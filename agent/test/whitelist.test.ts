@@ -1,7 +1,8 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { mkdirSync, symlinkSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
-import { canonicalize, checkPath, FORBIDDEN_COMMANDS, isExecAllowed } from '../src/whitelist.js';
+import { canonicalize, checkCcrcSwitchStat, checkPath, FORBIDDEN_COMMANDS, isExecAllowed } from '../src/whitelist.js';
+import { CCRC_SWITCH_FILES } from '../../shared/switches.js';
 import { LC_DIR_NAME, LC_ERRORS_NAME, LC_GEN_PREFIX, LC_GEN_SUFFIX } from '../../shared/api.js';
 import { NODE_FILE_BASENAMES } from '../../shared/agent-protocol.js';
 // critic2, gates 3 related sub-item: the three `rmSync` calls this replaces sat
@@ -266,6 +267,52 @@ describe('whitelist.checkPath', () => {
         .toBe(path.join(canonicalReal, 'update-intent'));
       expect(await checkPath(path.join(home, '.ccrc', 'agent.env'), cfg, 'read')).toBeNull();
     });
+  });
+});
+
+// D-8382: the operator's ~/.ccrc switch files, admitted for `stat` alone (existence, size and time), by name and at their
+// literal path. `checkPath` admits none of them, so read, readFrom, readB64, readdir and lstat stay refused.
+describe('whitelist.checkCcrcSwitchStat', () => {
+  afterEach(removeTmpFixtures);
+  const seedHome = (): { home: string; ccrc: string; cfg: { home: string; projectsRoot: string }; outside: string } => {
+    const home = mkTmp('ccrc-wl-sw-home-');
+    const ccrc = path.join(home, '.ccrc');
+    mkdirSync(ccrc, { recursive: true });
+    return { home, ccrc, cfg: { home, projectsRoot: mkTmp('ccrc-wl-sw-proj-') }, outside: mkTmp('ccrc-wl-sw-out-') };
+  };
+
+  it('the set is the switchboard\'s ~/.ccrc rows, derived: the three hand-placed off switches', () => {
+    expect([...CCRC_SWITCH_FILES].sort()).toEqual(['ccrc-card-off', 'compact-card-off', 'graph-gate-off']);
+  });
+
+  it('admits each name, absent or present, at its literal path; checkPath still refuses it for every op', async () => {
+    const { ccrc, cfg } = seedHome();
+    const canonicalCcrc = await canonicalize(ccrc);
+    for (const b of CCRC_SWITCH_FILES) {
+      const p = path.join(ccrc, b);
+      expect(await checkCcrcSwitchStat(p, cfg), `${b} (absent)`).toBe(path.join(canonicalCcrc, b));
+      writeFileSync(p, '');
+      expect(await checkCcrcSwitchStat(p, cfg), `${b} (present)`).toBe(path.join(canonicalCcrc, b));
+      expect(await checkPath(p, cfg, 'read'), `${b} must stay outside checkPath (no read, no readdir, no lstat)`).toBeNull();
+    }
+  });
+
+  it('refuses every other name in ~/.ccrc, the directory itself, a look-alike elsewhere and a symlink out', async () => {
+    const { home, ccrc, cfg, outside } = seedHome();
+    for (const r of ['agent.env', 'coord.db', 'graph-gate-off.bak', '.graph-gate-off', 'build.json']) {
+      writeFileSync(path.join(ccrc, r), 'x\n');
+      expect(await checkCcrcSwitchStat(path.join(ccrc, r), cfg), r).toBeNull();
+    }
+    expect(await checkCcrcSwitchStat(ccrc, cfg)).toBeNull();
+    expect(await checkCcrcSwitchStat(path.join(home, 'graph-gate-off'), cfg)).toBeNull();
+    expect(await checkCcrcSwitchStat(path.join(outside, 'graph-gate-off'), cfg)).toBeNull();
+    mkdirSync(path.join(ccrc, 'sub'), { recursive: true });
+    expect(await checkCcrcSwitchStat(path.join(ccrc, 'sub', 'graph-gate-off'), cfg)).toBeNull();
+    // A live link at a switch name onto a secret: stat would report the secret's size and time under the switch's name.
+    writeFileSync(path.join(ccrc, 'agent.env'), 'CCRC_AGENT_TOKEN=x\n');
+    symlinkSync(path.join(ccrc, 'agent.env'), path.join(ccrc, 'ccrc-card-off'));
+    expect(await checkCcrcSwitchStat(path.join(ccrc, 'ccrc-card-off'), cfg)).toBeNull();
+    expect(await checkCcrcSwitchStat('', cfg)).toBeNull();
   });
 });
 

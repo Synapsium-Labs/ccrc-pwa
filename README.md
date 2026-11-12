@@ -138,8 +138,9 @@ not the runtime: the staged `ccrc install` it hands off to refuses without `node
 `npm ci --omit=dev` for the server's runtime dependencies (and the agent's on a fleet box),
 and on every role but `server` builds the graph engine's venv from PyPI. So the box needs
 everything in "Requirements" below, network access to the npm registry and PyPI included.
-`install.sh` fetches `SHA256SUMS` first, then the tarball, and verifies it (`sha256sum -c`;
-`shasum -a 256 -c` on macOS) **before extracting a single file** — that checksum, from the
+`install.sh` fetches `SHA256SUMS` first, then the tarball, and verifies it against the digest on the
+tarball's own `SHA256SUMS` line (`sha256sum`; `shasum -a 256` on macOS; never `-c`, which would open
+every path the file names, D-8390) **before extracting a single file** — that checksum, from the
 same origin as the tarball, is the whole of the first install's verification; every
 `ccrc update` after it also verifies the provenance attestation ("Releases"):
 
@@ -805,10 +806,10 @@ version floor (design §9), unless `--downgrade` is typed.
 
 **Install from a release.** `bash install.sh --release [vX.Y.Z]` (default: the newest stable release —
 `latest/download` never serves a prerelease, so a `dev` build needs its tag) downloads the
-tarball and `SHA256SUMS`, verifies it (`sha256sum -c`; `shasum -a 256 -c` on macOS) **before extracting a
-single file**, extracts to a staging dir and hands off to the STAGED `ccrc install` — no build of ccrc on the
-box, though its runtime dependencies are still fetched (`npm ci --omit=dev`, which compiles `node-pty` on
-Linux) and, on every role but `server`, the graph engine is installed from PyPI into `~/.ccrc/graphify-venv`
+tarball and `SHA256SUMS`, verifies it against the digest on the tarball's own `SHA256SUMS` line (`sha256sum`;
+`shasum -a 256` on macOS; the updater does the same, D-8390) **before extracting a single file**, extracts to a
+staging dir and hands off to the STAGED `ccrc install` — no build of ccrc on the box, though its runtime
+dependencies are still fetched (`npm ci --omit=dev`, which compiles `node-pty` on Linux) and, on every role but `server`, the graph engine is installed from PyPI into `~/.ccrc/graphify-venv`
 ("Requirements" and "What the box needs first", above, list the toolchain, `python3 -m venv` and the registry
 access this takes). The first install trusts the transport checksum only and says so; every update from
 then on verifies provenance. Everything after `--release [tag]` passes through to that verb; `--role` rides here. Checkout mode
@@ -1026,8 +1027,10 @@ floor and reading `current` on the older tag included — stops a rollout before
 
 **Two trust roots, both named.** Everything above verifies against two things nothing on the box verifies: the
 Sigstore trusted root vendored in the INSTALLED tree at `deploy/sigstore-trusted-root.jsonl` — a snapshot taken
-when it was vendored, whose age nothing on the box reports, so an upstream key rotation it outlives makes it
-refuse every newer bundle until refreshed (the override below, for one update) — and a box's first
+when it was vendored, so an upstream key rotation it outlives makes it
+refuse every newer bundle until refreshed (the override below, for one update; for good, `gh attestation trusted-root`
+written over that file in a release PR). Doctor's `sigstore-root` check reads the newest validity start of any key in it
+and WARNs `stale` past 270 days (`unreadable` when the file cannot be read; D-8388) — and a box's first
 `install.sh --release`, which trusts the transport checksum alone — trust on first use — and places the verifier
 every later update runs. Whoever controls the environment can substitute the vendored root through
 `CCRC_SIGSTORE_TRUSTED_ROOT` — including a value set in the user manager's environment, which reaches a
@@ -1043,7 +1046,8 @@ three files from the release page — `ccrc-vX.Y.Z.tar.gz`, its
 `gh attestation verify ccrc-vX.Y.Z.tar.gz --bundle ccrc-vX.Y.Z.tar.gz.sigstore.json --repo Synapsium-Labs/ccrc-pwa`
 (gh ≥ 2.49; the box's own verifier is stricter, also pinning the signing workflow —
 `release-main.yml@refs/heads/main`, or `release.yml@refs/tags/<tag>` for a hand-cut tag), check the tarball
-against `SHA256SUMS` (`sha256sum -c SHA256SUMS`, or `shasum -a 256 -c` on macOS), then install that tag —
+against its own line of `SHA256SUMS` (compare `sha256sum ccrc-vX.Y.Z.tar.gz`, or `shasum -a 256` on macOS, with
+that line's digest; `sha256sum -c` opens every path the file names), then install that tag —
 `install.sh --release vX.Y.Z` fetches and checks its own copy against the release's `SHA256SUMS` again, so
 this narrows the first-install gap rather than closing it.
 
@@ -1366,8 +1370,8 @@ naming the file when it is not that shape. Sixteen are the fleet host's, read fr
 alone, into `~/.ccrc/testbox.env` (D-8166), which ccrc's one reader reads after `ccrc.env` and only for a key `ccrc.env` does not name;
 its lines are read by the same rules as `ccrc.env`'s, so a line it cannot decide refuses that key alone, and a value from it
 reads as `file`. The other
-twenty-eight are the test box's own, read on the box from its root-owned `/etc/ccrc-testbox/ccrc.env` alone
-(`deploy/testbox/ccrc.env.example` documents them): `CCRC_TESTBOX_RUNS`, `CCRC_TESTBOX_WORKERS`, `CCRC_TESTBOX_RUN_TMPDIR`, `CCRC_TESTBOX_RUN_MEMORY_MAX`, `CCRC_TESTBOX_RUN_SWAP_MAX`, `CCRC_TESTBOX_RUN_CPU_QUOTA`, `CCRC_TESTBOX_ROOT`, `CCRC_TESTBOX_REPOS`, `CCRC_TESTBOX_FETCH_EVERY`, `CCRC_TESTBOX_RETENTION`, `CCRC_TESTBOX_PRISTINE_KEEP`, `CCRC_TESTBOX_PRISTINE_RETRY`, `CCRC_TESTBOX_REPORT_MAX`, `CCRC_TESTBOX_TOOLS_DIR`, `CCRC_TESTBOX_OS_MIRROR`, `CCRC_TESTBOX_EGRESS_ALLOW`, `CCRC_TESTBOX_PUSH_USER`, `CCRC_TESTBOX_ENV_FORWARD`, `CCRC_TESTBOX_RUN_USER_PREFIX`, `CCRC_TESTBOX_REGISTRY_PROXY`, `CCRC_TESTBOX_REGISTRY_UPSTREAM`, `CCRC_TESTBOX_TMPFS`, `CCRC_TESTBOX_LOG_TAIL`, `CCRC_TESTBOX_SESSION_RUNS`, `CCRC_TESTBOX_SERVICE_USER`, `CCRC_TESTBOX_LISTEN`, `CCRC_TESTBOX_SERVICE_TOKEN_FILE` and `CCRC_TESTBOX_UNIT_MAX`. `ccrc test --testbox-knobs host|box` prints either table, one
+thirty-one are the test box's own, read on the box from its root-owned `/etc/ccrc-testbox/ccrc.env` alone
+(`deploy/testbox/ccrc.env.example` documents them): `CCRC_TESTBOX_RUNS`, `CCRC_TESTBOX_WORKERS`, `CCRC_TESTBOX_RUN_TMPDIR`, `CCRC_TESTBOX_RUN_MEMORY_MAX`, `CCRC_TESTBOX_RUN_SWAP_MAX`, `CCRC_TESTBOX_RUN_CPU_QUOTA`, `CCRC_TESTBOX_ROOT`, `CCRC_TESTBOX_REPOS`, `CCRC_TESTBOX_FETCH_EVERY`, `CCRC_TESTBOX_RETENTION`, `CCRC_TESTBOX_PRISTINE_KEEP`, `CCRC_TESTBOX_PRISTINE_RETRY`, `CCRC_TESTBOX_REPORT_MAX`, `CCRC_TESTBOX_TOOLS_DIR`, `CCRC_TESTBOX_OS_MIRROR`, `CCRC_TESTBOX_EGRESS_ALLOW`, `CCRC_TESTBOX_PUSH_USER`, `CCRC_TESTBOX_ENV_FORWARD`, `CCRC_TESTBOX_RUN_USER_PREFIX`, `CCRC_TESTBOX_REGISTRY_PROXY`, `CCRC_TESTBOX_REGISTRY_UPSTREAM`, `CCRC_TESTBOX_TMPFS`, `CCRC_TESTBOX_LOG_TAIL`, `CCRC_TESTBOX_SESSION_RUNS`, `CCRC_TESTBOX_SERVICE_USER`, `CCRC_TESTBOX_LISTEN`, `CCRC_TESTBOX_SERVICE_TOKEN_FILE`, `CCRC_TESTBOX_UNIT_MAX`, and the live probes' three (D-8290): `CCRC_TESTBOX_PROBE_CONFIG_DIR`, `CCRC_TESTBOX_PROBE_SOCKET` and `CCRC_TESTBOX_PROBES_PER_DAY`. `ccrc test --testbox-knobs host|box` prints either table, one
 line per key, and is how every other reader (the fleet agent's `testbox` op, the test service) gets them.
 One more is read by `ccrc doctor` alone, in `file` mode: `CCRC_CARRY_COPY_WARN_BYTES`, the `carry-copies` check's warn
 bound in bytes (default 10737418240, 10 GiB; see **Swap-carry copies and the dedupe sweep**).
@@ -3182,6 +3186,19 @@ operator's switch was undone by the next swap (§1.4: Opus typed by hand, Fable 
     a later stop or revival skips its read, so a choice typed in between is lost (narrow; closing it needs the marker bound
     to a pane instance).
 
+### The stop's grace is measured before it is armed (session-continuity stage 3, wave 6a)
+
+A stop that kills a session's process at once can cut off a turn's last writes. Wave 6a measures how long the
+process takes to leave before anything waits for it. Three stop sites carry the measurement: the swap, the
+limit-resume and the hibernate. By default each runs in **shadow**: `ccd/ccd#_graceful_stop_note` appends one
+`graceful-stop <id>: site=<site> mode=<mode> <outcome>` line to `swap.log` per stop and sends no new signal. The
+outcome is `exited=<ms>`, `alive=<ms>` (the process outlived the wait: a censored reading), `no-pid`,
+`gone-before-signal` or `unmeasured=<why>`. `$REG/graceful-stop-live` arms the live mode (SIGTERM first, with a
+provisional 10 s wait); it is the operator's, made by hand, and has no writer in the tree.
+`python3 deploy/measure-continuity.py --stage 3` reads the lines by site and mode (`deploy/measure-continuity.py#stage3`),
+reporting exit times by nearest rank and setting no target, as the bound is the operator's. A restart after a failed
+turn now also records the background tasks it ended as lost.
+
 ### A return visit merges the session's sidecar (session-continuity stage 1)
 
 A swap carries more than the transcript: beside it sits the session's sidecar directory — every subagent
@@ -3282,7 +3299,8 @@ boundary has come for a while — the shape of a session wedged in Claude Code's
 records a send as `auto-compact <id>: ctx N% >= T%`, and every refusal past the cheap gates at most once per
 30 minutes per session as `compact-skip <id>: <reason>` — `pane-narrow`, `no-ctx-segment` (the status line carried
 no context reading), `post-swap` and `no-turns-since-compact` among them.
-`touch ~/.cc-sessions/autocompact-disabled` stops it fleet-wide.
+`touch ~/.cc-sessions/autocompact-disabled` stops it fleet-wide; while it stands, Settings › Automation › Overrides in
+force names it (D-8382).
 
 ### One memory store per project: `ccrc memory`
 
@@ -3778,7 +3796,7 @@ see "Fleet coordination" below.
 | `CCRC_ADMIN_MERGE` | fleet box, read by `ccd pr-admin-merge` at each call | `auto` (default) or `off`: whether a coordinator may land an approval-missing PR through the admin-merge door in a repository the fleet's GitHub identity administers and that has no merge queue (D-8124; "The admin-merge door", below). A refused or unreadable value reads as `off`. |
 | `CCRC_AGENT_URL` | server | `ws://`/`wss://` URL of `ccrc-agent` on the fleet host, including its path, e.g. `ws://<fleet address>:7789/agent`. |
 | `CCRC_AGENT_TOKEN` | server + agent | Bearer token; must match on both sides. Generate with `openssl rand -hex 32`. |
-| `CCRC_HETZNER_TOKEN` | server | Hetzner Cloud API token — only used by the degraded-mode reboot action. Unset leaves that route disabled (`501`). |
+| `CCRC_HETZNER_TOKEN` | server | Hetzner Cloud API token — only used by the degraded-mode reboot action. Unset leaves that route disabled (`501`), and the unreachable banner says so before the tap, with **Reboot** disabled (D-8382). |
 | `CCRC_FLEET_SERVER_ID` | server | Hetzner Cloud server ID of the fleet host — only used by the reboot action. |
 | `CCRC_AGENT_HOST` | agent | Bind interface, default `127.0.0.1`. Never `0.0.0.0` (the agent refuses it, and `::`, at boot) — name the private-network address the server reaches it on, explicitly. |
 | `CCRC_AGENT_PORT` | agent | Listen port, default `7789`. |
@@ -4014,7 +4032,18 @@ the last-known-good fleet snapshot instead of going blank:
   everything else running on that box, not just the fleet. Guards: `409` if
   `mode !== 'remote'`,
   `501` if `CCRC_HETZNER_TOKEN`/`CCRC_FLEET_SERVER_ID` aren't set, `502` on a
-  Hetzner API error, `202` on success.
+  Hetzner API error, `202` on success. The `501` is said before the tap (D-8382): in remote mode the health answer
+  carries `rebootConfigured` (a boolean, never the token or the id, from the one function the route asks), and while it
+  is `false` the unreachable banner disables **Reboot** and names the remedy: set both keys in the server's
+  `~/.ccrc/ccrc.env`, then restart the server. An older server omits the field and the button stays as it was.
+- `GET /api/fleet/overrides` (D-8382) is read only, session-gated when armed, no box token: every emergency override
+  the switchboard declares (`overrideSwitchNames`, `shared/switches.ts`: each registry marker or fleet-host `~/.ccrc` file
+  whose writer is `hand-only`) with `set`, `clear` or `unmeasurable`, each read where it lives (a registry marker off the
+  registry listing through `readSwitches`, a `~/.ccrc` file through the agent's `stat`, which admits exactly the
+  switchboard's `~/.ccrc` names and nothing else there), and the server box's approvals topology (`boxes` one or two,
+  whether `~/.ccrc/approvals-single-box` stands there). Settings › Automation › Overrides in force lists the overrides that
+  stand, each with what it does, what its absence means and the file to remove at a terminal; Settings › Security ›
+  Approvals is one line on the topology. Neither has a control: every override is placed and lifted at a terminal.
 
 ### Verifying a remote-mode deploy
 
@@ -5620,17 +5649,27 @@ the rest) is listed in the hook's header, and a jq failure or a hook timeout fai
 the queue is the operator's act.
 
 **The landing line (landing-order stage 5).** `GET /api/landing?project=<p>` (box token; `ccrc-api landing show --project <p>`)
-is the coordinator's read of one project's line before it enqueues: every entry — the PR, its `pinnedSha` (the head the line
+is the coordinator's read of one project's line before it enqueues: the entries still in the line (`pinned`, `ejected`,
+`unknown`) — the PR, its `pinnedSha` (the head the line
 pinned when the run entered `merging`, which the coordinator requires to equal the head it binds and passes to
-`--match-head-commit`), its `handoffCommit`, its state and its ejections — the
+`--match-head-commit`), its `handoffCommit`, its state and its ejections — and, with `&pr=<n>` (`--pr <n>`), that PR's entry in any
+state, `entriesScope` saying which of the two the answer is; beside them the
 operator pause and the main-red hold, and the order the server's decider computes on that read; the line is paused
-while either flag is set. A project the line has never seen answers no entries and both flags off. The line's authority (no-run creation evidence,
+while either flag is set. An entry leaves the line `landed` when GitHub reads its PR merged (a merge train's proved landing included), with a head other than
+the pinned one kept in its `detail`, or `closed` when GitHub reads it closed unmerged or says no such PR exists. The landed reader
+(at most ten entries a sweep, oldest first) marks it, and a work run's `done` close marks it `landed` when GitHub reads the PR
+MERGED (a merge train's landing is left to the landed reader, which carries the train facts); a verified pin re-pins a `closed`
+entry. A project the line has never seen answers no entries and both flags off. The line's authority (no-run creation evidence,
 order edges, `fixesMain` and setter attribution) is journalled in `~/.ccrc/landing.log`, which a restored `coord.db` leaves in
 place (no backup copies it) and which the server replays before it serves anything. Replay never fabricates a measured pin or a
 current run association: a project whose projection is missing or whose binding evidence contradicts is reported as unmeasured
 and held, and invalid history refuses startup. An uncertain journal append or landing database commit fences every landing read
-and write, an advance's pin and its retreat from `merging` included: the failing call answers 503 with `mayApply: true` (the write
-may or may not have reached the line) and a `recovery` word, and every later one answers `landing-fenced` with that word. A `replay`
+and write, an advance's pin and its retreat from `merging` and a landing's mark included: the failing call answers 503 with
+`mayApply: true` (the write may or may not have reached the line) and a `recovery` word, and every later one answers
+`landing-fenced` with that word. An uncertain apply is named beside the append and the commit (`landing-db-apply`, as
+`landing-db-commit`, with `mayApply: true`), because the land arm answers the same words. After a `restart` fence the database
+handle is closed, so a later call that reads the database before the landing guard (the advance route reads the run first) fails
+on the closed handle instead of answering `landing-fenced`. A `replay`
 fence and a `restart` fence alike clear only when the server restarts: the replay is the only thing that reopens the line, and only
 the boot calls it, so there is no retry timer and nothing reopens the line while the server runs; a restart whose replay refuses
 does not start. A retreat refused `landing-projection-unreadable` (its pin names another head than the
@@ -7212,6 +7251,20 @@ passed (never the automatic restore, never `--no-gate`), and only with `CCRC_TES
 freshly measured versions. A failed call prints `update: WARN: test box: tools sync not sent — …` and never fails the
 update; the card shows the drift until the next sync.
 
+**Trusted Claude Code builds** (D-8289, the operator's ruling of 2026-11-10). A Claude Code build counts as trusted only
+once the test box has captured its hook and status-file output and the replay tests passed over it. The trusted set is
+data, `claude_builds` in coord.db: one row per build, seeded with the four builds the 2026-10-18 rig record proved
+(2.1.296 and 2.1.300 to 2.1.302). Every build a session on the fleet runs gets a row, queued for its capture; this covers a
+new build and every build already live. Once a minute the server sends one capture job, newest build first, over the test
+box connection. A build whose job got no verdict is sent again after an hour. Only a job that actually went out counts as
+an attempt: while no test box answers, or the box has no capture runner, the queue still tries each build hourly but sends
+nothing, so the row counts no attempt and records why, and the card says that no build can be captured yet instead of
+"sent N times". A failed capture stays untrusted and pushes one notice. Child approvals read the record: a child on a build that is not trusted is refused `version-unverified`, with
+`trust` naming why (`not-captured`, `capture-queued`, `capture-failed`, `unread` or `record-unreadable`). The card lists
+every build with its verdict, under the rest at every width. A failed build carries its replay output behind a disclosure
+and **Capture again** (`POST /api/testbox/builds/capture`, the operator's). The box-side capture runner is not built yet
+(plan `docs/superpowers/plans/2026-11-11-new-build-capture.md`, Open), so every new build stays queued until it lands.
+
 **The settings.** The fleet host's keys are in `~/.ccrc/ccrc.env`, the box's in its own `/etc/ccrc-testbox/ccrc.env`;
 **ccrc's own settings** names every one, and `deploy/testbox/ccrc.env.example` documents the box's with their defaults.
 The fleet host also holds two operator-placed files, the token the agent op and the wrapper present
@@ -7377,7 +7430,10 @@ swaps. Sessions call them by absolute path, because `ccrc` is not on a fleet ses
   line per child or source with its size; a pasted line goes in single quotes, each `'` in it
   written `'\''`;
 - `expand <node id or message uuid>` prints the real text in order, with a cursor past one page;
-- `tree` lists the family's epochs and nodes.
+- `tree` lists the family's epochs and nodes;
+- `touched <path|symbol>` lists, newest first, the nodes whose stored refs name a file (20 rows, or
+  `--limit N`). It sees only the refs the store kept, one origin each and at most 40 per node, so an
+  empty answer does not mean the file was never touched.
 
 Every answer opens with a header naming its scope, `coverage=this-box` and the index lag, prints at
 most 20,000 characters with `shown K of N` and a `next:` line (run only the `next:` line printed outside
@@ -7388,7 +7444,7 @@ redacted exactly prints under the line
 `[window redacted alone: every word of 8 or more characters masked]`; its long words are masked, not
 lost. `--workspace` widens the scope to every family of this project that ran in the session's
 workdir, and `--project` to the whole project; nothing crosses projects, and nothing reaches another
-box. Search has a reach of its own: grep reaches at most the first 1 MiB of each message's redacted
+box. `--agents` adds the scope's subagent transcripts and their nodes to any verb's reads. Search has a reach of its own: grep reaches at most the first 1 MiB of each message's redacted
 text and the first 512 KiB of each tool output Claude Code saved to its own file; text past that is
 stored but not searched. Exit 3 is "not found on this box" (for grep, not found within that reach),
 6 "not indexed yet", 8 "recall switched off for this session" and 9 "no store here" (macOS, a

@@ -212,7 +212,7 @@ CCRC_DOCTOR_CHECKS=(
   graphify
   graphify-path playwright browser-mcp   # one line, as `flock timeout`: _check_playwright and then _check_browser-mcp are at the END of this file
   build
-  provenance
+  provenance sigstore-root   # one line, as `flock timeout`: _check_sigstore-root follows _check_provenance (D-8388)
   fleet
   memory test-slice testbox   # one line, as `flock timeout`: _check_test-slice follows _check_scopes, _check_testbox follows it (D-7413)
   routing model-default   # one line, as `flock timeout` above; _check_model-default is at the END of this file
@@ -5702,6 +5702,75 @@ _check_provenance() {
   _dr_pass provenance "the completed-install record carries no unsigned mark"
 }
 
+# ── sigstore-root: how old is the trusted root this tree verifies against? ──
+# (D-8388.) `ccrc update` verifies a release's bundle with
+# `deploy/verify-provenance.mjs` against the Sigstore trusted root vendored
+# beside it, `deploy/sigstore-trusted-root.jsonl` (D-3119): a snapshot, one
+# TrustedRoot per line, of the keys Sigstore and GitHub published when it was
+# taken. Sigstore rotates those keys, and a root taken before a rotation
+# refuses every bundle signed with the new key — `--allow-unsigned` does not
+# apply to a FAILING bundle — so the box stops updating with nothing having
+# changed on it. This check reads the newest validity start of any key in the
+# file, the one date the file itself carries, and WARNs past the limit below.
+#
+# The limit: since GitHub's own authorities joined the vendored file (2023;
+# their keys rotate about twice a year) the newest start of any key in it has
+# moved every 38 to 232 days, so a limit above the longest gap does not warn
+# on a root refreshed after the newest rotation, and 270 days still names one
+# that has missed a rotation within about two months of it.
+DR_SIGSTORE_ROOT_MAX_DAYS=270
+#
+# FOUR ANSWERS, never folded: no verifier in this tree -> SKIP (nothing here
+# reads a root); jq or date missing -> SKIP, unmeasured (jq's own check FAILs
+# that box); a root that is missing, not a readable regular file, not JSON
+# lines, or holds no validity start it can read -> WARN `unreadable` (every
+# verified update would be refused); the newest start older than the limit
+# -> WARN `stale`; otherwise PASS, naming the date and the age. Never a FAIL:
+# the box runs, and refreshing the root is a release's act, as `provenance`'s
+# remedy is the operator's.
+_check_sigstore-root() {
+  local tree root verifier shown got ns day now age
+  tree="$(cd "$CCRC_HERE/.." 2>/dev/null && pwd)" || tree="$CCRC_HERE/.."
+  root="$tree/deploy/sigstore-trusted-root.jsonl"
+  verifier="$tree/deploy/verify-provenance.mjs"
+  # Named from `~`, as an operator types it: no home path in a line that may leave the box.
+  shown="$root"; [ -n "${HOME:-}" ] && [[ "$root" == "$HOME"/* ]] && shown="~${root#"$HOME"}"
+  local fix="refresh deploy/sigstore-trusted-root.jsonl from the Sigstore TUF root (gh attestation trusted-root > deploy/sigstore-trusted-root.jsonl) in a release PR, and ccrc update onto that release; to verify one update before it ships, point CCRC_SIGSTORE_TRUSTED_ROOT at a freshly fetched copy"
+  if [ ! -e "$verifier" ]; then
+    _dr_skip sigstore-root "this tree ships no provenance verifier (${shown%/*}/verify-provenance.mjs), so no Sigstore trusted root is read here"
+    return 3
+  fi
+  if ! command -v jq >/dev/null 2>&1 || ! now="$(date +%s 2>/dev/null)" || ! [[ "$now" =~ ^[0-9]+$ ]]; then
+    _dr_skip sigstore-root "jq or date is not usable here, so the Sigstore trusted root's age was not measured"
+    return 3
+  fi
+  # `-f` before `-r`, and both before any read (D-3025).
+  if [ ! -f "$root" ] || [ ! -r "$root" ]; then
+    _dr_warn sigstore-root "unreadable — the vendored Sigstore trusted root $shown is not a readable regular file, so its age was not measured and ccrc update cannot verify a release against it" "$fix"
+    return 2
+  fi
+  # Every `validFor.start` of every key, in every line; `.999Z`-style fractions
+  # dropped, since jq's ISO-8601 reader takes whole seconds only.
+  got="$(jq -rs '[.[] | .. | objects | .validFor? | objects | .start? | strings]
+    | if length == 0 then error("no validity start") else
+        (map(sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601) | max | floor | "\(.)\t\(todate[0:10])") end' "$root" 2>/dev/null)" || got=""
+  ns="${got%%$'\t'*}"; day="${got#*$'\t'}"
+  if ! [[ "$ns" =~ ^[0-9]{1,12}$ ]] || ! [[ "$day" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]]; then
+    _dr_warn sigstore-root "unreadable — the vendored Sigstore trusted root $shown does not parse as JSON lines holding a key's validity start, so its age was not measured and ccrc update cannot verify a release against it" "$fix"
+    return 2
+  fi
+  if [ "$ns" -gt "$now" ]; then
+    _dr_pass sigstore-root "the vendored Sigstore trusted root's newest key becomes valid on $day, after this box's clock (limit ${DR_SIGSTORE_ROOT_MAX_DAYS} days)"
+    return 0
+  fi
+  age=$(( (now - ns) / 86400 ))
+  if [ "$age" -gt "$DR_SIGSTORE_ROOT_MAX_DAYS" ]; then
+    _dr_warn sigstore-root "stale — the vendored Sigstore trusted root's newest key became valid on $day, $age days ago, over the ${DR_SIGSTORE_ROOT_MAX_DAYS}-day limit: a key Sigstore has rotated in since is likely missing from it, and ccrc update refuses a release signed with such a key" "$fix"
+    return 2
+  fi
+  _dr_pass sigstore-root "the vendored Sigstore trusted root's newest key became valid on $day, $age days ago (limit ${DR_SIGSTORE_ROOT_MAX_DAYS} days)"
+}
+
 # ── the two boxes' matched set ────────────────────────────────────────────
 # THE ONE CHECK THAT IS NOT ABOUT THIS BOX. Every check above measures the box
 # it runs on; this one asks whether this box and the OTHER one are a matched
@@ -6776,11 +6845,41 @@ _check_models() {
     esac
   done <<<"$out"
 
-  if [ "${#warn[@]}" -gt 0 ] || [ "${#unmeasured[@]}" -gt 0 ]; then
+  # THE WINDOW A MOVE LOWERED (D-8384, public issue #2607). A class that moves —
+  # auto-advance above all — to a model the lane's windows file does not
+  # measure takes the WHOLE lane off the measured window rule
+  # (`contextWindowFor`, shared/modelenv.mjs), so CLAUDE_CODE_MAX_CONTEXT_TOKENS
+  # drops for every session and nothing else says so. Asked in ONE node call
+  # for the whole roster, models-op's `lanes`, whose rows carry
+  # `windowNotices` spelled once (`unmeasuredMoveNotice`,
+  # shared/model-advance.mjs): no lane, account or model name and no lane
+  # file name is written here, and only the population above is reported. A
+  # `lanes` that refuses or prints nothing adds nothing: an unreadable
+  # registry, catalogue or windows file is already named above or by the
+  # codex check, each with its own remedy.
+  local -a lowered=()
+  local note
+  if command -v jq >/dev/null 2>&1; then
+    while IFS= read -r note; do
+      [ -n "$note" ] && lowered+=("$note")
+    done < <(_models_node lanes --file "$roster" 2>/dev/null \
+      | jq -r --arg ids "$(printf '%s\n' "${population[@]}")" '
+          ($ids | split("\n")) as $p
+          | if .ok == true and (.lanes | type) == "array" then .lanes[] else empty end
+          | select(type == "object" and (.id as $i | $p | index($i)) != null)
+          | (.windowNotices // []) | if type == "array" then .[] else empty end
+          | strings | gsub("[\n\t]"; " ")' 2>/dev/null)
+  fi
+
+  if [ "${#warn[@]}" -gt 0 ] || [ "${#unmeasured[@]}" -gt 0 ] || [ "${#lowered[@]}" -gt 0 ]; then
     local ret=2
     if [ "${#warn[@]}" -gt 0 ]; then
       _dr_warn models "$(_dr_join "${warn[@]}")" \
         "systemctl --user status ccrc-models.timer ; ccrc models refresh <id> for one named lane"
+    fi
+    if [ "${#lowered[@]}" -gt 0 ]; then
+      _dr_warn models "$(_dr_join "${lowered[@]}")" \
+        "measure the named model's window, then record it: ccrc models <id> set-window <modelId> <tokens> (ccrc models <id> show lists the lane's measured windows)"
     fi
     if [ "${#unmeasured[@]}" -gt 0 ] && [ "$bound_rc" -eq 3 ]; then
       _dr_cadence_unloaded models ccrc-models.timer "the staleness of $(_dr_join "${unmeasured[@]}")"; ret=1
@@ -11660,17 +11759,20 @@ _check_pane-scope-stop() {
 #     first. So the global environment is the wrong question, and sessions on one
 #     server differ: a supervised spawn carries the user manager's PATH, one started
 #     from a shell carries that shell's.
-#   - Neither the unit, nor ccd, nor a generated wrapper changes PATH, and Claude Code
-#     writes the process PATH as the last line of its shell snapshot, so ~/.bashrc
-#     edits never apply to a session's commands.
+#   - Neither the unit nor a generated wrapper changes PATH, and Claude Code writes the
+#     process PATH as the last line of its shell snapshot, so ~/.bashrc edits never
+#     apply to a session's commands. ccd's launch line is the one step that does
+#     (`SESSION_PANE_PATH`, D-8050): it adds $HOME/.local/bin last when it is absent.
 #   - A pane's pid is the session's process (every link is an `exec`), so its
 #     environ is the PATH that session started with.
-# So: read every live session's environ, and with none to read, the manager's PATH.
+# So: read every live session's environ, and with none to read, the manager's PATH as
+# that launch step leaves it (`_dr_spawn_path`, D-8333): a session started now gets the
+# folder whatever the manager holds, so the manager's own value would warn for ever.
 # rc 1 means nothing could be read, and each caller then measures `$PATH` as it
 # always did: a server box (no session runs there), Darwin with no readable proc
 # tree, or a box with neither. NOT READ: a lane's settings.json `env` block, which
 # Claude Code applies inside the process, so a lane that sets PATH there reads as lacking.
-DR_SESSION_NOT_THESE="\$HOME/.profile, \$HOME/.bashrc and 'ccrc install' cannot do this: a session's PATH comes from the service manager through tmux, and no login shell runs on the way"
+DR_SESSION_NOT_THESE="\$HOME/.profile, \$HOME/.bashrc and 'ccrc install' cannot do this: a session's PATH comes from the service manager through tmux, and no login shell runs on the way. A session's own restart also gives it \$HOME/.local/bin, which ccd's launch line adds (D-8050)"
 
 # The commands a session calls bare. A generated wrapper is not here: ccd launches
 # those by absolute path. Only what this box installed is asked about.
@@ -11683,6 +11785,16 @@ _dr_environ_path() {   # <environ file> -> its PATH; rc 1 when it cannot be read
     case "$kv" in PATH=*) printf '%s' "${kv#PATH=}"; return 0 ;; esac
   done < "$1"
   return 1
+}
+
+# THE PATH ccd'S LAUNCH STEP MAKES OF A PANE'S (D-8333): `SESSION_PANE_PATH` in ccd, spelled
+# again here because doctor never sources ccd's body. `ccrc-doctor-session-path.test.ts`
+# runs ccd's own word and this over the same PATHs and goes red on a drift.
+_dr_spawn_path() {   # <a pane's PATH> -> the PATH the session it launches starts with
+  case ":$1:" in
+    *":$HOME/.local/bin:"*) printf '%s' "$1" ;;
+    *) printf '%s' "$1:$HOME/.local/bin" ;;
+  esac
 }
 
 _dr_session_add() {   # <PATH> -> counted once per session, stored once per distinct value
@@ -11724,8 +11836,8 @@ _dr_session_paths() {   # -> DR_SESSION_PATHS, DR_SESSION_COUNTS, DR_SESSION_TOT
     case "$l" in PATH=*) p="${l#PATH=}"; break ;; esac
   done <<< "$out"
   case "$p" in ''|\$*) return 1 ;; esac   # `$'…'` is systemd's quoting of a value this cannot read as a list
-  _dr_session_add "$p"
-  DR_SESSION_FROM="read from the user manager, whose PATH a supervised session inherits; no session is running to read"
+  _dr_session_add "$(_dr_spawn_path "$p")"
+  DR_SESSION_FROM="read from the user manager, whose PATH a supervised session inherits, with \$HOME/.local/bin added last as ccd's launch line adds it; no session is running to read"
   return 0
 }
 

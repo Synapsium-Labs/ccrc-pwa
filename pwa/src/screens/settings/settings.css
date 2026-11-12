@@ -179,6 +179,8 @@
 .testbox-cells { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: calc(var(--pad-card) / 2); min-width: 0; margin: 0; }
 .testbox-cells > div { display: grid; min-width: 0; }
 .testbox-cell-value { margin: 0; overflow-wrap: anywhere; font-family: var(--family-mono); font-size: var(--fs-meta); }
+/* The live probes line (D-8290): a probe name may be 64 characters with no hyphen, so it wraps anywhere. */
+.testbox-probes { min-width: 0; overflow-wrap: anywhere; }
 .testbox-tables { display: grid; gap: var(--pad-card); min-width: 0; }
 .testbox-table { width: 100%; border-collapse: collapse; table-layout: fixed; font-size: var(--fs-meta); }
 .testbox-table caption { text-align: start; padding-bottom: calc(var(--pad-card) / 4); }
@@ -205,6 +207,23 @@
    full width, the key line wrapping inside its block with Copy under it. Laptop: the step list on the left and the current step
    on the right, the act's button at the end of its state line, settings a two-column form. Wide: a third area beside them, the
    ledger's recent acts. A key line or a fingerprint is one long token, so it wraps anywhere rather than push the card sideways. */
+/* D-8289: the card's Claude Code builds. One layout at every width: each build one wrapping row (the build and its verdict, where
+   it came from, and for a failure the replay output and Capture again). The output wraps inside its block, so a long line
+   never pushes the card sideways. No colour is set here: the words wear `.settings-note`, `.settings-catalogue--amber` or the
+   card's ink. */
+.testbox-builds { display: grid; gap: calc(var(--pad-card) / 2); min-width: 0; padding-top: var(--pad-card); border-top: 1px solid var(--edge-subtle); }
+.testbox-builds-title { margin: 0; font-weight: var(--weight-semibold); }
+.testbox-build-list { display: grid; gap: calc(var(--pad-card) / 2); min-width: 0; margin: 0; padding: 0; list-style: none; }
+.testbox-build { display: grid; gap: calc(var(--pad-card) / 4); min-width: 0; }
+.testbox-build-head { margin: 0; overflow-wrap: anywhere; }
+.testbox-build-name { font-family: var(--family-mono); font-weight: var(--weight-medium); }
+.testbox-build-output, .testbox-builds-older { min-width: 0; }
+.testbox-builds-older > .testbox-build-list { margin-top: calc(var(--pad-card) / 2); }
+.testbox-card:not([data-band='phone']) .testbox-build-again { justify-self: start; }
+.testbox-build-log {
+  margin: calc(var(--pad-card) / 4) 0 0; max-height: 16em; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere;
+  font-family: var(--family-mono); font-size: var(--fs-meta);
+}
 .testbox-connect { display: grid; gap: var(--pad-card); min-width: 0; padding-bottom: var(--pad-card); border-bottom: 1px solid var(--edge-subtle); }
 .testbox-connect-grid { display: grid; gap: var(--pad-card); min-width: 0; }
 .testbox-steps { display: grid; gap: calc(var(--pad-card) / 2); min-width: 0; margin: 0; padding-inline-start: 1.5em; list-style: decimal; }
@@ -263,6 +282,11 @@
 .testbox-pairing > div { display: grid; min-width: 0; }
 .testbox-pairing dd { margin: 0; }
 .testbox-sheet-list { display: grid; margin: 0; padding: 0; list-style: none; }
+/* An access key act's notice (D-8337), above the card: its sentence, the public key words to remove by hand (wrapping anywhere, as
+   every key line does), and its buttons, full width one per row on a phone and side by side from the laptop band. */
+.testbox-key-notice { display: grid; gap: calc(var(--pad-card) / 2); min-width: 0; padding-bottom: var(--pad-card); border-bottom: 1px solid var(--edge-subtle); }
+.testbox-key-notice-row { display: grid; gap: calc(var(--pad-card) / 2); min-width: 0; }
+.testbox-key-notice:not([data-band='phone']) .testbox-key-notice-row { grid-template-columns: repeat(2, auto); justify-content: start; }
 .testbox-manage:not([data-band='phone']) .testbox-manage-main { grid-template-columns: minmax(0, 1fr) minmax(0, 28rem); align-items: start; column-gap: var(--pad-card); }
 .testbox-manage:not([data-band='phone']) .testbox-manage-main > * { grid-column: 1 / -1; }
 .testbox-manage:not([data-band='phone']) .testbox-manage-main > .testbox-manage-state { grid-column: 1; grid-row: 1; }
@@ -270,6 +294,9 @@
 .testbox-manage[data-band='wide'] .testbox-manage-grid { grid-template-columns: minmax(0, 2.4fr) minmax(12rem, 1fr); align-items: start; column-gap: var(--pad-card); }
 .testbox-settings[data-band='laptop'] .testbox-form { grid-template-columns: repeat(2, minmax(0, 1fr)); column-gap: var(--pad-card); }
 .testbox-settings[data-band='wide'] .testbox-settings-groups { grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; column-gap: var(--pad-card); }
+/* A row's Reset to default (D-8336): full width under its input on a phone (the Button's own `full`), its own width at the start of
+   the field from the laptop band. */
+.testbox-settings:not([data-band='phone']) .testbox-reset { justify-self: start; }
 
 /* Security › Linear (#1444, spec §10.3's table). Layout only, but for the team chip, which sets its ink and its ground
    together. The band is the card's `data-band` (`LinearSection`'s one read of the desk and wide queries), so each band's

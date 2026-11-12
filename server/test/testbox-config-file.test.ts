@@ -51,6 +51,8 @@ function values(root: string, n: 2 | 3 | 4): Record<string, string> {
     CCRC_TESTBOX_TMPFS: n === 2 ? 'on' : 'off', CCRC_TESTBOX_LOG_TAIL: `${n}${n}`, CCRC_TESTBOX_SESSION_RUNS: String(n),
     CCRC_TESTBOX_SERVICE_USER: `ccrc-tb-svc${n}`, CCRC_TESTBOX_LISTEN: `127.0.0.${n + 10}:74${n}0`,
     CCRC_TESTBOX_SERVICE_TOKEN_FILE: path.join(root, 'var', 'lib', `ccrc-tb-svc${n}`, `tb${n}-token`), CCRC_TESTBOX_UNIT_MAX: `${n}h`,
+    CCRC_TESTBOX_PROBE_CONFIG_DIR: path.join(root, `scratch${n}`, 'config'), CCRC_TESTBOX_PROBE_SOCKET: `ccrc-probe${n}`,
+    CCRC_TESTBOX_PROBES_PER_DAY: String(n + 4),
   };
 }
 const envFile = (v: Record<string, string>): string => Object.entries(v).map(([k, x]) => `${k}="${x}"`).join('\n') + '\n';

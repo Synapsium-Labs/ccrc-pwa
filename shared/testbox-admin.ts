@@ -17,7 +17,7 @@ import { parseRepoRow, type Read, type TestboxRepoRow } from './testbox.js';
 import { utf8Bytes, utf8Decode, utf8Encode } from './utf8.js';
 
 // ---------------------------------------------------------------------------------------------------------------
-// The keys: 16 on the fleet host, 28 on the box (spec M7), each with its shape class.
+// The keys: 16 on the fleet host, 31 on the box (spec M7, and D-8290's three live probe keys), each with its shape class.
 // ---------------------------------------------------------------------------------------------------------------
 
 /** The sixteen fleet-host test box keys, in `_tb_host_table`'s order (`ccd/testbox-knobs`). */
@@ -29,7 +29,7 @@ export const TESTBOX_HOST_KEYS: readonly string[] = Object.freeze([
   'CCRC_TESTBOX_TIMES',
 ]);
 
-/** The twenty-eight test box keys, in `_tb_box_table`'s order. */
+/** The thirty-one test box keys, in `_tb_box_table`'s order (D-8290 adds the last three, the live probes'). */
 export const TESTBOX_BOX_KEYS: readonly string[] = Object.freeze([
   'CCRC_TESTBOX_RUNS', 'CCRC_TESTBOX_WORKERS', 'CCRC_TESTBOX_RUN_TMPDIR', 'CCRC_TESTBOX_RUN_MEMORY_MAX',
   'CCRC_TESTBOX_RUN_SWAP_MAX', 'CCRC_TESTBOX_RUN_CPU_QUOTA', 'CCRC_TESTBOX_ROOT', 'CCRC_TESTBOX_REPOS',
@@ -38,6 +38,7 @@ export const TESTBOX_BOX_KEYS: readonly string[] = Object.freeze([
   'CCRC_TESTBOX_PUSH_USER', 'CCRC_TESTBOX_ENV_FORWARD', 'CCRC_TESTBOX_RUN_USER_PREFIX', 'CCRC_TESTBOX_REGISTRY_PROXY',
   'CCRC_TESTBOX_REGISTRY_UPSTREAM', 'CCRC_TESTBOX_TMPFS', 'CCRC_TESTBOX_LOG_TAIL', 'CCRC_TESTBOX_SESSION_RUNS',
   'CCRC_TESTBOX_SERVICE_USER', 'CCRC_TESTBOX_LISTEN', 'CCRC_TESTBOX_SERVICE_TOKEN_FILE', 'CCRC_TESTBOX_UNIT_MAX',
+  'CCRC_TESTBOX_PROBE_CONFIG_DIR', 'CCRC_TESTBOX_PROBE_SOCKET', 'CCRC_TESTBOX_PROBES_PER_DAY',
 ]);
 
 /** The four pairing keys: written only by Connect, Replace and Disconnect (spec §2.6, M7). */
@@ -66,17 +67,18 @@ export const TESTBOX_PAIRED_BOX_KEYS: readonly string[] = Object.freeze([
 /** A key's shape class: `_tb_shape_class` in `ccd/testbox-knobs`, key for key. */
 export type TestboxShapeClass =
   | 'url' | 'path' | 'size' | 'duration' | 'durations' | 'lostrun' | 'fallback' | 'onoff' | 'percent' | 'count'
-  | 'hostport' | 'globs' | 'hosts' | 'envnames' | 'user';
+  | 'hostport' | 'globs' | 'hosts' | 'envnames' | 'user' | 'socket';
 export const TESTBOX_SHAPE_CLASS_MAP: Record<TestboxShapeClass, true> = {
   url: true, path: true, size: true, duration: true, durations: true, lostrun: true, fallback: true, onoff: true,
-  percent: true, count: true, hostport: true, globs: true, hosts: true, envnames: true, user: true,
+  percent: true, count: true, hostport: true, globs: true, hosts: true, envnames: true, user: true, socket: true,
 };
 
-/** Key to class, for all 44 keys. */
+/** Key to class, for all 47 keys. */
 export const TESTBOX_SHAPE_CLASS: Readonly<Record<string, TestboxShapeClass>> = Object.freeze({
   CCRC_TESTBOX_URL: 'url', CCRC_TESTBOX_GIT_URL_BASE: 'url', CCRC_TESTBOX_OS_MIRROR: 'url', CCRC_TESTBOX_REGISTRY_UPSTREAM: 'url',
   CCRC_TESTBOX_TOKEN_FILE: 'path', CCRC_TESTBOX_GIT_KEY: 'path', CCRC_TESTBOX_TIMES: 'path', CCRC_TESTBOX_RUN_TMPDIR: 'path',
   CCRC_TESTBOX_ROOT: 'path', CCRC_TESTBOX_REPOS: 'path', CCRC_TESTBOX_TOOLS_DIR: 'path', CCRC_TESTBOX_SERVICE_TOKEN_FILE: 'path',
+  CCRC_TESTBOX_PROBE_CONFIG_DIR: 'path',
   CCRC_TESTBOX_UNTRACKED_FILE_MAX: 'size', CCRC_TESTBOX_SNAPSHOT_MAX: 'size', CCRC_TESTBOX_RUN_MEMORY_MAX: 'size',
   CCRC_TESTBOX_RUN_SWAP_MAX: 'size', CCRC_TESTBOX_REPORT_MAX: 'size',
   CCRC_TESTBOX_STATUS_DEADLINE: 'duration', CCRC_TESTBOX_RECONNECT_DEADLINE: 'duration', CCRC_TESTBOX_QUEUE_WAIT: 'duration',
@@ -86,10 +88,11 @@ export const TESTBOX_SHAPE_CLASS: Readonly<Record<string, TestboxShapeClass>> = 
   CCRC_TESTBOX_LOST_RUN: 'lostrun', CCRC_TESTBOX_FALLBACK_INSTALL: 'fallback', CCRC_TESTBOX_TMPFS: 'onoff',
   CCRC_TESTBOX_RUN_CPU_QUOTA: 'percent',
   CCRC_TESTBOX_QUEUE_LIMIT: 'count', CCRC_TESTBOX_RUNS: 'count', CCRC_TESTBOX_WORKERS: 'count', CCRC_TESTBOX_LOG_TAIL: 'count',
-  CCRC_TESTBOX_SESSION_RUNS: 'count',
+  CCRC_TESTBOX_SESSION_RUNS: 'count', CCRC_TESTBOX_PROBES_PER_DAY: 'count',
   CCRC_TESTBOX_REGISTRY_PROXY: 'hostport', CCRC_TESTBOX_LISTEN: 'hostport',
   CCRC_TESTBOX_DENY_GLOBS: 'globs', CCRC_TESTBOX_EGRESS_ALLOW: 'hosts', CCRC_TESTBOX_ENV_FORWARD: 'envnames',
   CCRC_TESTBOX_PUSH_USER: 'user', CCRC_TESTBOX_SERVICE_USER: 'user', CCRC_TESTBOX_RUN_USER_PREFIX: 'user',
+  CCRC_TESTBOX_PROBE_SOCKET: 'socket',
 });
 
 /** Each class in words: `_tb_shape_says`, the sentence the shape check refuses with. */
@@ -109,6 +112,7 @@ export const TESTBOX_SHAPE_SENTENCE: Readonly<Record<TestboxShapeClass, string>>
   hosts: 'a list of host names',
   envnames: 'a list of environment variable names',
   user: 'a user name (lower-case letters, digits, _ and -)',
+  socket: 'a tmux socket name (lower-case letters, digits, _ and -)',
 });
 
 // The patterns are `_tb_shape`'s, spelled for JS. A class's check is the class's alone; an empty value fits none (the
@@ -150,6 +154,7 @@ function fitsClass(cls: TestboxShapeClass, v: string): boolean {
     case 'hosts': return everyWord(v, (w) => HOSTNAME_WORD_RE.test(w));
     case 'envnames': return everyWord(v, (w) => ENV_NAME_WORD_RE.test(w));
     case 'user': return USER_WORD_RE.test(v);
+    case 'socket': return USER_WORD_RE.test(v);
   }
 }
 
@@ -236,19 +241,21 @@ export function isPrNumber(v: unknown): boolean {
 
 export type TestboxAdminSub =
   | 'status' | 'read' | 'key' | 'probe' | 'pin' | 'preflight' | 'connect' | 'settings-fleet' | 'settings-box'
-  | 'cancel' | 'parity' | 'repair' | 'apply-release' | 'disconnect';
+  | 'cancel' | 'parity' | 'repair' | 'apply-release' | 'disconnect' | 'key-rotate' | 'key-revoke';
 export const TESTBOX_ADMIN_SUB_MAP: Record<TestboxAdminSub, true> = {
   status: true, read: true, key: true, probe: true, pin: true, preflight: true, connect: true, 'settings-fleet': true,
   'settings-box': true, cancel: true, parity: true, repair: true, 'apply-release': true, disconnect: true,
+  'key-rotate': true, 'key-revoke': true,
 };
 
 /** The acts the ledger records (spec §2.10) and the cancel that ends one. */
 export type TestboxAct =
   | 'connect' | 'confirm-host-key' | 'install' | 'pair' | 'settings-fleet' | 'settings-box' | 'parity' | 'switch'
-  | 'repair' | 'replace' | 'disconnect' | 'apply-release' | 'cancel';
+  | 'repair' | 'replace' | 'disconnect' | 'apply-release' | 'cancel' | 'key-rotate' | 'key-revoke';
 export const TESTBOX_ACT_MAP: Record<TestboxAct, true> = {
   connect: true, 'confirm-host-key': true, install: true, pair: true, 'settings-fleet': true, 'settings-box': true,
   parity: true, switch: true, repair: true, replace: true, disconnect: true, 'apply-release': true, cancel: true,
+  'key-rotate': true, 'key-revoke': true,
 };
 export const TESTBOX_ACTS: readonly TestboxAct[] = Object.freeze(Object.keys(TESTBOX_ACT_MAP) as TestboxAct[]);
 
@@ -267,7 +274,8 @@ export type TestboxAdminCode =
   | 'verify-failed' | 'copy-failed' | 'box-value-refused' | 'install-refused' | 'install-failed' | 'pair-failed'
   | 'status-not-ok' | 'pairing-keys-in-ccrc-env' | 'key-in-ccrc-env' | 'runs-in-progress' | 'idle-deadline'
   | 'cancelled' | 'gh-signed-out' | 'parity-differs' | 'not-connected' | 'box-side-skipped' | 'interrupted'
-  | 'unpair-failed' | 'address-not-private' | 'box-already-set';
+  | 'unpair-failed' | 'address-not-private' | 'box-already-set' | 'new-key-refused' | 'old-line-kept' | 'revoked-box-skipped'
+  | 'revoked-unpair-failed';
 /** Each code in one line that names no value (no address, path, key or setting text), for the card. */
 export const TESTBOX_ADMIN_CODE_SENTENCE: Record<TestboxAdminCode, string> = {
   'busy': 'Another test box act is already running; wait for it to end or cancel it.',
@@ -309,7 +317,19 @@ export const TESTBOX_ADMIN_CODE_SENTENCE: Record<TestboxAdminCode, string> = {
   'address-not-private': 'The box is not on a private network, so ccrc will not connect to it. Use an address on a tailnet, a VPN or your provider\'s private network.',
   'box-already-set': 'A box is already set up here, so its address and port change only through Replace or Start over.',
   'interrupted': 'The act stopped before it finished, because the fleet host restarted or its unit was stopped; run it again.',
+  // D-8337: the access key's Rotate and Revoke.
+  'new-key-refused': 'The box did not take the new access key, so ccrc took it out again and kept the old one, which still works.',
+  'old-line-kept': 'ccrc now uses its new access key, but the box still lets the old key in; remove the old key\'s line shown by hand.',
+  'revoked-box-skipped': 'ccrc deleted its access key and forgot the box, but did not remove its lines from the box; remove them by hand as shown.',
+  'revoked-unpair-failed': 'ccrc deleted its access key, but the box\'s unpair or the removal of its line did not finish; finish both by hand.',
 };
+/** The codes whose refusal carries `line`: the PUBLIC words of an access key whose line the operator removes from the box's
+ *  authorized_keys by hand (D-8337). Never a private key; the route holds it to one printable line. */
+export type TestboxLineCode = Extract<TestboxAdminCode, 'old-line-kept' | 'revoked-box-skipped' | 'revoked-unpair-failed'>;
+export const TESTBOX_LINE_CODES: readonly TestboxLineCode[] = Object.freeze(['old-line-kept', 'revoked-box-skipped', 'revoked-unpair-failed']);
+const TESTBOX_LINE_CODE_SET: ReadonlySet<string> = new Set(TESTBOX_LINE_CODES);
+/** A refusal code that carries `line` (one of `TESTBOX_LINE_CODES`). */
+export function isTestboxLineCode(v: string): v is TestboxLineCode { return TESTBOX_LINE_CODE_SET.has(v); }
 export const TESTBOX_ADMIN_CODE_MAP: Record<TestboxAdminCode, true> = Object.fromEntries(
   Object.keys(TESTBOX_ADMIN_CODE_SENTENCE).map((k) => [k, true]),
 ) as Record<TestboxAdminCode, true>;
@@ -337,12 +357,16 @@ export const TESTBOX_ADMIN_PHASES: Readonly<Record<TestboxPhasedSub, readonly Te
 // The sub table.
 // ---------------------------------------------------------------------------------------------------------------
 
-/** A field's grammar. `setting-fleet` and `setting-box` take a map of KEY to VALUE, written as repeated `--set=K=V`. */
+/** A field's grammar. `setting-fleet` and `setting-box` take a map of KEY to VALUE, written as repeated `--set=K=V`;
+ *  `unset-fleet` and `unset-box` a list of the same keys, written as repeated `--unset=K` (D-8336: Reset to default takes the
+ *  key out of the file ccrc wrote, so the reader answers the key's own default, an empty one included, which no `--set` word
+ *  can carry). */
 export type TestboxAdminGrammar =
-  | 'address' | 'port' | 'user' | 'fingerprint' | 'pr' | 'setting-fleet' | 'setting-box' | 'repo' | 'true';
+  | 'address' | 'port' | 'user' | 'fingerprint' | 'pr' | 'setting-fleet' | 'setting-box' | 'unset-fleet' | 'unset-box'
+  | 'repo' | 'true';
 export const TESTBOX_ADMIN_GRAMMAR_MAP: Record<TestboxAdminGrammar, true> = {
   address: true, port: true, user: true, fingerprint: true, pr: true, 'setting-fleet': true, 'setting-box': true,
-  repo: true, true: true,
+  'unset-fleet': true, 'unset-box': true, repo: true, true: true,
 };
 
 /** What one field's value is on the wire and into the builder: a scalar (address, port, user, fingerprint, `true`), a
@@ -360,6 +384,9 @@ export interface TestboxAdminField {
   readonly grammar: TestboxAdminGrammar;
   readonly required: boolean;
   readonly repeatable: boolean;
+  /** One of the sub's `anyOf` fields must be given (D-8336: a settings call changes a value, resets one, or both). The bash
+   *  table's third column says `+` for it. */
+  readonly anyOf: boolean;
 }
 export interface TestboxAdminSubSpec {
   /** The fields it takes, by the caller's name, in the order they are written. */
@@ -373,8 +400,8 @@ export interface TestboxAdminSubSpec {
   readonly act: TestboxAct | null;
 }
 
-const f = (flag: string, grammar: TestboxAdminGrammar, o: { required?: true; repeatable?: true } = {}): TestboxAdminField =>
-  Object.freeze({ flag, grammar, required: o.required === true, repeatable: o.repeatable === true });
+const f = (flag: string, grammar: TestboxAdminGrammar, o: { required?: true; repeatable?: true; anyOf?: true } = {}): TestboxAdminField =>
+  Object.freeze({ flag, grammar, required: o.required === true, repeatable: o.repeatable === true, anyOf: o.anyOf === true });
 
 const address = f('--address', 'address', { required: true });
 const port = f('--port', 'port');
@@ -405,11 +432,16 @@ export const TESTBOX_ADMIN_SUBS: Readonly<Record<TestboxAdminSub, TestboxAdminSu
     settings: f('--set', 'setting-box', { required: true, repeatable: true }),
     repos: f('--repo', 'repo', { required: true, repeatable: true }),
   }, { stepUp: true, long: true, act: 'connect' }),
-  'settings-fleet': spec({ settings: f('--set', 'setting-fleet', { required: true, repeatable: true }) }, { act: 'settings-fleet' }),
+  // A change (`settings`), a Reset to default (`unset`, D-8336) or both, in one write: at least one of the two.
+  'settings-fleet': spec({
+    settings: f('--set', 'setting-fleet', { repeatable: true, anyOf: true }),
+    unset: f('--unset', 'unset-fleet', { repeatable: true, anyOf: true }),
+  }, { act: 'settings-fleet' }),
   // No repository rows: parity runs the command head of a row on the fleet host as the fleet user, and only a step-up Connect may
   // name one. A box setting edit needs no step-up (C14), so it must not be able to put a row on the fleet host's record.
   'settings-box': spec({
-    settings: f('--set', 'setting-box', { required: true, repeatable: true }),
+    settings: f('--set', 'setting-box', { repeatable: true, anyOf: true }),
+    unset: f('--unset', 'unset-box', { repeatable: true, anyOf: true }),
     whenIdle: f('--when-idle', 'true'),
   }, { long: true, act: 'settings-box' }),
   'cancel': spec({}, { act: 'cancel' }),
@@ -417,6 +449,10 @@ export const TESTBOX_ADMIN_SUBS: Readonly<Record<TestboxAdminSub, TestboxAdminSu
   'repair': spec({}, { long: true, act: 'repair' }),
   'apply-release': spec({}, { long: true, act: 'apply-release' }),
   'disconnect': spec({ replace: f('--replace', 'true') }, { stepUp: true, act: 'disconnect' }),
+  // D-8337: a new access key put on the box with the old one, and the key taken off the box and deleted. Both replace or remove a
+  // credential (C14), and both read the connection, the key and the pin from the state, so they take no field.
+  'key-rotate': spec({}, { stepUp: true, act: 'key-rotate' }),
+  'key-revoke': spec({}, { stepUp: true, act: 'key-revoke' }),
 } satisfies Record<TestboxAdminSub, TestboxAdminSubSpec>);
 
 /** The fleet-host settings whose change needs the passkey step-up although `settings-fleet` does not (C14 rules a plain value
@@ -425,14 +461,18 @@ export const TESTBOX_ADMIN_SUBS: Readonly<Record<TestboxAdminSub, TestboxAdminSu
  *  private key to the machine where pull-request code runs. */
 export const TESTBOX_STEP_UP_SETTINGS: readonly string[] = Object.freeze(['CCRC_TESTBOX_DENY_GLOBS']);
 
-/** Whether this call needs the step-up: its sub's row says, or it changes a setting in {@link TESTBOX_STEP_UP_SETTINGS}.
- *  `fields` is the body's own (checked or not: a body that names such a key asks for the step-up whatever else is wrong with it). */
+/** Whether this call needs the step-up: its sub's row says, or it changes or resets (D-8336) a setting in
+ *  {@link TESTBOX_STEP_UP_SETTINGS}: a reset can widen what the deny list lets through as surely as an edit can. `fields` is the
+ *  body's own (checked or not: a body that names such a key asks for the step-up whatever else is wrong with it). */
 export function testboxAdminNeedsStepUp(sub: TestboxAdminSub, fields: unknown): boolean {
   if (TESTBOX_ADMIN_SUBS[sub].stepUp) return true;
   if (sub !== 'settings-fleet' || typeof fields !== 'object' || fields === null || Array.isArray(fields)) return false;
   const settings = (fields as Record<string, unknown>)['settings'];
-  if (typeof settings !== 'object' || settings === null || Array.isArray(settings)) return false;
-  return TESTBOX_STEP_UP_SETTINGS.some((k) => Object.hasOwn(settings, k));
+  const unset = (fields as Record<string, unknown>)['unset'];
+  const changes = typeof settings === 'object' && settings !== null && !Array.isArray(settings)
+    && TESTBOX_STEP_UP_SETTINGS.some((k) => Object.hasOwn(settings, k));
+  const resets = Array.isArray(unset) && TESTBOX_STEP_UP_SETTINGS.some((k) => (unset as unknown[]).includes(k));
+  return changes || resets;
 }
 
 /** Whether `v` is a sub in the union. */
@@ -502,6 +542,13 @@ export function readTestboxRepoArg(word: unknown): Read<TestboxRepoRow> {
 
 const DOT_DOT_SEGMENT_RE = /(?:^|[/\\])\.\.(?:[/\\]|$)/;
 
+/** The keys a settings field may name: the twelve fleet-host keys, or the box keys (less the four pairing ones the card keeps as
+ *  Connected, outside Connect). */
+function settingKeys(sub: TestboxAdminSub, fleet: boolean): readonly string[] {
+  if (fleet) return TESTBOX_FLEET_EDITABLE;
+  return sub === 'settings-box' ? TESTBOX_BOX_KEYS.filter((k) => !TESTBOX_PAIRED_BOX_KEYS.includes(k)) : TESTBOX_BOX_KEYS;
+}
+
 /** A value that rides one word: a non-empty string with no C0 byte or DEL, never `-`-led, no `..` path segment. */
 function wordOk(v: unknown): v is string {
   return typeof v === 'string' && v.length > 0 && !CONTROL_RE.test(v) && !v.startsWith('-') && !DOT_DOT_SEGMENT_RE.test(v);
@@ -546,8 +593,7 @@ function fieldWords(sub: TestboxAdminSub, fd: TestboxAdminField, value: unknown)
     case 'setting-fleet':
     case 'setting-box': {
       if (!plainObject(value)) return null;
-      const keys = fd.grammar === 'setting-fleet' ? TESTBOX_FLEET_EDITABLE
-        : sub === 'settings-box' ? TESTBOX_BOX_KEYS.filter((k) => !TESTBOX_PAIRED_BOX_KEYS.includes(k)) : TESTBOX_BOX_KEYS;
+      const keys = settingKeys(sub, fd.grammar === 'setting-fleet');
       const given = Object.keys(value);
       if (given.length < 1 || given.some((k) => !keys.includes(k))) return null;
       const out: string[] = [];
@@ -558,6 +604,16 @@ function fieldWords(sub: TestboxAdminSub, fd: TestboxAdminField, value: unknown)
         out.push(`${fd.flag}=${k}=${v}`);
       }
       return out;
+    }
+    case 'unset-fleet':
+    case 'unset-box': {
+      // The settings map's policing, key for key: the sub's own keys only (no pairing key), each once; a key both set and
+      // unset is refused by the builder, which sees both fields.
+      if (!Array.isArray(value) || value.length < 1) return null;
+      const keys = settingKeys(sub, fd.grammar === 'unset-fleet');
+      const given = value as unknown[];
+      if (new Set(given).size !== given.length || given.some((k) => typeof k !== 'string' || !keys.includes(k))) return null;
+      return keys.filter((k) => given.includes(k)).map((k) => `${fd.flag}=${k}`);
     }
     case 'repo': {
       if (!Array.isArray(value) || value.length < 1 || value.length > TESTBOX_REPO_ROWS_MAX) return null;
@@ -585,7 +641,9 @@ export function buildTestboxAdminArgv(sub: unknown, fields: unknown): TestboxAdm
   if (!plainObject(fields)) return BAD;
   for (const key of Object.keys(fields)) if (!Object.hasOwn(s.fields, key)) return BAD;
   const argv: string[] = ['testbox-admin', sub];
+  let anyOf: boolean | null = null;
   for (const [key, fd] of Object.entries(s.fields)) {
+    if (fd.anyOf) anyOf = anyOf === true || Object.hasOwn(fields, key);
     if (!Object.hasOwn(fields, key)) {
       if (fd.required) return BAD;
       continue;
@@ -594,6 +652,11 @@ export function buildTestboxAdminArgv(sub: unknown, fields: unknown): TestboxAdm
     if (words === null) return BAD;
     argv.push(...words);
   }
+  if (anyOf === false) return BAD;
+  // A key both changed and reset is no one thing to do.
+  const set = fields['settings'];
+  const unset = fields['unset'];
+  if (plainObject(set) && Array.isArray(unset) && (unset as unknown[]).some((k) => typeof k === 'string' && Object.hasOwn(set, k))) return BAD;
   return { ok: true, argv };
 }
 
@@ -815,7 +878,7 @@ export function readTestboxAdminStatus(json: string): Read<TestboxAdminStatus> {
     if (login !== null && login !== 'root' && login !== 'sudo') refuse('login', 'not root, sudo or null');
     let rows: BoxSettingRow[] | null = null;
     if (o['boxSettings'] !== null) {
-      if (!Array.isArray(o['boxSettings']) || o['boxSettings'].length > TESTBOX_BOX_KEYS.length) refuse('boxSettings', 'not a list of at most 28');
+      if (!Array.isArray(o['boxSettings']) || o['boxSettings'].length > TESTBOX_BOX_KEYS.length) refuse('boxSettings', `not a list of at most ${TESTBOX_BOX_KEYS.length}`);
       rows = (o['boxSettings'] as unknown[]).map((r, i) => settingRow(r, `boxSettings[${i}]`));
       const seen = new Set(rows.map((r) => r.key as string));
       if (seen.size !== rows.length) refuse('boxSettings', 'a key twice');

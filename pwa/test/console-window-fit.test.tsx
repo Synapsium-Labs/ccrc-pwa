@@ -395,7 +395,7 @@ describe('the glass meets the pinned window', () => {
     resizeWindow();
     expect(t.font()).toBe(11.7);
 
-    const back = view.baseElement.querySelector('[aria-label="Scroll back"]');
+    const back = view.baseElement.querySelector('[aria-label="Hist (Scroll back)"]');
     if (!back) throw new Error('the drawer rendered no history key');
     fireEvent.click(back);
     await waitFor(() => expect(born.length, 'the history layer never opened').toBeGreaterThan(0));
@@ -529,7 +529,7 @@ describe('a new terminal in the same drawer', () => {
     expect(host.clientWidth, 'the new glass has layout, so the opening fit measured it').toBe(0);
     expect(t.font(), 'the new terminal was not built at the base size').toBe(BASE_CONSOLE_FONT_PX);
 
-    const back = view.baseElement.querySelector('[aria-label="Scroll back"]');
+    const back = view.baseElement.querySelector('[aria-label="Hist (Scroll back)"]');
     if (!back) throw new Error('the drawer rendered no history key');
     fireEvent.click(back);
     await waitFor(() => expect(h.born.length, 'the history layer never opened').toBeGreaterThan(0));

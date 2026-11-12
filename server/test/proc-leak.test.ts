@@ -7,11 +7,12 @@
 //     group through the handle it holds, as `spawnSyncGroup` does.
 //   * `spawnGroup.ts`: a timed-out child takes its grandchildren with it; a child that returns on its own but
 //     leaves a member in its group makes the helper throw, and the member is dead afterwards; a caller that
-//     declares it strands one on purpose (`strays: 'end'`) gets a normal return, and the member is dead too.
+//     declares it strands one on purpose (`strays: 'end'`) gets a normal return, and the member is dead too; and an
+//     `input` reaches the child as a regular file that is gone from the temp root before the child runs (D-8381).
 import { describe, it, expect } from 'vitest';
 import { spawnSync } from 'node:child_process';
 import { createRequire } from 'node:module';
-import { readFileSync, realpathSync, writeFileSync } from 'node:fs';
+import { readdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mkTmp } from './tmpHelpers.js';
@@ -145,5 +146,59 @@ describe('spawnSyncGroup: a child that can fork runs in its own process group (s
     expect(r.status).toBe(0);
     expect(r.stdout).toBe('ok\n');
     expect(r.error).toBeUndefined();
+  });
+});
+
+// D-8381: on macOS a detached `spawnSync` given an `input` now and then delivers every byte and never the end of input,
+// so the child waits on its stdin until the timeout. Linux cannot show that hang, so these cases pin the ROUTE that
+// cannot lose the end: the child's stdin is a regular file holding every byte, and the file is gone when the call
+// returns, on every path. Put the input back through `spawnSync`'s `input` and the first case is red.
+describe('spawnSyncGroup: an input reaches the child from a regular file (D-8381)', () => {
+  const STDIN_IS_A_FILE = 'test -f /dev/stdin || { echo "stdin is not a regular file" >&2; exit 3; }; wc -c';
+
+  it('the child\'s stdin is a regular file holding every byte, empty, small and past a socket buffer', () => {
+    for (const input of ['', 'x', 'y'.repeat(4096), 'z'.repeat(200 * 1024)]) {
+      const r = spawnSyncGroup('sh', ['-c', STDIN_IS_A_FILE], { input, encoding: 'utf8', timeout: 30_000 });
+      expect(r.error, `${input.length} bytes`).toBeUndefined();
+      expect(r.status, `${input.length} bytes: ${r.stderr}`).toBe(0);
+      expect(r.stdout.trim()).toBe(String(input.length));
+    }
+    // Bytes, not text, arrive as given: `od` reads the stdin itself, the one reader of it.
+    const bytes = Buffer.from([0, 1, 2, 255, 10, 13]);
+    const b = spawnSyncGroup('sh', ['-c', 'test -f /dev/stdin || exit 3; od -An -tu1'], { input: bytes, encoding: 'utf8', timeout: 30_000 });
+    expect(b.status, b.stderr).toBe(0);
+    expect(b.stdout.trim().split(/\s+/)).toEqual(['0', '1', '2', '255', '10', '13']);
+  });
+
+  it('a caller\'s stdout and stderr settings are kept beside the input', () => {
+    const r = spawnSyncGroup('sh', ['-c', `${STDIN_IS_A_FILE}; echo to-stderr >&2`],
+      { input: 'abc', encoding: 'utf8', timeout: 30_000, stdio: ['ignore', 'pipe', 'ignore'] });
+    expect(r.status).toBe(0);
+    expect(r.stdout.trim()).toBe('3');
+    expect(r.stderr ?? '').toBe('');
+  });
+
+  it('nothing is left under the temp root while the child runs, or when the call returns, times out or throws', () => {
+    const root = mkTmp('ccrc-spawngroup-root-');
+    const was = process.env['TMPDIR'];
+    process.env['TMPDIR'] = root;
+    try {
+      // The child's own TMPDIR is the same root, so it lists what the input left there while it runs.
+      const ok = spawnSyncGroup('sh', ['-c', `${STDIN_IS_A_FILE}; ls -A "$TMPDIR"`], { input: 'q'.repeat(20_000), encoding: 'utf8', timeout: 30_000 });
+      expect(ok.status, ok.stderr).toBe(0);
+      expect(ok.stdout.trim()).toBe('20000');
+      expect(readdirSync(root)).toEqual([]);
+
+      const late = spawnSyncGroup('sh', ['-c', 'cat >/dev/null; sleep 30'], { input: 'q', encoding: 'utf8', timeout: 1_000 });
+      expect((late.error as NodeJS.ErrnoException | undefined)?.code).toBe('ETIMEDOUT');
+      expect(readdirSync(root)).toEqual([]);
+
+      expect(() => spawnSyncGroup('sh', ['-c', 'cat >/dev/null; sleep 37 >/dev/null 2>&1 &'],
+        { input: 'q', encoding: 'utf8', timeout: 30_000 })).toThrow(/left processes in its group/);
+      expect(readdirSync(root)).toEqual([]);
+    } finally {
+      if (was === undefined) delete process.env['TMPDIR'];
+      else process.env['TMPDIR'] = was;
+    }
   });
 });

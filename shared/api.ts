@@ -9168,6 +9168,10 @@ export interface LifecycleMeas {
    *  the registry rows that hold the child, comma-joined (`?` for one whose id ccd does not print). Null: no row held it,
    *  an older ccd, or another act. */
   readonly heldBy: string | null;
+  /** A `reclaim` or `expire` intent's stale index locks (D-5945): the `index.lock` paths rung 6 passed as stale (a
+   *  regular, empty file older than ccd's bound that no process holds), comma-joined; the tail removes them with the
+   *  tree. Null: no stale lock passed, an older ccd, or another act. */
+  readonly staleLock: string | null;
 }
 
 /** Derived from the interface, never restated beside it — `LIFECYCLE_ACT_MAP`'s
@@ -9194,6 +9198,7 @@ const LIFECYCLE_MEAS_KEY_MAP: Record<keyof LifecycleMeas, true> = {
   startpoint: true,
   witness: true,
   heldBy: true,
+  staleLock: true,
 };
 /** The one list `server/test/ccd-lifecycle-contain.test.ts` checks ccd's
  *  emitted keys against — imported, not re-typed, so the two sides cannot
@@ -9883,6 +9888,43 @@ export interface ClaimConflict {
 }
 
 /**
+ * One of the caller's OWN claims that lapsed within the last `CLAIM_LEASE_MS` on a path it is taking again
+ * (D-8392, public issue #145). `POST /api/claims`' 200 answer carries them as `lapsedSince`, present only when
+ * there is one: the caller's claim had a gap, so another session may have edited those paths meanwhile, and the
+ * caller re-checks before it edits. `endedAt` is when the gap BEGAN, the lapsed row's `expiresAt` (no lapse fires
+ * before it), not the later moment a sweep or this very attempt wrote the lapse: re-check from it. `endedBy` is
+ * `ClaimSummary.endedBy`'s display word, parsed back by nothing.
+ */
+export interface ClaimLapse {
+  readonly id: number;
+  readonly endedAt: number;
+  readonly endedBy: string;
+}
+
+/**
+ * `GET /api/claims`' 200 answer. `claims` is the live rows (`expiresAt > now`), or with `all=1` every row verbatim.
+ * D-8392: the default answer for one project (`?project=<p>` without `all`) adds `recentlyLapsed`, the rows that
+ * lapsed within the last `CLAIM_LEASE_MS`, each `state:'lapsed'` with its `endedAt` and `endedBy`, so a lapsed claim
+ * no longer reads like one never taken. A row whose lease ran out before any sweep lapsed it is reported the way the
+ * sweep would word it, ended at its `expiresAt`. `claims` keeps its meaning; the field is absent on the other arms.
+ */
+export interface ClaimsListAnswer {
+  readonly ok: true;
+  readonly claims: readonly ClaimSummary[];
+  readonly recentlyLapsed?: readonly ClaimSummary[];
+}
+
+/** `POST /api/claims`' 200 answer. `lapsedSince` (D-8392): see `ClaimLapse`; absent when none applies. */
+export interface ClaimTakeAnswer {
+  readonly ok: true;
+  readonly ids: readonly number[];
+  readonly expiresAt: number;
+  readonly hardExpiresAt: number;
+  readonly renewed: boolean;
+  readonly lapsedSince?: readonly ClaimLapse[];
+}
+
+/**
  * The deviation ledger's two STORED states. `'stale'` is deliberately not
  * here: a number allocated and never landed for `LEDGER_STALE_MS` is
  * REPORTED, never marked — D13 says "marks allocated → landed" but only
@@ -10431,6 +10473,26 @@ export interface NodeRequestWire { tag: string; kind: RequestKind; at: number }
 export interface NodeReportWire {
   phase: UpdatePhase; target: string | null; startedAt: number | null; updatedAt: number | null;
   detail: string | null;
+  /** R37 (D-8386): the supervisor sweep's record, `update.json`'s `sweep` key (`isUpdateSweepWord`). ADDITIVE and
+   *  OPTIONAL: absent is NOT MEASURED (no sweep ran on this report's path, an older node wrote it, or the key was
+   *  malformed), never `ok` or a count of none. */
+  sweep?: string;
+}
+/** R37 (D-8386): the first word of the record `ccrc update`'s supervisor sweep leaves in `update.json`'s `sweep` key
+ *  (wave 17, D-5314, D-5315, D-5329; README "One update at a time"): `ok`, `down: <n>: <ids>`, `refused: <why>`,
+ *  `unverified: relist`, `died: sweep` or the watchdog's `died: abandoned`. Spelled once, as a map, so a head added to
+ *  the union with no key fails loudly. */
+export type UpdateSweepHead = 'ok' | 'down' | 'refused' | 'unverified' | 'died';
+const UPDATE_SWEEP_HEAD_MAP: Record<UpdateSweepHead, true> = { ok: true, down: true, refused: true, unverified: true, died: true };
+/** The writer's cut (`_upd_json_str`'s 200 characters), the same bound as the report's detail. */
+export const UPDATE_SWEEP_MAX = 200;
+/** A sweep record this build can read: printable ASCII, at most `UPDATE_SWEEP_MAX`, and either `ok` alone or a known
+ *  head, `: ` and at least one more printable character. Anything else is not a measurement. */
+export function isUpdateSweepWord(v: unknown): v is string {
+  if (typeof v !== 'string' || v.length > UPDATE_SWEEP_MAX || !/^[\x20-\x7e]+$/.test(v)) return false;
+  if (v === 'ok') return true;
+  const m = /^([a-z]+): \S/.exec(v);
+  return m !== null && m[1] !== 'ok' && Object.hasOwn(UPDATE_SWEEP_HEAD_MAP, m[1]!);
 }
 /** The lease (§6 lease columns). `target` outlives `state` returning to `idle`. */
 export interface NodeUpdateWire { state: UpdateState; target: string | null; startedAt: number | null; detail: string | null }
@@ -10588,6 +10650,10 @@ export const BOX_SETTING_TABLE = {
   CCRC_TESTBOX_LISTEN: { cls: 'omit', family: 'testbox', roles: [], applies: 'run' },
   CCRC_TESTBOX_SERVICE_TOKEN_FILE: { cls: 'omit', family: 'testbox', roles: [], applies: 'run' },
   CCRC_TESTBOX_UNIT_MAX: { cls: 'omit', family: 'testbox', roles: [], applies: 'run' },
+  // D-8290: the live probes' three box keys.
+  CCRC_TESTBOX_PROBE_CONFIG_DIR: { cls: 'omit', family: 'testbox', roles: [], applies: 'run' },
+  CCRC_TESTBOX_PROBE_SOCKET: { cls: 'omit', family: 'testbox', roles: [], applies: 'run' },
+  CCRC_TESTBOX_PROBES_PER_DAY: { cls: 'omit', family: 'testbox', roles: [], applies: 'run' },
   CCRC_CARRY_COPY_WARN_BYTES: { cls: 'value', family: 'carry-copies', roles: ['fleet', 'both'], applies: 'run' },
   CCRC_BROWSER_MCP_DEFAULT: { cls: 'value', family: 'browser-tools', roles: ['fleet', 'both'], applies: 'run' },
   CCRC_BROWSER_MCP_SERVERS: { cls: 'is-set', family: 'browser-tools', roles: ['fleet', 'both'], applies: 'run' },
@@ -11499,13 +11565,23 @@ export const STALL_HELD_REASON = {
   watchOff: 'its kill switch is on',
   gateStrict: 'its mail gate is set to strict',
 } as const;
-/** One line per `StallHeld` flag, worded without file names (§13). */
+/** One line per `StallHeld` flag (§13). The wire stays booleans, never file names; since D-8339 the two terminal-only
+ *  overrides, the kill switch and the strict gate, name their marker through a `{marker}` slot the PWA fills from the
+ *  switchboard's constant (`shared/switches.ts`), so the name is spelled once. */
 export const STALL_HELD_TEXT = {
-  watchOff: 'A kill switch on the fleet box has the watch off, whatever is chosen here.',
+  watchOff: 'The {marker} marker on the fleet box is a kill switch: the watch is off, whatever is chosen here.',
   mailOff: 'Mail is switched off on the fleet box: no mail is delivered, and checks and reports are held. Pushes to you still go.',
-  gateStrict: 'The mail gate is set to strict on the fleet box: busy delivery and the busy gate are off.',
+  gateStrict: 'The {marker} marker on the fleet box sets the mail gate to strict: busy delivery and the busy gate are off.',
   wave2HeldByStrict: 'The strict mail gate also holds the further checks off, because they need busy delivery.',
 } as const satisfies Record<keyof StallHeld, string>;
+/** D-8339: the line under a marker's held line that says what the override does, for the one whose effect reaches past
+ *  the watch (the strict gate changes every session's mail). */
+export const STALL_HELD_DOES = {
+  gateStrict: 'While it stands, mail is delivered to idle sessions only.',
+} as const satisfies Partial<Record<keyof StallHeld, string>>;
+/** D-8339: how to lift a marker's hold. Both are emergency overrides with no writer in the tree, so the card offers no
+ *  control: the remedy is a person at a terminal. `{marker}` is the held line's own. */
+export const STALL_HELD_REMEDY = 'To lift it, remove {marker} from the registry at a terminal on the fleet box. It is an emergency override, so it has no control here.';
 /** The busy gate's Now sentence: `holds` always while `stages.busyGate`, then `logs` while busy delivery is off. */
 export const STALL_BUSY_GATE_TEXT = {
   holds: 'The mail gate also holds mail for a session whose main turn is running.',
@@ -13042,15 +13118,9 @@ export const CHILD_SHELL_PATH = /^\/[A-Za-z0-9._/-]+$/;
  *  `session-hook-approval-wait.test.ts`. */
 export const APPROVAL_HOOK_WAIT_S = 540;
 
-/** The Claude Code versions on which a recorded rig capture proved spec §6.9's criteria as restated on 2026-10-18
- *  (D-5439, D-5440, D-5441): plan Task 13's Linux re-check record, read with its macOS record. 2.1.299 is out: it has
- *  no Linux capture (D-5481). The server mints an approval request only for a child whose live version is listed. */
-export const APPROVAL_HOOK_VERSIONS: readonly string[] = ['2.1.296', '2.1.300', '2.1.301', '2.1.302'];
-
-/** The versions on which the rig proved that a PermissionRequest's `cwd` equals the shell's working directory after a
- *  `cd` in an earlier Bash call, on the main thread and in a subagent (spec §6.9; Task 13's Linux re-check record, L6).
- *  A subset of `APPROVAL_HOOK_VERSIONS`, never wider: elsewhere the classifier is given `cwd = null`. */
-export const APPROVAL_CWD_TRUSTED: readonly string[] = ['2.1.296', '2.1.300', '2.1.301', '2.1.302'];
+// D-8289: the builds an approval trusts are data, not a list here: `claude_builds` in coord.db (seeded with the 2026-10-18
+// rig record's 2.1.296 and 2.1.300 to 2.1.302, which this file listed until then), read through
+// `shared/claudeBuildTrust.ts#buildTrustOf`. A passed capture's `cwd` says whether the classifier is given the request's `cwd`.
 
 /** The pinned public key's file name under the fleet box's `~/.ccrc` (spec §6.4), and the server's private key's under
  *  the server box's: both carry `approval-signing`, the word the child's PreToolUse deny and the classifier's forbidden
@@ -13239,7 +13309,7 @@ export function isApprovalReleaseReason(v: unknown): v is ApprovalReleaseReason 
  *                        does not show the bash pin (D-5360's requirement, Task 15's two fields).
  *  `digest-mismatch`     the digest is not sha256 over the canonical string sent, or that string does not
  *                        re-canonicalise to itself. Journaled for doctor's `approval-digest-mismatch`.
- *  `version-unverified`  the child's live Claude Code version is not in `APPROVAL_HOOK_VERSIONS`.
+ *  `version-unverified`  the child's live Claude Code build is not trusted (`buildTrustOf`, D-8289); `trust` says why.
  *  `approval-released`   the row was minted `released` (`releaseReason` in the body): the operator has it.
  *  `unknown-approval`    no such row, or (on the ruling route) another nonce: answered alike, so a nonce is not probed.
  *  `approval-unreadable` the row could not be read back.
@@ -14180,6 +14250,24 @@ export interface FleetHealth {
    */
   backup?: BackupHealth;
 }
+
+/** `FleetHealth`'s reboot field (D-8382), at the foot as an interface merge, the disk block's rule, so no line cited above
+ *  moves. */
+export interface FleetHealth {
+  /**
+   * Whether the degraded-mode reboot (`POST /api/fleet/reboot`) is configured on the server box: both
+   * `CCRC_HETZNER_TOKEN` and `CCRC_FLEET_SERVER_ID` set in its environment. A boolean only: neither value is ever on the
+   * wire. Remote mode only (local mode has no reboot). Optional for the absence-permits reason: an older server omits it,
+   * and absent reads as unknown, so the button stays as it was and the route's 501 still answers a tap.
+   */
+  rebootConfigured?: boolean;
+}
+
+/** D-8382: the unreachable banner's words while `rebootConfigured` is `false`: the reboot cannot run, and the remedy.
+ *  The button is disabled beside them, so the operator learns it before the tap, not from a 501 mid-outage. */
+export const FLEET_REBOOT_NOT_CONFIGURED_TEXT = 'Reboot is not configured on this box.';
+export const FLEET_REBOOT_REMEDY_TEXT =
+  "To enable it, set CCRC_HETZNER_TOKEN and CCRC_FLEET_SERVER_ID in the server's ~/.ccrc/ccrc.env, then restart the server.";
 
 /** One subject of an `AttentionRow`: a session, and the run it belongs to where its lane knows one. */
 export interface AttentionSubject {

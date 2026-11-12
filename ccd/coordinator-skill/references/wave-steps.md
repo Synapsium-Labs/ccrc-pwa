@@ -154,11 +154,12 @@ not after.
      red>` for the new-head route or `paths: <the conflicted paths>` for the
      dequeue. Every ejection is clause 15's ejection, its base recorded on the
      landing line by the advance that sends the run back: first read the line,
-     `GET /api/landing?project=<project>` (`ccrc-api landing show --project
-     <project>`), and send an ejection only where this PR's entry for this run
-     reads `pinned`; with no such entry the round is no ejection, and it stays
-     a stop for the operator. **A red the PR owns** is sent when the queue
-     dequeued the PR for a required check and no conflict was measured, or when
+     `GET /api/landing?project=<project>&pr=<pr>` (`ccrc-api landing show
+     --project <project> --pr <pr>`), and send an ejection only where this PR's
+     entry for this run reads `pinned`; with no such entry the round is no
+     ejection, and it stays a stop for the operator. **A red the PR owns** is
+     sent when the queue dequeued the PR for a required check and no conflict
+     was measured, or when
      the verdict's `RED` line names a required check red on the head that is the
      PR's own. Its body holds two entries, one to a line, and nothing else:
      `red: #<pr>`, then `checks: <required names that are red>`. It has no

@@ -532,6 +532,100 @@ describe.skipIf(!HAS_KEYGEN || !HAS_FLOCK || !HAS_NODE)('ccrc testbox-admin sett
   });
 });
 
+describe.skipIf(!HAS_KEYGEN || !HAS_FLOCK || !HAS_NODE)('Reset to default: --unset takes the key out of the file ccrc wrote, so its reader answers the default (D-8336)', () => {
+  it('settings-fleet --unset removes the key\'s line from the overlay, keeps every other line, and answers the reader\'s read', () => {
+    const h = fixture();
+    writeFileSync(h.overlay, 'CCRC_TESTBOX_POLL=45s\nCCRC_TESTBOX_QUEUE_LIMIT=7\nCCRC_TESTBOX_DENY_GLOBS=*.pem\n', { mode: 0o600 });
+    const r = verb(h, 'settings-fleet', '--unset=CCRC_TESTBOX_POLL', '--unset=CCRC_TESTBOX_DENY_GLOBS', '--from', 'pwa');
+    const a = json(r);
+    expect(a['ok'], r.out + r.err).toBe(true);
+    expect(readFileSync(h.overlay, 'utf8')).toBe('CCRC_TESTBOX_QUEUE_LIMIT=7\n');
+    expect(sh(h, 'stat -c %a "$HOME/.ccrc/testbox.env" 2>/dev/null || stat -f %Lp "$HOME/.ccrc/testbox.env"').out.trim()).toBe('600');
+    expect(readdirSync(join(h.home, '.ccrc')).filter((n) => n.includes('.tmp.') || n.includes('.bak.'))).toEqual([]);
+    // the reader no longer reads the key from the file: it answers its default
+    expect(a['settings']).toEqual([{ key: 'CCRC_TESTBOX_POLL', set: false }, { key: 'CCRC_TESTBOX_DENY_GLOBS', set: false }]);
+    const knob = sh(h, SRC + '_ccrc_knob CCRC_TESTBOX_POLL 30s file; printf "%s|%s" "$KNOB" "$KNOB_FROM"', [VERB]);
+    expect(knob.out).toBe('30s|default');
+  });
+
+  it('settings-fleet sets and unsets in one write, and an unset of a key the overlay does not hold is a no-op that answers ok', () => {
+    const h = fixture();
+    writeFileSync(h.overlay, 'CCRC_TESTBOX_POLL=45s\n', { mode: 0o600 });
+    expect(json(verb(h, 'settings-fleet', '--set=CCRC_TESTBOX_BUDGET=9m', '--unset=CCRC_TESTBOX_POLL', '--from', 'pwa'))['ok']).toBe(true);
+    expect(readFileSync(h.overlay, 'utf8')).toBe('CCRC_TESTBOX_BUDGET=9m\n');
+    expect(json(verb(h, 'settings-fleet', '--unset=CCRC_TESTBOX_LOST_RUN', '--from', 'pwa'))['ok']).toBe(true);
+    expect(readFileSync(h.overlay, 'utf8')).toBe('CCRC_TESTBOX_BUDGET=9m\n');
+  });
+
+  it('a key ccrc.env sets has no reset: settings-fleet --unset refuses key-in-ccrc-env naming it, and writes nothing', () => {
+    const h = fixture();
+    writeFileSync(h.ccrcEnv, 'CCRC_TESTBOX_BUDGET=20m\n');
+    writeFileSync(h.overlay, 'CCRC_TESTBOX_POLL=45s\n', { mode: 0o600 });
+    const r = verb(h, 'settings-fleet', '--unset=CCRC_TESTBOX_BUDGET', '--unset=CCRC_TESTBOX_POLL', '--from', 'pwa');
+    expect(json(r)).toEqual({ ok: false, code: 'key-in-ccrc-env', keys: ['CCRC_TESTBOX_BUDGET'] });
+    expect(readFileSync(h.overlay, 'utf8')).toBe('CCRC_TESTBOX_POLL=45s\n');
+    expect(readFileSync(h.ccrcEnv, 'utf8')).toBe('CCRC_TESTBOX_BUDGET=20m\n');
+  });
+
+  it('settings-fleet --unset of a pairing key, a box key or no key is a usage error, and the overlay is untouched', () => {
+    const h = fixture();
+    writeFileSync(h.overlay, 'CCRC_TESTBOX_POLL=45s\n', { mode: 0o600 });
+    for (const w of ['--unset=CCRC_TESTBOX_URL', '--unset=CCRC_TESTBOX_TOKEN_FILE', '--unset=CCRC_TESTBOX_WORKERS', '--unset=', '--unset=CCRC_PORT']) {
+      const r = verb(h, 'settings-fleet', w, '--from', 'pwa');
+      expect(r.rc, w).toBe(2);
+      expect(r.out, w).toBe('');
+    }
+    expect(readFileSync(h.overlay, 'utf8')).toBe('CCRC_TESTBOX_POLL=45s\n');
+  });
+
+  it('settings-box --unset takes the key\'s line out of the box\'s current file, every other line kept, and re-applies', () => {
+    const catRule = ['^(sudo -n -- )?cat -- /etc/ccrc-testbox/ccrc\\.env$', '0', `# hand-made\\n${OLD_BOX}CCRC_TESTBOX_OS_MIRROR=https://mirror.testbox.invalid\\n`];
+    const h = fixture({}, WITH(catRule));
+    connectedTo(h);
+    expect(box(h, ['--unset=CCRC_TESTBOX_LOG_TAIL', '--unset=CCRC_TESTBOX_OS_MIRROR'])).toEqual({ ok: true });
+    expect(stdinOfLast(h, 'cmp')).toBe('# hand-made\n' + OLD_BOX.replace(/\\n/g, '\n').replace('CCRC_TESTBOX_LOG_TAIL=40\n', ''));
+    const all = cmds(h);
+    expect(all.findIndex((c) => c.includes('cmp -s'))).toBeLessThan(all.findIndex((c) => c.includes('install.sh --reapply')));
+    // a key the box file does not hold is a no-op for the file; the apply still runs
+    const g = fixture();
+    connectedTo(g);
+    expect(box(g, ['--set=CCRC_TESTBOX_WORKERS=3', '--unset=CCRC_TESTBOX_TMPFS'])).toEqual({ ok: true });
+    expect(stdinOfLast(g, 'cmp')).toBe(OLD_BOX.replace(/\\n/g, '\n').replace('WORKERS=2', 'WORKERS=3'));
+  });
+
+  it('settings-box --unset of a pairing setting is refused naming it, and nothing is sent to the box', () => {
+    for (const k of TESTBOX_PAIRED_BOX_KEYS) {
+      const h = fixture();
+      connectedTo(h);
+      const r = verb(h, 'settings-box', `--unset=${k}`, '--from', 'pwa');
+      expect(r.rc, k).toBe(2);
+      expect(sshCalls(h), k).toEqual([]);
+      expect(stateText(h), k).not.toContain('act_id=');
+    }
+  });
+
+  it('a key whose declared default the installer refuses (the root and the repository directory, `~/` paths) has no reset: refused naming it, before the box is asked', () => {
+    expect(sh(fixture(), SRC + 'for k in CCRC_TESTBOX_ROOT CCRC_TESTBOX_TOOLS_DIR CCRC_TESTBOX_OS_MIRROR; do printf "%s=%s\\n" "$k" "$(_tba_box_default "$k")"; done', [VERB]).out)
+      .toBe('CCRC_TESTBOX_ROOT=~/.ccrc/testbox\nCCRC_TESTBOX_TOOLS_DIR=/opt/ccrc-testbox/tools\nCCRC_TESTBOX_OS_MIRROR=\n');
+    for (const k of ['CCRC_TESTBOX_ROOT', 'CCRC_TESTBOX_REPOS']) {
+      const h = fixture();
+      connectedTo(h);
+      expect(box(h, [`--unset=${k}`]), k).toEqual({ ok: false, code: 'box-value-refused', keys: [k] });
+      expect(sshCalls(h), k).toEqual([]);
+      expect(stateText(h), k).not.toContain('act_id=');
+    }
+  });
+
+  it('resetting a run-shaping key the box file held marks parity stale; resetting one it did not hold does not', () => {
+    const h = fixture();
+    connectedTo(h);
+    expect(box(h, ['--unset=CCRC_TESTBOX_RUN_MEMORY_MAX'])).toEqual({ ok: true });
+    expect(stateText(h)).not.toMatch(/^parity_stale=/m);
+    expect(box(h, ['--unset=CCRC_TESTBOX_WORKERS'])).toEqual({ ok: true });
+    expect(stateText(h)).toMatch(/^parity_stale=1$/m);
+  });
+});
+
 describe.skipIf(!HAS_KEYGEN || !HAS_FLOCK || !HAS_NODE)('ccrc testbox-admin settings-box is always a detached act, and keeps the pairing (D-8166, TC8 review)', () => {
   it('the parent only detaches (its one read of the fleet is the busy check): the apply, which outruns a short sub\'s bound, runs in the unit', () => {
     const h = fixture();
@@ -858,7 +952,8 @@ describe.skipIf(!HAS_KEYGEN || !HAS_FLOCK || !HAS_NODE)('ccrc testbox-admin disc
     expect(all[1]).toContain('authorized_keys');
     expect(all[1]).toContain('mktemp');
     expect(all[1]).toContain('mv -f');
-    expect(all[1]).toMatch(/ sh root$/);
+    // the login user, then the mode `all`: every line of ccrc's, and any line holding ccrc's own key (D-8337)
+    expect(all[1]).toMatch(/ sh root all /);
     // an unpair that fails still takes the access line out (root-capable, and a box that cannot unpair is the very one that must not
     // keep it), and says the box side did not finish so the operator finishes it by hand
     const g = fixture({}, WITH(['--unpair', '1', 'ccrc-testbox-install: failed: cannot stop the test service\\n']));

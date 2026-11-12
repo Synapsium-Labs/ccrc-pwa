@@ -205,19 +205,19 @@ jobs:
   # modify or delete an existing file under docs/superpowers/programs/ or docs/superpowers/plans/; it adds
   # a per-task note instead, and a `Ledger-Edit: <reason>` trailer on the HEAD commit is the escape, written
   # to the step summary. Its OWN job, so an internal error or a violation fails only this check and never
-  # skips the test jobs that `needs: select`. WARN-ONLY first (LEDGER_GUARD_MODE=warn: it reports and exits
-  # 0, and `continue-on-error` holds while the mode is warn) while the open pull requests that already edit
-  # a ledger land or move their edit; flip the value to `enforce` to arm it. It checks out the PR's head
-  # commit, not the merge commit, because only the head commit's trailers count. A pull request that edits
-  # this script runs the PR's own copy, so a change to the rule is judged by the rule it changes only in
-  # warn mode; arming is a separate, reviewed one-line change.
+  # skips the test jobs that `needs: select`. ARMED (LEDGER_GUARD_MODE=enforce): it ran warn-only while the
+  # open pull requests that edited a ledger landed or moved to a trailer, and was armed once every open pull
+  # request passed in enforce mode. `warn` (it reports and exits 0, and `continue-on-error` holds) stays the
+  # one-line way back. It checks out the PR's head commit, not the merge commit, because only the head
+  # commit's trailers count. A pull request that edits this script runs the PR's own copy, so a change to
+  # the rule is judged by the rule it changes; review of that diff is what guards the guard.
   ledger-guard:
     name: ledger guard
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     env:
-      LEDGER_GUARD_MODE: warn
+      LEDGER_GUARD_MODE: enforce
     steps:
       - uses: actions/checkout@v7
         with:
@@ -1531,6 +1531,7 @@ jobs:
           test/history-census.test.ts
           test/history-rss-preload.test.ts
           test/history-redact-profiles.test.ts
+          test/history-touched.test.ts
           EOF
           CCRC_TEST_LIST="$RUNNER_TEMP/tests.txt" ./node_modules/.bin/vitest run --config vitest.select.config.ts
 

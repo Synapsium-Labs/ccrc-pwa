@@ -1978,7 +1978,7 @@ CCRC_EXPOSURE_FILE="$HOME/.ccrc/exposure.env"
 # `~/.ccrc/testbox.env` — ccrc-OWNED: the Test box card's verb (`ccrc testbox-admin`) writes the fleet-side test box
 # settings here, so connecting a test box never edits the operator's `ccrc.env`. ccrc's one reader, `_ccrc_knob`,
 # learns it for the sixteen fleet-host test box keys alone (`TB_OVERLAY_KEYS`, one literal list, the keys
-# `_tb_host_table` in ccd/testbox-knobs reads; the 28 box keys never meet it) and only for a key `ccrc.env` does not
+# `_tb_host_table` in ccd/testbox-knobs reads; the 31 box keys never meet it) and only for a key `ccrc.env` does not
 # name: ccrc.env wins, and an environment value still wins outside `file` mode. Both are copied into the generated
 # ccd/lib/ccrc-settings.sh (deploy/gen-settings-lib.mjs).
 CCRC_TESTBOX_OVERLAY_FILE="$HOME/.ccrc/testbox.env"
@@ -2382,6 +2382,7 @@ UPD_BAK_FLOOR=""   # the second this run first held ~/.ccrc/update.lock (`_upd_l
 UPD_URL_DIR=""    # _upd_resolve: the release's URL space (latest/ or download/<tag>/)
 UPD_URL_DIR_SAFE=""    # _upd_resolve: same, through _upd_redact — every "fetching …"/WARN line prints THIS, never UPD_URL_DIR, so a credentialed CCRC_RELEASE_BASE_URL never reaches stdout (review 155 C17, fix round 1 item 11); the real curl calls still read UPD_URL_DIR
 UPD_TARNAME=""    # _upd_resolve: the tarball SHA256SUMS names
+UPD_TARSUM=""     # _upd_resolve: the digest on that same line, the one `_upd_fetch` compares (D-8390)
 UPD_PROVENANCE=""    # _upd_fetch: verified|unsigned, once PROVENANCE settles
 UPD_LAST_PHASE=""    # _upd_last_report: the phase the PREVIOUS run's ~/.ccrc/update.json ended in, read before this run's first write (a foreground run's floor refusal names a restored update by it; a detached run's cannot — its parent's `queued` write replaced the report first)
 UPD_LAST_TARGET=""   # _upd_last_report: … and its target tag
@@ -2440,6 +2441,8 @@ UPD_SPINE_DIED=""    # cmd_update: the step a staged spine died in at or after _
 UPD_GATE_WHY=""        # _upd_gate_probe: one line — what the last probe measured (pass or fail)
 UPD_HEALTH_S=90        # _upd_health_s: the gate's window in seconds (CCRC_UPDATE_HEALTH_S, D-6914)
 UPD_HEALTH_WHY=""      # _upd_health_s: the gate's WARN sentence after `update: WARN: `, empty when the window reads as written
+UPD_DEADLINE_WHY=""    # _upd_deadline_ms: the first undecided reading's sentence, empty when every reading decided (D-8390)
+KNOB_FILE_ONLY=""      # 1 = `_ccrc_knob` reads ccrc.env alone, as a `--detach` parent's child does (D-8390); never from the environment
 UPD_HEALTH_VERSION=""  # _upd_health_version: the version /health answered
 UPD_HEALTH_ADDR=""     # _upd_health_version: the host:port it asked
 
@@ -2866,14 +2869,17 @@ EOF
 # echo). `ccd/ccd-update-sync`, another executable, carries a generated copy of
 # this function (`shared/hook-helpers.mjs`'s log-line region) and redacts at its
 # own `say`, with `bare-host`.
-# OUT OF SCOPE: this function masks only those two, a URL's userinfo and this
-# box's home directory. A query-string secret (`?token=…`, `&key=…`), a
+# D-8342 adds a third: a scheme URL's query and fragment (`https://h/r?token=…#…`
+# reads `https://h/r?[withheld]`; the rule's own comment has the shapes).
+# OUT OF SCOPE: this function masks only those three. A query-string secret
+# outside a scheme URL (`host/r?token=…`, `&key=…` alone), a
 # bearer token (`Authorization: Bearer …`) and curl's credential flags
 # (`-u` / `--user` / `--proxy-user user:pass`) pass through it whole; a line that
 # may carry one needs its own masking before it reaches here. KNOWN LIMITS
 # (D-7564, the corpus's `known-limit` rows): a scheme-less userinfo inside a
-# query string or a path (`https://h/x?proxy=user:secret@host`,
-# `dir/user:secret@host`), a raw '#', '?' or '/' inside a password
+# query string with no scheme URL around it or inside a path
+# (`GET /p?u=user:secret@host:8443`, `dir/user:secret@host`; inside a scheme
+# URL's query it goes with the query, D-8342), a raw '#', '?' or '/' inside a password
 # (`user:pa#ss@host`), a token-only userinfo before a bare host while more
 # text follows (`--proxy=tok@host refused`, an empty port's `tok@h: refused`
 # too), one before a port that a letter, '-', '_' or '~' follows, or a run of
@@ -2951,6 +2957,16 @@ _upd_redact() {
     local bre='(^|[[:space:]"<`])((@*[^/@?#[:space:]"<`][^/@?#[:space:]]*@)([^/@?#[:space:]]*@)*)([^/@?#[:space:])]+([/?#)]|$))'
     while [[ "$s" =~ $bre ]]; do s="${s/"${BASH_REMATCH[0]}"/"${BASH_REMATCH[1]}${BASH_REMATCH[5]}"}"; done
   fi
+  # D-8342, in both modes: a scheme URL's query and fragment can carry a token (`?token=…`), so what follows its first '?' or
+  # '#' goes, to the token's end (whitespace, '"', '<', '>' or a backtick, none of which a URL holds raw); the '?' or '#' stays
+  # and `[withheld]` follows it, so `https://h/r?token=x#f` reads `https://h/r?[withheld]`. A scheme is a letter, then
+  # letters, digits, '+', '.' or '-', then ':' and one or more '/', each maybe after a '\' (as the userinfo rules read one),
+  # and it starts where no such character stands before it (`KEY=https://…` keeps its `KEY=`). Text that is no scheme URL
+  # keeps every '?' and '#' (prose's `release?`, `#2`, `mailto:a@b?x`, a scheme-less `host/r?x`). The walk passes each mask
+  # once and keeps the text before it, so a second pass over its own output changes nothing.
+  local qre='(^|[^A-Za-z0-9+.-])([A-Za-z][A-Za-z0-9+.-]*:(\\?/)+[^?#[:space:]"<>`]*)([?#])[^[:space:]"<>`]*' qout="" qm=""
+  while [[ "$s" =~ $qre ]]; do qm="${BASH_REMATCH[0]}"; qout+="${s%%"$qm"*}${BASH_REMATCH[1]}${BASH_REMATCH[2]}${BASH_REMATCH[4]}[withheld]"; s="${s#*"$qm"}"; done
+  s="$qout$s"
   # Review fix round 1, M6: the OLD blind substring replace was not anchored
   # to a path boundary — HOME=`/home/u` turned `/home/user2/f` into
   # `~ser2/f` (a PREFIX match with no boundary check at all), and a
@@ -3024,7 +3040,9 @@ _upd_redact() {
 # '//' (`deploy://s3cret@m`) cannot be told from a scheme, and would show its user name as one (less, never more: a mirror on
 # another scheme shows `custom` alone). These rules on the raw value close the shapes `_upd_redact`'s KNOWN LIMITS name for a
 # release base: a raw '/' (or a JSON '\/') in the userinfo, and a userinfo inside a path or a query, by the '/' rule; a raw '?'
-# or '#' there by the '@' check below (no rule of the redactor drops that '@'); and the limits whose text follows the host
+# or '#' there by the same rule, which takes '?' and '#' too (D-8342: the redactor now withholds what follows a scheme URL's
+# first '?' or '#', '@' and all, so the '@' check below no longer sees that '@'; a query or a fragment that holds an '@'
+# shows no host, less, never more); and the limits whose text follows the host
 # (`tok@host refused`, `tok@host:8443-x retrying`, `tok@2130706433:80 x`) by the whitespace rule, or, written as one token, by
 # the '@' check (D-7873).
 # rc 0 otherwise, printing the origin (empty for an empty value).
@@ -3032,7 +3050,7 @@ _upd_url_origin() {
   local s="${1:-}" sre='^[A-Za-z][A-Za-z0-9+.-]*://' hre='^[Hh][Tt][Tt][Pp][Ss]?://$' scheme="" bre='[[:space:]"'"'"'<(`]' LC_ALL=C
   if [[ "$s" =~ $bre ]]; then return 1; fi
   if [[ "$s" =~ $sre ]]; then [[ "${BASH_REMATCH[0]}" =~ $hre ]] || return 1; s="${s#"${BASH_REMATCH[0]}"}"; fi
-  case "$s" in *[/\\=]*@*) return 1 ;; esac
+  case "$s" in *[/\\=?#]*@*) return 1 ;; esac
   s="$(_upd_redact "${1:-}")"
   if [[ "$s" =~ $sre ]]; then scheme="${BASH_REMATCH[0]}"; [[ "$scheme" =~ $hre ]] || return 1; s="${s#"$scheme"}"; fi
   case "$s" in *@*) return 1 ;; esac
@@ -18720,12 +18738,24 @@ _inst_caps() {   # what THIS install's ccrc can do (design 2026-09-20 §9, decis
 # files carry today is a scalar (host, port, token, origin) — and the shapes
 # that would diverge are also the shapes systemd itself documents as needing
 # quotes.
-_inst_plist_server() {   # <label> <log> -> the plist bytes, on stdout
-  local label="$1" log="$2" env1="$BOX_ENV_FILE" env2="$CCRC_EXPOSURE_FILE"
+#
+# THE ROLE PICKS THE LAUNCH LINE, as it picks the label (D-8388). A fleet box's
+# job is `ccrc-agent.service`'s translation: the agent's entry point, and its
+# ONE env file, `~/.ccrc/agent.env`, which that unit reads with no `-`, i.e.
+# REQUIRED. So the fleet line stops (`|| exit 1`) where systemd refuses to
+# start, and never reads ccrc.env or exposure.env, which a fleet unit does not
+# read either. Every other role gets the server's line, unchanged.
+_inst_plist_server() {   # <label> <log> [<role>] -> the plist bytes, on stdout
+  local label="$1" log="$2" role="${3:-}" env1="$BOX_ENV_FILE" env2="$CCRC_EXPOSURE_FILE"
   local entry="$HOME/ccrc/server/dist/server/src/index.js"
   # `&amp;&amp;` — this string lands inside XML, where a bare `&` is a parse
   # error and `plutil` refuses the whole file.
   local cmd="set -a; [ -f '$env1' ] &amp;&amp; . '$env1'; [ -f '$env2' ] &amp;&amp; . '$env2'; set +a; exec /usr/bin/env node '$entry'"
+  if [ "$role" = fleet ]; then
+    local agent_env="$HOME/.ccrc/agent.env"
+    entry="$HOME/ccrc/agent/dist/agent/src/index.js"
+    cmd="set -a; . '$agent_env' || exit 1; set +a; exec /usr/bin/env node '$entry'"
+  fi
   cat <<PL
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -18770,7 +18800,7 @@ _inst_units_darwin() {
   log="$HOME/.ccrc/logs/${label}.log"
   mkdir -p "$dir" "$HOME/.ccrc/logs" || _ccrc_die "cannot create $dir and \$HOME/.ccrc/logs"
   gen="$dir/$label.plist.tmp.$$.new"
-  _inst_plist_server "$label" "$log" > "$gen" \
+  _inst_plist_server "$label" "$log" "$INST_ROLE" > "$gen" \
     || { rm -f -- "$gen"; _ccrc_die "could not generate the $label job at $gen"; }
   # VALIDATED BEFORE IT LANDS. `launchctl bootstrap` on a malformed plist
   # fails with "Could not find specified service", a message about the wrong
@@ -20812,7 +20842,7 @@ _inst_floor() {
 # refusing loudly rather than degrading:
 #   1. FETCH + VERIFY (`_upd_fetch`): SHA256SUMS first (under `latest/` the
 #      tag is unknown until the sums file names the tarball — install.sh's
-#      own order), then the tarball; `sha256sum -c` BEFORE extraction (the
+#      own order), then the tarball; its own SHA256SUMS line BEFORE extraction (the
 #      outer checksum guards transport), then the per-file MANIFEST after it
 #      (the manifest guards the SET — a file corrupted after the MANIFEST was
 #      generated ships in a tarball whose SHA256SUMS is perfectly honest).
@@ -20891,6 +20921,8 @@ cmd_update() {
     esac
     shift
   done
+  # D-8390 (R50 b): a `--detach` parent reads its settings from ccrc.env alone, the one source its detached child has.
+  [ "$detach" -eq 0 ] || KNOB_FILE_ONLY=1
   if [ -n "$to" ] && [[ ! "$to" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
     echo "$PROG: --to expects a release tag shaped vX.Y.Z (got: $to)" >&2
     usage >&2
@@ -21916,6 +21948,8 @@ cmd_rollback() {
     esac
     shift
   done
+  # D-8390 (R50 b): as `cmd_update`'s: a `--detach` parent reads ccrc.env alone, as its detached child does.
+  [ "$detach" -eq 0 ] || KNOB_FILE_ONLY=1
   if [ -n "$to" ] && [[ ! "$to" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
     echo "$PROG: rollback: --to expects a release tag shaped vX.Y.Z (got: $to)" >&2
     usage >&2
@@ -22279,7 +22313,7 @@ _upd_rerun_hint() {
 # read the last four names too (wave 29, D-6981; D-7500), through ccd/lib/ccrc-settings.sh, which `node deploy/gen-settings-lib.mjs`
 # regenerates after any edit to this line, to `_ccrc_knob`, to the `_box_*` model or to a check the library carries.
 # ccd's spawn reads CCRC_BROWSER_MCP_DEFAULT and CCRC_BROWSER_MCP_SERVERS through that same library (D-8121).
-CCRC_SETTINGS=(CCRC_BACKUP_KEEP CCRC_BACKUP_DATA_KEEP CCRC_VERSIONS_KEEP CCRC_UPDATE_HEALTH_S CCRC_UPDATE_DEADLINE_MS CCRC_RELEASE_BASE_URL CCRC_MODELS_ADVANCE_BUDGET_S CCRC_SESSION_SLICE_MEMORY_MAX CCRC_SESSION_SLICE_SWAP_MAX CCRC_TEST_SLICE_MEMORY_MAX CCRC_TEST_SLICE_SWAP_MAX CCRC_TEST_SLICE_CPU_WEIGHT CCRC_TEST_SLICE_CPU_QUOTA CCRC_TEST_SLICE_IO_WEIGHT CCRC_TEST_HEAVY_SLOTS CCRC_TEST_WIDE_FILES CCRC_TEST_PRESSURE_MAX CCRC_GRAPH_STORE CCRC_GRAPH_SOURCE_REF CCRC_GRAPH_REPOS_EXCLUDE CCRC_GRAPH_REFRESH_SECS CCRC_GRAPH_FETCH_SECS CCRC_GRAPH_FULL_REBUILD_SECS CCRC_GRAPH_INCREMENTAL_MAX_FILES CCRC_GRAPH_FULL_FAIL_MAX CCRC_GRAPH_FAIL_BACKOFF_SECS CCRC_GRAPH_BUDGET CCRC_GRAPH_BUILD_TIMEOUT CCRC_GRAPH_SLOT_WAIT_SECS CCRC_GRAPH_BUILD_NICE CCRC_GRAPH_MAX_WORKERS CCRC_GRAPH_MAX_SHRINK_PCT CCRC_GRAPH_KEEP_BUILDS CCRC_GRAPH_BUILD_GRACE_SECS CCRC_GRAPH_MIGRATE_BUDGET CCRC_GRAPH_HOOKSTATE_FRESH_SECS CCRC_GRAPH_GATE_MAX_DIFF_PCT CCRC_GRAPH_GATE_MAX_DENIALS CCRC_GRAPH_CARD_DIFF_LIST_MAX CCRC_GRAPH_PRESSURE_MAX CCRC_KEEPALIVE_MODEL CCRC_KEEPALIVE_PROMPT CCRC_KEEPALIVE_FRESH CCRC_USAGE_SWEEP_DAYS CCRC_TESTBOX_URL CCRC_TESTBOX_TOKEN_FILE CCRC_TESTBOX_GIT_URL_BASE CCRC_TESTBOX_GIT_KEY CCRC_TESTBOX_UNTRACKED_FILE_MAX CCRC_TESTBOX_SNAPSHOT_MAX CCRC_TESTBOX_STATUS_DEADLINE CCRC_TESTBOX_RECONNECT_DEADLINE CCRC_TESTBOX_LOST_RUN CCRC_TESTBOX_QUEUE_LIMIT CCRC_TESTBOX_QUEUE_WAIT CCRC_TESTBOX_BUDGET CCRC_TESTBOX_DENY_GLOBS CCRC_TESTBOX_POLL CCRC_TESTBOX_FALLBACK_INSTALL CCRC_TESTBOX_TIMES CCRC_TESTBOX_RUNS CCRC_TESTBOX_WORKERS CCRC_TESTBOX_RUN_TMPDIR CCRC_TESTBOX_RUN_MEMORY_MAX CCRC_TESTBOX_RUN_SWAP_MAX CCRC_TESTBOX_RUN_CPU_QUOTA CCRC_TESTBOX_ROOT CCRC_TESTBOX_REPOS CCRC_TESTBOX_FETCH_EVERY CCRC_TESTBOX_RETENTION CCRC_TESTBOX_PRISTINE_KEEP CCRC_TESTBOX_PRISTINE_RETRY CCRC_TESTBOX_REPORT_MAX CCRC_TESTBOX_TOOLS_DIR CCRC_TESTBOX_OS_MIRROR CCRC_TESTBOX_EGRESS_ALLOW CCRC_TESTBOX_PUSH_USER CCRC_TESTBOX_ENV_FORWARD CCRC_TESTBOX_RUN_USER_PREFIX CCRC_TESTBOX_REGISTRY_PROXY CCRC_TESTBOX_REGISTRY_UPSTREAM CCRC_TESTBOX_TMPFS CCRC_TESTBOX_LOG_TAIL CCRC_TESTBOX_SESSION_RUNS CCRC_TESTBOX_SERVICE_USER CCRC_TESTBOX_LISTEN CCRC_TESTBOX_SERVICE_TOKEN_FILE CCRC_TESTBOX_UNIT_MAX CCRC_CARRY_COPY_WARN_BYTES CCRC_BROWSER_MCP_DEFAULT CCRC_BROWSER_MCP_SERVERS CCRC_WAKE_PRESSURE_GATE CCRC_WAKE_HEADROOM_MIN_GIB CCRC_SWEEP_BATCH CCRC_SWEEP_PRESSURE_WAIT_S CCRC_RESCUE_SOLO_JITTER_S CCRC_LIMIT_WATCHDOG_MIN CCRC_ADMIN_MERGE)
+CCRC_SETTINGS=(CCRC_BACKUP_KEEP CCRC_BACKUP_DATA_KEEP CCRC_VERSIONS_KEEP CCRC_UPDATE_HEALTH_S CCRC_UPDATE_DEADLINE_MS CCRC_RELEASE_BASE_URL CCRC_MODELS_ADVANCE_BUDGET_S CCRC_SESSION_SLICE_MEMORY_MAX CCRC_SESSION_SLICE_SWAP_MAX CCRC_TEST_SLICE_MEMORY_MAX CCRC_TEST_SLICE_SWAP_MAX CCRC_TEST_SLICE_CPU_WEIGHT CCRC_TEST_SLICE_CPU_QUOTA CCRC_TEST_SLICE_IO_WEIGHT CCRC_TEST_HEAVY_SLOTS CCRC_TEST_WIDE_FILES CCRC_TEST_PRESSURE_MAX CCRC_GRAPH_STORE CCRC_GRAPH_SOURCE_REF CCRC_GRAPH_REPOS_EXCLUDE CCRC_GRAPH_REFRESH_SECS CCRC_GRAPH_FETCH_SECS CCRC_GRAPH_FULL_REBUILD_SECS CCRC_GRAPH_INCREMENTAL_MAX_FILES CCRC_GRAPH_FULL_FAIL_MAX CCRC_GRAPH_FAIL_BACKOFF_SECS CCRC_GRAPH_BUDGET CCRC_GRAPH_BUILD_TIMEOUT CCRC_GRAPH_SLOT_WAIT_SECS CCRC_GRAPH_BUILD_NICE CCRC_GRAPH_MAX_WORKERS CCRC_GRAPH_MAX_SHRINK_PCT CCRC_GRAPH_KEEP_BUILDS CCRC_GRAPH_BUILD_GRACE_SECS CCRC_GRAPH_MIGRATE_BUDGET CCRC_GRAPH_HOOKSTATE_FRESH_SECS CCRC_GRAPH_GATE_MAX_DIFF_PCT CCRC_GRAPH_GATE_MAX_DENIALS CCRC_GRAPH_CARD_DIFF_LIST_MAX CCRC_GRAPH_PRESSURE_MAX CCRC_KEEPALIVE_MODEL CCRC_KEEPALIVE_PROMPT CCRC_KEEPALIVE_FRESH CCRC_USAGE_SWEEP_DAYS CCRC_TESTBOX_URL CCRC_TESTBOX_TOKEN_FILE CCRC_TESTBOX_GIT_URL_BASE CCRC_TESTBOX_GIT_KEY CCRC_TESTBOX_UNTRACKED_FILE_MAX CCRC_TESTBOX_SNAPSHOT_MAX CCRC_TESTBOX_STATUS_DEADLINE CCRC_TESTBOX_RECONNECT_DEADLINE CCRC_TESTBOX_LOST_RUN CCRC_TESTBOX_QUEUE_LIMIT CCRC_TESTBOX_QUEUE_WAIT CCRC_TESTBOX_BUDGET CCRC_TESTBOX_DENY_GLOBS CCRC_TESTBOX_POLL CCRC_TESTBOX_FALLBACK_INSTALL CCRC_TESTBOX_TIMES CCRC_TESTBOX_RUNS CCRC_TESTBOX_WORKERS CCRC_TESTBOX_RUN_TMPDIR CCRC_TESTBOX_RUN_MEMORY_MAX CCRC_TESTBOX_RUN_SWAP_MAX CCRC_TESTBOX_RUN_CPU_QUOTA CCRC_TESTBOX_ROOT CCRC_TESTBOX_REPOS CCRC_TESTBOX_FETCH_EVERY CCRC_TESTBOX_RETENTION CCRC_TESTBOX_PRISTINE_KEEP CCRC_TESTBOX_PRISTINE_RETRY CCRC_TESTBOX_REPORT_MAX CCRC_TESTBOX_TOOLS_DIR CCRC_TESTBOX_OS_MIRROR CCRC_TESTBOX_EGRESS_ALLOW CCRC_TESTBOX_PUSH_USER CCRC_TESTBOX_ENV_FORWARD CCRC_TESTBOX_RUN_USER_PREFIX CCRC_TESTBOX_REGISTRY_PROXY CCRC_TESTBOX_REGISTRY_UPSTREAM CCRC_TESTBOX_TMPFS CCRC_TESTBOX_LOG_TAIL CCRC_TESTBOX_SESSION_RUNS CCRC_TESTBOX_SERVICE_USER CCRC_TESTBOX_LISTEN CCRC_TESTBOX_SERVICE_TOKEN_FILE CCRC_TESTBOX_UNIT_MAX CCRC_TESTBOX_PROBE_CONFIG_DIR CCRC_TESTBOX_PROBE_SOCKET CCRC_TESTBOX_PROBES_PER_DAY CCRC_CARRY_COPY_WARN_BYTES CCRC_BROWSER_MCP_DEFAULT CCRC_BROWSER_MCP_SERVERS CCRC_WAKE_PRESSURE_GATE CCRC_WAKE_HEADROOM_MIN_GIB CCRC_SWEEP_BATCH CCRC_SWEEP_PRESSURE_WAIT_S CCRC_RESCUE_SOLO_JITTER_S CCRC_LIMIT_WATCHDOG_MIN CCRC_ADMIN_MERGE)
 # key:class:family:roles:applies (spec 5.1, D12, D16). class value|origin|is-set (the spec's `presence`, D12)|omit; roles a comma list of CCRC_ROLE
 # words, or none; applies run|update. Mirrored in shared/api.ts's BOX_SETTING_TABLE, held equal by box-settings-table.test.ts.
 # shellcheck disable=SC2054  # covers the whole array (shellcheck 0.11.0 reports one SC2054 per array, at the line of the array's opener, not at its first row, and a directive on a row inside it hides nothing): each element is one table row, and the commas inside a row are its roles, not separators
@@ -22372,6 +22406,9 @@ BOX_SETTINGS_TABLE=(
   CCRC_TESTBOX_LISTEN:omit:testbox:none:run
   CCRC_TESTBOX_SERVICE_TOKEN_FILE:omit:testbox:none:run
   CCRC_TESTBOX_UNIT_MAX:omit:testbox:none:run
+  CCRC_TESTBOX_PROBE_CONFIG_DIR:omit:testbox:none:run
+  CCRC_TESTBOX_PROBE_SOCKET:omit:testbox:none:run
+  CCRC_TESTBOX_PROBES_PER_DAY:omit:testbox:none:run
   CCRC_CARRY_COPY_WARN_BYTES:value:carry-copies:fleet,both:run
   CCRC_BROWSER_MCP_DEFAULT:value:browser-tools:fleet,both:run
   CCRC_BROWSER_MCP_SERVERS:is-set:browser-tools:fleet,both:run
@@ -22448,11 +22485,16 @@ _set_spec() {
 # `read` drops and systemd cannot read at all (`_box_env_has_nul`, D-3832), and a scan that answers anything but 0, 1 or
 # 4 (an awk that cannot run, or is killed) could not be scanned. Only an absent file, one that never names the key, one
 # the model reads as not naming it, or an empty value there (like an empty environment value) reads <default>.
+# D-8390 (R50 b): KNOB_FILE_ONLY=1 makes every call `file` mode. A `--detach` parent (`cmd_update`, `cmd_rollback`) sets it,
+# because its detached child runs under the user manager's environment, which carries no setting (W24-P5), and so reads
+# ccrc.env alone: a parent the server started holds the environment systemd parsed when the server started, and a ccrc.env
+# edited since would make the two read different values (a rollback's existence probe asking one release host, its child
+# fetching from another). ccd/ccrc clears it at file scope, so no environment can set it there.
 _ccrc_knob() {   # <KEY> <default> [file]
   local key="$1" f="$BOX_ENV_FILE" g=0 why=""
   KNOB=""; KNOB_FROM=""; KNOB_WHY=""
   case " ${CCRC_SETTINGS[*]} " in *" $key "*) ;; *) KNOB_WHY="$key is not one of ccrc's settings (CCRC_SETTINGS), so it is never read from a file"; return 1 ;; esac
-  [ "${3:-}" = file ] || KNOB="${!key:-}"
+  [ "${3:-}" = file ] || [ "${KNOB_FILE_ONLY:-}" = 1 ] || KNOB="${!key:-}"
   if [ -n "$KNOB" ]; then KNOB_FROM=environment
   elif [ -e "$f" ] || [ -L "$f" ]; then
     if [ -f "$f" ] && [ -r "$f" ]; then if _box_env_has_nul "$f" 2>/dev/null; then g=2; else LC_ALL=C awk -v k="$key" '{ sub(/^[ \t\r]+/, ""); t = $0; sub(/^export[ \t]+/, "", t); w = (" " $0 " ") ~ ("[^A-Za-z0-9_]" k "[^A-Za-z0-9_]"); n += w && (!/^[#;]/ || /\r./) } !/\r./ && (/^[#;]/ || index($0, k "=") == 1 || (t ~ /^[A-Za-z_][A-Za-z0-9_]*=/ && index(t, k "=") != 1)) { next } w { f = 1; exit } END { exit (f ? 0 : (n ? 1 : 4)) }' "$f" 2>/dev/null || g=$?; fi; else g=3; fi
@@ -22501,13 +22543,29 @@ _upd_deadline_says() { printf 'a positive whole number of milliseconds in canoni
 # which overrides what came before it and leaves its default; a file that never names it adds no reading. Prints
 # MILLISECONDS by name (each caller divides by 1000; update.json is seconds, rulings R1/R14). rc 0 decided; rc 1 when any
 # reading is not, printing 900000 plain, 0 under `min` (so a bound built on it is already past) and the largest it could
-# decide, at least 900000, under `max`. It never dies; each caller says what an rc 1 costs it.
+# decide, at least 900000, under `max`. It never dies; each caller says what an rc 1 costs it. D-8390 (R50 a): it also sets
+# UPD_DEADLINE_WHY, empty at rc 0, else the first undecided reading's sentence in the knob readers' words (`_keep_why`'s
+# shape): `_ccrc_knob`'s KNOB_WHY for a file it cannot measure, else `CCRC_UPDATE_DEADLINE_MS='<value>' is not <the check's
+# words>, as set in <the environment | the box's ccrc.env | the exposure file>`, the value capped at 32 characters and a
+# non-printable byte written `?`. Only a caller in this shell sees it, so one that prints it calls this a second time. With
+# `max` rc 1 `cmd_watchdog` refuses its wedged verdict, since no reading then bounds the server's.
 _upd_deadline_ms() {   # [min|max]
-  local f v lo="" hi=0 rc=0
+  local f v lo="" hi=0 rc=0 src shown
+  UPD_DEADLINE_WHY=""
   # "" is the plain reading; the two files are read alone only for `min` and `max`.
   for f in "" ${1:+"$BOX_ENV_FILE" "$CCRC_EXPOSURE_FILE"}; do
     if [ -z "$f" ]; then _ccrc_knob CCRC_UPDATE_DEADLINE_MS 900000; else BOX_ENV_FILE="$f" _ccrc_knob CCRC_UPDATE_DEADLINE_MS 900000 file; fi && v="$KNOB" || v=""
     [ -z "$f" ] || [ "$KNOB_FROM" != default ] || continue
+    if [[ ! "$v" =~ ^[123456789][0123456789]{0,14}$ ]] && [ -z "$UPD_DEADLINE_WHY" ]; then
+      if [ -n "$KNOB_WHY" ]; then UPD_DEADLINE_WHY="$KNOB_WHY"
+      else
+        src="the box's ccrc.env"
+        if [ -z "$f" ]; then [ "$KNOB_FROM" != environment ] || src="the environment"; elif [ "$f" = "$CCRC_EXPOSURE_FILE" ]; then src="the exposure file"; fi
+        shown="$v"; [ "${#shown}" -le 32 ] || shown="${shown:0:32}..."
+        UPD_DEADLINE_WHY="CCRC_UPDATE_DEADLINE_MS='${shown//[![:print:]]/?}' is not $(_upd_deadline_says), as set in $src"
+      fi
+      v=""
+    fi
     [[ "$v" =~ ^[123456789][0123456789]{0,14}$ ]] || { v=900000; rc=1; }
     [ "$v" -le "$hi" ] || hi="$v"
     [ -n "$lo" ] && [ "$lo" -le "$v" ] || lo="$v"
@@ -22695,7 +22753,7 @@ cmd_watchdog() {
   # knob W2's server reads) and is divided by 1000 HERE, the one place it is
   # compared — a sub-second deadline is 0 s, so a report one second old is
   # stale.
-  local now deadline lim age
+  local now deadline lim age dl_undecided=0
   now="$(date +%s)"
   # A `date` that did not answer would make the subtraction below a bash
   # arithmetic error, not an age — Task 1's `_upd_phase` refuses the same.
@@ -22703,8 +22761,15 @@ cmd_watchdog() {
     || _ccrc_die "watchdog: date +%s did not answer with unix seconds — nothing was re-measured or reverted"
   # The LARGEST reading (D-6602): `lim` feeds both thresholds, and past twice it a live holder's report is written over as wedged,
   # so it must never be smaller than a deadline the server may hold. One reading for both: a larger in-progress threshold only
-  # delays the probe of a DEAD updater, whose lease the server's own deadline frees meanwhile.
-  deadline="$(_upd_deadline_ms max)" || echo "watchdog: WARN: CCRC_UPDATE_DEADLINE_MS does not read as one whole number of milliseconds everywhere the server may take it from (the environment, the box's ccrc.env, the exposure file) — using the largest reading ccrc could decide"
+  # delays the probe of a DEAD updater, whose lease the server's own deadline frees meanwhile. D-8390 (R50 a): a reading the bash
+  # cannot decide (`2e6`, which the server reads as 2000000) leaves no largest, so the WARN says which one in the knob readers'
+  # words and the wedged verdict is refused while it stands: a dead updater, which the free lock below proves gone, is still
+  # measured past the largest reading decided, but a live holder's report is never written over.
+  if ! deadline="$(_upd_deadline_ms max)"; then
+    dl_undecided=1
+    _upd_deadline_ms max >/dev/null || :   # again in this shell, for UPD_DEADLINE_WHY
+    echo "watchdog: WARN: $UPD_DEADLINE_WHY — using $deadline ms, the largest reading ccrc could decide, for a dead updater; a live one is never recorded as wedged while a reading is undecided"
+  fi
   lim=$(( deadline / 1000 ))
   age=$(( 10#$now - 10#$upd ))
   if [ "$age" -le "$lim" ]; then
@@ -22768,7 +22833,7 @@ cmd_watchdog() {
   local who="${pid:-unknown}"
   if [ "$lrc" -eq 1 ]; then
     _upd_unlock
-    if [ "$age" -gt $(( 2 * lim )) ]; then
+    if [ "$dl_undecided" -eq 0 ] && [ "$age" -gt $(( 2 * lim )) ]; then
       _upd_phase failed "watchdog: updater pid $who wedged holding ~/.ccrc/update.lock since $upd"
       echo "watchdog: updater pid $who has held ~/.ccrc/update.lock with no report for ${age}s, past twice the deadline — recorded as wedged; nothing was reverted"
       return 0
@@ -23136,8 +23201,8 @@ _upd_phase() {
   # report, `died: abandoned`, D-5329) has set UPD_SWEEP_WORD, so it is absent on every
   # phase before the sweep, on every path that never swept, and in every report
   # an older build wrote. Absent means NOT MEASURED, never "nothing was down";
-  # `ccrc doctor`'s update-sweep check reads it that way. The server's
-  # `reportFrom` reads keys by name and ignores this one.
+  # `ccrc doctor`'s update-sweep check reads it that way, and so does the server's
+  # one reader of it (`sweepFrom`, D-8386), which puts it on `GET /api/updates`.
   [ -z "$UPD_SWEEP_WORD" ] || sw=",\"sweep\":$(_upd_json_str "$(_upd_redact "$UPD_SWEEP_WORD")")"
   tmp="$BOX_UPDATE_JSON.tmp.$$"
   _tmp_guard "$tmp"
@@ -23745,6 +23810,17 @@ _upd_release_base() {
   _ccrc_knob CCRC_RELEASE_BASE_URL "https://github.com/$CCRC_RELEASE_OWNER/$CCRC_RELEASE_REPO/releases" "${1:-}" || { echo "$PROG: $KNOB_WHY" >&2; return 1; }
   printf '%s' "$KNOB"
 }
+# `_upd_base_ok <base>` — D-8342: the release paths (`/download/<tag>/…`, `/latest/download/…`) are appended to the base, so
+# a base holding a '?' or a '#' would build a URL whose paths sit inside its query or fragment, one no release host serves.
+# rc 1 refuses it and sets KNOB_WHY, the sentence a caller dies with or reports, naming the variable and never the value (a
+# query can carry a token); rc 0 otherwise. Asked where a release path is first built from the base, before any fetch:
+# `_upd_resolve` and `_upd_asset_listed`. install.sh's release arm refuses the same base in the same words.
+_upd_base_ok() {
+  case "${1:-}" in
+    *'?'*|*'#'*) KNOB_WHY="CCRC_RELEASE_BASE_URL holds a query or a fragment, so the release paths cannot be appended to it"; return 1 ;;
+  esac
+  return 0
+}
 
 # `_upd_validate_timeout <name> <default> [what] [max]` — ONE validator for
 # every CCRC_RELEASE_* knob (review fix round 1 M5): curl reads
@@ -23817,6 +23893,7 @@ _upd_resolve() {   # $1 = pinned tag, or "" for the newest release
   # Called in this shell, never `$(…)`, so KNOB_WHY reaches the die: the report's detail then says why (the file, the key, the
   # line, never a value), and its own line is silenced, the die's saying it once. A node fault, never `provenance: ` (F8, F9).
   _upd_release_base >/dev/null 2>&1 && base="$KNOB" || _ccrc_die "$KNOB_WHY — nothing on this box was changed"
+  _upd_base_ok "$base" || _ccrc_die "$KNOB_WHY — nothing on this box was changed"   # D-8342, before any fetch or staging dir
   if [ -n "$to" ]; then UPD_URL_DIR="$base/download/$to"; else UPD_URL_DIR="$base/latest/download"; fi
   UPD_URL_DIR_SAFE="$(_upd_redact "$UPD_URL_DIR")"
   # UPD_STAGE_PARENT: set only by the test box's tools unit, which stages under its own <tools> (TB6, D-7408).
@@ -23846,6 +23923,7 @@ _upd_resolve() {   # $1 = pinned tag, or "" for the newest release
     || _ccrc_die "download failed: $UPD_URL_DIR/SHA256SUMS (is there a release, or did the connection stall — connect ${CCRC_RELEASE_CONNECT_TIMEOUT}s / under ${CCRC_RELEASE_SPEED_LIMIT}B/s for ${CCRC_RELEASE_SPEED_TIME}s — or did it time out after ${CCRC_RELEASE_SUMS_MAX_TIME}s / exceed ${CCRC_RELEASE_SUMS_MAX_FILESIZE} bytes) — nothing on this box was changed"
   read -r _sum UPD_TARNAME < "$UPD_STAGE/SHA256SUMS" \
     || _ccrc_die "SHA256SUMS is empty — refusing; nothing on this box was changed"
+  UPD_TARSUM="$_sum"   # D-8390 (R50 d): the tarball's own line is the only one ever read
   # D-6751 (review 926, F2; R46): a name the release host supplies is held to 200 bytes (spec §8's report cap) of printable
   # ASCII, counted and matched under LC_ALL=C, where it is read, before any sentence, terminal or `_upd_redact`'s loops carry
   # it; `_upd_fetch` holds build.json's version alike. The length test runs first, so the match never scans a long value.
@@ -23898,7 +23976,17 @@ _upd_fetch() {
   _upd_phase verifying
   # Verify BEFORE extracting: a tarball that fails its checksum never puts a
   # file on disk, let alone runs one (install.sh's rule, same words).
-  ( cd "$UPD_STAGE" && _plat_sha256_check SHA256SUMS >/dev/null 2>&1 ) \
+  # D-8390 (R50 d): never `sha256sum -c SHA256SUMS`, which opens every path the
+  # file names: a host could make it read any file on this box, block on a
+  # FIFO or read /dev/zero forever while this run holds update.lock. The one
+  # file digested is the staged tarball, by its own path and on stdin (so no
+  # name is escaped into the output), and it must equal the digest on the
+  # line `_upd_resolve` took its name from: 64 lowercase hex, as
+  # `deploy/build-release.sh`'s sha256sum writes it. No other line is read.
+  local got=""
+  got="$(_plat_sha256 < "$UPD_STAGE/$UPD_TARNAME" 2>/dev/null)" || got=""
+  got="${got%% *}"
+  [[ "$UPD_TARSUM" =~ ^[0123456789abcdef]{64}$ ]] && [ "$got" = "$UPD_TARSUM" ] \
     || _ccrc_die "checksum verification FAILED for $UPD_TARNAME — refusing to extract or install; nothing on this box was changed"
 
   # ── PROVENANCE (design §5). The bundle is fetched from beside the tarball
@@ -23924,10 +24012,16 @@ _upd_fetch() {
   if [ "$rc" -eq 0 ]; then
     verifier="$CCRC_HERE/../deploy/verify-provenance.mjs"
     vrc=0
-    node --no-warnings "$verifier" \
+    # D-8389: the verifier's stderr is printed through `_upd_redact`, as every
+    # other update line is, never inherited raw: its exit-3 sentence carries a
+    # dependency's own load error, which can name a credentialed URL or a path
+    # under this home. Its stdout (the one `verified …` line) stays inherited.
+    local verr=""
+    { verr="$(node --no-warnings "$verifier" \
         --blob "$UPD_STAGE/$UPD_TARNAME" --bundle "$bundle" --tag "$UPD_VERSION" \
-        --owner "$CCRC_RELEASE_OWNER" --repo "$CCRC_RELEASE_REPO" \
-      || vrc=$?
+        --owner "$CCRC_RELEASE_OWNER" --repo "$CCRC_RELEASE_REPO" 2>&1 1>&3 3>&-)" \
+      || vrc=$?; } 3>&1
+    [ -z "$verr" ] || printf '%s\n' "$(_upd_redact "$verr")" >&2
     # D-3142 (Task 12 review, Important): `deploy/verify-provenance.mjs`
     # speaks exactly two exit codes of its own — 1 (refused, a real verdict
     # on the bundle) and 2 (usage) — and `node` itself can add exits the
@@ -24854,7 +24948,7 @@ _upd_restore_copy() {
 
 # `_upd_asset_listed <tag> <asset>` — 0 the release carries it; 1 it does not,
 # MEASURED: the host answered 404; 2 unmeasured — anything else; 3 the release
-# base could not be read (`_upd_release_base`'s own stderr line says why, KNOB_WHY
+# base could not be read or holds a query or a fragment (`_upd_base_ok`, D-8342; a stderr line says why, KNOB_WHY
 # holds it for the caller's report, F8, and no host was asked: a word of its own, since a caller's rc-2 sentence blames
 # curl and the host, wave 24, D-6594). Two callers:
 # arm 2 asks for the previous release's bundle, `rollback` (Task 7) for
@@ -24899,6 +24993,7 @@ _upd_asset_listed() {
     "a whole number of seconds from 1 to 18 (the pre-detach check must answer inside W5's 20-second spawn deadline)" 18
   # Read before the curl, outside its `2>/dev/null`, so the reader's line reaches the operator.
   local b; _upd_release_base >/dev/null && b="$KNOB" || return 3   # in this shell, so the caller has KNOB_WHY
+  _upd_base_ok "$b" || { echo "$PROG: $KNOB_WHY" >&2; return 3; }   # D-8342: refused like an unreadable base, no host asked
   code="$(curl -g -fsSL --connect-timeout "$CCRC_RELEASE_CONNECT_TIMEOUT" \
     --max-time "$CCRC_RELEASE_PROBE_MAX_TIME" \
     -o /dev/null -w '%{http_code}' "$b/download/$1/$2" 2>/dev/null)" || rc=$?
@@ -27736,9 +27831,14 @@ _bak_gc() {   # <lead word: update|rollback>
   # every GATED verification (D-6745): when the re-stamp is already late, the keep-set's first full verification, which
   # `_bak_keepset` never gates (ruling 4), can run past `until`, and past the hard cap, by one classifier call (W24-K1 measures one).
   # An undecided reading (`_upd_deadline_ms min` rc 1) leaves no deadline to cap: the bound is the re-stamp less the margin.
+  # D-8390 (R50 c): the 63 s is an update's chain (a re-install rollback runs `cmd_update`, so it leads `update` here). A rollback
+  # by FLIP has its own, 58 s: the spawn and the two probes, counted as ruled (a flip whose kept check first answered not kept
+  # probes before D-3466's killed-flip state makes it a flip, in the parent and again in the child), and no fleet-health call,
+  # which only `cmd_update` makes. W24-K6 derives both literals.
+  local chain=63; [ "$lead" = update ] || chain=58
   if [[ "${UPD_THIN_AT:-}" =~ ^[1-9][0-9]{0,10}$ ]]; then
     dl="$(_upd_deadline_ms min)" || { rc=1; echo "$lead: backups: WARN: CCRC_UPDATE_DEADLINE_MS does not read as one whole number of milliseconds everywhere the server may take it from (the environment, the box's ccrc.env, the exposure file), so no verification starts this run past the keep-set's first full one — the next update continues"; }
-    until=$(( 10#$UPD_THIN_AT + dl / 1000 - margin )); hc=$(( 4 * dl / 1000 - 63 - margin ))
+    until=$(( 10#$UPD_THIN_AT + dl / 1000 - margin )); hc=$(( 4 * dl / 1000 - chain - margin ))
     [ "$dl" -eq 0 ] || [[ ! "${UPD_REPORT_STARTED:-}" =~ ^[1-9][0-9]{0,10}$ ]] || [ $(( hc += 10#$UPD_REPORT_STARTED )) -ge "$until" ] || until="$hc"
   fi
   _bak_keepset "$until" || krc=$?   # wave 9 R10g: the selection of the two extra keeps, shared with `_bak_prune`; the floor was checked above
@@ -29484,7 +29584,7 @@ _usage_history_paragraph() {
     '            session into ~/.ccrc/history every 2 minutes, verbatim, secrets' \
     '            a session printed included; touch ~/.ccrc/history-off to pause' \
     '            it. status [--json] reports the store and its health. A' \
-    '            session recalls with grep|describe|expand|tree [--agents].' \
+    '            session recalls with grep|describe|expand|tree|touched [--agents].' \
     '            import|prune|reparse are dry runs unless --apply, and a dry' \
     '            run runs inside a session. Every --apply form and every' \
     '            doctor flag, such as doctor' \

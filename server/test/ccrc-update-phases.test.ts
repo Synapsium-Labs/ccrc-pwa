@@ -839,12 +839,11 @@ describe('ccrc update: update.json at every phase, and --from (design §10)', ()
       expect(p.status, p.stderr).toBe(0);
       return p.stdout;
     };
-    // No userinfo: byte for byte, including a query-string '@' past the
-    // authority (the comment above `_upd_redact`'s own strip states this).
+    // No userinfo: byte for byte. A query-string '@' past the authority is no userinfo (the comment above `_upd_redact`'s
+    // own strip states this); the query itself goes since D-8342, its '?' kept.
     const plain = 'https://github.com/Synapsium-Labs/ccrc-pwa/releases/download/v1.0.0/SHA256SUMS';
     expect(call(plain)).toBe(plain);
-    const withQueryAt = 'https://example.com/path?email=a@example.com&x=1';
-    expect(call(withQueryAt)).toBe(withQueryAt);
+    expect(call('https://example.com/path?email=a@example.com&x=1')).toBe('https://example.com/path?[withheld]');
     // Userinfo stripped, host and path untouched.
     expect(call('http://user:s3cretTOKEN@127.0.0.1:1/rel/download/v0.0.1/SHA256SUMS'))
       .toBe('http://127.0.0.1:1/rel/download/v0.0.1/SHA256SUMS');
@@ -859,7 +858,39 @@ describe('ccrc update: update.json at every phase, and --from (design §10)', ()
     // Fix round 4, F1: a scheme followed by one slash or by three (curl authenticates with both) loses its userinfo, its
     // slashes kept as written.
     expect(call('fetching http:/u:s3cretTOKEN@h/r and https:///u:s3cretTOKEN@h/r')).toBe('fetching http:/h/r and https:///h/r');
-    for (const kept of ['curl: (6) user@host', 'mail a@example.com today', 'https://h/r?email=a@example.com/y', '@scope/pkg']) {
+    for (const kept of ['curl: (6) user@host', 'mail a@example.com today', '@scope/pkg']) {
+      expect(call(kept), kept).toBe(kept);
+    }
+    expect(call('https://h/r?email=a@example.com/y')).toBe('https://h/r?[withheld]');
+  });
+
+  // D-8342: a URL's query and fragment can carry a token, so a scheme URL keeps its '?' or '#' and loses what follows, to
+  // the token's end (whitespace, '"', '<', '>' or a backtick). A query and a fragment after it go as one. A second pass
+  // changes nothing (a die's sentence is redacted again by `_upd_phase`). Text that is no scheme URL keeps its '?' and '#'.
+  it('_upd_redact: a scheme URL\'s query and fragment are withheld, its "?" or "#" kept, and a second pass changes nothing (D-8342)', () => {
+    const src = readFileSync(join(REPO, 'ccd', 'ccrc'), 'utf8');
+    const redactBlock = /^_upd_redact\(\) \{[\s\S]*?\n\}$/m.exec(src);
+    expect(redactBlock, 'ccd/ccrc has no _upd_redact block').not.toBeNull();
+    const call = (text: string): string => {
+      const p = spawnSync(BASH, ['-c', [redactBlock![0], '_upd_redact "$1"'].join('\n'), '_', text],
+        { env: { HOME: '/home/u' }, encoding: 'utf8' });
+      expect(p.status, p.stderr).toBe(0);
+      return p.stdout;
+    };
+    const rows: Array<[string, string]> = [
+      ['fetching http://127.0.0.1:1/rel?x=1/latest/download/SHA256SUMS …', 'fetching http://127.0.0.1:1/rel?[withheld] …'],
+      ['fetching http://127.0.0.1:1/rel#f/latest/download/SHA256SUMS …', 'fetching http://127.0.0.1:1/rel#[withheld] …'],
+      ['https://u:s3cret@h/r?token=s3cret#frag-s3cret', 'https://h/r?[withheld]'],
+      ['"https://h/r?token=s3cret" and <https://h#s3cret> and `https://h/?s3cret`', '"https://h/r?[withheld]" and <https://h#[withheld]> and `https://h/?[withheld]`'],
+      ['CCRC_RELEASE_BASE_URL=https://h/r?token=s3cret refused', 'CCRC_RELEASE_BASE_URL=https://h/r?[withheld] refused'],
+      ['https://h/x?proxy=user:s3cret@host', 'https://h/x?[withheld]'],
+      ['https:\\/\\/h\\/r?token=s3cret', 'https:\\/\\/h\\/r?[withheld]'],
+    ];
+    for (const [input, want] of rows) {
+      expect(call(input), input).toBe(want);
+      expect(call(want), `a second pass over ${want}`).toBe(want);
+    }
+    for (const kept of ['is there a release? #2 of 3', 'urn:isbn:1?x=1', 'h/r?x=1', 'v1.2#3 ok?']) {
       expect(call(kept), kept).toBe(kept);
     }
   });
@@ -899,10 +930,11 @@ describe('ccrc update: update.json at every phase, and --from (design §10)', ()
     expect(callWithHome('(cd /home/u)', '/home/u')).toBe('(cd ~)');
     expect(callWithHome('/home/u', '/home/u')).toBe('~');
     // N2: an authority with no '/' before the credential — a query string
-    // ('?') or a fragment ('#') ending it instead — is left unchanged,
-    // never collapsed into `scheme://host`.
-    expect(callWithHome('https://h?a@b', '')).toBe('https://h?a@b');
-    expect(callWithHome('https://h#a@b', '')).toBe('https://h#a@b');
+    // ('?') or a fragment ('#') ending it instead — is never collapsed into
+    // `scheme://host`: its host stays, and since D-8342 its query or
+    // fragment is withheld after the '?' or '#'.
+    expect(callWithHome('https://h?a@b', '')).toBe('https://h?[withheld]');
+    expect(callWithHome('https://h#a@b', '')).toBe('https://h#[withheld]');
   });
 
   // W6 Task 8A, review 167's F5 (cosmetic): the boundary BEFORE HOME. The
@@ -1001,6 +1033,38 @@ describe('ccrc update: update.json at every phase, and --from (design §10)', ()
       expect(r.status, `${verb} must actually have refused`).not.toBe(0);
     }
   });
+
+  // D-8342: the release paths are appended to the base (`/download/<tag>/…`, `/latest/download/…`), so a base holding a '?'
+  // or a '#' would build a URL no release host serves. `_upd_resolve` (update) and `_upd_asset_listed` (rollback's
+  // pre-check, its first fetch) refuse it by name before any curl runs, and the refusal names the variable, never the
+  // value. The curl here logs every call, so "nothing fetched" is measured, not assumed.
+  for (const tail of ['?x=1', '#f'] as const) {
+    it(`a CCRC_RELEASE_BASE_URL holding ${tail[0]} (${tail}) is refused by name before anything is fetched, its query or fragment printed nowhere — update and rollback (D-8342)`, () => {
+      for (const verb of ['update', 'rollback'] as const) {
+        const home = mkTmp(`ccrc-base-query-${verb}-`);
+        mkdirSync(join(home, '.local', 'bin'), { recursive: true });
+        writeFileSync(join(home, '.local', 'bin', 'curl'), '#!/bin/sh\necho "$*" >> "$HOME/curl-calls"\nexit 99\n', { mode: 0o755 });
+        const env = {
+          ...ccrcContainedEnv(home, process.env, { managers: true, curl: 'poison' }),
+          CCRC_RELEASE_BASE_URL: `http://127.0.0.1:1/rel${tail}`,
+        };
+        assertNoRealTool(env, home);
+        const args = verb === 'update' ? ['update', '--to', 'v0.0.1'] : ['rollback', '--to', 'v0.0.1', '--from', 'pwa'];
+        const r = spawnSync(BASH, [join(REPO, 'ccd', 'ccrc'), ...args], { env, encoding: 'utf8' });
+        expect(r.status, `${verb}: ${r.stderr}`).toBe(1);
+        const why = 'CCRC_RELEASE_BASE_URL holds a query or a fragment, so the release paths cannot be appended to it';
+        expect(r.stderr.split('\n'), `${verb} stderr`)
+          .toContain(`ccrc: ${verb === 'rollback' ? 'rollback: ' : ''}${why} — nothing on this box was changed`);
+        expect(existsSync(join(home, 'curl-calls')), `${verb} ran curl`).toBe(false);
+        expect(r.stdout, `${verb} stdout`).not.toContain('fetching');
+        const json = join(home, '.ccrc', 'update.json');
+        const raw = existsSync(json) ? readFileSync(json, 'utf8') : '';
+        for (const [where, text] of [['stdout', r.stdout], ['stderr', r.stderr], ['update.json', raw]] as const) {
+          expect(text, `${verb} ${where} carries the base's ${tail}`).not.toContain(tail);
+        }
+      }
+    });
+  }
 
   // D-6748 (fix round 1, F7): a base in ccrc.env with NO scheme (`user:pass@host/r`, which curl takes as http) is masked by
   // `_upd_redact` as the scheme form is, on each of the three ways it would leave the box: the fetching line, the die line and
@@ -3333,6 +3397,12 @@ describe('ccrc rollback (design §11 — a verb, not a recipe)', () => {
     ? readFileSync(join(home, 'systemctl-calls'), 'utf8') : '');
   const sums = (home: string, tag: string): string =>
     `local://${home}/releases/download/${tag}/SHA256SUMS`;
+  /** D-8390 (R50 b): a `--detach` parent reads its settings from ccrc.env alone, as its detached child does, so a case that
+   *  measures what the parent asks the release host plants the fixture's base THERE; the environment's copy (`runRollback`'s)
+   *  is the server's, which the parent no longer reads. */
+  const baseInEnvFile = (home: string): void => {
+    appendFileSync(join(home, '.ccrc', 'ccrc.env'), `CCRC_RELEASE_BASE_URL=local://${home}/releases\n`);
+  };
   const pause = (ms: number): void => { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms); };
 
   /** The shape every real rollback starts from: a box on v2.0.0 whose install
@@ -3774,6 +3844,7 @@ describe('ccrc rollback (design §11 — a verb, not a recipe)', () => {
   // macOS answer is the refusal case directly below.
   itLinux('--detach resolves the target FIRST, asks its existence, then re-execs `rollback --to <tag> --from <who>` through systemd-run and returns — the default target reaches the detached argv (§11 pin)', () => {
     const home = rollbackBox('ccrc-rollback-detach-', { previous: PREV });
+    baseInEnvFile(home);
     const r = runRollback(home, ['--detach', '--from', 'pwa']);
     expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
     // The D-3282 PATH-prepend wrapper (fix round 1 item 19 / review 155
@@ -3791,11 +3862,36 @@ describe('ccrc rollback (design §11 — a verb, not a recipe)', () => {
     expect(existsSync(join(home, 'ccrc-backups'))).toBe(false);
     // An explicit --to reaches it the same way, whatever previous says.
     const pinned = rollbackBox('ccrc-rollback-detach-to-', { previous: `v0.9.0\n${PREV_SHA}\n` });
+    baseInEnvFile(pinned);
     const p = runRollback(pinned, ['--to=v1.0.0', '--detach']);
     expect(p.code, `stderr: ${p.stderr}\nstdout: ${p.stdout}`).toBe(0);
+    expect(localUrls(pinned), 'the pinned tag\'s existence, asked of the fixture\'s release').toEqual([sums(pinned, 'v1.0.0')]);
     expect(readFileSync(join(pinned, 'systemd-run-argv'), 'utf8').trim())
       .toBe('--user --collect --quiet /bin/sh -c PATH="$HOME/.local/bin:$PATH" exec "$HOME/.local/bin/ccrc" "$@" '
         + 'ccrc-detach rollback --to v1.0.0 --from cli');
+  });
+
+  // D-8390 (R50 b): a console-driven move's parent is started with the SERVER's environment, which systemd parsed from
+  // ccrc.env when the server started, while its detached child runs under the user manager's, which carries no setting
+  // (W24-P5), so the child reads ccrc.env. A ccrc.env edited since the server started made the two ask different hosts.
+  // The parent now reads ccrc.env alone too: the source changes between parent and child, and the base read does not.
+  itLinux('D-8390 (R50 b): a --detach parent reads the release base from ccrc.env, the one source its detached child reads, never the environment it was started with', () => {
+    const home = rollbackBox('ccrc-rollback-detach-source-', { previous: PREV });
+    baseInEnvFile(home);
+    // The parent's environment: the server's, parsed from a ccrc.env that has been edited since — another base.
+    const parent = runRollback(home, ['--detach', '--from', 'pwa'], { CCRC_RELEASE_BASE_URL: `local://${home}/stale` });
+    expect(parent.code, `stderr: ${parent.stderr}\nstdout: ${parent.stdout}`).toBe(0);
+    expect(localUrls(home), 'the parent asked ccrc.env\'s base').toEqual([sums(home, 'v1.0.0')]);
+    const argv = readFileSync(join(home, 'systemd-run-argv'), 'utf8').trim();
+    expect(argv, 'no setting rides the argv (W24-P5)').not.toMatch(/CCRC_/);
+    expect(argv.endsWith('ccrc-detach rollback --to v1.0.0 --from pwa')).toBe(true);
+    // The child: the recorded argv under the manager's environment, which names no setting.
+    rmSync(join(home, 'curl-argv'), { force: true });
+    const child = runRollback(home, ['--to', 'v1.0.0', '--from', 'pwa'], { CCRC_RELEASE_BASE_URL: undefined });
+    expect(child.code, `stderr: ${child.stderr}\nstdout: ${child.stdout}`).toBe(0);
+    const asked = localUrls(home);
+    expect(asked[0], 'the child asked the same base first').toBe(sums(home, 'v1.0.0'));
+    expect(asked.filter((u) => !u.startsWith(`local://${home}/releases/`)), 'nothing asked another base').toEqual([]);
   });
 
   // Fix round 1 item 3 / review 155 C31: a `queued` report with nothing
@@ -5559,19 +5655,54 @@ describe('ccrc watchdog: a re-measurement, never a timestamp alone (design §11)
   });
 
   // Wave 24 (D-6602): the watchdog takes the LARGEST deadline reading, for both of its thresholds, and says when one cannot be read.
-  const W24_WATCHDOG_WARN = 'watchdog: WARN: CCRC_UPDATE_DEADLINE_MS does not read as one whole number of milliseconds everywhere the '
-    + 'server may take it from (the environment, the box\'s ccrc.env, the exposure file) — using the largest reading ccrc could decide';
+  // D-8390 (R50 a): the sentence is the knob readers' own (`KEY='value' is not <its words>, as set in <source> — using <ms>`), and a
+  // reading it cannot decide never lets it write a live updater over as wedged: the server may read `2e6` as 2000000 ms.
+  const DL_SAYS = 'a positive whole number of milliseconds in canonical digits (at most 15, no lead zero)';
+  const W24_WATCHDOG_WARN = (value: string, source: string, ms = 900000): string =>
+    `watchdog: WARN: CCRC_UPDATE_DEADLINE_MS='${value}' is not ${DL_SAYS}, as set in ${source} — using ${ms} ms, the largest `
+    + 'reading ccrc could decide, for a dead updater; a live one is never recorded as wedged while a reading is undecided';
 
-  itLinux('W24-D4: the watchdog warns on a deadline it cannot read and uses the largest it can', () => {
+  itLinux('W24-D4: the watchdog warns on a deadline it cannot read, in the knob readers\' words, and uses the largest it can', () => {
     const home = watchBox('ccrc-watchdog-w24-d4-');
     appendFileSync(join(home, '.ccrc', 'ccrc.env'), 'CCRC_UPDATE_DEADLINE_MS=6e5\n');
     report(home, { phase: 'installing', ageS: 700 });
     const r = runWatchdog(home, [], { CCRC_UPDATE_DEADLINE_MS: undefined });
     expect(r.code, r.stderr).toBe(0);
     const out = r.stdout.split('\n');
-    expect(out[0]).toBe(W24_WATCHDOG_WARN);
+    expect(out[0]).toBe(W24_WATCHDOG_WARN('6e5', 'the box\'s ccrc.env'));
     expect(out[1]).toMatch(/^watchdog: update in progress \(installing, 70\ds old\)$/);
     expect(existsSync(join(home, 'launcher-argv'))).toBe(false);
+    // The environment's spelling names the environment.
+    const env = runWatchdog(home, [], { CCRC_UPDATE_DEADLINE_MS: 'soon' });
+    expect(env.stdout.split('\n')[0]).toBe(W24_WATCHDOG_WARN('soon', 'the environment'));
+  });
+
+  itLinux('D-8390 (R50 a): an undecided deadline never writes a LIVE updater over as wedged, however old its report', async () => {
+    const home = watchBox('ccrc-watchdog-r50a-live-');
+    // The server reads `2e6` as 2000000 ms (33 min); 1900 s is past twice the 900 s the bash could decide, inside the server's.
+    appendFileSync(join(home, '.ccrc', 'ccrc.env'), 'CCRC_UPDATE_DEADLINE_MS=2e6\n');
+    report(home, { phase: 'installing', ageS: 1900 });
+    const before = readFileSync(jsonPath(home), 'utf8');
+    const pgid = await holdLock(home);
+    try {
+      const r = runWatchdog(home, [], { CCRC_UPDATE_DEADLINE_MS: undefined });
+      expect(r.code, r.stderr).toBe(0);
+      const out = r.stdout.split('\n');
+      expect(out[0]).toBe(W24_WATCHDOG_WARN('2e6', 'the box\'s ccrc.env'));
+      expect(r.stdout).not.toMatch(/wedged —|recorded as wedged;/);
+      expect(out[1]).toMatch(/^watchdog: updater pid 4321 holds ~\/\.ccrc\/update\.lock — its report is 190\ds old; not acting while it lives$/);
+      expect(readFileSync(jsonPath(home), 'utf8'), 'the report is not rewritten').toBe(before);
+    } finally { release(pgid); }
+  });
+
+  itLinux('D-8390 (R50 a): an undecided deadline still lets a DEAD updater be measured past the default, its lock proving it gone', () => {
+    const home = watchBox('ccrc-watchdog-r50a-dead-');
+    appendFileSync(join(home, '.ccrc', 'ccrc.env'), 'CCRC_UPDATE_DEADLINE_MS=2e6\n');
+    report(home, { phase: 'installing', ageS: 1000 });
+    const r = runWatchdog(home, [], { CCRC_UPDATE_DEADLINE_MS: undefined });
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stdout.split('\n')[0]).toBe(W24_WATCHDOG_WARN('2e6', 'the box\'s ccrc.env'));
+    expect(readReport(home).detail).toBe('abandoned by its updater; box measures converged at v2.0.0');
   });
 
   itLinux('W24-D5: the watchdog never wedges a live update the server still counts as inside its deadline', async () => {

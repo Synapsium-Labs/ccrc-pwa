@@ -5,7 +5,7 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import {
-  RUNS_LOG_LINE, RUNS_LOG_LINE_MAX, TESTBOX_FALLBACK, TESTBOX_FALLBACK_ID_MAP, TESTBOX_PROTO, TESTBOX_STATE_MAP,
+  PROBE_REFUSAL_SENTENCE, RUNS_LOG_LINE, RUNS_LOG_LINE_MAX, TESTBOX_FALLBACK, TESTBOX_FALLBACK_ID_MAP, TESTBOX_PROTO, TESTBOX_STATE_MAP,
   TESTBOX_TOOLS, parseRepoRow, parseRunsLine, readTestboxFrame, versionCellsDiffer, versionRowDiffers,
   type TestboxFrame, type TestboxToolVersions,
 } from '../../shared/testbox.js';
@@ -51,7 +51,50 @@ const FRAMES: Record<string, TestboxFrame> = {
     sync: { state: 'idle', detail: null, at: null }, runs: { inProgress: 0, limit: 4 }, queueDepth: 0, pristine: [],
     failedKeys: [], heldRunUsers: [], repositories: [],
   },
+  // D-8290: the live probe frames.
+  'probe.submit': { t: 'probe.submit', probeId: RUN, name: 'probe-a', session: 'harness-a' },
+  'probe.state (refused)': {
+    t: 'probe.state', probeId: RUN, state: 'refused', refusal: 'not-test-box', detail: PROBE_REFUSAL_SENTENCE['not-test-box'], position: null, exit: null,
+  },
+  'probe.state (queued)': { t: 'probe.state', probeId: RUN, state: 'queued', refusal: null, detail: null, position: 2, exit: null },
+  'probe.state (running)': { t: 'probe.state', probeId: RUN, state: 'running', refusal: null, detail: null, position: null, exit: null },
+  'probe.state (ended)': { t: 'probe.state', probeId: RUN, state: 'ended', refusal: null, detail: null, position: null, exit: 1 },
 };
+
+/** The status answer's one optional field (D-8290). */
+const PROBES = { enabled: true, refusal: null, running: 'probe-a', waiting: ['probe-b'], day: '2026-11-11', used: 2, perDay: 10 };
+
+describe('the live probe frames and the status answer\'s probe block (D-8290)', () => {
+  const status = FRAMES['status (ok)'] as unknown as Record<string, unknown>;
+  it('the block round-trips; an answer without it still reads (an older box, a box with no probes)', () => {
+    expect(readTestboxFrame(JSON.stringify({ ...status, probes: PROBES }))).toEqual({ ok: true, value: { ...status, probes: PROBES } });
+    const r = readTestboxFrame(JSON.stringify(status));
+    expect(r.ok && 'probes' in r.value).toBe(false);
+  });
+  it('the block refuses an extra field, a missing one, a refusal on an enabled block, none on a disabled one, a bad day', () => {
+    const ok = (p: unknown): boolean => readTestboxFrame(JSON.stringify({ ...status, probes: p })).ok;
+    expect(ok({ ...PROBES, extra: 1 })).toBe(false);
+    const { used: _u, ...noUsed } = PROBES;
+    expect(ok(noUsed)).toBe(false);
+    expect(ok({ ...PROBES, refusal: 'no-runner' })).toBe(false);
+    expect(ok({ ...PROBES, enabled: false })).toBe(false);
+    expect(ok({ ...PROBES, enabled: false, refusal: 'no-runner' })).toBe(true);
+    expect(ok({ ...PROBES, enabled: false, refusal: 'not-a-refusal' })).toBe(false);
+    expect(ok({ ...PROBES, day: '2026-11-11T00:00:00Z' })).toBe(false);
+    expect(ok({ ...PROBES, perDay: 0 })).toBe(false);
+  });
+  it('probe.state: refusal only on refused, position only on queued, exit only on ended', () => {
+    const base = FRAMES['probe.state (queued)'] as unknown as Record<string, unknown>;
+    const ok = (o: Record<string, unknown>): boolean => readTestboxFrame(JSON.stringify({ ...base, ...o })).ok;
+    expect(ok({ position: null })).toBe(false);
+    expect(ok({ refusal: 'no-runner' })).toBe(false);
+    expect(ok({ exit: 0 })).toBe(false);
+    expect(ok({ state: 'refused', position: null })).toBe(false);
+    expect(ok({ state: 'ended', position: null })).toBe(false);
+    expect(ok({ state: 'running', position: null, detail: 'x' })).toBe(false);
+    expect(ok({ state: 'ended', position: null, exit: 256 })).toBe(false);
+  });
+});
 
 describe('the frames: one reader each, every field checked (D-7404, D-7428)', () => {
   it('the protocol version is 1, and the server state map is the five states', () => {

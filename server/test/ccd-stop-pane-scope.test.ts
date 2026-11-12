@@ -428,11 +428,13 @@ describe('a wedged tmux never holds a stop', () => {
 });
 
 describe('what this does not touch', () => {
-  it('the swap is not a stop: cmd_swap and the swap dispatch never reach the pane-scope stop', () => {
-    const body = h.sh('type cmd_swap; type _dispatch_swap');
+  it('the swap is not a stop: it never reaches the pane-scope stop or its reap, and reads the pane only through the graceful stop', () => {
+    const body = h.sh('type cmd_swap; type _dispatch_swap; type _graceful_stop_before; type _graceful_stop_after; type _graceful_stop_observe');
     expect(body).not.toContain('_pane_scope_stop');
     expect(body).not.toContain('_pane_scope_reap');
-    expect(body).not.toContain('_pane_scope_of');
+    // `_graceful_stop_before` reads the pane (`_pane_scope_of`) for the swap, so the wide body names it; the swap's own does not.
+    expect(h.sh('type cmd_swap; type _dispatch_swap')).not.toContain('_pane_scope_of');
+    expect(h.sh('type cmd_swap')).toContain('_graceful_stop_before "$id" swap');
   });
 
   it('the stop reads no panescope marker: the scope comes from the live pane, through the helper the marker\'s writer calls', () => {

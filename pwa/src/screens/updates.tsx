@@ -21,13 +21,13 @@
 // `NodeItem` is their consumer, and `pwa/test/halt-banner.test.tsx` asserts
 // the re-export is the SAME binding as the one in `fleet/updateAck` — the
 // point of that assertion is the identity, not which file carries it.
-import { useRef, useState } from 'react';
+import { useLayoutEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import type {
   CatalogueErrorReason, CatalogueState, NodeWire, ReleaseSourceWire, ReleaseWire, UpdateChannel,
 } from '../../../shared/api';
 import {
-  SETTLED_UPDATE_STATES, isReleaseTag, isStampRead, isUpdateChannel,
+  SETTLED_UPDATE_STATES, isReleaseTag, isStampRead, isUpdateChannel, isUpdateSweepWord,
   rollbackTargetRefusal, settledDoneDetail,
 } from '../../../shared/api';
 import { compareReleaseTags, isNewerTag } from '../../../shared/semver';
@@ -421,11 +421,21 @@ function MoveButton({ disabled, onClick, children, describedBy, tone = 'move' }:
   disabled: boolean;
   onClick: () => void;
   children: ReactNode;
+  /** The one halt line's id, passed only while a halt gates this control (Install, Update all, a node's Update). */
   describedBy?: string;
   tone?: 'move' | 'danger';
 }): ReactNode {
+  const ref = useRef<HTMLButtonElement>(null);
+  // Residue R30 (D-8340): a background poll that brings a halt disables this control, and a browser drops the focus of
+  // a disabled control to <body>. Keyed on the halt (its line's id arrives with it), the focus moves first to that
+  // line, which says why the control waits and where the Ack is (`HaltLine`, focusable from script). A layout effect,
+  // so the move lands in the commit that disables, before the browser's focus fix-up.
+  useLayoutEffect(() => {
+    if (!disabled || describedBy === undefined || document.activeElement !== ref.current) return;
+    document.getElementById(describedBy)?.focus();
+  }, [disabled, describedBy]);
   return (
-    <Button variant={tone === 'danger' ? 'danger-ghost' : 'ghost'} size="fit" className="settings-move"
+    <Button ref={ref} variant={tone === 'danger' ? 'danger-ghost' : 'ghost'} size="fit" className="settings-move"
             disabled={disabled} aria-describedby={describedBy} onClick={onClick}>
       {children}
     </Button>
@@ -480,8 +490,9 @@ export function haltLineText(nodes: readonly NodeWire[], w: ReleaseWindow): stri
   return `${halted} Clear it with Ack ${which}, under Nodes, after you have fixed what made it fail.`;
 }
 
+/** Focusable from script only (`tabIndex={-1}`): a control the halt disables hands it the focus (R30, D-8340). */
 export function HaltLine({ id, text }: { id: string; text: string }): ReactNode {
-  return <p className="settings-release-refused" id={id}>{text}</p>;
+  return <p className="settings-release-refused" id={id} tabIndex={-1}>{text}</p>;
 }
 
 /** Wave 8 item C's blocked line. Defined beside the rollback sheet since D-5611, which says it too; re-exported so this
@@ -773,6 +784,16 @@ export function nodeStateLine(n: NodeWire): string {
   return typeof detail === 'string' && detail !== '' ? `${state} — ${phase}: ${detail}` : `${state} — ${phase}`;
 }
 
+/** D-8386 (residue R37): the supervisor sweep's record from the node's own report (`update.json`'s `sweep` key, which the
+ *  server reads once and sends only when measured), or null. Absent, or a word `isUpdateSweepWord` cannot read, is NOT
+ *  MEASURED, so the row says nothing: never "ok", never "none down". */
+export function sweepLine(n: NodeWire): string | null {
+  const r: unknown = n.report;
+  if (typeof r !== 'object' || r === null) return null;
+  const { sweep } = r as { sweep?: unknown };
+  return isUpdateSweepWord(sweep) ? `Supervisor sweep: ${sweep}` : null;
+}
+
 export function reachabilityLine(n: NodeWire, now: number): string | null {
   // Fix round 2 (review of d5aefc4a, item 5): spelled as the direct question
   // — "is this node reachable (or not yet known)? then say nothing" — rather
@@ -886,6 +907,7 @@ function NodeItem({ node: n, releases, now, catalogueLastOkAt, halted, haltedBy,
   }
   // Wave 8 item F4: a finished move merges the state and detail lines into one, dated; anything else keeps them apart.
   const finished = finishedLine(n, now);
+  const sweep = sweepLine(n);
 
   return (
     <li className="settings-node" data-node-id={n.nodeId} ref={rowRef} tabIndex={-1}>
@@ -911,6 +933,8 @@ function NodeItem({ node: n, releases, now, catalogueLastOkAt, halted, haltedBy,
           {typeof n.update?.detail === 'string' && n.update.detail !== '' && <p className="settings-node-detail">{n.update.detail}</p>}
         </>
       )}
+      {/* D-8386: the report's sweep record, a text child, only when measured. */}
+      {sweep !== null && <p className="settings-node-detail" data-testid="settings-node-sweep">{sweep}</p>}
       {previousBlocked !== null && <p className="settings-node-detail">{previousBlocked}</p>}
       <div className="settings-node-actions">
         {!darwin && (

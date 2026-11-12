@@ -658,6 +658,55 @@ describe('HaltBanner — focus survives the Ack disabling (wave 19, R26(a))', ()
   });
 });
 
+// Centralised-update residue R28 (D-8340): when the LAST halting row's Ack lands, the next poll drops the whole banner,
+// list and all, so the list cannot take the focus. It goes to the landmark that is shown (`focusShownLandmark`, the
+// update line's dismiss's own move): the main landmark, and the fleet column's when main is not rendered. Without the
+// move the focus stays on the removed row, which reads as <body> in a browser.
+describe('HaltBanner — the last Ack\'s poll does not drop focus to <body> (R28, D-8340)', () => {
+  const landmarkTree = (v: UpdatesView, seq: number, onAcked: () => number): ReactNode => (
+    <>
+      <ToastHost />
+      <main id="content" tabIndex={-1}>
+        <HaltBanner updates={v} seq={seq} onAcked={onAcked} />
+        <p>the rest of the page</p>
+      </main>
+    </>
+  );
+
+  it('the poll that drops the last halting row hands focus to the shown landmark', async () => {
+    vi.spyOn(api, 'ackUpdateNode').mockResolvedValue({ ok: true, node: node() });
+    const onAcked = vi.fn(() => 2);
+    const { rerender } = render(landmarkTree(view([failed()]), 1, onAcked));
+    const btn = screen.getByRole('button', { name: 'Ack fleet' });
+    btn.focus();
+    tapAck(btn);
+    await waitFor(() => expect(onAcked).toHaveBeenCalledTimes(1));
+    // The re-poll's answer: the one halting row went back to idle on the ack, so the banner has nothing to say.
+    rerender(landmarkTree(view([node()]), 2, onAcked));
+    expect(banner(), 'the banner is gone').toBeNull();
+    const main = document.getElementById('content');
+    expect(document.activeElement, 'not <body>').not.toBe(document.body);
+    expect(document.activeElement, 'the main landmark').toBe(main);
+  });
+
+  it('CONTROL: focus outside the banner stays where it was when the banner goes', async () => {
+    vi.spyOn(api, 'ackUpdateNode').mockResolvedValue({ ok: true, node: node() });
+    const onAcked = vi.fn(() => 2);
+    const { rerender } = render(landmarkTree(view([failed()]), 1, onAcked));
+    const other = document.body.appendChild(document.createElement('button'));
+    try {
+      tapAck(screen.getByRole('button', { name: 'Ack fleet' }));
+      await waitFor(() => expect(onAcked).toHaveBeenCalledTimes(1));
+      other.focus();
+      rerender(landmarkTree(view([node()]), 2, onAcked));
+      expect(banner()).toBeNull();
+      expect(document.activeElement).toBe(other);
+    } finally {
+      other.remove();
+    }
+  });
+});
+
 // Settings spec §6.3 (D-5507): the banner's Ack is the Settings Ack, confirmed. It opens `AckConfirm` before any
 // request; Cancel posts nothing and holds the focus; the commit posts once; closing gives the focus back.
 describe('HaltBanner — Ack opens a confirm (D-5507)', () => {

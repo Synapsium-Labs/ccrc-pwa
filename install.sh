@@ -5,10 +5,11 @@
 #     converge decision.
 #   - RELEASE mode (`--release [vX.Y.Z]`): download the CI-built tarball +
 #     SHA256SUMS from GitHub Releases (latest, or the named tag), verify
-#     `sha256sum -c`, extract to a staging dir, and hand off to the STAGED
-#     `ccrc install` — no build step on the box, prebuilt dists ship in the
-#     tarball. Everything after `--release [tag]` passes through to the
-#     staged verb verbatim (`--role …` rides here).
+#     the tarball against its own SHA256SUMS line, extract to a staging
+#     dir, and hand off to the STAGED `ccrc install` — no build step on
+#     the box, prebuilt dists ship in the tarball. Everything after
+#     `--release [tag]` passes through to the staged verb verbatim
+#     (`--role …` rides here).
 # Neither mode touches ~/.ccrc, ~/.local/bin or systemd — bootstrap
 # builds/fetches, the verb installs. Re-running is safe: npm ci and the
 # builds are idempotent and the verb converges.
@@ -58,9 +59,9 @@ _inst_validate_knob() {
 }
 
 # ── The URL redactor — a COPY of `_upd_redact` (ccd/ccrc), held equal by OUTPUT,
-# not by text, under an install.sh-local name. It masks a URL's userinfo and the
-# home directory; it does NOT mask a query or a fragment (accepted: the
-# operator's ruling, shared with the updater). Why the text differs: this file
+# not by text, under an install.sh-local name. It masks a URL's userinfo, a
+# scheme URL's query and fragment (D-8342: what follows the '?' or '#' reads
+# `[withheld]`) and the home directory. Why the text differs: this file
 # runs `--release` BEFORE its bash version refusal, so the copy can run on
 # macOS /bin/bash 3.2, where (as in every bash up to 4.2) a quoted replacement
 # string inside "${s/pat/rep}" keeps its quotes and would print `https"://"h/r`;
@@ -86,6 +87,9 @@ _inst_redact() {
     local bre='(^|[[:space:]"<`])((@*[^/@?#[:space:]"<`][^/@?#[:space:]]*@)([^/@?#[:space:]]*@)*)([^/@?#[:space:])]+([/?#)]|$))'
     while [[ "$s" =~ $bre ]]; do m="${BASH_REMATCH[0]}"; r="${BASH_REMATCH[1]}${BASH_REMATCH[5]}"; s="${s%%"$m"*}$r${s#*"$m"}"; done
   fi
+  local qre='(^|[^A-Za-z0-9+.-])([A-Za-z][A-Za-z0-9+.-]*:(\\?/)+[^?#[:space:]"<>`]*)([?#])[^[:space:]"<>`]*' qout=""
+  while [[ "$s" =~ $qre ]]; do m="${BASH_REMATCH[0]}"; qout+="${s%%"$m"*}${BASH_REMATCH[1]}${BASH_REMATCH[2]}${BASH_REMATCH[4]}[withheld]"; s="${s#*"$m"}"; done
+  s="$qout$s"
   local home="${HOME:-}"
   home="${home%/}"
   if [ -n "$home" ]; then
@@ -160,8 +164,8 @@ if [ "$RELEASE_MODE" = true ]; then
     || { echo "install.sh: curl is not installed — install curl, then re-run" >&2; exit 1; }
   BASE="${CCRC_RELEASE_BASE_URL:-https://github.com/$CCRC_RELEASE_OWNER/$CCRC_RELEASE_REPO/releases}"
   # The release paths are appended to the base, so a query or a fragment swallows
-  # them, and `_inst_redact` would print it whole. The sentence names the variable
-  # and never the value: a query can carry a token.
+  # them (the updater's `_upd_base_ok` refuses the same base, D-8342). The sentence
+  # names the variable and never the value: a query can carry a token.
   case "$BASE" in
     *'?'*|*'#'*)
       echo "install.sh: CCRC_RELEASE_BASE_URL holds a query or a fragment, so the release paths cannot be appended to it — refusing" >&2
@@ -203,6 +207,9 @@ if [ "$RELEASE_MODE" = true ]; then
   # below printed it whole; with globbing off curl refuses it before a byte is
   # sent, and a tarball name is never globbed (the updater's D-6748).
   echo "install.sh: fetching $URL_SAFE/SHA256SUMS …"
+  # The updater's sentence at its own fetch (D-8342): `--max-filesize` caps the file only on curl 8.4.0 or later (a body of
+  # unknown length passes it below that), so below 8.4.0 the `read` of SHA256SUMS's first line is linear in what curl wrote
+  # within its total bound, before the name's 128-byte rule.
   curl -g -fsSL --connect-timeout "$CCRC_RELEASE_CONNECT_TIMEOUT" \
     --max-time "$CCRC_RELEASE_SUMS_MAX_TIME" --max-filesize "$CCRC_RELEASE_SUMS_MAX_FILESIZE" \
     --speed-limit "$CCRC_RELEASE_SPEED_LIMIT" --speed-time "$CCRC_RELEASE_SPEED_TIME" \
@@ -220,11 +227,13 @@ if [ "$RELEASE_MODE" = true ]; then
   fi
   # THE TAG IS BOUND, as the updater's `_upd_resolve` binds it: the name SHA256SUMS
   # gives must BE the tag asked for, tag to tag and un-stripped, before the tarball
-  # is fetched. Printing the name is safe here: it has passed the rules above.
+  # is fetched. Printing the name is safe here: it has passed the rules above. The
+  # sentence is the updater's, word for word (D-8385); install-sh.test.ts reads
+  # ccd/ccrc's and reds on any difference.
   if [ -n "$RELEASE_TAG" ]; then
     V="${TARNAME#ccrc-}"; V="${V%.tar.gz}"
     if [ "$V" != "$RELEASE_TAG" ]; then
-      echo "install.sh: the release at $RELEASE_TAG names a $TARNAME (version $V, not $RELEASE_TAG) — refusing" >&2; exit 1
+      echo "install.sh: the release at $RELEASE_TAG names a $TARNAME (version $V, not $RELEASE_TAG) — refusing; nothing on this box was changed" >&2; exit 1
     fi
   fi
   echo "install.sh: fetching $URL_SAFE/$TARNAME …"
@@ -243,13 +252,22 @@ if [ "$RELEASE_MODE" = true ]; then
   # macOS does not ship it — and because the check swallows its own stderr,
   # a missing tool exits the subshell 127 and lands in the `||` arm: the
   # first thing a macOS operator ever saw from ccrc was a FABRICATED
-  # supply-chain accusation about an intact download. `shasum -a 256 -c`
-  # reads the GNU-written two-space SHA256SUMS unchanged (measured against
+  # supply-chain accusation about an intact download. `shasum -a 256`
+  # prints the same `<digest>  <name>` line GNU writes (measured against
   # the published release). Unquoted on use, so the two words split.
+  # The updater's rule (D-8390): never `$SUM -c SHA256SUMS`, which opens every
+  # path the file names (any file on this box, a FIFO that blocks, /dev/zero).
+  # The one file digested is the staged tarball, on stdin, and it must equal
+  # the digest on the line TARNAME came from: 64 lowercase hex, as
+  # `deploy/build-release.sh` writes it. No other line is read.
   SUM=sha256sum
   [ "$(uname -s 2>/dev/null)" = Darwin ] && SUM="shasum -a 256"
-  ( cd "$STAGING" && $SUM -c SHA256SUMS >/dev/null 2>&1 ) \
-    || { echo "install.sh: checksum verification FAILED for $TARNAME — refusing to extract or install" >&2; exit 1; }
+  GOT="$($SUM < "$STAGING/$TARNAME" 2>/dev/null)" || GOT=""
+  GOT="${GOT%% *}"
+  case "$_sum" in *[!0123456789abcdef]*) _sum="" ;; esac
+  if [ "${#_sum}" -ne 64 ] || [ "$GOT" != "$_sum" ]; then
+    echo "install.sh: checksum verification FAILED for $TARNAME — refusing to extract or install" >&2; exit 1
+  fi
 
   mkdir "$STAGING/tree"
   tar -xzf "$STAGING/$TARNAME" -C "$STAGING/tree"

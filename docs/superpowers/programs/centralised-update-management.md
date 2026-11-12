@@ -7064,12 +7064,15 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
     past closure:
     - the release-base query/fragment item, and the updater's printing of a query and fragment;
     - the `install.sh --release` tag-binding item;
-    - review 1326's F1-F11, and F6's warn-path test row;
+    - review 1326's F1-F11, and F6's warn-path test row (the row: **done by D-8386, 2026-11-12**);
     - R48's two related gaps;
     - R28, R29, R30, R33(a), R35(a, e, f), R37, R41-R44, R50, R51 and R52;
     - the testbox group-writable local red;
     - macOS central management (spec decision 17);
     - the age of the vendored Sigstore trust root.
+    - of these, #2079's three wording fixes in the wave 33 plan's As built tables: **fixed by D-8393 (2026-11-12)**
+      (Review Focus row 1's "each asserts", the mutation table's "defaults" in rows 2 to 6, and its "every name
+      row" in rows 18 and 19).
   - **Wave 33 landed.** #2079 merged at 21:31:49 UTC as `de4eb553c` from head `7628b91f8`, the handoff, and was
     released as v0.0.900. Proven:
     - the PR reads MERGED with `headRefOid` equal to the handoff;
@@ -7353,11 +7356,14 @@ waves 10 and 11), or as documented limitations (the cuts of 2026-10-15 and 2026-
     with `onAcked=vi.fn()`, unlike the shipped props. Its pre-existing siblings (`:1545-1546`, the Step 6 count) need
     the same correction.
 - **R28 (wave 19, Reading 11; for a PWA wave).** When the last halting row's Ack lands, the next poll unmounts the
-  whole halt banner and focus falls to `<body>`.
+  whole halt banner and focus falls to `<body>`. **Fixed by D-8340 (2026-11-11):** the focus goes to the landmark that
+  is shown.
 - **R29 (wave 19, Reading 14; the stable path).** The heir-guard case in `update-store-nodes.test.ts` can red by load at
-  20 s on the shipped body too, the same class as B5.
+  20 s on the shipped body too, the same class as B5. **Fixed by D-8387 (2026-11-12):** one case per state and detail,
+  each one store's work under its own timeout.
 - **R30 (wave 19, Reading 16; for a PWA wave).** A background poll that brings a halt disables a focused Install or
-  Update, and focus drops to `<body>`. The fix shape is a layout effect keyed on the halted flag.
+  Update, and focus drops to `<body>`. The fix shape is a layout effect keyed on the halted flag. **Fixed by D-8340
+  (2026-11-11):** the focus moves to the one halt line.
 - **R31 (wave 15, review 510 F1; the docs PR).** The wave-15 plan's Tech Stack (plan:37) says node `>=22.13.0`; every
   package declares `>=22.16.0`, pinned by `node-floor.test.ts`. Also from wave 15's own review:
   `server/test/coord-prhistory.test.ts:41` cites `ccd/ccd:881-884` for unrelated behaviour, a citation already stale
@@ -7368,7 +7374,7 @@ waves 10 and 11), or as documented limitations (the cuts of 2026-10-15 and 2026-
 - **R33 (wave 19, review 511; the docs PR and a later store fold).** (a) `rowHalts`' docstring could name
   `isHaltingUpdate`; the consent allowed the body only. (b) `server/test/update-inventory.test.ts:415-416`: B5's comment
   names `expired()`, but the deciding path is `deadline.race`'s null (`server/src/pools.ts:65-66`). **(b) in #937
-  (2026-10-20).** (a) stays for the store fold.
+  (2026-10-20).** (a) stays for the store fold. **(a) by D-8340 (2026-11-11).**
 - **R34 (wave 16, review 512 F2; wave 17).** `^[0-9]{1,4}$` accepts non-ASCII decimal digits under a UTF-8 locale, in
   `deploy/deploy.sh`'s KEEP check and in `ccd/ccrc`'s `_keep_ok`. `agent/test/deploy-verify.test.ts` D1c pins the two
   as equal. `deploy.sh` fails safe; `_keep_ok`'s caller then fails `10#$keep`. Fix both at once (`[0123456789]`, or
@@ -7396,7 +7402,10 @@ waves 10 and 11), or as documented limitations (the cuts of 2026-10-15 and 2026-
   or protect the run's own directory by path, as `_bak_gc` does. If #448 fixes it, wave 17 drops it.
 - **R37 (wave 17's Readings 3 and 8; a later server wave).** `GET /api/updates` does not read wave 17's new `sweep`
   key (one reader in the inventory, an optional wire field, an absent key read as not measured). Item G's units, active
-  before the restart and not after it, stay named on stderr only; a third word class is the option.
+  before the restart and not after it, stay named on stderr only; a third word class is the option. **Fixed by D-8386
+  (2026-11-12):** `sweepFrom` is the one reader, migration 61's `reportedSweep` stores it, and the node report's
+  optional `sweep` carries it; absent or malformed is not measured, and Settings › Updates shows it on the node row.
+  Item G's third word class is not part of it.
 - **R38 (wave 17's Reading 7).** The other `[0-9]` validators in `ccd/ccrc`, `CCRC_SWEEP_VERIFY_JOBS`'s among them,
   accept non-ASCII digits under a UTF-8 locale. R34 fixed only the KEEP pair.
 - **R39 (wave 18's CodeQL; fix round 3).** #482's `CodeQL` leg is red with three alerts, all in test files:
@@ -7412,12 +7421,16 @@ waves 10 and 11), or as documented limitations (the cuts of 2026-10-15 and 2026-
 - **R41 (review 891's whole-branch notes; older than wave 24).** `_inst_plist_server` for the fleet role emits the
   server's entry point, while the Darwin installer around it picks the agent's label. The generator and its callers
   are byte-identical at wave 24's base and tip, and no launchd job was installed or run, so it is measured from a
-  fixture only. A macOS install wave reads it.
+  fixture only. A macOS install wave reads it. **Fixed by D-8388 (2026-11-12):** confirmed red from the fixture, then
+  `_inst_plist_server` takes the role, and the fleet job execs the agent's entry point and reads only its required
+  `agent.env`, as `ccrc-agent.service` does (`darwin-role-plist.test.ts`, on every leg).
 - **R42 (review 891's suites; main shares it).** `ccrc-install.test.ts` describe 35 (the codex tier's restart on a
   real spine) passes its five assertions, but its teardown names one fixture-only Python supervisor still running
   under a deleted fixture HOME and exits 1. It reproduces on current main. The process ends on its own later. The
   panel on wave 24's rounds measured the same shape in `ccrc-uninstall.test.ts`'s codex-namesake row instead (its
   fixture web server outlives the file, exit 1 with every test passed), on the wave's tip and on its merge base alike.
+  **Fixed by D-8387 (2026-11-12):** the install row's teardown reaps its fake manager's units and waits out their
+  supervisors; the uninstall row was fixed by D-6941 (#1549).
 - **R43 (review 895's survey; wave 32's pattern elsewhere).** Five test helpers resolve on a child's `exit` and then
   read what its stdout or stderr collected, the race wave 32 fixed. Two read positively and can red the same way:
   `delegation-watch.test.ts` (about :3108, read at :3111) and `run-tmp.test.ts`'s `nested()` (about :722, read at
@@ -7428,16 +7441,20 @@ waves 10 and 11), or as documented limitations (the cuts of 2026-10-15 and 2026-
   - The wave 31 plan's "every new or changed row is red under at least one mutant" is wider than its table. The
     review's M4 (times-build's single-file fallback made unconditional) reds the times-build row and belongs in
     the table. The other rows the sentence covers are controls or self-tests: narrow the sentence or name them.
+    **Fixed by D-8393 (2026-11-12):** M4 is in the table, re-measured on main, and the sentence is narrowed.
   - The two comment-only edits made under the later claims sit in no Task's Files list and have no D entry. They
-    were accepted as Task 3's own comment amendments. The as-built should say so.
+    were accepted as Task 3's own comment amendments. The as-built should say so. **Fixed by D-8393 (2026-11-12).**
   - Wave 26's plan still names the old majors in the headline of the deviation that moved download to v7, and in its
-    Architecture table. Amend them, or list them with the other history the wave 31 plan leaves stale.
+    Architecture table. Amend them, or list them with the other history the wave 31 plan leaves stale. **Fixed by
+    D-8393 (2026-11-12):** amended in place, and the wave 31 plan's stale-history bullet says so.
   - The wave 31 plan says a failed credential removal under `persist-credentials: false` only warns. The shipped
     comment is right that the action may also say nothing: checkout logs a failed include cleanup at debug only.
+    **Fixed by D-8393 (2026-11-12):** both sentences say the action warns or says nothing.
   - Verify's name-set check joins names with spaces, so one file named with a space or a newline between the two
     expected names passes it. The regular-file check then refuses it, so nothing is accepted, but no row plants
     that shape. Add one to `release-artifact.test.ts`, and credit both checks where the comments credit only the
-    exact file set.
+    exact file set. **Fixed by D-8386 (2026-11-12):** W26-V14 plants both shapes, and `release-artifact.sh`'s two
+    comments credit both checks. The other four items of R44 stay open.
 - **R45 (review 926 on wave 24; not that wave's file).** `ccd/ccd-update-sync`'s header still says it applies "the same two
   rules" as `ccd/ccrc`'s `_upd_redact`, which wave 24 widened. Its own mask strips userinfo after `://` only, so a
   `CCRC_SERVER_URL` spelled with one slash (`http:/u:p@h`) prints whole in its `say` lines (measured on an extracted copy).
@@ -7464,8 +7481,10 @@ waves 10 and 11), or as documented limitations (the cuts of 2026-10-15 and 2026-
   - it fetches SHA256SUMS with no time or size bound.
   It is trust-on-first-use, so a hostile host could serve hostile code anyway, but a terminal escape needs none of that.
   Two related gaps are also open:
-  - the contained curl front's `-g` admission is unpinned on macOS, with no refused-row for `-gK` or `-gx`;
-  - the verifier's exit-3 dependency-load sentence still prints unfiltered.
+  - the contained curl front's `-g` admission is unpinned on macOS, with no refused-row for `-gK` or `-gx`. **Fixed by
+    D-8389 (2026-11-12):** pinned in `ccrc-containment.test.ts`, which runs on macOS too; `-gK` and `-gx` are refused;
+  - the verifier's exit-3 dependency-load sentence still prints unfiltered. **Fixed by D-8389 (2026-11-12):** it
+    writes through `refuse`'s filter, and the update prints the verifier's stderr through `_upd_redact`.
   Residue R23 (the curl front) was not picked up when wave 24 touched that front.
 - **R49 (wave 24's in-session review; records and comments).**
   - The plan's hunk map gives add plus delete as the add count for 672293450.
@@ -7475,7 +7494,7 @@ waves 10 and 11), or as documented limitations (the cuts of 2026-10-15 and 2026-
   - The count rule for lines above the plan's base line 11635 nets minus 3 in the `_upd_redact` hunk, unledgered.
   - README's blank-budget sentence holds only from the environment.
   - Deviation 6751's enumeration counts the box stamp's sha, ref and builtAt as bounded, which only its version is.
-- **R50 (wave 24's in-session review; minor behaviour).**
+- **R50 (wave 24's in-session review; minor behaviour).** **Fixed by D-8390 (2026-11-12):** the first four; the fifth, `ccrc-uninstall`'s flake under load, stays open.
   - With an undecided deadline such as `2e6`, the watchdog's `max` falls to 900000 and only warns, so it can judge before
     the server, contrary to its own comment.
   - A console-driven move's parent reads its settings from the server's environment, which systemd parsed, while its
@@ -7491,10 +7510,13 @@ waves 10 and 11), or as documented limitations (the cuts of 2026-10-15 and 2026-
     shared locale pin but would not catch a later pin narrowed to that arm alone.
   - The invalid-byte row may fall back to C.UTF-8 when en_US.utf8 is unavailable instead of skipping; the reviewer
     measured the same defect under both. These are residue, not permission to edit the frozen W29 branch.
+  - **Fixed by D-8387 (2026-11-12):** the example, the scheme-arm row and the locale fallback. The extglob save and
+    restore was already gone with #1946 (D-7078, D-7289).
 
 - **R52 (wave 29, review 1013; minor, carried after acceptance).** The settings-reader test header still names
   rows L1-L4, omitting the existing L5 and new L6. Comment drift only; no behavioral gap or permission to edit the
   frozen branch. The other advisory was superseded by the main reviewer's independent named-suite reruns.
+  **Fixed by D-8387 (2026-11-12):** the header names L5 and L6.
 
 ## Next-wave brief
 

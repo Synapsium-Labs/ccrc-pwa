@@ -156,6 +156,28 @@ describe('ledger-guard CLI', () => {
   });
 });
 
+describe('the ledger guard job in ci.yml (D-6926: armed)', () => {
+  // Read the job's own block so a mode set elsewhere in the workflow cannot satisfy the pin.
+  const CI = path.resolve(path.dirname(GUARD), '..', 'workflows', 'ci.yml');
+  const job = (): string => {
+    const text = readFileSync(CI, 'utf8');
+    const start = text.indexOf('\n  ledger-guard:\n');
+    expect(start).toBeGreaterThan(-1);
+    const rest = text.slice(start + 1);
+    const next = rest.slice(1).search(/\n  [A-Za-z#]/);
+    return next < 0 ? rest : rest.slice(0, next + 1);
+  };
+
+  it('runs in enforce mode, so a violation fails the check', () => {
+    expect(job()).toMatch(/^ {6}LEDGER_GUARD_MODE: enforce$/m);
+    expect(job()).not.toMatch(/LEDGER_GUARD_MODE: warn/);
+  });
+
+  it('runs the guard script against the pull request base', () => {
+    expect(job()).toContain('node .github/ci/ledger-guard.mjs --repo "$GITHUB_WORKSPACE" --base "origin/${{ github.base_ref }}"');
+  });
+});
+
 describe('classifyChange', () => {
   it('only existing files under the two ledger trees are violations', () => {
     const v = classifyChange([

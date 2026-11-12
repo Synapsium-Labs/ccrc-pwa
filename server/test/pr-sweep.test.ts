@@ -692,6 +692,64 @@ describe('backoffPr — a failed read never overwrites a good phase, and unauthe
   });
 });
 
+describe('a failed sweep names how ccd ended and its stderr lines (landing-order 5h)', () => {
+  const failedLine = async (pr: Record<string, unknown>): Promise<string> => {
+    const home = seed(['demo-quiet-basin']);
+    liveIdle(home);
+    let prStateCalls = 0;
+    const run: Runner = async (_cmd, args) => {
+      if (args[0] === 'pr-state') { prStateCalls += 1; return pr as never; }
+      if (args[0] === 'list-panes') return { ran: true, code: 0, stdout: '4242\n', stderr: '' };
+      return { ran: true, code: 0, stdout: '', stderr: '' };
+    };
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const w = new FleetWatcher(withFakeClock(testDeps(home, run)), new Bus(), 10_000);
+    try {
+      await w.tick();
+      await vi.waitFor(() => expect(prStateCalls).toBe(1));
+      await vi.waitFor(() => expect(w.inFlight('pr')).toBeNull());
+      const lines = warn.mock.calls.map((c) => String(c[0])).filter((x) => x.includes('PR sweep of demo failed'));
+      expect(lines).toHaveLength(1);
+      return lines[0]!;
+    } finally { warn.mockRestore(); w.stop(); }
+  };
+
+  it('a failed sweep logs exit 3, the first and the last stderr line', async () => {
+    const line = await failedLine({ ran: true, code: 3, stdout: '', stderr: 'first boom\nmiddle\nlast boom\n', killed: false, signal: null });
+    expect(line).toMatch(/failed \(agent-down: exit 3; first: first boom; last: last boom\); retrying in \d+s$/);
+  });
+
+  it('a token-shaped string in stderr is masked in the logged line', async () => {
+    const secret = `ghp_${'A1b2C3d4E5'.repeat(4)}`;
+    const line = await failedLine({ ran: true, code: 3, stdout: '', stderr: `auth failed with ${secret}\nretry with ${secret}\n`, killed: false, signal: null });
+    expect(line).not.toContain(secret);
+    expect(line).toMatch(/exit 3; first: auth failed with /);
+    expect(line).toMatch(/last: retry with /);
+  });
+
+  it('a one-line stderr logs no last', async () => {
+    const line = await failedLine({ ran: true, code: 3, stdout: '', stderr: 'only\n', killed: false, signal: null });
+    expect(line).toContain('exit 3; first: only)');
+    expect(line).not.toContain('last:');
+  });
+
+  it('a deadline kill logs deadline under cut-short', async () => {
+    const line = await failedLine({ ran: true, code: 1, stdout: '', stderr: 'slow\n', killed: true, signal: 'SIGTERM' });
+    expect(line).toMatch(/failed \(cut-short: deadline; first: slow\)/);
+  });
+
+  it('a signal logs its name', async () => {
+    const line = await failedLine({ ran: true, code: 1, stdout: '', stderr: 'x\n', killed: false, signal: 'SIGKILL' });
+    expect(line).toContain('signal SIGKILL; first: x');
+  });
+
+  it('a call that did not run logs the runner\'s detail', async () => {
+    const line = await failedLine({ ran: false, code: 1, stdout: '', stderr: 'noise', reason: 'transport', detail: 'link down' });
+    expect(line).toContain('(unmeasured: link down)'.replace('unmeasured', line.match(/failed \((\S+):/)![1]!));
+    expect(line).not.toContain('first:');
+  });
+});
+
 describe('the unsupported-verb branch — a fleet that never advertised pr-state', () => {
   it('marks every session of the project "unsupported", without ever calling ccd', async () => {
     const home = seed(['demo-quiet-basin', 'demo-still-cove']);

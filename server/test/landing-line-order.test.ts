@@ -223,6 +223,18 @@ describe('landingOrder: a quarantined stale pin is in no line (wave 5f Task 3, C
   });
 });
 
+describe('landingOrder: a closed entry (wave 5h)', () => {
+  it('a closed entry is never head and releases the entry after it', () => {
+    const closed = e(1, { pinnedAt: 100, state: 'closed' });
+    const follower = e(2, { pinnedAt: 200, afterIds: [101] });
+    const o = landingOrder([closed, follower], OPEN);
+    expect(prs(o)).toEqual([2]);
+    expect(head(o)).toBe(2);
+    // CONTROL: the same follower behind a pinned entry waits for it
+    expect(head(landingOrder([e(1, { pinnedAt: 100 }), follower], OPEN))).toBe(1);
+  });
+});
+
 describe('landingOrder: recovery holds the line without touching the flags (wave 5f)', () => {
   const HOLD = { subjects: [], hold: { reason: 'landing-recovery-unresolved' as const, subjectIds: [7, 9] } };
   const NONE = { subjects: [], hold: null };

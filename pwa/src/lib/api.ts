@@ -9,6 +9,7 @@ import type { GoalsView, ItemView, WaitingView } from '../../../shared/ledgers';
 import type { LinearConnectionView } from '../../../shared/linear';
 import type { DispatchAbandonRequest, DispatchAbandonView } from '../../../shared/dispatch-abandon';
 import type { LaneArmRequest, LaneArmView } from '../../../shared/lane-arm';
+import type { OverridesView } from '../../../shared/overrides';
 import type { RunCloseRequest, RunCloseView } from '../../../shared/run-close';
 import type { ScopeSweepBusyRequest, ScopeSweepView } from '../../../shared/scope-sweep';
 import type { DelegationAdoptRequest, DelegationAdoptView } from '../../../shared/delegation-adopt';
@@ -808,6 +809,10 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
     actItem: async (itemId: number, opts?: ReadOpts): Promise<CloseAnswer> => closeAnswerOf(await request(`/api/items/${itemId}/act`, { method: 'POST' }, opts)),
     /** `POST /api/items/:id/decline` (D-8076): Keep the run. The item closes as declined and its asker is told. Body-less. */
     declineItem: (itemId: number) => postJson<{ readonly ok: true; readonly item: ItemView }>(`/api/items/${itemId}/decline`),
+    /** `POST /api/items/:id/act` on a release-review item (D-8293): Release a review child kept past its ceiling. Body-less and
+     *  session only. It abandons nothing: the item closes done and the child reclaim sweep takes the workspace on its next passes. */
+    releaseReviewItem: (itemId: number) =>
+      postJson<{ readonly ok: true; readonly released: true; readonly item: ItemView }>(`/api/items/${itemId}/act`),
     /** `POST /api/runs/:id/reclaim` — point a program's runs at a LIVING
      *  coordinator after the one they name has died. The wedge it opens is the
      *  one two readers create between them by answering the lowest-id
@@ -971,6 +976,9 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
      *  The card reads it through `useLaneArmView`, whose `asLaneArmView` is the wire guard. 501 `not-configured` and an older
      *  server's 404 read as not available. Session-gated when armed, open dark; no box token. */
     laneArm: (opts?: ReadOpts) => getJson<LaneArmView>('/api/coord/lane-arm', opts),
+    /** `GET /api/fleet/overrides` (D-8382): every override the switchboard declares with its state, and the approvals
+     *  topology. Read only; Overrides in force and Security's approvals line read it through `useOverridesView`. */
+    fleetOverrides: (opts?: ReadOpts) => getJson<OverridesView>('/api/fleet/overrides', opts),
     /** `POST /api/coord/lane-arm`: `{lane, choice}`, plus `confirm` only as the key a 409 `confirm-required` answered with. The
      *  server decides the confirm, so a 409 rejects with `ApiError` like every non-2xx, and the card reads its body through
      *  `laneArmWriteRefusal`. `postJsonOr`, for `setCoordCaps`' reason: an answer that could not be read may still have stored
@@ -999,6 +1007,11 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
     testboxToolsSync: () =>
       postJsonOr<{ readonly ok: boolean; readonly outcome?: unknown; readonly detail?: unknown } | 'unreadable'>(
         '/api/testbox/tools-sync', 'unreadable'),
+    /** D-8289: `GET /api/testbox/builds`, `{ok, claudeBuilds}`, the trusted Claude Code builds (`readClaudeBuildRecords` is the guard), and
+     *  `POST /api/testbox/builds/capture`, `{build}`, the operator's Capture again on a failed build, answered with the re-read list. */
+    testboxBuilds: (opts?: ReadOpts) => getJson<{ readonly ok: true; readonly claudeBuilds: unknown }>('/api/testbox/builds', opts),
+    testboxBuildCapture: (build: string) =>
+      postJsonOr<{ readonly ok: true; readonly claudeBuilds: unknown } | 'unreadable'>('/api/testbox/builds/capture', 'unreadable', { build }),
     /** `GET /api/testbox/admin` (test box connect plan TC12, D-8166): `{ok, status, events}`, session-gated. `useTestboxAdmin`
      *  reads it through the shared status reader; the type here is the envelope only. */
     testboxAdmin: (opts?: ReadOpts) => getJson<{ readonly ok: true; readonly status: unknown; readonly events: unknown }>('/api/testbox/admin', opts),

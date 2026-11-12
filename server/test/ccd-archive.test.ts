@@ -1327,6 +1327,137 @@ describe('ws-archive refuses rather than record a manifest that lies', () => {
   });
 });
 
+/** D-8335 (#2360): a stopped workspace whose folder stands EMPTY, which git records no worktree for and whose branch
+ *  resolves nowhere — not in the project, not as a tracking ref, not on any remote — holds nothing to lose, so it
+ *  archives without anything recreated. The proof needs every condition, each read fail-closed; any other shape still
+ *  refuses as before. */
+describe('ws-archive: an empty folder with no git record and no branch anywhere (D-8335)', () => {
+  const ID = 'demo-quiet-basin';
+  const BRANCH = 'ws/quiet-basin';
+  /** The measured shape: the worktree removed with its record, its branch deleted, and the folder made again empty. */
+  const emptyUnrecorded = (): { wt: string; main: string } => {
+    const wt = workspace('demo', 'quiet-basin');
+    const main = path.join(h.home, 'projects', 'demo');
+    h.git(main, 'worktree', 'remove', '--force', wt);
+    h.git(main, 'branch', '-D', BRANCH);
+    fs.mkdirSync(wt);
+    expect(h.git(main, 'ls-remote', '--heads', 'origin'), 'the fixture: origin holds no workspace branch').not.toContain(BRANCH);
+    return { wt, main };
+  };
+  const refusedUntouched = (r: { code: number; stderr: string }, why: RegExp): void => {
+    expect(r.code).toBe(1);
+    expect(r.stderr).toMatch(/cannot describe demo-quiet-basin truthfully — nothing was touched/);
+    expect(r.stderr).toMatch(/has no worktree record for/);
+    expect(r.stderr).toMatch(why);
+    expect(h.reg(ID, 'archived')).toBeNull();
+    expect(h.reg(ID, 'archivemanifest')).toBeNull();
+  };
+
+  it('archives it, records the shape in the manifest, and keeps the folder', () => {
+    const { wt } = emptyUnrecorded();
+    const r = shFail(`${ARCH} cmd_ws_archive --session ${ID}`);
+    expect(r.stderr).toBe('');
+    expect(r.code).toBe(0);
+    expect(r.stdout).toMatch(/^archived demo-quiet-basin \(no commits beyond base\) — worktree kept at /);
+    expect(h.reg(ID, 'archived')).toMatch(/^\d+$/);
+    expect(h.reg(ID, 'archivedreason')).toBe('empty');
+    const m = JSON.parse(h.reg(ID, 'archivemanifest')!) as Record<string, unknown>;
+    expect(m).toMatchObject({
+      id: ID, branch: BRANCH, worktreeHead: null, tip: null, dirty: 0, ignoredDigest: null, worktreeAdmin: null,
+      workdir: wt, unrecordedEmpty: true,
+    });
+    expect(typeof m.uuid).toBe('string');
+    // Archive destroys nothing: the folder stays, empty, so ws-restore puts the row back exactly as it was.
+    expect(fs.statSync(wt).isDirectory()).toBe(true);
+    expect(fs.readdirSync(wt)).toEqual([]);
+  });
+
+  it('archives it through the dispatcher too, the program the box runs', () => {
+    emptyUnrecorded();
+    const r = runCcd('ws-archive', '--session', ID);
+    expect(r.stderr).toBe('');
+    expect(r.code).toBe(0);
+    expect(h.reg(ID, 'archived')).toMatch(/^\d+$/);
+  });
+
+  it('a folder holding any entry, even one dotfile, still refuses', () => {
+    const { wt } = emptyUnrecorded();
+    fs.writeFileSync(path.join(wt, '.notes'), 'work\n');
+    refusedUntouched(shFail(`${ARCH} cmd_ws_archive --session ${ID}`), /is not empty/);
+  });
+
+  it('a folder holding an empty subdirectory still refuses', () => {
+    const { wt } = emptyUnrecorded();
+    fs.mkdirSync(path.join(wt, 'src'));
+    refusedUntouched(shFail(`${ARCH} cmd_ws_archive --session ${ID}`), /is not empty/);
+  });
+
+  it('a branch that still stands in the project refuses', () => {
+    const { main } = emptyUnrecorded();
+    h.git(main, 'branch', BRANCH, 'main');
+    refusedUntouched(shFail(`${ARCH} cmd_ws_archive --session ${ID}`), /refs\/heads\/ws\/quiet-basin still stands in/);
+  });
+
+  it('a branch that stands only on the remote refuses', () => {
+    const { main } = emptyUnrecorded();
+    h.git(main, 'branch', BRANCH, 'main');
+    h.git(main, 'push', '-q', 'origin', BRANCH);
+    h.git(main, 'branch', '-D', BRANCH);
+    h.git(main, 'update-ref', '-d', `refs/remotes/origin/${BRANCH}`);
+    refusedUntouched(shFail(`${ARCH} cmd_ws_archive --session ${ID}`), /stands on the remote origin/);
+  });
+
+  it('a tracking ref left behind refuses, though the remote dropped the branch', () => {
+    const { main } = emptyUnrecorded();
+    h.git(main, 'update-ref', `refs/remotes/origin/${BRANCH}`, h.git(main, 'rev-parse', 'main'));
+    refusedUntouched(shFail(`${ARCH} cmd_ws_archive --session ${ID}`), /refs\/remotes\/origin\/ws\/quiet-basin still stands/);
+  });
+
+  it('a remote that cannot be asked refuses — a probe that did not answer is no proof', () => {
+    const { main } = emptyUnrecorded();
+    h.git(main, 'remote', 'set-url', 'origin', path.join(h.home, 'origins', 'gone.git'));
+    refusedUntouched(shFail(`${ARCH} cmd_ws_archive --session ${ID}`), /could not ask the remote origin/);
+  });
+
+  it('a link standing at the workdir refuses, even to an empty directory', () => {
+    const { wt } = emptyUnrecorded();
+    fs.rmdirSync(wt);
+    const target = path.join(h.home, 'elsewhere-empty');
+    fs.mkdirSync(target);
+    fs.symlinkSync(target, wt);
+    refusedUntouched(shFail(`${ARCH} cmd_ws_archive --session ${ID}`), /is not a plain directory/);
+  });
+
+  it('a mount point refuses — its emptiness may be a disk that is not mounted', () => {
+    emptyUnrecorded();
+    const MOUNT = `_plat_devino() { case "$1" in */) echo 2:1 ;; *) echo 1:1 ;; esac; };`;
+    refusedUntouched(shFail(`${ARCH} ${MOUNT} cmd_ws_archive --session ${ID}`), /is a mount point/);
+  });
+
+  it('a folder whose entries cannot be listed refuses', () => {
+    const { wt } = emptyUnrecorded();
+    fs.chmodSync(wt, 0o000);
+    try {
+      refusedUntouched(shFail(`${ARCH} cmd_ws_archive --session ${ID}`), /could not be listed/);
+    } finally { fs.chmodSync(wt, 0o755); }
+  });
+
+  it('a worktree list that cannot be read refuses', () => {
+    emptyUnrecorded();
+    const NOLIST = `${ARCH} git() { [[ "$*" == *"worktree list"* ]] && return 128; command git "$@"; };`;
+    refusedUntouched(shFail(`${NOLIST} cmd_ws_archive --session ${ID}`), /could not read .*worktree list/);
+  });
+
+  it('an admin entry naming the folder refuses, though git\'s list omits it', () => {
+    const { wt, main } = emptyUnrecorded();
+    const adm = path.join(main, '.git', 'worktrees', 'quiet-basin');
+    fs.mkdirSync(adm, { recursive: true });
+    fs.writeFileSync(path.join(adm, 'gitdir'), `${wt}/.git\n`);
+    const OMIT = `${ARCH} git() { if [[ "$*" == *"worktree list --porcelain"* ]]; then command git "$@" | awk '/^worktree /{keep=($0 !~ /quiet-basin/)} keep'; return 0; fi; command git "$@"; };`;
+    refusedUntouched(shFail(`${OMIT} cmd_ws_archive --session ${ID}`), /omitted a record that exists/);
+  });
+});
+
 /** Drift between the registry's branch name and git's worktree record is a
  *  DESCRIBABLE fact about a healthy directory, not an unreadable one — so archive
  *  records it and folds the workspace out of the live fleet. Refusing was

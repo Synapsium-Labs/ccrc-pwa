@@ -5743,7 +5743,7 @@ _gh_fail_reason() {   # gh's stderr text -> ONE word on stdout: unauthenticated 
     # GITHUB'S OWN 5xx. Measured 2026-08-26 against a live fleet repo with
     # several thousand PRs of history — the slug is operator residue and
     # stays out of this tree. The 100-PR `statusCheckRollup` window
-    # `_gh_pr_list` sends answers
+    # `_gh_pr_list` USED to send answered
     # `HTTP 504: We couldn't respond to your request in time. …
     # (https://api.github.com/graphql)` after 11.2 s, on 3/3 attempts — a
     # standing property of that repo's PR history, not a blip. It went out as
@@ -10903,7 +10903,9 @@ cmd_ws_archive() {   # ccd ws-archive --session <id> — fold a merged workspace
   # HEAD moved after this workspace was created.
   base=$(_reg_get "$id" base); [[ -n "$base" ]] || base="origin/HEAD"
   ahead=""
-  [[ -n "$base" ]] && ahead=$(git -C "$workdir" rev-list --count "$base..HEAD" 2>/dev/null) || ahead=""
+  # D-8335: a folder proven to hold nothing is not asked: git would answer from whatever repository encloses it.
+  if [[ "$manifest" == *',"unrecordedEmpty":true}' ]]; then ahead=0
+  elif [[ -n "$base" ]]; then ahead=$(git -C "$workdir" rev-list --count "$base..HEAD" 2>/dev/null) || ahead=""; fi
   # Reason and its git reads are both settled BEFORE the `archived` marker
   # goes down: a mid-window kill between the two used to leave the marker
   # written with no reason ever recorded, and the `already archived` early
@@ -10931,6 +10933,62 @@ cmd_ws_archive() {   # ccd ws-archive --session <id> — fold a merged workspace
     empty)    note=" (no commits beyond base)" ;;
   esac
   echo "archived $id$note — worktree kept at $workdir, nothing deleted"
+}
+
+_WS_UNREC_WHY=''
+_ws_archive_unrecorded_empty() {   # main workdir branch -> rc 0 when the workspace is PROVEN to hold nothing (D-8335,
+  #                                   #2360); rc 1 (_WS_UNREC_WHY) when any condition fails or could not be read
+  # A STOPPED WORKSPACE WHOSE FOLDER STANDS EMPTY, which git keeps no record of
+  # and whose branch resolves nowhere, used to refuse "cannot describe … truthfully"
+  # with no way out from the console. All of these, each read fail-closed, because
+  # a false "nothing here" is the one answer that could lose work:
+  #   the folder is a plain directory, not a link and not a mount point (an
+  #     unmounted disk reads empty), and lists no entry at all;
+  #   git keeps no worktree record of it: `_ws_reclaim_record` answers "none"
+  #     from a list it READ, and `_ws_reclaim_no_record` finds no admin entry
+  #     naming `<workdir>/.git` that the list omitted;
+  #   the registry's branch is not in $main, no remote-tracking ref names it,
+  #     and every remote, asked live, answers "no such head" (`ls-remote` rc 2).
+  local main="$1" w="$2" branch="$3" n wd pd common rc r refs remotes RECLAIM_REC_BRANCH='' RECLAIM_REC_HEAD='' RECLAIM_REC_MAIN=0 RECLAIM_REC_PRUNABLE=0 _WS_REC_WHY='' _WS_NOREC_WHY=''
+  _WS_UNREC_WHY=''
+  [[ "$w" == /* && -d "$w" && ! -L "$w" ]] || { _WS_UNREC_WHY="$w is not a plain directory"; return 1; }
+  wd=$(_plat_devino "$w" 2>/dev/null) && pd=$(_plat_devino "${w%/*}/" 2>/dev/null) \
+    || { _WS_UNREC_WHY="the device of $w could not be read"; return 1; }
+  [[ "${wd%%:*}" == "${pd%%:*}" ]] || { _WS_UNREC_WHY="$w is a mount point"; return 1; }
+  n=$(find "$w" -mindepth 1 -maxdepth 1 2>/dev/null | wc -l) || { _WS_UNREC_WHY="the entries of $w could not be listed"; return 1; }
+  n=${n//[[:space:]]/}
+  [[ "$n" == 0 ]] || { _WS_UNREC_WHY="$w is not empty (${n} entries)"; return 1; }
+  _ws_reclaim_record "$main" "$w"; rc=$?
+  case "$rc" in
+    1) : ;;
+    0) _WS_UNREC_WHY="$main records a worktree at $w"; return 1 ;;
+    *) _WS_UNREC_WHY=$_WS_REC_WHY; return 1 ;;
+  esac
+  common=$(_ws_common_dir "$main") || { _WS_UNREC_WHY="could not resolve the repository of $main"; return 1; }
+  _ws_reclaim_no_record "$common" "$w" || { _WS_UNREC_WHY=$_WS_NOREC_WHY; return 1; }
+  git -C "$main" rev-parse --verify --quiet "refs/heads/$branch" >/dev/null 2>&1; rc=$?
+  case "$rc" in
+    1) : ;;
+    0) _WS_UNREC_WHY="refs/heads/$branch still stands in $main"; return 1 ;;
+    *) _WS_UNREC_WHY="could not ask $main for refs/heads/$branch"; return 1 ;;
+  esac
+  refs=$(git -C "$main" for-each-ref --format='%(refname)' refs/remotes/ 2>/dev/null) \
+    || { _WS_UNREC_WHY="could not list the remote-tracking refs of $main"; return 1; }
+  while IFS= read -r r; do
+    [[ -n "$r" && "$r" == refs/remotes/*/"$branch" ]] || continue
+    _WS_UNREC_WHY="$r still stands in $main"; return 1
+  done <<< "$refs"
+  remotes=$(git -C "$main" remote 2>/dev/null) || { _WS_UNREC_WHY="could not list the remotes of $main"; return 1; }
+  while IFS= read -r r; do
+    [[ -n "$r" ]] || continue
+    rc=0; _plat_timeout 60 git -C "$main" ls-remote --exit-code --heads "$r" "refs/heads/$branch" >/dev/null 2>&1 || rc=$?
+    case "$rc" in
+      2) : ;;
+      0) _WS_UNREC_WHY="refs/heads/$branch stands on the remote $r"; return 1 ;;
+      *) _WS_UNREC_WHY="could not ask the remote $r for refs/heads/$branch (git exited $rc)"; return 1 ;;
+    esac
+  done <<< "$remotes"
+  return 0
 }
 
 _ws_archive_manifest() {   # id -> one JSON object on stdout
@@ -10978,10 +11036,17 @@ _ws_archive_manifest() {   # id -> one JSON object on stdout
   # record AND the directory itself have both said $main, which is the pair
   # cmd_ws_rm requires before it touches anything (ccd:458-461). `registered` is
   # read from $? on its own line: `local x=$(...)` returns local's status.
-  local wthead registered wd_common main_common rc
+  local wthead registered wd_common main_common rc unrec=0
   wthead=$(_ws_wt_branch "$main" "$workdir"); registered=$?
-  (( registered == 0 )) \
-    || { echo "manifest: $main has no worktree record for $workdir" >&2; return 1; }
+  # D-8335: one shape without a record is describable: a folder PROVEN empty whose branch resolves nowhere
+  # (`_ws_archive_unrecorded_empty`). It is recorded as such (`unrecordedEmpty`), and no read below asks git inside
+  # it, since git would answer there from whatever repository encloses the folder.
+  if (( registered != 0 )); then
+    _ws_archive_unrecorded_empty "$main" "$workdir" "$branch" \
+      || { echo "manifest: $main has no worktree record for $workdir, and it is not proven to hold nothing: $_WS_UNREC_WHY" >&2; return 1; }
+    unrec=1; wthead=''
+  fi
+  if (( ! unrec )); then
   # DRIFT IS A FIELD, NOT A REFUSAL. `_ws_wt_branch` follows a rename whether ccd
   # or the user did it (ccd:403-409), so `$wthead` is git's own answer for this
   # path and `$branch` is the registry's claim: recorded side by side as `branch`
@@ -11058,6 +11123,9 @@ _ws_archive_manifest() {   # id -> one JSON object on stdout
   # inside that function, where its own callers inherit it.
   ignored=$(_ws_ignored_digest "$workdir") \
     || { echo "manifest: could not read the ignored set at $workdir" >&2; return 1; }
+  else
+    tip=''; dirty=0; ignored=''   # D-8335: proven above: no ref, no entry, so nothing ignored or uncommitted
+  fi
   # $main answered rev-parse a moment ago — rc 0 or a clean "no such ref", both
   # of which are answers — so its stash list is readable; the count is the only
   # field whose repository has already been proven healthy.
@@ -11226,12 +11294,12 @@ sys.stdout.write(out)
   uuid=$(_reg_read "$id" uuid) && [[ -n "$uuid" ]] \
     || { echo "manifest: could not read the uuid of '$id'" >&2; return 1; }
   ! _ws_reclaim_resolve "$workdir" || [[ "$_WS_RESOLVE_BASIS" != complete || "$_WS_RESOLVED" == //* ]] || { wr=$_WS_RESOLVED; wdreal=$(_json_str "$wr"); }
-  gd=$(git -C "$workdir" rev-parse --path-format=absolute --git-dir 2>/dev/null) && [[ "${gd%/*}" == "$main_common/worktrees" ]] && bl=$(cat -- "$gd/gitdir" 2>/dev/null) && [[ "$bl" == */.git ]] && { [[ "$bl" == /* ]] || bl="$gd/$bl"; } && _ws_reclaim_resolve "${bl%/.git}" && [[ -n "$wr" && "$_WS_RESOLVE_BASIS" == complete && "$_WS_RESOLVED" == "$wr" ]] && adm=$(_json_str "${gd##*/}")
-  printf '{"id":%s,"branch":%s,"worktreeHead":%s,"base":%s,"tip":%s,"dirty":%s,"ignoredDigest":%s,"stashes":%s,"worktreeBytes":%s,"pr":%s,"prHistory":%s,"transcript":%s,"workdir":%s,"workdirReal":%s,"uuid":%s,"worktreeAdmin":%s}\n' \
-    "$(_json_str "$id")" "$(_json_str "$branch")" "$(_json_str "$wthead")" "$(_json_str "$base")" \
+  (( ! unrec )) && gd=$(git -C "$workdir" rev-parse --path-format=absolute --git-dir 2>/dev/null) && [[ "${gd%/*}" == "$main_common/worktrees" ]] && bl=$(cat -- "$gd/gitdir" 2>/dev/null) && [[ "$bl" == */.git ]] && { [[ "$bl" == /* ]] || bl="$gd/$bl"; } && _ws_reclaim_resolve "${bl%/.git}" && [[ -n "$wr" && "$_WS_RESOLVE_BASIS" == complete && "$_WS_RESOLVED" == "$wr" ]] && adm=$(_json_str "${gd##*/}")
+  printf '{"id":%s,"branch":%s,"worktreeHead":%s,"base":%s,"tip":%s,"dirty":%s,"ignoredDigest":%s,"stashes":%s,"worktreeBytes":%s,"pr":%s,"prHistory":%s,"transcript":%s,"workdir":%s,"workdirReal":%s,"uuid":%s,"worktreeAdmin":%s%s}\n' \
+    "$(_json_str "$id")" "$(_json_str "$branch")" "$( (( unrec )) && echo null || _json_str "$wthead")" "$(_json_str "$base")" \
     "$( [[ -n "$tip" ]] && _json_str "$tip" || echo null)" \
-    "$dirty" "$(_json_str "$ignored")" "$stashes" "$bytes" "$pr" "$prhistory" "$(_json_str "$transcript")" \
-    "$(_json_str "$workdir")" "$wdreal" "$(_json_str "$uuid")" "$adm"
+    "$dirty" "$( (( unrec )) && echo null || _json_str "$ignored")" "$stashes" "$bytes" "$pr" "$prhistory" "$(_json_str "$transcript")" \
+    "$(_json_str "$workdir")" "$wdreal" "$(_json_str "$uuid")" "$adm" "$( (( unrec )) && echo ',"unrecordedEmpty":true')"
 }
 
 cmd_ws_restore() {   # ccd ws-restore --session <id> — undo an archive entirely
@@ -11934,11 +12002,11 @@ cmd_pr_state() {   # ccd pr-state --session <id> | ccd pr-state --project <proje
   # (`_pr_state_by_pr`'s `gh pr view`, under PR_GH_VIEW_TIMEOUT), plus, only when
   # that PR is CLOSED with the train label and has no kept proof, the train
   # record's reads inside PR_STATE_TRAIN_TIMEOUT — and no number moves when a
-  # project grows a ninth workspace. The budget argument (8 projects x 1 call / 120 s
-  # ~ 5 % of the GraphQL allowance) survives tripling and would not survive
-  # going per session, and `pr-timeout-budget.test.ts` sums each form's calls'
-  # timeouts against the server's outer bound on this verb. Read-only apart
-  # from the three registry fields `--session`/`--project` persist, so a ccrc restart degrades to
+  # project grows a ninth workspace, except the `--pr` form: the server's landed reader (`server/src/coord/landed.ts`) asks it
+  # once per open landing entry it reads in a sweep, at most LANDED_READS_PER_SWEEP a sweep across every project (about 300 an
+  # hour at the cap, 6 % of the GraphQL allowance beside the PR lane's 5 %). The budget argument (8 projects x 1 call / 120 s)
+  # survives that, and `pr-timeout-budget.test.ts` sums each form's calls' timeouts against the server's outer bound on this
+  # verb. Read-only apart from the three registry fields `--session`/`--project` persist, so a ccrc restart degrades to
   # honest stale, and the kept train proofs and tried lines a train claim's record writes (`--session` and `--pr`).
   [[ $# -eq 4 && $1 == --project && $3 == --pr ]] && { _pr_state_by_pr "$2" "$4"; return; }
   [[ $# -eq 2 ]] || die "usage: ccd pr-state --session <id> | ccd pr-state --project <project> [--pr <n>]"
@@ -13515,6 +13583,7 @@ _ws_child_manifest() {   # main workdir -> JSON array on stdout; non-zero and NO
 }
 
 REAP_SCAN_SECONDS=30      # the whole-workspace bound on the inside-of-ignored scan
+WS_INDEX_LOCK_STALE_S=21600   # D-5945: an empty, unheld index.lock is stale only once older than this (6 h)
 REAP_IGNLOCK_WAIT=5       # D-5884: the most a retry waits on `.ignored-scan.lock` before it retries unlocked
 
 _ws_sensitive_inside() {   # absdir relpath deadline -> 0 with hits in _WS_INSIDE_HITS, 1 = the scan did not complete
@@ -15363,7 +15432,7 @@ cmd_ws_audit() {   # ccd ws-audit --session <id> — read-only about the WORKSPA
   if [[ $mode == reclaim ]]; then
     printf '"mode":"reclaim","childOf":%s,"generation":%s,"legacyRows":%s,"pendingRows":%s,' \
       "$( _child_runid_valid "$RECLAIM_CHILDOF" && echo "$RECLAIM_CHILDOF" || echo null)" "$( _reg_generation_valid "$RECLAIM_GENERATION" && printf '"%s"' "$RECLAIM_GENERATION" || echo null)" "${_WS_LEGACY_ROWS:-null}" "${_WS_PENDING_ROWS:-null}"
-    _ws_rescue_doc; _ws_held_by_doc
+    _ws_rescue_doc; _ws_held_by_doc; _ws_stale_lock_doc
     [[ -n "$RECLAIM_RESUME_PHASE" ]] && printf '"resume":%s,' "$(_json_str "$RECLAIM_RESUME_PHASE")"
     if [[ "$REAP_VERDICT" == reclaimable ]]; then
       # never the literal `"verdict":"…"` shape — see "RECLAIMABLE, SPELLED THROUGH _JSON_STR" in the RECLAIM region
@@ -19076,7 +19145,7 @@ _ci_proc_start() {   # pid -> rc 0, _CI_PSTART = that process's start time, in c
   # 2) is in parentheses and may itself hold spaces or parentheses, so the
   # fields are counted from after its LAST ") ": field 3 on, starttime is the
   # 20th of them.
-  local s rest
+  local s="" rest
   local -a w
   _CI_PSTART=""
   [[ -f "$_CI_PROC/$1/stat" ]] || return 1
@@ -25421,6 +25490,95 @@ _pane_scope_reap() {   # id pid cg — in its own unit: wait for the main proces
   fi
   return 0
 }
+# ── THE GRACEFUL STOP (session-continuity 6a; spec D-8316 to D-8332) ─────────
+# The three stops a resume follows (`cmd_swap`, `_watchdog_resume_run`, `cmd_hibernate`) read the pane's process before
+# the kill and, after it, time that process's exit from a detached observer (SHADOW): the kill already hangs up Claude
+# Code's terminal, and its SIGHUP and SIGTERM handlers are one `shutdown()`, so the shadow sends no signal. With
+# `$REG/graceful-stop-live` standing (its one reader is `_graceful_stop_before`; NOTHING in the tree writes it, the
+# operator arms it) the stop sends SIGTERM first and waits up to GRACEFUL_STOP_TERM_WAIT_S, then goes on to today's kill.
+# Every outcome is one `graceful-stop <id>: site=<site> mode=<mode> <outcome>` line in swap.log:
+#   (exited|alive)=<ms> | no-pid | gone-before-signal | unmeasured=(wedged|no-start-time|stat-unreadable|detach-failed)
+GRACEFUL_STOP_TERM_WAIT_S=10   # live only: how long the stop waits for Claude Code to exit after SIGTERM, before the kill (chosen, provisional)
+GRACEFUL_STOP_OBSERVE_S=30     # shadow only: how long the detached observer watches the process after the kill
+GRACEFUL_STOP_POLL_S=0.1
+GRACEFUL_STOP_PID="" GRACEFUL_STOP_PSTART="" GRACEFUL_STOP_SITE="" GRACEFUL_STOP_MODE=""   # initialised at file scope, as PANE_SCOPE_* are, for `set -u`
+_graceful_stop_note() {   # id site mode outcome — the one writer of `graceful-stop` lines in swap.log. Always rc 0.
+  echo "$(date '+%F %T') graceful-stop $1: site=$2 mode=$3 $4" >> "$REG/swap.log" 2>/dev/null || true
+  return 0
+}
+_graceful_stop_same() {   # pid pstart — the one identity check: rc 0 the same process, rc 1 gone (or recycled), rc 2 alive, but its start time cannot be read
+  kill -0 "$1" 2>/dev/null || return 1
+  _ci_proc_start "$1" || { kill -0 "$1" 2>/dev/null && return 2; return 1; }
+  [[ "$_CI_PSTART" == "$2" ]] || return 1
+  return 0
+}
+_graceful_stop_before() {   # id site [read] — before the pane kill. `read`: the caller just ran `_pane_scope_of`, so its PANE_SCOPE_* are used as they stand. Always rc 0.
+  local id="$1" pid ps rc=0 t0 now tick_ms n poll="$GRACEFUL_STOP_POLL_S"
+  GRACEFUL_STOP_PID="" GRACEFUL_STOP_PSTART="" GRACEFUL_STOP_SITE="$2" GRACEFUL_STOP_MODE=shadow
+  [[ -f "$REG/graceful-stop-live" ]] && GRACEFUL_STOP_MODE=live
+  [[ "${3:-}" == read ]] || _pane_scope_of "$id"
+  if [[ -n "$PANE_SCOPE_WEDGED" ]]; then _graceful_stop_note "$id" "$2" "$GRACEFUL_STOP_MODE" unmeasured=wedged; return 0; fi
+  pid="$PANE_SCOPE_PID"
+  if [[ -z "$pid" ]]; then _graceful_stop_note "$id" "$2" "$GRACEFUL_STOP_MODE" no-pid; return 0; fi
+  if ! _ci_proc_start "$pid"; then _graceful_stop_note "$id" "$2" "$GRACEFUL_STOP_MODE" unmeasured=no-start-time; return 0; fi
+  ps="$_CI_PSTART"; GRACEFUL_STOP_PID="$pid" GRACEFUL_STOP_PSTART="$ps"
+  [[ "$GRACEFUL_STOP_MODE" == live ]] || return 0
+  _graceful_stop_same "$pid" "$ps" || rc=$?
+  GRACEFUL_STOP_PID=""
+  case "$rc" in
+    0) ;;
+    2) _graceful_stop_note "$id" "$2" live unmeasured=stat-unreadable; return 0 ;;
+    *) _graceful_stop_note "$id" "$2" live gone-before-signal; return 0 ;;
+  esac
+  kill -TERM "$pid" 2>/dev/null
+  t0=$(_plat_epoch_ms)
+  tick_ms="${GRACEFUL_STOP_POLL_S#*.}000"; tick_ms=$(( 10#${tick_ms:0:3} ))   # the poll is "0.<fraction>" seconds: its milliseconds, by string slicing (no fork)
+  (( tick_ms > 0 )) || { tick_ms=100; poll=0.1; }   # a poll that slices to 0 ms (0, 0.0005, empty): the default, tick and sleep together
+  # the clock is the bound; the count (twice the nominal passes) only backs up a clock that stops or steps back
+  for (( n = 0; n < 2 * GRACEFUL_STOP_TERM_WAIT_S * 1000 / tick_ms; n++ )); do
+    rc=0; _graceful_stop_same "$pid" "$ps" || rc=$?
+    now=$(_plat_epoch_ms)
+    case "$rc" in
+      0) ;;
+      2) _graceful_stop_note "$id" "$2" live unmeasured=stat-unreadable; return 0 ;;
+      *) _graceful_stop_note "$id" "$2" live "exited=$(( now - t0 ))"; return 0 ;;
+    esac
+    if (( now - t0 >= GRACEFUL_STOP_TERM_WAIT_S * 1000 )); then break; fi
+    sleep "$poll"
+  done
+  rc=0; _graceful_stop_same "$pid" "$ps" || rc=$?   # one last poll, so a process that left in the final interval is exited=, not alive=
+  now=$(_plat_epoch_ms)
+  case "$rc" in
+    0) _graceful_stop_note "$id" "$2" live "alive=$(( GRACEFUL_STOP_TERM_WAIT_S * 1000 ))" ;;
+    2) _graceful_stop_note "$id" "$2" live unmeasured=stat-unreadable ;;
+    *) _graceful_stop_note "$id" "$2" live "exited=$(( now - t0 ))" ;;
+  esac
+  return 0
+}
+_graceful_stop_after() {   # id — after the pane kill: in shadow, hand the watch of the kept pid to a detached observer. Never waits. Always rc 0.
+  local id="$1" t0 rc=0
+  if [[ "$GRACEFUL_STOP_MODE" == shadow && -n "$GRACEFUL_STOP_PID" ]]; then
+    t0=$(_plat_epoch_ms)
+    _pane_scope_detach _graceful_stop_observe "$id" "$GRACEFUL_STOP_SITE" "$GRACEFUL_STOP_PID" "$GRACEFUL_STOP_PSTART" "$t0" || rc=$?
+    (( rc == 0 )) || _graceful_stop_note "$id" "$GRACEFUL_STOP_SITE" shadow unmeasured=detach-failed
+  fi
+  GRACEFUL_STOP_PID="" GRACEFUL_STOP_PSTART="" GRACEFUL_STOP_SITE="" GRACEFUL_STOP_MODE=""
+  return 0
+}
+_graceful_stop_observe() {   # id site pid pstart t0 — in its own unit: watch the process after the kill. Always rc 0.
+  local id="$1" site="$2" pid="$3" pstart="$4" t0="$5" rc now
+  while :; do
+    rc=0; _graceful_stop_same "$pid" "$pstart" || rc=$?
+    now=$(_plat_epoch_ms)
+    case "$rc" in
+      0) ;;
+      2) _graceful_stop_note "$id" "$site" shadow unmeasured=stat-unreadable; return 0 ;;
+      *) _graceful_stop_note "$id" "$site" shadow "exited=$(( now - t0 ))"; return 0 ;;
+    esac
+    if (( now - t0 >= GRACEFUL_STOP_OBSERVE_S * 1000 )); then _graceful_stop_note "$id" "$site" shadow "alive=$(( GRACEFUL_STOP_OBSERVE_S * 1000 ))"; return 0; fi
+    sleep "$GRACEFUL_STOP_POLL_S"
+  done
+}
 # shellcheck disable=SC2128,SC2178  # scope is a local string here; the arrays named scope are other functions' locals (shellcheck does not scope names by function)
 _end_cause() {   # id -> the cause word of the end just seen: oom | tmux-server | exited | unknown. Always rc 0.
   # `oom` FIRST (D-5345): the pane scope's own journal naming an OOM kill in the 120 s
@@ -31352,7 +31510,9 @@ cmd_swap() {   # [--force] [--cross-pool] [--interrupt] id target-wrapper — mo
   _end_record "$id" "$(_swap_end_cause)"
   [[ -e "$REG/$id.choicekept" ]] || _operator_choice_keep "$id"   # a stop the spawn below follows: the operator's own /model and /effort reach the record first; a session already stopped and read (a marker) is not read again (§5.7)
   _svc_stop "claude-session@$id" 2>/dev/null   # first, or Restart=always resurrects under the old wrapper
+  _graceful_stop_before "$id" swap
   _tmx kill-session -t "$(_tmux_t "$id")" 2>/dev/null || _operator_choice_unmark "$id"   # a kill that failed on a live session leaves no marker (§5.7)
+  _graceful_stop_after "$id"
   sleep 1                                                  # let claude flush its final transcript entries
   # A SWAP IS NOT AN ABANDONMENT. Between the stop and the start this row is
   # not alive and, after 120 seconds, would also stop looking watched — and
@@ -32109,7 +32269,9 @@ _watchdog_resume_run() {   # id — the transient unit's body: the stop-and-ensu
   local id="$1"
   [[ -e "$REG/$id.choicekept" ]] || _operator_choice_keep "$id"   # the operator's own /model and /effort reach the record first (§5.7)
   _svc_stop "claude-session@$id" 2>/dev/null   # first, or Restart=always resurrects the old pane
+  _graceful_stop_before "$id" limit-resume
   _tmx kill-session -t "$(_tmux_t "$id")" 2>/dev/null || _operator_choice_unmark "$id"
+  _graceful_stop_after "$id"
   sleep 1   # let claude flush its final transcript entries
   _reg_set "$id" supervised "$(date +%s)"
   cmd_ensure "$id"
@@ -32497,7 +32659,9 @@ cmd_hibernate() {   # [--roll] [--surface <word>] [--actor <text>] [--reason <te
   _reg_set "$id" hibernated "$now $hours" || die "could not write $REG/$id.hibernated — nothing was stopped"
   _ws_unsupervise "$id" ccd
   _pane_scope_of "$id"   # D-7902: the pane's scope, read while the pane still stands, and after the stop's intent, which no tmux may hold
+  _graceful_stop_before "$id" hibernate read
   _tmx kill-session -t "$(_tmux_t "$id")" 2>/dev/null || _operator_choice_unmark "$id"   # a kill that failed on a live session leaves no marker (§5.7)
+  _graceful_stop_after "$id"
   # A roll whose pane is still live after the kill did not stop it, so nothing is rolled and no wake is tried: its own
   # exit (6) and phrase, never `rolled`. The marker and the stopped unit the act wrote stand, so the line says so.
   if (( lc_roll )) && _alive "$id"; then
@@ -33098,6 +33262,7 @@ _ws_reclaim_reset() {   # every REAP_* global `_ws_reap_reset` owns, plus the re
   RECLAIM_WIP_SHA=""        # `_ws_wip_commit`'s answer for the tree it was just handed
   RECLAIM_WIP_WHY=""; RECLAIM_PIN_WHY=""; _WS_RECLAIM_CLASSIFY_WHY=""
   RECLAIM_KEPT=()           # branches this reclaim KEEPS, never deletes, and records (`keptBranches`)
+  RECLAIM_STALE_LOCKS=""    # D-5945: the stale `index.lock` paths rung 6 passed, one per line (`staleLock`)
   _WS_LADDER_BIND=()        # the token's LEADING inputs — the caller's rungs 1-2 set them (`_ws_reclaim_ladder`)
   EXPIRE_ARCHIVED_AT=""     # ws-expire's archive epoch, as READ (the EXPIRE region); '' on every reclaim
   _WS_LEGACY_ROWS=""; _WS_PENDING_ROWS=""   # the rows rung's entry-field counts: '' = not counted, printed null
@@ -35217,27 +35382,103 @@ _ws_reclaim_tip_read() {   # main branch -> 0 with REAP_TIP (the tip; '' when th
 }
 
 _WS_HEAD_UNBORN_WHY=''
-_ws_reclaim_head_unborn() {   # workdir branch -> 0 when HEAD is still SYMBOLIC to that branch and the last
-  #                                `_ws_reclaim_tip_read` PROVED the branch absent; 1 when it is not so; 2 when
-  #                                HEAD could not be read. _WS_HEAD_UNBORN_WHY says why on 0 and on 2.
+_ws_reclaim_head_unborn() {   # workdir branch -> 0 when HEAD is SYMBOLIC to a branch that names no commit: that
+  #                                branch, which the last `_ws_reclaim_tip_read` PROVED absent, or ANOTHER branch
+  #                                proven absent (D-8286); 1 when it is not so; 2 when HEAD, or the other branch it
+  #                                names, could not be read. _WS_HEAD_UNBORN_WHY says why on 0 and on 2.
   # THE ONE PREDICATE OF THE LADDER AND THE PIN (D-5944), so the audit never
   # promises what the pin refuses. An `update-ref -d` under a checkout leaves
   # HEAD naming nothing, and no WIP commit can stand on it. A DETACHED HEAD on a
   # gone branch is not this shape: it names a commit, and the pin keeps it.
   # `symbolic-ref` answers 1 for a detached HEAD; any other failure is a read
   # that did not run, which is never "not so".
-  local ref rc
+  # A HEAD ON ANOTHER BRANCH (D-8286, #2293's stated residue) is the same shape
+  # when that branch names no commit: an orphan checkout never born, or a drifted
+  # HEAD whose branch was deleted under it. The pin keeps a drifted HEAD's branch
+  # and commits the WIP commit on HEAD, and here HEAD resolves to nothing, so it
+  # refused on every pass a token the ladder had minted with an empty `head=`.
+  # Its branch is read three ways (`_ws_reclaim_branch_state`): only a branch
+  # PROVEN absent is this shape, a standing one is the ordinary drift, and a
+  # read that did not run is 2, never "not so".
+  local ref rc other st
   _WS_HEAD_UNBORN_WHY=''
-  [[ "$RECLAIM_BRANCHSTATE" == absent ]] || return 1
   ref=$(git -C "$1" symbolic-ref -q HEAD 2>/dev/null); rc=$?
   if (( rc == 0 )); then
-    [[ "$ref" == "refs/heads/$2" ]] || return 1
-    _WS_HEAD_UNBORN_WHY="$1 still has $2 checked out, but $2 is gone from its repository — HEAD names no commit for the WIP commit to stand on, so nothing was pinned"
-    return 0
+    if [[ "$ref" == "refs/heads/$2" ]]; then
+      [[ "$RECLAIM_BRANCHSTATE" == absent ]] || return 1
+      _WS_HEAD_UNBORN_WHY="$1 still has $2 checked out, but $2 is gone from its repository — HEAD names no commit for the WIP commit to stand on, so nothing was pinned"
+      return 0
+    fi
+    [[ "$ref" == refs/heads/?* ]] || return 1
+    other="${ref#refs/heads/}"
+    st=$(_ws_reclaim_branch_state "$1" "$other")
+    case "$st" in
+      "present "*) return 1 ;;
+      absent)
+        _WS_HEAD_UNBORN_WHY="$1 has $other checked out, but $other names no commit (never born, or gone from its repository) — HEAD names no commit for the WIP commit to stand on, so nothing was pinned"
+        return 0 ;;
+    esac
+    _WS_HEAD_UNBORN_WHY="could not read whether $other, the branch $1 has checked out, exists"
+    return 2
   fi
   (( rc == 1 )) && return 1
   _WS_HEAD_UNBORN_WHY="could not read which branch $1 has checked out"
   return 2
+}
+
+_WS_LOCK_STATE=''; _WS_LOCK_WHY=''
+_ws_index_lock_state() {   # lockpath -> 0 always; _WS_LOCK_STATE = absent | held | stale | unmeasured, and
+  #                            _WS_LOCK_WHY says why for held, stale and unmeasured (D-5945, spec 2026-10-20 §2.4)
+  # RUNG 6's ONE CLASSIFIER, for the child's own tree and the nested checkout's
+  # twin alike. A lock a crashed git command left behind wedged an archived
+  # workspace for good: `tree-busy` is a retry word, and an expiry has no
+  # `--defer-expired`. STALE needs all three: a regular, EMPTY file (git writes
+  # the new index into its lock, so a writer that is still writing leaves
+  # bytes); an mtime older than `WS_INDEX_LOCK_STALE_S` (a future mtime is
+  # young, never a negative age read as old); and no holder the process probe
+  # `_ws_path_users` can find. Anything else that stands there — a link,
+  # dangling or not, a directory, a non-empty or young file, a holder — is
+  # `held`, and a read or a probe that could not run is `unmeasured`, never
+  # stale. ccd NEVER deletes the lock: the audit writes nothing, and the tail
+  # removes it with the tree after the pin, which copies the index through a
+  # scratch file and never takes the lock (`_ws_reclaim_index_src`).
+  local l="$1" size mt now age rc
+  _WS_LOCK_STATE=unmeasured; _WS_LOCK_WHY=''
+  if [[ ! -e "$l" && ! -L "$l" ]]; then _WS_LOCK_STATE=absent; return 0; fi
+  if [[ -L "$l" || ! -f "$l" ]]; then _WS_LOCK_STATE=held; _WS_LOCK_WHY="it is not a regular file"; return 0; fi
+  size=$(_plat_size "$l" 2>/dev/null) && [[ "$size" =~ ^[0-9]+$ ]] \
+    || { _WS_LOCK_WHY="its size could not be read"; return 0; }
+  (( size == 0 )) || { _WS_LOCK_STATE=held; _WS_LOCK_WHY="it holds $size bytes"; return 0; }
+  mt=$(_plat_mtime "$l" 2>/dev/null) && [[ "$mt" =~ ^[0-9]+$ ]] \
+    || { _WS_LOCK_WHY="its modification time could not be read"; return 0; }
+  now=$(_now_s); [[ "$now" =~ ^[0-9]+$ ]] || { _WS_LOCK_WHY="the clock could not be read"; return 0; }
+  age=$(( now - mt ))
+  (( age > WS_INDEX_LOCK_STALE_S )) \
+    || { _WS_LOCK_STATE=held; _WS_LOCK_WHY="it was written ${age}s ago, within the ${WS_INDEX_LOCK_STALE_S}s a git command may hold it"; return 0; }
+  _ws_path_users "$l"; rc=$?
+  case "$rc" in
+    0) _WS_LOCK_STATE=stale; _WS_LOCK_WHY="an empty file written ${age}s ago that no process holds" ;;
+    1) _WS_LOCK_STATE=held; _WS_LOCK_WHY="$_WS_PATH_USERS_WHY" ;;
+    *) _WS_LOCK_WHY="$_WS_PATH_USERS_WHY" ;;
+  esac
+  return 0
+}
+
+_ws_stale_lock_doc() {   # -> prints `"staleLock":[…],` for an audit document when rung 6 passed a stale lock, else nothing
+  # Absent, never `[]`, when none passed (D-5945): a document from a tree with no lock is byte-identical to before.
+  local l first=1
+  [[ -n "$RECLAIM_STALE_LOCKS" ]] || return 0
+  printf '"staleLock":['
+  while IFS= read -r l; do
+    [[ -n "$l" ]] || continue
+    (( first )) || printf ','; first=0
+    printf '%s' "$(_json_str "$l")"
+  done <<< "$RECLAIM_STALE_LOCKS"
+  printf '],'
+}
+_ws_stale_lock_meas() {   # -> the stale lock paths rung 6 passed, comma-joined, for `meas.staleLock` ('' when none)
+  local v="${RECLAIM_STALE_LOCKS%$'\n'}"
+  printf '%s' "${v//$'\n'/,}"
 }
 
 _WS_GITDIR_WHY=''; _WS_GITDIR_DIR=''
@@ -35611,8 +35852,13 @@ _ws_reclaim_ladder() {   # id defer -> rungs 3-10, SHARED by `_ws_reclaim_eval` 
     [[ -z "$op" ]] || { _ws_refuse tree-busy "$op in progress at $workdir"; return 1; }
     h=$(git -C "$workdir" rev-parse --path-format=absolute --git-path index 2>/dev/null) && [[ -n "$h" ]] \
       || { _ws_reclaim_unmeasured "could not locate the index of $workdir"; return 1; }
-    [[ ! -e "$h.lock" && ! -L "$h.lock" ]] \
-      || { _ws_refuse tree-busy "a git command holds the index lock of $workdir ($h.lock)"; return 1; }
+    _ws_index_lock_state "$h.lock"   # D-5945: a stale lock passes, named; a held one is busy
+    case "$_WS_LOCK_STATE" in
+      absent) : ;;
+      stale) RECLAIM_STALE_LOCKS+="$h.lock"$'\n' ;;
+      held) _ws_refuse tree-busy "a git command holds the index lock of $workdir ($h.lock) — $_WS_LOCK_WHY"; return 1 ;;
+      *) _ws_reclaim_unmeasured "whether a process holds the index lock of $workdir ($h.lock) could not be asked: $_WS_LOCK_WHY"; return 1 ;;
+    esac
   fi
   # THE BRANCH DELETED IS THE REGISTRY'S (spec §5.5: nothing that is not the
   # child's is deleted). A worktree whose HEAD has DRIFTED onto another branch
@@ -35710,8 +35956,13 @@ _ws_reclaim_ladder() {   # id defer -> rungs 3-10, SHARED by `_ws_reclaim_eval` 
       if (( ! defer )); then
         h=$(git -C "$p" rev-parse --path-format=absolute --git-path index 2>/dev/null) && [[ -n "$h" ]] \
           || { _ws_reclaim_unmeasured "could not locate the index of the nested checkout at $p"; return 1; }
-        [[ ! -e "$h.lock" && ! -L "$h.lock" ]] \
-          || { _ws_refuse tree-busy "a git command holds the index lock of the nested checkout at $p ($h.lock)"; return 1; }
+        _ws_index_lock_state "$h.lock"   # D-5945: the same rule as the child's own tree
+        case "$_WS_LOCK_STATE" in
+          absent) : ;;
+          stale) RECLAIM_STALE_LOCKS+="$h.lock"$'\n' ;;
+          held) _ws_refuse tree-busy "a git command holds the index lock of the nested checkout at $p ($h.lock) — $_WS_LOCK_WHY"; return 1 ;;
+          *) _ws_reclaim_unmeasured "whether a process holds the index lock of the nested checkout at $p ($h.lock) could not be asked: $_WS_LOCK_WHY"; return 1 ;;
+        esac
         op=$(_ws_child_op "$p") \
           || { _ws_reclaim_unmeasured "could not probe the nested checkout at $p for an in-progress git operation"; return 1; }
         [[ -z "$op" ]] || { _ws_refuse tree-busy "$op in progress at the nested checkout at $p"; return 1; }
@@ -35782,7 +36033,8 @@ _ws_reclaim_ladder() {   # id defer -> rungs 3-10, SHARED by `_ws_reclaim_eval` 
     "statusDigest=$RECLAIM_STATUSDIGEST" \
     "ignoredDigest=$REAP_IGNDIGEST" "secretsDigest=$REAP_SENSDIGEST" "hiddenDigest=$RECLAIM_HIDDENDIGEST" \
     "stashes=${RECLAIM_STASHES//$'\n'/,}" "opHeads=${RECLAIM_OPHEADS//$'\n'/,}" \
-    "nestedDigest=$REAP_CHILDDIGEST" "clipsDigest=$REAP_CLIPDIGEST")
+    "nestedDigest=$REAP_CHILDDIGEST" "clipsDigest=$REAP_CLIPDIGEST" \
+    ${RECLAIM_STALE_LOCKS:+"staleLock=${RECLAIM_STALE_LOCKS//$'\n'/,}"})   # D-5945: only when one passed, so no other token moves
   REAP_VERDICT=reclaimable
   return 0
 }
@@ -40260,6 +40512,7 @@ _ws_reclaim_locked() {   # token childof id defer surface actor reason — every
   lctx=$(_lc_tx)
   _lc_intent reclaim "$id" "$lctx" verb ws-reclaim meas.childOf "$RECLAIM_CHILDOF" meas.project "$project" \
     meas.workdir "$workdir" meas.branch "$REAP_BRANCH" meas.resumed "$resumed" \
+    ${RECLAIM_STALE_LOCKS:+meas.staleLock "$(_ws_stale_lock_meas)"} \
     dec.surface "$surface" dec.actor "$actor" dec.reason "$reason"
   if [[ -z "$phase" ]]; then
     # THE PIN PHASE, before anything is destroyed (spec §5.5), then the
@@ -40863,6 +41116,7 @@ _ws_expire_locked() {   # token id surface actor reason — everything the share
   lctx=$(_lc_tx)
   _lc_intent expire "$id" "$lctx" verb ws-expire meas.archivedAt "$EXPIRE_ARCHIVED_AT" meas.project "$project" \
     meas.workdir "$workdir" meas.branch "$REAP_BRANCH" meas.resumed "$resumed" \
+    ${RECLAIM_STALE_LOCKS:+meas.staleLock "$(_ws_stale_lock_meas)"} \
     dec.surface "$surface" dec.actor "$actor" dec.reason "$reason"
   if [[ -z "$phase" ]]; then
     # THE PIN PHASE, before anything is destroyed, then the tombstone (its
@@ -40957,7 +41211,7 @@ _ws_expire_audit_contained() {   # `_ws_expire_audit`'s body, run under `_ws_rec
   printf '{"session":%s,"mode":"expire","archivedAt":%s,"expiresAt":%s,"alive":%s,"exists":%s,"reaping":%s,"sensitive":%s,"legacyRows":%s,"pendingRows":%s,' \
     "$(_json_str "$id")" "$stamp" "$expires" \
     "$aliveflag" "$exists" "$( [[ -n "$reaping" ]] && _json_str "$reaping" || echo null)" "$sens" "${_WS_LEGACY_ROWS:-null}" "${_WS_PENDING_ROWS:-null}"
-  _ws_rescue_doc; _ws_held_by_doc
+  _ws_rescue_doc; _ws_held_by_doc; _ws_stale_lock_doc
   [[ -n "$RECLAIM_RESUME_PHASE" ]] && printf '"resume":%s,' "$(_json_str "$RECLAIM_RESUME_PHASE")"
   # WHO IS IN IT (an `in-use` refusal only): pid, command and cwd, at most five.
   if [[ "$REAP_VERDICT" == in-use && ${#EXPIRE_IN_USE[@]} -gt 0 ]]; then

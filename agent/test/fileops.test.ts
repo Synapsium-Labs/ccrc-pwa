@@ -441,6 +441,23 @@ describe('ccrc-agent file ops', () => {
     expect(res2).toMatchObject({ ok: true, missing: true });
   });
 
+  it('stat answers the ~/.ccrc switch files (D-8382), and read, readdir and lstat of them stay forbidden', async () => {
+    await open();
+    const ccrc = path.join(fixture!.home, '.ccrc');
+    mkdirSync(ccrc, { recursive: true });
+    const off = path.join(ccrc, 'graph-gate-off');
+    expect(await client!.req<Res>(nextId(), { op: 'stat', path: off })).toMatchObject({ ok: true, missing: true, absent: true });
+    writeFileSync(off, '');
+    expect(await client!.req<Res>(nextId(), { op: 'stat', path: off })).toMatchObject({ ok: true, size: 0 });
+    for (const op of ['read', 'lstat', 'readB64'] as const) {
+      expect(await client!.req<Res>(nextId(), { op, path: off }), op).toMatchObject({ ok: false, err: 'forbidden' });
+    }
+    expect(await client!.req<Res>(nextId(), { op: 'readdir', path: ccrc })).toMatchObject({ ok: false, err: 'forbidden' });
+    writeFileSync(path.join(ccrc, 'agent.env'), 'CCRC_AGENT_TOKEN=x\n');
+    expect(await client!.req<Res>(nextId(), { op: 'stat', path: path.join(ccrc, 'agent.env') }))
+      .toMatchObject({ ok: false, err: 'forbidden' });
+  });
+
   it('lstat answers about the PATH, not its target — the distinction `stat` structurally cannot carry', async () => {
     await open();
     const target = path.join(fixture!.home, '.cc-limits', 'target.json');

@@ -99,7 +99,7 @@ const skip = (over: Partial<ChildReclaimSweepInput>) => childReclaimSweepVerdict
 /** How `review-report-stale`'s sentence ends (D-5942): its release is the reviewed run's close, not a person's removal. */
 const REVIEW_STALE_ENDING = 'ccrc does not reclaim it while the run it reviewed stays open, unless nothing has touched '
   + 'the workspace for seven days and stale reclaim is switched on; '
-  + 'closing or abandoning that run releases this workspace, and the sweep can reclaim it then.';
+  + 'closing or abandoning that run releases this workspace, as does Release on its item in Waiting on you, and the sweep can reclaim it then.';
 
 describe('childReclaimSweepVerdict', () => {
   it('a child of a finished run with nothing open on it is eligible, carrying the MARKER\'s run id', () => {

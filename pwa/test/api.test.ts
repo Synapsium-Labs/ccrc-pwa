@@ -1842,4 +1842,14 @@ describe('the item acts (Task 24, spec 2026-11-04 §10; D-8076)', () => {
     expect(init.method).toBe('POST');
     expect(init.body).toBeUndefined();
   });
+
+  it('releaseReviewItem POSTs /api/items/:id/act with no body (D-8293)', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(200, { ok: true, released: true, item: {} }));
+    const a = createApi(fetchImpl as unknown as typeof fetch);
+    await a.releaseReviewItem(41);
+    const [url, init] = fetchImpl.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe('/api/items/41/act');
+    expect(init.method).toBe('POST');
+    expect(init.body).toBeUndefined();
+  });
 });

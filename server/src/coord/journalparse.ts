@@ -217,6 +217,8 @@ export function reviveMeas(v: unknown): LifecycleMeas | null {
     witness: s(o, 'witness'),
     // Cleanup un-wedge R2 (D-8000) — the rows that hold a child, on the reclaim audit's `probe-unmeasured` line (`LifecycleMeas.heldBy`).
     heldBy: s(o, 'heldBy'),
+    // D-5945 — the stale index locks rung 6 passed, on a reclaim or expiry intent (`LifecycleMeas.staleLock`).
+    staleLock: s(o, 'staleLock'),
   };
 }
 

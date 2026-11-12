@@ -28,6 +28,7 @@ THE CONFIG is a JSON object, read again at each request:
 import hashlib
 import http.server
 import json
+import socketserver
 import sys
 
 UNSUPPORTED = ("background", "conversation", "max_output_tokens", "max_tool_calls", "metadata", "moderation",
@@ -212,11 +213,20 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self._answer(entry, 200, stream(body, Handler.count, Handler.seen_keys, mode), "text/event-stream")
 
 
+class Server(http.server.ThreadingHTTPServer):
+    """`ThreadingHTTPServer` without `HTTPServer.server_bind`'s `socket.getfqdn` of the bind address, which nothing
+    reads and which has taken about 35 s on macOS, past the test's 15 s wait for `port <n>` (D-8343)."""
+
+    def server_bind(self):
+        socketserver.TCPServer.server_bind(self)
+        self.server_name, self.server_port = self.server_address[:2]
+
+
 def main(argv):
     args = dict(zip(argv[0::2], argv[1::2]))
     Handler.log_path = args["--log"]
     Handler.config_path = args["--config"]
-    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    server = Server(("127.0.0.1", 0), Handler)
     sys.stdout.write("port %d\n" % server.server_address[1])
     sys.stdout.flush()
     server.serve_forever()

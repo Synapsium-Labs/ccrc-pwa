@@ -3384,6 +3384,190 @@ net's join and one for the API commits address.
 **Acceptance.** Every review 1778 shape the brief names is a row; the budget pins hold with recorded margins; the
 differential fuzz and the mutation count are recorded in `c23.md`. **Rollback.** A plain revert.
 
+### Task C27: the macOS FIFO-EOF probe measured its own reader, not the FIFO (D-8344) — now
+
+Placed here, before C24, so that it does not touch C26's section, which was in review when this one was written.
+
+**Why.** With C26's three files fixed, the last red in the macOS test legs was `platform-hazards.test.ts`'s darwin case
+"BSD: after the deadline fires, does the output FIFO reach EOF? — candidate (b)" (D-2661): red on 2026-11-09 and in C26's
+dispatch 43124495612, green on 2026-11-05 and 2026-11-11, always with "nothing alive, nothing holding". A promotion to
+stable needs it green. Root cause first, by the brief: fix the shim if a descendant holds the output, or the probe if the
+probe is wrong on Darwin.
+
+**What was found and done.** No writer survived. Reproduced on macOS (17 reds in 185 iterations), the timeout's whole group
+was gone at +2 s, yet `read -t 0.5` answered 142 for 15 s while a fresh `read(2)` on the same descriptor returned 0 bytes at
+once and `select()` said "not readable". On macOS a FIFO's EOF is one-shot for anything waiting on it. The first read to
+return EOF clears it, and `read -t`'s own read consumed it and still answered a timeout. The case now waits with one
+blocking reader that never asks `select()` (`eofWait`), records the timeout's group before the deadline, and gains a control
+on both platforms that the reader still says "never" while a writer holds the FIFO. The fixed reader was green in 260 of 260
+iterations. The shim, the window, `macos.yml` and the gate are unchanged. The sign-in helper's pump reads with the same
+`read -t` and is booked as Task C28 (ask 356). Evidence, runs and the C28 hand-off are in `c27.md`.
+
+- **D-8344** - `darwin-fifo-eof-is-one-shot`: Task C27, issued on 2026-11-12. The brief expected a shim fix (a descendant holding the output) or a probe fix; it is the probe. D-2661's candidate (b) is refuted for the shim: no writer survived in any inspected red, and the probe's `read -t` lost a Darwin FIFO's one-shot EOF. The probe now reads with one select-free reader; the same reader shape in the sign-in pump is Task C28, not changed here. Departures are named by slug in `c27.md`.
+
+**Acceptance.** The darwin case is green in a `macos.yml` dispatch at the PR's tip, and its repeat runs are recorded in
+`c27.md`. The control reds when the reader is made to answer "eof" whatever happens. **Rollback.** A plain revert.
+
+### Task C29: the two macOS reds left in main's daily full suite (D-8354) — now
+
+Placed directly after C27, away from C28's spot after C26.
+
+**Why.** The daily full run on `main`, 43147459620 at `80d5823be`, failed one job only, `test-macos 4/8`, with two red
+tests: `session-hook-prune-deny.test.ts`'s "dqsub: deny linearity from 64 to 128 KB" (one jq run past the 120 s spawn
+timeout) and `session-hook-compact-carry.test.ts`'s eleventh grammar row (the hook and `parseServerCaps` disagreed). A
+promotion to stable needs that leg green. Root cause first, for each file. Test files only: `ccd/session-hook.sh` is
+under another programme's claim.
+
+**What was found and done.** Both reds were the tests' measures, not the code under test. compact-carry's grammar table
+read the clock once, at collection. The red row was built 175 s old on purpose, a 5 s margin, and the shard reached it
+about 5.5 s after collection, at the edge of the 180 s lease, so the parser's clock and the hook's fell on either side
+of it. Each row is now rendered when its case runs, and
+the parser is asked at both ends of the hook's run. prune-deny's CPU probe fed jq its 128 KB input through a detached
+`spawnSync`'s `input`. On a hosted macOS runner that hung, measured with `cat` in jq's place, in 8 of 6000 detached runs,
+with every byte delivered and the end of input never, and in none of 6000 attached runs. That the daily jq red was this
+hang is inferred from its matching symptoms. The probe now hands the run its input as a regular file, and a new case
+pins that. The hook, the bounds, `spawnGroup.ts`, `macos.yml` and the gate are unchanged. Evidence and runs are in
+`c29.md`.
+
+- **D-8354** - `macos-daily-reds-were-the-measures`: Task C29, issued on 2026-11-12. The brief asked whether each file's code or its measure is wrong on macOS. Both are the measure: compact-carry read its rows' clock at collection, on every platform, and prune-deny's CPU probe fed a detached `spawnSync` an `input` that Darwin now and then never ends. The probe's fix stays in its own file: the two other `spawnSyncGroup` callers that pass payloads are named in `c29.md`, not changed. Departures are named by slug in `c29.md`.
+
+**Acceptance.** Both files are green in a `macos.yml` dispatch at the PR's tip, with the repeat runs recorded in `c29.md`.
+A lease or grammar mutation of the hook reds a grammar row. The cost cases red on a super-linear program, and the new
+case reds when the input goes back through `spawnSync`'s `input`. **Rollback.** A plain revert.
+
+### Task C24: the gh reader's net reads the raw and the joined text, and quotes as the shell does (D-8291) — now
+
+**Why.** Review 1808, the third and last review of Task C23, found that the net read only the text as the shell joins it, so
+a continuation glued to the word before a repository flag or a `repos/` word hid the repository the raw text names (F1), a
+continuation inside an `api.github.com` address named nothing (F2), the join reached inside single quotes (F3), and a word
+glued after a closing quote was dropped from the value (F4); and ten minors. The rule stays as R15 sets it: open the
+repository the message means, or stay text. The receipts are in `c24.md`.
+
+**Items, and what was done.**
+- **F1 and F2.** The net reads the raw message and the joined one, and names what either finds, so the join can only add
+  what the net finds. A continuation between a flag and its value is read as the space the shell reads.
+- **F3.** A continuation inside `'..'` or `$'..'` is not joined, as in the shell; a quote between two letters is prose.
+- **F4.** A word glued after a repository flag value's closing quote belongs to the value.
+- **M5.** The address, `GH_REPO`, qualified-name and `gh`-word readers read the joined text as well as the raw. What only
+  the joined reading finds may only add: a repository it names, or a repository for a number or commit the raw reading
+  already gives one. The `gh` command reader still reads the raw text only (recorded).
+- **Minors.** The two commit-candidate pins read 3 MiB (M1); the record items M2, M3, M4, M8 and M10 are in `c24.md`; R15's
+  "Not read" names `owner/repo@sha` (M6); the mutants are named with their old and new text (M9).
+
+R15 gains one sentence for the union, one for single quotes and one for the glued tail, and its "Not read" list names
+`owner/repo@sha` (M6, the coordinator's answer to this task's ask), and nothing else in the spec changes.
+
+- **D-8291** - `gh-net-reads-raw-and-joined`: Task C24, issued on 2026-11-11. Review 1808's carried findings: the net reads the raw text and the joined text and names what either finds (F1, F2), a continuation inside single quotes is not joined (F3), a word glued after a closing quote belongs to the value (F4), the address, `GH_REPO`, qualified-name and `gh`-word readers read the joined text too and what only it finds may only add (M5), the commit-candidate pins read 3 MiB (M1), and R15's "Not read" names `owner/repo@sha` (M6); each change fails toward text except F4's and F3's few, which follow the shell's reading. Departures are named by slug in `c24.md`.
+
+### Task C30: spawnSyncGroup hands an input to its child as a regular file (D-8381) — now
+
+Placed at the end of C24, away from C28's spot after C26 and C29's before C24.
+
+**Why.** C29 (D-8354) measured on macOS that a detached `spawnSync` given an `input` now and then delivers every byte and
+never the end of input, so the child waits on its stdin until the timeout. `spawnSyncGroup` is detached by design
+(D-5894), so every caller that passes an `input` is exposed. A rare hang in any macOS shard reds the `full-suite` that a
+promotion to stable needs. C29 fixed only its own file.
+
+**What was found and done.** Measured through `spawnSyncGroup` itself on macOS: 1 hang in 3,000 runs with a 128 KB input
+under a test shard's load, with C29's signature. A plain detached `spawnSync` control hung 1 in 6,000 runs. No hang was
+seen at 4 KB or 0 B in 21,000 runs each, which is not conclusive at that rate. The helper now writes an `input` into a
+directory of its own under the run's temp root, opens it, removes the directory before the child starts, and passes the
+descriptor as the child's stdin. The group, the timeout, the group kill, the stray check and every caller are unchanged.
+The fixed helper had 0 hangs in 30,000 runs on macOS. Three cases in `proc-leak.test.ts` pin the route. The nine
+callers' inputs measured 1,989 bytes at the largest. Evidence and runs are in `c30.md`.
+
+- **D-8381** - `spawnsyncgroup-input-from-a-file`: Task C30, issued on 2026-11-12. `spawnSyncGroup` gives an `input` to its child as a regular file under the run's temp root, removed before the child starts, never through `spawnSync`'s `input`, which on macOS now and then loses the end of input. Whether a small or empty input can hang stays unproven either way (none in 21,000 runs each), and the fix covers every size. C29's local workaround in `session-hook-prune-deny.test.ts` could now go and is left in place. Departures are named by slug in `c30.md`.
+
+**Acceptance.** The PR's required checks and a `macos.yml` dispatch at its tip are green. The new cases red when the
+input goes back through `spawnSync`'s `input`, when the directory outlives the child's start, and when the caller's
+`stdio` is dropped. **Rollback.** A plain revert.
+
+### Task C26: the macOS test legs go green, so a promotion to stable can pass its gate (D-8343) — now
+
+**Why.** The operator asked to promote v0.0.1115. `release-stable`'s gate needs a green `full-suite` on the commit, and
+`full-suite` includes the macOS test shards. The manual full run 42992355563 on `0efa0c8a3` had every Linux leg green and
+three of eight macOS shards red; the last standalone macOS run, 41949722215 (2026-11-05, `3231cb2b5`), was red too. The
+operator chose to fix macOS, not to make the gate ignore it. Each cause, fix and measurement is in `c26.md`.
+
+**Items, and what was done.**
+- **`siwc-trial.test.ts` (73 cases at the 15 s wait).** `HTTPServer.server_bind` names the server `socket.getfqdn(host)`,
+  a reverse lookup of 127.0.0.1 that has taken about 35 s in a new process on the macOS runner (measured for
+  `ccgpt-proxy.py`'s `_Server`). Both fakes printed their port after `startFake`'s 15 s wait ("auth did not start"), and
+  the tool's own sign-in listener paid it too. The fakes and the shipped tool (`deploy/siwc-trial.py`'s `_Server`) bind
+  through `TCPServer`'s bind and set the two names themselves. A new describe makes `getfqdn` fatal in the process it
+  starts, so Linux shows the defect: red on `main`, green here.
+- **`delegation-rig-w0.test.ts:493` (an empty transcripts list).** `rig.sh`'s `sessions_snap` listed the transcripts with
+  `find -printf`, which is GNU find's; BSD find refuses it, and the `|| true` hid the refusal. It now lists them with
+  `find` and `wc -c`. A new case runs it with a `find` that refuses `-printf` as BSD's does: red on `main`, green here.
+- **`ccd-tick-diet-equivalence-route.test.ts` (E9 under C).** The batch ended in 0.4 s with an empty stderr and no row
+  begun, its rc unrecorded; the cause below is inferred, not seen. The bound it runs under, the test helper `BOUNDED` (`ccdWsHelpers.ts`), exits 125 with nothing on stderr when
+  either side's `setpgid` fails with an errno other than EACCES or ESRCH; the daily run of 2026-11-09 shows the same
+  silent 125 in `ccd-operator-choice.test.ts`. On XNU that errno does not prove that the group is missing, so `BOUNDED`
+  now asks the group itself before it gives up, which covers a failure once the group exists, and every 125 and 127 says
+  why on stderr. A new pair of cases makes one side's `setpgid` fail with EPERM once the group exists, the condition
+  inferred for Darwin: red on `main` (125), green here. The runner's
+  "a row never finished" line now carries the batch's rc and signal.
+- **Run 41949722215.** Its one failing test, `ledgers-secrets.test.ts`'s `kept2`, was fixed on `main` after that run (#2286:
+  two planted names were one file on macOS's case-insensitive disk); its cancelled shard 3/4 was cut at the 55-minute deadline of the four-shard plan, which D-8265 replaced with
+  eight. Neither needs a change here.
+
+No test is skipped on Darwin, no Linux assertion is loosened, no timeout is raised, and the gate, `full-suite` and
+`macos.yml` are unchanged.
+
+- **D-8343** - `macos-legs-green`: Task C26, issued on 2026-11-11. The three red macOS files of run 42992355563: the siwc
+  fakes and the trial's sign-in listener bind without `HTTPServer`'s `getfqdn` (about 35 s on macOS), `rig.sh`'s
+  `sessions_snap` lists transcripts without GNU find's `-printf`, and the test bound `BOUNDED` decides from the child's
+  process group rather than from a `setpgid` errno, and names every 125 and 127 on stderr. Each fix ships with a case that
+  is red on Linux without it. Departures are named by slug in `c26.md`.
+
+### Task C28: the sign-in pump confirms a macOS FIFO's end of file without select() (D-8345) — now
+
+**Why.** Task C27 (D-8344, #2689) found that D-2661's macOS red was its probe's reader: on Darwin a FIFO's end of file is
+delivered once to whatever waits for it, `select()` can then call a FIFO with no writer "not readable", and bash 5.3's
+`read -t` consumes the EOF and answers 142. The account sign-in helper's pump reads the child's output with the same
+`read -t` and looped on every timeout. Each claim below is labelled in `c28.md`, with the runs.
+
+**Items, and what was done.**
+- **The defect, measured on macOS.** The helper's own spawn, pump and wait, against a mint that prints two lines, sleeps a
+  second and exits 0, ran to the pump's backstop and was stamped expired in 51 of 140 runs (all from run 43154928175), on
+  both spawn arms, bare and under load. Each time the mint had exited 0 and both lines had reached the pane, and the tick reads answered 0, 0 and
+  then only 142, never 1. A sign-in that succeeded would end `expired` after its whole deadline (610 s by default).
+- **The fix.** Once a tick read has timed out and the child has exited, the pump makes one drain read with no `-t`, a
+  plain `read(2)`, in its own shell under `_auth_timeout`, bounded by the tick and by what is left before the backstop:
+  a line, the end of the stream, or a writer still there (D-2736's descendant), which stays a timeout and still ends at
+  the backstop. The partial-line display and the code forward run as before, in the same order. The tick read is a
+  function of its own, `_auth_pump_read`, the seam the tests drive. Measured on macOS with the fix: 0 of 140 late runs red
+  where 51 of 140 were before, 0 of 230 runs in all, and a held stream still ended expired at the 10 s backstop each time.
+- **Tests.** Three cases, each on both arms, drive the seam with stand-ins that answer as Darwin did: a finished mint whose
+  EOF the tick read lost ends at once; when `select()` never says readable every byte still arrives in order; a
+  descendant holding the stream still ends at the backstop as expired. Each is red without the drain arm (from a saved
+  copy); the third hangs with the drain read unbounded.
+- **`_auth_forward_code`'s peek on fd 7.** It cannot lose the code: fd 7 is held open read-write, so it never reaches end
+  of file, and a code is one line in one write. Measured on macOS: 400 of 400 codes whole. Not changed.
+
+`_auth_timeout`, the gate, `full-suite`, `macos.yml` and D-2736's backstop window are unchanged; no timeout is raised.
+
+**Fix round 1 (review 1849).** The backstop TERMs the pump's own child rather than `AUTH_CHILD`, which is empty under
+`login`; the pane methods are unchanged. On `_auth_timeout`'s pure-bash arm a `login` mint that ignores TERM used to hang
+the run, which was older than D-8345, and now ends `expired` at the backstop. The drain's shell runs with `-p`, so no
+BASH_ENV reaches the drained text, and the drain's bound is a function of its own that reads a zero tick as 1 and the
+tick's whole part with `10#`. New cases pin each: the drain reads fd 8 on the pure-bash arm, a printing BASH_ENV, `login`
+with the lost-EOF stand-in, `login`'s TERM-ignoring mint on the pure-bash arm, and the bound; each is red without its
+fix (from a saved copy). The record's 51 of 180 is corrected to 51 of 140. The departure `login-backstop-kills-nothing`
+is closed. `pure-bash-arm-mint-stdin`, found in this round and fixed in it on the coordinator's rulings: on that arm the
+mint got /dev/null for stdin, so no pasted code reached it (measured on Linux; pre-existing; a Mac without Homebrew
+coreutils takes that arm, inferred). Each spawn now hands its stdin over on fd 5 as well, and a `bash -p` trampoline
+puts it back before the mint runs; `_auth_timeout` and its two pinned copies are unchanged. Three cases pin it, red
+without the fix. Departures by slug in `c28.md`.
+
+- **D-8345** - `pump-darwin-eof`: Task C28, issued on 2026-11-12. The sign-in pump's tick read is `read -t` on a FIFO
+  whose end of file is one-shot on macOS, so a finished mint ran to the backstop and ended `expired` (51 of 140 runs
+  measured). After a timed-out tick with the child gone, the pump confirms the end of the stream with one bounded drain
+  read that does not use `select()`. Fix round 1 (review 1849): the backstop TERMs the pump's own child, so `login`'s
+  ends too (F2); the drain's shell runs `-p` (M1); a zero tick is 1 and the tick is read with `10#` (M2, M3); cases pin
+  the pure-bash arm and `login` (F3, F4); each spawn carries the mint's stdin past the shim's pure-bash arm on fd 5
+  (`pure-bash-arm-mint-stdin`). Departures are named by slug in `c28.md`.
+
 ## Acceptance (the matrix, per PR)
 
 Each rendered task's PR body carries a table: rows Refined and Instrument × dark and light; columns the task's widths (at least 360, 390, 1280 and 1920), each cell a before (`origin/main`) and after pair checked for: no horizontal page scroll; no page errors; no clipped or overlapping text; 44 px targets under coarse emulation; the identity core present; one instance of each moved readout; nothing moved that the task did not intend; and the task's own claim. Mark it ✓, or write the defect and its fix. Fixture names only. Departures are named by slug under `## Departures`, for the coordinator to number.

@@ -381,11 +381,12 @@ describe('ccd-update-sync: no credential or absolute home path in a printed line
     // _upd_redact strips every @-ended run in a scheme authority, even if curl refuses that base.
     expect(call('https://u:p@x@host', '/fixture-home')).toBe('https://host');
     expect(call('u:p@x@host/path', '/fixture-home')).toBe('host/path');
-    // A slash, query or fragment ends the authority; later @ text stays whole.
-    for (const url of ['https://host/path@x', 'https://host?a@b', 'https://host#a@b']) {
-      expect(call(url, '/fixture-home')).toBe(url);
-    }
-    expect(call('https://u:p@host?a@b#c@d', '/fixture-home')).toBe('https://host?a@b#c@d');
+    // A slash, query or fragment ends the authority; later @ text is no userinfo. A path's stays whole; a query or a fragment
+    // is withheld after its '?' or '#' (D-8342), the host kept.
+    expect(call('https://host/path@x', '/fixture-home')).toBe('https://host/path@x');
+    expect(call('https://host?a@b', '/fixture-home')).toBe('https://host?[withheld]');
+    expect(call('https://host#a@b', '/fixture-home')).toBe('https://host#[withheld]');
+    expect(call('https://u:p@host?a@b#c@d', '/fixture-home')).toBe('https://host?[withheld]');
     const ccrcSrc = readFileSync(CCRC, 'utf8');
     const LL = REGIONS.find((r) => r.name === 'log-line')!;
     expect(checkRegion(LL, src, ccrcSrc)).toBe('current');
@@ -535,9 +536,18 @@ describe('W29: the sync never prints a URL\'s userinfo', () => {
     expect(r.stderr).toContain('could not resolve host in 127.0.0.1:9)');
   });
 
-  it('W29-Y6: under a UTF-8 locale, invalid UTF-8 inside userinfo is still masked (D-6984)', ({ skip }) => {
-    const locales = spawnSync('locale', ['-a'], { encoding: 'utf8' }).stdout ?? '';
-    const locale = locales.split('\n').find((l) => /^en_US\.utf-?8$/i.test(l));
+  // R51 (D-8387): one row per arm of the userinfo mask, the scheme's and the scheme-less one, so a locale pin later
+  // narrowed to one arm alone reds the other; and a box without en_US.UTF-8 runs the rows under C.UTF-8 instead of
+  // skipping them (the review measured the same defect under both).
+  const utf8Locale = (): string | undefined => {
+    const locales = (spawnSync('locale', ['-a'], { encoding: 'utf8' }).stdout ?? '').split('\n');
+    return locales.find((l) => /^en_US\.utf-?8$/i.test(l)) ?? locales.find((l) => /^C\.utf-?8$/i.test(l));
+  };
+  it.for([
+    ['the scheme-less arm', ''],
+    ['the scheme arm', 'https://'],
+  ] as const)('W29-Y6: under a UTF-8 locale, invalid UTF-8 inside userinfo is still masked: %s (D-6984)', ([, scheme], { skip }) => {
+    const locale = utf8Locale();
     if (!locale) { skip(); return; }
     const src = readFileSync(SYNC, 'utf8');
     const block = ccdFunctionDefinition(src, '_upd_redact');
@@ -545,7 +555,7 @@ describe('W29: the sync never prints a URL\'s userinfo', () => {
     const home = mkTmp('upd-sync-w29-invalid-userinfo-');
     const fixture = join(home, 'url \' " $(printf expanded) [*]');
     writeFileSync(fixture, Buffer.from([
-      ...Buffer.from('u:hun', 'ascii'), 0xff,
+      ...Buffer.from(`${scheme}u:hun`, 'ascii'), 0xff,
       ...Buffer.from('ter2@127.0.0.1:9', 'ascii'),
     ]));
     const redactor = join(home, 'redactor \' " $(printf expanded) [*].sh');
@@ -557,7 +567,7 @@ describe('W29: the sync never prints a URL\'s userinfo', () => {
       env, input: '. "$1"\ninput="$(cat -- "$2")"\n_upd_redact "$input" bare-host\n',
     });
     expect(p.status, p.stderr.toString()).toBe(0);
-    expect(p.stdout).toEqual(Buffer.from('127.0.0.1:9', 'ascii'));
+    expect(p.stdout).toEqual(Buffer.from(`${scheme}127.0.0.1:9`, 'ascii'));
   });
 
   it('W29-Y3: the comment above say() names the rules it applies, not "the same two rules"', () => {

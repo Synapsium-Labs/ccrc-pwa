@@ -2676,6 +2676,53 @@ export const MIGRATIONS: readonly string[] = [
   UPDATE programs SET planRequired = 0;
   INSERT OR IGNORE INTO programs (slug, title, createdAt, state, planRequired) VALUES ('linear-sync', 'Linear sync', 0, 'paused', 0);
   `,
+  // ── 60: user_version 59 -> 60 ─────────────────────────────────────────────
+  // D-8289 (plan 2026-11-11-new-build-capture, the operator's ruling SH-1): `claude_builds`, the trusted set of Claude Code
+  // builds as data. ONE ROW PER BUILD: where it came from (`rig`, the 2026-10-18 rig record seeded here; `fleet`, a build a
+  // session ran), its capture (`queued`, `pass`, `fail`, CHECKed: an unknown token is no verdict any reader could trust),
+  // whether the capture proved a PermissionRequest's cwd (`cwd`), when it was recorded, the jobs that actually went out
+  // (`attempts`), the last try's time sent or not (`lastAttemptAt`, the retry clock), why that try sent nothing (`notSent`,
+  // CHECKed: `no-test-box` or `no-runner`, null once a job went out), the verdict's time and the replay output's tail. Its writers are all `CoordStore` methods over
+  // `coord/claudeBuildsStore.ts`; its readers go through `shared/claudeBuildTrust.ts#buildTrustOf`. The seed is the four builds
+  // `APPROVAL_HOOK_VERSIONS` and `APPROVAL_CWD_TRUSTED` named, so a child on one stays trusted as it was.
+  //
+  // A NEW TABLE AND ITS SEED, NOTHING ELSE: an older build opening a file at `user_version 60` takes rule 3 (it warns, reads
+  // as-is and migrates nothing) and never names it. Every earlier entry is frozen. RE-MEASURE the slot before the PR and
+  // before merge (it must print 59 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE claude_builds (
+    build         TEXT    PRIMARY KEY,
+    source        TEXT    NOT NULL CHECK (source IN ('rig', 'fleet')),
+    capture       TEXT    NOT NULL CHECK (capture IN ('queued', 'pass', 'fail')),
+    cwd           INTEGER NOT NULL DEFAULT 0,
+    seenAt        INTEGER NOT NULL,
+    attempts      INTEGER NOT NULL DEFAULT 0,
+    lastAttemptAt INTEGER,
+    notSent       TEXT    CHECK (notSent IS NULL OR notSent IN ('no-test-box', 'no-runner')),
+    verdictAt     INTEGER,
+    output        TEXT
+  );
+  INSERT INTO claude_builds (build, source, capture, cwd, seenAt, verdictAt) VALUES
+    ('2.1.296', 'rig', 'pass', 1, 0, 0), ('2.1.300', 'rig', 'pass', 1, 0, 0),
+    ('2.1.301', 'rig', 'pass', 1, 0, 0), ('2.1.302', 'rig', 'pass', 1, 0, 0);
+  `,
+  // ── 61: user_version 60 -> 61 ─────────────────────────────────────────────
+  // D-8386 (residue R37 of the centralised-update programme): `nodes.reportedSweep`, the supervisor sweep's record from a
+  // node's `update.json` (its `sweep` key, wave 17's D-5314), in the REPORT group beside the five report columns, so
+  // `GET /api/updates` can carry it. Its one writer is `upsertNodeMeasurement`, from the inventory's one reader
+  // (`reportFrom`). NULL = NOT MEASURED (no key, a key this build cannot read, or no report file), never "nothing down".
+  //
+  // ONE NULLABLE COLUMN ON AN EXISTING TABLE, nothing else: an older build opening a file at `user_version 61` takes
+  // rule 3 (it warns, reads as-is and migrates nothing); its reads and writes name their columns and never this one, so
+  // the column stays NULL or stale under it, and this build's next sweep writes it again. Every earlier entry is frozen.
+  // RE-MEASURE the slot before the PR and before merge (it must print 60 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  ALTER TABLE nodes ADD COLUMN reportedSweep TEXT;
+  `,
 ];
 
 /** The version this build writes. `MIGRATIONS.length` and nothing else: a

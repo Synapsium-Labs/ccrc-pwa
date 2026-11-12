@@ -622,6 +622,14 @@ describe('the rejection table is total, in both directions', () => {
       // does not take. Neither is a mail or run refusal; the route that carries `not-big` words it as its own 409 `not-big`.
       'big-call',
       'not-big',
+      // D-8289 — the trusted-builds record (`coord/claudeBuildsStore.ts`): `unknown-build` and `not-failed` are
+      // `requeueClaudeBuild`'s answers for a build with no row and one whose capture has not failed. Neither is a mail or
+      // run refusal; the requeue route words them as its own 404 `not-found` and 409 `conflict`.
+      'unknown-build',
+      'not-failed',
+      // D-8289 — the same record's `notSent` words (migration 60's CHECK): why a capture try sent nothing. A row fact, not a refusal.
+      'no-test-box',
+      'no-runner',
       'x-ccrc-mail-token',   // coord/token.ts's header name
       'not-configured',      // the generic "no store wired" answer, shared with push/notifyLog
       // D-2545 — the READ-FAILURE family, and the same family as
@@ -650,6 +658,8 @@ describe('the rejection table is total, in both directions', () => {
       'not-recorded',       // coord/landingEntry.ts: a recovery subject's creation kind (landing order wave 5f), a recovery-view discriminant, not a refusal code
       'not-set',            // coord/landingEntry.ts: a recovery subject's authority kind (landing order wave 5f), a recovery-view discriminant, not a refusal code
       'stale-episode-head', // coord/landingEntry.ts: the one quarantine kind, also a schema CHECK literal (landing order wave 5f), a recovery-view discriminant, not a refusal code
+      'call-failed',        // coord/landed.ts#landedAnswerOf and coord/landedLane.ts#landedPass: the input word for a ran-but-failed `pr-state` call (landing order wave 5h), a reader-internal discriminant, not a refusal code
+      'missing-field',      // coord/landed.ts#landedAnswerOf: compared against ccd's `pr-state` unmeasured reason, a word ccd writes (landing order wave 5h), a reader-internal discriminant, not a refusal code
       'packed-refs',         // coord/gitref.ts — a git filename
       'refused-project',     // coord/gitref.ts — a `WorktreeRead.reason` (§1.7).
                              // NOT a refusal a client ever sees: `readWorktreeRecords`

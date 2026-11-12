@@ -483,6 +483,32 @@ describe('verify-provenance.mjs: a dependency-load failure is not a bundle verdi
     expect(lines[0]).not.toMatch(/FAILED/);
     expect(r.stdout ?? '').toBe('');
   });
+
+  // D-8389 (R48's second gap): the dependency-load sentence goes through refuse's own filter, so a dependency whose
+  // load error carries terminal control, a newline or a multibyte character prints one line of printable ASCII,
+  // each byte outside it written `?`, and the sentence's own dash is ASCII (D-6843's spelling).
+  it('a dependency whose load error carries terminal control prints one line of printable ASCII, exit 3 (D-8389)', () => {
+    const scratch = mkTmp('ccrc-verify-depfilter-');
+    mkdirSync(join(scratch, 'deploy'), { recursive: true });
+    const dep = join(scratch, 'server', 'node_modules', '@sigstore', 'verify');
+    mkdirSync(dep, { recursive: true });
+    writeFileSync(join(scratch, 'server', 'package.json'), '{"name":"scratch-server"}\n');
+    writeFileSync(join(dep, 'package.json'), '{"name":"@sigstore/verify","main":"index.js"}\n');
+    writeFileSync(join(dep, 'index.js'),
+      'throw new Error("load \\u001b]52;c;aGVsbG8=\\u0007 broke\\nsecond line \\u00e9 \\u009b2J");\n');
+    const verifierCopy = join(scratch, 'deploy', 'verify-provenance.mjs');
+    copyFileSync(VERIFIER, verifierCopy);
+    const r = spawnSync(process.execPath, [verifierCopy, '--bundle', join(scratch, 'no-such-bundle.json'),
+      '--blob-sha256', mainMeta.sha256, '--tag', mainMeta.tag, '--owner', OWNER, '--repo', REPO_NAME],
+    { encoding: 'utf8' });
+    expect(r.status, r.stderr).toBe(3);
+    const lines = (r.stderr ?? '').split('\n').filter((l) => l !== '');
+    expect(lines).toHaveLength(1);
+    expect(lines[0], 'a byte outside printable ASCII reached stderr').toMatch(/^[\x20-\x7e]+$/);
+    expect(lines[0]).toContain('(load ?]52;c;aGVsbG8=? broke; second line ?? ??2J)');
+    expect(lines[0]).toMatch(/^verify-provenance: could not load the sigstore verifier's dependencies \(.*\) - a local dependency problem, not a verdict on the bundle$/);
+    expect(r.stdout ?? '').toBe('');
+  });
 });
 
 describe('verify-provenance.mjs: malformed or missing inputs refuse with one line, never a stack trace (D-3134)', () => {

@@ -7,7 +7,7 @@ import fastifyMultipart from '@fastify/multipart';
 import fastifyRateLimit from '@fastify/rate-limit';
 import fastifyStatic from '@fastify/static';
 import { pwaStaticOptions } from './pwaStatic.js';
-import { configDirFor } from './config.js';
+import { configDirFor, fleetRebootTarget } from './config.js';
 import type { BuildInfo } from './buildinfo.js';
 import type { Deps } from './deps.js';
 import { assembleFleet, dropStaleLandings, fleetNow } from './fleet.js';
@@ -78,6 +78,7 @@ import { createReaderLabRuns } from './readerLab/runs.js';
 import { installReaderLabCounter, registerReaderLabRoutes } from './readerLab/routes.js';
 import { operatorActRoute, servedFleetReads, servedFromWatcher, servedProjectReads, takenAfter } from './servedRead.js';
 import { registerTokenRoutes } from './token/routes.js';
+import { overridesViewNow } from './overridesRead.js';
 import { registerLinearRoutes, registerLinearWorkspaceRoutes } from './linear/routes.js';
 import { registerLinearProxyRoutes } from './linear/proxyRoutes.js';
 import { registerLinkingRoutes } from './linking/routes.js';
@@ -1383,6 +1384,8 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
         roster: rosterAgreement(deps.fleetState.rosterFp, ownRosterFp()),
         build: buildAgreement(builds.fleet, builds.own),
         projectPools: poolsEnforcement(deps.fleetState?.ccdVerbs ?? null),
+        // D-8382: whether the reboot button can work, said before the tap; a boolean, never the token or the id.
+        rebootConfigured: fleetRebootTarget(deps.cfg) !== null,
         ...(lifecycle ? { lifecycle } : {}),
         ...(delegation ? { delegation } : {}),
         ...(archivedHeld ? { archivedHeld } : {}),
@@ -1425,12 +1428,12 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   // property every box has rather than as the co-tenants of any one box.
   app.post('/api/fleet/reboot', async (req, reply) => {
     if (deps.cfg.fleetMode !== 'remote') return reply.code(409).send({ ok: false, error: 'not-remote' });
-    const { hetznerToken, fleetServerId } = deps.cfg;
-    if (!hetznerToken || !fleetServerId) return reply.code(501).send({ ok: false, error: 'not-configured' });
+    const target = fleetRebootTarget(deps.cfg);
+    if (target === null) return reply.code(501).send({ ok: false, error: 'not-configured' });
     try {
-      const res = await fetch(`https://api.hetzner.cloud/v1/servers/${fleetServerId}/actions/reboot`, {
+      const res = await fetch(`https://api.hetzner.cloud/v1/servers/${target.serverId}/actions/reboot`, {
         method: 'POST',
-        headers: { authorization: `Bearer ${hetznerToken}`, 'content-type': 'application/json' },
+        headers: { authorization: `Bearer ${target.token}`, 'content-type': 'application/json' },
       });
       if (!res.ok) return reply.code(502).send({ ok: false, error: 'hetzner-error' });
       return reply.code(202).send({ ok: true });
@@ -1438,6 +1441,10 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       return reply.code(502).send({ ok: false, error: 'hetzner-error' });
     }
   });
+
+  // D-8382: Overrides in force and the approvals topology, read only (`overridesRead.ts`): no write twin, because every
+  // override is placed and lifted at a terminal. Session-gated when armed (not EXEMPT), no box token.
+  app.get('/api/fleet/overrides', async () => ({ ok: true, ...await overridesViewNow(deps) }));
 
   // Web Push: the PWA fetches the VAPID public key, then registers its push
   // subscription here. Notifications fire from the FleetWatcher on a new

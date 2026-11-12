@@ -16,9 +16,9 @@ import * as planStore from './planStore.js';
 import { LINEAR_SYNC_PROGRAMME } from '../../../shared/plan.js';
 import type { ItemEventRow, ItemMoveResult, ItemRow, RaiseItemInput } from './ledgersStore.js';
 export type { ItemEventRow, ItemMoveResult, ItemRow, RaiseItemInput } from './ledgersStore.js';
-import { decideLandingWrite, landingFactsOf, landingHoldGate, landingRecordOf } from './landingEntry.js';
+import { decideLandingLand, decideLandingWrite, landingFactsOf, landingHoldGate, landingRecordOf, LANDING_LANDABLE_STATES } from './landingEntry.js';
 import { parseLandingJournal } from './landingJournalPolicy.js';
-import type { LandingAdvance, LandingWrite } from './landingEntry.js';
+import type { LandingAdvance, LandingLand, LandingLandWrite, LandingWrite } from './landingEntry.js';
 import type { LandingEntryState, LandingInfrastructureFailure, LandingJournalRecord } from '../../../shared/landingLine.js';
 import { decideLandingMutation } from './landingWrites.js';
 import type { LandingAuthorityCommand, LandingAuthorityWrite, LandingJournalReplay, LandingMutationFacts, LandingReadResult } from './landingWrites.js';
@@ -26,12 +26,14 @@ import type { LandingJournalPort, LandingJournalSnapshot } from './landingJourna
 import { redactCommand } from './redact.js';
 import { REVIEW_CAP_SUMMARY_MAX, cutWhole, reviewCapRefuses, reviewCapStatus } from './reviewcap.js';
 import { linkingAll, linkingOf, recordReading, setLinking } from './linkingStore.js';
+import * as builds from './claudeBuildsStore.js';
+import type { BuildCaptureResult, BuildCaptureTry, ClaudeBuildRecord } from '../../../shared/claudeBuildTrust.js';
 import type { LinkingWriteBody, ProjectLinkingWire } from '../../../shared/linking.js';
 import { openPracticeCase, practiceCaseNewest, type PracticeCaseNewestRead, type PracticeCaseOpen } from './practiceCasesStore.js';
 import type { CaseDue } from './practiceCases.js';
 import { liftReviewCapByCoordinator, raiseReviewCapAsk, reviewCapGate, reviewCapStatesOf, type CoordLiftResult, type ReviewCapState } from './reviewCapStore.js';
 import { renderEnvelope } from './envelope.js';
-import { decideClaim, type ClaimRow } from './claims.js';
+import { decideClaim, lapseWindowStart, ownLapsesUnder, type ClaimRow } from './claims.js';
 import { runsPage as runsPageQuery, type RunsPage } from './runsPage.js';
 import { runFind as runFindQuery, runsReviewing, type RunFindParsed } from './runFind.js';
 import { readProgrammes as readProgrammesQuery } from './programmesRead.js';
@@ -124,7 +126,7 @@ import {
 // `runLastMoves`' answer is declared by its consumer, the runs frame's wire composer (D-7334).
 import type { RunLastMovesRead } from './runWire.js';
 import { reviveDec, reviveMeas, reviveObs, type JournalRow } from './journalparse.js';
-import { BRIEF_NOTICE_DETAIL, BRIEF_RETRY_DETAIL, WAVE_BRIEF_SUBJECT, type UnlandedBrief } from './briefwatch.js';
+import { BRIEF_NOTICE_DETAIL, BRIEF_RETRY_DETAIL, WAVE_BRIEF_SUBJECT, briefTakenStartDetail, type BriefTakenHow, type UnlandedBrief } from './briefwatch.js';
 import { MAIL_REPLAY_CEILING_ERROR } from './delivery.js';
 import { LIFECYCLE_PARK_ERRORS, REVIVABLE_PARK_ERRORS, REVIVE_SKIPPED_SENDERS, REVIVE_SKIPPED_SUBJECT_HEADS } from './mailRevive.js';
 import {
@@ -144,6 +146,8 @@ import {
   isUpdatePhase, isUpdateState, PROVENANCE_DETAIL_PREFIX, SETTLED_UPDATE_STATES, validCapWords,
   // fix round 1, D-3213: the floor/previous read-state vocabulary beside `highestVersion`/`previousVersion`.
   isTagFileRead,
+  // R37 (D-8386): the supervisor sweep's record, `update.json`'s `sweep` key.
+  isUpdateSweepWord,
   // design 2026-09-20 §6/§9 (W2): the intent row's vocabularies, and the fleet-default scope — declared ONCE in
   // shared/api.ts (ruling R4), imported here and never spelled.
   FLEET_SCOPE, isAutoMode, isNotifyMode,
@@ -169,7 +173,7 @@ import {
   // plan Task 16 (D-5298): the approvals row's vocabularies.
   APPROVAL_INPUT_RETENTION_DAYS, ASK_OPERATOR_PRINCIPAL, isApprovalReleaseReason, isApprovalState,
   type ApprovalMintReleaseReason, type ApprovalReleaseReason, type ApprovalState,
-  type ClaimConflict, type ClaimState, type ClaimSummary,
+  type ClaimConflict, type ClaimLapse, type ClaimState, type ClaimSummary,
   type CoordCaps, type CoordCapsUsage, type DeviationAllocation, type DeviationAllocState,
   type LifecycleAct, type LifecycleGap, type LifecycleGapReason, type LifecycleOutcome,
   type MailDeliveryState, type MailGate,
@@ -324,6 +328,18 @@ export type LandingAdvanceResult =
   | ({ ok: false } & LandingInfrastructureFailure)
   | { ok: false; error: 'landing-recovery-unresolved' | 'landing-identity-conflict' | 'landing-id-overflow' };
 
+/** `advanceLanding`'s run arm: today's input, named. */
+export interface LandingRunAdvance { runId: number; to: RunState; causedBy: string; landing: LandingAdvance }
+
+/** `advanceLanding`'s land arm answer (landing order wave 5h): what the mark recorded, or why the line refused it. */
+export type LandingLandResult =
+  | { ok: true; landing: LandingLandWrite }
+  | ({ ok: false } & LandingInfrastructureFailure)
+  | { ok: false; error: 'landing-recovery-unresolved' | 'landing-identity-conflict' };
+
+/** `advanceLanding`'s answer by the arm its input names. */
+export type AdvanceLandingResultOf<I> = I extends LandingLand ? LandingLandResult : LandingAdvanceResult;
+
 /** `setAccountPools`'s answer (T6-R4, fix round 1; `error`'s vocabulary moved
  *  to `shared/api.ts`'s `SetAccountPoolsRefuseCode` in fix round 2 — see C1
  *  below). Wave 1 allows at most one pool per account —
@@ -450,6 +466,9 @@ interface RawReleaseRow {
  *  store holds ms in every column. */
 export interface NodeReport {
   phase: UpdatePhase; target: string | null; startedAt: number | null; updatedAt: number | null; detail: string | null;
+  /** R37 (D-8386): the supervisor sweep's record (`update.json`'s `sweep` key, `isUpdateSweepWord`); null = not
+   *  measured. Stored beside the five, never read by the phase table. */
+  sweep: string | null;
 }
 
 /** One sweep's measurement of one node: the MEASUREMENT and REPORT column
@@ -501,6 +520,8 @@ export interface NodeRow {
   measuredAt: number | null; reachable: boolean; unreachableSince: number | null;
   reportedPhase: UpdatePhase | null; reportedTarget: string | null; reportedStartedAt: number | null;
   reportedUpdatedAt: number | null; reportedDetail: string | null;
+  /** R37 (D-8386): null = not measured, and any stored text this build cannot read as a sweep word. */
+  reportedSweep: string | null;
   updateState: UpdateState; updateTarget: string | null; updateStartedAt: number | null; updateDetail: string | null;
   channel: UpdateChannel | null; desiredTag: string | null; resolveDetail: string | null;
   requestedTag: string | null; requestedKind: RequestKind | null; requestedAt: number | null;
@@ -665,7 +686,7 @@ interface RawNodeRow {
   highestVersion: string | null; previousVersion: string | null; floorRead: string; previousRead: string; os: string;
   measuredAt: number | null; reachable: number; unreachableSince: number | null;
   reportedPhase: string | null; reportedTarget: string | null; reportedStartedAt: number | null;
-  reportedUpdatedAt: number | null; reportedDetail: string | null;
+  reportedUpdatedAt: number | null; reportedDetail: string | null; reportedSweep: string | null;
   updateState: string; updateTarget: string | null; updateStartedAt: number | null; updateDetail: string | null;
   channel: string | null; desiredTag: string | null; resolveDetail: string | null;
   requestedTag: string | null; requestedKind: string | null; requestedAt: number | null;
@@ -699,6 +720,7 @@ function nodeRowOf(r: RawNodeRow): NodeRow {
     reportedPhase: r.reportedPhase === null ? null : (isUpdatePhase(r.reportedPhase) ? r.reportedPhase : 'unknown'),
     reportedTarget: r.reportedTarget, reportedStartedAt: r.reportedStartedAt,
     reportedUpdatedAt: r.reportedUpdatedAt, reportedDetail: r.reportedDetail,
+    reportedSweep: isUpdateSweepWord(r.reportedSweep) ? r.reportedSweep : null,
     updateState: isUpdateState(r.updateState) ? r.updateState : 'unknown',
     updateTarget: r.updateTarget, updateStartedAt: r.updateStartedAt, updateDetail: r.updateDetail,
     channel: isUpdateChannel(r.channel) ? r.channel : null, desiredTag: r.desiredTag, resolveDetail: r.resolveDetail,
@@ -760,7 +782,9 @@ export type SettleItemsResult =
  *  pass through untouched; only the `ok`/`why` discriminant is the store's,
  *  so this union reads like its `SetWorkItemResult` neighbours). */
 export type ClaimAttemptResult =
-  | { ok: true; claims: ClaimSummary[] }
+  /** `lapsedSince` (D-8392): the caller's own claims that lapsed within the last `CLAIM_LEASE_MS` on paths this
+   *  attempt took again, read inside the same transaction as the grant (`ownLapsesUnder`); empty when none. */
+  | { ok: true; claims: ClaimSummary[]; lapsedSince: readonly ClaimLapse[] }
   | { ok: false; why: 'bad-path'; paths: readonly string[] }
   | { ok: false; why: 'conflict'; conflicts: readonly ClaimConflict[] };
 
@@ -1272,8 +1296,9 @@ const HALTED_UPDATE_SQL = `('${HALTED_UPDATE_STATES.join("','")}')`;
 export const haltingRowSql = (t: string): string =>
   `(${t}.updateState IN ${HALTED_UPDATE_SQL} AND NOT (${t}.updateState = 'failed' AND ` +
   `substr(${t}.updateDetail, 1, ${PROVENANCE_DETAIL_PREFIX.length}) = '${PROVENANCE_DETAIL_PREFIX}'))`;
-/** The same notion over a read-back row (`handOffLease`'s `why`). A state this build cannot name reads `unknown`,
- *  which is busy and never halts. */
+/** The same notion over a read-back row (`handOffLease`'s `why`): the dispatcher's own halt rule, `isHaltingUpdate`
+ *  (shared/update-move.ts), asked rather than restated (residue R33(a), D-8340). A state this build cannot name reads
+ *  `unknown`, which is busy and never halts. */
 const rowHalts = (state: UpdateState, detail: string | null): boolean => isHaltingUpdate(state, detail);
 
 /** The shape of a node id: the lowercase uuid `_inst_node_id` mints and nothing else, so an uppercase, padded or
@@ -1296,7 +1321,7 @@ const NODE_COLUMNS =
   'nodeId, role, label, currentVersion, currentSha, currentRef, currentBuiltAt, currentDirty, stampRead, ' +
   'installState, provenance, caps, agentOps, highestVersion, previousVersion, floorRead, previousRead, os, ' +
   'measuredAt, reachable, ' +
-  'unreachableSince, reportedPhase, reportedTarget, reportedStartedAt, reportedUpdatedAt, reportedDetail, ' +
+  'unreachableSince, reportedPhase, reportedTarget, reportedStartedAt, reportedUpdatedAt, reportedDetail, reportedSweep, ' +
   'updateState, updateTarget, updateStartedAt, updateDetail, channel, desiredTag, resolveDetail, ' +
   'requestedTag, requestedKind, requestedAt, supersededBy';
 
@@ -3303,14 +3328,42 @@ export class CoordStore {
    * the recovery hold; its own effects phase (`none`, `applying`, `committing`) says what an exception left uncertain,
    * and an uncertain one fences the line and answers `mayApply`. A verified pin also writes its witness, atomically.
    */
-  advanceLanding(input: { runId: number; to: RunState; causedBy: string; landing: LandingAdvance }): LandingAdvanceResult {
-    const { runId, to, causedBy, landing } = input;
+  advanceLanding<I extends LandingRunAdvance | LandingLand>(input: I): AdvanceLandingResultOf<I> {
+    const land: LandingLand | null = 'kind' in input && input.kind === 'land' ? input : null;
+    const run: LandingRunAdvance | null = land === null ? (input as LandingRunAdvance) : null;
     let effects: 'none' | 'applying' | 'committing' = 'none';
     let touched = false;
     let began = false;
     try {
-      return tx(this.db, (): LandingAdvanceResult => {
+      return tx(this.db, (): LandingAdvanceResult | LandingLandResult => {
         began = true;
+        if (land !== null) {
+          // The land arm (wave 5h): a mark takes one entry out of the line and moves no run. Same guard, facts, gate,
+          // effects phases and catch as the pin; the mark is one UPDATE of state and detail.
+          const marked = ((): LandingLandResult => {
+            const fenced = this.landingGuard();
+            if (fenced !== null) return { ok: false as const, ...fenced };
+            touched = true;
+            const read = this.landingFactsInner(land.project);
+            if (!read.ok) return read;
+            const current = read.facts.entries.find((e) => e.pr === land.pr) ?? null;
+            const projection = read.facts.projections.find((p) => p.id === current?.id)?.value ?? null;
+            const gate = landingHoldGate(read.facts.recovery, 'land', { project: land.project, pr: land.pr }, projection);
+            if (!gate.ok) return { ok: false as const, error: gate.error };
+            const decision = decideLandingLand({ land, current, projection });
+            if (decision.act === 'none') return { ok: true as const, landing: decision.write };
+            effects = 'applying';
+            this.db.prepare('UPDATE landing_entries SET state = ?, detail = ? WHERE id = ?').run(decision.state, decision.detail, decision.id);
+            const after = this.landingFactsInner(land.project);
+            const entry = after.ok ? after.facts.entries.find((e) => e.pr === land.pr) ?? null : null;
+            if (entry === null) throw new Error('advanceLanding: the entry it just marked reads back absent');
+            return { ok: true as const, landing: { kind: decision.state, entry } };
+          })();
+          if (effects === 'applying') effects = 'committing';
+          return marked;
+        }
+        if (run === null) throw new Error('advanceLanding: an input of neither arm');
+        const { runId, to, causedBy, landing } = run;
         const out = ((): LandingAdvanceResult => {
           const row = this.db.prepare('SELECT state, kind, project FROM runs WHERE id = ?').get(runId) as
             { state: string; kind: string; project: string } | undefined;
@@ -3363,7 +3416,7 @@ export class CoordStore {
           } else if (landing.kind === 'pin' && decision.act === 'repin') {
             // A verified re-pin also clears the stale-head marker (a quarantined row re-pins only on a readable projection).
             this.db.prepare('UPDATE landing_entries SET pinnedSha = ?, handoffCommit = ?, runId = ?, state = ?, baseSha = NULL, ' +
-              'ejectionKind = NULL, quarantineKind = NULL, pinnedAt = ? WHERE id = ?').run(landing.head, landing.handoffCommit, runId, pinned, Date.now(), decision.id);
+              'ejectionKind = NULL, quarantineKind = NULL, detail = NULL, pinnedAt = ? WHERE id = ?').run(landing.head, landing.handoffCommit, runId, pinned, Date.now(), decision.id);
             entryId = decision.id;
           } else if (decision.act === 'eject') {
             // The count is the decider's (bounded at the safe-integer ceiling), never `ejections + 1` in SQL.
@@ -3389,18 +3442,30 @@ export class CoordStore {
         })();
         if (effects === 'applying') effects = 'committing';
         return out;
-      });
+      }) as AdvanceLandingResultOf<I>;
     } catch (err) {
       // A plain advance, and a pin or retreat that began but never reached the line (the run read, the pairing
       // programming error, a retreat with no PR or not from merging), carry no landing contract: the failure propagates
       // as it always did. A pin or retreat whose BEGIN threw is the line's own db-unavailable; once the line was
       // reached, a failure is the line's, by its effects phase.
-      if (landing.kind === 'plain' || (began && !touched)) throw err;
+      if ((run !== null && run.landing.kind === 'plain') || (began && !touched)) throw err;
       const recovery = this.landingBoundary();
-      if (effects === 'none') return { ok: false, error: 'landing-db-unavailable', recovery };
+      if (effects === 'none') return { ok: false, error: 'landing-db-unavailable', recovery } as AdvanceLandingResultOf<I>;
       this.landingFence = recovery;
-      return { ok: false, error: effects === 'applying' ? 'landing-db-apply' : 'landing-db-commit', recovery, mayApply: true };
+      return { ok: false, error: effects === 'applying' ? 'landing-db-apply' : 'landing-db-commit', recovery, mayApply: true } as AdvanceLandingResultOf<I>;
     }
+  }
+
+  /** The projects the landed reader walks (wave 5h): the distinct projects holding a row a mark could take, sorted. Behind
+   *  the landing guard like every landing read. */
+  landingReadProjects(): { ok: true; projects: string[] } | ({ ok: false } & LandingInfrastructureFailure) {
+    const fenced = this.landingGuard();
+    if (fenced !== null) return { ok: false, ...fenced };
+    try {
+      const rows = this.db.prepare(`SELECT DISTINCT project FROM landing_entries WHERE state IN (${LANDING_LANDABLE_STATES.map((w) => `'${w}'`).join(', ')}) ORDER BY project`)
+        .all() as { project: string }[];
+      return { ok: true, projects: rows.map((r) => r.project) };
+    } catch { return { ok: false, error: 'landing-db-unavailable', recovery: this.landingBoundary() }; }
   }
 
   /** The landing entrances' guard: unavailable without a journal port, `landing-fenced` while the fence stands. */
@@ -3433,7 +3498,8 @@ export class CoordStore {
     const all = (sql: string, ...p: string[]): Record<string, unknown>[] => this.bigReads(sql).all(...p) as Record<string, unknown>[];
     return landingFactsOf(project, {
       entries: all('SELECT id, project, pr, pinnedSha, handoffCommit, runId, state, baseSha, ejectionKind, ejections, afterIds, fixesMain, ' +
-        'setBy, pinnedAt, quarantineKind FROM landing_entries ORDER BY pinnedAt, id'),
+        'setBy, pinnedAt, quarantineKind FROM landing_entries WHERE project = ? ORDER BY pinnedAt, id', project),
+      foreign: all('SELECT id, project, pr FROM landing_entries WHERE project <> ? ORDER BY pinnedAt, id', project),
       subjects: all('SELECT id, project, pr, bindingKind, observedRunId, observedSeq, creationSeq, creationClaim FROM landing_subjects'),
       authorities: all('SELECT subjectId, afterIds, fixesMain, setBy, seq FROM landing_authority'),
       witnesses: all('SELECT entryId, project, pr, observedSeq, runId, pinnedSha, handoffCommit FROM landing_projection_witness'),
@@ -5875,6 +5941,19 @@ export class CoordStore {
     });
   }
 
+  // ── the trusted set of Claude Code builds (D-8289) ─────────────────────────
+
+  /** Every `claude_builds` row, newest build first (`coord/claudeBuildsStore.ts`). Throws when the table cannot be read. */
+  claudeBuilds(): ClaudeBuildRecord[] { return builds.claudeBuildRecords(this.db); }
+  /** One `queued` row per build that has none; answers the builds recorded. */
+  noteClaudeBuildsSeen(seen: readonly string[], now: number): string[] { return builds.noteClaudeBuildsSeen(this.db, seen, now); }
+  /** The queue tried a `queued` build: a job went out, or why none could. */
+  markClaudeBuildAttempt(build: string, now: number, tried: BuildCaptureTry): boolean { return builds.markClaudeBuildAttempt(this.db, build, now, tried); }
+  /** A capture's verdict, on a `queued` row only. */
+  recordClaudeBuildVerdict(r: BuildCaptureResult, now: number): boolean { return builds.recordClaudeBuildVerdict(this.db, r, now); }
+  /** The operator's **Capture again** on a failed build. */
+  requeueClaudeBuild(build: string): builds.ClaudeBuildRequeue { return builds.requeueClaudeBuild(this.db, build); }
+
   // ── stall watch settings (design 2026-10-05 §8, §11) ───────────────────────
 
   /** The settings row, every value as read: a row, no row, or a read that failed, three words and never one `null`.
@@ -7444,6 +7523,34 @@ export class CoordStore {
     return rows.map((r) => ({ ...r, retried: Number(r.retried) === 1 }));
   }
 
+  /** D-8292 (#119): every run at `dispatched` whose worker has TAKEN its wave brief moves to `working`, in one
+   *  transaction (`briefwatch.ts`'s `BRIEF_TAKEN_START_PREFIX` says why). Taken is the brief watch's word: a delivery of
+   *  a mail naming the run, with the brief's subject, addressed to the run's own session, that reached `ingestedAt` or
+   *  was acked. The sender is not read, so a brief the coordinator sent by hand after a refused `/clear` counts too.
+   *  The earliest such delivery is the one named. The move goes through `advanceInner`, the one state writer, as
+   *  `'sweep'`; the SELECT and the writes share the transaction, so a run the coordinator moved in between is never
+   *  read as `dispatched`. Answers the runs it moved, for the sweep's log line. */
+  startRunsOnTakenBrief(): { runId: number; deliveryId: number; how: BriefTakenHow }[] {
+    const from: RunState = 'dispatched';
+    return tx(this.db, () => {
+      const rows = this.db.prepare(
+        'SELECT r.id AS runId, MIN(d.id) AS deliveryId FROM runs r ' +
+        'JOIN mail m ON m.runId = r.id JOIN mail_deliveries d ON d.mailId = m.id ' +
+        "WHERE r.state = ? AND m.subject = ? AND d.toId = r.sessionId AND (d.ingestedAt IS NOT NULL OR d.state = 'acked') " +
+        'GROUP BY r.id ORDER BY r.id',
+      ).all(from, WAVE_BRIEF_SUBJECT) as unknown as { runId: number; deliveryId: number }[];
+      const started: { runId: number; deliveryId: number; how: BriefTakenHow }[] = [];
+      for (const row of rows) {
+        const d = this.db.prepare('SELECT ingestedAt FROM mail_deliveries WHERE id = ?').get(row.deliveryId) as
+          { ingestedAt: number | null } | undefined;
+        const how: BriefTakenHow = d?.ingestedAt != null ? 'ingested' : 'acked';
+        const adv = this.advanceInner(row.runId, 'working', 'sweep', briefTakenStartDetail(row.deliveryId, how));
+        if (adv.ok) started.push({ runId: row.runId, deliveryId: row.deliveryId, how });
+      }
+      return started;
+    });
+  }
+
   recordRejection(r: { code: MailRejectCode; fromId?: string; fromUuid?: string; toId?: string;
                        runId?: number | null; kind?: string; subject?: string;
                        detail?: string }): void {
@@ -8513,7 +8620,11 @@ export class CoordStore {
         for (const p of fresh) ins.run(claimId, input.project, p);
         out.push(this.claimRow(claimId));
       }
-      return { ok: true as const, claims: out };
+      // D-8392: after the expiry above, so a lease that ran out unswept is already the lapse it is.
+      const lapsedSince = ownLapsesUnder(
+        this.lapsedClaimsSince(input.project, lapseWindowStart(now), input.sessionId),
+        input.sessionId, paths, now);
+      return { ok: true as const, claims: out, lapsedSince };
     });
   }
 
@@ -8605,6 +8716,20 @@ export class CoordStore {
       : this.db.prepare(
           `SELECT ${CoordStore.CLAIM_COLS} FROM claims WHERE project = ? AND state = 'live' ORDER BY id`)
     ).all(project) as Parameters<CoordStore['hydrateClaim']>[0][];
+    return rows.flatMap((r) => this.hydrateClaim(r, this.claimPaths(r.id)) ?? []);
+  }
+
+  /** D-8392: one project's `lapsed` rows that ended after `since` (`lapseWindowStart`), optionally one holder's — the
+   *  recent-lapse readers' bounded read (`recentlyLapsedClaims` re-applies the window). */
+  lapsedClaimsSince(project: string, since: number, heldBy?: string): ClaimSummary[] {
+    const rows = (heldBy === undefined
+      ? this.db.prepare(
+          `SELECT ${CoordStore.CLAIM_COLS} FROM claims WHERE project = ? AND state = 'lapsed' AND endedAt > ? ORDER BY id`,
+        ).all(project, since)
+      : this.db.prepare(
+          `SELECT ${CoordStore.CLAIM_COLS} FROM claims WHERE project = ? AND state = 'lapsed' AND endedAt > ? ` +
+          'AND heldBy = ? ORDER BY id',
+        ).all(project, since, heldBy)) as Parameters<CoordStore['hydrateClaim']>[0][];
     return rows.flatMap((r) => this.hydrateClaim(r, this.claimPaths(r.id)) ?? []);
   }
 
@@ -9889,7 +10014,7 @@ export class CoordStore {
       m.floorRead, m.previousRead,
       m.os, m.measuredAt,
       r === null ? null : r.phase, r === null ? null : r.target, r === null ? null : r.startedAt,
-      r === null ? null : r.updatedAt, r === null ? null : r.detail,
+      r === null ? null : r.updatedAt, r === null ? null : r.detail, r === null ? null : r.sweep,
     ];
     return tx(this.db, (): UpsertNodeResult => {
       const ins = this.db.prepare(
@@ -9897,8 +10022,8 @@ export class CoordStore {
         'currentDirty, stampRead, installState, provenance, caps, agentOps, highestVersion, previousVersion, ' +
         'floorRead, previousRead, os, ' +
         'measuredAt, reachable, unreachableSince, reportedPhase, reportedTarget, reportedStartedAt, ' +
-        'reportedUpdatedAt, reportedDetail) VALUES (' +
-        '?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, NULL, ?, ?, ?, ?, ?) ON CONFLICT(nodeId) DO NOTHING',
+        'reportedUpdatedAt, reportedDetail, reportedSweep) VALUES (' +
+        '?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, NULL, ?, ?, ?, ?, ?, ?) ON CONFLICT(nodeId) DO NOTHING',
       ).run(m.nodeId, ...vals);
       if (Number(ins.changes) > 0) return { ok: true, created: true };
       const upd = this.db.prepare(
@@ -9907,7 +10032,7 @@ export class CoordStore {
         'agentOps = ?, highestVersion = ?, previousVersion = ?, floorRead = ?, previousRead = ?, ' +
         'os = ?, measuredAt = ?, reachable = 1, ' +
         'unreachableSince = NULL, reportedPhase = ?, reportedTarget = ?, reportedStartedAt = ?, ' +
-        'reportedUpdatedAt = ?, reportedDetail = ? WHERE nodeId = ? AND supersededBy IS NULL',
+        'reportedUpdatedAt = ?, reportedDetail = ?, reportedSweep = ? WHERE nodeId = ? AND supersededBy IS NULL',
       ).run(...vals, m.nodeId);
       if (Number(upd.changes) > 0) return { ok: true, created: false };
       // The INSERT conflicted, so the row exists; the UPDATE's only other
@@ -10840,6 +10965,12 @@ export class CoordStore {
   lastEndedEndRequest(runId: number, askerId: string) { return ledgers.lastEndedEndRequest(this.db, runId, askerId); }
   /** The refused-close items that still wait (held or not): the lane re-measures them each pass. */
   openCloseRefusedItems(): ItemRow[] { return ledgers.openCloseRefusedItems(this.db); }
+  /** D-8293: the release-review items that still wait, held or not (`ledgersStore.ts`). */
+  openReleaseReviewItems(): ItemRow[] { return ledgers.openReleaseReviewItems(this.db); }
+  /** D-8293: whether a release-review item was ever raised for this review run. */
+  releaseReviewItemRaised(reviewRunId: number): boolean { return ledgers.releaseReviewItemRaised(this.db, reviewRunId); }
+  /** D-8293: whether the operator released this review run's report (`ledgersStore.ts`, the one read of the fact). */
+  reviewChildReleased(reviewRunId: number): boolean { return ledgers.reviewChildReleased(this.db, reviewRunId); }
   /** The sessions of the review runs of a run: the workers who may ask to end the run they review. */
   reviewWorkersOf(runId: number): string[] { return ledgers.reviewWorkersOf(this.db, runId); }
   setBlocking(id: number, blocking: boolean, now: number) { return ledgers.setBlocking(this.db, id, blocking, now); }

@@ -64,7 +64,9 @@ export const CLAIM_DATA_LINE_ERE = String.raw`^data = "\{\\"code\\":\\"[A-Za-z0-
 /** A curl that runs `realCurl` ONLY for a call it can fully account for (wave 9 R10d, review fix). It PARSES argv:
  *
  *  - PASSES: the options ccrc's own curl calls use, measured in ccd/ccrc and ccd/ccrc-doctor-checks — the short flag
- *    clusters made of `s`, `S`, `f`, `L` (`-s`, `-fsS`, `-fsSL`); `-o`, `-w` and `-H` with the one value each takes; and
+ *    clusters made of `g`, `s`, `S`, `f`, `L` (`-s`, `-fsS`, `-fsSL`, and the release curls' `-g`, D-6748), read letter
+ *    by letter, so a cluster that leads with an admitted letter carries no other (`-gK`, `-gx`: D-8389, the
+ *    ccrc-containment rows, which run on macOS too); `-o`, `-w` and `-H` with the one value each takes; and
  *    `--connect-timeout`, `--max-time`, `--max-filesize`, `--speed-limit`, `--speed-time` with theirs. A value-taking
  *    option's value is CONSUMED as its value, never read as a URL. Names are matched exactly: curl itself accepts
  *    unambiguous prefixes (`--max-t`), and an abbreviation is refused here.

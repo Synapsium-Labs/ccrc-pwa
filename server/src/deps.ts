@@ -33,6 +33,7 @@ import type { LocalUpdateSpawn, SendUpdateOp } from './update/converge.js';
 import type { AccountAudit } from './accounts/audit.js';
 import type { TestboxAudit } from './testboxAudit.js';
 import type { TestboxAdminOps } from './testboxAdmin.js';
+import type { BuildCaptureTransport } from './buildCaptureLane.js';
 import type { AccountOps } from './accounts/ops.js';
 import type { AuthAttempts } from './accounts/attempts.js';
 import type { FetchLike } from './linear/client.js';
@@ -205,6 +206,9 @@ export interface Deps {
   /** D-8166 (plan TC12): the ONE `TestboxAdminOps` arm, chosen in `index.ts` by `cfg.fleetMode` only (`testboxAdminOpsFor`).
    *  The test box admin routes are its consumer; absent, they answer `fleetFailed` once the gate passes. */
   testboxAdmin?: TestboxAdminOps;
+  /** D-8289: the capture queue's transport to the test box, built in `index.ts`. Absent (a test, a script): builds are
+   *  recorded and no job is sent. */
+  buildCapture?: BuildCaptureTransport;
   /** The Linear lookup's test seams (named workspaces S4/S5): the network call and its deadline, read by the preview
    *  route and the workspace create alike so a test reaches neither the network nor an 8 s wait. Absent in
    *  production, where the client's own `fetch` and `LINEAR_TIMEOUT_MS` apply. */

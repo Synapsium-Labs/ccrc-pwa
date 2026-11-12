@@ -567,6 +567,21 @@ AUTH_RUN=''
 # A GLOBAL and not an echoed value: a command substitution would run the spawn
 # in a subshell, and the parent cannot `wait` on another shell's job.
 AUTH_CHILD=''
+# THE MINT'S STDIN CROSSES THE DEADLINE SHIM ON fd 5 (D-8345 fix round 1,
+# `pure-bash-arm-mint-stdin`). `_auth_timeout`'s pure-bash arm, which a box with
+# neither `timeout` nor `gtimeout` runs, starts the command as `"$@" &`, and bash
+# gives an asynchronous command /dev/null for stdin: the redirection a spawn puts
+# on the `_auth_timeout` call never reached the mint, so no pasted code could.
+# MEASURED on Linux, bash 5.3, through this helper's own spawn: the binary arm's
+# mint read the code (rc 0), the pure-bash arm's read nothing (rc 9). The shim is
+# one of three copies pinned byte for byte (`_plat_timeout` in ccd and ccrc), so
+# the fix is here, at the spawns, by the coordinator's ruling: each spawn also
+# hands its stdin over as fd 5 (`5<&0`, after the stdin redirection), which an
+# asynchronous command keeps, and this trampoline puts it back on stdin and
+# `exec`s the mint, so the pid the shim signals is still the mint's. `-p` so no
+# BASH_ENV runs in a shell whose stdout is the stream the pump parses. Both arms
+# of the shim go through it, so the mint sees one shape everywhere.
+AUTH_KEEP_STDIN=("$BASH" -p -c 'exec 0<&5 5<&-; exec "$@"' auth-mint)
 _auth_open_pipes() {
   AUTH_RUN="$AUTH_DIR/$AUTH_ID.run"
   mkdir -p "$AUTH_RUN" || return 1
@@ -748,12 +763,16 @@ _auth_spawn_pty_child() {   # <argv…> — background the mint under a pty, set
   # credential-minting path: the arm measured working does not change shape to
   # match the arm that was not.
   if [ "$CCD_OS" = darwin ]; then
-    { exec 7<&- 9<&-; _auth_timeout "$CCRC_AUTH_TIMEOUT" "$@"; } \
+    { exec 7<&- 9<&-; _auth_timeout "$CCRC_AUTH_TIMEOUT" "${AUTH_KEEP_STDIN[@]}" "$@" 5<&0; } \
       < <(exec 7<&- 9<&-; exec cat <"$AUTH_RUN/in.child") \
       >"$AUTH_RUN/out" 2>&1 &
   else
-    _auth_timeout "$CCRC_AUTH_TIMEOUT" "$@" <"$AUTH_RUN/in.child" >"$AUTH_RUN/out" 2>&1 &
+    _auth_timeout "$CCRC_AUTH_TIMEOUT" "${AUTH_KEEP_STDIN[@]}" "$@" \
+      <"$AUTH_RUN/in.child" 5<&0 >"$AUTH_RUN/out" 2>&1 &
   fi
+  # Both arms hand the mint its stdin through AUTH_KEEP_STDIN (D-8345 fix round
+  # 1), the one change either arm has had since the paragraph below: without it
+  # neither arm's code reached the mint on `_auth_timeout`'s pure-bash arm.
   # `exec 7<&- 9<&-` INSIDE THE SUBSTITUTION IS WHAT LETS THE COPIER END AT ALL
   # (D-2735), and it is not hygiene. A process substitution inherits this
   # shell's fds, so without those closes the copier holds fd 9 — a WRITE end on
@@ -852,8 +871,68 @@ _auth_line() {   # <raw line from the child> [prefix already classified] — cla
   printf '%s\n' "$clean"
 }
 
-_auth_pump() {   # the one loop: the child's stream out, the operator's code in
-  local line rc pending='' shown=''
+_auth_pump_read() {   # the pump's tick read: fd 8 into the CALLER's `line`, rc 0 / 1 (EOF) / >128 (timeout)
+  # A FUNCTION OF ITS OWN, AND IT IS A TEST SEAM (D-8345). `line` is the pump's
+  # local, reached by bash's dynamic scope. A test that sources this helper
+  # replaces this one function with a stand-in that answers 142 after the writer
+  # has gone, which is what macOS's `read -t` does (below), so a Linux box can
+  # show the pump's answer to it. Production runs only this body.
+  _auth_read -r -t "$CCRC_AUTH_TICK" -u 8 line
+}
+
+AUTH_DRAINED=''
+_auth_drain_read() {   # <seconds> -> one line from fd 8 with NO select(), into AUTH_DRAINED; rc 0 line, 1 EOF, else unconfirmed
+  # THE READ THAT `read -t` CANNOT BE, ON macOS (D-8345, after C27's D-8344).
+  # Darwin delivers a FIFO's end of file ONCE to whatever is waiting for it, and
+  # `select()` can then report a FIFO with no writer left as "not readable" for
+  # good. bash's `read -t` waits in `select()`, so it can consume that EOF and
+  # still answer 142, and every later `read -t` times out. A plain `read(2)`
+  # checks the writer count before it waits, so it answers 0 bytes at once.
+  # MEASURED on macos-26-arm64, bash 5.3.20 (C27's runs, and this task's): see
+  # docs/superpowers/plans/2026-10-22-desktop-polish/c28.md.
+  #
+  # So this read has no `-t`. It still must not block past the pump's backstop,
+  # because a DESCENDANT that holds the write end after the child is gone
+  # (D-2736's case) makes a plain read wait for ever. It runs in its own shell
+  # under `_auth_timeout`, bounded by the caller, and it reads one CHARACTER at a
+  # time and prints each as it goes, so the bytes a read that hits its bound had
+  # already taken still reach the caller rather than dying with it.
+  #
+  # `-u 8`, NEVER fd 8 on stdin: `_auth_timeout`'s pure-bash arm runs the command
+  # as `"$@" &`, and bash gives an asynchronous command /dev/null for stdin, which
+  # would read as an instant EOF while a descendant still writes. MEASURED, bash
+  # 5.3: `f(){ "$@" & wait; }; f cat <&8` prints nothing, while a command that
+  # reads `-u 8` gets the bytes. `7<&- 9<&-` so
+  # the reader holds neither the code channel nor a write end on `in.child`.
+  #
+  # `-p`, so the reader's bash runs no BASH_ENV or ENV and imports no exported
+  # function (review 1849, M1). Its stdout IS the drained text: a BASH_ENV that
+  # prints would land in the stream the pump parses, one that sleeps would spend
+  # the drain's whole bound and answer a timeout, and an exported `read` would
+  # replace the builtin. Measured in that review; pinned by the BASH_ENV case.
+  AUTH_DRAINED=$(_auth_timeout "$1" "$BASH" -p -c \
+    'printf -v n "\n"; c=""; while IFS= read -r -N 1 -u 8 c; do printf %s "$c"; [ "$c" = "$n" ] && exit 0; done; printf %s "$c"; exit 1' \
+    7<&- 9<&- 2>/dev/null)
+}
+
+_auth_drain_secs() {   # <tick> <seconds left> -> the drain read's bound: the tick, at most what is left
+  # A TICK THAT IS NOT A POSITIVE NUMBER IS 1 (review 1849, M2). `0` and `0.0`
+  # pass the number check, and a zero deadline is no deadline to GNU `timeout`,
+  # so the drain would be unbounded. `10#` because a whole part like `08` is not
+  # octal here, and a bare `(( 08 ))` writes a bash error to stderr and then
+  # picks the wrong arm (M3).
+  local t=$1 left=$2
+  [[ $t =~ ^[0-9]+(\.[0-9]+)?$ && $t =~ [1-9] ]] || t=1
+  (( 10#${t%%.*} < left )) || t=$left
+  printf '%s\n' "$t"
+}
+
+_auth_pump() {   # [child pid] — the one loop: the child's stream out, the operator's code in
+  # `child` is the pid whose exit licenses the drain read below, and the one the
+  # backstop TERMs. The pane methods
+  # spawn through `_auth_spawn_pty_child`, which sets AUTH_CHILD; `login` spawns
+  # its own and passes it.
+  local line rc pending='' shown='' child=${1:-$AUTH_CHILD} r left t
   # THE LOOP'S OWN DEADLINE (D-2736). `_auth_timeout` bounds the CHILD; this
   # bounds the READER, and the two are not the same guarantee. The loop below
   # leaves only on EOF, and EOF needs every writer of `$AUTH_RUN/out` to close
@@ -872,12 +951,40 @@ _auth_pump() {   # the one loop: the child's stream out, the operator's code in
       # given. Kill it so `wait` can answer, and record WHICH ending this was:
       # `wait` reports 143, which on its own reads as "someone killed the mint"
       # and would be stamped `failed` over a state the caller promises.
+      #
+      # THE PUMP'S OWN CHILD, NOT AUTH_CHILD (review 1849, F2). `login` spawns
+      # without `_auth_spawn_pty_child`, so AUTH_CHILD is empty there and this
+      # signal used to reach nobody. That was harmless only where a `timeout`
+      # binary with `-k` had already killed the mint. On `_auth_timeout`'s
+      # pure-bash arm, which sends one TERM and never escalates (D-2764), a mint
+      # that ignores TERM kept the shim alive, and `login`'s `wait` then blocked
+      # until the mint chose to exit. Older than D-8345. TERMing the shim, as the
+      # pane methods always did (`child` defaults to AUTH_CHILD there), lets
+      # `wait` answer.
       AUTH_EXPIRED=1
-      kill -TERM "$AUTH_CHILD" 2>/dev/null
+      kill -TERM "$child" 2>/dev/null
       return 0
     fi
     line=''
-    _auth_read -r -t "$CCRC_AUTH_TICK" -u 8 line; rc=$?
+    _auth_pump_read; rc=$?
+    # A TIMEOUT AFTER THE CHILD HAS GONE IS CONFIRMED WITHOUT select() (D-8345).
+    # On macOS that timeout can be the FIFO's end of file, consumed by `read -t`
+    # and answered as 142; looping on it ran a finished mint to the backstop and
+    # stamped it `expired`. One drain read, bounded by the tick and by what is
+    # left before the backstop, tells the three cases apart: a line (rc 0), the
+    # end of the stream (rc 1), or a writer still there (anything else), which
+    # stays a timeout, so D-2736's descendant still ends at the backstop. While
+    # the child lives nothing here runs, and a Linux FIFO reports its EOF to
+    # `read -t` as rc 1, so this arm is reached there only in D-2736's case.
+    if (( rc > 128 )) && [[ -n "$child" ]] && ! kill -0 "$child" 2>/dev/null; then
+      left=$(( bound - (SECONDS - t0) ))
+      if (( left > 0 )); then
+        t=$(_auth_drain_secs "$CCRC_AUTH_TICK" "$left")
+        _auth_drain_read "$t"; r=$?
+        line="$line$AUTH_DRAINED"
+        (( r > 1 )) || rc=$r
+      fi
+    fi
     if (( rc == 0 )); then
       _auth_line "$pending$line" "$shown"; pending=''; shown=''
     elif (( rc > 128 )); then
@@ -953,13 +1060,15 @@ _auth_login() {   # `auth login --claudeai` — no pane, no pty, no script(1)
   mkdir -p "$cfg" || _auth_die "cannot create $cfg"
   _auth_open_pipes || _auth_die 'cannot create the auth pipes'
   _auth_state starting
-  _auth_timeout "$CCRC_AUTH_TIMEOUT" \
+  # `AUTH_KEEP_STDIN` and `5<&0` carry the code channel past the deadline
+  # shim's pure-bash arm (D-8345 fix round 1; see its definition).
+  _auth_timeout "$CCRC_AUTH_TIMEOUT" "${AUTH_KEEP_STDIN[@]}" \
     env -u CLAUDE_CODE_OAUTH_TOKEN "CLAUDE_CONFIG_DIR=$cfg" \
       "$WRAPPER_DIR/$CCRC_UPSTREAM" auth login --claudeai \
-      <"$AUTH_RUN/in.child" >"$AUTH_RUN/out" 2>&1 &
+      <"$AUTH_RUN/in.child" 5<&0 >"$AUTH_RUN/out" 2>&1 &
   local child=$!
   exec 8<"$AUTH_RUN/out"
-  _auth_pump
+  _auth_pump "$child"
   wait "$child"; rc=$?
   _auth_close_pipes
   # 124 IS `_plat_timeout`'s own expiry code, and the ONE thing the callers

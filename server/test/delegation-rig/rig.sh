@@ -421,7 +421,10 @@ sessions_snap() {   # <name>: Claude Code's live-session records, and each trans
   mkdir -p "$d/sessions"
   cp "$CFG"/sessions/*.json "$d/sessions/" 2>/dev/null || true
   # A subshell, so the cd never moves the run's own working directory (later steps and collect may name relative paths).
-  ( cd "$CFG/projects" 2>/dev/null && find . -mindepth 2 -maxdepth 2 -name '*.jsonl' -type f -printf '%P\t%s\n' | sort || true ) > "$d/transcripts"
+  # No `-printf`: it is GNU find's, and BSD find (macOS) refuses it, so the list came out empty there (D-8343). The size
+  # is `wc -c`'s, whose padding BSD's adds and the `tr` takes off.
+  ( cd "$CFG/projects" 2>/dev/null && find . -mindepth 2 -maxdepth 2 -name '*.jsonl' -type f \
+      | while IFS= read -r f; do printf '%s\t%s\n' "${f#./}" "$(wc -c < "$f" | tr -d ' ')"; done | sort || true ) > "$d/transcripts"
 }
 run_steps() {
   local step verb sid pid i=0 t0 mode

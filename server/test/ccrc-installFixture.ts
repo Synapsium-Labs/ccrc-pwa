@@ -1904,6 +1904,9 @@ export const FLEET_BOX_CLASSES: Readonly<Record<string, string>> = {
   "secrets-backup-excluded": "SKIP",
   "server-caps": "PASS",
   "services": "PASS",
+  // D-8388: SKIP at every stage: the fixture tree (TREE_FILES) ships no deploy/verify-provenance.mjs, so nothing in it
+  // reads a Sigstore trusted root. A real tree places deploy/ whole and answers PASS or a WARN by the root's age.
+  "sigstore-root": "SKIP",
   "skills": "PASS",
   "snapshot-posture": "SKIP",
   // D-7298: PASS at every stage, re-measured from both box-token cases' own failing diff (the install

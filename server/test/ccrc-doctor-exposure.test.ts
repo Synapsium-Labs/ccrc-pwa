@@ -12,7 +12,7 @@ import { describeLinux, itLinux, itDarwin, IS_DARWIN } from './platformFixtures.
 import { fixClock, fixedNow } from './fixedClock.js';
 import { writeShippedTimer } from './shippedTimers.js';
 import { DOCS_INDEX_READY, DOCS_INDEX_UNREADABLE, DOCS_HELPER_UNAVAILABLE_MISSING_LINE, docsIndexStubScript } from './docsIndexFixtures.js';
-import { installDoctorHooks, here, REPO, CCRC_SRC, CHECKS_SRC, BASH, Result, installCcrc, stub, stubBin, unstub, linkReal, stubNodeModelsExit, stubNodeModelsWeirdStatus, RosterEntry, writeRoster, entry, writeWrapper, shq, HEALTHY_SHA, curlCalls, writeCcrcEnv, unitDirOf, unitFileOf, writeUnitFile, removeUnitFile, EXPOSED_HOST, writeExposureEnv, containedPath, doctorEnv, plantScope, sysCaddyfile, DOCTOR_DEADLINE_BIN, runDoctorBounded, runDoctor, registrationHooks, plantHookRegistration, plantSpoolDir, healthy, healthyCodexBox, broken, tableNames, lineFor, anyVerdictFor, HEALTHY_SKIPS, expectUndecided, skipLineFor, remedyFor, noRunnerBugLine, plantSession } from './ccrc-doctorFixture.js';
+import { installDoctorHooks, here, REPO, CCRC_SRC, CHECKS_SRC, BASH, Result, installCcrc, stub, stubBin, unstub, linkReal, stubNodeModelsExit, stubNodeModelsWeirdStatus, RosterEntry, writeRoster, writeRawRoster, rawRoster, installModelsOp, entry, writeWrapper, shq, HEALTHY_SHA, curlCalls, writeCcrcEnv, unitDirOf, unitFileOf, writeUnitFile, removeUnitFile, EXPOSED_HOST, writeExposureEnv, containedPath, doctorEnv, plantScope, sysCaddyfile, DOCTOR_DEADLINE_BIN, runDoctorBounded, runDoctor, registrationHooks, plantHookRegistration, plantSpoolDir, healthy, healthyCodexBox, broken, tableNames, lineFor, anyVerdictFor, HEALTHY_SKIPS, expectUndecided, skipLineFor, remedyFor, noRunnerBugLine, plantSession } from './ccrc-doctorFixture.js';
 
 // Each case's homes go when the case ends, not in a file-wide end sweep (R100, review 518's S1): that sweep overran vitest's 20 s
 // hook timeout on the one file this family was split from. Registered before `installDoctorHooks()`'s root `afterEach` (the codex
@@ -1388,6 +1388,61 @@ describe('ccrc doctor: models', () => {
     expect(warns.length, out).toBe(1);
     expect(warns[0]).toContain('HTTP 500');
     expect(warns[0]).not.toMatch(/not marked stale/);
+  });
+
+  // D-8384 (public issue #2607): a class that auto-advanced to a model the lane's windows file does not measure takes
+  // the whole lane off the measured window rule, and nothing else says so. The row WARNs in the one spelling
+  // (`unmeasuredMoveNotice`), naming the unmeasured model and `set-window`; the control measures it and PASSES.
+  const plantMovedLane = (home: string, measured: Record<string, number>): void => {
+    // The row asks models-op's `lanes`, so the fixture tree carries its closure and a roster it reads (each row
+    // with a label and homeAble).
+    installModelsOp(home);
+    writeRawRoster(home, rawRoster(
+      entry({ id: 'claude', label: 'claude', configDirSuffix: '.claude', exec: { kind: 'upstream' },
+        telemetry: 'anthropic', homeAble: true }),
+      entry({ id: 'gpt', label: 'gpt', configDirSuffix: '.gpt', exec: { kind: 'external', provider: 'openai' },
+        telemetry: 'codex', homeAble: false })));
+    const dir = join(home, '.ccrc', 'models');
+    mkdirSync(dir, { recursive: true });
+    const row = (id: string): Record<string, unknown> => ({ id, label: id, context: 272000, maxContext: 272000,
+      efforts: ['low', 'high'], hidden: false, priceIn: null, priceOut: null });
+    writeFileSync(join(dir, 'gpt.classes.json'), JSON.stringify({ probe: 'codex',
+      classes: { haiku: null, sonnet: 'model-6-beta', opus: 'model-6.1-gamma', fable: null },
+      subagent: 'sonnet', discovery: 'catalogue' }));
+    writeFileSync(join(dir, 'gpt.json'), JSON.stringify({ probe: 'codex', fetchedAt: nowS() - 60, stale: false,
+      models: ['model-6-beta', 'model-5.6-gamma', 'model-6.1-gamma'].map(row) }));
+    writeFileSync(join(dir, 'gpt.windows.json'), JSON.stringify({ windows: Object.fromEntries(
+      Object.entries(measured).map(([m, tokens]) => [m, { tokens }])) }));
+    const cls = (family: string | null, history: unknown[] = []): Record<string, unknown> =>
+      ({ family, hold: null, previous: null, history });
+    writeFileSync(join(dir, 'gpt.advance.json'), JSON.stringify({ v: 1, pending: null, classes: {
+      haiku: cls(null), sonnet: cls('beta'), fable: cls(null),
+      opus: cls('gamma', [{ at: '2026-11-12T08:00:00Z', how: 'advance', from: 'model-5.6-gamma', to: 'model-6.1-gamma',
+        ok: true, canary: 'passed', cause: 'newer' }]) } }));
+  };
+
+  it('WARNS when a class auto-advanced to a model with no measured window, naming it and set-window (D-8384)', () => {
+    const home = healthy('ccrc-doctor-models-unmeasured-');
+    plantMovedLane(home, { 'model-6-beta': 400000, 'model-5.6-gamma': 400000 });
+    const out = runDoctor(home).stdout;
+    const lines = out.split('\n');
+    const i = lines.findIndex((l) => l.startsWith('WARN models: '));
+    expect(lines.slice(i, i + 2), out).toEqual([
+      "WARN models: gpt's opus class moved from model-5.6-gamma to model-6.1-gamma (auto-advance to a newer model), "
+        + 'and model-6.1-gamma has no measured window while model-5.6-gamma had 400000 tokens, so every session on the '
+        + "lane now runs at the default rule's 200000 tokens; measure model-6.1-gamma, then: ccrc models gpt "
+        + 'set-window model-6.1-gamma <tokens>',
+      '  remedy: measure the named model\'s window, then record it: ccrc models <id> set-window <modelId> <tokens> '
+        + '(ccrc models <id> show lists the lane\'s measured windows)',
+    ]);
+    expect(lines.filter((l) => /^(PASS|FAIL) models: /.test(l)), out).toEqual([]);
+  });
+
+  it('stays a PASS when the model the class moved to is measured too — the control (D-8384)', () => {
+    const home = healthy('ccrc-doctor-models-measured-');
+    plantMovedLane(home, { 'model-6-beta': 400000, 'model-5.6-gamma': 400000, 'model-6.1-gamma': 400000 });
+    const out = runDoctor(home).stdout;
+    expect(lineFor(out, 'models'), out).toMatch(/^PASS models: 1 lane, gpt catalogue 1 min old$/);
   });
 
   it('ignores an orphan registry — an id no roster row names', () => {

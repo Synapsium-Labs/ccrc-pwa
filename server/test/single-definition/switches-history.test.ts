@@ -1052,3 +1052,28 @@ function pwaSources(): string[] {
   });
   return walk(root);
 }
+
+// D-8318. `$REG/graceful-stop-live` arms the graceful stop's SIGTERM at the three stop-then-resume sites. APPENDED for the
+// reason the stall-watch blocks above state. Like `carry-dedupe-live` the operator creates it by hand: the ONE line of shell
+// that reads it is `_graceful_stop_before`'s, and no TypeScript and no other file under ccd/ or deploy/ names it on a code line.
+describe('the graceful stop: its arming file has one reader and no writer in the tree (D-8318)', () => {
+  const NAME = 'graceful-stop-live';
+  const linesOf = (f: string): string[] => codeLines(BASH.find((x) => rel(x) === f) ?? '').filter((l) => l.includes(NAME));
+
+  it('one shell holder, ccd/ccd, whose one code line is the read', () => {
+    expect(holdersOf(NAME), 'a line of shell other than ccd/ccd names it — a writer in waiting').toEqual(['ccd/ccd']);
+    expect(linesOf('ccd/ccd').map((l) => l.trim())).toEqual(['[[ -f "$REG/graceful-stop-live" ]] && GRACEFUL_STOP_MODE=live']);
+  });
+
+  it('no TypeScript names it, and no other file under ccd/ or deploy/ names it on a code line', () => {
+    expect(ALL.filter((f) => stallCode(f).includes(NAME)).map(rel)).toEqual([]);
+    const nonShell = (dir: string): string[] => readdirSync(dir).flatMap((e) => {
+      const p = path.join(dir, e);
+      return statSync(p).isDirectory() ? nonShell(p) : (BASH.includes(p) || p.endsWith('.md') ? [] : [p]);
+    });
+    const others = bashRoots.flatMap(nonShell);
+    expect(others.length, 'the walk reached the non-shell files').toBeGreaterThan(40);
+    expect(others.filter((f) => readFileSync(f, 'utf8').split('\n')
+      .some((l) => !/^\s*(#|\/\/|\*|\/\*)/.test(l) && l.includes(NAME))).map(rel)).toEqual([]);
+  });
+});

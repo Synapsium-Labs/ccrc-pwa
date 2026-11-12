@@ -49,7 +49,7 @@ describe('the migration', () => {
     const db = openCoordDb(p);
     expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(COORD_SCHEMA_VERSION);
     // The opener runs every later entry too (56, lane_arm_settings, D-8274; 57, testbox_events, D-8166; 58, practice_cases,
-    // Overlord W1a; 59, the plan model, D-8181, whose two partial indexes are UNIQUE): what those create is theirs, not this
+    // Overlord W1a; 59, the plan model, D-8181, whose two partial indexes are UNIQUE; 60, claude_builds, D-8289): what those create is theirs, not this
     // entry's.
     const later = new Set(MIGRATIONS.slice(SLOT).flatMap((m) => [...m.matchAll(/CREATE (?:UNIQUE )?(?:TABLE|INDEX) (\w+)/g)].map((x) => x[1]!)));
     expect(objectNames(db).filter((n) => !had.includes(n) && !later.has(n)).sort()).toEqual([

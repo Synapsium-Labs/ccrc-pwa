@@ -12,7 +12,8 @@ import { TIME_SCALE, scaled } from './timeScale.js';
 import { assertNoRealTool } from './containedTools.js';
 import { itLinux, itDarwin } from './platformFixtures.js';
 import { installVersionedTree } from './installTreeFixture.js';
-import { } from './codexLaneFixture.js';
+import { assertSpineFrontContained } from './codexLaneFixture.js';
+import { spawnSyncGroup } from './spawnGroup.js';
 import {
   REPO,
   REAL_NODE,
@@ -1295,6 +1296,49 @@ describe('ccrc update: provenance (design §5; the verifier is the INSTALLED one
     expect(existsSync(join(home, 'ccrc-backups'))).toBe(false);
   });
 
+  // D-8389 (R48's second gap): the REAL verifier, whose sigstore dependency fails to load with an error naming a
+  // credentialed URL with a query token and a path under this box's home. A `--require` hook in the `node` ahead of
+  // the shim makes `@sigstore/verify` throw, so the checkout's own verifier takes its exit-3 arm. `_upd_fetch` prints
+  // the verifier's stderr through `_upd_redact`, as every other update line, so neither secret nor the absolute home
+  // reaches stderr, stdout or update.json, and the die is the could-not-RUN one.
+  it('a verifier whose dependency fails to load naming a secret prints its exit-3 line redacted (D-8389)', () => {
+    const home = freshUpdateBox('ccrc-update-prov-depload-');
+    plantOldBox(home, { version: 'v1.0.0' });
+    const before = treeDigest(join(home, 'ccrc'));
+    packRelease(home, stubTree(home, { version: 'v2.0.0' }), { tag: 'v2.0.0' });
+    const PW = 'S3cr3tPW8389';
+    const TOKEN = 'Q7tokenSecret8389';
+    const planted = `${home}/.ccrc/deps/loader.js`;
+    const hook = join(home, 'depload-hook.cjs');
+    writeFileSync(hook, [
+      "const M = require('module');",
+      'const load = M._load;',
+      "M._load = function (request, ...rest) {",
+      `  if (request === '@sigstore/verify') throw new Error(${JSON.stringify(`cannot load from ${planted}: mirror https://deploy:${PW}@mirror.example/r/pkg.tgz?token=${TOKEN} failed`)});`,
+      '  return load.call(this, request, ...rest);',
+      '};',
+      '',
+    ].join('\n'));
+    const realBin = join(home, 'real-node-bin');
+    mkdirSync(realBin, { recursive: true });
+    writeFileSync(join(realBin, 'node'), `#!/bin/sh\nexec '${REAL_NODE}' --require '${hook}' "$@"\n`);
+    chmodSync(join(realBin, 'node'), 0o755);
+    const r = runUpdate(home, [], { PATH: `${realBin}:${updateEnv(home)['PATH']}` });
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(1);
+    expect(existsSync(join(home, 'verify-argv')), 'the shim answered, not the real verifier').toBe(false);
+    expect(r.stderr).toMatch(/^verify-provenance: could not load the sigstore verifier's dependencies \(cannot load from ~\/\.ccrc\/deps\/loader\.js: mirror https:\/\/mirror\.example\/r\/pkg\.tgz\?\[withheld\] failed\) - a local dependency problem, not a verdict on the bundle$/m);
+    expect(r.stderr).toMatch(/could not RUN the installed verifier \(.*verify-provenance\.mjs exited 3\) — this is not a verdict on the bundle; nothing on this box was changed/);
+    expect(r.stderr).not.toMatch(/provenance verification FAILED/);
+    const report = readFileSync(join(home, '.ccrc', 'update.json'), 'utf8');
+    for (const [where, text] of [['stderr', r.stderr], ['stdout', r.stdout], ['update.json', report]] as const) {
+      expect(text, `${where} holds the planted password`).not.toContain(PW);
+      expect(text, `${where} holds the planted query token`).not.toContain(TOKEN);
+      expect(text, `${where} holds the planted absolute path`).not.toContain(planted);
+    }
+    expect(treeDigest(join(home, 'ccrc'))).toEqual(before);
+    expect(existsSync(join(home, 'ccrc-backups'))).toBe(false);
+  });
+
   // D-3142: a verifier that cannot RUN at all (a usage error, or node/the
   // script itself missing) is a DIFFERENT fact from a verifier that ran and
   // refused the bundle — folding both into "FAILED" tells the operator the
@@ -1499,6 +1543,44 @@ describe('ccrc update: the fleet-behind warning (D-150 aware)', () => {
     const r = runUpdate(home, [], { CCRC_ADDR: '127.0.0.1:7788' });
     expect(r.code, r.stderr).toBe(0);
     expect(r.stdout).toMatch(/^update: WARN: .*skewed.*fleet box first/im);
+  });
+
+  // D-8386 (the programme's follow-up issue, review 1326's F6): `_upd_fleet_warn`'s skewed clause, read whole. The row
+  // above matches a fragment; this one holds the one line, the address it asked, the order and the next step, and that
+  // the run still proceeds.
+  it('the skewed WARN is exactly one line: the address asked, the order (fleet box first), and the re-check', () => {
+    const home = freshUpdateBox('ccrc-update-skew-line-');
+    plantOldBox(home, { version: 'v1.0.0' });
+    writeFileSync(join(home, 'fixture-health-body'),
+      '{"mode":"remote","connected":true,"downSince":null,"build":"skewed","roster":"agreed"}\n');
+    packRelease(home, stubTree(home, { version: 'v2.0.0' }), { tag: 'v2.0.0' });
+    const r = runUpdate(home, [], { CCRC_ADDR: '127.0.0.1:7788' });
+    expect(r.code, r.stderr).toBe(0);
+    const warns = r.stdout.split('\n').filter((l) => l.startsWith('update: WARN:'));
+    expect(warns).toEqual([
+      "update: WARN: /api/fleet/health at 127.0.0.1:7788 says the two boxes' builds are SKEWED — the update order is "
+      + 'fleet box first, then this server box. This run proceeds; update the fleet box too, then re-check with: ccrc status',
+    ]);
+    expect(existsSync(join(home, 'staged-ccrc-argv')), 'the WARN stopped the run').toBe(true);
+  });
+
+  // Only a server that ANSWERED `skewed` produces the line: agreed, unknown, an absent `build` (the wire's "absent reads
+  // as unknown") and a word outside the vocabulary (`_box_health`'s `?`) are all silent, and the run proceeds.
+  it.each([
+    ['agreed', '"build":"agreed",'],
+    ['unknown', '"build":"unknown",'],
+    ['absent', ''],
+    ['a word outside the vocabulary', '"build":"drifting",'],
+  ])('a health answer whose build is %s prints no WARN', (_name, build) => {
+    const home = freshUpdateBox('ccrc-update-noskew-');
+    plantOldBox(home, { version: 'v1.0.0' });
+    writeFileSync(join(home, 'fixture-health-body'),
+      `{"mode":"remote","connected":true,"downSince":null,${build}"roster":"agreed"}\n`);
+    packRelease(home, stubTree(home, { version: 'v2.0.0' }), { tag: 'v2.0.0' });
+    const r = runUpdate(home, [], { CCRC_ADDR: '127.0.0.1:7788' });
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stdout).not.toMatch(/WARN/);
+    expect(existsSync(join(home, 'staged-ccrc-argv'))).toBe(true);
   });
 
   it('a 401 from the session gate skips the comparison SILENTLY — the gate answered, not the build (D-150)', () => {
@@ -2538,6 +2620,69 @@ describe('ccrc update: the tarball name is bounded — no path separator (D-3148
     expect(existsSync(join(home, 'evil.tar.gz'))).toBe(false);
     expect(existsSync(join(home, 'ccrc-backups'))).toBe(false);
     expect(existsSync(join(home, 'staged-ccrc-argv'))).toBe(false);
+  });
+});
+
+// D-8390 (R50 d): `sha256sum -c SHA256SUMS` opened every path the file names, so a release host could make the verifier read
+// any file on the box (or block on a FIFO, or read /dev/zero forever, holding update.lock). The verifier now digests the one
+// tarball `_upd_resolve` named, from its staged path, and compares it with the digest on that same line; no other line is read.
+describe('ccrc update: SHA256SUMS is checked for the tarball\'s own line alone (D-8390, R50 d)', () => {
+  /** `runUpdate`'s run, bounded: an open of a FIFO no one writes would block it forever. */
+  const boundedUpdate = (home: string): ReturnType<typeof spawnSyncGroup> => {
+    mkdirSync(join(home, 'tmp'), { recursive: true });
+    const env = { ...updateEnv(home), TMPDIR: join(home, 'tmp'), CCRC_RELEASE_BASE_URL: `local://${home}/releases` };
+    replantDoctorStubs(home);
+    assertSpineFrontContained(env, home);
+    assertNoRealTool(env, home);
+    return spawnSyncGroup(BASH, [join(REPO, 'ccd', 'ccrc'), 'update'], { env, encoding: 'utf8', timeout: scaled(60_000) });
+  };
+  const sumsOf = (home: string): string => join(home, 'releases', 'latest', 'download', 'SHA256SUMS');
+  const WRONG = '0'.repeat(64);
+
+  it('a SHA256SUMS that also names ../../etc/passwd-shaped paths and a FIFO outside the staging dir installs, opening none of them', () => {
+    const home = freshUpdateBox('ccrc-update-sums-other-paths-');
+    plantOldBox(home, { version: 'v1.0.0' });
+    packRelease(home, stubTree(home, { version: 'v2.0.0' }), { tag: 'v2.0.0' });
+    // The staging dir is <home>/tmp/<mktemp>, so `../../outside/fifo` is <home>/outside/fifo: outside it. Opening a FIFO that no
+    // process writes blocks, so a verifier that opened any of these lines would never answer, and each line's digest is wrong.
+    mkdirSync(join(home, 'outside'));
+    const fifo = join(home, 'outside', 'fifo');
+    expect(spawnSync('mkfifo', [fifo]).status).toBe(0);
+    appendFileSync(sumsOf(home), `${WRONG}  ${'../'.repeat(16)}etc/passwd\n${WRONG}  ../../outside/fifo\n${WRONG}  ${fifo}\n`);
+    const r = boundedUpdate(home);
+    expect(r.error, 'the verifier opened the FIFO and blocked').toBeUndefined();
+    expect(r.status, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    expect(r.stderr).not.toMatch(/checksum verification FAILED/);
+    expect(lstatSync(fifo).isFIFO(), 'the FIFO is untouched').toBe(true);
+  });
+
+  it('the tarball\'s own line decides: a wrong digest there is refused though a later line holds the right one', () => {
+    const home = freshUpdateBox('ccrc-update-sums-first-line-');
+    plantOldBox(home, { version: 'v1.0.0' });
+    packRelease(home, stubTree(home, { version: 'v2.0.0' }), { tag: 'v2.0.0' });
+    const right = readFileSync(sumsOf(home), 'utf8');
+    writeFileSync(sumsOf(home), `${WRONG}  ccrc-v2.0.0.tar.gz\n${right}`);
+    const before = treeDigest(join(home, 'ccrc'));
+    const r = boundedUpdate(home);
+    expect(r.status).toBe(1);
+    expect(r.stderr).toMatch(/checksum verification FAILED for ccrc-v2\.0\.0\.tar\.gz/);
+    expect(treeDigest(join(home, 'ccrc'))).toEqual(before);
+    expect(existsSync(join(home, 'ccrc-backups')), 'a backup ran for a refused artifact').toBe(false);
+  });
+
+  it('the binary-mode marker (`<digest> *<name>`) still verifies, and a digest that is not 64 lowercase hex is refused', () => {
+    for (const [shape, ok] of [['binary', true], ['upper', false], ['short', false]] as const) {
+      const home = freshUpdateBox(`ccrc-update-sums-${shape}-`);
+      plantOldBox(home, { version: 'v1.0.0' });
+      packRelease(home, stubTree(home, { version: 'v2.0.0' }), { tag: 'v2.0.0' });
+      const digest = readFileSync(sumsOf(home), 'utf8').split(' ')[0]!;
+      const line = shape === 'binary' ? `${digest} *ccrc-v2.0.0.tar.gz`
+        : shape === 'upper' ? `${digest.toUpperCase()}  ccrc-v2.0.0.tar.gz` : `${digest.slice(1)}  ccrc-v2.0.0.tar.gz`;
+      writeFileSync(sumsOf(home), `${line}\n`);
+      const r = boundedUpdate(home);
+      expect(r.status, `${shape}: stderr: ${r.stderr}`).toBe(ok ? 0 : 1);
+      if (!ok) expect(r.stderr, shape).toMatch(/checksum verification FAILED for ccrc-v2\.0\.0\.tar\.gz/);
+    }
   });
 });
 

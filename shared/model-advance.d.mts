@@ -1,6 +1,6 @@
 // shared/model-advance.d.mts — hand-written, in `shared/models.d.mts`'s shape: the `.mjs` beside it is what
 // runs, and this is what lets a TypeScript caller import it with types. Like the `.mjs`, it spells no class word.
-import type { Catalogue, ModelClass, Registry } from './models.js';
+import type { Catalogue, ModelClass, ModelWindows, Registry } from './models.js';
 
 export declare const BLOCKED_CAUSES: readonly [
   'advance-file-unreadable', 'advance-file-invalid', 'registry-unreadable', 'registry-invalid',
@@ -9,12 +9,14 @@ export declare const BLOCKED_CAUSES: readonly [
 ];
 export type BlockedCause = (typeof BLOCKED_CAUSES)[number];
 export declare const REASON_MAX: 200;
+export declare const CANDIDATE_REASONS: readonly ['newer', 'retired', 'empty'];
+export type CandidateReason = (typeof CANDIDATE_REASONS)[number];
 
 export interface ParsedModelId { vendor: string; version: number[]; family: string }
 
 export interface Choice {
   candidate: string | null;
-  reason: 'newer' | 'retired' | 'empty' | null;
+  reason: CandidateReason | null;
   blocked: 'pin-grammar' | 'shared-family' | null;
 }
 
@@ -59,6 +61,8 @@ export interface HistoryEntry {
   tries?: number;
   lastAt?: string;
   recovered?: boolean;
+  /** Why an advance moved (D-8384): absent on an entry written before the field, which `causeOf` reads as unknown. */
+  cause?: CandidateReason;
   [key: string]: unknown;
 }
 export interface ClassAdvance {
@@ -77,6 +81,8 @@ export interface AdvancePending {
   effortFrom: string | null;
   effortTo: string | null;
   at: string;
+  /** The candidate's reason, carried onto the history entry the intent becomes (D-8384). */
+  cause?: CandidateReason;
 }
 /** A hand `set-class`'s intent: the class it named, that class's pin before and after (`null` for none), the other
  *  classes one model, one class empties (each pinned `to` before), and the act's time. */
@@ -108,3 +114,21 @@ export declare function recordFailure(
 export declare function reconcilePending(adv: Advance, registry: Registry): { advance: Advance; recovered: boolean };
 export declare function heldBackOf(c: ClassAdvance, candidate: string | null): HistoryEntry | null;
 export declare function lastMoveOf(c: ClassAdvance): HistoryEntry | null;
+
+// ── the move that lowered a lane's window (D-8384) ──
+export declare function causeOf(e: HistoryEntry | null): CandidateReason | 'unknown';
+export interface UnmeasuredMove {
+  class: ModelClass;
+  from: string;
+  to: string;
+  fromTokens: number;
+  how: How;
+  cause: CandidateReason | 'unknown' | null;
+}
+export declare function unmeasuredMoves(a: {
+  registry: Registry;
+  advance: Advance | null;
+  windows: ModelWindows | null;
+  rule: 'measured' | 'default' | 'none';
+}): UnmeasuredMove[];
+export declare function unmeasuredMoveNotice(lane: string, m: UnmeasuredMove, tokens: number | null): string;

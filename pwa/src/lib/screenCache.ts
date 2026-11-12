@@ -55,7 +55,7 @@ export function clearScreenCache(): void {
 /** The Settings reads that keep their last answer. One name per read, so two reads never share a key. */
 export type SettingsCacheName =
   | 'updates' | 'stall-watch' | 'collect-lane' | 'dispatch-abandon' | 'lane-arm' | 'testbox' | 'linear-workspaces'
-  | 'auth' | 'passkeys';
+  | 'auth' | 'passkeys' | 'overrides';
 
 /** The key of one Settings read. */
 export const settingsKey = (name: SettingsCacheName): string => `settings:${name}`;

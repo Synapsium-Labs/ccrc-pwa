@@ -18,7 +18,7 @@ import {
 } from '../../../shared/api';
 import {
   DISPATCH_GLYPH, DISPATCH_STALLED_WORDS, RUN_GLYPH, childReclaimChip, dispatchStalledTitle,
-  childReclaimTitle, crossingNote, dispatchWindow, itemTallyLabel,
+  branchCommitsNote, childReclaimTitle, crossingNote, dispatchWindow, itemTallyLabel, itemTallyTitle,
   resumeNote, runKindChip, runRowName, runWarnings, runItems, runState, runStateWord, runWaitLine, workerSeenNote,
 } from '../fleet/runWords';
 import { spawnVerdictChip } from '../fleet/spawnWords';
@@ -124,6 +124,7 @@ export const RunRow = memo(function RunRow({
   const waitLine = runWaitLine(run, nowMs);
   // D-8285: the worker heartbeat, `workerSeenNote`'s words. Absent draws nothing.
   const seen = workerSeenNote(run, nowMs, quietMs);
+  const commits = branchCommitsNote(run, session);
   const body = (
     <>
       <span className="run-glyph" aria-hidden="true">{RUN_GLYPH[state]}</span>
@@ -144,7 +145,10 @@ export const RunRow = memo(function RunRow({
           {kindChip.word}
         </span>
       )}
-      <span className="run-tally">{itemTallyLabel(items)}</span>
+      {/* D-8292: the tally says it counts settled items, and the worker branch's commits stand beside it as their own
+          fact, from the PR read (`branchCommitsNote` decides; null draws nothing). */}
+      <span className="run-tally" title={itemTallyTitle(items) ?? undefined}>{itemTallyLabel(items)}</span>
+      {commits !== null && <span className="run-commits" title={commits.title}>{commits.word}</span>}
       <span className="run-when">
         {run.dispatchedAt === null ? '—' : formatAge(nowSec - Math.floor(run.dispatchedAt / 1000))}
       </span>

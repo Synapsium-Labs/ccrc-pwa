@@ -298,14 +298,18 @@ describe('stall.ts is the pure L1 module its docstring says it is', () => {
     expect(code(), 'stall.ts answers HTTP').not.toMatch(/\breply\s*\.|\bFastify|\bapp\s*\./);
     expect(code(), 'stall.ts reaches the store').not.toMatch(/CoordStore|\bcoord\s*\.|\bstore\s*\.|\bdb\s*\.|\.prepare\s*\(/);
   });
-  it('imports values only from shared/api.ts and shared/stall-watch.ts (L0), stallWatchSays from sessionReading and sessionRoleOf from roleOf (both L1, importing only L0); anything else is a type import', () => {
+  it('imports values only from shared/api.ts, shared/stall-watch.ts and shared/switches.ts (L0), stallWatchSays from sessionReading and sessionRoleOf from roleOf (both L1, importing only L0); anything else is a type import', () => {
     const c = code();
     expect(c, 'a side-effect import').not.toMatch(SIDE_EFFECT_IMPORT);
     expect(c, 'a dynamic import').not.toMatch(/\bimport\s*\(/);
     expect(c, 'a re-export').not.toMatch(RE_EXPORT);
     for (const spec of valueImportSpecifiers(c)) {
-      expect(['../../../shared/api.js', '../../../shared/stall-watch.js', '../sessionReading.js', '../roleOf.js'], `stall.ts takes a value import from ${spec}`).toContain(spec);
+      expect(['../../../shared/api.js', '../../../shared/stall-watch.js', '../../../shared/switches.js', '../sessionReading.js', '../roleOf.js'], `stall.ts takes a value import from ${spec}`).toContain(spec);
     }
+    // From shared/switches.ts (L0, D-8339), the kill switch's constant ALONE: the lane reads no other row's name, and no
+    // reader of the switchboard.
+    const fromSwitches = [...c.matchAll(/^\s*import\s[^'"]*?\bfrom\s*(['"])\.\.\/\.\.\/\.\.\/shared\/switches\.js\1;?$/gm)].map((m) => m[0].trim());
+    expect(fromSwitches, 'the one import from switches').toEqual([`import { STALL_WATCH_DISABLED_MARKER } from '../../../shared/switches.js';`]);
     // From sessionReading, `stallWatchSays` ALONE, and on exactly this one line: a second name, or a second import
     // from the module, would let the lane reach the policy table or `turnSays` and spell a policy name of its own.
     const fromReading = [...c.matchAll(/^\s*import\s[^'"]*?\bfrom\s*(['"])\.\.\/sessionReading\.js\1;?$/gm)].map((m) => m[0].trim());

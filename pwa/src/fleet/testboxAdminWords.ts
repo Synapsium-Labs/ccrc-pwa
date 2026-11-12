@@ -199,9 +199,10 @@ export function stepOf(status: TestboxAdminStatus | null, seen: TestboxStepSeen 
 // Step 4's settings.
 // ---------------------------------------------------------------------------------------------------------------
 
-export type BoxSettingFamily = 'runs' | 'storage' | 'network' | 'accounts';
+export type BoxSettingFamily = 'runs' | 'storage' | 'network' | 'accounts' | 'probes';
 
-/** The folded families, in the order the form draws them. Every one of the 28 box keys is in exactly one. */
+/** The folded families, in the order the form draws them. Every one of the 31 box keys is in exactly one (D-8290 adds the live
+ *  probes' family: the scratch account's config directory, its tmux socket and the day's budget, which the harness programme sets). */
 export const BOX_SETTING_FAMILIES: readonly { readonly id: BoxSettingFamily; readonly title: string; readonly keys: readonly string[] }[] = Object.freeze([
   {
     id: 'runs', title: 'Runs',
@@ -222,6 +223,10 @@ export const BOX_SETTING_FAMILIES: readonly { readonly id: BoxSettingFamily; rea
     id: 'accounts', title: 'Users and files',
     keys: Object.freeze(['CCRC_TESTBOX_PUSH_USER', 'CCRC_TESTBOX_ENV_FORWARD', 'CCRC_TESTBOX_RUN_USER_PREFIX', 'CCRC_TESTBOX_SERVICE_USER',
       'CCRC_TESTBOX_SERVICE_TOKEN_FILE']),
+  },
+  {
+    id: 'probes', title: 'Live probes',
+    keys: Object.freeze(['CCRC_TESTBOX_PROBE_CONFIG_DIR', 'CCRC_TESTBOX_PROBE_SOCKET', 'CCRC_TESTBOX_PROBES_PER_DAY']),
   },
 ]);
 
@@ -277,6 +282,7 @@ export const BOX_SETTING_DEFAULTS: Readonly<Record<string, string>> = Object.fre
   CCRC_TESTBOX_REGISTRY_PROXY: '127.0.0.2:4873', CCRC_TESTBOX_REGISTRY_UPSTREAM: 'https://registry.npmjs.org',
   CCRC_TESTBOX_TMPFS: 'off', CCRC_TESTBOX_LOG_TAIL: '40', CCRC_TESTBOX_SESSION_RUNS: '1', CCRC_TESTBOX_SERVICE_USER: 'ccrc-tb-svc',
   CCRC_TESTBOX_LISTEN: '', CCRC_TESTBOX_SERVICE_TOKEN_FILE: '~/.ccrc/testbox-service.token', CCRC_TESTBOX_UNIT_MAX: '1h',
+  CCRC_TESTBOX_PROBE_CONFIG_DIR: '', CCRC_TESTBOX_PROBE_SOCKET: 'ccrc-probe', CCRC_TESTBOX_PROBES_PER_DAY: '10',
 });
 
 /** The two paths the installer refuses with `~/` (root has no reader's home), and the absolute paths the form starts them from. */
@@ -305,6 +311,7 @@ const ACT_WORD: Readonly<Record<TestboxAct, string>> = {
   'connect': 'Connect', 'confirm-host-key': 'Confirm host key', 'install': 'Install', 'pair': 'Pair',
   'settings-fleet': 'Fleet settings', 'settings-box': 'Box settings', 'parity': 'Parity', 'switch': 'Switch',
   'repair': 'Repair', 'replace': 'Replace', 'disconnect': 'Disconnect', 'apply-release': 'Apply release', 'cancel': 'Cancel',
+  'key-rotate': 'Rotate key', 'key-revoke': 'Revoke key',
 };
 
 /** A ledger act in words; an act this build does not know is its own name. */
@@ -396,6 +403,13 @@ export const TESTBOX_MANAGE_TEXT = {
   cancel: 'Cancel',
   cancelled: 'Cancelled.',
   cancelTooLate: 'Too late to cancel. The change is already being applied to the box.',
+  // Reset to default (D-8336): one tap on the row, then the confirm sheet
+  resetToDefault: 'Reset to default',
+  resetTitle: 'Reset to default',
+  resetWhat: (label: string) => `${label} goes back to its default.`,
+  resetFleet: 'ccrc takes it out of the test box settings file it wrote on this fleet host, so the fleet host reads the default from then on.',
+  resetBox: "ccrc takes it out of the box's settings file and applies the box's settings again, so the box reads the default from then on.",
+  resetDone: 'Reset. The value shown is what the fleet host reads back.',
   // the sheet
   replaceTitle: 'Replace the test box',
   disconnectTitle: 'Disconnect the test box',
@@ -415,6 +429,26 @@ export const TESTBOX_MANAGE_TEXT = {
   pairingLocked: 'Changed only by Replace',
   accessSourceLabel: 'Address the box sees ccrc connect from (only if the box refused the key)',
   sheetCancel: 'Cancel',
+  // the access key's Rotate and Revoke (D-8337)
+  rotateKey: 'Rotate key',
+  revokeKey: 'Revoke key',
+  rotateTitle: 'Rotate the access key',
+  revokeTitle: 'Revoke the access key',
+  confirmRotate: 'Rotate',
+  confirmRevoke: 'Revoke',
+  rotateHow: 'ccrc makes a new access key, adds its line to the box with the old key, and checks that it can log in with the new one.',
+  rotateThen: "Only then does it switch to the new key and remove the old key's line. If the box does not take the new key, nothing changes.",
+  rotateKept: 'The connection, the pinned host key and the box itself are not touched.',
+  revokeBox: "On the box: the test service is unpaired and ccrc's line is removed from authorized_keys, as Disconnect does.",
+  revokeFleet: "On the fleet host: the pairing, as Disconnect removes it, and ccrc's access key itself, which cannot be recovered.",
+  revokeThen: 'The next Connect makes a new key, with a new line to add to the box.',
+  rotated: "Rotated. ccrc now logs in to the box with its new access key, and the old key's line is gone.",
+  revoked: "Revoked. ccrc's access key is deleted and its line is gone from the box.",
+  // A revoked key: every ccrc line goes (an interrupted act may have left another key's line), and any line holding this key.
+  handLineHead: "On the box, remove from the login user's authorized_keys every line that ends in ccrc-testbox-admin, and any other line that holds this key:",
+  // A rotated key: the new key's line stays, so only the old key's line goes; Rotate key again also removes any other old line.
+  handLineHeadRotate: "On the box, remove the line that holds this old key from the login user's authorized_keys. Keep the line with ccrc's new key; Rotate key again also removes any other old line of ccrc's:",
+  noticeDone: 'Done',
 } as const;
 
 /** What blocks the connected card, in the order they win: a changed host key (C9), a lost access key, a failed act. */

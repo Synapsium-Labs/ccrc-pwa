@@ -190,6 +190,7 @@ _project_origin_seed	C4
 _project_origin_make	C4
 cmd_project_add	C4
 cmd_ws_archive	C4
+_ws_archive_unrecorded_empty	C4
 _ws_archive_manifest	C4
 cmd_ws_restore	C4
 _attic_project	C4
@@ -435,6 +436,11 @@ _pane_scope_note	C2
 _pane_scope_detach	C2
 _pane_scope_stop	C2
 _pane_scope_reap	C2
+_graceful_stop_note	C2
+_graceful_stop_same	C2
+_graceful_stop_before	C2
+_graceful_stop_after	C2
+_graceful_stop_observe	C2
 _end_cause	C2
 _end_record	C2
 _end_note_gone	C2
@@ -620,6 +626,9 @@ _ws_reclaim_main_line_refuse	C4
 _ws_reclaim_branch_state	C4
 _ws_reclaim_tip_read	C4
 _ws_reclaim_head_unborn	C4
+_ws_index_lock_state	C4
+_ws_stale_lock_doc	C4
+_ws_stale_lock_meas	C4
 _ws_reclaim_gitdir_own	C4
 _ws_reclaim_foreign_clean	C4
 _ws_reclaim_logs_readable	C4

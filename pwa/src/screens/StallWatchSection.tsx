@@ -16,8 +16,8 @@
 //     sheet says, stage by stage, what the write turns on and what stops (confirm-on-stage-diff (D-4034)).
 //   * NO LADDER HERE. The section spells no level id and keeps no ladder column: the Now and Next blocks, the files'
 //     reading and every write's effect come from the wire, and every word is an L0 STALL_* constant (apart from
-//     the shared `UNCONFIRMED_TEXT` (§13 step 3)), filled by `fillStallText`. There is no viewport,
-//     pointer or user-agent branch.
+//     the shared `UNCONFIRMED_TEXT` (§13 step 3)), filled by `fillStallText`; a marker's name is the switchboard's
+//     constant (D-8339). There is no viewport, pointer or user-agent branch.
 //
 // The controls are `@ccrc/ui`'s. The skin this section first wrote by hand (`.settings-fieldset`, `.settings-legend`,
 // `.settings-option` and its sentence, `.route-select`) left fleet.css with the design system, and every declaration
@@ -29,13 +29,15 @@ import { useId, useState } from 'react';
 import type { ReactNode } from 'react';
 import {
   STALL_BUSY_GATE_OFF_TEXT, STALL_BUSY_GATE_TEXT, STALL_CONFIRM_TEXT, STALL_FALLBACK_TEXT, STALL_FILES_EXCEED_TEXT,
-  STALL_FOLLOW_LABEL, STALL_HAZARD_TEXT, STALL_HELD_REASON, STALL_HELD_TEXT, STALL_LEVELS, STALL_LEVEL_TEXT,
+  STALL_FOLLOW_LABEL, STALL_HAZARD_TEXT, STALL_HELD_DOES, STALL_HELD_REASON, STALL_HELD_REMEDY, STALL_HELD_TEXT,
+  STALL_LEVELS, STALL_LEVEL_TEXT,
   STALL_NEXT_TEXT, STALL_NOTICE_TEXT, STALL_NOT_AVAILABLE_TEXT, STALL_RUNLESS_FOOTNOTE,
   STALL_SECTION_TEXT, STALL_SOURCE_TEXT, STALL_STAGES, STALL_STAGE_TEXT, STALL_STORED_TEXT,
   type StallConfirmRequired, type StallHeld, type StallLevel, type StallLevelChoice, type StallNoticeCount,
   type StallStage, type StallWatchEffective, type StallWatchRequest, type StallWatchView, type StallWriteEffect,
 } from '../../../shared/api';
 import { stallDurationText } from '../../../shared/stall-watch';
+import { MAIL_GATE_STRICT_MARKER, STALL_WATCH_DISABLED_MARKER } from '../../../shared/switches';
 import {
   QuickConfirm, RADIO_FIELDSET, RADIO_LEGEND, Radio, Section, Select, Skeleton,
 } from '@ccrc/ui';
@@ -84,6 +86,33 @@ export interface StallNowLine { text: string; tone: StallNowTone }
 
 const HELD_FLAGS = Object.keys(STALL_HELD_TEXT) as Array<keyof StallHeld>;
 
+/** D-8339: the held flags an override marker sets, and that marker's switchboard name. The wire says which flag holds
+ *  the watch; the flag says which marker, one to one (`stallBoxHeld`: `watchOff` is the kill switch, `gateStrict` the
+ *  strict gate), so the wire carries no file name. Mail off and the wave-2 hold name none: mail off has its own card
+ *  sentence, and the wave-2 hold is the strict gate's, whose line already names it. */
+export const STALL_HELD_MARKER: Readonly<Partial<Record<keyof StallHeld, string>>> = {
+  watchOff: STALL_WATCH_DISABLED_MARKER,
+  gateStrict: MAIL_GATE_STRICT_MARKER,
+};
+
+/** A held flag's line, its marker named where it has one. */
+export function stallHeldLine(flag: keyof StallHeld): string {
+  const marker = STALL_HELD_MARKER[flag];
+  return marker === undefined ? STALL_HELD_TEXT[flag] : fillStallText(STALL_HELD_TEXT[flag], { marker });
+}
+
+/** A held flag's lines (D-8339): the held line (amber); then, for a marker's hold, what the override does where the
+ *  card says it, and how to lift it at a terminal. Words only: both markers are emergency overrides with no control. */
+function heldLines(flag: keyof StallHeld): StallNowLine[] {
+  const lines: StallNowLine[] = [{ text: stallHeldLine(flag), tone: 'warn' }];
+  const marker = STALL_HELD_MARKER[flag];
+  if (marker === undefined) return lines;
+  const does = (STALL_HELD_DOES as Readonly<Partial<Record<keyof StallHeld, string>>>)[flag];
+  if (does !== undefined) lines.push({ text: does, tone: 'note' });
+  lines.push({ text: fillStallText(STALL_HELD_REMEDY, { marker }), tone: 'note' });
+  return lines;
+}
+
 const levelLabel = (level: StallLevel | 'custom'): string =>
   level === 'custom' ? STALL_SECTION_TEXT.custom : STALL_LEVEL_TEXT[level].label;
 
@@ -110,7 +139,8 @@ function storedLine(chosen: StallWatchView['chosen']): string | null {
 
 /**
  * The Now block, top to bottom (§13): the effective level and its `does` text (or Custom and the stages that are
- * on, or Unknown, never Off); the busy gate; the source; one line per held flag; the hazard line; the files-exceed
+ * on, or Unknown, never Off); the busy gate; the source; one line per held flag, a marker's followed by its remedy
+ * (D-8339); the hazard line; the files-exceed
  * line; the stored-choice line; the fallback line. Every condition reads a wire fact, so no level id is spelled.
  *
  * The busy-gate-off note names one cause only: a level read from the fleet box's files that runs without the gate.
@@ -139,7 +169,7 @@ export function stallNowLines(view: StallWatchView): StallNowLine[] {
     }
     const source = sourceLine(effective, chosen.level);
     if (source !== null) push(source, 'note');
-    for (const flag of HELD_FLAGS) if (held[flag]) push(STALL_HELD_TEXT[flag], 'warn');
+    for (const flag of HELD_FLAGS) if (held[flag]) lines.push(...heldLines(flag));
     if (stages.alerts && stages.wave2 && !stages.busyDelivery && !held.mailOff) push(STALL_HAZARD_TEXT, 'warn');
     if (effective.filesExceed === true) push(STALL_FILES_EXCEED_TEXT, 'warn');
   }

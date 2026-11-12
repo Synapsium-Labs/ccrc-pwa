@@ -747,7 +747,7 @@ describe('worker stall watch: the four operator-switch markers have no writer in
   // (`'stall-watch-' + w`) is not seen; the bar is the ordinary copy.
   const MARKERS: [string, string][] = [
     ['mail-gate-strict', 'shared/switches.ts'], // its switchboard row since D-5855; turnidle.ts re-exports it
-    ['stall-watch-disabled', 'server/src/coord/stall.ts'],
+    ['stall-watch-disabled', 'shared/switches.ts'], // its switchboard row since D-8339; stall.ts keys its map by the constant
     ['stall-watch-live', 'server/src/coord/stall.ts'],
     ['stall-watch-escalate', 'server/src/coord/stall.ts'],
   ];

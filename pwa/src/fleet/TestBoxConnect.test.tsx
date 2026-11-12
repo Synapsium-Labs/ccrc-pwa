@@ -295,12 +295,12 @@ describe('step 4: the box settings and the repositories', () => {
     expect((within(flow()).getByLabelText('CCRC_TESTBOX_LISTEN') as HTMLInputElement).value).toBe(`${ADDRESS}:${TESTBOX_SERVICE_PORT}`);
   });
 
-  it('shows the 28 settings in four folded families, each with its default as the placeholder', async () => {
+  it('shows the 31 settings in five folded families (D-8290 adds the live probes\'), each with its default as the placeholder', async () => {
     await atStepFour();
     const families = [...flow().querySelectorAll('details[data-family]')];
-    expect(families.map((d) => d.getAttribute('data-family'))).toEqual(['runs', 'storage', 'network', 'accounts']);
+    expect(families.map((d) => d.getAttribute('data-family'))).toEqual(['runs', 'storage', 'network', 'accounts', 'probes']);
     expect(families.filter((d) => (d as HTMLDetailsElement).open).map((d) => d.getAttribute('data-family'))).toEqual(['network']);
-    expect(flow().querySelectorAll('details[data-family] input')).toHaveLength(28);
+    expect(flow().querySelectorAll('details[data-family] input')).toHaveLength(31);
     expect((within(flow()).getByLabelText('CCRC_TESTBOX_RUN_MEMORY_MAX') as HTMLInputElement).value).toBe('4G');
   });
 
@@ -630,7 +630,8 @@ describe('the card: the flow mounts with no connected box, and the switch waits 
     await settle();
     expect(card().querySelector('[data-testbox="connect"]')).toBeNull();
     expect(within(card()).getByRole('radio', { name: 'On' })).toBeEnabled();
-    expect(calls).toEqual([]);
+    // D-8289: the build list's own read is the card's, whatever the server; no connect-surface door is asked.
+    expect(calls.filter((c) => c.path !== '/api/testbox/builds')).toEqual([]);
   });
 
   it('with no box connected the flow mounts above the card, and the band reaches it', async () => {

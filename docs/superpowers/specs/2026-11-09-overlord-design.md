@@ -2,8 +2,9 @@
 
 - **Spec** · 2026-11-09
 - **Status:** Approved by the operator on 2026-11-10, with their rulings on the review's fifteen questions and two
-  further rulings, R16 and R17 (§2, §6.9, "Where things stand"). Appendix B says what those changed. This is the
-  hardened edition of rev 8: an outside review's calls H1 to
+  further rulings, R16 and R17 (§2, §6.9, "Where things stand"). On 2026-11-12 the operator gave R18: the Overlord
+  draws its accounts from account pools the operator names, and no account is reserved for it (§2, §3.4). Appendix B
+  says what those changed. This is the hardened edition of rev 8: an outside review's calls H1 to
   H39 are folded in, so that each mechanism is stated once, as it now is. A builder's check was applied to rev 8 by
   its author. This edition was then checked in nine ways: a builder's check in four slices, its closed vocabularies
   and state machines, its names and numbers, its claims about the tree, and a red team. Their findings are folded
@@ -21,7 +22,7 @@
 
 This document defines no D-numbers. The programme's plan allocates them when its run opens. There are three series of
 numbered decisions, and the operator can approve or overturn each one by number:
-- **R1 to R17** are the operator's rulings (§2).
+- **R1 to R18** are the operator's rulings (§2).
 - **C1 to C60** are the author's calls. §13 restates each one as it now stands.
 - **H1 to H39** are the hardening review's calls (§13.1). They have a series of their own, so that they never collide
   with the R and C series while the author keeps writing. Appendix A says what each one changed in rev 8.
@@ -42,7 +43,8 @@ than either would alone, and the operator should get better over time, not rusti
 same day that there is one and only one Overlord (R7), which must live a very long time without memory loss (R8).
 The Overlord is the console's home (R9). It may read everything (R10). It oversees every project at once and never
 moves between them (R11). It does brain work and never execution (R12). The long-life fixes apply to coordinators too
-(R13). It survives account swaps and limits and is never tied to one account (R14). It is the operator's colleague,
+(R13). It survives account swaps and limits and is never tied to one account (R14). It draws its accounts from the pools
+the operator names, and nothing is reserved for it (R18). It is the operator's colleague,
 advisor and majordomo (R15). It is there to make the pair decide better than either alone, with direction the
 operator's (R16). It starts from a profile each operator sets, and gives the picture before the question (R17). The
 operator also gave the hardening review three directions: build it so that it runs
@@ -55,9 +57,9 @@ accounts off for it.
 - **A long life.** One Overlord, many generations. A generation is a row with a state, a deadline and a fence. The
   server renews it from canonical state, re-anchors it at every start, and proves it remembers with probes. Coordinators
   get the same machine (§3.3).
-- **Its model and its accounts.** It runs the Fable class on accounts that keep a reserved share for it, with at least
-  two that can serve it. Other sessions use the rest of those accounts. ccd's own model fallback decides when Fable
-  cannot be served (§3.4).
+- **Its model and its accounts.** It runs the Fable class on accounts in the pools the operator names for it, with at
+  least two that can serve it. Nothing is reserved: other sessions keep using every account in those pools. ccd's own
+  model fallback decides when Fable cannot be served (§3.4).
 - **Brain work only.** It understands, decides, routes, answers and follows up. It has no editing tool, no shell and no
   web tool. Execution goes down the chain as an outcome, never as a method (§3.5).
 - **Built for containers.** Everything it needs at launch is one profile. It reaches ccrc only through typed doors, and
@@ -112,8 +114,8 @@ accounts off for it.
 
 **What it adds to ccrc.** Everything extends an existing owner, and §11.1 names each one:
 - one skill, `ccrc-overlord`, and three clauses in the coordinator skill (22, 23, 24);
-- the designation row, and tables for requests, acts, grants, proposals, generations, notes, drills, practice entries,
-  account reservations, the one sequence and the portfolio;
+- the designation row, which also holds the account pools it may draw from, and tables for requests, acts, grants,
+  proposals, generations, notes, drills, practice entries, the one sequence and the portfolio;
 - one private store, for the operator's messages and the operator model;
 - three journals that no backup carries: authority, acts and privacy;
 - one role table with a launch profile for each role;
@@ -237,7 +239,8 @@ in each row states the mechanism once.
 | R11 | **It oversees every project at once** (the operator, 2026-11-09, after rev 2): it never moves from one project to another; it is omniscient within the operator's ccrc environment | No move between projects. Its session runs in the dedicated `overlord` project, which only holds its pane. Replacing a lost session is a rebind inside that project (§3.1, C3) |
 | R12 | **Brain work, not execution** (the operator, 2026-11-09, after rev 3): much like the operator, it is focused on brain work; execution is always handed down the chain to coordinators, who deal with it as they deem necessary | Its launch profile gives it no command tool, no editing tool, no web tool and no workflow tool: only its doors, served by the door process. The sandbox check measures that absence at every start. The server refuses it on run-open and on every write lane that is not its own. It hands work down as an outcome, never a method (§3.5, C48) |
 | R13 | **Coordinators too** (the operator, 2026-11-09, after rev 4): the gaps the research measured (a roll and a wake resume the same conversation, a bare `/compact`, an empty card for a session with no runs, recall barely used, the replay quiz never run) must be fixed for coordinators, not just the Overlord | One role vocabulary and one generations table for every long-lived role. Coordinators get renewal, the receipt, the anchor, a card that is never empty, append-only notes, role compaction instructions, recall steering and probes. Their doors stay as today. It ships first, in W1a (§3.3.9) |
-| R14 | **Robust across accounts** (the operator, 2026-11-09, after rev 6): the Overlord survives account swaps and account limits, and is never limited to one Claude account | At least two accounts that can serve it, or no designation. The accounts reserved for it come first, on the designated class, and other accounts next, on Opus. ccd owns the model fallback. It moves at a renewal, before a load line bites. The operator's messages are server rows, so a swap loses none (§3.4, C56, C57) |
+| R14 | **Robust across accounts** (the operator, 2026-11-09, after rev 6): the Overlord survives account swaps and account limits, and is never limited to one Claude account | At least two accounts that can serve it, or no designation, counted inside the pools the operator names for it (R18). Those accounts serve it on the designated class first, and on Opus next. ccd owns the model fallback. It moves at a renewal, before a load line bites. The operator's messages are server rows, so a swap loses none (§3.4, C56, C57) |
+| R18 | **Account pools, not reserved accounts** (the operator, 2026-11-12, placed beside R14, which it amends): "I don't think I want to reserve any accounts specifically for overlord, what I'd like to do instead, is identify which account pools overlord may use accounts from. That provides the right balance." And: "the account pools is a change I want to make to overlord's design" | The operator names the set of account pools the Overlord may draw accounts from: a field of the designation, written only by the operator's session-gated doors. The set is the session's side of the one pool rule, widened from one name to a set and carried to ccd on the Overlord's route record. Untagged accounts serve it only when the set says so, and an empty set serves nothing. Nothing is reserved and nothing is fenced off: other sessions keep using every account in those pools as they do today, and its Fable meets the one Fable ceiling, shared with them. It amends C46, C56, C57, H16, Table 2b's "Accounts" direction and ruling 7 (§3.4, Appendix B) |
 | R15 | **A colleague, advisor and majordomo** (the operator, 2026-11-09, after rev 7): when the operator must decide, the Overlord helps them make the best possible decision. It suggests the best options, top 3 only, with reasons and the objective upsides and downsides of each. It may argue its point if it truly disagrees. The operator overrides its objections with "I command" or `/icommand` | A decision brief on every decision the operator owns: a safe default, at most three options with their downsides, the track record of its calls, the best case against and tripwires. One objection, filed as a row with a sealed prediction. A command is the operator's tap on a proposal the server rendered. A ranked decision queue, and an attention budget (§6.6, §4.2) |
 | R16 | **Better together, and direction is the operator's** (the operator, 2026-11-10, on the review's questions): the questions assumed that the operator is always right, which is not the case. The point of the Overlord is to maximise the operator's ability to make the right decisions, with general direction coming from the operator. It should make the operator better, not worse: its strengths and the operator's should combine into a much stronger whole | Direction is never scored. Every decision carries an outcome test sealed before the answer, and is scored by how it turned out, for the operator and the Overlord alike. The Overlord seals its own pick, never a prediction of the operator's. Three records for each kind of decision: the operator's alone, the Overlord's alone and the two together. Agreement that later fails counts against it. The operator sees their own record (§6.9) |
 | R17 | **A starting profile, and the picture first** (the operator, 2026-11-10): the Overlord is not for one operator only, though this operator is a reasonable starting point: strongest in strategy, vision and the higher level, less so in implementation detail of low impact, and thinking from the high level down, so that a low-level question is hard to answer without the picture | A Setting, the operator's profile, says who decides each kind of decision at the start, and the records then correct it. By default direction and operator-only acts are the operator's, an implementation choice with strategic weight is decided together, and a routine answer of class none is the Overlord's. Every brief opens with where the question sits. A premise that several questions share is asked once (§6.9) |
@@ -251,7 +254,7 @@ H1 to H6, H14 and H16 turn them into design.
 |---|---|
 | **Containers.** "I would also like this to be built in a way that easily lends itself to containerisation very soon down the road" | A crash-only body, with one launch profile per role applied at every launch and measured by the sandbox check. It reaches ccrc only through doors that a local door process serves. Ports at the edges: the session's host, the caller's identity, a decision model, policy, clock and chance. No authority or switch lives in a file on a fleet host. A measured word says how isolated the server is. Today's single box stays a supported case of every rule (§3.6, H1 to H4) |
 | **A decision model.** "we can also leverage Jev for the binary questions where appropriate", and of the routing diamonds in Figure 4: "referring to this kind of stuff, unless it's deterministic" | Three tiers below the operator. Code decides what rows can decide. A decision model answers typed questions code cannot. The Overlord deliberates the rest. The model may only narrow, flag, shortlist or send a matter up. One port, one catalogue of questions, lines admitted by a measured bound, and labels only from the operator or from measured outcomes. The operator arms each row, and arming is a paid service (§3.7, H5, H6) |
-| **Accounts.** On reading this edition's first draft: a "pool of accounts no other session may use" seems wasteful, "as fable limits use only 50% of the account's total limits". And: "auto-memory should be turned off when accounts are being pooled like this" | Its accounts are reserved, never fenced off. Each keeps a share for the Overlord, by default the most its Fable can use there. Other sessions use the rest on other models, and yield at a measured line. It is one more input to the one serviceability answer, with no new refusal. The operator sets each reserve, and Settings shows what the Overlord really used (§3.4, C46, H16). Sessions share accounts and move between them, so auto memory is off for every role. The operator's own plain sessions on a fleet host have it off by default, with a switch in Settings (§3.3.7, H14) |
+| **Accounts.** On reading this edition's first draft: a "pool of accounts no other session may use" seems wasteful, "as fable limits use only 50% of the account's total limits". And: "auto-memory should be turned off when accounts are being pooled like this" | Nothing is fenced off for it, and since R18 (2026-11-12) nothing is reserved either: the operator names the account pools it may draw from. Other sessions keep using every account in those pools, on every model, as they do today. The set is the session's side of the one pool rule, with no new refusal (§3.4, C46, H16). Sessions share accounts and move between them, so auto memory is off for every role. That reason holds whole under R18: every account the Overlord uses is shared, and it moves between them at renewals. The operator's own plain sessions on a fleet host have it off by default, with a switch in Settings (§3.3.7, H14) |
 
 *Table 2b. The operator's three directions to the hardening review.*
 
@@ -380,14 +383,17 @@ is one call, by number, so the operator can approve or overturn it.
     either way.
   - **Each call still proves freshness** the usual way, by the registry's current uuid. Every write door also carries
     the fence: term, generation and act key (§3.3.11).
-  - **What the row holds:** the session id, the registry row's generation, the term, the model class, the list of past
-    session ids, the actor the gate recorded, and the binding's state: `pending` or `live`. A retired row binds no
+  - **What the row holds:** the session id, the registry row's generation, the term, the model class, the account set
+    `accountPools` (R18, §3.4), the list of past session ids, the actor the gate recorded, and the binding's state:
+    `pending` or `live`. A retired row binds no
     session.
-  - **Its writers are the designate, rebind and retire doors, the Settings model row, and Confirm the restore**, which
+  - **Its writers are the designate, rebind and retire doors, the Settings model row, the Settings account-set row,
+    and Confirm the restore**, which
     raises the term and takes the stricter of the row and the authority journal (§7.6). The renewal lane writes it in
     one case only: it fails a `pending` binding whose deadline passed (below). Each of the three doors is
     a session-gated operator door with a step-up. The Settings model row writes the model class. Selecting `fable`
-    there keeps the step-up, and selecting `opus` needs none (§3.4).
+    there keeps the step-up, and selecting `opus` needs none (§3.4). The Settings account-set row writes the set.
+    Widening it keeps the step-up, and narrowing it needs none (C46).
   - **The three doors.** `POST /api/overlord/designate` is "Start the Overlord": it creates a session and binds it,
     creating the row or binding a retired row again. It refuses `overlord-exists` only while a session is bound or
     pending. `POST /api/overlord/rebind` is the recovery in §3.1: it creates a replacement session and binds it.
@@ -414,9 +420,11 @@ is one call, by number, so the operator can approve or overturn it.
     the card, probe and note doors answer. Every other door refuses `renewing`, and the readiness word reads
     `renewing` (§6.4, §11.2).
   - **What designation checks and does.** It refuses fewer than two accounts that can serve it
-    (`overlord-single-account`, §3.4). It refuses `capability-missing` when ccd does not advertise `keep-awake` or
-    `hibernate-fresh` (Table 11.1d). Both refusals run before the session is created, so a refused start leaves no
-    session behind. It writes the session's route class once (§3.4). It sets the two box-side accident guards on the
+    (`overlord-single-account`, §3.4), counted inside its account set. It refuses `capability-missing` when ccd does
+    not advertise `pool-set`, `keep-awake` or `hibernate-fresh` (Table 11.1d). Both refusals run before the session is
+    created, so a refused start leaves no session behind. It picks the first account from the set, through C32's
+    placement policy. It writes the session's route record once (§3.4): the route class, the account set and the
+    ordered account list. It sets the two box-side accident guards on the
     session (C4). Rebind does the same.
   - **"Start the Overlord"** composes the existing session-create door and writes the pending designation in the same
     door. So the session never runs as `plain`, with a shell or a fork that could outlive the designation. It always
@@ -946,8 +954,8 @@ Table 3.3.9b applies to it.
 | Role | `roleOf` reads it from | Long-lived | What continuity gives it |
 |---|---|---|---|
 | `overlord` | the designation, `pending` or `live` (§3.1) | yes | everything in §3.3, with the fence on its doors |
-| `auditor` | a row the audit lane wrote | no | its own launch profile and a scoped read (§9.5); a guest on a reserved account (§3.4) |
-| `replay` | a row the replay lane wrote | no | a replay body, from the Overlord's launch profile (§9.5). Every input of its serviceability answer is the Overlord's, the billing fact included. A reserved account serves it while the replay lane runs it, under the soft line, with no renewal due; its use counts against the reserve, and it waits while no reserved account is under the soft line (§3.4) |
+| `auditor` | a row the audit lane wrote | no | its own launch profile and a scoped read (§9.5). The Overlord's set does not bind it: its own project's pool rule places it, as it places any session, and it never runs Fable (§3.4) |
+| `replay` | a row the replay lane wrote | no | a replay body, from the Overlord's launch profile (§9.5). Every input of its serviceability answer is the Overlord's, the billing fact included, and so is its pool set, which the replay lane writes on its route record. It runs on an account in the set, under the soft line, with no renewal due, and waits while no account in the set is under the soft line (§3.4) |
 | `worker` | the child mark, on a work run | no | compaction instructions and a card; its wave is its renewal |
 | `reviewer` | the child mark, on a review run | no | compaction instructions and a card; its wave is its renewal |
 | `coordinator` | a claim on a non-terminal run, or declared coordinator intent | yes | generations, the receipt, the anchor, the card, probes and notes; its doors stay as today |
@@ -982,7 +990,7 @@ Table 3.3.9b applies to it.
     `degraded` coordinator keeps acting, and raises one item.
   - **What it does not get:** the fence and the `card-unread` gate, because its doors stay as today in version 1. Nor
     the Overlord's constitution and `style` entries: it gets its goals and rulings instead. Nor the outside audit,
-    because the Overlord is its judge (C52). Nor the Overlord's sleep hold, nor reserved accounts.
+    because the Overlord is its judge (C52). Nor the Overlord's sleep hold, nor its account set.
   - **Ordering.** No coordinator renewal starts while the Overlord's generation is outside `active`, and the Overlord's
     goes first. A coordinator's renewal sends its children's questions up, just when the Overlord would be away.
 - **C51. Every session's compaction gets instructions, and every card says something.**
@@ -1186,6 +1194,7 @@ minutes of observed time in which no soft trigger starts a renewal (Table 11.5b)
 | A start that resumed the conversation on another model class | hard | overlord | The start report, against the previous generation's model |
 | An entry it was served was retired, edited, superseded or wiped | hard | overlord | The privacy journal |
 | The operator confirmed a restore, which raised the term | hard | overlord | The designation's term, against the term the generation carries |
+| The generation's account is outside its set: the operator changed the set, or the account's pool changed (C46) | hard | overlord | The renewal lane's sweep asks ccd for the generation's pool answer, `ccd pool-answer <id>`, behind the `pool-set` capability (C46): `_pool_ok`'s verdict for the account it runs on, and `_crosspool_valid`'s answer for that account. Due only on a mismatch with no valid crossing, and only when an account in the set can serve it. Not due where no account in the set can serve it: no renewal starts, and the word reads `stranded`, its item naming the cause that holds (C57). Not due for an account a valid crossing marker names: the operator's deliberate move stands until the next renewal, which clears the marker (C46). Not due on an undecidable verdict (a stale pool projection, or a bad set on the route record), on an unreadable crossing record, or when the read itself fails; the lane records the reason on the sweep. Otherwise a renewal lands inside the set, so it is not due again at once |
 | The generation's class is no longer servable on its account | hard | overlord | ccd's serviceability answer, asked by the renewal lane on each sweep. Where no account can serve it at all, no renewal starts: a renewal needs an account to land on, and the word reads `stranded` (Table 3.4b) |
 | Account load: the account's load is past the harder line, 85%, the session is idle, and another listed account that can serve it is under the soft line (C57) | hard | overlord | The limit samples and the turn marker (§3.4). It moves before a limit can hit in the middle of a turn |
 | A proactive compaction the PreCompact arm refused | soft | overlord, coordinator | The PreCompact print's decision |
@@ -1228,8 +1237,9 @@ pool of its own. Both fit what it is. Its work is judgement for the whole fleet,
 policy saves Fable for. One session whose holds cover every coordinator should never wait behind workers for an
 account, nor take theirs. After rev 6 the operator added that Fable means the Fable class, which may come from another
 provider's lane. On reading this edition's first draft the operator added that a pool no other session may use is
-wasteful, because Fable may use only about half of an account's limit. So its accounts are reserved for it, and never
-fenced off (C46).
+wasteful, because Fable may use only about half of an account's limit, so the approved edition reserved a share of each
+account for it instead. On 2026-11-12 the operator replaced the reserve as well (R18): nothing is reserved, and the
+operator names the account pools it may draw from. Other sessions keep using every account in those pools (C46).
 
 - **C45. It runs the Fable class, because the operator selected it (C45, H16).**
   - **The operator's choice, on the designation.** The designation row holds `model`, a class: `fable` or `opus`. Only
@@ -1269,26 +1279,24 @@ fenced off (C46).
   a second writer.
   - **One answer.** `shared/serviceability.ts` and its bash twin give one answer for a class: servable, unservable or
     unmeasured. ccd's placement, the auto-swap and the server's forecast all read it.
-  - **Six more inputs.** This design adds them to the answer and its bash twin, and the parity fixtures gain each one:
-    - A reservation fact, read from the reservations document (C46): Fable serves the Overlord only on an account
-      reserved for it, and there it serves only the sessions the reservation serves.
+  - **Four more inputs.** This design adds them to the answer and its bash twin, and the parity fixtures gain each one:
     - A billing fact for each account, a roster field: where an account bills Fable to usage credits, Fable is
       unservable for the Overlord, because that is spend (O2). An account with no billing fact reads as billing
       Fable to credits.
     - The hold-down before a return to the designated class (below).
     - A continuity record for each lane, a roster field (below): on a lane without one, no class serves the Overlord.
-    - The lane's five-hour figure. `LaneFacts` and `_serviceable` read only the seven-day figure today, though `_avail`
-      and `readLimits` already read the other.
-    - The asking session's id, never its project. Today's answer is per lane and class. The reservation and the
-      billing fact answer differently for the Overlord and for a guest on the same lane, so every caller passes it.
-      The answer matches it against the ids the reservations document carries.
-  - **On a reserved account, Fable is judged against the window.** Today's reading, `fableShare.estimate`, is Fable's
-    part of the account's own priced usage, a proxy. The test refuses Fable when that part reaches
-    `FABLE_SHARE_CEILING_PCT` (40). On an account that mostly serves one Fable session, that part is near all of it
-    from the first turn, so today's test would refuse the Overlord its own account at once. For a session the
-    account's reservation serves, the Fable arm therefore compares Fable's part of the window with the ceiling: the
-    seven-day figure times the share reading. The sweep already writes the two side by side. It is still a proxy, and
-    it is labelled as one. Every other session's Fable test stays as it is today.
+    - The asking session's id, never its project. Today's answer is per lane and class. The billing fact and the
+      continuity record answer differently for the Overlord and the replay body than for another session on the same
+      lane, so every caller passes it. The answer knows those two by the route record the server wrote on their rows
+      (C46).
+  - **Which account it may use at all is not this answer's question.** The pool rule decides that, with the set the
+    operator names as the session's side (C46). This answer says only whether a lane may run a class now.
+  - **Fable is judged as for any session.** The Fable test reads `fableShare.estimate`, Fable's part of the account's
+    own priced usage, a proxy, and refuses Fable when that part reaches `FABLE_SHARE_CEILING_PCT` (40). On the
+    Overlord's accounts it is the same test, with the same ceiling, as for every Fable session there: the share is
+    the account's, and they share it (R18). On an account where the Overlord's Fable is most of the use, the test
+    refuses it Fable early, as it would any Fable session there, and it runs on the next account in the set, then on
+    Opus (C56).
   - **Unmeasured keeps the current class.** A Fable share reading older than eight hours, for example, changes nothing.
   - **The return waits, and ccd owns the hold-down.** ccd is the one writer of the degraded stamp (`_route_degrade`,
     `_route_restore`). Today it restores the intended class at the very next settle on a lane that can serve it. This
@@ -1314,8 +1322,8 @@ fenced off (C46).
     until that model's replay has passed (§7.5, §9.5).
   - **A routine fallback costs nothing.** The fallback class is replayed at each release, ahead of need. Every act row
     records the model and the lane, so overturns and audit scores split by them.
-  - **Falling back never stalls it.** When the Fable share on one reserved account is spent, the next generation runs
-    on the next one. When every share is spent, it runs Opus. If a turn fails on its account before that renewal,
+  - **Falling back never stalls it.** When the Fable share on one account in its set is spent, the next generation runs
+    on the next account in the set. When every share there is spent, it runs Opus on those accounts. If a turn fails on its account before that renewal,
     readiness reads `stranded` (§6.4), and every standing hold is released in one grouped push (§6.7). The daily
     backstop renewal (§3.3.11) bounds how long a return to Fable can wait.
 
@@ -1327,118 +1335,225 @@ fenced off (C46).
   - **Another provider's lane may serve it as a fallback, lane by lane** (the operator's ruling of 2026-11-10). It
     is still a privacy decision: that provider sees what the Overlord reads, the served operator-model entries and
     every project's history (§9.4). So such a lane serves it only when the operator has listed that lane for it and
-    set its continuity record, and only while no Anthropic account can serve it. It comes last in C56's order.
+    set its continuity record, and only while no Anthropic account can serve it. Its account must be in the set too,
+    because the one pool rule places it (C46). It comes last in C56's order.
 
-- **C46. Accounts reserved for it, never fenced off (C46, H16, and the operator's direction).**
-  - **Why not a pool no other session may use.** Rev 8 fenced its accounts off both ways. The operator pointed out the
-    waste. Fable may take only part of an account's weekly limit. The routing spec puts that allowance at half, and the
-    tree refuses Fable at a ceiling below it (`FABLE_SHARE_CEILING_PCT`, 40 until the operator sets it from the
-    measured share). A session that runs Fable can never spend the rest. On a fenced account the rest would serve
-    nobody, and on a small roster two fenced accounts are a large part of the fleet.
-  - **What must still hold.** No other session may spend the capacity the Overlord needs. One session whose holds
-    cover every coordinator should never wait behind workers for an account.
-  - **A reservation.** A reservation is a row of a table of its own in `coord.db`, `account_reservations`: the
-    account, `reservePct`, a share of the account's window, and when and by whom it was added. An account has at most
-    one row. The row holds no project and no session id. It is never a column of `pool_edges`, which holds a row only
-    for a tagged account (`pool` is `NOT NULL`) and is deleted and rewritten on every membership write
-    (`setAccountPools`). The one writer is the operator's membership door. Each write is journalled beside the
-    pool-edges log, and the reservations sync renders the rows for ccd (below). The default reserve is the Fable share
-    ceiling, because that is the most the Overlord's Fable can use there.
-  - **A reservation serves named sessions, never a project.** The server renders the served ids from the designation
-    and the replay lane. The reservations document carries, for each reserved account, the reserve and the ids of the
-    sessions it serves: the designated session, and the replay body while the replay lane runs one (§9.5). Every other
-    session is a guest there, whatever its project: a second session in the `overlord` project, a coordinator the
-    Overlord started, the auditor. The served ids come from server rows, so no session can name itself. A project's
-    local tag could not do this: it is a flat file any session can write with `ccd project-pool`.
-  - **An id is served before its session starts.** The served ids include the session of a `pending` binding, and
-    the replay body from the moment the lane asks for a run. The designate and rebind doors and the replay lane
-    start a session only once every agent that can place sessions holds a reservations document that names it.
-    Started sooner, the Overlord's own first start would be answered `reserved`, and it would begin on the fallback
-    class under the hold-down. If no such document arrives by the `pending` row's deadline, the start fails as a
-    start that never reports does (§3.2).
-  - **The replay body spends the reserve, within limits.** Its use counts against the reserve. The replay lane runs it
-    on a reserved account only while the account is under the soft line (C57) and no renewal is due. For every input
-    of the serviceability answer, the billing fact included, the replay body gets the Overlord's answer. When no
-    reserved account is under the soft line, the replay waits (§9.5).
-  - **The pool rule does not change.** A reservation is not a pool tag. The account keeps the pool it has, or none, and
-    `_pool_ok` admits the sessions it admits today. Every session the reservation does not serve is a guest there.
-    The `overlord` project (C2) needs no pool tag. If the operator gives it one, the pool rule keeps it inside that
-    pool as it does any tagged project. Real pool names are the operator's data and stay out of this repository.
-  - **One rule, inside the one serviceability answer.** The reservation is an input to `shared/serviceability.ts` and
-    its bash twin (H16). It adds no clause to the pool rule. For a guest on a reserved account:
-    - Fable is unservable, with the reason `reserved`. The Fable share there is the served sessions' alone.
-    - Every refusal the reservation causes carries that reason: the lower ceiling below, for a class and for
-      `default`, as well as Fable and the unmeasured figure. Placement, the swap log and the server's forecast show
-      it, so a guest passed over, moved or left with no account under today's ceiling is told why.
-    - Every other class meets a lower ceiling: the seven-day ceiling (98) minus what is left of the reserve. What is
-      left is the reserve minus the Fable the account has used in the window, never below zero. An unmeasured or
-      stale reading counts as nothing used, so the whole reserve is kept.
-    - The five-hour figure meets the same line while anything is left of the reserve in the seven-day window. No Fable
-      reading exists for the five-hour window, so the whole reserve is set aside in it. Once nothing is left, the
-      five-hour figure meets today's ceiling too: a spent reserve refuses no guest and moves none.
-    - A guest with no class, `default`, meets the same lower ceiling. Today `serviceability` answers `skipped` for
-      `default`, and `_class_gate` passes it. This design adds the lowered ceiling to the class-free eligibility test
-      (`_avail`, and its server twin in `projectHome`) on a reserved account, through the same reservation input.
-    - An unmeasured seven-day or five-hour figure admits no new guest there: for a guest's placement the reservation
-      arm answers `unservable`, with the reason `reserved`. That is a stated exception to "unmeasured never refuses",
-      in the safe direction for the reserve, and the parity fixtures pin it. The swap keeps today's answer, so no
-      guest is moved.
-  - **Guests yield through machinery that exists.** Placement and the swap's target pick pass over an account that
-    cannot serve the session's class. ccd already drops a Fable session one class where Fable cannot be served. The
-    auto-swap already relocates, at the next idle boundary, a session whose current account cannot serve its class
-    (`_swap_target`'s stay gates ask `_class_gate`). A guest past the line takes that arm, not the pool-mismatch arm.
-    A guest in a long turn has no idle boundary, so this design adds a second line behind the first. Once either
-    window's figure is past the guest's ceiling by half of what is left of the reserve, ccd moves the guest as it does
-    on a hard block, in the middle of its turn. The second line needs a fresh share reading: on a stale one a guest
-    past its ceiling still leaves at its next idle boundary, and none is moved in the middle of a turn, as none is
-    on an unmeasured figure. Today the tree moves such a session only behind its idle gate
-    (`_swap_idle_gate`). That is a swap, never a refusal. So no new refusal exists, and "swaps are never refused" (the
-    operator's ruling of 2026-10-19) stands whole. A move the operator makes by hand onto a reserved account is never
-    refused: ccd says the account is reserved and has no room. The manual-swap pin then holds it (`_swap_pinned`, up
-    to `SWAP_PIN_TTL`, 24 hours), unless the guest is past the line: this design adds that read to `_swap_pinned`,
-    beside `_avail`, so the next tick may move it on.
-  - **A document of its own.** The reservations travel as an additive field, rendered by a new pool sync, the
-    reservations sync, into a leased document of their own. A new line or column in today's pool-epoch file would
-    read as malformed to an older ccd, which fails shut for every tagged placement. If the document goes stale, the
-    last known reservations stay in force, and no other account gains one.
-  - **Nothing is reserved until it is enforced.** An older ccd ignores a reservation, so guests would spend the
-    reserve. The membership door accepts a reservation only while every connected agent that can place sessions
-    advertises the capability word (`account-reserve`, read from `ccd caps`, Table 11.1d). Otherwise it refuses
-    `reserve-unenforced`. The server checks again on every capability refresh.
-  - **Measured, not assumed.** The server raises an operator item when it measures a guest running Fable on a reserved
-    account, or guests standing past the line for longer than two sweeps. M32 counts both, and the target is zero.
-    With an outside account chooser configured (#465), it re-checks the chooser's answer against the same rule.
-  - **The reserve is the operator's number, set from evidence.** Beside each reserve, Settings shows the most Fable the
-    Overlord used on that account in each of the last four weeks, and what guests used. The operator lowers a reserve
-    the Overlord never fills, or raises one. A reserve of the whole window is rev 8's fenced account, and the operator
-    may still choose it. From W6, when four weeks of peaks sit under half of a reserve, Settings suggests a lower one
-    with the value filled in. Only the operator's own tap saves it. The server never changes a reserve.
-  - **What it is.** An accident guard while sessions share a user, as every pool rule is. In a container the same rule
-    is the account chooser's (§3.6).
-  - **How many.** At least two reserved accounts are recommended. When the share on one is spent, the Overlord moves to
-    the other's and stays on Fable. Which accounts, and how many, is the operator's choice in Settings. The spec names
-    none. Account management stays the operator's: the Overlord never tags, untags, reserves or edits an account or a
-    pool (§8.1).
-  - **The coordinators it starts are guests like any other session.** Their own projects' pools place them (C32).
+- **C46. The account pools it may draw from, never a reserve (C46, H16, R18).**
+  - **Why not a fenced pool, and why not a reserve.** Rev 8 fenced its accounts off both ways. The operator pointed
+    out the waste. Fable may take only part of an account's weekly limit. The routing spec puts that allowance at
+    half, and the tree refuses Fable at a ceiling below it (`FABLE_SHARE_CEILING_PCT`, 40 until the operator sets it
+    from the measured share). A session that runs Fable can never spend the rest, so on a fenced account the rest
+    would serve nobody. The edition the operator approved on 2026-11-10 kept a reserved share of each account for it
+    instead, with every other session yielding at a line. On 2026-11-12 the operator replaced that too (R18): no
+    account is reserved for it, and the operator names the account pools it may use accounts from. "That provides
+    the right balance."
+  - **What still holds, and is the reason.** Nothing is fenced off. Every other session keeps using every account in
+    those pools, on every model, as it does today. No session is passed over, moved or refused because of the
+    Overlord. Fable on those accounts meets the one Fable ceiling, shared with every Fable session there (H16).
+  - **What it gives up, said plainly.** Nothing keeps capacity for it. Another session may spend an account's window,
+    or its Fable share, before the Overlord does. What keeps it running is the set, the ordered list and the soft line
+    (C56, C57): it moves to the next account in the set, then to Opus, then to a lane the operator listed for it.
+    `poolRunway` warns ahead, and M11 counts the generations it spent off its designated class.
+  - **The set, and its one writer.** The set is a field of the designation row, `accountPools`. It holds a list of
+    pool names, in the operator's order, and one yes or no, `untagged`, for accounts in no pool.
+    - Only the operator's session-gated doors write it, as they write the class (C45): designate and rebind, which
+      take it with the class, and its Settings row. Each write is journalled with the designation's other fields. No
+      box-token write names it, and the Overlord never writes it: it never tags, untags or edits an account or a pool
+      (§8.1).
+    - **Widening the set needs the step-up; narrowing needs none.** Adding a pool, or turning `untagged` on, widens
+      which shared accounts carry the Overlord's reads and the operator's words, so it counts as a change that widens
+      authority (Table 11.1d) and keeps the step-up. Removing a pool, or turning `untagged` off, needs none. Designate
+      and rebind keep their step-up whatever the set (the author's call under R17, from the coordinator's ruling of
+      2026-11-12; "Where things stand").
+    - Settings offers the pools that the membership rows name. A name no account carries is saved with a warning,
+      as the project-pool door warns today (`unknown-pool`), and never refused.
+    - Real pool names are the operator's data. They live in `coord.db` and on the route record, never in this
+      repository. Fixtures use `pool-a` and `pool-b`.
+  - **Why a field of the designation, and not a tag on the `overlord` project.** A project's tag is a flat file on
+    the fleet host, `$POOLS_DIR/<project>`, holding one name, and that file is the authority itself, not a cache of
+    one. Two paths write it: the operator's door, through `ccd project-pool`, and any session that runs that verb from
+    its shell. No forbidden list refuses it (measured: `FORBIDDEN_CCD_VERBS` in `server/src/coord/approvalguard.ts`
+    does not name it). H2 keeps every Overlord switch out of a fleet host's files. So the set is a server row, and what
+    the fleet host holds is a cache of it (Table 3.6a). The `overlord` project needs no tag, and a tag on it does not
+    bind the Overlord (below).
+  - **How it reaches placement: the one pool rule, with the session's side widened to a set.** Table 3.4c weighs the
+    options. Measured on the tree:
+    - The pool rule decides whether an account may serve a session, by pool. It is written once in TypeScript,
+      `poolRule` (`shared/poolrule.ts`), and once in bash, `_pool_ok` (ccd), and one fixture table drives both.
+    - Its project side is read by `_project_pool_state` from the project's file, and by the server's own reader,
+      `readProjectPools` (`server/src/pools.ts`), for its forecast and its refusals. Its account side is central:
+      `pool_edges` in `coord.db`, written by the operator's membership door and pulled to the fleet host as
+      `$REG/pool-epoch`, which `_acct_pool_state` reads.
+    - The project side decides first. An untagged project is served by any account, and so is a tagged one by any
+      untagged account. ccd asks `_pool_ok` at every placement, swap target and tick.
+  - **The rule this design widens.** The session's side of the rule becomes a set: names, and the `untagged` yes or
+    no.
+    - An account serves a session whose side is a set when the account's pool is in the set, or when the account is
+      untagged and the set admits untagged accounts.
+    - Today's one-name tag reads as the set of that name with `untagged` on, so every project's answer stays what
+      it is today. The fixture table gains the set's rows, and pins that equivalence in both spellings.
+    - What cannot be read stays undecidable, in the same order as today. A set is never "untagged", so an empty set
+      is not the unconstrained case.
+    - For a session whose route record carries a set, that set is its side. For every other session, its side is
+      its project's file, as today. The server writes the set on the Overlord's row in the same route write as its
+      class and its ordered list (C56), and again at each renewal and on each change. The replay lane writes it on
+      the replay body's row (§9.5).
+    - **One reader of the session's side.** ccd gains one function that answers a session's side from its id: the
+      set on its route record when the record carries one, and its project's file otherwise. It answers in the
+      words `_project_pool_state` uses, plus one: `set <spelling>`. The spelling is the set as one token: its names
+      in sorted order, joined by commas, with `+untagged` at the end when it admits untagged accounts. Sorted, so
+      reordering the same set leaves the spelling, and any crossing that names it, as they were. A one-pool set
+      without `+untagged` spells a valid pool name, so the side word, `set` against `named`, is what tells the two
+      apart, and the crossing marker's field carries a kind prefix (Table 3.4d). `_pool_ok` gains the `set` case.
+    - **A bad set is undecidable, never absent, and says so in its own words.** The reader takes the set by a
+      measured read of the route record (`_reg_read`, which tells absent, present and unreadable apart), never
+      through `_route_get`, which answers "the validated value, or nothing" and so folds an unreadable or malformed
+      value into absent. Folded into "no set", the side would fall back to the untagged `overlord` project, which
+      every account serves: an overloaded null at a seam that fails open.
+      - A set field that is present but cannot be read answers `unreadable`, and one that does not parse answers
+        `malformed`. `_pool_ok` answers both rc 2, "nobody decides", with a side word of their own,
+        `POOL_OK_SIDE=set`, never `project`. On the `project` side every renderer names the project's tag file,
+        which for the Overlord is the healthy, untagged `$POOLS_DIR/overlord`: the wrong file, and the wrong remedy.
+      - The `set` side's sentence names the route record and its remedy: the server writes the record again at its
+        next sweep, or the operator saves the set again in Settings. It is the fourth cause of `stranded` (C57).
+    - **The server's forecast and its doors need no new reader of the set.** They hold it on the designation row and
+      pass it to `poolRule`. The renewal lane needs one read from the fleet host, below, because two of the set
+      trigger's exemptions are facts only ccd holds.
+    - The mismatch verdict names the account's side as untagged when the account is in no pool, because today's
+      verdict carries a pool name there.
+  - **The renewal lane asks ccd for the generation's pool answer.** The set trigger (Table 3.3.11b) needs three facts
+    the server does not hold: whether the account the generation runs on is a valid crossing, whether ccd's pool
+    projection is fresh (`$REG/pool-epoch`, which only ccd reads as `stale`), and whether the set on the route record
+    reads. The pool rule stays the one decider, so the lane asks ccd rather than copying `_crosspool_valid` or
+    `_pool_ok` onto the server.
+    - **The read.** One read-only ccd verb, `ccd pool-answer <id>`, which the server composes through `CcdArgv` and
+      the agent runs on the box that places the session. It prints one line: the session's side word, the verdict of
+      `_pool_ok` for the account the session runs on (serve, mismatch or undecidable, with `POOL_OK_SIDE` and
+      `POOL_OK_STATE`), and the answer of `_crosspool_valid` for that account (valid, none or unreadable). It writes
+      nothing.
+    - **Its gate.** It is part of the `pool-set` capability (Table 11.1d): the lane asks it only of a box that
+      advertises `pool-set`, and designate and rebind already refuse without it.
+    - **How the lane reads it.** The trigger is due only on a mismatch with no valid crossing, and only when an
+      account in the set can serve it. On an undecidable verdict, an unreadable crossing record, or a read that
+      itself fails (the agent unreachable, a refusal, a line that does not parse), the trigger is not due. The lane
+      records the reason on the sweep, and readiness says what could not be measured. An unmeasured answer never
+      moves the Overlord.
+    - **A bad set on the route record** comes back as undecidable on the `set` side. The lane then writes the route
+      record again from the designation row, at that sweep, which is the remedy the `set` sentence names.
+  - **Every user of the pool decision in ccd, and what the set changes in each.** Measured on the tree. Every user
+    keyed by a session reads its side through the one reader above. The ones keyed by a project judge the
+    Overlord's first placement only, on the account the server already picked from the set.
 
-| Readings on a reserved account | The Overlord | A guest on Opus or Sonnet | A guest on Fable |
-|---|---|---|---|
-| Seven-day 30, a third of the usage is Fable (10 of the window) | Fable servable: 10 is under the ceiling of 40. Its load is 25% | Servable: 30 is under 98 less the 30 still reserved, which is 68 | Unservable, `reserved`. It runs the next class, or lands elsewhere |
-| Seven-day 70, a seventh of the usage is Fable (10 of the window) | Fable servable. Its load is 30%: guests are past their ceiling, so 28 points are left under 98, not 30 | Unservable: 70 is past 68. It moves at its next idle boundary | Unservable |
-| Seven-day 70, four sevenths of the usage is Fable (40 of the window) | Fable at its ceiling: the next reserved account, or Opus. Its load is 100% | Servable: the reserve is spent, so the ceiling is 98 again | Unservable |
-| Seven-day 30, no fresh share reading | Fable unmeasured: it keeps its current class. Its weekly load is the whole figure, 30% | Servable: 30 is under 98 less the whole reserve, which is 58 | Unservable |
+| User in ccd | What it does today | What the set changes |
+|---|---|---|
+| `_swap_target`, `_auto_swap_check`, `cmd_swap`, `cmd_start` | Ask `_pool_ok` with the project's side, for a swap target, a tick, a manual swap and a start | They read the session's side, so the Overlord's rescue, its manual swap and its start honour the set. For the Overlord the affinity arm of the tick stands down (C57) |
+| The home re-seed in `_auto_swap_check` (the step before the affinity arm) | When `_pool_ok` refuses the session's `home`, it asks `_ws_least_loaded <project>` for a new home and writes it, logging `rehome` | Stands down for a session whose side is a set, as the affinity arm does. `_ws_least_loaded` reads the project's side, which for the Overlord is the untagged `overlord` project, so it would pick from every account and could write a home outside the set, and flip it as loads change. The Overlord's home moves nothing: its renewals pick from the ordered list (C56). Passing the session's side into `_ws_least_loaded` was the other way, but it would make a project-keyed placer session-keyed for one caller |
+| `cmd_prefer` | Sets a session's home account, refusing a pool mismatch unless `--cross-pool`, which writes a crossing marker | Reads the session's side. For the Overlord a `prefer --cross-pool` is not a lasting crossing: the marker names its home, which moves nothing, and the next renewal clears it (C46) |
+| The three callers of `_crosspool_mark`: `cmd_start`, `cmd_swap`, `cmd_prefer` | Pass `${pps#named }`, the project's pool name, as the marker's pool field | Write the field with its kind: a plain pool name for a `named` side, as today, and `set:<spelling>` for a `set` side, stripping the side word `set ` first |
+| `_crosspool_valid` | Accepts the marker only while the project's side reads `named <pool>`, and only for an account the marker names | For a `set` side it accepts a field `set:<spelling>` only while the side reads `set <that spelling>`. A crossing therefore lapses when the set changes, and not when the operator only reorders it |
+| `_crosspool_tick` | Ends a marker that no longer holds: it removes it and logs `crosspool-ended` with the reason. A side that is not `named` or `untagged` returns before that, as undecided | A decided `set` side is ended like `named`: the reason names the new spelling ("account set is now …") or the move off the marked account. Without this a set-side marker is never removed, and one that lapsed would come back to life if the set returned to its old spelling |
+| `_default_pool` | Admits a pay-per-use lane (D-8098) by its own equality test: the project reads `named <p>` and the lane's pool reads the same | Routed through the pool rule: a pay-per-use lane joins when `_pool_ok` answers rc 0 with `POOL_OK_SIDE=account` and `POOL_OK_STATE=named …`, that is, served because its pool is named on the session's side, never through an untagged arm. That is D-8098's "only when a pool names it" in the rule's own terms. For a one-name project it answers what the equality test answers today, and for the Overlord it admits a pay-per-use lane whose pool is in the set |
+| `_pool_undecidable_why` | Renders rc 2 by side: `project` names the tag file under `$POOLS_DIR`, and the account arms name the projection and the pool sync | Gains the `set` arm: the route record's set is unreadable or malformed, and the remedy is the server's next sweep or the operator saving the set again. The project's tag is not involved |
+| `_pool_mismatch_why` | Renders rc 1 with the account's pool and the project's pool, `${4#named }` | For a `set` side it names the set's spelling, and says the account's pool is not in it |
+| `_strand_why`, `_strand_mark` | Say why no account can take a blocked session, and record it in `swap.log`, naming the project's pool. `_strand_why`'s undecidable arm answers `tag:<state> $POOLS_DIR/<project>` for a bad project side, and `projection:<state> $REG/pool-epoch` for a bad account side | Read the session's side, and name the set's spelling where they name a pool today. The undecidable arm gains `set:<state>` naming the route record |
+| `_undecidable_cause`, and its caller on the tick and rescue path | Turns the tick's undecided word into the `stranded` sentence. `_swap_target`'s rc 4 sets the word `pool`, whose sentence names the project's tag file whatever side was undecided, so a stale account projection also reaches `_strand_mark` as "the project's pool tag could not be read" | The rc-4 caller picks the word from `POOL_OK_SIDE`: `pool` for the project side, as today, a new `projection` for the account side, whose sentence names `$REG/pool-epoch` and the pool sync, and a new `set` for the set side, whose sentence names the route record. So the remedy C46 and C57 name holds on this path too, not only on `cmd_start`'s |
+| `_ws_wrapper_why`, `_ws_pool_read`, `_ws_lane_why` | Re-validate a lane named by `ws-add --wrapper` against the project's side | Unchanged. They judge the Overlord's first placement, on the account designate or rebind picked from the set through C32's placement policy, against the untagged `overlord` project, so they pass it. The set binds every later start |
+| `_place_for_class`, `_ws_least_loaded` | Place a new workspace, keyed by project and class, with no session id | Unchanged. They are not the Overlord's placer: its first account is the server's pick, and every later start is a renewal that picks from the ordered list (C56). The re-seed's call stands down (above) |
 
-*Table 3.4c. The reservation rule on one account, with a reserve of 40. Figures are percentages of the weekly window,
-except a load, which is the share C57 defines.*
+*Table 3.4d. The users of the pool decision in ccd, and what the set changes in each.*
+
+  - **Why this keeps one owner for each fact.** The set has one writer, the operator's doors. An account's pool has
+    one, the membership door (`pool_edges`). The pool rule joins the two, in its two spellings. Since `_default_pool`
+    asks it too, and the renewal lane asks ccd rather than deciding, nothing decides "may this account serve it, by
+    pool" twice. The ordered list only orders (C56). The serviceability answer keeps its own question, whether a lane
+    may run a class now (H16).
+  - **The Overlord now depends on the pool sync being fresh.** Before R18 its project was untagged, and `_pool_ok`
+    answered "serve" before reading the account side. A set is read against every account's pool, so a stale,
+    unreadable or malformed `$REG/pool-epoch` makes every placement of the Overlord undecidable. That never moves a
+    running generation, and never fires the set trigger: `ccd pool-answer` reports it undecidable, and an unmeasured
+    answer moves nothing. It stops the next start. A renewal that cannot place reads `stranded`, with this cause and
+    its remedy, the pool sync and the control-plane link, named on every path: `_pool_undecidable_why` on a start,
+    and the `projection` word of `_undecidable_cause` on the tick and the rescue (Table 3.4d). Never "the earliest
+    reset" (C57). On a box with no pool sync installed, absence falls back to the declared tags, as today.
+  - **An older ccd.** `cmd_route` refuses a field outside `ROUTE_FIELDS`, so an older ccd refuses the route write
+    that carries the set, and the door that made the write fails rather than placing without it. The designate and
+    rebind doors refuse `capability-missing` until every agent that can place sessions advertises `pool-set` (Table
+    11.1d), as they do for `keep-awake`. There is no gate of its own and no refusal word of its own.
+  - **Untagged accounts serve it only when the set says so.** The `untagged` yes or no is off by default.
+    - Why: the pool rule reads an untagged account as unconstrained, which is right for a project tag that only
+      narrows. The set is a positive list, and R14's count must count only accounts the operator chose. If untagged
+      accounts were implied, a new roster account, untagged until someone tags it, would join the Overlord's
+      accounts and could make up the count of two with no choice by the operator.
+    - Why a yes or no, and not a word in the list: `untagged` is a valid pool name (`POOL_NAME_RE`), so a word would
+      collide with a real pool.
+  - **An empty set serves nothing.** No names, and `untagged` off, admits no account. It is never "unconstrained",
+    as an untagged project is. Why: a forgotten setting must never be the widest one. Tied to R14: the designate and
+    rebind doors count the accounts that can serve it under the set (C56). An empty set counts none, so there is no
+    designation. The designate door takes the set with the class, so the first designation names one.
+  - **When the set changes.**
+    - The server writes the new set and the new list at once, and they bind every later placement.
+    - A generation on an account still in the set goes on. One on an account the set no longer admits finishes its
+      turn. That is a hard renewal trigger (Table 3.3.11b), so it renews by C56's pick at the turn's end, never in the
+      middle of a turn.
+    - Where no account in the set can serve it, no renewal starts: a renewal needs an account to land on. The
+      trigger is not due, the generation keeps running where it is, and readiness reads `stranded`. Its item names
+      the cause that holds (C57): the set admitting no account that can serve it, or every account in the set
+      limited.
+    - The Settings row refuses a set under which fewer than two accounts can serve it while an Overlord is
+      designated (`overlord-single-account`, with the count). The operator widens the set first, or retires the
+      Overlord.
+    - A drop by any other path is told, never refused (C56): an account moved out of the set's pools by the
+      membership door, disabled, signed out or removed.
+  - **A deliberate crossing holds until the next renewal** (the author's call under R17, from the coordinator's
+    rulings of 2026-11-12; "Where things stand").
+    - When the operator moves the Overlord off the set by hand, with `--cross-pool` on a swap or a start, the move
+      stands until the next renewal of any kind. The set trigger is not due for an account a valid crossing marker
+      names, as `ccd pool-answer` reports it.
+    - Every renewal clears the crossing marker: the renewal's fresh start for a session whose side is a set removes
+      it and logs `crosspool-ended` with the reason `renewal`. C56's pick then lands it inside the set. Any other
+      trigger that renews it, such as the load line or model drift, therefore ends the crossing too.
+    - `prefer --cross-pool` is not a lasting crossing path for the Overlord. Its marker names the home, which moves
+      nothing for the Overlord, and the next renewal clears it.
+    - M32 leaves crossed generations out of its zero target and counts them apart.
+    - Why: a move the operator makes by hand is never refused (the ruling of 2026-10-19), and the manual-swap pin
+      already holds it.
+  - **What it is.** An accident guard while sessions share a user, as every pool rule is. Any session's shell can
+    still write a route record with `ccd route`, as it can write a project's tag. The server writes the Overlord's
+    again at each renewal and on each change, and the start report names the set ccd placed it under. In a
+    container the same rule is the account chooser's (§3.6).
+  - **How many.** At least two accounts that can serve it (C56). Which pools, and how many accounts are in them, is
+    the operator's choice in Settings. The spec names none. Account management stays the operator's (§8.1).
+  - **The coordinators it starts are placed like any other session.** Their own projects' pools place them (C32), on
+    any account those admit, the accounts in its set included.
+  - **Open for W1: what W0-23 measures under R18.** W0-23 was to read, for each account that may be reserved, its
+    plan and whether usage credits are on. Under R18 its subject is each account in a pool the operator may name for
+    the Overlord. Two facts matter there now that the Overlord shares Fable:
+    - the billing fact, as before;
+    - over a week, how much of each such account's Fable share other sessions already spend (the sweep's
+      `fableShare.estimate`, and which sessions spent it).
+
+    With them, W1 can tell whether two accounts leave the Overlord room on Fable, or whether it would mostly run
+    Opus. W0-24 measured the reserve's Fable arm, which R18 removes. Whether W0-24 still informs the shared test is
+    W1's call.
+
+| Option | Where the set lives | What decides | One owner for each fact? | Verdict |
+|---|---|---|---|---|
+| Widen the project-pool rule to a set, on the project's file, for the `overlord` project or for any project | `$POOLS_DIR/<project>` on the fleet host | `_pool_ok` and `poolRule` | The decider, yes. The set, no: the file is the authority, and two paths write it, the operator's door and any session's `ccd project-pool`. An Overlord switch in a fleet host's file breaks H2 | Rejected |
+| Widen the rule's session side to a set, and carry the Overlord's set on its route record | The designation row. The route record is a cache of it | `_pool_ok` and `poolRule`, in today's order | Yes. The operator's doors write the set, the membership door writes each account's pool, and the pool rule joins them. Every placement path already asks the rule | Chosen |
+| An input to the one serviceability answer (`shared/serviceability.ts` and its bash twin, H16) | The designation row, carried to ccd in a document of its own | `serviceability`, which would gain a pool test | No. "May this account serve this session, by pool" would be decided by the pool rule for every session and by the serviceability answer for one. That answer is per lane and class, and the set refuses every class at once. It needs a refusal word beside `pool-mismatch`, and a carrier with its own sync and its own staleness, the shape R18 removes with the reservations document | Rejected |
+
+*Table 3.4c. How the set reaches placement. The tree's readers were measured for this table, not taken from earlier
+editions of this spec.*
 
 - **C56. Never one account (R14).**
-  - **At least two, or no designation.** The designate and rebind doors count the enabled, non-pay-per-use accounts that
-    can serve the `overlord` project, reserved and other together. They refuse fewer than two
-    (`overlord-single-account`). Settings shows a warning while fewer than two are reserved for it.
-  - **A later drop is told.** An account disabled, signed out or withdrawn later raises an operator item when the count
-    drops below two.
-  - **An ordered list, picked by ccd (C56, H16).** The server writes the Overlord's ordered account list on its registry
-    row, through the route verb, as a route field this design adds (today `cmd_route` refuses any field outside
+  - **At least two, or no designation.** The designate and rebind doors, and the set's Settings row, count the
+    enabled, non-pay-per-use accounts that its set admits (C46) and that can serve it. They refuse fewer than two
+    (`overlord-single-account`). Settings shows the count beside the set, and a warning while it is under two.
+  - **A later drop is told.** An account disabled, signed out, withdrawn or moved out of the set's pools later raises
+    an operator item when the count drops below two. While a `stranded` item names the set as its cause, that item
+    takes this one's place, so one cause raises one item (C46).
+  - **An ordered list, drawn only from the set, picked by ccd (C56, H16).** The server writes the Overlord's ordered
+    account list on its registry row, through the route verb, as a route field this design adds (today `cmd_route` refuses any field outside
     `ROUTE_FIELDS`). At the renewal's fresh start ccd picks from the list in three steps. First, the first listed
     account under the soft line that can serve the designated class, once the hold-down allows that class. Next, the
     first listed account under the soft line, on the fallback class. Last, when every listed account is past the
@@ -1446,15 +1561,23 @@ except a load, which is the share C57 defines.*
     at `stranded` only when no account can serve it. Listed order and the soft line are new in ccd's pick, which
     today ranks by load alone. Table 3.4a gives the order. The server leaves out an account where a start loaded
     something the profile does not list, until the operator clears the item (§3.6).
-  - **It goes home.** Its reserved accounts head the list. So the first renewal after one of them regains headroom
-    moves it back off the borrowed one. This is the pools machinery's rehome, at a renewal rather than mid-work.
+  - **The list holds only accounts in the set.** The server lists them in the order of the set's pools, and within a
+    pool in roster order, today's tie-break. Untagged accounts come last, and only when the set admits them. Every
+    listed account must also pass the pool rule, which reads the same set (C46), so the list orders and never admits.
+  - **It goes back up the list.** The first renewal after an account higher on the list regains headroom moves it back
+    there. This is the pools machinery's rehome, at a renewal rather than mid-work.
+  - **Fable on its accounts is shared.** Fable billed to usage credits is unservable for it (H16). Otherwise its Fable
+    on an account meets the same ceiling as every Fable session there, and their use and its use count together.
+    When the share is spent on one account, the next generation runs on the next account in the set. When it is
+    spent on all of them, it runs Opus on them, in the same order.
+  - **When the set shrinks under a running generation,** it finishes its turn and then renews inside the set (C46).
 
 | Place | Accounts | Model it runs there |
 |---|---|---|
-| First | The accounts reserved for it (C46), in listed order | The designated class, Fable when the operator selected it |
-| Next | Other accounts the pool rule lets the `overlord` project use | Opus: Fable there would come out of other sessions' Fable share |
-| Only if the operator lists one for it | A pay-per-use lane (D-8098) | As the serviceability answer says. Fable billed to credits is unservable |
-| Never | An account the pool rule refuses its project | Not applicable |
+| First | The accounts in its set (C46), in listed order | The designated class, Fable when the operator selected it, while the Fable share it shares there is under the ceiling |
+| Next | The same accounts, in the same order | Opus, the fallback class |
+| Only if the operator lists one for it | Another provider's lane (ruling 6), then a pay-per-use lane (D-8098). Each is placed by the same pool rule, so its account must be in the set too. Neither counts towards the two | As the serviceability answer says. Fable billed to credits is unservable |
+| Never | An account outside the set | Not applicable |
 
 *Table 3.4a. The order in which accounts serve the Overlord. ccd picks in this order, in the three steps C56 gives.*
 
@@ -1462,16 +1585,9 @@ except a load, which is the share C57 defines.*
   - **The renewal is the moment to move.** A move of account is a fresh start from the card, between turns. At each
     renewal, ccd passes over an account past the soft line: by default a load of 70% in either its five-hour or its
     weekly window. The daily backstop renewal (§3.3.11) makes this happen at least once a day.
-  - **On an account reserved for it, a load reads the reserve, not the whole figure.** Guests cannot take the
-    reserve (C46). So the Overlord's room there is what is left of its reserve, or what is left under the seven-day
-    ceiling (98) if that is less. Its load is the share of the reserve that is no longer room. With a reserve of
-    40, the soft line is 28 points of it gone and the harder line 34. The five-hour window has no share reading, so
-    the whole reserve counts as left there, and the load is what the figure has taken out of the top 40 points
-    under the ceiling. Where the weekly share reading is unmeasured or stale, the weekly load is the account's
-    whole figure, as on any other account. Why: read on the whole figure, guests at their ceiling would hold a
-    reserved account near the soft line, and the Overlord would leave it, or fall to Opus elsewhere, with most
-    of its reserve unspent. Lowering the guests' ceiling instead would bring back the waste the reservation
-    exists to end.
+  - **A load reads the account's whole figure.** Nothing on its accounts is set aside for it (C46), so its room
+    there is what every session there leaves, and its load is the account's own five-hour and weekly figures, as for
+    any session.
   - **A pre-emptive move at idle.** Between renewals, when the current account passes the harder line (85% by
     default), the Overlord is idle and another listed account that can serve it is under the soft line, the renewal
     lane renews it onto that account at once. That is a hard trigger of `renewalDue` (Table 3.3.11b). With no such
@@ -1503,20 +1619,34 @@ except a load, which is the share C57 defines.*
   - **When everything is limited,** readiness reads `stranded`. Every standing hold is released in one grouped push, and
     an operator item names the earliest reset that `poolRunway` measures. It waits for that reset, as the continuity
     programme's waits already do. No coordinator waits on it.
+  - **`stranded` has four causes since R18, and its item names the cause that holds** (C46):
+    - every account in the set limited, whose remedy is the earliest reset;
+    - the pool projection stale or unreadable, whose remedy is the pool sync and the control-plane link, never a
+      reset;
+    - the set on the route record unreadable or malformed (`POOL_OK_SIDE=set`), whose remedy is the server writing
+      the record again at its next sweep, or the operator saving the set again;
+    - a set that admits no account that can serve it, whose remedy is the operator's: widen the set, or bring an
+      account back.
+
+    Each path that renders the cause names it in these words: a start through `_pool_undecidable_why`, and the tick
+    and the rescue through `_undecidable_cause` (Table 3.4d). The `stranded` item takes the place of C56's
+    count-below-two item only while its cause is the set admitting no account, because then the two name one cause.
+    With any other cause they are two causes, and two items.
   - **W0 measures it.** A swap at idle and one mid-turn, each followed by a stand-in renewal (a typed `/clear`, a card
     file and closed-form questions), because the renewal verb and the probes arrive with W1a, which measures again.
     W0 also measures whether its accounts bill Fable to usage credits.
 
 | Event | Who decides | When it lands | Standing holds |
 |---|---|---|---|
-| Fable becomes unservable (its share spent, credits billing, an account not reserved for it) | ccd's serviceability answer, asked by the renewal lane on each sweep | The next fresh start. On its current account it is a hard trigger (Table 3.3.11b) | As `renewing` in the retention table. The ladder condition starts |
+| Fable becomes unservable (the account's shared Fable share at the ceiling, or credits billing) | ccd's serviceability answer, asked by the renewal lane on each sweep | The next fresh start. On its current account it is a hard trigger (Table 3.3.11b) | As `renewing` in the retention table. The ladder condition starts |
 | A lane has no continuity record | ccd's serviceability answer | The next fresh start | As `renewing` |
+| Its account leaves the set: the operator changed the set, or the membership door moved the account out of its pools | ccd's pool answer for the generation, read by the renewal lane (C46) | At the next turn end, as a hard trigger (Table 3.3.11b). Not when no account in the set can serve it: then readiness reads `stranded`, its item naming the cause that holds. Not when the operator crossed onto that account by hand: that move stands until the next renewal, which clears the crossing. Not on an undecidable or unread answer | As `renewing` |
 | The fallback's stamp is older than the hold-down, and the designated class is servable | ccd's answer and its hold-down | The next renewal | As `renewing` |
 | The account's load is past the soft line, 70% | ccd's pick from the ordered list | The next renewal | As `renewing` |
 | The account's load is past the harder line, 85%, the Overlord is idle, and another listed account is under the soft line | The renewal lane, on a hard trigger (Table 3.3.11b) | At once, between turns | As `renewing` |
 | A limit hits mid-turn | ccd's hard-block swap | At once. The landing mints a generation | As `restarting` |
 | The landing resumed the conversation on another model class | The start report, against the previous generation's model | At the next turn end, as a hard trigger (Table 3.3.11b) | As `renewing` |
-| No account can serve it | Readiness reads `stranded` | At the earliest reset | All released in one grouped push |
+| No account can serve it | Readiness reads `stranded`, and its item names the cause that holds and its remedy: every account in the set limited (the earliest reset `poolRunway` measures), the pool projection stale or unreadable (the pool sync and the control-plane link, as `_pool_undecidable_why` and the `projection` word of `_undecidable_cause` name them), the set on the route record unreadable or malformed (the server writes the record again at its next sweep, or the operator saves the set again), or the set admitting no account that can serve it (widen the set, or bring an account back) | At the reset, when the pool sync recovers, when the route record is written again, or when the set or an account changes | All released in one grouped push |
 | The model changes inside a generation | The hook journals it: model drift | At the next turn end, as a hard trigger | As `renewing` |
 
 *Table 3.4b. What moves the Overlord's model or account, who decides, and when. The retention table is in §6.7.*
@@ -1617,14 +1747,15 @@ repository, no git credential and no file on any other session's disk.
     `--remote-control` where the box file says `on`, and a session with permissions bypassed accepts peer messages by
     default.
   - **It pins its sources.** The setting sources, the tool-server set and the route fields are pinned, so a route write
-    cannot add a tool. Guests run with a shell in the same account config directory (§3.4). So the profile loads
+    cannot add a tool. Other sessions run with a shell in the same account config directory, because its accounts are
+    shared (§3.4). So the profile loads
     nothing from that directory but the sign-in: no account-level settings, memory file, agent, mod or tool server.
     The start report lists the settings sources, hooks, tool servers, mods, agents and skills the session loaded,
     beside its instruction files. One that the profile does not list refuses `launch-profile-unmet`. The server then
     leaves that account out of the Overlord's ordered list until the operator clears the item, and renews. W0
     measures that the skill and the hook still load this way.
   - **It names what is loaded.** Skills enabled: `ccrc-overlord` only. The workspace memory file that carries the
-    constitution (§3.3.3). Its reserved accounts, in listed order (§3.4).
+    constitution (§3.3.3). Its account set and its ordered account list (§3.4).
   - **The door process (H9).** One small local process, started by ccd with each generation from the launch profile.
     - It serves every Overlord door to the main thread as a typed tool, and one read tool to readers.
     - It holds the credential, the identity and the fence (§3.3.11). The model never sees a token or a key.
@@ -1635,11 +1766,11 @@ repository, no git credential and no file on any other session's disk.
     - `ccrc-api` is the client inside it, so no second door client is written. The reason for a new carrier is a
       security boundary: the model must not hold the act key.
     - Its delta cache sits in a directory of the session's own, outside every account's config directory, because
-      guests share those (§3.4).
+      other sessions share those (§3.4).
     - W0 measures hooks, skills, the anchor and the permission mode under this launch.
   - **The fallback if W0 fails.** The main thread gets a shell that can run only `ccrc-api`. `ccrc-api` keeps the act
-    key in a 0600 file in a directory of the session's own, outside every account's config directory, because guests
-    share those (§3.4). The delta cache sits there too. The fallback has no door process, so it uses no launch nonce:
+    key in a 0600 file in a directory of the session's own, outside every account's config directory, because other
+    sessions share those (§3.4). The delta cache sits there too. The fallback has no door process, so it uses no launch nonce:
     `ccrc-api` writes the key file at the generation's mint. The deny set is the accident guard (§3.5).
 - **H2. Ports at the edges, and no fact carried by a file on a fleet host.** Each port is an L2 interface declared by
   its consumer, with a failure contract. `Clock`, `Scheduler` and `Entropy` are the exception: they are declared once,
@@ -1676,8 +1807,7 @@ repository, no git credential and no file on any other session's disk.
 | the statusline sidecar | the statusline script | context tokens, window, model id | unmeasured: the triggers that read the context are blind |
 | the compactions journal | the hook | compactions per conversation | that trigger is blind |
 | the model-switch journal | the hook, or the statusline writer on a change of model id if W0 finds no hook event for a switch | each model switch Claude Code made by itself, and each typed one refused | the model-drift trigger is blind |
-| the reservations document | the reservations sync, a pool sync | which accounts are reserved, the reserve on each, and the ids of the sessions each serves | the last known reservations stay in force, and no other account gains one |
-| the route record on the registry row: the model class and the ordered account list | the server's route write, through ccd | the designation's model class, and the Overlord's account order | ccd places by the last list written; the server writes it again at each renewal |
+| the route record on the registry row: the model class, the account set and the ordered account list | the server's route write, through ccd | the designation's model class and account set, and the Overlord's account order | ccd places by the last set and list written; the server writes them again at each renewal and on each change of the set |
 | the act key file, W0's fallback only | `ccrc-api`, at the generation's mint | the current generation's act key, 0600, in a directory of the session's own | `stale-generation` |
 | the profile digest | ccd | the launch profile it rendered for this start | `launch-profile-unmet` |
 | the loaded-file report | the hook | what the running session loaded | `launch-profile-unmet` |
@@ -1703,7 +1833,7 @@ authority or a switch. The act key file, W0's fallback only, holds a credential 
 | Server-held facts | No file is read across hosts as truth. The allowed files are caches (Table 3.6a) | #459 |
 | Launch profiles, templates and plugins | One launch profile per role, a column of `FLEET_ROLES`, shaped so each can absorb it | #460, #461, #467 |
 | Many agents | Nothing says "the fleet box". "Behind" and capabilities are measured per agent, and the history read names the agent that answered | #275, #463 |
-| An outside account chooser | Its answer is re-checked against the reservation rule (§3.4) | #465 |
+| An outside account chooser | Its answer is re-checked against the pool rule, with the Overlord's set (§3.4) | #465 |
 | A pre-start gate | The sandbox check (H4) is this seam's first user. Until it lands, the check runs at every start, the first one included, which the designate and rebind doors make | #466 |
 | Ids unique across servers | Session ids are opaque, and nothing parses one. C33's rule, always a named workspace, stays | #470 |
 | Start hooks and own repositories | The start door (E4) creates a workspace only through the one workspace-create path, so a configured start hook and clone mode apply as they do for the operator's sheet | #472, #473 |
@@ -1748,7 +1878,7 @@ authority or a switch. The act key file, W0's fallback only, holds a credential 
   - **Each property is a fact on the board.** The check records every property it measured, and the board shows them
     (§5.2).
   - **What must persist for the session itself.** Its Claude Code config directory (the sign-in and the settings state)
-    sits on a volume of its own. A guest on the same account gets the account's sign-in only, never a mount of that
+    sits on a volume of its own. Another session on the same account gets the account's sign-in only, never a mount of that
     volume. It runs as a user that is not root, which Claude Code requires when permissions are
     bypassed. Its transcripts need not persist: `ccrc history` is the lasting copy, and every generation starts from
     the card.
@@ -3479,7 +3609,6 @@ serve in time, a fair share for each programme, and a packet that lets the commo
     band 3. A report is news and waits.
 - **The load lines.** They read the limits the fleet already measures, and `poolRunway` (§3.4). A line is measured
   on the least-loaded account that can serve the Overlord now, as the higher of its five-hour and weekly loads.
-  On an account reserved for it, a load reads the reserve (C57).
   An unmeasured load stops item holds, as the 85% line does, and caps no rung.
   Past the 95% line the ladder is capped at `chat` (Table 7.5a), and standing holds are released as `released:rung`
   (Table 6.7c).
@@ -4326,8 +4455,8 @@ coordinator is told.
     the least-loaded lane the server forecasts, at parity with ccd's own walk (`projectHome`).
   - **Roster accounts only.** It chooses among the accounts already on the roster, under their plans. That is neither
     spend (O2) nor access (O4).
-  - **ccd still places.** It still refuses what its pool rule refuses. On an account reserved for the Overlord, a
-    started coordinator is a guest like any other session (§3.4).
+  - **ccd still places.** It still refuses what its pool rule refuses. The Overlord's account set does not bind a
+    coordinator it starts: its own project's pool places it, as it places any session (§3.4).
   - **Programme-aware placement.** When #749 lands, its `--programme` marker comes for free.
 - **C33. A named workspace, never a main checkout.** (C33, H3, H24) The start door always creates a named workspace,
   through the one workspace-create path (the server function behind `POST /api/projects/:project/workspaces`). So a
@@ -4590,7 +4719,7 @@ These are the privacy rules as they now stand. Each says what it holds and where
    Code transcripts and in `ccrc history`, on the host that runs it.
    - On a box where sessions share a user, every session of that user can read those. The boundary is that user.
    - In a container, the boundary is the Overlord's own volume.
-   - Its accounts are shared with guests (§3.4), so an account's config directory is not its own. Its transcripts
+   - Its accounts are shared with other sessions (§3.4), so an account's config directory is not its own. Its transcripts
      sit under its own project's directory there. A deny rule that names that directory is a precise accident guard.
 3. **Who can read the store.** Only the server, and the shipped backup script by `VACUUM INTO` (rule 13), open the
    file. It serves five callers, and refuses every other.
@@ -4724,10 +4853,12 @@ agreement of 0.95.*
     door it calls serves as of the question's date.
   - Every write door refuses it (`not-the-overlord`). What it tried to write is captured as the replay's answer, never
     applied, and never reaches the private store.
-  - It runs on a reserved account. While it runs, the server names it among the sessions the reservation serves
-    (§3.4), and it gets the Overlord's answer for every input of the serviceability answer, the billing fact
-    included. Its use counts against the reserve. The lane runs it only on a reserved account under the soft line,
-    and only while no renewal is due. When no reserved account is under the soft line, it waits.
+  - It runs on an account in the Overlord's set (§3.4). The replay lane writes the set on the body's route record,
+    beside its class, and the body gets the Overlord's answer for every input of the serviceability answer, the
+    billing fact included. So it judges on the accounts, lanes and class the Overlord itself would get. Its use comes
+    out of the same shared windows as every session's. The lane runs it only on an account in the set under the soft
+    line, and only while no renewal is due, so it never takes the room the next renewal needs. When no account in
+    the set is under the soft line, it waits.
   - Each run names the class it replays: the designation's class, or the fallback class under it, and no other.
     The replay lane writes that as the body's route class, as the operator's doors write the designated session's
     (§3.4).
@@ -5164,7 +5295,7 @@ name that owner.
 
 | Piece | Context and ring | Store or file | Its one writer | Lane or timer | Wave | In a snapshot | What an older build does |
 |---|---|---|---|---|---|---|---|
-| `overlord_designation` (singleton; session id, registry generation, `term`, model class, past ids, actor, and the binding's state, `pending` or `live`; a retired row binds no session and keeps the rest) | C5, L3 | `coord.db` | The designate, rebind and retire doors, the Settings model row, and Confirm the restore, which raises the term, takes the stricter of the row and the authority journal, and binds no session where the journal names another (§7.6). Designate and rebind each create the session they bind, in the same door, and write `pending`, and `live` once that start's sandbox check passes; retire keeps the row. The renewal lane writes it in one case: it fails a `pending` binding whose deadline passed (§3.2) | The `pending` row's deadline, which the renewal lane enforces | W1 | yes; the authority journal rules after a restore | Ignores it: no Overlord, today's routing |
+| `overlord_designation` (singleton; session id, registry generation, `term`, model class, the account set `accountPools`, past ids, actor, and the binding's state, `pending` or `live`; a retired row binds no session and keeps the rest) | C5, L3 | `coord.db` | The designate, rebind and retire doors, the Settings model row, the Settings account-set row, and Confirm the restore, which raises the term, takes the stricter of the row and the authority journal, and binds no session where the journal names another (§7.6). Designate and rebind each create the session they bind, in the same door, and write `pending`, and `live` once that start's sandbox check passes; retire keeps the row. The renewal lane writes it in one case: it fails a `pending` binding whose deadline passed (§3.2) | The `pending` row's deadline, which the renewal lane enforces | W1 | yes; the authority journal rules after a restore | Ignores it: no Overlord, today's routing |
 | `operator_messages` | OM, L3 | the private store | Insert: the console's prompt route, for the designated session only. State: one function of the private store, moving through the message moves table (Table 11.1b), called by the delivery lane (delivered, queued), the hook's pick-up report (picked up), the prompt route's settlement mark and each citing door after its own commit (settled, spent). The boot pass re-derives `settled` from the citing rows (I8). The private store is a second SQLite file, so a citing door's commit in `coord.db` and the message's state never share a transaction | none | W1 | yes | Records nothing: pane text is content, never operator words |
 | The read ledger | OM, L3 | the private store | The Overlord's read doors, one line per read | none | W1 | yes | Ignores it |
 | `continuity_generations` (and each generation's act key, bound at the mint to the launch nonce ccd put in the door process's environment, and issued once, on the first call that presents it; W0's fallback has no door process and no nonce, so `ccrc-api` writes the key file at the mint, §3.6) | C3, L3 | `coord.db` | The renewal lane | The renewal lane; deadlines are columns | W1a | yes | Ignores it: sessions roll and resume as today |
@@ -5194,7 +5325,6 @@ name that owner.
 | `programme_pairs` (pair key, kind `overlap` or `goal-conflict`, first seen, ruled) | C5, L3 | `coord.db` | The overlaps arm. `ruled`: the operator's goal-conflict door, with the operator's choice | On a new pair | W2 | yes | Ignores it |
 | Sealed forecasts (85% dates) | C5, L3 | `coord.db` | The forecast lane, at a wave boundary | Scored at the date | W2 | yes | Ignores them |
 | `limit_samples` | C1, L3 | `coord.db` | The limits reader | Its sampling beat | W1 | yes | Ignores it |
-| `account_reservations` (account, `reservePct`, added at, added by; one row per account, and no project column: the server renders the sessions a reservation serves from the designation and the replay lane) | C1, L3 | `coord.db`, each write journalled beside the pool-edges log | The operator's pool membership door | The reservations sync renders it, with the ids of the sessions it serves | W1 | yes | Ignores it: nothing is reserved (§11.5) |
 | A billing fact per account, and a continuity record per lane | C1, L3 | the roster | The operator, from Settings | none | W1 | as the roster is today | An older ccd ignores the fields |
 | `operatorClass`, `effect` and the urgency on asks and items; `brief`, with `reopenIf` and `reviewBy` | C6, L3 | `coord.db` | Raise and release: the existing doors. The brief: `attach-brief` and the escalate doors | `tripwireDue` reads `reopenIf` and `reviewBy` | W3 | yes | Ignores the columns (§11.5) |
 | `ratifiedBy` on each goals version | C5, L3 | `coord.db` | The goals doors, and the operator's answer that ratifies | none | W1 | yes | Ignores the column |
@@ -5213,8 +5343,8 @@ name that owner.
 *Table 11.1a. Stores, journals and the witness.*
 
 - **Files on a fleet host are listed once, in Table 3.6a,** with their writers and their answers when stale. They are
-  the server capability file, the statusline sidecar, the compactions and model-switch journals, the reservations
-  document, the route record on the registry row, the act key file (W0's fallback only), the profile digest, the
+  the server capability file, the statusline sidecar, the compactions and model-switch journals, the route record
+  on the registry row, the act key file (W0's fallback only), the profile digest, the
   loaded-file report, the delta cache (the door process's, or `ccrc-api`'s in W0's fallback), and `.no-hibernate` and
   `.no-roll`. None is in a snapshot, and none is an authority.
 
@@ -5226,7 +5356,8 @@ name that owner.
 | The message moves table: delivered and queued (the delivery lane), picked up (the hook's report door), settled and spent (the door that cites the message, or the prompt route's settlement mark) | OM, L0 | code | n/a | n/a | W1 | n/a | n/a |
 | `decideSleep`'s `overlord` hold, the roll lane's hold | C4, L1 | code | n/a | n/a | W1 | n/a | The Overlord may sleep or roll |
 | The sandbox check, `overlordReadiness`, the breaker, `effectiveRung`, the invariant monitor | C3 and C5, L1 | code | n/a | n/a | W1 (breaker W3) | n/a | No Overlord |
-| `shared/serviceability.ts` with six more inputs (the reservation, the billing fact, the hold-down, the lane's continuity record, the lane's five-hour figure and the asking session's id) and its bash twin; `poolRunway` | C1, L1 and ccd | code | n/a | n/a | W1 | n/a | An older ccd ignores a reservation, so the membership door refuses to set one (§11.5) |
+| `shared/serviceability.ts` with four more inputs (the billing fact, the hold-down, the lane's continuity record and the asking session's id) and its bash twin; `poolRunway` | C1, L1 and ccd | code | n/a | n/a | W1 | n/a | n/a |
+| The pool rule's session side widened from one name to a set, with its `untagged` yes or no: `poolRule` (`shared/poolrule.ts`), `_pool_ok` and their one fixture table; ccd reads a session's side from its route record when the record carries a set, and from its project's file otherwise (C46) | K, L0; C1 and ccd | code | n/a | n/a | W1 | n/a | An older ccd refuses the route write that carries a set, so designate and rebind refuse `capability-missing` until it advertises `pool-set` |
 | `portfolioFor`; `homePlace` (PWA L1) | C5, L1 | code | n/a | n/a | W1 | n/a | The console opens on the Fleet |
 | `OVERLORD_ACT_KINDS`, the act states, `overlordMayAct`, `overturnableNow`; `callsFor` | C5, L0 and L1; C6, L1 | code | n/a | n/a | W2 | n/a | D-8126's own read of `coordinator_calls` |
 | `REQUEST_TRANSITIONS`, the done-test vocabulary, `followUpDue`, `forecastProgramme`, `programmeHealth` | C5, L0 and L1 | code | n/a | n/a | W2 | n/a | n/a |
@@ -5246,7 +5377,7 @@ tested over its whole input domain (§11.7).*
 | Piece | Context and ring | Store or file | Its one writer | Lane or timer | Wave | In a snapshot | What an older build does |
 |---|---|---|---|---|---|---|---|
 | `SessionHost` port; ccd adapter over the roll's own verb with a fresh-start flag (`ccd hibernate --roll --fresh`), advertised by its capability word `hibernate-fresh`. It adds no verb | C3, L2 and L3 | n/a | n/a | n/a | W1a | n/a | An older ccd lacks `hibernate-fresh`: the renewal lane does not run, and designation refuses `capability-missing` |
-| ccd, for the `overlord` role: the affinity arm of `_auto_swap_check` stands down, beside the manual-swap pin check, so between renewals only the hard-block rescue moves it (this design adds the stand-down); for a long-lived role, `_route_restore` restores the designated class only once the degraded stamp is older than the hold-down (Table 11.5b), by ccd's own clock; on a reserved account, once either window's figure is past a guest's ceiling by half of what is left of the reserve, ccd moves the guest as it does on a hard block, in the middle of its turn (this design adds it: today the tree moves such a session only behind its idle gate); `ccd keep-awake --state on\|off <id>` sets and clears `.no-hibernate` and `.no-roll` | C1 and C4, ccd | the registry row's route stamp; the two markers | ccd | Each supervise tick and settle | W1 | n/a | An older ccd lacks `keep-awake`: designation refuses `capability-missing` |
+| ccd, for the `overlord` role: the affinity arm of `_auto_swap_check` stands down, beside the manual-swap pin check, so between renewals only the hard-block rescue moves it (this design adds the stand-down); for a long-lived role, `_route_restore` restores the designated class only once the degraded stamp is older than the hold-down (Table 11.5b), by ccd's own clock; `cmd_route` accepts the account set and the ordered account list as route fields; one read-only verb, `ccd pool-answer <id>`, prints the session's side word, `_pool_ok`'s verdict for its current account and `_crosspool_valid`'s answer, for the renewal lane's set trigger (C46); for a session whose side is a set, the home re-seed in `_auto_swap_check` stands down and the fresh start clears the crossing marker; `ccd keep-awake --state on\|off <id>` sets and clears `.no-hibernate` and `.no-roll` | C1 and C4, ccd | the registry row's route stamp; the two markers | ccd | Each supervise tick and settle | W1 | n/a | An older ccd lacks `keep-awake`: designation refuses `capability-missing` |
 | `Clock`, `Scheduler`, `Entropy` | K, L2; given by L5 | n/a | n/a | n/a | W1a | n/a | n/a |
 | Observed time: an accumulator of monotonic deltas within one process | K, L1 | a column of the row whose timer it bounds | the lane that owns that row | n/a | W1a, with the renewal lane | n/a | n/a |
 | The hook's arms: the anchor slot (`ANCHOR_CARD_MAX_CHARS`), the card arm, the PreCompact arm inside history W3's one print | C3, hook | n/a | n/a | Each start | W1a (PreCompact dark until W0) | n/a | No anchor: today's role card and compaction |
@@ -5255,7 +5386,6 @@ tested over its whole input domain (§11.7).*
 | `CallerIdentity` port; today's attribution adapter | C8, L2 and L3 | n/a | n/a | n/a | W1 | n/a | n/a |
 | The door process, with `ccrc-api` inside; the reader types it serves | C5, a fleet-host process ccd starts with each generation, with a one-time launch nonce in its environment | n/a | n/a | One per generation | W1 | n/a | If W0 fails it: a shell that runs only `ccrc-api` (§3.6) |
 | The outbox sender | C6, L4 | the push outbox | it marks sent | Drain, and a boot pass | W1 | n/a | n/a |
-| The reservations sync: for each reserved account, the reserve and the ids of the sessions it serves (the designated session, and the replay body while the replay lane runs one) | C1, fleet-host timer | the reservations document | it | Its timer | W1 | n/a | n/a |
 | `DecisionModel` port with adapters `hosted`, `local` and `zero-retention`; `OverlordPolicy` port | C5, L2 and L3 | n/a | n/a | 2 s deadline per decision-model call | W2 | n/a | n/a |
 | The done-test lane, the follow-up arm, the overlaps arm | C5, L4 | `overlord_requests` | it, as the server actor | On news; at `followUpAt`; on a new pair | W2 | n/a | n/a |
 | The hold lapse, inside the questions owner | C6, L4 | hold columns | `coord/questions.ts` | Each hold's deadline | W3 | n/a | n/a |
@@ -5267,7 +5397,7 @@ tested over its whole input domain (§11.7).*
 | The settling lane, with its boot pass | C5, L4 | `overlord_acts` | it | Drain, and a boot pass | W2 | n/a | n/a |
 | The readiness lane, with the breaker | C5, L4 | readiness rows, the breaker row | it | On each input change, and a sweep on a `LANE_SCHEDULE` cadence; the breaker's waits | W1 (breaker W3) | n/a | n/a |
 | The forecast lane | C5, L4 | sealed forecasts | it | At a wave boundary; scored at the date | W2 | n/a | n/a |
-| The replay lane, which issues the replay body's per-run key | C5, L4 | the replay row, captured writes | it | On a gate; at each release. The body gets the Overlord's answer for every input of the serviceability answer, the billing fact included. On a reserved account its use counts against the reserve, and it runs only while the account is under the soft line and no renewal is due; while no reserved account is under the soft line, it waits | W3 | n/a | n/a |
+| The replay lane, which issues the replay body's per-run key | C5, L4 | the replay row, captured writes | it | On a gate; at each release. The body gets the Overlord's answer for every input of the serviceability answer, the billing fact included. It writes the Overlord's account set on the body's route record, and runs it only on an account in the set under the soft line while no renewal is due; while no account in the set is under the soft line, it waits | W3 | n/a | n/a |
 | The invariant monitor's runner | C5, L4 | one latch and one item per violation | it | On each `overlord_sequence` row | W1 | n/a | n/a |
 | The practice lane | C5, L4 | `practice_entries` state | it | Replay, canary split, expiry | W4b | n/a | n/a |
 | The proposal lane and the portfolio packet | C5, L4 | `overlord_proposals`, one `decide` item | each its own | On evidence; weekly | W6 | n/a | n/a |
@@ -5277,10 +5407,10 @@ tested over its whole input domain (§11.7).*
 | Piece | Context and ring | Store or file | Its one writer | Lane or timer | Wave | In a snapshot | What an older build does |
 |---|---|---|---|---|---|---|---|
 | Capability words, one per wave and one per step of W3: `continuity-v1` (W1a), `push-outbox-v1` and `overlord-v1` (W1), `overlord-route-v1` (W2), `overlord-brief-v1` (W3, step one: brief first), `overlord-answer-v1` (W3, step two: answer first), `overlord-learn-v1` (W4), `practice-v1` (W4b), `overlord-start-v1` (W5), `overlord-propose-v1` (W6) | K, L0 | the server capability file | The update sync on each node | Its lease | as listed | n/a | The word is missing: today's path. A door of a later wave refuses `capability-missing` and names its word |
-| ccd's capability words: `account-reserve` (W1), `hibernate-fresh`, the fresh-start flag (W1a), and `keep-awake`, the sleep markers' verb (W1) | K, L0; C1, C3 and C4 | `ccd caps`, which the agent caches at boot and re-reads on each capability refresh | ccd | Each capability refresh | as listed | n/a | Missing: without `account-reserve` the membership door refuses `reserve-unenforced`; without `hibernate-fresh` the renewal lane does not run; without `keep-awake` or `hibernate-fresh`, designate and rebind refuse `capability-missing` |
+| ccd's capability words: `pool-set`, the account set on the route record, the pool rule's set and the read `ccd pool-answer` (W1), `hibernate-fresh`, the fresh-start flag (W1a), and `keep-awake`, the sleep markers' verb (W1) | K, L0; C1, C3 and C4 | `ccd caps`, which the agent caches at boot and re-reads on each capability refresh | ccd | Each capability refresh | as listed | n/a | Missing: without `hibernate-fresh` the renewal lane does not run; without `pool-set`, `keep-awake` or `hibernate-fresh`, designate and rebind refuse `capability-missing` |
 | The agent's capability word `overlord-history`, for the read-only history op | K, L0; C3 | the agent's capability list, read on each capability refresh | the agent | Each capability refresh | W1 | n/a | Missing, or advertised by more than one agent: the history door answers `history-unreachable` |
 | Auto memory for `plain` sessions, a row of `SWITCHES` (`shared/switches.ts`) | K switches, L3 | `coord.db` settings | The Settings door | none | W1a | yes | Ignores it: auto memory stays off |
-| Settings: the daily backstop hour and time zone (W1a); the designated model class (W1; selecting `fable` keeps the step-up, and `opus` needs none); `lambda` (W3, because its one reader, `askOrAct`, ships then); `operatorProfile`, with its `takesIn` line (W3, with the briefs; set at designation from then on); the push budget, briefing times, quiet hours, "away until", and the repeat push for an unseen blocking item, two hours (W3, with H35); the blind sample's switch (W3); the retention period (W4); `overlordLiveProgrammes`, `portfolioFocus` (W5) | K settings, L3 | `coord.db` settings | The Settings door, on the operator's own tap, behind the step-up where the change widens authority. For a stated preference that is a setting, the Overlord answers with a link that opens it with the value filled in; it never writes a setting, and files nothing (§9.3) | none | as listed | yes | Ignores them |
+| Settings: the daily backstop hour and time zone (W1a); the designated model class (W1; selecting `fable` keeps the step-up, and `opus` needs none); the designation's account set (W1; widening it keeps the step-up, and narrowing it needs none); `lambda` (W3, because its one reader, `askOrAct`, ships then); `operatorProfile`, with its `takesIn` line (W3, with the briefs; set at designation from then on); the push budget, briefing times, quiet hours, "away until", and the repeat push for an unseen blocking item, two hours (W3, with H35); the blind sample's switch (W3); the retention period (W4); `overlordLiveProgrammes`, `portfolioFocus` (W5) | K settings, L3 | `coord.db` settings | The Settings door, on the operator's own tap, behind the step-up where the change widens authority. For a stated preference that is a setting, the Overlord answers with a link that opens it with the value filled in; it never writes a setting, and files nothing (§9.3) | none | as listed | yes | Ignores them |
 
 *Table 11.1d. Capability words, switches and settings. Every switch that changes authority is journalled (§7.6).*
 
@@ -5305,7 +5435,7 @@ tested over its whole input domain (§11.7).*
 | The operator's Renew now and Restart the Overlord | C3 and C5, L4 | the generation row; the session, through the resume path | it | n/a | W1a (Renew now), W1 (Restart) | n/a | No route |
 | The performer's mark on a commanded act | C5, L4 | the act row's performer column | the one session the act row names, once | n/a | W3 | n/a | No route |
 | The retro door | C5, L4 | retrospectives | the coordinator, through attribution | n/a | W4b | n/a | No route |
-| The pool membership door gains a reservation | C1, L4 | `account_reservations` | it, behind the account gate | n/a | W1 | n/a | Ignores the rows |
+| The designation's account set, `accountPools` (pool names in the operator's order, and `untagged`), with its Settings row; designate and rebind take it with the class | C1, L3 and L4 | `coord.db`, the designation row, journalled with the designation's other fields | The operator's session-gated doors: designate, rebind and the Settings row | n/a | W1 | yes | Ignores the field: no Overlord is designated on an older server |
 | The Seen door on act rows, the operator's | C5, L4 | the act row's `seenAt` | it | n/a | W2 | n/a | No route |
 | Overturn: `POST /api/digest/correct`, kind `overlord-act` | C6, L4 | the act's outcome | it | n/a | W2 | n/a | Refuses the unknown kind |
 | The name-list upload door | OM, L4 | the hashed list | it | n/a | W2 | n/a | No route |
@@ -5346,7 +5476,7 @@ one fixed order, so the first refusal is the same on every door.
 | Group | Who calls | Credential | Verb class (#279) | Census |
 |---|---|---|---|---|
 | The Overlord's doors | The designated session, through the door process | `CallerIdentity` (today: the box token, then attribution), then the fence | `view` for reads, `operate` for acts | `EXEMPT` with one reason each, like the claim lanes |
-| The operator's doors | The signed-in console | The cookie. Designate, rebind, retire, selecting `fable` as the designation's model class, grants (a grant, a grant leaving shadow, a renewal), the command tap, a rung up, clearing a latch, arming a kind of answer, re-arming a kind bypassed for a programme, returning a grant from a latched suspension, raising a programme's engagement, arming a decision-model row, switching an armed gate row off, a decision-model refit that eases a gate, the decision model's key (set from Settings into a server-level slot of the operator-secrets store), Confirm the restore, the name list and wipe add the account gate's step-up | `admin` | The session-only set |
+| The operator's doors | The signed-in console | The cookie. Designate, rebind, retire, selecting `fable` as the designation's model class, widening the designation's account set (adding a pool, or turning `untagged` on), grants (a grant, a grant leaving shadow, a renewal), the command tap, a rung up, clearing a latch, arming a kind of answer, re-arming a kind bypassed for a programme, returning a grant from a latched suspension, raising a programme's engagement, arming a decision-model row, switching an armed gate row off, a decision-model refit that eases a gate, the decision model's key (set from Settings into a server-level slot of the operator-secrets store), Confirm the restore, the name list and wipe add the account gate's step-up | `admin` | The session-only set |
 | The coordinator-facing doors | The owning programme's coordinator | The box token and attribution, then "the caller is the owning coordinator" | `operate` | Their own prefix, in the census |
 | The hook's reports | The hook of a long-lived session | The box token and attribution, a short timeout | `view` | `EXEMPT` |
 | The server's own bodies (replay, auditor) | A row its lane wrote, which `roleOf` reads | A per-run key the lane issues at launch, as the act key is | `view` only | `EXEMPT`, one reason each |
@@ -5597,10 +5727,10 @@ reversible, so no act reads the two `reversible` weights in version 1.
 - **A capability word is a property of the build.** `ccrc-api`'s Overlord verbs, the hook's card arm and clause 22 act
   only while the server's capability file carries `overlord-v1`. A later wave's doors and verbs act only while its own
   word stands (Table 11.1d). After a rollback to an older server, everything takes today's path by itself.
-- **An older fleet build.** The `account-reserve` capability (Table 11.1d) is checked again on every capability
+- **An older fleet build.** The `pool-set` capability (Table 11.1d) is checked again on every capability
   refresh, for every agent that can place sessions. Losing it raises an operator item and a doctor failure.
   `ccrc rollout` and `ccrc rollback` refuse to go below a capability that a standing fact needs, unless forced.
-- **The agent link stays additive.** Every new field on it (the witness epoch, the reservations, a capability word)
+- **The agent link stays additive.** Every new field on it (the witness epoch, a capability word)
   is additive, and `FLEET_PROTO` does not change.
 
 **As measured (W0a, 2026-11-11).** Table 11.5b's notes: no lane computes the Overlord's readiness today (the `readiness` lane, 600 s, is the programme-start check); `LANE_SCHEDULE`'s cadences are listed in the results note. The restart counts are W0b's. Details: `docs/superpowers/plans/2026-11-11-overlord-w0-spike-results.md`.
@@ -5613,13 +5743,13 @@ The egress refusal is the one exception, because a detailed answer there is an o
 | Word | Door or lane | Meaning | Call |
 |---|---|---|---|
 | `not-the-overlord` | Every Overlord door | The caller is not the designated session, or one of the server's own bodies (the replay body, the auditor) called a write | C2, H2 |
-| `capability-missing` | Every Overlord door; designate and rebind, when ccd does not advertise `keep-awake` or `hibernate-fresh` | The build does not carry the door's capability word yet (Table 11.1d). The answer names the word. At designate and rebind it is checked before the session is created, so a refused start leaves no session behind | H32 |
+| `capability-missing` | Every Overlord door; designate and rebind, when ccd does not advertise `pool-set`, `keep-awake` or `hibernate-fresh` | The build does not carry the door's capability word yet (Table 11.1d). The answer names the word. At designate and rebind it is checked before the session is created, so a refused start leaves no session behind | H32 |
 | `overlord-off` | Every Overlord door but card, probe and note | The operator's rung is `off` | H25 |
 | `rung-below` | Every Overlord write door | The effective rung does not allow this act kind. The answer names the rung it needs | H25 |
 | `act-ceiling` | Every Overlord write door | The act kind's ceiling for the window is reached (Table 11.5b) | H25 |
 | `overlord-exists` | Designate | A session is bound to the designation, or is pending. A retired row is designated again | C2, R7 |
 | `overlord-body-alive` | Rebind | The old session does not measure dead or absent, and the operator did not force the rebind behind the step-up | C2, R7 |
-| `overlord-single-account` | Designate, rebind | Fewer than two accounts can serve it. Checked before the session is created, so a refused start leaves no session behind | C56 |
+| `overlord-single-account` | Designate, rebind, the account set's Settings row | Fewer than two accounts that its set admits can serve it. At designate and rebind it is checked before the session is created, so a refused start leaves no session behind. At the Settings row it is checked only while an Overlord is designated | C46, C56 |
 | `auth-off` | Every operator door | Sign-in is dark, so the door would be open to any local process | H28 |
 | `server-not-isolated` | Grants, commands, learning; `overlordMayAct` | The server shares a user with fleet sessions | H28 |
 | `overlord-sandbox-unmet` | Designate, rebind | A property of the sandbox check failed at the pending start, and the door stops the session it created. Designate removes only the pending binding: a retired row stays retired, with its past ids, and the term never goes down. Rebind keeps the old binding. The stopped session stays stopped, and the board shows the properties that failed. At a later start a failure is `launch-profile-unmet` (§3.6) | H4 |
@@ -5651,7 +5781,6 @@ The egress refusal is the one exception, because a detailed answer there is an o
 | `goal-conflict-open` | Relay | The relay deepens a goal conflict the operator has not ruled on | H38 |
 | `portfolio-full` | Start | Live programmes outside `background` are at `portfolioFocus` | H38 |
 | `overlord-cap` | Start | Overlord-started live programmes are at `overlordLiveProgrammes` | C28 |
-| `reserve-unenforced` | The pool membership door | Some agent that can place sessions does not advertise `account-reserve` | C46, H16 |
 | `practice-retired` | The practice door | The op names an entry that is already retired | H37 |
 | `practice-contradicts` | The practice lane, as the reason on an entry it retires | The replay found a contradiction with a pinned clause, a goal or a ruling | H37 |
 | `entry-retired` | Every act door, and the commit of a staged act | The act cites an operator-model entry that is not `active` | C40, H29 |
@@ -5764,10 +5893,10 @@ from rows the server writes, never from the Overlord's own account.
 | M8 | Probe pass rate after renewal and compaction, closed-book only | 100% after one re-read | Probe rows |
 | M9 | Outside audit scores, and agreement by option, normalised by the operator's own consistency, from replay and sealed predictions | Stable or rising | `overlord_audits`, replay, sealed predictions |
 | M10 | Context at renewal, and compactions per generation | Under the ceiling; at most one compaction | `continuity_generations`, readiness rows |
-| M11 | Generations on the designated model, and minutes stranded with no servable account | Fable for at least 90% of generations; stranded minutes watched | `continuity_generations`, readiness rows |
+| M11 | Generations on the designated model, and minutes stranded with no servable account. Since R18 it also splits the generations off the designated model by cause: Fable spent on every account in its set, credits billing, or no lane with a continuity record. Where Fable was spent, it says who spent each account's share, the Overlord or other sessions, from the sweep's share reading by session, which is what W0-23's open question asks (C46) | Fable for at least 90% of generations; stranded minutes watched | `continuity_generations`, readiness rows |
 | M12 | Execution attempts the guard denied, and relays that carried a method | Zero; each one is a skill defect, fixed in the skill | The hook's denial counter, door refusals (`relay-carries-method`) |
 | M13 | Coordinators: probe pass rate after renewal and compaction, the weekly replay quiz score, empty cards, and the share of generations that used recall | Probes 100% after one re-read; quiz above its W0 baseline; zero empty cards; recall in most generations | Probe rows, the quiz lane, the card door, `ccrc history` |
-| M14 | Swaps: planned against mid-turn, operator messages left unsettled after a swap, holds released by a restart, hours on a borrowed account | Most swaps planned; zero unsettled messages; no hold released whose deadline outlived the measured restart time. Releases in the boot-time witness window (§7.6) are counted apart | `continuity_generations`, readiness rows, hold rows |
+| M14 | Swaps: planned against mid-turn, operator messages left unsettled after a swap, holds released by a restart | Most swaps planned; zero unsettled messages; no hold released whose deadline outlived the measured restart time. Releases in the boot-time witness window (§7.6) are counted apart | `continuity_generations`, readiness rows, hold rows |
 | M15 | Decisions: the share taken on the Overlord's recommendation, commands over its objection and how they turned out, briefs with a downside on every option, the operator's time to decide | Balanced briefs 100%. Time to decide is watched, never a goal | Items, `operator_commands`, act rows, the audit sample |
 | M16 | Readiness: minutes in each word, breaker openings, holds released as `not-ready:<word>` | `ready` for at least 95% of the operator's active hours; no hold lapsed while not `ready` | Readiness rows, hold rows |
 | M17 | The Overlord's time to settle each kind of work, median and 90th percentile | Sets the windows (§6.4) | Act rows, inbox reads |
@@ -5785,7 +5914,7 @@ from rows the server writes, never from the Overlord's own account.
 | M29 | Load by source: holds, acts, tokens, decision-model calls and pushes per programme, and sources shed | Watched | Hold rows, act rows, the outbox, the spend read (§5.6) |
 | M30 | Portfolio: forecast calibration, lead time against work in progress, operator-wait programme-hours by rank | 75 to 90% of sealed 85% dates met | Sealed forecasts, `portfolioFor` |
 | M31 | Playbook: entries by state, effect against the holdout, retirements for harm, graduations, each case signature's recurrence after its remedy, coordinator skill bytes | Recurrence falling; skill bytes falling, apart from the bytes of an added pinned clause | `practice_entries`, exposure rows, `practice_cases` |
-| M32 | Reads: reads per door per day against the 28-day median, and reads with no turn behind them; guests on Fable, or past the line, on a reserved account; acts left in the act state `pending` or `unknown` after the boot pass | Such guests zero; unsettled acts after the boot pass zero; reads watched | The read ledger, reserved-account items, act rows |
+| M32 | Reads: reads per door per day against the 28-day median, and reads with no turn behind them; generations the Overlord ran on an account outside its set, with the operator's deliberate crossings (each held until the next renewal) and the generations held while `stranded` stands counted apart (C46); acts left in the act state `pending` or `unknown` after the boot pass | Generations outside the set zero, the two counted apart left out of it; unsettled acts after the boot pass zero; reads watched | The read ledger, generation rows against the set, act rows |
 | M33 | Together against alone: for each cell, the share of decisions that held up for the operator alone, the Overlord alone and the two together, and the four disagreement counts (`helped`, `hurt`, `operator-right`, `overlord-right`) | Together at or above the better of the two; `hurt` under `helped` | Outcome rows, sealed picks, answer events |
 | M34 | The operator's own record over time: the held share of their scored blind picks, by quarter | Not falling | Outcome rows, answer events |
 | M35 | The picture first: briefs that open with a place line, premises raised and the rows each one settled, and routine questions of class none that still reached the operator under the default profile | Every brief; the rest watched | Brief rows, items, `operatorProfile` |
@@ -5801,7 +5930,7 @@ names the hardening calls that changed a call from its rev 8 form. §13.1 lists 
 | # | Call | Options considered | Chosen, and why | Status | Shaped by |
 |---|---|---|---|---|---|
 | C1 | What the Overlord is | a server agent loop, a session | A session, so it reuses the chat, history and swaps, and the server stays free of judgement. Its body is crash-only: it may stop at any instant, losing at most the turn in progress and doubling no act. One launch profile, applied at every launch, gives it everything it needs | Approved | H1, H9 |
-| C2 | Who names it, and what it binds | self-declared, designated | Designated by the operator's step-up door, which reuses the account gate and refuses `auth-off` where sign-in is dark. A singleton row binds the session id, the registry row's own generation and a term. Designation's refusals (`overlord-single-account`, and `capability-missing` when ccd lacks `keep-awake` or `hibernate-fresh`) run before the session is created, so a refused start leaves no session behind. "Start the Overlord" creates the session and writes the designation `pending` in one door, so the session's first launch already has the `overlord` launch profile. A rebind creates its replacement session the same way. No door designates a session that already runs. While the row is `pending`, every other door but card, probe and note answers `renewing`. The row goes `live` only when that first start's sandbox check passes. Otherwise the session is stopped and stays stopped, and the board shows it with the properties that failed; the pending row is cleared (or, on a rebind, the old binding stands), and the door answers `overlord-sandbox-unmet`. The next "Start the Overlord" creates a fresh session. A rebind needs the old body measured gone, or a forced stop first. Retiring keeps the row and its memory. One per ccrc server | Approved | H3, H12, H27, H28 |
+| C2 | Who names it, and what it binds | self-declared, designated | Designated by the operator's step-up door, which reuses the account gate and refuses `auth-off` where sign-in is dark. A singleton row binds the session id, the registry row's own generation and a term. Designation's refusals (`overlord-single-account`, and `capability-missing` when ccd lacks `pool-set`, `keep-awake` or `hibernate-fresh`) run before the session is created, so a refused start leaves no session behind. "Start the Overlord" creates the session and writes the designation `pending` in one door, so the session's first launch already has the `overlord` launch profile. A rebind creates its replacement session the same way. No door designates a session that already runs. While the row is `pending`, every other door but card, probe and note answers `renewing`. The row goes `live` only when that first start's sandbox check passes. Otherwise the session is stopped and stays stopped, and the board shows it with the properties that failed; the pending row is cleared (or, on a rebind, the old binding stands), and the door answers `overlord-sandbox-unmet`. The next "Start the Overlord" creates a fresh session. A rebind needs the old body measured gone, or a forced stop first. Retiring keeps the row and its memory. One per ccrc server | Approved | H3, H12, H27, H28 |
 | C3 | Scope | one project, the fleet | The fleet: every project at once (R11). The `overlord` project only holds its pane. "The fleet" is what one ccrc server measures | Approved | H3 |
 | C4 | Does it claim runs | yes, no | No: one coordinator per programme, and no nested-coordinator rule is bent. The run-open door refuses it (`overlord-not-a-coordinator`), and so does every write lane that is not its own (`overlord-uses-its-doors`). Staying awake is a policy: one `overlord` hold in `decideSleep` and in the roll lane's table | Approved | H1, H10 |
 | C5 | Where its state lives | its context, the server | The server, keyed by the identity `overlord`, with term and generation as stamps: requests, acts, the designation, the operator's messages, generations, notes, the authority journal and the operator model. A stop, a renewal or a swap loses nothing | Approved | H1, H3, H7, H12, H27 |
@@ -5831,7 +5960,7 @@ names the hardening calls that changed a call from its rev 8 form. §13.1 lists 
 | C29 | Where the operator model lives | `coord.db`, its own file, the fleet box | Its own file, `operator-model.db`, on the server, out of the sessions' reach. It ships in W1 with the operator's messages and the read ledger. What the Overlord reads still sits in its transcripts and history: on a `shared-user` box the boundary is that user, in a container its own volume. A privacy journal outside snapshots stops a restore un-wiping | Approved | H7, H10, H27, H29, H31 |
 | C30 | What an entry may justify | anything, guidance only | Guidance only. An inferred entry may guide a routine answer of class none, and never supports alone a big answer or one whose effect carries a class. No entry authorises an operator-only act, except that a cited stated entry resting on an operator message may answer a `value` item (`state-a-fact`). That answer carries the quoted span as the server renders it, never the entry's statement | Approved | H21, H29 |
 | C31 | How holds are kept | a new hold service, extend each owner | In `coord/questions.ts`, the one owner of question state, re-seeded at boot. The ask row keeps its coordinator as holder. Asks and items gain `overlordUntil` and `overlordOutcome`, whose words are one closed L0 list. Each row has `reachedOperatorAt` and `pushedAt`, written with an outbox row in one transaction | Approved | H18 |
-| C32 | Who picks a started coordinator's account | the Overlord, the browser, one shared policy | One shared L1 placement policy, read by the sheet and the start door; roster accounts only. On an account reserved for the Overlord a started coordinator is a guest | Approved | H16 |
+| C32 | Who picks a started coordinator's account | the Overlord, the browser, one shared policy | One shared L1 placement policy, read by the sheet and the start door; roster accounts only. The Overlord's account set does not bind a started coordinator: its own project's pool places it | Approved | H16, R18 |
 | C33 | Where a started coordinator lives | a main checkout, a named workspace | Always a named workspace, through the one workspace-create path. Its name derives from the request's id, so a retried start finds the session the first call made. Session ids are opaque, and nothing parses one | Approved | H3, H24 |
 | C34 | Who the kickoff is from | operator, overlord | `overlord`, sent by the one kickoff function with a sender parameter, so one cap and one dedupe cover both senders. The server renders the operator's quote from the cited messages | Approved | H7 |
 | C35 | Where the private-name check runs | the server, the skill | The server. The operator uploads the list through a step-up door, hashed under a server-held key. `privateNameHits` runs at the relay, answer, kickoff and brief doors, and a hit refuses `egress-refused` with no detail. It also runs on the quote the server renders, where a hit waits for the operator's one tap, and on every field before it is sent to a `hosted` decision model, where a hit answers `not-asked`. An accident guard: a paraphrase passes | Approved | H9, H31 |
@@ -5845,7 +5974,7 @@ names the hardening calls that changed a call from its rev 8 form. §13.1 lists 
 | C43 | Changing preferences | overwrite, bi-temporal | Bi-temporal entries with a subject key: a change is a `supersede`, never something to remember. The store refuses a second active entry on one subject and scope, and an inferred entry that contradicts a stated one | Approved | H29 |
 | C44 | Context hygiene | ad hoc, rules | Reads go through readers that return typed records. One model per generation: every change of model is a relaunch. Board and card reads are ids and one-liners | Approved | H9, H14, H16 |
 | C45 | How its model is chosen and kept | the session, the operator once, the operator plus the server | The operator's choice on the designation, as a class, served by any lane with a continuity record. Selecting `fable` keeps the step-up; selecting `opus` needs none. The designation writes the route class once. ccd owns the model fallback to Opus and the return, after its own hold-down (Table 11.5b); `unmeasured` keeps the class. A start that resumed the conversation on another class is a hard renewal trigger. No typed `/model`. Off its model, the rung drops one until its replay passes | Approved | H14, H16 |
-| C46 | Its accounts | shared, a tagged pool, a tagged pool of fenced-off accounts, accounts with a reserved share | Accounts reserved for it, never fenced off, and set centrally: `reservePct` on the account's row of `account_reservations`; the server names the sessions it serves. Those are the designated session, and the replay body while the replay lane runs one. The replay body gets the Overlord's answer for every input of the serviceability answer, the billing fact included, and it waits while no reserved account is under the soft line. One more input to the serviceability answer: no session the reservation does not serve runs Fable there. Every other session is a guest there, whatever its project, class-free ones included, and yields at a line that keeps the reserve free. A guest in a long turn moves mid-turn at a second line, as on a hard block. No new refusal of a placement or a swap, and the pool rule is unchanged. A reservation is accepted only while every agent that places sessions enforces it. The operator sets each reserve; the whole window is rev 8's fenced account | Approved | H16, and the operator's direction |
+| C46 | Its accounts | shared, a tagged pool, a tagged pool of fenced-off accounts, accounts with a reserved share, account pools the operator names | The account pools the operator names (R18, 2026-11-12, replacing the reserved share the operator approved on 2026-11-10). The set is a field of the designation, `accountPools`: pool names in the operator's order and an `untagged` yes or no, off by default. Only the operator's session-gated doors write it: designate, rebind and its Settings row. It is the session's side of the one pool rule (`poolRule`, `_pool_ok`), widened from one name to a set; today's one-name tag reads as that name with `untagged` on. The server carries it to ccd on the Overlord's route record and the replay body's. An empty set serves nothing. Nothing is reserved and nothing is fenced off: other sessions keep using every account in those pools, and Fable there meets one ceiling, shared. No new refusal of a placement or a swap. The replay body runs on an account in the set under the soft line; the auditor and the coordinators it starts are placed by their own projects' pools | Approved; amended by R18 | H16, R18, and the operator's direction |
 | C47 | What it may read | operator prompts only, everything | Everything the console reads, plus every project's history through an agent op that takes the scope as an argument. Credential stores stay closed. Every read leaves a ledger line, under rate ceilings (Table 11.5b). Mail to or from `overlord` is served only to its recipient or the console | Approved | H3, H9, H10 |
 | C48 | What it does itself | some small execution, none | None (R12). Its launch profile holds no command, editing, web or workflow tool, and the sandbox check measures that at every start. The server refuses it on run-open and on every other write lane | Approved | H1, H4, H9, H10 |
 | C49 | How coordinators get the long-life fixes | a copy for coordinators, one mechanism | One role vocabulary, `FLEET_ROLES`, read by one `roleOf(session)`. Long-lived, the `SessionRole` view, launch profile, card renderer, compaction instructions and probe set are its columns. Mail pace and the renewal triggers are L1 records keyed by role, each total over `FLEET_ROLES`. One generations table, one renewal lane, one notes table, one card door and one probe verb | Approved | H1, H12 |
@@ -5855,8 +5984,8 @@ names the hardening calls that changed a call from its rev 8 form. §13.1 lists 
 | C53 | Lossless history | mentioned in passing, the episodic layer | The episodic layer of every long-lived role. Its generations stay one family in history. One PreCompact print, owned by history W3, carries the role's instructions. Leaves are read before transcripts. The chat reads earlier generations through the history reader | Approved | H14 |
 | C54 | Code graphs | unused, its context, its routing | Routing through history's `touched` and a graph's blast radius, read by readers. The blast radius also fills the request's `expectedPaths`, which the `split-overlaps` check reads. The graphify card is withheld from the Overlord | Approved | H9, H23 |
 | C55 | Workflows and subagents | workflows, subagents that act, read-only subagents only | No workflows. Readers only: declared agent types passed at launch, a closed tool list, no shell, one read tool from the door process, and typed returns from untrusted text. At most three at once, never Fable. Every act goes through the main thread's doors | Approved | H9, H14 |
-| C56 | How many accounts, and which | one, its pool only, its pool then shared | At least two that can serve it, or no designation (`overlord-single-account`). Its reserved accounts first on its class, other accounts next on Opus, and a pay-per-use lane or another provider's lane only if the operator lists it for the Overlord. Neither ever counts towards the two. Fable billed to usage credits is unservable for it. The server writes the ordered list on the registry row; ccd picks at the renewal's fresh start, in three steps: under the soft line on the designated class, under it on the fallback class, then the least loaded | Approved | H16 |
-| C57 | Swaps and limits | ccd's hard-block swap only, planned moves | It moves at a renewal past the first load line, and renews pre-emptively at idle past the second when another account is under the first. On an account reserved for it, a load reads its reserve. Between renewals only ccd's hard-block rescue moves it: this design stands ccd's affinity arm down for the `overlord` role. `limit_samples` lets a line read "projected past it before the next renewal". A mid-turn swap loses at most that turn, and unsettled messages are offered first. The retention table, not a fixed grace, decides what a restart does to holds | Approved | H7, H16, H18, H20 |
+| C56 | How many accounts, and which | one, its pool only, its pool then shared | At least two that can serve it inside its set, or no designation (`overlord-single-account`). Accounts in its set first on its class, the same accounts next on Opus, and another provider's lane or a pay-per-use lane only if the operator lists it for the Overlord and its account is in the set. Fable on its accounts meets the same ceiling as every session's there. Neither ever counts towards the two. Fable billed to usage credits is unservable for it. The server writes the ordered list on the registry row; ccd picks at the renewal's fresh start, in three steps: under the soft line on the designated class, under it on the fallback class, then the least loaded | Approved; amended by R18 | H16, R18 |
+| C57 | Swaps and limits | ccd's hard-block swap only, planned moves | It moves at a renewal past the first load line, and renews pre-emptively at idle past the second when another account is under the first. A load reads the account's whole figure, as for any session. Between renewals only ccd's hard-block rescue moves it: this design stands ccd's affinity arm down for the `overlord` role. `limit_samples` lets a line read "projected past it before the next renewal". A mid-turn swap loses at most that turn, and unsettled messages are offered first. The retention table, not a fixed grace, decides what a restart does to holds | Approved; amended by R18 | H7, H16, H18, H20, R18 |
 | C58 | How the operator is asked to decide | a recommendation, a free-form note, a brief | A structured brief. It opens with where the question sits (R17). The default is the safe option. At most three options, each with downsides and the catalogue's reversibility, and at most three reasons, each marked measured or judged. Then the cell's track record, the best case against, tripwires, and what only the operator knows. The server picks the reveal mode and measures whether an answer was examined | Approved | H21, H30, H34, H36, H42, H45 |
 | C59 | Disagreement and the override | comply silently, argue freely, argue once | Argue once: an objection is a row with a sealed prediction, and a second one needs a new id (`no-new-evidence`). A command is the operator's tap on a server-rendered proposal, behind a step-up: single use, 15 minutes. Never past SAFETY, R7 or R12, and never an irreversible effect. "You decide" is no command: it is the operator's own answer on the row, picking the recommended option once it is on screen. It is never offered for O2, O4 or an irreversible effect, and it is logged `delegated`, never counted as agreement | Approved | H8 |
 | C60 | The majordomo | answer when asked, manage attention | A decision queue ranked by `decisionRank`, each place with its measured reason. Bundles are rendered by the server, never span classes and never include O2 or O4. Briefs are prepared ahead as background work. An attention budget the operator sets decides when a push may interrupt | Approved | H18, H19, H35, H36, H38 |
@@ -5888,7 +6017,7 @@ H1 to H39, and Appendix B for H40 to H45.
 | H13 | Renewal: one act, measured triggers, measured preconditions | §3.3.11 | C36, C50 | shape | W1a |
 | H14 | Platform switches a long life needs | §3.3.4, §3.3.7, §3.6 | C6, C39, C44, C45, C53, C55 | tightening | W1a |
 | H15 | Probes that measure memory, and notes that cannot mislead | §3.3.2, §3.3.5 | C37, C41, C52 | tightening | W1a |
-| H16 | The model fallback, the lanes and the reserved share | §3.4 | C6, C32, C42, C44, C45, C46, C56, C57 | tightening | W1 |
+| H16 | The model fallback, the lanes and the account set | §3.4 | C6, C32, C42, C44, C45, C46, C56, C57 | tightening | W1 |
 | H17 | Classes are sets, and authority is read from the effect | §6.7 | C17, C18, C21, C25 | shape | W3 |
 | H18 | Holds: only what it may settle; a hold delays the push and never hides the row | §6.1, §6.7 | C17, C19, C20, C22, C23, C31, C57, C60 | shape | W1 (outbox), W3 |
 | H19 | The inbox, packets, admission and work by class | §6.8 | C14, C22, C24, C60 | shape | W1 (inbox), W2, W3 |
@@ -5950,7 +6079,7 @@ prerequisites gate W1, where the Overlord itself begins. Nothing in any wave is 
 |---|---|
 | W0, a spike | It changes nothing that runs: its test-only files ship in the tarball and do nothing. It measures what the design depends on: the hook's cap and the anchor slot; a fresh start as the renewal act, and its time; what a clear or a fresh start does to running readers, queued input and scheduled tasks; whether a compaction rotates the uuid; auto memory, forks, the subagent model, the model-switch hooks and a refused proactive compaction; the door process under a restricted launch (hooks, skills, the permission mode); reader types with no shell; nudge-and-read for the operator's messages; the statusline's token fields; whether the inbox socket can be used with the peer channel closed; a continuity record for each lane; whether its accounts bill Fable to usage credits; how closely the seven-day figure times the Fable share reading tracks the Fable allowance; how ccd picks an account today (no listed order exists yet: that is W1's build); the restart numbers and the first sweep after boot (§6.4); what an account's shared config directory loads into a session; how reliable the typed `/clear` is. It writes the first model of holds, readiness and generations (§11.7). Where the real thing does not exist yet (the renewal verb, probes), it measures the parts with stand-ins, and W1a measures again with the real ones |
 | W1a, continuity for every long-lived role | The one role table and its launch profiles; `continuity_generations`, the receipt and the renewal lane on the `SessionHost` port; the anchor slot and the card door; notes; compaction instructions (after history W3-1); probes and the weekly quiz; the trigger table (stall arms); coordinator clause 23; the skill-size ratchet, with caps measured at its merge, and each role skill's contract moved to the front of its file; the `MAIL_PACE` table (today's two rows first, behind a characterization test; total over `FLEET_ROLES`, with the Overlord's row, once the role table lands); the ports for time and chance; the simulator's skeleton; mutation floors for new deciders; the case lane in shadow; ccd's fresh-start flag and its capability word `hibernate-fresh`; the capability word `continuity-v1` |
-| W1, designate and talk | The private store, with the operator's messages and the read ledger; the designation with its term; the identity port and the isolation word; the door process and the reader types; the history door and its agent op; the sandbox check; the fence; ccd's sleep markers' verb and its capability word `keep-awake`; the ladder at `chat`, and Pause; the readiness word; the inbox, with band 1 (the operator's messages), probes and the coalesced wake; the journal kernel, the authority journal, the privacy journal's file with its record of the highest message id issued, and the "Confirm the restore" door; the push outbox and its capability word `push-outbox-v1`; the reservation rule, `account_reservations` and ccd's capability word `account-reserve`, and the two-account check; the home, the chat with message ticks, the board; the portfolio rank, the limit samples and `portfolioFor`; the refusal on other write lanes; the invariant monitor and `overlord_sequence`, with its cursor read; the capability word `overlord-v1` |
+| W1, designate and talk | The private store, with the operator's messages and the read ledger; the designation with its term; the identity port and the isolation word; the door process and the reader types; the history door and its agent op; the sandbox check; the fence; ccd's sleep markers' verb and its capability word `keep-awake`; the ladder at `chat`, and Pause; the readiness word; the inbox, with band 1 (the operator's messages), probes and the coalesced wake; the journal kernel, the authority journal, the privacy journal's file with its record of the highest message id issued, and the "Confirm the restore" door; the push outbox and its capability word `push-outbox-v1`; the account set on the designation, the pool rule's set and ccd's capability word `pool-set`, and the two-account check; the home, the chat with message ticks, the board; the portfolio rank, the limit samples and `portfolioFor`; the refusal on other write lanes; the invariant monitor and `overlord_sequence`, with its cursor read; the capability word `overlord-v1` |
 | W2, route and follow up | The act catalogue, `overlordMayAct`, revisions and operation keys, two-step acts and the act journal; requests as contracts, with `requestId` on runs, on mail and on `goals modify`, and the request doors; the home's Requests groups, the one-tap next steps, and what each request and programme cost; band 3 of the inbox (request moves, follow-ups and read-back flags); the relay door with its checks, and the door that uploads the private-name list; `followUpDue`; overlaps and goal conflicts, with the operator's door that rules a goal-conflict pair; remaining work, forecasts, health and edges; the decision-model port, with its W2 rows in shadow, and the label queue and its cards; the ladder at `advise`; the capability word `overlord-route-v1` |
 | W3, step one: brief first | `operatorClass` and `effect` on rows, with the floors; the operator's profile, the place line, outcome tests, `decisionOutcome` and the three records (§6.9); briefs with their reveal modes, `answerExamined` and `decisionRank`; `attach-brief`, and the inbox's rows that wait for a brief; sealed predictions; the blind sample; proposals and commands; the attention budget and its Settings, in shadow; engagement per programme; the replay body and the scenario suite; the weekly check and the Week page; the handover brief; the capability word `overlord-brief-v1` |
 | W3, step two: answer first | The holds, `mayHold`, retention and the breaker; the inbox's held rows, admission, packets and precedents; `askOrAct`; the answer and escalate doors; the grants door with all of H26, and staging; drills and the outside audit; background work; each kind of answer armed on evidence; the capability word `overlord-answer-v1` |
@@ -5979,9 +6108,9 @@ prerequisites gate W1, where the Overlord itself begins. Nothing in any wave is 
 - **A shape call cannot trail.** A call marked `shape` in Table 13.1 fixes a table or a door. It ships with the wave
   that creates it, because trailing it would mean a migration and a changed door contract. A `tightening` call may
   trail by one wave.
-- **Every agent before the server.** The reservation rule reaches every agent that can place sessions before the
-  membership door accepts a reservation (H16). It ships first in W1, in a pools-context pull request of its own. The
-  operator then reserves the Overlord's accounts in Settings, before designating.
+- **Every agent before the server.** The pool rule's set (`pool-set`) reaches every agent that can place sessions
+  before the designate door accepts a designation (C46). It ships first in W1, in a pools-context pull request of its
+  own. The operator then names the Overlord's pools in Settings, or at the designate door.
 - **Before W3's second step nothing is held.** In W1, W2 and W3's first step every question reaches the operator as
   it does today.
 - **A one-box install stays at `advise` until the split install exists.** No wave waits for it: a server measured
@@ -6080,10 +6209,10 @@ mechanism leaves something open, the row says what is left.
 | Agreement is inflated | Authority widens on numbers the Overlord shaped, or that a tired operator gave | Only blind or examined answers count. A sealed prediction is due on every item and ask that reaches the operator, and a missing one is a miss. One scored against an answer that was neither blind nor examined is reported apart, as anchored, and counts for no gate. The Overlord states a recommendation only in a brief, never in the chat or a summary, and an answer is scored blind only when none of its chat text since the filing was on screen before the pick. Replay as of a date runs in a replay body. Agreement is set against the operator's own consistency. When fatigue is measured, decisions move to on-tap |
 | Tripwires used to deny the Overlord | Someone trips latches on purpose to hold it at `advise` or `chat` | A step down only returns routing to today's, so the cost is availability, never safety. Tripwires refuse and count before they latch. `superseded` feeds no tripwire, and the breaker counts only lapses and releases the Overlord caused. Each step is logged with its cause, and only the operator clears a latch (M21) |
 | The operator's oversight decays | The operator waves everything through, and every measure still looks good | A weekly check of about five minutes, with blind spot-checks and a seeded wrong call. Supervision debt sends new big answers up as briefs, and missed checks pause grant renewals and proposals. Fatigue is measured. M27 reports whether oversight is real |
-| Fable's cap or cost | Its accounts run out sooner, or Fable bills usage credits | A reserved share on each of its accounts, so no other session spends what it needs. Fable billed to credits is unservable for it. ccd's model fallback moves it to Opus, and back after ccd's hold-down (Table 11.5b). Off its model, the ladder drops one rung until replay passes. M11 watches it |
+| Fable's cap or cost | Its accounts run out sooner, or Fable bills usage credits | Nothing is reserved (R18), so other sessions may spend an account's Fable share first. At least two accounts in its set, and the ordered list moves it to the next one at a renewal. Fable billed to credits is unservable for it. ccd's model fallback moves it to Opus, and back after ccd's hold-down (Table 11.5b). Off its model, the ladder drops one rung until replay passes. M11 watches it, by cause |
 | Every account it may use is limited | No account can serve it | Two accounts are required. `poolRunway` projects exhaustion, and it moves at a renewal before a load line. `stranded` releases holds to the operator, and an item names the first reset |
 | A swap drops a message or bursts escalations | The operator repeats themselves, and coordinators see noise | The operator's messages are server rows, offered first to the next generation. The retention table keeps holds that outlast the measured restart time. Restarting too often reads as not ready. M14 watches it |
-| The reservation fails open, or takes too much | Guests spend the Overlord's share, or capacity sits unused | The reservations travel in their own leased document. When it is stale, the last known ones stay in force and no other account gains one. A reservation is accepted only while every placing agent enforces it. It serves named sessions, never a project, so every other session there is a guest. A guest past its line moves at its next idle boundary, and one in a long turn moves mid-turn at a second line, as on a hard block. An item names any guest measured on Fable or past the line (M32). Settings shows what the Overlord really used beside each reserve, so the operator can lower it |
+| The account set fails open, or is too narrow | The Overlord runs on an account the operator did not name, or strands while other accounts have room | One writer, the operator's session-gated doors, and one rule, the pool rule, at every placement path. An empty set serves nothing, and untagged accounts serve it only when the set says so. An older ccd refuses the route write that carries the set, and designate refuses until every placing agent advertises `pool-set`. The server writes the set again at each renewal and on each change. M32 counts generations outside the set, and the target is zero. Fewer than two accounts in the set raises an item, and Settings shows the count beside the set |
 | It drifts into execution | Its context fills with diffs and logs, and coordinators lose ownership | No command, editing, web or workflow tool, measured by the sandbox check at every start. Run-open and other write lanes refuse it. A relay that prescribes a method is returned (`relay-carries-method`). M12 counts attempts |
 | Too many coordinators | Window spend and box load rise | `overlordLiveProgrammes`, `portfolioFocus`, the wake budget and the fleet's own admission. Scarcity rules hold back `background` work when a pool will run out |
 | A rollback to an older build | Holds or pushes are lost, or a new word is read wrongly | Capability words gate each part. The hold tier is armed only when every build the box can roll back to carries `push-outbox-v1`, and `ccrc rollback` below it refuses unless forced. A table of new persisted words says what an older build does with each (§11.5) |
@@ -6112,13 +6241,16 @@ mechanism leaves something open, the row says what is left.
   account (§3.4).
 - R15, the operator's ruling of 2026-11-09: a colleague, advisor and majordomo; decision briefs of at most three
   options; one argued objection; the operator's command overrides (§6.6).
-- The operator's direction of 2026-11-09: Fable, as a class, on accounts that keep a reserved share for it, never
-  fenced off (§3.4, C46).
+- The operator's direction of 2026-11-09: Fable, as a class, on accounts that are never fenced off (§3.4). R18
+  replaced the reserved share that this line first named.
 - The operator's three directions to the hardening review, 2026-11-09 (§2): build it so that it runs in containers
-  soon, use a decision model for the yes-or-no questions that code cannot decide, and reserve a share of its accounts
-  for it, never the whole account.
+  soon, use a decision model for the yes-or-no questions that code cannot decide, and never fence a whole account off
+  for it. Its "Accounts" row now reads as R18 amends it (Table 2b).
 - R16 and R17, the operator's rulings of 2026-11-10: the pair should decide better than either alone, with direction
   the operator's; a starting profile, and the picture before the question (§6.9).
+- R18, the operator's ruling of 2026-11-12: no account is reserved for the Overlord; the operator names the account
+  pools it may draw accounts from (§2, §3.4, C46). It amends C46, C56, C57, H16, Table 2b's "Accounts" row and
+  ruling 7. The operator approves this revision on its pull request.
 - **The operator approved this spec on 2026-11-10:** the author's calls C1 to C60 as §13 restates them, and the
   hardening calls H1 to H39 (§13.1), subject to the rulings below. C47 is where "everything" stops: it keeps the
   credential stores closed.
@@ -6134,7 +6266,8 @@ mechanism leaves something open, the row says what is left.
   - **Ruling 6. Another provider's lane (H16, §3.4).** Allowed as a fallback, lane by lane. That provider sees what
     the Overlord reads.
   - **Ruling 7. The reserve (C46, H16, §3.4).** A share of each of its accounts, by default the Fable ceiling, 40
-    today.
+    today. Replaced by R18 on 2026-11-12: there is no reserve and no default share. The operator names the account
+    pools the Overlord may draw from, and its Fable meets the one Fable ceiling, shared with every session there.
   - **Ruling 8. The blind sample and options first (H30, C58, §6.6).** Both stand. The operator always sees the
     Overlord's pick before an answer is final.
   - **Ruling 10. The attention budget (H35, §4.2).** Six interrupting pushes a day.
@@ -6151,12 +6284,23 @@ mechanism leaves something open, the row says what is left.
     record, not from about 470 questions put to the operator (H44).
   - **A case where the operator overruled the Overlord, and the operator's choice then failed its sealed test,**
     leaves the Overlord's record. It counts neither for it nor against it (H43).
+- **Settled by the author under R17 for R18, from the coordinator's rulings of 2026-11-12 on the review of this
+  revision.** Each is open to overrule by the operator on its pull request.
+  - **A deliberate crossing holds until the next renewal (C46).** When the operator moves the Overlord off its account
+    set by hand (`--cross-pool` on a swap or a start), the move stands until the next renewal of any kind, the set
+    trigger is not due for it, and M32 counts such generations apart from its zero target. Every renewal clears the
+    crossing marker, so `prefer --cross-pool` is not a lasting crossing path for the Overlord. A move the operator
+    makes by hand is never refused, and the manual-swap pin already holds it.
+  - **Widening the account set needs the step-up (C46, §11.2).** Adding a pool, or turning `untagged` on, widens which
+    shared accounts carry the Overlord's reads, so it is a change that widens authority. Narrowing needs none.
 
 ### Waiting on you
 
-- **Which accounts are reserved for the Overlord, and how much of each.** You set them in Settings once W1's
-  reservation rule is live. Two accounts that can serve it are required, and two reserved ones are recommended (C46,
-  C56). This spec names none.
+- **Which account pools the Overlord may draw from, and whether untagged accounts are among them.** You name them at
+  the designate door or in Settings once W1's pool set is live. At least two accounts in them must be able to serve
+  it (C46, C56). This spec names none.
+- **This revision itself (R18).** You approve it on its pull request. The calls it settles under R18 are in C46 and
+  Appendix B, each with its reason, and each is open to overrule.
 - **The prerequisites.** D-8126 (PR #2487) and its four open questions. D-8125 has merged. The Overlord's W1 starts
   when D-8126 has merged. W0 and W1a do not wait for it.
 - **A design for the split install** (ruling 1). Nothing in this spec waits for it on a server that already runs
@@ -6241,7 +6385,7 @@ The body of the spec states only the result.
 
 *Table A. What each hardening call changed, and why.*
 
-## Appendix B. What the rulings of 2026-11-10 changed
+## Appendix B. What the rulings since 2026-11-10 changed
 
 The operator approved this edition on 2026-11-10, ruled on the review's fifteen questions, and gave R16 and R17. This
 table keeps the trail for the six calls those two rulings added. The body of the spec states only the result.
@@ -6259,6 +6403,32 @@ table keeps the trail for the six calls those two rulings added. The body of the
 
 Three of the fifteen answers changed the body too. The opt-in on a `shared-user` box is gone (§7.4). Another
 provider's lane may serve the Overlord as a fallback (§3.4). And the measure of a right answer is the outcome (§6.9).
+
+**R18, 2026-11-12: account pools replace reserved accounts.** The operator ruled that no account is reserved for the
+Overlord, and that the operator names the account pools it may draw accounts from. Their point of 2026-11-09 stands and
+is the reason: nothing is fenced off, and other sessions keep using every account in those pools as they do today. This
+table keeps the trail. The body states only the result.
+
+| What | Before | Now, and why |
+|---|---|---|
+| C46 | A reserved share of each of its accounts, `reservePct` in `account_reservations`, rendered by a reservations sync into a document of its own, for the sessions a reservation served by id | The account pools the operator names, a field of the designation with one writer, the operator's doors. R18 |
+| Where the set reaches placement | The reservation was an input to the serviceability answer, beside an unchanged pool rule | The session's side of the one pool rule, widened from one name to a set and carried on the route record. The pool rule already decides "may this account serve it, by pool" at every placement path, so a serviceability arm would have been a second owner of that question (Table 3.4c) |
+| Untagged accounts | A reserve did not depend on pools | Only when the set admits them, by a yes or no, off by default. R14's count must count accounts the operator chose, and `untagged` is a valid pool name, so it cannot be a word in the list |
+| An empty set | Did not exist | Serves nothing, so it never designates. A forgotten setting must not be the widest one |
+| Every other session on its accounts | A guest: no Fable, a lower ceiling for every other class and for `default`, an unmeasured figure refused, and moves at an idle boundary or mid-turn at a second line | Unaffected. It runs, moves and is placed as today |
+| The `reserved` reason, the guest ceilings and the guest move | In the serviceability answer, `_avail` and its server twin, `_swap_pinned`, and ccd's mid-turn move | Gone, with nothing in their place |
+| "Nothing is reserved until it is enforced": the capability word `account-reserve` and the refusal `reserve-unenforced` | The membership door refused a reservation while some placing agent lacked the word | Gone. The word `pool-set` joins the words designate and rebind already require, under their `capability-missing`. An older ccd refuses the route write that carries the set |
+| The reserve's Settings row, its share and the suggested lower reserve | A share per account, 40 by default (ruling 7), with four weeks of use beside it | Gone. Settings shows the set and the count of accounts in it that can serve it |
+| H16's inputs to the serviceability answer | Six: the reservation, the billing fact, the hold-down, the continuity record, the five-hour figure and the asking session's id | Four. The reservation went. The five-hour figure went with it: its only reader was the guest's lower ceiling, and C57's loads read both windows through ccd's pick, as before. The asking session's id stays, for the billing fact and the continuity record |
+| Fable on its accounts | Judged against the window for the sessions a reservation served | Today's test, the same ceiling as every Fable session there, shared. The operator's ruling says so |
+| C56's order | Reserved accounts on its class, then other accounts the pool rule allowed, on Opus | Accounts in the set on its class, then the same accounts on Opus, then a lane the operator listed for it whose account is in the set. A set change that leaves its account outside is a hard renewal trigger, never a mid-turn move |
+| C57's load | Read against the reserve on a reserved account | The account's whole figure, as for any session |
+| The replay body | Spent the reserve, as a session the reservation served | Runs on an account in the set under the soft line, with no renewal due, from the same shared windows as any session |
+| The auditor | A guest on a reserved account | Placed by its own project's pool rule, like any session |
+| Table 2b's "Accounts" row, and ruling 7 | The reserve, and its default share | R18's set. The auto memory remark stands, because every account the Overlord uses is shared and it moves between them |
+| M32, M11, Table 16a | Counted guests on Fable or past the line; the reservation's risks | M32 counts generations outside the set, and M11 splits fallbacks by cause; the risks of a set that fails open or is too narrow |
+
+*Table B2. What R18 changed.*
 
 ---
 

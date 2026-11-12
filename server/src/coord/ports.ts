@@ -32,7 +32,10 @@ interface CcdAnswer {
  *  refusal, a box word or a die reads `ran === false` FIRST and reports it as unmeasured and retryable, never as a
  *  refusal: a transport failure is never permission to act, nor a verdict. */
 export type CcdResult =
-  | (CcdAnswer & { ran: true })
+  | (CcdAnswer & { ran: true;
+      /** The ran arm's measured exit code (landing-order 5h), set by `ccd()` from the runner's `code`; ABSENT means the
+       *  producer did not measure it and is never read as 0, and the not-ran arm never carries it. */
+      exitCode?: number })
   | (CcdAnswer & NotRan & { ok: false });
 
 /** The single ccd capability: run one `ccd` verb. Failure contract: a non-zero exit is `ok: false` with the verb's
@@ -56,10 +59,11 @@ export interface FleetWatcherView {
  *  needs a new member adds it here, in its sorted place, in the same PR. Never split it per lane or per callee (the
  *  ruling of 2026-10-30, the plan's Rejected list): one port, one member list. */
 export type WatcherCoordMember =
-  | 'absorbParkEscalation' | 'activeClaims' | 'approvalById' | 'approvalsForChild' | 'approvalsInState' | 'askById'
+  | 'absorbParkEscalation' | 'activeClaims' | 'advanceLanding'
+  | 'approvalById' | 'approvalsForChild' | 'approvalsInState' | 'askById'
   | 'autoContinueHeldUntil' | 'backOff' | 'baselineParkBox' | 'bigCallsIn' | 'bindingRunsOf' | 'bindingsOf' | 'bumpReplayCount'
   | 'cancelDeliveriesTo' | 'checksRows' | 'childReclaimCoordinatorClaims' | 'childReclaimSessionIds'
-  | 'childStaleActivity' | 'claimDigestDay' | 'closeRun' | 'closedProgrammeClaimants' | 'collectLaneRow' | 'commitDeadCoordinatorBreakerState'
+  | 'childStaleActivity' | 'claimDigestDay' | 'claudeBuilds' | 'closeRun' | 'closedProgrammeClaimants' | 'collectLaneRow' | 'commitDeadCoordinatorBreakerState'
   | 'coordPlacementStamps' | 'countDelegationEventsAtOrBelow' | 'currentAskFor' | 'currentAsksFor' | 'currentEpisode'
   | 'db' | 'deadAnchors' | 'deadCoordinatorBreakerHeldLatest' | 'deadCoordinatorBreakerState' | 'deadCoordinatorJournalRows'
   | 'declineApproval' | 'declineAsk' | 'delegationEventStats' | 'delegationRunStamps' | 'deleteDelegationEventsBetween' | 'deleteGoneSince' | 'deleteRunCloseAnchor' | 'deleteRunCloseWarning'
@@ -70,24 +74,24 @@ export type WatcherCoordMember =
   | 'hasMailWithSubject' | 'hasNotice' | 'hasOutstandingMail' | 'heldApprovalRowsByChild' | 'heldApprovalsFor'
   | 'heldAskFor' | 'heldQuestionRows' | 'holdParked' | 'importLaneArmMarker' | 'ingestJournal' | 'insertApproval' | 'insertAsk'
   | 'insertDelegationEvents' | 'insertMail' | 'insertObservation' | 'insertStallObservation' | 'intentFor'
-  | 'journalGenerations' | 'lapseApproval' | 'lapseClaimRow' | 'lastRunBySession' | 'laterReviewClosedFor' | 'laterReviewMovedAt'
+  | 'journalGenerations' | 'landingReadProjects' | 'lapseApproval' | 'lapseClaimRow' | 'lastRunBySession' | 'laterReviewClosedFor' | 'laterReviewMovedAt'
   | 'ledgerFloor' | 'ledgerIssued' | 'ledgerProjects' | 'lifecycleBirthEventsFor' | 'lifecycleCreatesFor'
   | 'lifecycleFor' | 'lifecycleGapGens' | 'lifecycleLeafEndsFor' | 'lifecycleReclaimRowsSince' | 'lifecycleStats' | 'linkingAll'
-  | 'mailOrigin' | 'mailQueuedSince' | 'markApprovalOperator' | 'markApprovalOperatorRows'
+  | 'mailOrigin' | 'mailQueuedSince' | 'markApprovalOperator' | 'markApprovalOperatorRows' | 'markClaudeBuildAttempt'
   | 'markDeadCoordinatorBreakerDirty' | 'markDelivered' | 'markDriftPushed' | 'markDriftShadowed' | 'markIngested'
   | 'markLanded' | 'markParkEscalated' | 'markReleaseNotified' | 'markUnreachable' | 'maxMailDeliveryId'
-  | 'maxRunEventId' | 'mergingRuns' | 'moveItem' | 'node' | 'nodeByLabel' | 'nodes' | 'noteDispatchRefusal' | 'noteGate'
-  | 'noteLeaseDetail' | 'openAllocations' | 'openCloseRefusedItems' | 'openCoordinatorIds' | 'openPracticeCase' | 'outstandingMailFor' | 'parkDelivery'
+  | 'maxRunEventId' | 'mergingRuns' | 'moveItem' | 'node' | 'nodeByLabel' | 'nodes' | 'noteClaudeBuildsSeen' | 'noteDispatchRefusal' | 'noteGate'
+  | 'noteLeaseDetail' | 'openAllocations' | 'openCloseRefusedItems' | 'openCoordinatorIds' | 'openPracticeCase' | 'openReleaseReviewItems' | 'outstandingMailFor' | 'parkDelivery'
   | 'parkedDeliveries' | 'poolEpoch' | 'practiceCaseNewest' | 'programOpenRunCount' | 'programmeActivity' | 'programmeLeftPlannedAt' | 'projectDelegationCheckpoint'
   | 'projectDelegationCheckpointChanges' | 'pruneApprovalInputs' | 'pruneAskQuestions' | 'queueDelivery' | 'queueRunCloseWarning'
-  | 'raiseItemWithMail' | 'raiseLedgerFloor' | 'recentProvenance' | 'recordDriftPass' | 'recordFeedEvent' | 'recordGap' | 'recordLinkingReading'
+  | 'raiseItemWithMail' | 'raiseLedgerFloor' | 'readLanding' | 'recentProvenance' | 'recordClaudeBuildVerdict' | 'recordDriftPass' | 'recordFeedEvent' | 'recordGap' | 'recordLinkingReading'
   | 'recordObservation' | 'recordRejection' | 'recordRunCloseRefusal' | 'recordRunEvent' | 'recordShadowVerdict' | 'recordStallObservation'
-  | 'refusalsFor' | 'refuseRelease' | 'rejectDelivery' | 'rekeyNode' | 'releaseAsk' | 'releaseLease' | 'releases'
-  | 'renewClaimRow' | 'requestNode' | 'resolveNode' | 'restampAsk' | 'retireGeneration' | 'reviveParkedDeliveries' | 'rollSettings' | 'run'
+  | 'refusalsFor' | 'refuseRelease' | 'rejectDelivery' | 'rekeyNode' | 'releaseAsk' | 'releaseLease' | 'releaseReviewItemRaised' | 'releases'
+  | 'renewClaimRow' | 'requestNode' | 'resolveNode' | 'restampAsk' | 'retireGeneration' | 'reviewChildReleased' | 'reviveParkedDeliveries' | 'rollSettings' | 'run'
   | 'runCloseAnchors' | 'runCloseChoice' | 'runCloseRuns' | 'runCloseWarning' | 'runCloseWarningProgrammes' | 'runEvents' | 'runEventsSince' | 'runLastMoves' | 'runs' | 'runsNamingSession' | 'sealDeadCoordinatorBreakerState'
   | 'setCollectLane' | 'setDeliveryEnvelope' | 'setGoneSince' | 'setRunCloseAnchor' | 'setSession' | 'settleAsk' | 'settleNode' | 'staleAllocations'
   | 'staleApproval' | 'staleAsk' | 'stallCandidates' | 'stallMailFor' | 'stallObservationsSince' | 'stallSettings' | 'stalledDispatchRunIds'
-  | 'strandedClear' | 'sweepClosesBetween' | 'takeApprovalForRule' | 'takeAskForAnswer' | 'tellRefusal' | 'unlandedBriefs'
+  | 'startRunsOnTakenBrief' | 'strandedClear' | 'sweepClosesBetween' | 'takeApprovalForRule' | 'takeAskForAnswer' | 'tellRefusal' | 'unlandedBriefs'
   | 'unsealDeadCoordinatorBreakerState' | 'untakeAsk' | 'untoldRows' | 'updateEpoch' | 'upsertNodeMeasurement' | 'wakeParked';
 
 /** D-7579: the watcher's narrow view of the coordination store, the one `Pick` of `CoordStore` the series uses. A

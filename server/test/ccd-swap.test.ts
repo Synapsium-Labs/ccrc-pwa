@@ -262,6 +262,8 @@ describe('cmd_swap keeps carrying the task list', () => {
       // its probe is the one tmux call ahead of the teardown.
       'tmux has-session -t =cc-claude-demo:',
       'systemctl --user stop claude-session@claude-demo',
+      // session-continuity 6a: the graceful stop reads the pane once, before the kill (its NO_PANE stub answers no pid).
+      'tmux list-panes -t =cc-claude-demo: -F #{pane_pid}',
       'tmux kill-session -t =cc-claude-demo:',
       // cmd_swap's own `_lc_done` (task 18) is the first `_lc_emit` in this
       // process — it sits right after the registry flip, before the restart —

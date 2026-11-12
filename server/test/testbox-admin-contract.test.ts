@@ -2,7 +2,7 @@
 // `ccrc testbox-admin` verb, `shared/testbox-admin.ts`. The sub table and its step-up marks; the argv builder's refusals
 // (a field the sub does not take, a leading dash, a `..` segment, a C0 byte or DEL), one `--name=value` word a value, no
 // bare flag, no `--force`, no `--replace`; the L0 copy of `_tb_shape` held equal to the bash function on one corpus; the
-// 44 keys and their classes read from `ccd/testbox-knobs`; the repository row as base64url JSON; the status reader that
+// 47 keys and their classes read from `ccd/testbox-knobs`; the repository row as base64url JSON; the status reader that
 // names no address; the parity gate; and one plain sentence per code.
 import { describe, it, expect } from 'vitest';
 import { readFileSync, writeFileSync } from 'node:fs';
@@ -13,7 +13,7 @@ import {
   TESTBOX_ACTS, TESTBOX_ACT_OUTCOMES, TESTBOX_BOX_KEYS, TESTBOX_HOST_KEYS, TESTBOX_FLEET_EDITABLE, TESTBOX_PAIRING_KEYS,
   TESTBOX_PAIRED_BOX_KEYS, TESTBOX_RUN_SHAPING, TESTBOX_SHAPE_CLASS, TESTBOX_SHAPE_SENTENCE, TESTBOX_REPO_ROW_MAX_BYTES,
   buildTestboxAdminArgv, fitsTestboxShape, isBoxAddress, isPrivateNetworkAddress, isSshPort, isLoginUser, isHostKeyFingerprint, isPrNumber,
-  TESTBOX_STEP_UP_SETTINGS, parityArmable, parityCurrentOf, readTestboxAdminStatus, readTestboxParityRecord, readTestboxRepoArg,
+  TESTBOX_STEP_UP_SETTINGS, TESTBOX_LINE_CODES, parityArmable, parityCurrentOf, readTestboxAdminStatus, readTestboxParityRecord, readTestboxRepoArg,
   testboxAdminIsLong, testboxAdminNeedsStepUp,
   type TestboxAdminSub, type TestboxAdminFields, type TestboxParityRecord,
 } from '../../shared/testbox-admin.js';
@@ -44,7 +44,7 @@ const MIN: Record<TestboxAdminSub, Record<string, unknown>> = {
   'status': {}, 'read': {}, 'key': { address: '192.0.2.10' }, 'probe': {}, 'pin': { fingerprint: FP },
   'preflight': {}, 'connect': { settings: { CCRC_TESTBOX_WORKERS: '3' }, repos: [ROW] },
   'settings-fleet': { settings: { CCRC_TESTBOX_POLL: '1m' } }, 'settings-box': { settings: { CCRC_TESTBOX_WORKERS: '3' } },
-  'cancel': {}, 'parity': {}, 'repair': {}, 'apply-release': {}, 'disconnect': {},
+  'cancel': {}, 'parity': {}, 'repair': {}, 'apply-release': {}, 'disconnect': {}, 'key-rotate': {}, 'key-revoke': {},
 };
 
 const build = (sub: unknown, fields: unknown) => buildTestboxAdminArgv(sub, fields);
@@ -61,15 +61,24 @@ const ip = (s: string): string => s.replace(/_/g, '.');
 describe('the sub table', () => {
   it('every sub has a spec and every spec a sub', () => {
     expect(Object.keys(TESTBOX_ADMIN_SUBS).sort()).toEqual([...SUBS].sort());
-    expect(SUBS).toHaveLength(14);
+    expect(SUBS).toHaveLength(16);
     expect(SUBS.sort()).toEqual([
-      'apply-release', 'cancel', 'connect', 'disconnect', 'key', 'parity', 'pin', 'preflight', 'probe', 'read', 'repair',
-      'settings-box', 'settings-fleet', 'status',
+      'apply-release', 'cancel', 'connect', 'disconnect', 'key', 'key-revoke', 'key-rotate', 'parity', 'pin', 'preflight', 'probe',
+      'read', 'repair', 'settings-box', 'settings-fleet', 'status',
     ]);
     for (const s of SUBS) expect(MIN[s], s).toBeDefined();
   });
-  it('step-up is exactly key, pin, connect and disconnect', () => {
-    expect(SUBS.filter((s) => TESTBOX_ADMIN_SUBS[s].stepUp).sort()).toEqual(['connect', 'disconnect', 'key', 'pin']);
+  it('step-up is exactly key, pin, connect, disconnect and the access key\'s rotate and revoke (D-8337)', () => {
+    expect(SUBS.filter((s) => TESTBOX_ADMIN_SUBS[s].stepUp).sort()).toEqual(['connect', 'disconnect', 'key', 'key-revoke', 'key-rotate', 'pin']);
+  });
+  it('key-rotate and key-revoke take no field, are short, and record acts of their own names (D-8337)', () => {
+    for (const s of ['key-rotate', 'key-revoke'] as const) {
+      expect(Object.keys(TESTBOX_ADMIN_SUBS[s].fields), s).toEqual([]);
+      expect(TESTBOX_ADMIN_SUBS[s].long, s).toBe(false);
+      expect(TESTBOX_ADMIN_SUBS[s].act, s).toBe(s);
+      refused(s, { address: '192.0.2.10' });
+      refused(s, { rotate: true });
+    }
   });
   it('a call needs the step-up when its sub does, or when settings-fleet changes the setting that guards secrets (the deny list), whatever else the body holds', () => {
     expect([...TESTBOX_STEP_UP_SETTINGS]).toEqual(['CCRC_TESTBOX_DENY_GLOBS']);
@@ -82,7 +91,7 @@ describe('the sub table', () => {
     expect(testboxAdminNeedsStepUp('settings-box', { settings: { CCRC_TESTBOX_DENY_GLOBS: '*.pem' } })).toBe(false);
   });
   it('settings-box takes no repository row: only a step-up Connect may put a command head on the fleet host\'s record', () => {
-    expect(Object.keys(TESTBOX_ADMIN_SUBS['settings-box'].fields).sort()).toEqual(['settings', 'whenIdle']);
+    expect(Object.keys(TESTBOX_ADMIN_SUBS['settings-box'].fields).sort()).toEqual(['settings', 'unset', 'whenIdle']);   // D-8336 adds the unset list
     refused('settings-box', { settings: { CCRC_TESTBOX_WORKERS: '2' }, repos: [ROW] });
     expect(build('connect', { settings: { CCRC_TESTBOX_WORKERS: '2' }, repos: [ROW] }).ok).toBe(true);
   });
@@ -102,7 +111,7 @@ describe('the sub table', () => {
   it('the acts and outcomes are the ledger\'s closed vocabularies', () => {
     expect([...TESTBOX_ACTS]).toEqual([
       'connect', 'confirm-host-key', 'install', 'pair', 'settings-fleet', 'settings-box', 'parity', 'switch', 'repair',
-      'replace', 'disconnect', 'apply-release', 'cancel',
+      'replace', 'disconnect', 'apply-release', 'cancel', 'key-rotate', 'key-revoke',
     ]);
     expect([...TESTBOX_ACT_OUTCOMES]).toEqual(['ok', 'refused', 'failed', 'unknown']);
   });
@@ -252,6 +261,7 @@ describe('the argv builder', () => {
       'settings-fleet': { settings: { CCRC_TESTBOX_POLL: '1m' } },
       'settings-box': { settings: { CCRC_TESTBOX_RUNS: '2' }, whenIdle: true },
       'cancel': {}, 'parity': { prs: [1, '2'] }, 'repair': {}, 'apply-release': {}, 'disconnect': { replace: true },
+      'key-rotate': {}, 'key-revoke': {},
     };
     for (const s of SUBS) expect(build(s, wire[s]).ok, s).toBe(true);
     // a list of K=V strings is not a settings map
@@ -304,6 +314,63 @@ describe('the argv builder', () => {
   });
 });
 
+describe('Reset to default: the settings subs take an unset list (D-8336)', () => {
+  it('settings-fleet and settings-box take settings, an unset list or both, and at least one of the two', () => {
+    expect(Object.keys(TESTBOX_ADMIN_SUBS['settings-fleet'].fields)).toEqual(['settings', 'unset']);
+    expect(Object.keys(TESTBOX_ADMIN_SUBS['settings-box'].fields)).toEqual(['settings', 'unset', 'whenIdle']);
+    for (const s of ['settings-fleet', 'settings-box'] as const) {
+      const fs = TESTBOX_ADMIN_SUBS[s].fields;
+      expect(fs['settings']!.required || fs['unset']!.required, s).toBe(false);
+      expect(fs['settings']!.anyOf && fs['unset']!.anyOf, s).toBe(true);
+      refused(s, {});
+      refused(s, { whenIdle: true });
+    }
+    // every other field of every sub is in no such group, and connect still requires its settings
+    for (const s of SUBS) {
+      for (const [name, fd] of Object.entries(TESTBOX_ADMIN_SUBS[s].fields)) {
+        if (s.startsWith('settings-') && (name === 'settings' || name === 'unset')) continue;
+        expect(fd.anyOf, `${s}.${name}`).toBe(false);
+      }
+    }
+    expect(TESTBOX_ADMIN_SUBS.connect.fields['settings']!.required).toBe(true);
+    refused('connect', { unset: ['CCRC_TESTBOX_WORKERS'], repos: [ROW] });
+  });
+  it('an unset list writes one --unset=KEY word per key, in the table\'s order, and rides beside settings', () => {
+    let r = build('settings-fleet', { unset: ['CCRC_TESTBOX_POLL', 'CCRC_TESTBOX_BUDGET'] });
+    expect(r.ok && r.argv).toEqual(['testbox-admin', 'settings-fleet', '--unset=CCRC_TESTBOX_BUDGET', '--unset=CCRC_TESTBOX_POLL']);
+    r = build('settings-box', { settings: { CCRC_TESTBOX_RUNS: '3' }, unset: ['CCRC_TESTBOX_OS_MIRROR'], whenIdle: true });
+    expect(r.ok && r.argv).toEqual(['testbox-admin', 'settings-box', '--set=CCRC_TESTBOX_RUNS=3', '--unset=CCRC_TESTBOX_OS_MIRROR', '--when-idle=true']);
+    // a key whose default is empty, which no --set word can carry, resets by the unset list
+    for (const k of ['CCRC_TESTBOX_OS_MIRROR', 'CCRC_TESTBOX_PROBE_CONFIG_DIR']) {
+      refused('settings-box', { settings: { [k]: '' } });
+      expect(build('settings-box', { unset: [k] }).ok, k).toBe(true);
+    }
+  });
+  it('the unset list is policed as the settings map is: the sub\'s own keys only, no pairing key, each once, never also set', () => {
+    for (const k of TESTBOX_FLEET_EDITABLE) expect(build('settings-fleet', { unset: [k] }).ok, k).toBe(true);
+    for (const k of TESTBOX_PAIRING_KEYS) refused('settings-fleet', { unset: [k] });
+    refused('settings-fleet', { unset: ['CCRC_TESTBOX_WORKERS'] });                        // a box key
+    for (const k of TESTBOX_BOX_KEYS.filter((x) => !TESTBOX_PAIRED_BOX_KEYS.includes(x))) expect(build('settings-box', { unset: [k] }).ok, k).toBe(true);
+    for (const k of TESTBOX_PAIRED_BOX_KEYS) refused('settings-box', { unset: [k] });
+    refused('settings-box', { unset: ['CCRC_TESTBOX_POLL'] });                             // a fleet key
+    for (const bad of [[], 'CCRC_TESTBOX_WORKERS', { CCRC_TESTBOX_WORKERS: true }, [1], [null], ['ccrc_testbox_workers'], ['CCRC_PORT'],
+      ['--force'], ['CCRC_TESTBOX_WORKERS', 'CCRC_TESTBOX_WORKERS'], ['__proto__']]) {
+      refused('settings-box', { unset: bad });
+    }
+    refused('settings-box', { settings: { CCRC_TESTBOX_WORKERS: '3' }, unset: ['CCRC_TESTBOX_WORKERS'] });
+    refused('settings-fleet', { settings: { CCRC_TESTBOX_POLL: '1m' }, unset: ['CCRC_TESTBOX_POLL'] });
+  });
+  it('resetting the deny list needs the step-up as changing it does; any other reset needs a session only', () => {
+    expect(testboxAdminNeedsStepUp('settings-fleet', { unset: ['CCRC_TESTBOX_DENY_GLOBS'] })).toBe(true);
+    expect(testboxAdminNeedsStepUp('settings-fleet', { unset: ['CCRC_TESTBOX_POLL', 'CCRC_TESTBOX_DENY_GLOBS'] })).toBe(true);
+    expect(testboxAdminNeedsStepUp('settings-fleet', { settings: { CCRC_TESTBOX_POLL: '1m' }, unset: ['CCRC_TESTBOX_DENY_GLOBS'] })).toBe(true);
+    expect(testboxAdminNeedsStepUp('settings-fleet', { unset: ['CCRC_TESTBOX_POLL'] })).toBe(false);
+    for (const bad of [{ unset: 'CCRC_TESTBOX_DENY_GLOBS' }, { unset: null }, { unset: { CCRC_TESTBOX_DENY_GLOBS: true } }]) {
+      expect(testboxAdminNeedsStepUp('settings-fleet', bad), JSON.stringify(bad)).toBe(false);
+    }
+  });
+});
+
 describe('the keys and their shapes', () => {
   /** `_tb_shape_class`'s case arms: key to class. */
   function bashClasses(): Record<string, string> {
@@ -318,18 +385,18 @@ describe('the keys and their shapes', () => {
     return [...KNOBS_TEXT.slice(start, end).matchAll(/_ccrc_knob (CCRC_TESTBOX_[A-Z0-9_]+) /g)].map((m) => m[1]!);
   };
 
-  it('the shape table names exactly the 44 keys and each class _tb_shape_class names', () => {
+  it('the shape table names exactly the 47 keys (D-8290 adds the live probes\' three) and each class _tb_shape_class names', () => {
     const bash = bashClasses();
-    expect(Object.keys(bash)).toHaveLength(44);
+    expect(Object.keys(bash)).toHaveLength(47);
     expect(Object.keys(TESTBOX_SHAPE_CLASS).sort()).toEqual(Object.keys(bash).sort());
     expect({ ...TESTBOX_SHAPE_CLASS }).toEqual(bash);
     expect([...TESTBOX_HOST_KEYS, ...TESTBOX_BOX_KEYS].sort()).toEqual(Object.keys(bash).sort());
   });
-  it('the host keys are the 16 and the box keys the 28 of the two tables, in order', () => {
+  it('the host keys are the 16 and the box keys the 31 of the two tables, in order', () => {
     expect([...TESTBOX_HOST_KEYS]).toEqual(tableKeys('_tb_host_table'));
     expect([...TESTBOX_BOX_KEYS]).toEqual(tableKeys('_tb_box_table'));
     expect(TESTBOX_HOST_KEYS).toHaveLength(16);
-    expect(TESTBOX_BOX_KEYS).toHaveLength(28);
+    expect(TESTBOX_BOX_KEYS).toHaveLength(31);
   });
   it('the shape sentences are _tb_shape_says, class for class', () => {
     const body = KNOBS_TEXT.slice(KNOBS_TEXT.indexOf('_tb_shape_says() {'), KNOBS_TEXT.indexOf('# ── the defaults table'));
@@ -571,8 +638,11 @@ describe('the codes', () => {
       'address-not-ip', 'no-egress', 'other-release', 'verify-failed', 'copy-failed', 'box-value-refused', 'install-refused',
       'install-failed', 'pair-failed', 'status-not-ok', 'pairing-keys-in-ccrc-env', 'key-in-ccrc-env', 'runs-in-progress',
       'idle-deadline', 'cancelled', 'gh-signed-out', 'parity-differs', 'not-connected', 'box-side-skipped',
-      'interrupted',
+      'interrupted', 'new-key-refused', 'old-line-kept', 'revoked-box-skipped', 'revoked-unpair-failed',
     ]) expect(TESTBOX_ADMIN_CODES, c).toContain(c);
+    // the codes whose refusal names a public key line for the operator to remove by hand (D-8337)
+    expect([...TESTBOX_LINE_CODES]).toEqual(['old-line-kept', 'revoked-box-skipped', 'revoked-unpair-failed']);
+    for (const c of TESTBOX_LINE_CODES) expect(TESTBOX_ADMIN_CODES).toContain(c);
     expect(TESTBOX_ADMIN_CODES.length).toBeGreaterThanOrEqual(35);
     for (const c of TESTBOX_ADMIN_CODES) {
       const s = TESTBOX_ADMIN_CODE_SENTENCE[c];

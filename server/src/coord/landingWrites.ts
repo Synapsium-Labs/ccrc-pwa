@@ -178,6 +178,23 @@ const text = (v: unknown): string | null => (typeof v === 'string' && v.trim() !
 const positive = (v: unknown): v is number => typeof v === 'number' && Number.isSafeInteger(v) && v > 0;
 const hash = (v: unknown): v is string => typeof v === 'string' && /^[0-9a-f]{40}$/.test(v);
 
+export type LandingReadQuery = { ok: true; project: string; pr: number | null } | { ok: false; detail: string };
+
+/** The landing read's query: `project` required and trimmed; `pr` absent (the entries still in the line) or a decimal
+ *  positive safe integer with no leading zero (that PR's entry, in any state). Anything else is refused, never coerced. */
+export function parseLandingReadQuery(q: unknown): LandingReadQuery {
+  const o = (typeof q === 'object' && q !== null ? q : {}) as Record<string, unknown>;
+  const project = text(o['project']);
+  if (project === null) return { ok: false, detail: 'the landing line is per-project — ?project= is required' };
+  const raw = o['pr'];
+  if (raw === undefined) return { ok: true, project, pr: null };
+  const pr = typeof raw === 'string' && /^[1-9][0-9]*$/.test(raw) ? Number(raw) : null;
+  if (pr === null || !Number.isSafeInteger(pr)) {
+    return { ok: false, detail: 'the landing read takes ?pr= as a PR number: a positive integer with no leading zero' };
+  }
+  return { ok: true, project, pr };
+}
+
 /** One request body, closed: known keys only, so a client `setBy`, `runId`, `state` or time is refused, never ignored. */
 export function parseLandingWrite(kind: 'entry' | 'order', body: unknown): LandingWriteParse {
   if (typeof body !== 'object' || body === null || Array.isArray(body)) return BAD;

@@ -32,6 +32,7 @@ import { liveStateReaderOver, readLiveState, readLiveStateMeasured } from './liv
 import { mailTurnIdle, mailTurnModeOf, mailTurnReadsMark, type MailTurnMode } from './turnidle.js';
 import { readTurnMarkMeasured } from './turnmark.js';
 import { finishedAfter } from './coord/finished.js';
+import { redactCommand } from './coord/redact.js';
 import { withCleanupHeldBy } from './cleanupHeldBy.js';
 import { foldHookStateRead, readHookState, readHookStateRawMeasured, type HookState, type HookStateRawRead } from './hookstate.js';
 import { readUsageMeasured, USAGE_FRESH_S } from './usage.js';
@@ -91,10 +92,11 @@ import { BoxSettingsLane } from './update/boxSettingsLane.js';
 import { DiskAlarmLane } from './diskAlarmLane.js';
 import { PressureLane } from './pressureLane.js';
 import { VisibilityLane } from './linking/visibilityLane.js';
-import { ProjectWalkCache, listProjects } from './lifecycle.js';
+import { ProjectWalkCache, listProjects, ccdEnding } from './lifecycle.js';
 import { BackupLane } from './backupLane.js';
 import type { BackupHealth } from '../../shared/backup.js';
 import { TestboxLane } from './testboxLane.js';
+import { BuildCaptureLane } from './buildCaptureLane.js';
 import type { HostPressureHealth } from '../../shared/pressure.js';
 import type { DiskHealth } from '../../shared/disk.js';
 import { DelegationDurability, type DelegationDurableBatch } from './coord/delegation-checkpoint.js';
@@ -175,6 +177,8 @@ import { coordinatorOfRun, readCoordinatorOfRun } from './coord/bindingReads.js'
 import { abandonDeadDispatches } from './coord/abandonDeadDispatch.js';
 import type { PushPayload } from './push.js';
 import { notify, noticeSink, notifyPushOnly } from './notice.js';
+import { mergedBody, mergedKey, mergedNoticeOf, type LandedMemory } from './coord/landed.js';
+import { landedPass } from './coord/landedLane.js';
 import { LANE_ARM_FEED_TITLE, LANE_ARM_LANES, LANE_ARM_MARKER, type LaneArmImport, type LaneArmLane } from '../../shared/lane-arm.js';
 import { laneArmImportLine } from './coord/laneArm.js';
 import { runDriftPass } from './coord/driftLane.js';
@@ -214,6 +218,7 @@ import {
   CHILD_RECLAIM_SWEEP_REJECTED, childReclaimTierSeed, type ChildReclaimSweepInput, type ChildStaleAsk,
 } from './childReclaimSweep.js';
 import { ChildStaleArm, childReclaimReviewedRun, readStaleHoldAt, readStaleHoldBytes, staleHoldWanted, type StaleHoldRead } from './coord/childReclaimStale.js';
+import { routeReviewReleases, type ReviewReleaseSighting } from './coord/reviewRelease.js';
 import { CHILD_BIRTH_SKEW_MS } from './coord/childSpent.js';
 import {
   CHILD_SHADOW_OUTCOME, EXPIRE_AUDITS_PER_PASS, EXPIRE_CHILD_LIVE_MARKER, archivedExpiryDue, archivedExpiryEntryFor, archivedExpiryLearned, archivedExpiryNextEntry,
@@ -597,18 +602,6 @@ const APPROVAL_RULED_GRACE_MS = 10_000;
  * disconnected so a stretch of empty/partial reads never clobbers the last
  * known good snapshot `/api/fleet` falls back to.
  */
-/** The identity of one merged announcement: the workspace AND the PR that
- *  merged. Defined once because two things key on it and they must not drift —
- *  `mergedNotified` (say it once) and the push's collapse tag (replace only
- *  what is genuinely the same statement). A workspace outlives its own merge
- *  now, so `id` alone is not an identity. */
-const mergedKey = (id: string, number: number | null): string => `${id}#${number ?? '?'}`;
-/** The merged announcement's body, built in ONE place (landing-order wave 3d): `announceMerged` writes it, and
- *  `sweepMerged`'s durable read matches a row archived before the once-only key existed by exactly this text. */
-const mergedBody = (number: number | null, reason: string | null): string => reason === null
-  ? `PR #${number ?? '?'} merged; nothing archived.`
-  : `PR #${number ?? '?'} merged — ${reason}; nothing archived.`;
-
 /** What one `FleetWatcher.pushRelease` call did (design 2026-09-20 §13; plan W3 Task 3). Each arm is a fact
  *  a caller or a test tells apart: nothing to decide; decided and marked with no push, every measured node
  *  already running the tag (D-3294); pushed; the mark lost to another writer, so nothing
@@ -641,10 +634,20 @@ function mergeBreakerMembers(
  *  without `recordAlways` had no caller and is not a type. */
 type PushOneMode = { recordOnly?: false | undefined } | { recordAlways: true; recordOnly: true };
 
-/** What a failed `pr-state` call says for itself, for the one log line `backoffPr` writes: the not-ran arm's detail, else
- *  the first line of ccd's stderr, cut to 160 characters. */
+/** What a failed ccd call says for itself, for the one log line `backoffPr` writes: the not-ran arm's detail; else how
+ *  ccd ended (`ccdEnding`, the single reader of the kill halves; `exit <n>` only when the exit code was measured),
+ *  then the first stderr line and, when it differs, the last non-empty one, each cut to 160 characters. */
 function failureDetail(res: CcdResult): string {
-  return (res.ran === false ? res.detail : res.stderr.split('\n')[0] ?? '').slice(0, 160);
+  if (res.ran === false) return res.detail.slice(0, 160);
+  const e = ccdEnding(res);
+  const ending = e.kind === 'exited' ? (res.exitCode === undefined ? 'exited' : `exit ${res.exitCode}`)
+    : e.kind === 'signal' ? `signal ${e.signal}` : e.kind === 'deadline' ? 'deadline' : 'ending unmeasured';
+  const lines = res.stderr.split('\n').filter((l) => l.trim() !== '');
+  const first = lines[0];
+  const last = lines[lines.length - 1];
+  // ccd's and gh's stderr is foreign text: each line goes through the one redactor before it is cut and logged.
+  return [ending, ...(first === undefined ? [] : [`first: ${redactCommand(first).slice(0, 160)}`]),
+    ...(first !== undefined && last !== first ? [`last: ${redactCommand(last!).slice(0, 160)}`] : [])].join('; ');
 }
 
 export class FleetWatcher {
@@ -713,6 +716,8 @@ export class FleetWatcher {
    * the first sweep after the deploy, and that repeat is keyed.
    */
   private mergedNotified = new Set<string>();
+  /** The landed reader's memory of each entry it has read (id -> due time, step, streak); `coord/landed.ts` decides on it. */
+  private landedMemory = new Map<number, LandedMemory>();
   /** The merge-queue word each session's last full pr-state line carried
    *  (`queueFor`), kept beside `prStates` and written by the same arm of
    *  `sweepPr`. Read by `sweepLanding` and nothing else. */
@@ -1078,6 +1083,8 @@ export class FleetWatcher {
   private readonly backupLane = new BackupLane(() => this.deps);
   /** The test box's poll (D-7411): the block `GET /api/testbox` answers, and the tools sync's one door. */
   readonly testboxLane = new TestboxLane(() => this.deps);
+  /** D-8289: the capture queue: a row per build the fleet runs, and one capture job at a time to the test box. */
+  private readonly buildCaptureLane = new BuildCaptureLane(() => this.deps);
   private readonly tmpCensus = new TmpCensusBeat(() => this.deps);
   /** Each node's last box-settings read (D-6916): read inside the inventory run, served by `GET /api/updates` through `boxSettingsHeld()`. */
   private readonly boxSettingsLane = new BoxSettingsLane();
@@ -2703,6 +2710,8 @@ export class FleetWatcher {
       // --timeout, so awaiting it would stall the dialog detector and the
       // busy->idle push behind GitHub's reachability.
       void this.sweepPr(registryRead).catch(() => { /* one bad sweep must not kill the poll */ });
+      // NEVER awaited, sweepPr's reasoning: it shells out to `gh` through ccd, once per entry.
+      void this.sweepLanded().catch(() => { /* one bad sweep must not kill the poll */ });
       const refreshCaps = this.deps.refreshCaps;
       if (refreshCaps) {
         // NEVER awaited: same reasoning as sweepPr immediately above — caps()
@@ -2975,6 +2984,8 @@ export class FleetWatcher {
       if (this.primed) void this.sweepSleep(sessions, records, registryRead.names).catch(() => { /* one bad sweep must not kill the poll */ });
       // D-7452: the automatic coordinator roll, at hibernation's clock, never awaited, gated on `primed` the same way.
       if (this.primed) void this.sweepRoll(sessions, records, registryRead.names)?.catch(() => { /* one bad sweep must not kill the poll */ });
+      // D-8289: the capture queue, on THIS tick's builds (D-8276's newest-build signal and every live build). Own clock, never awaited.
+      void this.buildCaptureLane.sweep(sessions.map((s) => s.version));
       if (this.primed) void this.sweepStaleArchive(records, registryRead.names).catch(() => { /* one bad sweep must not kill the poll */ });
       // D-5373: NEVER awaited, `sweepMail`'s reason — it can call `sendPrompt` through the per-session queue. Own clock.
       // A due beat that lands on a pass still running is skipped by the row and still spends its slot, as it always did.
@@ -4549,6 +4560,8 @@ export class FleetWatcher {
     const seen = new Set<string>();
     const judged = new Map<string, ChildReclaimSweepVerdict>();
     const due: { r: SessionRecord; entry: ChildReclaimSweepEntry; runId: number; id: string; stale: ChildStaleAsk | null }[] = [];
+    // D-8293: the review children judged past their ceiling this pass, for their Waiting on you item.
+    const staleReviews: ReviewReleaseSighting[] = [];
     // Declared here, not at section FOUR below, so the hold-release job (a
     // SEPARATE dispatch from the ordinary reclaim gathered into `due`) can be
     // pushed onto it from inside this same per-child loop, the instant its
@@ -4660,6 +4673,9 @@ export class FleetWatcher {
       };
       const v = childReclaimSweepVerdict(sweepIn);
       judged.set(r.id, v);
+      if (!v.eligible && v.why === 'review-report-stale' && reviewedId !== null) {
+        staleReviews.push({ sessionId: r.id, reviewRunId: v.runId, reviewedRunId: reviewedId });
+      }
       recordChildReclaimKeptReason({ coord, notifyLog: this.deps.notifyLog }, this.childReclaimKeptReasons, sweepIn, v);
       // D-6639: the stale arm judges BESIDE the verdict. An ask only when armed, on a box that proves the flag.
       const stale = this.childStale.judge({ coord, record: r, hold: staleHolds.get(r.id), input: sweepIn, verdict: v, names,
@@ -4768,6 +4784,8 @@ export class FleetWatcher {
       due.push({ r, entry, runId: actRunId, id: r.id, stale });
     }
     this.childReclaimJudged = judged;
+    // D-8293: a review child past its ceiling is a Waiting on you item whose Release is the operator's (`coord/reviewRelease.ts`).
+    routeReviewReleases({ coord }, staleReviews, judged, now);
     // The list's second publish, and the kept feed row: judging passes only, so a paused or capability-less
     // pass lists what it kept and writes nothing (spec §5.9). Recorded, never pushed.
     for (const a of this.childReclaimPublishAttention(mirrorArms, live)) {
@@ -7905,6 +7923,12 @@ export class FleetWatcher {
     const projects = new Set(records.map((r) => r.project));
     const sessionProjects = new Map(records.map((r) => [r.id, r.project] as const));
     this.reviveParked(store, records, now, sessionProjects, projects);
+    // D-8292 (#119): a run whose worker took its wave brief (ingested or acked) moves `dispatched -> working`. Before the
+    // empty-queue return, so a brief acked through the route with nothing else outstanding still starts its run; an
+    // ingest edge sampled further down this pass starts it on the next one. A store-only act: no read, no fleet act.
+    for (const s of store.startRunsOnTakenBrief()) {
+      console.log(`ccrc-server: run ${s.runId} working: its worker took its wave brief (delivery ${s.deliveryId}, ${s.how})`);
+    }
 
     const unacked = store.deliveredUnacked();
     const dueBefore = store.dueDeliveries(now, MAIL_REPLAY_MS);
@@ -8487,6 +8511,19 @@ export class FleetWatcher {
     await this.runLane('pr', () => this.prPass(fleet), anyPending);
   }
 
+  /** The landed reader's sweep (landing order wave 5h): `coord/landedLane.ts#landedPass` under the `landed` row. The
+   *  guard is `sweepPr`'s: with the agent down there is nothing to read. */
+  private async sweepLanded(): Promise<void> {
+    if (this.deps.cfg.fleetMode === 'remote' && !this.deps.fleetState?.connected) return;
+    const coord = this.deps.coord;
+    if (coord === undefined) return;
+    await this.runLane('landed', () => landedPass({
+      coord, runCcd: this.deps.runCcd, ...(this.deps.fleetState ? { fleetState: this.deps.fleetState } : {}),
+      notice: noticeSink(this.deps), now: () => this.deps.time.clock.wall(), memory: this.landedMemory,
+      warn: (l) => { console.warn(l); },
+    }));
+  }
+
   /** The visibility lane's tick over EVERY listed project (the root walk and the registry's), not only those with a workspace
    *  session: a project just added has none, and it must still be read (D-8147). Never throws. */
   private async measureVisibility(records: readonly { project: string; workdir: string }[], now: number): Promise<void> {
@@ -8654,12 +8691,14 @@ export class FleetWatcher {
   private announceMerged(key: string, r: SessionRecord, number: number | null, reason: string | null): void {
     if (this.mergedNotified.has(key)) return;
     this.mergedNotified.add(key);
+    // The record is `coord/landed.ts#mergedNoticeOf`'s, the one builder (wave 5h): the landed reader raises the same one.
+    const rec = mergedNoticeOf({ pr: number, reason, sessionId: r.id, workspace: String(r.workspace), key });
     this.pushOne({
-      kind: 'merged', sessionId: r.id, project: r.project,
-      title: `✓ merged › ${r.workspace}`,
-      body: mergedBody(number, reason),
+      kind: rec.kind, sessionId: rec.sessionId, project: r.project,
+      title: rec.title,
+      body: rec.body,
       // The once-only key, archived beside the row for `hasNotice` (landing-order wave 3d). It decides nothing here.
-      dedupeKey: key,
+      dedupeKey: rec.dedupeKey,
       // EXPLICIT, because `pushOne`'s default (`${kind}-${sessionId}`) is one
       // key short of this lane's own. The latch is per (workspace, PR) so a
       // second PR from the same workspace is announced — and an id-only
@@ -8672,7 +8711,7 @@ export class FleetWatcher {
       // (a row pruned past `FEED_RETENTION`, a push the presence gate kept out
       // of it, or a pre-key row whose body changed since) carries this same
       // tag, so it replaces rather than stacks.
-      tag: `merged-${key}`,
+      tag: rec.tag,
     }, this.activeProjects);
   }
 

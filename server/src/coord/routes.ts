@@ -16,14 +16,14 @@ import { turnReadDeps, turnVerdictFor } from '../turnverdict.js';
 import type { TurnVerdict } from './archiveDoor.js';
 import { configDirFor } from '../config.js';
 import { peerDeliverable, archiveContradicted } from './peers.js';
-import { claimMailHint } from './claims.js';
+import { claimMailHint, lapseWindowStart, recentlyLapsedClaims } from './claims.js';
 import { CCD_ARGV, ccdCan, deviceActor, sweepDec } from '../ccdargv.js';
 import { decideRoute, parseRouteRequest } from './route.js';
 import { decideCaps } from './caps.js';
 import { tx } from './db.js';
 import { LEDGER_ALLOC_MAX } from './ledger.js';
-import { landingOrder } from './landingLine.js';
-import { landingCommandOf, parseLandingWrite } from './landingWrites.js';
+import { landingViewOf } from './landingLine.js';
+import { landingCommandOf, parseLandingReadQuery, parseLandingWrite } from './landingWrites.js';
 import { actLandingWrite } from './landingWritesAct.js';
 import type { LandingLineView } from '../../../shared/landingLine.js';
 import { measureLedgerFloor, type FloorMeasurement } from './ledgerseed.js';
@@ -86,6 +86,7 @@ import {
 import { NO_FLEET_IDENTITY } from '../fleetidentity.js';
 import {
   CLAIM_INTENT_MAX_BYTES, CLAIM_PATHS_MAX, CLAIM_PATH_MAX_BYTES, isAskState,
+  type ClaimsListAnswer, type ClaimTakeAnswer,
   isPositiveDecimalSafeInteger, isRunState, isSendableMailKind,
   parseCanonicalPositiveSafeInteger, parseQuestionId, readDialogAnswer,
   LEDGER_STALE_MS, LEDGER_TITLE_MAX_BYTES, ledgerPath, shapeProgramSlug,
@@ -140,7 +141,7 @@ import {
   CHILD_DENY_SETTINGS_FILE, type ApprovalKeyAnswer, type ApprovalRequestAccepted, type ApprovalRulingAnswer,
   type ApprovalView,
 } from '../../../shared/api.js';
-import { CLAUDE_ROLL_TARGETS, CLAUDE_ROLL_TARGETS_DEFAULT, isClaudeRollTargets, type ClaudeRollTargets } from '../../../shared/claudeVersion.js';
+import { CLAUDE_ROLL_TARGETS, CLAUDE_ROLL_TARGETS_DEFAULT, isClaudeRollTargets, isClaudeVersion, type ClaudeRollTargets } from '../../../shared/claudeVersion.js';
 import { rollTargetsOf } from './rollTarget.js';
 import { planStorePort } from './planStore.js';
 import { planFactsOf } from './planRunFacts.js';
@@ -1709,7 +1710,7 @@ export function registerCoordRoutes(
     if (id === null) return reply.code(400).send({ ok: false, error: 'bad-request' });
 
     const closeDeps: CloseRunDeps = { coord, io: deps.io, cfg: deps.cfg, runCcd: deps.runCcd,
-      fleetState: deps.fleetState, childReclaim: childReclaimPort(deps, coord) };
+      fleetState: deps.fleetState, childReclaim: childReclaimPort(deps, coord), notice };
     const outcome = await coordMutex.run(() => closeRun(closeDeps, id, req.body, 'coordinator'));
     return sendCloseOutcome(reply, outcome);
   });
@@ -2285,6 +2286,33 @@ export function registerCoordRoutes(
       return refuseRoute(reply, refusal.error, { detail: refusal.detail });
     }
     return reply.code(200).send({ ok: r.reply.outcome === 'sent', ...r.reply });
+  });
+
+  /** D-8289: Settings › Automation › Test box's build list (`GET`, the record as `CoordStore.claudeBuilds` reads it) and the
+   *  operator's **Capture again** (`POST`, `{build}` and nothing else: a FAILED build goes back to the queue, which sends it on
+   *  its next pass). Both session-gated, no box token: no machine lane reads or moves the trusted set. A record that cannot be
+   *  read is `unavailable`, never an empty list. */
+  const buildsAnswer = (reply: FastifyReply, coord: NonNullable<typeof deps.coord>): FastifyReply => {
+    try { return reply.code(200).send({ ok: true, claudeBuilds: coord.claudeBuilds() }); } catch (err) {
+      return refuseRoute(reply, 'unavailable', { detail: `the build record could not be read (${err instanceof Error ? err.message : String(err)})` });
+    }
+  };
+  app.get('/api/testbox/builds', async (_req, reply) => (deps.coord ? buildsAnswer(reply, deps.coord) : notConfigured(reply)));
+  app.post('/api/testbox/builds/capture', async (req, reply) => {
+    if (!deps.coord) return notConfigured(reply);
+    const body = req.body as { build?: unknown } | null | undefined;
+    if (typeof body !== 'object' || body === null || Object.keys(body).join() !== 'build' || !isClaudeVersion(body.build)) {
+      return refuseRoute(reply, 'bad-request', { detail: 'the body is {build}, a Claude Code build such as 2.1.302' });
+    }
+    const r = deps.coord.requeueClaudeBuild(body.build);
+    if (r === 'unknown-build') return refuseRoute(reply, 'not-found', { detail: `no build ${body.build} is recorded` });
+    if (r === 'not-failed') return refuseRoute(reply, 'conflict', { detail: `build ${body.build} has not failed its capture` });
+    if (deps.notifyLog) {
+      const actor = deps.cfg.authEnabled ? deviceActor(sessionAuth(req).device) : 'flag-off';
+      notice({ kind: 'coord', sessionId: '', title: 'Claude Code build sent to capture again', runId: null,
+        body: `build ${body.build} is queued for its capture again; by ${actor}` }, 'record-only', { degraded: 'capture re-queued, feed archive degraded' });
+    }
+    return buildsAnswer(reply, deps.coord);
   });
 
   /** `GET`/`POST /api/coord/caps` — the coordination cap becomes an
@@ -3815,12 +3843,15 @@ export function registerCoordRoutes(
       // from them, one reader: `renewed` is true exactly when some row's lease
       // was re-armed after its creation, and the two horizons are the earliest
       // across the batch — the only bound that is true of everything acquired.
-      return reply.code(200).send({
+      // D-8392: `lapsedSince` only when the caller re-took paths its own recent lapse held — a gap it must re-check.
+      const answer: ClaimTakeAnswer = {
         ok: true, ids: r.claims.map((c) => c.id),
         expiresAt: Math.min(...r.claims.map((c) => c.expiresAt)),
         hardExpiresAt: Math.min(...r.claims.map((c) => c.hardExpiresAt)),
         renewed: r.claims.some((c) => c.renewedAt > c.createdAt),
-      });
+        ...(r.lapsedSince.length > 0 ? { lapsedSince: r.lapsedSince } : {}),
+      };
+      return reply.code(200).send(answer);
     }
     switch (r.why) {
       case 'bad-path':
@@ -3957,7 +3988,10 @@ export function registerCoordRoutes(
    * read (live rows only) — and the PWA's `claims({all:true})` history call
    * rides the same door, so `all=1` without a project answers EVERY
    * project's rows verbatim (`allClaims`), ended included: the same read
-   * the project arm's `all` gives one project.
+   * the project arm's `all` gives one project. D-8392: the default
+   * per-project answer adds `recentlyLapsed` (`ClaimsListAnswer`), the rows
+   * that lapsed within the last `CLAIM_LEASE_MS`, an unswept one included,
+   * so the coordinator's read tells a lapse from a claim never taken.
    */
   app.get('/api/claims', async (req, reply) => {
     if (deps.cfg.authEnabled) {
@@ -3981,9 +4015,20 @@ export function registerCoordRoutes(
       ? q.project.trim() : null;
     const all = q.all === '1' || q.all === 'true';
     const now = Date.now();
+    if (project !== null && !all) {
+      // D-8392: the default per-project read the coordinator makes (clause 10) answers its recent lapses beside the
+      // live rows, so a lapse no longer reads like a claim never taken. `claims` keeps meaning live rows only.
+      const rows = deps.coord.claimsForProject(project);
+      const answer: ClaimsListAnswer = {
+        ok: true,
+        claims: rows.filter((c) => c.expiresAt > now),
+        recentlyLapsed: recentlyLapsedClaims(
+          [...rows, ...deps.coord.lapsedClaimsSince(project, lapseWindowStart(now))], now),
+      };
+      return reply.code(200).send(answer);
+    }
     const claims = project !== null
-      ? (all ? deps.coord.claimsForProject(project, true)
-             : deps.coord.claimsForProject(project).filter((c) => c.expiresAt > now))
+      ? deps.coord.claimsForProject(project, true)
       : (all ? deps.coord.allClaims()
              : deps.coord.activeClaims().filter((c) => c.expiresAt > now));
     return reply.code(200).send({ ok: true, claims });
@@ -4163,7 +4208,8 @@ export function registerCoordRoutes(
   });
 
   /**
-   * `GET /api/landing?project=`: the landing line, read cookieless from the fleet host before the coordinator
+   * `GET /api/landing?project=[&pr=]`: the landing line (wave 5h: `entries` are the ones still in the line, or with
+   * `?pr=` that PR's entry in any state; `entriesScope` says which), read cookieless from the fleet host before the coordinator
    * enqueues. It follows the `GET /api/ledger` convention: box token, a read with no attribution to check, per-project
    * and REQUIRED. The order is computed on this read by `landingLine.ts#landingOrder` and never stored. A project with
    * no `landing_projects` row answers both flags `false`: inert until their writers (5i, 5j). The read is advisory
@@ -4172,15 +4218,13 @@ export function registerCoordRoutes(
   app.get('/api/landing', async (req, reply) => {
     if (!deps.coord) return notConfigured(reply);
     if (!requireMailToken(req, reply, 'GET /api/landing')) return;
-    const q = req.query as { project?: unknown };
-    if (typeof q.project !== 'string' || q.project.trim() === '') {
-      return refuseRoute(reply, 'bad-request', { detail: 'the landing line is per-project — ?project= is required' });
-    }
-    const project = q.project.trim();
+    const query = parseLandingReadQuery(req.query);
+    if (!query.ok) return refuseRoute(reply, 'bad-request', { detail: query.detail });
+    const { project, pr } = query;
     const read = deps.coord.readLanding(project);
     if (!read.ok) { const { ok: _ok, error, ...extra } = read; return refuseRoute(reply, error, extra); }
     const { entries, flags, recovery } = read.facts;
-    const view: LandingLineView = { project, ...flags, entries, order: landingOrder(entries, flags, recovery), recovery };
+    const view: LandingLineView = { project, ...flags, ...landingViewOf(entries, flags, recovery, pr), recovery };
     return reply.code(200).send({ ok: true, ...view });
   });
 
@@ -4449,7 +4493,7 @@ export function registerCoordRoutes(
       case 'internal': return refuseRoute(reply, 'internal', { detail: v.detail });
       case 'not-a-child': return refuseRoute(reply, 'not-a-child');
       case 'deny-not-engaged': return refuseRoute(reply, 'deny-not-engaged');
-      case 'version-unverified': return refuseRoute(reply, 'version-unverified', { detail: v.detail });
+      case 'version-unverified': return refuseRoute(reply, 'version-unverified', { detail: v.detail, trust: v.trust });
       case 'digest-mismatch': return refuseRoute(reply, 'digest-mismatch');
       case 'run-unreadable': return refuseRoute(reply, 'run-unreadable', { detail: v.detail });
       // Released at once: the hook prints nothing, the menu stays with the operator, and nobody is mailed.

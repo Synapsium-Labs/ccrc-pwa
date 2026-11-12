@@ -336,9 +336,11 @@ describe('testboxReaders(): nothing outside docs/ reads a test box setting or th
     'pwa/src/fleet/testboxAdminWords.ts', 'pwa/src/fleet/TestBoxConnect.tsx', 'pwa/src/fleet/TestBoxConnect.test.tsx', 'pwa/test/testbox-admin-words.test.ts',
     'pwa/src/fleet/TestBoxManage.test.tsx', 'pwa/browser/testbox-manage.browser.test.ts',
   ];
+  // The live probes (D-8290) add the three probe keys' reader, the refusal sentences that name two of them, and their test.
+  const PROBE_HOLDERS = ['agent/src/testbox/probes.ts', 'agent/test/testbox-probes.test.ts', 'shared/testbox.ts'];
   const HOLDERS = [
     ...TB1_HOLDERS, ...TB5_HOLDERS, ...TB6_HOLDERS, ...TB4_HOLDERS, ...TB3_HOLDERS, ...TB2_HOLDERS, ...TB7_HOLDERS, ...TB8_HOLDERS,
-    ...TB9_HOLDERS, ...TB10_HOLDERS, ...TB11_HOLDERS, ...BOX_SETTINGS_W2_HOLDERS, ...TC_HOLDERS,
+    ...TB9_HOLDERS, ...TB10_HOLDERS, ...TB11_HOLDERS, ...BOX_SETTINGS_W2_HOLDERS, ...TC_HOLDERS, ...PROBE_HOLDERS,
   ].sort();
   it('the tracked readers are exactly the literal list (TB1: the settings; TB2: the switch row and its two pins; TB3: the transport; TB4: the test service; TB5: the pristine store and the proxy; TB6: the tool sync; TB7: the box package; TB8: the remote arm; TB9: the agent op, the decider and the switch verb; TB10: the Test box card\'s read hook; TB11: the doctor line, the durations timer, lifecycle and README; W2: the box settings view\'s table, value words and tests)', () => {
     const r = git(['grep', '-l', '-E', 'CCRC_TESTBOX_|testbox-remote-live', '--', '.', ':!docs/', `:!${SELF}`]);

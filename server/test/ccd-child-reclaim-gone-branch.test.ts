@@ -22,7 +22,7 @@ import { execFileSync } from 'node:child_process';
 import { GH_STUB, makePrHarness, type PrHarness } from './ccdPrHelpers.js';
 import { inheritedEnv } from './gitEnvStrip.js';
 import { eventsOf, refusalsOf } from './lifecycleHelpers.js';
-import { CHILD_BRANCH, CHILD_ID, CHILD_STUBS, childReclaimVerb, evalOf, makeChild, type Child } from './childReclaimFixture.js';
+import { CHILD_BRANCH, CHILD_ID, CHILD_RUN, CHILD_STUBS, childReclaimVerb, evalOf, makeChild, type Child } from './childReclaimFixture.js';
 import { verbHelpers } from './childReclaimVerbHelpers.js';
 import { parseChildReclaimResult } from '../src/coord/childReclaim.js';
 import { CHILD_RECLAIM_PRE_LOCK_TOKEN, childReclaimFailureLine } from '../src/childReclaimSweep.js';
@@ -417,6 +417,21 @@ describe.skipIf(!MODERN_GIT)('the pin and the tail', () => {
   it('the verb’s in-lock recompute refuses it too: the terminal word, never pin-failed, nothing touched', () => {
     const c = symbolicGone();
     expect(refusedWith(childReclaimVerb(h, 'f'.repeat(64)))).toBe('branch-gone-checked-out');
+    workStands(c);
+  }, 90_000);
+
+  it('D-8286: a HEAD symbolic to ANOTHER branch with no commit (an orphan checkout) is refused by the ladder and the pin alike', () => {
+    const c = makeChild(h);
+    fs.appendFileSync(path.join(c.wt, 'f1.txt'), 'uncommitted\n');
+    h.git(c.wt, 'checkout', '-q', '--orphan', 'ws/other');
+    const a = evalOf(h);
+    expect(a.verdict, a.detail).toBe('branch-gone-checked-out');
+    expect(a.token, 'refused before any token is minted').toBe('');
+    expect(refusedWith(childReclaimVerb(h, 'f'.repeat(64)))).toBe('branch-gone-checked-out');
+    // The pin's own guard is the same predicate: called with no ladder in front of it (a settle), it refuses in the
+    // ladder's words, before any commit or pin.
+    const why = h.sh(`${CHILD_STUBS} _ws_reclaim_pin ${CHILD_ID} "${c.wt}" "${c.main}" ${CHILD_BRANCH} ${CHILD_RUN} >/dev/null; printf '%s' "$RECLAIM_PIN_WHY"`);
+    expect(why).toBe(`${c.wt} has ws/other checked out, but ws/other names no commit (never born, or gone from its repository) — HEAD names no commit for the WIP commit to stand on, so nothing was pinned`);
     workStands(c);
   }, 90_000);
 
