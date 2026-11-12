@@ -3455,15 +3455,15 @@ delivered once to whatever waits for it, `select()` can then call a FIFO with no
 
 **Items, and what was done.**
 - **The defect, measured on macOS.** The helper's own spawn, pump and wait, against a mint that prints two lines, sleeps a
-  second and exits 0, ran to the pump's backstop and was stamped expired in 51 of 180 runs, on both spawn arms, bare and
-  under load. Each time the mint had exited 0 and both lines had reached the pane, and the tick reads answered 0, 0 and
+  second and exits 0, ran to the pump's backstop and was stamped expired in 51 of 140 runs (all from run 43154928175), on
+  both spawn arms, bare and under load. Each time the mint had exited 0 and both lines had reached the pane, and the tick reads answered 0, 0 and
   then only 142, never 1. A sign-in that succeeded would end `expired` after its whole deadline (610 s by default).
 - **The fix.** Once a tick read has timed out and the child has exited, the pump makes one drain read with no `-t`, a
   plain `read(2)`, in its own shell under `_auth_timeout`, bounded by the tick and by what is left before the backstop:
   a line, the end of the stream, or a writer still there (D-2736's descendant), which stays a timeout and still ends at
   the backstop. The partial-line display and the code forward run as before, in the same order. The tick read is a
-  function of its own, `_auth_pump_read`, the seam the tests drive. Measured on macOS with the fix: 0 of 230 runs red, and
-  a held stream still ended expired at the 10 s backstop each time.
+  function of its own, `_auth_pump_read`, the seam the tests drive. Measured on macOS with the fix: 0 of 140 late runs red
+  where 51 of 140 were before, 0 of 230 runs in all, and a held stream still ended expired at the 10 s backstop each time.
 - **Tests.** Three cases, each on both arms, drive the seam with stand-ins that answer as Darwin did: a finished mint whose
   EOF the tick read lost ends at once; when `select()` never says readable every byte still arrives in order; a
   descendant holding the stream still ends at the backstop as expired. Each is red without the drain arm (from a saved
@@ -3471,12 +3471,24 @@ delivered once to whatever waits for it, `select()` can then call a FIFO with no
 - **`_auth_forward_code`'s peek on fd 7.** It cannot lose the code: fd 7 is held open read-write, so it never reaches end
   of file, and a code is one line in one write. Measured on macOS: 400 of 400 codes whole. Not changed.
 
-`_auth_timeout`, the gate, `full-suite`, `macos.yml`, D-2736's backstop and its window are unchanged; no timeout is raised.
+`_auth_timeout`, the gate, `full-suite`, `macos.yml` and D-2736's backstop window are unchanged; no timeout is raised.
+
+**Fix round 1 (review 1849).** The backstop TERMs the pump's own child rather than `AUTH_CHILD`, which is empty under
+`login`; the pane methods are unchanged. On `_auth_timeout`'s pure-bash arm a `login` mint that ignores TERM used to hang
+the run, which was older than D-8345, and now ends `expired` at the backstop. The drain's shell runs with `-p`, so no
+BASH_ENV reaches the drained text, and the drain's bound is a function of its own that reads a zero tick as 1 and the
+tick's whole part with `10#`. New cases pin each: the drain reads fd 8 on the pure-bash arm, a printing BASH_ENV, `login`
+with the lost-EOF stand-in, `login`'s TERM-ignoring mint on the pure-bash arm, and the bound; each is red without its
+fix (from a saved copy). The record's 51 of 180 is corrected to 51 of 140. The departure `login-backstop-kills-nothing`
+is closed, and `pure-bash-arm-mint-stdin` (the pure-bash arm hands the mint /dev/null, so no code reaches it) is
+observed for a ruling, by slug in `c28.md`.
 
 - **D-8345** - `pump-darwin-eof`: Task C28, issued on 2026-11-12. The sign-in pump's tick read is `read -t` on a FIFO
-  whose end of file is one-shot on macOS, so a finished mint ran to the backstop and ended `expired` (51 of 180 runs
+  whose end of file is one-shot on macOS, so a finished mint ran to the backstop and ended `expired` (51 of 140 runs
   measured). After a timed-out tick with the child gone, the pump confirms the end of the stream with one bounded drain
-  read that does not use `select()`. Departures are named by slug in `c28.md`.
+  read that does not use `select()`. Fix round 1 (review 1849): the backstop TERMs the pump's own child, so `login`'s
+  ends too (F2); the drain's shell runs `-p` (M1); a zero tick is 1 and the tick is read with `10#` (M2, M3); cases pin
+  the pure-bash arm and `login` (F3, F4). Departures are named by slug in `c28.md`.
 
 ## Acceptance (the matrix, per PR)
 
