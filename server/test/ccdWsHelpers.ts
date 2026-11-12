@@ -12,7 +12,7 @@ import { parseRoster } from '../../shared/roster.js';
 import { generateAccountsSh } from '../../shared/generate.mjs';
 import { asManagerCalls } from './platformFixtures.js';
 import { inheritedEnv } from './gitEnvStrip.js';
-import { CONTAINED_TOOLS, busUnder, plantPoison } from './containedTools.js';
+import { CONTAINED_TOOLS, assertNoPoisonLeft, busUnder, ledgerHitLine, plantPoison, takePoisonRecord } from './containedTools.js';
 import { CLOSED_AUTH_BASE } from './codexAuthFixture.js';
 import { markGenerated } from '../../shared/mark.mjs';
 
@@ -416,7 +416,7 @@ export function harnessBin(home: string): string {
  * to 165/170, and every failure named `ccrc status`, three files from the edit.
  */
 export interface ContainOpts {
-  /** Plant the `systemctl`/`systemd-run` poisons too. ASK FOR THIS IF THE SPAWN
+  /** Plant the `systemctl`/`systemd-run`/`launchctl` poisons too, and since D-8394 `plantPoison`'s `loginctl`. ASK FOR THIS IF THE SPAWN
    *  RUNS ccd: every path that can reach `_have_systemctl` or
    *  `_supervised_start` needs it, `makeCcdHarness` asks on behalf of every test
    *  that goes through the harness, and `ccd-workspaces.test.ts`'s source scan
@@ -437,7 +437,7 @@ export interface ContainOpts {
   net?: boolean;
 }
 
-/** The ssh, scp and curl poisons `net` plants: the three CONTAINED_TOOLS names the other options do not cover. */
+/** The ssh, scp and curl poisons `net` plants: three of the CONTAINED_TOOLS names the other options do not cover. */
 const NET_TOOLS = ['ssh', 'scp', 'curl'] as const;
 
 /** THE named door for a test that needs a FUNCTIONAL contained tool under the harness, a curl stub above all (wave
@@ -486,14 +486,24 @@ export function ghContainedEnv(
 ): NodeJS.ProcessEnv {
   const bin = harnessBin(home);
   fs.writeFileSync(path.join(bin, 'gh'),
-    '#!/bin/sh\nprintf \'%s\\n\' "$*" >> "$HOME/gh-poison"\n'
+    `#!/bin/sh\nprintf '%s\\n' "$*" >> "$HOME/gh-poison"\n${ledgerHitLine('gh-poison')}\n`
     + 'echo "ccd tests must never reach the real gh" >&2\nexit 97\n', { mode: 0o755 });
   // Everything below is the SYSTEMD boundary and the tmux poison (since wave 18
-  // also the net poisons and the bus), and it happens only for a caller that asked. OPT-IN, not opt-out: a default-on poison is invisible to the
+  // also the net poisons and loginctl), and it happens only for a caller that asked. OPT-IN, not opt-out: a default-on poison is invisible to the
   // consumer it hurts, because the damage shows up as a wrong ANSWER in a file
   // that never mentioned systemd (see the header). Opt-in makes the widening
   // land at the call site, where the reviewer of that call site can see it.
-  if (!opts.systemd && !opts.tmux && !opts.net) return { ...env, ...containedAuthBase(env), ...containedBridgeBase(env), PATH: `${bin}:${env['PATH'] ?? ''}` };
+  // The user bus is SET for every caller, the gh-only one included (D-8394, residue R35(f)): an environment VALUE,
+  // not a poison, so it is on by default as `containedAuthBase` is. Before it, a thin builder with no `systemd` kept
+  // the caller's real pair, D-5253's named blind spot. ccd's `: "${XDG_RUNTIME_DIR:=/run/user/$(id -u)}"` would turn
+  // an absence back into the real one, so it is set, after the caller's env, to two paths under HOME that do not
+  // exist. A caller's own pair stands only when BOTH name a path physically under HOME (`busUnder`, the rule
+  // `assertNoRealTool` applies): a fixture runtime dir a test made itself.
+  const bus = busUnder(env, home) ? {} : {
+    XDG_RUNTIME_DIR: path.join(home, 'no-runtime-dir'),
+    DBUS_SESSION_BUS_ADDRESS: `unix:path=${path.join(home, 'no-bus')}`,
+  };
+  if (!opts.systemd && !opts.tmux && !opts.net) return { ...env, ...bus, ...containedAuthBase(env), ...containedBridgeBase(env), PATH: `${bin}:${env['PATH'] ?? ''}` };
   // THE SECOND STRUCTURAL BOUNDARY for the ccd runners, and the reason it is a
   // poison rather than an absence: `_have_systemctl` is `command -v systemctl`,
   // so REMOVING systemctl would send every ccd test down `_supervised_start`'s
@@ -550,15 +560,9 @@ export function ghContainedEnv(
       + '[ "$rc" = 0 ] || echo "ccd tests must never reach the real user manager" >&2\nexit "$rc"\n',
       { mode: 0o755 });
   }
+  // `loginctl`, the user manager's linger switch, is poisoned with the managers (D-8394, residue R35(f)).
+  if (opts.systemd) plantPoison(bin, 'loginctl');
   if (opts.net) for (const n of NET_TOOLS) plantPoison(bin, n);
-  // The user bus rides the manager poisons (wave 18, D-5248): the managers are what read it, and ccd's
-  // `: "${XDG_RUNTIME_DIR:=/run/user/$(id -u)}"` would turn an absence back into the real one, so it is SET, after
-  // the caller's env, to two paths under HOME that do not exist. A caller's own pair stands only when BOTH name a
-  // path under HOME (`busUnder`, the rule `assertNoRealTool` applies): a fixture runtime dir a test made itself.
-  const bus = opts.systemd && !busUnder(env, home) ? {
-    XDG_RUNTIME_DIR: path.join(home, 'no-runtime-dir'),
-    DBUS_SESSION_BUS_ADDRESS: `unix:path=${path.join(home, 'no-bus')}`,
-  } : {};
   // Prepended to whatever the caller passed, never the other way round: a
   // snippet that supplies its own PATH must not be able to displace the poison,
   // which is the difference between structural and advisory.
@@ -570,8 +574,8 @@ export function ghContainedEnv(
 const readLines = (p: string): string[] =>
   fs.existsSync(p) ? fs.readFileSync(p, 'utf8').split('\n').filter(Boolean) : [];
 
-/** Every argv the poisoned `gh` at `<home>` saw. */
-export const ghPoisonAt = (home: string): string[] => readLines(path.join(home, 'gh-poison'));
+/** Every argv the poisoned `gh` at `<home>` saw, TAKEN: a case that reads it has decided about it (D-8394). */
+export const ghPoisonAt = (home: string): string[] => takePoisonRecord(home, 'gh');
 
 /** THE WIDTH QUERY EVERY ccd FIXTURE MUST ANSWER since wave 2, spread as the
  *  first statement of a bash `tmux()` stub.
@@ -729,7 +733,7 @@ export function makeCcdHarness(prefix: string): CcdHarness {
   // every `sh()` below: that is what makes "every test that can reach
   // `_supervised_start` is contained" a property of the harness rather than a
   // rule each ccd test file remembers. Since wave 18 it asks for ssh, scp and
-  // curl (`net`) too, and the fixture user bus rides `systemd` (D-5248), so every
+  // curl (`net`) too, and the fixture user bus is set for every caller (D-5248, D-8394), so every
   // CONTAINED_TOOLS name is planted here, at creation.
   ghContainedEnv(home, {}, { systemd: true, tmux: true, net: true });
 
@@ -854,7 +858,8 @@ export function makeCcdHarness(prefix: string): CcdHarness {
       return main;
     },
     git,
-    cleanup: () => { fs.rmSync(home, { recursive: true, force: true }); },
+    // A poison record under HOME that nothing took fails the test (D-8394, residue R35(e)); HOME goes either way.
+    cleanup: () => { try { assertNoPoisonLeft([home]); } finally { fs.rmSync(home, { recursive: true, force: true }); } },
   };
 }
 

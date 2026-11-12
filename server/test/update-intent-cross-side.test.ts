@@ -22,7 +22,7 @@
 // — now runs the real reader there, through updateIntentFixtures.ts.
 //
 // Fixture HOMEs only (mkTmp), one per box. Nothing reads the live $HOME; the
-// service managers are poisons (ghContainedEnv) and `curl` is a stub.
+// service managers, ssh and scp are poisons (ccrcContainedEnv, D-8394) and `curl` is a stub.
 import { describe, it, expect, afterEach } from 'vitest';
 import { spawnSync } from 'node:child_process';
 import { mkdirSync, readFileSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
@@ -47,7 +47,7 @@ import {
 import { seedRoster } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
 import { describeLinux } from './platformFixtures.js';
-import { ghContainedEnv } from './ccdWsHelpers.js';
+import { ccrcContainedEnv } from './ccrcContainment.js';
 import { CCRC, nodeEnv, plantNode, readIntent } from './updateIntentFixtures.js';
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
@@ -207,7 +207,7 @@ function envWithoutJq(home: string): NodeJS.ProcessEnv {
   }
   const tmp = path.join(home, 'tmp');
   mkdirSync(tmp, { recursive: true });
-  return ghContainedEnv(home, { HOME: home, TMPDIR: tmp, PATH: bin }, { systemd: true });
+  return ccrcContainedEnv(home, { HOME: home, TMPDIR: tmp, PATH: bin }, { managers: true, curl: 'poison' });
 }
 
 /** A real `local://` release layout under `root`/`dir`: SHA256SUMS (its REAL

@@ -38,6 +38,7 @@ import { fileURLToPath } from 'node:url';
 import { mkTmp } from './tmpHelpers.js';
 import { spawnSyncGroup } from './spawnGroup.js';
 import { CCD, ghContainedEnv, ccdSource } from './ccdWsHelpers.js';
+import { takePoisonRecord } from './containedTools.js';
 import { PROVIDERS, PROVIDER_IDS } from '../../shared/providers.js';
 import { markGenerated } from '../../shared/mark.mjs';
 import { generateWrapperBody } from '../../shared/wrapper.mjs';
@@ -137,7 +138,10 @@ function env(home: string): NodeJS.ProcessEnv {
 }
 
 function buildEnv(home: string): NodeJS.ProcessEnv {
-  const e = ghContainedEnv(home, { ...process.env, HOME: home });
+  // `net` (the second ring, residue R35(a), D-8394): ssh, scp and curl poisons, create-if-absent, so this file's own
+  // curl poison below still replaces the curl one; the fixture user bus is set for every caller. Not
+  // `ccrcContainedEnv`: its tmux poison records into `tmux-calls`, the log this file keeps apart (see `tmux` below).
+  const e = ghContainedEnv(home, { ...process.env, HOME: home }, { net: true });
   // Every poison carries the manager stand-in mark: the two manager names'
   // final-env check reads it, and on the other names it is inert.
   const poison = (name: string, says: string, ifAbsent = false): void => {
@@ -168,6 +172,8 @@ function buildEnv(home: string): NodeJS.ProcessEnv {
   // is a fixture").
   poison('systemd-run', 'ccrc tests must never start a transient unit on this box\'s real user manager', managed);
   poison('launchctl', 'ccrc tests must never query this box\'s real launchd');
+  // The linger switch of the same user manager, a contained tool since D-8394 (residue R35(f)).
+  poison('loginctl', 'ccrc tests must never change this box\'s real linger', true);
   // THE LAST POISON, AND IT IS ALWAYS CREATE-IF-ABSENT, where curl and
   // launchctl never are and the two manager poisons are only once managed.
   // `env()` runs on EVERY `run()`, so an unconditional write would
@@ -763,8 +769,9 @@ describe('ccrc account candidates: doctor\'s own rule, and sizes only', () => {
     seedBoxRoster(home, FIXTURE_ROSTER);
     const r = run(home, ['account', 'candidates']);
     expect(r.code).toBe(0);
+    // ssh, scp (`net`) and loginctl admitted on purpose by the second ring (residue R35(a) and (f), D-8394).
     expect(readdirSync(join(home, '.local', 'bin')).sort())
-      .toEqual(['curl', 'gh', 'launchctl', 'systemctl', 'systemd-run', 'tmux']);
+      .toEqual(['curl', 'gh', 'launchctl', 'loginctl', 'scp', 'ssh', 'systemctl', 'systemd-run', 'tmux']);
     expect(oneObject(r)['candidates']).toEqual([]);
   });
 });
@@ -5527,6 +5534,8 @@ describe('ccrc account remove', () => {
     expect(br.code).toBe(1);
     expect(oneObject(br)['error']).toBe('live-unmeasured');
     expect(existsSync(join(blind, '.local', 'bin', 'alt-max'))).toBe(true);
+    // The tmux poison is what left it blind (taken, D-8394: the case meets it on purpose).
+    expect(takePoisonRecord(blind, 'tmux')).toEqual(['list-sessions -F #{session_name}']);
 
     const empty = box('ccrc-account-remove-empty-');
     seedFull(empty);
@@ -5602,6 +5611,10 @@ describe('ccrc account remove', () => {
     chmodSync(join(home, '.cc-sessions', 'orchard-api.wrapper'), 0o600);
     const noTmux = why('tmux() { return 3; }');
     const unreadable = why('_SVC_REG="$HOME/.cc-sessions-not-a-dir"; : > "$_SVC_REG"');
+    // A case without its own tmux reaches the tmux poison's one call (taken, D-8394: met on purpose).
+    const tmuxAsked = takePoisonRecord(home, 'tmux');
+    expect(tmuxAsked.length).toBeGreaterThan(0);
+    for (const l of tmuxAsked) expect(l).toBe('list-sessions -F #{session_name}');
 
     expect(blind.startsWith('false|'), `a blind field measured: ${blind}`).toBe(true);
     expect(noTmux.startsWith('false|'), `a failing tmux measured: ${noTmux}`).toBe(true);
@@ -8068,8 +8081,7 @@ describe('ccrc account credential', () => {
     expect(existsSync(join(home, '.cc-secrets', 'alt-max-oauth.env'))).toBe(true);
     // AND THE POISON IS WHAT ANSWERED, which is the whole containment claim:
     // the argv it recorded is this verb's one tmux call and nothing else.
-    expect(readFileSync(join(home, 'tmux-poison'), 'utf8'))
-      .toBe('list-sessions -F #{session_name}\n');
+    expect(takePoisonRecord(home, 'tmux')).toEqual(['list-sessions -F #{session_name}']);
   });
 
   it('answers live:null when the REGISTRY ITSELF cannot be read (D-2185)', () => {

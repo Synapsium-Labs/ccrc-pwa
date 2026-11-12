@@ -28,7 +28,7 @@ import { fileURLToPath } from 'node:url';
 import { mkTmp } from './tmpHelpers.js';
 import { ccrcContainedEnv } from './ccrcContainment.js';
 import { TOKEN_VERB_MISSING_PREFIXES } from '../../shared/agent-protocol.js';
-import { assertNoRealTool } from './containedTools.js';
+import { assertNoRealTool, ledgerHitLine, takePoisonRecord } from './containedTools.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const CCRC = path.resolve(here, '..', '..', 'ccd', 'ccrc');
@@ -81,7 +81,7 @@ function ccrcEnv(home: string): NodeJS.ProcessEnv {
   const env = ccrcContainedEnv(home, process.env, { managers: true, curl: 'poison' });
   const poison = (name: string, says: string): void =>
     writeFileSync(join(home, '.local', 'bin', name),
-      `#!/bin/sh\nprintf '%s\\n' "$*" >> "$HOME/${name}-poison"\n`
+      `#!/bin/sh\nprintf '%s\\n' "$*" >> "$HOME/${name}-poison"\n${ledgerHitLine(`${name}-poison`)}\n`
       + `echo "${says}" >&2\nexit 97\n`, { mode: 0o755 });
   poison('curl', 'ccrc tests must never reach a real server');
   // `systemctl` for the same reason and a sharper one: this runner keeps the
@@ -108,12 +108,9 @@ function ccrcEnv(home: string): NodeJS.ProcessEnv {
   return env;
 }
 
-/** Every argv a poisoned binary saw. Empty means nothing tried to leave the
- *  fixture — which is what every test in this file except two expects. */
-const poisonLog = (home: string, name: string): string[] => {
-  const p = join(home, `${name}-poison`);
-  return existsSync(p) ? readFileSync(p, 'utf8').split('\n').filter(Boolean) : [];
-};
+/** Every argv a poisoned binary saw, TAKEN (D-8394): the case asserts on it. Empty means nothing tried to leave
+ *  the fixture — which is what every test in this file except two expects. */
+const poisonLog = (home: string, name: string): string[] => takePoisonRecord(home, name);
 const curlPoison = (home: string): string[] => poisonLog(home, 'curl');
 
 /** The brief's own shape: returns stdout, throwing (with stderr attached) on

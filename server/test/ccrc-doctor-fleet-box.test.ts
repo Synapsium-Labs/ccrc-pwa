@@ -466,7 +466,11 @@ describe('ccrc doctor: skills — every home carries the SHIPPED skills (release
     // both installCcrc's planted tree. Invoking the REPO's copy instead (what
     // this case did before) would have stayed green with a remedy naming a
     // script the box does not have. Contained through `ghContainedEnv` like
-    // every other spawn in this suite.
+    // every other spawn in this suite: gh-only, which since D-8394 sets the
+    // fixture user bus too. Not `net` or `ccrcContainedEnv` (residue R35(a)):
+    // their poisons land in `~/.local/bin`, which `doctorEnv`'s PATH puts AHEAD
+    // of the fixture's own stub dir, so the doctor run after this one met a
+    // curl poison instead of its stub (measured: two reds).
     const rem = spawnSync(BASH,
       [join(home, 'ccrc', 'ccd', 'install-reviewer-skill.sh'), '--homes', join(home, '.claude')],
       {

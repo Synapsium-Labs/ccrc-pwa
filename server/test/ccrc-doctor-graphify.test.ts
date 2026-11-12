@@ -47,6 +47,7 @@ import { fileURLToPath } from 'node:url';
 import { mkTmp } from './tmpHelpers.js';
 import { FIXTURE_DF_INODES_LINES } from './fixtureDfInodes.js';
 import { ghContainedEnv } from './ccdWsHelpers.js';
+import { DOCTOR_GH_PROBE, takeExpectedPoison } from './containedTools.js';
 import { parseRoster } from '../../shared/roster.js';
 import { generateAccountsSh } from '../../shared/generate.mjs';
 
@@ -178,6 +179,8 @@ function doctorEnv(home: string): NodeJS.ProcessEnv {
 function runDoctor(home: string): Result {
   const r = spawnSync(BASH, [ccrcIn(home), 'doctor'],
     { env: doctorEnv(home), encoding: 'utf8' });
+  // The doctor's gh probe meets the gh poison by design (D-8394): `ccrc-doctorFixture.ts`'s runners take it the same way.
+  takeExpectedPoison(home, 'gh', DOCTOR_GH_PROBE);
   return { code: r.status ?? -1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
 }
 

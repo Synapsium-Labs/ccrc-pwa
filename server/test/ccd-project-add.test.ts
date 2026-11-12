@@ -13,6 +13,7 @@ import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import fs from 'node:fs';
 import { makeCcdHarness, ghContainedEnv, ccdSource, CCD, WS_ADD, type CcdHarness } from './ccdWsHelpers.js';
+import { takePoisonRecord } from './containedTools.js';
 import { inheritedEnv } from './gitEnvStrip.js';
 
 let h: CcdHarness;
@@ -271,7 +272,7 @@ describe('project-add --url: a clone', () => {
     expect(r.status).toBe(1);
     expect(r.stderr).toMatch(/^ccd: git clone failed for repo: /);
     expect(fs.existsSync(path.join(home, 'probe')), 'an inherited ssh command ran').toBe(false);
-    const ssh = fs.readFileSync(path.join(home, 'ssh-poison'), 'utf8');
+    const ssh = takePoisonRecord(home, 'ssh').join('\n');
     expect(ssh).toContain('-o BatchMode=yes');
     expect(ssh).toContain('git@github.com');
     expect(listing()).toEqual([]);

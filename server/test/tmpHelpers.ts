@@ -29,6 +29,7 @@ import { mkdtempSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterAll, afterEach, beforeEach } from 'vitest';
+import { assertNoPoisonLeft } from './containedTools.js';
 
 const made: string[] = [];
 
@@ -58,7 +59,12 @@ export function removeTmpFixtures(): void {
   // `force` because a fixture the test already removed itself is the normal
   // case, not an error — several files own their own cleanup and this is the
   // net underneath them.
-  for (const dir of made.splice(0)) rmSync(dir, { recursive: true, force: true });
+  const dirs = made.splice(0);
+  // Scanned BEFORE removal: a poison record is read off the directory it lies in (D-8394).
+  let leak: unknown = null;
+  try { assertNoPoisonLeft(dirs); } catch (e) { leak = e; }
+  for (const dir of dirs) rmSync(dir, { recursive: true, force: true });
+  if (leak !== null) throw leak;
 }
 
 /** How many directories this file's `mkTmp` has made and not yet removed: the mark `removeTmpFixturesSince`
@@ -72,10 +78,15 @@ export function tmpMark(): number {
  *  directory is never forgotten unremoved (centralised-update wave 13, R20a). */
 export function removeTmpFixturesSince(mark: number): void {
   const kept: string[] = [];
-  for (const dir of made.splice(mark)) {
+  const dirs = made.splice(mark);
+  // Scanned BEFORE removal: a poison record is read off the directory it lies in (D-8394).
+  let leak: unknown = null;
+  try { assertNoPoisonLeft(dirs); } catch (e) { leak = e; }
+  for (const dir of dirs) {
     try { rmSync(dir, { recursive: true, force: true }); } catch { kept.push(dir); }
   }
   made.push(...kept);
+  if (leak !== null) throw leak;
 }
 
 /** OPT-IN, for a file whose one end-of-file sweep is too big for one hook: called at a file's top level, it
@@ -100,3 +111,10 @@ export function removeTmpFixturesEachTest(): void {
 // until then, not hundreds. The hook below and R20a above both stay: they bound the peak disk use WITHIN a run (R20a's
 // file made about 650 directories and 2.5 GB), and the parent goes only when the whole run ends.
 afterAll(removeTmpFixtures);
+
+// THE POISON TEARDOWN (D-8394, residue R35(e)). After every test, a contained tool's poison that was hit and whose
+// record the test did not take (`takePoisonRecord`) fails THAT test, by `containedTools.ts`'s ledger, so a HOME the
+// test removed itself cannot hide it; and each directory removed above is scanned for any `*-poison` file first,
+// which catches a hand-written poison too. Before it, a test that met a poison and stayed green left one record,
+// removed unread (review 535 F3's coverage half). The ledger lies under the run's TMPDIR, which the run removes.
+afterEach(() => { assertNoPoisonLeft(); });

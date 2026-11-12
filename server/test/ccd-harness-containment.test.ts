@@ -18,7 +18,7 @@ import {
   type CcdHarness,
 } from './ccdWsHelpers.js';
 import { mkTmp } from './tmpHelpers.js';
-import { CONTAINED_TOOLS, assertNoRealTool } from './containedTools.js';
+import { CONTAINED_TOOLS, assertNoRealTool, takePoisonRecord } from './containedTools.js';
 
 let h: CcdHarness;
 beforeEach(() => { h = makeCcdHarness('ccrc-ccd-contain-'); });
@@ -79,6 +79,7 @@ describe('the harness contains systemctl structurally', () => {
     fs.writeFileSync(path.join(harnessBin(h.home), 'gh'),
       '#!/bin/sh\nexit 0\n', { mode: 0o755 });
     expect(h.sh('gh pr list >/dev/null 2>&1; echo rc=$?')).toBe('rc=97');
+    expect(takePoisonRecord(h.home, 'gh'), 'the poison, not the planted gh, answered').toEqual(['pr list']);
   });
 
   it('WS_ADD shadows all three: _spawn, _ws_supervise and _supervised_start', () => {
@@ -175,7 +176,7 @@ describe('ghContainedEnv contains gh always, systemd only when asked', () => {
     const { home, bin } = consumer('ccrc-contain-optout-gh-');
     fs.writeFileSync(path.join(bin, 'gh'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
     expect(run(home, bin, 'gh pr list')).toBe('rc=97');
-    expect(fs.readFileSync(path.join(home, 'gh-poison'), 'utf8').trim()).toBe('pr list');
+    expect(takePoisonRecord(home, 'gh')).toEqual(['pr list']);
   });
 
   it('plants the systemd poison when a caller DOES ask, over that same PATH', () => {
@@ -318,7 +319,7 @@ describe('the harness contains ssh, scp, curl and the user bus too (wave 18)', (
   it.each(NET)('H18-3 %s resolves to harnessBin, records its argv, and refuses with 97', (t) => {
     expect(h.sh(`command -v ${t}`)).toBe(path.join(harnessBin(h.home), t));
     expect(h.sh(`${t} -o x example.invalid 2>/dev/null; echo rc=$?`)).toBe('rc=97');
-    expect(fs.readFileSync(path.join(h.home, `${t}-poison`), 'utf8')).toBe('-o x example.invalid\n');
+    expect(takePoisonRecord(h.home, t)).toEqual(['-o x example.invalid']);
   });
 
   it('H18-4 every sh() re-plants a poison that is gone (a module-level harness after cleanup is that case)', () => {
@@ -340,21 +341,25 @@ describe('the harness contains ssh, scp, curl and the user bus too (wave 18)', (
       .toBe(BUS(h.home));
   });
 
-  it('H18-7 ghContainedEnv plants the net poisons only for a caller that ASKS, and the fixture bus for every systemd caller', () => {
+  it('H18-7 ghContainedEnv plants the net poisons only for a caller that ASKS, and the fixture bus for every caller (D-8394)', () => {
     // Three homes, one per option set: a poison is create-if-absent, so a shared harnessBin would carry one case's
     // plant into the next.
     const [a, b, c] = ['ccrc-contain-tmux-only-', 'ccrc-contain-managers-', 'ccrc-contain-net-'].map((p) => mkTmp(p));
     const real = { PATH: '/usr/bin:/bin', XDG_RUNTIME_DIR: '/run/user/0', DBUS_SESSION_BUS_ADDRESS: 'unix:path=/run/user/0/bus' };
     const tmuxOnly = ghContainedEnv(a!, real, { tmux: true });
     for (const t of NET) expect(fs.existsSync(path.join(harnessBin(a!), t)), t).toBe(false);
-    expect(tmuxOnly['XDG_RUNTIME_DIR'], 'no systemd, no bus').toBe('/run/user/0');
+    expect(`${tmuxOnly['XDG_RUNTIME_DIR']}|${tmuxOnly['DBUS_SESSION_BUS_ADDRESS']}`, 'no systemd, still the fixture bus').toBe(BUS(a!));
     const managers = ghContainedEnv(b!, real, { systemd: true, tmux: true });
     for (const t of NET) expect(fs.existsSync(path.join(harnessBin(b!), t)), t).toBe(false);
     expect(`${managers['XDG_RUNTIME_DIR']}|${managers['DBUS_SESSION_BUS_ADDRESS']}`, 'the bus rides systemd').toBe(BUS(b!));
     const net = ghContainedEnv(c!, real, { net: true });
     for (const t of NET) expect(fs.existsSync(path.join(harnessBin(c!), t)), t).toBe(true);
     expect(fs.existsSync(path.join(harnessBin(c!), 'systemctl')), 'net is not systemd').toBe(false);
-    expect(net['XDG_RUNTIME_DIR'], 'net is not the bus').toBe('/run/user/0');
+    expect(`${net['XDG_RUNTIME_DIR']}|${net['DBUS_SESSION_BUS_ADDRESS']}`, 'net, the fixture bus').toBe(BUS(c!));
+    // The gh-only caller, D-5253's thin builder: before D-8394 (residue R35(f)) it kept the caller's real pair.
+    const d = mkTmp('ccrc-contain-gh-only-');
+    const ghOnly = ghContainedEnv(d, real);
+    expect(`${ghOnly['XDG_RUNTIME_DIR']}|${ghOnly['DBUS_SESSION_BUS_ADDRESS']}`, 'gh only, the fixture bus').toBe(BUS(d));
   });
 
   it('H18-8 a bus pair the caller points under HOME stands; a pair only half under HOME does not', () => {
