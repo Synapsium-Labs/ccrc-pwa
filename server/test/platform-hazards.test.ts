@@ -226,14 +226,75 @@ describe('the deadline shim, asked directly (D-2661)', () => {
     ).toBeLessThanOrEqual(10);
   });
 
+  /** WAIT FOR EOF ON fd 8 WITH ONE READER AND NO `select()` (D-8344). The
+   *  reader is a plain blocking `read` loop in a subshell, which reaches EOF
+   *  through read(2) and marks it in `$D/eof`. It is the ONLY reader of the
+   *  FIFO: this shell never reads fd 8, it only polls that file. Sets `GOT`
+   *  (eof or never) and `AFTER`, and leaves the reader's pid in `R`.
+   *
+   *  WHY NOT `read -t` (the shape this replaced). On macOS a FIFO's EOF is
+   *  ONE-SHOT for anything that waits for it: the end-of-file flag that
+   *  `select()` and an already-blocked read wait on is cleared by the first read
+   *  that returns EOF. A NEW read(2) still returns 0 at once while no writer is
+   *  left. On Linux a FIFO with no writers stays readable and every read returns
+   *  0, so nothing below happens there.
+   *  MEASURED on macos-26-arm64, bash 5.3.20, coreutils 9.12 (C27, D-8344):
+   *  - 17 of 185 iterations of this case's own scenario went red. In each red,
+   *    the timeout's whole process group was gone at +2 s and no `sleep 60` was
+   *    left on the runner, yet `read -t 0.5` answered 142, a timeout, every tick
+   *    for 15 s and never 1. In the 8 reds that were inspected, a second reader
+   *    on the same fd got `select()` not readable after 0.5 s, then read(2)
+   *    returned 0 bytes at once.
+   *  - With two readers waiting on one FIFO, usually only ONE saw the EOF: of
+   *    100 iterations, `read -t` alone saw it 66 times, a blocking reader alone
+   *    11 times, both 16 times and neither 7 times.
+   *  So `read -t`'s own read consumed the EOF and still answered 142, and every
+   *  `select()` after that waited for a flag that was already cleared. The
+   *  probe measured its reader, not the FIFO, and reported a missing EOF that
+   *  had arrived. */
+  const eofWait = (secs: number): string => `
+      ( while IFS= read -r -u 8 line; do :; done; echo eof > "$D/eof" ) &
+      R=$!
+      t0=$SECONDS; GOT=never
+      while (( SECONDS - t0 <= ${secs} )); do
+        if [ -s "$D/eof" ]; then GOT=eof; break; fi
+        sleep 0.2
+      done
+      AFTER=$((SECONDS-t0))`;
+
+  // THE INSTRUMENT MUST STILL BE ABLE TO SAY never, on both platforms (D-8344).
+  // A reader that answered eof whatever happened would turn the darwin case
+  // below green and hollow. Here a writer holds the FIFO open for the whole
+  // window, so the only correct answer is never.
+  it('the select-free EOF reader still says never while a writer holds the FIFO (D-8344 control)', () => {
+    const r = bash(`
+      D=$(mktemp -d); mkfifo -m 600 "$D/out"
+      ( exec 7>"$D/out"; sleep 30 ) &
+      H=$!
+      exec 8<"$D/out"
+      ${eofWait(3)}
+      echo "EOF=$GOT"
+      kill $R $H 2>/dev/null; pkill -P $$ 2>/dev/null; exec 8<&-; rm -rf "$D"
+    `, 20_000);
+    expect(r.cut, `the control itself was cut after ${r.ms}ms`).toBe(false);
+    expect(field(r.stdout, 'EOF'), `a held writer read as EOF: ${r.stdout.slice(0, 200)}`).toBe('never');
+  });
+
   // PLATFORM-ONLY: the Linux answer to this one is already measured and is not
   // in dispute — EOF arrived in all six configurations tried, including a
   // setsid'd grandchild confirmed alive. This asks it of the platform where
   // D-2661 was observed, which is the only place the answer was unknown.
+  //
+  // ANSWERED (C27, D-8344): on macOS too, EOF arrives once the deadline fires.
+  // The intermittent reds this case gave (2026-11-09, 2026-11-12, and earlier
+  // on PRs #116 and #117) came from the READER it used, `read -t`, which can
+  // consume a Darwin FIFO's one-shot EOF and still answer a timeout;
+  // `eofWait` above says how that was measured. Candidate (b), a descendant holding the write end, was not seen
+  // in any of those runs. The case stays: it still asks the question, now with
+  // a reader that answers it.
   itDarwin('BSD: after the deadline fires, does the output FIFO reach EOF? — candidate (b)', () => {
-    // THE ONE THAT MATTERS. `_auth_pump` leaves only on EOF, and EOF needs every
-    // writer of the FIFO to close. On Linux, EOF arrived in all six
-    // configurations tried, including a setsid'd grandchild confirmed alive.
+    // `_auth_pump` leaves only on EOF, and EOF needs every writer of the FIFO
+    // to close.
     const r = bash(`
       export CCRC_AUTH_NO_MAIN=1 HOME=$(mktemp -d)
       source ${JSON.stringify(HELPER)}
@@ -242,51 +303,37 @@ describe('the deadline shim, asked directly (D-2661)', () => {
       _auth_timeout 2 bash -c 'bash -c "sleep 60" & sleep 60' >"$D/out" 2>&1 &
       W=$!
       exec 8<"$D/out"
-      t0=$SECONDS; GOT=none
-      while :; do
-        IFS= read -r -t 0.5 -u 8 line; rc=$?
-        if (( rc == 1 )); then GOT=eof; break; fi
-        if (( SECONDS - t0 > 15 )); then GOT=never; break; fi
-      done
+      # THE WRITER'S GROUP IS READ BEFORE THE DEADLINE, while it exists. The
+      # timeout binary makes its own process group, so the group's id is the
+      # binary's pid. The old diagnostic asked the pgid of $W after the
+      # deadline, when $W had already exited, so it always printed nothing.
+      ( sleep 1; ps -A -o pid=,ppid=,command= 2>/dev/null \\
+          | awk -v w=$W '$2 == w && $3 ~ /timeout$/ {print $1; exit}' > "$D/tpg" ) &
+      ${eofWait(15)}
       echo "EOF=$GOT"
-      echo "AFTER=$((SECONDS-t0))"
-      # WHEN IT SAYS never, SAY WHO. This probe went red on unchanged trees on
-      # PR #116, on main's own probe-macos and on PR #117, and each time it
-      # reported only "eof=never" — which names the symptom and nothing that
-      # could be acted on, so three reds bought no diagnosis at all. The
-      # question "which writer is still holding the write end" is answerable at
-      # exactly this moment and never afterwards, so it is answered here.
-      # Costs nothing on the passing path: the whole block is inside the branch.
+      echo "AFTER=$AFTER"
+      # WHEN IT SAYS never, SAY WHO, from the group recorded before the deadline.
+      # SCOPED TO THAT GROUP, never a box-wide match on the sleep command: a
+      # shared box runs unrelated sessions, and a CI failure message in a
+      # public repository is no place for their paths.
       if [ "$GOT" = never ]; then
         echo "BASHV=$BASH_VERSION"
         echo "TMO=$(command -v timeout 2>/dev/null || command -v gtimeout 2>/dev/null || echo none)"
-        # SCOPED TO THE WRITER'S OWN PROCESS GROUP, never a fleet-wide grep for
-        # the sleep command: this box runs ~20 unrelated sessions, a bare match
-        # caught an unrelated sleep 600 and another project's logger, and a CI
-        # failure message is
-        # the wrong place for another session's paths in a repo bound for
-        # public release. The pgid IS the subject anyway — whether the
-        # descendant left the group is the question.
-        PG=$(ps -o pgid= -p $W 2>/dev/null | tr -d ' ')
+        PG=$(cat "$D/tpg" 2>/dev/null)
         echo "PGID=$PG"
-        echo "SURV=$(ps -o pid=,ppid=,pgid=,stat=,command= 2>/dev/null | awk -v pg="$PG" '$3 == pg' | cut -c1-72 | tr -s ' ' | tr '\n' '|')"
-        # FD, NOT JUST THE PID. An 8r row is this probe's own read end and proves
-        # nothing; a 1w or 1u row is a WRITER, and a writer still open at the
-        # deadline is the entire hazard. Reported separately so the next red
-        # answers "who held it" rather than restating "it was held".
-        echo "HOLD=$(lsof -- "$D/out" 2>/dev/null | tail -n +2 | awk '{print $1":"$2":"$4}' | sort -u | tr '\n' '|')"
+        echo "SURV=$( [ -n "$PG" ] && ps -A -o pid=,ppid=,pgid=,stat=,command= 2>/dev/null | awk -v pg="$PG" '$3 == pg' | cut -c1-72 | tr -s ' ' | tr '\\n' '|')"
       fi
-      kill $W 2>/dev/null; pkill -P $$ 2>/dev/null; exec 8<&-; rm -rf "$D"
+      kill $W $R 2>/dev/null; pkill -P $$ 2>/dev/null; exec 8<&-; rm -rf "$D"
     `, 40_000);
     expect(
       field(r.stdout, 'EOF'),
-      'THE OUTPUT FIFO NEVER REACHED EOF after the deadline fired on macOS. That is D-2661 candidate (b)\n'
-      + 'and it is the mechanism: a surviving descendant holds the write end, `_auth_pump` loops for ever,\n'
-      + 'and only D-2736\'s backstop ends the run. The fix is to end the DESCENDANTS, not to wait longer.\n'
+      'THE OUTPUT FIFO NEVER REACHED EOF after the deadline fired on macOS, measured by a reader that does\n'
+      + 'not use select(). That is D-2661 candidate (b): a descendant of the deadline\'s child still holds\n'
+      + 'the write end, `_auth_pump` loops for ever, and only D-2736\'s backstop ends the run. The fix is to\n'
+      + 'end the DESCENDANTS, not to wait longer.\n'
       + `  eof=${field(r.stdout, 'EOF')} after=${field(r.stdout, 'AFTER')}s  cut=${r.cut}\n`
       + `  bash=${field(r.stdout, 'BASHV')}  timeout-binary=${field(r.stdout, 'TMO')}\n`
-      + `  writer pgid=${field(r.stdout, 'PGID')}, still alive in it: ${field(r.stdout, 'SURV')}\n`
-      + `  holding the write end: ${field(r.stdout, 'HOLD')}`,
+      + `  the timeout's group (recorded before the deadline)=${field(r.stdout, 'PGID')}, still alive in it: ${field(r.stdout, 'SURV')}`,
     ).toBe('eof');
   });
 
