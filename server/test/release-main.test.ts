@@ -9,7 +9,7 @@
 // serves release assets the test built with that same builder. Never touches
 // the network: curl is poisoned, gh is the stub.
 import { describe, it, expect } from 'vitest';
-import { spawnSync, type SpawnSyncOptionsWithStringEncoding, type SpawnSyncReturns } from 'node:child_process';
+import { spawnSync, type SpawnSyncReturns } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { chmodSync, copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
 import path, { join } from 'node:path';
@@ -48,15 +48,16 @@ function told(r: SpawnSyncReturns<string>): string {
   const err = r.error === undefined ? '' : `, error ${r.error.message}`;
   return `pid ${r.pid ?? 'none'}, status ${r.status ?? 'none'}, signal ${r.signal ?? 'none'}${err}\n--- stdout\n${tail(r.stdout)}\n--- stderr\n${tail(r.stderr)}`;
 }
-/** A fixture step that must succeed: its failure carries everything `told` reads. */
-function spawnStep(what: string, cmd: string, args: string[], opts: SpawnSyncOptionsWithStringEncoding): SpawnSyncReturns<string> {
-  const r = spawnSync(cmd, args, opts);
+/** A fixture step that must succeed: its failure carries everything `told` reads.
+ *  Untimed, and its options are a literal, so the timed-spawn census reads it as one. */
+function spawnStep(what: string, cmd: string, args: string[], opts: { env?: NodeJS.ProcessEnv; cwd?: string } = {}): SpawnSyncReturns<string> {
+  const r = spawnSync(cmd, args, { env: opts.env, cwd: opts.cwd, encoding: 'utf8' });
   if (r.status !== 0) throw new Error(`fixture ${what} failed: ${told(r)}`);
   return r;
 }
 
 function git(root: string, ...args: string[]): string {
-  return spawnStep(`git ${args.join(' ')}`, 'git', ['-C', root, ...args], { env: { ...process.env, ...GIT_ENV }, encoding: 'utf8' }).stdout.trim();
+  return spawnStep(`git ${args.join(' ')}`, 'git', ['-C', root, ...args], { env: { ...process.env, ...GIT_ENV } }).stdout.trim();
 }
 
 /** The smallest tree build-release.sh's `git archive` pathspec accepts.
@@ -87,14 +88,14 @@ function buildAsset(home: string, root: string, tag: string, branch = 'main'): v
   const work = join(home, 'asset-build', tag);
   mkdirSync(path.dirname(work), { recursive: true });
   const env = { ...process.env, ...GIT_ENV };
-  spawnStep('clone', 'git', ['clone', '-q', root, work], { env, encoding: 'utf8' });
+  spawnStep('clone', 'git', ['clone', '-q', root, work], { env });
   git(work, 'checkout', '-q', '-B', branch, tag);
   const assetHome = join(home, 'asset-home');
   mkdirSync(assetHome, { recursive: true });
   const bin = plantBin(assetHome);
   const out = join(home, 'assets', tag);
   spawnStep(`asset build for ${tag}`, 'bash', [join(work, 'deploy', 'build-release.sh'), '--out', out],
-    { env: { ...env, HOME: assetHome, PATH: `${bin}:${process.env.PATH ?? ''}` }, cwd: work, encoding: 'utf8' });
+    { env: { ...env, HOME: assetHome, PATH: `${bin}:${process.env.PATH ?? ''}` }, cwd: work });
 }
 
 /** `<home>/repo` with one commit, `<home>/origin.git` bare and added as
@@ -145,7 +146,7 @@ function fixture(home: string, opts: {
   }
   if (opts.tagHead !== undefined) git(root, 'tag', opts.tagHead);
   const origin = join(home, 'origin.git');
-  spawnStep('init --bare', 'git', ['init', '-q', '--bare', origin], { env: { ...process.env, ...GIT_ENV }, encoding: 'utf8' });
+  spawnStep('init --bare', 'git', ['init', '-q', '--bare', origin], { env: { ...process.env, ...GIT_ENV } });
   // An `update` hook records every ref pushed to origin — including a
   // transient push that a later refusal unwinds — so "no push happened at
   // all" is OBSERVABLE from outside the process (R4: `git tag`/`push`
@@ -241,7 +242,7 @@ function pipeline(root: string, home: string, out: string, gh: GhView = {}, env:
  *  tag. `name` tells a second publish job's clone apart from the first. */
 function publishClone(home: string, name = 'publish'): string {
   const clone = join(home, name);
-  spawnStep('publish clone', 'git', ['clone', '-q', '-b', 'main', join(home, 'origin.git'), clone], { env: { ...process.env, ...GIT_ENV }, encoding: 'utf8' });
+  spawnStep('publish clone', 'git', ['clone', '-q', '-b', 'main', join(home, 'origin.git'), clone], { env: { ...process.env, ...GIT_ENV } });
   return clone;
 }
 /** The upload and the download: the tarball and SHA256SUMS from `out`, copied
@@ -265,7 +266,7 @@ function plantBundle(home: string): string {
   return p;
 }
 const originTags = (home: string): string[] =>
-  spawnStep('origin tag list', 'git', ['-C', join(home, 'origin.git'), 'tag'], { encoding: 'utf8' }).stdout.split('\n').filter((l) => l !== '');
+  spawnStep('origin tag list', 'git', ['-C', join(home, 'origin.git'), 'tag']).stdout.split('\n').filter((l) => l !== '');
 const ghCalls = (home: string): string[] =>
   existsSync(join(home, 'gh-argv')) ? readFileSync(join(home, 'gh-argv'), 'utf8').split('\n').filter((l) => l !== '') : [];
 const releaseCreates = (home: string): string[] => ghCalls(home).filter((l) => l.startsWith('release create '));
@@ -275,13 +276,13 @@ const stateOf = (out: string): string => readFileSync(join(out, 'release-main.st
 const tarballsIn = (dir: string): string[] => readdirSync(dir).filter((f) => /^ccrc-.*\.tar\.gz$/.test(f));
 /** The entries a fingerprint of this tarball has: everything below the root. */
 const entriesIn = (tarball: string): number =>
-  spawnStep('tar list', 'tar', ['-tzf', tarball], { encoding: 'utf8' }).stdout.split('\n').filter((l) => l !== '' && l !== './').length;
+  spawnStep('tar list', 'tar', ['-tzf', tarball]).stdout.split('\n').filter((l) => l !== '' && l !== './').length;
 const sha256 = (file: string): string => createHash('sha256').update(readFileSync(file)).digest('hex');
 
 /** A tarball whose root holds nothing: it extracts to an empty tree. */
 function emptyTarball(dest: string): void {
   const dir = mkTmp('ccrc-relmain-emptytree-');
-  spawnStep('tar', 'tar', ['-czf', dest, '-C', dir, '.'], { encoding: 'utf8' });
+  spawnStep('tar', 'tar', ['-czf', dest, '-C', dir, '.']);
 }
 /** Serves `tarball` as tag's release asset, with a SHA256SUMS that matches it. */
 function plantAsset(home: string, tag: string, tarball: string): void {
@@ -334,7 +335,7 @@ describe('release-main.sh: refusals before anything is written', () => {
     // the working tree, so the local checkout's tags stay behind origin's,
     // exactly the "tag-stale checkout" this guard exists for.
     const originSha = git(root, 'rev-parse', 'HEAD');
-    spawnStep('origin tag', 'git', ['-C', join(home, 'origin.git'), 'tag', 'v0.0.2', originSha], { env: { ...process.env, ...GIT_ENV }, encoding: 'utf8' });
+    spawnStep('origin tag', 'git', ['-C', join(home, 'origin.git'), 'tag', 'v0.0.2', originSha], { env: { ...process.env, ...GIT_ENV } });
     const r = run(root, home, ['prepare', '--out', join(home, 'out')]);
     expect(r.code, r.told).toBe(1);
     expect(r.stderr).toMatch(/origin already holds v0\.0\.2/);
@@ -851,9 +852,9 @@ describe('release-main.sh: compare — a build identical to the newest release H
     const cand = join(out, 'candidate', 'ccrc-v0.0.2.tar.gz');
     const tree = join(home, 'candidate-tree');
     mkdirSync(tree, { recursive: true });
-    spawnStep('tar', 'tar', ['-xzf', cand, '-C', tree], { encoding: 'utf8' });
+    spawnStep('tar', 'tar', ['-xzf', cand, '-C', tree]);
     writeFileSync(join(tree, 'build.json'), `${body}\n`);
-    spawnStep('tar', 'tar', ['-czf', cand, '-C', tree, '.'], { encoding: 'utf8' });
+    spawnStep('tar', 'tar', ['-czf', cand, '-C', tree, '.']);
     const c = run(root, home, ['compare', '--out', out]);
     expect(c.code, c.told).toBe(0);
     expect(c.stdout).toBe(`${L.cant('the fingerprint of the candidate failed', 'v0.0.2')}\n`);
@@ -936,7 +937,7 @@ describe('release-main.sh: compare — a build identical to the newest release H
     mkdirSync(join(tree, 'ccd'), { recursive: true });
     writeFileSync(join(tree, 'ccd', 'x'), 'x\n');
     const bare = join(home, 'bare.tar.gz');
-    spawnStep('tar', 'tar', ['-czf', bare, '-C', tree, '.'], { encoding: 'utf8' });
+    spawnStep('tar', 'tar', ['-czf', bare, '-C', tree, '.']);
     plantAsset(home, 'v0.0.1', bare);
     copyFileSync(bare, join(out, 'candidate', 'ccrc-v0.0.2.tar.gz'));
   }
@@ -962,12 +963,12 @@ describe('release-main.sh: compare — a build identical to the newest release H
     const tree = join(home, 'base-tree');
     mkdirSync(tree, { recursive: true });
     const asset = join(home, 'assets', 'v0.0.1', 'ccrc-v0.0.1.tar.gz');
-    spawnStep('tar', 'tar', ['-xpzf', asset, '-C', tree], { encoding: 'utf8' });
+    spawnStep('tar', 'tar', ['-xpzf', asset, '-C', tree]);
     const lines = readFileSync(join(tree, 'MANIFEST'), 'utf8').split('\n');
     expect(lines.filter((l) => l.endsWith('  build.json'))).toHaveLength(1);
     writeFileSync(join(tree, 'MANIFEST'), edit(lines).join('\n'));
     const repacked = join(home, 'repacked.tar.gz');
-    spawnStep('tar', 'tar', ['-czf', repacked, '-C', tree, '.'], { encoding: 'utf8' });
+    spawnStep('tar', 'tar', ['-czf', repacked, '-C', tree, '.']);
     plantAsset(home, 'v0.0.1', repacked);
     const out = join(home, 'out');
     const { p, c } = pipeline(root, home, out);
@@ -1083,7 +1084,7 @@ describe('release-main.sh: compare — a build identical to the newest release H
   it('W25-C32: a git diff against the base that fails releases — a failed guard is not an empty one', () => {
     const home = mkTmp('ccrc-relmain-w25c32-');
     const root = fixture(home, { tags: ['v0.0.1'], merge: docsOnly, assets: ['v0.0.1'] });
-    const realGit = spawnStep('command -v git', 'sh', ['-c', 'command -v git'], { encoding: 'utf8' }).stdout.trim();
+    const realGit = spawnStep('command -v git', 'sh', ['-c', 'command -v git']).stdout.trim();
     expect(realGit).toMatch(/^\//);
     // Fails only the guard's `diff --name-only`; every other git call runs for real.
     const env = stubbed(home, { git: `case " $* " in *" diff "*) case " $* " in *" --name-only "*) exit 128 ;; esac ;; esac\nexec "${realGit}" "$@"` });
@@ -1164,7 +1165,7 @@ describe('release-main.sh: compare — a build identical to the newest release H
   ])('W25-C37: a partial extraction of %s that exits non-zero releases with that reason — a short tree is never compared', (_name, side, reason) => {
     const home = mkTmp('ccrc-relmain-w25c37-');
     const root = fixture(home, { tags: ['v0.0.1'], assets: ['v0.0.1'], merge: (r) => chmodSync(join(r, 'ccd', 'ccrc'), 0o644) });
-    const realTar = spawnStep('command -v tar', 'sh', ['-c', 'command -v tar'], { encoding: 'utf8' }).stdout.trim();
+    const realTar = spawnStep('command -v tar', 'sh', ['-c', 'command -v tar']).stdout.trim();
     expect(realTar).toMatch(/^\//);
     const env = stubbed(home, {
       tar: `case " $* " in *" -xpzf "*"${side}"*) "${realTar}" "$@" --exclude=./ccd/ccrc --exclude=ccd/ccrc; exit 2 ;; esac\nexec "${realTar}" "$@"`,
@@ -1283,7 +1284,7 @@ describe('release-main.sh: receive — the publish job re-derives the tag and ve
     const home = mkTmp('ccrc-relmain-w26r2-');
     const { root, handed, digest } = buildHalf(home);
     // Another run's v0.0.2 lands on origin, on an earlier commit, after the build job derived its own.
-    spawnStep('origin tag', 'git', ['-C', join(home, 'origin.git'), 'tag', 'v0.0.2', git(root, 'rev-parse', 'HEAD~1')], { env: { ...process.env, ...GIT_ENV }, encoding: 'utf8' });
+    spawnStep('origin tag', 'git', ['-C', join(home, 'origin.git'), 'tag', 'v0.0.2', git(root, 'rev-parse', 'HEAD~1')], { env: { ...process.env, ...GIT_ENV } });
     rmSync(join(home, 'origin-pushes'), { force: true });
     const clone = publishClone(home);
     const r = receive(clone, home, handed, 'v0.0.2', digest);
