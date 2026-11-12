@@ -5032,3 +5032,147 @@ describe('an opted-in project: the lineage through the run routes (landing order
     });
   });
 });
+
+// ── landing order wave 5h: a done close that re-measures its PR merged marks the entry ────────────────────────────
+describe('POST /api/runs/:id/close marks the landing entry (landing order wave 5h)', () => {
+  let app: FastifyInstance | undefined;
+  afterEach(async () => { vi.restoreAllMocks(); if (app) await app.close(); app = undefined; });
+
+  const HEAD40 = 'a'.repeat(40);
+  const MERGE40 = 'e'.repeat(40);
+  const GOOD = { branchTip: TIP, prNumber: 7, prPhase: 'open', handoffCommit: TIP };
+  const mergedRow = (branch: string, extra: Record<string, unknown> = {}) =>
+    prRow(branch, 'MERGED', { headRefOid: HEAD40, mergeCommit: { oid: MERGE40 }, ...extra });
+  const lineOf = (sessionId: string, rows: Record<string, unknown>[]) =>
+    ({ ran: true as const, code: 0, stdout: `${ccdLine(sessionId, `ws/${sessionId}`, rows)}\n`, stderr: '' });
+
+  /** A dispatched run driven to `merging` with a pin of PR 7 through the store, as the landing line's guarded door does. */
+  const pinnedRun = async (sessionId: string, rows: Record<string, unknown>[]) => {
+    const home = mkTmp('ccrc-runs-');
+    const root = gitRoot(PROJECT, `ws/${sessionId}`, TIP);
+    const { run, calls } = makeRunner(home, { wsAddCreates: [sessionId], prState: lineOf(sessionId, rows) });
+    const notifyLog = new NotifyLog(path.join(home, '.ccrc', 'notify.json'));
+    await notifyLog.load();
+    const w = await openApp(home, run, { cfg: { projectsRoot: root }, notifyLog });
+    app = w.app;
+    const opened = (await postOpen(app)).json() as { id: number };
+    await postDispatch(app, opened.id);
+    for (const to of ['working', 'awaiting-review'] as const) {
+      if (!w.coord.advance(opened.id, to, 'test').ok) throw new Error(`fixture advance to ${to} refused`);
+    }
+    const pinned = w.coord.advanceLanding({ runId: opened.id, to: 'merging', causedBy: 'coordinator',
+      landing: { kind: 'pin', head: HEAD40, pr: 7, mode: 'off', handoffCommit: TIP } });
+    if (!pinned.ok) throw new Error(`fixture pin refused: ${pinned.error}`);
+    return { id: opened.id, coord: w.coord, calls };
+  };
+  const stateOf = (coord: CoordStore): string => {
+    const read = coord.readLanding(PROJECT);
+    if (!read.ok) throw new Error(read.error);
+    return read.facts.entries.find((e) => e.pr === 7)!.state;
+  };
+  const mergedRecords = (coord: CoordStore) => coord.feedEvents(200).filter((e) => e.kind === 'merged');
+
+  it('a done close that re-measures the PR merged marks its entry landed, by the close, and raises one merged record', async () => {
+    const s = `${PROJECT}-land1`;
+    const { id, coord } = await pinnedRun(s, [mergedRow(`ws/${s}`)]);
+    const res = await postClose(app!, id, { fingerprint: GOOD, final: true });
+    expect(res.statusCode).toBe(200);
+    expect(stateOf(coord)).toBe('landed');
+    const detail = JSON.parse((coord.db.prepare('SELECT detail FROM landing_entries WHERE pr = 7').get() as { detail: string }).detail);
+    expect(detail).toMatchObject({ by: 'close', word: 'merged', mergeCommit: MERGE40 });
+    expect(mergedRecords(coord)).toHaveLength(1);
+  });
+
+  it('a claim of open that measures merged still marks it', async () => {
+    const s = `${PROJECT}-land2`;
+    const { id, coord } = await pinnedRun(s, [mergedRow(`ws/${s}`)]);
+    const res = await postClose(app!, id, { fingerprint: { ...GOOD, prPhase: 'open' }, final: true });
+    expect(res.statusCode).toBe(200);
+    expect(stateOf(coord)).toBe('landed');
+  });
+
+  it('a done close that measures the PR open leaves the entry pinned', async () => {
+    const s = `${PROJECT}-land3`;
+    const { id, coord } = await pinnedRun(s, [prRow(`ws/${s}`, 'OPEN', { headRefOid: HEAD40 })]);
+    const res = await postClose(app!, id, { fingerprint: GOOD, final: true });
+    expect(res.statusCode).toBe(200);
+    expect(stateOf(coord)).toBe('pinned');
+    expect(mergedRecords(coord)).toHaveLength(0);
+  });
+
+  it('an abandon of the claim (state failed) asks no pr-state and leaves the entry pinned', async () => {
+    const s = `${PROJECT}-land4`;
+    const { id, coord, calls } = await pinnedRun(s, [mergedRow(`ws/${s}`)]);
+    const before = calls.filter((c) => c[0] === 'pr-state').length;
+    const res = await postClose(app!, id, { fingerprint: GOOD, state: 'failed', final: true });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ state: 'failed' });
+    expect(calls.filter((c) => c[0] === 'pr-state').length).toBe(before);
+    expect(stateOf(coord)).toBe('pinned');
+  });
+
+  it('a train-landed row leaves the entry to the reader', async () => {
+    const s = `${PROJECT}-land5`;
+    const train = prRow(`ws/${s}`, 'CLOSED', { headRefOid: HEAD40, landedInTrain: true, closedAt: '2020-01-01T00:00:00Z' });
+    const { id, coord } = await pinnedRun(s, [train]);
+    const res = await postClose(app!, id, { fingerprint: GOOD, final: true });
+    expect(res.statusCode).toBe(200);
+    expect(stateOf(coord)).toBe('pinned');
+  });
+
+  it('a fenced landing store still answers 200 done and leaves the entry pinned, with one warning line', async () => {
+    const s = `${PROJECT}-land6`;
+    const { id, coord } = await pinnedRun(s, [mergedRow(`ws/${s}`)]);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    vi.spyOn(coord, 'advanceLanding').mockReturnValue({ ok: false, error: 'landing-recovery-unresolved' });
+    const res = await postClose(app!, id, { fingerprint: GOOD, final: true });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ ok: true, state: 'done' });
+    expect(okRun(coord.run(id))!.state).toBe('done');
+    expect(stateOf(coord)).toBe('pinned');
+    expect(warn.mock.calls.map((c) => String(c[0]))).toEqual([
+      `ccrc-server: close of run ${id} could not mark ${PROJECT} #7 landed (landing-recovery-unresolved)`,
+    ]);
+  });
+
+  it('a mark that throws leaves the close answering 200 done, with one warning that names the failed mark', async () => {
+    const s = `${PROJECT}-land8`;
+    const { id, coord } = await pinnedRun(s, [mergedRow(`ws/${s}`)]);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    vi.spyOn(coord, 'advanceLanding').mockImplementation(() => { throw new Error('boom'); });
+    const res = await postClose(app!, id, { fingerprint: GOOD, final: true });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ ok: true, state: 'done' });
+    expect(okRun(coord.run(id))!.state).toBe('done');
+    expect(stateOf(coord)).toBe('pinned');
+    expect(warn.mock.calls.map((c) => String(c[0]))).toEqual([
+      `ccrc-server: close of run ${id} could not mark ${PROJECT} #7 landed (boom)`,
+    ]);
+  });
+
+  it('a notice step that throws after the mark committed leaves the close answering 200, and the warning says the mark was written but the record was not', async () => {
+    const s = `${PROJECT}-land9`;
+    const { id, coord } = await pinnedRun(s, [mergedRow(`ws/${s}`)]);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    vi.spyOn(coord, 'hasNotice').mockImplementation(() => { throw new Error('notice boom'); });
+    const res = await postClose(app!, id, { fingerprint: GOOD, final: true });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ ok: true, state: 'done' });
+    expect(stateOf(coord)).toBe('landed');
+    expect(mergedRecords(coord)).toHaveLength(0);
+    expect(warn.mock.calls.map((c) => String(c[0]))).toEqual([
+      `ccrc-server: close of run ${id} marked ${PROJECT} #7 landed but its merged record was not written (notice boom)`,
+    ]);
+  });
+
+  it('a session whose merged record sweepMerged already wrote gets no second one', async () => {
+    const s = `${PROJECT}-land7`;
+    const { id, coord } = await pinnedRun(s, [mergedRow(`ws/${s}`)]);
+    const rec = { kind: 'merged' as const, sessionId: s, title: 'x', body: 'PR #7 merged; nothing archived.', runId: null };
+    coord.recordFeedEvent('e', { ...rec, seq: 1, at: 1 }, `${s}#7`);
+    const res = await postClose(app!, id, { fingerprint: GOOD, final: true });
+    expect(res.statusCode).toBe(200);
+    expect(stateOf(coord)).toBe('landed');
+    expect(mergedRecords(coord)).toHaveLength(1);
+  });
+});

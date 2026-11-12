@@ -1139,6 +1139,11 @@ describe('a query key rides only if its row declared it', () => {
     expect(seen[0]!.url).toBe('/api/landing?project=project-a');
   });
 
+  it('the landing read carries its pr', async () => {
+    await run(['landing', 'show', '--project', 'project-a', '--pr', '41']);
+    expect(seen[0]!.url).toBe('/api/landing?project=project-a&pr=41');
+  });
+
   // Landing order wave 5f: the two attributed writes send the caller's own body, identity included, and never fill one.
   it.each([['entries', '/api/landing/entries'], ['order', '/api/landing/order']] as const)(
     'landing %s passes an explicit attributed body unchanged', async (verb, url) => {

@@ -719,14 +719,14 @@ describe('ccdRunner — the one ccd capability Deps carries', () => {
       // (§1.4/§1.7), and this runner reported NEITHER — so both read as the
       // token, never as `false`/`null`, which would claim a measurement.
       .toEqual({ ran: true, ok: true, stdout: 'out\n', stderr: 'warn\n',
-                 killed: UNMEASURED, signal: UNMEASURED });
+                 killed: UNMEASURED, signal: UNMEASURED, exitCode: 0 });
   });
 
   it('a FAILURE still carries stdout and stderr — the 502 body quotes stderr', async () => {
     const { run } = spy({ ran: true as const, code: 1, stdout: 'partial\n', stderr: 'boom\n' });
     expect(await ccdRunner(run, cfg)(CCD_ARGV.wsArchive(ID, null)))
       .toEqual({ ran: true, ok: false, stdout: 'partial\n', stderr: 'boom\n',
-                 killed: UNMEASURED, signal: UNMEASURED });
+                 killed: UNMEASURED, signal: UNMEASURED, exitCode: 1 });
   });
 });
 
@@ -736,7 +736,7 @@ describe('§1.4/§1.7 — CcdResult stops dropping the kill one hop later', () =
   it('threads `killed` off the runner', async () => {
     const killedRun: Runner = async () => ({ ran: true as const, code: 1, stdout: '', stderr: '', killed: true, signal: 'SIGTERM' });
     expect(await ccd(killedRun, cfg, CCD_ARGV.wsAdd('demo'))).toEqual({
-      ran: true as const, ok: false, stdout: '', stderr: '', killed: true, signal: 'SIGTERM',
+      ran: true as const, ok: false, stdout: '', stderr: '', killed: true, signal: 'SIGTERM', exitCode: 1,
     });
   });
 
@@ -747,14 +747,25 @@ describe('§1.4/§1.7 — CcdResult stops dropping the kill one hop later', () =
     // adoption gate treats those two differently on purpose.
     const plainRun: Runner = async () => ({ ran: true as const, code: 1, stdout: '', stderr: 'refused' });
     expect(await ccd(plainRun, cfg, CCD_ARGV.wsAdd('demo'))).toEqual({
-      ran: true as const, ok: false, stdout: '', stderr: 'refused', killed: UNMEASURED, signal: UNMEASURED,
+      ran: true as const, ok: false, stdout: '', stderr: 'refused', killed: UNMEASURED, signal: UNMEASURED, exitCode: 1,
     });
+  });
+
+  it('ccd carries the exit code on the ran arm, 0 and 2 alike, and never on the not-ran arm', async () => {
+    for (const code of [0, 2]) {
+      const res = await ccd(async () => ({ ran: true as const, code, stdout: '', stderr: '' }), cfg, CCD_ARGV.wsAdd('demo'));
+      expect(res.ran).toBe(true);
+      expect((res as { exitCode?: number }).exitCode).toBe(code);
+    }
+    const nr = await ccd(async () => ({ ran: false as const, code: 2, stdout: '', stderr: 'x', reason: 'transport' as const, detail: 'x' }), cfg, CCD_ARGV.wsAdd('demo'));
+    expect(nr.ran).toBe(false);
+    expect('exitCode' in nr).toBe(false);
   });
 
   it('keeps a MEASURED false and a MEASURED null — only absence becomes the token', async () => {
     const measured: Runner = async () => ({ ran: true as const, code: 1, stdout: '', stderr: 'die', killed: false, signal: null });
     expect(await ccd(measured, cfg, CCD_ARGV.wsAdd('demo'))).toEqual({
-      ran: true as const, ok: false, stdout: '', stderr: 'die', killed: false, signal: null,
+      ran: true as const, ok: false, stdout: '', stderr: 'die', killed: false, signal: null, exitCode: 1,
     });
   });
 });

@@ -5633,17 +5633,27 @@ the rest) is listed in the hook's header, and a jq failure or a hook timeout fai
 the queue is the operator's act.
 
 **The landing line (landing-order stage 5).** `GET /api/landing?project=<p>` (box token; `ccrc-api landing show --project <p>`)
-is the coordinator's read of one project's line before it enqueues: every entry — the PR, its `pinnedSha` (the head the line
+is the coordinator's read of one project's line before it enqueues: the entries still in the line (`pinned`, `ejected`,
+`unknown`) — the PR, its `pinnedSha` (the head the line
 pinned when the run entered `merging`, which the coordinator requires to equal the head it binds and passes to
-`--match-head-commit`), its `handoffCommit`, its state and its ejections — the
+`--match-head-commit`), its `handoffCommit`, its state and its ejections — and, with `&pr=<n>` (`--pr <n>`), that PR's entry in any
+state, `entriesScope` saying which of the two the answer is; beside them the
 operator pause and the main-red hold, and the order the server's decider computes on that read; the line is paused
-while either flag is set. A project the line has never seen answers no entries and both flags off. The line's authority (no-run creation evidence,
+while either flag is set. An entry leaves the line `landed` when GitHub reads its PR merged (a merge train's proved landing included), with a head other than
+the pinned one kept in its `detail`, or `closed` when GitHub reads it closed unmerged or says no such PR exists. The landed reader
+(at most ten entries a sweep, oldest first) marks it, and a work run's `done` close marks it `landed` when GitHub reads the PR
+MERGED (a merge train's landing is left to the landed reader, which carries the train facts); a verified pin re-pins a `closed`
+entry. A project the line has never seen answers no entries and both flags off. The line's authority (no-run creation evidence,
 order edges, `fixesMain` and setter attribution) is journalled in `~/.ccrc/landing.log`, which a restored `coord.db` leaves in
 place (no backup copies it) and which the server replays before it serves anything. Replay never fabricates a measured pin or a
 current run association: a project whose projection is missing or whose binding evidence contradicts is reported as unmeasured
 and held, and invalid history refuses startup. An uncertain journal append or landing database commit fences every landing read
-and write, an advance's pin and its retreat from `merging` included: the failing call answers 503 with `mayApply: true` (the write
-may or may not have reached the line) and a `recovery` word, and every later one answers `landing-fenced` with that word. A `replay`
+and write, an advance's pin and its retreat from `merging` and a landing's mark included: the failing call answers 503 with
+`mayApply: true` (the write may or may not have reached the line) and a `recovery` word, and every later one answers
+`landing-fenced` with that word. An uncertain apply is named beside the append and the commit (`landing-db-apply`, as
+`landing-db-commit`, with `mayApply: true`), because the land arm answers the same words. After a `restart` fence the database
+handle is closed, so a later call that reads the database before the landing guard (the advance route reads the run first) fails
+on the closed handle instead of answering `landing-fenced`. A `replay`
 fence and a `restart` fence alike clear only when the server restarts: the replay is the only thing that reopens the line, and only
 the boot calls it, so there is no retry timer and nothing reopens the line while the server runs; a restart whose replay refuses
 does not start. A retreat refused `landing-projection-unreadable` (its pin names another head than the

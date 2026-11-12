@@ -82,7 +82,7 @@ describe('the landing line has one writer (landing order wave 5e, D-7614)', () =
   });
 
   it('advanceLanding owns pin, repin, ejection and quarantine on landing_entries and the one witness write; replay owns neither', () => {
-    expect(allWrites(/^landing_entries$/).filter(inWriter).map((q) => q.verb).sort()).toEqual(['INSERT', 'UPDATE', 'UPDATE', 'UPDATE']);
+    expect(allWrites(/^landing_entries$/).filter(inWriter).map((q) => q.verb).sort()).toEqual(['INSERT', 'UPDATE', 'UPDATE', 'UPDATE', 'UPDATE']);
     const witness = allWrites(/^landing_projection_witness$/);
     expect(witness.length).toBe(1);
     expect(witness.every(inWriter)).toBe(true);
@@ -130,6 +130,20 @@ describe('the landing line has one writer (landing order wave 5e, D-7614)', () =
     expect(store.match(/MAX\([^)]*\)[^'"`]*FROM landing_/g) ?? []).toEqual([]);
   });
 
+  it("landingFactsInner reads its own project's rows whole and every other project's rows as id, project and pr only", () => {
+    const inner = symbolOf(STORE, 'CoordStore.landingFactsInner');
+    const reads = FILES.flatMap((f) => sqlStatementsInFile(f))
+      .filter((q) => !isSchema(q) && q.verb === 'SELECT' && q.table === 'landing_entries' && q.file.endsWith(STORE) && q.start >= inner.start && q.start < inner.end);
+    const flat = reads.map((q) => q.source.replace(/\s+/g, ' ').trim());
+    expect(flat).toHaveLength(2);
+    const own = flat.filter((x) => /WHERE project = \?/.test(x));
+    const foreign = flat.filter((x) => /WHERE project <> \?/.test(x));
+    expect(own).toHaveLength(1);
+    expect(own[0]).toMatch(/SELECT id, project, pr, pinnedSha, /);
+    expect(foreign).toHaveLength(1);
+    expect(foreign[0]).toMatch(/SELECT id, project, pr FROM landing_entries WHERE project <> \?/);
+  });
+
   it('the merging-at detail is built only inside advanceLanding', () => {
     const calls = FILES.flatMap((f) => parsedFile(f).calls.filter((c) => c.name === 'mergingAtDetail').map((c) => ({ file: f, start: c.start })));
     expect(calls.length).toBeGreaterThanOrEqual(1);
@@ -142,11 +156,54 @@ describe('the landing line has one writer (landing order wave 5e, D-7614)', () =
     expect(names).not.toContain('advance');
   });
 
-  it('advanceLanding has one caller, advanceAct', () => {
-    const act = symbolOf(ROUTES, ADVANCE_ACT);
-    const calls = FILES.flatMap((f) => parsedFile(f).calls.filter((c) => c.name === 'advanceLanding').map((c) => ({ file: f, start: c.start })));
+  it('detail has two statements, both inside advanceLanding: the land UPDATE writes state and detail and nothing else, and the re-pin UPDATE clears it', () => {
+    const marks = writes(/\bdetail\b/i).filter((q) => /^landing_entries$/.test(q.table ?? ''));
+    expect(marks.map((q) => q.verb)).toEqual(['UPDATE', 'UPDATE']);
+    expect(marks.filter((q) => !inWriter(q)).map((q) => `${q.file}:${q.text}`)).toEqual([]);
+    const flat = marks.map((q) => q.source.replace(/\s+/g, ' '));
+    expect(flat.filter((t) => /SET state = \?, detail = \? WHERE id = \?/.test(t))).toHaveLength(1);
+    expect(flat.filter((t) => /\bdetail = NULL\b/.test(t))).toHaveLength(1);
+  });
+
+  it('advanceLanding is declared once', () => {
+    expect(() => symbolOf(STORE, WRITER)).not.toThrow();
+    const text = parsedFile(STORE).text;
+    expect(text.match(/^\s*advanceLanding[<(]/gm) ?? []).toHaveLength(1);
+  });
+
+  it('decideLandingLand has one call, inside advanceLanding', () => {
+    const calls = FILES.flatMap((f) => parsedFile(f).calls.filter((c) => c.name === 'decideLandingLand').map((c) => ({ file: f, start: c.start })));
     expect(calls).toHaveLength(1);
-    expect(calls[0]!.file.endsWith(ROUTES) && calls[0]!.start >= act.start && calls[0]!.start < act.end).toBe(true);
+    expect(calls.every(inWriter)).toBe(true);
+  });
+
+  // Only code may satisfy the land-arm check: a comment is a request, a red suite is a mechanism.
+  const stripComments = (t: string): string => t.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '');
+
+  const CLOSE = 'server/src/coord/close.ts';
+  const LANE = 'server/src/coord/landedLane.ts';
+  const CLOSE_LAND = 'landOnClose';
+  const LANE_PASS = 'landedPass';
+
+  it('advanceLanding has three callers, each named by symbol: advanceAct, the close\'s landOnClose and the lane\'s landedPass; only advanceAct passes a run arm', () => {
+    const calls = FILES.flatMap((f) => parsedFile(f).calls.filter((c) => c.name === 'advanceLanding')
+      .map((c) => ({ file: f, start: c.start })));
+    expect(calls).toHaveLength(3);
+    const within = (file: string, name: string) => {
+      const s = symbolOf(file, name);
+      return calls.filter((c) => c.file.endsWith(file) && c.start >= s.start && c.start < s.end);
+    };
+    expect(within(ROUTES, ADVANCE_ACT), 'advanceAct').toHaveLength(1);
+    expect(within(CLOSE, CLOSE_LAND), 'close.ts#landOnClose').toHaveLength(1);
+    expect(within(LANE, LANE_PASS), 'landedLane.ts#landedPass').toHaveLength(1);
+    const act = symbolOf(ROUTES, ADVANCE_ACT);
+    const actText = stripComments(parsedFile(ROUTES).text.slice(within(ROUTES, ADVANCE_ACT)[0]!.start, act.end).slice(0, 400));
+    expect(actText).not.toMatch(/kind: 'land'/);
+    // the other two compose a land command: the lane spells it, the close takes it from the one builder
+    expect(stripComments(parsedFile(LANE).text.slice(within(LANE, LANE_PASS)[0]!.start, within(LANE, LANE_PASS)[0]!.start + 400))).toMatch(/kind: 'land'/);
+    const closeText = stripComments(symbolOf(CLOSE, CLOSE_LAND).text);
+    expect(closeText).toMatch(/closeLandingOf\(/);
+    expect(closeText, 'the close passes the value bound from closeLandingOf, never a command of its own').toMatch(/advanceLanding\(\s*land\s*\)/);
   });
 
   it('advanceLanding decides the edge before it writes, in one tx', () => {

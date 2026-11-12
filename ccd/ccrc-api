@@ -155,7 +155,7 @@ declare -A ROUTES=(
   [ledger.list]='GET|/api/ledger|no|project'
   [ledger.allocate]='POST|/api/ledger/deviations|no|-'
   # The landing line's read (landing order wave 5e, D-7625): one project's entries, flags and order.
-  [landing.show]='GET|/api/landing|no|project'
+  [landing.show]='GET|/api/landing|no|project,pr'
   # The landing line's two attributed writes (landing order wave 5f): the caller's own body, byId/byUuid included, rides
   # unchanged; nothing fills identity here.
   [landing.entries]='POST|/api/landing/entries|no|-'

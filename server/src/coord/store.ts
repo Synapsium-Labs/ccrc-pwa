@@ -16,9 +16,9 @@ import * as planStore from './planStore.js';
 import { LINEAR_SYNC_PROGRAMME } from '../../../shared/plan.js';
 import type { ItemEventRow, ItemMoveResult, ItemRow, RaiseItemInput } from './ledgersStore.js';
 export type { ItemEventRow, ItemMoveResult, ItemRow, RaiseItemInput } from './ledgersStore.js';
-import { decideLandingWrite, landingFactsOf, landingHoldGate, landingRecordOf } from './landingEntry.js';
+import { decideLandingLand, decideLandingWrite, landingFactsOf, landingHoldGate, landingRecordOf, LANDING_LANDABLE_STATES } from './landingEntry.js';
 import { parseLandingJournal } from './landingJournalPolicy.js';
-import type { LandingAdvance, LandingWrite } from './landingEntry.js';
+import type { LandingAdvance, LandingLand, LandingLandWrite, LandingWrite } from './landingEntry.js';
 import type { LandingEntryState, LandingInfrastructureFailure, LandingJournalRecord } from '../../../shared/landingLine.js';
 import { decideLandingMutation } from './landingWrites.js';
 import type { LandingAuthorityCommand, LandingAuthorityWrite, LandingJournalReplay, LandingMutationFacts, LandingReadResult } from './landingWrites.js';
@@ -325,6 +325,18 @@ export type LandingAdvanceResult =
   | { ok: false; error: Extract<RunRefuseCode, 'ejection-not-merging'>; from: RunState }
   | ({ ok: false } & LandingInfrastructureFailure)
   | { ok: false; error: 'landing-recovery-unresolved' | 'landing-identity-conflict' | 'landing-id-overflow' };
+
+/** `advanceLanding`'s run arm: today's input, named. */
+export interface LandingRunAdvance { runId: number; to: RunState; causedBy: string; landing: LandingAdvance }
+
+/** `advanceLanding`'s land arm answer (landing order wave 5h): what the mark recorded, or why the line refused it. */
+export type LandingLandResult =
+  | { ok: true; landing: LandingLandWrite }
+  | ({ ok: false } & LandingInfrastructureFailure)
+  | { ok: false; error: 'landing-recovery-unresolved' | 'landing-identity-conflict' };
+
+/** `advanceLanding`'s answer by the arm its input names. */
+export type AdvanceLandingResultOf<I> = I extends LandingLand ? LandingLandResult : LandingAdvanceResult;
 
 /** `setAccountPools`'s answer (T6-R4, fix round 1; `error`'s vocabulary moved
  *  to `shared/api.ts`'s `SetAccountPoolsRefuseCode` in fix round 2 — see C1
@@ -3306,14 +3318,42 @@ export class CoordStore {
    * the recovery hold; its own effects phase (`none`, `applying`, `committing`) says what an exception left uncertain,
    * and an uncertain one fences the line and answers `mayApply`. A verified pin also writes its witness, atomically.
    */
-  advanceLanding(input: { runId: number; to: RunState; causedBy: string; landing: LandingAdvance }): LandingAdvanceResult {
-    const { runId, to, causedBy, landing } = input;
+  advanceLanding<I extends LandingRunAdvance | LandingLand>(input: I): AdvanceLandingResultOf<I> {
+    const land: LandingLand | null = 'kind' in input && input.kind === 'land' ? input : null;
+    const run: LandingRunAdvance | null = land === null ? (input as LandingRunAdvance) : null;
     let effects: 'none' | 'applying' | 'committing' = 'none';
     let touched = false;
     let began = false;
     try {
-      return tx(this.db, (): LandingAdvanceResult => {
+      return tx(this.db, (): LandingAdvanceResult | LandingLandResult => {
         began = true;
+        if (land !== null) {
+          // The land arm (wave 5h): a mark takes one entry out of the line and moves no run. Same guard, facts, gate,
+          // effects phases and catch as the pin; the mark is one UPDATE of state and detail.
+          const marked = ((): LandingLandResult => {
+            const fenced = this.landingGuard();
+            if (fenced !== null) return { ok: false as const, ...fenced };
+            touched = true;
+            const read = this.landingFactsInner(land.project);
+            if (!read.ok) return read;
+            const current = read.facts.entries.find((e) => e.pr === land.pr) ?? null;
+            const projection = read.facts.projections.find((p) => p.id === current?.id)?.value ?? null;
+            const gate = landingHoldGate(read.facts.recovery, 'land', { project: land.project, pr: land.pr }, projection);
+            if (!gate.ok) return { ok: false as const, error: gate.error };
+            const decision = decideLandingLand({ land, current, projection });
+            if (decision.act === 'none') return { ok: true as const, landing: decision.write };
+            effects = 'applying';
+            this.db.prepare('UPDATE landing_entries SET state = ?, detail = ? WHERE id = ?').run(decision.state, decision.detail, decision.id);
+            const after = this.landingFactsInner(land.project);
+            const entry = after.ok ? after.facts.entries.find((e) => e.pr === land.pr) ?? null : null;
+            if (entry === null) throw new Error('advanceLanding: the entry it just marked reads back absent');
+            return { ok: true as const, landing: { kind: decision.state, entry } };
+          })();
+          if (effects === 'applying') effects = 'committing';
+          return marked;
+        }
+        if (run === null) throw new Error('advanceLanding: an input of neither arm');
+        const { runId, to, causedBy, landing } = run;
         const out = ((): LandingAdvanceResult => {
           const row = this.db.prepare('SELECT state, kind, project FROM runs WHERE id = ?').get(runId) as
             { state: string; kind: string; project: string } | undefined;
@@ -3366,7 +3406,7 @@ export class CoordStore {
           } else if (landing.kind === 'pin' && decision.act === 'repin') {
             // A verified re-pin also clears the stale-head marker (a quarantined row re-pins only on a readable projection).
             this.db.prepare('UPDATE landing_entries SET pinnedSha = ?, handoffCommit = ?, runId = ?, state = ?, baseSha = NULL, ' +
-              'ejectionKind = NULL, quarantineKind = NULL, pinnedAt = ? WHERE id = ?').run(landing.head, landing.handoffCommit, runId, pinned, Date.now(), decision.id);
+              'ejectionKind = NULL, quarantineKind = NULL, detail = NULL, pinnedAt = ? WHERE id = ?').run(landing.head, landing.handoffCommit, runId, pinned, Date.now(), decision.id);
             entryId = decision.id;
           } else if (decision.act === 'eject') {
             // The count is the decider's (bounded at the safe-integer ceiling), never `ejections + 1` in SQL.
@@ -3392,18 +3432,30 @@ export class CoordStore {
         })();
         if (effects === 'applying') effects = 'committing';
         return out;
-      });
+      }) as AdvanceLandingResultOf<I>;
     } catch (err) {
       // A plain advance, and a pin or retreat that began but never reached the line (the run read, the pairing
       // programming error, a retreat with no PR or not from merging), carry no landing contract: the failure propagates
       // as it always did. A pin or retreat whose BEGIN threw is the line's own db-unavailable; once the line was
       // reached, a failure is the line's, by its effects phase.
-      if (landing.kind === 'plain' || (began && !touched)) throw err;
+      if ((run !== null && run.landing.kind === 'plain') || (began && !touched)) throw err;
       const recovery = this.landingBoundary();
-      if (effects === 'none') return { ok: false, error: 'landing-db-unavailable', recovery };
+      if (effects === 'none') return { ok: false, error: 'landing-db-unavailable', recovery } as AdvanceLandingResultOf<I>;
       this.landingFence = recovery;
-      return { ok: false, error: effects === 'applying' ? 'landing-db-apply' : 'landing-db-commit', recovery, mayApply: true };
+      return { ok: false, error: effects === 'applying' ? 'landing-db-apply' : 'landing-db-commit', recovery, mayApply: true } as AdvanceLandingResultOf<I>;
     }
+  }
+
+  /** The projects the landed reader walks (wave 5h): the distinct projects holding a row a mark could take, sorted. Behind
+   *  the landing guard like every landing read. */
+  landingReadProjects(): { ok: true; projects: string[] } | ({ ok: false } & LandingInfrastructureFailure) {
+    const fenced = this.landingGuard();
+    if (fenced !== null) return { ok: false, ...fenced };
+    try {
+      const rows = this.db.prepare(`SELECT DISTINCT project FROM landing_entries WHERE state IN (${LANDING_LANDABLE_STATES.map((w) => `'${w}'`).join(', ')}) ORDER BY project`)
+        .all() as { project: string }[];
+      return { ok: true, projects: rows.map((r) => r.project) };
+    } catch { return { ok: false, error: 'landing-db-unavailable', recovery: this.landingBoundary() }; }
   }
 
   /** The landing entrances' guard: unavailable without a journal port, `landing-fenced` while the fence stands. */
@@ -3436,7 +3488,8 @@ export class CoordStore {
     const all = (sql: string, ...p: string[]): Record<string, unknown>[] => this.bigReads(sql).all(...p) as Record<string, unknown>[];
     return landingFactsOf(project, {
       entries: all('SELECT id, project, pr, pinnedSha, handoffCommit, runId, state, baseSha, ejectionKind, ejections, afterIds, fixesMain, ' +
-        'setBy, pinnedAt, quarantineKind FROM landing_entries ORDER BY pinnedAt, id'),
+        'setBy, pinnedAt, quarantineKind FROM landing_entries WHERE project = ? ORDER BY pinnedAt, id', project),
+      foreign: all('SELECT id, project, pr FROM landing_entries WHERE project <> ? ORDER BY pinnedAt, id', project),
       subjects: all('SELECT id, project, pr, bindingKind, observedRunId, observedSeq, creationSeq, creationClaim FROM landing_subjects'),
       authorities: all('SELECT subjectId, afterIds, fixesMain, setBy, seq FROM landing_authority'),
       witnesses: all('SELECT entryId, project, pr, observedSeq, runId, pinnedSha, handoffCommit FROM landing_projection_witness'),

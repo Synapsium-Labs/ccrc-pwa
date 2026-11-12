@@ -22,8 +22,8 @@ import { decideRoute, parseRouteRequest } from './route.js';
 import { decideCaps } from './caps.js';
 import { tx } from './db.js';
 import { LEDGER_ALLOC_MAX } from './ledger.js';
-import { landingOrder } from './landingLine.js';
-import { landingCommandOf, parseLandingWrite } from './landingWrites.js';
+import { landingViewOf } from './landingLine.js';
+import { landingCommandOf, parseLandingReadQuery, parseLandingWrite } from './landingWrites.js';
 import { actLandingWrite } from './landingWritesAct.js';
 import type { LandingLineView } from '../../../shared/landingLine.js';
 import { measureLedgerFloor, type FloorMeasurement } from './ledgerseed.js';
@@ -1709,7 +1709,7 @@ export function registerCoordRoutes(
     if (id === null) return reply.code(400).send({ ok: false, error: 'bad-request' });
 
     const closeDeps: CloseRunDeps = { coord, io: deps.io, cfg: deps.cfg, runCcd: deps.runCcd,
-      fleetState: deps.fleetState, childReclaim: childReclaimPort(deps, coord) };
+      fleetState: deps.fleetState, childReclaim: childReclaimPort(deps, coord), notice };
     const outcome = await coordMutex.run(() => closeRun(closeDeps, id, req.body, 'coordinator'));
     return sendCloseOutcome(reply, outcome);
   });
@@ -4190,7 +4190,8 @@ export function registerCoordRoutes(
   });
 
   /**
-   * `GET /api/landing?project=`: the landing line, read cookieless from the fleet host before the coordinator
+   * `GET /api/landing?project=[&pr=]`: the landing line (wave 5h: `entries` are the ones still in the line, or with
+   * `?pr=` that PR's entry in any state; `entriesScope` says which), read cookieless from the fleet host before the coordinator
    * enqueues. It follows the `GET /api/ledger` convention: box token, a read with no attribution to check, per-project
    * and REQUIRED. The order is computed on this read by `landingLine.ts#landingOrder` and never stored. A project with
    * no `landing_projects` row answers both flags `false`: inert until their writers (5i, 5j). The read is advisory
@@ -4199,15 +4200,13 @@ export function registerCoordRoutes(
   app.get('/api/landing', async (req, reply) => {
     if (!deps.coord) return notConfigured(reply);
     if (!requireMailToken(req, reply, 'GET /api/landing')) return;
-    const q = req.query as { project?: unknown };
-    if (typeof q.project !== 'string' || q.project.trim() === '') {
-      return refuseRoute(reply, 'bad-request', { detail: 'the landing line is per-project — ?project= is required' });
-    }
-    const project = q.project.trim();
+    const query = parseLandingReadQuery(req.query);
+    if (!query.ok) return refuseRoute(reply, 'bad-request', { detail: query.detail });
+    const { project, pr } = query;
     const read = deps.coord.readLanding(project);
     if (!read.ok) { const { ok: _ok, error, ...extra } = read; return refuseRoute(reply, error, extra); }
     const { entries, flags, recovery } = read.facts;
-    const view: LandingLineView = { project, ...flags, entries, order: landingOrder(entries, flags, recovery), recovery };
+    const view: LandingLineView = { project, ...flags, ...landingViewOf(entries, flags, recovery, pr), recovery };
     return reply.code(200).send({ ok: true, ...view });
   });
 

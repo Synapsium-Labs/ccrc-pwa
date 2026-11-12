@@ -32,6 +32,7 @@ import { liveStateReaderOver, readLiveState, readLiveStateMeasured } from './liv
 import { mailTurnIdle, mailTurnModeOf, mailTurnReadsMark, type MailTurnMode } from './turnidle.js';
 import { readTurnMarkMeasured } from './turnmark.js';
 import { finishedAfter } from './coord/finished.js';
+import { redactCommand } from './coord/redact.js';
 import { withCleanupHeldBy } from './cleanupHeldBy.js';
 import { foldHookStateRead, readHookState, readHookStateRawMeasured, type HookState, type HookStateRawRead } from './hookstate.js';
 import { readUsageMeasured, USAGE_FRESH_S } from './usage.js';
@@ -91,7 +92,7 @@ import { BoxSettingsLane } from './update/boxSettingsLane.js';
 import { DiskAlarmLane } from './diskAlarmLane.js';
 import { PressureLane } from './pressureLane.js';
 import { VisibilityLane } from './linking/visibilityLane.js';
-import { ProjectWalkCache, listProjects } from './lifecycle.js';
+import { ProjectWalkCache, listProjects, ccdEnding } from './lifecycle.js';
 import { BackupLane } from './backupLane.js';
 import type { BackupHealth } from '../../shared/backup.js';
 import { TestboxLane } from './testboxLane.js';
@@ -176,6 +177,8 @@ import { coordinatorOfRun, readCoordinatorOfRun } from './coord/bindingReads.js'
 import { abandonDeadDispatches } from './coord/abandonDeadDispatch.js';
 import type { PushPayload } from './push.js';
 import { notify, noticeSink, notifyPushOnly } from './notice.js';
+import { mergedBody, mergedKey, mergedNoticeOf, type LandedMemory } from './coord/landed.js';
+import { landedPass } from './coord/landedLane.js';
 import { LANE_ARM_FEED_TITLE, LANE_ARM_LANES, LANE_ARM_MARKER, type LaneArmImport, type LaneArmLane } from '../../shared/lane-arm.js';
 import { laneArmImportLine } from './coord/laneArm.js';
 import { runDriftPass } from './coord/driftLane.js';
@@ -599,18 +602,6 @@ const APPROVAL_RULED_GRACE_MS = 10_000;
  * disconnected so a stretch of empty/partial reads never clobbers the last
  * known good snapshot `/api/fleet` falls back to.
  */
-/** The identity of one merged announcement: the workspace AND the PR that
- *  merged. Defined once because two things key on it and they must not drift —
- *  `mergedNotified` (say it once) and the push's collapse tag (replace only
- *  what is genuinely the same statement). A workspace outlives its own merge
- *  now, so `id` alone is not an identity. */
-const mergedKey = (id: string, number: number | null): string => `${id}#${number ?? '?'}`;
-/** The merged announcement's body, built in ONE place (landing-order wave 3d): `announceMerged` writes it, and
- *  `sweepMerged`'s durable read matches a row archived before the once-only key existed by exactly this text. */
-const mergedBody = (number: number | null, reason: string | null): string => reason === null
-  ? `PR #${number ?? '?'} merged; nothing archived.`
-  : `PR #${number ?? '?'} merged — ${reason}; nothing archived.`;
-
 /** What one `FleetWatcher.pushRelease` call did (design 2026-09-20 §13; plan W3 Task 3). Each arm is a fact
  *  a caller or a test tells apart: nothing to decide; decided and marked with no push, every measured node
  *  already running the tag (D-3294); pushed; the mark lost to another writer, so nothing
@@ -643,10 +634,20 @@ function mergeBreakerMembers(
  *  without `recordAlways` had no caller and is not a type. */
 type PushOneMode = { recordOnly?: false | undefined } | { recordAlways: true; recordOnly: true };
 
-/** What a failed `pr-state` call says for itself, for the one log line `backoffPr` writes: the not-ran arm's detail, else
- *  the first line of ccd's stderr, cut to 160 characters. */
+/** What a failed ccd call says for itself, for the one log line `backoffPr` writes: the not-ran arm's detail; else how
+ *  ccd ended (`ccdEnding`, the single reader of the kill halves; `exit <n>` only when the exit code was measured),
+ *  then the first stderr line and, when it differs, the last non-empty one, each cut to 160 characters. */
 function failureDetail(res: CcdResult): string {
-  return (res.ran === false ? res.detail : res.stderr.split('\n')[0] ?? '').slice(0, 160);
+  if (res.ran === false) return res.detail.slice(0, 160);
+  const e = ccdEnding(res);
+  const ending = e.kind === 'exited' ? (res.exitCode === undefined ? 'exited' : `exit ${res.exitCode}`)
+    : e.kind === 'signal' ? `signal ${e.signal}` : e.kind === 'deadline' ? 'deadline' : 'ending unmeasured';
+  const lines = res.stderr.split('\n').filter((l) => l.trim() !== '');
+  const first = lines[0];
+  const last = lines[lines.length - 1];
+  // ccd's and gh's stderr is foreign text: each line goes through the one redactor before it is cut and logged.
+  return [ending, ...(first === undefined ? [] : [`first: ${redactCommand(first).slice(0, 160)}`]),
+    ...(first !== undefined && last !== first ? [`last: ${redactCommand(last!).slice(0, 160)}`] : [])].join('; ');
 }
 
 export class FleetWatcher {
@@ -715,6 +716,8 @@ export class FleetWatcher {
    * the first sweep after the deploy, and that repeat is keyed.
    */
   private mergedNotified = new Set<string>();
+  /** The landed reader's memory of each entry it has read (id -> due time, step, streak); `coord/landed.ts` decides on it. */
+  private landedMemory = new Map<number, LandedMemory>();
   /** The merge-queue word each session's last full pr-state line carried
    *  (`queueFor`), kept beside `prStates` and written by the same arm of
    *  `sweepPr`. Read by `sweepLanding` and nothing else. */
@@ -2707,6 +2710,8 @@ export class FleetWatcher {
       // --timeout, so awaiting it would stall the dialog detector and the
       // busy->idle push behind GitHub's reachability.
       void this.sweepPr(registryRead).catch(() => { /* one bad sweep must not kill the poll */ });
+      // NEVER awaited, sweepPr's reasoning: it shells out to `gh` through ccd, once per entry.
+      void this.sweepLanded().catch(() => { /* one bad sweep must not kill the poll */ });
       const refreshCaps = this.deps.refreshCaps;
       if (refreshCaps) {
         // NEVER awaited: same reasoning as sweepPr immediately above — caps()
@@ -8506,6 +8511,19 @@ export class FleetWatcher {
     await this.runLane('pr', () => this.prPass(fleet), anyPending);
   }
 
+  /** The landed reader's sweep (landing order wave 5h): `coord/landedLane.ts#landedPass` under the `landed` row. The
+   *  guard is `sweepPr`'s: with the agent down there is nothing to read. */
+  private async sweepLanded(): Promise<void> {
+    if (this.deps.cfg.fleetMode === 'remote' && !this.deps.fleetState?.connected) return;
+    const coord = this.deps.coord;
+    if (coord === undefined) return;
+    await this.runLane('landed', () => landedPass({
+      coord, runCcd: this.deps.runCcd, ...(this.deps.fleetState ? { fleetState: this.deps.fleetState } : {}),
+      notice: noticeSink(this.deps), now: () => this.deps.time.clock.wall(), memory: this.landedMemory,
+      warn: (l) => { console.warn(l); },
+    }));
+  }
+
   /** The visibility lane's tick over EVERY listed project (the root walk and the registry's), not only those with a workspace
    *  session: a project just added has none, and it must still be read (D-8147). Never throws. */
   private async measureVisibility(records: readonly { project: string; workdir: string }[], now: number): Promise<void> {
@@ -8673,12 +8691,14 @@ export class FleetWatcher {
   private announceMerged(key: string, r: SessionRecord, number: number | null, reason: string | null): void {
     if (this.mergedNotified.has(key)) return;
     this.mergedNotified.add(key);
+    // The record is `coord/landed.ts#mergedNoticeOf`'s, the one builder (wave 5h): the landed reader raises the same one.
+    const rec = mergedNoticeOf({ pr: number, reason, sessionId: r.id, workspace: String(r.workspace), key });
     this.pushOne({
-      kind: 'merged', sessionId: r.id, project: r.project,
-      title: `✓ merged › ${r.workspace}`,
-      body: mergedBody(number, reason),
+      kind: rec.kind, sessionId: rec.sessionId, project: r.project,
+      title: rec.title,
+      body: rec.body,
       // The once-only key, archived beside the row for `hasNotice` (landing-order wave 3d). It decides nothing here.
-      dedupeKey: key,
+      dedupeKey: rec.dedupeKey,
       // EXPLICIT, because `pushOne`'s default (`${kind}-${sessionId}`) is one
       // key short of this lane's own. The latch is per (workspace, PR) so a
       // second PR from the same workspace is announced — and an id-only
@@ -8691,7 +8711,7 @@ export class FleetWatcher {
       // (a row pruned past `FEED_RETENTION`, a push the presence gate kept out
       // of it, or a pre-key row whose body changed since) carries this same
       // tag, so it replaces rather than stacks.
-      tag: `merged-${key}`,
+      tag: rec.tag,
     }, this.activeProjects);
   }
 

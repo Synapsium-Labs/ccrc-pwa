@@ -29,7 +29,8 @@ export async function ccd(run: Runner, cfg: CcrcConfig, args: CcdArgv): Promise<
   };
   // D-6034: the runner's `ran: false` arm is CARRIED, beside every field above, unchanged.
   // `ok: false` is the arm's own claim, never derived from the forged code.
-  return r.ran === false ? { ...answer, ok: false, ran: false, reason: r.reason, detail: r.detail } : answer;
+  // landing-order 5h: `exitCode` rides the ran arm ONLY. It is never put on `answer`, which the not-ran arm spreads.
+  return r.ran === false ? { ...answer, ok: false, ran: false, reason: r.reason, detail: r.detail } : { ...answer, exitCode: r.code };
 }
 
 /** How one ccd call ENDED, as its two kill halves together say (docs W2, refinement (g)):
