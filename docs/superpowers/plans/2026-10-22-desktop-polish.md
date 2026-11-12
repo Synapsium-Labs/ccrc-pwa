@@ -3520,6 +3520,54 @@ No test is skipped on Darwin, no Linux assertion is loosened, no timeout is rais
   process group rather than from a `setpgid` errno, and names every 125 and 127 on stderr. Each fix ships with a case that
   is red on Linux without it. Departures are named by slug in `c26.md`.
 
+### Task C28: the sign-in pump confirms a macOS FIFO's end of file without select() (D-8345) — now
+
+**Why.** Task C27 (D-8344, #2689) found that D-2661's macOS red was its probe's reader: on Darwin a FIFO's end of file is
+delivered once to whatever waits for it, `select()` can then call a FIFO with no writer "not readable", and bash 5.3's
+`read -t` consumes the EOF and answers 142. The account sign-in helper's pump reads the child's output with the same
+`read -t` and looped on every timeout. Each claim below is labelled in `c28.md`, with the runs.
+
+**Items, and what was done.**
+- **The defect, measured on macOS.** The helper's own spawn, pump and wait, against a mint that prints two lines, sleeps a
+  second and exits 0, ran to the pump's backstop and was stamped expired in 51 of 140 runs (all from run 43154928175), on
+  both spawn arms, bare and under load. Each time the mint had exited 0 and both lines had reached the pane, and the tick reads answered 0, 0 and
+  then only 142, never 1. A sign-in that succeeded would end `expired` after its whole deadline (610 s by default).
+- **The fix.** Once a tick read has timed out and the child has exited, the pump makes one drain read with no `-t`, a
+  plain `read(2)`, in its own shell under `_auth_timeout`, bounded by the tick and by what is left before the backstop:
+  a line, the end of the stream, or a writer still there (D-2736's descendant), which stays a timeout and still ends at
+  the backstop. The partial-line display and the code forward run as before, in the same order. The tick read is a
+  function of its own, `_auth_pump_read`, the seam the tests drive. Measured on macOS with the fix: 0 of 140 late runs red
+  where 51 of 140 were before, 0 of 230 runs in all, and a held stream still ended expired at the 10 s backstop each time.
+- **Tests.** Three cases, each on both arms, drive the seam with stand-ins that answer as Darwin did: a finished mint whose
+  EOF the tick read lost ends at once; when `select()` never says readable every byte still arrives in order; a
+  descendant holding the stream still ends at the backstop as expired. Each is red without the drain arm (from a saved
+  copy); the third hangs with the drain read unbounded.
+- **`_auth_forward_code`'s peek on fd 7.** It cannot lose the code: fd 7 is held open read-write, so it never reaches end
+  of file, and a code is one line in one write. Measured on macOS: 400 of 400 codes whole. Not changed.
+
+`_auth_timeout`, the gate, `full-suite`, `macos.yml` and D-2736's backstop window are unchanged; no timeout is raised.
+
+**Fix round 1 (review 1849).** The backstop TERMs the pump's own child rather than `AUTH_CHILD`, which is empty under
+`login`; the pane methods are unchanged. On `_auth_timeout`'s pure-bash arm a `login` mint that ignores TERM used to hang
+the run, which was older than D-8345, and now ends `expired` at the backstop. The drain's shell runs with `-p`, so no
+BASH_ENV reaches the drained text, and the drain's bound is a function of its own that reads a zero tick as 1 and the
+tick's whole part with `10#`. New cases pin each: the drain reads fd 8 on the pure-bash arm, a printing BASH_ENV, `login`
+with the lost-EOF stand-in, `login`'s TERM-ignoring mint on the pure-bash arm, and the bound; each is red without its
+fix (from a saved copy). The record's 51 of 180 is corrected to 51 of 140. The departure `login-backstop-kills-nothing`
+is closed. `pure-bash-arm-mint-stdin`, found in this round and fixed in it on the coordinator's rulings: on that arm the
+mint got /dev/null for stdin, so no pasted code reached it (measured on Linux; pre-existing; a Mac without Homebrew
+coreutils takes that arm, inferred). Each spawn now hands its stdin over on fd 5 as well, and a `bash -p` trampoline
+puts it back before the mint runs; `_auth_timeout` and its two pinned copies are unchanged. Three cases pin it, red
+without the fix. Departures by slug in `c28.md`.
+
+- **D-8345** - `pump-darwin-eof`: Task C28, issued on 2026-11-12. The sign-in pump's tick read is `read -t` on a FIFO
+  whose end of file is one-shot on macOS, so a finished mint ran to the backstop and ended `expired` (51 of 140 runs
+  measured). After a timed-out tick with the child gone, the pump confirms the end of the stream with one bounded drain
+  read that does not use `select()`. Fix round 1 (review 1849): the backstop TERMs the pump's own child, so `login`'s
+  ends too (F2); the drain's shell runs `-p` (M1); a zero tick is 1 and the tick is read with `10#` (M2, M3); cases pin
+  the pure-bash arm and `login` (F3, F4); each spawn carries the mint's stdin past the shim's pure-bash arm on fd 5
+  (`pure-bash-arm-mint-stdin`). Departures are named by slug in `c28.md`.
+
 ## Acceptance (the matrix, per PR)
 
 Each rendered task's PR body carries a table: rows Refined and Instrument × dark and light; columns the task's widths (at least 360, 390, 1280 and 1920), each cell a before (`origin/main`) and after pair checked for: no horizontal page scroll; no page errors; no clipped or overlapping text; 44 px targets under coarse emulation; the identity core present; one instance of each moved readout; nothing moved that the task did not intend; and the task's own claim. Mark it ✓, or write the defect and its fix. Fixture names only. Departures are named by slug under `## Departures`, for the coordinator to number.
