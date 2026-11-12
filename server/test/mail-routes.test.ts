@@ -658,6 +658,8 @@ describe('the rejection table is total, in both directions', () => {
       'not-recorded',       // coord/landingEntry.ts: a recovery subject's creation kind (landing order wave 5f), a recovery-view discriminant, not a refusal code
       'not-set',            // coord/landingEntry.ts: a recovery subject's authority kind (landing order wave 5f), a recovery-view discriminant, not a refusal code
       'stale-episode-head', // coord/landingEntry.ts: the one quarantine kind, also a schema CHECK literal (landing order wave 5f), a recovery-view discriminant, not a refusal code
+      'call-failed',        // coord/landed.ts#landedAnswerOf: the input word for a ran-but-failed `pr-state` call (landing order wave 5h), a reader-internal discriminant, not a refusal code
+      'missing-field',      // coord/landed.ts#landedAnswerOf: compared against ccd's `pr-state` unmeasured reason, a word ccd writes (landing order wave 5h), a reader-internal discriminant, not a refusal code
       'packed-refs',         // coord/gitref.ts — a git filename
       'refused-project',     // coord/gitref.ts — a `WorktreeRead.reason` (§1.7).
                              // NOT a refusal a client ever sees: `readWorktreeRecords`
