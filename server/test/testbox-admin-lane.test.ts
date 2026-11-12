@@ -235,3 +235,38 @@ describe('an ended long act writes its end rows once, across a restart (D-8166)'
     expect(JSON.stringify(r.rows())).not.toMatch(/\/|@|\d+\.\d+\.\d+\.\d+/);
   });
 });
+
+describe('a box settings edit\'s end row carries the changes its route staged (D-8399)', () => {
+  const CHANGES = [{ key: 'CCRC_TESTBOX_WORKERS', old: { value: '2' }, new: { value: '4' } }];
+  const changes = (r: Rig) => r.rows().map((x) => [x['act'], x['outcome'], x['actId'], x['changes'] ?? null]);
+
+  it('an edit that ended ok writes its row with the staged changes, once across a restart, and the stage is gone', async () => {
+    const r = rig({ ...STATUS, act: act({ sub: 'settings-box', outcome: 'ok' }) });
+    expect(r.audit.stage('c'.repeat(32), CHANGES)).toBe(true);
+    await r.lane().sweep();
+    await r.lane().sweep(true);
+    expect(changes(r)).toEqual([['settings-box', 'ok', 'c'.repeat(32), CHANGES]]);
+    expect(r.audit.staged('c'.repeat(32))).toBeUndefined();
+  });
+
+  it('an edit that failed records nothing new and drops what was staged', async () => {
+    const r = rig({ ...STATUS, act: act({ sub: 'settings-box', outcome: 'failed', code: 'idle-deadline', phase: 'wait' }) });
+    r.audit.stage('c'.repeat(32), CHANGES);
+    await r.lane().sweep();
+    expect(changes(r)).toEqual([['settings-box', 'failed', 'c'.repeat(32), null]]);
+    expect(r.audit.staged('c'.repeat(32))).toBeUndefined();
+  });
+
+  it('an edit with nothing staged (a server from before D-8399 started it) writes its row as before', async () => {
+    const r = rig({ ...STATUS, act: act({ sub: 'settings-box', outcome: 'ok' }) });
+    await r.lane().sweep();
+    expect(changes(r)).toEqual([['settings-box', 'ok', 'c'.repeat(32), null]]);
+  });
+
+  it('another long act never takes staged changes', async () => {
+    const r = rig({ ...STATUS, act: act({ sub: 'repair', outcome: 'ok' }) });
+    r.audit.stage('c'.repeat(32), CHANGES);
+    await r.lane().sweep();
+    expect(changes(r)).toEqual([['repair', 'ok', 'c'.repeat(32), null]]);
+  });
+});

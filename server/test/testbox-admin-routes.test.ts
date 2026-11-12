@@ -22,7 +22,9 @@ import type { FleetIdentityCell } from '../src/fleetidentity.js';
 import type { FleetState } from '../src/fleetstate.js';
 import type { PtyLike } from '../src/pty.js';
 import { TestboxAudit } from '../src/testboxAudit.js';
-import { agentTestboxAdminOps, localTestboxAdminOps, testboxAdminOpsFor, type TestboxAdminOps, type TestboxAdminOutcome } from '../src/testboxAdmin.js';
+import {
+  agentTestboxAdminOps, boxChangesOf, fleetChangesOf, localTestboxAdminOps, testboxAdminOpsFor, type TestboxAdminOps, type TestboxAdminOutcome,
+} from '../src/testboxAdmin.js';
 import { createIo } from '../src/remote/io.js';
 import type { FleetClient } from '../src/remote/client.js';
 import { AgentOpError, LinkNotSentError } from '../src/remote/errors.js';
@@ -75,6 +77,8 @@ interface Rig {
   app: FastifyInstance; home: string; calls: { sub: TestboxAdminSub; fields: unknown }[];
   argv: () => string[]; stub: (sub: string, o: { out?: unknown; code?: number }) => void;
   rows: () => Record<string, unknown>[];
+  /** D-8399: the long acts' staged changes. */
+  staged: () => Record<string, unknown>[];
 }
 
 let app: FastifyInstance | undefined;
@@ -120,6 +124,7 @@ async function openApp(o: Opts = {}): Promise<Rig> {
       if (s.code !== undefined) writeFileSync(path.join(d, `${sub}.code`), String(s.code));
     },
     rows: () => (o.breakAudit === true ? [] : db.prepare('SELECT * FROM testbox_events ORDER BY id').all() as Record<string, unknown>[]),
+    staged: () => db.prepare('SELECT * FROM testbox_staged_changes ORDER BY actId').all() as Record<string, unknown>[],
   };
   rig.stub('status', { out: STATUS });
   return rig;
@@ -699,5 +704,113 @@ describe('the agent arm: FleetIO.testboxAdmin over the link (spec §2.11)', () =
     expect(testboxAdminOpsFor({ fleetMode: 'remote', home }, io).arm).toBe('remote');
     expect(testboxAdminOpsFor({ fleetMode: 'local', home }, io).arm).toBe('local');
     expect(await agentTestboxAdminOps({ testboxAdmin: async () => { throw new Error('boom'); } }).run('probe', {})).toEqual({ kind: 'lost' });
+  });
+});
+
+describe('a settings act records old and new values (D-8399, amending TC12)', () => {
+  const changesOf = (row: Record<string, unknown> | undefined): unknown => (row?.['changes'] == null ? null : JSON.parse(String(row['changes'])));
+
+  it('a non-secret fleet change records old and new as the verb\'s reader read them, each through its key\'s shape', async () => {
+    const r = await openApp();
+    const cookie = await fresh(r.app);
+    r.stub('settings-fleet', { out: {
+      ok: true,
+      before: [{ key: 'CCRC_TESTBOX_BUDGET', set: true, value: '30m' }, { key: 'CCRC_TESTBOX_POLL', set: false }, { key: 'CCRC_TESTBOX_QUEUE_LIMIT', set: true, value: '9; rm -rf /' }, { key: 'CCRC_TESTBOX_LOST_RUN', set: true, value: 'fail' }],
+      settings: [{ key: 'CCRC_TESTBOX_BUDGET', set: true, value: '45m' }, { key: 'CCRC_TESTBOX_POLL', set: true, value: '1m' }, { key: 'CCRC_TESTBOX_QUEUE_LIMIT', set: true, value: '7' }, { key: 'CCRC_TESTBOX_LOST_RUN', set: false }],
+    } });
+    const res = await post(r, 'settings-fleet', { fields: {
+      settings: { CCRC_TESTBOX_BUDGET: '45m', CCRC_TESTBOX_POLL: '1m', CCRC_TESTBOX_QUEUE_LIMIT: '7' }, unset: ['CCRC_TESTBOX_LOST_RUN'],
+    } }, cookie);
+    expect(res.statusCode, res.body).toBe(200);
+    const want = [
+      { key: 'CCRC_TESTBOX_BUDGET', old: { value: '30m' }, new: { value: '45m' } },
+      { key: 'CCRC_TESTBOX_POLL', old: { presence: 'not-set' }, new: { value: '1m' } },
+      // a value off its key's shape is no value: never recorded as text
+      { key: 'CCRC_TESTBOX_QUEUE_LIMIT', old: { presence: 'unknown' }, new: { value: '7' } },
+      { key: 'CCRC_TESTBOX_LOST_RUN', old: { value: 'fail' }, new: { presence: 'default' } },
+    ];
+    const rows = r.rows();
+    expect(rows.map((x) => [x['act'], x['outcome'], x['code']])).toEqual([['settings-fleet', 'ok', null]]);
+    expect(changesOf(rows[0])).toEqual(want);
+    expect(JSON.stringify(rows)).not.toContain('rm -rf');
+    // the answer's ledger rows and the GET's carry the same typed changes
+    expect(res.json().events[0].changes).toEqual(want);
+    expect((await get(r, cookie)).json().events[0].changes).toEqual(want);
+  });
+
+  it('an older verb that sends no before records the old side as unknown', async () => {
+    const r = await openApp();
+    const cookie = await fresh(r.app);
+    r.stub('settings-fleet', { out: { ok: true, settings: [{ key: 'CCRC_TESTBOX_BUDGET', set: true, value: '45m' }] } });
+    await post(r, 'settings-fleet', { fields: { settings: { CCRC_TESTBOX_BUDGET: '45m' } } }, cookie);
+    expect(changesOf(r.rows()[0])).toEqual([{ key: 'CCRC_TESTBOX_BUDGET', old: { presence: 'unknown' }, new: { value: '45m' } }]);
+  });
+
+  it('a secret-bearing setting, a path or a list records presence only, never the value, even when the verb said it', async () => {
+    const r = await openApp();
+    const cookie = await fresh(r.app);
+    r.stub('settings-fleet', { out: {
+      ok: true,
+      before: [{ key: 'CCRC_TESTBOX_DENY_GLOBS', set: true, value: '*.pem .env' }, { key: 'CCRC_TESTBOX_TIMES', set: false }],
+      settings: [{ key: 'CCRC_TESTBOX_DENY_GLOBS', set: true, value: '*.pem .env id_*' }, { key: 'CCRC_TESTBOX_TIMES', set: true, value: '/srv/secret-times.json' }],
+    } });
+    await post(r, 'settings-fleet', { fields: { settings: { CCRC_TESTBOX_DENY_GLOBS: '*.pem .env id_*', CCRC_TESTBOX_TIMES: '/srv/secret-times.json' } } }, cookie);
+    const rows = r.rows();
+    expect(changesOf(rows[0])).toEqual([
+      { key: 'CCRC_TESTBOX_DENY_GLOBS', old: { presence: 'set' }, new: { presence: 'set' } },
+      { key: 'CCRC_TESTBOX_TIMES', old: { presence: 'not-set' }, new: { presence: 'set' } },
+    ]);
+    for (const leak of ['*.pem', 'id_*', '/srv', 'secret-times']) expect(JSON.stringify(rows), leak).not.toContain(leak);
+    // the secret-bearing keys, which no settings sub may name, are presence only through the one rule as well
+    const fleet = fleetChangesOf({ settings: { CCRC_TESTBOX_GIT_KEY: '/root/.ssh/k2', CCRC_TESTBOX_TOKEN_FILE: '/root/t2' } },
+      { before: [{ key: 'CCRC_TESTBOX_GIT_KEY', set: true, value: '/root/.ssh/k1' }], settings: [{ key: 'CCRC_TESTBOX_GIT_KEY', set: true, value: '/root/.ssh/k2' }, { key: 'CCRC_TESTBOX_TOKEN_FILE', set: true, value: '/root/t2' }] });
+    const box = boxChangesOf({ settings: { CCRC_TESTBOX_SERVICE_TOKEN_FILE: '/var/lib/svc/t' } },
+      [{ key: 'CCRC_TESTBOX_SERVICE_TOKEN_FILE', state: 'ok', value: '/var/lib/svc/old', from: 'file' } as never]);
+    expect(fleet).toEqual([
+      { key: 'CCRC_TESTBOX_GIT_KEY', old: { presence: 'set' }, new: { presence: 'set' } },
+      { key: 'CCRC_TESTBOX_TOKEN_FILE', old: { presence: 'unknown' }, new: { presence: 'set' } },
+    ]);
+    expect(box).toEqual([{ key: 'CCRC_TESTBOX_SERVICE_TOKEN_FILE', old: { presence: 'set' }, new: { presence: 'set' } }]);
+    expect(JSON.stringify([fleet, box])).not.toContain('/');
+  });
+
+  it('a refused change records nothing new: its row has no values, a long act stages none, and a 400 writes no row', async () => {
+    const r = await openApp();
+    const cookie = await fresh(r.app);
+    r.stub('status', { out: { ...CONNECTED, boxSettings: [{ key: 'CCRC_TESTBOX_WORKERS', state: 'ok', value: '2', from: 'file' }] } });
+    r.stub('settings-fleet', { out: { ok: false, code: 'key-in-ccrc-env', keys: ['CCRC_TESTBOX_BUDGET'] } });
+    r.stub('settings-box', { out: { ok: false, code: 'runs-in-progress' } });
+    await post(r, 'settings-fleet', { fields: { settings: { CCRC_TESTBOX_BUDGET: '45m' } } }, cookie);
+    await post(r, 'settings-box', { fields: { settings: { CCRC_TESTBOX_WORKERS: '4' } } }, cookie);
+    expect((await post(r, 'settings-fleet', { fields: { settings: { CCRC_TESTBOX_BUDGET: 'soon' } } }, cookie)).statusCode).toBe(400);
+    const rows = r.rows();
+    expect(rows.map((x) => [x['act'], x['outcome'], x['code'], x['changes']])).toEqual([
+      ['settings-fleet', 'refused', 'key-in-ccrc-env', null], ['settings-box', 'refused', 'runs-in-progress', null],
+    ]);
+    expect(r.staged()).toEqual([]);
+    for (const ev of (await get(r, cookie)).json().events as Record<string, unknown>[]) expect('changes' in ev).toBe(false);
+  });
+
+  it('a box settings edit that started stages its old values from the status read before it, and its sent values', async () => {
+    const r = await openApp();
+    const cookie = await fresh(r.app);
+    r.stub('status', { out: { ...CONNECTED, boxSettings: [
+      { key: 'CCRC_TESTBOX_WORKERS', state: 'ok', value: '2', from: 'file' }, { key: 'CCRC_TESTBOX_ROOT', state: 'ok', from: 'file' },
+      { key: 'CCRC_TESTBOX_RUN_MEMORY_MAX', state: 'ok', value: '4G', from: 'file' },
+    ] } });
+    r.stub('settings-box', { out: { ok: true, act: ACT_ID } });
+    const res = await post(r, 'settings-box', { fields: { settings: { CCRC_TESTBOX_WORKERS: '4', CCRC_TESTBOX_ROOT: '/srv/box2' }, unset: ['CCRC_TESTBOX_RUN_MEMORY_MAX'] } }, cookie);
+    expect(res.statusCode, res.body).toBe(200);
+    // the status is read before the act and again after it
+    expect(r.calls.map((c) => c.sub)).toEqual(['status', 'settings-box', 'status']);
+    expect(r.rows()).toEqual([]);
+    const staged = r.staged();
+    expect(staged.map((x) => x['actId'])).toEqual([ACT_ID]);
+    expect(JSON.parse(String(staged[0]!['changes']))).toEqual([
+      { key: 'CCRC_TESTBOX_WORKERS', old: { value: '2' }, new: { value: '4' } },
+      { key: 'CCRC_TESTBOX_ROOT', old: { presence: 'set' }, new: { presence: 'set' } },
+      { key: 'CCRC_TESTBOX_RUN_MEMORY_MAX', old: { value: '4G' }, new: { presence: 'default' } },
+    ]);
+    expect(JSON.stringify(staged)).not.toContain('/srv');
   });
 });

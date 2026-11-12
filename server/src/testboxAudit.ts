@@ -2,8 +2,8 @@ import type { DatabaseSync } from 'node:sqlite';
 import type { TestboxEventRow } from '../../shared/api.js';
 import { ROUTE_REFUSALS, type RouteRefusal } from '../../shared/refusal.js';
 import {
-  TESTBOX_ACTS, TESTBOX_ACT_OUTCOMES, TESTBOX_ADMIN_CODES, isHostKeyFingerprint,
-  type TestboxAct, type TestboxActOutcome, type TestboxAdminCode,
+  TESTBOX_ACTS, TESTBOX_ACT_OUTCOMES, TESTBOX_ADMIN_CODES, isHostKeyFingerprint, readTestboxLedgerChanges,
+  type TestboxAct, type TestboxActOutcome, type TestboxAdminCode, type TestboxSettingChange,
 } from '../../shared/testbox-admin.js';
 // `NODE_ID_RE` straight from its L0 home, as `accounts/audit.ts` does (D-5896).
 import { NODE_ID_RE } from '../../shared/agent-protocol.js';
@@ -20,7 +20,15 @@ import { isMintedActor, type AccountActor } from './accounts/audit.js';
  *    `TESTBOX_ADMIN_CODES` with `ROUTE_REFUSALS`); a code rides only a row that did not end `ok`.
  *  - `fingerprint` is the host key's SHA-256 form (`isHostKeyFingerprint`); `fleetIdentity` the node-id grammar; `actId` a
  *    long act's 32-hex id, UNIQUE, so the lane that writes an act's end row (plan TC13) cannot write it twice across a restart.
+ *  - `changes` (D-8399, amending TC12) rides only an `ok` row of `settings-fleet` or `settings-box`: each setting the act
+ *    changed with its old and new value, as `readTestboxLedgerChanges` takes it (a value its key's own shape takes; a
+ *    secret-bearing setting, a path, an address or a list as a presence word). A refused or failed act changed nothing, so
+ *    its row carries none.
  *  - So no address, path, secret or free text can be written: there is no field that takes it.
+ *
+ * A long `settings-box` act's changes are known to the route that starts it and its end row is the lane's (TC13), so the route
+ * STAGES them by the act's id ({@link TestboxAudit.stage}, `testbox_staged_changes`) and the lane takes them
+ * ({@link TestboxAudit.staged}); any row written with that act id drops them, so a restart mid-act loses none and keeps none.
  *
  * Rows are kept {@link TESTBOX_AUDIT_RETENTION_DAYS} days ({@link TestboxAudit.sweep}).
  *
@@ -44,10 +52,12 @@ export interface TestboxEventInput {
   /** The node-id of the fleet the act ran against, or NULL when it is not known. */
   fleetIdentity: string | null;
   actor: AccountActor;
+  /** D-8399: each setting an `ok` settings act changed, old and new. Absent when none is known. */
+  changes?: readonly TestboxSettingChange[] | undefined;
 }
 
 /** Why a write was refused: one word per field, or the store's own failure. */
-export type TestboxAuditRefusal = 'act' | 'outcome' | 'code' | 'act-id' | 'fingerprint' | 'fleet-identity' | 'actor' | 'duplicate' | 'unwritable';
+export type TestboxAuditRefusal = 'act' | 'outcome' | 'code' | 'act-id' | 'fingerprint' | 'fleet-identity' | 'actor' | 'changes' | 'duplicate' | 'unwritable';
 export type TestboxAuditWrite = { ok: true; id: number } | { ok: false; why: TestboxAuditRefusal };
 
 const ACTS: ReadonlySet<string> = new Set(TESTBOX_ACTS);
@@ -55,6 +65,14 @@ const OUTCOMES: ReadonlySet<string> = new Set(TESTBOX_ACT_OUTCOMES);
 const CODES: ReadonlySet<string> = new Set<string>([...TESTBOX_ADMIN_CODES, ...ROUTE_REFUSALS]);
 const ACT_ID_RE = /^[0-9a-f]{32}$/;
 const DAY_MS = 86_400_000;
+/** The acts that change settings, the only ones whose row may carry `changes`. */
+const SETTINGS_ACTS: ReadonlySet<TestboxAct> = new Set<TestboxAct>(['settings-fleet', 'settings-box']);
+
+/** A stored `changes` cell back through the one reader; null for none, for a cell that is not JSON, or for one it refuses. */
+function changesOf(cell: unknown): TestboxSettingChange[] | null {
+  if (typeof cell !== 'string') return null;
+  try { return readTestboxLedgerChanges(JSON.parse(cell)); } catch { return null; }
+}
 
 /** The first rule a row breaks, or `null` for a row that may be written. */
 function refusalOf(e: TestboxEventInput): TestboxAuditRefusal | null {
@@ -65,6 +83,7 @@ function refusalOf(e: TestboxEventInput): TestboxAuditRefusal | null {
   if (e.fingerprint !== undefined && !isHostKeyFingerprint(e.fingerprint)) return 'fingerprint';
   if (!isMintedActor(e.actor)) return 'actor';
   if (e.fleetIdentity !== null && (typeof e.fleetIdentity !== 'string' || !NODE_ID_RE.test(e.fleetIdentity))) return 'fleet-identity';
+  if (e.changes !== undefined && (!SETTINGS_ACTS.has(e.act) || e.outcome !== 'ok' || readTestboxLedgerChanges(e.changes) === null)) return 'changes';
   return null;
 }
 
@@ -81,8 +100,11 @@ export class TestboxAudit {
     }
     try {
       const res = this.db.prepare(
-        'INSERT INTO testbox_events (at, actor, act, actId, outcome, code, fingerprint, fleetIdentity) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-      ).run(this.now(), e.actor.toString(), e.act, e.actId ?? null, e.outcome, e.code ?? null, e.fingerprint ?? null, e.fleetIdentity);
+        'INSERT INTO testbox_events (at, actor, act, actId, outcome, code, fingerprint, fleetIdentity, changes) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      ).run(this.now(), e.actor.toString(), e.act, e.actId ?? null, e.outcome, e.code ?? null, e.fingerprint ?? null, e.fleetIdentity,
+        e.changes === undefined ? null : JSON.stringify(e.changes));
+      // The act's end row is written: whatever it staged is taken or, for an act that did not end ok, dropped.
+      if (e.actId !== undefined) this.unstage(e.actId);
       return { ok: true, id: Number(res.lastInsertRowid) };
     } catch (err) {
       // `actId` is the table's one UNIQUE column: its constraint is a repeated act id, not a broken store.
@@ -98,12 +120,45 @@ export class TestboxAudit {
     try { return this.db.prepare('SELECT 1 AS x FROM testbox_events WHERE actId = ?').get(actId) !== undefined; } catch { return false; }
   }
 
-  /** The `limit` newest rows, newest first. A failed read is an empty list (said in one line), never a throw. */
+  /** Holds a long act's changes by its id until its end row is written (D-8399). False, said in one line, for an id off its
+   *  grammar, a list the reader refuses or a store that failed; never a throw. A second stage of the same id replaces the first. */
+  stage(actId: string, changes: readonly TestboxSettingChange[]): boolean {
+    if (typeof actId !== 'string' || !ACT_ID_RE.test(actId) || readTestboxLedgerChanges(changes) === null) {
+      console.warn('ccrc-server: testbox audit refused staged changes (changes)');
+      return false;
+    }
+    try {
+      this.db.prepare('INSERT OR REPLACE INTO testbox_staged_changes (actId, at, changes) VALUES (?, ?, ?)').run(actId, this.now(), JSON.stringify(changes));
+      return true;
+    } catch (err) {
+      console.warn(`ccrc-server: testbox audit could not stage changes (${err instanceof Error ? err.name : 'error'})`);
+      return false;
+    }
+  }
+
+  /** The changes staged for a long act, through the one reader; undefined for none, or for a read that failed. */
+  staged(actId: string): TestboxSettingChange[] | undefined {
+    try {
+      const row = this.db.prepare('SELECT changes FROM testbox_staged_changes WHERE actId = ?').get(actId) as { changes: unknown } | undefined;
+      return changesOf(row?.changes) ?? undefined;
+    } catch { return undefined; }
+  }
+
+  private unstage(actId: string): void {
+    try { this.db.prepare('DELETE FROM testbox_staged_changes WHERE actId = ?').run(actId); } catch { /* swept with the ledger */ }
+  }
+
+  /** The `limit` newest rows, newest first. A failed read is an empty list (said in one line), never a throw. A row's stored
+   *  changes pass the one reader again, and a cell it refuses reads as none. */
   recent(limit: number): TestboxEventRow[] {
     try {
-      return this.db.prepare(
-        'SELECT id, at, actor, act, actId, outcome, code, fingerprint, fleetIdentity FROM testbox_events ORDER BY id DESC LIMIT ?',
-      ).all(Math.max(0, Math.floor(limit))) as unknown as TestboxEventRow[];
+      const rows = this.db.prepare(
+        'SELECT id, at, actor, act, actId, outcome, code, fingerprint, fleetIdentity, changes FROM testbox_events ORDER BY id DESC LIMIT ?',
+      ).all(Math.max(0, Math.floor(limit))) as unknown as (Omit<TestboxEventRow, 'changes'> & { changes: unknown })[];
+      return rows.map(({ changes, ...row }) => {
+        const read = changesOf(changes);
+        return read === null ? row : { ...row, changes: read };
+      });
     } catch (err) {
       console.warn(`ccrc-server: testbox audit read failed (${err instanceof Error ? err.name : 'error'})`);
       return [];
@@ -114,7 +169,9 @@ export class TestboxAudit {
    *  or 0 when the delete failed (said in one line). */
   sweep(now: number): number {
     try {
-      const res = this.db.prepare('DELETE FROM testbox_events WHERE at < ?').run(now - TESTBOX_AUDIT_RETENTION_DAYS * DAY_MS);
+      const cut = now - TESTBOX_AUDIT_RETENTION_DAYS * DAY_MS;
+      const res = this.db.prepare('DELETE FROM testbox_events WHERE at < ?').run(cut);
+      this.db.prepare('DELETE FROM testbox_staged_changes WHERE at < ?').run(cut);
       return Number(res.changes);
     } catch (err) {
       console.warn(`ccrc-server: testbox audit sweep failed (${err instanceof Error ? err.name : 'error'}) — the next sweep retries`);
