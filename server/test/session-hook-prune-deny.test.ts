@@ -194,13 +194,30 @@ describe('this PR\'s own body is not refused by the prune row', () => {
 // CPU accrues no CPU time, so the CPU the run itself spent (user plus system, as bash's `times` reports it for the
 // children it waited on) is one invocation's cost with the queueing taken out. It is still one invocation, jq's
 // startup included, so the FD8 ruling's shape and its bounds are unchanged: only what is read off the clock is.
+//
+// D-8354: the input reaches the run from a FILE, never through `spawnSync`'s `input`. On macOS a detached `spawnSync`
+// (which `spawnSyncGroup` is) that writes a 128 KB `input` into the child's stdin socket now and then delivers every
+// byte and never the end of input: in 8 of 6000 such runs on a hosted macOS runner the child had read all 131 161 bytes
+// and sat in `read(2)` on its stdin while node waited in `kevent`, until the timeout (none in 6000 attached runs, none
+// on Linux). The daily run's red was that: one jq run past the 120 s timeout with nothing on its stderr, beside a
+// normal 64 KB case. A regular file ends where it ends, so the run's CPU, the thing measured, is unchanged.
 type CpuRun = { status: number | null; stdout: string; stderr: string; cpuMs: number };
-/** `argv` run once under bash, `input` on its stdin: its status, its own output, and the CPU time it spent. */
+/** `argv` run once under bash, `input` on its stdin (from a file): its status, its own output, and the CPU time it spent. */
 const childCpu = (argv: readonly string[], input: string, timeoutMs = scaled(120_000)): CpuRun => {
+  const dir = mkTmp('ccrc-prunedeny-cpu-');
+  const file = path.join(dir, 'stdin');
+  fs.writeFileSync(file, input);
+  const fd = fs.openSync(file, 'r');
   // `times`' second line is the waited children's user and system time; it goes to stderr, after the run's own.
   // In a process group of its own (#896), so a timeout takes the jq it waits on with it.
-  const r = spawnSyncGroup('bash', ['-c', '"$@"; s=$?; times >&2; exit $s', 'bash', ...argv],
-    { input, encoding: 'utf8', maxBuffer: 1 << 26, timeout: timeoutMs, env: { ...process.env, LC_ALL: 'C' } });
+  let r: ReturnType<typeof spawnSyncGroup>;
+  try {
+    r = spawnSyncGroup('bash', ['-c', '"$@"; s=$?; times >&2; exit $s', 'bash', ...argv],
+      { stdio: [fd, 'pipe', 'pipe'], encoding: 'utf8', maxBuffer: 1 << 26, timeout: timeoutMs, env: { ...process.env, LC_ALL: 'C' } });
+  } finally {
+    fs.closeSync(fd);
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
   const lines = (r.stderr ?? '').replace(/\n$/, '').split('\n');
   const m = /^(\d+)m(\d+(?:\.\d+)?)s (\d+)m(\d+(?:\.\d+)?)s$/.exec(lines.at(-1) ?? '');
   expect(m, `bash's times line, after ${JSON.stringify(r.stderr)}${r.error === undefined ? '' : `: ${String(r.error)}`}`).not.toBeNull();
@@ -229,6 +246,13 @@ describe('the cost measure is the work a run did, not the time it waited (D-8334
     const bad = childCpu(['jq', '-n', 'error("x")'], '');
     expect(bad.status).not.toBe(0);
     expect(bad.stderr).toContain('x');
+  });
+
+  it('a run reads its input from a regular file, whole, never from a socket node writes (D-8354)', () => {
+    const big = 'x'.repeat(200 * 1024);
+    const r = childCpu(['sh', '-c', 'test -f /dev/stdin || { echo "stdin is not a regular file" >&2; exit 3; }; wc -c'], big);
+    expect(r.status, r.stderr).toBe(0);
+    expect(r.stdout.trim()).toBe(String(big.length));
   });
 });
 
