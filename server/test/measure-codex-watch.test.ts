@@ -340,6 +340,263 @@ describe('measure-codex-watch.py: the five criteria', () => {
   });
 });
 
+// The bridge carries an unexplained name until a reviewed change to known.py explains it, so the list is cumulative.
+// With `--drift-baseline <a previous --json reading>`, drift reads GROWTH since that reading: a carried name passes
+// only while its count holds; a new name, or a carried one still growing, fails; a counter that went backwards means
+// the file is not the one the baseline read, so unmeasured. Without the flag drift is exactly what it was.
+const SENTINEL_BASELINE = 'SENTINEL-BASELINE-PATH-7c42';
+const OPUS = 'claude-opus-5-5';
+const SONNET = 'claude-sonnet-4-6';
+/** The stats file's two substitution families: `model` and `foreign` map a name to its count in `names`, and every
+ *  one of them is listed as unexplained. */
+const substitutions = (model: Record<string, number>, foreign: Record<string, number> = {}, over: Stats = {}): Stats => ({
+  names: { errorCode: { server_is_overloaded: 3 }, modelSubstitution: model, foreignSubstitution: foreign },
+  unexplained: { errorCode: [], modelSubstitution: Object.keys(model), foreignSubstitution: Object.keys(foreign) },
+  ...over,
+});
+const baselineFile = (): string => path.join(home, 'readings', SENTINEL_BASELINE, 'drift-baseline.json');
+/** Take a --json reading now and keep it where the operator keeps one; `edit` changes it first. */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const keepBaseline = (edit?: (rep: any) => void): string => {
+  const rep = report();
+  if (edit) edit(rep);
+  write(baselineFile(), JSON.stringify(rep, null, 1) + '\n');
+  return baselineFile();
+};
+const LATER = ['--now', String(NOW_S + 3600)];   // the second reading, an hour after the baseline
+const withBaseline = (file: string = baselineFile()): string[] => ['--drift-baseline', file, ...LATER];
+const TAKEN = '2026-11-03T07:00:00Z';
+const SINCE = '2026-10-27T06:26:05.000Z';
+
+describe('measure-codex-watch.py: drift reads growth since a baseline reading', () => {
+  it('a plain reading carries each unexplained name\'s count, 0 for one the counters do not hold, and when it was taken', () => {
+    passing();
+    writeStats(substitutions({ [OPUS]: 496, [SONNET]: 12 }, {}, {
+      unexplained: { errorCode: [], modelSubstitution: [OPUS, SONNET], foreignSubstitution: ['a-name-not-counted'] },
+    }));
+    const rep = report();
+    expect(rep.takenAt).toBe(TAKEN);
+    expect(rep.bridge.unexplained).toEqual({ foreignSubstitution: ['a-name-not-counted'], modelSubstitution: [OPUS, SONNET] });
+    expect(rep.bridge.unexplainedCounts).toEqual({
+      foreignSubstitution: { 'a-name-not-counted': 0 }, modelSubstitution: { [OPUS]: 496, [SONNET]: 12 },
+    });
+    passing();
+    expect(report().bridge.unexplainedCounts).toEqual({});
+  });
+
+  it('with no baseline, drift is exactly what it was: any unexplained name fails, and the text says how to take one', () => {
+    passing();
+    writeStats(substitutions({ [OPUS]: 496 }));
+    const rep = report();
+    expect(criterion(rep, 'drift')).toEqual({ name: 'drift', verdict: 'fail', unexplained: { modelSubstitution: [OPUS] } });
+    expect(rep.verdict).toBe('fail');
+    const text = run();
+    expect(text.stdout).toMatch(/^drift: fail\b/m);
+    expect(text.stdout).toMatch(/^drift baseline: none\b.*--drift-baseline/m);
+  });
+
+  it('a carried name whose count held since the baseline passes, with both counts and the baseline\'s stamps', () => {
+    passing();
+    writeStats(substitutions({ [OPUS]: 496, [SONNET]: 12 }));
+    keepBaseline();
+    const rep = report(withBaseline());
+    expect(rep.takenAt).toBe('2026-11-03T08:00:00Z');
+    expect(criterion(rep, 'drift')).toMatchObject({
+      verdict: 'pass', unexplained: { modelSubstitution: [OPUS, SONNET] },
+      baseline: { takenAt: TAKEN, since: SINCE },
+      names: [
+        { family: 'modelSubstitution', name: OPUS, baseline: 496, now: 496, state: 'held' },
+        { family: 'modelSubstitution', name: SONNET, baseline: 12, now: 12, state: 'held' },
+      ],
+    });
+    expect(rep.verdict).toBe('pass');
+    const text = run(withBaseline());
+    expect(text.stdout).toMatch(/^drift: pass\b/m);
+    expect(text.stdout).toMatch(new RegExp(`^drift baseline: taken at ${TAKEN}, stats since ${SINCE}$`, 'm'));
+    expect(text.stdout).toMatch(new RegExp(`^ {2}modelSubstitution ${OPUS}: 496 then, 496 now: held$`, 'm'));
+  });
+
+  it('a carried name whose count grew since the baseline fails', () => {
+    passing();
+    writeStats(substitutions({ [OPUS]: 496, [SONNET]: 12 }));
+    keepBaseline();
+    writeStats(substitutions({ [OPUS]: 497, [SONNET]: 12 }));
+    const rep = report(withBaseline());
+    expect(criterion(rep, 'drift')).toMatchObject({ verdict: 'fail', names: [
+      { family: 'modelSubstitution', name: OPUS, baseline: 496, now: 497, state: 'grew' },
+      { family: 'modelSubstitution', name: SONNET, baseline: 12, now: 12, state: 'held' },
+    ] });
+    expect(rep.verdict).toBe('fail');
+    expect(run(withBaseline()).stdout).toMatch(new RegExp(`^ {2}modelSubstitution ${OPUS}: 496 then, 497 now: grew$`, 'm'));
+  });
+
+  it('a name the baseline did not list fails, even at a count it could have had', () => {
+    passing();
+    writeStats(substitutions({ [OPUS]: 496 }));
+    keepBaseline();
+    writeStats(substitutions({ [OPUS]: 496, [SONNET]: 1 }));
+    const rep = report(withBaseline());
+    expect(criterion(rep, 'drift')).toMatchObject({ verdict: 'fail', names: [
+      { family: 'modelSubstitution', name: OPUS, baseline: 496, now: 496, state: 'held' },
+      { family: 'modelSubstitution', name: SONNET, baseline: null, now: 1, state: 'new' },
+    ] });
+    expect(run(withBaseline()).stdout).toMatch(new RegExp(`^ {2}modelSubstitution ${SONNET}: none then, 1 now: new$`, 'm'));
+  });
+
+  it('a counter that went backwards is unmeasured: the stats file is not the one the baseline read', () => {
+    passing();
+    writeStats(substitutions({ [OPUS]: 496 }));
+    keepBaseline();
+    writeStats(substitutions({ [OPUS]: 400 }));
+    const rep = report(withBaseline());
+    expect(criterion(rep, 'drift')).toMatchObject({ verdict: 'unmeasured', names: [
+      { family: 'modelSubstitution', name: OPUS, baseline: 496, now: 400, state: 'fell' },
+    ] });
+    expect(criterion(rep, 'drift').reason).toMatch(/went backwards/);
+    expect(rep.verdict).toBe('unmeasured');
+  });
+
+  it('a fail outranks a counter that went backwards', () => {
+    passing();
+    writeStats(substitutions({ [OPUS]: 496, [SONNET]: 12 }));
+    keepBaseline();
+    writeStats(substitutions({ [OPUS]: 400, [SONNET]: 13 }));
+    expect(criterion(report(withBaseline()), 'drift').verdict).toBe('fail');
+  });
+
+  it('a baseline name a reviewed change has explained since passes, reported as explained since', () => {
+    passing();
+    writeStats(substitutions({ [OPUS]: 496, [SONNET]: 12 }));
+    keepBaseline();
+    writeStats(substitutions({ [OPUS]: 496 }, {}, {
+      names: { modelSubstitution: { [OPUS]: 496, [SONNET]: 30 } },
+      unexplained: { modelSubstitution: [OPUS] },
+    }));
+    const rep = report(withBaseline());
+    expect(criterion(rep, 'drift')).toMatchObject({ verdict: 'pass', names: [
+      { family: 'modelSubstitution', name: OPUS, baseline: 496, now: 496, state: 'held' },
+      { family: 'modelSubstitution', name: SONNET, baseline: 12, now: null, state: 'explained since' },
+    ] });
+    expect(run(withBaseline()).stdout).toMatch(new RegExp(`^ {2}modelSubstitution ${SONNET}: 12 then, none now: explained since$`, 'm'));
+  });
+
+  it('the foreignSubstitution family is read the same way, under its own family', () => {
+    passing();
+    writeStats(substitutions({ [OPUS]: 496 }, { [OPUS]: 7 }));
+    keepBaseline();
+    expect(criterion(report(withBaseline()), 'drift')).toMatchObject({ verdict: 'pass', names: [
+      { family: 'foreignSubstitution', name: OPUS, baseline: 7, now: 7, state: 'held' },
+      { family: 'modelSubstitution', name: OPUS, baseline: 496, now: 496, state: 'held' },
+    ] });
+    writeStats(substitutions({ [OPUS]: 496 }, { [OPUS]: 8 }));
+    expect(criterion(report(withBaseline()), 'drift')).toMatchObject({ verdict: 'fail', names: [
+      { family: 'foreignSubstitution', name: OPUS, baseline: 7, now: 8, state: 'grew' },
+      { family: 'modelSubstitution', name: OPUS, baseline: 496, now: 496, state: 'held' },
+    ] });
+    // a name the baseline held under one family is new under the other
+    writeStats(substitutions({ [OPUS]: 496, [SONNET]: 2 }, { [OPUS]: 7 }, { names: {
+      modelSubstitution: { [OPUS]: 496 }, foreignSubstitution: { [OPUS]: 7, [SONNET]: 2 } },
+    unexplained: { modelSubstitution: [OPUS], foreignSubstitution: [OPUS, SONNET] } }));
+    expect(criterion(report(withBaseline()), 'drift')).toMatchObject({ verdict: 'fail', names: [
+      { family: 'foreignSubstitution', name: OPUS, state: 'held' },
+      { family: 'foreignSubstitution', name: SONNET, baseline: null, now: 2, state: 'new' },
+      { family: 'modelSubstitution', name: OPUS, state: 'held' },
+    ] });
+  });
+
+  it('a baseline reading of another lane is unmeasured, never compared', () => {
+    passing();
+    writeStats(substitutions({ [OPUS]: 496 }));
+    keepBaseline((rep) => { rep.lane = 'lane-b'; });
+    const d = criterion(report(withBaseline()), 'drift');
+    expect(d).toMatchObject({ verdict: 'unmeasured' });
+    expect(d.reason).toMatch(/another lane/);
+    expect(d).not.toHaveProperty('names');
+  });
+
+  it('a stats file replaced or reset since the baseline (its since differs) is unmeasured, saying so', () => {
+    passing();
+    writeStats(substitutions({ [OPUS]: 496 }));
+    keepBaseline();
+    writeStats(substitutions({ [OPUS]: 496 }, {}, { since: '2026-11-02T00:00:00.000Z' }));
+    const d = criterion(report(withBaseline()), 'drift');
+    expect(d).toMatchObject({ verdict: 'unmeasured' });
+    expect(d.reason).toMatch(/replaced or reset since the baseline/);
+    expect(d.reason).toContain('2026-11-02T00:00:00.000Z');
+    expect(d.reason).toContain(SINCE);
+  });
+
+  it('a baseline reading from before this build has no per-name counts: unmeasured, asking for a new reading', () => {
+    passing();
+    writeStats(substitutions({ [OPUS]: 496 }));
+    keepBaseline((rep) => { delete rep.bridge.unexplainedCounts; delete rep.takenAt; });
+    const d = criterion(report(withBaseline()), 'drift');
+    expect(d).toMatchObject({ verdict: 'unmeasured',
+      reason: 'the baseline reading has no per-name counts; take a new reading with this build' });
+  });
+
+  it('a baseline reading whose counts are of another shape, or that measured no bridge, is unmeasured', () => {
+    passing();
+    writeStats(substitutions({ [OPUS]: 496 }));
+    for (const counts of [[], { modelSubstitution: [OPUS] }, { modelSubstitution: { [OPUS]: -1 } },
+      { modelSubstitution: { [OPUS]: true } }, { modelSubstitution: { 'a name': 1 } }]) {
+      keepBaseline((rep) => { rep.bridge.unexplainedCounts = counts; });
+      const d = criterion(report(withBaseline()), 'drift');
+      expect(d, JSON.stringify(counts)).toMatchObject({ verdict: 'unmeasured' });
+      expect(d.reason, JSON.stringify(counts)).toMatch(/another shape/);
+    }
+    keepBaseline((rep) => { rep.bridge = { unmeasured: 'the stats file is absent' }; });
+    expect(criterion(report(withBaseline()), 'drift').reason).toMatch(/measured no bridge/);
+  });
+
+  it('an absent, unreadable, non-JSON, foreign or oversized baseline is unmeasured with its reason', () => {
+    passing();
+    writeStats(substitutions({ [OPUS]: 496 }));
+    const cases: [string, () => void, RegExp][] = [
+      ['absent', () => fs.rmSync(baselineFile(), { force: true }), /is absent/],
+      ['a directory', () => fs.mkdirSync(baselineFile(), { recursive: true }), /not a regular file/],
+      ['not JSON', () => write(baselineFile(), '{"lane": '), /not JSON/],
+      ['a list', () => write(baselineFile(), '[1]'), /not a --json reading of this instrument/],
+      ['another object', () => write(baselineFile(), JSON.stringify({ lane: LANE })), /not a --json reading of this instrument/],
+      // a valid reading padded past the cap: refused for its size, never parsed
+      ['oversized', () => {
+        const rep = report();
+        write(baselineFile(), JSON.stringify(rep) + ' '.repeat(4 * 2 ** 20));
+      }, /larger than \d+ bytes/],
+    ];
+    for (const [what, make, why] of cases) {
+      fs.rmSync(path.join(home, 'readings'), { recursive: true, force: true });
+      make();
+      const rep = report(withBaseline());
+      const d = criterion(rep, 'drift');
+      expect(d, what).toMatchObject({ verdict: 'unmeasured' });
+      expect(d.reason, what).toMatch(why);
+      expect(rep.verdict, what).toBe('unmeasured');
+    }
+  });
+
+  it('the baseline\'s path never leaves, in either form, whatever the reading', () => {
+    passing();
+    writeStats(substitutions({ [OPUS]: 496 }));
+    const variants: (() => void)[] = [
+      () => keepBaseline(),
+      () => keepBaseline((rep) => { rep.lane = 'lane-b'; }),
+      () => write(baselineFile(), 'not json'),
+      () => fs.rmSync(baselineFile(), { force: true }),
+    ];
+    for (const make of variants) {
+      make();
+      for (const r of [run(withBaseline()), run(['--json', ...withBaseline()])]) {
+        expect(r.code, r.stderr).toBe(0);
+        for (const out of [r.stdout, r.stderr]) {
+          expect(out).not.toContain(SENTINEL_BASELINE);
+          expect(out).not.toContain(home);
+        }
+      }
+    }
+  });
+});
+
 describe('measure-codex-watch.py: the 5xx rate measures like for like', () => {
   it('count_tokens lines do not enter the baseline, and are printed beside it', () => {
     passing();
