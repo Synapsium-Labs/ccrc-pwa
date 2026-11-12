@@ -33,7 +33,7 @@ import { openPracticeCase, practiceCaseNewest, type PracticeCaseNewestRead, type
 import type { CaseDue } from './practiceCases.js';
 import { liftReviewCapByCoordinator, raiseReviewCapAsk, reviewCapGate, reviewCapStatesOf, type CoordLiftResult, type ReviewCapState } from './reviewCapStore.js';
 import { renderEnvelope } from './envelope.js';
-import { decideClaim, type ClaimRow } from './claims.js';
+import { decideClaim, lapseWindowStart, ownLapsesUnder, type ClaimRow } from './claims.js';
 import { runsPage as runsPageQuery, type RunsPage } from './runsPage.js';
 import { runFind as runFindQuery, runsReviewing, type RunFindParsed } from './runFind.js';
 import { readProgrammes as readProgrammesQuery } from './programmesRead.js';
@@ -173,7 +173,7 @@ import {
   // plan Task 16 (D-5298): the approvals row's vocabularies.
   APPROVAL_INPUT_RETENTION_DAYS, ASK_OPERATOR_PRINCIPAL, isApprovalReleaseReason, isApprovalState,
   type ApprovalMintReleaseReason, type ApprovalReleaseReason, type ApprovalState,
-  type ClaimConflict, type ClaimState, type ClaimSummary,
+  type ClaimConflict, type ClaimLapse, type ClaimState, type ClaimSummary,
   type CoordCaps, type CoordCapsUsage, type DeviationAllocation, type DeviationAllocState,
   type LifecycleAct, type LifecycleGap, type LifecycleGapReason, type LifecycleOutcome,
   type MailDeliveryState, type MailGate,
@@ -782,7 +782,9 @@ export type SettleItemsResult =
  *  pass through untouched; only the `ok`/`why` discriminant is the store's,
  *  so this union reads like its `SetWorkItemResult` neighbours). */
 export type ClaimAttemptResult =
-  | { ok: true; claims: ClaimSummary[] }
+  /** `lapsedSince` (D-8392): the caller's own claims that lapsed within the last `CLAIM_LEASE_MS` on paths this
+   *  attempt took again, read inside the same transaction as the grant (`ownLapsesUnder`); empty when none. */
+  | { ok: true; claims: ClaimSummary[]; lapsedSince: readonly ClaimLapse[] }
   | { ok: false; why: 'bad-path'; paths: readonly string[] }
   | { ok: false; why: 'conflict'; conflicts: readonly ClaimConflict[] };
 
@@ -8618,7 +8620,11 @@ export class CoordStore {
         for (const p of fresh) ins.run(claimId, input.project, p);
         out.push(this.claimRow(claimId));
       }
-      return { ok: true as const, claims: out };
+      // D-8392: after the expiry above, so a lease that ran out unswept is already the lapse it is.
+      const lapsedSince = ownLapsesUnder(
+        this.lapsedClaimsSince(input.project, lapseWindowStart(now), input.sessionId),
+        input.sessionId, paths, now);
+      return { ok: true as const, claims: out, lapsedSince };
     });
   }
 
@@ -8710,6 +8716,20 @@ export class CoordStore {
       : this.db.prepare(
           `SELECT ${CoordStore.CLAIM_COLS} FROM claims WHERE project = ? AND state = 'live' ORDER BY id`)
     ).all(project) as Parameters<CoordStore['hydrateClaim']>[0][];
+    return rows.flatMap((r) => this.hydrateClaim(r, this.claimPaths(r.id)) ?? []);
+  }
+
+  /** D-8392: one project's `lapsed` rows that ended after `since` (`lapseWindowStart`), optionally one holder's — the
+   *  recent-lapse readers' bounded read (`recentlyLapsedClaims` re-applies the window). */
+  lapsedClaimsSince(project: string, since: number, heldBy?: string): ClaimSummary[] {
+    const rows = (heldBy === undefined
+      ? this.db.prepare(
+          `SELECT ${CoordStore.CLAIM_COLS} FROM claims WHERE project = ? AND state = 'lapsed' AND endedAt > ? ORDER BY id`,
+        ).all(project, since)
+      : this.db.prepare(
+          `SELECT ${CoordStore.CLAIM_COLS} FROM claims WHERE project = ? AND state = 'lapsed' AND endedAt > ? ` +
+          'AND heldBy = ? ORDER BY id',
+        ).all(project, since, heldBy)) as Parameters<CoordStore['hydrateClaim']>[0][];
     return rows.flatMap((r) => this.hydrateClaim(r, this.claimPaths(r.id)) ?? []);
   }
 

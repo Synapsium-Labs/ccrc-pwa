@@ -127,6 +127,8 @@ export const NOT_BINDING_SITES: readonly NotBindingSite[] = [
     why: "one run's two own columns against each other (a birth recorded for another session is unplaceable): no session is asked which run is its" },
   { file: 'server/src/coord/claims.ts', text: 'c.heldBy === req.sessionId',
     why: "a path claim's holder against the requesting session: the claims table, no run is read" },
+  { file: 'server/src/coord/claims.ts', text: 'r.heldBy === sessionId',
+    why: "a lapsed path claim's holder against the session re-taking its paths (D-8392): the claims table, no run is read" },
   { file: 'server/src/coord/close.ts', text: 'verifiedLine.id === sessionId',
     why: "a registry line's id against the session it was fetched for: a registry record, no run is read" },
   { file: 'server/src/coord/delegation-correlation.ts', text: 'a.parentId === e.sessionId',
