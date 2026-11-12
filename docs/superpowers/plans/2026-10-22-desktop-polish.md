@@ -3435,6 +3435,30 @@ pins that. The hook, the bounds, `spawnGroup.ts`, `macos.yml` and the gate are u
 A lease or grammar mutation of the hook reds a grammar row. The cost cases red on a super-linear program, and the new
 case reds when the input goes back through `spawnSync`'s `input`. **Rollback.** A plain revert.
 
+### Task C31: release-main.test.ts's fixture steps fail on macOS with no output (D-8391) — now
+
+Placed at the end of C29's section, before C24.
+
+**Why.** `release-main.test.ts` red on macOS in three branch dispatches (43142855710 shard 3/8; 43190654839 shard 6/8,
+both attempts), each time in the compare describe (W25 fix round 2), each time with a fixture step that exited non-zero
+and said nothing. A promotion to stable needs a green `full-suite`, which includes the macOS shards. Root cause first;
+no skip on Darwin, no raised timeout and no retry as the fix.
+
+**What was found and done.** The cause is in shipped code, and the fix is a release-path change. `deploy/build-release.sh`
+staged the tracked set with `git archive … | tar -x`. A throwaway macOS probe ran the file alone 25 times, logging every
+signal sender. It measured 4 reds, each at that pipe with status 141 (SIGPIPE), and no process signalling the step. That
+macOS's bsdtar stops reading after the archive's end marker while git still writes is inferred, and it was reproduced
+on Linux with a reader that stops early: 141, empty stderr, as on macOS. `git archive` now writes a file in the staging
+directory and `tar` extracts that file; the tarball's contents are unchanged. A new `build-release.test.ts` case is red
+without the fix. Every fixture step in `release-main.test.ts` now reports its pid, status, signal, stdout and stderr,
+where it used to report stderr alone. Evidence and runs are in `c31.md`.
+
+- **D-8391** - `release-stage-git-archive-sigpipe`: Task C31, issued on 2026-11-12. The brief asked why the fixture's steps fail on macOS with no output. The builder's staging pipe, `git archive | tar -x`, loses a race on macOS: tar can leave before git has written its last bytes, git dies of SIGPIPE, and `pipefail` with `set -e` ends the build at 141 without a word. The builder now stages through a file. Departures are named by slug in `c31.md`.
+
+**Acceptance.** `release-main.test.ts` and `build-release.test.ts` are green in a `macos.yml` dispatch at the PR's tip,
+with the probe's repeat runs recorded in `c31.md`. The new case reds when the stage goes back to a pipe. **Rollback.**
+A plain revert.
+
 ### Task C24: the gh reader's net reads the raw and the joined text, and quotes as the shell does (D-8291) — now
 
 **Why.** Review 1808, the third and last review of Task C23, found that the net read only the text as the shell joins it, so
