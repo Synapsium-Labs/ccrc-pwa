@@ -6,8 +6,9 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
-  AdvanceInvalid, HISTORY_CAP, REASON_MAX, backfillAdvance, familyOf, heldBackOf, lastMoveOf, parseAdvance,
-  reconcilePending, recordFailure, recordMove, serializeAdvance,
+  AdvanceInvalid, CANDIDATE_REASONS, HISTORY_CAP, REASON_MAX, backfillAdvance, causeOf, familyOf, heldBackOf,
+  lastMoveOf, parseAdvance, reconcilePending, recordFailure, recordMove, serializeAdvance, unmeasuredMoveNotice,
+  unmeasuredMoves,
 } from '../../shared/model-advance.mjs';
 import type { Advance, HandPending, HistoryEntry } from '../../shared/model-advance.mjs';
 import { CLASSES } from '../../shared/models.js';
@@ -340,6 +341,100 @@ describe('heldBackOf and lastMoveOf — what doctor and the panel read off one c
     expect(lastMoveOf(ADVANCE_EXAMPLE.classes.fable)).toEqual(ADVANCE_EXAMPLE.classes.fable.history[1]);
     expect(lastMoveOf(ADVANCE_EXAMPLE.classes.sonnet)).toBeNull();
     expect(lastMoveOf(ADVANCE_EXAMPLE.classes.haiku)).toBeNull();
+  });
+});
+
+describe('why a class moved, and the move that lowered a lane\'s window (D-8384)', () => {
+  it('an advance entry may carry its cause, one of the candidate\'s reasons; any other word, or one on a hand move, is refused', () => {
+    for (const cause of CANDIDATE_REASONS) {
+      const a = example();
+      a.classes.opus.history = [entry({ cause })];
+      expect(parseAdvance(a).classes.opus.history[0]!.cause).toBe(cause);
+    }
+    const bad = example();
+    bad.classes.opus.history = [{ ...entry(), cause: 'sideways' }];
+    expect(() => parseAdvance(bad)).toThrow(expect.objectContaining({ field: 'classes.opus.history[0].cause' }));
+    const hand = example();
+    hand.classes.opus.history = [entry({ how: 'hand', canary: 'not-run', cause: 'newer' })];
+    expect(() => parseAdvance(hand)).toThrow(expect.objectContaining({ field: 'classes.opus.history[0].cause' }));
+  });
+
+  it('an entry written before the field reads as unknown, never as an error', () => {
+    const old = example();
+    old.classes.opus.history = [entry()];
+    const parsed = parseAdvance(old).classes.opus.history[0]!;
+    expect(parsed.cause).toBeUndefined();
+    expect(causeOf(parsed)).toBe('unknown');
+    expect(causeOf(entry({ how: 'hand', canary: 'not-run' }))).toBe('unknown');
+    expect(causeOf(null)).toBe('unknown');
+    for (const cause of CANDIDATE_REASONS) expect(causeOf(entry({ cause }))).toBe(cause);
+  });
+
+  it('a landed automatic intent carries its cause onto the entry it becomes; one without the field records none', () => {
+    const moved = { ...ADV_REGISTRY, classes: { ...ADV_REGISTRY.classes, opus: PENDING.to } } as Registry;
+    for (const cause of CANDIDATE_REASONS) {
+      const a = parseAdvance({ ...fresh(), pending: { ...PENDING, cause } });
+      const h = reconcilePending(a, moved).advance.classes.opus.history;
+      expect(h[h.length - 1]).toMatchObject({ how: 'advance', to: PENDING.to, recovered: true, cause });
+    }
+    const h = reconcilePending(parseAdvance({ ...fresh(), pending: PENDING }), moved).advance.classes.opus.history;
+    expect(h[h.length - 1]).not.toHaveProperty('cause');
+    expect(() => parseAdvance({ ...fresh(), pending: { ...PENDING, cause: 'sideways' } }))
+      .toThrow(expect.objectContaining({ field: 'pending.cause' }));
+  });
+
+  /** A registry whose opus pin is `to`, and an advance file whose opus history ends with a move `from` → `to`. */
+  const movedLane = (from: string | null, to: string, o: Partial<HistoryEntry> = {}): { registry: Registry; advance: Advance } => {
+    const registry = { ...ADV_REGISTRY, classes: { ...ADV_REGISTRY.classes, opus: to } } as Registry;
+    const advance = recordMove(fresh(), 'opus', entry({ from, to, ...o }));
+    return { registry, advance };
+  };
+  const OTHERS = (registry: Registry): Record<string, number> => Object.fromEntries(
+    Object.values(registry.classes).filter((v): v is string => v !== null).map((id) => [id, 400000]));
+
+  it('names a class moved to an unmeasured model from a measured one, while the window rule is not measured', () => {
+    const { registry, advance } = movedLane('model-5.6-gamma', 'model-6.1-gamma', { cause: 'retired' });
+    const windows: Record<string, number> = { ...OTHERS(registry), 'model-5.6-gamma': 400000 };
+    delete windows['model-6.1-gamma'];
+    const rows = unmeasuredMoves({ registry, advance, windows, rule: 'default' });
+    expect(rows).toEqual([{ class: 'opus', from: 'model-5.6-gamma', to: 'model-6.1-gamma', fromTokens: 400000,
+      how: 'advance', cause: 'retired' }]);
+    expect(unmeasuredMoves({ registry, advance, windows, rule: 'none' })).toEqual(rows);
+    expect(unmeasuredMoveNotice('lane-x', rows[0]!, null)).toBe("lane-x's opus class moved from model-5.6-gamma to "
+      + 'model-6.1-gamma (auto-advance because the old model was retired), and model-6.1-gamma has no measured window '
+      + "while model-5.6-gamma had 400000 tokens, so every session on the lane now runs at the client's own default "
+      + 'window; measure model-6.1-gamma, then: ccrc models lane-x set-window model-6.1-gamma <tokens>');
+  });
+
+  it('names nothing when the new model is measured, the rule is measured, the old model was not, or there is no file', () => {
+    const { registry, advance } = movedLane('model-5.6-gamma', 'model-6.1-gamma', { cause: 'newer' });
+    const all: Record<string, number> = { ...OTHERS(registry), 'model-5.6-gamma': 400000 };
+    expect(unmeasuredMoves({ registry, advance, windows: all, rule: 'default' }), 'the new model measured').toEqual([]);
+    const unmeasured = { ...all };
+    delete unmeasured['model-6.1-gamma'];
+    expect(unmeasuredMoves({ registry, advance, windows: unmeasured, rule: 'measured' }), 'the rule measured').toEqual([]);
+    const neither = { ...unmeasured };
+    delete neither['model-5.6-gamma'];
+    expect(unmeasuredMoves({ registry, advance, windows: neither, rule: 'default' }), 'the old model unmeasured too')
+      .toEqual([]);
+    expect(unmeasuredMoves({ registry, advance: null, windows: unmeasured, rule: 'default' })).toEqual([]);
+    expect(unmeasuredMoves({ registry, advance, windows: null, rule: 'default' })).toEqual([]);
+    const filled = movedLane(null, 'model-6.1-gamma', { cause: 'empty' });
+    expect(unmeasuredMoves({ ...filled, windows: unmeasured, rule: 'default' }), 'an empty class had no window')
+      .toEqual([]);
+  });
+
+  it('an old entry with no cause still names the move, its reason unknown; a hand move names itself', () => {
+    const windows: Record<string, number> = { 'model-5.6-gamma': 400000 };
+    const old = movedLane('model-5.6-gamma', 'model-6.1-gamma');
+    const [row] = unmeasuredMoves({ ...old, windows, rule: 'default' });
+    expect(row).toMatchObject({ how: 'advance', cause: 'unknown' });
+    expect(unmeasuredMoveNotice('lane-x', row!, 200000)).toContain('(auto-advance, its reason not recorded)');
+    const hand = movedLane('model-5.6-gamma', 'model-6.1-gamma', { how: 'hand', canary: 'not-run' });
+    const [h] = unmeasuredMoves({ ...hand, windows, rule: 'default' });
+    expect(h).toMatchObject({ how: 'hand', cause: null });
+    expect(unmeasuredMoveNotice('lane-x', h!, 200000)).toContain("(set by hand)");
+    expect(unmeasuredMoveNotice('lane-x', h!, 200000)).toContain("at the default rule's 200000 tokens");
   });
 });
 

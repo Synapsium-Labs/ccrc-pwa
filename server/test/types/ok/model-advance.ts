@@ -3,12 +3,13 @@
 // front of tsc. `modelenv-types.test.ts`'s first case compiles `test/types/tsconfig.ok.json`, whose include is
 // `ok/**/*.ts`, so this file is checked there with no new project. It MUST compile clean, and it carries no cast.
 import {
-  ADVANCE_VERSION, AdvanceInvalid, BLOCKED_CAUSES, CANARY_RESULTS, HISTORY_CAP, HOLD_BY, HOWS, REASON_MAX,
-  backfillAdvance, canaryEffort, chooseCandidate, compareVersions, eligibleIds, familyOf, heldBackOf, lastMoveOf,
-  parseAdvance, parseModelId, reconcilePending, recordFailure, recordMove, resolveEffort, serializeAdvance,
+  ADVANCE_VERSION, AdvanceInvalid, BLOCKED_CAUSES, CANARY_RESULTS, CANDIDATE_REASONS, HISTORY_CAP, HOLD_BY, HOWS,
+  REASON_MAX, backfillAdvance, canaryEffort, causeOf, chooseCandidate, compareVersions, eligibleIds, familyOf,
+  heldBackOf, lastMoveOf, parseAdvance, parseModelId, reconcilePending, recordFailure, recordMove, resolveEffort,
+  serializeAdvance, unmeasuredMoveNotice, unmeasuredMoves,
 } from '../../../../shared/model-advance.mjs';
 import type {
-  Advance, BlockedCause, Choice, HistoryEntry, ParsedModelId, Pending,
+  Advance, BlockedCause, CandidateReason, Choice, HistoryEntry, ParsedModelId, Pending, UnmeasuredMove,
 } from '../../../../shared/model-advance.mjs';
 import type { Catalogue, ModelClass, Registry } from '../../../../shared/models.js';
 
@@ -43,3 +44,11 @@ export const invalid: AdvanceInvalid = new AdvanceInvalid('v', 'x');
 export const handIntent: Pending = { how: 'hand', class: cls, from: null, to: null, emptied: [], at: '2026-10-15T00:00:00Z' };
 export const advanceIntent: Pending = { class: cls, from: null, to: 'model-6.1-alpha', effortFrom: null, effortTo: null,
   at: '2026-10-15T00:00:00Z' };
+// D-8384: why a class moved, and the move that lowered a lane's window.
+export const firstReason: CandidateReason = CANDIDATE_REASONS[0];
+export const why: CandidateReason | 'unknown' = causeOf(entry);
+export const lowered: UnmeasuredMove[] = unmeasuredMoves({ registry: reg, advance: adv, windows: null, rule: 'default' });
+export const notice: string = unmeasuredMoveNotice('lane-x', lowered[0] ?? { class: cls, from: 'model-5-alpha',
+  to: 'model-6-alpha', fromTokens: 400000, how: 'advance', cause: 'newer' }, null);
+export const causedIntent: Pending = { class: cls, from: null, to: 'model-6.1-alpha', effortFrom: null, effortTo: null,
+  at: '2026-10-15T00:00:00Z', cause: 'empty' };

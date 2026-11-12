@@ -78,7 +78,7 @@ import {
 import { SUGGESTED_SUBAGENT_CLASS, suggestedClasses, suggestedModelMap } from '../shared/model-suggest.mjs';
 import {
   AdvanceInvalid, REASON_MAX, backfillAdvance, canaryEffort, chooseCandidate, familyOf, parseAdvance,
-  reconcilePending, recordFailure, recordMove, resolveEffort,
+  reconcilePending, recordFailure, recordMove, resolveEffort, unmeasuredMoveNotice, unmeasuredMoves,
 } from '../shared/model-advance.mjs';
 import { LitellmTemplateInvalid, renderLitellmConfig } from '../shared/litellm.mjs';
 
@@ -1156,7 +1156,21 @@ function describe(account, registry, catalogue, reading) {
     windows: windowsReport(reading),
     contextWindow: registry === null ? null : contextWindowFor(registry, catalogue, windows),
     advance: advanceReport(account.id),
+    windowNotices: windowNotices(account.id, registry, catalogue, windows),
   };
+}
+
+/** `show`'s and `lanes`' `windowNotices` (D-8384, public issue #2607): one sentence per class whose last move took
+ *  the lane's context window off the measured rule (`unmeasuredMoves`), each in `unmeasuredMoveNotice`'s one
+ *  spelling, which `ccrc doctor`'s `models` row prints as a WARN (it asks `lanes`). Empty with no registry, and
+ *  with an advance file that is absent or cannot be read: `advance` already names that one. */
+function windowNotices(id, registry, catalogue, windows) {
+  if (registry === null) return [];
+  const rd = readAdvance(id);
+  if (rd.err !== undefined || rd.advance === null) return [];
+  const room = contextWindowFor(registry, catalogue, windows);
+  return unmeasuredMoves({ registry, advance: rd.advance, windows, rule: room.rule })
+    .map((m) => unmeasuredMoveNotice(id, m, room.tokens));
 }
 
 /** §11's ORPHAN: a registry file whose id is in no roster row — typically
@@ -1182,6 +1196,7 @@ function orphanDescribe(id, registry, catalogue, reading) {
     windows: windowsReport(reading),
     contextWindow: contextWindowFor(registry, catalogue, windowsOf(reading)),
     advance: advanceReport(id),
+    windowNotices: windowNotices(id, registry, catalogue, windowsOf(reading)),
   };
 }
 
@@ -1863,7 +1878,9 @@ function advanceCommitOp(a, account, registry, catalogue, win) {
 
   // 6. The intent, BEFORE the rename (D-5188).
   const at = now();
-  const intent = { class: cls, from, to: a.to, effortFrom, effortTo, at };
+  // `cause` (D-8384): why the family rule chose `--to`, carried onto the entry the intent becomes, a recovered
+  // one included, so a retirement to an older model reads differently from an advance.
+  const intent = { class: cls, from, to: a.to, effortFrom, effortTo, at, cause: choice.reason };
   let w = writeAdvance(a.id, { ...adv, pending: intent });
   if (w !== null) return refuse(1, w[0], w[1]);
   settled = true;
@@ -1896,7 +1913,7 @@ function advanceCommitOp(a, account, registry, catalogue, win) {
   adv = recordMove({ ...adv, pending: null,
     classes: { ...adv.classes, [cls]: { ...adv.classes[cls], previous: { model: from, effort: effortFrom } } } },
   cls, { at, how: 'advance', from, to: a.to, ok: true, canary: 'passed',
-    ...(effortFrom === effortTo ? {} : { effort: { from: effortFrom, to: effortTo } }) });
+    ...(effortFrom === effortTo ? {} : { effort: { from: effortFrom, to: effortTo } }), cause: choice.reason });
   w = writeAdvance(a.id, adv);
   // A history that could not be written leaves the intent on disk: the next
   // locked writer records the move as landed. The class DID move. So this
@@ -1998,6 +2015,10 @@ function main(argv) {
         catalogueInvalid: cat.err !== undefined ? cat.err[1] : null,
         probe: registry === null ? null : registry.probe,
         baseUrl: registry === null || registry.baseUrl === undefined ? null : registry.baseUrl,
+        // D-8384: `show`'s `windowNotices`, for every lane in ONE call, which is how `ccrc doctor`'s `models`
+        // row asks: a lane's windows and advance file are read here, never by name in bash.
+        windowNotices: windowNotices(acc.id, registry, cat.err !== undefined ? null : cat.catalogue,
+          windowsOf(readWindowsFile(acc.id))),
       });
     }
     out({ ok: true, op: 'lanes', lanes });
