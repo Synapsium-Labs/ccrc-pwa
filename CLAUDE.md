@@ -429,6 +429,11 @@ generated value is never hand-edited, and the contrast gate rules on the result 
 - **Mutation-table discipline:** a new guard ships WITH a test that goes RED when the guard is deleted/mutated
   (measured before/after, not a comment). Doctrine: "A comment is a request; a red suite is a mechanism." TDD
   red-first.
+- **Push once per round** (operator ruling 2026-11-12, D-8397): commit as often as useful, and push once when a
+  build or a review fix round is complete, with its code, tests and notes (plan, ledger, deviation lines) in the same
+  push; a push before that only hands work to another session or comes before a stop that could lose the work. Every
+  push re-runs the PR's checks, so a push per commit buys CI runs and nothing else (expected: about 2.8 runs per
+  merged PR down to about 2.1). Worker clause 20 and the coordinator's brief sentence carry it to the fleet.
 - **Deviation ledger (D-N):** plans carry a `## Deviations found` section of numbered `D-N` entries (global,
   monotonic across project history — not reset per plan; ONE namespace, the old build-scoped `D-B<k>-<m>` ids
   were reconciled into it and survive only as `was D-B4-9` aliases — zero bare legacy refs remain in tracked
@@ -653,7 +658,7 @@ generated value is never hand-edited, and the contrast gate rules on the result 
   hand only. `coordinator-paused` does: Build 4's whitelisted `ccd coord-pause --state on|off`, driven by
   `POST /api/coord/pause`, both raises and lowers it, so it is reachable from a phone — `routes.ts` calls the
   boundary what it now is, "convention with a speed bump".
-- **The worker has a skill too** (`ccd/worker-skill/SKILL.md`, `ccrc-worker`, nineteen clauses pinned by
+- **The worker has a skill too** (`ccd/worker-skill/SKILL.md`, `ccrc-worker`, twenty clauses pinned by
   `server/test/worker-skill.test.ts`; it ships no `references/` and points at the coordinator's).
   `WORKER_KICKOFF_PREFIX` (`server/src/coord/dispatch.ts`) prefixes EVERY brief mail with the sentence that
   invokes it, so a wave brief carries WAVE SPECIFICS — plan path, task range, interfaces, deviations — never the

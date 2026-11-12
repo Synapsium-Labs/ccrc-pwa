@@ -4085,7 +4085,7 @@ Build 4 dogfood runbook, cross-repo programmes, and workspace holds.
 
 **All five skills ship to every rostered account's config dir.** The
 coordinator's protocol is now a trio: its worker counterpart is the
-`ccrc-worker` skill (`ccd/worker-skill/SKILL.md`, nineteen clauses pinned by
+`ccrc-worker` skill (`ccd/worker-skill/SKILL.md`, twenty clauses pinned by
 `server/test/worker-skill.test.ts`), and its reviewer counterpart is the
 `ccrc-reviewer` skill (`ccd/reviewer-skill/SKILL.md`, ten clauses pinned by
 `server/test/reviewer-skill.test.ts`), which reads a finished wave in its own
@@ -4780,7 +4780,7 @@ replacement for them, and a lost `coord.db` reconstructs from them.
 the `ccrc-coordinator` skill (`ccd/coordinator-skill/SKILL.md`), and its twenty
 clauses are pinned verbatim by `server/test/coordinator-skill.test.ts` — a
 softened clause is a red suite, not a silent drift. **A worker is the same
-shape:** the `ccrc-worker` skill (`ccd/worker-skill/SKILL.md`), nineteen clauses,
+shape:** the `ccrc-worker` skill (`ccd/worker-skill/SKILL.md`), twenty clauses,
 pinned the same way by `server/test/worker-skill.test.ts`, and it is what a
 dispatched session is told to run by the kickoff sentence dispatch composes
 onto every brief mail. That is why a wave brief is short: the standing
@@ -6166,7 +6166,7 @@ is that the read side lives only where ccrc owns the file it is written in, and 
   `server/test/session-hook-sync-advisory.test.ts`, the merge deny by
   `server/test/session-hook-merge-deny.test.ts`, the role-skill deny by
   `server/test/session-hook-role-skill-deny.test.ts`.
-- **Worker clause 12 (R2).** `ccd/worker-skill/SKILL.md` now carries nineteen clauses (thirteen at R2; routing slice 2 added 14 and 15, landing-order wave 1 added 16, the stall watch added 17, the temp-root clause added 18, the workflow rule added 19), pinned verbatim: a
+- **Worker clause 12 (R2).** `ccd/worker-skill/SKILL.md` now carries twenty clauses (thirteen at R2; routing slice 2 added 14 and 15, landing-order wave 1 added 16, the stall watch added 17, the temp-root clause added 18, the workflow rule added 19, the push-once rule added 20), pinned verbatim: a
   workspace with a `graphify-out/graph.json` takes a codebase question to `graphify query` before
   `grep`, **weighted by the card's freshness word** — only `fresh` licenses taking an answer as read,
   and every other word makes a query answer a lead to verify by opening the file it names — and never
