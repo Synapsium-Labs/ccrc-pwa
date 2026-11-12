@@ -142,10 +142,14 @@ describe('the skip engages only behind the server\'s word (D-5239, spec §6.1)',
     expect(readState()).toMatchObject({ state: 'working', event: 'PreCompact' });
   });
 
+  // D-8354: the file is planted after the Stop, so the second of lease it has left covers the PreCompact's run alone,
+  // and the case says so when a slow runner spent that second before the hook read its clock.
   it('control: the word listed in a current file (lease − 1 s, beside another word) → the skip', () => {
-    writeCaps(['hook-main-state-v1', WORD], SERVER_CAPS_LEASE_S - 1);
     const before = doneAt(T0);
+    const at = nowS() - (SERVER_CAPS_LEASE_S - 1);
+    writeCapsText(renderServerCaps(['hook-main-state-v1', WORD], at));
     run(preCompact('manual'));
+    expect(nowS() - at, 'the file was still inside its lease when the hook had run').toBeLessThanOrEqual(SERVER_CAPS_LEASE_S);
     expect(stateBytes().equals(before)).toBe(true);
   });
 
@@ -161,34 +165,51 @@ describe('the skip engages only behind the server\'s word (D-5239, spec §6.1)',
 
   // The bash grammar and the TypeScript one agree on every row: the hook engages exactly when `parseServerCaps`
   // answers ok and lists the word (the iterating case).
-  const n = nowS();
-  const TABLE: string[] = [
-    `at ${n}\ncaps ${WORD}\nend\n`,
-    `at ${n}\ncaps\nend\n`,
-    `at ${n}\ncaps hook-main-state-v1 ${WORD}\nend\n`,
-    `at ${n}\ncaps ${WORD}\nend`,
-    `at ${n}\ncaps ${WORD}\nend\nx`,
-    `at ${n}\ncaps ${WORD}\n`,
-    `at ${n}\ncaps  ${WORD}\nend\n`,
-    `at ${n}\ncaps ${WORD} \nend\n`,
-    `at ${n}\ncaps ${WORD}\nEND\n`,
-    `at  ${n}\ncaps ${WORD}\nend\n`,
-    `at ${n - SERVER_CAPS_LEASE_S + 5}\ncaps ${WORD}\nend\n`,
-    `at ${n - SERVER_CAPS_LEASE_S - 5}\ncaps ${WORD}\nend\n`,
-    `at ${n + 60}\ncaps ${WORD}\nend\n`,
-    `at 123456789012\ncaps ${WORD}\nend\n`,
-    `at ${n}\ncaps ${'a'.repeat(65)} ${WORD}\nend\n`,
-    `at ${n}\ncaps ${WORD}\r\nend\n`,
-    `\n`,
-    ``,
+  //
+  // D-8354: a row's `at` is relative to the moment its case runs, never to the file's collection. The table used to
+  // read the clock once, at collection, and a macOS shard reached a case 176 s later: `parseServerCaps` judged the row
+  // inside the 180 s lease, then the Stop and the PreCompact ran, the hook read its clock past the lease, and the two
+  // "disagreed" about a file whose age the case itself had let cross the boundary between the two reads. So each row
+  // is a function of the moment, rendered after the Stop, and the parser is asked at both ends of the hook's run: the
+  // hook reads its clock between them, a row's answer is one interval of that clock, and so the hook must answer what
+  // both ends answer. A runner too slow for a row's 5 s margin says so, instead of naming a disagreement.
+  type Row = (at: (dtS?: number) => string) => string;
+  const symbolic = (dtS = 0): string => (dtS === 0 ? '<now>' : `<now${dtS > 0 ? '+' : ''}${dtS}>`);
+  const atFrom = (nowSec: number) => (dtS = 0): string => String(nowSec + dtS);
+  const TABLE: Row[] = [
+    (at) => `at ${at()}\ncaps ${WORD}\nend\n`,
+    (at) => `at ${at()}\ncaps\nend\n`,
+    (at) => `at ${at()}\ncaps hook-main-state-v1 ${WORD}\nend\n`,
+    (at) => `at ${at()}\ncaps ${WORD}\nend`,
+    (at) => `at ${at()}\ncaps ${WORD}\nend\nx`,
+    (at) => `at ${at()}\ncaps ${WORD}\n`,
+    (at) => `at ${at()}\ncaps  ${WORD}\nend\n`,
+    (at) => `at ${at()}\ncaps ${WORD} \nend\n`,
+    (at) => `at ${at()}\ncaps ${WORD}\nEND\n`,
+    (at) => `at  ${at()}\ncaps ${WORD}\nend\n`,
+    (at) => `at ${at(-SERVER_CAPS_LEASE_S + 5)}\ncaps ${WORD}\nend\n`,
+    (at) => `at ${at(-SERVER_CAPS_LEASE_S - 5)}\ncaps ${WORD}\nend\n`,
+    (at) => `at ${at(60)}\ncaps ${WORD}\nend\n`,
+    () => `at 123456789012\ncaps ${WORD}\nend\n`,
+    (at) => `at ${at()}\ncaps ${'a'.repeat(65)} ${WORD}\nend\n`,
+    (at) => `at ${at()}\ncaps ${WORD}\r\nend\n`,
+    () => `\n`,
+    () => ``,
   ];
-  it.each(TABLE.map((t) => [JSON.stringify(t), t]))('grammar row %s: the hook and parseServerCaps agree', (_l, text) => {
-    writeCapsText(text);
-    const p = parseServerCaps(text, nowS());
-    const want = p.ok && p.words.includes(WORD);
+  const advertised = (text: string, nowSec: number): boolean => {
+    const p = parseServerCaps(text, nowSec);
+    return p.ok && p.words.includes(WORD);
+  };
+  it.each(TABLE.map((row) => [JSON.stringify(row(symbolic)), row] as const))('grammar row %s: the hook and parseServerCaps agree', (_l, row) => {
     const before = doneAt(T0);
+    const t0 = nowS();
+    const text = row(atFrom(t0));
+    writeCapsText(text);
     run(preCompact('auto'));
-    expect(stateBytes().equals(before), `parseServerCaps: ${JSON.stringify(p)}`).toBe(want);
+    const t1 = nowS();
+    const want = advertised(text, t0);
+    expect(advertised(text, t1), `the row's answer held from ${t0} to ${t1}, the seconds the hook read its clock in`).toBe(want);
+    expect(stateBytes().equals(before), `parseServerCaps at ${t0}: ${JSON.stringify(parseServerCaps(text, t0))}`).toBe(want);
   });
 });
 
