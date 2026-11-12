@@ -537,7 +537,7 @@ lostBg, lostKinds, lostIds}`
   leaves `hookstate.json` alone.
 - **SessionStart** `startup`/`resume`, or an absent or unknown `source` (D-1248's rule): `done`, `restartAt`, `bg 0`,
   keeping `stopAt` and `turnAt`. When the previous line was `done` for the same `sessionId`, `lostBg = prev.lostBg +
-  max(prev.bg, 0)`, and `lostKinds`/`lostIds` take `prev.bgKinds`/`prev.bgIds`: the old process's tasks died with it.
+  max(prev.bg, 0)`, and `lostKinds`/`lostIds` take `prev.bgKinds`/`prev.bgIds`: the old process's tasks died with it. (Amended 2026-11-11, session-continuity wave 6a, D-8316: a same-session `failed` line's `bg*` moves into `lost*` too.)
   When the previous line was `working` (a mid-turn death that ccd's redrive re-prompts), the stall lane and the `busy`
   gate hold for `RESTART_GRACE_MS` (5 min, *chosen*) after `restartAt`. `clear`: a fresh line. `compact`: untouched
   (a compact SessionStart fires mid-turn; D-306's rule).

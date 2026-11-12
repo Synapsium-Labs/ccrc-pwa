@@ -13,6 +13,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { mkTmp } from './tmpHelpers.js';
 import { readTurnMarkMeasured } from '../src/turnmark.js';
+import { stallOrphanDCandidate } from '../src/coord/stall.js';
 import { localIO } from '../src/io.js';
 
 const HOOK = path.resolve(__dirname, '../../ccd/session-hook.sh');
@@ -484,7 +485,7 @@ describe('the turn marker (§5.1)', () => {
 
 // ── The turn marker across a restart (worker stall watch §5.1, wave 2 Task 4) ──
 // A SessionStart other than compact is a new process: the old one's background
-// tasks died with it, so a same-session `done` moves bg/bgKinds/bgIds into lost*.
+// tasks died with it, so a same-session `done` or `failed` moves bg/bgKinds/bgIds into lost*.
 // compact fires mid-turn and is inert (D-306); clear starts a fresh line.
 describe('the turn marker across a restart (§5.1, SessionStart)', () => {
   const stopWith = (tasks: Array<{ id?: string; type?: string }>): void => {
@@ -605,19 +606,34 @@ describe('the turn marker across a restart (§5.1, SessionStart)', () => {
     expect(turnMark().lostBg).toBe(5);
   });
 
-  it('a resume after a failed line flips it to done, keeps err, turnAt and stopAt, and moves no tasks into lost*', () => {
+  it.each(['rate_limit', 'server_error'])('a resume after a failed line (%s) moves its tasks into lost*, keeping err, turnAt and stopAt (lost-bg-across-failed)', (error) => {
     stopWith(THREE);
     run({ hook_event_name: 'UserPromptSubmit' });   // working: bg 3 and its kinds and ids carried, lost* cleared
-    run({ hook_event_name: 'StopFailure', error: 'server_error' });
+    run({ hook_event_name: 'StopFailure', error });
     const failed = turnMark();
-    expect(failed).toMatchObject({ state: 'failed', err: 'server_error', bg: 3, bgKinds: 'shell,subagent', bgIds: 'b1,b2,b3' });
+    expect(failed).toMatchObject({ state: 'failed', err: error, bg: 3, bgKinds: 'shell,subagent', bgIds: 'b1,b2,b3' });
     run({ hook_event_name: 'SessionStart', source: 'resume' });
     const m = turnMark();
-    // Only a same-session DONE line's tasks are moved. A failed line's are dropped: bg, bgKinds and bgIds reset,
-    // lostBg stays 0 and the lost lists stay empty.
     expect(m).toEqual({ ...failed, state: 'done', event: 'SessionStart', at: m.at, restartAt: m.at, bg: 0, bgKinds: '',
-      bgIds: '', lostBg: 0, lostKinds: '', lostIds: '' });
-    expect(m.err).toBe('server_error');
+      bgIds: '', lostBg: 3, lostKinds: 'shell,subagent', lostIds: 'b1,b2,b3' });
+  });
+
+  it('a SECOND resume after a failed line keeps lost* and adds nothing', () => {
+    stopWith(THREE);
+    run({ hook_event_name: 'UserPromptSubmit' });
+    run({ hook_event_name: 'StopFailure', error: 'rate_limit' });
+    run({ hook_event_name: 'SessionStart', source: 'resume' });
+    run({ hook_event_name: 'SessionStart', source: 'resume' });
+    expect(turnMark()).toMatchObject({ state: 'done', bg: 0, bgKinds: '', bgIds: '', lostBg: 3,
+      lostKinds: 'shell,subagent', lostIds: 'b1,b2,b3' });
+  });
+
+  it('a failed line whose bg is -1 (unmeasured) adds 0 to lostBg, never subtracts', () => {
+    plantTurn(JSON.stringify({ v: 1, sessionId: 'uuid-1', state: 'failed', event: 'StopFailure', at: 2000, turnAt: 1000,
+      stopAt: 1500, bg: -1, bgKinds: '', bgIds: '', err: 'rate_limit', restartAt: null, lostBg: 2,
+      lostKinds: 'shell', lostIds: 'b1' }) + '\n');
+    run({ hook_event_name: 'SessionStart', source: 'resume' });
+    expect(turnMark()).toMatchObject({ state: 'done', bg: 0, lostBg: 2, lostKinds: 'shell', lostIds: 'b1' });
   });
 });
 
@@ -800,6 +816,31 @@ describe('the turn marker round trip: a hook-written line reads back ok (§5.1)'
     if (!r.ok) return;
     expect(r.bgKinds).toEqual([...sent].sort().slice(0, 25));
     expect(r.bgKinds.join(',')).toHaveLength(199);
+  });
+
+  it('a hook-written restart after a rate_limit StopFailure is orphan D\'s candidate; with no tasks it is not', async () => {
+    run({ hook_event_name: 'UserPromptSubmit' });
+    run({ hook_event_name: 'Stop', background_tasks: [{ id: 'b1', type: 'shell' }, { id: 'b2', type: 'shell' }] });
+    run({ hook_event_name: 'UserPromptSubmit' });
+    run({ hook_event_name: 'StopFailure', error: 'rate_limit' });
+    run({ hook_event_name: 'SessionStart', source: 'resume' });
+    const r = await readBack();
+    expect(r.ok, JSON.stringify(r)).toBe(true);
+    if (!r.ok) return;
+    expect(r.lostBg).toBe(2);
+    expect(stallOrphanDCandidate(r)).toBe(true);
+    // CONTROL, on a fresh marker: no tasks at the Stop, so nothing was lost.
+    fs.rmSync(turnFile(), { force: true });
+    run({ hook_event_name: 'UserPromptSubmit' });
+    run({ hook_event_name: 'Stop', background_tasks: [] });
+    run({ hook_event_name: 'UserPromptSubmit' });
+    run({ hook_event_name: 'StopFailure', error: 'rate_limit' });
+    run({ hook_event_name: 'SessionStart', source: 'resume' });
+    const c = await readBack();
+    expect(c.ok, JSON.stringify(c)).toBe(true);
+    if (!c.ok) return;
+    expect(c.lostBg).toBe(0);
+    expect(stallOrphanDCandidate(c)).toBe(false);
   });
 });
 

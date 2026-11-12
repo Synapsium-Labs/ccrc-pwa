@@ -17,6 +17,10 @@ records the operator's rulings of 2026-11-07 (§11, items 7 and 8): the spike re
 reduced to steps 5 and 6, and stage 3 is manifest-primary, decided on the evidence rather than measured; with
 notes in §3, §5.2, §5.3, §5.6, §8, §9, §10 and §11 item 5, among them step 7's closure by the working-state
 programme's D-5241, which this programme accepted (D-8103) ·
+rev 12 (2026-11-11) corrects the stale neighbours that wave 5 and #2603 left (the §1 lead-in, §1.2 mechanism 2, §5.2,
+§5.3, §6, §8, §11 item 7), records stage 3 as waves 6a to 6c with the design calls for 6b and 6c (§5.3, D-8316 to
+D-8332), and amends §3 (the C15 row), §4, §9, §10 and §12 for the not-stalled wake (C15), correcting §4's "constant"
+prompt and adding §12's two corrective notes (the fallback's "constant" text and the Codex lane's delegation premise) ·
 **Date:** 2026-09-23 ·
 **Branch:** `ws/enhance-ccrc-for-parallel-agents` (based on `origin/main` `bbb5e714`) ·
 **Companion:** `2026-09-23-landing-order-and-main-churn-design.md`. Its stage 5 needs this spec's stage 1; this
@@ -36,6 +40,8 @@ enhance recovery during account swap similar to how Claude Code itself does it?"
 A restart — limit rescue, auto-home, manual swap, supervisor revival — is today a place where work is lost. This
 spec makes it a place where work is handed over. It adds no revival: the swap stays the one sanctioned restart,
 and everything here changes what is on disk when it happens and what the restarted session is told.
+*(Amended 2026-11-11, rev 12: since #2603, the limit watchdog's in-place restart after a stated reset
+(`ccd/ccd#_watchdog_resume_run`, cause `limit-resume`) is a second sanctioned restart (D-8123, D-8173 ruling (a)).)*
 
 ---
 
@@ -113,7 +119,12 @@ Six mechanisms, read off the source at `bbb5e714`:
 2. **The restarted session is told nothing specific.** The redrive prompt is one constant (`RESUME_PROMPT`,
    `ccd/ccd:1208`): background work "is gone: re-check their journals". Resuming by run id works across accounts
    when the journal is present; the eight journal-missing refusals are the carry, and the five scriptPath
-   refusals are unexplained (stage 2 measures them).
+   refusals are unexplained (stage 2 measures them). *(History, dated: true until D-5237. Since D-5237 the
+   prompt is composed per spawn from the end's cause (`ccd/ccd#_resume_prompt_for`), and the typed fallback types that
+   composed prompt. Since 2026-10-22 a config-root script path passed after a swap was refused 17 of 17 times on disk.
+   On 2.1.314, after one swap, R2 (the old root's returned path) and R1 (the current-root path, the carry's hard link)
+   were both refused, while a working-directory copy and the inline script resumed (§5.2, "As measured"). The five
+   September refusals are past retention and remain unexplained.)*
 3. **The stop gives Claude Code no chance to hand over.** `cmd_swap` (`ccd/ccd:22404`) stops the unit, kills the
    tmux session and sleeps one second. Claude Code ships an exit handoff — an adopt record handing background
    shells, workflows and agents "to the next wake of this session" — gated on the process running as one of its
@@ -210,17 +221,20 @@ auto-home at 04:17 UTC the next day.
 | C12 | AMENDS D-3100's argument that a re-rendered banner "cannot reach a relocation" because the rescue arm sits below `SWAP_COOLDOWN`: the cooldown expires, and 32 of 248 rescues came from a banner the session carried in (§1.2 mechanism 6). A banner older than the session's landing is not a block, which also gives up the pane rung's immediacy for a pane positive that the transcript dates as carried in (§8). Shipped as D-3526 (#207): "the landing" is the pane's own process start with a swap after the row, and a landing whose Claude Code never came up is still moved. | Stage 4 rule 1. Slug `carried-in-banner-is-not-a-block`, D-3497; shipped by D-3526. |
 | C13 | The rescue-wait bound is 10 minutes (operator, 2026-09-23). | Stage 4 rule 2; §11 item 3. |
 | C14 | The slice ceiling is answered by measuring `OOMPolicy=continue` for pane scopes in the stage-2 spike, never by an aggregate `MemoryHigh` (operator, 2026-09-23). | Stage 2 step 7; §11 item 5. Rev 11: closed by the working-state programme's D-5241 (D-8103). |
+| C15 | AMENDS §4's "never mails a resume list" and §12's "server mail carrying resume lists": the stall watch mails a restarted session its composed list once (wake-keys-on-the-manifest). | Stage 3's not-stalled restarts (§5.3, call C; wave 6c). Slug `wake-keys-on-the-manifest`, D-8325. |
 
 ## 4. Roles and authority
 
 - **ccd** carries, stops gracefully, writes the manifest, spreads rescues, reports dead scopes of its own panes
   and stops the inert ones (C11), honours the route record. It never resumes anything itself and never types beyond the existing
-  redrive fallback's constant text.
+  redrive fallback's constant text. *(Amended 2026-11-11, rev 12: the typed fallback types D-5237's composed prompt,
+  not a constant.)*
 - **The session (the model)** decides whether to resume. It is told what was in flight and the literal call that
   resumes it; that is a request, and §9 measures whether it is honoured.
 - **Hooks** record launches (PostToolUse) and deliver the manifest (SessionStart). They never deny a launch.
 - **The server** reads what ccd wrote and shows it; it never parses Claude Code's journal formats, never mails a
-  resume list, and runs nothing but `tmux` and `ccd`.
+  resume list, and runs nothing but `tmux` and `ccd`. *(Amended 2026-11-11, rev 12, C15: from wave 6c, once armed, the
+  stall watch mails a restarted session its composed list once, D-8325.)*
 - **The operator** sees counts on the phone and on the run, overrides a refused swap with the counts in view,
   stops, or moves into a unit, the services doctor reports in dead scopes, and rules on §11.
 
@@ -340,8 +354,9 @@ key) across a fleet that runs several builds. Step 2 is not run, so the graceful
 stage 3's own wave (D-8104). Step 7 is closed by the working-state programme's D-5241, with this programme's
 agreement (D-8103): `set-property` refuses the property, and two prefix drop-ins ship `OOMPolicy=continue`, which
 doctor's `oom-policy` check reads. Steps 5 and 6 run on the lent
-scratch account (plan `docs/superpowers/plans/2026-11-07-session-continuity-wave5-reduced-spike.md`): step 5 as a
-matrix of script paths at one mid-run swap, step 6 by a cut list. The steps as first written:
+account (plan `docs/superpowers/plans/2026-11-07-session-continuity-wave5-reduced-spike.md`): step 5 as a
+matrix of script paths at one mid-run swap, step 6 by a cut list. *(Amended 2026-11-11, rev 12: the lent account was
+a real one, not a scratch one, D-8252.)* The steps as first written:
 
 On one scratch session on a scratch account, with a Bash background watcher, a Monitor task, a two-agent workflow
 and a plain background agent running:
@@ -387,9 +402,44 @@ note is `docs/superpowers/plans/2026-11-07-session-continuity-wave5-spike-result
 
 ### 5.3 Stage 3 — recovery at every restart (ccd, hook, prompt)
 
+**Amended 2026-11-11 (rev 12): delivered in three waves.** Wave 6a ships the graceful stop in shadow, the
+`lostBg` count across a failed turn, the spec's corrections and the `--stage 3` reading of the stop. Wave 6b (planned
+after 6a lands) ships the launch record and the manifest, written in shadow with nothing reading them. Wave 6c (planned
+after 6b's shadow week) ships delivery: the composed redrive prompt, the session-start subject, the server's read of
+the manifest and the not-stalled wake, armed by the operator. The design calls for 6b and 6c are fixed here, each under
+its number (table at the end of this section). Nothing in 6a, 6b or 6c needs the operator's go-ahead typed in a
+session's pane (call E, D-8328).
+
 **The graceful stop.** Every ccd stop that will be followed by a resume sends `SIGTERM` to the Claude Code process
 and waits a bounded time, measured in this stage's own wave (rev 11, D-8104), before the tmux kill. The unit is still stopped first, so
 `Restart=always` cannot resurrect it under the old wrapper.
+
+*(Amended 2026-11-11, rev 12: as built in 6a.)*
+- **The sites (call D, D-8326, D-8327).** `cmd_swap`, `_watchdog_resume_run` and `cmd_hibernate`: the stops after which
+  ccrc itself starts the next spawn (the swap and the limit-resume in the same verb; a hibernate by mail, an open
+  screen, `ccd ensure` or a roll's wake). The section's opening sentence, "Every ccd stop that will be followed by a
+  resume", is narrowed to those. `cmd_stop` and `ws-archive` are stops a spawn follows too, with the same composed
+  resume prompt (`ccd/ccd#_resume_prompt_for`), but only the operator starts that spawn (`ccd start`/`enable`,
+  `ws-restore`; mail never wakes a stopped row), so they are not graceful.
+- **The shadow (D-8317).** With `$REG/graceful-stop-live` absent, the stop is today's, timed after the kill by a
+  detached observer (`ccd/ccd#_graceful_stop_before`, `#_graceful_stop_after`, `#_graceful_stop_observe`), which
+  watches up to `GRACEFUL_STOP_OBSERVE_S` (30 s) at `GRACEFUL_STOP_POLL_S` (0.1 s) and writes one
+  `graceful-stop <id>: site= mode= <outcome>` line to swap.log. The acts and their order are today's, but it is not
+  today's stop byte for byte: at swap and limit-resume it adds one bounded tmux pane read before the kill (up to
+  `SUBSTRATE_PROBE_DEADLINE_S`, 8 s, on a wedged tmux), and at every site one synchronous `systemd-run` after it that
+  starts the observer's unit (under hibernate's coordination serialiser there, D-7541). Hibernate reuses D-7902's pane
+  read (`ccd/ccd#_pane_scope_of`) and adds none. The observer beside D-7902's reap is legitimately different (D-8319).
+- **The hang-up is the same shutdown.** Today's `tmux kill-session` already hangs up Claude Code's terminal, and its
+  SIGHUP and SIGTERM handlers call one `shutdown()` (builds 2.1.314 and 2.1.322, read in the installed bundles). So the
+  shadow sends no new signal: it times that shutdown with the terminal already gone, an upper bound on the true exit.
+- **`graceful-stop-live` (D-8318).** Hand-only, with no writer in the tree. With it present, the stop sends `SIGTERM` to
+  the pane's process, proved by its start time at the moment of the signal, waits up to `GRACEFUL_STOP_TERM_WAIT_S`
+  (10 s, provisional), then kills as today. It times the shutdown with its terminal still open, the one thing the shadow
+  cannot. Its wait lengthens a swap's window between the stop and the registry flip, and holds a plain hibernate's
+  serialiser, by the same amount.
+- **The bound and its arming.** The bound is set from `--stage 3`'s `graceful_stop` reading (D-8321), by site and mode;
+  arming is the operator's (D-8104). 6a arms nothing on any box.
+- The unit is still stopped first.
 
 **The launch record.** `session-hook.sh`'s PostToolUse arm appends one row to `$REG/<id>.deleg` for each Workflow
 launch, background Agent, `resumeFromRunId` and `SendMessage` continuation: time, wrapper, kind, run/task/agent id,
@@ -397,6 +447,16 @@ script path. Rows from a subagent's own hook input are dropped. On a single-UNIX
 writer" is a convention, so the mechanism is validation: ids must match `^[A-Za-z0-9_-]+$`; a script path must
 resolve (realpath) under this session's own current-root sidecar and match a strict path class; a failing row is
 dropped and counted, at write and again at compose.
+
+*(Amended 2026-11-11, rev 12, call B, D-8324, wave 6b.)* The launch record is ccd's own `$REG/<id>.deleg`, not the
+closed delegation broker's spool, which is legitimately different under the consolidation rule: the spool keeps about
+24 hours where the record lives until the manifest retires the item (#2603's waits to a weekly reset last days); the
+spool's consumer is the server's ingest where the record's is ccd on the box at stop time; and the spool keeps
+subagent rows where the record drops them (the launch record above has dropped rows from a subagent's own hook input
+since before rev 12). There is still one parser: the hook's existing delegation-spool jq parse gains a second sink, adding
+`resumeFromRunId` and `SendMessage` rows. This settles, and reverses, the ledger's carried proposal to extend the
+broker's spool and server projection rather than add a second writer. A resumed agent comes back under a new agent id
+(wave 5, §2.5 of its results note), which 6b's retire rule expects.
 
 **The manifest.** In the swap body, right after the carry (the unit is stopped, so journals are final), and at a
 supervisor revival from the launch record alone, ccd writes `$REG/<id>.inflight`, stamped with its write time and
@@ -415,12 +475,42 @@ come from the launch record joined with sidecar files changed in the last day:
 An item retires when the launch record shows its resume completed or its run finished. The file's absence means
 `never-written`, distinct from `none`.
 
+*(Amended 2026-11-11, rev 12, wave 6b.)* `abandoned` here is this class, not the run abandon door. 6b writes the
+manifest in shadow, and these calls belong to it:
+- **Call I (D-8332).** The manifest takes `$REG/.carry.lock` non-blocking, as the carry does. The daily carry-dedupe
+  timer (#317, a dry run) holds it too (`ccd/lib/carry-dedupe.py`, `flock(LOCK_EX | LOCK_NB)`), so a manifest written in
+  that window is `unmeasured`, and §9 counts it. #317 is not changed.
+- **Call H (D-8331).** A session with no Claude Code transcript answers `not-applicable` in the manifest, the prompt and
+  the session-start subject (§6), distinct from `never-written`, `none` and `unmeasured`. It is keyed on the measured
+  fact (the session's config root holds no Claude Code transcript for its uuid), not on the exec kind: a codex lane
+  runs Claude Code itself and writes its transcripts (COORDINATOR note 8 of the 6a plan).
+- **Call G's count (D-8330).** The manifest counts `deferred-until-reset` waits with a reset days out (below).
+
+The writer sites above are not settled by any design call: 6b's plan settles them, with a numbered deviation if it adds
+any. One open question it inherits: #2603's `_watchdog_resume_run` restarts with no carry and is neither of the two
+sites, and neither is a hibernate's stop.
+
 **Delivery.** The redrive prompt becomes a composed per-spawn string: today's sentence plus up to eight validated
 items, each with its literal call (`Workflow({scriptPath: "<current-root path>", resumeFromRunId: "<id>"})`, or
 `SendMessage` to the agent id). Ids and paths only; never free text such as a workflow name. With no manifest, an
 empty one, or `unmeasured`, the prompt is byte-identical to today's. The list rides the session-start context
 as its own subject, clipped at its own ceiling; the prompt's eight items are the guaranteed carrier. The typed fallback
 keeps today's constant.
+
+*(Amended 2026-11-11, rev 12, wave 6c.)*
+- **Call A (D-8323) replaces the literal.** The composed prompt names the script's current-root path and tells the
+  session to read the file and pass its text inline: `Workflow({script: <the file's text>, resumeFromRunId: "<id>"})`.
+  That form (R5) was accepted after a swap on 2.1.314; the old root's returned path (R2) and the current-root path (R1,
+  the carry's hard link) were refused (§5.2, "As measured"). ccd writes no file into the workspace, and the manifest
+  holds ids and paths only. Open, and measured in 6c's shadow: whether a Read of the current root, not only `cat`,
+  works on every lane. 6c also pins in a test the strings the prompt relies on (the R1/R2 refusal text `scriptPath must
+  be a script path this tool returned …`, `No journal found for workflow run …`, and R5's accepted shape), so a Claude
+  Code update that changes them fails a suite rather than the fleet.
+- "Byte-identical to today's" means today's composed prompt (`ccd/ccd#_resume_prompt_for`), and the typed fallback
+  types the composed prompt, as built since D-5237, not "today's constant".
+- `SendMessage` after a restart is unmeasured, and so is the fact that a resumed agent comes back under a new agent id.
+  6c measures both.
+- **Call H (D-8331)** keys `not-applicable` as the manifest paragraph says.
 
 **Not-stalled restarts.** Claude Code submits the resume prompt only when the resumed tail is an interrupted turn.
 A session that had ended its turn to wait lands idle; it gets the manifest in its session-start context at its next
@@ -431,12 +521,54 @@ restart; that mail needs `stall-watch-live` and `stall-watch-w2-live` both armed
 after its delivery (or still undelivered 30 minutes after it was queued), the operator is pushed once, which also
 needs `stall-watch-escalate`. §9 counts stalled and not-stalled restarts with a non-empty manifest separately.
 
+*(Amended 2026-11-11, rev 12.)*
+- A stall-watch Settings level arms these arms without any marker (review 1770 F1;
+  `server/src/coord/stallsettings.ts#STALL_LADDER`). `all` arms the wave-2 arms as `stall-watch-w2-live` does.
+  `alert`, `deliver` and `all` arm the operator push as `stall-watch-escalate` does.
+- Since 6a, `lostBg` includes a `failed` line's tasks (D-8316). The count is the one the `failed` line carries, the last
+  Stop's before the failed turn: tasks launched during that turn are not in it, and tasks that finished after that Stop
+  are. A `working` line still adds nothing, and `_swap_bg_hold` still does not hold on `failed`.
+- **Call C (D-8325, C15), wave 6c.** The wake keys on a non-empty manifest, not on `lostBg` alone, so limit-ended
+  sessions are covered. The server reads `$REG/<id>.inflight` through a new FleetIO read, and the stall watch mails the
+  session its composed list once, as soon as its live status reads idle after the restart: D5's immediate rung, extended
+  to every session class. It is armed by stage 3's own switch, not by the optional wave-2 markers, and nothing types at
+  spawn.
+- Wave 5's measured 15.5 minutes (§5.2) stays as the case this answers.
+
 **Deferred, not relaunched into the wall.** The manifest keeps a resume-attempt count per run; a run whose resumed
 agents die on the limit again becomes `deferred-until-reset <resetsAt>`, and the prompt says: resume once; if agents
 stop on the limit again, stop and leave it listed.
 
+*(Amended 2026-11-11, rev 12, call G, D-8330.)* Waits to a weekly reset stay unbounded in stage 3: #2603's automatic wait
+and the operator's limit-wait are not bounded on a weekly-only lane, and 6b's manifest counts such waits. The bound, if
+any, is wave 7's to propose from that count. Read from the code at `520b11c0d`, the stage-4 rules that depend on a
+five-hour reset behave so on such a lane:
+- **Cannot fire.** Each is gated on `HARD_BLOCK_TYPE == five_hour` (`ccd/ccd#_rescue_policy`) or needs a numeric recorded
+  reset that `ccd/ccd#_rescuewait_open` writes only for `five_hour`: the near wait; the end in place at the reset, and
+  its grace; the hold until `RESCUE_CHAIN_WAIT` past the reset; the no-room wait's `stale` end; the chain wait's early
+  end at its reset.
+- **Can still fire.** The carried-in rule (D-3526); the no-room wait, recorded with `reset=-`; the chain wait, which then
+  always runs its full 30 minutes; do-not-bounce, which then lasts its whole window; spread; the limit watchdog's forced
+  rescue and its automatic wait (D-8173 ruling (a)), and the operator's limit-wait, both of which run to the weekly
+  reset; and `ccd/ccd#_watchdog_resume_here`, which restarts the session once that reset has passed.
+- Unmeasured: which `rateLimitType` a plan with no five-hour window writes on its block (wave 5's Task 4 did not run).
+
 **Background shells** killed by the stop, or handed over natively, are listed so the session re-arms its watchers.
 (Rev 11: under the manifest none is handed over natively; each is killed and listed.)
+
+**Design calls for 6b and 6c (rev 12).**
+
+| Call | Number | Wave |
+|---|---|---|
+| A. The resume call is read, then passed inline | D-8323 | 6c |
+| B. The launch record is ccd's own `$REG/<id>.deleg` | D-8324 | 6b |
+| C. The wake keys on the manifest (C15) | D-8325 | 6c |
+| D. The graceful stop is at the three sites ccrc resumes itself | D-8326, D-8327 | 6a |
+| E. No step needs the operator in a session's pane | D-8328 | 6a to 6c |
+| F. The stage-3 baseline is re-cut from 6b's shadow week | D-8329 | 6b |
+| G. Waits to a weekly reset stay unbounded for now | D-8330 | 6b (the count), 7 (any bound) |
+| H. A session with no Claude Code transcript is `not-applicable` | D-8331 | 6b (manifest), 6c (prompt, subject) |
+| I. The carry lock is shared with the dedupe | D-8332 | 6b |
 
 ### 5.4 Stage 4 — rescue timing, the herd, and swaps that cut work (ccd; its refusal of swaps that cut work needs stage 3)
 
@@ -761,7 +893,12 @@ actual restart or stop count.
 ## 6. Invariants kept
 
 - **No revival.** Nothing starts, restarts or swaps a session ccd would not already restart. The one new stop
-  behaviour is a graceful signal before the existing kill; the typed fallback text is unchanged.
+  behaviour is a graceful signal before the existing kill; the typed fallback text is unchanged. *(Amended 2026-11-11,
+  rev 12: superseded in part by the operator's Q4 ruling (a), built by #2603 (D-8123, D-8173). ccd restarts a no-room
+  session in place after a stated reset (`ccd/ccd#_watchdog_resume_run`, cause `limit-resume`). The typed fallback types
+  D-5237's composed prompt. In 6a the stop's default sends no signal; it adds a bounded pane read before the kill (at
+  swap and limit-resume) and a detached observer unit after it, and SIGTERM before the kill only behind
+  `graceful-stop-live` (D-8317, D-8318).)*
 - **A new, named process-stop authority, bounded.** Stage 6 stops the scopes of panes ccd itself ends and (C11)
   dead ccd pane scopes that have done nothing for six hours and serve nothing; never a scope of another live tmux
   server, and never a scope that is not a pane's.
@@ -771,7 +908,10 @@ actual restart or stop count.
 - **Additive wire**, one reader per field per mode, absence means unknown, `FLEET_PROTO` unchanged.
 - **Mutation-table discipline** for every guard named above.
 - **Per exec kind.** A session with no Claude Code transcript (the Codex lane) is `not-applicable`, never an empty
-  list and never a refusal, and gets no variable it does not read.
+  list and never a refusal, and gets no variable it does not read. *(Amended 2026-11-11, rev 12: "(the Codex lane)" is
+  false on main. A codex lane runs Claude Code itself (`ccd/ccrc-codex` execs the upstream Claude Code binary in place)
+  and writes its transcripts. `not-applicable` is keyed on a session whose config root holds no Claude Code transcript
+  for its uuid, not on the exec kind (call H, D-8331, COORDINATOR note 8 of the 6a plan).)*
 
 ## 7. Surfaces touched
 
@@ -818,7 +958,10 @@ actual restart or stop count.
 - **A near-reset wait lasts longer than the reset promised:** it ends `RESCUE_WAIT_GRACE` after the reset, in
   place only on an armed pane, otherwise in a swap; the hold in place lasts at most `RESCUE_CHAIN_WAIT` past the
   reset, then the session is rescued as today; a row stale on arrival opens no wait.
-- **A stalled session idles on a reset account:** a stalled session's waits end in a swap, never in place; the one
+- **A stalled session idles on a reset account:** a stalled session's waits end in a swap, never in place; *(amended
+  2026-11-11, rev 12: since #2603, a session waiting on the rate-limit menu with no account to move to is restarted in
+  place on its own account once its stated reset has passed and the account measures room
+  (`ccd/ccd#_watchdog_resume_here`, then `_watchdog_resume_run`))* the one
   case left is a stalled session whose own account is the only one with room, left as today and counted by §9
   (§11 item 6).
 - **A chain wait on an account with a far reset:** bounded at 30 minutes, then a swap that skips the account just
@@ -845,6 +988,11 @@ census deduplicated by run id, the post-swap outcome classifier, the pressure-ki
 | 5 | holed or unmeasured wave-dones accepted without a note | not measured | 0 |
 | 6 | pressure kills of background shells; dead ccd scopes that pass the inert test yet survive a day; OOM stops of pane scopes whose session was idle 30 minutes or more with a live background shell, and all pane-scope OOM stops | 186 since 2026-09-04 (9 since 09-18); 5 of 12 on 2026-09-23; B, measured the week before the variable ships, and 16 in 2026-09-16..23 | 0 (from wave 4b's variable); 0 once the operator arms the stop — while it is shadowed every inert scope survives by design, and `--stage 6` reports the count off the sweep's verdict record; at most B + 2 a week, reported |
 | 7 | keep-time stops that revert an operator's `/model` (those ccd logs: a value outside the vocabulary, or refused; the stops that could not read the transcript or recognise its acknowledgement are reported beside it; a session stopped for good, or archived then removed, is counted with no restart: an over-count by design) | this session's case | 0 |
+
+*(Amended 2026-11-11, rev 12.)* Stage 3's baseline of 11 of 30 comes from a window now past retention. It is re-cut from
+6b's shadow week, which counts restarts with a non-empty manifest (call F, D-8329). The graceful stop's bound is read by
+`deploy/measure-continuity.py --stage 3`'s `graceful_stop` section (`deploy/measure-continuity.py#stage3`, D-8321); it
+sets the bound and is not a target.
 
 Stage 1's first merges meet the backlog C9 does not backfill: 43 of the 673 return-visit pairs on the box exceed
 `CARRY_MERGE_BUDGET` and defer part of their walk. Its row is therefore reported over all carries and over carries
@@ -905,6 +1053,9 @@ can ship any time. Before stage 3 no handoff record exists, so a handed-over wai
 stopped; that is §5.6's named cost. The second, ccd stopping a scope when it ends a pane, ships with or after stage
 3. The stage-2 decision is made (rev 11: the manifest is primary), so no native handoff record exists for it to read. Stage 7 is independent. Stage 5's clauses are appended after the landing spec's
 stage 1. The landing spec's stage 5 needs this spec's stage 1.
+
+*(Amended 2026-11-11, rev 12.)* Stage 3 ships as 6a, then 6b once 6a lands, then 6c after 6b's shadow week (§5.3).
+Waves 7 to 9 still depend on wave 6; which sub-wave each needs is settled when each is planned.
 
 ## 11. Operator decisions
 
@@ -978,9 +1129,9 @@ Decided on the written spec, 2026-09-23 — items 1–2 first, items 3–5 on th
    is the restart this item ruled out. A wait with no stated reset stays the operator's. The rows are re-read after #2603
    deploys.
 
-Decided 2026-11-07, when the operator offered a scratch account (the programme's items 59 and 75):
+Decided 2026-11-07, when the operator offered an account, a real one and not a scratch one (D-8252; the programme's items 59 and 75):
 
-7. **The programme resumes, and the operator lends a scratch account for the spike.** This lifts the stop of
+7. **The programme resumes, and the operator lends an account for the spike.** This lifts the stop of
    2026-10-20, which held waves 5 to 9 until an account was offered.
 8. **The reduced spike; the manifest is primary.** Of the four shapes offered (reduced; full on the fleet after a ccd
    change; full off the fleet on a throwaway box; none), the operator chose the reduced one. Stage 3 uses ccd's
@@ -993,5 +1144,6 @@ Decided 2026-11-07, when the operator offered a scratch account (the programme's
 
 Preventing the rate-limit deaths themselves (no headroom estimation, C4); recovering the partial output of an agent
 cut mid-turn (a resumed agent re-runs from its start); reconciling divergent transcripts across roots (counted and
-named, never overwritten); server mail carrying resume lists; typing anything but the fallback's constant; the Codex
-lane's delegation (`not-applicable`).
+named, never overwritten); typing anything but the fallback's composed prompt; the Codex
+lane's delegation (`not-applicable`). *(Amended 2026-11-11, rev 12: "server mail carrying resume lists" is no longer
+out of scope, C15; "the fallback's constant" was false from D-5237 on; "the Codex lane's delegation" rests on the premise §6's rev-12 note corrects: `not-applicable` is keyed on a session whose config root holds no Claude Code transcript for its uuid, not on the exec kind (call H, D-8331).)*
