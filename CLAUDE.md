@@ -209,10 +209,11 @@ generated value is never hand-edited, and the contrast gate rules on the result 
   `workflow_dispatch` full run (`gh workflow run ci.yml --ref <branch> -f mode=full`). **Dispatch it ONCE per accepted
   tip** — after review, never per push or fix round (D-8266: about 51 such runs in four days cost ~23k
   runner-minutes). First cancel a superseded one on the same branch (`gh run list --workflow ci.yml --branch <branch>
-  --event workflow_dispatch --status in_progress`, then `gh run cancel <id>`). Read ONLY its Linux legs as the
-  arbiter: a dispatched full run calls the macOS legs, which are advisory and off the merge path (operator rulings
-  2026-10-28 and 2026-11-02), so its `full-suite` can be red on macOS alone. A flake that CI ran and passed
-  is a flake. `ccd-session-state`'s window is `the supervisor heartbeat > a swap
+  --event workflow_dispatch --status in_progress`, then `gh run cancel <id>`). A dispatched full run skips the macOS
+  legs unless dispatched with `-f macos=true` (D-8396): its `full-suite` reads that skip as deliberate and is named
+  `full-suite (macOS skipped)`, which is no green-full-suite evidence for the daily run or the stable gate. With
+  `macos=true`, read ONLY its Linux legs as the arbiter: the macOS legs are advisory and off the merge path (operator
+  rulings 2026-10-28 and 2026-11-02). A flake that CI ran and passed is a flake. `ccd-session-state`'s window is `the supervisor heartbeat > a swap
   re-stamps while it carries` (`expected ['mid-carry:orphan'] to include 'mid-carry:restarting'`) — measured
   2026-08-16 at 2/4 full runs and 1/3 under concurrent load, but **0/6 on an idle box**, so isolation alone can
   clear it and a single green isolated run is not proof it was the load. `ccd-bounded-reads`' D4 family bounds
@@ -311,11 +312,21 @@ generated value is never hand-edited, and the contrast gate rules on the result 
   of them infrastructure: `reach.mjs` `docsOnly`; a root `.md` is not one; D-7868, the operator's direction of
   2026-11-03) runs only what can see it: in the queue, the server tests a pull request runs for it (the fast plan, from
   the queue's base), no node floor or agent tests, and the pwa suite whole; on a pull request without `full-ci`, no
-  agent tests, pwa typecheck, pwa build or Storybook. Every skip is by step, so the required checks still report. The queue is the
+  agent tests, pwa typecheck, pwa build or Storybook. Every skip is by step, so the required checks still report. **A docs-only
+  follow-up push** (D-8396, the operator's approval of 2026-11-12) runs none of the heavy pull-request jobs: when every
+  file changed since the PR's newest head with a passing `ci.yml` run (an ancestor of this head) is `docs/**` or a root
+  `*.md` (`.github/ci/docs-followup.mjs` `FOLLOWUP_DOCS_PATTERNS`, the one list; wider than `docsOnly` because the head
+  before already passed and the queue runs everything), `select` answers `docs_followup` from one REST call with the
+  job's own token, and the server jobs, the perf legs, the pwa shards and static checks, the node floor and
+  `storybook-a11y` skip, while `test (server)`, `test (agent)`, `test (pwa)` and `build-pwa` still report success
+  (`test (agent)` and `build-pwa` carry no `needs:`, so they keep their own per-path skip). A first push, any other
+  change, a force-push past every passing head, a pipeline change, the `full-ci` label or a `train/` head, and any
+  failed lookup run everything; the merge queue never asks. The queue is the
   safety net for everything the fast run leaves out, so nobody bypasses it: an admin merge that skips the queue
   (`gh pr merge --admin`; the ruleset's admin bypass allows it) lands on the fast run only, so never use it; ccrc's admin-merge door (D-8124) refuses any repository with a merge queue, so it never lands here. **The macOS legs** (`test-macos`, `probe-macos`)
-  live in `.github/workflows/macos.yml`, off the merge path and off the push to `main` (2026-11-02): the daily run calls them (their nightly run), a dispatched
-  or called full run (release-stable's gate) runs the tests, and `gh workflow run macos.yml` runs both on demand; a red
+  live in `.github/workflows/macos.yml`, off the merge path and off the push to `main` (2026-11-02): the daily run calls them (their nightly run), a called full run
+  (release-stable's gate) runs the tests, a dispatched full run only with `-f macos=true` (D-8396), and `gh workflow
+  run macos.yml` runs both on demand; a red
   one is a failing run on `main`, never a PR's or a queue entry's. **CodeQL** is an advanced setup (`.github/workflows/codeql.yml`, D-7744), not GitHub's default setup: it scans every pull request to `main` and `main` once a day, never a push to `main` and never the merge queue, and it feeds no required check. **A merge
   to `main`** starts no `ci.yml` run: a `refresh` run **every three hours** (cron plus `workflow_dispatch -f mode=refresh`, one concurrency
   group so runs coalesce; the scheduled one traces nothing when `main` has not moved since the newest map, D-7747) re-traces the tests every merge since the last refresh affected and updates the map, running

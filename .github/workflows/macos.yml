@@ -6,9 +6,12 @@
 #     (`probe: true`) as a call of its own that gates nothing. That run is
 #     skipped when main's head already carries a green `full-suite`, so an
 #     unchanged, verified main costs no macOS run;
-#   - in ci.yml's dispatched and called full runs, the tests only, so
-#     release-stable's gate runs them before a promotion when no green
-#     `full-suite` is on the commit;
+#   - in ci.yml's called full runs, the tests only, so release-stable's gate
+#     runs them before a promotion when no green `full-suite` is on the commit;
+#     and in a dispatched full run only when it asks (`-f macos=true`): by
+#     default a dispatch skips the call on purpose (D-8396, the operator's
+#     approval of 2026-11-12), and its full-suite, renamed `full-suite (macOS
+#     skipped)`, is no evidence for the daily run or the stable gate;
 #   - on a dispatch of this workflow (`gh workflow run macos.yml --ref <ref>`),
 #     both legs, for the day a Darwin change wants its answer before the night.
 # A push to main no longer starts a run (D-7745): 56 of the 65 per-push runs to

@@ -22,6 +22,16 @@
 #                       `train/`, or a change to shared infrastructure (under
 #                       .github/, a manifest or lockfile, a vitest or tsconfig,
 #                       select-tests.mjs `infraTrigger`) makes it the full run.
+#                       A DOCS-ONLY FOLLOW-UP PUSH (D-8396, the operator's
+#                       approval of 2026-11-12) runs none of the heavy jobs:
+#                       when every file changed since this pull request's
+#                       newest head with a passing run is docs/** or a root
+#                       *.md (.github/ci/docs-followup.mjs, one REST call in
+#                       `select`), the server jobs, the pwa shards and static
+#                       checks, Storybook's render and the node floor skip, and
+#                       the required check names still report success. A first
+#                       push, any other change, a pipeline change, the
+#                       `full-ci` label or a failed lookup runs everything.
 #   merge_group         full     — the queue is where the whole suite runs
 #                       (operator ruling 2026-10-25, replacing 2026-09-28's
 #                       "what a pull request runs"): every server shard, the
@@ -62,6 +72,11 @@
 #                       carries a green `full-suite`.
 #   workflow_dispatch   full (default) or rebuild; `workers` (2 or 4) sets the
 #                       vitest workers per server shard for that run alone.
+#                       The macOS legs run only with `-f macos=true` (D-8396,
+#                       the operator's approval of 2026-11-12): by default the
+#                       call is skipped on purpose, full-suite reads that skip
+#                       as not red, and names itself `full-suite (macOS
+#                       skipped)`, which is no green-full-suite evidence.
 #   workflow_call       the mode the caller passes — release-stable.yml's
 #                       gate runs `full` here before it promotes.
 # While CCRC_SELECTION (below) says `shadow`, `selected` mode computes and
@@ -151,6 +166,13 @@ on:
         type: choice
         options: ['2', '4']
         default: '2'
+      # D-8396 (the operator's approval of 2026-11-12): a dispatched full run leaves the macOS legs out unless asked.
+      # Off, the `macos` call is skipped on purpose and full-suite reads that skip as deliberate, not red. The daily
+      # run and a call (release-stable's gate, which declares no such input) run them as before.
+      macos:
+        description: 'Run the macOS legs too (test-macos, through macos.yml). Off by default: full-suite reads their skip as deliberate.'
+        type: boolean
+        default: false
   workflow_call:
     inputs:
       mode:
@@ -262,6 +284,8 @@ jobs:
       floor: ${{ steps.select.outputs.floor }}
       fast: ${{ steps.select.outputs.fast }}
       untraced: ${{ steps.select.outputs.untraced }}
+      docs_followup: ${{ steps.select.outputs.docs_followup }}
+      macos_off: ${{ steps.select.outputs.macos_off }}
     steps:
       # Full depth: the changed set is `git diff <map-sha> HEAD`, and the map's
       # commit must be present to be diffed against.
@@ -386,6 +410,27 @@ jobs:
             echo "::warning::could not read this commit's workflow runs; running the full suite rather than skipping it"
           fi
           echo "full_green=$full_green" >> "$GITHUB_OUTPUT"
+      # D-8396: is this push a docs-only follow-up to a head whose pull-request run passed? One REST call with the
+      # job's own read-only token (.github/ci/docs-followup.mjs has the rule); every doubt answers false, which runs
+      # everything, and so does a failure of the step itself. Asked only on a pull request whose pipeline the plain-bash
+      # step above found unchanged, so a change to the module is never judged by itself; never in the merge queue.
+      - name: Is this push a docs-only follow-up?
+        id: followup
+        if: github.event_name == 'pull_request' && steps.pipeline.outputs.changed == 'false'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          REPO_ID: ${{ github.repository_id }}
+          RUN_ID: ${{ github.run_id }}
+          PR: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          HEAD_REF: ${{ github.head_ref }}
+          HEAD_REPO_ID: ${{ github.event.pull_request.head.repo.id }}
+          FULL_LABEL: ${{ contains(github.event.pull_request.labels.*.name, 'full-ci') || startsWith(github.head_ref, 'train/') }}
+        run: |
+          node .github/ci/docs-followup.mjs --repo "$REPO" --repo-id "$REPO_ID" --run-id "$RUN_ID" --pr "$PR" --event pull_request \
+            --head-sha "$HEAD_SHA" --head-ref "$HEAD_REF" --head-repo-id "$HEAD_REPO_ID" --full-label "$FULL_LABEL" --checkout "$GITHUB_WORKSPACE" \
+            || echo "::warning::the docs-only follow-up check failed; everything runs"
       - name: Select
         id: select
         env:
@@ -403,6 +448,10 @@ jobs:
           # A pull request's base, or the merge queue's base sha: a docs-only group selects from it as a pull request
           # does, and reach.mjs's `--ask fast` answers true for it (D-7868).
           BASE: ${{ github.event_name == 'merge_group' && github.event.merge_group.base_sha || format('origin/{0}', github.base_ref) }}
+          # D-8396: the follow-up step's answer ('' when it was not asked), and a dispatch's macos input: '' for every
+          # other trigger, a call included (the called run's event is its caller's, so the workflow's name is checked too).
+          DOCS_FOLLOWUP: ${{ steps.followup.outputs.docs_followup }}
+          INPUT_MACOS: ${{ github.event_name == 'workflow_dispatch' && github.workflow == 'ci' && toJSON(inputs.macos) || '' }}
         run: |
           args=(--repo "$GITHUB_WORKSPACE" --event "$EVENT" --base "$BASE" --selection "$CCRC_SELECTION" --full-green "$FULL_GREEN" --map "$RUNNER_TEMP/ci-cache/testmap.json" --trace-list "$RUNNER_TEMP/ci-cache/traced.txt")
           if [ -n "$INPUT_MODE" ]; then args+=(--input-mode "$INPUT_MODE"); elif [ "$PIPELINE_CHANGED" = true ] || [ "$FULL_LABEL" = true ]; then args+=(--input-mode full); fi
@@ -419,6 +468,14 @@ jobs:
           # The fast run (operator ruling 2026-10-28): an ordinary pull request runs the fast checks only, and its
           # server tests come from the fast-plan job. Appended to this step's outputs, `fast=true|false`.
           node .github/ci/reach.mjs --ask fast --event "$EVENT" --base "$BASE" --full-label "$FULL_LABEL"
+          # D-8396: the two answers the jobs below read, written here so every select output has this one source.
+          if [ "$DOCS_FOLLOWUP" = true ]; then echo "docs_followup=true"; else echo "docs_followup=false"; fi >> "$GITHUB_OUTPUT"
+          if [ "$EVENT" = workflow_dispatch ] && [ "$INPUT_MACOS" = false ]; then
+            echo "macos_off=true" >> "$GITHUB_OUTPUT"
+            echo "**The macOS legs are skipped on purpose (D-8396):** dispatch with \`-f macos=true\` to run them." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "macos_off=false" >> "$GITHUB_OUTPUT"
+          fi
       # map-build refreshes against EXACTLY the map this job diffed from, not
       # whatever is newest by the time it runs, and is told which tests this
       # job MEANT to trace — a test whose trace never arrived is written
@@ -491,7 +548,8 @@ jobs:
   fast-plan:
     name: plan fast server tests
     needs: [select, deps]
-    if: ${{ !cancelled() && needs.select.result == 'success' && needs.select.outputs.fast == 'true' }}
+    # D-8396: not for a docs-only follow-up push, whose server jobs skip on purpose (`test (server)` reads that).
+    if: ${{ !cancelled() && needs.select.result == 'success' && needs.select.outputs.fast == 'true' && needs.select.outputs.docs_followup != 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     # actions: read — the durations are an artifact of a trusted main run, as in select.
@@ -565,7 +623,8 @@ jobs:
     needs: [select, deps, fast-plan]
     # A fast pull request runs fast-plan's matrix (never empty: the guard suites always run); every other run runs
     # select's.
-    if: ${{ !cancelled() && (needs.select.outputs.fast == 'true' && needs.fast-plan.result == 'success' && needs.fast-plan.outputs.count != '0' || needs.select.outputs.fast != 'true' && needs.select.outputs.count != '0' && (needs.select.outputs.tests == 'selected' || needs.select.outputs.tests == 'full')) }}
+    # Never on a docs-only follow-up push (D-8396).
+    if: ${{ !cancelled() && needs.select.outputs.docs_followup != 'true' && (needs.select.outputs.fast == 'true' && needs.fast-plan.result == 'success' && needs.fast-plan.outputs.count != '0' || needs.select.outputs.fast != 'true' && needs.select.outputs.count != '0' && (needs.select.outputs.tests == 'selected' || needs.select.outputs.tests == 'full')) }}
     runs-on: ubuntu-24.04
     # A deadline, not the default. Without this key a wedged job runs for
     # GitHub's 360 minutes before anyone learns it wedged. Each shard is
@@ -671,7 +730,8 @@ jobs:
   server-typecheck:
     name: typecheck (server)
     needs: select
-    if: needs.select.outputs.tests == 'selected' || needs.select.outputs.tests == 'full'
+    # Not on a docs-only follow-up push (D-8396): no file it reads changed since a head whose run passed.
+    if: needs.select.outputs.docs_followup != 'true' && (needs.select.outputs.tests == 'selected' || needs.select.outputs.tests == 'full')
     runs-on: ubuntu-24.04
     # tsc over server/src alone; about a minute. 15 carries a cold npm cache.
     timeout-minutes: 15
@@ -706,7 +766,7 @@ jobs:
   server-perf:
     name: perf (server)
     needs: [select, deps]
-    if: ${{ !cancelled() && needs.select.outputs.fast != 'true' && needs.select.outputs.count != '0' && (needs.select.outputs.tests == 'selected' || needs.select.outputs.tests == 'full') }}
+    if: ${{ !cancelled() && needs.select.outputs.docs_followup != 'true' && needs.select.outputs.fast != 'true' && needs.select.outputs.count != '0' && (needs.select.outputs.tests == 'selected' || needs.select.outputs.tests == 'full') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
@@ -744,7 +804,7 @@ jobs:
   mask-perf:
     name: perf (secret-mask)
     needs: [select, deps]
-    if: ${{ !cancelled() && needs.select.outputs.fast != 'true' && needs.select.outputs.count != '0' && (needs.select.outputs.tests == 'selected' || needs.select.outputs.tests == 'full') }}
+    if: ${{ !cancelled() && needs.select.outputs.docs_followup != 'true' && needs.select.outputs.fast != 'true' && needs.select.outputs.count != '0' && (needs.select.outputs.tests == 'selected' || needs.select.outputs.tests == 'full') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
@@ -798,7 +858,7 @@ jobs:
       # A fast pull request's verdict is over the fast plan's shards: the plan must have succeeded, and its count is
       # the one judged (operator ruling 2026-10-28). Any other run never reads fast-plan, which it skips.
       - name: Refuse a prerequisite that did not succeed (no script involved)
-        if: needs.select.result != 'success' || contains(fromJSON('["failure","cancelled"]'), needs.server-shard.result) || contains(fromJSON('["failure","cancelled"]'), needs.server-typecheck.result) || (needs.select.outputs.fast == 'true' && needs.fast-plan.result != 'success')
+        if: needs.select.result != 'success' || contains(fromJSON('["failure","cancelled"]'), needs.server-shard.result) || contains(fromJSON('["failure","cancelled"]'), needs.server-typecheck.result) || (needs.select.outputs.fast == 'true' && needs.select.outputs.docs_followup != 'true' && needs.fast-plan.result != 'success')
         run: exit 1
       - name: Refuse a node floor that did not succeed in the merge queue
         if: github.event_name == 'merge_group' && needs.node-floor.result != 'success'
@@ -815,6 +875,9 @@ jobs:
           TESTS: ${{ needs.select.outputs.fast == 'true' && 'selected' || needs.select.outputs.tests }}
           COUNT: ${{ needs.select.outputs.fast == 'true' && needs.fast-plan.outputs.count || needs.select.outputs.count }}
           EVENT: ${{ github.event_name }}
+          # D-8396: a docs-only follow-up push, whose typecheck and shards skip on purpose; verdict.mjs passes it on a
+          # pull request alone, and only with both skipped.
+          FOLLOWUP: ${{ needs.select.outputs.docs_followup }}
         run: node .github/ci/verdict.mjs server
 
   # `test (agent)` — required BY NAME, so this matrix keeps its id, its axis
@@ -904,7 +967,10 @@ jobs:
     # The run's one install (D-6770), restored read-only through server-deps
     # like the server shards; `!cancelled()` so a failed `deps` only costs the
     # shard its own install. `pwa` below still reads every shard's result.
-    needs: deps
+    # `select` lends only its `docs_followup` answer (D-8396): a docs-only
+    # follow-up push skips every step, so the shard reports success; a failed
+    # select answers nothing, and the shard runs as before.
+    needs: [deps, select]
     if: ${{ !cancelled() }}
     runs-on: ubuntu-24.04
     # A deadline, not the default: a shard is about four minutes plus install,
@@ -936,8 +1002,10 @@ jobs:
 
       # '22', as `deps` and the server shards: the trees' cache key names the
       # node version setup-node resolves, so another string would always miss.
+      # A docs-only follow-up push (select's `docs_followup`, D-8396) skips every step from here on, so the job
+      # reports success without installing anything; the checkout and the ask above are cheap and run either way.
       - uses: actions/setup-node@v7
-        if: env.CCRC_LEG == 'run' && steps.reach.outputs.skip != 'true'
+        if: env.CCRC_LEG == 'run' && steps.reach.outputs.skip != 'true' && needs.select.outputs.docs_followup != 'true'
         with:
           node-version: '22'
           cache: npm
@@ -958,14 +1026,14 @@ jobs:
       # directory already exists; this ordering is the only thing that proves
       # it on a clean checkout.
       - uses: ./.github/actions/server-deps
-        if: env.CCRC_LEG == 'run' && steps.reach.outputs.skip != 'true'
+        if: env.CCRC_LEG == 'run' && steps.reach.outputs.skip != 'true' && needs.select.outputs.docs_followup != 'true'
         with:
           platform: linux
 
       # Local binary, never npx: `npx vitest` resolves to a global cache copy
       # with no jsdom and falsely reports "no tests" alongside 39 errors.
       - name: Test
-        if: env.CCRC_LEG == 'run' && steps.reach.outputs.skip != 'true'
+        if: env.CCRC_LEG == 'run' && steps.reach.outputs.skip != 'true' && needs.select.outputs.docs_followup != 'true'
         working-directory: pwa
         env:
           SCOPE: ${{ steps.reach.outputs.scope }}
@@ -993,8 +1061,9 @@ jobs:
   # match their seeds. Same step-level skip as the shards.
   pwa-static:
     name: pwa typecheck and storybook
-    # Same install as the shards: the `deps` entry, restored read-only.
-    needs: deps
+    # Same install as the shards: the `deps` entry, restored read-only; and
+    # select's `docs_followup`, as the shards read it (D-8396).
+    needs: [deps, select]
     if: ${{ !cancelled() }}
     runs-on: ubuntu-24.04
     timeout-minutes: 30
@@ -1018,8 +1087,10 @@ jobs:
         run: node .github/ci/reach.mjs --pkg pwa-build --event pull_request --base "origin/$BASE_REF" --full-label "$FULL_LABEL"
       # '22', as `deps` and the server shards: the trees' cache key names the
       # node version setup-node resolves, so another string would always miss.
+      # A docs-only follow-up push (select's `docs_followup`, D-8396) skips every step from here on, so the job
+      # reports success without installing anything; the checkout and the ask above are cheap and run either way.
       - uses: actions/setup-node@v7
-        if: env.CCRC_LEG == 'run' && steps.reach.outputs.skip != 'true'
+        if: env.CCRC_LEG == 'run' && steps.reach.outputs.skip != 'true' && needs.select.outputs.docs_followup != 'true'
         with:
           node-version: '22'
           cache: npm
@@ -1032,22 +1103,22 @@ jobs:
       # The same restored install, ui included, before the typecheck, for the
       # shards' reason above.
       - uses: ./.github/actions/server-deps
-        if: env.CCRC_LEG == 'run' && steps.reach.outputs.skip != 'true'
+        if: env.CCRC_LEG == 'run' && steps.reach.outputs.skip != 'true' && needs.select.outputs.docs_followup != 'true'
         with:
           platform: linux
 
       - name: Typecheck
-        if: env.CCRC_LEG == 'run' && steps.reach.outputs.skip != 'true'
+        if: env.CCRC_LEG == 'run' && steps.reach.outputs.skip != 'true' && needs.select.outputs.docs_followup != 'true'
         working-directory: pwa
         run: ./node_modules/.bin/tsc --noEmit
 
       - name: Typecheck @ccrc/ui (incl. .storybook and stories)
-        if: env.CCRC_LEG == 'run' && steps.reach.outputs.skip != 'true'
+        if: env.CCRC_LEG == 'run' && steps.reach.outputs.skip != 'true' && needs.select.outputs.docs_followup != 'true'
         working-directory: ui
         run: ./node_modules/.bin/tsc --noEmit
 
       - name: Generated palettes match their seeds
-        if: env.CCRC_LEG == 'run' && steps.reach.outputs.skip != 'true'
+        if: env.CCRC_LEG == 'run' && steps.reach.outputs.skip != 'true' && needs.select.outputs.docs_followup != 'true'
         working-directory: ui
         run: npm run themes:check
 
@@ -1058,7 +1129,7 @@ jobs:
       # `storybook-a11y` job below, which is not required; this step stays
       # because it is the cheap half and it runs under a required check.
       - name: Storybook builds (the one surface that renders the components)
-        if: env.CCRC_LEG == 'run' && steps.reach.outputs.skip != 'true'
+        if: env.CCRC_LEG == 'run' && steps.reach.outputs.skip != 'true' && needs.select.outputs.docs_followup != 'true'
         working-directory: ui
         run: npm run build-storybook
 
@@ -1131,7 +1202,10 @@ jobs:
     # The browser download dominates; each skin's build and axe run is ~40s
     # for 180 stories, and the job runs one per skin.
     timeout-minutes: 20
-    if: github.event_name != 'merge_group' && !(github.event.schedule == '23 */3 * * *' || inputs.mode == 'refresh' || inputs.mode == 'rebuild')
+    # And not on a docs-only follow-up push (D-8396): select's answer, so the job
+    # waits on select; a failed select skips this advisory job, which gates nothing.
+    needs: select
+    if: github.event_name != 'merge_group' && !(github.event.schedule == '23 */3 * * *' || inputs.mode == 'refresh' || inputs.mode == 'rebuild') && needs.select.outputs.docs_followup != 'true'
     steps:
       # No token left behind: at this checkout major the token sits in a file
       # under the runner's temp directory only for the checkout's own fetch,
@@ -1217,9 +1291,11 @@ jobs:
   # select's matrix, and `full-suite` needs it (design 2026-09-23 ruling 6);
   # `macos-probe` runs probe-macos on the daily run only, and nothing needs it.
   # Never on a pull request or a merge-queue run.
+  # A dispatch skips this call unless `-f macos=true` (select's `macos_off`, D-8396), and full-suite reads that skip
+  # as deliberate; the daily run and a call run it as before.
   macos:
     needs: select
-    if: github.event_name != 'merge_group' && github.event_name != 'pull_request' && needs.select.outputs.macos_count != '0' && (needs.select.outputs.tests == 'selected' || needs.select.outputs.tests == 'full')
+    if: github.event_name != 'merge_group' && github.event_name != 'pull_request' && needs.select.outputs.macos_off != 'true' && needs.select.outputs.macos_count != '0' && (needs.select.outputs.tests == 'selected' || needs.select.outputs.tests == 'full')
     permissions:
       contents: read
       actions: read
@@ -1480,7 +1556,7 @@ jobs:
     # list runs in seconds. 30 is a deadline, not an estimate.
     timeout-minutes: 30
     env:
-      CCRC_LEG: ${{ (github.event.schedule == '23 */3 * * *' || inputs.mode == 'refresh' || inputs.mode == 'rebuild' || (github.event_name == 'pull_request' && (needs.select.outputs.fast == 'true' || needs.select.outputs.floor != 'true')) || (github.event_name == 'merge_group' && needs.select.outputs.fast == 'true')) && 'skip' || 'run' }}
+      CCRC_LEG: ${{ (github.event.schedule == '23 */3 * * *' || inputs.mode == 'refresh' || inputs.mode == 'rebuild' || (github.event_name == 'pull_request' && (needs.select.outputs.fast == 'true' || needs.select.outputs.floor != 'true' || needs.select.outputs.docs_followup == 'true')) || (github.event_name == 'merge_group' && needs.select.outputs.fast == 'true')) && 'skip' || 'run' }}
     steps:
       - uses: actions/checkout@v7
         if: env.CCRC_LEG == 'run'
@@ -1827,6 +1903,10 @@ jobs:
   # request's run (main-artifact.mjs green-full-suite) — and reads the
   # `verdict` output when it called this file itself.
   full-suite:
+    # D-8396: a dispatched full run that left the macOS legs out on purpose names this job `full-suite (macOS
+    # skipped)`, which main-artifact.mjs `isGreenFullSuiteJob` does not read as evidence, so such a run can neither
+    # stand in for the daily run's macOS legs nor promote to stable. Every other run keeps the name `full-suite`.
+    name: ${{ needs.select.outputs.macos_off == 'true' && 'full-suite (macOS skipped)' || 'full-suite' }}
     needs: [select, server, server-shard, server-typecheck, test, pwa, build-pwa, macos, node-floor, browser-pwa]
     # Never on a merge-queue run or a pull request: both skip the macOS call, and a
     # run that fell back to `full` would read that skip as a red leg (landing-
@@ -1839,9 +1919,15 @@ jobs:
       verdict: ${{ steps.verdict.outputs.verdict }}
     steps:
       # Script-free, and can only ADD red: any leg that did not succeed fails
-      # this job before verdict.mjs is even checked out.
+      # this job before verdict.mjs is even checked out. A dispatch that left
+      # the macOS legs out on purpose (select's `macos_off`, D-8396) has its
+      # skips judged by the second step instead, which refuses a skip of every
+      # leg but the macOS call.
       - name: Refuse any leg that did not succeed (no script involved)
-        if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') || contains(needs.*.result, 'skipped')
+        if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') || (contains(needs.*.result, 'skipped') && needs.select.outputs.macos_off != 'true')
+        run: exit 1
+      - name: Refuse a skipped leg other than the macOS call a dispatch left out (no script involved)
+        if: needs.select.outputs.macos_off == 'true' && (needs.select.result == 'skipped' || needs.server.result == 'skipped' || needs.server-shard.result == 'skipped' || needs.server-typecheck.result == 'skipped' || needs.test.result == 'skipped' || needs.pwa.result == 'skipped' || needs.build-pwa.result == 'skipped' || needs.node-floor.result == 'skipped' || needs.browser-pwa.result == 'skipped')
         run: exit 1
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
@@ -1854,6 +1940,8 @@ jobs:
       - name: Verdict
         id: verdict
         env:
+          # D-8396: `macos` when a dispatch left the macOS legs out on purpose; verdict.mjs excuses that skip alone.
+          SKIPPED_ON_PURPOSE: ${{ needs.select.outputs.macos_off == 'true' && 'macos' || '' }}
           RESULTS: select=${{ needs.select.result }} server=${{ needs.server.result }} server-shard=${{ needs.server-shard.result }} server-typecheck=${{ needs.server-typecheck.result }} test=${{ needs.test.result }} pwa=${{ needs.pwa.result }} build-pwa=${{ needs.build-pwa.result }} macos=${{ needs.macos.result }} node-floor=${{ needs.node-floor.result }} browser-pwa=${{ needs.browser-pwa.result }}
         run: |
           node .github/ci/verdict.mjs full

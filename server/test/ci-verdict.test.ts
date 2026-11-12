@@ -22,7 +22,7 @@ import { writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { mkTmp } from './tmpHelpers.js';
-import { serverVerdict, fullVerdict } from '../../.github/ci/verdict.mjs';
+import { serverVerdict, fullVerdict, DELIBERATE_SKIPS } from '../../.github/ci/verdict.mjs';
 import type { JobResult, TestsMode } from '../../.github/ci/verdict.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -198,6 +198,61 @@ describe('fullVerdict', () => {
   });
 });
 
+describe('serverVerdict — a docs-only follow-up push (D-8396)', () => {
+  const ok = (over: Partial<Parameters<typeof serverVerdict>[0]>) => serverVerdict({
+    select: 'success', typecheck: 'skipped', shards: 'skipped', tests: 'selected', count: '', event: 'pull_request', followup: 'true', ...over,
+  });
+
+  it('a pull request whose select answered the follow-up, with the typecheck and the shards skipped: green', () => {
+    expect(ok({}).ok).toBe(true);
+    expect(ok({}).reason).toContain('D-8396');
+  });
+
+  it('red off a pull request, on a select that did not succeed, and when a skipped job ran after all', () => {
+    for (const event of ['merge_group', 'push', 'schedule', 'workflow_dispatch', '']) expect(ok({ event }).ok, event).toBe(false);
+    for (const select of ['failure', 'cancelled', 'skipped', ''] as const) expect(ok({ select }).ok, select).toBe(false);
+    for (const r of ['success', 'failure', 'cancelled', ''] as const) {
+      expect(ok({ typecheck: r }).ok, `typecheck ${r}`).toBe(false);
+      expect(ok({ shards: r }).ok, `shards ${r}`).toBe(false);
+    }
+  });
+
+  it('any followup value but `true` is the ordinary rule, unchanged', () => {
+    for (const followup of ['false', '', undefined]) {
+      expect(serverVerdict({ select: 'success', typecheck: 'skipped', shards: 'skipped', tests: 'selected', count: '', event: 'pull_request', followup }).ok).toBe(false);
+      expect(serverVerdict({ select: 'success', typecheck: 'success', shards: 'success', tests: 'selected', count: '3', event: 'pull_request', followup }).ok).toBe(true);
+    }
+  });
+});
+
+describe('fullVerdict — the macOS legs a dispatch skipped on purpose (D-8396)', () => {
+  const legs = { select: { result: 'success' }, server: { result: 'success' }, pwa: { result: 'success' } };
+
+  it('a deliberate skip of macos is green; the same skip undeclared is red', () => {
+    const v = fullVerdict({ ...legs, macos: { result: 'skipped' } }, ['macos']);
+    expect(v.ok, v.reason).toBe(true);
+    expect(v.reason).toContain('macos');
+    expect(fullVerdict({ ...legs, macos: { result: 'skipped' } }).ok).toBe(false);
+    expect(fullVerdict({ ...legs, macos: { result: 'skipped' } }, []).ok).toBe(false);
+  });
+
+  it('a declared skip excuses a skip only: a macos failure or cancellation is still red, and success is green', () => {
+    expect(fullVerdict({ ...legs, macos: { result: 'failure' } }, ['macos']).ok).toBe(false);
+    expect(fullVerdict({ ...legs, macos: { result: 'cancelled' } }, ['macos']).ok).toBe(false);
+    expect(fullVerdict({ ...legs, macos: { result: 'success' } }, ['macos']).ok).toBe(true);
+  });
+
+  it('only a leg on DELIBERATE_SKIPS may be declared: any other name is red, even when it succeeded', () => {
+    expect(DELIBERATE_SKIPS).toEqual(['macos']);
+    expect(fullVerdict({ ...legs, macos: { result: 'skipped' }, server: { result: 'skipped' } }, ['macos', 'server']).ok).toBe(false);
+    expect(fullVerdict({ ...legs, macos: { result: 'success' } }, ['server']).ok).toBe(false);
+  });
+
+  it('a verdict over nothing but the deliberate skip proves nothing', () => {
+    expect(fullVerdict({ macos: { result: 'skipped' } }, ['macos']).ok).toBe(false);
+  });
+});
+
 describe('the CLI', () => {
   const cliPath = path.join(repoRoot, '.github', 'ci', 'verdict.mjs');
 
@@ -274,6 +329,24 @@ describe('the CLI', () => {
     const r = runFull('select=success server=success test-macos=success');
     expect(r.status).toBe(0);
     expect(r.stdout.length).toBeGreaterThan(0);
+  });
+
+  it('full subcommand: SKIPPED_ON_PURPOSE=macos excuses a skipped macos and nothing else (D-8396)', () => {
+    const run = (results: string, purpose: string) => spawnSync(process.argv0, [cliPath, 'full'], {
+      cwd: repoRoot, env: { ...process.env, RESULTS: results, SKIPPED_ON_PURPOSE: purpose }, encoding: 'utf8',
+    });
+    expect(run('select=success server=success macos=skipped', 'macos').status).toBe(0);
+    expect(run('select=success server=success macos=skipped', '').status).not.toBe(0);
+    expect(run('select=success server=skipped macos=skipped', 'macos').status).not.toBe(0);
+    expect(run('select=success server=success macos=failure', 'macos').status).not.toBe(0);
+    expect(run('select=success server=success macos=skipped', 'macos server').status).not.toBe(0);
+  });
+
+  it('server subcommand: FOLLOWUP=true passes a pull request whose typecheck and shards were skipped (D-8396)', () => {
+    const env = { SELECT_RESULT: 'success', TYPECHECK_RESULT: 'skipped', SHARDS_RESULT: 'skipped', TESTS: 'selected', COUNT: '' };
+    expect(runServer({ ...env, EVENT: 'pull_request', FOLLOWUP: 'true' }).status).toBe(0);
+    expect(runServer({ ...env, EVENT: 'merge_group', FOLLOWUP: 'true' }).status).not.toBe(0);
+    expect(runServer({ ...env, EVENT: 'pull_request', FOLLOWUP: 'false' }).status).not.toBe(0);
   });
 
   it('full subcommand: exits non-zero when one result is not success, when RESULTS is empty or absent, or malformed', () => {

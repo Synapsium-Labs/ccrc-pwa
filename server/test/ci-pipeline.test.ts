@@ -25,7 +25,8 @@ import { fileURLToPath } from 'node:url';
 import { mkTmp } from './tmpHelpers.js';
 import { RECORDS_FORMAT, readRecordsDir } from '../../.github/ci/testmap.mjs';
 import { FOREIGN, queueScope } from '../../.github/ci/reach.mjs';
-import { serverVerdict } from '../../.github/ci/verdict.mjs';
+import { serverVerdict, fullVerdict } from '../../.github/ci/verdict.mjs';
+import { isGreenFullSuiteJob } from '../../.github/ci/main-artifact.mjs';
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const read = (rel: string): string => readFileSync(join(REPO, rel), 'utf8');
@@ -153,10 +154,12 @@ describe('ci.yml: the required checks cannot go missing (design 2026-09-23 §4.2
     // The pwa shards and static checks report under the aggregate `test (pwa)`,
     // and they need the run's one install (D-6770) — but only behind
     // `!cancelled()`, so a failed `deps` costs them their own install and never
-    // skips them (a skip would read as red in the aggregate).
+    // skips them (a skip would read as red in the aggregate). `select` lends
+    // only its `docs_followup` answer (D-8396), behind the same `!cancelled()`:
+    // a failed select answers nothing, and the job runs as before.
     for (const id of ['pwa-shard', 'pwa-static']) {
       expect(jobKey(job(id), 'if'), `${id}: a failed deps would skip it`).toBe('${{ !cancelled() }}');
-      expect(needs(job(id)), `${id} needs something beyond the run's one install`).toEqual(['deps']);
+      expect(needs(job(id)), `${id} needs something beyond the run's one install and select's follow-up answer`).toEqual(['deps', 'select']);
     }
   });
 
@@ -190,8 +193,10 @@ describe('ci.yml: the required checks cannot go missing (design 2026-09-23 §4.2
   it('storybook-a11y skips on the required legs\' own refresh/rebuild predicate, and never on a merge-queue run', () => {
     const m = /\n {6}CCRC_LEG: \$\{\{ \((.+)\) && 'skip' \|\| 'run' \}\}\n/.exec(job('test'));
     expect(m, 'the test leg no longer spells its CCRC_LEG switch').not.toBeNull();
+    // …and not on a docs-only follow-up push (D-8396), select's answer.
     expect(jobKey(job('storybook-a11y'), 'if'))
-      .toBe(`github.event_name != 'merge_group' && !(${m![1]})`);
+      .toBe(`github.event_name != 'merge_group' && !(${m![1]}) && needs.select.outputs.docs_followup != 'true'`);
+    expect(needs(job('storybook-a11y'))).toEqual(['select']);
   });
 
   it('storybook-a11y runs only locked binaries — no npx, which fetches whatever is newest', () => {
@@ -476,12 +481,12 @@ describe('ci.yml: the required checks cannot go missing (design 2026-09-23 §4.2
     const s = steps(job('server'))[0];
     expect(s).toBe(
       "      - name: Refuse a prerequisite that did not succeed (no script involved)\n"
-      + "        if: needs.select.result != 'success' || contains(fromJSON('[\"failure\",\"cancelled\"]'), needs.server-shard.result) || contains(fromJSON('[\"failure\",\"cancelled\"]'), needs.server-typecheck.result) || (needs.select.outputs.fast == 'true' && needs.fast-plan.result != 'success')\n"
+      + "        if: needs.select.result != 'success' || contains(fromJSON('[\"failure\",\"cancelled\"]'), needs.server-shard.result) || contains(fromJSON('[\"failure\",\"cancelled\"]'), needs.server-typecheck.result) || (needs.select.outputs.fast == 'true' && needs.select.outputs.docs_followup != 'true' && needs.fast-plan.result != 'success')\n"
       + "        run: exit 1\n");
     const f = steps(job('full-suite'))[0];
     expect(f).toBe(
       "      - name: Refuse any leg that did not succeed (no script involved)\n"
-      + "        if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') || contains(needs.*.result, 'skipped')\n"
+      + "        if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') || (contains(needs.*.result, 'skipped') && needs.select.outputs.macos_off != 'true')\n"
       + "        run: exit 1\n");
   });
 
@@ -1575,7 +1580,7 @@ describe('ci.yml: the node-floor leg runs on exactly the declared floor (spec 20
 
   it('skips by STEP, on a refresh, a rebuild, a fast pull request or a pull request that left its inputs alone (D-6771)', () => {
     // D-7868: and a docs-only merge-queue group, which select answers `fast` for (reach.mjs `queueScope`).
-    const leg = "${{ (github.event.schedule == '23 */3 * * *' || inputs.mode == 'refresh' || inputs.mode == 'rebuild' || (github.event_name == 'pull_request' && (needs.select.outputs.fast == 'true' || needs.select.outputs.floor != 'true')) || (github.event_name == 'merge_group' && needs.select.outputs.fast == 'true')) && 'skip' || 'run' }}";
+    const leg = "${{ (github.event.schedule == '23 */3 * * *' || inputs.mode == 'refresh' || inputs.mode == 'rebuild' || (github.event_name == 'pull_request' && (needs.select.outputs.fast == 'true' || needs.select.outputs.floor != 'true' || needs.select.outputs.docs_followup == 'true')) || (github.event_name == 'merge_group' && needs.select.outputs.fast == 'true')) && 'skip' || 'run' }}";
     const b = job('node-floor');
     expect(b, 'the job-level leg switch').toContain(`\n    env:\n      CCRC_LEG: ${leg}\n`);
     const s = steps(b);
@@ -1982,8 +1987,9 @@ describe('ci.yml: the light pull-request rule for the agent, pwa and browser tes
     expect(read(CI)).not.toMatch(/^ {4}types: .*labeled/m);
     // A head branch under train/ asks for the full suite too (operator ruling 2026-10-28), in every place the label is read.
     const full = "FULL_LABEL: ${{ contains(github.event.pull_request.labels.*.name, 'full-ci') || startsWith(github.head_ref, 'train/') }}";
-    // Select, the three test legs' asks, and the docs-only asks of pwa-static, build-pwa and storybook-a11y (D-7868).
-    expect(read(CI).split(full).length - 1).toBe(7);
+    // Select, the three test legs' asks, the docs-only asks of pwa-static, build-pwa and storybook-a11y (D-7868), and
+    // the docs-only follow-up ask (D-8396).
+    expect(read(CI).split(full).length - 1).toBe(8);
     expect(read(CI)).not.toMatch(/FULL_LABEL: \$\{\{ contains\([^|]*\}\}/);
   });
 
@@ -2042,7 +2048,8 @@ describe('ci.yml: the session-hook budgets run in `perf (server)`, which is not 
     expect(jobKey(b, 'name')).toBe('perf (server)');
     expect(needs(b)).toEqual(['deps', 'select']);
     // Select's half of the server shards' gate, and never on a fast pull request (operator ruling 2026-10-28).
-    expect(jobKey(b, 'if')).toBe("${{ !cancelled() && needs.select.outputs.fast != 'true' && needs.select.outputs.count != '0' && (needs.select.outputs.tests == 'selected' || needs.select.outputs.tests == 'full') }}");
+    // And never on a docs-only follow-up push (D-8396).
+    expect(jobKey(b, 'if')).toBe("${{ !cancelled() && needs.select.outputs.docs_followup != 'true' && needs.select.outputs.fast != 'true' && needs.select.outputs.count != '0' && (needs.select.outputs.tests == 'selected' || needs.select.outputs.tests == 'full') }}");
     expect(jobKey(job('server-shard'), 'if')).toContain("needs.select.outputs.fast != 'true' && needs.select.outputs.count != '0' && (needs.select.outputs.tests == 'selected' || needs.select.outputs.tests == 'full')");
     expect(jobKey(b, 'timeout-minutes')).toBe('20');
     // NOT REQUIRED for two weeks (operator ruling 2026-10-25): no required summary or aggregate reads it.
@@ -2096,7 +2103,8 @@ describe('ci.yml: the secret-mask slicing row runs in `perf (secret-mask)`, a jo
     expect(jobKey(b, 'name')).toBe('perf (secret-mask)');
     expect(needs(b)).toEqual(['deps', 'select']);
     // Select's half of the server shards' gate, and never on a fast pull request (operator ruling 2026-10-28).
-    expect(jobKey(b, 'if')).toBe("${{ !cancelled() && needs.select.outputs.fast != 'true' && needs.select.outputs.count != '0' && (needs.select.outputs.tests == 'selected' || needs.select.outputs.tests == 'full') }}");
+    // And never on a docs-only follow-up push (D-8396).
+    expect(jobKey(b, 'if')).toBe("${{ !cancelled() && needs.select.outputs.docs_followup != 'true' && needs.select.outputs.fast != 'true' && needs.select.outputs.count != '0' && (needs.select.outputs.tests == 'selected' || needs.select.outputs.tests == 'full') }}");
     expect(jobKey(job('server-shard'), 'if')).toContain("needs.select.outputs.fast != 'true' && needs.select.outputs.count != '0' && (needs.select.outputs.tests == 'selected' || needs.select.outputs.tests == 'full')");
     expect(jobKey(b, 'timeout-minutes')).toBe('20');
     expect(b, 'continue-on-error would hide a red').not.toMatch(/continue-on-error/);
@@ -2317,5 +2325,165 @@ describe('M8.16: build-pwa verifies the shared Markdown library before it builds
     expect(names.length, 'the .github scan went vacuous').toBeGreaterThan(10);
     const holders = names.filter((n) => read(n).includes('docserver/.github/workflows/release.yml')).sort();
     expect(holders).toEqual([SCRIPT]);
+  });
+});
+
+// ── D-8396 (the operator's approval of 2026-11-12): two CI savings ──────────
+//
+// (1) A dispatched full run skips the macOS legs unless dispatched with `macos=true`, and full-suite reads that skip as
+// deliberate, not red, under a name main-artifact.mjs takes for no evidence. (2) A pull-request push whose every file
+// changed since the PR's newest passing head is documentation (docs-followup.mjs, whose own suite has the rule) skips
+// the heavy jobs while every required check name still reports success. Both are EVALUATED on the workflow's own
+// expressions, with the reader above.
+
+/** `contains(needs.*.result, 'X')` spelled out over `block`'s own needs, so evalExpr can read a full-suite guard. */
+function expandNeedsContains(expr: string, block: string): string {
+  return expr.replace(/contains\(needs\.\*\.result, '([a-z]+)'\)/g, (_m, v: string) =>
+    `(${needs(block).map((n) => `needs.${n}.result == '${v}'`).join(' || ')})`);
+}
+
+describe('D-8396 (1): a dispatched full run skips the macOS legs unless it asks for them', () => {
+  const dispatch = (macosOff: string): Record<string, string> => ({
+    'github.event_name': 'workflow_dispatch', 'needs.select.result': 'success', 'needs.select.outputs.tests': 'full',
+    'needs.select.outputs.macos_count': '4', 'needs.select.outputs.macos_off': macosOff,
+  });
+
+  it('the dispatch declares a boolean `macos` input, off by default; the call declares none, so a call runs them', () => {
+    const on = section(read(CI), 'on');
+    expect(on).toMatch(/^ {6}macos:\n {8}description: [^\n]+\n {8}type: boolean\n {8}default: false$/m);
+    const call = on.slice(on.indexOf('  workflow_call:'));
+    expect(call, 'workflow_call grew a macos input: a call (the stable gate) must always run the macOS legs').not.toMatch(/^ {6}macos:/m);
+  });
+
+  it('select answers macos_off from the dispatch input alone, and true only for exactly `false` on a dispatch of ci.yml itself', () => {
+    const st = step(job('select'), 'Select');
+    expect(st).toContain("          INPUT_MACOS: ${{ github.event_name == 'workflow_dispatch' && github.workflow == 'ci' && toJSON(inputs.macos) || '' }}\n");
+    const sh = runScript(st);
+    expect(sh).toContain('if [ "$EVENT" = workflow_dispatch ] && [ "$INPUT_MACOS" = false ]; then\n  echo "macos_off=true" >> "$GITHUB_OUTPUT"\n');
+    expect(sh).toContain('else\n  echo "macos_off=false" >> "$GITHUB_OUTPUT"\nfi\n');
+    expect(read(CI)).toMatch(/^name: ci$/m);
+  });
+
+  it('the macos call skips when select says off, and runs on the daily run, a call and a dispatch with macos=true', () => {
+    const cond = jobKey(job('macos'), 'if')!;
+    expect(evalExpr(cond, dispatch('true')), 'a default dispatch').toBe(false);
+    expect(evalExpr(cond, dispatch('false')), 'a dispatch with macos=true').toBe(true);
+    expect(evalExpr(cond, { ...dispatch('false'), 'github.event_name': 'schedule' }), 'the daily run').toBe(true);
+    expect(evalExpr(cond, { ...dispatch(''), 'github.event_name': 'push' }), 'a call from release-stable on a push to stable').toBe(true);
+  });
+
+  it('full-suite reads the deliberate skip as not red, and still refuses every other skip, failure and cancellation', () => {
+    const b = job('full-suite');
+    const legs = needs(b);
+    const refusals = (ctx: Record<string, string>): number => steps(b)
+      .filter((st) => /^ {8}run: exit 1$/m.test(st) && evalExpr(expandNeedsContains(stepIf(st)!, b), ctx)).length;
+    const results = (over: Record<string, string>): Record<string, string> =>
+      Object.fromEntries(legs.map((n) => [`needs.${n}.result`, over[n] ?? 'success']));
+    expect(refusals({ ...dispatch('true'), ...results({ macos: 'skipped' }) }), 'the deliberate skip').toBe(0);
+    expect(refusals({ ...dispatch('false'), ...results({ macos: 'skipped' }) }), 'an undeclared macOS skip').toBeGreaterThan(0);
+    for (const leg of legs) {
+      for (const red of ['failure', 'cancelled']) {
+        expect(refusals({ ...dispatch('true'), ...results({ macos: 'skipped', [leg]: red }) }), `${leg}=${red}`).toBeGreaterThan(0);
+      }
+      if (leg !== 'macos') expect(refusals({ ...dispatch('true'), ...results({ macos: 'skipped', [leg]: 'skipped' }) }), `${leg} skipped`).toBeGreaterThan(0);
+    }
+    // The second guard names every need but the macOS call: a need added later is refused when skipped.
+    const second = steps(b).find((st) => st.includes('name: Refuse a skipped leg other than the macOS call'));
+    expect(second, 'the macOS-off skip guard is gone').toBeDefined();
+    for (const leg of legs.filter((n) => n !== 'macos')) expect(stepIf(second!)!, leg).toContain(`needs.${leg}.result == 'skipped'`);
+    expect(stepIf(second!)!).not.toContain('needs.macos.result');
+    // verdict.mjs is told the same, and excuses the macos skip alone.
+    expect(step(b, 'Verdict')).toContain("          SKIPPED_ON_PURPOSE: ${{ needs.select.outputs.macos_off == 'true' && 'macos' || '' }}\n");
+    expect(fullVerdict({ select: { result: 'success' }, macos: { result: 'skipped' } }, ['macos']).ok).toBe(true);
+  });
+
+  it('a macOS-skipped full-suite carries a name main-artifact.mjs takes for no evidence; every other run keeps `full-suite`', () => {
+    const m = /^\$\{\{ (.+) && '([^']+)' \|\| '([^']+)' \}\}$/.exec(jobKey(job('full-suite'), 'name') ?? '');
+    expect(m, 'full-suite\'s name is no longer `${{ <off> && <skipped name> || full-suite }}`').not.toBeNull();
+    const [, cond, offName, onName] = m!;
+    expect(evalIf(cond, dispatch('true'))).toBe(true);
+    for (const off of ['false', '']) expect(evalIf(cond, dispatch(off)), off).toBe(false);
+    expect(onName).toBe('full-suite');
+    expect(isGreenFullSuiteJob({ name: onName, conclusion: 'success' })).toBe(true);
+    expect(isGreenFullSuiteJob({ name: offName, conclusion: 'success' }), 'a macOS-skipped run would count as evidence').toBe(false);
+    expect(isGreenFullSuiteJob({ name: `full / ${offName}`, conclusion: 'success' })).toBe(false);
+  });
+});
+
+describe('D-8396 (2): a docs-only follow-up push skips the heavy pull-request jobs, and every required check still reports', () => {
+  const pr = (followup: string): Record<string, string> => ({
+    'github.event_name': 'pull_request', 'github.event.schedule': '', 'inputs.mode': '',
+    'needs.select.result': 'success', 'needs.select.outputs.fast': 'true', 'needs.select.outputs.tests': 'selected',
+    'needs.select.outputs.count': '40', 'needs.select.outputs.floor': 'true', 'needs.select.outputs.docs_followup': followup,
+    'needs.fast-plan.result': followup === 'true' ? 'skipped' : 'success', 'needs.fast-plan.outputs.count': followup === 'true' ? '' : '25',
+  });
+
+  it('is asked once, in select, on a pull request whose pipeline is unchanged, with the job\'s own token, and fails safe', () => {
+    const st = step(job('select'), 'Is this push a docs-only follow-up?');
+    expect(st).toContain('        id: followup\n');
+    expect(st).toContain("        if: github.event_name == 'pull_request' && steps.pipeline.outputs.changed == 'false'\n");
+    expect(st).toContain('          GITHUB_TOKEN: ${{ github.token }}\n');
+    expect(st).toContain("          FULL_LABEL: ${{ contains(github.event.pull_request.labels.*.name, 'full-ci') || startsWith(github.head_ref, 'train/') }}\n");
+    expect(st).toContain('          HEAD_SHA: ${{ github.event.pull_request.head.sha }}\n');
+    const sh = runScript(st);
+    expect(sh).toContain('node .github/ci/docs-followup.mjs ');
+    expect(sh).toContain('--event pull_request');
+    expect(sh, 'a failure of the step itself must answer nothing, never fail select').toContain('|| echo "::warning::');
+    // The pipeline step it reads is the plain-bash one, before it.
+    const all = steps(job('select'));
+    expect(all.findIndex((x) => x.includes('id: pipeline\n'))).toBeLessThan(all.indexOf(st));
+    // Select republishes the answer, true only for exactly `true`.
+    const sel = step(job('select'), 'Select');
+    expect(sel).toContain('          DOCS_FOLLOWUP: ${{ steps.followup.outputs.docs_followup }}\n');
+    expect(runScript(sel)).toContain('if [ "$DOCS_FOLLOWUP" = true ]; then echo "docs_followup=true"; else echo "docs_followup=false"; fi >> "$GITHUB_OUTPUT"\n');
+    // Only the select job ever asks the API: one call a run.
+    const code = read(CI).split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
+    expect(code.match(/docs-followup\.mjs/g)).toHaveLength(1);
+  });
+
+  it('the server jobs, the perf legs and Storybook skip whole; the node floor and the pwa shards and static checks skip by step', () => {
+    for (const id of ['fast-plan', 'server-shard', 'server-typecheck', 'server-perf', 'mask-perf', 'storybook-a11y']) {
+      expect(evalExpr(jobKey(job(id), 'if')!, pr('true')), `${id} runs on a docs-only follow-up`).toBe(false);
+    }
+    expect(legSkips(job('node-floor'), { ...pr('true'), 'needs.select.outputs.floor': 'true', 'needs.select.outputs.fast': 'false' })).toBe(true);
+    for (const id of ['pwa-shard', 'pwa-static']) {
+      const ran = stepsRun(id, { ...pr('true'), 'env.CCRC_LEG': 'run', 'steps.reach.outputs.skip': 'false' });
+      expect(ran, `${id}: only the checkout and the ask run`).toEqual(steps(job(id)).slice(0, 2).map((st) => /^ {6}- (?:name|uses|if): (.*)$/m.exec(st)![1]!));
+    }
+  });
+
+  it('any other answer runs them as before: false, empty (select failed or did not ask)', () => {
+    for (const followup of ['false', '']) {
+      expect(evalExpr(jobKey(job('fast-plan'), 'if')!, pr(followup)), `fast-plan, followup=${JSON.stringify(followup)}`).toBe(true);
+      expect(evalExpr(jobKey(job('server-shard'), 'if')!, pr(followup)), 'server-shard').toBe(true);
+      expect(evalExpr(jobKey(job('server-typecheck'), 'if')!, pr(followup)), 'server-typecheck').toBe(true);
+      expect(evalExpr(jobKey(job('storybook-a11y'), 'if')!, pr(followup)), 'storybook-a11y').toBe(true);
+      for (const id of ['pwa-shard', 'pwa-static']) {
+        expect(stepsRun(id, { ...pr(followup), 'env.CCRC_LEG': 'run', 'steps.reach.outputs.skip': 'false' }), id).toHaveLength(steps(job(id)).length);
+      }
+    }
+  });
+
+  it('test (server) and test (pwa) pass the skip and still refuse a red; test (agent) and build-pwa are untouched (no needs)', () => {
+    const ctx = { ...pr('true'), 'needs.server-shard.result': 'skipped', 'needs.server-typecheck.result': 'skipped',
+      'needs.node-floor.result': 'success', 'needs.pwa-shard.result': 'success', 'needs.pwa-static.result': 'success', 'needs.browser-pwa.result': 'success' };
+    const refusals = (id: string, c: Record<string, string>): number => steps(job(id))
+      .filter((st) => /^ {8}run: exit 1$/m.test(st) && evalExpr(stepIf(st)!, c)).length;
+    expect(refusals('server', ctx)).toBe(0);
+    expect(refusals('pwa', ctx)).toBe(0);
+    expect(step(job('server'), 'Verdict')).toContain('          FOLLOWUP: ${{ needs.select.outputs.docs_followup }}\n');
+    expect(serverVerdict({ select: 'success', typecheck: 'skipped', shards: 'skipped', tests: 'selected', count: '', event: 'pull_request', followup: 'true' }).ok).toBe(true);
+    for (const [k, red] of [['needs.select.result', 'failure'], ['needs.server-shard.result', 'failure'], ['needs.server-typecheck.result', 'cancelled']] as const) {
+      expect(refusals('server', { ...ctx, [k]: red }), `${k}=${red}`).toBeGreaterThan(0);
+    }
+    expect(refusals('pwa', { ...ctx, 'needs.pwa-shard.result': 'failure' })).toBeGreaterThan(0);
+    // Without the answer, a fast pull request whose fast plan did not succeed is refused as before.
+    expect(refusals('server', { ...pr(''), 'needs.fast-plan.result': 'skipped' })).toBeGreaterThan(0);
+    for (const id of ['test', 'build-pwa', 'browser-pwa']) expect(job(id), id).not.toContain('docs_followup');
+  });
+
+  it('the merge queue never takes it: the ask runs on a pull request only, and the verdict refuses it anywhere else', () => {
+    expect(serverVerdict({ select: 'success', typecheck: 'skipped', shards: 'skipped', tests: 'selected', count: '', event: 'merge_group', followup: 'true' }).ok).toBe(false);
+    expect(stepIf(step(job('select'), 'Is this push a docs-only follow-up?'))).toMatch(/^github\.event_name == 'pull_request' && /);
   });
 });
