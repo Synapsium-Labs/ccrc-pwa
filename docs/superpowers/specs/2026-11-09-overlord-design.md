@@ -3,8 +3,9 @@
 - **Spec** · 2026-11-09
 - **Status:** Approved by the operator on 2026-11-10, with their rulings on the review's fifteen questions and two
   further rulings, R16 and R17 (§2, §6.9, "Where things stand"). On 2026-11-12 the operator gave R18: the Overlord
-  draws its accounts from account pools the operator names, and no account is reserved for it (§2, §3.4). Appendix B
-  says what those changed. This is the hardened edition of rev 8: an outside review's calls H1 to
+  draws its accounts from account pools the operator names, and no account is reserved for it (§2, §3.4). The same day
+  the operator gave R19: renewals wait for a break in the conversation and carry the current thread, so the operator
+  never feels one or repeats themselves (§2, §3.3). Appendix B says what those changed. This is the hardened edition of rev 8: an outside review's calls H1 to
   H39 are folded in, so that each mechanism is stated once, as it now is. A builder's check was applied to rev 8 by
   its author. This edition was then checked in nine ways: a builder's check in four slices, its closed vocabularies
   and state machines, its names and numbers, its claims about the tree, and a red team. Their findings are folded
@@ -22,7 +23,7 @@
 
 This document defines no D-numbers. The programme's plan allocates them when its run opens. There are three series of
 numbered decisions, and the operator can approve or overturn each one by number:
-- **R1 to R18** are the operator's rulings (§2).
+- **R1 to R19** are the operator's rulings (§2).
 - **C1 to C60** are the author's calls. §13 restates each one as it now stands.
 - **H1 to H39** are the hardening review's calls (§13.1). They have a series of their own, so that they never collide
   with the R and C series while the author keeps writing. Appendix A says what each one changed in rev 8.
@@ -241,6 +242,7 @@ in each row states the mechanism once.
 | R6 | **Audit.** A log of everything it relayed, decided and started. Not every item can be reversed, so the log marks which items can be overturned and which cannot | One table, `overlord_acts`, and an act journal outside every snapshot, written intent first. An effect outside the database is written `pending` first and settled by measuring. Reversibility comes from the act kind, and whether an act can still be undone is measured when asked. Overturns go through the one correction door, told apart from `superseded` and `concurred` (§10) |
 | R7 | **One and only one Overlord** (the operator, 2026-11-09, after rev 1) | A singleton designation row with a term, one per ccrc server. Only the operator's step-up door designates or rebinds, and a rebind needs the old body measured gone. Every write carries the term, the generation and that generation's act key, so an old body or a copy is refused. The replay body is never designated and holds no door that acts (§3.1) |
 | R8 | **Live a very long time** (the operator, 2026-11-09, after rev 1): no memory loss or the other known problems of long-running sessions; use every context, compaction and history technique ccrc has, and research more | One Overlord, many generations. The server renews its context from canonical rows, through a state machine with deadlines, a receipt and a fence. An anchor and a card re-anchor every start. Closed-book probes prove recall, and an outside judge audits judgement. Nothing it must keep lives only in its context (§3.3) |
+| R19 | **Renewals the operator does not feel** (the operator, 2026-11-12, placed beside R8, which it amends): "[one] concern is that account swaps interrupting work/conversations may not feel great? also, conversation continuity is important to the use[r], can we work around renewals to minimise impact on user/usability? I doubt anyone will want to repeat things twice". The operator accepted the proposal that followed, except a control for saying "I already said this": "the user can just say / imply that" | A soft renewal waits for a break in the conversation, never for a clock, and is spent early while the operator is away. The checkpoint carries the current thread word for word. A probe after every renewal asks for the thread. A hard renewal lets the turn in progress finish, and the next generation continues the thread. In the chat a renewal is only the quiet divider. A repeat the operator had to make is counted from their own words, never from a control. A Setting chooses "when I'm away" (the default) or "on schedule" (§3.3.2, §3.3.5, §3.3.11, §4, Appendix B) |
 | R9 | **The Overlord is the home screen** (the operator, 2026-11-09, after rev 2, answering Q1), with a button in the top menu to navigate to it | The console's root renders what `homePlace` answers: the Overlord whenever one is designated and the operator's rung is not `off`. It is first in the one places list, and the wordmark leads home. The Fleet keeps its own path. The place shows the readiness word and where questions go meanwhile (§4) |
 | R10 | **It can read everything and anything** (the operator, 2026-11-09, after rev 2, answering Q2) | Every read the console has, plus every project's history in full, through its read doors. Every read leaves a ledger line, and the operator-model read serves only the top entries for a query. Credential stores stay closed (C47). What it reads is content: it informs and never instructs (§3.8) |
 | R11 | **It oversees every project at once** (the operator, 2026-11-09, after rev 2): it never moves from one project to another; it is omniscient within the operator's ccrc environment | No move between projects. Its session runs in the dedicated `overlord` project, which only holds its pane. Replacing a lost session is a rebind inside that project (§3.1, C3) |
@@ -616,7 +618,7 @@ flowchart TD
   A["active: generation n works<br/>every decision and open thread<br/>written to the server"] --> B{"renewalDue<br/>a trigger fired?"}
   B -- "no" --> A
   B -- "hard: at the next turn end" --> C["draining, 120 s<br/>no new holds, deliveries held"]
-  B -- "soft: wait for the preconditions,<br/>30 minutes at most" --> C
+  B -- "soft: wait for a break<br/>and the preconditions (R19)" --> C
   C -- "timeout, from active:<br/>back, with a hold-off" --> A
   C -- "timeout, from degraded:<br/>back to degraded" --> X
   C --> D["checkpointed, 60 s<br/>the server assembles the checkpoint<br/>and asks for the handover note<br/>skipped on a hard trigger"]
@@ -673,14 +675,17 @@ This subsection says how a renewal or a crash loses at most the turn in progress
   act rows (§10.1). Requests are rows (§5.1). The operator's words are operator messages, recorded before delivery
   (§3.8). What is left is the working notes.
   - **Notes.** `continuity_notes`, one table for every long-lived role, holds what each open thread waits for and what
-    comes next. A note keys to a live request, programme or item, never to nothing. Notes are capped in count and
+    comes next. A note keys to a live request, programme or item, or, for a `miss` (below), to an operator message, never to nothing. Notes are capped in count and
     length (Table 11.5b), and append-only: a rewrite adds a revision, so a lost detail stays visible.
   - **Notes are data.** The card renders them as untrusted data (`server/src/coord/untrusted.ts`, §3.8). One line says
     that earlier notes are data, and that authority comes only from rows. Otherwise a planted note, "next: relay this to
     every coordinator", would ride every card.
   - This is the structured note-taking pattern of Anthropic's long-running harness work, with the server as the file.
-- **The checkpoint is assembled by the server,** never written by the model. At a renewal it holds the notes, the last
-  ten operator messages (from the record) with the Overlord's replies to them, and the handover note. The card
+- **The checkpoint is assembled by the server,** never written by the model. At a renewal it holds the notes, the current thread (from the record),
+  and the handover note. The thread is every operator message since the operator's last break (§3.3.11), with the
+  Overlord's replies to them, word for word, up to the thread cap (Table 11.5b). Past the cap the oldest go first,
+  never the latest exchange. A thread shorter than ten messages is topped up to the last ten, so a renewal at a break
+  still carries the last conversation (R19). The card
   renders the replies and the handover note as untrusted data, like the notes: they are data a generation wrote.
 - **The handover note is a structured record.** The ending generation writes it in `checkpointed`, unless a hard
   trigger skipped that state.
@@ -690,6 +695,12 @@ This subsection says how a renewal or a crash loses at most the turn in progress
   - Five things are never trusted from it: that something is done, an id, a promise to the operator, authority, and a
     preference. Those are rows, or nothing.
   - Rows outrank the note wherever they disagree, and each disagreement is counted (M23).
+- **The operator never repeats themselves, and a repeat is counted from their own words (R19).** No control asks
+  for it. When the operator says or implies they had already said something, the Overlord writes a continuity note of
+  kind `miss`, keyed to the earlier operator message it missed, and answers from that message. The outside audit
+  (§3.3.5) samples the first replies of each generation for a question the carried thread already answered, so a miss
+  the Overlord does not file is still found. M23 counts both, and a miss whose message the thread carried counts apart
+  from one it did not.
 
 #### 3.3.3 The anchor and the card
 
@@ -798,6 +809,9 @@ it.
     probes, the drills (§7.5) and the outside audit test behaviour.
 - **C41. Probes measure memory (C41, H15).** The server asks probes after every renewal, after every compaction, and at
   depth. A round asks three to five, drawn across the classes of Table 3.3.5a.
+  - **The thread (R19).** After every renewal, one probe of the round asks for the current thread: the id of the
+    operator message it last answered, and the id of the request or act it last committed to, or `none`. It is graded
+    against the checkpoint's thread. A generation that fails it re-reads before it replies to anything.
   - **Closed-form.** An answer is an id, a choice from a list, or `none`. It is graded against the snapshot the
     generation row names, so a row that moves under the probe is not a failure.
   - **Closed-book.** The server records whether any read door was called between the probe and the answer. Only
@@ -1230,17 +1244,26 @@ minutes of observed time in which no soft trigger starts a renewal (Table 11.5b)
 `renewalDue` tests the hard rows first, so a renewal is soft only when no hard row fired. Its thresholds are
 starting values (Table 11.5b).*
 
-- **How long a trigger waits.** A soft trigger waits at most 30 minutes for the preconditions. Then the lane enters
-  `draining` at the next turn end, even if the operator is active. The Overlord place shows "renewing" with the time
-  left, taken from the generation's deadlines, and the operator's messages are rows that the new generation is
-  offered first. A hard trigger drains at the next turn end, at once.
+- **How long a trigger waits (R19).** A soft trigger waits for a break, never for a clock. A break is one of: no
+  operator message for 20 minutes; no visible Overlord place for five minutes, which the console reports over its live
+  socket; or the operator's quiet hours. While the operator is in a live exchange a soft trigger waits however long the
+  exchange lasts. The hard rows bound the context meanwhile, and they still fire. The daily backstop's hour defaults
+  to one inside the quiet hours.
+  - **Early, while away.** At a break, the lane renews a generation that is past half of any soft row's threshold
+    (the soft ceiling, turns, and the account load past the soft line), so the renewal is spent while the operator is
+    away rather than later, inside a conversation. It counts against the soft budget.
+  - **The Setting.** "Renew when I'm away" is the default. "Renew on schedule" keeps the earlier rule: a soft trigger
+    waits at most 30 minutes for the preconditions, then drains at the next turn end, even if the operator is active.
+  - **A hard trigger** drains at the next turn end, at once, so the reply in progress finishes. The next generation's
+    first reply continues the thread from the checkpoint and never asks the operator to say again what it carried.
+  - The operator's messages are rows that the new generation is offered first.
 - **The preconditions** a soft trigger waits for:
   - the hibernate lane's own hold table (`server/src/coord/hibernate.ts`): the turn finished, no background task, no
     scheduled task, and no menu or dialog. The box checks a draft, an attached terminal and a recent swap again at the
     act;
   - no running reader, counted from the subagent start and stop events the hook reports;
-  - no operator message in the last ten minutes. An open console cannot be the test, because the Overlord is the home
-    screen.
+  - a break, as above. An open console alone cannot be the test, because the Overlord is the home screen. A console
+    that reports the place hidden can be.
 - **Verified as a machine.** `renewalDue` has an exhaustive test over its whole input domain. The model, the
   simulator and the invariant monitor check how generations compose with holds, readiness and restarts (§11.7). Two
   invariants bind this machine directly. A write is accepted only from the current term, generation and key (I5).
@@ -2387,8 +2410,9 @@ each is defined once, where the table says. A part from a later wave is not draw
   - **Under each operator message, the request ids the server bound to it,** and any project or programme name the
     server matched in it (§5.3).
   - **The server speaks when the Overlord cannot.** When the readiness word is not `ready`, the server adds one line of
-    its own at once, such as "Recorded. The Overlord is renewing." During a renewal the place shows "renewing" with
-    the time left, taken from the generation's deadlines.
+    its own at once, such as "Recorded. The Overlord is renewing." During a renewal the readiness line shows "renewing"
+    with the time left, taken from the generation's deadlines. The chat shows no banner for it: the composer keeps
+    working, and a message sent meanwhile reads "recorded" until the next generation picks it up (R19).
   - **The current generation streams from its transcript,** as today.
   - **Earlier generations are paged through the history reader.** Claude Code deletes transcripts after 30 days by
     default, and a transcript lives on whichever host ran the session. A quiet "generation n" divider, drawn from the
@@ -5463,7 +5487,7 @@ tested over its whole input domain (§11.7).*
 | ccd's capability words: `pool-set`, the account set on the route record, the pool rule's set and the read `ccd pool-answer` (W1), `hibernate-fresh`, the fresh-start flag (W1a), and `keep-awake`, the sleep markers' verb (W1) | K, L0; C1, C3 and C4 | `ccd caps`, which the agent caches at boot and re-reads on each capability refresh | ccd | Each capability refresh | as listed | n/a | Missing: without `hibernate-fresh` the renewal lane does not run; without `pool-set`, `keep-awake` or `hibernate-fresh`, designate and rebind refuse `capability-missing` |
 | The agent's capability word `overlord-history`, for the read-only history op | K, L0; C3 | the agent's capability list, read on each capability refresh | the agent | Each capability refresh | W1 | n/a | Missing, or advertised by more than one agent: the history door answers `history-unreachable` |
 | Auto memory for `plain` sessions, a row of `SWITCHES` (`shared/switches.ts`) | K switches, L3 | `coord.db` settings | The Settings door | none | W1a | yes | Ignores it: auto memory stays off |
-| Settings: the daily backstop hour and time zone (W1a); the designated model class (W1; selecting `fable` keeps the step-up, and `opus` needs none); the designation's account set (W1; widening it keeps the step-up, and narrowing it needs none); `lambda` (W3, because its one reader, `askOrAct`, ships then); `operatorProfile`, with its `takesIn` line (W3, with the briefs; set at designation from then on); the push budget, briefing times, quiet hours, "away until", and the repeat push for an unseen blocking item, two hours (W3, with H35); the blind sample's switch (W3); the retention period (W4); `overlordLiveProgrammes`, `portfolioFocus` (W5) | K settings, L3 | `coord.db` settings | The Settings door, on the operator's own tap, behind the step-up where the change widens authority. For a stated preference that is a setting, the Overlord answers with a link that opens it with the value filled in; it never writes a setting, and files nothing (§9.3) | none | as listed | yes | Ignores them |
+| Settings: the daily backstop hour and time zone, and when soft renewals happen, "when I'm away" or "on schedule" (W1a, R19); the designated model class (W1; selecting `fable` keeps the step-up, and `opus` needs none); the designation's account set (W1; widening it keeps the step-up, and narrowing it needs none); `lambda` (W3, because its one reader, `askOrAct`, ships then); `operatorProfile`, with its `takesIn` line (W3, with the briefs; set at designation from then on); the push budget, briefing times, quiet hours, "away until", and the repeat push for an unseen blocking item, two hours (W3, with H35); the blind sample's switch (W3); the retention period (W4); `overlordLiveProgrammes`, `portfolioFocus` (W5) | K settings, L3 | `coord.db` settings | The Settings door, on the operator's own tap, behind the step-up where the change widens authority. For a stated preference that is a setting, the Overlord answers with a link that opens it with the value filled in; it never writes a setting, and files nothing (§9.3) | none | as listed | yes | Ignores them |
 
 *Table 11.1d. Capability words, switches and settings. Every switch that changes authority is journalled (§7.6).*
 
@@ -5735,6 +5759,9 @@ values too. They are values of the renewal triggers' record, keyed by role, and 
 | 10 minutes | The hold-off after a renewal that went back to `active` | W1a | observed |
 | 30 minutes | The least age of a generation before a soft trigger may end it | W1a | observed |
 | Three soft renewals in six hours | The soft renewal budget | W1a | observed |
+| 20 minutes with no operator message, or five minutes with no visible Overlord place | A break, which a soft renewal waits for (R19) | W1a | observed |
+| Half of a soft row's threshold | The point past which a break renews a generation early (R19) | W1a | n/a |
+| The thread since the last break, up to 60 messages or 6,000 tokens of the card's budget | The checkpoint's thread (R19) | W1a | n/a |
 | A quarter of the hard cap | The context floor of the idle trigger | W1a | n/a |
 | One hour, and always longer than the least age of a generation | The hold-down before ccd restores the designated class | W1 | ccd's clock |
 | Two in an hour | Restarts before the readiness word stops reading `restarting` | W1 | wall |
@@ -5962,7 +5989,7 @@ from rows the server writes, never from the Overlord's own account.
 | M20 | Requests reopened within 7 days of done, the `done-unverified` share, declines, follow-ups the server escalated itself | Reopened under 5%; unverified falling | Request rows |
 | M21 | Tripwires: step-downs by cause, drills missed, unwitnessed calls, refusals for egress and for words that are not the operator's | No drill missed; every step-down explained | The authority journal, door refusals |
 | M22 | Authority: grants live, suspended and expired; acts under a grant vetoed or overturned; restores detected | No act under a suspended grant, ever | The authority journal |
-| M23 | Renewals: time in each state, receipts missing, `degraded` generations, the fitted ceiling by model, handover discrepancies, planned and unplanned starts counted apart | A renewal inside six minutes; no generation offered work before it read its card | `continuity_generations` |
+| M23 | Renewals: time in each state, receipts missing, `degraded` generations, the fitted ceiling by model, handover discrepancies, planned and unplanned starts counted apart; continuity misses (R19), the Overlord's own and the audit's, split by whether the carried thread held the message; soft renewals spent at a break and inside an exchange | A renewal inside six minutes; no generation offered work before it read its card | `continuity_generations` |
 | M24 | Verification: invariant-monitor violations in production, simulator seeds run and red, mutation floors, scenario pass | Zero violations; floors never fall; every anti-goal family passes three runs of three | The monitor, the simulator, the mutation runner, the scenario suite |
 | M25 | Attention: interrupting pushes per active day against the budget, overdrafts and their causes, minutes deferred | Within the budget; every overdraft a verified `blocking-now` or a `blocking-by` at its deferral limit | `pushAdmission`'s records |
 | M26 | Decision quality: the operator's own reversals within 14 days, tripwires fired, the deference gap, the switch rate after a reveal, delegations, the objection hit rate | Watched. The deference gap is M27's anchoring gap: M27 holds it under 10 points, and at 0.15 the fatigue rule acts | Items, act rows, objection rows, `fatigueSignals` |
@@ -6022,7 +6049,7 @@ names the hardening calls that changed a call from its rev 8 form. §13.1 lists 
 | C34 | Who the kickoff is from | operator, overlord | `overlord`, sent by the one kickoff function with a sender parameter, so one cap and one dedupe cover both senders. The server renders the operator's quote from the cited messages | Approved | H7 |
 | C35 | Where the private-name check runs | the server, the skill | The server. The operator uploads the list through a step-up door, hashed under a server-held key. `privateNameHits` runs at the relay, answer, kickoff and brief doors, and a hit refuses `egress-refused` with no detail. It also runs on the quote the server renders, where a hit waits for the operator's one tap, and on every field before it is sent to a `hosted` decision model, where a hit answers `not-asked`. An accident guard: a paraphrase passes | Approved | H9, H31 |
 | C36 | How it lives for months | one compacted conversation, a new session per rollover, generations of the same session | Generations of the same session. The renewal lane ends the conversation and starts a fresh one through `renew` on the `SessionHost` port. Each generation is a row of `continuity_generations`, with states, deadlines, a receipt and a fence. Every start mints one | Approved | H2, H12, H13 |
-| C37 | What a renewal may lose | the context, at most one turn | At most the turn in progress. Notes are append-only and key to a live request, programme or item. The server assembles the checkpoint from the notes, the last ten operator messages from the record, and a structured handover note it checks. The card renders the replies and the handover note inside the same fence as the notes | Approved | H7, H15 |
+| C37 | What a renewal may lose | the context, at most one turn | At most the turn in progress. Notes are append-only and key to a live request, programme or item. The server assembles the checkpoint from the notes, the current thread from the record (every operator message since the last break, with replies, word for word, R19), and a structured handover note it checks. The card renders the replies and the handover note inside the same fence as the notes | Approved | H7, H15 |
 | C38 | How it is re-anchored | the skill alone, a server card at every start | An anchor of at most 1,500 characters in the hook's first slot, canaries first. The session reads its card (15k tokens, in pages) as its first tool call, and other doors refuse `card-unread` until it has. The constitution rides the workspace memory file. No standing operator brief: only the `style` entries | Approved | H11, H21 |
 | C39 | Compaction's role | the main mechanism, a fallback | A fallback. Settings ride the session's one settings file and environment: idle compaction off, the window set. The PreCompact arm refuses a proactive compaction and marks renewal due, dark until W0 proves it safe. Role instructions ride history W3's one print | Approved | H1, H14 |
 | C40 | Stale-memory guard | none, canaries | Canaries on the anchor: term, generation, card hash and rules version. A stale card refuses `card-unread`. The fence refuses an older term (`stale-designation`) and a wrong generation or key (`stale-generation`). Canaries prove a fetch; probes, drills and the audit test behaviour | Approved | H11, H12 |
@@ -6308,6 +6335,9 @@ mechanism leaves something open, the row says what is left.
 - R18, the operator's ruling of 2026-11-12: no account is reserved for the Overlord; the operator names the account
   pools it may draw accounts from (§2, §3.4, C46). It amends C46, C56, C57, H16, Table 2b's "Accounts" row and
   ruling 7. The operator approves this revision on its pull request.
+- R19, the operator's ruling of 2026-11-12: renewals and the account moves that ride on them wait for a break in the
+  conversation, the checkpoint carries the current thread, and a repeat is counted from the operator's own words, never
+  from a control (§3.3.2, §3.3.11).
 - **The operator approved this spec on 2026-11-10:** the author's calls C1 to C60 as §13 restates them, and the
   hardening calls H1 to H39 (§13.1), subject to the rulings below. C47 is where "everything" stops: it keeps the
   credential stores closed.
@@ -6486,6 +6516,24 @@ table keeps the trail. The body states only the result.
 | M32, M11, Table 16a | Counted guests on Fable or past the line; the reservation's risks | M32 counts generations outside the set, and M11 splits fallbacks by cause; the risks of a set that fails open or is too narrow |
 
 *Table B2. What R18 changed.*
+
+**R19, 2026-11-12: renewals the operator does not feel.** The operator ruled that renewals and the account moves that
+ride on them must not interrupt a conversation, and that nobody should have to say a thing twice. They accepted the
+proposal, except a control for reporting a repeat: the operator just says so. This table keeps the trail. The body
+states only the result.
+
+| What | Before | Now, and why |
+|---|---|---|
+| When a soft renewal happens | After the preconditions, at most 30 minutes, then at the next turn end even if the operator was active. "No operator message in ten minutes" was the only sign of a pause | At a break: 20 minutes quiet, five minutes with the place hidden, or quiet hours. It waits through a live exchange. The 30-minute rule survives as the "on schedule" Setting |
+| Renewing early | Did not exist | At a break, a generation past half of a soft threshold renews then, so the renewal lands while the operator is away |
+| The daily backstop | Any hour the operator set | Defaults to an hour inside the quiet hours |
+| What the checkpoint carries | The last ten operator messages and the replies | The current thread since the last break, word for word, up to a cap, and at least the last ten. Ten messages clip a long exchange, and a clipped exchange is what makes the operator repeat themselves |
+| Probes after a renewal | Drawn across the classes of Table 3.3.5a | One of them always asks for the thread |
+| A hard renewal | Drained at the next turn end | The same, and the next generation's first reply continues the thread |
+| The chat during a renewal | The place showed "renewing" | The readiness line shows it; the chat shows only the divider, and the composer keeps working |
+| Repeats | Not counted | Counted from the operator's words: a `miss` note the Overlord files, and the audit's sample of first replies. No control: the operator ruled that saying so is enough |
+
+*Table B3. What R19 changed.*
 
 ---
 
