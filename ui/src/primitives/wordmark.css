@@ -1,7 +1,8 @@
 /* The wordmark's typed entrance (`Wordmark mark="overlord" typed`). Every animation is stepped; no colour is typed here. */
 /* The word is clipped to its own width and grown one character at a time: Geist Mono, so 8ch is exactly `overlord`.
-   `clip`, not `hidden`: a clip makes no scroll container, so the word keeps its text baseline beside the underscore. */
-.wordmark-type{display:inline-block;overflow:clip;white-space:nowrap;animation:wordmark-type 1.2s steps(8) 1 forwards}
+   `clip`, not `hidden`: a clip makes no scroll container, so the word keeps its text baseline beside the underscore.
+   `hidden` first is the fallback a browser without `clip` (Safari before 16) keeps, so the word still types in. */
+.wordmark-type{display:inline-block;overflow:hidden;overflow:clip;white-space:nowrap;animation:wordmark-type 1.2s steps(8) 1 forwards}
 /* The underscore waits for the typing (the delay equals its duration), then blinks once a second. */
 .wordmark-cursor{animation:wordmark-cursor 1s steps(1) 1.2s infinite}
 @keyframes wordmark-type{from{width:0}to{width:8ch}}

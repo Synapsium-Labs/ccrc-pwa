@@ -154,4 +154,12 @@ describe('Wordmark', () => {
     expect(seconds(cursor[2] ?? '')).toBe(seconds(typing[1] ?? ''));
     expect(rule('.wordmark-type')).toMatch(/forwards/);
   });
+
+  it('the typed word clips, with a fallback for a browser that has no overflow: clip', () => {
+    // `clip` keeps the word's text baseline beside the underscore (no scroll container). A browser without it (Safari
+    // before 16) drops the declaration and keeps the `hidden` before it, so the word still grows inside its box rather
+    // than showing whole while the underscore slides across it.
+    const decls = rule('.wordmark-type').split(';').map((d) => d.trim()).filter((d) => d.startsWith('overflow:'));
+    expect(decls).toEqual(['overflow:hidden', 'overflow:clip']);
+  });
 });
