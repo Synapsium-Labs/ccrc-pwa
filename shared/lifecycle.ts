@@ -84,10 +84,11 @@ export const LIFECYCLE: readonly LifecycleClass[] = [
   // D-6639 (fleet disk retention DR-27, spec 2026-10-23 §2.7.3): a `--child` workspace itself, whose collectors the
   // retention design names. Collected on its run's close; by the sweep once the run is done; by the stale arm after
   // seven idle days when a hold, an absent run, a review report or a terminal refusal kept it; and by expiry seven
-  // days after an archive. A child that coordinated is never taken automatically.
+  // days after an archive. A child that coordinated is never taken automatically. D-8612 (consolidation spec C4): the
+  // collector names the table that holds those verbs' refusal edges as text, since L0 imports nothing.
   { name: 'child-workspaces', root: '<worktrees-root>/<project>/<slug> (a --child workspace)', pattern: 'W',
     creators: ['ccd (ws-add --child, minted for a coordinated run)'],
-    collector: 'ws-reclaim on the run\'s close and by the sweep; its stale arm at 7 idle days (behind its live switch in shared/switches.ts); ws-expire once archived',
+    collector: 'ws-reclaim on the run\'s close and by the sweep; its stale arm at 7 idle days (behind its live switch in shared/switches.ts); ws-expire once archived; their refusal edges: WORKSPACE_TRANSITIONS (shared/workspaceTransitions.ts)',
     bound: 'the run\'s close, or 7 idle days when kept, or 7 days after an archive; never while it coordinated',
     tier: 'a worktree plus its pinned attic refs; the work is kept under refs/ccrc/attic/<id>/ before the tree goes', ruling: null },
   // D-7278 (the operator's A1 ruling of 2026-10-28, extended to coordinators; design note 2026-10-28 §4): the one class
