@@ -2,11 +2,12 @@
 // "Two compactions in one generation"; Table 3.6a, the compactions journal). Two writers on the fleet box, one file
 // each: PostCompact commits one record per settled compaction to `$REG/<id>.compactions` (the compaction card's
 // journal, `ccd/session-hook.sh#_hook_compact_post`), and PreCompact writes one `phase:"pre"` line per compaction to
-// `$REG/<id>.precompact`, rotated to `.precompactprev` at the hook's PRECOMPACT_KEEP lines
+// `$REG/<id>.compactevents`, rotated to `.compacteventsprev` at the hook's PRECOMPACT_KEEP lines
 // (`ccd/session-hook.sh#_hook_compact_pre_line`). The pre line is what counts an automatic compaction that fires
-// PreCompact with no PostCompact after it (W0-05). The same file may carry `phase:"refused"` lines, for a PreCompact
-// the hook refused (plan review 1890 I1, written by the compaction piece): a refused compaction never happened, so a
-// refused line is never counted and cancels the pre it follows.
+// PreCompact with no PostCompact after it (W0-05). The same file may carry `phase:"refused"` lines, which the compaction
+// piece writes IN PLACE OF a refused event's pre line: they are read, and never counted (plan review 1896 B3). Every
+// line carries the hook's scope verdict, and only `main` lines count: every PreCompact payload names the parent's
+// transcript, so the verdict is all that tells a subagent's compaction apart (plan review 1896 B2).
 //
 // Two exported functions: `readCompactionsMeasured` (L3, reads the three files through `FleetIO` and keeps every
 // distinction it receives) and `compactionsSince` (L1, pure: it imports nothing that does I/O). No renewal decision is
@@ -23,6 +24,8 @@ export interface CompactionLine {
   /** The transcript the compaction was attributed to, or null when the writer could not name one (an ambiguous or
    *  normalised record). A pre line and a post line pair only when these do not contradict. */
   readonly transcript: string | null;
+  /** The hook's scope verdict (`_hook_compact_scope`): only `main` counts; `ambiguous` and null (no verdict) do not. */
+  readonly scope: 'main' | 'subagent' | 'ambiguous' | null;
 }
 
 export type CompactionsRead =
@@ -52,19 +55,21 @@ function lineOf(text: string, file: 'journal' | 'pre'): CompactionLine | null {
   else return null;
   const t = r['transcript'];
   if (t !== null && t !== undefined && typeof t !== 'string') return null;
-  return { at, trigger: triggerOf(r['trigger']), phase, transcript: typeof t === 'string' && t !== '' ? t : null };
+  const sc = r['scope'];
+  const scope = sc === 'main' || sc === 'subagent' || sc === 'ambiguous' ? sc : null;
+  return { at, trigger: triggerOf(r['trigger']), phase, transcript: typeof t === 'string' && t !== '' ? t : null, scope };
 }
 
 export const compactionsPaths = (registryDir: string, id: string): { journal: string; pre: string; prev: string } => ({
   journal: path.join(registryDir, `${id}.compactions`),
-  pre: path.join(registryDir, `${id}.precompact`),
-  prev: path.join(registryDir, `${id}.precompactprev`),
+  pre: path.join(registryDir, `${id}.compactevents`),
+  prev: path.join(registryDir, `${id}.compacteventsprev`),
 });
 
 /** Three answers. `absent` only when none of the three files exists; `unreadable` when any one could not be read
  *  (a count from part of the evidence would read low, and a low count is the wrong side to fail on); otherwise
  *  `lines`, with every line that is not a line of its file counted in `skipped`, never thrown. The current pre file
- *  is read BEFORE `.precompactprev`: a rotation between the two reads then shows a line twice, never zero times, and
+ *  is read BEFORE `.compacteventsprev`: a rotation between the two reads then shows a line twice, never zero times, and
  *  a pre line repeated byte for byte is taken once. */
 export async function readCompactionsMeasured(io: FleetIO, registryDir: string, id: string): Promise<CompactionsRead> {
   const p = compactionsPaths(registryDir, id);
@@ -91,29 +96,22 @@ export async function readCompactionsMeasured(io: FleetIO, registryDir: string, 
   return { kind: 'lines', lines, skipped };
 }
 
-/** May this later line (a post, or a refusal) be the outcome of that `pre`? Same trigger, transcripts that do not
- *  contradict (equal, or one side unnamed), and the line at most COMPACTION_PAIR_MS after the pre. */
+/** May this `post` be the settlement of that `pre`? Same trigger, transcripts that do not contradict (equal, or one
+ *  side unnamed), and the post at most COMPACTION_PAIR_MS after the pre. */
 function pairs(pre: CompactionLine, post: CompactionLine): boolean {
   return pre.trigger === post.trigger
     && (pre.transcript === null || post.transcript === null || pre.transcript === post.transcript)
     && post.at >= pre.at && post.at - pre.at <= COMPACTION_PAIR_MS;
 }
 
-/** Pure. How many compactions the lines record at or after `sinceMs`. One compaction per `pre` that no `refused`
- *  line cancels (a refusal cancels the latest pre it may be the outcome of, see `pairs`, and is itself never counted);
- *  a `post` that may be the settlement of a remaining `pre` is the same one; a `post` with no such `pre` is one more.
- *  Lines before `sinceMs` are not counted. The post pairing is a MAXIMUM matching (augmenting paths), so over pre and
- *  post lines the count is their number less the most pairs they admit, and appending one never lowers it; only a
- *  refusal lowers it, by the compaction it says did not happen. */
+/** Pure. How many compactions of the MAIN conversation the lines record at or after `sinceMs`. One compaction per
+ *  `pre`; a `post` that may be the settlement of a `pre` (see `pairs`) is the same one; a `post` with no such `pre` is
+ *  one more. A line whose scope is not `main`, a `refused` line, and a line before `sinceMs` count nothing. The pairing
+ *  is a MAXIMUM matching (augmenting paths), so the count is the number of counted lines less the most pairs they
+ *  admit, and appending a line never lowers it. */
 export function compactionsSince(lines: readonly CompactionLine[], sinceMs: number): number {
-  const kept = lines.filter((l) => l.at >= sinceMs);
-  const byAt = (a: CompactionLine, b: CompactionLine): number => a.at - b.at;
-  const pres = kept.filter((l) => l.phase === 'pre').sort(byAt);
-  for (const r of kept.filter((l) => l.phase === 'refused').sort(byAt)) {
-    let k = -1;
-    for (let i = 0; i < pres.length; i += 1) if (pairs(pres[i]!, r)) k = i;
-    if (k >= 0) pres.splice(k, 1);
-  }
+  const kept = lines.filter((l) => l.at >= sinceMs && l.scope === 'main');
+  const pres = kept.filter((l) => l.phase === 'pre');
   const posts = kept.filter((l) => l.phase === 'post');
   const preOf: number[] = new Array<number>(pres.length).fill(-1);   // pre index -> the post index it is paired with
   const augment = (j: number, seen: boolean[]): boolean => {

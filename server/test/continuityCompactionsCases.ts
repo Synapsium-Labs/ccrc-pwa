@@ -8,9 +8,10 @@ export type Counter = (lines: readonly CompactionLine[], sinceMs: number) => num
 const PAIR_MS = 600_000;   // COMPACTION_PAIR_MS, pinned against the module in the suite
 const T = 1_800_000_000_000;
 const MIN = 60_000;
-type Spec = readonly [phase: CompactionLine['phase'], trigger: CompactionLine['trigger'], atOffsetMs: number, transcript?: string | null];
-const L = (specs: readonly Spec[]): CompactionLine[] =>
-  specs.map(([phase, trigger, off, transcript]) => ({ phase, trigger, at: T + off, transcript: transcript ?? null }));
+type Spec = readonly [phase: CompactionLine['phase'], trigger: CompactionLine['trigger'], atOffsetMs: number,
+  transcript?: string | null, scope?: CompactionLine['scope']];
+const L = (specs: readonly Spec[]): CompactionLine[] => specs.map(([phase, trigger, off, transcript, scope]) =>
+  ({ phase, trigger, at: T + off, transcript: transcript ?? null, scope: scope === undefined ? 'main' : scope }));
 
 /** [name, lines, sinceMs, expected count]. */
 export const COUNT_CASES: ReadonlyArray<readonly [string, readonly CompactionLine[], number, number]> = [
@@ -39,28 +40,26 @@ export const COUNT_CASES: ReadonlyArray<readonly [string, readonly CompactionLin
   ['a line at sinceMs counts', L([['pre', 'auto', 0]]), T, 1],
   ['a pre before sinceMs and its post after count one (the post)', L([['pre', 'auto', 0], ['post', 'auto', 2 * MIN]]), T + MIN, 1],
   ['other pairs only with other', L([['pre', 'other', 0], ['post', 'other', MIN], ['post', 'auto', 2 * MIN]]), T, 2],
-  // Plan review 1890 I1: a refused PreCompact is no compaction.
-  ['a pre and its refusal count none', L([['pre', 'auto', 0], ['refused', 'auto', 0]]), T, 0],
-  ['a refusal alone counts none', L([['refused', 'auto', 0]]), T, 0],
-  ['pre, refused, pre, post is one compaction', L([['pre', 'auto', 0], ['refused', 'auto', 0], ['pre', 'auto', MIN],
-    ['post', 'auto', 2 * MIN]]), T, 1],
-  ['two refusals and no compaction count none', L([['pre', 'auto', 0], ['refused', 'auto', 0], ['pre', 'auto', MIN],
-    ['refused', 'auto', MIN]]), T, 0],
-  ['a refusal of another trigger cancels nothing', L([['pre', 'auto', 0], ['refused', 'manual', 0]]), T, 1],
-  ['a refusal before the pre cancels nothing', L([['refused', 'auto', 0], ['pre', 'auto', MIN]]), T, 1],
-  ['a refusal past the window cancels nothing', L([['pre', 'auto', 0], ['refused', 'auto', PAIR_MS + 1]]), T, 1],
-  ['a refusal cancels the latest pre, so the earlier still pairs with its post',
-    L([['pre', 'auto', 0, '/t/a.jsonl'], ['post', 'auto', MIN, '/t/a.jsonl'], ['pre', 'auto', 2 * MIN, null],
-      ['refused', 'auto', 2 * MIN, null]]), T, 1],
+  // Plan review 1896 B3: a refused line is written in place of a refused event's pre; it counts nothing, cancels nothing.
+  ['a refused line alone counts none', L([['refused', 'auto', 0]]), T, 0],
+  ['a pre and a refused line count one: a refusal never cancels a pre', L([['pre', 'auto', 0], ['refused', 'auto', 0]]), T, 1],
+  ['a refused line is never a post\'s pre', L([['refused', 'auto', 0], ['post', 'auto', MIN]]), T, 1],
+  // Plan review 1896 B2: only the main conversation's compactions count.
+  ['a subagent\'s compaction counts none', L([['pre', 'auto', 0, '/t/agent.jsonl', 'subagent'],
+    ['post', 'auto', MIN, '/t/agent.jsonl', 'subagent']]), T, 0],
+  ['an ambiguous compaction counts none', L([['pre', 'auto', 0, null, 'ambiguous'], ['post', 'auto', MIN, null, 'ambiguous']]), T, 0],
+  ['a line with no scope verdict counts none', L([['pre', 'auto', 0, null, null]]), T, 0],
+  ['a main pre beside a subagent pre counts one', L([['pre', 'auto', 0], ['pre', 'auto', MIN, null, 'subagent']]), T, 1],
+  ['a subagent post never settles a main pre', L([['pre', 'auto', 0], ['post', 'auto', MIN, null, 'subagent']]), T, 1],
 ];
 
 /** Every sequence of up to four lines from {pre auto, post auto, post manual} at two times. */
 export function smallSequences(): CompactionLine[][] {
   const atoms: CompactionLine[] = [];
   for (const off of [0, MIN]) {
-    atoms.push({ phase: 'pre', trigger: 'auto', at: T + off, transcript: null });
-    atoms.push({ phase: 'post', trigger: 'auto', at: T + off, transcript: null });
-    atoms.push({ phase: 'post', trigger: 'manual', at: T + off, transcript: null });
+    atoms.push({ phase: 'pre', trigger: 'auto', at: T + off, transcript: null, scope: 'main' });
+    atoms.push({ phase: 'post', trigger: 'auto', at: T + off, transcript: null, scope: 'main' });
+    atoms.push({ phase: 'post', trigger: 'manual', at: T + off, transcript: null, scope: 'main' });
   }
   const out: CompactionLine[][] = [[]];
   let layer: CompactionLine[][] = [[]];

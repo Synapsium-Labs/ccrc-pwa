@@ -27,8 +27,8 @@ describe('compactionsSince', () => {
   });
   it('the order of the lines does not change the count', () => {
     const lines: CompactionLine[] = [
-      { phase: 'post', trigger: 'auto', at: T + 60_000, transcript: null },
-      { phase: 'pre', trigger: 'auto', at: T, transcript: null },
+      { phase: 'post', trigger: 'auto', at: T + 60_000, transcript: null, scope: 'main' },
+      { phase: 'pre', trigger: 'auto', at: T, transcript: null, scope: 'main' },
     ];
     expect(compactionsSince(lines, T)).toBe(1);
     expect(compactionsSince([...lines].reverse(), T)).toBe(1);
@@ -56,8 +56,8 @@ const preLine = (at: number, trigger = 'auto', transcript: string | null = '/t/a
 
 describe('readCompactionsMeasured keeps absent, unreadable and malformed apart', () => {
   it('the three paths are the registry\'s journal, the pre file and its rotation', () => {
-    expect(P).toEqual({ journal: '/reg/lane-a-project-a.compactions', pre: '/reg/lane-a-project-a.precompact',
-      prev: '/reg/lane-a-project-a.precompactprev' });
+    expect(P).toEqual({ journal: '/reg/lane-a-project-a.compactions', pre: '/reg/lane-a-project-a.compactevents',
+      prev: '/reg/lane-a-project-a.compacteventsprev' });
   });
   it('none of the three files: absent, never zero lines', async () => {
     expect(await readCompactionsMeasured(tableIO({}), '/reg', ID)).toEqual({ kind: 'absent' });
@@ -72,8 +72,8 @@ describe('readCompactionsMeasured keeps absent, unreadable and malformed apart',
       [P.journal]: `${record(T + 60_000, 'manual')}\n`, [P.pre]: `${preLine(T, 'manual')}\n`,
     }), '/reg', ID);
     expect(r).toEqual({ kind: 'lines', skipped: 0, lines: [
-      { at: T + 60_000, trigger: 'manual', phase: 'post', transcript: '/t/a.jsonl' },
-      { at: T, trigger: 'manual', phase: 'pre', transcript: '/t/a.jsonl' },
+      { at: T + 60_000, trigger: 'manual', phase: 'post', transcript: '/t/a.jsonl', scope: 'main' },
+      { at: T, trigger: 'manual', phase: 'pre', transcript: '/t/a.jsonl', scope: 'main' },
     ] });
   });
   it('the journal alone (an older hook, before any pre line) reads its posts', async () => {
@@ -82,7 +82,7 @@ describe('readCompactionsMeasured keeps absent, unreadable and malformed apart',
   });
   it('the pre files alone (no compaction has settled yet) read their pres', async () => {
     const r = await readCompactionsMeasured(tableIO({ [P.prev]: `${preLine(T)}\n` }), '/reg', ID);
-    expect(r.kind === 'lines' && r.lines).toEqual([{ at: T, trigger: 'auto', phase: 'pre', transcript: '/t/a.jsonl' }]);
+    expect(r.kind === 'lines' && r.lines).toEqual([{ at: T, trigger: 'auto', phase: 'pre', transcript: '/t/a.jsonl', scope: 'main' }]);
   });
   it('a malformed line is counted in skipped and never thrown; a trailing newline is not a line', async () => {
     const r = await readCompactionsMeasured(tableIO({
@@ -98,11 +98,17 @@ describe('readCompactionsMeasured keeps absent, unreadable and malformed apart',
     }), '/reg', ID);
     expect(r).toEqual({ kind: 'lines', lines: [], skipped: 2 });
   });
-  it('a refused line in the pre file reads as refused (the compaction piece writes it, plan review 1890 I1)', async () => {
+  it('a refused line in the pre file reads as refused, and never cancels a pre (plan review 1896 B3)', async () => {
     const refused = JSON.stringify({ at: T + 5, trigger: 'auto', scope: 'main', transcript: '/t/a.jsonl', phase: 'refused' });
     const r = await readCompactionsMeasured(tableIO({ [P.pre]: `${preLine(T)}\n${refused}\n` }), '/reg', ID);
     expect(r.kind === 'lines' && r.lines.map((l) => l.phase)).toEqual(['pre', 'refused']);
-    expect(r.kind === 'lines' && compactionsSince(r.lines, T)).toBe(0);
+    expect(r.kind === 'lines' && compactionsSince(r.lines, T)).toBe(1);
+  });
+  it('each line keeps the hook\'s scope verdict; a word outside the three reads null, never main', async () => {
+    const line = (scope: unknown): string => JSON.stringify({ at: T, trigger: 'auto', scope, transcript: null, phase: 'pre' });
+    const r = await readCompactionsMeasured(tableIO({ [P.pre]: ['main', 'subagent', 'ambiguous', null, 'Main', 7]
+      .map((x) => line(x)).join('\n') }), '/reg', ID);
+    expect(r.kind === 'lines' && r.lines.map((l) => l.scope)).toEqual(['main', 'subagent', 'ambiguous', null, null, null]);
   });
   it('a trigger outside auto and manual reads other', async () => {
     const r = await readCompactionsMeasured(tableIO({ [P.pre]: `${preLine(T, 'weird')}\n` }), '/reg', ID);
@@ -123,11 +129,11 @@ describe('readCompactionsMeasured keeps absent, unreadable and malformed apart',
     const reg = mkTmp('ccrc-continuity-compactions-');
     mkdirSync(reg, { recursive: true });
     writeFileSync(path.join(reg, `${ID}.compactions`), `${record(T)}\n`);
-    writeFileSync(path.join(reg, `${ID}.precompact`), `${preLine(T - 1)}\n`);
+    writeFileSync(path.join(reg, `${ID}.compactevents`), `${preLine(T - 1)}\n`);
     const r = await readCompactionsMeasured(localIO, reg, ID);
     expect(r.kind === 'lines' && compactionsSince(r.lines, T - 1)).toBe(1);
     if (process.getuid?.() !== 0) {
-      chmodSync(path.join(reg, `${ID}.precompact`), 0o000);
+      chmodSync(path.join(reg, `${ID}.compactevents`), 0o000);
       expect(await readCompactionsMeasured(localIO, reg, ID)).toEqual({ kind: 'unreadable' });
     }
   });

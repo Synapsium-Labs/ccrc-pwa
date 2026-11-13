@@ -1551,7 +1551,9 @@ _hook_lock_still_canonical() {   # <fd> -> 0 iff this descriptor is STILL the ca
 # ── THE PRECOMPACT LINE (Overlord W1a, W0-05) ────────────────────────────
 # An automatic compaction can fire PreCompact with no PostCompact after it, so
 # the server counts a compaction from this line, joined to its journal record
-# by trigger, transcript and time. ITS OWN FILE, NOT `.compactions`, and that is
+# by trigger, transcript and time. NAMED `compactevents`, never `precompact`,
+# which is a route field (`$REG/<id>.<field>`) that `cmd_route --set` writes.
+# ITS OWN FILE, NOT `.compactions`, and that is
 # legitimately different: every PostCompact commit re-checks the WHOLE journal
 # against JOURNAL_RECORD_PRED, a safety boundary, so a second line shape there
 # would refuse every later commit, an older hook's after a rollback included.
@@ -1562,12 +1564,16 @@ _hook_lock_still_canonical() {   # <fd> -> 0 iff this descriptor is STILL the ca
 # under the row's `.compactions.lock`, so a line and a commit never interleave.
 # Dot-free, so `_reg_purge` and the slug passes take it with the row. BOUNDED
 # BY ROTATION, with no temp file: at PRECOMPACT_KEEP lines it is renamed to
-# `.precompactprev` and a fresh file starts, so a reader of both always holds
+# `.compacteventsprev` and a fresh file starts, so a reader of both always holds
 # the last PRECOMPACT_KEEP lines. Its own lock miss still drops the line; the
 # server then reads one compaction fewer, never a file it cannot tell apart.
 PRECOMPACT_KEEP=32
-_hook_compact_pre_line() {   # PreCompact -> one line on $REG/<id>.precompact; silent and total on any failure
-  local f="$REG/$id.precompact" line="" lockfd="" lines=()
+_hook_compact_pre_line() {   # PreCompact -> one line on $REG/<id>.compactevents; silent and total on any failure
+  local f="$REG/$id.compactevents" line="" lockfd="" lines=()
+  # THE SCOPE VERDICT ON EVERY LINE: every PreCompact payload names the parent's
+  # transcript, so `_hook_compact_scope`'s word is all that tells a subagent's
+  # compaction apart. Asked here when the card did not run (its off switch).
+  [[ -n "${CS_SCOPE+x}" ]] || _hook_history_scope_verdict || true
   line=$(jq -c --argjson at "$(_hook_epoch_ms)" --arg s "${CS_SCOPE-}" --arg t "${CS_TRANSCRIPT-}" \
     '{at:$at, trigger:(.trigger // "auto" | if . == "auto" or . == "manual" then . else "other" end),
       scope:(if $s=="" then null else $s end), transcript:(if $t=="" then null else $t end), phase:"pre"}' \
@@ -1579,7 +1585,7 @@ _hook_compact_pre_line() {   # PreCompact -> one line on $REG/<id>.precompact; s
   if _hook_generation_ok && [[ ! -L "$f" ]] && { [[ ! -e "$f" ]] || [[ -f "$f" ]]; }; then
     [[ -f "$f" ]] && { mapfile -t lines < "$f"; } 2>/dev/null
     if (( ${#lines[@]} >= PRECOMPACT_KEEP )) && _hook_lock_still_canonical "$lockfd"; then
-      mv -f "$f" "$REG/$id.precompactprev" 2>/dev/null
+      mv -f "$f" "$REG/$id.compacteventsprev" 2>/dev/null
     fi
     _hook_lock_still_canonical "$lockfd" && { printf '%s\n' "$line" >> "$f"; } 2>/dev/null
   fi

@@ -1,10 +1,10 @@
 // The PreCompact line (Overlord W1a, context readings; W0-05). An automatic compaction can fire PreCompact with no
-// PostCompact after it, so PreCompact writes one line to `$REG/<id>.precompact`, its OWN file: every PostCompact commit
+// PostCompact after it, so PreCompact writes one line to `$REG/<id>.compactevents`, its OWN file: every PostCompact commit
 // re-checks the whole `.compactions` journal against JOURNAL_RECORD_PRED, and a second line shape there would refuse
 // every later commit. One writer (`_hook_compact_pre_line`), an arm of its own after `_hook_compact_pre` and
 // `_hook_history_pre`, so the card's early returns (its off switch, an unresolved scope, its lock miss) never drop the
 // line; under the row's `.compactions.lock`; dot-free, so `_reg_purge` takes it with the row; bounded by rotation to
-// `.precompactprev` at PRECOMPACT_KEEP lines.
+// `.compacteventsprev` at PRECOMPACT_KEEP lines.
 //
 // Runs ccd/session-hook.sh for real inside a fixture HOME (the harness shape of session-hook-compact-carry.test.ts,
 // copied: a test file cannot import another). `_reg_purge` runs through makeCcdHarness's fixture HOME, never the live one.
@@ -35,8 +35,8 @@ beforeEach(() => {
 afterEach(() => { fs.rmSync(home, { recursive: true, force: true }); });
 
 const reg = (): string => path.join(home, '.cc-sessions');
-const preFile = (): string => path.join(reg(), `${ID}.precompact`);
-const prevFile = (): string => path.join(reg(), `${ID}.precompactprev`);
+const preFile = (): string => path.join(reg(), `${ID}.compactevents`);
+const prevFile = (): string => path.join(reg(), `${ID}.compacteventsprev`);
 const journal = (): string => path.join(reg(), `${ID}.compactions`);
 const linesOf = (p: string): Array<Record<string, unknown>> => fs.existsSync(p)
   ? fs.readFileSync(p, 'utf8').split('\n').filter((l) => l !== '').map((l) => JSON.parse(l) as Record<string, unknown>)
@@ -100,12 +100,25 @@ describe('PreCompact writes one line to its own file (W0-05)', () => {
     expect(linesOf(preFile())).toEqual([{ at: expect.any(Number), trigger: 'auto', scope: null, transcript: null, phase: 'pre' }]);
   });
 
-  it('with the compaction card switched off the line is still written', () => {
+  // Plan review 1896 B2: the line carries the scope verdict even when the card did not run, because every PreCompact
+  // payload names the parent's transcript and the verdict is all that tells a subagent's compaction apart.
+  it('with the compaction card switched off the line is still written, with the hook\'s own scope verdict', () => {
     fs.mkdirSync(path.join(home, '.ccrc'), { recursive: true });
     fs.writeFileSync(path.join(home, '.ccrc', 'compact-card-off'), '');
-    run(preCompact('auto', transcript()));
+    const t = transcript();
+    run(preCompact('auto', t));
     expect(fs.existsSync(path.join(reg(), `${ID}.compactset`)), 'the card did not run').toBe(false);
-    expect(linesOf(preFile())).toEqual([{ at: expect.any(Number), trigger: 'auto', scope: null, transcript: null, phase: 'pre' }]);
+    expect(linesOf(preFile())).toEqual([{ at: expect.any(Number), trigger: 'auto', scope: 'main', transcript: t, phase: 'pre' }]);
+  });
+
+  it('a subagent\'s automatic compaction is written with scope subagent and its own transcript', () => {
+    const t = transcript();
+    const agents = path.join(path.dirname(t), UUID, 'subagents');
+    fs.mkdirSync(agents, { recursive: true });
+    const live = path.join(agents, 'agent-a1.jsonl');
+    fs.writeFileSync(live, '{"type":"user"}\n');
+    run(preCompact('auto', t));
+    expect(linesOf(preFile())).toEqual([{ at: expect.any(Number), trigger: 'auto', scope: 'subagent', transcript: live, phase: 'pre' }]);
   });
 
   it('a trigger outside auto and manual is written as other, never verbatim', () => {
@@ -184,15 +197,15 @@ describe('the file is bounded by rotation, with no temp file', () => {
     return text;
   };
 
-  it(`at ${KEEP} lines the file moves to .precompactprev whole, and the new line starts a fresh file`, () => {
+  it(`at ${KEEP} lines the file moves to .compacteventsprev whole, and the new line starts a fresh file`, () => {
     const text = seedLines(KEEP);
     run(preCompact('manual', transcript()));
     expect(fs.readFileSync(prevFile(), 'utf8')).toBe(text);
     expect(linesOf(preFile()).map((l) => l['trigger'])).toEqual(['manual']);
-    expect(fs.readdirSync(reg()).filter((n) => n.startsWith(`.${ID}.precompact`) || n.endsWith('.tmp')), 'no temp file').toEqual([]);
+    expect(fs.readdirSync(reg()).filter((n) => n.startsWith(`.${ID}.compactevents`) || n.endsWith('.tmp')), 'no temp file').toEqual([]);
   });
 
-  it(`below ${KEEP} lines it appends in place and leaves no .precompactprev`, () => {
+  it(`below ${KEEP} lines it appends in place and leaves no .compacteventsprev`, () => {
     seedLines(KEEP - 1);
     run(preCompact('auto', transcript()));
     expect(linesOf(preFile())).toHaveLength(KEEP);
@@ -201,7 +214,7 @@ describe('the file is bounded by rotation, with no temp file', () => {
 });
 
 describe('PostCompact and its journal are untouched by the line', () => {
-  it('a PreCompact then a PostCompact: one pre line in .precompact, one record in .compactions with no phase', () => {
+  it('a PreCompact then a PostCompact: one pre line in .compactevents, one record in .compactions with no phase', () => {
     fs.copyFileSync(HELPER_SRC, path.join(reg(), 'compact-card.mjs'));
     const t = transcript();
     fs.mkdirSync(path.join(home, 'repo'));
@@ -225,27 +238,27 @@ describe('PostCompact and its journal are untouched by the line', () => {
 });
 
 describe('the row\'s purge takes both files (dot-free, so the suffix glob covers them)', () => {
-  it('_reg_purge removes .precompact and .precompactprev with the row', () => {
+  it('_reg_purge removes .compactevents and .compacteventsprev with the row', () => {
     const h = makeCcdHarness('ccrc-precompact-purge-');
     try {
       const id = 'demo-still-river';
       h.sh(`_reg_set ${id} project demo
         _reg_set ${id} workspace still-river`);
       const r = path.join(h.home, '.cc-sessions');
-      fs.writeFileSync(path.join(r, `${id}.precompact`), '{"phase":"pre"}\n');
-      fs.writeFileSync(path.join(r, `${id}.precompactprev`), '{"phase":"pre"}\n');
+      fs.writeFileSync(path.join(r, `${id}.compactevents`), '{"phase":"pre"}\n');
+      fs.writeFileSync(path.join(r, `${id}.compacteventsprev`), '{"phase":"pre"}\n');
       h.sh(`_reg_purge ${id}`);
-      expect(fs.existsSync(path.join(r, `${id}.precompact`))).toBe(false);
-      expect(fs.existsSync(path.join(r, `${id}.precompactprev`))).toBe(false);
+      expect(fs.existsSync(path.join(r, `${id}.compactevents`))).toBe(false);
+      expect(fs.existsSync(path.join(r, `${id}.compacteventsprev`))).toBe(false);
     } finally { h.cleanup(); }
   });
 
-  it('a lone .precompact or .precompactprev holds the slug, and _ws_slug_residue names it', () => {
+  it('a lone .compactevents or .compacteventsprev holds the slug, and _ws_slug_residue names it', () => {
     const h = makeCcdHarness('ccrc-precompact-slug-');
     try {
       const r = path.join(h.home, '.cc-sessions');
       fs.mkdirSync(r, { recursive: true });
-      for (const field of ['precompact', 'precompactprev']) {
+      for (const field of ['compactevents', 'compacteventsprev']) {
         fs.writeFileSync(path.join(r, `demo-quiet-mesa.${field}`), '{"phase":"pre"}\n');
         expect(h.sh('_ws_slug_free demo quiet-mesa && echo free || echo held').trim(), field).toBe('held');
         expect(h.sh('_ws_slug_residue demo quiet-mesa'), field).toBe(`demo-quiet-mesa.${field}`);
@@ -257,7 +270,7 @@ describe('the row\'s purge takes both files (dot-free, so the suffix glob covers
 
   it('the hook names both files dot-free: no dot inside the suffix, none before the id', () => {
     const src = fs.readFileSync(HOOK, 'utf8');
-    expect(src).toContain('local f="$REG/$id.precompact"');
-    expect(src).toContain('"$REG/$id.precompactprev"');
+    expect(src).toContain('local f="$REG/$id.compactevents"');
+    expect(src).toContain('"$REG/$id.compacteventsprev"');
   });
 });
