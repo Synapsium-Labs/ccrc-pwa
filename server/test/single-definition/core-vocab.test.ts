@@ -873,10 +873,19 @@ describe('one MAIL_PACE: the mail gate pace has one home (Overlord spec §6.4)',
       .toHaveLength(1);
     expect(code.match(/\broleOf\(/g)).toHaveLength(1);
   });
+  // Review 1895 F3: an index is any read of a row, by brackets, a dot, an optional chain or a destructuring.
+  const INDEX = /\bMAIL_PACE\s*(?:\[|\??\.\s*[A-Za-z_$])|\}\s*=\s*MAIL_PACE\b/;
   it('the row is chosen in coord/mailPace.ts only: no other source indexes MAIL_PACE, and mailPaceRoleOf is gone', () => {
-    const INDEX = /\bMAIL_PACE\s*\[/;
     expect(ALL.filter((f) => INDEX.test(stallCodeText(readFileSync(f, 'utf8')))).map(rel)).toEqual(['server/src/coord/mailPace.ts']);
     expect(ALL.filter((f) => /\bmailPaceRoleOf\b/.test(readFileSync(f, 'utf8'))).map(rel)).toEqual([]);
+  });
+  it('CONTROL: the MAIL_PACE index scan sees every way to read a row, and passes an import and a type use', () => {
+    for (const read of ["MAIL_PACE['worker']", 'MAIL_PACE.worker.quietMs', 'MAIL_PACE?.coordinator', 'const { worker } = MAIL_PACE;']) {
+      expect(INDEX.test(read), read).toBe(true);
+    }
+    for (const other of ["import { MAIL_PACE } from './coord/mailPace.js';", 'keyof typeof MAIL_PACE', 'MAIL_PACE_IS_TOTAL']) {
+      expect(INDEX.test(other), other).toBe(false);
+    }
   });
   it('CONTROL: the retired-definition scan catches a planted copy and passes an import', () => {
     expect(RETIRED.test('const COORD_QUIET_MS = 15_000;')).toBe(true);
