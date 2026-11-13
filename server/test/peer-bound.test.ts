@@ -6,6 +6,7 @@ import { describe, it, expect, vi } from 'vitest';
 import path from 'node:path';
 import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
+import { peerMailVerdict, type PeerFacts } from '../src/coord/peerBound.js';
 import { mkTmp } from './tmpHelpers.js';
 
 const HOUR = 3_600_000;
@@ -76,5 +77,36 @@ describe('the store: invitations and the peer counts (#2726, schema 64)', () => 
       const plan = (s.db.prepare(`EXPLAIN QUERY PLAN ${q2}`).all() as { detail: string }[]).map((r) => r.detail).join(' | ');
       expect(plan, q2).not.toMatch(/\bSCAN (mail|mail_deliveries)\b/);
     }
+  });
+});
+
+describe('peerMailVerdict: the bound, unchanged by the move to L1 (plan Task 3)', () => {
+  const NOW = 1_800_000_000_000;
+  const ats = (n: number): number[] => Array.from({ length: n }, (_, i) => NOW - HOUR + 1 + i);
+  const facts = (over: Partial<PeerFacts> = {}): PeerFacts => ({
+    fromId: 'demo-quiet-mesa', toId: 'demo-calm-ridge', duplicate: false, outstanding: 0, hourAts: [], now: NOW, ...over,
+  });
+
+  it('inside every bound: bounded', () => {
+    expect(peerMailVerdict(facts())).toEqual({ verdict: 'bounded' });
+  });
+  it("an outstanding repeat: duplicate, with today's sentence", () => {
+    expect(peerMailVerdict(facts({ duplicate: true }))).toEqual({ verdict: 'duplicate',
+      detail: 'an outstanding peer mail from demo-quiet-mesa to demo-calm-ridge with this subject is already queued' });
+  });
+  it('the pair arm: 2 outstanding is bounded, 3 refuses', () => {
+    expect(peerMailVerdict(facts({ outstanding: 2 }))).toEqual({ verdict: 'bounded' });
+    expect(peerMailVerdict(facts({ outstanding: 3 }))).toMatchObject({ verdict: 'peer-quota',
+      detail: expect.stringMatching(/^3 peer mails from demo-quiet-mesa to demo-calm-ridge are already outstanding/) });
+  });
+  it('the hourly arm: 11 in the hour is bounded, 12 refuses', () => {
+    expect(peerMailVerdict(facts({ hourAts: ats(11) }))).toEqual({ verdict: 'bounded' });
+    expect(peerMailVerdict(facts({ hourAts: ats(12) }))).toMatchObject({ verdict: 'peer-quota',
+      detail: expect.stringMatching(/^demo-quiet-mesa has sent 12 peer mails in the last hour/) });
+  });
+  it("today's order: duplicate before the pair, the pair before the hour", () => {
+    expect(peerMailVerdict(facts({ duplicate: true, outstanding: 3, hourAts: ats(12) }))).toMatchObject({ verdict: 'duplicate' });
+    expect(peerMailVerdict(facts({ outstanding: 3, hourAts: ats(12) }))).toMatchObject({
+      verdict: 'peer-quota', detail: expect.stringMatching(/are already outstanding/) });
   });
 });

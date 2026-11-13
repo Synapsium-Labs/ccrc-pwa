@@ -16,6 +16,7 @@ import { turnReadDeps, turnVerdictFor } from '../turnverdict.js';
 import type { TurnVerdict } from './archiveDoor.js';
 import { configDirFor } from '../config.js';
 import { peerDeliverable, archiveContradicted } from './peers.js';
+import { peerMailVerdict } from './peerBound.js';
 import { claimLivenessProbe, claimMailHint, lapseWindowStart, normalizeClaimPath, rechainTargets, recentlyLapsedClaims, type LivenessVerdict } from './claims.js';
 import { CCD_ARGV, ccdCan, deviceActor, sweepDec } from '../ccdargv.js';
 import { decideRoute, parseRouteRequest } from './route.js';
@@ -91,7 +92,7 @@ import {
   parseCanonicalPositiveSafeInteger, parseQuestionId, readDialogAnswer,
   LEDGER_STALE_MS, LEDGER_TITLE_MAX_BYTES, ledgerPath, shapeProgramSlug,
   MAIL_ARTIFACTS_MAX, MAIL_ARTIFACT_PATH_MAX_BYTES, MAIL_BODY_MAX_BYTES, MAIL_INBOX_PAGE_MAX_BYTES,
-  MAIL_SUBJECT_MAX_BYTES, PEER_ETIQUETTE, PEER_MAIL_HOURLY, PEER_MAIL_MAX_OUTSTANDING, transitionsFor, IDLE_RUN_STATES,
+  MAIL_SUBJECT_MAX_BYTES, PEER_ETIQUETTE, transitionsFor, IDLE_RUN_STATES,
   isRegistryId, isSessionIdShape, routeEventDetail,
   type AskState, type ClaimConflict, type CoordCapsView, type LifecycleQueryResult,
   type MirroredLifecycleEvent, type PeerDeliverable, type PeerSummary, type RunState, type RunSummary,
@@ -1040,18 +1041,19 @@ export function registerCoordRoutes(
     // 'duplicate' first: the most specific refusal — "your message is
     // already queued" tells the caller not to resend at all, where
     // 'peer-quota' invites a retry later.
+    // The decision, its order and its sentences are `peerMailVerdict`'s (L1, `coord/peerBound.ts`, #2726); this
+    // block reads the facts and acts.
     if (runId === null) {
-      if (coord.hasOutstandingPeerDuplicate(fromId, resolvedToId, subject)) {
-        return refuse(reply, 'duplicate', { fromId, fromUuid, toId, kind, subject, runId },
-          `an outstanding peer mail from ${fromId} to ${resolvedToId} with this subject is already queued`);
-      }
-      if (coord.outstandingPeerCount(fromId, resolvedToId) >= PEER_MAIL_MAX_OUTSTANDING) {
-        return refuse(reply, 'peer-quota', { fromId, fromUuid, toId, kind, subject, runId },
-          `${PEER_MAIL_MAX_OUTSTANDING} peer mails from ${fromId} to ${resolvedToId} are already outstanding`);
-      }
-      if (coord.peerMailAtsInLastHour(fromId, Date.now()).length >= PEER_MAIL_HOURLY) {
-        return refuse(reply, 'peer-quota', { fromId, fromUuid, toId, kind, subject, runId },
-          `${fromId} has sent ${PEER_MAIL_HOURLY} peer mails in the last hour`);
+      const now = Date.now();
+      const v = peerMailVerdict({
+        fromId, toId: resolvedToId,
+        duplicate: coord.hasOutstandingPeerDuplicate(fromId, resolvedToId, subject),
+        outstanding: coord.outstandingPeerCount(fromId, resolvedToId),
+        hourAts: coord.peerMailAtsInLastHour(fromId, now),
+        now,
+      });
+      if (v.verdict !== 'bounded') {
+        return refuse(reply, v.verdict, { fromId, fromUuid, toId, kind, subject, runId }, v.detail);
       }
     }
 
