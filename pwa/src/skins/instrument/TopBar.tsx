@@ -38,6 +38,7 @@ import { commandDoor } from '../../command/door';
 import { COMMAND_FIELD_WORDS } from '../../command/registry';
 import { AccountsStrip } from '../../fleet/AccountsStrip';
 import { badgePrint, placeBadge, useNavBadges, type NavBadges } from '../../fleet/navBadges';
+import { FaceMark } from '../../face/FaceMark';
 import { NotificationBell } from '../../fleet/NotificationBell';
 import { DESK_PLACES } from '../../lib/places';
 import { useLocation } from '../../lib/router';
@@ -117,6 +118,7 @@ export function TopBar(): ReactNode {
             {...commandDoor('go-fleet')}
           >
             <Wordmark />
+            <FaceMark />
           </Door>
           {DESK_DOORS.map((d) => ('reserved' in d
             ? null

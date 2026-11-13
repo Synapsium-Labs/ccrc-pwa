@@ -161,9 +161,9 @@ async function lineFaults(page: Page, holderSel: string, barSel: string | null, 
     // card of the lanes row is whole inside its row with its readings whole (refined-bar's check).
     if (bar !== null) {
       const bb = bar.getBoundingClientRect();
-      for (const c of [...bar.querySelector('.ref-bar')!.children] as HTMLElement[]) {
+      for (const c of [...bar.querySelector('.ref-bar')!.children] as Element[]) {
         const r = c.getBoundingClientRect();
-        if (r.width > 0) inside(`the bar's ${c.className.split(' ').pop()}`, r, bb, 'the bar');
+        if (r.width > 0) inside(`the bar's ${(c.getAttribute('class') ?? c.tagName).split(' ').pop()}`, r, bb, 'the bar');
       }
       const fresh = bar.querySelector<HTMLElement>('.ref-bar-new');
       if (fresh === null) out.push('no New session');
