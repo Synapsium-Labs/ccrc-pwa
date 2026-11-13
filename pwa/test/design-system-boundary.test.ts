@@ -134,6 +134,8 @@ export const OWNED = [
   // The characters' art and its stylesheet, generated together (`ui/design/make-characters.mjs`): every `chr-*` class
   // `art.ts` emits and `characters.css` selects, derived by the generator so this list cannot drift from it.
   ...CHARACTER_CLASSES,
+  // The wordmark's typed entrance (`wordmark.css`): the word's width animation and the underscore's blink.
+  'wordmark-type', 'wordmark-cursor',
 ];
 
 /** Tokens the derivation finds that are NOT vocabulary, each with the reason.

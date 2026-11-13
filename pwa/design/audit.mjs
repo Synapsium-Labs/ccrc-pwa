@@ -1482,6 +1482,8 @@ export const KEYFRAME_TROUGHS = {
   'theme.css sheet-pop-out 0': 'the Sheet\'s desktop arm\'s one-shot exit to opacity 0 as the dialog unmounts (D-5933); reduced motion takes it to 1ms',
   'task-strip.css task-breathe 0.55': 'the running task mark (.task-mark--running). Reduced motion: animation none, opacity 0.85 — registered and measured above',
   'chat.css jump-in 0': 'a one-shot entrance for the jump-to-latest button; the resting state is opacity 1',
+  'wordmark.css wordmark-type 1': 'a width animation (`Wordmark typed`); the stops set no opacity. Reduced motion: animation none, the whole word',
+  'wordmark.css wordmark-cursor 0': 'the mark\'s underscore, a prompt caret blinking between 1 and 0, not content (chat.css caret-blink\'s reason). Reduced motion: animation none, steady',
   'chat.css caret-blink 0': 'the terminal caret, a step-end blink between 1 and 0. A caret is a cursor, not content',
   'chat.css working-glyph 0.35': 'the working indicator glyph (.msg-working-glyph). Reduced motion: animation none, opacity 1',
   'chat.css working-dot 0.25': 'the three working dots (.msg-working-dots i), 4px decorative pips beside a full-strength label; the same dots are the own-words Send\'s busy face (.dlg-reply-wait i), painted in Send\'s busy ink (.dlg-reply-send[aria-busy=\'true\'], measured above) on a button a screen reader hears as Sending…. Reduced motion: animation none, opacity inherits 1',
