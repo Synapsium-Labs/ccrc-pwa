@@ -3957,7 +3957,7 @@ _hook_start_send() {   # <report JSON> -> 0 taken (202); 1 stale-uuid; 2 no answ
   case "$out" in *'http 202'*) return 0 ;; *'"stale-uuid"'*) return 1 ;; *'http 4'[0-9][0-9]*) return 3 ;; *) return 2 ;; esac
 }
 _hook_start_report() {
-  local f="$REG/$id.startpending" now after=0 drop=0 t j rc pass=1 dead="" body="" inc="" s0=$SECONDS e kept=() out=()
+  local f="$REG/$id.startpending" now after=0 drop=0 t j rc pass=1 dead="" body="" inc="" s0=$SECONDS e kept=() stay=()
   case "$event" in UserPromptSubmit|SessionStart) ;; *) return 0 ;; esac
   [[ -z "$paid" && "$id" =~ ^[A-Za-z0-9_-]+$ && -f "$REG/$id.generation" && ! -L "$f" ]] || return 0
   { [ -e "$REG/$id.child" ] || [ -L "$REG/$id.child" ]; } && return 0
@@ -3969,8 +3969,8 @@ _hook_start_report() {
     t="${e%%$'\t'*}" j="${e#*$'\t'}"; [[ "$t" =~ ^[0-9]+$ ]] || t=0
     (( pass && SECONDS - s0 >= 4 )) && pass=0 dead=1
     rc=4; (( pass )) && { _hook_start_send "$j"; rc=$?; }
-    case "$rc" in 0) ;; 1) t=$(( t + 1 )); (( t >= START_RESEND_TRIES )) && drop=$(( drop + 1 )) || out+=("$t"$'\t'"$j") ;;
-      2) pass=0 dead=1; out+=("$t"$'\t'"$j") ;; 3) drop=$(( drop + 1 )) ;; *) out+=("$t"$'\t'"$j") ;; esac
+    case "$rc" in 0) ;; 1) t=$(( t + 1 )); (( t >= START_RESEND_TRIES )) && drop=$(( drop + 1 )) || stay+=("$t"$'\t'"$j") ;;
+      2) pass=0 dead=1; stay+=("$t"$'\t'"$j") ;; 3) drop=$(( drop + 1 )) ;; *) stay+=("$t"$'\t'"$j") ;; esac
   done
   (( ${#kept[@]} > 0 && now >= after )) && after=$(( now + START_RESEND_BACKOFF_MS ))
   if [[ "$event" == SessionStart && "$src" != fork ]]; then
@@ -3981,11 +3981,11 @@ _hook_start_report() {
         model: (.model | if type == "string" then .[0:128] elif type == "object" and (.id | type) == "string" then .id[0:128] else null end),
         rowIncarnation: (if $inc == "" then null else $inc end), reportedAt: $at}' <<<"$payload" 2>/dev/null) || body=""
     rc=2; [[ -n "$body" && -z "$dead" ]] && { _hook_start_send "$body"; rc=$?; }
-    [[ -z "$body" ]] || case "$rc" in 0) ;; 1|2) out+=("0"$'\t'"$body") ;; *) drop=$(( drop + 1 )) ;; esac
+    [[ -z "$body" ]] || case "$rc" in 0) ;; 1|2) stay+=("0"$'\t'"$body") ;; *) drop=$(( drop + 1 )) ;; esac
   fi
-  while (( ${#out[@]} > START_PENDING_MAX )); do out=("${out[@]:1}"); drop=$(( drop + 1 )); done
-  if (( ${#out[@]} == 0 && drop == 0 )); then rm -f -- "$f" 2>/dev/null; return 0; fi
-  { { printf '%s\t%s\n' "$after" "$drop"; if (( ${#out[@]} )); then printf '%s\n' "${out[@]}"; fi; } > "$f$$" && mv -f -- "$f$$" "$f"; } 2>/dev/null \
+  while (( ${#stay[@]} > START_PENDING_MAX )); do stay=("${stay[@]:1}"); drop=$(( drop + 1 )); done
+  if (( ${#stay[@]} == 0 && drop == 0 )); then rm -f -- "$f" 2>/dev/null; return 0; fi
+  { { printf '%s\t%s\n' "$after" "$drop"; if (( ${#stay[@]} )); then printf '%s\n' "${stay[@]}"; fi; } > "$f$$" && mv -f -- "$f$$" "$f"; } 2>/dev/null \
     || rm -f -- "$f$$" 2>/dev/null
   return 0
 }
