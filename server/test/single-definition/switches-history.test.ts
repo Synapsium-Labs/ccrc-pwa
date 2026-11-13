@@ -1116,9 +1116,9 @@ describe('the launch record: one appender, one purge, and no reader in the tree 
     const outside = named.filter(({ l, i }) => !(l.includes('DSP_DEFS=') || (i > open && i < close)));
     expect(outside.map(({ l }) => l.slice(0, 100)), 'a code line outside the gate statement and the appender names it: a second writer in waiting').toEqual([]);
     expect(named.filter(({ l }) => l.includes('DSP_DEFS=')), 'the gate statement is the one physical line holding DSP_DEFS=').toHaveLength(1);
-    // ONE writer inside the appender: exactly the appends to the file it names by `$f`.
+    // ONE writer inside the appender: its appends to the file it names by `$f` (the budget drop row, the two-line pair and the one-line row; this positive control only proves the scan still sees them).
     const body = all.slice(open + 1, close).filter((l) => !isBashComment(l));
-    expect(body.filter((l) => /(?:>>|>)\s*"\$[a-z]+"/.test(l) && l.includes('printf')).length, 'its appends are the budget row, the two-line row and the one-line row').toBeGreaterThan(0);
+    expect(body.filter((l) => /(?:>>|>)\s*"\$[a-z]+"/.test(l) && l.includes('printf')).length, 'the appender\'s appends are seen by the scan').toBeGreaterThan(0);
   });
 
   it('ccd/ccd: the only code line naming it is _reg_purge\'s post-generation rm', () => {

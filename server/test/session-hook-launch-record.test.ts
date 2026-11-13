@@ -297,7 +297,10 @@ describe('the launch record: the script path', () => {
     expect(got.map((r) => [r.k, r.why ?? r.script])).toEqual([['drop', 'path'], ['workflow', null]]);
   });
 
-  // Rows that vary the TRANSCRIPT path with a script path that is consistent with it, so only lrpath's transcript-side conjuncts can refuse them.
+  // Rows that vary the TRANSCRIPT path or the script name, with a script path consistent with the transcript. Which conjunct of `lrpath` refuses which row:
+  // a relative transcript -> `startswith("/")` on the transcript; another session's id -> `endswith("/" + $cs + ".jsonl")`; `//`, `/./` and `/../` ->
+  // the segment test on the script path (`all(. != "" and . != "." and . != "..")`); a space -> `all(lrbyte)` on the script path; `xxjs` -> `endswith(".js")`
+  // (its name slice `x` passes the name class, so nothing else refuses it). The absent, null and number rows below are refused by `($tp | type) == "string"`.
   const withTranscript = (dir: string, name = 'x.js', sid = SID): { extra: Record<string, unknown>; over: Record<string, unknown> } =>
     ({ extra: { transcript_path: `${dir}/${sid}.jsonl` }, over: { scriptPath: `${dir}/${sid}/workflows/scripts/${name}` } });
   const badTranscript: Array<[string, { extra: Record<string, unknown>; over: Record<string, unknown> }]> = [
@@ -308,13 +311,16 @@ describe('the launch record: the script path', () => {
     ['a /../ in the directory part', withTranscript('/rig/../rig/cfg/projects/-rig-repo')],
     ['a space in the directory part', withTranscript('/rig/cfg x/projects/-rig-repo')],
     ['a script name ending js with no dot', withTranscript(CONFIG, 'xxjs')],
+    ['a transcript_path that is absent', { extra: { transcript_path: undefined }, over: { scriptPath: SCRIPT } }],
+    ['a transcript_path that is null', { extra: { transcript_path: null }, over: { scriptPath: SCRIPT } }],
+    ['a transcript_path that is a number', { extra: { transcript_path: 42 }, over: { scriptPath: SCRIPT } }],
   ];
   it.each(badTranscript)('a transcript path or script name the check refuses keeps the row with script null, after one drop row with why path: %s', (_label, c) => {
     const got = added(workflow(c.over, { script: 'return 1' }, c.extra));
     expect(got).toEqual([{ v: 1, t: expect.any(Number), k: 'drop', why: 'path' }, { ...WORKFLOW_ROW, script: null }]);
   });
   it('CONTROL: the same shapes with a clean directory write the script path', () => {
-    for (const [label, dir, name] of [['an absolute directory', '/rig/cfg2/projects/-rig-repo', 'x.js'], ['a dotted directory name', '/rig/cfg.d/projects/-rig-repo', 'xx.js']] as const) {
+    for (const [label, dir, name] of [['an absolute directory', '/rig/cfg2/projects/-rig-repo', 'x.js'], ['a dotted directory name', '/rig/cfg.d/projects/-rig-repo', 'xx.js'], ['a leading-dot directory (the shape of a real config directory)', '/rig/.cfg/projects/-rig-repo', 'x.js']] as const) {
       const c = withTranscript(dir, name);
       expect(added(workflow(c.over, { script: 'return 1' }, c.extra)).map((r) => [r.k, r.script]), label).toEqual([['workflow', c.over['scriptPath']]]);
     }
@@ -514,6 +520,44 @@ describe('the launch record: its budget', () => {
       fs.chmodSync(delegFile(), 0o644);
       expect(fs.readFileSync(delegFile(), 'utf8'), `${label}: nothing was written`).toBe('{"v":1,"t":1,"k":"drop","why":"id"}\n');
     }
+  });
+
+  // The pair arm (a script-path failure: a drop row and the row) and the budget-drop arm, each with a mode-644 twin that writes, so the 444 case cannot pass
+  // because the append was never reached.
+  const SEED = '{"v":1,"t":1,"k":"drop","why":"id"}\n';
+  const pairPayload = (): Record<string, unknown> => workflow({ scriptPath: '/rig/repo/x.js' });
+  it('the pair arm writes both lines into a writable .deleg (the twin of the mode-444 case)', () => {
+    fs.writeFileSync(delegFile(), SEED);
+    const r = run(pairPayload(), {}, 30_000);
+    expect([r.timedOut, r.status, r.stderr]).toEqual([false, 0, '']);
+    expect(rows().slice(1).map((x) => [x.k, x.why ?? x.script])).toEqual([['drop', 'path'], ['workflow', null]]);
+  });
+  it.skipIf(process.getuid?.() === 0)('the pair arm keeps the hook\'s stderr empty when the append cannot open a mode-444 .deleg', () => {
+    fs.writeFileSync(delegFile(), SEED);
+    fs.chmodSync(delegFile(), 0o444);
+    const r = run(pairPayload(), {}, 30_000);
+    expect([r.timedOut, r.status], 'exit 0').toEqual([false, 0]);
+    expect(r.stderr, 'nothing on the hook\'s stderr').toBe('');
+    fs.chmodSync(delegFile(), 0o644);
+    expect(fs.readFileSync(delegFile(), 'utf8'), 'nothing was written').toBe(SEED);
+  });
+  it('the budget-drop arm writes one drop row into a writable .deleg at the cap (the twin of the mode-444 case)', () => {
+    plant(LRC_MAX_BYTES - 10);
+    const before = size();
+    const r = run(workflow(), {}, 30_000);
+    expect([r.timedOut, r.status, r.stderr]).toEqual([false, 0, '']);
+    expect(size() - before, 'one budget drop row and its LF').toBeGreaterThan(40);
+    expect(rows().slice(-1).map((x) => [x.k, x.why])).toEqual([['drop', 'budget']]);
+  });
+  it.skipIf(process.getuid?.() === 0)('the budget-drop arm keeps the hook\'s stderr empty when the append cannot open a mode-444 .deleg at the cap', () => {
+    plant(LRC_MAX_BYTES - 10);
+    const want = fs.readFileSync(delegFile());
+    fs.chmodSync(delegFile(), 0o444);
+    const r = run(workflow(), {}, 30_000);
+    expect([r.timedOut, r.status], 'exit 0').toEqual([false, 0]);
+    expect(r.stderr, 'nothing on the hook\'s stderr').toBe('');
+    fs.chmodSync(delegFile(), 0o644);
+    expect(fs.readFileSync(delegFile()).equals(want), 'nothing was written').toBe(true);
   });
 
   it('an append that lands after the row was purged leaves no .deleg behind', () => {
