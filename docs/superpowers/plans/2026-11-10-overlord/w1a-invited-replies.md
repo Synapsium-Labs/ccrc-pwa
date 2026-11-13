@@ -83,7 +83,7 @@ the subject's replies"); the build 9 peers design, `docs/superpowers/specs/2026-
   `references/peer-protocol.md` (the "Peer mail is quota'd" paragraph; `coordinator-skill.test.ts` requires both
   codes to appear there), and the build 9 design's table.
 - **Schema.** `server/src/coord/schema.ts`'s `MIGRATIONS` has 63 entries on `origin/main` (measured
-  2026-11-13 with the `grep -c` line every entry carries); this plan adds the 64th.
+  2026-11-13 with the `grep -c` line every entry carries); this plan adds the 64th. (Renumbered to the 65th on absorbing `origin/main` after D-8405 took slot 64; see Deviations.)
 
 ## Global Constraints
 
@@ -121,7 +121,7 @@ the subject's replies"); the build 9 peers design, `docs/superpowers/specs/2026-
    recipient that never mailed the sender gives it nothing, and peer invitations are themselves bounded.
 5. **Absence permits.** An older client sends no `inReplyTo` and sees today's behaviour; an older server ignores the
    field (it reads named body fields only), so a newer client's reply is merely bounded as today. An older build
-   opening a database at `user_version 64` reads every row with its own counts, which include invited replies:
+   opening a database at `user_version 65` reads every row with its own counts, which include invited replies:
    stricter, never looser.
 6. **L1 decides, L4 acts.** `peerBound.ts` imports no I/O and reads no clock; the route reads `Date.now()` once and
    passes it.
@@ -186,16 +186,16 @@ describe("today's peer refusal bodies, exactly (characterization for #2726)", ()
   Restore from the saved copy.
 - [ ] **Step 4: Commit.** `test(mail): pin today's three peer refusal bodies, and that an answer is counted (#2726)`
 
-### Task 2: The column, and the store's reads (schema 64)
+### Task 2: The column, and the store's reads (schema 65)
 
 **Files:**
-- Modify: `server/src/coord/schema.ts`: entry 64, after entry 63, in the form of entries 61 and 62.
+- Modify: `server/src/coord/schema.ts`: entry 65 (written as 64, renumbered on absorbing main), after the last entry, in the form of entries 61 and 62.
 - Modify: `server/src/coord/store.ts`: `insertMail`, `outstandingPeerCount`, `peerMailInLastHour` (replaced), a new
   `invitation`.
 - Modify: `server/src/coord/routes.ts`: check 9's hourly probe reads `peerMailAtsInLastHour(...).length` (no
   behaviour change).
 - Modify: `server/test/coord-db.test.ts`: the two migration-count pins (`COORD_SCHEMA_VERSION derives to 23` and the
-  migration-11 case) move from 63 to 64, each with a comment line naming `MIGRATIONS[63]`.
+  migration-11 case) move to the new count (65 after the renumber), each with a comment line naming the entry.
 - Test: `server/test/peer-bound.test.ts` (new), describe `'the store: invitations and the peer counts'`.
 
 **Interfaces:**
@@ -490,6 +490,10 @@ Decisions and departures of this plan, by slug; the coordinator issues the numbe
 - **peer-retry-field** — `retry` is a new, additive field on the `429 peer-quota` answer body only; the recorded
   `mail_rejections` row is unchanged.
 - **held-queue-deferred** — (b) is written up above, not built.
+- **migration-slot-65** — the column was written as migration 64; `origin/main` took slot 64 first (D-8405, the
+  automatic team link), so on absorbing main it became 65, with the coord-db pins and `run-close-switch.test.ts`'s
+  rewind moved to match, and `linking-team-link.test.ts`'s migration case, which read the LAST entry as D-8405's, finds
+  it by content instead. Run 1886 (start report) takes a slot too; whoever of us lands second renumbers again.
 - **peer-window-one-constant** — the hourly arm's one-hour window becomes one L0 constant, `PEER_MAIL_WINDOW_MS`
   (`shared/api.ts`), read by the store's hourly read and by the decider's `retry`, instead of a literal in each.
 - **peer-retry-one-word** — `PeerRetry`'s words are `ack` and `time`, one word each, so the quoted-kebab scan of

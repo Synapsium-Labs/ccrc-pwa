@@ -88,11 +88,16 @@ describe('the store: three states per group, default shadow', () => {
     const file = path.join(mkTmp('ccrc-runclose-migrate-'), 'coord.db');
     const fresh = openCoordDb(file);
     fresh.prepare("UPDATE run_close_settings SET neverStarted = 'on', claimantCrashed = 'off', updatedAt = 9").run();
-    // Back to version 53: undo migrations 64 (mail.answersMail and mail_answers_once, #2726), 63 (testbox_staged_changes and testbox_events.changes, D-8399), 62 (claims.chainedFrom,
+    // Back to version 53: undo migrations 65 (mail.answersMail and mail_answers_once, #2726), 64 (project_linking's team link columns,
+    // D-8405), 63 (testbox_staged_changes and
+    // testbox_events.changes, D-8399), 62 (claims.chainedFrom,
     // D-8395), 61 (nodes.reportedSweep, D-8386), 60 (claude_builds, D-8289), 59 (the plan model, D-8181), 58 (practice_cases,
     // Overlord W1a), 57 (testbox_events, D-8166), 56 (lane_arm_settings, D-8274) and 55 (coordinator_calls, D-8126) as well
-    // as 54, so the reopen replays all eleven.
-    fresh.exec(`DROP TABLE linear_bindings; DROP TABLE plan_sync_due; DROP TABLE plan_tickets; DROP TABLE plan_checkpoints; DROP TABLE plan_epics;
+    // as 54, so the reopen replays all twelve.
+    fresh.exec(`ALTER TABLE project_linking DROP COLUMN teamSource; ALTER TABLE project_linking DROP COLUMN teamName;
+      ALTER TABLE project_linking DROP COLUMN teamEvidence; ALTER TABLE project_linking DROP COLUMN teamAt;
+      ALTER TABLE project_linking DROP COLUMN teamCandidates;
+      DROP TABLE linear_bindings; DROP TABLE plan_sync_due; DROP TABLE plan_tickets; DROP TABLE plan_checkpoints; DROP TABLE plan_epics;
       ALTER TABLE runs DROP COLUMN ticketId;
       ALTER TABLE project_linking DROP COLUMN initiatives; ALTER TABLE project_linking DROP COLUMN linearOwner; ALTER TABLE project_linking DROP COLUMN ownsTeam;
       ALTER TABLE programs DROP COLUMN planBy; ALTER TABLE programs DROP COLUMN planAt; ALTER TABLE programs DROP COLUMN planRequired;

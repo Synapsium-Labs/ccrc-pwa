@@ -51,8 +51,7 @@ type Listed = Extract<LinearStoreRead, { kind: 'listed' }>;
  */
 export function routableSlots(store: Listed): LinearRouteSlot[] {
   const out: LinearRouteSlot[] = store.slots.map((s) => {
-    const current = s.key.kind === 'key' && s.record.kind === 'details' && s.record.details.keyDigest === s.key.digest
-      ? s.record.details : null;
+    const current = currentDetails(s);
     return {
       ref: { source: 'file', id: s.id },
       workspaceId: s.id,
@@ -68,6 +67,25 @@ export function routableSlots(store: Listed): LinearRouteSlot[] {
       urlKey: legacy.workspace.urlKey,
       teamKeys: legacy.workspace.teams.map((t) => t.key.toUpperCase()),
     });
+  }
+  return out;
+}
+
+/** A file slot's record while it describes the key now in the file (the digest rule), else null. */
+function currentDetails(s: Listed['slots'][number]) {
+  return s.key.kind === 'key' && s.record.kind === 'details' && s.record.details.keyDigest === s.key.digest ? s.record.details : null;
+}
+
+/**
+ * D-8405: every team the routable slots reach, key (uppercased) and name, in slot order: what the automatic team link
+ * chooses among. The same slots `routableSlots` answers, by the same rules, so a team the router cannot reach is never
+ * linked; a key two workspaces share appears once per workspace, and the decider counts it once.
+ */
+export function routableTeams(store: Listed): Array<{ key: string; name: string }> {
+  const out = store.slots.flatMap((s) => (currentDetails(s)?.teams ?? []).map((t) => ({ key: t.key.toUpperCase(), name: t.name })));
+  const legacy = store.legacy;
+  if (legacy !== null && legacy.workspace !== null && !legacy.superseded) {
+    out.push(...legacy.workspace.teams.map((t) => ({ key: t.key.toUpperCase(), name: t.name })));
   }
   return out;
 }

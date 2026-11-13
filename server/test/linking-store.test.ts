@@ -19,13 +19,19 @@ const MEASURED = { state: 'measured', visibility: 'private', slug: 'owner/repo',
 
 describe('project_linking', () => {
   it('a project with no row reads unmeasured with no key and mode unknown', () => {
-    expect(linkingOf(db, 'project-a')).toEqual({ teamKey: null, override: null, measured: { state: 'unmeasured' }, mode: 'unknown', initiatives: 'on', linearOwner: null, ownsTeam: false });
+    expect(linkingOf(db, 'project-a')).toEqual({
+      teamKey: null, override: null, measured: { state: 'unmeasured' }, mode: 'unknown', initiatives: 'on', linearOwner: null, ownsTeam: false,
+      teamLink: null, teamCandidates: [],
+    });
   });
 
   it('setLinking writes the key and override and leaves the reading', () => {
     recordReading(db, 'project-a', MEASURED);
     setLinking(db, 'project-a', { teamKey: 'KEY', override: 'public' }, 'device-1', 200);
-    expect(linkingOf(db, 'project-a')).toEqual({ teamKey: 'KEY', override: 'public', measured: MEASURED, mode: 'public', initiatives: 'on', linearOwner: null, ownsTeam: false });
+    expect(linkingOf(db, 'project-a')).toEqual({
+      teamKey: 'KEY', override: 'public', measured: MEASURED, mode: 'public', initiatives: 'on', linearOwner: null, ownsTeam: false,
+      teamLink: { source: 'manual', at: 200 }, teamCandidates: [],
+    });
     const row = db.prepare('SELECT setBy, setAt FROM project_linking WHERE project = ?').get('project-a');
     expect({ ...row }).toEqual({ setBy: 'device-1', setAt: 200 });
   });
@@ -33,7 +39,10 @@ describe('project_linking', () => {
   it('recordReading writes the reading and leaves the key', () => {
     setLinking(db, 'project-a', { teamKey: 'KEY', override: null }, 'device-1', 200);
     recordReading(db, 'project-a', MEASURED);
-    expect(linkingOf(db, 'project-a')).toEqual({ teamKey: 'KEY', override: null, measured: MEASURED, mode: 'private', initiatives: 'on', linearOwner: null, ownsTeam: false });
+    expect(linkingOf(db, 'project-a')).toEqual({
+      teamKey: 'KEY', override: null, measured: MEASURED, mode: 'private', initiatives: 'on', linearOwner: null, ownsTeam: false,
+      teamLink: { source: 'manual', at: 200 }, teamCandidates: [],
+    });
     recordReading(db, 'project-a', { state: 'unmeasured' });
     expect(linkingOf(db, 'project-a').teamKey).toBe('KEY');
     expect(linkingOf(db, 'project-a').measured).toEqual({ state: 'unmeasured' });
@@ -46,6 +55,7 @@ describe('project_linking', () => {
     recordReading(db, 'project-a', { state: 'failed', reason: 'gh-failed', at: 300 });
     expect(linkingOf(db, 'project-a')).toEqual({
       teamKey: null, override: null, measured: { state: 'failed', reason: 'gh-failed', at: 300 }, mode: 'private', initiatives: 'on', linearOwner: null, ownsTeam: false,
+      teamLink: null, teamCandidates: [],
     });
     // The last visibility stays in the row, so the next measurement overwrites it and nothing else has to.
     expect(db.prepare('SELECT visibility FROM project_linking WHERE project = ?').get('project-a')).toEqual({ visibility: 'private' });

@@ -9,6 +9,7 @@ import { ConnectSheet, type ConnectSheetProps } from '../src/accounts/ConnectShe
 import { ApiError } from '../src/lib/api';
 import { navigate } from '../src/lib/router';
 import { useFleetStore } from '../src/stores/fleet';
+import { expectSecretInput } from './secretInputAttrs';
 
 const CANARY = 'sk-ant-oat01-CANARY-' + 'k'.repeat(48);
 const ROSTER: RosterWire[] = [{ id: 'lane-a', label: 'lane-a', hue: 'cyan', homeAble: true, hidden: false, pool: null }];
@@ -73,11 +74,8 @@ describe('the secret field (spec §3.3)', () => {
     paste();
     expect(field()!.value).toBe(CANARY);
     expect(field()!).toHaveAttribute('type', 'password');
-    expect(field()!).toHaveAttribute('autocomplete', 'off');
-    expect(field()!).toHaveAttribute('autocapitalize', 'off');
-    expect(field()!).toHaveAttribute('spellcheck', 'false');
+    expectSecretInput(field()!);
     expect(field()!).toHaveAttribute('inputmode', 'text');
-    expect(field()!).not.toHaveAttribute('name');
     expect(document.documentElement.outerHTML).not.toContain(CANARY);
     fireEvent.click(screen.getByRole('button', { name: 'Show' }));
     expect(field()!).toHaveAttribute('type', 'text');

@@ -25,7 +25,7 @@ import type { LandingAuthorityCommand, LandingAuthorityWrite, LandingJournalRepl
 import type { LandingJournalPort, LandingJournalSnapshot } from './landingJournalPort.js';
 import { redactCommand } from './redact.js';
 import { REVIEW_CAP_SUMMARY_MAX, cutWhole, reviewCapRefuses, reviewCapStatus } from './reviewcap.js';
-import { linkingAll, linkingOf, recordReading, setLinking } from './linkingStore.js';
+import { linkTeamAuto, linkingAll, linkingOf, recordReading, recordTeamCandidates, setLinking } from './linkingStore.js';
 import * as builds from './claudeBuildsStore.js';
 import type { BuildCaptureResult, BuildCaptureTry, ClaudeBuildRecord } from '../../../shared/claudeBuildTrust.js';
 import type { LinkingWriteBody, ProjectLinkingWire } from '../../../shared/linking.js';
@@ -5394,6 +5394,16 @@ export class CoordStore {
     return linkingAll(this.db);
   }
 
+  /** D-8405: the automatic pass's link of a project's team; false when a key or the operator's decision stands. */
+  linkTeamAuto(project: string, link: Parameters<typeof linkTeamAuto>[2], at: number): boolean {
+    return linkTeamAuto(this.db, project, link, at);
+  }
+
+  /** D-8405: the automatic pass's one-tap candidates for a project with no key. */
+  recordTeamCandidates(project: string, candidates: Parameters<typeof recordTeamCandidates>[2]): void {
+    recordTeamCandidates(this.db, project, candidates);
+  }
+
   /** D-6795: the operator's lift, per work run. Idempotent; false when the run is not a work run on file. */
   liftReviewCap(workRunId: number, now: number): boolean {
     const run = this.db.prepare("SELECT 1 AS x FROM runs WHERE id = ? AND kind = 'work'").get(workRunId);
@@ -6527,7 +6537,7 @@ export class CoordStore {
 
   // ── mail (rows only; ingress validation is routes.ts, delivery is watch.ts) ─
 
-  /** `answersMail` (#2726, schema 64): the MAIL id of the mail this one was admitted as the invited reply to, which
+  /** `answersMail` (#2726, schema 65): the MAIL id of the mail this one was admitted as the invited reply to, which
    *  only the mail ingress passes, on `peerMailVerdict`'s `invited`; absent or null for every other mail. This is the
    *  column's one writer, and `mail_answers_once` refuses a second row answering the same mail. */
   insertMail(m: { fromId: string; fromUuid: string; toId: string; runId: number | null;

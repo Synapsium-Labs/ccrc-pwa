@@ -1,4 +1,4 @@
-// #2726: an invited reply is never refused by the peer bound. This file holds the store's half (schema 64's
+// #2726: an invited reply is never refused by the peer bound. This file holds the store's half (schema 65's
 // `mail.answersMail`, the invitation read, and the two peer counts that skip an invited reply) and, from Task 3 of
 // the plan, the L1 decider `peerMailVerdict`. The route's half is `mail-peer-quota.test.ts`.
 // Plan: docs/superpowers/plans/2026-11-10-overlord/w1a-invited-replies.md
@@ -21,7 +21,7 @@ const mail = (s: CoordStore, fromId: string, toId: string, over: { runId?: numbe
   return { mailId: id, deliveryId: d.id };
 };
 
-describe('the store: invitations and the peer counts (#2726, schema 64)', () => {
+describe('the store: invitations and the peer counts (#2726, schema 65)', () => {
   it('reads a delivery as an invitation: the mail it carries, who sent it, and who it went to', () => {
     const s = store();
     const q = mail(s, 'demo-a', 'demo-b');

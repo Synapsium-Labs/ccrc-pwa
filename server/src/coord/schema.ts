@@ -2764,6 +2764,29 @@ export const MIGRATIONS: readonly string[] = [
   );
   `,
   // ── 64: user_version 63 -> 64 ─────────────────────────────────────────────
+  // D-8405 (the automatic team link): who set a project's team key and why. `teamSource` is `manual` (the operator typed,
+  // chose or cleared it) or `auto` (the automatic pass linked it), NULL for a row no one has decided since this entry;
+  // `teamName`, `teamEvidence` (JSON, `isTeamEvidence`) and `teamAt` say which team the pass linked, on what evidence and
+  // when (`teamAt` is the operator's time for `manual`); `teamCandidates` (JSON, `isTeamCandidate` each) is the pass's
+  // one-tap choices for a project with no key. The writers are `linkingStore.ts`'s `setLinking` (the operator, through
+  // `teamSourceAfterWrite`), `linkTeamAuto` (the pass, which never writes over a key or a `manual` source) and
+  // `recordTeamCandidates`; a value that does not parse reads as none (absence permits; never a throw).
+  //
+  // FIVE NULLABLE COLUMNS ON AN EXISTING TABLE, nothing else: an older build opening a file at `user_version 64` takes
+  // rule 3 (it warns, reads as-is and migrates nothing); its reads and writes name their columns and never these, so an
+  // operator's write there leaves the five as they were (a rollback's residual: a key linked automatically and then
+  // changed under the older build still reads `auto` here until the operator saves it again). Every earlier entry is
+  // frozen. RE-MEASURE the slot before the PR and before merge (it must print 63 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  ALTER TABLE project_linking ADD COLUMN teamSource TEXT CHECK (teamSource IN ('manual','auto'));
+  ALTER TABLE project_linking ADD COLUMN teamName TEXT;
+  ALTER TABLE project_linking ADD COLUMN teamEvidence TEXT;
+  ALTER TABLE project_linking ADD COLUMN teamAt INTEGER;
+  ALTER TABLE project_linking ADD COLUMN teamCandidates TEXT;
+  `,
+  // ── 65: user_version 64 -> 65 ─────────────────────────────────────────────
   // #2726 (the invited reply, plan docs/superpowers/plans/2026-11-10-overlord/w1a-invited-replies.md): `mail.answersMail`,
   // the MAIL row id of the mail this row was admitted as the invited reply to. Peer mail (`runId` NULL) of kind `answer`
   // whose `inReplyTo` names a delivery to its sender, of a mail from its recipient, is outside the peer bound
@@ -2775,10 +2798,10 @@ export const MIGRATIONS: readonly string[] = [
   // before this entry.
   //
   // ONE NULLABLE COLUMN ON AN EXISTING TABLE AND ONE PARTIAL INDEX, nothing else: an older build opening a file at
-  // `user_version 64` takes rule 3 (it warns, reads as-is and migrates nothing); its INSERT names its columns and never
+  // `user_version 65` takes rule 3 (it warns, reads as-is and migrates nothing); its INSERT names its columns and never
   // this one, so a row it writes is an ordinary mail, and its peer counts count invited replies as ordinary mail too:
   // stricter, never looser. Every earlier entry is frozen. RE-MEASURE the slot before the PR and before merge (it must
-  // print 63 before this entry is counted):
+  // print 64 before this entry is counted):
   //     git fetch origin main
   //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
   `
