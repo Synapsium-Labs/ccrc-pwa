@@ -43,6 +43,20 @@ describe('the hierarchy documents (D-8180)', () => {
     }
   });
 
+  it('no milestone selection asks for a creator: Linear\'s ProjectMilestone has none (FX2, D-8407)', () => {
+    // FX2's introspection of ProjectMilestone lists no `creator`, and every document that selected one answered HTTP
+    // 400 GRAPHQL_VALIDATION_FAILED (`error-graphql-validation-milestone-creator`). A milestone binds by name in its project.
+    const { projectById, changedProjects, changedMilestones } = LINEAR_HIERARCHY_DOCUMENTS;
+    for (const doc of [projectById, changedProjects, changedMilestones]) {
+      expect(doc.slice(doc.indexOf('projectMilestones('))).not.toContain('creator');
+    }
+    const milestone = { id: '00000000-0008-4000-8000-000000000002', name: 'Wave 1', description: null, targetDate: null, sortOrder: 1,
+      updatedAt: '2026-11-13T16:13:20.088Z', project: { id: '00000000-0004-4000-8000-000000000001' } };
+    const shaped = LINEAR_CCRC_OPS.changedMilestones.shape({ data: { projectMilestones: { nodes: [milestone], pageInfo: { hasNextPage: false, endCursor: null } } } });
+    expect(shaped).toMatchObject({ ok: true });
+    expect(JSON.stringify(shaped)).not.toContain('creator');
+  });
+
   it('initiativeToProjectDelete is the only *Delete* document, and it unlinks, never removes an object', () => {
     expect(Object.keys(LINEAR_HIERARCHY_DOCUMENTS).filter((k) => /Delete$/.test(k))).toEqual(['initiativeToProjectDelete']);
   });
