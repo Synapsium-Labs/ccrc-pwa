@@ -2763,6 +2763,36 @@ export const MIGRATIONS: readonly string[] = [
     changes TEXT    NOT NULL
   );
   `,
+  // ── 64: user_version 63 -> 64 ─────────────────────────────────────────────
+  // The start report (Overlord spec §3.3.11, H12, W1a): `continuity_starts`, one row per SessionStart the hook reported
+  // through `POST /api/sessions/:id/start` (`server/src/continuity/routes.ts`). `reportId` is the hook's own id for the
+  // report, so a resend of a spooled report is the same row (`UNIQUE (sessionId, reportId)`); `source` is a word of
+  // `START_SOURCES` (`other` for any word outside it); `model` and `regGen` are null when the payload or the environment
+  // carried none; `reportedAt` is the hook's clock (data only) and `receivedAt` the server's, which every reader ages from
+  // (§11.5). Its one writer is `insertStart` in `server/src/continuity/continuityStore.ts`.
+  //
+  // A NEW TABLE AND AN INDEX, nothing on an existing table: an older build opening a file at `user_version 64` takes rule 3
+  // (it warns, reads as-is and migrates nothing), never names this table, and boots. Every earlier entry is frozen.
+  // This build's writer names its columns, so a later build that adds a column to `continuity_starts` must make it
+  // nullable or give it a DEFAULT, or this build's writer fails after a rollback.
+  // RE-MEASURE the slot before the PR and before merge (it must print 63 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE continuity_starts (
+    id         INTEGER PRIMARY KEY,
+    sessionId  TEXT NOT NULL,
+    reportId   TEXT NOT NULL,     -- the hook's own id for this report, so a resend is one row
+    uuid       TEXT NOT NULL,     -- the conversation that started
+    source     TEXT NOT NULL,     -- startup | resume | clear | compact | fork | other
+    model      TEXT,              -- as the payload carries it, or null
+    regGen     INTEGER,           -- CCRC_SESSION_GENERATION, or null
+    reportedAt INTEGER NOT NULL,  -- the hook's clock, ms (data only)
+    receivedAt INTEGER NOT NULL,  -- the server's clock, ms: what every reader ages from
+    UNIQUE (sessionId, reportId)
+  );
+  CREATE INDEX continuity_starts_by_session ON continuity_starts(sessionId, receivedAt);
+  `,
 ];
 
 /** The version this build writes. `MIGRATIONS.length` and nothing else: a
