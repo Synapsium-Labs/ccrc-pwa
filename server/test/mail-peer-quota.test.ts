@@ -126,6 +126,264 @@ describe('POST /api/mail — peer-mail bounds (runId === null only)', () => {
   });
 });
 
+describe("the peer refusal bodies, exactly (characterization for #2726; the two peer-quota bodies changed by (c))", () => {
+  let app: FastifyInstance | undefined;
+  afterEach(async () => { if (app) await app.close(); app = undefined; });
+  const two = async () => {
+    const home = mkTmp('ccrc-peerq-');
+    seed(home, 'demo-quiet-mesa'); seed(home, 'demo-calm-ridge');
+    for (const to of ['demo-b', 'demo-c', 'demo-d', 'demo-e', 'demo-f']) seed(home, to);
+    return withMail(home);
+  };
+
+  it('duplicate', async () => {
+    const w = await two(); app = w.app;
+    await send(app, PEER);
+    expect((await send(app, PEER)).json()).toEqual({ ok: false, error: 'duplicate',
+      detail: 'an outstanding peer mail from demo-quiet-mesa to demo-calm-ridge with this subject is already queued' });
+  });
+  it('the pair arm', async () => {
+    const w = await two(); app = w.app;
+    for (let i = 0; i < 3; i++) await send(app, { ...PEER, subject: `q ${i}` });
+    expect((await send(app, { ...PEER, subject: 'one more' })).json()).toEqual({ ok: false, error: 'peer-quota',
+      detail: '3 peer mails from demo-quiet-mesa to demo-calm-ridge are already outstanding; it can go when ' +
+        'demo-calm-ridge acks one, which it does when it next reads its mail. A reply to an unasked mail of demo-calm-ridge\'s ' +
+        'is outside this bound: send it as kind answer with inReplyTo set to that mail\'s delivery id',
+      retry: { on: 'ack', toId: 'demo-calm-ridge' } });
+  });
+  it('the hourly arm', async () => {
+    const w = await two(); app = w.app;
+    for (const to of ['demo-b', 'demo-c', 'demo-d', 'demo-e']) {
+      for (let i = 0; i < 3; i++) await send(app, { ...PEER, toId: to, subject: `q ${i}` });
+    }
+    const oldest = (w.coord.db.prepare('SELECT MIN(at) AS a FROM mail').get() as { a: number }).a;
+    const res = (await send(app, { ...PEER, toId: 'demo-f', subject: 'one more' })).json() as Record<string, unknown>;
+    expect(res).toMatchObject({ ok: false, error: 'peer-quota', retry: { on: 'time', at: oldest + 3_600_000 } });
+    // Compared as text, never through a pattern built from the time: the exact head, then the varying seconds.
+    const detail = String(res['detail']);
+    const head = `demo-quiet-mesa has sent 12 peer mails in the last hour; it can go at ${new Date(oldest + 3_600_000).toISOString()} (in `;
+    expect(detail.startsWith(head), detail).toBe(true);
+    expect(detail.slice(head.length)).toMatch(
+      /^\d+ s\), when the oldest leaves the hour\. A reply to an unasked mail of demo-f's is outside this bound/);
+  });
+  it('a kind answer with no inReplyTo is counted like any peer mail', async () => {
+    const w = await two(); app = w.app;
+    for (let i = 0; i < 3; i++) await send(app, { ...PEER, subject: `q ${i}` });
+    expect((await send(app, { ...PEER, kind: 'answer', subject: 'a reply' })).statusCode).toBe(429);
+  });
+});
+
+describe('an invited reply (#2726 (a))', () => {
+  let app: FastifyInstance | undefined;
+  afterEach(async () => { if (app) await app.close(); app = undefined; });
+
+  // demo-quiet-mesa is the replier throughout; demo-calm-ridge asks it.
+  const ASKER = { ...PEER, fromId: 'demo-calm-ridge', toId: 'demo-quiet-mesa' };
+  const REPLY = { ...PEER, kind: 'answer', subject: 're: peer q' };
+  const deliveryOf = (coord: CoordStore, mailId: number): number =>
+    (coord.db.prepare('SELECT id FROM mail_deliveries WHERE mailId = ?').get(mailId) as { id: number }).id;
+  const answersMail = (coord: CoordStore, mailId: number): number | null =>
+    (coord.db.prepare('SELECT answersMail AS a FROM mail WHERE id = ?').get(mailId) as { a: number | null }).a;
+  const sessions = async (...extra: string[]) => {
+    const home = mkTmp('ccrc-peerq-');
+    for (const id of ['demo-quiet-mesa', 'demo-calm-ridge', ...extra]) seed(home, id);
+    return withMail(home);
+  };
+  /** demo-calm-ridge asks; answers the delivery id demo-quiet-mesa sees, and the asked mail's own id. */
+  const ask = async (a: FastifyInstance, coord: CoordStore, subject = 'can you check') => {
+    const res = await send(a, { ...ASKER, subject });
+    expect(res.statusCode).toBe(202);
+    const mailId = (res.json() as { id: number }).id;
+    return { mailId, delivery: deliveryOf(coord, mailId) };
+  };
+  /** The replier's pair is full: three unacked mails out to demo-calm-ridge. */
+  const fillPair = async (a: FastifyInstance) => {
+    for (let i = 0; i < PEER_MAIL_MAX_OUTSTANDING; i++) {
+      expect((await send(a, { ...PEER, subject: `unasked ${i}` })).statusCode).toBe(202);
+    }
+  };
+
+  it('W0-20: with the pair full, the asked-for reply is accepted, recorded as answering the mail, and refuses nothing', async () => {
+    const w = await sessions(); app = w.app;
+    await fillPair(app);
+    const q = await ask(app, w.coord);
+    const res = await send(app, { ...REPLY, inReplyTo: q.delivery });
+    expect(res.statusCode).toBe(202);
+    expect(answersMail(w.coord, (res.json() as { id: number }).id)).toBe(q.mailId);
+    expect(w.coord.rejections()).toEqual([]);
+  });
+
+  it('a second reply to the same mail is ordinary peer mail, and the full pair refuses it, saying why', async () => {
+    const w = await sessions(); app = w.app;
+    await fillPair(app);
+    const q = await ask(app, w.coord);
+    expect((await send(app, { ...REPLY, inReplyTo: q.delivery })).statusCode).toBe(202);
+    const again = await send(app, { ...REPLY, subject: 're: peer q, again', inReplyTo: q.delivery });
+    expect(again.statusCode).toBe(429);
+    expect(again.json()).toMatchObject({ error: 'peer-quota', detail: expect.stringContaining('already answered') });
+  });
+
+  it('the hourly arm does not refuse it, and it does not charge the hour', async () => {
+    const w = await sessions('demo-b', 'demo-c', 'demo-d', 'demo-e', 'demo-f'); app = w.app;
+    for (const to of ['demo-b', 'demo-c', 'demo-d', 'demo-e']) {
+      for (let i = 0; i < PEER_MAIL_MAX_OUTSTANDING; i++) {
+        expect((await send(app, { ...PEER, toId: to, subject: `q ${i}` })).statusCode).toBe(202);
+      }
+    }
+    const q = await ask(app, w.coord);
+    expect((await send(app, { ...REPLY, inReplyTo: q.delivery })).statusCode).toBe(202);
+    expect(w.coord.peerMailAtsInLastHour('demo-quiet-mesa', Date.now())).toHaveLength(PEER_MAIL_HOURLY);
+    expect((await send(app, { ...PEER, toId: 'demo-f', subject: 'unasked' })).statusCode).toBe(429);
+  });
+
+  it('invited replies hold no slot: three outstanding to one peer, and an unasked mail to it still goes', async () => {
+    const w = await sessions(); app = w.app;
+    for (let i = 0; i < PEER_MAIL_MAX_OUTSTANDING; i++) {
+      const q = await ask(app, w.coord, `question ${i}`);
+      expect((await send(app, { ...REPLY, subject: `re: question ${i}`, inReplyTo: q.delivery })).statusCode).toBe(202);
+    }
+    expect((await send(app, { ...PEER, subject: 'unasked' })).statusCode).toBe(202);
+  });
+
+  it('the duplicate probe does not stop it: its subject may repeat an outstanding unasked mail', async () => {
+    const w = await sessions(); app = w.app;
+    expect((await send(app, { ...PEER, subject: 'the answer' })).statusCode).toBe(202);
+    const q = await ask(app, w.coord);
+    expect((await send(app, { ...REPLY, subject: 'the answer', inReplyTo: q.delivery })).statusCode).toBe(202);
+  });
+
+  it('review 1907 F1: two sessions trading answers stop at the bound; an invited reply never invites', async () => {
+    // Each invited reply spends one unasked (counted) mail, so the trade alternates invited and counted mails and
+    // stops when the counted side is refused: at most one invited reply per counted mail, all inside the pair bound.
+    const w = await sessions(); app = w.app;
+    let last = await ask(app, w.coord);
+    let from = 'demo-quiet-mesa';
+    let accepted = 1;   // the ask
+    let refused = false;
+    for (let i = 0; i < 20; i++) {
+      const to = from === 'demo-quiet-mesa' ? 'demo-calm-ridge' : 'demo-quiet-mesa';
+      const res = await send(app, { ...REPLY, fromId: from, toId: to, subject: `re ${i}`, inReplyTo: last.delivery });
+      if (res.statusCode === 429) { refused = true; break; }
+      expect(res.statusCode).toBe(202);
+      accepted++;
+      const mailId = (res.json() as { id: number }).id;
+      last = { mailId, delivery: deliveryOf(w.coord, mailId) };
+      from = to;
+    }
+    expect(refused).toBe(true);
+    expect(accepted).toBeLessThanOrEqual(2 * PEER_MAIL_MAX_OUTSTANDING);
+    const replyToReply = (w.coord.db.prepare('SELECT COUNT(*) AS n FROM mail r JOIN mail m ON m.id = r.answersMail ' +
+      'WHERE m.answersMail IS NOT NULL').get() as { n: number }).n;
+    expect(replyToReply).toBe(0);
+  });
+
+  it('review 1907 F1: a self-answer chain is bounded, and no mail to oneself invites', async () => {
+    const w = await sessions(); app = w.app;
+    const first = await send(app, { ...PEER, toId: 'demo-quiet-mesa', subject: 'note to self' });
+    expect(first.statusCode).toBe(202);
+    let delivery = deliveryOf(w.coord, (first.json() as { id: number }).id);
+    let refused = false;
+    for (let i = 0; i < 20; i++) {
+      const res = await send(app, { ...REPLY, toId: 'demo-quiet-mesa', subject: `self ${i}`, inReplyTo: delivery });
+      if (res.statusCode === 429) { refused = true; break; }
+      delivery = deliveryOf(w.coord, (res.json() as { id: number }).id);
+    }
+    expect(refused).toBe(true);
+    expect((w.coord.db.prepare('SELECT COUNT(*) AS n FROM mail WHERE answersMail IS NOT NULL').get() as { n: number }).n).toBe(0);
+  });
+
+  /** Moves the delivery sequence ahead of the mail sequence, as revived heirs and system mail do in production. */
+  const partIds = (coord: CoordStore, by: number): void => {
+    const { id } = coord.insertMail({ fromId: 'demo-third', fromUuid: UUID, toId: 'demo-third', runId: null,
+      kind: 'status', subject: 'filler', body: 'b', artifacts: [] });
+    for (let i = 0; i < by; i++) coord.queueDelivery(id, 'demo-third', '');
+  };
+
+  it('review 1907 F2: the column records the MAIL id when the delivery id has parted from it', async () => {
+    const w = await sessions('demo-third'); app = w.app;
+    partIds(w.coord, 5);
+    await fillPair(app);
+    const q = await ask(app, w.coord);
+    expect(q.delivery).not.toBe(q.mailId);
+    const res = await send(app, { ...REPLY, inReplyTo: q.delivery });
+    expect(res.statusCode).toBe(202);
+    expect(answersMail(w.coord, (res.json() as { id: number }).id)).toBe(q.mailId);
+  });
+
+  it('review 1907 F2: a second delivery of an answered mail buys no second reply', async () => {
+    const w = await sessions('demo-third'); app = w.app;
+    partIds(w.coord, 5);
+    await fillPair(app);
+    const q = await ask(app, w.coord);
+    expect((await send(app, { ...REPLY, inReplyTo: q.delivery })).statusCode).toBe(202);
+    const heir = w.coord.queueDelivery(q.mailId, 'demo-quiet-mesa', '').id;   // the shape a revived heir has
+    const again = await send(app, { ...REPLY, subject: 're: peer q, via the heir', inReplyTo: heir });
+    expect(again.statusCode).toBe(429);
+    expect(again.json()).toMatchObject({ detail: expect.stringContaining('already answered') });
+  });
+
+  it('review 1907 F2: a mail asked through the coordinator role is answered by the coordinator session', async () => {
+    const w = await sessions(); app = w.app;
+    w.coord.openRun({ program: 'build9b', title: 'role', project: 'demo', wave: 1, waveOf: 1, claimedBy: 'demo-quiet-mesa' });
+    await fillPair(app);
+    const res0 = await send(app, { ...ASKER, toId: 'coordinator', subject: 'to the chair' });
+    expect(res0.statusCode).toBe(202);
+    const mailId = (res0.json() as { id: number }).id;
+    expect((w.coord.db.prepare('SELECT toId FROM mail WHERE id = ?').get(mailId) as { toId: string }).toId).toBe('coordinator');
+    const res = await send(app, { ...REPLY, inReplyTo: deliveryOf(w.coord, mailId) });
+    expect(res.statusCode).toBe(202);
+    expect(answersMail(w.coord, (res.json() as { id: number }).id)).toBe(mailId);
+  });
+
+  it.each([
+    ['is not kind answer', 'status', 'asker', 'an invited reply is kind answer, not status'],
+    ['answers a mail from a third session', 'answer', 'third-from', 'is not a mail from demo-calm-ridge'],
+    ['answers a delivery to a third session', 'answer', 'third-to', 'was not delivered to demo-quiet-mesa'],
+    ['names no delivery', 'answer', 'none', 'inReplyTo 999999 names no delivery'],
+  ] as const)('not invited when it %s: counted, and the full pair refuses it with the reason', async (_w, kind, which, why) => {
+    const w = await sessions('demo-third'); app = w.app;
+    await fillPair(app);
+    let inReplyTo = 999_999;
+    if (which === 'asker') inReplyTo = (await ask(app, w.coord)).delivery;
+    if (which === 'third-from') {
+      const r = await send(app, { ...PEER, fromId: 'demo-third', toId: 'demo-quiet-mesa', subject: 'from a third' });
+      inReplyTo = deliveryOf(w.coord, (r.json() as { id: number }).id);
+    }
+    if (which === 'third-to') {
+      const r = await send(app, { ...ASKER, toId: 'demo-third', subject: 'to a third' });
+      inReplyTo = deliveryOf(w.coord, (r.json() as { id: number }).id);
+    }
+    const res = await send(app, { ...REPLY, kind, inReplyTo });
+    expect(res.statusCode).toBe(429);
+    expect(res.json()).toMatchObject({ error: 'peer-quota', detail: expect.stringContaining(`not an invited reply: `) });
+    expect((res.json() as { detail: string }).detail).toContain(why);
+  });
+
+  it('run mail stays dark: a reply with a runId and an inReplyTo records no answersMail', async () => {
+    const w = await sessions(); app = w.app;
+    const q = await ask(app, w.coord);
+    const run = w.coord.openRun({ program: 'build9b', title: 'dark', project: 'demo', wave: 1, waveOf: 1,
+      claimedBy: 'demo-coordinator' }) as { id: number };
+    const res = await send(app, { ...REPLY, runId: run.id, inReplyTo: q.delivery });
+    expect(res.statusCode).toBe(202);
+    expect(answersMail(w.coord, (res.json() as { id: number }).id)).toBeNull();
+    expect(w.coord.invitation(q.delivery)).toMatchObject({ answered: false });
+  });
+
+  it.each([['a string', '7'], ['zero', 0], ['a negative', -1], ['a fraction', 1.5]] as const)(
+    'inReplyTo as %s is 400 bad-kind', async (_w, inReplyTo) => {
+      const w = await sessions(); app = w.app;
+      const res = await send(app, { ...REPLY, inReplyTo });
+      expect(res.statusCode).toBe(400);
+      expect(res.json()).toMatchObject({ error: 'bad-kind', detail: expect.stringContaining('inReplyTo') });
+    });
+
+  it('inReplyTo null is no inReplyTo', async () => {
+    const w = await sessions(); app = w.app;
+    expect((await send(app, { ...REPLY, inReplyTo: null })).statusCode).toBe(202);
+  });
+});
+
 describe('run mail is DARK — the bounds structurally cannot touch runId-carrying traffic (D10)', () => {
   let app: FastifyInstance | undefined;
   afterEach(async () => { if (app) await app.close(); app = undefined; });
@@ -187,7 +445,7 @@ describe('run mail is DARK — the bounds structurally cannot touch runId-carryi
       expect((await send(app, { ...PEER, runId: r.id, kind: 'status', subject: `run ${i}` }))
         .statusCode).toBe(202);
     }
-    // The sender's peer-hour stands at 0 — `peerMailInLastHour` counts
+    // The sender's peer-hour stands at 0 — `peerMailAtsInLastHour` reads
     // `runId IS NULL` rows only. If run rows bled into it, this send would
     // be the "13th" and 429.
     expect((await send(app, PEER)).statusCode).toBe(202);

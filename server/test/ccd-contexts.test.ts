@@ -210,6 +210,17 @@ describe('ccd cross-context references: the ratchet (D-6054)', () => {
     expect(lines).toEqual([...new Set(lines)].sort());
   });
 
+  it('no manifest line joins a context to itself: one inside a context is not a cross-context edge (D-8561)', () => {
+    // A line whose two ends now sit in one context (a function moved, or a line written by hand) is never computed, so
+    // the ratchet above can only warn about it; here it is red. A line naming a function that is gone stays a warning.
+    const ctx = new Map(ccdContextRows().map((r) => r.text.split('\t') as [string, string]));
+    const inside = manifestEdges(readFileSync(EDGES_FILE, 'utf8')).filter((l) => {
+      const [a, b] = l.split(' -> ').map((n) => ctx.get(n!));
+      return a !== undefined && a === b;
+    });
+    expect(inside).toEqual([]);
+  });
+
   it('the edge check fails an edge the manifest lacks and names a manifest edge the code no longer makes', () => {
     expect(checkEdges(['a -> b', 'c -> d'], ['a -> b'])).toEqual({ extra: ['c -> d'], stale: [] });
     expect(checkEdges(['a -> b'], ['a -> b', 'x -> y'])).toEqual({ extra: [], stale: ['x -> y'] });

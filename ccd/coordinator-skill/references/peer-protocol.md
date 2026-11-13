@@ -129,6 +129,20 @@ is genuinely a new question); more than 3 outstanding to one peer
 (`PEER_MAIL_HOURLY`), refuses 429 `peer-quota`. Bound the producer, never
 the record.
 
+A reply you were asked for is never refused by those bounds (#2726): send it
+`"kind":"answer"` with `"inReplyTo"` set to the DELIVERY id of the mail you
+answer (its envelope's `id:` line, the inbox's `delivery:` line, `deliveryId`
+in `mail list`; never the 202's `id`, which is a mail id). It must answer an
+unasked mail delivered to you by the peer you are replying to, and each such
+mail buys one reply; it then holds no slot either. A reply to an invited
+reply, or to your own mail, invites nothing, so a thanks-for-the-thanks is
+ordinary peer mail. Anything else is ordinary peer mail too. A `peer-quota` refusal
+says when the mail can go, in its `detail` and in a `retry` field:
+`{"on":"ack","toId":…}` (when that peer acks one of your outstanding mails,
+which it does when it next reads its mail) or `{"on":"time","at":<epoch ms>}`
+(when your oldest mail of the hour leaves it). Wait for that, or answer
+through `inReplyTo`; do not drop the mail.
+
 ## History — `GET /api/claims`, `GET /api/lifecycle`, `GET /api/ledger`
 
 `GET /api/claims?project=<slug>` is the live set (`claims`) — the coordinator

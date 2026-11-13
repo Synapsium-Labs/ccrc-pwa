@@ -47,7 +47,7 @@ export const advanceIntent: Pending = { class: cls, from: null, to: 'model-6.1-a
 // D-8384: why a class moved, and the move that lowered a lane's window.
 export const firstReason: CandidateReason = CANDIDATE_REASONS[0];
 export const why: CandidateReason | 'unknown' = causeOf(entry);
-export const lowered: UnmeasuredMove[] = unmeasuredMoves({ registry: reg, advance: adv, windows: null, rule: 'default' });
+export const lowered: UnmeasuredMove[] = unmeasuredMoves({ registry: reg, advance: adv, windows: null, rule: 'default', tokens: null });
 export const notice: string = unmeasuredMoveNotice('lane-x', lowered[0] ?? { class: cls, from: 'model-5-alpha',
   to: 'model-6-alpha', fromTokens: 400000, how: 'advance', cause: 'newer' }, null);
 export const causedIntent: Pending = { class: cls, from: null, to: 'model-6.1-alpha', effortFrom: null, effortTo: null,

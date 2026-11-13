@@ -3211,6 +3211,26 @@ provisional 10 s wait); it is the operator's, made by hand, and has no writer in
 reporting exit times by nearest rank and setting no target, as the bound is the operator's. A restart after a failed
 turn now also records the background tasks it ended as lost.
 
+### What was in flight at a restart is recorded, and read by nothing yet (session-continuity stage 3, wave 6b)
+
+Before a restart can hand a session its unfinished background work, ccrc has to know what that work was. Wave 6b records
+it, in shadow. **The launch record** is `$REG/<id>.deleg`, written by the session hook beside its delegation spool: four
+row kinds (a launch, a resume, a send, and a counted `drop`), kept under a byte budget with a reserve for the drops, and
+compacted by the manifest. **The manifest** is `$REG/<id>.inflight`, written by `ccd/ccd#_inflight_write` at the three
+sites ccrc restarts a session itself: the swap, the limit-resume and a supervisor revival. The hibernate has none: it
+refuses unless the turn marker reads no background work, and its wake is a spawn. Each file holds a header (its verdict
+`listed`, `none`, `unread`, `not-applicable` or `unmeasured`, and the counts) and its items. Every restart a site reaches
+rewrites the file, except a directory standing at its path, which is kept (the log line still says `why=error`), so the
+file never shows an earlier site-reached restart's items. A restart no site reaches (a reboot or `_svc_stop`, a stop then
+`ensure`, a hibernate's wake, an archive restore) leaves the previous file standing, so a reader compares its header's
+`at=` and `gen=` with the session's latest spawn before trusting its items. The manifest takes a slot of its own,
+`$REG/.inflight.lock`, never the carry's `$REG/.carry.lock`, so it never holds up a carry (`ccd/ccd#_inflight_slot_take`).
+Each write ends in one `manifest <id>: site=<site> verdict=… wait=… items=…` line in `swap.log`. Nothing reads either file
+before wave 6c: no prompt, route or stall-watch arm. `python3 deploy/measure-continuity.py --stage 3` reads the lines, and
+its `manifest` section is the shadow week's reading: restarts by cause, verdicts by site, restarts with items by site and
+class, the restarts that never wrote one, and waits of a day or more. It reports and sets no target. An unreadable
+`swap.log` is `unmeasured` in every section that reads it.
+
 ### A return visit merges the session's sidecar (session-continuity stage 1)
 
 A swap carries more than the transcript: beside it sits the session's sidecar directory — every subagent
@@ -5819,7 +5839,10 @@ operator breaks one with `POST /api/claims/:id/break`, an ungated door, and the 
 clause 10 reads it before splitting a wave across workers; worker clause 11 claims before editing.
 Peer mail (`runId: null`) is bounded at ingress: a repeat of an outstanding
 `(fromId, toId, subject)` is `409 duplicate`, and a send past 3 outstanding per pair, or past 12
-accepted sends per sender per hour, is `429 peer-quota`.
+accepted sends per sender per hour, is `429 peer-quota`, whose `retry` says when it can go (`ack`: when the
+recipient acks one; `time`: when the oldest leaves the hour). An invited reply is outside all three (#2726): a
+`kind: answer` whose `inReplyTo` names the delivery of an unasked mail the recipient sent to the sender (never an
+invited reply, never a mail to oneself), one per mail, recorded in `mail.answersMail` and holding no slot.
 
 **The deviation ledger's allocator.** Plans record their departures as numbered `D-N` entries in one
 global, monotonic namespace, and the numbers are ISSUED, never looked up. `POST /api/ledger/deviations`

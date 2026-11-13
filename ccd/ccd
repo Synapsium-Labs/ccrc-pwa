@@ -1428,11 +1428,13 @@ POOL_NAME_RE='^[a-z][a-z0-9-]{0,31}$'
 # SUPERSEDED 2026-09-11. A Codex lane IS home-able now — `gpt` and `gpt7` carry
 # `telemetry: "codex"` and sit in CCRC_HOME_ABLE — so "such a lane is never a
 # HOME (no project STARTS there by accident)", which stood in this paragraph
-# until that date, is simply false about the live roster. The 272k window did
-# not survive contact either: the catalogue advertises 272k, the backend has
-# never accepted a prompt over ~196k, and the ceiling therefore stays at Claude
-# Code's 200k default — a reason to distrust the catalogue, never a reason to
-# keep the lane out of placement.
+# until that date, is simply false about the live roster. The catalogue's
+# advertised window was doubted on that date too (one July sample never saw a
+# prompt over ~196k, so the lane was held at Claude Code's 200k default); the
+# 2026-10-15 fleet scan withdrew that sample, and since D-8564 (2026-11-13) a
+# Codex lane's window follows the catalogue's promise unless a window is
+# measured (shared/modelenv.mjs contextWindowFor). Either way, a window is
+# never a reason to keep the lane out of placement.
 #
 # What DOES stand is the telemetry difference, and it is now carried by a field
 # of its own. A Codex lane has no Anthropic-style 5h/7d pair: ccgpt-usage
@@ -4095,14 +4097,14 @@ _reg_purge() {   # id -> rm -f every "$REG/$id.<field>" registry file for id
   # to neither. 34 + 2 = 36, re-measured on the merged file rather than added
   # up — the same discipline this paragraph is about. The drawer wave then added
   # `stalenarrownote` and `swapnarrownote` (`_pane_narrow_note`'s per-site log
-  # floors): 38; #166's `child` made 39, D-3526's `carriednote` and `tdate` 41, the stall watch's `turn` 42, continuity's `rescuewait` 43, `typed` 44, `choicekept` 45, the route read-back's `readbackseen` 46, the background-job wait's `bgwait` 47 (#189), D-6180's stand-down lines `standdown`, `standdownaff` and `standdownprobe` 50, D-5941's `prbranch` 51, and D-8271's typing-check log floor `typerefuse` 52, and the launch record's `deleg` 53 (D-8367), and the fresh start's `fresh` 54 (overlord W1a), and the Overlord's compaction events `compactevents` and `compacteventsprev` 56 — by addition, NOT a fresh census of
+  # floors): 38; #166's `child` made 39, D-3526's `carriednote` and `tdate` 41, the stall watch's `turn` 42, continuity's `rescuewait` 43, `typed` 44, `choicekept` 45, the route read-back's `readbackseen` 46, the background-job wait's `bgwait` 47 (#189), D-6180's stand-down lines `standdown`, `standdownaff` and `standdownprobe` 50, D-5941's `prbranch` 51, and D-8271's typing-check log floor `typerefuse` 52, the launch record's `deleg` 53 (D-8367), the fresh start's `fresh` 54 (overlord W1a), the manifest's `inflight` 55 (D-8374), and the Overlord's compaction events `compactevents` and `compacteventsprev` 57 — by addition, NOT a fresh census of
   # every per-session field, which this list still is not. `ROUTE_FIELDS` (`class`,
   # `effort`, `subagent`, `workflow`, `compact`, `degraded`, `inert`) and
   # `$REG/<id>.stalepress`/`.tscan` are all real per-session fields this list
   # omits; the gap is pre-existing, not new, and this paragraph's count tracks
   # only the additions named above against the last stated total.
-  # The 56: `archived`, `archivedreason`, `archivemanifest`, `base`, `bgwait`, `branch`,
-  # `carriednote`, `child`, `choicekept`, `compactevents`, `compacteventsprev`, `compactnote`, `compactskip`, `crosspool`, `deleg`, `fresh`, `hold`, `home`, `hookstate`, `lastcompact`, `lastswap`,
+  # The 57: `archived`, `archivedreason`, `archivemanifest`, `base`, `bgwait`, `branch`,
+  # `carriednote`, `child`, `choicekept`, `compactevents`, `compacteventsprev`, `compactnote`, `compactskip`, `crosspool`, `deleg`, `fresh`, `hold`, `home`, `hookstate`, `inflight`, `lastcompact`, `lastswap`,
   # `pool`, `prbranch`, `prcheckedat`, `prhistory`, `prnumber`, `prphase`, `project`, `rc`,
   # `readbackseen`, `reaping`, `rescuewait`, `setup`, `spawn`, `stalenarrownote`, `standdown`, `standdownaff`, `standdownprobe`, `started`, `stopped`, `stranded`,
   # `strandnotify`, `substrate`, `supervised`, `svcfailed`, `swapblocked`,
@@ -6937,14 +6939,15 @@ _ws_slug_valid() { [[ "$1" =~ ^[a-z0-9][a-z0-9-]{1,30}$ ]]; }
 # marker `$REG/<id>.shedding`, which no alias glob reaches, and the gate fails closed on it
 # (DEPSSHED region).
 #
-# NOT reachable this way, and this set IS the boundary — TWENTY-TWO dot-prefixed
-# artifacts live under `$REG`; the eight above are reachable, these fourteen are
+# NOT reachable this way, and this set IS the boundary — TWENTY-THREE dot-prefixed
+# artifacts live under `$REG`; the eight above are reachable, these fifteen are
 # not. THE CARDINAL IS MEASURED NOW, and it had to be: this paragraph said
 # EIGHT about a tree that already held nine, because `.account-placement.lock`
 # landed with `ccrc account` and nothing here reds when prose drifts.
 # `ccd-account-auth.test.ts`'s "the dot-prefixed registry inventory is a
 # census, not a memory" derives the number from the shipped bash and refuses
-# a paragraph that disagrees with it. The fourteen: `$REG/.carry.lock` (no id is the dash-free `.carry`);
+# a paragraph that disagrees with it. The fifteen: `$REG/.carry.lock` (no id is the dash-free `.carry`);
+# `$REG/.inflight.lock` (the manifest's own slot, D-8362; no id is the dash-free `.inflight`);
 # `$REG/.train-proofs` and `$REG/.train-tried` (D-7362, D-7381: the PR lane's kept train proofs and its tried
 # records, `PR_TRAIN_PROOFS_FILE` and `PR_TRAIN_TRIED_FILE`; neither name has a dot after its leading one, so no
 # `<id>.<field>` split leaves an id at all, and `.train-tried`'s `.tmp.XXXXXX` staging files, counted WITH it,
@@ -25643,6 +25646,7 @@ _end_note_gone() {   # id — the supervise loop's `gone` exit: classify and rec
   _now_s_to now
   if [[ "$le" =~ ^([0-9]+)\ swap- ]] && (( now - BASH_REMATCH[1] >= 0 && now - BASH_REMATCH[1] <= 60 )); then return 0; fi
   _end_record "$id" "$(_end_cause "$id")"
+  _inflight_write "$id" revival
 }
 _swap_end_cause() {   # -> this swap's cause word: swap-manual | swap-auto-home | swap-auto-rescue | swap-auto
   # CCD_SWAP_AUTO=1 is `_dispatch_swap`'s mark; CCD_SWAP_ARM names its arm
@@ -28816,6 +28820,15 @@ _swap_carry_jsonl() {   # srccfg dstcfg uuid mdir sanitize(0|1)
 # copy — and this cost — remains only where no such mount exists, and the log
 # names it: `(copy: <cause> <bytes> bytes)` (D-4501).
 CARRY_MERGE_BUDGET=536870912    # bytes one sidecar's merge walk may read + copy per visit (512 MiB); what does not fit is deferred
+LAUNCH_RECORD_MAX_BYTES=1048576    # bytes the launch record may hold: the hook's LRC_MAX_BYTES spelled again, pinned equal (D-8366)
+LAUNCH_RECORD_DROP_RESERVE=4096    # bytes kept back for the record's drop rows: the hook's LRC_DROP_RESERVE; _inflight_write passes the sum as <record-max>
+INFLIGHT_SCAN_BUDGET=67108864      # bytes one manifest may read (64 MiB), priced first; over it is why=budget (D-8376, provisional)
+INFLIGHT_MAX_BYTES=65536           # the byte size of the item lines in a session's manifest file
+INFLIGHT_TAIL_BYTES=65536          # the tail of one agent transcript read (D-5561's TAIL_BYTES)
+INFLIGHT_RECENT_S=86400            # "sidecar files changed in the last day"
+INFLIGHT_ABANDON_S=691200          # eight days of no activity: an item is abandoned (D-8372, provisional)
+INFLIGHT_TIME_S=30                 # the program's time bound; over it is why=time (D-8376, provisional)
+INFLIGHT_WAIT_CLOSED_S=600         # how recently a limit-wait may have closed end=resume for the limit-resume to count it (D-8375)
 
 _carry_slot_take() {   # -> 0 and the CALLER's local CARRY_SLOT_FD set | 1 contended | 2 no mechanism (no flock, the lock file, any other flock failure)
   command -v flock >/dev/null 2>&1 || return 2
@@ -28825,6 +28838,105 @@ _carry_slot_take() {   # -> 0 and the CALLER's local CARRY_SLOT_FD set | 1 conte
   flock -n "$fd" 2>/dev/null || frc=$?
   if (( frc != 0 )); then { exec {fd}>&-; } 2>/dev/null; (( frc == 1 )) && return 1; return 2; fi
   CARRY_SLOT_FD=$fd
+}
+
+# THE RESTART MANIFEST (session-continuity 6b; D-8361, D-8362): what a session had running when it was stopped, written to
+# `$REG/<id>.inflight` at the swap, the limit-resume and a revival, in shadow (nothing reads it in 6b). THE SLOT IS ITS OWN,
+# `$REG/.inflight.lock`, never the carry's `.carry.lock` (D-8362): the carry slot is a box-wide budget for the carry's heavy
+# reads and writes, not a lock between sessions, and a shadow manifest must never make a carry log `(kept: busy)`. The helper
+# sits beside `_carry_slot_take` because it mirrors it line for line, on another file.
+_inflight_slot_take() {   # -> 0 and the CALLER's local INFLIGHT_SLOT_FD set | 1 contended | 2 no mechanism (no flock, the lock file, any other flock failure)
+  command -v flock >/dev/null 2>&1 || return 2
+  local fd frc=0
+  { exec {fd}>>"$REG/.inflight.lock"; } 2>/dev/null || return 2
+  flock -n "$fd" 2>/dev/null || frc=$?
+  if (( frc != 0 )); then { exec {fd}>&-; } 2>/dev/null; (( frc == 1 )) && return 1; return 2; fi
+  INFLIGHT_SLOT_FD=$fd
+}
+
+_inflight_note() {   # id site rest -> one `manifest` line in swap.log, the one writer of them. Always rc 0.
+  echo "$(date '+%F %T') manifest $1: site=$2 $3" >> "$REG/swap.log" 2>/dev/null || true
+  return 0
+}
+
+_inflight_write() {   # id site [cfg uuid [log-from]] -> the session's manifest file, the launch record compacted, one `manifest` line. Always rc 0; never dies, never waits.
+  # THE BODY IS ONE SUBSHELL, because its sites run between a session's stop and its restart, in a shell under `set -u`, where
+  # an unbound variable ends the shell and no `|| true` catches it (`_swap_carry_sidecars` names the same hazard): here an
+  # `exit`, a `die` or an abort ends the subshell alone, and every variable below is its own.
+  (
+    local id="$1" site="$2" cfg="${3-}" uuid="${4-}" lfrom="${5-}" now=0 gfd="" w="" gen="-" wait="-" reset="-" lw="" wrc=0
+    local verdict=unmeasured why=error listed="" items="" kept="" out="" prc=0 slrc=0 prog="" lpath="" tokens="" hdr="" ln="" pass dash re INFLIGHT_SLOT_FD=""
+    local f_acct f_since f_reset f_state f_end f_until
+    dash='items=- in-flight=- holed=- stopped-agent=- diverged=- deferred-until-reset=- abandoned=- unread=- unread-expired=- killed=- resumed=- drop-id=- drop-path=- drop-budget=- drop-shape=- drop-read=- drop-readpath=- drop-over=- retired=-'
+    re="^summary verdict=(listed|none|unread) (${dash//=-/=[0-9]+})\$"
+    local counts="$dash"
+    _now_s_to now
+    _reg_read_to w "$id" wrapper || w=""
+    if [[ -z "$cfg" && -n "$w" ]]; then _cfg_dir_to cfg "$w"; fi
+    [[ -n "$uuid" ]] || _reg_get_to uuid "$id" uuid || uuid=""
+    # The generation read is a canonical write (its alias link), so it runs under the row's compaction lock like every other caller's,
+    # with wait 0 (never waits in the restart window) and around the read alone, before the manifest's slot: it never nests.
+    # An absent file is read with builtins alone (the reader answers "absent" before any write too): no lock, no fork, gen=-.
+    if [[ -e "$REG/$id.generation" || -L "$REG/$id.generation" ]] && _compact_lock_acquire "$id" 0; then
+      gfd="$COMPACT_LOCK_FD"
+      if _reg_generation_read "$id"; then gen="$REG_GENERATION"; fi
+      _compact_lock_release "$gfd"
+    fi
+    # THE WAIT (D-8375): the span this restart stands in, from the registry record of the limit-wait.
+    _reg_read_to lw "$id" limitwait || wrc=$?
+    if (( wrc == 2 )); then wait='?'
+    elif (( wrc == 0 )); then
+      f_acct=$(_rw_field "$lw" account); f_since=$(_rw_field "$lw" since); f_reset=$(_rw_field "$lw" reset)
+      f_state=$(_rw_field "$lw" state); f_end=$(_rw_field "$lw" end); f_until=$(_rw_field "$lw" until)
+      if [[ -n "$w" && "$f_acct" == "$w" && "$f_since" =~ ^[0-9]{1,15}$ && "$f_reset" =~ ^([0-9]{1,15}|-)$ ]] \
+        && { [[ "$f_state" == open ]] || { [[ "$site" == limit-resume && "$f_state" == closed && "$f_end" == resume && "$f_until" =~ ^[0-9]{1,15}$ ]] \
+          && (( now - 10#$f_until >= 0 && now - 10#$f_until <= INFLIGHT_WAIT_CLOSED_S )); }; }; then
+        if [[ "$f_reset" == - ]]; then wait=undated
+        else reset=$f_reset; wait=$(( 10#$f_reset > 10#$f_since ? 10#$f_reset - 10#$f_since : 0 )); fi
+      fi
+    fi
+    if [[ -z "$cfg" || -z "$uuid" || ! -d "$cfg" || ! -x "$cfg" ]]; then :   # unmeasured, why=error (a config root that cannot be searched is not a measured absence)
+    elif [[ -e "$cfg/projects" || -L "$cfg/projects" ]] && ! [[ -d "$cfg/projects" && -r "$cfg/projects" && -x "$cfg/projects" ]]; then :   # not a measured absence
+    elif [[ -z "$(_transcript_matches "$cfg" "$uuid")" ]]; then
+      # no transcript: the program never runs, but only when every project directory could be searched (D-8376): a directory that
+      # cannot be searched hides its transcript, so it is unmeasured, never a measured absence. Builtins only: no external command.
+      if [[ -n "$( shopt -s nullglob; for pd in "$cfg"/projects/*/; do [[ -x "$pd" ]] || { printf x; break; }; done )" ]]; then :   # unmeasured, why=error
+      else verdict=not-applicable why=-; counts="$dash"; fi
+    else
+      prog="${BASH_SOURCE[0]%/*}/lib/inflight-manifest.py"
+      [[ -f "$prog" ]] || prog="$HOME/.cc-sessions/lib/inflight-manifest.py"
+      lpath=-; if [[ "$lfrom" =~ ^[0-9]{1,15}$ ]]; then lpath="$REG/swap.log"; else lfrom=-; fi
+      _inflight_slot_take || slrc=$?
+      if (( slrc == 1 )); then why=busy
+      elif (( slrc == 0 )); then
+        if [[ -f "$prog" ]] && command -v python3 >/dev/null 2>&1; then
+          out=$(_plat_timeout "$INFLIGHT_TIME_S" python3 -I "$prog" "$REG" "$id" "$cfg" "$uuid" "$site" "$now" "$INFLIGHT_SCAN_BUDGET" "$INFLIGHT_MAX_BYTES" "$INFLIGHT_TAIL_BYTES" "$INFLIGHT_RECENT_S" "$INFLIGHT_ABANDON_S" "$reset" "$TRANSCRIPT_JQ_LIB" "$lpath" "$lfrom" "$((LAUNCH_RECORD_MAX_BYTES + LAUNCH_RECORD_DROP_RESERVE))" 2>/dev/null) || prc=$?
+          if (( prc == 124 )); then why="time"
+          elif (( prc == 3 )); then why=budget
+          elif (( prc == 0 )) && [[ "${out%%$'\n'*}" =~ $re ]]; then
+            verdict="${BASH_REMATCH[1]}"; why=-; counts="${BASH_REMATCH[2]}"
+            while IFS= read -r ln; do
+              case "$ln" in 'item '*) items+="${ln#item }"$'\n' ;; 'row '*) kept+="${ln#row }"$'\n' ;; esac
+            done <<< "$out"
+            tokens="verdict=$verdict why=$why wait=$wait $counts"; hdr="v=1 at=$now gen=$gen site=$site uuid=$uuid $tokens"
+            _reg_set "$id" inflight "$hdr"$'\n'"$items" && listed=1
+            if [[ -n "$listed" && -e "$REG/$id.deleg" ]]; then _reg_set "$id" deleg "$kept" || listed=""; fi
+            [[ -n "$listed" ]] || { verdict=unmeasured why=error; counts="$dash"; }
+          fi
+        fi
+        exec {INFLIGHT_SLOT_FD}>&-
+      fi
+    fi
+    if [[ -z "$listed" ]]; then
+      for pass in 1 2; do
+        tokens="verdict=$verdict why=$why wait=$wait $counts"; hdr="v=1 at=$now gen=$gen site=$site uuid=${uuid:--} $tokens"
+        _reg_set "$id" inflight "$hdr" && break
+        rm -f -- "$REG/$id.inflight" 2>/dev/null; verdict=unmeasured why=error counts="$dash"
+      done
+    fi
+    _inflight_note "$id" "$site" "$tokens"
+  ) || true
+  return 0
 }
 
 _swap_carry_merge_walk() {   # src dst budget -> stdout rows; rc 0 merged (K deferred) | 3 the first action alone over budget (nothing touched) | other: failed
@@ -31627,6 +31739,7 @@ cmd_swap() {   # [--force] [--cross-pool] [--interrupt] id target-wrapper — mo
   fi
   # Unconditional, and separate: sidecars are globbed in their own right and
   # exist in project dirs that hold no .jsonl for this uuid at all.
+  local mlog=""; mlog=$(_plat_size "$REG/swap.log" 2>/dev/null) || mlog=""
   _swap_carry_sidecars "$srccfg" "$dstcfg" "$uuid"
   # The task list lives at <configdir>/tasks/<uuid>/ and is keyed by config dir,
   # so a swap orphans it under the OLD account: the resumed session forgets its
@@ -31639,6 +31752,7 @@ cmd_swap() {   # [--force] [--cross-pool] [--interrupt] id target-wrapper — mo
     cp -r "$srccfg/tasks/$uuid" "$dstcfg/tasks/" 2>/dev/null \
       || echo "ccd: warn: could not carry the task list across to $target" >&2
   fi
+  _inflight_write "$id" swap "$dstcfg" "$uuid" "$mlog"
   # THE CARRY IS OVER — every file that was going to move has moved — so the
   # heartbeat stops here, before the registry is flipped. What follows is
   # milliseconds of `_reg_set`, and the final stamp below covers the restart.
@@ -32303,6 +32417,7 @@ _watchdog_resume_run() {   # id — the transient unit's body: the stop-and-ensu
   _graceful_stop_after "$id"
   sleep 1   # let claude flush its final transcript entries
   _reg_set "$id" supervised "$(date +%s)"
+  _inflight_write "$id" limit-resume
   cmd_ensure "$id"
 }
 
