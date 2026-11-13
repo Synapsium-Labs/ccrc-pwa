@@ -54,6 +54,8 @@ export interface SettingsRigOpts {
   journal?: LinearJournal;
   /** A gate in place of the real one. */
   gate?: AccountGate;
+  /** D-8405: told when a key act learned a workspace's teams. */
+  onTeamsLearned?: () => void;
 }
 
 export interface SettingsRig {
@@ -103,6 +105,7 @@ export async function settingsRig(o: SettingsRigOpts = {}): Promise<SettingsRig>
   registerLinearRoutes(app, { ccrcDir, gate, rate, refresher, ...net });
   registerLinearWorkspaceRoutes(app, {
     ccrcDir, gate, rate, refresher, journal: absent.has('journal') ? null : (o.journal ?? fx.journal), ...net,
+    ...(o.onTeamsLearned === undefined ? {} : { onTeamsLearned: o.onTeamsLearned }),
   });
   await app.ready();
   const cookie = `${SESSION_COOKIE}=${token}`;
