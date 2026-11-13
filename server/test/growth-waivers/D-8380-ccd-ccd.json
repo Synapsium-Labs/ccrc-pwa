@@ -2,6 +2,6 @@
   "file": "ccd/ccd",
   "maxDelta": 95,
   "d": "D-8380",
-  "reason": "the manifest in shadow (session-continuity 6b): its writer, its log line and its own slot beside the carry slot it mirrors, its nine constants and four site lines; about +93 net lines against the merge-base",
+  "reason": "the manifest in shadow (session-continuity 6b): its writer, its log line and its own slot beside the carry slot it mirrors, its nine constants and four site lines; +95 net lines against the merge-base, measured after review 1903's fix round",
   "added": "2026-11-13"
 }

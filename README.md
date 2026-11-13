@@ -3220,9 +3220,10 @@ compacted by the manifest. **The manifest** is `$REG/<id>.inflight`, written by 
 sites ccrc restarts a session itself: the swap, the limit-resume and a supervisor revival. The hibernate has none: it
 refuses unless the turn marker reads no background work, and its wake is a spawn. Each file holds a header (its verdict
 `listed`, `none`, `unread`, `not-applicable` or `unmeasured`, and the counts) and its items. Every restart a site reaches
-rewrites the file, so it never shows an earlier site-reached restart's items. A restart no site reaches (a reboot, a stop
-then `ensure`, a hibernate's wake) leaves the previous file standing, so a reader compares its header's `at=` and `gen=`
-with the session's latest spawn before trusting its items. The manifest takes a slot of its own,
+rewrites the file, except a directory standing at its path, which is kept (the log line still says `why=error`), so the
+file never shows an earlier site-reached restart's items. A restart no site reaches (a reboot or `_svc_stop`, a stop then
+`ensure`, a hibernate's wake, an archive restore) leaves the previous file standing, so a reader compares its header's
+`at=` and `gen=` with the session's latest spawn before trusting its items. The manifest takes a slot of its own,
 `$REG/.inflight.lock`, never the carry's `$REG/.carry.lock`, so it never holds up a carry (`ccd/ccd#_inflight_slot_take`).
 Each write ends in one `manifest <id>: site=<site> verdict=… wait=… items=…` line in `swap.log`. Nothing reads either file
 before wave 6c: no prompt, route or stall-watch arm. `python3 deploy/measure-continuity.py --stage 3` reads the lines, and

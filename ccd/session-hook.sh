@@ -1377,19 +1377,19 @@ _hook_lock_acquire() {   # <wait-seconds> -> 0 acquired (HOOK_LOCK_FD set); 1 re
   HOOK_LOCK_FD=""
   # WHY, NOT A SECOND STATUS. Every one of this file's five acquire sites reads
   # the acquire as a boolean (`|| return 0`) and ccd's nine read the VALUE, all
-  # but `_inflight_write`'s, which reads only whether it holds the lock, with
-  # two FUNCTIONS across three of those sites — `cmd_start`, and `_spawn_start`,
-  # which holds two of them — falling through an unknown code into a silent
-  # continue, and `_inflight_write` continuing silently on any refusal, so a
-  # third numeric status would be a distinct refusal nobody distinguishes. (SIX and “two of ccd's five” is what stood here for several
-  # rounds, and both were wrong by census: §3.1 gives PreCompact two acquires,
-  # §3.3 SessionStart one and §3.4 PostCompact two, which is five, and the two
-  # fall-through FUNCTIONS own three SITES between them. A scan in
-  # `session-hook.test.ts` now counts both files and reads the numerals out of
-  # this sentence and the spec's, so neither can drift from the code again.) The condition is carried in a named
-  # out-parameter instead, the way `GC_DIRTY_WHY` and `_WS_NESTED_WHY` already
-  # carry theirs, and cleared on entry so a stale one is never read as this
-  # call's.
+  # but `_inflight_write`'s, which reads only whether it holds the lock, with two
+  # FUNCTIONS across three of those sites — `cmd_start`, and `_spawn_start`, which
+  # holds two of them — falling through an unknown code into a silent continue,
+  # and `_inflight_write` continuing silently on any refusal, so a third numeric
+  # status would be a distinct refusal nobody distinguishes. (SIX and “two of
+  # ccd's five” is what stood here for several rounds, and both were wrong by
+  # census: §3.1 gives PreCompact two acquires, §3.3 SessionStart one and §3.4
+  # PostCompact two, which is five, and the two fall-through FUNCTIONS own three
+  # SITES between them. A scan in `session-hook.test.ts` now counts both files and
+  # reads the numerals out of this sentence and the spec's, so neither can drift
+  # from the code again.) The condition is carried in a named out-parameter
+  # instead, the way `GC_DIRTY_WHY` and `_WS_NESTED_WHY` already carry theirs, and
+  # cleared on entry so a stale one is never read as this call's.
   HOOK_LOCK_WHY=""
   command -v flock  >/dev/null 2>&1 || return 2
   command -v mktemp >/dev/null 2>&1 || return 2
