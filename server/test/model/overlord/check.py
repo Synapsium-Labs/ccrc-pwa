@@ -427,7 +427,7 @@ SAFE = dict(RAISE_TXN='one', OUTCOME_REACH_TXN='same', OUTCOME_AT='pending', REV
             NONBLOCKING_PUSH='silent', START_WHILE_DOWN='reported-at-boot', CHECKPOINTED_TIMEOUT='clearing',
             NO_PROOF_WORD='unmeasured', REINHERIT='inherit', STATE_A_FACT_AUTH='grant',
             BOOT_UNMEASURED_RELEASES=True, I9_SCOPE='rows', WITNESS_LAG=False,
-            FAILED_RENEWAL_RETURNS='active')
+            FAILED_RENEWAL_RETURNS='proven')
 
 QUIET = dict(SERVER_CRASHES=0, SESSION_CRASHES=0, SWAPS=0, RENEWALS=0, REBINDS=0, OPERATOR_MSGS=0,
              RUNG_OPS=0, PUSH_FAILS=0, FAULTS=(), FAULT_EVENTS=0, PROBE_FAILS=False, GEN_TIMEOUTS=False,
@@ -478,6 +478,9 @@ SCEN = {
     # Generation machine alone, with a bigger renewal budget, for D2.
     'genmachine': sc(N_Q=0, KINDS=(), RENEWALS=3, SESSION_CRASHES=1, SERVER_CRASHES=1, SWAPS=1,
                      OPERATOR_MSGS=1, PROBE_FAILS=True, GEN_TIMEOUTS=True, STALE_CALLERS=True, T_MAX=3),
+    # A failed renewal's return alone (plan review 1902, F3): two renewals, one server crash, no swaps or operator
+    # messages, so a generation degraded before it was proven can renew and fail. Small enough for the fast tests.
+    'genback': sc(N_Q=0, KINDS=(), RENEWALS=2, SERVER_CRASHES=1, PROBE_FAILS=True, GEN_TIMEOUTS=True, T_MAX=2),
     # Rebind with a standing hold, and stale callers of both kinds.
     'rebind': sc(N_Q=1, KINDS=(('item_none',),), REBINDS=1, SESSION_CRASHES=1, SERVER_CRASHES=1,
                  STALE_CALLERS=True, STALE_REVS=True, T_MAX=3, RESTART_BOUND=0),
@@ -506,8 +509,9 @@ SWITCHES = [
     ('NONBLOCKING_PUSH', ['push', 'none'], 'nohold'),
     ('START_WHILE_DOWN', ['lost-oldkey', 'lost-nokey'], 'genmachine'),
     ('CHECKPOINTED_TIMEOUT', ['active'], 'genmachine'),
-    ('FAILED_RENEWAL_RETURNS', ['previous'], 'genmachine'),
-    ('FAILED_RENEWAL_RETURNS', ['previous'], 'renewal'),
+    ('FAILED_RENEWAL_RETURNS', ['previous', 'active'], 'genmachine'),
+    ('FAILED_RENEWAL_RETURNS', ['previous', 'active'], 'renewal'),
+    ('FAILED_RENEWAL_RETURNS', ['previous', 'active'], 'genback'),
     ('NO_PROOF_WORD', ['previous'], 'readiness'),
     ('REINHERIT', ['replace'], 'lineage'),
     ('OP_CLASS_REMOVALS', [1], 'lineage'),

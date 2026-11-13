@@ -77,7 +77,7 @@ DEFAULT = dict(
     BOOT_UNMEASURED_RELEASES=True,  # Table 6.4a+6.7c at boot: 'unmeasured' releases every hold
     I9_SCOPE='rows',            # 'rows' | 'all' (count the dead-Overlord push too)
     DEAF_ROWS=False,
-    FAILED_RENEWAL_RETURNS='active',   # | 'previous'
+    FAILED_RENEWAL_RETURNS='proven',   # | 'previous' | 'active' (plan review 1902, F3)
     MAX_ACTS=2,            # bound on act rows (a model bound)
     WITNESS_LAG=True,      # a witness learns an epoch after the commit (separate event)
     PROBE_FAILS=True,      # probes may fail (generation machine)
@@ -879,18 +879,22 @@ def staged_commit(s, k, c):
 
 def back(s, c):
     """§3.3.11 'A failure before the first half returns the generation to active, with a hold-off.'
-    FAILED_RENEWAL_RETURNS='active' is that sentence; 'previous' returns a renewal that began in
-    degraded to degraded. Either way, a generation that has not read its card and passed its probes
-    (not ok) returns to degraded, because 'A generation never becomes active without having read its
-    card and passed its probes' (the coordinator's ruling, slug
-    failed-renewal-returns-to-active-only-if-proven)."""
+    Three readings (plan review 1902, F3). 'proven', the default and the coordinator's ruling (slug
+    failed-renewal-returns-to-active-only-if-proven): active only for a generation that has read its
+    card and passed its probes, because 'A generation never becomes active without having read its
+    card and passed its probes', else degraded. 'active', the sentence alone: always active (X4 finds
+    it). 'previous': back to the state the renewal began in."""
     if back_degraded(s.gen, c):
         return gen_to(s, 'degraded', fromdeg=False)
     return gen_to(s, 'active', holdoff=True, fromdeg=False)
 
 
 def back_degraded(g, c):
-    return (g.fromdeg and c.FAILED_RENEWAL_RETURNS == 'previous') or not (g.card and g.ok)
+    if c.FAILED_RENEWAL_RETURNS == 'active':
+        return False
+    if c.FAILED_RENEWAL_RETURNS == 'previous':
+        return g.fromdeg
+    return not (g.card and g.ok)
 
 
 def back_label(g, c):
