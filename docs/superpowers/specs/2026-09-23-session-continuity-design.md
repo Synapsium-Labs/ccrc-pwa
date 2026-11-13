@@ -476,12 +476,13 @@ An item retires when the launch record shows its resume completed or its run fin
 `never-written`, distinct from `none`.
 
 *(As built, wave 6b, 2026-11-12; an as-built annotation, not a new ruling.)* The manifest is written at three sites: the
-swap, #2603's limit-resume and a supervisor revival (D-8361), and not at the hibernate, which refuses with work in flight.
-The classes are computed as above (`ccd/lib/inflight-manifest.py`, written by `ccd/ccd#_inflight_write`, D-8371); an item
-whose files cannot be read is `unread`, never given a class, and `listed` is the verdict of a manifest with items. A script
-path is checked lexically at write and by `realpath` at read (D-8365). Background shells stay in the turn marker (D-8377).
-The header's `wait=` is the span of the limit-wait this restart stands in (D-8375). The file is rewritten at every restart a
-site reaches (D-8374), and its slot is its own (the call-I amendment below).
+swap, #2603's limit-resume and a supervisor revival (D-8361), and not at the hibernate, which refuses with work in
+flight. The classes are computed as above (`ccd/lib/inflight-manifest.py`, written by `ccd/ccd#_inflight_write`,
+D-8371), except that `finished` is stricter: a `killed`, non-final or unparseable summary is in flight (D-8370), and
+`abandoned` waits eight days (D-8372). An item whose files cannot be read is `unread`, never given a class; `listed` is
+a manifest with items. A script path is checked lexically at write and by `realpath` at read (D-8365). Background shells
+stay in the turn marker (D-8377). The header's `wait=` is the span of the limit-wait this restart stands in (D-8375).
+The file is rewritten at every restart a site reaches (D-8374), and its slot is its own (the call-I amendment below).
 
 *(Amended 2026-11-11, rev 12, wave 6b.)* `abandoned` here is this class, not the run abandon door. 6b writes the
 manifest in shadow, and these calls belong to it:
