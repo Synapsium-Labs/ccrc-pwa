@@ -6,7 +6,7 @@
 // keep for the design system to hold: tones that read tokens, every tone measured against the page on every
 // palette, stepped animation, reduced motion that stills every loop, and a still frame that is the mood's own rest.
 import { describe, expect, it } from 'vitest';
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import { ART } from '../../ui/src/characters/art';
@@ -185,6 +185,15 @@ describe('the generator refuses what is outside the measured vocabulary', () => 
   it.each(bad)('refuses %s', (_name, text, word) => {
     expect(text).not.toBe(base);
     expect(() => parseArt(text)).toThrow(word);
+  });
+  it('refuses a drawn duration on a part that no animation paces', () => {
+    // A duration is emitted as its part's shorthand (`.chr-<part>.chr-dur-<ms>`, D-5930's one-place retiming), so a
+    // duration with no animated class beside it has nothing to pace, and the generator refuses it.
+    const files = Object.fromEntries(readdirSync(SVG_DIR).filter((f) => f.endsWith('.svg')).map((f) => [f, svg(f.slice(0, -4))]));
+    const bare = base.replace(/<path (fill="#[0-9A-Fa-f]{6}")/, '<path style="animation-duration: 6s" $1');
+    expect(bare).not.toBe(base);
+    expect(() => compileAll(files)).not.toThrow();
+    expect(() => compileAll({ ...files, 'orb-neutral.svg': bare })).toThrow(/refused pace/);
   });
   it('refuses a class or keyframe name defined two ways across two files', () => {
     const other = base.replace('.md-hop{animation:md-up2 1.2s', '.md-hop{animation:md-up2 1.3s');

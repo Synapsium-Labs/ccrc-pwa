@@ -68,13 +68,14 @@
 @keyframes chr-peek{0%{opacity:0}60%{opacity:1}90%{opacity:0}}
 @keyframes chr-doze{0%{opacity:1}60%{opacity:0}90%{opacity:1}}
 @keyframes chr-peeklook{0%{transform:translate(-4px,0)}70%{transform:translate(4px,0)}80%{transform:translate(0,0)}}
-/* The six inline styles the art drew, as classes after the rules so they win. */
+/* The six inline styles the art drew, as classes after the rules so they win: each delay as its own rule, each
+   duration as its part's shorthand on a compound selector (ui/src retimes motion in one place, D-5930). */
 .chr-delay-500{animation-delay:-0.5s}
 .chr-delay-600{animation-delay:-0.6s}
 .chr-delay-1000{animation-delay:-1s}
-.chr-dur-1600{animation-duration:1.6s}
-.chr-dur-5000{animation-duration:5s}
-.chr-dur-6000{animation-duration:6s}
+.chr-breathe.chr-dur-6000{animation:chr-up1 6s steps(1) infinite}
+.chr-flash.chr-dur-1600{animation:chr-flash 1.6s steps(1) infinite}
+.chr-sq.chr-dur-5000{animation:chr-sq 5s steps(1) infinite}
 /* Reduced motion stills every animation; the resting pose is each part's own base style. */
 @media (prefers-reduced-motion:reduce){
 .chr-hop,
@@ -107,7 +108,10 @@
 .chr-puzzle,
 .chr-peek,
 .chr-doze,
-.chr-peeklook{animation:none}
+.chr-peeklook,
+.chr-breathe.chr-dur-6000,
+.chr-flash.chr-dur-1600,
+.chr-sq.chr-dur-5000{animation:none}
 }
 /* A bounded play (Character data-still): the same stillness, asked for by the component. */
 .chr[data-still] .chr-hop{animation:none}
@@ -141,3 +145,6 @@
 .chr[data-still] .chr-peek{animation:none}
 .chr[data-still] .chr-doze{animation:none}
 .chr[data-still] .chr-peeklook{animation:none}
+.chr[data-still] .chr-breathe.chr-dur-6000{animation:none}
+.chr[data-still] .chr-flash.chr-dur-1600{animation:none}
+.chr[data-still] .chr-sq.chr-dur-5000{animation:none}

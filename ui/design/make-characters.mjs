@@ -63,14 +63,18 @@ const PART_ATTRS = {
   path: new Set(['d', 'class', 'fill', 'fill-opacity', 'transform', 'style']),
   rect: new Set(['x', 'y', 'width', 'height', 'class', 'fill', 'fill-opacity', 'transform', 'style']),
 };
-/** The six inline styles the drawn art uses, each as a modifier class that is emitted after the rules. */
+/** The six inline styles the drawn art uses, each as a modifier class emitted after the rules. A delay is its own
+ *  rule. A duration is NOT spelled as its longhand: `ui/src` retimes motion in one place (D-5930,
+ *  `server/test/single-definition/docs-l0.test.ts` refuses an `animation-duration:` literal anywhere else), so each
+ *  drawn duration is emitted as the paced part's own `animation` shorthand, on the compound selector
+ *  `.chr-<part>.chr-dur-<ms>`, with only the duration changed (`pacedRules`). */
 const STYLE_MODIFIERS = {
   'animation-delay: -0.5s': { cls: 'chr-delay-500', css: 'animation-delay:-0.5s' },
   'animation-delay: -0.6s': { cls: 'chr-delay-600', css: 'animation-delay:-0.6s' },
   'animation-delay: -1s': { cls: 'chr-delay-1000', css: 'animation-delay:-1s' },
-  'animation-duration: 1.6s': { cls: 'chr-dur-1600', css: 'animation-duration:1.6s' },
-  'animation-duration: 5s': { cls: 'chr-dur-5000', css: 'animation-duration:5s' },
-  'animation-duration: 6s': { cls: 'chr-dur-6000', css: 'animation-duration:6s' },
+  'animation-duration: 1.6s': { cls: 'chr-dur-1600', dur: '1.6s' },
+  'animation-duration: 5s': { cls: 'chr-dur-5000', dur: '5s' },
+  'animation-duration: 6s': { cls: 'chr-dur-6000', dur: '6s' },
 };
 const REDUCED = '@media (prefers-reduced-motion:reduce)';
 const GRID = 32;
@@ -298,6 +302,36 @@ function serNode(n, ind) {
   return `${pad}{ ${f.join(', ')}, kids: [\n${kids}\n${pad}] },`;
 }
 
+/** Each drawn duration as its part's shorthand on a compound selector (see `STYLE_MODIFIERS`). A paced node carries
+ *  exactly one animated class and no delay modifier, or the generator refuses: a shorthand would reset a drawn delay,
+ *  and two animated classes leave the pace ambiguous. */
+function pacedRules(art, classRules) {
+  const durs = new Map(Object.values(STYLE_MODIFIERS).filter((m) => m.dur).map((m) => [m.cls, m.dur]));
+  const delays = new Set(Object.values(STYLE_MODIFIERS).filter((m) => m.css).map((m) => m.cls));
+  const animatedBody = new Map(classRules.filter((d) => isAnimated(d.body)).map((d) => [d.selector.slice(1), d.body]));
+  const out = new Map();
+  const walk = (nodes) => {
+    for (const n of nodes) {
+      const cls = (n.cls ?? '').split(/\s+/).filter(Boolean);
+      const dur = cls.filter((c) => durs.has(c));
+      if (dur.length > 0) {
+        const parts = cls.filter((c) => animatedBody.has(c));
+        if (dur.length !== 1 || parts.length !== 1 || cls.some((c) => delays.has(c))) {
+          refuse('pace', `"${n.cls}" must carry one duration, one animated class and no delay`);
+        }
+        const body = animatedBody.get(parts[0]);
+        const shorthand = body.match(/(?:^|;)\s*animation\s*:\s*([^;]+)/)[1].trim();
+        const paced = shorthand.replace(/(^|\s)(\d*\.?\d+m?s)(?=\s|$)/, `$1${durs.get(dur[0])}`);
+        if (paced === shorthand && !shorthand.includes(durs.get(dur[0]))) refuse('pace', `no duration in "${shorthand}"`);
+        out.set(`.${parts[0]}.${dur[0]}`, `animation:${paced}`);
+      }
+      if (n.kids) walk(n.kids);
+    }
+  };
+  for (const c of Object.keys(art)) for (const m of Object.keys(art[c])) walk(art[c][m].nodes);
+  return [...out.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([selector, body]) => ({ selector, body }));
+}
+
 const classesIn = (nodes, into) => {
   for (const n of nodes) {
     for (const c of (n.cls ?? '').split(/\s+/).filter(Boolean)) into.add(c);
@@ -346,7 +380,8 @@ export function compileAll(files) {
   // characters.css
   const classRules = [...defs.values()].filter((d) => d.selector.startsWith('.'));
   const keyframes = [...defs.values()].filter((d) => d.selector.startsWith('@keyframes'));
-  const animated = classRules.filter((d) => isAnimated(d.body)).map((d) => d.selector);
+  const paced = pacedRules(art, classRules);
+  const animated = [...classRules.filter((d) => isAnimated(d.body)).map((d) => d.selector), ...paced.map((d) => d.selector)];
   const mods = Object.values(STYLE_MODIFIERS);
   const toneRules = Object.entries(TONE_TOKEN).map(([t, tok]) => `.chr-t-${t}{fill:var(${tok})}`);
   const css = [
@@ -356,8 +391,10 @@ export function compileAll(files) {
     '/* The drawn animation vocabulary (renamed md-* and dl-* to chr-*). Every animation is stepped. */',
     ...classRules.map((d) => `${d.selector}{${d.body}}`),
     ...keyframes.map((d) => `${d.selector}{${d.body}}`),
-    '/* The six inline styles the art drew, as classes after the rules so they win. */',
-    ...mods.map((m) => `.${m.cls}{${m.css}}`),
+    '/* The six inline styles the art drew, as classes after the rules so they win: each delay as its own rule, each',
+    '   duration as its part\'s shorthand on a compound selector (ui/src retimes motion in one place, D-5930). */',
+    ...mods.filter((m) => m.css).map((m) => `.${m.cls}{${m.css}}`),
+    ...paced.map((d) => `${d.selector}{${d.body}}`),
     '/* Reduced motion stills every animation; the resting pose is each part\'s own base style. */',
     `${REDUCED}{\n${animated.join(',\n')}{animation:none}\n}`,
     '/* A bounded play (Character data-still): the same stillness, asked for by the component. */',
