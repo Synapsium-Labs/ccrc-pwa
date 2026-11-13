@@ -4,6 +4,7 @@
 import { describe, expect, it } from 'vitest';
 import type { FleetSession, RosterWire } from '../../shared/api';
 import { accountProvider } from '../src/lib/accounts';
+import type { LaneModelsRead } from '../../shared/models';
 import { classReadbackMeasurable } from '../src/lib/models';
 import { routeView } from '../src/session/routeView';
 import { routingLine } from '../src/session/routingLine';
@@ -14,8 +15,18 @@ const route = (over: Partial<Route> & { fields?: Route['fields'] } = {}): Route 
   fields: {}, degraded: null, inert: [], unreadable: [], ...over,
 });
 
-const line = (row: FleetSession, provider: Parameters<typeof routeView>[2], lane = 'Lane A') =>
-  routingLine(row, routeView(row, row.wrapper, provider), lane);
+const line = (
+  row: FleetSession, provider: Parameters<typeof routeView>[2], lane = 'Lane A', models: LaneModelsRead | null = null,
+) => routingLine(row, routeView(row, row.wrapper, provider, models), lane, models);
+
+/** D-8406: a dedicated lane's model files, as `GET /api/models/:lane` answers them. */
+const GPT_LANE: LaneModelsRead = {
+  kind: 'read',
+  classes: {
+    fable: { model: 'gpt-6-astra', label: 'GPT-6-Astra' }, opus: { model: 'gpt-6.1-sol', label: 'GPT-6.1-Sol' },
+    sonnet: { model: 'gpt-6.1-terra', label: 'GPT-6.1 Terra' }, haiku: { model: 'gpt-6-luna', label: 'GPT-6 Luna' },
+  },
+};
 
 const entry = (over: Partial<RosterWire> = {}): RosterWire => ({
   id: 'lane-a', label: 'Lane A', hue: 'cyan', homeAble: true, hidden: false, pool: null, ...over,
@@ -40,8 +51,8 @@ describe('the routing line says what runs and asks only what it can measure', ()
       route: route({ fields: { class: 'opus' } }),
     });
     const out = line(row, 'anthropic');
-    expect(out.askedClass).toBe('Opus 5.5');
-    expect(out.sentence).toBe('Runs Sonnet 5 on Lane A · effort high · asked Opus 5.5');
+    expect(out.askedClass).toBe('Opus class');
+    expect(out.sentence).toBe('Runs Sonnet 5 on Lane A · effort high · asked Opus class');
   });
 
   it('a lane whose provider is absent never reads asked or queued for the class', () => {
@@ -50,10 +61,10 @@ describe('the routing line says what runs and asks only what it can measure', ()
       route: route({ fields: { class: 'opus' } }),
     });
     for (const provider of [null, accountProvider([entry()], 'lane-a')]) {
-      const view = routeView(row, 'lane-a', provider);
+      const view = routeView(row, 'lane-a', provider, null);
       expect(view.classPending).toBe(false);
       expect(view.wireQueuedField).not.toBe('class');
-      const out = routingLine(row, view, 'Lane A');
+      const out = routingLine(row, view, 'Lane A', null);
       expect(out.askedClass).toBeNull();
       expect(out.sentence).not.toMatch(/asked|queued/);
     }
@@ -66,20 +77,36 @@ describe('the routing line says what runs and asks only what it can measure', ()
     });
     // An OpenRouter lane, and a second OpenAI lane that is not the dedicated one (it gets the Anthropic list).
     for (const provider of ['openrouter', 'openai'] as const) {
-      const view = routeView(row, 'lane-a', provider);
+      const view = routeView(row, 'lane-a', provider, null);
       expect(view.classPending).toBe(false);
       expect(view.wireQueuedField).not.toBe('class');
-      expect(routingLine(row, view, 'Lane A').sentence).not.toMatch(/asked|queued/);
+      expect(routingLine(row, view, 'Lane A', null).sentence).not.toMatch(/asked|queued/);
     }
-    // Control: the dedicated lane, on its own provider, can read its class back.
+    // Control: the dedicated lane, on its own provider and with its model files read, can read its class back, and
+    // names the asked class by the model its registry maps it to (D-8406).
     const gpt = fleetSession({
-      wrapper: 'gpt', model: 'GPT-5.6 Terra', effort: 'high',
+      wrapper: 'gpt', model: 'gpt-6.1-terra', effort: 'high',
       route: route({ fields: { class: 'opus' } }),
     });
-    const view = routeView(gpt, 'gpt', 'openai');
+    const view = routeView(gpt, 'gpt', 'openai', GPT_LANE);
     expect(view.classPending).toBe(true);
     expect(view.wireQueuedField).toBe('class');
-    expect(routingLine(gpt, view, 'gpt').sentence).toContain('· asked GPT-5.6 Sol');
+    expect(routingLine(gpt, view, 'gpt', GPT_LANE).sentence).toContain('· asked GPT-6.1-Sol');
+    // The pane reading the asked model back clears it, a context suffix and all.
+    const landed = { ...gpt, model: 'gpt-6.1-sol[1m]' };
+    expect(routeView(landed, 'gpt', 'openai', GPT_LANE).classPending).toBe(false);
+  });
+
+  it('a dedicated lane whose model files are not read yet, absent or unreadable never reads asked (D-8406)', () => {
+    const gpt = fleetSession({
+      wrapper: 'gpt', model: 'gpt-6.1-terra', effort: 'high',
+      route: route({ fields: { class: 'opus' } }),
+    });
+    for (const models of [null, { kind: 'absent' }, { kind: 'unreadable' }] as const) {
+      const view = routeView(gpt, 'gpt', 'openai', models);
+      expect(view.classPending).toBe(false);
+      expect(routingLine(gpt, view, 'gpt', models).sentence).not.toMatch(/asked/);
+    }
   });
 
   it("an inert effort reads 'effort set by the lane'", () => {
@@ -108,22 +135,22 @@ describe('the routing line says what runs and asks only what it can measure', ()
       wrapper: 'lane-a', model: 'Sonnet 5', effort: 'low',
       route: route({ fields: { class: 'opus', effort: 'high' } }),
     });
-    const view = routeView(row, 'lane-a', 'anthropic');
+    const view = routeView(row, 'lane-a', 'anthropic', null);
     // Today's precedence: the effort is the field the wire reports as queued.
     expect(view.wireQueuedField).toBe('effort');
     expect(view.classPending).toBe(true);
     expect(view.effortPending).toBe(true);
-    expect(routingLine(row, view, 'Lane A').sentence)
-      .toBe('Runs Sonnet 5 on Lane A · effort low · asked Opus 5.5 · asked effort high');
+    expect(routingLine(row, view, 'Lane A', null).sentence)
+      .toBe('Runs Sonnet 5 on Lane A · effort low · asked Opus class · asked effort high');
   });
 
   it('with no routing record nothing is pending', () => {
     const row = fleetSession({ wrapper: 'lane-a', model: 'Sonnet 5', effort: 'low', route: null });
-    const view = routeView(row, 'lane-a', 'anthropic');
+    const view = routeView(row, 'lane-a', 'anthropic', null);
     expect(view.classPending).toBe(false);
     expect(view.effortPending).toBe(false);
     expect(view.wireQueuedField).toBeNull();
-    expect(routingLine(row, view, 'Lane A').sentence).toBe('Runs Sonnet 5 on Lane A · effort low');
+    expect(routingLine(row, view, 'Lane A', null).sentence).toBe('Runs Sonnet 5 on Lane A · effort low');
   });
 
   it('an unreadable effort says routing could not be read and asks nothing of the effort', () => {
@@ -131,10 +158,10 @@ describe('the routing line says what runs and asks only what it can measure', ()
       wrapper: 'lane-a', model: 'Sonnet 5', effort: 'medium',
       route: route({ unreadable: ['effort'] }),
     });
-    const view = routeView(row, 'lane-a', 'anthropic');
+    const view = routeView(row, 'lane-a', 'anthropic', null);
     expect(view.effortUnreadable).toBe(true);
     expect(view.effortPending).toBe(false);
-    expect(routingLine(row, view, 'Lane A').sentence)
+    expect(routingLine(row, view, 'Lane A', null).sentence)
       .toBe('Runs Sonnet 5 on Lane A · effort medium · routing could not be read');
   });
 
@@ -153,7 +180,7 @@ describe('the routing line says what runs and asks only what it can measure', ()
         .toEqual(['model', 'effort']);
     }
     expect(line(rows[0]![0], 'anthropic').parts.filter((p) => p.kind === 'asked').map((p) => p.text))
-      .toEqual(['asked Opus 5.5', 'asked effort high']);
+      .toEqual(['asked Opus class', 'asked effort high']);
   });
 
   it("every '·' is a sep part, and each sep leads, past plain words only, to a door, an ask or a note", () => {
@@ -184,7 +211,7 @@ describe('the routing line says what runs and asks only what it can measure', ()
     }), 'anthropic');
     const kinds = both.parts.map((p) => `${p.kind}:${p.text}`);
     expect(kinds.slice(-5)).toEqual([
-      'effort:low', 'sep: · ', 'asked:asked Opus 5.5', 'sep: · ', 'asked:asked effort high',
+      'effort:low', 'sep: · ', 'asked:asked Opus class', 'sep: · ', 'asked:asked effort high',
     ]);
     const note = line(fleetSession({
       wrapper: 'lane-a', model: 'Sonnet 5', effort: 'medium', route: route({ unreadable: ['effort'] }),
@@ -211,10 +238,10 @@ describe('the routing line says what runs and asks only what it can measure', ()
       wrapper: 'lane-a', model: 'Sonnet 5', effort: 'medium',
       route: route({ fields: { class: 'opus' }, inert: ['class'] }),
     });
-    const view = routeView(row, 'lane-a', 'anthropic');
+    const view = routeView(row, 'lane-a', 'anthropic', null);
     expect(view.classInert).toBe(true);
     expect(view.classPending).toBe(false);
-    const out = routingLine(row, view, 'Lane A');
+    const out = routingLine(row, view, 'Lane A', null);
     expect(out.askedClass).toBeNull();
     expect(out.sentence).toBe('Runs Sonnet 5 on Lane A · effort medium · model set by the lane');
     expect(out.parts.slice(-2).map((p) => `${p.kind}:${p.text}`)).toEqual(['sep: · ', 'note:model set by the lane']);
@@ -244,7 +271,7 @@ describe('the routing line says what runs and asks only what it can measure', ()
     const rows: FleetSession[] = [
       fleetSession({ wrapper: 'lane-a', model: 'Sonnet 5', effort: 'low', route: route({ fields: { class: 'opus', effort: 'high' } }) }),
       fleetSession({ wrapper: 'lane-a', model: 'deepseek-v4', route: route({ fields: { class: 'opus' }, unreadable: ['effort'] }) }),
-      fleetSession({ wrapper: 'gpt', model: 'GPT-5.6 Luna', route: route({ fields: { class: 'opus' }, degraded: 'haiku' }) }),
+      fleetSession({ wrapper: 'gpt', model: 'gpt-6-luna', route: route({ fields: { class: 'opus' }, degraded: 'haiku' }) }),
       fleetSession({ wrapper: 'lane-a' }),
     ];
     for (const row of rows) {

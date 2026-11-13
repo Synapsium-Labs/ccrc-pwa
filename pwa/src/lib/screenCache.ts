@@ -68,3 +68,7 @@ export const digestKey = (day: string | null): string => (day === null ? 'digest
 /** The key of the runs board's place (the runs rebuild, D-8072): its Finished fold and its scroll, kept so a return from a run
  *  finds the board as it was left. */
 export const runsBoardKey = 'runs:board';
+
+/** The key of one lane's model files as `GET /api/models/:lane` read them (D-8406), kept so the session's model picker, its
+ *  routing lines and the new-session sheet name a lane's models at once on a second visit. */
+export const laneModelsKey = (lane: string): string => `lane-models:${lane}`;

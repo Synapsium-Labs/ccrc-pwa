@@ -324,9 +324,9 @@ describe('a section with nothing to show renders nothing (desktop polish T3d, D-
       roster: [{ id: 'lane-a', label: 'Lane A', hue: 'acct-1', homeAble: true, provider: 'anthropic' } as never],
     }));
     el = line();
-    expect(el.textContent).toMatch(/ · asked Opus 5\.5$/);
+    expect(el.textContent).toMatch(/ · asked Opus class$/);
     // The pill holds the asked words only: the separator is plain text beside it, so the pill never wraps it.
-    expect(el.querySelector('.route-queued')?.textContent).toBe('asked Opus 5.5');
+    expect(el.querySelector('.route-queued')?.textContent).toBe('asked Opus class');
   });
 
   it('the routing line reads exactly the sentence, whichever parts it carries', () => {
@@ -338,7 +338,7 @@ describe('a section with nothing to show renders nothing (desktop polish T3d, D-
     const route = (over: Partial<NonNullable<FleetSession['route']>>): FleetSession['route'] =>
       ({ fields: {}, degraded: null, inert: [], unreadable: [], ...over });
     const cases: [string, Partial<FleetSession>, string][] = [
-      ['an asked class', { model: 'Sonnet 5', route: route({ fields: { class: 'opus' } }) }, ' · asked Opus 5.5'],
+      ['an asked class', { model: 'Sonnet 5', route: route({ fields: { class: 'opus' } }) }, ' · asked Opus class'],
       ['an asked effort', { route: route({ fields: { effort: 'max' } }) }, ' · asked effort max'],
       ['an inert class', { route: route({ fields: { class: 'opus' }, inert: ['class'] }) }, ' · model set by the lane'],
       ['an unreadable field', { route: route({ unreadable: ['effort'] }) }, ' · routing could not be read'],
@@ -352,7 +352,7 @@ describe('a section with nothing to show renders nothing (desktop polish T3d, D-
       act(() => useFleetStore.setState({ sessions: [row] }));
       const { container, unmount } = render(<RoutingSection />);
       const el = container.querySelector<HTMLElement>('.insp-routing-row')!;
-      const sentence = routingLine(row, routeView(row, row.wrapper, 'anthropic'), 'Lane A').sentence;
+      const sentence = routingLine(row, routeView(row, row.wrapper, 'anthropic', null), 'Lane A', null).sentence;
       // The shape really carries its part, and the component prints the sentence and nothing else.
       expect(sentence, name).toContain(expected);
       expect(el.textContent, name).toBe(sentence);
