@@ -19,8 +19,9 @@ the next day. W1 is where coordinators and the Overlord first talk by mail, so t
 - **(a) An invited reply is outside the bound.** `POST /api/mail` takes one more, optional body field, `inReplyTo`:
   the DELIVERY id of the mail being answered, the number on the replier's own `delivery:` / `id:` line. The server
   admits a mail as an invited reply when it is peer mail (`runId: null`), its `kind` is `answer`, and `inReplyTo`
-  names a delivery that went TO the reply's sender, of a mail FROM the reply's (resolved) recipient, which no earlier
-  mail was admitted as answering. Such a mail is never refused by any of the three peer arms, and it is recorded in
+  names a delivery that went TO the reply's sender, of an UNASKED mail (one not itself admitted as an invited reply)
+  FROM the reply's (resolved) recipient, the two being different sessions, which no earlier mail was admitted as
+  answering (review 1907 F1: an invited reply never invites another, so neither two sessions nor one can chain). Such a mail is never refused by any of the three peer arms, and it is recorded in
   a new nullable column, `mail.answersMail` (the invitation's MAIL row id), so it occupies no slot in either count
   afterwards and a second reply to the same invitation is ordinary peer mail. A unique partial index makes "one
   invited reply per invitation" a fact of the database, not only of the route. An `inReplyTo` that does not qualify
@@ -109,16 +110,23 @@ the subject's replies"); the build 9 peers design, `docs/superpowers/specs/2026-
 ## Review Focus
 
 1. **The invitation check is exact.** All of: `runId` null, `kind === 'answer'`, the named delivery exists, its
-   `toId` is the reply's `fromId`, its mail's `fromId` is the reply's RESOLVED recipient, and no mail is already
-   recorded as answering that mail. Task 4's cases hold each conjunct with a case that fails only that one; Task 4
-   Step 5 deletes each conjunct in turn.
+   `toId` is the reply's `fromId`, its mail's `fromId` is the reply's RESOLVED recipient, the two are different
+   sessions, the invited mail is not itself an invited reply (`answersMail` NULL), and no mail is already recorded
+   as answering that mail. Task 4's cases (and fix round 1's, for the two from review 1907) hold each conjunct with a
+   case that fails only that one, and each conjunct has a mutant in the floor set. The delivery is read without its
+   state: a reply to a mail still queued is a reply, and the once-rule bounds it either way (review 1907 F5).
 2. **One invited reply per invitation, keyed on the MAIL id.** A parked delivery revived by
    `reviveParkedDeliveries` gets a new delivery id for the same mail; keying the once-rule on the delivery id would
    let each heir buy one more reply. The unique partial index `mail_answers_once` backs the route's check.
 3. **An invited reply occupies no slot.** Both counts exclude `answersMail IS NOT NULL`; the duplicate probe still
    counts every outstanding row, because an unasked mail repeating a queued reply's subject is still a repeat.
-4. **No unbounded lane opens.** Exempt replies are bounded by invitations: one per mail the recipient sent. A
-   recipient that never mailed the sender gives it nothing, and peer invitations are themselves bounded.
+4. **No unbounded lane opens.** Exempt replies are bounded by invitations: one per UNASKED mail the recipient sent
+   to the sender, and never one to itself. An invited reply invites nothing, so a trade of answers alternates
+   invited and counted mails and stops when the counted side is refused (review 1907 F1, measured through the route:
+   before the fix, 40 chained answers and 41 self-answers were all accepted). Unasked PEER mail is bounded by the
+   arms. Run mail is dark and unbounded, and check 8 does not check that the sender belongs to the run, so a run mail
+   is an invitation too; each still buys exactly one peer reply, and a session able to send it could already send
+   unbounded run mail directly, so this adds no capacity (review 1907 F4).
 5. **Absence permits.** An older client sends no `inReplyTo` and sees today's behaviour; an older server ignores the
    field (it reads named body fields only), so a newer client's reply is merely bounded as today. An older build
    opening a database at `user_version 65` reads every row with its own counts, which include invited replies:
@@ -466,7 +474,7 @@ uses the one-word `ack` and `time`). It differs in six places:
 
 | Draft | This plan | Why |
 |---|---|---|
-| Only the pair arm is lifted; the hour and `duplicate` still apply | All three arms are lifted for an invited reply | The issue's title, "never refused by the peer bound". The hour arm guards a runaway sender, and an invited reply cannot run away: one per mail the recipient sent. A duplicate subject on two replies is not a repeat |
+| Only the pair arm is lifted; the hour and `duplicate` still apply | All three arms are lifted for an invited reply | The issue's title, "never refused by the peer bound". The hour arm guards a runaway sender, and an invited reply cannot run away: one per UNASKED mail the recipient sent (review 1907 F1 found the first draft let replies chain; `only-unasked-mail-invites` closes it). A duplicate subject on two replies is not a repeat |
 | The once-rule keys on the cited DELIVERY id (`replyToDelivery`) | It keys on the invited MAIL id (`answersMail`), with a unique partial index | A revived heir delivery has a new id for the same mail; the index makes the rule a database fact |
 | An invited reply still counts in later counts | It holds no slot afterwards | Answering should not cost the replier its own room for unasked mail |
 | A run mail cannot be an invitation (`run-mail`) | Any mail from the recipient to the sender can | A peer reply to a run mail is bounded by the same once-rule; refusing it would refuse an asked-for reply |
@@ -479,11 +487,18 @@ Decisions and departures of this plan, by slug; the coordinator issues the numbe
 
 - **invited-reply-outside-every-arm** — the issue names "the pair's bound"; an invited reply is exempt from all three
   peer arms (pair, hour, duplicate), as the issue's title says ("never refused by the peer bound"). The exemption is
-  bounded by invitations, one reply per mail the recipient sent, so no arm is needed to bound it.
+  bounded by invitations, one reply per UNASKED mail the recipient sent (`only-unasked-mail-invites`), so no arm is
+  needed to bound it. A run mail invites too and adds no capacity (Review Focus 4).
+- **only-unasked-mail-invites** — (review 1907 F1, the coordinator's ruling: chains are not wanted) a mail whose
+  `answersMail` is set never invites, and a session's mail to itself never does; without this, two sessions trading
+  answers, or one answering itself, mailed without limit outside every arm.
 - **invited-reply-holds-no-slot** — an admitted invited reply is excluded from both counts afterwards, so answering
   never costs the replier the room for its own unasked mail.
 - **in-reply-to-is-a-delivery-id** — the wire field names the DELIVERY id (the only id a recipient sees); the
   once-rule and the column key on the invitation's MAIL id, so a revived heir delivery buys no second reply.
+- **malformed-in-reply-to-is-bad-kind** — (review 1907 F6, kept) a malformed `inReplyTo` refuses `400 bad-kind` on
+  any mail, run mail included, where the field was ignored before: the shape check every body field has, with an
+  existing word; no client sends the field yet.
 - **unqualified-in-reply-to-is-counted** — an `inReplyTo` that does not qualify is not refused on its own; the mail
   is ordinary peer mail, and a refusal says why the exemption did not apply.
 - **peer-check-moves-to-l1** — check 9's decision moves from the route (L4) to `coord/peerBound.ts` (L1).
