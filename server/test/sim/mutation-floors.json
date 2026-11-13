@@ -1,3 +1,4 @@
 {
-  "server/src/coord/stall.ts#stallCoordBlockedStep": 1
+  "server/src/coord/stall.ts#stallCoordBlockedStep": 1,
+  "server/src/coord/mailPace.ts#mailPaceOf": 1
 }
