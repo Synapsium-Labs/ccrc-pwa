@@ -32,14 +32,15 @@
 import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import type { FleetSession, ProjectRow } from '../../../shared/api';
-import { CLASSES, type ModelClass } from '../../../shared/models';
+import { CLASSES, type LaneModelsRead, type ModelClass } from '../../../shared/models';
 import { Button, ListRow, Select, Sheet, toast } from '@ccrc/ui';
 import type { ProjectAddBody } from '../../../shared/projectAdd';
 import { accountIsHomeAble, accountLabel, accountPool, accountPoolState } from '../lib/accounts';
 import { api, apiErrorText, failedTo } from '../lib/api';
 import { navigate } from '../lib/router';
 import { sessionPath } from '../lib/routes';
-import { effortOptions, modelOptions } from '../lib/models';
+import { effortOptions, laneClassLabel } from '../lib/models';
+import { useLaneModels } from '../lib/useLaneModels';
 import { poolSide } from '../lib/pools';
 import { declaredAccountPool } from '../../../shared/poolrule';
 import { useFleetStore, type FleetStore } from '../stores/fleet';
@@ -91,18 +92,18 @@ function ProjectRowButton({ row, selected, pool, onPick }: {
 }
 
 /** A `CLASSES` entry's display name for the sheet's `Class` select — the
- *  label `modelOptions` already has for this wrapper/class pair (so gpt's
- *  own aliases read the same here as they do in the session screen's own
- *  picker) when the lane offers one, else the class word with its first
+ *  label the picked lane's own model files give that class's model (D-8406,
+ *  `laneClassLabel`: the catalogue's label for the model the registry maps
+ *  the class to, so a lane reads the same here as in the session screen's own
+ *  picker) when the lane names one, else the class word with its first
  *  letter capitalised — with the class word ITSELF always appended (`—
- *  <cls>`), because a gpt-lane label like "GPT-6 Astra" carries no class word
- *  at all, though the option it labels posts `class=fable` (S4-R13). Never a
+ *  <cls>`), because a lane's model label carries no class word at all,
+ *  though the option it labels posts `class=<cls>` (S4-R13). Never a
  *  hand-typed list of the four names — this is the only path this file may
  *  take to spell one, and it derives every spelling from `CLASSES` at render
  *  time. */
-function classDisplayLabel(wrapper: string, cls: ModelClass): string {
-  const opt = modelOptions(wrapper, null).find((o) => o.route.field === 'class' && o.route.value === cls);
-  const base = opt?.label ?? cls.charAt(0).toUpperCase() + cls.slice(1);
+function classDisplayLabel(lane: LaneModelsRead | null, cls: ModelClass): string {
+  const base = laneClassLabel(lane, cls) ?? cls.charAt(0).toUpperCase() + cls.slice(1);
   return `${base} — ${cls}`;
 }
 
@@ -182,6 +183,8 @@ export function NewSessionSheet({
   const accounts = useAccountUsage(open);
 
   const [wrapper, setWrapper] = useState<string | null>(null); // null = step 1
+  // D-8406: the picked lane's model files, which name the Class choice's models; nothing is asked before a lane is picked.
+  const laneModels = useLaneModels(open ? wrapper : null);
   const [project, setProject] = useState<ProjectRow | null>(null);
   // Classification at the deliberate pick, not at the current render. A later
   // eligible -> crossing transition must withdraw the selection; a project
@@ -733,7 +736,7 @@ export function NewSessionSheet({
               <option value="" title={AUTOMATIC_CLASS.title}>{AUTOMATIC_CLASS.word}</option>
               <option value="default">Default</option>
               {[...CLASSES].reverse().map((c) => (
-                <option key={c} value={c}>{classDisplayLabel(wrapper, c)}</option>
+                <option key={c} value={c}>{classDisplayLabel(laneModels, c)}</option>
               ))}
             </RouteField>
             <RouteField label="Effort" value={routeEffort} onChange={setRouteEffort}>

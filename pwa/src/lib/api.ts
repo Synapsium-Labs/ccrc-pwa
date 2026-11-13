@@ -979,6 +979,10 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
     /** `GET /api/fleet/overrides` (D-8382): every override the switchboard declares with its state, and the approvals
      *  topology. Read only; Overrides in force and Security's approvals line read it through `useOverridesView`. */
     fleetOverrides: (opts?: ReadOpts) => getJson<OverridesView>('/api/fleet/overrides', opts),
+    /** `GET /api/models/:lane` (D-8406): the lane's classes as its own model files say them, each class's model and its
+     *  catalogue label. Unknown on purpose: `asLaneModelsRead` (`lib/models.ts`) is the one reader of the answer, and an
+     *  older server's 404 rejects like every non-2xx. Read through `useLaneModels`. */
+    laneModels: (lane: string, opts?: ReadOpts) => getJson<unknown>(`/api/models/${encodeURIComponent(lane)}`, opts),
     /** `POST /api/coord/lane-arm`: `{lane, choice}`, plus `confirm` only as the key a 409 `confirm-required` answered with. The
      *  server decides the confirm, so a 409 rejects with `ApiError` like every non-2xx, and the card reads its body through
      *  `laneArmWriteRefusal`. `postJsonOr`, for `setCoordCaps`' reason: an answer that could not be read may still have stored
