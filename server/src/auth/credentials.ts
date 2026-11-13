@@ -109,7 +109,7 @@ export type AddResult =
   | { ok: false; reason: 'unusable' }
   /**
    * The row did not reach the disk, AND HAS BEEN ROLLED BACK OUT OF MEMORY
-   * (D-136) — so this answer is true rather than true-until-restart. The
+   * (D-8609) — so this answer is true rather than true-until-restart. The
    * credential is not enrolled, on disk or in this process.
    *
    * NOTE the deliberate asymmetry with {@link PasskeyStore.recordUse}, which
@@ -301,7 +301,7 @@ export class PasskeyStore {
     // to answer `204 Passkey added` for a row that vanished on the next restart.
     if (!this.lastWriteOk) {
       /**
-       * AND THE ROW IS ROLLED BACK, so the answer is TRUE (D-136).
+       * AND THE ROW IS ROLLED BACK, so the answer is TRUE (D-8609).
        *
        * Without this the credential stayed live in memory while the response
        * said the enrolment had failed: the key worked until the next restart and

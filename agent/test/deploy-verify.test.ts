@@ -1202,7 +1202,7 @@ describe('the verification is actually wired into the deploy, and can observe a 
     // '\nelse' — the TARGET dispatch's own top-level else (the only line-start
     // else in the file), NOT a bare indexOf('else'): the bare form matched the
     // word inside an unrelated comment added 60 lines up and silently EMPTIED
-    // this slice, inverting both ordering pins (stage-4 branch review, D-145).
+    // this slice, inverting both ordering pins (stage-4 branch review, D-8608).
     const agentBranch = deploySh.slice(deploySh.indexOf('if [ "$TARGET" = "agent" ]'), deploySh.indexOf('\nelse'));
     // D-8122: the sweep restarts the running units by name, in batches, never with the glob.
     expect(agentBranch, 'the agent branch no longer try-restarts the claude-session@ supervisors')
@@ -1566,7 +1566,7 @@ describe('the verification is actually wired into the deploy, and can observe a 
     expect(mjs.lastIndexOf('renameSync('), 'rename must follow the VACUUM, not precede it')
       .toBeGreaterThan(mjs.indexOf("'VACUUM INTO ?'"));
 
-    const serverBranch = deploySh.slice(deploySh.indexOf('\nelse'));   // structural anchor — see the agentBranch comment (D-145)
+    const serverBranch = deploySh.slice(deploySh.indexOf('\nelse'));   // structural anchor — see the agentBranch comment (D-8608)
     // The INVOCATION is pinned, not just the guard (review finding: replacing
     // the node call with `|| true` while a comment mentioned the tool's name
     // left the suite green).
@@ -2472,7 +2472,7 @@ describe('the verification is actually wired into the deploy, and can observe a 
 // real in `server/test/coordination-snapshot.test.ts`.
 describe('the fallback deploy captures the coordination snapshot before rsync (W3-M32)', () => {
   const deploySh = readFileSync(path.join(deployDir, 'deploy.sh'), 'utf8');
-  const serverBranch = deploySh.slice(deploySh.indexOf('\nelse'));   // the same structural anchor as the coord.db row (D-145)
+  const serverBranch = deploySh.slice(deploySh.indexOf('\nelse'));   // the same structural anchor as the coord.db row (D-8608)
   const code = serverBranch.split('\n').filter((l) => !l.trim().startsWith('#')).join('\n');
 
   it('the helper is shipped fresh this run, beside backup-coord.mjs, and invoked with `capture` into THIS run\'s timestamp directory', () => {
