@@ -371,10 +371,10 @@ export const CCD_ARGV = {
   /** `start`/`enable` with the crossing declared — see `swapCross` below for
    *  why the flag leads and why these are separate entries. `route` is the
    *  same defaulted trailing parameter as `start`/`enable` above: measured
-   *  against the real binary, `cmd_start`'s flag loop (`ccd/ccd:16478-16483`)
+   *  against the real binary, `cmd_start`'s flag loop in `ccd/ccd`
    *  strips `--cross-pool` and `--route` independently of each other's
    *  position, and `cmd_enable` forwards both unchanged to `cmd_start`
-   *  (`ccd/ccd:18500-18520`) — so a cross-pool spawn takes `--route` exactly
+   *  (`cmd_enable`'s closing `cmd_start` call) — so a cross-pool spawn takes `--route` exactly
    *  like an in-pool one, and dropping it here (as the entries did before)
    *  silently downgraded an operator's ask on the one path `POST
    *  /api/sessions` reaches when `crossPool: true` is set (routing spec

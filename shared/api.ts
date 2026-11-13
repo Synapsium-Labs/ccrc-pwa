@@ -6285,7 +6285,7 @@ export const WORK_ITEM_MAX = 32;
  *  - DONE-AUTHORITY (spec:127-132): the claim is rejected, the run is unchanged.
  *
  * `tip-unmeasurable`/`pr-unmeasurable` exist because NOT KNOWING IS NOT `[]` —
- * ccd's own three-answer ladder (`ccd/ccd:2080-2086`). A fact the server could
+ * ccd's own three-answer ladder (`_reg_read`). A fact the server could
  * not re-measure must never read as a fact that matched. `registry-unmeasurable`
  * (D-37) is the INGRESS member of the same family: a `readRegistry` that could
  * not list its directory, or that dropped a listed row for an unreadable
@@ -6476,8 +6476,8 @@ export type RouteReadField = (typeof ROUTE_READ_FIELDS)[number];
  *  (bytes, not `.length`, for the same reason `ccd/ccd`'s `_route_bytes`
  *  counts bytes for its refusal messages — a UTF-8 value's byte count and
  *  character count differ). Measured against the real binary: neither
- *  `_route_valid` (`ccd/ccd:14727-14760`, closed-vocabulary lookups only,
- *  no length check) nor `_route_argv_check` (`ccd/ccd:14801-14840`, which
+ *  `_route_valid` (closed-vocabulary lookups only,
+ *  no length check) nor `_route_argv_check` (which
  *  calls `_route_bytes` only to RENDER a byte count inside an already-decided
  *  refusal) enforces a byte cap on a `--route` value — so this constant has
  *  no counterpart on the box and is not "the same 32 bytes" as anything ccd
@@ -6490,7 +6490,7 @@ const ROUTE_VALUE_MAX_BYTES = 32;
  *  blank value or one carrying a control character is refused here before a
  *  malformed body reaches the fleet. Measured against the real binary: the
  *  only `[[:cntrl:]]` guard over a `--route` VALUE anywhere in `ccd/ccd` is
- *  `cmd_route`'s over `--actor`/`--reason` (`ccd/ccd:6769-6771`, guarding
+ *  `cmd_route`'s over `--actor`/`--reason` (guarding
  *  free-form log text against a forged journal line) — `_route_valid` has no
  *  control-character arm at all, since it only ever looks a value up in a
  *  closed vocabulary. */

@@ -471,7 +471,7 @@ const PROVENANCE_WINDOW_MS = 3_600_000;
  *  — `attemptedRenames`'s per-(incarnation, derived-branch) key is already the
  *  correct guard for a name-dependent refusal. Today the arm is dead code:
  *  `deriveBranch` only ever emits `ws/[a-z0-9]+(-[a-z0-9]+)*`, a subset
- *  `_ws_branch_valid` (`ccd/ccd:3186-3194`) always accepts, so `bad-branch`
+ *  `_ws_branch_valid` in `ccd/ccd` always accepts, so `bad-branch`
  *  never actually reaches this lane — see `naming.ts:26-30`.
  *
  *  `held` (Wave 3 §3.1's `ws-rename` rung) is DELIBERATELY ABSENT and must
@@ -554,7 +554,7 @@ function parkBoxSeen(box: string | null, parkBox: string | null): 'changed' | 's
 }
 
 /* The fleet kill-switch, `$REG/mail-disabled` — ccd's `-disabled` family
- *  (`ccd/ccd:40-41`, `_lane_enabled` at `:248`), which the operator already
+ *  (`_lane_enabled`'s `$REG/<w>-disabled`, `AUTOCOMPACT_DISABLE_FILE`), which the operator already
  *  knows how to use: `touch` to stop, `rm` to resume. Read by LISTING the
  *  registry directory, never by reading the file — and that stays true even
  *  though `FleetIO` no longer has to collapse "unreadable" into "absent":
