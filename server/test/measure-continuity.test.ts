@@ -241,3 +241,11 @@ describe('the resume section', () => {
     expect(late.resume_calls, 'a window after the stamp').toBe(0);
   });
 });
+
+describe('an unreadable swap.log (a directory at its path) is unmeasured, never a traceback (D-8353)', () => {
+  it('the carry section', () => {
+    const dir = path.join(h.home, 'a-directory');
+    fs.mkdirSync(dir);
+    expect(measure('--swap-log', dir).carry).toEqual({ swap_log: 'unmeasured', error: 'IsADirectoryError' });
+  });
+});

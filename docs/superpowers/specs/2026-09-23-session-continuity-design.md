@@ -475,11 +475,26 @@ come from the launch record joined with sidecar files changed in the last day:
 An item retires when the launch record shows its resume completed or its run finished. The file's absence means
 `never-written`, distinct from `none`.
 
+*(As built, wave 6b, 2026-11-12; an as-built annotation, not a new ruling.)* The manifest is written at three sites: the
+swap, #2603's limit-resume and a supervisor revival (D-8361), and not at the hibernate, which refuses with work in flight.
+The classes are computed as above (`ccd/lib/inflight-manifest.py`, written by `ccd/ccd#_inflight_write`, D-8371); an item
+whose files cannot be read is `unread`, never given a class, and `listed` is the verdict of a manifest with items. A script
+path is checked lexically at write and by `realpath` at read (D-8365). Background shells stay in the turn marker (D-8377).
+The header's `wait=` is the span of the limit-wait this restart stands in (D-8375). The file is rewritten at every restart a
+site reaches (D-8374), and its slot is its own (the call-I amendment below).
+
 *(Amended 2026-11-11, rev 12, wave 6b.)* `abandoned` here is this class, not the run abandon door. 6b writes the
 manifest in shadow, and these calls belong to it:
 - **Call I (D-8332).** The manifest takes `$REG/.carry.lock` non-blocking, as the carry does. The daily carry-dedupe
   timer (#317, a dry run) holds it too (`ccd/lib/carry-dedupe.py`, `flock(LOCK_EX | LOCK_NB)`), so a manifest written in
   that window is `unmeasured`, and §9 counts it. #317 is not changed.
+  *(As built, wave 6b, 2026-11-12: call I amended by D-8362, ruled by the coordinator and approved with the 6b plan.)*
+  The manifest takes its own box-wide slot, `$REG/.inflight.lock`, non-blocking, one manifest at a time on the box, and
+  never `$REG/.carry.lock` (`ccd/ccd#_inflight_slot_take`), so the dedupe no longer makes a manifest `unmeasured`, and a
+  busy manifest means another manifest held that slot. Why: the carry slot is a box-wide budget for heavy reads and writes,
+  not a lock between sessions; a carry touches one session's sidecars, the swap's manifest follows its own session's carry
+  in the same process, and the limit-resume and revival carry nothing; the manifest is bounded on its own
+  (`INFLIGHT_SCAN_BUDGET`, priced first, and `_plat_timeout`). So a shadow manifest never refuses a carry.
 - **Call H (D-8331).** A session with no Claude Code transcript answers `not-applicable` in the manifest, the prompt and
   the session-start subject (§6), distinct from `never-written`, `none` and `unmeasured`. It is keyed on the measured
   fact (the session's config root holds no Claude Code transcript for its uuid), not on the exec kind: a codex lane
@@ -568,7 +583,7 @@ five-hour reset behave so on such a lane:
 | F. The stage-3 baseline is re-cut from 6b's shadow week | D-8329 | 6b |
 | G. Waits to a weekly reset stay unbounded for now | D-8330 | 6b (the count), 7 (any bound) |
 | H. A session with no Claude Code transcript is `not-applicable` | D-8331 | 6b (manifest), 6c (prompt, subject) |
-| I. The carry lock is shared with the dedupe | D-8332 | 6b |
+| I. The carry lock is shared with the dedupe | D-8332 (amended by D-8362) | 6b |
 
 ### 5.4 Stage 4 — rescue timing, the herd, and swaps that cut work (ccd; its refusal of swaps that cut work needs stage 3)
 
@@ -993,6 +1008,8 @@ census deduplicated by run id, the post-swap outcome classifier, the pressure-ki
 6b's shadow week, which counts restarts with a non-empty manifest (call F, D-8329). The graceful stop's bound is read by
 `deploy/measure-continuity.py --stage 3`'s `graceful_stop` section (`deploy/measure-continuity.py#stage3`, D-8321); it
 sets the bound and is not a target.
+
+*(As built, wave 6b, 2026-11-12.)* The shadow week's counts are `--stage 3`'s `manifest` section (`deploy/measure-continuity.py#s3_manifest`).
 
 Stage 1's first merges meet the backlog C9 does not backfill: 43 of the 673 return-visit pairs on the box exceed
 `CARRY_MERGE_BUDGET` and defer part of their walk. Its row is therefore reported over all carries and over carries
