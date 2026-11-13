@@ -42,6 +42,15 @@ describe('ccd/lib/launch-profiles.json is the role table, projected (H1)', () =>
       expect(Object.keys(parsed[r]!).sort(), r).toEqual(['autoMemory', 'compactionSettings', 'env', 'settings']);
     }
   });
+  it('ships where ccd reads it: both installers place it in ~/.cc-sessions/lib, ccd fallback path, and uninstall removes it', () => {
+    const read = (rel: string): string => fs.readFileSync(path.resolve(__dirname, '../..', rel), 'utf8');
+    expect(read('ccd/ccd')).toContain('[[ -f "$LAUNCH_PROFILES_JSON" ]] || LAUNCH_PROFILES_JSON="$HOME/.cc-sessions/lib/launch-profiles.json"');
+    const ccrc = read('ccd/ccrc');
+    expect(ccrc).toContain('_inst_atomic "$tree/ccd/lib/launch-profiles.json" "$HOME/.cc-sessions/lib/launch-profiles.json" 644');
+    expect(ccrc).toContain('_upd_backup_copy "$HOME/.cc-sessions/lib/launch-profiles.json" launch-profiles.json');
+    expect(ccrc).toContain('"$reg/lib/launch-profiles.json" \\');
+    expect(read('deploy/deploy.sh')).toContain('install_atomic ccd/lib/launch-profiles.json .cc-sessions/lib/launch-profiles.json 644');
+  });
   it("every value is a literal ccd may put on an argv: no quote, no space, no shell character", () => {
     const parsed = JSON.parse(fs.readFileSync(FILE, 'utf8')) as Record<string, { env: Record<string, string> }>;
     for (const [r, p] of Object.entries(parsed)) {

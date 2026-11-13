@@ -18311,6 +18311,9 @@ _inst_files() {   # the artifacts the box RUNS that are not on PATH
   # The roster card's one builder (D4; its wake arm R-5a, D-8201), 0644: data for jq the hook loads with `jq -L`,
   # placed before the hook. Without it the hook makes no card (fail open).
   _inst_atomic "$tree/ccd/lib/roster-card.jq" "$HOME/.cc-sessions/lib/roster-card.jq" 644
+  # The launch profiles ccd renders at every spawn whose route names one (Overlord W1a; a projection of FLEET_ROLES),
+  # 0644: data for jq. Without it a profile-naming spawn launches without its profile and warns.
+  _inst_atomic "$tree/ccd/lib/launch-profiles.json" "$HOME/.cc-sessions/lib/launch-profiles.json" 644
   # `ccd carry-dedupe`'s program (#317), 0644: a script python3 runs. Without it the verb refuses by name.
   _inst_atomic "$tree/ccd/lib/carry-dedupe.py" "$HOME/.cc-sessions/lib/carry-dedupe.py" 644
   # The approval wait's ruling verifier (coordinator-first routing, plan Task 14, D-5297), 0644 for the same reason:
@@ -24836,6 +24839,7 @@ _upd_backup_set() {
   _upd_backup_copy "$HOME/.cc-sessions/session-hook.sh" session-hook.sh
   _upd_backup_copy "$HOME/.cc-sessions/compact-card.mjs" compact-card.mjs
   _upd_backup_copy "$HOME/.cc-sessions/lib/transcript.jq" transcript.jq
+  _upd_backup_copy "$HOME/.cc-sessions/lib/launch-profiles.json" launch-profiles.json
   _upd_backup_copy "$HOME/.cc-sessions/lib/roster-card.jq" roster-card.jq
   _upd_backup_copy "$HOME/.cc-sessions/lib/carry-dedupe.py" carry-dedupe.py
   _upd_backup_copy "$HOME/.cc-sessions/approval-verify.mjs" approval-verify.mjs
@@ -29227,6 +29231,7 @@ _uninst_cc_sessions() {
     "$reg/compact-card.mjs" "$reg/approval-verify.mjs" "$reg/lib/transcript.jq" "$reg/lib/carry-dedupe.py" \
     "$reg/lib/roster-card.jq" \
     "$reg/install-coordinator-skill.sh" "$reg/install-worker-skill.sh" \
+    "$reg/lib/launch-profiles.json" \
     "$reg/install-reviewer-skill.sh" "$reg/install-history-skill.sh" "$reg/install-linear-skill.sh" \
     "$reg/install-graphify-skill.sh" "$reg/child-deny.settings.json" \
     "$reg/account-deny.settings.json" \

@@ -1704,7 +1704,8 @@ COMPACT_NOTE_FLOOR=1800         # D-2013 — min seconds between swap.log lines 
                                 # swap.log's floored line, nothing more. If it is ever promoted to a
                                 # wire field it needs a reader and the additive-only contract first.
 # ── The routing record (routing spec 2026-09-14 §5.1) ───────────────────────
-# Eight ordinary registry fields per session (`browser` joined the seven, D-8121), written by `cmd_route` and by ccd
+# Eleven ordinary registry fields per session (`browser` joined the seven, D-8121; `profile`, `automem` and `compactwindow`,
+# the launch profile's three, Overlord W1a), written by `cmd_route` and by ccd
 # itself (`degraded`, `inert`), read ONLY through `_route_get` below. The fields
 # are a byte channel into an argv and a pane — any session on the box can write
 # them (one UNIX user; attribution, not authentication) — so every value is
@@ -1720,7 +1721,7 @@ COMPACT_NOTE_FLOOR=1800         # D-2013 — min seconds between swap.log lines 
 # ROUTE_FIELD it names a class and is checked against `CCRC_SUBAGENT_CLASSES`;
 # inside an `inert` list it is the FIELD's name, stamped by a lane that composed
 # no `CLAUDE_CODE_SUBAGENT_MODEL` whatever class the field held.
-ROUTE_FIELDS=(class effort subagent workflow compact browser degraded inert)
+ROUTE_FIELDS=(class effort subagent workflow compact browser degraded inert profile automem compactwindow)
 ROUTE_CLASSES="fable opus sonnet haiku default"
 ROUTE_EFFORTS="auto low medium high xhigh max ultracode"
 # THE SLIDER'S STOPS, IN THE ORDER THE SLIDER PUTS THEM (D-2808, measured on a
@@ -10097,7 +10098,7 @@ cmd_route() {   # ccd route --session <id> --set <field>=<value> [--set ...] [--
     _route_valid "$f" "$v"; rc=$?
     case "$rc" in
       0) ;;
-      2) die "route: this box's roster projection carries no subagent class list — re-run ccrc install" ;;
+      2) [[ "$f" == profile ]] && die "route: this box's launch profiles ($LAUNCH_PROFILES_JSON) cannot be read — re-run ccrc install"; die "route: this box's roster projection carries no subagent class list — re-run ccrc install" ;;
       *) die "bad value for $f ($(_route_bytes "$v") bytes) — not in its vocabulary" ;;
     esac
     _route_fable_shell "$f" "$v" && die "fable-operator-only: a Claude Code session may not select class fable"
@@ -22098,8 +22099,12 @@ _route_any() {   # id — 0 iff ANY routing field file exists (spec §5.1: a ses
   # `browser` IS NOT A ROUTING FIELD FOR THIS QUESTION (D-8121): it decides which MCP servers a spawn starts, never the
   # model, effort or placement, and `_browser_spawn_compose` reads it on its own. A row that names only `browser` is a
   # row with no routing record, so the coordinator row is still seeded beside it and the spawn composes no route flags.
+  # THE LAUNCH PROFILE'S THREE (`profile`, `automem`, `compactwindow`; Overlord W1a, plan slug
+  # profile-fields-outside-route-any) are not routing fields for this question either, for the same reason: they decide
+  # the spawn's settings and environment, read on their own by `_profile_spawn_compose`. A profile-only row keeps today's
+  # seed, writes no empty `routeapplied` and is not read per tick by `_route_apply_pending` (m-B9).
   local f
-  for f in "${ROUTE_FIELDS[@]}"; do [[ "$f" != browser && -e "$REG/$1.$f" ]] && return 0; done
+  for f in "${ROUTE_FIELDS[@]}"; do case "$f" in browser|profile|automem|compactwindow) ;; *) [[ -e "$REG/$1.$f" ]] && return 0 ;; esac; done
   return 1
 }
 _route_valid() {   # field value — THREE answers, because two of them are two different
@@ -22130,6 +22135,14 @@ _route_valid() {   # field value — THREE answers, because two of them are two 
     workflow) _route_word_in "$v" "$ROUTE_WORKFLOWS" ;;
     browser)  _route_word_in "$v" "$ROUTE_BROWSERS" ;;
     compact)  [[ "$v" =~ ^[0-9]{2,3}$ ]] && (( 10#$v >= 10 && 10#$v <= 100 )) ;;
+    # THE LAUNCH PROFILE'S THREE (Overlord W1a, spec §3.6 H1). `profile` names a row of `LAUNCH_PROFILES_JSON` (the role
+    # table's projection, so this file holds no second list of role words): rc 2 when that file cannot be read, ccd's
+    # "vocabulary unavailable", never "bad value". `automem` is the Settings row's choice for `plain`; `compactwindow` is
+    # Claude Code's own auto-compact window in tokens, the range `CLAUDE_CODE_AUTO_COMPACT_WINDOW` takes (W0-14).
+    profile)  [[ "$v" =~ ^[a-z]{1,16}$ ]] || return 1
+              jq -e --arg r "$v" 'has($r)' "$LAUNCH_PROFILES_JSON" >/dev/null 2>&1; x=$?; (( x <= 1 )) || return 2; return "$x" ;;
+    automem)  _route_word_in "$v" "on off" ;;
+    compactwindow) [[ "$v" =~ ^[1-9][0-9]{5,6}$ ]] && (( v >= 100000 && v <= 1000000 )) ;;
     # `degraded` is the four CLASS names WITHOUT `default` — a session cannot
     # degrade TO "no override" — and they are DERIVED from `ROUTE_CLASSES`
     # rather than typed a second time three lines below the first (controller
@@ -22259,7 +22272,7 @@ _route_argv_check() {   # k=v... -> 0 all valid | dies naming the field and the 
     _route_valid "$f" "$v"; rc=$?
     case "$rc" in
       0) ;;
-      2) die "route: this box's roster projection carries no subagent class list — re-run ccrc install" ;;
+      2) [[ "$f" == profile ]] && die "route: this box's launch profiles ($LAUNCH_PROFILES_JSON) cannot be read — re-run ccrc install"; die "route: this box's roster projection carries no subagent class list — re-run ccrc install" ;;
       *) die "bad value for $f ($(_route_bytes "$v") bytes) — not in its vocabulary; nothing was touched" ;;
     esac
     _route_fable_shell "$f" "$v" && die "fable-operator-only: a Claude Code session may not select class fable"
@@ -22410,7 +22423,7 @@ _route_unmeasured_note() {   # id field — journal a field whose VOCABULARY cou
   # the reason-flap shape `_compact_note` measured and removed.
   local id="$1" f="$2"
   _route_note_floored "$id" "routeunmeas$f" && return 0
-  echo "$(date '+%F %T') route-unmeasured $id: field $f could not be checked — this box's roster projection (\$HOME/.ccrc/accounts.sh) carries no class list for it; treated as absent — re-run ccrc install" >> "$REG/swap.log"
+  echo "$(date '+%F %T') route-unmeasured $id: field $f could not be checked — this box's roster projection (\$HOME/.ccrc/accounts.sh) carries no class list for it, or its launch profiles file cannot be read; treated as absent — re-run ccrc install" >> "$REG/swap.log"
   return 0
 }
 _route_unread_note() {   # id field — journal a field whose FILE is on disk but whose BYTES
@@ -26067,25 +26080,75 @@ _browser_spawn_compose() {   # id launchflags -> sets BROWSER_SPAWN_FLAGS; write
 # native wait could be armed are deleted (`_pane_auto_continue_armed` D-2229, the mail sweep's hold D-2369, the rescue
 # near-wait `_rescue_armed`, the stale-Enter check `_auto_stale_check`).
 FLEET_SPAWN_PINS='{"autoContinueAtUsageLimit":false,"crossSessionInbound":"refuse","idleCompaction":true}'
-_fleet_spawn_compose() {   # id launchflags -> sets FLEET_SPAWN_FLAGS; never fails
-  local id="$1" flags="$2" v base="" merged re="--settings '([^']*)'"
-  FLEET_SPAWN_FLAGS="$flags"
-  [[ -n "$FLEET_SPAWN_PINS" ]] || return 0   # EMPTY composes nothing: the older argv suites' harness clears it after sourcing (as it pins the browser default); no setting reads it
+_spawn_settings_last() {   # id launchflags json what -> SPAWN_SETTINGS_FLAGS = the flags with json merged LAST into their one --settings; rc 1 (warned, flags as they were) when it cannot be
+  # The one merge of a JSON value into a spawn's one `--settings` (D-5391), shared by the fleet pins and the launch
+  # profile: a base that is inline JSON or a regular, quote-free file is merged under `SETTINGS_UNION_JQ` with the value
+  # last; no base takes the value inline; a result carrying a quote is refused, since it would break the argv's quoting.
+  local id="$1" flags="$2" p="$3" v base="" merged="" had=0 re="--settings '([^']*)'"
+  SPAWN_SETTINGS_FLAGS="$flags"
   if [[ "$flags" =~ $re ]]; then
-    v="${BASH_REMATCH[1]}"
+    had=1; v="${BASH_REMATCH[1]}"
     if [[ "$v" == "{"* ]]; then base="$v"
     elif [[ -f "$v" && ! -L "$v" ]] && ! grep -q "'" -- "$v" 2>/dev/null; then base=$(jq -c . "$v" 2>/dev/null) || base=""
     fi
-    if [[ -n "$base" ]] && merged=$(jq -c -n --argjson b "$base" --argjson p "$FLEET_SPAWN_PINS" "[\$b, \$p] | $SETTINGS_UNION_JQ" 2>/dev/null) \
-       && [[ -n "$merged" && "$merged" != *"'"* ]]; then
-      FLEET_SPAWN_FLAGS="${flags%%"--settings '$v'"*}--settings '$merged'${flags#*"--settings '$v'"}"
-    else
-      echo "ccd: warn: $id: could not merge the fleet pins into this spawn's one --settings — spawning without them" >&2
-    fi
+    [[ -z "$base" ]] || merged=$(jq -c -n --argjson b "$base" --argjson p "$p" "[\$b, \$p] | $SETTINGS_UNION_JQ" 2>/dev/null) || merged=""
   else
-    FLEET_SPAWN_FLAGS="${flags:+$flags }--settings '$FLEET_SPAWN_PINS'"
+    merged="$p"
   fi
+  if [[ -z "$merged" || "$merged" == *"'"* ]]; then
+    echo "ccd: warn: $id: could not merge $4 into this spawn's one --settings — spawning without them" >&2
+    return 1
+  fi
+  if (( had )); then SPAWN_SETTINGS_FLAGS="${flags%%"--settings '$v'"*}--settings '$merged'${flags#*"--settings '$v'"}"
+  else SPAWN_SETTINGS_FLAGS="${flags:+$flags }--settings '$merged'"
+  fi
+}
+_fleet_spawn_compose() {   # id launchflags -> sets FLEET_SPAWN_FLAGS; never fails
+  FLEET_SPAWN_FLAGS="$2"
+  [[ -n "$FLEET_SPAWN_PINS" ]] || return 0   # EMPTY composes nothing: the older argv suites' harness clears it after sourcing (as it pins the browser default); no setting reads it
+  _spawn_settings_last "$1" "$2" "$FLEET_SPAWN_PINS" "the fleet pins" && FLEET_SPAWN_FLAGS="$SPAWN_SETTINGS_FLAGS"
   return 0
+}
+
+# ── THE LAUNCH PROFILE THE ROUTE NAMES (Overlord W1a; spec §3.6 H1, §3.3.7 H14, §3.3.4 C39) ─────────────────────
+# The server picks a row by writing the route field `profile` (and `automem`, `compactwindow`); this renders it at every
+# spawn, after the fleet pins, so a profile pin wins (`idleCompaction: false` over the fleet's `true`). The rows are
+# `LAUNCH_PROFILES_JSON`, a projection of `shared/fleetRoles.ts#FLEET_ROLES` held equal by
+# `server/test/launch-profiles-file.test.ts`: beside this script in a tree, else where the installers put it.
+#   no `profile` field: compose nothing (a row with no profile spawns byte for byte as before; Review Focus 1);
+#   a word that is not a row, a file absent or malformed, a row of the wrong shape, a settings merge that fails: compose
+#     NOTHING, settings and environment alike, and warn (never half-applied; Review Focus 2);
+#   otherwise: `settings` merged into the one `--settings`; `env` as KEY=value words; auto memory off
+#     (CLAUDE_CODE_DISABLE_AUTO_MEMORY=1) for an `off` row, and for a `switch` row only when the route's `automem` is
+#     `off`; and ONLY when the route carries `compactwindow` (written only while `continuity` is live, plan slug
+#     compaction-follows-continuity), the row's `compactionSettings` after `settings` and
+#     CLAUDE_CODE_AUTO_COMPACT_WINDOW=<compactwindow>.
+# One jq program reads the row and checks every key and value by shape: a value is a literal word, never quoted.
+LAUNCH_PROFILES_JSON="${BASH_SOURCE[0]%/*}/lib/launch-profiles.json"
+[[ -f "$LAUNCH_PROFILES_JSON" ]] || LAUNCH_PROFILES_JSON="$HOME/.cc-sessions/lib/launch-profiles.json"
+PROFILE_ROW_JQ='.[$r] as $x
+  | if ($x | type) == "object" and ($x.env | type) == "object" and ($x.settings | type) == "object"
+       and ($x.compactionSettings | type) == "object" and ($x.autoMemory == "off" or $x.autoMemory == "switch")
+       and ($x.env | to_entries | all((.key | test("^CLAUDE_CODE_[A-Z_]+$")) and (.value | type == "string") and (.value | test("^[A-Za-z0-9._-]+$"))))
+    then . else error("malformed row") end
+  | ($x.settings * (if $cw == "" then {} else $x.compactionSettings end) | tojson) + "\t"
+    + ([$x.env | to_entries[] | "\(.key)=\(.value)"]
+       + (if $x.autoMemory == "off" or $am == "off" then ["CLAUDE_CODE_DISABLE_AUTO_MEMORY=1"] else [] end)
+       + (if $cw == "" then [] else ["CLAUDE_CODE_AUTO_COMPACT_WINDOW=" + $cw] end) | join(" "))'
+_profile_spawn_compose() {   # id launchflags -> sets PROFILE_SPAWN_FLAGS, PROFILE_SPAWN_ENV; never fails, never half-applies
+  local id="$1" p w am cw out="" pset="" penv=""
+  PROFILE_SPAWN_FLAGS="$2"; PROFILE_SPAWN_ENV=""
+  [[ -e "$REG/$id.profile" || -L "$REG/$id.profile" ]] || return 0
+  p=$(_route_get "$id" profile); am=$(_route_get "$id" automem); cw=$(_route_get "$id" compactwindow)
+  [[ -z "$p" ]] || out=$(jq -r --arg r "$p" --arg am "$am" --arg cw "$cw" "$PROFILE_ROW_JQ" "$LAUNCH_PROFILES_JSON" 2>/dev/null) || out=""
+  IFS=$'\t' read -r pset penv <<< "$out"
+  if [[ -z "$pset" ]] || { [[ "$pset" != '{}' ]] && ! _spawn_settings_last "$id" "$2" "$pset" "launch profile $p"; }; then
+    w=$(_reg_get "$id" profile 2>/dev/null); [[ "$w" =~ ^[a-z]{1,16}$ ]] || w="<$(_route_bytes "$w") bytes>"
+    echo "ccd: warn: $id: launch profile $w unreadable — spawning without it" >&2
+    return 0
+  fi
+  [[ "$pset" == '{}' ]] || PROFILE_SPAWN_FLAGS="$SPAWN_SETTINGS_FLAGS"
+  PROFILE_SPAWN_ENV="$penv"
 }
 
 # ── THE TEMP ROOT'S POSITIVE WITNESS (child-workspace reclamation, spec §5.2) ─
@@ -26698,6 +26761,7 @@ _spawn_start() {   # id mode(new|resume) -> creates the tmux session, sets SPAWN
   _account_spawn_compose "$id" "$launchflags"; launchflags="$ACCOUNT_SPAWN_FLAGS"
   # THE FLEET PINS (D-8173), for EVERY row, LAST: the auto-continue, inbox and idle-compaction rulings merge into the one `--settings`.
   _fleet_spawn_compose "$id" "$launchflags"; launchflags="$FLEET_SPAWN_FLAGS"
+  _profile_spawn_compose "$id" "$launchflags"; launchflags="$PROFILE_SPAWN_FLAGS"; resenv="$resenv${PROFILE_SPAWN_ENV:+ $PROFILE_SPAWN_ENV}"
   # COLORTERM=truecolor so Claude Code emits 24-bit colour (it otherwise quantises
   # to 256, collapsing its palette). tmux passes it through to the terminal-drawer
   # xterm once the server has the RGB terminal-feature (see hardening/tmux.conf).

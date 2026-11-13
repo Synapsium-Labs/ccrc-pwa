@@ -6452,8 +6452,14 @@ export function parseWaveDoneSignals(body: string): WaveDoneSignals {
  * browser MCP servers (absent: the box default, `CCRC_BROWSER_MCP_DEFAULT`). It
  * has no keystroke and is never applied live; `FleetSession.browserMcp` says
  * what the running pane's spawn applied.
+ *
+ * `profile`, `automem` and `compactwindow` (Overlord W1a, spec §3.6 H1) name the
+ * launch profile a session's spawn applies: a `FLEET_ROLES` key, the memory choice
+ * for `plain` (`on`/`off`), and Claude Code's own auto-compact window in tokens.
+ * ccd renders them at every spawn (`_profile_spawn_compose`) from
+ * `ccd/lib/launch-profiles.json`; like `browser`, none is applied live.
  */
-export const ROUTE_WRITABLE_FIELDS = ['class', 'effort', 'subagent', 'workflow', 'compact', 'browser'] as const;
+export const ROUTE_WRITABLE_FIELDS = ['class', 'effort', 'subagent', 'workflow', 'compact', 'browser', 'profile', 'automem', 'compactwindow'] as const;
 export type RouteField = (typeof ROUTE_WRITABLE_FIELDS)[number];
 export type RouteFields = Partial<Record<RouteField, string>>;
 

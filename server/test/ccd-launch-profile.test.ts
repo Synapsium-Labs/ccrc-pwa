@@ -10,7 +10,7 @@
 // point, flags and environment both, on a first start, a resume (both lines), a fresh start and a routed row. The
 // recording below was taken on the branch point's code, before `_profile_spawn_compose` existed.
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { spawnSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { makeCcdHarness, ghContainedEnv, CCD, type CcdHarness } from './ccdWsHelpers.js';
@@ -56,13 +56,6 @@ const settingsOf = (l: string): Record<string, unknown> => {
   expect(all, l).toHaveLength(1);
   return JSON.parse(all[0]!) as Record<string, unknown>;
 };
-/** The `env` words of a spawn line, between `exec env` and the wrapper. */
-const envOf = (l: string): string[] => {
-  const m = /exec env (.*?) [^ ]*'<HOME>\/\.local\/bin\/claude'/.exec(l) ?? /exec env (.*?) '[^']*\/claude'/.exec(l);
-  expect(m, l).not.toBeNull();
-  return m![1]!.split(' ');
-};
-
 // ── The recording (branch point d24da2880), normalised by `norm`. ────────────────────────────────────────────────
 const RECORDED = JSON.parse(fs.readFileSync(path.join(__dirname, 'fixtures/launch-profile/branch-point.json'), 'utf8')) as Record<string, string[]>;
 
@@ -81,5 +74,159 @@ describe('no profile, no change: the spawn is byte for byte the branch point (Re
       expect(lines).toStrictEqual(RECORDED[name]);
     });
   }
+});
+
+// ── Applying a profile (Review Focus 2 and 5; plan Task 3 Step 2). ─────────────────────────────────────────────
+const MEM = 'CLAUDE_CODE_DISABLE_AUTO_MEMORY=1';
+const PINS = { autoContinueAtUsageLimit: false, crossSessionInbound: 'refuse', idleCompaction: true };
+/** `cmd_route`, observed through its exit status (it refuses through `die`): the `ccd-route-verb.test.ts` shape. */
+const route = (args: string, pre = ''): { status: number; out: string } => {
+  try {
+    const out = execFileSync('bash', ['-c', `source "${CCD}"; exec 2>&1; ${pre} cmd_route ${args}`],
+      { encoding: 'utf8', cwd: h.home, env: ghContainedEnv(h.home, { ...process.env, HOME: h.home }, { systemd: true, tmux: true }) });
+    return { status: 0, out };
+  } catch (e) {
+    const err = e as { status?: number | null; stdout?: string; stderr?: string };
+    return { status: err.status ?? -1, out: `${err.stdout ?? ''}${err.stderr ?? ''}` };
+  }
+};
+/** A profiles file of the test's own, named to ccd through `LAUNCH_PROFILES_JSON` (a snippet prefix). */
+const altFile = (rows: unknown): string => {
+  const f = path.join(h.home, 'alt-profiles.json');
+  fs.writeFileSync(f, typeof rows === 'string' ? rows : JSON.stringify(rows));
+  return `LAUNCH_PROFILES_JSON='${f}';`;
+};
+
+describe('the spawn applies the launch profile the route names (H1, H14, C39)', () => {
+  it('coordinator with a compact window: idle compaction off over the fleet pin, memory off, the window set, on both resume lines', () => {
+    seed([['profile', 'coordinator'], ['compactwindow', '350000']]);
+    const { lines } = spawn('resume');
+    expect(lines).toHaveLength(2);
+    for (const l of lines) {
+      expect(settingsOf(l)).toStrictEqual({ ...PINS, idleCompaction: false });
+      expect(l).toContain(` ${MEM} `);
+      expect(l).toContain(' CLAUDE_CODE_AUTO_COMPACT_WINDOW=350000 ');
+    }
+  });
+  it('coordinator with no compact window: no compaction setting from the profile and no window variable (compaction-follows-continuity)', () => {
+    seed([['profile', 'coordinator']]);
+    const { lines, err } = spawn('new');
+    expect(lines).toHaveLength(1);
+    expect(settingsOf(lines[0]!)).toStrictEqual(PINS);
+    expect(lines[0]).toContain(` ${MEM} `);
+    expect(lines[0]).not.toContain('CLAUDE_CODE_AUTO_COMPACT_WINDOW');
+    expect(err).not.toContain('launch profile');
+  });
+  it('the overlord turns forks and agent view off, and its memory', () => {
+    seed([['profile', 'overlord']]);
+    const l = spawn('new').lines[0]!;
+    for (const w of ['CLAUDE_CODE_DISABLE_AGENT_VIEW=1', 'CLAUDE_CODE_FORK_SUBAGENT=0', MEM]) expect(l).toContain(` ${w} `);
+    expect(settingsOf(l)).toStrictEqual(PINS);
+  });
+  it('a worker gets memory off and nothing else: the line is the no-profile line plus one word', () => {
+    seed([['profile', 'worker']]);
+    const l = spawn('new').lines[0]!;
+    expect(l.replace(` ${MEM}`, '')).toBe(RECORDED['first start']![0]);
+    expect(l).toContain(` ${MEM} `);
+  });
+  it('a fresh start applies it too', () => {
+    seed([['profile', 'reviewer']]);
+    const l = spawn('new', `_reg_set ${ID} fresh ${UUID};`).lines[0]!;
+    expect(l.replace(` ${MEM}`, '')).toBe(RECORDED['fresh start']![0]);
+    expect(l).toContain(` ${MEM} `);
+  });
+  it('plain follows the route: automem off sets the variable; on, or absent, does not', () => {
+    seed([['profile', 'plain'], ['automem', 'off']]);
+    expect(spawn('new').lines[0]).toContain(` ${MEM} `);
+    seed([['automem', 'on']]);
+    expect(spawn('new').lines).toStrictEqual(RECORDED['first start']);
+    h.sh(`rm -f "$HOME/.cc-sessions/${ID}.automem"`);
+    expect(spawn('new').lines).toStrictEqual(RECORDED['first start']);
+  });
+  it("a routed row keeps its own --settings keys and gains the profile's after the pins", () => {
+    seed([['effort', 'high'], ['workflow', 'on'], ['subagent', 'sonnet'], ['profile', 'coordinator'], ['compactwindow', '120000']]);
+    const { lines } = spawn('resume');
+    expect(lines).toHaveLength(2);
+    for (const l of lines) {
+      expect(settingsOf(l)).toStrictEqual({ enableWorkflows: true, ...PINS, idleCompaction: false });
+      expect(l).toContain(' CLAUDE_CODE_AUTO_COMPACT_WINDOW=120000 ');
+    }
+  });
+});
+
+describe('an unknown or unreadable profile never half-applies (Review Focus 2)', () => {
+  const warned = (err: string, word: string): void => {
+    expect(err).toContain(`ccd: warn: ${ID}: launch profile ${word} unreadable — spawning without it`);
+  };
+  it('the file deleted after the route was set: spawn as today, and warn, on a first start, a resume and a fresh start', () => {
+    seed([['profile', 'coordinator'], ['compactwindow', '350000']]);
+    const pre = `LAUNCH_PROFILES_JSON="$HOME/no-such.json";`;
+    for (const [mode, rec] of [['new', 'first start'], ['resume', 'resume, both lines']] as const) {
+      const { lines, err } = spawn(mode, pre);
+      expect(lines, rec).toStrictEqual(RECORDED[rec]);
+      warned(err, 'coordinator');
+    }
+    const fresh = spawn('new', `${pre} _reg_set ${ID} fresh ${UUID};`);
+    expect(fresh.lines).toStrictEqual(RECORDED['fresh start']);
+    warned(fresh.err, 'coordinator');
+  });
+  it('a file that does not parse, or a row of the wrong shape: nothing applied, settings or environment', () => {
+    seed([['profile', 'worker']]);
+    const row = (over: Record<string, unknown>): unknown => ({ worker: { env: {}, settings: {}, autoMemory: 'off', compactionSettings: {}, ...over } });
+    for (const bad of ['{not json', row({ env: { CLAUDE_CODE_X: "a'b" } }), row({ env: { CLAUDE_CODE_X: 'a b' } }), row({ env: { PATH: '/x' } }),
+      row({ autoMemory: 'maybe' }), row({ settings: [] }), row({ env: { CLAUDE_CODE_X: 1 } }), { worker: null }]) {
+      const { lines, err } = spawn('new', altFile(bad));
+      expect(lines, JSON.stringify(bad)).toStrictEqual(RECORDED['first start']);
+      warned(err, 'worker');
+    }
+  });
+  it('a settings merge that fails takes the environment with it', () => {
+    seed([['profile', 'worker']]);
+    const { lines, err } = spawn('new', altFile({ worker: { env: { CLAUDE_CODE_X: '1' }, settings: { k: "it's" }, autoMemory: 'off', compactionSettings: {} } }));
+    expect(lines).toStrictEqual(RECORDED['first start']);
+    warned(err, 'worker');
+  });
+  it('a stored word that is not a row: spawn as today, and the warning names it, or its byte count when it is not a word', () => {
+    seed([['profile', 'bogus']]);
+    const r1 = spawn('new');
+    expect(r1.lines).toStrictEqual(RECORDED['first start']);
+    warned(r1.err, 'bogus');
+    h.sh(`printf '%s' 'x y' > "$HOME/.cc-sessions/${ID}.profile"`);
+    const r2 = spawn('new');
+    expect(r2.lines).toStrictEqual(RECORDED['first start']);
+    warned(r2.err, '<3 bytes>');
+  });
+});
+
+describe('the route fields: written by cmd_route, checked by _route_valid, skipped by _route_any', () => {
+  it('cmd_route writes the three and refuses what is not in their vocabulary', () => {
+    seed();
+    expect(route(`--session ${ID} --set profile=coordinator --set automem=off --set compactwindow=350000`).status).toBe(0);
+    expect([h.reg(ID, 'profile'), h.reg(ID, 'automem'), h.reg(ID, 'compactwindow')]).toEqual(['coordinator', 'off', '350000']);
+    for (const ok of ['100000', '1000000']) expect(route(`--session ${ID} --set compactwindow=${ok}`).status, ok).toBe(0);
+    for (const bad of ['profile=bogus', 'profile=Coordinator', 'profile=', 'automem=maybe', 'compactwindow=50', 'compactwindow=99999',
+      'compactwindow=1000001', 'compactwindow=0350000']) {
+      const r = route(`--session ${ID} --set ${bad}`);
+      expect(r.status, bad).not.toBe(0);
+      expect(r.out, bad).toMatch(/not in its vocabulary/);
+    }
+  });
+  it('an unreadable profiles file is "vocabulary unavailable", not a bad value', () => {
+    seed();
+    const r = route(`--session ${ID} --set profile=worker`, 'LAUNCH_PROFILES_JSON="$HOME/no-such.json";');
+    expect(r.status).not.toBe(0);
+    expect(r.out).toMatch(/launch profiles \(.*no-such\.json\) cannot be read — re-run ccrc install/);
+  });
+  it('a row naming only the launch fields has no routing record: the coordinator row is still seeded', () => {
+    seed([['profile', 'plain'], ['automem', 'off'], ['compactwindow', '350000']]);
+    expect(h.sh(`_route_any ${ID} && echo yes || echo no`).trim()).toBe('no');
+    h.sh(`_route_seed_default ${ID} claude`);
+    expect(h.reg(ID, 'class')).toBe('opus');
+  });
+  it('a profile-only spawn writes no routeapplied', () => {
+    seed([['profile', 'worker']]);
+    spawn('new');
+    expect(fs.existsSync(path.join(h.home, '.cc-sessions', `${ID}.routeapplied`))).toBe(false);
+  });
 });
 

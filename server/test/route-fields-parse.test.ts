@@ -33,9 +33,10 @@ describe('ROUTE_WRITABLE_FIELDS', () => {
   // A LITERAL RATCHET, not a value computed from the thing under test: `6` is
   // typed out here, so a seventh field (or a lost one) reds this line and forces
   // the author past it, rather than the expectation moving with the code. D-8121
-  // moved it from 5 to 6 (`browser`).
-  it('is exactly six fields', () => {
-    expect(ROUTE_WRITABLE_FIELDS).toHaveLength(6);
+  // moved it from 5 to 6 (`browser`); the launch profile (Overlord W1a) from 6 to 9
+  // (`profile`, `automem`, `compactwindow`).
+  it('is exactly nine fields', () => {
+    expect(ROUTE_WRITABLE_FIELDS).toHaveLength(9);
   });
 
   it('every field the list names is one parseRouteFields accepts', () => {
