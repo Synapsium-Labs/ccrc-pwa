@@ -127,8 +127,3 @@ export function mailPaceOf(reading: RoleReading): MailPace {
   if (reading.kind === 'role') return MAIL_PACE[reading.role];
   return ROLE_AMBIGUITIES[reading.between].map((role): MailPace => MAIL_PACE[role]).reduce(slower);
 }
-
-/** THE one choice of a session's pace row until the lane reads `roleOf`: the claimant of an open run is a coordinator. */
-export function mailPaceRoleOf(sessionId: string, openCoordinators: ReadonlySet<string>): 'coordinator' | 'worker' {
-  return openCoordinators.has(sessionId) ? 'coordinator' : 'worker';
-}

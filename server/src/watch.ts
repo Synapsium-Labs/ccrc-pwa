@@ -190,7 +190,8 @@ import {
   type OpenSibling, type RunRow,
 } from './coord/store.js';
 import { renderMailNudge } from './coord/envelope.js';
-import { MAIL_PACE, mailPaceRoleOf } from './coord/mailPace.js';
+import { mailLaneRoleFacts, mailPaceOf } from './coord/mailPace.js';
+import { roleOf } from './roleOf.js';
 import { configDirFor } from './config.js';
 import { refusalSentence } from './wsaudit.js';
 import {
@@ -7591,7 +7592,7 @@ export class FleetWatcher {
    *   5. `mailTurnIdle` (`turnidle.ts`) reads the RAW live word as a finished
    *      turn — `idle`, or `shell` (an idle main loop over a background shell)
    *      unless `$REG/mail-gate-strict` is listed — and `statusUpdatedAt` is at
-   *      least `MAIL_PACE.worker.quietMs` old (`MAIL_PACE.coordinator.quietMs` for a coordinator): the
+   *      least its row of `MAIL_PACE` old (`quietMs`, `coord/mailPace.ts`, the row its role reads): the
    *      SOLE turn-idle authority. A `shell` delivery also asks `sendPrompt`
    *      to refuse a pane showing `esc to interrupt` (`turn-running`), a
    *      tripwire only. It never reads a folded word,
@@ -8054,17 +8055,20 @@ export class FleetWatcher {
       // and never leaves a session claimed across sweeps.
       this.mailInFlight.add(d.toId);
       try {
-        // THE ONE FACT THIS RUNG ADDS, read once per row from the per-sweep set
-        // above and consumed by exactly two gates: this one and `not-quiet`
-        // below. It is the row of `MAIL_PACE` (`coord/mailPace.ts`) this session
-        // reads, chosen through `mailPaceRoleOf`: the claimant of an open run
-        // reads the coordinator row, every other session the worker row.
-        // Neither condition changes — only the threshold each is measured
-        // against.
-        const pace = MAIL_PACE[mailPaceRoleOf(d.toId, coordinators)];
+        // The recipient's registry record, looked up once and gated on below
+        // (the registry ladder); found here, before the cooldown, only because
+        // the pace reads its `.child` mark. A lookup, not a gate.
+        const rec = records.find((r) => r.id === d.toId);
+        // THE ONE FACT THIS RUNG ADDS, read once per row and consumed by
+        // exactly two gates: this one and `not-quiet` below. It is the row of
+        // `MAIL_PACE` (`coord/mailPace.ts`) this session's role reads, decided in
+        // L1 through `roleOf` from the two facts this pass measures: the
+        // recipient's `.child` mark and whether it claims an open run (the
+        // per-sweep set above). Neither condition changes — only the threshold
+        // each is measured against.
+        const pace = mailPaceOf(roleOf(mailLaneRoleFacts(rec?.child, coordinators.has(d.toId))));
         const last = this.mailCooldown.get(d.toId) ?? 0;
         if (now - last < pace.cooldownMs) { gated(d, 'cooldown'); continue; }
-        const rec = records.find((r) => r.id === d.toId);
         // registry ladder: `records` came from `readRegistryMeasured` above,
         // with `!listed` already refused (fix — blocking review findings
         // 1/5) — so by the time this line runs, a whole-fleet read failure

@@ -2730,6 +2730,31 @@ describe('sweepMail: the coordinator quiet window', () => {
       expect(literalSends(h.calls)).toEqual([NUDGE, NUDGE]);
     });
   });
+
+  // The one answer the move to `roleOf` changes: Table 3.3.9a tests the child mark before the claim, so a child that
+  // claims an open run is a worker or a reviewer, and reads the worker pair (Overlord W1a, w1a-mail-pace-roles.md).
+  // Measured 2026-11-13: no claimant of an open run carries a `.child` mark, so no session that exists today is this
+  // subject.
+  describe('a child that claims an open run reads the worker pair (roleOf, Table 3.3.9a)', () => {
+    it.each([
+      ['a dispatched child', (runId: number): string => `${runId}\n`],
+      ['a session with an unreadable child mark', (_runId: number): string => 'not-a-run-id\n'],
+    ])('%s that claims an open run is held as not-quiet at the coordinator quiet time', async (_who, mark) => {
+      const h = harness({ panes: HAPPY_PANES });
+      const coord = store(h.home);
+      const { w } = await primedWatcher(h, coord);
+      seedRegistry(h.home, ID);
+      seedHookState(h.home, ID);
+      seedLiveState(h.home, { statusUpdatedAt: NOW - 15_000 });
+      const r = coord.openRun({ program: 'program-leverage', title: 'Program leverage', project: 'demo',
+        wave: 6, waveOf: 8, claimedBy: ID }) as { id: number };
+      writeFileSync(path.join(h.home, '.cc-sessions', `${ID}.child`), mark(r.id));
+      const d = queueTestDelivery(coord, ID, ENVELOPE);
+      await w.sweepMail();
+      expect(literalSends(h.calls)).toEqual([]);
+      expect(deliveryRow(coord, d.id).lastGate).toBe('not-quiet');
+    });
+  });
 });
 
 // ── Worker stall watch §4.1: `shell` is an idle main loop ─────────────────

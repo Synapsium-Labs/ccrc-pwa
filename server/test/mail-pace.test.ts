@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import type { ChildMark } from '../../shared/api.js';
-import { FLEET_ROLE_NAMES } from '../../shared/fleetRoles.js';
+import { FLEET_ROLE_NAMES, type FleetRole } from '../../shared/fleetRoles.js';
 import { ROLE_AMBIGUITIES, roleOf, type RoleAmbiguity } from '../src/roleOf.js';
 import { MAIL_PACE, mailLaneRoleFacts, mailPaceOf } from '../src/coord/mailPace.js';
 
@@ -12,7 +12,16 @@ const CHILDREN: readonly (ChildMark | undefined)[] = [
   { kind: 'none' }, { kind: 'child', runId: 7 }, { kind: 'unreadable' }, undefined,
 ];
 
+// A role with no row, or a row for no role, is a compile error twice over: the table `satisfies
+// Readonly<Record<FleetRole, MailPace>>` in its own file, and this exact-key check here, which `typecheck-tests`
+// compiles. The second holds even if the first is ever loosened to `Record<string, MailPace>`.
+type SameKeys<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false;
+const MAIL_PACE_IS_TOTAL: SameKeys<keyof typeof MAIL_PACE, FleetRole> = true;
+
 describe('MAIL_PACE (Overlord spec §6.4, C24, C49 and H19)', () => {
+  it('is keyed by exactly FleetRole (a compile-time check; this case only keeps it referenced)', () => {
+    expect(MAIL_PACE_IS_TOTAL).toBe(true);
+  });
   it('has a row for every role in FLEET_ROLES, in its order, and no other', () => {
     expect(Object.keys(MAIL_PACE)).toEqual([...FLEET_ROLE_NAMES]);
   });
