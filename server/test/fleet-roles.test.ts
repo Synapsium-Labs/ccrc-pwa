@@ -13,9 +13,11 @@ describe('FLEET_ROLES (Overlord spec §3.3.9, C49)', () => {
       .toEqual(['auditor', 'replay', 'worker', 'reviewer']);
   });
   it('every column that waits for a later piece is null on every row', () => {
+    // One line per column, so the piece that fills a column deletes its own line (plan review I14).
     for (const r of FLEET_ROLE_NAMES) {
-      const { launchProfile, compactInstructions, probeSet } = FLEET_ROLES[r];
-      expect([launchProfile, compactInstructions, probeSet]).toEqual([null, null, null]);
+      expect(FLEET_ROLES[r].launchProfile, r).toBeNull();
+      expect(FLEET_ROLES[r].compactInstructions, r).toBeNull();
+      expect(FLEET_ROLES[r].probeSet, r).toBeNull();
     }
   });
   it('the card renderer: one per role, auditor and replay take plain (C51)', () => {
