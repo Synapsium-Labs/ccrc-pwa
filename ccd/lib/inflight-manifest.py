@@ -93,11 +93,12 @@ def kind_word(st):
     return 'other'
 
 
-def read_bytes(p, cap=None, tail=None, start=None, limit=None):
+def read_bytes(p, cap=None, tail=None, start=None, limit=None, seen=None):
     """The bytes of a regular file, or None. `cap`: at most that many from the front. `tail`: the last that many (from mid-file the
     partial first line is cut at its first LF). `start`: from that offset to the end, no cut (the swap log's tail past
     <log-from>; nothing below it is read). `limit`: never more than that many bytes, the size the file was priced at (a file that
-    grew since its lstat is not read past its price). Opened only after lstat says regular, no-follow, non-blocking, then fstat again."""
+    grew since its lstat is not read past its price; with `tail` the window shrinks to the price and stays the NEWEST bytes).
+    `seen`: a list that gets the fresh fstat size, so a caller can tell a file that grew past what it read. Opened only after lstat says regular, no-follow, non-blocking, then fstat again."""
     st, fd = probe(p), None
     if st[0] != OK:
         return None
@@ -106,15 +107,18 @@ def read_bytes(p, cap=None, tail=None, start=None, limit=None):
         if not stat.S_ISREG(os.fstat(fd).st_mode):
             return None
         size = os.fstat(fd).st_size
+        if seen is not None:
+            seen.append(size)
         off, want = 0, (size if cap is None else min(size, cap))
         if tail is not None:
-            want = min(size, tail)
+            want = min(size, tail, size if limit is None else limit)
             off = size - want
         if start is not None:
             off = min(start, size)
             want = size - off
         if limit is not None:
             want = min(want, limit)
+        off0 = off
         chunks = []
         while want > 0:
             b = os.pread(fd, min(want, 1 << 20), off)
@@ -124,7 +128,7 @@ def read_bytes(p, cap=None, tail=None, start=None, limit=None):
             off += len(b)
             want -= len(b)
         data = b''.join(chunks)
-        if tail is not None and size > tail:
+        if tail is not None and off0 > 0:
             i = data.find(b'\n')
             data = data[i + 1:] if i >= 0 else b''
         return data
@@ -182,7 +186,6 @@ if price > SCAN_BUDGET:
 
 drops = {w: 0 for w in MANIFEST_DROP_WHY}
 n_read = n_readpath = n_retired = n_over = 0
-overflow = record_size > RECORD_MAX
 
 
 def valid_int(v):
@@ -213,12 +216,15 @@ def valid_row(o):
 
 
 rows = []      # (file index, row dict)
-data = read_bytes(RECORD, cap=RECORD_MAX) if rstate == OK else b''
+seen = []
+data = read_bytes(RECORD, cap=RECORD_MAX, limit=price, seen=seen) if rstate == OK else b''
 if data is None:
     data = b''
     print('record other')   # a regular file that would not open or read: none of its rows is judged
     sys.exit(4)
 parts = data.split(b'\n')
+# overflow: the record held more than the program may read (its price) -- larger than RECORD_MAX at the lstat, or grown past what was read since
+overflow = record_size > RECORD_MAX or (bool(seen) and seen[0] > len(data))
 if overflow:
     parts = parts[:-1]                        # the last piece is the cut line (or empty): budget overflow, not an invalid line
     drops[DROP_BUDGET] += 1
@@ -396,6 +402,7 @@ if LOG != '-' and LOG_FROM is not None:
 
 # ---------------------------------------------------------------- the pricing
 total = price + log_bytes
+tail_price = {}     # transcript path -> the bytes its tail window was priced at
 for r, x in runs.items():
     if x.journal in (None, BAD):
         continue
@@ -404,10 +411,12 @@ for r, x in runs.items():
         total += x.sst.st_size
     for (_p, sz, _m, s) in x.agents.values():
         if s == OK:
-            total += min(sz, TAIL_BYTES)
+            tail_price[_p] = min(sz, TAIL_BYTES)
+            total += tail_price[_p]
 for it in ag.values():
     if it.st is not None:
-        total += min(it.st.st_size, TAIL_BYTES)
+        tail_price[it.path] = min(it.st.st_size, TAIL_BYTES)
+        total += tail_price[it.path]
 if total > SCAN_BUDGET:
     print('budget %d' % total)
     sys.exit(3)
@@ -532,7 +541,7 @@ for it in wf.values():
     if it.finished:
         for k, (aid, _last) in sorted(it.keys.items()):
             ent = x.agents.get(aid) if ID_RE.match(aid) else None
-            if ent is not None:
+            if ent is not None and ent[3] != ABSENT:
                 it.tails.append((aid, ent[0], None, ent[3]))
             else:
                 it.unread = True      # the latest attempt's agent transcript is absent (or its id cannot name one): no class from absent evidence
@@ -559,7 +568,7 @@ ends = None
 if need:
     wins = []
     for p in need:
-        b = read_bytes(p, tail=TAIL_BYTES)
+        b = read_bytes(p, tail=TAIL_BYTES, limit=tail_price[p])
         wins.append(b.decode('utf-8', 'replace') if b is not None else None)
     ok_idx = [i for i, w in enumerate(wins) if w is not None]
     try:

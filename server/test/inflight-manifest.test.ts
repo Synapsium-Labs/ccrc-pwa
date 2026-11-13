@@ -90,12 +90,13 @@ const mkRun = (run: string, o: RunOpts = {}): void => {
 const mkAgent = (id: string, lines: string, mtime = NOW - 60, pdir = PDIR): void => { put(path.join(side(pdir), 'subagents', `agent-${id}.jsonl`), lines, mtime); };
 
 // ── the program ──
-type Over = Partial<{ now: number; budget: number; maxBytes: number; tail: number; recent: number; abandon: number; reset: string; log: string; logFrom: string; recordMax: number; site: string; id: string }>;
+type Over = Partial<{ now: number; budget: number; maxBytes: number; tail: number; recent: number; abandon: number; reset: string; log: string; logFrom: string; recordMax: number; site: string; id: string; patch: string }>;
 type Got = { rc: number | null; out: string; err: string; timedOut: boolean; summary: Record<string, string>; items: Array<Record<string, string>>; rows: any[] };
 const run = (o: Over = {}, timeout = 60_000): Got => {
   const args = [reg, o.id ?? SID, cfg, UUID, o.site ?? 'swap', String(o.now ?? NOW), String(o.budget ?? 64 * 2 ** 20), String(o.maxBytes ?? 16384), String(o.tail ?? 65536),
     String(o.recent ?? 3600), String(o.abandon ?? 7 * DAY), o.reset ?? '-', JQ_LIB, o.log ?? '-', o.logFrom ?? '-', String(o.recordMax ?? 1048576 + 4096)];
-  const r = spawnSyncGroup('python3', ['-I', PROG, ...args], { encoding: 'utf8', timeout });
+  const r = o.patch === undefined ? spawnSyncGroup('python3', ['-I', PROG, ...args], { encoding: 'utf8', timeout })
+    : spawnSyncGroup('python3', ['-I', '-c', PATCHED, PROG, o.patch, ...args], { encoding: 'utf8', timeout });
   const out = String(r.stdout ?? '');
   outputs.push(out);
   const lines = out.split('\n').filter(Boolean);
@@ -660,6 +661,36 @@ describe('the vocabularies, the grammar and the shipping', () => {
   });
 });
 
+// ── the program run whole with one patched os function (a file that changes between the program's lstat and its read) ──
+const PATCHED = `
+import os, sys
+src = open(sys.argv[1]).read()
+patch = sys.argv[2]
+real_lstat, real_listdir = os.lstat, os.listdir
+ns = {'os': os, 'real_lstat': real_lstat, 'real_listdir': real_listdir}
+exec(patch, ns)
+if 'lstat' in ns:
+    os.lstat = ns['lstat']
+if 'listdir' in ns:
+    os.listdir = ns['listdir']
+sys.argv = ['prog'] + sys.argv[3:]
+try:
+    exec(compile(src, 'prog', 'exec'), {'__name__': '__main__'})
+except SystemExit as e:
+    sys.stdout.flush()
+    sys.exit(e.code)
+`;
+/** An lstat that reports `size` for any path ending in `suffix`: the file is then read after it grew. */
+const smallLstat = (suffix: string, size: number): string => `
+def lstat(p, *a, **k):
+    st = real_lstat(p, *a, **k)
+    if str(p).endswith(${JSON.stringify(suffix)}):
+        l = list(st)
+        l[6] = ${size}
+        return os.stat_result(l)
+    return st
+`;
+
 // ── read_bytes, driven directly: the program parses its argv at import, so `probe` and `read_bytes` are cut out of its source ──
 const HARNESS = `
 import ast, os, stat, sys
@@ -681,16 +712,24 @@ if mode == 'limit':
     p = sys.argv[3]
     r = [len(ns['read_bytes'](p, limit=10)), len(ns['read_bytes'](p, start=40, limit=10)), len(ns['read_bytes'](p, cap=50, limit=7)), len(ns['read_bytes'](p))]
     print(r)
+elif mode == 'tail':
+    p = sys.argv[3]
+    print([ns['read_bytes'](p, tail=100, limit=30), ns['read_bytes'](p, tail=100, limit=1000), ns['read_bytes'](p, tail=100)])
 elif mode == 'fifo':
     ns['probe'] = lambda q: (ns['OK'], None)
     print(ns['read_bytes'](sys.argv[3]))
 elif mode == 'calls':
-    bad = []
+    # every priced read: its limit VALUE is the expression its pricing used
+    expect = {'RECORD': 'price', 'x.journal': 'x.jst.st_size', 'x.summary': 'x.sst.st_size', 'LOG': 'log_bytes', 'p': 'tail_price[p]'}
+    pricing = {'price = min(record_size, RECORD_MAX)', 'total += x.jst.st_size', 'total += x.sst.st_size', 'total = price + log_bytes',
+               'tail_price[_p] = min(sz, TAIL_BYTES)', 'tail_price[it.path] = min(it.st.st_size, TAIL_BYTES)'}
+    bad = [e for e in sorted(pricing) if e not in src]
     for nd in ast.walk(tree):
         if isinstance(nd, ast.Call) and isinstance(nd.func, ast.Name) and nd.func.id == 'read_bytes':
-            kw = {k.arg for k in nd.keywords}
-            if not (kw & {'limit', 'cap', 'tail'}):
-                bad.append(ast.get_source_segment(src, nd))
+            first = ast.unparse(nd.args[0])
+            kw = {k.arg: ast.unparse(k.value) for k in nd.keywords}
+            if kw.get('limit') != expect.get(first):
+                bad.append([first, kw])
     print(bad)
 `;
 const drive = (mode: string, arg = '', timeout = 20_000): { out: string; timedOut: boolean } => {
@@ -699,10 +738,21 @@ const drive = (mode: string, arg = '', timeout = 20_000): { out: string; timedOu
 };
 
 describe('read_bytes bounds a priced file by its price', () => {
-  it('a file that grew past its priced size is read to the limit and no further, with every read mode; and every call that reads a priced file passes a bound', () => {
+  it('a file that grew past its priced size is read to the limit and no further, with every read mode', () => {
     const f = put(path.join(home, 'grown.bin'), 'x'.repeat(100));
     expect(drive('limit', f).out).toBe('[10, 10, 7, 100]');
-    expect(drive('calls').out, 'a read_bytes call with no limit, cap or tail').toBe('[]');
+  });
+
+  it("every priced read passes a limit that is its file's priced-size expression, the one the pricing used (limit=None or a literal is red)", () => {
+    expect(drive('calls').out).toBe('[]');
+  });
+
+  it('a transcript tail priced small that grew reads at most its price, and the NEWEST bytes', () => {
+    const lines = Array.from({ length: 20 }, (_v, i) => `line-${String(i).padStart(4, '0')}\n`).join('');   // 200 bytes, 10 per line
+    const f = put(path.join(home, 'tail.bin'), lines);
+    const out = drive('tail', f).out;
+    // price 30 -> the last 30 bytes with the partial first line cut; 1000 -> tail 100; none -> tail 100
+    expect(out).toBe(`[b'line-0018\\nline-0019\\n', b'line-0011\\nline-0012\\nline-0013\\nline-0014\\nline-0015\\nline-0016\\nline-0017\\nline-0018\\nline-0019\\n', b'line-0011\\nline-0012\\nline-0013\\nline-0014\\nline-0015\\nline-0016\\nline-0017\\nline-0018\\nline-0019\\n']`);
   });
 
   it('a FIFO that gets past probe is turned away by its fstat, never blocking the open (O_NONBLOCK)', () => {
@@ -711,5 +761,37 @@ describe('read_bytes bounds a priced file by its price', () => {
     const g = drive('fifo', f, 8_000);
     expect(g.timedOut, 'the open blocked on a FIFO with no writer').toBe(false);
     expect(g.out).toBe('None');
+  });
+});
+
+describe('the program against a file that changed after it was priced', () => {
+  it('a launch record that grew after its lstat is read to its price; the cut line is drop-budget, not drop-read', () => {
+    const rows = Array.from({ length: 10 }, () => dropRow('shape'));
+    plantRecord(rows);
+    const L = JSON.stringify(dropRow('shape')).length + 1;
+    const g = run({ patch: smallLstat('.deleg', 2 * L + 5) });
+    expect(g.rc).toBe(0);
+    expect([n(g, 'drop-shape'), n(g, 'drop-budget'), n(g, 'drop-read')], 'two whole lines read, the cut one counted as budget').toEqual([2, 1, 0]);
+  });
+
+  it('a record exactly at its price is not an overflow', () => {
+    plantRecord(Array.from({ length: 3 }, () => dropRow('shape')));
+    const g = run();
+    expect([n(g, 'drop-shape'), n(g, 'drop-budget'), n(g, 'drop-read')]).toEqual([3, 0, 0]);
+  });
+
+  it('a finished run whose agent transcript vanished between the listing and the probe is unread, never retired', () => {
+    plantRecord([wfRow()]);
+    mkRun(RUN, { summary: { status: 'completed' }, journal: [{ type: 'started', key: key(1), agentId: 'a1' }, { type: 'result', key: key(1), agentId: 'a1' }], agents: { a1: { lines: jl([FIN]) } } });
+    const gone = `
+def lstat(p, *a, **k):
+    if str(p).endswith('agent-a1.jsonl'):
+        raise FileNotFoundError(p)
+    return real_lstat(p, *a, **k)
+`;
+    const g = run({ patch: gone });
+    expect(g.rc).toBe(0);
+    expect(g.summary['verdict']).toBe('unread');
+    expect([n(g, 'unread'), n(g, 'retired')]).toEqual([1, 0]);
   });
 });

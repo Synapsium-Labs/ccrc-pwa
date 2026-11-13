@@ -364,7 +364,7 @@ describe('the manifest writer: no generation file', () => {
     const d = path.join(h.home, 'stubbin');
     fs.mkdirSync(d, { recursive: true });
     for (const t of ['flock', 'mktemp', 'link']) fs.writeFileSync(path.join(d, t), `#!/bin/sh\necho ${t} >> "$HOME/ext-calls"\nexit 1\n`, { mode: 0o755 });
-    // the stubs are first on PATH for the whole call, so the case also proves the manifest's own slot takes none of the three:
+    // the stubs are first on PATH for the whole call, so the case proves the rest of `_inflight_write` forks none of the three (the slot's own flock is stubbed out below):
     // `_inflight_slot_take` is replaced by a stub that opens a real descriptor on /dev/null, so the release line prints nothing
     const out = write('swap', 'PATH="$HOME/stubbin:$PATH"; _inflight_slot_take() { exec {INFLIGHT_SLOT_FD}>/dev/null; return 0; };');
     expect(out).toContain('[rc=0]');
