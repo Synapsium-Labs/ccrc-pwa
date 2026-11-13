@@ -5766,6 +5766,7 @@ values too. They are values of the renewal triggers' record, keyed by role, and 
 | 30 minutes | The least age of a generation before a soft trigger may end it | W1a | observed |
 | Three soft renewals in six hours | The soft renewal budget | W1a | observed |
 | 20 minutes with no operator message, or five minutes with no visible Overlord place | A break, which a soft renewal waits for (R19) | W1a | observed |
+| Twice the period of the lane that advances it | The most observed time advances in one step; a larger delta advances nothing and is recorded as a `gap` (plan-driven consistency, the W1a plans) | W1a | observed |
 | Half of a soft row's threshold | The point past which a break renews a generation early (R19) | W1a | n/a |
 | The thread since the last break, up to 60 messages or 6,000 tokens of the card's budget | The checkpoint's thread (R19) | W1a | n/a |
 | A quarter of the hard cap | The context floor of the idle trigger | W1a | n/a |
