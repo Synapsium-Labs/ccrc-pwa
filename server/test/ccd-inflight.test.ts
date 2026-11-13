@@ -9,7 +9,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
-import { makeCcdHarness, ccdSource, CCD, type CcdHarness } from './ccdWsHelpers.js';
+import { makeCcdHarness, ccdSource, CCD, ghContainedEnv, harnessBin, type CcdHarness } from './ccdWsHelpers.js';
 import { spawnSyncGroup } from './spawnGroup.js';
 
 const REPO = path.resolve(__dirname, '../..');
@@ -85,7 +85,7 @@ const SWAP_STUBS = `systemctl() { :; }; tmux() { case "\${1:-}" in has-session) 
 const shT = (snippet: string, extra: NodeJS.ProcessEnv = {}, timeout = 90_000): { out: string; timedOut: boolean } => {
   const r = spawnSyncGroup('bash', ['-c', 'ccd_h_src=$CCD_HARNESS_SRC ccd_h_snippet=$CCD_HARNESS_SNIPPET; '
     + 'unset CCD_HARNESS_SRC CCD_HARNESS_SNIPPET; source "$ccd_h_src"; FLEET_SPAWN_PINS=; eval "$ccd_h_snippet"'],
-  { encoding: 'utf8', cwd: h.home, env: { ...h.env(extra), CCD_HARNESS_SRC: CCD, CCD_HARNESS_SNIPPET: snippet }, timeout });
+  { encoding: 'utf8', cwd: h.home, env: ghContainedEnv(h.home, { ...h.env(extra), CCD_HARNESS_SRC: CCD, CCD_HARNESS_SNIPPET: snippet }, { systemd: true, tmux: true }), timeout });
   return { out: String(r.stdout ?? ''), timedOut: (r.error as NodeJS.ErrnoException | undefined)?.code === 'ETIMEDOUT' };
 };
 
@@ -273,15 +273,15 @@ describe('the manifest writer: the listed file', () => {
     // the real hook, in the same fixture HOME: a stub tmux names the pane, the generation file is the row's
     const gen = '0189abcd-1234-5678-9abc-0123456789ab';
     fs.writeFileSync(reg(`${ID}.generation`), gen);
-    fs.mkdirSync(path.join(h.home, 'bin'), { recursive: true });
     const answered = path.join(h.home, 'tmux-answered');
-    fs.writeFileSync(path.join(h.home, 'bin', 'tmux'), `#!/bin/sh\ntrap '' TERM\necho "cc-${ID}"\nprintf '%s\\n' answered >> '${answered}'\n`, { mode: 0o755 });
+    // the hook asks tmux for the pane's name: the stub takes the place of the harness's poisoned tmux, in the same directory
+    fs.writeFileSync(path.join(harnessBin(h.home), 'tmux'), `#!/bin/sh\ntrap '' TERM\necho "cc-${ID}"\nprintf '%s\\n' answered >> '${answered}'\n`, { mode: 0o755 });
     const payload = { session_id: UUID, transcript_path: `/rig/${UUID}.jsonl`, cwd: '/rig', hook_event_name: 'PostToolUse', tool_name: 'Workflow',
       tool_input: { script: 'return 1' }, tool_use_id: 'toolu_01AAAA',
       tool_response: { status: 'async_launched', taskId: 't9', runId: RUN2, taskType: 'local_workflow', workflowName: 'demo',
         transcriptDir: `/rig/${UUID}/workflows/${RUN2}`, scriptPath: `/rig/${UUID}/workflows/scripts/x-${RUN2}.js` } };
-    const env = { ...process.env, HOME: h.home, PATH: `${path.join(h.home, 'bin')}:${process.env['PATH'] ?? ''}`, TMUX_PANE: '%1',
-      CLAUDE_CODE_SESSION_ID: 'uuid-1', CLAUDE_PID: '4242', CCRC_SESSION_GENERATION: gen, CLAUDE_CODE_EXECPATH: '' } as NodeJS.ProcessEnv;
+    const env = ghContainedEnv(h.home, { ...process.env, HOME: h.home, TMUX_PANE: '%1',
+      CLAUDE_CODE_SESSION_ID: 'uuid-1', CLAUDE_PID: '4242', CCRC_SESSION_GENERATION: gen, CLAUDE_CODE_EXECPATH: '' }, { systemd: true, tmux: true });
     delete env['OSTYPE'];
     for (let attempt = 0; attempt < 5; attempt += 1) {
       const before = (readOr(answered) ?? '').length;
@@ -321,6 +321,22 @@ describe('the manifest writer: the listed file', () => {
     run();                                        // a failed write
     const words = (readOr(probe) ?? '').split('\n').filter(Boolean);
     expect(words).toEqual(Array(6).fill('SLOT-FREE'));
+  });
+});
+
+describe('the manifest writer: the generation read', () => {
+  const GEN = '0189abcd-1234-5678-9abc-0123456789ab';
+  it('the generation is read under the row\'s compaction lock, which is never waited for: held by another holder, gen=- and the manifest still writes; free, gen= is the row\'s generation', () => {
+    seed();
+    fs.writeFileSync(reg(`${ID}.generation`), GEN);
+    write('swap');
+    expect(parse().head['gen']).toBe(GEN);
+    const out = write('swap', `exec 9>>"$REG/.${ID}.compactions.lock"; flock -n 9 || echo HOLD-FAILED;`);
+    expect(out).not.toContain('HOLD-FAILED');
+    expect(out).toContain('[rc=0]');
+    const p = parse();
+    expect(p.head['gen']).toBe('-');
+    expect(p.head['verdict'], 'the manifest still writes').toBe('listed');
   });
 });
 
