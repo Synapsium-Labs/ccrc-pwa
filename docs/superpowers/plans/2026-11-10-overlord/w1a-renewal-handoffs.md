@@ -60,8 +60,10 @@ daily backstop's hour), Table 11.1d (the W1a Settings), Table 11.1e rows "The op
   for the touched screens. Each task's last run adds both server `tsc` runs (and pwa's for PWA tasks). **Growth check:**
   `server/src/server.ts`, `server/src/coord/routes.ts`, `server/src/watch.ts` and `pwa/src/lib/api.ts` grow at most 40
   net lines each.
-- **Mutation floors.** The widened `rollTargetVerdict` and `stallRestartedVerdict` keep their floors (raise if they
-  rise).
+- **Mutation floors.** Neither `rollTargetVerdict` nor `stallRestartedVerdict` has a floor today (`MUTANT_SETS` holds
+  only `stallCoordBlockedStep`). Each widening registers one: `rollTargetVerdict` (mutants: drop `renewal-owns`; let
+  `renewal-owns` win over a pinned row) and `stallRestartedVerdict` (mutants: keep the old short-lived-only arm; widen
+  past long-lived roles), in `MUTANT_SETS` and `mutation-floors.json`.
 - **Censuses.** Each new session-gated door: `SESSION_ONLY` in `box-token-census.test.ts`, the sentence in `CLAUDE.md`,
   `server/test/auth-gate.test.ts`, `server/test/rings/fastify-l4.data.ts`. New refusal words through
   `shared/refusal.ts`.
@@ -117,17 +119,22 @@ daily backstop's hour), Table 11.1d (the W1a Settings), Table 11.1e rows "The op
 ### Task 3: The `operator-at-programme` mark
 
 **Files:**
-- Modify: `server/src/coord/schema.ts` (migration: `operator_marks(programme TEXT PRIMARY KEY, at INTEGER NOT NULL)`)
+- Modify: `server/src/coord/schema.ts` (migration: `operator_marks(programme TEXT PRIMARY KEY, at INTEGER NOT NULL,
+  observed TEXT NOT NULL)`, `observed` the JSON `Observed` stamp of the write, from `observeTime`)
 - Modify: `server/src/server.ts` (after a prompt is typed, the route upserts the mark for the programme the session
   coordinates or serves, measured from its runs; a session with no programme writes none)
-- Modify: `server/src/continuity/generationsLane.ts` (a coordinator's `lastOperatorActivityMs` is `now - mark.at` for its
-  programme; no mark is "no activity", a read failure is `unmeasured`)
+- Modify: `server/src/continuity/generationsLane.ts` (a coordinator's `lastOperatorActivityObservedMs` is
+  `observedSince(mark.observed, now)` for its programme, observed time as Table 11.5b asks, so a server gap never ages
+  a mark; no mark is a measured "no activity", which opens the break; a read failure is `unmeasured`; this replaces
+  the renewal-act piece's `unmeasured` (reason `operator-mark`))
 - Modify: `shared/continuity.ts` (`OPERATOR_MARK_MS = 1_800_000`, the mark's 30 minutes, Table 11.1e)
 - Test: `server/test/continuity-operator-mark.test.ts` (new)
 
 - [ ] **Step 1: Failing tests:** a prompt into a coordinator of `prog-a` marks `prog-a`; into a worker of `prog-a` marks
   `prog-a`; into a session with no programme marks nothing; a soft renewal of `prog-a`'s coordinator waits while the mark
-  is younger than 20 minutes and starts after; a mark older than 30 minutes reads as no activity.
+  is younger than 20 minutes and starts after; a mark older than 30 minutes reads as no activity; a mark written
+  before a server restart does not age across the gap; the renewal-act piece's soft case on the lane's real gather now
+  starts (its `unmeasured` wait is gone).
 - [ ] **Step 2: Run.** Red. **Step 3: Implement.** **Step 4: Run.** Green.
 - [ ] **Step 5: Commit.** `feat(continuity): the prompt route writes the operator-at-programme mark (C50)`
 
@@ -136,9 +143,11 @@ daily backstop's hour), Table 11.1d (the W1a Settings), Table 11.1e rows "The op
 **Files:**
 - Modify: `shared/switches.ts` (row `renewal-mode`: setting, `when-away` | `on-schedule`, default `when-away`, owner
   `C3`, writer `POST /api/coord/renewal-mode`)
-- Modify: `server/src/coord/routes.ts` (the session-gated door, `roll-idle`'s shape)
+- Modify: `server/src/coord/routes.ts` (the session-gated door, `roll-idle`'s shape; growth-checked, and shared by
+  lanes: see the index's "Where lanes meet")
 - Modify: `server/src/continuity/generationsLane.ts` (passes the stored mode to `softRenewalMay`)
-- Modify: `pwa/src/screens/settings/` (the row beside "Roll idle sessions")
+- Modify: the PWA Settings screen that holds "Roll idle sessions" (measure: `grep -rln 'Roll idle sessions' pwa/src`;
+  one row, after the launch-profiles piece's row if that has merged; shared by lanes: see the index)
 - Modify: the census files and `CLAUDE.md`'s sentence
 - Test: `server/test/renewal-mode-route.test.ts` (new), the PWA settings suite
 
@@ -212,7 +221,9 @@ None yet. Decisions this plan takes, by slug:
 - **renew-request-read-by-cursor** — the lane reads Renew now requests from a cursor row of its own, so the request
   table keeps one writer, the door.
 - **backstop-setting-in-w1** — the daily backstop's hour and time zone ship with W1, where the Overlord's row first reads
-  them (Table 11.1d lists them in W1a).
+  them (Table 11.1d, as this programme's spec amendment now reads, lists them in W1).
+- **operator-mark-observed** — the mark keeps the observed stamp of its write, and a coordinator's break reads its age
+  as observed time, so a server gap never opens a break.
 - **mark-for-any-session-of-the-programme** — a prompt into any session of a programme marks the programme.
 - **roll-skips-long-lived-when-live** — the roll's hand-off is a skip reason, `renewal-owns`, read only while the
   `continuity` row is `live`.

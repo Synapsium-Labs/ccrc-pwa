@@ -156,7 +156,8 @@ and name them in the departures note.
 
 - [ ] **Step 1: Measure** the rulings' rows. **Step 2: Failing tests:** ten newest rulings, verbatim, inside
   `untrustedBlock` on the card; fewer than ten when fewer exist; a hard trigger's checkpoint has no handover note.
-- [ ] **Step 3: Run.** Red. **Step 4: Implement.** **Step 5: Run.** Green. Register `assembleCheckpoint`'s floor.
+- [ ] **Step 3: Run.** Red. **Step 4: Implement.** **Step 5: Run.** Green. Register `assembleCheckpoint`'s floor (mutants: oldest first;
+  keep eleven; keep the handover on a hard trigger; render a ruling outside `untrustedBlock`).
 - [ ] **Step 6: Commit.** `feat(continuity): the checkpoint, assembled by the lane; a coordinator's last ten rulings`
 
 ### Task 4: The lane acts
@@ -168,8 +169,11 @@ and name them in the departures note.
   hibernate hold table and the turn marker say so, `handover` when the note arrived, `host-ended` / `host-failed` from
   `renew`'s answer, `started` from the receipt; run the actions when `live`, record them when not)
 - Modify: `server/src/watch.ts` (`sweepMail` gates a delivery to a session whose live generation is in `draining` to
-  `probing` with the gate word `renewing`; on entering `draining` the lane re-queues that session's `delivered`, unacked
-  deliveries through the store's existing re-queue writer)
+  `probing` with the gate word `renewing`. Nothing is re-queued and no delivery row is written on entering `draining`:
+  a delivery already `delivered` and unacked is replayed by `dueDeliveries`' existing replay of unacked delivered rows
+  (`MAIL_REPLAY_MAX_ATTEMPTS`), which the gate holds while the word stands and lets through after `probing`. Step 1
+  measures whether a gated replay spends an attempt; if it does, the gate refuses before the attempt is counted, and
+  the departures note says which)
 - Test: `server/test/continuity-renewal-acts.test.ts` (new), the mail sweep's gate suite
 
 **Actions:** `hold-deliveries` (nothing to send: the gate reads the state); `assemble-checkpoint`; `ask-handover` (system
@@ -185,7 +189,13 @@ mint, as today).
   - a hard `hard-cap` on an idle coordinator: draining → (drained) clearing → `renew` once → a start reported → carded,
     the first prompt delivered → card read → probing → passed → active; deliveries gated `renewing` throughout and
     released after;
-  - a soft trigger waits for `softRenewalMay`, then checkpointed: the handover asked, received, the checkpoint stored;
+  - a soft trigger on a coordinator with no hold and its break measured open (the gather's operator mark given as a
+    measured age) waits for nothing more, then checkpointed: the handover asked, received, the checkpoint stored;
+  - the lane's real gather before the renewal hand-offs piece lands: the coordinator's operator mark reads `unmeasured`
+    (reason `operator-mark`), so the soft trigger waits `unmeasured` and no soft renewal starts; the hand-offs piece's
+    Task 3 turns the same case into a start with the real mark;
+  - a delivery `delivered` and unacked when `draining` begins is not delivered again while the gate holds, and is
+    replayed once after `probing`;
   - `renew` refused (3): back to `active` with a hold-off, no retry inside it;
   - `renew` unreachable then a start reported: no second `renew`;
   - wake-failed until the clearing deadline: `degraded`, one item;
@@ -204,7 +214,7 @@ mint, as today).
 
 Invariants added: **G7** at most one fresh conversation per renewal (count the fake port's successful `renew`s per
 `(identity, n)`); **G8** every renewal ends within `RENEWAL_BUDGET_S` from `checkpointed`, or in `degraded`, or back in
-the state it began from; **G9** deliveries to a renewing session are held and none is lost (each is delivered once
+`active` with a hold-off; **G9** deliveries to a renewing session are held and none is lost (each is delivered once
 after `probing`).
 
 - [ ] **Step 1:** Add the faults and G7 to G9. **Step 2: Run** with the CI seeds. Green.
@@ -236,6 +246,11 @@ hand-offs, the `precompact` field, the lost-task nudge); W1's Overlord renewal (
 **Open questions for the operator, most important first:**
 
 1. **Arm the `continuity` row?** Recommend after one week of shadow records on the fleet's coordinators, with the counts
-   per trigger and the blind rows in the item.
+   per trigger and the blind rows in the item, and after the replay baseline is taken (the replay-quiz piece's
+   door refuses `live` before it). The item says what the counts can and cannot show: only coordinators started after
+   the generations piece merged have rows (a coordinator running at merge has none until its next start); in shadow
+   no first prompt is sent, so most `probing` rows time out to `degraded`, and those `degraded` counts measure the
+   missing prompt, not the probes; and soft triggers stay waiting `unmeasured` until the renewal hand-offs piece
+   brings the operator mark.
 2. **Should a degraded coordinator stop acting?** The spec says it keeps acting and raises one item (C50); recommend
    as written.

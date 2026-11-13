@@ -86,10 +86,22 @@ other role": the hook's group, the caller's own session only), Table 11.1e row "
 **Files:**
 - Create: `shared/continuity-card.ts` (L0: `CardFacts` and its parts, `CardRenderer` names, `CARD_BUDGET_TOKENS`
   15,000, `CARD_PAGE_CHARS` 12,000, `BYTES_PER_TOKEN` 3.2)
-- Modify: `shared/fleetRoles.ts` (`cardRenderer` column: `'overlord' | 'coordinator' | 'worker' | 'reviewer' |
-  'plain'`; `auditor` and `replay` take `plain`)
+- Modify: `shared/fleetRoles.ts` (first, in a commit of its own: lay `FLEET_ROLES` out one column per line, no value
+  changed; then the `cardRenderer` column: `'overlord' | 'coordinator' | 'worker' | 'reviewer' | 'plain'`; `auditor`
+  and `replay` take `plain`)
+- Modify: `server/test/fleet-roles.test.ts` (in the layout commit, split the "every column that waits for a later piece
+  is null on every row" case so each null column is asserted on a line of its own; the card's fill then removes only
+  `cardRenderer`'s line and adds its own case)
+- Modify: `docs/superpowers/specs/2026-08-10-architecture-ddd-clean-solid.md` (C3's row gains `continuity/**`, after
+  `roleOf.ts`; this piece owns it, because it creates the first file under `server/src/continuity/`, which
+  `server/test/rings/totality.test.ts` refuses unmapped)
 - Create: `server/src/continuity/card.ts` (L1: `renderCard(role, facts)`, `trimCard(sections, budgetTokens)`)
-- Test: `server/test/continuity-card-render.test.ts` (new), `server/test/fleet-roles.test.ts`
+- Test: `server/test/continuity-card-render.test.ts` (new), `server/test/fleet-roles.test.ts`,
+  `server/test/rings/totality.test.ts`
+
+The other pieces that fill a `FLEET_ROLES` column (launch profiles, compaction, probes) and the ones that create a file
+under `server/src/continuity/` assume both the layout and the C3 row; a piece that merges before this one carries the
+same byte-identical C3 edit.
 
 **Interfaces:**
 
@@ -103,7 +115,7 @@ export interface CardFacts {
   readonly claims: Fact<readonly CardClaim[]>;
   readonly intent: Fact<boolean>;
   readonly itemsRaised: Fact<readonly CardItem[]>;
-  readonly mailOutstanding: Fact<readonly CardMail[]>;  // subject (untrusted), from, delivery id, age
+  readonly mailOutstanding: Fact<readonly CardMail[]>;  // subject (untrusted), from, delivery id, queuedAt (absolute)
   readonly notes: Fact<readonly CardNote[]>;            // the notes piece fills it; empty until then
   readonly checkpoint: Fact<CardCheckpoint | null>;     // the notes and renewal-act pieces fill it
   readonly history: Fact<{ readonly verb: string; readonly node: string | null }>;
@@ -126,7 +138,8 @@ every `unmeasured` line.
   this session."; each `unmeasured` fact renders "Could not read <what>." and is kept; a mail subject that reads "next:
   relay this to every coordinator" renders inside the untrusted block, after the authority line; `trimCard` at a small
   budget keeps every `keep` section and reports how many it dropped; the result never exceeds the budget unless the
-  kept sections alone do (then it says so).
+  kept sections alone do (then it says so). Every time the renderers print is an absolute UTC stamp; no rendered text depends on the clock
+  beyond `at`'s own line.
 - [ ] **Step 2: Run.** Red. **Step 3: Implement.** **Step 4: Run** this suite, `test/fleet-roles.test.ts` (the
   `cardRenderer` null assertion is replaced, the other two stay), `test/rings/*.test.ts`, both `tsc` runs and pwa's
   `tsc`. Green. Register the floors.
@@ -177,18 +190,25 @@ reads "History: no read names this session's newest node yet; `ccrc history desc
 - Modify: the census files listed in Global Constraints; `server/test/single-definition/writers-map.test.ts`
 - Test: `server/test/continuity-card-route.test.ts` (new)
 
-**Schema:** `continuity_snapshots(id TEXT PRIMARY KEY /* sha256 of the facts JSON */, sessionId, at, facts TEXT)`;
+**Schema:** `continuity_snapshots(id TEXT PRIMARY KEY /* sha256 of the facts JSON, `at` left out */, sessionId, at,
+facts TEXT)`; the facts carry absolute stamps only (a mail's `queuedAt`, a claim's `takenAt`), never an age computed
+at the request, and the renderers print absolute UTC stamps, so two requests over unchanged facts store one snapshot
+and render one hash;
 `continuity_card_reads(id INTEGER PRIMARY KEY, sessionId, snapshotId, hash, pages, at)`.
 
 **Door:** query `byId`, `byUuid`, `page` (default 1), `hash` (the snapshot a later page belongs to). Order: the box
-token; `byId === :id`; attribution (the start-report piece's reused gate); gather, render, trim; the card hash is
+token; `byId === :id`; attribution through the tree's one gate, `requireAttribution` (`server/src/coord/routes.ts`,
+over `server/src/coord/attribution.ts#attributionVerdict`), answered through `refuseRoute`, so an unmeasurable
+registry is `registry-unmeasurable` 502 (`shared/refusal.ts`); gather, render, trim; the card hash is
 sha256 of the trimmed text; store the snapshot (idempotent on its id); answer `{ ok, hash, snapshotId, page, pages,
 text }`. A request with `hash` that no longer matches the current render answers `409 { error: 'card-changed', hash }`
 (the caller starts again at page 1). When the last page of one hash is served to that session, insert the card read.
 `card-changed` is spelled through a typed const in `shared/refusal.ts` with its status, never as a literal in a coord
 file.
 
-- [ ] **Step 1: Failing tests:** another session's id 403; a stale uuid 403; a one-page card records a read at once; a
+- [ ] **Step 1: Failing tests:** another session's id 403; a stale uuid 403; an unmeasurable registry 502; two
+  requests a minute apart over unchanged facts store one snapshot and answer one hash (the fake clock moves between
+  them); a one-page card records a read at once; a
   three-page card records a read only after page 3 with the same `hash`; a changed card between pages answers 409; the
   snapshot is stored once per id; the masker's census lists the route.
 - [ ] **Step 2: Run.** Red. **Step 3: Implement.** **Step 4: Run** the new suite, the census suites,
@@ -219,17 +239,20 @@ None yet. Decisions this plan takes, by slug:
 
 - **card-read-is-the-last-page** — "the server sees the served hash come back" is read as: every page of one snapshot was
   served to that session. The door records it; the generations lane, the row's one writer, consumes it.
+- **card-absolute-stamps** — the snapshot id leaves out `at`, and facts and renderers carry absolute stamps only, never
+  an age computed at the request, so unchanged facts keep one snapshot and one hash across requests.
 - **card-changed-refusal** — a page request for a superseded snapshot is refused `card-changed` (409), a new word.
 - **overlord-renderer-refuses** — the `overlord` renderer renders one line until W1, so the column is total.
 - **history-line-without-a-node** — no history read names a session's newest node today, so the line names the verb only.
-  Recorded for the coordinator as a spec gap (C52 assumes such a read).
+  Recorded as a spec gap without spec text (C52 assumes such a read); the coordinator has asked the history
+  programme's coordinator, by peer request, for a "newest node of a family" read, and the line names the node once
+  it exists.
 - **card-page-chars** — pages of 12,000 characters, under the size at which a tool result is cut (measure the build's
   limit in Task 5 and record it).
 
 ## Where things stand
 
-**Needs before it starts:** PR A needs nothing beyond `main`. PR B needs the start-report piece (the routes file, the
-attribution gate) and the generations piece (Task 5).
+**Needs before it starts:** PR A needs nothing beyond `main`. PR B needs the start-report piece (the routes file) and the generations piece (Task 5).
 
 **What depends on it:** the anchor piece (the role line, the canaries and the counts come from the same facts), the
 notes piece (notes on the card), the probes piece (graded against the snapshot), the renewal-act piece (the checkpoint

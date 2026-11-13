@@ -29,8 +29,10 @@ node measured.
 
 **Architecture:** an L4 lane on a weekly `LANE_SCHEDULE` row raises one operator item a week through the ledger's
 existing server raise; an operator-run `ccrc` subcommand reads the driver's report (read-only) and posts it to a
-session-gated door that writes `continuity_quiz_runs`; an L1 decider marks the baseline; the lane-arm door refuses to
-arm a W1a lane before a baseline exists. The server never runs the driver. One pull request.
+box-token door that writes `continuity_quiz_runs`; an L1 decider marks the baseline; the lane-arm door's L1 decider,
+`decideLaneArmPost`, refuses to arm a W1a row before a baseline exists. The W1a rows it guards are `continuity`,
+`launch-profile` and `anchor-slot`; the coordinator skill's clause that W1a adds is ordered after the baseline is taken
+(the index's order), because it changes what a coordinator recalls. The server never runs the driver. One pull request.
 
 **Tech Stack:** TypeScript (ESM), bash (`ccd/ccrc`), `node:sqlite`, vitest.
 
@@ -50,9 +52,13 @@ waves; the wave asks that programme's coordinator first), Table 11.1c row "The r
   percentile bootstrap). The judge model is required and must be an exact Opus id.
 - No server lane runs or schedules it (`grep` of `server/src` finds nothing).
 - Server-raised items exist (`server/src/coord/endRequest.ts` raises through `ledgersStore.ts`).
-- `shared/lane-arm.ts` and `POST /api/coord/lane-arm` (D-8274); W1a adds the rows `continuity` and `launch-profile` (the
-  generations and launch-profiles pieces); `lane_arm_settings` has `updatedAt`. The `#2726` run may add a row of its own
-  (`peer-mail-hold`); it is not a W1a arm and this piece does not name it.
+- `shared/lane-arm.ts` and `POST /api/coord/lane-arm` (D-8274). The door's verdict is L1:
+  `server/src/coord/laneArm.ts#decideLaneArmPost({ request, row, signedIn })`, called from the handler in
+  `server/src/coord/routes.ts`; its refusal words are the closed `shared/lane-arm.ts#LANE_ARM_REFUSALS`. W1a adds the
+  rows `continuity` (the generations piece, Task 1), `launch-profile` (the launch-profiles piece, PR B Task 5) and
+  `anchor-slot` (the anchor piece, Task 2). `lane_arm_settings` keeps only each row's current choice and its
+  `updatedAt`, no history. The `#2726` run may add a row of its own (`peer-mail-hold`); it is not a W1a arm and this
+  piece does not name it.
 
 ## Global Constraints
 
@@ -60,8 +66,10 @@ waves; the wave asks that programme's coordinator first), Table 11.1c row "The r
   form of `ccrc history`, touches a history marker, or runs the driver. The `ccrc` subcommand only reads files the
   operator names and marker files' existence.
 - **Architecture (`CLAUDE.md`).** One writer: the quiz door writes `continuity_quiz_runs`. The baseline rule is L1
-  (`quizBaseline`). The lane is L4 and only raises an item. Consolidate: the item goes through the ledger's existing
-  server raise; the arming guard is one more refusal of the existing lane-arm door, not a second switch. A guard ships
+  (`quizBaseline`), and so is the arming refusal: `decideLaneArmPost` takes the fact `baselineExists` and decides; the
+  handler in `routes.ts` only reads the fact and passes it. The lane is L4 and only raises an item. Consolidate: the item
+  goes through the ledger's existing server raise; the arming guard is one more refusal of the existing lane-arm door,
+  not a second switch. A guard ships
   with a test that goes red without it.
 - **Peer protocol first.** Before Task 1, mail the history programme's coordinator (`ccrc-api peers list`): name this
   piece, the four conditions, the report it reads, and the driver change it needs (below); wait for the answer before
@@ -82,8 +90,9 @@ waves; the wave asks that programme's coordinator first), Table 11.1c row "The r
 
 1. The server never runs the driver and never writes a history file or marker (an import and path pin in the lane's and
    the subcommand's tests).
-2. The baseline is the first run recorded while every W1a lane-arm row has stayed `shadow`, and once a W1a row has been
-   `live`, no later run can become the baseline.
+2. The baseline is the first run recorded while every W1a lane-arm row's stored choice is `shadow`, read from
+   `lane_arm_settings` at the recording; together with point 3 no W1a row can be `live` before it, so the rule needs
+   no arm history.
 3. No W1a lane can be armed `live` before a baseline row exists (`baseline-missing`).
 4. Nothing labels a run a PASS or a benefit: the record holds the score and its interval only.
 
@@ -93,7 +102,8 @@ waves; the wave asks that programme's coordinator first), Table 11.1c row "The r
 
 **Files:**
 - Modify: `server/src/coord/schema.ts` (migration: `continuity_quiz_runs`)
-- Create: `server/src/continuity/quiz.ts` (L1: `quizBaseline(runs, armHistory)`, `validQuizReport(json)`)
+- Create: `server/src/continuity/quiz.ts` (L1: `quizBaseline(runs, w1aChoices)`, `validQuizReport(json)`;
+  `W1A_ARM_ROWS = ['continuity', 'launch-profile', 'anchor-slot']`, typed against `LaneArmLane`)
 - Create: `server/src/continuity/quizStore.ts` (`insertQuizRun`, `quizRuns`; its own module, so this lane shares no
   store file with the server spine)
 - Test: `server/test/continuity-quiz.test.ts` (new), `server/test/coord-db.test.ts`
@@ -111,11 +121,15 @@ CREATE TABLE continuity_quiz_runs (
 );
 ```
 
-`quizBaseline` answers `true` for a run when no earlier row is a baseline and no W1a lane-arm row (`continuity` or
-`launch-profile`) has an `updatedAt` with choice `live` at or before the run's `measuredAt`.
+`quizBaseline` answers `true` for a run when no earlier row is a baseline and every row of `W1A_ARM_ROWS` reads
+`shadow` in `lane_arm_settings` when the run is recorded (an unreadable row answers `false`, so an unreadable read never
+makes a baseline). This is derivable from what the table keeps: the arming guard (Task 2) stops any of these rows going
+`live` before a baseline exists, so "has never been live" and "is shadow now" agree. A row armed before this piece
+merged is the one case the guard cannot see; the index orders this piece before any W1a row can be armed, and the
+departures note records it.
 
 - [ ] **Step 1: Failing tests:** the first run with every row shadow is the baseline; a second is not; a first run
-  measured after any W1a row went `live` is not, and no later run can be; a report missing any field the record needs is
+  recorded while any W1a row is `live` is not; an unreadable row makes no baseline; a report missing any field the record needs is
   refused by `validQuizReport` naming the field; a duplicate `reportSha` is one row.
 - [ ] **Step 2: Run.** Red. **Step 3: Implement.** **Step 4: Run.** Green. Register `quizBaseline`'s floor.
 - [ ] **Step 5: Commit.** `feat(continuity): continuity_quiz_runs and the baseline rule (W0-28)`
@@ -123,13 +137,18 @@ CREATE TABLE continuity_quiz_runs (
 ### Task 2: Arming a W1a lane waits for the baseline
 
 **Files:**
-- Modify: `server/src/coord/routes.ts` (`POST /api/coord/lane-arm`: `live` for `continuity` or `launch-profile` is
-  refused `baseline-missing` (409) while no baseline row exists; `shadow` is never refused)
-- Modify: `shared/refusal.ts` (`baseline-missing`)
-- Test: the lane-arm route suite
+- Modify: `server/src/coord/laneArm.ts` (`decideLaneArmPost` takes `baselineExists: boolean`; `live` for a row of
+  `W1A_ARM_ROWS` while it is `false` answers `{ kind: 'baseline-missing' }`, decided before the confirm key; `shadow`
+  is never refused)
+- Modify: `shared/lane-arm.ts` (`LANE_ARM_REFUSALS` gains `baseline-missing`; the closed list's one append)
+- Modify: `server/src/coord/routes.ts` (the lane-arm handler reads whether a baseline row exists through
+  `quizStore.ts` and passes it; it maps the new verdict to 409 `baseline-missing`; nothing else)
+- Modify: `shared/refusal.ts` (`baseline-missing`, 409)
+- Test: the lane-arm decider's suite and the lane-arm route suite (measure: `grep -ln decideLaneArmPost server/test`)
 
-- [ ] **Step 1: Failing tests:** each of the two refused before a baseline and accepted after; `roster-card` (not a
-  W1a lane) unaffected; `shadow` always accepted.
+- [ ] **Step 1: Failing tests:** in the decider, each of the three rows refused before a baseline and accepted after;
+  `roster-card` (not a W1a row) unaffected; `shadow` always accepted; at the route, the 409 body names
+  `baseline-missing`.
 - [ ] **Step 2: Run.** Red. **Step 3: Implement.** **Step 4: Run.** Green.
 - [ ] **Step 5: Mutation.** Drop the check: red. Revert.
 - [ ] **Step 6: Commit.** `feat(lane-arm): a W1a lane is armed only after the quiz baseline exists (W0-28)`
@@ -175,21 +194,24 @@ the departures note records the wait.
 
 None yet. Decisions this plan takes, by slug:
 
-- **quiz-lane-reminds-not-runs** — C52 says "a server lane runs history's replay quiz weekly", but the driver refuses
-  inside a pane and condition 3 makes it the operator's by hand, so the lane asks and records. Recorded for the
-  coordinator as a spec gap.
+- **quiz-lane-reminds-not-runs** — the driver refuses inside a pane and condition 3 makes it the operator's by hand, so
+  the lane asks and records; C52 now reads so (this programme's spec amendment).
 - **quiz-needs-a-single-arm-mode** — the baseline's "recall on and no A/B window" needs a driver mode history's driver does
   not have; it is that programme's change, asked by peer mail. Recorded as a dependency and a spec gap.
-- **arming-waits-for-the-baseline** — the lane-arm door refuses `live` for a W1a lane until a baseline exists, so
-  "taken before any W1a arm is armed" is a mechanism, not a convention.
+- **arming-waits-for-the-baseline** — the lane-arm door's L1 decider refuses `live` for `continuity`, `launch-profile`
+  and `anchor-slot` until a baseline exists, so "taken before any W1a arm is armed" is a mechanism, not a convention.
+- **baseline-rule-from-current-choices** — the baseline rule reads the W1a rows' current choices, which
+  `lane_arm_settings` keeps, rather than an arm history it does not keep; the arming guard makes the two agree.
 - **quiz-record-is-the-operators** — the record comes from an operator verb on the box, refused inside a session, through
   a box-token door; a session could still post it directly (the box token is shared), so the row carries `recordedBy`
   and the door's census reason says so.
 
 ## Where things stand
 
-**Needs before it starts:** Tasks 1, 2 and 4 need the lane-arm rows of the W1a pieces they name (or add the names as
-literals that the arming test checks once those rows exist). Task 3 needs the history programme's single-arm report.
+**Needs before it starts:** the generations piece (Task 1: the `continuity` row), the launch-profiles piece's PR B
+(Task 5: the `launch-profile` row) and the anchor piece (Task 2: the `anchor-slot` row), because `W1A_ARM_ROWS` is
+typed against `LaneArmLane` and a name not yet in it does not compile; and the start-report piece (the continuity
+routes' home). Task 3 needs the history programme's single-arm report.
 
 **What depends on it:** every W1a arm (Task 2's guard); M13 (§12), which compares later runs against the baseline; the
 Overlord's weekly drift reading (C52), which reads the same rows from W1.

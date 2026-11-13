@@ -82,6 +82,9 @@ the designated one).
 - Modify: `shared/continuity.ts` (`ProbeClass`, `PROBE_CLASSES`, `PROBE_ROUND_MIN = 3`, `PROBE_ROUND_MAX = 5`,
   `SPOT_PROBE_EVERY_TOKENS = 50_000`, `FIT_PASS_RATE = 0.95`, `FIT_WINDOW = 20`)
 - Create: `server/src/continuity/probes.ts` (`probeRound`)
+- Assumes: card PR A's commit that lays `FLEET_ROLES` out one column per line and splits
+  `server/test/fleet-roles.test.ts`'s null-columns case one column per line, and its C3 row `continuity/**`; this
+  piece edits only its own column's lines in both files
 - Test: `server/test/continuity-probes.test.ts` (new), `server/test/fleet-roles.test.ts`
 
 **Interfaces:**
@@ -106,7 +109,8 @@ too thin for three answers fewer, and says so.
   snapshot; a snapshot with no runs yields the abstention question and says the round is short; the same seed yields
   the same round. `probeSet` is total and empty for roles that are not long-lived.
 - [ ] **Step 2: Run.** Red. **Step 3: Implement.** **Step 4: Run** this suite, `test/fleet-roles.test.ts` (the last
-  null assertion goes), both `tsc` runs and pwa's `tsc`. Green. Register the floor.
+  null assertion goes), both `tsc` runs and pwa's `tsc`. Green. Register the floor (mutants: skip the top-up to three;
+  let `expected` fall outside `choices`; draw from a class the role lacks; ignore the seed).
 - [ ] **Step 5: Commit.** `feat(continuity): a coordinator's probe round, drawn from its own rows (C41, C52)`
 
 ### Task 2: Grading (L1)
@@ -126,7 +130,8 @@ export function roundVerdict(grades: readonly ProbeGrade[]): 'passed' | 'failed'
 
 - [ ] **Step 1: Failing tests:** exact id passes; a near id fails; `none` passes only an abstention question; an answer
   outside `choices` fails; a round with one fail fails. Monotonicity: changing a pass to a fail never makes a round pass.
-- [ ] **Step 2: Run.** Red. **Step 3: Implement.** **Step 4: Run.** Green. Register the floor.
+- [ ] **Step 2: Run.** Red. **Step 3: Implement.** **Step 4: Run.** Green. Register the floor (mutants: drop the
+  case-fold; pass `none` on any question; pass a round on most passes).
 - [ ] **Step 5: Commit.** `feat(continuity): grade a probe closed-form, and a round all-or-nothing`
 
 ### Task 3: The fitted ceiling (L1, derived on read)
@@ -144,7 +149,8 @@ model class by depth (`SPOT_PROBE_EVERY_TOKENS`); a bucket is good when its last
 - [ ] **Step 1: Failing tests:** no probes: the hard cap, not fitted; 20 passes at 50k and 100k, 18 of 20 at 150k:
   100k, fitted; a model class with no probes: the hard cap even when another class is fitted; open-book probes do not
   count. Monotonicity: adding a fail never raises the ceiling.
-- [ ] **Step 2: Run.** Red. **Step 3: Implement.** **Step 4: Run.** Green. Register the floor.
+- [ ] **Step 2: Run.** Red. **Step 3: Implement.** **Step 4: Run.** Green. Register the floor (mutants: `>=` to `>` on
+  the pass rate; count open-book probes; ignore the model class; let the ceiling exceed the hard cap).
 - [ ] **Step 5: Commit.** `feat(continuity): the fitted ceiling, derived from closed-book spot probes (C41)`
 
 **PR A ends here.**
@@ -221,6 +227,33 @@ grades. A second answer to an answered round is `probe-closed`.
 
 **PR B ends here.**
 
+### Task 7 (waits on the operator's item; can be dropped): a coordinator's thread probe
+
+The spec gives a coordinator no thread probe in W1a (Table 3.3.5a's thread probe is the Overlord's), yet R19's "never
+repeat" arguably covers what the operator types into a coordinator. The operator rules between two answers; this task
+is written for the second and is dropped, with the slug `no-coordinator-thread-probe` recorded, if the operator rules
+the first.
+
+- **W1a has none.** Drop this task. The coordinator's set stays `fact`, `temporal`, `abstention`, `continuation`.
+- **The newest ruling in the checkpoint.** Build this task.
+
+**Files:**
+- Modify: `shared/fleetRoles.ts` (`coordinator`'s `probeSet` gains `thread`; one line)
+- Modify: `server/src/continuity/probes.ts` (`probeRound` draws one `thread` question for a coordinator when the
+  snapshot's checkpoint holds at least one ruling: "What did the operator rule last on programme `prog-a`?", choices
+  the newest ruling's id and up to three older ones, expected the newest; skipped, and the round says so, when the
+  checkpoint has none)
+- Test: `server/test/continuity-probes.test.ts`
+
+**Needs:** PR B, and the renewal-act piece's Task 3 (the checkpoint and its last ten rulings).
+
+- [ ] **Step 1: Failing tests:** a snapshot whose checkpoint has three rulings yields one `thread` question whose
+  `expected` is the newest; a snapshot with none yields no `thread` question and says so; `gradeProbe` grades it like a
+  `fact` question.
+- [ ] **Step 2: Run.** Red. **Step 3: Implement.** **Step 4: Run.** Green. The floor's mutants gain one: expect the
+  oldest ruling.
+- [ ] **Step 5: Commit.** `feat(continuity): a coordinator's thread probe, the newest ruling in its checkpoint (R19)`
+
 ## Deviations found
 
 None yet. Decisions this plan takes, by slug:
@@ -232,13 +265,19 @@ None yet. Decisions this plan takes, by slug:
   needs W1's witness. Recorded for the coordinator: until then no probe counts towards M8 or the fitted ceiling.
 - **coordinator-probe-classes** — a coordinator's set is `fact`, `temporal`, `abstention` and `continuation`, the classes
   its own rows can grade (C52's list).
+- **coordinator-thread-probe-waits-on-the-operator** — whether a coordinator gets a thread probe in W1a is the
+  operator's call (an item the coordinator raises); Task 7 is written for "the newest ruling in the checkpoint" and is
+  dropped, as `no-coordinator-thread-probe`, if the operator rules "none".
 - **spot-probes-announced-by-mail** — an active coordinator learns of a spot probe by system mail; the questions come
   only from the door. The Overlord's arrive as inbox rows in W1.
 
 ## Where things stand
 
-**Needs before it starts:** PR A needs the card piece's PR A (`CardFacts` and `CardNote`, in `shared/continuity-card.ts`). PR B needs the
+**Needs before it starts:** PR A needs the card piece's PR A (`CardFacts` and `CardNote`, in `shared/continuity-card.ts`)
+and the renewal-deciders piece's PR A (`shared/continuity.ts`, which Task 1 extends). PR B needs the
 card piece (snapshots, the `probing` move), the notes piece, the generations piece and the context-readings piece.
+
+Task 7 waits on the operator's item and on the renewal-act piece's Task 3.
 
 **What depends on it:** the renewal-act piece (`probing` is the last state before `active`), the Overlord's soft
 ceiling row (W1, the fitted ceiling), M8 and M23 (§12), the weekly quiz's report (it lands beside the probe rows).

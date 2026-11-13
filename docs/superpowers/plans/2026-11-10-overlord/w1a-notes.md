@@ -30,7 +30,9 @@ note and the checkpoint", §11.2 (the hook's group for every role but the design
 - `server/src/coord/untrusted.ts#untrustedBlock`.
 - The keys a coordinator can name in W1a: a programme (by slug, `ledgersStore.ts`), an item (by id), a run (by id).
   Requests (W2) and operator messages (W1) do not exist yet.
-- The routes file, the attribution gate and the census sites (the start-report piece).
+- The routes file and the census sites (the start-report piece); the tree's one attribution gate,
+  `requireAttribution` (`server/src/coord/routes.ts`, over `attribution.ts#attributionVerdict`), answered through
+  `refuseRoute` (an unmeasurable registry is 502).
 - `shared/continuity.ts#NOTES_CAP` (`{ count: 200, chars: 500 }`), from the renewal-deciders piece.
 
 ## Global Constraints
@@ -131,7 +133,7 @@ CREATE TABLE continuity_handovers (
 A note is live when no row revises it and it does not close. The partial unique index makes a second revision of one
 note a constraint failure, so two revisions race to one winner.
 
-**Doors** (box token and attribution, the caller's own session; `identity` is the session id for a coordinator):
+**Doors** (box token and `requireAttribution`, the caller's own session; `identity` is the session id for a coordinator):
 - `POST …/notes` measures the key (a programme the caller coordinates, an item it raised or that its programme holds, a
   run it claims), asks `noteVerdict`, appends.
 - `GET …/notes` answers the live notes, newest first.
@@ -153,7 +155,9 @@ note a constraint failure, so two revisions race to one winner.
 ### Task 3: The client and the card
 
 **Files:**
-- Modify: `ccd/ccrc-api` (`note add`, `note list`, `note close`, `handover`, each a `ROUTES` row with a JSON body)
+- Modify: `ccd/ccrc-api` (`note add`, `note list`, `note close`, `handover`, each a `ROUTES` row with a JSON body;
+  the route count word four higher than it stands at merge, measured)
+- Modify: `server/test/ccrc-api.test.ts` (its `toHaveLength` and `WORDS` follow the four new rows)
 - Modify: `server/src/continuity/cardFacts.ts` (`notes` from `liveNotes`, `checkpoint.handover` from the handover row
   of the generation that ended last)
 - Modify: `server/src/continuity/card.ts` (the notes section, ranked by recency, inside `untrustedBlock` after the
@@ -173,16 +177,17 @@ None yet. Decisions this plan takes, by slug:
 
 - **note-keys-in-w1a** — in W1a a note keys to a programme, an item or a run (a coordinator's threads); `request` joins
   in W2 and `message` (a `miss`) in W1, as their rows appear. The spec names request, programme or item; a run is
-  added because a coordinator's thread is usually a run.
+  added because a coordinator's thread is usually a run. C37 and Table 11.1a now read so (this programme's spec
+  amendment).
 - **handover-table** — the handover note is a row of its own table keyed by generation, written by the note door, so
-  `continuity_generations` keeps one writer (Table 11.1a puts it "on the generation row").
+  `continuity_generations` keeps one writer; Table 11.1a now reads so (this programme's spec amendment).
 - **revision-by-unique-index** — a note has at most one revision, enforced by a partial unique index.
 - **handover-only-when-asked** — the handover door answers only while the caller's generation is `checkpointed`
   (`note-not-asked`).
 
 ## Where things stand
 
-**Needs before it starts:** the start-report piece (the routes file, attribution), the generations piece (the
+**Needs before it starts:** the start-report piece (the routes file), the generations piece (the
 `checkpointed` read; Task 2's handover only), the card piece (Task 3).
 
 **What depends on it:** clause 23 ("Keep your notes current"), the renewal-act piece (the checkpoint carries the

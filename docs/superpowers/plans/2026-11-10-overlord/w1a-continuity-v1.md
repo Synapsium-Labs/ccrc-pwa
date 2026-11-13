@@ -29,7 +29,9 @@ its word"), §11.5 (an older server reads the newer database), §14 (Table 14, W
   fleet node `ccd-update-sync` writes `~/.ccrc/server-caps` every minute.
 - `ccd/session-hook.sh#_hook_server_cap <word>` answers 0 when the word is advertised and current (a 180 s lease), 1
   otherwise.
-- The start report, its spool and the anchor fetch (the start-report and anchor pieces) run unconditionally.
+- The start report, its spool (`$REG/<id>.startpending`, with `startdropped`) and its resend, and the anchor fetch (the
+  start-report and anchor pieces) run unconditionally; the anchor is dark on the server until the operator arms the
+  `anchor-slot` row, so before this piece the fetch answers `dark` and the role card prints.
 
 ## Global Constraints
 
@@ -66,7 +68,7 @@ its word"), §11.5 (an older server reads the newer database), §14 (Table 14, W
 ### Task 2: The hook follows the word
 
 **Files:**
-- Modify: `ccd/session-hook.sh` (`_hook_start_report`, its resend and `_hook_anchor_card` run only when
+- Modify: `ccd/session-hook.sh` (`_hook_start_report`, `_hook_start_resend` and `_hook_anchor_card` run only when
   `_hook_server_cap continuity-v1` answers 0)
 - Test: `server/test/session-hook-start-report.test.ts`, `server/test/session-hook-anchor.test.ts`
 
@@ -85,7 +87,8 @@ None yet. Decisions this plan takes, by slug:
 
 ## Where things stand
 
-**Needs before it starts:** every other W1a machine piece merged.
+**Needs before it starts:** every other W1a machine piece merged (clause 21's piece included, which waits for the
+replay baseline).
 
 **What depends on it:** W1's designate and rebind doors (`capability-missing` names `continuity-v1`), and any later
 reader that must know the continuity machine is present.

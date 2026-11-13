@@ -29,7 +29,7 @@ database).
 ## What exists today
 
 - `continuity_starts` and `continuity/continuityStore.ts` (the start-report piece): one row per reported start, with
-  `sessionId`, `uuid`, `source`, `model`, `regGen`, `receivedAt`; `startsSince(sinceId)`.
+  `sessionId`, `uuid`, `source`, `model`, `rowIncarnation`, `receivedAt`; `startsSince(sinceId)`.
 - The deciders (the renewal-deciders piece): `generationStep`, `renewalDue`, `RENEWAL_ROWS`, `observeTime`, and
   `shared/continuity.ts`'s vocabulary.
 - `roleOf` and `roleFactsOf` (`server/src/roleOf.ts`, the latter from the renewal-deciders piece, Task 0).
@@ -67,8 +67,8 @@ database).
 
 1. Mint and end are one transaction: no instant exists with two non-ended generations for one identity, and a
    resent start mints nothing (the start's id is on the row, unique).
-2. A compaction start mints nothing; a child's start (if any arrives) mints nothing; an undecided role mints nothing
-   and is counted.
+2. A compaction start mints nothing; a fork's start (if any arrives) mints nothing and ends nothing; a child's start
+   (if any arrives) mints nothing; an undecided role mints nothing and is counted.
 3. A pass after a restart resumes from the cursor and the stored columns, never from memory.
 4. Shadow writes only the two tables, by an import pin that goes red if the lane gains a sending import.
 
@@ -81,9 +81,13 @@ database).
   seed row `continuity`, `shadow`)
 - Modify: `server/src/continuity/continuityStore.ts` (the generation functions)
 - Modify: `server/src/coord/store.ts` (delegates)
-- Modify: `shared/lane-arm.ts` (`CONTINUITY_LANE` in `LANE_ARM_LANES`, card words: "Renew long-lived sessions")
+- Modify: `shared/lane-arm.ts` (`CONTINUITY_LANE` in `LANE_ARM_LANES`, card words: "Renew long-lived sessions"; one
+  append-only row, shared with the launch-profiles piece: see the index's "Where lanes meet")
+- Modify: `pwa/src/fleet/ShadowLanesSection.tsx` (its `Record<LaneArmLane, …>` needs the new lane's entry, or the PWA
+  does not compile; one append-only entry)
 - Modify: `server/test/single-definition/writers-map.test.ts`
-- Test: `server/test/continuity-generations-store.test.ts` (new), `server/test/coord-db.test.ts`, the lane-arm suites
+- Test: `server/test/continuity-generations-store.test.ts` (new), `server/test/coord-db.test.ts`, the lane-arm suites,
+  the Shadow lanes card's suite (measure: `grep -ln 'ShadowLanesSection' pwa/test`) and pwa's `tsc`
 
 **Schema:**
 
@@ -93,11 +97,13 @@ CREATE TABLE continuity_generations (
   identity    TEXT NOT NULL,          -- a coordinator's session id; 'overlord' from W1
   sessionId   TEXT NOT NULL,
   role        TEXT NOT NULL,          -- a FleetRole word
-  term        INTEGER NOT NULL,       -- a coordinator's registry generation; the designation's term from W1
+  term        INTEGER NOT NULL,       -- 1 in W1a; the designation's term from W1
+  rowIncarnation TEXT,                -- the registry row's incarnation at the start (continuity_starts), or null
   n           INTEGER NOT NULL,
   state       TEXT NOT NULL,          -- a GenerationState word
   enteredAt   INTEGER NOT NULL,       -- wall ms
-  deadlineAt  INTEGER,                -- wall ms; null in active, degraded and ended
+  deadlineAt  INTEGER,                -- wall ms; set from STATE_DEADLINE_S by the write that enters a state with a
+                                      -- deadline (mint for carded, a step for the others); null in active, degraded, ended
   dueSince    INTEGER, dueWhy TEXT, dueClass TEXT,
   blind       TEXT,                   -- JSON array of RenewalTrigger words the last pass could not read
   model TEXT, lane TEXT, host TEXT,
@@ -122,8 +128,10 @@ live row is not the `(term, n, state)` the caller read); `stepGeneration(id, exp
 
 - [ ] **Step 1: Failing tests:** mint ends the old row (`outcome` set) and inserts the next in one transaction (a forced
   failure leaves both unchanged); a second live row for one identity is refused by the partial unique index; a stale
-  `expect` answers `superseded` / `changed: false`; a start id minted twice answers `superseded`; the migration's slot,
-  the seed row `continuity` = `shadow`.
+  `expect` answers `superseded` / `changed: false`; a start id minted twice answers `superseded`; a mint at `carded`
+  sets `deadlineAt` to `enteredAt + STATE_DEADLINE_S.carded × 1000`, a step into `probing` sets its own, a step into
+  `active` clears it; the migration's slot, the seed row `continuity` = `shadow`; the Shadow lanes card lists the new
+  lane.
 - [ ] **Step 2: Run.** Red. **Step 3: Implement.** **Step 4: Run** this suite, `test/coord-db.test.ts`,
   `test/single-definition/writers-map.test.ts`, the lane-arm suites. Green.
 - [ ] **Step 5: Mutation.** Drop the partial unique index: the two-live-rows case goes red. Revert.
@@ -137,20 +145,22 @@ live row is not the `(term, n, state)` the caller read); `stepGeneration(id, exp
 - Modify: `server/src/index.ts` (wire it with `Deps.time` and the store)
 - Test: `server/test/continuity-generations-lane.test.ts` (new)
 
-The pass reads starts after the cursor (at most 200), and for each: skip `source: compact`; read the session's
+The pass reads starts after the cursor (at most 200), and for each: skip `source: compact` and `source: fork` (a
+fork is another conversation in the same pane, never this identity's next life); read the session's
 registry record and gather facts with `roleFactsOf`; skip a role that is not long-lived, and an undecided reading
 (counted, logged once a pass); mint with outcome by source (`clear`/`startup` after a renewal the lane asked for:
 `renewed` — none in this piece; a start with no renewal in flight: `crashed` if the old row was `active` and the
-registry generation did not change, `swapped` if the start's account differs from the row's `lane`, else `woken`);
+row incarnation did not change, `swapped` if the start's account differs from the row's `lane`, else `woken`);
 `resumed` from `source: resume`; `observed` from `observeTime(null, clock.mono(), proc)`. Then advance the cursor to the
 last id read, in the same transaction as the last mint.
 
 - [ ] **Step 1: Failing tests** (an in-memory `coord.db`, the fake time ports, a fake registry): a coordinator's
-  `startup` mints n=1 at `carded`; its `clear` mints n=2 and ends n=1; a `compact` start mints nothing; a worker's
+  `startup` mints n=1 at `carded`; its `clear` mints n=2 and ends n=1; a `compact` start mints nothing; a `fork` start
+  mints nothing and leaves n=2 live; a worker's
   start mints nothing; an unmeasured claim read (undecided `coordinator-or-plain`) mints nothing and is counted; a
   restart of the lane re-reads from the cursor and mints nothing twice; 201 starts take two passes.
 - [ ] **Step 2: Run.** Red. **Step 3: Implement.** **Step 4: Run.** Green.
-- [ ] **Step 5: Mutation.** Mint on `compact`: red. Revert.
+- [ ] **Step 5: Mutation.** Mint on `compact`: red. Mint on `fork`: red. Revert each.
 - [ ] **Step 6: Commit.** `feat(continuity): the generations lane mints a generation at every start of a long-lived session`
 
 ### Task 3: The pass records `renewalDue` on every live generation
@@ -201,6 +211,14 @@ None yet. Decisions this plan takes, by slug:
   `renewed` is written only for a start the lane asked for.
 - **overlord-inputs-unmeasured-until-w1** — the Overlord's rows read `unmeasured` (reason `W1`) in W1a, so they appear
   in `blind` and never fire.
+- **fork-is-not-a-generation** — a `fork` start mints nothing and ends nothing; the hook does not report one, and the
+  lane skips one that arrives.
+- **deadline-set-on-entry** — the write that enters a state with a deadline sets `deadlineAt` from `STATE_DEADLINE_S`
+  in the same compare-and-set; nothing else writes it.
+- **shadow-week-counts-new-starts-only** — rows are minted only at a reported start, so a long-lived session already
+  running when this piece merges has no row until its next start; and in shadow, probes are announced only by the
+  live-only first prompt, so most shadow `probing` rows time out to `degraded`. The arming item (the renewal-act piece)
+  says both, so its counts are read for what they are.
 - **lane-cursor-row** — the lane's position in `continuity_starts` is its own row, `continuity_cursor`, written with the
   last mint of a pass.
 

@@ -4,7 +4,9 @@
 > superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** the coordinator skill gains the recall clause, pinned verbatim, in the one pull request that also raises the
-skill's size cap by the clause's bytes and no more.
+skill's size cap by the clause's bytes and no more. It merges only after the replay baseline is taken, because it
+changes what a coordinator recalls, and a baseline taken after it would measure the clause, not today's recall (ruling 1
+of this programme's fix round; W0-28's "before any other part of W1a is armed").
 
 **Why:** recall is barely used (7 of 368 session families in a week, Table 3.3.9b). After a compaction or a renewal a
 coordinator acts on what it recalls, and a summary of a summary is where an id or a ruling's words go wrong (§3.3,
@@ -90,10 +92,16 @@ server before you act on it. Keep your notes current: what each open thread wait
 None yet. Decisions this plan takes, by slug:
 
 - **recall-clause-is-21** — the spec's working name is clause 23; it lands as 21, the next free number (§11.4).
+- **recall-clause-after-the-baseline** — the clause merges after the replay quiz's baseline row exists, because a skill
+  clause reaches every coordinator at its next install and would contaminate the baseline; the merge arms it, so it
+  is ordered rather than switched.
 
 ## Where things stand
 
-**Needs before it starts:** the notes piece (the clause's second sentence names an act its door serves). The ratchet
+**Needs before it starts:** the notes piece (the clause's second sentence names an act its door serves), and the
+replay baseline taken: a baseline row in `continuity_quiz_runs` (the replay-quiz piece), measured on the server before
+the pull request is enqueued and named in its description. The plan may be built and reviewed before that; it does not
+merge until then. The ratchet
 (#2565) has merged, so this is the first pull request to use the one allowed raise (the carried constraint).
 
 **What depends on it:** W1's clause 22 (the Overlord clause) and W4b's clause 24 take the next numbers after it.

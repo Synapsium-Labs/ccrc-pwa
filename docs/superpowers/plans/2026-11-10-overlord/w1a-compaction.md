@@ -6,7 +6,7 @@
 **Goal:** every session's compaction carries instructions written for its role: ccd's auto-compact types
 `/compact <the role's text>`, and history W3's one PreCompact print carries the same text as a section where W3 is
 armed. A long-lived session's proactive automatic compaction can be refused once a turn and turned into a soft renewal,
-an arm that ships dark until the renewal-act piece arms it.
+an arm that ships dark until the generations lane writes its route field (the renewal hand-offs piece).
 
 **Why:** auto-compact types a bare `/compact` today (Table 3.3.9b), so a summary keeps whatever the model picks.
 Summaries of summaries lose ids and paths, and errors become canon (§3.3). The instructions keep what each role needs
@@ -17,8 +17,9 @@ the PreCompact print this piece adds a section to; the spec orders this piece af
 **Architecture:** the text is a column of `FLEET_ROLES` (L0), read through `compactInstructionsFor(role)` (L1). It
 reaches ccd as a field of the launch-profile projection (`ccd/lib/launch-profiles.json`), keyed by the route's
 `profile` field, so ccd and the hook read one copy. Two carriers, one source: ccd's auto-compact and the hook's
-PreCompact print. The refusal arm is a decision inside that same print, reading a route field the renewal-act piece
-writes; its refusals are journalled in the compactions journal, where `renewalDue` reads them. One pull request.
+PreCompact print. The refusal arm is a decision inside that same print, reading a route field the generations lane
+writes (through the renewal hand-offs piece, Task 6); its refusals are recorded in the hook's compaction events file
+(the context-readings piece), never in the PostCompact journal, and `renewalDue` reads them from there. One pull request.
 
 **Tech Stack:** TypeScript (ESM), bash (`ccd/ccd`, `ccd/session-hook.sh`), `jq`, vitest with `makeCcdHarness`.
 
@@ -42,7 +43,9 @@ them; this part waits for history W3-1), §14 (Figure 8).
   `docs/superpowers/plans/2026-10-29-ccrc-history-w3-steering.md`; W3-2 (the breaker) and W3-3 (arming) are pending.
 - `shared/fleetRoles.ts#FLEET_ROLES` has `compactInstructions: null` (D-8209). The launch-profiles piece adds
   `ccd/lib/launch-profiles.json` and the route field `profile`.
-- The compactions journal and its `pre` line (the context-readings piece); `renewalDue`'s `two-compactions` and
+- The compaction events file `$REG/<id>.compactevents` and its `pre` line, written by `_hook_compact_event` after
+  `_hook_history_pre` (the context-readings piece); the PostCompact journal `$REG/<id>.compactions`, which takes no
+  new line shape (ask 367); `renewalDue`'s `two-compactions` and
   `compaction-refused` rows (the renewal-deciders piece).
 
 ## Global Constraints
@@ -83,6 +86,9 @@ them; this part waits for history W3-1), §14 (Figure 8).
   constant)
 - Create: `server/src/continuity/compaction.ts` (L1: `compactInstructionsFor(role: FleetRole): string`)
 - Modify: `server/test/fleet-roles.test.ts`
+- Assumes: card PR A's commit that lays `FLEET_ROLES` out one column per line and splits
+  `server/test/fleet-roles.test.ts`'s null-columns case one column per line, and its C3 row `continuity/**`; this
+  piece edits only its own column's lines in both files
 - Test: `server/test/continuity-compaction.test.ts` (new)
 
 **The texts** (one line each, at most 600 characters, no quote characters, ending with the history instruction):
@@ -139,22 +145,31 @@ them; this part waits for history W3-1), §14 (Figure 8).
 ### Task 4: The refusal arm, dark
 
 **Files:**
-- Modify: `ccd/ccd` (`ROUTE_FIELDS` gains `precompact`, values `refuse|allow`; the renewal-act piece is its one writer)
+- Modify: `ccd/ccd` (`ROUTE_FIELDS` gains `precompact`, values `refuse|allow`; the generations lane, through the
+  renewal hand-offs piece's Task 6, is its one writer)
+- Modify, the route vocabulary, so the server can write and read the field back (each a one-line, append-only row):
+  `shared/api.ts` (`ROUTE_WRITABLE_FIELDS` and `parseRouteFields`'s accepted fields, in the route region),
+  `server/src/ccdargv.ts` (`routeSet`'s filter follows the list), `server/src/registry.ts` (its route read follows the
+  list), the PWA's route display if it enumerates fields (measure: `grep -rn 'ROUTE_WRITABLE_FIELDS' pwa/src`)
 - Modify: `ccd/session-hook.sh` (inside `_hook_history_pre`'s path, before the print: when `trigger` is `auto` and the
-  route's `precompact` is `refuse` and no refusal was journalled for this turn, answer PreCompact's block decision and
-  journal `{at, trigger, transcript, phase: "refused"}` through the journal's one append; otherwise fall through to the
-  print; the route field is read whether or not `steer-on` exists, since the refusal is the arm's decision, not the
-  steer's)
-- Modify: `server/src/continuity/compactions.ts` (`CompactionLine.phase` gains `refused`; `compactionsSince` does not count
-  it; `refusedSince(lines, sinceMs): boolean` for `renewalDue`'s `compactionRefused` input)
+  route's `precompact` is `refuse` and no refusal was recorded for this turn, answer PreCompact's block decision and
+  set the arm's verdict so the PreCompact arm's `_hook_compact_event` call (after `_hook_history_pre`) records
+  `refused` in place of `pre`; otherwise fall through to the print, and the event records `pre`; the route field is
+  read whether or not `steer-on` exists, since the refusal is the arm's decision, not the steer's)
+- Modify: `server/src/continuity/compactions.ts` (`CompactionLine.phase` gains `refused`; `compactionsSince` does not
+  count it; `refusedSince(lines, sinceMs): boolean` for `renewalDue`'s `compactionRefused` input)
 - Create: `server/src/continuity/precompact.ts` (L1 `precompactDecision(trigger, field, refusedThisTurn)`, the twin the
   simulator and a parity test use)
-- Test: `server/test/session-hook-precompact-refuse.test.ts` (new), `server/test/continuity-compactions.test.ts`
+- Test: `server/test/session-hook-precompact-refuse.test.ts` (new), `server/test/continuity-compactions.test.ts`,
+  `server/test/ccd-route-fields.test.ts` (its pin of `ROUTE_FIELDS` becomes nine fields, `precompact` last),
+  `server/test/single-definition/update-stall.test.ts` (it guards the list; measure whether it needs a row)
 
-- [ ] **Step 1: Failing tests:** field absent: no refusal (dark); `refuse` + `auto`: blocked once, one `refused` line;
-  the same turn's second PreCompact passes; `manual` is never refused; `allow` passes; `compactionsSince` ignores
-  `refused`, `refusedSince` sees it; the bash arm and `precompactDecision` agree on every input (a parity table run
-  through both).
+- [ ] **Step 1: Failing tests:** field absent: no refusal (dark); `refuse` + `auto`: blocked once, one `refused` line in
+  `compactevents` and no `pre` line for that event; the PostCompact journal untouched; the same turn's second
+  PreCompact passes and records `pre`; `manual` is never refused; `allow` passes; `compactionsSince` counts neither
+  the `refused` nor anything for it, `refusedSince` sees it; the route vocabulary: `routeSet(id, {precompact: 'refuse'})`
+  builds its argv, the registry reads the field back, and an unknown value is refused; the bash arm and
+  `precompactDecision` agree on every input (a parity table run through both).
 - [ ] **Step 2: Run.** Red. **Step 3: Implement.** Measure the PreCompact block decision's exact JSON from the W0a
   scenario (`server/test/delegation-rig/scenarios-overlord/`) and cite it. **Step 4: Run.** Green. Register the floor.
 - [ ] **Step 5: Mutation.** Refuse `manual` too: red. Revert.
@@ -167,18 +182,19 @@ None yet. Decisions this plan takes, by slug:
 - **compaction-text-rides-the-profile-projection** — ccd and the hook read the role's text from
   `ccd/lib/launch-profiles.json`, keyed by the route's `profile`, one copy held equal to `FLEET_ROLES` by a test.
 - **refusal-reads-a-route-field** — the arm reads the route field `precompact`; absent is dark. Its writer is the
-  renewal-act piece, which knows the soft budget.
-- **refusal-journalled-as-a-phase** — a refusal is a `refused` line in the compactions journal, read by the server as
-  `renewalDue`'s `compactionRefused` input; no new door.
+  generations lane (the renewal hand-offs piece's Task 6), which knows the soft budget.
+- **refusal-journalled-as-a-phase** — a refusal is a `refused` line in the compaction events file, written in place
+  of the event's `pre` line and read by the server as `renewalDue`'s `compactionRefused` input; the PostCompact
+  journal takes no new line shape (ask 367); no new door.
 - **instructions-one-line** — each text is one line of at most 600 characters with no quotes, so it can be typed as one
   literal send.
 
 ## Where things stand
 
 **Needs before it starts:** the launch-profiles piece (PR A: the projection and the `profile` route field), the
-context-readings piece (the journal's append and reader), history W3-1 (merged, #2510).
+context-readings piece (the events file, its writer `_hook_compact_event` and the reader), history W3-1 (merged, #2510).
 
-**What depends on it:** the renewal-act piece (it writes `precompact`); history W3-3's arming (the operator's), which
+**What depends on it:** the renewal hand-offs piece (its Task 6 has the generations lane write `precompact`); history W3-3's arming (the operator's), which
 turns the second carrier on per backend.
 
 **Open questions for the operator:** none in this piece; arming history's steer stays the operator's, per backend.

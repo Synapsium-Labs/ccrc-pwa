@@ -59,8 +59,9 @@ timer), Table 11.5b, §11.7 (Table 11.7b; monotonic by construction).
 - **Mutation floors.** `renewalDue`, `softRenewalMay`, `generationStep` and `observeTime` each join `MUTANT_SETS` and
   `server/test/sim/mutation-floors.json` in the task that creates them; a floor only rises.
 - **Time scan.** The modules sit in `server/src/continuity/` and `server/src/time/`, inside
-  `TIME_PORT_FAMILIES`; the first piece to create `server/src/continuity/` adds `continuity/**` to C3's row of the
-  ring-context table in `docs/superpowers/specs/2026-08-10-architecture-ddd-clean-solid.md`.
+  `TIME_PORT_FAMILIES`; card PR A owns `continuity/**` in C3's row of the ring-context table in
+  `docs/superpowers/specs/2026-08-10-architecture-ddd-clean-solid.md`; this piece assumes it, and if it merges
+  before card PR A it carries the same byte-identical edit.
 - **Simulator limits (carried).** A simulator predicate that reads sweep times assumes the simulator's beat; an async
   lane runs after the timers. Task 6's predicates read only generation rows and the fake clock, never sweep phases.
 - Cite by symbol or `@anchor`. No private names. No D-number invented; departures go in
@@ -72,7 +73,10 @@ timer), Table 11.5b, §11.7 (Table 11.7b; monotonic by construction).
 2. A stale or unmeasured reading never makes a renewal due; `renewalDue` names it as blind instead.
 3. Observed time never advances across a gap (a new process, a mono reading that went backwards).
 4. `generationStep` never answers `active` from `carded` or from `probing` without a read card and a passed round, and a
-   failure before the receipt's first half returns to the state the renewal began from.
+   failure before the receipt's first half returns the generation to `active` with a hold-off, whatever state the
+   renewal began from (§3.3.11; the model's `FAILED_RENEWAL_RETURNS='active'`).
+5. A soft renewal can start in W1a: an input a role does not have is `not-applicable`, never `unmeasured`, and the
+   break is a disjunction that fires on any measured disjunct.
 
 ---
 
@@ -111,7 +115,8 @@ export function roleFactsOf(sessionId: string, i: RoleFactInputs): RoleFacts;
 **Files:**
 - Create: `shared/continuity.ts`
 - Create: `server/test/continuity-vocabulary.test.ts`
-- Modify: `docs/superpowers/specs/2026-08-10-architecture-ddd-clean-solid.md` (C3's row: `continuity/**`, if absent)
+- Assumes: C3's row `continuity/**` (card PR A owns it; if this piece merges first, it carries the same byte-identical
+  edit to `docs/superpowers/specs/2026-08-10-architecture-ddd-clean-solid.md`)
 
 **Interfaces (all exported, each list derived from one map, as `PR_REASONS` is):**
 
@@ -244,13 +249,22 @@ for a resumed long conversation) are the L0 constants of Task 1.
 **Interfaces:**
 
 ```ts
+/** An input a role does not have. Distinct from `unmeasured` (an input it has but could not read): only `unmeasured`
+ *  makes a soft renewal wait. Per role, in W1a: a coordinator's `readersRunning` is `not-applicable`, because the
+ *  hibernate hold answers its reader wait (an unfinished turn or a background task holds it; slug
+ *  `coordinator-readers-by-the-hold`), and its `placeHiddenFor` is `not-applicable` (the console report is the
+ *  Overlord's). The Overlord's inputs read `unmeasured` (reason `W1`) until W1. */
+export type SoftReading<T> = Reading<T> | { readonly kind: 'not-applicable' };
 export interface SoftInputs {
   readonly role: FleetRole;
   readonly hibernateHold: { readonly held: false } | { readonly held: true; readonly reason: string };  // hibernateVerdict's answer
-  readonly readersRunning: Reading<number>;            // the hook's reader start and stop reports
-  readonly lastOperatorActivityMs: Reading<number>;    // overlord: its last operator message (W1); coordinator: the
-                                                       // operator-at-programme mark's age
-  readonly placeHiddenForMs: Reading<number>;          // overlord, W1's console report
+  readonly readersRunning: SoftReading<number>;        // overlord: the hook's reader reports (W1)
+  // The break's two clocks are observed time (Table 11.5b): each is `observedSince(stamp, now)` from Task 2, never a
+  // wall difference.
+  readonly lastOperatorActivityObservedMs: SoftReading<number>;  // overlord: its last operator message (W1);
+                                                       // coordinator: the operator-at-programme mark's age (the
+                                                       // renewal hand-offs piece; until it lands, `unmeasured`)
+  readonly placeHiddenForObservedMs: SoftReading<number>;  // overlord, W1's console report
   readonly mode: 'when-away' | 'on-schedule';          // the Setting (R19); default when-away
   readonly dueSinceObservedMs: number;                 // how long the soft trigger has waited
   readonly generationAgeObservedMs: number;            // least age
@@ -265,14 +279,24 @@ export function softRenewalMay(i: SoftInputs): SoftAnswer;
 export function earlyWhileAway(role: FleetRole, i: RenewalInputs): boolean;
 ```
 
-Order of the waits: `least-age`, `hold-off`, `budget`, `overlord-first`, `hold`, `readers`, then the break. A break is
-`lastOperatorActivity >= BREAK_NO_MESSAGE_MS` or `placeHidden >= BREAK_PLACE_HIDDEN_MS` (quiet hours join in W3, with
-their Setting). In `on-schedule` mode, a trigger that has waited 30 minutes skips the break test only. Any `unmeasured`
-input answers `unmeasured`, never `start`.
+Order of the waits: `least-age`, `hold-off`, `budget`, `overlord-first`, then the preconditions: `hold`, `readers`,
+then the break. `readers` waits only on a measured count above zero or an `unmeasured` reading; `not-applicable`
+passes. The break is a disjunction (spec: "one of" its conditions): `lastOperatorActivityObserved >=
+BREAK_NO_MESSAGE_MS` or `placeHiddenForObserved >= BREAK_PLACE_HIDDEN_MS` (quiet hours join in W3, with their
+Setting). It is open when any measured disjunct says so; when none does and at least one applicable disjunct is
+`unmeasured`, the answer is `unmeasured`; when every applicable disjunct is measured and none says so, `no-break`; a
+`not-applicable` disjunct is left out. In `on-schedule` mode, the preconditions delay a soft trigger at most 30
+minutes (Appendix B: "the preconditions, at most 30 minutes"; ruling 3 of this programme's fix round): once
+`dueSinceObservedMs >= 1_800_000`, `hold`, `readers` and the break no longer delay it, while `least-age`, `hold-off`,
+`budget` and `overlord-first` still do. Outside that, an `unmeasured` input answers `unmeasured`, never `start`.
 
-- [ ] **Step 1: Failing tests:** exhaustive over each wait's input at {unmeasured, blocking, clear} one at a time and in
-  pairs (the first wait in order is named); `on-schedule` after 30 minutes skips the break but not the hold; the
-  monotonicity property (unmeasured never turns a wait into a start). `earlyWhileAway`: at half the soft ceiling and
+- [ ] **Step 1: Failing tests:** exhaustive over each wait's input at {unmeasured, not-applicable, blocking, clear} one
+  at a time and in pairs (the first wait in order is named); a coordinator with `readersRunning` and
+  `placeHiddenFor` `not-applicable`, no hold and a mark 21 minutes old starts; the same with the mark `unmeasured`
+  waits `unmeasured`; the break opens on one measured disjunct while the other is `unmeasured`; `on-schedule` after 30
+  minutes starts past a standing hold, readers and no break, but not past least age, the hold-off, the budget or the
+  Overlord's renewal; at 29 minutes it still waits on the hold; the monotonicity property (unmeasured never turns a
+  wait into a start, outside `on-schedule`'s cap). `earlyWhileAway`: at half the soft ceiling and
   half the turns, yes; below, no; an unmeasured reading, no.
 - [ ] **Step 2: Run.** Red. **Step 3: Implement.** **Step 4: Run.** Green. Register both floors.
 - [ ] **Step 5: Commit.** `feat(continuity): softRenewalMay, the preconditions and the budget a soft renewal waits for (R19)`
@@ -308,15 +332,17 @@ export function generationStep(g: GenView, e: GenEvent): { readonly next: GenVie
 
 Table 3.3.11a's rules, as the machine: `due` → `draining` (hard skips nothing here; it skips `checkpointed` later);
 `drained` → `checkpointed`, or `clearing` on a hard trigger; `handover` or `deadline` in `checkpointed` → `clearing`;
-`deadline` in `draining` → back to `from` (`active` with `set-hold-off`, or `degraded`); `host-failed` before the first
-half → back to `from`; after it, retry while the deadline stands, then `degraded` with `raise-item`; `started` on any
+`deadline` in `draining` → `active` with `set-hold-off`; `host-failed` before the first half → `active` with
+`set-hold-off`, also when the renewal began in `degraded` (§3.3.11: "A failure before the first half returns the
+generation to active, with a hold-off"); after it, retry while the deadline stands, then `degraded` with `raise-item`; `started` on any
 generation → this one `ended` (`end-this`) and the next minted at `carded` (`mint-next`); `card-read` with a match →
 `probing` (`start-probes`); `deadline` in `carded` → one `renudge-card`, then `degraded`; `probes` passed → `active`;
 failed once → re-read and probe again; twice → `degraded` with `raise-item`; `renew-now` in `degraded` or `active` →
 `draining`. Any event a state does not name is ignored (the same view, no action).
 
 - [ ] **Step 1: Failing tests.** Exhaustive over every state × every event × `from` × `cls` × the counters' edge values,
-  against a table written out in the test (the spec's words cited in each row's title). Properties (seeded, 10,000
+  against a table written out in the test (the spec's words cited in each row's title); among them, a renewal that
+  began in `degraded` and failed before the first half lands in `active` with `set-hold-off`. Properties (seeded, 10,000
   random event sequences from `active`): never `active` from `carded` or `probing` without a matching `card-read` and a
   passed round; a sequence with no `started` mints nothing; at most one `renew` per generation per try; `ended` is
   terminal.
@@ -363,6 +389,19 @@ None yet. Decisions this plan takes, by slug:
 - **outcome-woken** — `GenerationOutcome` adds `woken` beside the spec's "woken elsewhere", for a wake on the same host.
 - **break-without-quiet-hours** — until W3's quiet-hours Setting exists, a break is the message test or the hidden
   place.
+- **soft-input-not-applicable** — each soft input is `measured`, `unmeasured` or `not-applicable` per role; only
+  `unmeasured` makes a soft renewal wait, and the break opens on any measured disjunct; the break's ages are observed
+  time.
+- **coordinator-readers-by-the-hold** — in W1a the hibernate hold answers a coordinator's reader wait (an unfinished
+  turn or a background task holds it), so its `readersRunning` is `not-applicable` until the hook's reader reports
+  arrive in W1.
+- **on-schedule-capped-at-30-minutes** — in `on-schedule` mode the preconditions (the hold, readers, the break) delay
+  a soft trigger at most 30 minutes, as Appendix B reads; least age, the hold-off, the budget and the Overlord's
+  renewal still apply.
+- **failed-renewal-returns-active** — a failure before the receipt's first half returns the generation to `active`
+  with a hold-off, also when the renewal began in `degraded` (§3.3.11, and the model's default).
+- **generation-means-one-life** — the index's pick, followed here: "generation" is one life from start to start
+  (`GenerationState`, `continuity_generations`).
 
 ## Where things stand
 
