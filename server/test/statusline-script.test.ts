@@ -354,7 +354,8 @@ describe('statusline-command.sh writes the per-session usage sidecar (routing sp
     const row = usageFile(home, 'demo-quiet-basin.json') as Record<string, unknown>;
     expect(row).toEqual({
       ts: expect.any(Number), uuid: '11111111-2222-3333-4444-555555555555', account: 'zeta',
-      model: 'claude-opus-5', effort: 'high', ctxPct: 12, cost: 1.25, cacheExpiresAt: null, agent: null,
+      model: 'claude-opus-5', effort: 'high', ctxPct: 12, ctxTokens: null, ctxWindow: null, cost: 1.25,
+      cacheExpiresAt: null, agent: null,
     });
     expect(row['ts'] as number).toBeGreaterThanOrEqual(before);
     expect(row['ts'] as number).toBeLessThanOrEqual(Math.floor(Date.now() / 1000) + 1);
@@ -374,6 +375,29 @@ describe('statusline-command.sh writes the per-session usage sidecar (routing sp
     const home = seed('ccrc-statusline-usage-cache-'); seedReg(home);
     runUsage(home, usagePayload(extra), { tmux: 'cc-demo-cache' });
     expect(usageFile(home, 'demo-cache.json')).toMatchObject({ cacheExpiresAt: want });
+  });
+
+  // Overlord W0-18: Claude Code's payload carries the context's token count (input plus cache read plus cache creation)
+  // and the window's size beside the percentage; the renewal triggers read the count, never a percentage of an unknown
+  // window. Absent in the payload is null on the sidecar, never 0: a missing count is not an empty context.
+  it('carries the context token count and window size beside ctxPct, every existing field unchanged', () => {
+    const home = seed('ccrc-statusline-usage-ctxtok-'); seedReg(home);
+    runUsage(home, usagePayload({
+      context_window: { total_input_tokens: 71_000, context_window_size: 1_000_000, used_percentage: 7 },
+    }), { tmux: 'cc-demo-ctx' });
+    expect(usageFile(home, 'demo-ctx.json')).toEqual({
+      ts: expect.any(Number), uuid: '11111111-2222-3333-4444-555555555555', account: 'zeta',
+      model: 'claude-opus-5', effort: 'high', ctxPct: 7, ctxTokens: 71_000, ctxWindow: 1_000_000, cost: 1.25,
+      cacheExpiresAt: null, agent: null,
+    });
+  });
+
+  it('a payload with no context_window writes ctxTokens and ctxWindow as null, not 0', () => {
+    const home = seed('ccrc-statusline-usage-noctx-'); seedReg(home);
+    const p = JSON.parse(usagePayload()) as Record<string, unknown>;
+    delete p['context_window'];
+    runUsage(home, JSON.stringify(p), { tmux: 'cc-demo-noctx' });
+    expect(usageFile(home, 'demo-noctx.json')).toMatchObject({ ctxPct: null, ctxTokens: null, ctxWindow: null });
   });
 
   it('an agent render writes <ccd-id>.agents/<name>.json and leaves the main-loop row untouched', () => {

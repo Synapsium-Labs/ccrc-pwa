@@ -738,8 +738,25 @@ describe('the unarmed session forks nothing the steering added (Linux, strace -f
     expect(forks(HOOK), 'unarmed under history-steer-off').toBe(base);
     expect(fs.existsSync(histDir('steer-on')), 'nothing armed it').toBe(false);
     fs.rmSync(path.join(home, '.ccrc', 'history-steer-off'));
+    // CONTROL, on hooks without the compaction events arm (Overlord W1a): that arm asks the same scope verdict when the
+    // card did not run, so with it in place the armed print's verdict only moves a fork the unarmed run takes too.
+    const EVENTS_LINE = 'if [[ "$event" == PreCompact ]]; then _hook_compact_pre_line || true; fi';
+    const without = (lines: string[], name: string): string => {
+      const kept2 = lines.filter((l) => l !== EVENTS_LINE);
+      expect(lines.length - kept2.length, `${name} lost exactly the events arm's call line`).toBe(1);
+      const p = path.join(home, name);
+      fs.writeFileSync(p, kept2.join('\n'));
+      return p;
+    };
+    const noEventsBaseline = without(kept, 'hook-baseline-noevents.sh');
+    const noEvents = without(src, 'hook-noevents.sh');
+    // Unarmed too, without the events arm (review 1927 M4): with it in place, a scope ask moved ahead of the `steer-on`
+    // gate would only MOVE a fork the arm then skips, and the equality above would stay green.
+    forks(noEventsBaseline); forks(noEvents);                  // WARM-UP, as above
+    expect(forks(noEvents), 'unarmed, without the events arm').toBe(forks(noEventsBaseline));
     arm();                                                      // CONTROL: armed, the scope verdict is the print's own fork
-    expect(forks(HOOK), 'CONTROL: an armed session does fork for its scope verdict').toBeGreaterThan(base);
+    const baseNoEvents = forks(noEventsBaseline);
+    expect(forks(noEvents), 'CONTROL: an armed session does fork for its scope verdict').toBeGreaterThan(baseNoEvents);
   }, 120_000);
 });
 
