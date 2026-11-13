@@ -89,6 +89,7 @@ _pr_num_valid -> _child_runid_valid
 _profile_spawn_compose -> _reg_get_to
 _profile_spawn_compose -> _route_bytes
 _profile_spawn_compose -> _route_get
+_profile_spawn_compose -> _route_note_floored
 _redrive_after_spawn -> _reg_get
 _redrive_after_spawn -> _tmux_at
 _redrive_after_spawn -> _tmx

@@ -8,15 +8,19 @@
 //
 // CHARACTERIZATION FIRST (Review Focus 1): a row whose route names no profile spawns byte for byte as on the branch
 // point, flags and environment both, on a first start, a resume (both lines), a fresh start and a routed row. The
-// recording below was taken on the branch point's code, before `_profile_spawn_compose` existed.
+// recording below was taken on the branch point's code, before `_profile_spawn_compose` existed (fix round 1 added the
+// generation case and each case's stderr, recorded the same way, on the branch point's `ccd/ccd`): flags, environment
+// and warnings, so the composer adds no line to a no-profile spawn's stderr either.
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { execFileSync, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { makeCcdHarness, ghContainedEnv, CCD, type CcdHarness } from './ccdWsHelpers.js';
+import { COMPACT_WINDOW_MAX_TOKENS, COMPACT_WINDOW_MIN_TOKENS } from '../src/continuity/launchProfile.js';
 
 const ID = 'lane-a-project-a';
 const UUID = 'deadbeef-0000-4000-8000-000000000000';
+const GEN = 'cafebabe-0000-4000-8000-000000000000';
 const RESUME_DIES = `sleep() { :; };
     tmux() {
       echo "tmux $*" >> "$HOME/ccd-calls"
@@ -65,15 +69,26 @@ describe('no profile, no change: the spawn is byte for byte the branch point (Re
     ['resume, both lines', 'resume', [], ''],
     ['fresh start', 'new', [], `_reg_set ${ID} fresh ${UUID};`],
     ['routed row, resume', 'resume', [['effort', 'high'], ['workflow', 'on'], ['subagent', 'sonnet']], ''],
+    ['resume with a generation file', 'resume', [], `printf '%s' ${GEN} > "$HOME/.cc-sessions/${ID}.generation";`],
   ];
   for (const [name, mode, route, pre] of cases) {
     it(name, () => {
       seed(route);
-      const { lines } = spawn(mode, pre);
-      if (process.env.LP_RECORD === '1') console.log(`RECORD ${JSON.stringify([name, lines])}`);
+      const { lines, err } = spawn(mode, pre);
+      const errLines = err.split('\n').filter((l) => l !== '');
+      if (process.env.LP_RECORD === '1') console.log(`RECORD ${JSON.stringify([name, lines, errLines])}`);
       expect(lines).toStrictEqual(RECORDED[name]);
+      expect(errLines).toStrictEqual(RECORDED[`${name} (stderr)`]);
+      expect(err).not.toContain('launch profile');
     });
   }
+  it('the fresh start spends its receipt, and the generation case carries the generation', () => {
+    expect(RECORDED['fresh start']).toBeDefined();
+    seed();
+    spawn('new', `_reg_set ${ID} fresh ${UUID};`);
+    expect(h.reg(ID, 'fresh')).toBe(`used ${UUID}`);
+    for (const l of RECORDED['resume with a generation file']!) expect(l).toContain(`CCRC_SESSION_GENERATION='${GEN}'`);
+  });
 });
 
 // ── Applying a profile (Review Focus 2 and 5; plan Task 3 Step 2). ─────────────────────────────────────────────
@@ -174,17 +189,29 @@ describe('an unknown or unreadable profile never half-applies (Review Focus 2)',
     seed([['profile', 'worker']]);
     const row = (over: Record<string, unknown>): unknown => ({ worker: { env: {}, settings: {}, autoMemory: 'off', compactionSettings: {}, ...over } });
     for (const bad of ['{not json', row({ env: { CLAUDE_CODE_X: "a'b" } }), row({ env: { CLAUDE_CODE_X: 'a b' } }), row({ env: { PATH: '/x' } }),
-      row({ autoMemory: 'maybe' }), row({ settings: [] }), row({ env: { CLAUDE_CODE_X: 1 } }), { worker: null }]) {
+      row({ autoMemory: 'maybe' }), row({ settings: [] }), row({ env: { CLAUDE_CODE_X: 1 } }), { worker: null },
+      // jq's `$` matches before a final newline, so these two passed an unanchored check (review F3): the value would cut
+      // the env line after it, and the key would run as a program.
+      row({ env: { CLAUDE_CODE_X: '1\n', CLAUDE_CODE_Y: '2' } }), row({ env: { 'CLAUDE_CODE_X\n': '1' } })]) {
       const { lines, err } = spawn('new', altFile(bad));
       expect(lines, JSON.stringify(bad)).toStrictEqual(RECORDED['first start']);
       warned(err, 'worker');
     }
   });
-  it('a settings merge that fails takes the environment with it', () => {
+  it('a settings merge that fails takes the environment with it, and says so once, naming the merge', () => {
     seed([['profile', 'worker']]);
     const { lines, err } = spawn('new', altFile({ worker: { env: { CLAUDE_CODE_X: '1' }, settings: { k: "it's" }, autoMemory: 'off', compactionSettings: {} } }));
     expect(lines).toStrictEqual(RECORDED['first start']);
-    warned(err, 'worker');
+    expect(err.split('\n').filter((l) => l.includes('launch profile'))).toStrictEqual([
+      `ccd: warn: ${ID}: could not merge launch profile worker into this spawn's one --settings — spawning without them`]);
+  });
+  it('a profiles file that cannot be read journals its own route-unmeasured line, once, naming the file', () => {
+    seed([['profile', 'coordinator']]);
+    for (let i = 0; i < 2; i++) warned(spawn('new', `LAUNCH_PROFILES_JSON="$HOME/no-such.json";`).err, 'coordinator');
+    const log = fs.readFileSync(path.join(h.home, '.cc-sessions', 'swap.log'), 'utf8').split('\n').filter((l) => l.includes('route-unmeasured'));
+    expect(log).toHaveLength(1);
+    expect(log[0]).toContain(`route-unmeasured ${ID}: field profile could not be checked — this box's launch profiles (${h.home}/no-such.json) cannot be read`);
+    expect(log[0]).not.toContain('roster projection');
   });
   it('a stored word that is not a row: spawn as today, and the warning names it, or its byte count when it is not a word', () => {
     seed([['profile', 'bogus']]);
@@ -203,9 +230,10 @@ describe('the route fields: written by cmd_route, checked by _route_valid, skipp
     seed();
     expect(route(`--session ${ID} --set profile=coordinator --set automem=off --set compactwindow=350000`).status).toBe(0);
     expect([h.reg(ID, 'profile'), h.reg(ID, 'automem'), h.reg(ID, 'compactwindow')]).toEqual(['coordinator', 'off', '350000']);
-    for (const ok of ['100000', '1000000']) expect(route(`--session ${ID} --set compactwindow=${ok}`).status, ok).toBe(0);
-    for (const bad of ['profile=bogus', 'profile=Coordinator', 'profile=', 'automem=maybe', 'compactwindow=50', 'compactwindow=99999',
-      'compactwindow=1000001', 'compactwindow=0350000']) {
+    // The window's bounds are the decider's own constants (review F5), so a TS-only change to them reds here.
+    for (const ok of [COMPACT_WINDOW_MIN_TOKENS, COMPACT_WINDOW_MAX_TOKENS]) expect(route(`--session ${ID} --set compactwindow=${ok}`).status, `${ok}`).toBe(0);
+    for (const bad of ['profile=bogus', 'profile=Coordinator', 'profile=', 'automem=maybe', 'compactwindow=50', `compactwindow=${COMPACT_WINDOW_MIN_TOKENS - 1}`,
+      `compactwindow=${COMPACT_WINDOW_MAX_TOKENS + 1}`, 'compactwindow=0350000']) {
       const r = route(`--session ${ID} --set ${bad}`);
       expect(r.status, bad).not.toBe(0);
       expect(r.out, bad).toMatch(/not in its vocabulary/);

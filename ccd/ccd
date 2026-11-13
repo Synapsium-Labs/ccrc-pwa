@@ -10087,9 +10087,9 @@ cmd_route() {   # ccd route --session <id> --set <field>=<value> [--set ...] [--
     _route_word_in "$f" "${ROUTE_FIELDS[*]}" || die "unknown routing field '$f' (want one of: ${ROUTE_FIELDS[*]})"
     [[ "$f" == degraded || "$f" == inert ]] && die "'$f' is written by ccd only"
     # THREE ANSWERS, THREE SENTENCES (fix round 2, Finding 1). `_route_valid`
-    # answers 2 when the field's vocabulary itself could not be read — today
-    # only `subagent`, whose list is PROJECTED into `$HOME/.ccrc/accounts.sh`
-    # by `ccrc install` — and that is not the caller's value being wrong, it is
+    # answers 2 when the field's vocabulary itself could not be read — `subagent`,
+    # whose list is PROJECTED into `$HOME/.ccrc/accounts.sh` by `ccrc install`, and
+    # `profile`, whose rows are `LAUNCH_PROFILES_JSON` — and that is not the caller's value being wrong, it is
     # this box not being able to say. Both refuse (fail closed); they name
     # different remedies, and folding them into "bad value" told an operator
     # with a perfectly good `haiku` to go and fix `haiku`. The `*)` arm takes
@@ -22102,7 +22102,9 @@ _route_any() {   # id — 0 iff ANY routing field file exists (spec §5.1: a ses
   # THE LAUNCH PROFILE'S THREE (`profile`, `automem`, `compactwindow`; Overlord W1a, plan slug
   # profile-fields-outside-route-any) are not routing fields for this question either, for the same reason: they decide
   # the spawn's settings and environment, read on their own by `_profile_spawn_compose`. A profile-only row keeps today's
-  # seed, writes no empty `routeapplied` and is not read per tick by `_route_apply_pending` (m-B9).
+  # seed, and on the tick and spawn paths it is not read per tick by `_route_apply_pending` (m-B9) and writes no
+  # `routeapplied`. A `ccd route --set` of one on a never-routed row can leave an empty stamp, as `browser` does; the
+  # next spawn removes it.
   local f
   for f in "${ROUTE_FIELDS[@]}"; do case "$f" in browser|profile|automem|compactwindow) ;; *) [[ -e "$REG/$1.$f" ]] && return 0 ;; esac; done
   return 1
@@ -22113,8 +22115,8 @@ _route_valid() {   # field value — THREE answers, because two of them are two 
   #   1  the value is NOT in it — bad input, the caller's to refuse
   #   2  THE VOCABULARY ITSELF WAS UNAVAILABLE, so this call measured nothing
   #      about the value at all
-  # Only `subagent` can answer 2, and only because its vocabulary is the one
-  # that is not spelled in this file: it is `shared/models.mjs`'s
+  # Two fields can answer 2, because their vocabularies are not spelled in this file: `profile` (the rows of
+  # `LAUNCH_PROFILES_JSON`, below) and `subagent`, which is `shared/models.mjs`'s
   # `SUBAGENT_CLASSES` PROJECTED into `$HOME/.ccrc/accounts.sh` as
   # `CCRC_SUBAGENT_CLASSES` (routing slice 1, Task 1), and a projection written
   # before that line carries no such array — a hand-installed ccd, an adopt, or
@@ -26123,31 +26125,35 @@ _fleet_spawn_compose() {   # id launchflags -> sets FLEET_SPAWN_FLAGS; never fai
 #     `off`; and ONLY when the route carries `compactwindow` (written only while `continuity` is live, plan slug
 #     compaction-follows-continuity), the row's `compactionSettings` after `settings` and
 #     CLAUDE_CODE_AUTO_COMPACT_WINDOW=<compactwindow>.
-# One jq program reads the row and checks every key and value by shape: a value is a literal word, never quoted.
+# One jq program reads the row and checks every key and value by shape: a value is a literal word, never quoted, and the
+# anchors are `\A`/`\z`, since jq's `$` also matches before a final newline (a value `"1\n"` would cut the env line).
+# The word is read raw, not through `_route_get`, whose unmeasured note names the roster projection: a profiles file
+# that cannot be read journals its own `route-unmeasured` line here, floored by the same `routeunmeasprofile` marker.
 LAUNCH_PROFILES_JSON="${BASH_SOURCE[0]%/*}/lib/launch-profiles.json"
 [[ -f "$LAUNCH_PROFILES_JSON" ]] || LAUNCH_PROFILES_JSON="$HOME/.cc-sessions/lib/launch-profiles.json"
 PROFILE_ROW_JQ='.[$r] as $x
   | if ($x | type) == "object" and ($x.env | type) == "object" and ($x.settings | type) == "object"
        and ($x.compactionSettings | type) == "object" and ($x.autoMemory == "off" or $x.autoMemory == "switch")
-       and ($x.env | to_entries | all((.key | test("^CLAUDE_CODE_[A-Z_]+$")) and (.value | type == "string") and (.value | test("^[A-Za-z0-9._-]+$"))))
+       and ($x.env | to_entries | all((.key | test("\\ACLAUDE_CODE_[A-Z_]+\\z")) and (.value | type == "string") and (.value | test("\\A[A-Za-z0-9._-]+\\z"))))
     then . else error("malformed row") end
   | ($x.settings * (if $cw == "" then {} else $x.compactionSettings end) | tojson) + "\t"
     + ([$x.env | to_entries[] | "\(.key)=\(.value)"]
        + (if $x.autoMemory == "off" or $am == "off" then ["CLAUDE_CODE_DISABLE_AUTO_MEMORY=1"] else [] end)
        + (if $cw == "" then [] else ["CLAUDE_CODE_AUTO_COMPACT_WINDOW=" + $cw] end) | join(" "))'
 _profile_spawn_compose() {   # id launchflags -> sets PROFILE_SPAWN_FLAGS, PROFILE_SPAWN_ENV; never fails, never half-applies
-  local id="$1" p w am cw out="" pset="" penv=""
+  local id="$1" p="" am cw out="" pset="" penv=""
   PROFILE_SPAWN_FLAGS="$2"; PROFILE_SPAWN_ENV=""
   [[ -e "$REG/$id.profile" || -L "$REG/$id.profile" ]] || return 0
-  p=$(_route_get "$id" profile); am=$(_route_get "$id" automem); cw=$(_route_get "$id" compactwindow)
-  [[ -z "$p" ]] || out=$(jq -r --arg r "$p" --arg am "$am" --arg cw "$cw" "$PROFILE_ROW_JQ" "$LAUNCH_PROFILES_JSON" 2>/dev/null) || out=""
+  _reg_get_to p "$id" profile 2>/dev/null; am=$(_route_get "$id" automem); cw=$(_route_get "$id" compactwindow)
+  [[ "$p" =~ ^[a-z]{1,16}$ ]] && out=$(jq -r --arg r "$p" --arg am "$am" --arg cw "$cw" "$PROFILE_ROW_JQ" "$LAUNCH_PROFILES_JSON" 2>/dev/null) || out=""
   IFS=$'\t' read -r pset penv <<< "$out"
-  if [[ -z "$pset" ]] || { [[ "$pset" != '{}' ]] && ! _spawn_settings_last "$id" "$2" "$pset" "launch profile $p"; }; then
-    _reg_get_to w "$id" profile 2>/dev/null; [[ "$w" =~ ^[a-z]{1,16}$ ]] || w="<$(_route_bytes "$w") bytes>"
-    echo "ccd: warn: $id: launch profile $w unreadable — spawning without it" >&2
-    return 0
+  if [[ -z "$pset" ]]; then
+    [[ "$p" =~ ^[a-z]{1,16}$ ]] || p="<$(_route_bytes "$p") bytes>"
+    jq -e 'type == "object"' "$LAUNCH_PROFILES_JSON" >/dev/null 2>&1 || _route_note_floored "$id" routeunmeasprofile \
+      || echo "$(date '+%F %T') route-unmeasured $id: field profile could not be checked — this box's launch profiles ($LAUNCH_PROFILES_JSON) cannot be read; treated as absent — re-run ccrc install" >> "$REG/swap.log"
+    echo "ccd: warn: $id: launch profile $p unreadable — spawning without it" >&2; return 0
   fi
-  [[ "$pset" == '{}' ]] || PROFILE_SPAWN_FLAGS="$SPAWN_SETTINGS_FLAGS"
+  [[ "$pset" == '{}' ]] || { _spawn_settings_last "$id" "$2" "$pset" "launch profile $p" || return 0; PROFILE_SPAWN_FLAGS="$SPAWN_SETTINGS_FLAGS"; }
   PROFILE_SPAWN_ENV="$penv"
 }
 
