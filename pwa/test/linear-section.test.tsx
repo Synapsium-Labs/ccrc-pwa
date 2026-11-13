@@ -13,6 +13,7 @@ import { LinearSection, LINEAR_TEXT, LINEAR_TEAMS_SHOWN, workspaceControls, line
 import { useLinearWorkspaces } from '../src/fleet/useLinearWorkspaces';
 import { renderSettings } from './settingsHost';
 import { readLinearConnection, readLinearWorkspaces } from '../src/lib/api';
+import { PASSWORD_MANAGER_IGNORE } from '../src/lib/noAutofill';
 
 const LEAK = 'BOX-TEXT-THAT-MUST-NOT-REACH-THE-SCREEN';
 const NOW = 1_800_000_000_000;
@@ -489,7 +490,10 @@ describe('Add a workspace (§10.1, §10.2): the one key field', () => {
       install({ list: answer });
       await mount();
       expect(field().type).toBe('password');
-      expect(field().getAttribute('autocomplete')).toBe('off');
+      // A browser or password manager never fills the operator's saved sign-in into it (D-8405).
+      expect(field().getAttribute('autocomplete')).toBe('new-password');
+      for (const [attr, v] of Object.entries(PASSWORD_MANAGER_IGNORE)) expect(field().getAttribute(attr)).toBe(v);
+      expect(field().hasAttribute('name')).toBe(false);
       expect(document.getElementById(field().getAttribute('aria-describedby') ?? '')?.textContent).toBe('A read-only key lets sessions read but not write.');
       expect(addButton().disabled).toBe(true);
       type('   ');

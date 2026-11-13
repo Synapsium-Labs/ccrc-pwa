@@ -48,6 +48,7 @@ import { openExternal } from '../lib/markdown';
 import { ApiError } from '../lib/apiError';
 import { readAuthStatus } from '../lib/auth';
 import { onPageHidden } from '../lib/pageClock';
+import { SECRET_NO_AUTOFILL } from '../lib/noAutofill';
 import { apiErrorText, LEDGER_REFUSAL_TEXT, refusalText } from '../lib/refusalWords';
 import { SpecLink } from './GoalsPanel';
 import { linkRuns } from './ledgerLinks';
@@ -250,7 +251,7 @@ function SecretPanel({ item, saveSecret, stepUpDeps, authStatus, current }: {
       <form onSubmit={(e) => { e.preventDefault(); void submit(); }}>
         <div className="wi-field">
           <label className="wi-label" htmlFor={fieldId}>{SECRET_TEXT.label}</label>
-          <TextInput id={fieldId} className="wi-input" type="password" autoComplete="off" autoCapitalize="off" spellCheck={false}
+          <TextInput id={fieldId} className="wi-input" type="password" {...SECRET_NO_AUTOFILL} autoCapitalize="off" spellCheck={false}
                      aria-describedby={tooLong && !dark ? `${hintId} ${tooLongId}` : hintId} value={value} disabled={posture !== 'open'}
                      onChange={(e) => setValue(e.target.value)} />
           <span id={hintId} className="wi-hint">{dark ? SECRET_TEXT[darkWhy] : SECRET_TEXT.hint}</span>

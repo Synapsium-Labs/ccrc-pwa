@@ -1,13 +1,15 @@
 import { useEffect, useId, useImperativeHandle, useRef, useState, type ReactNode, type Ref } from 'react';
 import { Button, TextInput } from '@ccrc/ui';
 import { onPageHidden } from '../lib/pageClock';
+import { SECRET_NO_AUTOFILL } from '../lib/noAutofill';
 import { useLocation } from '../lib/router';
 
 /**
  * THE SECRET FIELD (spec §3.3, §12.4; accounts plan Task A18, D-7740): where a pasted token or key is typed, and the
  * one place in the app its value lives.
  *
- * - `type="password"` with a Show toggle (hidden by default), `autocomplete="off"`, `autocapitalize="off"`,
+ * - `type="password"` with a Show toggle (hidden by default), `autocomplete="new-password"` and the password managers'
+ *   opt-outs (`SECRET_NO_AUTOFILL`, D-8405: browsers ignore `off` on a password field), `autocapitalize="off"`,
  *   `spellcheck=false`, `inputmode="text"`, and no `name` a password manager would key on.
  * - THE VALUE LIVES IN THIS FIELD'S OWN DOM NODE, never in React state, a store or browser storage. The field is
  *   uncontrolled on purpose: React keeps a controlled input's `value` ATTRIBUTE in step with what is typed, which would
@@ -75,7 +77,7 @@ export function SecretField({ label, handle, onPresence, describedBy }: SecretFi
           id={fieldId}
           type={shown ? 'text' : 'password'}
           className="font-mono"
-          autoComplete="off"
+          {...SECRET_NO_AUTOFILL}
           autoCapitalize="off"
           autoCorrect="off"
           spellCheck={false}

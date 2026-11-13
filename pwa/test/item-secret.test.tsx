@@ -12,6 +12,7 @@ import { LEDGER_REFUSAL_TEXT } from '../src/lib/refusalWords';
 import type { StepUpDeps } from '../src/accounts/useStepUp';
 import type { AuthStatus } from '../../shared/api';
 import { api } from '../src/lib/api';
+import { PASSWORD_MANAGER_IGNORE } from '../src/lib/noAutofill';
 import { NOW, itemView } from './ledgersFixture';
 
 afterEach(() => { cleanup(); vi.restoreAllMocks(); });
@@ -56,7 +57,8 @@ describe('the secret panel (plan PL6)', () => {
   it('is a password field that does not autocomplete, and Save waits for a value; there is no Mark done', async () => {
     await show(vi.fn());
     expect(field().type).toBe('password');
-    expect(field().getAttribute('autocomplete')).toBe('off');
+    expect(field().getAttribute('autocomplete')).toBe('new-password');
+    for (const [attr, v] of Object.entries(PASSWORD_MANAGER_IGNORE)) expect(field().getAttribute(attr)).toBe(v);
     expect(saveButton().disabled).toBe(true);
     expect(screen.queryByRole('button', { name: 'Mark done' })).toBeNull();
   });

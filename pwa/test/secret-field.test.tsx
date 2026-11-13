@@ -8,6 +8,7 @@ import type { AccountsConnect, LaneWire, RosterWire } from '../../shared/api';
 import { ConnectSheet, type ConnectSheetProps } from '../src/accounts/ConnectSheet';
 import { ApiError } from '../src/lib/api';
 import { navigate } from '../src/lib/router';
+import { PASSWORD_MANAGER_IGNORE } from '../src/lib/noAutofill';
 import { useFleetStore } from '../src/stores/fleet';
 
 const CANARY = 'sk-ant-oat01-CANARY-' + 'k'.repeat(48);
@@ -73,7 +74,8 @@ describe('the secret field (spec §3.3)', () => {
     paste();
     expect(field()!.value).toBe(CANARY);
     expect(field()!).toHaveAttribute('type', 'password');
-    expect(field()!).toHaveAttribute('autocomplete', 'off');
+    expect(field()!).toHaveAttribute('autocomplete', 'new-password');
+    for (const [attr, v] of Object.entries(PASSWORD_MANAGER_IGNORE)) expect(field()!).toHaveAttribute(attr, v);
     expect(field()!).toHaveAttribute('autocapitalize', 'off');
     expect(field()!).toHaveAttribute('spellcheck', 'false');
     expect(field()!).toHaveAttribute('inputmode', 'text');

@@ -10,6 +10,7 @@ import { ApiError } from '../src/lib/apiError';
 import { LINKING_REFUSAL_TEXT, LINKING_ROUTE_TEXT } from '../src/lib/refusalWords';
 import { SETTINGS_CARDS } from '../src/fleet/settingsText';
 import { LINKING_TEXT, ProjectLinkingCard } from '../src/screens/settings/ProjectLinkingCard';
+import { PASSWORD_MANAGER_IGNORE } from '../src/lib/noAutofill';
 
 afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
@@ -46,6 +47,16 @@ describe('the card', () => {
     expect(overrideSelect('project-a').value).toBe('');
     expect(within(rowOf('project-b')).getByText(LINKING_TEXT.notRead)).toBeInTheDocument();
     expect(within(rowOf('project-c')).getByText("Couldn't read: offline")).toBeInTheDocument();
+  });
+
+  it('the team key box is never filled by a browser or password manager (D-8405)', async () => {
+    await mount([row('project-a', wire()), row('project-b', wire({ teamKey: 'KEY' }))]);
+    for (const name of ['project-a', 'project-b']) {
+      const f = keyField(name);
+      expect(f.getAttribute('autocomplete')).toBe('off');
+      for (const [attr, v] of Object.entries(PASSWORD_MANAGER_IGNORE)) expect(f.getAttribute(attr)).toBe(v);
+      expect(f.hasAttribute('name')).toBe(false);
+    }
   });
 
   it('saving a key renders the stored row', async () => {

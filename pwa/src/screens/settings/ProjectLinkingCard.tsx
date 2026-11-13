@@ -17,6 +17,7 @@ import { LINKING_TEMPLATE_PATH } from '../../../../shared/linking';
 import type { ProjectRow } from '../../../../shared/api';
 import { ResultLine, SETTINGS_CARDS, useResultLine } from '../../fleet/settingsText';
 import { api } from '../../lib/api';
+import { TEXT_NO_AUTOFILL } from '../../lib/noAutofill';
 import { loadProjects } from '../../fleet/useProjectRows';
 import { linkingErrorText } from '../../lib/refusalWords';
 
@@ -115,7 +116,7 @@ function LinkingRow({ name, linking, now, onStored }: {
             id={keyId}
             value={draft}
             maxLength={16}
-            autoComplete="off"
+            {...TEXT_NO_AUTOFILL}
             autoCapitalize="characters"
             spellCheck={false}
             disabled={busy}
