@@ -27,8 +27,8 @@ the next day. W1 is where coordinators and the Overlord first talk by mail, so t
   is not refused: the mail is ordinary peer mail, bounded as today, and if the bound refuses it the refusal says why
   the exemption did not apply.
 - **(c) A refusal names when the mail can go.** A `429 peer-quota` refusal gains one additive field, `retry`
-  (`PeerRetry`, L0): `{on: 'recipient-acks', toId}` for the pair arm (a slot frees when the recipient acks one of
-  the outstanding mails, which it does when it next reads its mail), and `{on: 'hour-slides', at}` for the hourly
+  (`PeerRetry`, L0): `{on: 'ack', toId}` for the pair arm (a slot frees when the recipient acks one of
+  the outstanding mails, which it does when it next reads its mail), and `{on: 'time', at}` for the hourly
   arm (the epoch ms at which the oldest counted mail leaves the hour). The detail sentence says the same in words,
   and both arms name the invited-reply route when the refused mail did not try it.
 - **(b) Holding over-bound mail queued is NOT built here.** It is written up below as a follow-up (see "Follow-up:
@@ -194,6 +194,8 @@ describe("today's peer refusal bodies, exactly (characterization for #2726)", ()
   `invitation`.
 - Modify: `server/src/coord/routes.ts`: check 9's hourly probe reads `peerMailAtsInLastHour(...).length` (no
   behaviour change).
+- Modify: `server/test/coord-db.test.ts`: the two migration-count pins (`COORD_SCHEMA_VERSION derives to 23` and the
+  migration-11 case) move from 63 to 64, each with a comment line naming `MIGRATIONS[63]`.
 - Test: `server/test/peer-bound.test.ts` (new), describe `'the store: invitations and the peer counts'`.
 
 **Interfaces:**
@@ -380,8 +382,8 @@ field is parsed and then ignored: no invitation is read and `answersMail` stays 
 /** When a mail refused `429 peer-quota` can go (#2726 (c)): the pair arm frees when `toId` acks one of the outstanding
  *  mails (or the lane parks one); the hourly arm frees at `at`, epoch ms, when the oldest counted mail leaves the hour. */
 export type PeerRetry =
-  | { readonly on: 'recipient-acks'; readonly toId: string }
-  | { readonly on: 'hour-slides'; readonly at: number };
+  | { readonly on: 'ack'; readonly toId: string }
+  | { readonly on: 'time'; readonly at: number };
 ```
 
 The hourly arm's `at` is `hourAts[hourAts.length - PEER_MAIL_HOURLY] + 3_600_000`: the mail whose leaving brings
@@ -406,7 +408,23 @@ the count under the bound. The details:
   `refuse`'s body (the route `retry` cases go red). Restore each.
 - [ ] **Step 6: Commit.** `feat(mail): a peer-quota refusal says when the mail can go (#2726)`
 
-### Task 6: The descriptions
+### Task 6: The decider's mutant set and floor (D-8217's rule)
+
+**Files:**
+- Modify: `server/test/sim/mutation-floors.test.ts`: a `PEER_SET` (`MutantSet<typeof import('../../src/coord/peerBound.js')>`)
+  above `MUTANT_SETS`, and its key, `server/src/coord/peerBound.ts#peerMailVerdict`, in the record.
+- Modify: `server/test/sim/mutation-floors.json`: its floor, `1`.
+
+The set's suite is the decider's own cases over the loaded module: the bounded, duplicate, pair-edge, hour-edge,
+order, each invited conjunct, and the `retry` of each arm. Its mutants: `>=` to `>` on the pair and on the hour; the
+pair and duplicate probes swapped; `invited` tested after the duplicate probe; each of the five conjuncts of
+`invitedReply` deleted; `hourAts[0]` for the indexed `at`. Every mutant must be killed, so the floor is 1.
+
+- [ ] **Step 1:** Add the set and the floor. **Step 2: Run** `test/sim/mutation-floors.test.ts`. Expected: every
+  mutant killed. **Step 3:** Delete one suite case that is a mutant's only killer: the run goes red, naming it.
+  Restore. **Step 4: Commit.** `test(sim): peerMailVerdict's mutant set and floor`
+
+### Task 7: The descriptions
 
 **Files:**
 - Modify: `README.md`: the claims paragraph's peer-mail sentence gains the exemption and `retry`.
@@ -438,6 +456,23 @@ Not built here; for the coordinator to raise as its own piece if wanted after (a
   W0-20's refusals were all replies. Measure first whether unasked peer mail is refused at all once (a) is live
   (`mail_rejections` rows with `code = 'peer-quota'` and `answersMail` never set on the sender's later mail).
 
+## Where this plan differs from the draft of run 1880
+
+Run 1880 drafted a plan for this piece before its scope changed (`w1a-peer-reply.md` at `89a0ae2be`, on
+`ws/overlord-w1a-plans`). This plan takes from it the reply naming a delivery id, the once-rule, the `retry` field
+passed outside `mail_rejections`, the decider move behind a characterization, the mutation-floor entry and the
+kebab-scan caution (`mail-routes.test.ts`'s scan of `server/src/coord` would flag a new two-word literal, so `PeerRetry`
+uses the one-word `ack` and `time`). It differs in six places:
+
+| Draft | This plan | Why |
+|---|---|---|
+| Only the pair arm is lifted; the hour and `duplicate` still apply | All three arms are lifted for an invited reply | The issue's title, "never refused by the peer bound". The hour arm guards a runaway sender, and an invited reply cannot run away: one per mail the recipient sent. A duplicate subject on two replies is not a repeat |
+| The once-rule keys on the cited DELIVERY id (`replyToDelivery`) | It keys on the invited MAIL id (`answersMail`), with a unique partial index | A revived heir delivery has a new id for the same mail; the index makes the rule a database fact |
+| An invited reply still counts in later counts | It holds no slot afterwards | Answering should not cost the replier its own room for unasked mail |
+| A run mail cannot be an invitation (`run-mail`) | Any mail from the recipient to the sender can | A peer reply to a run mail is bounded by the same once-rule; refusing it would refuse an asked-for reply |
+| The 202 carries a `reply` verdict | Only a refusal says why the exemption did not apply | Smaller wire change; a reply that was admitted needs no explanation. Listed under Later |
+| (b) built in shadow, behind a Shadow lanes row | (b) written up, not built | The brief allows it; see "Follow-up: (b)" |
+
 ## Deviations found
 
 Decisions and departures of this plan, by slug; the coordinator issues the numbers.
@@ -455,6 +490,8 @@ Decisions and departures of this plan, by slug; the coordinator issues the numbe
 - **peer-retry-field** — `retry` is a new, additive field on the `429 peer-quota` answer body only; the recorded
   `mail_rejections` row is unchanged.
 - **held-queue-deferred** — (b) is written up above, not built.
+- **peer-retry-one-word** — `PeerRetry`'s words are `ack` and `time`, one word each, so the quoted-kebab scan of
+  `server/src/coord` (`mail-routes.test.ts`) needs no allowlist row.
 
 ## Where things stand
 
@@ -463,5 +500,5 @@ otherwise written up.
 
 **Waiting on you (the coordinator):** the numbers for the slugs above; whether to raise (b) as its own piece.
 
-**Later:** the envelope could show which of the recipient's mails a reply answers (an `answers:` line); not needed
+**Later:** the 202 could say whether a reply was admitted as invited (the draft's `reply` field). The envelope could show which of the recipient's mails a reply answers (an `answers:` line); not needed
 for the bound, and the envelope grammar is pinned, so it is left out.
