@@ -490,6 +490,8 @@ Decisions and departures of this plan, by slug; the coordinator issues the numbe
 - **peer-retry-field** — `retry` is a new, additive field on the `429 peer-quota` answer body only; the recorded
   `mail_rejections` row is unchanged.
 - **held-queue-deferred** — (b) is written up above, not built.
+- **peer-window-one-constant** — the hourly arm's one-hour window becomes one L0 constant, `PEER_MAIL_WINDOW_MS`
+  (`shared/api.ts`), read by the store's hourly read and by the decider's `retry`, instead of a literal in each.
 - **peer-retry-one-word** — `PeerRetry`'s words are `ack` and `time`, one word each, so the quoted-kebab scan of
   `server/src/coord` (`mail-routes.test.ts`) needs no allowlist row.
 

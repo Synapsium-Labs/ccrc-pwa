@@ -46,6 +46,14 @@ delivery the lane gave up on this way still shows up on `GET
 /api/mail?to=<your id>` (`state: "rejected"`) — it was never acked and never
 acted on, so it stays visible there rather than silently disappearing.
 
+**Answering a peer's mail is outside the peer bound.** Mail with no `runId` is
+bounded at the door (`references/peer-protocol.md`), but a reply you were asked
+for is not: send it with `"kind":"answer"` and `"inReplyTo":<id>`, where `<id>`
+is the `id:` line of the envelope you are answering (the DELIVERY id, the same
+number you acked). The server checks that the delivery went to you, from the
+session you are replying to, and admits one reply per mail that way; a second
+reply, or one whose `inReplyTo` does not match, is ordinary peer mail.
+
 **Artifacts are paths, never payloads.** Read the file; do not expect its
 contents in the body. The path above is **absolute**, because it is quoting
 `renderEnvelope`'s literal output for a fixture message a WORKER already
