@@ -67,7 +67,16 @@ describe('the starting values (Table 11.5b, Table 3.3.11a, Table 3.3.11b)', () =
   it('§11.5 one observed step is capped at twice the advancing lane\'s period (observed-time-caps-one-step)', () => {
     expect([RENEWAL_LANE_PERIOD_MS, OBSERVED_STEP_PERIODS]).toEqual([30_000, 2]);
   });
-  it('Table 3.3.11a carded "45, with one re-nudge": the nudge point inside the 45 s (deadline-set-once-rounds-fit-inside)', () => {
-    expect(CARDED_NUDGE_AT_MS).toBe(22_500);
+  it('Table 3.3.11a carded "45, with one re-nudge": the nudge point is one lane period before the deadline, 15 s (review 1912, F4)', () => {
+    expect(CARDED_NUDGE_AT_MS).toBe(15_000);
+  });
+  it('RELATION (I2, deadline-set-once-rounds-fit-inside): the states from checkpointed to active spend exactly the renewal budget (review 1912, F14)', () => {
+    const { checkpointed, clearing, carded, probing } = STATE_DEADLINE_S;
+    expect(checkpointed + clearing + carded + probing).toBe(RENEWAL_BUDGET_S);
+  });
+  it('RELATION: the nudge point falls inside carded\'s window, a whole lane period before its deadline, so a pass that feeds the nudge never also feeds the deadline (F4, F14)', () => {
+    expect(CARDED_NUDGE_AT_MS).toBeGreaterThan(0);
+    expect(CARDED_NUDGE_AT_MS).toBeLessThan(STATE_DEADLINE_S.carded * 1_000);
+    expect(CARDED_NUDGE_AT_MS + RENEWAL_LANE_PERIOD_MS).toBeLessThanOrEqual(STATE_DEADLINE_S.carded * 1_000);
   });
 });

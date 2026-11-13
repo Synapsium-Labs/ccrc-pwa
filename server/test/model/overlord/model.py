@@ -878,9 +878,11 @@ def staged_commit(s, k, c):
 
 
 def back(s, c):
-    """§3.3.11 'A failure before the first half returns the generation to active, with a hold-off.'
-    Three readings (plan review 1902, F3). 'proven', the default and the coordinator's ruling (slug
-    failed-renewal-returns-to-active-only-if-proven): active only for a generation that has read its
+    """§3.3.11: 'A failure before the first half returns the generation to `active` with a hold-off
+    (Table 11.5b) if it was proven, whichever state the renewal began from, and to `degraded` with one
+    operator item if it was not.' Three readings (plan review 1902, F3). 'proven', the default and the
+    coordinator's ruling (slug failed-renewal-returns-to-active-only-if-proven): active only for a
+    generation that has read its
     card and passed its probes, because 'A generation never becomes active without having read its
     card and passed its probes', else degraded. 'active', the sentence alone: always active (X4 finds
     it). 'previous': back to the state the renewal began in."""
@@ -931,7 +933,8 @@ def gen_steps(s, c):
             add(('receipt first half: old conversation ended', ns))
         else:
             add(start_report(s._replace(conv=s.conv + 1), c, 'receipt second half: fresh conversation starts'))
-            add(('clearing retries spent after the first half: degraded', gen_to(s, 'degraded')))
+            # The old conversation has ended, so its proof does not carry over (review 1912, F5).
+            add(('clearing retries spent after the first half: degraded', gen_to(s, 'degraded', card=False, ok=False)))
     if g.st == 'carded' and (c.GEN_TIMEOUTS or s.t - g.ent >= c.GEN_D):
         add(('carded times out after one re-nudge: degraded', gen_to(s, 'degraded')))
     if g.st == 'probing':

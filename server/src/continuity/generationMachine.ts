@@ -7,8 +7,8 @@
 // `probing`'s second round follows a failed first one, both inside their state's own seconds.
 //
 // The same machine for every long-lived role (C49, C50). Any event a state does not name is ignored: the same view, no
-// action. So `active` is reached from `probing` only, after a matching card read and a passed round, and `ended` is
-// terminal.
+// action. So `active` is reached only through a proven generation: from `probing` after a matching card read and a
+// passed round, or by `back()` for a generation that was proven before its renewal began. `ended` is terminal.
 import type { GenerationState, TriggerClass } from '../../../shared/continuity.js';
 
 export type GenEvent =
@@ -26,19 +26,18 @@ export type GenEvent =
 
 export interface GenView {
   readonly state: GenerationState;
-  /** The state the renewal began from, as recorded on the row. A failure before the receipt's first half returns to
-   *  `active` either way (A2). */
-  readonly from: 'active' | 'degraded';
   /** `renew` calls in this `clearing`: one per try. */
   readonly tries: number;
   readonly cls: TriggerClass | null;
   /** `carded` re-nudged its card once already (at its nudge point). */
   readonly renudged: boolean;
-  /** Probe rounds that failed in this `probing`. */
+  /** Probe rounds that failed in this `probing` (0 or 1): the count of failed rounds, not of rounds opened. */
   readonly probeRounds: number;
   /** The receipt's first half came in this `clearing`: the old conversation ended. */
   readonly hostEnded: boolean;
-  /** This generation has read its card and passed a round (or was already working when the machine began). */
+  /** This generation has read its card and passed a round (or was already working when the machine began). It does
+   *  not outlive the conversation: a renewal that degrades after the receipt's first half leaves it false (review
+   *  1912, F5). */
   readonly proven: boolean;
 }
 
@@ -48,7 +47,7 @@ export type GenAction = 'hold-deliveries' | 'release-deliveries' | 'assemble-che
 export interface GenStep { readonly next: GenView; readonly actions: readonly GenAction[] }
 
 /** A working generation, outside any renewal. */
-export const GEN_ACTIVE: GenView = { state: 'active', from: 'active', tries: 0, cls: null, renudged: false, probeRounds: 0, hostEnded: false, proven: true };
+export const GEN_ACTIVE: GenView = { state: 'active', tries: 0, cls: null, renudged: false, probeRounds: 0, hostEnded: false, proven: true };
 /** A generation as a start mints it: at `carded`, not yet proven, its deliveries held until it is `active`. */
 export const GEN_MINTED: GenView = { ...GEN_ACTIVE, state: 'carded', proven: false };
 
@@ -56,21 +55,22 @@ const same = (g: GenView): GenStep => ({ next: g, actions: [] });
 const to = (g: GenView, state: GenerationState, actions: readonly GenAction[], over: Partial<GenView> = {}): GenStep =>
   ({ next: { ...g, ...over, state }, actions });
 
-/** Into `draining`: the renewal begins from `from`. */
-const drain = (g: GenView, from: 'active' | 'degraded', cls: TriggerClass): GenStep =>
-  to(g, 'draining', ['hold-deliveries'], { from, cls, tries: 0, renudged: false, probeRounds: 0, hostEnded: false });
+/** Into `draining`, from `active` or `degraded`. */
+const drain = (g: GenView, cls: TriggerClass): GenStep =>
+  to(g, 'draining', ['hold-deliveries'], { cls, tries: 0, renudged: false, probeRounds: 0, hostEnded: false });
 
-/** A failure before the receipt's first half: back to `active` with a hold-off, whether the renewal began in `active`
- *  or in `degraded` (the model's FAILED_RENEWAL_RETURNS='active'; plan review 1890, A2), but only for a generation
- *  that has read its card and passed a round: one degraded before that returns to `degraded`, because a generation
- *  never becomes `active` without them (§3.3.11; the coordinator's ruling on ask, slug failed-renewal-returns-to-active-only-if-proven). */
+/** Into `degraded`: one operator item, on every step into it (review 1912, F1; one open item per generation is the
+ *  renewal act's to keep, not the machine's). After the receipt's first half the old conversation has ended, so the
+ *  generation is no longer proven (F5). */
+const degrade = (g: GenView): GenStep =>
+  to({ ...GEN_ACTIVE, proven: g.proven && !g.hostEnded }, 'degraded', ['release-deliveries', 'raise-item']);
+
+/** A failure before the receipt's first half (§3.3.11): "returns the generation to `active` with a hold-off if it was
+ *  proven, whichever state the renewal began from, and to `degraded` with one operator item if it was not" (the
+ *  model's FAILED_RENEWAL_RETURNS='proven'; slug failed-renewal-returns-to-active-only-if-proven). */
 const back = (g: GenView): GenStep => (g.proven
   ? to(GEN_ACTIVE, 'active', ['release-deliveries', 'set-hold-off'])
-  : to({ ...GEN_ACTIVE, from: 'degraded', proven: false }, 'degraded', ['release-deliveries']));
-
-/** Into `degraded` after the first half, or when a card or probes fail: one operator item. */
-const degrade = (g: GenView): GenStep =>
-  to({ ...GEN_ACTIVE, from: 'degraded', proven: g.proven }, 'degraded', ['release-deliveries', 'raise-item']);
+  : degrade(g));
 
 /** Into `clearing`: the host ends the conversation and starts a fresh one; this is the try's one `renew`. */
 const clear = (g: GenView): GenStep => to(g, 'clearing', ['renew'], { tries: 1, hostEnded: false });
@@ -80,8 +80,8 @@ const startedHere = (g: GenView): GenStep => to(g, 'ended', ['end-this', 'mint-n
 
 const HANDLERS: Readonly<Record<GenerationState, (g: GenView, e: GenEvent) => GenStep>> = {
   active: (g, e) => {
-    if (e.kind === 'due') return drain(g, 'active', e.cls);
-    if (e.kind === 'renew-now') return drain(g, 'active', 'hard');
+    if (e.kind === 'due') return drain(g, e.cls);
+    if (e.kind === 'renew-now') return drain(g, 'hard');
     if (e.kind === 'started') return startedHere(g);
     return same(g);
   },
@@ -115,6 +115,9 @@ const HANDLERS: Readonly<Record<GenerationState, (g: GenView, e: GenEvent) => Ge
     if (e.kind === 'started') return startedHere(g);
     return same(g);
   },
+  // A failed first round asks the session to read its card again and opens round two. The re-read is advisory: a
+  // `card-read` in `probing` is ignored, so round two can pass without one being seen; the card matched on entry
+  // (review 1912, F17).
   probing: (g, e) => {
     if (e.kind === 'probes') {
       if (e.passed) return to(GEN_ACTIVE, 'active', ['release-deliveries']);
@@ -125,8 +128,8 @@ const HANDLERS: Readonly<Record<GenerationState, (g: GenView, e: GenEvent) => Ge
     return same(g);
   },
   degraded: (g, e) => {
-    if (e.kind === 'due' && e.cls === 'hard') return drain(g, 'degraded', 'hard');
-    if (e.kind === 'renew-now') return drain(g, 'degraded', 'hard');
+    if (e.kind === 'due' && e.cls === 'hard') return drain(g, 'hard');
+    if (e.kind === 'renew-now') return drain(g, 'hard');
     if (e.kind === 'started') return startedHere(g);
     return same(g);
   },

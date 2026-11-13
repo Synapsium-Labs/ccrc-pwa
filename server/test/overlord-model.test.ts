@@ -40,9 +40,12 @@ describe.skipIf(PY === null)('the Overlord model (§11.7, the first model)', () 
   it.each(FAST)('%s holds every invariant at the defaults', (sc) => {
     expect(check(sc)).toMatchObject({ scenario: sc, violated: [] });
   }, 60_000);
-  it('A2: a failed renewal returns to active only for a proven generation; the bare "active" reading is caught by X4', () => {
-    expect(check('genback', 'FAILED_RENEWAL_RETURNS=proven').violated).toEqual([]);
-    expect(check('genback', 'FAILED_RENEWAL_RETURNS=previous').violated).toEqual([]);
+  // Since a degraded generation is never proven (review 1912, F5), 'previous' and 'proven' give the same state graph,
+  // so no run tells them apart: the default reading is pinned in the text (F13), and the runs pin the rest.
+  it('A2: the model reads a failed renewal as active only if proven, at its default and its SAFE baseline; the bare "active" reading is caught by X4', () => {
+    expect(readFileSync(path.join(DIR, 'model.py'), 'utf8')).toMatch(/^\s*FAILED_RENEWAL_RETURNS='proven',/m);
+    expect(readFileSync(CHECK, 'utf8')).toMatch(/^\s*FAILED_RENEWAL_RETURNS='proven'\)/m);
+    expect(check('genback').violated).toEqual([]);
     expect(check('genback', 'FAILED_RENEWAL_RETURNS=active').violated).toContain('X4');
   }, 60_000);
   it('no_fence on rebind is caught by I5', () => {
