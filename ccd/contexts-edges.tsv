@@ -50,6 +50,7 @@ _dispatch_swap -> _svc_run_detached
 _docs_py -> _gh_repo_slug
 _end_cause -> _reg_get
 _end_cause -> _tmx
+_end_note_gone -> _inflight_write
 _end_note_gone -> _reg_get
 _end_record -> _reg_set
 _follow_continued_in -> _reg_get
@@ -62,6 +63,8 @@ _hib_wake_clear -> _reg_set
 _idle_for_keystroke -> _cfg_dir_to
 _idle_for_keystroke -> _reg_get
 _idle_for_keystroke -> _tmux_t
+_inflight_write -> _compact_lock_acquire
+_inflight_write -> _compact_lock_release
 _limit_dated -> _transcript_path
 _limit_read -> _transcript_limit_banner
 _operator_choice_keep -> _reg_set

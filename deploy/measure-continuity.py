@@ -50,6 +50,19 @@ def read_lines(path):
         return [raw.decode("utf-8", "replace").rstrip("\n") for raw in fh]
 
 
+def swap_log_lines(ctx):
+    """swap.log's lines, the one place the instrument opens it (D-8353). Answers `(lines, None)`,
+    `(None, {"swap_log": "absent"})` for no file, or `(None, {"swap_log": "unmeasured", "error": <class>})` for any
+    other OSError (a directory at the path, no permission): an unreadable log is unmeasured, never a traceback."""
+    path = ctx["swap_log"] or os.path.join(ctx["home"], ".cc-sessions", "swap.log")
+    try:
+        return read_lines(path), None
+    except FileNotFoundError:
+        return None, {"swap_log": "absent"}
+    except OSError as e:
+        return None, {"swap_log": "unmeasured", "error": type(e).__name__}
+
+
 # ── stage 1 (wave 1): the carry, and the journal-missing resume refusals ─────
 # carry   every `sidecar <uuid> -> <dst> (<mode>)` line in swap.log, by mode —
 #         link, copy, merged, and `kept` by reason: `kept` alone is the
@@ -186,10 +199,9 @@ def carry_counts(modes_seen):
 
 
 def carry_section(ctx):
-    try:
-        lines = read_lines(ctx["swap_log"])
-    except FileNotFoundError:
-        return {"swap_log": "absent"}
+    lines, err = swap_log_lines(ctx)
+    if err:
+        return err
     deployed = ctx["deployed"]
     early = lambda t: deployed is not None and t is not None and t < deployed
     carries, diverged_rows = [], 0          # carries: (t, uuid, root, mode) inside the window
@@ -350,12 +362,9 @@ def s4_epoch(stamp):
 
 def stage4(ctx):
     since, until = ctx["since"], ctx["until"]
-    path = ctx["swap_log"] or os.path.join(ctx["home"], ".cc-sessions", "swap.log")
-    try:
-        with open(path, "rb") as fh:
-            lines = [raw.decode("utf-8", "replace").rstrip("\n") for raw in fh]
-    except FileNotFoundError:
-        return {"rescue": {"swap_log": "absent"}}
+    lines, err = swap_log_lines(ctx)
+    if err:
+        return {"rescue": err}
     rescues, landings, carried = [], collections.defaultdict(list), []
     moves, landed_moves, chain_opens = collections.defaultdict(list), collections.defaultdict(list), collections.defaultdict(list)
     opened, ended = collections.Counter(), collections.Counter()
@@ -1213,12 +1222,9 @@ S7_UNMEASURED = re.compile(r"(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d) operator-choice (\
 
 def stage7(ctx):
     since, until = ctx["since"], ctx["until"]
-    path = ctx["swap_log"] or os.path.join(ctx["home"], ".cc-sessions", "swap.log")
-    try:
-        with open(path, "rb") as fh:
-            lines = [raw.decode("utf-8", "replace").rstrip("\n") for raw in fh]
-    except FileNotFoundError:
-        return {"operator_choice": {"swap_log": "absent"}}
+    lines, err = swap_log_lines(ctx)
+    if err:
+        return {"operator_choice": err}
     def inwin(stamp):
         try:
             t = int(time.mktime(time.strptime(stamp, "%Y-%m-%d %H:%M:%S")))
@@ -1262,11 +1268,13 @@ def s3_rank(sorted_values, pct):
 
 
 def stage3(ctx):
-    path = ctx["swap_log"] or os.path.join(ctx["home"], ".cc-sessions", "swap.log")
-    try:
-        lines = read_lines(path)
-    except FileNotFoundError:
-        return {"graceful_stop": {"swap_log": "absent"}}
+    lines, err = swap_log_lines(ctx)
+    if err:
+        return {"graceful_stop": err, "manifest": err}
+    return {"graceful_stop": s3_graceful(lines, ctx), "manifest": s3_manifest(lines, ctx)}
+
+
+def s3_graceful(lines, ctx):
     stops, malformed = 0, 0
     by_key, exits, censored, why = {}, {}, collections.Counter(), collections.Counter()
     for line in lines:
@@ -1298,14 +1306,173 @@ def stage3(ctx):
         vals.sort()
         exit_ms[key] = {"n": len(vals), "p50": s3_rank(vals, 50), "p90": s3_rank(vals, 90),
                         "p99": s3_rank(vals, 99), "max": vals[-1]}
-    return {"graceful_stop": {
+    return {
         "stops": stops,
         "by_site_mode": dict(sorted(by_key.items())),
         "exit_ms": exit_ms,
         "censored": dict(sorted(censored.items())),
         "unmeasured_by_why": dict(sorted(why.items())),
         "malformed_lines": malformed,
-    }}
+    }
+
+
+# ── stage 3 (wave 6b): what was in flight at a restart ──
+# `ccd/ccd#_inflight_write` ends in one `manifest <id>: site=<site> <header tokens>` line (`_inflight_note`), at the
+# swap, the limit-resume and a revival (never the hibernate, which writes no `ended` line). This pairs each restart
+# (an `ended <id>: <cause>` line in the window) with the id's next manifest line before its next `ended` line, reading
+# past --until, and counts. It reports, and sets no target. A second spelling of the program's tuples
+# (`ccd/lib/inflight-manifest.py`, D-8376), held equal by `measure-continuity-stage3.test.ts`.
+S3_DAYS_OUT_S = 86400
+MANIFEST_CLASSES = ('in-flight', 'holed', 'stopped-agent', 'diverged', 'deferred-until-reset', 'abandoned')
+MANIFEST_VERDICTS = ('listed', 'none', 'unread', 'not-applicable', 'unmeasured')
+MANIFEST_WHY = ('busy', 'budget', 'time', 'error')
+MANIFEST_SITES = ('swap', 'limit-resume', 'revival')
+S3_COUNTS = ("items",) + MANIFEST_CLASSES + ("unread", "unread-expired", "killed", "resumed", "drop-id", "drop-path",
+                                              "drop-budget", "drop-shape", "drop-read", "drop-readpath", "drop-over", "retired")
+S3_ENDED = re.compile(TS + r" ended (\S+): ([a-z][a-z-]*)")
+S3_MANIFEST = re.compile(
+    TS + r" manifest (\S+): site=(" + "|".join(MANIFEST_SITES) + r") verdict=(" + "|".join(MANIFEST_VERDICTS)
+    + r") why=(" + "|".join(MANIFEST_WHY) + r"|-) wait=(\d+|-|\?|undated)"
+    + "".join(" " + c + r"=(\d+|-)" for c in S3_COUNTS))
+S3_NOROOM = re.compile(TS + r" rescuewait (\S+): kind=noroom on \S+ reset=-")
+S3_DISPATCH_FAILED = re.compile(TS + r" dispatch FAILED for (\S+) -> \S+ \(resume\)")
+S3_SWAP_REFUSED = re.compile(TS + r" swap-refused (\S+): .*")
+S3_SWAP_DONE = re.compile(TS + r" swap (\S+): \S+ -> \S+ \(uuid \S+\)")
+
+
+def s3_num(v):
+    return int(v) if v.isdigit() else 0
+
+
+def s3_manifest(lines, ctx):
+    events = collections.defaultdict(list)   # id -> [(line index, kind, payload)] in log order
+    first_seen, noroom, malformed = {}, 0, 0
+    for i, line in enumerate(lines):
+        head = re.match(TS + " ", line)
+        t = epoch(head.group(1)) if head else None
+        if head and " manifest " in line and in_window(t, ctx) and not S3_MANIFEST.fullmatch(line):
+            malformed += 1
+        m = S3_ENDED.fullmatch(line)
+        if m:
+            events[m.group(2)].append((i, "ended", (t, m.group(3))))
+            continue
+        m = S3_MANIFEST.fullmatch(line)
+        if m:
+            mid = m.group(2)
+            vals = dict(zip(S3_COUNTS, m.groups()[6:]))
+            first_seen.setdefault(mid, i)
+            events[mid].append((i, "manifest", {"site": m.group(3), "verdict": m.group(4), "why": m.group(5),
+                                                "wait": m.group(6), "n": {k: s3_num(v) for k, v in vals.items()},
+                                                "first": first_seen[mid] == i}))
+        m = S3_NOROOM.fullmatch(line)
+        if m:
+            if in_window(t, ctx):
+                noroom += 1
+            continue
+        m = S3_DISPATCH_FAILED.fullmatch(line)
+        if m:
+            events[m.group(2)].append((i, "dispatch-failed", None))
+            continue
+        m = S3_SWAP_REFUSED.fullmatch(line)
+        if m:
+            events[m.group(2)].append((i, "refused", None))
+            continue
+        m = S3_SWAP_DONE.fullmatch(line)
+        if m:
+            events[m.group(2)].append((i, "done", None))
+    # Each id's restarts, in log order: (in window, cause, paired manifest, not_restarted, refused).
+    per_id = {}
+    for rid, evs in events.items():
+        rows = []
+        ends = [k for k, e in enumerate(evs) if e[1] == "ended"]
+        for n, k in enumerate(ends):
+            stop = ends[n + 1] if n + 1 < len(ends) else len(evs)
+            span = evs[k + 1:stop]
+            t, cause = evs[k][2]
+            man = next((e[2] for e in span if e[1] == "manifest"), None)
+            failed = any(e[1] == "dispatch-failed" for e in span)
+            refused = False
+            if cause.startswith("swap-"):
+                for e in span:
+                    if e[1] == "done":
+                        break
+                    if e[1] == "refused":
+                        refused = True
+                        break
+            rows.append({"in": in_window(t, ctx), "cause": cause, "man": man, "failed": failed, "refused": refused})
+        per_id[rid] = rows
+    zero = lambda: {c: 0 for c in MANIFEST_CLASSES}
+    r = {"restarts": 0, "restarts_by_cause": collections.Counter(), "manifests_by_site_verdict": collections.Counter(),
+         "restarts_with_items": 0, "restarts_with_items_by_site": collections.Counter(),
+         "restarts_with_items_by_class": zero(), "restarts_with_resumable_items": 0,
+         "restarts_with_items_later_resumed": 0, "resumed_items": 0, "items_by_class": zero(), "killed_in_flight": 0,
+         "first_manifests": {"restarts": 0, "restarts_with_items": 0, "items_by_class": zero()},
+         "unread_expired": 0, "unmeasured_by_why": {w: 0 for w in MANIFEST_WHY}, "not_applicable": 0,
+         "unread_manifests": 0, "never_written_by_cause": collections.Counter(), "not_restarted": 0,
+         "refused_restart": 0, "drops": {k: 0 for k in ("id", "path", "budget", "shape", "read", "readpath", "over")},
+         "weekly_waits": {"days_out": 0, "days_out_with_items": 0, "days_out_deferred": 0, "wait_unreadable": 0,
+                          "limitwait_reset_unknown": 0, "noroom_reset_unknown": noroom},
+         "malformed_lines": malformed}
+    for rows in per_id.values():
+        for k, row in enumerate(rows):
+            if not row["in"]:
+                continue
+            r["restarts"] += 1
+            r["restarts_by_cause"][row["cause"]] += 1
+            man = row["man"]
+            if row["failed"]:
+                r["not_restarted"] += 1
+            elif row["refused"]:
+                r["refused_restart"] += 1
+            elif man is None:
+                r["never_written_by_cause"][row["cause"]] += 1
+            if man is None:
+                continue
+            n = man["n"]
+            r["manifests_by_site_verdict"][f"{man['site']}/{man['verdict']}"] += 1
+            has_items = n["items"] >= 1
+            if has_items:
+                r["restarts_with_items"] += 1
+                r["restarts_with_items_by_site"][man["site"]] += 1
+            if any(n[c] >= 1 for c in ("in-flight", "holed", "stopped-agent", "deferred-until-reset")):
+                r["restarts_with_resumable_items"] += 1
+            for c in MANIFEST_CLASSES:
+                r["items_by_class"][c] += n[c]
+                if n[c] >= 1:
+                    r["restarts_with_items_by_class"][c] += 1
+            if has_items:   # forward pairing: the same id's next paired manifest says whether the work resumed
+                nxt = next((x["man"] for x in rows[k + 1:] if x["man"] is not None), None)
+                if nxt is not None and nxt["n"]["resumed"] >= 1:
+                    r["restarts_with_items_later_resumed"] += 1
+            r["resumed_items"] += n["resumed"]
+            r["killed_in_flight"] += n["killed"]
+            r["unread_expired"] += n["unread-expired"]
+            if man["first"]:
+                f = r["first_manifests"]
+                f["restarts"] += 1
+                f["restarts_with_items"] += 1 if has_items else 0
+                for c in MANIFEST_CLASSES:
+                    f["items_by_class"][c] += n[c]
+            if man["verdict"] == "unmeasured" and man["why"] in r["unmeasured_by_why"]:
+                r["unmeasured_by_why"][man["why"]] += 1
+            if man["verdict"] == "not-applicable":
+                r["not_applicable"] += 1
+            if man["verdict"] == "unread":
+                r["unread_manifests"] += 1
+            for d in r["drops"]:
+                r["drops"][d] += n["drop-" + d]
+            w, ww = man["wait"], r["weekly_waits"]
+            if w.isdigit() and int(w) >= S3_DAYS_OUT_S:
+                ww["days_out"] += 1
+                ww["days_out_with_items"] += 1 if has_items else 0
+                ww["days_out_deferred"] += 1 if n["deferred-until-reset"] >= 1 else 0
+            elif w == "?":
+                ww["wait_unreadable"] += 1
+            elif w == "undated":
+                ww["limitwait_reset_unknown"] += 1
+    for key in ("restarts_by_cause", "manifests_by_site_verdict", "restarts_with_items_by_site", "never_written_by_cause"):
+        r[key] = dict(sorted(r[key].items()))
+    return r
 
 
 STAGES = {1: stage1, 3: stage3, 4: stage4, 6: stage6, 7: stage7}

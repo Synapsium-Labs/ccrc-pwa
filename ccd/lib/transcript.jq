@@ -5,7 +5,8 @@
 # slurped raw tail window names, or nothing), `last_turn_ts` (the newest real
 # turn's epoch seconds in a slurped raw window, or nothing) and
 # `limit_banner($mode; $since)` (whether the newest real row is a limit or auth
-# banner, as `_transcript_limit_banner` answers it); and, for ccd/session-hook.sh's
+# banner, as `_transcript_limit_banner` answers it), `agent_end` (how a background agent's transcript tail ends: `finished`,
+# `open`, `rate-limit [<resetsAt>]` or `none`, for the restart manifest's program, D-8368); and, for ccd/session-hook.sh's
 # roster-card wake arm (R-5a, D-8201), `idle_compaction_open` (whether the newest
 # compaction is an idle one with no turn since). Everything else is a
 # helper. A named jq argument (`--arg u`) is not visible inside a module, so
@@ -220,6 +221,12 @@ def lb_row: . as $l
     else [try fromjson catch ($l | unsurrogate | try fromjson catch empty)][] end
   | select(type == "object");
 def lb_at($s): if $s == null then null else [.timestamp | lb_epoch] | .[0] end;
+# THE RATE-LIMIT ROW AND ITS RESET, ONE SPELLING FOR TWO READERS (D-8371): `limit_banner` and `agent_end` both test a row with
+# `lb_ratelimit` and read its reset with `lb_reset`, so the two cannot disagree on one. `lb_reset` prints a finite whole number
+# as digits, else the empty string.
+def lb_ratelimit: .type == "assistant" and .isApiErrorMessage == true and .error == "rate_limit";
+def lb_reset: (.quotaLimits | if type == "object" then . else {} end).resetsAt
+  | if type == "number" and (isinfinite | not) and . == floor then . + 0 | tostring else "" end;
 def limit_banner($mode; $since):
   ($mode == "stuck" or $mode == "dated") as $stuck
   | (if $since | lb_digits then $since | tonumber else null end) as $s
@@ -228,7 +235,7 @@ def limit_banner($mode; $since):
       | if $r == [] then null
         else $r[0] as $row | ($row | lb_at($s)) as $at
         | if ($row.type == "user" or $row.type == "assistant") | not then $f
-          elif $row.type == "assistant" and $row.isApiErrorMessage == true and $row.error == "rate_limit" then $row
+          elif ($row | lb_ratelimit) then $row
           elif $stuck and $row.type == "assistant" and $row.isApiErrorMessage == true
             and $row.error == "authentication_failed" and $row.apiErrorStatus == 401
             and $s != null and $at != null and $at >= $s then $row
@@ -240,7 +247,7 @@ def limit_banner($mode; $since):
     | if $stuck and $f.error != "authentication_failed" and $s != null and $at != null and $at < $s then "3\n\($at)"
       elif $f.error == "authentication_failed" then "0\n\t\tauthentication_failed"
       else ($f.quotaLimits | if type == "object" then . else {} end) as $q
-      | ($q.resetsAt | if type == "number" and (isinfinite | not) and . == floor then . + 0 | tostring else "" end) as $reset
+      | ($f | lb_reset) as $reset
       | ($q.rateLimitType | if type == "string" then [explode[] | select(. != 0)] | implode else "" end) as $kind
       | "0\n\($reset)\t\($kind)" + (if $mode == "dated" then "\t" + ($at | if . == null then "-" else tostring end) else "" end)
       end
@@ -288,3 +295,29 @@ def idle_compaction_open:
         else . end)
   | .cur
   | if . == null then false else (.notice or (.trigger == "auto" and .fin)) and (.after | not) end;
+
+# HOW A BACKGROUND AGENT'S TRANSCRIPT ENDS (D-8368; the restart manifest's program, `ccd/lib/inflight-manifest.py`, hands it one
+# raw tail window per agent). The input is a window of whole lines as a string: the program has already cut a partial first line
+# when it read from mid-file. The answer is one word: `finished` (the newest real row is an assistant row that is not an API
+# error and whose `stop_reason` is `end_turn`), `rate-limit` or `rate-limit <resetsAt>` (a `lb_ratelimit` row, with `lb_reset`'s
+# integer when it has one), `open` (any other newest user or assistant row: a `tool_use` with no result after it, a tool result,
+# an API error that is not a rate limit, another `stop_reason`) or `none` (no user or assistant row). NOT `complete`, which
+# accepts `tool_use`. Non-user, non-assistant rows and chatter user rows are stepped over. A line that does not parse sets the
+# candidate to `open`, FAIL CLOSED as `limit_banner` clears on one, and a later whole row replaces it: a torn final line (a field
+# with no terminating newline that is not an object) is evidence the agent was still writing. The newest row left is a `reduce`
+# over the lines, never `first` (the jq 1.6 rule above); each parse's `try` sits inside its own array constructor (`lb_row`).
+def agent_end:
+  split("\n") as $f
+  | (if ($f | length) > 0 and $f[-1] == "" then $f[:-1] else $f end) as $ls
+  | reduce $ls[] as $l (null; . as $c
+      | [$l | lb_row] as $r
+      | if $r == [] then "open"
+        else $r[0] as $row
+        | if ($row.type == "user" or $row.type == "assistant") | not then $c
+          elif ($row | lb_ratelimit) then ($row | lb_reset) as $x | if $x == "" then "rate-limit" else "rate-limit " + $x end
+          elif $row.type == "user" and ($row.message | type) == "object" and ($row.message.content | chatter) then $c
+          elif $row.type == "assistant" and $row.isApiErrorMessage != true and ($row.message | type) == "object"
+            and $row.message.stop_reason == "end_turn" then "finished"
+          else "open" end
+        end)
+  | . // "none";
