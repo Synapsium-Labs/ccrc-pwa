@@ -469,8 +469,10 @@ describe('the launch record: its budget', () => {
     for (const [label, make] of cases) {
       fs.rmSync(delegFile(), { recursive: true, force: true });
       fs.writeFileSync(elsewhere, 'kept\n');
+      // The stand-in holds the real jq's output until the object exists: the hook reads the parse from a process
+      // substitution, so a stand-in that printed first could lose the race to the append it is meant to precede.
       fs.writeFileSync(path.join(home, 'bin', 'jq'),
-        `#!/bin/sh\n'${REAL_JQ}' "$@"\nrc=$?\nif [ ! -e '${delegFile()}' ] && [ ! -L '${delegFile()}' ]; then ${make}; fi\nexit $rc\n`, { mode: 0o755 });
+        `#!/bin/sh\n'${REAL_JQ}' "$@" > '${home}/jq.out'\nrc=$?\nif [ ! -e '${delegFile()}' ] && [ ! -L '${delegFile()}' ]; then ${make}; fi\ncat '${home}/jq.out'\nexit $rc\n`, { mode: 0o755 });
       const r = run(workflow(), {}, 30_000);
       expect(r.timedOut, `${label}: nothing blocks`).toBe(false);
       expect(r.status, label).toBe(0);
@@ -486,7 +488,7 @@ describe('the launch record: its budget', () => {
     expect(added(workflow()), 'control: with the real jq the event is recorded').toHaveLength(1);
     const flag = path.join(home, 'swapped');
     fs.writeFileSync(path.join(home, 'bin', 'jq'),
-      `#!/bin/sh\n'${REAL_JQ}' "$@"\nrc=$?\nif [ ! -e '${flag}' ]; then : > '${flag}'; printf '%s' '${OTHER_GENERATION}' > '${genFile()}'; fi\nexit $rc\n`, { mode: 0o755 });
+      `#!/bin/sh\n'${REAL_JQ}' "$@" > '${home}/jq.out'\nrc=$?\nif [ ! -e '${flag}' ]; then : > '${flag}'; printf '%s' '${OTHER_GENERATION}' > '${genFile()}'; fi\ncat '${home}/jq.out'\nexit $rc\n`, { mode: 0o755 });   // the swap happens before the parse's output is released (see the stand-in above)
     const before = text();
     ok(workflow());
     expect(fs.existsSync(flag), 'the swap happened').toBe(true);
