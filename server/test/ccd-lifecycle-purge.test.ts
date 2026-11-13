@@ -2663,7 +2663,7 @@ describe('_reg_purge leaves no join record behind, whenever the hook\'s append l
     expect(h.sh(`_ws_slug_free demo still-river; echo "free=$?"`), 'and the slug is free').toContain('free=0');
   });
 
-  it('it is the LAST unlink, ONE rm call for both names: after generation, before the lock is released', () => {
+  it('it is the LAST unlink, ONE rm call for the three names: after generation, before the lock is released', () => {
     const id = seed();
     fs.writeFileSync(path.join(REGD(), `${id}.generation`), '0189abcd-1234-5678-9abc-0123456789ab');
     fs.writeFileSync(path.join(REGD(), `${id}.joined`), 'a-1\n');
@@ -2674,10 +2674,10 @@ describe('_reg_purge leaves no join record behind, whenever the hook\'s append l
       [ -z "$names" ] || printf '%s\\n' "$names" >> '${log}'; command rm "$@"; }
       _reg_purge ${id}`);
     const calls = fs.readFileSync(log, 'utf8').split('\n').filter(Boolean);
-    expect(calls.at(-1), 'the last call takes both names at once').toBe(`${id}.joined ${id}.joinedprev `);
+    expect(calls.at(-1), 'the last call takes the join record\'s two names and the launch record at once').toBe(`${id}.joined ${id}.joinedprev ${id}.deleg `);
     expect(calls.at(-2), 'and right before it the generation went').toBe(`${id}.generation `);
     expect(calls.filter((c) => c.includes('.joined ') || c.includes('.joinedprev ')), 'the loop took each first, one call apiece')
-      .toEqual([`${id}.joined `, `${id}.joinedprev `, `${id}.joined ${id}.joinedprev `]);
+      .toEqual([`${id}.joined `, `${id}.joinedprev `, `${id}.joined ${id}.joinedprev ${id}.deleg `]);
   });
 
   it('a refusal of that unlink is its own condition: status 3, and each path still standing is named', () => {
@@ -2739,5 +2739,40 @@ describe('_reg_purge takes the turn marker with the row (stall watch wave 2)', (
     expect(fs.existsSync(path.join(REGD, `${id}.hookstate.json`)), 'its sibling in the same loop still went')
       .toBe(false);
     expect(h.reg(id, 'uuid'), 'and so did the rest of the row').toBeNull();
+  });
+});
+
+// ── The launch record goes with the row (session-continuity 6b, D-8367) ────────────────────────────────────
+// `session-hook.sh` appends `$REG/<id>.deleg` without a lock, only while `generation` stands, and removes it after the write if the row
+// is gone. The purge takes it in the same post-generation `rm` as the join record, so whichever side of the generation's removal the
+// append lands on, one of the two sees it.
+describe('the launch record goes with the row (session-continuity 6b)', () => {
+  const REGD = (): string => path.join(h.home, '.cc-sessions');
+  it('_reg_purge removes <id>.deleg after the generation, and one appended in the window does not survive', () => {
+    const id = seed();
+    fs.writeFileSync(path.join(REGD(), `${id}.generation`), '0189abcd-1234-5678-9abc-0123456789ab');
+    fs.writeFileSync(path.join(REGD(), `${id}.deleg`), '{"v":1,"t":1,"k":"drop","why":"id"}\n');
+    const neighbour = `${id}x.deleg`;
+    fs.writeFileSync(path.join(REGD(), neighbour), 'x\n');
+    const calm = h.sh(`_reg_purge ${id}; echo "rc=$?"; echo "unremoved=[$REG_PURGE_UNREMOVED]"`);
+    expect(calm).toContain('rc=0');
+    expect(calm).toContain('unremoved=[]');
+    expect(fs.existsSync(path.join(REGD(), `${id}.deleg`)), 'it goes with the row').toBe(false);
+    expect(fs.existsSync(path.join(REGD(), neighbour)), 'another row\'s record stays').toBe(true);
+    // The window: the "append" lands after the loop passed the name and before generation goes.
+    const id2 = seed('demo-quiet-bay');
+    fs.writeFileSync(path.join(REGD(), `${id2}.generation`), '0189abcd-1234-5678-9abc-0123456789ab');
+    const out = h.sh(`_usage_purge() { printf '{"v":1}\\n' >> "$REG/$1.deleg"; }; _reg_purge ${id2}; echo "rc=$?"; echo "unremoved=[$REG_PURGE_UNREMOVED]"`);
+    expect(out).toContain('rc=0');
+    expect(out).toContain('unremoved=[]');
+    expect(fs.existsSync(path.join(REGD(), `${id2}.deleg`)), 'the record that landed in the window did not survive').toBe(false);
+    expect(h.sh(`_ws_slug_free demo quiet-bay; echo "free=$?"`), 'and the slug is free').toContain('free=0');
+  });
+  it('a directory at <id>.deleg is its own condition: status 3, and the path is named', () => {
+    const id = seed();
+    fs.writeFileSync(path.join(REGD(), `${id}.generation`), '0189abcd-1234-5678-9abc-0123456789ab');
+    const out = h.sh(`_usage_purge() { mkdir "$REG/$1.deleg"; }; _reg_purge ${id}; echo "rc=$?"; echo "unremoved=[$REG_PURGE_UNREMOVED]"`);
+    expect(out).toContain('rc=3');
+    expect(out).toContain(`unremoved=[${path.join(REGD(), `${id}.deleg`)}]`);
   });
 });
