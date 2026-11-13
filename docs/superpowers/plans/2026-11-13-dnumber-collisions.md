@@ -162,3 +162,8 @@ Found while carrying it out:
   in task order; the `was D-136` alias finds it either way.
 - The era-scoping test is the only premise that had to change. Every other guard in `deviation-refs.test.ts`
   reads `GRANDFATHERED` as a filter and passes over an empty set unchanged.
+- The 2026-12-19 date this plan could not find is `server/test/rings/exemption-age.data.ts`'s stamp for
+  `GRANDFATHERED` (size 16, since 2026-10-20, red after 60 days). The stamp now says size 0, since 2026-11-13,
+  and an empty set is never stale. `exemption-age.test.ts`'s control that a literal set in another file is
+  measured used `GRANDFATHERED` as its non-empty example; it now uses the same file's `LEGACY_PER_PLAN_LEDGERS`
+  (3) and pins the emptied set at 0.
