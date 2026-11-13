@@ -475,4 +475,8 @@ describe('ccd hibernate --roll --fresh: the roll whose wake starts a fresh conve
     expect(has('hibernated')).toBe(true);
     expect(uuidNow(), 'the old conversation is what mail wakes').toBe(UUID);
   });
+
+  it('caps advertises hibernate-fresh', () => {
+    expect(h.sh('cmd_caps').split('\n')).toContain('hibernate-fresh');
+  });
 });

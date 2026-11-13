@@ -9284,6 +9284,7 @@ EOF
   echo stop-surface
   echo hibernate-hold-ok   # D-6091: `cmd_hibernate --hold-ok <text>`; the server passes it only on this token (`capSupported`)
   echo hibernate-roll      # D-7458: `cmd_hibernate --roll`, the automatic roll's one act; the server sends it only on this token (`capSupported`)
+  echo hibernate-fresh     # spec 2026-11-09 §3.3.11 H13: `cmd_hibernate --roll --fresh`, the roll whose wake starts a new conversation; sent only on this token
   # `lifecycle-v1` says THIS copy of ccd writes `$REG/.lifecycle/`. It gates a
   # SERVER DECISION — sweep at all — not a file: absent means the mirror never
   # sweeps and every surface says "this box's ccd does not write the lifecycle
