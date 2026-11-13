@@ -15,7 +15,9 @@ const lineCitations = (file: string, text: string): string[] =>
 
 describe('ccd is cited by name, not by line (D-8561)', () => {
   it('CONTROL: a line citation of either file is found, and a citation by name is not', () => {
-    expect(lineCitations('a.ts', ['// see `ccd/ccd:9327`', '// `_sync_uuid` in ccd/ccd', '// (`ccd/ccrc:12-14`)'].join('\n')))
+    // The two numeric citations are assembled at run time, so this file adds none for the D-5893 scan to find.
+    const cite = (file: string, lines: string): string => `${file}:${lines}`;
+    expect(lineCitations('a.ts', [`// see \`${cite('ccd/ccd', '9327')}\``, '// `_sync_uuid` in ccd/ccd', `// (\`${cite('ccd/ccrc', '12-14')}\`)`].join('\n')))
       .toEqual(['a.ts:1', 'a.ts:3']);
     expect(lineCitations('b.ts', "// `ccd/ccd`'s `_reg_read`, and `ccd/ccd-pool-sync`")).toEqual([]);
   });
