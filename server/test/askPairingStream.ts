@@ -11,7 +11,7 @@ import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { Deps } from '../src/server.js';
-import { SessionStream } from '../src/sessionws.js';
+import { NO_TICK, SessionStream } from '../src/sessionws.js';
 import { Bus } from '../src/bus.js';
 import { loadConfig } from '../src/config.js';
 import { ccdRunner } from '../src/lifecycle.js';
@@ -224,7 +224,7 @@ export async function runSequence(sc: Scenario): Promise<{ frames: Sent[]; repli
     let conn = 0;
     const bus = new Bus();
     const connect = (n: number): SessionStream =>
-      new SessionStream(deps, bus, ID, (m) => { if (PAIRING_FRAMES.has(m.type)) out.push(n === 0 ? { step, frame: m } : { step, frame: m, conn: n }); });
+      new SessionStream(deps, bus, ID, (m) => { if (PAIRING_FRAMES.has(m.type)) out.push(n === 0 ? { step, frame: m } : { step, frame: m, conn: n }); }, undefined, NO_TICK);
     set(sc.steps[0]!);
     let stream = connect(conn);
     try {

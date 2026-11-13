@@ -44,7 +44,7 @@ import { parseAudit, parseReap } from './wsaudit.js';
 import { readTasks } from './tasks/read.js';
 import { Bus, type Notice } from './bus.js';
 import type { FleetWatcher } from './watch.js';
-import { SessionStream, parseSince } from './sessionws.js';
+import { NO_TICK, SessionStream, parseSince } from './sessionws.js';
 import { BEAT_MS } from './sessionws.js';
 // D-5866: the one verb question. Its own line, so the ccdargv import above is left as it stands.
 import { ccdCan } from './ccdargv.js';
@@ -2258,7 +2258,8 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     const { id } = req.params as { id: string };
     const q = req.query as { since?: string; sinceFile?: string };
     const since = parseSince(q.since, q.sinceFile);
-    const stream = new SessionStream(deps, bus, id, (m: SessionStreamMsg) => socket.send(JSON.stringify(m)), since, watcher);
+    // D-8611: a box with no watcher hands NO_TICK; its streams read for themselves and re-resolve on the backstop alone.
+    const stream = new SessionStream(deps, bus, id, (m: SessionStreamMsg) => socket.send(JSON.stringify(m)), since, watcher ?? NO_TICK);
     void stream.start();
     // A per-connection token, not the session id: one socket's close drops
     // only its OWN claim, so a second tab watching the same session doesn't
