@@ -9427,6 +9427,7 @@ export type LcRefusalToken =
   | 'is-a-workspace'           // forget, aimed at a workspace: use the audited path
   | 'session-live'             // forget, on a running session
   | 'session-verdict-unknown' | 'hibernated'  // tmux did not answer: fail-shut, nothing removed; `hibernated` (D-5242): forget on a sleeping row, wake or stop it first
+  | 'roll-fresh-unproven'     // hibernate --roll --fresh (overlord W1a, review 1904 F1): the wake answered 0, but no spawn of the new uuid consumed its marker (a concurrent wake resumed the old conversation) — journaled `failed`; the old uuid is back, exit 7
   | 'workspace-unreadable'     // forget (D-8140): the row's workspace field could not be read, so whether it is a workspace is unproven; nothing removed
   | 'spawn-failed'             // _lc_fail: the undo landed, the session did not come back
   | 'purge-refused'            // D-2605: the row's compaction mutex was unavailable, so the registry row stands // @anchor purge-refusal-union
@@ -9589,6 +9590,9 @@ export const LC_REFUSAL_WORD: Record<LcRefusalToken, string> = {
   // D-5242: a hibernated row is asleep, not dead — `ccd ensure` (or mail, a dispatch, a Restart) wakes it (D-5423).
   'hibernated':
     'This session is asleep, not gone: it wakes when it is opened, mailed or dispatched. Wake it (ccd ensure) or stop it (ccd stop) first. Nothing was removed.',
+  // Overlord W1a (review 1904 F1): `ccd hibernate --roll --fresh` proves its fresh start by the consuming spawn's receipt.
+  'roll-fresh-unproven':
+    'This session was put to sleep to start a fresh conversation, but something else woke it first, so it is running its old conversation. Nothing was lost, and a fresh start can be asked for again.',
 };
 
 /** Derived from the map — the `PR_REASON_MAP` idiom, so a member added to the
