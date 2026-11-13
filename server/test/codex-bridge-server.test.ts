@@ -76,10 +76,11 @@ const delta = (oi: number, id: string, text: string): string => ev('response.out
   output_index: oi, item_id: id, content_index: 0, delta: text,
 });
 const done = (oi: number, item: Json): string => ev('response.output_item.done', { output_index: oi, item });
-type U = { input?: number; cached?: number; cacheWrite?: number; output?: number };
+type U = { input?: number; cached?: number; cacheWrite?: number; output?: number; reasoning?: number };
 const usage = (u: U = {}): Json => ({
   input_tokens: u.input ?? 100, output_tokens: u.output ?? 5,
   input_tokens_details: { cached_tokens: u.cached ?? 0, ...(u.cacheWrite === undefined ? {} : { cache_write_tokens: u.cacheWrite }) },
+  ...(u.reasoning === undefined ? {} : { output_tokens_details: { reasoning_tokens: u.reasoning } }),
 });
 const completed = (u: U = {}, extra: Json = {}): string => ev('response.completed', {
   response: { id: 'resp_fx1', status: 'completed', usage: usage(u), ...extra },
@@ -1450,6 +1451,194 @@ describe.skipIf(!PY)('an upstream page logs one bounded line (the CDN edge answe
       await statsWhen(lane, (d) => d.outcomes['2xx'] === 2);
       await sleep(100);
       expect(pageLines(bridge)).toEqual([]);
+    });
+  });
+});
+
+// D-8618: the stats file's parity section, measured per upstream response on the real message path. Nothing it reads
+// goes on the wire: the body sent upstream and the answer the client gets are the ones a bridge without it builds.
+describe.skipIf(!PY)('the parity section, measured per response (D-8618)', () => {
+  const KEY = `backend/${MODEL}`;
+  const BUCKETS = ['250', '500', '1000', '2000', '4000', '8000', '16000', '32000', '64000', 'inf'];
+  const total = (h: Record<string, number>): number => Object.values(h).reduce((a, b) => a + b, 0);
+  const bucketOf = (h: Record<string, number>): string[] => Object.entries(h).filter(([, n]) => n > 0).map(([b]) => b);
+  const session = { 'x-claude-code-session-id': 'sess-fx1' };
+  const removed = (reason: string): Json => ({ type: 'reasoning', id: 'rs_fx9', action: 'removed', reason });
+  const liveReply = (u: U, extra: Json = {}): string => created() + added(0, 'msg_fx1') + delta(0, 'msg_fx1', 'Hel')
+    + delta(0, 'msg_fx1', 'lo') + done(0, msgItem('msg_fx1', 'Hello')) + completed(u, extra);
+
+  it('one request: one response, its token sums, the effort sent, the served model, and one bucket per time', async () => {
+    const sse = liveReply({ input: 120, cached: 20, output: 7, reasoning: 3 }, {
+      model: MODEL, input_transformations: [removed('turn_boundary'), removed('prefix_mismatch')],
+    });
+    await withBridge([{ status: 200, sse }], async ({ bridge, lane }) => {
+      const a = await call(bridge, '/v1/messages', { body: { ...messages(), output_config: { effort: 'high' } }, headers: session });
+      expect(a.status, a.text).toBe(200);
+      const stats = await statsWhen(lane, (d) => d.outcomes['2xx'] === 1);
+      const row = stats.parity[KEY];
+      expect(row).toMatchObject({
+        responses: 1, inputTokens: 120, cachedTokens: 20, outputTokens: 7, reasoningTokens: 3,
+        effort: { high: 1 }, served: { same: 1, other: 0, absent: 0 }, servedOther: {},
+        inputTransformations: { 'reasoning:removed:turn_boundary': 1, 'reasoning:removed:prefix_mismatch': 1 },
+        responsesWithTransformations: 1,
+        replay: { 'text-hit': 0, 'text-empty': 0, 'text-absent': 0, 'call-hit': 0, 'call-absent': 0 },
+      });
+      expect(Object.keys(row.firstOutputMs)).toEqual(BUCKETS);
+      expect(total(row.firstOutputMs)).toBe(1);
+      expect(total(row.totalMs)).toBe(1);
+      expect(BUCKETS.indexOf(bucketOf(row.firstOutputMs)[0])).toBeLessThanOrEqual(BUCKETS.indexOf(bucketOf(row.totalMs)[0]));
+      // a measurement, never drift: nothing unexplained (the fake upstream's own response headers aside), no event
+      // type counted, nothing new in the outcomes or the routes row
+      expect(Object.keys(stats.unexplained).filter((f) => f !== 'responseHeader')).toEqual([]);
+      expect(stats.names.eventType).toBeUndefined();
+      expect(stats.outcomes).toEqual({ '2xx': 1 });
+      expect(Object.keys(stats.routes[KEY]).sort()).toEqual(['bytesPerToken', 'promptTokensLast', 'promptTokensMax', 'requests']);
+    });
+  });
+
+  it('the upstream body and the client\'s answer are what a bridge without the parity section sends, byte for byte', async () => {
+    const sse = liveReply({ input: 120, cached: 20, output: 7, reasoning: 3 }, {
+      model: 'model-6.1-beta', input_transformations: [removed('turn_boundary'), 'not an object'],
+    });
+    await withBridge([{ status: 200, sse }], async ({ bridge, up }) => {
+      const a = await call(bridge, '/v1/messages', { body: { ...messages(), output_config: { effort: 'high' } }, headers: session });
+      expect(a.status, a.text).toBe(200);
+      const expected: Json = {
+        model: MODEL, stream: true,
+        input: [
+          { type: 'message', role: 'developer', content: [{ type: 'input_text', text: 'You are a helper.' }] },
+          { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'hello there' }] },
+        ],
+        tools: [], tool_choice: 'auto', parallel_tool_calls: true, reasoning: { effort: 'high' }, store: false,
+        include: ['reasoning.encrypted_content'], prompt_cache_key: 'ccrc:sess-fx1',
+      };
+      expect(up.requests).toHaveLength(1);
+      expect(up.requests[0].body).toEqual(expected);
+      expect(Object.keys(up.requests[0].body!)).toEqual(Object.keys(expected));
+      const id = a.frames[0].data.message.id as string;
+      const f = (o: Json): string => `event: ${String(o.type)}\ndata: ${JSON.stringify(o)}\n\n`;
+      const zero = { input_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, output_tokens: 0 };
+      expect(a.text).toBe([
+        f({ type: 'message_start', message: { id, type: 'message', role: 'assistant', model: MODEL, content: [], stop_reason: null, stop_sequence: null, usage: zero } }),
+        f({ type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } }),
+        f({ type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'Hel' } }),
+        f({ type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'lo' } }),
+        f({ type: 'content_block_stop', index: 0 }),
+        f({ type: 'message_delta', delta: { stop_reason: 'end_turn', stop_sequence: null },
+          usage: { input_tokens: 100, cache_read_input_tokens: 20, cache_creation_input_tokens: 0, output_tokens: 7 } }),
+        f({ type: 'message_stop' }),
+      ].join(''));
+    });
+  });
+
+  it('effort is the body the bridge built: the lane\'s default for auto, the client\'s level, else none', async () => {
+    const answers = [1, 2, 3].map(() => ({ status: 200, sse: textReply('ok') }));
+    await withBridge(answers, async ({ bridge, up, lane, home }) => {
+      const effortFile = path.join(home, '.ccrc', 'models', `${LANE}.effort.json`);
+      writeFileSync(effortFile, JSON.stringify({ byModel: { [MODEL]: 'medium' } }));
+      const auto = await call(bridge, '/v1/messages', { body: { ...messages(), output_config: { effort: 'auto' } } });
+      const low = await call(bridge, '/v1/messages', { body: { ...messages(), output_config: { effort: 'low' } } });
+      rmSync(effortFile);
+      const none = await call(bridge, '/v1/messages', { body: messages() });
+      for (const a of [auto, low, none]) expect(a.status, a.text).toBe(200);
+      expect(up.requests.map((r) => r.body!.reasoning ?? null)).toEqual([{ effort: 'medium' }, { effort: 'low' }, null]);
+      expect(await bridge.stop()).toEqual({ code: 0, signal: null }); // D-6997: read after the drain's flush
+      expect(readStats(lane).parity[KEY].effort).toEqual({ medium: 1, low: 1, none: 1 });
+    });
+  });
+
+  it('a continued message counts each of its upstream responses', async () => {
+    const part = (n: number, last: boolean): ResponsesAnswer => ({
+      status: 200,
+      sse: created(n) + done(0, msgItem(`msg_fx${n}`, `part ${n}`))
+        + completed({ input: 1000 + n, cached: n, output: 2, reasoning: 1 }, { model: MODEL, ...(last ? {} : { end_turn: false }) }),
+    });
+    await withBridge([part(1, false), part(2, false), part(3, true)], async ({ bridge, up, lane }) => {
+      const a = await call(bridge, '/v1/messages', { body: messages() });
+      expect(a.status, a.text).toBe(200);
+      expect(up.requests).toHaveLength(3);
+      const row = (await statsWhen(lane, (d) => d.outcomes['2xx'] === 1)).parity[KEY];
+      expect(row).toMatchObject({
+        responses: 3, inputTokens: 3006, cachedTokens: 6, outputTokens: 6, reasoningTokens: 3,
+        effort: { none: 3 }, served: { same: 3, other: 0, absent: 0 },
+      });
+      expect(total(row.firstOutputMs)).toBe(3);
+      expect(total(row.totalMs)).toBe(3);
+    });
+  });
+
+  it('a response the bridge answers as an error still counts its terminal event; a failed one has none to count', async () => {
+    const unknown = created() + ev('response.incomplete', { response: {
+      id: 'resp_fx1', status: 'incomplete', incomplete_details: { reason: 'fx_new_reason' }, output: [], model: 'model-6.1-beta',
+      usage: usage({ input: 40, output: 0 }), input_transformations: [removed('turn_boundary'), removed('turn_boundary')],
+    } });
+    await withBridge([{ status: 200, sse: created() + failed('server_is_overloaded') }, { status: 200, sse: unknown }], async ({ bridge, lane }) => {
+      const f = await call(bridge, '/v1/messages', { body: messages() });
+      expect(f.status).toBe(529);
+      const a = await call(bridge, '/v1/messages', { body: messages() });
+      expect(a.status).toBe(503);
+      expect(a.json?.error.type).toBe('api_error');
+      expect(await bridge.stop()).toEqual({ code: 0, signal: null }); // D-6997: read after the drain's flush
+      const stats = readStats(lane);
+      expect(stats.outcomes['5xx']).toBe(2);
+      const row = stats.parity[KEY];
+      expect(row).toMatchObject({
+        responses: 1, inputTokens: 40, outputTokens: 0, effort: { none: 2 },
+        served: { same: 0, other: 1, absent: 0 }, servedOther: { 'model-6.1-beta': 1 },
+        inputTransformations: { 'reasoning:removed:turn_boundary': 2 }, responsesWithTransformations: 1,
+      });
+      // it released no output, so only its total time is counted
+      expect(total(row.firstOutputMs)).toBe(0);
+      expect(total(row.totalMs)).toBe(1);
+    });
+  });
+
+  it('the first output is timed from the POST to the first text delta, the total to the terminal event', async () => {
+    const first = created() + added(0, 'msg_fx1') + delta(0, 'msg_fx1', 'Hi');
+    const rest = done(0, msgItem('msg_fx1', 'Hi')) + completed({});
+    await withBridge([{ status: 200, sse: { chunks: [first, rest], delayMs: 700 } }], async ({ bridge, lane }) => {
+      const a = await call(bridge, '/v1/messages', { body: messages() });
+      expect(a.status, a.text).toBe(200);
+      const row = (await statsWhen(lane, (d) => d.outcomes['2xx'] === 1)).parity[KEY];
+      const [firstAt] = bucketOf(row.firstOutputMs);
+      const [totalAt] = bucketOf(row.totalMs);
+      expect(BUCKETS.indexOf(totalAt), JSON.stringify(row.totalMs)).toBeGreaterThanOrEqual(BUCKETS.indexOf('1000'));
+      expect(BUCKETS.indexOf(firstAt), JSON.stringify(row)).toBeLessThan(BUCKETS.indexOf(totalAt));
+      expect(row.served).toEqual({ same: 0, other: 0, absent: 1 });
+    });
+  });
+
+  it('a request whose history replays stored reasoning counts what each lookup found', async () => {
+    const first = created()
+      + done(0, { type: 'reasoning', id: 'rs_fx1', summary: [], encrypted_content: 'ENC-1' })
+      + done(1, { type: 'function_call', id: 'fc_fx1', call_id: 'call_fx1', name: 'Read', arguments: '{"file_path":"a.txt"}' })
+      + done(2, { type: 'function_call', id: 'fc_fx2', call_id: 'call_fx2', name: 'Read', arguments: '{"file_path":"b.txt"}' })
+      + completed();
+    await withBridge([{ status: 200, sse: first }, { status: 200, sse: textReply('both read') }], async ({ bridge, lane }) => {
+      const body1: Json = { ...messages(), tools: [READ_TOOL] };
+      const a = await call(bridge, '/v1/messages', { body: body1, headers: session });
+      expect(a.status, a.text).toBe(200);
+      const body2 = {
+        ...body1,
+        messages: [
+          ...body1.messages,
+          { role: 'assistant', content: [
+            { type: 'tool_use', id: 'call_fx1', name: 'Read', input: { file_path: 'a.txt' } },
+            { type: 'tool_use', id: 'call_fx2', name: 'Read', input: { file_path: 'b.txt' } },
+          ] },
+          { role: 'user', content: [
+            { type: 'tool_result', tool_use_id: 'call_fx1', content: 'A' },
+            { type: 'tool_result', tool_use_id: 'call_fx2', content: 'B' },
+          ] },
+        ],
+      };
+      const b = await call(bridge, '/v1/messages', { body: body2, headers: session });
+      expect(b.status, b.text).toBe(200);
+      expect(await bridge.stop()).toEqual({ code: 0, signal: null }); // D-6997: read after the drain's flush
+      // the reasoning keyed the first call; the second call, after the same reasoning, has no row
+      expect(readStats(lane).parity[KEY].replay).toEqual({
+        'text-hit': 0, 'text-empty': 0, 'text-absent': 0, 'call-hit': 1, 'call-absent': 1,
+      });
     });
   });
 });

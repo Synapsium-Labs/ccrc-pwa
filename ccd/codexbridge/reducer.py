@@ -45,6 +45,15 @@ THE RULES (each is a case or a mutation row in codex-bridge-replay.test.ts):
       released stay, and nothing held is released after a failure.
 - R17 `committable` is true once a block was released or a NON-failure terminal was seen.
 - R19 the `tool_use` id is the upstream `call_id`, never the item `id`.
+- R21 (D-8618) a terminal `response.completed` or `response.incomplete` leaves `diagnostics`, read for the stats file's
+      parity section and for nothing else: the served model (the terminal response's `model`, else
+      `response.created`'s), the terminal usage's valid counts (`input`, `cached`, `output`, `reasoning`:
+      `usage.output_tokens_details.reasoning_tokens`) and the response's `input_transformations` (an array on the
+      response object, not an event: upstream openai/codex @ 826b6e8, codex-rs/codex-api/src/sse/responses.rs:377-398,
+      476-536) as `transformation_key`s, None when the field is not a list. It is set before an incomplete reason the
+      table does not know fails the response, so a response answered as an error is measured too; a failed or
+      truncated one leaves it None. Codex's rule holds here as there: a diagnostic field is optional and never makes
+      an otherwise valid response fail, so a malformed entry or part is counted `unrecognised`, never raised.
 
 NOTHING HERE HOLDS CONTENT IN A COUNT OR A NAME. Names go to the NameSink by family (`itemType`, `eventType`,
 `incompleteReason`); counts are integers; warnings name what was wrong, never a value. Encrypted reasoning leaves this
@@ -52,6 +61,7 @@ module only through `reasoning` and `output_items` (for the reasoning store and 
 """
 
 import json
+import re
 import time
 from typing import Dict, FrozenSet, List, NamedTuple, Optional, Tuple
 
@@ -87,6 +97,11 @@ W_NO_CALL_ID = "a tool call with no call_id was skipped"
 W_NOT_OBJECT = "a finished item that is not an object was skipped"
 
 UNREADABLE_REASONING = "reasoning-without-encrypted-content"
+
+# D-8618: one part of an `input_transformations` key (R21); a part outside it is UNRECOGNISED_CODE, a missing reason
+# NO_REASON. The stats file re-checks its keys against this same pattern.
+DIAG_PART_RE = re.compile(r"^[A-Za-z0-9_.-]{1,32}$")
+NO_REASON = "none"
 
 
 class Usage(NamedTuple):
@@ -141,6 +156,40 @@ def _bounded(value: object) -> str:
     return lowered if errors.CODE_RE.fullmatch(lowered) else errors.UNRECOGNISED_CODE
 
 
+def transformation_key(entry: object) -> str:
+    """One `input_transformations` entry as the parity section counts it (R21): `<type>:<action>:<reason>`, each part
+    a string under DIAG_PART_RE or UNRECOGNISED_CODE, a missing or null reason NO_REASON. An entry that is not an
+    object is UNRECOGNISED_CODE in all three parts; its `id` is never kept."""
+    if not isinstance(entry, dict):
+        return ":".join([errors.UNRECOGNISED_CODE] * 3)
+    parts = []
+    for field in ("type", "action", "reason"):
+        value = entry.get(field)
+        if field == "reason" and value is None:
+            parts.append(NO_REASON)
+        else:
+            parts.append(value if isinstance(value, str) and DIAG_PART_RE.fullmatch(value) else errors.UNRECOGNISED_CODE)
+    return ":".join(parts)
+
+
+def _diagnostic_usage(response: dict) -> Dict[str, int]:
+    """The terminal usage's counts the parity section sums (R21), each only when it is a valid count."""
+    u = response.get("usage")
+    u = u if isinstance(u, dict) else {}
+    inputs = u.get("input_tokens_details")
+    outputs = u.get("output_tokens_details")
+    inputs = inputs if isinstance(inputs, dict) else {}
+    outputs = outputs if isinstance(outputs, dict) else {}
+    found = (("input", u.get("input_tokens")), ("cached", inputs.get("cached_tokens")),
+             ("output", u.get("output_tokens")), ("reasoning", outputs.get("reasoning_tokens")))
+    return {name: value for name, value in found if _index(value) is not None}
+
+
+def _model_of(response: object) -> Optional[str]:
+    model = response.get("model") if isinstance(response, dict) else None
+    return model if isinstance(model, str) and model else None
+
+
 def _reject_constant(name: str) -> object:
     raise ValueError("not JSON: " + name)
 
@@ -178,6 +227,8 @@ class Reducer:
         self.emitted_text = {}  # type: Dict[int, str]
         self.phases = {}  # type: Dict[str, str]
         self.response_id = None  # type: Optional[str]
+        self.created_model = None  # type: Optional[str]  (response.created's `model`, R21)
+        self.diagnostics = None  # type: Optional[dict]  (R21: set by a completed or incomplete terminal)
         self.counts = {"emptyArguments": 0, "invalidArguments": 0, "liveTextMismatch": 0}  # type: Dict[str, int]
         self.warnings = []  # type: List[str]
         self._out = []  # type: List[Tuple[str, dict]]
@@ -226,6 +277,7 @@ class Reducer:
             rid = resp.get("id") if isinstance(resp, dict) else None
             if isinstance(rid, str):
                 self.response_id = rid
+            self.created_model = _model_of(resp)
         elif etype == "response.output_item.added":
             item = d.get("item")
             oi = _index(d.get("output_index"))
@@ -437,6 +489,12 @@ class Reducer:
     # ── terminals ──
     def _end(self, kind: str, response: object) -> None:
         resp = response if isinstance(response, dict) else {}
+        # R21, before any failure below: a response the bridge answers as an error is measured too
+        raw = resp.get("input_transformations")
+        self.diagnostics = {
+            "model": _model_of(resp) or self.created_model, "usage": _diagnostic_usage(resp),
+            "transformations": [transformation_key(e) for e in raw] if isinstance(raw, list) else None,
+        }
         reason = None  # type: Optional[str]
         if kind == "incomplete":
             details = resp.get("incomplete_details")
