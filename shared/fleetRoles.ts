@@ -52,9 +52,9 @@ export interface FleetRoleRow {
   readonly sessionRole: SessionRole;
   /** The role's launch switches (`LaunchProfile`). */
   readonly launchProfile: LaunchProfile;
-  /** `compactInstructions` and `probeSet` are typed and absent until their pieces land. */
   /** The card's renderer (`server/src/continuity/card.ts#renderCard`). */
   readonly cardRenderer: CardRenderer;
+  /** `compactInstructions` and `probeSet` are typed and absent until their pieces land. */
   readonly compactInstructions: null;
   readonly probeSet: null;
 }
