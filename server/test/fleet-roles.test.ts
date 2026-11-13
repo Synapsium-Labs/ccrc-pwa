@@ -15,10 +15,24 @@ describe('FLEET_ROLES (Overlord spec §3.3.9, C49)', () => {
   it('every column that waits for a later piece is null on every row', () => {
     // One line per column, so the piece that fills a column deletes its own line (plan review I14).
     for (const r of FLEET_ROLE_NAMES) {
-      expect(FLEET_ROLES[r].launchProfile, r).toBeNull();
       expect(FLEET_ROLES[r].compactInstructions, r).toBeNull();
       expect(FLEET_ROLES[r].probeSet, r).toBeNull();
     }
+  });
+  it('every role has a launch profile; only the long-lived roles compact on their own terms, only plain switches memory (H1, H14, C39)', () => {
+    for (const r of FLEET_ROLE_NAMES) {
+      const p = FLEET_ROLES[r].launchProfile;
+      expect(p, r).not.toBeNull();
+      for (const k of Object.keys(p.env)) expect(k, r).toMatch(/^CLAUDE_CODE_[A-Z_]+$/);
+    }
+    expect(FLEET_ROLE_NAMES.filter((r) => FLEET_ROLES[r].launchProfile.compaction !== null)).toEqual(['overlord', 'coordinator']);
+    expect(FLEET_ROLE_NAMES.filter((r) => FLEET_ROLES[r].launchProfile.autoMemory === 'switch')).toEqual(['plain']);
+    for (const r of ['overlord', 'coordinator'] as const) {
+      expect(FLEET_ROLES[r].launchProfile.compaction).toStrictEqual({ settings: { idleCompaction: false }, aboveHardCapPts: 10 });
+    }
+    expect(FLEET_ROLES.overlord.launchProfile.env).toStrictEqual({ CLAUDE_CODE_FORK_SUBAGENT: '0', CLAUDE_CODE_DISABLE_AGENT_VIEW: '1' });
+    for (const r of FLEET_ROLE_NAMES.filter((x) => x !== 'overlord')) expect(FLEET_ROLES[r].launchProfile.env, r).toStrictEqual({});
+    for (const r of FLEET_ROLE_NAMES) expect(FLEET_ROLES[r].launchProfile.settings, r).toStrictEqual({});
   });
   it('the card renderer: one per role, auditor and replay take plain (C51)', () => {
     expect(FLEET_ROLE_NAMES.map((r) => FLEET_ROLES[r].cardRenderer))
@@ -26,7 +40,7 @@ describe('FLEET_ROLES (Overlord spec §3.3.9, C49)', () => {
   });
   it('a row must carry every column (a compile-time pin, read by the test typecheck)', () => {
     // @ts-expect-error a row with no sessionRole is not a FleetRoleRow
-    const partial: FleetRoleRow = { longLived: false, launchProfile: null, cardRenderer: 'plain', compactInstructions: null, probeSet: null };
+    const partial: FleetRoleRow = { longLived: false, launchProfile: { env: {}, settings: {}, autoMemory: 'off', compaction: null }, cardRenderer: 'plain', compactInstructions: null, probeSet: null };
     expect(partial.longLived).toBe(false);
   });
   it('isFleetRole accepts exactly the table keys', () => {
