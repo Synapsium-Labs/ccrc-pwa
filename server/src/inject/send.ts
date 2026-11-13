@@ -7,6 +7,7 @@ import {
   type DialogTabRefuseCode, type DialogTextRefuseCode, type FleetSession, type InterruptRefusalBody,
 } from '../../../shared/api.js';
 import { CHAT_ABOUT_ROW_RE, FREE_TEXT_PLACEHOLDER_RE, parseAskTabs, reviewRows } from '../../../shared/ask-menu.js';
+import { hookEventIs } from '../../../shared/hook-events.js';
 
 export interface SendDeps {
   tmux: Tmux;
@@ -2503,7 +2504,7 @@ export function interruptVerdict(r: InterruptReading): InterruptVerdict {
   if (r.row === null || r.row.dialogPending) return { kind: 'turn' };
   if (r.word.word === 'shell') return { kind: 'background-only', count: null, kinds: [] };
   const bg = r.row.background;
-  if (r.word.word === 'busy' && bg !== null && bg.count > 0 && r.row.hookState === 'done' && r.hookEvent === 'Stop'
+  if (r.word.word === 'busy' && bg !== null && bg.count > 0 && r.row.hookState === 'done' && hookEventIs(r.hookEvent, 'Stop')
     && r.hookUpdatedAt !== null && (r.word.since === null || r.hookUpdatedAt > r.word.since)) {
     return { kind: 'background-only', count: bg.count, kinds: bg.kinds };
   }

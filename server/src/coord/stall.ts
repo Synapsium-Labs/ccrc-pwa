@@ -2,6 +2,7 @@ import { ACTIVE_RUN_STATES, MAIL_REPLAY_MS, REVIEW_DONE_SUBJECT, WAVE_DONE_SUBJE
 import { STALL_ARMS, isStallArm } from '../../../shared/stall-watch.js';
 import { STALL_WATCH_DISABLED_MARKER } from '../../../shared/switches.js';
 import type { StallArm } from '../../../shared/stall-watch.js';
+import { isHookEvent, type HookEvent } from '../../../shared/hook-events.js';
 import { sessionRoleOf } from '../roleOf.js';
 import type { ChildMark, MailGate, RunState } from '../../../shared/api.js';
 import type { MailTurnMode } from '../turnidle.js';
@@ -407,7 +408,7 @@ export const STALL_WAKE_KINDS: readonly string[] = Object.keys(STALL_BG_KIND_MAP
 export const STALL_RESUMING_KINDS: readonly string[] = STALL_WAKE_KINDS.filter((k) => STALL_BG_KIND_MAP[k as keyof typeof STALL_BG_KIND_MAP] === 'resumes');
 /** §5.1 "the one bounded exception": hook events that are plumbing. They never refresh the frozen clock or the
  *  `delegates` hold. */
-export const STALL_PLUMBING_EVENTS: readonly string[] = ['SessionStart', 'PreCompact', 'PostCompact'];
+export const STALL_PLUMBING_EVENTS: readonly HookEvent[] = ['SessionStart', 'PreCompact', 'PostCompact'];
 
 // ── the report classifier (Contract note 8) ──────────────────────────────────────────────────────────────────
 /** Every report is a `stall:` subject from the operator role. A wave-2 report names its kind right after the run,
@@ -919,7 +920,7 @@ function stallW2Notify(input: StallInput, arm: 'frozen' | 'dead', key: number, b
 }
 
 function stallPlumbing(event: string | null): boolean {
-  return event !== null && STALL_PLUMBING_EVENTS.includes(event);
+  return isHookEvent(event) && STALL_PLUMBING_EVENTS.includes(event);
 }
 
 /** A raw hook fact that `delegates` may read: identity `current`, and a non-empty session id. A `''` session id is

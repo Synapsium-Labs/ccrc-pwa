@@ -56,6 +56,7 @@ import type {
 } from '../../shared/api.js';
 import { APPROVAL_HOOK_WAIT_S, repoLabel } from '../../shared/api.js';
 import { RUN_CLOSE_WHY } from '../../shared/run-close.js';
+import { hookEventIs } from '../../shared/hook-events.js';
 import type { AskMintReleaseReason, DelegationEventEnvelopeV1, DelegationHealthInput, DelegationObservationHealth, DelegationProjectionWire } from '../../shared/api.js';
 // ONE LINE, deliberately: `single-definition.test.ts` scans for `UNCHECKED_PR`
 // arriving from shared/api on a single import line, and a prettier multi-line
@@ -7767,7 +7768,7 @@ export class FleetWatcher {
       if (row.deliveredAt === null) continue;   // defensive; markDelivered always sets it
       if (row.ingestedAt !== null) continue;
       const hs = await hookStateFor(row.toId);
-      if (hs !== null && hs.event === 'UserPromptSubmit' && hs.updatedAt > row.deliveredAt) {
+      if (hs !== null && hookEventIs(hs.event, 'UserPromptSubmit') && hs.updatedAt > row.deliveredAt) {
         this.landed(store.markIngested(row.id, hs.updatedAt), 'markIngested', row.id);
       }
     }

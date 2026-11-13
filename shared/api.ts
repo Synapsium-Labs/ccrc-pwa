@@ -18,6 +18,7 @@ import type { WorkflowView } from './workflows.js';
 import type { WaitingView } from './ledgers.js';
 import type { CHECKS_MAIL_TOKEN } from './landing.js';
 import type { LandingWrite } from './landingLine.js';
+import { hookEventIs, type HookEvent } from './hook-events.js';
 
 export type SessionStatus = 'busy' | 'idle' | 'dead';
 
@@ -1833,7 +1834,7 @@ export function sessionBucket(
   // `idle`. D-75's wedge recovery is kept for a Stop with no delegated work.
   const delegated = s.background !== null && s.background.count > 0;
   const finishedAfterStatus =
-    hookNewer && s.hookState === 'done' && hookEvent !== 'SessionStart' && !delegated;
+    hookNewer && s.hookState === 'done' && !hookEventIs(hookEvent, 'SessionStart') && !delegated;
   // NOT the hook's timestamp: the hook rewrites `updatedAt` on every
   // PostToolUse, so a busy session would report a continuously-refreshed
   // "since" — permanently new, and permanently badged. That holds for the
@@ -1854,7 +1855,7 @@ export function sessionBucket(
     // function's own docstring for `hookEvent`. Degrade to `idle`: exactly
     // the bucket a virgin session would report if `SessionStart` had never
     // touched `state` at all, which is the honest fact on the ground.
-    if (hookEvent === 'SessionStart') return { bucket: 'idle', bucketSince: s.statusUpdatedAt };
+    if (hookEventIs(hookEvent, 'SessionStart')) return { bucket: 'idle', bucketSince: s.statusUpdatedAt };
     // D-5231: after a Stop that left delegated work running, `done` is reached
     // only once the live file writes `idle` (the rung above held `working`
     // until then), so it is dated from THAT write when it is the later one —
@@ -12568,7 +12569,7 @@ export const DELEGATION_EVENT_KINDS = [
   'SubagentStop',
   'UserPromptSubmit',
   'SessionEnd',
-] as const;
+] as const satisfies readonly HookEvent[];
 export type DelegationEventKind = (typeof DELEGATION_EVENT_KINDS)[number];
 
 /** Where an activity (a unit of delegated work the parent started) came from. `bash-worktree` is raw Bash use of
