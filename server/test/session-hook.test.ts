@@ -6031,7 +6031,7 @@ describe('the compaction card — jq programs and shell words in the compaction 
    *  builds a jq program. `_hook_emit_context` is here because the row's own
    *  non-vacuity clause names its `jq -cn --arg c "$text"` as a site the scan
    *  must FIND. */
-  const ARMS = ['_hook_compact_scope', '_hook_compact_pre', '_hook_compact_card',
+  const ARMS = ['_hook_compact_scope', '_hook_compact_pre_line', '_hook_compact_pre', '_hook_compact_card',
     '_hook_compact_card_locked', '_hook_compact_mark_served', '_hook_compact_serve_end',
     '_hook_compact_post', '_hook_compact_post_abandon', '_hook_compact_post_fail',
     '_hook_lock_init', '_hook_lock_acquire', '_hook_lock_release', '_hook_lock_same',
@@ -6185,8 +6185,8 @@ describe('the compaction card — jq programs and shell words in the compaction 
     // NON-VACUITY, MANDATORY and BY IDENTITY — §5 names these two sites by
     // pre-Task-9 line anchors that this task moved, so they are required by
     // what they ARE rather than by where they sit.
-    expect(a.programs.length, 'the scan found every jq program in the arms — 3 in PreCompact, 9 in PostCompact, 1 in the emitter')
-      .toBe(13);
+    expect(a.programs.length, 'the scan found every jq program in the arms — 4 in PreCompact (the fourth its precompact line, Overlord W0-05), 9 in PostCompact, 1 in the emitter')
+      .toBe(14);
     const emit = audit(hookSrc()).programs.filter((h) => h.fn === '_hook_emit_context');
     expect(emit.length, 'the emitter\'s program is in the found set').toBeGreaterThan(0);
     const pre = a.programs.filter((h) => h.fn === '_hook_compact_pre');

@@ -1547,6 +1547,33 @@ _hook_lock_still_canonical() {   # <fd> -> 0 iff this descriptor is STILL the ca
   _hook_lock_same "${1-}" "$REG/.$id.compactions.lock"
 }
 
+# ── THE PRECOMPACT LINE (Overlord W1a, W0-05) ────────────────────────────
+# An automatic compaction can fire PreCompact with no PostCompact after it, so
+# the server counts a compaction from this line, joined to its journal record
+# by trigger, transcript and time. ITS OWN FILE, NOT `.compactions`, and that is
+# legitimately different: every PostCompact commit re-checks the WHOLE journal
+# against JOURNAL_RECORD_PRED, a safety boundary, so a second line shape there
+# would refuse every later commit, an older hook's after a rollback included.
+# One writer (this function), inside PreCompact's first held section of the
+# row's `.compactions.lock`, so a line and a commit never interleave; no fork
+# unless it rotates. Dot-free, so `_reg_purge` and the slug passes take it with
+# the row. BOUNDED BY ROTATION, with no temp file: at PRECOMPACT_KEEP lines it
+# is renamed to `.precompactprev` and a fresh file starts, so a reader of both
+# always holds the last PRECOMPACT_KEEP lines.
+PRECOMPACT_KEEP=32
+_hook_compact_pre_line() {   # <held lock fd> <line> -> appends it; silent and total on any failure
+  local f="$REG/$id.precompact" lines=()
+  # A FIFO, a symlink or a directory at the pathname is not this file and is
+  # never opened: an open of a FIFO would block inside the held lock.
+  [[ ! -L "$f" ]] && { [[ ! -e "$f" ]] || [[ -f "$f" ]]; } || return 0
+  [[ -f "$f" ]] && { mapfile -t lines < "$f"; } 2>/dev/null
+  if (( ${#lines[@]} >= PRECOMPACT_KEEP )) && _hook_lock_still_canonical "$1"; then
+    mv -f "$f" "$REG/$id.precompactprev" 2>/dev/null
+  fi
+  _hook_lock_still_canonical "$1" && { printf '%s\n' "$2" >> "$f"; } 2>/dev/null
+  return 0
+}
+
 # ── PreCompact (spec §3.1): THE SET ALWAYS, THE CARD WITH A GRAPH ────────
 # Called from the very end of this file, AFTER the hookstate rename: the
 # `working` stamp lands first and never waits on the helper (Task 6's sole
@@ -1555,7 +1582,7 @@ _hook_lock_still_canonical() {   # <fd> -> 0 iff this descriptor is STILL the ca
 _hook_compact_pre() {
   [ -e "$COMPACT_CARD_OFF" ] && return 0
   local tp="" trig="" set="$REG/$id.compactset" cardf="$REG/$id.compactcard" doc="" at="" nonce="" rc=0 helper_rc=0 lockfd=""
-  local aged="" cand="" suffix="" setstage="" cardstage="" ownhead="" ovl="false"
+  local aged="" cand="" suffix="" setstage="" cardstage="" ownhead="" ovl="false" pl=""
   local mins=$(( COMPACT_CARD_MAX_AGE / 60 ))
   tp=$(jq -r '.transcript_path // empty' <<<"$payload" 2>/dev/null) || return 0
   trig=$(jq -r '.trigger // "auto"' <<<"$payload" 2>/dev/null) || trig="auto"
@@ -1568,6 +1595,11 @@ _hook_compact_pre() {
   # asserts exactly that: the acquire below sits AFTER both of these calls and
   # BEFORE the overlap `find`.
   rc=0; _hook_graph_measure || rc=$?
+  # THE PRECOMPACT LINE'S TEXT (Overlord W0-05), built here so its forks stay
+  # outside the held section; it is written just after the generation check.
+  pl=$(jq -cn --argjson at "$(_hook_epoch_ms)" --arg trig "$trig" --arg s "$CS_SCOPE" --arg t "$CS_TRANSCRIPT" \
+    '{at:$at, trigger:(if $trig=="auto" or $trig=="manual" then $trig else "other" end),
+      scope:$s, transcript:(if $t=="" then null else $t end), phase:"pre"}' 2>/dev/null) || pl=""
   # ACQUIRE. From here to the release, this arm owns the row: the overlap
   # verdict, the sweep and the initial canonical publication are one
   # uninterrupted section, so no sibling can publish between the check and the
@@ -1578,6 +1610,7 @@ _hook_compact_pre() {
   lockfd="$HOOK_LOCK_FD"
   # STEP 5: the generation, validated UNDER the lock and before any inspection.
   _hook_generation_ok || { _hook_lock_release "$lockfd"; return 0; }
+  [[ -z "$pl" ]] || _hook_compact_pre_line "$lockfd" "$pl"
   # OVERLAP (spec §3.0). One slot per session id, and every context of the
   # session writes it. An unconsumed set still inside the in-flight window
   # means another compaction is in flight (or failed inside the window), and
