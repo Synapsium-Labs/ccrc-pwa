@@ -1,6 +1,5 @@
-import type { ChildMark } from '../../../shared/api.js';
 import type { FleetRole } from '../../../shared/fleetRoles.js';
-import { ROLE_AMBIGUITIES, type RoleFacts, type RoleReading } from '../roleOf.js';
+import { ROLE_AMBIGUITIES, type RoleReading } from '../roleOf.js';
 
 /**
  * ONE MAIL-PACE TABLE, KEYED BY ROLE (Overlord spec §6.4, C24 and H19; §3.3.9, C49).
@@ -11,14 +10,17 @@ import { ROLE_AMBIGUITIES, type RoleFacts, type RoleReading } from '../roleOf.js
  *
  * The key is `FleetRole` (`shared/fleetRoles.ts`), and the table `satisfies Readonly<Record<FleetRole, MailPace>>`,
  * so a role with no row is a compile error and a stray row is one too (spec §3.3.9: "Each is total over the roles").
- * The mail lane picks a session's row through the fleet's one role reader:
- * `mailPaceOf(roleOf(mailLaneRoleFacts(child, claimsOpenRun)))`, the facts measured in L4 and the row decided here.
+ * The mail lane picks a session's row through the fleet's one role reader, `mailPaceOf(roleOf(facts))`: `roleOf`
+ * decides the role and `mailPaceOf` the row, both in L1.
  *
- * The lane reads two facts, the recipient's `.child` mark and whether it claims an open run; every other fact is passed
- * as "not read on this path" (`mailLaneRoleFacts`). Declared coordinator intent is one of those: reading it would move a
- * session with intent and no open run onto the coordinator row, which spec §6.4 rules a change of behaviour for a
- * commit of its own. The designation has no reader before W1, so no live session reads the Overlord's row until then,
- * and no audit or replay lane exists before §9.5, so none reads theirs either.
+ * The lane measures two facts, the recipient's `.child` mark and whether it claims an open run, and passes every other
+ * as `roleOf.ts`'s `ROLE_FACTS_CHILD_AXIS` spells "not read on this path". It assembles no facts of its own: the one
+ * assembly of `RoleFacts` belongs to `roleFactsOf` (the renewal deciders' piece), and the lane can move onto it with the
+ * same two inputs once it lands. Declared coordinator intent stays `unmeasured`: reading it would move a session with
+ * intent and no open run onto the coordinator row, which spec §6.4 rules a change of behaviour for a commit of its own.
+ * A non-claimant therefore reads undecided between coordinator and plain, and takes `plain`'s row, the worker pair.
+ * The designation has no reader before W1, so no live session reads the Overlord's row until then, and no audit or
+ * replay lane exists before §9.5, so none reads theirs either.
  */
 
 /** One role's mail pace. Both are measured by the mail lane (`watch.ts`, `mailPass`). */
@@ -99,23 +101,6 @@ export const MAIL_PACE = {
    *  and every non-claimant read the worker pair before this table, and still do, for the worker row's reason. */
   plain: { quietMs: 60_000, cooldownMs: 120_000 },
 } as const satisfies Readonly<Record<FleetRole, MailPace>>;
-
-/** THE FACTS THE MAIL LANE MEASURES, as `roleOf` takes them. The lane reads the recipient's `.child` mark from the
- *  registry record the pass already holds, and whether it is the `claimedBy` of a non-terminal run. Every other fact
- *  is "not read on this path", spelled as `ROLE_FACTS_CHILD_AXIS` spells it (`server/src/roleOf.ts`): no designation
- *  reader before W1, no audit or replay lane before §9.5, the child's run kind and declared intent `unmeasured`.
- *
- *  A recipient the registry does not list (`undefined`) has a child mark that could not be measured, which spec
- *  §3.3.9 reads as undecided, as it reads an unreadable one: it takes the worker pair. */
-export function mailLaneRoleFacts(child: ChildMark | undefined, claimsOpenRun: boolean): RoleFacts {
-  return {
-    designation: 'none', auditBody: false, replayBody: false,
-    child: child ?? { kind: 'unreadable' },
-    childRunKind: 'unmeasured',
-    claimsOpenRun: claimsOpenRun ? 'yes' : 'no',
-    declaredIntent: 'unmeasured',
-  };
-}
 
 const slower = (a: MailPace, b: MailPace): MailPace =>
   b.quietMs > a.quietMs || (b.quietMs === a.quietMs && b.cooldownMs > a.cooldownMs) ? b : a;

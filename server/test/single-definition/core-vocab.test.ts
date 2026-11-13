@@ -867,7 +867,10 @@ describe('one MAIL_PACE: the mail gate pace has one home (Overlord spec §6.4)',
   it('the mail lane chooses a row once, through roleOf', () => {
     // Keyed on the symbol (scan/symbols.ts), never a literal read of watch.ts: the pin follows `mailPass` if it moves.
     const code = stallCodeText(sourceOfSymbol(path.join(ccrcRoot, 'server', 'src', 'watch.ts'), 'FleetWatcher.mailPass'));
-    expect(code.match(/\bmailPaceOf\(roleOf\(mailLaneRoleFacts\(/g)).toHaveLength(1);
+    // The facts are the child axis's constant with the two the lane measures, and nothing else overridden: declared
+    // intent stays unmeasured until the commit that reads it (spec §6.4).
+    expect(code.match(/\bmailPaceOf\(roleOf\(\{\s*\.\.\.ROLE_FACTS_CHILD_AXIS,\s*child:[^,]+,\s*claimsOpenRun:[^,}]+\}\)\)/g))
+      .toHaveLength(1);
     expect(code.match(/\broleOf\(/g)).toHaveLength(1);
   });
   it('the row is chosen in coord/mailPace.ts only: no other source indexes MAIL_PACE, and mailPaceRoleOf is gone', () => {

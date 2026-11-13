@@ -190,8 +190,8 @@ import {
   type OpenSibling, type RunRow,
 } from './coord/store.js';
 import { renderMailNudge } from './coord/envelope.js';
-import { mailLaneRoleFacts, mailPaceOf } from './coord/mailPace.js';
-import { roleOf } from './roleOf.js';
+import { mailPaceOf } from './coord/mailPace.js';
+import { ROLE_FACTS_CHILD_AXIS, roleOf } from './roleOf.js';
 import { configDirFor } from './config.js';
 import { refusalSentence } from './wsaudit.js';
 import {
@@ -8064,9 +8064,13 @@ export class FleetWatcher {
         // `MAIL_PACE` (`coord/mailPace.ts`) this session's role reads, decided in
         // L1 through `roleOf` from the two facts this pass measures: the
         // recipient's `.child` mark and whether it claims an open run (the
-        // per-sweep set above). Neither condition changes — only the threshold
-        // each is measured against.
-        const pace = mailPaceOf(roleOf(mailLaneRoleFacts(rec?.child, coordinators.has(d.toId))));
+        // per-sweep set above); every other fact is "not read on this path"
+        // (`ROLE_FACTS_CHILD_AXIS`), declared intent included. A recipient the
+        // registry does not list has a child mark that was not measured, read
+        // as an unreadable one (spec §3.3.9). Neither condition changes — only
+        // the threshold each is measured against.
+        const pace = mailPaceOf(roleOf({ ...ROLE_FACTS_CHILD_AXIS, child: rec?.child ?? { kind: 'unreadable' },
+          claimsOpenRun: coordinators.has(d.toId) ? 'yes' : 'no' }));
         const last = this.mailCooldown.get(d.toId) ?? 0;
         if (now - last < pace.cooldownMs) { gated(d, 'cooldown'); continue; }
         // registry ladder: `records` came from `readRegistryMeasured` above,
