@@ -1049,7 +1049,7 @@ export function registerCoordRoutes(
         return refuse(reply, 'peer-quota', { fromId, fromUuid, toId, kind, subject, runId },
           `${PEER_MAIL_MAX_OUTSTANDING} peer mails from ${fromId} to ${resolvedToId} are already outstanding`);
       }
-      if (coord.peerMailInLastHour(fromId, Date.now()) >= PEER_MAIL_HOURLY) {
+      if (coord.peerMailAtsInLastHour(fromId, Date.now()).length >= PEER_MAIL_HOURLY) {
         return refuse(reply, 'peer-quota', { fromId, fromUuid, toId, kind, subject, runId },
           `${fromId} has sent ${PEER_MAIL_HOURLY} peer mails in the last hour`);
       }

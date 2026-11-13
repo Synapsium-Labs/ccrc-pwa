@@ -224,7 +224,7 @@ describe('run mail is DARK — the bounds structurally cannot touch runId-carryi
       expect((await send(app, { ...PEER, runId: r.id, kind: 'status', subject: `run ${i}` }))
         .statusCode).toBe(202);
     }
-    // The sender's peer-hour stands at 0 — `peerMailInLastHour` counts
+    // The sender's peer-hour stands at 0 — `peerMailAtsInLastHour` reads
     // `runId IS NULL` rows only. If run rows bled into it, this send would
     // be the "13th" and 429.
     expect((await send(app, PEER)).statusCode).toBe(202);
