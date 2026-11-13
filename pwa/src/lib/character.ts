@@ -8,7 +8,7 @@
 // the server. A refusal or a failed write puts back the value the server last answered (`confirmed`), never a guess.
 import { useSyncExternalStore } from 'react';
 import { CHARACTERS, DEFAULT_CHARACTER, isCharacter, type Character as CharacterName } from '../../../shared/face';
-import { api } from './api';
+import { api, type FaceAnswer } from './api';
 import { readKey, writeKey } from './storage';
 
 export const CHARACTER_STORAGE_KEY = 'ccrc-character';
@@ -25,10 +25,14 @@ function storedCharacter(): CharacterName {
 }
 
 let current: CharacterName = DEFAULT_CHARACTER;
-/** What the server last answered; what a refused write puts back. */
+/** What the server last answered, in REQUEST order: an answer sets it only when its request is newer than the one
+ *  that set it (`confirmedSeq`), so a late answer to an older request never overwrites a newer one. */
 let confirmed: CharacterName = DEFAULT_CHARACTER;
-/** Bumped by every choice, so a read that answers after a choice does not overwrite it. */
-let choices = 0;
+let confirmedSeq = 0;
+/** One counter for every request, the boot read and each write. */
+let seq = 0;
+/** The writes sent and not yet settled. */
+const pending = new Set<number>();
 const listeners = new Set<() => void>();
 
 function show(c: CharacterName): void {
@@ -37,29 +41,34 @@ function show(c: CharacterName): void {
   for (const l of listeners) l();
 }
 
+/** A request settled, answered (`answer`) or failed (`null`). Fold an answer into `confirmed` if it is the newest so
+ *  far; then, unless a newer write is still out (it will settle the display), show what the server last answered. */
+function settle(id: number, answer: FaceAnswer | null): void {
+  pending.delete(id);
+  if (answer !== null && isCharacter(answer.character) && id > confirmedSeq) {
+    confirmed = answer.character;
+    confirmedSeq = id;
+  }
+  if (![...pending].some((w) => w > id)) show(confirmed);
+}
+
 /** Read the device copy, then the server's row, at boot (main.tsx). A failed read keeps the copy. */
 export function initCharacter(): void {
   const copy = storedCharacter();
   confirmed = copy;
+  confirmedSeq = 0;
   current = copy;
   for (const l of listeners) l();
-  const asked = choices;
-  api.getFace().then((a) => {
-    if (!isCharacter(a.character)) return;
-    confirmed = a.character;
-    if (choices === asked) show(a.character);
-  }).catch(() => { /* offline or an older server: the copy stands */ });
+  const id = ++seq;
+  api.getFace().then((a) => settle(id, a), () => settle(id, null));
 }
 
 /** Apply a choice now, then write it. */
 export function setCharacter(c: CharacterName): void {
-  const mine = ++choices;
+  const id = ++seq;
+  pending.add(id);
   show(c);
-  api.setFace(c).then((a) => {
-    if (isCharacter(a.character)) confirmed = a.character;
-  }).catch(() => {
-    if (choices === mine) show(confirmed);
-  });
+  api.setFace(c).then((a) => settle(id, a), () => settle(id, null));
 }
 
 function subscribe(onChange: () => void): () => void {

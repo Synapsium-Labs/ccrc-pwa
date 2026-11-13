@@ -37,10 +37,10 @@ import type { ProjectAddAnswer, ProjectAddBody } from '../../../shared/projectAd
 import type { LinkingWriteBody, ProjectLinkingWire } from '../../../shared/linking';
 import type { SecretRemoveAnswer, SecretSaveAnswer, StoredSecretsAnswer } from '../../../shared/ledgers';
 
-/** `GET`/`POST /api/coord/roll-idle`'s answer (D-7453). */
 /** `GET`/`POST /api/face`'s answer. */
 export interface FaceAnswer { readonly character: CharacterName; readonly updatedAt: number }
 
+/** `GET`/`POST /api/coord/roll-idle`'s answer (D-7453). */
 export interface RollIdleView {
   readonly ok: true;
   readonly targets: ClaudeRollTargets | null;

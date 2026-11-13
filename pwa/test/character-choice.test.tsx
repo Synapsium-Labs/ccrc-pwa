@@ -72,6 +72,42 @@ describe('the character store', () => {
   });
 });
 
+describe('answers settle in request order', () => {
+  it('a boot read that answers late does not overwrite a newer write, and a later refusal puts back the newer value', async () => {
+    stubFetch(() => undefined);
+    const { result } = renderHook(() => useCharacter());
+    act(() => { initCharacter(); });
+    const bootGet = held.shift()!;
+    act(() => { setCharacter('dark-lord'); });
+    await act(async () => { held.shift()!(face('dark-lord')); });
+    await act(async () => { bootGet(face('orb')); });
+    expect(result.current).toBe('dark-lord');
+    act(() => { setCharacter('orb'); });
+    await act(async () => { held.shift()!({ status: 400, body: { ok: false, error: 'bad-request' } }); });
+    expect(result.current).toBe('dark-lord');
+  });
+
+  it('a newer write refused while an older one is in flight: the older write\'s success still shows', async () => {
+    stubFetch(() => undefined);
+    const { result } = renderHook(() => useCharacter());
+    act(() => { setCharacter('dark-lord'); setCharacter('orb'); });
+    const [first, second] = held.splice(0);
+    await act(async () => { second!({ status: 400, body: { ok: false, error: 'bad-request' } }); });
+    await act(async () => { first!(face('dark-lord')); });
+    expect(result.current).toBe('dark-lord');
+  });
+
+  it('a write that fails on the network reverts', async () => {
+    stubFetch((m) => (m === 'GET' ? face('orb') : undefined));
+    const { result } = renderHook(() => useCharacter());
+    act(() => { initCharacter(); });
+    await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
+    vi.stubGlobal('fetch', vi.fn(async () => { throw new TypeError('network'); }));
+    act(() => { setCharacter('dark-lord'); });
+    await waitFor(() => expect(result.current).toBe('orb'));
+  });
+});
+
 describe('the card', () => {
   const group = (): HTMLElement => within(screen.getByRole('group', { name: 'Character' })).getByRole('radiogroup');
   const radios = (): HTMLInputElement[] => within(group()).getAllByRole('radio') as HTMLInputElement[];
