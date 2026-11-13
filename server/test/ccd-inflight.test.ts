@@ -137,6 +137,24 @@ describe('the manifest writer: results that run no program', () => {
     } finally { fs.chmodSync(path.join(h.home, CFG, 'projects'), 0o755); }
   });
 
+  it.skipIf(process.getuid?.() === 0)('a config root that cannot be searched (mode 000) is unmeasured why=error, never not-applicable', () => {
+    seed({ items: false });
+    fs.chmodSync(path.join(h.home, CFG), 0o000);
+    try {
+      write('swap');
+    } finally { fs.chmodSync(path.join(h.home, CFG), 0o755); }
+    expect(parse().head).toMatchObject({ verdict: 'unmeasured', why: 'error' });
+  });
+
+  it.skipIf(process.getuid?.() === 0)('a project directory that cannot be searched, under a readable projects directory, is unmeasured why=error, never not-applicable', () => {
+    seed({ items: false });
+    fs.chmodSync(path.join(h.home, CFG, 'projects', PDIR), 0o000);   // the transcript is inside it
+    try {
+      write('swap');
+    } finally { fs.chmodSync(path.join(h.home, CFG, 'projects', PDIR), 0o755); }
+    expect(parse().head).toMatchObject({ verdict: 'unmeasured', why: 'error' });
+  });
+
   it('a config root that is not a directory, or a projects entry that is a file, is unmeasured why=error, never not-applicable', () => {
     seed({ items: false });
     fs.writeFileSync(path.join(h.home, 'notadir'), 'x');
@@ -341,15 +359,16 @@ describe('the manifest writer: the generation read', () => {
 });
 
 describe('the manifest writer: no generation file', () => {
-  it('with no generation file the header reads gen=- and no flock, mktemp, link or rm runs for it: the absence is read with builtins', () => {
+  it('with no generation file the header reads gen=- and no flock, mktemp or link runs for it: the absence is read with builtins', () => {
     seed();
     const d = path.join(h.home, 'stubbin');
     fs.mkdirSync(d, { recursive: true });
     for (const t of ['flock', 'mktemp', 'link']) fs.writeFileSync(path.join(d, t), `#!/bin/sh\necho ${t} >> "$HOME/ext-calls"\nexit 1\n`, { mode: 0o755 });
-    // the manifest's own slot uses flock too, so the stub is first on PATH only around the generation read: the slot is taken
-    // by the real one through an absolute path in this snippet's override of `command -v`
-    const out = write('swap', 'PATH="$HOME/stubbin:$PATH"; _inflight_slot_take() { INFLIGHT_SLOT_FD=""; return 0; };');
+    // the stubs are first on PATH for the whole call, so the case also proves the manifest's own slot takes none of the three:
+    // `_inflight_slot_take` is replaced by a stub that opens a real descriptor on /dev/null, so the release line prints nothing
+    const out = write('swap', 'PATH="$HOME/stubbin:$PATH"; _inflight_slot_take() { exec {INFLIGHT_SLOT_FD}>/dev/null; return 0; };');
     expect(out).toContain('[rc=0]');
+    expect(out).not.toContain('ambiguous redirect');
     expect(parse().head['gen']).toBe('-');
     expect(readOr(path.join(h.home, 'ext-calls')) ?? '', 'no external ran for the generation read').toBe('');
   });

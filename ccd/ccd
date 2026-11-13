@@ -28864,9 +28864,13 @@ _inflight_write() {   # id site [cfg uuid [log-from]] -> the session's manifest 
         else reset=$f_reset; wait=$(( 10#$f_reset > 10#$f_since ? 10#$f_reset - 10#$f_since : 0 )); fi
       fi
     fi
-    if [[ -z "$cfg" || -z "$uuid" || ! -d "$cfg" ]]; then :   # unmeasured, why=error
+    if [[ -z "$cfg" || -z "$uuid" || ! -d "$cfg" || ! -x "$cfg" ]]; then :   # unmeasured, why=error (a config root that cannot be searched is not a measured absence)
     elif [[ -e "$cfg/projects" || -L "$cfg/projects" ]] && ! [[ -d "$cfg/projects" && -r "$cfg/projects" && -x "$cfg/projects" ]]; then :   # not a measured absence
-    elif [[ -z "$(_transcript_matches "$cfg" "$uuid")" ]]; then verdict=not-applicable why=-; counts="$dash"   # no transcript: the program never runs
+    elif [[ -z "$(_transcript_matches "$cfg" "$uuid")" ]]; then
+      # no transcript: the program never runs, but only when every project directory could be searched (D-8376): a directory that
+      # cannot be searched hides its transcript, so it is unmeasured, never a measured absence. Builtins only (no fork).
+      if [[ -n "$( shopt -s nullglob; for pd in "$cfg"/projects/*/; do [[ -x "$pd" ]] || { printf x; break; }; done )" ]]; then :   # unmeasured, why=error
+      else verdict=not-applicable why=-; counts="$dash"; fi
     else
       prog="${BASH_SOURCE[0]%/*}/lib/inflight-manifest.py"
       [[ -f "$prog" ]] || prog="$HOME/.cc-sessions/lib/inflight-manifest.py"
