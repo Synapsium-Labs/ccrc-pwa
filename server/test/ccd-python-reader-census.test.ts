@@ -59,6 +59,8 @@ const ROWS: readonly Row[] = [
     why: 'sums usage from assistant rows, a standalone sweep that stays in Python' },
   { name: 'lib/carry-dedupe.py', kind: 'reader', d: 'D-8070',
     why: 'parses each row of a carried copy for its uuid, to prove the copy adds nothing to the keeper; it rewrites no record, but it deletes a carried copy once proved and swaps identical sidecar files for hard links to the keeper\'s' },
+  { name: 'lib/inflight-manifest.py', kind: 'no-read', d: 'D-8369',
+    why: 'parses Claude Code\'s workflow journals and summaries, which are not transcripts; an agent transcript\'s tail is read as bytes and handed to agent_end in ccd/lib/transcript.jq, which parses it' },
   { name: '_sanitize_anthropic', kind: 'writer', d: 'D-8070',
     why: 'fills empty assistant text blocks in a carried transcript; the writer stays whatever happens to the readers' },
   { name: '_carry_py', kind: 'no-read', d: 'D-8070',
