@@ -6,6 +6,7 @@ import { mkTmp } from './tmpHelpers.js';
 import { DEFAULT_TEST_ROSTER } from './helpers.js';
 import { seedAccountsSh } from './ccdWsHelpers.js';
 import { ACCOUNT_DENY_RULES, CHILD_DENY_RULES, childDenyRules } from '../../shared/api.js';
+import { HOOK_EVENTS } from '../../shared/hook-events.js';
 
 const INSTALLER = path.resolve(__dirname, '../../ccd/install-session-hooks.sh');
 
@@ -304,6 +305,13 @@ describe('installer wiring cannot drift from the hook it installs (D-306)', () =
   it('the derivation is real: it reads SessionStart out of the hook source', () => {
     expect(handledEvents()).toContain('SessionStart');
     expect(handledEvents().length).toBeGreaterThanOrEqual(10);
+  });
+
+  // D-8613: the TypeScript vocabulary is the same set a third time, so it is held to the hook's case arms in both
+  // directions: an arm the union lacks, or a member no arm handles, is red.
+  it('HOOK_EVENTS, the L0 union, is the hook\'s handled set as a set, both directions (D-8613)', () => {
+    expect(new Set(HOOK_EVENTS).size, 'no duplicate member').toBe(HOOK_EVENTS.length);
+    expect([...HOOK_EVENTS].sort()).toEqual(handledEvents());
   });
 });
 
