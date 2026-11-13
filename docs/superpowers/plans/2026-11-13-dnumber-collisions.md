@@ -132,3 +132,33 @@ Left as they are, because they are dated history about the collision or a range,
   date gate: `GRANDFATHERED` is checked only for "still collides" and "below 211". The deadline is not in this tree.
 - The grandfathered set undercounts the block: three of its numbers (139, 140, 141) are three- or four-way
   collisions, and 136, 142, 143 and 144 collide too (136 through a code-only claim neither scan can see).
+
+## Carried out
+
+The ledger issued the block D-8586 to D-8609 (24 numbers) and all 24 were used, in table order:
+
+| Row | Issued | Was | Plan |
+|---|---|---|---|
+| N1–N8 | D-8586 to D-8593 | 128 to 135 | `regset-atomic-write` |
+| N9 | D-8594 | 137 | `regset-atomic-write` |
+| N10 | D-8595 | 138 | `regset-atomic-write` |
+| N11 | D-8596 | 139 | `regset-atomic-write` |
+| N12–N16 | D-8597 to D-8601 | 139 to 143 | `stage3b-exposure` |
+| N17–N23 | D-8602 to D-8608 | 139 to 145 | `stage4-release` |
+| N24 | D-8609 | 136 | `stage3a-auth` (the code-only claim) |
+
+Every definition that moved keeps its date or task and carries `was D-<old>`; every citation the table lists
+moved with it, each re-read in context with `git grep` first, and none was ambiguous. The three rewordings
+(72, 73, 171) landed as proposed. `GRANDFATHERED` is empty, the `SUB-211 COLLISIONS:` marker reads `none`, and
+the era-scoping test's premise is now that its derivation read at least 100 distinct sub-211 definitions
+(124 measured), with the derived set pinned empty.
+
+Found while carrying it out:
+
+- `ccd/ccd` had moved since `ab89d6ff5`: the two citations of rows N5 and N11 sat at `:6538` and `:6546`, not
+  `:6536` and `:6544`. Same comments, same meaning.
+- The N24 definition sits in the 136 slot of `stage3a-auth.md`'s ledger (between its D-135 and D-137 entries),
+  and the note at `:126` lost only its "claimed … has no ledger entry" sentence. Placing it there keeps the ledger
+  in task order; the `was D-136` alias finds it either way.
+- The era-scoping test is the only premise that had to change. Every other guard in `deviation-refs.test.ts`
+  reads `GRANDFATHERED` as a filter and passes over an empty set unchanged.

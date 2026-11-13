@@ -27,7 +27,8 @@ systemd user units, Caddy as a system package (never a node dependency).
 - Suites run from inside each package as `./node_modules/.bin/vitest run <file>` — NEVER bare
   `npx vitest`. Foreground. Full-suite gates at each commit named below.
 - TDD red-first; every guard mutation-measured with the before/after counts recorded in this
-  plan's `## Deviations found` ledger (D-N numbering continues from D-138).
+  plan's `## Deviations found` ledger (its entries are D-8597 to D-8601; they were numbered D-139 to
+  D-143, which `2026-08-20-stage3a-auth.md` also defines, until D-8562 renumbered them).
 - Bash single-definition: every new path/name constant (`CCRC_EXPOSURE_FILE`, the Caddyfile
   path, the ddns unit names) is spelled ONCE per corpus and pinned in
   `server/test/single-definition.test.ts` following the `CCRC_RC_FILE` worked example
@@ -290,7 +291,7 @@ Verdict table (each row is a test):
   Step-5 mutation is what proves the matching-name one guards.)*
 - [x] **Step 4: GREEN (pwa)** — thread the field through the login screen's status read.
   *(40/40, `tsc --noEmit` clean. The current-rpId half rides `PasskeyCeremonyError.rpId` —
-  D-142.)*
+  D-8600.)*
 - [x] **Step 5:** mutation — drop the rpId-mismatch condition (the plain-cancel test reds,
   because every cancel would claim a rename). D-149 sweep note in the commit (no route
   added; the exempt GET's body widened — checked `ccd/ccrc` + both skills for `auth/status`
@@ -299,7 +300,7 @@ Verdict table (each row is a test):
   `feat(auth): status names enrolled rpIds; the rename failure says what is true`.
   *(Measured: mismatch condition reduced to `enrolled.length > 0` → auth-login 1 red (the
   matching-name plain-cancel pin) / 39 passed; reverted. D-149 sweep: ZERO out-of-package
-  `auth/status` readers exist — the parenthetical's `_check_auth` claim was stale, D-141.
+  `auth/status` readers exist — the parenthetical's `_check_auth` claim was stale, D-8599.
   Gate + neighbour suites green: server auth-routes + single-definition + auth-passkey +
   auth-gate 378/378, typecheck-tests 9/9; pwa auth-login + auth-passkey 76/76, tsc clean.)*
 
@@ -340,12 +341,12 @@ Verdict table (each row is a test):
   re-enrol"). *(Shipped as 11 + 11a–11f, including the 11a un-shadow edit the runbook path
   itself forces — step 10b put both keys in `ccrc.env`, exactly the state Task 2's shadow
   refusal exists for. The `:508-516` region held ONE bullet carrying both stale claims —
-  D-143.)*
+  D-8601.)*
 - [x] **Step 2:** `ccrc.env.example`: document that exposure keys live in `exposure.env` and
   which file wins; README: the exposure section (BYO-proxy contract sentence from spec
   `:160-164` verbatim). *(README quotes no transcript fences, so `readme-holds` needed no
   extension; the two stale 3a sentences found in `ccrc.env.example` fixed in the same pass —
-  D-143.)*
+  D-8601.)*
 - [x] **Step 3: RED→GREEN** — add `runbook-holds` pins for every doctor line step 11 quotes.
   Full server suite green. Commit `docs(runbook): step 11 — expose, ceremony, phone proof`.
   *(Red-first: the eight step-11 pins written BEFORE the docs — runbook-holds 8 failed /
@@ -364,9 +365,9 @@ Verdict table (each row is a test):
 
 ## Deviations found
 
-(D-139 onward; recorded during execution.)
+(D-8597 to D-8601, renumbered by D-8562 from D-139 to D-143; recorded during execution.)
 
-- **D-139** (Task 2): the tty refusal is the `cmd_passwd` sentence's SHAPE, not its verbatim
+- **D-8597** (Task 2; was D-139): the tty refusal is the `cmd_passwd` sentence's SHAPE, not its verbatim
   bytes. The plan says "the `cmd_passwd` sentence verbatim", but that sentence names a
   passphrase, a confirmation read, and `Run 'ccrc passwd' from a terminal` — three claims
   that are false for this verb. Shipped: the same structure and the same load-bearing
@@ -375,7 +376,7 @@ Verdict table (each row is a test):
   `ccrc expose <sub>`. The test pins the same two anchors the passwd suite pins
   (`/^ccrc: stdin is not a terminal/m`, `/curl … \| bash/`), so the two refusals cannot
   drift apart on the parts that matter.
-- **D-140** (Task 3): the timer enable is DEGRADED, not fatal — the plan's Step 1 named the
+- **D-8598** (Task 3; was D-140): the timer enable is DEGRADED, not fatal — the plan's Step 1 named the
   `systemctl` calls without naming their failure mode, and Task 2's already-shipped contract
   decides it: every duckdns-arm test runs against the fixture's poisoned `systemctl` (exit 97)
   and asserts exit 0, so a fatal enable would red the whole shipped suite. Shipped as
@@ -385,14 +386,14 @@ Verdict table (each row is a test):
   verb prints the exact `daemon-reload && enable --now` command and exits 0, pinned by a
   fifth test (`a failing systemctl DEGRADES, never dies`) beyond Step 1's three named bullets.
   Doctor's `name` check (Task 4) carries the not-yet-enabled state.
-- **D-141** (Task 5): the D-149 sweep's parenthetical claim is stale — measured, NO
+- **D-8599** (Task 5; was D-141): the D-149 sweep's parenthetical claim is stale — measured, NO
   out-of-package consumer reads `/api/auth/status` at all (`grep -rn "api/auth" ccd/ deploy/`
   → zero hits). Doctor's `_check_auth` measures `ccrc.env`, the secret file and the session
   store ON DISK through `_box_env_value`/`_box_auth_path`, never the HTTP route, so there is
   no parser to verify tolerance on. The sweep still ran and the commit says what it checked;
   the widened exempt body has exactly one out-of-server reader, the PWA's `readAuthStatus`,
   which types the body `Partial<AuthStatus>` and is additive-tolerant by construction.
-- **D-142** (Task 5): the rename condition needs the box's CURRENT rpId, which the plan
+- **D-8600** (Task 5; was D-142): the rename condition needs the box's CURRENT rpId, which the plan
   locates "already present in the assert-start response" — a response only
   `pwa/src/lib/passkey.ts` (not in the task's file list) has in scope. Shipped: `assertPasskey`
   stamps it onto every `PasskeyCeremonyError` it throws after start (`readonly rpId`), and the
@@ -400,7 +401,7 @@ Verdict table (each row is a test):
   the login screen lives at `pwa/src/components/LoginScreen.tsx` (the list says `screens/`),
   and `pwa/src/lib/auth.ts` needed no edit — its `readAuthStatus` was already the single
   reader the field rides in on.
-- **D-143** (Task 7): the plan's "`:508-516`'s two bullets" was ONE bullet carrying both stale
+- **D-8601** (Task 7; was D-143): the plan's "`:508-516`'s two bullets" was ONE bullet carrying both stale
   claims (the refusal text and the trustProxy forward-reference). Shipped as a split into two
   bullets — the real-name/TLS one now pointing at step 11 and quoting Task 5's shipped
   sentence, and a proxy-trust one stating the D5 settlement ("settled: none", grounded in

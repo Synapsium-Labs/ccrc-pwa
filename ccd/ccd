@@ -6535,7 +6535,7 @@ if mode == 'state':
     # appending needs write on the FILE, not the directory — the unwritable
     # `$REG` never touches it; and `clear`'s `os.remove` and `put`'s tmp-create
     # both raise `PermissionError`, because both need write on the DIRECTORY
-    # (D-132). So for a session that has never run `pr-state` under an
+    # (D-8590). So for a session that has never run `pr-state` under an
     # unwritable `$REG`: the lock cannot be created, the compare-and-set below
     # proceeds UNLOCKED, and two concurrent runs can each reach the prhistory
     # append — the duplicate-append harm this lock exists to prevent — before
@@ -6543,7 +6543,7 @@ if mode == 'state':
     # which `_ws_archive_manifest` later folds into the archive manifest
     # verbatim.
     #
-    # DISCLOSED, NOT CLOSED (ruling, D-139). It takes a read-only `$REG` AND
+    # DISCLOSED, NOT CLOSED (ruling, D-8596). It takes a read-only `$REG` AND
     # concurrent `pr-state` runs AND a session with no lock file yet — all
     # three at once — and the natural closes each trade this rare duplicate
     # for a worse ordinary-case cost: locking `.prhistory` itself adds a new
