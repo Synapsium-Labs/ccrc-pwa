@@ -93,6 +93,10 @@ backlog.
   `ccrc test -- ./node_modules/.bin/tsc --noEmit` and `ccrc test -- ./node_modules/.bin/tsc -p test/tsconfig.tests.json --noEmit`.
 - **Mutation floors.** `peerMailVerdict` is a new L1 decider: it joins `MUTANT_SETS` and
   `server/test/sim/mutation-floors.json` in Task 1 (spec Table 11.7b).
+- **Growth check.** `ccd/ccd`, `ccd/session-hook.sh`, `server/src/watch.ts`, `server/src/coord/store.ts` and
+  `server/src/coord/routes.ts` (among the files `server/test/growthCheck.ts` lists) grow at most `GROWTH_LIMIT` (40)
+  net lines a pull request. New code goes in a new module; growth past the limit needs a waiver file under
+  `server/test/growth-waivers/`, whose D-number the coordinator issues.
 - **Migration slots** are measured again before each merge:
   `git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'`. Tests find a slot with
   `MIGRATIONS.findIndex(...)`, never a literal.
