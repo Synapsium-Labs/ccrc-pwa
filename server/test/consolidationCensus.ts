@@ -618,10 +618,60 @@ export function laneClockReported(root: string = REPO): CensusSite[] {
   return out;
 }
 
-/** Numeric fields of `FleetWatcher` that are compared with a constant and are NOT a lane's throttle: `lastStallJudgedAt` is
- *  the stall watch's gap rule (slug `stall-clocks-drop-on-an-unobserved-gap`, D-3750), a state test on how long the watch
- *  went unobserved, which decides whether to drop its clocks and does not decide whether a lane runs. */
-export const LANE_CLOCK_SHAPE_EXEMPT: readonly string[] = ['lastStallJudgedAt'];
+/** One hand-made clock kept outside `LANE_SCHEDULE` on purpose, with why it is not a row. */
+export interface LaneScheduleException {
+  readonly file: string;
+  /** The class that holds the field, or null for a timer of the module's own. */
+  readonly owner: string | null;
+  /** The field's name; for a module timer, a token its call's line carries. */
+  readonly name: string;
+  /** `gap-rule`: a state test on how long something went unobserved. `safety-interval`: how long a lane WAITS before it acts
+   *  again (`laneSchedule.ts`' header: never a row). `calendar-latch`: a UTC hour or day spent once, on the wall clock (a
+   *  boundary, not an elapsed cadence; every row is monotonic under OA-C4). `process-timer`: a timer of the composition
+   *  root, beside the watcher, for a job that is not a watcher lane. */
+  readonly kind: 'gap-rule' | 'safety-interval' | 'calendar-latch' | 'process-timer';
+  readonly reason: string;
+}
+
+/** D-8614 (ARCH-68's follow-up): where the schedule census keeps its exceptions. Every clock here was measured and is not
+ *  a cadence a row could hold with the same firing and gating (`delegation-clocks.test.ts` pins the delegation lane's
+ *  three as they fire), so each stays where it is, named, with its reason. `handClocksOutsideSchedule` finds every such
+ *  clock by its shape, so a new one that is neither a row nor named here is seen; an entry whose clock is gone is stale
+ *  and reds the ratchet too. */
+export const LANE_SCHEDULE_EXCEPTIONS: readonly LaneScheduleException[] = [
+  {
+    file: 'server/src/watch.ts', owner: 'FleetWatcher', name: 'lastStallJudgedAt', kind: 'gap-rule',
+    reason: 'the stall watch\'s gap rule (slug stall-clocks-drop-on-an-unobserved-gap, D-3750): it decides whether to drop the watch\'s clocks after an unobserved gap, never whether a lane runs',
+  },
+  {
+    file: 'server/src/watch.ts', owner: 'DelegationLane', name: 'reconciledWallMs', kind: 'gap-rule',
+    reason: 'the breaker\'s staleness test (M-1, DELEGATION_STALE_RECONCILE_MS): a reconcile older than three census cadences no longer vouches for its counts; it decides a verdict, never whether a lane runs',
+  },
+  {
+    file: 'server/src/watch.ts', owner: 'DelegationLane', name: 'lastRecoverAt', kind: 'safety-interval',
+    reason: 'the recovery backoff (DELEGATION_RECOVERY_RETRY_MS): stamped by the applier\'s open and by each recovery, and read only while the applier is failed, so it is state, not a beat',
+  },
+  {
+    file: 'server/src/watch.ts', owner: 'DelegationLane', name: 'lastUpkeepHour', kind: 'calendar-latch',
+    reason: 'the hourly retention spends a UTC hour on the pass\'s wall instant (two passes a minute apart across an hour both run it), and the same pass enters the door every time an interval is due',
+  },
+  {
+    file: 'server/src/watch.ts', owner: 'DelegationLane', name: 'lastCompactDay', kind: 'calendar-latch',
+    reason: 'the daily compaction spends a UTC day on the pass\'s wall instant, and only once the applier allows pruning (D-7022)',
+  },
+  {
+    file: 'server/src/watch.ts', owner: 'DelegationLane', name: 'lastMarkWarnHour', kind: 'calendar-latch',
+    reason: 'the marks warn line, at most once per UTC hour while a mark holds something back (R73 rule 4, N16): a log latch the change-latch census reports by name (D-5861), never a lane',
+  },
+  {
+    file: 'server/src/index.ts', owner: null, name: 'accountAudit.sweep', kind: 'process-timer',
+    reason: 'the audit and Linear journal retention (D-5620, D-7671) runs at boot, before the server listens, then daily on an unref\'d timer of the composition root, which holds the three stores; they belong to no watcher lane, and the sweep runs whether or not the tick does',
+  },
+];
+
+/** Numeric fields of `FleetWatcher` that are compared with a constant and are NOT a lane's throttle: the `FleetWatcher`
+ *  entries of `LANE_SCHEDULE_EXCEPTIONS` (today the stall watch's gap rule, `lastStallJudgedAt`). */
+export const LANE_CLOCK_SHAPE_EXEMPT: readonly string[] = LANE_SCHEDULE_EXCEPTIONS.filter((e) => e.owner === 'FleetWatcher').map((e) => e.name);
 
 /** The structural query: a numeric field of `FleetWatcher` (bar `LANE_CLOCK_SHAPE_EXEMPT`) compared as
  *  `<now> - this.X <op> CONST` (`<`, `<=`, `>`, `>=`), CONST an UPPER_CASE name, a numeric literal or a product of those. So a
@@ -631,6 +681,77 @@ export function laneClockShapes(root: string = REPO): CensusSite[] {
   if (w === null) return [];
   const numeric = new Set(w.facts.fields.filter((f) => f.cls === 'FleetWatcher' && f.numeric && !LANE_CLOCK_SHAPE_EXEMPT.includes(f.name)).map((f) => f.name));
   return w.facts.comparisons.filter((c) => c.cls === 'FleetWatcher' && numeric.has(c.field) && c.other !== 'other').map((c) => siteAt(w, c.line));
+}
+
+/** One hand-made clock outside `LANE_SCHEDULE`, with the exception that names it (null when none does). */
+export interface HandClockSite extends CensusSite {
+  readonly owner: string | null;
+  readonly name: string;
+  readonly exception: LaneScheduleException | null;
+}
+
+/** The module timers the census reads beside the watcher: the composition root's own. */
+const TIMER_MODULES: readonly string[] = ['server/src/index.ts'];
+
+/**
+ * D-8614: every hand-made clock outside `LANE_SCHEDULE` that the census can see, each tagged with the exception that names it.
+ * Three shapes:
+ * - in `FleetWatcher`, what `laneClockShapes` sees with no exemption (a numeric field compared as `<now> - this.X <op> CONST`);
+ * - in `DelegationLane`, the same throttle shape, and a numeric `last*` field compared with `===` or `!==` against a key in
+ *   one of its methods (an hour or a day spent once; a warn-once latch of that shape is one too, whatever else reports it);
+ * - in the composition root (`TIMER_MODULES`), every `setInterval(` on a code line.
+ * One site per field, on its first comparing line (in line order); one per timer call.
+ * KNOWN WIDTH: a clock of another class, a timer of another module, a latch compared through a local alias, and a
+ * `setTimeout` that re-arms itself are other shapes and are not seen.
+ */
+export function handClocksOutsideSchedule(root: string = REPO): HandClockSite[] {
+  const out: HandClockSite[] = [];
+  const named = (file: string, owner: string | null, name: string): LaneScheduleException | null =>
+    LANE_SCHEDULE_EXCEPTIONS.find((e) => e.file === file && e.owner === owner && e.name === name) ?? null;
+  const w = watcherFacts(root);
+  if (w !== null) {
+    const parsed = parsedFile(path.join(root, w.file));
+    const numericOf = (cls: string): Set<string> => new Set(w.facts.fields.filter((f) => f.cls === cls && f.numeric).map((f) => f.name));
+    const first = new Map<string, { owner: string; line: number }>();
+    const note = (owner: string, name: string, line: number): void => {
+      const key = `${owner}#${name}`;
+      const had = first.get(key);
+      if (had === undefined || line < had.line) first.set(key, { owner, line });
+    };
+    for (const cls of ['FleetWatcher', 'DelegationLane']) {
+      const numeric = numericOf(cls);
+      for (const c of w.facts.comparisons) if (c.cls === cls && numeric.has(c.field) && c.other !== 'other') note(cls, c.field, c.line);
+    }
+    const delegationNumeric = numericOf('DelegationLane');
+    for (const m of parsed.symbols) {
+      if (m.kind !== 'method' || !m.name.startsWith('DelegationLane.')) continue;
+      for (let ln = m.line; ln <= m.endLine; ln++) {
+        const code = codeOf(w.lines[ln - 1] ?? '');
+        const hits = [
+          ...[...code.matchAll(/([A-Za-z_$][\w$.]*)\s*(?:!==|===)\s*this\.(last\w+)\b/g)].map((x) => [x[1]!, x[2]!] as const),
+          ...[...code.matchAll(/this\.(last\w+)\s*(?:!==|===)\s*([A-Za-z_$][\w$.]*)/g)].map((x) => [x[2]!, x[1]!] as const),
+        ];
+        for (const [key, field] of hits) {
+          if (/^(?:null|undefined|true|false)$/.test(key) || !delegationNumeric.has(field)) continue;
+          note('DelegationLane', field, ln);
+        }
+      }
+    }
+    for (const [key, { owner, line }] of first) {
+      const name = key.slice(owner.length + 1);
+      out.push({ ...siteAt(w, line), owner, name, exception: named(w.file, owner, name) });
+    }
+  }
+  for (const file of TIMER_MODULES) {
+    const abs = path.join(root, file);
+    if (!existsSync(abs)) continue;
+    readFileSync(abs, 'utf8').split('\n').forEach((text, i) => {
+      if (!/\bsetInterval\s*\(/.test(codeOf(text))) return;
+      const exception = LANE_SCHEDULE_EXCEPTIONS.find((e) => e.file === file && e.owner === null && text.includes(e.name)) ?? null;
+      out.push({ file, line: i + 1, text, owner: null, name: exception?.name ?? 'setInterval', exception });
+    });
+  }
+  return out.sort((a, b) => a.file.localeCompare(b.file) || a.line - b.line);
 }
 
 /** The single-flight guards (`SINGLE_FLIGHT_NAMES`) still declared as fields of `FleetWatcher`. */

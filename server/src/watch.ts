@@ -10417,6 +10417,8 @@ class DelegationLane {
   private opening: Promise<DelegationDurability | null> | null = null;
   /** The lane has tried to open the applier: from then on a health is reported (absence before that reads as unknown). */
   private attempted = false;
+  /** The recovery backoff's wall stamp (`DELEGATION_RECOVERY_RETRY_MS`), set by the open and by each recovery and read only while the
+   *  applier is failed: a safety interval, never a row of `LANE_SCHEDULE` (a recorded exception, D-8614). */
   private lastRecoverAt = 0;
   private registryListed = true;
   /** Hours already read after they closed, this process: not read again. Memory only; a restart reads each once more. */
@@ -10507,6 +10509,8 @@ class DelegationLane {
   private droppedAdded = 0;
   private droppedPeak = 0;
   private seams: DelegationLaneSeams = {};
+  /** The UTC hour the hourly upkeep and the UTC day the compaction last spent, on the pass's wall instant: calendar latches, not
+   *  cadences, so never rows of `LANE_SCHEDULE` (recorded exceptions, D-8614; `delegation-clocks.test.ts` pins when each fires). */
   private lastUpkeepHour = -1;
   private lastCompactDay = -1;
   private cursorsPruned = 0;
