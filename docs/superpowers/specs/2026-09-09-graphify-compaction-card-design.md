@@ -1120,7 +1120,8 @@ slug residue because it intentionally outlives the row. The Bash 4.4+/GNU-or-BSD
    `COMPACT_LOCK_WHY` beside the ordinary rc 1, because all five hook acquire sites read the acquire as a
    boolean and two functions across three of its nine sites (`cmd_start`, and `_spawn_start`, which holds
    two) fall through an unrecognised code into a
-   silent continue — a new numeric status would be a distinct refusal nobody distinguishes, and two spawn
+   silent continue (and the ninth, `_inflight_write`'s, reads the acquire as a boolean and continues silently on any
+   refusal) — a new numeric status would be a distinct refusal nobody distinguishes, and two spawn
    paths would quietly treat it as mechanism absence. `cmd_ws_add` and `cmd_start` append a conditional
    remedy clause when it is set, because "retry" is the WRONG remedy for a lock file nothing will recreate.
 
