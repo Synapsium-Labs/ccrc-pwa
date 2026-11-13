@@ -1453,7 +1453,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   // the roster never vetted.
   app.get('/api/models/:lane', async (req, reply) => {
     const { lane } = req.params as { lane: string };
-    if (!deps.cfg.roster.byId.has(lane)) return reply.code(404).send({ ok: false, error: 'not-found' });
+    if (!deps.cfg.roster.byId.has(lane)) return refuseRoute(reply, 'not-found');
     reply.header('cache-control', 'no-store');
     const answer: LaneModelsAnswer = { ok: true, lane, models: await readLaneModels(deps.io, deps.cfg.ccrcDir, lane) };
     return answer;
