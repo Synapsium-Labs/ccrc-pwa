@@ -3941,19 +3941,22 @@ _hook_launch_record_append() {   # $lrc_line (a row, or a drop row, one TAB, the
 # THE START REPORT (Overlord W1a, spec §3.3.11, H12; the header's FOURTH exception): every SessionStart of a main-thread
 # session that is not a child, compact included (so it runs before the exit below) and `fork` excluded (a fork shares this
 # pane's id under a new uuid, so its report could never be attributed), is reported to `POST /api/sessions/:id/start`
-# through the closed client. The event spends at most START_BUDGET_MS here: one deadline set at entry, the fresh report
-# sent first, each send given what is left, and none started with under a second left. The body carries the
-# conversation's uuid as `startedUuid`, data; `fromUuid`, the sender the server attributes, is rewritten to this event's
-# `session_id` on every resend, so a report spooled before a `/clear` lands once the registry follows. A report the
+# through the closed client. The report spends at most START_BUDGET_MS (the roster card's own bound comes before it on a
+# clear, compact or resume start): one deadline set at entry, the fresh report sent first, each send given what is left,
+# and none started with under a second left. The body carries the conversation's uuid as `startedUuid`, data; `fromUuid`,
+# the sender the server attributes, is rewritten to this event's `session_id` on a resend of a `clear`, `resume` or
+# `compact` report, so one spooled before a `/clear` lands once the registry follows. A `startup` report keeps its own
+# `fromUuid`, so another process's start in this pane meets `stale-uuid` and is dropped. A report the
 # server did not take is kept in ONE dot-free field, `$REG/<id>.startpending`, so `_reg_purge` and `_ws_slug_residue` take
 # it with the row: line 1 is `<not-before ms>\t<dropped count>`, each later line `<tries>\t<report JSON>`, oldest first.
-# No answer keeps it untried and ends the pass; `stale-uuid` keeps it and counts a try; a 404 or 401 (an older server,
+# No answer keeps it untried and ends the pass; `stale-uuid` keeps it, counts a try and ends the pass; a 404 or 401 (an older server,
 # mid-rollout), a 5xx or a local client refusal keeps it, counts a try and ends the pass; any other 4xx drops it. A report
 # tried START_RESEND_TRIES times is dropped, at most START_PENDING_MAX are kept (the oldest dropped first), and every drop
 # is counted. Only SessionStart and UserPromptSubmit resend, never a tool event or Stop, and only after the back-off the
 # last pass stamped by how it ended: START_RESEND_BACKOFF_MS after a send that ended the pass, START_STALE_BACKOFF_MS (one
-# supervisor tick, for `_sync_uuid` to follow) after a `stale-uuid` or a spent budget; a stamp past the long back-off (a
-# clock stepped back) reads as the long one. Written only for a row ccd created (its `generation` stands), under the join
+# supervisor tick, for `_sync_uuid` to follow) after a `stale-uuid` or a spent budget, each counted from the pass's end; a
+# fresh report taken clears a standing stamp; a stamp past the long back-off (a clock stepped back) reads as the long
+# one. Written only for a row ccd created (its `generation` stands), under the join
 # record's two-sided rule: looked at again after the write here, and taken once more after `generation` by `_reg_purge`,
 # so no purge orphans it. It holds no authority, is never read as truth, prints nothing, and no path through it changes
 # this hook's exit code or stdout.
@@ -3967,7 +3970,7 @@ _hook_start_send() {   # <report JSON> <deadline ms> -> 0 taken; 1 stale-uuid; 2
 }
 _hook_start_keep() {   # <tries> <report JSON> <send rc, 6 unsent> -> the caller's stay, drop, pass and why
   local t=$1
-  case "$3" in 0) return 0 ;; 3) drop=$(( drop + 1 )); return 0 ;; 1|5) why=$(( why > 1 ? why : 1 )) ;; 2|4) pass=0 why=2 ;; esac
+  case "$3" in 0) return 0 ;; 3) drop=$(( drop + 1 )); return 0 ;; 1) pass=0 why=$(( why > 1 ? why : 1 )) ;; 5) why=$(( why > 1 ? why : 1 )) ;; 2|4) pass=0 why=2 ;; esac
   [[ "$3" == [14] ]] && t=$(( t + 1 ))
   (( t >= START_RESEND_TRIES )) && drop=$(( drop + 1 )) || stay+=("$t"$'\t'"$2")
 }
@@ -3990,15 +3993,18 @@ _hook_start_report() {
         model: (.model | if type == "string" then .[0:128] elif type == "object" and (.id | type) == "string" then .id[0:128] else null end),
         rowIncarnation: (if $inc == "" then null else $inc end), reportedAt: $at}' <<<"$payload" 2>/dev/null) || body=""
     [[ -n "$body" ]] && { _hook_start_send "$body" "$dl"; rc=$?; }
-    [[ "$rc" == [245] ]] && pass=0
+    [[ "$rc" == [1245] ]] && pass=0
   fi
+  [[ -n "$psid" ]] || pass=0
   for e in ${kept[@]+"${kept[@]}"}; do
     t="${e%%$'\t'*}" j="${e#*$'\t'}"; [[ "$t" =~ ^[0-9]+$ ]] || t=0; r=6
-    (( pass )) && { j=$(jq -c --arg u "$psid" '.startedUuid //= .fromUuid | .fromUuid = $u' <<<"$j" 2>/dev/null) && { _hook_start_send "$j" "$dl"; r=$?; } || r=3; }
+    (( pass )) && { j=$(jq -c --arg u "$psid" '.startedUuid //= .fromUuid | if .source == "clear" or .source == "resume" or .source == "compact" then .fromUuid = $u else . end' <<<"$j" 2>/dev/null) && { _hook_start_send "$j" "$dl"; r=$?; } || r=3; }
     [[ "$r" == 5 ]] && pass=0
     _hook_start_keep "$t" "$j" "$r"
   done
   [[ -z "$body" ]] || _hook_start_keep 0 "$body" "$rc"
+  (( rc == 0 )) && after=0
+  now=$(_hook_epoch_ms)
   (( why == 2 )) && after=$(( now + START_RESEND_BACKOFF_MS ))
   (( why == 1 )) && after=$(( now + START_STALE_BACKOFF_MS ))
   while (( ${#stay[@]} > START_PENDING_MAX )); do stay=("${stay[@]:1}"); drop=$(( drop + 1 )); done

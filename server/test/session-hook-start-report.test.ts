@@ -1,11 +1,13 @@
 // Overlord W1a, the start report (Task 3, as plan review 1890's I2 to I4 shape it): every SessionStart of a main-thread
 // session that is not a child, `fork` excluded, is reported to `POST /api/sessions/:id/start` through the closed client
-// (`ccrc-api sessions start <id> --json -`), the whole event inside one 4 s budget, the fresh report first. A report not
+// (`ccrc-api sessions start <id> --json -`), the report inside its own 4 s budget (the roster card's bound comes before it
+// on a clear, compact or resume start), the fresh report first. A report not
 // taken is kept in one dot-free field, `$REG/<id>.startpending`, which `_reg_purge` and `_ws_slug_residue` take with the
 // row: no answer keeps it untried; `stale-uuid`, a 404, a 401, a 5xx or a local refusal keep it and count a try; any other
 // refusal drops it, counted. Only SessionStart and UserPromptSubmit resend, after the back-off the last pass stamped by
-// how it ended, each kept report once, with the sender's current uuid; a report tried START_RESEND_TRIES times is
-// dropped. The start path's exit code and stdout never change for it (review 1911: F2, F3, F4, F6, F7, F9).
+// how it ended, each kept report once, a clear, resume or compact one with the sender's current uuid; a report tried
+// START_RESEND_TRIES times is dropped. The start path's exit code and stdout never change for it (review 1911: F2, F3,
+// F4, F6, F7, F9; review 1949: G2, G4 to G7).
 //
 // Runs ccd/session-hook.sh for real inside a fixture HOME with a fake `ccrc-api`; no live box, no live server. The
 // harness is COPIED from session-hook-roster-card.test.ts (a test file cannot import another). The purge cases run ccd's
@@ -40,16 +42,21 @@ beforeEach(() => {
   fs.writeFileSync(path.join(home, 'bin', 'tmux'), `#!/bin/sh\necho "cc-${ID}"\n`, { mode: 0o755 });
   // The fake closed client. `runs list` (the roster card's read) answers an empty list; `sessions start` records its argv
   // and the body it read from stdin, then answers what `api.code` holds: `202`, `<status> <error word>`, `hang`, `slow`
-  // (202 after 3.6 s), `late` (202 after 2.5 s, then a hang), `local` (the client's own refusal, exit 2) or `purge`.
+  // (202 after 3.6 s), `slowstale` (stale-uuid after 3 s), `late` (202 after 2.5 s, then a hang), `attr <uuid>` (202 only
+  // for a sender whose fromUuid is <uuid>, else stale-uuid), `local` (the client's own refusal, exit 2) or `purge`.
   fs.writeFileSync(path.join(home, '.local', 'bin', 'ccrc-api'), [
     '#!/bin/sh',
     'if [ "$1 $2" = "runs list" ]; then echo \'{"runs":[]}\'; echo "http 200" >&2; exit 0; fi',
     '[ "$1 $2" = "sessions start" ] || exit 9',
     `printf '%s\\n' "$*" >> "${home}/api.argv"`,
-    `cat >> "${home}/api.bodies"`,
+    'body=$(cat)',
+    `printf '%s\\n' "$body" >> "${home}/api.bodies"`,
     `set -- $(cat "${home}/api.code" 2>/dev/null || echo 202)`,
     'if [ "$1" = hang ]; then sleep 20; fi',
     'if [ "$1" = slow ]; then sleep 3.6; set -- 202; fi',
+    'if [ "$1" = slowstale ]; then sleep 3; set -- 403 stale-uuid; fi',
+    // `attr <uuid>`: the door's attribution of the sender, as the registry holds <uuid>.
+    'if [ "$1" = attr ]; then case "$body" in *"\\"fromUuid\\":\\"$2\\""*) set -- 202 ;; *) set -- 403 stale-uuid ;; esac; fi',
     `if [ "$1" = late ]; then if [ -e "${home}/api.once" ]; then sleep 20; fi; : > "${home}/api.once"; sleep 2.5; set -- 202; fi`,
     'if [ "$1" = local ]; then echo "ccrc-api: --json needs a body (bad-args)" >&2; exit 2; fi',
     // `purge`: the row is purged while the send is in flight (plan review 1896, R12), then the server answers stale-uuid.
@@ -77,10 +84,10 @@ const spool = (): { after: number; dropped: number; kept: { tries: number; body:
   const [after, dropped] = head!.split('\t').map(Number);
   return { after: after!, dropped: dropped!, kept: rest.map((l) => ({ tries: Number(l.split('\t')[0]), body: JSON.parse(l.slice(l.indexOf('\t') + 1)) as Record<string, unknown> })) };
 };
-/** Writes a spool of `n` untried reports spooled under `uuid`, its back-off passed. */
-const seed = (n: number, uuid = SID): void => {
-  const lines = Array.from({ length: n }, (_, i) => `0\t${JSON.stringify({ fromId: ID, fromUuid: uuid, startedUuid: uuid, reportId: `seed-${String(i).padStart(4, '0')}`, source: 'clear', model: null, rowIncarnation: null, reportedAt: 1 })}`);
-  fs.writeFileSync(spoolFile(), `0\t0\n${lines.join('\n')}\n`);
+/** Writes a spool of `n` untried reports of `source` spooled under `uuid`, its back-off at `after` (passed by default). */
+const seed = (n: number, uuid = SID, source = 'clear', after = 0): void => {
+  const lines = Array.from({ length: n }, (_, i) => `0\t${JSON.stringify({ fromId: ID, fromUuid: uuid, startedUuid: uuid, reportId: `seed-${String(i).padStart(4, '0')}`, source, model: null, rowIncarnation: null, reportedAt: 1 })}`);
+  fs.writeFileSync(spoolFile(), `${after}\t0\n${lines.join('\n')}\n`);
 };
 /** Moves the spool's back-off stamp into the past, as the passing of the back-off would. */
 const expireBackoff = (): void => {
@@ -299,7 +306,7 @@ describe('the start report: the budget, the answers that count a try, and the ba
       const r = hook(ev());
       expect(r.status).toBe(0);
       expect(calls(), 'one send fits; none starts with under a second left').toBe(1);
-      expect(r.ms, 'the whole event: the budget plus a small margin').toBeLessThan(base.ms + BUDGET + 800);
+      expect(r.ms, 'the report: the budget plus a small margin').toBeLessThan(base.ms + BUDGET + 800);
       const s = spool()!;
       expect(s.kept.length + (ev === prompt ? 1 : 0), 'what was not sent is kept, untried').toBe(2);
       expect(s.kept.every((k) => k.tries === 0)).toBe(true);
@@ -362,9 +369,66 @@ describe('the start report: the budget, the answers that count a try, and the ba
     const older = JSON.parse(fs.readFileSync(spoolFile(), 'utf8').split('\n')[1]!.split('\t')[1]!) as Record<string, unknown>;
     delete older['startedUuid'];
     fs.writeFileSync(spoolFile(), `0\t0\n0\t${JSON.stringify(older)}\n`);
+    answer(`attr ${B}`);
     expect(hook({ ...prompt(), session_id: B }, { CLAUDE_CODE_SESSION_ID: B }).status).toBe(0);
     expect(bodies()).toMatchObject([{ fromUuid: B, startedUuid: A, reportId: 'seed-0000' }]);
     expect(spool(), 'taken').toBeNull();
+  });
+
+  it('a startup report keeps its own fromUuid on resend, so another process\'s start in this pane is never taken (review 1949, G2)', () => {
+    const N = '00000000-0000-4000-8000-0000000000ee';
+    seed(1, N, 'startup');
+    answer(`attr ${SID}`);
+    hook(prompt());
+    expect(bodies()).toMatchObject([{ fromUuid: N, startedUuid: N, source: 'startup' }]);
+    expect(spool(), 'stale-uuid: kept with a try, never a 202').toMatchObject({ kept: [{ tries: 1, body: { fromUuid: N } }] });
+  });
+
+  it.each(['resume', 'compact'])('a %s report is rewritten to the sender\'s current uuid, as a clear is (G2)', (source) => {
+    const A = '00000000-0000-4000-8000-00000000000a';
+    seed(1, A, source);
+    answer(`attr ${SID}`);
+    hook(prompt());
+    expect(bodies()).toMatchObject([{ fromUuid: SID, startedUuid: A, source }]);
+    expect(spool()).toBeNull();
+  });
+
+  it('one stale-uuid ends the pass: one try spent, not one per kept report (G5)', () => {
+    seed(3);
+    answer('403 stale-uuid');
+    const t0 = Date.now();
+    hook(prompt());
+    expect(calls()).toBe(1);
+    const s = spool()!;
+    expect(s.kept.map((k) => k.tries)).toEqual([1, 0, 0]);
+    expect(s.after).toBeGreaterThanOrEqual(t0 + SHORT);
+    expect(s.after).toBeLessThan(t0 + LONG);
+  });
+
+  it('an empty session_id after the filter skips the resend pass and keeps every report (G6)', () => {
+    seed(2);
+    answer('202');
+    hook({ ...prompt(), session_id: '!!!' });
+    expect(calls()).toBe(0);
+    expect(spool()).toMatchObject({ dropped: 0, kept: [{ tries: 0 }, { tries: 0 }] });
+  });
+
+  it('the back-off counts from the end of the pass, not its start (G7)', () => {
+    answer('slowstale');
+    hook(start('clear'));
+    const end = Date.now();
+    expect(spool()!.after, 'a 3 s pass still leaves the full 5 s').toBeGreaterThanOrEqual(end + SHORT - 300);
+  }, 30_000);
+
+  it('a fresh report taken clears a standing back-off, so the kept reports go on the next event (G7)', () => {
+    seed(1, SID, 'clear', Date.now() + 20_000);
+    answer('202');
+    hook(start('resume'));
+    expect(calls(), 'the kept report waited inside its back-off').toBe(1);
+    expect(spool()).toMatchObject({ after: 0, kept: [{ tries: 0 }] });
+    hook(prompt());
+    expect(calls()).toBe(2);
+    expect(spool()).toBeNull();
   });
 
   it('a stale-uuid keep stamps the short back-off, one supervisor tick (F7)', () => {
