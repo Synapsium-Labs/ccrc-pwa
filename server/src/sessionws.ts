@@ -37,6 +37,10 @@ export interface RowFactsSource {
    *  `statusUpdatedAt` come from the same live-file measurement `resolve()` makes (D-115). */
   currentFleetListing(): { sessions: FleetSession[]; listedAt: number } | null;
 }
+/** A watcher that has not ticked: no row facts and no listing. The server hands it on a box with no watcher (the same
+ *  `watcher?.… ?? null` its other reads make), so every stream takes one path: the 2 s look finds no fresh listing and
+ *  runs a full resolve, the backstop and the row listener are armed (D-8611, which retired the source-less poll). */
+export const NO_TICK: RowFactsSource = { currentRowFacts: () => null, currentFleetListing: () => null };
 const BACKLOG_N = 50;
 
 interface Resolved {
@@ -86,9 +90,9 @@ type Resolution =
 export class SessionStream implements FeedSubscriber {
   private tailer: TranscriptTailer | null = null;
   private poll: NodeJS.Timeout | null = null;
-  /** With a watcher: the 30 s backstop's interval (`poll` is then the 2 s status look in the listing). */
+  /** The 30 s backstop's interval (`poll` is the 2 s status look in the listing). */
   private backstop: NodeJS.Timeout | null = null;
-  /** With a watcher: a ROW EVENT that came in while a tick was in flight, or the start pre-arm, and nothing else (a poll
+  /** A ROW EVENT that came in while a tick was in flight, or the start pre-arm, and nothing else (a poll
    *  or the backstop that finds a tick in flight drops), so the tick that ends (or `start()`) runs once more. */
   private rerun = false;
   /** The `statusUpdatedAt` of the last measurement this stream took, to compare with the listing's. */
@@ -283,11 +287,12 @@ export class SessionStream implements FeedSubscriber {
      *  gets the backlog. This is why the parameter is still optional and why
      *  its absence is still not a mismatch — a client with no file is a real
      *  state, and it is a state with no offset to protect. */
-    private readonly since?: { uuid: string; offset: number; file?: string | null },
-    /** The watcher's last tick (console speed S2). Given, `resolve()` takes the row, the pane verdict and the pid from
-     *  it while they are fresh; the stream re-resolves on `row:<id>`, on a status change `lookInListing` sees every
-     *  `POLL_MS` (a full tick when no fresh listing has the row) and on a backstop. Omitted, it is what it was. */
-    private readonly rows?: RowFactsSource,
+    private readonly since: { uuid: string; offset: number; file?: string | null } | undefined,
+    /** The watcher's last tick (console speed S2): `resolve()` takes the row, the pane verdict and the pid from it while
+     *  they are fresh; the stream re-resolves on `row:<id>`, on a status change `lookInListing` sees every `POLL_MS`
+     *  (a full tick when no fresh listing has the row) and on a backstop. Required (D-8611): a box with no watcher
+     *  hands `NO_TICK`, so there is no second, source-less schedule. */
+    private readonly rows: RowFactsSource,
   ) {
     const masker = deps.masker ?? SHAPE_ONLY_MASKER;
     this.send = (m) => sendRaw(masker.maskDeep(m));
@@ -298,18 +303,18 @@ export class SessionStream implements FeedSubscriber {
    *  `start()` has armed the stream, or while a tick is in flight, it keeps the event as `rerun`: only a row event is kept. */
   private readonly onRowChanged = (): void => { if (this.poll && !this.ticking) void this.tick(); else this.rerun = true; };
 
-  /** With a watcher, every `POLL_MS`: look this row up in the watcher's fleet listing, in memory, and run `tick()` only
-   *  when its status or `statusUpdatedAt` is not what this stream last measured. No fresh listing, or no such row,
-   *  polls as without a watcher: a full `tick()`. */
+  /** Every `POLL_MS`: look this row up in the watcher's fleet listing, in memory, and run `tick()` only when its
+   *  status or `statusUpdatedAt` is not what this stream last measured. No fresh listing, or no such row: a full
+   *  `tick()`. */
   private lookInListing(): void {
-    const served = servedFromWatcher(this.rows?.currentFleetListing() ?? null, Date.now());
+    const served = servedFromWatcher(this.rows.currentFleetListing(), Date.now());
     const row = served.serve ? served.value.sessions.find((x) => x.id === this.id) : undefined;
     if (row === undefined || row.status !== this.status || row.statusUpdatedAt !== this.statusAt) void this.tick();
   }
 
   async start(): Promise<void> {
     // Before the first resolve, so a change during it is kept (`rerun`) and run once the stream is armed.
-    if (this.rows) this.bus.on(`row:${this.id}`, this.onRowChanged);
+    this.bus.on(`row:${this.id}`, this.onRowChanged);
     this.bus.on('notice', this.onNotice);
     this.bus.on(`session:${this.id}`, this.onSessionMsg);
     this.bus.on(`answered:${this.id}`, this.onAnswered);
@@ -401,12 +406,10 @@ export class SessionStream implements FeedSubscriber {
     // appeared-branch heal a stream that started life unable to prove the
     // session existed at all (`this.uuid` is still null on that first tick).
     if (r.ok || r.reason === 'unmeasurable') {
-      this.poll = setInterval(() => { if (this.rows) this.lookInListing(); else void this.tick(); }, POLL_MS);
+      this.poll = setInterval(() => { this.lookInListing(); }, POLL_MS);
       this.poll.unref();
-      if (this.rows) {
-        this.backstop = setInterval(() => { void this.tick(); }, STREAM_BACKSTOP_MS).unref();
-        if (this.rerun) { this.rerun = false; void this.tick(); }
-      }
+      this.backstop = setInterval(() => { void this.tick(); }, STREAM_BACKSTOP_MS).unref();
+      if (this.rerun) { this.rerun = false; void this.tick(); }
     } else {
       this.bus.off(`row:${this.id}`, this.onRowChanged);   // a proven-gone session installs no trigger
       this.feed.leave(this);          // nothing will ever be asked of it again
@@ -675,9 +678,9 @@ export class SessionStream implements FeedSubscriber {
   /** Registry record + live state → current uuid, transcript file, and status. */
   private async resolve(): Promise<Resolution> {
     // C0.3: one session's own row, not the whole registry — this stream only ever asks about `this.id`: on a
-    // row event, a status change in the watcher's listing or the backstop (every 2 s with no watcher).
-    const served = this.rows ? servedFromWatcher(this.rows.currentRowFacts(this.id), Date.now()) : null;
-    const facts = served?.serve ? served.value : null;
+    // row event, a status change in the watcher's listing or the backstop (every 2 s while no fresh listing has it).
+    const served = servedFromWatcher(this.rows.currentRowFacts(this.id), Date.now());
+    const facts = served.serve ? served.value : null;
     const read = facts ? { kind: 'found' as const, record: facts.record } : await readSessionRecord(this.deps.io, this.deps.cfg, this.id);
     if (read.kind !== 'found') {
       // The registry ladder is `readSession`'s row arm (ARCH-48, #783); this door keeps only its terminal answers.
@@ -695,7 +698,7 @@ export class SessionStream implements FeedSubscriber {
     // `uuid`/`workdir` would resolve `transcriptPath` against `''`, a path
     // that names nothing real, rather than this session's actual transcript.
     // `measuredIdentity` — the one door to the triple — is null the instant
-    // ANY of the three is unmeasured; this resolve re-runs every 2 s (with a watcher, on a row event, a status change or the 30 s backstop), so a
+    // ANY of the three is unmeasured; this resolve re-runs on a row event, a status change, the 30 s backstop or every 2 s while no fresh listing has the row, so a
     // transient field read heals itself on the very next tick with no
     // special-casing beyond this early return. HONEST LIMIT: there is no
     // half-measure here — when `uuid` itself is unmeasured there is no
@@ -840,7 +843,7 @@ export class SessionStream implements FeedSubscriber {
   /** The tailed file shrank under us: treat as rotation — re-resolve, resend backlog.
    *  An unmeasurable or absent re-resolve here (rare — the file just rotated,
    *  so the registry read a moment ago plainly succeeded) leaves the OLD
-   *  tailer alone rather than tearing it down on a guess; the next poll (or, with a watcher, row event or backstop)
+   *  tailer alone rather than tearing it down on a guess; the next row event, listing look or backstop
    *  retries. */
   private async onFileShrunk(): Promise<void> {
     if (this.stopped) return;
@@ -905,7 +908,7 @@ export class SessionStream implements FeedSubscriber {
     return true;
   }
 
-  /** The poll's body (every 2 s; with a watcher, run on a row event, a status change in its listing or the backstop): uuid change → rotated + fresh backlog; status change → status msg. */
+  /** The re-resolve (run on a row event, a status change in the listing, every 2 s while no fresh listing has the row, or the backstop): uuid change → rotated + fresh backlog; status change → status msg. */
   private async tick(): Promise<void> {
     if (this.stopped) return;
     if (this.ticking) return;   // no overlap: a poll or the backstop that finds a tick in flight drops, as before (F2)

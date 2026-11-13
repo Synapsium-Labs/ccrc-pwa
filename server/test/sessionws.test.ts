@@ -6,7 +6,7 @@ import WebSocket from 'ws';
 import type { FastifyInstance } from 'fastify';
 import { buildServer, type Deps } from '../src/server.js';
 import {
-  SessionStream, dialogFrameLine, foreignConfigDirs, nextDialogFrame, registryCaughtUp, shouldRepoint, type DialogSeen,
+  NO_TICK, SessionStream, dialogFrameLine, foreignConfigDirs, nextDialogFrame, registryCaughtUp, shouldRepoint, type DialogSeen,
 } from '../src/sessionws.js';
 import { parseDialog } from '../src/pane/dialog.js';
 import { RESOLVER_BACKOFF_MS, type TranscriptResolution, type TranscriptRung } from '../src/transcript/resolve.js';
@@ -518,7 +518,7 @@ const streamWith = async (opts: {
       marks.push(frames.length);
     }
   };
-  const stream = new SessionStream(deps, bus, ID, (m) => frames.push(m), { uuid: UUID_A, offset, file });
+  const stream = new SessionStream(deps, bus, ID, (m) => frames.push(m), { uuid: UUID_A, offset, file }, NO_TICK);
   try {
     await stream.start();
     answerAfter(0);
@@ -1325,7 +1325,7 @@ describe('the stream follows a changed answer (spec §5.3)', () => {
 
     const deps = mkLadderDeps(home, localIO);
     const frames: any[] = [];
-    const stream = new SessionStream(deps, new Bus(), ID, (m) => frames.push(m));
+    const stream = new SessionStream(deps, new Bus(), ID, (m) => frames.push(m), undefined, NO_TICK);
     try {
       await stream.start();
       const first = frames.find((f) => f.type === 'backlog');
@@ -1377,7 +1377,7 @@ describe('the stream follows a changed answer (spec §5.3)', () => {
 
     const deps = mkLadderDeps(home, localIO);
     const frames: any[] = [];
-    const stream = new SessionStream(deps, new Bus(), ID, (m) => frames.push(m));
+    const stream = new SessionStream(deps, new Bus(), ID, (m) => frames.push(m), undefined, NO_TICK);
     try {
       await stream.start();
       expect(frames.find((f) => f.type === 'backlog').file).toBe(globA);
@@ -1413,7 +1413,7 @@ describe('the stream follows a changed answer (spec §5.3)', () => {
 
     const deps = mkLadderDeps(home, localIO);
     const frames: any[] = [];
-    const stream = new SessionStream(deps, new Bus(), ID, (m) => frames.push(m));
+    const stream = new SessionStream(deps, new Bus(), ID, (m) => frames.push(m), undefined, NO_TICK);
     try {
       await stream.start();
       expect(frames.find((f) => f.type === 'backlog').file).toBe(tailed);
@@ -1467,7 +1467,7 @@ describe('the stream follows a changed answer (spec §5.3)', () => {
 
     const deps = mkLadderDeps(home, localIO);
     const frames: any[] = [];
-    const stream = new SessionStream(deps, new Bus(), ID, (m) => frames.push(m));
+    const stream = new SessionStream(deps, new Bus(), ID, (m) => frames.push(m), undefined, NO_TICK);
     try {
       await stream.start();
       expect(frames.find((f) => f.type === 'backlog').file).toBe(tailed);
@@ -1509,7 +1509,7 @@ describe('the stream follows a changed answer (spec §5.3)', () => {
 
     const deps = mkLadderDeps(home, localIO);
     const frames: any[] = [];
-    const stream = new SessionStream(deps, new Bus(), ID, (m) => frames.push(m));
+    const stream = new SessionStream(deps, new Bus(), ID, (m) => frames.push(m), undefined, NO_TICK);
     try {
       await stream.start();
       frames.length = 0;
@@ -1546,7 +1546,7 @@ describe('the stream follows a changed answer (spec §5.3)', () => {
       },
     };
     const frames: any[] = [];
-    const stream = new SessionStream(mkLadderDeps(home, io), new Bus(), ID, (m) => frames.push(m));
+    const stream = new SessionStream(mkLadderDeps(home, io), new Bus(), ID, (m) => frames.push(m), undefined, NO_TICK);
     try {
       await stream.start();
       appendFileSync(tailed, marker(UUID_A, UUID_B), 'utf8');
@@ -1605,7 +1605,7 @@ describe('the stream follows a changed answer (spec §5.3)', () => {
     const now = vi.spyOn(Date, 'now').mockImplementation(() => clock);
     const frames: any[] = [];
     const stream = new SessionStream(mkLadderDeps(home, io), new Bus(), ID, (m) => frames.push(m),
-      { uuid: UUID_A, offset: statSync(successor).size, file: successor });
+      { uuid: UUID_A, offset: statSync(successor).size, file: successor }, NO_TICK);
     try {
       await stream.start();
       expect(failA, 'the blip really landed on the first walk').toBe(0);
@@ -1640,7 +1640,7 @@ describe('the stream follows a changed answer (spec §5.3)', () => {
         (p === successor && statBFails ? { ok: false, reason: 'unreadable' } : localIO.statMeasured(p)),
     };
     const frames: any[] = [];
-    const stream = new SessionStream(mkLadderDeps(home, io), new Bus(), ID, (m) => frames.push(m));
+    const stream = new SessionStream(mkLadderDeps(home, io), new Bus(), ID, (m) => frames.push(m), undefined, NO_TICK);
     try {
       await stream.start();
       appendFileSync(tailed, marker(UUID_A, UUID_B), 'utf8');
@@ -1674,7 +1674,7 @@ describe('the stream follows a changed answer (spec §5.3)', () => {
     const tailed = path.join(home, '.claude-a', 'projects', MUNGED, `${UUID_A}.jsonl`);
     const successor = path.join(home, '.claude-a', 'projects', MUNGED, `${UUID_B}.jsonl`);
     const frames: any[] = [];
-    const stream = new SessionStream(mkLadderDeps(home, localIO), new Bus(), ID, (m) => frames.push(m));
+    const stream = new SessionStream(mkLadderDeps(home, localIO), new Bus(), ID, (m) => frames.push(m), undefined, NO_TICK);
     try {
       await stream.start();
       frames.length = 0;
@@ -1711,7 +1711,7 @@ describe('the stream follows a changed answer (spec §5.3)', () => {
     const end = path.join(dir, `${F}.jsonl`);
     writeFileSync(end, turn('the end of the chain'));
     const frames: any[] = [];
-    const stream = new SessionStream(mkLadderDeps(home, localIO), new Bus(), ID, (m) => frames.push(m));
+    const stream = new SessionStream(mkLadderDeps(home, localIO), new Bus(), ID, (m) => frames.push(m), undefined, NO_TICK);
     try {
       await stream.start();
       expect(frames.find((f) => f.type === 'backlog').file).toBe(path.join(dir, `${E}.jsonl`));   // the bound
@@ -1748,7 +1748,7 @@ describe('the stream follows a changed answer (spec §5.3)', () => {
     let clock = 1_000_000;
     const now = vi.spyOn(Date, 'now').mockImplementation(() => clock);
     const frames: any[] = [];
-    const stream = new SessionStream(mkLadderDeps(home, io), new Bus(), ID, (m) => frames.push(m));
+    const stream = new SessionStream(mkLadderDeps(home, io), new Bus(), ID, (m) => frames.push(m), undefined, NO_TICK);
     try {
       await stream.start();
       frames.length = 0;
@@ -1789,7 +1789,7 @@ describe('the stream follows a changed answer (spec §5.3)', () => {
     let clock = 1_000_000;
     const now = vi.spyOn(Date, 'now').mockImplementation(() => clock);
     const frames: any[] = [];
-    const stream = new SessionStream(mkLadderDeps(home, localIO), new Bus(), ID, (m) => frames.push(m));
+    const stream = new SessionStream(mkLadderDeps(home, localIO), new Bus(), ID, (m) => frames.push(m), undefined, NO_TICK);
     try {
       await stream.start();
       appendFileSync(tailed, marker(UUID_A, UUID_B), 'utf8');   // B not written yet
@@ -1827,7 +1827,7 @@ describe('the stream follows a changed answer (spec §5.3)', () => {
       const tailed = path.join(home, '.claude-a', 'projects', MUNGED, `${UUID_A}.jsonl`);
       const successor = path.join(home, '.claude-a', 'projects', MUNGED, `${UUID_B}.jsonl`);
       const frames: any[] = [];
-      const stream = new SessionStream(mkLadderDeps(home, localIO), new Bus(), ID, (m) => frames.push(m));
+      const stream = new SessionStream(mkLadderDeps(home, localIO), new Bus(), ID, (m) => frames.push(m), undefined, NO_TICK);
       try {
         await stream.start();
         frames.length = 0;
@@ -1859,7 +1859,7 @@ describe('the stream follows a changed answer (spec §5.3)', () => {
       const tailed = path.join(dir, `${UUID_A}.jsonl`);
       const end = path.join(dir, `${C}.jsonl`);
       const frames: any[] = [];
-      const stream = new SessionStream(mkLadderDeps(home, localIO), new Bus(), ID, (m) => frames.push(m));
+      const stream = new SessionStream(mkLadderDeps(home, localIO), new Bus(), ID, (m) => frames.push(m), undefined, NO_TICK);
       try {
         await stream.start();
         frames.length = 0;
@@ -1896,7 +1896,7 @@ describe('the stream follows a changed answer (spec §5.3)', () => {
       writeFileSync(successor, turn('after the fork'), 'utf8');
       writeFileSync(path.join(home, '.cc-sessions', `${ID}.uuid`), UUID_B);
       const frames: any[] = [];
-      const stream = new SessionStream(mkLadderDeps(home, localIO), new Bus(), ID, (m) => frames.push(m));
+      const stream = new SessionStream(mkLadderDeps(home, localIO), new Bus(), ID, (m) => frames.push(m), undefined, NO_TICK);
       try {
         await stream.start();
         expect(streamTailed(stream)).toMatchObject({ path: successor, uuid: UUID_B });
@@ -1952,7 +1952,7 @@ describe('the stream follows a changed answer (spec §5.3)', () => {
       let clock = 1_000_000;
       const now = vi.spyOn(Date, 'now').mockImplementation(() => clock);
       const frames: any[] = [];
-      const stream = new SessionStream(mkLadderDeps(home, io), new Bus(), ID, (m) => frames.push(m));
+      const stream = new SessionStream(mkLadderDeps(home, io), new Bus(), ID, (m) => frames.push(m), undefined, NO_TICK);
       try {
         await stream.start();
         expect(streamTailed(stream)).toMatchObject({ path: c, followedFrom: [UUID_A, UUID_B] });
@@ -1986,7 +1986,7 @@ describe('the stream follows a changed answer (spec §5.3)', () => {
       const home = mkTmp('ccrc-sv1-gone-');
       const { b, c } = twoHops(home);
       const frames: any[] = [];
-      const stream = new SessionStream(mkLadderDeps(home, localIO), new Bus(), ID, (m) => frames.push(m));
+      const stream = new SessionStream(mkLadderDeps(home, localIO), new Bus(), ID, (m) => frames.push(m), undefined, NO_TICK);
       try {
         await stream.start();
         expect(streamTailed(stream)?.path).toBe(c);
@@ -2024,7 +2024,7 @@ describe('the stream follows a changed answer (spec §5.3)', () => {
         },
       };
       const frames: any[] = [];
-      const stream = new SessionStream(mkLadderDeps(home, io), new Bus(), ID, (m) => frames.push(m));
+      const stream = new SessionStream(mkLadderDeps(home, io), new Bus(), ID, (m) => frames.push(m), undefined, NO_TICK);
       try {
         await stream.start();
         expect(streamTailed(stream)).toMatchObject({ path: c, followedFrom: [UUID_A, UUID_B] });
@@ -2059,7 +2059,7 @@ describe('the stream follows a changed answer (spec §5.3)', () => {
       seed(home);
       const D = 'd'.repeat(36);
       const frames: any[] = [];
-      const stream = new SessionStream(mkLadderDeps(home, localIO), new Bus(), ID, (m) => frames.push(m));
+      const stream = new SessionStream(mkLadderDeps(home, localIO), new Bus(), ID, (m) => frames.push(m), undefined, NO_TICK);
       try {
         await stream.start();
         const tailer = streamTailer(stream);
@@ -2092,7 +2092,7 @@ describe('the stream follows a changed answer (spec §5.3)', () => {
       const a = path.join(dir, `${UUID_A}.jsonl`);
       const b = path.join(dir, `${UUID_B}.jsonl`);
       const frames: any[] = [];
-      const stream = new SessionStream(mkLadderDeps(home, localIO), new Bus(), ID, (m) => frames.push(m));
+      const stream = new SessionStream(mkLadderDeps(home, localIO), new Bus(), ID, (m) => frames.push(m), undefined, NO_TICK);
       try {
         await stream.start();
         appendFileSync(a, marker(UUID_A, UUID_B), 'utf8');   // the fork announced itself; B is not there
@@ -2128,7 +2128,7 @@ describe('the stream follows a changed answer (spec §5.3)', () => {
         const a = path.join(dir, `${UUID_A}.jsonl`);
         const b = path.join(dir, `${UUID_B}.jsonl`);
         const frames: any[] = [];
-        const stream = new SessionStream(mkLadderDeps(home, localIO), new Bus(), ID, (m) => frames.push(m));
+        const stream = new SessionStream(mkLadderDeps(home, localIO), new Bus(), ID, (m) => frames.push(m), undefined, NO_TICK);
         try {
           await stream.start();
           appendFileSync(a, marker(UUID_A, UUID_B), 'utf8');
@@ -2173,7 +2173,7 @@ describe('the stream follows a changed answer (spec §5.3)', () => {
             (p === b && statBFails ? { ok: false, reason: 'unreadable' } : localIO.statMeasured(p)),
         };
         const frames: any[] = [];
-        const stream = new SessionStream(mkLadderDeps(home, io), new Bus(), ID, (m) => frames.push(m));
+        const stream = new SessionStream(mkLadderDeps(home, io), new Bus(), ID, (m) => frames.push(m), undefined, NO_TICK);
         try {
           await stream.start();
           appendFileSync(a, marker(UUID_A, UUID_B), 'utf8');
@@ -2216,7 +2216,7 @@ describe('the stream follows a changed answer (spec §5.3)', () => {
       const a = path.join(dir, `${UUID_A}.jsonl`);
       const b = path.join(dir, `${UUID_B}.jsonl`);
       const frames: any[] = [];
-      const stream = new SessionStream(mkLadderDeps(home, localIO), new Bus(), ID, (m) => frames.push(m));
+      const stream = new SessionStream(mkLadderDeps(home, localIO), new Bus(), ID, (m) => frames.push(m), undefined, NO_TICK);
       try {
         await stream.start();
         appendFileSync(a, marker(UUID_A, UUID_B), 'utf8');
@@ -2260,7 +2260,7 @@ describe('the stream follows a changed answer (spec §5.3)', () => {
       const home = mkTmp('ccrc-resumed-live-');
       const { a, b } = setup(home);
       const frames: any[] = [];
-      const stream = new SessionStream(mkLadderDeps(home, localIO), new Bus(), ID, (m) => frames.push(m));
+      const stream = new SessionStream(mkLadderDeps(home, localIO), new Bus(), ID, (m) => frames.push(m), undefined, NO_TICK);
       try {
         await stream.start();
         appendFileSync(a, marker(UUID_A, UUID_B), 'utf8');
@@ -2311,7 +2311,7 @@ describe('the stream follows a changed answer (spec §5.3)', () => {
             return localIO.statMeasured(p);
           },
         };
-        const stream = new SessionStream(mkLadderDeps(home, io), new Bus(), ID, () => {});
+        const stream = new SessionStream(mkLadderDeps(home, io), new Bus(), ID, () => {}, undefined, NO_TICK);
         try {
           await stream.start();
           appendFileSync(a, marker(UUID_A, UUID_B), 'utf8');
@@ -2348,7 +2348,7 @@ describe('the stream follows a changed answer (spec §5.3)', () => {
         let clock = 1_000_000;
         const now = vi.spyOn(Date, 'now').mockImplementation(() => clock);
         const frames: any[] = [];
-        const stream = new SessionStream(mkLadderDeps(home, localIO), new Bus(), ID, (m) => frames.push(m));
+        const stream = new SessionStream(mkLadderDeps(home, localIO), new Bus(), ID, (m) => frames.push(m), undefined, NO_TICK);
         try {
           await stream.start();
           appendFileSync(a, marker(UUID_A, UUID_B), 'utf8');
@@ -2386,7 +2386,7 @@ describe('the stream follows a changed answer (spec §5.3)', () => {
       let clock = 1_000_000;
       const now = vi.spyOn(Date, 'now').mockImplementation(() => clock);
       const frames: any[] = [];
-      const stream = new SessionStream(mkLadderDeps(home, localIO), new Bus(), ID, (m) => frames.push(m));
+      const stream = new SessionStream(mkLadderDeps(home, localIO), new Bus(), ID, (m) => frames.push(m), undefined, NO_TICK);
       try {
         await stream.start();
         appendFileSync(a, marker(UUID_A, UUID_B), 'utf8');
@@ -2439,7 +2439,7 @@ describe('the stream follows a changed answer (spec §5.3)', () => {
       let clock = 1_000_000;
       const now = vi.spyOn(Date, 'now').mockImplementation(() => clock);
       const frames: any[] = [];
-      const stream = new SessionStream(mkLadderDeps(home, io), new Bus(), ID, (m) => frames.push(m));
+      const stream = new SessionStream(mkLadderDeps(home, io), new Bus(), ID, (m) => frames.push(m), undefined, NO_TICK);
       try {
         await stream.start();
         appendFileSync(a, marker(UUID_A, UUID_B), 'utf8');
@@ -2490,7 +2490,7 @@ describe('the stream follows a changed answer (spec §5.3)', () => {
       };
       let clock = 1_000_000;
       const now = vi.spyOn(Date, 'now').mockImplementation(() => clock);
-      const stream = new SessionStream(mkLadderDeps(home, io), new Bus(), ID, () => {});
+      const stream = new SessionStream(mkLadderDeps(home, io), new Bus(), ID, () => {}, undefined, NO_TICK);
       try {
         await stream.start();
         appendFileSync(a, marker(UUID_A, UUID_B), 'utf8');
@@ -2553,7 +2553,7 @@ describe('the stream follows a changed answer (spec §5.3)', () => {
       const { pre, successor, pidJson } = setup(home);
       const flags = { pid: false, tailOf: null as string | null };
       const frames: any[] = [];
-      const stream = new SessionStream(mkLadderDeps(home, blippy(pidJson, flags)), new Bus(), ID, (m) => frames.push(m));
+      const stream = new SessionStream(mkLadderDeps(home, blippy(pidJson, flags)), new Bus(), ID, (m) => frames.push(m), undefined, NO_TICK);
       try {
         await stream.start();
         expect(streamTailed(stream)).toMatchObject({ path: pre });
@@ -2586,7 +2586,7 @@ describe('the stream follows a changed answer (spec §5.3)', () => {
       const { pre, successor, pidJson } = setup(home);
       const flags = { pid: false, tailOf: null as string | null };
       const frames: any[] = [];
-      const stream = new SessionStream(mkLadderDeps(home, blippy(pidJson, flags)), new Bus(), ID, (m) => frames.push(m));
+      const stream = new SessionStream(mkLadderDeps(home, blippy(pidJson, flags)), new Bus(), ID, (m) => frames.push(m), undefined, NO_TICK);
       try {
         await stream.start();
         flags.pid = true; await pollOnce(stream); flags.pid = false;   // a blip before the fork: memoizes A
@@ -2616,7 +2616,7 @@ describe('the stream follows a changed answer (spec §5.3)', () => {
       const { pre, successor, pidJson } = setup(home);
       const flags = { pid: false, tailOf: null as string | null };
       const frames: any[] = [];
-      const stream = new SessionStream(mkLadderDeps(home, blippy(pidJson, flags)), new Bus(), ID, (m) => frames.push(m));
+      const stream = new SessionStream(mkLadderDeps(home, blippy(pidJson, flags)), new Bus(), ID, (m) => frames.push(m), undefined, NO_TICK);
       try {
         await stream.start();
         appendFileSync(pre, marker(UUID_A, UUID_B), 'utf8');
@@ -2648,7 +2648,7 @@ describe('the stream follows a changed answer (spec §5.3)', () => {
     seed(home);
     const deps = mkLadderDeps(home, localIO);
     const frames: any[] = [];
-    const stream = new SessionStream(deps, new Bus(), ID, (m) => frames.push(m));
+    const stream = new SessionStream(deps, new Bus(), ID, (m) => frames.push(m), undefined, NO_TICK);
     try {
       await stream.start();
       const tailerBefore = streamTailer(stream);
@@ -2678,7 +2678,7 @@ describe('the stream follows a changed answer (spec §5.3)', () => {
 
     const deps = mkLadderDeps(home, localIO);
     const frames: any[] = [];
-    const stream = new SessionStream(deps, new Bus(), ID, (m) => frames.push(m));
+    const stream = new SessionStream(deps, new Bus(), ID, (m) => frames.push(m), undefined, NO_TICK);
     try {
       await stream.start();
       const backlog = frames.find((f) => f.type === 'backlog');
@@ -2712,7 +2712,7 @@ describe('the stream follows a changed answer (spec §5.3)', () => {
       stat: async (p) => (p === cfgDir2 ? null : localIO.stat(p)),
     };
     const frames2: any[] = [];
-    const stream2 = new SessionStream(mkLadderDeps(home2, unmeasurableOwnAccountIO), new Bus(), ID, (m) => frames2.push(m));
+    const stream2 = new SessionStream(mkLadderDeps(home2, unmeasurableOwnAccountIO), new Bus(), ID, (m) => frames2.push(m), undefined, NO_TICK);
     try {
       await stream2.start();
       const backlog = frames2.find((f) => f.type === 'backlog');
@@ -2737,7 +2737,7 @@ describe('the stream follows a changed answer (spec §5.3)', () => {
     seed(home);
     const io = degradedStatIO((p) => p.endsWith(`${UUID_A}.jsonl`));
     const frames: any[] = [];
-    const stream = new SessionStream(mkLadderDeps(home, io), new Bus(), ID, (m) => frames.push(m));
+    const stream = new SessionStream(mkLadderDeps(home, io), new Bus(), ID, (m) => frames.push(m), undefined, NO_TICK);
     try {
       await stream.start();
       const backlog = frames.find((f) => f.type === 'backlog');
@@ -2761,7 +2761,7 @@ describe('registry ladder: resolve() three-way, degrade-and-heal vs refuse (Task
     seed(home);
     const deps = mkLadderDeps(home, unreadableField(ID, 'uuid'));
     const frames: { type: string; message?: string }[] = [];
-    const stream = new SessionStream(deps, new Bus(), ID, (m) => frames.push(m as { type: string; message?: string }));
+    const stream = new SessionStream(deps, new Bus(), ID, (m) => frames.push(m as { type: string; message?: string }), undefined, NO_TICK);
     try {
       await stream.start();
       expect(frames[0]).toEqual({ type: 'notice', message: `session ${ID} is temporarily unreadable — retrying` });
@@ -2780,7 +2780,7 @@ describe('registry ladder: resolve() three-way, degrade-and-heal vs refuse (Task
     seed(home);
     const deps = mkLadderDeps(home, unlistableIO);
     const frames: { type: string; message?: string }[] = [];
-    const stream = new SessionStream(deps, new Bus(), ID, (m) => frames.push(m as { type: string; message?: string }));
+    const stream = new SessionStream(deps, new Bus(), ID, (m) => frames.push(m as { type: string; message?: string }), undefined, NO_TICK);
     try {
       await stream.start();
       expect(frames[0]).toEqual({ type: 'notice', message: `session ${ID} is temporarily unreadable — retrying` });
@@ -2798,7 +2798,7 @@ describe('registry ladder: resolve() three-way, degrade-and-heal vs refuse (Task
     mkdirSync(path.join(home, '.cc-sessions'), { recursive: true }); // listable, but names nobody
     const deps = mkLadderDeps(home, localIO);
     const frames: { type: string; message?: string }[] = [];
-    const stream = new SessionStream(deps, new Bus(), 'no-such-session', (m) => frames.push(m as { type: string; message?: string }));
+    const stream = new SessionStream(deps, new Bus(), 'no-such-session', (m) => frames.push(m as { type: string; message?: string }), undefined, NO_TICK);
     try {
       await stream.start();
       expect(frames[0]).toEqual({ type: 'notice', message: 'unknown session no-such-session' });
@@ -2818,7 +2818,7 @@ describe('registry ladder: resolve() three-way, degrade-and-heal vs refuse (Task
     const io = degradedReadIO((p) => broken && p.endsWith(`${ID}.uuid`));
     const deps = mkLadderDeps(home, io);
     const frames: { type: string; message?: string; uuid?: string }[] = [];
-    const stream = new SessionStream(deps, new Bus(), ID, (m) => frames.push(m as { type: string; message?: string; uuid?: string }), { uuid: UUID_A, offset: 0 });
+    const stream = new SessionStream(deps, new Bus(), ID, (m) => frames.push(m as { type: string; message?: string; uuid?: string }), { uuid: UUID_A, offset: 0 }, NO_TICK);
     try {
       await stream.start();
       expect(streamUuid(stream)).toBeNull(); // never resolved yet — the honest starting point
@@ -2847,7 +2847,7 @@ describe('registry ladder: resolve() three-way, degrade-and-heal vs refuse (Task
     const io = degradedReadIO((p) => broken && p.endsWith(`${ID}.uuid`));
     const deps = mkLadderDeps(home, io);
     const frames: { type: string }[] = [];
-    const stream = new SessionStream(deps, new Bus(), ID, (m) => frames.push(m as { type: string }));
+    const stream = new SessionStream(deps, new Bus(), ID, (m) => frames.push(m as { type: string }), undefined, NO_TICK);
     try {
       await stream.start(); // clean resolve — installs the real tailer
       const uuidBefore = streamUuid(stream);
@@ -2889,7 +2889,7 @@ describe('chat header: an unmeasured live status file is not a session at rest (
     const deps = mkLadderDeps(home, io);
     const frames: { type: string; status?: string; statusUpdatedAt?: number | null }[] = [];
     const stream = new SessionStream(deps, new Bus(), ID,
-      (m) => frames.push(m as { type: string; status?: string; statusUpdatedAt?: number | null }));
+      (m) => frames.push(m as { type: string; status?: string; statusUpdatedAt?: number | null }), undefined, NO_TICK);
     try {
       await stream.start();          // clean resolve: the file reads 'idle'
       frames.length = 0;
@@ -2934,7 +2934,7 @@ describe('chat header: an unmeasured live status file is not a session at rest (
     const deps: Deps = { ...mkLadderDeps(home, localIO), tmux: new Tmux(run) };
     const frames: { type: string; status?: string; statusUpdatedAt?: number | null }[] = [];
     const stream = new SessionStream(deps, new Bus(), ID,
-      (m) => frames.push(m as { type: string; status?: string; statusUpdatedAt?: number | null }));
+      (m) => frames.push(m as { type: string; status?: string; statusUpdatedAt?: number | null }), undefined, NO_TICK);
     try {
       await stream.start();
       const first = frames.filter((f) => f.type === 'status');
@@ -2962,7 +2962,7 @@ describe('chat header: an unmeasured live status file is not a session at rest (
     seedRoster(home);
     seed(home);
     rmSync(path.join(home, '.claude-a', LIVE));
-    const stream = new SessionStream(mkLadderDeps(home, localIO), new Bus(), ID, () => {});
+    const stream = new SessionStream(mkLadderDeps(home, localIO), new Bus(), ID, () => {}, undefined, NO_TICK);
     try {
       await stream.start();
       expect(streamStatus(stream)).toBe('idle');
@@ -3002,7 +3002,7 @@ describe('chat header: the stream STATES the status on connect, it does not only
     seed(home);                      // live file says idle @ 1784582728369
     const frames: { type: string; status?: string; statusUpdatedAt?: number | null }[] = [];
     const stream = new SessionStream(mkLadderDeps(home, localIO), new Bus(), ID,
-      (m) => frames.push(m as { type: string; status?: string; statusUpdatedAt?: number | null }));
+      (m) => frames.push(m as { type: string; status?: string; statusUpdatedAt?: number | null }), undefined, NO_TICK);
     try {
       await stream.start();
       const st = frames.filter((f) => f.type === 'status');
@@ -3035,7 +3035,7 @@ describe('chat header: the stream STATES the status on connect, it does not only
     const frames: { type: string; status?: string }[] = [];
     const stream = new SessionStream(mkLadderDeps(home, localIO), new Bus(), ID,
       (m) => frames.push(m as { type: string; status?: string }),
-      { uuid: UUID_A, offset: statSync(fileA).size, file: fileA });
+      { uuid: UUID_A, offset: statSync(fileA).size, file: fileA }, NO_TICK);
     try {
       await stream.start();
       expect(frames.filter((f) => f.type === 'backlog')).toHaveLength(0);   // resumed, as designed
@@ -3054,7 +3054,7 @@ describe('chat header: the stream STATES the status on connect, it does not only
     seed(home);
     const frames: { type: string }[] = [];
     const stream = new SessionStream(mkLadderDeps(home, localIO), new Bus(), ID,
-      (m) => frames.push(m as { type: string }));
+      (m) => frames.push(m as { type: string }), undefined, NO_TICK);
     try {
       await stream.start();
       frames.length = 0;
@@ -3078,7 +3078,7 @@ describe('chat header: the stream STATES the status on connect, it does not only
     seed(home);
     const frames: { type: string }[] = [];
     const stream = new SessionStream(mkLadderDeps(home, unreadableField(ID, 'uuid')), new Bus(), ID,
-      (m) => frames.push(m as { type: string }));
+      (m) => frames.push(m as { type: string }), undefined, NO_TICK);
     try {
       await stream.start();
       expect(frames.filter((f) => f.type === 'status')).toHaveLength(0);
@@ -3094,7 +3094,7 @@ describe('chat header: the stream STATES the status on connect, it does not only
     mkdirSync(path.join(home, '.cc-sessions'), { recursive: true });
     const frames: { type: string }[] = [];
     const stream = new SessionStream(mkLadderDeps(home, localIO), new Bus(), 'no-such-session',
-      (m) => frames.push(m as { type: string }));
+      (m) => frames.push(m as { type: string }), undefined, NO_TICK);
     try {
       await stream.start();
       expect(frames.filter((f) => f.type === 'status')).toHaveLength(0);
@@ -3288,7 +3288,7 @@ describe('outstanding mail push (Build 7 Task 6)', () => {
     const cfg = loadConfig({ CCRC_HOME: home });
     const deps: Deps = { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue(), time: fakeTime().ports, coord };
     const frames: SessionStreamMsg[] = [];
-    const stream = new SessionStream(deps, new Bus(), ID, (m) => frames.push(m));
+    const stream = new SessionStream(deps, new Bus(), ID, (m) => frames.push(m), undefined, NO_TICK);
     try {
       await stream.start(); // no tick() called — real timer never fires inside a sync test
       const mailFrame = frames.find((f) => f.type === 'mail') as { mail: { subject: string }[] } | undefined;
@@ -3685,7 +3685,7 @@ describe('the tasks frame carries touchedAt (D-5372)', () => {
     const cfg = loadConfig({ CCRC_HOME: home });
     const deps: Deps = { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue(), time: fakeTime().ports };
     const frames: SessionStreamMsg[] = [];
-    const stream = new SessionStream(deps, new Bus(), ID, (m) => frames.push(m));
+    const stream = new SessionStream(deps, new Bus(), ID, (m) => frames.push(m), undefined, NO_TICK);
     try { await stream.start(); } finally { stream.stop(); }
     return frames;
   };
@@ -3716,7 +3716,7 @@ describe('the tasks frame carries touchedAt (D-5372)', () => {
     const cfg = loadConfig({ CCRC_HOME: home });
     const deps: Deps = { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue(), time: fakeTime().ports };
     const frames: SessionStreamMsg[] = [];
-    const stream = new SessionStream(deps, new Bus(), ID, (m) => frames.push(m));
+    const stream = new SessionStream(deps, new Bus(), ID, (m) => frames.push(m), undefined, NO_TICK);
     try {
       await stream.start();
       const later = new Date('2026-10-17T18:00:00Z');

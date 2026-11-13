@@ -1,11 +1,12 @@
 // Console speed S2: a chat stream takes its row facts from the watcher's last tick and re-resolves on change
-// (a `row:<id>` event, the tailer's rotation, a 30 s backstop) instead of every 2 s. With no watcher the stream is
-// exactly what it was: the 2 s poll and today's reads.
+// (a `row:<id>` event, the tailer's rotation, a 30 s backstop) instead of every 2 s. D-8611: every stream is given a
+// source; a watcher that has not ticked (and a box with none, `NO_TICK`) has no fresh listing, so the 2 s look falls
+// back to a full resolve, as before.
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import type { Deps } from '../src/server.js';
-import { SessionStream, STREAM_BACKSTOP_MS, type RowFactsSource } from '../src/sessionws.js';
+import { NO_TICK, SessionStream, STREAM_BACKSTOP_MS, type RowFactsSource } from '../src/sessionws.js';
 import { Bus } from '../src/bus.js';
 import { loadConfig } from '../src/config.js';
 import { ccdRunner } from '../src/lifecycle.js';
@@ -105,7 +106,7 @@ describe('a chat stream and the watcher\'s row facts (console speed S2)', () => 
   });
   afterEach(() => { vi.useRealTimers(); rmSync(home, { recursive: true, force: true }); });
 
-  const open = async (watcher?: RowFactsSource): Promise<SessionStream> => {
+  const open = async (watcher: RowFactsSource): Promise<SessionStream> => {
     const s = new SessionStream(deps, bus, ID, (m) => frames.push(m), undefined, watcher);
     await s.start();
     return s;
@@ -170,17 +171,28 @@ describe('a chat stream and the watcher\'s row facts (console speed S2)', () => 
     try { expect(factsReads).toBeGreaterThan(0); } finally { s.stop(); }
   });
 
-  it('a stream with no watcher behaves as before', async () => {
+  it('a watcher that has not ticked (NO_TICK): the stream reads for itself and re-resolves every 2 s (D-8611)', async () => {
     vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'Date'] });
-    const s = await open();
+    const s = await open(NO_TICK);
     try {
       expect({ hasSession, listPanes }).toEqual({ hasSession: 1, listPanes: 1 });
       expect(registryListings).toBeGreaterThan(0);
       const before = registryListings;
       await vi.advanceTimersByTimeAsync(2000);
-      expect(registryListings).toBeGreaterThan(before);   // the 2 s poll still resolves
+      expect(registryListings).toBeGreaterThan(before);   // no fresh listing: the 2 s look runs a full resolve
       expect(factsReads).toBe(0);
+      expect(bus.listenerCount(`row:${ID}`), 'it listens for its row as a watched stream does').toBe(1);
     } finally { s.stop(); }
+  });
+
+  it('NO_TICK has neither row facts nor a listing (D-8611)', () => {
+    expect({ facts: NO_TICK.currentRowFacts(ID), listing: NO_TICK.currentFleetListing() }).toEqual({ facts: null, listing: null });
+  });
+
+  it('a stream is never built without a row-facts source (D-8611)', () => {
+    // @ts-expect-error -- the source is required: the server hands the watcher, or NO_TICK on a box without one
+    const make = (): SessionStream => new SessionStream(deps, bus, ID, () => undefined, undefined);
+    expect(typeof make).toBe('function');
   });
 
   it('a stream given a watcher stops listening for its row when it stops', async () => {
