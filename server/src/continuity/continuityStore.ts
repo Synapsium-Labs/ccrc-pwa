@@ -15,7 +15,8 @@ export interface StartInsert {
   uuid: string;
   source: string;
   model: string | null;
-  regGen: number | null;
+  /** The registry row's generation (`CCRC_SESSION_GENERATION`, a lowercase UUID), or null. */
+  regGen: string | null;
   reportedAt: number;
   receivedAt: number;
 }
@@ -28,7 +29,7 @@ export interface StartRow {
   uuid: string;
   source: StartSource;
   model: string | null;
-  regGen: number | null;
+  regGen: string | null;
   reportedAt: number;
   receivedAt: number;
 }

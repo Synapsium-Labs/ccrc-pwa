@@ -37,7 +37,7 @@ const open = async (io?: FleetIO): Promise<FastifyInstance> => {
 };
 
 const body = (over: Record<string, unknown> = {}): Record<string, unknown> => ({
-  fromId: ID, fromUuid: UUID, reportId: 'r-0001-abcd', source: 'clear', model: 'claude-opus-5-5', regGen: 4,
+  fromId: ID, fromUuid: UUID, reportId: 'r-0001-abcd', source: 'clear', model: 'claude-opus-5-5', regGen: '0189abcd-1234-5678-9abc-0123456789ab',
   reportedAt: FAKE_T0 - 50, ...over,
 });
 
@@ -55,7 +55,7 @@ describe('POST /api/sessions/:id/start', () => {
     const first = await post(app, body());
     expect([first.statusCode, first.json()]).toEqual([202, { ok: true, id: 1, fresh: true }]);
     expect(rows()).toEqual([{ id: 1, sessionId: ID, reportId: 'r-0001-abcd', uuid: UUID, source: 'clear',
-      model: 'claude-opus-5-5', regGen: 4, reportedAt: FAKE_T0 - 50, receivedAt: FAKE_T0 }]);
+      model: 'claude-opus-5-5', regGen: '0189abcd-1234-5678-9abc-0123456789ab', reportedAt: FAKE_T0 - 50, receivedAt: FAKE_T0 }]);
     const again = await post(app, body());
     expect([again.statusCode, again.json()]).toEqual([202, { ok: true, id: 1, fresh: false }]);
     expect(rows()).toHaveLength(1);
@@ -113,7 +113,7 @@ describe('POST /api/sessions/:id/start', () => {
       { reportId: 'short' }, { reportId: 'has space in it' }, { reportId: 'x'.repeat(65) }, { reportId: 7 },
       { source: 7 }, { source: '' }, { source: 's'.repeat(33) },
       { reportedAt: 1.5 }, { reportedAt: '1' }, { reportedAt: Number.MAX_SAFE_INTEGER + 2 },
-      { model: 7 }, { model: 'm'.repeat(129) }, { regGen: -1 }, { regGen: 1.5 }, { regGen: '4' },
+      { model: 7 }, { model: 'm'.repeat(129) }, { regGen: 4 }, { regGen: '0189ABCD-1234-5678-9abc-0123456789ab' }, { regGen: 'not-a-uuid' },
     ];
     for (const over of bad) {
       const res = await post(app, body(over));

@@ -13,7 +13,7 @@ const store = (): CoordStore => new CoordStore(openCoordDb(path.join(mkTmp('ccrc
 const NOW = 1_800_000_000_000;
 const start = (over: Partial<StartInsert> = {}): StartInsert => ({
   sessionId: 'lane-a-project-a', reportId: 'r-0001-abcd', uuid: '11111111-2222-3333-4444-555555555555',
-  source: 'clear', model: 'claude-opus-5-5', regGen: 4, reportedAt: NOW - 50, receivedAt: NOW, ...over,
+  source: 'clear', model: 'claude-opus-5-5', regGen: '0189abcd-1234-5678-9abc-0123456789ab', reportedAt: NOW - 50, receivedAt: NOW, ...over,
 });
 const rows = (s: CoordStore): unknown[] => s.db.prepare('SELECT * FROM continuity_starts ORDER BY id').all();
 
@@ -22,7 +22,7 @@ describe('continuity_starts', () => {
     const s = store();
     expect(s.insertStart(start())).toEqual({ ok: true, id: 1, fresh: true });
     const row = { id: 1, sessionId: 'lane-a-project-a', reportId: 'r-0001-abcd', uuid: '11111111-2222-3333-4444-555555555555',
-      source: 'clear', model: 'claude-opus-5-5', regGen: 4, reportedAt: NOW - 50, receivedAt: NOW };
+      source: 'clear', model: 'claude-opus-5-5', regGen: '0189abcd-1234-5678-9abc-0123456789ab', reportedAt: NOW - 50, receivedAt: NOW };
     expect(rows(s)).toEqual([row]);
     expect(s.startsSince(0)).toEqual({ ok: true, rows: [row] });
   });

@@ -2767,8 +2767,9 @@ export const MIGRATIONS: readonly string[] = [
   // The start report (Overlord spec §3.3.11, H12, W1a): `continuity_starts`, one row per SessionStart the hook reported
   // through `POST /api/sessions/:id/start` (`server/src/continuity/routes.ts`). `reportId` is the hook's own id for the
   // report, so a resend of a spooled report is the same row (`UNIQUE (sessionId, reportId)`); `source` is a word of
-  // `START_SOURCES` (`other` for any word outside it); `model` and `regGen` are null when the payload or the environment
-  // carried none; `reportedAt` is the hook's clock (data only) and `receivedAt` the server's, which every reader ages from
+  // `START_SOURCES` (`other` for any word outside it); `regGen` is the registry row's generation as the session's
+  // environment carries it (`CCRC_SESSION_GENERATION`, a lowercase UUID ccd writes); `model` and `regGen` are null when the
+  // payload or the environment carried none; `reportedAt` is the hook's clock (data only) and `receivedAt` the server's, which every reader ages from
   // (§11.5). Its one writer is `insertStart` in `server/src/continuity/continuityStore.ts`.
   //
   // A NEW TABLE AND AN INDEX, nothing on an existing table: an older build opening a file at `user_version 64` takes rule 3
@@ -2786,7 +2787,7 @@ export const MIGRATIONS: readonly string[] = [
     uuid       TEXT NOT NULL,     -- the conversation that started
     source     TEXT NOT NULL,     -- startup | resume | clear | compact | fork | other
     model      TEXT,              -- as the payload carries it, or null
-    regGen     INTEGER,           -- CCRC_SESSION_GENERATION, or null
+    regGen     TEXT,              -- CCRC_SESSION_GENERATION (a lowercase UUID), or null
     reportedAt INTEGER NOT NULL,  -- the hook's clock, ms (data only)
     receivedAt INTEGER NOT NULL,  -- the server's clock, ms: what every reader ages from
     UNIQUE (sessionId, reportId)

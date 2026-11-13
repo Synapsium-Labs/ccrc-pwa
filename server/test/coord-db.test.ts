@@ -902,7 +902,7 @@ describe('coord.db: continuity_starts, the start report\'s record (Overlord §3.
     const cols = (db.prepare("SELECT name, type, \"notnull\", pk FROM pragma_table_info('continuity_starts')").all() as unknown as ColumnInfo[])
       .map((c) => [c.name, c.type, c.notnull, c.pk]);
     expect(cols).toEqual([['id', 'INTEGER', 0, 1], ['sessionId', 'TEXT', 1, 0], ['reportId', 'TEXT', 1, 0], ['uuid', 'TEXT', 1, 0],
-      ['source', 'TEXT', 1, 0], ['model', 'TEXT', 0, 0], ['regGen', 'INTEGER', 0, 0], ['reportedAt', 'INTEGER', 1, 0],
+      ['source', 'TEXT', 1, 0], ['model', 'TEXT', 0, 0], ['regGen', 'TEXT', 0, 0], ['reportedAt', 'INTEGER', 1, 0],
       ['receivedAt', 'INTEGER', 1, 0]]);
     expect(MIGRATIONS[SLOT - 1]!.replace(/--[^\n]*/g, '').trim(), 'the migration CREATEs one table and one index and alters nothing')
       .toMatch(ENTRY);

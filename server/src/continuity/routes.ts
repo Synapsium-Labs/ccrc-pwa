@@ -25,6 +25,8 @@ export interface ContinuityRouteDeps {
 const IDENTITY_RE = /^[A-Za-z0-9_-]{1,128}$/;
 /** The hook's own id for one report: a resend carries the same one, so it is recorded once. */
 const REPORT_ID_RE = /^[A-Za-z0-9_-]{8,64}$/;
+/** The registry row's generation as ccd writes it (`_reg_generation_read`): a lowercase UUID. */
+const GENERATION_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const SOURCE_MAX = 32;
 const MODEL_MAX = 128;
 
@@ -68,7 +70,7 @@ export function registerContinuityRoutes(app: FastifyInstance, deps: ContinuityR
     if (typeof source !== 'string' || source.length === 0 || source.length > SOURCE_MAX) return refuseRoute(reply, 'bad-request', { detail: 'source' });
     if (!isSafeNat(reportedAt)) return refuseRoute(reply, 'bad-request', { detail: 'reportedAt' });
     if (model !== null && (typeof model !== 'string' || model.length > MODEL_MAX)) return refuseRoute(reply, 'bad-request', { detail: 'model' });
-    if (regGen !== null && !isSafeNat(regGen)) return refuseRoute(reply, 'bad-request', { detail: 'regGen' });
+    if (regGen !== null && (typeof regGen !== 'string' || !GENERATION_RE.test(regGen))) return refuseRoute(reply, 'bad-request', { detail: 'regGen' });
 
     const coord = deps.coord;
     if (coord === undefined) return refuseRoute(reply, 'unavailable');
