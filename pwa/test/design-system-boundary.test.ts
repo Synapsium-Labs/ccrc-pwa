@@ -24,6 +24,7 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
+import { CHARACTER_CLASSES } from '../../ui/src/characters/art';
 
 const SRC = path.join(import.meta.dirname, '..', 'src');
 const UI_SRC = path.join(import.meta.dirname, '..', '..', 'ui', 'src');
@@ -130,6 +131,9 @@ export const OWNED = [
   'wb-term-view', 'wb-term-pane', 'wb-term-latch', 'wb-term-short', 'wb-term-input', 'wb-term-send', // WorkbenchTerminal
   'wb-acct-head', 'wb-acct-row', 'wb-acct-eyebrow',                                               // WorkbenchAccountRow
   'wb-status-item',                                                                                // WorkbenchStatusBar
+  // The characters' art and its stylesheet, generated together (`ui/design/make-characters.mjs`): every `chr-*` class
+  // `art.ts` emits and `characters.css` selects, derived by the generator so this list cannot drift from it.
+  ...CHARACTER_CLASSES,
 ];
 
 /** Tokens the derivation finds that are NOT vocabulary, each with the reason.
