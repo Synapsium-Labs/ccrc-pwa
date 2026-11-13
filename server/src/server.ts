@@ -3410,7 +3410,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
    *
    * EMITS THE RESOLVED POOL, central-if-present-else-declared, not central
    * edges alone (review round 3, W1 — the fail-open the whole wave missed).
-   * MEASURED: `_acct_pool_state` (`ccd/ccd:2101`) reads ONLY `$REG/pool-epoch`
+   * MEASURED: `_acct_pool_state` in `ccd/ccd` reads ONLY `$REG/pool-epoch`
    * — Task 2 deliberately stopped `_pool_ok` consulting the declared
    * `accounts.sh` tag at placement — so an id this document omitted read
    * `untagged` on the fleet. Emitting central edges alone meant a DECLARED-only
@@ -3455,8 +3455,8 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
    * gate's information boundary on an armed box."
    *
    * `leaseUntil`/`issuedAt` are UNIX SECONDS, not milliseconds (review round 1,
-   * C1 — CRITICAL, fixed). Every reader in the tree (`ccd/ccd:2366-2367`'s
-   * `now=$(date +%s)`) compares in seconds; emitting `Date.now()` (ms) made
+   * C1 — CRITICAL, fixed). Every reader in the tree (`_acct_pool_state`'s
+   * lease check, `now > lease`) compares in seconds; emitting `Date.now()` (ms) made
    * the `stale` arm unreachable for ~56,700 years, pinning
    * `POOL_LEASE_MS`'s whole dial to "a dead control plane's last projection
    * is enforced forever" — exactly the hazard spec §5.8 exists to bound.

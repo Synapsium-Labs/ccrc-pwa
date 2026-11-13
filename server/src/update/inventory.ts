@@ -38,7 +38,7 @@ import { NODE_FILES, NODE_ID_RE, type NodeFileKey } from '../../../shared/agent-
 import { parseBuildInfo, type BuildInfo } from '../../../shared/buildinfo.js';
 // NODE_ID_RE is declared once, in `shared/agent-protocol.ts` (D-5622), and the
 // store's `rekeyNode` refuses a key outside the same one, so this reader and that
-// writer cannot disagree about what `_inst_node_id` (`ccd/ccrc:9494-9513`) mints — a
+// writer cannot disagree about what `_inst_node_id` (in `ccd/ccrc`) mints — a
 // lowercase uuid. An uppercase one was not written by the installer and keys nothing.
 // It is imported from there, not through the store (D-5896), so this import is types only.
 import {

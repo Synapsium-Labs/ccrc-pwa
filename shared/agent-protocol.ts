@@ -225,7 +225,7 @@ export const NODE_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9
 
 /**
  * The `$REG/pool-epoch` document's numeric sub-grammar — `_acct_pool_state`'s
- * own `numRe` (`ccd/ccd:2157`, shared by `epoch`/`issued`/`lease`) and
+ * own `numRe` (declared at its top, shared by `epoch`/`issued`/`lease`) and
  * `ccd-pool-sync`'s own `NUM` (`ccd/ccd-pool-sync:156`): zero, or a non-zero
  * digit followed by any digits — no leading zero, because the control
  * plane's `%d` can never produce one.
@@ -258,18 +258,17 @@ export const OBSERVED_EPOCH_NUM = '(?:0|[1-9][0-9]*)';
 
 /** Matches a well-formed `epoch <n>` line ANYWHERE in the document, not only
  *  the first line: `_acct_pool_state`'s own per-line parser is order-agnostic
- *  (`ccd/ccd:2271` onward — the `while` loop whose `case "$k" in` at `:2290`
- *  dispatches on each line's KEY, not a positional read; `:2270` — cited here
- *  in a previous round, review T8-R2 M2 — is the terminator check the line
- *  before, not the loop), so this reader must not be stricter than the
+ *  (its `while` loop, whose `case "$k" in` dispatches on each line's KEY,
+ *  not a positional read; the terminator check just before the loop is not
+ *  the loop, review T8-R2 M2), so this reader must not be stricter than the
  *  format actually is. */
 const EPOCH_LINE_RE = new RegExp(`^epoch (${OBSERVED_EPOCH_NUM})$`, 'm');
 
 /** Matches ANY line KEYED `epoch` — the same first-token test
- *  `_acct_pool_state` makes (`k=${line%% *}`, `ccd/ccd:2287`), regardless of
+ *  `_acct_pool_state` makes (`k=${line%% *}`), regardless of
  *  whether the rest of the line is a well-formed value. Used only to COUNT
  *  such lines (review T8-R2, I2, Ruling): bash refuses a document carrying
- *  two, and the reason (`ccd/ccd:2291-2297`, "nothing says which value is
+ *  two, and the reason (its `epoch` arm's comment, "nothing says which value is
  *  true") is a statement about the epoch ITSELF — the exact fact this field
  *  exists to report — not one of the placement-trust questions the rest of
  *  that grammar answers and this reader defers (a duplicate `issued`/
@@ -290,7 +289,7 @@ const EPOCH_KEYED_LINE_RE = /^epoch(?: .*)?$/gm;
  * 1. THE TERMINATOR (review T8-R1, F1). The document must end, after
  *    stripping AT MOST one trailing newline, in a line that is exactly `end`
  *    — the same structural check `_acct_pool_state` makes
- *    (`ccd/ccd:2248-2270`) before it parses a single field, because a
+ *    (its `end` check) before it parses a single field, because a
  *    line-oriented reader has no other way to tell a torn final row from a
  *    complete one. This is a PROVENANCE check, not a usability one: an
  *    unterminated document may be a FRAGMENT of a PREVIOUS one, and a number
@@ -321,7 +320,7 @@ const EPOCH_KEYED_LINE_RE = /^epoch(?: .*)?$/gm;
  */
 export function parseObservedEpochDoc(text: string): number | null {
   // The SAME strip-then-check algorithm `_acct_pool_state` uses
-  // (`ccd/ccd:2263-2270`): at most ONE trailing newline is stripped, so a
+  // (its `tail` strip and `end` check): at most ONE trailing newline is stripped, so a
   // SECOND one (content after the terminator, even a blank line) leaves the
   // true last line empty, not `end`, and is refused.
   const stripped = text.endsWith('\n') ? text.slice(0, -1) : text;

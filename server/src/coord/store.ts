@@ -190,7 +190,7 @@ import {
   type WorkItemState, type LastReviewReport, type RunRefuseCode,
 } from '../../../shared/api.js'; import { programmeNameFromSlug } from '../../../shared/api.js'; import { isNodeRole } from '../../../shared/node-role.js';
 
-/** One entry in `$REG/<id>.prhistory` (ccd/ccd:2252-2253). Re-declared as a TYPE
+/** One entry in `$REG/<id>.prhistory` (appended by ccd/ccd's `_pr_py`). Re-declared as a TYPE
  *  here rather than parsed twice: `coord/prhistory.ts` owns the reader.
  *
  *  `branch` is the branch at REPLACEMENT, the one the sweep was bound to when this row was written. `prbranch` is the
@@ -1575,7 +1575,7 @@ const ABANDONED_PARK_SQL =
  *     id>` and `sessionws.ts`'s `checkMail` both read it, and `checkMail` is
  *     keyed on the SESSION's own id. A reclaimed workspace id is not gone for
  *     good: `ccd start` / `ws-restore` bring the same id back, and `_ws_slug_new`
- *     recycles a purged slug outright (`ccd/ccd:3653`) — so the returning
+ *     recycles a purged slug outright (through `_ws_slug_free`) — so the returning
  *     session's mail strip would open on a kickoff briefing it to coordinate a
  *     program somebody else now holds. That is MINOR 9's own two-coordinator
  *     hazard, re-entered through the READ side after the write side closed it.
@@ -5150,7 +5150,7 @@ export class CoordStore {
   /** Routing spec 2026-09-14 §6 — speed and quality per run, read-only. The
    *  worker is `runs.sessionId` (never `claimedBy`, the coordinator). Holds
    *  pair `hold done` with the next `release done`; a swap is ONE `done` row
-   *  in ccd's journal (no intent, no landing pair — `ccd/ccd:17166`), so it is
+   *  in ccd's journal (no intent, no landing pair — `cmd_swap`'s `_lc_done swap`), so it is
    *  COUNTED and flagged, never timed. Refused wave-dones are the
    *  `mail_rejections` rows `closeRun` records with a `DONE_REFUSAL_CODES` code
    *  (the authority codes less `lineage-unmeasured`),
@@ -7849,7 +7849,7 @@ export class CoordStore {
    *    approximation of "whatever `foldPrLineage` would have stored at THAT
    *    close" when the close-time snapshots themselves were lost with the
    *    database. A wave that has not closed gets `[]`, and that is NOT a
-   *    stand-in: nothing has folded into it yet (`ccd/ccd:2080-2086`'s
+   *    stand-in: nothing has folded into it yet (`_reg_read`'s
    *    three-answer ladder).
    *
    * A THIRD rule (deviation D-11, found in Task 3 review — the plan's own

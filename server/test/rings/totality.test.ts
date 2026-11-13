@@ -6,13 +6,15 @@
 // `remote/`, the top level of each package) needs a file row in the spec's table in the same PR; a row that names no
 // file is stale and is deleted. The contexts are ARCH-34's vocabulary (`CCD_CONTEXTS`). No exemption set: the table
 // is the override map, and every row in it is a reason written in the spec.
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { CCD_CONTEXTS, CCD_ONLY_CONTEXTS } from '../consolidationCensus.js';
 import { pwaRing, serverRing, type Ring } from './ring.js';
 import {
-  assignContexts, fileRowNames, parseContextTable, readContextTable, type ContextRow,
+  SPEC_FILE, assignContexts, fileRowNames, parseContextTable, readContextTable, type ContextRow,
 } from './ringContextMap.js';
-import { walkSrc } from './walkSrc.js';
+import { REPO, walkSrc } from './walkSrc.js';
 
 const SERVER_FILES = (): string[] => walkSrc({ roots: ['server/src'], min: 150 });
 const PWA_FILES = (): string[] => walkSrc({ roots: ['pwa/src'], min: 250, extensions: /\.(?:ts|tsx|mjs|css)$/ });
@@ -77,6 +79,16 @@ describe('the context table (ARCH-04 stage 4)', () => {
     const ten = TABLE.replace('| K Kernels', '| C10 Session host | `host.ts` | (none) |\n| K Kernels');
     expect(parseContextTable(ten).filter((r) => r.context === 'C10').map((r) => `${r.pkg} ${r.pattern}`))
       .toEqual(['server host.ts']);
+  });
+
+  it('the spec\'s numbered list of bounded contexts has one item per context, a ccd-only one included (D-8561)', () => {
+    // The table above holds no row for a CCD_ONLY_CONTEXTS context, so only this list says the context exists.
+    const spec = readFileSync(path.join(REPO, SPEC_FILE), 'utf8');
+    const at = spec.indexOf('\n## Bounded contexts\n');
+    expect(at).toBeGreaterThan(-1);
+    const section = spec.slice(at + 1, spec.indexOf('\n## ', at + 1));
+    const items = [...section.matchAll(/^(\d+)\. \*\*/gm)].map((m) => `C${m[1]}`);
+    expect(items).toEqual(CCD_CONTEXTS.filter((c) => c !== 'K'));
   });
 
   it('the spec holds each context the packages have, once and in order, and every row names a known context', () => {
