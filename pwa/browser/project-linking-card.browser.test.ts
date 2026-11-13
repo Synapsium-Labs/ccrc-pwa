@@ -5,7 +5,9 @@
 //     scrolling inside itself), with a long project name that has to wrap;
 //   * the layout follows the card's own width, not the window's (a container query): under 480 a row stacks, from 480 its
 //     name, key and visibility share a line with the template cell under them, from 760 a row is ONE grid line;
-//   * on a phone the key field and Save share a line, and the select and the template button are as wide as the card.
+//   * on a phone the key field and Save share a line, and the select and the template button are as wide as the card;
+//   * D-8405: a project the route answers once per checkout directory is ONE row, and the automatic link's line and the
+//     candidates' one-tap buttons (long team names and evidence) wrap inside the key cell, at every width and skin.
 //
 // The app answers from a fixture (`browser/app.ts`): no server, no ccd. Run: `( cd pwa && CCRC_CHROME=<a Chrome or
 // Chromium binary> ./node_modules/.bin/vitest run --config vitest.browser.config.ts browser/project-linking-card.browser.test.ts )`.
@@ -33,9 +35,18 @@ const wire = (over: Partial<ProjectLinkingWire>): ProjectLinkingWire => ({
   measured: { state: 'measured', visibility: 'private', slug: 'owner/repo', template: 'absent', at: NOW - 3 * 3_600_000 },
   ...over,
 });
+const LONG_TEAM = 'A team whose name is long enough that it has to wrap on a phone screen';
 const PROJECTS = [
-  { name: 'project-a', workdir: '/w/project-a', linking: wire({}) },
-  { name: LONG_NAME, workdir: `/w/${LONG_NAME}`, linking: wire({ teamKey: null, measured: { state: 'unmeasured' }, mode: 'unknown' }) },
+  { name: 'project-a', workdir: '/w/project-a', linking: wire({
+    teamLink: { source: 'auto', teamName: LONG_TEAM, evidence: { kind: 'ticket-ids', ids: 1234, of: 1250 }, at: NOW - 60_000 },
+  }) },
+  { name: LONG_NAME, workdir: `/w/${LONG_NAME}`, linking: wire({
+    teamKey: null, measured: { state: 'unmeasured' }, mode: 'unknown',
+    teamCandidates: [
+      { key: 'ABCDEFGHIJKLMNOP', name: LONG_TEAM, evidence: { kind: 'name-match', matched: 'repo', on: 'name' } },
+      { key: 'BBB', name: 'Beta', evidence: { kind: 'name-match', matched: 'project', on: 'key' } },
+    ],
+  }) },
   { name: 'project-c', workdir: '/w/project-c', linking: wire({
     override: 'public', mode: 'public',
     measured: { state: 'measured', visibility: 'public', slug: 'owner/repo', template: 'present', at: NOW - 60_000 },
@@ -45,11 +56,14 @@ const PROJECTS = [
   }) },
 ];
 
+/** D-8405: the route answers one row per checkout directory, so project-a arrives three times; the card draws it once. */
+const SERVED = [...PROJECTS, { ...PROJECTS[0]!, workdir: '/w2/project-a' }, { ...PROJECTS[0]!, workdir: '/w3/project-a' }];
+
 const FIXTURE: AppFixture = {
   api: {
     '/api/accounts': { accounts: [], projected: null, roster: [] },
     '/api/feed': { events: [] },
-    '/api/projects': { roots: ['/w'], projects: PROJECTS },
+    '/api/projects': { roots: ['/w'], projects: SERVED },
   },
   fleetFrames: [{ type: 'fleet', sessions: [] }, { type: 'coord', coord: { pause: 'clear' } }],
 };
@@ -71,7 +85,11 @@ afterAll(async () => {
 });
 
 interface Box { left: number; right: number; top: number; bottom: number; width: number; height: number }
-interface RowMeasure { name: string; row: Box; cells: Record<'name' | 'key' | 'visibility' | 'template', Box>; keyLine: Box[]; select: Box; button: Box | null }
+interface RowMeasure {
+  name: string; row: Box; cells: Record<'name' | 'key' | 'visibility' | 'template', Box>; keyLine: Box[]; select: Box; button: Box | null;
+  /** D-8405: the automatic link's line and each candidate's button and evidence line. */
+  extras: Box[];
+}
 interface Measured {
   viewport: number; pageScrollWidth: number; pageClientWidth: number;
   section: { scrollWidth: number; clientWidth: number; box: Box };
@@ -105,6 +123,7 @@ const measure = (el: Element): Measured => {
       keyLine: [...r.querySelectorAll('.linking-key-line > *')].map(box),
       select: box(one(r, 'select')),
       button: button === null ? null : box(button),
+      extras: [...r.querySelectorAll('.linking-auto, .linking-candidate button, .linking-candidate p')].map(box),
     };
   });
   return {
@@ -137,6 +156,10 @@ const assertContained = (m: Measured, at: string): void => {
       expect(b.right, `${at}: ${r.name}'s ${cell} cell runs past its row`).toBeLessThanOrEqual(r.row.right + 0.5);
     }
     expect(r.select.right, `${at}: ${r.name}'s select runs past its row`).toBeLessThanOrEqual(r.row.right + 0.5);
+    for (const e of r.extras) {
+      expect(e.right, `${at}: ${r.name}'s team link text runs past its key cell`).toBeLessThanOrEqual(r.cells.key.right + 0.5);
+      expect(e.left, `${at}: ${r.name}'s team link text starts left of its key cell`).toBeGreaterThanOrEqual(r.cells.key.left - 0.5);
+    }
   }
 };
 
@@ -164,6 +187,8 @@ describe('Settings › Security › Project linking, per width, skin and theme (
             const shots = process.env.CCRC_SHOTS;
             if (shots) await section.screenshot({ path: path.join(shots, `project-linking-${skin}-${theme}-${width}.png`) });
             expect(m.rows.map((r) => r.name), 'one row per project that carries a cell').toEqual(PROJECTS.map((p) => p.name));
+            expect(m.rows[0]!.extras.length, 'project-a\'s automatic link line').toBe(1);
+            expect(m.rows[1]!.extras.length, 'two candidates, each a button and an evidence line').toBe(4);
             assertContained(m, named(view));
 
             const at = named(view);
