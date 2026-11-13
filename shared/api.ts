@@ -972,6 +972,14 @@ export interface SessionUsage {
   readonly class: string | null;
   readonly effort: string | null;
   readonly ctxPct: number | null;
+  /** Overlord W0-18: the context's size in tokens, Claude Code's statusline field
+   *  `context_window.total_input_tokens` (input plus cache read plus cache creation), the figure the renewal triggers
+   *  read. Null when the sidecar has none or it is not a non-negative number: never 0 for "no reading". Optional
+   *  because an older sidecar omits it; `parseUsageSidecar` is its one reader. */
+  readonly ctxTokens?: number | null;
+  /** Overlord W0-18: the context window's size in tokens, `context_window.context_window_size`. Null as for
+   *  `ctxTokens`. Optional because an older sidecar omits it; `parseUsageSidecar` is its one reader. */
+  readonly ctxWindow?: number | null;
   readonly cost: number | null;
   /** D-8267: when the main conversation's cached prompt prefix leaves its TTL, in epoch SECONDS (the sidecar's unit):
    *  Claude Code's documented statusline field `prompt_cache.expires_at` (v2.1.251 and later), null when the last

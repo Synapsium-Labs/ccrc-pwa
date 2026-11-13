@@ -16,7 +16,8 @@ const row = (over: Record<string, unknown> = {}): string => JSON.stringify({
 describe('parseUsageSidecar', () => {
   it('reads a fresh row and derives the class from model.id', () => {
     expect(parseUsageSidecar(row(), NOW)).toEqual({ kind: 'reading', usage: {
-      ts: NOW - 10, model: 'claude-opus-5', class: 'opus', effort: 'high', ctxPct: 12, cost: 1.25, cacheExpiresAt: null, stale: false,
+      ts: NOW - 10, model: 'claude-opus-5', class: 'opus', effort: 'high', ctxPct: 12, ctxTokens: null, ctxWindow: null, cost: 1.25, cacheExpiresAt: null,
+      stale: false,
     } });
   });
   // D-8267: the prompt cache's expiry (`prompt_cache.expires_at`, epoch seconds), the idle-compaction prediction's input.
@@ -27,6 +28,29 @@ describe('parseUsageSidecar', () => {
     expect(none.kind === 'reading' && none.usage.cacheExpiresAt).toBeNull();
     const str = parseUsageSidecar(row({ cacheExpiresAt: String(NOW + 3000) }), NOW);
     expect(str.kind === 'reading' && str.usage.cacheExpiresAt).toBeNull();
+  });
+  // Overlord W0-18: the context's token count and the window's size, the renewal triggers' inputs. A row written before
+  // the statusline carried them reads null for both, and a string or a negative is no reading either, never a 0.
+  it('reads ctxTokens and ctxWindow, and a row without them (an older statusline) reads null for both', () => {
+    const r = parseUsageSidecar(row({ ctxTokens: 71_000, ctxWindow: 1_000_000 }), NOW);
+    expect(r.kind === 'reading' && [r.usage.ctxTokens, r.usage.ctxWindow]).toEqual([71_000, 1_000_000]);
+    const old = parseUsageSidecar(row(), NOW);
+    expect(old).toEqual({ kind: 'reading', usage: {
+      ts: NOW - 10, model: 'claude-opus-5', class: 'opus', effort: 'high', ctxPct: 12, ctxTokens: null, ctxWindow: null,
+      cost: 1.25, cacheExpiresAt: null, stale: false,
+    } });
+  });
+  it.each([
+    ['a string', '71000', '1000000'],
+    ['a negative', -1, -1_000_000],
+    ['an explicit null', null, null],
+  ] as const)('%s is no reading: ctxTokens and ctxWindow read null', (_label, tokens, window) => {
+    const r = parseUsageSidecar(row({ ctxTokens: tokens, ctxWindow: window }), NOW);
+    expect(r.kind === 'reading' && [r.usage.ctxTokens, r.usage.ctxWindow]).toEqual([null, null]);
+  });
+  it('a zero is a reading of zero, kept apart from absent', () => {
+    const r = parseUsageSidecar(row({ ctxTokens: 0, ctxWindow: 200_000 }), NOW);
+    expect(r.kind === 'reading' && [r.usage.ctxTokens, r.usage.ctxWindow]).toEqual([0, 200_000]);
   });
   it.each([
     ['claude-fable-5-1', 'fable'], ['claude-sonnet-5', 'sonnet'], ['claude-haiku-4-5-20251001', 'haiku'], ['gpt-6-astra', null],
@@ -44,7 +68,8 @@ describe('parseUsageSidecar', () => {
   it('nulls ride through as nulls; strings where numbers belong are nulls too', () => {
     const r = parseUsageSidecar(row({ effort: null, cost: null, ctxPct: '12' }), NOW);
     expect(r).toEqual({ kind: 'reading', usage: {
-      ts: NOW - 10, model: 'claude-opus-5', class: 'opus', effort: null, ctxPct: null, cost: null, cacheExpiresAt: null, stale: false,
+      ts: NOW - 10, model: 'claude-opus-5', class: 'opus', effort: null, ctxPct: null, ctxTokens: null, ctxWindow: null,
+      cost: null, cacheExpiresAt: null, stale: false,
     } });
   });
   it.each([
