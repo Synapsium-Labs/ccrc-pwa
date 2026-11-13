@@ -22,5 +22,8 @@ This is the design only. No code changes, and no task is dispatched until the op
 - **The size ceiling is measured in code lines, not file lines.** The ccd plan bounds a library at 6,000 file lines. The
   design measures in code lines (2,500, Q1) instead, because that is the unit the growth check already measures. With
   this repository's comment density, the two bounds land in the same range.
+- **Task 0's PR list.** The ccd plan's Task 0 (measured 2026-11-13) names #2735, #2739 and #2742. Two of those have
+  merged by `218a5e3a3`, so the design cites the unmerged heads that edit `ccd/ccd` at that sha (#2739, #2740, #2763),
+  read by git. The ccd plan's list is refreshed when Task 0 is ticked.
 - **Line citations.** The design cites `file:line` at `218a5e3a3`, as its brief asked. CLAUDE.md prefers anchors in code,
   but `citations.test.ts` excludes `docs/`, so these citations are snapshots and are marked as such.
