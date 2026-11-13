@@ -46,6 +46,21 @@ describe('useLaneModels (D-8406)', () => {
     expect(load.mock.calls.map((c) => c[0])).toEqual(['lane-a', 'lane-b']);
   });
 
+  it('a surface opening again (refreshOn turning true) asks again, so a class that moved since is named', async () => {
+    let opus = 'Opus before';
+    const load = vi.fn(async (lane: string) => answer(lane, readOf(opus)));
+    const { result, rerender } = renderHook(({ open }: { open: boolean }) => useLaneModels('lane-a', load, open),
+      { initialProps: { open: false } });
+    await waitFor(() => expect(result.current).toEqual(readOf('Opus before')));
+    expect(load).toHaveBeenCalledTimes(1);
+    opus = 'Opus after'; // the registry advanced the class while the screen stayed open
+    rerender({ open: true });
+    await waitFor(() => expect(result.current).toEqual(readOf('Opus after')));
+    expect(load).toHaveBeenCalledTimes(2);
+    rerender({ open: false }); // closing asks nothing
+    expect(load).toHaveBeenCalledTimes(2);
+  });
+
   it('a failed or malformed answer is nothing; a second mount draws the last good answer at once', async () => {
     const failing = vi.fn(async () => { throw new Error('404'); });
     const first = renderHook(() => useLaneModels('lane-a', failing));

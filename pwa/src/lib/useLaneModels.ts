@@ -1,7 +1,8 @@
 // D-8406: the read of `GET /api/models/:lane`, the lane's classes as its own model files say them, for every surface
 // that names a class's model: the session's model picker and its routing line, the inspector's routing line, and the
 // new-session sheet's Class choice. Asked once when a lane is named and again when the page becomes visible, on
-// `usePoll` (no timer: a registry moves at most hourly, and a return to the page re-reads it). The last good answer for
+// `usePoll` (no timer: a registry moves at most hourly, and a return to the page re-reads it), and again each time a
+// surface shows the models (`refreshOn`, the picker opening). The last good answer for
 // a lane is kept in the screen cache, so a second surface, or a return to the session, names the models at once.
 //
 // `null` until a read lands for THIS lane: a caller then shows class names, never a model name it remembers. A failed
@@ -17,10 +18,13 @@ const cached = (lane: string | null): LaneModelsRead | null =>
   lane === null ? null : asLaneModelsRead(peek(laneModelsKey(lane))?.raw);
 
 /** `lane` is the session's wrapper, or `null` while there is none to ask about (the hook then asks nothing). `load` is
- *  injectable for tests; it defaults to the app's one API client. */
+ *  injectable for tests; it defaults to the app's one API client. `refreshOn` is a surface's own "shown again" signal
+ *  (the model picker opening): each time it turns true the lane is asked again, so a class the registry moved while the
+ *  screen stayed open is named the moment the models are looked at. */
 export function useLaneModels(
   lane: string | null,
   load: (lane: string, signal: AbortSignal) => Promise<unknown> = (l, signal) => api.laneModels(l, { signal }),
+  refreshOn = false,
 ): LaneModelsRead | null {
   const [state, setState] = useState<{ lane: string | null; read: LaneModelsRead | null }>(
     () => ({ lane, read: cached(lane) }));
@@ -53,5 +57,11 @@ export function useLaneModels(
     setState({ lane, read: cached(lane) });
     if (was !== null && lane !== null) reload();
   }, [lane, reload]);
+  const wasShown = useRef(refreshOn);
+  useEffect(() => {
+    const before = wasShown.current;
+    wasShown.current = refreshOn;
+    if (refreshOn && !before && lane !== null) reload();
+  }, [refreshOn, lane, reload]);
   return state.lane === lane ? state.read : cached(lane);
 }

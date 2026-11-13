@@ -369,7 +369,7 @@ export function SessionScreen({
   // reasoning that had nothing to do with rendering.
   const routeInfo = live?.route ?? null;
   // D-8406: the lane's model files, which name each class's model in the picker and give its readback.
-  const laneModels = useLaneModels(wrapper);
+  const laneModels = useLaneModels(wrapper, undefined, picker === 'model');
   const route = routeView(live, wrapper, accountProvider(roster, wrapper), laneModels);
   const { classIntended, effortIntended, classInert, effortInert,
           classUnreadable, effortUnreadable } = route;
