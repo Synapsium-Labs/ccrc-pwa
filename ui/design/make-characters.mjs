@@ -64,10 +64,11 @@ const PART_ATTRS = {
   rect: new Set(['x', 'y', 'width', 'height', 'class', 'fill', 'fill-opacity', 'transform', 'style']),
 };
 /** The six inline styles the drawn art uses, each as a modifier class emitted after the rules. A delay is its own
- *  rule. A duration is NOT spelled as its longhand: `ui/src` retimes motion in one place (D-5930,
- *  `server/test/single-definition/docs-l0.test.ts` refuses an `animation-duration:` literal anywhere else), so each
- *  drawn duration is emitted as the paced part's own `animation` shorthand, on the compound selector
- *  `.chr-<part>.chr-dur-<ms>`, with only the duration changed (`pacedRules`). */
+ *  rule. A duration is NOT spelled as its longhand: the `animation-duration`/`animation-timing-function` longhand
+ *  stays out of ui/src (D-5930, `server/test/single-definition/docs-l0.test.ts` refuses an `animation-duration:`
+ *  literal anywhere else), and the drawn art's pace stays in each part's own shorthand, so each drawn duration is
+ *  emitted as the paced part's own `animation` shorthand, on the compound selector `.chr-<part>.chr-dur-<ms>`, with
+ *  only the duration changed (`pacedRules`). */
 const STYLE_MODIFIERS = {
   'animation-delay: -0.5s': { cls: 'chr-delay-500', css: 'animation-delay:-0.5s' },
   'animation-delay: -0.6s': { cls: 'chr-delay-600', css: 'animation-delay:-0.6s' },
@@ -76,6 +77,12 @@ const STYLE_MODIFIERS = {
   'animation-duration: 5s': { cls: 'chr-dur-5000', dur: '5s' },
   'animation-duration: 6s': { cls: 'chr-dur-6000', dur: '6s' },
 };
+/** The properties a drawn class rule may declare, as measured in the 28 SVGs. Nothing else: a `filter` or a
+ *  `box-shadow` would be a glow (a glow means life), and an `animation-*` longhand would escape every motion guard
+ *  (the reduced-motion and data-still lists read the `animation` shorthand). */
+const CLASS_PROPS = new Set(['animation', 'opacity', 'transform', 'transform-box', 'transform-origin']);
+/** The properties a keyframe step may declare, as measured. */
+const KEYFRAME_PROPS = new Set(['transform', 'opacity']);
 const REDUCED = '@media (prefers-reduced-motion:reduce)';
 const GRID = 32;
 
@@ -122,6 +129,15 @@ function cssBlocks(text) {
   return out;
 }
 
+/** The property names of one declaration block, each checked against an allow-list. */
+function checkProps(body, allowed, where) {
+  for (const decl of body.split(';')) {
+    if (!decl.trim()) continue;
+    const prop = decl.split(':')[0].trim();
+    if (!allowed.has(prop)) refuse('property', `${prop || decl.trim()} in ${where} is outside (${[...allowed].join(', ')})`);
+  }
+}
+
 /** One file's `<style>`: its class rules and keyframes (renamed to `chr-*`), and what its reduced-motion blocks name. */
 function readStyle(styleText) {
   /** @type {Map<string, {key:string, selector:string, body:string}>} */
@@ -145,12 +161,14 @@ function readStyle(styleText) {
     }
     const kf = prelude.match(/^@keyframes\s+([\w-]+)$/);
     if (kf) {
+      for (const step of cssBlocks(body)) checkProps(step.body, KEYFRAME_PROPS, `@keyframes ${kf[1]} ${step.prelude}`);
       const name = rename(kf[1]);
       add(`keyframes ${name}`, { key: `keyframes ${name}`, selector: `@keyframes ${name}`, body: rename(body) });
       continue;
     }
     const cl = prelude.match(/^\.([\w-]+)$/);
     if (cl) {
+      checkProps(body, CLASS_PROPS, `.${cl[1]}`);
       const name = rename(cl[1]);
       add(`class ${name}`, { key: `class ${name}`, selector: `.${name}`, body: rename(body) });
       continue;
@@ -329,7 +347,7 @@ function pacedRules(art, classRules) {
     }
   };
   for (const c of Object.keys(art)) for (const m of Object.keys(art[c])) walk(art[c][m].nodes);
-  return [...out.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([selector, body]) => ({ selector, body }));
+  return [...out.entries()].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)).map(([selector, body]) => ({ selector, body }));
 }
 
 const classesIn = (nodes, into) => {
@@ -392,7 +410,8 @@ export function compileAll(files) {
     ...classRules.map((d) => `${d.selector}{${d.body}}`),
     ...keyframes.map((d) => `${d.selector}{${d.body}}`),
     '/* The six inline styles the art drew, as classes after the rules so they win: each delay as its own rule, each',
-    '   duration as its part\'s shorthand on a compound selector (ui/src retimes motion in one place, D-5930). */',
+    '   duration as its part\'s shorthand on a compound selector (the `animation-duration`/`animation-timing-function`',
+    '   longhand stays out of ui/src, D-5930; the drawn art\'s pace stays in each part\'s own shorthand). */',
     ...mods.filter((m) => m.css).map((m) => `.${m.cls}{${m.css}}`),
     ...paced.map((d) => `${d.selector}{${d.body}}`),
     '/* Reduced motion stills every animation; the resting pose is each part\'s own base style. */',
@@ -445,19 +464,29 @@ ${classes.map((c) => `  ${q(c)},`).join('\n')}
 /** A class's base style as the sleeping art rests: hidden (`opacity:0`) and/or shifted by a whole-cell translate. Read
  *  from the drawn SVGs' own style blocks, once. */
 let BASE = null;
-function baseStyles() {
-  if (BASE) return BASE;
-  BASE = new Map();
-  for (const f of readdirSync(SVG_DIR).filter((n) => n.endsWith('.svg')).sort()) {
-    const { style } = readMarkup(readFileSync(path.join(SVG_DIR, f), 'utf8'));
+/** `{ 'orb-neutral.svg': text, … }` -> class name -> `{ hidden, at }`. A resting `transform` that is not a
+ *  whole-cell `translate(x[px], y[px])` is refused: reading it as no shift would draw a wrong still frame. */
+export function restingStyles(files) {
+  const base = new Map();
+  for (const f of Object.keys(files).sort()) {
+    const { style } = readMarkup(files[f]);
     for (const d of readStyle(style).values()) {
       if (!d.selector.startsWith('.')) continue;
       const hidden = /(^|;)\s*opacity\s*:\s*0\s*(;|$)/.test(d.body);
-      const t = d.body.match(/(?:^|;)\s*transform\s*:\s*translate\((-?\d+)px\s*,\s*(-?\d+)px\)/);
-      BASE.set(d.selector.slice(1), { hidden, at: t ? [Number(t[1]), Number(t[2])] : [0, 0] });
+      let at = [0, 0];
+      const decl = d.body.match(/(?:^|;)\s*transform\s*:\s*([^;]*)/);
+      if (decl) {
+        const t = decl[1].trim().match(/^translate\((-?\d+)(?:px)?\s*,\s*(-?\d+)(?:px)?\)$/);
+        if (!t) refuse('transform', `${d.selector} rests at "${decl[1].trim()}", which is not a whole-cell translate`);
+        at = [Number(t[1]), Number(t[2])];
+      }
+      base.set(d.selector.slice(1), { hidden, at });
     }
   }
-  return BASE;
+  return base;
+}
+function baseStyles() {
+  return (BASE ??= restingStyles(readSvgDir()));
 }
 
 /**

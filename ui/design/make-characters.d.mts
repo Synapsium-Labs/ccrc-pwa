@@ -12,3 +12,5 @@ export function compileAll(files: Record<string, string>): { art: string; css: s
 export function stillGrid(art: MoodArt): StillGrid;
 /** A window of a grid. */
 export function crop(grid: StillGrid, x: number, y: number, w: number, h: number): StillGrid;
+/** The resting style of each class the files draw: hidden or not, and its whole-cell translate. Refuses a resting `transform` that is not one. */
+export function restingStyles(files: Record<string, string>): Map<string, { hidden: boolean; at: [number, number] }>;
