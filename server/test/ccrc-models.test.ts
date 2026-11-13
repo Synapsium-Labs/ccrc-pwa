@@ -1172,13 +1172,31 @@ describe('ccrc models <id> set-window and clear-window (codex-bridge spec §2.7)
     for (const m of CLASS_MODELS) expect(r.stderr).toContain(`measured window: ${m} 400000 tokens (set `);
   });
 
-  // The fixture catalogue lists 272000 for the default model, so this is the
-  // CAPPED case: the line must not credit the catalogue with the 200000.
-  it('show on a lane part-way measured names the default rule and the models still unmeasured', () => {
+  // D-8564: the fixture catalogue lists 272000 for every class model, and the
+  // provider's promise is the window: the line names the model whose promise
+  // decided it, and no 200000 cap.
+  it('show on a lane part-way measured names the provider default, its model, and the models still unmeasured', () => {
     expect(run(['models', ID, 'set-window', OPUS, '400000']).code).toBe(0);
     const r = run(['models', ID, 'show']);
-    expect(r.stderr).toContain('context window: 200000 tokens, by the default rule (the catalogue context of the '
-      + 'default model, capped at 200000); not measured: ' + CLASS_MODELS.filter((m) => m !== OPUS).join(', '));
+    const unmeasured = CLASS_MODELS.filter((m) => m !== OPUS);
+    expect(r.stderr).toContain(`context window: 272000 tokens, by the provider default (the catalogue context of `
+      + `${unmeasured[0]}); not measured: ${unmeasured.join(', ')}`);
+    expect(r.stderr).not.toMatch(/capped at 200000/);
+  });
+
+  it('show names a smaller measured window as the one that decided, while others are unmeasured', () => {
+    expect(run(['models', ID, 'set-window', OPUS, '100000']).code).toBe(0);
+    const r = run(['models', ID, 'show']);
+    expect(r.stderr).toContain(`context window: 100000 tokens, measured for ${OPUS} (the smallest across the class `
+      + `models); not measured: ${CLASS_MODELS.filter((m) => m !== OPUS).join(', ')}`);
+  });
+
+  it('show names the client default when a class model has neither a measured window nor a catalogue context', () => {
+    const first = CLASS_MODELS[0]!;
+    writeCatalogue(ID, { ...CODEX, models: CODEX.models.map((m) => (m.id === first ? { ...m, context: null } : m)) });
+    const r = run(['models', ID, 'show']);
+    expect(r.stderr).toContain(`context window: 200000 tokens, the client default (${first} has no measured window `
+      + `and no catalogue context); not measured: ${CLASS_MODELS.join(', ')}`);
   });
 
   it('show on a lane with no catalogue: rule none prints its own line, naming the models still unmeasured', () => {
@@ -3276,7 +3294,7 @@ describe('the hourly refresh lowers a refused window on a direct lane (codex-bri
     (JSON.parse(fs.readFileSync(join(home, `.claude-${ID}`, 'settings.json'), 'utf8')) as { env: Record<string, string> })
       .env['CLAUDE_CODE_MAX_CONTEXT_TOKENS'];
 
-  async function seatLane(bridge: 'direct' | 'litellm'): Promise<void> {
+  async function seatLane(bridge: 'direct' | 'litellm', refused = 380000): Promise<void> {
     const [p1, p2] = await freePorts(2);
     fs.rmSync(home, { recursive: true, force: true });
     home = box({ ...ROSTER, accounts: [...ROSTER.accounts, codexRow(ID, p1!, p2!, { bridge })] });
@@ -3289,7 +3307,7 @@ describe('the hourly refresh lowers a refused window on a direct lane (codex-bri
     const stats = join(home, '.ccrc', 'codex', ID, lane.bridgeFiles.stats);
     fs.writeFileSync(stats, JSON.stringify({
       version: 1, lane: ID, since: AT, startedAt: AT, updatedAt: AT, routes: {},
-      refusals: { [`backend/${OPUS}`]: { tokens: 380000, window: 400000, at: AT, estimated: true } },
+      refusals: { [`backend/${OPUS}`]: { tokens: refused, window: 400000, at: AT, estimated: true } },
       outcomes: {}, names: {}, unexplained: {}, usageHeaders: null, lastUpstreamRequestId: null,
     }), { mode: 0o600 });
   }
@@ -3307,14 +3325,17 @@ describe('the hourly refresh lowers a refused window on a direct lane (codex-bri
     expect(eighthKey()).toBe('342000');
   });
 
+  // The probe writes the 2026-09-08 catalogue, whose maxContext for the class models is 272000, and since D-8564 a
+  // measured window counts only up to it: the refusal here lowers below that ceiling, so the lowered window is the
+  // smallest and reaches the key unchanged.
   it('the new window reaches settings.json in the same run', async () => {
-    await seatLane('direct');
-    expect(eighthKey(), 'the planted windows are not materialised before the run').not.toBe('342000');
+    await seatLane('direct', 250000);
+    expect(eighthKey(), 'the planted windows are not materialised before the run').not.toBe('225000');
     const r = refreshFaked(ID);
     expect(r.code, r.stderr).toBe(0);
     expect(oneObject(r)['refreshed']).toEqual([{ id: ID, probe: 'codex', ok: true, count: 9, litellm: 'rendered',
-      lowered: [{ model: OPUS, from: 400000, to: 342000, refused: 380000 }] }]);
-    expect(eighthKey()).toBe('342000');
+      lowered: [{ model: OPUS, from: 400000, to: 225000, refused: 250000 }] }]);
+    expect(eighthKey()).toBe('225000');
   });
 
   it('a lowering the op refuses is named on the row, and never fails it', async () => {

@@ -31,12 +31,12 @@ export type ModelEnv = {
   // narrowing, still parses (fix round 2A, N1), it just cannot reach this
   // type.
   CLAUDE_CODE_SUBAGENT_MODEL: string;
-  // The eighth key (§6.1, amended 2026-09-08; amended again by the
-  // codex-bridge spec §2.7): `contextWindowFor(...).tokens` as a string — the
-  // smallest measured window across the lane's class models when every one is
-  // measured, else `min(catalogue context, 200000)` for ANTHROPIC_MODEL's
-  // model when the catalogue is non-null, not stale and names it with a
-  // POSITIVE INTEGER context; absent otherwise.
+  // The eighth key (§6.1, amended 2026-09-08, by the codex-bridge spec §2.7,
+  // and replaced by the provider's-promise rule, D-8564):
+  // `contextWindowFor(...).tokens` as a string — the smallest window across
+  // the lane's class models, each its measured window (never above
+  // `windowCeiling`) or else its fresh catalogue `context`; never above the
+  // client's 200000 while a class model has neither; absent when none has.
   CLAUDE_CODE_MAX_CONTEXT_TOKENS?: string;
   // Present only when the caller asked for a Codex lane's block
   // (`modelEnvBlock`'s `codexLane` option): the security-guidance plugin's
@@ -53,16 +53,24 @@ export declare const CODEX_LANE_ENV: Readonly<{ ENABLE_CODE_SECURITY_REVIEW: '0'
 /** Every key a lane's settings `env` can carry from this writer. */
 export declare const LANE_ENV_KEYS: readonly string[];
 /** The client's default window for a model id it does not know (spec §6.1).
- *  The DEFAULT window rule never writes more than this; a measured window may. */
+ *  A class model with no measured window and no provider promise counts at
+ *  this (D-8564). */
 export declare const CLIENT_DEFAULT_CONTEXT_TOKENS: number;
-/** What decided the eighth key (codex-bridge spec §2.7): `tokens` is what
- *  `modelEnvBlock` writes (null: omitted); `unmeasured` is the class models with
- *  no measured window, in CLASSES order. */
+/** What decided the eighth key (codex-bridge spec §2.7, D-8564): `tokens` is
+ *  what `modelEnvBlock` writes (null: omitted); `unmeasured` is the class models
+ *  with no measured window, in CLASSES order; `model` is the class model whose
+ *  window decided `tokens` and `source` where that window came from (both null
+ *  exactly when `tokens` is). */
 export type ContextWindow = {
   tokens: number | null;
   rule: 'measured' | 'default' | 'none';
   unmeasured: string[];
+  model: string | null;
+  source: 'measured' | 'provider' | 'client' | null;
 };
+/** The largest window a lane may hold for a model (D-8564): a codex
+ *  catalogue's `maxContext` for it, else WINDOW_MAX, never above WINDOW_MAX. */
+export declare function windowCeiling(catalogue: Catalogue | null, modelId: string): number;
 export declare function contextWindowFor(
   registry: Registry, catalogue: Catalogue | null, windows: ModelWindows | null | undefined,
 ): ContextWindow;

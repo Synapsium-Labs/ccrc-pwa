@@ -1,7 +1,7 @@
 // Step 2 of the new-session sheet, after pools. The account is already picked,
 // so the split runs the other way round from SwapSheet's: which projects may
 // this account take. Same disclosure, same rule, same wire flag.
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { ToastHost } from '@ccrc/ui';
 import type { FleetSession, ProjectRow, RosterWire } from '../../shared/api';
@@ -11,6 +11,13 @@ import { api } from '../src/lib/api';
 import { createFleetStore, type FleetStore } from '../src/stores/fleet';
 import { fleetSession } from './fleetFixture';
 import { TEST_ROSTER } from './rosterFixture';
+
+// D-8406: the Class select names a class's model from the picked lane's model files (`GET /api/models/:lane`). Every
+// test answers that read at once, for a lane with no registry, unless it says otherwise; a real fetch would hold a
+// read deadline open and count as a timer.
+beforeEach(() => {
+  vi.spyOn(api, 'laneModels').mockImplementation(async (lane) => ({ ok: true, lane, models: { kind: 'absent' } }));
+});
 
 afterEach(() => {
   cleanup();
@@ -312,9 +319,10 @@ describe('the optional routing row (routing slice 4, Task 6)', () => {
 
   // Fix round 2, finding #5: the Class select used to read in ladder order
   // (Haiku first) with no class word on a gpt label, so a gpt operator saw
-  // "GPT-6 Astra" and had no way to know it posts `class=fable`. S4-R13 wants
+  // a model name and had no way to know it posts `class=fable`. S4-R13 wants
   // capability order (Fable, Opus, Sonnet, Haiku) after the two unset rows,
-  // and every label carrying its class word.
+  // and every label carrying its class word. D-8406: a lane with no registry
+  // reads the class word alone, never a model name this tree remembers.
   it('the Class select reads in capability order with the class word appended (S4-R13)', async () => {
     await openAtStepTwo([proj('demo', { state: 'tagged', name: 'pool-a' })]);
     fireEvent.click(await screen.findByText('demo'));
@@ -322,7 +330,7 @@ describe('the optional routing row (routing slice 4, Task 6)', () => {
     const labels = Array.from(classSelect.options).map((o) => o.textContent);
     expect(labels).toEqual([
       'Automatic', 'Default',
-      'Fable 5 — fable', 'Opus 5.5 — opus', 'Sonnet 5 — sonnet', 'Haiku 4.5 — haiku',
+      'Fable — fable', 'Opus — opus', 'Sonnet — sonnet', 'Haiku — haiku',
     ]);
     // The unset option's title says who picks (T3a, D-6331).
     expect(classSelect.options[0]).toHaveAttribute('title', 'The routing matrix picks the class');
@@ -332,11 +340,24 @@ describe('the optional routing row (routing slice 4, Task 6)', () => {
     const roster = pooled(POOLS);
     vi.spyOn(api, 'projects').mockResolvedValue({ roots: ['/w'], projects: [] });
     vi.spyOn(api, 'accounts').mockResolvedValue({ accounts: [], projected: null, roster });
+    // D-8406: the label is the picked lane's own catalogue label for the model its registry maps the class to.
+    const asked: string[] = [];
+    vi.spyOn(api, 'laneModels').mockImplementation(async (lane) => {
+      asked.push(lane);
+      const c = (model: string, label: string) => ({ model, label });
+      return { ok: true, lane, models: { kind: 'read', classes: {
+        fable: c('gpt-6-astra', 'GPT-6-Astra'), opus: c('gpt-6.1-sol', 'GPT-6.1-Sol'),
+        sonnet: c('gpt-6.1-terra', 'GPT-6.1 Terra'), haiku: c('gpt-6-luna', 'GPT-6 Luna'),
+      } } };
+    });
     render(<NewSessionSheet open onClose={vi.fn()} fleet={storeWith(roster)} />);
+    expect(asked).toEqual([]); // nothing is asked before a lane is picked
 
     fireEvent.click(await screen.findByRole('button', { name: /^gpt/ }));
     const classSelect = await screen.findByLabelText('Class');
-    expect(within(classSelect).getByText('GPT-6 Astra — fable')).toBeInTheDocument();
+    expect(await within(classSelect).findByText('GPT-6-Astra — fable')).toBeInTheDocument();
+    expect(within(classSelect).getByText('GPT-6.1-Sol — opus')).toBeInTheDocument();
+    expect(asked).toEqual(['gpt']);
   });
 
   it('shows the coordinator-row note under the row', async () => {

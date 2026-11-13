@@ -719,9 +719,10 @@ describe('coord.db: migration 4 — runs.dispatchStartedAt', () => {
     // and MIGRATIONS[61] (claims.chainedFrom, a running holder's re-chained claim, D-8395) and MIGRATIONS[62]
     // (testbox_events.changes and testbox_staged_changes, the ledger's old and new values, D-8399)
     // and MIGRATIONS[63] (project_linking's team source, evidence and candidates, the automatic team link, D-8405)
-    // and MIGRATIONS[64] (continuity_starts, the start report, Overlord W1a).
-    expect(COORD_SCHEMA_VERSION).toBe(65);
-    expect(MIGRATIONS.length).toBe(65);
+    // and MIGRATIONS[64] (mail.answersMail and mail_answers_once, the invited reply, #2726)
+    // and MIGRATIONS[65] (continuity_starts, the start report, Overlord W1a).
+    expect(COORD_SCHEMA_VERSION).toBe(66);
+    expect(MIGRATIONS.length).toBe(66);
   });
 
   it('is ADDITIVE: every column migration 1 wrote is still on the table, unchanged', () => {
@@ -811,8 +812,9 @@ describe('coord.db: migration 11 — runs.kind and runs.reviews (design 2026-09-
     // and MIGRATIONS[60] (nodes.reportedSweep, D-8386)
     // and MIGRATIONS[61] (claims.chainedFrom, D-8395) and MIGRATIONS[62] (testbox_events.changes and testbox_staged_changes, D-8399)
     // and MIGRATIONS[63] (project_linking's team link columns, D-8405)
-    // and MIGRATIONS[64] (continuity_starts, the start report, Overlord W1a); the migration above is still entry 11.
-    expect(COORD_SCHEMA_VERSION).toBe(65);
+    // and MIGRATIONS[64] (mail.answersMail, #2726)
+    // and MIGRATIONS[65] (continuity_starts, the start report, Overlord W1a); the migration above is still entry 11.
+    expect(COORD_SCHEMA_VERSION).toBe(66);
     const row = db.prepare('SELECT kind, reviews FROM runs').get() as { kind: string; reviews: number | null };
     expect(row).toEqual({ kind: 'work', reviews: null });
     db.close();

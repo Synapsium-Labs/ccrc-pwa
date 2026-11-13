@@ -5820,7 +5820,10 @@ operator breaks one with `POST /api/claims/:id/break`, an ungated door, and the 
 clause 10 reads it before splitting a wave across workers; worker clause 11 claims before editing.
 Peer mail (`runId: null`) is bounded at ingress: a repeat of an outstanding
 `(fromId, toId, subject)` is `409 duplicate`, and a send past 3 outstanding per pair, or past 12
-accepted sends per sender per hour, is `429 peer-quota`.
+accepted sends per sender per hour, is `429 peer-quota`, whose `retry` says when it can go (`ack`: when the
+recipient acks one; `time`: when the oldest leaves the hour). An invited reply is outside all three (#2726): a
+`kind: answer` whose `inReplyTo` names the delivery of an unasked mail the recipient sent to the sender (never an
+invited reply, never a mail to oneself), one per mail, recorded in `mail.answersMail` and holding no slot.
 
 **The deviation ledger's allocator.** Plans record their departures as numbered `D-N` entries in one
 global, monotonic namespace, and the numbers are ISSUED, never looked up. `POST /api/ledger/deviations`

@@ -1,0 +1,190 @@
+{
+  "name": "introspection-initiative-create-input",
+  "documentSource": "fx2-introspection",
+  "document": "query { __type(name: \"InitiativeCreateInput\") { name kind inputFields { name type { name kind ofType { name kind } } } fields { name type { name kind ofType { name kind } } } enumValues { name } } }",
+  "variables": {},
+  "requestBody": "{\"query\":\"query { __type(name: \\\"InitiativeCreateInput\\\") { name kind inputFields { name type { name kind ofType { name kind } } } fields { name type { name kind ofType { name kind } } } enumValues { name } } }\",\"variables\":{}}",
+  "requestHeaders": [
+    "authorization: <the key, bare, no Bearer>",
+    "content-type: application/json"
+  ],
+  "sentAtMs": null,
+  "receivedAtMs": null,
+  "sentAt": null,
+  "status": 200,
+  "statusLine": null,
+  "headers": [
+    [
+      "content-type",
+      "application/json; charset=utf-8"
+    ],
+    [
+      "x-complexity",
+      "14"
+    ],
+    [
+      "x-ratelimit-complexity-limit",
+      "3000000"
+    ],
+    [
+      "x-ratelimit-complexity-remaining",
+      "2999985"
+    ],
+    [
+      "x-ratelimit-complexity-reset",
+      "1794589998776"
+    ],
+    [
+      "x-ratelimit-requests-limit",
+      "2500"
+    ],
+    [
+      "x-ratelimit-requests-remaining",
+      "2484"
+    ],
+    [
+      "x-ratelimit-requests-reset",
+      "1794589998776"
+    ]
+  ],
+  "body": {
+    "data": {
+      "__type": {
+        "name": "InitiativeCreateInput",
+        "kind": "INPUT_OBJECT",
+        "inputFields": [
+          {
+            "name": "id",
+            "type": {
+              "name": "String",
+              "kind": "SCALAR",
+              "ofType": null
+            }
+          },
+          {
+            "name": "name",
+            "type": {
+              "name": null,
+              "kind": "NON_NULL",
+              "ofType": {
+                "name": "String",
+                "kind": "SCALAR"
+              }
+            }
+          },
+          {
+            "name": "description",
+            "type": {
+              "name": "String",
+              "kind": "SCALAR",
+              "ofType": null
+            }
+          },
+          {
+            "name": "ownerId",
+            "type": {
+              "name": "String",
+              "kind": "SCALAR",
+              "ofType": null
+            }
+          },
+          {
+            "name": "leadTeamId",
+            "type": {
+              "name": "String",
+              "kind": "SCALAR",
+              "ofType": null
+            }
+          },
+          {
+            "name": "sortOrder",
+            "type": {
+              "name": "Float",
+              "kind": "SCALAR",
+              "ofType": null
+            }
+          },
+          {
+            "name": "prioritySortOrder",
+            "type": {
+              "name": "Float",
+              "kind": "SCALAR",
+              "ofType": null
+            }
+          },
+          {
+            "name": "color",
+            "type": {
+              "name": "String",
+              "kind": "SCALAR",
+              "ofType": null
+            }
+          },
+          {
+            "name": "icon",
+            "type": {
+              "name": "String",
+              "kind": "SCALAR",
+              "ofType": null
+            }
+          },
+          {
+            "name": "status",
+            "type": {
+              "name": "InitiativeStatus",
+              "kind": "ENUM",
+              "ofType": null
+            }
+          },
+          {
+            "name": "targetDate",
+            "type": {
+              "name": "TimelessDate",
+              "kind": "SCALAR",
+              "ofType": null
+            }
+          },
+          {
+            "name": "targetDateResolution",
+            "type": {
+              "name": "DateResolutionType",
+              "kind": "ENUM",
+              "ofType": null
+            }
+          },
+          {
+            "name": "content",
+            "type": {
+              "name": "String",
+              "kind": "SCALAR",
+              "ofType": null
+            }
+          },
+          {
+            "name": "priority",
+            "type": {
+              "name": "Int",
+              "kind": "SCALAR",
+              "ofType": null
+            }
+          },
+          {
+            "name": "labelIds",
+            "type": {
+              "name": null,
+              "kind": "LIST",
+              "ofType": {
+                "name": null,
+                "kind": "NON_NULL"
+              }
+            }
+          }
+        ],
+        "fields": null,
+        "enumValues": null
+      }
+    }
+  },
+  "bodyRaw": "{\"data\":{\"__type\":{\"name\":\"InitiativeCreateInput\",\"kind\":\"INPUT_OBJECT\",\"inputFields\":[{\"name\":\"id\",\"type\":{\"name\":\"String\",\"kind\":\"SCALAR\",\"ofType\":null}},{\"name\":\"name\",\"type\":{\"name\":null,\"kind\":\"NON_NULL\",\"ofType\":{\"name\":\"String\",\"kind\":\"SCALAR\"}}},{\"name\":\"description\",\"type\":{\"name\":\"String\",\"kind\":\"SCALAR\",\"ofType\":null}},{\"name\":\"ownerId\",\"type\":{\"name\":\"String\",\"kind\":\"SCALAR\",\"ofType\":null}},{\"name\":\"leadTeamId\",\"type\":{\"name\":\"String\",\"kind\":\"SCALAR\",\"ofType\":null}},{\"name\":\"sortOrder\",\"type\":{\"name\":\"Float\",\"kind\":\"SCALAR\",\"ofType\":null}},{\"name\":\"prioritySortOrder\",\"type\":{\"name\":\"Float\",\"kind\":\"SCALAR\",\"ofType\":null}},{\"name\":\"color\",\"type\":{\"name\":\"String\",\"kind\":\"SCALAR\",\"ofType\":null}},{\"name\":\"icon\",\"type\":{\"name\":\"String\",\"kind\":\"SCALAR\",\"ofType\":null}},{\"name\":\"status\",\"type\":{\"name\":\"InitiativeStatus\",\"kind\":\"ENUM\",\"ofType\":null}},{\"name\":\"targetDate\",\"type\":{\"name\":\"TimelessDate\",\"kind\":\"SCALAR\",\"ofType\":null}},{\"name\":\"targetDateResolution\",\"type\":{\"name\":\"DateResolutionType\",\"kind\":\"ENUM\",\"ofType\":null}},{\"name\":\"content\",\"type\":{\"name\":\"String\",\"kind\":\"SCALAR\",\"ofType\":null}},{\"name\":\"priority\",\"type\":{\"name\":\"Int\",\"kind\":\"SCALAR\",\"ofType\":null}},{\"name\":\"labelIds\",\"type\":{\"name\":null,\"kind\":\"LIST\",\"ofType\":{\"name\":null,\"kind\":\"NON_NULL\"}}}],\"fields\":null,\"enumValues\":null}}}\n",
+  "note": "Recorded by the hierarchy capture (FX2, D-8407). The schema of InitiativeCreateInput."
+}

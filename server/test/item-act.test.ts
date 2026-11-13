@@ -203,12 +203,17 @@ describe('POST /api/items/:id/act', () => {
     expect(mail.body.indexOf('```')).toBeLessThan(mail.body.indexOf('Operator ruling: merge it now'));
   });
 
-  it('reads no body, and is not a box-token lane', async () => {
+  it('refuses a body naming another run, an intent or an archive, and is not a box-token lane', async () => {
     const r = await rig();
     const id = await ask(r, r.planned, 'lane-a');
-    // A body naming another run, an intent or an archive is not read.
+    // D-8558: act reads a refused close's reason and programme end alone (`parseItemActBody`); anything else is refused whole.
     const res = await act(r, id, { runId: r.run, intent: 'archive', archive: true });
-    expect(res.statusCode, res.body).toBe(200);
+    expect(res.statusCode, res.body).toBe(400);
+    expect(r.coord.run(r.run)).toMatchObject({ run: { state: 'working' } });
+    expect(r.coord.itemById(id)!.state).toBe('open');
+    expect((await act(r, id, { reason: 'done elsewhere' })).statusCode, 'an end request takes no reason').toBe(400);
+    const plain = await act(r, id);
+    expect(plain.statusCode, plain.body).toBe(200);
     expect(r.coord.run(r.run)).toMatchObject({ run: { state: 'working' } });
   });
 });

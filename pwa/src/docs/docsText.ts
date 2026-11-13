@@ -108,6 +108,16 @@ export const DOCS_FAILURE_FALLBACK_SENTENCE: Partial<Record<DocsFailure, readonl
   'raster-mismatch': ['These bytes are not the kind of image the file declares.'],
 };
 
+/** `helper-unavailable`'s sentence by the `detail` ccd answers it with (D-7077): with no node, no redactor CLI, or an
+ *  installed redactor that is not the one ccd pins, the Docs helper cannot redact, and the sentence says so rather than
+ *  blaming python3. A python detail (`python-missing`, `python-too-old`), an unknown one or none keeps the spec's own
+ *  sentence above; `ccrc doctor` names the cause in every case. */
+export const HELPER_UNAVAILABLE_DETAIL_SENTENCE: Readonly<Record<string, string>> = {
+  'node-missing': 'The fleet box has no node its ccd can run, and Docs redacts through node; run ccrc doctor there.',
+  'redactor-missing': "The fleet box's Docs redactor is not where its ccd looks for it; run ccrc doctor there.",
+  'redactor-mismatch': "The fleet box's installed Docs redactor is not the one its ccd pins; run ccrc doctor there.",
+};
+
 /** A page-URL refusal (spec 4.4: a parse failure renders this and a link to the index), 20+ characters each. */
 export const DOCS_PAGE_INVALID_SENTENCE: Record<DocsPageParseFailure, string> = {
   'not-docs': 'This address is not a Docs page.',
@@ -260,6 +270,10 @@ export function shortCommit(sha: string): string {
 export function failureSentence(body: DocsFailureBody): string {
   const word: string = body.failure;
   if (!isDocsFailureWord(word)) return unknownWordSentence(word);
+  const detail = word === 'helper-unavailable' ? body.detail : undefined;
+  if (typeof detail === 'string' && Object.hasOwn(HELPER_UNAVAILABLE_DETAIL_SENTENCE, detail)) {
+    return HELPER_UNAVAILABLE_DETAIL_SENTENCE[detail]!;
+  }
   const fields: Record<string, string | number> = {};
   for (const [name, value] of Object.entries(body)) {
     if (typeof value === 'string' || (typeof value === 'number' && Number.isFinite(value))) fields[name] = value;

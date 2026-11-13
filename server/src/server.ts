@@ -16,7 +16,7 @@ import { readLaneStates, readLimits, projectHome, projectPlacement } from './lim
 import { accountsConnect, lanesWire } from './accounts/lanes.js';
 import { accountOriginClass } from './accounts/gate.js';
 import { readSharesMeasured } from './shares.js';
-import { CLASSES, MODELS_PUSH_MAX, modelsPushDecision, type ModelClass } from '../../shared/models.js';
+import { CLASSES, MODELS_PUSH_MAX, modelsPushDecision, type LaneModelsAnswer, type ModelClass } from '../../shared/models.js';
 import {
   accountPoolsEnforcement, accountPoolsUnavailableReason, poolFor, poolsEnforcement, poolsWire, readObservedEpochFromRegistry, readPoolEpoch,
   readProjectPools, readProjectPoolsWithRoot,
@@ -79,6 +79,7 @@ import { installReaderLabCounter, registerReaderLabRoutes } from './readerLab/ro
 import { operatorActRoute, servedFleetReads, servedFromWatcher, servedProjectReads, takenAfter } from './servedRead.js';
 import { registerTokenRoutes } from './token/routes.js';
 import { overridesViewNow } from './overridesRead.js';
+import { readLaneModels } from './laneModels.js';
 import { registerLinearRoutes, registerLinearWorkspaceRoutes } from './linear/routes.js';
 import { registerLinearProxyRoutes } from './linear/proxyRoutes.js';
 import { registerLinkingRoutes } from './linking/routes.js';
@@ -1447,6 +1448,18 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   // override is placed and lifted at a terminal. Session-gated when armed (not EXEMPT), no box token.
   app.get('/api/fleet/overrides', async () => ({ ok: true, ...await overridesViewNow(deps) }));
 
+  // D-8406: a lane's classes as its own files say them (`laneModels.ts`): each class's model and the catalogue's label,
+  // for the session's model picker and the new-session sheet. Read only. Session-gated when armed (not EXEMPT), no box
+  // token. A lane the roster does not hold is `not-found` before any file is named, so no path is built from a word
+  // the roster never vetted.
+  app.get('/api/models/:lane', async (req, reply) => {
+    const { lane } = req.params as { lane: string };
+    if (!deps.cfg.roster.byId.has(lane)) return refuseRoute(reply, 'not-found');
+    reply.header('cache-control', 'no-store');
+    const answer: LaneModelsAnswer = { ok: true, lane, models: await readLaneModels(deps.io, deps.cfg.ccrcDir, lane) };
+    return answer;
+  });
+
   // Web Push: the PWA fetches the VAPID public key, then registers its push
   // subscription here. Notifications fire from the FleetWatcher on a new
   // question or a busy→idle finish. 501 when push isn't configured.
@@ -2629,6 +2642,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     authEnabled: deps.cfg.authEnabled, sessionAuth, mailToken: () => deps.mailToken ?? null,
     registerSecret: (laneId, value, o) => deps.masker?.ingestSecret(laneId, value, o) ?? 'unregistered',
     retireSecret: (laneId) => { deps.masker?.retireSecret(laneId); },
+    ...(deps.plan === undefined ? {} : { plan: deps.plan }),
   });
 
   /**
@@ -3402,7 +3416,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
    *
    * EMITS THE RESOLVED POOL, central-if-present-else-declared, not central
    * edges alone (review round 3, W1 — the fail-open the whole wave missed).
-   * MEASURED: `_acct_pool_state` (`ccd/ccd:2101`) reads ONLY `$REG/pool-epoch`
+   * MEASURED: `_acct_pool_state` in `ccd/ccd` reads ONLY `$REG/pool-epoch`
    * — Task 2 deliberately stopped `_pool_ok` consulting the declared
    * `accounts.sh` tag at placement — so an id this document omitted read
    * `untagged` on the fleet. Emitting central edges alone meant a DECLARED-only
@@ -3447,8 +3461,8 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
    * gate's information boundary on an armed box."
    *
    * `leaseUntil`/`issuedAt` are UNIX SECONDS, not milliseconds (review round 1,
-   * C1 — CRITICAL, fixed). Every reader in the tree (`ccd/ccd:2366-2367`'s
-   * `now=$(date +%s)`) compares in seconds; emitting `Date.now()` (ms) made
+   * C1 — CRITICAL, fixed). Every reader in the tree (`_acct_pool_state`'s
+   * lease check, `now > lease`) compares in seconds; emitting `Date.now()` (ms) made
    * the `stale` arm unreachable for ~56,700 years, pinning
    * `POOL_LEASE_MS`'s whole dial to "a dead control plane's last projection
    * is enforced forever" — exactly the hazard spec §5.8 exists to bound.

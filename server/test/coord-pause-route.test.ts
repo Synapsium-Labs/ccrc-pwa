@@ -607,10 +607,16 @@ describe("the operator's act and decline consult no box token, and the abandon r
     return src.slice(at, next === -1 ? undefined : at + 1 + next);
   };
 
-  it.each(['/api/items/:id/act', '/api/items/:id/decline'])('%s consults no box token and reads no body', (route) => {
+  it.each(['/api/items/:id/act', '/api/items/:id/decline'])('%s consults no box token', (route) => {
     const body = handlerIn(LEDGERS, route);
     expect(body).not.toMatch(/requireMailToken|checkMailToken|x-ccrc-mail-token/);
-    expect(body).not.toMatch(/req\.body/);
+  });
+
+  it('decline reads no body; act reads its body once, through parseItemActBody, which names no run and no archive (D-8558)', () => {
+    expect(handlerIn(LEDGERS, '/api/items/:id/decline')).not.toMatch(/req\.body/);
+    const act = handlerIn(LEDGERS, '/api/items/:id/act');
+    expect(act.match(/req\.body/g)).toHaveLength(1);
+    expect(act).toContain('parseItemActBody(req.body');
   });
 
   it('is in neither the UNGATED nor the SESSION_ONLY set of coord/routes.ts, which it is not registered in', () => {

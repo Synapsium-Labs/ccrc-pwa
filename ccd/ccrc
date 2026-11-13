@@ -2605,8 +2605,9 @@ already running).
             "init" seeds it, and set-class/set-subagent/set-effort/discovery
             change it — each re-writing that lane's own settings.json.
             set-window/clear-window record or drop a measured context
-            window per model; once every class model has one, the lane's
-            window is the smallest of them.
+            window per model (never above the catalogue's maxContext);
+            a model with none takes the provider default, its catalogue
+            context, and the lane's window is the smallest of them.
             hold/release/revert <class> keep a class where it is, let it
             move again, or put back the model it had before its last
             automatic advance and hold it there.
@@ -11687,7 +11688,10 @@ _models_summary() {   # <json body> — the human sentences, on STDERR
      elif .contextWindow.rule == "measured" then
        "  context window: \(.contextWindow.tokens) tokens, measured (the smallest across the class models)"
      else
-       "  context window: \(if .contextWindow.rule == "default" then "\(.contextWindow.tokens) tokens, by the default rule (the catalogue context of the default model, capped at 200000)" else "not set, the client default applies" end)\(if (.contextWindow.unmeasured | length) > 0 then "; not measured: \(.contextWindow.unmeasured | join(", "))" else "" end)"
+       "  context window: \(if .contextWindow.rule != "default" then "not set, the client default applies"
+         elif .contextWindow.source == "measured" then "\(.contextWindow.tokens) tokens, measured for \(.contextWindow.model) (the smallest across the class models)"
+         elif .contextWindow.source == "client" then "\(.contextWindow.tokens) tokens, the client default (\(.contextWindow.model) has no measured window and no catalogue context)"
+         else "\(.contextWindow.tokens) tokens, by the provider default (the catalogue context of \(.contextWindow.model))" end)\(if (.contextWindow.unmeasured | length) > 0 then "; not measured: \(.contextWindow.unmeasured | join(", "))" else "" end)"
      end),
     (if .windows.state == "ok" then
        (.windows.byModel | to_entries[] | "  measured window: \(.key) \(.value.tokens) tokens\(if .value.setAt == null then "" else " (set \(.value.setAt))" end)")

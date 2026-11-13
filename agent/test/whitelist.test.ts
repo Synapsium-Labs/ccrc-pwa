@@ -268,6 +268,65 @@ describe('whitelist.checkPath', () => {
       expect(await checkPath(path.join(home, '.ccrc', 'agent.env'), cfg, 'read')).toBeNull();
     });
   });
+
+  // D-8406: a lane's class registry and catalogue, the two files the session's model picker reads, by exact name.
+  describe('the lane model files in ~/.ccrc/models — two exact names per lane, READ mode only', () => {
+    function seedModels(): string {
+      seed();
+      const dir = path.join(home, '.ccrc', 'models');
+      mkdirSync(dir, { recursive: true });
+      return dir;
+    }
+
+    it('admits a lane\'s registry and catalogue for read, absent or present, at the canonical path', async () => {
+      const dir = seedModels();
+      const cfg = { home, projectsRoot };
+      const canonicalDir = await canonicalize(dir);
+      for (const b of ['lane-a.classes.json', 'lane-a.json']) {
+        const p = path.join(dir, b);
+        expect(await checkPath(p, cfg, 'read'), `${b} (absent)`).toBe(path.join(canonicalDir, b));
+        writeFileSync(p, '{}\n');
+        expect(await checkPath(p, cfg, 'read'), `${b} (present)`).toBe(path.join(canonicalDir, b));
+        expect(await checkPath(p, cfg, 'write'), `${b} must NOT be writable`).toBeNull();
+      }
+    });
+
+    it('refuses the directory, every sibling file, a reserved word, and the same names anywhere else', async () => {
+      const dir = seedModels();
+      const cfg = { home, projectsRoot };
+      for (const r of ['lane-a.effort.json', 'lane-a.windows.json', 'lane-a.advance.json', 'lane-a.classes.tsv',
+        'lane-a.aliases.json', 'litellm.json', 'lane-a.json.tmp', 'Lane-a.json']) {
+        writeFileSync(path.join(dir, r), '{}\n');
+        expect(await checkPath(path.join(dir, r), cfg, 'read'), `${r} must NOT be readable`).toBeNull();
+      }
+      expect(await checkPath(dir, cfg, 'read'), '~/.ccrc/models itself must NOT be readable').toBeNull();
+      expect(await checkPath(path.join(home, '.ccrc', 'lane-a.json'), cfg, 'read')).toBeNull();
+      expect(await checkPath(path.join(home, '.ccrc', 'models-x', 'lane-a.json'), cfg, 'read')).toBeNull();
+      expect(await checkPath(path.join(home, '.ccrc', 'models', 'sub', 'lane-a.json'), cfg, 'read')).toBeNull();
+      expect(await checkPath(path.join(outside, 'models', 'lane-a.json'), cfg, 'read')).toBeNull();
+    });
+
+    it('a live symlink at a lane file\'s name, or a models directory that is a symlink, is refused', async () => {
+      const dir = seedModels();
+      const cfg = { home, projectsRoot };
+      writeFileSync(path.join(home, '.ccrc', 'agent.env'), 'CCRC_AGENT_TOKEN=x\n');
+      writeFileSync(path.join(dir, 'lane-b.json'), '{}\n');
+      symlinkSync(path.join(home, '.ccrc', 'agent.env'), path.join(dir, 'lane-a.classes.json'));
+      // Canonical-path membership alone would admit this one: it resolves onto another lane's real catalogue.
+      symlinkSync(path.join(dir, 'lane-b.json'), path.join(dir, 'lane-a.json'));
+      for (const b of ['lane-a.classes.json', 'lane-a.json']) {
+        expect(await checkPath(path.join(dir, b), cfg, 'read'), `${b} (a symlink) must NOT be readable`).toBeNull();
+      }
+      expect(await checkPath(path.join(dir, 'lane-b.json'), cfg, 'read'), 'the real file keeps its grant').not.toBeNull();
+
+      seed();
+      const real = mkTmp('ccrc-wl-models-real-');
+      mkdirSync(path.join(home, '.ccrc'), { recursive: true });
+      symlinkSync(real, path.join(home, '.ccrc', 'models'));
+      writeFileSync(path.join(real, 'lane-a.json'), '{}\n');
+      expect(await checkPath(path.join(home, '.ccrc', 'models', 'lane-a.json'), { home, projectsRoot }, 'read')).toBeNull();
+    });
+  });
 });
 
 // D-8382: the operator's ~/.ccrc switch files, admitted for `stat` alone (existence, size and time), by name and at their

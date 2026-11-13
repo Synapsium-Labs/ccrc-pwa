@@ -5900,9 +5900,23 @@ export const PROGRAM_KICKOFF_SUBJECT = 'program-kickoff';
  * name them: the route enforces, and a peer client showing remaining
  * headroom must not carry a second copy of a policy number
  * (`MAIL_MAX_ATTEMPTS`'s own argument).
+ *
+ * #2726: an INVITED reply is outside all three arms: a `kind: answer` whose
+ * `inReplyTo` names the delivery of a mail its recipient sent to its sender,
+ * one per such mail (`mail.answersMail`). It holds no slot afterwards. The
+ * decision is `server/src/coord/peerBound.ts#peerMailVerdict`.
  */
 export const PEER_MAIL_MAX_OUTSTANDING = 3;
 export const PEER_MAIL_HOURLY = 12;
+/** The hourly arm's window: `PEER_MAIL_HOURLY` accepted peer mails per sender inside any span this long. */
+export const PEER_MAIL_WINDOW_MS = 3_600_000;
+/** When a mail refused `429 peer-quota` can go (#2726 (c)), on the refusal's body beside `detail`, never in the
+ *  recorded rejection row. `ack`: the pair arm frees when `toId` acks one of the sender's outstanding mails to it (or
+ *  the lane parks one), which it does when it next reads its mail. `time`: the hourly arm frees at `at` (epoch ms),
+ *  when the mail whose leaving brings the sender under `PEER_MAIL_HOURLY` leaves the window. */
+export type PeerRetry =
+  | { readonly on: 'ack'; readonly toId: string }
+  | { readonly on: 'time'; readonly at: number };
 
 /** The info string on the fence `renderEnvelope` emits (`coord/envelope.ts`).
  *  ONE definition, here in L0, imported by the renderer — the grammar is
@@ -6285,7 +6299,7 @@ export const WORK_ITEM_MAX = 32;
  *  - DONE-AUTHORITY (spec:127-132): the claim is rejected, the run is unchanged.
  *
  * `tip-unmeasurable`/`pr-unmeasurable` exist because NOT KNOWING IS NOT `[]` —
- * ccd's own three-answer ladder (`ccd/ccd:2080-2086`). A fact the server could
+ * ccd's own three-answer ladder (`_reg_read`). A fact the server could
  * not re-measure must never read as a fact that matched. `registry-unmeasurable`
  * (D-37) is the INGRESS member of the same family: a `readRegistry` that could
  * not list its directory, or that dropped a listed row for an unreadable
@@ -6476,8 +6490,8 @@ export type RouteReadField = (typeof ROUTE_READ_FIELDS)[number];
  *  (bytes, not `.length`, for the same reason `ccd/ccd`'s `_route_bytes`
  *  counts bytes for its refusal messages — a UTF-8 value's byte count and
  *  character count differ). Measured against the real binary: neither
- *  `_route_valid` (`ccd/ccd:14727-14760`, closed-vocabulary lookups only,
- *  no length check) nor `_route_argv_check` (`ccd/ccd:14801-14840`, which
+ *  `_route_valid` (closed-vocabulary lookups only,
+ *  no length check) nor `_route_argv_check` (which
  *  calls `_route_bytes` only to RENDER a byte count inside an already-decided
  *  refusal) enforces a byte cap on a `--route` value — so this constant has
  *  no counterpart on the box and is not "the same 32 bytes" as anything ccd
@@ -6490,7 +6504,7 @@ const ROUTE_VALUE_MAX_BYTES = 32;
  *  blank value or one carrying a control character is refused here before a
  *  malformed body reaches the fleet. Measured against the real binary: the
  *  only `[[:cntrl:]]` guard over a `--route` VALUE anywhere in `ccd/ccd` is
- *  `cmd_route`'s over `--actor`/`--reason` (`ccd/ccd:6769-6771`, guarding
+ *  `cmd_route`'s over `--actor`/`--reason` (guarding
  *  free-form log text against a forged journal line) — `_route_valid` has no
  *  control-character arm at all, since it only ever looks a value up in a
  *  closed vocabulary. */
@@ -9427,6 +9441,7 @@ export type LcRefusalToken =
   | 'is-a-workspace'           // forget, aimed at a workspace: use the audited path
   | 'session-live'             // forget, on a running session
   | 'session-verdict-unknown' | 'hibernated'  // tmux did not answer: fail-shut, nothing removed; `hibernated` (D-5242): forget on a sleeping row, wake or stop it first
+  | 'roll-fresh-unproven'     // hibernate --roll --fresh (overlord W1a, review 1904 F1): the wake answered 0, but no spawn of the new uuid left its receipt (a concurrent wake, a lost create or an account move came first) — journaled `failed`; the old uuid is back, exit 7
   | 'workspace-unreadable'     // forget (D-8140): the row's workspace field could not be read, so whether it is a workspace is unproven; nothing removed
   | 'spawn-failed'             // _lc_fail: the undo landed, the session did not come back
   | 'purge-refused'            // D-2605: the row's compaction mutex was unavailable, so the registry row stands // @anchor purge-refusal-union
@@ -9589,6 +9604,9 @@ export const LC_REFUSAL_WORD: Record<LcRefusalToken, string> = {
   // D-5242: a hibernated row is asleep, not dead — `ccd ensure` (or mail, a dispatch, a Restart) wakes it (D-5423).
   'hibernated':
     'This session is asleep, not gone: it wakes when it is opened, mailed or dispatched. Wake it (ccd ensure) or stop it (ccd stop) first. Nothing was removed.',
+  // Overlord W1a (review 1904 F1): `ccd hibernate --roll --fresh` proves its fresh start by the consuming spawn's receipt.
+  'roll-fresh-unproven':
+    'This session was put to sleep to start a fresh conversation, but the fresh start could not be proven, so the session is set back to its previous conversation. Nothing was lost, and a fresh start can be asked for again.',
 };
 
 /** Derived from the map — the `PR_REASON_MAP` idiom, so a member added to the

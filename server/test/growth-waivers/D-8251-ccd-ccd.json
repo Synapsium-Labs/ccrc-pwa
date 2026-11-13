@@ -1,0 +1,7 @@
+{
+  "file": "ccd/ccd",
+  "maxDelta": 70,
+  "d": "D-8251",
+  "reason": "overlord W1a fresh start (#2742): `ccd hibernate --roll --fresh`, its marker carried into the unit's own process and read by `_spawn_mode`, and the fresh start's proof (review 1904 F1: the consuming spawn's receipt, exit 7 roll-fresh-unproven without it, stale-marker removal, swap.log naming both uuids before the writes); measured +54 net lines against the merge-base",
+  "added": "2026-11-13"
+}

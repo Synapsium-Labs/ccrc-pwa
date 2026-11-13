@@ -191,7 +191,8 @@ import {
   type OpenSibling, type RunRow,
 } from './coord/store.js';
 import { renderMailNudge } from './coord/envelope.js';
-import { MAIL_PACE, mailPaceRoleOf } from './coord/mailPace.js';
+import { mailPaceOf } from './coord/mailPace.js';
+import { roleFactsOf, roleOf } from './roleOf.js';
 import { configDirFor } from './config.js';
 import { refusalSentence } from './wsaudit.js';
 import {
@@ -471,7 +472,7 @@ const PROVENANCE_WINDOW_MS = 3_600_000;
  *  — `attemptedRenames`'s per-(incarnation, derived-branch) key is already the
  *  correct guard for a name-dependent refusal. Today the arm is dead code:
  *  `deriveBranch` only ever emits `ws/[a-z0-9]+(-[a-z0-9]+)*`, a subset
- *  `_ws_branch_valid` (`ccd/ccd:3186-3194`) always accepts, so `bad-branch`
+ *  `_ws_branch_valid` in `ccd/ccd` always accepts, so `bad-branch`
  *  never actually reaches this lane — see `naming.ts:26-30`.
  *
  *  `held` (Wave 3 §3.1's `ws-rename` rung) is DELIBERATELY ABSENT and must
@@ -554,7 +555,7 @@ function parkBoxSeen(box: string | null, parkBox: string | null): 'changed' | 's
 }
 
 /* The fleet kill-switch, `$REG/mail-disabled` — ccd's `-disabled` family
- *  (`ccd/ccd:40-41`, `_lane_enabled` at `:248`), which the operator already
+ *  (`_lane_enabled`'s `$REG/<w>-disabled`, `AUTOCOMPACT_DISABLE_FILE`), which the operator already
  *  knows how to use: `touch` to stop, `rm` to resume. Read by LISTING the
  *  registry directory, never by reading the file — and that stays true even
  *  though `FleetIO` no longer has to collapse "unreadable" into "absent":
@@ -7595,7 +7596,7 @@ export class FleetWatcher {
    *   5. `mailTurnIdle` (`turnidle.ts`) reads the RAW live word as a finished
    *      turn — `idle`, or `shell` (an idle main loop over a background shell)
    *      unless `$REG/mail-gate-strict` is listed — and `statusUpdatedAt` is at
-   *      least `MAIL_PACE.worker.quietMs` old (`MAIL_PACE.coordinator.quietMs` for a coordinator): the
+   *      least its row of `MAIL_PACE` old (`quietMs`, `coord/mailPace.ts`, the row its role reads): the
    *      SOLE turn-idle authority. A `shell` delivery also asks `sendPrompt`
    *      to refuse a pane showing `esc to interrupt` (`turn-running`), a
    *      tripwire only. It never reads a folded word,
@@ -8058,17 +8059,25 @@ export class FleetWatcher {
       // and never leaves a session claimed across sweeps.
       this.mailInFlight.add(d.toId);
       try {
-        // THE ONE FACT THIS RUNG ADDS, read once per row from the per-sweep set
-        // above and consumed by exactly two gates: this one and `not-quiet`
-        // below. It is the row of `MAIL_PACE` (`coord/mailPace.ts`) this session
-        // reads, chosen through `mailPaceRoleOf`: the claimant of an open run
-        // reads the coordinator row, every other session the worker row.
+        // The recipient's registry record, looked up once and gated on below
+        // (the registry ladder); found here, before the cooldown, only because
+        // the pace reads its `.child` mark. A lookup, not a gate.
+        const rec = records.find((r) => r.id === d.toId);
+        // THE ONE FACT THIS RUNG ADDS, read once per row and consumed by
+        // exactly two gates: this one and `not-quiet` below. It is the row of
+        // `MAIL_PACE` (`coord/mailPace.ts`) this session's role reads, decided in
+        // L1 through `roleOf`, its facts assembled by the one assembly,
+        // `roleFactsOf`, from the two this pass measures: the recipient's
+        // `.child` mark and the open claimants (the per-sweep set above). The
+        // run kind and declared intent are not read on this path, so they are
+        // `unmeasured`. A recipient the registry does not list has a child mark
+        // that was not measured, read as an unreadable one (spec §3.3.9).
         // Neither condition changes — only the threshold each is measured
         // against.
-        const pace = MAIL_PACE[mailPaceRoleOf(d.toId, coordinators)];
+        const pace = mailPaceOf(roleOf(roleFactsOf(d.toId, { child: rec?.child ?? { kind: 'unreadable' },
+          childRunKind: 'unmeasured', openCoordinators: coordinators, intentDeclared: 'unmeasured' })));
         const last = this.mailCooldown.get(d.toId) ?? 0;
         if (now - last < pace.cooldownMs) { gated(d, 'cooldown'); continue; }
-        const rec = records.find((r) => r.id === d.toId);
         // registry ladder: `records` came from `readRegistryMeasured` above,
         // with `!listed` already refused (fix — blocking review findings
         // 1/5) — so by the time this line runs, a whole-fleet read failure

@@ -4,7 +4,8 @@ These are the answers Linear gave to the documents ccrc sends, recorded once by 
 Linear central key plan's FX act, D-7684) and scrubbed to the public fixture vocabulary. Every task that needs a Linear
 answer, an `X-Complexity` value, a rate-limit header, an error code or a schema fact reads it here. No worker makes one up.
 The departures from the plan's FX item are D-7743 (`docs/superpowers/plans/2026-11-02-linear-fx-capture.md`).
-`server/test/linear-fixtures.test.ts` checks these files.
+The hierarchy documents were recorded by a second capture, FX2 (D-8407, the Linear hierarchy plan's FX2 act), on
+2026-11-13: see "What FX2 measured" below. `server/test/linear-fixtures.test.ts` checks these files.
 
 ## The capture
 
@@ -39,9 +40,19 @@ the HTTP status, every response header in the order Linear sent it, the parsed `
 | `error-401-revoked-key` | the capture's own key, after the operator revoked it | `KEY_CHECK_QUERY` |
 | `error-429-ratelimited-constructed` | **constructed, not recorded**: see below | `KEY_CHECK_QUERY` |
 | `mutation-attachment-link-url-constructed` | **constructed, not recorded**: see below | `LINEAR_DOCUMENTS.link` |
-| `read-{initiative-by-id,project-by-id,project-statuses,initiatives-probe,initiatives-by-name,projects-by-name,changed-initiatives,changed-projects,changed-milestones,changed-issues,team-open-issues,issue-owned}-constructed` | **constructed, not recorded**: the hierarchy reads (D-8180), see below | `LINEAR_HIERARCHY_DOCUMENTS.<name>` |
-| `directory-project-statuses-page-1-constructed` | **constructed, not recorded**: the directory's page of project statuses (D-8180), see below | `LINEAR_HIERARCHY_DOCUMENTS.projectStatuses` |
-| `mutation-{initiative-create,initiative-update,initiative-to-project-create,initiative-to-project-delete,project-create,project-update,project-milestone-create,project-milestone-update,issue-relation-create}-constructed` | **constructed, not recorded**: the hierarchy mutations (D-8180), see below | `LINEAR_HIERARCHY_DOCUMENTS.<name>` |
+| `read-{initiative-by-id,project-by-id,project-statuses,initiatives-probe,initiatives-by-name,projects-by-name,changed-initiatives,issue-owned}` | FX2: the hierarchy reads (D-8407). `read-project-statuses` is also the directory's page of project statuses | `LINEAR_HIERARCHY_DOCUMENTS.<name>` |
+| `read-initiatives-by-name-near-miss` | FX2: the initiative's name less its last character | `LINEAR_HIERARCHY_DOCUMENTS.initiativesByName` |
+| `read-project-by-id-milestone-update-{before,after}` | FX2 item 4: the project read around a milestone update | `LINEAR_HIERARCHY_DOCUMENTS.projectById` |
+| `mutation-{initiative-create,initiative-to-project-create,project-create,project-milestone-create,project-milestone-update,issue-relation-create}` | FX2: the hierarchy mutations (D-8407) | `LINEAR_HIERARCHY_DOCUMENTS.<name>` |
+| `mutation-{initiative,project,project-milestone}-create-same-id` | FX2: each create sent again with the same caller-chosen id | `LINEAR_HIERARCHY_DOCUMENTS.<name>Create` |
+| `mutation-initiative-update-status-{proposed,planned,active,completed,canceled}` | FX2: each `InitiativeStatus` value set in turn | `LINEAR_HIERARCHY_DOCUMENTS.initiativeUpdate` |
+| `mutation-comment-create-on-{initiative,project}` | FX2: a comment on an initiative and on a project | `LINEAR_DOCUMENTS.comment` |
+| `extra-issue-create-in-milestone-{a,b}` | FX2: two issues in the capture's project and milestone | `LINEAR_DOCUMENTS.create` |
+| `extra-viewer` | FX2: the key's viewer, which the creator reads name | the capture's own `viewer { id }` query |
+| `introspection-{initiative-create-input,project-create-input,project-milestone-create-input,comment-create-input,project-milestone,initiative-status}` | FX2: the schema answers to the plan's questions 1 to 3 and 7 | the capture's own introspection query |
+| `error-graphql-validation-milestone-creator` | FX2: `changedMilestones` as merged before D-8407, selecting a milestone `creator` | the document before D-8407 |
+| `error-project-name-too-long` | FX2: a project name of 85 characters | `LINEAR_HIERARCHY_DOCUMENTS.projectCreate` |
+| `read-{changed-projects,changed-milestones,changed-issues,team-open-issues}-constructed`, `mutation-{initiative-to-project-delete,project-update}-constructed` | **constructed, not recorded**: the six hierarchy documents FX2 did not record (D-8180), see below | `LINEAR_HIERARCHY_DOCUMENTS.<name>` |
 
 ## What the fixtures show
 
@@ -81,6 +92,65 @@ the HTTP status, every response header in the order Linear sent it, the parsed `
   the id the caller sends. Sending the same id again gets HTTP 200, `data` null, `INPUT_ERROR` "conflict on insert of
   Issue", and creates nothing. That makes it a retry guard. The merged code does not send it.
 
+## What FX2 measured
+
+FX2 (D-8407) answered the Linear hierarchy plan's seven capture questions on 2026-11-13, between 16:12 and 16:14 UTC,
+on the operator's Mac with a throwaway key, in a scratch team of an existing workspace. It created its own initiative,
+project, milestone, link, two issues, a relation and two comments, and deleted them afterwards with calls that are
+not kept. `linear-fixtures.test.ts` ("what FX2 measured") reads each answer below off the recordings.
+
+1. **Every hierarchy create takes a caller-chosen id.** `InitiativeCreateInput`, `ProjectCreateInput` and
+   `ProjectMilestoneCreateInput` each have a nullable `id`, and Linear keeps the id sent. A repeated initiative or
+   project create with the same id answers HTTP 200, `data` null, `INPUT_ERROR` "conflict on insert of Initiative" /
+   "conflict on insert of Project", and creates nothing. A repeated milestone create with the same id and name answers
+   `INPUT_ERROR` "name not unique" instead: Linear checks a milestone's name in its project before its id.
+2. **`InitiativeStatus` is `Proposed`, `Planned`, `Active`, `Completed`, `Canceled`**, so there is a canceled one, and
+   each was set in turn. An initiative made with no status reads `Active`. The workspace's project statuses come with
+   the types `planned`, `backlog`, `canceled`, `completed` and `started` (Linear's default names: Planned, Backlog,
+   Canceled, Completed, In Progress).
+3. **`CommentCreateInput` takes `issueId`, `projectId`, `initiativeId`, `projectUpdateId` and `initiativeUpdateId`, not a
+   milestone.** A comment on an initiative and one on a project were each made.
+4. **A milestone update does not move its project's `updatedAt`** (`read-project-by-id-milestone-update-{before,after}`:
+   the same value before and after). A drift pass reads changed milestones on their own, not through their projects.
+   In both runs the milestone's own `updatedAt` also stayed where its create left it after a description-only update,
+   so whether `changedMilestones` sees such an edit is not measured.
+5. **The initiatives-off probe was not measured.** No workspace the operator has has initiatives off. On a workspace
+   that has them on with none made, the probe answers HTTP 200 with an empty list (`read-initiatives-probe`), so the
+   probe cannot by itself tell off from empty. Its off answer stays awaited (`AWAITING_ANSWER` in the test), and
+   `readInitiativesProbe` answers `unknown`, never `off`, for anything but nodes.
+6. **The GitHub mirror observation is deferred** to the pilot team: whether the mirror of a synced issue shows an
+   issue relation and an attachment link is to be watched there, not in a capture.
+7. **Exact-name filters hold, and `creator` reads the key's viewer for initiatives and projects.** `initiativesByName`
+   and `projectsByName` find the object made, and its `creator.id` equals the key's viewer (`extra-viewer`); a name one
+   character short finds none (`read-initiatives-by-name-near-miss`). **`ProjectMilestone` has no `creator`**: its
+   introspection lists none, and `projectById`, `changedProjects` and `changedMilestones`, which selected one, each
+   answered HTTP 400 `GRAPHQL_VALIDATION_FAILED`, 'Cannot query field "creator" on type "ProjectMilestone"'
+   (`error-graphql-validation-milestone-creator`; that error carries no `x-complexity` and no rate-limit header).
+   D-8407 removes the milestone `creator` from the three documents, and a milestone binds by name inside its project.
+
+Also measured:
+- **A project name is at most 80 characters.** An 85-character name answers `INVALID_INPUT`, "Argument Validation Error",
+  with `userPresentableMessage` "name must be shorter than or equal to 80 characters." (`error-project-name-too-long`).
+- **`X-Complexity`** of the hierarchy documents, all far under the 10,000 cap:
+
+  | Document | X-Complexity |
+  |---|---|
+  | `changedInitiatives` (`first: 100`) | 1360 |
+  | `projectsByName` / `projectById` / `projectStatuses` | 235 / 153 / 111 |
+  | `initiativesByName` / `initiativeById` / `issueOwned` / `initiativesProbe` | 15 / 13 / 6 / 1 |
+  | each hierarchy mutation / the introspections | 2 / 14 |
+
+What FX2 left unrecorded: `changedProjects` and `changedMilestones` (their recorded answers are the 400 above, and their
+corrected documents are unsent), `changedIssues`, `teamOpenIssues` and `projectUpdate` (not in the run), and
+`initiativeToProjectDelete` (sent only as the capture's cleanup, which is not kept). Their constructed files stay, each
+named by its `AWAITING_RECAPTURE` row.
+
+How FX2's files differ from FX1's: the capture kept no clock and no status line, so `sentAtMs`, `receivedAtMs`,
+`sentAt` and `statusLine` are null; it kept only the `content-type`, `x-complexity`, `x-ratelimit-*` and `retry-after`
+response headers (none sent `retry-after`), in the fetch API's order, and no `date` or `content-length`; `bodyRaw` is
+the parsed body written compactly, as Linear sends it. The item-4 run (the two `read-project-by-id-milestone-update`
+files) kept no header at all. Each reset header is about an hour after the run, as in FX1.
+
 ## The constructed rate-limited answer
 
 `error-429-ratelimited-constructed.json` was **not recorded**. No capture provokes a rate limit. It is built from Linear's
@@ -105,16 +175,15 @@ replaced by a recorded `mutation-attachment-link-url.json` against a throwaway i
 
 ## The constructed hierarchy answers
 
-The 22 hierarchy `*-constructed.json` files (D-8180) were **not recorded**: one for each of the 21
-`LINEAR_HIERARCHY_DOCUMENTS`, and a second answer to `projectStatuses`, `directory-project-statuses-page-1-constructed`,
-the page the directory reads (`readLinearProjectStatusesPage`). The hierarchy documents were written before any session
-may call Linear. Each is built from the document `ops.ts` sends and Linear's
+Six hierarchy `*-constructed.json` files (D-8180) are **not recorded**: the documents FX2 did not record (above). The
+22 constructed files D-8180 landed, one for each of the 21 `LINEAR_HIERARCHY_DOCUMENTS` and the directory's page of
+project statuses, were written before any session could call Linear; FX2's recordings replaced 16 of them (D-8407). Each is built from the document `ops.ts` sends and Linear's
 published schema. Every id is a fixture id (kind word 8 for an object the capture has no kind for: an initiative, a
 milestone, a project status, a link, a relation), and the files carry no `x-complexity` and no rate-limit header, so no
 number in them is a measurement. Each is named by its document's `AWAITING_RECAPTURE` row in `linear-fixtures.test.ts` (the
 `projectStatuses` row names both of its files), and FX2 (the operator's capture) replaces it with a recorded file and
 removes the row; a constructed answer no row names fails the suite. The initiatives probe's "off" answer is
-unrecorded until then, which is why `readInitiativesProbe` answers `unknown`, never `off`, for anything but nodes.
+still unrecorded (FX2 item 5), which is why `readInitiativesProbe` answers `unknown`, never `off`, for anything but nodes.
 
 ## The scrub
 
@@ -128,7 +197,14 @@ real values to fixture values never left the machine the capture ran on.
 - **UUIDs.** Every UUID is a fixed fixture UUID, `00000000-000K-4000-8000-0000000000NN`. The same real id always maps to
   the same fixture id, so references across files still line up: a cursor that was an id, an id inside an error message, a
   variable that names an entity from another file. The kind word `K` is 0 organization, 1 team, 2 workflow state,
-  3 label, 4 project, 5 user, 6 issue, 7 comment, and 8 a random UUID the capture made up to provoke an error.
+  3 label, 4 project, 5 user, 6 issue, 7 comment, and 8 a random UUID the capture made up to provoke an error or an
+  object with no kind of its own (an initiative, a milestone, a project status, a link, a relation).
+- **FX2 (D-8407).** The same vocabulary, with FX2's ids from serial `20` up so none meets an FX1 id. Its scratch team
+  is `AAA`, `Team A`; the key's viewer, which every `creator` it read names, is `User A`. Its objects are named
+  `Capture initiative temp`, `Capture project temp`, `Capture milestone temp` and so on, keeping each real name's shape
+  (a near miss is still the name less its last character, the refused long name is still 85 characters). Its two issues
+  are `AAA-101` and `AAA-102`: unlike FX1, Linear's numbers are not kept. Every timestamp, every header number and every
+  Linear message that names no identity is kept as captured.
 - **Headers.** `x-request-id`, `cf-ray` and `etag` are fixed placeholders. `content-length` is recomputed for the
   scrubbed body.
 - **Keys.** No key appears in any file. The request headers record only that the key was sent bare.

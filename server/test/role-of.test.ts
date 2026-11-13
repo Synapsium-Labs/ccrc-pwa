@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { RUN_KINDS, type ChildMark } from '../../shared/api.js';
 import { FLEET_ROLES, type FleetRole } from '../../shared/fleetRoles.js';
+import * as roleOfModule from '../src/roleOf.js';
 import { ROLE_AMBIGUITIES, ROLE_FACTS_CHILD_AXIS, roleOf, sessionRoleOf, sessionRoleOfReading, type RoleAmbiguity, type RoleFacts, type RoleReading } from '../src/roleOf.js';
+import { roleFactsOfCases } from './sim/renewalDeciderSets.js';
 
 const BASE: RoleFacts = { designation: 'none', auditBody: false, replayBody: false, child: { kind: 'none' },
   childRunKind: 'unmeasured', claimsOpenRun: 'no', declaredIntent: 'no' };
@@ -110,4 +112,8 @@ describe('SessionRole as a view of roleOf', () => {
     expect(roleOf({ ...ROLE_FACTS_CHILD_AXIS, child: { kind: 'none' } }))
       .toEqual({ kind: 'undecided', between: 'coordinator-or-plain' });
   });
+});
+
+describe('roleFactsOf: the one assembly of a session\'s role facts (Overlord W1a, renewal deciders Task 0)', () => {
+  for (const [name, fn] of Object.entries(roleFactsOfCases(roleOfModule))) it(name, fn);
 });
