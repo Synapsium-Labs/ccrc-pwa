@@ -4,7 +4,7 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { Character, Wordmark, usePrefersReducedMotion } from '@ccrc/ui';
 import { useCharacter } from '../lib/character';
-import { useFleetStore } from '../stores/fleet';
+import { useFleetChrome } from '../fleet/FleetChrome';
 import { SPLASH_MAX_MS, SPLASH_MOTTO, SPLASH_TAGLINE, SPLASH_TYPE_MS, splashShows } from './splash';
 import './splash.css';
 
@@ -18,7 +18,7 @@ function installed(): boolean {
 
 export function Splash(): ReactNode {
   const character = useCharacter();
-  const frameSeen = useFleetStore((s) => s.fleetFrameSeen);
+  const frameSeen = useFleetChrome().store((s) => s.fleetFrameSeen);
   const reducedMotion = usePrefersReducedMotion();
   const [standalone] = useState(installed);
   const mountedAt = useRef(0);

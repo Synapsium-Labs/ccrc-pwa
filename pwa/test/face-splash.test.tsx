@@ -1,7 +1,9 @@
+import type { ReactNode } from 'react';
 import { act, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Splash } from '../src/face/Splash';
 import { SPLASH_MAX_MS, SPLASH_MOTTO, SPLASH_TAGLINE, SPLASH_TYPE_MS, splashShows, type SplashFacts } from '../src/face/splash';
+import { FleetChromeProvider } from '../src/fleet/FleetChrome';
 import { useFleetStore } from '../src/stores/fleet';
 
 const facts = (over: Partial<SplashFacts> = {}): SplashFacts => ({
@@ -42,11 +44,15 @@ function standalone(on: boolean): void {
   }));
 }
 
+// The splash is mounted inside the shell's provider (app.tsx), and reads the frame flag through it.
+const inShell = (ui: ReactNode): ReactNode => <FleetChromeProvider store={useFleetStore}>{ui}</FleetChromeProvider>;
+
 describe('<Splash />', () => {
   beforeEach(() => {
     vi.useFakeTimers();
     useFleetStore.setState({ fleetFrameSeen: false });
     standalone(true);
+    vi.stubGlobal('fetch', vi.fn(async () => { throw new TypeError('offline'); }));
   });
   afterEach(() => {
     vi.useRealTimers();
@@ -54,7 +60,7 @@ describe('<Splash />', () => {
   });
 
   it('draws the chosen character in Neutral, with the words', () => {
-    const { container } = render(<Splash />);
+    const { container } = render(inShell(<Splash />));
     const layer = screen.getByTestId('splash');
     expect(layer.getAttribute('aria-hidden')).toBe('true');
     expect(container.querySelector('svg.chr')).not.toBeNull();
@@ -65,12 +71,12 @@ describe('<Splash />', () => {
 
   it('is not drawn in a tab', () => {
     standalone(false);
-    render(<Splash />);
+    render(inShell(<Splash />));
     expect(screen.queryByTestId('splash')).toBeNull();
   });
 
   it('leaves at the 4 s cap with no link', () => {
-    render(<Splash />);
+    render(inShell(<Splash />));
     act(() => { vi.advanceTimersByTime(SPLASH_MAX_MS); });
     expect(screen.queryByTestId('splash')).toBeNull();
     act(() => { useFleetStore.setState({ fleetFrameSeen: true }); });
@@ -79,7 +85,7 @@ describe('<Splash />', () => {
   });
 
   it('never comes back once gone: a later lost link does not raise it again', () => {
-    render(<Splash />);
+    render(inShell(<Splash />));
     act(() => { useFleetStore.setState({ fleetFrameSeen: true }); });
     expect(screen.queryByTestId('splash')).not.toBeNull();
     act(() => { vi.advanceTimersByTime(SPLASH_TYPE_MS); });
@@ -91,13 +97,13 @@ describe('<Splash />', () => {
   });
 
   it('hides nothing from assistive technology', () => {
-    render(
+    render(inShell(
       <>
         <Splash />
         <header><nav aria-label="Main">x</nav></header>
         <main>content</main>
       </>,
-    );
+    ));
     expect(screen.queryByTestId('splash')).not.toBeNull();
     expect(screen.getByRole('navigation', { name: 'Main' })).toBeTruthy();
     expect(screen.getByRole('main')).toBeTruthy();

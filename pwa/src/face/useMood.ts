@@ -7,7 +7,7 @@
 //   |-----------------|-----------------------------------------------------------------------------------------|
 //   | conn            | the fleet store's `conn`                                                                |
 //   | linkLost        | the fleet store's `linkLost`                                                            |
-//   | agentDown       | `agentLink(useFleetChrome().health).word === 'agent down'`; false while health is null  |
+//   | agentDown       | `agentDown(useFleetChrome().health)`, `fleet/agentLink.ts`; false while health is null      |
 //   | sessions        | the store's `sessions` once `fleetFrameSeen`, else null                                 |
 //   | runs            | the store's `runs` once `runsFrameSeen`, else null                                      |
 //   | waitingItems    | `useNavBadges().waitingItems` (its own null rule; never recomputed here)                |
@@ -19,7 +19,7 @@
 // Both hooks throw outside `FleetChromeProvider`: every bar renders inside it.
 import { useEffect, useState } from 'react';
 import type { Mood } from '../../../shared/face';
-import { agentLink } from '../fleet/agentLink';
+import { agentDown } from '../fleet/agentLink';
 import { useFleetChrome } from '../fleet/FleetChrome';
 import { useNavBadges } from '../fleet/navBadges';
 import { moodOf } from './mood';
@@ -36,10 +36,10 @@ export function useMood(): { mood: Mood; cause: string } {
   const lanes = useStore((s) => s.lanes);
   const stallQuietMs = useStore((s) => s.stallQuietMs);
   const { waitingItems } = useNavBadges();
-  const agentDown = agentLink(chrome.health).word === 'agent down';
+  const agentIsDown = agentDown(chrome.health);
   const nowMs = Date.now();
   const decided = moodOf({
-    conn, linkLost, agentDown,
+    conn, linkLost, agentDown: agentIsDown,
     sessions: fleetFrameSeen ? sessions : null,
     runs: runsFrameSeen ? runs : null,
     waitingItems, lanes, stallQuietMs, nowMs,

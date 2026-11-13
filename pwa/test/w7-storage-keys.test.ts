@@ -1,6 +1,6 @@
 // Every key each storage owner reads or writes, as a literal sorted list (D-7179; Task C7a Step 5; plan
 // docs/superpowers/plans/2026-10-27-consolidation-w7-pwa.md, item 13; ARCH-75). The owners are `storageOwners()`
-// (census-w7, 12 files); each is driven through its own read and write, and `Storage`'s three methods are recorded, so
+// (census-w7); each is driven through its own read and write, and `Storage`'s three methods are recorded, so
 // the keys are what the code touches, not text it holds. C7l moves every owner onto one storage port; every key here
 // stays byte-identical (a renamed key loses a device's remembered choice).
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
@@ -125,7 +125,7 @@ describe('each storage owner\'s keys (read and write), byte for byte', () => {
   });
 });
 
-describe('every key, across the twelve owners, as one sorted list', () => {
+describe('every key, across the owners above, as one sorted list', () => {
   it('the literal list (the union of the rows above)', () => {
     expect([...ALL].sort()).toEqual([
       'ccrc-accounts-strip', 'ccrc-character', 'ccrc-fleet-group', 'ccrc-inspector', 'ccrc-release-dismissed', 'ccrc-skin', 'ccrc-theme',
@@ -135,7 +135,7 @@ describe('every key, across the twelve owners, as one sorted list', () => {
   });
 });
 
-// W8a (Task 7): the reader's keys. They are NOT in the union list above (the list is the twelve owners' keys, and the
+// W8a (Task 7): the reader's keys. They are NOT in the union list above (the list is the owners' keys above, and the
 // reader's are a family under one prefix, not a literal set); this describe pins that the library's store keeps every
 // write and every eviction inside `READER_STORE_PREFIX`, and the budget and caps it states (M8.15).
 describe('W8a: the reader\'s keys stay under its own prefix (M8.15)', () => {

@@ -2,6 +2,9 @@
 // L1 function in the PWA (`pwa/src/face/{mood,splash,appBadge}.ts`); its cases are restated here, over a loaded module,
 // so `mutation-floors.test.ts` can run them against each textual mutant (every-run floors). The pwa suites pin the same
 // behaviour against the real module; the duplication is the point, the server runner needs a suite it can hand a copy.
+// The sets load the pwa deciders by path at runtime, so vitest's import graph does not tie them to
+// `mutation-floors.test.ts`: a pull request that changes only a face decider runs no floor on its fast run, and the merge
+// queue's full run does.
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { expect } from 'vitest';

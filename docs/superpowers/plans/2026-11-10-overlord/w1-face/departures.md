@@ -10,7 +10,7 @@ into its ledger. Each entry is a plain slug. None carries a number: the programm
   The store never holds an open link with `linkLost` set, but the decider is pure, so a row pins that an open link with a
   stale `linkLost` is not Offline. That row is what fails when the `conn` clause is dropped. The rule is not reduced to
   `linkLost` alone.
-- **mood-fallback-names-its-cause, review carry R3-2** — when no rule matches, `moodOf` answers `MOOD_FALLBACK` with a
+- **mood-fallback-names-its-cause, review carry R3-2 (review 1898)** — when no rule matches, `moodOf` answers `MOOD_FALLBACK` with a
   cause that names the readers it has not heard yet ("not heard yet: the runs, the lanes"). The cause is never empty.
   `fallbackCause` is exported and has one test case per null reader.
 - **worker-quiet-at-shared, one reader** — the Confused window's edge needs the instant a run's worker turns quiet.
@@ -61,6 +61,9 @@ into its ledger. Each entry is a plain slug. None carries a number: the programm
 - **bar-one-line-check-reads-centres, a test** — `instrument-bar.browser.test.ts`'s one-line check compared the tops of
   the bar's children. The 32 px face is centred in the 44 px line, so its top sits lower. The check compares centres
   instead, and a wrapped bar still fails it by a whole row.
+- **face-play-rate-later, a follow-up** — each change of mood plays 5 s, as the plan says. A fleet whose mood flips every
+  few seconds would therefore move almost all the time. A cap on how often the face plays (for example, at most once a
+  minute) is left for the coordinator to rule on, and is not built here.
 
 ## The splash (Task 9)
 
@@ -89,15 +92,15 @@ into its ledger. Each entry is a plain slug. None carries a number: the programm
 - **face-deciders-join-the-floors, rule** — the three pure deciders (`moodOf`, `splashShows`, `badgeAct`) join the
   server's mutation floors (`server/test/sim/faceSets.ts`), each at floor 1, with every mutant killed. The sets name no
   pwa file at the type level, so the server's test typecheck does not resolve pwa sources.
-- **character-classname-scan, review carry R2-12** — a scan of every `<Character` in `pwa/src` and `ui/src` refuses
+- **character-classname-scan, review carry R2-12 (review 1918)** — a scan of every `<Character` in `pwa/src` and `ui/src` refuses
   glow and loop utilities in its `className` (`drop-shadow-*`, including the arbitrary form, `animate-*`, `shadow-*`,
   `blur-*`, `filter`). It also refuses a non-literal `className` or a spread of props, which it cannot read. No caller
   passes one today.
-- **animation-tokens-closed, review carries R3-1, R3-2 and R3-5** — every token of an `animation` entry in `checkSheet`
+- **animation-tokens-closed, review carries R3-1, R3-2 and R3-5 (review 1924)** — every token of an `animation` entry in `checkSheet`
   must be a number, a time, a known keyword, a `steps(…)` timing token (matched as a whole token, in any case) or a
   keyframe the sheet defines. Keyframe stops may be written `.5%`.
-- **var-refusal-rides-the-token-rule, review carry R3-2** — `var(` is not a legal token, so the closed token rule refuses
+- **var-refusal-rides-the-token-rule, review carry R3-2 (review 1924)** — `var(` is not a legal token, so the closed token rule refuses
   it, and a refusal row pins that. No separate `var(` check was added, because one could never fail on its own.
-- **argv-guarded, review carry R3-3** — both generators (`make-characters.mjs` and `icon-gen.mjs`) check that
+- **argv-guarded, review carry R3-3 (review 1924)** — both generators (`make-characters.mjs` and `icon-gen.mjs`) check that
   `process.argv[1]` exists before resolving its real path.
-- **keyframe-set-built-once, review carry R3-4** — `checkSheet` builds its set of keyframe names once.
+- **keyframe-set-built-once, review carry R3-4 (review 1924)** — `checkSheet` builds its set of keyframe names once.

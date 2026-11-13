@@ -87,18 +87,14 @@
   gap: calc(var(--pad-card) / 2);
   min-width: 0;
 }
-.settings-characters {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: calc(var(--pad-card) / 2);
-  min-width: 0;
-}
+.settings-characters,
 .settings-palettes {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: calc(var(--pad-card) / 2);
   min-width: 0;
 }
+.settings-characters { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .settings-palette,
 .settings-character {
   display: block;

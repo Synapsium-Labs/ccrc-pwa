@@ -8,7 +8,8 @@ import { INSTRUMENT, REFINED } from '@ccrc/ui';
 import { FleetChromeProvider } from '../src/fleet/FleetChrome';
 import { createFleetStore, type FleetStore } from '../src/stores/fleet';
 import { FaceMark, MOOD_PLAY_MS } from '../src/face/FaceMark';
-import { HAPPY_WINDOW_MS } from '../src/face/mood';
+import { HAPPY_WINDOW_MS, MOOD_RULES } from '../src/face/mood';
+import { api } from '../src/lib/api';
 import { setCharacter } from '../src/lib/character';
 import { fleetSession } from './fleetFixture';
 import { useFleetStore } from '../src/stores/fleet';
@@ -54,6 +55,7 @@ afterEach(() => {
   cleanup();
   vi.useRealTimers();
   vi.unstubAllGlobals();
+  vi.restoreAllMocks();
   localStorage.clear();
 });
 
@@ -167,6 +169,42 @@ describe('the face', () => {
     expect(vi.getTimerCount()).toBeGreaterThan(bare);
     rerender(tree(false));
     expect(vi.getTimerCount()).toBe(bare);
+  });
+});
+
+describe('the face is Offline for each input of the bar', () => {
+  const rule = MOOD_RULES.offline;
+  if (rule.kind !== 'measured') throw new Error('Offline is a measured mood');
+  const offlineCause = rule.cause;
+  const label = (): string => face().getAttribute('aria-label') ?? '';
+
+  it('a lost link with the socket down', () => {
+    mountFace(heard({ conn: 'down', linkLost: true }));
+    expect(label()).toContain(offlineCause);
+  });
+
+  it('a lost link with the socket reconnecting', () => {
+    mountFace(heard({ conn: 'connecting', linkLost: true }));
+    expect(label()).toContain(offlineCause);
+  });
+
+  it('a remote fleet whose agent is not connected', async () => {
+    vi.spyOn(api, 'fleetHealth').mockResolvedValue({ mode: 'remote', connected: false, downSince: NOW - MIN } as never);
+    mountFace(heard());
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    expect(label()).toContain(offlineCause);
+  });
+
+  it('control: reconnecting with no lost link is not Offline', () => {
+    mountFace(heard({ conn: 'connecting', linkLost: false }));
+    expect(label()).not.toContain(offlineCause);
+  });
+
+  it('control: a remote fleet whose agent is connected is not Offline', async () => {
+    vi.spyOn(api, 'fleetHealth').mockResolvedValue({ mode: 'remote', connected: true, downSince: null } as never);
+    mountFace(heard());
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    expect(label()).not.toContain(offlineCause);
   });
 });
 
