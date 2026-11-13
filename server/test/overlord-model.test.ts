@@ -40,13 +40,20 @@ describe.skipIf(PY === null)('the Overlord model (§11.7, the first model)', () 
   it.each(FAST)('%s holds every invariant at the defaults', (sc) => {
     expect(check(sc)).toMatchObject({ scenario: sc, violated: [] });
   }, 60_000);
-  // Since a degraded generation is never proven (review 1912, F5), 'previous' and 'proven' give the same state graph,
-  // so no run tells them apart: the default reading is pinned in the text (F13), and the runs pin the rest.
-  it('A2: the model reads a failed renewal as active only if proven, at its default and its SAFE baseline; the bare "active" reading is caught by X4', () => {
+  // 'previous' and 'proven' reach the same states (each lands where the other also can), so no state count tells them
+  // apart (review 1920, R3). What pins the behaviour: the text pins the default's name; X6, an edge check, holds that a
+  // renewal begun in degraded never returns to active (F5's proof ends with the conversation), and goes red when the
+  // model keeps the proof; the fact that a failed renewal returns to active with a hold-off pins the other direction,
+  // and goes unreachable when back() always degrades; X4 catches the bare 'active' reading.
+  it('A2: the model reads a failed renewal as active only if proven, and the proof ends with the conversation (F5)', () => {
     expect(readFileSync(path.join(DIR, 'model.py'), 'utf8')).toMatch(/^\s*FAILED_RENEWAL_RETURNS='proven',/m);
     expect(readFileSync(CHECK, 'utf8')).toMatch(/^\s*FAILED_RENEWAL_RETURNS='proven'\)/m);
-    expect(check('genback').violated).toEqual([]);
+    const atDefault = check('genback');
+    expect(atDefault.violated).toEqual([]);
+    expect(atDefault.reachable).toContain('a failed renewal returns to active with a hold-off');
     expect(check('genback', 'FAILED_RENEWAL_RETURNS=active').violated).toContain('X4');
+    expect(check('genback', 'MUTATION=proof_outlives_conversation').violated).toContain('X6');
+    expect(check('genback', 'MUTATION=back_always_degraded').reachable).not.toContain('a failed renewal returns to active with a hold-off');
   }, 60_000);
   it('no_fence on rebind is caught by I5', () => {
     expect(check('rebind', 'MUTATION=no_fence').violated).toContain('I5');

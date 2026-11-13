@@ -703,6 +703,18 @@ export function generationStepCases(m: GenModule): Record<string, SuiteCase> {
         if (s.next.state === 'degraded' && g.state !== 'degraded') expect(s.actions, JSON.stringify([g, e])).toContain('raise-item');
       }
     },
+    'REACHABLE: a renewal begun in degraded always returns there when it fails before the first half, from both degraded origins the machine produces (review 1920, R4)': () => {
+      const origins = [runChain(m, m.GEN_MINTED, [ev('deadline')]).views.at(-1)!,
+        runChain(m, m.GEN_ACTIVE, [ev('due', { cls: 'hard' }), ev('drained'), ev('host-ended'), ev('deadline')]).views.at(-1)!];
+      for (const o of origins) {
+        expect(o).toMatchObject({ state: 'degraded', proven: false });
+        for (const failure of [[ev('drained'), ev('host-failed', { afterEnd: false })], [ev('drained'), ev('deadline')], [ev('deadline')]]) {
+          const r = runChain(m, o, [ev('due', { cls: 'hard' }), ...failure]);
+          expect(r.views.at(-1), JSON.stringify(failure)).toMatchObject({ state: 'degraded', proven: false });
+          expect(r.actions.at(-1)).toEqual(['release-deliveries', 'raise-item']);
+        }
+      }
+    },
     'proven does not outlive the conversation: a clearing that degrades after the first half leaves it false (review 1912, F5)': () => {
       const r = runChain(m, m.GEN_ACTIVE, [ev('due', { cls: 'hard' }), ev('drained'), ev('host-ended'), ev('deadline')]);
       expect(r.views.at(-1)).toMatchObject({ state: 'degraded', proven: false });
@@ -733,6 +745,7 @@ export function generationStepCases(m: GenModule): Record<string, SuiteCase> {
           if ((s.next.state === 'active' || s.next.state === 'degraded') && s.next.proven && !proof) throw new Error(`${where}: settled proven with no read card and passed round`);
           if (g.state === 'carded') renudges += s.actions.filter((a) => a === 'renudge-card').length;
           if (renudges > 1) throw new Error(`${where}: carded re-nudged twice`);
+          if (s.next.state === 'degraded' && s.next.proven) throw new Error(`${where}: a proven degraded view (review 1920, R4)`);
           if (s.actions.filter((a) => a === 'renew').length > 1) throw new Error(`${where}: two renews in one step`);
           if (s.actions.includes('renew') && s.next.tries !== (g.state === 'clearing' ? g.tries + 1 : 1)) throw new Error(`${where}: a renew that is not one try`);
           if (s.actions.includes('renew') && s.next.state !== 'clearing') throw new Error(`${where}: renew outside clearing`);
@@ -752,7 +765,7 @@ export function generationStepCases(m: GenModule): Record<string, SuiteCase> {
       expect(r.views.at(-1)!.state).toBe('active');
       expect(r.actions.at(-1)).toContain('set-hold-off');
     },
-    'MODEL FAILED_RENEWAL_RETURNS=proven, whichever state the renewal began from (A2): a proven generation returns to active with a hold-off': () => {
+    'MODEL FAILED_RENEWAL_RETURNS=proven, whichever state the renewal began from (A2), on a CONSTRUCTED view: a proven degraded generation, which the machine never produces (review 1920, R4), returns to active with a hold-off': () => {
       const deg: GView = { ...m.GEN_ACTIVE, state: 'degraded', proven: true };
       for (const failure of [[ev('drained'), ev('host-failed', { afterEnd: false })], [ev('drained'), ev('deadline')], [ev('deadline')]]) {
         const r = runChain(m, deg, [ev('renew-now'), ...failure]);
@@ -760,7 +773,9 @@ export function generationStepCases(m: GenModule): Record<string, SuiteCase> {
         expect(r.actions.at(-1)).toEqual(['release-deliveries', 'set-hold-off']);
       }
     },
-    'the generation day\'s seed 17 (named case): a generation degraded before it ever passed returns to degraded with an item, never to active (§3.3.11)': () => {
+    // The shape the generation day's seed 17 found under the bare 'active' reading (review 1920, R8: named by what it
+    // does, since the day's draws move).
+    'a generation degraded before it ever passed returns to degraded with an item, never to active (§3.3.11)': () => {
       const r0 = runChain(m, m.GEN_MINTED, [ev('nudge-due'), ev('deadline')]);
       expect(r0.views.at(-1)).toMatchObject({ state: 'degraded', proven: false });
       for (const failure of [[ev('drained'), ev('host-failed', { afterEnd: false })], [ev('drained'), ev('deadline')], [ev('deadline')]]) {

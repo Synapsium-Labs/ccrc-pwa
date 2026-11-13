@@ -60,9 +60,13 @@ describe('the generation day\'s invariants go red on a hand-made sequence', () =
     expect(byName('G4').check(timed([['obs', 'server', 'ms=0', 'lane', 0], ['obs', 'server', 'ms=60001', 'lane', 90_000]]))?.invariant).toBe('G4');
     expect(byName('G4').check(timed([['obs', 'server', 'ms=0', 'lane', 0], ['obs', 'server', 'ms=30000', 'lane', 30_000]]))).toBeNull();
   });
-  it('CONTROL: G4 is red when observed time runs ahead of the clock within one process, and on a freeze with no step gap (review 1912, F2 and F7)', () => {
+  it('CONTROL: G4 is red when observed time runs ahead of the clock or behind it within one process, and on a freeze with no step gap (review 1912, F2 and F7; review 1920, R5)', () => {
     expect(byName('G4').check(timed([['obs', 'server', 'ms=0', 'lane', 0], ['obs', 'server', 'ms=30001', 'lane', 30_000]]))?.invariant).toBe('G4');
-    expect(byName('G4').check(timed([['obs', 'server', 'ms=0', 'lane', 0], ['obs', 'server', 'ms=29999', 'lane', 30_000]]))).toBeNull();
+    expect(byName('G4').check(timed([['obs', 'server', 'ms=0', 'lane', 0], ['obs', 'server', 'ms=29999', 'lane', 30_000]]))?.invariant).toBe('G4');
+    expect(byName('G4').check(timed([['obs', 'server', 'ms=0', 'lane', 0], ['obs', 'server', 'ms=30000', 'lane', 30_000]]))).toBeNull();
+    // A freeze before the first observation: the first stamp has nothing to step from, so it answers no gap (R1).
+    expect(byName('G4').check(timed([['server', 'freeze', 'frozen;for=360000', 'sim', 15_000], ['obs', 'server', 'ms=0', 'lane', 390_000],
+      ['obs', 'server', 'ms=30000', 'lane', 420_000]]))).toBeNull();
     const thaw = (gap: boolean): SequenceLine[] => timed([['obs', 'server', 'ms=0', 'lane', 0], ['server', 'freeze', 'frozen;for=300000', 'sim', 10_000],
       ...(gap ? [['obs-gap', 'server', 'kind=step;deltaMs=330000', 'lane', 330_000] as TRow] : []), ['obs', 'server', 'ms=60000', 'lane', 330_000]]);
     expect(byName('G4').check(thaw(true))).toBeNull();
@@ -133,6 +137,13 @@ describe('the generation day over seeded runs', () => {
     expect(await redSeed(withObserve((p, mono, proc, cap) => {
       const st = observed.observeTime(p, mono, proc, cap);
       return st.gap === null && p !== null ? { ...st, at: { ...st.at, ms: p.ms + Math.min(cap, 2 * (st.at.ms - p.ms)) } } : st;
+    }), 'G4')).not.toBeNull();
+  }, 600_000);
+
+  it('MUTATION: an observeTime that counts half of each step goes red on G4 within the CI seeds (review 1920, R5)', async () => {
+    expect(await redSeed(withObserve((p, mono, proc, cap) => {
+      const st = observed.observeTime(p, mono, proc, cap);
+      return st.gap === null && p !== null ? { ...st, at: { ...st.at, ms: p.ms + Math.floor((st.at.ms - p.ms) / 2) } } : st;
     }), 'G4')).not.toBeNull();
   }, 600_000);
 

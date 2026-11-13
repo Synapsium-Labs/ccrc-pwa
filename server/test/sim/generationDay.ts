@@ -28,12 +28,12 @@ export interface GenDayModules {
 
 export const GEN_DAY_EDGES = ['soft-renewal', 'hard-renewal', 'renewed', 'crash-gap', 'freeze-gap', 'start-while-down', 'degraded',
   'hold-off', 'budget-wait', 'probe-retry', 'renudge', 'unplanned-start', 'overlord-first', 'clearing-timeout-back',
-  'clearing-timeout-degraded', 'soft-due-in-degraded'] as const;
+  'clearing-timeout-degraded', 'soft-due-in-degraded', 'probing-timeout'] as const;
 export type GenDayEdge = (typeof GEN_DAY_EDGES)[number];
 
 const START = Date.parse('2026-11-13T00:00:00Z');
 const DAY_MS = 24 * 3_600_000;
-const BEAT_MS = 30_000;
+const BEAT_MS = RENEWAL_LANE_PERIOD_MS;   // the server's lane and the world both beat at the renewal lane's period
 const SEC = 1_000;
 const MIN = 60_000;
 const COORD = 'lane-a-coordinator';
@@ -169,9 +169,12 @@ export function generationDay(mods: GenDayModules): Scenario<GenDayEdge> {
         const matches = chance(entropy, 0.9);
         world.envAfter(late, () => deliver(who, n, { kind: 'card-read', hashMatches: matches }));
       };
+      // A probe round now and then never answers, so probing's own deadline is reached (review 1920, R6).
       const sessionProbes = (who: string, n: number): void => {
         const late = between(10, 60) * SEC;
         const passed = chance(entropy, 0.85);
+        const hangs = chance(entropy, 0.05);
+        if (hangs) return;
         world.envAfter(late, () => deliver(who, n, { kind: 'probes', passed }));
       };
 
@@ -256,6 +259,7 @@ export function generationDay(mods: GenDayModules): Scenario<GenDayEdge> {
           if (TRANSIENT.has(r.view.state) && server.clock.wall() >= r.deadlineAt) {
             line('deadline', `${idOf(who, r.n)}:${r.view.state}:${r.deadlineAt}`, 'fired', 'lane');
             if (r.view.state === 'clearing') cover(r.view.hostEnded ? 'clearing-timeout-degraded' : 'clearing-timeout-back');
+            if (r.view.state === 'probing') cover('probing-timeout');
             apply(who, { kind: 'deadline' });
           }
           if (r.view.state === 'draining' && facts.get(who)!.readers === 0) apply(who, { kind: 'drained' });
@@ -348,7 +352,7 @@ export const GEN_DAY_INVARIANTS: readonly Invariant[] = [
       }
       return null;
     } },
-  { name: 'G4', says: 'a restart never advances observed time; a freeze advances it by the step cap and answers a step gap; within one process with no gap, observed time never runs ahead of the clock; no deadline fires twice',
+  { name: 'G4', says: 'a restart never advances observed time; a freeze advances it by the step cap and answers a step gap; within one process with no gap, observed time advances exactly as the clock does; no deadline fires twice',
     check(lines) {
       let last: number | null = null; let lastAt = 0; let lastBeforeCrash: number | null = null;
       let afterBoot = false; let stepGap = false; let gapSince = false; let frozeSince = false;
@@ -372,9 +376,11 @@ export const GEN_DAY_INVARIANTS: readonly Invariant[] = [
           if (stepGap && last !== null && ms - last !== STEP_CAP_MS) {
             return violation('G4', l, `a freeze advanced observed time by ${ms - last}, not by the cap (review 1894, F1)`);
           }
-          if (frozeSince && !stepGap) return violation('G4', l, 'a freeze answered no step gap (review 1912, F7)');
-          if (!gapSince && last !== null && ms - last > l.at - lastAt) {
-            return violation('G4', l, `observed time ran ahead of the clock: ${ms - last} ms in ${l.at - lastAt} (review 1912, F2)`);
+          // A freeze before the first observation has no stamp to step from (review 1920, R1).
+          if (frozeSince && last !== null && !stepGap) return violation('G4', l, 'a freeze answered no step gap (review 1912, F7)');
+          // Both ways: within one process with no gap, observed time advances by exactly the clock's step (review 1920, R5).
+          if (!gapSince && last !== null && ms - last !== l.at - lastAt) {
+            return violation('G4', l, `observed time moved ${ms - last} ms in ${l.at - lastAt} of clock (review 1912, F2; review 1920, R5)`);
           }
           afterBoot = false; stepGap = false; gapSince = false; frozeSince = false; last = ms; lastAt = l.at;
         }

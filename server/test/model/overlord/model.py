@@ -892,6 +892,8 @@ def back(s, c):
 
 
 def back_degraded(g, c):
+    if c.MUTATION == 'back_always_degraded':
+        return True
     if c.FAILED_RENEWAL_RETURNS == 'active':
         return False
     if c.FAILED_RENEWAL_RETURNS == 'previous':
@@ -934,7 +936,9 @@ def gen_steps(s, c):
         else:
             add(start_report(s._replace(conv=s.conv + 1), c, 'receipt second half: fresh conversation starts'))
             # The old conversation has ended, so its proof does not carry over (review 1912, F5).
-            add(('clearing retries spent after the first half: degraded', gen_to(s, 'degraded', card=False, ok=False)))
+            spent = gen_to(s, 'degraded') if c.MUTATION == 'proof_outlives_conversation' else \
+                gen_to(s, 'degraded', card=False, ok=False)
+            add(('clearing retries spent after the first half: degraded', spent))
     if g.st == 'carded' and (c.GEN_TIMEOUTS or s.t - g.ent >= c.GEN_D):
         add(('carded times out after one re-nudge: degraded', gen_to(s, 'degraded')))
     if g.st == 'probing':

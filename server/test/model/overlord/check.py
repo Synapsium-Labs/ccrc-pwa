@@ -217,6 +217,12 @@ def trans_checks(s, lbl, info, s2, c):
         if q2.held and not q1.held and not s2.gen.card:
             out.append(('X5', 'a hold was taken on q%d while generation %d has not read its card'
                         % (i, s2.gen.n)))
+    # Extra X6 (review 1912, F5; review 1920, R3): a renewal begun in degraded never returns to active. A degraded
+    # generation is never proven, because its proof ended with its conversation, so a failure before the first half
+    # returns it to degraded; only probes passing in a new generation reach active.
+    if s.gen.fromdeg and s.gen.st in ('draining', 'checkpointed', 'clearing') and s2.gen.st == 'active' and \
+            s2.gen.n == s.gen.n:
+        out.append(('X6', 'generation %d returned to active from a renewal begun in degraded (%s)' % (s.gen.n, lbl)))
     # Extra X2: no Overlord effect lands on a row that has already reached the operator.
     for i, (q1, q2) in enumerate(zip(s.qs, s2.qs)):
         if lbl.startswith('effect lands') and len(q2.effects) > len(q1.effects) and \
@@ -550,6 +556,9 @@ MUTATIONS = [
     ('renewing_keeps_all', 'renewal', {}, 'none expected: retention is not an invariant'),
     ('no_natural_key', 'asks', {'OUTCOME_AT': 'done', 'REV_BUMP_AT': 'settle'},
      'none expected: the dialog takes one press'),
+    ('proof_outlives_conversation', 'genback', {}, 'X6'),
+    ('back_always_degraded', 'genback', {},
+     "none expected: the fact 'a failed renewal returns to active with a hold-off' becomes unreachable"),
 ]
 
 # Reachability facts reported with every run (sanity of the model, and some design questions).
@@ -562,9 +571,11 @@ FACTS = {
     'generation 2 reaches active': lambda s: s.gen.n >= 2 and s.gen.st == 'active' and s.gen.ok,
     'a generation is active with its card unread': lambda s: s.gen.st == 'active' and not s.gen.card,
     'a row is released server-gap': lambda s: any(q.outcome == 'server-gap' for q in s.qs),
+    'a failed renewal returns to active with a hold-off': lambda s: s.gen.st == 'active' and s.gen.holdoff,
 }
 
-ALL_NAMES = ['I1', 'I2', 'I3', 'I4', 'I5', 'I6', 'I7', 'I7t', 'I8', 'I9', 'I10', 'X1', 'X2', 'X4', 'X5', 'D1', 'D2', 'D2b', 'D3']
+ALL_NAMES = ['I1', 'I2', 'I3', 'I4', 'I5', 'I6', 'I7', 'I7t', 'I8', 'I9', 'I10', 'X1', 'X2', 'X4', 'X5', 'X6', 'D1', 'D2', 'D2b',
+             'D3']
 
 
 def run(name, overrides, show=True, live=True):
@@ -649,7 +660,8 @@ def main_json(argv):
         print(json.dumps(dict(scenario=name, bound=True)))
         return 3
     print(json.dumps(dict(scenario=name, overrides=over, states=r['states'], transitions=r['trans'],
-                          violated=sorted(r['found']))))
+                          violated=sorted(r['found']),
+                          reachable=sorted(k for k, v in r['facts'].items() if v is not None))))
     return 0
 
 
