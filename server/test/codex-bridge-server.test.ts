@@ -1608,6 +1608,19 @@ describe.skipIf(!PY)('the parity section, measured per response (D-8618)', () =>
     });
   });
 
+  it('both times start at the POST, so time the upstream holds the head (queueing, prefill) is counted', async () => {
+    await withBridge([{ status: 200, holdHeadMs: 1100, sse: textReply('ok') }], async ({ bridge, lane }) => {
+      const a = await call(bridge, '/v1/messages', { body: messages() });
+      expect(a.status, a.text).toBe(200);
+      const row = (await statsWhen(lane, (d) => d.outcomes['2xx'] === 1)).parity[KEY];
+      const [firstAt] = bucketOf(row.firstOutputMs);
+      const [totalAt] = bucketOf(row.totalMs);
+      // 1100 ms before the head is past the 1000 bucket: a clock started at the head would read the 250 one
+      expect(BUCKETS.indexOf(firstAt), JSON.stringify(row.firstOutputMs)).toBeGreaterThanOrEqual(BUCKETS.indexOf('2000'));
+      expect(BUCKETS.indexOf(totalAt), JSON.stringify(row.totalMs)).toBeGreaterThanOrEqual(BUCKETS.indexOf('2000'));
+    });
+  });
+
   it('a request whose history replays stored reasoning counts what each lookup found', async () => {
     const first = created()
       + done(0, { type: 'reasoning', id: 'rs_fx1', summary: [], encrypted_content: 'ENC-1' })

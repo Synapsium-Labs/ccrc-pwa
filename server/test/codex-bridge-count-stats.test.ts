@@ -1055,17 +1055,22 @@ describe.skipIf(!PY)('the parity section (D-8618)', () => {
     ]);
     // no row is even made: every call above was refused before it touched the section
     expect(rest.at(-1)!.doc.parity).toEqual({});
-    const [, , snap] = await run(home, [
+    const [, , , snap] = await run(home, [
       open(path.join(path.dirname(file), 'other.json')),
       response({
         served: 5, usage: { input: -1, cached: true, output: '7', reasoning: 1.5 },
-        transformations: ['reasoning:removed', 'a b:removed:none', 'reasoning:removed:' + 'x'.repeat(33), 7, null],
+        // `overflow` is the cap's own key: a caller can never count it directly
+        transformations: ['reasoning:removed', 'a b:removed:none', 'reasoning:removed:' + 'x'.repeat(33), 7, null, 'overflow'],
         first_output_ms: { float: 'nan' }, total_ms: -1,
       }),
+      // a bool is not a time, though Python's bool is an int
+      response({ first_output_ms: true, total_ms: false }),
       { op: 'stats-snapshot' },
     ]);
-    // the response is counted, and nothing malformed in it is: no token, no served word, no key, no bucket
-    expect(snap.doc.parity[ROUTE_KEY]).toEqual(parityRow({ responses: 1, responsesWithTransformations: 1 }));
+    // each response is counted, and nothing malformed in either is: no token, no served word, no key, no bucket
+    expect(snap.doc.parity[ROUTE_KEY]).toEqual(parityRow({
+      responses: 2, responsesWithTransformations: 1, served: { same: 0, other: 0, absent: 1 },
+    }));
     const [, , notMapping] = await run(home, [
       open(path.join(path.dirname(file), 'third.json')),
       response({ usage: 'lots', transformations: { type: 'reasoning' }, first_output_ms: 'soon', total_ms: { float: 'inf' } }),

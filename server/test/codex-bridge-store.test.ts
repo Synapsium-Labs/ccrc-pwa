@@ -516,6 +516,23 @@ describe.skipIf(!PY)('the replay counter (D-8618)', () => {
     // a call row with nothing to replay is no stored reasoning; a row that is not a turn is no row
     expect(line.replay).toEqual({ 'text-absent': 1, 'call-absent': 1 });
   });
+
+  it('a row whose items hold no object replays nothing: a call row is absent, a text row empty', async () => {
+    const { home } = lane('cb-store-replay-junk-');
+    const [line] = await run(home, [{
+      op: 'from-anthropic', counted: true, stored: [{ call: 'call_fx1', turn: { items: ['x', 7], phase: null } },
+        { session: 's-1', text: 'Odd row.', turn: { items: ['x', 7], phase: null } }],
+      headers: { 'x-claude-code-session-id': 's-1' },
+      body: { model: 'model-6.1-alpha', messages: [
+        { role: 'user', content: 'start' },
+        { role: 'assistant', content: [{ type: 'text', text: 'Odd row.' },
+          { type: 'tool_use', id: 'call_fx1', name: 'probe_tool', input: {} }] },
+        { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'call_fx1', content: 'ok' }] },
+      ] },
+    }]);
+    // a non-empty list is not reasoning to replay: only an object item is (D-8618)
+    expect(line.replay).toEqual({ 'text-empty': 1, 'call-absent': 1 });
+  });
 });
 
 describe.skipIf(!PY)('the start check: a damaged store is set aside and started fresh (D-7676, D-7677)', () => {
