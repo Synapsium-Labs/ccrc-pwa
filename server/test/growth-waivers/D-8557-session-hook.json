@@ -3,5 +3,6 @@
   "maxDelta": 56,
   "d": "D-8557",
   "reason": "Overlord W1a, the start report (spec section 3.3.11) with review 1911's fixes: one millisecond budget for the whole event with each send given what is left, the fresh report first, the back-off stamped by how the pass ended (30 s, or 5 s after a stale-uuid) and clamped, the sender's uuid rewritten on resend, and the answers that keep a report and count a try; measured +51 net code lines against the merge-base (2836 to 2887); kept in the hook because the report must run on the SessionStart path itself and the hook loads no library",
-  "added": "2026-11-13"
+  "added": "2026-11-13",
+  "createdAt": "2026-11-13"
 }
