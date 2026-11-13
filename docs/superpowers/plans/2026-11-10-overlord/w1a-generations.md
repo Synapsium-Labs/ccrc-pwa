@@ -32,7 +32,7 @@ database).
   `sessionId`, `uuid`, `source`, `model`, `regGen`, `receivedAt`; `startsSince(sinceId)`.
 - The deciders (the renewal-deciders piece): `generationStep`, `renewalDue`, `RENEWAL_ROWS`, `observeTime`, and
   `shared/continuity.ts`'s vocabulary.
-- `roleOf` and `roleFactsOf` (`server/src/roleOf.ts`, the latter from the overlord-pace piece).
+- `roleOf` and `roleFactsOf` (`server/src/roleOf.ts`, the latter from the renewal-deciders piece, Task 0).
 - The context readings (the context-readings piece): `readUsageMeasured` with `ctxTokens`/`ctxWindow`/`stale`,
   `readCompactionsMeasured`, `compactionsSince`.
 - The turn marker: `server/src/turnmark.ts#readTurnMarkMeasured` (`state`, `stopAt`, `turnAt`, `bg`, `lostBg`, …).
@@ -207,10 +207,14 @@ None yet. Decisions this plan takes, by slug:
 ## Where things stand
 
 **Needs before it starts:** the start-report piece (`continuity_starts`), the renewal-deciders piece, the
-context-readings piece, and `roleFactsOf` (the overlord-pace piece).
+context-readings piece.
 
 **What depends on it:** the card piece (it writes `cardHash` through this store), the probes piece (the probing state),
 the notes piece (the handover note on the row), the renewal-act piece (it arms the lane's acts).
+
+**States W1's face may read** (read-only facts for the Overlord's face in the PWA, a W1 screen): a generation's `state`
+(`draining` to `probing` is "a renewal in progress", `degraded` is "degraded"), `dueSince`/`dueWhy`, and `n`. This
+piece adds no read door for them; W1's board reads the rows.
 
 **Open questions for the operator:** none in this piece. The shadow counts are the evidence the renewal-act piece's
 arming question will cite.

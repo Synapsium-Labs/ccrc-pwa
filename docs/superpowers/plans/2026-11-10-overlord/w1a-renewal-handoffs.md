@@ -225,4 +225,7 @@ field), the generations piece.
 **What depends on it:** the `continuity-v1` piece; W1's Overlord (Restart the Overlord; the backstop setting; the D5
 arm for its role).
 
+**States W1's face may read** (read-only, for W1's screen): `renewing` at the prompt route (a renewal in progress, the
+draft kept), and a session the hibernate lane put to sleep (today's hibernate state, unchanged here: "sleeping").
+
 **Open questions for the operator:** none beyond the renewal-act piece's arming question.

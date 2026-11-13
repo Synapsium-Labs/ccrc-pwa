@@ -15,8 +15,8 @@ them, and lets the simulator run them on the fake ports.
 
 **Architecture:** one L0 file of vocabulary and starting values (`shared/continuity.ts`); four L1 modules in
 `server/src/continuity/`; one L1 accumulator in the clock kernel (`server/src/time/observed.ts`); one simulator scenario.
-No table, no route, no lane. Two pull requests: **PR A** (Tasks 1 to 4: the vocabulary, observed time, `renewalDue`,
-`softRenewalMay`) and **PR B** (Tasks 5 and 6: `generationStep` and the simulator scenario).
+No table, no route, no lane. Two pull requests: **PR A** (Tasks 0 to 4: `roleFactsOf`, the vocabulary, observed time,
+`renewalDue`, `softRenewalMay`) and **PR B** (Tasks 5 and 6: `generationStep` and the simulator scenario).
 
 **Tech Stack:** TypeScript (ESM), vitest. **No new dependency:** the property tests use the seeded generator already in
 the tree (`server/test/fakeTime.ts#mulberry32`, the one copy D-8225 kept), which is this plan's choice of
@@ -75,6 +75,36 @@ timer), Table 11.5b, §11.7 (Table 11.7b; monotonic by construction).
    failure before the receipt's first half returns to the state the renewal began from.
 
 ---
+
+### Task 0: `roleFactsOf`, the one assembly of a session's role facts
+
+**Why here.** Every later W1a lane (generations, the card, the profile lane, the roll's hand-off, the widened D5 arm)
+asks `roleOf` about a session, and each would otherwise assemble `RoleFacts` itself. One pure function, written once,
+first. The `MAIL_PACE` run (its own run, in parallel) needs the same answer for the mail gate: if it lands first with an
+equivalent function, this task reuses it and records that in the departures note, so the tree keeps one.
+
+**Files:**
+- Modify: `server/src/roleOf.ts` (`RoleFactInputs`, `roleFactsOf`)
+- Test: `server/test/role-of.test.ts`
+
+**Interfaces:**
+
+```ts
+export interface RoleFactInputs {
+  readonly child: ChildMark;                                   // the registry record's child mark, as read
+  readonly childRunKind: RunKind | 'unmeasured';               // read only when child.kind is 'child'
+  readonly openCoordinators: ReadonlySet<string> | 'unmeasured';
+  readonly intentDeclared: boolean | 'unmeasured';
+}
+/** Pure. `designation`, `auditBody` and `replayBody` are fixed ('none', false, false) until their waves. */
+export function roleFactsOf(sessionId: string, i: RoleFactInputs): RoleFacts;
+```
+
+- [ ] **Step 1: Failing test:** exhaustive over the child marks, the run kinds, the open set {containing the id, not,
+  unmeasured} and the intent {true, false, unmeasured}; `roleOf(roleFactsOf(…))` answers what Table 3.3.9a and the
+  undecided rules say for each.
+- [ ] **Step 2: Run.** Red. **Step 3: Implement.** **Step 4: Run.** Green. Register the floor.
+- [ ] **Step 5: Commit.** `feat(roles): roleFactsOf, the one assembly of a session's role facts`
 
 ### Task 1: The vocabulary and the starting values (L0)
 

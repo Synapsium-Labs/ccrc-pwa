@@ -237,10 +237,13 @@ None yet. Decisions this plan takes, by slug:
 
 ## Where things stand
 
-**Needs before it starts:** PR A needs the card piece's `CardFacts` type and the notes piece's `CardNote`. PR B needs the
+**Needs before it starts:** PR A needs the card piece's PR A (`CardFacts` and `CardNote`, in `shared/continuity-card.ts`). PR B needs the
 card piece (snapshots, the `probing` move), the notes piece, the generations piece and the context-readings piece.
 
 **What depends on it:** the renewal-act piece (`probing` is the last state before `active`), the Overlord's soft
 ceiling row (W1, the fitted ceiling), M8 and M23 (§12), the weekly quiz's report (it lands beside the probe rows).
+
+**States W1's face may read** (read-only, for W1's screen): a round's grades and `book`, and a generation in `probing` or
+`degraded` after a second failed round ("a probe failing").
 
 **Open questions for the operator:** none.

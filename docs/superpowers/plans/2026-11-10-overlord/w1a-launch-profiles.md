@@ -199,8 +199,7 @@ export function profileFor(reading: RoleReading, plainAutoMemory: 'on' | 'off', 
 An undecided reading takes the member that does less (C49): `worker-or-reviewer` → `worker`, `coordinator-or-plain` →
 `plain`. `automem` is `off` for every role but `plain`, where it is the Settings row's value.
 
-The pass, for each registry row: gather facts with `roleFactsOf` (the overlord-pace piece; if it has not landed, this
-piece adds it as that plan specifies), read the session's route and its usage reading (`ctxWindow`, the
+The pass, for each registry row: gather facts with `roleFactsOf` (the renewal-deciders piece, Task 0), read the session's route and its usage reading (`ctxWindow`, the
 context-readings piece), ask `profileFor`, and diff against the route. In `shadow` it counts the writes it would make
 and logs them once a pass with `console.warn('ccrc-server: …')`; `live`, it sends one `routeSet` per changed session,
 behind `ROUTE_CAP`, at most `PROFILE_WRITES_PER_PASS` (5) a pass. A route that could not be read is skipped and
@@ -277,7 +276,7 @@ None yet. Decisions this plan takes, by slug:
 ## Where things stand
 
 **Needs before it starts:** PR A needs nothing beyond `main`. PR B needs the context-readings piece (`ctxWindow`) and
-uses `roleFactsOf` from the overlord-pace piece (or adds it).
+the renewal-deciders piece (`roleFactsOf`).
 
 **What depends on it:** the compaction piece (the role's text rides the same route field); W1's `overlord` profile
 (the tool surface, the door process, pinned sources, the hook registration and the bypass acceptance: the results

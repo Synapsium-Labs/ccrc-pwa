@@ -50,8 +50,9 @@ waves; the wave asks that programme's coordinator first), Table 11.1c row "The r
   percentile bootstrap). The judge model is required and must be an exact Opus id.
 - No server lane runs or schedules it (`grep` of `server/src` finds nothing).
 - Server-raised items exist (`server/src/coord/endRequest.ts` raises through `ledgersStore.ts`).
-- `shared/lane-arm.ts` and `POST /api/coord/lane-arm` (D-8274); W1a adds the rows `continuity`, `launch-profile` and
-  `peer-mail-hold` (the generations, launch-profiles and peer-reply pieces); `lane_arm_settings` has `updatedAt`.
+- `shared/lane-arm.ts` and `POST /api/coord/lane-arm` (D-8274); W1a adds the rows `continuity` and `launch-profile` (the
+  generations and launch-profiles pieces); `lane_arm_settings` has `updatedAt`. The `#2726` run may add a row of its own
+  (`peer-mail-hold`); it is not a W1a arm and this piece does not name it.
 
 ## Global Constraints
 
@@ -93,7 +94,8 @@ waves; the wave asks that programme's coordinator first), Table 11.1c row "The r
 **Files:**
 - Modify: `server/src/coord/schema.ts` (migration: `continuity_quiz_runs`)
 - Create: `server/src/continuity/quiz.ts` (L1: `quizBaseline(runs, armHistory)`, `validQuizReport(json)`)
-- Modify: `server/src/continuity/continuityStore.ts` (`insertQuizRun`, `quizRuns`)
+- Create: `server/src/continuity/quizStore.ts` (`insertQuizRun`, `quizRuns`; its own module, so this lane shares no
+  store file with the server spine)
 - Test: `server/test/continuity-quiz.test.ts` (new), `server/test/coord-db.test.ts`
 
 **Schema:**
@@ -109,8 +111,8 @@ CREATE TABLE continuity_quiz_runs (
 );
 ```
 
-`quizBaseline` answers `true` for a run when no earlier row is a baseline and no W1a lane-arm row (`continuity`,
-`launch-profile`, `peer-mail-hold`) has an `updatedAt` with choice `live` at or before the run's `measuredAt`.
+`quizBaseline` answers `true` for a run when no earlier row is a baseline and no W1a lane-arm row (`continuity` or
+`launch-profile`) has an `updatedAt` with choice `live` at or before the run's `measuredAt`.
 
 - [ ] **Step 1: Failing tests:** the first run with every row shadow is the baseline; a second is not; a first run
   measured after any W1a row went `live` is not, and no later run can be; a report missing any field the record needs is
@@ -121,12 +123,12 @@ CREATE TABLE continuity_quiz_runs (
 ### Task 2: Arming a W1a lane waits for the baseline
 
 **Files:**
-- Modify: `server/src/coord/routes.ts` (`POST /api/coord/lane-arm`: `live` for `continuity`, `launch-profile` or
-  `peer-mail-hold` is refused `baseline-missing` (409) while no baseline row exists; `shadow` is never refused)
+- Modify: `server/src/coord/routes.ts` (`POST /api/coord/lane-arm`: `live` for `continuity` or `launch-profile` is
+  refused `baseline-missing` (409) while no baseline row exists; `shadow` is never refused)
 - Modify: `shared/refusal.ts` (`baseline-missing`)
 - Test: the lane-arm route suite
 
-- [ ] **Step 1: Failing tests:** each of the three refused before a baseline and accepted after; `roster-card` (not a
+- [ ] **Step 1: Failing tests:** each of the two refused before a baseline and accepted after; `roster-card` (not a
   W1a lane) unaffected; `shadow` always accepted.
 - [ ] **Step 2: Run.** Red. **Step 3: Implement.** **Step 4: Run.** Green.
 - [ ] **Step 5: Mutation.** Drop the check: red. Revert.
@@ -138,7 +140,8 @@ CREATE TABLE continuity_quiz_runs (
 - Modify: `ccd/ccrc` (`ccrc quiz-record --report <file> --sha <hex>`: refuses in a session or a `cc-*` pane; reads the
   report, checks its sha, reads the existence of the steer and agents-on markers on this node read-only, and the
   installed release and Claude Code builds (`ccrc version`), then posts)
-- Modify: `server/src/continuity/routes.ts` (`POST /api/continuity/quiz-runs`)
+- Create: `server/src/continuity/quizRoutes.ts` (`POST /api/continuity/quiz-runs`, registered from `server/src/server.ts`;
+  a lane source of its own in the box-token census)
 - Modify: the census files
 - Test: `server/test/ccrc-quiz-record.test.ts` (new, fixture HOME, a stub server), `server/test/continuity-quiz-route.test.ts`
 
