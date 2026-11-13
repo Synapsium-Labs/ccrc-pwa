@@ -62,6 +62,14 @@ describe('continuity_starts', () => {
     expect(s.startsSince(3)).toEqual({ ok: true, rows: [] });
   });
 
+  it('startsSince reads a word outside the vocabulary (a newer build\'s, after a rollback) as other (review 1911, F10)', () => {
+    const s = store();
+    s.db.prepare('INSERT INTO continuity_starts (sessionId, reportId, uuid, source, model, rowIncarnation, reportedAt, receivedAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+      .run('lane-a-project-a', 'r-newer-0001', '11111111-2222-3333-4444-555555555555', 'teleport', null, null, NOW - 50, NOW);
+    const r = s.startsSince(0);
+    expect(r.ok && r.rows.map((x) => x.source)).toEqual(['other']);
+  });
+
   it('a failed statement answers write-failed or ok: false, never a throw', () => {
     const s = store();
     s.db.exec('DROP TABLE continuity_starts');

@@ -9,6 +9,7 @@ import type { AttributionRead } from '../coord/openRun.js';
 import type { CoordStore } from '../coord/store.js';
 import { MAIL_TOKEN_HEADER, checkMailToken, type BoxTokenHolder } from '../coord/token.js';
 import { refuseRoute } from '../refuse.js';
+import { REG_GENERATION_SHAPE } from '../../../shared/api.js';
 
 export interface ContinuityRouteDeps {
   /** The coordination store, or undefined on a server without one (a test, a script): the report answers `unavailable`. */
@@ -25,8 +26,6 @@ export interface ContinuityRouteDeps {
 const IDENTITY_RE = /^[A-Za-z0-9_-]{1,128}$/;
 /** The hook's own id for one report: a resend carries the same one, so it is recorded once. */
 const REPORT_ID_RE = /^[A-Za-z0-9_-]{8,64}$/;
-/** The registry row's incarnation as ccd writes it (`_reg_generation_valid`'s grammar): a lowercase UUID. */
-const INCARNATION_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const SOURCE_MAX = 32;
 const MODEL_MAX = 128;
 
@@ -43,9 +42,10 @@ export function registerContinuityRoutes(app: FastifyInstance, deps: ContinuityR
    * `POST /api/sessions/:id/start`: the hook reports one SessionStart of a session that is not a child (its source, the
    * conversation's uuid, the model, the row's incarnation). A box-token machine lane, an `auth/gate.ts` EXEMPT entry:
    * the token first (never the cookie), then the path's session is the sender (`not-owner`), then the body's shape (cheap,
-   * so a malformed report never costs a registry read), then the registry's attribution (`stale-uuid` for a uuid the
-   * registry has not followed yet, which the hook keeps and resends), then the one writer. `202 { ok, id, fresh }`; a
-   * resend of a recorded report is `fresh: false`.
+   * so a malformed report never costs a registry read), then the registry's attribution of the SENDER, `fromUuid`
+   * (`stale-uuid` for a uuid the registry has not followed yet, which the hook keeps and resends), then the one writer,
+   * which records `startedUuid`, the reported conversation's uuid, or `fromUuid` when the body has none. `202 { ok, id,
+   * fresh }`; a resend of a recorded report is `fresh: false`.
    */
   app.post('/api/sessions/:id/start', {
     onRequest: async (req: FastifyRequest, reply: FastifyReply) => {
@@ -68,13 +68,17 @@ export function registerContinuityRoutes(app: FastifyInstance, deps: ContinuityR
     if (typeof source !== 'string' || source.length === 0 || source.length > SOURCE_MAX) return refuseRoute(reply, 'bad-request', { detail: 'source' });
     if (!isSafeNat(reportedAt)) return refuseRoute(reply, 'bad-request', { detail: 'reportedAt' });
     if (model !== null && (typeof model !== 'string' || model.length > MODEL_MAX)) return refuseRoute(reply, 'bad-request', { detail: 'model' });
-    if (rowIncarnation !== null && (typeof rowIncarnation !== 'string' || !INCARNATION_RE.test(rowIncarnation))) return refuseRoute(reply, 'bad-request', { detail: 'rowIncarnation' });
+    if (rowIncarnation !== null && (typeof rowIncarnation !== 'string' || !REG_GENERATION_SHAPE.test(rowIncarnation))) return refuseRoute(reply, 'bad-request', { detail: 'rowIncarnation' });
+    // The reported conversation's uuid is DATA (review 1911, F4): a resend carries the uuid it was spooled under here and
+    // the sender's current one in `fromUuid`, which alone is attributed. Absent or null (an older hook), it is `fromUuid`.
+    const startedUuid = b['startedUuid'] ?? uuid;
+    if (typeof startedUuid !== 'string' || !IDENTITY_RE.test(startedUuid)) return refuseRoute(reply, 'bad-request', { detail: 'startedUuid' });
     const attributed = await deps.attribute(id, uuid);
     if (!attributed.ok) return refuseRoute(reply, attributed.error, { detail: attributed.detail });
 
     const coord = deps.coord;
     if (coord === undefined) return refuseRoute(reply, 'unavailable');
-    const r = coord.insertStart({ sessionId: id, reportId, uuid, source, model, rowIncarnation, reportedAt, receivedAt: deps.wall() });
+    const r = coord.insertStart({ sessionId: id, reportId, uuid: startedUuid, source, model, rowIncarnation, reportedAt, receivedAt: deps.wall() });
     if (!r.ok) return refuseRoute(reply, 'write-failed', { detail: 'continuity_starts could not be written' });
     return reply.code(202).send({ ok: true, id: r.id, fresh: r.fresh });
   });

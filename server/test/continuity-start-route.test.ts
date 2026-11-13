@@ -1,8 +1,10 @@
 // Overlord W1a, the start report (Task 2): `POST /api/sessions/:id/start`, the hook's report of a SessionStart. The box
-// token first, then the path's session is the sender, then the registry's attribution (`attributionVerdict`, the gate
-// every box-token lane shares), then the body's shape, then `insertStart` with the server's own clock. Fixture HOMEs only.
+// token first, then the path's session is the sender, then the body's shape, then the registry's attribution of the
+// sender (`attributionVerdict`, the gate every box-token lane shares), then `insertStart` with the server's own clock,
+// recording the reported conversation's `startedUuid` (review 1911, F4). Fixture HOMEs only.
 import { describe, it, expect, afterEach, beforeEach } from 'vitest';
-import type { FastifyInstance } from 'fastify';
+import Fastify, { type FastifyInstance } from 'fastify';
+import { registerContinuityRoutes } from '../src/continuity/routes.js';
 import { localIOFor, type FleetIO } from '../src/io.js';
 import type { CoordStore } from '../src/coord/store.js';
 import { FAKE_T0 } from './fakeTime.js';
@@ -132,6 +134,43 @@ describe('POST /api/sessions/:id/start', () => {
     app = await open();
     const res = await post(app, body({ fromUuid: '99999999-2222-3333-4444-555555555555', reportId: 'bad' }));
     expect([res.statusCode, res.json().error]).toEqual([400, 'bad-request']);
+  });
+
+  it('a resend spooled under uuid A lands from a sender the registry now knows as B, and records A (review 1911, F4)', async () => {
+    const A = '99999999-2222-3333-4444-555555555555';
+    app = await open();
+    const res = await post(app, body({ fromUuid: UUID, startedUuid: A }));
+    expect(res.statusCode, res.body).toBe(202);
+    expect(rows()).toMatchObject([{ uuid: A }]);
+    const spoofed = await post(app, body({ reportId: 'r-0002-abcd', fromUuid: A, startedUuid: A }));
+    expect([spoofed.statusCode, spoofed.json().error], 'the sender, not the reported uuid, is attributed').toEqual([403, 'stale-uuid']);
+    expect(rows()).toHaveLength(1);
+  });
+
+  it('a body with no startedUuid (an older hook) meets today\'s check on fromUuid and records it', async () => {
+    app = await open();
+    const ok = await post(app, body({ startedUuid: null }));
+    expect(ok.statusCode, ok.body).toBe(202);
+    expect(rows()).toMatchObject([{ uuid: UUID }]);
+    const stale = await post(app, body({ reportId: 'r-0002-abcd', fromUuid: '99999999-2222-3333-4444-555555555555' }));
+    expect([stale.statusCode, stale.json().error]).toEqual([403, 'stale-uuid']);
+  });
+
+  it('refuses a malformed startedUuid 400 and records nothing', async () => {
+    app = await open();
+    for (const startedUuid of [7, '', 'has space', 'x'.repeat(129)]) {
+      const res = await post(app, body({ startedUuid }));
+      expect([res.statusCode, res.json().error], JSON.stringify(startedUuid)).toEqual([400, 'bad-request']);
+    }
+    expect(rows()).toEqual([]);
+  });
+
+  it('answers unavailable (503) on a server with no coordination store', async () => {
+    app = Fastify({ logger: false });
+    registerContinuityRoutes(app, { coord: undefined, mailToken: () => ID_GATE_TOKEN, attribute: async () => ({ ok: true }), wall: () => FAKE_T0 });
+    await app.ready();
+    const res = await post(app, body());
+    expect([res.statusCode, res.json().error]).toEqual([503, 'unavailable']);
   });
 
   it('answers write-failed (503) when the store cannot write', async () => {

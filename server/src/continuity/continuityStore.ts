@@ -62,8 +62,9 @@ export function startsSince(db: DatabaseSync, sinceId: number): StartsRead {
   try {
     const rows = db.prepare(
       'SELECT id, sessionId, reportId, uuid, source, model, rowIncarnation, reportedAt, receivedAt FROM continuity_starts WHERE id > ? ORDER BY id',
-    ).all(sinceId) as unknown as StartRow[];
-    return { ok: true, rows: rows.map((r) => ({ ...r })) };
+    ).all(sinceId) as unknown as (Omit<StartRow, 'source'> & { source: string })[];
+    // The table has no CHECK, so a word a newer build wrote reads through the same rule as the writer (review 1911, F10).
+    return { ok: true, rows: rows.map((r) => ({ ...r, source: sourceOf(r.source) })) };
   } catch (e) {
     return { ok: false, detail: `continuity_starts read failed: ${e instanceof Error ? e.message : String(e)}` };
   }
