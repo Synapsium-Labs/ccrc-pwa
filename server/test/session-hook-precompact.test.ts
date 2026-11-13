@@ -10,6 +10,7 @@
 // copied: a test file cannot import another). `_reg_purge` runs through makeCcdHarness's fixture HOME, never the live one.
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { spawnSync } from 'node:child_process';
+import { spawnSyncGroup } from './spawnGroup.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import { mkTmp } from './tmpHelpers.js';
@@ -50,8 +51,9 @@ const env = (over: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv => ({
   CCRC_SESSION_GENERATION: GENERATION, ...over,
 });
 const run = (payload: object, over: NodeJS.ProcessEnv = {}): void => {
-  // Bounded (review 1927 M6): spawnSync blocks the event loop, so vitest's own timeout could never fire on a hung hook.
-  const r = spawnSync('bash', [HOOK], { input: JSON.stringify(payload), encoding: 'utf8', env: env(over), timeout: 15_000 });
+  // Bounded (review 1927 M6): a synchronous spawn blocks the event loop, so vitest's own timeout could never fire on a
+  // hung hook. A timed shell spawn goes through spawnSyncGroup (#896), which also ends the hook's process group.
+  const r = spawnSyncGroup('bash', [HOOK], { input: JSON.stringify(payload), encoding: 'utf8', env: env(over), timeout: 15_000 });
   expect(r.status, 'the hook contract: exit 0 on every path').toBe(0);
 };
 /** A transcript that exists, so `_hook_compact_scope` resolves `main` for a manual compaction. */
