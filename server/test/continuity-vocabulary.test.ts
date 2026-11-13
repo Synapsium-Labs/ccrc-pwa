@@ -6,7 +6,7 @@ import {
   GENERATION_OUTCOMES, GENERATION_STATES, HARD_CAP_TOKENS, HOLD_OFF_MS, IDLE_SOFT_MS, LEAST_AGE_MS, NOTES_CAP,
   RENEWAL_BUDGET_S, RENEWAL_TRIGGERS, SOFT_BUDGET, SOFT_CEILING_FRACTION, STATE_DEADLINE_S, TRIGGER_CLASSES, TURNS_SOFT,
   isGenerationOutcome, isGenerationState, isRenewalTrigger, isTriggerClass, IDLE_FLOOR_FRACTION, WAVE_BOUNDARY_FLOOR_FRACTION,
-  RESUMED_LONG_FRACTION, ON_SCHEDULE_WAIT_MS, RENEWAL_LANE_PERIOD_MS, OBSERVED_STEP_CAP_MS,
+  RESUMED_LONG_FRACTION, ON_SCHEDULE_WAIT_MS, RENEWAL_LANE_PERIOD_MS, OBSERVED_STEP_PERIODS,
 } from '../../shared/continuity.js';
 
 describe('the lists, each derived from one map, in order', () => {
@@ -65,6 +65,6 @@ describe('the starting values (Table 11.5b, Table 3.3.11a, Table 3.3.11b)', () =
   });
   it('§3.3.11 R19 "Renew on schedule": a soft trigger waits at most 30 minutes', () => { expect(ON_SCHEDULE_WAIT_MS).toBe(1_800_000); });
   it('§11.5 one observed step is capped at twice the advancing lane\'s period (observed-time-caps-one-step)', () => {
-    expect([RENEWAL_LANE_PERIOD_MS, OBSERVED_STEP_CAP_MS]).toEqual([30_000, 60_000]);
+    expect([RENEWAL_LANE_PERIOD_MS, OBSERVED_STEP_PERIODS]).toEqual([30_000, 2]);
   });
 });

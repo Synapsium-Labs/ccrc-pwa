@@ -37,7 +37,8 @@ export interface SoftInputs {
   readonly generationAgeObservedMs: number;
   /** The end of a hold-off on the same observed clock as `generationAgeObservedMs`, or null when none stands. */
   readonly holdOffUntilObservedMs: number | null;
-  /** Soft renewals inside the budget's window, counted over observed time. */
+  /** Soft renewals inside the budget's window, counted over observed time. A count that is not a non-negative
+   *  integer is unmeasured, and waits (review 1894, F3). */
   readonly softRenewalsInWindow: number;
   /** The Overlord's generation is outside `active`: a coordinator waits while the Overlord renews (C50). */
   readonly overlordOutsideActive: boolean;
@@ -66,7 +67,9 @@ function breakOf(i: SoftInputs): boolean | 'unmeasured' {
 export function softRenewalMay(i: SoftInputs): SoftAnswer {
   if (!(i.generationAgeObservedMs >= LEAST_AGE_MS)) return wait('least-age');
   if (i.holdOffUntilObservedMs !== null && !(i.generationAgeObservedMs >= i.holdOffUntilObservedMs)) return wait('hold-off');
-  if (!(i.softRenewalsInWindow < SOFT_BUDGET.count)) return wait('budget');
+  const used = i.softRenewalsInWindow;
+  if (!(Number.isInteger(used) && used >= 0)) return wait('unmeasured');
+  if (!(used < SOFT_BUDGET.count)) return wait('budget');
   if (i.role !== 'overlord' && i.overlordOutsideActive) return wait('overlord-first');
   if (i.mode === 'on-schedule' && i.dueSinceObservedMs >= ON_SCHEDULE_WAIT_MS) return START;
   if (i.hibernateHold.held) return wait('hold');

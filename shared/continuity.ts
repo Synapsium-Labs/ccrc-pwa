@@ -116,6 +116,7 @@ export const ON_SCHEDULE_WAIT_MS = 1_800_000;
 /** The renewal lane's period, the one the lane that advances the generations' observed time runs at. Its LANE_SCHEDULE
  *  row (the generations piece) reads it from here. A starting value. */
 export const RENEWAL_LANE_PERIOD_MS = 30_000;
-/** One observed-time step advances by at most twice the advancing lane's period (slug observed-time-caps-one-step):
- *  a longer monotonic delta is a freeze, and counts as a gap. */
-export const OBSERVED_STEP_CAP_MS = 2 * RENEWAL_LANE_PERIOD_MS;
+/** One observed-time step advances by at most this many periods of the lane that advances it (slug
+ *  observed-time-caps-one-step; Table 11.5b): a longer monotonic delta is a freeze, advances by the cap only and counts
+ *  as a gap. `observedStepCapMs` (`server/src/time/observed.ts`) is the one place the cap is computed from it. */
+export const OBSERVED_STEP_PERIODS = 2;

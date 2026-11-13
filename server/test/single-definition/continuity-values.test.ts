@@ -10,9 +10,9 @@ const HOME = 'shared/continuity.ts';
 const NAMES = ['STATE_DEADLINE_S', 'RENEWAL_BUDGET_S', 'HOLD_OFF_MS', 'LEAST_AGE_MS', 'SOFT_BUDGET', 'BREAK_NO_MESSAGE_MS',
   'BREAK_PLACE_HIDDEN_MS', 'HARD_CAP_TOKENS', 'SOFT_CEILING_FRACTION', 'TURNS_SOFT', 'IDLE_SOFT_MS', 'ACCOUNT_LOAD_HARD',
   'EARLY_WHILE_AWAY_FRACTION', 'CHECKPOINT_THREAD', 'NOTES_CAP', 'IDLE_FLOOR_FRACTION', 'WAVE_BOUNDARY_FLOOR_FRACTION',
-  'RESUMED_LONG_FRACTION', 'ON_SCHEDULE_WAIT_MS', 'RENEWAL_LANE_PERIOD_MS', 'OBSERVED_STEP_CAP_MS'];
+  'RESUMED_LONG_FRACTION', 'ON_SCHEDULE_WAIT_MS', 'RENEWAL_LANE_PERIOD_MS', 'OBSERVED_STEP_PERIODS'];
 /** The figures no continuity decider may spell again: it imports the constant instead. */
-const FIGURES = [250_000, 600_000, 1_200_000, 1_800_000, 2_700_000, 21_600_000];
+const FIGURES = [250_000, 300_000, 600_000, 1_200_000, 1_800_000, 2_700_000, 21_600_000];
 
 const declares = (text: string, name: string): boolean => new RegExp(`\\b(?:const|let|var)\\s+${name}\\b`).test(text);
 /** A figure written as code, with or without digit separators (`1_800_000`, `1800000`). */
@@ -20,8 +20,10 @@ const spells = (text: string, n: number): boolean => {
   const digits = String(n).split('');
   return new RegExp(`(?<![\\w.])${digits.join('_?')}(?![\\w.])`).test(text.replace(/\/\/.*$|\/\*[\s\S]*?\*\//gm, ''));
 };
-/** The deciders that read these values: every file of `server/src/continuity/`, and observed time. */
-const SCOPE = /^server\/src\/(?:continuity\/|time\/observed\.ts$)/;
+/** The deciders that read these values, by name: a later decider joins this list. Not the whole of
+ *  `server/src/continuity/`, whose other files (a store, a route, a card) keep figures of their own, such as the
+ *  compaction pairing window, which is ten minutes too (review 1894, F2). */
+const DECIDERS = ['server/src/continuity/renewalDue.ts', 'server/src/continuity/softRenewal.ts', 'server/src/time/observed.ts'];
 
 describe('the generation machine\'s starting values are defined once, in shared/continuity.ts', () => {
   const all = ROOTS.filter((r) => existsSync(r)).flatMap(sources);
@@ -33,17 +35,19 @@ describe('the generation machine\'s starting values are defined once, in shared/
     expect(spells('if (ms >= 1_800_000) f();', 1_800_000)).toBe(true);
     expect(spells('// 1_800_000 is the least age', 1_800_000)).toBe(false);
     expect(spells('const a = 11_800_000;', 1_800_000)).toBe(false);
-    expect(SCOPE.test('server/src/continuity/renewalDue.ts') && SCOPE.test('server/src/time/observed.ts')).toBe(true);
-    expect(SCOPE.test('server/src/time/rules.ts')).toBe(false);
   });
 
   it.each(NAMES)('%s is declared in exactly one file', (name) => {
     expect(all.filter((f) => declares(readFileSync(f, 'utf8'), name)).map(rel)).toEqual([HOME]);
   });
 
+  it('the decider list is not empty, and every file on it exists', () => {
+    expect(DECIDERS.length).toBeGreaterThanOrEqual(3);
+    expect(DECIDERS.filter((f) => !existsSync(path.join(ccrcRoot, f)))).toEqual([]);
+  });
+
   it('no continuity decider spells one of the figures', () => {
-    const scoped = all.map(rel).filter((f) => SCOPE.test(f));
-    const hits = scoped.flatMap((f) => FIGURES.filter((n) => spells(readFileSync(path.join(ccrcRoot, f), 'utf8'), n))
+    const hits = DECIDERS.flatMap((f) => FIGURES.filter((n) => spells(readFileSync(path.join(ccrcRoot, f), 'utf8'), n))
       .map((n) => `${f}: ${n}`));
     expect(hits).toEqual([]);
   });

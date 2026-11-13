@@ -6,6 +6,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { expect } from 'vitest';
 import { RUN_KINDS, type ChildMark } from '../../../shared/api.js';
+import { FLEET_ROLE_NAMES } from '../../../shared/fleetRoles.js';
 import type { RoleFactInputs, RoleReading } from '../../src/roleOf.js';
 import type { MutantSet, SuiteCase } from './mutate.js';
 import { mulberry32 } from '../fakeTime.js';
@@ -91,7 +92,7 @@ const ROLE_FACTS_SET: MutantSet<RoleOfModule> = {
 export type ObservedModule = typeof import('../../src/time/observed.js');
 
 export function observeTimeCases(m: ObservedModule): Record<string, SuiteCase> {
-  const CAP = 60_000;   // twice a 30 s lane's period
+  const CAP = 60_000;   // twice a 30 s lane's period: observedStepCapMs(30_000)
   const step = (prev: import('../../src/time/observed.js').Observed | null, mono: number, proc: string): unknown =>
     m.observeTime(prev, mono, proc, CAP);
   return {
@@ -103,22 +104,33 @@ export function observeTimeCases(m: ObservedModule): Record<string, SuiteCase> {
       expect(step({ ms: 3_500, mono: 4_500, proc: 'p1' }, 4_500, 'p1')).toEqual({ at: { ms: 3_500, mono: 4_500, proc: 'p1' }, gap: null });
       expect(step({ ms: 0, mono: 0, proc: 'p1' }, CAP, 'p1')).toEqual({ at: { ms: CAP, mono: CAP, proc: 'p1' }, gap: null });
     },
-    'a frozen process: a 10-minute delta advances by the cap only, and is a gap (observed-time-caps-one-step)': () => {
+    'observedStepCapMs: two periods of the lane, so a 30 s lane\'s cap is 60 s': () => {
+      expect([m.observedStepCapMs(30_000), m.observedStepCapMs(45_000)]).toEqual([CAP, 90_000]);
+    },
+    'a frozen process: a 10-minute delta advances by the cap only, and is a step gap carrying its delta (F1)': () => {
       expect(step({ ms: 100, mono: 1_000, proc: 'p1' }, 1_000 + 600_000, 'p1'))
-        .toEqual({ at: { ms: 100 + CAP, mono: 601_000, proc: 'p1' }, gap: 'capped' });
-      expect(step({ ms: 0, mono: 0, proc: 'p1' }, CAP + 1, 'p1')).toEqual({ at: { ms: CAP, mono: CAP + 1, proc: 'p1' }, gap: 'capped' });
+        .toEqual({ at: { ms: 100 + CAP, mono: 601_000, proc: 'p1' }, gap: { kind: 'step', deltaMs: 600_000 } });
+      expect(step({ ms: 0, mono: 0, proc: 'p1' }, CAP + 1, 'p1'))
+        .toEqual({ at: { ms: CAP, mono: CAP + 1, proc: 'p1' }, gap: { kind: 'step', deltaMs: CAP + 1 } });
+    },
+    'a cap that is not a finite positive number advances nothing, and answers a step gap (F5)': () => {
+      for (const cap of [Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY, 0, -5]) {
+        expect(m.observeTime({ ms: 40, mono: 1_000, proc: 'p1' }, 11_000, 'p1', cap), String(cap))
+          .toEqual({ at: { ms: 40, mono: 11_000, proc: 'p1' }, gap: { kind: 'step', deltaMs: 10_000 } });
+      }
+      expect(m.observeTime({ ms: 40, mono: 1_000, proc: 'p1' }, 1_000, 'p1', Number.NaN).at.ms).toBe(40);
     },
     'a new process: no advance, re-anchored on the new reading, a gap': () => {
       const a = { ms: 10_000, mono: 90_000, proc: 'p1' };
-      expect(step(a, 95_000, 'p2')).toEqual({ at: { ms: 10_000, mono: 95_000, proc: 'p2' }, gap: 'new-process' });
-      expect(step(a, 200, 'p2')).toEqual({ at: { ms: 10_000, mono: 200, proc: 'p2' }, gap: 'new-process' });
+      expect(step(a, 95_000, 'p2')).toEqual({ at: { ms: 10_000, mono: 95_000, proc: 'p2' }, gap: { kind: 'process', deltaMs: 5_000 } });
+      expect(step(a, 200, 'p2')).toEqual({ at: { ms: 10_000, mono: 200, proc: 'p2' }, gap: { kind: 'process', deltaMs: -89_800 } });
     },
     'mono backwards in one process: no advance, re-anchored, a gap': () => {
-      expect(step({ ms: 7, mono: 50, proc: 'p1' }, 40, 'p1')).toEqual({ at: { ms: 7, mono: 40, proc: 'p1' }, gap: 'backwards' });
+      expect(step({ ms: 7, mono: 50, proc: 'p1' }, 40, 'p1')).toEqual({ at: { ms: 7, mono: 40, proc: 'p1' }, gap: { kind: 'backwards', deltaMs: -10 } });
     },
     'a mono that is not a number never advances, and the next reading re-anchors': () => {
       const a = m.observeTime({ ms: 7, mono: 50, proc: 'p1' }, Number.NaN, 'p1', CAP);
-      expect([a.at.ms, a.gap]).toEqual([7, 'backwards']);
+      expect([a.at.ms, a.gap]).toEqual([7, { kind: 'backwards', deltaMs: Number.NaN }]);
       expect(m.observeTime(a.at, 80, 'p1', CAP).at.ms).toBe(7);
     },
     'observedSince counts the observed milliseconds between two stamps, never below 0': () => {
@@ -154,13 +166,16 @@ export function observeTimeCases(m: ObservedModule): Record<string, SuiteCase> {
 const OBSERVED_SET: MutantSet<ObservedModule> = {
   modulePath: path.join(ROOT, 'server/src/time/observed.ts'),
   mutants: [
-    { id: 'O1', old: "if (prev.proc !== proc) return { at: { ms: prev.ms, mono, proc }, gap: 'new-process' };", new: '' },
-    { id: 'O2', old: "if (!(mono >= prev.mono)) return { at: { ms: prev.ms, mono, proc }, gap: 'backwards' };", new: '' },
+    { id: 'O1', old: "if (prev.proc !== proc) return { at: { ms: prev.ms, mono, proc }, gap: { kind: 'process', deltaMs } };", new: '' },
+    { id: 'O2', old: "if (!(mono >= prev.mono)) return { at: { ms: prev.ms, mono, proc }, gap: { kind: 'backwards', deltaMs } };", new: '' },
     { id: 'O3', old: 'if (prev === null) return { at: { ms: 0, mono, proc }, gap: null };', new: 'if (prev === null) return { at: { ms: mono, mono, proc }, gap: null };' },
     { id: 'O4', old: 'Math.max(0, now.ms - start.ms)', new: 'now.ms - start.ms' },
-    { id: 'O5', old: "return { at: { ms: prev.ms, mono, proc }, gap: 'new-process' };", new: "return { at: prev, gap: 'new-process' };" },
-    { id: 'O6', old: 'const step = Math.min(delta, Math.max(0, capMs));', new: 'const step = delta;' },
-    { id: 'O7', old: "gap: step < delta ? 'capped' : null", new: 'gap: null' },
+    { id: 'O5', old: "return { at: { ms: prev.ms, mono, proc }, gap: { kind: 'process', deltaMs } };", new: "return { at: prev, gap: { kind: 'process', deltaMs } };" },
+    { id: 'O6', old: 'const step = Math.min(deltaMs, cap);', new: 'const step = deltaMs;' },
+    { id: 'O7', old: "gap: step < deltaMs ? { kind: 'step', deltaMs } : null", new: 'gap: null' },
+    { id: 'O8', old: 'const cap = Number.isFinite(capMs) && capMs > 0 ? capMs : 0;', new: 'const cap = capMs;' },
+    { id: 'O9', old: "{ kind: 'step', deltaMs } : null", new: "{ kind: 'step', deltaMs: step } : null" },
+    { id: 'O10', old: 'return OBSERVED_STEP_PERIODS * lanePeriodMs;', new: 'return 2 * lanePeriodMs + 1;' },
   ],
   suite: observeTimeCases,
 };
@@ -201,10 +216,11 @@ export function renewalBase(role: FleetRoleName): RIn {
     compactions: M(0), idleMs: M(0), startResumed: M({ resumed: false, otherClass: false }), renewNow: false, ...flags };
 }
 
-/** Each input's domain: unmeasured, and measured values below, at and above every threshold that reads it, plus
- *  measured values that are not a count (read as unmeasured). */
+/** Each input's domain: unmeasured, and measured values below, at and above every threshold that reads it (the hard
+ *  cap at half a 200k window included, review 1894 F9), plus measured values that are not a count (read as
+ *  unmeasured). */
 export const RENEWAL_DOMAINS: Record<string, readonly unknown[]> = {
-  contextTokens: [U, M(0), M(62_499), M(62_500), M(62_501), M(124_999), M(125_000), M(125_001), M(149_999), M(150_000),
+  contextTokens: [U, M(0), M(62_499), M(62_500), M(62_501), M(99_999), M(100_000), M(100_001), M(124_999), M(125_000), M(125_001), M(149_999), M(150_000),
     M(150_001), M(249_999), M(250_000), M(250_001), M(-1), M(Number.NaN)],
   windowTokens: [U, M(0), M(200_000), M(500_000), M(1_000_000)],
   fittedCeilingTokens: [U, M(100_000), M(250_000)],
@@ -253,7 +269,6 @@ export function expectedRenewal(i: RIn): { due: boolean; why?: Trig; cls?: 'hard
   return why === undefined ? { due: false, blind } : { due: true, why, cls: HARD_WRITTEN.has(why) ? 'hard' : 'soft', blind };
 }
 
-const ROLES_ALL: FleetRoleName[] = ['overlord', 'auditor', 'replay', 'worker', 'reviewer', 'coordinator', 'plain'];
 const showIn = (i: unknown): string => JSON.stringify(i);
 
 export function renewalDueCases(m: RenewalDueModule): Record<string, SuiteCase> {
@@ -264,7 +279,7 @@ export function renewalDueCases(m: RenewalDueModule): Record<string, SuiteCase> 
       expect(m.RENEWAL_ROWS).toEqual(ROWS_WRITTEN);
     },
     'the class column: hard rows are the hard ones, and every role tests them first': () => {
-      for (const r of ROLES_ALL) {
+      for (const r of FLEET_ROLE_NAMES) {
         const rows = m.RENEWAL_ROWS[r];
         for (const t of rows) expect(m.TRIGGER_CLASS[t], t).toBe(HARD_WRITTEN.has(t) ? 'hard' : 'soft');
         const firstSoft = rows.findIndex((t) => m.TRIGGER_CLASS[t] === 'soft');
@@ -275,13 +290,13 @@ export function renewalDueCases(m: RenewalDueModule): Record<string, SuiteCase> 
       expect([m.hardCapTokens(1_000_000), m.hardCapTokens(500_000), m.hardCapTokens(200_000)]).toEqual([250_000, 250_000, 100_000]);
     },
     'EXHAUSTIVE: the base fires nothing, for every role': () => {
-      for (const r of ROLES_ALL) expect(m.renewalDue(renewalBase(r))).toEqual({ due: false, blind: [] });
+      for (const r of FLEET_ROLE_NAMES) expect(m.renewalDue(renewalBase(r))).toEqual({ due: false, blind: [] });
     },
     'EXHAUSTIVE: each input over its domain, one at a time, for every role': () => {
-      for (const r of ROLES_ALL) for (const f of fields) for (const v of RENEWAL_DOMAINS[f]!) check({ ...renewalBase(r), [f]: v } as RIn);
+      for (const r of FLEET_ROLE_NAMES) for (const f of fields) for (const v of RENEWAL_DOMAINS[f]!) check({ ...renewalBase(r), [f]: v } as RIn);
     },
     'EXHAUSTIVE: every pair of inputs over their domains, for every role': () => {
-      for (const r of ROLES_ALL) {
+      for (const r of FLEET_ROLE_NAMES) {
         const base = renewalBase(r);
         for (let a = 0; a < fields.length; a++) for (let b = a + 1; b < fields.length; b++) {
           for (const va of RENEWAL_DOMAINS[fields[a]!]!) for (const vb of RENEWAL_DOMAINS[fields[b]!]!) {
@@ -313,7 +328,7 @@ export function renewalDueCases(m: RenewalDueModule): Record<string, SuiteCase> 
       expect(got.blind).toContain('hard-cap');
     },
     'PROPERTY (10,000 seeded inputs per role): an unmeasured reading never makes a renewal due or moves it earlier': () => {
-      for (const r of ROLES_ALL) {
+      for (const r of FLEET_ROLE_NAMES) {
         const rnd = mulberry32(0x5eed + r.length);
         const rows = m.RENEWAL_ROWS[r];
         for (let n = 0; n < 10_000; n++) {
@@ -377,7 +392,7 @@ export function softBase(role: FleetRoleName): SIn {
 export const SOFT_DOMAINS: Record<string, readonly unknown[]> = {
   generationAgeObservedMs: [0, 30 * MIN - 1, 30 * MIN, Number.NaN],
   holdOffUntilObservedMs: [null, 30 * MIN, 30 * MIN + 1],
-  softRenewalsInWindow: [0, 2, 3, Number.NaN],
+  softRenewalsInWindow: [0, 2, 3, -1, 1.5, Number.NEGATIVE_INFINITY, Number.POSITIVE_INFINITY, Number.NaN],
   overlordOutsideActive: [false, true],
   hibernateHold: [{ held: false }, { held: true, reason: 'pane' }],
   readersRunning: [NA, U, M(0), M(1), M(Number.NaN), M(-1)],
@@ -388,12 +403,15 @@ export const SOFT_DOMAINS: Record<string, readonly unknown[]> = {
 };
 
 /** The spec's words (§3.3.11 R19, the preconditions, the soft budget; C50; Appendix B's "the preconditions, at most 30
- *  minutes"; review 1890 I7: not applicable is not unmeasured, a break is any measured disjunct) as an oracle. */
+ *  minutes"; review 1890 I7: not applicable is not unmeasured, a break is any measured disjunct; review 1894 F3: a budget
+ *  count that is not a non-negative integer is unmeasured) as an oracle. */
 export function expectedSoft(i: SIn): SAns {
   const no = (waitFor: import('../../src/continuity/softRenewal.js').SoftWait): SAns => ({ start: false, waitFor });
   if (!(i.generationAgeObservedMs >= 30 * MIN)) return no('least-age');
   if (i.holdOffUntilObservedMs !== null && !(i.generationAgeObservedMs >= i.holdOffUntilObservedMs)) return no('hold-off');
-  if (!(i.softRenewalsInWindow <= 2)) return no('budget');
+  const n = i.softRenewalsInWindow;
+  if (!(Number.isInteger(n) && n >= 0)) return no('unmeasured');
+  if (!(n <= 2)) return no('budget');
   if (i.role === 'coordinator' && i.overlordOutsideActive) return no('overlord-first');
   const capped = i.mode === 'on-schedule' && i.dueSinceObservedMs >= 30 * MIN;
   if (capped) return { start: true };
@@ -516,7 +534,10 @@ const SOFT_SET: MutantSet<SoftModule> = {
   modulePath: SOFT_PATH,
   mutants: [
     { id: 'S1', old: 'if (!(i.generationAgeObservedMs >= LEAST_AGE_MS))', new: 'if (!(i.generationAgeObservedMs > LEAST_AGE_MS))' },
-    { id: 'S2', old: "if (!(i.softRenewalsInWindow < SOFT_BUDGET.count)) return wait('budget');", new: '' },
+    { id: 'S2', old: "if (!(used < SOFT_BUDGET.count)) return wait('budget');", new: '' },
+    { id: 'S14', old: "if (!(Number.isInteger(used) && used >= 0)) return wait('unmeasured');", new: '' },
+    { id: 'S15', old: 'Number.isInteger(used) && used >= 0', new: 'used >= 0' },
+    { id: 'S16', old: 'Number.isInteger(used) && used >= 0', new: 'Number.isInteger(used)' },
     { id: 'S3', old: "if (readers === null) return wait('unmeasured');", new: '' },
     { id: 'S4', old: "  if (i.mode === 'on-schedule' && i.dueSinceObservedMs >= ON_SCHEDULE_WAIT_MS) return START;\n  if (i.hibernateHold.held) return wait('hold');",
       new: "  if (i.hibernateHold.held) return wait('hold');\n  if (i.mode === 'on-schedule' && i.dueSinceObservedMs >= ON_SCHEDULE_WAIT_MS) return START;" },
