@@ -39,8 +39,9 @@
 >    `DELEGATION_SPOOL_BOUNDS` works. They are not added in Task 1, because shellcheck counts an unread global as SC2034
 >    and `server/test/shellcheck-baseline.json` pins `ccd/ccd + ccd/lib` at 23 of them. So in 6b-1 (note 8) the hook's
 >    `LRC_MAX_BYTES` and `LRC_DROP_RESERVE` are the only spelling, pinned by nothing; `ccd/ccd`'s spelling and the
->    equality pin arrive with Task 3 in 6b-2. The record's append takes no slot: each append is one `write(2)`, the
->    spool's rule. The record is compacted inside the manifest's own slot (`$REG/.inflight.lock`, R-A), from 6b-2 on.
+>    equality pin arrive with Task 3 in 6b-2. The record's append takes no slot: each line is one `write(2)` (a pair
+>    is two, D-8401), the spool's rule. The record is compacted inside the manifest's own slot (`$REG/.inflight.lock`,
+>    R-A), from 6b-2 on.
 > 5. **COORDINATOR: unmeasured has two more reasons, and an all-unread manifest has a verdict of its own.** Call 8 splits
 >    `unmeasured` into lock-busy and over-budget. Two more words stand beside them, because their remedies differ:
 >    - `why=error`, as the carry's `(kept: error)` is: no `flock`, no `python3`, the program missing or failing, an
@@ -254,7 +255,8 @@ instrument ship. No `server/src` or `shared/` file changes.
   notification, which suggests `Workflow({scriptPath, resumeFromRunId})`. It cannot count:
   - refused calls;
   - a subagent's calls;
-  - a SendMessage to a name rather than an agent id.
+  - a SendMessage to a name rather than an agent id (a name inside the id grammar writes a `send` row that joins no
+    agent, which the manifest retires; one outside it writes nothing; D-8402).
 
   `deferred-until-reset`'s `reset` is the deciding rate-limit row's own `quotaLimits.resetsAt` (spec §5.3's
   `<resetsAt>`), read by `agent_end`; where no deciding row carries one, the session's limit-wait reset when Task 3
@@ -334,12 +336,16 @@ instrument ship. No `server/src` or `shared/` file changes.
     provisional 30 s, about 11% of that deadline), plus its unbounded pre-slot reads (the registry, `.limitwait`, the
     transcript listing). The provisional 30 s is weighed against that budget: it is not raised without re-measuring
     the swap's slack;
-  - in the hook, one `wc -c` fork for each row it writes;
+  - in the hook, one `wc -c` fork for each append once the record exists (a pair is one append), and over budget one
+    subshell for the drop row's time (D-8403);
   - in the hook, the `DSP_DEFS` compile (about 11 ms of CPU) on every payload quoting `"SendMessage"` where the spool
     directory exists (every ccd-spawned session, note 7), and, where it is absent, on a PostToolUse of Agent, Task,
     Workflow or SendMessage. Every other event compiles the parse alone, as on main;
-  - in the hook, one bounded builtin read of `$REG/<id>.wrapper`, and the generation read now made without the spool
-    directory, on each of those PostToolUse events.
+  - in the hook, one bounded builtin read of `$REG/<id>.wrapper` and the `lrec` evaluation on each of those
+    PostToolUse events, and, where the spool directory exists, on every event the prefilter matches, Bash included,
+    where the `DSP_DEFS` compile is also longer by the launch record's defs (together about +1.2 to +1.5 ms on a Bash
+    PostToolUse, D-8400); the generation read on every event of a session with a generation file; and the `.deleg`
+    type tests on every event.
 
 ## Global Constraints
 
@@ -430,8 +436,9 @@ Each item is tagged with the run whose reviewer reads it: **[6b-1]** is Task 1's
    - **[6b-1]** `lrec` prints exactly one line on every event, so the parse's last `read` never fails on its account;
      every launch event (a Workflow, an Agent, a path failure, a full record, a spent reserve, an orphan removal) still
      writes its hookstate; and the hook's new per-event reads on the hot path of every Agent, Task, Workflow and
-     SendMessage PostToolUse, `$REG/<id>.wrapper` and the generation read made without the spool directory, are
-     builtin, bounded and regular-file-only, so a FIFO or a link to `/dev/zero` there never blocks.
+     SendMessage PostToolUse (and, where the spool directory exists, on every event the prefilter matches, D-8400),
+     `$REG/<id>.wrapper` and the generation read made without the spool directory, are builtin, bounded and
+     regular-file-only, so a FIFO or a link to `/dev/zero` there never blocks.
 
    Task 1: `'every event still writes its turn marker and hookstate …'`, `'every launch event still writes its
    hookstate …'` and the wrapper row. Task 3: `'never dies …'`, `'releases the slot …'`, `'its own slot …'`,
@@ -598,9 +605,10 @@ Each item is tagged with the run whose reviewer reads it: **[6b-1]** is Task 1's
   - each line is under the parse's `DSP_LINE_BELOW`;
   - the size (one `wc -c <` when the file exists) plus every line plus one newline each is at most `LRC_MAX_BYTES`.
 
-  Both lines go out in one `printf '%s\n%s\n'` (one line: `printf '%s\n'`), one `write(2)`. Over budget, it appends one
-  budget `drop` row instead, timed by `_hook_epoch_ms` (never a bare `$EPOCHREALTIME`: it is bash 5.0+, the hook's
-  floor is 4.4, and a bare expansion under `set -u` aborts the hook, as the comment at `_hook_timeout` warns), only
+  Both lines go out in one `printf '%s\n%s\n'` (one line: `printf '%s\n'`), one `write(2)` per line (D-8401). Over
+  budget, it appends one budget `drop` row instead, timed by `_hook_epoch_ms` (never a bare `$EPOCHREALTIME`: it is
+  bash 5.0+, the hook's floor is 4.4, and a bare expansion under `set -u` aborts the hook, as the comment at
+  `_hook_timeout` warns), only
   when the size plus that row plus its newline is at most `LRC_MAX_BYTES + LRC_DROP_RESERVE`, so a sequence of appends
   never passes that sum (parallel PostToolUse appends that each passed the check can; Task 2 counts what lies past it).
   AFTER the write it tests `$REG/$id.generation` once more and, if the row is gone, removes
@@ -1678,12 +1686,13 @@ is dispatched; each run's PR carries, and its source comments cite, only its own
   - Named cost: past the reserve (about 90 drop rows), launches are lost uncounted until the next manifest compacts the
     record; in 6b-1 alone nothing compacts. Parallel appends that each passed the size check can pass the sum; the
     manifest counts that overflow once in `drop-budget` and removes it.
-  - The hook forks one `wc -c` for each row it writes, and for nothing else.
+  - The hook forks one `wc -c` for each row it writes, and for nothing else (corrected by D-8403: one per append once
+    the record exists, none for a session's first append, and over budget one subshell for the drop row's time).
   - **Hook half (6b-1):** the constants are spelled in the hook (`LRC_MAX_BYTES`, `LRC_DROP_RESERVE`), alone and
     pinned by nothing until 6b-2. **`ccd/ccd` half (6b-2):** `LAUNCH_RECORD_MAX_BYTES` and `LAUNCH_RECORD_DROP_RESERVE`
     are defined in `ccd/ccd` (Task 3, where `_inflight_write` reads them as the program's `<record-max>`), and a Task 3
     test pins the two spellings equal (COORDINATOR note 4).
-  - The append takes no slot: each append is one `printf`, one `write(2)`, the spool's rule.
+  - The append takes no slot: each append is one `printf`, one `write(2)` per line (D-8401), the spool's rule.
 - **D-8367 (2026-11-12)** — launch-record-purged-after-generation: the hook
   appends `$REG/<id>.deleg` without a lock, so a purge can run between its generation test and its append, and an
   orphaned dot-free field holds the slug for ever (`_ws_slug_free`). The join record's two-sided rule is copied:
