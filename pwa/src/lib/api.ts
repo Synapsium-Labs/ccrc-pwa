@@ -5,7 +5,7 @@
 import type { AccountAuthCancelBody, AccountAuthCodeBody, AccountAuthStartAnswer, AccountAuthStartBody, AccountAuthStatusAnswer, AccountSetBody, AccountSignOutAnswer } from '../../../shared/api';
 import type { AccountAddAnswer, AccountAddBody, AccountCheckAnswer, AccountCredentialAnswer, AccountCredentialBody, AccountRemoveAnswer, AccountRemoveBody, AccountRemoveCheckAnswer, AccountRevokeAckBody, AccountsResponse, AccountSwitchAnswer, AckAnswer, ApplyUpdateBody, CatalogueState, CatchUp, ClaimSummary, CollectLaneRequest, CollectLaneView, CoordCaps, CoordCapsView, FleetHealth, FleetSession, IntentWriteAnswer, LifecycleQueryResult, LoginRequest, MoveRequestAnswer, NotifyEvent, PaneHistoryReply, PasskeyAssertFinish, PasskeyAssertStart, PasskeyListResponse, PasskeyRegisterFinish, PasskeyRegisterStart, ProjectPoolWire, ProjectRow, PrView, ProgrammesAnswer, ReapResult, ReviewCapLiftAnswer, ReviewCapView, RollbackUpdateBody, RouteField, RunFindAnswer, RunFindQuery, RunRecordAnswer, RunSignals, RunSpend, RunSummary, SlashCommand, StagedClip, StallWatchRequest, StallWatchView, StepUpAnswer, StepUpStart, UpdatesView, WorkItemState, WsAudit } from '../../../shared/api';
 import type { ArchiveAnswer, StopAnswer, StopBody, DialogAnswered, DialogTabRequest, DigestAnswer, DigestCorrectAnswer, DigestCorrectBody, InterruptRouteSource, QuestionAnswerBody } from '../../../shared/api';
-import type { GoalsView, ItemView, WaitingView } from '../../../shared/ledgers';
+import type { GoalsView, ItemActBody, ItemView, WaitingView } from '../../../shared/ledgers';
 import type { LinearConnectionView } from '../../../shared/linear';
 import type { DispatchAbandonRequest, DispatchAbandonView } from '../../../shared/dispatch-abandon';
 import type { LaneArmRequest, LaneArmView } from '../../../shared/lane-arm';
@@ -803,10 +803,12 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
     abandonRun: async (id: number, opts?: ReadOpts): Promise<CloseAnswer> => {
       return closeAnswerOf(await request(`/api/runs/${id}/abandon`, { method: 'POST' }, opts));
     },
-    /** `POST /api/items/:id/act` (D-8076; spec 2026-11-04 §10): the operator's Abandon run on an end-request item. Body-less and
-     *  session only like `abandonRun`, and it answers as `abandonRun` does, so the one sheet reads the same refusals and
-     *  `released` and `childReclaim` fields. The server closes the item itself. */
-    actItem: async (itemId: number, opts?: ReadOpts): Promise<CloseAnswer> => closeAnswerOf(await request(`/api/items/${itemId}/act`, { method: 'POST' }, opts)),
+    /** `POST /api/items/:id/act` (D-8076; spec 2026-11-04 §10): the operator's Abandon run on an end-request item. Session only
+     *  like `abandonRun`, and it answers as `abandonRun` does, so the one sheet reads the same refusals and `released` and
+     *  `childReclaim` fields. The server closes the item itself. `body` (D-8558) is a refused close's reason and the programme's
+     *  end; absent, the request is body-less as before. */
+    actItem: async (itemId: number, opts?: ReadOpts, body?: ItemActBody): Promise<CloseAnswer> =>
+      closeAnswerOf(await request(`/api/items/${itemId}/act`, body === undefined ? { method: 'POST' } : jsonInit(body), opts)),
     /** `POST /api/items/:id/decline` (D-8076): Keep the run. The item closes as declined and its asker is told. Body-less. */
     declineItem: (itemId: number) => postJson<{ readonly ok: true; readonly item: ItemView }>(`/api/items/${itemId}/decline`),
     /** `POST /api/items/:id/act` on a release-review item (D-8293): Release a review child kept past its ceiling. Body-less and
@@ -979,6 +981,10 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
     /** `GET /api/fleet/overrides` (D-8382): every override the switchboard declares with its state, and the approvals
      *  topology. Read only; Overrides in force and Security's approvals line read it through `useOverridesView`. */
     fleetOverrides: (opts?: ReadOpts) => getJson<OverridesView>('/api/fleet/overrides', opts),
+    /** `GET /api/models/:lane` (D-8406): the lane's classes as its own model files say them, each class's model and its
+     *  catalogue label. Unknown on purpose: `asLaneModelsRead` (`lib/models.ts`) is the one reader of the answer, and an
+     *  older server's 404 rejects like every non-2xx. Read through `useLaneModels`. */
+    laneModels: (lane: string, opts?: ReadOpts) => getJson<unknown>(`/api/models/${encodeURIComponent(lane)}`, opts),
     /** `POST /api/coord/lane-arm`: `{lane, choice}`, plus `confirm` only as the key a 409 `confirm-required` answered with. The
      *  server decides the confirm, so a 409 rejects with `ApiError` like every non-2xx, and the card reads its body through
      *  `laneArmWriteRefusal`. `postJsonOr`, for `setCoordCaps`' reason: an answer that could not be read may still have stored

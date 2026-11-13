@@ -1,0 +1,80 @@
+{
+  "name": "read-changed-initiatives",
+  "documentSource": "code",
+  "document": "query ChangedInitiatives($since: DateTimeOrDuration!, $after: String) { initiatives(filter: { updatedAt: { gt: $since } }, first: 100, after: $after) { nodes { id name description status updatedAt projects(first: 50) { nodes { id } } } pageInfo { hasNextPage endCursor } } }",
+  "variables": {
+    "since": "2026-11-13T15:58:24.477Z"
+  },
+  "requestBody": "{\"query\":\"query ChangedInitiatives($since: DateTimeOrDuration!, $after: String) { initiatives(filter: { updatedAt: { gt: $since } }, first: 100, after: $after) { nodes { id name description status updatedAt projects(first: 50) { nodes { id } } } pageInfo { hasNextPage endCursor } } }\",\"variables\":{\"since\":\"2026-11-13T15:58:24.477Z\"}}",
+  "requestHeaders": [
+    "authorization: <the key, bare, no Bearer>",
+    "content-type: application/json"
+  ],
+  "sentAtMs": null,
+  "receivedAtMs": null,
+  "sentAt": null,
+  "status": 200,
+  "statusLine": null,
+  "headers": [
+    [
+      "content-type",
+      "application/json; charset=utf-8"
+    ],
+    [
+      "x-complexity",
+      "1360"
+    ],
+    [
+      "x-ratelimit-complexity-limit",
+      "3000000"
+    ],
+    [
+      "x-ratelimit-complexity-remaining",
+      "2998371"
+    ],
+    [
+      "x-ratelimit-complexity-reset",
+      "1794590004602"
+    ],
+    [
+      "x-ratelimit-requests-limit",
+      "2500"
+    ],
+    [
+      "x-ratelimit-requests-remaining",
+      "2454"
+    ],
+    [
+      "x-ratelimit-requests-reset",
+      "1794590004602"
+    ]
+  ],
+  "body": {
+    "data": {
+      "initiatives": {
+        "nodes": [
+          {
+            "id": "00000000-0008-4000-8000-000000000020",
+            "name": "Capture initiative temp",
+            "description": "Capture.",
+            "status": "Canceled",
+            "updatedAt": "2026-11-13T16:13:24.177Z",
+            "projects": {
+              "nodes": [
+                {
+                  "id": "00000000-0004-4000-8000-000000000020"
+                }
+              ]
+            }
+          }
+        ],
+        "pageInfo": {
+          "hasNextPage": false,
+          "endCursor": "00000000-0008-4000-8000-000000000020"
+        }
+      }
+    }
+  },
+  "bodyRaw": "{\"data\":{\"initiatives\":{\"nodes\":[{\"id\":\"00000000-0008-4000-8000-000000000020\",\"name\":\"Capture initiative temp\",\"description\":\"Capture.\",\"status\":\"Canceled\",\"updatedAt\":\"2026-11-13T16:13:24.177Z\",\"projects\":{\"nodes\":[{\"id\":\"00000000-0004-4000-8000-000000000020\"}]}}],\"pageInfo\":{\"hasNextPage\":false,\"endCursor\":\"00000000-0008-4000-8000-000000000020\"}}}}\n",
+  "note": "Recorded by the hierarchy capture (FX2, D-8407)."
+}

@@ -1,0 +1,68 @@
+{
+  "name": "mutation-comment-create-on-initiative",
+  "documentSource": "code document (LINEAR_DOCUMENTS.comment); the input names initiativeId",
+  "document": "mutation CommentCreate($input: CommentCreateInput!) { commentCreate(input: $input) { success comment { id createdAt } } }",
+  "variables": {
+    "input": {
+      "initiativeId": "00000000-0008-4000-8000-000000000020",
+      "body": "Capture comment."
+    }
+  },
+  "requestBody": "{\"query\":\"mutation CommentCreate($input: CommentCreateInput!) { commentCreate(input: $input) { success comment { id createdAt } } }\",\"variables\":{\"input\":{\"initiativeId\":\"00000000-0008-4000-8000-000000000020\",\"body\":\"Capture comment.\"}}}",
+  "requestHeaders": [
+    "authorization: <the key, bare, no Bearer>",
+    "content-type: application/json"
+  ],
+  "sentAtMs": null,
+  "receivedAtMs": null,
+  "sentAt": null,
+  "status": 200,
+  "statusLine": null,
+  "headers": [
+    [
+      "content-type",
+      "application/json; charset=utf-8"
+    ],
+    [
+      "x-complexity",
+      "3"
+    ],
+    [
+      "x-ratelimit-complexity-limit",
+      "3000000"
+    ],
+    [
+      "x-ratelimit-complexity-remaining",
+      "2999975"
+    ],
+    [
+      "x-ratelimit-complexity-reset",
+      "1794590003468"
+    ],
+    [
+      "x-ratelimit-requests-limit",
+      "2500"
+    ],
+    [
+      "x-ratelimit-requests-remaining",
+      "2464"
+    ],
+    [
+      "x-ratelimit-requests-reset",
+      "1794590003468"
+    ]
+  ],
+  "body": {
+    "data": {
+      "commentCreate": {
+        "success": true,
+        "comment": {
+          "id": "00000000-0007-4000-8000-000000000020",
+          "createdAt": "2026-11-13T16:13:23.476Z"
+        }
+      }
+    }
+  },
+  "bodyRaw": "{\"data\":{\"commentCreate\":{\"success\":true,\"comment\":{\"id\":\"00000000-0007-4000-8000-000000000020\",\"createdAt\":\"2026-11-13T16:13:23.476Z\"}}}}\n",
+  "note": "Recorded by the hierarchy capture (FX2, D-8407)."
+}

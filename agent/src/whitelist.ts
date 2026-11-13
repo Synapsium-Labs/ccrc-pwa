@@ -2,6 +2,7 @@ import { realpath } from 'node:fs/promises';
 import path from 'node:path';
 import { CCRC_DIR_NAME, LANE_STATE_DIR_NAME, NODE_FILE_BASENAMES } from '../../shared/agent-protocol.js';
 import { CCRC_SWITCH_FILES } from '../../shared/switches.js';
+import { MODELS_DIR_NAME, isLaneModelsReadName } from '../../shared/models.mjs';
 
 /**
  * Everything a connection needs to evaluate the path/exec whitelists — the
@@ -114,9 +115,32 @@ function isCcrcNodeFile(canonicalCcrc: string, targetPath: string, canonicalTarg
 }
 
 /**
+ * D-8406: a lane's class registry and catalogue in `~/.ccrc/models` (`registryFileName`, `catalogueFileName`), the two
+ * files the session's model picker names a class's model from (`server/src/laneModels.ts`). READ mode only, and exact
+ * names only: `isLaneModelsReadName` (`shared/models.mjs`) admits those two shapes for a lane id and nothing else, so
+ * the directory stays unlistable and its other files (effort, windows, advance, the classes TSV) unread. Neither file
+ * holds a secret: model ids, labels, efforts and prices, the class map and the lane's endpoint, which the endpoint gate
+ * keeps free of a user name or password (`BASE_URL_OK`).
+ *
+ * `isCcrcNodeFile`'s two conditions, one directory down: the canonical target must be `<canonical ~/.ccrc>/models/<the
+ * literal basename>`, so a live symlink at either name (onto `agent.env`, say) or a `models` directory that is a
+ * symlink is refused, never answered with its target's bytes. A dangling symlink canonicalises onto its own literal
+ * path and is admitted, and the read then fails on it, as it does for a node file.
+ *
+ * This is the approved models design's first read path (auto-advance spec §2.7, before D14 moved its panel onto the
+ * planned `models` op): the op is unbuilt, and the picker needs only these two reads. When the op lands, its `show`
+ * carries the same facts and this grant is retired with the reader that uses it.
+ */
+function isLaneModelsFile(canonicalCcrc: string, targetPath: string, canonicalTarget: string): boolean {
+  const base = path.basename(path.resolve(targetPath));
+  return isLaneModelsReadName(base) && canonicalTarget === path.join(canonicalCcrc, MODELS_DIR_NAME, base);
+}
+
+/**
  * Whitelist check for ALL file ops. Reads: `.cc-sessions/`, `.cc-limits/`,
  * `.cc-clips/`, `.claude*` (glob) under $HOME, plus the fleet projects root,
- * plus exactly the `~/.ccrc` node files `NODE_FILES` names by name (`isCcrcNodeFile`).
+ * plus exactly the `~/.ccrc` node files `NODE_FILES` names by name (`isCcrcNodeFile`), and a lane's two model files
+ * (`isLaneModelsFile`, D-8406).
  * Writes: `.cc-clips/` under $HOME only. Returns the canonical path to operate on when
  * allowed, `null` otherwise — canonicalizing here means every downstream fs
  * call in fileops.ts/tail.ts already has symlink-escapes resolved.
@@ -147,7 +171,8 @@ export async function checkPath(
     isUnder(canonicalTarget, path.join(canonicalHome, '.cc-clips')) ||
     isUnder(canonicalTarget, canonicalRoot) ||
     underClaudeGlob(canonicalHome, canonicalTarget) ||
-    isCcrcNodeFile(canonicalCcrc, targetPath, canonicalTarget);
+    isCcrcNodeFile(canonicalCcrc, targetPath, canonicalTarget) ||
+    isLaneModelsFile(canonicalCcrc, targetPath, canonicalTarget);
 
   return readAllowed ? canonicalTarget : null;
 }

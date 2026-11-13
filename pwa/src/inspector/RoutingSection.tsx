@@ -6,6 +6,7 @@
 // them to markup and spells none of the sentence.
 import type { ReactNode } from 'react';
 import { accountLabel, accountProvider } from '../lib/accounts';
+import { useLaneModels } from '../lib/useLaneModels';
 import { metaChipTone } from '../session/chipTones';
 import { routeView } from '../session/routeView';
 import { routingLine, type RoutingPart } from '../session/routingLine';
@@ -21,9 +22,12 @@ export function RoutingSection(): ReactNode {
   const modelDoor = useSessionDoor('session-model');
   const effortDoor = useSessionDoor('session-effort');
   const row = session?.row ?? null;
+  // D-8406: the lane's model files name the asked class's model; read before the early return, as every hook is.
+  const laneModels = useLaneModels(row?.wrapper ?? null);
   if (row === null) return null;
   const line = routingLine(
-    row, routeView(row, row.wrapper, accountProvider(roster, row.wrapper)), accountLabel(roster, row.wrapper),
+    row, routeView(row, row.wrapper, accountProvider(roster, row.wrapper), laneModels), accountLabel(roster, row.wrapper),
+    laneModels,
   );
   // Named by its field: the words around a door are text, so a reader moving by buttons would hear the value alone.
   const part = (p: RoutingPart, i: number): ReactNode => {

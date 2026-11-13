@@ -1,0 +1,68 @@
+{
+  "name": "mutation-issue-relation-create",
+  "documentSource": "code",
+  "document": "mutation IssueRelationCreate($input: IssueRelationCreateInput!) { issueRelationCreate(input: $input) { success issueRelation { id } } }",
+  "variables": {
+    "input": {
+      "issueId": "00000000-0006-4000-8000-000000000020",
+      "relatedIssueId": "00000000-0006-4000-8000-000000000021",
+      "type": "related"
+    }
+  },
+  "requestBody": "{\"query\":\"mutation IssueRelationCreate($input: IssueRelationCreateInput!) { issueRelationCreate(input: $input) { success issueRelation { id } } }\",\"variables\":{\"input\":{\"issueId\":\"00000000-0006-4000-8000-000000000020\",\"relatedIssueId\":\"00000000-0006-4000-8000-000000000021\",\"type\":\"related\"}}}",
+  "requestHeaders": [
+    "authorization: <the key, bare, no Bearer>",
+    "content-type: application/json"
+  ],
+  "sentAtMs": null,
+  "receivedAtMs": null,
+  "sentAt": null,
+  "status": 200,
+  "statusLine": null,
+  "headers": [
+    [
+      "content-type",
+      "application/json; charset=utf-8"
+    ],
+    [
+      "x-complexity",
+      "2"
+    ],
+    [
+      "x-ratelimit-complexity-limit",
+      "3000000"
+    ],
+    [
+      "x-ratelimit-complexity-remaining",
+      "2999998"
+    ],
+    [
+      "x-ratelimit-complexity-reset",
+      "1794590003150"
+    ],
+    [
+      "x-ratelimit-requests-limit",
+      "2500"
+    ],
+    [
+      "x-ratelimit-requests-remaining",
+      "2467"
+    ],
+    [
+      "x-ratelimit-requests-reset",
+      "1794590003150"
+    ]
+  ],
+  "body": {
+    "data": {
+      "issueRelationCreate": {
+        "success": true,
+        "issueRelation": {
+          "id": "00000000-0008-4000-8000-000000000023"
+        }
+      }
+    }
+  },
+  "bodyRaw": "{\"data\":{\"issueRelationCreate\":{\"success\":true,\"issueRelation\":{\"id\":\"00000000-0008-4000-8000-000000000023\"}}}}\n",
+  "note": "Recorded by the hierarchy capture (FX2, D-8407)."
+}
