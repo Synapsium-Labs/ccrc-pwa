@@ -426,6 +426,53 @@ describe('the manifest program: the record, validation at read, compaction', () 
     expect(run().summary['verdict']).toBe('none');
   });
 
+  it('unread: a sidecar-only run whose journal is a FIFO, or whose summary is a directory, counts in unread and the verdict reads unread, never none; it leaves once its journal is older than recent-s', () => {
+    const runDir = path.join(side(), 'subagents', 'workflows', RUN);
+    fs.mkdirSync(runDir, { recursive: true });
+    execFileSync('mkfifo', [path.join(runDir, 'journal.jsonl')]);
+    fs.utimesSync(path.join(runDir, 'journal.jsonl'), NOW - 100, NOW - 100);
+    const g = run({}, 20_000);
+    expect(g.timedOut).toBe(false);
+    expect([n(g, 'unread'), n(g, 'items'), g.summary['verdict']]).toEqual([1, 0, 'unread']);
+    expect(g.rows).toEqual([]);
+    expect(run({ recent: 50 }).summary['verdict'], 'a FIFO journal older than recent-s leaves on its own').toBe('none');
+    fs.rmSync(runDir, { recursive: true });
+    mkRun(RUN2, { jm: NOW - 100 });
+    fs.mkdirSync(path.join(side(), 'workflows', `${RUN2}.json`), { recursive: true });
+    const g2 = run();
+    expect([n(g2, 'unread'), n(g2, 'items'), g2.summary['verdict']]).toEqual([1, 0, 'unread']);
+  });
+
+  it.skipIf(process.getuid?.() === 0)('unread: a run directory that cannot be listed is unread before any class, so a holed run is never retired and its rows are kept; an unlistable subagents/workflows base counts one unread', () => {
+    plantRecord([wfRow()]);
+    mkRun(RUN, { summary: { status: 'completed' }, journal: [{ type: 'started', key: key(1), agentId: 'a1' }, { type: 'failed', key: key(1), agentId: 'a1' }], agents: { a1: { lines: jl([RATE(1790000000)]) } } });
+    const runDir = path.join(side(), 'subagents', 'workflows', RUN);
+    expect(classes(run())).toEqual([`workflow:${RUN}=holed`]);
+    fs.chmodSync(runDir, 0o300);
+    try {
+      const g = run();
+      expect([n(g, 'unread'), n(g, 'items'), n(g, 'retired'), g.summary['verdict']]).toEqual([1, 0, 0, 'unread']);
+      expect(g.rows).toHaveLength(1);
+    } finally { fs.chmodSync(runDir, 0o700); }
+    fs.rmSync(path.join(reg, `${SID}.deleg`));
+    const base = path.join(side(), 'subagents', 'workflows');
+    fs.chmodSync(base, 0o300);
+    try {
+      const g = run();
+      expect([n(g, 'unread'), g.summary['verdict']]).toEqual([1, 'unread']);
+    } finally { fs.chmodSync(base, 0o700); }
+  });
+
+  it('a deeply nested JSON line (a record line, a journal line, a summary) is an invalid line or an unparseable one, never a traceback', () => {
+    const deep = '['.repeat(200_000);
+    fs.writeFileSync(path.join(reg, `${SID}.deleg`), `${deep}\n${JSON.stringify(wfRow())}\n`);
+    mkRun(RUN, { journal: [deep, { type: 'started', key: key(1), agentId: 'a1' }], summary: deep });
+    const g = run();
+    expect(g.rc, g.err).toBe(0);
+    expect(g.err).toBe('');
+    expect([n(g, 'drop-read'), n(g, 'in-flight')]).toEqual([1, 1]);
+  });
+
   it('none: an empty record and no recent sidecar run', () => {
     fs.writeFileSync(path.join(reg, `${SID}.deleg`), '');
     const g = run();

@@ -130,10 +130,14 @@ def read_bytes(p, cap=None, tail=None, start=None):
 
 
 def listdir(p):
+    """The sorted names in a directory: [] when it is absent (FileNotFoundError, NotADirectoryError), None when it cannot be
+    listed for any other reason. The two are never folded: an absent directory is no evidence, an unlistable one is unread."""
     try:
         return sorted(os.listdir(p))
-    except OSError:
+    except (FileNotFoundError, NotADirectoryError):
         return []
+    except OSError:
+        return None
 
 
 # ---------------------------------------------------------------- arguments
@@ -217,7 +221,7 @@ elif parts and parts[-1] == b'':
 for i, raw in enumerate(parts):
     try:
         o = json.loads(raw.decode('utf-8'), parse_constant=no_const)
-    except ValueError:
+    except (ValueError, RecursionError):      # a line nested past the recursion limit is an invalid line, never a crash
         o = None
     if not valid_row(o):
         n_read += 1
@@ -282,13 +286,19 @@ for it in ag.values():
 # ---------------------------------------------------------------- sidecars
 PROJECTS = os.path.join(CFG, 'projects')
 sidecars = []
-for pdir in listdir(PROJECTS):
+n_lost = 0         # directories that could not be measured at all: each counts one unread, so the verdict is never none
+_pd = listdir(PROJECTS)
+if _pd is None:
+    n_lost += 1
+for pdir in _pd or []:
     d = os.path.join(PROJECTS, pdir, UUID)
     try:
         if stat.S_ISDIR(os.lstat(d).st_mode):
             sidecars.append(d)
-    except OSError:
+    except (FileNotFoundError, NotADirectoryError):
         pass
+    except OSError:
+        n_lost += 1
 
 
 def first_of(rel):
@@ -329,10 +339,13 @@ def run_of(r):
         x.sbad = (s == BAD)
         if s == OK:
             x.summary, x.sst = sp, st
+    x.nolist = False   # the run directory exists and could not be listed: its items are unread
     x.agents = {}      # agent id -> (jsonl path, size, mtime_ns) for the run directory's agent-*.jsonl
     x.metas = {}       # agent id -> meta mtime_ns
     if x.dir:
-        for name in listdir(x.dir):
+        names = listdir(x.dir)
+        x.nolist = names is None
+        for name in names or []:
             m = re.fullmatch(r'agent-(.+)\.(jsonl|meta\.json)', name)
             if not m or not ID_RE.match(m.group(1)):
                 continue
@@ -349,16 +362,19 @@ for r in list(wf):
 # Sidecar-only runs: a run directory whose journal changed within <recent-s> and that no row names.
 for d in sidecars:
     base = os.path.join(d, 'subagents', 'workflows')
-    for r in listdir(base):
+    names = listdir(base)
+    if names is None:
+        n_lost += 1
+    for r in names or []:
         if r in wf or not ID_RE.match(r):
             continue
         j = os.path.join(base, r, 'journal.jsonl')
         s, st = probe(j)
-        if s == OK and st.st_mtime >= NOW - RECENT_S:
-            x = run_of(r)
-            if x.journal == j and r not in wf:
-                it = Item(K_WORKFLOW, r, 'sidecar')
-                wf[r] = it
+        if s != ABSENT and st is None:
+            n_lost += 1                      # a path that could not even be lstat'ed: counted, no run to name
+        elif s != ABSENT and st.st_mtime >= NOW - RECENT_S:
+            run_of(r)                        # a journal that is not a regular file makes an unread item, never a skip
+            wf[r] = Item(K_WORKFLOW, r, 'sidecar')
 for it in ag.values():
     it.path, it.st = first_of('subagents/agent-%s.jsonl' % it.key)
 
@@ -428,7 +444,7 @@ def script_ok(s):
 def parse_line(text):
     try:
         o = json.loads(text, parse_constant=no_const)
-    except ValueError:
+    except (ValueError, RecursionError):
         t = re.search(r'"type"\s*:\s*"(started|result|failed)"', text)
         k = re.search(r'"key"\s*:\s*"(v[0-9]+:[0-9a-f]{64})"', text)
         a = re.search(r'"agentId"\s*:\s*"([^"\\]*)"', text)
@@ -479,7 +495,7 @@ def want(path):
 for it in wf.values():
     x = runs[it.key]
     it.run = x
-    if x.journal in (None, BAD) or x.sbad:
+    if x.journal in (None, BAD) or x.sbad or x.nolist:
         it.unread = True
         continue
     raw = read_bytes(x.journal)
@@ -495,7 +511,7 @@ for it in wf.values():
             continue
         try:
             so = json.loads(sraw.decode('utf-8'), parse_constant=no_const)
-        except ValueError:
+        except (ValueError, RecursionError):
             so = None
         st = so.get('status') if isinstance(so, dict) else None
         it.status = st if isinstance(st, str) else None
@@ -547,7 +563,7 @@ if need:
             ends = [None] * len(wins)
             for i, v in zip(ok_idx, out):
                 ends[i] = v
-    except (OSError, ValueError):
+    except (OSError, ValueError, RecursionError):
         ends = None
 
 
@@ -639,7 +655,7 @@ for it in wf.values():
     it.script = good or '-'
 for it in wf.values():
     if it.src == 'sidecar' and it.cls is not None:
-        cands = [n for n in listdir(os.path.join(it.run.sidecar, 'workflows', 'scripts')) if n.endswith('-%s.js' % it.key)] if it.run.sidecar else []
+        cands = [n for n in (listdir(os.path.join(it.run.sidecar, 'workflows', 'scripts')) or []) if n.endswith('-%s.js' % it.key)] if it.run.sidecar else []
         rooted = None
         if len(cands) == 1:
             rooted = script_ok(os.path.join(it.run.sidecar, 'workflows', 'scripts', cands[0]))
@@ -662,9 +678,10 @@ for it in unread_items:
     newest = max((row_s(o) for i, o in it.rows), default=0)
     if it.rows and newest < NOW - ABANDON_S:
         n_expired += 1
-    elif it.rows:
-        n_unread += 1
+    else:
+        n_unread += 1       # a sidecar-only item has no rows to keep or expire; it leaves when its journal ages past recent-s
         keep_idx.update(i for i, o in it.rows)
+n_unread += n_lost
 for it in retired_items:
     n_retired += len(it.rows)
     if it.attempts >= 1:
