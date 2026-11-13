@@ -244,9 +244,10 @@ None yet. Decisions this plan takes, by slug:
 - **card-changed-refusal** — a page request for a superseded snapshot is refused `card-changed` (409), a new word.
 - **overlord-renderer-refuses** — the `overlord` renderer renders one line until W1, so the column is total.
 - **history-line-without-a-node** — no history read names a session's newest node today, so the line names the verb only.
-  Recorded as a spec gap without spec text (C52 assumes such a read); the coordinator has asked the history
-  programme's coordinator, by peer request, for a "newest node of a family" read, and the line names the node once
-  it exists.
+  Recorded as a spec gap without spec text (C52 assumes such a read). The history programme's coordinator answered
+  the peer request: not taken now (that programme is at its close), listed as a candidate follow-up under this slug.
+  `ccrc history tree --json` can find the newest node only by paging to the last page, so the line keeps naming the
+  verb until a one-answer read exists.
 - **card-page-chars** — pages of 12,000 characters, under the size at which a tool result is cut (measure the build's
   limit in Task 5 and record it).
 

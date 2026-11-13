@@ -196,7 +196,8 @@ mint, as today).
     Task 3 turns the same case into a start with the real mark;
   - a delivery `delivered` and unacked when `draining` begins is not delivered again while the gate holds, and is
     replayed once after `probing`;
-  - `renew` refused (3): back to `active` with a hold-off, no retry inside it;
+  - `renew` refused (3): back to `active` with a hold-off for a proven generation (`degraded` for one never proven), no
+    retry inside it;
   - `renew` unreachable then a start reported: no second `renew`;
   - wake-failed until the clearing deadline: `degraded`, one item;
   - no `hibernate-fresh`: nothing sent, `capability-missing` recorded;
@@ -214,7 +215,7 @@ mint, as today).
 
 Invariants added: **G7** at most one fresh conversation per renewal (count the fake port's successful `renew`s per
 `(identity, n)`); **G8** every renewal ends within `RENEWAL_BUDGET_S` from `checkpointed`, or in `degraded`, or back in
-`active` with a hold-off; **G9** deliveries to a renewing session are held and none is lost (each is delivered once
+`active` with a hold-off (a proven generation only; an unproven one ends in `degraded`); **G9** deliveries to a renewing session are held and none is lost (each is delivered once
 after `probing`).
 
 - [ ] **Step 1:** Add the faults and G7 to G9. **Step 2: Run** with the CI seeds. Green.

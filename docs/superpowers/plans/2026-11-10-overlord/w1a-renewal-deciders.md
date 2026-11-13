@@ -73,8 +73,9 @@ timer), Table 11.5b, §11.7 (Table 11.7b; monotonic by construction).
 2. A stale or unmeasured reading never makes a renewal due; `renewalDue` names it as blind instead.
 3. Observed time never advances across a gap (a new process, a mono reading that went backwards).
 4. `generationStep` never answers `active` from `carded` or from `probing` without a read card and a passed round, and a
-   failure before the receipt's first half returns the generation to `active` with a hold-off, whatever state the
-   renewal began from (§3.3.11; the model's `FAILED_RENEWAL_RETURNS='active'`).
+   failure before the receipt's first half returns the generation to `active` with a hold-off only if it was proven
+   (it read its card and passed its probes), and to `degraded` otherwise, because a generation never becomes `active`
+   without both (§3.3.11; the coordinator's ruling on ask 370; the model changes to match).
 5. A soft renewal can start in W1a: an input a role does not have is `not-applicable`, never `unmeasured`, and the
    break is a disjunction that fires on any measured disjunct.
 
@@ -323,7 +324,9 @@ export type GenEvent =
   | { readonly kind: 'probes'; readonly passed: boolean }
   | { readonly kind: 'deadline' }                               // the state's stored deadline passed
   | { readonly kind: 'renew-now' };
+/** `proven`: this generation read its card and passed a probe round (set on `probes` passed, never cleared). */
 export interface GenView { readonly state: GenerationState; readonly from: 'active' | 'degraded'; readonly tries: number;
+                           readonly proven: boolean;
                            readonly cls: TriggerClass | null; readonly renudged: boolean; readonly probeRounds: number }
 export type GenAction = 'hold-deliveries' | 'release-deliveries' | 'assemble-checkpoint' | 'ask-handover' | 'renew'
   | 'renudge-card' | 'start-probes' | 'raise-item' | 'set-hold-off' | 'mint-next' | 'end-this';
@@ -332,26 +335,30 @@ export function generationStep(g: GenView, e: GenEvent): { readonly next: GenVie
 
 Table 3.3.11a's rules, as the machine: `due` → `draining` (hard skips nothing here; it skips `checkpointed` later);
 `drained` → `checkpointed`, or `clearing` on a hard trigger; `handover` or `deadline` in `checkpointed` → `clearing`;
-`deadline` in `draining` → `active` with `set-hold-off`; `host-failed` before the first half → `active` with
-`set-hold-off`, also when the renewal began in `degraded` (§3.3.11: "A failure before the first half returns the
-generation to active, with a hold-off"); after it, retry while the deadline stands, then `degraded` with `raise-item`; `started` on any
+`deadline` in `draining` and `host-failed` before the first half → `active` with `set-hold-off` when the generation
+is `proven`, else `degraded` with `set-hold-off` (§3.3.11: "A failure before the first half returns the generation to
+active, with a hold-off", read with "a generation never becomes active without having read its card and passed its
+probes"; ask 370); after it, retry while the deadline stands, then `degraded` with `raise-item`; `started` on any
 generation → this one `ended` (`end-this`) and the next minted at `carded` (`mint-next`); `card-read` with a match →
-`probing` (`start-probes`); `deadline` in `carded` → one `renudge-card`, then `degraded`; `probes` passed → `active`;
+`probing` (`start-probes`); `deadline` in `carded` → one `renudge-card`, then `degraded`; `probes` passed → `active`
+and `proven`;
 failed once → re-read and probe again; twice → `degraded` with `raise-item`; `renew-now` in `degraded` or `active` →
 `draining`. Any event a state does not name is ignored (the same view, no action).
 
 - [ ] **Step 1: Failing tests.** Exhaustive over every state × every event × `from` × `cls` × the counters' edge values,
   against a table written out in the test (the spec's words cited in each row's title); among them, a renewal that
-  began in `degraded` and failed before the first half lands in `active` with `set-hold-off`. Properties (seeded, 10,000
-  random event sequences from `active`): never `active` from `carded` or `probing` without a matching `card-read` and a
-  passed round; a sequence with no `started` mints nothing; at most one `renew` per generation per try; `ended` is
+  began in `degraded` with the generation proven and failed before the first half lands in `active` with
+  `set-hold-off`, and the same unproven lands in `degraded`. Properties (seeded, 10,000 random event sequences from
+  `active`): never `active` from `carded` or `probing` without a matching `card-read` and a passed round; never `active`
+  at all while `proven` is false (the generation-day simulation's seed 17 is a named case); a sequence with no `started` mints nothing; at most one `renew` per generation per try; `ended` is
   terminal.
 - [ ] **Step 2: Run.** Red. **Step 3: Implement** as a `Record<GenerationState, (g, e) => step>`, so a new state
   without a handler is a compile error. **Step 4: Run.** Green. Register the floor.
 - [ ] **Step 5: The model agrees.** Read `server/test/model/overlord/model.py`'s generation transitions (the
   `genmachine` scenario's checks named above). Write a test that drives `generationStep` through each of those four
   checks' scenarios as event sequences and asserts the model's expected state (`CHECKPOINTED_TIMEOUT` → `clearing`
-  without the note, `FAILED_RENEWAL_RETURNS` → `active`, `START_WHILE_DOWN`, `CARD_DOOR_SKIPS`). Where the model's
+  without the note, `FAILED_RENEWAL_RETURNS` → `active` if proven and `degraded` otherwise, the model changed to match
+  per ask 370, `START_WHILE_DOWN`, `CARD_DOOR_SKIPS`). Where the model's
   anchor sentence no longer matches the spec (the results note's Proposal 9), record it in the departures note.
 - [ ] **Step 6: Commit.** `feat(continuity): generationStep, Table 3.3.11a as a pure machine, checked against the model`
 
@@ -398,8 +405,9 @@ None yet. Decisions this plan takes, by slug:
 - **on-schedule-capped-at-30-minutes** — in `on-schedule` mode the preconditions (the hold, readers, the break) delay
   a soft trigger at most 30 minutes, as Appendix B reads; least age, the hold-off, the budget and the Overlord's
   renewal still apply.
-- **failed-renewal-returns-active** — a failure before the receipt's first half returns the generation to `active`
-  with a hold-off, also when the renewal began in `degraded` (§3.3.11, and the model's default).
+- **failed-renewal-returns-to-active-only-if-proven** — a failure before the receipt's first half returns the
+  generation to `active` with a hold-off only if it read its card and passed its probes, and to `degraded` otherwise
+  (§3.3.11's "never active without" rule; the coordinator's ruling on ask 370; the model changes to match).
 - **generation-means-one-life** — the index's pick, followed here: "generation" is one life from start to start
   (`GenerationState`, `continuity_generations`).
 
