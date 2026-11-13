@@ -566,7 +566,7 @@ export const EXEMPT: ReadonlyMap<string, string> = new Map([
   // The continuity routes (Overlord §3.3.11, W1a): the hook reports every SessionStart of a session that is not a child.
   ['POST /api/sessions/:id/start',
     "the hook's report: box token and attribution — a session's hook reports its own SessionStart (source, " +
-    'conversation uuid, model, registry generation), box-token gated in its own onRequest whatever the flag, no cookie ' +
+    "conversation uuid, model, the row's incarnation), box-token gated in its own onRequest whatever the flag, no cookie " +
     "accepted, the path's session the sender, attribution checked against the registry, recorded once per report id"],
 
   ['POST /api/token/claim',

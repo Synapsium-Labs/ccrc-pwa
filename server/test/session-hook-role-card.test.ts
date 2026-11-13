@@ -188,8 +188,8 @@ describe('the role card (D-5301): a row with no `.child` and no hold is its proj
 
   it('writes no marker: beside the per-event state every SessionStart writes, the registry is unchanged', () => {
     // `.hookstate.json` and `.turn.json` are the arm's existing per-event state (D-306, the turn marker); a
-    // `.start-pending.<reportId>` file is the start report's spool (Overlord W1a), left by a start no server answered.
-    const mine = (n: string): boolean => n !== `${id}.hookstate.json` && n !== `${id}.turn.json` && !n.startsWith(`${id}.start-pending.`);
+    // `.startpending` field is the start report's spool (Overlord W1a), left by a start no server answered.
+    const mine = (n: string): boolean => n !== `${id}.hookstate.json` && n !== `${id}.turn.json` && n !== `${id}.startpending`;
     const before = fs.readdirSync(reg()).filter(mine).sort();
     run(startup());
     run(withSource('resume'));

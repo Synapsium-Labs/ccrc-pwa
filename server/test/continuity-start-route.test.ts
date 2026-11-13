@@ -37,7 +37,7 @@ const open = async (io?: FleetIO): Promise<FastifyInstance> => {
 };
 
 const body = (over: Record<string, unknown> = {}): Record<string, unknown> => ({
-  fromId: ID, fromUuid: UUID, reportId: 'r-0001-abcd', source: 'clear', model: 'claude-opus-5-5', regGen: '0189abcd-1234-5678-9abc-0123456789ab',
+  fromId: ID, fromUuid: UUID, reportId: 'r-0001-abcd', source: 'clear', model: 'claude-opus-5-5', rowIncarnation: '0189abcd-1234-5678-9abc-0123456789ab',
   reportedAt: FAKE_T0 - 50, ...over,
 });
 
@@ -55,21 +55,21 @@ describe('POST /api/sessions/:id/start', () => {
     const first = await post(app, body());
     expect([first.statusCode, first.json()]).toEqual([202, { ok: true, id: 1, fresh: true }]);
     expect(rows()).toEqual([{ id: 1, sessionId: ID, reportId: 'r-0001-abcd', uuid: UUID, source: 'clear',
-      model: 'claude-opus-5-5', regGen: '0189abcd-1234-5678-9abc-0123456789ab', reportedAt: FAKE_T0 - 50, receivedAt: FAKE_T0 }]);
+      model: 'claude-opus-5-5', rowIncarnation: '0189abcd-1234-5678-9abc-0123456789ab', reportedAt: FAKE_T0 - 50, receivedAt: FAKE_T0 }]);
     const again = await post(app, body());
     expect([again.statusCode, again.json()]).toEqual([202, { ok: true, id: 1, fresh: false }]);
     expect(rows()).toHaveLength(1);
   });
 
-  it('takes a report with no model and no regGen, and stores both null', async () => {
+  it('takes a report with no model and no rowIncarnation, and stores both null', async () => {
     app = await open();
     const b = body();
     delete b['model'];
-    delete b['regGen'];
+    delete b['rowIncarnation'];
     const res = await post(app, b);
     expect(res.statusCode, res.body).toBe(202);
-    expect(rows()[0]).toMatchObject({ model: null, regGen: null });
-    const nulls = await post(app, body({ reportId: 'r-0002-abcd', model: null, regGen: null }));
+    expect(rows()[0]).toMatchObject({ model: null, rowIncarnation: null });
+    const nulls = await post(app, body({ reportId: 'r-0002-abcd', model: null, rowIncarnation: null }));
     expect(nulls.statusCode, nulls.body).toBe(202);
   });
 
@@ -113,7 +113,7 @@ describe('POST /api/sessions/:id/start', () => {
       { reportId: 'short' }, { reportId: 'has space in it' }, { reportId: 'x'.repeat(65) }, { reportId: 7 },
       { source: 7 }, { source: '' }, { source: 's'.repeat(33) },
       { reportedAt: 1.5 }, { reportedAt: '1' }, { reportedAt: Number.MAX_SAFE_INTEGER + 2 },
-      { model: 7 }, { model: 'm'.repeat(129) }, { regGen: 4 }, { regGen: '0189ABCD-1234-5678-9abc-0123456789ab' }, { regGen: 'not-a-uuid' },
+      { model: 7 }, { model: 'm'.repeat(129) }, { rowIncarnation: 4 }, { rowIncarnation: '0189ABCD-1234-5678-9abc-0123456789ab' }, { rowIncarnation: 'not-a-uuid' },
     ];
     for (const over of bad) {
       const res = await post(app, body(over));
@@ -126,6 +126,12 @@ describe('POST /api/sessions/:id/start', () => {
       expect(res.statusCode, missing).toBe(missing === 'fromId' ? 403 : 400);
     }
     expect(rows()).toEqual([]);
+  });
+
+  it('checks the body before the registry: a malformed report from a stale uuid is 400, not 403', async () => {
+    app = await open();
+    const res = await post(app, body({ fromUuid: '99999999-2222-3333-4444-555555555555', reportId: 'bad' }));
+    expect([res.statusCode, res.json().error]).toEqual([400, 'bad-request']);
   });
 
   it('answers write-failed (503) when the store cannot write', async () => {

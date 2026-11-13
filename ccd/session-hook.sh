@@ -3,7 +3,7 @@
 #
 # Runs on the HOT PATH of every tool call in every fleet session, so the
 # contract is absolute: exit 0 on every path, write atomically or not at
-# all, no network — and on the HOT PATH, no locks and no waiting. THREE declared exceptions, all OFF the hot path:
+# all, no network — and on the HOT PATH, no locks and no waiting. FOUR declared exceptions, all OFF the hot path:
 # the first two in the compaction arms alone, the helper's one hookstate-first, COMPACT_HELPER_TIMEOUT-bounded,
 # locally resolved `timeout`/`gtimeout` deadline; and, since D-2605, the row's
 # permanent stable lock, taken with a bounded `flock -w` of COMPACT_LOCK_WAIT
@@ -11,7 +11,7 @@
 # is waiting on) and never held across a fork the arm does not reap. A miss
 # publishes nothing; there is no unlocked fallback. The THIRD (D4, #757): the roster card, one `_hook_timeout 4` server
 # read (`ccrc-api runs list`) on compact, resume and clear of a non-child session, and on its wake arm (R-5a, D-8201: a server wake prompt after an idle compaction), fail-open
-# (no roster line on any failure), made even when unarmed (shadow). Every OTHER event — every
+# (no roster line on any failure), made even when unarmed (shadow). The FOURTH (Overlord W1a): the start report, one `_hook_timeout 4` send on a non-child SessionStart and a resend pass inside one bound on UserPromptSubmit (`_hook_start_report`), fail-open. Every OTHER event — every
 # PreToolUse, PostToolUse and Stop, which is where the hot path actually is —
 # still takes no lock and waits on nothing. A hook that can slow or break a
 # session is worse than no hook. Consumed read-only by the ccrc server via the agent
@@ -3937,48 +3937,56 @@ _hook_launch_record_append() {   # $lrc_line (a row, or a drop row, one TAB, the
 }
 [[ -n "$lrc_line" && -z "$tmsub" ]] && { _hook_launch_record_append || true; }
 # <<< launch-record
-# THE START REPORT (Overlord W1a, spec §3.3.11, H12): every SessionStart of a main-thread session that is not a child
-# (compact included, so it runs before the exit below) is reported to `POST /api/sessions/:id/start` through the closed
-# client, bounded by `_hook_timeout 4`. The body is SPOOLED FIRST, as `$REG/<id>.start-pending.<reportId>` (its one
-# writer is this function; it holds no authority and is never read as truth), and removed only on a 202, so a refused,
-# timed-out or killed send is resent once at each later UserPromptSubmit, Stop or SessionStart of the session; never on a
-# tool event, the hot path. A resend stops at the first send that got no answer, so one event waits at most one bound.
-# At most START_PENDING_MAX files are kept, the oldest dropped first and each drop counted in
-# `$REG/<id>.start-pending.dropped`. The report id leads with the hook's clock, so the glob's order is the age order.
-# Prints nothing and fails open: no path through it changes this hook's exit code or stdout.
-START_PENDING_MAX=20
-_hook_start_send() {   # <pending file> -> 0 and the file removed on a 202; 1 answered otherwise; 2 no answer
+# THE START REPORT (Overlord W1a, spec §3.3.11, H12; the header's FOURTH exception): every SessionStart of a main-thread
+# session that is not a child, compact included (so it runs before the exit below) and `fork` excluded (a fork shares this
+# pane's id under a new uuid, so its report could never be attributed), is reported to `POST /api/sessions/:id/start`
+# through the closed client, bounded by `_hook_timeout 4`. A report refused `stale-uuid` (the `/clear` race: the registry
+# has not followed the new uuid yet), not answered or answered 5xx is kept in ONE dot-free field, `$REG/<id>.startpending`,
+# so `_reg_purge` and `_ws_slug_residue` take it with the row: line 1 is `<not-before ms>\t<dropped count>`, each later
+# line `<tries>\t<report JSON>`, oldest first. Any other refusal is dropped and counted. Only SessionStart and
+# UserPromptSubmit resend, never a tool event or Stop, and only once START_RESEND_BACKOFF_MS has passed since the last
+# pass: each kept report is sent once inside one time budget (the bound), a send with no answer ends the pass, a report
+# refused START_RESEND_TRIES times is dropped, and a start whose pass found the server silent is kept without a second
+# send, so an event waits at most about one bound here. At most START_PENDING_MAX reports are kept, the oldest dropped
+# first. Written only for a row ccd created (its `generation` stands); it holds no authority, is never read as truth,
+# prints nothing, and no path through it changes this hook's exit code or stdout.
+START_PENDING_MAX=20 START_RESEND_TRIES=5 START_RESEND_BACKOFF_MS=30000
+_hook_start_send() {   # <report JSON> -> 0 taken (202); 1 stale-uuid; 2 no answer or not a 4xx; 3 refused for good
   local out
-  out=$(_hook_timeout 4 "$HOME/.local/bin/ccrc-api" sessions start "$id" --json "$1" 2>&1 >/dev/null) || return 2
-  [[ "$out" == *'http 202'* ]] || { [[ "$out" == *'http '[0-9]* ]] && return 1; return 2; }
-  rm -f -- "$1" 2>/dev/null; return 0
+  out=$(printf '%s\n' "$1" | CCRC_API_STATUS=line _hook_timeout 4 "$HOME/.local/bin/ccrc-api" sessions start "$id" --json - 2>&1) || return 2
+  case "$out" in *'http 202'*) return 0 ;; *'"stale-uuid"'*) return 1 ;; *'http 4'[0-9][0-9]*) return 3 ;; *) return 2 ;; esac
 }
 _hook_start_report() {
-  local p rid body n=0 old=()
-  case "$event" in UserPromptSubmit|Stop|SessionStart) ;; *) return 0 ;; esac
-  [[ -z "$paid" && -d "$REG" ]] || return 0
+  local f="$REG/$id.startpending" now after=0 drop=0 t j rc pass=1 dead="" body="" inc="" s0=$SECONDS e kept=() out=()
+  case "$event" in UserPromptSubmit|SessionStart) ;; *) return 0 ;; esac
+  [[ -z "$paid" && "$id" =~ ^[A-Za-z0-9_-]+$ && -f "$REG/$id.generation" && ! -L "$f" ]] || return 0
   { [ -e "$REG/$id.child" ] || [ -L "$REG/$id.child" ]; } && return 0
-  for p in "$REG/$id".start-pending.[0-9]*; do
-    [[ -f "$p" && ! -L "$p" ]] || continue
-    _hook_start_send "$p"; (( $? == 2 )) && break
+  now=$(_hook_epoch_ms)
+  [[ -f "$f" ]] && { IFS=$'\t' read -r after drop; while IFS=$'\t' read -r t j; do kept+=("$t"$'\t'"$j"); done; } < "$f" 2>/dev/null
+  [[ "$after" =~ ^[0-9]+$ ]] || after=0; [[ "$drop" =~ ^[0-9]+$ ]] || drop=0
+  (( now < after )) && pass=0
+  for e in ${kept[@]+"${kept[@]}"}; do
+    t="${e%%$'\t'*}" j="${e#*$'\t'}"; [[ "$t" =~ ^[0-9]+$ ]] || t=0
+    (( pass && SECONDS - s0 >= 4 )) && pass=0 dead=1
+    rc=4; (( pass )) && { _hook_start_send "$j"; rc=$?; }
+    case "$rc" in 0) ;; 1) t=$(( t + 1 )); (( t >= START_RESEND_TRIES )) && drop=$(( drop + 1 )) || out+=("$t"$'\t'"$j") ;;
+      2) pass=0 dead=1; out+=("$t"$'\t'"$j") ;; 3) drop=$(( drop + 1 )) ;; *) out+=("$t"$'\t'"$j") ;; esac
   done
-  [[ "$event" == SessionStart ]] || return 0
-  rid="$(_hook_epoch_ms)-$$-$RANDOM"
-  body=$(jq -c --arg id "$id" --arg rid "$rid" --arg gen "${CCRC_SESSION_GENERATION:-}" --argjson at "${rid%%-*}" \
-    '{fromId: $id, fromUuid: (.session_id // "" | tostring), reportId: $rid, source: (.source // "other" | tostring | .[0:32]),
-      model: (.model | if type == "string" then .[0:128] elif type == "object" and (.id | type) == "string" then .id[0:128] else null end),
-      regGen: (if ($gen | test("^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")) then $gen else null end), reportedAt: $at}' \
-    <<<"$payload" 2>/dev/null) || return 0
-  for p in "$REG/$id".start-pending.[0-9]*; do [[ -f "$p" ]] && old+=("$p"); done
-  while (( ${#old[@]} - n >= START_PENDING_MAX )); do
-    rm -f -- "${old[$n]}" 2>/dev/null; n=$(( n + 1 ))
-  done
-  if (( n > 0 )); then
-    p=0; { read -r p < "$REG/$id.start-pending.dropped"; } 2>/dev/null; [[ "$p" =~ ^[0-9]+$ ]] || p=0
-    printf '%s\n' "$(( p + n ))" > "$REG/$id.start-pending.dropped" 2>/dev/null
+  (( ${#kept[@]} > 0 && now >= after )) && after=$(( now + START_RESEND_BACKOFF_MS ))
+  if [[ "$event" == SessionStart && "$src" != fork ]]; then
+    [[ "${CCRC_SESSION_GENERATION:-}" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]] && inc="$CCRC_SESSION_GENERATION"
+    body=$(jq -c --arg id "$id" --arg rid "$now-$$-$RANDOM" --arg inc "$inc" --argjson at "$now" \
+      '{fromId: $id, fromUuid: (.session_id // "" | tostring), reportId: $rid,
+        source: (.source // "" | tostring | if . == "" then "other" else .[0:32] end),
+        model: (.model | if type == "string" then .[0:128] elif type == "object" and (.id | type) == "string" then .id[0:128] else null end),
+        rowIncarnation: (if $inc == "" then null else $inc end), reportedAt: $at}' <<<"$payload" 2>/dev/null) || body=""
+    rc=2; [[ -n "$body" && -z "$dead" ]] && { _hook_start_send "$body"; rc=$?; }
+    [[ -z "$body" ]] || case "$rc" in 0) ;; 1|2) out+=("0"$'\t'"$body") ;; *) drop=$(( drop + 1 )) ;; esac
   fi
-  { ( umask 077; printf '%s\n' "$body" > "$REG/$id.start-pending.$rid" ); } 2>/dev/null || return 0
-  _hook_start_send "$REG/$id.start-pending.$rid"
+  while (( ${#out[@]} > START_PENDING_MAX )); do out=("${out[@]:1}"); drop=$(( drop + 1 )); done
+  if (( ${#out[@]} == 0 && drop == 0 )); then rm -f -- "$f" 2>/dev/null; return 0; fi
+  { { printf '%s\t%s\n' "$after" "$drop"; if (( ${#out[@]} )); then printf '%s\n' "${out[@]}"; fi; } > "$f$$" && mv -f -- "$f$$" "$f"; } 2>/dev/null \
+    || rm -f -- "$f$$" 2>/dev/null
   return 0
 }
 _hook_start_report || true

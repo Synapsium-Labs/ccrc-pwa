@@ -7073,7 +7073,7 @@ describe('the compaction card — mechanism absence, the serve and settle arms (
     // stage, a claim or a marker the arms should never have created shows up
     // as a diff instead of slipping past an enumeration nobody updated. The start report's spool (Overlord W1a) is set
     // aside: a compact start is reported whatever the card's mechanism, and no server answers in this fixture.
-    const spool = (n: string): boolean => !/\.start-pending\./.test(n);
+    const spool = (n: string): boolean => !n.endsWith('.startpending');
     expect(reg().filter(spool), 'no stage, claim, marker or journal appears').toEqual(before.filter(spool));
     expect(fs.existsSync(journalFile()), 'and no journal line is committed').toBe(false);
     expect(fs.readFileSync(setFile()), 'the canonical set is byte-identical').toEqual(setBytes);

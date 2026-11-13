@@ -15,8 +15,8 @@ export interface StartInsert {
   uuid: string;
   source: string;
   model: string | null;
-  /** The registry row's generation (`CCRC_SESSION_GENERATION`, a lowercase UUID), or null. */
-  regGen: string | null;
+  /** The registry row's incarnation (`CCRC_SESSION_GENERATION`, a lowercase UUID), or null. */
+  rowIncarnation: string | null;
   reportedAt: number;
   receivedAt: number;
 }
@@ -29,7 +29,7 @@ export interface StartRow {
   uuid: string;
   source: StartSource;
   model: string | null;
-  regGen: string | null;
+  rowIncarnation: string | null;
   reportedAt: number;
   receivedAt: number;
 }
@@ -45,9 +45,9 @@ const sourceOf = (w: string): StartSource => ((START_SOURCES as readonly string[
 export function insertStart(db: DatabaseSync, row: StartInsert): StartInsertResult {
   try {
     const res = db.prepare(
-      'INSERT INTO continuity_starts (sessionId, reportId, uuid, source, model, regGen, reportedAt, receivedAt) '
+      'INSERT INTO continuity_starts (sessionId, reportId, uuid, source, model, rowIncarnation, reportedAt, receivedAt) '
       + 'VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (sessionId, reportId) DO NOTHING',
-    ).run(row.sessionId, row.reportId, row.uuid, sourceOf(row.source), row.model, row.regGen, row.reportedAt, row.receivedAt);
+    ).run(row.sessionId, row.reportId, row.uuid, sourceOf(row.source), row.model, row.rowIncarnation, row.reportedAt, row.receivedAt);
     if (Number(res.changes) === 1) return { ok: true, id: Number(res.lastInsertRowid), fresh: true };
     const held = db.prepare('SELECT id FROM continuity_starts WHERE sessionId = ? AND reportId = ?')
       .get(row.sessionId, row.reportId) as { id: number } | undefined;
@@ -61,7 +61,7 @@ export function insertStart(db: DatabaseSync, row: StartInsert): StartInsertResu
 export function startsSince(db: DatabaseSync, sinceId: number): StartsRead {
   try {
     const rows = db.prepare(
-      'SELECT id, sessionId, reportId, uuid, source, model, regGen, reportedAt, receivedAt FROM continuity_starts WHERE id > ? ORDER BY id',
+      'SELECT id, sessionId, reportId, uuid, source, model, rowIncarnation, reportedAt, receivedAt FROM continuity_starts WHERE id > ? ORDER BY id',
     ).all(sinceId) as unknown as StartRow[];
     return { ok: true, rows: rows.map((r) => ({ ...r })) };
   } catch (e) {
