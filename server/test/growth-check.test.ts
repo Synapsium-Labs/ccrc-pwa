@@ -982,13 +982,13 @@ describe('growthCheck: every large file is measured, a new file waives only in i
     file: 'ccd/ccd', maxDelta: 60, d: 'D-6223', reason: 'a fixture', added: '2026-10-01', createdAt: '2026-10-02', ...over,
   });
 
-  it('a waiver carries a required createdAt day, never in the future; a merge-base\'s waiver may predate it', () => {
+  it('a waiver may carry a createdAt day, never in the future; one without it still parses (its age is unknown)', () => {
     const at = (text: string) => parseWaiverFiles([{ name: 'D-6223-x.json', text }], GROWTH_FILES, today);
     expect(at(waiverText()).problems).toEqual([]);
     expect(at(waiverText()).entries[0]!.createdAt).toBe('2026-10-02');
     const noCreated = JSON.parse(waiverText()) as Record<string, unknown>;
     delete noCreated['createdAt'];
-    expect(at(JSON.stringify(noCreated)).problems.join()).toContain('missing `createdAt`');
+    expect(at(JSON.stringify(noCreated)).problems).toEqual([]);
     expect(at(waiverText({ createdAt: '2026-02-30' })).problems.join()).toContain("createdAt '2026-02-30' is not a YYYY-MM-DD day");
     expect(at(waiverText({ createdAt: '2026-11-14' })).problems.join()).toContain("createdAt '2026-11-14' is in the future");
     expect(at(waiverText({ createdAt: 20261002 })).problems.join()).toContain('createdAt must be a string');
@@ -1023,11 +1023,11 @@ describe('growthCheck: every large file is measured, a new file waives only in i
       const got = waiversInDiff(GROWTH_FILES, base, head, dir, today);
       expect(got.problems).toEqual([]);
       expect(got.added.map((w) => w.d)).toEqual(['D-6224']);
-      // At HEAD the field is required: a new waiver without it is a problem, so nothing is added.
+      // At HEAD the field is optional too: an open PR's waiver written before D-8563 still counts (its age unknown).
       put(`${GROWTH_WAIVERS_DIR}/D-6225-ccd-ccd.json`, JSON.stringify({ ...old, d: 'D-6225' }));
-      const bad = waiversInDiff(GROWTH_FILES, base, commit('a waiver with no createdAt'), dir, today);
-      expect(bad.added).toEqual([]);
-      expect(bad.problems.join()).toContain('head: D-6225-ccd-ccd.json: missing `createdAt`');
+      const undated = waiversInDiff(GROWTH_FILES, base, commit('a waiver with no createdAt'), dir, today);
+      expect(undated.problems).toEqual([]);
+      expect(undated.added.map((w) => w.d)).toEqual(['D-6224', 'D-6225']);
     } finally {
       rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
@@ -1044,8 +1044,8 @@ describe('growthCheck: every large file is measured, a new file waives only in i
       { name: 'D-6-no-date.json', text: JSON.stringify({ d: 'D-6' }) },
     ];
     const aged = agedWaivers(items, today);
-    expect(aged).toEqual([{ name: 'D-1-old.json', days: 73 }, { name: 'D-4-older-by-name.json', days: 31 }]);
-    expect(agedLine(aged)).toBe('D-1-old.json (73 days), D-4-older-by-name.json (31 days)');
+    expect(aged).toEqual([{ name: 'D-1-old.json', days: 73 }, { name: 'D-4-older-by-name.json', days: 31 }, { name: 'D-6-no-date.json', days: null }]);
+    expect(agedLine(aged)).toBe('D-1-old.json (73 days), D-4-older-by-name.json (31 days), D-6-no-date.json (age unknown)');
     expect(agedLine([])).toBe('(none)');
     const md = growthSummary({ base: 'abcdef1234567', rows: [], over: [], methods: { base: 1, head: 1 }, armed: true, aged });
     expect(md).toContain(`Waivers older than ${WAIVER_AGE_DAYS} days (a report, not a failure): D-1-old.json (73 days)`);

@@ -450,8 +450,9 @@ export interface GrowthWaiver { file: string; maxDelta: number; d: string; reaso
 
 const WAIVER_KEYS: readonly (keyof GrowthWaiver)[] = ['file', 'maxDelta', 'd', 'reason', 'added', 'createdAt'];
 
-/** How a ledger is read: at a merge-base, `createdAt` may be absent (a ledger from before D-8563); at HEAD it is
- *  required. */
+/** How a ledger is read. `createdAt` is never required: a waiver without one (a ledger from before D-8563, or an open
+ *  PR's waiver written before it) parses, and the age report names it as of unknown age. `createdAtOptional` stays for
+ *  callers that pass it. */
 export interface WaiverReadOptions { createdAtOptional?: boolean }
 
 /** Every problem in one waiver object, pushed onto `problems` under `at`; the object when it is one, else null. */
@@ -461,7 +462,7 @@ function checkWaiverEntry(e: unknown, at: string, files: readonly string[], toda
   const o = e as Record<string, unknown>;
   for (const k of Object.keys(o)) if (!(WAIVER_KEYS as readonly string[]).includes(k)) problems.push(`${at}: unknown key \`${k}\``);
   for (const k of WAIVER_KEYS) {
-    if (!(k in o) && !(k === 'createdAt' && opts.createdAtOptional === true)) problems.push(`${at}: missing \`${k}\``);
+    if (!(k in o) && k !== 'createdAt') problems.push(`${at}: missing \`${k}\``);
   }
   if ('createdAt' in o) {
     if (typeof o['createdAt'] !== 'string') problems.push(`${at}: createdAt must be a string`);
@@ -574,12 +575,13 @@ export function waiversInDiff(files: readonly string[], baseSha: string, headSha
 export const WAIVER_AGE_DAYS = 30;
 
 /** One waiver file and its age in whole days since its `createdAt`. */
-export interface AgedWaiver { name: string; days: number }
+export interface AgedWaiver { name: string; days: number | null }
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
-/** The waiver files whose `createdAt` is more than `maxDays` whole days before `today`, oldest first, then by name. A
- *  file that is not JSON or carries no readable `createdAt` is skipped here: the ledger's parse names it. */
+/** The waiver files whose `createdAt` is more than `maxDays` whole days before `today`, oldest first, then by name, and
+ *  after them every waiver with no `createdAt` (age unknown, `days: null`). A file that is not JSON, or whose `createdAt`
+ *  is malformed, is skipped here: the ledger's parse names it. */
 export function agedWaivers(items: readonly { name: string; text: string }[], today: Date = new Date(),
   maxDays: number = WAIVER_AGE_DAYS): AgedWaiver[] {
   const day0 = Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate());
@@ -589,18 +591,21 @@ export function agedWaivers(items: readonly { name: string; text: string }[], to
     try {
       created = (JSON.parse(text) as { createdAt?: unknown } | null)?.createdAt;
     } catch { continue; }
+    if (created === undefined) { out.push({ name, days: null }); continue; }
     if (typeof created !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(created)) continue;
     const t = Date.parse(`${created}T00:00:00Z`);
     if (Number.isNaN(t)) continue;
     const days = Math.floor((day0 - t) / DAY_MS);
     if (days > maxDays) out.push({ name, days });
   }
-  return out.sort((a, b) => b.days - a.days || (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+  const byName = (a: AgedWaiver, b: AgedWaiver): number => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0);
+  const dated = out.filter((a) => a.days !== null).sort((a, b) => (b.days as number) - (a.days as number) || byName(a, b));
+  return [...dated, ...out.filter((a) => a.days === null).sort(byName)];
 }
 
 /** The aged waivers as one line: each name with its age, or `(none)`. */
 export const agedLine = (aged: readonly AgedWaiver[]): string =>
-  (aged.length ? aged.map((a) => `${a.name} (${a.days} days)`).join(', ') : '(none)');
+  (aged.length ? aged.map((a) => `${a.name} (${a.days === null ? 'age unknown' : `${a.days} days`})`).join(', ') : '(none)');
 
 /** The added entry that best covers one over file: the largest `maxDelta` for it. */
 export interface WaiverMatch { file: string; entry: GrowthWaiver; applies: boolean }
