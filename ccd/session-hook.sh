@@ -4076,9 +4076,9 @@ if [[ -n "$gcmd" && "$gcmd" =~ $CCRC_CLAIMS_RE ]]; then cc=$((cc + 1)); fi
 # AN ARM OF ITS OWN, run after `_hook_compact_pre` and `_hook_history_pre`, so
 # none of the card's early returns (its off switch, a scope that does not
 # resolve, its lock miss) can drop the line. It runs LAST so that the
-# compaction piece's coming refusal, `_hook_compact_refuse` (which sets
-# `CS_REFUSED`), is decided before it and makes it write `"phase":"refused"`.
-# Nothing refuses a PreCompact today. One writer (this function),
+# compaction piece's coming refusal arm (_hook_compact_refuse in its plan, not
+# yet in this file), which sets `CS_REFUSED`, is decided before it and makes it
+# write `"phase":"refused"`. Nothing refuses a PreCompact today. One writer (this function),
 # under the row's `.compactions.lock`, so a line and a commit never interleave.
 # Dot-free, so `_reg_purge` and the slug passes take it with the row. BOUNDED
 # BY ROTATION, with no temp file: at PRECOMPACT_KEEP lines it is renamed to
@@ -6400,8 +6400,9 @@ _hook_history_pre() {   # PreCompact: the steer print, then its receipt; silent 
 }
 if [[ "$event" == PreCompact ]]; then _hook_history_pre || true; fi
 # LAST of the PreCompact arms (Overlord W1a, plan review 1890 I1): the
-# compaction piece's coming `_hook_compact_refuse` sets `CS_REFUSED` before it,
-# so this line will then say `"phase":"refused"`. Nothing refuses one today.
+# compaction piece's coming refusal arm (_hook_compact_refuse in its plan) sets
+# `CS_REFUSED` before it, so this line will then say `"phase":"refused"`.
+# Nothing refuses one today.
 if [[ "$event" == PreCompact ]]; then _hook_compact_pre_line || true; fi
 if [[ "$event" == PostCompact ]]; then _hook_compact_post || true; fi
 exit 0
