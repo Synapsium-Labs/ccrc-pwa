@@ -1121,11 +1121,27 @@ describe('the launch record: one appender, one purge, and no reader in the tree 
     expect(body.filter((l) => /(?:>>|>)\s*"\$[a-z]+"/.test(l) && l.includes('printf')).length, 'the appender\'s appends are seen by the scan').toBeGreaterThan(0);
   });
 
-  it('ccd/ccd: the only code line naming it is _reg_purge\'s post-generation rm', () => {
+  it('ccd/ccd: the code lines naming it are _reg_purge\'s post-generation rm and _inflight_write\'s one compaction write (6b-2)', () => {
     const ccd = BASH.find((f) => rel(f) === 'ccd/ccd') ?? '';
-    const named = codeLines(ccd).filter(bashNames);
-    expect(named).toHaveLength(1);
-    expect(named[0]).toContain('rm -f "$REG/$id.joined" "$REG/$id.joinedprev" "$REG/$id.deleg" ||');
+    const all = readFileSync(ccd, 'utf8').split('\n');
+    const open = all.findIndex((l) => l.startsWith('_inflight_write() {'));
+    expect(open, '_inflight_write is defined').toBeGreaterThan(0);
+    const close = all.findIndex((l, i) => i > open && l === '}');
+    const named = all.map((l, i) => ({ l, i })).filter(({ l }) => !isBashComment(l) && bashNames(l));
+    expect(named).toHaveLength(2);
+    expect(named[0]!.l).toContain('rm -f "$REG/$id.joined" "$REG/$id.joinedprev" "$REG/$id.deleg" ||');
+    expect(named[1]!.l.trim()).toContain('_reg_set "$id" deleg "$kept"');
+    expect(named[1]!.i > open && named[1]!.i < close, 'the compaction write is inside _inflight_write').toBe(true);
+  });
+
+  it('the Python record reader is lib/inflight-manifest.py alone: its spelling is allowed there and nowhere else under ccd/ or deploy/', () => {
+    const walk = (d: string): string[] => (existsSync(d) ? readdirSync(d).flatMap((e) => {
+      const p = path.join(d, e);
+      return statSync(p).isDirectory() ? (e === 'node_modules' ? [] : walk(p)) : (/\.py$/.test(p) ? [p] : []);
+    }) : []);
+    const files = [...walk(path.join(ccrcRoot, 'ccd')), ...walk(path.join(ccrcRoot, 'deploy'))];
+    expect(files.length, 'the walk reached the Python files').toBeGreaterThan(3);
+    expect(files.filter((f) => readFileSync(f, 'utf8').split('\n').some((l) => !/^\s*#/.test(l) && QUOTED.test(l))).map(rel)).toEqual(['ccd/lib/inflight-manifest.py']);
   });
 
   it('no other shell file under ccd/ or deploy/ names it', () => {
@@ -1143,5 +1159,60 @@ describe('the launch record: one appender, one purge, and no reader in the tree 
       .filter((f) => existsSync(f));
     expect(files.length, 'the walk reached the trees').toBeGreaterThan(100);
     expect(files.filter((f) => readFileSync(f, 'utf8').split('\n').some((l) => !/^\s*(#|\/\/|\*|\/\*)/.test(l) && QUOTED.test(l))).map(rel)).toEqual([]);
+  });
+});
+
+// SESSION-CONTINUITY 6B-2 (D-8369). `$REG/<id>.inflight`, the restart manifest's file: ONE writer, `_inflight_write` in ccd/ccd, on exactly
+// three code lines (its listed write, its header-only write, and the `rm` that stands when a write fails), and no reader in the tree in 6b.
+// APPENDED for the reason the blocks above state. The patterns match the REGISTRY spellings only, never the bare word: `this.inflight` already
+// stands in four `server/src` lanes. The manifest's own slot, `"$REG/.inflight.lock"`, is not a site and is not matched (R-A).
+describe('the manifest: one writer, and no reader in the tree but the program\'s caller (session-continuity 6b)', () => {
+  const BASH_PATH = /\$\{?REG\}?"?\/[^\s]*?\.inflight(?![A-Za-z0-9_.-])/;
+  const BASH_FIELD = /_reg_set\s+"?\$\{?\w+\}?"?\s+inflight(?![A-Za-z0-9_-])/;
+  const bashNames = (l: string): boolean => BASH_PATH.test(l) || BASH_FIELD.test(l);
+  const QUOTED = /\.inflight(?=["'`])/;
+
+  it('CONTROL: a planted line of each spelling is matched, and the slot and the bare word are not', () => {
+    expect(bashNames('  rm -f -- "$REG/$id.inflight"')).toBe(true);
+    expect(bashNames('f="${REG}/$id.inflight"')).toBe(true);
+    expect(bashNames('  _reg_set "$id" inflight "$hdr"')).toBe(true);
+    expect(QUOTED.test('p = os.path.join(reg, id + ".inflight")')).toBe(true);
+    expect(QUOTED.test("const f = `${id}.inflight`;")).toBe(true);
+    expect(QUOTED.test("join(reg, id + '.inflight')")).toBe(true);
+    for (const other of ['  { exec {fd}>>"$REG/.inflight.lock"; } 2>/dev/null || return 2', 'this.inflight = 0', 'a.inflight b', '_reg_set "$id" inflightx 1']) {
+      expect(bashNames(other) || QUOTED.test(other), `not matched: ${other}`).toBe(false);
+    }
+  });
+
+  it('ccd/ccd: every code line naming it is inside _inflight_write, and they are exactly its listed write, its header-only write and its rm', () => {
+    const ccd = BASH.find((f) => rel(f) === 'ccd/ccd') ?? '';
+    const all = readFileSync(ccd, 'utf8').split('\n');
+    const open = all.findIndex((l) => l.startsWith('_inflight_write() {'));
+    expect(open, '_inflight_write is defined').toBeGreaterThan(0);
+    expect(all.filter((l) => l.startsWith('_inflight_write() {')), 'once').toHaveLength(1);
+    const close = all.findIndex((l, i) => i > open && l === '}');
+    expect(close).toBeGreaterThan(open);
+    const named = all.map((l, i) => ({ l: l.trim(), i })).filter(({ l }) => !isBashComment(l) && bashNames(l));
+    expect(named.filter(({ i }) => i < open || i > close).map(({ l }) => l.slice(0, 100)), 'a code line outside _inflight_write names it: a second writer').toEqual([]);
+    const SITES = ['_reg_set "$id" inflight "$hdr"$\'\\n\'"$items" && listed=1', '_reg_set "$id" inflight "$hdr" && break', 'rm -f -- "$REG/$id.inflight";'];
+    expect(named.map(({ l }) => SITES.find((x) => l.startsWith(x)) ?? `UNKNOWN: ${l}`)).toEqual(SITES);
+  });
+
+  it('no other shell file under ccd/ or deploy/ names it', () => {
+    const others = BASH.filter((f) => rel(f) !== 'ccd/ccd');
+    expect(others.length, 'the walk reached the other shell files').toBeGreaterThan(10);
+    expect(others.filter((f) => codeLines(f).some(bashNames)).map(rel)).toEqual([]);
+  });
+
+  it('no file under server/src, shared or pwa/src, no Python file under ccd/ or deploy/, and not deploy/measure-continuity.py, names it', () => {
+    const walk = (d: string, ext: RegExp): string[] => (existsSync(d) ? readdirSync(d).flatMap((e) => {
+      const p = path.join(d, e);
+      return statSync(p).isDirectory() ? (e === 'node_modules' ? [] : walk(p, ext)) : (ext.test(p) ? [p] : []);
+    }) : []);
+    const files = [...['server/src', 'shared', 'pwa/src'].flatMap((d) => walk(path.join(ccrcRoot, d), /\.(ts|tsx|mts|mjs|js|py)$/)),
+      ...['ccd', 'deploy'].flatMap((d) => walk(path.join(ccrcRoot, d), /\.py$/))];
+    expect(files.length, 'the walk reached the trees').toBeGreaterThan(100);
+    expect(files.filter((f) => readFileSync(f, 'utf8').split('\n').some((l) => !/^\s*(#|\/\/|\*|\/\*)/.test(l) && QUOTED.test(l))).map(rel)).toEqual([]);
+    expect(readFileSync(path.join(ccrcRoot, 'deploy', 'measure-continuity.py'), 'utf8')).not.toMatch(QUOTED);
   });
 });

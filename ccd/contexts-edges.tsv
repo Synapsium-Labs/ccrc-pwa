@@ -50,6 +50,7 @@ _dispatch_swap -> _svc_run_detached
 _docs_py -> _gh_repo_slug
 _end_cause -> _reg_get
 _end_cause -> _tmx
+_end_note_gone -> _inflight_write
 _end_note_gone -> _reg_get
 _end_record -> _reg_set
 _follow_continued_in -> _reg_get

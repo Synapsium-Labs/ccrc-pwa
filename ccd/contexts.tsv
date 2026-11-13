@@ -509,6 +509,9 @@ _transcript_matches	C1
 _sidecar_matches	C1
 _swap_carry_jsonl	C1
 _carry_slot_take	C1
+_inflight_slot_take	C1
+_inflight_note	C1
+_inflight_write	C1
 _swap_carry_merge_walk	C1
 _carry_link_route	C1
 _carry_py	C1

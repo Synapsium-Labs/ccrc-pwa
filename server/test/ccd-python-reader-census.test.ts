@@ -67,6 +67,8 @@ const ROWS: readonly Row[] = [
     why: 'picks transcripts by their file name and copies bytes; it parses no record' },
   { name: 'cmd_carry_dedupe', kind: 'no-read', d: 'D-8070',
     why: 'hands `lib/carry-dedupe.py` its arguments, and that program has its own row' },
+  { name: '_inflight_write', kind: 'no-read', d: 'D-8369',
+    why: 'hands lib/inflight-manifest.py its arguments, and that program has its own row; _transcript_matches only lists file names' },
   { name: '_ws_archive_manifest', kind: 'no-read', d: 'D-8070',
     why: 'records the transcript\'s path; its Python reads the PR ledger' },
 ];
