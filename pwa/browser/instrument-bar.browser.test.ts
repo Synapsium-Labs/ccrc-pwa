@@ -97,7 +97,8 @@ describe('the bar fits on one line with every badge at 99+', () => {
             const m = await page.evaluate(() => {
               const bar = document.querySelector<HTMLElement>('.ins-topbar')!;
               const b = bar.getBoundingClientRect();
-              const tops = [...bar.children].map((c) => Math.round(c.getBoundingClientRect().top));
+              // Centres, not tops: the face is a 32px cell centred in the 44px line, so its top is lower and its centre is the line's.
+              const tops = [...bar.children].map((c) => { const r = c.getBoundingClientRect(); return Math.round((r.top + r.bottom) / 2); });
               const parts: [string, Element | null][] = [
                 ...[...bar.querySelectorAll('nav.ins-doors > .ins-door')].map((d): [string, Element] => [d.getAttribute('aria-label')!, d]),
                 ['⌘K', bar.querySelector('.ins-command > :last-child')],
@@ -121,7 +122,7 @@ describe('the bar fits on one line with every badge at 99+', () => {
             });
             console.log(`DESK-NAV-FIGURE ${viewName(view)}: bar ${m.figure.bar} px, doors ${m.figure.doors} px, command field ${m.figure.field} px`);
             expect(m.doorCount, 'the wordmark door and six doors are measured').toBe(7);
-            for (const t of m.tops) expect(Math.abs(t - m.tops[0]!), `one line: tops ${m.tops.join(', ')}`).toBeLessThanOrEqual(1);
+            for (const t of m.tops) expect(Math.abs(t - m.tops[0]!), `one line: centres ${m.tops.join(', ')}`).toBeLessThanOrEqual(1);
             expect(m.outside, 'every door, ⌘K, the bell, Settings and + inside the bar').toEqual([]);
             expect(m.barScroll, 'the bar does not scroll sideways').toBeLessThanOrEqual(0);
             expect(m.pageScroll, 'the page does not scroll sideways').toBeLessThanOrEqual(0);

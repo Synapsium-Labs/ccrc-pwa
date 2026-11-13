@@ -118,12 +118,15 @@ export function TopBar(): ReactNode {
             {...commandDoor('go-fleet')}
           >
             <Wordmark />
-            <FaceMark />
           </Door>
           {DESK_DOORS.map((d) => ('reserved' in d
             ? null
             : <DeskDoorEntry key={d.id} id={d.id} icon={d.icon} current={current} badges={badges} words={words} />))}
         </nav>
+        {/* Beside the doors, not in the home door (a button's children are presentational: the face's name, the mood and
+            its cause, would never reach assistive tech, and a click on it would go home) and not in the nav, which holds
+            doors only (`nav-holds-doors-only`). */}
+        <FaceMark />
         <BareRow className="ins-command" aria-label={COMMAND_FIELD_WORDS} {...commandDoor('open-palette')}>
           <Icon name="search" />
           <span className="ins-command-words">{COMMAND_FIELD_WORDS}</span>

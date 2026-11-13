@@ -13,11 +13,13 @@ export const MOOD_PLAY_MS = 5000;
 export function FaceMark(): ReactNode {
   const character = useCharacter();
   const { mood, cause } = useMood();
-  // The mood whose play window has run out. A mood that is not it is new, so it plays at once, in the render that
-  // shows it, with no frame of stillness between (and the first mood plays too).
-  const [settled, setSettled] = useState<Mood | null>(null);
+  // The play window of the mood now shown. A change of mood, to ANY mood, opens a new window in the render that shows it
+  // (state set during render, so no frame of stillness between), and a window is shut by its own timer; so a return to
+  // a mood that had settled plays again.
+  const [win, setWin] = useState<{ mood: Mood | null; done: boolean }>({ mood: null, done: false });
+  if (win.mood !== mood) setWin({ mood, done: false });
   useEffect(() => {
-    const t = setTimeout(() => { setSettled(mood); }, MOOD_PLAY_MS);
+    const t = setTimeout(() => { setWin({ mood, done: true }); }, MOOD_PLAY_MS);
     return () => { clearTimeout(t); };
   }, [mood]);
   return (
@@ -25,7 +27,7 @@ export function FaceMark(): ReactNode {
       character={character}
       mood={mood}
       scale={1}
-      play={settled !== mood}
+      play={win.mood !== mood || !win.done}
       label={`${ART[character][mood].label}: ${cause}`}
       className="face-mark"
     />

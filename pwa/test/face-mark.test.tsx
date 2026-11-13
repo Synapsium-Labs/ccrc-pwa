@@ -3,7 +3,7 @@
 // Fake timers drive the clock, `Date` included; a fixture store stands in for the fleet; `fetch` is refused, so the
 // shell's polls answer nothing (no health: the agent is not down).
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { act, cleanup, render } from '@testing-library/react';
+import { act, cleanup, render, screen } from '@testing-library/react';
 import { INSTRUMENT, REFINED } from '@ccrc/ui';
 import { FleetChromeProvider } from '../src/fleet/FleetChrome';
 import { createFleetStore, type FleetStore } from '../src/stores/fleet';
@@ -98,6 +98,22 @@ describe('the face', () => {
     expect(still()).toBe(true);
   });
 
+  it('a return to a mood that had settled plays again, inside five seconds of leaving it', () => {
+    const store = heard();
+    mountFace(store);
+    advance(MOOD_PLAY_MS);
+    expect(still()).toBe(true);
+    act(() => store.setState({ sessions: [fleetSession({ id: 'lane-a-1', bucket: 'attention' })] }));
+    advance(MOOD_PLAY_MS - 1000);
+    act(() => store.setState({ sessions: [fleetSession({ id: 'lane-a-1', bucket: 'idle' })] }));
+    expect(face().getAttribute('aria-label')).toContain('nothing needs anyone');
+    expect(still()).toBe(false);
+    advance(MOOD_PLAY_MS - 1);
+    expect(still()).toBe(false);
+    advance(1);
+    expect(still()).toBe(true);
+  });
+
   it('a change that keeps the mood does not play again', () => {
     const store = heard();
     mountFace(store);
@@ -119,7 +135,7 @@ describe('the face', () => {
     expect(face().getAttribute('aria-label')).toContain('a pull request just merged');
     advance(HAPPY_WINDOW_MS - 9 * MIN - 1);
     expect(face().getAttribute('aria-label')).toContain('a pull request just merged');
-    advance(MIN);
+    advance(1);
     expect(face().getAttribute('aria-label')).toContain('nothing needs anyone');
   });
 
@@ -171,7 +187,13 @@ describe('the bars', () => {
       expect(faces).toHaveLength(1);
       const mark = document.querySelector('[data-wordmark]');
       expect(mark).not.toBeNull();
-      expect(faces[0]!.previousElementSibling).toBe(mark);
+      // Beside the wordmark, never inside a button: found by its own accessible name (the mood and its cause).
+      const named = screen.getAllByRole('img', { name: /not heard yet: the runs/ });
+      expect(named).toEqual([faces[0]]);
+      expect(faces[0]!.closest('button, a')).toBeNull();
+      // Instrument's wordmark is inside the home door, inside the doors-only nav: the face follows that nav.
+      if (skin === INSTRUMENT) expect(faces[0]!.previousElementSibling).toBe(mark!.closest('nav'));
+      else expect(faces[0]!.previousElementSibling).toBe(mark);
       act(() => { navigate('/'); setSkin(REFINED); });
     });
   }
