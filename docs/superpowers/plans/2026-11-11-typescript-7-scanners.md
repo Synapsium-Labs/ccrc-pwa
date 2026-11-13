@@ -46,8 +46,15 @@ Not in this change: no TypeScript 7 bump in any package and no build or deploy s
 ## Deviations found
 
 - pwa's typecheck (and its `npm run build`) now resolves `typescript-api` from `server/node_modules`, as it already
-  resolves ui's imports from `ui/node_modules`. Every install lane that builds pwa installs server first
-  (`install.sh`, `deploy/build-release.sh`, CI's shared install) or runs from a developer checkout.
+  resolves ui's imports from `ui/node_modules`. `install.sh`, `deploy/build-release.sh` and CI's shared install
+  install server before they build pwa.
+- KNOWN WIDTH: `deploy/deploy.sh`'s server lane does not. It installs ui, then runs pwa's `npm ci && npm run build`
+  locally, and installs server only on the target, after the build. From a fresh clone or worktree, which is how
+  deploys run, pwa's `tsc --noEmit` fails with TS2307 "Cannot find module 'typescript-api'" and the deploy stops
+  before it ships anything. A developer checkout that already has `server/node_modules` builds. The fix is one line,
+  `(cd server && npm ci --no-audit --no-fund)` before the pwa build, with a `ci-pipeline.test.ts` walk that pins
+  the order. It is not in this change (the change leaves every build and deploy script alone) and lands separately;
+  until it does, run `npm ci` in `server/` before a deploy.
 - KNOWN WIDTH: a pull request that only bumps the pin (server's `package.json` and lock) does not run the pwa suite;
   the merge queue does.
 - Not done here: jsdom 30's `^22.22.2` Node range against pwa's `engines` floor (`>=22.16.0`), the ticket's tidy item.
