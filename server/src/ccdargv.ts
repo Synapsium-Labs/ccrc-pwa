@@ -92,9 +92,20 @@ const commitId = (id: string): string => {
  *  only behind `HIBERNATE_HOLD_OK_CAP`; ccd refuses a dash-leading value, and a programme hold never begins with one. */
 const holdOkFlags = (text: string | null): string[] => (text === null ? [] : ['--hold-ok', text]);
 
-/** `ccd hibernate --roll` (D-7458): the automatic roll's one act, the sleep and the wake in one verb. Sent only behind
- *  `HIBERNATE_ROLL_CAP`; an older ccd binds the bare flag as a second positional and dies on its arity rule. */
-const rollFlags = (roll: boolean): string[] => (roll ? ['--roll'] : []);
+/** What follows `ccd hibernate`'s sleep: `sleep` (nothing, the plain hibernate), `roll` (D-7458, `--roll`: the automatic
+ *  roll's one act, the sleep and the wake in one verb, sent only behind `HIBERNATE_ROLL_CAP`) or `fresh` (`--roll
+ *  --fresh`, spec 2026-11-09 §3.3.11 H13: the same roll, whose wake starts a new conversation under the same session id).
+ *  An older ccd binds an unknown bare flag as a second positional and dies on its arity rule. */
+export type HibernateMode = 'sleep' | 'roll' | 'fresh';
+/** The flags each mode sends. NO CAPABILITY DECISION HERE: a caller sends `fresh` only where
+ *  `capSupported(state, HIBERNATE_FRESH_CAP)` answered yes for the box (the word `hibernate-fresh`, Table 11.1d), as `roll`
+ *  is sent only behind `capSupported(state, HIBERNATE_ROLL_CAP)`; the renewal act, the first caller, adds that constant and
+ *  its gate with its call. The server is the only caller by contract. */
+const HIBERNATE_MODE_FLAGS: Readonly<Record<HibernateMode, readonly string[]>> = {
+  sleep: [],
+  roll: ['--roll'],
+  fresh: ['--roll', '--fresh'],
+};
 
 /**
  * The DECLARED half of a provenance record (spec D2's `dec`), as the three ccd
@@ -465,9 +476,12 @@ export const CCD_ARGV = {
    *  Sent only behind `verbSupported` (the box's `ccd caps` lists `hibernate`); `ensure` wakes it. `roll` (D-7458)
    *  makes it the automatic roll's act: `.no-roll` refuses instead of `.no-hibernate`, and ccd wakes it in the same
    *  verb, exiting 4 with `ccd: roll-wake-failed` when the wake fails and the row is back asleep, 5 with
-   *  `ccd: roll-wake-unrestored` when it could not be put back. */
-  hibernate: (id: string, dec: ActorFlags | null, holdOk: string | null = null, roll = false) =>
-    argv(['hibernate', ...rollFlags(roll), ...holdOkFlags(holdOk), id, ...decFlags(dec)]),
+   *  `ccd: roll-wake-unrestored` when it could not be put back. `fresh` is the same roll whose wake starts a new
+   *  conversation (a new uuid, `--session-id`, never `--resume`), with every refusal and exit code the roll has, plus
+   *  exit 7, `ccd: roll-fresh-unproven`, when the wake answered 0 but no spawn left the fresh start's receipt (the old
+   *  uuid is back; the caller asks again later). */
+  hibernate: (id: string, dec: ActorFlags | null, holdOk: string | null = null, mode: HibernateMode = 'sleep') =>
+    argv(['hibernate', ...HIBERNATE_MODE_FLAGS[mode], ...holdOkFlags(holdOk), id, ...decFlags(dec)]),
   swap:      (id: string, w: string) => argv(['swap', id, w]),
   /** THE DELIBERATE CROSSING (account pools, spec §5.7). A SEPARATE ENTRY, not
    *  a parameter of `swap` above — `start`/`enable`'s rule, for its reason: a

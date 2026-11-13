@@ -152,6 +152,7 @@ _session_hard_blocked -> _pane_measurable
 _session_hard_blocked -> _tmux_t
 _session_probe -> _tmux_t
 _session_state -> _sup_fresh
+_spawn_mode -> _reg_get
 _spawn_settle -> _accept_first_run_prompts
 _spawn_settle -> _authdead_clear_on_spawn
 _spawn_settle -> _lc_done
@@ -173,6 +174,7 @@ _spawn_start -> _lc_done
 _spawn_start -> _operator_choice_keep
 _spawn_start -> _reg_generation_read
 _spawn_start -> _reg_get
+_spawn_start -> _reg_get_to
 _spawn_start -> _reg_set
 _spawn_start -> _route_any
 _spawn_start -> _route_degrade
@@ -391,8 +393,8 @@ cmd_ensure -> _compact_lock_release
 cmd_ensure -> _lc_done
 cmd_ensure -> _reg_claim
 cmd_ensure -> _reg_generation_init
-cmd_ensure -> _reg_get
 cmd_ensure -> _resupervise_live
+cmd_ensure -> _spawn_mode
 cmd_ensure -> _spawn_settle
 cmd_ensure -> _spawn_start
 cmd_ensure -> _strand_clear
@@ -417,6 +419,7 @@ cmd_hibernate -> _graceful_stop_before
 cmd_hibernate -> _idle_for_keystroke
 cmd_hibernate -> _lc_dec_ok
 cmd_hibernate -> _lc_done
+cmd_hibernate -> _lc_fail
 cmd_hibernate -> _lc_surface_norm
 cmd_hibernate -> _operator_choice_keep
 cmd_hibernate -> _operator_choice_unmark

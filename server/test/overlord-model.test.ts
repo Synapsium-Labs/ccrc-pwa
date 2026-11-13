@@ -8,8 +8,9 @@ import { fileURLToPath } from 'node:url';
 import { pythonOrSkip } from './ccgptHarness.js';
 
 // The scenarios W0's final matrix (matrix.out) measures at 1.1 s or less at the defaults, the plan's rule;
-// `nohold` measured 1.2 s there, so it runs only under CCRC_MODEL=full.
-const FAST = ['push', 'pause', 'race', 'asks', 'value', 'lineage', 'deadpush', 'restore', 'rebind'];
+// `nohold` measured 1.2 s there, so it runs only under CCRC_MODEL=full. `genback` (plan review 1902, F3) measured
+// 0.06 s; `genmachine` and `renewal`, which also exercise a failed renewal's return, take 15 s and more.
+const FAST = ['push', 'pause', 'race', 'asks', 'value', 'lineage', 'deadpush', 'restore', 'rebind', 'genback'];
 
 const PY = pythonOrSkip();
 const DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), 'model/overlord');
@@ -38,6 +39,21 @@ describe.skipIf(PY === null)('the Overlord model (§11.7, the first model)', () 
   }, 60_000);
   it.each(FAST)('%s holds every invariant at the defaults', (sc) => {
     expect(check(sc)).toMatchObject({ scenario: sc, violated: [] });
+  }, 60_000);
+  // 'previous' and 'proven' reach the same states (each lands where the other also can), so no state count tells them
+  // apart (review 1920, R3). What pins the behaviour: the text pins the default's name; X6, an edge check, holds that a
+  // renewal begun in degraded never returns to active (F5's proof ends with the conversation), and goes red when the
+  // model keeps the proof; the fact that a failed renewal returns to active with a hold-off pins the other direction,
+  // and goes unreachable when back() always degrades; X4 catches the bare 'active' reading.
+  it('A2: the model reads a failed renewal as active only if proven, and the proof ends with the conversation (F5)', () => {
+    expect(readFileSync(path.join(DIR, 'model.py'), 'utf8')).toMatch(/^\s*FAILED_RENEWAL_RETURNS='proven',/m);
+    expect(readFileSync(CHECK, 'utf8')).toMatch(/^\s*FAILED_RENEWAL_RETURNS='proven'\)/m);
+    const atDefault = check('genback');
+    expect(atDefault.violated).toEqual([]);
+    expect(atDefault.reachable).toContain('a failed renewal returns to active with a hold-off');
+    expect(check('genback', 'FAILED_RENEWAL_RETURNS=active').violated).toContain('X4');
+    expect(check('genback', 'MUTATION=proof_outlives_conversation').violated).toContain('X6');
+    expect(check('genback', 'MUTATION=back_always_degraded').reachable).not.toContain('a failed renewal returns to active with a hold-off');
   }, 60_000);
   it('no_fence on rebind is caught by I5', () => {
     expect(check('rebind', 'MUTATION=no_fence').violated).toContain('I5');

@@ -1,0 +1,453 @@
+// A generation day (Overlord W1a, renewal deciders Task 6; spec §3.3.11, §11.5, §11.7): an Overlord and a coordinator
+// for a seeded day of context growth, compactions, operator presence and absence, idle stretches, host failures,
+// unplanned starts, server crashes with gaps, and server freezes. The server side is driven ONLY through the four deciders
+// (`renewalDue`, `softRenewalMay`, `generationStep`, `observeTime`) and an in-memory generation row per identity; the
+// deciders' modules are a parameter, so a mutated copy can be handed to the same scenario.
+//
+// Durable state (the rows, the observed-time stamp, the soft renewals' stamps) survives a crash; the server's timers do
+// not. The world (the sessions, their hosts, the operator) keeps its own timers, which survive. The predicates read
+// only the sequence's lines: generation rows and the fake clock, never sweep phases (the simulator's beat and its async
+// limit, carried from W1a's simulator piece).
+import type { FleetRole } from '../../../shared/fleetRoles.js';
+import { CARDED_NUDGE_AT_MS, HOLD_OFF_MS, LEAST_AGE_MS, RENEWAL_BUDGET_S, RENEWAL_LANE_PERIOD_MS, SOFT_BUDGET, STATE_DEADLINE_S } from '../../../shared/continuity.js';
+import type { GenEvent, GenView } from '../../src/continuity/generationMachine.js';
+import type { Reading, RenewalInputs } from '../../src/continuity/renewalDue.js';
+import type { SoftInputs } from '../../src/continuity/softRenewal.js';
+import type { Observed } from '../../src/time/observed.js';
+import type { Scenario } from './run.js';
+import type { Invariant, SequenceLine, Violation } from './sequence.js';
+import { chance } from './world.js';
+
+/** The four deciders, passed in so that a mutant can be handed to the same scenario. */
+export interface GenDayModules {
+  readonly renewal: Pick<typeof import('../../src/continuity/renewalDue.js'), 'renewalDue'>;
+  readonly soft: Pick<typeof import('../../src/continuity/softRenewal.js'), 'softRenewalMay'>;
+  readonly machine: Pick<typeof import('../../src/continuity/generationMachine.js'), 'generationStep' | 'GEN_ACTIVE' | 'GEN_MINTED'>;
+  readonly observed: Pick<typeof import('../../src/time/observed.js'), 'observeTime' | 'observedStepCapMs'>;
+}
+
+export const GEN_DAY_EDGES = ['soft-renewal', 'hard-renewal', 'renewed', 'crash-gap', 'freeze-gap', 'start-while-down', 'degraded',
+  'hold-off', 'budget-wait', 'probe-retry', 'renudge', 'unplanned-start', 'overlord-first', 'clearing-timeout-back',
+  'clearing-timeout-degraded', 'soft-due-in-degraded', 'probing-timeout'] as const;
+export type GenDayEdge = (typeof GEN_DAY_EDGES)[number];
+
+const START = Date.parse('2026-11-13T00:00:00Z');
+const DAY_MS = 24 * 3_600_000;
+const BEAT_MS = RENEWAL_LANE_PERIOD_MS;   // the server's lane and the world both beat at the renewal lane's period
+const SEC = 1_000;
+const MIN = 60_000;
+const COORD = 'lane-a-coordinator';
+const WHO: ReadonlyArray<readonly [string, FleetRole]> = [['overlord', 'overlord'], [COORD, 'coordinator']];
+const TRANSIENT = new Set(['draining', 'checkpointed', 'clearing', 'carded', 'probing']);
+
+const M = <T>(value: T): Reading<T> => ({ kind: 'measured', value });
+const U: Reading<never> = { kind: 'unmeasured', why: 'stale' };
+const NA = { kind: 'not-applicable' } as const;
+
+interface Row {
+  n: number; view: GenView; mintedObs: number; deadlineAt: number; nudgeAt: number;
+  holdOffUntil: number | null; dueSinceObs: number | null; softStamps: number[];
+}
+interface Facts {
+  ctx: number; turns: number; compactions: number; idleSince: number | null; wave: boolean; readers: number;
+}
+
+export function generationDay(mods: GenDayModules): Scenario<GenDayEdge> {
+  return {
+    name: 'generation-day', startWallMs: START, durationMs: DAY_MS, edges: GEN_DAY_EDGES,
+    setup({ world, seq, cover, entropy }) {
+      const line = (kind: string, id: string, state: string, actor: string): void => { seq.append({ kind, id, state, actor }); };
+      const server = world.server;
+      const between = (lo: number, hi: number): number => lo + entropy.below(hi - lo + 1);
+
+      // ---- DURABLE: the server's rows and its observed-time column, which survive a crash.
+      const rows = new Map<string, Row>();
+      for (const [who] of WHO) rows.set(who, { n: 1, view: mods.machine.GEN_ACTIVE, mintedObs: 0, deadlineAt: 0, nudgeAt: 0, holdOffUntil: null, dueSinceObs: null, softStamps: [] });
+      let obs: Observed | null = null;
+      let boots = 0;
+      let proc = 'p0';
+      const startQueue: Array<[string, GenEvent]> = [];
+      // A freeze (SIGSTOP, a paused container): the server's process runs nothing until `frozenUntil`, and what reaches
+      // it meanwhile waits in its socket, applied in order at the first beat after the thaw.
+      let frozenUntil = 0;
+      let thawPending = false;
+      const frozenQueue: Array<[string, number | null, GenEvent]> = [];
+      const frozen = (): boolean => server.clock.wall() < frozenUntil;
+
+      // ---- WORLD: the sessions, their hosts and the operator. Their timers survive a crash.
+      const facts = new Map<string, Facts>();
+      for (const [who] of WHO) facts.set(who, { ctx: 20_000, turns: 0, compactions: 0, idleSince: null, wave: false, readers: 0 });
+      let operatorHere = true;
+      // The operator's last message, stamped in observed time when it reaches the server (review 1912, F6): a message
+      // written while the server is down or frozen is stamped at its next beat.
+      let lastOperatorObs = 0;
+      let operatorPending = false;
+      let operatorFlipAt = START + 40 * MIN;
+
+      const idOf = (who: string, n: number): string => `${who}#${n}`;
+      const age = (r: Row): number => (obs?.ms ?? 0) - r.mintedObs;
+
+      /** Applies one event to `who`'s current generation and acts on the machine's answer. */
+      const apply = (who: string, e: GenEvent): void => {
+        const r = rows.get(who)!;
+        const prev = r.view;
+        // What the server accepted, logged at receipt (review I4): a card read with its hash verdict, in carded; a probe
+        // round, in probing. A read or a round that reaches another state is not one (review 1912, F12).
+        if (e.kind === 'card-read' && prev.state === 'carded') line('card', idOf(who, r.n), e.hashMatches ? 'match' : 'mismatch', 'lane');
+        if (e.kind === 'probes' && prev.state === 'probing') line('probes', idOf(who, r.n), e.passed ? 'passed' : 'failed', 'lane');
+        const step = mods.machine.generationStep(prev, e);
+        if (e.kind === 'started' && prev.state !== 'ended') line('start', who, 'applied', 'host');
+        r.view = step.next;
+        const changed = step.next.state !== prev.state;
+        if (changed) line('gen', idOf(who, r.n), step.next.state, 'lane');
+        // Each deadline is set once, on entry, and never re-armed; carded's nudge point likewise
+        // (deadline-set-once-rounds-fit-inside).
+        if (changed) {
+          const s = STATE_DEADLINE_S[step.next.state as keyof typeof STATE_DEADLINE_S];
+          r.deadlineAt = s === undefined ? 0 : server.clock.wall() + s * SEC;
+          r.nudgeAt = step.next.state === 'carded' ? server.clock.wall() + CARDED_NUDGE_AT_MS : 0;
+        }
+        const n = r.n;
+        for (const a of step.actions) {
+          if (a === 'renew') hostRenews(who, n);
+          else if (a === 'ask-handover') sessionWritesNote(who, n);
+          else if (a === 'renudge-card') { cover('renudge'); sessionReadsCard(who, n); }
+          else if (a === 'start-probes') sessionProbes(who, n);
+          else if (a === 'raise-item') { cover('degraded'); line('item', idOf(who, n), 'raised', 'lane'); }
+          else if (a === 'set-hold-off') {
+            cover('hold-off'); r.holdOffUntil = age(r) + HOLD_OFF_MS;
+            line('hold-off', idOf(who, n), `until=${r.holdOffUntil}`, 'lane');
+          }
+        }
+        if (prev.state === 'probing' && e.kind === 'probes' && !e.passed && step.next.state === 'probing') cover('probe-retry');
+        if (prev.state === 'probing' && step.next.state === 'active') cover('renewed');
+        if (step.actions.includes('mint-next')) {
+          const next: Row = { n: r.n + 1, view: mods.machine.GEN_MINTED, mintedObs: obs?.ms ?? 0,
+            deadlineAt: server.clock.wall() + STATE_DEADLINE_S.carded * SEC, nudgeAt: server.clock.wall() + CARDED_NUDGE_AT_MS,
+            holdOffUntil: null, dueSinceObs: null, softStamps: r.softStamps };
+          rows.set(who, next);
+          line('gen', idOf(who, next.n), 'carded', 'mint');
+          sessionReadsCard(who, next.n);
+        }
+      };
+
+      /** A host or session event reaches the server: a start report is queued while the server is down and sent at
+       *  boot (the start-while-down rule); anything else is lost while it is down. Events for an older generation are
+       *  dropped, except a start, which ends whatever generation is current. */
+      const deliver = (who: string, n: number | null, e: GenEvent): void => {
+        if (world.isDown()) { if (e.kind === 'started') startQueue.push([who, e]); return; }
+        if (frozen()) { frozenQueue.push([who, n, e]); return; }
+        if (n !== null && rows.get(who)!.n !== n) return;
+        apply(who, e);
+      };
+
+      // The host's renewal: it ends the old conversation and starts a fresh one, fails before or after the end, or hangs
+      // before or after it, so clearing's deadline is reached on both sides of the first half (review 1912, F9).
+      const hostRenews = (who: string, n: number): void => {
+        world.envAfter(between(2, 20) * SEC, () => {
+          const fails = chance(entropy, 0.08); const hangs = chance(entropy, 0.04);
+          if (hangs) return;
+          if (fails) { deliver(who, n, { kind: 'host-failed', afterEnd: false }); return; }
+          deliver(who, n, { kind: 'host-ended' });
+          const failsAfter = chance(entropy, 0.05); const hangsAfter = chance(entropy, 0.04);
+          if (hangsAfter) return;
+          if (failsAfter) { deliver(who, n, { kind: 'host-failed', afterEnd: true }); return; }
+          world.envAfter(between(1, 5) * SEC, () => {
+            const f = facts.get(who)!;
+            f.ctx = between(12_000, 30_000); f.turns = 0; f.compactions = 0; f.wave = false;
+            deliver(who, null, { kind: 'started', resumed: false });
+          });
+        });
+      };
+      const sessionWritesNote = (who: string, n: number): void => {
+        const late = between(5, 90) * SEC;
+        const writes = chance(entropy, 0.7);
+        world.envAfter(late, () => { if (writes) deliver(who, n, { kind: 'handover' }); });
+      };
+      const sessionReadsCard = (who: string, n: number): void => {
+        const late = between(2, 60) * SEC;
+        const matches = chance(entropy, 0.9);
+        world.envAfter(late, () => deliver(who, n, { kind: 'card-read', hashMatches: matches }));
+      };
+      // A probe round now and then never answers, so probing's own deadline is reached (review 1920, R6).
+      const sessionProbes = (who: string, n: number): void => {
+        const late = between(10, 60) * SEC;
+        const passed = chance(entropy, 0.85);
+        const hangs = chance(entropy, 0.05);
+        if (hangs) return;
+        world.envAfter(late, () => deliver(who, n, { kind: 'probes', passed }));
+      };
+
+      // ---- The world's beat: context growth, compactions, idle stretches, the operator, wave boundaries, unplanned
+      // starts and server crashes. A fixed order of draws on every beat.
+      const worldBeat = (): void => {
+        const now = server.clock.wall();
+        if (now >= operatorFlipAt) { operatorHere = !operatorHere; operatorFlipAt = now + between(10, operatorHere ? 90 : 120) * MIN; }
+        const operatorWrites = chance(entropy, 0.3);
+        if (operatorHere && operatorWrites) operatorPending = true;
+        for (const [who, role] of WHO) {
+          const f = facts.get(who)!;
+          const growth = between(500, 4_000);
+          const goesIdle = chance(entropy, 0.02);
+          const wakes = chance(entropy, 0.1);
+          const compacts = chance(entropy, 0.05);
+          const waveEnds = chance(entropy, 0.003);
+          const readers = chance(entropy, 0.3) ? 1 : 0;
+          const crashes = chance(entropy, 0.0005);
+          if (f.idleSince === null && goesIdle) f.idleSince = now;
+          else if (f.idleSince !== null && wakes) f.idleSince = null;
+          if (f.idleSince === null && (role === 'coordinator' || operatorHere)) f.ctx += growth;
+          if (role === 'overlord' && operatorHere && operatorWrites) f.turns++;
+          if (f.ctx > 160_000 && compacts) { f.ctx = 60_000; f.compactions++; }
+          if (role === 'coordinator' && waveEnds) f.wave = true;
+          f.readers = readers;
+          if (crashes) { cover('unplanned-start'); deliver(who, null, { kind: 'started', resumed: true }); }
+        }
+        const serverCrash = chance(entropy, 0.0007);
+        const downFor = between(1, 20) * MIN;
+        const serverFreeze = chance(entropy, 0.0007);
+        const frozenFor = between(2, 20) * MIN;
+        if (serverFreeze && !world.isDown() && !frozen()) {
+          cover('freeze-gap');
+          line('server', 'freeze', `frozen;for=${frozenFor}`, 'sim');
+          frozenUntil = server.clock.wall() + frozenFor; thawPending = true;
+        }
+        if (serverCrash && !world.isDown() && !frozen()) {
+          cover('crash-gap');
+          line('server', 'crash', 'down', 'sim');
+          world.crash(downFor);
+        }
+        world.envAfter(BEAT_MS, worldBeat);
+      };
+      world.envAfter(BEAT_MS / 2, worldBeat);
+
+      // ---- The server's beat: observed time, deadlines, the drain, and the deciders.
+      const renewalInputs = (who: string, role: FleetRole, stale: boolean, pressed: boolean, loadMove: boolean): RenewalInputs => {
+        const f = facts.get(who)!;
+        const now = server.clock.wall();
+        const no = M(false);
+        return { role, contextTokens: stale ? U : M(f.ctx), windowTokens: M(1_000_000), fittedCeilingTokens: M(250_000),
+          turns: M(f.turns), compactions: M(f.compactions), idleMs: M(f.idleSince === null ? 0 : now - f.idleSince),
+          backstopDue: no, installBehind: no, probeFailedUnfixed: no, modelDrift: no,
+          startResumed: M({ resumed: false, otherClass: false }), entryRetired: no, termRaised: no, accountOutsideSet: no,
+          classUnservable: no, accountLoadMove: M(loadMove), compactionRefused: no, classChanged: no, evaluationDue: no,
+          notLocal: no, waveBoundary: M(f.wave), renewNow: pressed };
+      };
+
+      const serverBeat = (): void => {
+        if (frozen()) { server.scheduler.after(BEAT_MS, serverBeat); return; }
+        const st = mods.observed.observeTime(obs, server.clock.mono(), proc, mods.observed.observedStepCapMs(RENEWAL_LANE_PERIOD_MS));
+        obs = st.at;
+        if (st.gap !== null) line('obs-gap', 'server', `kind=${st.gap.kind};deltaMs=${st.gap.deltaMs}`, 'lane');
+        line('obs', 'server', `ms=${obs.ms}`, 'lane');
+        if (operatorPending) { operatorPending = false; lastOperatorObs = obs.ms; }
+        if (thawPending) {
+          thawPending = false;
+          line('server', 'thaw', 'thawed', 'sim');
+          for (const [who, n, e] of frozenQueue.splice(0)) deliver(who, n, e);
+        }
+        for (const [who, role] of WHO) {
+          const stale = chance(entropy, 0.05);
+          const pressed = chance(entropy, 0.0003);
+          const loadMove = chance(entropy, 0.0003);
+          const held = chance(entropy, 0.2);
+          const r = rows.get(who)!;
+          if (r.view.state === 'carded' && r.nudgeAt > 0 && server.clock.wall() >= r.nudgeAt) {
+            r.nudgeAt = 0;
+            apply(who, { kind: 'nudge-due' });
+          }
+          if (TRANSIENT.has(r.view.state) && server.clock.wall() >= r.deadlineAt) {
+            line('deadline', `${idOf(who, r.n)}:${r.view.state}:${r.deadlineAt}`, 'fired', 'lane');
+            if (r.view.state === 'clearing') cover(r.view.hostEnded ? 'clearing-timeout-degraded' : 'clearing-timeout-back');
+            if (r.view.state === 'probing') cover('probing-timeout');
+            apply(who, { kind: 'deadline' });
+          }
+          if (r.view.state === 'draining' && facts.get(who)!.readers === 0) apply(who, { kind: 'drained' });
+          if (r.view.state !== 'active' && r.view.state !== 'degraded') continue;
+          const due = mods.renewal.renewalDue(renewalInputs(who, role, stale, pressed, loadMove));
+          if (!due.due) { r.dueSinceObs = null; continue; }
+          if (due.cls === 'hard') { cover('hard-renewal'); r.dueSinceObs = null; apply(who, { kind: 'due', cls: 'hard' }); continue; }
+          // A soft due reaches the machine in degraded too, which ignores it ("degraded blocks soft triggers only").
+          r.dueSinceObs ??= obs.ms;
+          const inWindow = r.softStamps.filter((t) => obs!.ms - t < SOFT_BUDGET.windowMs).length;
+          const overlord = rows.get('overlord')!;
+          const si: SoftInputs = { role, hibernateHold: held ? { held: true, reason: 'background' } : { held: false },
+            // I7: a coordinator's reader wait is the hold table's in W1a, and it has no Overlord place; the Overlord's
+            // place report is W1's, so unmeasured here.
+            readersRunning: role === 'coordinator' ? NA : M(facts.get(who)!.readers),
+            operatorQuietObservedMs: M(obs.ms - lastOperatorObs),
+            placeHiddenObservedMs: role === 'overlord' ? U : NA, mode: 'when-away', dueSinceObservedMs: obs.ms - r.dueSinceObs,
+            generationAgeObservedMs: age(r), holdOffUntilObservedMs: r.holdOffUntil, softRenewalsInWindow: inWindow,
+            overlordOutsideActive: overlord.view.state !== 'active' };
+          const may = mods.soft.softRenewalMay(si);
+          if (!may.start) {
+            if (may.waitFor === 'budget') cover('budget-wait');
+            if (may.waitFor === 'overlord-first') cover('overlord-first');
+            continue;
+          }
+          const before = r.view.state; const at = `obs=${obs.ms};age=${age(r)};n=${r.n};from=${before}`;
+          apply(who, { kind: 'due', cls: 'soft' });
+          if (before === 'degraded') cover('soft-due-in-degraded');
+          if (r.view.state === before) continue;
+          cover('soft-renewal');
+          line('soft-renewal', who, at, 'lane');
+          r.softStamps = [...r.softStamps, obs.ms];
+          r.dueSinceObs = null;
+        }
+        server.scheduler.after(BEAT_MS, serverBeat);
+      };
+
+      world.onBoot(() => {
+        proc = `p${boots++}`;
+        // A crash right after a thaw loses what waited in the socket, except a start (the start-while-down rule).
+        for (const [who, , e] of frozenQueue.splice(0)) if (e.kind === 'started') startQueue.push([who, e]);
+        thawPending = false;
+        if (boots > 1) {
+          line('server', 'boot', 'up', 'sim');
+          for (const [who, e] of startQueue.splice(0)) { cover('start-while-down'); apply(who, e); }
+        }
+        server.scheduler.after(BEAT_MS, serverBeat);
+      });
+    },
+  };
+}
+
+// ---- The invariants: predicates over the lines alone.
+const violation = (invariant: string, l: SequenceLine, message: string): Violation => ({ invariant, seq: l.seq, message });
+/** Table 11.5b: one observed step is at most two periods of the 30 s renewal lane, written here from the table rather
+ *  than read from the code under test. */
+const STEP_CAP_MS = 60_000;
+/** §3.3.11's renewal budget runs through these states, checkpointed to active. */
+const BUDGET_STATES = ['checkpointed', 'clearing', 'carded', 'probing'] as const;
+const num = (state: string, key: string): number => Number(new RegExp(`${key}=(-?\\d+)`).exec(state)?.[1] ?? Number.NaN);
+
+export const GEN_DAY_INVARIANTS: readonly Invariant[] = [
+  { name: 'G1', says: 'no generation is active without a read card hash and a passed round',
+    check(lines) {
+      const minted = new Set<string>(); const card = new Set<string>(); const passed = new Set<string>();
+      for (const l of lines) {
+        if (l.kind === 'gen' && l.actor === 'mint') minted.add(l.id);
+        if (l.kind === 'card' && l.state === 'match') card.add(l.id);
+        if (l.kind === 'probes' && l.state === 'passed' && card.has(l.id)) passed.add(l.id);
+        if (l.kind === 'gen' && l.state === 'active' && minted.has(l.id) && !(card.has(l.id) && passed.has(l.id))) {
+          return violation('G1', l, `${l.id} active without a read card and a passed round`);
+        }
+      }
+      return null;
+    } },
+  { name: 'G2', says: 'at most three soft renewals in any six hours of observed time, per identity',
+    check(lines) {
+      const by = new Map<string, Array<[number, SequenceLine]>>();
+      for (const l of lines) if (l.kind === 'soft-renewal') {
+        const xs = by.get(l.id) ?? []; xs.push([num(l.state, 'obs'), l]); by.set(l.id, xs);
+        const within = xs.filter(([t]) => xs.at(-1)![0] - t < SOFT_BUDGET.windowMs);
+        if (within.length > SOFT_BUDGET.count) return violation('G2', l, `${l.id}: ${within.length} soft renewals in six observed hours`);
+      }
+      return null;
+    } },
+  { name: 'G3', says: 'no soft renewal ends a generation younger than 30 observed minutes',
+    check(lines) {
+      for (const l of lines) if (l.kind === 'soft-renewal' && !(num(l.state, 'age') >= LEAST_AGE_MS)) {
+        return violation('G3', l, `${l.id}: a soft renewal at observed age ${num(l.state, 'age')}`);
+      }
+      return null;
+    } },
+  { name: 'G4', says: 'a restart never advances observed time; a freeze advances it by the step cap and answers a step gap; within one process with no gap, observed time advances exactly as the clock does; no deadline fires twice',
+    check(lines) {
+      let last: number | null = null; let lastAt = 0; let lastBeforeCrash: number | null = null;
+      let afterBoot = false; let stepGap = false; let gapSince = false; let frozeSince = false;
+      const fired = new Set<string>();
+      for (const l of lines) {
+        if (l.kind === 'server' && l.state === 'down') { lastBeforeCrash = last; gapSince = true; frozeSince = false; }
+        if (l.kind === 'server' && l.state === 'up') { afterBoot = true; gapSince = true; }
+        if (l.kind === 'server' && l.state.startsWith('frozen')) { frozeSince = true; gapSince = true; }
+        if (l.kind === 'obs-gap') {
+          gapSince = true;
+          if (l.state.startsWith('kind=step;')) stepGap = true;
+          if (l.state.startsWith('kind=process;')) frozeSince = false;   // a freeze right after a boot: the restart's gap answers it
+        }
+        if (l.kind === 'obs') {
+          const ms = num(l.state, 'ms');
+          if (last !== null && ms < last) return violation('G4', l, `observed time fell from ${last} to ${ms}`);
+          if (afterBoot && lastBeforeCrash !== null && ms !== lastBeforeCrash) {
+            return violation('G4', l, `observed time moved across a gap: ${lastBeforeCrash} before the crash, ${ms} after the boot`);
+          }
+          if (last !== null && ms - last > STEP_CAP_MS) return violation('G4', l, `one step advanced ${ms - last}, past the cap`);
+          if (stepGap && last !== null && ms - last !== STEP_CAP_MS) {
+            return violation('G4', l, `a freeze advanced observed time by ${ms - last}, not by the cap (review 1894, F1)`);
+          }
+          // A freeze before the first observation has no stamp to step from (review 1920, R1).
+          if (frozeSince && last !== null && !stepGap) return violation('G4', l, 'a freeze answered no step gap (review 1912, F7)');
+          // Both ways: within one process with no gap, observed time advances by exactly the clock's step (review 1920, R5).
+          if (!gapSince && last !== null && ms - last !== l.at - lastAt) {
+            return violation('G4', l, `observed time moved ${ms - last} ms in ${l.at - lastAt} of clock (review 1912, F2; review 1920, R5)`);
+          }
+          afterBoot = false; stepGap = false; gapSince = false; frozeSince = false; last = ms; lastAt = l.at;
+        }
+        if (l.kind === 'deadline') {
+          if (fired.has(l.id)) return violation('G4', l, `deadline ${l.id} fired twice`);
+          fired.add(l.id);
+        }
+      }
+      return null;
+    } },
+  { name: 'G6', says: 'each transient state ends within its deadline plus one lane period, and a renewal that lands (a later generation active) spends at most RENEWAL_BUDGET_S from checkpointed or clearing, plus one lane period per state, unless the server was down or frozen meanwhile',
+    check(lines) {
+      // The lane sees a deadline at its next pass, so each state may run one period past it (review 1912, F10).
+      const slack = RENEWAL_LANE_PERIOD_MS;
+      const budget = RENEWAL_BUDGET_S * 1_000 + BUDGET_STATES.length * slack;
+      const cur = new Map<string, { state: string; at: number; n: number; waived: boolean }>();
+      const began = new Map<string, { at: number; n: number; waived: boolean }>();
+      for (const l of lines) {
+        if (l.kind === 'server' && (l.state === 'down' || l.state.startsWith('frozen'))) {
+          for (const c of cur.values()) c.waived = true;
+          for (const b of began.values()) b.waived = true;
+        }
+        if (l.kind !== 'gen') continue;
+        const who = l.id.slice(0, l.id.lastIndexOf('#')); const n = Number(l.id.slice(l.id.lastIndexOf('#') + 1));
+        const c = cur.get(who);
+        const deadlineS = c === undefined ? undefined : STATE_DEADLINE_S[c.state as keyof typeof STATE_DEADLINE_S];
+        if (c !== undefined && c.n === n && deadlineS !== undefined && !c.waived && l.at - c.at > deadlineS * 1_000 + slack) {
+          return violation('G6', l, `${l.id}: ${c.state} lasted ${l.at - c.at} ms, past its ${deadlineS} s and one lane period`);
+        }
+        cur.set(who, { state: l.state, at: l.at, n, waived: false });
+        if ((l.state === 'checkpointed' || l.state === 'clearing') && !began.has(who)) began.set(who, { at: l.at, n, waived: false });
+        if (l.state === 'degraded') began.delete(who);   // the renewal ended without landing, on either generation
+        if (l.state === 'active' && began.has(who)) {
+          const b = began.get(who)!; began.delete(who);
+          if (n > b.n && !b.waived && l.at - b.at > budget) return violation('G6', l, `${l.id}: a renewal took ${l.at - b.at} ms`);
+        }
+      }
+      return null;
+    } },
+  { name: 'G7', says: 'a soft renewal starts only from active, and never while the generation\'s hold-off stands',
+    check(lines) {
+      const holdOff = new Map<string, number>();
+      for (const l of lines) {
+        if (l.kind === 'hold-off') holdOff.set(l.id, num(l.state, 'until'));
+        if (l.kind !== 'soft-renewal') continue;
+        const from = /from=(\w+)/.exec(l.state)?.[1];
+        if (from !== 'active') return violation('G7', l, `${l.id}: a soft renewal from ${from} ("degraded blocks soft triggers")`);
+        const until = holdOff.get(`${l.id}#${num(l.state, 'n')}`);
+        if (until !== undefined && num(l.state, 'age') < until) return violation('G7', l, `${l.id}: a soft renewal at age ${num(l.state, 'age')}, inside the hold-off to ${until}`);
+      }
+      return null;
+    } },
+  { name: 'G5', says: 'every start mints exactly one generation',
+    check(lines) {
+      const starts = new Map<string, number>(); const mints = new Map<string, number>();
+      for (const l of lines) {
+        if (l.kind === 'start') starts.set(l.id, (starts.get(l.id) ?? 0) + 1);
+        if (l.kind === 'gen' && l.actor === 'mint') {
+          const who = l.id.slice(0, l.id.lastIndexOf('#'));
+          mints.set(who, (mints.get(who) ?? 0) + 1);
+          if ((mints.get(who) ?? 0) !== (starts.get(who) ?? 0)) return violation('G5', l, `${who}: a mint with no start`);
+          if (Number(l.id.slice(l.id.lastIndexOf('#') + 1)) !== mints.get(who)! + 1) return violation('G5', l, `${l.id}: not the next number`);
+        }
+        if (l.kind === 'sim' && l.state === 'end') {
+          for (const [who, n] of starts) if ((mints.get(who) ?? 0) !== n) return violation('G5', l, `${who}: ${n} starts, ${mints.get(who) ?? 0} mints`);
+        }
+      }
+      return null;
+    } },
+];

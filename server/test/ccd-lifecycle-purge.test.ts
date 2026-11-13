@@ -2776,3 +2776,21 @@ describe('the launch record goes with the row (session-continuity 6b)', () => {
     expect(out).toContain(`unremoved=[${path.join(REGD(), `${id}.deleg`)}]`);
   });
 });
+
+// ── The fresh start's marker goes with the row (overlord W1a, plan review 1890 C2) ──────────────────────────────────
+// `cmd_hibernate --roll --fresh` writes `$REG/<id>.fresh` (one-shot, dot-free, the new uuid) for the unit's spawn to
+// consume. A row purged while one stands must not leave it for a slug's next owner to start fresh on.
+describe('the fresh start\'s marker goes with the row (overlord W1a)', () => {
+  it('_reg_purge removes <id>.fresh, and another row\'s marker stays', () => {
+    const REGD = path.join(h.home, '.cc-sessions');
+    const id = seed();
+    fs.writeFileSync(path.join(REGD, `${id}.fresh`), 'b0000000-0000-4000-8000-000000000002');
+    const neighbour = path.join(REGD, `${id}x.fresh`);
+    fs.writeFileSync(neighbour, 'b0000000-0000-4000-8000-000000000003');
+    const out = h.sh(`_reg_purge ${id}; echo "rc=$?"; echo "unremoved=[$REG_PURGE_UNREMOVED]"`);
+    expect(out).toContain('rc=0');
+    expect(out).toContain('unremoved=[]');
+    expect(fs.existsSync(path.join(REGD, `${id}.fresh`)), 'it goes with the row').toBe(false);
+    expect(fs.existsSync(neighbour), 'another row\'s marker stays').toBe(true);
+  });
+});

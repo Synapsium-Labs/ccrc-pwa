@@ -92,7 +92,9 @@ Table 11.1c (the `SessionHost` row), Table 11.1d (ccd's capability words).
 **Files:**
 - Modify: `ccd/ccd` (`cmd_hibernate` parses `--fresh` and, after the sleep and before the wake, writes
   `$REG/<id>.fresh` = `<new uuid>` and then the row's uuid = `<new uuid>`; the in-unit spawn's mode reader
-  (`_spawn_mode`) answers `new` for a marker naming the row's uuid, and `_spawn_start` consumes it; `cmd_hibernate`
+  (`_spawn_mode`) answers `new` for a marker naming the row's uuid, and `_spawn_start` consumes it, leaving the receipt
+  `used <uuid>` once its `tmux new-session` answered 0; `cmd_hibernate` exits 0 only on that receipt, and otherwise exits
+  7, `roll-fresh-unproven`, with the old uuid back (reviews 1904 F1 and 1919 R1); `cmd_hibernate`
   restores the old uuid after a failed wake (exit 4); `cmd_ensure` is unchanged and keeps one positional; `_reg_purge`'s
   inventory comment gains `fresh`)
 - Test: `server/test/ccd-hibernate-roll.test.ts`, `server/test/ccd-ensure-argv.test.ts` (new, or the existing suite
@@ -118,6 +120,11 @@ Table 11.1c (the `SessionHost` row), Table 11.1d (ccd's capability words).
   - The wake failing (the stub `_supervised_start` returning 1): exit 4 `roll-wake-failed`, as `--roll`; the marker is
     gone and the registry's uuid is the old one.
   - The wake answering exit 5: nothing is restored; the marker and the new uuid stand (the builder's change, m-B6).
+  - **The proof (exit 7, `roll-fresh-unproven`):** a wake that answered 0 with no receipt in the marker exits 7, the
+    marker gone and the old uuid back, with `swap.log` and a `failed` hibernate row. The cases: a concurrent wake before
+    the roll's writes, and one between them (the real `cmd_ensure` as that wake); the consuming spawn's `tmux
+    new-session` failing (a lost duplicate-name race); and an account at its ceiling, where the wake's move answers 0
+    with no spawn. The renewal act reads 7 as "not renewed, ask again later".
   - `hibernate --fresh <id>` without `--roll` dies with usage (exit 1: `die` is `exit 1`) and touches nothing.
   - `--fresh=x` dies with usage (exit 1).
   - `.no-roll` present: refused exactly as `--roll` is refused, the uuid unchanged and no marker written.
@@ -125,8 +132,9 @@ Table 11.1c (the `SessionHost` row), Table 11.1d (ccd's capability words).
 - [ ] **Step 3: Run.** Expected: red.
 - [ ] **Step 4: Implement.** The new uuid comes from `_plat_uuid`. After the sleep, `cmd_hibernate` writes the marker
   and then the row's uuid, each through `_reg_set` (never a second writer), and only then runs the wake. The in-unit
-  spawn's mode reader answers `new` when the marker names the row's uuid, and `_spawn_start` removes the marker and
-  builds `--session-id` for this spawn and its retry; a stale marker is removed and named on stderr. On a wake exit 4,
+  spawn's mode reader answers `new` when the marker names the row's uuid, and `_spawn_start` builds `--session-id` for
+  this spawn and its retry and, once its create answered 0, leaves the receipt `used <uuid>`, which `cmd_hibernate`
+  requires after a wake that answered 0 (else exit 7); a stale marker is removed and named on stderr. On a wake exit 4,
   `cmd_hibernate` removes the marker if it still stands and writes the old uuid back; on exit 5 it restores nothing. The fresh path changes only the uuid and the flag; everything else `_spawn_start` composes
   (the route's class, effort and account, the settings, the environment) is read at the spawn, so a route write made
   before the act applies in the same step. The marker's name is dot-free, so `_reg_purge` and `_ws_slug_residue`
@@ -171,14 +179,21 @@ Table 11.1c (the `SessionHost` row), Table 11.1d (ccd's capability words).
 
 ## Deviations found
 
-None yet. Decisions this plan takes, by slug:
+- **D-8251, fresh-start-growth-waiver, scope** (2026-11-13) — ccd/ccd grows past GROWTH_LIMIT by the fresh start's proof: review 1904 F1 makes the consuming
+  `new` spawn leave a receipt (`used <uuid>`) in the marker, and `cmd_hibernate` exits 7 `roll-fresh-unproven`, with the
+  old uuid back, when a wake that answered 0 left none (a concurrent wake, a lost create or an account move came first). With the marker
+  read through `_reg_get_to`, stale removal, and swap.log naming both uuids before the writes, #2742 measures +54 net
+  lines in `ccd/ccd` against its merge base. Waived to 70 by `server/test/growth-waivers/D-8251-ccd-ccd.json`.
+
+Decisions this plan takes, by slug:
 
 - **fresh-is-a-roll-mode** — `--fresh` is accepted only with `--roll`, so it inherits the roll's refusals and exit
-  codes, and the builder's boolean becomes a three-word mode.
+  codes, plus its own exit 7 (`roll-fresh-unproven`, an unproven fresh start), and the builder's boolean becomes a three-word mode.
 - **fresh-crosses-by-marker** — the fresh request reaches the in-unit spawn through a one-shot, dot-free registry
   marker (`$REG/<id>.fresh`), never an argument, so `cmd_ensure` keeps its one positional; a failed wake (exit 4)
   removes the marker and restores the old uuid. The name `fresh` is the one the build chose and the coordinator ruled
-  on; Table 3.6a lists the marker, with one writer (`ccd hibernate --roll --fresh`), consumed by the in-unit spawn, and
+  on; Table 3.6a lists the marker, with one writer (`ccd hibernate --roll --fresh`), consumed by the in-unit spawn (which leaves the receipt the roll
+  reads as its proof), and
   no authority and no switch (this programme's spec amendment).
 - **marker-follows-the-build** — the marker holds the new uuid only, and `cmd_hibernate` writes it and then the row's
   uuid before the wake; the spawn acts on a marker naming the row's own uuid (the coordinator's ruling on R5).
