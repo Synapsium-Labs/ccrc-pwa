@@ -1156,7 +1156,7 @@ Only the fence is the Overlord's alone.
 | State | What happens | Seconds, and what follows a timeout |
 |---|---|---|
 | `active` | It works. A renewal may be due | none |
-| `draining` | No new hold is taken (the readiness word reads `renewing`). Standing holds are kept or released by the retention table (§6.7). The mail gate holds deliveries, and delivered but unacknowledged ones are queued again. The lane waits until no reader is running | 120, then back to the state it left: `active` with a hold-off, or `degraded`. Outside the budget |
+| `draining` | No new hold is taken (the readiness word reads `renewing`). Standing holds are kept or released by the retention table (§6.7). The mail gate holds deliveries, and delivered but unacknowledged ones are queued again. The lane waits until no reader is running | 120, then `active` with a hold-off if the generation was proven (it read its card and passed its probes), or `degraded` if it was not (plan-driven consistency, the W1a plans: the A2 ruling). Outside the budget |
 | `checkpointed` | The server assembles the checkpoint and asks for the handover note | 60, then `clearing` without the note; skipped on a hard trigger |
 | `clearing` | The session's host ends the conversation and starts a fresh one | 90, for all tries |
 | `carded` | The anchor is injected, the card is read, and the server sees the served hash come back | 45, with one re-nudge |
@@ -1171,9 +1171,10 @@ minutes of observed time in which no soft trigger starts a renewal (Table 11.5b)
   outside that budget. From `draining` to `probing`, the doors accept only card, probe and note calls.
 - **The receipt has two halves.** The first: the old conversation ended. The second: the new one started, and read the
   card hash the server served.
-  - A failure before the first half returns the generation to the state it left: `active` with a hold-off (Table
-    11.5b), or `degraded` if the renewal began there. A generation never becomes `active` without having read its
-    card and passed its probes.
+  - A failure before the first half returns the generation to `active` with a hold-off (Table 11.5b) if it was
+    proven, whichever state the renewal began from, and to `degraded` with one operator item if it was not. A
+    generation never becomes `active` without having read its card and passed its probes (plan-driven consistency, the W1a plans: the
+    A2 ruling, which reads these two sentences together).
   - A failure after it retries within the state's deadline, then goes to `degraded`.
   - `renew(session, n)` is idempotent on n, so a retry never starts two conversations.
 - **`degraded`** blocks soft triggers only. A hard trigger still renews. The operator's "Renew now" and a rebind (§3.1)
