@@ -4532,7 +4532,7 @@ describe('the compaction card — option A, the staging-only helper (spec §3.1 
     // NON-VACUITY, both halves: a scan over an empty set proves nothing, and a
     // scan whose anchors had all vanished would report success just as loudly.
     expect(guards.length, 'the re-check is called at all').toBeGreaterThan(0);
-    expect(acquires.length, 'and the sections exist to be guarded').toBe(5);
+    expect(acquires.length, 'and the sections exist to be guarded (the sixth, the precompact line\'s)').toBe(6);
 
     // Each entry is the FIRST line of a statement that mutates a canonical
     // pathname while the row's mutex is held. Order matters: the scan walks
@@ -6185,7 +6185,7 @@ describe('the compaction card — jq programs and shell words in the compaction 
     // NON-VACUITY, MANDATORY and BY IDENTITY — §5 names these two sites by
     // pre-Task-9 line anchors that this task moved, so they are required by
     // what they ARE rather than by where they sit.
-    expect(a.programs.length, 'the scan found every jq program in the arms — 4 in PreCompact (the fourth its precompact line, Overlord W0-05), 9 in PostCompact, 1 in the emitter')
+    expect(a.programs.length, 'the scan found every jq program in the arms — 3 in PreCompact, 1 in its precompact line (Overlord W0-05), 9 in PostCompact, 1 in the emitter')
       .toBe(14);
     const emit = audit(hookSrc()).programs.filter((h) => h.fn === '_hook_emit_context');
     expect(emit.length, 'the emitter\'s program is in the found set').toBeGreaterThan(0);
@@ -7158,8 +7158,10 @@ const forkCensus = (raw: string, whole = false): { forks: string[]; unparsed: st
   // THE WINDOW. The acquire's LAST child is its `flock`, so the section opens
   // straight after the first one; it closes at the helper fork (the first
   // child after the release) or, on an arm that releases and returns, at the
-  // end of the trace. `_hook_compact_pre` is the last statement in the file,
-  // so "end of trace" really is "end of the arm".
+  // next `flock`. `_hook_compact_pre` is no longer the last arm: the Overlord's
+  // precompact line (`_hook_compact_pre_line`) runs after it with an acquire of
+  // its own, so such a window closes at THAT acquire's `flock` and carries the
+  // three children it takes first: its line's `jq`, its alias `link` and `rm`.
   const flockAt = whole ? 0 : events.findIndex((e) => e.kind === 'exec' && e.name === 'flock');   // `whole`: every child of the run, no window
   expect(flockAt, 'the arm took the row mutex').toBeGreaterThan(-1);
   // THE END IS THE CLONE, NOT ITS EXEC. `timeout`'s `execve` happens in the
@@ -7311,7 +7313,9 @@ describe.skipIf(process.platform === 'darwin')('the compaction card — the firs
     // runs to the end of the trace here, where the publishing run's ends at the
     // helper fork. A SINGLE expected list carrying this member would be red on
     // the ordinary run, which is why the multiset is stated per scenario.
-    expect(tally(forks)).toEqual({ '(subshell)': 1, find: 2, jq: 1, link: 1, mv: 1, rm: 2 });
+    // Plus the precompact line's three children before its own `flock` (the
+    // window's note above): jq, link and rm each one higher than the card's.
+    expect(tally(forks)).toEqual({ '(subshell)': 1, find: 2, jq: 2, link: 2, mv: 1, rm: 3 });
   }, 60_000);
 
   // THE RESIDUE SCENARIO (closing gate I1). The sweep loop's per-iteration

@@ -1,9 +1,10 @@
 // The PreCompact line (Overlord W1a, context readings; W0-05). An automatic compaction can fire PreCompact with no
 // PostCompact after it, so PreCompact writes one line to `$REG/<id>.precompact`, its OWN file: every PostCompact commit
 // re-checks the whole `.compactions` journal against JOURNAL_RECORD_PRED, and a second line shape there would refuse
-// every later commit. One writer (`_hook_compact_pre_line`), inside PreCompact's first held section of the row's
-// `.compactions.lock`, so a PreCompact whose scope does not resolve (it returns before that section) writes none;
-// dot-free, so `_reg_purge` takes it with the row; bounded by rotation to `.precompactprev` at PRECOMPACT_KEEP lines.
+// every later commit. One writer (`_hook_compact_pre_line`), an arm of its own after `_hook_compact_pre` and
+// `_hook_history_pre`, so the card's early returns (its off switch, an unresolved scope, its lock miss) never drop the
+// line; under the row's `.compactions.lock`; dot-free, so `_reg_purge` takes it with the row; bounded by rotation to
+// `.precompactprev` at PRECOMPACT_KEEP lines.
 //
 // Runs ccd/session-hook.sh for real inside a fixture HOME (the harness shape of session-hook-compact-carry.test.ts,
 // copied: a test file cannot import another). `_reg_purge` runs through makeCcdHarness's fixture HOME, never the live one.
@@ -93,11 +94,18 @@ describe('PreCompact writes one line to its own file (W0-05)', () => {
     expect(linesOf(preFile())).toEqual([{ at: expect.any(Number), trigger: 'auto', scope: 'main', transcript: t, phase: 'pre' }]);
   });
 
-  // The line rides PreCompact's first held section, which a transcript that cannot be read never reaches: no line,
-  // and the reader answers that session's file absent rather than a count of 0.
-  it('a PreCompact whose scope does not resolve writes no line', () => {
+  // Plan review 1890 C1: the card's early returns must not drop the line, or a missing line reads as a measured zero.
+  it('a PreCompact whose scope does not resolve still writes its line, scope and transcript null', () => {
     run(preCompact('auto', '/rig/absent/transcript.jsonl'));
-    expect(fs.existsSync(preFile())).toBe(false);
+    expect(linesOf(preFile())).toEqual([{ at: expect.any(Number), trigger: 'auto', scope: null, transcript: null, phase: 'pre' }]);
+  });
+
+  it('with the compaction card switched off the line is still written', () => {
+    fs.mkdirSync(path.join(home, '.ccrc'), { recursive: true });
+    fs.writeFileSync(path.join(home, '.ccrc', 'compact-card-off'), '');
+    run(preCompact('auto', transcript()));
+    expect(fs.existsSync(path.join(reg(), `${ID}.compactset`)), 'the card did not run').toBe(false);
+    expect(linesOf(preFile())).toEqual([{ at: expect.any(Number), trigger: 'auto', scope: null, transcript: null, phase: 'pre' }]);
   });
 
   it('a trigger outside auto and manual is written as other, never verbatim', () => {
@@ -132,6 +140,23 @@ describe('PreCompact writes one line to its own file (W0-05)', () => {
     fs.symlinkSync(target, preFile());
     run(preCompact('auto', transcript()));
     expect(fs.readFileSync(target, 'utf8')).toBe('');
+  });
+});
+
+describe('the line runs after the refusal decision (plan review 1890 I1)', () => {
+  // A PreCompact refusal is decided in `_hook_history_pre` (the compaction piece), so the line's call follows that
+  // arm's in the dispatch: a refused compaction then writes no pre line and is not counted.
+  it('the dispatch calls _hook_compact_pre_line after _hook_history_pre and after _hook_compact_pre', () => {
+    const src = fs.readFileSync(HOOK, 'utf8');
+    const at = (call: string): number => {
+      const line = `if [[ "$event" == PreCompact ]]; then ${call} || true; fi`;
+      expect(src.split(line).length - 1, `${call} is dispatched once`).toBe(1);
+      return src.indexOf(line);
+    };
+    const card = src.indexOf('if [[ "$event" == PreCompact  ]]; then _hook_compact_pre  || true; fi');
+    expect(card, 'the card arm\'s dispatch').toBeGreaterThan(-1);
+    expect(at('_hook_compact_pre_line')).toBeGreaterThan(at('_hook_history_pre'));
+    expect(at('_hook_history_pre')).toBeGreaterThan(card);
   });
 });
 
@@ -212,6 +237,21 @@ describe('the row\'s purge takes both files (dot-free, so the suffix glob covers
       h.sh(`_reg_purge ${id}`);
       expect(fs.existsSync(path.join(r, `${id}.precompact`))).toBe(false);
       expect(fs.existsSync(path.join(r, `${id}.precompactprev`))).toBe(false);
+    } finally { h.cleanup(); }
+  });
+
+  it('a lone .precompact or .precompactprev holds the slug, and _ws_slug_residue names it', () => {
+    const h = makeCcdHarness('ccrc-precompact-slug-');
+    try {
+      const r = path.join(h.home, '.cc-sessions');
+      fs.mkdirSync(r, { recursive: true });
+      for (const field of ['precompact', 'precompactprev']) {
+        fs.writeFileSync(path.join(r, `demo-quiet-mesa.${field}`), '{"phase":"pre"}\n');
+        expect(h.sh('_ws_slug_free demo quiet-mesa && echo free || echo held').trim(), field).toBe('held');
+        expect(h.sh('_ws_slug_residue demo quiet-mesa'), field).toBe(`demo-quiet-mesa.${field}`);
+        fs.rmSync(path.join(r, `demo-quiet-mesa.${field}`));
+      }
+      expect(h.sh('_ws_slug_free demo quiet-mesa && echo free || echo held').trim(), 'CONTROL').toBe('free');
     } finally { h.cleanup(); }
   });
 

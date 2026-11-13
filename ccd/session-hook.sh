@@ -1375,7 +1375,7 @@ _hook_lock_init() {   # <canonical> -> 0 canonical exists and validates; 1 other
 _hook_lock_acquire() {   # <wait-seconds> -> 0 acquired (HOOK_LOCK_FD set); 1 refused; 2 mechanism absent
   local lock="$REG/.$id.compactions.lock" al="" fd="" tries=0
   HOOK_LOCK_FD=""
-  # WHY, NOT A SECOND STATUS. Every one of this file's five acquire sites reads
+  # WHY, NOT A SECOND STATUS. Every one of this file's six acquire sites reads
   # the acquire as a boolean (`|| return 0`) and ccd's eight read the VALUE, with
   # two FUNCTIONS across three of those sites — `cmd_start`, and `_spawn_start`,
   # which holds two of them — falling through an unknown code into a silent
@@ -1385,7 +1385,8 @@ _hook_lock_acquire() {   # <wait-seconds> -> 0 acquired (HOOK_LOCK_FD set); 1 re
   # §3.3 SessionStart one and §3.4 PostCompact two, which is five, and the two
   # fall-through FUNCTIONS own three SITES between them. A scan in
   # `session-hook.test.ts` now counts both files and reads the numerals out of
-  # this sentence and the spec's, so neither can drift from the code again.) The condition is carried in a named
+  # this sentence and the spec's, so neither can drift from the code again. The
+  # Overlord's PreCompact line, `_hook_compact_pre_line`, holds a sixth, W1a.) The condition is carried in a named
   # out-parameter instead, the way `GC_DIRTY_WHY` and `_WS_NESTED_WHY` already
   # carry theirs, and cleared on entry so a stale one is never read as this
   # call's.
@@ -1554,23 +1555,35 @@ _hook_lock_still_canonical() {   # <fd> -> 0 iff this descriptor is STILL the ca
 # legitimately different: every PostCompact commit re-checks the WHOLE journal
 # against JOURNAL_RECORD_PRED, a safety boundary, so a second line shape there
 # would refuse every later commit, an older hook's after a rollback included.
-# One writer (this function), inside PreCompact's first held section of the
-# row's `.compactions.lock`, so a line and a commit never interleave; no fork
-# unless it rotates. Dot-free, so `_reg_purge` and the slug passes take it with
-# the row. BOUNDED BY ROTATION, with no temp file: at PRECOMPACT_KEEP lines it
-# is renamed to `.precompactprev` and a fresh file starts, so a reader of both
-# always holds the last PRECOMPACT_KEEP lines.
+# AN ARM OF ITS OWN, run after `_hook_compact_pre` and `_hook_history_pre`, so
+# none of the card's early returns (its off switch, a scope that does not
+# resolve, its lock miss) can drop the line, and a PreCompact refusal decided
+# in `_hook_history_pre` comes first and skips it. One writer (this function),
+# under the row's `.compactions.lock`, so a line and a commit never interleave.
+# Dot-free, so `_reg_purge` and the slug passes take it with the row. BOUNDED
+# BY ROTATION, with no temp file: at PRECOMPACT_KEEP lines it is renamed to
+# `.precompactprev` and a fresh file starts, so a reader of both always holds
+# the last PRECOMPACT_KEEP lines. Its own lock miss still drops the line; the
+# server then reads one compaction fewer, never a file it cannot tell apart.
 PRECOMPACT_KEEP=32
-_hook_compact_pre_line() {   # <held lock fd> <line> -> appends it; silent and total on any failure
-  local f="$REG/$id.precompact" lines=()
+_hook_compact_pre_line() {   # PreCompact -> one line on $REG/<id>.precompact; silent and total on any failure
+  local f="$REG/$id.precompact" line="" lockfd="" lines=()
+  line=$(jq -c --argjson at "$(_hook_epoch_ms)" --arg s "${CS_SCOPE-}" --arg t "${CS_TRANSCRIPT-}" \
+    '{at:$at, trigger:(.trigger // "auto" | if . == "auto" or . == "manual" then . else "other" end),
+      scope:(if $s=="" then null else $s end), transcript:(if $t=="" then null else $t end), phase:"pre"}' \
+    <<<"$payload" 2>/dev/null) || return 0
+  _hook_lock_acquire "$COMPACT_LOCK_WAIT" || return 0
+  lockfd="$HOOK_LOCK_FD"
   # A FIFO, a symlink or a directory at the pathname is not this file and is
   # never opened: an open of a FIFO would block inside the held lock.
-  [[ ! -L "$f" ]] && { [[ ! -e "$f" ]] || [[ -f "$f" ]]; } || return 0
-  [[ -f "$f" ]] && { mapfile -t lines < "$f"; } 2>/dev/null
-  if (( ${#lines[@]} >= PRECOMPACT_KEEP )) && _hook_lock_still_canonical "$1"; then
-    mv -f "$f" "$REG/$id.precompactprev" 2>/dev/null
+  if _hook_generation_ok && [[ ! -L "$f" ]] && { [[ ! -e "$f" ]] || [[ -f "$f" ]]; }; then
+    [[ -f "$f" ]] && { mapfile -t lines < "$f"; } 2>/dev/null
+    if (( ${#lines[@]} >= PRECOMPACT_KEEP )) && _hook_lock_still_canonical "$lockfd"; then
+      mv -f "$f" "$REG/$id.precompactprev" 2>/dev/null
+    fi
+    _hook_lock_still_canonical "$lockfd" && { printf '%s\n' "$line" >> "$f"; } 2>/dev/null
   fi
-  _hook_lock_still_canonical "$1" && { printf '%s\n' "$2" >> "$f"; } 2>/dev/null
+  _hook_lock_release "$lockfd"
   return 0
 }
 
@@ -1582,7 +1595,7 @@ _hook_compact_pre_line() {   # <held lock fd> <line> -> appends it; silent and t
 _hook_compact_pre() {
   [ -e "$COMPACT_CARD_OFF" ] && return 0
   local tp="" trig="" set="$REG/$id.compactset" cardf="$REG/$id.compactcard" doc="" at="" nonce="" rc=0 helper_rc=0 lockfd=""
-  local aged="" cand="" suffix="" setstage="" cardstage="" ownhead="" ovl="false" pl=""
+  local aged="" cand="" suffix="" setstage="" cardstage="" ownhead="" ovl="false"
   local mins=$(( COMPACT_CARD_MAX_AGE / 60 ))
   tp=$(jq -r '.transcript_path // empty' <<<"$payload" 2>/dev/null) || return 0
   trig=$(jq -r '.trigger // "auto"' <<<"$payload" 2>/dev/null) || trig="auto"
@@ -1595,11 +1608,6 @@ _hook_compact_pre() {
   # asserts exactly that: the acquire below sits AFTER both of these calls and
   # BEFORE the overlap `find`.
   rc=0; _hook_graph_measure || rc=$?
-  # THE PRECOMPACT LINE'S TEXT (Overlord W0-05), built here so its forks stay
-  # outside the held section; it is written just after the generation check.
-  pl=$(jq -cn --argjson at "$(_hook_epoch_ms)" --arg trig "$trig" --arg s "$CS_SCOPE" --arg t "$CS_TRANSCRIPT" \
-    '{at:$at, trigger:(if $trig=="auto" or $trig=="manual" then $trig else "other" end),
-      scope:$s, transcript:(if $t=="" then null else $t end), phase:"pre"}' 2>/dev/null) || pl=""
   # ACQUIRE. From here to the release, this arm owns the row: the overlap
   # verdict, the sweep and the initial canonical publication are one
   # uninterrupted section, so no sibling can publish between the check and the
@@ -1610,7 +1618,6 @@ _hook_compact_pre() {
   lockfd="$HOOK_LOCK_FD"
   # STEP 5: the generation, validated UNDER the lock and before any inspection.
   _hook_generation_ok || { _hook_lock_release "$lockfd"; return 0; }
-  [[ -z "$pl" ]] || _hook_compact_pre_line "$lockfd" "$pl"
   # OVERLAP (spec §3.0). One slot per session id, and every context of the
   # session writes it. An unconsumed set still inside the in-flight window
   # means another compaction is in flight (or failed inside the window), and
@@ -6371,5 +6378,8 @@ _hook_history_pre() {   # PreCompact: the steer print, then its receipt; silent 
   return 0
 }
 if [[ "$event" == PreCompact ]]; then _hook_history_pre || true; fi
+# AFTER the history arm, which is where a PreCompact refusal is decided: a
+# refused compaction writes no pre line (Overlord W1a, plan review 1890 I1).
+if [[ "$event" == PreCompact ]]; then _hook_compact_pre_line || true; fi
 if [[ "$event" == PostCompact ]]; then _hook_compact_post || true; fi
 exit 0
