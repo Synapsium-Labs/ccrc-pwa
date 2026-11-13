@@ -79,3 +79,30 @@ export const ROLE_FACTS_CHILD_AXIS: Omit<RoleFacts, 'child'> = {
  *  badge although it was never given the card; both are as spec §8 asks. */
 export const sessionRoleOf = (child: ChildMark): SessionRole =>
   sessionRoleOfReading(roleOf({ ...ROLE_FACTS_CHILD_AXIS, child }));
+
+/** What a caller reads about one session, before it is assembled into `RoleFacts`. */
+export interface RoleFactInputs {
+  /** The registry record's child mark, as read. */
+  readonly child: ChildMark;
+  /** The kind of the run the child mark names. Read only when `child.kind` is 'child'. */
+  readonly childRunKind: RunKind | 'unmeasured';
+  /** The ids that claim a run that is not terminal (`openCoordinatorIds`), or 'unmeasured'. */
+  readonly openCoordinators: ReadonlySet<string> | 'unmeasured';
+  /** Declared coordinator intent on the current incarnation, or 'unmeasured'. */
+  readonly intentDeclared: boolean | 'unmeasured';
+}
+
+const word = (v: boolean | 'unmeasured'): RoleFactWord => (v === 'unmeasured' ? 'unmeasured' : v ? 'yes' : 'no');
+
+/** THE ONE ASSEMBLY of a session's `RoleFacts` (Overlord W1a, renewal deciders Task 0): every lane that asks `roleOf`
+ *  about a session builds its facts here. Pure. `designation`, `auditBody` and `replayBody` are fixed ('none', false,
+ *  false) until their waves bring readers; an unmeasured input stays unmeasured, never `no`. */
+export function roleFactsOf(sessionId: string, i: RoleFactInputs): RoleFacts {
+  return {
+    designation: 'none', auditBody: false, replayBody: false,
+    child: i.child,
+    childRunKind: i.child.kind === 'child' ? i.childRunKind : 'unmeasured',
+    claimsOpenRun: i.openCoordinators === 'unmeasured' ? 'unmeasured' : word(i.openCoordinators.has(sessionId)),
+    declaredIntent: word(i.intentDeclared),
+  };
+}

@@ -11,9 +11,10 @@ spec → plan → subagent execution with per-PR review lenses + whole-branch pa
 — read the README for anything below in depth.** Deep design lives in `docs/superpowers/specs/` (esp.
 `2026-08-10-architecture-ddd-clean-solid.md`, `2026-08-07-build7-fleet-coordination-design.md`).
 
-## Architecture aim: DDD, Clean Architecture, SOLID
-ccrc aims to follow **Domain-Driven Design, Clean Architecture and SOLID** (operator directive 2026-08-10). Every
-change should leave the code closer to that aim, never further from it:
+## Architecture: DDD, Clean Architecture, SOLID — all work follows them
+ccrc follows **Domain-Driven Design, Clean Architecture and SOLID** (operator directives 2026-08-10 and 2026-11-13).
+This binds ALL work, not only refactors: features, fixes, plans, specs and reviews. New code is written to these
+rules, and code a change touches is left closer to them, never further:
 - **DDD:** each concept lives in one bounded context, with one model and one vocabulary: Fleet Registry & Accounts,
   Fleet Mutation, Session Conversation, Workspace & PR Lifecycle, Coordination, Attention & Notification (the
   consolidation wave adds the update control plane, auth & box token, docs, and context-free shared kernels: clock
@@ -36,11 +37,21 @@ change should leave the code closer to that aim, never further from it:
 - **Characterization tests first when moving code:** pin today's inputs → outputs, green on `main` against the old
   code; a move commit changes only the test's imports, and an intended behaviour change is a commit of its own.
 
-Adoption is incremental: fix what you touch, never a big-bang rewrite. The assessment, target design and a Rejected
-list no PR relitigates are in `docs/superpowers/specs/2026-08-10-architecture-ddd-clean-solid.md`; its follow-up is
+Apply them with common sense:
+- **In proportion.** A one-line fix stays one line: fix the defect where it is, add no new violation, and do not grow
+  the change into a refactor. A larger change moves what it touches toward the rules, never a big-bang rewrite.
+- **No ceremony for its own sake.** No interface with one implementation unless it is a port at an edge, no layer
+  that only forwards, no repository over `CoordStore`. Everything on the spec's Rejected list stays rejected.
+- **`ccd` (bash) keeps the intent** — one owner per fact, decide before acting, the anti-corruption boundary —
+  within what bash can express; `ccd/contexts.tsv` and `ccd/contexts-edges.tsv` are its context map.
+- **An emergency may bend a rule** to restore service: say so in the PR and file the follow-up that straightens it.
+- **When a rule and the task genuinely conflict, say so** in the plan or PR (which rule, why, and the follow-up),
+  never bend it silently. Reviewers treat a silent bend as a defect: a second writer of a fact, a decision in
+  delivery code, an import that points outward, or a parallel mechanism beside an existing owner.
+
+The assessment, target design and a Rejected list no PR relitigates are in `docs/superpowers/specs/2026-08-10-architecture-ddd-clean-solid.md`; its follow-up is
 `docs/superpowers/specs/2026-10-19-ccrc-consolidation-wave-design.md` (the "legitimately different" catalogue). The
 binding ring rules are the **Rings / bounded contexts** bullet under *Conventions that shape every change* below.
-When a change and the aim conflict, or a change bends the rings, say so in the PR.
 
 ## This repository is public — nothing private goes in it
 Everything here is public: code, test fixtures, docs, commit messages, branch names, issues, PRs and comments.

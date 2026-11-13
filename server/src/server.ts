@@ -2147,6 +2147,8 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   registerLinearWorkspaceRoutes(app, {
     ccrcDir: deps.cfg.ccrcDir, gate: accountGate, rate: deps.linearRate ?? null, refresher: deps.linearRefresher ?? null,
     journal: deps.linearJournal ?? null, fetch: deps.linear?.fetch, timeoutMs: deps.linear?.timeoutMs,
+    // D-8405: a key act that learned a workspace's teams runs the automatic team link at once.
+    onTeamsLearned: () => watcher?.linkTeamsSoon(),
   });
   // The Linear proxy's thirteen box-token routes (#1444, spec §6), beside the connection's: the same rate service and
   // refresher, the one journal and the policy point, each passed through as it is (possibly absent, never a default),
@@ -3242,6 +3244,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       return refuseRoute(reply, failure === 'exists' ? 'project-exists' : 'outcome-unknown');
     }
     projectWalk.drop();
+    watcher?.linkTeamsSoon([plan.name]);   // D-8405: a project that appears is linked now, not at the next sweep
     return { ok: true, name: plan.name, source: plan.source } satisfies ProjectAddAnswer;
   });
 
