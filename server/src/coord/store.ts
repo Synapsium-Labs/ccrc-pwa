@@ -31,6 +31,7 @@ import type { BuildCaptureResult, BuildCaptureTry, ClaudeBuildRecord } from '../
 import type { LinkingWriteBody, ProjectLinkingWire } from '../../../shared/linking.js';
 import { openPracticeCase, practiceCaseNewest, type PracticeCaseNewestRead, type PracticeCaseOpen } from './practiceCasesStore.js';
 import type { CaseDue } from './practiceCases.js';
+import type { Invitation } from './peerBound.js';
 import { liftReviewCapByCoordinator, raiseReviewCapAsk, reviewCapGate, reviewCapStatesOf, type CoordLiftResult, type ReviewCapState } from './reviewCapStore.js';
 import { renderEnvelope } from './envelope.js';
 import { decideClaim, heldWithin, lapseWindowStart, ownLapsesUnder, rechainTargets, type ClaimRow, type LivenessVerdict } from './claims.js';
@@ -188,9 +189,9 @@ import {
   type SettledUpdateState, type StampRead, type TagFileRead, type UpdatePhase, type UpdateState,
   type AutoMode, type NotifyMode, type DriftFinding, isDriftKind,
   type WorkItemState, type LastReviewReport, type RunRefuseCode,
-} from '../../../shared/api.js'; import { programmeNameFromSlug } from '../../../shared/api.js'; import { isNodeRole } from '../../../shared/node-role.js';
+} from '../../../shared/api.js'; import { programmeNameFromSlug, PEER_MAIL_WINDOW_MS } from '../../../shared/api.js'; import { isNodeRole } from '../../../shared/node-role.js';
 
-/** One entry in `$REG/<id>.prhistory` (ccd/ccd:2252-2253). Re-declared as a TYPE
+/** One entry in `$REG/<id>.prhistory` (appended by ccd/ccd's `_pr_py`). Re-declared as a TYPE
  *  here rather than parsed twice: `coord/prhistory.ts` owns the reader.
  *
  *  `branch` is the branch at REPLACEMENT, the one the sweep was bound to when this row was written. `prbranch` is the
@@ -1575,7 +1576,7 @@ const ABANDONED_PARK_SQL =
  *     id>` and `sessionws.ts`'s `checkMail` both read it, and `checkMail` is
  *     keyed on the SESSION's own id. A reclaimed workspace id is not gone for
  *     good: `ccd start` / `ws-restore` bring the same id back, and `_ws_slug_new`
- *     recycles a purged slug outright (`ccd/ccd:3653`) — so the returning
+ *     recycles a purged slug outright (through `_ws_slug_free`) — so the returning
  *     session's mail strip would open on a kickoff briefing it to coordinate a
  *     program somebody else now holds. That is MINOR 9's own two-coordinator
  *     hazard, re-entered through the READ side after the write side closed it.
@@ -5150,7 +5151,7 @@ export class CoordStore {
   /** Routing spec 2026-09-14 §6 — speed and quality per run, read-only. The
    *  worker is `runs.sessionId` (never `claimedBy`, the coordinator). Holds
    *  pair `hold done` with the next `release done`; a swap is ONE `done` row
-   *  in ccd's journal (no intent, no landing pair — `ccd/ccd:17166`), so it is
+   *  in ccd's journal (no intent, no landing pair — `cmd_swap`'s `_lc_done swap`), so it is
    *  COUNTED and flagged, never timed. Refused wave-dones are the
    *  `mail_rejections` rows `closeRun` records with a `DONE_REFUSAL_CODES` code
    *  (the authority codes less `lineage-unmeasured`),
@@ -6545,14 +6546,17 @@ export class CoordStore {
 
   // ── mail (rows only; ingress validation is routes.ts, delivery is watch.ts) ─
 
+  /** `answersMail` (#2726, schema 65): the MAIL id of the mail this one was admitted as the invited reply to, which
+   *  only the mail ingress passes, on `peerMailVerdict`'s `invited`; absent or null for every other mail. This is the
+   *  column's one writer, and `mail_answers_once` refuses a second row answering the same mail. */
   insertMail(m: { fromId: string; fromUuid: string; toId: string; runId: number | null;
                   kind: MailKind; subject: string; body: string;
-                  artifacts: readonly string[] }): { id: number } {
+                  artifacts: readonly string[]; answersMail?: number | null }): { id: number } {
     const res = this.db.prepare(
-      'INSERT INTO mail (at, fromId, fromUuid, toId, runId, kind, subject, body, artifacts) ' +
-      'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      'INSERT INTO mail (at, fromId, fromUuid, toId, runId, kind, subject, body, artifacts, answersMail) ' +
+      'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
     ).run(Date.now(), m.fromId, m.fromUuid, m.toId, m.runId, m.kind, m.subject, m.body,
-      JSON.stringify(m.artifacts));
+      JSON.stringify(m.artifacts), m.answersMail ?? null);
     return { id: Number(res.lastInsertRowid) };
   }
 
@@ -6981,23 +6985,42 @@ export class CoordStore {
    *  one recipient, not on history (the hourly arm below is the one history
    *  bound, and it deliberately uses a different denominator). */
   outstandingPeerCount(fromId: string, toId: string): number {
+    // `answersMail IS NULL` (#2726): an invited reply holds no slot.
     return (this.db.prepare(
       'SELECT COUNT(*) AS n FROM mail m JOIN mail_deliveries d ON d.mailId = m.id ' +
-      `WHERE m.runId IS NULL AND m.fromId = ? AND d.toId = ? AND d.state IN ${OUTSTANDING_STATES_SQL}`,
+      `WHERE m.runId IS NULL AND m.fromId = ? AND d.toId = ? AND d.state IN ${OUTSTANDING_STATES_SQL} ` +
+      'AND m.answersMail IS NULL',
     ).get(fromId, toId) as { n: number }).n;
   }
 
-  /** How many peer mails `fromId` has had ACCEPTED in the sliding hour before
-   *  `now` — the per-sender arm of the 429 'peer-quota' bound. Counts `mail`
-   *  ROWS (inserts), not deliveries and not delivery state: a refusal inserts
-   *  no row and charges nothing; an ack does not refund the hour. `now` is
-   *  the caller's clock, passed in rather than read here — the same
+  /** The `at` of every peer mail `fromId` has had ACCEPTED in the sliding
+   *  hour before `now`, ascending — the per-sender arm of the 429 'peer-quota'
+   *  bound: its length is the count, and its oldest rows say when the arm
+   *  frees (#2726 (c), `peerMailVerdict`'s `retry`). Reads `mail` ROWS
+   *  (inserts), not deliveries and not delivery state: a refusal inserts no
+   *  row and charges nothing; an ack does not refund the hour. An invited
+   *  reply (`answersMail` set, #2726) is not charged. `now` is the caller's
+   *  clock, passed in rather than read here — the same
    *  policy-stays-with-the-caller reason `dueDeliveries`/`capsUsage` already
    *  take theirs. */
-  peerMailInLastHour(fromId: string, now: number): number {
+  peerMailAtsInLastHour(fromId: string, now: number): number[] {
     return (this.db.prepare(
-      'SELECT COUNT(*) AS n FROM mail WHERE runId IS NULL AND fromId = ? AND at > ?',
-    ).get(fromId, now - 3_600_000) as { n: number }).n;
+      'SELECT at FROM mail WHERE runId IS NULL AND fromId = ? AND at > ? AND answersMail IS NULL ORDER BY at, id',
+    ).all(fromId, now - PEER_MAIL_WINDOW_MS) as { at: number }[]).map((r) => r.at);
+  }
+
+  /** The delivery `deliveryId` names, read as an invitation to reply (#2726): the mail it carries, that mail's
+   *  sender, the session the delivery went to, whether that mail is itself an invited reply (it then invites nothing,
+   *  review 1907 F1), and whether a mail is already recorded as that mail's invited reply.
+   *  Null when no delivery has that id. Whether it IS an invitation for a given reply is `peerMailVerdict`'s call. */
+  invitation(deliveryId: number): Invitation | null {
+    const row = this.db.prepare(
+      'SELECT m.id AS mailId, m.fromId AS inviter, d.toId AS invitee, m.answersMail IS NOT NULL AS isReply, ' +
+      'EXISTS (SELECT 1 FROM mail r WHERE r.answersMail = m.id) AS answered ' +
+      'FROM mail_deliveries d JOIN mail m ON m.id = d.mailId WHERE d.id = ?',
+    ).get(deliveryId) as { mailId: number; inviter: string; invitee: string; isReply: number; answered: number } | undefined;
+    return row === undefined ? null
+      : { mailId: row.mailId, inviter: row.inviter, invitee: row.invitee, isReply: row.isReply !== 0, answered: row.answered !== 0 };
   }
 
   /** A new `queued` delivery. `revivedFrom` (D-5914, migration 40) is the parked delivery this one revives, written
@@ -7849,7 +7872,7 @@ export class CoordStore {
    *    approximation of "whatever `foldPrLineage` would have stored at THAT
    *    close" when the close-time snapshots themselves were lost with the
    *    database. A wave that has not closed gets `[]`, and that is NOT a
-   *    stand-in: nothing has folded into it yet (`ccd/ccd:2080-2086`'s
+   *    stand-in: nothing has folded into it yet (`_reg_read`'s
    *    three-answer ladder).
    *
    * A THIRD rule (deviation D-11, found in Task 3 review — the plan's own

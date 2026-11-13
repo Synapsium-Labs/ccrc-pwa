@@ -55,7 +55,7 @@
 import { describe, expect, it } from 'vitest';
 import { readdirSync, statSync } from 'node:fs';
 import path from 'node:path';
-import ts from 'typescript';
+import { ts } from '../../server/test/scan/parse';
 import { parseTs, isSpecifier } from './literalWalker';
 
 const PKG = path.join(import.meta.dirname, '..', '..');

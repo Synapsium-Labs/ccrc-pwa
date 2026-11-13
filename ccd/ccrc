@@ -2605,8 +2605,9 @@ already running).
             "init" seeds it, and set-class/set-subagent/set-effort/discovery
             change it — each re-writing that lane's own settings.json.
             set-window/clear-window record or drop a measured context
-            window per model; once every class model has one, the lane's
-            window is the smallest of them.
+            window per model (never above the catalogue's maxContext);
+            a model with none takes the provider default, its catalogue
+            context, and the lane's window is the smallest of them.
             hold/release/revert <class> keep a class where it is, let it
             move again, or put back the model it had before its last
             automatic advance and hold it there.
@@ -11687,7 +11688,10 @@ _models_summary() {   # <json body> — the human sentences, on STDERR
      elif .contextWindow.rule == "measured" then
        "  context window: \(.contextWindow.tokens) tokens, measured (the smallest across the class models)"
      else
-       "  context window: \(if .contextWindow.rule == "default" then "\(.contextWindow.tokens) tokens, by the default rule (the catalogue context of the default model, capped at 200000)" else "not set, the client default applies" end)\(if (.contextWindow.unmeasured | length) > 0 then "; not measured: \(.contextWindow.unmeasured | join(", "))" else "" end)"
+       "  context window: \(if .contextWindow.rule != "default" then "not set, the client default applies"
+         elif .contextWindow.source == "measured" then "\(.contextWindow.tokens) tokens, measured for \(.contextWindow.model) (the smallest across the class models)"
+         elif .contextWindow.source == "client" then "\(.contextWindow.tokens) tokens, the client default (\(.contextWindow.model) has no measured window and no catalogue context)"
+         else "\(.contextWindow.tokens) tokens, by the provider default (the catalogue context of \(.contextWindow.model))" end)\(if (.contextWindow.unmeasured | length) > 0 then "; not measured: \(.contextWindow.unmeasured | join(", "))" else "" end)"
      end),
     (if .windows.state == "ok" then
        (.windows.byModel | to_entries[] | "  measured window: \(.key) \(.value.tokens) tokens\(if .value.setAt == null then "" else " (set \(.value.setAt))" end)")
@@ -18316,6 +18320,8 @@ _inst_files() {   # the artifacts the box RUNS that are not on PATH
   _inst_atomic "$tree/ccd/lib/launch-profiles.json" "$HOME/.cc-sessions/lib/launch-profiles.json" 644
   # `ccd carry-dedupe`'s program (#317), 0644: a script python3 runs. Without it the verb refuses by name.
   _inst_atomic "$tree/ccd/lib/carry-dedupe.py" "$HOME/.cc-sessions/lib/carry-dedupe.py" 644
+  # the in-flight manifest's program (session-continuity 6b, D-8368), 0644, read-only.
+  _inst_atomic "$tree/ccd/lib/inflight-manifest.py" "$HOME/.cc-sessions/lib/inflight-manifest.py" 644
   # The approval wait's ruling verifier (coordinator-first routing, plan Task 14, D-5297), 0644 for the same reason:
   # a script `node` runs, never executed directly. The hook sends no request without it, so either order is safe.
   _inst_atomic "$tree/ccd/approval-verify.mjs" "$HOME/.cc-sessions/approval-verify.mjs" 644
@@ -24842,6 +24848,7 @@ _upd_backup_set() {
   _upd_backup_copy "$HOME/.cc-sessions/lib/launch-profiles.json" launch-profiles.json
   _upd_backup_copy "$HOME/.cc-sessions/lib/roster-card.jq" roster-card.jq
   _upd_backup_copy "$HOME/.cc-sessions/lib/carry-dedupe.py" carry-dedupe.py
+  _upd_backup_copy "$HOME/.cc-sessions/lib/inflight-manifest.py" inflight-manifest.py
   _upd_backup_copy "$HOME/.cc-sessions/approval-verify.mjs" approval-verify.mjs
   _upd_backup_copy "$HOME/.cc-sessions/notify.sh"  notify.sh
   # R34 (final whole-branch review): since `ccrc memory --apply`,
@@ -29228,7 +29235,7 @@ _uninst_cc_sessions() {
   # ONE remover (D-5392): `install-session-hooks.sh --remove` runs per account and leaves it.
   # `account-deny.settings.json` (D-6202) is every session's account deny file, removed with it.
   rm -f -- "$reg/session-hook.sh" "$reg/install-session-hooks.sh" "$reg/notify.sh" \
-    "$reg/compact-card.mjs" "$reg/approval-verify.mjs" "$reg/lib/transcript.jq" "$reg/lib/carry-dedupe.py" \
+    "$reg/compact-card.mjs" "$reg/approval-verify.mjs" "$reg/lib/transcript.jq" "$reg/lib/carry-dedupe.py" "$reg/lib/inflight-manifest.py" \
     "$reg/lib/roster-card.jq" "$reg/lib/launch-profiles.json" \
     "$reg/install-coordinator-skill.sh" "$reg/install-worker-skill.sh" \
     "$reg/install-reviewer-skill.sh" "$reg/install-history-skill.sh" "$reg/install-linear-skill.sh" \

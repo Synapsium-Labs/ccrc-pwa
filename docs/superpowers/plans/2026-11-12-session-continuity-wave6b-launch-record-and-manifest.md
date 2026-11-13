@@ -1009,7 +1009,7 @@ git commit -m "feat(hook): the launch record, a second output of the one payload
 | MP-RESETROW | `reset=` taken from the `<reset>` argument only | `'deferred-until-reset: …'` (the row's resetsAt is not written) |
 | MP-UNREADFIRST | unread decided last, after the classes | `'unread is decided before any class …'` (the item reads abandoned) |
 | MP-UNREADEXPIRE | unread rows kept past `<abandon-s>` | `'an unread item past abandon-s …'` (its rows stay, the verdict stays unread) |
-| MP-RECORDMAX | the record read whole, past `<record-max>` | `'a record longer than record-max …'` (the overflow is kept) |
+| MP-RECORDMAX | both `cap` and `limit` removed from the record read, permitting a read past `<record-max>` | `'a record longer than record-max …'` (the overflow is kept; D-8582) |
 | MP-UUID | rows of another uuid kept as items | `'other-uuid rows and unjoined sends …'` (`retired` short, an item listed) |
 | MP-RECENT | the `<recent-s>` cutoff dropped for sidecar-only runs | `'a sidecar-only run changed within recent-s …'` (the older one is listed) |
 | MP-LASTPROJ | the script path re-rooted at its first `/projects/` | `'a script path is re-rooted at its last /projects/ …'` |

@@ -1,4 +1,5 @@
 {
+  "server/src/coord/peerBound.ts#peerMailVerdict": 1,
   "server/src/coord/stall.ts#stallCoordBlockedStep": 1,
   "server/src/roleOf.ts#roleFactsOf": 1,
   "server/src/time/observed.ts#observeTime": 1,

@@ -105,8 +105,12 @@ written. That is the whole DDD argument, measured rather than asserted.
    2's `ccdargv.ts`, `lifecycle.ts` and `exec.ts` for the verbs; context 1's
    `fleetstate.ts`; `node:crypto`; `fastify` in its L4 files (single-definition's "the docs
    ring" pin holds the L3 import list). The door's: L0 `shared/readerLab.ts`; context 8's `auth/cookie.ts` (the session cookie's name and parser); `node:crypto` and `fastify` in `routes.ts`.
+10. **Session host** (D-8272, amended 2026-11-13, D-8561) — ccd's alone: hosting, observing and driving sessions
+   behind the one `SessionHost` interface (the session-host report's §8 A4), its home `ccd/lib/sessionhost.sh` once
+   the ccd file-split plan's Task 7 lands. The server declares its `SessionHost` port at its consumer, context 3, so no file
+   under `server/src` or `pwa/src` maps here, and the table below has no C10 row (`CCD_ONLY_CONTEXTS`).
 
-Every non-test file under `server/src` and `pwa/src` maps to exactly one of these nine
+Every non-test file under `server/src` and `pwa/src` maps to exactly one of the first nine
 contexts, or to **K**, the shared kernels and platform files (the composition root,
 `server.ts`, `watch.ts`, the generic adapters, the PWA shell), which hold no aggregate.
 The map is the table in "Deciding a file's ring and context" below.
@@ -250,6 +254,8 @@ never name one file. Paths are relative to the package's `src/`.
 | C9 Docs | `docs/**`, `readerLab/**` | `docs/**`, `screens/DocsScreen.tsx`, `screens/HighlightMeasure.tsx`, `screens/highlightMeasureRun.tsx`, `readerLab/**`, `screens/ReaderLab.tsx` |
 | K Kernels and platform | `index.ts`, `server.ts`, `overridesRead.ts`, `deps.ts`, `watch.ts`, `io.ts`, `refuse.ts`, `pwaStatic.ts`, `shutdownseal.ts`, `bounded.ts`, `remote/client.ts`, `remote/io.ts`, `remote/errors.ts`, `changeLatch.ts`, `laneRunner.ts`, `laneSchedule.ts`, `disk.ts`, `diskAlarmLane.ts`, `diskepisode.ts`, `pressure.ts`, `pressureLane.ts`, `backupLane.ts`, `tmpSweep.ts`, `tmpSweepLane.ts`, `unmeasured.ts`, `journalKernel.ts`, `perf/**`, `time/**` | `main.tsx`, `app.tsx`, `command/**`, `components/**`, `styles/**`, `lib/**`, `screens/AppearanceRow.tsx`, `screens/SkinFieldset.tsx`, `skins/**`, `screens/settings/**`, `fleet/DiskBanner.tsx`, `fleet/diskWords.ts`, `fleet/PressureBanner.tsx`, `fleet/pressureWords.ts`, `fleet/BackupBanner.tsx`, `fleet/backupWords.ts`, `fleet/BackupSection.tsx`, `fleet/OverridesSection.tsx`, `fleet/overridesWords.ts`, `fleet/useOverridesView.ts` |
 <!-- ring-context-map:end -->
+
+C10 Session host has no row: none of its files is under either package, and a row for it is red (D-8272).
 
 A new file takes its directory's row, or needs a file row in the same PR when its
 directory has none (`screens/`, `stores/`, `remote/` and the top level of each package).
