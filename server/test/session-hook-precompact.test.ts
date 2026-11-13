@@ -15,6 +15,7 @@ import path from 'node:path';
 import { mkTmp } from './tmpHelpers.js';
 import { holdCompactLock } from './lifecycleHelpers.js';
 import { makeCcdHarness } from './ccdWsHelpers.js';
+import { compactionsSince, type CompactionLine } from '../src/continuity/compactions.js';
 
 const HOOK = path.resolve(__dirname, '../../ccd/session-hook.sh');
 const HELPER_SRC = path.resolve(__dirname, '../../ccd/compact-card.mjs');
@@ -49,7 +50,8 @@ const env = (over: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv => ({
   CCRC_SESSION_GENERATION: GENERATION, ...over,
 });
 const run = (payload: object, over: NodeJS.ProcessEnv = {}): void => {
-  const r = spawnSync('bash', [HOOK], { input: JSON.stringify(payload), encoding: 'utf8', env: env(over) });
+  // Bounded (review 1927 M6): spawnSync blocks the event loop, so vitest's own timeout could never fire on a hung hook.
+  const r = spawnSync('bash', [HOOK], { input: JSON.stringify(payload), encoding: 'utf8', env: env(over), timeout: 15_000 });
   expect(r.status, 'the hook contract: exit 0 on every path').toBe(0);
 };
 /** A transcript that exists, so `_hook_compact_scope` resolves `main` for a manual compaction. */
@@ -134,6 +136,25 @@ describe('PreCompact writes one line to its own file (W0-05)', () => {
     expect(lines[0]!['at'] as number).toBeLessThanOrEqual(lines[1]!['at'] as number);
   });
 
+  // Review 1927 I1: the line carries the scope RULE's answer, never the card's overlap degrade. A PreCompact with no
+  // PostCompact (W0-05) leaves its set unconsumed for twenty minutes, and the card reads every PreCompact inside them as
+  // ambiguous; the counter counts main lines only, so a second main compaction there would read as none.
+  it('a PreCompact-only compaction, then a second within twenty minutes: two main lines, and both are counted', () => {
+    fs.copyFileSync(HELPER_SRC, path.join(reg(), 'compact-card.mjs'));
+    const t = transcript();
+    fs.mkdirSync(path.join(home, 'repo'));
+    const since = Date.now();
+    run(preCompact('auto', t));
+    expect(fs.existsSync(path.join(reg(), `${ID}.compactset`)), 'the unconsumed set the card reads as an overlap').toBe(true);
+    run(preCompact('manual', t));
+    const lines = linesOf(preFile());
+    expect(lines).toEqual([
+      { at: expect.any(Number), trigger: 'auto', scope: 'main', transcript: t, phase: 'pre' },
+      { at: expect.any(Number), trigger: 'manual', scope: 'main', transcript: t, phase: 'pre' },
+    ]);
+    expect(compactionsSince(lines as unknown as CompactionLine[], since)).toBe(2);
+  });
+
   it('a row whose generation is not this session\'s gets no line', () => {
     run(preCompact('auto', transcript()), { CCRC_SESSION_GENERATION: '0189abcd-0000-0000-0000-000000000000' });
     expect(fs.existsSync(preFile())).toBe(false);
@@ -156,10 +177,10 @@ describe('PreCompact writes one line to its own file (W0-05)', () => {
   });
 });
 
-describe('the line runs after the refusal decision (plan review 1890 I1)', () => {
-  // A PreCompact refusal is decided in `_hook_history_pre` (the compaction piece), so the line's call follows that
-  // arm's in the dispatch: a refused compaction then writes no pre line and is not counted.
-  it('the dispatch calls _hook_compact_pre_line after _hook_history_pre and after _hook_compact_pre', () => {
+describe('the line is the last PreCompact arm (plan review 1890 I1)', () => {
+  // Nothing refuses a PreCompact today. The compaction piece's coming `_hook_compact_refuse` sets `CS_REFUSED`, and this
+  // arm runs last so that it will then write `"phase":"refused"` (review 1927 M3).
+  it('the dispatch calls _hook_compact_pre_line last: after _hook_compact_pre and _hook_history_pre', () => {
     const src = fs.readFileSync(HOOK, 'utf8');
     const at = (call: string): number => {
       const line = `if [[ "$event" == PreCompact ]]; then ${call} || true; fi`;
@@ -203,6 +224,29 @@ describe('the file is bounded by rotation, with no temp file', () => {
     expect(fs.readFileSync(prevFile(), 'utf8')).toBe(text);
     expect(linesOf(preFile()).map((l) => l['trigger'])).toEqual(['manual']);
     expect(fs.readdirSync(reg()).filter((n) => n.startsWith(`.${ID}.compactevents`) || n.endsWith('.tmp')), 'no temp file').toEqual([]);
+  });
+
+  // Review 1927 M5: GNU mv moves a file INTO a directory destination, so an unchecked rotation would take the lines out
+  // of the path the server reads, and a rotation that kept failing would let the current file grow without bound.
+  it.each(['directory', 'symlink to a directory'] as const)('a .compacteventsprev that is a %s: no line, both left alone', (kind) => {
+    const text = seedLines(KEEP);
+    const dir = path.join(home, 'elsewhere-dir');
+    if (kind === 'directory') fs.mkdirSync(prevFile());
+    else { fs.mkdirSync(dir); fs.symlinkSync(dir, prevFile()); }
+    run(preCompact('manual', transcript()));
+    expect(fs.readFileSync(preFile(), 'utf8'), 'the current file is untouched').toBe(text);
+    expect(fs.readdirSync(kind === 'directory' ? prevFile() : dir), 'nothing moved into it').toEqual([]);
+  });
+
+  it('a .compacteventsprev that is a symlink to a file: no line, and the link and its target are left alone', () => {
+    const text = seedLines(KEEP);
+    const target = path.join(home, 'elsewhere-file');
+    fs.writeFileSync(target, 'kept\n');
+    fs.symlinkSync(target, prevFile());
+    run(preCompact('manual', transcript()));
+    expect(fs.readFileSync(preFile(), 'utf8'), 'the current file is untouched').toBe(text);
+    expect(fs.lstatSync(prevFile()).isSymbolicLink(), 'the link is not replaced').toBe(true);
+    expect(fs.readFileSync(target, 'utf8')).toBe('kept\n');
   });
 
   it(`below ${KEEP} lines it appends in place and leaves no .compacteventsprev`, () => {

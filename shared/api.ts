@@ -974,7 +974,7 @@ export interface SessionUsage {
   readonly ctxPct: number | null;
   /** Overlord W0-18: the context's size in tokens, Claude Code's statusline field
    *  `context_window.total_input_tokens` (input plus cache read plus cache creation), the figure the renewal triggers
-   *  read. Null when the sidecar has none or it is not a non-negative number: never 0 for "no reading". Optional
+   *  read. Null when the sidecar has none or it is not a number above zero: never 0 for "no reading". Optional
    *  because an older sidecar omits it; `parseUsageSidecar` is its one reader. */
   readonly ctxTokens?: number | null;
   /** Overlord W0-18: the context window's size in tokens, `context_window.context_window_size`. Null as for
@@ -3365,6 +3365,7 @@ function reviveUsage(o: Record<string, unknown>, key: string): SessionUsage | nu
     ts: reqNum(u, 'ts'), model: optStr(u, 'model'), class: optStr(u, 'class'),
     effort: optStr(u, 'effort'), ctxPct: optNum(u, 'ctxPct'), cost: optNum(u, 'cost'),
     cacheExpiresAt: optNum(u, 'cacheExpiresAt'), stale: optBool(u, 'stale', false),
+    ctxTokens: optNum(u, 'ctxTokens'), ctxWindow: optNum(u, 'ctxWindow'),   // Overlord W1a (review 1927 M2)
   };
 }
 

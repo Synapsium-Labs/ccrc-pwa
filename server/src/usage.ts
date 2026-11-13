@@ -22,8 +22,10 @@ export function usageSidecarPath(registryDir: string, id: string): string {
 }
 
 const num = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) ? v : null);
-/** A token count: a finite number at or above zero, else null. A negative is no reading, never a small context. */
-const count = (v: unknown): number | null => { const n = num(v); return n !== null && n >= 0 ? n : null; };
+/** A token count: a finite number above zero, else null. A negative is no reading, never a small context; nor is a
+ *  zero, which Claude Code sends before a conversation's first API response, and which as a window would make a ratio
+ *  NaN or Infinity (review 1927 I2). */
+const count = (v: unknown): number | null => { const n = num(v); return n !== null && n > 0 ? n : null; };
 const str = (v: unknown): string | null => (typeof v === 'string' && v !== '' ? v : null);
 
 /** Pure. `nowS` in epoch seconds, the sidecar's unit. A row with no numeric

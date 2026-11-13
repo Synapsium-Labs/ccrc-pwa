@@ -29,7 +29,9 @@ export interface CompactionLine {
 }
 
 export type CompactionsRead =
-  | { readonly kind: 'lines'; readonly lines: readonly CompactionLine[]; readonly skipped: number }  // skipped: malformed lines
+  // skipped: malformed lines. eventsAbsent: the journal was read and neither events file exists, which is what an
+  // older hook (before the PreCompact line) leaves, so the count is only a lower bound (review 1927 M1).
+  | { readonly kind: 'lines'; readonly lines: readonly CompactionLine[]; readonly skipped: number; readonly eventsAbsent: boolean }
   | { readonly kind: 'absent' }
   | { readonly kind: 'unreadable' };
 
@@ -68,7 +70,11 @@ export const compactionsPaths = (registryDir: string, id: string): { journal: st
 
 /** Three answers. `absent` only when none of the three files exists; `unreadable` when any one could not be read
  *  (a count from part of the evidence would read low, and a low count is the wrong side to fail on); otherwise
- *  `lines`, with every line that is not a line of its file counted in `skipped`, never thrown. The current pre file
+ *  `lines`, with every line that is not a line of its file counted in `skipped`, never thrown, and `eventsAbsent`
+ *  kept apart: a journal with neither events file is an older hook's, whose count is a lower bound. ONE union, not
+ *  one answer per file (a departure from the plan's interface, ruled in review 1927 M1): the callers' rule is that
+ *  any unreadable file is unmeasured and an absent one has no lines, and this keeps every distinction that rule
+ *  reads. The current pre file
  *  is read BEFORE `.compacteventsprev`: a rotation between the two reads then shows a line twice, never zero times, and
  *  a pre line repeated byte for byte is taken once. */
 export async function readCompactionsMeasured(io: FleetIO, registryDir: string, id: string): Promise<CompactionsRead> {
@@ -93,7 +99,7 @@ export async function readCompactionsMeasured(io: FleetIO, registryDir: string, 
   const seen = new Set<string>();
   if (pre.ok) take(pre.content, 'pre', seen);
   if (prev.ok) take(prev.content, 'pre', seen);
-  return { kind: 'lines', lines, skipped };
+  return { kind: 'lines', lines, skipped, eventsAbsent: !pre.ok && !prev.ok };
 }
 
 /** May this `post` be the settlement of that `pre`? Same trigger, transcripts that do not contradict (equal, or one

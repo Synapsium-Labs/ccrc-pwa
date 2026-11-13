@@ -48,9 +48,18 @@ describe('parseUsageSidecar', () => {
     const r = parseUsageSidecar(row({ ctxTokens: tokens, ctxWindow: window }), NOW);
     expect(r.kind === 'reading' && [r.usage.ctxTokens, r.usage.ctxWindow]).toEqual([null, null]);
   });
-  it('a zero is a reading of zero, kept apart from absent', () => {
-    const r = parseUsageSidecar(row({ ctxTokens: 0, ctxWindow: 200_000 }), NOW);
-    expect(r.kind === 'reading' && [r.usage.ctxTokens, r.usage.ctxWindow]).toEqual([0, 200_000]);
+  // Review 1927 I2: Claude Code sends total_input_tokens 0 before the conversation's first API response, so a zero is
+  // a missing sample, never a small context; a zero window would make a ratio NaN or Infinity.
+  it.each([
+    ['ctxTokens', { ctxTokens: 0, ctxWindow: 200_000 }, [null, 200_000]],
+    ['ctxWindow', { ctxTokens: 50_000, ctxWindow: 0 }, [50_000, null]],
+  ] as const)('a %s of zero is no reading: null, never 0', (_f, fields, want) => {
+    const r = parseUsageSidecar(row(fields), NOW);
+    expect(r.kind === 'reading' && [r.usage.ctxTokens, r.usage.ctxWindow]).toEqual(want);
+  });
+  it('CONTROL: one token and a one-token window are readings', () => {
+    const r = parseUsageSidecar(row({ ctxTokens: 1, ctxWindow: 1 }), NOW);
+    expect(r.kind === 'reading' && [r.usage.ctxTokens, r.usage.ctxWindow]).toEqual([1, 1]);
   });
   it.each([
     ['claude-fable-5-1', 'fable'], ['claude-sonnet-5', 'sonnet'], ['claude-haiku-4-5-20251001', 'haiku'], ['gpt-6-astra', null],

@@ -750,6 +750,10 @@ describe('the unarmed session forks nothing the steering added (Linux, strace -f
     };
     const noEventsBaseline = without(kept, 'hook-baseline-noevents.sh');
     const noEvents = without(src, 'hook-noevents.sh');
+    // Unarmed too, without the events arm (review 1927 M4): with it in place, a scope ask moved ahead of the `steer-on`
+    // gate would only MOVE a fork the arm then skips, and the equality above would stay green.
+    forks(noEventsBaseline); forks(noEvents);                  // WARM-UP, as above
+    expect(forks(noEvents), 'unarmed, without the events arm').toBe(forks(noEventsBaseline));
     arm();                                                      // CONTROL: armed, the scope verdict is the print's own fork
     const baseNoEvents = forks(noEventsBaseline);
     expect(forks(noEvents), 'CONTROL: an armed session does fork for its scope verdict').toBeGreaterThan(baseNoEvents);

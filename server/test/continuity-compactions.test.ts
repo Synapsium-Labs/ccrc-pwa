@@ -71,14 +71,21 @@ describe('readCompactionsMeasured keeps absent, unreadable and malformed apart',
     const r = await readCompactionsMeasured(tableIO({
       [P.journal]: `${record(T + 60_000, 'manual')}\n`, [P.pre]: `${preLine(T, 'manual')}\n`,
     }), '/reg', ID);
-    expect(r).toEqual({ kind: 'lines', skipped: 0, lines: [
+    expect(r).toEqual({ kind: 'lines', skipped: 0, eventsAbsent: false, lines: [
       { at: T + 60_000, trigger: 'manual', phase: 'post', transcript: '/t/a.jsonl', scope: 'main' },
       { at: T, trigger: 'manual', phase: 'pre', transcript: '/t/a.jsonl', scope: 'main' },
     ] });
   });
-  it('the journal alone (an older hook, before any pre line) reads its posts', async () => {
+  it('the journal alone (an older hook, before any pre line) reads its posts, and says the events files are absent', async () => {
     const r = await readCompactionsMeasured(tableIO({ [P.journal]: `${record(T)}\n${record(T + 1)}\n` }), '/reg', ID);
     expect(r.kind === 'lines' && r.lines.map((l) => l.phase)).toEqual(['post', 'post']);
+    expect(r).toMatchObject({ kind: 'lines', eventsAbsent: true });
+  });
+  // Review 1927 M1: eventsAbsent is true only when BOTH events files are absent; either one present is a hook that
+  // writes pre lines, so its count is no mere lower bound.
+  it.each(['pre', 'prev'] as const)('the journal and the %s file: eventsAbsent is false', async (which) => {
+    const r = await readCompactionsMeasured(tableIO({ [P.journal]: `${record(T)}\n`, [P[which]]: '' }), '/reg', ID);
+    expect(r).toMatchObject({ kind: 'lines', eventsAbsent: false });
   });
   it('the pre files alone (no compaction has settled yet) read their pres', async () => {
     const r = await readCompactionsMeasured(tableIO({ [P.prev]: `${preLine(T)}\n` }), '/reg', ID);
@@ -96,7 +103,7 @@ describe('readCompactionsMeasured keeps absent, unreadable and malformed apart',
     const r = await readCompactionsMeasured(tableIO({
       [P.journal]: `${preLine(T)}\n`, [P.pre]: `${record(T)}\n`,
     }), '/reg', ID);
-    expect(r).toEqual({ kind: 'lines', lines: [], skipped: 2 });
+    expect(r).toEqual({ kind: 'lines', lines: [], skipped: 2, eventsAbsent: false });
   });
   it('a refused line in the pre file reads as refused, and never cancels a pre (plan review 1896 B3)', async () => {
     const refused = JSON.stringify({ at: T + 5, trigger: 'auto', scope: 'main', transcript: '/t/a.jsonl', phase: 'refused' });

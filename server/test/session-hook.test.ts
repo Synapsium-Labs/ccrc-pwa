@@ -4594,6 +4594,9 @@ describe('the compaction card — option A, the staging-only helper (spec §3.1 
         needle: '{ link "$claim" "$f"; } 2>/dev/null || true', pick: [0, 2] },
       { what: 'SessionStart(compact): the body-less card restore',
         needle: '{ link "$claim" "$f"; } 2>/dev/null || true', pick: [1, 2] },
+      // The Overlord's PreCompact events line (W1a, review 1927 I3): its rotation and its append.
+      { what: 'PreCompact events line: the rotation', needle: 'mv -f "$f" "$prev" 2>/dev/null' },
+      { what: 'PreCompact events line: the append', needle: `{ printf '%s\\n' "$line" >> "$f"; } 2>/dev/null` },
     ];
     /** The k-th line carrying `needle`, with the total pinned: an anchor that
      *  gained or lost an occurrence is a moved anchor, not a re-indexed one. */

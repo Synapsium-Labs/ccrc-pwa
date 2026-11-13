@@ -826,10 +826,16 @@ describe('reviveFleetSession carries usage (routing slice 0)', () => {
     delete base['usage'];
     expect(reviveFleetSession(base)?.usage).toBeNull();
     const usage = { ts: 1, model: 'claude-sonnet-5', class: 'sonnet', effort: 'medium', ctxPct: null, cost: 0, stale: true };
-    expect(reviveFleetSession({ ...base, usage })?.usage).toEqual({ ...usage, cacheExpiresAt: null });
+    expect(reviveFleetSession({ ...base, usage })?.usage).toEqual({ ...usage, cacheExpiresAt: null, ctxTokens: null, ctxWindow: null });
     // D-8267: the prompt cache's expiry revives when present; a non-number refuses like every other number field.
     expect(reviveFleetSession({ ...base, usage: { ...usage, cacheExpiresAt: 1_800_003_600 } })?.usage?.cacheExpiresAt).toBe(1_800_003_600);
     expect(reviveFleetSession({ ...base, usage: { ...usage, cacheExpiresAt: 'x' } })).toBeNull();
+    // Overlord W1a (review 1927 M2): the context's tokens and window revive when present, each like cacheExpiresAt.
+    for (const k of ['ctxTokens', 'ctxWindow'] as const) {
+      expect(reviveFleetSession({ ...base, usage: { ...usage, [k]: 150_000 } })?.usage?.[k], k).toBe(150_000);
+      expect(reviveFleetSession({ ...base, usage: { ...usage, [k]: null } })?.usage?.[k], k).toBeNull();
+      expect(reviveFleetSession({ ...base, usage: { ...usage, [k]: 'x' } }), k).toBeNull();
+    }
     expect(reviveFleetSession({ ...base, usage: { ...usage, ts: 'x' } })).toBeNull();      // MalformedSnapshot: no clock
     expect(reviveFleetSession({ ...base, usage: { ...usage, class: 7 } })).toBeNull();     // MalformedSnapshot: not a string
   });
