@@ -143,6 +143,8 @@ interface Actionable {
   readonly detail: string;
   /** How the claimant reads (the reclaim door's ladder), and the row's anchor: what a refused close is routed by. */
   readonly claimantState: 'alive' | 'dead' | 'unmeasurable';
+  /** D-8558: false when the registry holds no row for the claimant (`cause: 'absent'`): its item offers no door to it. */
+  readonly claimantHeld: boolean;
   readonly anchor: number | null;
 }
 
@@ -288,7 +290,8 @@ async function pass(deps: RunCloseLaneDeps): Promise<RunCloseOutcome> {
     record(deps, E1, program, claimant, verdict, armed, now);
     acts.push({
       row: E1, program, claimant, activityAt: act, verdict, runs: candidates, warning,
-      detail: `expired:never-started quiet-since=${anchor ?? 0}`, claimantState: claimantReachable ? 'alive' : 'dead', anchor,
+      detail: `expired:never-started quiet-since=${anchor ?? 0}`, claimantState: claimantReachable ? 'alive' : 'dead',
+      claimantHeld: registryHolds(reach), anchor,
     });
   }
   for (const program of coord.runCloseWarningProgrammes()) if (!seen.has(program)) coord.deleteRunCloseWarning(program);
@@ -324,7 +327,7 @@ async function pass(deps: RunCloseLaneDeps): Promise<RunCloseOutcome> {
     acts.push({
       row: E1R, program: run.program, claimant: run.claimedBy, activityAt: anchor, verdict, runs: [c], warning: null,
       detail: `expired:review-orphaned ${targetClosed ? 'target-closed' : 'later-review'}`,
-      claimantState: owner.state === 'alive' ? 'alive' : owner.state === 'dead' ? 'dead' : 'unmeasurable', anchor,
+      claimantState: owner.state === 'alive' ? 'alive' : owner.state === 'dead' ? 'dead' : 'unmeasurable', claimantHeld: registryHolds(owner), anchor,
     });
   }
   for (const key of reviewAnchors.keys()) if (!seenReviews.has(key)) coord.deleteRunCloseAnchor(E1R, key);
@@ -477,11 +480,15 @@ async function claimantGoneRows(deps: RunCloseLaneDeps, c: GoneContext): Promise
     record(deps, row, `${run.program}#${run.id}`, claimant, held ? { kind: 'hold', word: 'breaker-held' } : verdict, c.armed, c.now);
     c.acts.push({
       row, program: run.program, claimant, activityAt: anchor, verdict: held ? { kind: 'hold', word: 'breaker-held' } : verdict, runs: [cand],
-      warning: null, detail: `expired:${row}`, claimantState: owner.state === 'alive' ? 'alive' : owner.state === 'dead' ? 'dead' : 'unmeasurable', anchor,
+      warning: null, detail: `expired:${row}`, claimantState: owner.state === 'alive' ? 'alive' : owner.state === 'dead' ? 'dead' : 'unmeasurable',
+      claimantHeld: registryHolds(owner), anchor,
     });
   }
   for (const row of GONE_ROWS) for (const key of anchors[row].keys()) if (!seen[row].has(key)) coord.deleteRunCloseAnchor(row, key);
 }
+
+/** D-8558: does the registry still hold the claimant's session: everything but a death the reclaim ladder read as a missing row. */
+const registryHolds = (v: ClaimantVerdict): boolean => !(v.state === 'dead' && v.cause === 'absent');
 
 /** True when the run has a session whose readable `.child` marker names a different run: a later wave's, or a recycled name's. */
 async function markNamesAnotherRun(deps: RunCloseLaneDeps, run: LaneRun): Promise<boolean> {
@@ -539,22 +546,22 @@ async function routeClosesRefused(
         const busy = c.hold === 'live-session' && (a.row === 'claimant-gone' || a.row === 'claimant-stopped');
         if (c.hold === 'unmeasured' || (c.hold === 'live-session' && !busy)) unmeasured.add(c.run.id);
         const reason = c.hold === null ? undefined : busy ? 'busy-worker' : REFUSAL_OF_HOLD[c.hold];
-        if (reason !== undefined) add({ run: c.run, row: a.row, reason, claimant: a.claimant, lives });
+        if (reason !== undefined) add({ run: c.run, row: a.row, reason, claimant: a.claimant, lives, held: a.claimantHeld });
       }
     }
     // E1's warning, due and never delivered for 24 hours more: the coordinator was not reached, which is the reason (A58).
     if (a.row === E1 && !lives && warningUndeliveredPast(a.anchor, a.warning, now)) {
       const first = a.runs[0];
-      if (first !== undefined) add({ run: first.run, row: a.row, reason: 'warning-undelivered', claimant: a.claimant, lives: false });
+      if (first !== undefined) add({ run: first.run, row: a.row, reason: 'warning-undelivered', claimant: a.claimant, lives: false, held: a.claimantHeld });
     }
   }
   // A quiet programme nobody is on record as coordinating: the coordinator is gone by definition, so its item shows at once.
-  for (const run of absent) add({ run, row: E1, reason: 'absent-claimant', claimant: null, lives: false });
+  for (const run of absent) add({ run, row: E1, reason: 'absent-claimant', claimant: null, lives: false, held: false });
   // A run in a state a newer build wrote: information whoever owns it, and a living coordinator is told.
   for (const run of unknownStateRuns(runs)) {
     const v = run.claimedBy === null ? null : await measure(run.claimedBy);
     if (v !== null && v.state === 'unmeasurable') { unmeasured.add(run.id); continue; }
-    add({ run, row: null, reason: 'unknown-run', claimant: run.claimedBy, lives: v !== null && v.state === 'alive' });
+    add({ run, row: null, reason: 'unknown-run', claimant: run.claimedBy, lives: v !== null && v.state === 'alive', held: v !== null && registryHolds(v) });
   }
   await deps.serial!(deps.coord, async () => {
     routeRefusals({ coord: deps.coord, abandonRefusal: deps.abandonRefusal, notifyLog: deps.notifyLog }, current, now, unmeasured);

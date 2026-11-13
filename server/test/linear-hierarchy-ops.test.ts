@@ -1,5 +1,6 @@
 // D-8180 (Linear hierarchy plan, Task 1.1): the hierarchy documents and the ccrc operation rows. Inert until wave 3.
-// Every answer here is a constructed fixture (`fixtures/linear/*-constructed.json`); nothing reaches a network.
+// Every answer here is a fixture: FX2's recording (D-8407), or a constructed one (`*-constructed.json`) for a document
+// FX2 did not record; nothing reaches a network.
 import { describe, expect, it } from 'vitest';
 import {
   LINEAR_CCRC_PROVENANCE_LINE, LINEAR_DOCUMENTS, LINEAR_HIERARCHY_DOCUMENTS, isLinearIdentifier, readLinearProjectStatusesPage,
@@ -11,21 +12,22 @@ import {
 import { RATELIMITED_ERRORS } from './linearFetchFake.js';
 import { linearRecord } from './linearRecorded.js';
 
-/** Each row's fixture: a constructed hierarchy answer, or the recorded answer of the issue row it reuses. */
+/** Each row's fixture: FX2's recorded answer, a constructed one where FX2 recorded none, or the recorded answer of the
+ *  issue row it reuses. */
 const FIXTURE: Readonly<Record<CcrcOpName, string>> = {
-  initiativeById: 'read-initiative-by-id-constructed', projectById: 'read-project-by-id-constructed',
-  projectStatuses: 'read-project-statuses-constructed', initiativesProbe: 'read-initiatives-probe-constructed',
-  initiativesByName: 'read-initiatives-by-name-constructed', projectsByName: 'read-projects-by-name-constructed',
-  changedInitiatives: 'read-changed-initiatives-constructed', changedProjects: 'read-changed-projects-constructed',
+  initiativeById: 'read-initiative-by-id', projectById: 'read-project-by-id',
+  projectStatuses: 'read-project-statuses', initiativesProbe: 'read-initiatives-probe',
+  initiativesByName: 'read-initiatives-by-name', projectsByName: 'read-projects-by-name',
+  changedInitiatives: 'read-changed-initiatives', changedProjects: 'read-changed-projects-constructed',
   changedMilestones: 'read-changed-milestones-constructed', changedIssues: 'read-changed-issues-constructed',
-  teamOpenIssues: 'read-team-open-issues-constructed', issueOwned: 'read-issue-owned-constructed',
-  initiativeCreate: 'mutation-initiative-create-constructed', initiativeUpdate: 'mutation-initiative-update-constructed',
-  initiativeToProjectCreate: 'mutation-initiative-to-project-create-constructed',
+  teamOpenIssues: 'read-team-open-issues-constructed', issueOwned: 'read-issue-owned',
+  initiativeCreate: 'mutation-initiative-create', initiativeUpdate: 'mutation-initiative-update-status-canceled',
+  initiativeToProjectCreate: 'mutation-initiative-to-project-create',
   initiativeToProjectDelete: 'mutation-initiative-to-project-delete-constructed',
-  projectCreate: 'mutation-project-create-constructed', projectUpdate: 'mutation-project-update-constructed',
-  projectMilestoneCreate: 'mutation-project-milestone-create-constructed',
-  projectMilestoneUpdate: 'mutation-project-milestone-update-constructed',
-  issueRelationCreate: 'mutation-issue-relation-create-constructed',
+  projectCreate: 'mutation-project-create', projectUpdate: 'mutation-project-update-constructed',
+  projectMilestoneCreate: 'mutation-project-milestone-create',
+  projectMilestoneUpdate: 'mutation-project-milestone-update',
+  issueRelationCreate: 'mutation-issue-relation-create',
   issueCreate: 'mutation-issue-create', issueUpdate: 'mutation-issue-update',
   issueComment: 'mutation-comment-create', issueLink: 'mutation-attachment-link-url-constructed',
 };
@@ -43,6 +45,20 @@ describe('the hierarchy documents (D-8180)', () => {
     }
   });
 
+  it('no milestone selection asks for a creator: Linear\'s ProjectMilestone has none (FX2, D-8407)', () => {
+    // FX2's introspection of ProjectMilestone lists no `creator`, and every document that selected one answered HTTP
+    // 400 GRAPHQL_VALIDATION_FAILED (`error-graphql-validation-milestone-creator`). A milestone binds by name in its project.
+    const { projectById, changedProjects, changedMilestones } = LINEAR_HIERARCHY_DOCUMENTS;
+    for (const doc of [projectById, changedProjects, changedMilestones]) {
+      expect(doc.slice(doc.indexOf('projectMilestones('))).not.toContain('creator');
+    }
+    const milestone = { id: '00000000-0008-4000-8000-000000000002', name: 'Wave 1', description: null, targetDate: null, sortOrder: 1,
+      updatedAt: '2026-11-13T16:13:20.088Z', project: { id: '00000000-0004-4000-8000-000000000001' } };
+    const shaped = LINEAR_CCRC_OPS.changedMilestones.shape({ data: { projectMilestones: { nodes: [milestone], pageInfo: { hasNextPage: false, endCursor: null } } } });
+    expect(shaped).toMatchObject({ ok: true });
+    expect(JSON.stringify(shaped)).not.toContain('creator');
+  });
+
   it('initiativeToProjectDelete is the only *Delete* document, and it unlinks, never removes an object', () => {
     expect(Object.keys(LINEAR_HIERARCHY_DOCUMENTS).filter((k) => /Delete$/.test(k))).toEqual(['initiativeToProjectDelete']);
   });
@@ -58,7 +74,7 @@ describe('the hierarchy documents (D-8180)', () => {
 });
 
 describe('the rows shape their answers', () => {
-  it.each(Object.keys(LINEAR_CCRC_OPS))('%s shapes its constructed fixture', (op) => {
+  it.each(Object.keys(LINEAR_CCRC_OPS))('%s shapes its fixture', (op) => {
     const r = linearRecord(FIXTURE[op as CcrcOpName]);
     expect(r.document, op).toBe(LINEAR_CCRC_OPS[op as CcrcOpName].document);
     expect(LINEAR_CCRC_OPS[op as CcrcOpName].shape(r.body).ok).toBe(true);
@@ -70,7 +86,7 @@ describe('the rows shape their answers', () => {
 
   it('a create names the object it made, an update and a read name none', () => {
     const made = LINEAR_CCRC_OPS.projectCreate.shape(linearRecord(FIXTURE.projectCreate).body);
-    expect(made).toMatchObject({ ok: true, created: '00000000-0004-4000-8000-000000000011' });
+    expect(made).toMatchObject({ ok: true, created: '00000000-0004-4000-8000-000000000020' });
     expect(LINEAR_CCRC_OPS.projectUpdate.shape(linearRecord(FIXTURE.projectUpdate).body)).toMatchObject({ ok: true, created: null });
   });
 

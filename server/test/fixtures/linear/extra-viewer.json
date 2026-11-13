@@ -1,0 +1,59 @@
+{
+  "name": "extra-viewer",
+  "documentSource": "the capture's own viewer query (not a ccrc document)",
+  "document": "query { viewer { id } }",
+  "variables": {},
+  "requestBody": "{\"query\":\"query { viewer { id } }\",\"variables\":{}}",
+  "requestHeaders": [
+    "authorization: <the key, bare, no Bearer>",
+    "content-type: application/json"
+  ],
+  "sentAtMs": null,
+  "receivedAtMs": null,
+  "sentAt": null,
+  "status": 200,
+  "statusLine": null,
+  "headers": [
+    [
+      "content-type",
+      "application/json; charset=utf-8"
+    ],
+    [
+      "x-complexity",
+      "1"
+    ],
+    [
+      "x-ratelimit-complexity-limit",
+      "3000000"
+    ],
+    [
+      "x-ratelimit-complexity-remaining",
+      "2999999"
+    ],
+    [
+      "x-ratelimit-complexity-reset",
+      "1794589998699"
+    ],
+    [
+      "x-ratelimit-requests-limit",
+      "2500"
+    ],
+    [
+      "x-ratelimit-requests-remaining",
+      "2485"
+    ],
+    [
+      "x-ratelimit-requests-reset",
+      "1794589998699"
+    ]
+  ],
+  "body": {
+    "data": {
+      "viewer": {
+        "id": "00000000-0005-4000-8000-000000000001"
+      }
+    }
+  },
+  "bodyRaw": "{\"data\":{\"viewer\":{\"id\":\"00000000-0005-4000-8000-000000000001\"}}}\n",
+  "note": "Recorded by the hierarchy capture (FX2, D-8407). The key's viewer, which every creator read below names."
+}

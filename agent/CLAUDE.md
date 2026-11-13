@@ -62,6 +62,9 @@ get wrong when editing `src/whitelist.ts`.
   from the switchboard's `~/.ccrc` rows in `shared/switches.ts`), by literal path and canonical-path equality
   (`checkCcrcSwitchStat`), so the server can say which stands. It is not part of `checkPath`: `read`, `readdir` and
   `lstat` admit none of them.
+  And one more READ grant (D-8406): a lane's class registry and catalogue, `~/.ccrc/models/<lane>.classes.json` and
+  `<lane>.json`, by exact name (`isLaneModelsReadName`, `shared/models.mjs`) and canonical-path equality
+  (`isLaneModelsFile`), for the session's model picker. `~/.ccrc/models` stays unlistable, and its other files unread.
 - `ptyOpen` only ever spawns `tmux attach -t =cc-<sessionId>:` (exact — `tmuxTarget`, D-3525) with `sessionId` sanitized to `[A-Za-z0-9_-]+` —
   never an arbitrary command.
 - The **`update` op** (design 2026-09-20 §10) is one of the FIVE wire-triggered spawn classes outside the exec whitelist

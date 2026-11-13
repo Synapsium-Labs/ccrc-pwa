@@ -23,7 +23,7 @@ import { LINEAR_FAILURES } from '../../shared/linear.js';
 import { WS_TITLE_MAX_BYTES } from '../../shared/slug.js';
 import { mkTmp, removeTmpFixturesEachTest } from './tmpHelpers.js';
 import { RATELIMITED_ERRORS, linearAnswer } from './linearFetchFake.js';
-import { linearRecord, recordedAnswer, recordedHeader } from './linearRecorded.js';
+import { linearRecord, recordedAnswer, recordedHeader, recordedReceivedAtMs } from './linearRecorded.js';
 import { linearServicesFake } from './linearServicesFake.js';
 import { resolveTitle } from '../src/linear/resolve.js';
 
@@ -218,7 +218,7 @@ describe('lookupLinearIssue', () => {
     // FX recorded the reset headers as absolute Unix times in milliseconds, a rolling hour after each send
     // (`fixtures/linear/README.md`; linear-fixtures.test.ts holds it on every recording). A millisecond epoch read as
     // seconds, or as a wait, is held to 3,600 and turns the 90-second row red.
-    const NOW = linearRecord('key-check-page-1').receivedAtMs;
+    const NOW = recordedReceivedAtMs('key-check-page-1');
     const cases: [Record<string, string>, number][] = [
       [{ 'X-RateLimit-Requests-Reset': String(NOW + 90_000) }, 90],
       [{ 'X-RateLimit-Requests-Reset': String(NOW + 90_001) }, 91],
@@ -246,7 +246,7 @@ describe('lookupLinearIssue', () => {
   it('the constructed rate-limited answer (Linear\'s published page, never recorded) is read with its Retry-After', async () => {
     const r = linearRecord('error-429-ratelimited-constructed');
     const { f } = spyFetch(recordedAnswer('error-429-ratelimited-constructed'));
-    expect(await lookupLinearIssue(REF, HAVE_KEY, { fetch: f, now: () => r.receivedAtMs }))
+    expect(await lookupLinearIssue(REF, HAVE_KEY, { fetch: f, now: () => recordedReceivedAtMs(r.name) }))
       .toMatchObject({ reason: 'rate-limited', retryAfterS: Number(recordedHeader(r, 'retry-after')) });
   });
 

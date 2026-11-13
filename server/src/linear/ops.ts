@@ -122,11 +122,12 @@ const RESOLVED_FIELDS = 'id identifier team { id key }';
 
 // ── the hierarchy documents (D-8180; design 2026-11-10 §5, §8.1) ──
 
-/** What each hierarchy answer selects; `hierarchyOps.ts`'s shapers read exactly these fields. */
+/** What each hierarchy answer selects; `hierarchyOps.ts`'s shapers read exactly these fields. A milestone selects no
+ *  `creator`: Linear's ProjectMilestone has none (FX2, D-8407), so a milestone binds by name inside its project. */
 const INITIATIVE_FIELDS = 'id name description status updatedAt projects(first: 50) { nodes { id } }';
 const PROJECT_FIELDS = 'id name description updatedAt status { id type } teams(first: 20) { nodes { key } } '
-  + 'initiatives(first: 10) { nodes { id } } projectMilestones(first: 50) { nodes { id name description targetDate sortOrder updatedAt creator { id } } }';
-const MILESTONE_FIELDS = 'id name description targetDate sortOrder updatedAt project { id } creator { id }';
+  + 'initiatives(first: 10) { nodes { id } } projectMilestones(first: 50) { nodes { id name description targetDate sortOrder updatedAt } }';
+const MILESTONE_FIELDS = 'id name description targetDate sortOrder updatedAt project { id }';
 const NAMED_FIELDS = 'id name createdAt creator { id }';
 const HIERARCHY_ISSUE_FIELDS = 'id identifier title description updatedAt team { key } state { type } project { id } '
   + `projectMilestone { id } parent { id } labels(first: ${LINEAR_ISSUE_LABELS_MAX}) { nodes { id } }`;

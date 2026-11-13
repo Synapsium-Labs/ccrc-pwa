@@ -3,10 +3,10 @@
 // TypeScript caller import it with types. The names and the shape are
 // `shared/models.ts`'s exactly.
 import type {
-  Catalogue, CatalogueModel, DerivedModels, ModelClass, ModelWindows, ProbeKind, Registry,
+  Catalogue, CatalogueModel, DerivedModels, LaneClassModels, ModelClass, ModelWindows, ProbeKind, Registry,
 } from './models.js';
 
-export type { Catalogue, CatalogueModel, DerivedModels, ModelClass, ModelWindows, ProbeKind, Registry };
+export type { Catalogue, CatalogueModel, DerivedModels, LaneClassModels, ModelClass, ModelWindows, ProbeKind, Registry };
 // Fix round 1, finding 3 (2026-09-08): the runtime twin of `shared/models.ts`'s
 // own `as const` `CLASSES`/`PROBE_KINDS` — see `shared/models.mjs` for why
 // that file keeps a separate export rather than this one re-exporting it.
@@ -27,6 +27,12 @@ export declare const MODEL_ID_RE: RegExp;
 // words of `ccrc models`, each defined once in `shared/models.mjs`.
 export declare const MODELS_LANE_ID_RE: RegExp;
 export declare const MODELS_RESERVED_IDS: readonly string[];
+// D-8406: the lane model files' directory and names, the read grant's shape, and each class's model with its label.
+export declare const MODELS_DIR_NAME: string;
+export declare function registryFileName(id: string): string;
+export declare function catalogueFileName(id: string): string;
+export declare function isLaneModelsReadName(name: unknown): boolean;
+export declare function laneClassModels(reg: Registry, catalogue: Catalogue | null): LaneClassModels;
 // Auto-advance plan W2 Task 12: the one reader of a models push line, its length cap and the pure policy of
 // `/api/notify`'s `push: true`, each defined once in `shared/models.mjs`.
 export declare const MODELS_PUSH_MAX: number;

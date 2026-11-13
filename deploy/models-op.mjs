@@ -68,8 +68,9 @@ import { readFileSync, writeFileSync, renameSync, mkdirSync, unlinkSync } from '
 import path from 'node:path';
 import { rosterFromJson, RosterInvalid } from '../shared/roster-json.mjs';
 import {
-  CLASSES, CatalogueInvalid, MODEL_ID_RE, MODELS_LANE_ID_RE, PROBE_KINDS, RegistryInvalid, SUBAGENT_CLASSES,
-  WINDOW_MAX, WINDOW_MIN, availableFor, deriveModels, parseCatalogue, parseRegistry, parseWindows,
+  CLASSES, CatalogueInvalid, MODEL_ID_RE, MODELS_DIR_NAME, MODELS_LANE_ID_RE, PROBE_KINDS, RegistryInvalid, SUBAGENT_CLASSES,
+  WINDOW_MAX, WINDOW_MIN, availableFor, catalogueFileName, deriveModels, parseCatalogue, parseRegistry, parseWindows,
+  registryFileName,
 } from '../shared/models.mjs';
 import {
   CLIENT_DEFAULT_CONTEXT_TOKENS, LANE_ENV_KEYS, ModelEnvInvalid, classesTsv, clearSettingsEnv, contextWindowFor,
@@ -146,9 +147,10 @@ const SEED_FAMILIES = Object.freeze({
 const now = () => process.env['CCRC_MODELS_NOW'] ?? new Date().toISOString().replace(/\.\d{3}Z$/, 'Z');
 
 const HOME = process.env['HOME'] ?? '';
-const modelsDir = () => path.join(HOME, '.ccrc', 'models');
-const cataloguePath = (id) => path.join(modelsDir(), `${id}.json`);
-const registryPath = (id) => path.join(modelsDir(), `${id}.classes.json`);
+// D-8406: the directory and the two names the console also reads, spelled once in `shared/models.mjs`.
+const modelsDir = () => path.join(HOME, '.ccrc', MODELS_DIR_NAME);
+const cataloguePath = (id) => path.join(modelsDir(), catalogueFileName(id));
+const registryPath = (id) => path.join(modelsDir(), registryFileName(id));
 // `rm` and `materialise` both name these two by id (`materialFiles`): an ORPHAN
 // id has no `account` to build a path off, so neither builds one off it.
 const classesTsvPath = (id) => path.join(modelsDir(), `${id}.classes.tsv`);

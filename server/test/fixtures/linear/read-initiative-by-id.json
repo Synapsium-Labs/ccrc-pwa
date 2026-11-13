@@ -1,0 +1,72 @@
+{
+  "name": "read-initiative-by-id",
+  "documentSource": "code",
+  "document": "query InitiativeById($id: String!) { initiative(id: $id) { id name description status updatedAt projects(first: 50) { nodes { id } } } }",
+  "variables": {
+    "id": "00000000-0008-4000-8000-000000000020"
+  },
+  "requestBody": "{\"query\":\"query InitiativeById($id: String!) { initiative(id: $id) { id name description status updatedAt projects(first: 50) { nodes { id } } } }\",\"variables\":{\"id\":\"00000000-0008-4000-8000-000000000020\"}}",
+  "requestHeaders": [
+    "authorization: <the key, bare, no Bearer>",
+    "content-type: application/json"
+  ],
+  "sentAtMs": null,
+  "receivedAtMs": null,
+  "sentAt": null,
+  "status": 200,
+  "statusLine": null,
+  "headers": [
+    [
+      "content-type",
+      "application/json; charset=utf-8"
+    ],
+    [
+      "x-complexity",
+      "13"
+    ],
+    [
+      "x-ratelimit-complexity-limit",
+      "3000000"
+    ],
+    [
+      "x-ratelimit-complexity-remaining",
+      "2999985"
+    ],
+    [
+      "x-ratelimit-complexity-reset",
+      "1794590002564"
+    ],
+    [
+      "x-ratelimit-requests-limit",
+      "2500"
+    ],
+    [
+      "x-ratelimit-requests-remaining",
+      "2470"
+    ],
+    [
+      "x-ratelimit-requests-reset",
+      "1794590002564"
+    ]
+  ],
+  "body": {
+    "data": {
+      "initiative": {
+        "id": "00000000-0008-4000-8000-000000000020",
+        "name": "Capture initiative temp",
+        "description": "Capture.",
+        "status": "Active",
+        "updatedAt": "2026-11-13T16:13:19.451Z",
+        "projects": {
+          "nodes": [
+            {
+              "id": "00000000-0004-4000-8000-000000000020"
+            }
+          ]
+        }
+      }
+    }
+  },
+  "bodyRaw": "{\"data\":{\"initiative\":{\"id\":\"00000000-0008-4000-8000-000000000020\",\"name\":\"Capture initiative temp\",\"description\":\"Capture.\",\"status\":\"Active\",\"updatedAt\":\"2026-11-13T16:13:19.451Z\",\"projects\":{\"nodes\":[{\"id\":\"00000000-0004-4000-8000-000000000020\"}]}}}}\n",
+  "note": "Recorded by the hierarchy capture (FX2, D-8407). Read before the status updates: a new initiative made with no status is Active."
+}
