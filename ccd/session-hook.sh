@@ -3948,7 +3948,8 @@ _hook_launch_record_append() {   # $lrc_line (a row, or a drop row, one TAB, the
 # pass: each kept report is sent once inside one time budget (the bound), a send with no answer ends the pass, a report
 # refused START_RESEND_TRIES times is dropped, and a start whose pass found the server silent is kept without a second
 # send, so an event waits at most about one bound here. At most START_PENDING_MAX reports are kept, the oldest dropped
-# first. Written only for a row ccd created (its `generation` stands); it holds no authority, is never read as truth,
+# first. Written only for a row ccd created (its `generation` stands, looked at again after the write, as the join record
+# does, so a purge during the up-to-4 s send leaves no orphan field); it holds no authority, is never read as truth,
 # prints nothing, and no path through it changes this hook's exit code or stdout.
 START_PENDING_MAX=20 START_RESEND_TRIES=5 START_RESEND_BACKOFF_MS=30000
 _hook_start_send() {   # <report JSON> -> 0 taken (202); 1 stale-uuid; 2 no answer or not a 4xx; 3 refused for good
@@ -3987,6 +3988,7 @@ _hook_start_report() {
   if (( ${#stay[@]} == 0 && drop == 0 )); then rm -f -- "$f" 2>/dev/null; return 0; fi
   { { printf '%s\t%s\n' "$after" "$drop"; if (( ${#stay[@]} )); then printf '%s\n' "${stay[@]}"; fi; } > "$f$$" && mv -f -- "$f$$" "$f"; } 2>/dev/null \
     || rm -f -- "$f$$" 2>/dev/null
+  [[ -e "$REG/$id.generation" ]] || rm -f -- "$f" 2>/dev/null   # a purge during the send: no orphan field (the join record's (a))
   return 0
 }
 _hook_start_report || true

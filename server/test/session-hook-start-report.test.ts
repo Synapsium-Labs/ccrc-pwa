@@ -35,7 +35,7 @@ beforeEach(() => {
   fs.writeFileSync(path.join(reg(), `${ID}.generation`), GENERATION);
   fs.writeFileSync(path.join(home, 'bin', 'tmux'), `#!/bin/sh\necho "cc-${ID}"\n`, { mode: 0o755 });
   // The fake closed client. `runs list` (the roster card's read) answers an empty list; `sessions start` records its argv
-  // and the body it read from stdin, then answers what `api.code` holds: `202`, `<status> <error word>`, or `hang`.
+  // and the body it read from stdin, then answers what `api.code` holds: `202`, `<status> <error word>`, `hang` or `purge`.
   fs.writeFileSync(path.join(home, '.local', 'bin', 'ccrc-api'), [
     '#!/bin/sh',
     'if [ "$1 $2" = "runs list" ]; then echo \'{"runs":[]}\'; echo "http 200" >&2; exit 0; fi',
@@ -44,6 +44,8 @@ beforeEach(() => {
     `cat >> "${home}/api.bodies"`,
     `set -- $(cat "${home}/api.code" 2>/dev/null || echo 202)`,
     'if [ "$1" = hang ]; then sleep 20; fi',
+    // `purge`: the row is purged while the send is in flight (plan review 1896, R12), then the server answers stale-uuid.
+    `if [ "$1" = purge ]; then rm -f "${path.join(home, '.cc-sessions', `${ID}.generation`)}"; set -- 403 stale-uuid; fi`,
     'if [ "$1" = 202 ]; then echo \'{"ok":true,"id":1,"fresh":true}\'; else echo "{\\"ok\\":false,\\"error\\":\\"$2\\"}"; fi',
     'echo "http $1" >&2; exit 0',
   ].join('\n') + '\n', { mode: 0o755 });
@@ -249,6 +251,13 @@ describe('the start report: what is kept and resent', () => {
     expect(r.ms).toBeLessThan(8_000);
     expect(spool()!.kept.map((k) => k.body['source'])).toEqual(['clear', 'resume']);
   }, 30_000);
+
+  it('a row purged during the send leaves no field behind: the generation is looked at again after the write (review 1896, R12)', () => {
+    answer('purge');
+    expect(hook(start('clear')).status).toBe(0);
+    expect(calls()).toBe(1);
+    expect(fs.readdirSync(reg()).filter((n) => n.startsWith(`${ID}.startpending`)), 'no orphan field, no temp file').toEqual([]);
+  });
 
   it(`keeps at most ${MAX} reports, the oldest dropped first and counted`, () => {
     answer('403 stale-uuid');
