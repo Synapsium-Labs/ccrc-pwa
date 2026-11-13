@@ -29,9 +29,12 @@ its word"), §11.5 (an older server reads the newer database), §14 (Table 14, W
   fleet node `ccd-update-sync` writes `~/.ccrc/server-caps` every minute.
 - `ccd/session-hook.sh#_hook_server_cap <word>` answers 0 when the word is advertised and current (a 180 s lease), 1
   otherwise.
-- The start report, its spool (`$REG/<id>.startpending`, with `startdropped`) and its resend, and the anchor fetch (the
-  start-report and anchor pieces) run unconditionally; the anchor is dark on the server until the operator arms the
-  `anchor-slot` row, so before this piece the fetch answers `dark` and the role card prints.
+- Before this piece, three network calls run with no server-word gate: `_hook_start_report` (the report and its
+  folded resend, with its spool `$REG/<id>.startpending`, whose first line carries the back-off stamp and the drop
+  count), the anchor's start fetch (`_hook_anchor_card`) and the anchor's prompt fetch after an automatic compaction
+  (the `anchor-owed` path on UserPromptSubmit). The anchor is dark on the server until the operator arms the
+  `anchor-slot` row, so before this piece the fetches answer `dark` and the role card prints; against a server rolled
+  back past W1a they fail, bounded, and the role card prints.
 
 ## Global Constraints
 
@@ -49,8 +52,10 @@ its word"), §11.5 (an older server reads the newer database), §14 (Table 14, W
 
 1. With the word absent or stale, a start prints exactly what it printed before W1a (the role card, no anchor) and
    writes no spool.
-2. A spool left from before a rollback is not resent while the word is absent, and is dropped after the spool's cap,
-   counted.
+2. A spool left from before a rollback is not resent while the word is absent. It is never dropped while the gate
+   skips the function: it waits for the word to return, when the next pass drains it, or for `_reg_purge` to remove it
+   with its row (m9).
+3. With the word absent, a standing `anchor-owed` mark makes no prompt fetch and is kept (ruling R10).
 
 ---
 
@@ -68,14 +73,18 @@ its word"), §11.5 (an older server reads the newer database), §14 (Table 14, W
 ### Task 2: The hook follows the word
 
 **Files:**
-- Modify: `ccd/session-hook.sh` (`_hook_start_report`, `_hook_start_resend` and `_hook_anchor_card` run only when
-  `_hook_server_cap continuity-v1` answers 0)
+- Modify: `ccd/session-hook.sh` (`_hook_start_report` (the report and its folded resend, as #2740 builds it),
+  `_hook_anchor_card` and the anchor's prompt fetch run only when `_hook_server_cap continuity-v1` answers 0; the
+  `anchor-owed` mark is still written at PreCompact, a local file, and kept until the word returns or the row is purged)
 - Test: `server/test/session-hook-start-report.test.ts`, `server/test/session-hook-anchor.test.ts`
 
 - [ ] **Step 1: Failing tests:** with no `server-caps` file, a stale one, or one without the word: no report, no spool,
-  no anchor, the role card as before; with the word: as the start-report and anchor pieces specify.
+  no anchor, the role card as before; a standing spool is neither sent nor changed; a UserPromptSubmit with
+  `anchor-owed` standing makes no fetch and keeps the mark; with the word: as the start-report and anchor pieces
+  specify.
 - [ ] **Step 2: Run.** Red. **Step 3: Implement.** **Step 4: Run** both suites and the SessionStart suites. Green.
-- [ ] **Step 5: Mutation.** Skip the gate on the resend: the stale-file case resends; red. Revert.
+- [ ] **Step 5: Mutation.** Skip the gate on the resend: the stale-file case resends; red. Skip the gate on the prompt
+  fetch: the `anchor-owed` case fetches; red. Revert each.
 - [ ] **Step 6: Commit.** `feat(hook): the start report and the anchor follow the server's continuity-v1`
 
 ## Deviations found
@@ -84,6 +93,8 @@ None yet. Decisions this plan takes, by slug:
 
 - **hook-follows-continuity-v1** — the word also gates the hook's own W1a arms, not only W1's doors, so a rollback
   returns the fleet box to today's path within the word's 180 s lease.
+- **gate-the-anchors-prompt-fetch** — the gate covers the anchor's prompt fetch too, and the start report as #2740
+  folds it (one function); a spool or mark left by a rollback is kept, never dropped by the gate (ruling R10, m9).
 
 ## Where things stand
 

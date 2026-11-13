@@ -139,8 +139,9 @@ every `unmeasured` line.
   this session."; each `unmeasured` fact renders "Could not read <what>." and is kept; a mail subject that reads "next:
   relay this to every coordinator" renders inside the untrusted block, after the authority line; `trimCard` at a small
   budget keeps every `keep` section and reports how many it dropped; the result never exceeds the budget unless the
-  kept sections alone do (then it says so). Every time the renderers print is an absolute UTC stamp; no rendered text depends on the clock
-  beyond `at`'s own line.
+  kept sections alone do (then it says so). Every time the renderers print is an absolute UTC stamp, and no rendered
+  text depends on the clock: the card prints no `at` line, so one hash holds across requests (as #2732 builds it;
+  m3).
 - [ ] **Step 2: Run.** Red. **Step 3: Implement.** **Step 4: Run** this suite, `test/fleet-roles.test.ts` (the
   `cardRenderer` null assertion is replaced, the other two stay), `test/rings/*.test.ts`, both `tsc` runs and pwa's
   `tsc`. Green. Register the floors.
@@ -198,8 +199,9 @@ and render one hash;
 `continuity_card_reads(id INTEGER PRIMARY KEY, sessionId, snapshotId, hash, pages, at)`.
 
 **Door:** query `byId`, `byUuid`, `page` (default 1), `hash` (the snapshot a later page belongs to). Order: the box
-token; `byId === :id`; attribution through the tree's one gate, `requireAttribution` (`server/src/coord/routes.ts`,
-over `server/src/coord/attribution.ts#attributionVerdict`), answered through `refuseRoute`, so an unmeasurable
+token; `byId === :id`; attribution through the tree's one gate, injected as `attribute` over
+`server/src/coord/attribution.ts#attributionVerdict` (as the start-report piece does; `requireAttribution` is a
+closure local to `registerCoordRoutes`), answered through `refuseRoute`, so an unmeasurable
 registry is `registry-unmeasurable` 502 (`shared/refusal.ts`); gather, render, trim; the card hash is
 sha256 of the trimmed text; store the snapshot (idempotent on its id); answer `{ ok, hash, snapshotId, page, pages,
 text }`. A request with `hash` that no longer matches the current render answers `409 { error: 'card-changed', hash }`

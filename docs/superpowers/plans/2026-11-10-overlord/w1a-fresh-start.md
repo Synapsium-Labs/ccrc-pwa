@@ -18,9 +18,10 @@ with `--roll`, wakes it through `( cmd_ensure "$id" )`, which resumes the conver
 `CCD_IN_UNIT=1`. An argument or a dynamic local never crosses that process boundary, and `cmd_ensure` takes ONE
 positional by contract (its header: "Do not give this verb another argument", because the agent whitelist grants
 `ensure` as a prefix). So `--fresh` crosses through the registry, the way the swap path carries its intent in
-`lastswap`: after the sleep, `cmd_hibernate --roll --fresh` writes a one-shot, dot-free marker `$REG/<id>.fresh`
-holding the new uuid and the old one, and the in-unit `_spawn_start` consumes it, writes the new uuid through the
-registry's uuid writer and spawns with `--session-id`. One pull request.
+`lastswap`: before the wake, `cmd_hibernate --roll --fresh` mints a uuid, writes it to a one-shot, dot-free marker
+`$REG/<id>.fresh` and then as the row's uuid (the marker first, so a uuid written without it still resumes, never the
+reverse), and the in-unit spawn (`_spawn_mode`) sees a marker naming the row's own uuid, spawns with `--session-id`
+and consumes it. This follows the fresh-start build's code (the coordinator's ruling on R5). One pull request.
 
 **Tech Stack:** bash (`ccd/ccd`), TypeScript (ESM), vitest with `makeCcdHarness`. No new dependency.
 
@@ -76,8 +77,10 @@ Table 11.1c (the `SessionHost` row), Table 11.1d (ccd's capability words).
 1. A fresh start never resumes: the spawn line carries `--session-id` with a uuid that differs from the old one, and no
    `--resume`, on the first try and on the retry. The request reaches the in-unit spawn through the marker only;
    `cmd_ensure` keeps exactly one positional.
-2. A failed wake leaves no half state: the marker is gone, and the registry's uuid is the old one again, so the next
-   ensure resumes the old conversation rather than silently starting a fresh one.
+2. A failed wake (exit 4) leaves no half state: the marker is gone, and the registry's uuid is the old one again, so
+   the next ensure resumes the old conversation rather than silently starting a fresh one. An uncertain wake (exit 5)
+   restores nothing, because a pane may already run the new conversation. A stale marker is removed and named on
+   stderr, never left and never acted on.
 3. Every refusal `--roll` has, `--fresh` has too (`.no-roll`, a busy session, a hold), with the same exit codes.
 4. A box without the word never receives the flag: the argv builder refuses to add it unless the caller proved
    `hibernate-fresh`.
@@ -88,9 +91,10 @@ Table 11.1c (the `SessionHost` row), Table 11.1d (ccd's capability words).
 
 **Files:**
 - Modify: `ccd/ccd` (`cmd_hibernate` parses `--fresh` and, after the sleep and before the wake, writes
-  `$REG/<id>.fresh` = `<new uuid> <old uuid>`; the in-unit `_spawn_start` consumes the marker; `cmd_hibernate`
-  cleans up after a failed wake; `cmd_ensure` is unchanged and keeps one positional; `_reg_purge`'s inventory comment
-  gains `fresh`)
+  `$REG/<id>.fresh` = `<new uuid>` and then the row's uuid = `<new uuid>`; the in-unit spawn's mode reader
+  (`_spawn_mode`) answers `new` for a marker naming the row's uuid, and `_spawn_start` consumes it; `cmd_hibernate`
+  restores the old uuid after a failed wake (exit 4); `cmd_ensure` is unchanged and keeps one positional; `_reg_purge`'s
+  inventory comment gains `fresh`)
 - Test: `server/test/ccd-hibernate-roll.test.ts`, `server/test/ccd-ensure-argv.test.ts` (new, or the existing suite
   that pins `cmd_ensure`'s arity: measure `grep -ln 'ONE POSITIONAL\|cmd_ensure' server/test`)
 
@@ -98,34 +102,40 @@ Table 11.1c (the `SessionHost` row), Table 11.1d (ccd's capability words).
   point. Expected: green; they stay green, unedited.
 - [ ] **Step 2: Failing tests** (fixture HOME, the suite's stub `claude` that records its argv):
   - **The supervised path** (the suite's `_supervised_start` stub, as its roll cases use it): `hibernate --roll --fresh
-    lane-a-project-a` writes `$REG/lane-a-project-a.fresh` with two well-formed, different uuids, the second the
-    uuid before, then calls `_supervised_start lane-a-project-a` with no other argument.
-  - **The in-unit spawn** (`CCD_IN_UNIT=1`, the suite's stub `claude` recording its argv): with the marker present and
-    its old uuid equal to the registry's, the spawn has `--session-id <u2>` and no `--resume`; the registry's uuid file
-    now holds `u2`; the marker is gone; `started` stays `1`.
+    lane-a-project-a` writes `$REG/lane-a-project-a.fresh` holding one well-formed uuid `u2`, different from the uuid
+    before, and the registry's uuid file now holds `u2`, both before `_supervised_start lane-a-project-a` is called with
+    no other argument; `swap.log` names both uuids.
+  - **The in-unit spawn** (`CCD_IN_UNIT=1`, the suite's stub `claude` recording its argv): with the marker naming the
+    registry's uuid `u2`, the spawn has `--session-id <u2>` and no `--resume`; the marker is gone; `started` stays `1`.
   - The stub refusing the first spawn: the retry also carries `--session-id <u2>` (the same new uuid, not a third).
-  - A marker whose old uuid is not the registry's (a stale marker), or that does not parse: the spawn resumes as
-    today, and the marker is removed and named on stderr.
+  - **A stale marker** is one that does not name the row's current uuid (the uuid moved on: a swap, a `/clear` the
+    registry followed, a restore after a failed wake, or a `cmd_hibernate` killed between its two writes), or that does
+    not parse as one uuid: the spawn resumes as today, and the marker is removed and named on stderr (the builder's
+    change, ruling m-B7).
+  - A `cmd_hibernate` killed after both writes and before the wake leaves a marker naming the row's uuid: the next
+    spawn starts fresh under it, which is right, because the row already names a conversation that never started;
+    `swap.log` keeps the old uuid.
   - The wake failing (the stub `_supervised_start` returning 1): exit 4 `roll-wake-failed`, as `--roll`; the marker is
     gone and the registry's uuid is the old one.
+  - The wake answering exit 5: nothing is restored; the marker and the new uuid stand (the builder's change, m-B6).
   - `hibernate --fresh <id>` without `--roll` dies with usage (exit 1: `die` is `exit 1`) and touches nothing.
   - `--fresh=x` dies with usage (exit 1).
   - `.no-roll` present: refused exactly as `--roll` is refused, the uuid unchanged and no marker written.
   - `cmd_ensure` given a second argument still refuses it (its arity pin stays green, unedited).
 - [ ] **Step 3: Run.** Expected: red.
-- [ ] **Step 4: Implement.** The new uuid comes from `_plat_uuid`. The marker is written with the registry's own
-  atomic file write after the sleep, and only then is the wake run. The in-unit `_spawn_start` reads it before it
-  builds the flag: when the old uuid matches the registry's, it writes the new uuid through `_reg_set "$id" uuid`
-  (never a second writer), removes the marker, and builds `--session-id` for this spawn and its retry. On a wake exit 4
-  or 5, `cmd_hibernate` removes the marker if it still stands and, if the registry's uuid reads the marker's new uuid,
-  writes the old one back. The fresh path changes only the uuid and the flag; everything else `_spawn_start` composes
+- [ ] **Step 4: Implement.** The new uuid comes from `_plat_uuid`. After the sleep, `cmd_hibernate` writes the marker
+  and then the row's uuid, each through `_reg_set` (never a second writer), and only then runs the wake. The in-unit
+  spawn's mode reader answers `new` when the marker names the row's uuid, and `_spawn_start` removes the marker and
+  builds `--session-id` for this spawn and its retry; a stale marker is removed and named on stderr. On a wake exit 4,
+  `cmd_hibernate` removes the marker if it still stands and writes the old uuid back; on exit 5 it restores nothing. The fresh path changes only the uuid and the flag; everything else `_spawn_start` composes
   (the route's class, effort and account, the settings, the environment) is read at the spawn, so a route write made
   before the act applies in the same step. The marker's name is dot-free, so `_reg_purge` and `_ws_slug_residue`
   already sweep it with its row; add it to `_reg_purge`'s inventory comment, and a case to the purge suite (measure:
   `grep -ln '_reg_purge' server/test`) that a purge removes it.
 - [ ] **Step 5: Run** both hibernate suites. Expected: green.
 - [ ] **Step 6: Mutation (measured once).** Make `_spawn_start` ignore the marker: the "no `--resume`" case goes red.
-  Drop the failed-wake restore: the failed-wake case goes red. Revert each.
+  Drop the failed-wake restore: the failed-wake case goes red. Restore on exit 5 too: the exit-5 case goes red. Leave
+  a stale marker in place: the stale case goes red. Revert each.
 - [ ] **Step 7: Commit.** `feat(ccd): hibernate --roll --fresh starts a fresh conversation under the same session id`
 
 ### Task 2: The capability word `hibernate-fresh`
@@ -166,10 +176,16 @@ None yet. Decisions this plan takes, by slug:
 - **fresh-is-a-roll-mode** — `--fresh` is accepted only with `--roll`, so it inherits the roll's refusals and exit
   codes, and the builder's boolean becomes a three-word mode.
 - **fresh-crosses-by-marker** — the fresh request reaches the in-unit spawn through a one-shot, dot-free registry
-  marker (`$REG/<id>.fresh`), never an argument, so `cmd_ensure` keeps its one positional; a failed wake removes
-  the marker and restores the old uuid. The name `fresh` is the one the build chose and the coordinator ruled on;
-  Table 3.6a lists the marker, with one writer (`ccd hibernate --roll --fresh`), consumed by the in-unit spawn, and no
-  authority and no switch (this programme's spec amendment).
+  marker (`$REG/<id>.fresh`), never an argument, so `cmd_ensure` keeps its one positional; a failed wake (exit 4)
+  removes the marker and restores the old uuid. The name `fresh` is the one the build chose and the coordinator ruled
+  on; Table 3.6a lists the marker, with one writer (`ccd hibernate --roll --fresh`), consumed by the in-unit spawn, and
+  no authority and no switch (this programme's spec amendment).
+- **marker-follows-the-build** — the marker holds the new uuid only, and `cmd_hibernate` writes it and then the row's
+  uuid before the wake; the spawn acts on a marker naming the row's own uuid (the coordinator's ruling on R5).
+- **stale-marker-removed** — a marker that does not name the row's uuid, or does not parse, is stale: removed and named
+  on stderr, never acted on; a killed roll that wrote both starts fresh under the uuid the row already names (m-B7).
+- **restore-on-exit-4-only** — only a failed wake restores the old uuid; an uncertain one (exit 5) restores nothing,
+  because a pane may already run the new conversation (m-B6).
 
 ## Where things stand
 

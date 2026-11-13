@@ -163,7 +163,8 @@ model class by depth (`SPOT_PROBE_EVERY_TOKENS`); a bucket is good when its last
 - Modify: `server/src/continuity/routes.ts` (`GET /api/sessions/:id/probe`, `POST /api/sessions/:id/probe`; the card and
   notes GETs stamp the caller's last read time for closed-book)
 - Modify: the census files; `server/test/single-definition/writers-map.test.ts`; `shared/refusal.ts`
-  (`PROBE_REFUSALS`: `probe-none-open`, `probe-closed`)
+  (`PROBE_REFUSALS`: `probe-none-open`, `probe-closed`; spec Table 11.6 lists both, this programme's spec amendment,
+  m5)
 - Test: `server/test/continuity-probe-route.test.ts` (new)
 
 **Schema:**

@@ -53,7 +53,10 @@ database).
 - **SAFETY (`CLAUDE.md`).** This piece acts on no session: no `CcdArgv`, no mail, no push. It writes only its own two
   tables. The server never places a session.
 - **Shadow is structural.** The lane imports nothing that sends (no `ccdargv`, no mail store method, no push); an import
-  pin in its test holds that, as the case lane's does.
+  pin in its test holds that, as the case lane's does. And shadow's would-be states never reach `state`: while
+  `continuity` is not `live`, every write that would move a generation's state writes `shadowState` instead, and
+  `state` stays `active`; only with `continuity` `live` does `state` move. The mail gate and the prompt route read
+  `state` only, so they need no switch of their own, and one writer decides (the coordinator's ruling on R1).
 - **Tests.** From `server/`: `ccrc test -- ./node_modules/.bin/vitest run test/<file>.test.ts`; the last run adds both
   `tsc` runs. **Growth check:** `server/src/coord/store.ts` grows at most 40 net lines (delegates only).
 - **Time.** The lane takes `Deps.time`; state deadlines are wall-clock columns (they fail towards the operator), the
@@ -71,6 +74,10 @@ database).
    (if any arrives) mints nothing; an undecided role mints nothing and is counted.
 3. A pass after a restart resumes from the cursor and the stored columns, never from memory.
 4. Shadow writes only the two tables, by an import pin that goes red if the lane gains a sending import.
+5. In shadow, `state` never leaves `active`: a mint writes `carded` to `shadowState`, so no coordinator's mail is held
+   and no prompt is refused before `continuity` is live.
+6. The observed accumulator carries across mints, so least age, the hold-off, the due start and the soft budget's
+   six-hour window are measured on one clock for an identity, never reset by a renewal.
 
 ---
 
@@ -100,19 +107,27 @@ CREATE TABLE continuity_generations (
   term        INTEGER NOT NULL,       -- 1 in W1a; the designation's term from W1
   rowIncarnation TEXT,                -- the registry row's incarnation at the start (continuity_starts), or null
   n           INTEGER NOT NULL,
-  state       TEXT NOT NULL,          -- a GenerationState word
-  enteredAt   INTEGER NOT NULL,       -- wall ms
+  state       TEXT NOT NULL,          -- a GenerationState word; moves only while `continuity` is live (R1)
+  shadowState TEXT,                   -- the would-be state while `continuity` is shadow; null when live
+  enteredAt   INTEGER NOT NULL,       -- wall ms, of the state the lane is moving (shadowState in shadow)
   deadlineAt  INTEGER,                -- wall ms; set from STATE_DEADLINE_S by the write that enters a state with a
                                       -- deadline (mint for carded, a step for the others); null in active, degraded, ended
-  dueSince    INTEGER, dueWhy TEXT, dueClass TEXT,
+  dueSince    INTEGER,                -- wall ms, shown to the operator; never read for a decision
+  dueWhy TEXT, dueClass TEXT,
+  dueSinceObservedMs INTEGER,         -- the identity's accumulator when the trigger became due (softRenewalMay)
+  proven      INTEGER NOT NULL DEFAULT 0,  -- read its card and passed a round; set once, never cleared (A2)
+  renudged    INTEGER NOT NULL DEFAULT 0,  -- the carded re-nudge was sent (once)
+  probeRounds INTEGER NOT NULL DEFAULT 0,  -- rounds opened in this probing (at most two)
   blind       TEXT,                   -- JSON array of RenewalTrigger words the last pass could not read
   model TEXT, lane TEXT, host TEXT,
   cardHash TEXT, snapshotId TEXT,     -- the card piece writes through this store's functions
-  attempts    INTEGER NOT NULL DEFAULT 0,
+  attempts    INTEGER NOT NULL DEFAULT 0,  -- GenView.tries
   outcome     TEXT,                   -- a GenerationOutcome word, set when ended
   resumed     INTEGER NOT NULL,       -- the start resumed the old conversation
   startId     INTEGER NOT NULL UNIQUE REFERENCES continuity_starts(id),
-  observed    TEXT NOT NULL,          -- JSON Observed (least age and hold-off read it)
+  observed    TEXT NOT NULL,          -- JSON Observed: the identity's accumulator, carried across mints (R4)
+  mintedObservedMs INTEGER NOT NULL,  -- the accumulator at the mint (least age = observed.ms - this)
+  softRenewalObservedMs INTEGER,      -- the accumulator when this generation's soft renewal began, else null
   holdOffUntilObservedMs INTEGER,
   UNIQUE (identity, term, n)
 );
@@ -124,19 +139,25 @@ CREATE TABLE continuity_cursor (lane TEXT PRIMARY KEY, lastStartId INTEGER NOT N
 live row of the identity with its outcome and inserts `n + 1` at `carded`, in one transaction; `superseded` when the
 live row is not the `(term, n, state)` the caller read); `stepGeneration(id, expect: {term, n, state}, next):
 { changed: boolean }`; `setDue(id, expect, due): { changed }`; `liveGenerations(): GenRow[] | { ok: false }`;
-`advanceCursor(lane, from, to): { changed }`. Every write is a compare-and-set.
+`advanceCursor(lane, from, to): { changed }`; `advanceObserved(id, expect, observed): { changed }`. Every write is a
+compare-and-set. The store's step and mint take `live: boolean` (the `continuity` row's choice, read once a pass) and
+write `state` when it is true and `shadowState` when it is false; nothing else chooses the column. When the row goes
+`live`, a walk begun in shadow is not carried into `state`: the next pass clears `shadowState`, and the next due
+trigger starts a live walk.
 
 - [ ] **Step 1: Failing tests:** mint ends the old row (`outcome` set) and inserts the next in one transaction (a forced
   failure leaves both unchanged); a second live row for one identity is refused by the partial unique index; a stale
   `expect` answers `superseded` / `changed: false`; a start id minted twice answers `superseded`; a mint at `carded`
   sets `deadlineAt` to `enteredAt + STATE_DEADLINE_S.carded × 1000`, a step into `probing` sets its own, a step into
-  `active` clears it; the migration's slot, the seed row `continuity` = `shadow`; the Shadow lanes card lists the new
-  lane. The deadline is set once (ruling I2): a step that stays in `carded` (the re-nudge) or in `probing`
+  `active` clears it; in shadow a mint writes `state` `active` and `shadowState` `carded`, and a step moves
+  `shadowState` only; live, a mint writes `state` `carded` and `shadowState` null; the migration's slot, the seed row
+  `continuity` = `shadow`; the Shadow lanes card lists the new lane. The deadline is set once (ruling I2): a step that stays in `carded` (the re-nudge) or in `probing`
   (the second round) leaves `deadlineAt` unchanged, and no store function takes a new deadline for a state the row is
   already in.
 - [ ] **Step 2: Run.** Red. **Step 3: Implement.** **Step 4: Run** this suite, `test/coord-db.test.ts`,
   `test/single-definition/writers-map.test.ts`, the lane-arm suites. Green.
-- [ ] **Step 5: Mutation.** Drop the partial unique index: the two-live-rows case goes red. Revert.
+- [ ] **Step 5: Mutation.** Drop the partial unique index: the two-live-rows case goes red. Mint into `state` in
+  shadow: the shadow mint case goes red. Revert each.
 - [ ] **Step 6: Commit.** `feat(continuity): continuity_generations, compare-and-set writes, and the continuity lane-arm row`
 
 ### Task 2: The pass mints and ends from the starts
@@ -153,9 +174,12 @@ registry record and gather facts with `roleFactsOf`; skip a role that is not lon
 (counted, logged once a pass); mint with outcome by source (`clear`/`startup` after a renewal the lane asked for:
 `renewed` — none in this piece; a start with no renewal in flight: `crashed` if the old row was `active` and the
 row incarnation did not change, `swapped` if the start's account differs from the row's `lane`, else `woken`);
-`resumed` from `source: resume`; `observed` from `observeTime(null, clock.mono(), proc,
-observedStepCapMs(GENERATIONS_PERIOD_MS))` (the lane's 30 s period, so a step is capped at 60 s; every later
-advance of a row's observed stamp passes the same cap, and each `gap` it answers is counted and logged once a pass). Then advance the cursor to the
+`resumed` from `source: resume`; `observed` continues the identity's accumulator: the ended row's `observed.ms`,
+re-anchored at `clock.mono()` and this process with no advance (an identity's first mint starts at 0), and
+`mintedObservedMs` is that value. Each pass advances every live row's `observed` through `observeTime(row.observed,
+clock.mono(), proc, observedStepCapMs(GENERATIONS_PERIOD_MS))` (the lane's 30 s period, so a step is capped at 60 s
+and a longer one advances by the cap and answers a `step` gap), written by `advanceObserved`, and each `gap` it answers
+is counted and logged once a pass. Then advance the cursor to the
 last id read, in the same transaction as the last mint.
 
 - [ ] **Step 1: Failing tests** (an in-memory `coord.db`, the fake time ports, a fake registry): a coordinator's
@@ -164,12 +188,12 @@ last id read, in the same transaction as the last mint.
   start mints nothing; an unmeasured claim read (undecided `coordinator-or-plain`) mints nothing and is counted; a
   restart of the lane re-reads from the cursor and mints nothing twice; 201 starts take two passes.
 - [ ] **Step 2: Run.** Red. **Step 3: Implement.** **Step 4: Run.** Green.
-- [ ] **Step 4b: The deadline is set once** (ruling I2; fake time). A coordinator renewed at `t` reaches `carded`: at
-  `t + 23 s` the pass feeds `midway`, the re-nudge is recorded and `deadlineAt` is unchanged; it reads the card and
-  fails its first round in `probing`: the second round opens and `deadlineAt` is unchanged; it passes: `active`, and
-  the time from `checkpointed` to `active` is at most `RENEWAL_BUDGET_S`. A long pause (a 90 s gap between passes)
-  advances observed time by nothing and records one `gap`.
-- [ ] **Step 5: Mutation.** Mint on `compact`: red. Mint on `fork`: red. Revert each. Re-arm the deadline on the re-nudge: Step 4b goes red. Revert.
+- [ ] **Step 4b: The accumulator** (fake time). n=2's `observed.ms` at its mint equals n=1's at its end, and its
+  `mintedObservedMs` is that value; a 90 s pause between passes advances it by the cap (60 s) and records one `step`
+  gap with `deltaMs` 90 000; a restart (a new `proc`) advances nothing and records one `process` gap. (The set-once
+  deadline test, with `midway`, is the renewal-act piece's Task 4: this piece feeds no state event, ruling R3.)
+- [ ] **Step 5: Mutation.** Mint on `compact`: red. Mint on `fork`: red. Start each mint's accumulator at 0: Step 4b
+  goes red. Revert each.
 - [ ] **Step 6: Commit.** `feat(continuity): the generations lane mints a generation at every start of a long-lived session`
 
 ### Task 3: The pass records `renewalDue` on every live generation
@@ -182,7 +206,7 @@ For each live generation in `active` or `degraded`: read the usage sidecar (cont
 since the generation's `enteredAt`, the turn marker (idle), the roll's behind test, the start row (resumed, class), and
 for a coordinator the wave-boundary fact (its newest run open and its previous closed, from `CoordStore`); pass every
 input the Overlord's rows need and W1a cannot read as `unmeasured` with the reason `"W1"`; call `renewalDue`; write
-`dueSince`/`dueWhy`/`dueClass` when it becomes due, clear them when it no longer is, and always write `blind`. Nothing
+`dueSince`/`dueWhy`/`dueClass` and `dueSinceObservedMs` (the row's `observed.ms`) when it becomes due, clear them when it no longer is, and always write `blind`. Nothing
 else happens: no state changes, no act.
 
 - [ ] **Step 1: Measure** the roll lane's behind test (its function and inputs) and the wave-boundary read (which
@@ -222,14 +246,31 @@ None yet. Decisions this plan takes, by slug:
   in `blind` and never fire.
 - **fork-is-not-a-generation** — a `fork` start mints nothing and ends nothing; the hook does not report one, and the
   lane skips one that arrives.
+- **clear-start-mints-at-its-resend** — a `/clear` start's row lands at the next prompt's resend (run 1886's
+  `clear-start-lands-on-next-prompt`), so the generation it mints ages from that resend's `receivedAt`, not from the
+  `/clear`; the pass mints it on the pass after the row lands, and nothing waits on it as a renewal's receipt (the
+  renewal-act piece's `receipt-never-waits-on-a-clear-start`).
+- **pass-records-act-orders** — this piece records `renewalDue` and never starts a renewal; the
+  ordering "no coordinator renewal, hard ones included, while the Overlord's generation is outside `active`" is the
+  renewal-act piece's `overlordFirst` (ruling F11).
 - **deadline-set-once-rounds-fit-inside** — the coordinator's ruling: the deadline set on entry is never re-armed;
-  the carded re-nudge (the machine's `midway`) and the second probe round fit inside it.
+  the carded re-nudge (the machine's `midway`) and the second probe round fit inside it. This piece's store holds it
+  (no function takes a new deadline for a state the row is already in); the renewal-act piece feeds `midway` and
+  tests the walk (ruling R3).
+- **shadow-state-column** — in shadow the lane writes its would-be states to `shadowState` and `state` stays `active`,
+  so readers of `state` need no switch (the coordinator's ruling on R1).
+- **accumulator-across-mints** — an identity's observed accumulator carries across mints, and the due start, each soft
+  renewal's start and the mint are stored as accumulator values, so the soft budget's window and least age span
+  generations (the coordinator's ruling on R4).
+- **machine-counters-are-columns** — `proven`, `renudged` and `probeRounds` are columns, so a pass after a restart
+  resumes them from the row (R2).
 - **deadline-set-on-entry** — the write that enters a state with a deadline sets `deadlineAt` from `STATE_DEADLINE_S`
   in the same compare-and-set; nothing else writes it.
 - **shadow-week-counts-new-starts-only** — rows are minted only at a reported start, so a long-lived session already
   running when this piece merges has no row until its next start; and in shadow, probes are announced only by the
   live-only first prompt, so most shadow `probing` rows time out to `degraded`. The arming item (the renewal-act piece)
-  says both, so its counts are read for what they are.
+  says both, so its counts are read for what they are. Both are `shadowState` counts: `state` stays `active` in
+  shadow.
 - **lane-cursor-row** — the lane's position in `continuity_starts` is its own row, `continuity_cursor`, written with the
   last mint of a pass.
 

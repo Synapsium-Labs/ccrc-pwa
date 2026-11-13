@@ -156,7 +156,10 @@ Every row's own `settings` is empty except where a later wave adds one.
 - Modify: `ccd/ccd` (`ROUTE_FIELDS` gains `profile`, `automem` and `compactwindow`; `_route_valid` accepts a role word
   for `profile`, `on|off` for `automem` and an integer from 100000 to 1000000 for `compactwindow`;
   `_profile_spawn_compose id launchflags` sets `PROFILE_SPAWN_FLAGS` and `PROFILE_SPAWN_ENV`; `_spawn_start` calls it
-  after `_fleet_spawn_compose` and adds `PROFILE_SPAWN_ENV` to both spawn lines)
+  after `_fleet_spawn_compose` and adds `PROFILE_SPAWN_ENV` to both spawn lines; `_route_any` skips the three fields
+  as it skips `browser` (D-8121), so a row that names only these fields is still a row with no routing record:
+  `_route_seed_default` still seeds it, `routeapplied` is not written empty and `_route_apply_pending` does not read
+  it per tick (m-B9))
 - Modify, the route vocabulary, so the server can write the fields and read them back (each a one-line, append-only
   row, in the same pull request as ccd's list, so a snapshot carrying a new field never meets a server that refuses
   it): `shared/api.ts` (`ROUTE_WRITABLE_FIELDS` and `parseRouteFields`'s accepted fields, in the route region),
@@ -192,7 +195,9 @@ the route carries `compactwindow`, merge the row's `compactionSettings` after `s
   `test/ccd-route-verb.test.ts` and the spawn compose suites (measure: `grep -ln '_fleet_spawn_compose' server/test`).
   Expected: green.
 - [ ] **Step 6: Mutation.** Merge the profile before the fleet pins: `idleCompaction` reads `true`; red. Apply the
-  compaction settings without `compactwindow`: the "no `compactwindow`" case goes red. Revert each.
+  compaction settings without `compactwindow`: the "no `compactwindow`" case goes red. Count `profile` in
+  `_route_any`: the case "a row naming only `profile` is still seeded by `_route_seed_default`" goes red (add that
+  case to Step 2). Revert each.
 - [ ] **Step 7: Commit.** `feat(ccd): the spawn applies the launch profile the route names (route fields profile, automem)`
 
 ### Task 4: ccd's compact threshold for a long-lived role
@@ -308,7 +313,10 @@ counted, never written blind.
   nothing, the doctor lists what exists; and it moves no compaction setting: the lowered window, Claude Code's own
   auto-compact window and idle compaction off follow only once the `continuity` row is also live); and the
   options: arm now; arm for long-lived roles only first (a one-line change to `profileFor`, recorded as a departure);
-  keep shadow. Recommend: arm now, because a memory nobody reviews is loaded as the session's own (§3.8).
+  keep shadow. Recommend: arm once the replay baseline is recorded, because a memory nobody reviews is loaded as the
+  session's own (§3.8). **The interim rule** (ruling R9): the coordinator raises this item only after the replay
+  quiz's baseline run is recorded; until the replay-quiz piece's `baseline-missing` refusal ships, that rule is what
+  keeps an early arm from forfeiting the baseline, and the item says so.
 - [ ] **Step 2: Commit.** `docs(plans): the auto-memory item for the operator (W0-09)`
 
 **PR B ends here.** The coordinator raises the item; the lane stays `shadow` until the operator answers.
@@ -329,7 +337,12 @@ None yet. Decisions this plan takes, by slug:
 - **compact-window-per-session** — Claude Code's own auto-compact window (`CLAUDE_CODE_AUTO_COMPACT_WINDOW`) rides the
   route field `compactwindow`, since a literal in the profile file cannot follow each session's window.
 - **compaction-follows-continuity** — the profile's compaction columns are written and applied only while `continuity`
-  is live, so arming the profile lane for auto memory moves no compaction setting.
+  is live, so arming the profile lane for auto memory moves no compaction setting, and no `/compact` text either: the
+  compaction piece keys the role's text on `compactwindow` (its `compaction-text-follows-continuity`, ruling R8).
+- **profile-fields-outside-route-any** — `profile`, `automem` and `compactwindow` are skipped by `_route_any`, as
+  `browser` is (D-8121), so a profile-only row keeps today's routing record and seed (m-B9).
+- **arm-item-after-the-baseline** — the auto-memory item is raised only after the replay baseline is recorded; until
+  the replay-quiz piece's refusal ships, that interim rule is the guard (the coordinator's ruling on R9).
 
 ## Where things stand
 

@@ -125,8 +125,10 @@ CREATE TABLE continuity_quiz_runs (
 `shadow` in `lane_arm_settings` when the run is recorded (an unreadable row answers `false`, so an unreadable read never
 makes a baseline). This is derivable from what the table keeps: the arming guard (Task 2) stops any of these rows going
 `live` before a baseline exists, so "has never been live" and "is shadow now" agree. A row armed before this piece
-merged is the one case the guard cannot see; the index orders this piece before any W1a row can be armed, and the
-departures note records it.
+merged is the one case the guard cannot see. The index orders this piece after the three rows it guards merge, so
+the guard cannot stand before they exist; until it merges, the interim rule holds instead: the coordinator raises no
+W1a arm item before the baseline is recorded (the index's "What a merge arms", and launch profiles' Task 8). The
+departures note records it (the coordinator's ruling on R9).
 
 - [ ] **Step 1: Failing tests:** the first run with every row shadow is the baseline; a second is not; a first run
   recorded while any W1a row is `live` is not; an unreadable row makes no baseline; a report missing any field the record needs is

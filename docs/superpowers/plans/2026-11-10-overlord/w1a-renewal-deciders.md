@@ -166,10 +166,12 @@ export function isGenerationState(v: unknown): v is GenerationState;   // and on
 ```ts
 /** Stored in a column of the row whose timer it bounds (§11.5). */
 export interface Observed { readonly ms: number; readonly mono: number; readonly proc: string }
-/** Why a step advanced nothing. `step`: the delta exceeded the cap. */
+/** Why a step was not credited in full. `process` and `backwards` advance nothing; `step`: the delta exceeded the
+ *  cap, so the step advanced by the cap only, and `deltaMs` is the delta measured. */
 export type ObservedGap = { readonly kind: 'process' | 'backwards' | 'step'; readonly deltaMs: number };
 /** Advance by the monotonic delta when `proc` is this process, `mono` did not go back and the delta is at most
- *  `stepCapMs`; otherwise re-anchor with no advance and answer the gap, which the caller records as an observation.
+ *  `stepCapMs`; past the cap, advance by `stepCapMs` and answer a `step` gap; on a new process or a backwards `mono`,
+ *  re-anchor with no advance and answer the gap. The caller records each gap as an observation.
  *  Never reads a clock: the caller passes `clock.mono()`, its process id and `observedStepCapMs(its lane's period)`. */
 export function observeTime(prev: Observed | null, mono: number, proc: string, stepCapMs: number):
   { readonly at: Observed; readonly gap: ObservedGap | null };
@@ -180,12 +182,12 @@ export function observedSince(start: Observed, now: Observed): number;   // ms o
 
 - [ ] **Step 1: Failing tests.** Same process, forward: advances by the delta, no gap; a new `proc`: no advance,
   re-anchored, gap `process`; `mono` backwards: no advance, gap `backwards`; with a 30 s lane (cap 60 s), a 60 s delta
-  advances and a 61 s delta advances nothing and answers gap `step` with its delta; `null`: starts at 0. Property
+  advances 60 s with no gap, and a 61 s delta advances 60 s and answers gap `step` with `deltaMs` 61 000; `null`: starts at 0. Property
   (seeded, 1,000 runs of random sequences with process changes and long pauses): `ms` never decreases, never exceeds
   the sum of in-process forward deltas, and never advances more than the cap in one step.
 - [ ] **Step 2: Run.** Red. **Step 3: Implement.** **Step 4: Run.** Green. Register the floor.
 - [ ] **Step 5: Mutation.** Advance across a process change: the property goes red. Drop the step cap: the 61 s case
-  and the property go red. Revert each.
+  and the property go red. Advance nothing past the cap: the 61 s case goes red. Revert each.
 - [ ] **Step 6: Commit.** `feat(time): observed time, one accumulator that never advances across a gap (§11.5)`
 
 ### Task 3: `renewalDue`, total over the roles
@@ -265,7 +267,7 @@ for a resumed long conversation) are the L0 constants of Task 1.
 /** An input a role does not have. Distinct from `unmeasured` (an input it has but could not read): only `unmeasured`
  *  makes a soft renewal wait. Per role, in W1a: a coordinator's `readersRunning` is `not-applicable`, because the
  *  hibernate hold answers its reader wait (an unfinished turn or a background task holds it; slug
- *  `coordinator-readers-by-the-hold`), and its `placeHiddenFor` is `not-applicable` (the console report is the
+ *  `coordinator-readers-by-the-hold`), and its `placeHiddenObservedMs` is `not-applicable` (the console report is the
  *  Overlord's). The Overlord's inputs read `unmeasured` (reason `W1`) until W1. */
 export type SoftReading<T> = Reading<T> | { readonly kind: 'not-applicable' };
 export interface SoftInputs {
@@ -274,10 +276,10 @@ export interface SoftInputs {
   readonly readersRunning: SoftReading<number>;        // overlord: the hook's reader reports (W1)
   // The break's two clocks are observed time (Table 11.5b): each is `observedSince(stamp, now)` from Task 2, never a
   // wall difference.
-  readonly lastOperatorActivityObservedMs: SoftReading<number>;  // overlord: its last operator message (W1);
+  readonly operatorQuietObservedMs: SoftReading<number>; // overlord: since its last operator message (W1);
                                                        // coordinator: the operator-at-programme mark's age (the
                                                        // renewal hand-offs piece; until it lands, `unmeasured`)
-  readonly placeHiddenForObservedMs: SoftReading<number>;  // overlord, W1's console report
+  readonly placeHiddenObservedMs: SoftReading<number>;   // overlord, W1's console report
   readonly mode: 'when-away' | 'on-schedule';          // the Setting (R19); default when-away
   readonly dueSinceObservedMs: number;                 // how long the soft trigger has waited
   readonly generationAgeObservedMs: number;            // least age
@@ -292,10 +294,15 @@ export function softRenewalMay(i: SoftInputs): SoftAnswer;
 export function earlyWhileAway(role: FleetRole, i: RenewalInputs): boolean;
 ```
 
+Every soft input is gathered by the renewal-act piece's lane (its Task 4), from the generation rows' stored columns
+(the generations piece): `dueSinceObservedMs` and `generationAgeObservedMs` are differences of the session's observed
+accumulator, which carries across mints, so they and `softRenewalsInWindow` (the soft-renewal stamps within six
+observed hours) span generations (ruling R4).
+
 Order of the waits: `least-age`, `hold-off`, `budget`, `overlord-first`, then the preconditions: `hold`, `readers`,
 then the break. `readers` waits only on a measured count above zero or an `unmeasured` reading; `not-applicable`
-passes. The break is a disjunction (spec: "one of" its conditions): `lastOperatorActivityObserved >=
-BREAK_NO_MESSAGE_MS` or `placeHiddenForObserved >= BREAK_PLACE_HIDDEN_MS` (quiet hours join in W3, with their
+passes. The break is a disjunction (spec: "one of" its conditions): `operatorQuietObservedMs >=
+BREAK_NO_MESSAGE_MS` or `placeHiddenObservedMs >= BREAK_PLACE_HIDDEN_MS` (quiet hours join in W3, with their
 Setting). It is open when any measured disjunct says so; when none does and at least one applicable disjunct is
 `unmeasured`, the answer is `unmeasured`; when every applicable disjunct is measured and none says so, `no-break`; a
 `not-applicable` disjunct is left out. In `on-schedule` mode, the preconditions delay a soft trigger at most 30
@@ -305,7 +312,7 @@ minutes (Appendix B: "the preconditions, at most 30 minutes"; ruling 3 of this p
 
 - [ ] **Step 1: Failing tests:** exhaustive over each wait's input at {unmeasured, not-applicable, blocking, clear} one
   at a time and in pairs (the first wait in order is named); a coordinator with `readersRunning` and
-  `placeHiddenFor` `not-applicable`, no hold and a mark 21 minutes old starts; the same with the mark `unmeasured`
+  `placeHiddenObservedMs` `not-applicable`, no hold and a mark 21 minutes old starts; the same with the mark `unmeasured`
   waits `unmeasured`; the break opens on one measured disjunct while the other is `unmeasured`; `on-schedule` after 30
   minutes starts past a standing hold, readers and no break, but not past least age, the hold-off, the budget or the
   Overlord's renewal; at 29 minutes it still waits on the hold; the monotonicity property (unmeasured never turns a
@@ -321,6 +328,12 @@ minutes (Appendix B: "the preconditions, at most 30 minutes"; ruling 3 of this p
 **Files:**
 - Create: `server/src/continuity/generationMachine.ts`
 - Create: `server/test/continuity-generation-machine.test.ts`
+- Modify: `server/test/model/overlord/model.py` (`back()` gains the A2 reading: `FAILED_RENEWAL_RETURNS` takes a third
+  value, `proven`, which returns the generation to `active` with a hold-off when `g.ok` and to `degraded` otherwise;
+  its docstring cites ask 370)
+- Modify: `server/test/model/overlord/check.py` (the `genmachine` and `renewal` pins of `FAILED_RENEWAL_RETURNS`
+  become `['proven']`)
+- Test: `server/test/overlord-model.test.ts` (runs the model's checks; it stays green with the new pins)
 
 **Interfaces:**
 
@@ -334,12 +347,12 @@ export type GenEvent =
   | { readonly kind: 'started'; readonly resumed: boolean }     // a SessionStart that is not a compaction
   | { readonly kind: 'card-read'; readonly hashMatches: boolean }
   | { readonly kind: 'probes'; readonly passed: boolean }
-  | { readonly kind: 'midway' }                                 // half the stored deadline's span passed (fed once)
+  | { readonly kind: 'midway' }                                 // half the stored deadline's span passed (the renewal
+                                                                //   act's lane feeds it once, in `carded`)
   | { readonly kind: 'deadline' }                               // the state's stored deadline passed
   | { readonly kind: 'renew-now' };
 /** `proven`: this generation read its card and passed a probe round (set on `probes` passed, never cleared). */
-export interface GenView { readonly state: GenerationState; readonly from: 'active' | 'degraded'; readonly tries: number;
-                           readonly proven: boolean;
+export interface GenView { readonly state: GenerationState; readonly tries: number; readonly proven: boolean;
                            readonly cls: TriggerClass | null; readonly renudged: boolean; readonly probeRounds: number }
 export type GenAction = 'hold-deliveries' | 'release-deliveries' | 'assemble-checkpoint' | 'ask-handover' | 'renew'
   | 'renudge-card' | 'start-probes' | 'raise-item' | 'set-hold-off' | 'mint-next' | 'end-this';
@@ -349,11 +362,12 @@ export function generationStep(g: GenView, e: GenEvent): { readonly next: GenVie
 Table 3.3.11a's rules, as the machine: `due` → `draining` (hard skips nothing here; it skips `checkpointed` later);
 `drained` → `checkpointed`, or `clearing` on a hard trigger; `handover` or `deadline` in `checkpointed` → `clearing`;
 `deadline` in `draining` and `host-failed` before the first half → `active` with `set-hold-off` when the generation
-is `proven`, else `degraded` with `set-hold-off` (§3.3.11: "A failure before the first half returns the generation to
+is `proven`, else `degraded` with `raise-item` (§3.3.11: "A failure before the first half returns the generation to
 active, with a hold-off", read with "a generation never becomes active without having read its card and passed its
 probes"; ask 370); after it, retry while the deadline stands, then `degraded` with `raise-item`; `started` on any
 generation → this one `ended` (`end-this`) and the next minted at `carded` (`mint-next`); `card-read` with a match →
-`probing` (`start-probes`); `midway` in `carded`, once → `renudge-card`; `deadline` in `carded` → `degraded`; `probes`
+`probing` (`start-probes`); `midway` in `carded`, once → `renudge-card`; `deadline` in `carded` → `degraded` with
+`raise-item` (spec Table 3.3.11a's `degraded` row: one operator item; m7); `probes`
 passed → `active` and `proven`;
 failed once → re-read and probe again inside the same `probing` deadline; twice, or `deadline` in `probing` →
 `degraded` with `raise-item`. Each state's deadline is set once, on entry, and no action re-arms it: the carded
@@ -361,10 +375,11 @@ re-nudge and the second probe round fit inside the state's 45 s and 165 s, so `c
 `RENEWAL_BUDGET_S` (ruling I2, slug `deadline-set-once-rounds-fit-inside`); `renew-now` in `degraded` or `active` →
 `draining`. Any event a state does not name is ignored (the same view, no action).
 
-- [ ] **Step 1: Failing tests.** Exhaustive over every state × every event × `from` × `cls` × the counters' edge values,
-  against a table written out in the test (the spec's words cited in each row's title); among them, a renewal that
-  began in `degraded` with the generation proven and failed before the first half lands in `active` with
-  `set-hold-off`, and the same unproven lands in `degraded`. Properties (seeded, 10,000 random event sequences from
+- [ ] **Step 1: Failing tests.** Exhaustive over every state × every event × `proven` × `cls` × the counters' edge
+  values, against a table written out in the test (the spec's words cited in each row's title); among them, a renewal
+  of a proven generation that failed before the first half lands in `active` with `set-hold-off`, whatever state it
+  began from, and the same unproven lands in `degraded` with `raise-item`; every step into `degraded` carries
+  `raise-item`, a carded deadline included. Properties (seeded, 10,000 random event sequences from
   `active`): never `active` from `carded` or `probing` without a matching `card-read` and a passed round; never `active`
   at all while `proven` is false (the generation-day simulation's seed 17 is a named case); no step's actions re-arm
   a deadline (no action names one), and `midway` in `carded` re-nudges at most once; a sequence with no `started` mints nothing; at most one `renew` per generation per try; `ended` is
@@ -374,8 +389,9 @@ re-nudge and the second probe round fit inside the state's 45 s and 165 s, so `c
 - [ ] **Step 5: The model agrees.** Read `server/test/model/overlord/model.py`'s generation transitions (the
   `genmachine` scenario's checks named above). Write a test that drives `generationStep` through each of those four
   checks' scenarios as event sequences and asserts the model's expected state (`CHECKPOINTED_TIMEOUT` → `clearing`
-  without the note, `FAILED_RENEWAL_RETURNS` → `active` if proven and `degraded` otherwise, the model changed to match
-  per ask 370, `START_WHILE_DOWN`, `CARD_DOOR_SKIPS`). Where the model's
+  without the note, `FAILED_RENEWAL_RETURNS` → `active` if proven and `degraded` otherwise, the model's new `proven`
+  value, `START_WHILE_DOWN`, `CARD_DOOR_SKIPS`). Step 5 fails until the model's `back()` and `check.py`'s pins carry
+  the `proven` value (this task's Files); run `test/overlord-model.test.ts` after the model edit. Where the model's
   anchor sentence no longer matches the spec (the results note's Proposal 9), record it in the departures note.
 - [ ] **Step 6: Commit.** `feat(continuity): generationStep, Table 3.3.11a as a pure machine, checked against the model`
 
@@ -429,7 +445,8 @@ None yet. Decisions this plan takes, by slug:
   (at `midway`) and the second probe round fit inside the state's 45 s and 165 s and never re-arm it, so `checkpointed`
   to `active` stays within `RENEWAL_BUDGET_S` (the coordinator's ruling, from run 1885's build).
 - **observed-time-caps-one-step** — observed time advances by at most `OBSERVED_STEP_PERIODS` (2) periods of the lane
-  that advances it, per step; a larger delta advances nothing and answers a `gap` the caller records (the
+  that advances it, per step; a larger delta advances by the cap and answers a `step` gap with the delta measured,
+  which the caller records, so a freeze is under-credited yet a lane that is always late still ages (the
   coordinator's ruling, from run 1885's build; Table 11.5b, this programme's spec amendment).
 - **generation-means-one-life** — the index's pick, followed here: "generation" is one life from start to start
   (`GenerationState`, `continuity_generations`).

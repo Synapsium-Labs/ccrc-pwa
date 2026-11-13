@@ -31,7 +31,8 @@ note and the checkpoint", §11.2 (the hook's group for every role but the design
 - The keys a coordinator can name in W1a: a programme (by slug, `ledgersStore.ts`), an item (by id), a run (by id).
   Requests (W2) and operator messages (W1) do not exist yet.
 - The routes file and the census sites (the start-report piece); the tree's one attribution gate,
-  `requireAttribution` (`server/src/coord/routes.ts`, over `attribution.ts#attributionVerdict`), answered through
+  `attribution.ts#attributionVerdict`, injected into the routes file as `attribute` (as the start-report piece does;
+  `requireAttribution` is a closure local to `registerCoordRoutes` and cannot be imported), answered through
   `refuseRoute` (an unmeasurable registry is 502).
 - `shared/continuity.ts#NOTES_CAP` (`{ count: 200, chars: 500 }`), from the renewal-deciders piece.
 
@@ -133,7 +134,7 @@ CREATE TABLE continuity_handovers (
 A note is live when no row revises it and it does not close. The partial unique index makes a second revision of one
 note a constraint failure, so two revisions race to one winner.
 
-**Doors** (box token and `requireAttribution`, the caller's own session; `identity` is the session id for a coordinator):
+**Doors** (box token and the injected `attribute`, the caller's own session; `identity` is the session id for a coordinator):
 - `POST …/notes` measures the key (a programme the caller coordinates, an item it raised or that its programme holds, a
   run it claims), asks `noteVerdict`, appends.
 - `GET …/notes` answers the live notes, newest first.

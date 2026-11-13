@@ -59,7 +59,9 @@ Table 11.1d (without `hibernate-fresh` the renewal lane does not run).
   The fresh start is sent only where `ccdCan(…, 'hibernate-fresh')` answered yes; otherwise the lane records
   `capability-missing` and does not act.
 - **Arming.** Every act checks the `continuity` row: `live` acts, anything else records. The test suite proves shadow
-  sends nothing (no `CcdArgv`, no prompt, no mail, no item).
+  sends nothing (no `CcdArgv`, no prompt, no mail, no item). In shadow every step writes `shadowState` (the
+  generations piece's store), and `state` stays `active`, so the mail gate and the prompt route, which read `state`
+  only, hold no mail and refuse no prompt (the coordinator's ruling on R1).
 - **Tests.** From `server/`: `ccrc test -- ./node_modules/.bin/vitest run test/<file>.test.ts`; the last run adds both
   `tsc` runs. **Growth check:** `server/src/watch.ts` (the gate word) and `server/src/coord/store.ts` grow at most 40
   net lines.
@@ -72,11 +74,15 @@ Table 11.1d (without `hibernate-fresh` the renewal lane does not run).
 
 1. `renew(session, n)` is idempotent on n: a retry never starts a second fresh conversation once a start for that
    renewal is recorded (the receipt's second half is read before any retry).
-2. A failure before the receipt's first half returns the generation to the state the renewal began from, with a
-   hold-off; a failure after it retries within the deadline, then degrades with one item.
-3. Shadow sends nothing, by test.
-4. Deliveries are held from `draining` to `probing` and released after, and a delivery delivered but not acked when
-   draining began is queued again (Table 3.3.11a), through `writeDeliveries`'s existing guard.
+2. A failure before the receipt's first half returns a proven generation to `active` with a hold-off, and an unproven
+   one to `degraded` with one item (A2); a failure after it retries within the deadline, then degrades with one item.
+3. Shadow sends nothing, by test, and holds nothing: `state` stays `active`, so no delivery is gated and no prompt is
+   refused.
+4. Deliveries are held from `draining` to `probing` and released after. A delivery delivered but not acked when
+   draining began is replayed after `probing` by `dueDeliveries`' existing replay of unacked delivered rows; nothing
+   is re-queued and no delivery row is written on entering `draining` (A3).
+5. Within one pass, an event stamped before the deadline is fed before `deadline`, so a card read that arrived in time
+   is never lost to a deadline seen on the same pass.
 
 ---
 
@@ -164,16 +170,34 @@ and name them in the departures note.
 
 **Files:**
 - Create: `server/src/continuity/renewalActs.ts` (L4: `runActions(deps, gen, actions)`)
-- Modify: `server/src/continuity/generationsLane.ts` (for a live generation: if due and `softRenewalMay` (soft) or at once
-  (hard), feed `generationStep` the `due` event; each pass feed `deadline` when `deadlineAt` passed, `drained` when the
-  hibernate hold table and the turn marker say so, `handover` when the note arrived, `host-ended` / `host-failed` from
-  `renew`'s answer, `started` from the receipt; run the actions when `live`, record them when not)
+- Create: `server/src/continuity/renewalOrder.ts` (L1: `overlordFirst(overlordState: GenerationState | 'none' |
+  'unmeasured'): boolean`, true when a coordinator's renewal may start: the Overlord's live generation is `active`, or
+  no Overlord generation is live. This piece owns the ordering, for hard and soft renewals alike (ruling F11, slug
+  `overlord-renews-first-hard-included`); `softRenewalMay`'s `overlordOutsideActive` input is fed from it)
+- Modify: `server/src/continuity/generationsLane.ts` (for a live generation: if due and `softRenewalMay` (soft) or at
+  once (hard), and only when `overlordFirst` answers true for a coordinator (a hard trigger waits too, recorded as
+  `overlord-first`), feed `generationStep` the `due` event; each pass feed `drained` when the hibernate hold table and
+  the turn marker say so, `handover` when the note arrived, `host-ended` / `host-failed` from `renew`'s answer,
+  `started` from the receipt, `card-read` and `probes` from the card and probes pieces' rows, `midway` once in
+  `carded` when half the span from `enteredAt` to `deadlineAt` has passed and `renudged` is 0 (ruling R3), and
+  `deadline` when `deadlineAt` passed, last: every other event stamped before `deadlineAt` is fed first (m6). The
+  machine's view comes from the row's columns (`state` live, `shadowState` in shadow, `attempts`, `proven`,
+  `renudged`, `probeRounds`), and its next view is written back in one compare-and-set; run the actions when `live`,
+  record them when not.
+  **The gather for `softRenewalMay`** (ruling R4) reads only stored columns and measured readings:
+  `generationAgeObservedMs` = `observed.ms - mintedObservedMs`; `dueSinceObservedMs` = `observed.ms -
+  dueSinceObservedMs` (the column the generations piece's due write sets); `softRenewalsInWindow` = the identity's
+  rows whose `softRenewalObservedMs` is within six observed hours of `observed.ms` (the accumulator carries across
+  mints, so the window spans generations); `holdOffUntilObservedMs` from the row; the hold from `hibernateVerdict`;
+  `readersRunning` and `placeHiddenObservedMs` `not-applicable` for a coordinator; `operatorQuietObservedMs`
+  `unmeasured` (reason `operator-mark`) until the renewal hand-offs piece; `overlordOutsideActive` from
+  `overlordFirst`; the mode from the Setting. Feeding a soft `due` writes `softRenewalObservedMs`)
 - Modify: `server/src/watch.ts` (`sweepMail` gates a delivery to a session whose live generation is in `draining` to
   `probing` with the gate word `renewing`. Nothing is re-queued and no delivery row is written on entering `draining`:
   a delivery already `delivered` and unacked is replayed by `dueDeliveries`' existing replay of unacked delivered rows
   (`MAIL_REPLAY_MAX_ATTEMPTS`), which the gate holds while the word stands and lets through after `probing`. Step 1
   measures whether a gated replay spends an attempt; if it does, the gate refuses before the attempt is counted, and
-  the departures note says which)
+  the departures note says which. The gate reads `state` only, never `shadowState`)
 - Test: `server/test/continuity-renewal-acts.test.ts` (new), the mail sweep's gate suite
 
 **Actions:** `hold-deliveries` (nothing to send: the gate reads the state); `assemble-checkpoint`; `ask-handover` (system
@@ -189,6 +213,9 @@ mint, as today).
   - a hard `hard-cap` on an idle coordinator: draining → (drained) clearing → `renew` once → a start reported → carded,
     the first prompt delivered → card read → probing → passed → active; deliveries gated `renewing` throughout and
     released after;
+  - a hard `hard-cap` on a coordinator while the Overlord's generation is `draining`: no `due` is fed and the wait is
+    recorded `overlord-first`; once the Overlord's generation is `active`, the next pass feeds `due`; the Overlord's
+    generation `unmeasured`: the coordinator waits too;
   - a soft trigger on a coordinator with no hold and its break measured open (the gather's operator mark given as a
     measured age) waits for nothing more, then checkpointed: the handover asked, received, the checkpoint stored;
   - the lane's real gather before the renewal hand-offs piece lands: the coordinator's operator mark reads `unmeasured`
@@ -201,10 +228,22 @@ mint, as today).
   - `renew` unreachable then a start reported: no second `renew`;
   - wake-failed until the clearing deadline: `degraded`, one item;
   - no `hibernate-fresh`: nothing sent, `capability-missing` recorded;
-  - the same scenarios with the lane `shadow`: no port call, no mail, no item; the records name each would-be act.
+  - the same scenarios with the lane `shadow`: no port call, no mail, no item; the records name each would-be act;
+    `state` stays `active` throughout and `shadowState` walks; a delivery to that coordinator is delivered as today,
+    never gated `renewing`;
+  - a card read stamped before `deadlineAt` and first seen on the pass after it: `probing`, not `degraded` (m6);
+  - the soft gather: a coordinator with two soft renewals in its previous generation inside six observed hours and
+    one in this one answers `budget`; the same with the oldest seven observed hours back starts.
+- [ ] **Step 1b: The deadline is set once** (ruling I2, moved here from the generations piece by ruling R3; fake time).
+  A coordinator renewed at `t` reaches `carded`: at `t + 23 s` the pass feeds `midway`, the re-nudge is delivered,
+  `renudged` is 1 and `deadlineAt` is unchanged; a later pass in `carded` feeds no second `midway`; it reads the card
+  and fails its first round in `probing`: the second round opens, `probeRounds` is 2 and `deadlineAt` is unchanged; it
+  passes: `active` and `proven`, and the time from `checkpointed` to `active` is at most `RENEWAL_BUDGET_S`.
 - [ ] **Step 2: Run.** Red. **Step 3: Implement.** **Step 4: Run** the new suite, the generations lane's suite, the mail
   gate suites, `test/mail-deliveries-writer.test.ts`, `test/mail-hardening.test.ts`. Green.
-- [ ] **Step 5: Mutation.** Skip the receipt read before a retry: the unreachable case calls `renew` twice; red. Revert.
+- [ ] **Step 5: Mutation.** Skip the receipt read before a retry: the unreachable case calls `renew` twice; red.
+  Re-arm the deadline on the re-nudge: Step 1b goes red. Never feed `midway`: Step 1b's re-nudge goes red. Feed
+  `deadline` first: the m6 case goes red. Gate on `shadowState` too: the shadow delivery case goes red. Revert each.
 - [ ] **Step 6: Commit.** `feat(continuity): the generations lane renews through SessionHost when armed live`
 
 ### Task 5: The simulator runs the acts under faults
@@ -228,6 +267,22 @@ None yet. Decisions this plan takes, by slug:
 
 - **port-declares-what-w1a-consumes** — the port declares `renew`, `deliver`, `contextUsage` and `receipt`; `compact`
   joins when a consumer asks for it (H2 lists five).
+- **overlord-renews-first-hard-included** — no coordinator renewal, hard ones included, starts while the Overlord's
+  live generation is outside `active` (or unmeasured); this piece's `overlordFirst` owns the ordering, and the lane asks
+  it before feeding `due` (the coordinator's ruling F11, from review 1894 of renewal deciders A).
+- **receipt-never-waits-on-a-clear-start** — a `/clear` start's row lands at the next prompt's resend (run 1886's
+  `clear-start-lands-on-next-prompt`), so its `receivedAt` is that resend's time. W1a renews by fresh start, whose uuid
+  ccd writes before the spawn, so its start report lands at SessionStart and the receipt reads it; the typed `/clear`
+  fast path, when it comes, must not wait on a `/clear` start's row as its receipt, or ccd's tick must resend right
+  after it syncs the uuid (the coordinator's carry).
+- **gate-reads-state-only** — the mail gate and the prompt route read `state`, which moves only while `continuity` is
+  live; shadow's walk is `shadowState` (the coordinator's ruling on R1).
+- **midway-fed-by-the-act-lane** — this piece's lane feeds `midway` once in `carded`, and Step 1b tests the set-once
+  deadline walk, moved from the generations piece, which feeds no state event (ruling R3).
+- **gather-in-the-act-lane** — this piece's lane gathers every `softRenewalMay` input from stored columns on the
+  identity's carried accumulator (ruling R4).
+- **events-before-the-deadline-first** — within a pass, events stamped before `deadlineAt` are fed before `deadline`
+  (m6).
 - **fresh-start-only** — W1a renews coordinators by fresh start too; the typed `/clear` fast path waits for a
   measurement of ccrc's own lane typing it (W0-07 found none).
 - **first-prompt-by-deliver** — a fresh conversation has no first turn, so the lane delivers one line that sends it to its
@@ -250,8 +305,8 @@ hand-offs, the `precompact` field, the lost-task nudge); W1's Overlord renewal (
    per trigger and the blind rows in the item, and after the replay baseline is taken (the replay-quiz piece's
    door refuses `live` before it). The item says what the counts can and cannot show: only coordinators started after
    the generations piece merged have rows (a coordinator running at merge has none until its next start); in shadow
-   no first prompt is sent, so most `probing` rows time out to `degraded`, and those `degraded` counts measure the
-   missing prompt, not the probes; and soft triggers stay waiting `unmeasured` until the renewal hand-offs piece
+   no first prompt is sent, so most `probing` rows time out to `degraded` (all of it in `shadowState`; `state` stays
+   `active`), and those `degraded` counts measure the missing prompt, not the probes; and soft triggers stay waiting `unmeasured` until the renewal hand-offs piece
    brings the operator mark.
 2. **Should a degraded coordinator stop acting?** The spec says it keeps acting and raises one item (C50); recommend
    as written.

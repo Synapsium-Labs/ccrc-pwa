@@ -38,9 +38,10 @@ token and attribution, a short timeout", `view`, `EXEMPT`), Table 3.6a.
   `_reg_generation_read`, which passes only `_reg_generation_valid`: a 36-character lowercase uuid naming the registry
   row's life. This programme calls that life the row's **incarnation** (the index's slug
   `generation-means-one-life`); the tree's identifiers keep their names.
-- The tree's one attribution gate is `server/src/coord/attribution.ts#attributionVerdict`, wrapped as
-  `requireAttribution` in `server/src/coord/routes.ts` ("one check, two callers"; used by `endRequest`,
-  `reviewRoundsRoute`, `coordCallsRoute`, `planRoutes` and `linking/routes`). It checks `fromUuid` against
+- The tree's one attribution gate is `server/src/coord/attribution.ts#attributionVerdict`. Inside
+  `registerCoordRoutes` it is wrapped in `requireAttribution`, a closure local to that function, so a routes file of
+  its own cannot import it; such a file takes it injected, as a dependency named `attribute` over
+  `attributionVerdict` (the landing and claim lanes do the same). It checks `fromUuid` against
   `$REG/<id>.uuid` and answers `stale-uuid` (403) on a mismatch and `registry-unmeasurable` (502,
   `shared/refusal.ts`) when the registry cannot be read. The mail door's inline ladder is the older copy. After a
   `/clear` or a fresh start the registry's uuid follows the new conversation within one `_sync_uuid` tick (about 5 s).
@@ -68,8 +69,8 @@ token and attribution, a short timeout", `view`, `EXEMPT`), Table 3.6a.
   `_hook_timeout`, and a failure that can pass spools. Hook tests use fixture HOMEs. Never print the box token; `ccrc-api` reads it.
 - **Tests.** From `server/`: `ccrc test -- ./node_modules/.bin/vitest run test/<file>.test.ts`; the last run adds both
   `tsc` runs. `session-hook*` suites are load-sensitive; re-run a red one alone first.
-- **Growth check.** `ccd/session-hook.sh` grows at most 40 net lines (`GROWTH_LIMIT`); the report and the spool in
-  `_hook_start_report`, the resend in `_hook_start_resend`, and nothing else.
+- **Growth check.** `ccd/session-hook.sh` grows at most 40 net lines (`GROWTH_LIMIT`); the report, the spool and the
+  resend all in `_hook_start_report` (with its send helper `_hook_start_send`), and nothing else.
 - **Migration slot** re-measured before merge; tests find it by `findIndex`. Cite by symbol or `@anchor`. No private
   names: fixtures `lane-a-project-a`. No D-number invented; departures go in
   `docs/superpowers/plans/2026-11-10-overlord/w1a-start-report/departures.md`.
@@ -84,7 +85,8 @@ token and attribution, a short timeout", `view`, `EXEMPT`), Table 3.6a.
    path (PreToolUse, PostToolUse, Stop) makes no call at all.
 3. Attribution: a report whose uuid does not match the registry yet is refused `stale-uuid` and resent, never accepted
    on the session id alone; any other refusal is dropped, counted, not spooled.
-4. The spool is purged with its row.
+4. The spool is purged with its row, and a spool written while its row was being purged is removed by the hook's
+   re-check after the write, so it never holds the slug (ruling R12).
 
 ---
 
@@ -143,18 +145,18 @@ generations lane's read).
 
 **Door:** `POST /api/sessions/:id/start`, body
 `{ fromId, fromUuid, reportId, source, model?, rowIncarnation?, reportedAt }`. Order: the box token
-(`requireMailToken`, 401 on missing); `fromId === :id`; the tree's one attribution gate, `requireAttribution`
-(`server/src/coord/routes.ts`, over `attributionVerdict`), answered through `refuseRoute` (`stale-uuid` 403,
-`registry-unmeasurable` 502), never a copy; shape (`reportId` matches `^[A-Za-z0-9_-]{8,64}$`, `source` a string,
-`reportedAt` a safe integer; `rowIncarnation` matches the grammar of `_reg_generation_valid`, a 36-character lowercase
-uuid, and a value that does not is stored as `null`, never coerced); then `insertStart` with `receivedAt` from
+(`requireMailToken`, 401 on missing); `fromId === :id` (403 `not-owner`); shape (`reportId` matches
+`^[A-Za-z0-9_-]{8,64}$`, `source` a string, `reportedAt` a safe integer; `rowIncarnation`, when present, matches the
+grammar of `_reg_generation_valid`, a 36-character lowercase uuid, and a value that does not is refused 400
+`bad-request`, as #2740 does); the tree's one attribution gate, the injected `attribute` over `attributionVerdict`,
+answered through `refuseRoute` (`stale-uuid` 403, `registry-unmeasurable` 502), never a copy; then `insertStart` with `receivedAt` from
 `deps.time.clock.wall()`. Answers `202 { ok: true, id, fresh }`. No refusal word is added.
 
-- [ ] **Step 1: Measure** `requireAttribution`'s signature and how its callers pass the registry read; name it in the
-  departures note.
-- [ ] **Step 2: Failing tests:** no token 401; another session's id 403; a stale uuid 403 `stale-uuid`; an unmeasurable
-  registry 502 `registry-unmeasurable`; a good report 202 with `fresh: true`, the resend 202 with `fresh: false`; a bad
-  `reportId` 400; a malformed `rowIncarnation` stored as null.
+- [ ] **Step 1: Measure** how a routes file of its own takes the injected `attribute` (the landing and claim lanes'
+  wiring); name it in the departures note.
+- [ ] **Step 2: Failing tests:** no token 401; another session's id 403 `not-owner`; a stale uuid 403 `stale-uuid`; an
+  unmeasurable registry 502 `registry-unmeasurable`; a good report 202 with `fresh: true`, the resend 202 with `fresh:
+  false`; a bad `reportId` 400; a malformed `rowIncarnation` 400 `bad-request`; an absent one stored as `null`.
 - [ ] **Step 3: Run.** Red. **Step 4: Implement.** **Step 5: Run** the new suite, the census suites listed above,
   `test/mail-routes.test.ts`, `test/rings/*.test.ts`, both `tsc` runs. Green.
 - [ ] **Step 6: Mutation.** Drop the attribution check: the stale-uuid case goes red. Revert.
@@ -166,35 +168,43 @@ uuid, and a value that does not is stored as `null`, never coerced); then `inser
 - Modify: `ccd/ccrc-api` (`[sessions.start]='POST|/api/sessions/{id}/start|yes|-'`; the route count word one higher
   than it stands at merge, measured)
 - Modify: `server/test/ccrc-api.test.ts` (its `toHaveLength` and `WORDS` follow the new row)
-- Modify: `ccd/session-hook.sh` (`_hook_start_report`: on SessionStart, unless `$REG/<id>.child` exists or the
-  payload's `source` is `fork`, build the body with `jq` from the payload's `session_id`, `source` and `model` and the
-  environment's `CCRC_SESSION_GENERATION`, call `_hook_timeout 4 ccrc-api sessions start`. On no answer, a timeout, a
-  5xx or a `stale-uuid` 403, append the body with `tries: 1` as one line to the dot-free spool `$REG/<id>.startpending`
-  (at most 20 lines, the oldest dropped first); on any other refusal, drop it. Every drop adds one to the dot-free
-  counter `$REG/<id>.startdropped`. `_hook_start_resend` runs on SessionStart and UserPromptSubmit only, at most one
-  pass per event, and only when the spool's mtime is at least 60 s old (the back-off stamp is the spool itself, touched
-  by a failed pass): it sends the lines in order, removes each on a 202, drops a line that reaches 5 tries or meets a
-  refusal other than `stale-uuid` (counted), and ends the pass at the first timeout)
-- Modify: `ccd/ccd` (`_reg_purge`'s inventory comment gains `startpending` and `startdropped`)
+- Modify: `ccd/session-hook.sh` (one function, `_hook_start_report`, with its send helper `_hook_start_send`, as
+  #2740 builds it. It runs on SessionStart and UserPromptSubmit only, for a row ccd created (`generation` stands) that
+  is not a child, and after the hookstate write, so it never delays the `working` edge (m-B10). The dot-free spool
+  `$REG/<id>.startpending` holds, on its first line, `<not-before ms>\t<dropped count>` (the back-off stamp and the
+  drop count), and on each later line `<tries>\t<report JSON>`, oldest first, at most `START_PENDING_MAX` (20). A
+  pass runs once `START_RESEND_BACKOFF_MS` (30 s) has passed since the stamp: it sends each kept report once inside one
+  4 s budget, removes it on a 202, adds a try on `stale-uuid` and drops it at `START_RESEND_TRIES` (5), drops and
+  counts any other refusal, and ends at the first send with no answer, which keeps the rest. On SessionStart, unless
+  the payload's `source` is `fork`, it then builds the body with `jq` from the payload's `session_id`, `source` and
+  `model` and the environment's `CCRC_SESSION_GENERATION`, and sends it through `_hook_timeout 4 ccrc-api sessions
+  start` unless the pass found the server silent; no answer, a 5xx or `stale-uuid` keeps it with 0 tries, any other
+  refusal is dropped and counted. The spool is written to a dot-free temp name and renamed, and removed when it holds
+  no report and no drop. **After the write it re-checks `generation`, and removes the spool if the row is gone, as
+  the join record does** (ruling R12): a purge that ran during the 4 s send would otherwise leave a spool that holds
+  the slug for ever (`_ws_slug_free` refuses while any dot-free field stands). No `ccd/ccd` edit: `_reg_purge` and
+  `_ws_slug_residue` take the spool by their glob)
 - Test: `server/test/session-hook-start-report.test.ts` (new, fixture HOME, a stub `ccrc-api` that records its argv and
   answers what the case sets), the `_reg_purge` suite (measure: `grep -ln '_reg_purge\|_ws_slug_residue' server/test`)
 
 - [ ] **Step 1: Failing tests:**
   - a SessionStart `clear` sends one report with the payload's uuid and `source: "clear"`; a child sends none; a
     `fork` sends none and spools nothing;
-  - the stub answering `stale-uuid` leaves one spool line, and the next UserPromptSubmit (the spool's mtime set 61 s
-    back) resends it and removes it on 202; a resend inside 60 s makes no call;
-  - the stub answering 400 or 403 `wrong-session` spools nothing and counts one drop;
+  - the stub answering `stale-uuid` leaves one spool line, and the next UserPromptSubmit (the stamp set 31 s back)
+    resends it and removes it on 202; a resend inside 30 s makes no call;
+  - the stub answering 400 or 403 `not-owner` spools nothing and counts one drop on the spool's first line;
   - the stub hanging past the bound leaves the start path's exit code and stdout unchanged (the anchor and cards still
     print) and one spool line; a resend pass with two lines ends at the first timeout, making one call;
   - a line that has failed 5 times is dropped and counted; at most 20 lines are kept, the oldest dropped and counted;
   - PreToolUse, PostToolUse and Stop with a spool standing make no call (the stub's argv log stays empty);
-  - `_reg_purge` removes `startpending` and `startdropped` with the row, and `_ws_slug_residue` lists them while they
-    stand.
+  - `_reg_purge` removes `startpending` with the row, and `_ws_slug_residue` lists it while it stands;
+  - a stub that removes `generation` before answering 5xx (a purge during the send) leaves no spool;
+  - on a UserPromptSubmit with a spool to resend, the hookstate is already `working` when the stub is called.
 - [ ] **Step 2: Run.** Red. **Step 3: Implement.** **Step 4: Run** the new suite and the SessionStart suites
   (`grep -ln 'SessionStart' server/test/session-hook*.test.ts`). Green.
 - [ ] **Step 5: Mutation.** Skip the spool on `stale-uuid`: the resend case goes red. Resend on PreToolUse too: the
-  tool-path case goes red. Revert each.
+  tool-path case goes red. Skip the re-check after the write: the purge-during-send case goes red. Call the report
+  before the hookstate write: the `working` case goes red. Revert each.
 - [ ] **Step 6: Commit.** `feat(hook): every non-child SessionStart is reported to the server, spooled and resent on failure`
 
 ## Deviations found
@@ -204,18 +214,25 @@ None yet. Decisions this plan takes, by slug:
 - **start-report-for-every-non-child** — the hook reports the start of every session that is not a child and not a
   fork; the generations lane keeps only the long-lived roles' (the hook cannot know a role; `roleOf` is the server's).
 - **start-spool-file** — a report the server did not take, for a reason that can pass, is one line of the dot-free
-  spool `$REG/<id>.startpending` (20 lines, 5 tries each), with its drops counted in `$REG/<id>.startdropped`; both are
-  purged with the row. They hold no authority and no switch, have one writer (the hook) and are resent, never read as
-  truth. Table 3.6a lists them (this programme's spec amendment).
-- **start-resend-off-the-tool-path** — the resend runs on SessionStart and UserPromptSubmit only, once per event,
-  behind a 60 s back-off read from the spool's mtime, and a timeout ends the pass; the tool path makes no call.
+  spool `$REG/<id>.startpending` (20 reports, 5 tries each), whose first line carries the back-off stamp and the drop
+  count; it is purged with the row. It holds no authority and no switch, has one writer (the hook) and is resent,
+  never read as truth. Table 3.6a lists it (this programme's spec amendment).
+- **start-resend-off-the-tool-path** — the resend runs on SessionStart and UserPromptSubmit only, inside
+  `_hook_start_report`, once 30 s have passed since the stamp on the spool's first line, and a send with no answer ends
+  the pass; the tool path makes no call.
+- **start-report-follows-the-build** — the spool's shape (no separate drop counter), the 30 s back-off, the resend
+  folded into `_hook_start_report`, no `ccd/ccd` edit and the 400 for a malformed `rowIncarnation` follow #2740's code
+  (the coordinator's ruling on R5).
+- **spool-rechecks-its-row** — after writing the spool the hook re-checks `generation` and removes the spool if the
+  row is gone, as the join record does, so a purge during the send never orphans it (ruling R12).
+- **start-report-after-hookstate** — the report and its resend run after the hookstate write (m-B10).
 - **readers-by-the-hold-table** — the hook's reader start and stop reports wait for W1, with the Overlord's readers. In
   W1a a coordinator's running subagent is seen by the hibernate hold table (`background`, an unfinished turn), which is
   the soft precondition's first test.
-- **attribution-reused** — the start door calls the tree's one attribution gate, `requireAttribution`, through
-  `refuseRoute`; an unmeasurable registry is 502.
+- **attribution-reused** — the start door calls the tree's one attribution gate, injected as `attribute` over
+  `attributionVerdict`, through `refuseRoute`; an unmeasurable registry is 502.
 - **row-incarnation-is-text** — the row incarnation the spawn exports as `CCRC_SESSION_GENERATION` is a lowercase
-  uuid, stored as `TEXT` (`rowIncarnation`), and a malformed value is stored as `null`.
+  uuid, stored as `TEXT` (`rowIncarnation`); a malformed value is refused 400, and an absent one is stored as `null`.
 
 ## Where things stand
 

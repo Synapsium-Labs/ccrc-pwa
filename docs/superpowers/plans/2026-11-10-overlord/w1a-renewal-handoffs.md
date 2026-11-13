@@ -50,8 +50,8 @@ daily backstop's hour), Table 11.1d (the W1a Settings), Table 11.1e rows "The op
 ## Global Constraints
 
 - **Architecture (`CLAUDE.md`).** One writer per fact: the Renew now door writes `continuity_renew_requests`, the prompt
-  route writes `operator_marks`, the Settings door writes its setting, the generations lane writes generation rows and
-  the `precompact` route field. Decide in L1: the roll target verdict gains a role input and a rule; the lane and the
+  route writes `operator_marks`' `at` (and resets `quiet`), the generations lane advances `quiet`, the Settings door
+  writes its setting, the generations lane writes generation rows and the `precompact` route field. Decide in L1: the roll target verdict gains a role input and a rule; the lane and the
   routes only act. Consolidate: the lost-task notice is the D5 arm, widened, not a second notice; the hand-off is a row
   of the roll's verdict, not a second roll lane. A guard ships with a test that goes red without it. Additive wire.
 - **SAFETY (`CLAUDE.md`).** No ccd verb. Renew now is the operator's, session-gated; it enters the same lane, so every
@@ -104,38 +104,51 @@ daily backstop's hour), Table 11.1d (the W1a Settings), Table 11.1e rows "The op
 ### Task 2: The prompt route answers `renewing`, and the console keeps the draft
 
 **Files:**
-- Modify: `server/src/server.ts` (the prompt route reads the session's live generation; in `clearing` or `carded` it
-  answers `409 { ok: false, error: 'renewing' }` before `sendPrompt`)
+- Modify: `server/src/server.ts` (the prompt route reads the session's live generation's `state`, never
+  `shadowState`; in `clearing` or `carded` it answers `409 { ok: false, error: 'renewing' }` before `sendPrompt`.
+  `state` moves only while `continuity` is live (the generations piece's `shadow-state-column`), so the route needs no
+  switch of its own: ruling R1)
 - Modify: `shared/refusal.ts` (`renewing`, 409)
 - Modify: `pwa/src/` (the composer: on `renewing`, keep the text, show "Renewing — your message is kept; send it again
   in a moment."; measure the composer and its draft store)
 - Test: `server/test/continuity-prompt-renewing.test.ts` (new), the composer's PWA suite
 
 - [ ] **Step 1: Failing tests:** `clearing` and `carded` answer 409 and do not type; `active`, `draining`, `probing` and
-  no generation type as today; the PWA keeps the draft on 409 `renewing`.
+  no generation type as today; with `continuity` shadow, a generation whose `shadowState` is `carded` or `clearing`
+  (and `state` `active`) types as today; the PWA keeps the draft on 409 `renewing`.
 - [ ] **Step 2: Run.** Red. **Step 3: Implement.** **Step 4: Run.** Green.
+- [ ] **Step 4b: Mutation.** Read `shadowState` as well as `state`: the shadow case goes red. Revert.
 - [ ] **Step 5: Commit.** `feat(console): a prompt to a session between conversations answers renewing and keeps the draft`
 
 ### Task 3: The `operator-at-programme` mark
 
 **Files:**
 - Modify: `server/src/coord/schema.ts` (migration: `operator_marks(programme TEXT PRIMARY KEY, at INTEGER NOT NULL,
-  observed TEXT NOT NULL)`, `observed` the JSON `Observed` stamp of the write, from `observeTime`)
+  quiet TEXT)`: `at` the wall ms of the last prompt, `quiet` the JSON `Observed` accumulator of the time since it,
+  `null` until the lane's next pass)
 - Modify: `server/src/server.ts` (after a prompt is typed, the route upserts the mark for the programme the session
-  coordinates or serves, measured from its runs; a session with no programme writes none)
-- Modify: `server/src/continuity/generationsLane.ts` (a coordinator's `lastOperatorActivityObservedMs` is
-  `observedSince(mark.observed, now)` for its programme, observed time as Table 11.5b asks, so a server gap never ages
-  a mark; no mark is a measured "no activity", which opens the break; a read failure is `unmeasured`; this replaces
-  the renewal-act piece's `unmeasured` (reason `operator-mark`))
+  coordinates or serves, measured from its runs: `at` now and `quiet` reset to `null`; a session with no programme
+  writes none)
+- Modify: `server/src/continuity/generationsLane.ts` (the mark ages by a mechanism of its own, ruling R4: each pass
+  advances every mark's `quiet` through `observeTime(mark.quiet, clock.mono(), proc,
+  observedStepCapMs(GENERATIONS_PERIOD_MS))`, a `null` starting at 0, written by a compare-and-set on the `at` it read,
+  so a prompt that lands between the read and the write is never overwritten. The route owns `at` and the reset; the
+  lane owns the advance. A coordinator's `operatorQuietObservedMs` is its programme's `quiet.ms`, observed time as
+  Table 11.5b asks: a restart advances nothing (a new process), a freeze advances by the cap; no mark is a measured
+  "no activity", which opens the break; a read failure is `unmeasured`; this replaces the renewal-act piece's
+  `unmeasured` (reason `operator-mark`))
 - Modify: `shared/continuity.ts` (`OPERATOR_MARK_MS = 1_800_000`, the mark's 30 minutes, Table 11.1e)
 - Test: `server/test/continuity-operator-mark.test.ts` (new)
 
 - [ ] **Step 1: Failing tests:** a prompt into a coordinator of `prog-a` marks `prog-a`; into a worker of `prog-a` marks
   `prog-a`; into a session with no programme marks nothing; a soft renewal of `prog-a`'s coordinator waits while the mark
   is younger than 20 minutes and starts after; a mark older than 30 minutes reads as no activity; a mark written
-  before a server restart does not age across the gap; the renewal-act piece's soft case on the lane's real gather now
-  starts (its `unmeasured` wait is gone).
+  before a server restart does not age across the gap (the first pass after it advances nothing); a prompt between a
+  pass's read and its write resets `quiet` and the pass's advance is refused by the compare-and-set; the renewal-act
+  piece's soft case on the lane's real gather now starts (its `unmeasured` wait is gone).
 - [ ] **Step 2: Run.** Red. **Step 3: Implement.** **Step 4: Run.** Green.
+- [ ] **Step 4b: Mutation.** Advance `quiet` without the compare-and-set on `at`: the between case goes red. Age the
+  mark by the wall clock: the restart case goes red. Revert each.
 - [ ] **Step 5: Commit.** `feat(continuity): the prompt route writes the operator-at-programme mark (C50)`
 
 ### Task 4: When soft renewals happen, a Settings row
@@ -182,12 +195,18 @@ renewed from canonical state instead of resumed (§3.3.8).
 ### Task 6: The PreCompact arm's field, and the hibernate wake as a start
 
 **Files:**
+- Modify: `server/src/continuity/precompact.ts` (L1 `precompactField(softRenewalsInWindow): 'refuse' | 'allow'`,
+  beside `precompactDecision`: `refuse` while `softRenewalsInWindow < SOFT_BUDGET.count`, `allow` at or above. It reads
+  the budget alone, never `softRenewalMay`'s answer, which names no budget left and tests the budget only after least
+  age and the hold-off (m8))
 - Modify: `server/src/continuity/generationsLane.ts` (for a live long-lived generation, while the row is `live`: write
-  `precompact=refuse` while `softRenewalMay` has budget left, `allow` once it is spent, through `routeSet`, only on a
-  change; `shadow` writes nothing)
+  the field `precompactField` answers for the gather's `softRenewalsInWindow`, through `routeSet`, only on a change;
+  `shadow` writes nothing)
 - Test: `server/test/continuity-generations-lane.test.ts`, `server/test/continuity-hibernate-wake.test.ts` (new)
 
-- [ ] **Step 1: Failing tests:** live with budget writes `refuse` once; spent writes `allow`; shadow writes nothing.
+- [ ] **Step 1: Failing tests:** live with budget writes `refuse` once; spent writes `allow`; a generation inside its
+  least age with budget left writes `refuse` (the budget alone decides); shadow writes nothing; `precompactField` at
+  2, 3 and 4.
   A hibernate wake (a `resume` start report after a sleep) mints a generation with `resumed: true`, and with the context
   above half the hard cap it is due `resumed-long` (hard); below, it is probed and goes on (the wake needs no other
   change: any wake is a start).
@@ -222,8 +241,11 @@ None yet. Decisions this plan takes, by slug:
   table keeps one writer, the door.
 - **backstop-setting-in-w1** — the daily backstop's hour and time zone ship with W1, where the Overlord's row first reads
   them (Table 11.1d, as this programme's spec amendment now reads, lists them in W1).
-- **operator-mark-observed** — the mark keeps the observed stamp of its write, and a coordinator's break reads its age
-  as observed time, so a server gap never opens a break.
+- **operator-mark-observed** — the mark's age is an observed accumulator of its own, `quiet`, which the route resets
+  and the lane advances each pass (compare-and-set on `at`), so a coordinator's break reads observed time and a server
+  gap never opens it (the coordinator's ruling on R4: a mechanism that ages).
+- **precompact-field-from-the-budget** — `precompact` is decided by L1 `precompactField` from the soft budget's count
+  alone, not from `softRenewalMay`'s answer (m8).
 - **mark-for-any-session-of-the-programme** — a prompt into any session of a programme marks the programme.
 - **roll-skips-long-lived-when-live** — the roll's hand-off is a skip reason, `renewal-owns`, read only while the
   `continuity` row is `live`.

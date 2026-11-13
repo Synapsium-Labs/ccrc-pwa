@@ -5,7 +5,8 @@
 
 **Goal:** at every start of a session that is not a child (`startup`, `resume`, `clear`, `compact`), the hook's first
 emitter slot carries a short anchor from the server: the role line, the canaries (term, generation, card hash), the
-counts, and "read your card". A `fork` gets a one-line refusal. After an automatic compaction that brings no
+counts, and "read your card". A `fork` gets a one-line refusal once the slot is live, and today's role card until
+then. After an automatic compaction that brings no
 SessionStart, the next prompt carries a short anchor once. The slot ships dark: the door serves no anchor until the
 operator arms the Shadow lanes row `anchor-slot`, which the replay-quiz piece's guard refuses to arm before the replay
 baseline is taken (ruling 1 of this programme's fix round).
@@ -49,8 +50,9 @@ Proposal 2).
 - `_hook_roster_card` calls `_hook_timeout 4 ccrc-api runs list`.
 - The card door and `renderCard` (the card piece); the generations rows (the generations piece).
 - PreCompact records a `pre` event in `$REG/<id>.compactevents`, after the refusal decision, through
-  `_hook_compact_event` (the context-readings piece); a refused PreCompact records `refused` instead (the compaction
-  piece).
+  `_hook_compact_pre_line` (the context-readings piece), each line carrying the hook's scope verdict; a refused
+  PreCompact records `refused` instead (the compaction piece).
+- On `fork`, `_hook_role_card` prints the short role card today (`resume`/`fork`/`compact` take the short form).
 - `shared/lane-arm.ts#LANE_ARM_LANES` and its door `POST /api/coord/lane-arm` (D-8274), decided in L1 by
   `server/src/coord/laneArm.ts#decideLaneArmPost`; `pwa/src/fleet/ShadowLanesSection.tsx` is a
   `Record<LaneArmLane, …>`.
@@ -77,9 +79,10 @@ Proposal 2).
 
 1. The canaries survive a cut: they come before the counts, and the ceiling cuts from the end.
 2. The pinned sum is 9,951, under 10,000, and the test names the 49 characters left.
-3. With the server down, or the slot dark, a start prints today's role card and nothing is lost.
+3. With the server down, or the slot dark, a start prints today's role card and nothing is lost, a `fork`
+   included.
 4. An automatic compaction with no SessionStart `compact` still sends the session back to its card, once; a refused
-   one does not.
+   one does not, and neither does a subagent's or an ambiguous one.
 5. Nothing reaches a session before the operator arms `anchor-slot`: the merge arms nothing.
 
 ---
@@ -119,9 +122,11 @@ minted, it reads `n+1 starting`.
   row is `live`; in `shadow` it still renders and logs the size once a pass, so the shadow week measures it)
 - Modify: `ccd/session-hook.sh` (`ANCHOR_CARD_MAX_CHARS=1500`; `_hook_anchor_card` fetches with `_hook_timeout 4
   ccrc-api card --anchor`, unless `$REG/<id>.child` exists, on `startup`, `resume`, `clear` and `compact`; on `fork` it
-  sets the one line "ccrc-anchor: a forked copy is not this session; it has no card."; `_hook_emit_context` prints the
-  anchor slot first, clipped at its ceiling, before the standing clip; `_hook_role_card` prints nothing when the anchor
-  slot holds text)
+  makes the same fetch with `--form fork`, which the door answers `{ ok: true, live: true }` with no text only when the
+  row is `live`, and only on that answer sets the one line "ccrc-anchor: a forked copy is not this session; it has no
+  card."; a `dark` answer or a failed fetch leaves the slot empty, so the fork prints today's short role card (ruling
+  R6); `_hook_emit_context` prints the anchor slot first, clipped at its ceiling, before the standing clip;
+  `_hook_role_card` prints nothing when the anchor slot holds text)
 - Modify: `ccd/ccrc-api` (`card --anchor`)
 - Modify: `server/test/session-hook.test.ts` (the sum: 1500 + 1 + 2400 + 1 + 4000 + 1 + 2048 = 9951, `< 10000`, and a
   case title naming "49 characters left"; the second budget test gains the anchor)
@@ -131,32 +136,41 @@ minted, it reads `n+1 starting`.
   coordinator fixture on the branch point; the new suite asserts it is unchanged after the edit.
 - [ ] **Step 2: Failing tests:** the door with `anchor-slot` `shadow` answers `dark` and no text; the stub answering
   `dark`: every source prints exactly the characterized output; the seed row is `shadow` and the Shadow lanes card lists
-  it; with the stub answering text, `clear` prints the anchor first and no role card; `fork`
-  prints the refusal line and no anchor fetch is made; a child prints neither; a stub answering 2,000 characters is
+  it; with the stub answering text, `clear` prints the anchor first and no role card; `fork` with the stub answering
+  `live` prints the refusal line and no role card; `fork` with the stub answering `dark`, or failing, prints exactly the
+  characterized short role card; a child prints neither and makes no fetch; a stub answering 2,000 characters is
   clipped to 1,500 with the canaries intact; the sum test reads all four constants from the source.
 - [ ] **Step 3: Run.** Red. **Step 4: Implement.** **Step 5: Run** the new suite, `test/session-hook.test.ts` and the
   SessionStart suites. Green.
 - [ ] **Step 6: Mutation.** Print the anchor after the standing card: the order case goes red. Serve the text in
-  `shadow`: the dark case goes red. Revert each.
+  `shadow`: the dark case goes red. Set the fork line without asking the door: the dark-fork case goes red. Revert
+  each.
 - [ ] **Step 7: Commit.** `feat(hook): the anchor is the first slot of every non-child start; the role card stands down for it`
 
 ### Task 3: An automatic compaction with no SessionStart still re-anchors
 
 **Files:**
-- Modify: `ccd/session-hook.sh` (`_hook_compact_event`, when it records `pre` for an `auto` PreCompact, also touches
-  `$REG/<id>.anchor-owed`; a `refused` event touches nothing; on SessionStart `compact` remove it after printing the
-  anchor; on UserPromptSubmit, if it exists, fetch `card --anchor --form prompt`, emit it as the prompt's
-  `additionalContext`, and remove it; a `dark` answer removes it too)
+- Modify: `ccd/session-hook.sh` (`_hook_compact_pre_line`, when it records `pre` for an `auto` PreCompact whose
+  scope verdict is `main`, also touches `$REG/<id>.anchor-owed` under the same lock; a `refused` event, and a
+  `subagent`, `ambiguous` or `null` scope, touch nothing (ruling R7a); on SessionStart `compact` remove it after
+  printing the anchor; on UserPromptSubmit, if it exists, fetch `card --anchor --form prompt` AFTER the hookstate
+  write, so the fetch never delays the `working` edge (m-B10), emit it as the prompt's `additionalContext`, and remove
+  it; a `dark` answer removes it too)
+- Modify: `ccd/ccd` (`_reg_purge`'s inventory comment gains `anchor-owed`, by addition; the glob already purges it)
 - Test: `server/test/session-hook-anchor.test.ts`
 
 - [ ] **Step 1: Failing tests:** PreCompact `auto` then UserPromptSubmit emits the prompt anchor once and removes the
   mark; PreCompact `auto` then SessionStart `compact` prints the start anchor and the next prompt emits nothing; a
-  manual PreCompact sets no mark (a manual compaction fires SessionStart `compact`, W0-05); a refused PreCompact (the
+  manual PreCompact sets no mark (a manual compaction fires SessionStart `compact`, W0-05); an `auto` PreCompact whose
+  scope is `subagent` or `ambiguous` sets no mark; the prompt's hookstate is written before the fetch (a stub that
+  sleeps three seconds finds hookstate already `working`); a refused PreCompact (the
   compaction piece's arm, or its `refused` event stubbed in if that piece has not merged) sets no mark, and the next
   prompt emits nothing; a `dark` answer removes the mark and emits nothing; a failed fetch keeps the mark for the next
   prompt, at most three tries (the count in the mark).
 - [ ] **Step 2: Run.** Red. **Step 3: Implement.** **Step 4: Run.** Green.
-- [ ] **Step 5: Commit.** `feat(hook): after an automatic compaction, the next prompt carries the anchor once (Proposal 2)`
+- [ ] **Step 5: Mutation.** Mark on any scope: the subagent case goes red. Fetch before the hookstate write: the
+  three-second case goes red. Revert each.
+- [ ] **Step 6: Commit.** `feat(hook): after an automatic compaction, the next prompt carries the anchor once (Proposal 2)`
 
 ## Deviations found
 
@@ -166,12 +180,16 @@ None yet. Decisions this plan takes, by slug:
   not a door of its own.
 - **anchor-role-card-fallback** — the role subject stands down only when the anchor printed; a failed fetch prints
   today's role card, so a server outage costs nothing that works today.
-- **anchor-owed-mark** — `$REG/<id>.anchor-owed`, one writer (the hook, in `_hook_compact_event`, after the refusal
-  decision), carries "an automatic compaction happened" to the next prompt; dot-free, so purged with the row. Table
+- **anchor-owed-mark** — `$REG/<id>.anchor-owed`, one writer (the hook, in `_hook_compact_pre_line`, after the
+  refusal decision, for a main-scope `pre` only), carries "an automatic compaction happened" to the next prompt; dot-free, so purged with the row. Table
   3.6a lists it (this programme's spec amendment).
 - **anchor-ships-dark** — the anchor slot is the Shadow lanes row `anchor-slot`, seeded `shadow`, whose door refuses
   `live` before the replay baseline is taken (the replay-quiz piece); in `shadow` the door renders and measures but
   serves nothing.
+- **fork-line-only-when-live** — the fork's refusal line is set only when the door answers `live`; until then a fork
+  prints today's short role card, so the merge changes no fork's start (ruling R6).
+- **prompt-fetch-after-hookstate** — the prompt anchor's fetch runs after the hookstate write, so it never delays the
+  `working` edge (m-B10).
 - **rules-version-in-w1** — the anchor's canaries carry term, generation and card hash; the rules version joins with W1's
   grants, the first thing that raises it.
 - **prompt-delta-in-w1** — C38's delta on every prompt reads the door process's cache, which is W1's; W1a sends a prompt
@@ -182,7 +200,7 @@ None yet. Decisions this plan takes, by slug:
 **Needs before it starts:** the card piece, both PRs (the door, the facts, `shared/continuity-card.ts`,
 `server/src/continuity/routes.ts`, `server/test/continuity-card-route.test.ts` and `ccrc-api card`, which this piece
 then edits: lane C's files, edited only after lane C has merged them), the generations piece (the live `n`), the
-context-readings piece (`_hook_compact_event`, which Task 3 extends).
+context-readings piece (`_hook_compact_pre_line`, which Task 3 extends).
 
 **What depends on it:** the renewal-act piece (the `carded` state's nudge re-sends the start anchor), the compaction
 piece (the anchor on the `compact` start is one of the three protections, §3.3.4).
