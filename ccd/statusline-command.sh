@@ -507,6 +507,8 @@ if [ -n "$ccd_id" ]; then
         model: (.model.id // null),
         effort: (.effort.level // null),
         ctxPct: (.context_window.used_percentage // null),
+        ctxTokens: (.context_window.total_input_tokens // null),
+        ctxWindow: (.context_window.context_window_size // null),
         cost: (.cost.total_cost_usd // null),
         cacheExpiresAt: (.prompt_cache.expires_at | if type == "number" then . else null end),
         agent: (if $agent == "" then null else $agent end)
