@@ -234,6 +234,8 @@ const pairs = (T, name) => [
   // .sess-warn critical-limit glyph both take dead-text on a surface ground.
   [`${name} dead-text / surface`, T.deadText, T.surface, 4.5],
   [`${name} dead dot / surface (UI 3:1)`, T.dead, T.surface, 3],
+  // The Overlord's alarm tone (`characters.css` `.chr-t-alarm`, `--status-dead`) is drawn straight on the page.
+  [`${name} dead dot / page (UI 3:1)`, T.dead, T.page, 3],
   [`${name} dead dot / lamp well (UI 3:1)`, T.dead, T.well, 3],
   // --status-dead-tint-solid IS the 12% wash pre-composited on a card, so this
   // no longer mixes anything here; tokens.css owns the 12% and audit.mjs pins
