@@ -26143,7 +26143,7 @@ _profile_spawn_compose() {   # id launchflags -> sets PROFILE_SPAWN_FLAGS, PROFI
   [[ -z "$p" ]] || out=$(jq -r --arg r "$p" --arg am "$am" --arg cw "$cw" "$PROFILE_ROW_JQ" "$LAUNCH_PROFILES_JSON" 2>/dev/null) || out=""
   IFS=$'\t' read -r pset penv <<< "$out"
   if [[ -z "$pset" ]] || { [[ "$pset" != '{}' ]] && ! _spawn_settings_last "$id" "$2" "$pset" "launch profile $p"; }; then
-    w=$(_reg_get "$id" profile 2>/dev/null); [[ "$w" =~ ^[a-z]{1,16}$ ]] || w="<$(_route_bytes "$w") bytes>"
+    _reg_get_to w "$id" profile 2>/dev/null; [[ "$w" =~ ^[a-z]{1,16}$ ]] || w="<$(_route_bytes "$w") bytes>"
     echo "ccd: warn: $id: launch profile $w unreadable — spawning without it" >&2
     return 0
   fi
