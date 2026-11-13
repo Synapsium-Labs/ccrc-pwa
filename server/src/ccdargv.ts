@@ -477,7 +477,9 @@ export const CCD_ARGV = {
    *  makes it the automatic roll's act: `.no-roll` refuses instead of `.no-hibernate`, and ccd wakes it in the same
    *  verb, exiting 4 with `ccd: roll-wake-failed` when the wake fails and the row is back asleep, 5 with
    *  `ccd: roll-wake-unrestored` when it could not be put back. `fresh` is the same roll whose wake starts a new
-   *  conversation (a new uuid, `--session-id`, never `--resume`), with every refusal and exit code the roll has. */
+   *  conversation (a new uuid, `--session-id`, never `--resume`), with every refusal and exit code the roll has, plus
+   *  exit 7, `ccd: roll-fresh-unproven`, when the wake answered 0 but no spawn left the fresh start's receipt (the old
+   *  uuid is back; the caller asks again later). */
   hibernate: (id: string, dec: ActorFlags | null, holdOk: string | null = null, mode: HibernateMode = 'sleep') =>
     argv(['hibernate', ...HIBERNATE_MODE_FLAGS[mode], ...holdOkFlags(holdOk), id, ...decFlags(dec)]),
   swap:      (id: string, w: string) => argv(['swap', id, w]),

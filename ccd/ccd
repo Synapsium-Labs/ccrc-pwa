@@ -26301,7 +26301,8 @@ _spawn_mode() {   # id -> `new` or `resume`: what a spawn of the row passes Clau
   # `new` until the row is claimed (`started`), then `resume`, except a FRESH START (`cmd_hibernate --roll --fresh`, spec
   # 2026-11-09 §3.3.11 H13): `$REG/<id>.fresh`, one-shot, names the uuid the roll minted, and while it is the row's uuid
   # the spawn is `new`. It crosses into the unit's own process, where no argv or local can (plan review 1890 C2).
-  # `_spawn_start` consumes it, and removes a stale one (any other uuid), which this reader ignores.
+  # `_spawn_start` consumes it, leaving the receipt `used <uuid>` once its create answered 0, which `cmd_hibernate` reads as
+  # its proof (no receipt: exit 7, `roll-fresh-unproven`); it removes a stale one (any other uuid), which this ignores.
   local f u
   [[ "$(_reg_get "$1" started)" == 1 ]] || { echo new; return 0; }
   f=$(_reg_get "$1" fresh); u=$(_reg_get "$1" uuid)
@@ -26380,14 +26381,16 @@ _spawn_start() {   # id mode(new|resume) -> creates the tmux session, sets SPAWN
   [[ "$lastswap" =~ ^[0-9]+$ && $(( $(date +%s) - lastswap )) -lt 300 ]] && fromswap=1
   if [[ "$mode" == "resume" ]]; then sidflag="--resume '$uuid'"; else sidflag="--session-id '$uuid'"; fi
   # A fresh start's marker is consumed by the `new` spawn it chose (`_spawn_mode`), which leaves `used <uuid>` for the roll
-  # to read. Any other is STALE (another uuid, unreadable, a receipt left by a killed roll, or a spawn that is not `new`),
-  # and goes, said on stderr (plan review 1896 m-B7). One that names the row's uuid is never stale, however old.
+  # to read, once its create has answered 0 (below). Any other is STALE (another uuid, unreadable, a spent receipt, or a
+  # spawn that is not `new`), and goes, said on stderr (plan review 1896 m-B7). One naming the row's uuid is never stale.
+  local freshtake=0
   if [[ -e "$REG/$id.fresh" || -L "$REG/$id.fresh" ]]; then
     local sf=''; _reg_get_to sf "$id" fresh
-    if [[ "$mode" == new && "$sf" == "$uuid" ]]; then   # consumed: the receipt is `cmd_hibernate`'s proof of a fresh start
-      _reg_set "$id" fresh "used $uuid" || rm -f -- "$REG/$id.fresh"
+    if [[ "$mode" == new && "$sf" == "$uuid" ]]; then freshtake=1
     else
-      echo "ccd: $id: removing a stale fresh-start marker (it names ${sf:-nothing readable}; this spawn is $mode of $uuid)" >&2
+      local what="a stale fresh-start marker (it names ${sf:-nothing readable}"
+      [[ "$sf" == "used "* ]] && what="a spent fresh-start receipt (for ${sf#used }"
+      echo "ccd: $id: removing $what; this spawn is $mode of $uuid)" >&2
       rm -f -- "$REG/$id.fresh"
     fi
   fi
@@ -26759,6 +26762,9 @@ _spawn_start() {   # id mode(new|resume) -> creates the tmux session, sets SPAWN
   _spawn_workdirid_pending "$id" "$workdir" || :
   _tmux_new_session -d -s "$tname" -x 220 -y 50 \
     "cd '$workdir' && $(_plat_workdirid_pane "$REG" "$id" "$workdir")true; cd '$workdir' && exec env ${genenv}COLORTERM=truecolor $resenv $SESSION_PANE_PATH '$WRAPPER_DIR/$wrapper' $launchflags $sidflag --dangerously-skip-permissions"
+  # THE RECEIPT IS A PROOF, so only a create that answered 0 writes it (review 1919 R1): one that lost a duplicate-name
+  # race to a concurrent spawn leaves the marker unspent, and the roll exits 7 (`roll-fresh-unproven`).
+  (( $? == 0 && freshtake )) && { _reg_set "$id" fresh "used $uuid" || rm -f -- "$REG/$id.fresh"; }
   # THE PRICE OF A MONOTONE `started`, PAID AUTOMATICALLY INSTEAD OF BY HAND.
   # Nothing in ccd ever clears the field: there is no registry delete/unset
   # helper at all — `ccd-reg-claim.test.ts` greps this file for one and pins
@@ -32726,8 +32732,8 @@ cmd_hibernate() {   # [--roll] [--surface <word>] [--actor <text>] [--reason <te
     if [[ "$lc_rcpt" != "used $lc_u2" ]]; then
       [[ -n "$lc_u1" ]] && { _reg_set "$id" uuid "$lc_u1" || true; }
       echo "$(date '+%F %T') hibernate $id: fresh start unproven (marker read ${lc_rcpt:-absent}), uuid back to $lc_u1" >> "$REG/swap.log"
-      _lc_fail hibernate "$id" "" roll-fresh-unproven "woke, but no spawn of $lc_u2 consumed its marker"
-      echo "ccd: roll-fresh-unproven — $id woke, but not into the fresh conversation $lc_u2 (a concurrent wake, or one that moved it); its uuid is back to ${lc_u1:-nothing} and it runs the conversation that woke" >&2
+      _lc_fail hibernate "$id" "" roll-fresh-unproven "the wake answered 0, but no spawn of $lc_u2 left its receipt"
+      echo "ccd: roll-fresh-unproven — $id: a fresh start into $lc_u2 could not be proven (a concurrent wake, a lost create or an account move came first); its uuid is back to ${lc_u1:-nothing}, and a fresh start can be asked for again" >&2
       exit 7
     fi
   fi
