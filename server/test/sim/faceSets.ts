@@ -5,17 +5,35 @@
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { expect } from 'vitest';
-import type { LaneWire } from '../../../shared/api.js';
-import { fleetSession } from '../../../pwa/test/fleetFixture.js';
-import { runRow } from '../../../pwa/test/ledgersFixture.js';
+import type { FleetSession, LaneWire, RunSummary } from '../../../shared/api.js';
 import type { MutantSet, SuiteCase } from './mutate.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
 
-type MoodModule = typeof import('../../../pwa/src/face/mood.js');
-type SplashModule = typeof import('../../../pwa/src/face/splash.js');
-type BadgeModule = typeof import('../../../pwa/src/face/appBadge.js');
-type MoodFacts = Parameters<MoodModule['moodOf']>[0];
+// The loaded modules' shapes, written here and only as far as the suite uses them: a type edge into `pwa/` would pull
+// pwa sources into the server's node16 resolution (TS2835), and `modulePath` below is a runtime load, not a type edge.
+interface MoodFacts {
+  conn: 'connecting' | 'open' | 'down'; linkLost: boolean; agentDown: boolean;
+  sessions: readonly FleetSession[] | null; runs: readonly RunSummary[] | null; waitingItems: number | null;
+  lanes: Readonly<Record<string, LaneWire>> | null; stallQuietMs: number | null; nowMs: number;
+}
+interface MoodModule {
+  moodOf(f: MoodFacts): { mood: string; cause: string; next: number | null };
+  fallbackCause(f: Pick<MoodFacts, 'sessions' | 'runs' | 'waitingItems' | 'lanes'>): string;
+  CRY_WINDOW_MS: number; HAPPY_WINDOW_MS: number; DIZZY_SWAP_MS: number; SUSPICIOUS_WINDOW_MS: number; MOOD_FALLBACK: string;
+}
+interface SplashFacts { standalone: boolean; sinceMs: number; frameSeen: boolean; reducedMotion: boolean }
+interface SplashModule { splashShows(f: SplashFacts): boolean; SPLASH_TYPE_MS: number; SPLASH_MAX_MS: number }
+interface BadgeModule { badgeAct(count: number | null, last: number | null): { kind: string; n?: number } }
+
+/** A session row with only the fields the mood rules read; the rest of the wire type is cast over. */
+const fleetSession = (over: Partial<Record<keyof FleetSession, unknown>> = {}): FleetSession => ({
+  id: 'lane-a-x', project: 'project-a', status: 'idle', bucket: 'idle', bucketSince: null, hibernatedAt: null, stoppedBy: null,
+  swapBlocked: null, limitWait: null, lastEnd: null, pr: null, stranded: null, ...over,
+}) as unknown as FleetSession;
+/** A run row with only the fields the mood rules read. */
+const runRow = (over: Partial<Record<keyof RunSummary, unknown>> & { id: number; program: string }): RunSummary =>
+  ({ state: 'working', kind: 'work', wave: 1, waveOf: 3, closedAt: null, sessionId: null, claimedBy: null, programTitle: null, ...over }) as unknown as RunSummary;
 
 const NOW = 1_700_000_000_000;
 const MIN = 60_000;
@@ -25,7 +43,7 @@ const base = (over: Partial<MoodFacts> = {}): MoodFacts => ({
   sessions: [idle('1'), idle('2'), idle('3')], runs: [], waitingItems: 0, lanes: {}, stallQuietMs: 600_000, nowMs: NOW,
   ...over,
 });
-const withSession = (s: Partial<Parameters<typeof fleetSession>[0]>, over: Partial<MoodFacts> = {}) =>
+const withSession = (s: Parameters<typeof fleetSession>[0], over: Partial<MoodFacts> = {}) =>
   base({ sessions: [...base().sessions!, fleetSession({ id: 'project-a-x', ...s })], ...over });
 const merged = (ago: number) => ({ pr: { mergedAt: NOW - ago } as never });
 const rateLimited = { state: { word: 'rate-limited', source: 'x' } } as unknown as LaneWire;
@@ -158,7 +176,7 @@ const MOOD_SET: MutantSet<MoodModule> = {
 };
 
 export function splashCases(m: SplashModule): Record<string, SuiteCase> {
-  const facts = (over: Partial<Parameters<SplashModule['splashShows']>[0]> = {}) =>
+  const facts = (over: Partial<SplashFacts> = {}) =>
     ({ standalone: true, sinceMs: 0, frameSeen: false, reducedMotion: false, ...over });
   return {
     'not installed never shows': () => {
