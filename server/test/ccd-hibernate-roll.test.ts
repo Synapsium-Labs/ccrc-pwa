@@ -439,11 +439,22 @@ describe('ccd hibernate --roll --fresh: the roll whose wake starts a fresh conve
     expect(uuidNow()).toBe(u2);
   });
 
-  it('a stale marker (another uuid) is ignored: the spawn resumes', () => {
+  it('a STALE marker (a roll killed between its two writes: it names another uuid) is removed by the spawn, said on stderr, and the spawn resumes', () => {
     claimed();
-    fs.writeFileSync(regPath('fresh'), 'b0000000-0000-4000-8000-000000000002');
-    h.sh(`${REAL} ${SPAWNS} _alive() { return 1; }; ( cmd_ensure ${ID} ) >/dev/null 2>&1`, { TMUX: '' });
+    fs.writeFileSync(regPath('fresh'), 'b0000000-0000-4000-8000-000000000002\n');
+    const err = h.sh(`${REAL} ${SPAWNS} _alive() { return 1; }; ( cmd_ensure ${ID} ) 2>&1 >/dev/null`, { TMUX: '' });
     expect(news()[0]).toContain(`--resume '${UUID}'`);
+    expect(has('fresh'), 'no stale marker outlives the spawn').toBe(false);
+    expect(err).toContain(`ccd: ${ID}: removing a stale fresh-start marker (it names b0000000-0000-4000-8000-000000000002, not the row's uuid)`);
+  });
+
+  it('control: a marker that names the row\'s uuid is not stale: the spawn uses it and says nothing of staleness', () => {
+    claimed();
+    fs.writeFileSync(regPath('fresh'), `${UUID}\n`);
+    const err = h.sh(`${REAL} ${SPAWNS} _alive() { return 1; }; ( cmd_ensure ${ID} ) 2>&1 >/dev/null`, { TMUX: '' });
+    expect(news()[0]).toContain(`--session-id '${UUID}'`);
+    expect(has('fresh')).toBe(false);
+    expect(err).not.toContain('stale fresh-start marker');
   });
 
   it('--fresh without --roll dies with the usage line (exit 1, die) and touches nothing', () => {
@@ -494,15 +505,15 @@ describe('ccd hibernate --roll --fresh: the roll whose wake starts a fresh conve
     expect(uuidNow(), 'the old conversation is what mail wakes').toBe(UUID);
   });
 
-  it('a failed wake that exits 5 (roll-wake-unrestored) also removes the marker and puts the old uuid back', () => {
+  it('a failed wake that exits 5 (roll-wake-unrestored) keeps the NEW uuid: a pane may still run the new conversation', () => {
     claimed();
     const unwritable = 'cmd_ensure() { echo "ensure $*" >> "$HOME/ccd-calls"; rm -f -- "$REG/$1.hibernated"; '
       + 'mkdir -p -- "$REG/$1.hibernated"; echo "ccd: spawn failed" >&2; return 5; };';
     const r = run(`--roll --fresh --surface agent --actor 'sweep:renew' ${ID}`, unwritable);
     expect(r.rc, r.err).toBe(5);
     expect(r.err).toContain('roll-wake-unrestored');
-    expect(has('fresh')).toBe(false);
-    expect(uuidNow()).toBe(UUID);
+    expect(uuidNow(), 'the registry keeps naming the conversation that may be running').not.toBe(UUID);
+    expect(uuidNow()).toMatch(UUID_RE);
   });
 
   it('caps advertises hibernate-fresh', () => {

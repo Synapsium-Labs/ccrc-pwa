@@ -26301,7 +26301,7 @@ _spawn_mode() {   # id -> `new` or `resume`: what a spawn of the row passes Clau
   # `new` until the row is claimed (`started`), then `resume`, except a FRESH START (`cmd_hibernate --roll --fresh`, spec
   # 2026-11-09 §3.3.11 H13): `$REG/<id>.fresh`, one-shot, names the uuid the roll minted, and while it is the row's uuid
   # the spawn is `new`. It crosses into the unit's own process, where no argv or local can (plan review 1890 C2).
-  # `_spawn_start` consumes it; a stale one (any other uuid) is ignored.
+  # `_spawn_start` consumes it, and removes a stale one (any other uuid), which this reader ignores.
   local f u
   [[ "$(_reg_get "$1" started)" == 1 ]] || { echo new; return 0; }
   f=$(_reg_get "$1" fresh); u=$(_reg_get "$1" uuid)
@@ -26379,7 +26379,14 @@ _spawn_start() {   # id mode(new|resume) -> creates the tmux session, sets SPAWN
   lastswap=$(_reg_get "$id" lastswap)
   [[ "$lastswap" =~ ^[0-9]+$ && $(( $(date +%s) - lastswap )) -lt 300 ]] && fromswap=1
   if [[ "$mode" == "resume" ]]; then sidflag="--resume '$uuid'"; else sidflag="--session-id '$uuid'"; fi
-  [[ "$mode" == new ]] && rm -f -- "$REG/$id.fresh"   # a fresh start's marker is consumed by the spawn it chose (`_spawn_mode`)
+  # A fresh start's marker is consumed by the spawn it chose (`_spawn_mode`). One that did not choose it is STALE (it names
+  # a uuid other than the row's, e.g. left by a killed roll), and goes too, said on stderr (plan review 1896 m-B7). One that
+  # names the row's uuid is never stale, however old: that uuid has no conversation to resume.
+  if [[ -e "$REG/$id.fresh" ]]; then
+    local sf=''; { IFS= read -r sf < "$REG/$id.fresh"; } 2>/dev/null
+    [[ "$mode" == new ]] || echo "ccd: $id: removing a stale fresh-start marker (it names ${sf:-nothing readable}, not the row's uuid)" >&2
+    rm -f -- "$REG/$id.fresh"
+  fi
   # WHETHER THIS BOX DRIVES ITS SESSIONS OVER THE RC SOCKET — read ONCE, here,
   # and used by BOTH spawn lines below (the primary and the --session-id retry).
   # Once, not per line, so the two can never disagree: a resume that died and
@@ -32566,7 +32573,8 @@ cmd_hibernate() {   # [--roll] [--surface <word>] [--actor <text>] [--reason <te
   # `--fresh` (spec 2026-11-09 §3.3.11 H13, the renewal's adapter): a mode of `--roll`, refused without it, so it has every
   # refusal and exit code the roll has. Before the wake it mints a uuid, writes it as the row's and names it in
   # `$REG/<id>.fresh`, so the wake (in the unit's own process) starts a new conversation under the same session id
-  # (`_spawn_mode`). A failed wake (exit 4 or 5) removes the marker and puts the old uuid back. `ccd caps` says `hibernate-fresh`.
+  # (`_spawn_mode`). A failed wake that is put back to sleep (exit 4) removes the marker and puts the old uuid back.
+  # `ccd caps` says `hibernate-fresh`.
   local usage="usage: ccd hibernate [--surface <word>] [--actor <text>] [--reason <text>] <id>"
   local lc_gh=0 lc_holdok=''   # `--hold-ok <text>` (D-6091)
   local lc_roll=0 lc_fresh=0 lc_u1='' lc_u2=''
@@ -32705,8 +32713,6 @@ cmd_hibernate() {   # [--roll] [--surface <word>] [--actor <text>] [--reason <te
   fi
   (( wrc )) || ( cmd_ensure "$id" ) || wrc=$?
   if (( wrc != 0 )); then
-    # A fresh start that did not wake keeps the old conversation (exit 4 and 5 alike): its marker goes, the old uuid is back.
-    [[ -n "$lc_u1" ]] && { rm -f -- "$REG/$id.fresh"; _reg_set "$id" uuid "$lc_u1" || true; }
     # Back to sleep, in the act's own order: the marker first, then the unit, then a pane the unit may have raised late.
     # A unit that could not be stopped again is not the sanctioned hibernated row (a Restart=always unit retries it), so
     # it takes the unrestored branch below, never "put back to sleep".
@@ -32724,6 +32730,9 @@ cmd_hibernate() {   # [--roll] [--surface <word>] [--actor <text>] [--reason <te
       # The `.woke` stamp `cmd_ensure` wrote goes back to what stood before it: nothing woke, so it must neither hold
       # the auto-swap's cooldown (`_standdown_note … woke`) nor read as fresh activity to the stale-archive lane.
       if (( lc_had_woke )); then _reg_set "$id" woke "$lc_woke" || true; else rm -f -- "$REG/$id.woke"; fi
+      # A fresh start that did not wake keeps the old conversation: its marker goes, the old uuid is back. Exit 4 only: on
+      # exit 5 a pane may still run the new conversation, and the registry must keep naming it (plan review 1896 m-B6).
+      [[ -n "$lc_u1" ]] && { rm -f -- "$REG/$id.fresh"; _reg_set "$id" uuid "$lc_u1" || true; }
       echo "$(date '+%F %T') hibernate $id: roll wake failed (rc $wrc), back to sleep" >> "$REG/swap.log"
       echo "ccd: roll-wake-failed — $id was hibernated and its wake exited $wrc; it was put back to sleep (hibernated, unit stopped), and mail, an open screen or ccd ensure wakes it" >&2
       exit 4
