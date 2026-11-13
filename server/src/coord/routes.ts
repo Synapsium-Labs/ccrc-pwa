@@ -856,6 +856,20 @@ export function registerCoordRoutes(
         'runId must be a positive integer when given');
     }
 
+    // `inReplyTo` (#2726): the DELIVERY id of the mail this one answers — the number on the sender's own `id:` line,
+    // the only id a recipient ever sees. Optional and additive: absent or null is none, and an older client never sends
+    // it. Its shape rule is `runId`'s; whether it makes the mail an invited reply is check 9's, for peer mail only.
+    const inReplyToRaw = body['inReplyTo'];
+    let inReplyTo: number | null;
+    if (inReplyToRaw === undefined || inReplyToRaw === null) {
+      inReplyTo = null;
+    } else if (typeof inReplyToRaw === 'number' && Number.isInteger(inReplyToRaw) && inReplyToRaw >= 1) {
+      inReplyTo = inReplyToRaw;
+    } else {
+      return refuse(reply, 'bad-kind', { fromId, toId, subject, runId },
+        'inReplyTo must be a positive integer (a delivery id) when given');
+    }
+
     // 3: sendable kind. `isSendableMailKind` deliberately excludes `unknown` —
     // a sender cannot ask for the we-do-not-know bucket.
     if (!isSendableMailKind(kind)) {
@@ -1042,17 +1056,22 @@ export function registerCoordRoutes(
     // already queued" tells the caller not to resend at all, where
     // 'peer-quota' invites a retry later.
     // The decision, its order and its sentences are `peerMailVerdict`'s (L1, `coord/peerBound.ts`, #2726); this
-    // block reads the facts and acts.
+    // block reads the facts and acts. An invited reply (a kind `answer` whose `inReplyTo` names a delivery to its
+    // sender, of a mail from its recipient, not yet answered) is admitted outside every arm, and the insert below
+    // records which mail it answers, so it holds no slot and the mail buys no second one.
+    let answersMail: number | null = null;
     if (runId === null) {
       const now = Date.now();
       const v = peerMailVerdict({
-        fromId, toId: resolvedToId,
+        fromId, toId: resolvedToId, kind, inReplyTo,
+        invitation: inReplyTo === null ? null : coord.invitation(inReplyTo),
         duplicate: coord.hasOutstandingPeerDuplicate(fromId, resolvedToId, subject),
         outstanding: coord.outstandingPeerCount(fromId, resolvedToId),
         hourAts: coord.peerMailAtsInLastHour(fromId, now),
         now,
       });
-      if (v.verdict !== 'bounded') {
+      if (v.verdict === 'invited') answersMail = v.answersMail;
+      else if (v.verdict !== 'bounded') {
         return refuse(reply, v.verdict, { fromId, fromUuid, toId, kind, subject, runId }, v.detail);
       }
     }
@@ -1071,7 +1090,7 @@ export function registerCoordRoutes(
     const artifactPaths = artifacts as string[];
     const { id } = tx(coord.db, () => {
       const inserted = coord.insertMail({ fromId, fromUuid, toId, runId, kind, subject, body: msgBody,
-        artifacts: artifactPaths });
+        artifacts: artifactPaths, answersMail });
       const delivery = coord.queueDelivery(inserted.id, resolvedToId, '');
       const envelope = renderEnvelope({
         id: delivery.id, fromId, toId: resolvedToId, runId,

@@ -84,7 +84,8 @@ describe('peerMailVerdict: the bound, unchanged by the move to L1 (plan Task 3)'
   const NOW = 1_800_000_000_000;
   const ats = (n: number): number[] => Array.from({ length: n }, (_, i) => NOW - HOUR + 1 + i);
   const facts = (over: Partial<PeerFacts> = {}): PeerFacts => ({
-    fromId: 'demo-quiet-mesa', toId: 'demo-calm-ridge', duplicate: false, outstanding: 0, hourAts: [], now: NOW, ...over,
+    fromId: 'demo-quiet-mesa', toId: 'demo-calm-ridge', kind: 'question', inReplyTo: null, invitation: null,
+    duplicate: false, outstanding: 0, hourAts: [], now: NOW, ...over,
   });
 
   it('inside every bound: bounded', () => {
@@ -108,5 +109,39 @@ describe('peerMailVerdict: the bound, unchanged by the move to L1 (plan Task 3)'
     expect(peerMailVerdict(facts({ duplicate: true, outstanding: 3, hourAts: ats(12) }))).toMatchObject({ verdict: 'duplicate' });
     expect(peerMailVerdict(facts({ outstanding: 3, hourAts: ats(12) }))).toMatchObject({
       verdict: 'peer-quota', detail: expect.stringMatching(/are already outstanding/) });
+  });
+});
+
+describe('peerMailVerdict: an invited reply (#2726 (a))', () => {
+  const NOW = 1_800_000_000_000;
+  const full = { duplicate: true, outstanding: 3, hourAts: Array.from({ length: 12 }, (_, i) => NOW - 1_000 + i) };
+  // demo-quiet-mesa answers demo-calm-ridge's mail 41, delivered to it as delivery 7.
+  const INVITE = { mailId: 41, inviter: 'demo-calm-ridge', invitee: 'demo-quiet-mesa', answered: false };
+  const reply = (over: Partial<PeerFacts> = {}): PeerFacts => ({
+    fromId: 'demo-quiet-mesa', toId: 'demo-calm-ridge', kind: 'answer', inReplyTo: 7, invitation: INVITE,
+    ...full, now: NOW, ...over,
+  });
+
+  it('a reply of kind answer to a mail from its recipient is invited, with every bound spent', () => {
+    expect(peerMailVerdict(reply())).toEqual({ verdict: 'invited', answersMail: 41 });
+  });
+  it.each([
+    ['names no delivery', { invitation: null }, 'inReplyTo 7 names no delivery'],
+    ['is not kind answer', { kind: 'status' as const }, 'an invited reply is kind answer, not status'],
+    ['answers a delivery to someone else', { invitation: { ...INVITE, invitee: 'demo-b' } }, 'delivery 7 was not delivered to demo-quiet-mesa'],
+    ['answers a mail from someone else', { invitation: { ...INVITE, inviter: 'demo-b' } }, 'delivery 7 is not a mail from demo-calm-ridge'],
+    ['answers a mail already answered', { invitation: { ...INVITE, answered: true } }, 'the mail delivery 7 carries is already answered'],
+  ] as const)('not invited when it %s: bounded as any peer mail, and the refusal says why', (_w, over, why) => {
+    const v = peerMailVerdict(reply({ duplicate: false, ...over }));
+    expect(v.verdict).toBe('peer-quota');
+    expect(v).toMatchObject({ detail: expect.stringContaining(`; not an invited reply: ${why}`) });
+  });
+  it('a failed invitation that the bound admits is simply bounded', () => {
+    expect(peerMailVerdict(reply({ kind: 'status', duplicate: false, outstanding: 0, hourAts: [] }))).toEqual({ verdict: 'bounded' });
+  });
+  it('a mail with no inReplyTo carries no not-invited clause', () => {
+    const v = peerMailVerdict(reply({ inReplyTo: null, invitation: null, duplicate: false }));
+    expect(v).toMatchObject({ verdict: 'peer-quota' });
+    expect((v as { detail: string }).detail).not.toContain('not an invited reply');
   });
 });
