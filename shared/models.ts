@@ -111,10 +111,25 @@ export interface Registry {
   baseUrl?: string;
 }
 
+/** A Codex model's default `text.verbosity` (D-8620). The runtime list that validates it is
+ *  `CATALOGUE_VERBOSITIES` (`shared/models.mjs`), pinned to this type by `server/test/models.test.ts`. */
+export type CatalogueVerbosity = 'low' | 'medium' | 'high';
+/** The unit of a Codex truncation policy's `limit` (D-8620); `CATALOGUE_TRUNCATION_MODES` is its runtime list. */
+export type TruncationMode = 'tokens' | 'bytes';
+/** Codex's cap on one tool output (D-8620): `limit` is an integer in `1..CATALOGUE_TRUNCATION_LIMIT_MAX`. */
+export interface TruncationPolicy {
+  mode: TruncationMode;
+  limit: number;
+}
+
 /** One model as a probe recorded it. Everything but `id` is best effort: an
  *  OpenRouter row has prices and no efforts, a Codex row has efforts and no
  *  prices, and a `compatible` `/v1/models` row has neither. `null` is
- *  "unknown", never "zero". */
+ *  "unknown", never "zero".
+ *
+ *  The five optional keys after `priceOut` are the Codex catalogue's request-shape fields (D-8620), kept on a Codex
+ *  row only. Each is ABSENT when the reply did not carry a valid value, never null and never a default, so a row
+ *  without them reads exactly as before and a genuine `false` stays a fact. */
 export interface CatalogueModel {
   id: string;
   label: string;
@@ -124,6 +139,18 @@ export interface CatalogueModel {
   hidden: boolean;
   priceIn: number | null;
   priceOut: number | null;
+  /** `use_responses_lite`: native Codex sends `reasoning.context: "all_turns"`, `parallel_tool_calls: false` and
+   *  the Lite header when it is true. */
+  useResponsesLite?: boolean;
+  /** `support_verbosity`: whether Codex sends `text.verbosity` for this model at all. */
+  supportVerbosity?: boolean;
+  /** `default_verbosity`: the `text.verbosity` Codex sends when the user configured none. */
+  defaultVerbosity?: CatalogueVerbosity;
+  /** `default_reasoning_level`: the effort Codex sends when the user configured none. A non-empty string, valid
+   *  whether or not `efforts` lists it. */
+  defaultReasoningLevel?: string;
+  /** `truncation_policy`: Codex's cap on tool output. */
+  truncationPolicy?: TruncationPolicy;
 }
 
 /** `~/.ccrc/models/<accountId>.json`. An ABSENT file is "never probed" and is
@@ -210,6 +237,9 @@ export {
   parseWindows,
   WINDOW_MIN,
   WINDOW_MAX,
+  CATALOGUE_VERBOSITIES,
+  CATALOGUE_TRUNCATION_MODES,
+  CATALOGUE_TRUNCATION_LIMIT_MAX,
   MODELS_LANE_ID_RE,
   MODELS_RESERVED_IDS,
   MODELS_DIR_NAME,
