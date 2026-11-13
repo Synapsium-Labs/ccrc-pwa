@@ -67,12 +67,12 @@ export interface CardProgramme {
   readonly decisions: readonly CardDecision[];
 }
 
-/** One claim the session holds. */
+/** One claim the session holds. No lease expiry: a lease renews while its holder runs, so it would change the card
+ *  and its snapshot with no row changing (plan review A4). */
 export interface CardClaim {
   readonly id: number;
   readonly paths: readonly string[];
   readonly runId: number | null;
-  readonly expiresAt: number;
 }
 
 /** One delivery addressed to the session and not yet answered. Its subject is untrusted. */
@@ -96,7 +96,8 @@ export interface CardFacts {
   readonly sessionId: string;
   readonly role: FleetRole | 'undecided';
   readonly roleWhy: string;
-  /** The server's time of rendering, epoch milliseconds. */
+  /** The server's time of rendering, epoch milliseconds. Never rendered, and kept out of the snapshot id's hash, so one
+   *  card's text and id are stable across requests (plan review A4). */
   readonly at: number;
   readonly runs: Fact<readonly CardRun[]>;
   readonly ledger: Fact<readonly CardProgramme[]>;

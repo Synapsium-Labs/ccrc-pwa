@@ -65,7 +65,7 @@ describe('the coordinator renderer (Task 1)', () => {
     expect(t).toContain('goal: ship the card');
     expect(t).toContain('decision 2026-11-13T11:00:00Z: pages of 12,000 characters');
     expect(t).toContain('You have declared coordinator intent.');
-    expect(t).toContain('item 5 (prog-a, decide, open, needed soon, 30m old):');
+    expect(t).toContain('item 5 (prog-a, decide, open, needed soon, raised 2026-11-13T11:30:00Z):');
     expect(t).not.toContain(CARD_NOTHING_LINE);
   });
 
@@ -106,7 +106,7 @@ describe('the coordinator renderer (Task 1)', () => {
     expect(preface).toBeLessThan(body);
     expect(t.slice(preface, body)).toMatch(/\n```\n$/);
     expect(t.slice(body + subject.length)).toMatch(/^\n```/);
-    expect(t).toContain('Mail delivery 901 from lane-b-project-a, 5m old, not answered; its subject:');
+    expect(t).toContain('Mail delivery 901 from lane-b-project-a, sent 2026-11-13T11:55:00Z, not answered; its subject:');
   });
 
   it('a subject carrying a fence cannot close its block', () => {
@@ -143,7 +143,7 @@ describe('the coordinator renderer (Task 1)', () => {
   it('stable first, live last: programmes, runs, intent, claims, items, mail, notes, checkpoint, history', () => {
     const f = empty({
       ledger: read([{ slug: 'prog-a', goals: [], openItems: [], decisions: [] }]), runs: read([RUN_A]), intent: read(true),
-      claims: read([{ id: 3, paths: ['server/src/a.ts'], runId: 11, expiresAt: AT + 30 * MIN }]),
+      claims: read([{ id: 3, paths: ['server/src/a.ts'], runId: 11 }]),
       itemsRaised: read([item(6, 'an ask')]),
       mailOutstanding: read([{ deliveryId: 7, fromId: 'coordinator', at: AT - MIN, subject: 's' }]),
       notes: read([{ id: 8, at: AT - MIN, text: 'a note' }]), checkpoint: read({ at: AT - 2 * MIN, text: 'carried' }),
@@ -155,7 +155,7 @@ describe('the coordinator renderer (Task 1)', () => {
   it('keep is set on the role line, the runs, the items, the history line and every unmeasured line, and nowhere else', () => {
     const f = empty({
       ledger: read([{ slug: 'prog-a', goals: [], openItems: [], decisions: [] }]), runs: read([RUN_A]), intent: read(true),
-      claims: read([{ id: 3, paths: ['a'], runId: null, expiresAt: AT }]), itemsRaised: read([item(6, 'x')]),
+      claims: read([{ id: 3, paths: ['a'], runId: null }]), itemsRaised: read([item(6, 'x')]),
       mailOutstanding: read([{ deliveryId: 7, fromId: 'c', at: AT, subject: 's' }]),
       notes: read([{ id: 8, at: AT, text: 'n' }]), checkpoint: read({ at: AT, text: 'c' }),
     });
@@ -219,7 +219,7 @@ describe('trimCard (Task 1)', () => {
   it('a rendered coordinator card at the real budget trims mail before claims, and keeps its items', () => {
     const big = 'y'.repeat(900);
     const f = empty({
-      claims: read([{ id: 3, paths: ['server/src/a.ts'], runId: 11, expiresAt: AT }]), itemsRaised: read([item(6, 'an ask')]),
+      claims: read([{ id: 3, paths: ['server/src/a.ts'], runId: 11 }]), itemsRaised: read([item(6, 'an ask')]),
       mailOutstanding: read(Array.from({ length: 80 }, (_, i) => ({ deliveryId: 100 + i, fromId: 'c', at: AT - i * MIN, subject: big }))),
     });
     const r = trimCard(renderCard('coordinator', f), CARD_BUDGET_TOKENS);
@@ -238,7 +238,7 @@ describe('the worker, reviewer, plain and Overlord renderers (Task 2)', () => {
   const full = (): CardFacts => empty({
     role: 'worker',
     runs: read([RUN_A]), ledger: read([{ slug: 'prog-a', goals: [{ text: 'g', ratified: true }], openItems: [], decisions: [] }]),
-    claims: read([{ id: 3, paths: ['server/src/a.ts'], runId: 11, expiresAt: AT + MIN }]), intent: read(true),
+    claims: read([{ id: 3, paths: ['server/src/a.ts'], runId: 11 }]), intent: read(true),
     itemsRaised: read([item(6, 'an ask')]),
     mailOutstanding: read([{ deliveryId: 7, fromId: 'coordinator', at: AT - MIN, subject: 'wave-brief' }]),
     history: read({ verb: 'ccrc history describe', node: 'N0123456789abcdef0123' }),
@@ -310,6 +310,33 @@ describe('never silent, for every role and every combination of failed reads (Re
           `${role} mask ${mask}`).toBe(true);
       }
     }
+  });
+});
+
+describe('a card\'s text depends on its rows alone, never on the clock (plan review A4)', () => {
+  const rows = (at: number): CardFacts => empty({
+    at,
+    ledger: read([{ slug: 'prog-a', goals: [{ text: 'g', ratified: false }], openItems: [item(5, 'open')],
+      decisions: [{ at: AT - 60 * MIN, text: 'd' }] }]),
+    runs: read([RUN_A]), intent: read(true), claims: read([{ id: 3, paths: ['server/src/a.ts'], runId: 11 }]),
+    itemsRaised: read([item(6, 'an ask')]),
+    mailOutstanding: read([{ deliveryId: 7, fromId: 'coordinator', at: AT - 5 * MIN, subject: 's' }]),
+    notes: read([{ id: 8, at: AT - 3 * MIN, text: 'n' }]), checkpoint: read({ at: AT - 2 * MIN, text: 'c' }),
+    history: read({ verb: 'ccrc history describe', node: 'N0123456789abcdef0123' }),
+  });
+  it('the same rows render the same text while the clock moves across minutes, hours and days', () => {
+    for (const role of CARD_RENDERERS) {
+      const first = trimCard(renderCard(role, rows(AT)), CARD_BUDGET_TOKENS).text;
+      for (const later of [AT + 1, AT + 59_000, AT + 61 * MIN, AT + 2 * 24 * 60 * MIN, AT + 40 * 24 * 60 * MIN]) {
+        expect(trimCard(renderCard(role, rows(later)), CARD_BUDGET_TOKENS).text, `${role} at +${later - AT}ms`).toBe(first);
+      }
+    }
+  });
+  it('CONTROL: a row\'s own time is on the card, as an absolute stamp', () => {
+    const moved = empty({ mailOutstanding: read([{ deliveryId: 7, fromId: 'coordinator', at: AT - 6 * MIN, subject: 's' }]) });
+    const t = textOf(renderCard('coordinator', moved));
+    expect(t).toContain('sent 2026-11-13T11:54:00Z');
+    expect(t).not.toMatch(/\d+[mhd] old/);
   });
 });
 

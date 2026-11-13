@@ -13,7 +13,12 @@
  * written by a session or a person. Each rides `untrustedBlock`, and the card says once, before any of them, that
  * authority comes only from its rows.
  *
- * L1, pure: no `fs`, no store, no clock (the time of rendering is in the facts).
+ * STABLE TEXT (plan review A4). The card's hash names the snapshot a paging client reads page by page, so the text
+ * depends on the rows alone: every time on it is an absolute stamp of a row, never an age and never the time of
+ * rendering (`CardFacts.at` is not read here), and nothing that moves on its own while the rows stand still, such as
+ * a claim's lease, is rendered.
+ *
+ * L1, pure: no `fs`, no store, no clock.
  */
 import {
   BYTES_PER_TOKEN, type CardFacts, type CardItem, type CardMail, type CardRenderer, type CardRun, type CardSection, type Fact,
@@ -41,15 +46,6 @@ const LEFT_OUT_KEYS_SHOWN = 20;
 export const couldNotRead = (what: string): string => `Could not read ${what}.`;
 
 const iso = (ms: number): string => new Date(ms).toISOString().replace(/\.\d{3}Z$/, 'Z');
-
-/** An age in the roster card's words (`ccd/lib/roster-card.jq`'s `age`): minutes under an hour, hours under two days,
- *  then days. */
-function age(now: number, then: number): string {
-  const s = Math.floor((now - then) / 1000);
-  if (s < 3600) return `${Math.floor(s / 60)}m`;
-  if (s < 172_800) return `${Math.floor(s / 3600)}h`;
-  return `${Math.floor(s / 86_400)}d`;
-}
 
 const block = (text: string, capBytes: number, fullAt: string): string =>
   untrustedBlock(text, capBytes, fullAt, CARD_TEXT_PREFACE);
@@ -82,7 +78,7 @@ function claimsSections(f: CardFacts): readonly CardSection[] {
   return factSections('claims', f.claims, (claims) => claims.length === 0 ? [] : [{
     key: 'claims', rank: RANK.claims, keep: false,
     text: ['Claims you hold:', ...claims.map((c) =>
-      `claim ${c.id} run ${c.runId ?? 'none'} expires ${iso(c.expiresAt)}: ${c.paths.join(', ')}`)].join('\n'),
+      `claim ${c.id} run ${c.runId ?? 'none'}: ${c.paths.join(', ')}`)].join('\n'),
   }]);
 }
 
@@ -92,8 +88,8 @@ function intentSections(f: CardFacts): readonly CardSection[] {
     : []);
 }
 
-function itemText(f: CardFacts, it: CardItem): string {
-  return `item ${it.id} (${it.programme}, ${it.kind}, ${it.state}, needed ${it.neededBy}, ${age(f.at, it.at)} old):\n` +
+function itemText(it: CardItem): string {
+  return `item ${it.id} (${it.programme}, ${it.kind}, ${it.state}, needed ${it.neededBy}, raised ${iso(it.at)}):\n` +
     block(it.text, SHORT_CAP_BYTES, `on item ${it.id}'s row`);
 }
 
@@ -106,7 +102,7 @@ function itemsSections(f: CardFacts, withLedger: boolean): readonly CardSection[
   if (f.itemsRaised.kind === 'unmeasured') out.push(keepLine('unmeasured:itemsRaised', couldNotRead(f.itemsRaised.what)));
   else for (const it of f.itemsRaised.value) items.set(it.id, it);
   const all = [...items.values()].sort((a, b) => a.at - b.at || a.id - b.id);
-  if (all.length > 0) out.unshift(keepLine('items', ['Open items and asks:', ...all.map((it) => itemText(f, it))].join('\n')));
+  if (all.length > 0) out.unshift(keepLine('items', ['Open items and asks:', ...all.map(itemText)].join('\n')));
   return out;
 }
 
@@ -115,7 +111,7 @@ function mailSections(f: CardFacts): readonly CardSection[] {
     const sorted = [...mail].sort((a, b) => a.at - b.at || a.deliveryId - b.deliveryId);
     return sorted.map((m: CardMail, i) => ({
       key: `mail:${m.deliveryId}`, rank: banded(RANK.mail, i, sorted.length), keep: false,
-      text: `Mail delivery ${m.deliveryId} from ${m.fromId}, ${age(f.at, m.at)} old, not answered; its subject:\n` +
+      text: `Mail delivery ${m.deliveryId} from ${m.fromId}, sent ${iso(m.at)}, not answered; its subject:\n` +
         block(m.subject, SHORT_CAP_BYTES, `in \`ccrc-api mail fetch ${m.deliveryId}\``),
     }));
   });
@@ -143,7 +139,7 @@ function notesSections(f: CardFacts): readonly CardSection[] {
     const sorted = [...notes].sort((a, b) => a.at - b.at || a.id - b.id);
     return sorted.map((n, i) => ({
       key: `note:${n.id}`, rank: banded(RANK.note, i, sorted.length), keep: false,
-      text: `Note ${n.id}, ${age(f.at, n.at)} old:\n${block(n.text, SHORT_CAP_BYTES, `on note ${n.id}'s row`)}`,
+      text: `Note ${n.id}, written ${iso(n.at)}:\n${block(n.text, SHORT_CAP_BYTES, `on note ${n.id}'s row`)}`,
     }));
   });
 }
@@ -164,7 +160,7 @@ function historySections(f: CardFacts): readonly CardSection[] {
 }
 
 function roleSection(f: CardFacts): CardSection {
-  return keepLine('role', `Card for ${f.sessionId}: role ${f.role} (${f.roleWhy}), rendered ${iso(f.at)}.`);
+  return keepLine('role', `Card for ${f.sessionId}: role ${f.role} (${f.roleWhy}).`);
 }
 
 /** The facts a role's card reads, for its never-empty rule: content when any of them holds something. */
