@@ -18,6 +18,7 @@ import { ACTOR_FLAGS_CAP, ROUTE_APPLY_CAP } from '../src/ccdargv.js';
 import { EXEMPT } from '../src/auth/gate.js';
 import { seedRoster, testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
+import { ROUTE_LANE_ONLY_FIELDS } from '../../shared/api.js';
 
 const ID = 'claude-a-project-f';
 
@@ -35,6 +36,7 @@ const seededHome = (): string => {
   return home;
 };
 
+const LANE_ONLY_VALUE: Record<string, string> = { profile: 'coordinator', automem: 'off', compactwindow: '350000' };
 const BOTH_CAPS = { connected: true, downSince: null, ccdVerbs: [ROUTE_APPLY_CAP, ACTOR_FLAGS_CAP], rosterFp: null, build: null };
 const APPLY_ONLY = { connected: true, downSince: null, ccdVerbs: [ROUTE_APPLY_CAP], rosterFp: null, build: null };
 const NEITHER_CAP = { connected: true, downSince: null, ccdVerbs: ['start'], rosterFp: null, build: null };
@@ -82,6 +84,19 @@ describe('POST /api/sessions/:id/route (routing spec §5.3, live change from the
       const res = await post(app, ID, payload);
       expect(res.statusCode, JSON.stringify(payload)).toBe(400);
       expect(res.json()).toEqual({ ok: false, error: 'bad-request' });
+    }
+    expect(calls).toEqual([]);
+    await app.close();
+  });
+
+  it('400 naming the field for each launch-profile field: the lane writes those, never this door (Overlord W1a, F1)', async () => {
+    const home = seededHome();
+    const { app, calls } = await open(home, async () => ({ ran: true, code: 0, stdout: '', stderr: '' }), BOTH_CAPS);
+    expect(ROUTE_LANE_ONLY_FIELDS).toHaveLength(3);
+    for (const field of ROUTE_LANE_ONLY_FIELDS) {
+      const res = await post(app, ID, { field, value: LANE_ONLY_VALUE[field] });
+      expect(res.statusCode, field).toBe(400);
+      expect(res.json()).toEqual({ ok: false, error: 'bad-request', detail: `route: lane-only ${field}` });
     }
     expect(calls).toEqual([]);
     await app.close();
