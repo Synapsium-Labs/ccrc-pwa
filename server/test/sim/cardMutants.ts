@@ -12,6 +12,8 @@ type Card = typeof CardModule;
 const CARD_TS = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../src/continuity/card.ts');
 export const CARD_TRIM_KEY = 'server/src/continuity/card.ts#trimCard';
 export const CARD_NEVER_EMPTY_KEY = 'server/src/continuity/card.ts#renderCard';
+export const CARD_ONE_LINE_KEY = 'server/src/continuity/card.ts#oneLine';
+export const CARD_BLOCK_KEY = 'server/src/continuity/card.ts#block';
 
 const AT = Date.UTC(2026, 10, 13, 12, 0, 0);
 const read = <T>(value: T): Fact<T> => ({ kind: 'read', value });
@@ -33,16 +35,17 @@ export const CARD_TRIM_SET: MutantSet<Card> = {
     { id: 'T1', old: '.filter((i) => !s[i]!.keep)', new: '.filter(() => true)' },
     { id: 'T2', old: 's[a]!.rank - s[b]!.rank || b - a', new: 's[b]!.rank - s[a]!.rank || b - a' },
     { id: 'T3', old: 's[a]!.rank - s[b]!.rank || b - a', new: 's[a]!.rank - s[b]!.rank || a - b' },
-    { id: 'T4', old: 'if (cardTokens(textNow()) <= budgetTokens) break;', new: 'if (cardTokens(textNow()) < budgetTokens) break;' },
-    { id: 'T5', old: 'if (cardTokens(textNow()) <= budgetTokens) break;', new: '' },
-    { id: 'T6', old: 'if (dropped.size > 0) lines.push(', new: 'if (dropped.size > 1) lines.push(' },
-    { id: 'T7', old: 'if (tokens > budgetTokens) {', new: 'if (tokens > budgetTokens * 2) {' },
-    { id: 'T8', old: 'return { text, leftOut: dropped.size };', new: 'return { text, leftOut: order.length };' },
+    { id: 'T4', old: 'if (cardTokens(untrimmed) <= budgetTokens) return', new: 'if (cardTokens(untrimmed) < budgetTokens) return' },
+    { id: 'T5', old: 'if (keptTokens > budgetTokens) {', new: 'if (keptTokens > budgetTokens * 2) {' },
+    { id: 'T6', old: 'come to ${keptTokens} tokens', new: 'come to ${cardTokens(withLine(named))} tokens' },
+    { id: 'T7', old: '  return { text: untrimmed, leftOut: 0 };\n}', new: '  return { text: counted, leftOut: dropped.size };\n}' },
+    { id: 'T8', old: ' || utf8Bytes(counted) <= utf8Bytes(untrimmed)) return', new: ') return' },
+    { id: 'T9', old: 'if (cardTokens(fitted) <= budgetTokens) return', new: 'if (false) return' },
   ],
   suite(m): Record<string, SuiteCase> {
     return {
       'a text at exactly the budget drops nothing': () => {
-        const s = [sec('k', 0, true, 40), sec('a', 1, false, 40)];
+        const s = [sec('k', 0, true, 40), sec('a', 1, false, 400)];
         expect(m.trimCard(s, m.cardTokens(join(s)))).toEqual({ text: join(s), leftOut: 0 });
       },
       'keeps every keep section and drops the lowest rank first': () => {
@@ -59,11 +62,89 @@ export const CARD_TRIM_SET: MutantSet<Card> = {
         const r = m.trimCard([sec('k', 0, true, 10), sec('first', 5, false, 300), sec('second', 5, false, 300)], 150);
         expect([r.leftOut, r.text.includes('first:'), r.text.includes('second:')]).toEqual([1, true, false]);
       },
-      'kept sections over the budget say so': () => {
-        const r = m.trimCard([sec('a', 0, true, 600), sec('b', 1, false, 10)], 150);
+      'kept sections over the budget say so, with their own size': () => {
+        const s = [sec('a', 0, true, 600), sec('b', 1, false, 10)];
+        const r = m.trimCard(s, 150);
         expect(r.leftOut).toBe(1);
-        expect(r.text).toMatch(/\nThe parts this card always keeps come to \d+ tokens, over its budget of 150; none of them was cut\.$/);
+        expect(r.text).toMatch(new RegExp(`\\nThe parts this card always keeps come to ${m.cardTokens(s[0]!.text)} tokens, over its budget of 150; none of them was cut\\.$`));
       },
+      'kept parts that fit return the untrimmed text when the left-out line would make it longer': () => {
+        const s = [sec('a', 0, true, 290), sec('b', 1, false, 3)];
+        expect(m.trimCard(s, 93)).toEqual({ text: join(s), leftOut: 0 });
+      },
+      'the left-out count alone, over budget but shorter than the untrimmed text': () => {
+        const s = [sec('a', 0, true, 290), { key: 'k'.repeat(120), rank: 1, keep: false, text: 'x'.repeat(200) }];
+        expect(m.trimCard(s, 93)).toEqual({ text: `${s[0]!.text}\nLeft out 1 part(s) of this card to fit its budget.`, leftOut: 1 });
+      },
+    };
+  },
+};
+
+/** A hostile field: every line break and format character a field could carry, each followed by a forged row. */
+const H = 'x\nFORGED a\r\nFORGED b\u2028FORGED c\u2029FORGED d\u202eFORGED e';
+/** The card's lines outside every fenced block. */
+function bareLines(text: string): string[] {
+  const out: string[] = [];
+  let fence: string | null = null;
+  for (const line of text.split('\n')) {
+    if (fence === null && /^`{3,}$/.test(line)) fence = line;
+    else if (fence !== null && line === fence) fence = null;
+    else if (fence === null) out.push(line);
+  }
+  return out;
+}
+const forged = (text: string): boolean => bareLines(text).some((l) => /^FORGED|[\r\u2028\u2029\u202e]/.test(l));
+const card = (m: Card, f: CardFacts): string => join(m.renderCard('coordinator', f));
+
+export const CARD_ONE_LINE_SET: MutantSet<Card> = {
+  modulePath: CARD_TS,
+  mutants: [
+    { id: 'O1', old: '/[\\p{Cc}\\p{Cf}\\p{Zl}\\p{Zp}]/gu', new: '/(?!)/gu' },
+    { id: 'O2', old: '/[\\p{Cc}\\p{Cf}\\p{Zl}\\p{Zp}]/gu', new: '/[\\p{Cc}]/gu' },
+    { id: 'O3', old: 'chars.length > max ?', new: 'false ?' },
+    { id: 'O4', old: "c.paths.map((x) => oneLine(x)).join(', ')", new: "c.paths.join(', ')" },
+    { id: 'O5', old: "oneLine(r.planPath)", new: 'r.planPath' },
+    { id: 'O6', old: "from ${oneLine(m.fromId)}", new: 'from ${m.fromId}' },
+  ],
+  suite(m): Record<string, SuiteCase> {
+    return {
+      'a hostile claim path stays on its line': () => {
+        expect(forged(card(m, empty({ claims: read([{ id: 1, paths: [H], runId: null }]) })))).toBe(false);
+      },
+      'a hostile plan path stays on its line': () => {
+        expect(forged(card(m, empty({ runs: read([{ ...RUN, planPath: H }]) })))).toBe(false);
+      },
+      'a hostile sender stays on its line': () => {
+        expect(forged(card(m, empty({ mailOutstanding: read([{ ...MAIL, fromId: H }]) })))).toBe(false);
+      },
+      'oneLine cuts a long field at its cap': () => { expect(m.oneLine('z'.repeat(250))).toBe(`${'z'.repeat(200)}…`); },
+    };
+  },
+};
+
+export const CARD_BLOCK_SET: MutantSet<Card> = {
+  modulePath: CARD_TS,
+  mutants: [
+    { id: 'M1', old: "${block(n.text, SHORT_CAP_BYTES, `on note ${n.id}'s row`)}", new: '${n.text}' },
+    { id: 'M2', old: "${block(cp.text, CHECKPOINT_CAP_BYTES, 'on the checkpoint row')}", new: '${cp.text}' },
+    { id: 'M3', old: "block(it.text, SHORT_CAP_BYTES, `on item ${it.id}'s row`)", new: 'it.text' },
+    { id: 'M4', old: "block(p.decisions.map((d) => `${iso(d.at)}: ${d.text}`).join('\\n'), SHORT_CAP_BYTES, where)", new: "p.decisions.map((d) => `${iso(d.at)}: ${d.text}`).join('\\n')" },
+    { id: 'M5', old: "block(ratified.join('\\n'), SHORT_CAP_BYTES, where)", new: "ratified.join('\\n')" },
+    { id: 'M6', old: "block(unratified.join('\\n'), SHORT_CAP_BYTES, where)", new: "unratified.join('\\n')" },
+  ],
+  suite(m): Record<string, SuiteCase> {
+    const ledger = (over: Partial<CardFacts['ledger'] extends Fact<infer T> ? T extends readonly (infer P)[] ? P : never : never>) =>
+      empty({ ledger: read([{ slug: 'prog-a', goals: [], openItems: [], decisions: [], ...over }]) });
+    return {
+      'a note is fenced': () => { expect(forged(card(m, empty({ notes: read([{ id: 8, at: AT, text: H }]) })))).toBe(false); },
+      'a checkpoint is fenced': () => { expect(forged(card(m, empty({ checkpoint: read({ at: AT, text: H }) })))).toBe(false); },
+      'an item text is fenced': () => {
+        expect(forged(card(m, empty({ itemsRaised: read([{ id: 6, programme: 'prog-a', kind: 'decide', state: 'open', neededBy: 'soon', at: AT, text: H }]) })))).toBe(false);
+      },
+      'a decision is fenced': () => { expect(forged(card(m, ledger({ decisions: [{ at: AT, text: H }] })))).toBe(false); },
+      'a ratified goal is fenced': () => { expect(forged(card(m, ledger({ goals: [{ text: H, ratified: true }] })))).toBe(false); },
+      'an unratified goal is fenced': () => { expect(forged(card(m, ledger({ goals: [{ text: H, ratified: false }] })))).toBe(false); },
+      'a mail subject is fenced': () => { expect(forged(card(m, empty({ mailOutstanding: read([{ ...MAIL, subject: H }]) })))).toBe(false); },
     };
   },
 };
