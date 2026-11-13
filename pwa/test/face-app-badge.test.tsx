@@ -68,6 +68,7 @@ describe('useAppBadge', () => {
   it('counts what the Waiting on you door counts', () => {
     const store = mount();
     expect(setApp).not.toHaveBeenCalled();
+    expect(clearApp).not.toHaveBeenCalled();
     frame(store, 2, 1);
     expect(setApp).toHaveBeenCalledTimes(1);
     expect(setApp).toHaveBeenCalledWith(3);
@@ -83,11 +84,36 @@ describe('useAppBadge', () => {
   });
 
   it('a browser without the API is never called and never throws', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     delete nav.setAppBadge;
     delete nav.clearAppBadge;
     const store = mount();
     expect(() => frame(store, 1, 0)).not.toThrow();
     expect(setApp).not.toHaveBeenCalled();
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it.each(['setAppBadge', 'clearAppBadge'])('a browser with only %s calls neither and warns nothing', (only) => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    delete nav[only === 'setAppBadge' ? 'clearAppBadge' : 'setAppBadge'];
+    const store = mount();
+    frame(store, 1, 0);
+    frame(store, 0, 0);
+    expect(setApp).not.toHaveBeenCalled();
+    expect(clearApp).not.toHaveBeenCalled();
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it('a synchronous throw warns once and stops', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    setApp.mockImplementation(() => { throw Object.assign(new Error('no'), { name: 'NotAllowedError' }); });
+    const store = mount();
+    frame(store, 1, 0);
+    frame(store, 2, 0);
+    frame(store, 0, 0);
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(setApp).toHaveBeenCalledTimes(1);
+    expect(clearApp).not.toHaveBeenCalled();
   });
 
   it('a refusal warns once and stops', async () => {
