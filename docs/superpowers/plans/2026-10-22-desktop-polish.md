@@ -3611,10 +3611,17 @@ way: no other block overflowed by this cause. A new browser test, `pwa/browser/i
 (12 of 12) and green with the fix, and each declaration is load-bearing on its own. Evidence, the checklist and the
 before and after views are in `c32.md`.
 
+**Fix round 1 (review 1938).** A decision option that is not the recommended one, or any option of a decision with no
+recommendation, still overflowed the side panel when it held a long run: its words sit in the shared radio primitive's
+sentence span, which sets no wrap. `.wi-act .wi-opt` now has `overflow-wrap: anywhere`, on the item page only (F1). The test
+holds the run in such options and also asserts that the detail pane has no sideways overflow at desktop widths, where the pane
+clips and the page's own scroll cannot show it (F2); it is red on `main` in all 16 cases and red in 10 without the new rule. The
+note corrects the run's length to 340 characters (F3) and says which checked rows hold no long run (F4).
+
 - **D-8585** - `item-card-auto-track`: Task C32, issued on 2026-11-13. An item card's one implicit `auto` grid column took the
   min-content width of a How step that could not wrap, so a long run with no spaces pushed all of the card's text past its
-  edge, under the side panel. The card's column is now `minmax(0, 1fr)` and the How steps wrap anywhere. Departures are named
-  by slug in `c32.md`.
+  edge, under the side panel. The card's column is now `minmax(0, 1fr)` and the How steps wrap anywhere; fix round 1 (review
+  1938) makes a decision's options wrap too. Departures are named by slug in `c32.md`.
 
 **Acceptance.** `item-wrap.browser.test.ts` is green at the PR's tip and pwa's whole browser suite passes once before the
 wave-done. The test reds with either declaration removed (the probe case for the column). **Rollback.** A plain revert.
