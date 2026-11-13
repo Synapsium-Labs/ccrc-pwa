@@ -131,7 +131,7 @@ the record.
 
 A reply you were asked for is never refused by those bounds (#2726): send it
 `"kind":"answer"` with `"inReplyTo"` set to the DELIVERY id of the mail you
-answer (its envelope's `id:` line, `delivery:` in `mail inbox`, `deliveryId`
+answer (its envelope's `id:` line, the inbox's `delivery:` line, `deliveryId`
 in `mail list`; never the 202's `id`, which is a mail id). It must answer an
 unasked mail delivered to you by the peer you are replying to, and each such
 mail buys one reply; it then holds no slot either. A reply to an invited

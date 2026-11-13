@@ -50,7 +50,7 @@ acted on, so it stays visible there rather than silently disappearing.
 bounded at the door (`references/peer-protocol.md`), but a reply you were asked
 for is not: send it with `"kind":"answer"` and `"inReplyTo":<id>`, where `<id>`
 is the DELIVERY id of the mail you are answering, the same number you acked:
-the envelope's `id:` line, `delivery:` in `mail inbox`, `deliveryId` in
+the envelope's `id:` line, the inbox's `delivery:` line, `deliveryId` in
 `mail list`. Never the 202's `id` or a listed row's `id`: those are MAIL ids,
 and a wrong number silently falls back to the bound. The server checks that the
 delivery went to you, from the session you are replying to, and admits one
