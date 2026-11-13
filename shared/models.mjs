@@ -278,9 +278,10 @@ export class CatalogueInvalid extends Error {
 const isObj = (v) => typeof v === 'object' && v !== null && !Array.isArray(v);
 const num = (v) => (typeof v === 'number' && Number.isFinite(v) ? v : null);
 
-/** The one bound an effort level carries in this file: a non-empty string. `parseRegistry`'s `effort` map refuses
- *  anything else, and `parseCatalogue`'s `defaultReasoningLevel` keeps nothing else (D-8620). It is the same bound
- *  the probe's Codex arm applies to each `supported_reasoning_levels` name (`effort_name`, ccd/ccrc-models-probe). */
+/** A non-empty string: the bound `parseRegistry`'s `effort` map and `parseCatalogue`'s `defaultReasoningLevel`
+ *  apply (D-8620), and the same bound the probe's Codex arm applies to each `supported_reasoning_levels` name and to
+ *  `default_reasoning_level` (`effort_name`, ccd/ccrc-models-probe). `parseCatalogue`'s `efforts` filter is NOT
+ *  bound by it: that filter keeps any string, unchanged, so a row reads exactly as it did before D-8620. */
 const isEffortName = (v) => typeof v === 'string' && v.length > 0;
 
 /** D-8620: the bounds of the Codex catalogue's request-shape fields (`CatalogueModel`, shared/models.ts), defined
