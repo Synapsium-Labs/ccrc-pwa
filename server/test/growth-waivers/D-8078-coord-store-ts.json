@@ -3,5 +3,6 @@
   "maxDelta": 172,
   "d": "D-8078",
   "reason": "the claimant-gone group's choice column beside the other two groups' (run_close_settings.claimantGone, migration 54) and the lane's project and branch columns for E5's open-PR read (Task 28); +4 net code lines on top of D-8077's +168; the deciders are in coord/ files, only the wiring is here",
-  "added": "2026-11-09"
+  "added": "2026-11-09",
+  "createdAt": "2026-11-10"
 }

@@ -2,7 +2,7 @@
 // row's name moved from fleet-pieces.test.tsx, their expected words changed in the commit that made them
 // windowReading's and lanesRowLabel's; the card's name (laneDoorLabel) and the shared words were added beside them.
 import { join } from 'node:path';
-import ts from 'typescript';
+import { ts } from '../../server/test/scan/parse';
 import { describe, expect, it } from 'vitest';
 import type { AccountUsage } from '../../shared/api';
 import { parseTs } from './literalWalker';

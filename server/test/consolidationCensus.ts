@@ -96,14 +96,9 @@ export function markerDefinitions(name: string, root: string = REPO): CensusSite
 // A column-0 `}` inside a heredoc body would end a region early and hide the calls after it: `ccdHeredocBraces`
 // lists any such line, and the test's CONTROL holds that list empty.
 
-/** The contexts a manifest row may name: the 08-10 spec's nine, C10 Session host (the session-host ruling Q13,
- *  D-8272: hosting, observing and driving sessions behind one SessionHost interface, home `ccd/lib/sessionhost.sh`
- *  in the file-split plan's Task 7) and K (kernels and platform, no aggregate). */
-export const CCD_CONTEXTS = ['C1', 'C2', 'C3', 'C4', 'C5', 'C6', 'C7', 'C8', 'C9', 'C10', 'K'] as const;
-export type CcdContext = (typeof CCD_CONTEXTS)[number];
-/** Contexts ccd has and `server/src` and `pwa/src` do not, so the spec's ring-context-map table holds no row for them:
- *  C10 is ccd's SessionHost adapter, and the server declares the port at its consumer, C3 (D-8272). */
-export const CCD_ONLY_CONTEXTS: readonly CcdContext[] = ['C10'];
+// The context ids live in `ccdContextIds.ts`, a leaf, so the ring classifier the growth check loads (D-8563) does
+// not load this census.
+export { CCD_CONTEXTS, CCD_ONLY_CONTEXTS, type CcdContext } from './ccdContextIds.js';
 
 /** The launcher under `root`: `ccdWsHelpers.ts`'s `CCD`, the one spelling of its path, re-rooted for a fixture tree. */
 export function ccdLauncherIn(root: string = REPO): string {

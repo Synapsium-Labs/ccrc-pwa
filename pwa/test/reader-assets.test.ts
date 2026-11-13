@@ -5,7 +5,7 @@
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
-import ts from 'typescript';
+import { ts } from '../../server/test/scan/parse';
 import { describe, expect, it } from 'vitest';
 import {
   BRIDGE_LIMITS, BRIDGE_PROTOCOL, ERROR_WHY, FRAME_MANIFEST, MERMAID_GATE_DEFAULTS, PREF_KEYS, frameCsp,
