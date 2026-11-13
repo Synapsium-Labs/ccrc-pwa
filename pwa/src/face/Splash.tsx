@@ -1,5 +1,5 @@
 // The splash screen the installed app opens on (the Overlord face plan, Task 9; L4). It decides nothing: it reads
-// `matchMedia` once at boot, keeps the mount time, runs the two timers and holds the latch, and `splashShows` answers.
+// `matchMedia` once at boot, keeps the mount time, runs the two timers and holds the latch (state), and `splashShows` answers.
 // `aria-hidden`: the app beneath is the content, and nothing here takes a pointer.
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { Character, Wordmark, usePrefersReducedMotion } from '@ccrc/ui';
@@ -21,21 +21,22 @@ export function Splash(): ReactNode {
   const frameSeen = useFleetStore((s) => s.fleetFrameSeen);
   const reducedMotion = usePrefersReducedMotion();
   const [standalone] = useState(installed);
-  const mountedAt = useRef(Date.now());
-  const gone = useRef(false); // the latch: once false, stays false
-  const [, tick] = useState(0);
+  const mountedAt = useRef(0);
+  // Time since mount, advanced only by the timers below, so no render reads the clock.
+  const [sinceMs, setSinceMs] = useState(0);
+  // The latch: once closed, stays closed.
+  const [open, setOpen] = useState(true);
 
-  const shows = !gone.current && splashShows({
-    standalone, sinceMs: Date.now() - mountedAt.current, frameSeen, reducedMotion,
-  });
-  if (!shows) gone.current = true;
+  const shows = open && splashShows({ standalone, sinceMs, frameSeen, reducedMotion });
 
+  useEffect(() => { mountedAt.current = Date.now(); }, []);
+  useEffect(() => { if (!shows) setOpen(false); }, [shows]);
   useEffect(() => {
-    if (gone.current) return;
+    if (!open) return;
     const ids = [SPLASH_TYPE_MS, SPLASH_MAX_MS].map((ms) =>
-      setTimeout(() => { tick((n) => n + 1); }, Math.max(0, ms - (Date.now() - mountedAt.current))));
+      setTimeout(() => { setSinceMs(Date.now() - mountedAt.current); }, Math.max(0, ms - (Date.now() - mountedAt.current))));
     return () => { ids.forEach(clearTimeout); };
-  }, [shows, frameSeen]);
+  }, [open, frameSeen]);
 
   if (!shows) return null;
   return (

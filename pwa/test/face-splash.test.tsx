@@ -69,7 +69,7 @@ describe('<Splash />', () => {
     expect(screen.queryByTestId('splash')).toBeNull();
   });
 
-  it('leaves at the cap with no link, and never comes back once gone', () => {
+  it('leaves at the 4 s cap with no link', () => {
     render(<Splash />);
     act(() => { vi.advanceTimersByTime(SPLASH_MAX_MS); });
     expect(screen.queryByTestId('splash')).toBeNull();
@@ -78,13 +78,14 @@ describe('<Splash />', () => {
     expect(screen.queryByTestId('splash')).toBeNull();
   });
 
-  it('leaves when the typing ends after the frame, and a later lost link does not raise it again', () => {
+  it('never comes back once gone: a later lost link does not raise it again', () => {
     render(<Splash />);
     act(() => { useFleetStore.setState({ fleetFrameSeen: true }); });
     expect(screen.queryByTestId('splash')).not.toBeNull();
     act(() => { vi.advanceTimersByTime(SPLASH_TYPE_MS); });
     expect(screen.queryByTestId('splash')).toBeNull();
     act(() => { useFleetStore.setState({ fleetFrameSeen: false }); });
+    expect(screen.queryByTestId('splash')).toBeNull(); // facts alone say show here: only the latch holds it shut
     act(() => { vi.advanceTimersByTime(SPLASH_MAX_MS); });
     expect(screen.queryByTestId('splash')).toBeNull();
   });
