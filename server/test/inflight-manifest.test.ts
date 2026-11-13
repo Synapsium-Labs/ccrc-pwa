@@ -166,6 +166,16 @@ describe('the manifest program: workflow items', () => {
     expect(n(g, 'retired'), 'the retried run retires its row').toBe(1);
   });
 
+  it('a finished run whose latest attempt\'s agent transcript is absent is unread, never retired on absent evidence', () => {
+    plantRecord([wfRow()]);
+    mkRun(RUN, { summary: { status: 'completed' }, journal: [{ type: 'started', key: key(1), agentId: 'a1' }, { type: 'result', key: key(1), agentId: 'a1' }], sm: NOW - 30, jm: NOW - 60 });
+    const g = run();
+    expect(g.rc).toBe(0);
+    expect(g.summary['verdict']).toBe('unread');
+    expect([n(g, 'unread'), n(g, 'retired')]).toEqual([1, 0]);
+    expect(g.rows, 'its launch row is kept').toHaveLength(1);
+  });
+
   it('deferred-until-reset: a resume row, then an agent whose meta is newer than it ends on the limit: attempts=1 reset=<the row\'s resetsAt>; with no resetsAt on the row, reset=<reset>; an agent older than the resume does not count; resumed counts it', () => {
     const resumeAt = NOW - 2000;
     const rows = (run_: string): unknown[] => [wfRow({ run: run_, t: (NOW - 5000) * 1000 }), resumeRow({ run: run_, t: resumeAt * 1000 })];
@@ -487,6 +497,15 @@ describe('the manifest program: the record, validation at read, compaction', () 
     const r = spawnSyncGroup('python3', ['-I', PROG, reg], { encoding: 'utf8', timeout: 20_000 });
     expect(r.status).toBe(2);
   });
+
+  it("the session id is ccd's registry id: a dotted id and a 128-character id run; a 129-character id and a dot-leading id are rc 2", () => {
+    plantRecord([]);
+    for (const id of ['lane-a-my.site', 'a'.repeat(128), `a${'.'.repeat(127)}`]) {
+      const g = run({ id });
+      expect([id.length, g.rc, g.summary['verdict']]).toEqual([id.length, 0, 'none']);
+    }
+    for (const id of ['a'.repeat(129), '.lane-a', '-lane-a', 'lane/a']) expect([id.length, run({ id }).rc], id).toEqual([id.length, 2]);
+  });
 });
 
 describe('the launch record round trip: every row the hook writes reads clean', () => {
@@ -638,5 +657,59 @@ describe('the vocabularies, the grammar and the shipping', () => {
     expect(ccrc).toContain('"$reg/lib/inflight-manifest.py"');
     expect(read('server/test/installTreeFixture.ts')).toContain("'ccd/lib/inflight-manifest.py'");
     expect(read('server/test/ccd-python-reader-census.test.ts')).toContain("name: 'lib/inflight-manifest.py', kind: 'no-read', d: 'D-8369'");
+  });
+});
+
+// ── read_bytes, driven directly: the program parses its argv at import, so `probe` and `read_bytes` are cut out of its source ──
+const HARNESS = `
+import ast, os, stat, sys
+src = open(sys.argv[1]).read()
+tree = ast.parse(src)
+want = {'OPEN_FLAGS', 'OK', 'ABSENT', 'BAD'}
+keep = []
+for nd in tree.body:
+    if isinstance(nd, ast.FunctionDef) and nd.name in ('probe', 'read_bytes'):
+        keep.append(nd)
+    elif isinstance(nd, ast.Assign):
+        names = {t.id for t in nd.targets if isinstance(t, ast.Name)} | {e.id for t in nd.targets if isinstance(t, ast.Tuple) for e in t.elts if isinstance(e, ast.Name)}
+        if names & want:
+            keep.append(nd)
+ns = {'os': os, 'stat': stat}
+exec(compile(ast.Module(body=keep, type_ignores=[]), 'cut', 'exec'), ns)
+mode = sys.argv[2]
+if mode == 'limit':
+    p = sys.argv[3]
+    r = [len(ns['read_bytes'](p, limit=10)), len(ns['read_bytes'](p, start=40, limit=10)), len(ns['read_bytes'](p, cap=50, limit=7)), len(ns['read_bytes'](p))]
+    print(r)
+elif mode == 'fifo':
+    ns['probe'] = lambda q: (ns['OK'], None)
+    print(ns['read_bytes'](sys.argv[3]))
+elif mode == 'calls':
+    bad = []
+    for nd in ast.walk(tree):
+        if isinstance(nd, ast.Call) and isinstance(nd.func, ast.Name) and nd.func.id == 'read_bytes':
+            kw = {k.arg for k in nd.keywords}
+            if not (kw & {'limit', 'cap', 'tail'}):
+                bad.append(ast.get_source_segment(src, nd))
+    print(bad)
+`;
+const drive = (mode: string, arg = '', timeout = 20_000): { out: string; timedOut: boolean } => {
+  const r = spawnSyncGroup('python3', ['-I', '-c', HARNESS, PROG, mode, arg], { encoding: 'utf8', timeout });
+  return { out: String(r.stdout ?? '').trim(), timedOut: (r.error as NodeJS.ErrnoException | undefined)?.code === 'ETIMEDOUT' };
+};
+
+describe('read_bytes bounds a priced file by its price', () => {
+  it('a file that grew past its priced size is read to the limit and no further, with every read mode; and every call that reads a priced file passes a bound', () => {
+    const f = put(path.join(home, 'grown.bin'), 'x'.repeat(100));
+    expect(drive('limit', f).out).toBe('[10, 10, 7, 100]');
+    expect(drive('calls').out, 'a read_bytes call with no limit, cap or tail').toBe('[]');
+  });
+
+  it('a FIFO that gets past probe is turned away by its fstat, never blocking the open (O_NONBLOCK)', () => {
+    const f = path.join(home, 'pipe');
+    execFileSync('mkfifo', [f]);
+    const g = drive('fifo', f, 8_000);
+    expect(g.timedOut, 'the open blocked on a FIFO with no writer').toBe(false);
+    expect(g.out).toBe('None');
   });
 });

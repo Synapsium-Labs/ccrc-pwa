@@ -42,6 +42,9 @@ MANIFEST_DROP_WHY = ('id', 'path', 'budget', 'shape')
 (DROP_ID, DROP_PATH, DROP_BUDGET, DROP_SHAPE) = MANIFEST_DROP_WHY
 
 ID_RE = re.compile(r'[A-Za-z0-9_-]{1,64}\Z')
+# The session id is ccd's registry id, not the claude-side id class: `ccd/ccd#_reg_id_ok` (`[A-Za-z0-9._-]+`, not dash-leading)
+# plus `_ws_tmproot_id_ok`'s not-dot-leading, capped at `_REG_ID_MAX` (128, the hook's CCRC_ID_MAX). A project name may carry dots.
+SID_RE = re.compile(r'[A-Za-z0-9_][A-Za-z0-9._-]{0,127}\Z')
 WRAPPER_RE = re.compile(r'[A-Za-z0-9._-]{1,64}\Z')
 BYTE_RE = re.compile(r'[A-Za-z0-9._/@+-]+\Z')      # the hook's `lrbyte` class
 NAME_STEM_RE = re.compile(r'[A-Za-z0-9_-][A-Za-z0-9._-]{0,127}\Z')
@@ -90,10 +93,11 @@ def kind_word(st):
     return 'other'
 
 
-def read_bytes(p, cap=None, tail=None, start=None):
+def read_bytes(p, cap=None, tail=None, start=None, limit=None):
     """The bytes of a regular file, or None. `cap`: at most that many from the front. `tail`: the last that many (from mid-file the
     partial first line is cut at its first LF). `start`: from that offset to the end, no cut (the swap log's tail past
-    <log-from>; nothing below it is read). Opened only after lstat says regular, no-follow, non-blocking, then fstat again."""
+    <log-from>; nothing below it is read). `limit`: never more than that many bytes, the size the file was priced at (a file that
+    grew since its lstat is not read past its price). Opened only after lstat says regular, no-follow, non-blocking, then fstat again."""
     st, fd = probe(p), None
     if st[0] != OK:
         return None
@@ -109,6 +113,8 @@ def read_bytes(p, cap=None, tail=None, start=None):
         if start is not None:
             off = min(start, size)
             want = size - off
+        if limit is not None:
+            want = min(want, limit)
         chunks = []
         while want > 0:
             b = os.pread(fd, min(want, 1 << 20), off)
@@ -144,7 +150,7 @@ def listdir(p):
 if len(sys.argv) != 17:
     usage('16 arguments are required')
 (REG, SID, CFG, UUID, SITE) = sys.argv[1:6]
-if not ID_RE.match(SID) or not ID_RE.match(UUID) or not REG or not CFG or SITE not in MANIFEST_SITES:
+if not SID_RE.match(SID) or not ID_RE.match(UUID) or not REG or not CFG or SITE not in MANIFEST_SITES:
     usage('a malformed id, uuid, root or site')
 NOW = num(sys.argv[6], 'now')
 SCAN_BUDGET = num(sys.argv[7], 'scan-budget')
@@ -407,7 +413,7 @@ if total > SCAN_BUDGET:
     sys.exit(3)
 
 if LOG != '-' and LOG_FROM is not None and log_bytes > 0:
-    blob = read_bytes(LOG, start=log_off)
+    blob = read_bytes(LOG, start=log_off, limit=log_bytes)
     if blob is not None:
         for line in blob.decode('utf-8', 'replace').split('\n'):
             m = LOGLINE.match(line)
@@ -498,14 +504,14 @@ for it in wf.values():
     if x.journal in (None, BAD) or x.sbad or x.nolist:
         it.unread = True
         continue
-    raw = read_bytes(x.journal)
+    raw = read_bytes(x.journal, limit=x.jst.st_size)
     if raw is None:
         it.unread = True
         continue
     it.keys = fold(raw)
     it.summary_final = False
     if x.summary is not None:
-        sraw = read_bytes(x.summary)
+        sraw = read_bytes(x.summary, limit=x.sst.st_size)
         if sraw is None:
             it.unread = True
             continue
@@ -528,6 +534,8 @@ for it in wf.values():
             ent = x.agents.get(aid) if ID_RE.match(aid) else None
             if ent is not None:
                 it.tails.append((aid, ent[0], None, ent[3]))
+            else:
+                it.unread = True      # the latest attempt's agent transcript is absent (or its id cannot name one): no class from absent evidence
     elif it.attempts >= 1:
         for aid, mns in sorted(x.metas.items()):
             ent = x.agents.get(aid)
