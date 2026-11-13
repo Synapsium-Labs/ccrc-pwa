@@ -170,7 +170,10 @@ const EV = { kind: 'ticket-ids', ids: 5, of: 5 } as const;
 
 describe('the store: one writer of the linking row, the operator first', () => {
   it('migration 64 adds the five team columns to project_linking and nothing else', () => {
-    const last = MIGRATIONS[MIGRATIONS.length - 1]!.replace(/--[^\n]*/g, '').trim();
+    // Found by content, never as the last entry: a later migration (#2726's, 65) follows it.
+    const at = MIGRATIONS.findIndex((m) => m.includes('ADD COLUMN teamSource'));
+    expect(at).toBe(63);
+    const last = MIGRATIONS[at]!.replace(/--[^\n]*/g, '').trim();
     expect(last.split(';').map((l) => l.trim()).filter(Boolean)).toEqual([
       "ALTER TABLE project_linking ADD COLUMN teamSource TEXT CHECK (teamSource IN ('manual','auto'))",
       'ALTER TABLE project_linking ADD COLUMN teamName TEXT',
