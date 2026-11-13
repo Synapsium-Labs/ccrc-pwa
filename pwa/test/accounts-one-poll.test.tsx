@@ -7,7 +7,7 @@
 // leaves every surface's last good rows standing, by the store's one rule.
 import { readdirSync } from 'node:fs';
 import path from 'node:path';
-import ts from 'typescript';
+import { ts } from '../../server/test/scan/parse';
 import type { ReactNode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, render, screen } from '@testing-library/react';
