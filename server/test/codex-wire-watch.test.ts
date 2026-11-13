@@ -22,8 +22,8 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parse as parseYaml } from 'yaml';
 import {
-  CONTRACT_FILES, CATALOGUE_FILE, STATE_TITLE, BOT_LOGIN, UPSTREAM, BODY_FINDINGS_MAX, wireReport, nextPairs, pairTitle,
-  issueBody, runWatch, githubIo,
+  CONTRACT_FILES, CATALOGUE_FILE, FAMILIES, STATE_TITLE, BOT_LOGIN, UPSTREAM, BODY_FINDINGS_MAX, wireReport, nextPairs,
+  pairTitle, issueBody, runWatch, githubIo,
 } from '../../.github/ci/codex-wire-watch.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -289,6 +289,25 @@ describe('wireReport over the model catalogue (D-8621)', () => {
     for (const f of r.findings) expect(f.split('`').length % 2).toBe(1);
   });
 
+  it('a slug or a key holding a line break or another control character stays inside its one-line code span', () => {
+    const ms = baseModels();
+    const slug = 'x\n\n@team-a **hi** <img src=x>';
+    const added = { ...ms[0]!, slug };
+    const b = ms.find((m) => m.slug === 'model-b')!;
+    b['new\r\n- @team-b\tkey\u2028#'] = 1;
+    const r = wireReport(BASE, withCatalogue([...ms, added]));
+    expect(r.findings).toEqual([
+      `added catalogue field \`model-b\`.\`new\\u000d\\u000a- @team-b\\u0009key\\u2028#\` is \`1\` ${AT}`,
+      `added catalogue field model \`x\\u000a\\u000a@team-a **hi** <img src=x>\` ${AT}`,
+    ]);
+    for (const f of r.findings) {
+      expect(f).not.toMatch(/[\u0000-\u001f\u007f\u0085\u2028\u2029]/);
+      expect(f.split('`').length % 2).toBe(1);
+    }
+    const listed = issueBody(tag(161), tag(162), r).split('\n').filter((l) => l.includes('catalogue field'));
+    expect(listed).toEqual(r.findings.map((f) => `- ${f}`));
+  });
+
   it('a catalogue that is not JSON cannot be compared: an error naming the file, and the walk stops there', async () => {
     expect(() => wireReport(BASE, withCatalogue('{"models": [ not json'))).toThrow(/models-manager\/models\.json/);
     expect(() => wireReport(withCatalogue(''), BASE)).toThrow(/models-manager\/models\.json/);
@@ -313,6 +332,20 @@ describe('wireReport over the model catalogue (D-8621)', () => {
   ])('a catalogue of the wrong shape cannot be compared: %s', (_, text) => {
     expect(() => wireReport(BASE, withCatalogue(text))).toThrow(/models-manager\/models\.json/);
     expect(() => wireReport(withCatalogue(text), BASE)).toThrow(/models-manager\/models\.json/);
+  });
+
+  it('a catalogue finding comes after every Rust family, so a catalogue-wide change never hides a request-shape finding', () => {
+    expect(FAMILIES.at(-1)).toBe('catalogue field');
+    const one = wireReport(BASE, { ...overlay('instructions-moved'), [CATALOGUE_FILE]: withCatalogue(editModel('model-b', (m) => { m.default_verbosity = 'high'; }))[CATALOGUE_FILE]! });
+    expect(one.findings).toEqual([
+      'removed request-struct field `ResponsesApiRequest.instructions` (codex-api/src/common.rs)',
+      `changed catalogue field \`model-b\`.\`default_verbosity\` from \`"medium"\` to \`"high"\` ${AT}`,
+    ]);
+    const many = (value: string): Model[] => Array.from({ length: 600 }, (_, k) => ({ slug: `model-${String(k).padStart(3, '0')}`, default_verbosity: value }));
+    const wide = wireReport(withCatalogue(many('o'.repeat(190))),
+      { ...overlay('instructions-moved'), [CATALOGUE_FILE]: withCatalogue(many('n'.repeat(190)))[CATALOGUE_FILE]! });
+    expect(wide.findings[0]).toBe('removed request-struct field `ResponsesApiRequest.instructions` (codex-api/src/common.rs)');
+    expect(issueBody(tag(161), tag(162), wide)).toContain('\n- removed request-struct field `ResponsesApiRequest.instructions` (codex-api/src/common.rs)\n');
   });
 
   it('a catalogue-wide default change stays inside the issue body\'s bounds', () => {

@@ -338,11 +338,17 @@ export function catalogueFacts(src) {
   return out;
 }
 
-/** A slug, a key or a value as an issue shows it: cut to `CATALOGUE_SHOWN_MAX` characters, in a code span, a
- *  backtick written `\u0060` so the span cannot close early (D-8621). @param {string} text @returns {string} */
+/** What `shown` writes as a `\uXXXX` escape: a backtick, which would close the code span, and every control character
+ *  and line or paragraph separator, which could end the span's line or list item and let the rest of an upstream
+ *  slug or key (values arrive JSON-encoded, slugs and keys raw) render as live markup or a mention (D-8621). */
+const SHOWN_ESCAPE_RE = /[`\u0000-\u001f\u007f-\u009f\u2028\u2029]/g;
+
+/** A slug, a key or a value as an issue shows it: cut to `CATALOGUE_SHOWN_MAX` characters, in a code span, each
+ *  character of `SHOWN_ESCAPE_RE` written as its `\uXXXX` escape (a backtick `\u0060`, a line feed `\u000a`), so the span
+ *  stays on one line and cannot close early (D-8621). @param {string} text @returns {string} */
 function shown(text) {
   const cut = text.length > CATALOGUE_SHOWN_MAX ? `${text.slice(0, CATALOGUE_SHOWN_MAX - 1)}…` : text;
-  return `\`${cut.replace(/`/g, '\\u0060')}\``;
+  return `\`${cut.replace(SHOWN_ESCAPE_RE, (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, '0')}`)}\``;
 }
 const shownValue = (v) => (v === null ? '(not compared)' : shown(v));
 
