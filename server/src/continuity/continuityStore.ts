@@ -2,11 +2,7 @@
 // `insertStart`, and one read, `startsSince` (the generations lane's); `CoordStore` keeps one-line delegates of the same
 // names. Nothing here decides: the door (`routes.ts`) validates, this file records and measures.
 import type { DatabaseSync } from 'node:sqlite';
-
-/** The SessionStart sources a row may carry. A word outside them is stored as `other`: the payload is Claude Code's,
- *  and a new source word there must not lose the start. */
-export const START_SOURCES = ['startup', 'resume', 'clear', 'compact', 'fork', 'other'] as const;
-export type StartSource = (typeof START_SOURCES)[number];
+import { startSourceOf, type StartRow } from '../../../shared/api.js';
 
 /** What the door hands the writer: `source` is the payload's word as it came. */
 export interface StartInsert {
@@ -21,24 +17,9 @@ export interface StartInsert {
   receivedAt: number;
 }
 
-/** A recorded start, as the table holds it. */
-export interface StartRow {
-  id: number;
-  sessionId: string;
-  reportId: string;
-  uuid: string;
-  source: StartSource;
-  model: string | null;
-  rowIncarnation: string | null;
-  reportedAt: number;
-  receivedAt: number;
-}
-
 /** `fresh: false` is a resend that met the unique key: the first report's row stands and its id is answered. */
 export type StartInsertResult = { ok: true; id: number; fresh: boolean } | { ok: false; kind: 'write-failed' };
 export type StartsRead = { ok: true; rows: StartRow[] } | { ok: false; detail: string };
-
-const sourceOf = (w: string): StartSource => ((START_SOURCES as readonly string[]).includes(w) ? (w as StartSource) : 'other');
 
 /** The table's one writer. A resend (the same `sessionId` and `reportId`) writes nothing and answers the stored row's
  *  id with `fresh: false`; a statement that fails answers `write-failed`, never a throw. */
@@ -47,7 +28,7 @@ export function insertStart(db: DatabaseSync, row: StartInsert): StartInsertResu
     const res = db.prepare(
       'INSERT INTO continuity_starts (sessionId, reportId, uuid, source, model, rowIncarnation, reportedAt, receivedAt) '
       + 'VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (sessionId, reportId) DO NOTHING',
-    ).run(row.sessionId, row.reportId, row.uuid, sourceOf(row.source), row.model, row.rowIncarnation, row.reportedAt, row.receivedAt);
+    ).run(row.sessionId, row.reportId, row.uuid, startSourceOf(row.source), row.model, row.rowIncarnation, row.reportedAt, row.receivedAt);
     if (Number(res.changes) === 1) return { ok: true, id: Number(res.lastInsertRowid), fresh: true };
     const held = db.prepare('SELECT id FROM continuity_starts WHERE sessionId = ? AND reportId = ?')
       .get(row.sessionId, row.reportId) as { id: number } | undefined;
@@ -64,7 +45,7 @@ export function startsSince(db: DatabaseSync, sinceId: number): StartsRead {
       'SELECT id, sessionId, reportId, uuid, source, model, rowIncarnation, reportedAt, receivedAt FROM continuity_starts WHERE id > ? ORDER BY id',
     ).all(sinceId) as unknown as (Omit<StartRow, 'source'> & { source: string })[];
     // The table has no CHECK, so a word a newer build wrote reads through the same rule as the writer (review 1911, F10).
-    return { ok: true, rows: rows.map((r) => ({ ...r, source: sourceOf(r.source) })) };
+    return { ok: true, rows: rows.map((r) => ({ ...r, source: startSourceOf(r.source) })) };
   } catch (e) {
     return { ok: false, detail: `continuity_starts read failed: ${e instanceof Error ? e.message : String(e)}` };
   }

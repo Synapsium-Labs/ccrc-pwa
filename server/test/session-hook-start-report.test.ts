@@ -289,6 +289,15 @@ describe('the start report\'s field goes with its row (plan review 1890, I2)', (
     expect(fs.existsSync(path.join(REGD(), `${id}x.startpending`))).toBe(true);
   });
 
+  it('a spool write that lands after the purge\'s glob has run is still gone when the purge returns (review 1911, F1, side b)', () => {
+    h.sh(`_reg_set ${id} uuid 72be9ee2-0000-4bcc-b60b-0cfc0dc3d199; _reg_set ${id} project demo`);
+    // `_usage_purge` runs after the glob loop and before `generation` goes: the hook's rename lands there.
+    const out = h.sh(`_usage_purge() { printf '0\\t0\\n' > "$REG/${id}.startpending"; echo landed; }; _reg_purge ${id}; echo "rc=$?"`);
+    expect(out).toContain('landed');
+    expect(out).toContain('rc=0');
+    expect(fs.existsSync(path.join(REGD(), `${id}.startpending`)), 'taken once more after generation').toBe(false);
+  });
+
   it('_ws_slug_residue names <id>.startpending while it stands', () => {
     fs.writeFileSync(path.join(REGD(), `${id}.startpending`), '0\t0\n');
     expect(h.sh('_ws_slug_residue demo still-river')).toContain(`${id}.startpending`);
