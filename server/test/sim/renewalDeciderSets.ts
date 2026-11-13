@@ -8,6 +8,7 @@ import { expect } from 'vitest';
 import { RUN_KINDS, type ChildMark } from '../../../shared/api.js';
 import type { RoleFactInputs, RoleReading } from '../../src/roleOf.js';
 import type { MutantSet, SuiteCase } from './mutate.js';
+import { mulberry32 } from '../fakeTime.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
 
@@ -85,7 +86,75 @@ const ROLE_FACTS_SET: MutantSet<RoleOfModule> = {
   suite: roleFactsOfCases,
 };
 
+// ---------------------------------------------------------------------------------------------------------- observeTime
+
+export type ObservedModule = typeof import('../../src/time/observed.js');
+
+export function observeTimeCases(m: ObservedModule): Record<string, SuiteCase> {
+  const { observeTime, observedSince } = m;
+  return {
+    'null starts at 0, anchored at the mono reading and the process': () => {
+      expect(observeTime(null, 5_000, 'p1')).toEqual({ ms: 0, mono: 5_000, proc: 'p1' });
+    },
+    'the same process, forward: advances by the monotonic delta': () => {
+      const a = observeTime(null, 1_000, 'p1');
+      expect(observeTime(a, 4_500, 'p1')).toEqual({ ms: 3_500, mono: 4_500, proc: 'p1' });
+      expect(observeTime(observeTime(a, 4_500, 'p1'), 4_500, 'p1')).toEqual({ ms: 3_500, mono: 4_500, proc: 'p1' });
+    },
+    'a new process: no advance, re-anchored on the new reading': () => {
+      const a = { ms: 10_000, mono: 90_000, proc: 'p1' };
+      expect(observeTime(a, 95_000, 'p2')).toEqual({ ms: 10_000, mono: 95_000, proc: 'p2' });
+      expect(observeTime(a, 200, 'p2')).toEqual({ ms: 10_000, mono: 200, proc: 'p2' });
+    },
+    'mono backwards in one process: no advance, re-anchored': () => {
+      expect(observeTime({ ms: 7, mono: 50, proc: 'p1' }, 40, 'p1')).toEqual({ ms: 7, mono: 40, proc: 'p1' });
+    },
+    'a mono that is not a number never advances, and the next reading re-anchors': () => {
+      const a = observeTime({ ms: 7, mono: 50, proc: 'p1' }, Number.NaN, 'p1');
+      expect(a.ms).toBe(7);
+      expect(observeTime(a, 80, 'p1').ms).toBe(7);
+    },
+    'observedSince counts the observed milliseconds between two stamps, never below 0': () => {
+      const s = { ms: 1_000, mono: 0, proc: 'p1' };
+      expect(observedSince(s, { ms: 4_000, mono: 3_000, proc: 'p1' })).toBe(3_000);
+      expect(observedSince(s, { ms: 1_000, mono: 9, proc: 'p2' })).toBe(0);
+      expect(observedSince({ ms: 5_000, mono: 0, proc: 'p1' }, s)).toBe(0);
+    },
+    'PROPERTY (1,000 seeded runs): ms never decreases and never exceeds the in-process forward deltas': () => {
+      for (let seed = 1; seed <= 1_000; seed++) {
+        const r = mulberry32(seed);
+        let proc = 'p0'; let mono = Math.floor(r() * 1e6); let o = observeTime(null, mono, proc); let bound = 0; let pnum = 0;
+        for (let k = 0; k < 40; k++) {
+          const x = r();
+          const prev = o; const prevMono = mono; const prevProc = proc;
+          if (x < 0.15) { proc = `p${++pnum}`; mono = Math.floor(r() * 1e6); }
+          else if (x < 0.25) mono = Math.max(0, mono - Math.floor(r() * 5_000));
+          else mono += Math.floor(r() * 100_000);
+          if (proc === prevProc && mono >= prevMono) bound += mono - prevMono;
+          o = observeTime(prev, mono, proc);
+          if (o.ms < prev.ms) throw new Error(`seed ${seed} step ${k}: ms fell from ${prev.ms} to ${o.ms}`);
+          if (o.ms > bound) throw new Error(`seed ${seed} step ${k}: ms ${o.ms} exceeds the forward deltas ${bound}`);
+          if (o.mono !== mono || o.proc !== proc) throw new Error(`seed ${seed} step ${k}: not re-anchored on the reading`);
+        }
+      }
+    },
+  };
+}
+
+const OBSERVED_SET: MutantSet<ObservedModule> = {
+  modulePath: path.join(ROOT, 'server/src/time/observed.ts'),
+  mutants: [
+    { id: 'O1', old: 'prev.proc === proc && mono >= prev.mono', new: 'mono >= prev.mono' },
+    { id: 'O2', old: 'prev.proc === proc && mono >= prev.mono', new: 'prev.proc === proc' },
+    { id: 'O3', old: 'if (prev === null) return { ms: 0, mono, proc };', new: 'if (prev === null) return { ms: mono, mono, proc };' },
+    { id: 'O4', old: 'Math.max(0, now.ms - start.ms)', new: 'now.ms - start.ms' },
+    { id: 'O5', old: 'return { ms: prev.ms, mono, proc };', new: 'return prev;' },
+  ],
+  suite: observeTimeCases,
+};
+
 /** This plan's sets, keyed as `mutation-floors.json` keys them (`<file>#<decider>`). */
 export const RENEWAL_MUTANT_SETS: Record<string, MutantSet<never>> = {
   'server/src/roleOf.ts#roleFactsOf': ROLE_FACTS_SET as MutantSet<never>,
+  'server/src/time/observed.ts#observeTime': OBSERVED_SET as MutantSet<never>,
 };
