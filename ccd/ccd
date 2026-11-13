@@ -1428,11 +1428,13 @@ POOL_NAME_RE='^[a-z][a-z0-9-]{0,31}$'
 # SUPERSEDED 2026-09-11. A Codex lane IS home-able now — `gpt` and `gpt7` carry
 # `telemetry: "codex"` and sit in CCRC_HOME_ABLE — so "such a lane is never a
 # HOME (no project STARTS there by accident)", which stood in this paragraph
-# until that date, is simply false about the live roster. The 272k window did
-# not survive contact either: the catalogue advertises 272k, the backend has
-# never accepted a prompt over ~196k, and the ceiling therefore stays at Claude
-# Code's 200k default — a reason to distrust the catalogue, never a reason to
-# keep the lane out of placement.
+# until that date, is simply false about the live roster. The catalogue's
+# advertised window was doubted on that date too (one July sample never saw a
+# prompt over ~196k, so the lane was held at Claude Code's 200k default); the
+# 2026-10-15 fleet scan withdrew that sample, and since D-8564 (2026-11-13) a
+# Codex lane's window follows the catalogue's promise unless a window is
+# measured (shared/modelenv.mjs contextWindowFor). Either way, a window is
+# never a reason to keep the lane out of placement.
 #
 # What DOES stand is the telemetry difference, and it is now carried by a field
 # of its own. A Codex lane has no Anthropic-style 5h/7d pair: ccgpt-usage

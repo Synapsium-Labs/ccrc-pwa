@@ -445,15 +445,18 @@ const ownWindow = (windows, id) => windows !== null && windows !== undefined
   && Object.prototype.hasOwnProperty.call(windows, id) && typeof windows[id] === 'number';
 
 /**
- * `({registry, advance, windows, rule}) => Move[]` — the classes whose last move silently lowered the lane's context
+ * `({registry, advance, windows, rule, tokens}) => Move[]` — the classes whose last move lowered the lane's context
  * window (D-8384, public issue #2607): the lane's window `rule` (`contextWindowFor`'s, in `shared/modelenv.mjs`) is
- * not `measured`, the class's pin has no measured window in `windows`, and the class's newest successful history
- * entry moved it TO that pin FROM a model `windows` does measure. One row per such class, `CLASSES` order:
+ * not `measured`, the class's pin has no measured window in `windows`, the class's newest successful history entry
+ * moved it TO that pin FROM a model `windows` does measure, and `tokens`, the window now in force
+ * (`contextWindowFor`'s `tokens`, null when no key is written), is below that old model's measured window. Under
+ * D-8564 an unmeasured model runs at its provider's promise, so a move to one whose promise is at least the old
+ * measured window lowered nothing and is not named. One row per such class, `CLASSES` order:
  * `{class, from, to, fromTokens, how, cause}`, `cause` being `causeOf`'s word on an advance and null on a hand move or
  * a revert. A lane whose window is measured, or with no advance file (`advance` null), has none. Pure: the caller
  * reads the files.
  */
-export function unmeasuredMoves({ registry, advance, windows, rule }) {
+export function unmeasuredMoves({ registry, advance, windows, rule, tokens }) {
   if (rule === 'measured' || advance === null || advance === undefined) return [];
   const rows = [];
   for (const cls of CLASSES) {
@@ -461,6 +464,7 @@ export function unmeasuredMoves({ registry, advance, windows, rule }) {
     if (pin === null || ownWindow(windows, pin) || !isObj(advance.classes?.[cls])) continue;
     const last = lastMoveOf(advance.classes[cls]);
     if (last === null || last.to !== pin || last.from === null || !ownWindow(windows, last.from)) continue;
+    if (tokens !== null && tokens >= windows[last.from]) continue;
     rows.push({ class: cls, from: last.from, to: pin, fromTokens: windows[last.from], how: last.how,
       cause: last.how === 'advance' ? causeOf(last) : null });
   }
@@ -483,7 +487,7 @@ const MOVE_WORDS = Object.freeze({
  *  and the remedy, and carries no lane, account or machine of its own: every name in it comes from the arguments. */
 export function unmeasuredMoveNotice(lane, m, tokens) {
   const what = MOVE_WORDS[m.how === 'advance' ? (m.cause ?? 'unknown') : m.how] ?? MOVE_WORDS.unknown;
-  const now = tokens === null ? "the client's own default window" : `the default rule's ${tokens} tokens`;
+  const now = tokens === null ? "the client's own default window" : `${tokens} tokens`;
   return `${lane}'s ${m.class} class moved from ${m.from} to ${m.to} (${what}), and ${m.to} has no measured window `
     + `while ${m.from} had ${m.fromTokens} tokens, so every session on the lane now runs at ${now}; measure ${m.to}, `
     + `then: ccrc models ${lane} set-window ${m.to} <tokens>`;
