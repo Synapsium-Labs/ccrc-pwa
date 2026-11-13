@@ -1,0 +1,70 @@
+{
+  "name": "read-initiatives-by-name",
+  "documentSource": "code",
+  "document": "query InitiativesByName($name: String!) { initiatives(filter: { name: { eq: $name } }, first: 10) { nodes { id name createdAt creator { id } } } }",
+  "variables": {
+    "name": "Capture initiative temp"
+  },
+  "requestBody": "{\"query\":\"query InitiativesByName($name: String!) { initiatives(filter: { name: { eq: $name } }, first: 10) { nodes { id name createdAt creator { id } } } }\",\"variables\":{\"name\":\"Capture initiative temp\"}}",
+  "requestHeaders": [
+    "authorization: <the key, bare, no Bearer>",
+    "content-type: application/json"
+  ],
+  "sentAtMs": null,
+  "receivedAtMs": null,
+  "sentAt": null,
+  "status": 200,
+  "statusLine": null,
+  "headers": [
+    [
+      "content-type",
+      "application/json; charset=utf-8"
+    ],
+    [
+      "x-complexity",
+      "15"
+    ],
+    [
+      "x-ratelimit-complexity-limit",
+      "3000000"
+    ],
+    [
+      "x-ratelimit-complexity-remaining",
+      "2999981"
+    ],
+    [
+      "x-ratelimit-complexity-reset",
+      "1794590004269"
+    ],
+    [
+      "x-ratelimit-requests-limit",
+      "2500"
+    ],
+    [
+      "x-ratelimit-requests-remaining",
+      "2457"
+    ],
+    [
+      "x-ratelimit-requests-reset",
+      "1794590004269"
+    ]
+  ],
+  "body": {
+    "data": {
+      "initiatives": {
+        "nodes": [
+          {
+            "id": "00000000-0008-4000-8000-000000000020",
+            "name": "Capture initiative temp",
+            "createdAt": "2026-11-13T16:13:19.451Z",
+            "creator": {
+              "id": "00000000-0005-4000-8000-000000000001"
+            }
+          }
+        ]
+      }
+    }
+  },
+  "bodyRaw": "{\"data\":{\"initiatives\":{\"nodes\":[{\"id\":\"00000000-0008-4000-8000-000000000020\",\"name\":\"Capture initiative temp\",\"createdAt\":\"2026-11-13T16:13:19.451Z\",\"creator\":{\"id\":\"00000000-0005-4000-8000-000000000001\"}}]}}}\n",
+  "note": "Recorded by the hierarchy capture (FX2, D-8407). The creator is the key's viewer."
+}

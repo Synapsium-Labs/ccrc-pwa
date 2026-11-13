@@ -1,0 +1,77 @@
+{
+  "name": "read-projects-by-name",
+  "documentSource": "code",
+  "document": "query ProjectsByName($name: String!) { projects(filter: { name: { eq: $name } }, first: 10) { nodes { id name createdAt creator { id } teams(first: 20) { nodes { key } } } } }",
+  "variables": {
+    "name": "Capture project temp"
+  },
+  "requestBody": "{\"query\":\"query ProjectsByName($name: String!) { projects(filter: { name: { eq: $name } }, first: 10) { nodes { id name createdAt creator { id } teams(first: 20) { nodes { key } } } } }\",\"variables\":{\"name\":\"Capture project temp\"}}",
+  "requestHeaders": [
+    "authorization: <the key, bare, no Bearer>",
+    "content-type: application/json"
+  ],
+  "sentAtMs": null,
+  "receivedAtMs": null,
+  "sentAt": null,
+  "status": 200,
+  "statusLine": null,
+  "headers": [
+    [
+      "content-type",
+      "application/json; charset=utf-8"
+    ],
+    [
+      "x-complexity",
+      "235"
+    ],
+    [
+      "x-ratelimit-complexity-limit",
+      "3000000"
+    ],
+    [
+      "x-ratelimit-complexity-remaining",
+      "2999746"
+    ],
+    [
+      "x-ratelimit-complexity-reset",
+      "1794590004381"
+    ],
+    [
+      "x-ratelimit-requests-limit",
+      "2500"
+    ],
+    [
+      "x-ratelimit-requests-remaining",
+      "2456"
+    ],
+    [
+      "x-ratelimit-requests-reset",
+      "1794590004381"
+    ]
+  ],
+  "body": {
+    "data": {
+      "projects": {
+        "nodes": [
+          {
+            "id": "00000000-0004-4000-8000-000000000020",
+            "name": "Capture project temp",
+            "createdAt": "2026-11-13T16:13:19.699Z",
+            "creator": {
+              "id": "00000000-0005-4000-8000-000000000001"
+            },
+            "teams": {
+              "nodes": [
+                {
+                  "key": "AAA"
+                }
+              ]
+            }
+          }
+        ]
+      }
+    }
+  },
+  "bodyRaw": "{\"data\":{\"projects\":{\"nodes\":[{\"id\":\"00000000-0004-4000-8000-000000000020\",\"name\":\"Capture project temp\",\"createdAt\":\"2026-11-13T16:13:19.699Z\",\"creator\":{\"id\":\"00000000-0005-4000-8000-000000000001\"},\"teams\":{\"nodes\":[{\"key\":\"AAA\"}]}}]}}}\n",
+  "note": "Recorded by the hierarchy capture (FX2, D-8407). The creator is the key's viewer."
+}
