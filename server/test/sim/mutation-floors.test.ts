@@ -7,6 +7,7 @@ import { expect, it } from 'vitest';
 import { mergeBaseText } from '../mergeBase.js';
 import { COORD_BLOCKED_INVARIANTS, coordBlockedDay, type CoordBlockedModule } from './coordBlockedDay.js';
 import { floorsFallen, rewriteRelativeImports, runMutants, type MutantSet, type SuiteCase } from './mutate.js';
+import { RENEWAL_MUTANT_SETS } from './renewalDeciderSets.js';
 import { simulate } from './run.js';
 import {
   CARD_BLOCK_KEY, CARD_BLOCK_SET, CARD_NEVER_EMPTY_KEY, CARD_NEVER_EMPTY_SET, CARD_ONE_LINE_KEY, CARD_ONE_LINE_SET, CARD_TRIM_KEY,
@@ -48,6 +49,7 @@ const MUTANT_SETS: Record<string, MutantSet<never>> = {
   [CARD_NEVER_EMPTY_KEY]: CARD_NEVER_EMPTY_SET as MutantSet<never>,
   [CARD_ONE_LINE_KEY]: CARD_ONE_LINE_SET as MutantSet<never>,
   [CARD_BLOCK_KEY]: CARD_BLOCK_SET as MutantSet<never>,
+  ...RENEWAL_MUTANT_SETS,
 };
 
 it('rewriteRelativeImports makes ./ and ../ absolute and leaves bare specifiers', () => {
