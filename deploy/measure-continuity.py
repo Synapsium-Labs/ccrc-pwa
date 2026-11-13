@@ -1338,7 +1338,6 @@ S3_NOROOM = re.compile(TS + r" rescuewait (\S+): kind=noroom on \S+ reset=-")
 S3_DISPATCH_FAILED = re.compile(TS + r" dispatch FAILED for (\S+) -> \S+ \(resume\)")
 S3_SWAP_REFUSED = re.compile(TS + r" swap-refused (\S+): .*")
 S3_SWAP_DONE = re.compile(TS + r" swap (\S+): \S+ -> \S+ \(uuid \S+\)")
-S3_MANIFEST_HEAD = re.compile(TS + r" manifest (\S+):")
 
 
 def s3_num(v):
@@ -1361,13 +1360,10 @@ def s3_manifest(lines, ctx):
         if m:
             mid = m.group(2)
             vals = dict(zip(S3_COUNTS, m.groups()[6:]))
+            first_seen.setdefault(mid, i)
             events[mid].append((i, "manifest", {"site": m.group(3), "verdict": m.group(4), "why": m.group(5),
                                                 "wait": m.group(6), "n": {k: s3_num(v) for k, v in vals.items()},
-                                                "first": mid not in first_seen}))
-        hm = S3_MANIFEST_HEAD.match(line)
-        if hm:
-            first_seen.setdefault(hm.group(2), i)
-            continue
+                                                "first": first_seen[mid] == i}))
         m = S3_NOROOM.fullmatch(line)
         if m:
             if in_window(t, ctx):

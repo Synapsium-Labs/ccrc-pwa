@@ -165,6 +165,7 @@ describe('stage 3 reads the manifest lines', () => {
 
   it("first_manifests: a restart whose manifest is its id's first manifest line is counted there, and a later one of the same id is not", () => {
     const lines = [
+      '2026-11-05 09:59:00 manifest a: site=swap garbage',                                      // a malformed line is not the id's first
       EL('2026-11-05 10:00:00', 'a', 'swap-auto-rescue'), ML('2026-11-05 10:00:01', 'a', 'swap', tokens('listed', '-', '-', { items: 1, 'in-flight': 1 })),
       EL('2026-11-05 10:10:00', 'a', 'swap-auto-rescue'), ML('2026-11-05 10:10:01', 'a', 'swap', tokens('listed', '-', '-', { items: 2, holed: 2 })),
       EL('2026-11-05 10:20:00', 'b', 'oom'), ML('2026-11-05 10:20:01', 'b', 'revival', tokens('none', '-', '-')),
@@ -173,6 +174,18 @@ describe('stage 3 reads the manifest lines', () => {
     expect(r.first_manifests).toEqual({ restarts: 2, restarts_with_items: 1, items_by_class: zeros({ 'in-flight': 1 }) });
     expect(r.restarts).toBe(3);
     expect(r.items_by_class).toEqual(zeros({ 'in-flight': 1, holed: 2 }));
+  });
+
+  it('an ended line with both dispatch FAILED and swap-refused is not_restarted, never refused_restart or never-written', () => {
+    const log = write([
+      EL('2026-11-05 10:00:00', 'a', 'swap-auto-rescue'),
+      '2026-11-05 10:00:01 dispatch FAILED for a -> claude-b (resume)',
+      '2026-11-05 10:00:02 swap-refused a: claude -> claude-b (carry failed)',
+    ]);
+    const r = mrun(['--swap-log', log, '--since', '2026-11-05'], UTC);
+    expect(r.not_restarted).toBe(1);
+    expect(r.refused_restart).toBe(0);
+    expect(r.never_written_by_cause).toEqual({});
   });
 
   it("a restart with items whose id's next manifest has resumed=1 counts in restarts_with_items_later_resumed", () => {

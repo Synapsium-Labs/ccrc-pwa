@@ -489,12 +489,10 @@ manifest in shadow, and these calls belong to it:
   timer (#317, a dry run) holds it too (`ccd/lib/carry-dedupe.py`, `flock(LOCK_EX | LOCK_NB)`), so a manifest written in
   that window is `unmeasured`, and §9 counts it. #317 is not changed.
   *(As built, wave 6b, 2026-11-12: call I amended by D-8362, ruled by the coordinator and approved with the 6b plan.)*
-  The manifest takes its own box-wide slot, `$REG/.inflight.lock`, non-blocking, one manifest at a time on the box, and
-  never `$REG/.carry.lock` (`ccd/ccd#_inflight_slot_take`), so the dedupe no longer makes a manifest `unmeasured`, and a
-  busy manifest means another manifest held that slot. Why: the carry slot is a box-wide budget for heavy reads and writes,
-  not a lock between sessions; a carry touches one session's sidecars, the swap's manifest follows its own session's carry
-  in the same process, and the limit-resume and revival carry nothing; the manifest is bounded on its own
-  (`INFLIGHT_SCAN_BUDGET`, priced first, and `_plat_timeout`). So a shadow manifest never refuses a carry.
+  The manifest takes its own box-wide slot, `$REG/.inflight.lock`, non-blocking, one at a time, never `$REG/.carry.lock`
+  (`ccd/ccd#_inflight_slot_take`), so the dedupe never makes a manifest `unmeasured`; busy means another manifest held it.
+  Why: the carry slot is a box-wide budget for heavy reads, not a lock between sessions, and the manifest is bounded on its
+  own (`INFLIGHT_SCAN_BUDGET`, `_plat_timeout`). So a shadow manifest never refuses a carry, and no existing act changes.
 - **Call H (D-8331).** A session with no Claude Code transcript answers `not-applicable` in the manifest, the prompt and
   the session-start subject (§6), distinct from `never-written`, `none` and `unmeasured`. It is keyed on the measured
   fact (the session's config root holds no Claude Code transcript for its uuid), not on the exec kind: a codex lane
