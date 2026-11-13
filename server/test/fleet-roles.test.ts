@@ -14,13 +14,17 @@ describe('FLEET_ROLES (Overlord spec §3.3.9, C49)', () => {
   });
   it('every column that waits for a later piece is null on every row', () => {
     for (const r of FLEET_ROLE_NAMES) {
-      const { launchProfile, cardRenderer, compactInstructions, probeSet } = FLEET_ROLES[r];
-      expect([launchProfile, cardRenderer, compactInstructions, probeSet]).toEqual([null, null, null, null]);
+      const { launchProfile, compactInstructions, probeSet } = FLEET_ROLES[r];
+      expect([launchProfile, compactInstructions, probeSet]).toEqual([null, null, null]);
     }
+  });
+  it('the card renderer: one per role, auditor and replay take plain (C51)', () => {
+    expect(FLEET_ROLE_NAMES.map((r) => FLEET_ROLES[r].cardRenderer))
+      .toEqual(['overlord', 'plain', 'plain', 'worker', 'reviewer', 'coordinator', 'plain']);
   });
   it('a row must carry every column (a compile-time pin, read by the test typecheck)', () => {
     // @ts-expect-error a row with no sessionRole is not a FleetRoleRow
-    const partial: FleetRoleRow = { longLived: false, launchProfile: null, cardRenderer: null, compactInstructions: null, probeSet: null };
+    const partial: FleetRoleRow = { longLived: false, launchProfile: null, cardRenderer: 'plain', compactInstructions: null, probeSet: null };
     expect(partial.longLived).toBe(false);
   });
   it('isFleetRole accepts exactly the table keys', () => {
