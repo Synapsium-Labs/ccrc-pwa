@@ -149,8 +149,28 @@ const ANIMATION_WORDS = new Set([
   'none', 'infinite', 'forwards', 'backwards', 'both', 'normal', 'reverse', 'alternate', 'alternate-reverse',
   'running', 'paused', 'linear', 'ease', 'ease-in', 'ease-out', 'ease-in-out', 'step-start', 'step-end',
 ]);
-const namesIn = (entry) => splitTop(entry.trim(), ' ').map((t) => t.trim())
-  .filter((t) => /^-?[a-z_][\w-]*$/i.test(t) && !ANIMATION_WORDS.has(t));
+const NUMBER = /^[+-]?(?:\d+\.?\d*|\.\d+)$/;
+const TIME = /^[+-]?(?:\d+\.?\d*|\.\d+)(?:s|ms)$/i;
+/** `steps(<int>[, <jump>])` as a WHOLE token, in any case: `xsteps(1)` and a name holding `steps(` are not one. */
+const STEPS_TOKEN = /^steps\(\s*\d+\s*(?:,\s*(?:jump-start|jump-end|jump-none|jump-both|start|end)\s*)?\)$/i;
+const KEYFRAME_NAME = /^-?[a-z_][\w-]*$/i;
+
+/** The tokens of an `animation` entry, each judged: a number, a time, a keyword, a stepped timing function, or a
+ *  keyframe name (returned, to be checked against what the sheet defines). Anything else (a quoted, escaped or
+ *  `var()` name, a `cubic-bezier(…)`, a stray `steps(` substring) is refused. Returns `{ names, stepped }`. */
+function readAnimationEntry(entry, where) {
+  const names = [];
+  let stepped = false;
+  for (const raw of splitTop(entry.trim(), ' ')) {
+    const t = raw.trim();
+    if (!t) continue;
+    if (STEPS_TOKEN.test(t)) stepped = true;
+    else if (NUMBER.test(t) || TIME.test(t) || ANIMATION_WORDS.has(t.toLowerCase())) continue;
+    else if (KEYFRAME_NAME.test(t)) names.push(t);
+    else refuse('animation', `"${t}" in ${where} is not a number, a time, a keyword, steps(…) or a plain keyframe name`);
+  }
+  return { names, stepped };
+}
 
 /** One declaration block: no nested block, no `!` (an `!important` animation would beat the reduced-motion and
  *  data-still rules), every property on the allow-list, and every `animation` entry stepped. Returns the keyframe
@@ -167,8 +187,9 @@ function checkDecls(body, allowed, where) {
     if (prop === 'animation') {
       for (const entry of splitTop(decl.slice(colon + 1), ',')) {
         if (entry.trim() === 'none') continue;
-        if (!entry.includes('steps(')) refuse('animation', `"${entry.trim()}" in ${where} is not stepped`);
-        names.push(...namesIn(entry));
+        const read = readAnimationEntry(entry, where);
+        if (!read.stepped) refuse('animation', `"${entry.trim()}" in ${where} is not stepped`);
+        names.push(...read.names);
       }
     }
   }
@@ -187,6 +208,7 @@ function checkDecls(body, allowed, where) {
 export function checkSheet(css, allow) {
   const classProps = new Set(allow.classProps);
   const keyframeProps = new Set(allow.keyframeProps);
+  const keyframeNames = allow.keyframeNames ? new Set(allow.keyframeNames) : null;
   const defined = new Set();
   const played = [];
   for (const { prelude, body } of cssBlocks(css)) {
@@ -202,11 +224,11 @@ export function checkSheet(css, allow) {
     const kf = prelude.match(/^@keyframes\s+([\w-]+)$/);
     if (kf) {
       defined.add(kf[1]);
-      if (allow.keyframeNames && !new Set(allow.keyframeNames).has(kf[1])) {
-        refuse('keyframes', `${kf[1]} is outside (${[...allow.keyframeNames].join(', ')})`);
+      if (keyframeNames && !keyframeNames.has(kf[1])) {
+        refuse('keyframes', `${kf[1]} is outside (${[...keyframeNames].join(', ')})`);
       }
       for (const step of cssBlocks(body)) {
-        const stepOk = splitTop(step.prelude, ',').every((p) => /^(?:from|to|\d+(?:\.\d+)?%)$/.test(p.trim()));
+        const stepOk = splitTop(step.prelude, ',').every((p) => /^(?:from|to|(?:\d+\.?\d*|\.\d+)%)$/i.test(p.trim()));
         if (!stepOk) refuse('keyframe step', `"${step.prelude}" in @keyframes ${kf[1]} is not from, to or N%`);
         played.push(...checkDecls(step.body, keyframeProps, `@keyframes ${kf[1]} ${step.prelude}`));
       }
@@ -625,7 +647,7 @@ function readSvgDir() {
   return files;
 }
 
-if (process.argv[1] && realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url))) {
+if (process.argv[1] && existsSync(process.argv[1]) && realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url))) {
   const { art, css } = compileAll(readSvgDir());
   const have = (p) => (existsSync(p) ? readFileSync(p, 'utf8') : null);
   const same = have(ART_TS) === art && have(CSS) === css;

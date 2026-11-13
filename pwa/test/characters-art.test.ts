@@ -285,6 +285,14 @@ describe('the generator refuses what is outside the measured vocabulary', () => 
     ['a nested block inside a keyframe step', base.replace('</style>', '@keyframes md-nk{0%{opacity:0;&{filter:blur(1px)}}}</style>'), /refused nested block/],
     ['a keyframe step prelude that swallowed a declaration', base.replace('</style>', '@keyframes md-k{filter:blur(1px);0%{opacity:0}}</style>'), /refused keyframe step/],
     ['an animation naming a keyframe the sheet does not define', base.replace('</style>', '.md-zz{animation:fade-in 1s steps(1)}</style>'), /refused animation.*fade-in/],
+    ['an animation naming a keyframe in quotes', base.replace('</style>', '.md-zz{animation:"md-up2" 1s steps(1)}</style>'), /refused animation.*"md-up2".*not a number/],
+    ['an animation naming a keyframe with an escape', base.replace('</style>', '.md-zz{animation:md\\-up2 1s steps(1)}</style>'), /refused animation.*not a number/],
+    ['an animation reading its name from var()', base.replace('</style>', '.md-zz{animation:var(--k) 1s steps(1)}</style>'), /refused animation.*var\(/],
+    ['an animation reading its time from var()', base.replace('</style>', '.md-zz{animation:md-up2 var(--t) steps(1)}</style>'), /refused animation.*var\(/],
+    ['a timing function that only contains steps(', base.replace('</style>', '.md-zz{animation:md-up2 1s xsteps(1)}</style>'), /refused animation.*xsteps\(1\)/],
+    ['a keyframe name that holds steps( and no timing', base.replace('</style>', '.md-zz{animation:md-up2 1s a-steps(1)}</style>'), /refused animation.*a-steps\(1\)/],
+    ['a steps( with a count that is not an integer', base.replace('</style>', '.md-zz{animation:md-up2 1s steps(1.5)}</style>'), /refused animation.*steps\(1\.5\)/],
+    ['an easing function beside a stepped one', base.replace('</style>', '.md-zz{animation:md-up2 1s steps(1) cubic-bezier(0,0,1,1)}</style>'), /refused animation.*cubic-bezier/],
     ['a style rule of two classes', base.replace('</style>', '.a .b{opacity:0}</style>'), /refused inline style/],
     ['a style rule on an element', base.replace('</style>', 'div{opacity:0}</style>'), /refused inline style/],
     ['a style rule on a pseudo-class', base.replace('</style>', '.a:hover{opacity:0}</style>'), /refused inline style/],
@@ -297,6 +305,23 @@ describe('the generator refuses what is outside the measured vocabulary', () => 
     expect(text).not.toBe(base);
     expect(() => parseArt(text)).toThrow(word);
   });
+  it('accepts what the tightened check must still allow: a STEPS( in capitals, a jump term, a .5% stop', () => {
+    const ok = base.replace('</style>', '.md-zz{animation:md-up2 .5s STEPS(2, Jump-End) 2 forwards}@keyframes md-fr{.5%{opacity:0}}</style>');
+    expect(ok).not.toBe(base);
+    expect(() => parseArt(ok)).not.toThrow();
+  });
+  it.each([['ui/design/make-characters.mjs'], ['pwa/design/icon-gen.mjs']])(
+    '%s imports under a virtual argv[1] without throwing, and writes nothing',
+    (rel) => {
+      // `realpathSync` throws on a path that does not exist (`node -e`, a runner passing a virtual one).
+      const url = new URL(`file://${path.join(REPO, rel)}`).href;
+      const code = `process.argv[1] = '/nowhere/virtual-entry.mjs'; await import(${JSON.stringify(url)}); console.log('imported');`;
+      const run = spawnSync('node', ['--input-type=module', '-e', code], { encoding: 'utf8' });
+      expect(run.stderr).toBe('');
+      expect(run.stdout.trim()).toBe('imported');
+      expect(run.status).toBe(0);
+    },
+  );
   it('refuses a drawn duration on a part that no animation paces', () => {
     // A duration is emitted as its part's shorthand (`.chr-<part>.chr-dur-<ms>`, D-5930's one-place retiming), so a
     // duration with no animated class beside it has nothing to pace, and the generator refuses it.
