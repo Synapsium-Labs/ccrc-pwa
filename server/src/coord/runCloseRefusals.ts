@@ -23,7 +23,7 @@ import { ITEM_TITLE_MAX, closeRefusedAction, isCloseRefusedAction, itemRunName, 
 import type { CloseOutcome } from './close.js';
 import type { WatcherCoordPort } from './ports.js';
 import {
-  REFUSAL_REASONS, refusalRoute, type LaneRun, type RefusalReason, type RunCloseRow,
+  REFUSAL_REASONS, refusalRoute, type DoorFacts, type LaneRun, type RefusalReason, type RunCloseRow,
 } from './runClose.js';
 
 const mailBytes = (s: string): number => Buffer.byteLength(s, 'utf8');
@@ -56,13 +56,15 @@ export function closeRefusedAskMail(
 }
 
 /** One close an armed lane refused, with who owns the run. `lives` is true for an alive or asleep claimant and false for a gone one
- *  (or none); a claimant the pass could not measure is never routed. */
+ *  (or none); a claimant the pass could not measure is never routed. `held` (D-8558) is false when the registry holds no row for
+ *  the claimant (a session forgotten, `cause: 'absent'`) or there is no claimant: the item then offers no door to it. */
 export interface RefusedClose {
   readonly run: LaneRun;
   readonly row: RunCloseRow | null;
   readonly reason: RefusalReason;
   readonly claimant: string | null;
   readonly lives: boolean;
+  readonly held: boolean;
 }
 
 export interface RefusalDeps {
@@ -109,7 +111,8 @@ const WHY: Readonly<Record<RefusalReason, string>> = {
 export const CLOSE_REFUSED_HOW: readonly string[] = ['Read why ccrc did not close it.', 'Take the control on this row.'];
 
 /** The line a refused-close item ends in, as an end request's does: who it reached the operator through. */
-export const closeRefusedOrigin = (lives: boolean): string => (lives ? 'Its coordinator did not answer' : 'Its coordinator is gone');
+export const closeRefusedOrigin = (lives: boolean, held = true): string =>
+  (lives ? 'Its coordinator did not answer' : held ? 'Its coordinator is gone' : 'Its coordinator is gone, and its session no longer exists');
 
 /** The board's information line for a run the arm cannot move (§8.2 item 5), as the feed row says it once. */
 function informWords(runId: number, ab: Extract<CloseOutcome, { ok: false }> | null, reason: RefusalReason): { title: string; body: string } {
@@ -129,7 +132,7 @@ function itemInput(coord: WatcherCoordPort, r: RefusedClose, doors: ItemDoors, h
   return {
     program: read.run.program, runId: r.run.id, raisedBy: 'ccrc', kind: 'do' as const,
     title: [...`${TITLE[r.reason]}: ${itemRunName(read.run)}`].slice(0, ITEM_TITLE_MAX).join(''),
-    why: `${WHY[r.reason]}\n${closeRefusedOrigin(r.lives)}`, how: [...CLOSE_REFUSED_HOW], options: null,
+    why: `${WHY[r.reason]}\n${closeRefusedOrigin(r.lives, r.held || r.claimant === null)}`, how: [...CLOSE_REFUSED_HOW], options: null,
     // `soon` with no label: nothing pushes, at raise or later (A20).
     neededBy: 'soon' as const, soonLabel: null, secretSlot: null, action: closeRefusedAction(r.run.id, doors), heldUntil,
   };
@@ -141,6 +144,14 @@ const nameOf = (coord: WatcherCoordPort, runId: number): string => {
 };
 
 const sameDoors = (a: readonly string[], b: readonly string[]): boolean => a.length === b.length && a.every((d, i) => d === b[i]);
+
+/** The facts `refusedCloseDoors` decides a gone claimant's doors from (D-8558), read inside the lane's hold: whether the registry
+ *  holds the claimant, whether the programme can still take a run, and whether this run is its last one not closed. */
+const doorFactsOf = (coord: WatcherCoordPort, r: RefusedClose): DoorFacts => ({
+  claimantHeld: r.held,
+  programmeLive: coord.programmeLive(r.run.program),
+  lastLiveRun: coord.programOpenRunCount(r.run.program) === 1,
+});
 
 /** Route every refusal once, then settle the items whose reason has gone. SYNCHRONOUS past the arm's read, and called inside the
  *  lane's coordination hold. `current` is every refusal this pass measured, whether or not it acts. Never throws past a
@@ -162,12 +173,18 @@ export function routeRefusals(
     keep.add(`${row}\u0000${key}`);
     try {
       const ab = deps.abandonRefusal(r.run.id);
-      const route = refusalRoute(r.reason, r.lives ? 'lives' : 'gone', ab === null);
+      const route = refusalRoute(r.reason, r.lives ? 'lives' : 'gone', ab === null, doorFactsOf(coord, r));
       if (route.kind === 'item' || route.kind === 'tell-and-hold') doorsNow.set(r.run.id, route.doors);
-      if (coord.runCloseAnchors(row).has(key)) { coord.setRunCloseAnchor(row, key, { firstAt: coord.runCloseAnchors(row).get(key)!.firstAt, lastAt: now }); continue; }
+      const mine = coord.openCloseRefusedItems().filter((i) => i.runId === r.run.id && isCloseRefusedAction(i.action));
+      const open = (route.kind === 'item' || route.kind === 'tell-and-hold')
+        && mine.some((i) => isCloseRefusedAction(i.action) && sameDoors(i.action.doors, route.doors));
+      // D-8558: an open item whose doors the facts have changed (the claimant forgotten, the programme's other runs closed) is
+      // replaced: the settle below closes it and this raises the new one. A withdrawn or answered item is not open, so a
+      // refusal that lasts still acts once.
+      const redraw = !open && mine.length > 0 && (route.kind === 'item' || route.kind === 'tell-and-hold');
+      if (coord.runCloseAnchors(row).has(key) && !redraw) { coord.setRunCloseAnchor(row, key, { firstAt: coord.runCloseAnchors(row).get(key)!.firstAt, lastAt: now }); continue; }
       let toldInItem = false;
       if (route.kind === 'item' || route.kind === 'tell-and-hold') {
-        const open = coord.openCloseRefusedItems().some((i) => i.runId === r.run.id && isCloseRefusedAction(i.action) && sameDoors(i.action.doors, route.doors));
         const input = open ? null : itemInput(coord, r, route.doors, route.kind === 'tell-and-hold' ? askNotifyAt(now) : null);
         if (input !== null) {
           const mailTo = route.kind === 'tell-and-hold' ? r.claimant : null;
@@ -192,7 +209,8 @@ export function routeRefusals(
           'record-only', { degraded: 'run-close information, feed archive degraded' });
         informed.push(r.run.id);
       }
-      coord.setRunCloseAnchor(row, key, { firstAt: now, lastAt: now });
+      const was = coord.runCloseAnchors(row).get(key);
+      coord.setRunCloseAnchor(row, key, { firstAt: was?.firstAt ?? now, lastAt: now });
     } catch (err) {
       console.warn(`ccrc-server: runClose: the refusal of run ${r.run.id} could not be routed (${err instanceof Error ? err.message : String(err)}) — asked again next pass`);
     }

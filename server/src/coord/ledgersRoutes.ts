@@ -30,9 +30,9 @@ import type { GateDecision } from '../auth/gate.js';
 import { MAIL_TOKEN_HEADER, checkMailToken, type BoxTokenHolder } from './token.js';
 import { LEDGER_ROUTE_REFUSALS, type RouteRefusal } from '../../../shared/refusal.js';
 import {
-  ABANDON_REFUSED_PREFIX, ABANDON_REQUESTED_PREFIX, ANSWER_MAX, ITEM_KINDS, ITEM_OPTIONS_MAX, ITEM_STEPS_MAX, ITEM_TEXT_MAX, ITEM_TITLE_MAX, NEEDED_BY_LEVELS, RECOMMEND_WHY_MAX, SECRET_VALUE_MAX,
+  ABANDON_REQUESTED_PREFIX, ANSWER_MAX, ITEM_KINDS, ITEM_OPTIONS_MAX, ITEM_STEPS_MAX, ITEM_TEXT_MAX, ITEM_TITLE_MAX, NEEDED_BY_LEVELS, RECOMMEND_WHY_MAX, SECRET_VALUE_MAX,
   SOON_LABEL_MAX,
-  actAbandons, doneWhenOf, earlierTickBlocks, isCloseRefusedAction, isEndRunAction, isReleaseReviewAction, isOneLine, isSecretValue, isSlotSlug, isSpecPath, itemIsStale,
+  actAbandons, doneWhenOf, earlierTickBlocks, isCloseRefusedAction, parseItemActBody, refusedCloseDetail, isEndRunAction, isReleaseReviewAction, isOneLine, isSecretValue, isSlotSlug, isSpecPath, itemIsStale,
   nextItemState, outsideDocLink, secretAnswer, secretTailOf,
   type CoordinatorPresence, type GoalsRead, type ItemKind, type ItemView, type NeededBy, type SecretRemoveAnswer,
   type StoredSecret, type StoredSecretsAnswer, type WaitingView,
@@ -45,6 +45,8 @@ import { TERMINAL_RUN_STATES } from '../../../shared/api.js';
 import { endRequestEndedMail, itemMailSubject, tickMail } from './ledgersMail.js';
 import { callViewOf } from './coordCalls.js';
 import { insertSystemMailTx } from './rundefsTx.js';
+import type { PlanStorePort } from './planStore.js';
+import type { PlanEndOutcome } from '../../../shared/plan.js';
 import { credentialBodyRoute, noStoreRoute, type AccountGate } from '../accounts/gate.js';
 import {
   OperatorSecretNameCollides, OperatorSecretStoredUnrecorded, operatorSecretLaneId, operatorSlotNamesValid, readOperatorSecretMeta, readStoredSecrets,
@@ -567,6 +569,8 @@ export interface LedgerOperatorDeps {
   mailToken: () => string | BoxTokenHolder | null;
   /** How long an act waits for the slot's previous act before it answers `slot-busy` (`SLOT_WAIT_MS`; a test passes its own). */
   slotWaitMs?: number;
+  /** D-8558: the plan tables' port (`Deps.plan`), whose `closePlan` the operator's programme end calls. Absent, no plan is closed. */
+  plan?: PlanStorePort;
 }
 
 /** The tick's words to the operator, and the reasons behind the two programme refusals. */
@@ -589,6 +593,20 @@ const actingItems = new WeakMap<CoordStore, Set<number>>();
 const isActing = (coord: CoordStore, id: number): boolean => actingItems.get(coord)?.has(id) === true;
 const ACT_IN_FLIGHT_DETAIL = (id: number): string => `item ${id} is being acted on: the operator's Abandon run is in progress`;
 const RUN_ABANDONED_NOTE = 'The operator abandoned the run.';
+
+/** D-8558: the operator ends a programme whose last run its act just closed, through the two writers a programme's end already
+ *  has: `programs.state` (the close's own retirement, D-51, which an abandon left `abandoned`) and the plan's close (`closePlan`,
+ *  the plan store's one writer), so no run opens under it again. The reason stays on the run's close detail: the plan's why is
+ *  synced to the tracker, and an operator's words are not checked for that here. False when a run of the programme is open. */
+function endProgrammeByOperator(
+  coord: CoordStore, plan: PlanStorePort | undefined, program: string, outcome: PlanEndOutcome, now: number,
+): boolean {
+  if (coord.programOpenRunCount(program) !== 0) return false;
+  coord.setProgramState(program, outcome);
+  // Without the plan port (a test, a script) the plan routes answer `unavailable`, and there is no plan here to close either.
+  if (plan !== undefined && plan.planEndOf(program) === null) plan.closePlan(program, outcome, null, now);
+  return true;
+}
 
 /** Why an operator's `act` or `decline` cannot take an item, or null: it must be open (`nextItemState`'s word), not held (the
  *  operator never saw a held item), and carry an action that may abandon (`act`: `end-run`, or `close-refused` with an abandoning
@@ -737,8 +755,10 @@ export function registerLedgerOperatorRoutes(app: FastifyInstance, deps: LedgerO
    * `POST /api/items/:id/act` (D-8076; spec 2026-11-04 §10, "The act"): the operator's Abandon run on an end-request item, and Abandon or Abandon anyway on a refused-close item (Task 27,
    * D-8077; `endRunItemRefusal` says which items may), and Release on a release-review item (D-8293), which abandons nothing.
    * Decline stays an end request's alone.
-   * SESSION ONLY and BODY-LESS: no box token, and no field of the request is read, so a caller cannot name another run or an
-   * archive (the abandon route's own rule, D-280). The whole act runs inside `withAbandon`'s coordMutex hold, in the spec's
+   * SESSION ONLY: no box token. The body names no run and no archive (the abandon route's own rule, D-280): on a refused-close
+   * item it may carry the operator's `reason`, stored in the run's close detail after the item, and `programme` (`done` or
+   * `abandoned`) when the item offers `end-programme`, which ends the programme once this, its last open run, is closed
+   * (D-8558; `parseItemActBody` is its one reader). Any other item takes no body. The whole act runs inside `withAbandon`'s coordMutex hold, in the spec's
    * order: read the item (open, not held, carrying an action that may abandon); run the abandon arm as the operator
    * with `abandon:requested:<item>` (`abandon:refused:<item>` on a refused-close item, which no session asked for); move the item `act` (open to done); and a run that had already closed closes the item
    * with a note and is success. The abandon's fleet act runs before its commit, so the item's move is a second step: a death
@@ -774,6 +794,9 @@ export function registerLedgerOperatorRoutes(app: FastifyInstance, deps: LedgerO
       const now = deps.now();
       const refusal = endRunItemRefusal(item, 'act', now);
       if (refusal !== null) return refuseRoute(reply, refusal.why, { detail: refusal.detail });
+      // D-8558: a refused close's body, the operator's reason and the programme's end; an absent body is the act as before.
+      const body = parseItemActBody(req.body ?? undefined, item.action);
+      if (!body.ok) return bad(reply, body.detail);
       const runId = (item.action as { runId: number }).runId;
       const read = coord.run(runId);
       if (read.ok && read.run !== null && (TERMINAL_RUN_STATES as readonly string[]).includes(read.run.state)) {
@@ -784,12 +807,17 @@ export function registerLedgerOperatorRoutes(app: FastifyInstance, deps: LedgerO
         // an abandon nor a sibling's hold on the workspace.
         return reply.code(200).send({ ok: true, id: runId, state: read.run.state, released: false, childReclaim: 'not-queued', alreadyClosed: true });
       }
+      const program = read.ok && read.run !== null ? read.run.program : item.program;
+      // Ending the programme needs this run to be its last one open, checked inside the hold, before anything is ended.
+      if (body.programme !== null && coord.programOpenRunCount(program) !== 1) {
+        return refuseRoute(reply, 'plan-runs-open', { detail: `another run of programme ${program} is not finished: close this run alone, or close that one first` });
+      }
       // Held from the check above to the move below: a withdraw or a decline in between is refused (`isActing`).
       const holds = actingItems.get(coord) ?? new Set<number>();
       actingItems.set(coord, holds);
       holds.add(id);
       try {
-        const outcome = await abandon(runId, `${isCloseRefusedAction(item.action) ? ABANDON_REFUSED_PREFIX : ABANDON_REQUESTED_PREFIX}${id}`);
+        const outcome = await abandon(runId, isCloseRefusedAction(item.action) ? refusedCloseDetail(id, body.reason) : `${ABANDON_REQUESTED_PREFIX}${id}`);
         if (!outcome.ok) return deps.sendClose(reply, outcome);
         let moved = coord.moveItem(id, 'act', 'operator', {}, deps.now(), { programmeHasOpenRun: true });
         // The run is abandoned either way. A refused move is mended with a settle; an item the mender already closed is fine;
@@ -800,6 +828,10 @@ export function registerLedgerOperatorRoutes(app: FastifyInstance, deps: LedgerO
             deps.bus.emit('waiting');
             return refuseRoute(reply, 'write-failed', { detail: `run ${runId} was abandoned, but item ${id} could not be closed (${moved.why}); it settles on the next read` });
           }
+        }
+        if (body.programme !== null && !endProgrammeByOperator(coord, deps.plan, program, body.programme, deps.now())) {
+          deps.bus.emit('waiting');
+          return refuseRoute(reply, 'write-failed', { detail: `run ${runId} was closed, but programme ${program} still has an open run, so it was not ended` });
         }
         deps.bus.emit('waiting');
         return deps.sendClose(reply, outcome);
