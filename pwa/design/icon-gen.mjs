@@ -1,31 +1,56 @@
 #!/usr/bin/env node
-// ccrc icon generator — "Phosphor & Ink" (design/DIRECTION.md).
+// ccrc icon generator: the Orb, the brand brief's mark (docs/design/overlord/).
 //
-// The app icon is the direction's one piece of terminal furniture: the ❯
-// cursor, drawn in phosphor green with a soft breathing-glow bloom, on the
-// dark green-cast graphite of --bg-page. No scanlines, no bezels — glow means
-// life, and the icon is the app at rest, lamp lit.
+// Every icon draws the Orb's Neutral still (`orb-neutral.svg`, read through the
+// design system's own parser, `ui/design/make-characters.mjs`) as whole-pixel
+// cells, at a whole multiple per icon, so the pixels stay the grid's. Colours
+// are never typed here: each tone's value is read from `tokens.css`'s Phosphor
+// block (`:root`), by the token name `characters.css` gives that tone. The
+// brief's shading (the page colour at 0.22, 0.3 or 0.35) is composited once over
+// the colour that icon draws beneath the cell, so the icons keep the drawn rim.
 //
-// Zero dependencies: the chevron is rendered geometrically (distance-to-
-// segment with round caps + gaussian bloom) into an RGBA buffer and written
-// as a PNG by hand (zlib deflate + CRC32). Regenerate with:
+// Zero dependencies: the PNGs are written by hand (zlib deflate + CRC32).
+// Regenerate with:
 //
 //   node design/icon-gen.mjs
 //
 // Outputs (public/icons/):
-//   icon-192.png / icon-512.png            purpose "any"
-//   icon-maskable-192.png / -512.png       purpose "maskable" (glyph inside
-//                                          the 40%-radius safe zone)
-//   apple-touch-icon.png                   180×180, opaque (iOS home screen)
+//   icon-192.png / icon-512.png            purpose "any": the Orb on a rounded
+//                                          page-colour square, corners transparent
+//   icon-maskable-192.png / -512.png       purpose "maskable": the accent colour
+//                                          full bleed, the Orb's body and crown
+//                                          drawn in the page colour, every mark
+//                                          pixel inside the 40%-radius safe zone
+//   apple-touch-icon.png                   180x180, opaque (iOS rounds it)
+//   favicon-32.png                         the eye alone, 1x, opaque
 import { deflateSync } from 'node:zlib';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { crop, parseArt, stillGrid } from '../../ui/design/make-characters.mjs';
 
-// — tokens (values mirror src/styles/tokens.css; keep in sync by hand) —
-const BG = [0x0b, 0x0d, 0x0c]; // --bg-page (dark)
-const PHOSPHOR = [0x45, 0xd6, 0x7e]; // --accent / --status-busy
-const BLOOM = [0x45, 0xd6, 0x7e]; // glow is the same phosphor, low alpha
+const HERE = path.dirname(fileURLToPath(import.meta.url));
+const REPO = path.join(HERE, '..', '..');
+
+// — tones, read from the stylesheets —
+
+const tokensCss = readFileSync(path.join(REPO, 'ui', 'src', 'styles', 'tokens.css'), 'utf8');
+const rootAt = tokensCss.indexOf(':root {');
+const phosphor = tokensCss.slice(rootAt, tokensCss.indexOf('\n}', rootAt));
+function token(name) {
+  const m = new RegExp(`${name}:\\s*#([0-9A-Fa-f]{6})`).exec(phosphor);
+  if (!m) throw new Error(`icon-gen: no ${name} in tokens.css's :root`);
+  const n = parseInt(m[1], 16);
+  return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+}
+const charactersCss = readFileSync(path.join(REPO, 'ui', 'src', 'characters', 'characters.css'), 'utf8');
+function toneValue(tone) {
+  const m = new RegExp(`\\.chr-t-${tone}\\{fill:var\\((--[a-z-]+)\\)\\}`).exec(charactersCss);
+  if (!m) throw new Error(`icon-gen: no tone ${tone} in characters.css`);
+  return token(m[1]);
+}
+const PAGE = token('--bg-page');
+const ACCENT = token('--accent');
 
 // — PNG plumbing —
 
@@ -70,79 +95,71 @@ function pngFromRgba(size, rgba) {
   ]);
 }
 
-// — geometry —
+// — drawing —
 
-function distToSegment(px, py, ax, ay, bx, by) {
-  const abx = bx - ax;
-  const aby = by - ay;
-  const t = Math.max(0, Math.min(1, ((px - ax) * abx + (py - ay) * aby) / (abx * abx + aby * aby)));
-  const dx = px - (ax + t * abx);
-  const dy = py - (ay + t * aby);
-  return Math.hypot(dx, dy);
-}
+const GRID = stillGrid(
+  parseArt(readFileSync(path.join(REPO, 'docs', 'design', 'overlord', 'svg', 'orb-neutral.svg'), 'utf8')),
+);
 
-/** Render the ❯ at `scale` (glyph height as a fraction of the icon side). */
-function renderIcon(size, scale) {
-  const G = size * scale; // glyph height
-  const cx = size / 2 - G * 0.03; // slight left shift: a chevron's optical center leans apex-ward
-  const cy = size / 2;
-  const halfH = G / 2;
-  const halfW = G * 0.3;
-  const r = G * 0.13; // stroke radius (stroke ≈ 26% of glyph height)
-  // two strokes meeting at the apex, endpoints inset so round caps stay in the box
-  const top = [cx - halfW, cy - halfH + r];
-  const apex = [cx + halfW, cy];
-  const bot = [cx - halfW, cy + halfH - r];
-  const sigma1 = G * 0.11; // tight bloom
-  const sigma2 = G * 0.28; // wide faint halo (the 3-layer --glow-busy, flattened)
+/** `top` at `alpha` over `base`, rounded once. */
+const composite = (top, alpha, base) => top.map((c, i) => Math.round(c * alpha + base[i] * (1 - alpha)));
 
+/**
+ * One icon. `window` crops the grid (x, y, w, h in cells); `scale` is pixels per cell; `ground` is the colour the
+ * mark sits on; `maskable` draws the body and crown in the page colour; `radius` rounds the square (corners transparent).
+ */
+function renderIcon({ size, scale, window = [0, 0, 32, 32], ground, maskable = false, radius = 0 }) {
+  const [wx, wy, ww, wh] = window;
+  const cells = crop(GRID, wx, wy, ww, wh);
+  const ox = Math.floor((size - ww * scale) / 2);
+  const oy = Math.floor((size - wh * scale) / 2);
   const rgba = Buffer.alloc(size * size * 4);
+  const put = (x, y, c, a = 255) => {
+    const i = (y * size + x) * 4;
+    rgba[i] = c[0]; rgba[i + 1] = c[1]; rgba[i + 2] = c[2]; rgba[i + 3] = a;
+  };
   for (let y = 0; y < size; y++) {
     for (let x = 0; x < size; x++) {
-      const px = x + 0.5;
-      const py = y + 0.5;
-      const d1 = distToSegment(px, py, top[0], top[1], apex[0], apex[1]);
-      const d2 = distToSegment(px, py, apex[0], apex[1], bot[0], bot[1]);
-      const edge = Math.min(d1, d2) - r;
-      const stroke = Math.max(0, Math.min(1, 0.5 - edge)); // 1px anti-aliased edge
-      // Bloom is additive per stroke (min-distance would crease along the
-      // bisector inside the V); both strokes lighting the apex is the point.
-      let glow = 0;
-      for (const d of [d1, d2]) {
-        const e = Math.max(0, d - r);
-        glow +=
-          0.32 * Math.exp(-(e * e) / (2 * sigma1 * sigma1)) +
-          0.08 * Math.exp(-(e * e) / (2 * sigma2 * sigma2));
+      let a = 255;
+      if (radius > 0) {
+        // distance past the rounded corner's centre, one pixel of anti-aliasing
+        const dx = Math.max(radius - (x + 0.5), 0, x + 0.5 - (size - radius));
+        const dy = Math.max(radius - (y + 0.5), 0, y + 0.5 - (size - radius));
+        a = Math.round(255 * Math.max(0, Math.min(1, radius - Math.hypot(dx, dy) + 0.5)));
       }
-      glow = Math.min(1, glow);
-      const i = (y * size + x) * 4;
-      for (let c = 0; c < 3; c++) {
-        let v = BG[c] * (1 - glow) + BLOOM[c] * glow;
-        v = v * (1 - stroke) + PHOSPHOR[c] * stroke;
-        rgba[i + c] = Math.round(v);
-      }
-      rgba[i + 3] = 255; // opaque: full-bleed glass, correct for maskable + iOS
+      put(x, y, ground, a);
     }
   }
+  const drawn = (tone) => (maskable && (tone === 'ground' || tone === 'body' || tone === 'crown') ? PAGE : toneValue(tone));
+  cells.forEach((row, cy) => row.forEach((cell, cx) => {
+    if (!cell) return;
+    const colour = cell.alpha === null
+      ? drawn(cell.tone)
+      : composite(PAGE, cell.alpha, cell.under === null || maskable ? PAGE : toneValue(cell.under));
+    for (let dy = 0; dy < scale; dy++) {
+      for (let dx = 0; dx < scale; dx++) put(ox + cx * scale + dx, oy + cy * scale + dy, colour);
+    }
+  }));
   return pngFromRgba(size, rgba);
 }
 
 // — outputs —
 
-const outDir = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'public', 'icons');
+const outDir = path.join(HERE, '..', 'public', 'icons');
 mkdirSync(outDir, { recursive: true });
 
 const files = [
-  ['icon-192.png', 192, 0.46],
-  ['icon-512.png', 512, 0.46],
-  // maskable: glyph + bloom comfortably inside the 40%-radius safe circle
-  ['icon-maskable-192.png', 192, 0.36],
-  ['icon-maskable-512.png', 512, 0.36],
-  ['apple-touch-icon.png', 180, 0.46],
+  ['icon-192.png', { size: 192, scale: 5, ground: PAGE, radius: 42 }],
+  ['icon-512.png', { size: 512, scale: 13, ground: PAGE, radius: 112 }],
+  // maskable: the mark inside the 40%-radius safe circle
+  ['icon-maskable-192.png', { size: 192, scale: 4, ground: ACCENT, maskable: true }],
+  ['icon-maskable-512.png', { size: 512, scale: 10, ground: ACCENT, maskable: true }],
+  ['apple-touch-icon.png', { size: 180, scale: 5, ground: PAGE }],
+  ['favicon-32.png', { size: 32, scale: 1, ground: PAGE, window: [5, 13, 22, 14] }],
 ];
 
-for (const [name, size, scale] of files) {
-  const png = renderIcon(size, scale);
+for (const [name, spec] of files) {
+  const png = renderIcon(spec);
   writeFileSync(path.join(outDir, name), png);
-  console.log(`${name}  ${size}×${size}  ${png.length} bytes`);
+  console.log(`${name}  ${spec.size}x${spec.size}  ${png.length} bytes`);
 }
