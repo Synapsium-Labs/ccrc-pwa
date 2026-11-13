@@ -23,7 +23,7 @@ import { fileURLToPath } from 'node:url';
 import { parse as parseYaml } from 'yaml';
 import {
   CONTRACT_FILES, CATALOGUE_FILE, FAMILIES, STATE_TITLE, BOT_LOGIN, UPSTREAM, BODY_FINDINGS_MAX, wireReport, nextPairs,
-  pairTitle, issueBody, runWatch, githubIo,
+  pairTitle, issueBody, runWatch, githubIo, RELEASES_PER_PAGE,
 } from '../../.github/ci/codex-wire-watch.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -433,7 +433,8 @@ const bot = { login: 'github-actions[bot]', type: 'Bot' };
 /** A fake of the four REST calls the walk makes. `files[tag]` is that tag's contract set, or a number: the
  *  status every contents request at that tag answers. Lists are paged by `per_page` and `page`, as the API pages
  *  them. Nothing here opens a socket. */
-function fakeGitHub(opts: { tags: Release[], files: Record<string, Record<string, string> | number>, issues: Issue[], api?: string }) {
+function fakeGitHub(opts: { tags: Release[], files: Record<string, Record<string, string> | number>, issues: Issue[], api?: string,
+  releaseStatuses?: number[] }) {
   const api = opts.api ?? API;
   const calls: Call[] = [];
   const logs: string[] = [];
@@ -448,6 +449,9 @@ function fakeGitHub(opts: { tags: Release[], files: Record<string, Record<string
     const perPage = Number(u.searchParams.get('per_page') ?? '30');
     const paged = <T>(all: T[]): T[] => all.slice((page - 1) * perPage, page * perPage);
     if (method === 'GET' && u.pathname === `/repos/${UPSTREAM}/releases`) {
+      // A scripted answer per releases call, in order, before the listing answers normally (a gateway timeout).
+      const scripted = opts.releaseStatuses?.shift();
+      if (scripted !== undefined) return json({ message: 'scripted' }, scripted);
       return json(paged(opts.tags.map((t, i) => (typeof t === 'string'
         ? { tag_name: t, draft: false, prerelease: false, id: i }
         : { tag_name: t.tag, draft: t.draft === true, prerelease: t.prerelease === true, id: i }))));
@@ -485,7 +489,7 @@ function fakeGitHub(opts: { tags: Release[], files: Record<string, Record<string
     }
     return json({ message: `unexpected ${method} ${u.pathname}` }, 500);
   };
-  const io = githubIo({ repo: REPO, token: 'synthetic-token', apiBase: api, fetchImpl, log: (l) => { logs.push(l); } });
+  const io = githubIo({ repo: REPO, token: 'synthetic-token', apiBase: api, fetchImpl, log: (l) => { logs.push(l); }, retryDelayMs: 0 });
   const posted = () => calls.filter((c) => c.method === 'POST').map((c) => c.body?.title);
   const patched = () => calls.filter((c) => c.method === 'PATCH').map((c) => `${c.url.split('/').pop()}=${c.body?.body}`);
   /** The pairs the walk compared, from its own log lines. */
@@ -557,7 +561,7 @@ describe('the walk', () => {
   it('a state on the second page of releases walks every stable tag on both pages', async () => {
     const alphas = (minor: number, n: number): Release[] =>
       Array.from({ length: n }, (_, k) => ({ tag: `rust-v0.${minor}.0-alpha.${n - k}`, prerelease: true }));
-    // 201 releases: page 2 is full, so only the stop predicate ends the paging there, before page 3.
+    // 201 releases: the state, at index 132, sits on a full page, so only the stop predicate ends the paging there.
     const tags: Release[] = [tag(163), ...alphas(163, 130), tag(162), tag(161), tag(160), ...alphas(160, 67)];
     expect(tags).toHaveLength(201);
     const gh = fakeGitHub({
@@ -567,13 +571,13 @@ describe('the walk', () => {
     expect(await runWatch(gh.io)).toBe(0);
     expect(gh.walkedPairs()).toEqual([`${tag(161)}..${tag(162)}`, `${tag(162)}..${tag(163)}`]);
     expect(gh.patched()).toEqual([`7=${tag(163)}`]);
-    expect(gh.calls.filter((c) => c.url.includes('/releases?')).length).toBe(2);
+    expect(gh.calls.filter((c) => c.url.includes('/releases?')).length).toBe(Math.ceil(133 / RELEASES_PER_PAGE));
   });
 
   it('with no state yet, a first page holding one stable tag pages on to the second for the newest pair', async () => {
     const alphas = (minor: number, n: number): Release[] =>
       Array.from({ length: n }, (_, k) => ({ tag: `rust-v0.${minor}.0-alpha.${n - k}`, prerelease: true }));
-    // 201 releases: page 2 is full, so only the stop predicate ends the paging there, before page 3.
+    // 201 releases: the second stable tag, at index 131, sits on a full page, so only the stop predicate ends the paging.
     const tags: Release[] = [tag(163), ...alphas(163, 130), tag(162), tag(161), tag(160), ...alphas(160, 67)];
     expect(tags).toHaveLength(201);
     const gh = fakeGitHub({ tags, files: { [tag(162)]: BASE, [tag(163)]: BASE }, issues: [] });
@@ -581,7 +585,7 @@ describe('the walk', () => {
     expect(gh.walkedPairs()).toEqual([`${tag(162)}..${tag(163)}`]);
     expect(gh.posted()).toEqual([STATE_TITLE]);
     expect(gh.issues.find((i) => i.title === STATE_TITLE)?.body).toBe(tag(163));
-    expect(gh.calls.filter((c) => c.url.includes('/releases?')).length).toBe(2);
+    expect(gh.calls.filter((c) => c.url.includes('/releases?')).length).toBe(Math.ceil(132 / RELEASES_PER_PAGE));
   });
 
   it('a pair whose issue already exists is walked and not opened twice', async () => {
@@ -632,6 +636,55 @@ describe('the walk', () => {
     const reads = gh.calls.filter((c) => c.url.includes('/contents/'));
     expect(reads).toHaveLength(2 * CONTRACT_FILES.length);
     expect(reads.every((c) => c.accept === 'application/vnd.github.raw')).toBe(true);
+  });
+
+  it('lists openai/codex releases in small pages: at 100 a page the listing answered HTTP 504 on most daily runs', async () => {
+    // Measured 2026-11-08..13: four of six scheduled runs failed on `GET /repos/openai/codex/releases: HTTP 504` at
+    // per_page=100, whose release objects carry long notes and many assets. This repository's own issues stay at 100.
+    expect(RELEASES_PER_PAGE).toBeLessThanOrEqual(30);
+    const gh = fakeGitHub({ tags: [tag(161), tag(160)], files: { [tag(160)]: BASE, [tag(161)]: BASE }, issues: [] });
+    expect(await runWatch(gh.io)).toBe(0);
+    const pages = gh.calls.filter((c) => c.url.includes('/releases?')).map((c) => new URL(c.url).searchParams.get('per_page'));
+    expect(pages).toEqual([String(RELEASES_PER_PAGE)]);
+    const issuePages = gh.calls.filter((c) => c.method === 'GET' && c.url.includes(`/repos/${REPO}/issues?`))
+      .map((c) => new URL(c.url).searchParams.get('per_page'));
+    expect(issuePages.length).toBeGreaterThan(0);
+    expect(issuePages.every((p) => p === '100')).toBe(true);
+  });
+
+  it('a gateway answer (502, 503, 504) to a GET is retried once, and the walk goes on', async () => {
+    for (const status of [502, 503, 504]) {
+      const gh = fakeGitHub({ tags: [tag(161), tag(160)], files: { [tag(160)]: BASE, [tag(161)]: BASE }, issues: [],
+        releaseStatuses: [status] });
+      expect(await runWatch(gh.io), `status ${status}`).toBe(0);
+      expect(gh.walkedPairs()).toEqual([`${tag(160)}..${tag(161)}`]);
+      expect(gh.calls.filter((c) => c.url.includes('/releases?')).length).toBe(2);
+      expect(gh.logs.filter((l) => l.includes(`HTTP ${status}`) && l.includes('retrying once')).length).toBe(1);
+    }
+  });
+
+  it('a second gateway answer fails the walk as before; any other failure is never retried', async () => {
+    const twice = fakeGitHub({ tags: [tag(161), tag(160)], files: { [tag(160)]: BASE, [tag(161)]: BASE }, issues: [],
+      releaseStatuses: [504, 504] });
+    await expect(runWatch(twice.io)).rejects.toThrow(/releases: HTTP 504/);
+    expect(twice.calls.filter((c) => c.url.includes('/releases?')).length).toBe(2);
+    for (const status of [404, 500, 403]) {
+      const once = fakeGitHub({ tags: [tag(161), tag(160)], files: { [tag(160)]: BASE, [tag(161)]: BASE }, issues: [],
+        releaseStatuses: [status] });
+      await expect(runWatch(once.io), `status ${status}`).rejects.toThrow(new RegExp(`releases: HTTP ${status}`));
+      expect(once.calls.filter((c) => c.url.includes('/releases?')).length).toBe(1);
+    }
+  });
+
+  it('a write is never retried, even on a gateway answer', async () => {
+    let posts = 0;
+    const io = githubIo({ repo: REPO, token: 'synthetic-token', apiBase: API, retryDelayMs: 0, log: () => {},
+      fetchImpl: async (_u: string, init: { method?: string }) => {
+        if (init.method === 'POST') { posts += 1; return new Response('{}', { status: 504 }); }
+        return new Response('[]', { status: 200, headers: { 'content-type': 'application/json' } });
+      } });
+    await expect(io.openIssue('codex wire: x..y', 'body')).rejects.toThrow(/HTTP 504/);
+    expect(posts).toBe(1);
   });
 
   it('every request goes to the API base, with the job\'s token', async () => {

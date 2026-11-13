@@ -567,20 +567,30 @@ export async function runWatch(io) {
 }
 
 const PER_PAGE = 100;
+/** The page size of openai/codex's releases listing, smaller than `PER_PAGE`: its release objects carry long notes and
+ *  many assets, and at 100 a page the listing answered HTTP 504 on four of six daily runs (2026-11-08 to 11-13), which
+ *  stopped the walk before it read a single pair. `MAX_PAGES` still bounds it, at 600 releases. */
+export const RELEASES_PER_PAGE = 20;
 const MAX_PAGES = 30;
 const FETCH_TIMEOUT_MS = 30_000;
+/** A gateway answer to a GET (a read, which repeats safely) is retried once, after this long. A write is never
+ *  retried: a 504 to a POST may still have opened the issue. */
+const GATEWAY_STATUSES = Object.freeze([502, 503, 504]);
+const GATEWAY_RETRY_MS = 5_000;
 
 /**
  * The REST layer: this repository's issues (read and written with the job's token) and openai/codex's releases and
- * contract files (read). Only issues `BOT_LOGIN` opened are returned, and never a pull request.
+ * contract files (read). Only issues `BOT_LOGIN` opened are returned, and never a pull request. A GET answered by a
+ * gateway status (`GATEWAY_STATUSES`) is retried once after `retryDelayMs`; any other failure, and any write, is not.
  * @typedef {{ method: string, headers: Record<string, string>, body?: string, signal?: AbortSignal }} FetchInit
  * @param {{ repo: string, token: string, apiBase?: string,
- *   fetchImpl?: (url: string, init: FetchInit) => Promise<Response>, log?: (line: string) => void }} opts
+ *   fetchImpl?: (url: string, init: FetchInit) => Promise<Response>, log?: (line: string) => void,
+ *   retryDelayMs?: number }} opts
  * @returns {WatchIo}
  */
-export function githubIo({ repo, token, apiBase = 'https://api.github.com', fetchImpl = fetch, log = (l) => process.stdout.write(`${l}\n`) }) {
+export function githubIo({ repo, token, apiBase = 'https://api.github.com', fetchImpl = fetch, log = (l) => process.stdout.write(`${l}\n`), retryDelayMs = GATEWAY_RETRY_MS }) {
   const call = async (method, route, { body, accept = 'application/vnd.github+json' } = {}) => {
-    const res = await fetchImpl(`${apiBase}${route}`, {
+    const send = () => fetchImpl(`${apiBase}${route}`, {
       method,
       headers: {
         authorization: `Bearer ${token}`,
@@ -591,17 +601,23 @@ export function githubIo({ repo, token, apiBase = 'https://api.github.com', fetc
       ...(body ? { body: JSON.stringify(body) } : {}),
       signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
     });
+    let res = await send();
+    if (!res.ok && method === 'GET' && GATEWAY_STATUSES.includes(res.status)) {
+      log(`codex-wire-watch: ${method} ${route.split('?')[0]}: HTTP ${res.status}, retrying once`);
+      await new Promise((resolve) => setTimeout(resolve, retryDelayMs));
+      res = await send();
+    }
     if (!res.ok) throw new Error(`${method} ${route.split('?')[0]}: HTTP ${res.status}`);
     return res;
   };
-  const list = async (route, stop) => {
+  const list = async (route, stop, perPage = PER_PAGE) => {
     const out = [];
     for (let page = 1; page <= MAX_PAGES; page++) {
       const sep = route.includes('?') ? '&' : '?';
-      const items = await (await call('GET', `${route}${sep}per_page=${PER_PAGE}&page=${page}`)).json();
+      const items = await (await call('GET', `${route}${sep}per_page=${perPage}&page=${page}`)).json();
       if (!Array.isArray(items)) throw new Error(`GET ${route.split('?')[0]}: the answer is not a list`);
       out.push(...items);
-      if (items.length < PER_PAGE || stop(out)) return out;
+      if (items.length < perPage || stop(out)) return out;
     }
     throw new Error(`GET ${route.split('?')[0]}: more than ${MAX_PAGES} pages`);
   };
@@ -636,7 +652,7 @@ export function githubIo({ repo, token, apiBase = 'https://api.github.com', fetc
         && STABLE_TAG_RE.test(r.tag_name)).map((r) => r.tag_name);
       const releases = await list(`/repos/${UPSTREAM}/releases`, (rs) => (lastWalked === null
         ? stable(rs).length >= 2
-        : rs.some((r) => r && r.tag_name === lastWalked)));
+        : rs.some((r) => r && r.tag_name === lastWalked)), RELEASES_PER_PAGE);
       return stable(releases);
     },
     files(tag) {
