@@ -8,6 +8,10 @@ import { mergeBaseText } from '../mergeBase.js';
 import { COORD_BLOCKED_INVARIANTS, coordBlockedDay, type CoordBlockedModule } from './coordBlockedDay.js';
 import { floorsFallen, rewriteRelativeImports, runMutants, type MutantSet, type SuiteCase } from './mutate.js';
 import { simulate } from './run.js';
+import {
+  CARD_BLOCK_KEY, CARD_BLOCK_SET, CARD_NEVER_EMPTY_KEY, CARD_NEVER_EMPTY_SET, CARD_ONE_LINE_KEY, CARD_ONE_LINE_SET, CARD_TRIM_KEY,
+  CARD_TRIM_SET,
+} from './cardMutants.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(HERE, '../../..');
@@ -97,6 +101,10 @@ const PEER_SET: MutantSet<PeerBoundModule> = {
 const MUTANT_SETS: Record<string, MutantSet<never>> = {
   [KEY]: COORD_BLOCKED_SET as MutantSet<never>,
   [PEER_KEY]: PEER_SET as MutantSet<never>,
+  [CARD_TRIM_KEY]: CARD_TRIM_SET as MutantSet<never>,
+  [CARD_NEVER_EMPTY_KEY]: CARD_NEVER_EMPTY_SET as MutantSet<never>,
+  [CARD_ONE_LINE_KEY]: CARD_ONE_LINE_SET as MutantSet<never>,
+  [CARD_BLOCK_KEY]: CARD_BLOCK_SET as MutantSet<never>,
 };
 
 it('rewriteRelativeImports makes ./ and ../ absolute and leaves bare specifiers', () => {
