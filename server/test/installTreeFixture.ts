@@ -250,6 +250,8 @@ export const TREE_FILES = [
   'ccd/lib/roster-card.jq',
   // `ccd carry-dedupe`'s program (#317); `_inst_files` places it beside the reader above.
   'ccd/lib/carry-dedupe.py',
+  // the in-flight manifest's program (session-continuity 6b); placed beside it.
+  'ccd/lib/inflight-manifest.py',
   // The settings reader the ccd-* sweeps source (wave 29): `_inst_bins` places it under ~/.local/libexec/ccrc on every
   // OS and role, so a tree without it dies in `_inst_atomic` naming the missing source.
   'ccd/lib/ccrc-settings.sh',

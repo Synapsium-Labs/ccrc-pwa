@@ -250,11 +250,12 @@ no warnings 'redefine';
     expect(cut.stdout).toBe('rc=142\n');
   });
   it("the detector's error literal is shared's RATE_LIMIT_ERROR — one jq copy, one TS copy, pinned", () => {
-    // The reading is `limit_banner` in ccd/lib/transcript.jq (#2367); its first `$row.error ==` is the rate-limit one.
+    // The reading is `limit_banner` in ccd/lib/transcript.jq (#2367); the rate-limit row test is `lb_ratelimit`, the def it shares
+    // with `agent_end` (D-8368), and its `.error ==` is the rate-limit one.
     const src = fs.readFileSync(path.join(path.dirname(CCD), 'lib', 'transcript.jq'), 'utf8');
-    const line = src.split('\n').find((l) => l.includes('$row.error =='));
-    if (!line) throw new Error('limit_banner detector line not found in ccd/lib/transcript.jq');
-    const m = /\$row\.error == "([a-z_]+)"/.exec(line);
+    const line = src.split('\n').find((l) => l.startsWith('def lb_ratelimit:'));
+    if (!line) throw new Error('lb_ratelimit detector line not found in ccd/lib/transcript.jq');
+    const m = /\.error == "([a-z_]+)"/.exec(line);
     if (!m) throw new Error('no parsed error literal on the detector line');
     expect(m[1]).toBe(RATE_LIMIT_ERROR);
   });

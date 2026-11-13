@@ -33,6 +33,8 @@ export {
 } from './primitives/radio';
 export { BackButton, BACK_BUTTON, type BackButtonProps } from './primitives/back-button';
 export { Door, DOOR, DOOR_GLYPH, type DoorProps } from './primitives/door';
+export { Character, type CharacterProps } from './characters/character';
+export { ART, type Tone } from './characters/art';
 export { Icon, type IconName, type IconProps, type IconSize } from './primitives/icon';
 export { Well, WELL, type WellProps } from './primitives/well';
 // The page scaffold (D-5102; the C3 slots D-5666).
