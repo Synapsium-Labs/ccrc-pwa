@@ -126,6 +126,43 @@ describe('POST /api/mail — peer-mail bounds (runId === null only)', () => {
   });
 });
 
+describe("today's peer refusal bodies, exactly (characterization for #2726)", () => {
+  let app: FastifyInstance | undefined;
+  afterEach(async () => { if (app) await app.close(); app = undefined; });
+  const two = async () => {
+    const home = mkTmp('ccrc-peerq-');
+    seed(home, 'demo-quiet-mesa'); seed(home, 'demo-calm-ridge');
+    for (const to of ['demo-b', 'demo-c', 'demo-d', 'demo-e', 'demo-f']) seed(home, to);
+    return withMail(home);
+  };
+
+  it('duplicate', async () => {
+    const w = await two(); app = w.app;
+    await send(app, PEER);
+    expect((await send(app, PEER)).json()).toEqual({ ok: false, error: 'duplicate',
+      detail: 'an outstanding peer mail from demo-quiet-mesa to demo-calm-ridge with this subject is already queued' });
+  });
+  it('the pair arm', async () => {
+    const w = await two(); app = w.app;
+    for (let i = 0; i < 3; i++) await send(app, { ...PEER, subject: `q ${i}` });
+    expect((await send(app, { ...PEER, subject: 'one more' })).json()).toEqual({ ok: false, error: 'peer-quota',
+      detail: '3 peer mails from demo-quiet-mesa to demo-calm-ridge are already outstanding' });
+  });
+  it('the hourly arm', async () => {
+    const w = await two(); app = w.app;
+    for (const to of ['demo-b', 'demo-c', 'demo-d', 'demo-e']) {
+      for (let i = 0; i < 3; i++) await send(app, { ...PEER, toId: to, subject: `q ${i}` });
+    }
+    expect((await send(app, { ...PEER, toId: 'demo-f', subject: 'one more' })).json()).toEqual({ ok: false,
+      error: 'peer-quota', detail: 'demo-quiet-mesa has sent 12 peer mails in the last hour' });
+  });
+  it('a kind answer with no inReplyTo is counted like any peer mail', async () => {
+    const w = await two(); app = w.app;
+    for (let i = 0; i < 3; i++) await send(app, { ...PEER, subject: `q ${i}` });
+    expect((await send(app, { ...PEER, kind: 'answer', subject: 'a reply' })).statusCode).toBe(429);
+  });
+});
+
 describe('run mail is DARK — the bounds structurally cannot touch runId-carrying traffic (D10)', () => {
   let app: FastifyInstance | undefined;
   afterEach(async () => { if (app) await app.close(); app = undefined; });
