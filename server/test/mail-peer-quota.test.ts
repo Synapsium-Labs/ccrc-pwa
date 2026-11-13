@@ -126,7 +126,7 @@ describe('POST /api/mail — peer-mail bounds (runId === null only)', () => {
   });
 });
 
-describe("today's peer refusal bodies, exactly (characterization for #2726)", () => {
+describe("the peer refusal bodies, exactly (characterization for #2726; the two peer-quota bodies changed by (c))", () => {
   let app: FastifyInstance | undefined;
   afterEach(async () => { if (app) await app.close(); app = undefined; });
   const two = async () => {
@@ -146,15 +146,22 @@ describe("today's peer refusal bodies, exactly (characterization for #2726)", ()
     const w = await two(); app = w.app;
     for (let i = 0; i < 3; i++) await send(app, { ...PEER, subject: `q ${i}` });
     expect((await send(app, { ...PEER, subject: 'one more' })).json()).toEqual({ ok: false, error: 'peer-quota',
-      detail: '3 peer mails from demo-quiet-mesa to demo-calm-ridge are already outstanding' });
+      detail: '3 peer mails from demo-quiet-mesa to demo-calm-ridge are already outstanding; it can go when ' +
+        'demo-calm-ridge acks one, which it does when it next reads its mail. A reply to a mail of demo-calm-ridge\'s ' +
+        'is outside this bound: send it as kind answer with inReplyTo set to that mail\'s delivery id',
+      retry: { on: 'ack', toId: 'demo-calm-ridge' } });
   });
   it('the hourly arm', async () => {
     const w = await two(); app = w.app;
     for (const to of ['demo-b', 'demo-c', 'demo-d', 'demo-e']) {
       for (let i = 0; i < 3; i++) await send(app, { ...PEER, toId: to, subject: `q ${i}` });
     }
-    expect((await send(app, { ...PEER, toId: 'demo-f', subject: 'one more' })).json()).toEqual({ ok: false,
-      error: 'peer-quota', detail: 'demo-quiet-mesa has sent 12 peer mails in the last hour' });
+    const oldest = (w.coord.db.prepare('SELECT MIN(at) AS a FROM mail').get() as { a: number }).a;
+    const res = (await send(app, { ...PEER, toId: 'demo-f', subject: 'one more' })).json() as Record<string, unknown>;
+    expect(res).toMatchObject({ ok: false, error: 'peer-quota', retry: { on: 'time', at: oldest + 3_600_000 } });
+    expect(res['detail']).toMatch(new RegExp('^demo-quiet-mesa has sent 12 peer mails in the last hour; it can go at ' +
+      `${new Date(oldest + 3_600_000).toISOString().replace(/\./g, '\\.')} \\(in \\d+ s\\), when the oldest leaves the hour\\. ` +
+      'A reply to a mail of demo-f\'s is outside this bound'));
   });
   it('a kind answer with no inReplyTo is counted like any peer mail', async () => {
     const w = await two(); app = w.app;

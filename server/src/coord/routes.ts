@@ -100,7 +100,7 @@ import {
   type ReviewCapAsk, type ReviewCapLiftAnswer, type ReviewCapView, type LeaseDoorAnswer,
 } from '../../../shared/api.js';
 import { REFUSAL_STATUS, type CollectLaneRouteRefusal, type MailRouteRefusal, type RouteRefusal } from '../../../shared/refusal.js';
-import { TESTBOX_PARITY_REQUIRED_SENTENCE } from '../../../shared/api.js';
+import { TESTBOX_PARITY_REQUIRED_SENTENCE, type PeerRetry } from '../../../shared/api.js';
 import type { TestboxActOutcome, TestboxAdminCode } from '../../../shared/testbox-admin.js';
 import { knownFleetIdentity } from '../accounts/audit.js';
 import { parityRefusedByCcd, switchActorOf, switchOnGate, writeSwitchRow } from '../testboxAdmin.js';
@@ -738,11 +738,13 @@ export function registerCoordRoutes(
    *  message ever arrived. `ctx` never carries `code`/`detail` itself — both
    *  are this function's own parameters, spread on top so a call site cannot
    *  accidentally supply a stale one. */
+  // `extra` (#2726 (c)): fields for the answer body beside `detail`, such as a peer-quota refusal's `retry`; never
+  // recorded in the rejection row, whose shape is unchanged.
   const refuse = (reply: FastifyReply, code: MailRouteRefusal,   // D-5381: the status is REFUSAL_STATUS's
     ctx: Omit<Parameters<CoordStore['recordRejection']>[0], 'code' | 'detail'>,
-    detail: string) => {
+    detail: string, extra: { readonly retry?: PeerRetry } = {}) => {
     deps.coord!.recordRejection({ ...ctx, code, detail });
-    return reply.code(REFUSAL_STATUS[code]).send({ ok: false, error: code, detail });
+    return reply.code(REFUSAL_STATUS[code]).send({ ok: false, error: code, detail, ...extra });
   };
 
   /**
@@ -1072,7 +1074,8 @@ export function registerCoordRoutes(
       });
       if (v.verdict === 'invited') answersMail = v.answersMail;
       else if (v.verdict !== 'bounded') {
-        return refuse(reply, v.verdict, { fromId, fromUuid, toId, kind, subject, runId }, v.detail);
+        return refuse(reply, v.verdict, { fromId, fromUuid, toId, kind, subject, runId }, v.detail,
+          v.verdict === 'peer-quota' ? { retry: v.retry } : {});
       }
     }
 

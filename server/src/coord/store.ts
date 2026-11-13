@@ -189,7 +189,7 @@ import {
   type SettledUpdateState, type StampRead, type TagFileRead, type UpdatePhase, type UpdateState,
   type AutoMode, type NotifyMode, type DriftFinding, isDriftKind,
   type WorkItemState, type LastReviewReport, type RunRefuseCode,
-} from '../../../shared/api.js'; import { programmeNameFromSlug } from '../../../shared/api.js'; import { isNodeRole } from '../../../shared/node-role.js';
+} from '../../../shared/api.js'; import { programmeNameFromSlug, PEER_MAIL_WINDOW_MS } from '../../../shared/api.js'; import { isNodeRole } from '../../../shared/node-role.js';
 
 /** One entry in `$REG/<id>.prhistory` (ccd/ccd:2252-2253). Re-declared as a TYPE
  *  here rather than parsed twice: `coord/prhistory.ts` owns the reader.
@@ -6987,7 +6987,7 @@ export class CoordStore {
   peerMailAtsInLastHour(fromId: string, now: number): number[] {
     return (this.db.prepare(
       'SELECT at FROM mail WHERE runId IS NULL AND fromId = ? AND at > ? AND answersMail IS NULL ORDER BY at, id',
-    ).all(fromId, now - 3_600_000) as { at: number }[]).map((r) => r.at);
+    ).all(fromId, now - PEER_MAIL_WINDOW_MS) as { at: number }[]).map((r) => r.at);
   }
 
   /** The delivery `deliveryId` names, read as an invitation to reply (#2726): the mail it carries, that mail's

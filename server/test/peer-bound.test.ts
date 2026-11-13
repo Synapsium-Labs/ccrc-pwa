@@ -145,3 +145,39 @@ describe('peerMailVerdict: an invited reply (#2726 (a))', () => {
     expect((v as { detail: string }).detail).not.toContain('not an invited reply');
   });
 });
+
+describe('peerMailVerdict: a peer-quota refusal says when the mail can go (#2726 (c))', () => {
+  const NOW = 1_800_000_000_000;
+  const HINT = ". A reply to a mail of demo-calm-ridge's is outside this bound: send it as kind answer with inReplyTo set to that mail's delivery id";
+  const facts = (over: Partial<PeerFacts> = {}): PeerFacts => ({
+    fromId: 'demo-quiet-mesa', toId: 'demo-calm-ridge', kind: 'question', inReplyTo: null, invitation: null,
+    duplicate: false, outstanding: 0, hourAts: [], now: NOW, ...over,
+  });
+
+  it('the pair arm: retry on an ack by the recipient, in words too, with the inReplyTo hint', () => {
+    expect(peerMailVerdict(facts({ outstanding: 3 }))).toEqual({ verdict: 'peer-quota',
+      retry: { on: 'ack', toId: 'demo-calm-ridge' },
+      detail: '3 peer mails from demo-quiet-mesa to demo-calm-ridge are already outstanding; it can go when ' +
+        'demo-calm-ridge acks one, which it does when it next reads its mail' + HINT });
+  });
+  it('the hourly arm: retry at the time the oldest counted mail leaves the hour', () => {
+    const oldest = NOW - HOUR + 90_000; // leaves the hour 90 s from now
+    const hourAts = [oldest, ...Array.from({ length: 11 }, (_, i) => NOW - 1_000 + i)];
+    expect(peerMailVerdict(facts({ hourAts }))).toEqual({ verdict: 'peer-quota',
+      retry: { on: 'time', at: oldest + HOUR },
+      detail: `demo-quiet-mesa has sent 12 peer mails in the last hour; it can go at ${new Date(oldest + HOUR).toISOString()} ` +
+        '(in 90 s), when the oldest leaves the hour' + HINT });
+  });
+  it('with thirteen in the hour, the slot frees when the second oldest leaves, not the oldest', () => {
+    const hourAts = Array.from({ length: 13 }, (_, i) => NOW - HOUR + 1_000 * (i + 1));
+    expect(peerMailVerdict(facts({ hourAts }))).toMatchObject({ retry: { on: 'time', at: hourAts[1]! + HOUR } });
+  });
+  it('a mail that tried inReplyTo gets the reason instead of the hint', () => {
+    const v = peerMailVerdict(facts({ outstanding: 3, kind: 'answer', inReplyTo: 7 }));
+    expect(v).toMatchObject({ detail: expect.stringMatching(/; not an invited reply: inReplyTo 7 names no delivery$/) });
+    expect((v as { detail: string }).detail).not.toContain('is outside this bound');
+  });
+  it('duplicate carries no retry: the mail is already queued, there is nothing to wait out', () => {
+    expect(peerMailVerdict(facts({ duplicate: true }))).not.toHaveProperty('retry');
+  });
+});

@@ -7,7 +7,7 @@
  * producer, never the record"). The route (`routes.ts`, check 9 of `POST /api/mail`) reads the facts below from the
  * store and acts on what this module decides.
  */
-import { PEER_MAIL_HOURLY, PEER_MAIL_MAX_OUTSTANDING, type MailKind } from '../../../shared/api.js';
+import { PEER_MAIL_HOURLY, PEER_MAIL_MAX_OUTSTANDING, PEER_MAIL_WINDOW_MS, type MailKind, type PeerRetry } from '../../../shared/api.js';
 
 /** A delivery read as an invitation to reply (`CoordStore.invitation`). `mailId` is the invited MAIL row's id, the
  *  key of the one-reply-per-mail rule and of `mail.answersMail`, never the delivery id the wire names: a parked
@@ -48,7 +48,7 @@ export type PeerVerdict =
   | { readonly verdict: 'invited'; readonly answersMail: number }
   | { readonly verdict: 'bounded' }
   | { readonly verdict: 'duplicate'; readonly detail: string }
-  | { readonly verdict: 'peer-quota'; readonly detail: string };
+  | { readonly verdict: 'peer-quota'; readonly detail: string; readonly retry: PeerRetry };
 
 /**
  * Whether the mail is the one invited reply to the mail its `inReplyTo` delivered (#2726 (a)), and if not, why not.
@@ -77,22 +77,34 @@ export function invitedReply(f: PeerFacts): { readonly invited: true; readonly m
  * order is the door's: `duplicate` first, the most specific refusal ("your message is already queued" tells the
  * sender not to resend at all, where `peer-quota` invites a retry later), then the pair (standing pressure on one
  * recipient), then the sender's hour. A refusal of a mail that named an `inReplyTo` says why it was not invited.
+ *
+ * A `peer-quota` refusal says when the mail can go (#2726 (c)): `retry` for a client, the same in its `detail` for a
+ * reader, and, for a mail that did not try `inReplyTo`, the route round the bound when it is a reply. `duplicate`
+ * carries no `retry`: the mail is already queued, so there is nothing to wait out.
  */
 export function peerMailVerdict(f: PeerFacts): PeerVerdict {
   const inv = invitedReply(f);
   if (inv.invited) return { verdict: 'invited', answersMail: inv.mailId };
   const notInvited = inv.why === null ? '' : `; not an invited reply: ${inv.why}`;
+  const hint = inv.why !== null ? notInvited
+    : `. A reply to a mail of ${f.toId}'s is outside this bound: send it as kind answer with inReplyTo set to that ` +
+      "mail's delivery id";
   if (f.duplicate) {
     return { verdict: 'duplicate',
       detail: `an outstanding peer mail from ${f.fromId} to ${f.toId} with this subject is already queued${notInvited}` };
   }
   if (f.outstanding >= PEER_MAIL_MAX_OUTSTANDING) {
-    return { verdict: 'peer-quota',
-      detail: `${PEER_MAIL_MAX_OUTSTANDING} peer mails from ${f.fromId} to ${f.toId} are already outstanding${notInvited}` };
+    return { verdict: 'peer-quota', retry: { on: 'ack', toId: f.toId },
+      detail: `${PEER_MAIL_MAX_OUTSTANDING} peer mails from ${f.fromId} to ${f.toId} are already outstanding; ` +
+        `it can go when ${f.toId} acks one, which it does when it next reads its mail${hint}` };
   }
   if (f.hourAts.length >= PEER_MAIL_HOURLY) {
-    return { verdict: 'peer-quota',
-      detail: `${f.fromId} has sent ${PEER_MAIL_HOURLY} peer mails in the last hour${notInvited}` };
+    // The mail whose leaving brings the count under the bound: the oldest when the count is exactly the bound.
+    const at = f.hourAts[f.hourAts.length - PEER_MAIL_HOURLY]! + PEER_MAIL_WINDOW_MS;
+    const inS = Math.max(0, Math.ceil((at - f.now) / 1000));
+    return { verdict: 'peer-quota', retry: { on: 'time', at },
+      detail: `${f.fromId} has sent ${PEER_MAIL_HOURLY} peer mails in the last hour; it can go at ` +
+        `${new Date(at).toISOString()} (in ${inS} s), when the oldest leaves the hour${hint}` };
   }
   return { verdict: 'bounded' };
 }
