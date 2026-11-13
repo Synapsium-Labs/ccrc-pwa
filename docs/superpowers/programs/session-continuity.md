@@ -26,7 +26,7 @@ the one sanctioned restart. The operator's rulings are the spec's §3 (C1–C14)
 | 4b | 6, first part | `CLAUDE_CODE_DISABLE_BG_SHELL_PRESSURE_REAP=1` in the spawn environment; 3925's `/clear` fix | **AGENT-FIRST** (ccd) | wave 4 plus its one baseline week | plan #401; reanchor #409; implementation #435 | baseline B complete 2026-10-13: 0 reap-class / 34 pane-scope OOM stops, 5 unmapped and 4 unmeasured; handoff `990c70cbb`, four items settled, implementation NOT accepted; review 489 failed without dispatch; review 630 closed done 2026-10-19 14:32 UTC with its original report fingerprint accepted; run 308 returned to working 14:50 UTC and fix-round rulings mailed, worker effort raised high to xhigh; required server CI red at reviewed tip, inherited README-size failure; fix-round handoff `2f6caa48e` accepted by the server 2026-10-20 07:25 UTC, NEW review 685 dispatched 07:42 UTC; PR conflicts with main on the generated stamp; review 685 closed done 2026-10-20 13:56 UTC with its report fingerprint accepted, no critical finding; run 308 returned to working 13:59 UTC for fix round 2, its last phase waiting on another run's claims on `ccd/ccd` and README; Task 5 coordinator-owned/pending; scope sweep remains SHADOWED; MERGED 2026-10-21 03:54 UTC (`d8cd4765`, #435) after reviews 714 and 729 and fix round 3; run 308 closed; deployed 2026-10-21 by ccrc's updater, fleet box first (v0.0.508); Task 5's week runs 2026-10-21 05:38 to 2026-10-28 05:38 UTC; read 2026-10-28: 0 reap-class, `not-triggered`, the variable stays; week 2 read 2026-11-04: 0 reap-class, `not-triggered` in the part read, its first 2 h 9 m unmeasured (the fleet moved boxes), the variable stays, direct figure 0 in both weeks but partial, reported under spec §9; week 3 read 2026-11-11: 0 reap-class over the whole week, `not-triggered`, the variable stays, the direct reading `measured` (0 kills in 1,208 transcripts, 0 notifications unmeasured; the first week under wave 4c's scanner); weekly reading continues, next due 2026-11-18 05:38 UTC; the scope sweep is no longer shadowed: `scope-sweep-live` exists since 2026-10-26 23:38 UTC, armed by the operator (confirmed 2026-10-28) |
 | 4c | 6, first part | the direct-kill scanner reads the notifications it missed: queued-command attachments, queue enqueue rows, and summary-only notices that name no low memory | the instrument only (`deploy/measure-continuity.py`, in the release) | 4b and its two weekly readings | — | planned 2026-11-04 on the operator's ruling (`docs/superpowers/plans/2026-11-04-session-continuity-wave4c-direct-kill-scanner.md`, D-7960 to D-7963; Decisions, 2026-11-04 10:22); approved as written by the operator 2026-11-04 15:11 UTC (item 30; Decisions, 2026-11-04 15:14); plan merged 2026-11-04 16:18 UTC (`aff374c4`, #2262); run 1450 dispatched 16:23 UTC (`ccrc-pwa-continuity-4c`; Decisions, 2026-11-04 16:25); wave-done verified at `4a24db72` (PR #2277), review 1452 confirmed three important and three minor findings, fix round 1 sent (Decisions, 2026-11-04 17:35); accepted 18:07 UTC at `a5e8071e` after review 1458 (round 2); MERGED 2026-11-04 18:27 UTC (`ba93eb31`, #2277); run 1450 closed; released as prerelease v0.0.962 (18:29 UTC), and the first weekly reading after the fleet box installs v0.0.962 or later is the first under it (Decisions, 2026-11-04 18:44); that is week 3, read on v0.0.1088 (Decisions, 2026-11-11 05:48) |
 | 5 | 2 | the reduced spike: which resume call works after an ordinary swap (step 5), and a paused workflow under a blocked parent (step 6); steps 1 to 4 decided on the evidence, step 7 closed by D-5241 | measurement on a lent account (D-8252); no code | wave 1 | #2602 | deferred by the operator 2026-10-20; resumed 2026-11-07, the operator lending a scratch account (item 59; Decisions, 2026-11-07 14:40); reduced to steps 5 and 6, the manifest primary (item 75; spec rev 11, §11 items 7 and 8; Decisions, 2026-11-07 22:40); plan `docs/superpowers/plans/2026-11-07-session-continuity-wave5-reduced-spike.md` (D-8102 to D-8109), approved as written (item 80) and merged (#2443 `86a713a5`); run 730 dispatched 2026-11-08 (Decisions, 2026-11-08 00:50); Task 1 done and row R5 added (Decisions, 2026-11-08 01:03); setup confirmed (item 95; Decisions, 2026-11-10 19:48); Task 3 done and Task 4 not run (item 145; Decisions, 2026-11-10 23:40); merged 2026-11-11 (`ec7a6caf`, D-8252 to D-8264; Decisions, 2026-11-11 01:41); run 730 closed |
-| 6 | 3 | graceful stop; the launch record; the manifest; the composed redrive prompt | **AGENT-FIRST** | waves 1, 5 | 6a: plan #2672; implementation #2687; 6b: plan #2695; 6b-1: #2723 | 6a and 6b-1 merged, 6b-2 next; run 1777 (wave 7 of the run record) opened 2026-11-11, `planned`, before run 730 closed (Decisions, 2026-11-11 01:41); split into 6a, 6b and 6c, and 6a planned 2026-11-11 (`docs/superpowers/plans/2026-11-11-session-continuity-wave6a-graceful-stop-shadow.md`, D-8316 to D-8332; Decisions, 2026-11-11 16:20); approved as written with the calls for 6b and 6c (item 174), the plan merged (#2672 `2e81f8b0`) and run 1777 dispatched 2026-11-12 for 6a (Decisions, 2026-11-12 00:14); 6a accepted after three review rounds, merged 2026-11-12 (#2687 `933f293f`), its departures D-8346 to D-8353, run 1777 closed, and run 1845 (wave 8 of the run record) opened for 6b, `planned` (Decisions, 2026-11-12 05:26); 6b planned 2026-11-12 as two runs, 6b-1 and 6b-2 (`docs/superpowers/plans/2026-11-12-session-continuity-wave6b-launch-record-and-manifest.md`, D-8361 to D-8380; Decisions, 2026-11-12 07:51); approved as written (item 176), the plan merged (#2695 `d765e720`) and run 1845 dispatched 2026-11-12 for 6b-1; 6b-1 accepted after three review rounds, merged 2026-11-13 (#2723 `d8c4ed4a`), its departures D-8400 to D-8403, run 1845 closed, and run 1878 (wave 9 of the run record) opened for 6b-2, `planned` (Decisions, 2026-11-13 11:52) |
+| 6 | 3 | graceful stop; the launch record; the manifest; the composed redrive prompt | **AGENT-FIRST** | waves 1, 5 | 6a: plan #2672; implementation #2687; 6b: plan #2695; 6b-1: #2723; 6b-2: #2735 | 6a and both 6b runs merged, 6c to plan; run 1777 (wave 7 of the run record) opened 2026-11-11, `planned`, before run 730 closed (Decisions, 2026-11-11 01:41); split into 6a, 6b and 6c, and 6a planned 2026-11-11 (`docs/superpowers/plans/2026-11-11-session-continuity-wave6a-graceful-stop-shadow.md`, D-8316 to D-8332; Decisions, 2026-11-11 16:20); approved as written with the calls for 6b and 6c (item 174), the plan merged (#2672 `2e81f8b0`) and run 1777 dispatched 2026-11-12 for 6a (Decisions, 2026-11-12 00:14); 6a accepted after three review rounds, merged 2026-11-12 (#2687 `933f293f`), its departures D-8346 to D-8353, run 1777 closed, and run 1845 (wave 8 of the run record) opened for 6b, `planned` (Decisions, 2026-11-12 05:26); 6b planned 2026-11-12 as two runs, 6b-1 and 6b-2 (`docs/superpowers/plans/2026-11-12-session-continuity-wave6b-launch-record-and-manifest.md`, D-8361 to D-8380; Decisions, 2026-11-12 07:51); approved as written (item 176), the plan merged (#2695 `d765e720`) and run 1845 dispatched 2026-11-12 for 6b-1; 6b-1 accepted after three review rounds, merged 2026-11-13 (#2723 `d8c4ed4a`), its departures D-8400 to D-8403, run 1845 closed, and run 1878 (wave 9 of the run record) opened for 6b-2, `planned` (Decisions, 2026-11-13 11:52); 6b-2 dispatched for Tasks 2 to 5, accepted after three review rounds, merged 2026-11-13 (#2735 `99dd85142`), its departures and limits D-8566 to D-8584; run 1878 closed final, and run 1931 (wave 10 of the run record) opened first for 6c, `planned` (Decisions, 2026-11-13 21:17) |
 | 7 | 4, the refusal | non-rescue swaps refuse while delegated work is in flight; `--cut-delegated`; its own 409 | **AGENT-FIRST**, then server | wave 6 | — | after wave 6 |
 | 8 | 5 | the three skill clauses; review-panel's "resume before re-run"; run signals; `FleetSession.delegations` and its chip | skills, server, pwa | wave 6; landing-order wave 1's clauses | — | after wave 6 |
 | 9 | 6, second part | ccd stops a pane's scope when it ends the pane | **AGENT-FIRST** | waves 5, 6 | — | after wave 6 |
@@ -1578,6 +1578,70 @@ re-measures the citation corpus and the `_reg_get` census on the merged tree bef
     from `main` after #2723. Once the fleet box runs v0.0.1161 or later, the launch record collects rows, and 6b-2's
     first manifests read that backlog.
 
+- **2026-11-13 21:17 UTC - 6b-2 is accepted after three review rounds, merged (#2735 `99dd85142`), and run 1878 is
+  closed; run 1931 is open for 6c.**
+  - **Dispatch and scope.** After the 6b-1 acceptance ledger merged (#2725 `cc6bcad17`), run 1878 was dispatched at
+    12:33 UTC for Tasks 2 to 5 of the approved 6b plan. It ships the manifest program, the writer at swap,
+    limit-resume and revival, and the instrument's stage-3 manifest counts. `.inflight` stays shadow-only: no runtime
+    consumer or delivery is added, and the instrument reads the swap-log counts, not the file. The writer takes
+    `.inflight.lock`, never `.carry.lock` (D-8362), and changes no existing restart act's order.
+  - **The first gate and review 1903.** Three guard-suite failures across two fast runs were fixed before the first
+    wave-done: the first run failed the generation-read compaction-lock census (D-8576) and the new test's
+    gh-containment scan; the second failed the gone-exit tick budget, so the absent-generation-file gate was changed
+    to avoid taking the lock or forking external commands. Review 1903 at `dbe85995` found two important findings:
+    the program applied the narrower
+    Claude-side id grammar to ccd's session id, and an unsearchable config root could read `not-applicable` rather
+    than `unmeasured why=error`. Fix round 1 corrected both, made a finished run's absent latest-agent transcript
+    unread (the reviewer had refuted that as a plan defect; the coordinator ruled to harden it), and bounded reads
+    by their price. It also added the nonblocking-open mutation, a second manifest-line grammar pin, and the
+    spec/README/comment corrections. The measured growth became +95, exactly D-8380's cap.
+  - **Review 1917** at `4c215368` found nothing critical or important, but the record read was not limited to its
+    price, tails could read beyond theirs, the static scan did not check the limit's value, and a vanished agent
+    transcript could retire a finished run. Fix round 2, the last, was rulings R10 to R14: limit the record read,
+    price the newest tail window, check each known site's limit expression, keep the vanished transcript unread,
+    and correct the remaining prose. The worker reported all 80 mutation rows red when mutated and green when
+    restored at `fe42050bb`; that is the worker's complete-row measurement, not a coordinator re-run.
+  - **Review 1929** (round 3, at `fe42050bb`) was narrow over R10 to R14 and found nothing critical or important.
+    It found the rulings in and no out-of-scope change. It independently re-ran the named new mutation rows, but
+    found two minors and four nits:
+    - the scan's five current reads are priced correctly, but an unlisted argument without a limit passes, missing
+      sites are not asserted, and pricing is checked by source substrings (F1, D-8583);
+    - a tail window on a line boundary can drop a whole good line, on the conservative side; the cut-key mutant
+      stays green (F2, D-8584); its behavioural half was single-lens, unrefuted;
+    - a stale oversize check can report a false drop-budget after shrink, and the record's cap is redundant beside
+      its limit (N1 and N3, D-8582); the tail-price comment misdescribes its fixture (N2, D-8584); the plan's
+      MP-RECORDMAX wording omitted that the mutation now removes both bounds (N4, corrected in this ledger PR).
+  - **Review coverage.** Review 1903 ran three Opus/high lenses and a Sonnet/high refute pass through Agent; its
+    report names its unverified items. Review 1929 ran three Opus/high lenses through Agent, none lost, but **zero
+    refuters**, despite the brief asking one per minor. F1 was measured by two lenses; F2's behavioural half and the
+    nits were single-lens, unrefuted. The reviewer separately measured the cut-key gap. The review cap was reached;
+    the coordinator accepted with those limits carried, not with a claim that full refuter coverage ran. No fourth
+    code-fix or review round was opened.
+  - **Accepted** at `fe42050bb`, then reconciled at `4ab349ce6` under that acceptance. The nineteen departures and
+    limits, D-8566 to D-8584, were allocated at acceptance and are defined in
+    `docs/superpowers/plans/2026-11-13-session-continuity-wave6b2-departures.md`. The final merge's local suite counts
+    are worker-reported; the coordinator independently verified the reconciliation and exact-tip CI.
+  - **The landing.** #2742 was already queued ahead and conflicted in the shared inventory comment. Under the
+    second-lander agreement, #2735 held until #2742 merged as `d24da2880`, then merged `main` once. The coordinator's
+    remerge-diff read found only the agreed three comment lines: both `fresh` and `inflight`, the extended count
+    sentence, and `The 55:`. No code reconciliation or additional fix was accepted. The merge was clean against
+    the freshly fetched `main`; growth stayed +95, with no headroom.
+    - Fast run 43499048637 passed on `4ab349ce65e36cc92795c0a0d4d4bb0d0f1cde39`, attempt 1, and all four required
+      checks passed. No failed attempt of a required check was found; a non-required external review-gate app
+      failed. A green fast run alone is not a full-suite proof.
+    - Run 1931 opened first, for 6c (wave 10), before closing 1878 could retire the programme.
+    - Run 1878 advanced to `merging`; landing entry 172 pinned the accepted head. The fresh `BOUND_S=0` verdict
+      selected the native queue, the required-checks gate exited 0, the landing line was unpaused, and mail was
+      clear immediately before enqueue.
+    - #2735 entered the native queue at 20:35:47 UTC, position 5, bound by `--match-head-commit` to that exact head.
+      At 21:03 it was position 1, awaiting checks; it merged at 21:14:43 UTC as `99dd85142`. No re-enqueue was needed.
+  - **The close.** The coordinator independently read MERGED with the exact accepted `headRefOid`, mailed the worker
+    MERGED, then closed run 1878 final with that fingerprint: done, `released:true`. Its own closed row reads done.
+    Reclaim was queued and the subsequent row read it deferred by a hold; the close is not proof of deletion.
+  - **Next.** 6b is complete as a shadow producer, not as restart delivery. Run 1931 is planned for 6c, with no
+    worker dispatched. Its plan first settles the carried reader limits below, then the composed delivery and wake
+    contract. No live stop is armed by this acceptance, and no installed version is inferred from the merge.
+
 ## Carried constraints
 
 - **Every wave that edits `ccd/ccd`** re-stamps it (`ownership.test.ts`), pays the citation tax for every cited file
@@ -1696,6 +1760,26 @@ re-measures the citation corpus and the `_reg_get` census on the merged tree bef
     than 40 bytes, where the drop row and its newline are 52), and the pair arm's stderr cases sit in the budget's
     `describe`.
 
+- **From wave 6b-2 (reviews 1903, 1917 and 1929; Decisions, 2026-11-13 21:17), for 6c and the live arm:**
+  - before any runtime consumer reads `.inflight`, tighten the five-site bounded-read/pricing scan (D-8583), add the
+    distinguishing `size <= tail, limit < size` tail-cut case, and decide the boundary peek and its extra byte
+    explicitly (D-8584); the present line-boundary cut can conservatively report unread;
+  - accept both a listed manifest's LF-terminated lines and a header-only file without a final LF (D-8569), and
+    compare `at=` and `gen=` with the latest spawn as D-8374 requires; a merge is not proof that a new build has
+    written a manifest at every restart;
+  - preserve the distinction between an unlistable base's undated unread count (D-8578) and recent work; take the
+    cross-sidecar FIFO-recency admission limit (D-8579) into the first consumer's decision;
+  - a SendMessage restart of a cut-short agent can be retired as an unjoined send (review 1903 D1; D-8373, D-8402).
+    Settle the agent-id and delivery contract before treating the manifest as a complete restart inventory;
+  - a FIFO at swap.log still blocks the instrument: D-8353 fixed unreadable-file failures, not that pre-existing
+    blocking open. Its next hardening owes the FIFO case;
+  - before arming the live stop, measure the `KillMode=process` revival-manifest overlap and the server's swap
+    deadline with the added manifest time. Both remain unverified, alongside the 6a prerequisites above;
+  - the record's stale oversize term can count a false drop-budget after shrink, and its cap is redundant beside
+    the price limit (D-8582). These are recorded limits, not an authorization to alter the closed 6b branch;
+  - `ccd/ccd` grew by exactly D-8380's +95. Any later growth is measured against its own base and authorization,
+    never silently charged to nonexistent headroom in that waiver.
+
 ## Next-wave brief
 
 Waves 1 and 2 are merged (#230 `a934a59b`, #235 `db44b136`). Owed after their deploys:
@@ -1724,7 +1808,16 @@ v0.0.962, and the fleet box read week 3 with it on v0.0.1088. What is owed now: 
 05:48), and the next is due 2026-11-18 05:38 UTC, owned by this coordinator. `$REG/scope-sweep-live`
 exists since 2026-10-26 23:38 UTC: the operator armed it, and confirmed so on 2026-10-28 (Decisions, 08:00). The operator lifted the stop on 2026-11-07 and lent an account for the spike (item 59), a real one rather than scratch
 (D-8252), and chose the reduced spike (item 75; Decisions, 2026-11-07 14:40 and 22:40). Wave 5's plan, `docs/superpowers/plans/2026-11-07-session-continuity-wave5-reduced-spike.md`, is merged (#2443 `86a713a5`), and so are its results (#2602 `ec7a6caf`; Decisions, 2026-11-11 01:41). After an ordinary swap, a working-directory copy of the script or the script passed inline resumes a run, and the returned path and the carry's copy are refused (build 2.1.314, one
-swap). Task 4 was not run (item 145). §11 item 6 is closed (item 140). Wave 6, stage 3, is next, split into 6a, 6b and 6c (Decisions, 2026-11-11 16:20): run 1777 was opened at `planned`, and 6a's plan, `docs/superpowers/plans/2026-11-11-session-continuity-wave6a-graceful-stop-shadow.md`, was approved as written with the calls for 6b and 6c (item 174) and merged (#2672); run 1777 was dispatched for 6a on 2026-11-12 (Decisions, 2026-11-12 00:14). 6a is merged (#2687 `933f293f`), run 1777 is closed, and run 1845 was opened for 6b, whose plan, `docs/superpowers/plans/2026-11-12-session-continuity-wave6b-launch-record-and-manifest.md`, the operator approved as written (item 176; Decisions, 2026-11-13 11:52): two runs, 6b-1 then 6b-2, with call I amended (D-8362; Decisions, 2026-11-12 07:51). The plan is merged (#2695 `d765e720`). 6b-1 is merged (#2723 `d8c4ed4a`), run 1845 is closed, and run 1878 is open for 6b-2, Tasks 2 to 5 (Decisions, 2026-11-13 11:52). #2603 is on the fleet box (v0.0.1124), so stage 4's no-room rows are re-read with the weekly reading due 2026-11-18.
+swap). Task 4 was not run (item 145). §11 item 6 is closed (item 140). Wave 6, stage 3, is next, split into 6a, 6b and 6c (Decisions, 2026-11-11 16:20): run 1777 was opened at `planned`, and 6a's plan, `docs/superpowers/plans/2026-11-11-session-continuity-wave6a-graceful-stop-shadow.md`, was approved as written with the calls for 6b and 6c (item 174) and merged (#2672); run 1777 was dispatched for 6a on 2026-11-12 (Decisions, 2026-11-12 00:14). 6a is merged (#2687 `933f293f`), run 1777 is closed, and run 1845 was opened for 6b, whose plan, `docs/superpowers/plans/2026-11-12-session-continuity-wave6b-launch-record-and-manifest.md`, the operator approved as written (item 176; Decisions, 2026-11-13 11:52): two runs, 6b-1 then 6b-2, with call I amended (D-8362; Decisions, 2026-11-12 07:51). The plan is merged (#2695 `d765e720`). 6b-1 is merged (#2723 `d8c4ed4a`), run 1845 is closed, and run 1878 was opened for 6b-2, Tasks 2 to 5 (Decisions, 2026-11-13 11:52). #2603 is on the fleet box (v0.0.1124), so stage 4's no-room rows are re-read with the weekly reading due 2026-11-18.
+
+**6b-2 is merged** (#2735 `99dd85142`), run 1878 is closed final, and run 1931 is planned for 6c, opened before that
+close (Decisions, 2026-11-13 21:17). The nineteen departures and carried limits are D-8566 to D-8584, defined in
+`docs/superpowers/plans/2026-11-13-session-continuity-wave6b2-departures.md`. The manifest is still shadow-only;
+merge is not a deployment or live-arm proof. Before dispatch, write 6c's plan against the as-built writer and the
+carried limits above: tighten the scan and tail tests, settle header-only/no-final-LF and freshness handling, the
+unread/recency limits and SendMessage restart identity, then delivery and the wake. The inherited 6a stop prerequisites
+and 6b-2 timing questions remain prerequisites for any live arm. No 6c worker is dispatched yet.
+
 The record below is the wave's history.
 
 Wave 4b is run 308 (dispatched 2026-10-15 16:00 UTC; deviation numbers 4316 to 4325, written bare). Its plan is
