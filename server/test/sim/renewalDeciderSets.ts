@@ -587,19 +587,23 @@ export function genViews(): GView[] {
   const out: GView[] = [];
   for (const state of G_STATES) for (const from of ['active', 'degraded'] as const) for (const cls of [null, 'hard', 'soft'] as const)
     for (const tries of [0, 1, 2]) for (const renudged of [false, true]) for (const probeRounds of [0, 1])
-      for (const hostEnded of [false, true]) out.push({ state, from, tries, cls, renudged, probeRounds, hostEnded });
+      for (const hostEnded of [false, true]) for (const proven of [false, true]) out.push({ state, from, tries, cls, renudged, probeRounds, hostEnded, proven });
   return out;
 }
 
-const FRESH = { from: 'active', tries: 0, cls: null, renudged: false, probeRounds: 0, hostEnded: false } as const;
+const FRESH = { from: 'active', tries: 0, cls: null, renudged: false, probeRounds: 0, hostEnded: false, proven: true } as const;
 type Want = { readonly state: GState; readonly over?: Partial<GView>; readonly actions: readonly GAction[] };
 /** Table 3.3.11a and §3.3.11's sentences, one rule each, first match. `same` is "any event a state does not name". */
 type Rule = { readonly why: string; readonly st: readonly GState[]; readonly ev: (e: GEvent) => boolean;
   readonly when?: (g: GView) => boolean; readonly then: (g: GView) => Want };
 /** "A failure before the first half returns the generation to active, with a hold-off" (the model's
  *  FAILED_RENEWAL_RETURNS='active', ruled by plan review 1890 A2), wherever the renewal began. */
-const BACK = (): Want => ({ state: 'active', over: FRESH, actions: ['release-deliveries', 'set-hold-off'] });
-const DEGRADE: Want = { state: 'degraded', over: { ...FRESH, from: 'degraded' }, actions: ['release-deliveries', 'raise-item'] };
+/** ...and "A generation never becomes active without having read its card and passed its probes" (§3.3.11): one that
+ *  was degraded before it ever passed returns to degraded (the coordinator's ruling, slug a2-active-only-if-proven). */
+const BACK = (g: GView): Want => (g.proven
+  ? { state: 'active', over: FRESH, actions: ['release-deliveries', 'set-hold-off'] }
+  : { state: 'degraded', over: { ...FRESH, from: 'degraded', proven: false }, actions: ['release-deliveries'] });
+const DEGRADE = (g: GView): Want => ({ state: 'degraded', over: { ...FRESH, from: 'degraded', proven: g.proven }, actions: ['release-deliveries', 'raise-item'] });
 const LIVE: readonly GState[] = ['active', 'draining', 'checkpointed', 'clearing', 'carded', 'probing', 'degraded'];
 export const GEN_RULES: readonly Rule[] = [
   { why: '"Every start mints a generation": n ends, n+1 is minted at carded', st: LIVE, ev: (e) => e.kind === 'started',
@@ -625,20 +629,20 @@ export const GEN_RULES: readonly Rule[] = [
   { why: '"A failure after it retries within the state\'s deadline"; renew is idempotent on n', st: ['clearing'],
     ev: (e) => e.kind === 'host-failed', then: (g) => ({ state: 'clearing', over: { tries: g.tries + 1, hostEnded: true }, actions: ['renew'] }) },
   { why: 'clearing "90, for all tries", after the first half: degraded', st: ['clearing'], ev: (e) => e.kind === 'deadline',
-    when: (g) => g.hostEnded, then: () => DEGRADE },
+    when: (g) => g.hostEnded, then: DEGRADE },
   { why: 'clearing times out before the first half: back to the state it left', st: ['clearing'], ev: (e) => e.kind === 'deadline', then: BACK },
   { why: 'carded: the served hash comes back', st: ['carded'], ev: (e) => e.kind === 'card-read' && e.hashMatches,
     then: () => ({ state: 'probing', over: { probeRounds: 0 }, actions: ['start-probes'] }) },
   { why: 'carded "45, with one re-nudge"', st: ['carded'], ev: (e) => e.kind === 'deadline', when: (g) => !g.renudged,
     then: () => ({ state: 'carded', over: { renudged: true }, actions: ['renudge-card'] }) },
-  { why: 'carded after its re-nudge: degraded', st: ['carded'], ev: (e) => e.kind === 'deadline', then: () => DEGRADE },
+  { why: 'carded after its re-nudge: degraded', st: ['carded'], ev: (e) => e.kind === 'deadline', then: DEGRADE },
   { why: '"When probing passes, generation n+1 is active"', st: ['probing'], ev: (e) => e.kind === 'probes' && e.passed,
     then: () => ({ state: 'active', over: FRESH, actions: ['release-deliveries'] }) },
   { why: 'probing "two rounds at most": a first failure re-reads and probes again', st: ['probing'],
     ev: (e) => e.kind === 'probes' && !e.passed, when: (g) => g.probeRounds === 0,
     then: () => ({ state: 'probing', over: { probeRounds: 1 }, actions: ['renudge-card', 'start-probes'] }) },
-  { why: '"Probes that fail twice": degraded', st: ['probing'], ev: (e) => e.kind === 'probes' && !e.passed, then: () => DEGRADE },
-  { why: 'probing "165": degraded', st: ['probing'], ev: (e) => e.kind === 'deadline', then: () => DEGRADE },
+  { why: '"Probes that fail twice": degraded', st: ['probing'], ev: (e) => e.kind === 'probes' && !e.passed, then: DEGRADE },
+  { why: 'probing "165": degraded', st: ['probing'], ev: (e) => e.kind === 'deadline', then: DEGRADE },
 ];
 
 export function expectedStep(g: GView, e: GEvent): { next: GView; actions: readonly GAction[] } {
@@ -669,11 +673,11 @@ export function generationStepCases(m: GenModule): Record<string, SuiteCase> {
   return {
     'the starting views: GEN_ACTIVE works, GEN_MINTED is at carded': () => {
       expect(m.GEN_ACTIVE).toEqual({ state: 'active', ...FRESH });
-      expect(m.GEN_MINTED).toEqual({ state: 'carded', ...FRESH });
+      expect(m.GEN_MINTED).toEqual({ state: 'carded', ...FRESH, proven: false });
     },
     'EXHAUSTIVE: every state x every event x from x cls x the counters\' edges, against Table 3.3.11a written out': () => {
       const views = genViews();
-      expect(views.length * GEN_EVENTS.length).toBe(1152 * 15);
+      expect(views.length * GEN_EVENTS.length).toBe(2304 * 15);
       for (const g of views) for (const e of GEN_EVENTS) expect(m.generationStep(g, e), JSON.stringify([g, e])).toEqual(expectedStep(g, e));
     },
     'PROPERTY (10,000 seeded event sequences from active): G1, no mint without a start, one renew per try, ended terminal': () => {
@@ -710,11 +714,20 @@ export function generationStepCases(m: GenModule): Record<string, SuiteCase> {
       expect(r.actions.at(-1)).toContain('set-hold-off');
     },
     'MODEL FAILED_RENEWAL_RETURNS=active, from degraded too (A2): a failure before the first half returns to active with a hold-off': () => {
-      const deg: GView = { ...m.GEN_ACTIVE, state: 'degraded', from: 'degraded' };
+      const deg: GView = { ...m.GEN_ACTIVE, state: 'degraded', from: 'degraded', proven: true };
       for (const failure of [[ev('drained'), ev('host-failed', { afterEnd: false })], [ev('drained'), ev('deadline')], [ev('deadline')]]) {
         const r = runChain(m, deg, [ev('renew-now'), ...failure]);
         expect(r.views.at(-1), JSON.stringify(failure)).toEqual(m.GEN_ACTIVE);
         expect(r.actions.at(-1)).toEqual(['release-deliveries', 'set-hold-off']);
+      }
+    },
+    'a generation degraded before it ever passed returns to degraded, never to active (§3.3.11; slug a2-active-only-if-proven)': () => {
+      const r0 = runChain(m, m.GEN_MINTED, [ev('deadline'), ev('deadline')]);
+      expect(r0.views.at(-1)).toMatchObject({ state: 'degraded', proven: false });
+      for (const failure of [[ev('drained'), ev('host-failed', { afterEnd: false })], [ev('drained'), ev('deadline')], [ev('deadline')]]) {
+        const r = runChain(m, r0.views.at(-1)!, [ev('renew-now'), ...failure]);
+        expect(r.views.at(-1), JSON.stringify(failure)).toMatchObject({ state: 'degraded', proven: false });
+        expect(r.actions.at(-1)).toEqual(['release-deliveries']);
       }
     },
     'MODEL START_WHILE_DOWN=reported-at-boot: a start reported late still ends n and mints n+1 at carded': () => {
@@ -747,16 +760,18 @@ const GEN_SET: MutantSet<GenModule> = {
     { id: 'G1', old: "if (e.kind === 'card-read' && e.hashMatches) return", new: "if (e.kind === 'card-read') return" },
     { id: 'G2', old: "if (e.passed) return to(GEN_ACTIVE, 'active', ['release-deliveries']);", new: "if (e.passed || g.probeRounds >= 1) return to(GEN_ACTIVE, 'active', ['release-deliveries']);" },
     { id: 'G3', old: "  draining: (g, e) => {\n    if (e.kind === 'drained') {\n      return g.cls === 'hard'", new: "  draining: (g, e) => {\n    if (e.kind === 'drained') {\n      return g.cls !== 'soft'" },
-    { id: 'G4', old: "if (!g.hostEnded && !e.afterEnd) return back();", new: 'if (!e.afterEnd) return back();' },
+    { id: 'G4', old: "if (!g.hostEnded && !e.afterEnd) return back(g);", new: 'if (!e.afterEnd) return back(g);' },
     { id: 'G5', old: "to(GEN_ACTIVE, 'active', ['release-deliveries', 'set-hold-off'])", new: "to(GEN_ACTIVE, 'active', ['release-deliveries'])" },
     { id: 'G6', old: "if (e.kind === 'due' && e.cls === 'hard') return drain(g, 'degraded', 'hard');", new: "if (e.kind === 'due') return drain(g, 'degraded', 'hard');" },
-    { id: 'G7', old: "if (e.kind === 'deadline') return g.renudged ? degrade() : to(g, 'carded', ['renudge-card'], { renudged: true });", new: "if (e.kind === 'deadline') return degrade();" },
-    { id: 'G8', old: "return g.probeRounds >= 1 ? degrade() :", new: 'return g.probeRounds >= 2 ? degrade() :' },
-    { id: 'G9', old: "if (e.kind === 'deadline') return g.hostEnded ? degrade() : back();", new: "if (e.kind === 'deadline') return degrade();" },
+    { id: 'G7', old: "if (e.kind === 'deadline') return g.renudged ? degrade(g) : to(g, 'carded', ['renudge-card'], { renudged: true });", new: "if (e.kind === 'deadline') return degrade(g);" },
+    { id: 'G8', old: "return g.probeRounds >= 1 ? degrade(g) :", new: 'return g.probeRounds >= 2 ? degrade(g) :' },
+    { id: 'G9', old: "if (e.kind === 'deadline') return g.hostEnded ? degrade(g) : back(g);", new: "if (e.kind === 'deadline') return degrade(g);" },
     { id: 'G10', old: "  ended: (g) => same(g),", new: "  ended: (g, e) => (e.kind === 'started' ? startedHere(g) : same(g))," },
-    { id: 'G11', old: "if (e.kind === 'deadline') return g.hostEnded ? degrade() : back();", new: "if (e.kind === 'deadline') return g.hostEnded ? degrade() : g.from === 'degraded' ? degrade() : back();" },
+    { id: 'G11', old: "if (e.kind === 'deadline') return g.hostEnded ? degrade(g) : back(g);", new: "if (e.kind === 'deadline') return g.hostEnded ? degrade(g) : g.from === 'degraded' ? degrade(g) : back(g);" },
+    { id: 'G14', old: 'const back = (g: GenView): GenStep => (g.proven', new: 'const back = (g: GenView): GenStep => (true' },
+    { id: 'G15', old: "proven: g.proven }, 'degraded'", new: "proven: true }, 'degraded'" },
     { id: 'G12', old: "return to(g, 'clearing', ['renew'], { tries: g.tries + 1, hostEnded: true });", new: "return to(g, 'clearing', ['renew', 'renew'], { tries: g.tries + 1, hostEnded: true });" },
-    { id: 'G13', old: "    if (e.kind === 'handover' || e.kind === 'deadline') return clear(g);", new: "    if (e.kind === 'handover') return clear(g);\n    if (e.kind === 'deadline') return back();" },
+    { id: 'G13', old: "    if (e.kind === 'handover' || e.kind === 'deadline') return clear(g);", new: "    if (e.kind === 'handover') return clear(g);\n    if (e.kind === 'deadline') return back(g);" },
   ],
   suite: generationStepCases,
 };

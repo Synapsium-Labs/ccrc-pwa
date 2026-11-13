@@ -41,6 +41,7 @@ const TRANSIENT = new Set(['draining', 'checkpointed', 'clearing', 'carded', 'pr
 
 const M = <T>(value: T): Reading<T> => ({ kind: 'measured', value });
 const U: Reading<never> = { kind: 'unmeasured', why: 'stale' };
+const NA = { kind: 'not-applicable' } as const;
 
 interface Row {
   n: number; view: GenView; mintedObs: number; deadlineAt: number;
@@ -80,6 +81,9 @@ export function generationDay(mods: GenDayModules): Scenario<GenDayEdge> {
       const apply = (who: string, e: GenEvent): void => {
         const r = rows.get(who)!;
         const prev = r.view;
+        // What the server received, logged at receipt (review I4): a card read with its hash verdict, a probe round.
+        if (e.kind === 'card-read') line('card', idOf(who, r.n), e.hashMatches ? 'match' : 'mismatch', 'lane');
+        if (e.kind === 'probes') line('probes', idOf(who, r.n), e.passed ? 'passed' : 'failed', 'lane');
         const step = mods.machine.generationStep(prev, e);
         if (e.kind === 'started' && prev.state !== 'ended') line('start', who, 'applied', 'host');
         r.view = step.next;
@@ -144,10 +148,7 @@ export function generationDay(mods: GenDayModules): Scenario<GenDayEdge> {
       const sessionProbes = (who: string, n: number): void => {
         const late = between(10, 60) * SEC;
         const passed = chance(entropy, 0.85);
-        world.envAfter(late, () => {
-          line('probes', idOf(who, n), passed ? 'passed' : 'failed', 'session');
-          deliver(who, n, { kind: 'probes', passed });
-        });
+        world.envAfter(late, () => deliver(who, n, { kind: 'probes', passed }));
       };
 
       // ---- The world's beat: context growth, compactions, idle stretches, the operator, wave boundaries, unplanned
@@ -222,8 +223,11 @@ export function generationDay(mods: GenDayModules): Scenario<GenDayEdge> {
           const inWindow = r.softStamps.filter((t) => obs!.ms - t < SOFT_BUDGET.windowMs).length;
           const overlord = rows.get('overlord')!;
           const si: SoftInputs = { role, hibernateHold: held ? { held: true, reason: 'background' } : { held: false },
-            readersRunning: M(facts.get(who)!.readers), lastOperatorActivityMs: M(server.clock.wall() - lastOperatorAt),
-            placeHiddenForMs: U, mode: 'when-away', dueSinceObservedMs: obs.ms - r.dueSinceObs,
+            // I7: a coordinator's reader wait is the hold table's in W1a, and it has no Overlord place; the Overlord's
+            // place report is W1's, so unmeasured here.
+            readersRunning: role === 'coordinator' ? NA : M(facts.get(who)!.readers),
+            operatorQuietObservedMs: M(server.clock.wall() - lastOperatorAt),
+            placeHiddenObservedMs: role === 'overlord' ? U : NA, mode: 'when-away', dueSinceObservedMs: obs.ms - r.dueSinceObs,
             generationAgeObservedMs: age(r), holdOffUntilObservedMs: r.holdOffUntil, softRenewalsInWindow: inWindow,
             overlordOutsideActive: overlord.view.state !== 'active' };
           const may = mods.soft.softRenewalMay(si);
@@ -263,7 +267,7 @@ export const GEN_DAY_INVARIANTS: readonly Invariant[] = [
       const minted = new Set<string>(); const card = new Set<string>(); const passed = new Set<string>();
       for (const l of lines) {
         if (l.kind === 'gen' && l.actor === 'mint') minted.add(l.id);
-        if (l.kind === 'gen' && l.state === 'probing') card.add(l.id);
+        if (l.kind === 'card' && l.state === 'match') card.add(l.id);
         if (l.kind === 'probes' && l.state === 'passed' && card.has(l.id)) passed.add(l.id);
         if (l.kind === 'gen' && l.state === 'active' && minted.has(l.id) && !(card.has(l.id) && passed.has(l.id))) {
           return violation('G1', l, `${l.id} active without a read card and a passed round`);

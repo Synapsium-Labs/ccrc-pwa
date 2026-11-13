@@ -22,9 +22,13 @@ const H = 3_600_000;
 
 describe('the generation day\'s invariants go red on a hand-made sequence', () => {
   it('CONTROL: G1 is red on a minted generation that is active without a passed round', () => {
-    const l = seqOf([['gen', 'o#2', 'carded', 'mint'], ['gen', 'o#2', 'probing', 'lane'], ['gen', 'o#2', 'active', 'lane']]);
+    const l = seqOf([['gen', 'o#2', 'carded', 'mint'], ['card', 'o#2', 'match', 'lane'], ['gen', 'o#2', 'probing', 'lane'], ['gen', 'o#2', 'active', 'lane']]);
     expect(byName('G1').check(l)?.invariant).toBe('G1');
-    const ok = seqOf([['gen', 'o#2', 'carded', 'mint'], ['gen', 'o#2', 'probing', 'lane'], ['probes', 'o#2', 'passed', 'session'], ['gen', 'o#2', 'active', 'lane']]);
+    const mismatch = seqOf([['gen', 'o#2', 'carded', 'mint'], ['card', 'o#2', 'mismatch', 'lane'], ['gen', 'o#2', 'probing', 'lane'],
+      ['probes', 'o#2', 'passed', 'lane'], ['gen', 'o#2', 'active', 'lane']]);
+    expect(byName('G1').check(mismatch)?.invariant).toBe('G1');
+    const ok = seqOf([['gen', 'o#2', 'carded', 'mint'], ['card', 'o#2', 'match', 'lane'], ['gen', 'o#2', 'probing', 'lane'],
+      ['probes', 'o#2', 'passed', 'lane'], ['gen', 'o#2', 'active', 'lane']]);
     expect(byName('G1').check(ok)).toBeNull();
   });
   it('CONTROL: G2 is red on a fourth soft renewal inside six observed hours, green on one just outside', () => {
@@ -54,6 +58,17 @@ describe('the generation day\'s invariants go red on a hand-made sequence', () =
 describe('the generation day over seeded runs', () => {
   it('holds G1 to G5 on every seed and reaches every edge', async () => {
     await assertScenario(generationDay(REAL), GEN_DAY_INVARIANTS, { seeds: simSeeds(DEFAULTS), testFile: FILE });
+  }, 600_000);
+
+  it('MUTATION: a generationStep that takes any card read as a match goes red on G1 within the CI seeds (review I4)', async () => {
+    const anyCard: GenDayModules = { ...REAL, machine: { ...machine,
+      generationStep: (g, e) => machine.generationStep(g, e.kind === 'card-read' ? { kind: 'card-read', hashMatches: true } : e) } };
+    let red: string | null = null;
+    for (const seed of DEFAULTS) {
+      const r = await simulate(generationDay(anyCard), seed, GEN_DAY_INVARIANTS);
+      if (r.violations.some((v) => v.invariant === 'G1')) { red = `seed ${seed}`; break; }
+    }
+    expect(red).not.toBeNull();
   }, 600_000);
 
   it('MUTATION: a softRenewalMay that ignores the budget goes red on G2 within the CI seeds', async () => {

@@ -34,6 +34,8 @@ export interface GenView {
   readonly probeRounds: number;
   /** The receipt's first half came in this `clearing`: the old conversation ended. */
   readonly hostEnded: boolean;
+  /** This generation has read its card and passed a round (or was already working when the machine began). */
+  readonly proven: boolean;
 }
 
 export type GenAction = 'hold-deliveries' | 'release-deliveries' | 'assemble-checkpoint' | 'ask-handover' | 'renew'
@@ -42,9 +44,9 @@ export type GenAction = 'hold-deliveries' | 'release-deliveries' | 'assemble-che
 export interface GenStep { readonly next: GenView; readonly actions: readonly GenAction[] }
 
 /** A working generation, outside any renewal. */
-export const GEN_ACTIVE: GenView = { state: 'active', from: 'active', tries: 0, cls: null, renudged: false, probeRounds: 0, hostEnded: false };
-/** A generation as a start mints it: at `carded`, its deliveries held until it is `active`. */
-export const GEN_MINTED: GenView = { ...GEN_ACTIVE, state: 'carded' };
+export const GEN_ACTIVE: GenView = { state: 'active', from: 'active', tries: 0, cls: null, renudged: false, probeRounds: 0, hostEnded: false, proven: true };
+/** A generation as a start mints it: at `carded`, not yet proven, its deliveries held until it is `active`. */
+export const GEN_MINTED: GenView = { ...GEN_ACTIVE, state: 'carded', proven: false };
 
 const same = (g: GenView): GenStep => ({ next: g, actions: [] });
 const to = (g: GenView, state: GenerationState, actions: readonly GenAction[], over: Partial<GenView> = {}): GenStep =>
@@ -55,11 +57,16 @@ const drain = (g: GenView, from: 'active' | 'degraded', cls: TriggerClass): GenS
   to(g, 'draining', ['hold-deliveries'], { from, cls, tries: 0, renudged: false, probeRounds: 0, hostEnded: false });
 
 /** A failure before the receipt's first half: back to `active` with a hold-off, whether the renewal began in `active`
- *  or in `degraded` (the model's FAILED_RENEWAL_RETURNS='active'; plan review 1890, A2). */
-const back = (): GenStep => to(GEN_ACTIVE, 'active', ['release-deliveries', 'set-hold-off']);
+ *  or in `degraded` (the model's FAILED_RENEWAL_RETURNS='active'; plan review 1890, A2), but only for a generation
+ *  that has read its card and passed a round: one degraded before that returns to `degraded`, because a generation
+ *  never becomes `active` without them (§3.3.11; the coordinator's ruling on ask, slug a2-active-only-if-proven). */
+const back = (g: GenView): GenStep => (g.proven
+  ? to(GEN_ACTIVE, 'active', ['release-deliveries', 'set-hold-off'])
+  : to({ ...GEN_ACTIVE, from: 'degraded', proven: false }, 'degraded', ['release-deliveries']));
 
 /** Into `degraded` after the first half, or when a card or probes fail: one operator item. */
-const degrade = (): GenStep => to({ ...GEN_ACTIVE, from: 'degraded' }, 'degraded', ['release-deliveries', 'raise-item']);
+const degrade = (g: GenView): GenStep =>
+  to({ ...GEN_ACTIVE, from: 'degraded', proven: g.proven }, 'degraded', ['release-deliveries', 'raise-item']);
 
 /** Into `clearing`: the host ends the conversation and starts a fresh one; this is the try's one `renew`. */
 const clear = (g: GenView): GenStep => to(g, 'clearing', ['renew'], { tries: 1, hostEnded: false });
@@ -78,7 +85,7 @@ const HANDLERS: Readonly<Record<GenerationState, (g: GenView, e: GenEvent) => Ge
     if (e.kind === 'drained') {
       return g.cls === 'hard' ? clear(g) : to(g, 'checkpointed', ['assemble-checkpoint', 'ask-handover']);
     }
-    if (e.kind === 'deadline') return back();
+    if (e.kind === 'deadline') return back(g);
     if (e.kind === 'started') return startedHere(g);
     return same(g);
   },
@@ -90,25 +97,25 @@ const HANDLERS: Readonly<Record<GenerationState, (g: GenView, e: GenEvent) => Ge
   clearing: (g, e) => {
     if (e.kind === 'host-ended') return to(g, 'clearing', [], { hostEnded: true });
     if (e.kind === 'host-failed') {
-      if (!g.hostEnded && !e.afterEnd) return back();
+      if (!g.hostEnded && !e.afterEnd) return back(g);
       return to(g, 'clearing', ['renew'], { tries: g.tries + 1, hostEnded: true });
     }
-    if (e.kind === 'deadline') return g.hostEnded ? degrade() : back();
+    if (e.kind === 'deadline') return g.hostEnded ? degrade(g) : back(g);
     if (e.kind === 'started') return startedHere(g);
     return same(g);
   },
   carded: (g, e) => {
     if (e.kind === 'card-read' && e.hashMatches) return to(g, 'probing', ['start-probes'], { probeRounds: 0 });
-    if (e.kind === 'deadline') return g.renudged ? degrade() : to(g, 'carded', ['renudge-card'], { renudged: true });
+    if (e.kind === 'deadline') return g.renudged ? degrade(g) : to(g, 'carded', ['renudge-card'], { renudged: true });
     if (e.kind === 'started') return startedHere(g);
     return same(g);
   },
   probing: (g, e) => {
     if (e.kind === 'probes') {
       if (e.passed) return to(GEN_ACTIVE, 'active', ['release-deliveries']);
-      return g.probeRounds >= 1 ? degrade() : to(g, 'probing', ['renudge-card', 'start-probes'], { probeRounds: 1 });
+      return g.probeRounds >= 1 ? degrade(g) : to(g, 'probing', ['renudge-card', 'start-probes'], { probeRounds: 1 });
     }
-    if (e.kind === 'deadline') return degrade();
+    if (e.kind === 'deadline') return degrade(g);
     if (e.kind === 'started') return startedHere(g);
     return same(g);
   },
