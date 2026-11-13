@@ -356,6 +356,10 @@
 .linking-key-line input { width: calc(8ch + 1.5rem + 2px); max-width: 100%; margin: 0; }
 .linking-key-line button { width: auto; flex: 0 0 auto; }
 .linking-cell select { width: 100%; max-width: 100%; }
+/* D-8405: the automatic link's line and the candidates' one-tap buttons, under the key field; long evidence wraps. */
+.linking-candidates { display: grid; gap: calc(var(--pad-card) / 4); min-width: 0; }
+.linking-candidate { display: grid; gap: calc(var(--pad-card) / 8); min-width: 0; }
+.linking-candidate button { width: auto; max-width: 100%; justify-self: start; }
 .linking-result { min-width: 0; }
 .linking-result p { margin: 0; overflow-wrap: anywhere; }
 @container (min-width: 480px) {
