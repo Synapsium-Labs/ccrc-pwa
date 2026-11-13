@@ -97,9 +97,10 @@ const holdOkFlags = (text: string | null): string[] => (text === null ? [] : ['-
  *  --fresh`, spec 2026-11-09 §3.3.11 H13: the same roll, whose wake starts a new conversation under the same session id).
  *  An older ccd binds an unknown bare flag as a second positional and dies on its arity rule. */
 export type HibernateMode = 'sleep' | 'roll' | 'fresh';
-/** The flags each mode sends. NO CAPABILITY DECISION HERE: a caller sends `fresh` only where `ccdCan(…, 'hibernate-fresh')`
- *  answered yes for the box (Table 11.1d), and `roll` only behind `HIBERNATE_ROLL_CAP`; the renewal act adds the
- *  `hibernate-fresh` check with its call. */
+/** The flags each mode sends. NO CAPABILITY DECISION HERE: a caller sends `fresh` only where
+ *  `capSupported(state, HIBERNATE_FRESH_CAP)` answered yes for the box (the word `hibernate-fresh`, Table 11.1d), as `roll`
+ *  is sent only behind `capSupported(state, HIBERNATE_ROLL_CAP)`; the renewal act, the first caller, adds that constant and
+ *  its gate with its call. The server is the only caller by contract. */
 const HIBERNATE_MODE_FLAGS: Readonly<Record<HibernateMode, readonly string[]>> = {
   sleep: [],
   roll: ['--roll'],

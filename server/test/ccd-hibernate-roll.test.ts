@@ -366,9 +366,12 @@ describe('ccd hibernate --roll: one verb sleeps and wakes (D-7458)', () => {
  * The fresh start (overlord W1a; spec 2026-11-09 §3.3.11 H13): `ccd hibernate --roll --fresh <id>` is the roll whose wake
  * starts a NEW conversation under the same session id. After the sleep the roll mints a uuid, names it in the one-shot
  * marker `$REG/<id>.fresh` and writes it as the row's uuid; the spawn that marker chooses (`_spawn_mode`) is
- * `--session-id`, never `--resume`, and consumes it. The marker is the carrier because the roll's wake spawns in the
- * unit's OWN process (plan review 1890 C2). It is a mode of the roll, so it has every refusal and exit code `--roll` has,
- * and a failed wake (exit 4 or 5) removes the marker and puts the old uuid back.
+ * `--session-id`, never `--resume`, and consumes it, leaving the receipt `used <uuid>` the roll reads as its proof. The
+ * marker is the carrier because the roll's wake spawns in the unit's OWN process (plan review 1890 C2). It is a mode of
+ * the roll, so it has every refusal and exit code `--roll` has. A failed wake put back to sleep (exit 4) removes the
+ * marker and puts the old uuid back; on exit 5 the new uuid and its marker stand (plan review 1896 m-B6). A wake that
+ * answered 0 without the receipt (a concurrent wake resumed the old conversation) exits 7, `roll-fresh-unproven`, with the
+ * old uuid back (review 1904 F1).
  *
  * These rows run the REAL `cmd_ensure` and the REAL `_spawn_start` with the settle stubbed; tmux logs the composed
  * `new-session` line, which is the spawn's argv. The unsupervised rows take the no-systemd fallback (the mode computed in
@@ -403,9 +406,13 @@ describe('ccd hibernate --roll --fresh: the roll whose wake starts a fresh conve
     expect(news(), 'one spawn').toHaveLength(1);
     expect(news()[0]).toContain(`--session-id '${u2}'`);
     expect(news()[0]).not.toContain('--resume');
-    expect(has('fresh'), 'the spawn consumed the marker').toBe(false);
+    expect(has('fresh'), 'the spawn consumed the marker, and the roll took its receipt').toBe(false);
     expect(fs.readFileSync(regPath('started'), 'utf8').trim()).toBe('1');
-    expect(eventsOf(h.home, 'hibernate'), 'ONE deliberate act').toHaveLength(1);
+    expect(eventsOf(h.home, 'hibernate'), 'ONE deliberate act, and no failure row').toHaveLength(1);
+    const log = fs.readFileSync(path.join(reg(), 'swap.log'), 'utf8');
+    expect(log, 'swap.log names both uuids').toContain(`hibernate ${ID}: fresh start, uuid ${UUID} -> ${u2}\n`);
+    expect(log).toContain(`hibernate ${ID}: fresh start writes rc 0\n`);
+    expect(log.indexOf(`uuid ${UUID} -> ${u2}`), 'the uuids are logged before the writes\' rc').toBeLessThan(log.indexOf('writes rc 0'));
   });
 
   it('on the SUPERVISED path the marker crosses into the unit\'s own process, and that spawn is --session-id of the new uuid', () => {
@@ -435,6 +442,9 @@ describe('ccd hibernate --roll --fresh: the roll whose wake starts a fresh conve
     const u2 = uuidNow();
     h.sh(`${REAL} ${SPAWNS} ( cmd_ensure ${ID} ) >/dev/null 2>&1`, { TMUX: '' });
     expect(news()[1]).toContain(`--resume '${u2}'`);
+    // The restart's resume of u2 finds no conversation (no pane comes up), so `_spawn_start`'s one retry is `--session-id u2`.
+    expect(news()[2]).toContain(`--session-id '${u2}'`);
+    expect(news()).toHaveLength(3);
     expect(news().every((l) => l.includes(`'${u2}'`)), 'every later spawn names the same new uuid').toBe(true);
     expect(uuidNow()).toBe(u2);
   });
@@ -445,7 +455,19 @@ describe('ccd hibernate --roll --fresh: the roll whose wake starts a fresh conve
     const err = h.sh(`${REAL} ${SPAWNS} _alive() { return 1; }; ( cmd_ensure ${ID} ) 2>&1 >/dev/null`, { TMUX: '' });
     expect(news()[0]).toContain(`--resume '${UUID}'`);
     expect(has('fresh'), 'no stale marker outlives the spawn').toBe(false);
-    expect(err).toContain(`ccd: ${ID}: removing a stale fresh-start marker (it names b0000000-0000-4000-8000-000000000002, not the row's uuid)`);
+    expect(err).toContain(`ccd: ${ID}: removing a stale fresh-start marker (it names b0000000-0000-4000-8000-000000000002; this spawn is resume of ${UUID})`);
+  });
+
+  it.each([
+    ['garbage', 'not-a-uuid\n', 'it names not-a-uuid;'],
+    ['empty', '', 'it names nothing readable;'],
+  ])('a marker that does not parse (%s) is stale: removed, named on stderr, and the spawn resumes', (_n, body, said) => {
+    claimed();
+    fs.writeFileSync(regPath('fresh'), body);
+    const err = h.sh(`${REAL} ${SPAWNS} _alive() { return 1; }; ( cmd_ensure ${ID} ) 2>&1 >/dev/null`, { TMUX: '' });
+    expect(news()[0]).toContain(`--resume '${UUID}'`);
+    expect(has('fresh')).toBe(false);
+    expect(err).toContain(`removing a stale fresh-start marker (${said}`);
   });
 
   it('control: a marker that names the row\'s uuid is not stale: the spawn uses it and says nothing of staleness', () => {
@@ -453,7 +475,7 @@ describe('ccd hibernate --roll --fresh: the roll whose wake starts a fresh conve
     fs.writeFileSync(regPath('fresh'), `${UUID}\n`);
     const err = h.sh(`${REAL} ${SPAWNS} _alive() { return 1; }; ( cmd_ensure ${ID} ) 2>&1 >/dev/null`, { TMUX: '' });
     expect(news()[0]).toContain(`--session-id '${UUID}'`);
-    expect(has('fresh')).toBe(false);
+    expect(h.reg(ID, 'fresh'), 'the consuming spawn leaves its receipt').toBe(`used ${UUID}`);
     expect(err).not.toContain('stale fresh-start marker');
   });
 
@@ -514,6 +536,59 @@ describe('ccd hibernate --roll --fresh: the roll whose wake starts a fresh conve
     expect(r.err).toContain('roll-wake-unrestored');
     expect(uuidNow(), 'the registry keeps naming the conversation that may be running').not.toBe(UUID);
     expect(uuidNow()).toMatch(UUID_RE);
+    expect(h.reg(ID, 'fresh'), 'no spawn consumed it, so the marker stands and names the new uuid').toBe(uuidNow());
+  });
+
+  it('a mint that fails takes the wake-failed arm: exit 4, no wake tried, no marker, the old uuid', () => {
+    claimed();
+    const r = fresh('--roll --fresh', '_plat_uuid() { return 1; };');
+    expect(r.rc, r.err).toBe(4);
+    expect(r.err).toContain('roll-wake-failed');
+    expect(news(), 'no wake was tried').toEqual([]);
+    expect(has('fresh')).toBe(false);
+    expect(uuidNow()).toBe(UUID);
+    expect(has('hibernated')).toBe(true);
+  });
+
+  it('a marker write that fails takes the same arm: exit 4, no wake tried, the old uuid', () => {
+    claimed();
+    const failing = 'eval "$(declare -f _reg_set | sed \'1s/^_reg_set/_reg_set_real/\')"; '
+      + '_reg_set() { [[ "$2" == fresh ]] && return 1; _reg_set_real "$@"; };';
+    const r = fresh('--roll --fresh', failing);
+    expect(r.rc, r.err).toBe(4);
+    expect(news()).toEqual([]);
+    expect(uuidNow()).toBe(UUID);
+    expect(fs.readFileSync(path.join(reg(), 'swap.log'), 'utf8')).toMatch(/fresh start writes rc 1\n/);
+  });
+
+  // REVIEW 1904 F1: a concurrent wake (the mail lane's `ensure`) can land in the window between the kill and the roll's
+  // own wake. The roll's wake then answers `alive:` at exit 0, and only the consuming spawn's receipt says whether the
+  // conversation is fresh. Both races are run with the REAL `cmd_ensure` as the concurrent wake.
+  const CONCURRENT = `_alive() { grep -q new-session "$HOME/ccd-calls" 2>/dev/null; }; wake_now() { ( cmd_ensure ${ID} ) >/dev/null 2>&1; };`;
+  const unproven = (r: { rc: number; err: string; out: string }): void => {
+    expect(r.rc, r.err).toBe(7);
+    expect(r.err).toMatch(new RegExp(`ccd: roll-fresh-unproven — ${ID} woke, but not into the fresh conversation [0-9a-f-]{36} .*its uuid is back to ${UUID}`));
+    expect(r.out).not.toContain(`rolled ${ID}`);
+    expect(news().some((l) => l.includes(`--resume '${UUID}'`)), 'the concurrent wake resumed the OLD conversation').toBe(true);
+    expect(news().filter((l) => !l.includes(`'${UUID}'`)), 'no spawn of the new uuid ran').toEqual([]);
+    expect(has('fresh'), 'no marker is left').toBe(false);
+    expect(uuidNow(), 'the registry names the conversation that runs').toBe(UUID);
+    expect(fs.readFileSync(path.join(reg(), 'swap.log'), 'utf8')).toContain(`hibernate ${ID}: fresh start unproven`);
+    expect(eventsOf(h.home, 'hibernate').filter((e) => e['outcome'] === 'failed').map((e) => e['refusal']))
+      .toEqual(['roll-fresh-unproven']);
+  };
+
+  it('F1, a wake BEFORE the writes: the pane resumed the old uuid, the roll answers alive, and it is exit 7, not success', () => {
+    claimed();
+    const before = 'eval "$(declare -f _plat_uuid | sed \'1s/^_plat_uuid/_plat_uuid_real/\')"; _plat_uuid() { wake_now; _plat_uuid_real; };';
+    unproven(fresh('--roll --fresh', `${CONCURRENT} ${before}`));
+  });
+
+  it('F1, a wake BETWEEN the writes: the spawn removes the marker as stale and resumes, and it is exit 7, not success', () => {
+    claimed();
+    const between = 'eval "$(declare -f _reg_set | sed \'1s/^_reg_set/_reg_set_real/\')"; '
+      + '_reg_set() { _reg_set_real "$@"; local rc=$?; if [[ "$2" == fresh && ! -e "$HOME/woke-once" ]]; then : > "$HOME/woke-once"; wake_now; fi; return $rc; };';
+    unproven(fresh('--roll --fresh', `${CONCURRENT} ${between}`));
   });
 
   it('caps advertises hibernate-fresh', () => {

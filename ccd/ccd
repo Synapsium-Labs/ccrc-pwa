@@ -26379,13 +26379,17 @@ _spawn_start() {   # id mode(new|resume) -> creates the tmux session, sets SPAWN
   lastswap=$(_reg_get "$id" lastswap)
   [[ "$lastswap" =~ ^[0-9]+$ && $(( $(date +%s) - lastswap )) -lt 300 ]] && fromswap=1
   if [[ "$mode" == "resume" ]]; then sidflag="--resume '$uuid'"; else sidflag="--session-id '$uuid'"; fi
-  # A fresh start's marker is consumed by the spawn it chose (`_spawn_mode`). One that did not choose it is STALE (it names
-  # a uuid other than the row's, e.g. left by a killed roll), and goes too, said on stderr (plan review 1896 m-B7). One that
-  # names the row's uuid is never stale, however old: that uuid has no conversation to resume.
-  if [[ -e "$REG/$id.fresh" ]]; then
-    local sf=''; { IFS= read -r sf < "$REG/$id.fresh"; } 2>/dev/null
-    [[ "$mode" == new ]] || echo "ccd: $id: removing a stale fresh-start marker (it names ${sf:-nothing readable}, not the row's uuid)" >&2
-    rm -f -- "$REG/$id.fresh"
+  # A fresh start's marker is consumed by the `new` spawn it chose (`_spawn_mode`), which leaves `used <uuid>` for the roll
+  # to read. Any other is STALE (another uuid, unreadable, a receipt left by a killed roll, or a spawn that is not `new`),
+  # and goes, said on stderr (plan review 1896 m-B7). One that names the row's uuid is never stale, however old.
+  if [[ -e "$REG/$id.fresh" || -L "$REG/$id.fresh" ]]; then
+    local sf=''; _reg_get_to sf "$id" fresh
+    if [[ "$mode" == new && "$sf" == "$uuid" ]]; then   # consumed: the receipt is `cmd_hibernate`'s proof of a fresh start
+      _reg_set "$id" fresh "used $uuid" || rm -f -- "$REG/$id.fresh"
+    else
+      echo "ccd: $id: removing a stale fresh-start marker (it names ${sf:-nothing readable}; this spawn is $mode of $uuid)" >&2
+      rm -f -- "$REG/$id.fresh"
+    fi
   fi
   # WHETHER THIS BOX DRIVES ITS SESSIONS OVER THE RC SOCKET — read ONCE, here,
   # and used by BOTH spawn lines below (the primary and the --session-id retry).
@@ -32573,11 +32577,12 @@ cmd_hibernate() {   # [--roll] [--surface <word>] [--actor <text>] [--reason <te
   # `--fresh` (spec 2026-11-09 §3.3.11 H13, the renewal's adapter): a mode of `--roll`, refused without it, so it has every
   # refusal and exit code the roll has. Before the wake it mints a uuid, writes it as the row's and names it in
   # `$REG/<id>.fresh`, so the wake (in the unit's own process) starts a new conversation under the same session id
-  # (`_spawn_mode`). A failed wake that is put back to sleep (exit 4) removes the marker and puts the old uuid back.
+  # (`_spawn_mode`). A failed wake that is put back to sleep (exit 4) removes the marker and puts the old uuid back. A wake
+  # that answered 0 without the consuming spawn's receipt exits 7, `ccd: roll-fresh-unproven — …`, the old uuid back.
   # `ccd caps` says `hibernate-fresh`.
   local usage="usage: ccd hibernate [--surface <word>] [--actor <text>] [--reason <text>] <id>"
   local lc_gh=0 lc_holdok=''   # `--hold-ok <text>` (D-6091)
-  local lc_roll=0 lc_fresh=0 lc_u1='' lc_u2=''
+  local lc_roll=0 lc_fresh=0 lc_u1='' lc_u2='' lc_rcpt=''
   while (( $# )); do
     case "$1" in
       --roll)      lc_roll=1; shift ;;
@@ -32707,11 +32712,25 @@ cmd_hibernate() {   # [--roll] [--surface <word>] [--actor <text>] [--reason <te
   local wrc=0 lc_woke='' lc_had_woke=0
   if [[ -e "$REG/$id.woke" || -L "$REG/$id.woke" ]]; then lc_had_woke=1; IFS= read -r lc_woke < "$REG/$id.woke" 2>/dev/null || true; fi
   if (( lc_fresh )); then   # the marker first: a uuid written without it would still resume (`_spawn_mode`), never the reverse
-    _reg_get_to lc_u1 "$id" uuid; lc_u2=$(_plat_uuid)
-    _reg_set "$id" fresh "$lc_u2" && _reg_set "$id" uuid "$lc_u2" || wrc=$?
-    echo "$(date '+%F %T') hibernate $id: fresh start, uuid $lc_u1 -> $lc_u2 (rc $wrc)" >> "$REG/swap.log"
+    _reg_get_to lc_u1 "$id" uuid; lc_u2=$(_plat_uuid) && [[ -n "$lc_u2" ]] || wrc=1
+    echo "$(date '+%F %T') hibernate $id: fresh start, uuid $lc_u1 -> $lc_u2" >> "$REG/swap.log"   # before the writes, so a kill keeps u1 named
+    (( wrc )) || { _reg_set "$id" fresh "$lc_u2" && _reg_set "$id" uuid "$lc_u2"; } || wrc=$?
+    echo "$(date '+%F %T') hibernate $id: fresh start writes rc $wrc" >> "$REG/swap.log"
   fi
   (( wrc )) || ( cmd_ensure "$id" ) || wrc=$?
+  # A FRESH START IS PROVEN, NEVER ASSUMED (review 1904 F1): the wake's exit 0 also covers a concurrent wake that resumed
+  # the old conversation (its pane is up, so this one answers `alive:`) and a stale removal. Only the receipt the
+  # consuming `new` spawn writes (`_spawn_start`) proves it; without it, the old uuid is back and the answer is exit 7.
+  if (( lc_fresh && ! wrc )); then
+    _reg_get_to lc_rcpt "$id" fresh; rm -f -- "$REG/$id.fresh"
+    if [[ "$lc_rcpt" != "used $lc_u2" ]]; then
+      [[ -n "$lc_u1" ]] && { _reg_set "$id" uuid "$lc_u1" || true; }
+      echo "$(date '+%F %T') hibernate $id: fresh start unproven (marker read ${lc_rcpt:-absent}), uuid back to $lc_u1" >> "$REG/swap.log"
+      _lc_fail hibernate "$id" "" roll-fresh-unproven "woke, but no spawn of $lc_u2 consumed its marker"
+      echo "ccd: roll-fresh-unproven — $id woke, but not into the fresh conversation $lc_u2 (a concurrent wake, or one that moved it); its uuid is back to ${lc_u1:-nothing} and it runs the conversation that woke" >&2
+      exit 7
+    fi
+  fi
   if (( wrc != 0 )); then
     # Back to sleep, in the act's own order: the marker first, then the unit, then a pane the unit may have raised late.
     # A unit that could not be stopped again is not the sanctioned hibernated row (a Restart=always unit retries it), so
@@ -32732,7 +32751,7 @@ cmd_hibernate() {   # [--roll] [--surface <word>] [--actor <text>] [--reason <te
       if (( lc_had_woke )); then _reg_set "$id" woke "$lc_woke" || true; else rm -f -- "$REG/$id.woke"; fi
       # A fresh start that did not wake keeps the old conversation: its marker goes, the old uuid is back. Exit 4 only: on
       # exit 5 a pane may still run the new conversation, and the registry must keep naming it (plan review 1896 m-B6).
-      [[ -n "$lc_u1" ]] && { rm -f -- "$REG/$id.fresh"; _reg_set "$id" uuid "$lc_u1" || true; }
+      (( lc_fresh )) && { rm -f -- "$REG/$id.fresh"; [[ -z "$lc_u1" ]] || _reg_set "$id" uuid "$lc_u1" || true; }
       echo "$(date '+%F %T') hibernate $id: roll wake failed (rc $wrc), back to sleep" >> "$REG/swap.log"
       echo "ccd: roll-wake-failed — $id was hibernated and its wake exited $wrc; it was put back to sleep (hibernated, unit stopped), and mail, an open screen or ccd ensure wakes it" >&2
       exit 4
