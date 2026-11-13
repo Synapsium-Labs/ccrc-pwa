@@ -35,13 +35,62 @@ export interface FleetRoleRow {
 
 /** Keys in Table 3.3.9a's order. */
 export const FLEET_ROLES: Readonly<Record<FleetRole, FleetRoleRow>> = {
-  overlord: { longLived: true, sessionRole: 'coordinator', launchProfile: null, cardRenderer: null, compactInstructions: null, probeSet: null },
-  auditor: { longLived: false, sessionRole: 'child', launchProfile: null, cardRenderer: null, compactInstructions: null, probeSet: null },
-  replay: { longLived: false, sessionRole: 'child', launchProfile: null, cardRenderer: null, compactInstructions: null, probeSet: null },
-  worker: { longLived: false, sessionRole: 'child', launchProfile: null, cardRenderer: null, compactInstructions: null, probeSet: null },
-  reviewer: { longLived: false, sessionRole: 'child', launchProfile: null, cardRenderer: null, compactInstructions: null, probeSet: null },
-  coordinator: { longLived: true, sessionRole: 'coordinator', launchProfile: null, cardRenderer: null, compactInstructions: null, probeSet: null },
-  plain: { longLived: false, sessionRole: 'coordinator', launchProfile: null, cardRenderer: null, compactInstructions: null, probeSet: null },
+  overlord: {
+    longLived: true,
+    sessionRole: 'coordinator',
+    launchProfile: null,
+    cardRenderer: null,
+    compactInstructions: null,
+    probeSet: null,
+  },
+  auditor: {
+    longLived: false,
+    sessionRole: 'child',
+    launchProfile: null,
+    cardRenderer: null,
+    compactInstructions: null,
+    probeSet: null,
+  },
+  replay: {
+    longLived: false,
+    sessionRole: 'child',
+    launchProfile: null,
+    cardRenderer: null,
+    compactInstructions: null,
+    probeSet: null,
+  },
+  worker: {
+    longLived: false,
+    sessionRole: 'child',
+    launchProfile: null,
+    cardRenderer: null,
+    compactInstructions: null,
+    probeSet: null,
+  },
+  reviewer: {
+    longLived: false,
+    sessionRole: 'child',
+    launchProfile: null,
+    cardRenderer: null,
+    compactInstructions: null,
+    probeSet: null,
+  },
+  coordinator: {
+    longLived: true,
+    sessionRole: 'coordinator',
+    launchProfile: null,
+    cardRenderer: null,
+    compactInstructions: null,
+    probeSet: null,
+  },
+  plain: {
+    longLived: false,
+    sessionRole: 'coordinator',
+    launchProfile: null,
+    cardRenderer: null,
+    compactInstructions: null,
+    probeSet: null,
+  },
 };
 
 export const FLEET_ROLE_NAMES: readonly FleetRole[] = Object.keys(FLEET_ROLES) as FleetRole[];
