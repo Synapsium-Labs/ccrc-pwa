@@ -30,6 +30,10 @@ parsing test behind one module, the later parser swap touches that module alone.
 - `.github/ci/reach.mjs`: `READS.pwa` gains `server/test/scan/` (22 pwa files read it), so a pull request touching
   the parser module runs the pwa suite.
 - `.github/dependabot.yml`: the `typescript-api` exception says it is the whole repository's parser.
+- `pwa/tsconfig.json`: `paths` resolves `typescript-api` to server's pinned copy first and to pwa's own `typescript`
+  when server is not installed, so pwa's typecheck (the first half of its `npm run build`) needs no server install.
+  `pwa/test/parser-resolution.test.ts` proves both halves with TypeScript's module resolution over pwa's compiler
+  options, and pins that pwa's locked `typescript` is the same release as the locked pin.
 
 ### Results identical, before and after (this tree)
 
@@ -45,16 +49,15 @@ Not in this change: no TypeScript 7 bump in any package and no build or deploy s
 
 ## Deviations found
 
-- pwa's typecheck (and its `npm run build`) now resolves `typescript-api` from `server/node_modules`, as it already
-  resolves ui's imports from `ui/node_modules`. `install.sh`, `deploy/build-release.sh` and CI's shared install
-  install server before they build pwa.
-- KNOWN WIDTH: `deploy/deploy.sh`'s server lane does not. It installs ui, then runs pwa's `npm ci && npm run build`
-  locally, and installs server only on the target, after the build. From a fresh clone or worktree, which is how
-  deploys run, pwa's `tsc --noEmit` fails with TS2307 "Cannot find module 'typescript-api'" and the deploy stops
-  before it ships anything. A developer checkout that already has `server/node_modules` builds. The fix is one line,
-  `(cd server && npm ci --no-audit --no-fund)` before the pwa build, with a `ci-pipeline.test.ts` walk that pins
-  the order. It is not in this change (the change leaves every build and deploy script alone) and lands separately;
-  until it does, run `npm ci` in `server/` before a deploy.
+- pwa's typecheck (and its `npm run build`) compiles the suites that import `scan/parse.ts`, whose `typescript-api`
+  is installed in `server/node_modules` alone. `install.sh`, `deploy/build-release.sh` and CI's shared install
+  install server before they build pwa; `deploy/deploy.sh`'s server lane does not (it installs ui, builds pwa
+  locally, and installs server only on the target), so from a fresh clone or worktree the build stopped on TS2307
+  "Cannot find module 'typescript-api'" before it shipped anything. Fixed without touching the deploy script:
+  `pwa/tsconfig.json` falls back to pwa's own `typescript` (above). Measured: with `server/node_modules` moved
+  away, pwa's `tsc --noEmit -p .` exits 0.
+- KNOWN WIDTH: the fallback is types only. Running the suites still loads `typescript-api` from `server/node_modules`;
+  every lane that runs them installs server first.
 - KNOWN WIDTH: a pull request that only bumps the pin (server's `package.json` and lock) does not run the pwa suite;
   the merge queue does.
 - Not done here: jsdom 30's `^22.22.2` Node range against pwa's `engines` floor (`>=22.16.0`), the ticket's tidy item.
