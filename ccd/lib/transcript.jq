@@ -221,7 +221,7 @@ def lb_row: . as $l
     else [try fromjson catch ($l | unsurrogate | try fromjson catch empty)][] end
   | select(type == "object");
 def lb_at($s): if $s == null then null else [.timestamp | lb_epoch] | .[0] end;
-# THE RATE-LIMIT ROW AND ITS RESET, ONE SPELLING FOR TWO READERS (D-8368): `limit_banner` and `agent_end` both test a row with
+# THE RATE-LIMIT ROW AND ITS RESET, ONE SPELLING FOR TWO READERS (D-8371): `limit_banner` and `agent_end` both test a row with
 # `lb_ratelimit` and read its reset with `lb_reset`, so the two cannot disagree on one. `lb_reset` prints a finite whole number
 # as digits, else the empty string.
 def lb_ratelimit: .type == "assistant" and .isApiErrorMessage == true and .error == "rate_limit";

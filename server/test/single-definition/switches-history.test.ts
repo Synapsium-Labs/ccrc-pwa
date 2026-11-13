@@ -1162,7 +1162,7 @@ describe('the launch record: one appender, one purge, and no reader in the tree 
   });
 });
 
-// SESSION-CONTINUITY 6B-2 (D-8369). `$REG/<id>.inflight`, the restart manifest's file: ONE writer, `_inflight_write` in ccd/ccd, on exactly
+// SESSION-CONTINUITY 6B-2 (D-8374). `$REG/<id>.inflight`, the restart manifest's file: ONE writer, `_inflight_write` in ccd/ccd, on exactly
 // three code lines (its listed write, its header-only write, and the `rm` that stands when a write fails), and no reader in the tree in 6b.
 // APPENDED for the reason the blocks above state. The patterns match the REGISTRY spellings only, never the bare word: `this.inflight` already
 // stands in four `server/src` lanes. The manifest's own slot, `"$REG/.inflight.lock"`, is not a site and is not matched (R-A).
