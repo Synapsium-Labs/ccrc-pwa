@@ -148,7 +148,7 @@ describe('console speed S2: the beat of both sockets', () => {
     for (let i = 1; i <= 2; i += 1) {
       vi.advanceTimersByTime(BEAT_MS);
       await settle();
-      // the 2 s poll fakes along too and may emit other frames; only the beat count is in question
+      // the backstop fakes along too and may emit other frames; only the beat count is in question
       expect(beatsOf(frames)).toBe(i);
     }
     ws.close();

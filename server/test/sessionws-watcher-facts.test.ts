@@ -1,7 +1,7 @@
 // Console speed S2: a chat stream takes its row facts from the watcher's last tick and re-resolves on change
-// (a `row:<id>` event, the tailer's rotation, a 30 s backstop) instead of every 2 s. D-8611: every stream is given a
-// source; a watcher that has not ticked (and a box with none, `NO_TICK`) has no fresh listing, so the 2 s look falls
-// back to a full resolve, as before.
+// (a `row:<id>` event, the tailer's rotation, a 30 s backstop) instead of every 2 s. D-8611: the stream has no timer of
+// its own but the backstop. A status change reaches it in the watcher's fleet frame (`'fleet'`), and a box with no
+// watcher (`NO_TICK`) re-resolves on the backstop alone.
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
@@ -39,7 +39,7 @@ describe('a chat stream and the watcher\'s row facts (console speed S2)', () => 
   let record: SessionRecord;
   let factsReads: number;
   let listedAgeMs: number;
-  /** The row the watcher's fleet listing holds for the session; null is no fresh listing at all. */
+  /** The row the watcher's next fleet frame holds for the session; null is a frame without it. */
   let listing: { status: 'busy' | 'idle' | 'dead'; statusUpdatedAt: number | null } | null;
   /** While set, every io read waits on it: a tick held in flight. */
   let hold: Promise<void> | null;
@@ -53,9 +53,9 @@ describe('a chat stream and the watcher\'s row facts (console speed S2)', () => 
       onFactsRead?.();
       return { record: structuredClone(record), verdict: { verdict: 'live' }, pid: PID, listedAt: Date.now() - listedAgeMs };
     },
-    currentFleetListing: () => (listing === null ? null
-      : { sessions: [{ id: ID, ...listing } as FleetSession], listedAt: Date.now() }),
   };
+  /** The watcher's fleet frame, as its tick sends one when the listing changed. */
+  const fleetFrame = (): void => { bus.emit('fleet', listing === null ? [] : [{ id: ID, ...listing } as FleetSession]); };
   let onFactsRead: (() => void) | undefined;
   const liveFile = (status: string, at: number): void => {
     writeFileSync(path.join(home, '.claude-a', 'sessions', `${PID}.json`), JSON.stringify({
@@ -171,22 +171,25 @@ describe('a chat stream and the watcher\'s row facts (console speed S2)', () => 
     try { expect(factsReads).toBeGreaterThan(0); } finally { s.stop(); }
   });
 
-  it('a watcher that has not ticked (NO_TICK): the stream reads for itself and re-resolves every 2 s (D-8611)', async () => {
+  it('a box with no watcher (NO_TICK): the stream reads for itself and re-resolves on the backstop alone (D-8611)', async () => {
     vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'Date'] });
     const s = await open(NO_TICK);
     try {
       expect({ hasSession, listPanes }).toEqual({ hasSession: 1, listPanes: 1 });
       expect(registryListings).toBeGreaterThan(0);
       const before = registryListings;
-      await vi.advanceTimersByTimeAsync(2000);
-      expect(registryListings).toBeGreaterThan(before);   // no fresh listing: the 2 s look runs a full resolve
+      await vi.advanceTimersByTimeAsync(STREAM_BACKSTOP_MS - 1000);
+      expect(registryListings, 'no 2 s poll: nothing re-reads before the backstop').toBe(before);
+      await vi.advanceTimersByTimeAsync(1000);
+      await vi.waitFor(() => expect(registryListings).toBeGreaterThan(before));
       expect(factsReads).toBe(0);
-      expect(bus.listenerCount(`row:${ID}`), 'it listens for its row as a watched stream does').toBe(1);
+      expect({ row: bus.listenerCount(`row:${ID}`), fleet: bus.listenerCount('fleet') }, 'it listens as a watched stream does')
+        .toEqual({ row: 1, fleet: 1 });
     } finally { s.stop(); }
   });
 
-  it('NO_TICK has neither row facts nor a listing (D-8611)', () => {
-    expect({ facts: NO_TICK.currentRowFacts(ID), listing: NO_TICK.currentFleetListing() }).toEqual({ facts: null, listing: null });
+  it('NO_TICK has no row facts (D-8611)', () => {
+    expect(NO_TICK.currentRowFacts(ID)).toBeNull();
   });
 
   it('a stream is never built without a row-facts source (D-8611)', () => {
@@ -195,11 +198,11 @@ describe('a chat stream and the watcher\'s row facts (console speed S2)', () => 
     expect(typeof make).toBe('function');
   });
 
-  it('a stream given a watcher stops listening for its row when it stops', async () => {
+  it('a stream given a watcher stops listening for its row and the fleet when it stops', async () => {
     const s = await open(source);
-    expect(bus.listenerCount(`row:${ID}`)).toBe(1);
+    expect({ row: bus.listenerCount(`row:${ID}`), fleet: bus.listenerCount('fleet') }).toEqual({ row: 1, fleet: 1 });
     s.stop();
-    expect(bus.listenerCount(`row:${ID}`)).toBe(0);
+    expect({ row: bus.listenerCount(`row:${ID}`), fleet: bus.listenerCount('fleet') }).toEqual({ row: 0, fleet: 0 });
   });
 
   it('a row event during an in-flight tick is not lost', async () => {
@@ -216,8 +219,7 @@ describe('a chat stream and the watcher\'s row facts (console speed S2)', () => 
     } finally { s.stop(); }
   });
 
-  it('a poll that finds a tick in flight drops, as before: only a row event is kept (fix round 1, F2)', async () => {
-    listing = null;                                               // no fresh listing: every 2 s poll runs a full tick
+  it('a backstop that finds a tick in flight drops, as before: only a change is kept (fix round 1, F2)', async () => {
     vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'Date'] });
     const s = await open(source);
     const ticking = (): boolean => (s as unknown as { ticking: boolean }).ticking;
@@ -225,14 +227,29 @@ describe('a chat stream and the watcher\'s row facts (console speed S2)', () => 
       const before = factsReads;
       let release: () => void = () => undefined;
       hold = new Promise<void>((r) => { release = r; });
-      await vi.advanceTimersByTimeAsync(2000);                    // a poll's tick starts and waits on its reads
+      await vi.advanceTimersByTimeAsync(STREAM_BACKSTOP_MS);      // the backstop's tick starts and waits on its reads
       await vi.waitFor(() => expect(factsReads).toBe(before + 1));
-      await vi.advanceTimersByTimeAsync(4000);                    // two more polls find it in flight
+      await vi.advanceTimersByTimeAsync(STREAM_BACKSTOP_MS);      // the next backstop finds it in flight
       expect(ticking()).toBe(true);
       hold = null; release();
       await vi.waitFor(() => expect(ticking()).toBe(false));
       await new Promise((r) => setTimeout(r, 50));                // room for a kept trigger's tick to start
-      expect(factsReads, 'a dropped poll ran no tick when the held one ended').toBe(before + 1);
+      expect(factsReads, 'a dropped backstop ran no tick when the held one ended').toBe(before + 1);
+    } finally { s.stop(); }
+  });
+
+  it('a status change in a fleet frame during an in-flight tick is kept (D-8611)', async () => {
+    const s = await open(source);
+    try {
+      let release: () => void = () => undefined;
+      hold = new Promise<void>((r) => { release = r; });
+      bus.emit(`row:${ID}`, { listedAt: Date.now() });            // a tick starts and waits on its reads
+      await vi.waitFor(() => expect(factsReads).toBeGreaterThan(1));
+      record = { ...record, uuid: UUID_B };
+      listing = { status: 'busy', statusUpdatedAt: LIVE_AT + 1000 };
+      fleetFrame();                                               // skipped by the no-overlap rule, and kept
+      hold = null; release();
+      await vi.waitFor(() => expect(rotatedUuids()).toEqual([UUID_B]));
     } finally { s.stop(); }
   });
 
@@ -243,16 +260,15 @@ describe('a chat stream and the watcher\'s row facts (console speed S2)', () => 
     try { await vi.waitFor(() => expect(rotatedUuids()).toEqual([UUID_B])); } finally { s.stop(); }
   });
 
-  it('a working-to-idle flip in the listing reaches the stream within one interval', async () => {
+  it('a working-to-idle flip in the watcher\'s fleet frame reaches the stream (D-8611)', async () => {
     liveFile('busy', LIVE_AT - 5000);
     listing = { status: 'busy', statusUpdatedAt: LIVE_AT - 5000 };
-    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'Date'] });
     const s = await open(source);
     try {
       expect(statusFrames()).toEqual([{ type: 'status', status: 'busy', statusUpdatedAt: LIVE_AT - 5000 }]);
       liveFile('idle', LIVE_AT);
       listing = { status: 'idle', statusUpdatedAt: LIVE_AT };
-      await vi.advanceTimersByTimeAsync(2000);
+      fleetFrame();
       await vi.waitFor(() => expect(statusFrames().at(-1)).toEqual({ type: 'status', status: 'idle', statusUpdatedAt: LIVE_AT }));
     } finally { s.stop(); }
   });
@@ -263,29 +279,32 @@ describe('a chat stream and the watcher\'s row facts (console speed S2)', () => 
     const tick = vi.spyOn(s as unknown as { tick: () => Promise<void> }, 'tick');
     try {
       listing = { status: 'idle', statusUpdatedAt: LIVE_AT + 1000 };
-      await vi.advanceTimersByTimeAsync(2000);
+      fleetFrame();
       expect(tick).toHaveBeenCalledTimes(1);
     } finally { s.stop(); }
   });
 
-  it('an unchanged row runs no tick', async () => {
+  it('an unchanged row in a fleet frame runs no tick', async () => {
     vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'Date'] });
     const s = await open(source);
     const tick = vi.spyOn(s as unknown as { tick: () => Promise<void> }, 'tick');
     try {
+      fleetFrame();
       await vi.advanceTimersByTimeAsync(10_000);
+      fleetFrame();
       expect(tick).not.toHaveBeenCalled();
     } finally { s.stop(); }
   });
 
-  it('a missing listing falls back to today\'s poll', async () => {
-    listing = null;
+  it('a fleet frame without the row runs no tick: its row event says it left, and the backstop covers the rest (D-8611)', async () => {
     vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'Date'] });
     const s = await open(source);
     const tick = vi.spyOn(s as unknown as { tick: () => Promise<void> }, 'tick');
     try {
-      await vi.advanceTimersByTimeAsync(6000);
-      expect(tick).toHaveBeenCalledTimes(3);
+      listing = null;
+      fleetFrame();
+      await vi.advanceTimersByTimeAsync(STREAM_BACKSTOP_MS - 1000);
+      expect(tick, 'no frame of its own and no 2 s look at the listing').not.toHaveBeenCalled();
     } finally { s.stop(); }
   });
 
@@ -295,9 +314,8 @@ describe('a chat stream and the watcher\'s row facts (console speed S2)', () => 
     const s = await open(source);
     try {
       expect(frames.some((f) => f.type === 'notice')).toBe(true);
-      expect(bus.listenerCount(`row:${ID}`)).toBe(0);
-      const timers = s as unknown as { poll: unknown; backstop: unknown };
-      expect({ poll: timers.poll, backstop: timers.backstop }).toEqual({ poll: null, backstop: null });
+      expect({ row: bus.listenerCount(`row:${ID}`), fleet: bus.listenerCount('fleet') }).toEqual({ row: 0, fleet: 0 });
+      expect((s as unknown as { backstop: unknown }).backstop).toBeNull();
     } finally { s.stop(); }
   });
 });

@@ -2258,7 +2258,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     const { id } = req.params as { id: string };
     const q = req.query as { since?: string; sinceFile?: string };
     const since = parseSince(q.since, q.sinceFile);
-    // D-8611: a box with no watcher hands one that has not ticked, so the stream has one schedule either way.
+    // D-8611: a box with no watcher hands NO_TICK; its streams read for themselves and re-resolve on the backstop alone.
     const stream = new SessionStream(deps, bus, id, (m: SessionStreamMsg) => socket.send(JSON.stringify(m)), since, watcher ?? NO_TICK);
     void stream.start();
     // A per-connection token, not the session id: one socket's close drops

@@ -406,8 +406,8 @@ const fixture = (name: string): string =>
   readFileSync(path.join(FIXTURES, name.endsWith('.jsonl') ? name : path.join('panes', name)), 'utf8');
 
 /** One poll of a live stream. `tick` is private only to keep it off the class's
- *  public surface; the harness wants exactly what the 2 s interval does, awaited,
- *  so these tests never sleep. */
+ *  public surface; the harness wants exactly what a row event does (D-8611: the
+ *  stream has no 2 s interval), then the feed's tick, awaited, so these tests never sleep. */
 const pollOnce = async (s: SessionStream): Promise<void> => {
   await (s as unknown as { tick: () => Promise<void> }).tick();
   await (s as unknown as { feed: { poll(): Promise<void> } | null }).feed?.poll();   // the session feed's own tick (ARCH-52)
@@ -1046,6 +1046,8 @@ describe('session WS', () => {
   let port: number;
   let fileA: string;
   let fileB: string;
+  /** The bus the server shares with its watcher: a test sends what the watcher's tick would (D-8611). */
+  let bus: Bus;
 
   beforeEach(async () => {
     home = mkTmp('ccrc-sws-');
@@ -1061,7 +1063,8 @@ describe('session WS', () => {
     };
     const cfg = loadConfig({ CCRC_HOME: home });
     const deps: Deps = { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue(), time: fakeTime().ports };
-    app = await buildServer(deps, new Bus());
+    bus = new Bus();
+    app = await buildServer(deps, bus);
     await app.listen({ host: '127.0.0.1', port: 0 });
     const addr = app.server.address();
     port = typeof addr === 'object' && addr !== null ? addr.port : 0;
@@ -1094,9 +1097,11 @@ describe('session WS', () => {
     expect(ev.events[0]).toMatchObject({ kind: 'user', uuid: 'u3', text: 'three' });
     expect(ev.offset).toBe(statSync(fileA).size);
 
-    // Rotate: new transcript file, registry uuid flipped (clear/compact/swap).
+    // Rotate: new transcript file, registry uuid flipped (clear/compact/swap). The watcher's tick sees the row's
+    // record change and sends `row:<id>`; that is what re-resolves the stream (D-8611: it has no 2 s poll).
     writeFileSync(fileB, userLine('r1', 'fresh transcript'));
     writeFileSync(path.join(home, '.cc-sessions', `${ID}.uuid`), UUID_B);
+    bus.emit(`row:${ID}`, { listedAt: Date.now() });
 
     const rotated = await next(8000);
     expect(rotated).toEqual({ type: 'rotated', uuid: UUID_B });
@@ -1275,7 +1280,8 @@ const mkLadderDeps = (home: string, io: FleetIO): Deps => {
 
 /** Private-field peeks, same discipline as this file's own `pollOnce` (a cast
  *  through `unknown`, not a public API this class needs for production). */
-const pollTimer = (s: SessionStream): unknown => (s as unknown as { poll: unknown }).poll;
+/** The stream's one re-resolve timer, the backstop (D-8611): set once `start()` armed it. */
+const retryTimer = (s: SessionStream): unknown => (s as unknown as { backstop: unknown }).backstop;
 const streamUuid = (s: SessionStream): string | null => (s as unknown as { uuid: string | null }).uuid;
 const streamTailer = (s: SessionStream): unknown => (s as unknown as { tailer: unknown }).tailer;
 const streamTailed = (s: SessionStream): TranscriptResolution | null =>
@@ -2765,8 +2771,8 @@ describe('registry ladder: resolve() three-way, degrade-and-heal vs refuse (Task
     try {
       await stream.start();
       expect(frames[0]).toEqual({ type: 'notice', message: `session ${ID} is temporarily unreadable — retrying` });
-      // degrade-and-heal keeps polling — see the next test for the absent contrast.
-      expect(pollTimer(stream)).not.toBeNull();
+      // degrade-and-heal stays armed — see the next test for the absent contrast.
+      expect(retryTimer(stream)).not.toBeNull();
     } finally {
       stream.stop();
       rmSync(home, { recursive: true, force: true });
@@ -2784,7 +2790,7 @@ describe('registry ladder: resolve() three-way, degrade-and-heal vs refuse (Task
     try {
       await stream.start();
       expect(frames[0]).toEqual({ type: 'notice', message: `session ${ID} is temporarily unreadable — retrying` });
-      expect(pollTimer(stream)).not.toBeNull();
+      expect(retryTimer(stream)).not.toBeNull();
     } finally {
       stream.stop();
       rmSync(home, { recursive: true, force: true });
@@ -2798,11 +2804,14 @@ describe('registry ladder: resolve() three-way, degrade-and-heal vs refuse (Task
     mkdirSync(path.join(home, '.cc-sessions'), { recursive: true }); // listable, but names nobody
     const deps = mkLadderDeps(home, localIO);
     const frames: { type: string; message?: string }[] = [];
-    const stream = new SessionStream(deps, new Bus(), 'no-such-session', (m) => frames.push(m as { type: string; message?: string }), undefined, NO_TICK);
+    const bus = new Bus();
+    const stream = new SessionStream(deps, bus, 'no-such-session', (m) => frames.push(m as { type: string; message?: string }), undefined, NO_TICK);
     try {
       await stream.start();
       expect(frames[0]).toEqual({ type: 'notice', message: 'unknown session no-such-session' });
-      expect(pollTimer(stream)).toBeNull();
+      expect(retryTimer(stream)).toBeNull();
+      expect({ row: bus.listenerCount('row:no-such-session'), fleet: bus.listenerCount('fleet') }, 'and no event trigger (D-8611)')
+        .toEqual({ row: 0, fleet: 0 });
     } finally {
       stream.stop();
       rmSync(home, { recursive: true, force: true });
@@ -3270,8 +3279,9 @@ describe('outstanding mail push (Build 7 Task 6)', () => {
   });
 
   // Task 8 fix round 1, finding 1: the test above waits up to 36 s across six
-  // messages — plenty of time for the first 2 s poll tick's OWN checkMail()
-  // call (`tick()`) to deliver the identical frame, so it cannot actually
+  // messages — when this was written, plenty of time for the first 2 s poll tick's OWN checkMail()
+  // call (`tick()`) to deliver the identical frame (the mail is the feed's now, ARCH-52, and the stream has no 2 s
+  // poll, D-8611), so it cannot actually
   // tell `start()`'s own call site (`if (r.ok) await this.checkMail();`)
   // apart from the tick's. Constructing the stream directly and reading
   // `frames` the instant `start()` resolves — never calling `tick()` at all
@@ -3460,9 +3470,9 @@ describe('outstanding mail push (Build 7 Task 6)', () => {
   // an unchanged ask' — hook ask envelope frames, line 295); `checkMail`'s
   // own change gate (`if (json === this.lastMailJson) return;`) never had
   // one. Undetected, deleting that gate would put a `mail` frame on the wire
-  // every ~2 s poll tick, for the life of every session socket, whether or
+  // every feed tick, for the life of every session socket, whether or
   // not anything changed.
-  it('does not resend an unchanged mail list on a later poll tick', { timeout: 15_000 }, async () => {
+  it('does not resend an unchanged mail list on a later feed tick', { timeout: 15_000 }, async () => {
     queueTo(ID, 'steady state');
 
     const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/session/${ID}`);
@@ -3478,12 +3488,14 @@ describe('outstanding mail push (Build 7 Task 6)', () => {
     expect(mailFrame?.mail).toHaveLength(1);
 
     // The store is untouched from here on — collect everything that arrives
-    // over two more real poll ticks (POLL_MS = 2 s in sessionws.ts) and
+    // over two more feed ticks (each woken by a published pane, as the watcher's
+    // tick sends one: the feed and the stream have no clock of their own, ARCH-52, D-8611) and
     // confirm no second `mail` frame is among it. A deleted change gate
     // fails this deterministically (one extra frame per tick), unlike the
     // pre-existing 'pushes freshly queued mail' test, which only proves a
     // CHANGE gets sent and says nothing about an UNCHANGED one.
-    const deadline = Date.now() + 5000;
+    for (let i = 0; i < 2; i++) bus.emit(`pane:${ID}`, { at: Date.now(), doneAt: Date.now(), pane: 'idle\n❯ \n' });
+    const deadline = Date.now() + 3000;
     const extra: { type: string }[] = [];
     for (;;) {
       const remaining = deadline - Date.now();
