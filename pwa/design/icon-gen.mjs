@@ -5,7 +5,7 @@
 // design system's own parser, `ui/design/make-characters.mjs`) as whole-pixel
 // cells, at a whole multiple per icon, so the pixels stay the grid's. Colours
 // are never typed here: each tone's value is read from `tokens.css`'s Phosphor
-// block (`:root`), by the token name `characters.css` gives that tone. The
+// block (`:root`, through `audit.mjs`'s `loadThemes` and `resolveColor`), by the token name `characters.css` gives that tone. The
 // brief's shading (the page colour at 0.22, 0.3 or 0.35) is composited once over
 // the colour that icon draws beneath the cell, so the icons keep the drawn rim.
 //
@@ -13,6 +13,9 @@
 // Regenerate with:
 //
 //   node design/icon-gen.mjs
+//
+// `node design/icon-gen.mjs --check` writes nothing: it compares the PNGs it would write with the committed ones
+// byte for byte and exits 1 on any difference (`app-icons.test.ts` runs it). Importing the file does nothing.
 //
 // Outputs (public/icons/):
 //   icon-192.png / icon-512.png            purpose "any": the Orb on a rounded
@@ -24,25 +27,24 @@
 //   apple-touch-icon.png                   180x180, opaque (iOS rounds it)
 //   favicon-32.png                         the eye alone, 1x, opaque
 import { deflateSync } from 'node:zlib';
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { crop, parseArt, stillGrid } from '../../ui/design/make-characters.mjs';
+import { loadThemes, resolveColor } from './audit.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.join(HERE, '..', '..');
 
 // — tones, read from the stylesheets —
 
-const tokensCss = readFileSync(path.join(REPO, 'ui', 'src', 'styles', 'tokens.css'), 'utf8');
-const rootAt = tokensCss.indexOf(':root {');
-const phosphor = tokensCss.slice(rootAt, tokensCss.indexOf('\n}', rootAt));
-function token(name) {
-  const m = new RegExp(`${name}:\\s*#([0-9A-Fa-f]{6})`).exec(phosphor);
-  if (!m) throw new Error(`icon-gen: no ${name} in tokens.css's :root`);
-  const n = parseInt(m[1], 16);
-  return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
-}
+// `tokens.css` is read by the design system's one reader (`audit.mjs`: `loadThemes`, `resolveColor`), as the
+// contrast gate reads it; `:root` is the Phosphor palette, `DARK`.
+const { DARK } = loadThemes();
+const token = (name) => {
+  if (DARK[name] === undefined) throw new Error(`icon-gen: no ${name} in tokens.css's :root`);
+  return resolveColor(DARK[name], DARK).slice(0, 3);
+};
 const charactersCss = readFileSync(path.join(REPO, 'ui', 'src', 'characters', 'characters.css'), 'utf8');
 function toneValue(tone) {
   const m = new RegExp(`\\.chr-t-${tone}\\{fill:var\\((--[a-z-]+)\\)\\}`).exec(charactersCss);
@@ -146,7 +148,6 @@ function renderIcon({ size, scale, window = [0, 0, 32, 32], ground, maskable = f
 // — outputs —
 
 const outDir = path.join(HERE, '..', 'public', 'icons');
-mkdirSync(outDir, { recursive: true });
 
 const files = [
   ['icon-192.png', { size: 192, scale: 5, ground: PAGE, radius: 42 }],
@@ -158,8 +159,22 @@ const files = [
   ['favicon-32.png', { size: 32, scale: 1, ground: PAGE, window: [5, 13, 22, 14] }],
 ];
 
-for (const [name, spec] of files) {
-  const png = renderIcon(spec);
-  writeFileSync(path.join(outDir, name), png);
-  console.log(`${name}  ${spec.size}x${spec.size}  ${png.length} bytes`);
+// Only a run of this file does anything: importing it writes nothing.
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  if (process.argv.includes('--check')) {
+    const stale = files.filter(([name, spec]) => {
+      const file = path.join(outDir, name);
+      return !existsSync(file) || !readFileSync(file).equals(renderIcon(spec));
+    });
+    for (const [name] of stale) console.error(`icon-gen: ${name} is not what the generator makes; run node design/icon-gen.mjs`);
+    if (stale.length) process.exit(1);
+    console.log(`icon-gen: ${files.length} icons match the generator`);
+  } else {
+    mkdirSync(outDir, { recursive: true });
+    for (const [name, spec] of files) {
+      const png = renderIcon(spec);
+      writeFileSync(path.join(outDir, name), png);
+      console.log(`${name}  ${spec.size}x${spec.size}  ${png.length} bytes`);
+    }
+  }
 }

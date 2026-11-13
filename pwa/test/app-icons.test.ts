@@ -3,7 +3,9 @@
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { inflateSync } from 'node:zlib';
+import { spawnSync } from 'node:child_process';
 import { describe, expect, it } from 'vitest';
+import { loadThemes, resolveColor } from '../design/audit.mjs';
 import { crop, parseArt, stillGrid } from '../../ui/design/make-characters.mjs';
 
 const PWA = path.join(import.meta.dirname, '..');
@@ -38,14 +40,11 @@ const at = (p: Png, x: number, y: number): [number, number, number, number] => {
   return [p.px[i]!, p.px[i + 1]!, p.px[i + 2]!, p.px[i + 3]!];
 };
 
-// ── the tones' values, read from the stylesheets ──
-const tokensCss = readFileSync(path.join(REPO, 'ui', 'src', 'styles', 'tokens.css'), 'utf8');
-const phosphor = tokensCss.slice(tokensCss.indexOf(':root {'), tokensCss.indexOf('\n}', tokensCss.indexOf(':root {')));
+// ── the tones' values: tokens.css through the design system's one reader (design/audit.mjs), `:root` being Phosphor ──
+const { DARK } = loadThemes(PWA);
 const token = (name: string): Rgb => {
-  const m = new RegExp(`${name}:\\s*#([0-9A-Fa-f]{6})`).exec(phosphor);
-  if (!m) throw new Error(`no ${name} in tokens.css's :root`);
-  const n = parseInt(m[1]!, 16);
-  return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+  if (DARK[name] === undefined) throw new Error(`no ${name} in tokens.css's :root`);
+  return resolveColor(DARK[name], DARK).slice(0, 3) as Rgb;
 };
 const charactersCss = readFileSync(path.join(REPO, 'ui', 'src', 'characters', 'characters.css'), 'utf8');
 const toneToken = (tone: string): Rgb => {
@@ -63,10 +62,10 @@ const key = (c: ArrayLike<number>): string => `${c[0]},${c[1]},${c[2]}`;
 
 const grid = stillGrid(parseArt(readFileSync(path.join(REPO, 'docs', 'design', 'overlord', 'svg', 'orb-neutral.svg'), 'utf8')));
 
-interface Icon { file: string; size: number; scale: number; maskable: boolean; window?: [number, number, number, number] }
+interface Icon { file: string; size: number; scale: number; maskable: boolean; radius?: number; window?: [number, number, number, number] }
 const ICON_ROWS: Icon[] = [
-  { file: 'icon-512.png', size: 512, scale: 13, maskable: false },
-  { file: 'icon-192.png', size: 192, scale: 5, maskable: false },
+  { file: 'icon-512.png', size: 512, scale: 13, maskable: false, radius: 112 },
+  { file: 'icon-192.png', size: 192, scale: 5, maskable: false, radius: 42 },
   { file: 'icon-maskable-512.png', size: 512, scale: 10, maskable: true },
   { file: 'icon-maskable-192.png', size: 192, scale: 4, maskable: true },
   { file: 'apple-touch-icon.png', size: 180, scale: 5, maskable: false },
@@ -149,6 +148,77 @@ describe('the app icons', () => {
       }));
     }
     expect(shaded).toBeGreaterThan(0);
+  });
+
+  /** What an icon draws on a cell of the Orb's still grid: the tone's colour, the shading over what is beneath, or the ground. */
+  const cellColour = (r: Icon, cell: (typeof grid)[number][number]): Rgb => {
+    const ground = r.maskable ? ACCENT : PAGE;
+    if (!cell) return ground;
+    // the maskable icons draw the ground, body and crown in the page colour; the others draw the tone's token
+    const drawn = (tone: string): Rgb => (r.maskable && (tone === 'ground' || tone === 'body' || tone === 'crown') ? PAGE : toneToken(tone));
+    if (cell.alpha === null) return drawn(cell.tone);
+    return shade(cell.alpha, r.maskable || cell.under === null ? PAGE : toneToken(cell.under));
+  };
+
+  it('every cell of every icon is the colour that icon draws there', () => {
+    for (const r of ICON_ROWS) {
+      const p = readPng(r.file);
+      const [wx, wy, ww, wh] = r.window ?? [0, 0, 32, 32];
+      const cells = crop(grid, wx, wy, ww, wh);
+      const ox = Math.floor((r.size - ww * r.scale) / 2);
+      const oy = Math.floor((r.size - wh * r.scale) / 2);
+      const ground = r.maskable ? ACCENT : PAGE;
+      for (let y = 0; y < p.height; y++) {
+        for (let x = 0; x < p.width; x++) {
+          const c = at(p, x, y);
+          if (c[3] !== 255) continue; // the `any` icons' corner band: its own row below
+          const cx = Math.floor((x - ox) / r.scale);
+          const cy = Math.floor((y - oy) / r.scale);
+          const inside = x >= ox && y >= oy && cx < ww && cy < wh;
+          const want = inside ? cellColour(r, cells[cy]![cx]!) : ground;
+          expect(key(c), `${r.file} (${x},${y})${inside ? ` cell (${wx + cx},${wy + cy})` : ' ground'}`).toBe(key(want));
+        }
+      }
+    }
+  });
+
+  it('an any icon is a rounded page-colour square: transparent corners, an opaque ground', () => {
+    for (const r of ICON_ROWS.filter((x) => x.radius)) {
+      const p = readPng(r.file);
+      expect(at(p, 0, 0)[3], `${r.file} corner`).toBe(0);
+      expect(at(p, r.size - 1, r.size - 1)[3], `${r.file} far corner`).toBe(0);
+      // inside the square, outside the mark
+      expect(at(p, r.size / 2, 3), `${r.file} ground`).toEqual([...PAGE, 255]);
+      expect(at(p, 3, r.size / 2), `${r.file} ground`).toEqual([...PAGE, 255]);
+    }
+  });
+
+  it('every non-opaque pixel of an any icon is the ground colour in the rounded corners band', () => {
+    for (const r of ICON_ROWS.filter((x) => x.radius)) {
+      const radius = r.radius!;
+      const p = readPng(r.file);
+      let partial = 0;
+      for (let y = 0; y < p.height; y++) {
+        for (let x = 0; x < p.width; x++) {
+          const c = at(p, x, y);
+          if (c[3] === 255) continue;
+          // distance past the corner circle's centre; the inscribed rounded square is where it is `radius` or less
+          const dx = Math.max(radius - (x + 0.5), 0, x + 0.5 - (r.size - radius));
+          const dy = Math.max(radius - (y + 0.5), 0, y + 0.5 - (r.size - radius));
+          const d = Math.hypot(dx, dy);
+          const where = `${r.file} (${x},${y}) alpha ${c[3]}`;
+          expect(d, `${where} is outside the rounded square`).toBeGreaterThan(radius - 0.5);
+          if (c[3] > 0) { partial++; expect(d, `${where} is within the anti-aliasing`).toBeLessThan(radius + 0.5); }
+          expect(key(c), `${where} keeps the ground's colour`).toBe(key(PAGE));
+        }
+      }
+      expect(partial, `${r.file} has an anti-aliased edge`).toBeGreaterThan(0);
+    }
+  });
+
+  it('the committed icons are what the generator makes', () => {
+    const run = spawnSync('node', ['design/icon-gen.mjs', '--check'], { cwd: PWA, encoding: 'utf8' });
+    expect(run.status, `${run.stdout}${run.stderr}`).toBe(0);
   });
 
   it('the mark is the Orb, not the old chevron', () => {
