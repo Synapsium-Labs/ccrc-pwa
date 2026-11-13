@@ -35,9 +35,12 @@ import { useEffect, useRef, useState } from 'react';
 import type { MouseEvent, ReactNode } from 'react';
 import { isRunState, type FleetSession, type RunSummary } from '../../../shared/api';
 import { RUN_WORD, childMarkOf, coordinatorGoneOf, runRowName, runWaitLine } from './runWords';
+import { CLOSE_RUN_REASONS } from './closeWords';
+import { CLOSE_REASON_MAX, type ItemActBody } from '../../../shared/ledgers';
+import type { PlanEndOutcome } from '../../../shared/plan';
 import type { CoordinatorPresence } from './presence';
 import { inAppClick } from './settingsText';
-import { Button, QC_ACTIONS, QC_CONSEQUENCE, Sheet, cn, toast } from '@ccrc/ui';
+import { Button, QC_ACTIONS, QC_CONSEQUENCE, RadioFieldset, Sheet, TextInput, cn, toast } from '@ccrc/ui';
 import { GHOST_ANCHOR } from '../lib/ghostAnchor';
 import { ApiError, COORD_UNSUPPORTED_TEXT, UNKNOWN_RUN_TEXT, api, isRegistryUnmeasurable, type ReadOpts } from '../lib/api';
 import { LEDGER_REFUSAL_TEXT, refusalText } from '../lib/refusalWords';
@@ -250,6 +253,31 @@ export interface AbandonSheetProps {
   itemId?: number;
   /** The "Abandon anyway" door of a refused close (spec §12.2): the same act, and the sheet adds that the branch stays on disk. */
   anyway?: boolean;
+  /** D-8558: the "Close this run" door of a refused close whose coordinator the registry no longer holds: the same act, with the
+   *  operator's reason, and, when the item offers it (`offerEnd`), the programme's end; `endFirst` opens with "done" picked. */
+  closeRun?: { readonly offerEnd: boolean; readonly endFirst: boolean };
+}
+
+/** D-8558: the close-run mode's words, once. */
+export const CLOSE_RUN_WORDS = {
+  title: (id: number) => `Close run ${id}?`, confirm: 'Close this run', busy: 'Closing…', keep: 'Keep it',
+  why: 'Why', other: 'Something else', otherLabel: 'The reason, in a few words',
+  programme: 'The programme', keepOpen: 'Keep it open', endDone: 'End it: its work is done', endAbandoned: 'End it: abandoned',
+} as const;
+
+/** The programme choice of the close-run mode: keep it, or end it done or abandoned. */
+type ProgrammeChoice = 'keep' | PlanEndOutcome;
+
+/** D-8558: the reason the close-run mode sends, from the picked option and the typed text, or null while there is none. */
+export function closeRunReason(pick: string | null, typed: string): string | null {
+  if (pick === null) return null;
+  const said = pick === 'other' ? typed.trim() : pick;
+  return said === '' ? null : [...said].slice(0, CLOSE_REASON_MAX).join('');
+}
+
+/** The toast a landed close-run says: the run, and the programme's end when one was asked. */
+export function closeRunToast(runId: number, programme: ProgrammeChoice): string {
+  return programme === 'keep' ? `Run ${runId} closed.` : `Run ${runId} closed. Its programme is ended: ${programme}.`;
 }
 
 /** The line "Abandon anyway" adds: the unpushed commits are on the branch, and the close does not remove it. */
@@ -264,6 +292,7 @@ export function AbandonSheet({
   onDone,
   itemId,
   anyway = false,
+  closeRun,
   abandonRun = api.abandonRun,
   actItem = api.actItem,
 }: AbandonSheetProps & {
@@ -273,10 +302,13 @@ export function AbandonSheet({
    *  coverage of the write path. */
   abandonRun?: (id: number, opts?: ReadOpts) => Promise<AbandonAnswer>;
   /** Injectable like `abandonRun`; the item act's URL and method are pinned in `api.test.ts`. */
-  actItem?: (itemId: number, opts?: ReadOpts) => Promise<AbandonAnswer>;
+  actItem?: (itemId: number, opts?: ReadOpts, body?: ItemActBody) => Promise<AbandonAnswer>;
 }): ReactNode {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<AbandonError | null>(null);
+  const [reasonPick, setReasonPick] = useState<string | null>(null);
+  const [reasonTyped, setReasonTyped] = useState('');
+  const [programme, setProgramme] = useState<ProgrammeChoice>('keep');
 
   // Review fix round 1, Important 1 — the same defect class `ReapSheet`
   // already litigated (`session/ReapSheet.tsx:124-186`, findings 17-F1/F2)
@@ -303,12 +335,16 @@ export function AbandonSheet({
   // `onClose`.
   const gen = useRef(0);
   const targetId = run?.id ?? null;
+  const endFirst = closeRun?.endFirst === true;
   useEffect(() => {
     setBusy(false);
     setError(null);
+    setReasonPick(null);
+    setReasonTyped('');
+    setProgramme(endFirst ? 'done' : 'keep');
     return () => { gen.current += 1; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [targetId]);
+  }, [targetId, endFirst]);
 
   if (run === null) return null;
 
@@ -318,12 +354,16 @@ export function AbandonSheet({
 
   const toRecord = (e: MouseEvent<HTMLAnchorElement>): void => { inAppClick(runPath(run.id))(e); onClose(); };
 
+  const reason = closeRunReason(reasonPick, reasonTyped);
+  const closing = closeRun !== undefined && itemId !== undefined;
   const confirm = (): void => {
-    if (busy) return;
+    if (busy || (closing && reason === null)) return;
     const mine = gen.current;
     setBusy(true);
     setError(null);
-    void (itemId === undefined ? abandonRun(run.id) : actItem(itemId)).then(
+    const body: ItemActBody | null = closing && reason !== null
+      ? { reason, ...(closeRun.offerEnd && programme !== 'keep' ? { programme } : {}) } : null;
+    void (itemId === undefined ? abandonRun(run.id) : body === null ? actItem(itemId) : actItem(itemId, undefined, body)).then(
       (res) => {
         if (gen.current !== mine) return; // superseded — a different run's sheet is open now
         setBusy(false);
@@ -334,6 +374,8 @@ export function AbandonSheet({
         const action = { label: 'Open record', onClick: () => navigate(runPath(run.id)) };
         if (res.alreadyClosed === true) {
           toast(`Run ${run.id} had already closed, so nothing was abandoned.`, 'info', action);
+        } else if (body !== null) {
+          toast(closeRunToast(run.id, body.programme ?? 'keep'), 'info', action);
         } else if (res.childReclaim === 'queued') {
           toast(`Run ${run.id} abandoned. Its workspace is being reclaimed.`, 'info', action);
         } else if (!res.released && run.sessionId !== null) {
@@ -356,15 +398,15 @@ export function AbandonSheet({
     <Sheet
       open
       onClose={onClose}
-      title={`Abandon run ${run.id}?`}
+      title={closing ? CLOSE_RUN_WORDS.title(run.id) : `Abandon run ${run.id}?`}
       // The answers are pinned in the Sheet's footer (D-5932).
       footer={
         <div className={QC_ACTIONS}>
-          <Button variant="danger" disabled={busy} onClick={confirm}>
-            {busy ? 'Abandoning…' : `Abandon run ${run.id}`}
+          <Button variant="danger" disabled={busy || (closing && reason === null)} onClick={confirm}>
+            {closing ? (busy ? CLOSE_RUN_WORDS.busy : CLOSE_RUN_WORDS.confirm) : busy ? 'Abandoning…' : `Abandon run ${run.id}`}
           </Button>
           <Button variant="ghost" disabled={busy} onClick={onClose}>
-            Keep it
+            {CLOSE_RUN_WORDS.keep}
           </Button>
         </div>
       }
@@ -376,6 +418,24 @@ export function AbandonSheet({
           {abandonConsequence(run, workspaceChild)}
         </p>
         {anyway && <p className="abandon-note">{ABANDON_ANYWAY_LINE}</p>}
+        {closing && (
+          <div className="abandon-close-run" data-close-run={run.id}>
+            <RadioFieldset legend={CLOSE_RUN_WORDS.why} name={`close-reason-${run.id}`} disabled={busy} value={reasonPick}
+                           onPick={setReasonPick}
+                           options={[...CLOSE_RUN_REASONS.map((r) => ({ value: r, label: r[0]!.toUpperCase() + r.slice(1) })),
+                             { value: 'other', label: CLOSE_RUN_WORDS.other }]} />
+            {reasonPick === 'other' && (
+              <TextInput aria-label={CLOSE_RUN_WORDS.otherLabel} placeholder={CLOSE_RUN_WORDS.otherLabel} maxLength={CLOSE_REASON_MAX}
+                         disabled={busy} value={reasonTyped} onChange={(e) => setReasonTyped(e.target.value)} />
+            )}
+            {closeRun.offerEnd && (
+              <RadioFieldset<ProgrammeChoice> legend={CLOSE_RUN_WORDS.programme} name={`close-programme-${run.id}`} disabled={busy}
+                             value={programme} onPick={setProgramme}
+                             options={[{ value: 'keep', label: CLOSE_RUN_WORDS.keepOpen }, { value: 'done', label: CLOSE_RUN_WORDS.endDone },
+                               { value: 'abandoned', label: CLOSE_RUN_WORDS.endAbandoned }]} />
+            )}
+          </div>
+        )}
         {run.waitsOn === 'worker' && <p className="abandon-note">Its worker is still running.</p>}
         {told && <p className="abandon-note">Its coordinator is told.</p>}
         <p className="abandon-note abandon-links">

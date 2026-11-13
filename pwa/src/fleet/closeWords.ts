@@ -2,7 +2,7 @@
 // the stored detail only adds the reason, because history stores none. `runStateWord` (`runWords.ts`) asks this first,
 // so an abandoned run never reads "failed". An older server sends neither field, and every run then reads as today.
 import { isRunClosedBy, type RunSummary } from '../../../shared/api';
-import { ABANDON_REFUSED_PREFIX, ABANDON_REQUESTED_PREFIX } from '../../../shared/ledgers';
+import { ABANDON_REFUSED_PREFIX, ABANDON_REQUESTED_PREFIX, refusedCloseReason } from '../../../shared/ledgers';
 
 type CloseFacts = Pick<RunSummary, 'state' | 'closedBy' | 'closeDetail'>;
 
@@ -31,7 +31,11 @@ export function closeWords(run: CloseFacts): string | null {
   if (by === 'operator') {
     if (typeof run.closeDetail === 'string' && run.closeDetail.startsWith(ABANDON_REQUESTED_PREFIX)) return 'closed by you, at its request';
     // A refused-close item's Abandon: ccrc's lane held the close and the operator took the door; no session asked.
-    if (typeof run.closeDetail === 'string' && run.closeDetail.startsWith(ABANDON_REFUSED_PREFIX)) return 'closed by you, after ccrc held it';
+    if (typeof run.closeDetail === 'string' && run.closeDetail.startsWith(ABANDON_REFUSED_PREFIX)) {
+      // D-8558: the reason the operator gave when its claimant was gone ("Close this run"), when it gave one.
+      const reason = refusedCloseReason(run.closeDetail);
+      return reason === null ? 'closed by you, after ccrc held it' : `closed by you: ${reason}`;
+    }
     const why = reasonOf(run.closeDetail, 'abandon:');
     return why === null ? 'closed by you' : `closed by you: ${why}`;
   }
@@ -51,3 +55,7 @@ export function closedLine(
   if (closeWords(run) === null && run.closedBy === 'coordinator') return `Closed by the coordinator, ${when}`;
   return when;
 }
+
+/** D-8558: the reasons "Close this run" offers on a refused-close item whose coordinator is gone, in the words the run's record
+ *  then reads ("closed by you: done elsewhere"). The operator may type its own instead. */
+export const CLOSE_RUN_REASONS: readonly string[] = ['done elsewhere', 'no longer needed', 'replaced by other work'];
