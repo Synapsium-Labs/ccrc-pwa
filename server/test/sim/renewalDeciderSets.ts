@@ -579,7 +579,7 @@ export const GEN_EVENTS: GEvent[] = [
   { kind: 'host-ended' }, { kind: 'host-failed', afterEnd: false }, { kind: 'host-failed', afterEnd: true },
   { kind: 'started', resumed: false }, { kind: 'started', resumed: true }, { kind: 'card-read', hashMatches: true },
   { kind: 'card-read', hashMatches: false }, { kind: 'probes', passed: true }, { kind: 'probes', passed: false },
-  { kind: 'deadline' }, { kind: 'renew-now' },
+  { kind: 'nudge-due' }, { kind: 'deadline' }, { kind: 'renew-now' },
 ];
 
 /** Every view: each state with `from`, `cls` and the counters at their edge values. */
@@ -599,7 +599,7 @@ type Rule = { readonly why: string; readonly st: readonly GState[]; readonly ev:
 /** "A failure before the first half returns the generation to active, with a hold-off" (the model's
  *  FAILED_RENEWAL_RETURNS='active', ruled by plan review 1890 A2), wherever the renewal began. */
 /** ...and "A generation never becomes active without having read its card and passed its probes" (§3.3.11): one that
- *  was degraded before it ever passed returns to degraded (the coordinator's ruling, slug a2-active-only-if-proven). */
+ *  was degraded before it ever passed returns to degraded (the coordinator's ruling, slug failed-renewal-returns-to-active-only-if-proven). */
 const BACK = (g: GView): Want => (g.proven
   ? { state: 'active', over: FRESH, actions: ['release-deliveries', 'set-hold-off'] }
   : { state: 'degraded', over: { ...FRESH, from: 'degraded', proven: false }, actions: ['release-deliveries'] });
@@ -633,9 +633,9 @@ export const GEN_RULES: readonly Rule[] = [
   { why: 'clearing times out before the first half: back to the state it left', st: ['clearing'], ev: (e) => e.kind === 'deadline', then: BACK },
   { why: 'carded: the served hash comes back', st: ['carded'], ev: (e) => e.kind === 'card-read' && e.hashMatches,
     then: () => ({ state: 'probing', over: { probeRounds: 0 }, actions: ['start-probes'] }) },
-  { why: 'carded "45, with one re-nudge"', st: ['carded'], ev: (e) => e.kind === 'deadline', when: (g) => !g.renudged,
-    then: () => ({ state: 'carded', over: { renudged: true }, actions: ['renudge-card'] }) },
-  { why: 'carded after its re-nudge: degraded', st: ['carded'], ev: (e) => e.kind === 'deadline', then: DEGRADE },
+  { why: 'carded "45, with one re-nudge": the re-nudge at its nudge point, once', st: ['carded'], ev: (e) => e.kind === 'nudge-due',
+    when: (g) => !g.renudged, then: () => ({ state: 'carded', over: { renudged: true }, actions: ['renudge-card'] }) },
+  { why: 'carded "45": its deadline, set once, degrades (deadline-set-once-rounds-fit-inside)', st: ['carded'], ev: (e) => e.kind === 'deadline', then: DEGRADE },
   { why: '"When probing passes, generation n+1 is active"', st: ['probing'], ev: (e) => e.kind === 'probes' && e.passed,
     then: () => ({ state: 'active', over: FRESH, actions: ['release-deliveries'] }) },
   { why: 'probing "two rounds at most": a first failure re-reads and probes again', st: ['probing'],
@@ -677,7 +677,7 @@ export function generationStepCases(m: GenModule): Record<string, SuiteCase> {
     },
     'EXHAUSTIVE: every state x every event x from x cls x the counters\' edges, against Table 3.3.11a written out': () => {
       const views = genViews();
-      expect(views.length * GEN_EVENTS.length).toBe(2304 * 15);
+      expect(views.length * GEN_EVENTS.length).toBe(2304 * 16);
       for (const g of views) for (const e of GEN_EVENTS) expect(m.generationStep(g, e), JSON.stringify([g, e])).toEqual(expectedStep(g, e));
     },
     'PROPERTY (10,000 seeded event sequences from active): G1, no mint without a start, one renew per try, ended terminal': () => {
@@ -721,14 +721,20 @@ export function generationStepCases(m: GenModule): Record<string, SuiteCase> {
         expect(r.actions.at(-1)).toEqual(['release-deliveries', 'set-hold-off']);
       }
     },
-    'a generation degraded before it ever passed returns to degraded, never to active (§3.3.11; slug a2-active-only-if-proven)': () => {
-      const r0 = runChain(m, m.GEN_MINTED, [ev('deadline'), ev('deadline')]);
+    'a generation degraded before it ever passed returns to degraded, never to active (§3.3.11; slug failed-renewal-returns-to-active-only-if-proven)': () => {
+      const r0 = runChain(m, m.GEN_MINTED, [ev('nudge-due'), ev('deadline')]);
       expect(r0.views.at(-1)).toMatchObject({ state: 'degraded', proven: false });
       for (const failure of [[ev('drained'), ev('host-failed', { afterEnd: false })], [ev('drained'), ev('deadline')], [ev('deadline')]]) {
         const r = runChain(m, r0.views.at(-1)!, [ev('renew-now'), ...failure]);
         expect(r.views.at(-1), JSON.stringify(failure)).toMatchObject({ state: 'degraded', proven: false });
         expect(r.actions.at(-1)).toEqual(['release-deliveries']);
       }
+    },
+    'carded: one re-nudge at its nudge point, a second nudge is nothing, and its one deadline degrades': () => {
+      const a = m.generationStep(m.GEN_MINTED, ev('nudge-due'));
+      expect(a).toEqual({ next: { ...m.GEN_MINTED, renudged: true }, actions: ['renudge-card'] });
+      expect(m.generationStep(a.next, ev('nudge-due'))).toEqual({ next: a.next, actions: [] });
+      expect(m.generationStep(m.GEN_MINTED, ev('deadline')).next).toMatchObject({ state: 'degraded', proven: false });
     },
     'MODEL START_WHILE_DOWN=reported-at-boot: a start reported late still ends n and mints n+1 at carded': () => {
       const r = runChain(m, m.GEN_ACTIVE, [ev('due', { cls: 'hard' }), ev('drained'), ev('host-ended'), ev('started', { resumed: false })]);
@@ -763,7 +769,8 @@ const GEN_SET: MutantSet<GenModule> = {
     { id: 'G4', old: "if (!g.hostEnded && !e.afterEnd) return back(g);", new: 'if (!e.afterEnd) return back(g);' },
     { id: 'G5', old: "to(GEN_ACTIVE, 'active', ['release-deliveries', 'set-hold-off'])", new: "to(GEN_ACTIVE, 'active', ['release-deliveries'])" },
     { id: 'G6', old: "if (e.kind === 'due' && e.cls === 'hard') return drain(g, 'degraded', 'hard');", new: "if (e.kind === 'due') return drain(g, 'degraded', 'hard');" },
-    { id: 'G7', old: "if (e.kind === 'deadline') return g.renudged ? degrade(g) : to(g, 'carded', ['renudge-card'], { renudged: true });", new: "if (e.kind === 'deadline') return degrade(g);" },
+    { id: 'G7', old: "if (e.kind === 'nudge-due' && !g.renudged)", new: "if (e.kind === 'nudge-due')" },
+    { id: 'G16', old: "    if (e.kind === 'nudge-due' && !g.renudged) return to(g, 'carded', ['renudge-card'], { renudged: true });\n    if (e.kind === 'deadline') return degrade(g);", new: "    if (e.kind === 'nudge-due' && !g.renudged) return to(g, 'carded', ['renudge-card'], { renudged: true });\n    if (e.kind === 'deadline') return g.renudged ? degrade(g) : to(g, 'carded', ['renudge-card'], { renudged: true });" },
     { id: 'G8', old: "return g.probeRounds >= 1 ? degrade(g) :", new: 'return g.probeRounds >= 2 ? degrade(g) :' },
     { id: 'G9', old: "if (e.kind === 'deadline') return g.hostEnded ? degrade(g) : back(g);", new: "if (e.kind === 'deadline') return degrade(g);" },
     { id: 'G10', old: "  ended: (g) => same(g),", new: "  ended: (g, e) => (e.kind === 'started' ? startedHere(g) : same(g))," },

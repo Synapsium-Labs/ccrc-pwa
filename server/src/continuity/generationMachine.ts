@@ -1,7 +1,10 @@
 // L1, context C3 (Session Conversation): `generationStep`, the generation machine (Overlord spec §3.3.11, H12, Table
 // 3.3.11a, "The receipt has two halves", `degraded`). Pure: what each event does to one generation's view, and which
 // acts the renewal lane should take for it. The lane owns the row and its compare-and-set; the deadline is a stored
-// column the lane reads through the `Clock` port and reports here as a `deadline` event.
+// column the lane reads through the `Clock` port and reports here as a `deadline` event. Each deadline is set once, on
+// entry, and the work of a state fits inside it (the coordinator's ruling, slug deadline-set-once-rounds-fit-inside):
+// `carded`'s one re-nudge comes at its nudge point (`CARDED_NUDGE_AT_MS`, a second column set once on entry), and
+// `probing`'s second round follows a failed first one, both inside their state's own seconds.
 //
 // The same machine for every long-lived role (C49, C50). Any event a state does not name is ignored: the same view, no
 // action. So `active` is reached from `probing` only, after a matching card read and a passed round, and `ended` is
@@ -17,7 +20,8 @@ export type GenEvent =
   | { readonly kind: 'started'; readonly resumed: boolean }     // a SessionStart that is not a compaction
   | { readonly kind: 'card-read'; readonly hashMatches: boolean }
   | { readonly kind: 'probes'; readonly passed: boolean }
-  | { readonly kind: 'deadline' }                               // the state's stored deadline passed
+  | { readonly kind: 'nudge-due' }                              // carded's nudge point passed (set once on entry)
+  | { readonly kind: 'deadline' }                               // the state's stored deadline passed (set once on entry)
   | { readonly kind: 'renew-now' };
 
 export interface GenView {
@@ -28,7 +32,7 @@ export interface GenView {
   /** `renew` calls in this `clearing`: one per try. */
   readonly tries: number;
   readonly cls: TriggerClass | null;
-  /** `carded` re-nudged its card once already. */
+  /** `carded` re-nudged its card once already (at its nudge point). */
   readonly renudged: boolean;
   /** Probe rounds that failed in this `probing`. */
   readonly probeRounds: number;
@@ -59,7 +63,7 @@ const drain = (g: GenView, from: 'active' | 'degraded', cls: TriggerClass): GenS
 /** A failure before the receipt's first half: back to `active` with a hold-off, whether the renewal began in `active`
  *  or in `degraded` (the model's FAILED_RENEWAL_RETURNS='active'; plan review 1890, A2), but only for a generation
  *  that has read its card and passed a round: one degraded before that returns to `degraded`, because a generation
- *  never becomes `active` without them (§3.3.11; the coordinator's ruling on ask, slug a2-active-only-if-proven). */
+ *  never becomes `active` without them (§3.3.11; the coordinator's ruling on ask, slug failed-renewal-returns-to-active-only-if-proven). */
 const back = (g: GenView): GenStep => (g.proven
   ? to(GEN_ACTIVE, 'active', ['release-deliveries', 'set-hold-off'])
   : to({ ...GEN_ACTIVE, from: 'degraded', proven: false }, 'degraded', ['release-deliveries']));
@@ -106,7 +110,8 @@ const HANDLERS: Readonly<Record<GenerationState, (g: GenView, e: GenEvent) => Ge
   },
   carded: (g, e) => {
     if (e.kind === 'card-read' && e.hashMatches) return to(g, 'probing', ['start-probes'], { probeRounds: 0 });
-    if (e.kind === 'deadline') return g.renudged ? degrade(g) : to(g, 'carded', ['renudge-card'], { renudged: true });
+    if (e.kind === 'nudge-due' && !g.renudged) return to(g, 'carded', ['renudge-card'], { renudged: true });
+    if (e.kind === 'deadline') return degrade(g);
     if (e.kind === 'started') return startedHere(g);
     return same(g);
   },

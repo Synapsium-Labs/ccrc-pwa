@@ -880,14 +880,21 @@ def staged_commit(s, k, c):
 def back(s, c):
     """§3.3.11 'A failure before the first half returns the generation to active, with a hold-off.'
     FAILED_RENEWAL_RETURNS='active' is that sentence; 'previous' returns a renewal that began in
-    degraded to degraded."""
-    if s.gen.fromdeg and c.FAILED_RENEWAL_RETURNS == 'previous':
+    degraded to degraded. Either way, a generation that has not read its card and passed its probes
+    (not ok) returns to degraded, because 'A generation never becomes active without having read its
+    card and passed its probes' (the coordinator's ruling, slug
+    failed-renewal-returns-to-active-only-if-proven)."""
+    if back_degraded(s.gen, c):
         return gen_to(s, 'degraded', fromdeg=False)
     return gen_to(s, 'active', holdoff=True, fromdeg=False)
 
 
+def back_degraded(g, c):
+    return (g.fromdeg and c.FAILED_RENEWAL_RETURNS == 'previous') or not (g.card and g.ok)
+
+
 def back_label(g, c):
-    if g.fromdeg and c.FAILED_RENEWAL_RETURNS == 'previous':
+    if back_degraded(g, c):
         return 'back to degraded'
     return 'active with hold-off'
 

@@ -427,7 +427,7 @@ SAFE = dict(RAISE_TXN='one', OUTCOME_REACH_TXN='same', OUTCOME_AT='pending', REV
             NONBLOCKING_PUSH='silent', START_WHILE_DOWN='reported-at-boot', CHECKPOINTED_TIMEOUT='clearing',
             NO_PROOF_WORD='unmeasured', REINHERIT='inherit', STATE_A_FACT_AUTH='grant',
             BOOT_UNMEASURED_RELEASES=True, I9_SCOPE='rows', WITNESS_LAG=False,
-            FAILED_RENEWAL_RETURNS='previous')
+            FAILED_RENEWAL_RETURNS='active')
 
 QUIET = dict(SERVER_CRASHES=0, SESSION_CRASHES=0, SWAPS=0, RENEWALS=0, REBINDS=0, OPERATOR_MSGS=0,
              RUNG_OPS=0, PUSH_FAILS=0, FAULTS=(), FAULT_EVENTS=0, PROBE_FAILS=False, GEN_TIMEOUTS=False,
@@ -506,8 +506,8 @@ SWITCHES = [
     ('NONBLOCKING_PUSH', ['push', 'none'], 'nohold'),
     ('START_WHILE_DOWN', ['lost-oldkey', 'lost-nokey'], 'genmachine'),
     ('CHECKPOINTED_TIMEOUT', ['active'], 'genmachine'),
-    ('FAILED_RENEWAL_RETURNS', ['active'], 'genmachine'),
-    ('FAILED_RENEWAL_RETURNS', ['active'], 'renewal'),
+    ('FAILED_RENEWAL_RETURNS', ['previous'], 'genmachine'),
+    ('FAILED_RENEWAL_RETURNS', ['previous'], 'renewal'),
     ('NO_PROOF_WORD', ['previous'], 'readiness'),
     ('REINHERIT', ['replace'], 'lineage'),
     ('OP_CLASS_REMOVALS', [1], 'lineage'),

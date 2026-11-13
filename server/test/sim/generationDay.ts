@@ -9,7 +9,7 @@
 // only the sequence's lines: generation rows and the fake clock, never sweep phases (the simulator's beat and its async
 // limit, carried from W1a's simulator piece).
 import type { FleetRole } from '../../../shared/fleetRoles.js';
-import { HOLD_OFF_MS, LEAST_AGE_MS, SOFT_BUDGET, STATE_DEADLINE_S } from '../../../shared/continuity.js';
+import { CARDED_NUDGE_AT_MS, HOLD_OFF_MS, LEAST_AGE_MS, OBSERVED_STEP_CAP_MS, RENEWAL_BUDGET_S, SOFT_BUDGET, STATE_DEADLINE_S } from '../../../shared/continuity.js';
 import type { GenEvent, GenView } from '../../src/continuity/generationMachine.js';
 import type { Reading, RenewalInputs } from '../../src/continuity/renewalDue.js';
 import type { SoftInputs } from '../../src/continuity/softRenewal.js';
@@ -44,7 +44,7 @@ const U: Reading<never> = { kind: 'unmeasured', why: 'stale' };
 const NA = { kind: 'not-applicable' } as const;
 
 interface Row {
-  n: number; view: GenView; mintedObs: number; deadlineAt: number;
+  n: number; view: GenView; mintedObs: number; deadlineAt: number; nudgeAt: number;
   holdOffUntil: number | null; dueSinceObs: number | null; softStamps: number[];
 }
 interface Facts {
@@ -61,7 +61,7 @@ export function generationDay(mods: GenDayModules): Scenario<GenDayEdge> {
 
       // ---- DURABLE: the server's rows and its observed-time column, which survive a crash.
       const rows = new Map<string, Row>();
-      for (const [who] of WHO) rows.set(who, { n: 1, view: mods.machine.GEN_ACTIVE, mintedObs: 0, deadlineAt: 0, holdOffUntil: null, dueSinceObs: null, softStamps: [] });
+      for (const [who] of WHO) rows.set(who, { n: 1, view: mods.machine.GEN_ACTIVE, mintedObs: 0, deadlineAt: 0, nudgeAt: 0, holdOffUntil: null, dueSinceObs: null, softStamps: [] });
       let obs: Observed | null = null;
       let boots = 0;
       let proc = 'p0';
@@ -89,9 +89,12 @@ export function generationDay(mods: GenDayModules): Scenario<GenDayEdge> {
         r.view = step.next;
         const changed = step.next.state !== prev.state;
         if (changed) line('gen', idOf(who, r.n), step.next.state, 'lane');
-        if (changed || step.actions.includes('renudge-card')) {
+        // Each deadline is set once, on entry, and never re-armed; carded's nudge point likewise
+        // (deadline-set-once-rounds-fit-inside).
+        if (changed) {
           const s = STATE_DEADLINE_S[step.next.state as keyof typeof STATE_DEADLINE_S];
           r.deadlineAt = s === undefined ? 0 : server.clock.wall() + s * SEC;
+          r.nudgeAt = step.next.state === 'carded' ? server.clock.wall() + CARDED_NUDGE_AT_MS : 0;
         }
         const n = r.n;
         for (const a of step.actions) {
@@ -106,7 +109,8 @@ export function generationDay(mods: GenDayModules): Scenario<GenDayEdge> {
         if (prev.state === 'probing' && step.next.state === 'active') cover('renewed');
         if (step.actions.includes('mint-next')) {
           const next: Row = { n: r.n + 1, view: mods.machine.GEN_MINTED, mintedObs: obs?.ms ?? 0,
-            deadlineAt: server.clock.wall() + STATE_DEADLINE_S.carded * SEC, holdOffUntil: null, dueSinceObs: null, softStamps: r.softStamps };
+            deadlineAt: server.clock.wall() + STATE_DEADLINE_S.carded * SEC, nudgeAt: server.clock.wall() + CARDED_NUDGE_AT_MS,
+            holdOffUntil: null, dueSinceObs: null, softStamps: r.softStamps };
           rows.set(who, next);
           line('gen', idOf(who, next.n), 'carded', 'mint');
           sessionReadsCard(who, next.n);
@@ -201,7 +205,9 @@ export function generationDay(mods: GenDayModules): Scenario<GenDayEdge> {
       };
 
       const serverBeat = (): void => {
-        obs = mods.observed.observeTime(obs, server.clock.mono(), proc);
+        const st = mods.observed.observeTime(obs, server.clock.mono(), proc, OBSERVED_STEP_CAP_MS);
+        obs = st.at;
+        if (st.gap !== null) line('obs-gap', 'server', st.gap, 'lane');
         line('obs', 'server', `ms=${obs.ms}`, 'lane');
         for (const [who, role] of WHO) {
           const stale = chance(entropy, 0.05);
@@ -209,6 +215,10 @@ export function generationDay(mods: GenDayModules): Scenario<GenDayEdge> {
           const loadMove = chance(entropy, 0.0003);
           const held = chance(entropy, 0.2);
           const r = rows.get(who)!;
+          if (r.view.state === 'carded' && r.nudgeAt > 0 && server.clock.wall() >= r.nudgeAt) {
+            r.nudgeAt = 0;
+            apply(who, { kind: 'nudge-due' });
+          }
           if (TRANSIENT.has(r.view.state) && server.clock.wall() >= r.deadlineAt) {
             line('deadline', `${idOf(who, r.n)}:${r.view.state}:${r.deadlineAt}`, 'fired', 'lane');
             apply(who, { kind: 'deadline' });
@@ -310,6 +320,24 @@ export const GEN_DAY_INVARIANTS: readonly Invariant[] = [
         if (l.kind === 'deadline') {
           if (fired.has(l.id)) return violation('G4', l, `deadline ${l.id} fired twice`);
           fired.add(l.id);
+        }
+      }
+      return null;
+    } },
+  { name: 'G6', says: 'a renewal that lands spends at most RENEWAL_BUDGET_S from checkpointed (or clearing) to active, give or take the lane\'s beat per state, unless the server was down meanwhile',
+    check(lines) {
+      // When a renewal's budget began, per identity; a crash inside it waives the check for that renewal.
+      const began = new Map<string, { at: number; crashed: boolean }>();
+      for (const l of lines) {
+        if (l.kind === 'server' && l.state === 'down') for (const b of began.values()) b.crashed = true;
+        if (l.kind !== 'gen') continue;
+        const who = l.id.slice(0, l.id.lastIndexOf('#'));
+        if ((l.state === 'checkpointed' || l.state === 'clearing') && !began.has(who)) began.set(who, { at: l.at, crashed: false });
+        if (l.state === 'degraded' || (l.state === 'active' && l.actor === 'lane' && !began.has(who))) began.delete(who);
+        if (l.state === 'active' && began.has(who)) {
+          const b = began.get(who)!; began.delete(who);
+          const spent = l.at - b.at;
+          if (!b.crashed && spent > RENEWAL_BUDGET_S * 1_000 + 4 * 30_000) return violation('G6', l, `${l.id}: a renewal took ${spent} ms`);
         }
       }
       return null;

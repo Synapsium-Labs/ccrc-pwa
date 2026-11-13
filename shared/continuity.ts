@@ -120,3 +120,6 @@ export const RENEWAL_LANE_PERIOD_MS = 30_000;
  *  observed-time-caps-one-step; Table 11.5b): a longer monotonic delta is a freeze, advances by the cap only and counts
  *  as a gap. `observedStepCapMs` (`server/src/time/observed.ts`) is the one place the cap is computed from it. */
 export const OBSERVED_STEP_PERIODS = 2;
+/** Table 3.3.11a, `carded` "45, with one re-nudge": the re-nudge comes at this point after entry, inside the 45 seconds
+ *  (slug deadline-set-once-rounds-fit-inside). A starting value. */
+export const CARDED_NUDGE_AT_MS = 22_500;

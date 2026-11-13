@@ -48,6 +48,16 @@ describe('the generation day\'s invariants go red on a hand-made sequence', () =
     expect(byName('G4').check(seqOf([['obs', 'server', 'ms=5', 'lane'], ['obs', 'server', 'ms=4', 'lane']]))?.invariant).toBe('G4');
     expect(byName('G4').check(seqOf([['deadline', 'o#1:draining:9', 'fired', 'lane'], ['deadline', 'o#1:draining:9', 'fired', 'lane']]))?.invariant).toBe('G4');
   });
+  it('CONTROL: G6 is red on a renewal past its budget and the beat slack, green within it or across a crash', () => {
+    const at = (rows: Array<[...Row, number]>): SequenceLine[] => rows.map(([kind, id, state, actor, t], i) => ({ seq: i + 1, at: t, kind, id, state, actor }));
+    const budget = 360_000 + 4 * 30_000;
+    const run = (end: number, crash = false): SequenceLine[] => at([['gen', 'o#1', 'checkpointed', 'lane', 0],
+      ...(crash ? [['server', 'crash', 'down', 'sim', 1_000] as [...Row, number]] : []),
+      ['start', 'o', 'applied', 'host', 10_000], ['gen', 'o#2', 'carded', 'mint', 10_000], ['gen', 'o#2', 'active', 'lane', end]]);
+    expect(byName('G6').check(run(budget + 1))?.invariant).toBe('G6');
+    expect(byName('G6').check(run(budget))).toBeNull();
+    expect(byName('G6').check(run(budget + 1, true))).toBeNull();
+  });
   it('CONTROL: G5 is red on a mint with no start, and on a start that minted nothing', () => {
     expect(byName('G5').check(seqOf([['gen', 'o#2', 'carded', 'mint']]))?.invariant).toBe('G5');
     expect(byName('G5').check(seqOf([['start', 'o', 'applied', 'host'], ['sim', 'generation-day', 'end', 'sim']]))?.invariant).toBe('G5');
@@ -56,7 +66,7 @@ describe('the generation day\'s invariants go red on a hand-made sequence', () =
 });
 
 describe('the generation day over seeded runs', () => {
-  it('holds G1 to G5 on every seed and reaches every edge', async () => {
+  it('holds G1 to G6 on every seed and reaches every edge', async () => {
     await assertScenario(generationDay(REAL), GEN_DAY_INVARIANTS, { seeds: simSeeds(DEFAULTS), testFile: FILE });
   }, 600_000);
 
