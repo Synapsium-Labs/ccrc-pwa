@@ -2,12 +2,14 @@
 // the ChatGPT backend's Responses route the way the Codex CLI does, so a change to the CLI's wire is a change the
 // bridge may have to follow. Each run lists the stable `rust-v*` releases of openai/codex, reads the last WALKED tag
 // from one state issue (`codex wire: state`, whose body is that tag alone), and for every consecutive pair of stable
-// tags from there on, oldest first, fetches the nine contract files at both tags and diffs what they name: the
+// tags from there on, oldest first, fetches the ten contract files at both tags and diffs what they name: the
 // fields of a struct that is sent and the variants of an enum that is sent, and the event, error-code, header and
-// endpoint literals. A pair with findings opens one issue, `codex wire: <old>..<new>`, unless an issue of that title
+// endpoint literals, in nine Rust files; and in the bundled model catalogue, `models-manager/models.json`, the models,
+// their keys and their short values (D-8621: native Codex shapes each request from that catalogue's per-model fields,
+// so a change to one is a change the bridge may have to follow). A pair with findings opens one issue, `codex wire: <old>..<new>`, unless an issue of that title
 // already exists; a pair with none opens nothing.
 //
-// The walk never skips a release. A pair counts as walked only when all nine files were read at both of its tags and
+// The walk never skips a release. A pair counts as walked only when all ten files were read at both of its tags and
 // its issue (if any) is open; the first pair that cannot be compared ends the walk, the state stays at the last pair
 // walked, and the job exits non-zero. With no state issue yet, the walk is the newest pair: the state is created at
 // its newer tag, or at its older tag when that pair fails. The state and the "already opened" check read only issues
@@ -22,13 +24,19 @@
 //
 // Pure parts (`contractFacts`, `wireReport`, `nextPairs`, `pairTitle`, `issueBody`) and the walk (`runWatch`) are
 // unit-tested offline in server/test/codex-wire-watch.test.ts; `githubIo` is the only code that talks to the REST
-// API, and its `fetch` is injected there. The extraction is lexical, over Rust source with comments, doc comments and
-// `#[cfg(test)]` modules removed: a real-file shape it misses is found by the first real run (D-6424).
+// API, and its `fetch` is injected there. The Rust extraction is lexical, over Rust source with comments, doc comments
+// and `#[cfg(test)]` modules removed: a real-file shape it misses is found by the first real run (D-6424). The
+// catalogue is parsed as JSON by its own fact family, `catalogue field`, never by the Rust extractors (D-8621), and a
+// catalogue that is not JSON, or not `{"models": [...]}` with a unique string `slug` on each model, cannot be compared,
+// like a file that cannot be read.
 import { pathToFileURL } from 'node:url';
 
 export const UPSTREAM = 'openai/codex';
 export const CONTRACT_ROOT = 'codex-rs';
-/** The nine wire-contract files, relative to `CONTRACT_ROOT` (spec D1; plan Task 19). */
+/** The bundled model catalogue, relative to `CONTRACT_ROOT`: the one JSON contract file (D-8621). */
+export const CATALOGUE_FILE = 'models-manager/models.json';
+/** The ten wire-contract files, relative to `CONTRACT_ROOT` (spec D1; plan Task 19): nine Rust files, read by the lexical
+ *  extractors, and the model catalogue, read as JSON (D-8621). */
 export const CONTRACT_FILES = Object.freeze([
   'codex-api/src/common.rs',
   'codex-api/src/sse/responses.rs',
@@ -39,6 +47,7 @@ export const CONTRACT_FILES = Object.freeze([
   'protocol/src/models.rs',
   'protocol/src/openai_models.rs',
   'core/src/responses_retry.rs',
+  CATALOGUE_FILE,
 ]);
 export const STATE_TITLE = 'codex wire: state';
 /** The author of every issue `GITHUB_TOKEN` opens. */
@@ -51,7 +60,15 @@ export const BODY_FINDINGS_MAX = 200;
 export const BODY_FINDINGS_CHARS = 60_000;
 
 /** The families a finding names, in report order. */
-export const FAMILIES = Object.freeze(['request-struct field', 'event literal', 'error-code literal', 'header literal', 'endpoint literal']);
+export const FAMILIES = Object.freeze(['request-struct field', 'event literal', 'error-code literal', 'header literal', 'endpoint literal',
+  'catalogue field']);
+/** A catalogue value is compared only when it is a scalar, a string of at most this many characters, or an array or
+ *  object of scalars whose compact JSON is at most this long; anything else is a text block or a structure, whose key
+ *  is a fact but whose value is not, so an upstream prompt edit is no finding and no prompt text reaches an issue
+ *  (D-8621). */
+export const CATALOGUE_VALUE_MAX = 200;
+/** A catalogue finding cuts the slug, the key and each value it shows to this many characters (D-8621). */
+export const CATALOGUE_SHOWN_MAX = 120;
 
 const SNAKE_RE = /^[a-z][a-z0-9]*(?:_[a-z0-9]+)+$/;
 const DOTTED_RE = /^[a-z][a-z0-9_]*(?:\.[a-z0-9_]+)+$/;
@@ -280,14 +297,107 @@ export function contractFacts(src) {
   return facts;
 }
 
-/** Every name of every family across one tag's contract files, with the files that name it.
- *  @param {Record<string, string>} files @returns {Map<string, Set<string>>} keyed `<family>\0<name>` */
+const isScalar = (v) => v === null || ['string', 'number', 'boolean'].includes(typeof v);
+
+/** A catalogue value's compact JSON when D-8621 compares it, else `null`: the key is present, its value not compared
+ *  (a JSON `null` value is the string `'null'`, so the two never meet). @param {unknown} v @returns {string | null} */
+function comparedValue(v) {
+  if (typeof v === 'string') return v.length <= CATALOGUE_VALUE_MAX ? JSON.stringify(v) : null;
+  if (isScalar(v)) return JSON.stringify(v);
+  const members = Array.isArray(v) ? v : typeof v === 'object' && v !== null ? Object.values(v) : null;
+  if (members === null || !members.every(isScalar)) return null;
+  const compact = JSON.stringify(v);
+  return compact.length <= CATALOGUE_VALUE_MAX ? compact : null;
+}
+
+/**
+ * What the model catalogue holds (D-8621): each model by its slug, and for each model every top-level key that is
+ * present, with its value's compact JSON when that value is compared (`comparedValue`) or `null` when it is not. Text
+ * that is not JSON, or JSON that is not `{"models": [...]}` with a string `slug` on each model and no slug twice, throws:
+ * the catalogue cannot be compared, as a file that cannot be read cannot (other top-level keys are not facts).
+ * @param {string} src @returns {Map<string, Map<string, string | null>>}
+ */
+export function catalogueFacts(src) {
+  let doc;
+  try {
+    doc = JSON.parse(src);
+  } catch (e) {
+    throw new Error(`${CATALOGUE_FILE} is not JSON: ${e instanceof Error ? e.message : String(e)}`);
+  }
+  const models = doc !== null && typeof doc === 'object' && !Array.isArray(doc) ? doc.models : undefined;
+  if (!Array.isArray(models)) throw new Error(`${CATALOGUE_FILE} is not {"models": [...]}`);
+  /** @type {Map<string, Map<string, string | null>>} */
+  const out = new Map();
+  for (const [k, m] of models.entries()) {
+    if (m === null || typeof m !== 'object' || Array.isArray(m) || typeof m.slug !== 'string') {
+      throw new Error(`${CATALOGUE_FILE}: model ${k} is not an object with a string slug`);
+    }
+    if (out.has(m.slug)) throw new Error(`${CATALOGUE_FILE}: the slug ${JSON.stringify(m.slug.slice(0, CATALOGUE_SHOWN_MAX))} is there twice`);
+    out.set(m.slug, new Map(Object.entries(m).map(([key, v]) => [key, comparedValue(v)])));
+  }
+  return out;
+}
+
+/** A slug, a key or a value as an issue shows it: cut to `CATALOGUE_SHOWN_MAX` characters, in a code span, a
+ *  backtick written `\u0060` so the span cannot close early (D-8621). @param {string} text @returns {string} */
+function shown(text) {
+  const cut = text.length > CATALOGUE_SHOWN_MAX ? `${text.slice(0, CATALOGUE_SHOWN_MAX - 1)}…` : text;
+  return `\`${cut.replace(/`/g, '\\u0060')}\``;
+}
+const shownValue = (v) => (v === null ? '(not compared)' : shown(v));
+
+/**
+ * The catalogue's findings between two tags (D-8621): a model removed or added (one finding, not one per key); a key
+ * removed or added within a model both hold, with the value it had or has; and a value that changed, with both values.
+ * A value not compared on either side is no finding. Rows sort as `wireReport`'s do, a change after the additions.
+ * @param {Map<string, Map<string, string | null>>} was @param {Map<string, Map<string, string | null>>} now
+ * @returns {Array<{ fam: number, kind: number, name: string, line: string }>}
+ */
+function catalogueRows(was, now) {
+  const fam = 'catalogue field';
+  const at = FAMILIES.indexOf(fam);
+  const rows = [];
+  const row = (kind, name, text) => rows.push({ fam: at, kind, name, line: `${['removed', 'added', 'changed'][kind]} ${fam} ${text} (${CATALOGUE_FILE})` });
+  for (const slug of was.keys()) if (!now.has(slug)) row(0, slug, `model ${shown(slug)}`);
+  for (const slug of now.keys()) if (!was.has(slug)) row(1, slug, `model ${shown(slug)}`);
+  for (const [slug, before] of was) {
+    const after = now.get(slug);
+    if (!after) continue;
+    const field = (key) => `${shown(slug)}.${shown(key)}`;
+    for (const [key, v] of before) {
+      const name = `${slug}\0${key}`;
+      if (!after.has(key)) row(0, name, `${field(key)} was ${shownValue(v)}`);
+      else {
+        const w = /** @type {string | null} */ (after.get(key));
+        if (v !== w) row(2, name, `${field(key)} from ${shownValue(v)} to ${shownValue(w)}`);
+      }
+    }
+    for (const [key, w] of after) if (!before.has(key)) row(1, `${slug}\0${key}`, `${field(key)} is ${shownValue(w)}`);
+  }
+  return rows;
+}
+
+/** The contract files' facts at one tag: every name of every Rust family across the Rust files, with the files that
+ *  name it, and the catalogue's own facts (D-8621). A file missing, or a catalogue that cannot be compared, throws.
+ *  @param {Record<string, string>} files @param {string} side
+ *  @returns {{ names: Map<string, Set<string>>, catalogue: Map<string, Map<string, string | null>> }} names keyed
+ *  `<family>\0<name>` */
 function unionFacts(files, side) {
   /** @type {Map<string, Set<string>>} */
   const all = new Map();
+  /** @type {Map<string, Map<string, string | null>> | null} */
+  let catalogue = null;
   for (const file of CONTRACT_FILES) {
     const src = files[file];
-    if (typeof src !== 'string') throw new Error(`the ${side} side has no ${file}: a pair is compared only on all nine contract files`);
+    if (typeof src !== 'string') throw new Error(`the ${side} side has no ${file}: a pair is compared only on all ten contract files`);
+    if (file.endsWith('.json')) {
+      try {
+        catalogue = catalogueFacts(src);
+      } catch (e) {
+        throw new Error(`the ${side} side's ${e instanceof Error ? e.message : String(e)}`);
+      }
+      continue;
+    }
     const facts = contractFacts(src);
     for (const fam of FAMILIES) {
       for (const name of facts[fam]) {
@@ -297,13 +407,14 @@ function unionFacts(files, side) {
       }
     }
   }
-  return all;
+  return { names: all, catalogue: /** @type {Map<string, Map<string, string | null>>} */ (catalogue) };
 }
 
 /**
- * The difference between one tag's nine contract files and the next's: `changed` is the files whose text differs
- * (contract order), `findings` one line per name that one side holds and the other does not, across all nine files
- * (a name that only moves between them is no finding), sorted by family, then removed before added, then name.
+ * The difference between one tag's ten contract files and the next's: `changed` is the files whose text differs
+ * (contract order), `findings` one line per name that one side holds and the other does not, across the nine Rust
+ * files (a name that only moves between them is no finding), and the catalogue's findings (`catalogueRows`), sorted by
+ * family, then removed before added before changed, then name.
  * @param {Record<string, string>} before @param {Record<string, string>} after
  * @returns {{ changed: string[], findings: string[] }}
  */
@@ -318,8 +429,9 @@ export function wireReport(before, after) {
     const where = [...files].sort((a, b) => CONTRACT_FILES.indexOf(a) - CONTRACT_FILES.indexOf(b)).join(', ');
     rows.push({ fam: FAMILIES.indexOf(fam), kind: kind === 'removed' ? 0 : 1, name, line: `${kind} ${fam} \`${name}\` (${where})` });
   };
-  for (const [key, files] of was) if (!now.has(key)) note('removed', key, files);
-  for (const [key, files] of now) if (!was.has(key)) note('added', key, files);
+  for (const [key, files] of was.names) if (!now.names.has(key)) note('removed', key, files);
+  for (const [key, files] of now.names) if (!was.names.has(key)) note('added', key, files);
+  rows.push(...catalogueRows(was.catalogue, now.catalogue));
   rows.sort((a, b) => a.fam - b.fam || a.kind - b.kind || (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
   return { changed, findings: rows.map((r) => r.line) };
 }

@@ -10,7 +10,9 @@
 // first-run state seed, the release flags and paging, the body's length cap, the serde names and the printable-name
 // class and length) in fix round 1's; G20-G25 and G20b (fix round 2: the first-run paging stop, `<`, `>` and
 // whitespace each alone, the CLI's API base and that the CLI walk reached the fake) in fix round 2's; G26-G27 (fix
-// round 3: each arm of the release paging stop set never to stop) in the whole-wave fix round's commit body.
+// round 3: each arm of the release paging stop set never to stop) in the whole-wave fix round's commit body. The model
+// catalogue (D-8621) runs over a synthetic `fixtures/codex-wire/base/models-manager/models.json`, three small models with
+// scalar fields and long text fields, never a copy of the upstream file; its mutation rows are in its commit body.
 import { describe, it, expect } from 'vitest';
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { createServer } from 'node:http';
@@ -20,7 +22,8 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parse as parseYaml } from 'yaml';
 import {
-  CONTRACT_FILES, STATE_TITLE, BOT_LOGIN, UPSTREAM, wireReport, nextPairs, pairTitle, issueBody, runWatch, githubIo,
+  CONTRACT_FILES, CATALOGUE_FILE, STATE_TITLE, BOT_LOGIN, UPSTREAM, BODY_FINDINGS_MAX, wireReport, nextPairs, pairTitle,
+  issueBody, runWatch, githubIo,
 } from '../../.github/ci/codex-wire-watch.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -44,10 +47,11 @@ const overlay = (name: string): Record<string, string> => ({ ...BASE, ...readSet
 
 const tag = (minor: number): string => `rust-v0.${minor}.0`;
 
-describe('wireReport over the nine contract files', () => {
-  it('the base fixture holds exactly the nine contract files', () => {
+describe('wireReport over the ten contract files', () => {
+  it('the base fixture holds exactly the ten contract files', () => {
     expect(Object.keys(BASE).sort()).toEqual([...CONTRACT_FILES].sort());
-    expect(CONTRACT_FILES).toHaveLength(9);
+    expect(CONTRACT_FILES).toHaveLength(10);
+    expect(CONTRACT_FILES).toContain(CATALOGUE_FILE);
   });
 
   it('it reports the removal of the instructions field', () => {
@@ -169,6 +173,163 @@ describe('wireReport over the nine contract files', () => {
   });
 });
 
+// ─── the model catalogue (D-8621) ────────────────────────────────────────────────
+
+type Model = Record<string, unknown> & { slug: string };
+/** The base catalogue's models, parsed afresh so a case may change them. */
+const baseModels = (): Model[] => (JSON.parse(BASE[CATALOGUE_FILE]!) as { models: Model[] }).models;
+/** The base contract set with its catalogue replaced by these models (or by this raw text). */
+const withCatalogue = (models: Model[] | string): Record<string, string> =>
+  ({ ...BASE, [CATALOGUE_FILE]: typeof models === 'string' ? models : JSON.stringify({ models }, null, 2) });
+/** The base models with `edit` applied to the one whose slug is `slug`. */
+const editModel = (slug: string, edit: (m: Model) => void): Model[] => {
+  const ms = baseModels();
+  const m = ms.find((x) => x.slug === slug);
+  if (!m) throw new Error(`no ${slug} in the fixture`);
+  edit(m);
+  return ms;
+};
+const AT = `(${'models-manager/models.json'})`;
+
+describe('wireReport over the model catalogue (D-8621)', () => {
+  it('a changed scalar field is one finding, naming the model, the key and both values', () => {
+    const r = wireReport(BASE, withCatalogue(editModel('model-b', (m) => { m.default_verbosity = 'high'; })));
+    expect(r.changed).toEqual([CATALOGUE_FILE]);
+    expect(r.findings).toEqual([
+      `changed catalogue field \`model-b\`.\`default_verbosity\` from \`"medium"\` to \`"high"\` ${AT}`,
+    ]);
+  });
+
+  it('a boolean, a number and a null that changes are findings too', () => {
+    const r = wireReport(BASE, withCatalogue(editModel('model-a', (m) => {
+      m.use_responses_lite = false;
+      m.context_window = 300000;
+      m.auto_compact_token_limit = 250000;
+    })));
+    expect(r.findings).toEqual([
+      `changed catalogue field \`model-a\`.\`auto_compact_token_limit\` from \`null\` to \`250000\` ${AT}`,
+      `changed catalogue field \`model-a\`.\`context_window\` from \`272000\` to \`300000\` ${AT}`,
+      `changed catalogue field \`model-a\`.\`use_responses_lite\` from \`true\` to \`false\` ${AT}`,
+    ]);
+  });
+
+  it('a model added or removed is one finding each, not one per key', () => {
+    const ms = baseModels();
+    const added = { ...ms[0]!, slug: 'model-d', display_name: 'Model D' };
+    const r = wireReport(BASE, withCatalogue([...ms.filter((m) => m.slug !== 'model-b'), added]));
+    expect(r.findings).toEqual([
+      `removed catalogue field model \`model-b\` ${AT}`,
+      `added catalogue field model \`model-d\` ${AT}`,
+    ]);
+  });
+
+  it('a key added or removed is a finding, with the value it had or has', () => {
+    const r = wireReport(BASE, withCatalogue(editModel('model-c', (m) => {
+      delete m.priority;
+      m.tool_mode = 'code_mode_only';
+    })));
+    expect(r.findings).toEqual([
+      `removed catalogue field \`model-c\`.\`priority\` was \`3\` ${AT}`,
+      `added catalogue field \`model-c\`.\`tool_mode\` is \`"code_mode_only"\` ${AT}`,
+    ]);
+  });
+
+  it('a key whose value is a text block is still a key: adding or removing it is a finding, its text never shown', () => {
+    const r = wireReport(BASE, withCatalogue(editModel('model-a', (m) => {
+      delete m.model_messages;
+      m.persistent_instructions = 'p'.repeat(300);
+    })));
+    expect(r.findings).toEqual([
+      `removed catalogue field \`model-a\`.\`model_messages\` was (not compared) ${AT}`,
+      `added catalogue field \`model-a\`.\`persistent_instructions\` is (not compared) ${AT}`,
+    ]);
+  });
+
+  it('a changed long text field, or a changed object holding one, is no finding', () => {
+    const r = wireReport(BASE, withCatalogue(editModel('model-a', (m) => {
+      m.base_instructions = `${String(m.base_instructions)} An upstream prompt edit.`;
+      m.model_messages = { instructions_template: 'x'.repeat(250), tools: null };
+      m.supported_reasoning_levels = [{ effort: 'low', description: 'Quicker' }];
+    })));
+    expect(r.changed).toEqual([CATALOGUE_FILE]);
+    expect(r.findings).toEqual([]);
+  });
+
+  it('a string of exactly 200 characters is compared, and one of 201 is not', () => {
+    const at200 = wireReport(BASE, withCatalogue(editModel('model-a', (m) => { m.display_name = 'a'.repeat(200); })));
+    expect(at200.findings).toEqual([
+      `changed catalogue field \`model-a\`.\`display_name\` from \`"Model A"\` to \`"${'a'.repeat(118)}…\` ${AT}`,
+    ]);
+    const at201 = wireReport(BASE, withCatalogue(editModel('model-a', (m) => { m.display_name = 'a'.repeat(201); })));
+    expect(at201.findings).toEqual([
+      `changed catalogue field \`model-a\`.\`display_name\` from \`"Model A"\` to (not compared) ${AT}`,
+    ]);
+  });
+
+  it('a changed array of scalars, and a changed object of scalars, are findings', () => {
+    const r = wireReport(BASE, withCatalogue(editModel('model-b', (m) => {
+      m.input_modalities = ['text'];
+      m.truncation_policy = { mode: 'tokens', limit: 20000 };
+    })));
+    expect(r.findings).toEqual([
+      `changed catalogue field \`model-b\`.\`input_modalities\` from \`["text","image"]\` to \`["text"]\` ${AT}`,
+      `changed catalogue field \`model-b\`.\`truncation_policy\` from \`{"mode":"tokens","limit":10000}\` to \`{"mode":"tokens","limit":20000}\` ${AT}`,
+    ]);
+  });
+
+  it('every value is cut to 120 characters, and a backtick in one cannot close its code span', () => {
+    const r = wireReport(BASE, withCatalogue(editModel('model-a', (m) => {
+      m.description = 'd'.repeat(150);
+      m.default_verbosity = '`@team-a` <b>';
+    })));
+    expect(r.findings).toEqual([
+      `added catalogue field \`model-a\`.\`description\` is \`"${'d'.repeat(118)}…\` ${AT}`,
+      `changed catalogue field \`model-a\`.\`default_verbosity\` from \`"low"\` to \`"\\u0060@team-a\\u0060 <b>"\` ${AT}`,
+    ]);
+    for (const f of r.findings) expect(f.split('`').length % 2).toBe(1);
+  });
+
+  it('a catalogue that is not JSON cannot be compared: an error naming the file, and the walk stops there', async () => {
+    expect(() => wireReport(BASE, withCatalogue('{"models": [ not json'))).toThrow(/models-manager\/models\.json/);
+    expect(() => wireReport(withCatalogue(''), BASE)).toThrow(/models-manager\/models\.json/);
+    const gh = fakeGitHub({
+      tags: [tag(161), tag(160)], files: { [tag(160)]: BASE, [tag(161)]: withCatalogue('<html>not json</html>') },
+      issues: [{ number: 7, title: STATE_TITLE, body: tag(160), user: bot }],
+    });
+    expect(await runWatch(gh.io)).toBe(1);
+    expect(gh.posted()).toEqual([]);
+    expect(gh.patched()).toEqual([]);
+    expect(gh.logs.some((l) => /^::error::.*models-manager\/models\.json/.test(l))).toBe(true);
+  });
+
+  it.each([
+    ['a list at the top', '[]'],
+    ['no models key', '{"data": []}'],
+    ['models that is not a list', '{"models": {}}'],
+    ['a model that is not an object', '{"models": ["model-a"]}'],
+    ['a model with no slug', '{"models": [{"display_name": "Model A"}]}'],
+    ['a slug that is not a string', '{"models": [{"slug": 7}]}'],
+    ['two models with one slug', '{"models": [{"slug": "model-a"}, {"slug": "model-a"}]}'],
+  ])('a catalogue of the wrong shape cannot be compared: %s', (_, text) => {
+    expect(() => wireReport(BASE, withCatalogue(text))).toThrow(/models-manager\/models\.json/);
+    expect(() => wireReport(withCatalogue(text), BASE)).toThrow(/models-manager\/models\.json/);
+  });
+
+  it('a catalogue-wide default change stays inside the issue body\'s bounds', () => {
+    const many = (value: string): Model[] => Array.from({ length: 600 }, (_, k) => ({
+      slug: `model-${String(k).padStart(3, '0')}`, default_verbosity: value, context_window: 272000,
+    }));
+    const r = wireReport(withCatalogue(many('o'.repeat(190))), withCatalogue(many('n'.repeat(190))));
+    expect(r.findings).toHaveLength(600);
+    const body = issueBody(tag(161), tag(162), r);
+    expect(body.length).toBeLessThanOrEqual(65_536);
+    const shown = body.split('\n').filter((l) => l.startsWith('- changed ')).length;
+    expect(shown).toBeGreaterThan(0);
+    expect(shown).toBeLessThanOrEqual(BODY_FINDINGS_MAX);
+    expect(body).toContain(`- … and ${600 - shown} more\n`);
+  });
+});
+
 describe('nextPairs: every stable release since the last walk, never skipped', () => {
   it('three releases since the last walk give three consecutive pairs, oldest first', () => {
     const tags = [tag(163), tag(160), tag(162), tag(159), tag(161)];
@@ -230,7 +391,7 @@ describe('the issue text', () => {
 type Issue = { number: number, title: string, body: string, user: { login: string, type: string }, pull_request?: object };
 /** A release, newest first as the API lists them: a tag, or a tag with its draft and prerelease flags. */
 type Release = string | { tag: string, draft?: boolean, prerelease?: boolean };
-type Call = { method: string, url: string, auth?: string, body?: { title?: string, body?: string } };
+type Call = { method: string, url: string, auth?: string, accept?: string, body?: { title?: string, body?: string } };
 
 const API = 'http://api.fake.invalid';
 const REPO = 'owner-a/repo-a';
@@ -247,7 +408,7 @@ function fakeGitHub(opts: { tags: Release[], files: Record<string, Record<string
   const json = (v: unknown, status = 200): Response => new Response(JSON.stringify(v), { status, headers: { 'content-type': 'application/json' } });
   const fetchImpl = async (input: string, init: { method?: string, body?: string, headers?: Record<string, string> } = {}): Promise<Response> => {
     const method = init.method ?? 'GET';
-    calls.push({ method, url: input, auth: init.headers?.authorization, ...(init.body ? { body: JSON.parse(init.body) } : {}) });
+    calls.push({ method, url: input, auth: init.headers?.authorization, accept: init.headers?.accept, ...(init.body ? { body: JSON.parse(init.body) } : {}) });
     if (!input.startsWith(`${api}/`)) throw new Error(`the walk reached outside the fake: ${input}`);
     const u = new URL(input);
     const page = Number(u.searchParams.get('page') ?? '1');
@@ -264,7 +425,14 @@ function fakeGitHub(opts: { tags: Release[], files: Record<string, Record<string
       if (set === undefined) return json({ message: 'Not Found' }, 404);
       if (typeof set === 'number') return json({ message: 'boom' }, set);
       const text = set[contents[1]!];
-      return text === undefined ? json({ message: 'Not Found' }, 404) : new Response(text, { status: 200 });
+      if (text === undefined) return json({ message: 'Not Found' }, 404);
+      if (init.headers?.accept === 'application/vnd.github.raw') return new Response(text, { status: 200 });
+      // The JSON envelope, as the contents API answers it: the file base64 in `content` up to 1 MB, and over 1 MB an
+      // empty `content` with `encoding: "none"`.
+      const size = Buffer.byteLength(text);
+      return json(size > 1_000_000
+        ? { type: 'file', size, encoding: 'none', content: '' }
+        : { type: 'file', size, encoding: 'base64', content: Buffer.from(text).toString('base64') });
     }
     if (u.pathname === `/repos/${REPO}/issues`) {
       if (method === 'GET') return json(paged(issues));
@@ -413,6 +581,26 @@ describe('the walk', () => {
     expect(gh.patched()).toEqual([`9=${tag(162)}`]);
   });
 
+  it('a contract file over 1 MB is read whole: the raw media type, never the JSON envelope\'s content', async () => {
+    const big = (verbosity: string): Record<string, string> => withCatalogue([
+      ...baseModels().map((m) => (m.slug === 'model-b' ? { ...m, default_verbosity: verbosity } : m)),
+      ...Array.from({ length: 300 }, (_, k) => ({ slug: `model-pad-${k}`, base_instructions: 'p'.repeat(4000) })),
+    ]);
+    const older = big('medium');
+    expect(Buffer.byteLength(older[CATALOGUE_FILE]!)).toBeGreaterThan(1_000_000);
+    const gh = fakeGitHub({
+      tags: [tag(161), tag(160)], files: { [tag(160)]: older, [tag(161)]: big('high') },
+      issues: [{ number: 7, title: STATE_TITLE, body: tag(160), user: bot }],
+    });
+    expect(await runWatch(gh.io)).toBe(0);
+    const opened = gh.calls.find((c) => c.method === 'POST' && c.body?.title === pairTitle(tag(160), tag(161)));
+    expect(opened?.body?.body).toContain(
+      `- changed catalogue field \`model-b\`.\`default_verbosity\` from \`"medium"\` to \`"high"\` ${AT}`);
+    const reads = gh.calls.filter((c) => c.url.includes('/contents/'));
+    expect(reads).toHaveLength(2 * CONTRACT_FILES.length);
+    expect(reads.every((c) => c.accept === 'application/vnd.github.raw')).toBe(true);
+  });
+
   it('every request goes to the API base, with the job\'s token', async () => {
     const gh = fakeGitHub({ tags: [tag(161), tag(160)], files: { [tag(160)]: BASE, [tag(161)]: BASE }, issues: [] });
     await runWatch(gh.io);
@@ -440,7 +628,7 @@ async function runCli(build: (api: string) => ReturnType<typeof fakeGitHub>, env
       const body = Buffer.concat(chunks).toString('utf8');
       void gh!.fetchImpl(`${api}${req.url ?? ''}`, {
         method: req.method ?? 'GET',
-        headers: { authorization: String(req.headers.authorization ?? '') },
+        headers: { authorization: String(req.headers.authorization ?? ''), accept: String(req.headers.accept ?? '') },
         ...(body ? { body } : {}),
       }).then(async (r) => {
         res.writeHead(r.status, { 'content-type': r.headers.get('content-type') ?? 'text/plain' });
