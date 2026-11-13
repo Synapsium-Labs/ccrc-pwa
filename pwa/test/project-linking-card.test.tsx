@@ -10,6 +10,7 @@ import { ApiError } from '../src/lib/apiError';
 import { LINKING_REFUSAL_TEXT, LINKING_ROUTE_TEXT } from '../src/lib/refusalWords';
 import { SETTINGS_CARDS } from '../src/fleet/settingsText';
 import { LINKING_TEXT, ProjectLinkingCard } from '../src/screens/settings/ProjectLinkingCard';
+import { candidateLabel, candidateWhy, evidenceWords, linkingRowsOf, teamLinkLine } from '../src/fleet/linkingWords';
 
 afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
@@ -151,5 +152,56 @@ describe('the card', () => {
   it('uses the long word for an internal repository', async () => {
     await mount([row('project-a', wire({ measured: measured({ visibility: 'internal' }) }))]);
     expect(within(rowOf('project-a')).getByText('Internal, read 3h ago')).toBeInTheDocument();
+  });
+});
+
+describe('D-8405: one row per project, and the automatic team link', () => {
+  it('a project the route answers once per checkout directory is ONE row (the first cell wins)', async () => {
+    const dup = (workdir: string, linking: ProjectLinkingWire): ProjectRow => ({ name: 'project-a', workdir, linking });
+    const rows = [
+      dup('/w/project-a', wire({ teamKey: 'KEY' })), dup('/w2/project-a', wire()), dup('/w3/project-a', wire()),
+      dup('/w4/project-a', wire()), row('project-b', wire()), row('project-c'),
+    ];
+    expect(linkingRowsOf(rows).map((r) => [r.name, r.linking.teamKey])).toEqual([['project-a', 'KEY'], ['project-b', null]]);
+    await mount(rows);
+    expect([...document.querySelectorAll('[data-linking-row]')].map((e) => e.getAttribute('data-linking-row'))).toEqual(['project-a', 'project-b']);
+    expect(keyField('project-a').value).toBe('KEY');
+  });
+
+  it('a key the pass linked says so, with its evidence; a typed key says nothing more', async () => {
+    const auto = wire({ teamKey: 'AAA', teamLink: { source: 'auto', teamName: 'Alpha', evidence: { kind: 'ticket-ids', ids: 9, of: 10 }, at: NOW } });
+    await mount([row('project-a', auto), row('project-b', wire({ teamKey: 'BBB', teamLink: { source: 'manual', at: NOW } }))]);
+    const line = 'Linked automatically to Alpha: 9 of 10 ticket ids in its branches, pull requests and commits use AAA.';
+    expect(teamLinkLine(auto)).toBe(line);
+    expect(within(rowOf('project-a')).getByText(line)).toBeInTheDocument();
+    expect(rowOf('project-b').querySelector('[data-linking-auto]')).toBeNull();
+  });
+
+  it('a project with no key offers the candidates; one tap saves that key as the operator\'s', async () => {
+    const candidates = [
+      { key: 'AAA', name: 'Alpha', evidence: { kind: 'ticket-ids' as const, ids: 2, of: 3 } },
+      { key: 'BBB', name: 'project-a', evidence: { kind: 'name-match' as const, matched: 'project' as const, on: 'name' as const } },
+    ];
+    await mount([row('project-a', wire({ override: 'private', teamCandidates: candidates }))]);
+    const r = within(rowOf('project-a'));
+    expect(r.getByRole('group', { name: LINKING_TEXT.candidates })).toBeInTheDocument();
+    expect(r.getByText(candidateWhy(candidates[1]!))).toBeInTheDocument();
+    expect(candidateWhy(candidates[1]!)).toBe('project-a: the project name matches the team name');
+    expect(candidateLabel(candidates[0]!)).toBe('Link AAA');
+    expect(evidenceWords(candidates[0]!.evidence, 'AAA')).toBe('2 of 3 ticket ids in its branches, pull requests and commits use AAA');
+    const save = vi.spyOn(api, 'saveLinking').mockResolvedValue({
+      ok: true, linking: wire({ teamKey: 'BBB', override: 'private', teamLink: { source: 'manual', at: NOW } }),
+    });
+    fireEvent.click(r.getByRole('button', { name: candidateLabel(candidates[1]!) }));
+    await waitFor(() => expect(save).toHaveBeenCalledWith('project-a', { teamKey: 'BBB', override: 'private' }));
+    await waitFor(() => expect(keyField('project-a').value).toBe('BBB'));
+    expect(r.queryByRole('group', { name: LINKING_TEXT.candidates })).toBeNull();
+  });
+
+  it('a key the operator cleared says why it stays unlinked; an older server\'s row says nothing', async () => {
+    await mount([row('project-a', wire({ teamLink: { source: 'manual', at: NOW } })), row('project-b', wire())]);
+    expect(within(rowOf('project-a')).getByText('The key was cleared here, so it is not linked automatically.')).toBeInTheDocument();
+    expect(rowOf('project-b').querySelector('[data-linking-auto]')).toBeNull();
+    expect(within(rowOf('project-b')).queryByRole('group', { name: LINKING_TEXT.candidates })).toBeNull();
   });
 });
