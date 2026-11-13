@@ -22,7 +22,8 @@ export type GenEvent =
 
 export interface GenView {
   readonly state: GenerationState;
-  /** The state the renewal began from, and the one a failure before the receipt's first half returns to. */
+  /** The state the renewal began from, as recorded on the row. A failure before the receipt's first half returns to
+   *  `active` either way (A2). */
   readonly from: 'active' | 'degraded';
   /** `renew` calls in this `clearing`: one per try. */
   readonly tries: number;
@@ -53,11 +54,9 @@ const to = (g: GenView, state: GenerationState, actions: readonly GenAction[], o
 const drain = (g: GenView, from: 'active' | 'degraded', cls: TriggerClass): GenStep =>
   to(g, 'draining', ['hold-deliveries'], { from, cls, tries: 0, renudged: false, probeRounds: 0, hostEnded: false });
 
-/** A failure before the receipt's first half: back to the state the renewal began from, `active` with a hold-off. */
-const back = (g: GenView): GenStep =>
-  g.from === 'active'
-    ? to(GEN_ACTIVE, 'active', ['release-deliveries', 'set-hold-off'])
-    : to({ ...GEN_ACTIVE, from: 'degraded' }, 'degraded', ['release-deliveries']);
+/** A failure before the receipt's first half: back to `active` with a hold-off, whether the renewal began in `active`
+ *  or in `degraded` (the model's FAILED_RENEWAL_RETURNS='active'; plan review 1890, A2). */
+const back = (): GenStep => to(GEN_ACTIVE, 'active', ['release-deliveries', 'set-hold-off']);
 
 /** Into `degraded` after the first half, or when a card or probes fail: one operator item. */
 const degrade = (): GenStep => to({ ...GEN_ACTIVE, from: 'degraded' }, 'degraded', ['release-deliveries', 'raise-item']);
@@ -79,7 +78,7 @@ const HANDLERS: Readonly<Record<GenerationState, (g: GenView, e: GenEvent) => Ge
     if (e.kind === 'drained') {
       return g.cls === 'hard' ? clear(g) : to(g, 'checkpointed', ['assemble-checkpoint', 'ask-handover']);
     }
-    if (e.kind === 'deadline') return back(g);
+    if (e.kind === 'deadline') return back();
     if (e.kind === 'started') return startedHere(g);
     return same(g);
   },
@@ -91,10 +90,10 @@ const HANDLERS: Readonly<Record<GenerationState, (g: GenView, e: GenEvent) => Ge
   clearing: (g, e) => {
     if (e.kind === 'host-ended') return to(g, 'clearing', [], { hostEnded: true });
     if (e.kind === 'host-failed') {
-      if (!g.hostEnded && !e.afterEnd) return back(g);
+      if (!g.hostEnded && !e.afterEnd) return back();
       return to(g, 'clearing', ['renew'], { tries: g.tries + 1, hostEnded: true });
     }
-    if (e.kind === 'deadline') return g.hostEnded ? degrade() : back(g);
+    if (e.kind === 'deadline') return g.hostEnded ? degrade() : back();
     if (e.kind === 'started') return startedHere(g);
     return same(g);
   },

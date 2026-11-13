@@ -596,9 +596,9 @@ type Want = { readonly state: GState; readonly over?: Partial<GView>; readonly a
 /** Table 3.3.11a and §3.3.11's sentences, one rule each, first match. `same` is "any event a state does not name". */
 type Rule = { readonly why: string; readonly st: readonly GState[]; readonly ev: (e: GEvent) => boolean;
   readonly when?: (g: GView) => boolean; readonly then: (g: GView) => Want };
-const BACK = (g: GView): Want => (g.from === 'active'
-  ? { state: 'active', over: FRESH, actions: ['release-deliveries', 'set-hold-off'] }
-  : { state: 'degraded', over: { ...FRESH, from: 'degraded' }, actions: ['release-deliveries'] });
+/** "A failure before the first half returns the generation to active, with a hold-off" (the model's
+ *  FAILED_RENEWAL_RETURNS='active', ruled by plan review 1890 A2), wherever the renewal began. */
+const BACK = (): Want => ({ state: 'active', over: FRESH, actions: ['release-deliveries', 'set-hold-off'] });
 const DEGRADE: Want = { state: 'degraded', over: { ...FRESH, from: 'degraded' }, actions: ['release-deliveries', 'raise-item'] };
 const LIVE: readonly GState[] = ['active', 'draining', 'checkpointed', 'clearing', 'carded', 'probing', 'degraded'];
 export const GEN_RULES: readonly Rule[] = [
@@ -709,11 +709,13 @@ export function generationStepCases(m: GenModule): Record<string, SuiteCase> {
       expect(r.views.at(-1)!.state).toBe('active');
       expect(r.actions.at(-1)).toContain('set-hold-off');
     },
-    'SPEC over the model\'s default: a renewal that began in degraded returns to degraded (the model\'s FAILED_RENEWAL_RETURNS=previous)': () => {
+    'MODEL FAILED_RENEWAL_RETURNS=active, from degraded too (A2): a failure before the first half returns to active with a hold-off': () => {
       const deg: GView = { ...m.GEN_ACTIVE, state: 'degraded', from: 'degraded' };
-      const r = runChain(m, deg, [ev('renew-now'), ev('drained'), ev('host-failed', { afterEnd: false })]);
-      expect(r.views.map((v) => v.state)).toEqual(['draining', 'clearing', 'degraded']);
-      expect(r.actions.at(-1)).not.toContain('set-hold-off');
+      for (const failure of [[ev('drained'), ev('host-failed', { afterEnd: false })], [ev('drained'), ev('deadline')], [ev('deadline')]]) {
+        const r = runChain(m, deg, [ev('renew-now'), ...failure]);
+        expect(r.views.at(-1), JSON.stringify(failure)).toEqual(m.GEN_ACTIVE);
+        expect(r.actions.at(-1)).toEqual(['release-deliveries', 'set-hold-off']);
+      }
     },
     'MODEL START_WHILE_DOWN=reported-at-boot: a start reported late still ends n and mints n+1 at carded': () => {
       const r = runChain(m, m.GEN_ACTIVE, [ev('due', { cls: 'hard' }), ev('drained'), ev('host-ended'), ev('started', { resumed: false })]);
@@ -745,16 +747,16 @@ const GEN_SET: MutantSet<GenModule> = {
     { id: 'G1', old: "if (e.kind === 'card-read' && e.hashMatches) return", new: "if (e.kind === 'card-read') return" },
     { id: 'G2', old: "if (e.passed) return to(GEN_ACTIVE, 'active', ['release-deliveries']);", new: "if (e.passed || g.probeRounds >= 1) return to(GEN_ACTIVE, 'active', ['release-deliveries']);" },
     { id: 'G3', old: "  draining: (g, e) => {\n    if (e.kind === 'drained') {\n      return g.cls === 'hard'", new: "  draining: (g, e) => {\n    if (e.kind === 'drained') {\n      return g.cls !== 'soft'" },
-    { id: 'G4', old: "if (!g.hostEnded && !e.afterEnd) return back(g);", new: 'if (!e.afterEnd) return back(g);' },
-    { id: 'G5', old: "    ? to(GEN_ACTIVE, 'active', ['release-deliveries', 'set-hold-off'])", new: "    ? to(GEN_ACTIVE, 'active', ['release-deliveries'])" },
+    { id: 'G4', old: "if (!g.hostEnded && !e.afterEnd) return back();", new: 'if (!e.afterEnd) return back();' },
+    { id: 'G5', old: "to(GEN_ACTIVE, 'active', ['release-deliveries', 'set-hold-off'])", new: "to(GEN_ACTIVE, 'active', ['release-deliveries'])" },
     { id: 'G6', old: "if (e.kind === 'due' && e.cls === 'hard') return drain(g, 'degraded', 'hard');", new: "if (e.kind === 'due') return drain(g, 'degraded', 'hard');" },
     { id: 'G7', old: "if (e.kind === 'deadline') return g.renudged ? degrade() : to(g, 'carded', ['renudge-card'], { renudged: true });", new: "if (e.kind === 'deadline') return degrade();" },
     { id: 'G8', old: "return g.probeRounds >= 1 ? degrade() :", new: 'return g.probeRounds >= 2 ? degrade() :' },
-    { id: 'G9', old: "if (e.kind === 'deadline') return g.hostEnded ? degrade() : back(g);", new: "if (e.kind === 'deadline') return degrade();" },
+    { id: 'G9', old: "if (e.kind === 'deadline') return g.hostEnded ? degrade() : back();", new: "if (e.kind === 'deadline') return degrade();" },
     { id: 'G10', old: "  ended: (g) => same(g),", new: "  ended: (g, e) => (e.kind === 'started' ? startedHere(g) : same(g))," },
-    { id: 'G11', old: "  : to({ ...GEN_ACTIVE, from: 'degraded' }, 'degraded', ['release-deliveries']);", new: "  : to(GEN_ACTIVE, 'active', ['release-deliveries', 'set-hold-off']);" },
+    { id: 'G11', old: "if (e.kind === 'deadline') return g.hostEnded ? degrade() : back();", new: "if (e.kind === 'deadline') return g.hostEnded ? degrade() : g.from === 'degraded' ? degrade() : back();" },
     { id: 'G12', old: "return to(g, 'clearing', ['renew'], { tries: g.tries + 1, hostEnded: true });", new: "return to(g, 'clearing', ['renew', 'renew'], { tries: g.tries + 1, hostEnded: true });" },
-    { id: 'G13', old: "    if (e.kind === 'handover' || e.kind === 'deadline') return clear(g);", new: "    if (e.kind === 'handover') return clear(g);\n    if (e.kind === 'deadline') return back(g);" },
+    { id: 'G13', old: "    if (e.kind === 'handover' || e.kind === 'deadline') return clear(g);", new: "    if (e.kind === 'handover') return clear(g);\n    if (e.kind === 'deadline') return back();" },
   ],
   suite: generationStepCases,
 };
