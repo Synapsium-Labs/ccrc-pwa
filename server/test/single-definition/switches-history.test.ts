@@ -1125,7 +1125,7 @@ describe('the launch record: one appender, one purge, and no reader in the tree 
     const ccd = BASH.find((f) => rel(f) === 'ccd/ccd') ?? '';
     const named = codeLines(ccd).filter(bashNames);
     expect(named).toHaveLength(1);
-    expect(named[0]).toContain('rm -f "$REG/$id.joined" "$REG/$id.joinedprev" "$REG/$id.deleg" ||');
+    expect(named[0]).toContain('rm -f "$REG/$id.joined" "$REG/$id.joinedprev" "$REG/$id.deleg" "$REG/$id.startpending" ||');
   });
 
   it('no other shell file under ccd/ or deploy/ names it', () => {
