@@ -11,7 +11,7 @@ import {
   BREAK_NO_MESSAGE_MS, BREAK_PLACE_HIDDEN_MS, EARLY_WHILE_AWAY_FRACTION, LEAST_AGE_MS, ON_SCHEDULE_WAIT_MS, SOFT_BUDGET,
   SOFT_CEILING_FRACTION, TURNS_SOFT,
 } from '../../../shared/continuity.js';
-import { RENEWAL_ROWS, type Reading, type RenewalInputs } from './renewalDue.js';
+import { RENEWAL_ROWS, measuredCount, type Reading, type RenewalInputs } from './renewalDue.js';
 
 /** A soft input: measured, unmeasured, or not applicable to this role (a role that has no Overlord place, or whose
  *  reader wait the hold table answers). Not applicable is never unmeasured: it neither blocks nor fires (I7). */
@@ -52,12 +52,12 @@ const START: SoftAnswer = { start: true };
 /** A break (R19): no operator message for 20 minutes, or no visible place for five, both in observed time. Any
  *  measured disjunct that passes is a break; an input the role does not have neither blocks nor fires. 'unmeasured'
  *  when no measured disjunct passes and an applicable one is unmeasured. Quiet hours join in W3, with their Setting. A
- *  value that is not a number fails `>=`, so it never makes a break. */
+ *  measured value that is not a count (`measuredCount`) never makes a break. */
 function breakOf(i: SoftInputs): boolean | 'unmeasured' {
   const parts: Array<[SoftReading<number>, number]> = [
     [i.operatorQuietObservedMs, BREAK_NO_MESSAGE_MS], [i.placeHiddenObservedMs, BREAK_PLACE_HIDDEN_MS]];
-  if (parts.some(([r, t]) => r.kind === 'measured' && r.value >= t)) return true;
-  return parts.some(([r]) => r.kind === 'unmeasured') ? 'unmeasured' : false;
+  if (parts.some(([r, t]) => { const v = measuredCount(r); return v !== null && v >= t; })) return true;
+  return parts.some(([r]) => r.kind !== 'not-applicable' && measuredCount(r) === null) ? 'unmeasured' : false;
 }
 
 /** May a soft renewal start now? The waits, first match: least age, hold-off, budget, the Overlord first, then the
@@ -70,9 +70,11 @@ export function softRenewalMay(i: SoftInputs): SoftAnswer {
   if (i.role !== 'overlord' && i.overlordOutsideActive) return wait('overlord-first');
   if (i.mode === 'on-schedule' && i.dueSinceObservedMs >= ON_SCHEDULE_WAIT_MS) return START;
   if (i.hibernateHold.held) return wait('hold');
-  const readers = i.readersRunning;
-  if (readers.kind === 'unmeasured') return wait('unmeasured');
-  if (readers.kind === 'measured' && !(readers.value <= 0)) return wait('readers');
+  if (i.readersRunning.kind !== 'not-applicable') {
+    const readers = measuredCount(i.readersRunning);
+    if (readers === null) return wait('unmeasured');
+    if (readers !== 0) return wait('readers');
+  }
   const away = breakOf(i);
   if (away === 'unmeasured') return wait('unmeasured');
   return away ? START : wait('no-break');
@@ -83,9 +85,7 @@ export function softRenewalMay(i: SoftInputs): SoftAnswer {
  *  input of `renewalDue` yet, so it joins with its reading. */
 export function earlyWhileAway(role: FleetRole, i: RenewalInputs): boolean {
   const rows = RENEWAL_ROWS[role];
-  const at = (r: Reading<number>): number | null =>
-    r.kind === 'measured' && Number.isFinite(r.value) && r.value >= 0 ? r.value : null;
-  const ctx = at(i.contextTokens); const fit = at(i.fittedCeilingTokens); const turns = at(i.turns);
+  const ctx = measuredCount(i.contextTokens); const fit = measuredCount(i.fittedCeilingTokens); const turns = measuredCount(i.turns);
   const pastCeiling = rows.includes('soft-ceiling') && ctx !== null && fit !== null
     && ctx >= fit * SOFT_CEILING_FRACTION * EARLY_WHILE_AWAY_FRACTION;
   const pastTurns = rows.includes('turns') && turns !== null && turns >= TURNS_SOFT * EARLY_WHILE_AWAY_FRACTION;

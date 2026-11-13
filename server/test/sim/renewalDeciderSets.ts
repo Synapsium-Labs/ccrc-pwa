@@ -214,12 +214,13 @@ export function expectedRenewal(i: RIn): { due: boolean; why?: Trig; cls?: 'hard
   type V = boolean | null;   // null: unmeasured
   const and = (...p: V[]): boolean | 'blind' => (p.some((x) => x === false) ? false : p.some((x) => x === null) ? 'blind' : true);
   const b = (r: Rd<boolean>): V => (r.kind === 'measured' ? r.value : null);
-  const above = (frac: number): V => (ctx === null || cap === null ? null : ctx > cap * frac);
+  // The cap is never above 250k, so a context past 250k times the fraction is past it whatever the window (review I1).
+  const above = (frac: number): V => (ctx === null ? null : cap === null ? (ctx > 250_000 * frac ? true : null) : ctx > cap * frac);
   const res = i.startResumed.kind === 'measured' ? i.startResumed.value : null;
   const t = val(i.turns); const c = val(i.compactions); const idle = val(i.idleMs); const fit = val(i.fittedCeilingTokens);
   const row: Record<Trig, boolean | 'blind'> = {
     operator: i.renewNow,
-    'hard-cap': and(ctx === null || cap === null ? null : ctx >= cap),
+    'hard-cap': and(ctx === null ? null : cap === null ? (ctx >= 250_000 ? true : null) : ctx >= cap),
     'soft-ceiling': and(ctx === null || fit === null ? null : ctx > 0.6 * fit),
     turns: and(t === null ? null : t > 40),
     'two-compactions': and(c === null ? null : c >= 2),
@@ -288,6 +289,12 @@ export function renewalDueCases(m: RenewalDueModule): Record<string, SuiteCase> 
       expect(m.renewalDue({ ...renewalBase('coordinator'), waveBoundary: M(true), contextTokens: M(70_000) }))
         .toEqual({ due: true, cls: 'soft', why: 'wave-boundary', blind: [] });
     },
+    'WORKED: 300k tokens with the window unmeasured is hard-cap (the cap is never above 250k); 200k is blind': () => {
+      expect(m.renewalDue({ ...renewalBase('coordinator'), windowTokens: U, contextTokens: M(300_000) }))
+        .toMatchObject({ due: true, cls: 'hard', why: 'hard-cap' });
+      expect(m.renewalDue({ ...renewalBase('coordinator'), windowTokens: U, contextTokens: M(200_000) }))
+        .toEqual({ due: false, blind: ['hard-cap'] });
+    },
     'WORKED: a stale context reading is not due, with hard-cap blind': () => {
       const got = m.renewalDue({ ...renewalBase('overlord'), contextTokens: U });
       expect(got.due).toBe(false);
@@ -319,13 +326,14 @@ const RENEWAL_DUE_SET: MutantSet<RenewalDueModule> = {
   modulePath: path.join(ROOT, 'server/src/continuity/renewalDue.ts'),
   mutants: [
     { id: 'D1', old: "'class-unservable', 'account-load', 'not-local', 'resumed-long',\n    'soft-ceiling', 'turns',", new: "'class-unservable', 'account-load', 'not-local', 'soft-ceiling',\n    'resumed-long', 'turns'," },
-    { id: 'D2', old: 'return atCap ? c >= cap * fraction : c > cap * fraction;', new: 'return atCap ? c > cap * fraction : c > cap * fraction;' },
+    { id: 'D2', old: '(atCap ? c >= cap * fraction : c > cap * fraction)', new: '(atCap ? c > cap * fraction : c > cap * fraction)' },
+    { id: 'D13', old: "return past(HARD_CAP_TOKENS) ? true : 'blind';", new: "return 'blind';" },
     { id: 'D3', old: "r.kind === 'measured' ? r.value === true : 'blind'", new: "r.kind === 'measured' ? r.value === true : false" },
     { id: 'D4', old: "  overlord: ['operator', 'hard-cap',", new: "  overlord: ['hard-cap'," },
     { id: 'D5', old: "'not-local', 'resumed-long',\n    'two-compactions',", new: "'not-local', 'two-compactions',\n    'resumed-long'," },
     { id: 'D6', old: 'return Math.min(HARD_CAP_TOKENS, windowTokens / 2);', new: 'return HARD_CAP_TOKENS;' },
     { id: 'D7', old: 'if (parts.includes(false)) return false;', new: "if (parts.includes('blind')) return 'blind';" },
-    { id: 'D8', old: "r.kind === 'measured' && Number.isFinite(r.value) && r.value >= 0 ? r.value : null", new: "r.kind === 'measured' ? r.value : null" },
+    { id: 'D8', old: "typeof r.value === 'number' && Number.isFinite(r.value) && r.value >= 0 ? r.value : null", new: "typeof r.value === 'number' ? r.value : null" },
     { id: 'D9', old: 'turns: (i) => gt(i.turns, TURNS_SOFT),', new: 'turns: (i) => ge(i.turns, TURNS_SOFT),' },
     { id: 'D10', old: "'model-drift': 'hard',", new: "'model-drift': 'soft'," },
     { id: 'D11', old: 'else if (v && why === null) why = t;', new: 'else if (v) why = t;' },
@@ -360,9 +368,9 @@ export const SOFT_DOMAINS: Record<string, readonly unknown[]> = {
   softRenewalsInWindow: [0, 2, 3, Number.NaN],
   overlordOutsideActive: [false, true],
   hibernateHold: [{ held: false }, { held: true, reason: 'pane' }],
-  readersRunning: [NA, U, M(0), M(1), M(Number.NaN)],
-  operatorQuietObservedMs: [NA, U, M(0), M(20 * MIN - 1), M(20 * MIN)],
-  placeHiddenObservedMs: [NA, U, M(0), M(5 * MIN - 1), M(5 * MIN)],
+  readersRunning: [NA, U, M(0), M(1), M(Number.NaN), M(-1)],
+  operatorQuietObservedMs: [NA, U, M(0), M(20 * MIN - 1), M(20 * MIN), M(Number.POSITIVE_INFINITY)],
+  placeHiddenObservedMs: [NA, U, M(0), M(5 * MIN - 1), M(5 * MIN), M(-1)],
   mode: ['when-away', 'on-schedule'],
   dueSinceObservedMs: [0, 30 * MIN - 1, 30 * MIN],
 };
@@ -378,11 +386,13 @@ export function expectedSoft(i: SIn): SAns {
   const capped = i.mode === 'on-schedule' && i.dueSinceObservedMs >= 30 * MIN;
   if (capped) return { start: true };
   if (i.hibernateHold.held) return no('hold');
-  const r = i.readersRunning;
-  if (r.kind === 'unmeasured') return no('unmeasured');
-  if (r.kind === 'measured' && r.value !== 0) return no('readers');
-  const passes = (x: SRd<number>, t: number): boolean | 'u' | 'na' =>
-    x.kind === 'not-applicable' ? 'na' : x.kind === 'unmeasured' ? 'u' : x.value >= t;
+  // A measured value that is not a count (NaN, negative, infinite) is read as unmeasured.
+  const count = (x: SRd<number>): number | 'u' | 'na' => (x.kind === 'not-applicable' ? 'na'
+    : x.kind === 'measured' && Number.isFinite(x.value) && x.value >= 0 ? x.value : 'u');
+  const r = count(i.readersRunning);
+  if (r === 'u') return no('unmeasured');
+  if (r !== 'na' && r !== 0) return no('readers');
+  const passes = (x: SRd<number>, t: number): boolean | 'u' | 'na' => { const v = count(x); return v === 'u' || v === 'na' ? v : v >= t; };
   const d = [passes(i.operatorQuietObservedMs, 20 * MIN), passes(i.placeHiddenObservedMs, 5 * MIN)];
   if (d.includes(true)) return { start: true };
   if (d.includes('u')) return no('unmeasured');
@@ -495,19 +505,18 @@ const SOFT_SET: MutantSet<SoftModule> = {
   mutants: [
     { id: 'S1', old: 'if (!(i.generationAgeObservedMs >= LEAST_AGE_MS))', new: 'if (!(i.generationAgeObservedMs > LEAST_AGE_MS))' },
     { id: 'S2', old: "if (!(i.softRenewalsInWindow < SOFT_BUDGET.count)) return wait('budget');", new: '' },
-    { id: 'S3', old: "if (readers.kind === 'unmeasured') return wait('unmeasured');", new: '' },
+    { id: 'S3', old: "if (readers === null) return wait('unmeasured');", new: '' },
     { id: 'S4', old: "  if (i.mode === 'on-schedule' && i.dueSinceObservedMs >= ON_SCHEDULE_WAIT_MS) return START;\n  if (i.hibernateHold.held) return wait('hold');",
       new: "  if (i.hibernateHold.held) return wait('hold');\n  if (i.mode === 'on-schedule' && i.dueSinceObservedMs >= ON_SCHEDULE_WAIT_MS) return START;" },
     { id: 'S5', old: "i.role !== 'overlord' && i.overlordOutsideActive", new: 'i.overlordOutsideActive' },
     { id: 'S6', old: "if (away === 'unmeasured') return wait('unmeasured');", new: "if (away === 'unmeasured') return START;" },
-    { id: 'S7', old: "return parts.some(([r]) => r.kind === 'unmeasured') ? 'unmeasured' : false;", new: "return parts.some(([r]) => r.kind !== 'measured') ? 'unmeasured' : false;" },
+    { id: 'S7', old: "r.kind !== 'not-applicable' && measuredCount(r) === null", new: "measuredCount(r) === null" },
     { id: 'S8', old: '!(i.generationAgeObservedMs >= i.holdOffUntilObservedMs)', new: 'i.generationAgeObservedMs > i.holdOffUntilObservedMs' },
-    { id: 'S9', old: "  if (i.hibernateHold.held) return wait('hold');\n  const readers = i.readersRunning;\n  if (readers.kind === 'unmeasured') return wait('unmeasured');\n  if (readers.kind === 'measured' && !(readers.value <= 0)) return wait('readers');",
-      new: "  const readers = i.readersRunning;\n  if (readers.kind === 'unmeasured') return wait('unmeasured');\n  if (readers.kind === 'measured' && !(readers.value <= 0)) return wait('readers');\n  if (i.hibernateHold.held) return wait('hold');" },
+    { id: 'S9', old: "  if (i.hibernateHold.held) return wait('hold');\n  if (i.readersRunning.kind !== 'not-applicable') {", new: "  if (i.readersRunning.kind !== 'not-applicable') {" },
     { id: 'S10', old: "if (i.mode === 'on-schedule' && i.dueSinceObservedMs >= ON_SCHEDULE_WAIT_MS) return START;", new: "if (i.mode === 'on-schedule') return START;" },
     { id: 'S11', old: '[i.placeHiddenObservedMs, BREAK_PLACE_HIDDEN_MS]', new: '[i.placeHiddenObservedMs, BREAK_NO_MESSAGE_MS]' },
-    { id: 'S12', old: "parts.some(([r, t]) => r.kind === 'measured' && r.value >= t)", new: "parts.every(([r, t]) => r.kind === 'measured' && r.value >= t)" },
-    { id: 'S13', old: "if (readers.kind === 'measured' && !(readers.value <= 0))", new: "if (readers.kind !== 'measured' || !(readers.value <= 0))" },
+    { id: 'S12', old: "if (parts.some(([r, t]) =>", new: "if (parts.every(([r, t]) =>" },
+    { id: 'S13', old: "  if (i.readersRunning.kind !== 'not-applicable') {", new: '  {' },
   ],
   suite: softRenewalCases,
 };
@@ -517,7 +526,7 @@ const EARLY_SET: MutantSet<SoftModule> = {
     { id: 'E1', old: 'turns >= TURNS_SOFT * EARLY_WHILE_AWAY_FRACTION', new: 'turns > TURNS_SOFT * EARLY_WHILE_AWAY_FRACTION' },
     { id: 'E2', old: "const pastTurns = rows.includes('turns') && ", new: 'const pastTurns = ' },
     { id: 'E3', old: 'ctx >= fit * SOFT_CEILING_FRACTION * EARLY_WHILE_AWAY_FRACTION', new: 'ctx >= fit * EARLY_WHILE_AWAY_FRACTION' },
-    { id: 'E4', old: "r.kind === 'measured' && Number.isFinite(r.value) && r.value >= 0 ? r.value : null", new: "r.kind === 'measured' ? r.value : null" },
+    { id: 'E4', old: "const pastCeiling = rows.includes('soft-ceiling') && ", new: 'const pastCeiling = ' },
     { id: 'E5', old: 'return pastCeiling || pastTurns;', new: 'return pastCeiling && pastTurns;' },
   ],
   suite: earlyWhileAwayCases,

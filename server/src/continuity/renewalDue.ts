@@ -95,9 +95,11 @@ function all(...parts: Verdict[]): Verdict {
   return parts.every((p) => p === true) ? true : 'blind';
 }
 
-/** A measured count or duration: finite and not negative. Anything else is read as unmeasured. */
-const num = (r: Reading<number>): number | null =>
-  r.kind === 'measured' && Number.isFinite(r.value) && r.value >= 0 ? r.value : null;
+/** THE ONE READER of a measured count, size or duration for the renewal deciders: its value when it is measured,
+ *  finite and not negative; null otherwise, so a value that is not one reads as unmeasured. */
+export const measuredCount = (r: { readonly kind: string; readonly value?: unknown }): number | null =>
+  r.kind === 'measured' && typeof r.value === 'number' && Number.isFinite(r.value) && r.value >= 0 ? r.value : null;
+const num = measuredCount;
 
 const flag = (r: Reading<boolean>): Verdict => (r.kind === 'measured' ? r.value === true : 'blind');
 
@@ -107,12 +109,15 @@ function capOf(i: RenewalInputs): number | null {
   return w === null || w <= 0 ? null : hardCapTokens(w);
 }
 
-/** Context strictly above `fraction` of the hard cap (or at or above the whole cap when `atCap`). */
+/** Context strictly above `fraction` of the hard cap (or at or above the whole cap when `atCap`). With the window
+ *  unmeasured the cap is still at most `HARD_CAP_TOKENS`, so a context past that bound is decided; below it, blind. */
 function contextPast(i: RenewalInputs, fraction: number, atCap: boolean): Verdict {
   const c = num(i.contextTokens);
+  if (c === null) return 'blind';
+  const past = (cap: number): boolean => (atCap ? c >= cap * fraction : c > cap * fraction);
   const cap = capOf(i);
-  if (c === null || cap === null) return 'blind';
-  return atCap ? c >= cap * fraction : c > cap * fraction;
+  if (cap !== null) return past(cap);
+  return past(HARD_CAP_TOKENS) ? true : 'blind';
 }
 
 const ge = (r: Reading<number>, t: number): Verdict => { const v = num(r); return v === null ? 'blind' : v >= t; };
