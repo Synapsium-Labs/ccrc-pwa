@@ -75,12 +75,13 @@ describe('W2 census: FIXTURE rows', () => {
 describe('one reading of a session: the W2 pins (D-8049; each may only shrink)', () => {
   const functionsIn = (sites: readonly string[]): number => new Set(sites.map((s) => s.split(' ')[0])).size;
 
-  // `presenceOf` is `readSession`'s ladder. `mailPass` is what is left of the seven: mail delivery weighs the pane, the
-  // `.hibernated` stamp and the lifecycle itself to choose its gate. Moving it is a change of its own.
-  it('statusLadders(): 2 functions, readSession\'s and the mail pass\'s, weighing 10 facts between them', () => {
+  // `presenceOf` is `readSession`'s ladder, and the only one. D-8610 moved the mail pass onto the reading: it reads a gone
+  // pane as the reading's `absent` substrate and `session-dead` as its `deadCause`. The `.hibernated` marker it still
+  // weighs alone, beside no lifecycle, is no ladder (plan 2026-11-13-session-reading-ladders).
+  it('statusLadders(): 1 function, readSession\'s, weighing 6 facts', () => {
     const sites = statusLadders();
-    expect(sites.length).toBeLessThanOrEqual(10);
-    expect(functionsIn(sites)).toBeLessThanOrEqual(2);
+    expect(sites.length).toBeLessThanOrEqual(6);
+    expect(functionsIn(sites)).toBeLessThanOrEqual(1);
     expect(sites).toEqual([
       "server/src/sessionReading.ts#presenceOf f.pane === 'live'",
       "server/src/sessionReading.ts#presenceOf f.pane === 'unknown'",
@@ -88,32 +89,17 @@ describe('one reading of a session: the W2 pins (D-8049; each may only shrink)',
       "server/src/sessionReading.ts#presenceOf lc === 'unmeasurable'",
       'server/src/sessionReading.ts#presenceOf lc === null',
       'server/src/sessionReading.ts#presenceOf lifecycleIsDead(lc)',
-      'server/src/watch.ts#FleetWatcher.mailPass lifecycleIsDead(lc)',
-      "server/src/watch.ts#FleetWatcher.mailPass sv.verdict === 'gone'",
-      "server/src/watch.ts#FleetWatcher.mailPass sv.verdict === 'gone'",
-      "server/src/watch.ts#FleetWatcher.mailPass sv.verdict === 'unknown'",
     ]);
   });
 
-  // The one reading is `turnWordOf`. The rest still compare the word they hold: the stall lane's rungs, which ask only for
-  // `doubt` through `stallWatchSays`; the idle-compact nudge; and the interrupt door's verdict and its route. ARCH-50 moved
-  // the mail gate, the stop verdict, the sleep verdict and the display collapse, none of which may come back here.
-  it('rawTurnWordReaders(): 14 comparisons in 10 functions, turnWordOf and the nine readers not yet on it', () => {
+  // The one reading is `turnWordOf`, and its three comparisons are the allowlist itself. D-8610 moved the last nine
+  // readers onto it (the stall lane's six, the idle-compact nudge, the interrupt door's verdict and its route); ARCH-50
+  // moved the mail gate, the stop verdict, the sleep verdict and the display collapse. None of them may come back here.
+  it('rawTurnWordReaders(): 3 comparisons in 1 function, turnWordOf alone', () => {
     const sites = rawTurnWordReaders();
-    expect(sites.length).toBeLessThanOrEqual(14);
-    expect(functionsIn(sites)).toBeLessThanOrEqual(10);
+    expect(sites.length).toBeLessThanOrEqual(3);
+    expect(functionsIn(sites)).toBeLessThanOrEqual(1);
     expect(sites).toEqual([
-      "server/src/coord/stall.ts#stallCoordBusySince live.word !== 'busy'",
-      "server/src/coord/stall.ts#stallCoordGate live.word !== 'busy'",
-      "server/src/coord/stall.ts#stallIdleStart live.word === 'busy'",
-      "server/src/coord/stall.ts#stallOrphanEInner live.word !== 'idle'",
-      "server/src/coord/stall.ts#stallVerdictInner live.word === 'busy'",
-      "server/src/coord/stall.ts#stallWaveOneLadder word === 'busy'",
-      "server/src/idlenudge.ts#decideIdleCompactNudge f.live.word !== 'idle'",
-      "server/src/inject/send.ts#interruptVerdict r.word.word === 'busy'",
-      "server/src/inject/send.ts#interruptVerdict r.word.word === 'idle'",
-      "server/src/inject/send.ts#interruptVerdict r.word.word === 'shell'",
-      "server/src/server.ts#buildServer word.word === 'idle'",
       "server/src/sessionReading.ts#turnWordOf raw === 'busy'",
       "server/src/sessionReading.ts#turnWordOf raw === 'idle'",
       "server/src/sessionReading.ts#turnWordOf raw === 'shell'",
