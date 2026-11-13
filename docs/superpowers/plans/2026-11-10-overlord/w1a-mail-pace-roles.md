@@ -402,9 +402,9 @@ intentDeclared: 'unmeasured' })` answers, so the move onto `roleFactsOf` after 1
   overridden).
 - Create: `server/test/sim/mailPaceSets.ts` (`mailPaceOfCases`, written once, and `MAIL_PACE_MUTANT_SETS`, the
   mutants P1 to P4), run against the real module by `server/test/mail-pace.test.ts`.
-- Modify, once their holder agrees: `server/test/sim/mutation-floors.test.ts` (spread `MAIL_PACE_MUTANT_SETS` into
+- Modify (append-only, the coordinator's ruling): `server/test/sim/mutation-floors.test.ts` (spread `MAIL_PACE_MUTANT_SETS` into
   `MUTANT_SETS`) and `server/test/sim/mutation-floors.json` (`"server/src/coord/mailPace.ts#mailPaceOf": 1`), D-8217's
-  rule for a new L1 decider. Both files are claimed by run 1888; the request went to it as mail.
+  rule for a new L1 decider. Each run adds only its own rows, and the second to land takes the union.
 
 - [ ] **Step 1: Mutations on the new shape.** The child passed as `{ kind: 'none' }`: both child-claimant cases red.
   `declaredIntent: 'no'` added to the lane's facts: the "chooses a row once, through roleOf" pin red. Restore each.
@@ -445,7 +445,12 @@ the new decider. It differs in three places:
   whole file outran the test slice under load and its worker was killed): every case green but three. Two passed alone
   (a hibernated recipient's ensure, and a stash-failed park), so they were load. The third, "a DELIVERED row never
   parks as rejected on repeated replay failures", times out at its 20 s bound alone, and does so on the code before
-  Task 3's switch too: ten sweeps at about 2 s each on this box. CI on a quiet runner is its arbiter.
+  Task 3's switch too: ten sweeps at about 2 s each on this box. CI on a quiet runner is its arbiter. Measured on a clean `origin/main` (6d9c27d21) in scratch: the same timeout,
+  so it is not this branch's.
+- **Task 4:** the mutation floor for `mailPaceOf` (`"server/src/coord/mailPace.ts#mailPaceOf": 1`) passes, every mutant
+  P1 to P4 killed; adding the equivalent tiebreak mutant reds it (`survived`), so the floor bites. The coordinator ruled
+  (2026-11-13) that the floors file and the `MUTANT_SETS` spread are append-only: each run adds its own rows, and the
+  second to land takes the union.
 
 ## Deviations found
 
