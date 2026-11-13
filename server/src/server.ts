@@ -143,6 +143,7 @@ import { moveClaims } from './coord/reclaim.js';
 import { admitArchive } from './coord/archiveAdmission.js';
 import { actArchive, replyArchiveRefused } from './archiveAct.js';
 import { liveRowFor, liveRowWithHookFor, liveWordFor, turnReadDeps, turnVerdictFor } from './turnverdict.js';
+import { turnWordOf } from './sessionReading.js';
 import { ccdSwapRefusal, swapTurnRefusal } from './swapguard.js';
 
 /**
@@ -2812,7 +2813,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       if (read.kind !== 'found') return { kind: 'idle' };
       const word = await liveWordFor(turnReads, read.record);
       const identity = measuredIdentity(read.record);
-      if (!word.ok || word.word === 'idle' || identity === null) {
+      if (!word.ok || turnWordOf(word.word) === 'idle' || identity === null) {
         return interruptVerdict({ word, row: null, hookUpdatedAt: null, hookEvent: null });
       }
       return interruptVerdict({ word, ...(await liveRowWithHookFor(turnReads, read.record, identity.uuid)) });

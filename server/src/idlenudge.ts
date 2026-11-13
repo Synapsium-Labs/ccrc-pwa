@@ -1,5 +1,6 @@
 import { IDLE_COMPACT_NOTICE_PREFIXES, TASKS_STALE_MS, type AskState, type SessionLifecycle, type SessionStatus } from '../../shared/api.js';
 import { IDLE_NUDGE_DISABLED_MARKER } from '../../shared/switches.js';
+import { turnSays, turnWordOf } from './sessionReading.js';
 
 /**
  * `idle-compact-nudge` (D-5373). L1: pure decisions, no `fs`, no clock of its own.
@@ -224,7 +225,8 @@ export function decideIdleCompactNudge(f: IdleNudgeFacts): IdleNudgeVerdict {
   const row = idleNudgeRowHold(f);
   if (row !== null) return hold(row);
   if (!f.live.ok) return hold('unmeasured');
-  if (f.live.word !== 'idle') return hold('not-idle');
+  // The nudge types a prompt, so it reads the word by the keystroke policy: only `idle` is at rest.
+  if (turnSays('keystroke', turnWordOf(f.live.word)) !== 'rest') return hold('not-idle');
   if (!f.mark.ok) return hold('no-marker');
   if (f.mark.state !== 'done') return hold('turn-open');
   if (f.mark.bg !== 0) return hold('background');

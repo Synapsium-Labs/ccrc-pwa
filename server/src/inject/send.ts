@@ -8,6 +8,7 @@ import {
 } from '../../../shared/api.js';
 import { CHAT_ABOUT_ROW_RE, FREE_TEXT_PLACEHOLDER_RE, parseAskTabs, reviewRows } from '../../../shared/ask-menu.js';
 import { hookEventIs } from '../../../shared/hook-events.js';
+import { turnWordOf } from '../sessionReading.js';
 
 export interface SendDeps {
   tmux: Tmux;
@@ -2500,11 +2501,13 @@ export interface InterruptReading {
  * begun after that Stop, and only a Stop's stamp proves the main turn ended. A carried `done` is a `turn` (Escape).
  */
 export function interruptVerdict(r: InterruptReading): InterruptVerdict {
-  if (!r.word.ok || r.word.word === 'idle') return { kind: 'idle' };
+  if (!r.word.ok) return { kind: 'idle' };
+  const word = turnWordOf(r.word.word);
+  if (word === 'idle') return { kind: 'idle' };
   if (r.row === null || r.row.dialogPending) return { kind: 'turn' };
-  if (r.word.word === 'shell') return { kind: 'background-only', count: null, kinds: [] };
+  if (word === 'shell') return { kind: 'background-only', count: null, kinds: [] };
   const bg = r.row.background;
-  if (r.word.word === 'busy' && bg !== null && bg.count > 0 && r.row.hookState === 'done' && hookEventIs(r.hookEvent, 'Stop')
+  if (word === 'busy' && bg !== null && bg.count > 0 && r.row.hookState === 'done' && hookEventIs(r.hookEvent, 'Stop')
     && r.hookUpdatedAt !== null && (r.word.since === null || r.hookUpdatedAt > r.word.since)) {
     return { kind: 'background-only', count: bg.count, kinds: bg.kinds };
   }
