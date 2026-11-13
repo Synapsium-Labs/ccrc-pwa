@@ -136,6 +136,9 @@ export const HOLD_OFF_MS = 600_000;                      // observed
 export const LEAST_AGE_MS = 1_800_000;                   // observed
 export const SOFT_BUDGET = { count: 3, windowMs: 21_600_000 } as const;   // observed
 export const BREAK_NO_MESSAGE_MS = 1_200_000; export const BREAK_PLACE_HIDDEN_MS = 300_000;
+/** Observed time advances by at most this many periods of the lane that advances it, per step (ruling I5, slug
+ *  `observed-time-caps-one-step`; Table 11.5b). */
+export const OBSERVED_STEP_PERIODS = 2;
 export const HARD_CAP_TOKENS = 250_000;                  // or half the window, whichever is lower
 export const SOFT_CEILING_FRACTION = 0.6; export const TURNS_SOFT = 40; export const IDLE_SOFT_MS = 2_700_000;
 export const ACCOUNT_LOAD_HARD = 0.85; export const EARLY_WHILE_AWAY_FRACTION = 0.5;
@@ -163,17 +166,26 @@ export function isGenerationState(v: unknown): v is GenerationState;   // and on
 ```ts
 /** Stored in a column of the row whose timer it bounds (§11.5). */
 export interface Observed { readonly ms: number; readonly mono: number; readonly proc: string }
-/** Advance by the monotonic delta when `proc` is this process and `mono` did not go back; otherwise re-anchor with
- *  no advance. Never reads a clock: the caller passes `clock.mono()` and its process id. */
-export function observeTime(prev: Observed | null, mono: number, proc: string): Observed;
+/** Why a step advanced nothing. `step`: the delta exceeded the cap. */
+export type ObservedGap = { readonly kind: 'process' | 'backwards' | 'step'; readonly deltaMs: number };
+/** Advance by the monotonic delta when `proc` is this process, `mono` did not go back and the delta is at most
+ *  `stepCapMs`; otherwise re-anchor with no advance and answer the gap, which the caller records as an observation.
+ *  Never reads a clock: the caller passes `clock.mono()`, its process id and `observedStepCapMs(its lane's period)`. */
+export function observeTime(prev: Observed | null, mono: number, proc: string, stepCapMs: number):
+  { readonly at: Observed; readonly gap: ObservedGap | null };
+/** `OBSERVED_STEP_PERIODS × lanePeriodMs`, the one place the cap is computed. */
+export function observedStepCapMs(lanePeriodMs: number): number;
 export function observedSince(start: Observed, now: Observed): number;   // ms observed between two stamps
 ```
 
-- [ ] **Step 1: Failing tests.** Same process, forward: advances by the delta; a new `proc`: no advance, re-anchored;
-  `mono` backwards: no advance; `null`: starts at 0. Property (seeded, 1,000 runs of random sequences with process
-  changes): `ms` never decreases and never exceeds the sum of in-process forward deltas.
+- [ ] **Step 1: Failing tests.** Same process, forward: advances by the delta, no gap; a new `proc`: no advance,
+  re-anchored, gap `process`; `mono` backwards: no advance, gap `backwards`; with a 30 s lane (cap 60 s), a 60 s delta
+  advances and a 61 s delta advances nothing and answers gap `step` with its delta; `null`: starts at 0. Property
+  (seeded, 1,000 runs of random sequences with process changes and long pauses): `ms` never decreases, never exceeds
+  the sum of in-process forward deltas, and never advances more than the cap in one step.
 - [ ] **Step 2: Run.** Red. **Step 3: Implement.** **Step 4: Run.** Green. Register the floor.
-- [ ] **Step 5: Mutation.** Advance across a process change: the property goes red. Revert.
+- [ ] **Step 5: Mutation.** Advance across a process change: the property goes red. Drop the step cap: the 61 s case
+  and the property go red. Revert each.
 - [ ] **Step 6: Commit.** `feat(time): observed time, one accumulator that never advances across a gap (§11.5)`
 
 ### Task 3: `renewalDue`, total over the roles
@@ -322,6 +334,7 @@ export type GenEvent =
   | { readonly kind: 'started'; readonly resumed: boolean }     // a SessionStart that is not a compaction
   | { readonly kind: 'card-read'; readonly hashMatches: boolean }
   | { readonly kind: 'probes'; readonly passed: boolean }
+  | { readonly kind: 'midway' }                                 // half the stored deadline's span passed (fed once)
   | { readonly kind: 'deadline' }                               // the state's stored deadline passed
   | { readonly kind: 'renew-now' };
 /** `proven`: this generation read its card and passed a probe round (set on `probes` passed, never cleared). */
@@ -340,9 +353,12 @@ is `proven`, else `degraded` with `set-hold-off` (§3.3.11: "A failure before th
 active, with a hold-off", read with "a generation never becomes active without having read its card and passed its
 probes"; ask 370); after it, retry while the deadline stands, then `degraded` with `raise-item`; `started` on any
 generation → this one `ended` (`end-this`) and the next minted at `carded` (`mint-next`); `card-read` with a match →
-`probing` (`start-probes`); `deadline` in `carded` → one `renudge-card`, then `degraded`; `probes` passed → `active`
-and `proven`;
-failed once → re-read and probe again; twice → `degraded` with `raise-item`; `renew-now` in `degraded` or `active` →
+`probing` (`start-probes`); `midway` in `carded`, once → `renudge-card`; `deadline` in `carded` → `degraded`; `probes`
+passed → `active` and `proven`;
+failed once → re-read and probe again inside the same `probing` deadline; twice, or `deadline` in `probing` →
+`degraded` with `raise-item`. Each state's deadline is set once, on entry, and no action re-arms it: the carded
+re-nudge and the second probe round fit inside the state's 45 s and 165 s, so `checkpointed` to `active` stays within
+`RENEWAL_BUDGET_S` (ruling I2, slug `deadline-set-once-rounds-fit-inside`); `renew-now` in `degraded` or `active` →
 `draining`. Any event a state does not name is ignored (the same view, no action).
 
 - [ ] **Step 1: Failing tests.** Exhaustive over every state × every event × `from` × `cls` × the counters' edge values,
@@ -350,7 +366,8 @@ failed once → re-read and probe again; twice → `degraded` with `raise-item`;
   began in `degraded` with the generation proven and failed before the first half lands in `active` with
   `set-hold-off`, and the same unproven lands in `degraded`. Properties (seeded, 10,000 random event sequences from
   `active`): never `active` from `carded` or `probing` without a matching `card-read` and a passed round; never `active`
-  at all while `proven` is false (the generation-day simulation's seed 17 is a named case); a sequence with no `started` mints nothing; at most one `renew` per generation per try; `ended` is
+  at all while `proven` is false (the generation-day simulation's seed 17 is a named case); no step's actions re-arm
+  a deadline (no action names one), and `midway` in `carded` re-nudges at most once; a sequence with no `started` mints nothing; at most one `renew` per generation per try; `ended` is
   terminal.
 - [ ] **Step 2: Run.** Red. **Step 3: Implement** as a `Record<GenerationState, (g, e) => step>`, so a new state
   without a handler is a compile error. **Step 4: Run.** Green. Register the floor.
@@ -408,6 +425,12 @@ None yet. Decisions this plan takes, by slug:
 - **failed-renewal-returns-to-active-only-if-proven** — a failure before the receipt's first half returns the
   generation to `active` with a hold-off only if it read its card and passed its probes, and to `degraded` otherwise
   (§3.3.11's "never active without" rule; the coordinator's ruling on ask 370; the model changes to match).
+- **deadline-set-once-rounds-fit-inside** — each state's deadline is set once, on entry (§11.5); the carded re-nudge
+  (at `midway`) and the second probe round fit inside the state's 45 s and 165 s and never re-arm it, so `checkpointed`
+  to `active` stays within `RENEWAL_BUDGET_S` (the coordinator's ruling, from run 1885's build).
+- **observed-time-caps-one-step** — observed time advances by at most `OBSERVED_STEP_PERIODS` (2) periods of the lane
+  that advances it, per step; a larger delta advances nothing and answers a `gap` the caller records (the
+  coordinator's ruling, from run 1885's build; Table 11.5b, this programme's spec amendment).
 - **generation-means-one-life** — the index's pick, followed here: "generation" is one life from start to start
   (`GenerationState`, `continuity_generations`).
 

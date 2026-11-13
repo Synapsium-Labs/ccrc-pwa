@@ -131,7 +131,9 @@ live row is not the `(term, n, state)` the caller read); `stepGeneration(id, exp
   `expect` answers `superseded` / `changed: false`; a start id minted twice answers `superseded`; a mint at `carded`
   sets `deadlineAt` to `enteredAt + STATE_DEADLINE_S.carded × 1000`, a step into `probing` sets its own, a step into
   `active` clears it; the migration's slot, the seed row `continuity` = `shadow`; the Shadow lanes card lists the new
-  lane.
+  lane. The deadline is set once (ruling I2): a step that stays in `carded` (the re-nudge) or in `probing`
+  (the second round) leaves `deadlineAt` unchanged, and no store function takes a new deadline for a state the row is
+  already in.
 - [ ] **Step 2: Run.** Red. **Step 3: Implement.** **Step 4: Run** this suite, `test/coord-db.test.ts`,
   `test/single-definition/writers-map.test.ts`, the lane-arm suites. Green.
 - [ ] **Step 5: Mutation.** Drop the partial unique index: the two-live-rows case goes red. Revert.
@@ -151,7 +153,9 @@ registry record and gather facts with `roleFactsOf`; skip a role that is not lon
 (counted, logged once a pass); mint with outcome by source (`clear`/`startup` after a renewal the lane asked for:
 `renewed` — none in this piece; a start with no renewal in flight: `crashed` if the old row was `active` and the
 row incarnation did not change, `swapped` if the start's account differs from the row's `lane`, else `woken`);
-`resumed` from `source: resume`; `observed` from `observeTime(null, clock.mono(), proc)`. Then advance the cursor to the
+`resumed` from `source: resume`; `observed` from `observeTime(null, clock.mono(), proc,
+observedStepCapMs(GENERATIONS_PERIOD_MS))` (the lane's 30 s period, so a step is capped at 60 s; every later
+advance of a row's observed stamp passes the same cap, and each `gap` it answers is counted and logged once a pass). Then advance the cursor to the
 last id read, in the same transaction as the last mint.
 
 - [ ] **Step 1: Failing tests** (an in-memory `coord.db`, the fake time ports, a fake registry): a coordinator's
@@ -160,7 +164,12 @@ last id read, in the same transaction as the last mint.
   start mints nothing; an unmeasured claim read (undecided `coordinator-or-plain`) mints nothing and is counted; a
   restart of the lane re-reads from the cursor and mints nothing twice; 201 starts take two passes.
 - [ ] **Step 2: Run.** Red. **Step 3: Implement.** **Step 4: Run.** Green.
-- [ ] **Step 5: Mutation.** Mint on `compact`: red. Mint on `fork`: red. Revert each.
+- [ ] **Step 4b: The deadline is set once** (ruling I2; fake time). A coordinator renewed at `t` reaches `carded`: at
+  `t + 23 s` the pass feeds `midway`, the re-nudge is recorded and `deadlineAt` is unchanged; it reads the card and
+  fails its first round in `probing`: the second round opens and `deadlineAt` is unchanged; it passes: `active`, and
+  the time from `checkpointed` to `active` is at most `RENEWAL_BUDGET_S`. A long pause (a 90 s gap between passes)
+  advances observed time by nothing and records one `gap`.
+- [ ] **Step 5: Mutation.** Mint on `compact`: red. Mint on `fork`: red. Revert each. Re-arm the deadline on the re-nudge: Step 4b goes red. Revert.
 - [ ] **Step 6: Commit.** `feat(continuity): the generations lane mints a generation at every start of a long-lived session`
 
 ### Task 3: The pass records `renewalDue` on every live generation
@@ -213,6 +222,8 @@ None yet. Decisions this plan takes, by slug:
   in `blind` and never fire.
 - **fork-is-not-a-generation** — a `fork` start mints nothing and ends nothing; the hook does not report one, and the
   lane skips one that arrives.
+- **deadline-set-once-rounds-fit-inside** — the coordinator's ruling: the deadline set on entry is never re-armed;
+  the carded re-nudge (the machine's `midway`) and the second probe round fit inside it.
 - **deadline-set-on-entry** — the write that enters a state with a deadline sets `deadlineAt` from `STATE_DEADLINE_S`
   in the same compare-and-set; nothing else writes it.
 - **shadow-week-counts-new-starts-only** — rows are minted only at a reported start, so a long-lived session already
