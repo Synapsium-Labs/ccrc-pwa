@@ -209,7 +209,7 @@ answered through `refuseRoute` (`stale-uuid` 403, `registry-unmeasurable` 502), 
 
 ## Deviations found
 
-- **D-8557** (2026-11-13), start-report-hook-growth — review 1911's fixes to the start report (one millisecond budget
+- **D-8557, start-report-hook-growth, scope** (2026-11-13) — review 1911's fixes to the start report (one millisecond budget
   for the whole event, the fresh report first, the back-off stamped by how the pass ended and clamped, the sender's
   uuid rewritten on resend, and the answers that keep a report and count a try) put `ccd/session-hook.sh` at +51 net
   code lines against the merge-base, over the growth limit of 40. Waived to 56 by

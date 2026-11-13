@@ -92,7 +92,8 @@ a slug and its reason. The one number this piece was issued, D-8557, is defined 
 - **d-8557-in-both-plans** — the ruling named this piece's plan for D-8557's entry, but `growth-check`'s waiver test
   and `deviation-refs` read only top-level plans. The coordinator ruled (ask 373) that the full entry stays in this
   plan and a two-line entry, the one the guards read, goes in the index plan, `2026-11-10-overlord.md`, beside D-8251's,
-  as D-8251 was done. The guards are not widened.
+  as D-8251 was done: the piece's entry is spelled `**D-8557, <slug>, scope**`, as D-8251's is, so the cross-tree
+  collision scan reads only the index's as the definition. The guards are not widened.
 
 ## Open risk
 
