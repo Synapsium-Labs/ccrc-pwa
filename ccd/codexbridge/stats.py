@@ -69,11 +69,12 @@ positive int, a usage that is not a mapping, a time that is not a finite number 
 shape); the load re-checks every bound and drops what fails it, never resetting.
 
 NOTHING HERE HOLDS CONTENT. A name is bounded by NAME_RE (else `unrecognised`), at most NAMES_MAX per family (then
-`overflow`); the parity section's model ids, effort levels and transformation words are names under the same rule
-(a transformation's each part under `reducer.DIAG_PART_RE`), never content; a header's value is never kept, except an `x-codex-` header's, for the usage poller, and only when it has
-the shape the poller reads (USAGE_VALUE_RE: a decimal number or a boolean, at most VALUE_MAX characters) and its name
-is not in TOKEN_HEADERS. Any other value of that family is dropped, its name still counted by `header_names`: the
-family also carries Codex's `x-codex-turn-state` sticky-routing token, an opaque value of no fixed shape (so refused by
+`overflow`); the parity section's model ids, effort levels and transformation words are names under the same rule (a
+transformation's each part under `reducer.DIAG_PART_RE`), never content; a header's value is never kept, except an
+`x-codex-` header's, for the usage poller, and only when it has the shape the poller reads (USAGE_VALUE_RE: a decimal
+number or a boolean, at most VALUE_MAX characters) and its name is not in TOKEN_HEADERS. Any other value of that family
+is dropped, its name still counted by `header_names`: the family also carries Codex's `x-codex-turn-state`
+sticky-routing token, an opaque value of no fixed shape (so refused by
 name, whatever its value), and free text (upstream openai/codex @ 092d3ac, codex-rs/codex-api/src/sse/responses.rs:32,
 65-71; codex-rs/core/src/client.rs:288-302; codex-rs/codex-api/src/rate_limits.rs:182). A request id is kept only
 under errors.REQUEST_ID_RE, and the bridge gives it only the id the credential library bounded against the lane's

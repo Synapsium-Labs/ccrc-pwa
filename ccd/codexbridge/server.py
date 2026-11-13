@@ -21,16 +21,16 @@ indexes running on; while a continued message waits for its next upstream head (
 thread still pings (`_waiting`), and it stops waiting once the stream is closed (the client went away, or the drain
 cut it): the helper's answer, when it comes, is dropped and its connection closed. A stream that is closed is never
 posted upstream again (`_one_response` checks before each post, the one after a refresh included). Then the reasoning
-store, the stats file and, when the status file read an upstream state, `ok`.
+store, the stats file and, when the status file read an upstream state, `ok`. An upstream failure the bridge meets
+itself (the idle bound, a timeout or transport failure of the post) is recorded in the status file with a bounded code
+too, like every classified one. While the lane directory holds the operator's `record-streams` marker, each 2xx answer
+is also written raw into the lane's recordings directory (`record.start`, Task 18), at most `record.RECORD_MAX` files.
 
 THE PARITY SECTION (D-8618) is measured on that path from what the bridge already holds, so nothing new goes on the
 wire and the client's answer is unchanged: each reasoning-store lookup of the translation (`counted_lookup`), each
 POST's `reasoning.effort` as the body was built (`_post`), and each upstream response whose terminal
 `response.completed` or `response.incomplete` the reducer saw (`_reduce`, on every return, the error ones included):
-its `diagnostics`, and the milliseconds from the POST's start to the first output released and to the terminal. An upstream failure the bridge meets
-itself (the idle bound, a timeout or transport failure of the post) is recorded in the status file with a bounded code
-too, like every classified one. While the lane directory holds the operator's `record-streams` marker, each 2xx answer
-is also written raw into the lane's recordings directory (`record.start`, Task 18), at most `record.RECORD_MAX` files.
+its `diagnostics`, and the milliseconds from the POST's start to the first output released and to the terminal.
 
 THE CATALOGUE. A model outside it is the client's: 404 `not_found_error`, counted `modelSubstitution:<model>` when the
 request carries Claude Code's claude-code beta (`inbound.from_claude_code`) and `foreignSubstitution:<model>` when it
