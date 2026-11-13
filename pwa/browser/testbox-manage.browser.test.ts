@@ -6,6 +6,8 @@
 //     line; the settings families folded; the confirm sheet keeps Confirm and Cancel reachable at 360 by 667;
 //   * laptop (1280, 1470): the controls at the end of the state line, the settings a two-column form, the last act under the state;
 //   * wide (1920): the settings' two groups side by side and the ledger's last ten acts beside the state;
+//   * every band (D-8399): the newest act, a settings edit, lists each setting it changed with its old and new value under the last
+//     act (and, wide, under its ledger row), one per line, and the longest name and value wrap inside the card;
 //   * every band: a row a settings file sets carries Reset to default (D-8336) under its input, full width and at least
 //     `--tap-min` tall on a phone, its own width at the field's start from the laptop band, and its one-tap confirm keeps Confirm
 //     and Cancel reachable.
@@ -56,9 +58,16 @@ const STATUS_ADMIN = {
   ],
   boxSettingsAt: 1, installedTag: 'v0.0.800', parity: null,
 };
+/** D-8399: the newest act is a fleet settings edit whose changes are the longest the ledger holds: the longest key names and a value
+ *  at the ledger's bound, so the lines must wrap at a phone's width. */
+const CHANGES = [
+  { key: 'CCRC_TESTBOX_RECONNECT_DEADLINE', old: { value: '9999999999999999999999m' }, new: { value: '45m' } },
+  { key: 'CCRC_TESTBOX_UNTRACKED_FILE_MAX', old: { presence: 'not-set' }, new: { value: '64M' } },
+  { key: 'CCRC_TESTBOX_DENY_GLOBS', old: { presence: 'set' }, new: { presence: 'default' } },
+];
 const EVENTS = Array.from({ length: 12 }, (_, i) => ({
-  id: 12 - i, at: Date.parse('2026-11-10T12:00:00Z') + (12 - i) * 60_000, actor: 'phone a1b2c3d4', act: 'repair', actId: null, outcome: 'ok', code: null,
-  fingerprint: null, fleetIdentity: null,
+  id: 12 - i, at: Date.parse('2026-11-10T12:00:00Z') + (12 - i) * 60_000, actor: 'phone a1b2c3d4', act: i === 0 ? 'settings-fleet' : 'repair', actId: null,
+  outcome: 'ok', code: null, fingerprint: null, fleetIdentity: null, ...(i === 0 ? { changes: CHANGES } : {}),
 }));
 
 const FIXTURE: AppFixture = {
@@ -103,7 +112,9 @@ interface Measured {
   controls: Box | null;
   buttons: { name: string; box: Box }[];
   lastAct: { box: Box; lines: number } | null;
-  ledger: { box: Box; rows: number } | null;
+  /** D-8399: the last act's changed settings, one line each, and how far each line reaches. */
+  lastChanges: { lines: number; right: number; scroll: number }[];
+  ledger: { box: Box; rows: number; changes: number } | null;
   main: Box | null;
   settings: Box | null;
   groups: { name: string; box: Box }[];
@@ -158,7 +169,13 @@ const measure = (el: Element): Measured => {
     controls: boxOf('[data-testbox="manage-controls"]'),
     buttons: [...el.querySelectorAll<HTMLButtonElement>('[data-testbox="manage-controls"] button')].filter((b) => shown(b)).map((b) => ({ name: b.textContent ?? '', box: box(b) })),
     lastAct: lastBox === null ? null : { box: lastBox, lines: Math.round(lastBox.height / (lineHeight || 1)) },
-    ledger: ledger !== null && shown(ledger) ? { box: box(ledger), rows: ledger.querySelectorAll('li').length } : null,
+    lastChanges: [...el.querySelectorAll<HTMLElement>('[data-testbox="manage-state"] [data-testbox="ledger-changes"] > li')].filter(shown).map((li) => ({
+      lines: Math.round(li.getBoundingClientRect().height / (parseFloat(getComputedStyle(li).lineHeight) || 1)),
+      right: li.getBoundingClientRect().right, scroll: li.scrollWidth - li.clientWidth,
+    })),
+    ledger: ledger !== null && shown(ledger)
+      ? { box: box(ledger), rows: ledger.querySelectorAll('.testbox-checks > li').length, changes: ledger.querySelectorAll('[data-testbox="ledger-changes"] > li').length }
+      : null,
     main: boxOf('.testbox-manage-main'),
     settings: boxOf('[data-testbox="settings"]'),
     groups: [...el.querySelectorAll<HTMLElement>('.testbox-settings-group')].filter(shown).map((g) => ({ name: g.getAttribute('data-group') ?? '', box: box(g) })),
@@ -248,6 +265,9 @@ describe.each(SKINS)('the connected test box card in %s', (skin) => {
             expect(controls.left, `${width}px: the controls are at the end of the state line`).toBeGreaterThanOrEqual(state.right - 0.5);
             expect(Math.abs(controls.top - state.top), `${width}px: the controls and the state share a top`).toBeLessThanOrEqual(1);
             expect(Math.abs(controls.right - one.main!.right), `${width}px: the controls end the line`).toBeLessThanOrEqual(1);
+            // D-8399: the state column keeps a floor (16rem, or the whole line when narrower), so the last act and its changes never
+            // shrink to one character per line beside the controls.
+            expect(state.width, `${width}px: the state column is never squeezed by the controls`).toBeGreaterThanOrEqual(Math.min(200, one.main!.width));
             if (width >= 1600) {
               expect(one.ledger!.rows, 'the last ten acts').toBe(10);
               expect(one.ledger!.box.left, 'the ledger is beside the state').toBeGreaterThanOrEqual(one.main!.right - 0.5);
@@ -258,6 +278,14 @@ describe.each(SKINS)('the connected test box card in %s', (skin) => {
             }
           }
           if (width < 900) expect(one.lastAct!.lines, `${width}px: the last act is one line or wraps whole, never cut`).toBeGreaterThanOrEqual(1);
+          // D-8399: the last act's changes, one per line, each inside the card at every width (a long one wraps, never cut or scrolled).
+          expect(one.lastChanges, `${width}px: the last act's changed settings`).toHaveLength(CHANGES.length);
+          for (const c of one.lastChanges) {
+            expect(c.scroll, `${width}px: a change line scrolls sideways`).toBeLessThanOrEqual(0);
+            expect(c.right, `${width}px: a change line ends inside the card`).toBeLessThanOrEqual(one.card.box.right + 0.5);
+          }
+          if (width < 400) expect(Math.max(...one.lastChanges.map((c) => c.lines)), `${width}px: the longest change wraps`).toBeGreaterThan(1);
+          if (width >= 1600) expect(one.ledger!.changes, `${width}px: the ledger row lists its changes`).toBe(CHANGES.length);
 
           // Settings.
           await card.locator('[data-testbox="settings-toggle"]').click();

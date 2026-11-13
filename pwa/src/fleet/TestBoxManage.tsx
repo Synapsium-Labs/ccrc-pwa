@@ -33,6 +33,10 @@
 // line, families folded, the sheet scrolling inside itself with Confirm and Cancel pinned; laptop, the controls at the end of the
 // state line and the settings a two-column form; wide, the settings' two groups (the box, the fleet host) side by side and the
 // ledger's last ten acts beside the state. The band is the card's (`TestBoxSection`'s one read).
+//
+// THE LEDGER'S VALUES (D-8399). A settings act's row carries each setting it changed, old and new; the last act and each of the
+// wide band's rows list them under their line, one per line, wrapping at every width. A secret-bearing setting, a path, an
+// address or a list reads set or not set: the row holds no more.
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { Button, QC_ACTIONS, QC_CONSEQUENCE, Sheet, Skeleton, useCancelFirst } from '@ccrc/ui';
@@ -47,7 +51,7 @@ import { ApiError } from '../lib/api';
 import { testboxRouteText } from '../lib/refusalWords';
 import { isRecord } from '../lib/wire';
 import { ResultLine, SETTINGS_AMBER_NOTE, useResultLine } from './settingsText';
-import { BLANK_CONN, ConnFields, Field, PARTIAL_DISCONNECT, Phases, StateLine, connReady, keyFieldsOf, type Conn } from './TestBoxConnect';
+import { BLANK_CONN, ConnFields, Field, LedgerChanges, PARTIAL_DISCONNECT, Phases, StateLine, connReady, keyFieldsOf, type Conn } from './TestBoxConnect';
 import {
   BOX_SETTING_FAMILIES, BOX_SETTING_FORM_START, FLEET_EDIT_KEYS, PAIRED_BOX_KEYS, TESTBOX_FAMILY_FOLD, actWord, TESTBOX_CONNECT_TEXT, TESTBOX_MANAGE_TEXT, blockedOf, checkWord, codeSentence, ledgerLine, manageRowLine,
   phaseWord, settingLabel, shapeSentence,
@@ -488,7 +492,10 @@ export function TestBoxManage(p: TestBoxManageProps): ReactNode {
           <dl className="testbox-manage-state" data-testbox="manage-state">
             <StateRow term={T.addressLabel}><span data-testbox="address">{T.addressSet}</span></StateRow>
             <StateRow term={T.hostKeyLabel}><code className="testbox-fingerprint" data-testbox="manage-fingerprint">{hostKeyText}</code></StateRow>
-            <StateRow term={T.lastAct}><span data-testbox="last-act">{lastEvent === undefined ? T.noActs : ledgerLine(lastEvent)}</span></StateRow>
+            <StateRow term={T.lastAct}>
+              <span data-testbox="last-act">{lastEvent === undefined ? T.noActs : ledgerLine(lastEvent)}</span>
+              {lastEvent !== undefined && <LedgerChanges e={lastEvent} />}
+            </StateRow>
           </dl>
           {blockedBody}
           <div className="testbox-manage-controls" data-testbox="manage-controls">
@@ -527,7 +534,7 @@ export function TestBoxManage(p: TestBoxManageProps): ReactNode {
           <aside className="testbox-ledger" data-testbox="manage-ledger" aria-label={T.recent}>
             <p className="settings-note">{T.recent}</p>
             {ledgerRows.length === 0 ? <p className="settings-note">{T.noActs}</p> : (
-              <ul className="testbox-checks">{ledgerRows.map((e) => <li key={e.id}>{ledgerLine(e)}</li>)}</ul>
+              <ul className="testbox-checks">{ledgerRows.map((e) => <li key={e.id}>{ledgerLine(e)}<LedgerChanges e={e} /></li>)}</ul>
             )}
           </aside>
         )}

@@ -33,7 +33,7 @@ import { testboxRouteText } from '../lib/refusalWords';
 import { ResultLine, SETTINGS_AMBER_NOTE, useResultLine } from './settingsText';
 import {
   BOX_SETTING_DEFAULTS, BOX_SETTING_FAMILIES, FROM_MISMATCH, TESTBOX_FAMILY_FOLD, GIT_HOST_BASE, TESTBOX_CONNECT_TEXT, TESTBOX_DEFAULT_RUNNER, TESTBOX_LISTEN_KEY, actWord, boxSettingStart, checkWord,
-  codeSentence, isIpLiteral, isPublicIpLiteral, listenFor, listenHostOf, phaseTime, phaseWord, settingLabel, shapeSentence, stepOf, type TestboxStepSeen,
+  codeSentence, isIpLiteral, isPublicIpLiteral, ledgerChangeLine, listenFor, listenHostOf, phaseTime, phaseWord, settingLabel, shapeSentence, stepOf, type TestboxStepSeen,
 } from './testboxAdminWords';
 import { useTestboxAdmin } from './useTestboxAdmin';
 import { loadProjects } from './useProjectRows';
@@ -666,6 +666,17 @@ export function Phases({ sub, act }: { sub: TestboxPhasedSub; act: NonNullable<T
   );
 }
 
+/** The settings a ledger row changed (D-8399), one line each under the row's own line; a long value wraps inside its line. Nothing
+ *  for a row with none. */
+export function LedgerChanges({ e }: { e: TestboxEventRow }): ReactNode {
+  if (e.changes === undefined || e.changes.length === 0) return null;
+  return (
+    <ul className="testbox-changes" data-testbox="ledger-changes">
+      {e.changes.map((c) => <li key={c.key} className="settings-note">{ledgerChangeLine(c)}</li>)}
+    </ul>
+  );
+}
+
 /** The ledger's recent acts, beside the steps at the widest band. */
 function Ledger({ events }: { events: readonly TestboxEventRow[] }): ReactNode {
   const shown = useMemo(() => events.slice(0, 5), [events]);
@@ -675,7 +686,7 @@ function Ledger({ events }: { events: readonly TestboxEventRow[] }): ReactNode {
       {shown.length === 0 ? <p className="settings-note">{T.noActs}</p> : (
         <ul className="testbox-checks">
           {shown.map((e) => (
-            <li key={e.id}>{`${utcMinute(e.at)} ${actWord(e.act)} ${e.outcome}`}{e.code !== null && <span className="settings-note">{` ${codeSentence(e.code)}`}</span>}</li>
+            <li key={e.id}>{`${utcMinute(e.at)} ${actWord(e.act)} ${e.outcome}`}{e.code !== null && <span className="settings-note">{` ${codeSentence(e.code)}`}</span>}<LedgerChanges e={e} /></li>
           ))}
         </ul>
       )}

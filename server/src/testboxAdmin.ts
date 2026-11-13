@@ -2,7 +2,7 @@ import { spawn } from 'node:child_process';
 import { constants as osConstants } from 'node:os';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import {
-  TESTBOX_ADMIN_CAP, TESTBOX_PARITY_REQUIRED_SENTENCE, type TestboxAdminActAnswer, type TestboxAdminAnswer, type TestboxAdminResult,
+  TESTBOX_ADMIN_CAP, TESTBOX_PARITY_REQUIRED_SENTENCE, type BoxSettingRow, type TestboxAdminActAnswer, type TestboxAdminAnswer, type TestboxAdminResult,
 } from '../../shared/api.js';
 import {
   TESTBOX_ADMIN_DRAIN_MS, TESTBOX_ADMIN_KILL_GRACE_MS, TESTBOX_ADMIN_LONG_TIMEOUT_MS, TESTBOX_ADMIN_OUTPUT_MAX_BYTES,
@@ -11,8 +11,10 @@ import {
 import type { RouteRefusal } from '../../shared/refusal.js';
 import {
   TESTBOX_ADMIN_CODES, TESTBOX_ADMIN_SUBS, TESTBOX_BOX_KEYS, TESTBOX_HOST_KEYS, TESTBOX_LINE_CODES, buildTestboxAdminArgv, isHostKeyFingerprint,
-  isTestboxAdminSub, parityArmable, parityCurrentOf, readTestboxAdminStatus, testboxAdminIsLong, testboxAdminNeedsStepUp,
+  isTestboxAdminSub, parityArmable, parityCurrentOf, readTestboxAdminStatus, readTestboxLedgerChanges, testboxAdminIsLong, testboxAdminNeedsStepUp,
+  testboxLedgerShowsValue, testboxLedgerValueOf, testboxLedgerValueOfRow,
   type TestboxAct, type TestboxActOutcome, type TestboxAdminCode, type TestboxAdminFields, type TestboxAdminStatus, type TestboxAdminSub,
+  type TestboxLedgerValue, type TestboxSettingChange,
 } from '../../shared/testbox-admin.js';
 import { boundedStdinSpawn } from '../../shared/spawn.mjs';
 import { accountSpawnEnv } from './accounts/ops.js';
@@ -48,6 +50,11 @@ import type { TestboxAudit, TestboxEventInput } from './testboxAudit.js';
  *    retries (D-5518).
  *  - Every short act writes one `testbox_events` row (`testboxAudit.ts`); a long act writes one only when it never started
  *    (its end row comes from the lane, keyed by `actId`). A failed ledger write is an answer, never a throw.
+ *  - A SETTINGS ACT'S ROW CARRIES ITS OLD AND NEW VALUES (D-8399): `settings-fleet`'s from the verb's own answer (`before` and
+ *    `settings`, the one reader's rows either side of the write); `settings-box`'s old values from the status's box settings,
+ *    read before the act, and its new ones from the sent values read through their shapes, staged by the act's id for the lane's
+ *    end row. Each value goes through `testboxLedgerValueOf`, so a secret-bearing setting, a path, an address or a list is a
+ *    presence word. A refused act records none.
  *  - NOTHING SECRET IS READ OR SAID. The routes never open the token, the push key or the access key; the verb's JSON never
  *    carries them, and a field outside the closed result shapes is dropped.
  */
@@ -199,6 +206,54 @@ export function resultOf(sub: TestboxAdminSub, j: Record<string, unknown>): Test
   return out;
 }
 
+// ── a settings act's old and new values (D-8399) ─────────────────────────────────────────────────────────────────────
+
+/** The keys a settings call changes and the keys it resets, in the builder's order (the sent settings, then the resets). */
+function settingsKeysOf(fields: TestboxAdminFields): { set: [string, string][]; unset: string[] } {
+  const set = fields['settings'];
+  const unset = fields['unset'];
+  return {
+    set: typeof set === 'object' && set !== null && !Array.isArray(set)
+      ? Object.entries(set as Record<string, unknown>).filter((e): e is [string, string] => typeof e[1] === 'string') : [],
+    unset: Array.isArray(unset) ? (unset as unknown[]).filter((k): k is string => typeof k === 'string') : [],
+  };
+}
+
+/** The list the ledger takes, or undefined for none or for one its reader refuses (the row is then written without it). */
+const changesOrNone = (c: TestboxSettingChange[]): TestboxSettingChange[] | undefined =>
+  c.length > 0 && readTestboxLedgerChanges(c) !== null ? c : undefined;
+
+/** One of the verb's settings rows (`{key, set, value?}`) for `key`, as a ledger value: `unknown` when the verb named no row. */
+function answerValueOf(key: string, rows: unknown): TestboxLedgerValue {
+  const row = Array.isArray(rows)
+    ? (rows as unknown[]).find((r): r is Record<string, unknown> => typeof r === 'object' && r !== null && (r as Record<string, unknown>)['key'] === key)
+    : undefined;
+  if (row === undefined || typeof row['set'] !== 'boolean') return { presence: 'unknown' };
+  if (!row['set']) return { presence: 'not-set' };
+  return testboxLedgerShowsValue(key) && typeof row['value'] === 'string' ? testboxLedgerValueOf(key, row['value']) : { presence: 'set' };
+}
+
+/** `settings-fleet`'s changes, from the verb's answer: `before` is the old side (an older verb sends none: `unknown`), `settings`
+ *  the new side as the reader reads it after the write; a reset key's new side is `default`. */
+export function fleetChangesOf(fields: TestboxAdminFields, answer: Record<string, unknown>): TestboxSettingChange[] | undefined {
+  const { set, unset } = settingsKeysOf(fields);
+  return changesOrNone([
+    ...set.map(([key]) => ({ key, old: answerValueOf(key, answer['before']), new: answerValueOf(key, answer['settings']) })),
+    ...unset.map((key) => ({ key, old: answerValueOf(key, answer['before']), new: { presence: 'default' as const } })),
+  ]);
+}
+
+/** `settings-box`'s changes: the old side from the status's box settings rows read before the act (null: `unknown`), the new side
+ *  the sent value read through its key's shape, a reset key's `default`. */
+export function boxChangesOf(fields: TestboxAdminFields, rows: readonly BoxSettingRow[] | null): TestboxSettingChange[] | undefined {
+  const { set, unset } = settingsKeysOf(fields);
+  const old = (key: string): TestboxLedgerValue => testboxLedgerValueOfRow(key, rows?.find((r) => r.key === key));
+  return changesOrNone([
+    ...set.map(([key, v]) => ({ key, old: old(key), new: testboxLedgerValueOf(key, v) })),
+    ...unset.map((key) => ({ key, old: old(key), new: { presence: 'default' as const } })),
+  ]);
+}
+
 /** The ledger act a call records, or null for a read. `disconnect --replace` is `replace`. */
 function actOf(sub: TestboxAdminSub, fields: TestboxAdminFields): TestboxAct | null {
   if (sub === 'disconnect' && (fields['replace'] === true || fields['replace'] === 'true')) return 'replace';
@@ -272,7 +327,7 @@ export interface TestboxAdminRouteDeps {
   /** The ONE `TestboxAdminOps` arm. */
   ops: Pick<TestboxAdminOps, 'run'>;
   /** The ledger, absent in a test or script that wants none. */
-  audit?: Pick<TestboxAudit, 'write' | 'recent'>;
+  audit?: Pick<TestboxAudit, 'write' | 'recent' | 'stage'>;
   /** The node-id of the fleet the act ran against, or null when it is not known. */
   fleetIdentity: () => string | null;
 }
@@ -328,13 +383,21 @@ export function registerTestboxAdminRoutes(app: FastifyInstance, deps: TestboxAd
       deps.audit.write({ ...e, ...pinned, act, fleetIdentity: deps.fleetIdentity(), actor: g.actor });
     };
 
+    // D-8399: a box settings edit's old values are the status's box settings as they stand before the act.
+    const boxBefore = sub === 'settings-box' && deps.audit !== undefined ? await readStatus() : null;
     const d = decisionOf(await deps.ops.run(sub, typed));
     if (d.kind === 'refuse') {
       row({ outcome: d.audit, code: d.code });
       return refuseRoute(reply, d.word, d.extra);
     }
-    // A short act writes its row on answer; a long act that started writes none (the lane writes its end row by act id).
-    if (!long) row({ outcome: 'ok' });
+    // A short act writes its row on answer; a long act that started writes none (the lane writes its end row by act id), and a
+    // box settings edit stages its changes for that row.
+    if (!long) row({ outcome: 'ok', ...(sub === 'settings-fleet' ? { changes: fleetChangesOf(typed, d.json) } : {}) });
+    const actId = resultOf(sub, d.json).act;
+    if (sub === 'settings-box' && actId !== undefined && boxBefore !== null) {
+      const changes = boxChangesOf(typed, boxBefore.ok ? boxBefore.status.boxSettings : null);
+      if (changes !== undefined) deps.audit?.stage(actId, changes);
+    }
     const after = await readStatus();
     if (!after.ok) return refuseRoute(reply, after.d.word, { ...after.d.extra, acted: true });
     return { ok: true, status: after.status, events: events(), result: resultOf(sub, d.json) } satisfies TestboxAdminActAnswer;

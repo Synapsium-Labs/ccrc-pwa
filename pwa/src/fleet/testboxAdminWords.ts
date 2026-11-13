@@ -14,6 +14,7 @@ import {
   TESTBOX_ACT_MAP, TESTBOX_ADMIN_CODE_SENTENCE, TESTBOX_BOX_KEYS, TESTBOX_FLEET_EDITABLE, TESTBOX_PAIRED_BOX_KEYS, TESTBOX_SHAPE_CLASS,
   TESTBOX_SHAPE_SENTENCE, isBoxAddress, isPrivateNetworkAddress,
   type TestboxAct, type TestboxAdminCode, type TestboxAdminPhase, type TestboxAdminStatus, type TestboxAdminSub,
+  type TestboxLedgerPresence, type TestboxLedgerValue, type TestboxSettingChange,
 } from '../../../shared/testbox-admin';
 import { TESTBOX_PARITY_REQUIRED_SENTENCE, type BoxSettingRow, type NodeWire } from '../../../shared/api';
 import type { TestboxEventRow } from '../../../shared/api';
@@ -342,6 +343,17 @@ export const utcMinuteAt = (at: number): string => `${new Date(at).toISOString()
 export function ledgerLine(e: TestboxEventRow): string {
   return `${utcMinuteAt(e.at)} ${actWord(e.act)} ${e.outcome}${e.code === null ? '' : ` ${codeSentence(e.code)}`}`;
 }
+
+/** D-8399: a side of a change the row records by presence only, in words. */
+const LEDGER_PRESENCE_WORD: Readonly<Record<TestboxLedgerPresence, string>> = {
+  'set': 'set', 'not-set': 'not set', 'default': 'its default', 'unknown': 'not known',
+};
+/** One side of a recorded change: the value as the reader read it, or its presence word. */
+export const ledgerValueText = (v: TestboxLedgerValue): string => ('value' in v ? v.value : LEDGER_PRESENCE_WORD[v.presence]);
+/** One setting a settings act changed, as one line (D-8399): its name, its old value and its new one. A secret-bearing setting,
+ *  a path, an address or a list reads `set` or `not set` only: the row holds no more. */
+export const ledgerChangeLine = (c: TestboxSettingChange): string =>
+  `${settingLabel(c.key)} from ${ledgerValueText(c.old)} to ${ledgerValueText(c.new)}`;
 
 export const TESTBOX_MANAGE_TEXT = {
   stateLabel: 'Connection',

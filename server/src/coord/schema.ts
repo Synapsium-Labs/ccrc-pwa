@@ -2739,6 +2739,30 @@ export const MIGRATIONS: readonly string[] = [
   `
   ALTER TABLE claims ADD COLUMN chainedFrom INTEGER;
   `,
+  // ── 63: user_version 62 -> 63 ─────────────────────────────────────────────
+  // D-8399 (the operator's ruling on the test box ledger, amending TC12 of the test box connect plan): `testbox_events.changes`,
+  // each setting an `ok` settings act changed with its old and new value, as JSON, and `testbox_staged_changes`, a long
+  // `settings-box` act's changes held by its 32-hex act id from the route that started it until the lane writes its end row
+  // (which takes them when the act ended ok and drops them either way), so a server restart mid-act loses none. Both are
+  // written only by `TestboxAudit` (`server/src/testboxAudit.ts`), which checks every list with `readTestboxLedgerChanges`
+  // (`shared/testbox-admin.ts`): a value is one its key's own shape takes, and a secret-bearing setting, a path, an address
+  // or a list is a presence word, so no column carries free text, a path or a secret. NULL = the row has none. Staged rows
+  // are swept with the ledger (365 days).
+  //
+  // ONE NULLABLE COLUMN ON AN EXISTING TABLE AND ONE NEW TABLE, nothing else: an older build opening a file at
+  // `user_version 63` takes rule 3 (it warns, reads as-is and migrates nothing); its INSERT and SELECT name their columns and
+  // never these, so its rows read as having no changes. Every earlier entry is frozen. RE-MEASURE the slot before the PR and
+  // before merge (it must print 62 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  ALTER TABLE testbox_events ADD COLUMN changes TEXT;
+  CREATE TABLE testbox_staged_changes (
+    actId   TEXT    PRIMARY KEY,
+    at      INTEGER NOT NULL,
+    changes TEXT    NOT NULL
+  );
+  `,
 ];
 
 /** The version this build writes. `MIGRATIONS.length` and nothing else: a

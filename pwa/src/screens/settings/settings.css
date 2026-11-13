@@ -242,6 +242,9 @@
 }
 .testbox-checks, .testbox-phases { display: grid; gap: calc(var(--pad-card) / 4); min-width: 0; margin: 0; padding: 0; list-style: none; }
 .testbox-checks > li, .testbox-phases > li { overflow-wrap: anywhere; }
+/* D-8399: a ledger row's changed settings, one per line under the row's line; a long name or value wraps inside its line. */
+.testbox-changes { display: grid; gap: 0; min-width: 0; margin: 0; padding: 0 0 0 var(--pad-card); list-style: none; }
+.testbox-changes > li { min-width: 0; overflow-wrap: anywhere; }
 .testbox-phases { counter-reset: phase; }
 .testbox-form { display: grid; gap: calc(var(--pad-card) / 2); min-width: 0; }
 .testbox-field { display: grid; gap: calc(var(--pad-card) / 4); min-width: 0; }
@@ -287,7 +290,9 @@
 .testbox-key-notice { display: grid; gap: calc(var(--pad-card) / 2); min-width: 0; padding-bottom: var(--pad-card); border-bottom: 1px solid var(--edge-subtle); }
 .testbox-key-notice-row { display: grid; gap: calc(var(--pad-card) / 2); min-width: 0; }
 .testbox-key-notice:not([data-band='phone']) .testbox-key-notice-row { grid-template-columns: repeat(2, auto); justify-content: start; }
-.testbox-manage:not([data-band='phone']) .testbox-manage-main { grid-template-columns: minmax(0, 1fr) minmax(0, 28rem); align-items: start; column-gap: var(--pad-card); }
+/* D-8399: the state column has a floor. With `minmax(0, 1fr)` the controls' 28rem took all of a narrow card (the wide band's card
+   beside the ledger), and the state, the last act and its changes, were drawn one character per line in a 0px column. */
+.testbox-manage:not([data-band='phone']) .testbox-manage-main { grid-template-columns: minmax(min(16rem, 100%), 1fr) minmax(0, 28rem); align-items: start; column-gap: var(--pad-card); }
 .testbox-manage:not([data-band='phone']) .testbox-manage-main > * { grid-column: 1 / -1; }
 .testbox-manage:not([data-band='phone']) .testbox-manage-main > .testbox-manage-state { grid-column: 1; grid-row: 1; }
 .testbox-manage:not([data-band='phone']) .testbox-manage-main > .testbox-manage-controls { grid-column: 2; grid-row: 1; display: flex; flex-wrap: wrap; justify-content: flex-end; }

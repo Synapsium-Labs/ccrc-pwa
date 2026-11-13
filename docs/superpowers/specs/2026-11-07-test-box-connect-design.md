@@ -265,6 +265,9 @@ closed vocabularies for the act (`connect`, `confirm-host-key`, `install`, `pair
 `parity`, `switch`, `repair`, `replace`, `disconnect`), the outcome and the code; the actor from the gate (device label
 and a short hash, never an IP); the fleet identity; the host key fingerprint; no free text, no address and no secret.
 A failed write is an answer, never a throw. The card shows the last act on a phone and the last ten on a wide screen.
+Amended 2026-11-12 (D-8399, `docs/superpowers/plans/2026-11-12-test-box-ledger-values.md`): an `ok` settings act's row also
+records each changed setting's old and new value, read through that setting's own shape (never free text); a secret-bearing
+setting, a path, an address or a list records presence only.
 
 ### 2.11 Threat model: what changes
 

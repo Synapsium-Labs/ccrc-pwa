@@ -190,7 +190,7 @@ describe('L0 stays import-free: the PWA bundles this file', () => {
       "import { parseReapCrumb, type ReapCrumb } from './reapcrumb.js';",
       "import type { HostPressureHealth } from './pressure.js';",
       "import type { BackupHealth } from './backup.js';",
-      "import type { TestboxAct, TestboxActOutcome, TestboxAdminCode, TestboxAdminStatus } from './testbox-admin.js';",
+      "import type { TestboxAct, TestboxActOutcome, TestboxAdminCode, TestboxAdminStatus, TestboxSettingChange } from './testbox-admin.js';",
     ]);
   });
 });

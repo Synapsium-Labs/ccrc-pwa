@@ -919,3 +919,91 @@ export function readTestboxParityRecord(json: string): Read<TestboxParityRecord>
     throw e;
   }
 }
+
+// ---------------------------------------------------------------------------------------------------------------
+// The ledger's old and new values (D-8399, which amends the test box connect plan's TC12: a settings act's row records each
+// changed setting's old and new value, still no free text).
+// ---------------------------------------------------------------------------------------------------------------
+
+/** The settings that hold or name a secret: the fleet host's service token and push key files, and the box service's token
+ *  file. Their row records only whether one is set, whatever reader or class says (spec §2.10; "secret-bearing
+ *  settings show presence only", #2438). */
+export const TESTBOX_SECRET_BEARING_KEYS: readonly string[] = Object.freeze([
+  'CCRC_TESTBOX_TOKEN_FILE', 'CCRC_TESTBOX_GIT_KEY', 'CCRC_TESTBOX_SERVICE_TOKEN_FILE',
+]);
+/** The longest value a row records. Every value class but a run of digits is shorter; a longer value records as set. */
+export const TESTBOX_LEDGER_VALUE_MAX = 24;
+/** The most changes one row carries: one act edits one side, and the box has the most keys. */
+export const TESTBOX_LEDGER_CHANGES_MAX = TESTBOX_BOX_KEYS.length;
+
+/** What a row says of a setting it cannot show by value. `set` and `not-set`: a secret-bearing setting, or a path, an
+ *  address or a list (the readers' is-set display classes, so nothing path-like is ever recorded); `default`: a Reset to
+ *  default took the key out of the file ccrc wrote; `unknown`: the reader had no answer (unmeasured, refused, an older
+ *  verb), or the value was off its shape. */
+export type TestboxLedgerPresence = 'set' | 'not-set' | 'default' | 'unknown';
+export const TESTBOX_LEDGER_PRESENCE_MAP: Record<TestboxLedgerPresence, true> = { set: true, 'not-set': true, default: true, unknown: true };
+/** One side of a change: a value its key's shape takes, or a presence word. */
+export type TestboxLedgerValue = { readonly value: string } | { readonly presence: TestboxLedgerPresence };
+/** One setting a settings act changed, as its ledger row records it. */
+export interface TestboxSettingChange { readonly key: string; readonly old: TestboxLedgerValue; readonly new: TestboxLedgerValue }
+
+const LEDGER_KEYS: ReadonlySet<string> = new Set([...TESTBOX_HOST_KEYS, ...TESTBOX_BOX_KEYS]);
+
+/** Whether a row may record this key's value: a known test box key, not secret-bearing, of a class the readers show by value. */
+export function testboxLedgerShowsValue(key: string): boolean {
+  if (!LEDGER_KEYS.has(key) || TESTBOX_SECRET_BEARING_KEYS.includes(key)) return false;
+  return !IS_SET_CLASSES.has(TESTBOX_SHAPE_CLASS[key]!);
+}
+
+/** A value as a row records it, read through its key's own shape (`fitsTestboxShape`): never free text. Empty or absent is
+ *  `not-set`; a key that shows no value is `set`; a value off its shape is `unknown`; one past the bound is `set`. */
+export function testboxLedgerValueOf(key: string, value: string | null | undefined): TestboxLedgerValue {
+  if (value === null || value === undefined || value === '') return { presence: 'not-set' };
+  if (!testboxLedgerShowsValue(key)) return { presence: 'set' };
+  if (!fitsTestboxShape(key, value)) return { presence: 'unknown' };
+  return value.length <= TESTBOX_LEDGER_VALUE_MAX ? { value } : { presence: 'set' };
+}
+
+/** A box settings reader's row as a row records it: an `ok` value through {@link testboxLedgerValueOf}, an is-set row as set or
+ *  not set (a default or empty source is not set), anything else `unknown`. */
+export function testboxLedgerValueOfRow(key: string, row: BoxSettingRow | undefined): TestboxLedgerValue {
+  if (row === undefined || row.state !== 'ok') return { presence: 'unknown' };
+  if ('value' in row && typeof row.value === 'string') return testboxLedgerValueOf(key, row.value);
+  return { presence: row.from === 'default' || row.from === 'empty' ? 'not-set' : 'set' };
+}
+
+function ledgerValue(key: string, v: unknown): TestboxLedgerValue | null {
+  if (!plainObject(v)) return null;
+  if (Object.keys(v).length !== 1) return null;
+  // Destructured, not indexed by a quoted field name: the W7 census counts the quoted presence word as the wire word.
+  const { presence, value } = v as { presence?: unknown; value?: unknown };
+  if (presence !== undefined) {
+    return typeof presence === 'string' && Object.hasOwn(TESTBOX_LEDGER_PRESENCE_MAP, presence)
+      ? { presence: presence as TestboxLedgerPresence } : null;
+  }
+  if (typeof value !== 'string') return null;
+  const read = testboxLedgerValueOf(key, value);
+  return 'value' in read && read.value === value ? read : null;
+}
+
+/** The ONE reader of a row's stored changes (the writer's check, the store's read, the console's guard): a list of 1 to
+ *  {@link TESTBOX_LEDGER_CHANGES_MAX} changes, each exactly `{key, old, new}`, a test box key once, each side a presence word or a
+ *  value {@link testboxLedgerValueOf} gives back unchanged. Anything else is null, whole. */
+export function readTestboxLedgerChanges(raw: unknown): TestboxSettingChange[] | null {
+  if (!Array.isArray(raw) || raw.length < 1 || raw.length > TESTBOX_LEDGER_CHANGES_MAX) return null;
+  const out: TestboxSettingChange[] = [];
+  const seen = new Set<string>();
+  for (const c of raw as unknown[]) {
+    if (!plainObject(c)) return null;
+    const fields = Object.keys(c);
+    if (fields.length !== 3 || !['key', 'old', 'new'].every((f) => Object.hasOwn(c, f))) return null;
+    const key = c['key'];
+    if (typeof key !== 'string' || !LEDGER_KEYS.has(key) || seen.has(key)) return null;
+    const old = ledgerValue(key, c['old']);
+    const now = ledgerValue(key, c['new']);
+    if (old === null || now === null) return null;
+    seen.add(key);
+    out.push({ key, old, new: now });
+  }
+  return out;
+}

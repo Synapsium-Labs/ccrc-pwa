@@ -108,7 +108,9 @@ export class TestboxLane {
       if (installed.ok && (outcome === 'ok' || atPair)) audit.write({ ...row, act: 'pair', outcome, ...code });
     } else {
       const act = TESTBOX_ADMIN_SUBS[a.sub].act;
-      if (act !== null) audit.write({ ...row, act, actId: a.id, outcome, ...code });
+      // D-8399: a box settings edit that ended ok records the changes its route staged by the act's id; the row drops them either way.
+      const changes = act === 'settings-box' && outcome === 'ok' ? audit.staged(a.id) : undefined;
+      if (act !== null) audit.write({ ...row, act, actId: a.id, outcome, ...code, ...(changes === undefined ? {} : { changes }) });
     }
     this.settle(a.id);
   }

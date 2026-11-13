@@ -1664,9 +1664,25 @@ _tba_run_read() {
 
 # ── settings-fleet: the twelve fleet-host keys the card may edit, in the ccrc-owned overlay ────────────────────────────
 # Written by a temp and a rename at 0600, then read again through the one reader: a key that then reads refused puts the
-# old overlay back. The answer is what the reader says now (a path, an address or a list as set or not set), never the text sent.
+# old overlay back. The answer is what the reader says now (a path, an address or a list as set or not set), never the text sent,
+# and (D-8399) `before`, what the same reader said of each key before the write, which the console's ledger row records as the
+# old value.
+# `_tba_fleet_rows <key>...` -> TBA_FLEET_JSON, each key as the one reader reads it now: `{"key","set"}`, with `value` only for a key
+# whose class shows one.
+_tba_fleet_rows() {
+  local k row first=1
+  TBA_FLEET_JSON=""
+  for k in "$@"; do
+    _ccrc_knob "$k" '' file || KNOB=""
+    if [ -z "$KNOB" ]; then row="{\"key\":\"$k\",\"set\":false}"
+    elif _tba_set_only "$k"; then row="{\"key\":\"$k\",\"set\":true}"
+    else row="{\"key\":\"$k\",\"set\":true,\"value\":\"$(_tba_jstr "$KNOB")\"}"; fi
+    [ "$first" = 1 ] || TBA_FLEET_JSON="$TBA_FLEET_JSON,"
+    TBA_FLEET_JSON="$TBA_FLEET_JSON$row"; first=0
+  done
+}
 _tba_run_settings-fleet() {
-  local w kv k v bak="" had=0 rc=0 first=1 out="" row
+  local w kv k v bak="" had=0 rc=0 before=""
   local -a pairs=() fkeys=() named=() bad=() resets=()
   for w in "$@"; do
     case "$w" in
@@ -1685,6 +1701,7 @@ _tba_run_settings-fleet() {
   for k in "${fkeys[@]}"; do _tba_ccrc_env_names "$k" && named+=("$k"); done
   if [ "${#named[@]}" -gt 0 ]; then _tba_refuse key-in-ccrc-env "${named[*]}"; return 0; fi
   _tba_short_lock || return 0
+  _tba_fleet_rows "${fkeys[@]}"; before="$TBA_FLEET_JSON"
   [ -d "$TBA_DIR" ] || (umask 077 && mkdir -p "$TBA_DIR") || { echo "$PROG: cannot make $TBA_DIR" >&2; return 1; }
   bak="$(umask 077 && mktemp "$TBA_DIR/testbox.env.bak.XXXXXXXX")" || { echo "$PROG: cannot make a backup of the overlay" >&2; return 1; }
   _tmp_guard "$bak"
@@ -1707,15 +1724,8 @@ _tba_run_settings-fleet() {
   fi
   rm -f -- "$bak"
   ( cmd_settings --write ) >/dev/null 2>&1 || :
-  for k in "${fkeys[@]}"; do
-    _ccrc_knob "$k" '' file || KNOB=""
-    if [ -z "$KNOB" ]; then row="{\"key\":\"$k\",\"set\":false}"
-    elif _tba_set_only "$k"; then row="{\"key\":\"$k\",\"set\":true}"
-    else row="{\"key\":\"$k\",\"set\":true,\"value\":\"$(_tba_jstr "$KNOB")\"}"; fi
-    [ "$first" = 1 ] || out="$out,"
-    out="$out$row"; first=0
-  done
-  _tba_ok "\"settings\":[$out]"
+  _tba_fleet_rows "${fkeys[@]}"
+  _tba_ok "\"before\":[$before],\"settings\":[$TBA_FLEET_JSON]"
 }
 
 # ── settings-box: the box's own settings, applied by re-running the installed installer ────────────────────────────────

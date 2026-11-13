@@ -14367,7 +14367,7 @@ export interface CallView {
 export interface CallRecordAnswer { ok: true; id: number; class: CoordCallClass; expiresAt: number | null }
 
 // ── the test box connect routes (test box connect spec §2.1, §2.6, §2.10; plan TC12, D-8166) ───────────────────────────
-import type { TestboxAct, TestboxActOutcome, TestboxAdminCode, TestboxAdminStatus } from './testbox-admin.js';
+import type { TestboxAct, TestboxActOutcome, TestboxAdminCode, TestboxAdminStatus, TestboxSettingChange } from './testbox-admin.js';
 
 /** The cap word `ccd caps` prints when THIS copy of ccd carries the test box connect surface (the `testbox-admin` verb's
  *  host). The two routes ask the account gate for it; a fleet that does not print it answers `unsupported`. */
@@ -14389,7 +14389,10 @@ export function isTestboxAdminRouteRefusal(s: string): s is TestboxAdminRouteRef
 export const TESTBOX_PARITY_REQUIRED_SENTENCE = 'Turns on after the parity check passes.';
 
 /** One row of the test box ledger (`testbox_events`, spec §2.10) as `GET /api/testbox/admin` lists it. No address, path,
- *  secret or free text: `code` is a closed word, `fingerprint` the host key's SHA-256 form, `fleetIdentity` the node id. */
+ *  secret or free text: `code` is a closed word, `fingerprint` the host key's SHA-256 form, `fleetIdentity` the node id, and
+ *  `changes` (D-8399) each setting a settings act changed, its old and new value read through that setting's own shape or, for
+ *  a secret-bearing setting, a path, an address or a list, presence only (`readTestboxLedgerChanges`). `changes` rides only an
+ *  `ok` row of `settings-fleet` or `settings-box`, and is ABSENT from an older server and from a row with none. */
 export interface TestboxEventRow {
   id: number;
   at: number;
@@ -14400,6 +14403,7 @@ export interface TestboxEventRow {
   code: string | null;
   fingerprint: string | null;
   fleetIdentity: string | null;
+  changes?: TestboxSettingChange[];
 }
 
 /** What an act may add to its answer beside the re-read status: the one thing the card needs from it. `line` is the
