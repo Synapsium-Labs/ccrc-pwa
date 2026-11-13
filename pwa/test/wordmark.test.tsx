@@ -13,6 +13,7 @@ import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { cleanup, render, screen } from '@testing-library/react';
 import { Wordmark } from '@ccrc/ui';
+import { checkSheet } from '../../ui/design/make-characters.mjs';
 import { colourStems } from './themeStems';
 
 // vitest runs without globals, so RTL's auto-cleanup never registers itself.
@@ -161,5 +162,27 @@ describe('Wordmark', () => {
     // than showing whole while the underscore slides across it.
     const decls = rule('.wordmark-type').split(';').map((d) => d.trim()).filter((d) => d.startsWith('overflow:'));
     expect(decls).toEqual(['overflow:hidden', 'overflow:clip']);
+  });
+
+  it('wordmark.css keeps the generator\'s rules: no glow, no easing, no longhand, no !important, played once', () => {
+    // The same `checkSheet` the generator runs over each drawn `<style>`, with the wordmark's own allow-list: a
+    // `text-shadow`, a `filter` or an `animation-*` longhand is outside it.
+    const allow = {
+      classProps: ['display', 'overflow', 'white-space', 'animation'],
+      keyframeProps: ['width', 'opacity'],
+      keyframeNames: ['wordmark-type', 'wordmark-cursor'],
+    };
+    expect(() => checkSheet(WORDMARK_CSS, allow)).not.toThrow();
+    for (const extra of ['text-shadow:0 0 6px currentColor', 'box-shadow:0 0 4px currentColor', 'filter:drop-shadow(0 0 4px currentColor)', 'animation-iteration-count:infinite']) {
+      const worse = WORDMARK_CSS.replace('.wordmark-cursor{', `.wordmark-cursor{${extra};`);
+      expect(worse, extra).not.toBe(WORDMARK_CSS);
+      expect(() => checkSheet(worse, allow), extra).toThrow(/refused property/);
+    }
+    // Played once: the typing's shorthand carries count 1 and `forwards`, and only the cursor loops.
+    const type = rule('.wordmark-type').match(/animation:([^;]*)/)?.[1] ?? '';
+    expect(type.split(/\s+/)).toEqual(expect.arrayContaining(['1', 'forwards']));
+    expect(type).not.toContain('infinite');
+    expect(rule('.wordmark-cursor')).toContain('infinite');
+    expect([...WORDMARK_CSS.matchAll(/infinite/g)]).toHaveLength(1);
   });
 });

@@ -14,3 +14,10 @@ export function stillGrid(art: MoodArt): StillGrid;
 export function crop(grid: StillGrid, x: number, y: number, w: number, h: number): StillGrid;
 /** The resting style of each class the files draw: hidden or not, and its whole-cell translate. Refuses a resting `transform` that is not one. */
 export function restingStyles(files: Record<string, string>): Map<string, { hidden: boolean; at: [number, number] }>;
+/** The rules a drawn `<style>` and a hand-written stylesheet share: property allow-lists for class rules and keyframe
+ *  steps, no `!`, no nested block, every `animation` entry stepped, every animation naming a keyframe the sheet
+ *  defines, step preludes only `from`, `to` or `N%`. Throws `refused …`. */
+export function checkSheet(
+  css: string,
+  allow: { classProps: Iterable<string>; keyframeProps: Iterable<string>; keyframeNames?: Iterable<string> },
+): void;

@@ -15,7 +15,7 @@
 //   node design/icon-gen.mjs
 //
 // `node design/icon-gen.mjs --check` writes nothing: it compares the PNGs it would write with the committed ones
-// byte for byte and exits 1 on any difference (`app-icons.test.ts` runs it). Importing the file does nothing.
+// byte for byte and exits 1 on any difference (`app-icons.test.ts` runs it). Importing it writes nothing.
 //
 // Outputs (public/icons/):
 //   icon-192.png / icon-512.png            purpose "any": the Orb on a rounded
@@ -27,7 +27,7 @@
 //   apple-touch-icon.png                   180x180, opaque (iOS rounds it)
 //   favicon-32.png                         the eye alone, 1x, opaque
 import { deflateSync } from 'node:zlib';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { crop, parseArt, stillGrid } from '../../ui/design/make-characters.mjs';
@@ -160,7 +160,7 @@ const files = [
 ];
 
 // Only a run of this file does anything: importing it writes nothing.
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+if (process.argv[1] && realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url))) {
   if (process.argv.includes('--check')) {
     const stale = files.filter(([name, spec]) => {
       const file = path.join(outDir, name);

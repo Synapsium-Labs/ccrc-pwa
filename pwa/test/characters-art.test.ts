@@ -110,7 +110,11 @@ describe('the characters\' art', () => {
   it('every animation is stepped', () => {
     const animations = parseCss(css()).decls.filter((d) => d.prop === 'animation' && d.value !== 'none');
     expect(animations.length).toBeGreaterThan(20);
-    for (const d of animations) expect(d.value, d.chain.join(' ')).toContain('steps(');
+    for (const d of animations) {
+      // Every entry of a comma list, split where no parenthesis is open (`steps(1, end)` keeps its comma).
+      const entries = d.value.split(/,(?![^(]*\))/).map((e) => e.trim());
+      for (const e of entries) expect(e, `${d.chain.join(' ')}: ${d.value}`).toContain('steps(');
+    }
   });
 
   it('every animated selector is stilled under reduced motion', () => {
@@ -274,6 +278,13 @@ describe('the generator refuses what is outside the measured vocabulary', () => 
     ['a class rule declaring a box-shadow', base.replace('</style>', '.md-glow{box-shadow:0 0 4px currentColor}</style>'), /refused property/],
     ['a class rule animated by longhands', base.replace('</style>', '.md-run{animation-name:md-up2;animation-duration:1s}</style>'), /refused property/],
     ['a keyframe step declaring a filter', base.replace('</style>', '@keyframes md-glowk{0%{filter:blur(1px)}}</style>'), /refused property/],
+    ['an !important animation, which would beat the reduced-motion and data-still rules', base.replace('.md-hop{animation:md-up2 1.2s steps(1) infinite}', '.md-hop{animation:md-up2 1.2s steps(1) infinite !important}'), /refused important/],
+    ['a keyframe step declaring !important', base.replace('</style>', '@keyframes md-imp{0%{opacity:0 !important}}</style>'), /refused important/],
+    ['an eased entry after a stepped one in an animation list', base.replace('.md-hop{animation:md-up2 1.2s steps(1) infinite}', '.md-hop{animation:md-up2 1.2s steps(1) infinite, md-up2 1.2s ease-in-out infinite}'), /refused animation.*not stepped/],
+    ['a nested block inside a class body', base.replace('</style>', '.md-nx{opacity:1;transform:hover, *{animation:md-up2 1s steps(1) infinite;transform:none}}</style>'), /refused nested block/],
+    ['a nested block inside a keyframe step', base.replace('</style>', '@keyframes md-nk{0%{opacity:0;&{filter:blur(1px)}}}</style>'), /refused nested block/],
+    ['a keyframe step prelude that swallowed a declaration', base.replace('</style>', '@keyframes md-k{filter:blur(1px);0%{opacity:0}}</style>'), /refused keyframe step/],
+    ['an animation naming a keyframe the sheet does not define', base.replace('</style>', '.md-zz{animation:fade-in 1s steps(1)}</style>'), /refused animation.*fade-in/],
     ['a style rule of two classes', base.replace('</style>', '.a .b{opacity:0}</style>'), /refused inline style/],
     ['a style rule on an element', base.replace('</style>', 'div{opacity:0}</style>'), /refused inline style/],
     ['a style rule on a pseudo-class', base.replace('</style>', '.a:hover{opacity:0}</style>'), /refused inline style/],
@@ -305,7 +316,7 @@ describe('the generator refuses what is outside the measured vocabulary', () => 
   it('refuses a file that is not <character>-<mood>.svg, whole, never a TypeError', () => {
     const files = allSvgs();
     for (const name of ['orb-bogus.svg', 'bogus-neutral.svg', 'bogus.svg', 'Orb-neutral.svg']) {
-      expect(() => compileAll({ ...files, [name]: base }), name).toThrow(/^Error: refused file|refused file/);
+      expect(() => compileAll({ ...files, [name]: base }), name).toThrow(/refused file/);
     }
   });
   it('refuses a resting transform that is not a whole-cell translate', () => {
@@ -314,6 +325,20 @@ describe('the generator refuses what is outside the measured vocabulary', () => 
     expect(rotated).not.toBe(confused);
     expect(() => restingStyles({ 'orb-confused.svg': confused })).not.toThrow();
     expect(() => restingStyles({ 'orb-confused.svg': rotated })).toThrow(/refused transform/);
+  });
+  it('accepts a comma inside steps() and a comma list of keyframe stops', () => {
+    const ok = base.replace('</style>', '.md-ok{animation:md-up2 1s steps(1, end) infinite, md-up2 2s steps(2, start) infinite}@keyframes md-lst{0%,50%{opacity:0}to{opacity:1}}</style>');
+    expect(ok).not.toBe(base);
+    expect(() => parseArt(ok)).not.toThrow();
+  });
+  it('refuses a second transform or opacity in one class body, and an opacity that is not the literal 0 or 1', () => {
+    const rest = (body: string): string => base.replace('</style>', `.md-rs{${body}}</style>`);
+    expect(() => restingStyles({ 'orb-neutral.svg': rest('opacity:0') })).not.toThrow();
+    expect(() => restingStyles({ 'orb-neutral.svg': rest('opacity:0;opacity:1') })).toThrow(/refused declaration/);
+    expect(() => restingStyles({ 'orb-neutral.svg': rest('transform:translate(1px,0);transform:translate(2px,0)') })).toThrow(/refused declaration/);
+    for (const v of ['.0', '0.0', '0%', '.5']) {
+      expect(() => restingStyles({ 'orb-neutral.svg': rest(`opacity:${v}`) }), v).toThrow(/refused opacity/);
+    }
   });
   it('refuses a class or keyframe name defined two ways across two files', () => {
     const other = base.replace('.md-hop{animation:md-up2 1.2s', '.md-hop{animation:md-up2 1.3s');

@@ -19,7 +19,7 @@
 // THIS FILE TYPES THE DRAWN HEX. That is allowed here: it is a design-time tool and ships nowhere, and it sits outside
 // `pwa/`, which is what `contrast.test.ts`'s hand-typed-copy sweep walks (`make-themes.mjs`'s seeds are typed hex the
 // same way). Nothing it WRITES carries a hex.
-import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -129,28 +129,68 @@ function cssBlocks(text) {
   return out;
 }
 
-/** The property names of one declaration block, each checked against an allow-list. */
-function checkProps(body, allowed, where) {
-  for (const decl of body.split(';')) {
-    if (!decl.trim()) continue;
-    const prop = decl.split(':')[0].trim();
-    if (!allowed.has(prop)) refuse('property', `${prop || decl.trim()} in ${where} is outside (${[...allowed].join(', ')})`);
+/** Split on a separator that is not inside parentheses: `steps(1, end)` and `cubic-bezier(…)` keep their commas. */
+function splitTop(text, sep) {
+  const out = [];
+  let depth = 0;
+  let from = 0;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (c === '(') depth++;
+    else if (c === ')') depth--;
+    else if (c === sep && depth === 0) { out.push(text.slice(from, i)); from = i + 1; }
   }
+  out.push(text.slice(from));
+  return out;
 }
 
-/** One file's `<style>`: its class rules and keyframes (renamed to `chr-*`), and what its reduced-motion blocks name. */
-function readStyle(styleText) {
-  /** @type {Map<string, {key:string, selector:string, body:string}>} */
-  const defs = new Map();
-  const add = (key, entry) => {
-    const had = defs.get(key);
-    if (had && squash(had.body) !== squash(entry.body)) {
-      refuse('name', `${key} is defined two ways in one file`);
+/** The words of an `animation` entry that name no timing, count, direction or fill: the keyframes it plays. */
+const ANIMATION_WORDS = new Set([
+  'none', 'infinite', 'forwards', 'backwards', 'both', 'normal', 'reverse', 'alternate', 'alternate-reverse',
+  'running', 'paused', 'linear', 'ease', 'ease-in', 'ease-out', 'ease-in-out', 'step-start', 'step-end',
+]);
+const namesIn = (entry) => splitTop(entry.trim(), ' ').map((t) => t.trim())
+  .filter((t) => /^-?[a-z_][\w-]*$/i.test(t) && !ANIMATION_WORDS.has(t));
+
+/** One declaration block: no nested block, no `!` (an `!important` animation would beat the reduced-motion and
+ *  data-still rules), every property on the allow-list, and every `animation` entry stepped. Returns the keyframe
+ *  names its animations play. */
+function checkDecls(body, allowed, where) {
+  if (/[{}]/.test(body)) refuse('nested block', `a block inside ${where}`);
+  if (body.includes('!')) refuse('important', `"!" in ${where}`);
+  const names = [];
+  for (const decl of body.split(';')) {
+    if (!decl.trim()) continue;
+    const colon = decl.indexOf(':');
+    const prop = (colon < 0 ? decl : decl.slice(0, colon)).trim();
+    if (!allowed.has(prop)) refuse('property', `${prop || decl.trim()} in ${where} is outside (${[...allowed].join(', ')})`);
+    if (prop === 'animation') {
+      for (const entry of splitTop(decl.slice(colon + 1), ',')) {
+        if (entry.trim() === 'none') continue;
+        if (!entry.includes('steps(')) refuse('animation', `"${entry.trim()}" in ${where} is not stepped`);
+        names.push(...namesIn(entry));
+      }
     }
-    defs.set(key, entry);
-  };
-  for (const { prelude, body } of cssBlocks(styleText)) {
-    if (prelude === REDUCED || squash(prelude) === squash(REDUCED)) {
+  }
+  return names;
+}
+
+/**
+ * The rules a drawn `<style>` and a hand-written stylesheet (wordmark.css) both keep. Throws `refused …` for:
+ * a class rule or keyframe step declaring a property outside its allow-list, a nested block, a `!`, an `animation`
+ * entry that is not stepped, an animation naming a keyframe the sheet does not define, a keyframe step whose
+ * prelude is not `from`, `to` or `N%`, and a reduced-motion block that is not `animation:none`. `keyframeNames`,
+ * when given, is the whole set of keyframes the sheet may define.
+ * @param {string} css
+ * @param {{ classProps: Set<string>|string[], keyframeProps: Set<string>|string[], keyframeNames?: Set<string>|string[] }} allow
+ */
+export function checkSheet(css, allow) {
+  const classProps = new Set(allow.classProps);
+  const keyframeProps = new Set(allow.keyframeProps);
+  const defined = new Set();
+  const played = [];
+  for (const { prelude, body } of cssBlocks(css)) {
+    if (squash(prelude) === squash(REDUCED)) {
       // Each block only stills animations; the generator re-derives the whole block, so it need only be that shape.
       for (const inner of cssBlocks(body)) {
         if (squash(inner.body) !== 'animation:none') {
@@ -161,19 +201,52 @@ function readStyle(styleText) {
     }
     const kf = prelude.match(/^@keyframes\s+([\w-]+)$/);
     if (kf) {
-      for (const step of cssBlocks(body)) checkProps(step.body, KEYFRAME_PROPS, `@keyframes ${kf[1]} ${step.prelude}`);
+      defined.add(kf[1]);
+      if (allow.keyframeNames && !new Set(allow.keyframeNames).has(kf[1])) {
+        refuse('keyframes', `${kf[1]} is outside (${[...allow.keyframeNames].join(', ')})`);
+      }
+      for (const step of cssBlocks(body)) {
+        const stepOk = splitTop(step.prelude, ',').every((p) => /^(?:from|to|\d+(?:\.\d+)?%)$/.test(p.trim()));
+        if (!stepOk) refuse('keyframe step', `"${step.prelude}" in @keyframes ${kf[1]} is not from, to or N%`);
+        played.push(...checkDecls(step.body, keyframeProps, `@keyframes ${kf[1]} ${step.prelude}`));
+      }
+      continue;
+    }
+    const cl = prelude.match(/^\.([\w-]+)$/);
+    if (cl) {
+      played.push(...checkDecls(body, classProps, `.${cl[1]}`));
+      continue;
+    }
+    refuse('inline style', `a rule that is neither one class nor one keyframes (${prelude})`);
+  }
+  for (const name of played) {
+    if (!defined.has(name)) refuse('animation', `${name} is not a keyframes this sheet defines`);
+  }
+}
+
+/** One file's `<style>`: its class rules and keyframes (renamed to `chr-*`), and what its reduced-motion blocks name. */
+function readStyle(styleText) {
+  checkSheet(styleText, { classProps: CLASS_PROPS, keyframeProps: KEYFRAME_PROPS });
+  /** @type {Map<string, {key:string, selector:string, body:string}>} */
+  const defs = new Map();
+  const add = (key, entry) => {
+    const had = defs.get(key);
+    if (had && squash(had.body) !== squash(entry.body)) {
+      refuse('name', `${key} is defined two ways in one file`);
+    }
+    defs.set(key, entry);
+  };
+  for (const { prelude, body } of cssBlocks(styleText)) {
+    if (squash(prelude) === squash(REDUCED)) continue;
+    const kf = prelude.match(/^@keyframes\s+([\w-]+)$/);
+    if (kf) {
       const name = rename(kf[1]);
       add(`keyframes ${name}`, { key: `keyframes ${name}`, selector: `@keyframes ${name}`, body: rename(body) });
       continue;
     }
     const cl = prelude.match(/^\.([\w-]+)$/);
-    if (cl) {
-      checkProps(body, CLASS_PROPS, `.${cl[1]}`);
-      const name = rename(cl[1]);
-      add(`class ${name}`, { key: `class ${name}`, selector: `.${name}`, body: rename(body) });
-      continue;
-    }
-    refuse('inline style', `a rule that is neither one class nor one keyframes (${prelude})`);
+    const name = rename(cl[1]);
+    add(`class ${name}`, { key: `class ${name}`, selector: `.${name}`, body: rename(body) });
   }
   return defs;
 }
@@ -472,7 +545,13 @@ export function restingStyles(files) {
     const { style } = readMarkup(files[f]);
     for (const d of readStyle(style).values()) {
       if (!d.selector.startsWith('.')) continue;
-      const hidden = /(^|;)\s*opacity\s*:\s*0\s*(;|$)/.test(d.body);
+      for (const prop of ['transform', 'opacity']) {
+        const n = d.body.split(';').filter((x) => x.split(':')[0].trim() === prop).length;
+        if (n > 1) refuse('declaration', `${d.selector} declares ${prop} ${n} times: the resting read takes one`);
+      }
+      const op = d.body.match(/(?:^|;)\s*opacity\s*:\s*([^;]*)/);
+      if (op && !/^[01]$/.test(op[1].trim())) refuse('opacity', `${d.selector} rests at opacity "${op[1].trim()}", not the literal 0 or 1`);
+      const hidden = !!op && op[1].trim() === '0';
       let at = [0, 0];
       const decl = d.body.match(/(?:^|;)\s*transform\s*:\s*([^;]*)/);
       if (decl) {
@@ -546,7 +625,7 @@ function readSvgDir() {
   return files;
 }
 
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+if (process.argv[1] && realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url))) {
   const { art, css } = compileAll(readSvgDir());
   const have = (p) => (existsSync(p) ? readFileSync(p, 'utf8') : null);
   const same = have(ART_TS) === art && have(CSS) === css;
