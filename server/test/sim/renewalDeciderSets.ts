@@ -153,8 +153,190 @@ const OBSERVED_SET: MutantSet<ObservedModule> = {
   suite: observeTimeCases,
 };
 
+// ---------------------------------------------------------------------------------------------------------- renewalDue
+
+export type RenewalDueModule = typeof import('../../src/continuity/renewalDue.js');
+type RIn = import('../../src/continuity/renewalDue.js').RenewalInputs;
+type Rd<T> = import('../../src/continuity/renewalDue.js').Reading<T>;
+type Trig = import('../../../shared/continuity.js').RenewalTrigger;
+type FleetRoleName = import('../../../shared/fleetRoles.js').FleetRole;
+
+export const U = { kind: 'unmeasured', why: 'stale' } as const;
+export const M = <T>(value: T): Rd<T> => ({ kind: 'measured', value });
+
+/** Table 3.3.11b written out per role: Renew now, the hard rows, then the soft rows, each in the table's order. */
+export const ROWS_WRITTEN: Record<FleetRoleName, readonly Trig[]> = {
+  overlord: ['operator', 'hard-cap', 'model-drift', 'resumed-other-class', 'entry-retired', 'term-raised',
+    'account-outside-set', 'class-unservable', 'account-load', 'not-local', 'resumed-long', 'soft-ceiling', 'turns',
+    'two-compactions', 'idle', 'daily-backstop', 'new-install', 'probe-failed', 'compaction-refused', 'class-changed',
+    'evaluation-due'],
+  auditor: [], replay: [], worker: [], reviewer: [],
+  coordinator: ['operator', 'hard-cap', 'not-local', 'resumed-long', 'two-compactions', 'new-install', 'probe-failed',
+    'compaction-refused', 'wave-boundary'],
+  plain: [],
+};
+const HARD_WRITTEN = new Set<Trig>(['operator', 'hard-cap', 'model-drift', 'resumed-other-class', 'entry-retired',
+  'term-raised', 'account-outside-set', 'class-unservable', 'account-load', 'not-local', 'resumed-long']);
+
+const BOOL_FIELDS = ['backstopDue', 'installBehind', 'probeFailedUnfixed', 'modelDrift', 'entryRetired', 'termRaised',
+  'accountOutsideSet', 'classUnservable', 'accountLoadMove', 'compactionRefused', 'classChanged', 'evaluationDue',
+  'notLocal', 'waveBoundary'] as const;
+
+/** A base where nothing fires: a 1M window (hard cap 250k), no context, no idle, every flag measured false. */
+export function renewalBase(role: FleetRoleName): RIn {
+  const flags = Object.fromEntries(BOOL_FIELDS.map((k) => [k, M(false)])) as Record<(typeof BOOL_FIELDS)[number], Rd<boolean>>;
+  return { role, contextTokens: M(0), windowTokens: M(1_000_000), fittedCeilingTokens: M(250_000), turns: M(0),
+    compactions: M(0), idleMs: M(0), startResumed: M({ resumed: false, otherClass: false }), renewNow: false, ...flags };
+}
+
+/** Each input's domain: unmeasured, and measured values below, at and above every threshold that reads it, plus
+ *  measured values that are not a count (read as unmeasured). */
+export const RENEWAL_DOMAINS: Record<string, readonly unknown[]> = {
+  contextTokens: [U, M(0), M(62_499), M(62_500), M(62_501), M(124_999), M(125_000), M(125_001), M(149_999), M(150_000),
+    M(150_001), M(249_999), M(250_000), M(250_001), M(-1), M(Number.NaN)],
+  windowTokens: [U, M(0), M(200_000), M(500_000), M(1_000_000)],
+  fittedCeilingTokens: [U, M(100_000), M(250_000)],
+  turns: [U, M(0), M(40), M(41)],
+  compactions: [U, M(0), M(1), M(2)],
+  idleMs: [U, M(0), M(2_699_999), M(2_700_000)],
+  startResumed: [U, M({ resumed: false, otherClass: false }), M({ resumed: true, otherClass: false }),
+    M({ resumed: false, otherClass: true }), M({ resumed: true, otherClass: true })],
+  renewNow: [false, true],
+  ...Object.fromEntries(BOOL_FIELDS.map((k) => [k, [U, M(false), M(true)]])),
+};
+
+/** The spec's words as an oracle. A row needs some readings; a measured part that fails decides the row false; else a
+ *  part that is unmeasured makes it blind. */
+export function expectedRenewal(i: RIn): { due: boolean; why?: Trig; cls?: 'hard' | 'soft'; blind: Trig[] } {
+  const val = (r: Rd<number>): number | null => (r.kind === 'measured' && Number.isFinite(r.value) && r.value >= 0 ? r.value : null);
+  const ctx = val(i.contextTokens); const win = val(i.windowTokens);
+  const cap = win === null || win === 0 ? null : Math.min(250_000, win / 2);
+  type V = boolean | null;   // null: unmeasured
+  const and = (...p: V[]): boolean | 'blind' => (p.some((x) => x === false) ? false : p.some((x) => x === null) ? 'blind' : true);
+  const b = (r: Rd<boolean>): V => (r.kind === 'measured' ? r.value : null);
+  const above = (frac: number): V => (ctx === null || cap === null ? null : ctx > cap * frac);
+  const res = i.startResumed.kind === 'measured' ? i.startResumed.value : null;
+  const t = val(i.turns); const c = val(i.compactions); const idle = val(i.idleMs); const fit = val(i.fittedCeilingTokens);
+  const row: Record<Trig, boolean | 'blind'> = {
+    operator: i.renewNow,
+    'hard-cap': and(ctx === null || cap === null ? null : ctx >= cap),
+    'soft-ceiling': and(ctx === null || fit === null ? null : ctx > 0.6 * fit),
+    turns: and(t === null ? null : t > 40),
+    'two-compactions': and(c === null ? null : c >= 2),
+    idle: and(idle === null ? null : idle >= 45 * 60_000, above(0.25)),
+    'daily-backstop': and(b(i.backstopDue)), 'new-install': and(b(i.installBehind)),
+    'probe-failed': and(b(i.probeFailedUnfixed)), 'model-drift': and(b(i.modelDrift)),
+    'resumed-other-class': and(res === null ? null : res.resumed && res.otherClass),
+    'entry-retired': and(b(i.entryRetired)), 'term-raised': and(b(i.termRaised)),
+    'account-outside-set': and(b(i.accountOutsideSet)), 'class-unservable': and(b(i.classUnservable)),
+    'account-load': and(b(i.accountLoadMove)), 'compaction-refused': and(b(i.compactionRefused)),
+    'class-changed': and(b(i.classChanged)), 'evaluation-due': and(b(i.evaluationDue)), 'not-local': and(b(i.notLocal)),
+    'resumed-long': and(res === null ? null : res.resumed, above(0.5)),
+    'wave-boundary': and(b(i.waveBoundary), above(0.25)),
+  };
+  const rows = ROWS_WRITTEN[i.role];
+  const blind = rows.filter((r) => row[r] === 'blind');
+  const why = rows.find((r) => row[r] === true);
+  return why === undefined ? { due: false, blind } : { due: true, why, cls: HARD_WRITTEN.has(why) ? 'hard' : 'soft', blind };
+}
+
+const ROLES_ALL: FleetRoleName[] = ['overlord', 'auditor', 'replay', 'worker', 'reviewer', 'coordinator', 'plain'];
+const showIn = (i: unknown): string => JSON.stringify(i);
+
+export function renewalDueCases(m: RenewalDueModule): Record<string, SuiteCase> {
+  const check = (i: RIn): void => { expect(m.renewalDue(i), showIn(i)).toEqual(expectedRenewal(i)); };
+  const fields = Object.keys(RENEWAL_DOMAINS);
+  return {
+    'the rows are Table 3.3.11b per role, total over FLEET_ROLES, only long-lived roles have rows': () => {
+      expect(m.RENEWAL_ROWS).toEqual(ROWS_WRITTEN);
+    },
+    'the class column: hard rows are the hard ones, and every role tests them first': () => {
+      for (const r of ROLES_ALL) {
+        const rows = m.RENEWAL_ROWS[r];
+        for (const t of rows) expect(m.TRIGGER_CLASS[t], t).toBe(HARD_WRITTEN.has(t) ? 'hard' : 'soft');
+        const firstSoft = rows.findIndex((t) => m.TRIGGER_CLASS[t] === 'soft');
+        if (firstSoft >= 0) expect(rows.slice(firstSoft).every((t) => m.TRIGGER_CLASS[t] === 'soft'), r).toBe(true);
+      }
+    },
+    'hardCapTokens: 250k or half the window, whichever is lower': () => {
+      expect([m.hardCapTokens(1_000_000), m.hardCapTokens(500_000), m.hardCapTokens(200_000)]).toEqual([250_000, 250_000, 100_000]);
+    },
+    'EXHAUSTIVE: the base fires nothing, for every role': () => {
+      for (const r of ROLES_ALL) expect(m.renewalDue(renewalBase(r))).toEqual({ due: false, blind: [] });
+    },
+    'EXHAUSTIVE: each input over its domain, one at a time, for every role': () => {
+      for (const r of ROLES_ALL) for (const f of fields) for (const v of RENEWAL_DOMAINS[f]!) check({ ...renewalBase(r), [f]: v } as RIn);
+    },
+    'EXHAUSTIVE: every pair of inputs over their domains, for every role': () => {
+      for (const r of ROLES_ALL) {
+        const base = renewalBase(r);
+        for (let a = 0; a < fields.length; a++) for (let b = a + 1; b < fields.length; b++) {
+          for (const va of RENEWAL_DOMAINS[fields[a]!]!) for (const vb of RENEWAL_DOMAINS[fields[b]!]!) {
+            check({ ...base, [fields[a]!]: va, [fields[b]!]: vb } as RIn);
+          }
+        }
+      }
+    },
+    'WORKED: a 1M window at 260k tokens is hard-cap; a 200k window at 100k is hard-cap': () => {
+      for (const r of ['overlord', 'coordinator'] as const) {
+        expect(m.renewalDue({ ...renewalBase(r), contextTokens: M(260_000) })).toMatchObject({ due: true, cls: 'hard', why: 'hard-cap' });
+        expect(m.renewalDue({ ...renewalBase(r), windowTokens: M(200_000), contextTokens: M(100_000) }))
+          .toMatchObject({ due: true, cls: 'hard', why: 'hard-cap' });
+      }
+    },
+    'WORKED: a coordinator at a wave boundary with 70k tokens on a 1M window is wave-boundary': () => {
+      expect(m.renewalDue({ ...renewalBase('coordinator'), waveBoundary: M(true), contextTokens: M(70_000) }))
+        .toEqual({ due: true, cls: 'soft', why: 'wave-boundary', blind: [] });
+    },
+    'WORKED: a stale context reading is not due, with hard-cap blind': () => {
+      const got = m.renewalDue({ ...renewalBase('overlord'), contextTokens: U });
+      expect(got.due).toBe(false);
+      expect(got.blind).toContain('hard-cap');
+    },
+    'PROPERTY (10,000 seeded inputs per role): an unmeasured reading never makes a renewal due or moves it earlier': () => {
+      for (const r of ROLES_ALL) {
+        const rnd = mulberry32(0x5eed + r.length);
+        const rows = m.RENEWAL_ROWS[r];
+        for (let n = 0; n < 10_000; n++) {
+          const i: Record<string, unknown> = { ...renewalBase(r) };
+          for (const f of fields) { const d = RENEWAL_DOMAINS[f]!; i[f] = d[Math.floor(rnd() * d.length)]; }
+          const before = m.renewalDue(i as unknown as RIn);
+          const measured = fields.filter((f) => f !== 'renewNow' && (i[f] as { kind: string }).kind === 'measured');
+          if (measured.length === 0) continue;
+          const f = measured[Math.floor(rnd() * measured.length)]!;
+          const after = m.renewalDue({ ...i, [f]: U } as unknown as RIn);
+          if (!before.due && after.due) throw new Error(`${r}: unmeasured ${f} made a renewal due: ${showIn(i)}`);
+          if (before.due && after.due && rows.indexOf(after.why) < rows.indexOf(before.why)) {
+            throw new Error(`${r}: unmeasured ${f} moved ${before.why} to ${after.why}`);
+          }
+        }
+      }
+    },
+  };
+}
+
+const RENEWAL_DUE_SET: MutantSet<RenewalDueModule> = {
+  modulePath: path.join(ROOT, 'server/src/continuity/renewalDue.ts'),
+  mutants: [
+    { id: 'D1', old: "'class-unservable', 'account-load', 'not-local', 'resumed-long',\n    'soft-ceiling', 'turns',", new: "'class-unservable', 'account-load', 'not-local', 'soft-ceiling',\n    'resumed-long', 'turns'," },
+    { id: 'D2', old: 'return atCap ? c >= cap * fraction : c > cap * fraction;', new: 'return atCap ? c > cap * fraction : c > cap * fraction;' },
+    { id: 'D3', old: "r.kind === 'measured' ? r.value === true : 'blind'", new: "r.kind === 'measured' ? r.value === true : false" },
+    { id: 'D4', old: "  overlord: ['operator', 'hard-cap',", new: "  overlord: ['hard-cap'," },
+    { id: 'D5', old: "'not-local', 'resumed-long',\n    'two-compactions',", new: "'not-local', 'two-compactions',\n    'resumed-long'," },
+    { id: 'D6', old: 'return Math.min(HARD_CAP_TOKENS, windowTokens / 2);', new: 'return HARD_CAP_TOKENS;' },
+    { id: 'D7', old: 'if (parts.includes(false)) return false;', new: "if (parts.includes('blind')) return 'blind';" },
+    { id: 'D8', old: "r.kind === 'measured' && Number.isFinite(r.value) && r.value >= 0 ? r.value : null", new: "r.kind === 'measured' ? r.value : null" },
+    { id: 'D9', old: 'turns: (i) => gt(i.turns, TURNS_SOFT),', new: 'turns: (i) => ge(i.turns, TURNS_SOFT),' },
+    { id: 'D10', old: "'model-drift': 'hard',", new: "'model-drift': 'soft'," },
+    { id: 'D11', old: 'else if (v && why === null) why = t;', new: 'else if (v) why = t;' },
+    { id: 'D12', old: 'return w === null || w <= 0 ? null : hardCapTokens(w);', new: 'return w === null ? null : hardCapTokens(w);' },
+  ],
+  suite: renewalDueCases,
+};
+
 /** This plan's sets, keyed as `mutation-floors.json` keys them (`<file>#<decider>`). */
 export const RENEWAL_MUTANT_SETS: Record<string, MutantSet<never>> = {
   'server/src/roleOf.ts#roleFactsOf': ROLE_FACTS_SET as MutantSet<never>,
   'server/src/time/observed.ts#observeTime': OBSERVED_SET as MutantSet<never>,
+  'server/src/continuity/renewalDue.ts#renewalDue': RENEWAL_DUE_SET as MutantSet<never>,
 };
