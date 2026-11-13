@@ -9,7 +9,7 @@
  */
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
-import { CCD_CONTEXTS, type CcdContext } from '../consolidationCensus.js';
+import { CCD_CONTEXTS, type CcdContext } from '../ccdContextIds.js';
 import { REPO } from './walkSrc.js';
 
 export const SPEC_FILE = 'docs/superpowers/specs/2026-08-10-architecture-ddd-clean-solid.md';
