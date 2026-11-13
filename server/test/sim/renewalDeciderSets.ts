@@ -118,7 +118,22 @@ export function observeTimeCases(m: ObservedModule): Record<string, SuiteCase> {
         expect(m.observeTime({ ms: 40, mono: 1_000, proc: 'p1' }, 11_000, 'p1', cap), String(cap))
           .toEqual({ at: { ms: 40, mono: 11_000, proc: 'p1' }, gap: { kind: 'step', deltaMs: 10_000 } });
       }
-      expect(m.observeTime({ ms: 40, mono: 1_000, proc: 'p1' }, 1_000, 'p1', Number.NaN).at.ms).toBe(40);
+      for (const cap of [Number.NaN, Number.POSITIVE_INFINITY, 0, -0, -5]) {
+        expect(m.observeTime({ ms: 40, mono: 1_000, proc: 'p1' }, 1_000, 'p1', cap), `delta 0, cap ${cap}`)
+          .toEqual({ at: { ms: 40, mono: 1_000, proc: 'p1' }, gap: null });   // a delta of 0 loses no time (review 1901, R2-1)
+      }
+    },
+    'a delta that is not finite never advances and never makes a NaN stamp: a backwards gap (review 1901, R2-2)': () => {
+      const inf = Number.POSITIVE_INFINITY;
+      const cases: Array<[number, number]> = [[inf, inf], [-inf, -inf], [1_000, inf], [-inf, 1_000], [inf, 1_000]];
+      for (const [from, to] of cases) {
+        const st = m.observeTime({ ms: 40, mono: from, proc: 'p1' }, to, 'p1', CAP);
+        expect([st.at.ms, st.at.mono, st.gap?.kind], `${from} -> ${to}`).toEqual([40, to, 'backwards']);
+      }
+      const reanchored = m.observeTime({ ms: 40, mono: 1_000, proc: 'p1' }, -inf, 'p1', CAP).at;
+      const next = m.observeTime(reanchored, 2_000, 'p1', CAP);
+      expect([next.at.ms, next.gap?.kind]).toEqual([40, 'backwards']);
+      expect(m.observeTime(next.at, 2_500, 'p1', CAP)).toEqual({ at: { ms: 540, mono: 2_500, proc: 'p1' }, gap: null });
     },
     'a new process: no advance, re-anchored on the new reading, a gap': () => {
       const a = { ms: 10_000, mono: 90_000, proc: 'p1' };
@@ -167,7 +182,8 @@ const OBSERVED_SET: MutantSet<ObservedModule> = {
   modulePath: path.join(ROOT, 'server/src/time/observed.ts'),
   mutants: [
     { id: 'O1', old: "if (prev.proc !== proc) return { at: { ms: prev.ms, mono, proc }, gap: { kind: 'process', deltaMs } };", new: '' },
-    { id: 'O2', old: "if (!(mono >= prev.mono)) return { at: { ms: prev.ms, mono, proc }, gap: { kind: 'backwards', deltaMs } };", new: '' },
+    { id: 'O2', old: "if (!(Number.isFinite(deltaMs) && deltaMs >= 0)) return { at: { ms: prev.ms, mono, proc }, gap: { kind: 'backwards', deltaMs } };", new: '' },
+    { id: 'O11', old: 'Number.isFinite(deltaMs) && deltaMs >= 0', new: 'mono >= prev.mono' },
     { id: 'O3', old: 'if (prev === null) return { at: { ms: 0, mono, proc }, gap: null };', new: 'if (prev === null) return { at: { ms: mono, mono, proc }, gap: null };' },
     { id: 'O4', old: 'Math.max(0, now.ms - start.ms)', new: 'now.ms - start.ms' },
     { id: 'O5', old: "return { at: { ms: prev.ms, mono, proc }, gap: { kind: 'process', deltaMs } };", new: "return { at: prev, gap: { kind: 'process', deltaMs } };" },

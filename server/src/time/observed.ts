@@ -10,8 +10,9 @@ import { OBSERVED_STEP_PERIODS } from '../../../shared/continuity.js';
 export interface Observed { readonly ms: number; readonly mono: number; readonly proc: string }
 
 /** Why a step did not advance by its whole monotonic delta: `process`, another process (a restart); `backwards`, a mono
- *  reading that went back or is not a number; `step`, a delta past the step cap (a freeze: SIGSTOP, a paused container,
- *  a VM stall), or any delta under a cap that is not a finite positive number. `deltaMs` is the reading's monotonic
+ *  reading that went back, or a delta that is not a finite number (a reading or a stored stamp at NaN or ±Infinity);
+ *  `step`, a delta past the step cap (a freeze: SIGSTOP, a paused container, a VM stall), or any delta above 0 under a
+ *  cap that is not a finite positive number (a delta of 0 loses no time and answers no gap). `deltaMs` is the reading's monotonic
  *  delta from the stamp, `mono - prev.mono`, as read: for `step` the freeze's size, for `backwards` how far back
  *  (negative, or NaN for a reading that is not a number), and for `process` a difference of two processes' clocks,
  *  which measures nothing and is recorded as read. */
@@ -29,13 +30,14 @@ export function observedStepCapMs(lanePeriodMs: number): number {
  *  (slug observed-time-caps-one-step; the coordinator's ruling F1 on review 1894: a longer delta advances by the cap,
  *  so a lane that is always late still ages, and a freeze never fires a break or a soft renewal by itself), answering
  *  a `step` gap for the rest; otherwise re-anchor on the reading with no advance. A cap that is not a finite positive
- *  number advances nothing. `null` starts at 0. So `ms` never decreases, and never exceeds the in-process forward
+ *  number advances nothing, and answers a gap for a delta above 0. A delta that is not finite (review 1901, R2-2) is a
+ *  `backwards` gap, so no stamp ever becomes NaN. `null` starts at 0. So `ms` never decreases, and never exceeds the in-process forward
  *  deltas, each capped. */
 export function observeTime(prev: Observed | null, mono: number, proc: string, capMs: number): ObservedStep {
   if (prev === null) return { at: { ms: 0, mono, proc }, gap: null };
   const deltaMs = mono - prev.mono;
   if (prev.proc !== proc) return { at: { ms: prev.ms, mono, proc }, gap: { kind: 'process', deltaMs } };
-  if (!(mono >= prev.mono)) return { at: { ms: prev.ms, mono, proc }, gap: { kind: 'backwards', deltaMs } };
+  if (!(Number.isFinite(deltaMs) && deltaMs >= 0)) return { at: { ms: prev.ms, mono, proc }, gap: { kind: 'backwards', deltaMs } };
   const cap = Number.isFinite(capMs) && capMs > 0 ? capMs : 0;
   const step = Math.min(deltaMs, cap);
   return { at: { ms: prev.ms + step, mono, proc }, gap: step < deltaMs ? { kind: 'step', deltaMs } : null };

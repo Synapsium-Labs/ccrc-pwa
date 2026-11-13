@@ -14,7 +14,11 @@ const NAMES = ['STATE_DEADLINE_S', 'RENEWAL_BUDGET_S', 'HOLD_OFF_MS', 'LEAST_AGE
 /** The figures no continuity decider may spell again: it imports the constant instead. */
 const FIGURES = [250_000, 300_000, 600_000, 1_200_000, 1_800_000, 2_700_000, 21_600_000];
 
-const declares = (text: string, name: string): boolean => new RegExp(`\\b(?:const|let|var)\\s+${name}\\b`).test(text);
+/** A declaration of `name`: `const`/`let`/`var` (exported or not, first or later in a comma list), `function`, `class`
+ *  or `enum`. An object property or an import is not one (review 1901, R2-4: a property that holds a figure is caught by
+ *  the figure scan). */
+const declares = (text: string, name: string): boolean =>
+  new RegExp(`\\b(?:(?:const|let|var)\\s+(?:\\w+\\s*=[^;,()]*,\\s*)*|function\\s*\\*?\\s*|class\\s+|enum\\s+)${name}\\b`).test(text);
 /** A figure written as code, with or without digit separators (`1_800_000`, `1800000`). */
 const spells = (text: string, n: number): boolean => {
   const digits = String(n).split('');
@@ -31,6 +35,13 @@ describe('the generation machine\'s starting values are defined once, in shared/
   it('CONTROL: the scanners see a declaration and a figure, in either spelling, and not inside a comment', () => {
     expect(declares('export const HOLD_OFF_MS = 600_000;', 'HOLD_OFF_MS')).toBe(true);
     expect(declares('const x = HOLD_OFF_MS;', 'HOLD_OFF_MS')).toBe(false);
+    expect(declares('const A = 1, HOLD_OFF_MS = 2;', 'HOLD_OFF_MS')).toBe(true);
+    expect(declares('export const A = 1, B = 2, HOLD_OFF_MS = 3;', 'HOLD_OFF_MS')).toBe(true);
+    expect(declares('export function HOLD_OFF_MS() {}', 'HOLD_OFF_MS')).toBe(true);
+    expect(declares('class HOLD_OFF_MS {}', 'HOLD_OFF_MS')).toBe(true);
+    expect(declares('enum HOLD_OFF_MS { A }', 'HOLD_OFF_MS')).toBe(true);
+    expect(declares("import { HOLD_OFF_MS } from './c.js';", 'HOLD_OFF_MS')).toBe(false);
+    expect(declares('const x = f(a, HOLD_OFF_MS);', 'HOLD_OFF_MS')).toBe(false);
     expect(spells('if (ms >= 1800000) f();', 1_800_000)).toBe(true);
     expect(spells('if (ms >= 1_800_000) f();', 1_800_000)).toBe(true);
     expect(spells('// 1_800_000 is the least age', 1_800_000)).toBe(false);
