@@ -90,9 +90,10 @@ def kind_word(st):
     return 'other'
 
 
-def read_bytes(p, cap=None, tail=None):
+def read_bytes(p, cap=None, tail=None, start=None):
     """The bytes of a regular file, or None. `cap`: at most that many from the front. `tail`: the last that many (from mid-file the
-    partial first line is cut at its first LF). Opened only after lstat says regular, no-follow, non-blocking, then fstat again."""
+    partial first line is cut at its first LF). `start`: from that offset to the end, no cut (the swap log's tail past
+    <log-from>; nothing below it is read). Opened only after lstat says regular, no-follow, non-blocking, then fstat again."""
     st, fd = probe(p), None
     if st[0] != OK:
         return None
@@ -105,6 +106,9 @@ def read_bytes(p, cap=None, tail=None):
         if tail is not None:
             want = min(size, tail)
             off = size - want
+        if start is not None:
+            off = min(start, size)
+            want = size - off
         chunks = []
         while want > 0:
             b = os.pread(fd, min(want, 1 << 20), off)
@@ -387,9 +391,9 @@ if total > SCAN_BUDGET:
     sys.exit(3)
 
 if LOG != '-' and LOG_FROM is not None and log_bytes > 0:
-    blob = read_bytes(LOG)
+    blob = read_bytes(LOG, start=log_off)
     if blob is not None:
-        for line in blob[log_off:].decode('utf-8', 'replace').split('\n'):
+        for line in blob.decode('utf-8', 'replace').split('\n'):
             m = LOGLINE.match(line)
             if m and m.group(1) == UUID:
                 diverged.append((m.group(2), m.group(3)))

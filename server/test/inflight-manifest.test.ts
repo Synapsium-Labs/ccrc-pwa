@@ -217,6 +217,23 @@ describe('the manifest program: workflow items', () => {
     expect(g0.items.find((i) => i['run'] === RUN)).toMatchObject({ class: 'diverged', longer: `/other/cfg/projects/${PDIR}/${UUID}/subagents/workflows/${RUN}/journal.jsonl` });
   });
 
+  it('the swap log is read from log-from on: a log far larger than the process may map, below log-from, still answers rc 0 and reads the diverged line in the tail', () => {
+    plantRecord([wfRow()]);
+    mkRun(RUN);
+    const log = path.join(reg, 'swap.log');
+    const HEAD = 4 * 2 ** 30;                       // a sparse head, never written: 4 GiB of nothing
+    const fd = fs.openSync(log, 'w');
+    fs.ftruncateSync(fd, HEAD);
+    fs.writeSync(fd, `2026-11-12 10:05:00 sidecar ${UUID} diverged ${side()}/subagents/workflows/${RUN}/journal.jsonl longer /x/y\n`, HEAD);
+    fs.closeSync(fd);
+    // A 1 GiB address-space limit: a reader that takes the head into memory dies of it.
+    const args = [reg, SID, cfg, UUID, 'swap', String(NOW), String(2 ** 20), '16384', '65536', '3600', String(7 * DAY), '-', JQ_LIB, log, String(HEAD), String(1048576 + 4096)];
+    const r = spawnSyncGroup('bash', ['-c', 'ulimit -v 1048576; exec python3 -I "$@"', 'x', PROG, ...args], { encoding: 'utf8', timeout: 60_000 });
+    expect(r.stderr).toBe('');
+    expect(r.status).toBe(0);
+    expect(r.stdout).toMatch(/^item class=diverged kind=workflow run=wf_0123abcd-0ab /m);
+  });
+
   it('a sidecar-only run changed within recent-s is listed with src=sidecar; an older one is not', () => {
     mkRun(RUN, { jm: NOW - 100 });
     script(RUN);
