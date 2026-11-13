@@ -10,6 +10,7 @@ import { isRunClosed } from '../fleet/runWords';
 import { matchRoute, ROUTES, sessionPath } from '../lib/routes';
 import type { Command, CommandContext } from './registry';
 import { sessionEntries } from './sessionEntries';
+import { CHARACTER_CHOICES } from '../lib/character';
 
 /** The `g` chord's second key per route. Archive and Docs have none: `a` is
  *  Accounts and `d` is unclaimed, and both are doors off the fleet rather
@@ -173,6 +174,17 @@ export function baseCommands(): Command[] {
             run: (c) => c.setTheme(t.id),
           })),
         ],
+      }),
+    },
+    {
+      id: 'switch-character',
+      title: 'Switch character…',
+      group: 'Appearance',
+      run: () => ({
+        title: 'Switch character',
+        commands: CHARACTER_CHOICES.map((ch): Command => ({
+          id: `character-${ch.id}`, title: ch.label, group: 'Character', run: (c) => c.setCharacter(ch.id),
+        })),
       }),
     },
     {

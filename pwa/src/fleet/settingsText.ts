@@ -36,7 +36,7 @@ export const UNCONFIRMED_TEXT = "Saved — the server's answer could not be read
 export const SETTINGS_INDEX_TEXT = {
   purpose: {
     updates: 'Which ccrc release the fleet runs, and how new releases reach it.',
-    appearance: 'How ccrc looks on this device. Other devices keep their own choice.',
+    appearance: 'How ccrc looks: the layout and theme on this device, and your character on every device.',
     notifications: 'What this browser is told, and which releases the server announces to everyone.',
     automation: 'What the server does to the fleet by itself: checking on quiet workers, abandoning dispatches that never '
       + 'came back, and clearing what dead sessions leave behind.',
@@ -301,6 +301,10 @@ export const SETTINGS_CARDS = {
     look: {
       scope: SETTINGS_SCOPE.device, title: 'Layout and theme',
       purpose: 'How ccrc looks on this device. Other devices keep their own choice.',
+    },
+    character: {
+      scope: SETTINGS_SCOPE.you, title: 'Character',
+      purpose: 'The face the console wears. Your choice follows you to every device.',
     },
   },
   notifications: {

@@ -17,6 +17,7 @@ import { inspectorHidden, resetInspectorChoiceForTests, setInspectorHidden } fro
 import { loadMark, saveMark } from '../src/lib/notifymark';
 import { forgetWaitingSnapshot, loadFleetSnapshot, loadWaitingSnapshot, saveFleetSnapshot, saveWaitingSnapshot } from '../src/lib/offline';
 import { ack, loadAcks } from '../src/lib/seen';
+import { CHARACTER_STORAGE_KEY, initCharacter, setCharacter } from '../src/lib/character';
 import { rememberSkin, storedSkin } from '../src/lib/skin';
 import { rememberTheme, storedTheme } from '../src/lib/theme';
 import { readViewOverride, writeViewOverride } from '../src/session/drawerView';
@@ -90,6 +91,11 @@ describe('each storage owner\'s keys (read and write), byte for byte', () => {
   it('lib/skin.ts', async () => {
     expect(await keysTouched(() => { rememberSkin('auto'); storedSkin(); })).toEqual(['ccrc-skin']);
   });
+  it('lib/character.ts', async () => {
+    vi.stubGlobal('fetch', vi.fn(() => new Promise(() => {})));
+    expect(await keysTouched(() => { setCharacter('orb'); initCharacter(); })).toEqual([CHARACTER_STORAGE_KEY]);
+    expect(CHARACTER_STORAGE_KEY).toBe('ccrc-character');
+  });
   it('lib/theme.ts', async () => {
     expect(await keysTouched(() => { rememberTheme('system'); storedTheme(); })).toEqual(['ccrc-theme']);
   });
@@ -122,7 +128,7 @@ describe('each storage owner\'s keys (read and write), byte for byte', () => {
 describe('every key, across the twelve owners, as one sorted list', () => {
   it('the literal list (the union of the rows above)', () => {
     expect([...ALL].sort()).toEqual([
-      'ccrc-accounts-strip', 'ccrc-fleet-group', 'ccrc-inspector', 'ccrc-release-dismissed', 'ccrc-skin', 'ccrc-theme',
+      'ccrc-accounts-strip', 'ccrc-character', 'ccrc-fleet-group', 'ccrc-inspector', 'ccrc-release-dismissed', 'ccrc-skin', 'ccrc-theme',
       'ccrc.drawer-view.v1', 'ccrc.fleet-folded.v1', 'ccrc.fleet-rollup.v1', 'ccrc.fleet-snapshot.v1',
       'ccrc.waiting-snapshot.v1', 'ccrc:chat-row-samples', 'ccrc:chat-row-samples-v2', 'ccrc:notify:v1', 'ccrc:seen:v1',
     ]);

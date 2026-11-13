@@ -87,13 +87,20 @@
   gap: calc(var(--pad-card) / 2);
   min-width: 0;
 }
+.settings-characters {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: calc(var(--pad-card) / 2);
+  min-width: 0;
+}
 .settings-palettes {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: calc(var(--pad-card) / 2);
   min-width: 0;
 }
-.settings-palette {
+.settings-palette,
+.settings-character {
   display: block;
   position: relative;
   min-width: 0;
@@ -102,19 +109,22 @@
   background: var(--bg-surface);
   color: var(--ink-primary);
 }
-.settings-palette[data-active='true'] {
+.settings-palette[data-active='true'],
+.settings-character[data-active='true'] {
   background: var(--accent-tint);
   box-shadow: inset 3px 0 0 var(--accent);
   color: var(--ink-primary);
 }
 /* The keyboard's ring, inside the card so it is drawn in the card's own primary ink on the card's own ground: the
    input is hidden, so its own ring has nothing to draw on. */
-.settings-palette:has(input:focus-visible) {
+.settings-palette:has(input:focus-visible),
+.settings-character:has(input:focus-visible) {
   outline: 2px solid var(--ink-primary);
   outline-offset: -4px;
 }
 /* The label is the target: at least 64px tall on a phone, which is over the 44px floor at every pointer. */
-.settings-palette-hit {
+.settings-palette-hit,
+.settings-character-hit {
   display: grid;
   align-content: space-between;
   gap: calc(var(--pad-card) / 4);
@@ -122,7 +132,8 @@
   min-height: 64px;
   padding: calc(var(--pad-card) / 2);
 }
-.settings-palette-hit input {
+.settings-palette-hit input,
+.settings-character-hit input {
   position: absolute;
   inset: 0;
   width: 100%;
@@ -137,7 +148,8 @@
 .settings-palette-chip-dead { background: var(--status-dead); }
 .settings-palette-text { display: grid; gap: 2px; min-width: 0; }
 /* A name is never cut: on a phone a long one ("Catppuccin Mocha") takes a second line and its row grows with it. */
-.settings-palette-name {
+.settings-palette-name,
+.settings-character-name {
   overflow-wrap: anywhere;
   font-size: var(--fs-meta);
   font-weight: var(--weight-medium);
