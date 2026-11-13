@@ -28845,7 +28845,8 @@ _inflight_write() {   # id site [cfg uuid [log-from]] -> the session's manifest 
     [[ -n "$uuid" ]] || _reg_get_to uuid "$id" uuid || uuid=""
     # The generation read is a canonical write (its alias link), so it runs under the row's compaction lock like every other caller's,
     # with wait 0 (never waits in the restart window) and around the read alone, before the manifest's slot: it never nests.
-    if _compact_lock_acquire "$id" 0; then
+    # An absent file is read with builtins alone (the reader answers "absent" before any write too): no lock, no fork, gen=-.
+    if [[ -e "$REG/$id.generation" || -L "$REG/$id.generation" ]] && _compact_lock_acquire "$id" 0; then
       gfd="$COMPACT_LOCK_FD"
       if _reg_generation_read "$id"; then gen="$REG_GENERATION"; fi
       _compact_lock_release "$gfd"

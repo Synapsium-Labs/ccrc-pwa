@@ -340,6 +340,21 @@ describe('the manifest writer: the generation read', () => {
   });
 });
 
+describe('the manifest writer: no generation file', () => {
+  it('with no generation file the header reads gen=- and no flock, mktemp, link or rm runs for it: the absence is read with builtins', () => {
+    seed();
+    const d = path.join(h.home, 'stubbin');
+    fs.mkdirSync(d, { recursive: true });
+    for (const t of ['flock', 'mktemp', 'link']) fs.writeFileSync(path.join(d, t), `#!/bin/sh\necho ${t} >> "$HOME/ext-calls"\nexit 1\n`, { mode: 0o755 });
+    // the manifest's own slot uses flock too, so the stub is first on PATH only around the generation read: the slot is taken
+    // by the real one through an absolute path in this snippet's override of `command -v`
+    const out = write('swap', 'PATH="$HOME/stubbin:$PATH"; _inflight_slot_take() { INFLIGHT_SLOT_FD=""; return 0; };');
+    expect(out).toContain('[rc=0]');
+    expect(parse().head['gen']).toBe('-');
+    expect(readOr(path.join(h.home, 'ext-calls')) ?? '', 'no external ran for the generation read').toBe('');
+  });
+});
+
 describe('the manifest writer: never dies', () => {
   it('never dies: a directory at $REG/<id>.inflight gives unmeasured why=error, and the caller\'s next line runs', () => {
     seed();
