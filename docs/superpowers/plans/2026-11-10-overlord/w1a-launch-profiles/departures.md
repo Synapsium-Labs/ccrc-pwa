@@ -36,8 +36,8 @@ PR A is Tasks 1 to 4. `ccd/ccd` grows by 37 net code lines (the growth check's m
   It checks the shape (`^[a-z]{1,16}$`), then asks `jq has`. ccd therefore holds no second list of role words: the
   file is the one projection of `FLEET_ROLES`. A file that cannot be read answers rc 2, ccd's existing "vocabulary
   unavailable", which is never "bad value". `cmd_route` and the `--route` argv check say this in a sentence of their
-  own, naming the file, and the `route-unmeasured` journal line names the file as a possible cause beside the roster
-  projection.
+  own, naming the file. The `route-unmeasured` journal line keeps its words (it names only the roster projection):
+  `_route_unmeasured_note` is frozen by the tick diet's legacy fixture, and the spawn's own warning names the profile.
 - **env-values-are-words, an addition.** The composer's jq program checks the whole row before anything is applied.
   Every `env` key must match `^CLAUDE_CODE_[A-Z_]+$` and every value `^[A-Za-z0-9._-]+$`, `autoMemory` must be
   `off` or `switch`, and each of `env`, `settings` and `compactionSettings` must be an object. One bad entry refuses

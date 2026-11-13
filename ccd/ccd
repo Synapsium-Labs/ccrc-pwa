@@ -22423,7 +22423,7 @@ _route_unmeasured_note() {   # id field — journal a field whose VOCABULARY cou
   # the reason-flap shape `_compact_note` measured and removed.
   local id="$1" f="$2"
   _route_note_floored "$id" "routeunmeas$f" && return 0
-  echo "$(date '+%F %T') route-unmeasured $id: field $f could not be checked — this box's roster projection (\$HOME/.ccrc/accounts.sh) carries no class list for it, or its launch profiles file cannot be read; treated as absent — re-run ccrc install" >> "$REG/swap.log"
+  echo "$(date '+%F %T') route-unmeasured $id: field $f could not be checked — this box's roster projection (\$HOME/.ccrc/accounts.sh) carries no class list for it; treated as absent — re-run ccrc install" >> "$REG/swap.log"
   return 0
 }
 _route_unread_note() {   # id field — journal a field whose FILE is on disk but whose BYTES
