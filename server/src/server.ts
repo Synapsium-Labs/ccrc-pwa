@@ -2636,6 +2636,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     authEnabled: deps.cfg.authEnabled, sessionAuth, mailToken: () => deps.mailToken ?? null,
     registerSecret: (laneId, value, o) => deps.masker?.ingestSecret(laneId, value, o) ?? 'unregistered',
     retireSecret: (laneId) => { deps.masker?.retireSecret(laneId); },
+    ...(deps.plan === undefined ? {} : { plan: deps.plan }),
   });
 
   /**
