@@ -203,7 +203,10 @@
 }
 .wi-detail { display: grid; grid-template-columns: minmax(0, 1fr) 21rem; gap: var(--sp-3); align-items: start; }
 @media (max-width: 900px) { .wi-detail { grid-template-columns: minmax(0, 1fr); } }
-.wi-card { display: grid; gap: var(--sp-2); padding: var(--sp-3); min-width: 0; background: var(--bg-surface); color: var(--ink-primary); border: 1px solid var(--edge-subtle); border-radius: var(--r-md); }
+/* The card's one column is `minmax(0, 1fr)`, never the implicit `auto` track: an `auto` track is as wide as its widest child's
+   min-content, so one run that cannot break (a How step of ids joined by slashes and commas) set it wider than the card, and
+   every child, the Why text with it, was laid out past the card's edge, under the side panel (Task C32, D-8585). */
+.wi-card { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--sp-2); padding: var(--sp-3); min-width: 0; background: var(--bg-surface); color: var(--ink-primary); border: 1px solid var(--edge-subtle); border-radius: var(--r-md); }
 .wi-card .wi-tag { justify-self: start; display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2); }
 .wi-card .wi-kind {
   justify-self: start; font: var(--weight-medium) var(--fs-2xs) / 1.6 var(--family-mono); padding: 0 var(--sp-1); border-radius: var(--r-sm);
@@ -212,7 +215,7 @@
 .wi-card .wi-what { margin: 0; font: var(--weight-medium) var(--fs-md) / var(--lh-tight) var(--family-ui); color: var(--ink-primary); overflow-wrap: anywhere; }
 .wi-card .wi-h { margin: 0; font-size: var(--fs-xs); letter-spacing: 0.06em; text-transform: uppercase; color: var(--ink-secondary); font-weight: var(--weight-medium); }
 .wi-card .wi-text { margin: 0; color: var(--ink-primary); overflow-wrap: anywhere; }
-.wi-card .wi-steps { margin: 0; padding-left: var(--sp-4); display: grid; gap: var(--sp-1); color: var(--ink-primary); }
+.wi-card .wi-steps { margin: 0; padding-left: var(--sp-4); display: grid; gap: var(--sp-1); color: var(--ink-primary); overflow-wrap: anywhere; }
 .wi-card .wi-history { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--sp-1); font-size: var(--fs-meta); color: var(--ink-secondary); }
 .wi-card .wi-history li { border-left: 2px solid var(--edge-strong); padding-left: var(--sp-2); overflow-wrap: anywhere; }
 .wi-act .wi-opt {
