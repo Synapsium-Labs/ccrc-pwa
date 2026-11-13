@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { MOODS, type Mood } from '../../shared/face';
 import type { LaneWire } from '../../shared/api';
-import { CRY_WINDOW_MS, DIZZY_SWAP_MS, HAPPY_WINDOW_MS, MOOD_FALLBACK, MOOD_RULES, SUSPICIOUS_WINDOW_MS, fallbackCause, moodOf, type MoodFacts } from '../src/face/mood';
+import { workerQuietAt } from '../src/fleet/runWords';
+import { MEASURED, CRY_WINDOW_MS, DIZZY_SWAP_MS, HAPPY_WINDOW_MS, MOOD_FALLBACK, MOOD_RULES, SUSPICIOUS_WINDOW_MS, fallbackCause, moodOf, type MoodFacts } from '../src/face/mood';
 import { fleetSession } from './fleetFixture';
 import { runRow } from './ledgersFixture';
 
@@ -94,6 +95,21 @@ describe('moodOf', () => {
     expect(moodOf(base({ runs: [review(5 * MIN)] })).next).toBe(NOW - 5 * MIN + SUSPICIOUS_WINDOW_MS);
     expect(moodOf(withSession(merged(MIN))).next).toBe(NOW - MIN + HAPPY_WINDOW_MS);
   });
+  it('next is the instant a quiet worker reads quiet, as its owner says', () => {
+    const run = runRow({ id: 1, program: 'project-a', state: 'working', workerLastSeen: NOW - 5 * MIN });
+    const expected = NOW - 5 * MIN + 10 * MIN + 1;
+    expect(workerQuietAt(run, 10 * MIN)).toBe(expected);
+    expect(moodOf(base({ runs: [run], stallQuietMs: 10 * MIN })).next).toBe(expected);
+    const open = { ...run, workerLastTurn: { state: 'working', startedAt: NOW - MIN, endedAt: null } } as never;
+    expect(workerQuietAt(open, 10 * MIN)).toBeNull();
+    expect(workerQuietAt({ ...run, workerLastSeen: Number.NaN }, 10 * MIN)).toBeNull();
+  });
+  it('next is the end of a swap window', () =>
+    expect(moodOf(withSession({ lastEnd: { at: NOW - 10_000, cause: 'swap-manual' } })).next).toBe(NOW - 10_000 + DIZZY_SWAP_MS));
+  it('a dead session with a standing refusal is not Angry', () =>
+    expect(mood(withSession({ bucket: 'dead', swapBlocked: { at: NOW, reason: 'x' } }))).not.toBe('angry'));
+  it('the measured table is in rank order', () =>
+    expect(MEASURED.map(([m]) => { const r = MOOD_RULES[m]; return r.kind === 'measured' ? r.rank : -1; })).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]));
   it('no rule matching gives the fallback', () => {
     const a = moodOf(base({ waitingItems: null }));
     expect(a.mood).toBe(MOOD_FALLBACK);

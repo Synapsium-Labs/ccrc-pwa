@@ -2,11 +2,11 @@
 // holds. First matching rule wins; the order puts what the operator can act on first (spec §4.2: attention is a budget).
 // No clock is read: `nowMs` is an argument. A reader still `null` never matches its rule, so a console that has not heard
 // a reader never claims calm (Neutral, with the readers named), and never claims a thing that reader would have said.
-import type { FleetSession, LaneWire, RunSummary } from '../../../shared/api';
+import type { FleetSession, LaneWire, RunSummary, SessionBucket } from '../../../shared/api';
 import { recentLastEnd } from '../../../shared/api';
 import type { Mood } from '../../../shared/face';
 import { operatorAsk } from '../fleet/rollup';
-import { isRunClosed, runLastMove, workerSeenNote } from '../fleet/runWords';
+import { isRunClosed, runLastMove, workerQuietAt, workerSeenNote } from '../fleet/runWords';
 
 export interface MoodFacts {
   /** The fleet socket. */
@@ -95,16 +95,14 @@ function edges(f: MoodFacts, sessions: readonly FleetSession[]): number[] {
     if (isRunClosed(r)) continue;
     const move = runLastMove(r);
     if (r.state === 'awaiting-review' && move !== null) out.push(move + SUSPICIOUS_WINDOW_MS);
-    // The note gives no instant, so the threshold's edge reads the heartbeat field beside it.
-    if (f.stallQuietMs !== null && typeof r.workerLastSeen === 'number' && r.workerLastTurn?.state !== 'working') {
-      out.push(r.workerLastSeen + f.stallQuietMs + 1);
-    }
+    const quietAt = workerQuietAt(r, f.stallQuietMs);
+    if (quietAt !== null) out.push(quietAt);
   }
   return out.filter((t) => t > f.nowMs);
 }
 
 /** Buckets where a session is not live ("any live session" in the angry rule). */
-const NOT_LIVE: ReadonlySet<string> = new Set(['dead', 'archived', 'cleanup']);
+const NOT_LIVE: ReadonlySet<SessionBucket> = new Set<SessionBucket>(['dead', 'archived', 'cleanup']);
 
 type Rule = (f: MoodFacts, sessions: readonly FleetSession[]) => boolean;
 
@@ -112,7 +110,7 @@ const within = (at: number | null | undefined, window: number, nowMs: number): b
   typeof at === 'number' && nowMs - at < window;
 
 /** The measured rules in rank order: rank n is `MEASURED[n - 1]`. */
-const MEASURED: readonly (readonly [Mood, Rule])[] = [
+export const MEASURED: readonly (readonly [Mood, Rule])[] = [
   ['offline', (f) => (f.conn !== 'open' && f.linkLost) || f.agentDown],
   ['neutral', (f) => f.sessions === null],
   ['alert', (_f, ss) => ss.some(operatorAsk)],
