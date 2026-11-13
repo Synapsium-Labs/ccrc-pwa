@@ -27,7 +27,8 @@ const WORDMARK_CSS = readFileSync(
 
 /** The declarations of the first top-level rule whose selector is exactly `sel`. */
 function rule(sel: string): string {
-  const m = new RegExp(`(?:^|\\})\\s*${sel.replace(/\./g, '\\.')}\\s*\\{([^}]*)\\}`).exec(WORDMARK_CSS);
+  const escaped = sel.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const m = new RegExp(`(?:^|\\})\\s*${escaped}\\s*\\{([^}]*)\\}`).exec(WORDMARK_CSS);
   if (m === null) throw new Error(`wordmark.css has no ${sel} rule`);
   return m[1] ?? '';
 }
