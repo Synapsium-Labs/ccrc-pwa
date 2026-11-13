@@ -20,17 +20,17 @@ send to nudge p50 90.3 s, against at most 3.4 s from nudge to its first tool cal
 (`docs/superpowers/plans/2026-11-11-overlord-w0-spike-results.md`, W0-20).
 
 **Architecture:** All in `server/src/coord/mailPace.ts` (L1, C5) and its one reader, `FleetWatcher.mailPass` in
-`server/src/watch.ts` (L4). The table is typed `satisfies Readonly<Record<FleetRole, MailPace>>`. Two L1 functions
-join it:
-- `mailLaneRoleFacts(child, claimsOpenRun)` builds the `RoleFacts` the mail lane measures: the recipient's `.child`
-  mark from the registry record the pass already holds, and whether it claims an open run, from the set the pass
-  already builds. Every other fact is the constant the roles plan uses for "not read on this path".
-- `mailPaceOf(reading)` answers a `RoleReading`'s row. An undecided reading takes the slowest of its members' rows,
-  as spec §3.3.9 rules ("it takes the slower mail pace").
+`server/src/watch.ts` (L4). The table is typed `satisfies Readonly<Record<FleetRole, MailPace>>`. One L1 function
+joins it: `mailPaceOf(reading)` answers a `RoleReading`'s row, and an undecided reading takes the slowest of its
+members' rows, as spec §3.3.9 rules ("it takes the slower mail pace").
 
-The lane's one line becomes `mailPaceOf(roleOf(mailLaneRoleFacts(rec?.child, coordinators.has(d.toId))))`. It decides
-nothing itself: the facts are measured in L4, and the reading and the row are decided in L1. No new I/O, no wire
-change, no new route.
+The lane's one line becomes
+`mailPaceOf(roleOf({ ...ROLE_FACTS_CHILD_AXIS, child: rec?.child ?? { kind: 'unreadable' }, claimsOpenRun: ... }))`:
+it measures the recipient's `.child` mark (from the registry record the pass already holds) and whether it claims an
+open run (from the set the pass already builds), and passes every other fact as `roleOf.ts`'s `ROLE_FACTS_CHILD_AXIS`
+spells "not read on this path". It assembles no facts of its own: the one assembly of `RoleFacts`, `roleFactsOf`,
+belongs to the renewal deciders' piece (run 1885), and the lane can move onto it with the same two inputs once it lands
+(Task 4). The role and the row are decided in L1. No new I/O, no wire change, no new route.
 
 **Tech Stack:** TypeScript (ES modules, NodeNext), vitest, the `server/` package only.
 
@@ -106,7 +106,8 @@ role table lands"); §3.8, "As measured (W0b)", W0-20.
    member whose row is slowest. Task 2 pins that each ambiguity has a member at least as slow as every other member on
    both fields, so "slowest" never has to trade one field against the other. A future row that breaks this reds the
    test before it can pick an arbitrary member.
-3. **The facts are what the lane measures, nothing more.** `mailLaneRoleFacts` reads the child mark and the claim.
+3. **The facts are what the lane measures, nothing more.** The lane overrides only the child mark and the claim on
+   `ROLE_FACTS_CHILD_AXIS` (Task 4; Task 3's pin holds that shape).
    Declared intent stays `unmeasured`: reading it would move a session with intent and no open run onto the
    coordinator row, which spec §6.4 calls a change of behaviour for a commit of its own. That commit is not in this
    plan (mail-lane-facts). A non-claimant therefore reads undecided `coordinator-or-plain` and takes `plain`'s
@@ -286,6 +287,9 @@ describe("mailLaneRoleFacts: the lane's facts, and today's answers", () => {
 
 ### Task 3: The mail lane reads its row through `roleOf`; `mailPaceRoleOf` retires
 
+> As built, Tasks 2 and 3 used an L1 `mailLaneRoleFacts(child, claimsOpenRun)`. Task 4 removes it, so the text of
+> those two tasks below records what was built then; Task 4 says what the branch holds now.
+
 **Files:**
 - Modify: `server/src/watch.ts`, `FleetWatcher.mailPass`: the registry lookup `const rec = records.find(...)` moves
   above the pace line (a pure lookup, no gate moves), and the pace line becomes
@@ -381,6 +385,48 @@ describe('a child that claims an open run reads the worker pair (roleOf, Table 3
   `MAIL_PACE_IS_TOTAL`.
 - [ ] **Step 6: Commit.** `refactor(coord): the mail lane reads its pace row through roleOf; mailPaceRoleOf retires`
 
+### Task 4: The lane assembles no role facts of its own; `mailPaceOf` joins the mutation floors
+
+The coordinator ruled (mail, 2026-11-13) that `roleFactsOf`, the one assembly of `RoleFacts`, is run 1885's (Task 0 of
+`w1a-renewal-deciders.md`), and that no other run writes a second; a run that can reach `roleOf` with the inputs its
+call site already has does that instead. The lane can: its two facts override `ROLE_FACTS_CHILD_AXIS`, which is on
+`main`, and the result is exactly what `roleFactsOf(d.toId, { child, childRunKind: 'unmeasured', openCoordinators,
+intentDeclared: 'unmeasured' })` answers, so the move onto `roleFactsOf` after 1885 lands is one line.
+
+**Files:**
+- Modify: `server/src/coord/mailPace.ts` (delete `mailLaneRoleFacts`; the header names where the facts come from).
+- Modify: `server/src/watch.ts` (the pace line spreads `ROLE_FACTS_CHILD_AXIS`; the absent-record fallback
+  `rec?.child ?? { kind: 'unreadable' }` sits beside it).
+- Modify: `server/test/single-definition/core-vocab.test.ts` (the lane pin matches
+  `mailPaceOf(roleOf({ ...ROLE_FACTS_CHILD_AXIS, child: ..., claimsOpenRun: ... }))` once, with nothing else
+  overridden).
+- Create: `server/test/sim/mailPaceSets.ts` (`mailPaceOfCases`, written once, and `MAIL_PACE_MUTANT_SETS`, the
+  mutants P1 to P4), run against the real module by `server/test/mail-pace.test.ts`.
+- Modify, once their holder agrees: `server/test/sim/mutation-floors.test.ts` (spread `MAIL_PACE_MUTANT_SETS` into
+  `MUTANT_SETS`) and `server/test/sim/mutation-floors.json` (`"server/src/coord/mailPace.ts#mailPaceOf": 1`), D-8217's
+  rule for a new L1 decider. Both files are claimed by run 1888; the request went to it as mail.
+
+- [ ] **Step 1: Mutations on the new shape.** The child passed as `{ kind: 'none' }`: both child-claimant cases red.
+  `declaredIntent: 'no'` added to the lane's facts: the "chooses a row once, through roleOf" pin red. Restore each.
+- [ ] **Step 2: The floor.** With the two lines in, `test/sim/mutation-floors.test.ts`: every mutant of
+  `mailPaceOf` killed, score 1. One mutant is left out as equivalent today (dropping `slower`'s `cooldownMs`
+  tiebreak), because no ambiguity has two members with equal quiet times and different cooldowns.
+- [ ] **Step 3: Commit.** `refactor(coord): the mail lane assembles no role facts of its own; mailPaceOf's cases are
+  written once`, then the floors commit.
+
+## Where this plan differs from the reference draft
+
+Before its scope changed, run 1880 drafted a plan for this piece (`w1a-overlord-pace.md`, on its branch at
+`fb8b4fb7a`). This plan takes from it the row values, the undecided-takes-the-slower rule and the mutation floor for
+the new decider. It differs in three places:
+- **The intent move is not here.** The draft's Task 3 moves a session with declared intent and no open run onto the
+  coordinator row. This piece's brief rules that no session that exists today changes pace, so the lane passes
+  intent `unmeasured` (mail-lane-facts), and the move waits for a commit that reads intent on this path.
+- **No `roleFactsOf` here.** The draft added it to `roleOf.ts`; run 1885 owns it (Task 4).
+- **The child mark is read.** The draft's facts read the child mark too, but did not name the one answer that changes:
+  a child that claims an open run. This plan pins it with its own test and measured that no live session is one
+  (mail-lane-child-claimant).
+
 ## Measured while building (2026-11-13)
 
 - **Task 1:** 20 cases green on the old code; the worker row at `quietMs: 60_001` reds the four "delivered at exactly
@@ -428,6 +474,10 @@ Each is a plain-words slug; the coordinator issues the numbers.
   table's `satisfies` and by a type-level exact-key check in `mail-pace.test.ts`. A source-text pin was not used: a
   literal read of `mailPace.ts` reds the ARCH-06 ratchet (`single-definition/advance-switches.test.ts`), and
   `scan/symbols.ts` does not index a `const`.
+- **mail-lane-no-assembly** — The lane builds its facts by spreading `ROLE_FACTS_CHILD_AXIS` and overriding the two
+  it measures, not through a builder of its own and not through `roleFactsOf`, which run 1885 owns and has not landed
+  (the coordinator's ruling of 2026-11-13). Once `roleFactsOf` is on `main`, the lane moves onto it in one line with the
+  same answers. The absent-record fallback (`?? { kind: 'unreadable' }`) sits in the lane beside the spread.
 - **mail-lane-absent-recipient** — A recipient the registry does not list has no child fact. It is read as a
   mark that could not be measured (`unreadable`), which spec §3.3.9 reads as undecided, so it takes the worker pair.
   The cooldown gate still runs before the registry ladder, so such a row, if it claims an open run and was nudged in
