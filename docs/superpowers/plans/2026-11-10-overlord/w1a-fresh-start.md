@@ -18,7 +18,7 @@ with `--roll`, wakes it through `( cmd_ensure "$id" )`, which resumes the conver
 `CCD_IN_UNIT=1`. An argument or a dynamic local never crosses that process boundary, and `cmd_ensure` takes ONE
 positional by contract (its header: "Do not give this verb another argument", because the agent whitelist grants
 `ensure` as a prefix). So `--fresh` crosses through the registry, the way the swap path carries its intent in
-`lastswap`: after the sleep, `cmd_hibernate --roll --fresh` writes a one-shot, dot-free marker `$REG/<id>.freshstart`
+`lastswap`: after the sleep, `cmd_hibernate --roll --fresh` writes a one-shot, dot-free marker `$REG/<id>.fresh`
 holding the new uuid and the old one, and the in-unit `_spawn_start` consumes it, writes the new uuid through the
 registry's uuid writer and spawns with `--session-id`. One pull request.
 
@@ -88,9 +88,9 @@ Table 11.1c (the `SessionHost` row), Table 11.1d (ccd's capability words).
 
 **Files:**
 - Modify: `ccd/ccd` (`cmd_hibernate` parses `--fresh` and, after the sleep and before the wake, writes
-  `$REG/<id>.freshstart` = `<new uuid> <old uuid>`; the in-unit `_spawn_start` consumes the marker; `cmd_hibernate`
+  `$REG/<id>.fresh` = `<new uuid> <old uuid>`; the in-unit `_spawn_start` consumes the marker; `cmd_hibernate`
   cleans up after a failed wake; `cmd_ensure` is unchanged and keeps one positional; `_reg_purge`'s inventory comment
-  gains `freshstart`)
+  gains `fresh`)
 - Test: `server/test/ccd-hibernate-roll.test.ts`, `server/test/ccd-ensure-argv.test.ts` (new, or the existing suite
   that pins `cmd_ensure`'s arity: measure `grep -ln 'ONE POSITIONAL\|cmd_ensure' server/test`)
 
@@ -98,7 +98,7 @@ Table 11.1c (the `SessionHost` row), Table 11.1d (ccd's capability words).
   point. Expected: green; they stay green, unedited.
 - [ ] **Step 2: Failing tests** (fixture HOME, the suite's stub `claude` that records its argv):
   - **The supervised path** (the suite's `_supervised_start` stub, as its roll cases use it): `hibernate --roll --fresh
-    lane-a-project-a` writes `$REG/lane-a-project-a.freshstart` with two well-formed, different uuids, the second the
+    lane-a-project-a` writes `$REG/lane-a-project-a.fresh` with two well-formed, different uuids, the second the
     uuid before, then calls `_supervised_start lane-a-project-a` with no other argument.
   - **The in-unit spawn** (`CCD_IN_UNIT=1`, the suite's stub `claude` recording its argv): with the marker present and
     its old uuid equal to the registry's, the spawn has `--session-id <u2>` and no `--resume`; the registry's uuid file
@@ -166,8 +166,10 @@ None yet. Decisions this plan takes, by slug:
 - **fresh-is-a-roll-mode** — `--fresh` is accepted only with `--roll`, so it inherits the roll's refusals and exit
   codes, and the builder's boolean becomes a three-word mode.
 - **fresh-crosses-by-marker** — the fresh request reaches the in-unit spawn through a one-shot, dot-free registry
-  marker (`$REG/<id>.freshstart`), never an argument, so `cmd_ensure` keeps its one positional; a failed wake removes
-  the marker and restores the old uuid.
+  marker (`$REG/<id>.fresh`), never an argument, so `cmd_ensure` keeps its one positional; a failed wake removes
+  the marker and restores the old uuid. The name `fresh` is the one the build chose and the coordinator ruled on;
+  Table 3.6a lists the marker, with one writer (`ccd hibernate --roll --fresh`), consumed by the in-unit spawn, and no
+  authority and no switch (this programme's spec amendment).
 
 ## Where things stand
 

@@ -89,9 +89,10 @@ other role": the hook's group, the caller's own session only), Table 11.1e row "
 - Modify: `shared/fleetRoles.ts` (first, in a commit of its own: lay `FLEET_ROLES` out one column per line, no value
   changed; then the `cardRenderer` column: `'overlord' | 'coordinator' | 'worker' | 'reviewer' | 'plain'`; `auditor`
   and `replay` take `plain`)
-- Modify: `server/test/fleet-roles.test.ts` (in the layout commit, split the "every column that waits for a later piece
-  is null on every row" case so each null column is asserted on a line of its own; the card's fill then removes only
-  `cardRenderer`'s line and adds its own case)
+- Modify: `server/test/fleet-roles.test.ts` (split the "every column that waits for a later piece is null on every
+  row" case so each null column is asserted on a line of its own; the card's fill then removes only `cardRenderer`'s
+  line and adds its own case. Done in #2732, the split in a commit after the layout commit, and confirmed by its
+  review)
 - Modify: `docs/superpowers/specs/2026-08-10-architecture-ddd-clean-solid.md` (C3's row gains `continuity/**`, after
   `roleOf.ts`; this piece owns it, because it creates the first file under `server/src/continuity/`, which
   `server/test/rings/totality.test.ts` refuses unmapped)
