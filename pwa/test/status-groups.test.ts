@@ -15,7 +15,7 @@
 import { describe, it, expect, expectTypeOf, afterEach } from 'vitest';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
-import ts from 'typescript';
+import { ts } from '../../server/test/scan/parse';
 import { createElement } from 'react';
 import { render, cleanup } from '@testing-library/react';
 import type { FleetSession, SessionBucket } from '../../shared/api';

@@ -3,7 +3,7 @@
 import { describe, expect, it } from 'vitest';
 import { readdirSync, statSync } from 'node:fs';
 import path from 'node:path';
-import ts from 'typescript';
+import { ts } from '../../server/test/scan/parse';
 import type { AccountUsage } from '../../shared/api';
 import { bindingWindow, lanesByFree } from '../src/fleet/laneOrder';
 import * as order from '../src/fleet/laneOrder';
