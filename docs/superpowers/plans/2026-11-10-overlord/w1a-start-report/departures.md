@@ -2,7 +2,8 @@
 
 A note for the programme's ledger pull request, written by the worker of run 1886 (#2740). It adds to
 `docs/superpowers/plans/2026-11-10-overlord/w1a-start-report.md`, as that plan's Global Constraints direct. Each entry is
-a slug and its reason. The one number this piece was issued, D-8557, is defined in the plan and in the index plan.
+a slug and its reason. The one number this piece was issued, D-8557, has one definition, the index plan's
+(`2026-11-10-overlord.md`); this piece's plan carries the full entry under a spelling that is not a definition.
 
 ## The door and the store (Tasks 1 and 2)
 
@@ -23,14 +24,26 @@ a slug and its reason. The one number this piece was issued, D-8557, is defined 
 - **started-uuid-is-data** (review 1911, F4) — the door attributes the SENDER, `fromUuid`, against the registry at
   send time, and records the reported conversation's uuid from the additive body field `startedUuid`. A body without
   it (an older hook) records `fromUuid` and meets the same check as before. The hook rewrites `fromUuid` to its current
-  `session_id` on every resend, so a report spooled before a `/clear` or a fork hop lands once the registry follows,
-  as spec §3.3.11 promises ("A start the server did not receive is reported again when the server is back").
+  `session_id` on a resend of a `clear`, `resume` or `compact` report, so a report spooled before a `/clear` lands once
+  the registry follows, as spec §3.3.11 promises ("A start the server did not receive is reported again when the server
+  is back"). `startedUuid` is data the server cannot check against the sender.
+- **startup-keeps-its-own-sender** (review 1949, G2) — a `startup` report is resent with its own `fromUuid`, never
+  rewritten. Another Claude process that inherits this pane (a nested `claude -p` from the session's own shell) runs
+  this hook under the row's id; its start meets `stale-uuid`, is kept, and is then refused on every resend and dropped,
+  so it is never recorded as the row's own start. Only a source that changes the row's own conversation (`clear`,
+  `resume`, `compact`) is rewritten. The generations piece also checks `startedUuid` against the registry's history
+  (the coordinator's carry).
 - **startsSince-answer-shape** — the read answers `{ok: true, rows}` or `{ok: false, detail}`, never a null that
   means two things.
-- **start-vocabulary-in-l0** (review 1911, F10) — `START_SOURCES`, `StartSource`, `StartRow` and `startSourceOf`, the
-  rule that reads any other source word as `other`, live at the foot of `shared/api.ts`. The store's writer and its
-  read both go through that one rule, so a word a newer build wrote reads `other` after a rollback. The generations
-  lane, an L1 decider, reads them without the store.
+- **id-order-is-receipt-order** (review 1949, G3) — id order is receipt order; a session's start order is
+  `reportedAt`. The hook sends the fresh report first and the kept ones after it, so a start kept and resent can land
+  after a newer one. `StartRow` says so; the generations piece orders a session's starts by `reportedAt` (the
+  coordinator's carry). No schema change.
+- **start-vocabulary-in-l0** (reviews 1911 F10, 1949 G8) — `START_SOURCES` (derived from one map), `StartSource`, its
+  guard `isStartSource`, `StartRow` and `startSourceOf`, the rule that reads any other source word as `other`, live in
+  `shared/continuity.ts` beside the generation vocabulary. The store's writer and its read both go through that one
+  rule, so a word a newer build wrote reads `other` after a rollback. The generations lane, an L1 decider, reads them
+  without the store.
 - **claude-md-untouched** — `CLAUDE.md`'s box-token census sentence names only the `requireMailToken` sites of
   `coord/routes.ts`, and the sibling `checkMailToken` lanes (linking, the plan verbs, the Linear proxy) are not named
   there either, so the new lane adds no sentence.
@@ -52,15 +65,18 @@ a slug and its reason. The one number this piece was issued, D-8557, is defined 
   attributed; it is not sent.
 - **start-report-before-the-exit** — the report runs before the hook's early exit for a compact start, so compact
   starts are reported too (coordinator ruling F2 of mail 18315).
-- **one-budget-fresh-first** (review 1911, F2) — the whole event spends at most `START_BUDGET_MS` (4 s): one
-  millisecond deadline from `_hook_epoch_ms` at entry, the fresh report sent first, then the resends, each send's
-  `_hook_timeout` given what is left.
+- **one-budget-fresh-first** (reviews 1911 F2, 1949 G4) — the report spends at most `START_BUDGET_MS` (4 s): one
+  millisecond deadline from `_hook_epoch_ms` at its entry, the fresh report sent first, then the resends, each send's
+  `_hook_timeout` given what is left. The budget is the report's, not the event's: on a `clear`, `compact` or `resume`
+  SessionStart the roster card's own bound comes before it.
 - **budget-floor-skips-not-stretches** (review 1911, F2) — the ruling's "1 s floor" is read as the least time a send
   may start with: no send starts with under a second left, and a send that starts gets exactly what is left, never
   more. So the event never runs past the budget; a report not sent for want of time is kept untried.
 - **every-answered-send-counts-a-try** — a send the server answered without taking the report counts a try, the
   fresh send included, so "refused START_RESEND_TRIES times" holds for every report. Before this round only resends
   counted. No answer, and no time left, count none.
+- **stale-uuid-ends-the-pass** (review 1949, G5) — a `stale-uuid` ends the pass with the short back-off, so one stale
+  answer spends one try, not one per kept report sent after it.
 - **older-server-answers-count-a-try** (review 1911, F3, option (a)) — a 404 or a 401 from the door (an older server
   during a rollout that moved the fleet box first, or a token being rotated) is "no answer": the report is kept, a try
   is counted, and the pass ends. No new cap word.
@@ -72,8 +88,12 @@ a slug and its reason. The one number this piece was issued, D-8557, is defined 
 - **backoff-by-how-the-pass-ended** (review 1911, F7, F12, F15) — the pass stamps `START_RESEND_BACKOFF_MS` (30 s) when
   a send ended it (no answer, a 404, a 401, a 5xx or a local refusal), a report spooled in this same pass included, and
   `START_STALE_BACKOFF_MS` (5 s, one supervisor tick) after a `stale-uuid` or a spent budget, so a `/clear` start lands
-  on the first prompt after `_sync_uuid` has followed. A stamp further out than the long back-off (a wall clock that
-  stepped back) is read as the long back-off. A pass that sent nothing (inside the back-off) leaves the stamp.
+  on the first prompt after `_sync_uuid` has followed. Each stamp counts from the end of the pass, not its start
+  (review 1949, G7). A fresh report taken clears a standing stamp, so the kept reports go on the next event (G7). A
+  stamp further out than the long back-off (a wall clock that stepped back) is read as the long back-off. A pass that
+  sent nothing (inside the back-off) leaves the stamp.
+- **empty-session-id-skips-the-resend** (review 1949, G6) — a payload whose `session_id` is empty after the hook's
+  filter skips the resend pass and keeps every report, rather than sending an empty sender the door refuses for good.
 - **one-ccd-line-closes-the-purge-race** (review 1911, F1; replaces `no-ccd-edit`) — the plan built the piece with no
   `ccd/ccd` edit (R5). The coordinator lifted that for one line: `_reg_purge`'s trailing one-call `rm` takes
   `$REG/<id>.startpending` once more after `generation`, with `joined`, `joinedprev` and `deleg`, and its fallback
@@ -89,11 +109,12 @@ a slug and its reason. The one number this piece was issued, D-8557, is defined 
   merge-base, over the limit of 40. D-8557 waives it to 56 (`server/test/growth-waivers/D-8557-session-hook.json`),
   and the back-off decision has lines of its own again. This retires `back-off-test-joined-for-growth`, the join that
   held the earlier build at +40.
-- **d-8557-in-both-plans** — the ruling named this piece's plan for D-8557's entry, but `growth-check`'s waiver test
-  and `deviation-refs` read only top-level plans. The coordinator ruled (ask 373) that the full entry stays in this
-  plan and a two-line entry, the one the guards read, goes in the index plan, `2026-11-10-overlord.md`, beside D-8251's,
-  as D-8251 was done: the piece's entry is spelled `**D-8557, <slug>, scope**`, as D-8251's is, so the cross-tree
-  collision scan reads only the index's as the definition. The guards are not widened.
+- **d-8557-defined-once** (reviews 1911, 1949 G10) — D-8557 has one definition, the index plan's two-line entry
+  (`2026-11-10-overlord.md`, beside D-8251's), which `growth-check`'s waiver test reads (it lists top-level plans only).
+  This piece's plan keeps the full entry, spelled `**D-8557, <slug>, scope**` as D-8251's is. That comma spelling, not
+  the file's path, is what keeps it from counting as a second definition: `deviation-refs`' cross-tree scan reads every
+  plan, subdirectories included, and its definition grammar does not match that spelling (ask 373). The guards are not
+  widened. The index entry rides a merge commit of this branch, so a redone merge must keep it.
 
 ## Open risk
 
@@ -102,6 +123,6 @@ a slug and its reason. The one number this piece was issued, D-8557, is defined 
   prompt after that. The tail: dispatch types the `/clear` and then the brief, so a prompt can arrive inside that tick
   (the gap is not measured). That prompt finds the back-off standing and sends nothing; tool events never resend, so
   for a working worker the report waits for its next prompt, which can be its next mail, hours later. A prompt that
-  arrives after the back-off but before the registry follows meets `stale-uuid` again and counts a try, and five such
-  misses drop the report. The report is stamped `receivedAt` when the server takes it, and the generations plan ages a
+  arrives after the back-off but before the registry follows meets `stale-uuid` again, counts a try and ends the pass;
+  the fresh send's miss is the first of the five tries, so four more such prompts drop the report. The report is stamped `receivedAt` when the server takes it, and the generations plan ages a
   start from `receivedAt`, so a late landing shifts that generation's clock by the delay.
