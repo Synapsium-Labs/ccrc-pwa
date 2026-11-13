@@ -27,7 +27,8 @@ export interface GenDayModules {
 }
 
 export const GEN_DAY_EDGES = ['soft-renewal', 'hard-renewal', 'renewed', 'crash-gap', 'freeze-gap', 'start-while-down', 'degraded',
-  'hold-off', 'budget-wait', 'probe-retry', 'renudge', 'unplanned-start', 'overlord-first'] as const;
+  'hold-off', 'budget-wait', 'probe-retry', 'renudge', 'unplanned-start', 'overlord-first', 'clearing-timeout-back',
+  'clearing-timeout-degraded', 'soft-due-in-degraded'] as const;
 export type GenDayEdge = (typeof GEN_DAY_EDGES)[number];
 
 const START = Date.parse('2026-11-13T00:00:00Z');
@@ -77,7 +78,10 @@ export function generationDay(mods: GenDayModules): Scenario<GenDayEdge> {
       const facts = new Map<string, Facts>();
       for (const [who] of WHO) facts.set(who, { ctx: 20_000, turns: 0, compactions: 0, idleSince: null, wave: false, readers: 0 });
       let operatorHere = true;
-      let lastOperatorAt = START;
+      // The operator's last message, stamped in observed time when it reaches the server (review 1912, F6): a message
+      // written while the server is down or frozen is stamped at its next beat.
+      let lastOperatorObs = 0;
+      let operatorPending = false;
       let operatorFlipAt = START + 40 * MIN;
 
       const idOf = (who: string, n: number): string => `${who}#${n}`;
@@ -87,9 +91,10 @@ export function generationDay(mods: GenDayModules): Scenario<GenDayEdge> {
       const apply = (who: string, e: GenEvent): void => {
         const r = rows.get(who)!;
         const prev = r.view;
-        // What the server received, logged at receipt (review I4): a card read with its hash verdict, a probe round.
-        if (e.kind === 'card-read') line('card', idOf(who, r.n), e.hashMatches ? 'match' : 'mismatch', 'lane');
-        if (e.kind === 'probes') line('probes', idOf(who, r.n), e.passed ? 'passed' : 'failed', 'lane');
+        // What the server accepted, logged at receipt (review I4): a card read with its hash verdict, in carded; a probe
+        // round, in probing. A read or a round that reaches another state is not one (review 1912, F12).
+        if (e.kind === 'card-read' && prev.state === 'carded') line('card', idOf(who, r.n), e.hashMatches ? 'match' : 'mismatch', 'lane');
+        if (e.kind === 'probes' && prev.state === 'probing') line('probes', idOf(who, r.n), e.passed ? 'passed' : 'failed', 'lane');
         const step = mods.machine.generationStep(prev, e);
         if (e.kind === 'started' && prev.state !== 'ended') line('start', who, 'applied', 'host');
         r.view = step.next;
@@ -109,7 +114,10 @@ export function generationDay(mods: GenDayModules): Scenario<GenDayEdge> {
           else if (a === 'renudge-card') { cover('renudge'); sessionReadsCard(who, n); }
           else if (a === 'start-probes') sessionProbes(who, n);
           else if (a === 'raise-item') { cover('degraded'); line('item', idOf(who, n), 'raised', 'lane'); }
-          else if (a === 'set-hold-off') { cover('hold-off'); r.holdOffUntil = age(r) + HOLD_OFF_MS; }
+          else if (a === 'set-hold-off') {
+            cover('hold-off'); r.holdOffUntil = age(r) + HOLD_OFF_MS;
+            line('hold-off', idOf(who, n), `until=${r.holdOffUntil}`, 'lane');
+          }
         }
         if (prev.state === 'probing' && e.kind === 'probes' && !e.passed && step.next.state === 'probing') cover('probe-retry');
         if (prev.state === 'probing' && step.next.state === 'active') cover('renewed');
@@ -133,12 +141,17 @@ export function generationDay(mods: GenDayModules): Scenario<GenDayEdge> {
         apply(who, e);
       };
 
-      // The host's renewal: it ends the old conversation and starts a fresh one, or fails before or after the end.
+      // The host's renewal: it ends the old conversation and starts a fresh one, fails before or after the end, or hangs
+      // before or after it, so clearing's deadline is reached on both sides of the first half (review 1912, F9).
       const hostRenews = (who: string, n: number): void => {
         world.envAfter(between(2, 20) * SEC, () => {
-          if (chance(entropy, 0.08)) { deliver(who, n, { kind: 'host-failed', afterEnd: false }); return; }
+          const fails = chance(entropy, 0.08); const hangs = chance(entropy, 0.04);
+          if (hangs) return;
+          if (fails) { deliver(who, n, { kind: 'host-failed', afterEnd: false }); return; }
           deliver(who, n, { kind: 'host-ended' });
-          if (chance(entropy, 0.05)) { deliver(who, n, { kind: 'host-failed', afterEnd: true }); return; }
+          const failsAfter = chance(entropy, 0.05); const hangsAfter = chance(entropy, 0.04);
+          if (hangsAfter) return;
+          if (failsAfter) { deliver(who, n, { kind: 'host-failed', afterEnd: true }); return; }
           world.envAfter(between(1, 5) * SEC, () => {
             const f = facts.get(who)!;
             f.ctx = between(12_000, 30_000); f.turns = 0; f.compactions = 0; f.wave = false;
@@ -168,7 +181,7 @@ export function generationDay(mods: GenDayModules): Scenario<GenDayEdge> {
         const now = server.clock.wall();
         if (now >= operatorFlipAt) { operatorHere = !operatorHere; operatorFlipAt = now + between(10, operatorHere ? 90 : 120) * MIN; }
         const operatorWrites = chance(entropy, 0.3);
-        if (operatorHere && operatorWrites) lastOperatorAt = now;
+        if (operatorHere && operatorWrites) operatorPending = true;
         for (const [who, role] of WHO) {
           const f = facts.get(who)!;
           const growth = between(500, 4_000);
@@ -224,6 +237,7 @@ export function generationDay(mods: GenDayModules): Scenario<GenDayEdge> {
         obs = st.at;
         if (st.gap !== null) line('obs-gap', 'server', `kind=${st.gap.kind};deltaMs=${st.gap.deltaMs}`, 'lane');
         line('obs', 'server', `ms=${obs.ms}`, 'lane');
+        if (operatorPending) { operatorPending = false; lastOperatorObs = obs.ms; }
         if (thawPending) {
           thawPending = false;
           line('server', 'thaw', 'thawed', 'sim');
@@ -241,6 +255,7 @@ export function generationDay(mods: GenDayModules): Scenario<GenDayEdge> {
           }
           if (TRANSIENT.has(r.view.state) && server.clock.wall() >= r.deadlineAt) {
             line('deadline', `${idOf(who, r.n)}:${r.view.state}:${r.deadlineAt}`, 'fired', 'lane');
+            if (r.view.state === 'clearing') cover(r.view.hostEnded ? 'clearing-timeout-degraded' : 'clearing-timeout-back');
             apply(who, { kind: 'deadline' });
           }
           if (r.view.state === 'draining' && facts.get(who)!.readers === 0) apply(who, { kind: 'drained' });
@@ -248,7 +263,7 @@ export function generationDay(mods: GenDayModules): Scenario<GenDayEdge> {
           const due = mods.renewal.renewalDue(renewalInputs(who, role, stale, pressed, loadMove));
           if (!due.due) { r.dueSinceObs = null; continue; }
           if (due.cls === 'hard') { cover('hard-renewal'); r.dueSinceObs = null; apply(who, { kind: 'due', cls: 'hard' }); continue; }
-          if (r.view.state !== 'active') continue;
+          // A soft due reaches the machine in degraded too, which ignores it ("degraded blocks soft triggers only").
           r.dueSinceObs ??= obs.ms;
           const inWindow = r.softStamps.filter((t) => obs!.ms - t < SOFT_BUDGET.windowMs).length;
           const overlord = rows.get('overlord')!;
@@ -256,7 +271,7 @@ export function generationDay(mods: GenDayModules): Scenario<GenDayEdge> {
             // I7: a coordinator's reader wait is the hold table's in W1a, and it has no Overlord place; the Overlord's
             // place report is W1's, so unmeasured here.
             readersRunning: role === 'coordinator' ? NA : M(facts.get(who)!.readers),
-            operatorQuietObservedMs: M(server.clock.wall() - lastOperatorAt),
+            operatorQuietObservedMs: M(obs.ms - lastOperatorObs),
             placeHiddenObservedMs: role === 'overlord' ? U : NA, mode: 'when-away', dueSinceObservedMs: obs.ms - r.dueSinceObs,
             generationAgeObservedMs: age(r), holdOffUntilObservedMs: r.holdOffUntil, softRenewalsInWindow: inWindow,
             overlordOutsideActive: overlord.view.state !== 'active' };
@@ -266,11 +281,14 @@ export function generationDay(mods: GenDayModules): Scenario<GenDayEdge> {
             if (may.waitFor === 'overlord-first') cover('overlord-first');
             continue;
           }
+          const before = r.view.state; const at = `obs=${obs.ms};age=${age(r)};n=${r.n};from=${before}`;
+          apply(who, { kind: 'due', cls: 'soft' });
+          if (before === 'degraded') cover('soft-due-in-degraded');
+          if (r.view.state === before) continue;
           cover('soft-renewal');
-          line('soft-renewal', who, `obs=${obs.ms};age=${age(r)}`, 'lane');
+          line('soft-renewal', who, at, 'lane');
           r.softStamps = [...r.softStamps, obs.ms];
           r.dueSinceObs = null;
-          apply(who, { kind: 'due', cls: 'soft' });
         }
         server.scheduler.after(BEAT_MS, serverBeat);
       };
@@ -295,6 +313,8 @@ const violation = (invariant: string, l: SequenceLine, message: string): Violati
 /** Table 11.5b: one observed step is at most two periods of the 30 s renewal lane, written here from the table rather
  *  than read from the code under test. */
 const STEP_CAP_MS = 60_000;
+/** §3.3.11's renewal budget runs through these states, checkpointed to active. */
+const BUDGET_STATES = ['checkpointed', 'clearing', 'carded', 'probing'] as const;
 const num = (state: string, key: string): number => Number(new RegExp(`${key}=(-?\\d+)`).exec(state)?.[1] ?? Number.NaN);
 
 export const GEN_DAY_INVARIANTS: readonly Invariant[] = [
@@ -328,14 +348,20 @@ export const GEN_DAY_INVARIANTS: readonly Invariant[] = [
       }
       return null;
     } },
-  { name: 'G4', says: 'a restart never advances observed time, a freeze advances it by the step cap (never by nothing, never by more), and no deadline fires twice',
+  { name: 'G4', says: 'a restart never advances observed time; a freeze advances it by the step cap and answers a step gap; within one process with no gap, observed time never runs ahead of the clock; no deadline fires twice',
     check(lines) {
-      let last: number | null = null; let lastBeforeCrash: number | null = null; let afterBoot = false; let stepGap = false;
+      let last: number | null = null; let lastAt = 0; let lastBeforeCrash: number | null = null;
+      let afterBoot = false; let stepGap = false; let gapSince = false; let frozeSince = false;
       const fired = new Set<string>();
       for (const l of lines) {
-        if (l.kind === 'server' && l.state === 'down') lastBeforeCrash = last;
-        if (l.kind === 'server' && l.state === 'up') afterBoot = true;
-        if (l.kind === 'obs-gap' && l.state.startsWith('kind=step;')) stepGap = true;
+        if (l.kind === 'server' && l.state === 'down') { lastBeforeCrash = last; gapSince = true; frozeSince = false; }
+        if (l.kind === 'server' && l.state === 'up') { afterBoot = true; gapSince = true; }
+        if (l.kind === 'server' && l.state.startsWith('frozen')) { frozeSince = true; gapSince = true; }
+        if (l.kind === 'obs-gap') {
+          gapSince = true;
+          if (l.state.startsWith('kind=step;')) stepGap = true;
+          if (l.state.startsWith('kind=process;')) frozeSince = false;   // a freeze right after a boot: the restart's gap answers it
+        }
         if (l.kind === 'obs') {
           const ms = num(l.state, 'ms');
           if (last !== null && ms < last) return violation('G4', l, `observed time fell from ${last} to ${ms}`);
@@ -346,7 +372,11 @@ export const GEN_DAY_INVARIANTS: readonly Invariant[] = [
           if (stepGap && last !== null && ms - last !== STEP_CAP_MS) {
             return violation('G4', l, `a freeze advanced observed time by ${ms - last}, not by the cap (review 1894, F1)`);
           }
-          afterBoot = false; stepGap = false; last = ms;
+          if (frozeSince && !stepGap) return violation('G4', l, 'a freeze answered no step gap (review 1912, F7)');
+          if (!gapSince && last !== null && ms - last > l.at - lastAt) {
+            return violation('G4', l, `observed time ran ahead of the clock: ${ms - last} ms in ${l.at - lastAt} (review 1912, F2)`);
+          }
+          afterBoot = false; stepGap = false; gapSince = false; frozeSince = false; last = ms; lastAt = l.at;
         }
         if (l.kind === 'deadline') {
           if (fired.has(l.id)) return violation('G4', l, `deadline ${l.id} fired twice`);
@@ -355,21 +385,45 @@ export const GEN_DAY_INVARIANTS: readonly Invariant[] = [
       }
       return null;
     } },
-  { name: 'G6', says: 'a renewal that lands spends at most RENEWAL_BUDGET_S from checkpointed (or clearing) to active, give or take the lane\'s beat per state, unless the server was down or frozen meanwhile',
+  { name: 'G6', says: 'each transient state ends within its deadline plus one lane period, and a renewal that lands (a later generation active) spends at most RENEWAL_BUDGET_S from checkpointed or clearing, plus one lane period per state, unless the server was down or frozen meanwhile',
     check(lines) {
-      // When a renewal's budget began, per identity; a crash inside it waives the check for that renewal.
-      const began = new Map<string, { at: number; crashed: boolean }>();
+      // The lane sees a deadline at its next pass, so each state may run one period past it (review 1912, F10).
+      const slack = RENEWAL_LANE_PERIOD_MS;
+      const budget = RENEWAL_BUDGET_S * 1_000 + BUDGET_STATES.length * slack;
+      const cur = new Map<string, { state: string; at: number; n: number; waived: boolean }>();
+      const began = new Map<string, { at: number; n: number; waived: boolean }>();
       for (const l of lines) {
-        if (l.kind === 'server' && (l.state === 'down' || l.state.startsWith('frozen'))) for (const b of began.values()) b.crashed = true;
+        if (l.kind === 'server' && (l.state === 'down' || l.state.startsWith('frozen'))) {
+          for (const c of cur.values()) c.waived = true;
+          for (const b of began.values()) b.waived = true;
+        }
         if (l.kind !== 'gen') continue;
-        const who = l.id.slice(0, l.id.lastIndexOf('#'));
-        if ((l.state === 'checkpointed' || l.state === 'clearing') && !began.has(who)) began.set(who, { at: l.at, crashed: false });
-        if (l.state === 'degraded' || (l.state === 'active' && l.actor === 'lane' && !began.has(who))) began.delete(who);
+        const who = l.id.slice(0, l.id.lastIndexOf('#')); const n = Number(l.id.slice(l.id.lastIndexOf('#') + 1));
+        const c = cur.get(who);
+        const deadlineS = c === undefined ? undefined : STATE_DEADLINE_S[c.state as keyof typeof STATE_DEADLINE_S];
+        if (c !== undefined && c.n === n && deadlineS !== undefined && !c.waived && l.at - c.at > deadlineS * 1_000 + slack) {
+          return violation('G6', l, `${l.id}: ${c.state} lasted ${l.at - c.at} ms, past its ${deadlineS} s and one lane period`);
+        }
+        cur.set(who, { state: l.state, at: l.at, n, waived: false });
+        if ((l.state === 'checkpointed' || l.state === 'clearing') && !began.has(who)) began.set(who, { at: l.at, n, waived: false });
+        if (l.state === 'degraded') began.delete(who);   // the renewal ended without landing, on either generation
         if (l.state === 'active' && began.has(who)) {
           const b = began.get(who)!; began.delete(who);
-          const spent = l.at - b.at;
-          if (!b.crashed && spent > RENEWAL_BUDGET_S * 1_000 + 4 * 30_000) return violation('G6', l, `${l.id}: a renewal took ${spent} ms`);
+          if (n > b.n && !b.waived && l.at - b.at > budget) return violation('G6', l, `${l.id}: a renewal took ${l.at - b.at} ms`);
         }
+      }
+      return null;
+    } },
+  { name: 'G7', says: 'a soft renewal starts only from active, and never while the generation\'s hold-off stands',
+    check(lines) {
+      const holdOff = new Map<string, number>();
+      for (const l of lines) {
+        if (l.kind === 'hold-off') holdOff.set(l.id, num(l.state, 'until'));
+        if (l.kind !== 'soft-renewal') continue;
+        const from = /from=(\w+)/.exec(l.state)?.[1];
+        if (from !== 'active') return violation('G7', l, `${l.id}: a soft renewal from ${from} ("degraded blocks soft triggers")`);
+        const until = holdOff.get(`${l.id}#${num(l.state, 'n')}`);
+        if (until !== undefined && num(l.state, 'age') < until) return violation('G7', l, `${l.id}: a soft renewal at age ${num(l.state, 'age')}, inside the hold-off to ${until}`);
       }
       return null;
     } },
