@@ -594,17 +594,24 @@ const isActing = (coord: CoordStore, id: number): boolean => actingItems.get(coo
 const ACT_IN_FLIGHT_DETAIL = (id: number): string => `item ${id} is being acted on: the operator's Abandon run is in progress`;
 const RUN_ABANDONED_NOTE = 'The operator abandoned the run.';
 
+/** D-8558: the plan's why when the operator ends a programme abandoned. The plan's own close needs a reason for an abandon
+ *  (`parsePlanClose`'s `dropped-needs-reason`), and the why is synced to the tracker, so it is these fixed words, which point at the
+ *  run whose close detail keeps the operator's own; the operator's words are not checked for the tracker here. */
+const OPERATOR_PLAN_ABANDONED_WHY = 'Ended by the operator with its last run; the reason is on that run\'s record.';
+
 /** D-8558: the operator ends a programme whose last run its act just closed, through the two writers a programme's end already
  *  has: `programs.state` (the close's own retirement, D-51, which an abandon left `abandoned`) and the plan's close (`closePlan`,
- *  the plan store's one writer), so no run opens under it again. The reason stays on the run's close detail: the plan's why is
- *  synced to the tracker, and an operator's words are not checked for that here. False when a run of the programme is open. */
+ *  the plan store's one writer), so no run opens under it again. The operator's reason stays on the run's close detail; an
+ *  abandoned plan's why is `OPERATOR_PLAN_ABANDONED_WHY`. False when a run of the programme is open. */
 function endProgrammeByOperator(
   coord: CoordStore, plan: PlanStorePort | undefined, program: string, outcome: PlanEndOutcome, now: number,
 ): boolean {
   if (coord.programOpenRunCount(program) !== 0) return false;
   coord.setProgramState(program, outcome);
   // Without the plan port (a test, a script) the plan routes answer `unavailable`, and there is no plan here to close either.
-  if (plan !== undefined && plan.planEndOf(program) === null) plan.closePlan(program, outcome, null, now);
+  if (plan !== undefined && plan.planEndOf(program) === null) {
+    plan.closePlan(program, outcome, outcome === 'abandoned' ? OPERATOR_PLAN_ABANDONED_WHY : null, now);
+  }
   return true;
 }
 

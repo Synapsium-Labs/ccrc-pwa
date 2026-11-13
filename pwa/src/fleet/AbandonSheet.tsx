@@ -262,7 +262,7 @@ export interface AbandonSheetProps {
 export const CLOSE_RUN_WORDS = {
   title: (id: number) => `Close run ${id}?`, confirm: 'Close this run', busy: 'Closing…', keep: 'Keep it',
   why: 'Why', other: 'Something else', otherLabel: 'The reason, in a few words',
-  programme: 'The programme', keepOpen: 'Keep it open', endDone: 'End it: its work is done', endAbandoned: 'End it: abandoned',
+  programme: 'The programme', keepOpen: 'Keep its plan open', endDone: 'End it: its work is done', endAbandoned: 'End it: abandoned',
 } as const;
 
 /** The programme choice of the close-run mode: keep it, or end it done or abandoned. */

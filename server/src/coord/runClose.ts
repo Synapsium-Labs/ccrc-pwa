@@ -390,7 +390,7 @@ export function refusalDoors(reason: RefusalReason): ItemDoors | null {
 }
 
 /** What the lane measured about who could take a refused close (D-8558): whether the registry still holds the claimant's session
- *  (false for a forgotten one, and for a run nobody claims), whether the programme can still take a run (not ended, its plan not
+ *  (false for a forgotten one, and for a run nobody claims), whether the programme can still take a run (its plan not
  *  closed), and whether this run is the programme's last one not closed. */
 export interface DoorFacts {
   readonly claimantHeld: boolean;

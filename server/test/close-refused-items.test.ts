@@ -296,6 +296,56 @@ describe('Close this run, and the programme\'s end', () => {
     expect(programme()).toMatchObject({ state: 'abandoned', planEnd: 'abandoned' });
   });
 
+  // D-8558 review: `programs.state` is no lifecycle gate. The close retires it whenever the open-run count reaches 0 (D-51) and
+  // openRun never sets it back, so a programme whose next wave opened still reads `abandoned`; only its plan's end stops a run.
+  it('a programme the close retired, whose next wave is open, still offers Hand to a coordinator', async () => {
+    const r = await rig();
+    const first = fixtureRun(r, false);
+    const program = (r.coord.run(first) as { run: { program: string } }).run.program;
+    const stateOfProgramme = () => (r.coord.db.prepare('SELECT state FROM programs WHERE slug = ?').get(program) as { state: string }).state;
+    expect((await post(r, `/api/runs/${first}/abandon`)).statusCode).toBe(200);
+    expect(stateOfProgramme(), 'the close retired the programme (D-51)').toBe('abandoned');
+    const next = r.coord.openRun({ program, title: 'Wave 2', project: 'project-a', wave: 2, waveOf: 2, claimedBy: 'lane-gone' });
+    if (!('id' in next)) throw new Error(`fixture openRun refused: ${JSON.stringify(next)}`);
+    expect(stateOfProgramme(), 'opening a wave does not set it back').toBe('abandoned');
+    expect(r.coord.programmeLive(program)).toBe(true);
+    const action = r.coord.itemById(raise(r, next.id, 'warning-undelivered', 'gone'))!.action;
+    expect(isCloseRefusedAction(action) && action.doors).toEqual(['close-run', 'hand-to-coordinator', 'end-programme']);
+    // The plan's end is what stops a run, and a programme with no row has none to take.
+    r.coord.db.prepare("UPDATE programs SET planEnd = 'done' WHERE slug = ?").run(program);
+    expect(r.coord.programmeLive(program)).toBe(false);
+    expect(r.coord.programmeLive('no-such-programme')).toBe(false);
+  });
+
+  it('two refusals of one run in one pass raise once, and later passes neither settle nor raise again', async () => {
+    const r = await rig();
+    const id = fixtureRun(r, false);
+    const run = laneRunOf(r.coord, id);
+    const both: RefusedClose[] = [
+      { run, row: 'never-started', reason: 'warning-undelivered', claimant: 'lane-gone', lives: false, held: false },
+      { run, row: 'never-started', reason: 'absent-claimant', claimant: 'lane-gone', lives: false, held: false },
+    ];
+    const deps = { coord: r.coord, abandonRefusal: (i: number) => abandonRefusal(r.coord, i) };
+    const t0 = Date.now() - 2 * ASK_GRACE_MS;
+    routeRefusals(deps, both, t0);
+    const after = r.coord.openCloseRefusedItems().map((i) => i.id);
+    for (let pass = 1; pass <= 3; pass += 1) {
+      const out = routeRefusals(deps, both, t0 + pass * 60_000);
+      expect(out.raised, `pass ${pass} raises nothing`).toEqual([]);
+      expect(out.settled, `pass ${pass} settles nothing`).toEqual([]);
+    }
+    expect(r.coord.openCloseRefusedItems().map((i) => i.id)).toEqual(after);
+  });
+
+  it('ending the programme abandoned gives its plan a reason, as the plan\'s own close requires', async () => {
+    const { r, itemId, programme } = await closeItem();
+    const res = await post(r, `/api/items/${itemId}/act`, { reason: 'replaced by other work', programme: 'abandoned' });
+    expect(res.statusCode, res.body).toBe(200);
+    const why = programme().planEndWhy;
+    expect(why).not.toBeNull();
+    expect(why!.trim()).not.toBe('');
+  });
+
   it('a run opened in the programme since the item was raised: the end is refused before anything is closed', async () => {
     const { r, id, itemId, program, programme } = await closeItem();
     const other = r.coord.openRun({ program, title: 'Wave 2', project: 'project-a', wave: 2, waveOf: 2, claimedBy: 'lane-gone' });

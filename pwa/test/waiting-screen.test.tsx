@@ -708,7 +708,7 @@ describe('the doors of a refused close (Task 27)', () => {
     open({ runs: [live], view: waitingView({ items: [refused(65, ['close-run', 'end-programme'])] }) });
     fireEvent.click(screen.getByRole('button', { name: 'Close this run' }));
     const dialog = await screen.findByRole('dialog');
-    expect((within(dialog).getByLabelText('Keep it open') as HTMLInputElement).checked).toBe(true);
+    expect((within(dialog).getByLabelText('Keep its plan open') as HTMLInputElement).checked).toBe(true);
     fireEvent.click(within(dialog).getByLabelText('Done elsewhere'));
     fireEvent.click(within(dialog).getByLabelText('End it: abandoned'));
     fireEvent.click(within(dialog).getAllByRole('button', { name: 'Close this run' }).at(-1)!);

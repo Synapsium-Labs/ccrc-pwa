@@ -174,7 +174,15 @@ export function routeRefusals(
     try {
       const ab = deps.abandonRefusal(r.run.id);
       const route = refusalRoute(r.reason, r.lives ? 'lives' : 'gone', ab === null, doorFactsOf(coord, r));
-      if (route.kind === 'item' || route.kind === 'tell-and-hold') doorsNow.set(r.run.id, route.doors);
+      const raises = route.kind === 'item' || route.kind === 'tell-and-hold';
+      // D-8558: one item per run per pass. A second item-raising reason of a run already routed this pass keeps its anchor and
+      // raises nothing: the first reason's doors are the run's, so the settle below never closes what the redraw would raise again.
+      if (raises && doorsNow.has(r.run.id)) {
+        const was = coord.runCloseAnchors(row).get(key);
+        coord.setRunCloseAnchor(row, key, { firstAt: was?.firstAt ?? now, lastAt: now });
+        continue;
+      }
+      if (raises) doorsNow.set(r.run.id, route.doors);
       const mine = coord.openCloseRefusedItems().filter((i) => i.runId === r.run.id && isCloseRefusedAction(i.action));
       const open = (route.kind === 'item' || route.kind === 'tell-and-hold')
         && mine.some((i) => isCloseRefusedAction(i.action) && sameDoors(i.action.doors, route.doors));

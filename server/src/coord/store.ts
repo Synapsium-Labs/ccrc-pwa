@@ -5289,12 +5289,13 @@ export class CoordStore {
     this.db.prepare('UPDATE programs SET state = ? WHERE slug = ?').run(state, slug);
   }
 
-  /** D-8558: can the programme still take a run: its row is not retired (`done`/`abandoned`) and its plan is not closed. A
-   *  programme with no row cannot. The refused-close lane asks it before offering "Hand to a coordinator". */
+  /** D-8558: can the programme still take a run: its row is present and its plan is not closed (`planEnd` null), the one fact
+   *  that stops a run attaching (`attachTicketInTx`'s `plan-closed`). NOT `programs.state`: the close retires it whenever the
+   *  open-run count reaches 0 (D-51) and `openRun` never sets it back, so a programme whose next wave is open can still read
+   *  `done`. A programme with no row cannot. The refused-close lane asks it before offering "Hand to a coordinator". */
   programmeLive(slug: string): boolean {
-    const r = this.db.prepare('SELECT state, planEnd FROM programs WHERE slug = ?').get(slug) as
-      { state: string; planEnd: string | null } | undefined;
-    return r !== undefined && r.state !== 'done' && r.state !== 'abandoned' && r.planEnd === null;
+    const r = this.db.prepare('SELECT planEnd FROM programs WHERE slug = ?').get(slug) as { planEnd: string | null } | undefined;
+    return r !== undefined && r.planEnd === null;
   }
 
   /** Count of this program's runs still in a NON-terminal state — the
