@@ -249,6 +249,89 @@ describe('an invited reply (#2726 (a))', () => {
     expect((await send(app, { ...REPLY, subject: 'the answer', inReplyTo: q.delivery })).statusCode).toBe(202);
   });
 
+  it('review 1907 F1: two sessions trading answers stop at the bound; an invited reply never invites', async () => {
+    // Each invited reply spends one unasked (counted) mail, so the trade alternates invited and counted mails and
+    // stops when the counted side is refused: at most one invited reply per counted mail, all inside the pair bound.
+    const w = await sessions(); app = w.app;
+    let last = await ask(app, w.coord);
+    let from = 'demo-quiet-mesa';
+    let accepted = 1;   // the ask
+    let refused = false;
+    for (let i = 0; i < 20; i++) {
+      const to = from === 'demo-quiet-mesa' ? 'demo-calm-ridge' : 'demo-quiet-mesa';
+      const res = await send(app, { ...REPLY, fromId: from, toId: to, subject: `re ${i}`, inReplyTo: last.delivery });
+      if (res.statusCode === 429) { refused = true; break; }
+      expect(res.statusCode).toBe(202);
+      accepted++;
+      const mailId = (res.json() as { id: number }).id;
+      last = { mailId, delivery: deliveryOf(w.coord, mailId) };
+      from = to;
+    }
+    expect(refused).toBe(true);
+    expect(accepted).toBeLessThanOrEqual(2 * PEER_MAIL_MAX_OUTSTANDING);
+    const replyToReply = (w.coord.db.prepare('SELECT COUNT(*) AS n FROM mail r JOIN mail m ON m.id = r.answersMail ' +
+      'WHERE m.answersMail IS NOT NULL').get() as { n: number }).n;
+    expect(replyToReply).toBe(0);
+  });
+
+  it('review 1907 F1: a self-answer chain is bounded, and no mail to oneself invites', async () => {
+    const w = await sessions(); app = w.app;
+    const first = await send(app, { ...PEER, toId: 'demo-quiet-mesa', subject: 'note to self' });
+    expect(first.statusCode).toBe(202);
+    let delivery = deliveryOf(w.coord, (first.json() as { id: number }).id);
+    let refused = false;
+    for (let i = 0; i < 20; i++) {
+      const res = await send(app, { ...REPLY, toId: 'demo-quiet-mesa', subject: `self ${i}`, inReplyTo: delivery });
+      if (res.statusCode === 429) { refused = true; break; }
+      delivery = deliveryOf(w.coord, (res.json() as { id: number }).id);
+    }
+    expect(refused).toBe(true);
+    expect((w.coord.db.prepare('SELECT COUNT(*) AS n FROM mail WHERE answersMail IS NOT NULL').get() as { n: number }).n).toBe(0);
+  });
+
+  /** Moves the delivery sequence ahead of the mail sequence, as revived heirs and system mail do in production. */
+  const partIds = (coord: CoordStore, by: number): void => {
+    const { id } = coord.insertMail({ fromId: 'demo-third', fromUuid: UUID, toId: 'demo-third', runId: null,
+      kind: 'status', subject: 'filler', body: 'b', artifacts: [] });
+    for (let i = 0; i < by; i++) coord.queueDelivery(id, 'demo-third', '');
+  };
+
+  it('review 1907 F2: the column records the MAIL id when the delivery id has parted from it', async () => {
+    const w = await sessions('demo-third'); app = w.app;
+    partIds(w.coord, 5);
+    await fillPair(app);
+    const q = await ask(app, w.coord);
+    expect(q.delivery).not.toBe(q.mailId);
+    const res = await send(app, { ...REPLY, inReplyTo: q.delivery });
+    expect(res.statusCode).toBe(202);
+    expect(answersMail(w.coord, (res.json() as { id: number }).id)).toBe(q.mailId);
+  });
+
+  it('review 1907 F2: a second delivery of an answered mail buys no second reply', async () => {
+    const w = await sessions('demo-third'); app = w.app;
+    partIds(w.coord, 5);
+    await fillPair(app);
+    const q = await ask(app, w.coord);
+    expect((await send(app, { ...REPLY, inReplyTo: q.delivery })).statusCode).toBe(202);
+    const heir = w.coord.queueDelivery(q.mailId, 'demo-quiet-mesa', '').id;   // the shape a revived heir has
+    const again = await send(app, { ...REPLY, subject: 're: peer q, via the heir', inReplyTo: heir });
+    expect(again.statusCode).toBe(429);
+    expect(again.json()).toMatchObject({ detail: expect.stringContaining('already answered') });
+  });
+
+  it('review 1907 F2: a mail asked through the coordinator role is answered by the coordinator session', async () => {
+    const w = await sessions(); app = w.app;
+    w.coord.openRun({ program: 'build9b', title: 'role', project: 'demo', wave: 1, waveOf: 1, claimedBy: 'demo-quiet-mesa' });
+    await fillPair(app);
+    const res0 = await send(app, { ...ASKER, toId: 'coordinator', subject: 'to the chair' });
+    expect(res0.statusCode).toBe(202);
+    const mailId = (res0.json() as { id: number }).id;
+    expect((w.coord.db.prepare('SELECT toId FROM mail WHERE id = ?').get(mailId) as { toId: string }).toId).toBe('coordinator');
+    const res = await send(app, { ...REPLY, inReplyTo: deliveryOf(w.coord, mailId) });
+    expect(res.statusCode).toBe(202);
+    expect(answersMail(w.coord, (res.json() as { id: number }).id)).toBe(mailId);
+  });
+
   it.each([
     ['is not kind answer', 'status', 'asker', 'an invited reply is kind answer, not status'],
     ['answers a mail from a third session', 'answer', 'third-from', 'is not a mail from demo-calm-ridge'],

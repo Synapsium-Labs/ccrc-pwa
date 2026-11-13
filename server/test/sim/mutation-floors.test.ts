@@ -59,13 +59,16 @@ const PEER_SET: MutantSet<PeerBoundModule> = {
     { id: 'C3', old: 'if (inv.invitee !== f.fromId) return', new: 'if (false) return' },
     { id: 'C4', old: 'if (inv.inviter !== f.toId) return', new: 'if (false) return' },
     { id: 'C5', old: 'if (inv.answered) return', new: 'if (false) return' },
+    // Review 1907 F1: only an unasked mail invites, and never one to oneself.
+    { id: 'C6', old: 'if (inv.inviter === inv.invitee) return', new: 'if (false) return' },
+    { id: 'C7', old: 'if (inv.isReply) return', new: 'if (false) return' },
     { id: 'R1', old: "retry: { on: 'ack', toId: f.toId }", new: "retry: { on: 'ack', toId: f.fromId }" },
     { id: 'H1', old: 'const hint = inv.why !== null ? notInvited', new: 'const hint = inv.why === null ? notInvited' },
   ],
   suite(mod) {
     const NOW = 1_800_000_000_000;
     const HOUR = 3_600_000;
-    const INVITE = { mailId: 41, inviter: 'demo-calm-ridge', invitee: 'demo-quiet-mesa', answered: false };
+    const INVITE = { mailId: 41, inviter: 'demo-calm-ridge', invitee: 'demo-quiet-mesa', isReply: false, answered: false };
     type Facts = Parameters<PeerBoundModule['peerMailVerdict']>[0];
     const f = (over: Partial<Facts> = {}): Facts => ({ fromId: 'demo-quiet-mesa', toId: 'demo-calm-ridge',
       kind: 'question', inReplyTo: null, invitation: null, duplicate: false, outstanding: 0, hourAts: [], now: NOW, ...over });
@@ -85,6 +88,8 @@ const PEER_SET: MutantSet<PeerBoundModule> = {
       'not to the sender': () => { notInvited({ invitation: { ...INVITE, invitee: 'demo-b' } }); },
       'not from the recipient': () => { notInvited({ invitation: { ...INVITE, inviter: 'demo-b' } }); },
       'already answered': () => { notInvited({ invitation: { ...INVITE, answered: true } }); },
+      'a mail to oneself': () => { notInvited({ fromId: 'demo-calm-ridge', invitation: { ...INVITE, invitee: 'demo-calm-ridge' } }); },
+      'an invited reply': () => { notInvited({ invitation: { ...INVITE, isReply: true } }); },
       'pair retry names the recipient': () => { expect(v({ outstanding: 3 })['retry']).toEqual({ on: 'ack', toId: 'demo-calm-ridge' }); },
       'hour retry at the 12th newest': () => {
         const h = ats(13);

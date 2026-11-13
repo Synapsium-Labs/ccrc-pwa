@@ -18,6 +18,8 @@ export interface Invitation {
   readonly inviter: string;
   /** The session the delivery went to (`mail_deliveries.toId`). */
   readonly invitee: string;
+  /** The mail is itself an invited reply (`mail.answersMail` set): it invites nothing (review 1907 F1). */
+  readonly isReply: boolean;
   /** A mail is already recorded as this mail's invited reply. */
   readonly answered: boolean;
 }
@@ -52,13 +54,18 @@ export type PeerVerdict =
 
 /**
  * Whether the mail is the one invited reply to the mail its `inReplyTo` delivered (#2726 (a)), and if not, why not.
- * Invited iff all five hold: the delivery exists; the mail is kind `answer`; the delivery went to this mail's sender;
- * the delivered mail came from this mail's recipient; and no mail is recorded as its invited reply yet. `why` is null
- * when the body named no `inReplyTo`, so there is nothing to explain.
+ * Invited iff all seven hold: the delivery exists; the mail is kind `answer`; the delivery went to this mail's sender;
+ * the delivered mail came from this mail's recipient; the two are different sessions; the delivered mail is not
+ * itself an invited reply; and no mail is recorded as its invited reply yet. `why` is null when the body named no
+ * `inReplyTo`, so there is nothing to explain.
  *
- * WHY THIS IS SAFE TO LEAVE OUTSIDE THE BOUND: an invited reply cannot run away. Each one spends an invitation, a mail
- * the recipient itself chose to send, and each invitation buys one reply (`mail_answers_once`). A session can only
- * answer as often as it is asked, so the bound on unasked mail is untouched.
+ * WHY THIS IS SAFE TO LEAVE OUTSIDE THE BOUND: only an UNASKED mail invites (review 1907 F1). An invited reply is
+ * itself a mail from its sender to its recipient, so if it could invite, two sessions trading answers, or one session
+ * answering itself, would mail without limit and outside every arm. With this rule each invited reply spends one
+ * unasked mail, a mail the recipient chose to send, and each such mail buys one reply (`mail_answers_once`). Peer
+ * unasked mail is bounded by the arms below; run mail is dark and unbounded, but a session able to send it could
+ * already send unbounded run mail directly, so the one peer reply it buys adds no capacity. Delivery state is not read:
+ * a reply to a mail still queued is a reply, and the once-rule bounds it either way.
  */
 export function invitedReply(f: PeerFacts): { readonly invited: true; readonly mailId: number }
   | { readonly invited: false; readonly why: string | null } {
@@ -68,6 +75,8 @@ export function invitedReply(f: PeerFacts): { readonly invited: true; readonly m
   if (f.kind !== 'answer') return { invited: false, why: `an invited reply is kind answer, not ${f.kind}` };
   if (inv.invitee !== f.fromId) return { invited: false, why: `delivery ${f.inReplyTo} was not delivered to ${f.fromId}` };
   if (inv.inviter !== f.toId) return { invited: false, why: `delivery ${f.inReplyTo} is not a mail from ${f.toId}` };
+  if (inv.inviter === inv.invitee) return { invited: false, why: 'a mail to oneself is not an invitation' };
+  if (inv.isReply) return { invited: false, why: `the mail delivery ${f.inReplyTo} carries is itself an invited reply` };
   if (inv.answered) return { invited: false, why: `the mail delivery ${f.inReplyTo} carries is already answered` };
   return { invited: true, mailId: inv.mailId };
 }

@@ -7001,16 +7001,17 @@ export class CoordStore {
   }
 
   /** The delivery `deliveryId` names, read as an invitation to reply (#2726): the mail it carries, that mail's
-   *  sender, the session the delivery went to, and whether a mail is already recorded as that mail's invited reply.
+   *  sender, the session the delivery went to, whether that mail is itself an invited reply (it then invites nothing,
+   *  review 1907 F1), and whether a mail is already recorded as that mail's invited reply.
    *  Null when no delivery has that id. Whether it IS an invitation for a given reply is `peerMailVerdict`'s call. */
   invitation(deliveryId: number): Invitation | null {
     const row = this.db.prepare(
-      'SELECT m.id AS mailId, m.fromId AS inviter, d.toId AS invitee, ' +
+      'SELECT m.id AS mailId, m.fromId AS inviter, d.toId AS invitee, m.answersMail IS NOT NULL AS isReply, ' +
       'EXISTS (SELECT 1 FROM mail r WHERE r.answersMail = m.id) AS answered ' +
       'FROM mail_deliveries d JOIN mail m ON m.id = d.mailId WHERE d.id = ?',
-    ).get(deliveryId) as { mailId: number; inviter: string; invitee: string; answered: number } | undefined;
+    ).get(deliveryId) as { mailId: number; inviter: string; invitee: string; isReply: number; answered: number } | undefined;
     return row === undefined ? null
-      : { mailId: row.mailId, inviter: row.inviter, invitee: row.invitee, answered: row.answered !== 0 };
+      : { mailId: row.mailId, inviter: row.inviter, invitee: row.invitee, isReply: row.isReply !== 0, answered: row.answered !== 0 };
   }
 
   /** A new `queued` delivery. `revivedFrom` (D-5914, migration 40) is the parked delivery this one revives, written

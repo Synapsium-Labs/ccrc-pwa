@@ -25,7 +25,7 @@ describe('the store: invitations and the peer counts (#2726, schema 65)', () => 
   it('reads a delivery as an invitation: the mail it carries, who sent it, and who it went to', () => {
     const s = store();
     const q = mail(s, 'demo-a', 'demo-b');
-    expect(s.invitation(q.deliveryId)).toEqual({ mailId: q.mailId, inviter: 'demo-a', invitee: 'demo-b', answered: false });
+    expect(s.invitation(q.deliveryId)).toEqual({ mailId: q.mailId, inviter: 'demo-a', invitee: 'demo-b', isReply: false, answered: false });
     expect(s.invitation(999_999)).toBeNull();
   });
 
@@ -34,6 +34,13 @@ describe('the store: invitations and the peer counts (#2726, schema 65)', () => 
     const q = mail(s, 'demo-a', 'demo-b');
     mail(s, 'demo-b', 'demo-a', { answersMail: q.mailId });
     expect(s.invitation(q.deliveryId)).toMatchObject({ answered: true });
+  });
+
+  it('an invited reply read as an invitation says it is one, so it invites nothing (review 1907 F1)', () => {
+    const s = store();
+    const q = mail(s, 'demo-a', 'demo-b');
+    const a = mail(s, 'demo-b', 'demo-a', { answersMail: q.mailId });
+    expect(s.invitation(a.deliveryId)).toMatchObject({ mailId: a.mailId, isReply: true });
   });
 
   it('one invited reply per mail is a fact of the database: a second row answering the same mail is refused', () => {
@@ -116,7 +123,7 @@ describe('peerMailVerdict: an invited reply (#2726 (a))', () => {
   const NOW = 1_800_000_000_000;
   const full = { duplicate: true, outstanding: 3, hourAts: Array.from({ length: 12 }, (_, i) => NOW - 1_000 + i) };
   // demo-quiet-mesa answers demo-calm-ridge's mail 41, delivered to it as delivery 7.
-  const INVITE = { mailId: 41, inviter: 'demo-calm-ridge', invitee: 'demo-quiet-mesa', answered: false };
+  const INVITE = { mailId: 41, inviter: 'demo-calm-ridge', invitee: 'demo-quiet-mesa', isReply: false, answered: false };
   const reply = (over: Partial<PeerFacts> = {}): PeerFacts => ({
     fromId: 'demo-quiet-mesa', toId: 'demo-calm-ridge', kind: 'answer', inReplyTo: 7, invitation: INVITE,
     ...full, now: NOW, ...over,
@@ -131,6 +138,9 @@ describe('peerMailVerdict: an invited reply (#2726 (a))', () => {
     ['answers a delivery to someone else', { invitation: { ...INVITE, invitee: 'demo-b' } }, 'delivery 7 was not delivered to demo-quiet-mesa'],
     ['answers a mail from someone else', { invitation: { ...INVITE, inviter: 'demo-b' } }, 'delivery 7 is not a mail from demo-calm-ridge'],
     ['answers a mail already answered', { invitation: { ...INVITE, answered: true } }, 'the mail delivery 7 carries is already answered'],
+    ['answers an invited reply', { invitation: { ...INVITE, isReply: true } }, 'the mail delivery 7 carries is itself an invited reply'],
+    ['answers its own mail', { fromId: 'demo-calm-ridge', invitation: { ...INVITE, invitee: 'demo-calm-ridge' } },
+      'a mail to oneself is not an invitation'],
   ] as const)('not invited when it %s: bounded as any peer mail, and the refusal says why', (_w, over, why) => {
     const v = peerMailVerdict(reply({ duplicate: false, ...over }));
     expect(v.verdict).toBe('peer-quota');
