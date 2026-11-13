@@ -15,8 +15,12 @@ const ICONS = path.join(PWA, 'public', 'icons');
 type Rgb = [number, number, number];
 interface Png { width: number; height: number; px: Buffer }
 
-/** Width, height and RGBA of a PNG whose rows all use filter 0, which is all the generator writes. */
+/** Width, height and RGBA of a PNG whose rows all use filter 0, which is all the generator writes. Each file is
+ *  decoded once and shared by every case that reads it. */
+const DECODED = new Map<string, Png>();
 function readPng(file: string): Png {
+  const seen = DECODED.get(file);
+  if (seen !== undefined) return seen;
   const buf = readFileSync(path.join(ICONS, file));
   const width = buf.readUInt32BE(16);
   const height = buf.readUInt32BE(20);
@@ -33,7 +37,9 @@ function readPng(file: string): Png {
     expect(raw[y * (stride + 1)], `row ${y} filter`).toBe(0);
     raw.copy(px, y * stride, y * (stride + 1) + 1, (y + 1) * (stride + 1));
   }
-  return { width, height, px };
+  const png = { width, height, px };
+  DECODED.set(file, png);
+  return png;
 }
 const at = (p: Png, x: number, y: number): [number, number, number, number] => {
   const i = (y * p.width + x) * 4;
@@ -60,6 +66,17 @@ const INK = token('--ink-primary');
 const shade = (alpha: number, base: Rgb): Rgb => PAGE.map((c, i) => Math.round(c * alpha + base[i]! * (1 - alpha))) as Rgb;
 const key = (c: ArrayLike<number>): string => `${c[0]},${c[1]},${c[2]}`;
 
+/** The pixels a walk found wrong: every one counted, the first ten described. A walk asserts once at its end, not once
+ *  per pixel, which kept the per-pixel cases past vitest's 5 s timeout on a loaded merge-queue runner. */
+function misses(): { add: (what: string) => void; none: () => void } {
+  let count = 0;
+  const first: string[] = [];
+  return {
+    add: (what) => { count++; if (first.length < 10) first.push(what); },
+    none: () => { expect({ count, first }).toEqual({ count: 0, first: [] }); },
+  };
+}
+
 const grid = stillGrid(parseArt(readFileSync(path.join(REPO, 'docs', 'design', 'overlord', 'svg', 'orb-neutral.svg'), 'utf8')));
 
 interface Icon { file: string; size: number; scale: number; maskable: boolean; radius?: number; window?: [number, number, number, number] }
@@ -81,23 +98,25 @@ describe('the app icons', () => {
   });
 
   it('a maskable mark stays inside the safe zone', () => {
+    const bad = misses();
     for (const r of ICON_ROWS.filter((x) => x.maskable)) {
       const p = readPng(r.file);
       let marked = 0;
       for (let y = 0; y < p.height; y++) {
         for (let x = 0; x < p.width; x++) {
           const c = at(p, x, y);
-          expect(c[3], `${r.file} is full bleed`).toBe(255);
+          if (c[3] !== 255) bad.add(`${r.file} (${x},${y}) is not full bleed: alpha ${c[3]}`);
           if (key(c) === key(ACCENT)) continue;
           marked++;
           // the pixel's farthest corner from the centre
           const dx = Math.max(Math.abs(x - r.size / 2), Math.abs(x + 1 - r.size / 2));
           const dy = Math.max(Math.abs(y - r.size / 2), Math.abs(y + 1 - r.size / 2));
-          expect(Math.hypot(dx, dy), `${r.file} (${x},${y})`).toBeLessThanOrEqual(0.4 * r.size);
+          if (Math.hypot(dx, dy) > 0.4 * r.size) bad.add(`${r.file} (${x},${y}) is outside the safe zone`);
         }
       }
       expect(marked, r.file).toBeGreaterThan(0);
     }
+    bad.none();
   });
 
   it('the apple and favicon icons are opaque', () => {
@@ -114,15 +133,17 @@ describe('the app icons', () => {
       allowed.add(key(v));
       for (const a of [0.22, 0.3, 0.35]) allowed.add(key(shade(a, v)));
     }
+    const bad = misses();
     for (const r of ICON_ROWS) {
       const p = readPng(r.file);
       for (let y = 0; y < p.height; y++) {
         for (let x = 0; x < p.width; x++) {
           const c = at(p, x, y);
-          if (c[3] === 255) expect(allowed.has(key(c)), `${r.file} (${x},${y}) ${key(c)}`).toBe(true);
+          if (c[3] === 255 && !allowed.has(key(c))) bad.add(`${r.file} (${x},${y}) ${key(c)}`);
         }
       }
     }
+    bad.none();
   });
 
   it('each shaded cell composites over the colour that icon draws beneath it', () => {
@@ -161,6 +182,7 @@ describe('the app icons', () => {
   };
 
   it('every cell of every icon is the colour that icon draws there', () => {
+    const bad = misses();
     for (const r of ICON_ROWS) {
       const p = readPng(r.file);
       const [wx, wy, ww, wh] = r.window ?? [0, 0, 32, 32];
@@ -175,11 +197,12 @@ describe('the app icons', () => {
           const cx = Math.floor((x - ox) / r.scale);
           const cy = Math.floor((y - oy) / r.scale);
           const inside = x >= ox && y >= oy && cx < ww && cy < wh;
-          const want = inside ? cellColour(r, cells[cy]![cx]!) : ground;
-          expect(key(c), `${r.file} (${x},${y})${inside ? ` cell (${wx + cx},${wy + cy})` : ' ground'}`).toBe(key(want));
+          const want = key(inside ? cellColour(r, cells[cy]![cx]!) : ground);
+          if (key(c) !== want) bad.add(`${r.file} (${x},${y})${inside ? ` cell (${wx + cx},${wy + cy})` : ' ground'}: ${key(c)}, not ${want}`);
         }
       }
     }
+    bad.none();
   });
 
   it('an any icon is a rounded page-colour square: transparent corners, an opaque ground', () => {
