@@ -1,3 +1,4 @@
 {
-  "server/src/coord/stall.ts#stallCoordBlockedStep": 1
+  "server/src/coord/stall.ts#stallCoordBlockedStep": 1,
+  "server/src/roleOf.ts#roleFactsOf": 1
 }
