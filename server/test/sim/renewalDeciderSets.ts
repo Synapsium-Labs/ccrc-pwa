@@ -91,49 +91,59 @@ const ROLE_FACTS_SET: MutantSet<RoleOfModule> = {
 export type ObservedModule = typeof import('../../src/time/observed.js');
 
 export function observeTimeCases(m: ObservedModule): Record<string, SuiteCase> {
-  const { observeTime, observedSince } = m;
+  const CAP = 60_000;   // twice a 30 s lane's period
+  const step = (prev: import('../../src/time/observed.js').Observed | null, mono: number, proc: string): unknown =>
+    m.observeTime(prev, mono, proc, CAP);
   return {
-    'null starts at 0, anchored at the mono reading and the process': () => {
-      expect(observeTime(null, 5_000, 'p1')).toEqual({ ms: 0, mono: 5_000, proc: 'p1' });
+    'null starts at 0, anchored at the mono reading and the process, with no gap': () => {
+      expect(step(null, 5_000, 'p1')).toEqual({ at: { ms: 0, mono: 5_000, proc: 'p1' }, gap: null });
     },
     'the same process, forward: advances by the monotonic delta': () => {
-      const a = observeTime(null, 1_000, 'p1');
-      expect(observeTime(a, 4_500, 'p1')).toEqual({ ms: 3_500, mono: 4_500, proc: 'p1' });
-      expect(observeTime(observeTime(a, 4_500, 'p1'), 4_500, 'p1')).toEqual({ ms: 3_500, mono: 4_500, proc: 'p1' });
+      expect(step({ ms: 0, mono: 1_000, proc: 'p1' }, 4_500, 'p1')).toEqual({ at: { ms: 3_500, mono: 4_500, proc: 'p1' }, gap: null });
+      expect(step({ ms: 3_500, mono: 4_500, proc: 'p1' }, 4_500, 'p1')).toEqual({ at: { ms: 3_500, mono: 4_500, proc: 'p1' }, gap: null });
+      expect(step({ ms: 0, mono: 0, proc: 'p1' }, CAP, 'p1')).toEqual({ at: { ms: CAP, mono: CAP, proc: 'p1' }, gap: null });
     },
-    'a new process: no advance, re-anchored on the new reading': () => {
+    'a frozen process: a 10-minute delta advances by the cap only, and is a gap (observed-time-caps-one-step)': () => {
+      expect(step({ ms: 100, mono: 1_000, proc: 'p1' }, 1_000 + 600_000, 'p1'))
+        .toEqual({ at: { ms: 100 + CAP, mono: 601_000, proc: 'p1' }, gap: 'capped' });
+      expect(step({ ms: 0, mono: 0, proc: 'p1' }, CAP + 1, 'p1')).toEqual({ at: { ms: CAP, mono: CAP + 1, proc: 'p1' }, gap: 'capped' });
+    },
+    'a new process: no advance, re-anchored on the new reading, a gap': () => {
       const a = { ms: 10_000, mono: 90_000, proc: 'p1' };
-      expect(observeTime(a, 95_000, 'p2')).toEqual({ ms: 10_000, mono: 95_000, proc: 'p2' });
-      expect(observeTime(a, 200, 'p2')).toEqual({ ms: 10_000, mono: 200, proc: 'p2' });
+      expect(step(a, 95_000, 'p2')).toEqual({ at: { ms: 10_000, mono: 95_000, proc: 'p2' }, gap: 'new-process' });
+      expect(step(a, 200, 'p2')).toEqual({ at: { ms: 10_000, mono: 200, proc: 'p2' }, gap: 'new-process' });
     },
-    'mono backwards in one process: no advance, re-anchored': () => {
-      expect(observeTime({ ms: 7, mono: 50, proc: 'p1' }, 40, 'p1')).toEqual({ ms: 7, mono: 40, proc: 'p1' });
+    'mono backwards in one process: no advance, re-anchored, a gap': () => {
+      expect(step({ ms: 7, mono: 50, proc: 'p1' }, 40, 'p1')).toEqual({ at: { ms: 7, mono: 40, proc: 'p1' }, gap: 'backwards' });
     },
     'a mono that is not a number never advances, and the next reading re-anchors': () => {
-      const a = observeTime({ ms: 7, mono: 50, proc: 'p1' }, Number.NaN, 'p1');
-      expect(a.ms).toBe(7);
-      expect(observeTime(a, 80, 'p1').ms).toBe(7);
+      const a = m.observeTime({ ms: 7, mono: 50, proc: 'p1' }, Number.NaN, 'p1', CAP);
+      expect([a.at.ms, a.gap]).toEqual([7, 'backwards']);
+      expect(m.observeTime(a.at, 80, 'p1', CAP).at.ms).toBe(7);
     },
     'observedSince counts the observed milliseconds between two stamps, never below 0': () => {
-      const s = { ms: 1_000, mono: 0, proc: 'p1' };
-      expect(observedSince(s, { ms: 4_000, mono: 3_000, proc: 'p1' })).toBe(3_000);
-      expect(observedSince(s, { ms: 1_000, mono: 9, proc: 'p2' })).toBe(0);
-      expect(observedSince({ ms: 5_000, mono: 0, proc: 'p1' }, s)).toBe(0);
+      const s0 = { ms: 1_000, mono: 0, proc: 'p1' };
+      expect(m.observedSince(s0, { ms: 4_000, mono: 3_000, proc: 'p1' })).toBe(3_000);
+      expect(m.observedSince(s0, { ms: 1_000, mono: 9, proc: 'p2' })).toBe(0);
+      expect(m.observedSince({ ms: 5_000, mono: 0, proc: 'p1' }, s0)).toBe(0);
     },
-    'PROPERTY (1,000 seeded runs): ms never decreases and never exceeds the in-process forward deltas': () => {
+    'PROPERTY (1,000 seeded runs): ms never decreases and never exceeds the in-process forward deltas, each capped': () => {
       for (let seed = 1; seed <= 1_000; seed++) {
         const r = mulberry32(seed);
-        let proc = 'p0'; let mono = Math.floor(r() * 1e6); let o = observeTime(null, mono, proc); let bound = 0; let pnum = 0;
+        let proc = 'p0'; let mono = Math.floor(r() * 1e6); let o = m.observeTime(null, mono, proc, CAP).at; let bound = 0; let pnum = 0;
         for (let k = 0; k < 40; k++) {
           const x = r();
           const prev = o; const prevMono = mono; const prevProc = proc;
           if (x < 0.15) { proc = `p${++pnum}`; mono = Math.floor(r() * 1e6); }
           else if (x < 0.25) mono = Math.max(0, mono - Math.floor(r() * 5_000));
+          else if (x < 0.35) mono += 60_000 + Math.floor(r() * 3_600_000);   // a freeze
           else mono += Math.floor(r() * 100_000);
-          if (proc === prevProc && mono >= prevMono) bound += mono - prevMono;
-          o = observeTime(prev, mono, proc);
+          if (proc === prevProc && mono >= prevMono) bound += Math.min(CAP, mono - prevMono);
+          const st = m.observeTime(prev, mono, proc, CAP);
+          o = st.at;
           if (o.ms < prev.ms) throw new Error(`seed ${seed} step ${k}: ms fell from ${prev.ms} to ${o.ms}`);
-          if (o.ms > bound) throw new Error(`seed ${seed} step ${k}: ms ${o.ms} exceeds the forward deltas ${bound}`);
+          if (o.ms > bound) throw new Error(`seed ${seed} step ${k}: ms ${o.ms} exceeds the capped forward deltas ${bound}`);
+          if (o.ms - prev.ms > CAP) throw new Error(`seed ${seed} step ${k}: one step advanced ${o.ms - prev.ms}, past the cap`);
           if (o.mono !== mono || o.proc !== proc) throw new Error(`seed ${seed} step ${k}: not re-anchored on the reading`);
         }
       }
@@ -144,11 +154,13 @@ export function observeTimeCases(m: ObservedModule): Record<string, SuiteCase> {
 const OBSERVED_SET: MutantSet<ObservedModule> = {
   modulePath: path.join(ROOT, 'server/src/time/observed.ts'),
   mutants: [
-    { id: 'O1', old: 'prev.proc === proc && mono >= prev.mono', new: 'mono >= prev.mono' },
-    { id: 'O2', old: 'prev.proc === proc && mono >= prev.mono', new: 'prev.proc === proc' },
-    { id: 'O3', old: 'if (prev === null) return { ms: 0, mono, proc };', new: 'if (prev === null) return { ms: mono, mono, proc };' },
+    { id: 'O1', old: "if (prev.proc !== proc) return { at: { ms: prev.ms, mono, proc }, gap: 'new-process' };", new: '' },
+    { id: 'O2', old: "if (!(mono >= prev.mono)) return { at: { ms: prev.ms, mono, proc }, gap: 'backwards' };", new: '' },
+    { id: 'O3', old: 'if (prev === null) return { at: { ms: 0, mono, proc }, gap: null };', new: 'if (prev === null) return { at: { ms: mono, mono, proc }, gap: null };' },
     { id: 'O4', old: 'Math.max(0, now.ms - start.ms)', new: 'now.ms - start.ms' },
-    { id: 'O5', old: 'return { ms: prev.ms, mono, proc };', new: 'return prev;' },
+    { id: 'O5', old: "return { at: { ms: prev.ms, mono, proc }, gap: 'new-process' };", new: "return { at: prev, gap: 'new-process' };" },
+    { id: 'O6', old: 'const step = Math.min(delta, Math.max(0, capMs));', new: 'const step = delta;' },
+    { id: 'O7', old: "gap: step < delta ? 'capped' : null", new: 'gap: null' },
   ],
   suite: observeTimeCases,
 };

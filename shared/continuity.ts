@@ -113,3 +113,9 @@ export const WAVE_BOUNDARY_FLOOR_FRACTION = 0.25;
 export const RESUMED_LONG_FRACTION = 0.5;
 /** R19, "Renew on schedule": a soft trigger waits at most this long for a break. */
 export const ON_SCHEDULE_WAIT_MS = 1_800_000;
+/** The renewal lane's period, the one the lane that advances the generations' observed time runs at. Its LANE_SCHEDULE
+ *  row (the generations piece) reads it from here. A starting value. */
+export const RENEWAL_LANE_PERIOD_MS = 30_000;
+/** One observed-time step advances by at most twice the advancing lane's period (slug observed-time-caps-one-step):
+ *  a longer monotonic delta is a freeze, and counts as a gap. */
+export const OBSERVED_STEP_CAP_MS = 2 * RENEWAL_LANE_PERIOD_MS;
