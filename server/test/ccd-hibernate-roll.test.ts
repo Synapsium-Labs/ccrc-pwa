@@ -361,3 +361,118 @@ describe('ccd hibernate --roll: one verb sleeps and wakes (D-7458)', () => {
     expect(h.sh('cmd_caps').split('\n')).toContain('hibernate-roll');
   });
 });
+
+/**
+ * The fresh start (overlord W1a; spec 2026-11-09 §3.3.11 H13): `ccd hibernate --roll --fresh <id>` is the roll whose wake
+ * starts a NEW conversation under the same session id. The roll mints a uuid, writes it as the row's uuid and names it
+ * in `$REG/<id>.fresh`; every spawn of that uuid before its transcript exists is `--session-id`, never `--resume`. It is
+ * a mode of the roll, so it has every refusal and exit code `--roll` has.
+ *
+ * These rows run the REAL `cmd_ensure` and the REAL `_spawn_start`, on the no-systemd fallback (the unsupervised spawn
+ * computes the mode in this process, as the unit's own `cmd_ensure` does in its), with the settle stubbed: tmux logs the
+ * composed `new-session` line, which is the spawn's argv.
+ */
+describe('ccd hibernate --roll --fresh: the roll whose wake starts a fresh conversation (overlord W1a)', () => {
+  const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+  const REAL = STUBS.replace(/^\s*cmd_ensure\(\).*$/m, '');
+  const SPAWNS = '_have_systemctl() { return 1; }; _spawn_settle() { return 0; };';
+  const news = (): string[] => calls().filter((l) => /^tmux new-session/.test(l));
+  const uuidNow = (): string => fs.readFileSync(regPath('uuid'), 'utf8').trim();
+  const claimed = (): void => { idle(); h.sh(`_reg_claim ${ID}`); };
+  const fresh = (flags = '--roll --fresh', extra = ''): { rc: number; err: string; out: string } =>
+    run(`${flags} --surface agent --actor 'sweep:renew' ${ID}`, `${SPAWNS} ${extra}`, REAL);
+
+  it('control: the same fixture under a plain --roll resumes the old uuid', () => {
+    claimed();
+    const r = run(`--roll --surface agent --actor 'sweep:roll' ${ID}`, SPAWNS, REAL);
+    expect(r.rc, r.err).toBe(0);
+    expect(news()[0]).toContain(`--resume '${UUID}'`);
+  });
+
+  it('wakes with --session-id of a NEW uuid, never --resume; the registry names it and started stays 1', () => {
+    claimed();
+    const r = fresh();
+    expect(r.rc, r.err).toBe(0);
+    expect(r.out).toContain(`rolled ${ID}`);
+    const u2 = uuidNow();
+    expect(u2).toMatch(UUID_RE);
+    expect(u2).not.toBe(UUID);
+    expect(news(), 'one spawn').toHaveLength(1);
+    expect(news()[0]).toContain(`--session-id '${u2}'`);
+    expect(news()[0]).not.toContain('--resume');
+    expect(fs.readFileSync(regPath('fresh'), 'utf8').trim()).toBe(u2);
+    expect(fs.readFileSync(regPath('started'), 'utf8').trim()).toBe('1');
+    expect(eventsOf(h.home, 'hibernate'), 'ONE deliberate act').toHaveLength(1);
+  });
+
+  it('a spawn that did not come up is retried by the unit with the SAME new uuid, still --session-id, never a third', () => {
+    claimed();
+    expect(fresh().rc).toBe(0);
+    const u2 = uuidNow();
+    // The unit's restart re-enters cmd_ensure; the pane never came up, so no transcript stands for u2.
+    h.sh(`${REAL} ${SPAWNS} ( cmd_ensure ${ID} ) >/dev/null 2>&1`, { TMUX: '' });
+    expect(news()).toHaveLength(2);
+    expect(news()[1]).toContain(`--session-id '${u2}'`);
+    expect(news()[1]).not.toContain('--resume');
+    expect(uuidNow()).toBe(u2);
+  });
+
+  it('once the new conversation has a transcript, a later spawn resumes it as any other', () => {
+    claimed();
+    expect(fresh().rc).toBe(0);
+    const u2 = uuidNow();
+    const t = h.sh(`_transcript_path ${ID}`);
+    expect(t.endsWith(`${u2}.jsonl`)).toBe(true);
+    fs.mkdirSync(path.dirname(t), { recursive: true });
+    fs.writeFileSync(t, '{}\n');
+    h.sh(`${REAL} ${SPAWNS} ( cmd_ensure ${ID} ) >/dev/null 2>&1`, { TMUX: '' });
+    expect(news()[1]).toContain(`--resume '${u2}'`);
+  });
+
+  it('--fresh without --roll dies with the usage line and touches nothing', () => {
+    claimed();
+    const r = fresh(`--fresh`);
+    expect(r.rc).toBe(1);
+    expect(r.err).toContain('usage: ccd hibernate');
+    expect(has('hibernated')).toBe(false);
+    expect(has('fresh')).toBe(false);
+    expect(killAt()).toBe(-1);
+    expect(uuidNow()).toBe(UUID);
+  });
+
+  it('--fresh takes no value', () => {
+    claimed();
+    const r = fresh(`--roll --fresh=x`);
+    expect(r.rc).toBe(1);
+    expect(r.err).toContain('usage: ccd hibernate');
+    expect(has('hibernated')).toBe(false);
+    expect(uuidNow()).toBe(UUID);
+  });
+
+  it.each([
+    ['.no-roll', 'opted-out', () => { fs.writeFileSync(regPath('no-roll'), ''); }],
+    ['busy', 'busy', () => { live('busy'); }],
+    ['a hold', 'held', () => { fs.writeFileSync(regPath('hold'), 'keep'); }],
+  ])('%s refuses %s at exit 3, as --roll does, and the uuid is unchanged', (_name, reason, set) => {
+    claimed();
+    set();
+    const r = fresh();
+    expect(r.rc, r.err).toBe(3);
+    expect(r.err).toContain(`ccd: session-busy: ${reason}`);
+    expect(has('hibernated')).toBe(false);
+    expect(has('fresh')).toBe(false);
+    expect(news()).toEqual([]);
+    expect(uuidNow()).toBe(UUID);
+  });
+
+  it('a failed wake exits 4 with roll-wake-failed, as --roll, and the row keeps its old uuid', () => {
+    claimed();
+    fs.writeFileSync(path.join(h.home, 'wake-fails'), '');
+    const r = run(`--roll --fresh --surface agent --actor 'sweep:renew' ${ID}`);
+    expect(r.rc).toBe(4);
+    expect(r.err).toMatch(/ccd: roll-wake-failed — .* exited 5/);
+    expect(r.out).not.toContain('rolled');
+    expect(has('hibernated')).toBe(true);
+    expect(uuidNow(), 'the old conversation is what mail wakes').toBe(UUID);
+  });
+});

@@ -26296,6 +26296,16 @@ _ws_tmproot_witness_write() {   # id leaf run -> 0 written or already current | 
 # bare pattern ACCEPTS `²`, `½`, `٣` and `१` — none a run id any server composed.
 _child_runid_valid() { local LC_ALL=C; [[ "${1-}" =~ ^[1-9][0-9]{0,9}$ ]]; }   # value -> 0 iff it is a legal --child run id
 
+_spawn_mode() {   # id -> `new` or `resume`: what a spawn of the row passes Claude Code (`--session-id` or `--resume`). A reader.
+  # `new` until the row is claimed (`started`), then `resume`, except a FRESH START (`cmd_hibernate --roll --fresh`, spec
+  # 2026-11-09 §3.3.11 H13): while `$REG/<id>.fresh` names the row's uuid and no transcript stands for it, every spawn of
+  # it (the roll's wake, the unit's restart) is `new`, never a `--resume` of a conversation that does not exist. Once
+  # its transcript exists the marker is spent, and a stale one (any other uuid) is ignored, so nothing need clear it.
+  local f u
+  [[ "$(_reg_get "$1" started)" == 1 ]] || { echo new; return 0; }
+  f=$(_reg_get "$1" fresh); u=$(_reg_get "$1" uuid)
+  if [[ -n "$f" && "$f" == "$u" && ! -e "$(_transcript_path "$1")" ]]; then echo new; else echo resume; fi
+}
 _spawn_start() {   # id mode(new|resume) -> creates the tmux session, sets SPAWN_FROMSWAP. NEVER WAITS ON THE TUI.
                    # (One bounded exception, `resume` only: SPAWN_RESUME_SETTLE_S before
                    #  the --session-id retry below. The 15-minute wait stays in _spawn_settle.)
@@ -27339,7 +27349,7 @@ _supervised_start() {   # id — ask the UNIT to spawn, then WAIT for an observa
     # construction — that is what "UNSUPERVISED" in the warning above means —
     # so the claim is the only write there is to get in front of the block.
     # No `$( )` around `_spawn_start`: its `die` must stay process-fatal.
-    local mode=new; [[ "$(_reg_get "$id" started)" == "1" ]] && mode=resume
+    local mode; mode=$(_spawn_mode "$id")
     _spawn_start "$id" "$mode" || return $?
     _reg_claim "$id"
     _spawn_settle "$id" "$SPAWN_FROMSWAP"; rc=$?
@@ -27354,7 +27364,7 @@ _supervised_start() {   # id — ask the UNIT to spawn, then WAIT for an observa
     # The same split, for the same reason as the no-systemctl fallback above:
     # this is the OTHER box that cannot recover on its own, so leaving a live
     # pane no row claims is worse here than anywhere else.
-    local mode=new; [[ "$(_reg_get "$id" started)" == "1" ]] && mode=resume
+    local mode; mode=$(_spawn_mode "$id")
     _spawn_start "$id" "$mode" || return $?
     _reg_claim "$id"
     _spawn_settle "$id" "$SPAWN_FROMSWAP"; rc=$?
@@ -27798,7 +27808,7 @@ cmd_start() {   # <id>  |  <wrapper> <project> [workdir]
   # already pinned home to this wrapper, so the marker's account clause is
   # satisfied by BOTH `wrapper` and `home` from the first tick onward.
   [[ "$prc" -eq 1 && -n "$cross" && -z "$regw" ]] && _crosspool_mark "$id" "${pps#named }" "$wrapper"
-  local mode=new; [[ "$(_reg_get "$id" started)" == "1" ]] && mode=resume
+  local mode; mode=$(_spawn_mode "$id")
   # A deliberate revival supersedes a refused swap's banner: `ccd start <id>`
   # is the human act §4.4 names as "what would bring this back" (whether typed
   # directly or reached via the two-argument form once the registry has
@@ -28015,7 +28025,7 @@ cmd_ensure() {   # id — idempotent; used by systemd. arg is the id directly.
   # wrapper for a uuid whose session-env directory already exists (measured on
   # the live orphan). With `started` written at session-creation time — which is
   # what the split below finally makes true on every path — it picks `resume`.
-  local mode=new; [[ "$(_reg_get "$id" started)" == "1" ]] && mode=resume
+  local mode; mode=$(_spawn_mode "$id")
   # SPLIT, and NO `_ws_supervise` on this branch: see cmd_start's matching
   # comment. The settle takes two positionals and no more — the bound rides
   # `CCD_SETTLE_BOUND`, because a third one here would be `cmd_ensure`'s second
@@ -32551,13 +32561,19 @@ cmd_hibernate() {   # [--roll] [--surface <word>] [--actor <text>] [--reason <te
   # nothing was rolled and no wake is tried. The deliberate act is ONE journal row, `hibernate`, its declared reason defaulted to `roll` (the wake's
   # `ensure` rows are the unit's own, as on every wake). It takes no value and, like `--hold-ok`, is not on the usage
   # line, which is pinned. `ccd caps` says `hibernate-roll`.
+  # `--fresh` (spec 2026-11-09 §3.3.11 H13, the renewal's adapter): a mode of `--roll`, refused without it, so it has every
+  # refusal and exit code the roll has. Before the wake it mints a uuid, writes it as the row's and names it in
+  # `$REG/<id>.fresh`, so the wake (in the unit's own process) starts a new conversation under the same session id
+  # (`_spawn_mode`). A failed wake (exit 4) puts the old uuid back with the row. `ccd caps` says `hibernate-fresh`.
   local usage="usage: ccd hibernate [--surface <word>] [--actor <text>] [--reason <text>] <id>"
   local lc_gh=0 lc_holdok=''   # `--hold-ok <text>` (D-6091)
-  local lc_roll=0
+  local lc_roll=0 lc_fresh=0 lc_u1='' lc_u2=''
   while (( $# )); do
     case "$1" in
       --roll)      lc_roll=1; shift ;;
       --roll=*)    die "$usage" ;;
+      --fresh)     lc_fresh=1; shift ;;
+      --fresh=*)   die "$usage" ;;
       --surface)   [[ $# -ge 2 && $2 != -* ]] || die "$usage"; lc_gs=1; lc_surface="$2"; shift 2 ;;
       --surface=*) [[ ${1#--surface=} != -* ]] || die "$usage"; lc_gs=1; lc_surface="${1#--surface=}"; shift ;;
       --actor)     [[ $# -ge 2 && $2 != -* ]] || die "$usage"; lc_ga=1; lc_actor="$2"; shift 2 ;;
@@ -32584,6 +32600,7 @@ cmd_hibernate() {   # [--roll] [--surface <word>] [--actor <text>] [--reason <te
     [[ -n "${lc_reason//[[:space:]]/}" ]] || die "--reason must be non-blank"
     _lc_dec_ok "$lc_reason" || die "--reason is longer than $_LC_DEC_MAX bytes"
   fi
+  (( lc_fresh && ! lc_roll )) && die "$usage"   # a fresh start is a mode of the roll
   (( lc_roll && ! lc_gr )) && lc_reason=roll   # the roll names itself on its one journal row
   [[ $# -eq 1 ]] || die "$usage"
   local id="$1"
@@ -32679,7 +32696,12 @@ cmd_hibernate() {   # [--roll] [--surface <word>] [--actor <text>] [--reason <te
   #    `.woke` is read first: the wake stamps it, and a wake that failed did not wake anything (below).
   local wrc=0 lc_woke='' lc_had_woke=0
   if [[ -e "$REG/$id.woke" || -L "$REG/$id.woke" ]]; then lc_had_woke=1; IFS= read -r lc_woke < "$REG/$id.woke" 2>/dev/null || true; fi
-  ( cmd_ensure "$id" ) || wrc=$?
+  if (( lc_fresh )); then   # the marker first: a uuid written without it would still resume (`_spawn_mode`), never the reverse
+    _reg_get_to lc_u1 "$id" uuid; lc_u2=$(_plat_uuid)
+    _reg_set "$id" fresh "$lc_u2" && _reg_set "$id" uuid "$lc_u2" || wrc=$?
+    echo "$(date '+%F %T') hibernate $id: fresh start, uuid $lc_u1 -> $lc_u2 (rc $wrc)" >> "$REG/swap.log"
+  fi
+  (( wrc )) || ( cmd_ensure "$id" ) || wrc=$?
   if (( wrc != 0 )); then
     # Back to sleep, in the act's own order: the marker first, then the unit, then a pane the unit may have raised late.
     # A unit that could not be stopped again is not the sanctioned hibernated row (a Restart=always unit retries it), so
@@ -32698,6 +32720,7 @@ cmd_hibernate() {   # [--roll] [--surface <word>] [--actor <text>] [--reason <te
       # The `.woke` stamp `cmd_ensure` wrote goes back to what stood before it: nothing woke, so it must neither hold
       # the auto-swap's cooldown (`_standdown_note … woke`) nor read as fresh activity to the stale-archive lane.
       if (( lc_had_woke )); then _reg_set "$id" woke "$lc_woke" || true; else rm -f -- "$REG/$id.woke"; fi
+      [[ -n "$lc_u1" ]] && { _reg_set "$id" uuid "$lc_u1" || true; }   # a fresh start that did not wake keeps the old conversation
       echo "$(date '+%F %T') hibernate $id: roll wake failed (rc $wrc), back to sleep" >> "$REG/swap.log"
       echo "ccd: roll-wake-failed — $id was hibernated and its wake exited $wrc; it was put back to sleep (hibernated, unit stopped), and mail, an open screen or ccd ensure wakes it" >&2
       exit 4

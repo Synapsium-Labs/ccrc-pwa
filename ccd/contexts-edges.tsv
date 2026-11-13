@@ -152,6 +152,8 @@ _session_hard_blocked -> _pane_measurable
 _session_hard_blocked -> _tmux_t
 _session_probe -> _tmux_t
 _session_state -> _sup_fresh
+_spawn_mode -> _reg_get
+_spawn_mode -> _transcript_path
 _spawn_settle -> _accept_first_run_prompts
 _spawn_settle -> _authdead_clear_on_spawn
 _spawn_settle -> _lc_done
@@ -391,8 +393,8 @@ cmd_ensure -> _compact_lock_release
 cmd_ensure -> _lc_done
 cmd_ensure -> _reg_claim
 cmd_ensure -> _reg_generation_init
-cmd_ensure -> _reg_get
 cmd_ensure -> _resupervise_live
+cmd_ensure -> _spawn_mode
 cmd_ensure -> _spawn_settle
 cmd_ensure -> _spawn_start
 cmd_ensure -> _strand_clear
