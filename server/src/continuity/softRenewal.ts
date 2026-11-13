@@ -13,17 +13,22 @@ import {
 } from '../../../shared/continuity.js';
 import { RENEWAL_ROWS, type Reading, type RenewalInputs } from './renewalDue.js';
 
+/** A soft input: measured, unmeasured, or not applicable to this role (a role that has no Overlord place, or whose
+ *  reader wait the hold table answers). Not applicable is never unmeasured: it neither blocks nor fires (I7). */
+export type SoftReading<T> = Reading<T> | { readonly kind: 'not-applicable' };
+
 export interface SoftInputs {
   readonly role: FleetRole;
   /** `hibernateVerdict`'s answer: the turn finished, no background or scheduled task, no menu or dialog. */
   readonly hibernateHold: { readonly held: false } | { readonly held: true; readonly reason: string };
-  /** Readers running, from the hook's subagent start and stop reports. */
-  readonly readersRunning: Reading<number>;
-  /** How long since the operator's last activity: the Overlord's last operator message (W1); for a coordinator, the
-   *  age of the operator-at-programme mark. */
-  readonly lastOperatorActivityMs: Reading<number>;
-  /** Overlord: how long no Overlord place has been visible (W1's console report). Unmeasured for other roles. */
-  readonly placeHiddenForMs: Reading<number>;
+  /** Readers running, from the hook's subagent start and stop reports. Not applicable where the hold table answers the
+   *  reader wait (a coordinator in W1a). */
+  readonly readersRunning: SoftReading<number>;
+  /** Observed time since the operator's last activity: the Overlord's last operator message (W1); for a coordinator,
+   *  the age of the operator-at-programme mark. */
+  readonly operatorQuietObservedMs: SoftReading<number>;
+  /** Overlord: observed time with no Overlord place visible (W1's console report). Not applicable to other roles. */
+  readonly placeHiddenObservedMs: SoftReading<number>;
   /** The Setting (R19): renew when I'm away (the default), or on schedule. */
   readonly mode: 'when-away' | 'on-schedule';
   /** How long the soft trigger has waited, observed. */
@@ -44,33 +49,32 @@ export type SoftAnswer = { readonly start: true } | { readonly start: false; rea
 const wait = (waitFor: SoftWait): SoftAnswer => ({ start: false, waitFor });
 const START: SoftAnswer = { start: true };
 
-/** A measured value, or null when unmeasured. A value that is not a number fails every `>=` below, so it never clears
- *  a wait. */
-const valueOf = (r: Reading<number>): number | null => (r.kind === 'measured' ? r.value : null);
-
-/** A break (R19): no operator message for 20 minutes, or no visible place for five. Either measured fact suffices;
- *  null when neither holds and one of them is unmeasured. Quiet hours join in W3, with their Setting. */
-function isBreak(i: SoftInputs): boolean | null {
-  const quiet = valueOf(i.lastOperatorActivityMs);
-  const hidden = valueOf(i.placeHiddenForMs);
-  if ((quiet !== null && quiet >= BREAK_NO_MESSAGE_MS) || (hidden !== null && hidden >= BREAK_PLACE_HIDDEN_MS)) return true;
-  return quiet === null || hidden === null ? null : false;
+/** A break (R19): no operator message for 20 minutes, or no visible place for five, both in observed time. Any
+ *  measured disjunct that passes is a break; an input the role does not have neither blocks nor fires. 'unmeasured'
+ *  when no measured disjunct passes and an applicable one is unmeasured. Quiet hours join in W3, with their Setting. A
+ *  value that is not a number fails `>=`, so it never makes a break. */
+function breakOf(i: SoftInputs): boolean | 'unmeasured' {
+  const parts: Array<[SoftReading<number>, number]> = [
+    [i.operatorQuietObservedMs, BREAK_NO_MESSAGE_MS], [i.placeHiddenObservedMs, BREAK_PLACE_HIDDEN_MS]];
+  if (parts.some(([r, t]) => r.kind === 'measured' && r.value >= t)) return true;
+  return parts.some(([r]) => r.kind === 'unmeasured') ? 'unmeasured' : false;
 }
 
-/** May a soft renewal start now? The waits, first match: least age, hold-off, budget, the Overlord first, the hold
- *  table, readers, then the break. In `on-schedule` mode a trigger that has waited 30 minutes skips the break only. */
+/** May a soft renewal start now? The waits, first match: least age, hold-off, budget, the Overlord first, then the
+ *  preconditions: the hold table, readers, the break. In `on-schedule` mode a trigger that has waited 30 minutes is no
+ *  longer delayed by the preconditions (Appendix B: "the preconditions, at most 30 minutes"). */
 export function softRenewalMay(i: SoftInputs): SoftAnswer {
   if (!(i.generationAgeObservedMs >= LEAST_AGE_MS)) return wait('least-age');
   if (i.holdOffUntilObservedMs !== null && !(i.generationAgeObservedMs >= i.holdOffUntilObservedMs)) return wait('hold-off');
   if (!(i.softRenewalsInWindow < SOFT_BUDGET.count)) return wait('budget');
   if (i.role !== 'overlord' && i.overlordOutsideActive) return wait('overlord-first');
-  if (i.hibernateHold.held) return wait('hold');
-  const readers = valueOf(i.readersRunning);
-  if (readers === null) return wait('unmeasured');
-  if (!(readers <= 0)) return wait('readers');
   if (i.mode === 'on-schedule' && i.dueSinceObservedMs >= ON_SCHEDULE_WAIT_MS) return START;
-  const away = isBreak(i);
-  if (away === null) return wait('unmeasured');
+  if (i.hibernateHold.held) return wait('hold');
+  const readers = i.readersRunning;
+  if (readers.kind === 'unmeasured') return wait('unmeasured');
+  if (readers.kind === 'measured' && !(readers.value <= 0)) return wait('readers');
+  const away = breakOf(i);
+  if (away === 'unmeasured') return wait('unmeasured');
   return away ? START : wait('no-break');
 }
 
