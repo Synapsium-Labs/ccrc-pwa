@@ -137,6 +137,18 @@ describe('stage 3 reads the manifest lines', () => {
     expect(r.manifests_by_site_verdict).toEqual({ 'swap/listed': 2, 'limit-resume/none': 1, 'revival/unmeasured': 1, 'revival/not-applicable': 1 });
   });
 
+  it('a manifest line with trailing text after its ended line is malformed and pairs with nothing: the counter and the event parse both fullmatch', () => {
+    const log = write([
+      EL('2026-11-05 10:00:00', 'p', 'swap-manual'),
+      ML('2026-11-05 10:00:01', 'p', 'swap', tokens('listed', '-', '-', { items: 1, 'in-flight': 1 })) + ' trailing',   // a valid line with a tail: only a prefix match takes it
+    ]);
+    const r = mrun(['--swap-log', log, '--since', '2026-11-05 09:30', '--until', '2026-11-05 11:00'], UTC);
+    expect(r.malformed_lines).toBe(1);
+    expect(r.manifests_by_site_verdict).toEqual({});
+    expect(r.restarts_with_items).toBe(0);
+    expect(r.never_written_by_cause).toEqual({ 'swap-manual': 1 });
+  });
+
   it('a manifest line written after --until pairs with its ended line inside the window', () => {
     const log = write([
       EL('2026-11-05 10:00:00', 'a', 'swap-auto-rescue'),
