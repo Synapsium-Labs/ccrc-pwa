@@ -73,7 +73,7 @@ const IMPORTS = [
   "import { parseReapCrumb, type ReapCrumb } from './reapcrumb.js';",
   "import type { HostPressureHealth } from './pressure.js';",
   "import type { BackupHealth } from './backup.js';",
-  "import type { TestboxAct, TestboxActOutcome, TestboxAdminCode, TestboxAdminStatus } from './testbox-admin.js';",
+  "import type { TestboxAct, TestboxActOutcome, TestboxAdminCode, TestboxAdminStatus, TestboxSettingChange } from './testbox-admin.js';",
 ];
 
 describe("the collector switch's L0 vocabulary (path-identity spec §5.7)", () => {

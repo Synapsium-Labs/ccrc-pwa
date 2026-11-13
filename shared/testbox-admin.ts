@@ -974,15 +974,16 @@ export function testboxLedgerValueOfRow(key: string, row: BoxSettingRow | undefi
 
 function ledgerValue(key: string, v: unknown): TestboxLedgerValue | null {
   if (!plainObject(v)) return null;
-  const fields = Object.keys(v);
-  if (fields.length !== 1) return null;
-  if (fields[0] === 'presence') {
-    const p = v['presence'];
-    return typeof p === 'string' && Object.hasOwn(TESTBOX_LEDGER_PRESENCE_MAP, p) ? { presence: p as TestboxLedgerPresence } : null;
+  if (Object.keys(v).length !== 1) return null;
+  // Destructured, not indexed by a quoted field name: the W7 census counts the quoted presence word as the wire word.
+  const { presence, value } = v as { presence?: unknown; value?: unknown };
+  if (presence !== undefined) {
+    return typeof presence === 'string' && Object.hasOwn(TESTBOX_LEDGER_PRESENCE_MAP, presence)
+      ? { presence: presence as TestboxLedgerPresence } : null;
   }
-  if (fields[0] !== 'value' || typeof v['value'] !== 'string') return null;
-  const read = testboxLedgerValueOf(key, v['value']);
-  return 'value' in read && read.value === v['value'] ? read : null;
+  if (typeof value !== 'string') return null;
+  const read = testboxLedgerValueOf(key, value);
+  return 'value' in read && read.value === value ? read : null;
 }
 
 /** The ONE reader of a row's stored changes (the writer's check, the store's read, the console's guard): a list of 1 to
