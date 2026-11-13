@@ -96,7 +96,7 @@ export function peerMailVerdict(f: PeerFacts): PeerVerdict {
   if (inv.invited) return { verdict: 'invited', answersMail: inv.mailId };
   const notInvited = inv.why === null ? '' : `; not an invited reply: ${inv.why}`;
   const hint = inv.why !== null ? notInvited
-    : `. A reply to a mail of ${f.toId}'s is outside this bound: send it as kind answer with inReplyTo set to that ` +
+    : `. A reply to an unasked mail of ${f.toId}'s is outside this bound: send it as kind answer with inReplyTo set to that ` +
       "mail's delivery id";
   if (f.duplicate) {
     return { verdict: 'duplicate',

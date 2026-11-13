@@ -158,7 +158,7 @@ describe('peerMailVerdict: an invited reply (#2726 (a))', () => {
 
 describe('peerMailVerdict: a peer-quota refusal says when the mail can go (#2726 (c))', () => {
   const NOW = 1_800_000_000_000;
-  const HINT = ". A reply to a mail of demo-calm-ridge's is outside this bound: send it as kind answer with inReplyTo set to that mail's delivery id";
+  const HINT = ". A reply to an unasked mail of demo-calm-ridge's is outside this bound: send it as kind answer with inReplyTo set to that mail's delivery id";
   const facts = (over: Partial<PeerFacts> = {}): PeerFacts => ({
     fromId: 'demo-quiet-mesa', toId: 'demo-calm-ridge', kind: 'question', inReplyTo: null, invitation: null,
     duplicate: false, outstanding: 0, hourAts: [], now: NOW, ...over,
