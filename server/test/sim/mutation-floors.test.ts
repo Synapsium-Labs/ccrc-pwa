@@ -38,7 +38,66 @@ const COORD_BLOCKED_SET: MutantSet<CoordBlockedModule> = {
   },
 };
 
-const MUTANT_SETS: Record<string, MutantSet<never>> = { [KEY]: COORD_BLOCKED_SET as MutantSet<never> };
+// #2726: the peer bound's decider (plan docs/superpowers/plans/2026-11-10-overlord/w1a-invited-replies.md, Task 6). Its
+// suite is the decider's own cases, run over the loaded module; every mutant must be killed.
+type PeerBoundModule = typeof import('../../src/coord/peerBound.js');
+const PEER_KEY = 'server/src/coord/peerBound.ts#peerMailVerdict';
+const PEER_SET: MutantSet<PeerBoundModule> = {
+  modulePath: path.join(ROOT, 'server/src/coord/peerBound.ts'),
+  mutants: [
+    { id: 'P1', old: 'if (f.outstanding >= PEER_MAIL_MAX_OUTSTANDING) {', new: 'if (f.outstanding > PEER_MAIL_MAX_OUTSTANDING) {' },
+    { id: 'P2', old: 'if (f.hourAts.length >= PEER_MAIL_HOURLY) {', new: 'if (f.hourAts.length > PEER_MAIL_HOURLY) {' },
+    { id: 'P3', old: 'f.hourAts[f.hourAts.length - PEER_MAIL_HOURLY]!', new: 'f.hourAts[0]!' },
+    { id: 'P4', old: 'if (inv.invited) return', new: 'if (inv.invited && !f.duplicate) return' },
+    { id: 'P5', old: 'if (f.duplicate) {', new: 'if (f.duplicate && f.outstanding < PEER_MAIL_MAX_OUTSTANDING) {' },
+    { id: 'C1', old: 'if (inv === null) return', new: 'if (inv === null && f.kind !== \'answer\') return' },
+    { id: 'C2', old: "if (f.kind !== 'answer') return", new: 'if (false) return' },
+    { id: 'C3', old: 'if (inv.invitee !== f.fromId) return', new: 'if (false) return' },
+    { id: 'C4', old: 'if (inv.inviter !== f.toId) return', new: 'if (false) return' },
+    { id: 'C5', old: 'if (inv.answered) return', new: 'if (false) return' },
+    { id: 'R1', old: "retry: { on: 'ack', toId: f.toId }", new: "retry: { on: 'ack', toId: f.fromId }" },
+    { id: 'H1', old: 'const hint = inv.why !== null ? notInvited', new: 'const hint = inv.why === null ? notInvited' },
+  ],
+  suite(mod) {
+    const NOW = 1_800_000_000_000;
+    const HOUR = 3_600_000;
+    const INVITE = { mailId: 41, inviter: 'demo-calm-ridge', invitee: 'demo-quiet-mesa', answered: false };
+    type Facts = Parameters<PeerBoundModule['peerMailVerdict']>[0];
+    const f = (over: Partial<Facts> = {}): Facts => ({ fromId: 'demo-quiet-mesa', toId: 'demo-calm-ridge',
+      kind: 'question', inReplyTo: null, invitation: null, duplicate: false, outstanding: 0, hourAts: [], now: NOW, ...over });
+    const ats = (n: number): number[] => Array.from({ length: n }, (_, i) => NOW - HOUR + 1_000 * (i + 1));
+    const v = (over: Partial<Facts> = {}) => mod.peerMailVerdict(f(over)) as Record<string, unknown>;
+    const reply = (over: Partial<Facts> = {}): Partial<Facts> => ({ kind: 'answer', inReplyTo: 7, invitation: INVITE,
+      duplicate: true, outstanding: 3, hourAts: ats(12), ...over });
+    const notInvited = (over: Partial<Facts>): void => { expect(v(reply({ duplicate: false, ...over }))['verdict']).toBe('peer-quota'); };
+    return {
+      bounded: () => { expect(v()).toEqual({ verdict: 'bounded' }); },
+      'pair edge': () => { expect(v({ outstanding: 2 })['verdict']).toBe('bounded'); expect(v({ outstanding: 3 })['verdict']).toBe('peer-quota'); },
+      'hour edge': () => { expect(v({ hourAts: ats(11) })['verdict']).toBe('bounded'); expect(v({ hourAts: ats(12) })['verdict']).toBe('peer-quota'); },
+      'duplicate before the pair': () => { expect(v({ duplicate: true, outstanding: 3 })['verdict']).toBe('duplicate'); },
+      'invited before every arm': () => { expect(v(reply())).toEqual({ verdict: 'invited', answersMail: 41 }); },
+      'no delivery': () => { notInvited({ invitation: null }); },
+      'not an answer': () => { notInvited({ kind: 'status' }); },
+      'not to the sender': () => { notInvited({ invitation: { ...INVITE, invitee: 'demo-b' } }); },
+      'not from the recipient': () => { notInvited({ invitation: { ...INVITE, inviter: 'demo-b' } }); },
+      'already answered': () => { notInvited({ invitation: { ...INVITE, answered: true } }); },
+      'pair retry names the recipient': () => { expect(v({ outstanding: 3 })['retry']).toEqual({ on: 'ack', toId: 'demo-calm-ridge' }); },
+      'hour retry at the 12th newest': () => {
+        const h = ats(13);
+        expect(v({ hourAts: h })['retry']).toEqual({ on: 'time', at: h[1]! + HOUR });
+      },
+      'the hint without inReplyTo, the reason with one': () => {
+        expect(String(v({ outstanding: 3 })['detail'])).toContain('is outside this bound');
+        expect(String(v({ outstanding: 3, kind: 'answer', inReplyTo: 7 })['detail'])).toContain('not an invited reply');
+      },
+    };
+  },
+};
+
+const MUTANT_SETS: Record<string, MutantSet<never>> = {
+  [KEY]: COORD_BLOCKED_SET as MutantSet<never>,
+  [PEER_KEY]: PEER_SET as MutantSet<never>,
+};
 
 it('rewriteRelativeImports makes ./ and ../ absolute and leaves bare specifiers', () => {
   const out = rewriteRelativeImports(`import { a } from '../x.js';\nimport b from 'node:fs';\n`, '/r/src/coord');
