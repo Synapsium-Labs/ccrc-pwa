@@ -74,7 +74,7 @@ import {
 } from '../shared/models.mjs';
 import {
   CLIENT_DEFAULT_CONTEXT_TOKENS, LANE_ENV_KEYS, ModelEnvInvalid, classesTsv, clearSettingsEnv, contextWindowFor,
-  effortFile, mergeSettingsEnv, modelEnvBlock, readRegular,
+  effortFile, mergeSettingsEnv, modelEnvBlock, readRegular, windowCeiling,
 } from '../shared/modelenv.mjs';
 import { SUGGESTED_SUBAGENT_CLASS, suggestedClasses, suggestedModelMap } from '../shared/model-suggest.mjs';
 import {
@@ -1072,9 +1072,9 @@ function materialise(account, registry, catalogue, windows) {
  *  question of the same keys. A Codex lane's `ENABLE_CODE_SECURITY_REVIEW`
  *  drifts the same way: on a lane that is not Codex-kind `want` omits it, so a
  *  copy still on disk counts as drift; on a Codex lane a missing or edited one
- *  does. Before measured windows that copy held at most
- *  `min(catalogue context, 200000)`; a measured one can hold up to 1000000.
- *  With a stale or absent catalogue the rule yields nothing, the hourly refresh
+ *  does. That copy holds the provider's promise or a measured window, up to
+ *  1000000 (D-8564). With a stale or absent catalogue and nothing measured the
+ *  rule yields nothing, the hourly refresh
  *  materialises only after a successful probe, and a windows file deleted or
  *  broken outside the two window verbs (or a rollback past them) would leave
  *  that number in force with `show` reporting no drift at all.
@@ -1376,9 +1376,13 @@ function materialiseCheck(account, registry, catalogue) {
  *  says in its refusal that the windows file was already updated.
  *
  *  `set-window` refuses a `tokens` that is not digits only or lies outside
- *  `WINDOW_MIN`..`WINDOW_MAX`, and — the typo guard — a model that is neither in
+ *  `WINDOW_MIN`..`WINDOW_MAX`; — the typo guard — a model that is neither in
  *  the lane's catalogue nor one of its class models: a window for such a model
- *  changes nothing, so writing it would hide the typo. `clear-window` has no
+ *  changes nothing, so writing it would hide the typo; and (D-8564,
+ *  `above-max-context`) a window above `windowCeiling`, the catalogue's
+ *  `maxContext` for the model: the provider serves no larger window, and the
+ *  rule would count the window only up to that ceiling anyway, so writing it
+ *  would record a number nothing honours. `clear-window` has no
  *  typo guard: removing a stale entry for a model the lane no longer names is
  *  the point. Clearing an absent entry is ok with `removed: false` and writes
  *  nothing; clearing the LAST entry deletes the file, so "absent" keeps meaning
@@ -1419,6 +1423,13 @@ function windowOp(opName, a, account, registry, catalogue, reading) {
         + 'would change nothing. set-window takes a MODEL id, not a class. Run '
         + `'ccrc models ${a.id} show' to see the lane's class models, or 'ccrc models refresh ${a.id}' if the `
         + 'model is new. Nothing was written.', 'model');
+    }
+    const ceiling = windowCeiling(catalogue, a.model);
+    if (Number(a.tokens) > ceiling) {
+      return refuse(1, 'above-max-context',
+        `${a.tokens} tokens is above the largest window the provider serves: ${a.model}'s maxContext is ${ceiling} `
+        + `in account "${a.id}"'s catalogue, so a measured window for it is at most ${ceiling}. Run `
+        + `'ccrc models refresh ${a.id}' if the provider has raised it. Nothing was written.`, 'tokens');
     }
   }
   // RULE 2's render, before any write: the mutation tail's own check, with

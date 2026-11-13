@@ -1404,7 +1404,7 @@ describe('ccrc doctor: models', () => {
         telemetry: 'codex', homeAble: false })));
     const dir = join(home, '.ccrc', 'models');
     mkdirSync(dir, { recursive: true });
-    const row = (id: string): Record<string, unknown> => ({ id, label: id, context: 272000, maxContext: 272000,
+    const row = (id: string): Record<string, unknown> => ({ id, label: id, context: 272000, maxContext: 872000,
       efforts: ['low', 'high'], hidden: false, priceIn: null, priceOut: null });
     writeFileSync(join(dir, 'gpt.classes.json'), JSON.stringify({ probe: 'codex',
       classes: { haiku: null, sonnet: 'model-6-beta', opus: 'model-6.1-gamma', fable: null },
@@ -1430,7 +1430,7 @@ describe('ccrc doctor: models', () => {
     expect(lines.slice(i, i + 2), out).toEqual([
       "WARN models: gpt's opus class moved from model-5.6-gamma to model-6.1-gamma (auto-advance to a newer model), "
         + 'and model-6.1-gamma has no measured window while model-5.6-gamma had 400000 tokens, so every session on the '
-        + "lane now runs at the default rule's 200000 tokens; measure model-6.1-gamma, then: ccrc models gpt "
+        + "lane now runs at 272000 tokens; measure model-6.1-gamma, then: ccrc models gpt "
         + 'set-window model-6.1-gamma <tokens>',
       '  remedy: measure the named model\'s window, then record it: ccrc models <id> set-window <modelId> <tokens> '
         + '(ccrc models <id> show lists the lane\'s measured windows)',

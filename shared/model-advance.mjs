@@ -483,7 +483,7 @@ const MOVE_WORDS = Object.freeze({
  *  and the remedy, and carries no lane, account or machine of its own: every name in it comes from the arguments. */
 export function unmeasuredMoveNotice(lane, m, tokens) {
   const what = MOVE_WORDS[m.how === 'advance' ? (m.cause ?? 'unknown') : m.how] ?? MOVE_WORDS.unknown;
-  const now = tokens === null ? "the client's own default window" : `the default rule's ${tokens} tokens`;
+  const now = tokens === null ? "the client's own default window" : `${tokens} tokens`;
   return `${lane}'s ${m.class} class moved from ${m.from} to ${m.to} (${what}), and ${m.to} has no measured window `
     + `while ${m.from} had ${m.fromTokens} tokens, so every session on the lane now runs at ${now}; measure ${m.to}, `
     + `then: ccrc models ${lane} set-window ${m.to} <tokens>`;

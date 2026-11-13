@@ -752,18 +752,17 @@ describe('set-class', () => {
     expect(classesOf('gpt')['sonnet']).toBe('gpt-5.6-terra');
   });
 
-  it('CLAUDE_CODE_MAX_CONTEXT_TOKENS is min(the default model\'s catalogue context, 200000), and drops '
-    + 'out when it cannot (§6.1, amended 2026-09-08, Task 16c)', () => {
+  it('CLAUDE_CODE_MAX_CONTEXT_TOKENS is the provider\'s promise, the class models\' catalogue context, and '
+    + 'drops out when nothing promises one (D-8564)', () => {
     const r = op('set-class', '--file', rosterPath(), '--id', 'gpt', '--class', 'opus', '--model', 'gpt-5.6-sol');
     expect(r.code).toBe(0);
-    // gpt-5.6-sol's catalogue context is 272000 — advertised, not usable
-    // (fleet-host measurement: 196,341 the largest prompt ever accepted, 30
-    // refusals past that wall) — so the key never exceeds the client's own
-    // 200000 default.
-    expect(settingsOf('.claude-gpt').env.CLAUDE_CODE_MAX_CONTEXT_TOKENS).toBe('200000');
+    // Every class model's catalogue context is 272000, and since D-8564 the
+    // provider's promise IS the window (the 2026-09-08 rule capped it at the
+    // client's 200000).
+    expect(settingsOf('.claude-gpt').env.CLAUDE_CODE_MAX_CONTEXT_TOKENS).toBe('272000');
     // Switching the default to a model no catalogue can vouch for — the same
     // "accepts a model no catalogue can vouch for" situation as above — leaves
-    // nothing to measure a window from, and the STALE '200000' must not
+    // nothing to measure a window from, and the STALE '272000' must not
     // survive the re-materialise: the eighth key carries no sentinel, so a
     // left-behind number would misstate the window rather than merely miss.
     fs.rmSync(path.join(home, '.ccrc', 'models', 'gpt.json'));
@@ -1142,14 +1141,11 @@ describe('materialise', () => {
   it('rewrites the three generated files from the registry and the catalogue', () => {
     plantCodex(LEGACY_EXTERNAL_ID);
     fs.rmSync(path.join(home, '.ccrc', 'models', 'gpt.classes.tsv'));
-    // Fix round 1 (review): the seeded opus, gpt-5.6-sol, has catalogue
-    // context 272000 — clamped TO the 200000 ceiling — so a mutant that
-    // hardcoded the key to the literal '200000' (ignoring the catalogue
-    // entirely) could not be told apart from a real clamp on that subject.
-    // Point opus BELOW the ceiling instead, directly on disk (same pattern as
-    // `writeCatalogue` below): only a model whose OWN context survives
-    // unclamped proves the number came from the catalogue this run just
-    // wrote, not a literal.
+    // Fix round 1 (review): point opus at a model whose catalogue context
+    // (128000) differs from every other class model's (272000), directly on
+    // disk (same pattern as `writeCatalogue` below): only that model's OWN
+    // context proves the number came from the catalogue this run just wrote,
+    // not a literal.
     const reg = registryOf('gpt');
     (reg['classes'] as Record<string, unknown>)['opus'] = 'gpt-5.3-codex-spark';
     fs.writeFileSync(regPath('gpt'), JSON.stringify(reg));
@@ -1170,10 +1166,10 @@ describe('materialise', () => {
     // The catalogue this run just wrote (init ran before it existed, so init's
     // own materialise could not have) — proves `materialise` reads the SAME
     // freshly-parsed catalogue it used for `derived`, not a stale one (§6.1
-    // amendment). gpt-5.3-codex-spark's catalogue context is 128000, BELOW
-    // the 200000 ceiling, so this value can only have come from the fresh
-    // catalogue — a mutant that hardcoded '200000' reds here (§6.1, amended
-    // 2026-09-08, Task 16c fix round 1).
+    // amendment). gpt-5.3-codex-spark's catalogue context is 128000, the
+    // smallest class model's, so this value can only have come from the fresh
+    // catalogue — a mutant that hardcoded a literal reds here (§6.1, amended
+    // 2026-09-08, Task 16c fix round 1; D-8564).
     expect(settingsOf('.claude-gpt').env.CLAUDE_CODE_MAX_CONTEXT_TOKENS).toBe('128000');
   });
 
@@ -1688,9 +1684,9 @@ describe('rm (§4.1 Lifecycle, §10, §11) — reap, not a mutation', () => {
     // Task 2 put where `init` was) ran against a written catalogue, so the eighth
     // key is live before `rm` runs — this is the case that shows `rm` reaps
     // it too, not just the seven keys that predate the §6.1 amendment. The
-    // default model's catalogue context (272000) is capped at 200000 (§6.1,
-    // amended 2026-09-08, Task 16c).
-    expect(j.env.CLAUDE_CODE_MAX_CONTEXT_TOKENS).toBe('200000');
+    // class models' catalogue context is 272000, the provider's promise
+    // (D-8564).
+    expect(j.env.CLAUDE_CODE_MAX_CONTEXT_TOKENS).toBe('272000');
     const r = op('rm', '--file', rosterPath(), '--id', 'gpt');
     expect(r.code).toBe(0);
     expect(r.body['removed']).toEqual([
@@ -1902,11 +1898,11 @@ describe('the measured windows file — read, applied, reported, reaped (codex-b
     expect(eighthKey()).toBe('400000');
   });
 
-  it('one class model unmeasured: the key stays today\'s 200000', () => {
+  it('one class model unmeasured: it counts at its provider default, 272000 (D-8564)', () => {
     const [m0, m1] = CLASS_MODELS as [string, string];
     plantWindows(ID, windowsFor({ [m0]: 511000, [m1]: 511000 }));
     expect(mat().code).toBe(0);
-    expect(eighthKey()).toBe('200000');
+    expect(eighthKey()).toBe('272000');
   });
 
   it('with no windows file the env block is today\'s, every key', () => {
@@ -1916,7 +1912,7 @@ describe('the measured windows file — read, applied, reported, reaped (codex-b
       ANTHROPIC_DEFAULT_HAIKU_MODEL: haiku, ANTHROPIC_DEFAULT_SONNET_MODEL: sonnet,
       ANTHROPIC_DEFAULT_OPUS_MODEL: opus, ANTHROPIC_DEFAULT_FABLE_MODEL: 'ccrc-unavailable-fable',
       ANTHROPIC_MODEL: opus, ANTHROPIC_SMALL_FAST_MODEL: haiku, CLAUDE_CODE_SUBAGENT_MODEL: 'sonnet',
-      CLAUDE_CODE_MAX_CONTEXT_TOKENS: '200000',
+      CLAUDE_CODE_MAX_CONTEXT_TOKENS: '272000',
     });
   });
 
@@ -1932,7 +1928,7 @@ describe('the measured windows file — read, applied, reported, reaped (codex-b
     plantWindows(ID, body);
     const r = mat();
     expect(r.code, r.stdout + r.stderr).toBe(0);
-    expect(eighthKey()).toBe('200000');
+    expect(eighthKey()).toBe('272000');
   });
 
   it('show reports each measured window, the effective window, its rule and the unmeasured models', () => {
@@ -1942,7 +1938,8 @@ describe('the measured windows file — read, applied, reported, reaped (codex-b
     expect(r.code).toBe(0);
     expect(r.body['windows']).toEqual({ state: 'ok', byModel: {
       [m0]: { tokens: 511000, setAt: '2026-10-15T12:00:00.000Z' }, [m1]: { tokens: 450000, setAt: null } } });
-    expect(r.body['contextWindow']).toEqual({ tokens: 200000, rule: 'default', unmeasured: [m2] });
+    expect(r.body['contextWindow'])
+      .toEqual({ tokens: 272000, rule: 'default', unmeasured: [m2], model: m2, source: 'provider' });
   });
 
   // The whole-wave fix round of codex bridge Stage 2 (L3): a window a refusal lowered carries `source` and
@@ -1965,13 +1962,15 @@ describe('the measured windows file — read, applied, reported, reaped (codex-b
 
   it('show with every class model measured reports rule measured', () => {
     plantWindows(ID, all(400000));
-    expect(show().body['contextWindow']).toEqual({ tokens: 400000, rule: 'measured', unmeasured: [] });
+    expect(show().body['contextWindow'])
+      .toEqual({ tokens: 400000, rule: 'measured', unmeasured: [], model: CLASS_MODELS[0], source: 'measured' });
   });
 
   it('show with no windows file: state absent, every class model unmeasured', () => {
     const r = show();
     expect(r.body['windows']).toEqual({ state: 'absent' });
-    expect(r.body['contextWindow']).toEqual({ tokens: 200000, rule: 'default', unmeasured: CLASS_MODELS });
+    expect(r.body['contextWindow']).toEqual({ tokens: 272000, rule: 'default', unmeasured: CLASS_MODELS,
+      model: CLASS_MODELS[0], source: 'provider' });
   });
 
   // `contextWindow` is null ONLY with no registry file, and a caller tells
@@ -1990,7 +1989,7 @@ describe('the measured windows file — read, applied, reported, reaped (codex-b
     expect(i.code, i.stdout + i.stderr).toBe(0);
     const r = op('show', '--file', rosterPath(), '--id', id);
     expect(r.code, r.stdout + r.stderr).toBe(0);
-    expect(r.body['contextWindow']).toEqual({ tokens: null, rule: 'none', unmeasured: [] });
+    expect(r.body['contextWindow']).toEqual({ tokens: null, rule: 'none', unmeasured: [], model: null, source: null });
   });
 
   it('show on an unreadable windows file answers ok, names the file and the reason, and reports the default rule', () => {
@@ -2024,7 +2023,7 @@ describe('the measured windows file — read, applied, reported, reaped (codex-b
     expect((s.body['windows'] as { reason: string }).reason).toMatch(/not a regular file/);
     const m = mat();
     expect(m.code, m.stdout + m.stderr).toBe(0);
-    expect(eighthKey()).toBe('200000');
+    expect(eighthKey()).toBe('272000');
     // `rm -f` semantics per file, as for the other four: a directory is not a
     // file `rm` may unlink, so it reaps the four before it and stops there,
     // the answer a directory at any of those four paths already gets.
@@ -2035,28 +2034,30 @@ describe('the measured windows file — read, applied, reported, reaped (codex-b
     expect(fs.existsSync(regPath(ID))).toBe(false);
   });
 
-  it('a class that moves to an unmeasured model drops the lane back to the default rule (spec §5)', () => {
+  it('a class that moves to an unmeasured model takes that model\'s provider default (spec §5; D-8564)', () => {
     plantWindows(ID, all(400000));
     expect(mat().code).toBe(0);
     expect(eighthKey()).toBe('400000');
     const next = CODEX.models.find((m) => !m.hidden && !CLASS_MODELS.includes(m.id) && m.context === 272000)!.id;
     const r = op('set-class', '--file', rosterPath(), '--id', ID, '--class', 'opus', '--model', next);
     expect(r.code, r.stdout + r.stderr).toBe(0);
-    expect(eighthKey()).toBe('200000');
-    expect(r.body['contextWindow']).toEqual({ tokens: 200000, rule: 'default', unmeasured: [next] });
+    expect(eighthKey()).toBe('272000');
+    expect(r.body['contextWindow'])
+      .toEqual({ tokens: 272000, rule: 'default', unmeasured: [next], model: next, source: 'provider' });
   });
 
   // The mutation tail and init's create each pass the windows reading to
   // `materialise` (Task 3: the same reading to every caller). A tail or a
-  // create that passed null would write the default rule's 200000 over a
-  // lane every one of whose class models is measured.
+  // create that passed null would write the provider's 272000 over a lane
+  // every one of whose class models is measured.
   it('a mutation that leaves the classes alone still writes the measured window (the tail passes the reading)', () => {
     plantWindows(ID, all(400000));
-    expect(eighthKey()).toBe('200000');
+    expect(eighthKey()).toBe('272000');
     const r = op('set-effort', '--file', rosterPath(), '--id', ID, '--class', 'sonnet', '--level', 'xhigh');
     expect(r.code, r.stdout + r.stderr).toBe(0);
     expect(eighthKey()).toBe('400000');
-    expect(r.body['contextWindow']).toEqual({ tokens: 400000, rule: 'measured', unmeasured: [] });
+    expect(r.body['contextWindow'])
+      .toEqual({ tokens: 400000, rule: 'measured', unmeasured: [], model: CLASS_MODELS[0], source: 'measured' });
   });
 
   it('init applies a windows file already on disk: the lane it creates is materialised with the measured window', () => {
@@ -2067,7 +2068,8 @@ describe('the measured windows file — read, applied, reported, reaped (codex-b
     expect(r.code, r.stdout + r.stderr).toBe(0);
     expect(r.body['created']).toBe(true);
     expect(settingsOf(CODEX_ROW.configDirSuffix).env['CLAUDE_CODE_MAX_CONTEXT_TOKENS']).toBe('400000');
-    expect(r.body['contextWindow']).toEqual({ tokens: 400000, rule: 'measured', unmeasured: [] });
+    expect(r.body['contextWindow'])
+      .toEqual({ tokens: 400000, rule: 'measured', unmeasured: [], model: CLASS_MODELS[0], source: 'measured' });
   });
 
   it('rm reaps the windows file with the lane\'s other model files, last', () => {
@@ -2157,7 +2159,7 @@ describe('a measured key the block omits is drift until a materialise removes it
     fs.rmSync(winPath(ID));
     expect(driftOf()).toEqual([KEY]);
     expect(op('materialise', '--file', rosterPath(), '--id', ID).code).toBe(0);
-    expect(eighthKey()).toBe('200000');
+    expect(eighthKey()).toBe('272000');
     expect(driftOf()).toEqual([]);
   });
 });
@@ -2186,21 +2188,23 @@ describe('set-window and clear-window (codex-bridge spec §2.7)', () => {
     const entry = windowsFile().windows[OPUS]!;
     expect(entry['tokens']).toBe(400000);
     expect(String(entry['setAt'])).toMatch(ISO_UTC);
-    // Two class models are still unmeasured, so the rule is still the default.
-    expect(eighthKey()).toBe('200000');
-    expect(r.body['contextWindow']).toEqual({ tokens: 200000, rule: 'default',
-      unmeasured: CLASS_MODELS.filter((m) => m !== OPUS) });
+    // Two class models are still unmeasured, so their provider default (272000)
+    // is still the smallest window.
+    expect(eighthKey()).toBe('272000');
+    expect(r.body['contextWindow']).toEqual({ tokens: 272000, rule: 'default',
+      unmeasured: CLASS_MODELS.filter((m) => m !== OPUS), model: CLASS_MODELS[0], source: 'provider' });
   });
 
   it('the LAST class model measured flips the lane to the smallest window, in that same call', () => {
     const [m0, m1, m2] = CLASS_MODELS as [string, string, string];
     expect(setWindow(m0, '511000').code).toBe(0);
     expect(setWindow(m1, '450000').code).toBe(0);
-    expect(eighthKey()).toBe('200000');
+    expect(eighthKey()).toBe('272000');
     const r = setWindow(m2, '400000');
     expect(r.code).toBe(0);
     expect(eighthKey()).toBe('400000');
-    expect(r.body['contextWindow']).toEqual({ tokens: 400000, rule: 'measured', unmeasured: [] });
+    expect(r.body['contextWindow'])
+      .toEqual({ tokens: 400000, rule: 'measured', unmeasured: [], model: m2, source: 'measured' });
     expect(r.body['settingsDrift']).toEqual([]);
   });
 
@@ -2211,8 +2215,29 @@ describe('set-window and clear-window (codex-bridge spec §2.7)', () => {
     expect(windowsFile().windows[OPUS]!['tokens']).toBe(350000);
   });
 
-  it.each(['1000', '1000000'])('accepts the bound %s exactly', (tokens) => {
+  it.each(['1000', '872000'])('accepts the bound %s exactly (872000: the catalogue\'s maxContext)', (tokens) => {
     expect(setWindow(OPUS, tokens).code).toBe(0);
+  });
+
+  it('accepts WINDOW_MAX where no catalogue names a ceiling for the model', () => {
+    fs.rmSync(path.join(home, '.ccrc', 'models', `${ID}.json`));
+    expect(setWindow(OPUS, '1000000').code).toBe(0);
+  });
+
+  // D-8564: a measured window may never exceed the provider's own ceiling, the
+  // catalogue's maxContext for the model (`windowCeiling`, shared/modelenv.mjs).
+  it('refuses a window above the catalogue\'s maxContext for the model, naming it, and writes nothing', () => {
+    const r = setWindow(OPUS, '872001');
+    expect(r.code).toBe(1);
+    expect(r.body['error']).toBe('above-max-context');
+    expect(r.body['field']).toBe('tokens');
+    expect(String(r.body['detail'])).toContain(`${OPUS}'s maxContext is 872000`);
+    expect(fs.existsSync(winPath(ID))).toBe(false);
+  });
+
+  it('a STALE catalogue\'s maxContext still bounds set-window: a ceiling only ever lowers', () => {
+    writeCatalogue(ID, CODEX_STALE);
+    expect(setWindow(OPUS, '900000').body['error']).toBe('above-max-context');
   });
 
   it.each(['400k', '400,000', '4e5', '400000.0', '-400000', ' 400000', '999', '1000001', ''])(
@@ -2313,12 +2338,12 @@ describe('set-window and clear-window (codex-bridge spec §2.7)', () => {
     expect(fs.statSync(winPath(ID)).mtimeMs).toBe(mtime);
   });
 
-  it('clear-window drops one entry and re-materialises: one class model unmeasured is the default rule again', () => {
+  it('clear-window drops one entry and re-materialises: one class model unmeasured takes its provider default', () => {
     for (const m of CLASS_MODELS) expect(setWindow(m, '400000').code).toBe(0);
     expect(eighthKey()).toBe('400000');
     const r = clearWindow(OPUS);
     expect(r.body).toMatchObject({ removed: true });
-    expect(eighthKey()).toBe('200000');
+    expect(eighthKey()).toBe('272000');
     expect(Object.keys(windowsFile().windows)).toEqual(CLASS_MODELS.filter((m) => m !== OPUS));
   });
 
@@ -2344,7 +2369,8 @@ describe('set-window and clear-window (codex-bridge spec §2.7)', () => {
   it('a stale entry for a model no class names is ignored by the rule and still listed by show', () => {
     plantWindows(ID, windowsFor({ ...Object.fromEntries(CLASS_MODELS.map((m) => [m, 400000])), 'model-9-omega': 5000 }));
     const r = showOf();
-    expect(r.body['contextWindow']).toEqual({ tokens: 400000, rule: 'measured', unmeasured: [] });
+    expect(r.body['contextWindow'])
+      .toEqual({ tokens: 400000, rule: 'measured', unmeasured: [], model: CLASS_MODELS[0], source: 'measured' });
     expect(Object.keys((r.body['windows'] as { byModel: Record<string, unknown> }).byModel)).toContain('model-9-omega');
   });
 
@@ -4419,7 +4445,7 @@ describe('advance-commit (auto-advance spec §2.1 D21 and §2.3; plan W2 Task 9)
     expect(opusOf().previous).toEqual({ model: 'model-5.6-gamma', effort: 'max' });
   });
 
-  it('moving to a model with no measured window drops the lane to the default window rule', () => {
+  it('moving to a model with no measured window takes that model\'s provider default (D-8564)', () => {
     plantStep();
     plantWindows('lane-a', windowsFor({ 'model-6-alpha': 400000, 'model-6-beta': 400000, 'model-5.6-gamma': 400000 }));
     expect(op('materialise', '--file', rosterPath(), '--id', 'lane-a').code).toBe(0);
@@ -4430,14 +4456,14 @@ describe('advance-commit (auto-advance spec §2.1 D21 and §2.3; plan W2 Task 9)
     const windows = parseWindows(JSON.parse(fs.readFileSync(winPath('lane-a'), 'utf8')));
     expect(contextWindowFor(next, cat, windows).rule).toBe('default');
     expect(env()).toMatchObject(modelEnvBlock(next, cat, windows));
-    expect(env()['CLAUDE_CODE_MAX_CONTEXT_TOKENS']).toBe('200000');
+    expect(env()['CLAUDE_CODE_MAX_CONTEXT_TOKENS']).toBe('272000');
     // D-8384 (public issue #2607): `show` says so, in the one spelling doctor's models row prints.
     const shown = op('show', '--file', rosterPath(), '--id', 'lane-a');
     expect(shown.body['windowNotices']).toEqual([unmeasuredMoveNotice('lane-a', { class: 'opus',
-      from: 'model-5.6-gamma', to: 'model-6.1-gamma', fromTokens: 400000, how: 'advance', cause: 'newer' }, 200000)]);
+      from: 'model-5.6-gamma', to: 'model-6.1-gamma', fromTokens: 400000, how: 'advance', cause: 'newer' }, 272000)]);
     expect(shown.body['windowNotices']).toEqual(["lane-a's opus class moved from model-5.6-gamma to model-6.1-gamma "
       + '(auto-advance to a newer model), and model-6.1-gamma has no measured window while model-5.6-gamma had 400000 '
-      + "tokens, so every session on the lane now runs at the default rule's 200000 tokens; measure model-6.1-gamma, "
+      + 'tokens, so every session on the lane now runs at 272000 tokens; measure model-6.1-gamma, '
       + 'then: ccrc models lane-a set-window model-6.1-gamma <tokens>']);
     // …and `lanes` carries the same sentences for every lane in one call, which is how doctor asks.
     const lanes = op('lanes', '--file', rosterPath()).body['lanes'] as Record<string, unknown>[];
@@ -4556,14 +4582,14 @@ describe('lower-windows: a refusal lowers the window (codex-bridge D25, Stage 2 
   });
 
   it("a first entry is capped at the lane's window", () => {
-    // No entry for the model: the lane's window is the default rule's, min(catalogue context, 200000).
+    // No entry for the model: the lane's window is the provider's promise, the class models' 272000 (D-8564).
     plantStats({ [`backend/${OPUS}`]: refusal(380000) });
     const before = contextWindowFor(SEEDED, CODEX, null).tokens;
-    expect(before).toBe(200000);
+    expect(before).toBe(272000);
     const r = lower();
     expect(r.code, r.stdout + r.stderr).toBe(0);
-    expect(r.body).toMatchObject({ lowered: [{ model: OPUS, from: null, to: 200000, refused: 380000 }] });
-    expect(tokensOf(OPUS)).toBe(200000);
+    expect(r.body).toMatchObject({ lowered: [{ model: OPUS, from: null, to: 272000, refused: 380000 }] });
+    expect(tokensOf(OPUS)).toBe(272000);
   });
 
   it('a refusal of 1100 tokens is skipped below-minimum', () => {

@@ -7,9 +7,10 @@ import type { Advance } from '../../../shared/model-advance.mjs';
 export const EFFORTS5: readonly string[] = ['low', 'medium', 'high', 'xhigh', 'max'];
 export const EFFORTS4: readonly string[] = ['low', 'medium', 'high', 'xhigh'];
 
-/** One catalogue row: visible, a 272000 context, the five effort levels, unless `o` says otherwise. */
+/** One catalogue row: visible, a 272000 context, the 872000 ceiling the catalogue advertises today (a measured
+ *  window's bound since D-8564), the five effort levels, unless `o` says otherwise. */
 export const mrow = (id: string, o: Partial<CatalogueModel> = {}): CatalogueModel => ({
-  id, label: id, context: 272000, maxContext: 272000, efforts: [...EFFORTS5], hidden: false,
+  id, label: id, context: 272000, maxContext: 872000, efforts: [...EFFORTS5], hidden: false,
   priceIn: null, priceOut: null, ...o,
 });
 
@@ -100,9 +101,9 @@ export const ADV_DEEP_TEXT = `${'['.repeat(ADV_DEEP)}${']'.repeat(ADV_DEEP)}`;
  *  which `resolveEffort` ranks by. */
 export const STEP_EFFORTS: readonly string[] = ['low', 'medium', 'high', 'xhigh', 'max'];
 
-/** One catalogue row, in `parseCatalogue`'s normalised shape. */
+/** One catalogue row, in `parseCatalogue`'s normalised shape (`maxContext` as `mrow`'s). */
 export const stepRow = (id: string, efforts: readonly string[] = STEP_EFFORTS, hidden = false) => ({
-  id, label: `Fixture ${id}`, context: 272000, maxContext: 272000, efforts: [...efforts], hidden,
+  id, label: `Fixture ${id}`, context: 272000, maxContext: 872000, efforts: [...efforts], hidden,
   priceIn: null, priceOut: null,
 });
 

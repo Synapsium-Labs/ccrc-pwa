@@ -434,7 +434,7 @@ describe('why a class moved, and the move that lowered a lane\'s window (D-8384)
     const [h] = unmeasuredMoves({ ...hand, windows, rule: 'default' });
     expect(h).toMatchObject({ how: 'hand', cause: null });
     expect(unmeasuredMoveNotice('lane-x', h!, 200000)).toContain("(set by hand)");
-    expect(unmeasuredMoveNotice('lane-x', h!, 200000)).toContain("at the default rule's 200000 tokens");
+    expect(unmeasuredMoveNotice('lane-x', h!, 272000)).toContain('now runs at 272000 tokens;');
   });
 });
 
