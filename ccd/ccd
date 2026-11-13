@@ -4095,14 +4095,14 @@ _reg_purge() {   # id -> rm -f every "$REG/$id.<field>" registry file for id
   # to neither. 34 + 2 = 36, re-measured on the merged file rather than added
   # up — the same discipline this paragraph is about. The drawer wave then added
   # `stalenarrownote` and `swapnarrownote` (`_pane_narrow_note`'s per-site log
-  # floors): 38; #166's `child` made 39, D-3526's `carriednote` and `tdate` 41, the stall watch's `turn` 42, continuity's `rescuewait` 43, `typed` 44, `choicekept` 45, the route read-back's `readbackseen` 46, the background-job wait's `bgwait` 47 (#189), D-6180's stand-down lines `standdown`, `standdownaff` and `standdownprobe` 50, D-5941's `prbranch` 51, and D-8271's typing-check log floor `typerefuse` 52, and the launch record's `deleg` 53 (D-8367) — by addition, NOT a fresh census of
+  # floors): 38; #166's `child` made 39, D-3526's `carriednote` and `tdate` 41, the stall watch's `turn` 42, continuity's `rescuewait` 43, `typed` 44, `choicekept` 45, the route read-back's `readbackseen` 46, the background-job wait's `bgwait` 47 (#189), D-6180's stand-down lines `standdown`, `standdownaff` and `standdownprobe` 50, D-5941's `prbranch` 51, and D-8271's typing-check log floor `typerefuse` 52, and the launch record's `deleg` 53 (D-8367), and the fresh start's `fresh` 54 (overlord W1a) — by addition, NOT a fresh census of
   # every per-session field, which this list still is not. `ROUTE_FIELDS` (`class`,
   # `effort`, `subagent`, `workflow`, `compact`, `degraded`, `inert`) and
   # `$REG/<id>.stalepress`/`.tscan` are all real per-session fields this list
   # omits; the gap is pre-existing, not new, and this paragraph's count tracks
   # only the additions named above against the last stated total.
-  # The 53: `archived`, `archivedreason`, `archivemanifest`, `base`, `bgwait`, `branch`,
-  # `carriednote`, `child`, `choicekept`, `compactnote`, `compactskip`, `crosspool`, `deleg`, `hold`, `home`, `hookstate`, `lastcompact`, `lastswap`,
+  # The 54: `archived`, `archivedreason`, `archivemanifest`, `base`, `bgwait`, `branch`,
+  # `carriednote`, `child`, `choicekept`, `compactnote`, `compactskip`, `crosspool`, `deleg`, `fresh`, `hold`, `home`, `hookstate`, `lastcompact`, `lastswap`,
   # `pool`, `prbranch`, `prcheckedat`, `prhistory`, `prnumber`, `prphase`, `project`, `rc`,
   # `readbackseen`, `reaping`, `rescuewait`, `setup`, `spawn`, `stalenarrownote`, `standdown`, `standdownaff`, `standdownprobe`, `started`, `stopped`, `stranded`,
   # `strandnotify`, `substrate`, `supervised`, `svcfailed`, `swapblocked`,
@@ -26299,13 +26299,13 @@ _child_runid_valid() { local LC_ALL=C; [[ "${1-}" =~ ^[1-9][0-9]{0,9}$ ]]; }   #
 
 _spawn_mode() {   # id -> `new` or `resume`: what a spawn of the row passes Claude Code (`--session-id` or `--resume`). A reader.
   # `new` until the row is claimed (`started`), then `resume`, except a FRESH START (`cmd_hibernate --roll --fresh`, spec
-  # 2026-11-09 §3.3.11 H13): while `$REG/<id>.fresh` names the row's uuid and no transcript stands for it, every spawn of
-  # it (the roll's wake, the unit's restart) is `new`, never a `--resume` of a conversation that does not exist. Once
-  # its transcript exists the marker is spent, and a stale one (any other uuid) is ignored, so nothing need clear it.
+  # 2026-11-09 §3.3.11 H13): `$REG/<id>.fresh`, one-shot, names the uuid the roll minted, and while it is the row's uuid
+  # the spawn is `new`. It crosses into the unit's own process, where no argv or local can (plan review 1890 C2).
+  # `_spawn_start` consumes it; a stale one (any other uuid) is ignored.
   local f u
   [[ "$(_reg_get "$1" started)" == 1 ]] || { echo new; return 0; }
   f=$(_reg_get "$1" fresh); u=$(_reg_get "$1" uuid)
-  if [[ -n "$f" && "$f" == "$u" && ! -e "$(_transcript_path "$1")" ]]; then echo new; else echo resume; fi
+  if [[ -n "$f" && "$f" == "$u" ]]; then echo new; else echo resume; fi
 }
 _spawn_start() {   # id mode(new|resume) -> creates the tmux session, sets SPAWN_FROMSWAP. NEVER WAITS ON THE TUI.
                    # (One bounded exception, `resume` only: SPAWN_RESUME_SETTLE_S before
@@ -26379,6 +26379,7 @@ _spawn_start() {   # id mode(new|resume) -> creates the tmux session, sets SPAWN
   lastswap=$(_reg_get "$id" lastswap)
   [[ "$lastswap" =~ ^[0-9]+$ && $(( $(date +%s) - lastswap )) -lt 300 ]] && fromswap=1
   if [[ "$mode" == "resume" ]]; then sidflag="--resume '$uuid'"; else sidflag="--session-id '$uuid'"; fi
+  [[ "$mode" == new ]] && rm -f -- "$REG/$id.fresh"   # a fresh start's marker is consumed by the spawn it chose (`_spawn_mode`)
   # WHETHER THIS BOX DRIVES ITS SESSIONS OVER THE RC SOCKET — read ONCE, here,
   # and used by BOTH spawn lines below (the primary and the --session-id retry).
   # Once, not per line, so the two can never disagree: a resume that died and
@@ -32565,7 +32566,7 @@ cmd_hibernate() {   # [--roll] [--surface <word>] [--actor <text>] [--reason <te
   # `--fresh` (spec 2026-11-09 §3.3.11 H13, the renewal's adapter): a mode of `--roll`, refused without it, so it has every
   # refusal and exit code the roll has. Before the wake it mints a uuid, writes it as the row's and names it in
   # `$REG/<id>.fresh`, so the wake (in the unit's own process) starts a new conversation under the same session id
-  # (`_spawn_mode`). A failed wake (exit 4) puts the old uuid back with the row. `ccd caps` says `hibernate-fresh`.
+  # (`_spawn_mode`). A failed wake (exit 4 or 5) removes the marker and puts the old uuid back. `ccd caps` says `hibernate-fresh`.
   local usage="usage: ccd hibernate [--surface <word>] [--actor <text>] [--reason <text>] <id>"
   local lc_gh=0 lc_holdok=''   # `--hold-ok <text>` (D-6091)
   local lc_roll=0 lc_fresh=0 lc_u1='' lc_u2=''
@@ -32704,6 +32705,8 @@ cmd_hibernate() {   # [--roll] [--surface <word>] [--actor <text>] [--reason <te
   fi
   (( wrc )) || ( cmd_ensure "$id" ) || wrc=$?
   if (( wrc != 0 )); then
+    # A fresh start that did not wake keeps the old conversation (exit 4 and 5 alike): its marker goes, the old uuid is back.
+    [[ -n "$lc_u1" ]] && { rm -f -- "$REG/$id.fresh"; _reg_set "$id" uuid "$lc_u1" || true; }
     # Back to sleep, in the act's own order: the marker first, then the unit, then a pane the unit may have raised late.
     # A unit that could not be stopped again is not the sanctioned hibernated row (a Restart=always unit retries it), so
     # it takes the unrestored branch below, never "put back to sleep".
@@ -32721,7 +32724,6 @@ cmd_hibernate() {   # [--roll] [--surface <word>] [--actor <text>] [--reason <te
       # The `.woke` stamp `cmd_ensure` wrote goes back to what stood before it: nothing woke, so it must neither hold
       # the auto-swap's cooldown (`_standdown_note … woke`) nor read as fresh activity to the stale-archive lane.
       if (( lc_had_woke )); then _reg_set "$id" woke "$lc_woke" || true; else rm -f -- "$REG/$id.woke"; fi
-      [[ -n "$lc_u1" ]] && { _reg_set "$id" uuid "$lc_u1" || true; }   # a fresh start that did not wake keeps the old conversation
       echo "$(date '+%F %T') hibernate $id: roll wake failed (rc $wrc), back to sleep" >> "$REG/swap.log"
       echo "ccd: roll-wake-failed — $id was hibernated and its wake exited $wrc; it was put back to sleep (hibernated, unit stopped), and mail, an open screen or ccd ensure wakes it" >&2
       exit 4

@@ -153,7 +153,6 @@ _session_hard_blocked -> _tmux_t
 _session_probe -> _tmux_t
 _session_state -> _sup_fresh
 _spawn_mode -> _reg_get
-_spawn_mode -> _transcript_path
 _spawn_settle -> _accept_first_run_prompts
 _spawn_settle -> _authdead_clear_on_spawn
 _spawn_settle -> _lc_done
