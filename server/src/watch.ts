@@ -192,7 +192,7 @@ import {
 } from './coord/store.js';
 import { renderMailNudge } from './coord/envelope.js';
 import { mailPaceOf } from './coord/mailPace.js';
-import { ROLE_FACTS_CHILD_AXIS, roleOf } from './roleOf.js';
+import { roleFactsOf, roleOf } from './roleOf.js';
 import { configDirFor } from './config.js';
 import { refusalSentence } from './wsaudit.js';
 import {
@@ -8066,15 +8066,16 @@ export class FleetWatcher {
         // THE ONE FACT THIS RUNG ADDS, read once per row and consumed by
         // exactly two gates: this one and `not-quiet` below. It is the row of
         // `MAIL_PACE` (`coord/mailPace.ts`) this session's role reads, decided in
-        // L1 through `roleOf` from the two facts this pass measures: the
-        // recipient's `.child` mark and whether it claims an open run (the
-        // per-sweep set above); every other fact is "not read on this path"
-        // (`ROLE_FACTS_CHILD_AXIS`), declared intent included. A recipient the
-        // registry does not list has a child mark that was not measured, read
-        // as an unreadable one (spec §3.3.9). Neither condition changes — only
-        // the threshold each is measured against.
-        const pace = mailPaceOf(roleOf({ ...ROLE_FACTS_CHILD_AXIS, child: rec?.child ?? { kind: 'unreadable' },
-          claimsOpenRun: coordinators.has(d.toId) ? 'yes' : 'no' }));
+        // L1 through `roleOf`, its facts assembled by the one assembly,
+        // `roleFactsOf`, from the two this pass measures: the recipient's
+        // `.child` mark and the open claimants (the per-sweep set above). The
+        // run kind and declared intent are not read on this path, so they are
+        // `unmeasured`. A recipient the registry does not list has a child mark
+        // that was not measured, read as an unreadable one (spec §3.3.9).
+        // Neither condition changes — only the threshold each is measured
+        // against.
+        const pace = mailPaceOf(roleOf(roleFactsOf(d.toId, { child: rec?.child ?? { kind: 'unreadable' },
+          childRunKind: 'unmeasured', openCoordinators: coordinators, intentDeclared: 'unmeasured' })));
         const last = this.mailCooldown.get(d.toId) ?? 0;
         if (now - last < pace.cooldownMs) { gated(d, 'cooldown'); continue; }
         // registry ladder: `records` came from `readRegistryMeasured` above,

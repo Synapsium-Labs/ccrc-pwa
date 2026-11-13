@@ -13,11 +13,11 @@ import { ROLE_AMBIGUITIES, type RoleReading } from '../roleOf.js';
  * The mail lane picks a session's row through the fleet's one role reader, `mailPaceOf(roleOf(facts))`: `roleOf`
  * decides the role and `mailPaceOf` the row, both in L1.
  *
- * The lane measures two facts, the recipient's `.child` mark and whether it claims an open run, and passes every other
- * as `roleOf.ts`'s `ROLE_FACTS_CHILD_AXIS` spells "not read on this path". It assembles no facts of its own: the one
- * assembly of `RoleFacts` belongs to `roleFactsOf` (the renewal deciders' piece), and the lane can move onto it with the
- * same two inputs once it lands. Declared coordinator intent stays `unmeasured`: reading it would move a session with
- * intent and no open run onto the coordinator row, which spec §6.4 rules a change of behaviour for a commit of its own.
+ * The lane measures two facts, the recipient's `.child` mark and the claimants of open runs, and hands them to the one
+ * assembly of `RoleFacts`, `roleOf.ts`'s `roleFactsOf`, with the run kind and declared intent `unmeasured` (not read on
+ * this path). It assembles no facts of its own. Declared coordinator intent stays `unmeasured`: reading it would move
+ * a session with intent and no open run onto the coordinator row, which spec §6.4 rules a change of behaviour for a
+ * commit of its own.
  * A non-claimant therefore reads undecided between coordinator and plain, and takes `plain`'s row, the worker pair.
  * The designation has no reader before W1, so no live session reads the Overlord's row until then, and no audit or
  * replay lane exists before §9.5, so none reads theirs either.

@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import type { ChildMark } from '../../shared/api.js';
 import { FLEET_ROLE_NAMES, type FleetRole } from '../../shared/fleetRoles.js';
-import { ROLE_AMBIGUITIES, ROLE_FACTS_CHILD_AXIS, roleOf, type RoleAmbiguity, type RoleFacts } from '../src/roleOf.js';
+import { ROLE_AMBIGUITIES, roleFactsOf, roleOf, type RoleAmbiguity, type RoleFacts } from '../src/roleOf.js';
 import * as mailPaceModule from '../src/coord/mailPace.js';
 import { MAIL_PACE, mailPaceOf } from '../src/coord/mailPace.js';
 import { mailPaceOfCases } from './sim/mailPaceSets.js';
@@ -11,9 +11,12 @@ const WORKER = { quietMs: 60_000, cooldownMs: 120_000 };
 const COORDINATOR = { quietMs: 15_000, cooldownMs: 30_000 };
 /** Every child fact the mail lane can pass: the three `ChildMark` kinds (an absent record reads as `unreadable`). */
 const CHILDREN: readonly ChildMark[] = [{ kind: 'none' }, { kind: 'child', runId: 7 }, { kind: 'unreadable' }];
-/** The facts `FleetWatcher.mailPass` builds (`core-vocab.test.ts`'s "one MAIL_PACE" pins that shape there). */
-const laneFacts = (child: ChildMark, claims: boolean): RoleFacts =>
-  ({ ...ROLE_FACTS_CHILD_AXIS, child, claimsOpenRun: claims ? 'yes' : 'no' });
+const LANE_ID = 'lane-a-project-a';
+/** The facts `FleetWatcher.mailPass` asks `roleFactsOf` for (`core-vocab.test.ts`'s "one MAIL_PACE" pins that call). */
+const laneFacts = (child: ChildMark, claims: boolean): RoleFacts => roleFactsOf(LANE_ID, {
+  child, childRunKind: 'unmeasured', openCoordinators: new Set(claims ? [LANE_ID] : ['lane-b-project-a']),
+  intentDeclared: 'unmeasured',
+});
 
 // A role with no row, or a row for no role, is a compile error twice over: the table `satisfies
 // Readonly<Record<FleetRole, MailPace>>` in its own file, and this exact-key check here, which `typecheck-tests`
@@ -52,7 +55,7 @@ describe('mailPaceOf: a reading picks its row', () => {
   });
 });
 
-describe("the mail lane's facts (the child axis, plus the child mark and the claim), and today's answers", () => {
+describe("the mail lane's facts (roleFactsOf over the child mark and the claim), and today's answers", () => {
   it('a claimant with no child mark reads the coordinator row; a non-claimant the worker pair', () => {
     expect(mailPaceOf(roleOf(laneFacts({ kind: 'none' }, true)))).toEqual(COORDINATOR);
     expect(mailPaceOf(roleOf(laneFacts({ kind: 'none' }, false)))).toEqual(WORKER);
