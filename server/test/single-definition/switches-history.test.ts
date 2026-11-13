@@ -1194,7 +1194,7 @@ describe('the manifest: one writer, and no reader in the tree but the program\'s
     expect(close).toBeGreaterThan(open);
     const named = all.map((l, i) => ({ l: l.trim(), i })).filter(({ l }) => !isBashComment(l) && bashNames(l));
     expect(named.filter(({ i }) => i < open || i > close).map(({ l }) => l.slice(0, 100)), 'a code line outside _inflight_write names it: a second writer').toEqual([]);
-    const SITES = ['_reg_set "$id" inflight "$hdr"$\'\\n\'"$items" && listed=1', '_reg_set "$id" inflight "$hdr" && break', 'rm -f -- "$REG/$id.inflight";'];
+    const SITES = ['_reg_set "$id" inflight "$hdr"$\'\\n\'"$items" && listed=1', '_reg_set "$id" inflight "$hdr" && break', 'rm -f -- "$REG/$id.inflight" 2>/dev/null;'];
     expect(named.map(({ l }) => SITES.find((x) => l.startsWith(x)) ?? `UNKNOWN: ${l}`)).toEqual(SITES);
   });
 

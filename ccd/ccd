@@ -28833,7 +28833,7 @@ _inflight_write() {   # id site [cfg uuid [log-from]] -> the session's manifest 
   # an unbound variable ends the shell and no `|| true` catches it (`_swap_carry_sidecars` names the same hazard): here an
   # `exit`, a `die` or an abort ends the subshell alone, and every variable below is its own.
   (
-    local id="$1" site="$2" cfg="${3-}" uuid="${4-}" lfrom="${5-}" now w="" gen="-" wait="-" reset="-" lw="" wrc=0
+    local id="$1" site="$2" cfg="${3-}" uuid="${4-}" lfrom="${5-}" now=0 w="" gen="-" wait="-" reset="-" lw="" wrc=0
     local verdict=unmeasured why=error listed="" items="" kept="" out="" prc=0 slrc=0 prog="" lpath="" tokens="" hdr="" ln="" pass dash re INFLIGHT_SLOT_FD=""
     local f_acct f_since f_reset f_state f_end f_until
     dash='items=- in-flight=- holed=- stopped-agent=- diverged=- deferred-until-reset=- abandoned=- unread=- unread-expired=- killed=- resumed=- drop-id=- drop-path=- drop-budget=- drop-shape=- drop-read=- drop-readpath=- drop-over=- retired=-'
@@ -28889,7 +28889,7 @@ _inflight_write() {   # id site [cfg uuid [log-from]] -> the session's manifest 
       for pass in 1 2; do
         tokens="verdict=$verdict why=$why wait=$wait $counts"; hdr="v=1 at=$now gen=$gen site=$site uuid=${uuid:--} $tokens"
         _reg_set "$id" inflight "$hdr" && break
-        rm -f -- "$REG/$id.inflight"; verdict=unmeasured why=error counts="$dash"
+        rm -f -- "$REG/$id.inflight" 2>/dev/null; verdict=unmeasured why=error counts="$dash"
       done
     fi
     _inflight_note "$id" "$site" "$tokens"

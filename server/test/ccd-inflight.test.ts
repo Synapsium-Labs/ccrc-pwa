@@ -127,15 +127,18 @@ describe('the manifest writer: results that run no program', () => {
     expect(deleg()).toBe(before);
   });
 
-  it('an unlistable projects directory, or a config root that is not a directory, is unmeasured why=error, never not-applicable', () => {
+  // root reads any directory, so a mode-000 one is listable there: the case cannot mean anything, and says so as a skip
+  it.skipIf(process.getuid?.() === 0)('an unlistable projects directory (mode 000) is unmeasured why=error, never not-applicable', () => {
     seed({ items: false });
     fs.chmodSync(path.join(h.home, CFG, 'projects'), 0o000);   // present, not listable
     try {
-      if (process.getuid?.() !== 0) {
-        write('swap');
-        expect(parse().head).toMatchObject({ verdict: 'unmeasured', why: 'error' });
-      }
+      write('swap');
+      expect(parse().head).toMatchObject({ verdict: 'unmeasured', why: 'error' });
     } finally { fs.chmodSync(path.join(h.home, CFG, 'projects'), 0o755); }
+  });
+
+  it('a config root that is not a directory, or a projects entry that is a file, is unmeasured why=error, never not-applicable', () => {
+    seed({ items: false });
     fs.writeFileSync(path.join(h.home, 'notadir'), 'x');
     h.sh(`_inflight_write ${ID} swap "$HOME/notadir" ${UUID}`);
     expect(parse().head).toMatchObject({ verdict: 'unmeasured', why: 'error' });
@@ -343,6 +346,9 @@ describe('the manifest writer: never dies', () => {
     const swap = shT(`${STUB} cmd_swap ${ID} claude-d`, { TMUX: '' });
     expect(swap.timedOut, swap.out).toBe(false);
     expect(h.reg(ID, 'wrapper')).toBe('claude-d');
+    const man = manifestLines();
+    expect(man, 'one manifest line for the swap').toHaveLength(1);
+    expect(man[0]).toMatch(/why=error/);
     // a journal that is a FIFO (the limit-resume, the record intact)
     fs.rmSync(reg(`${ID}.deleg`)); fs.writeFileSync(reg(`${ID}.deleg`), wfRow());
     const j = path.join(side('.claude-d'), 'subagents', 'workflows', RUN, 'journal.jsonl');
@@ -354,7 +360,7 @@ describe('the manifest writer: never dies', () => {
 
   it('an abort inside the body ends only its subshell: the swap still lands and the limit-resume still runs cmd_ensure', () => {
     seed();
-    const ABORT = `eval "$(declare -f _inflight_write | sed '0,/local id=/s//: "$ZZ_UNBOUND_X"; local id=/')";`;
+    const ABORT = `eval "$(declare -f _inflight_write | sed 's/local id=/: "$ZZ_UNBOUND_X"; local id=/')";`;
     const wd = path.join(h.home, 'projects', 'demo');
     fs.mkdirSync(wd, { recursive: true });
     h.sh(`_reg_set ${ID} project demo; _reg_set ${ID} workdir ${wd}`);
