@@ -171,7 +171,13 @@ Table 11.1c (the `SessionHost` row), Table 11.1d (ccd's capability words).
 
 ## Deviations found
 
-None yet. Decisions this plan takes, by slug:
+- **D-8251, fresh-start-growth-waiver, scope** (2026-11-13) — ccd/ccd grows past GROWTH_LIMIT by the fresh start's proof: review 1904 F1 makes the consuming
+  `new` spawn leave a receipt (`used <uuid>`) in the marker, and `cmd_hibernate` exits 7 `roll-fresh-unproven`, with the
+  old uuid back, when a wake that answered 0 left none (a concurrent wake resumed the old conversation). With the marker
+  read through `_reg_get_to`, stale removal, and swap.log naming both uuids before the writes, #2742 measures +54 net
+  lines in `ccd/ccd` against its merge base. Waived to 70 by `server/test/growth-waivers/D-8251-ccd-ccd.json`.
+
+Decisions this plan takes, by slug:
 
 - **fresh-is-a-roll-mode** — `--fresh` is accepted only with `--roll`, so it inherits the roll's refusals and exit
   codes, and the builder's boolean becomes a three-word mode.
