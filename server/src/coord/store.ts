@@ -25,7 +25,7 @@ import type { LandingAuthorityCommand, LandingAuthorityWrite, LandingJournalRepl
 import type { LandingJournalPort, LandingJournalSnapshot } from './landingJournalPort.js';
 import { redactCommand } from './redact.js';
 import { REVIEW_CAP_SUMMARY_MAX, cutWhole, reviewCapRefuses, reviewCapStatus } from './reviewcap.js';
-import { linkingAll, linkingOf, recordReading, setLinking } from './linkingStore.js';
+import { linkTeamAuto, linkingAll, linkingOf, recordReading, recordTeamCandidates, setLinking } from './linkingStore.js';
 import * as builds from './claudeBuildsStore.js';
 import type { BuildCaptureResult, BuildCaptureTry, ClaudeBuildRecord } from '../../../shared/claudeBuildTrust.js';
 import type { LinkingWriteBody, ProjectLinkingWire } from '../../../shared/linking.js';
@@ -5289,6 +5289,15 @@ export class CoordStore {
     this.db.prepare('UPDATE programs SET state = ? WHERE slug = ?').run(state, slug);
   }
 
+  /** D-8558: can the programme still take a run: its row is present and its plan is not closed (`planEnd` null), the one fact
+   *  that stops a run attaching (`attachTicketInTx`'s `plan-closed`). NOT `programs.state`: the close retires it whenever the
+   *  open-run count reaches 0 (D-51) and `openRun` never sets it back, so a programme whose next wave is open can still read
+   *  `done`. A programme with no row cannot. The refused-close lane asks it before offering "Hand to a coordinator". */
+  programmeLive(slug: string): boolean {
+    const r = this.db.prepare('SELECT planEnd FROM programs WHERE slug = ?').get(slug) as { planEnd: string | null } | undefined;
+    return r !== undefined && r.planEnd === null;
+  }
+
   /** Count of this program's runs still in a NON-terminal state — the
    *  question `setProgramState`'s caller (the close route, D-51) needs
    *  answered to know whether the run it just closed was the LAST one: zero
@@ -5391,6 +5400,16 @@ export class CoordStore {
   /** D-8147: every stored project's linking facts in one query. */
   linkingAll(): Map<string, ProjectLinkingWire> {
     return linkingAll(this.db);
+  }
+
+  /** D-8405: the automatic pass's link of a project's team; false when a key or the operator's decision stands. */
+  linkTeamAuto(project: string, link: Parameters<typeof linkTeamAuto>[2], at: number): boolean {
+    return linkTeamAuto(this.db, project, link, at);
+  }
+
+  /** D-8405: the automatic pass's one-tap candidates for a project with no key. */
+  recordTeamCandidates(project: string, candidates: Parameters<typeof recordTeamCandidates>[2]): void {
+    recordTeamCandidates(this.db, project, candidates);
   }
 
   /** D-6795: the operator's lift, per work run. Idempotent; false when the run is not a work run on file. */

@@ -11,8 +11,14 @@
  * every reader of the linking vocabulary names one module.
  */
 import type { LinkingOverride, ProjectLinkingWire } from './api.js';
-export type { RepoVisibility, LinkingOverride, LinkingMode, TemplateState, ProjectLinkingWire } from './api.js';
-export { REPO_VISIBILITIES, LINKING_OVERRIDES, LINKING_MODES, TEMPLATE_STATES } from './api.js';
+export type {
+  RepoVisibility, LinkingOverride, LinkingMode, TemplateState, ProjectLinkingWire,
+  TeamEvidence, TeamEvidenceKind, TeamLinkSource, TeamLinkWire, TeamCandidateWire,
+} from './api.js';
+export {
+  REPO_VISIBILITIES, LINKING_OVERRIDES, LINKING_MODES, TEMPLATE_STATES, TEAM_EVIDENCE_KINDS, TEAM_LINK_SOURCES,
+  isTeamEvidence, isTeamCandidate,
+} from './api.js';
 
 /** `GET /api/linking`: a session's read of its own project. */
 export interface LinkingShowAnswer extends ProjectLinkingWire { ok: true; project: string }

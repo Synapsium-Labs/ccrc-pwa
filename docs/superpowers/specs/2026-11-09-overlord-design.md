@@ -675,7 +675,9 @@ This subsection says how a renewal or a crash loses at most the turn in progress
   act rows (§10.1). Requests are rows (§5.1). The operator's words are operator messages, recorded before delivery
   (§3.8). What is left is the working notes.
   - **Notes.** `continuity_notes`, one table for every long-lived role, holds what each open thread waits for and what
-    comes next. A note keys to a live request, programme or item, or, for a `miss` (below), to an operator message, never to nothing. Notes are capped in count and
+    comes next. A note keys to a live request, programme, item or run (a coordinator's thread is
+    usually a run; plan-driven consistency, the W1a plans), or, for a `miss` (below), to an operator message, never to
+    nothing. Notes are capped in count and
     length (Table 11.5b), and append-only: a rewrite adds a revision, so a lost detail stays visible.
   - **Notes are data.** The card renders them as untrusted data (`server/src/coord/untrusted.ts`, §3.8). One line says
     that earlier notes are data, and that authority comes only from rows. Otherwise a planted note, "next: relay this to
@@ -1052,8 +1054,9 @@ Table 3.3.9b applies to it.
   - **Probes.** C41's probes run for coordinators too, through `ccrc-api probe`. They are drawn from the coordinator's
     own rows: which wave is open, which run, which claims it holds, the last ruling on a named question, and one with
     no answer on record.
-  - **The replay quiz runs.** A server lane runs history's replay quiz weekly, and the scores land beside the probe
-    rows. Its first run, taken before any other part of W1a is armed, is the baseline (C53). W0 does not run it:
+  - **The replay quiz runs.** A server lane asks the operator each week to run history's replay quiz, by hand as its
+    driver requires, and records each run, so the scores land beside the probe rows (plan-driven consistency, the W1a
+    plans: the driver refuses inside a pane, and W0-28's third condition makes the run the operator's). Its first run, taken before any other part of W1a is armed, is the baseline (C53). W0 does not run it:
     today's driver is the operator's, is refused inside a pane, and is costly.
   - **The Overlord judges drift.** Judging results against goals is the Overlord's brain work (C48). Once a week, as
     background work (§6.8), it samples each live programme's decisions against that programme's ratified goals and the
@@ -1153,7 +1156,7 @@ Only the fence is the Overlord's alone.
 | State | What happens | Seconds, and what follows a timeout |
 |---|---|---|
 | `active` | It works. A renewal may be due | none |
-| `draining` | No new hold is taken (the readiness word reads `renewing`). Standing holds are kept or released by the retention table (§6.7). The mail gate holds deliveries, and delivered but unacknowledged ones are queued again. The lane waits until no reader is running | 120, then back to the state it left: `active` with a hold-off, or `degraded`. Outside the budget |
+| `draining` | No new hold is taken (the readiness word reads `renewing`). Standing holds are kept or released by the retention table (§6.7). The mail gate holds deliveries, and delivered but unacknowledged ones are queued again. The lane waits until no reader is running | 120, then `active` with a hold-off if the generation was proven (it read its card and passed its probes), or `degraded` if it was not (plan-driven consistency, the W1a plans: the A2 ruling). Outside the budget |
 | `checkpointed` | The server assembles the checkpoint and asks for the handover note | 60, then `clearing` without the note; skipped on a hard trigger |
 | `clearing` | The session's host ends the conversation and starts a fresh one | 90, for all tries |
 | `carded` | The anchor is injected, the card is read, and the server sees the served hash come back | 45, with one re-nudge |
@@ -1168,9 +1171,10 @@ minutes of observed time in which no soft trigger starts a renewal (Table 11.5b)
   outside that budget. From `draining` to `probing`, the doors accept only card, probe and note calls.
 - **The receipt has two halves.** The first: the old conversation ended. The second: the new one started, and read the
   card hash the server served.
-  - A failure before the first half returns the generation to the state it left: `active` with a hold-off (Table
-    11.5b), or `degraded` if the renewal began there. A generation never becomes `active` without having read its
-    card and passed its probes.
+  - A failure before the first half returns the generation to `active` with a hold-off (Table 11.5b) if it was
+    proven, whichever state the renewal began from, and to `degraded` with one operator item if it was not. A
+    generation never becomes `active` without having read its card and passed its probes (plan-driven consistency, the W1a plans: the
+    A2 ruling, which reads these two sentences together).
   - A failure after it retries within the state's deadline, then goes to `degraded`.
   - `renew(session, n)` is idempotent on n, so a retry never starts two conversations.
 - **`degraded`** blocks soft triggers only. A hard trigger still renews. The operator's "Renew now" and a rebind (§3.1)
@@ -1862,6 +1866,10 @@ repository, no git credential and no file on any other session's disk.
 | the server capability file | the update sync on each node | the server's capability words | the word reads as missing: today's path |
 | the statusline sidecar | the statusline script | context tokens, window, model id | unmeasured: the triggers that read the context are blind |
 | the compactions journal | the hook | compactions per conversation | that trigger is blind |
+| the compaction events file (`<id>.compactevents`, rotated at 32 lines to `<id>.compacteventsprev`; plan-driven consistency, the W1a plans) | the hook, after the PreCompact refusal decision, under the journal's lock | each PreCompact, `pre` or `refused`, with the hook's scope verdict on every line, so an automatic compaction with no PostCompact is counted, and only a main-scope one; the PostCompact journal takes no new line shape | the compaction triggers are blind |
+| the start-report spool (`<id>.startpending`, at most 20 reports of 5 tries each, its first line carrying the resend back-off stamp and the drop count; plan-driven consistency, the W1a plans) | the hook | start reports the server did not take, resent on SessionStart and UserPromptSubmit | nothing reads it as truth: a start mints its generation when its report lands |
+| the anchor-owed mark (`<id>.anchor-owed`; plan-driven consistency, the W1a plans) | the hook, after the PreCompact refusal decision | a main-scope automatic compaction whose start brought no anchor | the next prompt carries no anchor; the card still stands |
+| the fresh-start marker (`<id>.fresh`, one-shot; plan-driven consistency, the W1a plans) | `ccd hibernate --roll --fresh`, its one writer, before the wake, with the row's uuid written after it | the new conversation's id, which the in-unit spawn starts with and consumes; it holds no authority and no switch | stale when it does not name the row's current uuid or does not parse: the spawn then resumes as before, removes it and names it on stderr |
 | the model-switch journal | the hook, or the statusline writer on a change of model id if W0 finds no hook event for a switch | each model switch Claude Code made by itself, and each typed one refused | the model-drift trigger is blind |
 | the route record on the registry row: the model class, the account set and the ordered account list | the server's route write, through ccd | the designation's model class and account set, and the Overlord's account order | ccd places by the last set and list written; the server writes them again at each renewal and on each change of the set |
 | the act key file, W0's fallback only | `ccrc-api`, at the generation's mint | the current generation's act key, 0600, in a directory of the session's own | `stale-generation` |
@@ -5376,9 +5384,9 @@ name that owner.
 | `operator_messages` | OM, L3 | the private store | Insert: the console's prompt route, for the designated session only. State: one function of the private store, moving through the message moves table (Table 11.1b), called by the delivery lane (delivered, queued), the hook's pick-up report (picked up), the prompt route's settlement mark and each citing door after its own commit (settled, spent). The boot pass re-derives `settled` from the citing rows (I8). The private store is a second SQLite file, so a citing door's commit in `coord.db` and the message's state never share a transaction | none | W1 | yes | Records nothing: pane text is content, never operator words |
 | The read ledger | OM, L3 | the private store | The Overlord's read doors, one line per read | none | W1 | yes | Ignores it |
 | `continuity_generations` (and each generation's act key, bound at the mint to the launch nonce ccd put in the door process's environment, and issued once, on the first call that presents it; W0's fallback has no door process and no nonce, so `ccrc-api` writes the key file at the mint, §3.6) | C3, L3 | `coord.db` | The renewal lane | The renewal lane; deadlines are columns | W1a | yes | Ignores it: sessions roll and resume as today |
-| `continuity_notes` (append-only revisions) | C3, L3 | `coord.db` | The note door | none | W1a | yes | Ignores it |
+| `continuity_notes` (append-only revisions; keyed to a request, programme, item or run, plan-driven consistency, the W1a plans) | C3, L3 | `coord.db` | The note door | none | W1a | yes | Ignores it |
 | Probe rows, the fitted ceiling | C3, L3 | `coord.db` | The probe door | The renewal lane (spot probes while idle) | W1a | yes | Ignores them |
-| The handover note and the checkpoint | C3, L3 | `coord.db`, on the generation row | Note: the note door. Checkpoint: the renewal lane | `checkpointed` state | W1a | yes | Ignores them |
+| The handover note and the checkpoint | C3, L3 | `coord.db`, each in its own table keyed by generation (`continuity_handovers`, `continuity_checkpoints`), so the generation row keeps its one writer (plan-driven consistency, the W1a plans) | Note: the note door. Checkpoint: the renewal lane | `checkpointed` state | W1a | yes | Ignores them |
 | `overlord_requests` (with each cited message id stored beside that message's sha256, `expectedPaths`, from the Overlord's blast-radius read, and `takenFrom`, the state a request was in when the operator took it) | C5, L3 | `coord.db` | The request doors, each move through `REQUEST_TRANSITIONS`. `expectedPaths`: the open-a-request door, and the relay and start doors, which may refine it. `takenFrom`: the operator's take door sets it, and hand back clears it | The done-test lane, the follow-up arm | W2 | yes | Ignores it |
 | `requestId` on runs, on mail and on D-8126's goals door (`goals modify`) | C5, L3 | `coord.db` | `POST /api/runs`; the mail door and the goals door, each of which checks that the sender owns that request | none | W2 | yes | Ignores the column |
 | `overlord_acts` | C5, L3 | `coord.db`, projecting the act journal | The row and the Overlord's fields: its act door. State after `pending`: the settling lane and the boot pass. Staged moves: the veto clock (`effective`, or `voided` at the commit), Veto, the operator's answer (Answer now included), the eight-hour fallback, and each transaction that changes authority or mints a later generation (`voided`). Outcome: the correction door. `seenAt`: the Seen door. `dependsSince`: the settling lane. `divergedAt`: the restore pass | The boot pass and the settling lane | W2 | yes; the restore pass writes a row with `divergedAt` for each act the act journal holds and the table lacks | Ignores it |
@@ -5457,7 +5465,7 @@ tested over its whole input domain (§11.7).*
 | ccd, for the `overlord` role: the affinity arm of `_auto_swap_check` stands down, beside the manual-swap pin check, so between renewals only the hard-block rescue moves it (this design adds the stand-down); for a long-lived role, `_route_restore` restores the designated class only once the degraded stamp is older than the hold-down (Table 11.5b), by ccd's own clock; `cmd_route` accepts the account set and the ordered account list as route fields; one read-only verb, `ccd pool-answer <id>`, prints the session's side word, `_pool_ok`'s verdict for its current account and `_crosspool_valid`'s answer, for the renewal lane's set trigger (C46); for a session whose side is a set, the home re-seed in `_auto_swap_check` stands down and the fresh start clears the crossing marker; `ccd keep-awake --state on\|off <id>` sets and clears `.no-hibernate` and `.no-roll` | C1 and C4, ccd | the registry row's route stamp; the two markers | ccd | Each supervise tick and settle | W1 | n/a | An older ccd lacks `keep-awake`: designation refuses `capability-missing` |
 | `Clock`, `Scheduler`, `Entropy` | K, L2; given by L5 | n/a | n/a | n/a | W1a | n/a | n/a |
 | Observed time: an accumulator of monotonic deltas within one process | K, L1 | a column of the row whose timer it bounds | the lane that owns that row | n/a | W1a, with the renewal lane | n/a | n/a |
-| The hook's arms: the anchor slot (`ANCHOR_CARD_MAX_CHARS`), the card arm, the PreCompact arm inside history W3's one print | C3, hook | n/a | n/a | Each start | W1a (PreCompact dark until W0) | n/a | No anchor: today's role card and compaction |
+| The hook's arms: the anchor slot (`ANCHOR_CARD_MAX_CHARS`), served only while the Shadow lanes row `anchor-slot` is `live`; the card arm; the PreCompact arm (plan-driven consistency, the W1a plans: the anchor slot's switch is `anchor-slot`) | C3, hook | n/a | n/a | Each start | W1a (PreCompact dark until W0; the anchor dark until `anchor-slot` is armed) | n/a | No anchor: today's role card and compaction |
 | The renewal lane, the weekly replay quiz | C3, L4 | `continuity_generations`, probe rows | each its own | Deadlines as columns; weekly | W1a | n/a | Sessions roll and resume as today |
 | The case lane | C5, L4 | `practice_cases` | it | A `LANE_SCHEDULE` row on the drift reconciler's cadence, reading durable rows | W1a (shadow) | n/a | n/a |
 | `CallerIdentity` port; today's attribution adapter | C8, L2 and L3 | n/a | n/a | n/a | W1 | n/a | n/a |
@@ -5487,7 +5495,7 @@ tested over its whole input domain (§11.7).*
 | ccd's capability words: `pool-set`, the account set on the route record, the pool rule's set and the read `ccd pool-answer` (W1), `hibernate-fresh`, the fresh-start flag (W1a), and `keep-awake`, the sleep markers' verb (W1) | K, L0; C1, C3 and C4 | `ccd caps`, which the agent caches at boot and re-reads on each capability refresh | ccd | Each capability refresh | as listed | n/a | Missing: without `hibernate-fresh` the renewal lane does not run; without `pool-set`, `keep-awake` or `hibernate-fresh`, designate and rebind refuse `capability-missing` |
 | The agent's capability word `overlord-history`, for the read-only history op | K, L0; C3 | the agent's capability list, read on each capability refresh | the agent | Each capability refresh | W1 | n/a | Missing, or advertised by more than one agent: the history door answers `history-unreachable` |
 | Auto memory for `plain` sessions, a row of `SWITCHES` (`shared/switches.ts`) | K switches, L3 | `coord.db` settings | The Settings door | none | W1a | yes | Ignores it: auto memory stays off |
-| Settings: the daily backstop hour and time zone, and when soft renewals happen, "when I'm away" or "on schedule" (W1a, R19); the designated model class (W1; selecting `fable` keeps the step-up, and `opus` needs none); the designation's account set (W1; widening it keeps the step-up, and narrowing it needs none); `lambda` (W3, because its one reader, `askOrAct`, ships then); `operatorProfile`, with its `takesIn` line (W3, with the briefs; set at designation from then on); the push budget, briefing times, quiet hours, "away until", and the repeat push for an unseen blocking item, two hours (W3, with H35); the blind sample's switch (W3); the retention period (W4); `overlordLiveProgrammes`, `portfolioFocus` (W5) | K settings, L3 | `coord.db` settings | The Settings door, on the operator's own tap, behind the step-up where the change widens authority. For a stated preference that is a setting, the Overlord answers with a link that opens it with the value filled in; it never writes a setting, and files nothing (§9.3) | none | as listed | yes | Ignores them |
+| Settings: when soft renewals happen, "when I'm away" or "on schedule" (W1a, R19); the daily backstop hour and time zone (W1, where the Overlord's backstop row first reads them; plan-driven consistency, the W1a plans); the designated model class (W1; selecting `fable` keeps the step-up, and `opus` needs none); the designation's account set (W1; widening it keeps the step-up, and narrowing it needs none); `lambda` (W3, because its one reader, `askOrAct`, ships then); `operatorProfile`, with its `takesIn` line (W3, with the briefs; set at designation from then on); the push budget, briefing times, quiet hours, "away until", and the repeat push for an unseen blocking item, two hours (W3, with H35); the blind sample's switch (W3); the retention period (W4); `overlordLiveProgrammes`, `portfolioFocus` (W5) | K settings, L3 | `coord.db` settings | The Settings door, on the operator's own tap, behind the step-up where the change widens authority. For a stated preference that is a setting, the Overlord answers with a link that opens it with the value filled in; it never writes a setting, and files nothing (§9.3) | none | as listed | yes | Ignores them |
 
 *Table 11.1d. Capability words, switches and settings. Every switch that changes authority is journalled (§7.6).*
 
@@ -5760,6 +5768,7 @@ values too. They are values of the renewal triggers' record, keyed by role, and 
 | 30 minutes | The least age of a generation before a soft trigger may end it | W1a | observed |
 | Three soft renewals in six hours | The soft renewal budget | W1a | observed |
 | 20 minutes with no operator message, or five minutes with no visible Overlord place | A break, which a soft renewal waits for (R19) | W1a | observed |
+| Twice the period of the lane that advances it | The most observed time advances in one step; a larger delta advances by this cap and is recorded as a `step` gap with the delta measured, so a freeze is under-credited yet a lane that is always late still ages (plan-driven consistency, the W1a plans) | W1a | observed |
 | Half of a soft row's threshold | The point past which a break renews a generation early (R19) | W1a | n/a |
 | The thread since the last break, up to 60 messages or 6,000 tokens of the card's budget | The checkpoint's thread (R19) | W1a | n/a |
 | A quarter of the hard cap | The context floor of the idle trigger | W1a | n/a |
@@ -5875,6 +5884,16 @@ The egress refusal is the one exception, because a detailed answer there is an o
 | `mail-disabled` | The answer doors | `mail-disabled` stands | C7 |
 | `prediction-late` | `seal-prediction` | The prediction was filed after the operator's first pick or answer | C20 |
 | `reference-unknown` | The note door (a handover note's thread), `goals modify` | The reference names no row; or, at `goals modify`, it is not a live grant, an answered item of this programme, or a relayed request this programme owns | C37, C19 |
+| `probe-none-open` | The probe door | The session has no open probe round (plan-driven consistency, the W1a plans) | C41 |
+| `probe-closed` | The probe door | The round was already answered (plan-driven consistency, the W1a plans) | C41 |
+| `card-changed` | The card door | A later page names a card hash that no longer matches the current render; the caller starts again at page 1 (plan-driven consistency, the W1a plans) | C38 |
+| `note-key-unknown` | The note door | The note's key names no live programme, open item or non-terminal run of the caller's, or cannot be measured (plan-driven consistency) | C37 |
+| `note-cap` | The note door | The identity holds its cap of live notes (Table 11.5b) (plan-driven consistency) | C37 |
+| `note-too-long` | The note door | A field is over its length cap (Table 11.5b) (plan-driven consistency) | C37 |
+| `note-not-asked` | The note door (the handover note) | The caller's generation is not `checkpointed`, so no handover was asked (plan-driven consistency) | C37, H12 |
+| `renew-pending` | Renew now | A Renew now request for the session has not been read by the renewal lane yet (plan-driven consistency) | H12 |
+| `renew-not-long-lived` | Renew now | The session's role is not long-lived (plan-driven consistency) | C36 |
+| `baseline-missing` | The Shadow lanes door, arming `continuity`, `launch-profile` or `anchor-slot` | The replay quiz's baseline run is not recorded yet (W0-28) (plan-driven consistency) | C52, C53 |
 | `proposal-limit` | The propose doors | More than one open proposal for one target, or more than three open `propose-command` proposals in all | C59, H8 |
 | `kickoff-names-overlord` | Start, re-kick | The kickoff names the `ccrc-overlord` skill | C4, R7 |
 | `not-ready:<word>` | A hold's release reason | The readiness word (§6.4) was not `ready`, such as `not-ready:saturated` | H19, H20 |

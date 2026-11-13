@@ -16,6 +16,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { toast } from '@ccrc/ui';
 import type { FleetSession, RouteField } from '../../../shared/api';
+import { liveModelNames } from '../lib/models';
 
 /** How long the badge waits for the pane to read a write back before it says
  *  so and stops claiming the write is pending. */
@@ -63,12 +64,15 @@ export function useQueuedRoute(live: FleetSession | null, routed: boolean): Queu
   // `live.ultracode` for the `ultracode` value, since that is a separate
   // boolean on the wire, not an effort string); `class` compares the queued
   // row's `readback` key against the live model string the same loose way
-  // `modelOptions`' own `active` highlight already does.
+  // `modelOptions`' own `active` highlight already does (`liveModelNames`,
+  // D-8406: the key is the lane registry's model id). An empty key is a row
+  // whose model nothing on the pane could confirm: it agrees at once, as it
+  // always has, rather than waiting out the timeout.
   useEffect(() => {
     if (queued === null) return;
     const agrees = queued.field === 'effort'
       ? (queued.value === 'ultracode' ? live?.ultracode === true : live?.effort === queued.value)
-      : (live?.model ?? '').toLowerCase().includes(queued.readback);
+      : queued.readback === '' || liveModelNames(live?.model ?? null, queued.readback);
     if (agrees) clear();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [queued, live?.effort, live?.ultracode, live?.model]);

@@ -5,6 +5,8 @@
 //   * A refused-close item (`ItemAction` verb `close-refused`, Task 27): one control per door it carries. "Abandon" and "Abandon
 //     anyway" open the same `AbandonSheet` (its confirm calls `/act`; "Abandon anyway" adds "The branch stays on disk."), "Hand to
 //     a coordinator" opens `ResumeSheet` at its third step, and the three links open the run, its worker or its coordinator.
+//     D-8558: under a coordinator the registry no longer holds, "Close this run" opens the same sheet in its close-run mode (a
+//     reason, and the programme's end when "Close and end the programme" is on the item too); that door opens it with "done" picked.
 //   * A release-review item (`ItemAction` verb `release-review`, D-8293): a review child kept past its ceiling. "Release
 //     workspace", which opens `ReleaseReviewSheet` whose confirm calls `/act`. It needs no run among the runs heard.
 //   * A run whose review cap waits: "Lift cap", which opens the unchanged `LiftCapSheet`.
@@ -41,6 +43,8 @@ export const ITEM_DOOR_WORDS: Readonly<Record<ItemDoor, string>> = {
   'abandon-anyway': 'Abandon anyway',
   'open-worker': 'Open the worker',
   'open-coordinator': 'Open the coordinator',
+  'close-run': 'Close this run',
+  'end-programme': 'Close and end the programme',
 };
 
 /** The page each link door opens (all three exist for the run): the run's own page, its worker's session, its coordinator's session.
@@ -55,6 +59,8 @@ export function doorPath(door: 'open-pr' | 'open-worker' | 'open-coordinator', r
 export interface ItemActs {
   /** `anyway` is the "Abandon anyway" door: the same sheet and the same `/act`, with the line that the branch stays on disk. */
   readonly abandon: (item: ItemView, run: RunSummary, anyway?: boolean) => void;
+  /** D-8558: "Close this run" (`endFirst` false) and "Close and end the programme" (true): the abandon sheet's close-run mode. */
+  readonly close: (item: ItemView, run: RunSummary, endFirst: boolean) => void;
   readonly hand: (item: ItemView, run: RunSummary) => void;
   readonly keep: (item: ItemView, runId: number) => void;
   readonly lift: (run: RunSummary) => void;
@@ -89,13 +95,17 @@ export const carriesControls = (item: ItemView, runs: readonly RunSummary[] | nu
  *  rows heard, or `null`) lets the abandon sheet say whether the run's workspace is a child's. `onActed` is told when an
  *  Abandon run or a Keep the run landed (the item page steps back to its list). */
 export function useItemActs(sessions: readonly FleetSession[] | null = null, onActed?: () => void): { acts: ItemActs; sheets: ReactNode } {
-  const [abandon, setAbandon] = useState<{ item: number; run: RunSummary; anyway: boolean } | null>(null);
+  const [abandon, setAbandon] = useState<{
+    item: number; run: RunSummary; anyway: boolean; closeRun?: { offerEnd: boolean; endFirst: boolean };
+  } | null>(null);
   const [hand, setHand] = useState<RunSummary | null>(null);
   const [keep, setKeep] = useState<KeepRunTarget | null>(null);
   const [lift, setLift] = useState<RunSummary | null>(null);
   const [release, setRelease] = useState<ReleaseReviewTarget | null>(null);
   const acts: ItemActs = {
     abandon: (item, run, anyway = false) => setAbandon({ item: item.id, run, anyway }),
+    close: (item, run, endFirst) => setAbandon({ item: item.id, run, anyway: false, closeRun: {
+      offerEnd: closeRefusedOf(item)?.doors.includes('end-programme') === true, endFirst } }),
     hand: (_item, run) => setHand(run),
     keep: (item, runId) => setKeep({ itemId: item.id, runId }),
     lift: setLift,
@@ -106,6 +116,7 @@ export function useItemActs(sessions: readonly FleetSession[] | null = null, onA
       <AbandonSheet run={abandon?.run ?? null} {...(abandon === null ? {} : { itemId: abandon.item })}
                     workspaceChild={abandonChildOf(abandon === null || sessions === null ? undefined : workerOf(abandon.run, new Map(sessions.map((s) => [s.id, s] as const))) ?? undefined)}
                     {...(abandon?.anyway === true ? { anyway: true } : {})}
+                    {...(abandon?.closeRun === undefined ? {} : { closeRun: abandon.closeRun })}
                     onClose={() => setAbandon(null)} {...(onActed === undefined ? {} : { onDone: onActed })} />
       <ResumeSheet run={hand} atReclaim onClose={() => setHand(null)} {...(onActed === undefined ? {} : { onDone: onActed })}
                    heirs={hand === null || sessions === null ? [] : resumeHeirs(sessions, hand.project, hand.claimedBy, true)} />
@@ -153,6 +164,12 @@ export function CloseRefusedControls({ item, runs, acts, enabled = true }: {
         if (run === null) return null;
         if (door === 'hand-to-coordinator') {
           return <Button key={door} variant="primary" size="fit" disabled={!enabled} data-door={door} onClick={() => acts.hand(item, run)}>{words}</Button>;
+        }
+        if (door === 'close-run' || door === 'end-programme') {
+          return (
+            <Button key={door} variant={door === 'close-run' ? 'danger' : 'ghost'} size="fit" disabled={!enabled} data-door={door}
+                    onClick={() => acts.close(item, run, door === 'end-programme')}>{words}</Button>
+          );
         }
         return (
           <Button key={door} variant="danger" size="fit" disabled={!enabled} data-door={door} onClick={() => acts.abandon(item, run, door === 'abandon-anyway')}>{words}</Button>

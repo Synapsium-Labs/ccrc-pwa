@@ -1,3 +1,14 @@
 {
-  "server/src/coord/stall.ts#stallCoordBlockedStep": 1
+  "server/src/coord/stall.ts#stallCoordBlockedStep": 1,
+  "server/src/roleOf.ts#roleFactsOf": 1,
+  "server/src/time/observed.ts#observeTime": 1,
+  "server/src/continuity/renewalDue.ts#renewalDue": 1,
+  "server/src/continuity/softRenewal.ts#softRenewalMay": 1,
+  "server/src/continuity/softRenewal.ts#earlyWhileAway": 1,
+  "server/src/continuity/card.ts#trimCard": 1,
+  "server/src/continuity/card.ts#renderCard": 1,
+  "server/src/continuity/card.ts#oneLine": 1,
+  "server/src/continuity/card.ts#block": 1,
+  "server/src/continuity/generationMachine.ts#generationStep": 1,
+  "server/src/coord/mailPace.ts#mailPaceOf": 1
 }

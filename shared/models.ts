@@ -159,6 +159,31 @@ export interface DerivedModels {
  *  `shared/models.mjs`'s `parseWindows` for why. */
 export type ModelWindows = Readonly<Record<string, number>>;
 
+/** D-8406: one class on one lane, as the lane's own files say it: the model its registry slot names (`null`: the class
+ *  is unavailable on this lane by nature) and the catalogue's label for that model (`null`: no catalogue, or no row
+ *  for it). `laneClassModels` derives it. */
+export interface LaneClassModel {
+  readonly model: string | null;
+  readonly label: string | null;
+}
+export type LaneClassModels = Readonly<Record<ModelClass, LaneClassModel>>;
+
+/** D-8406: `GET /api/models/:lane`'s reading of a lane's model files. The non-readings stay two: `absent` is a lane
+ *  with no class registry (an Anthropic lane, or one `ccrc models <id> init` never ran on), `unreadable` one whose
+ *  registry exists and could not be read or parsed, or a fleet that would not answer. A reader shows class names
+ *  for both, and never a model name this tree spells. */
+export type LaneModelsRead =
+  | { readonly kind: 'read'; readonly classes: LaneClassModels }
+  | { readonly kind: 'absent' }
+  | { readonly kind: 'unreadable' };
+
+/** D-8406: `GET /api/models/:lane`'s 200. */
+export interface LaneModelsAnswer {
+  readonly ok: true;
+  readonly lane: string;
+  readonly models: LaneModelsRead;
+}
+
 // ── EVERYTHING BELOW IS THE SINGLE IMPLEMENTATION IN `shared/models.mjs` ──
 // `MODEL_ID_RE`, the two error classes, and every function are defined
 // exactly once, over there — see that file for their behaviour, their
@@ -187,6 +212,11 @@ export {
   WINDOW_MAX,
   MODELS_LANE_ID_RE,
   MODELS_RESERVED_IDS,
+  MODELS_DIR_NAME,
+  registryFileName,
+  catalogueFileName,
+  isLaneModelsReadName,
+  laneClassModels,
   MODELS_PUSH_MAX,
   modelsPushOf,
   modelsPushDecision,

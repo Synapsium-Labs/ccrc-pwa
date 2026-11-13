@@ -466,6 +466,7 @@ _ws_tmproot_witness_parse	C4
 _ws_tmproot_witness_read	C4
 _ws_tmproot_witness_write	C4
 _child_runid_valid	C5
+_spawn_mode	C2
 _spawn_start	C2
 _spawn_settle	C2
 _spawn	C2

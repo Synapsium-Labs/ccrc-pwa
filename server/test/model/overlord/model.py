@@ -77,7 +77,7 @@ DEFAULT = dict(
     BOOT_UNMEASURED_RELEASES=True,  # Table 6.4a+6.7c at boot: 'unmeasured' releases every hold
     I9_SCOPE='rows',            # 'rows' | 'all' (count the dead-Overlord push too)
     DEAF_ROWS=False,
-    FAILED_RENEWAL_RETURNS='active',   # | 'previous'
+    FAILED_RENEWAL_RETURNS='proven',   # | 'previous' | 'active' (plan review 1902, F3)
     MAX_ACTS=2,            # bound on act rows (a model bound)
     WITNESS_LAG=True,      # a witness learns an epoch after the commit (separate event)
     PROBE_FAILS=True,      # probes may fail (generation machine)
@@ -878,16 +878,31 @@ def staged_commit(s, k, c):
 
 
 def back(s, c):
-    """§3.3.11 'A failure before the first half returns the generation to active, with a hold-off.'
-    FAILED_RENEWAL_RETURNS='active' is that sentence; 'previous' returns a renewal that began in
-    degraded to degraded."""
-    if s.gen.fromdeg and c.FAILED_RENEWAL_RETURNS == 'previous':
+    """§3.3.11: 'A failure before the first half returns the generation to `active` with a hold-off
+    (Table 11.5b) if it was proven, whichever state the renewal began from, and to `degraded` with one
+    operator item if it was not.' Three readings (plan review 1902, F3). 'proven', the default and the
+    coordinator's ruling (slug failed-renewal-returns-to-active-only-if-proven): active only for a
+    generation that has read its
+    card and passed its probes, because 'A generation never becomes active without having read its
+    card and passed its probes', else degraded. 'active', the sentence alone: always active (X4 finds
+    it). 'previous': back to the state the renewal began in."""
+    if back_degraded(s.gen, c):
         return gen_to(s, 'degraded', fromdeg=False)
     return gen_to(s, 'active', holdoff=True, fromdeg=False)
 
 
+def back_degraded(g, c):
+    if c.MUTATION == 'back_always_degraded':
+        return True
+    if c.FAILED_RENEWAL_RETURNS == 'active':
+        return False
+    if c.FAILED_RENEWAL_RETURNS == 'previous':
+        return g.fromdeg
+    return not (g.card and g.ok)
+
+
 def back_label(g, c):
-    if g.fromdeg and c.FAILED_RENEWAL_RETURNS == 'previous':
+    if back_degraded(g, c):
         return 'back to degraded'
     return 'active with hold-off'
 
@@ -920,7 +935,10 @@ def gen_steps(s, c):
             add(('receipt first half: old conversation ended', ns))
         else:
             add(start_report(s._replace(conv=s.conv + 1), c, 'receipt second half: fresh conversation starts'))
-            add(('clearing retries spent after the first half: degraded', gen_to(s, 'degraded')))
+            # The old conversation has ended, so its proof does not carry over (review 1912, F5).
+            spent = gen_to(s, 'degraded') if c.MUTATION == 'proof_outlives_conversation' else \
+                gen_to(s, 'degraded', card=False, ok=False)
+            add(('clearing retries spent after the first half: degraded', spent))
     if g.st == 'carded' and (c.GEN_TIMEOUTS or s.t - g.ent >= c.GEN_D):
         add(('carded times out after one re-nudge: degraded', gen_to(s, 'degraded')))
     if g.st == 'probing':

@@ -25,8 +25,8 @@ import { defaultCachePath, persistFleetSnapshot, SnapshotWriter, snapshotNotice 
 import { readTasks, taskProgress } from './tasks/read.js';
 import { CCD_ARGV, EXPIRE_CHILD_CAP, RECLAIM_PAUSE_CAP, capSupported, ccdCan, sweepDec } from './ccdargv.js';
 import {
-  isFullLine, parsePrLines, phaseFor, queueFor, readPrLandingLine, repoCellFor, sweepFailureReason, type CcdPrFailure, type PrLandingLine,
-  type PrQueueRead,
+  isFullLine, parsePrLines, phaseFor, queueFor, readPrLandingLine, repoCellFor, sweepFailureReason, ticketTexts, type CcdPrFailure,
+  type PrLandingLine, type PrQueueRead,
 } from './prstate.js';
 import { liveStateReaderOver, readLiveState, readLiveStateMeasured } from './livestate.js';
 import { mailTurnIdle, mailTurnModeOf, mailTurnReadsMark, type MailTurnMode } from './turnidle.js';
@@ -54,7 +54,7 @@ import type {
   LifecycleHealth, MailGate, MirroredLifecycleEvent, NotifyEvent, ProjectPoolsWire, ProjectRepoWire, PrState, RunSummary,
   SessionLanding, SessionStatus, SessionUsage, TaskProgress,
 } from '../../shared/api.js';
-import { APPROVAL_HOOK_WAIT_S } from '../../shared/api.js';
+import { APPROVAL_HOOK_WAIT_S, repoLabel } from '../../shared/api.js';
 import { RUN_CLOSE_WHY } from '../../shared/run-close.js';
 import type { AskMintReleaseReason, DelegationEventEnvelopeV1, DelegationHealthInput, DelegationObservationHealth, DelegationProjectionWire } from '../../shared/api.js';
 // ONE LINE, deliberately: `single-definition.test.ts` scans for `UNCHECKED_PR`
@@ -91,7 +91,8 @@ import type { BoxSettingsHeld } from './update/boxSettings.js';
 import { BoxSettingsLane } from './update/boxSettingsLane.js';
 import { DiskAlarmLane } from './diskAlarmLane.js';
 import { PressureLane } from './pressureLane.js';
-import { VisibilityLane } from './linking/visibilityLane.js';
+import { VisibilityLane, type TeamLinkInputs } from './linking/visibilityLane.js';
+import { ticketTally } from './linking/teamLink.js';
 import { ProjectWalkCache, listProjects, ccdEnding } from './lifecycle.js';
 import { BackupLane } from './backupLane.js';
 import type { BackupHealth } from '../../shared/backup.js';
@@ -190,7 +191,8 @@ import {
   type OpenSibling, type RunRow,
 } from './coord/store.js';
 import { renderMailNudge } from './coord/envelope.js';
-import { MAIL_PACE, mailPaceRoleOf } from './coord/mailPace.js';
+import { mailPaceOf } from './coord/mailPace.js';
+import { roleFactsOf, roleOf } from './roleOf.js';
 import { configDirFor } from './config.js';
 import { refusalSentence } from './wsaudit.js';
 import {
@@ -1076,8 +1078,11 @@ export class FleetWatcher {
   private readonly diskAlarm = new DiskAlarmLane(() => this.deps);
   /** The host-pressure beat (#1170): its last reading classifies a stalled link. */
   private readonly pressureLane = new PressureLane(() => this.deps);
-  /** D-8147: one repository-visibility reading per PR pass at most. */
+  /** D-8147: one repository-visibility reading per PR pass at most; D-8405: then the automatic team link. */
   private readonly visibilityLane = new VisibilityLane(() => this.deps);
+  /** D-8405: each project's ticket ids per key (`ticketTally`) from the PR sweep's last full read of it: its branches, pull
+   *  request titles and commits. Written by `prPass` alone and read by the team link; in memory, re-read every sweep. */
+  private readonly ticketTallies = new Map<string, ReadonlyMap<string, number>>();
   private readonly projectWalk = new ProjectWalkCache();
   /** The backup-health beat (D-7858): the last read of the backup state files, judged when the block is read. */
   private readonly backupLane = new BackupLane(() => this.deps);
@@ -7591,7 +7596,7 @@ export class FleetWatcher {
    *   5. `mailTurnIdle` (`turnidle.ts`) reads the RAW live word as a finished
    *      turn — `idle`, or `shell` (an idle main loop over a background shell)
    *      unless `$REG/mail-gate-strict` is listed — and `statusUpdatedAt` is at
-   *      least `MAIL_PACE.worker.quietMs` old (`MAIL_PACE.coordinator.quietMs` for a coordinator): the
+   *      least its row of `MAIL_PACE` old (`quietMs`, `coord/mailPace.ts`, the row its role reads): the
    *      SOLE turn-idle authority. A `shell` delivery also asks `sendPrompt`
    *      to refuse a pane showing `esc to interrupt` (`turn-running`), a
    *      tripwire only. It never reads a folded word,
@@ -8054,17 +8059,25 @@ export class FleetWatcher {
       // and never leaves a session claimed across sweeps.
       this.mailInFlight.add(d.toId);
       try {
-        // THE ONE FACT THIS RUNG ADDS, read once per row from the per-sweep set
-        // above and consumed by exactly two gates: this one and `not-quiet`
-        // below. It is the row of `MAIL_PACE` (`coord/mailPace.ts`) this session
-        // reads, chosen through `mailPaceRoleOf`: the claimant of an open run
-        // reads the coordinator row, every other session the worker row.
+        // The recipient's registry record, looked up once and gated on below
+        // (the registry ladder); found here, before the cooldown, only because
+        // the pace reads its `.child` mark. A lookup, not a gate.
+        const rec = records.find((r) => r.id === d.toId);
+        // THE ONE FACT THIS RUNG ADDS, read once per row and consumed by
+        // exactly two gates: this one and `not-quiet` below. It is the row of
+        // `MAIL_PACE` (`coord/mailPace.ts`) this session's role reads, decided in
+        // L1 through `roleOf`, its facts assembled by the one assembly,
+        // `roleFactsOf`, from the two this pass measures: the recipient's
+        // `.child` mark and the open claimants (the per-sweep set above). The
+        // run kind and declared intent are not read on this path, so they are
+        // `unmeasured`. A recipient the registry does not list has a child mark
+        // that was not measured, read as an unreadable one (spec §3.3.9).
         // Neither condition changes — only the threshold each is measured
         // against.
-        const pace = MAIL_PACE[mailPaceRoleOf(d.toId, coordinators)];
+        const pace = mailPaceOf(roleOf(roleFactsOf(d.toId, { child: rec?.child ?? { kind: 'unreadable' },
+          childRunKind: 'unmeasured', openCoordinators: coordinators, intentDeclared: 'unmeasured' })));
         const last = this.mailCooldown.get(d.toId) ?? 0;
         if (now - last < pace.cooldownMs) { gated(d, 'cooldown'); continue; }
-        const rec = records.find((r) => r.id === d.toId);
         // registry ladder: `records` came from `readRegistryMeasured` above,
         // with `!listed` already refused (fix — blocking review findings
         // 1/5) — so by the time this line runs, a whole-fleet read failure
@@ -8522,10 +8535,38 @@ export class FleetWatcher {
   private async measureVisibility(records: readonly { project: string; workdir: string }[], now: number): Promise<void> {
     try {
       const listed = await listProjects(this.deps.io, this.deps.cfg, records, this.projectWalk);
-      await this.visibilityLane.tick([...new Set(listed.projects.map((p) => p.name))], now);
+      const projects = [...new Set(listed.projects.map((p) => p.name))];
+      await this.visibilityLane.tick(projects, now);
+      await this.visibilityLane.linkTeams(projects, now, this.teamLinkInputs());
     } catch (e) {
       console.warn(`ccrc-server: visibility project list failed (${e instanceof Error ? e.message.slice(0, 120) : 'unknown'})`);
     }
+  }
+
+  /** D-8405: what the team link reads of the PR sweep's memory. */
+  private teamLinkInputs(): TeamLinkInputs {
+    return {
+      tally: (project) => this.ticketTallies.get(project) ?? new Map(),
+      slug: (project) => repoLabel(this.projectRepos.get(project)),
+    };
+  }
+
+  /**
+   * D-8405: the team link now, outside the sweep's cadence: the console calls it when a project is added and when a
+   * Linear workspace key is added, replaced or checked, so a link does not wait for the next PR sweep. The visibility
+   * step is not run (it costs a ccd call; the sweep's own tick takes it). `projects` names the ones to link (a project
+   * just added, which this watcher's kept walk may not list yet); absent, every listed project. Never awaited by a
+   * request; never throws.
+   */
+  linkTeamsSoon(projects?: readonly string[]): void {
+    void (async () => {
+      try {
+        const names = projects ?? (await listProjects(this.deps.io, this.deps.cfg, undefined, this.projectWalk)).projects.map((p) => p.name);
+        await this.visibilityLane.linkTeams(names, this.deps.time.clock.wall(), this.teamLinkInputs());
+      } catch (e) {
+        console.warn(`ccrc-server: team link failed (${e instanceof Error ? e.message.slice(0, 120) : 'unknown'})`);
+      }
+    })();
   }
 
   private async prPass(fleet?: FleetReadModel): Promise<void> {
@@ -8616,6 +8657,8 @@ export class FleetWatcher {
         // arm above already uses for the same reason.
         this.retainRepo(project, repoCellFor({ slug: line.repo }));
       }
+      // D-8405: the team link's evidence, from what this read already holds (no call of its own).
+      this.ticketTallies.set(project, ticketTally(lines.filter(isFullLine).flatMap(ticketTexts)));
       // THE BOUNDED TRAIN PROVER (D-7378), a separate step with its own timeout row: `pr-state --project` has no room
       // for a train read, so a member a merge train landed and closed reads `train-unread` (unmeasured) until its proof
       // is kept. One `ccd pr-train-prove` proves a few such members once and keeps the proofs; the NEXT sweep reads

@@ -1,0 +1,48 @@
+{
+  "name": "error-graphql-validation-milestone-creator",
+  "documentSource": "code before D-8407: changedMilestones selecting the milestone creator that D-8407 removes",
+  "document": "query ChangedMilestones($since: DateTimeOrDuration!, $after: String) { projectMilestones(filter: { updatedAt: { gt: $since } }, first: 100, after: $after) { nodes { id name description targetDate sortOrder updatedAt project { id } creator { id } } pageInfo { hasNextPage endCursor } } }",
+  "variables": {
+    "since": "2026-11-13T15:58:24.477Z"
+  },
+  "requestBody": "{\"query\":\"query ChangedMilestones($since: DateTimeOrDuration!, $after: String) { projectMilestones(filter: { updatedAt: { gt: $since } }, first: 100, after: $after) { nodes { id name description targetDate sortOrder updatedAt project { id } creator { id } } pageInfo { hasNextPage endCursor } } }\",\"variables\":{\"since\":\"2026-11-13T15:58:24.477Z\"}}",
+  "requestHeaders": [
+    "authorization: <the key, bare, no Bearer>",
+    "content-type: application/json"
+  ],
+  "sentAtMs": null,
+  "receivedAtMs": null,
+  "sentAt": null,
+  "status": 400,
+  "statusLine": null,
+  "headers": [
+    [
+      "content-type",
+      "application/json; charset=utf-8"
+    ]
+  ],
+  "body": {
+    "errors": [
+      {
+        "message": "Cannot query field \"creator\" on type \"ProjectMilestone\".",
+        "locations": [
+          {
+            "line": 1,
+            "column": 232
+          }
+        ],
+        "extensions": {
+          "http": {
+            "status": 400,
+            "headers": {}
+          },
+          "code": "GRAPHQL_VALIDATION_FAILED",
+          "type": "graphql error",
+          "userError": true
+        }
+      }
+    ]
+  },
+  "bodyRaw": "{\"errors\":[{\"message\":\"Cannot query field \\\"creator\\\" on type \\\"ProjectMilestone\\\".\",\"locations\":[{\"line\":1,\"column\":232}],\"extensions\":{\"http\":{\"status\":400,\"headers\":{}},\"code\":\"GRAPHQL_VALIDATION_FAILED\",\"type\":\"graphql error\",\"userError\":true}}]}\n",
+  "note": "Recorded by the hierarchy capture (FX2, D-8407). ProjectMilestone has no creator: HTTP 400 GRAPHQL_VALIDATION_FAILED. projectById and changedProjects, which selected it too, answered the same."
+}

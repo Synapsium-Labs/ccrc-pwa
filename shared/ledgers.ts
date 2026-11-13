@@ -13,6 +13,7 @@
 import { ACTIVE_RUN_STATES, OUTSTANDING_DELIVERY_STATES, TERMINAL_RUN_STATES, isStuckReason, type CallView, type MailDeliveryState, type Presence, type RunKind, type RunState, type StuckReason } from './api.js';
 import { DOC_SECTIONS, DOC_SECTION_SLUGS } from './docs.js';
 import { utf8Bytes } from './utf8.js';
+import { PLAN_END_OUTCOMES, type PlanEndOutcome } from './plan.js';
 
 /** What the operator is asked to do. `decide` and `value` carry an answer; `do` carries none; a
  *  `secret`'s value goes to its slot, never through the answer (spec §5). */
@@ -60,17 +61,21 @@ export const ITEM_TRANSITIONS: Readonly<Record<ItemAct, {
 };
 
 /** The ways an operator can answer a refused close (spec 2026-11-04 §12.2, A19): every door but one opens a page or a sheet that
- *  already exists, and `abandon-anyway` opens §9.1's sheet and reuses `act`. */
-export type ItemDoor = 'open-pr' | 'hand-to-coordinator' | 'abandon' | 'abandon-anyway' | 'open-worker' | 'open-coordinator';
+ *  already exists, and `abandon-anyway` opens §9.1's sheet and reuses `act`. D-8558: a claimant the registry no longer holds
+ *  gets no `open-coordinator` (a door to a session that does not exist); `close-run` takes its place, the same `act` with the
+ *  operator's reason, and `end-programme` is that act ending the programme too, offered on the programme's last live run. */
+export type ItemDoor =
+  | 'open-pr' | 'hand-to-coordinator' | 'abandon' | 'abandon-anyway' | 'open-worker' | 'open-coordinator' | 'close-run' | 'end-programme';
 const ITEM_DOOR_MAP: Record<ItemDoor, true> = {
   'open-pr': true, 'hand-to-coordinator': true, abandon: true, 'abandon-anyway': true, 'open-worker': true, 'open-coordinator': true,
+  'close-run': true, 'end-programme': true,
 };
 export const ITEM_DOORS = Object.keys(ITEM_DOOR_MAP) as readonly ItemDoor[];
 export const isItemDoor = (v: unknown): v is ItemDoor => typeof v === 'string' && (ITEM_DOORS as readonly string[]).includes(v);
 /** At least one door: an item with none does not compile (the ruling: a Waiting on you item carries a control that works). */
 export type ItemDoors = readonly [ItemDoor, ...ItemDoor[]];
 /** The doors that end the run through the operator's `act`. */
-export const ABANDONING_DOORS: readonly ItemDoor[] = ['abandon', 'abandon-anyway'];
+export const ABANDONING_DOORS: readonly ItemDoor[] = ['abandon', 'abandon-anyway', 'close-run', 'end-programme'];
 
 /** The typed action an item carries, written by the server alone (`raiseItem`; `parseRaise` never reads one). `end-run`: the
  *  operator's `act` abandons the run and `decline` keeps it; `stuckReason` is the reason the run was stuck under when the
@@ -725,3 +730,54 @@ export function outsideDocLink(texts: readonly string[]): string | null {
  *  transition leaves both to the act, which closes its item itself. */
 export const ABANDON_REQUESTED_PREFIX = 'abandon:requested:';
 export const ABANDON_REFUSED_PREFIX = 'abandon:refused:';
+
+/** D-8558: the longest reason the operator gives when closing a refused run (`close-run`): a few words, one line. */
+export const CLOSE_REASON_MAX = 120;
+
+/** THE ONE WRITER of a refused-close act's detail: the prefix, the item, and the operator's reason after one space. */
+export const refusedCloseDetail = (itemId: number, reason: string | null): string =>
+  `${ABANDON_REFUSED_PREFIX}${itemId}${reason === null ? '' : ` ${reason}`}`;
+
+/** THE ONE READER of that reason: the text after the item's id, or null for a detail with none (an older act, another close). */
+export function refusedCloseReason(detail: string | null | undefined): string | null {
+  if (typeof detail !== 'string' || !detail.startsWith(ABANDON_REFUSED_PREFIX)) return null;
+  const at = detail.indexOf(' ', ABANDON_REFUSED_PREFIX.length);
+  if (at < 0) return null;
+  const reason = detail.slice(at + 1).trim();
+  return reason === '' ? null : reason;
+}
+
+/** What the operator's `act` on a refused-close item may carry (D-8558): the reason, and the programme's end when the item
+ *  offers `end-programme`. An absent body is the act as it always was. */
+export interface ItemActBody { reason?: string; programme?: PlanEndOutcome }
+
+/** THE ONE READER of `act`'s body (D-8558), pure: `reason` is one line of 1 to `CLOSE_REASON_MAX` characters and rides only a
+ *  refused-close item; `programme` (`done` or `abandoned`) rides only an item that offers `end-programme`, and `abandoned` takes
+ *  a reason, as a plan's close does. Any other field, or a body that is not an object, is refused. */
+export function parseItemActBody(raw: unknown, action: ItemAction | null):
+  { ok: true; reason: string | null; programme: PlanEndOutcome | null } | { ok: false; detail: string } {
+  if (raw === undefined || raw === null) return { ok: true, reason: null, programme: null };
+  if (typeof raw !== 'object' || Array.isArray(raw)) return { ok: false, detail: 'the body is an object' };
+  const o = raw as Record<string, unknown>;
+  const extra = Object.keys(o).filter((k) => k !== 'reason' && k !== 'programme');
+  if (extra.length > 0) return { ok: false, detail: `the body takes reason and programme only, not ${extra.join(', ')}` };
+  const refused = action !== null && action.verb === 'close-refused' ? action : null;
+  let reason: string | null = null;
+  if (o['reason'] !== undefined) {
+    if (refused === null) return { ok: false, detail: 'only a refused close takes a reason' };
+    const r = o['reason'];
+    if (typeof r !== 'string' || !isOneLine(r) || r.trim() === '' || [...r.trim()].length > CLOSE_REASON_MAX) {
+      return { ok: false, detail: `the reason is one line of 1 to ${CLOSE_REASON_MAX} characters` };
+    }
+    reason = r.trim();
+  }
+  let programme: PlanEndOutcome | null = null;
+  if (o['programme'] !== undefined) {
+    const p = o['programme'];
+    if (typeof p !== 'string' || !(PLAN_END_OUTCOMES as readonly string[]).includes(p)) return { ok: false, detail: 'programme is done or abandoned' };
+    if (refused === null || !refused.doors.includes('end-programme')) return { ok: false, detail: 'this item does not offer to end the programme' };
+    if (p === 'abandoned' && reason === null) return { ok: false, detail: 'abandoning a programme needs a reason' };
+    programme = p as PlanEndOutcome;
+  }
+  return { ok: true, reason, programme };
+}

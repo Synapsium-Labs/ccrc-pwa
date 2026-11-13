@@ -2373,6 +2373,64 @@ export interface ProjectLinkingWire {
   initiatives: 'on' | 'off';
   linearOwner: string | null;
   ownsTeam: boolean;
+  /** D-8405: how the team key came to be: the operator's (typed, or a candidate tapped; a key stored before D-8405 reads
+   *  `manual` too, as the operator was its only writer), or the automatic pass's, with the evidence it read and the
+   *  team's name. With no key: `manual` when the operator cleared it (the pass then never links it), else null. Absent:
+   *  an older server. */
+  teamLink?: TeamLinkWire | null;
+  /** D-8405: the automatic pass's one-tap choices for a project with no key, best first; empty when it found none. The
+   *  pass never links on them. Absent: an older server. */
+  teamCandidates?: readonly TeamCandidateWire[];
+}
+
+/** D-8405: what the automatic team link read, strongest first. `ticket-ids`: `ids` distinct ticket ids of the team's key
+ *  among `of` distinct ids of every known team key, in the project's branches, pull request titles and commits (a
+ *  private repository only). `name-match`: the project's name or its repository's name equals the team's name or key,
+ *  ignoring case. */
+export type TeamEvidence =
+  | { kind: 'ticket-ids'; ids: number; of: number }
+  | { kind: 'name-match'; matched: 'project' | 'repo'; on: 'name' | 'key' };
+export type TeamEvidenceKind = TeamEvidence['kind'];
+/** D-6048 (ARCH-12): the runtime list, derived from the type. */
+const TEAM_EVIDENCE_KIND_MAP: Record<TeamEvidenceKind, true> = { 'ticket-ids': true, 'name-match': true };
+export const TEAM_EVIDENCE_KINDS: readonly TeamEvidenceKind[] = Object.keys(TEAM_EVIDENCE_KIND_MAP) as TeamEvidenceKind[];
+
+/** D-8405: who set a project's team key. */
+export type TeamLinkSource = 'manual' | 'auto';
+/** D-6048 (ARCH-12): the runtime list, derived from the type. */
+const TEAM_LINK_SOURCE_MAP: Record<TeamLinkSource, true> = { manual: true, auto: true };
+export const TEAM_LINK_SOURCES: readonly TeamLinkSource[] = Object.keys(TEAM_LINK_SOURCE_MAP) as TeamLinkSource[];
+
+/** D-8405: a project's team key and who set it. `at` is when (null for a key stored before anyone recorded it). */
+export type TeamLinkWire =
+  | { source: 'manual'; at: number | null }
+  | { source: 'auto'; teamName: string; evidence: TeamEvidence; at: number };
+
+/** D-8405: one team the automatic pass offers for a project, with the evidence that names it. */
+export interface TeamCandidateWire { key: string; name: string; evidence: TeamEvidence }
+
+const isCount = (v: unknown): v is number => typeof v === 'number' && Number.isInteger(v) && v >= 0;
+
+/** D-8405: the one guard of `TeamEvidence`, for a value read back from storage: exactly one of the two shapes. */
+export function isTeamEvidence(v: unknown): v is TeamEvidence {
+  if (typeof v !== 'object' || v === null || Array.isArray(v)) return false;
+  const o = v as Record<string, unknown>;
+  if (o['kind'] === 'ticket-ids') {
+    return Object.keys(o).length === 3 && isCount(o['ids']) && isCount(o['of']) && (o['ids'] as number) <= (o['of'] as number);
+  }
+  if (o['kind'] === 'name-match') {
+    return Object.keys(o).length === 3 && (o['matched'] === 'project' || o['matched'] === 'repo')
+      && (o['on'] === 'name' || o['on'] === 'key');
+  }
+  return false;
+}
+
+/** D-8405: the one guard of `TeamCandidateWire`; `isKey` is the team key's grammar (`isLinearTeamKey`, `./linear.ts`),
+ *  passed in because this file imports no runtime module. */
+export function isTeamCandidate(v: unknown, isKey: (k: unknown) => boolean): v is TeamCandidateWire {
+  if (typeof v !== 'object' || v === null || Array.isArray(v)) return false;
+  const o = v as Record<string, unknown>;
+  return Object.keys(o).length === 3 && isKey(o['key']) && typeof o['name'] === 'string' && isTeamEvidence(o['evidence']);
 }
 
 /**
@@ -9369,6 +9427,7 @@ export type LcRefusalToken =
   | 'is-a-workspace'           // forget, aimed at a workspace: use the audited path
   | 'session-live'             // forget, on a running session
   | 'session-verdict-unknown' | 'hibernated'  // tmux did not answer: fail-shut, nothing removed; `hibernated` (D-5242): forget on a sleeping row, wake or stop it first
+  | 'roll-fresh-unproven'     // hibernate --roll --fresh (overlord W1a, review 1904 F1): the wake answered 0, but no spawn of the new uuid left its receipt (a concurrent wake, a lost create or an account move came first) — journaled `failed`; the old uuid is back, exit 7
   | 'workspace-unreadable'     // forget (D-8140): the row's workspace field could not be read, so whether it is a workspace is unproven; nothing removed
   | 'spawn-failed'             // _lc_fail: the undo landed, the session did not come back
   | 'purge-refused'            // D-2605: the row's compaction mutex was unavailable, so the registry row stands // @anchor purge-refusal-union
@@ -9531,6 +9590,9 @@ export const LC_REFUSAL_WORD: Record<LcRefusalToken, string> = {
   // D-5242: a hibernated row is asleep, not dead — `ccd ensure` (or mail, a dispatch, a Restart) wakes it (D-5423).
   'hibernated':
     'This session is asleep, not gone: it wakes when it is opened, mailed or dispatched. Wake it (ccd ensure) or stop it (ccd stop) first. Nothing was removed.',
+  // Overlord W1a (review 1904 F1): `ccd hibernate --roll --fresh` proves its fresh start by the consuming spawn's receipt.
+  'roll-fresh-unproven':
+    'This session was put to sleep to start a fresh conversation, but the fresh start could not be proven, so the session is set back to its previous conversation. Nothing was lost, and a fresh start can be asked for again.',
 };
 
 /** Derived from the map — the `PR_REASON_MAP` idiom, so a member added to the

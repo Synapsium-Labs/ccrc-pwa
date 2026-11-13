@@ -565,6 +565,7 @@ describe('the doors of a refused close (Task 27)', () => {
   const WORDS = {
     'open-pr': 'Open the PR', 'hand-to-coordinator': 'Hand to a coordinator', abandon: 'Abandon', 'abandon-anyway': 'Abandon anyway',
     'open-worker': 'Open the worker', 'open-coordinator': 'Open the coordinator',
+    'close-run': 'Close this run', 'end-programme': 'Close and end the programme',
   } as const;
 
   it('each door renders on the row, in the order the item names, beside the row and never inside its button', () => {
@@ -658,6 +659,60 @@ describe('the doors of a refused close (Task 27)', () => {
 
   it('every door in the vocabulary has its words and renders', () => {
     for (const d of ITEM_DOORS) expect(ITEM_DOOR_WORDS[d]).toBe(WORDS[d]);
+  });
+
+  // D-8558: a coordinator the registry no longer holds is never a door; "Close this run" takes the operator's reason.
+  it('Close this run opens the close-run sheet, needs a reason, and sends it with the act', async () => {
+    const act = vi.spyOn(api, 'actItem').mockResolvedValue({ released: true });
+    open({ runs: [live], view: waitingView({ items: [refused(62, ['close-run', 'hand-to-coordinator'])] }) });
+    expect(rowOf(62).querySelector('[data-door="open-coordinator"]')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Close this run' }));
+    expect(await screen.findByText('Close run 7?')).toBeTruthy();
+    const dialog = screen.getByRole('dialog');
+    const confirm = within(dialog).getAllByRole('button', { name: 'Close this run' }).at(-1) as HTMLButtonElement;
+    expect(confirm.disabled, 'no reason picked yet').toBe(true);
+    expect(within(dialog).queryByRole('group', { name: 'The programme' }), 'the item does not offer the programme\'s end').toBeNull();
+    fireEvent.click(within(dialog).getByLabelText('Done elsewhere'));
+    expect(confirm.disabled).toBe(false);
+    fireEvent.click(confirm);
+    await waitFor(() => expect(act).toHaveBeenCalledWith(62, undefined, { reason: 'done elsewhere' }));
+  });
+
+  it('a typed reason is sent as typed, trimmed', async () => {
+    const act = vi.spyOn(api, 'actItem').mockResolvedValue({ released: true });
+    open({ runs: [live], view: waitingView({ items: [refused(63, ['close-run'])] }) });
+    fireEvent.click(screen.getByRole('button', { name: 'Close this run' }));
+    const dialog = await screen.findByRole('dialog');
+    fireEvent.click(within(dialog).getByLabelText('Something else'));
+    const confirm = within(dialog).getAllByRole('button', { name: 'Close this run' }).at(-1) as HTMLButtonElement;
+    expect(confirm.disabled, 'nothing typed yet').toBe(true);
+    fireEvent.change(within(dialog).getByLabelText('The reason, in a few words'), { target: { value: '  landed in another programme ' } });
+    fireEvent.click(confirm);
+    await waitFor(() => expect(act).toHaveBeenCalledWith(63, undefined, { reason: 'landed in another programme' }));
+  });
+
+  it('Close and end the programme opens the same sheet with done picked, and sends the programme\'s end', async () => {
+    const act = vi.spyOn(api, 'actItem').mockResolvedValue({ released: true });
+    open({ runs: [live], view: waitingView({ items: [refused(64, ['close-run', 'end-programme'])] }) });
+    fireEvent.click(screen.getByRole('button', { name: 'Close and end the programme' }));
+    const dialog = await screen.findByRole('dialog');
+    const programme = within(dialog).getByRole('group', { name: 'The programme' });
+    expect((within(programme).getByLabelText('End it: its work is done') as HTMLInputElement).checked).toBe(true);
+    fireEvent.click(within(dialog).getByLabelText('No longer needed'));
+    fireEvent.click(within(dialog).getAllByRole('button', { name: 'Close this run' }).at(-1)!);
+    await waitFor(() => expect(act).toHaveBeenCalledWith(64, undefined, { reason: 'no longer needed', programme: 'done' }));
+  });
+
+  it('Close this run on an item that offers the end keeps the programme open unless the operator picks an end', async () => {
+    const act = vi.spyOn(api, 'actItem').mockResolvedValue({ released: true });
+    open({ runs: [live], view: waitingView({ items: [refused(65, ['close-run', 'end-programme'])] }) });
+    fireEvent.click(screen.getByRole('button', { name: 'Close this run' }));
+    const dialog = await screen.findByRole('dialog');
+    expect((within(dialog).getByLabelText('Keep its plan open') as HTMLInputElement).checked).toBe(true);
+    fireEvent.click(within(dialog).getByLabelText('Done elsewhere'));
+    fireEvent.click(within(dialog).getByLabelText('End it: abandoned'));
+    fireEvent.click(within(dialog).getAllByRole('button', { name: 'Close this run' }).at(-1)!);
+    await waitFor(() => expect(act).toHaveBeenCalledWith(65, undefined, { reason: 'done elsewhere', programme: 'abandoned' }));
   });
 });
 

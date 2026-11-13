@@ -16,7 +16,7 @@ import { readLaneStates, readLimits, projectHome, projectPlacement } from './lim
 import { accountsConnect, lanesWire } from './accounts/lanes.js';
 import { accountOriginClass } from './accounts/gate.js';
 import { readSharesMeasured } from './shares.js';
-import { CLASSES, MODELS_PUSH_MAX, modelsPushDecision, type ModelClass } from '../../shared/models.js';
+import { CLASSES, MODELS_PUSH_MAX, modelsPushDecision, type LaneModelsAnswer, type ModelClass } from '../../shared/models.js';
 import {
   accountPoolsEnforcement, accountPoolsUnavailableReason, poolFor, poolsEnforcement, poolsWire, readObservedEpochFromRegistry, readPoolEpoch,
   readProjectPools, readProjectPoolsWithRoot,
@@ -79,6 +79,7 @@ import { installReaderLabCounter, registerReaderLabRoutes } from './readerLab/ro
 import { operatorActRoute, servedFleetReads, servedFromWatcher, servedProjectReads, takenAfter } from './servedRead.js';
 import { registerTokenRoutes } from './token/routes.js';
 import { overridesViewNow } from './overridesRead.js';
+import { readLaneModels } from './laneModels.js';
 import { registerLinearRoutes, registerLinearWorkspaceRoutes } from './linear/routes.js';
 import { registerLinearProxyRoutes } from './linear/proxyRoutes.js';
 import { registerLinkingRoutes } from './linking/routes.js';
@@ -1446,6 +1447,18 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   // override is placed and lifted at a terminal. Session-gated when armed (not EXEMPT), no box token.
   app.get('/api/fleet/overrides', async () => ({ ok: true, ...await overridesViewNow(deps) }));
 
+  // D-8406: a lane's classes as its own files say them (`laneModels.ts`): each class's model and the catalogue's label,
+  // for the session's model picker and the new-session sheet. Read only. Session-gated when armed (not EXEMPT), no box
+  // token. A lane the roster does not hold is `not-found` before any file is named, so no path is built from a word
+  // the roster never vetted.
+  app.get('/api/models/:lane', async (req, reply) => {
+    const { lane } = req.params as { lane: string };
+    if (!deps.cfg.roster.byId.has(lane)) return refuseRoute(reply, 'not-found');
+    reply.header('cache-control', 'no-store');
+    const answer: LaneModelsAnswer = { ok: true, lane, models: await readLaneModels(deps.io, deps.cfg.ccrcDir, lane) };
+    return answer;
+  });
+
   // Web Push: the PWA fetches the VAPID public key, then registers its push
   // subscription here. Notifications fire from the FleetWatcher on a new
   // question or a busy→idle finish. 501 when push isn't configured.
@@ -2147,6 +2160,8 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   registerLinearWorkspaceRoutes(app, {
     ccrcDir: deps.cfg.ccrcDir, gate: accountGate, rate: deps.linearRate ?? null, refresher: deps.linearRefresher ?? null,
     journal: deps.linearJournal ?? null, fetch: deps.linear?.fetch, timeoutMs: deps.linear?.timeoutMs,
+    // D-8405: a key act that learned a workspace's teams runs the automatic team link at once.
+    onTeamsLearned: () => watcher?.linkTeamsSoon(),
   });
   // The Linear proxy's thirteen box-token routes (#1444, spec §6), beside the connection's: the same rate service and
   // refresher, the one journal and the policy point, each passed through as it is (possibly absent, never a default),
@@ -2621,6 +2636,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     authEnabled: deps.cfg.authEnabled, sessionAuth, mailToken: () => deps.mailToken ?? null,
     registerSecret: (laneId, value, o) => deps.masker?.ingestSecret(laneId, value, o) ?? 'unregistered',
     retireSecret: (laneId) => { deps.masker?.retireSecret(laneId); },
+    ...(deps.plan === undefined ? {} : { plan: deps.plan }),
   });
 
   /**
@@ -3242,6 +3258,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       return refuseRoute(reply, failure === 'exists' ? 'project-exists' : 'outcome-unknown');
     }
     projectWalk.drop();
+    watcher?.linkTeamsSoon([plan.name]);   // D-8405: a project that appears is linked now, not at the next sweep
     return { ok: true, name: plan.name, source: plan.source } satisfies ProjectAddAnswer;
   });
 

@@ -1,0 +1,67 @@
+{
+  "name": "mutation-initiative-update-status-active",
+  "documentSource": "code",
+  "document": "mutation InitiativeUpdate($id: String!, $input: InitiativeUpdateInput!) { initiativeUpdate(id: $id, input: $input) { success initiative { id } } }",
+  "variables": {
+    "id": "00000000-0008-4000-8000-000000000020",
+    "input": {
+      "status": "Active"
+    }
+  },
+  "requestBody": "{\"query\":\"mutation InitiativeUpdate($id: String!, $input: InitiativeUpdateInput!) { initiativeUpdate(id: $id, input: $input) { success initiative { id } } }\",\"variables\":{\"id\":\"00000000-0008-4000-8000-000000000020\",\"input\":{\"status\":\"Active\"}}}",
+  "requestHeaders": [
+    "authorization: <the key, bare, no Bearer>",
+    "content-type: application/json"
+  ],
+  "sentAtMs": null,
+  "receivedAtMs": null,
+  "sentAt": null,
+  "status": 200,
+  "statusLine": null,
+  "headers": [
+    [
+      "content-type",
+      "application/json; charset=utf-8"
+    ],
+    [
+      "x-complexity",
+      "2"
+    ],
+    [
+      "x-ratelimit-complexity-limit",
+      "3000000"
+    ],
+    [
+      "x-ratelimit-complexity-remaining",
+      "2999952"
+    ],
+    [
+      "x-ratelimit-complexity-reset",
+      "1794590003917"
+    ],
+    [
+      "x-ratelimit-requests-limit",
+      "2500"
+    ],
+    [
+      "x-ratelimit-requests-remaining",
+      "2459"
+    ],
+    [
+      "x-ratelimit-requests-reset",
+      "1794590003917"
+    ]
+  ],
+  "body": {
+    "data": {
+      "initiativeUpdate": {
+        "success": true,
+        "initiative": {
+          "id": "00000000-0008-4000-8000-000000000020"
+        }
+      }
+    }
+  },
+  "bodyRaw": "{\"data\":{\"initiativeUpdate\":{\"success\":true,\"initiative\":{\"id\":\"00000000-0008-4000-8000-000000000020\"}}}}\n",
+  "note": "Recorded by the hierarchy capture (FX2, D-8407). Each InitiativeStatus value in turn, on one initiative."
+}
