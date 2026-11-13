@@ -1,6 +1,9 @@
 // Settings › Security › Project linking (the linking standard, D-8147; plan Task 8). One row per project, from the
-// `linking` cell of `GET /api/projects`:
-//   * Team key: a short field (uppercased as typed), Save; empty clears it.
+// `linking` cell of `GET /api/projects` (D-8405: one per project NAME, `linkingRowsOf`, though the route answers one row
+// per checkout directory):
+//   * Team key: a short field (uppercased as typed), Save; empty clears it. D-8405: a key the automatic pass linked says
+//     so under the field, with its evidence; a project with no key shows the pass's candidates, each a one-tap Link that
+//     saves its key as the operator's (the action sits on the row). The pass never writes over the operator's key.
 //   * Visibility: the measured word and its age ("Private, read 3h ago", "Not read yet", "Couldn't read: offline"), and
 //     the override select (Automatic, Private, Public), written the moment it changes.
 //   * PR template: Present / Absent, and, for a private project with no template and a team key, "Open a template PR"
@@ -18,6 +21,7 @@ import type { ProjectRow } from '../../../../shared/api';
 import { ResultLine, SETTINGS_CARDS, useResultLine } from '../../fleet/settingsText';
 import { api } from '../../lib/api';
 import { loadProjects } from '../../fleet/useProjectRows';
+import { candidateLabel, candidateWhy, candidatesShown, linkingRowsOf, teamLinkLine } from '../../fleet/linkingWords';
 import { linkingErrorText } from '../../lib/refusalWords';
 
 /** The card's words. Short labels only; the sentences a refusal says are `LINKING_REFUSAL_TEXT`'s. */
@@ -41,6 +45,7 @@ export const LINKING_TEXT = {
   none: 'There are no projects on this fleet.',
   unreadable: "The project list could not be read. Reload this page to try again.",
   noRows: 'This server does not report project linking yet.',
+  candidates: 'Suggested teams',
 } as const;
 
 /** The consequence line of the confirm: the repository and the file, named. */
@@ -92,6 +97,8 @@ function LinkingRow({ name, linking, now, onStored }: {
     const key = draft.trim().toUpperCase();
     write({ teamKey: key === '' ? null : key, override: linking.override });
   };
+  const linkLine = teamLinkLine(linking);
+  const candidates = candidatesShown(linking);
   const openTemplate = (): void => {
     setBusy(true);
     result.clear();
@@ -124,6 +131,20 @@ function LinkingRow({ name, linking, now, onStored }: {
           />
           <Button variant="ghost" disabled={busy} onClick={saveKey}>{LINKING_TEXT.save}</Button>
         </div>
+        {linkLine !== null && <p className="settings-note linking-auto" data-linking-auto="">{linkLine}</p>}
+        {candidates.length > 0 && (
+          <div className="linking-candidates" role="group" aria-label={LINKING_TEXT.candidates}>
+            <p className="settings-note">{LINKING_TEXT.candidates}</p>
+            {candidates.map((c) => (
+              <div key={c.key} className="linking-candidate" data-linking-candidate={c.key}>
+                <Button variant="ghost" disabled={busy} onClick={() => write({ teamKey: c.key, override: linking.override })}>
+                  {candidateLabel(c)}
+                </Button>
+                <p className="settings-note">{candidateWhy(c)}</p>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
       <div className="linking-cell linking-visibility">
         <p className="settings-note linking-measured">{visibilityLine(linking.measured, now)}</p>
@@ -191,12 +212,12 @@ export function ProjectLinkingCard(): ReactNode {
   if (read.kind === 'loading') body = <p className="settings-note">{LINKING_TEXT.loading}</p>;
   else if (read.kind === 'failed') body = <p className="settings-note">{LINKING_TEXT.unreadable}</p>;
   else {
-    const shown = read.rows.filter((p) => p.linking !== undefined);
+    const shown = linkingRowsOf(read.rows);
     body = read.rows.length === 0 ? <p className="settings-note">{LINKING_TEXT.none}</p>
       : shown.length === 0 ? <p className="settings-note">{LINKING_TEXT.noRows}</p>
         : (
           <ul className="linking-list">
-            {shown.map((p) => <LinkingRow key={p.name} name={p.name} linking={p.linking!} now={now} onStored={stored} />)}
+            {shown.map((p) => <LinkingRow key={p.name} name={p.name} linking={p.linking} now={now} onStored={stored} />)}
           </ul>
         );
   }

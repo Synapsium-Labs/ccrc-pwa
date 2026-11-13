@@ -117,6 +117,18 @@ export const isFullLine = (
   v: CcdPrLine | CcdPrFailure | CcdPrSessionFailure,
 ): v is CcdPrLine => Array.isArray((v as CcdPrLine).rows);
 
+/** D-8405: the texts of a full line the team link reads for ticket ids: the workspace's branch, each commit's subject and
+ *  body, and each pull request row's title and head branch. A field of the wrong type is skipped (rows are cast through
+ *  from ccd's output). Pull request bodies are not here: the sweep's rows do not carry them. */
+export function ticketTexts(line: CcdPrLine): string[] {
+  const out: string[] = [];
+  const add = (v: unknown): void => { if (typeof v === 'string' && v !== '') out.push(v); };
+  add(line.branch);
+  for (const c of Array.isArray(line.commits) ? line.commits : []) { add(c?.subject); add(c?.body); }
+  for (const r of line.rows) { add(r?.title); add(r?.headRefName); }
+  return out;
+}
+
 /**
  * `ccd pr-state` output → one entry per line. **Every line is parsed inside
  * its own try/catch**: `FleetWatcher.tick()` is invoked as `void this.tick()`,

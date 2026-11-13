@@ -1,13 +1,32 @@
 // The visibility reading's sweep lane (D-8147). L4: it acts and records; `visibilityDue` (policy.ts) decides which
 // project is next and `linkingStore.ts` is the table. One `ccd repo-visibility` call per tick at most, so a fleet of
 // projects is read over a few passes and the GitHub budget the PR sweep already spends does not grow with it.
+//
+// D-8405: the linking lane's second step, `linkTeams`, the automatic team link. It runs on the same cadence (after each
+// visibility tick, from the PR sweep) and when the console adds a project or a Linear workspace key, never on a poller of
+// its own. It calls neither Linear nor GitHub: the teams are what the box's Linear keys already learned (the store the
+// refresher and the key acts write), and the evidence is what the PR sweep already read. `teamLink.ts` decides; this
+// writes through `CoordStore`, whose SQL keeps the operator's key against it.
 import type { RepoVisibility, TemplateState } from '../../../shared/linking.js';
 import { REPO_VISIBILITIES, TEMPLATE_STATES } from '../../../shared/linking.js';
 import type { WatcherDeps } from '../deps.js';
 import { CCD_ARGV, ccdCan } from '../ccdargv.js';
+import { readLinearStore, type LinearStoreRead } from '../linear/store.js';
+import { routableTeams } from '../linear/route.js';
 import { visibilityDue } from './policy.js';
+import { planTeamLink, repoNameOf } from './teamLink.js';
 
-type LaneDeps = Pick<WatcherDeps, 'coord' | 'runCcd' | 'fleetState'>;
+/** `cfg` is the Linear store's home for the team link; a lane given none (a test of the visibility step) links nothing. */
+type LaneDeps = Pick<WatcherDeps, 'coord' | 'runCcd' | 'fleetState'> & { cfg?: Pick<WatcherDeps['cfg'], 'ccrcDir'> };
+
+/** What the PR sweep last read of each project, for the team link (D-8405). */
+export interface TeamLinkInputs {
+  /** The project's ticket ids per key (`ticketTally` of its branches, pull request titles and commits); empty when the
+   *  sweep has read none. */
+  tally: (project: string) => ReadonlyMap<string, number>;
+  /** The repository slug the PR sweep measured for the project, or null. */
+  slug: (project: string) => string | null;
+}
 
 /** What ccd printed, narrowed: a full answer, a failure with its word, or nothing intelligible. */
 function parseAnswer(stdout: string):
@@ -25,7 +44,39 @@ function parseAnswer(stdout: string):
 }
 
 export class VisibilityLane {
-  constructor(private readonly deps: () => LaneDeps) {}
+  constructor(
+    private readonly deps: () => LaneDeps,
+    /** The Linear store's read (the seam a test replaces). */
+    private readonly readStore: (ccrcDir: string) => Promise<LinearStoreRead> = readLinearStore,
+  ) {}
+
+  /**
+   * D-8405: the automatic team link over `projects`: each project's step is `planTeamLink`'s (link the decisive team, or
+   * record the candidates; a project with a key keeps none), and the store's SQL holds the operator's key. Nothing when
+   * there is no store, no ccrc dir or the Linear store cannot be read (no teams known is not the same as no teams). Never
+   * throws.
+   */
+  async linkTeams(projects: readonly string[], now: number, inputs: TeamLinkInputs): Promise<void> {
+    try {
+      const { coord, cfg } = this.deps();
+      if (coord === undefined || cfg === undefined || projects.length === 0) return;
+      const store = await this.readStore(cfg.ccrcDir);
+      if (store.kind !== 'listed') return;
+      const teams = routableTeams(store);
+      const known = coord.linkingAll();
+      for (const project of new Set(projects)) {
+        const l = known.get(project);
+        const slug = l?.measured.state === 'measured' ? l.measured.slug : inputs.slug(project);
+        const plan = planTeamLink({ teamKey: l?.teamKey ?? null, source: l?.teamLink?.source ?? null }, {
+          project, repo: slug === null ? null : repoNameOf(slug), mode: l?.mode ?? 'unknown', teams, tally: inputs.tally(project),
+        });
+        if (plan.link !== null && coord.linkTeamAuto(project, plan.link, now)) continue;
+        coord.recordTeamCandidates(project, plan.candidates);
+      }
+    } catch (e) {
+      console.warn(`ccrc-server: team link lane failed (${e instanceof Error ? e.message.slice(0, 120) : 'unknown'})`);
+    }
+  }
 
   /** Measure the one project that is due, if any. Never throws; a ccd without the verb is skipped without a record. */
   async tick(projects: readonly string[], now: number): Promise<void> {
