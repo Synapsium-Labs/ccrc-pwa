@@ -3964,8 +3964,7 @@ _hook_start_report() {
   { [ -e "$REG/$id.child" ] || [ -L "$REG/$id.child" ]; } && return 0
   now=$(_hook_epoch_ms)
   [[ -f "$f" ]] && { IFS=$'\t' read -r after drop; while IFS=$'\t' read -r t j; do kept+=("$t"$'\t'"$j"); done; } < "$f" 2>/dev/null
-  [[ "$after" =~ ^[0-9]+$ ]] || after=0; [[ "$drop" =~ ^[0-9]+$ ]] || drop=0
-  (( now < after )) && pass=0
+  [[ "$after" =~ ^[0-9]+$ ]] || after=0; [[ "$drop" =~ ^[0-9]+$ ]] || drop=0; (( now < after )) && pass=0
   for e in ${kept[@]+"${kept[@]}"}; do
     t="${e%%$'\t'*}" j="${e#*$'\t'}"; [[ "$t" =~ ^[0-9]+$ ]] || t=0
     (( pass && SECONDS - s0 >= 4 )) && pass=0 dead=1
