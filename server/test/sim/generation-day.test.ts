@@ -48,6 +48,16 @@ describe('the generation day\'s invariants go red on a hand-made sequence', () =
     expect(byName('G4').check(seqOf([['obs', 'server', 'ms=5', 'lane'], ['obs', 'server', 'ms=4', 'lane']]))?.invariant).toBe('G4');
     expect(byName('G4').check(seqOf([['deadline', 'o#1:draining:9', 'fired', 'lane'], ['deadline', 'o#1:draining:9', 'fired', 'lane']]))?.invariant).toBe('G4');
   });
+  it('CONTROL: G4 reads a freeze as observed time advanced by the cap, never frozen and never past it (review 1894, F1)', () => {
+    const freeze = (after: number): SequenceLine[] => seqOf([['obs', 'server', 'ms=500', 'lane'],
+      ['obs-gap', 'server', 'kind=step;deltaMs=600000', 'lane'], ['obs', 'server', `ms=${after}`, 'lane']]);
+    expect(byName('G4').check(freeze(500 + 60_000))).toBeNull();
+    expect(byName('G4').check(freeze(500))?.invariant).toBe('G4');
+    expect(byName('G4').check(freeze(500 + 30_000))?.invariant).toBe('G4');
+    expect(byName('G4').check(freeze(500 + 60_001))?.invariant).toBe('G4');
+    expect(byName('G4').check(seqOf([['obs', 'server', 'ms=0', 'lane'], ['obs', 'server', 'ms=60001', 'lane']]))?.invariant).toBe('G4');
+    expect(byName('G4').check(seqOf([['obs', 'server', 'ms=0', 'lane'], ['obs', 'server', 'ms=30000', 'lane']]))).toBeNull();
+  });
   it('CONTROL: G6 is red on a renewal past its budget and the beat slack, green within it or across a crash', () => {
     const at = (rows: Array<[...Row, number]>): SequenceLine[] => rows.map(([kind, id, state, actor, t], i) => ({ seq: i + 1, at: t, kind, id, state, actor }));
     const budget = 360_000 + 4 * 30_000;
@@ -57,6 +67,9 @@ describe('the generation day\'s invariants go red on a hand-made sequence', () =
     expect(byName('G6').check(run(budget + 1))?.invariant).toBe('G6');
     expect(byName('G6').check(run(budget))).toBeNull();
     expect(byName('G6').check(run(budget + 1, true))).toBeNull();
+    const frozenRun = at([['gen', 'o#1', 'checkpointed', 'lane', 0], ['server', 'freeze', 'frozen;for=600000', 'sim', 1_000],
+      ['start', 'o', 'applied', 'host', 10_000], ['gen', 'o#2', 'carded', 'mint', 10_000], ['gen', 'o#2', 'active', 'lane', budget + 1]]);
+    expect(byName('G6').check(frozenRun)).toBeNull();
   });
   it('CONTROL: G5 is red on a mint with no start, and on a start that minted nothing', () => {
     expect(byName('G5').check(seqOf([['gen', 'o#2', 'carded', 'mint']]))?.invariant).toBe('G5');
@@ -77,6 +90,20 @@ describe('the generation day over seeded runs', () => {
     for (const seed of DEFAULTS) {
       const r = await simulate(generationDay(anyCard), seed, GEN_DAY_INVARIANTS);
       if (r.violations.some((v) => v.invariant === 'G1')) { red = `seed ${seed}`; break; }
+    }
+    expect(red).not.toBeNull();
+  }, 600_000);
+
+  it('MUTATION: an observeTime that advances nothing across a freeze goes red on G4 within the CI seeds (review 1894, F1)', async () => {
+    const frozenClock: GenDayModules = { ...REAL, observed: { ...observed,
+      observeTime: (p, mono, proc, cap) => {
+        const st = observed.observeTime(p, mono, proc, cap);
+        return st.gap?.kind === 'step' && p !== null ? { at: { ...st.at, ms: p.ms }, gap: st.gap } : st;
+      } } };
+    let red: string | null = null;
+    for (const seed of DEFAULTS) {
+      const r = await simulate(generationDay(frozenClock), seed, GEN_DAY_INVARIANTS);
+      if (r.violations.some((v) => v.invariant === 'G4')) { red = `seed ${seed}`; break; }
     }
     expect(red).not.toBeNull();
   }, 600_000);

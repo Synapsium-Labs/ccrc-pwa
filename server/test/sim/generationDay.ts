@@ -1,6 +1,6 @@
 // A generation day (Overlord W1a, renewal deciders Task 6; spec §3.3.11, §11.5, §11.7): an Overlord and a coordinator
 // for a seeded day of context growth, compactions, operator presence and absence, idle stretches, host failures,
-// unplanned starts, and server crashes with gaps. The server side is driven ONLY through the four deciders
+// unplanned starts, server crashes with gaps, and server freezes. The server side is driven ONLY through the four deciders
 // (`renewalDue`, `softRenewalMay`, `generationStep`, `observeTime`) and an in-memory generation row per identity; the
 // deciders' modules are a parameter, so a mutated copy can be handed to the same scenario.
 //
@@ -9,7 +9,7 @@
 // only the sequence's lines: generation rows and the fake clock, never sweep phases (the simulator's beat and its async
 // limit, carried from W1a's simulator piece).
 import type { FleetRole } from '../../../shared/fleetRoles.js';
-import { CARDED_NUDGE_AT_MS, HOLD_OFF_MS, LEAST_AGE_MS, OBSERVED_STEP_CAP_MS, RENEWAL_BUDGET_S, SOFT_BUDGET, STATE_DEADLINE_S } from '../../../shared/continuity.js';
+import { CARDED_NUDGE_AT_MS, HOLD_OFF_MS, LEAST_AGE_MS, RENEWAL_BUDGET_S, RENEWAL_LANE_PERIOD_MS, SOFT_BUDGET, STATE_DEADLINE_S } from '../../../shared/continuity.js';
 import type { GenEvent, GenView } from '../../src/continuity/generationMachine.js';
 import type { Reading, RenewalInputs } from '../../src/continuity/renewalDue.js';
 import type { SoftInputs } from '../../src/continuity/softRenewal.js';
@@ -23,10 +23,10 @@ export interface GenDayModules {
   readonly renewal: Pick<typeof import('../../src/continuity/renewalDue.js'), 'renewalDue'>;
   readonly soft: Pick<typeof import('../../src/continuity/softRenewal.js'), 'softRenewalMay'>;
   readonly machine: Pick<typeof import('../../src/continuity/generationMachine.js'), 'generationStep' | 'GEN_ACTIVE' | 'GEN_MINTED'>;
-  readonly observed: Pick<typeof import('../../src/time/observed.js'), 'observeTime'>;
+  readonly observed: Pick<typeof import('../../src/time/observed.js'), 'observeTime' | 'observedStepCapMs'>;
 }
 
-export const GEN_DAY_EDGES = ['soft-renewal', 'hard-renewal', 'renewed', 'crash-gap', 'start-while-down', 'degraded',
+export const GEN_DAY_EDGES = ['soft-renewal', 'hard-renewal', 'renewed', 'crash-gap', 'freeze-gap', 'start-while-down', 'degraded',
   'hold-off', 'budget-wait', 'probe-retry', 'renudge', 'unplanned-start', 'overlord-first'] as const;
 export type GenDayEdge = (typeof GEN_DAY_EDGES)[number];
 
@@ -66,6 +66,12 @@ export function generationDay(mods: GenDayModules): Scenario<GenDayEdge> {
       let boots = 0;
       let proc = 'p0';
       const startQueue: Array<[string, GenEvent]> = [];
+      // A freeze (SIGSTOP, a paused container): the server's process runs nothing until `frozenUntil`, and what reaches
+      // it meanwhile waits in its socket, applied in order at the first beat after the thaw.
+      let frozenUntil = 0;
+      let thawPending = false;
+      const frozenQueue: Array<[string, number | null, GenEvent]> = [];
+      const frozen = (): boolean => server.clock.wall() < frozenUntil;
 
       // ---- WORLD: the sessions, their hosts and the operator. Their timers survive a crash.
       const facts = new Map<string, Facts>();
@@ -122,6 +128,7 @@ export function generationDay(mods: GenDayModules): Scenario<GenDayEdge> {
        *  dropped, except a start, which ends whatever generation is current. */
       const deliver = (who: string, n: number | null, e: GenEvent): void => {
         if (world.isDown()) { if (e.kind === 'started') startQueue.push([who, e]); return; }
+        if (frozen()) { frozenQueue.push([who, n, e]); return; }
         if (n !== null && rows.get(who)!.n !== n) return;
         apply(who, e);
       };
@@ -182,7 +189,14 @@ export function generationDay(mods: GenDayModules): Scenario<GenDayEdge> {
         }
         const serverCrash = chance(entropy, 0.0007);
         const downFor = between(1, 20) * MIN;
-        if (serverCrash && !world.isDown()) {
+        const serverFreeze = chance(entropy, 0.0007);
+        const frozenFor = between(2, 20) * MIN;
+        if (serverFreeze && !world.isDown() && !frozen()) {
+          cover('freeze-gap');
+          line('server', 'freeze', `frozen;for=${frozenFor}`, 'sim');
+          frozenUntil = server.clock.wall() + frozenFor; thawPending = true;
+        }
+        if (serverCrash && !world.isDown() && !frozen()) {
           cover('crash-gap');
           line('server', 'crash', 'down', 'sim');
           world.crash(downFor);
@@ -205,10 +219,16 @@ export function generationDay(mods: GenDayModules): Scenario<GenDayEdge> {
       };
 
       const serverBeat = (): void => {
-        const st = mods.observed.observeTime(obs, server.clock.mono(), proc, OBSERVED_STEP_CAP_MS);
+        if (frozen()) { server.scheduler.after(BEAT_MS, serverBeat); return; }
+        const st = mods.observed.observeTime(obs, server.clock.mono(), proc, mods.observed.observedStepCapMs(RENEWAL_LANE_PERIOD_MS));
         obs = st.at;
-        if (st.gap !== null) line('obs-gap', 'server', st.gap, 'lane');
+        if (st.gap !== null) line('obs-gap', 'server', `kind=${st.gap.kind};deltaMs=${st.gap.deltaMs}`, 'lane');
         line('obs', 'server', `ms=${obs.ms}`, 'lane');
+        if (thawPending) {
+          thawPending = false;
+          line('server', 'thaw', 'thawed', 'sim');
+          for (const [who, n, e] of frozenQueue.splice(0)) deliver(who, n, e);
+        }
         for (const [who, role] of WHO) {
           const stale = chance(entropy, 0.05);
           const pressed = chance(entropy, 0.0003);
@@ -257,6 +277,9 @@ export function generationDay(mods: GenDayModules): Scenario<GenDayEdge> {
 
       world.onBoot(() => {
         proc = `p${boots++}`;
+        // A crash right after a thaw loses what waited in the socket, except a start (the start-while-down rule).
+        for (const [who, , e] of frozenQueue.splice(0)) if (e.kind === 'started') startQueue.push([who, e]);
+        thawPending = false;
         if (boots > 1) {
           line('server', 'boot', 'up', 'sim');
           for (const [who, e] of startQueue.splice(0)) { cover('start-while-down'); apply(who, e); }
@@ -269,6 +292,9 @@ export function generationDay(mods: GenDayModules): Scenario<GenDayEdge> {
 
 // ---- The invariants: predicates over the lines alone.
 const violation = (invariant: string, l: SequenceLine, message: string): Violation => ({ invariant, seq: l.seq, message });
+/** Table 11.5b: one observed step is at most two periods of the 30 s renewal lane, written here from the table rather
+ *  than read from the code under test. */
+const STEP_CAP_MS = 60_000;
 const num = (state: string, key: string): number => Number(new RegExp(`${key}=(-?\\d+)`).exec(state)?.[1] ?? Number.NaN);
 
 export const GEN_DAY_INVARIANTS: readonly Invariant[] = [
@@ -302,20 +328,25 @@ export const GEN_DAY_INVARIANTS: readonly Invariant[] = [
       }
       return null;
     } },
-  { name: 'G4', says: 'a server gap neither advances observed time nor fires a deadline twice',
+  { name: 'G4', says: 'a restart never advances observed time, a freeze advances it by the step cap (never by nothing, never by more), and no deadline fires twice',
     check(lines) {
-      let last: number | null = null; let lastBeforeCrash: number | null = null; let afterBoot = false;
+      let last: number | null = null; let lastBeforeCrash: number | null = null; let afterBoot = false; let stepGap = false;
       const fired = new Set<string>();
       for (const l of lines) {
         if (l.kind === 'server' && l.state === 'down') lastBeforeCrash = last;
         if (l.kind === 'server' && l.state === 'up') afterBoot = true;
+        if (l.kind === 'obs-gap' && l.state.startsWith('kind=step;')) stepGap = true;
         if (l.kind === 'obs') {
           const ms = num(l.state, 'ms');
           if (last !== null && ms < last) return violation('G4', l, `observed time fell from ${last} to ${ms}`);
           if (afterBoot && lastBeforeCrash !== null && ms !== lastBeforeCrash) {
             return violation('G4', l, `observed time moved across a gap: ${lastBeforeCrash} before the crash, ${ms} after the boot`);
           }
-          afterBoot = false; last = ms;
+          if (last !== null && ms - last > STEP_CAP_MS) return violation('G4', l, `one step advanced ${ms - last}, past the cap`);
+          if (stepGap && last !== null && ms - last !== STEP_CAP_MS) {
+            return violation('G4', l, `a freeze advanced observed time by ${ms - last}, not by the cap (review 1894, F1)`);
+          }
+          afterBoot = false; stepGap = false; last = ms;
         }
         if (l.kind === 'deadline') {
           if (fired.has(l.id)) return violation('G4', l, `deadline ${l.id} fired twice`);
@@ -324,12 +355,12 @@ export const GEN_DAY_INVARIANTS: readonly Invariant[] = [
       }
       return null;
     } },
-  { name: 'G6', says: 'a renewal that lands spends at most RENEWAL_BUDGET_S from checkpointed (or clearing) to active, give or take the lane\'s beat per state, unless the server was down meanwhile',
+  { name: 'G6', says: 'a renewal that lands spends at most RENEWAL_BUDGET_S from checkpointed (or clearing) to active, give or take the lane\'s beat per state, unless the server was down or frozen meanwhile',
     check(lines) {
       // When a renewal's budget began, per identity; a crash inside it waives the check for that renewal.
       const began = new Map<string, { at: number; crashed: boolean }>();
       for (const l of lines) {
-        if (l.kind === 'server' && l.state === 'down') for (const b of began.values()) b.crashed = true;
+        if (l.kind === 'server' && (l.state === 'down' || l.state.startsWith('frozen'))) for (const b of began.values()) b.crashed = true;
         if (l.kind !== 'gen') continue;
         const who = l.id.slice(0, l.id.lastIndexOf('#'));
         if ((l.state === 'checkpointed' || l.state === 'clearing') && !began.has(who)) began.set(who, { at: l.at, crashed: false });
