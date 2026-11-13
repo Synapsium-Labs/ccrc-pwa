@@ -2786,6 +2786,28 @@ export const MIGRATIONS: readonly string[] = [
   ALTER TABLE project_linking ADD COLUMN teamAt INTEGER;
   ALTER TABLE project_linking ADD COLUMN teamCandidates TEXT;
   `,
+  // ── 65: user_version 64 -> 65 ─────────────────────────────────────────────
+  // #2726 (the invited reply, plan docs/superpowers/plans/2026-11-10-overlord/w1a-invited-replies.md): `mail.answersMail`,
+  // the MAIL row id of the mail this row was admitted as the invited reply to. Peer mail (`runId` NULL) of kind `answer`
+  // whose `inReplyTo` names a delivery to its sender, of a mail from its recipient, is outside the peer bound
+  // (`coord/peerBound.ts`, `peerMailVerdict`), and this column records that admission: the peer counts skip a row that
+  // carries it, so an invited reply holds no slot, and `mail_answers_once` makes "one invited reply per mail" a fact of
+  // the database as well as of the route. Keyed on the MAIL id, never the delivery id the wire names, because a parked
+  // delivery revived by `reviveParkedDeliveries` gets a new delivery id for the same mail and must buy no second reply.
+  // Its one writer is `insertMail`, from the mail ingress only. NULL = an ordinary mail, which is every row written
+  // before this entry.
+  //
+  // ONE NULLABLE COLUMN ON AN EXISTING TABLE AND ONE PARTIAL INDEX, nothing else: an older build opening a file at
+  // `user_version 65` takes rule 3 (it warns, reads as-is and migrates nothing); its INSERT names its columns and never
+  // this one, so a row it writes is an ordinary mail, and its peer counts count invited replies as ordinary mail too:
+  // stricter, never looser. Every earlier entry is frozen. RE-MEASURE the slot before the PR and before merge (it must
+  // print 64 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  ALTER TABLE mail ADD COLUMN answersMail INTEGER REFERENCES mail(id);
+  CREATE UNIQUE INDEX mail_answers_once ON mail(answersMail) WHERE answersMail IS NOT NULL;
+  `,
 ];
 
 /** The version this build writes. `MIGRATIONS.length` and nothing else: a

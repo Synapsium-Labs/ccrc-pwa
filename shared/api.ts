@@ -5900,9 +5900,23 @@ export const PROGRAM_KICKOFF_SUBJECT = 'program-kickoff';
  * name them: the route enforces, and a peer client showing remaining
  * headroom must not carry a second copy of a policy number
  * (`MAIL_MAX_ATTEMPTS`'s own argument).
+ *
+ * #2726: an INVITED reply is outside all three arms: a `kind: answer` whose
+ * `inReplyTo` names the delivery of a mail its recipient sent to its sender,
+ * one per such mail (`mail.answersMail`). It holds no slot afterwards. The
+ * decision is `server/src/coord/peerBound.ts#peerMailVerdict`.
  */
 export const PEER_MAIL_MAX_OUTSTANDING = 3;
 export const PEER_MAIL_HOURLY = 12;
+/** The hourly arm's window: `PEER_MAIL_HOURLY` accepted peer mails per sender inside any span this long. */
+export const PEER_MAIL_WINDOW_MS = 3_600_000;
+/** When a mail refused `429 peer-quota` can go (#2726 (c)), on the refusal's body beside `detail`, never in the
+ *  recorded rejection row. `ack`: the pair arm frees when `toId` acks one of the sender's outstanding mails to it (or
+ *  the lane parks one), which it does when it next reads its mail. `time`: the hourly arm frees at `at` (epoch ms),
+ *  when the mail whose leaving brings the sender under `PEER_MAIL_HOURLY` leaves the window. */
+export type PeerRetry =
+  | { readonly on: 'ack'; readonly toId: string }
+  | { readonly on: 'time'; readonly at: number };
 
 /** The info string on the fence `renderEnvelope` emits (`coord/envelope.ts`).
  *  ONE definition, here in L0, imported by the renderer — the grammar is

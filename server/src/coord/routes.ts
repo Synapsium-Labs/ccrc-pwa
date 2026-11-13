@@ -16,6 +16,7 @@ import { turnReadDeps, turnVerdictFor } from '../turnverdict.js';
 import type { TurnVerdict } from './archiveDoor.js';
 import { configDirFor } from '../config.js';
 import { peerDeliverable, archiveContradicted } from './peers.js';
+import { peerMailVerdict } from './peerBound.js';
 import { claimLivenessProbe, claimMailHint, lapseWindowStart, normalizeClaimPath, rechainTargets, recentlyLapsedClaims, type LivenessVerdict } from './claims.js';
 import { CCD_ARGV, ccdCan, deviceActor, sweepDec } from '../ccdargv.js';
 import { decideRoute, parseRouteRequest } from './route.js';
@@ -91,7 +92,7 @@ import {
   parseCanonicalPositiveSafeInteger, parseQuestionId, readDialogAnswer,
   LEDGER_STALE_MS, LEDGER_TITLE_MAX_BYTES, ledgerPath, shapeProgramSlug,
   MAIL_ARTIFACTS_MAX, MAIL_ARTIFACT_PATH_MAX_BYTES, MAIL_BODY_MAX_BYTES, MAIL_INBOX_PAGE_MAX_BYTES,
-  MAIL_SUBJECT_MAX_BYTES, PEER_ETIQUETTE, PEER_MAIL_HOURLY, PEER_MAIL_MAX_OUTSTANDING, transitionsFor, IDLE_RUN_STATES,
+  MAIL_SUBJECT_MAX_BYTES, PEER_ETIQUETTE, transitionsFor, IDLE_RUN_STATES,
   isRegistryId, isSessionIdShape, routeEventDetail,
   type AskState, type ClaimConflict, type CoordCapsView, type LifecycleQueryResult,
   type MirroredLifecycleEvent, type PeerDeliverable, type PeerSummary, type RunState, type RunSummary,
@@ -99,7 +100,7 @@ import {
   type ReviewCapAsk, type ReviewCapLiftAnswer, type ReviewCapView, type LeaseDoorAnswer,
 } from '../../../shared/api.js';
 import { REFUSAL_STATUS, type CollectLaneRouteRefusal, type MailRouteRefusal, type RouteRefusal } from '../../../shared/refusal.js';
-import { TESTBOX_PARITY_REQUIRED_SENTENCE } from '../../../shared/api.js';
+import { TESTBOX_PARITY_REQUIRED_SENTENCE, type PeerRetry } from '../../../shared/api.js';
 import type { TestboxActOutcome, TestboxAdminCode } from '../../../shared/testbox-admin.js';
 import { knownFleetIdentity } from '../accounts/audit.js';
 import { parityRefusedByCcd, switchActorOf, switchOnGate, writeSwitchRow } from '../testboxAdmin.js';
@@ -737,11 +738,13 @@ export function registerCoordRoutes(
    *  message ever arrived. `ctx` never carries `code`/`detail` itself — both
    *  are this function's own parameters, spread on top so a call site cannot
    *  accidentally supply a stale one. */
+  // `extra` (#2726 (c)): fields for the answer body beside `detail`, such as a peer-quota refusal's `retry`; never
+  // recorded in the rejection row, whose shape is unchanged.
   const refuse = (reply: FastifyReply, code: MailRouteRefusal,   // D-5381: the status is REFUSAL_STATUS's
     ctx: Omit<Parameters<CoordStore['recordRejection']>[0], 'code' | 'detail'>,
-    detail: string) => {
+    detail: string, extra: { readonly retry?: PeerRetry } = {}) => {
     deps.coord!.recordRejection({ ...ctx, code, detail });
-    return reply.code(REFUSAL_STATUS[code]).send({ ok: false, error: code, detail });
+    return reply.code(REFUSAL_STATUS[code]).send({ ok: false, error: code, detail, ...extra });
   };
 
   /**
@@ -853,6 +856,20 @@ export function registerCoordRoutes(
     } else {
       return refuse(reply, 'bad-kind', { fromId, toId, subject },
         'runId must be a positive integer when given');
+    }
+
+    // `inReplyTo` (#2726): the DELIVERY id of the mail this one answers — the number on the sender's own `id:` line,
+    // the only id a recipient ever sees. Optional and additive: absent or null is none, and an older client never sends
+    // it. Its shape rule is `runId`'s; whether it makes the mail an invited reply is check 9's, for peer mail only.
+    const inReplyToRaw = body['inReplyTo'];
+    let inReplyTo: number | null;
+    if (inReplyToRaw === undefined || inReplyToRaw === null) {
+      inReplyTo = null;
+    } else if (typeof inReplyToRaw === 'number' && Number.isInteger(inReplyToRaw) && inReplyToRaw >= 1) {
+      inReplyTo = inReplyToRaw;
+    } else {
+      return refuse(reply, 'bad-kind', { fromId, toId, subject, runId },
+        'inReplyTo must be a positive integer (a delivery id) when given');
     }
 
     // 3: sendable kind. `isSendableMailKind` deliberately excludes `unknown` —
@@ -1040,18 +1057,25 @@ export function registerCoordRoutes(
     // 'duplicate' first: the most specific refusal — "your message is
     // already queued" tells the caller not to resend at all, where
     // 'peer-quota' invites a retry later.
+    // The decision, its order and its sentences are `peerMailVerdict`'s (L1, `coord/peerBound.ts`, #2726); this
+    // block reads the facts and acts. An invited reply (a kind `answer` whose `inReplyTo` names a delivery to its
+    // sender, of a mail from its recipient, not yet answered) is admitted outside every arm, and the insert below
+    // records which mail it answers, so it holds no slot and the mail buys no second one.
+    let answersMail: number | null = null;
     if (runId === null) {
-      if (coord.hasOutstandingPeerDuplicate(fromId, resolvedToId, subject)) {
-        return refuse(reply, 'duplicate', { fromId, fromUuid, toId, kind, subject, runId },
-          `an outstanding peer mail from ${fromId} to ${resolvedToId} with this subject is already queued`);
-      }
-      if (coord.outstandingPeerCount(fromId, resolvedToId) >= PEER_MAIL_MAX_OUTSTANDING) {
-        return refuse(reply, 'peer-quota', { fromId, fromUuid, toId, kind, subject, runId },
-          `${PEER_MAIL_MAX_OUTSTANDING} peer mails from ${fromId} to ${resolvedToId} are already outstanding`);
-      }
-      if (coord.peerMailInLastHour(fromId, Date.now()) >= PEER_MAIL_HOURLY) {
-        return refuse(reply, 'peer-quota', { fromId, fromUuid, toId, kind, subject, runId },
-          `${fromId} has sent ${PEER_MAIL_HOURLY} peer mails in the last hour`);
+      const now = Date.now();
+      const v = peerMailVerdict({
+        fromId, toId: resolvedToId, kind, inReplyTo,
+        invitation: inReplyTo === null ? null : coord.invitation(inReplyTo),
+        duplicate: coord.hasOutstandingPeerDuplicate(fromId, resolvedToId, subject),
+        outstanding: coord.outstandingPeerCount(fromId, resolvedToId),
+        hourAts: coord.peerMailAtsInLastHour(fromId, now),
+        now,
+      });
+      if (v.verdict === 'invited') answersMail = v.answersMail;
+      else if (v.verdict !== 'bounded') {
+        return refuse(reply, v.verdict, { fromId, fromUuid, toId, kind, subject, runId }, v.detail,
+          v.verdict === 'peer-quota' ? { retry: v.retry } : {});
       }
     }
 
@@ -1069,7 +1093,7 @@ export function registerCoordRoutes(
     const artifactPaths = artifacts as string[];
     const { id } = tx(coord.db, () => {
       const inserted = coord.insertMail({ fromId, fromUuid, toId, runId, kind, subject, body: msgBody,
-        artifacts: artifactPaths });
+        artifacts: artifactPaths, answersMail });
       const delivery = coord.queueDelivery(inserted.id, resolvedToId, '');
       const envelope = renderEnvelope({
         id: delivery.id, fromId, toId: resolvedToId, runId,
