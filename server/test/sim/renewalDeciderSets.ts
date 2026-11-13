@@ -565,6 +565,200 @@ const EARLY_SET: MutantSet<SoftModule> = {
   suite: earlyWhileAwayCases,
 };
 
+// ---------------------------------------------------------------------------------------------------------- generationStep
+
+export type GenModule = typeof import('../../src/continuity/generationMachine.js');
+type GView = import('../../src/continuity/generationMachine.js').GenView;
+type GEvent = import('../../src/continuity/generationMachine.js').GenEvent;
+type GAction = import('../../src/continuity/generationMachine.js').GenAction;
+type GState = import('../../../shared/continuity.js').GenerationState;
+
+const G_STATES: GState[] = ['active', 'draining', 'checkpointed', 'clearing', 'carded', 'probing', 'degraded', 'ended'];
+export const GEN_EVENTS: GEvent[] = [
+  { kind: 'due', cls: 'hard' }, { kind: 'due', cls: 'soft' }, { kind: 'drained' }, { kind: 'handover' },
+  { kind: 'host-ended' }, { kind: 'host-failed', afterEnd: false }, { kind: 'host-failed', afterEnd: true },
+  { kind: 'started', resumed: false }, { kind: 'started', resumed: true }, { kind: 'card-read', hashMatches: true },
+  { kind: 'card-read', hashMatches: false }, { kind: 'probes', passed: true }, { kind: 'probes', passed: false },
+  { kind: 'deadline' }, { kind: 'renew-now' },
+];
+
+/** Every view: each state with `from`, `cls` and the counters at their edge values. */
+export function genViews(): GView[] {
+  const out: GView[] = [];
+  for (const state of G_STATES) for (const from of ['active', 'degraded'] as const) for (const cls of [null, 'hard', 'soft'] as const)
+    for (const tries of [0, 1, 2]) for (const renudged of [false, true]) for (const probeRounds of [0, 1])
+      for (const hostEnded of [false, true]) out.push({ state, from, tries, cls, renudged, probeRounds, hostEnded });
+  return out;
+}
+
+const FRESH = { from: 'active', tries: 0, cls: null, renudged: false, probeRounds: 0, hostEnded: false } as const;
+type Want = { readonly state: GState; readonly over?: Partial<GView>; readonly actions: readonly GAction[] };
+/** Table 3.3.11a and §3.3.11's sentences, one rule each, first match. `same` is "any event a state does not name". */
+type Rule = { readonly why: string; readonly st: readonly GState[]; readonly ev: (e: GEvent) => boolean;
+  readonly when?: (g: GView) => boolean; readonly then: (g: GView) => Want };
+const BACK = (g: GView): Want => (g.from === 'active'
+  ? { state: 'active', over: FRESH, actions: ['release-deliveries', 'set-hold-off'] }
+  : { state: 'degraded', over: { ...FRESH, from: 'degraded' }, actions: ['release-deliveries'] });
+const DEGRADE: Want = { state: 'degraded', over: { ...FRESH, from: 'degraded' }, actions: ['release-deliveries', 'raise-item'] };
+const LIVE: readonly GState[] = ['active', 'draining', 'checkpointed', 'clearing', 'carded', 'probing', 'degraded'];
+export const GEN_RULES: readonly Rule[] = [
+  { why: '"Every start mints a generation": n ends, n+1 is minted at carded', st: LIVE, ev: (e) => e.kind === 'started',
+    then: () => ({ state: 'ended', actions: ['end-this', 'mint-next'] }) },
+  { why: 'active: a due renewal drains', st: ['active'], ev: (e) => e.kind === 'due',
+    then: (g) => ({ state: 'draining', over: { from: 'active', cls: g.cls, tries: 0, renudged: false, probeRounds: 0, hostEnded: false }, actions: ['hold-deliveries'] }) },
+  { why: 'Renew now from active drains, as a hard trigger', st: ['active'], ev: (e) => e.kind === 'renew-now',
+    then: () => ({ state: 'draining', over: { from: 'active', cls: 'hard', tries: 0, renudged: false, probeRounds: 0, hostEnded: false }, actions: ['hold-deliveries'] }) },
+  { why: '"degraded blocks soft triggers only. A hard trigger still renews"; so does Renew now', st: ['degraded'],
+    ev: (e) => (e.kind === 'due' && e.cls === 'hard') || e.kind === 'renew-now',
+    then: () => ({ state: 'draining', over: { from: 'degraded', cls: 'hard', tries: 0, renudged: false, probeRounds: 0, hostEnded: false }, actions: ['hold-deliveries'] }) },
+  { why: 'draining, drained on a hard trigger: checkpointed is skipped', st: ['draining'], ev: (e) => e.kind === 'drained',
+    when: (g) => g.cls === 'hard', then: () => ({ state: 'clearing', over: { tries: 1, hostEnded: false }, actions: ['renew'] }) },
+  { why: 'draining, drained: the checkpoint is assembled and the note asked for', st: ['draining'], ev: (e) => e.kind === 'drained',
+    then: () => ({ state: 'checkpointed', actions: ['assemble-checkpoint', 'ask-handover'] }) },
+  { why: 'draining "120, then back to the state it left"', st: ['draining'], ev: (e) => e.kind === 'deadline', then: BACK },
+  { why: 'checkpointed: the note, or "60, then clearing without the note"', st: ['checkpointed'],
+    ev: (e) => e.kind === 'handover' || e.kind === 'deadline', then: () => ({ state: 'clearing', over: { tries: 1, hostEnded: false }, actions: ['renew'] }) },
+  { why: 'clearing: the receipt\'s first half', st: ['clearing'], ev: (e) => e.kind === 'host-ended',
+    then: () => ({ state: 'clearing', over: { hostEnded: true }, actions: [] }) },
+  { why: '"A failure before the first half returns the generation to the state it left"', st: ['clearing'],
+    ev: (e) => e.kind === 'host-failed' && !e.afterEnd, when: (g) => !g.hostEnded, then: BACK },
+  { why: '"A failure after it retries within the state\'s deadline"; renew is idempotent on n', st: ['clearing'],
+    ev: (e) => e.kind === 'host-failed', then: (g) => ({ state: 'clearing', over: { tries: g.tries + 1, hostEnded: true }, actions: ['renew'] }) },
+  { why: 'clearing "90, for all tries", after the first half: degraded', st: ['clearing'], ev: (e) => e.kind === 'deadline',
+    when: (g) => g.hostEnded, then: () => DEGRADE },
+  { why: 'clearing times out before the first half: back to the state it left', st: ['clearing'], ev: (e) => e.kind === 'deadline', then: BACK },
+  { why: 'carded: the served hash comes back', st: ['carded'], ev: (e) => e.kind === 'card-read' && e.hashMatches,
+    then: () => ({ state: 'probing', over: { probeRounds: 0 }, actions: ['start-probes'] }) },
+  { why: 'carded "45, with one re-nudge"', st: ['carded'], ev: (e) => e.kind === 'deadline', when: (g) => !g.renudged,
+    then: () => ({ state: 'carded', over: { renudged: true }, actions: ['renudge-card'] }) },
+  { why: 'carded after its re-nudge: degraded', st: ['carded'], ev: (e) => e.kind === 'deadline', then: () => DEGRADE },
+  { why: '"When probing passes, generation n+1 is active"', st: ['probing'], ev: (e) => e.kind === 'probes' && e.passed,
+    then: () => ({ state: 'active', over: FRESH, actions: ['release-deliveries'] }) },
+  { why: 'probing "two rounds at most": a first failure re-reads and probes again', st: ['probing'],
+    ev: (e) => e.kind === 'probes' && !e.passed, when: (g) => g.probeRounds === 0,
+    then: () => ({ state: 'probing', over: { probeRounds: 1 }, actions: ['renudge-card', 'start-probes'] }) },
+  { why: '"Probes that fail twice": degraded', st: ['probing'], ev: (e) => e.kind === 'probes' && !e.passed, then: () => DEGRADE },
+  { why: 'probing "165": degraded', st: ['probing'], ev: (e) => e.kind === 'deadline', then: () => DEGRADE },
+];
+
+export function expectedStep(g: GView, e: GEvent): { next: GView; actions: readonly GAction[] } {
+  for (const r of GEN_RULES) {
+    if (r.st.includes(g.state) && r.ev(e) && (r.when === undefined || r.when(g))) {
+      const w = r.then(e.kind === 'due' ? { ...g, cls: e.cls } : g);
+      return { next: { ...g, ...(w.over ?? {}), state: w.state }, actions: w.actions };
+    }
+  }
+  return { next: g, actions: [] };
+}
+
+/** Feeds events through `generationStep`; a `started` hands over to the generation it mints. */
+function runChain(m: GenModule, start: GView, events: readonly GEvent[]): { views: GView[]; actions: GAction[][]; gens: number } {
+  let g = start; let gens = 1;
+  const views: GView[] = []; const actions: GAction[][] = [];
+  for (const e of events) {
+    const s = m.generationStep(g, e);
+    views.push(s.next); actions.push([...s.actions]);
+    if (s.actions.includes('mint-next')) { g = m.GEN_MINTED; gens++; } else g = s.next;
+  }
+  return { views, actions, gens };
+}
+
+const ev = (kind: GEvent['kind'], x: Record<string, unknown> = {}): GEvent => ({ kind, ...x }) as GEvent;
+
+export function generationStepCases(m: GenModule): Record<string, SuiteCase> {
+  return {
+    'the starting views: GEN_ACTIVE works, GEN_MINTED is at carded': () => {
+      expect(m.GEN_ACTIVE).toEqual({ state: 'active', ...FRESH });
+      expect(m.GEN_MINTED).toEqual({ state: 'carded', ...FRESH });
+    },
+    'EXHAUSTIVE: every state x every event x from x cls x the counters\' edges, against Table 3.3.11a written out': () => {
+      const views = genViews();
+      expect(views.length * GEN_EVENTS.length).toBe(1152 * 15);
+      for (const g of views) for (const e of GEN_EVENTS) expect(m.generationStep(g, e), JSON.stringify([g, e])).toEqual(expectedStep(g, e));
+    },
+    'PROPERTY (10,000 seeded event sequences from active): G1, no mint without a start, one renew per try, ended terminal': () => {
+      const rnd = mulberry32(0x6e11);
+      for (let n = 0; n < 10_000; n++) {
+        let g: GView = m.GEN_ACTIVE; let cardOk = false; let starts = 0; let mints = 0;
+        for (let k = 0; k < 30; k++) {
+          const e = GEN_EVENTS[Math.floor(rnd() * GEN_EVENTS.length)]!;
+          const s = m.generationStep(g, e);
+          const where = `seq ${n} step ${k}: ${g.state} ${JSON.stringify(e)}`;
+          if (g.state === 'ended' && (s.next !== g && JSON.stringify(s.next) !== JSON.stringify(g) || s.actions.length > 0)) throw new Error(`${where}: ended moved`);
+          if (e.kind === 'started' && g.state !== 'ended') starts++;
+          mints += s.actions.filter((a) => a === 'mint-next').length;
+          if (s.next.state === 'active' && (g.state === 'carded' || g.state === 'probing')) {
+            if (!(cardOk && g.state === 'probing' && e.kind === 'probes' && e.passed)) throw new Error(`${where}: active without a read card and a passed round`);
+          }
+          if (s.actions.filter((a) => a === 'renew').length > 1) throw new Error(`${where}: two renews in one step`);
+          if (s.actions.includes('renew') && s.next.tries !== (g.state === 'clearing' ? g.tries + 1 : 1)) throw new Error(`${where}: a renew that is not one try`);
+          if (s.actions.includes('renew') && s.next.state !== 'clearing') throw new Error(`${where}: renew outside clearing`);
+          if (g.state === 'carded' && s.next.state === 'probing') cardOk = e.kind === 'card-read' && e.hashMatches;
+          if (s.actions.includes('mint-next')) { g = m.GEN_MINTED; cardOk = false; } else g = s.next;
+        }
+        if (mints !== starts) throw new Error(`seq ${n}: ${mints} mints for ${starts} starts`);
+      }
+    },
+    'MODEL CHECKPOINTED_TIMEOUT=clearing: a timed-out checkpoint goes to clearing without the note': () => {
+      const r = runChain(m, m.GEN_ACTIVE, [ev('due', { cls: 'soft' }), ev('drained'), ev('deadline')]);
+      expect(r.views.map((v) => v.state)).toEqual(['draining', 'checkpointed', 'clearing']);
+      expect(r.actions[2]).toEqual(['renew']);
+    },
+    'MODEL FAILED_RENEWAL_RETURNS=active: a failure before the first half returns to active with a hold-off': () => {
+      const r = runChain(m, m.GEN_ACTIVE, [ev('due', { cls: 'soft' }), ev('drained'), ev('handover'), ev('host-failed', { afterEnd: false })]);
+      expect(r.views.at(-1)!.state).toBe('active');
+      expect(r.actions.at(-1)).toContain('set-hold-off');
+    },
+    'SPEC over the model\'s default: a renewal that began in degraded returns to degraded (the model\'s FAILED_RENEWAL_RETURNS=previous)': () => {
+      const deg: GView = { ...m.GEN_ACTIVE, state: 'degraded', from: 'degraded' };
+      const r = runChain(m, deg, [ev('renew-now'), ev('drained'), ev('host-failed', { afterEnd: false })]);
+      expect(r.views.map((v) => v.state)).toEqual(['draining', 'clearing', 'degraded']);
+      expect(r.actions.at(-1)).not.toContain('set-hold-off');
+    },
+    'MODEL START_WHILE_DOWN=reported-at-boot: a start reported late still ends n and mints n+1 at carded': () => {
+      const r = runChain(m, m.GEN_ACTIVE, [ev('due', { cls: 'hard' }), ev('drained'), ev('host-ended'), ev('started', { resumed: false })]);
+      expect(r.views.at(-1)!.state).toBe('ended');
+      expect(r.actions.at(-1)).toEqual(['end-this', 'mint-next']);
+      expect(r.gens).toBe(2);
+      expect(m.generationStep(m.GEN_ACTIVE, ev('started', { resumed: true })).actions).toEqual(['end-this', 'mint-next']);
+    },
+    'MODEL CARD_DOOR_SKIPS=table: the card is read at carded only, and a matching read starts the probes': () => {
+      expect(m.generationStep(m.GEN_MINTED, ev('card-read', { hashMatches: true }))).toEqual({ next: { ...m.GEN_MINTED, state: 'probing' }, actions: ['start-probes'] });
+      expect(m.generationStep(m.GEN_MINTED, ev('card-read', { hashMatches: false }))).toEqual({ next: m.GEN_MINTED, actions: [] });
+      for (const st of ['active', 'draining', 'checkpointed', 'clearing', 'probing', 'degraded'] as const) {
+        const g = { ...m.GEN_ACTIVE, state: st };
+        expect(m.generationStep(g, ev('card-read', { hashMatches: true })), st).toEqual({ next: g, actions: [] });
+      }
+    },
+    'a full renewal: active, draining, checkpointed, clearing, ended; the next carded, probing, active': () => {
+      const r = runChain(m, m.GEN_ACTIVE, [ev('due', { cls: 'soft' }), ev('drained'), ev('handover'), ev('host-ended'),
+        ev('started', { resumed: false }), ev('card-read', { hashMatches: true }), ev('probes', { passed: false }), ev('probes', { passed: true })]);
+      expect(r.views.map((v) => v.state)).toEqual(['draining', 'checkpointed', 'clearing', 'clearing', 'ended', 'probing', 'probing', 'active']);
+      expect(r.views.at(-1)).toEqual(m.GEN_ACTIVE);
+    },
+  };
+}
+
+const GEN_SET: MutantSet<GenModule> = {
+  modulePath: path.join(ROOT, 'server/src/continuity/generationMachine.ts'),
+  mutants: [
+    { id: 'G1', old: "if (e.kind === 'card-read' && e.hashMatches) return", new: "if (e.kind === 'card-read') return" },
+    { id: 'G2', old: "if (e.passed) return to(GEN_ACTIVE, 'active', ['release-deliveries']);", new: "if (e.passed || g.probeRounds >= 1) return to(GEN_ACTIVE, 'active', ['release-deliveries']);" },
+    { id: 'G3', old: "  draining: (g, e) => {\n    if (e.kind === 'drained') {\n      return g.cls === 'hard'", new: "  draining: (g, e) => {\n    if (e.kind === 'drained') {\n      return g.cls !== 'soft'" },
+    { id: 'G4', old: "if (!g.hostEnded && !e.afterEnd) return back(g);", new: 'if (!e.afterEnd) return back(g);' },
+    { id: 'G5', old: "    ? to(GEN_ACTIVE, 'active', ['release-deliveries', 'set-hold-off'])", new: "    ? to(GEN_ACTIVE, 'active', ['release-deliveries'])" },
+    { id: 'G6', old: "if (e.kind === 'due' && e.cls === 'hard') return drain(g, 'degraded', 'hard');", new: "if (e.kind === 'due') return drain(g, 'degraded', 'hard');" },
+    { id: 'G7', old: "if (e.kind === 'deadline') return g.renudged ? degrade() : to(g, 'carded', ['renudge-card'], { renudged: true });", new: "if (e.kind === 'deadline') return degrade();" },
+    { id: 'G8', old: "return g.probeRounds >= 1 ? degrade() :", new: 'return g.probeRounds >= 2 ? degrade() :' },
+    { id: 'G9', old: "if (e.kind === 'deadline') return g.hostEnded ? degrade() : back(g);", new: "if (e.kind === 'deadline') return degrade();" },
+    { id: 'G10', old: "  ended: (g) => same(g),", new: "  ended: (g, e) => (e.kind === 'started' ? startedHere(g) : same(g))," },
+    { id: 'G11', old: "  : to({ ...GEN_ACTIVE, from: 'degraded' }, 'degraded', ['release-deliveries']);", new: "  : to(GEN_ACTIVE, 'active', ['release-deliveries', 'set-hold-off']);" },
+    { id: 'G12', old: "return to(g, 'clearing', ['renew'], { tries: g.tries + 1, hostEnded: true });", new: "return to(g, 'clearing', ['renew', 'renew'], { tries: g.tries + 1, hostEnded: true });" },
+    { id: 'G13', old: "    if (e.kind === 'handover' || e.kind === 'deadline') return clear(g);", new: "    if (e.kind === 'handover') return clear(g);\n    if (e.kind === 'deadline') return back(g);" },
+  ],
+  suite: generationStepCases,
+};
+
 /** This plan's sets, keyed as `mutation-floors.json` keys them (`<file>#<decider>`). */
 export const RENEWAL_MUTANT_SETS: Record<string, MutantSet<never>> = {
   'server/src/roleOf.ts#roleFactsOf': ROLE_FACTS_SET as MutantSet<never>,
@@ -572,4 +766,5 @@ export const RENEWAL_MUTANT_SETS: Record<string, MutantSet<never>> = {
   'server/src/continuity/renewalDue.ts#renewalDue': RENEWAL_DUE_SET as MutantSet<never>,
   'server/src/continuity/softRenewal.ts#softRenewalMay': SOFT_SET as MutantSet<never>,
   'server/src/continuity/softRenewal.ts#earlyWhileAway': EARLY_SET as MutantSet<never>,
+  'server/src/continuity/generationMachine.ts#generationStep': GEN_SET as MutantSet<never>,
 };
