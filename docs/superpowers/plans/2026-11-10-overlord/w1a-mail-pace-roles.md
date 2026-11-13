@@ -5,7 +5,7 @@
 
 > **Status:** Draft, written and built in one run (1883). It follows the merged `w1a-mail-pace.md` (the table with
 > today's two rows) and `w1a-roles.md` (`FLEET_ROLES`, `roleOf`). The programme mints the deviation numbers; every
-> entry below is `D-TBD-<slug>`.
+> entry below is a plain-words slug until then.
 
 **Goal:** `MAIL_PACE` has one row for every role in `FLEET_ROLES`, so a role with no row is a compile error. The
 Overlord has a row of its own. The mail lane chooses a session's row through `roleOf`, the fleet's one role reader, and
@@ -91,7 +91,7 @@ role table lands"); §3.8, "As measured (W0b)", W0-20.
 - **Cite code by symbol or anchor** (`file.ts#name`), never by line number (`server/test/citations.test.ts`).
 - **Public repository:** no private project, host, account or person's name, no home path. Fixtures use neutral names
   (`lane-a-project-a`).
-- **No D-number is invented.** Departures are written `D-TBD-<slug>` and listed in the wave-done.
+- **No D-number is invented.** Departures are written as plain-words slugs and listed in the wave-done; the coordinator issues the numbers.
 - **No session that exists today changes pace.** Task 1's cases stay unchanged and green from Task 1 to the end. The
   one change of answer, for a session no live session is (a child that claims an open run), is Task 3's own test.
 - **Mutations are restored from a saved copy** (`cp` before, `cp` back after), never `git checkout`, and
@@ -99,9 +99,9 @@ role table lands"); §3.8, "As measured (W0b)", W0-20.
 
 ## Review Focus
 
-1. **Totality is a compiler fact.** `satisfies Readonly<Record<FleetRole, MailPace>>` refuses a missing row (TS1360)
+1. **Totality is a compiler fact.** `satisfies Readonly<Record<FleetRole, MailPace>>` refuses a missing row (TS2741)
    and a stray one (TS2353). Task 2 Step 5 measures both with `tsc`; a looser `Record<string, MailPace>` would compile
-   and is held by Task 3's text pin.
+   and is held by Task 3's type-level check in `mail-pace.test.ts`.
 2. **Undecided takes the slower row, and that is decidable.** `mailPaceOf` picks, for an undecided reading, the
    member whose row is slowest. Task 2 pins that each ambiguity has a member at least as slow as every other member on
    both fields, so "slowest" never has to trade one field against the other. A future row that breaks this reds the
@@ -109,12 +109,12 @@ role table lands"); §3.8, "As measured (W0b)", W0-20.
 3. **The facts are what the lane measures, nothing more.** `mailLaneRoleFacts` reads the child mark and the claim.
    Declared intent stays `unmeasured`: reading it would move a session with intent and no open run onto the
    coordinator row, which spec §6.4 calls a change of behaviour for a commit of its own. That commit is not in this
-   plan (D-TBD-mail-lane-facts). A non-claimant therefore reads undecided `coordinator-or-plain` and takes `plain`'s
+   plan (mail-lane-facts). A non-claimant therefore reads undecided `coordinator-or-plain` and takes `plain`'s
    row, today's 60 s and 120 s.
 4. **The Overlord's row is unreachable today.** Task 2 pins that no combination of the facts the lane passes answers
    `overlord`, `auditor` or `replay`.
 5. **The edges hold.** Task 1's exact-edge cases (now five subjects) are unchanged by Tasks 2 and 3.
-6. **The Overlord's values.** 15 s and 30 s, its own literals (D-TBD-overlord-row). A reviewer checks the argument in
+6. **The Overlord's values.** 15 s and 30 s, its own literals (overlord-row). A reviewer checks the argument in
    the row's docstring against W0-20 and §6.4.
 
 ## Tasks
@@ -192,7 +192,7 @@ export function mailPaceOf(reading: RoleReading): MailPace;
   `mailLaneRoleFacts` returns `{ designation: 'none', auditBody: false, replayBody: false, child: child ?? { kind:
   'unreadable' }, childRunKind: 'unmeasured', claimsOpenRun: claimsOpenRun ? 'yes' : 'no', declaredIntent:
   'unmeasured' }`. An absent record (`undefined`) is a child mark that could not be measured, which spec §3.3.9 reads
-  as undecided, as it reads an unreadable mark (D-TBD-mail-lane-absent-recipient). `MailPaceRole` is deleted (the key
+  as undecided, as it reads an unreadable mark (mail-lane-absent-recipient). `MailPaceRole` is deleted (the key
   is `FleetRole`). `mailPaceRoleOf` stays until Task 3 removes its one caller.
 
 - [ ] **Step 1: Write the failing test.**
@@ -270,14 +270,14 @@ describe("mailLaneRoleFacts: the lane's facts, and today's answers", () => {
 - [ ] **Step 3: Implement.** The table above, each row with its docstring: the worker and coordinator rows keep
   theirs word for word; `plain` and `reviewer` say they read the worker pair for the worker row's reason; `auditor` and
   `replay` say they have no lane before §9.5 and take the worker pair until their lanes measure otherwise
-  (D-TBD-auditor-replay-rows); `overlord` carries the argument of D-TBD-overlord-row. `mailPaceOf`: a decided role
+  (auditor-replay-rows); `overlord` carries the argument of overlord-row. `mailPaceOf`: a decided role
   reads `MAIL_PACE[role]`; an undecided one reduces its members' rows to the one with the larger `quietMs`, then the
   larger `cooldownMs`. The header is rewritten: keyed by `FleetRole`, total, chosen through `roleOf`; the facts the
   lane passes and why intent is not read; the Overlord's row unreachable until W1's designation reader.
 - [ ] **Step 4: Run it, and the rings.** `ccrc test -- ./node_modules/.bin/vitest run test/mail-pace.test.ts`, then
   the same for `test/rings/totality.test.ts`, `test/rings/outward-edges.test.ts` and `test/citations.test.ts`, then
   `ccrc test -- ./node_modules/.bin/tsc --noEmit -p .`. Expected: all pass.
-- [ ] **Step 5: Mutations** (each from a saved copy, restored after). Delete the `replay` row: `tsc` reports TS1360
+- [ ] **Step 5: Mutations** (each from a saved copy, restored after). Delete the `replay` row: `tsc` reports TS2741
   (`replay` missing), and the keys case goes red. Add a row `operator: { ... }`: `tsc` reports TS2353. Make
   `mailPaceOf` take the faster member: the undecided case goes red. Return `child` unchanged for `undefined` (no
   fallback): the absent-record case goes red. Pass `declaredIntent: 'no'`: the "intent is not read" case goes red.
@@ -303,7 +303,7 @@ describe("mailLaneRoleFacts: the lane's facts, and today's answers", () => {
 - Produces: no new export.
 
 - [ ] **Step 1: Write the failing pins.** In `core-vocab.test.ts`, the case "the mail lane chooses a row once,
-  through mailPaceRoleOf" becomes two, and one more joins:
+  through mailPaceRoleOf" becomes two:
 
 ```ts
 it('the mail lane chooses a row once, through roleOf', () => {
@@ -316,11 +316,20 @@ it('the row is chosen in coord/mailPace.ts only: no other source indexes MAIL_PA
   expect(ALL.filter((f) => INDEX.test(stallCodeText(readFileSync(f, 'utf8')))).map(rel)).toEqual(['server/src/coord/mailPace.ts']);
   expect(ALL.filter((f) => /\bmailPaceRoleOf\b/.test(readFileSync(f, 'utf8'))).map(rel)).toEqual([]);
 });
-it('MAIL_PACE is keyed by FleetRole, so a role with no row is a compile error', () => {
-  const src = readFileSync(path.join(ccrcRoot, 'server', 'src', 'coord', 'mailPace.ts'), 'utf8');
-  expect(src).toMatch(/\}\s*as const satisfies Readonly<Record<FleetRole, MailPace>>;/);
-});
 ```
+
+  In `mail-pace.test.ts`, a type-level check that the table's keys are exactly `FleetRole`, which
+  `typecheck-tests` compiles, and one case that references it:
+
+```ts
+type SameKeys<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false;
+const MAIL_PACE_IS_TOTAL: SameKeys<keyof typeof MAIL_PACE, FleetRole> = true;
+```
+
+  It holds totality even if the table's `satisfies` is ever loosened. A text pin over `mailPace.ts` was tried first
+  and dropped: a literal source read of a `server/src` file with no ARCH-06 ceiling row reds
+  `single-definition/advance-switches.test.ts`'s ratchet ("literal source pins ... may only shrink"), and
+  `scan/symbols.ts` indexes functions, not `const` declarations (mail-pace-total-type-pin).
 
   In `mail-sweep.test.ts`, after the characterization describe and inside the same outer describe:
 
@@ -350,7 +359,8 @@ describe('a child that claims an open run reads the worker pair (roleOf, Table 3
 ```
 
 - [ ] **Step 2: Run them.** `ccrc test -- ./node_modules/.bin/vitest run test/single-definition/core-vocab.test.ts
-  -t 'one MAIL_PACE'`: the three new cases fail (the lane still calls `mailPaceRoleOf`). `ccrc test --
+  -t 'one MAIL_PACE'`: the two lane cases fail (the lane still calls `mailPaceRoleOf`). The type-level check
+  already compiles, because Task 2 typed the table. `ccrc test --
   ./node_modules/.bin/vitest run test/mail-sweep.test.ts -t 'a child that claims'`: both cases fail (today's lane
   delivers at 15 s to any claimant).
 - [ ] **Step 3: Implement** the `watch.ts` and `mailPace.ts` changes above.
@@ -367,33 +377,58 @@ describe('a child that claims an open run reads the worker pair (roleOf, Table 3
   takes the worker pair). Pass `false` for the claim: the claimant's characterization cases go red. Replace the pace
   line with `MAIL_PACE.worker`: the claimant's cases and the "chooses a row once" pin go red. Re-add an
   `export function mailPaceRoleOf` to `mailPace.ts`: the "gone" pin goes red. Loosen the `satisfies` to
-  `Record<string, MailPace>`: the keyed-by pin goes red.
+  `Record<string, MailPace>` and delete the `replay` row: the test project's typecheck reds on
+  `MAIL_PACE_IS_TOTAL`.
 - [ ] **Step 6: Commit.** `refactor(coord): the mail lane reads its pace row through roleOf; mailPaceRoleOf retires`
+
+## Measured while building (2026-11-13)
+
+- **Task 1:** 20 cases green on the old code; the worker row at `quietMs: 60_001` reds the four "delivered at exactly
+  its quiet time" cases on the worker pair, the two child subjects among them.
+- **Task 2:** 11 cases red first (exports missing), then green. Mutations, each red: delete the `replay` row (TS2741,
+  TS7053; two cases), a stray `operator` row (TS2353; two cases), the faster member (three cases), no absent-record
+  fallback (one), intent `no` (one), designation `live` (four), the Overlord's row at the worker pair (one).
+- **Task 3:** the two lane pins and the two child-claimant cases red first, then green. Mutations, each red: the child
+  passed as `none` (both child-claimant cases), as `undefined` (the claimant's two "delivered" edges), the claim
+  passed as `false` (the same two), a fixed worker row (the "chooses a row once" pin and the same two edges),
+  `mailPaceRoleOf` re-added (the "gone" pin), a second index of `MAIL_PACE` in `watch.ts` (the same pin), and a
+  loosened `satisfies` with the `replay` row deleted (the test project's typecheck: TS2322 on `MAIL_PACE_IS_TOTAL`).
+- **Suites:** `mail-pace`, `role-of`, `roll-target`, `session-role-view`, `stall-vocabulary`, `turnidle`, `anchors`,
+  `citations`, `deviation-refs` (after `git fetch origin main`), every `single-definition/*` and every `rings/*` file
+  green; the server typecheck and the test project's typecheck clean. `mail-sweep.test.ts` ran in five chunks (the
+  whole file outran the test slice under load and its worker was killed): every case green but three. Two passed alone
+  (a hibernated recipient's ensure, and a stash-failed park), so they were load. The third, "a DELIVERED row never
+  parks as rejected on repeated replay failures", times out at its 20 s bound alone, and does so on the code before
+  Task 3's switch too: ten sweeps at about 2 s each on this box. CI on a quiet runner is its arbiter.
 
 ## Deviations found
 
 Each is a plain-words slug; the coordinator issues the numbers.
 
-- **D-TBD-overlord-row** — The Overlord's row is 15 s of quiet and 30 s of cooldown, written as its own literals with
+- **overlord-row** — The Overlord's row is 15 s of quiet and 30 s of cooldown, written as its own literals with
   its own docstring, never a reference to the coordinator's row, so the lapse measure (M3) can move one without the
   other. The values are spec §6.4's starting point ("Its row starts at the coordinator's pair"), and W0-20 supports
   them: its gate waited p50 90.3 s under the worker pair, which a 30 s cooldown cuts to at most one cooldown plus a
   sweep; its turns from nudge to reply ran p50 6.3 s and max 20.1 s, all inside 30 s, so the cooldown does not cut
   into a turn's next mail; and a quiet time under the lane's 10 s sweep (`MAIL_SWEEP_MS`) would buy nothing.
-- **D-TBD-auditor-replay-rows** — `auditor` and `replay` take the worker pair. Neither has a lane before §9.5, so no
+- **auditor-replay-rows** — `auditor` and `replay` take the worker pair. Neither has a lane before §9.5, so no
   session reads them; their lanes size them when they land.
-- **D-TBD-mail-pace-undecided-slowest** — `mailPaceOf` reads an undecided reading as the slowest member's row, the
+- **mail-pace-undecided-slowest** — `mailPaceOf` reads an undecided reading as the slowest member's row, the
   member that does less (spec §3.3.9). A test pins that each ambiguity has a member slowest on both fields.
-- **D-TBD-mail-lane-facts** — The mail lane passes `designation: 'none'`, no audit or replay body, run kind
+- **mail-lane-facts** — The mail lane passes `designation: 'none'`, no audit or replay body, run kind
   `unmeasured` and declared intent `unmeasured`. It reads only the child mark and the claim, both already in the pass.
   Reading intent would move a session with declared intent and no open run onto the coordinator row; spec §6.4 rules
   that a change of behaviour for a commit of its own, and the brief rules that no session changes pace in this piece.
   So that move waits for the piece that reads intent on this path.
-- **D-TBD-mail-lane-child-claimant** — A session with a `.child` mark (readable or not) that claims an open run now
+- **mail-lane-child-claimant** — A session with a `.child` mark (readable or not) that claims an open run now
   reads the worker pair, where `mailPaceRoleOf` gave it the coordinator pair: `roleOf` tests the child mark before the
   claim (Table 3.3.9a). Measured 2026-11-13: none of the 13 claimants of open runs carries a `.child` mark, so no
   session that exists today changes pace. Pinned by Task 3's own test.
-- **D-TBD-mail-lane-absent-recipient** — A recipient the registry does not list has no child fact. It is read as a
+- **mail-pace-total-type-pin** — The brief's "a role with no row is a compile error" is held twice: by the
+  table's `satisfies` and by a type-level exact-key check in `mail-pace.test.ts`. A source-text pin was not used: a
+  literal read of `mailPace.ts` reds the ARCH-06 ratchet (`single-definition/advance-switches.test.ts`), and
+  `scan/symbols.ts` does not index a `const`.
+- **mail-lane-absent-recipient** — A recipient the registry does not list has no child fact. It is read as a
   mark that could not be measured (`unreadable`), which spec §3.3.9 reads as undecided, so it takes the worker pair.
   The cooldown gate still runs before the registry ladder, so such a row, if it claims an open run and was nudged in
   the last 120 s, is held `cooldown` up to 90 s longer before the ladder parks it.
