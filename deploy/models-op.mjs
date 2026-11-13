@@ -1172,8 +1172,9 @@ function describe(account, registry, catalogue, reading) {
   };
 }
 
-/** `show`'s and `lanes`' `windowNotices` (D-8384, public issue #2607): one sentence per class whose last move took
- *  the lane's context window off the measured rule (`unmeasuredMoves`), each in `unmeasuredMoveNotice`'s one
+/** `show`'s and `lanes`' `windowNotices` (D-8384, public issue #2607): one sentence per class whose last move
+ *  lowered the lane's context window below the old model's measured one (`unmeasuredMoves`; D-8564: a move to a
+ *  model whose provider promise is at least that lowered nothing and is quiet), each in `unmeasuredMoveNotice`'s one
  *  spelling, which `ccrc doctor`'s `models` row prints as a WARN (it asks `lanes`). Empty with no registry, and
  *  with an advance file that is absent or cannot be read: `advance` already names that one. */
 function windowNotices(id, registry, catalogue, windows) {
@@ -1181,7 +1182,7 @@ function windowNotices(id, registry, catalogue, windows) {
   const rd = readAdvance(id);
   if (rd.err !== undefined || rd.advance === null) return [];
   const room = contextWindowFor(registry, catalogue, windows);
-  return unmeasuredMoves({ registry, advance: rd.advance, windows, rule: room.rule })
+  return unmeasuredMoves({ registry, advance: rd.advance, windows, rule: room.rule, tokens: room.tokens })
     .map((m) => unmeasuredMoveNotice(id, m, room.tokens));
 }
 
@@ -1406,7 +1407,7 @@ function windowOp(opName, a, account, registry, catalogue, reading) {
   if (reading.state === 'unreadable') {
     return refuse(1, 'windows-unreadable',
       `${reading.reason} — ${opName} rewrites that file and will not overwrite one it cannot read. Fix it by hand, `
-      + `or delete it to drop every measured window on account "${a.id}" (its lane then uses the default rule), `
+      + `or delete it to drop every measured window on account "${a.id}" (its lane then follows the provider's promise for every model), `
       + 'then re-run. Nothing was written.');
   }
   if (opName === 'set-window') {
@@ -1542,7 +1543,10 @@ const timeOf = (v) => (typeof v === 'string' && Number.isFinite(Date.parse(v)) ?
  *   1. `to` = tokens × 9/10, rounded down to 1k; below `WINDOW_MIN`, skipped `below-minimum`.
  *   2. The floor of real usage (D-6428): `to` is raised to the route and model's `promptTokensMax`, rounded up to
  *      1k, the largest prompt the model accepted, because the refused size is the bridge's estimate (D24).
- *   3. A model no class names and the catalogue does not list: skipped `not-a-lane-model`.
+ *   3. A model no class names and the catalogue does not list: skipped `not-a-lane-model`. Then (D-8564) `to` is
+ *      capped at `windowCeiling`, the catalogue's `maxContext` for the model, the bound `set-window` refuses to
+ *      cross, so the floor of step 2 never writes a window the rule would not honour; below `WINDOW_MIN`,
+ *      `below-minimum`.
  *   4. With an entry: only a refusal later than the entry's `setAt` (`older-than-entry` otherwise, and for an entry
  *      with no readable `setAt`, which a hand wrote), and only a smaller `to` (`not-lower` otherwise), so a
  *      deliberate `set-window` after a refusal is never undone.
@@ -1618,6 +1622,10 @@ function lowerWindowsOp(a, account, registry, catalogue, reading) {
       to = Math.max(to, Math.ceil(accepted / WINDOW_ROUND) * WINDOW_ROUND);
     }
     if (!laneModel(model)) { skipped.push({ model, why: 'not-a-lane-model' }); continue; }
+    // D-8564: never above the model's ceiling, which `set-window` refuses to cross, so the file holds only windows
+    // the rule honours.
+    to = Math.min(to, windowCeiling(catalogue, model));
+    if (to < WINDOW_MIN) { skipped.push({ model, why: 'below-minimum' }); continue; }
     const hasEntry = reading.state === 'ok' && own(reading.windows, model);
     const from = hasEntry ? reading.windows[model] : null;
     if (hasEntry) {

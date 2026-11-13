@@ -396,10 +396,10 @@ describe('why a class moved, and the move that lowered a lane\'s window (D-8384)
     const { registry, advance } = movedLane('model-5.6-gamma', 'model-6.1-gamma', { cause: 'retired' });
     const windows: Record<string, number> = { ...OTHERS(registry), 'model-5.6-gamma': 400000 };
     delete windows['model-6.1-gamma'];
-    const rows = unmeasuredMoves({ registry, advance, windows, rule: 'default' });
+    const rows = unmeasuredMoves({ registry, advance, windows, rule: 'default', tokens: null });
     expect(rows).toEqual([{ class: 'opus', from: 'model-5.6-gamma', to: 'model-6.1-gamma', fromTokens: 400000,
       how: 'advance', cause: 'retired' }]);
-    expect(unmeasuredMoves({ registry, advance, windows, rule: 'none' })).toEqual(rows);
+    expect(unmeasuredMoves({ registry, advance, windows, rule: 'none', tokens: null })).toEqual(rows);
     expect(unmeasuredMoveNotice('lane-x', rows[0]!, null)).toBe("lane-x's opus class moved from model-5.6-gamma to "
       + 'model-6.1-gamma (auto-advance because the old model was retired), and model-6.1-gamma has no measured window '
       + "while model-5.6-gamma had 400000 tokens, so every session on the lane now runs at the client's own default "
@@ -409,29 +409,43 @@ describe('why a class moved, and the move that lowered a lane\'s window (D-8384)
   it('names nothing when the new model is measured, the rule is measured, the old model was not, or there is no file', () => {
     const { registry, advance } = movedLane('model-5.6-gamma', 'model-6.1-gamma', { cause: 'newer' });
     const all: Record<string, number> = { ...OTHERS(registry), 'model-5.6-gamma': 400000 };
-    expect(unmeasuredMoves({ registry, advance, windows: all, rule: 'default' }), 'the new model measured').toEqual([]);
+    expect(unmeasuredMoves({ registry, advance, windows: all, rule: 'default', tokens: null }), 'the new model measured').toEqual([]);
     const unmeasured = { ...all };
     delete unmeasured['model-6.1-gamma'];
-    expect(unmeasuredMoves({ registry, advance, windows: unmeasured, rule: 'measured' }), 'the rule measured').toEqual([]);
+    expect(unmeasuredMoves({ registry, advance, windows: unmeasured, rule: 'measured', tokens: null }), 'the rule measured').toEqual([]);
     const neither = { ...unmeasured };
     delete neither['model-5.6-gamma'];
-    expect(unmeasuredMoves({ registry, advance, windows: neither, rule: 'default' }), 'the old model unmeasured too')
+    expect(unmeasuredMoves({ registry, advance, windows: neither, rule: 'default', tokens: null }), 'the old model unmeasured too')
       .toEqual([]);
-    expect(unmeasuredMoves({ registry, advance: null, windows: unmeasured, rule: 'default' })).toEqual([]);
-    expect(unmeasuredMoves({ registry, advance, windows: null, rule: 'default' })).toEqual([]);
+    expect(unmeasuredMoves({ registry, advance: null, windows: unmeasured, rule: 'default', tokens: null })).toEqual([]);
+    expect(unmeasuredMoves({ registry, advance, windows: null, rule: 'default', tokens: null })).toEqual([]);
     const filled = movedLane(null, 'model-6.1-gamma', { cause: 'empty' });
-    expect(unmeasuredMoves({ ...filled, windows: unmeasured, rule: 'default' }), 'an empty class had no window')
+    expect(unmeasuredMoves({ ...filled, windows: unmeasured, rule: 'default', tokens: null }), 'an empty class had no window')
       .toEqual([]);
+  });
+
+  it('names nothing when the window now in force is not below the old model\'s measured one (D-8564)', () => {
+    // A lane whose window follows the provider's promise: a move to an unmeasured model whose catalogue default is
+    // at least what the old model measured did not lower the lane, so there is nothing to warn about.
+    const { registry, advance } = movedLane('model-5.6-gamma', 'model-6.1-gamma', { cause: 'newer' });
+    const windows: Record<string, number> = { ...OTHERS(registry), 'model-5.6-gamma': 400000 };
+    delete windows['model-6.1-gamma'];
+    expect(unmeasuredMoves({ registry, advance, windows, rule: 'default', tokens: 400000 }), 'unchanged').toEqual([]);
+    expect(unmeasuredMoves({ registry, advance, windows, rule: 'default', tokens: 500000 }), 'raised').toEqual([]);
+    const lowered = [{ class: 'opus', from: 'model-5.6-gamma', to: 'model-6.1-gamma', fromTokens: 400000,
+      how: 'advance', cause: 'newer' }];
+    expect(unmeasuredMoves({ registry, advance, windows, rule: 'default', tokens: 272000 }), 'lowered').toEqual(lowered);
+    expect(unmeasuredMoves({ registry, advance, windows, rule: 'default', tokens: null }), 'no key').toEqual(lowered);
   });
 
   it('an old entry with no cause still names the move, its reason unknown; a hand move names itself', () => {
     const windows: Record<string, number> = { 'model-5.6-gamma': 400000 };
     const old = movedLane('model-5.6-gamma', 'model-6.1-gamma');
-    const [row] = unmeasuredMoves({ ...old, windows, rule: 'default' });
+    const [row] = unmeasuredMoves({ ...old, windows, rule: 'default', tokens: null });
     expect(row).toMatchObject({ how: 'advance', cause: 'unknown' });
     expect(unmeasuredMoveNotice('lane-x', row!, 200000)).toContain('(auto-advance, its reason not recorded)');
     const hand = movedLane('model-5.6-gamma', 'model-6.1-gamma', { how: 'hand', canary: 'not-run' });
-    const [h] = unmeasuredMoves({ ...hand, windows, rule: 'default' });
+    const [h] = unmeasuredMoves({ ...hand, windows, rule: 'default', tokens: null });
     expect(h).toMatchObject({ how: 'hand', cause: null });
     expect(unmeasuredMoveNotice('lane-x', h!, 200000)).toContain("(set by hand)");
     expect(unmeasuredMoveNotice('lane-x', h!, 272000)).toContain('now runs at 272000 tokens;');

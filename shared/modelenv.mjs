@@ -222,8 +222,13 @@ function providerWindow(catalogue, modelId) {
  * client's own default; when EVERY class model is unknown the key is OMITTED,
  * never sentinelled — there is no "unavailable" reading for a window, only
  * "unknown", and the client's own default already means "unknown". So a stale
- * catalogue never raises a lane: it yields no promise, and the lane keeps
- * what it had before this rule (the measured rule, or no key).
+ * catalogue never raises a lane: it yields no promise, every class model with
+ * no measured window counts as unknown, and a lane with some measured models
+ * runs at the smaller of its smallest measured window and the client's own
+ * default (`source` `'client'`), while a lane with none writes no key. Before
+ * this rule a partly measured lane on a stale catalogue wrote no key, which
+ * left it on that same client default, so the key it writes now never raises
+ * it; it can only lower it, to a smaller measured window.
  *
  * WHAT THIS REPLACED (D-8564). The 2026-09-08 default rule read only
  * `ANTHROPIC_MODEL`'s catalogue context and capped it at 200000: "an

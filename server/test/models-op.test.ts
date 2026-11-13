@@ -4470,6 +4470,21 @@ describe('advance-commit (auto-advance spec §2.1 D21 and §2.3; plan W2 Task 9)
     expect(lanes.find((l) => l['id'] === 'lane-a')!['windowNotices']).toEqual(shown.body['windowNotices']);
   });
 
+  it('moving to an unmeasured model whose provider promise is at least the old measured window warns of nothing (D-8564)', () => {
+    // The live shape that prompted the ruling: every other class measured at 400000, opus advanced to a model the
+    // catalogue promises 500000 for. The lane stays at 400000, so `show`, `lanes` (and doctor's models row) are quiet.
+    const promised = { ...STEP_CATALOGUE, models: STEP_CATALOGUE.models.map((m) => (m.id === 'model-6.1-gamma'
+      ? { ...m, context: 500000 } : m)) };
+    plantStep({ catalogue: promised });
+    plantWindows('lane-a', windowsFor({ 'model-6-alpha': 400000, 'model-6-beta': 400000, 'model-5.6-gamma': 400000 }));
+    expect(op('materialise', '--file', rosterPath(), '--id', 'lane-a').code).toBe(0);
+    expect(commit().body['outcome']).toBe('moved');
+    expect(env()['CLAUDE_CODE_MAX_CONTEXT_TOKENS']).toBe('400000');
+    expect(op('show', '--file', rosterPath(), '--id', 'lane-a').body['windowNotices']).toEqual([]);
+    const lanes = op('lanes', '--file', rosterPath()).body['lanes'] as Record<string, unknown>[];
+    expect(lanes.find((l) => l['id'] === 'lane-a')!['windowNotices']).toEqual([]);
+  });
+
   it('moving to a model already measured keeps the measured rule, so the move passes the windows on', () => {
     plantStep();
     plantWindows('lane-a', windowsFor({ 'model-6-alpha': 400000, 'model-6-beta': 400000, 'model-5.6-gamma': 400000,
@@ -4559,6 +4574,31 @@ describe('lower-windows: a refusal lowers the window (codex-bridge D25, Stage 2 
     expect(r.body).toMatchObject({ ok: true, lowered: [{ model: OPUS, from: 400000, to: 342000, refused: 380000 }],
       skipped: [] });
     expect(tokensOf(OPUS)).toBe(342000);
+  });
+
+  it('a lowered window is never recorded above the catalogue\'s maxContext for the model (D-8564)', () => {
+    // `set-window` refuses a window above `windowCeiling` (`above-max-context`), so a refusal never writes one either:
+    // the windows file holds only numbers the rule honours.
+    writeCatalogue(ID, { ...CODEX, models: CODEX.models.map((row) => (row.id === OPUS
+      ? { ...row, maxContext: 272000 } : row)) });
+    plantWindows(ID, { windows: { [OPUS]: entry(400000, '2026-10-01T00:00:00Z') } });
+    plantStats({ [`backend/${OPUS}`]: refusal(380000) });
+    const r = lower();
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect(r.body).toMatchObject({ lowered: [{ model: OPUS, from: 400000, to: 272000, refused: 380000 }] });
+    expect(tokensOf(OPUS)).toBe(272000);
+  });
+
+  it('the floor of real usage never lifts a lowered window above the catalogue\'s maxContext (D-8564)', () => {
+    writeCatalogue(ID, { ...CODEX, models: CODEX.models.map((row) => (row.id === OPUS
+      ? { ...row, maxContext: 272000 } : row)) });
+    plantWindows(ID, { windows: { [OPUS]: entry(400000, '2026-10-01T00:00:00Z') } });
+    plantStats({ [`backend/${OPUS}`]: refusal(120000) },
+      { [`backend/${OPUS}`]: { requests: 9, bytesPerToken: 3.5, promptTokensMax: 301500, promptTokensLast: 200000 } });
+    const r = lower();
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect(r.body).toMatchObject({ lowered: [{ model: OPUS, from: 400000, to: 272000, refused: 120000 }] });
+    expect(tokensOf(OPUS)).toBe(272000);
   });
 
   it('a refusal never raises a window', () => {

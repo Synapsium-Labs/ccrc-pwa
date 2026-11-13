@@ -115,7 +115,7 @@ export declare function reconcilePending(adv: Advance, registry: Registry): { ad
 export declare function heldBackOf(c: ClassAdvance, candidate: string | null): HistoryEntry | null;
 export declare function lastMoveOf(c: ClassAdvance): HistoryEntry | null;
 
-// ── the move that lowered a lane's window (D-8384) ──
+// ── the move that lowered a lane's window (D-8384, D-8564) ──
 export declare function causeOf(e: HistoryEntry | null): CandidateReason | 'unknown';
 export interface UnmeasuredMove {
   class: ModelClass;
@@ -130,5 +130,6 @@ export declare function unmeasuredMoves(a: {
   advance: Advance | null;
   windows: ModelWindows | null;
   rule: 'measured' | 'default' | 'none';
+  tokens: number | null;
 }): UnmeasuredMove[];
 export declare function unmeasuredMoveNotice(lane: string, m: UnmeasuredMove, tokens: number | null): string;
