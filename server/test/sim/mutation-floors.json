@@ -2,5 +2,7 @@
   "server/src/coord/stall.ts#stallCoordBlockedStep": 1,
   "server/src/roleOf.ts#roleFactsOf": 1,
   "server/src/time/observed.ts#observeTime": 1,
-  "server/src/continuity/renewalDue.ts#renewalDue": 1
+  "server/src/continuity/renewalDue.ts#renewalDue": 1,
+  "server/src/continuity/softRenewal.ts#softRenewalMay": 1,
+  "server/src/continuity/softRenewal.ts#earlyWhileAway": 1
 }

@@ -334,9 +334,181 @@ const RENEWAL_DUE_SET: MutantSet<RenewalDueModule> = {
   suite: renewalDueCases,
 };
 
+// ---------------------------------------------------------------------------------------------------------- softRenewalMay
+
+export type SoftModule = typeof import('../../src/continuity/softRenewal.js');
+type SIn = import('../../src/continuity/softRenewal.js').SoftInputs;
+type SAns = import('../../src/continuity/softRenewal.js').SoftAnswer;
+
+const MIN = 60_000;
+
+/** A base where every precondition is clear and the operator has been away 20 minutes: a soft renewal may start. */
+export function softBase(role: FleetRoleName): SIn {
+  return { role, hibernateHold: { held: false }, readersRunning: M(0), lastOperatorActivityMs: M(20 * MIN),
+    placeHiddenForMs: M(0), mode: 'when-away', dueSinceObservedMs: 0, generationAgeObservedMs: 30 * MIN,
+    holdOffUntilObservedMs: null, softRenewalsInWindow: 0, overlordOutsideActive: false };
+}
+
+/** Each input at unmeasured (where it is a reading), blocking, at its edge and clear, and a value that is not a number. */
+export const SOFT_DOMAINS: Record<string, readonly unknown[]> = {
+  generationAgeObservedMs: [0, 30 * MIN - 1, 30 * MIN, Number.NaN],
+  holdOffUntilObservedMs: [null, 30 * MIN, 30 * MIN + 1],
+  softRenewalsInWindow: [0, 2, 3, Number.NaN],
+  overlordOutsideActive: [false, true],
+  hibernateHold: [{ held: false }, { held: true, reason: 'pane' }],
+  readersRunning: [U, M(0), M(1), M(Number.NaN)],
+  lastOperatorActivityMs: [U, M(0), M(20 * MIN - 1), M(20 * MIN)],
+  placeHiddenForMs: [U, M(0), M(5 * MIN - 1), M(5 * MIN)],
+  mode: ['when-away', 'on-schedule'],
+  dueSinceObservedMs: [0, 30 * MIN - 1, 30 * MIN],
+};
+
+/** The spec's words (§3.3.11 R19, the preconditions, the soft budget; C50) as an oracle, wait by wait in order. */
+export function expectedSoft(i: SIn): SAns {
+  const n = (r: Rd<number>): number | 'u' => (r.kind === 'measured' ? r.value : 'u');
+  const waits: Array<[import('../../src/continuity/softRenewal.js').SoftWait, boolean]> = [
+    ['least-age', !(i.generationAgeObservedMs >= 30 * MIN)],
+    ['hold-off', i.holdOffUntilObservedMs !== null && !(i.generationAgeObservedMs >= i.holdOffUntilObservedMs)],
+    ['budget', !(i.softRenewalsInWindow <= 2)],
+    ['overlord-first', i.role === 'coordinator' && i.overlordOutsideActive],
+    ['hold', i.hibernateHold.held],
+  ];
+  for (const [w, blocks] of waits) if (blocks) return { start: false, waitFor: w };
+  const readers = n(i.readersRunning);
+  if (readers === 'u') return { start: false, waitFor: 'unmeasured' };
+  if (!(readers === 0)) return { start: false, waitFor: 'readers' };
+  if (i.mode === 'on-schedule' && i.dueSinceObservedMs >= 30 * MIN) return { start: true };
+  const quiet = n(i.lastOperatorActivityMs); const hidden = n(i.placeHiddenForMs);
+  const quietBreak = quiet === 'u' ? 'u' : quiet >= 20 * MIN;
+  const hiddenBreak = hidden === 'u' ? 'u' : hidden >= 5 * MIN;
+  if (quietBreak === true || hiddenBreak === true) return { start: true };
+  if (quietBreak === 'u' || hiddenBreak === 'u') return { start: false, waitFor: 'unmeasured' };
+  return { start: false, waitFor: 'no-break' };
+}
+
+export function softRenewalCases(m: SoftModule): Record<string, SuiteCase> {
+  const check = (i: SIn): void => { expect(m.softRenewalMay(i), showIn(i)).toEqual(expectedSoft(i)); };
+  const fields = Object.keys(SOFT_DOMAINS);
+  const roles = ['overlord', 'coordinator'] as const;
+  return {
+    'EXHAUSTIVE: the base starts, for both long-lived roles': () => {
+      for (const r of roles) expect(m.softRenewalMay(softBase(r))).toEqual({ start: true });
+    },
+    'EXHAUSTIVE: each wait\'s input over its domain, one at a time': () => {
+      for (const r of roles) for (const f of fields) for (const v of SOFT_DOMAINS[f]!) check({ ...softBase(r), [f]: v } as SIn);
+    },
+    'EXHAUSTIVE: every pair of inputs over their domains (the first wait in order is named)': () => {
+      for (const r of roles) {
+        const base = softBase(r);
+        for (let a = 0; a < fields.length; a++) for (let b = a + 1; b < fields.length; b++) {
+          for (const va of SOFT_DOMAINS[fields[a]!]!) for (const vb of SOFT_DOMAINS[fields[b]!]!) {
+            check({ ...base, [fields[a]!]: va, [fields[b]!]: vb } as SIn);
+          }
+        }
+      }
+    },
+    'the order of the waits: least-age, hold-off, budget, overlord-first, hold, readers, then the break': () => {
+      const all: SIn = { ...softBase('coordinator'), generationAgeObservedMs: 0, holdOffUntilObservedMs: 60 * MIN,
+        softRenewalsInWindow: 3, overlordOutsideActive: true, hibernateHold: { held: true, reason: 'menu' },
+        readersRunning: M(2), lastOperatorActivityMs: M(0), placeHiddenForMs: M(0) };
+      const seen: string[] = [];
+      let cur: SIn = all;
+      const clear: Partial<SIn>[] = [{ generationAgeObservedMs: 30 * MIN }, { holdOffUntilObservedMs: null },
+        { softRenewalsInWindow: 0 }, { overlordOutsideActive: false }, { hibernateHold: { held: false } },
+        { readersRunning: M(0) }, { lastOperatorActivityMs: M(20 * MIN) }];
+      for (const c of clear) { const a = m.softRenewalMay(cur); seen.push(a.start ? 'start' : a.waitFor); cur = { ...cur, ...c } as SIn; }
+      seen.push(m.softRenewalMay(cur).start ? 'start' : 'wait');
+      expect(seen).toEqual(['least-age', 'hold-off', 'budget', 'overlord-first', 'hold', 'readers', 'no-break', 'start']);
+    },
+    'on-schedule: after 30 minutes a trigger skips the break, but not the hold': () => {
+      const away: SIn = { ...softBase('overlord'), mode: 'on-schedule', dueSinceObservedMs: 30 * MIN,
+        lastOperatorActivityMs: M(0), placeHiddenForMs: M(0) };
+      expect(m.softRenewalMay(away)).toEqual({ start: true });
+      expect(m.softRenewalMay({ ...away, dueSinceObservedMs: 30 * MIN - 1 })).toEqual({ start: false, waitFor: 'no-break' });
+      expect(m.softRenewalMay({ ...away, hibernateHold: { held: true, reason: 'background' } })).toEqual({ start: false, waitFor: 'hold' });
+      expect(m.softRenewalMay({ ...away, mode: 'when-away' })).toEqual({ start: false, waitFor: 'no-break' });
+    },
+    'the Overlord does not wait for itself; a coordinator waits for it (C50)': () => {
+      expect(m.softRenewalMay({ ...softBase('overlord'), overlordOutsideActive: true })).toEqual({ start: true });
+      expect(m.softRenewalMay({ ...softBase('coordinator'), overlordOutsideActive: true })).toEqual({ start: false, waitFor: 'overlord-first' });
+    },
+    'PROPERTY (10,000 seeded inputs per role): an unmeasured reading never turns a wait into a start': () => {
+      const readings = ['readersRunning', 'lastOperatorActivityMs', 'placeHiddenForMs'];
+      for (const r of roles) {
+        const rnd = mulberry32(0x50f7 + r.length);
+        for (let k = 0; k < 10_000; k++) {
+          const i: Record<string, unknown> = { ...softBase(r) };
+          for (const f of fields) { const d = SOFT_DOMAINS[f]!; i[f] = d[Math.floor(rnd() * d.length)]; }
+          const before = m.softRenewalMay(i as unknown as SIn);
+          for (const f of readings) {
+            const after = m.softRenewalMay({ ...i, [f]: U } as unknown as SIn);
+            if (!before.start && after.start) throw new Error(`${r}: unmeasured ${f} turned a wait into a start: ${showIn(i)}`);
+          }
+        }
+      }
+    },
+  };
+}
+
+export function earlyWhileAwayCases(m: SoftModule): Record<string, SuiteCase> {
+  return {
+    'at half the soft ceiling or half the turns, yes; below both, no; for the Overlord': () => {
+      const b = renewalBase('overlord');   // fitted ceiling 250k: the soft ceiling is 150k, half of it 75k
+      expect(m.earlyWhileAway('overlord', { ...b, contextTokens: M(75_000) })).toBe(true);
+      expect(m.earlyWhileAway('overlord', { ...b, turns: M(20) })).toBe(true);
+      expect(m.earlyWhileAway('overlord', { ...b, contextTokens: M(74_999), turns: M(19) })).toBe(false);
+      expect(m.earlyWhileAway('overlord', { ...b, contextTokens: M(75_000), turns: M(20), fittedCeilingTokens: U })).toBe(true);
+    },
+    'an unmeasured reading, or one that is not a count, says no': () => {
+      const b = renewalBase('overlord');
+      expect(m.earlyWhileAway('overlord', { ...b, contextTokens: U, turns: U })).toBe(false);
+      expect(m.earlyWhileAway('overlord', { ...b, contextTokens: M(200_000), fittedCeilingTokens: U, turns: M(Number.NaN) })).toBe(false);
+      expect(m.earlyWhileAway('overlord', { ...b, contextTokens: M(Number.POSITIVE_INFINITY) })).toBe(false);
+    },
+    'a role whose rows have neither the soft ceiling nor turns never renews early': () => {
+      for (const r of ['coordinator', 'worker', 'plain'] as const) {
+        expect(m.earlyWhileAway(r, { ...renewalBase(r), contextTokens: M(200_000), turns: M(40) }), r).toBe(false);
+      }
+    },
+  };
+}
+
+const SOFT_PATH = path.join(ROOT, 'server/src/continuity/softRenewal.ts');
+const SOFT_SET: MutantSet<SoftModule> = {
+  modulePath: SOFT_PATH,
+  mutants: [
+    { id: 'S1', old: 'if (!(i.generationAgeObservedMs >= LEAST_AGE_MS))', new: 'if (!(i.generationAgeObservedMs > LEAST_AGE_MS))' },
+    { id: 'S2', old: "if (!(i.softRenewalsInWindow < SOFT_BUDGET.count)) return wait('budget');", new: '' },
+    { id: 'S3', old: "if (readers === null) return wait('unmeasured');", new: 'if (readers === null) return START;' },
+    { id: 'S4', old: "if (i.hibernateHold.held) return wait('hold');", new: "if (i.hibernateHold.held && i.mode !== 'on-schedule') return wait('hold');" },
+    { id: 'S5', old: "i.role !== 'overlord' && i.overlordOutsideActive", new: 'i.overlordOutsideActive' },
+    { id: 'S6', old: "if (away === null) return wait('unmeasured');", new: 'if (away === null) return START;' },
+    { id: 'S7', old: 'return quiet === null || hidden === null ? null : false;', new: 'return false;' },
+    { id: 'S8', old: '!(i.generationAgeObservedMs >= i.holdOffUntilObservedMs)', new: 'i.generationAgeObservedMs > i.holdOffUntilObservedMs' },
+    { id: 'S9', old: "  if (i.hibernateHold.held) return wait('hold');\n  const readers = valueOf(i.readersRunning);\n  if (readers === null) return wait('unmeasured');\n  if (!(readers <= 0)) return wait('readers');",
+      new: "  const readers = valueOf(i.readersRunning);\n  if (readers === null) return wait('unmeasured');\n  if (!(readers <= 0)) return wait('readers');\n  if (i.hibernateHold.held) return wait('hold');" },
+    { id: 'S10', old: "if (i.mode === 'on-schedule' && i.dueSinceObservedMs >= ON_SCHEDULE_WAIT_MS) return START;", new: "if (i.mode === 'on-schedule') return START;" },
+    { id: 'S11', old: '(hidden !== null && hidden >= BREAK_PLACE_HIDDEN_MS)', new: '(hidden !== null && hidden >= BREAK_NO_MESSAGE_MS)' },
+  ],
+  suite: softRenewalCases,
+};
+const EARLY_SET: MutantSet<SoftModule> = {
+  modulePath: SOFT_PATH,
+  mutants: [
+    { id: 'E1', old: 'turns >= TURNS_SOFT * EARLY_WHILE_AWAY_FRACTION', new: 'turns > TURNS_SOFT * EARLY_WHILE_AWAY_FRACTION' },
+    { id: 'E2', old: "const pastTurns = rows.includes('turns') && ", new: 'const pastTurns = ' },
+    { id: 'E3', old: 'ctx >= fit * SOFT_CEILING_FRACTION * EARLY_WHILE_AWAY_FRACTION', new: 'ctx >= fit * EARLY_WHILE_AWAY_FRACTION' },
+    { id: 'E4', old: "r.kind === 'measured' && Number.isFinite(r.value) && r.value >= 0 ? r.value : null", new: "r.kind === 'measured' ? r.value : null" },
+    { id: 'E5', old: 'return pastCeiling || pastTurns;', new: 'return pastCeiling && pastTurns;' },
+  ],
+  suite: earlyWhileAwayCases,
+};
+
 /** This plan's sets, keyed as `mutation-floors.json` keys them (`<file>#<decider>`). */
 export const RENEWAL_MUTANT_SETS: Record<string, MutantSet<never>> = {
   'server/src/roleOf.ts#roleFactsOf': ROLE_FACTS_SET as MutantSet<never>,
   'server/src/time/observed.ts#observeTime': OBSERVED_SET as MutantSet<never>,
   'server/src/continuity/renewalDue.ts#renewalDue': RENEWAL_DUE_SET as MutantSet<never>,
+  'server/src/continuity/softRenewal.ts#softRenewalMay': SOFT_SET as MutantSet<never>,
+  'server/src/continuity/softRenewal.ts#earlyWhileAway': EARLY_SET as MutantSet<never>,
 };
