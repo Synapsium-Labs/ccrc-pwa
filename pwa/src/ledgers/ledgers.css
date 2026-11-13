@@ -218,9 +218,12 @@
 .wi-card .wi-steps { margin: 0; padding-left: var(--sp-4); display: grid; gap: var(--sp-1); color: var(--ink-primary); overflow-wrap: anywhere; }
 .wi-card .wi-history { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--sp-1); font-size: var(--fs-meta); color: var(--ink-secondary); }
 .wi-card .wi-history li { border-left: 2px solid var(--edge-strong); padding-left: var(--sp-2); overflow-wrap: anywhere; }
+/* An option's words wrap anywhere, recommended or not: a plain option's text sits in the radio primitive's sentence span, which
+   sets no wrap of its own, so a long run with no spaces in it ran past the side panel and the window (Task C32 fix round 1). The
+   rule is the item page's, not the shared primitive's. */
 .wi-act .wi-opt {
   display: flex; align-items: flex-start; gap: var(--sp-2); padding: var(--sp-2); border: 1px solid var(--edge-subtle); border-radius: var(--r-md);
-  background: var(--bg-surface); color: var(--ink-primary); cursor: pointer; min-height: var(--row-h);
+  background: var(--bg-surface); color: var(--ink-primary); cursor: pointer; min-height: var(--row-h); overflow-wrap: anywhere;
 }
 .wi-act .wi-field { display: grid; gap: var(--sp-1); border: 0; margin: 0; padding: 0; min-width: 0; }
 .wi-card .wi-label { font-size: var(--fs-xs); letter-spacing: 0.06em; text-transform: uppercase; color: var(--ink-secondary); }

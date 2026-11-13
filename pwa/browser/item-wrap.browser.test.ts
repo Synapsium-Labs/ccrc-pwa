@@ -6,12 +6,16 @@
 // text with it, is laid out in that widened column.
 //
 // This file renders such an item at desktop widths in both skins and holds what the jsdom suites cannot: the item card stays in
-// its column and left of the side panel, every element inside the card and inside the panel ends inside its own box, and the
-// page never scrolls sideways. A second item, ticked and waiting on the coordinator, puts the panel's status line under the
-// same long run. At a phone width the same page holds with no sideways scroll, so the one-column layout is unchanged.
+// its column and left of the side panel, every element inside the card and inside the panel ends inside its own box, and neither
+// the page nor the detail pane scrolls sideways. On a desk the pane (`.shell-detail`) clips its overflow sideways, so the page's
+// own sideways scroll stays 0 there whatever the card does: the pane's own is the one that measures it. A second item, ticked
+// and waiting on the coordinator, has the panel's status line, fixed words, in the same panel; a third is a decision with no
+// recommendation. At a phone width the same page holds with no sideways scroll, so the one-column layout is unchanged.
 //
-// The long run is built here, about 400 characters of neutral words joined by slashes and commas; a second How step is one long
-// outside address, so a link (`TextLink`) is measured too. The programme's title is a long run as well, for the band.
+// The long run is built here, 340 characters of neutral words joined by slashes and commas; a second How step is one long
+// outside address (369 characters), so a link (`TextLink`) is measured too. The programme's title is a long run as well, for
+// the band. The run is in a recommended option, a plain one and every option of the decision with no recommendation: a plain
+// option's words sit in the radio primitive's sentence span, not in the recommended option's own wrapping span (fix round 1).
 //
 //   CCRC_CHROME=$HOME/.cache/ms-playwright/chromium-1248/chrome-linux64/chrome ./node_modules/.bin/vitest run --config vitest.browser.config.ts --maxWorkers=2 browser/item-wrap.browser.test.ts
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -24,7 +28,7 @@ import { withRunBinding } from '../test/runBindingFixture';
 const NOW = Date.now();
 const MIN = 60_000;
 
-/** About 400 characters with no space: neutral words joined by slashes and commas, as a path-like list of ids runs together. */
+/** 340 characters with no space: neutral words joined by slashes and commas, as a path-like list of ids runs together. */
 const WORDS = ['alpha', 'beta', 'gamma', 'delta', 'epsilon', 'zeta', 'theta', 'iota', 'kappa', 'lambda'];
 const RUN = Array.from({ length: 44 }, (_, i) => `${i === 0 ? '' : i % 2 === 0 ? ',' : '/'}${WORDS[i % WORDS.length]}${i}`).join('');
 const ADDRESS = `https://example.com/${Array.from({ length: 36 }, (_, i) => `segment${i}`).join('/')}`;
@@ -50,16 +54,22 @@ const SESSIONS = [session('prog-a-coord', 'coordinator'), session('prog-a-w1', '
 
 const item = (id: number, over: object): object => ({
   id, program: 'prog-a', runId: null, kind: 'decide', title: `Check ${RUN}`, why: `The run reads ${RUN} and needs a ruling.`,
-  how: [`Open ${RUN}.`, `Read ${ADDRESS} first.`, 'Set it to Live.'], options: [`Keep ${RUN}`, 'Hold it'], recommended: 0,
+  how: [`Open ${RUN}.`, `Read ${ADDRESS} first.`, 'Set it to Live.'], options: [`Keep ${RUN}`, `Hold ${RUN}`, 'Hold it'], recommended: 0,
   recommendedWhy: `Because ${RUN} is the current set.`, neededBy: 'blocking', soonLabel: null, state: 'open', stale: false,
   raisedAt: NOW - 3 * 60 * MIN, tickedAt: null, closedAt: null, answer: null, note: null, secretSlot: null, secretSet: null,
   history: [{ at: NOW - 3 * 60 * MIN, act: 'raise', note: null }, { at: NOW - 2 * 60 * MIN, act: 'tick', note: null },
     { at: NOW - 60 * MIN, act: 'return', note: `Still reads ${RUN}.` }],
   ...over,
 });
-/** Item 1 is open (the decision's options, its reasons and the note field in the panel); item 2 waits on the coordinator (the
- *  panel's status line). */
-const ITEMS = [item(1, {}), item(2, { kind: 'do', options: null, recommended: null, recommendedWhy: null, state: 'checking', tickedAt: NOW - 5 * MIN })];
+/** Item 1 is open (the decision's options, the recommended one and a plain one holding the run, its reasons and the note field
+ *  in the panel); item 2 waits on the coordinator (the panel's status line); item 3 is an open decision with no recommendation,
+ *  every option holding the run. */
+const ITEMS = [
+  item(1, {}),
+  item(2, { kind: 'do', options: null, recommended: null, recommendedWhy: null, state: 'checking', tickedAt: NOW - 5 * MIN }),
+  item(3, { recommended: null, recommendedWhy: null }),
+];
+const IDS = [1, 2, 3] as const;
 
 const fixture = (): AppFixture => {
   const waiting = { items: ITEMS, cleared: [], goals: [] };
@@ -101,6 +111,12 @@ async function open(skin: string, width: number, path: string) {
 }
 
 const sideways = (page: Page): Promise<number> => page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+/** The detail pane's own sideways overflow: on a desk the pane clips sideways (`overflow-x: hidden`), so what the card spills
+ *  lands here and never in the page's scroll (review 1938 F2). */
+const paneSideways = (page: Page): Promise<number> => page.evaluate(() => {
+  const pane = document.querySelector('.shell-detail')!;
+  return pane.scrollWidth - pane.clientWidth;
+});
 
 interface Geometry {
   /** The item card's right edge past its own grid column's (the detail grid's first track), in px; 0 or less is inside. */
@@ -148,7 +164,7 @@ const geometry = (page: Page): Promise<Geometry> => page.evaluate(() => {
 
 describe.each([REFINED, INSTRUMENT] as const)('an item whose text holds a long run with no spaces, in %s', (skin) => {
   for (const width of [1280, 1920] as const) {
-    for (const id of [1, 2] as const) {
+    for (const id of IDS) {
       it(`at ${width}, item ${id}: the card, its text and the side panel stay inside their columns, with no sideways scroll`, async () => {
         const { ctx, page, errors } = await open(skin, width, `/waiting/${id}`);
         try {
@@ -162,6 +178,7 @@ describe.each([REFINED, INSTRUMENT] as const)('an item whose text holds a long r
           expect(g.spills, 'elements ending past their card').toEqual([]);
           expect(g.scrolls, 'a card scrolling sideways').toEqual([]);
           expect(await sideways(page), 'sideways scroll').toBe(0);
+          expect(await paneSideways(page), 'the detail pane\'s sideways overflow').toBeLessThanOrEqual(0);
           expect(errors).toEqual([]);
         } finally {
           await ctx.close();
@@ -195,8 +212,8 @@ describe.each([REFINED, INSTRUMENT] as const)('an item whose text holds a long r
     }
   });
 
-  it('at 390, both items: one column, every element inside its card, no sideways scroll', async () => {
-    for (const id of [1, 2] as const) {
+  it('at 390, every item: one column, every element inside its card, no sideways scroll', async () => {
+    for (const id of IDS) {
       const { ctx, page, errors } = await open(skin, 390, `/waiting/${id}`);
       try {
         const g = await geometry(page);
