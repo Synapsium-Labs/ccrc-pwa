@@ -1,0 +1,118 @@
+{
+  "name": "introspection-project-milestone-create-input",
+  "documentSource": "fx2-introspection",
+  "document": "query { __type(name: \"ProjectMilestoneCreateInput\") { name kind inputFields { name type { name kind ofType { name kind } } } fields { name type { name kind ofType { name kind } } } enumValues { name } } }",
+  "variables": {},
+  "requestBody": "{\"query\":\"query { __type(name: \\\"ProjectMilestoneCreateInput\\\") { name kind inputFields { name type { name kind ofType { name kind } } } fields { name type { name kind ofType { name kind } } } enumValues { name } } }\",\"variables\":{}}",
+  "requestHeaders": [
+    "authorization: <the key, bare, no Bearer>",
+    "content-type: application/json"
+  ],
+  "sentAtMs": null,
+  "receivedAtMs": null,
+  "sentAt": null,
+  "status": 200,
+  "statusLine": null,
+  "headers": [
+    [
+      "content-type",
+      "application/json; charset=utf-8"
+    ],
+    [
+      "x-complexity",
+      "14"
+    ],
+    [
+      "x-ratelimit-complexity-limit",
+      "3000000"
+    ],
+    [
+      "x-ratelimit-complexity-remaining",
+      "2999957"
+    ],
+    [
+      "x-ratelimit-complexity-reset",
+      "1794589998958"
+    ],
+    [
+      "x-ratelimit-requests-limit",
+      "2500"
+    ],
+    [
+      "x-ratelimit-requests-remaining",
+      "2482"
+    ],
+    [
+      "x-ratelimit-requests-reset",
+      "1794589998958"
+    ]
+  ],
+  "body": {
+    "data": {
+      "__type": {
+        "name": "ProjectMilestoneCreateInput",
+        "kind": "INPUT_OBJECT",
+        "inputFields": [
+          {
+            "name": "id",
+            "type": {
+              "name": "String",
+              "kind": "SCALAR",
+              "ofType": null
+            }
+          },
+          {
+            "name": "name",
+            "type": {
+              "name": null,
+              "kind": "NON_NULL",
+              "ofType": {
+                "name": "String",
+                "kind": "SCALAR"
+              }
+            }
+          },
+          {
+            "name": "description",
+            "type": {
+              "name": "String",
+              "kind": "SCALAR",
+              "ofType": null
+            }
+          },
+          {
+            "name": "targetDate",
+            "type": {
+              "name": "TimelessDate",
+              "kind": "SCALAR",
+              "ofType": null
+            }
+          },
+          {
+            "name": "projectId",
+            "type": {
+              "name": null,
+              "kind": "NON_NULL",
+              "ofType": {
+                "name": "String",
+                "kind": "SCALAR"
+              }
+            }
+          },
+          {
+            "name": "sortOrder",
+            "type": {
+              "name": "Float",
+              "kind": "SCALAR",
+              "ofType": null
+            }
+          }
+        ],
+        "fields": null,
+        "enumValues": null
+      }
+    }
+  },
+  "bodyRaw": "{\"data\":{\"__type\":{\"name\":\"ProjectMilestoneCreateInput\",\"kind\":\"INPUT_OBJECT\",\"inputFields\":[{\"name\":\"id\",\"type\":{\"name\":\"String\",\"kind\":\"SCALAR\",\"ofType\":null}},{\"name\":\"name\",\"type\":{\"name\":null,\"kind\":\"NON_NULL\",\"ofType\":{\"name\":\"String\",\"kind\":\"SCALAR\"}}},{\"name\":\"description\",\"type\":{\"name\":\"String\",\"kind\":\"SCALAR\",\"ofType\":null}},{\"name\":\"targetDate\",\"type\":{\"name\":\"TimelessDate\",\"kind\":\"SCALAR\",\"ofType\":null}},{\"name\":\"projectId\",\"type\":{\"name\":null,\"kind\":\"NON_NULL\",\"ofType\":{\"name\":\"String\",\"kind\":\"SCALAR\"}}},{\"name\":\"sortOrder\",\"type\":{\"name\":\"Float\",\"kind\":\"SCALAR\",\"ofType\":null}}],\"fields\":null,\"enumValues\":null}}}\n",
+  "note": "Recorded by the hierarchy capture (FX2, D-8407). The schema of ProjectMilestoneCreateInput."
+}

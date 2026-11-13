@@ -117,6 +117,33 @@ number from `POST /api/ledger/deviations`.
       so a later run in a wave a `done` epic lists (a retry, or a wave after its checkpoints were met) opens, and
       `attachTicketInTx` sets the epic back to `active` once every refusal is behind it. The design names no state a
       settled epic returns to.
+  - **Further departures, from FX2's capture (D-8407; the answers are in `server/test/fixtures/linear/README.md`,
+    "What FX2 measured"):**
+    - **A milestone has no creator.** Linear's `ProjectMilestone` has no `creator` field: `projectById`,
+      `changedProjects` and `changedMilestones` answered HTTP 400 `GRAPHQL_VALIDATION_FAILED` for it. The three
+      documents drop it, and the milestone shapers no longer read a `creatorId`. A milestone binds by exact name inside
+      its own bound project (the fallback Task 3.2 already names), and the "another creator" test row covers
+      initiatives and projects only. Initiatives and projects keep `creator { id }`, which FX2 measured as the key's viewer.
+    - **A repeated milestone create answers `name not unique`, not a conflict on insert.** Every hierarchy create takes
+      a caller-chosen id, but Linear checks a milestone's name in its project first. For wave 3 (Task 3.2): on a
+      milestone create, `INPUT_ERROR` "name not unique" means the milestone may already exist; the step reads its
+      project's `projectById` and binds the milestone of that name whose id is the step's `requestId`, never a second
+      create.
+    - **A project name is at most 80 characters; ccrc's epic title allows 255.** Linear refuses a longer project name
+      with `INVALID_INPUT` ("name must be shorter than or equal to 80 characters", in `userPresentableMessage`). An
+      epic's title, which names its Linear project (design §5.2), is bounded by `PLAN_BOUNDS.titleChars` (255), and
+      `LINEAR_NAME_MAX_CHARS` (80) bounds only names ccrc reads from Linear, not what the sync writes. Finding for
+      wave 3: the plan sync must fit a project name to 80 characters before `projectCreate` and `projectUpdate`, and
+      its by-name bind compares the name as sent. Initiative and milestone name limits were not measured.
+    - **A milestone update moves neither its project's `updatedAt` nor, for a description-only edit, its own.** The
+      drift pass (wave 4) reads changed milestones on their own, and cannot rely on `changedMilestones` alone to see a
+      milestone's description edited in Linear.
+    - **The initiatives-off probe answer is not recorded.** No workspace the operator has is off, and an on workspace
+      with no initiatives answers an empty list, so the probe alone cannot tell off from empty; `readInitiativesProbe`
+      keeps answering `unknown` for anything but nodes. The GitHub mirror observation (question 6) moves to the pilot
+      team. Six hierarchy documents remain constructed until a later capture: `changedProjects` and
+      `changedMilestones` (their corrected documents are unsent), `changedIssues`, `teamOpenIssues`, `projectUpdate`
+      and `initiativeToProjectDelete`.
 - **D-8180 (2026-11-10)** — linear-hierarchy-w1-proxy: wave 1, the proxy additions: the hierarchy documents and the
   ccrc operation rows, the ccrc actor in the write policy and the journal, the `sync` and `migration` rate lanes, the
   directory's status types and `statusOfType` (unsent until wave 3), and the server-internal caller `runCcrcOp`.
@@ -134,6 +161,9 @@ number from `POST /api/ledger/deviations`.
 - **D-8185 (2026-11-10)** — linear-hierarchy-w6-skills: wave 6, the coordinator, worker and Linear skills.
 - **D-8186 (2026-11-10)** — linear-hierarchy-w7-migration: wave 7, the per-team migration: start, map propose and
   check, approve, apply at wave boundaries, report, follow-up maps and put back.
+- **D-8407 (2026-11-13)** — linear-hierarchy-fx2: FX2's hierarchy capture lands as recorded fixtures, and its one
+  schema defect is fixed: `ProjectMilestone` has no `creator`, so no document selects one and a milestone binds by name
+  inside its project. Its other findings are the departures above.
 
 ## Global Constraints
 
@@ -317,9 +347,9 @@ Inert: nothing calls the new rows until wave 3. Testable alone over constructed 
 What each document selects (the shapers read exactly these; the implementer writes the GraphQL text once, and FX2
 records that text):
 - initiative: `id name description status updatedAt projects(first: 50) { nodes { id } }`
-- project: `id name description updatedAt status { id type } teams(first: 20) { nodes { key } } initiatives(first: 10) { nodes { id } } projectMilestones(first: 50) { nodes { id name description targetDate sortOrder updatedAt creator { id } } }`
-  (`creator { id }` on a milestone is the bind-by-name check of Task 3.2; FX2 question 7 confirms the field exists,
-  and if the schema has none the selection drops it before FX2 records the document)
+- project: `id name description updatedAt status { id type } teams(first: 20) { nodes { key } } initiatives(first: 10) { nodes { id } } projectMilestones(first: 50) { nodes { id name description targetDate sortOrder updatedAt } }`
+  (FX2 found no `creator` on `ProjectMilestone`, so the milestone selection has none, D-8407; a milestone binds by name
+  inside its project, Task 3.2)
 - `projectStatuses`: `id name type`, first 50; `initiativesProbe`: `initiatives(first: 1) { nodes { id } }`
 - `initiativesByName`, `projectsByName`: filtered by exact `name`, first 10, each node `id name createdAt creator { id }`
   (a project also `teams(first: 20) { nodes { key } }`): the bind-by-name read of Task 3.2
@@ -1155,8 +1185,8 @@ insert" reads the object by its `requestId` and binds it. A `name-and-creator` c
 pass that may have sent it) first reads by exact name in its scope (`initiativesByName`; `projectsByName` narrowed to
 the team; a milestone from its project's `projectById`) and binds the one object whose `creator.id` is the key's viewer
 (the directory's `viewerId`) and whose id no binding holds; none sends the create, and two or more mark the binding
-`failed` and mail the coordinator. A milestone's creator check holds only if FX2's answer 7 finds `creator` on
-`ProjectMilestone`; if it does not, a milestone binds by exact name inside its own bound project when no binding holds
+`failed` and mail the coordinator. FX2's answer 7 found no `creator` on `ProjectMilestone` (D-8407), so a milestone
+binds by exact name inside its own bound project when no binding holds
 that milestone (a ccrc-bound project holds only what ccrc made, so the name is unique there), and the "another
 creator" test row covers initiatives and projects only. It does not use `LinearJournal.viaFleet`: that read matches
 only `outcome = 'ok'` rows with a `result`, and in the very crash this exists for (server death after send, before

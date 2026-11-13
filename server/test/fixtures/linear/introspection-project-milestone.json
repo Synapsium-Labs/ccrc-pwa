@@ -1,0 +1,195 @@
+{
+  "name": "introspection-project-milestone",
+  "documentSource": "fx2-introspection",
+  "document": "query { __type(name: \"ProjectMilestone\") { name kind inputFields { name type { name kind ofType { name kind } } } fields { name type { name kind ofType { name kind } } } enumValues { name } } }",
+  "variables": {},
+  "requestBody": "{\"query\":\"query { __type(name: \\\"ProjectMilestone\\\") { name kind inputFields { name type { name kind ofType { name kind } } } fields { name type { name kind ofType { name kind } } } enumValues { name } } }\",\"variables\":{}}",
+  "requestHeaders": [
+    "authorization: <the key, bare, no Bearer>",
+    "content-type: application/json"
+  ],
+  "sentAtMs": null,
+  "receivedAtMs": null,
+  "sentAt": null,
+  "status": 200,
+  "statusLine": null,
+  "headers": [
+    [
+      "content-type",
+      "application/json; charset=utf-8"
+    ],
+    [
+      "x-complexity",
+      "14"
+    ],
+    [
+      "x-ratelimit-complexity-limit",
+      "3000000"
+    ],
+    [
+      "x-ratelimit-complexity-remaining",
+      "2999972"
+    ],
+    [
+      "x-ratelimit-complexity-reset",
+      "1794589999108"
+    ],
+    [
+      "x-ratelimit-requests-limit",
+      "2500"
+    ],
+    [
+      "x-ratelimit-requests-remaining",
+      "2480"
+    ],
+    [
+      "x-ratelimit-requests-reset",
+      "1794589999108"
+    ]
+  ],
+  "body": {
+    "data": {
+      "__type": {
+        "name": "ProjectMilestone",
+        "kind": "OBJECT",
+        "inputFields": null,
+        "fields": [
+          {
+            "name": "id",
+            "type": {
+              "name": null,
+              "kind": "NON_NULL",
+              "ofType": {
+                "name": "ID",
+                "kind": "SCALAR"
+              }
+            }
+          },
+          {
+            "name": "createdAt",
+            "type": {
+              "name": null,
+              "kind": "NON_NULL",
+              "ofType": {
+                "name": "DateTime",
+                "kind": "SCALAR"
+              }
+            }
+          },
+          {
+            "name": "updatedAt",
+            "type": {
+              "name": null,
+              "kind": "NON_NULL",
+              "ofType": {
+                "name": "DateTime",
+                "kind": "SCALAR"
+              }
+            }
+          },
+          {
+            "name": "archivedAt",
+            "type": {
+              "name": "DateTime",
+              "kind": "SCALAR",
+              "ofType": null
+            }
+          },
+          {
+            "name": "name",
+            "type": {
+              "name": null,
+              "kind": "NON_NULL",
+              "ofType": {
+                "name": "String",
+                "kind": "SCALAR"
+              }
+            }
+          },
+          {
+            "name": "documentContent",
+            "type": {
+              "name": "DocumentContent",
+              "kind": "OBJECT",
+              "ofType": null
+            }
+          },
+          {
+            "name": "targetDate",
+            "type": {
+              "name": "TimelessDate",
+              "kind": "SCALAR",
+              "ofType": null
+            }
+          },
+          {
+            "name": "project",
+            "type": {
+              "name": null,
+              "kind": "NON_NULL",
+              "ofType": {
+                "name": "Project",
+                "kind": "OBJECT"
+              }
+            }
+          },
+          {
+            "name": "sortOrder",
+            "type": {
+              "name": null,
+              "kind": "NON_NULL",
+              "ofType": {
+                "name": "Float",
+                "kind": "SCALAR"
+              }
+            }
+          },
+          {
+            "name": "description",
+            "type": {
+              "name": "String",
+              "kind": "SCALAR",
+              "ofType": null
+            }
+          },
+          {
+            "name": "status",
+            "type": {
+              "name": null,
+              "kind": "NON_NULL",
+              "ofType": {
+                "name": "ProjectMilestoneStatus",
+                "kind": "ENUM"
+              }
+            }
+          },
+          {
+            "name": "progress",
+            "type": {
+              "name": null,
+              "kind": "NON_NULL",
+              "ofType": {
+                "name": "Float",
+                "kind": "SCALAR"
+              }
+            }
+          },
+          {
+            "name": "issues",
+            "type": {
+              "name": null,
+              "kind": "NON_NULL",
+              "ofType": {
+                "name": "IssueConnection",
+                "kind": "OBJECT"
+              }
+            }
+          }
+        ],
+        "enumValues": null
+      }
+    }
+  },
+  "bodyRaw": "{\"data\":{\"__type\":{\"name\":\"ProjectMilestone\",\"kind\":\"OBJECT\",\"inputFields\":null,\"fields\":[{\"name\":\"id\",\"type\":{\"name\":null,\"kind\":\"NON_NULL\",\"ofType\":{\"name\":\"ID\",\"kind\":\"SCALAR\"}}},{\"name\":\"createdAt\",\"type\":{\"name\":null,\"kind\":\"NON_NULL\",\"ofType\":{\"name\":\"DateTime\",\"kind\":\"SCALAR\"}}},{\"name\":\"updatedAt\",\"type\":{\"name\":null,\"kind\":\"NON_NULL\",\"ofType\":{\"name\":\"DateTime\",\"kind\":\"SCALAR\"}}},{\"name\":\"archivedAt\",\"type\":{\"name\":\"DateTime\",\"kind\":\"SCALAR\",\"ofType\":null}},{\"name\":\"name\",\"type\":{\"name\":null,\"kind\":\"NON_NULL\",\"ofType\":{\"name\":\"String\",\"kind\":\"SCALAR\"}}},{\"name\":\"documentContent\",\"type\":{\"name\":\"DocumentContent\",\"kind\":\"OBJECT\",\"ofType\":null}},{\"name\":\"targetDate\",\"type\":{\"name\":\"TimelessDate\",\"kind\":\"SCALAR\",\"ofType\":null}},{\"name\":\"project\",\"type\":{\"name\":null,\"kind\":\"NON_NULL\",\"ofType\":{\"name\":\"Project\",\"kind\":\"OBJECT\"}}},{\"name\":\"sortOrder\",\"type\":{\"name\":null,\"kind\":\"NON_NULL\",\"ofType\":{\"name\":\"Float\",\"kind\":\"SCALAR\"}}},{\"name\":\"description\",\"type\":{\"name\":\"String\",\"kind\":\"SCALAR\",\"ofType\":null}},{\"name\":\"status\",\"type\":{\"name\":null,\"kind\":\"NON_NULL\",\"ofType\":{\"name\":\"ProjectMilestoneStatus\",\"kind\":\"ENUM\"}}},{\"name\":\"progress\",\"type\":{\"name\":null,\"kind\":\"NON_NULL\",\"ofType\":{\"name\":\"Float\",\"kind\":\"SCALAR\"}}},{\"name\":\"issues\",\"type\":{\"name\":null,\"kind\":\"NON_NULL\",\"ofType\":{\"name\":\"IssueConnection\",\"kind\":\"OBJECT\"}}}],\"enumValues\":null}}}\n",
+  "note": "Recorded by the hierarchy capture (FX2, D-8407). The schema of ProjectMilestone."
+}

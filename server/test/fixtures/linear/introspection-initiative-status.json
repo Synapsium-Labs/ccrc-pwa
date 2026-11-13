@@ -1,0 +1,79 @@
+{
+  "name": "introspection-initiative-status",
+  "documentSource": "fx2-introspection",
+  "document": "query { __type(name: \"InitiativeStatus\") { name kind inputFields { name type { name kind ofType { name kind } } } fields { name type { name kind ofType { name kind } } } enumValues { name } } }",
+  "variables": {},
+  "requestBody": "{\"query\":\"query { __type(name: \\\"InitiativeStatus\\\") { name kind inputFields { name type { name kind ofType { name kind } } } fields { name type { name kind ofType { name kind } } } enumValues { name } } }\",\"variables\":{}}",
+  "requestHeaders": [
+    "authorization: <the key, bare, no Bearer>",
+    "content-type: application/json"
+  ],
+  "sentAtMs": null,
+  "receivedAtMs": null,
+  "sentAt": null,
+  "status": 200,
+  "statusLine": null,
+  "headers": [
+    [
+      "content-type",
+      "application/json; charset=utf-8"
+    ],
+    [
+      "x-complexity",
+      "14"
+    ],
+    [
+      "x-ratelimit-complexity-limit",
+      "3000000"
+    ],
+    [
+      "x-ratelimit-complexity-remaining",
+      "2999958"
+    ],
+    [
+      "x-ratelimit-complexity-reset",
+      "1794589999183"
+    ],
+    [
+      "x-ratelimit-requests-limit",
+      "2500"
+    ],
+    [
+      "x-ratelimit-requests-remaining",
+      "2479"
+    ],
+    [
+      "x-ratelimit-requests-reset",
+      "1794589999183"
+    ]
+  ],
+  "body": {
+    "data": {
+      "__type": {
+        "name": "InitiativeStatus",
+        "kind": "ENUM",
+        "inputFields": null,
+        "fields": null,
+        "enumValues": [
+          {
+            "name": "Proposed"
+          },
+          {
+            "name": "Planned"
+          },
+          {
+            "name": "Active"
+          },
+          {
+            "name": "Completed"
+          },
+          {
+            "name": "Canceled"
+          }
+        ]
+      }
+    }
+  },
+  "bodyRaw": "{\"data\":{\"__type\":{\"name\":\"InitiativeStatus\",\"kind\":\"ENUM\",\"inputFields\":null,\"fields\":null,\"enumValues\":[{\"name\":\"Proposed\"},{\"name\":\"Planned\"},{\"name\":\"Active\"},{\"name\":\"Completed\"},{\"name\":\"Canceled\"}]}}}\n",
+  "note": "Recorded by the hierarchy capture (FX2, D-8407). The schema of InitiativeStatus."
+}
