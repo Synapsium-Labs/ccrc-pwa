@@ -2,7 +2,7 @@
 // `insertStart`, and one read, `startsSince` (the generations lane's); `CoordStore` keeps one-line delegates of the same
 // names. Nothing here decides: the door (`routes.ts`) validates, this file records and measures.
 import type { DatabaseSync } from 'node:sqlite';
-import { startSourceOf, type StartRow } from '../../../shared/api.js';
+import { startSourceOf, type StartRow } from '../../../shared/continuity.js';
 
 /** What the door hands the writer: `source` is the payload's word as it came. */
 export interface StartInsert {

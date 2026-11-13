@@ -5,6 +5,7 @@ import path from 'node:path';
 import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
 import type { StartInsert } from '../src/continuity/continuityStore.js';
+import { START_SOURCES, isStartSource, startSourceOf } from '../../shared/continuity.js';
 import { mkTmp, removeTmpFixtures } from './tmpHelpers.js';
 
 afterEach(removeTmpFixtures);
@@ -68,6 +69,14 @@ describe('continuity_starts', () => {
       .run('lane-a-project-a', 'r-newer-0001', '11111111-2222-3333-4444-555555555555', 'teleport', null, null, NOW - 50, NOW);
     const r = s.startsSince(0);
     expect(r.ok && r.rows.map((x) => x.source)).toEqual(['other']);
+  });
+
+  it('the source vocabulary: one list in order, one guard, and the rule that reads any other word as other (review 1949, G8)', () => {
+    expect(START_SOURCES).toEqual(['startup', 'resume', 'clear', 'compact', 'fork', 'other']);
+    for (const w of START_SOURCES) { expect(isStartSource(w), w).toBe(true); expect(startSourceOf(w)).toBe(w); }
+    for (const v of ['', 'Clear', 'teleport', 'constructor', '__proto__', null, 7]) expect(isStartSource(v), String(v)).toBe(false);
+    expect(startSourceOf('teleport')).toBe('other');
+    expect(startSourceOf('toString')).toBe('other');
   });
 
   it('a failed statement answers write-failed or ok: false, never a throw', () => {

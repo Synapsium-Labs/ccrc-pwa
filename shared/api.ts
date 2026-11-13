@@ -14515,26 +14515,3 @@ export const ACCOUNT_POOLS_UNAVAILABLE_REASONS: readonly AccountPoolsUnavailable
 export function isAccountPoolsUnavailableReason(v: unknown): v is AccountPoolsUnavailableReason {
   return typeof v === 'string' && (ACCOUNT_POOLS_UNAVAILABLE_REASONS as readonly string[]).includes(v);
 }
-
-/** Overlord W1a, the start report (spec §3.3.11; review 1911, F10): the SessionStart sources a `continuity_starts` row
- *  may carry. A word outside them is read as `other` by `startSourceOf`, the one rule the table's writer and its read
- *  both go through: the payload is Claude Code's, and a new source word there must not lose the start. Here in L0, not
- *  in the store, because the generations lane (an L1 decider) reads them. APPENDED at the foot for wave 8's reason above. */
-export const START_SOURCES = ['startup', 'resume', 'clear', 'compact', 'fork', 'other'] as const;
-export type StartSource = (typeof START_SOURCES)[number];
-export function startSourceOf(w: string): StartSource {
-  return (START_SOURCES as readonly string[]).includes(w) ? (w as StartSource) : 'other';
-}
-/** A recorded start, as `continuity_starts` holds it and `startsSince` answers it. `uuid` is the reported conversation's
- *  (the body's `startedUuid`, else its `fromUuid`); `rowIncarnation` is the registry row's generation, or null. */
-export interface StartRow {
-  id: number;
-  sessionId: string;
-  reportId: string;
-  uuid: string;
-  source: StartSource;
-  model: string | null;
-  rowIncarnation: string | null;
-  reportedAt: number;
-  receivedAt: number;
-}
