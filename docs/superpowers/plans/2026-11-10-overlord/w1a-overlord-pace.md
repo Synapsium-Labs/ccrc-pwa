@@ -113,7 +113,9 @@ Each row keeps a comment that says why; the worker row's existing comment stays,
 
 **Files:**
 - Modify: `server/src/coord/mailPace.ts` (delete `mailPaceRoleOf` and `MailPaceRole`)
-- Modify: `server/src/watch.ts` (`sweepMail` builds `RoleFacts` and asks `paceRoleOf(roleOf(facts))`)
+- Modify: `server/src/roleOf.ts` (add `roleFactsOf(input: RoleFactInputs): RoleFacts`, pure: the one assembly of a
+  session's facts from values a caller already holds; the launch-profile, generations and card pieces reuse it)
+- Modify: `server/src/watch.ts` (`sweepMail` asks `paceRoleOf(roleOf(roleFactsOf(…)))`)
 - Test: `server/test/mail-pace.test.ts`, the mail sweep's suites (measure: `grep -ln 'cooldown' server/test/*mail*`)
 
 **The facts this task passes:** `designation: 'none'`, `auditBody: false`, `replayBody: false`, `child` from the
@@ -126,7 +128,9 @@ registry record the sweep already holds, `childRunKind` from the run the sweep a
 - [ ] **Step 2: Failing test.** In the sweep's suite, a fixture where the claimant of an open run gets a 15 s quiet and
   a session with no run gets 60 s (today's behaviour through the new path), and a child of a review run gets 60 s.
 - [ ] **Step 3: Run.** Expected: red only on the import of the removed name; then green once the call site moves.
-- [ ] **Step 4: Implement** the call site. Delete `mailPaceRoleOf`; `grep -rn mailPaceRoleOf server shared` answers
+- [ ] **Step 4: Implement** `roleFactsOf` (its input: the registry record's child mark, the run kind if read, the
+  open-coordinator set or `unmeasured`, the intent answer or `unmeasured`; `designation`, `auditBody` and `replayBody`
+  fixed until their waves), with an exhaustive test beside `roleOf`'s, then the call site. Delete `mailPaceRoleOf`; `grep -rn mailPaceRoleOf server shared` answers
   nothing.
 - [ ] **Step 5: Run** the suites and both `tsc` runs. Expected: green.
 - [ ] **Step 6: Commit.** `refactor(mail-pace): the mail gate picks its row through roleOf (behaviour unchanged)`
