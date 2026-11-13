@@ -129,6 +129,7 @@ import type { RunLastMovesRead } from './runWire.js';
 import { reviveDec, reviveMeas, reviveObs, type JournalRow } from './journalparse.js';
 import { BRIEF_NOTICE_DETAIL, BRIEF_RETRY_DETAIL, WAVE_BRIEF_SUBJECT, briefTakenStartDetail, type BriefTakenHow, type UnlandedBrief } from './briefwatch.js';
 import { MAIL_REPLAY_CEILING_ERROR } from './delivery.js';
+import { DEFAULT_CHARACTER, isCharacter, type Character } from '../../../shared/face.js';
 import { LIFECYCLE_PARK_ERRORS, REVIVABLE_PARK_ERRORS, REVIVE_SKIPPED_SENDERS, REVIVE_SKIPPED_SUBJECT_HEADS } from './mailRevive.js';
 import {
   DEAD_COORDINATOR_BREAKER_HELD_HEAD, DEAD_COORDINATOR_JOURNAL_ACTS, deadCoordinatorBreakerHeldDetail,
@@ -5961,6 +5962,22 @@ export class CoordStore {
       }
       return { before, after: this.rollSettings() };
     });
+  }
+
+  // ── the operator's character choice (the Overlord face plan, Task 6) ─────
+
+  /** The chosen character. A word `isCharacter` refuses (a newer build's) or a lost row reads `DEFAULT_CHARACTER`. */
+  faceSettings(): { character: Character; updatedAt: number } {
+    const r = this.db.prepare('SELECT character, updatedAt FROM face_settings WHERE id = 1').get() as
+      { character: unknown; updatedAt: unknown } | undefined;
+    if (r === undefined) return { character: DEFAULT_CHARACTER, updatedAt: 0 };
+    return { character: isCharacter(r.character) ? r.character : DEFAULT_CHARACTER, updatedAt: Number(r.updatedAt) };
+  }
+
+  /** The one writer of `face_settings`; it validates nothing: the route has narrowed `c`. An upsert, so a lost row returns. */
+  setFaceCharacter(c: Character, at: number): void {
+    this.db.prepare('INSERT INTO face_settings (id, character, updatedAt) VALUES (1, ?, ?) ' +
+      'ON CONFLICT(id) DO UPDATE SET character = excluded.character, updatedAt = excluded.updatedAt').run(c, at);
   }
 
   // ── the trusted set of Claude Code builds (D-8289) ─────────────────────────

@@ -125,6 +125,7 @@ const ROUTES: ScannedRoute[] = [
   ...scanRoutes('accounts/routes.ts'),
   ...scanRoutes('linear/proxyRoutes.ts'),
   ...scanRoutes('readerLab/routes.ts'),
+  ...scanRoutes('face/routes.ts'),
   ...scanRoutes('linking/routes.ts'),
   ...scanRoutes('testboxAdmin.ts'),
   ...scanRoutes('coord/planRoutes.ts'),
@@ -410,6 +411,8 @@ describe('the scanner is looking at something', () => {
     // `POST …/runs/:nonce/close`, session-gated and NOT EXEMPT; `GET` and `POST /api/reader-lab/probe/:nonce/:name`, IN
     // EXEMPT under reason 8. None consults the box token.
     expect(scanRoutes('readerLab/routes.ts').length).toBe(5);
+    // 2 in `face/routes.ts` (the Overlord face plan, Task 6): `GET` and `POST /api/face`, session-gated and NOT EXEMPT, no box token.
+    expect(scanRoutes('face/routes.ts').length).toBe(2);
     // The `server.ts` half moved too, and NOT on that ladder: 47 since
     // `POST /api/projects/:project/pool` (account pools wave 3, task 9) — the
     // project-pool tag write, registered in `server.ts` rather than in
@@ -623,7 +626,9 @@ describe('the scanner is looking at something', () => {
     // gated count 134 -> 135, the exempt-HTTP count stays 83.
     // 223 since `GET /api/models/:lane` (D-8406), session-gated and NOT EXEMPT, no box token: the HTTP half 219 -> 220, the
     // gated count 135 -> 136, the exempt-HTTP count stays 83.
-    expect(ROUTES.length).toBe(223);
+    // 225 since `GET /api/face` and `POST /api/face` (the Overlord face plan, Task 6), session-gated and NOT EXEMPT, no box token:
+    // the HTTP half 220 -> 222, the gated count 136 -> 138, the exempt-HTTP count stays 83.
+    expect(ROUTES.length).toBe(225);
     expect(scanRoutes('testboxAdmin.ts').length).toBe(2);
     // …and the three partitions add up: the websockets plus the HTTP half.
     expect(ROUTES.filter(isWs).length + ROUTES.filter((r) => !isWs(r)).length).toBe(ROUTES.length);
@@ -699,6 +704,8 @@ describe('the scanner is looking at something', () => {
       // The tenth file's five (the reader lab's door): a scanner that stopped reading `readerLab/routes.ts` would lose them all.
       'POST /api/reader-lab/runs', 'GET /api/reader-lab/runs/:nonce', 'POST /api/reader-lab/runs/:nonce/close',
       'GET /api/reader-lab/probe/:nonce/:name', 'POST /api/reader-lab/probe/:nonce/:name',
+      // The face door's two (the Overlord face plan, Task 6): a scanner that stopped reading `face/routes.ts` would lose both.
+      'GET /api/face', 'POST /api/face',
     ]) expect(keys, `${k} was not found by the scanner`).toContain(k);
     // Both a GET and a POST on the same path, which is the case a path-only
     // exempt table would get wrong (the POST is a box-token machine lane, the
@@ -796,7 +803,7 @@ describe('the scanner is COMPLETE — measured against Fastify\'s own route tabl
     const w = await openApp(); app = w.app;
     const real = realRouteTable(app);
     expect([...real].filter((r) => r.startsWith('UNPARSED'))).toEqual([]);
-    // 223 scanned + the static wildcard when the bundle is built.
+    // 225 scanned + the static wildcard when the bundle is built.
     // (59 stood here across several waves; the account-pools merge is where
     // it was finally re-measured, not where it went stale.)
     expect(real.size).toBe(ROUTES.length + (HAS_PWA ? 1 : 0));
@@ -1501,7 +1508,7 @@ describe('with CCRC_AUTH off — the shipped default', () => {
   });
 
   it('the gate changes the status of EXACTLY the gated routes, and of nothing else', async () => {
-    // THE PROPERTY, in one loop over all 220 HTTP routes, with THREE probes each:
+    // THE PROPERTY, in one loop over all 222 HTTP routes, with THREE probes each:
     // dark, armed-anonymous, and armed-with-a-live-session. Comparing dark
     // against AUTHENTICATED is what makes this a real status assertion for the
     // gated routes too (review R1) — the earlier version asserted only
@@ -1565,7 +1572,7 @@ describe('with CCRC_AUTH off — the shipped default', () => {
           }
 
           // 3. Armed WITH a live session: identical to dark, for every route that
-          //    is not itself flag-aware — the assertion that covers all 220 HTTP routes, not the 83 exempt.
+          //    is not itself flag-aware — the assertion that covers all 222 HTTP routes, not the 83 exempt.
           //    (Both counts are derived and checked against this very sentence at the
           //    bottom of this file. They read fifty-five and fifteen for several builds
           //    after the tree had grown past both — D-1223.)
