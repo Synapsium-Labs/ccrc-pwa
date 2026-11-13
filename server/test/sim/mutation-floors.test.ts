@@ -7,6 +7,7 @@ import { expect, it } from 'vitest';
 import { mergeBaseText } from '../mergeBase.js';
 import { COORD_BLOCKED_INVARIANTS, coordBlockedDay, type CoordBlockedModule } from './coordBlockedDay.js';
 import { floorsFallen, rewriteRelativeImports, runMutants, type MutantSet, type SuiteCase } from './mutate.js';
+import { FACE_MUTANT_SETS } from './faceSets.js';
 import { MAIL_PACE_MUTANT_SETS } from './mailPaceSets.js';
 import { RENEWAL_MUTANT_SETS } from './renewalDeciderSets.js';
 import { simulate } from './run.js';
@@ -114,6 +115,7 @@ const MUTANT_SETS: Record<string, MutantSet<never>> = {
   [CARD_BLOCK_KEY]: CARD_BLOCK_SET as MutantSet<never>,
   ...RENEWAL_MUTANT_SETS,
   ...MAIL_PACE_MUTANT_SETS,
+  ...FACE_MUTANT_SETS,
 };
 
 it('rewriteRelativeImports makes ./ and ../ absolute and leaves bare specifiers', () => {

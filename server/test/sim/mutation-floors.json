@@ -11,5 +11,8 @@
   "server/src/continuity/card.ts#oneLine": 1,
   "server/src/continuity/card.ts#block": 1,
   "server/src/continuity/generationMachine.ts#generationStep": 1,
-  "server/src/coord/mailPace.ts#mailPaceOf": 1
+  "server/src/coord/mailPace.ts#mailPaceOf": 1,
+  "pwa/src/face/mood.ts#moodOf": 1,
+  "pwa/src/face/splash.ts#splashShows": 1,
+  "pwa/src/face/appBadge.ts#badgeAct": 1
 }
