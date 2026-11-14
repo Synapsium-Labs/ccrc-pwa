@@ -294,6 +294,16 @@ describe('the generator refuses what is outside the measured vocabulary', () => 
     ['a steps( with a count that is not an integer', base.replace('</style>', '.md-zz{animation:md-up2 1s steps(1.5)}</style>'), /refused animation.*steps\(1\.5\)/],
     ['an easing function beside a stepped one', base.replace('</style>', '.md-zz{animation:md-up2 1s steps(1) cubic-bezier(0,0,1,1)}</style>'), /refused animation.*cubic-bezier/],
     ['an eased keyword after steps(), which is no keyframe name and no stepped timing', base.replace('</style>', '.md-zz{animation:md-up2 1s steps(1) ease-in}</style>'), /refused animation.*ease-in/],
+    // Every eased word is refused, one row each (review 2002 N-J): putting any back turns its own row red.
+    ...['linear', 'ease', 'ease-out', 'ease-in-out'].map((word): [string, string, RegExp] => [
+      `the eased word ${word} after steps()`,
+      base.replace('</style>', `.md-zz{animation:md-up2 1s steps(1) ${word}}</style>`),
+      new RegExp(`refused animation.*"${word}".*eased`),
+    ]),
+    ['an eased word in capitals', base.replace('</style>', '.md-zz{animation:md-up2 1s steps(1) EASE-IN-OUT}</style>'), /refused animation.*EASE-IN-OUT.*eased/],
+    ['an eased word that is a keyframe name the sheet defines, which CSS reads as a second timing function', base.replace('</style>', '@keyframes ease-in{0%{opacity:0}}.md-zz{animation:ease-in 1s steps(1)}</style>'), /refused animation.*"ease-in".*eased/],
+    ['two timing functions in one entry: steps() and step-end', base.replace('</style>', '.md-zz{animation:md-up2 1s steps(1) step-end}</style>'), /refused animation.*more than one timing function/],
+    ['two timing functions in one entry: two steps()', base.replace('</style>', '.md-zz{animation:md-up2 1s steps(1) steps(2)}</style>'), /refused animation.*more than one timing function/],
     ['a steps( token with a trailing character', base.replace('</style>', '.md-zz{animation:md-up2 1s steps(1)x}</style>'), /refused animation.*steps\(1\)x/],
     ['a steps( jump term outside the closed list', base.replace('</style>', '.md-zz{animation:md-up2 1s steps(2, ease)}</style>'), /refused animation.*steps\(2, ease\)/],
     ['a style rule of two classes', base.replace('</style>', '.a .b{opacity:0}</style>'), /refused inline style/],

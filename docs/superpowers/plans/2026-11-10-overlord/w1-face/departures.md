@@ -57,7 +57,18 @@ into its ledger. Each entry is a plain slug. None carries a number: the programm
 - **character-choice-request-order, ordering** — the device copy numbers every request it sends: the boot read and each
   write. An answer updates the value the server last confirmed only when it is newer than the answer that last set it, and
   the display follows the newest write still pending. So a late boot read cannot overwrite a newer choice, and a refused
-  write puts back what the server last confirmed, not something older.
+  write puts back what the server last confirmed, not something older. Superseded in part by the next two entries: one
+  write is in flight at a time (review 1992 F9), and a read asked for while it is out waits for it.
+- **character-choice-reconciles-an-unknown-write, ordering** — review 2002 R2-2. The device copy used to skip a queued
+  choice that equalled what the server last answered. After a write whose outcome is unknown (no answer: a dropped
+  connection, a truncated body, a 5xx) that skip was wrong: the server may have stored the write, so a press back to the old
+  value was dropped and the two ends ended on different characters. The skip is replaced: after an unknown outcome the row
+  is read once more (the write stays in flight meanwhile, so a press still queues), and a queued choice that differs from what
+  that read returned is sent. A refusal (a 4xx) is a known outcome and is not read again. If the re-read also fails the
+  queued choice is sent only when it differs from the last answer, as before.
+- **character-read-waits-for-the-write, ordering** — review 2002 N-C. A read made on a regained sign-in while a write is
+  out waits until the write settles, so a read the server answered before the write's effect never wins over the write's
+  answer.
 - **radio-arrows-shared, consolidation** — `ThemeGrid`'s arrow-key handling moved to `radioArrows`
   (`pwa/src/screens/AppearanceRow.tsx`). The theme grid and the character choice both use it, and the theme grid behaves
   as before.
@@ -77,11 +88,17 @@ into its ledger. Each entry is a plain slug. None carries a number: the programm
 - **fleet-head-wears-the-face, placement** — Instrument has no phone head of its own (its skin set's `Head` is null), so
   on a phone it shows the shared `pwa/src/fleet/FleetHead.tsx`, which writes its own wordmark. That is a fourth top bar the
   plan did not list. The face sits straight after that wordmark too, so every top bar wears it.
-- **face-mark-class-and-css, layout** — a `face-mark` class with layout-only rules (`flex: none`, margins) keeps the face
+  Cost (accepted by the coordinator, option C): where the right group cannot fit beside the wordmark and the face, the
+  head grows by one 32 px cell, because that group takes a second row and the wordmark never wraps. Measured in Chromium:
+  at 390 the head is 76 px against 48 px without the face; at 360 it is 73 px against 76 px; at 438 it is 48 px against
+  48 px, no growth.
+- **face-mark-class-and-css, layout** — a `face-mark` class with layout-only rules (`flex: none`, a group) keeps the face
   in place in each bar: Instrument's top bar, Refined's two bars and the shared phone head (`.fleet-head`, which Instrument's
-  phone mounts; first missed, found in review 1992 F1). In that head the wordmark keeps one line (`flex: none`, no wrap) and
-  the face is a centred 32 px cell beside it; at 390 the row has about 12 px to spare, so the right group wraps to a second
-  row, as it does at 360. A browser row in `refined-phone.browser.test.ts` measures the head at 390 and 360 in both palettes.
+  phone mounts; first missed, found in review 1992 F1). In that head the wordmark and the face are one group (`.fleet-id`,
+  review 2002 R2-1): the wordmark keeps one line (`flex: none`, no wrap) and the face is a 32 px cell centred on the
+  wordmark, so it is level with the wordmark on the head's first row, wrapped or not (measured 0 px off at 360, 390 and 438
+  in both palettes; centred on the whole head it was 22, 18 and 4 px off). A browser row in `refined-phone.browser.test.ts`
+  asserts the centre within 3 px and the gap between 6 and 10 px (it is the group's 8 px), at 360, 390 and 438.
   There is no animation, filter or shadow, and the still frame is lane A's `.chr[data-still]` rules.
 - **every-change-plays, accessibility** — each change of mood plays for 5 s, including a return to a mood that had
   settled. The first mood plays on mount.

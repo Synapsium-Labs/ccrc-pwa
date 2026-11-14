@@ -37,8 +37,12 @@ export function FleetHead(
   if (!chrome && countLine === null && poolLag === null) return null;
   return (
     <header className="fleet-head">
-        {chrome && <span className="wordmark">ccrc</span>}
-        {chrome && <FaceMark />}
+        {chrome && (
+          <span className="fleet-id">
+            <span className="wordmark">ccrc</span>
+            <FaceMark />
+          </span>
+        )}
         <div className="fleet-head-right">
           {countLine !== null && <span className="fleet-count">{countLine}</span>}
           {poolLag !== null && <PoolLag text={poolLag} />}

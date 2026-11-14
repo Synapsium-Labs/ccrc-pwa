@@ -129,7 +129,10 @@ describe('the bar fits on one line with every badge at 99+', () => {
             for (const t of m.tops) expect(Math.abs(t - m.tops[0]!), `one line: tops ${m.tops.join(', ')}`).toBeLessThanOrEqual(1);
             expect(m.faceHeights, 'the face is in the bar').toHaveLength(1);
             for (const c of m.centres) expect(Math.abs(c - m.centres[0]!), `one line: centres ${m.centres.join(', ')}`).toBeLessThanOrEqual(1);
-            for (const h of m.faceHeights) expect(h, 'the face is one cell within the line').toBeLessThanOrEqual(m.line);
+            // Bounded by the cells' own sizes, not by the auto-height bar: a 48 px face would grow the bar and pass a check
+            // against it (review 2002 N-H). The face is one 32 px cell, the bar one 44 px line.
+            for (const h of m.faceHeights) expect(h, 'the face is one 32 px cell').toBeLessThanOrEqual(32.5);
+            expect(m.line, 'the bar is one 44 px line').toBeLessThanOrEqual(44.5);
             expect(m.outside, 'every door, ⌘K, the bell, Settings and + inside the bar').toEqual([]);
             expect(m.barScroll, 'the bar does not scroll sideways').toBeLessThanOrEqual(0);
             expect(m.pageScroll, 'the page does not scroll sideways').toBeLessThanOrEqual(0);

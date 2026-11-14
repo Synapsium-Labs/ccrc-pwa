@@ -164,6 +164,15 @@ describe('the face', () => {
     expect(face().getAttribute('aria-label')).toContain('nothing needs anyone');
   });
 
+  it('an accounts answer with no roster is not a heard one: accountsHeard stays false and the face stays Neutral', async () => {
+    const store = createFleetStore({ fetchAccounts: async () => ({ accounts: [], projected: null }) as never });
+    store.setState({ conn: 'open', sessions: [fleetSession({ id: 'lane-a-1', bucket: 'idle' })], fleetFrameSeen: true, runs: [], runsFrameSeen: true, waiting: waitingView({ items: [] }) });
+    mountFace(store);
+    await act(async () => { await store.getState().refreshAccounts(); });
+    expect(store.getState().accountsHeard).toBe(false);
+    expect(face().getAttribute('aria-label')).toContain('not heard yet: the accounts');
+  });
+
   it("the face's name says the cause", () => {
     mountFace(heard());
     expect(face().getAttribute('aria-label')).toBe('The Orb asleep: its eye closed in a downward curve, with small letter Zs drifting up: nothing needs anyone');

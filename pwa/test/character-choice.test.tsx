@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, renderHook, screen, waitFor, within } from '@testing-library/react';
 import { AppearanceSection } from '../src/screens/settings/AppearanceSection';
 import { CHARACTER_STORAGE_KEY, initCharacter, resetCharacterForTests, setCharacter, useCharacter } from '../src/lib/character';
-import { clearAuthLost, isAuthLost } from '../src/lib/auth';
+import { clearAuthLost, isAuthLost, raiseAuthLost } from '../src/lib/auth';
 import { SETTINGS_INDEX_TEXT } from '../src/fleet/settingsText';
 import { baseCommands } from '../src/command/commands';
 import type { Character as CharacterName } from '../../shared/face';
@@ -163,6 +163,77 @@ describe('answers settle in request order', () => {
     vi.stubGlobal('fetch', vi.fn(async () => { throw new TypeError('network'); }));
     act(() => { setCharacter('dark-lord'); });
     await waitFor(() => expect(result.current).toBe('orb'));
+  });
+});
+
+describe('a write whose outcome is unknown is reconciled', () => {
+  /** A server that keeps one row. A POST waits to be let go (`gates`), then stores the choice and answers as `onPost` says:
+   *  `lost` stores it and drops the connection, as a response lost on the way back does. */
+  function stateful(start: CharacterName): { row: () => CharacterName; gates: Array<() => void>; getCount: () => number } {
+    let row = start;
+    const gates: Array<() => void> = [];
+    let gets = 0;
+    vi.stubGlobal('fetch', vi.fn(async (input: unknown, init?: RequestInit) => {
+      const method = init?.method ?? 'GET';
+      calls.push({ method, path: String(input), body: typeof init?.body === 'string' ? JSON.parse(init.body) : undefined });
+      if (method === 'GET') { gets += 1; return new Response(JSON.stringify({ character: row, updatedAt: 1 }), { status: 200, headers: { 'content-type': 'application/json' } }); }
+      const asked = (JSON.parse(String(init!.body)) as { character: CharacterName }).character;
+      await new Promise<void>((go) => { gates.push(go); });
+      row = asked;
+      if (gates.length === 1 && lostFirst) throw new TypeError('network'); // stored, and the answer is lost
+      return new Response(JSON.stringify({ character: row, updatedAt: 2 }), { status: 200, headers: { 'content-type': 'application/json' } });
+    }));
+    return { row: () => row, gates, getCount: () => gets };
+  }
+  let lostFirst = false;
+  beforeEach(() => { lostFirst = false; });
+
+  it('the server stores a write whose answer is lost, and a press back to the old value is queued: both ends end on the same character', async () => {
+    lostFirst = true;
+    const server = stateful('orb');
+    const { result } = renderHook(() => useCharacter());
+    act(() => { initCharacter(); });
+    await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
+    act(() => { setCharacter('dark-lord'); });
+    act(() => { setCharacter('orb'); }); // back to what the server held before: queued
+    expect(posts()).toHaveLength(1);
+    await act(async () => { server.gates[0]!(); await new Promise((r) => setTimeout(r, 0)); });
+    // the outcome was unknown, so the row was read again (it holds dark-lord), and the queued choice differs from it: sent
+    await waitFor(() => expect(posts()).toHaveLength(2));
+    expect(posts()[1]).toMatchObject({ body: { character: 'orb' } });
+    await act(async () => { server.gates[1]!(); await new Promise((r) => setTimeout(r, 0)); });
+    await waitFor(() => expect(server.row()).toBe('orb'));
+    expect(result.current).toBe('orb');
+    expect(localStorage.getItem(CHARACTER_STORAGE_KEY)).toBe('orb');
+  });
+
+  it('a lost answer with nothing queued shows what the re-read returned: the server holds it', async () => {
+    lostFirst = true;
+    const server = stateful('orb');
+    const { result } = renderHook(() => useCharacter());
+    act(() => { initCharacter(); });
+    await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
+    act(() => { setCharacter('dark-lord'); });
+    await act(async () => { server.gates[0]!(); await new Promise((r) => setTimeout(r, 0)); });
+    await waitFor(() => expect(result.current).toBe('dark-lord'));
+    expect(posts()).toHaveLength(1);
+  });
+
+  it('a read made on sign-in regained while a write is out waits for the write to settle, and then wins nothing stale', async () => {
+    const server = stateful('orb');
+    const { result } = renderHook(() => useCharacter());
+    act(() => { initCharacter(); });
+    await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
+    expect(server.getCount()).toBe(1);
+    act(() => { setCharacter('dark-lord'); });
+    act(() => { raiseAuthLost('expired'); });
+    act(() => { clearAuthLost(); });
+    expect(server.getCount(), 'no read goes out while the write is out').toBe(1);
+    await act(async () => { server.gates[0]!(); await new Promise((r) => setTimeout(r, 0)); });
+    await waitFor(() => expect(server.getCount()).toBe(2));
+    await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
+    expect(result.current).toBe('dark-lord');
+    expect(server.row()).toBe('dark-lord');
   });
 });
 

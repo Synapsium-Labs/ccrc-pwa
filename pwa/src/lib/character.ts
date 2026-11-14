@@ -8,12 +8,17 @@
 // reload, then asks the server. One write is in flight at a time (`inFlight`): a choice made meanwhile waits as the newest
 // (`queued`, a newer choice replacing an older waiting one), and goes out when the write in flight settles, if it differs
 // from what the server last answered. So the server receives writes in the order they were made, and the last one wins
-// there as on screen. A refusal or a failed write puts back the value the server last answered (`confirmed`), never a guess.
+// there as on screen. A refusal puts back the value the server last answered (`confirmed`), never a guess.
+// A write whose OUTCOME IS UNKNOWN (no answer: a dropped connection, a truncated body, a 5xx) may or may not have been
+// stored, so `confirmed` may be stale: the choice is read once more before anything is sent or put back, and a choice
+// waiting is sent when it differs from what that read returned (`reconcile`).
 // The choice is read again when sign-in is regained (`onAuthRegained`): a read refused at boot, on an armed box with no
-// cookie yet, must not leave this device on its own copy.
+// cookie yet, must not leave this device on its own copy. That read waits while a write is out (`readWanted`), so a read
+// answered before the write's effect never wins over the write's answer.
 import { useSyncExternalStore } from 'react';
 import { DEFAULT_CHARACTER, isCharacter, type Character as CharacterName } from '../../../shared/face';
 import { api, type FaceAnswer } from './api';
+import { ApiError } from './apiError';
 import { onAuthRegained } from './auth';
 import { readKey, writeKey } from './storage';
 
@@ -35,6 +40,8 @@ let seq = 0;
 /** Whether a write is out, and the newest choice made while it is (`null`: none waiting). */
 let inFlight = false;
 let queued: CharacterName | null = null;
+/** A read was asked for (sign-in regained) while a write was out: made when the write settles. */
+let readWanted = false;
 /** Bumped by the test reset, so an answer to a request of an earlier test settles nothing. */
 let generation = 0;
 const listeners = new Set<() => void>();
@@ -61,27 +68,56 @@ function settleRead(gen: number, id: number, answer: FaceAnswer | null): void {
   if (!inFlight && queued === null) show(confirmed);
 }
 
-/** The write in flight settled. Fold its answer; then send the newest choice made meanwhile, if the server does not
- *  already hold it, or else show what the server last answered (a refusal puts the last confirmed value back). */
-function settleWrite(gen: number, id: number, answer: FaceAnswer | null): void {
-  if (gen !== generation) return;
+/** The write in flight (and any reconciling read) is over. Send the newest choice made meanwhile, if the server does not
+ *  already hold it, or else show what the server last answered (a refusal puts the last confirmed value back); then make
+ *  a read that was asked for while the write was out. */
+function endWrite(): void {
   inFlight = false;
-  fold(id, answer);
   const next = queued;
   queued = null;
   if (next !== null && next !== confirmed) { send(next); return; }
   show(confirmed);
+  if (readWanted) { readWanted = false; readNow(); }
 }
+
+/** The write in flight settled: `answered`, `refused` (a 4xx: the server did not store it) or `unknown` (anything else,
+ *  which may have been stored). Only an unknown outcome is read again. */
+function settleWrite(gen: number, id: number, outcome: FaceAnswer | 'refused' | 'unknown'): void {
+  if (gen !== generation) return;
+  if (outcome === 'unknown') { reconcile(gen); return; }
+  fold(id, outcome === 'refused' ? null : outcome);
+  endWrite();
+}
+
+/** After a write of unknown outcome: read the row once (the write stays "in flight", so a press meanwhile still queues),
+ *  fold the answer, then `endWrite` sends a queued choice that differs from what the server holds. */
+function reconcile(gen: number): void {
+  readWanted = false; // this read comes after the sign-in that asked for one
+  const id = ++seq;
+  api.getFace().then((a) => { if (gen === generation) { fold(id, a); endWrite(); } },
+    () => { if (gen === generation) endWrite(); });
+}
+
+const outcomeOf = (err: unknown): 'refused' | 'unknown' =>
+  err instanceof ApiError && err.status < 500 ? 'refused' : 'unknown';
 
 function send(c: CharacterName): void {
   inFlight = true;
   const gen = generation;
   const id = ++seq;
-  api.setFace(c).then((a) => settleWrite(gen, id, a), () => settleWrite(gen, id, null));
+  api.setFace(c).then(
+    (a) => settleWrite(gen, id, isCharacter(a?.character) ? a : 'unknown'),
+    (err: unknown) => settleWrite(gen, id, outcomeOf(err)),
+  );
 }
 
-/** Ask the server for the row. */
+/** Ask the server for the row, once no write is out (sign-in regained, boot). */
 function readServer(): void {
+  if (inFlight) { readWanted = true; return; }
+  readNow();
+}
+
+function readNow(): void {
   const gen = generation;
   const id = ++seq;
   api.getFace().then((a) => settleRead(gen, id, a), () => settleRead(gen, id, null));
@@ -118,6 +154,7 @@ export function resetCharacterForTests(): void {
   seq = 0;
   inFlight = false;
   queued = null;
+  readWanted = false;
 }
 
 function subscribe(onChange: () => void): () => void {

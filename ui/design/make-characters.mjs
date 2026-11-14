@@ -150,6 +150,12 @@ const ANIMATION_WORDS = new Set([
   'none', 'infinite', 'forwards', 'backwards', 'both', 'normal', 'reverse', 'alternate', 'alternate-reverse',
   'running', 'paused', 'step-start', 'step-end',
 ]);
+/** The eased timing keywords. They are refused wherever they stand in an entry, a keyframe NAME included: `ease-in 1s
+ *  steps(1)` would play a keyframes called `ease-in` in the sheet's own eyes and be dropped by CSS, which reads the word as
+ *  a second timing function. */
+const EASED_WORDS = new Set(['linear', 'ease', 'ease-in', 'ease-out', 'ease-in-out']);
+/** The stepped timing keywords, besides `steps(…)`: each is a timing function, and an entry has at most one. */
+const STEP_WORDS = new Set(['step-start', 'step-end']);
 const NUMBER = /^[+-]?(?:\d+\.?\d*|\.\d+)$/;
 const TIME = /^[+-]?(?:\d+\.?\d*|\.\d+)(?:s|ms)$/i;
 /** `steps(<int>[, <jump>])` as a WHOLE token, in any case: `xsteps(1)` and a name holding `steps(` are not one. */
@@ -162,14 +168,18 @@ const KEYFRAME_NAME = /^-?[a-z_][\w-]*$/i;
 function readAnimationEntry(entry, where) {
   const names = [];
   let stepped = false;
+  let timings = 0;
   for (const raw of splitTop(entry.trim(), ' ')) {
     const t = raw.trim();
     if (!t) continue;
-    if (STEPS_TOKEN.test(t)) stepped = true;
+    if (EASED_WORDS.has(t.toLowerCase())) refuse('animation', `"${t}" in ${where} is an eased word, not stepped`);
+    if (STEP_WORDS.has(t.toLowerCase())) timings++;
+    if (STEPS_TOKEN.test(t)) { stepped = true; timings++; }
     else if (NUMBER.test(t) || TIME.test(t) || ANIMATION_WORDS.has(t.toLowerCase())) continue;
     else if (KEYFRAME_NAME.test(t)) names.push(t);
     else refuse('animation', `"${t}" in ${where} is not a number, a time, a keyword, steps(…) or a plain keyframe name`);
   }
+  if (timings > 1) refuse('animation', `"${entry.trim()}" in ${where} has more than one timing function`);
   return { names, stepped };
 }
 
