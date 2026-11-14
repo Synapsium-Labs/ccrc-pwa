@@ -45,9 +45,13 @@ describe('FLEET_ROLES (Overlord spec §3.3.9, C49)', () => {
     expect(FLEET_ROLES.coordinator.probeSet).toEqual(['fact', 'temporal', 'abstention', 'continuation']);
     expect(FLEET_ROLES.overlord.probeSet).toEqual(PROBE_CLASSES);
   });
+  it('the timer cap: set on every row, the Overlord 50, a coordinator 20, every other role 5 (Table 11.1b, C65)', () => {
+    for (const r of FLEET_ROLE_NAMES) expect(Number.isSafeInteger(FLEET_ROLES[r].timerCap) && FLEET_ROLES[r].timerCap > 0, r).toBe(true);
+    expect(FLEET_ROLE_NAMES.map((r) => FLEET_ROLES[r].timerCap)).toEqual([50, 5, 5, 5, 5, 20, 5]);
+  });
   it('a row must carry every column (a compile-time pin, read by the test typecheck)', () => {
     // @ts-expect-error a row with no sessionRole is not a FleetRoleRow
-    const partial: FleetRoleRow = { longLived: false, launchProfile: { env: {}, settings: {}, autoMemory: 'off', compaction: null }, cardRenderer: 'plain', compactInstructions: '', probeSet: [] };
+    const partial: FleetRoleRow = { longLived: false, launchProfile: { env: {}, settings: {}, autoMemory: 'off', compaction: null }, cardRenderer: 'plain', compactInstructions: '', probeSet: [], timerCap: 5 };
     expect(partial.longLived).toBe(false);
   });
   it('isFleetRole accepts exactly the table keys', () => {

@@ -209,6 +209,16 @@ export const NOTE_REFUSALS = {
   notAsked: 'note-not-asked',
 } as const;
 export type NoteRefusal = (typeof NOTE_REFUSALS)[keyof typeof NOTE_REFUSALS];
+/** The timer doors' own words (Overlord W1a, the timers piece; spec §11.6, the `timer-*` words), each with its one status,
+ *  declared once here and spread into `REFUSAL_STATUS` (`LEASE_DOOR_REFUSALS`' idiom). CHOSEN, not measured: 409 for the
+ *  caller's cap and for a timer no longer pending, 429 for the hourly rate, 400 for a body the caller can fix, 503 for a
+ *  stamp or binding the box could not read (a box fault never reads as "not yours"), 403 for a key or a timer that is not
+ *  the caller's. Decided by `server/src/continuity/timers.ts`. */
+export const TIMER_REFUSALS = {
+  'timer-cap': 409, 'timer-rate': 429, 'timer-too-soon': 400, 'timer-too-late': 400, 'timer-too-long': 400,
+  'timer-masked': 400, 'timer-unmeasured': 503, 'timer-key-unknown': 403, 'timer-not-yours': 403, 'timer-not-pending': 409,
+} as const;
+export type TimerRefusal = keyof typeof TIMER_REFUSALS;
 
 /** The approval routes' own words (plan Task 16, D-5298): typed from the start, as D-5381 set out to make them. */
 export type RouteRefusal = ClaimRefusal | MailRouteRefusal | UpdateRouteError | CollectLaneRouteRefusal | SwapRefusal | GenericRefusal
@@ -232,6 +242,8 @@ export type RouteRefusal = ClaimRefusal | MailRouteRefusal | UpdateRouteError | 
   | CardRefusal
   // The note door (Overlord W1a): its five words of its own.
   | NoteRefusal
+  // The timer doors (Overlord W1a, the timers piece): their ten words, each with its status in `TIMER_REFUSALS`.
+  | TimerRefusal
   // The lane routes, Check and the kill switch (accounts plan Task A14, D-7732): their four words of their own.
   | AccountRouteRefusal
   // The test box connect routes (D-8166): their one word of their own.
@@ -441,6 +453,8 @@ export const REFUSAL_STATUS: Readonly<Record<RouteRefusal, number>> = {
   // its cap and for a handover thread naming no live row (the caller's text to fix).
   [NOTE_REFUSALS.keyUnknown]: 403, [NOTE_REFUSALS.cap]: 409, [NOTE_REFUSALS.tooLong]: 400,
   [NOTE_REFUSALS.referenceUnknown]: 400, [NOTE_REFUSALS.notAsked]: 409,
+  // The timer doors (Overlord W1a): CHOSEN, not measured, each status declared once in `TIMER_REFUSALS`.
+  ...TIMER_REFUSALS,
   // D-8126: CHOSEN, not measured. 400 for both: the coordinator sent a list of the wrong shape, or a change with nothing
   // to stand on; either is theirs to fix, as `bad-in-short`.
   [LEDGER_ROUTE_REFUSALS.badDoneWhen]: 400, [LEDGER_ROUTE_REFUSALS.doneWhenNeedsRuling]: 400,

@@ -34,5 +34,11 @@
   "server/src/continuity/notes.ts#noteVerdict": 1,
   "server/src/continuity/notes.ts#handoverVerdict": 1,
   "server/src/continuity/notes.ts#noteKeyFact": 1,
-  "server/src/continuity/notes.ts#notesPage": 1
+  "server/src/continuity/notes.ts#notesPage": 1,
+  "server/src/continuity/timers.ts#timerBodyVerdict": 1,
+  "server/src/continuity/timers.ts#timerSetVerdict": 1,
+  "server/src/continuity/timers.ts#timerCancelVerdict": 1,
+  "server/src/continuity/timers.ts#timerCleanupVerdict": 1,
+  "server/src/continuity/timers.ts#timerPreview": 1,
+  "server/src/continuity/timers.ts#packTimerMail": 1
 }

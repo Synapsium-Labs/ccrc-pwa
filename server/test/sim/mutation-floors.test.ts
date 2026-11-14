@@ -15,6 +15,7 @@ import { RENEWAL_MUTANT_SETS } from './renewalDeciderSets.js';
 import { GENERATION_START_MUTANT_SETS } from './generationStartSets.js';
 import { PROBE_MUTANT_SETS } from './probeSets.js';
 import { NOTES_MUTANT_SETS } from './notesMutants.js';
+import { TIMER_MUTANT_SETS } from './timerSets.js';
 import { simulate } from './run.js';
 import {
   CARD_BLOCK_KEY, CARD_BLOCK_SET, CARD_NEVER_EMPTY_KEY, CARD_NEVER_EMPTY_SET, CARD_ONE_LINE_KEY, CARD_ONE_LINE_SET, CARD_TRIM_KEY,
@@ -149,6 +150,7 @@ const MUTANT_SETS: Record<string, MutantSet<never>> = {
   ...COMPACTION_MUTANT_SETS,
   ...PROBE_MUTANT_SETS,
   ...NOTES_MUTANT_SETS,
+  ...TIMER_MUTANT_SETS,
 };
 
 it('rewriteRelativeImports makes ./ and ../ absolute and leaves bare specifiers', () => {

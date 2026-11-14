@@ -10,6 +10,9 @@ import {
   type HandoverThread, type NoteKey, type NoteKind, type RenewalTrigger, type StartRow, type TriggerClass,
 } from '../../../shared/continuity.js';
 import { isFleetRole, type FleetRole } from '../../../shared/fleetRoles.js';
+import {
+  TIMER_STATES, cancelActorOf, isTimerCancelReason, timerMoveAllowed, type TimerActor, type TimerCancelReason, type TimerState,
+} from '../../../shared/continuity-timers.js';
 import type { Observed } from '../time/observed.js';
 import type { GenView } from './generationMachine.js';
 import { tx } from '../coord/tx.js';
@@ -518,8 +521,173 @@ export function cardReadOfStart(db: DatabaseSync, startId: number): CardReadRead
   }
 }
 
+// ------------------------------------------------------------------------------------------------- the timers
+// `continuity_timers` (Overlord spec §3.3.12 C61 to C65, I17; W1a, the timers piece; migration 70). Each move of
+// `TIMER_TRANSITIONS` has ONE writer here, and checks `timerMoveAllowed` before it writes: the set (`insertTimer`), the
+// fire (`markTimersFired`), the cancel (`cancelTimer`) and the purge of terminal rows (`purgeTimers`). Every move is a
+// compare-and-set on `state = 'pending'`. A read that fails answers ok: false with a detail, never an empty list.
+
+/** What the set door hands the writer. `role` is `roleOf` at the set, or `undecided`. */
+export interface TimerInsert {
+  readonly setter: string;
+  readonly setterIncarnation: string;
+  readonly setById: string;
+  readonly setByUuid: string;
+  readonly role: FleetRole | 'undecided';
+  readonly note: string;
+  readonly runId: number | null;
+  readonly programme: string | null;
+  readonly setAt: number;
+  readonly dueAt: number;
+}
+
+/** One row as read. `role` is the stored word: a newer build may have written a role this one does not know. */
+export interface TimerRow extends Omit<TimerInsert, 'role'> {
+  readonly id: number;
+  readonly role: string;
+  readonly state: TimerState;
+  readonly firedAt: number | null;
+  readonly mailId: number | null;
+  readonly cancelledAt: number | null;
+  readonly cancelReason: TimerCancelReason | null;
+}
+export type TimersRead = { ok: true; rows: TimerRow[] } | { ok: false; detail: string };
+/** The stall hold's read (Task 9): the setter's earliest pending timer and its newest fired at or after `firedSince`. */
+export type TimerHoldRead =
+  | { ok: true; earliestPending: TimerRow | null; newestFired: TimerRow | null }
+  | { ok: false; detail: string };
+
+const TIMER_COLUMNS = 'id, setter, setterIncarnation, setById, setByUuid, role, note, runId, programme, setAt, dueAt, state, '
+  + 'firedAt, mailId, cancelledAt, cancelReason';
+
+/** A stored row, or the reason it does not read (a state or cancel reason outside this build's vocabulary included). */
+function timerRowOf(raw: Record<string, unknown>): TimerRow | string {
+  const id = intOrNull(raw.id); const setAt = intOrNull(raw.setAt); const dueAt = intOrNull(raw.dueAt);
+  const { setter, setterIncarnation, setById, setByUuid, role, note, state, cancelReason } = raw;
+  if (id === null || setAt === null || dueAt === null) return `continuity_timers row ${String(raw.id)} has a time or id that does not read`;
+  if (typeof setter !== 'string' || typeof setterIncarnation !== 'string' || typeof setById !== 'string'
+    || typeof setByUuid !== 'string' || typeof role !== 'string' || typeof note !== 'string') {
+    return `continuity_timers row ${id} has a text column that does not read`;
+  }
+  if (typeof state !== 'string' || !(TIMER_STATES as readonly string[]).includes(state)) return `continuity_timers row ${id} has state ${String(state)}`;
+  // A bound key that does not read fails the read rather than reading as unbound, which would skip the cleanup's run and
+  // programme rungs and send the mail run-less (review 2038 F5).
+  const runId = intOrNull(raw.runId);
+  if (raw.runId !== null && runId === null) return `continuity_timers row ${id} has run ${String(raw.runId)}`;
+  if (raw.programme !== null && typeof raw.programme !== 'string') return `continuity_timers row ${id} has programme ${String(raw.programme)}`;
+  if (cancelReason !== null && (typeof cancelReason !== 'string' || !isTimerCancelReason(cancelReason))) {
+    return `continuity_timers row ${id} has cancel reason ${String(cancelReason)}`;
+  }
+  return {
+    id, setter, setterIncarnation, setById, setByUuid, role, note, runId, programme: strOrNull(raw.programme),
+    setAt, dueAt, state: state as TimerState, firedAt: intOrNull(raw.firedAt), mailId: intOrNull(raw.mailId),
+    cancelledAt: intOrNull(raw.cancelledAt), cancelReason: cancelReason as TimerCancelReason | null,
+  };
+}
+
+function timersOf(raws: readonly Record<string, unknown>[]): TimersRead {
+  const rows: TimerRow[] = [];
+  for (const raw of raws) {
+    const r = timerRowOf(raw);
+    if (typeof r === 'string') return { ok: false, detail: r };
+    rows.push(r);
+  }
+  return { ok: true, rows };
+}
+
+const readFailed = (e: unknown): { ok: false; detail: string } =>
+  ({ ok: false, detail: `continuity_timers read failed: ${e instanceof Error ? e.message : String(e)}` });
+
+/** The set: one pending row. A statement that fails answers `write-failed`, never a throw. */
+export function insertTimer(db: DatabaseSync, row: TimerInsert): { ok: true; id: number } | { ok: false; kind: 'write-failed' } {
+  if (!timerMoveAllowed(null, 'pending', 'set-door')) return { ok: false, kind: 'write-failed' };
+  try {
+    const res = stmt(db, 'INSERT INTO continuity_timers (setter, setterIncarnation, setById, setByUuid, role, note, runId, programme, '
+      + "setAt, dueAt, state) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')")
+      .run(row.setter, row.setterIncarnation, row.setById, row.setByUuid, row.role, row.note, row.runId, row.programme, row.setAt, row.dueAt);
+    return { ok: true, id: Number(res.lastInsertRowid) };
+  } catch {
+    return { ok: false, kind: 'write-failed' };
+  }
+}
+
+/** The cancel, by `actor` with `reason`: a pending row moves once, and a row that already moved answers `changed: false`.
+ *  A reason that belongs to another actor (`cancelActorOf`) is a caller's defect, so it THROWS and moves nothing (slug
+ *  cancel-reason-by-actor). */
+export function cancelTimer(db: DatabaseSync, id: number, actor: TimerActor, reason: TimerCancelReason, at: number): { changed: boolean } {
+  if (cancelActorOf(reason) !== actor) throw new Error(`cancelTimer: reason ${reason} is not ${actor}'s`);
+  if (!timerMoveAllowed('pending', 'cancelled', actor)) throw new Error(`cancelTimer: ${actor} may not cancel`);
+  return changedOf(stmt(db, "UPDATE continuity_timers SET state = 'cancelled', cancelledAt = ?, cancelReason = ? "
+    + "WHERE id = ? AND state = 'pending'").run(at, reason, id));
+}
+
+/** The fire: every row of `ids` moves pending to fired with its one mail's id, or none does. A row that already moved makes
+ *  it THROW, after undoing its own writes (a savepoint), so the caller's transaction rolls back its mail with it (I17). */
+export function markTimersFired(db: DatabaseSync, ids: readonly number[], mailId: number, at: number): { changed: boolean } {
+  if (!timerMoveAllowed('pending', 'fired', 'timer-lane')) throw new Error('markTimersFired: the lane may not fire');
+  if (ids.length === 0) return { changed: false };
+  db.exec('SAVEPOINT continuity_timers_fire');
+  try {
+    let moved = 0;
+    for (const id of ids) {
+      moved += Number(stmt(db, "UPDATE continuity_timers SET state = 'fired', firedAt = ?, mailId = ? WHERE id = ? AND state = 'pending'")
+        .run(at, mailId, id).changes);
+    }
+    if (moved !== ids.length) throw new Error(`markTimersFired: ${ids.length - moved} of ${ids.length} timers were no longer pending`);
+    db.exec('RELEASE continuity_timers_fire');
+    return { changed: true };
+  } catch (e) {
+    try { db.exec('ROLLBACK TO continuity_timers_fire'); db.exec('RELEASE continuity_timers_fire'); } catch { /* already gone */ }
+    throw e;
+  }
+}
+
+/** One setter's pending timers, oldest due first: the list door's and the card's read. */
+export function pendingTimersOf(db: DatabaseSync, setter: string): TimersRead {
+  try {
+    return timersOf(stmt(db, `SELECT ${TIMER_COLUMNS} FROM continuity_timers WHERE state = 'pending' AND setter = ? ORDER BY dueAt, id`)
+      .all(setter) as Record<string, unknown>[]);
+  } catch (e) { return readFailed(e); }
+}
+
+/** Every pending timer, oldest due first: the timers lane's read. */
+export function pendingTimers(db: DatabaseSync): TimersRead {
+  try {
+    return timersOf(stmt(db, `SELECT ${TIMER_COLUMNS} FROM continuity_timers WHERE state = 'pending' ORDER BY dueAt, id`)
+      .all() as Record<string, unknown>[]);
+  } catch (e) { return readFailed(e); }
+}
+
+/** The stall hold's read: the setter's earliest pending timer, and its newest timer fired at or after `firedSince`. */
+export function timerHoldFacts(db: DatabaseSync, setter: string, firedSince: number): TimerHoldRead {
+  try {
+    const pending = timersOf(stmt(db, `SELECT ${TIMER_COLUMNS} FROM continuity_timers WHERE state = 'pending' AND setter = ? `
+      + 'ORDER BY dueAt, id LIMIT 1').all(setter) as Record<string, unknown>[]);
+    if (!pending.ok) return pending;
+    const fired = timersOf(stmt(db, `SELECT ${TIMER_COLUMNS} FROM continuity_timers WHERE state = 'fired' AND setter = ? AND firedAt >= ? `
+      + 'ORDER BY firedAt DESC, id DESC LIMIT 1').all(setter, firedSince) as Record<string, unknown>[]);
+    if (!fired.ok) return fired;
+    return { ok: true, earliestPending: pending.rows[0] ?? null, newestFired: fired.rows[0] ?? null };
+  } catch (e) { return readFailed(e); }
+}
+
+/** How many timers `setter` set at or after `since`, whatever became of them (the hourly rate counts cancelled ones). A
+ *  failed read THROWS: the set door maps it to `timer-unmeasured`, so it never reads as zero. */
+export function setsSince(db: DatabaseSync, setter: string, since: number): number {
+  const row = stmt(db, 'SELECT COUNT(*) AS n FROM continuity_timers WHERE setter = ? AND setAt >= ?').get(setter, since) as { n: number | bigint };
+  return Number(row.n);
+}
+
+/** The purge: fired and cancelled rows whose `firedAt` or `cancelledAt` is before `before` (the lane passes
+ *  `now - TIMER_KEEP_MS`). A pending row is never purged. */
+export function purgeTimers(db: DatabaseSync, before: number): { removed: number } {
+  const res = stmt(db, "DELETE FROM continuity_timers WHERE (state = 'fired' AND firedAt < ?) OR (state = 'cancelled' AND cancelledAt < ?)")
+    .run(before, before);
+  return { removed: Number(res.changes) };
+}
+
 // ------------------------------------------------------------------------------------------------- the notes
-// `continuity_notes` and `continuity_handovers` (Overlord spec §3.3.2 C37, W1a, the notes piece; migration 70). ONE writer,
+// `continuity_notes` and `continuity_handovers` (Overlord spec §3.3.2 C37, W1a, the notes piece; migration 71). ONE writer,
 // the note door (`routes.ts`), through `appendNote` and `putHandover`; the door and the card's gatherer read through
 // `liveNotes`, `noteById` and `handoverBefore`. APPEND-ONLY: nothing here updates or deletes a note. A failed statement
 // answers ok: false, never a throw; a row this build cannot read fails the read whole, never a partial list.

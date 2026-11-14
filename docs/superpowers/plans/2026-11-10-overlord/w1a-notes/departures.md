@@ -120,10 +120,18 @@ are built as written.
 
 ## Measured
 
-- Migration slot: `origin/main` had 69 entries at `44f68ea36`, so this is entry 70. Launch profiles PR B (#2794) adds a
-  migration too: whichever lands second merges `main` once, takes the next slot and re-counts.
-- `server/src/coord/schema.ts` passes 3,000 lines with migration 70 (2,968 to 3,006), so `growth-check`'s census asked for it in
-  `GROWTH_FILES` (`server/test/growthCheck.ts`), and it is listed there. Its growth here, 38 net lines, is under the 40 allowed.
+- Migration slot: this is entry 71. Timers PR A (#2797) landed first, at `dc2a6826a`, and took entry 70
+  (`continuity_timers`). This branch merged `main` once and moved the notes entry after it. The coordinator ruled the
+  move (review 2039, F10). `coord-db.test.ts` pins the slot to the timers' entry plus one, and to 71. The sites moved:
+  - `schema.ts`, the entry's header, its `user_version` sentence and its "must print 70" line;
+  - `coord-db.test.ts`, the version pins and the comment chains;
+  - `run-close-switch.test.ts`, the undo comment, the DROP list (`continuity_timers` too) and "eighteen";
+  - `writers-map.test.ts`;
+  - the store comment.
+
+  Launch profiles PR B (#2794) also adds a migration. If it lands after this one, it takes 72.
+- `server/src/coord/schema.ts` grows by 38 net lines over `main` with entry 71 (3,005 to 3,043). It was already in
+  `GROWTH_FILES` (`server/test/growthCheck.ts`) on both sides, and 38 is under the 40 allowed.
 - `server/src/coord/store.ts` grows by 9 net lines (the five one-line delegates and their import), under the 40 allowed.
 - The partial unique index, measured: with it dropped, the store-level case of two revisions of one note goes red
   (`continuity-notes-route.test.ts`, "two revisions of one note").
