@@ -154,6 +154,9 @@ describe('gatherCardFacts: held items and the mail list (review 2023 F14, F15)',
     expect(value((await gather(c)).facts.itemsRaised)).toEqual([]);
     const other = (await gatherCardFacts(deps(c), OTHER, NOW)).facts;
     expect(items(other)).toEqual([[forThem, true]]);
+    // A third session that reads programme prog-a's ledger (it raised an item there) never sees prog-a's held item.
+    const raiser = (await gatherCardFacts(deps(c), 'lane-c-project-a', NOW)).facts;
+    expect(items(raiser)).toEqual([[shown, false]]);
     // Once the hold passes, the operator is shown it, so it is an ordinary item on every card of the programme.
     const later = (await gatherCardFacts(deps(c), ME, NOW + 60_000)).facts;
     expect(items(later)).toEqual([[shown, false], [forMe, false], [forThem, false]]);
