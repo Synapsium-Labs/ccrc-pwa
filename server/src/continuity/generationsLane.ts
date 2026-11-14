@@ -24,6 +24,7 @@ import { roleFactsOf, roleOf } from '../roleOf.js';
 import type { ReleaseRead } from '../rollLane.js';
 import type { Clock } from '../time/ports.js';
 import { observeTime, observedStepCapMs, type ObservedGap } from '../time/observed.js';
+import type { MeasuredStat } from '../io.js';
 import type { UsageRead } from '../usage.js';
 import { compactionsSince, type CompactionsRead } from './compactions.js';
 import { effectiveGeneration, genExpectOf, type GenRow, type MintInput } from './continuityStore.js';
@@ -260,7 +261,7 @@ export function softTimesOf(g: GenRow): { generationAgeObservedMs: number; holdO
 export interface GatherPorts {
   usage(id: string): Promise<UsageRead>;
   /** `$REG/<id>.compactevents`'s size and time, the key the compactions are re-read on (review 1927 N2). */
-  eventsStamp(id: string): Promise<{ mtimeMs: number; size: number } | 'absent' | 'unreadable'>;
+  eventsStamp(id: string): Promise<MeasuredStat>;
   compactions(id: string): Promise<CompactionsRead>;
   turnMark(id: string): Promise<TurnMarkRead>;
   processStartedAt(id: string): Promise<number | null>;
@@ -286,7 +287,7 @@ export async function gatherGenerationReadings(coord: Pick<GenerationsCoord, 'li
     const id = g.sessionId;
     const usage = await ports.usage(id);
     const stamp = await ports.eventsStamp(id);
-    const key = typeof stamp === 'object' ? `${stamp.mtimeMs}:${stamp.size}` : null;
+    const key = stamp.ok ? `${stamp.mtimeMs}:${stamp.size}` : null;
     const held = memo.get(id);
     let compactions: CompactionsRead;
     if (key !== null && held !== undefined && held.stamp === key) compactions = held.read;

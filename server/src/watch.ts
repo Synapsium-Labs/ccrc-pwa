@@ -6078,10 +6078,7 @@ export class FleetWatcher {
       const rec = (id: string): SessionRecord | undefined => records.find((r) => r.id === id);
       const readings = await gatherGenerationReadings(coord, {
         usage: (id) => readUsageMeasured(io, cfg.registryDir, id, Math.floor(this.deps.time.clock.wall() / 1000)),
-        eventsStamp: async (id) => {
-          const st = await io.statMeasured(compactionsPaths(cfg.registryDir, id).pre);
-          return st.ok ? { mtimeMs: st.mtimeMs, size: st.size } : st.reason === 'absent' ? 'absent' : 'unreadable';
-        },
+        eventsStamp: (id) => io.statMeasured(compactionsPaths(cfg.registryDir, id).pre),
         compactions: (id) => readCompactionsMeasured(io, cfg.registryDir, id),
         turnMark: async (id) => { const r = rec(id); return r === undefined ? { ok: false, reason: 'unmeasured' } : turnMarkFor(reads, r); },
         processStartedAt: async (id) => { const r = rec(id); return r === undefined ? null : processStartedAtFor(reads, r); },

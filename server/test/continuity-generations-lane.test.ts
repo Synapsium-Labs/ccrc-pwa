@@ -12,6 +12,7 @@ import {
 } from '../src/continuity/generationsLane.js';
 import type { CompactionsRead } from '../src/continuity/compactions.js';
 import type { UsageRead } from '../src/usage.js';
+import type { MeasuredStat } from '../src/io.js';
 import type { ChildMark } from '../../shared/api.js';
 import { CONTINUITY_LANE } from '../../shared/lane-arm.js';
 import { HOLD_OFF_MS } from '../../shared/continuity.js';
@@ -316,7 +317,7 @@ describe('the pass records renewalDue on every generation at rest (Task 3)', () 
 });
 
 describe('the gather', () => {
-  const ports = (calls: string[], stamp: () => { mtimeMs: number; size: number } | 'absent'): GatherPorts => ({
+  const ports = (calls: string[], stamp: () => MeasuredStat): GatherPorts => ({
     usage: async () => { calls.push('usage'); return usage(1, 2); },
     eventsStamp: async () => stamp(),
     compactions: async () => { calls.push('compactions'); return { kind: 'absent' }; },
@@ -333,14 +334,14 @@ describe('the gather', () => {
     f.s.clearShadowWalk(g.id, { term: g.term, n: g.n, state: g.state, shadowState: g.shadowState, walk: g.walk }, 0);
     const calls: string[] = [];
     const memo: CompactionsMemo = new Map();
-    let st: { mtimeMs: number; size: number } | 'absent' = { mtimeMs: 1, size: 10 };
+    let st: MeasuredStat = { ok: true, mtimeMs: 1, size: 10 };
     const r1 = await gatherGenerationReadings(f.s, ports(calls, () => st), memo);
     await gatherGenerationReadings(f.s, ports(calls, () => st), memo);
     expect(calls.filter((c) => c === 'compactions')).toHaveLength(1);
-    st = { mtimeMs: 2, size: 10 };
+    st = { ok: true, mtimeMs: 2, size: 10 };
     await gatherGenerationReadings(f.s, ports(calls, () => st), memo);
     expect(calls.filter((c) => c === 'compactions')).toHaveLength(2);
-    st = 'absent';
+    st = { ok: false, reason: 'absent' };
     await gatherGenerationReadings(f.s, ports(calls, () => st), memo);
     await gatherGenerationReadings(f.s, ports(calls, () => st), memo);
     expect(calls.filter((c) => c === 'compactions')).toHaveLength(4);
@@ -353,7 +354,7 @@ describe('the gather', () => {
     f.start('startup', U1);
     f.pass();
     const calls: string[] = [];
-    expect((await gatherGenerationReadings(f.s, ports(calls, () => 'absent'), new Map())).size).toBe(0);
+    expect((await gatherGenerationReadings(f.s, ports(calls, () => ({ ok: false, reason: 'absent' })), new Map())).size).toBe(0);
     expect(calls).toEqual([]);
   });
 });
