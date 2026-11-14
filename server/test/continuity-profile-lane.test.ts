@@ -274,6 +274,15 @@ describe('the launch-profile lane, one pass (Task 5)', () => {
     expect(shadow.sent.map(sets)).toEqual([['profile=plain', 'compactwindow=']]);   // `compact` is not the lane's while continuity is shadow
   });
 
+  it('a window outside the band is no compact point: the lane writes no compaction field and leaves the earlier ones (review 2031 F4)', async () => {
+    const h = harness({ lanes: { ...LIVE, continuity: armed('live') }, openGate: true, coordinators: ['lane-a-project-a', 'lane-a-project-b'],
+      windows: { 'lane-a-project-a': 50_000, 'lane-a-project-b': 10_000_000 } });
+    const earlier = { profile: 'coordinator', automem: 'off', compact: '60', compactwindow: '154000' };
+    await profilePass(h.deps, [row('lane-a-project-a', earlier), row('lane-a-project-b', earlier)]);
+    expect(h.sent).toEqual([]);
+    expect(h.usageAsked).toEqual(['lane-a-project-a', 'lane-a-project-b']);
+  });
+
   it('a stale usage sample is no window: a coordinator\'s compaction fields are left alone (review 2024 F13 a)', async () => {
     const h = harness({ lanes: { ...LIVE, continuity: armed('live') }, openGate: true, coordinators: ['lane-a-project-a'],
       windows: { 'lane-a-project-a': 200_000 }, stale: new Set(['lane-a-project-a']) });
