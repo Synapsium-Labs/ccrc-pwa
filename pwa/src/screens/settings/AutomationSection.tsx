@@ -20,6 +20,7 @@ import { SETTINGS_CARDS } from '../../fleet/settingsText';
 import { StallWatchSection } from '../StallWatchSection';
 import { OverridesSection } from '../../fleet/OverridesSection';
 import { RollIdleSection } from '../../fleet/RollIdleSection';
+import { PlainAutoMemorySection } from '../../fleet/PlainAutoMemorySection';
 import { PaneScopeStopSection } from '../../fleet/PaneScopeStopSection';
 import { BrowserToolsSection } from '../../fleet/BrowserToolsSection';
 import { TestBoxSection } from '../../fleet/TestBoxSection';
@@ -42,6 +43,7 @@ export function AutomationSection({ view }: { view: SettingsView }): ReactNode {
       </Section>
       <BrowserToolsSection nodes={view.updates.view?.nodes ?? null} />
       <RollIdleSection />
+      <PlainAutoMemorySection />
       <PaneScopeStopSection />
       <ScopeSweepSection poll={view.scopeSweep} />
       <DelegationAdoptSection poll={view.delegationAdopt} />

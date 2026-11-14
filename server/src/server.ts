@@ -2597,7 +2597,9 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
    * `{field, value}`, one pair, never the multi-field `{route: {...}}` body
    * the operator's own spawn/dispatch doors take (`parseOperatorRoute`
    * above): the picker taps ONE control, and `routeApply` builds ONE `--set`.
-   * `parseRouteFields` is reused for its SHAPE guard only — built from the
+   * `parseRouteFields` is reused for its SHAPE guard and its `lane-only`
+   * refusal (a launch-profile or `precompact` field is a lane's alone, so the
+   * 400 then carries a `detail` naming it; review 1970 N3) — built from the
    * single named field so its `Object.keys(...).length !== 1` arm can never
    * see more than the one key this body can produce, defensive against the
    * function's own general contract rather than reachable from this route.

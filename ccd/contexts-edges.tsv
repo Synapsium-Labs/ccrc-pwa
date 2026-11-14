@@ -95,6 +95,8 @@ _profile_spawn_compose -> _reg_get_to
 _profile_spawn_compose -> _route_bytes
 _profile_spawn_compose -> _route_get
 _profile_spawn_compose -> _route_note_floored
+_profile_spawn_compose -> _route_reject_note
+_profile_spawn_compose -> _route_unread_note
 _redrive_after_spawn -> _reg_get
 _redrive_after_spawn -> _tmux_at
 _redrive_after_spawn -> _tmx

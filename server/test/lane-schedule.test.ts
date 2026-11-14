@@ -10,7 +10,8 @@ import { LANE_SCHEDULE, laneRow, type LaneRow } from '../src/laneSchedule.js';
 import { LaneRunner } from '../src/laneRunner.js';
 import { callsIn, symbolOf } from './scan/symbols.js';
 import { CATALOGUE_POLL_INTERVAL_MS, SERVER_CAPS_WRITE_MS, CHILD_RECLAIM_SWEEP_MS } from '../src/laneSchedule.js';
-import { HIBERNATE_SWEEP_MS, STOP_DONE_SWEEP_MS, DRIFT_SWEEP_MS } from '../src/laneSchedule.js';
+import { HIBERNATE_SWEEP_MS, STOP_DONE_SWEEP_MS, DRIFT_SWEEP_MS, USAGE_SWEEP_MS } from '../src/laneSchedule.js';
+import { LAUNCH_PROFILE_LANE_ROW } from '../src/continuity/profileLane.js';
 import { parsedFile, sourceOfSymbol } from './scan/symbols.js';
 
 const SRC = path.join(import.meta.dirname, '..', 'src');
@@ -518,9 +519,9 @@ describe('the four reclaim lanes (D-5862, PR 3)', () => {
 });
 
 describe('every throttle is on the monotonic clock (OA-C4, ruled (a) on #803)', () => {
-  it('no row of LANE_SCHEDULE is on the wall clock: 42 of 42 are monotonic (the disk alarm, the tmp census and the stale-archive arm are rows, D-7895; the stuck verdict pass, D-8071; the run-close lane, D-8077; the case lane, Overlord §10.5; the generations lane, Overlord §3.3.11)', () => {
+  it('no row of LANE_SCHEDULE is on the wall clock: 43 of 43 are monotonic (the disk alarm, the tmp census and the stale-archive arm are rows, D-7895; the stuck verdict pass, D-8071; the run-close lane, D-8077; the case lane, Overlord §10.5; the generations lane, Overlord §3.3.11; the launch-profile lane, Overlord §3.6)', () => {
     expect(LANE_SCHEDULE.filter((r) => r.clock === 'wall').map((r) => r.name), 'a throttle on Date.now()').toEqual([]);
-    expect(LANE_SCHEDULE.filter((r) => r.clock === 'mono')).toHaveLength(42);
+    expect(LANE_SCHEDULE.filter((r) => r.clock === 'mono')).toHaveLength(43);
   });
 
   it('the runner throttles a monotonic row on the monotonic reading: a wall step back runs it at its cadence, a step forward never early', () => {
@@ -586,6 +587,16 @@ describe('the generations lane row (Overlord spec §3.3.11, Table 11.1c "The ren
     expect(laneRow('generations')).toMatchObject({
       cadenceMs: RENEWAL_LANE_PERIOD_MS, clock: 'mono', flight: 'skip',
       warnKey: 'ccrc-server: the generations lane failed', derivedFrom: { name: 'RENEWAL_LANE_PERIOD_MS' },
+    });
+  });
+});
+
+describe('the launch-profile lane row (Overlord spec §3.6 H1, W1a launch profiles PR B)', () => {
+  it('rides the usage lane\'s cadence by reference, skips an overlap and names its warning; the lane names its own row', () => {
+    expect(LAUNCH_PROFILE_LANE_ROW).toBe('launchProfile');
+    expect(laneRow(LAUNCH_PROFILE_LANE_ROW)).toMatchObject({
+      cadenceMs: USAGE_SWEEP_MS, clock: 'mono', flight: 'skip',
+      warnKey: 'ccrc-server: the launch-profile lane failed', derivedFrom: { name: 'USAGE_SWEEP_MS' },
     });
   });
 });

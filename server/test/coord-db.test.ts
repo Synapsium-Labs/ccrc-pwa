@@ -725,8 +725,9 @@ describe('coord.db: migration 4 — runs.dispatchStartedAt', () => {
     // and MIGRATIONS[67] (continuity_generations, continuity_cursor and the continuity lane-arm row, Overlord W1a)
     // and MIGRATIONS[68] (continuity_snapshots and continuity_card_reads, the card door, Overlord W1a)
     // and MIGRATIONS[69] (continuity_timers, the timers, Overlord W1a).
-    expect(COORD_SCHEMA_VERSION).toBe(70);
-    expect(MIGRATIONS.length).toBe(70);
+    // and MIGRATIONS[70] (plain_memory_settings and the launch-profile lane-arm row, Overlord W1a launch profiles PR B).
+    expect(COORD_SCHEMA_VERSION).toBe(71);
+    expect(MIGRATIONS.length).toBe(71);
   });
 
   it('is ADDITIVE: every column migration 1 wrote is still on the table, unchanged', () => {
@@ -821,8 +822,9 @@ describe('coord.db: migration 11 — runs.kind and runs.reviews (design 2026-09-
     // and MIGRATIONS[66] (face_settings)
     // and MIGRATIONS[67] (continuity_generations, Overlord W1a)
     // and MIGRATIONS[68] (continuity_snapshots and continuity_card_reads, Overlord W1a)
-    // and MIGRATIONS[69] (continuity_timers, Overlord W1a); the migration above is still entry 11.
-    expect(COORD_SCHEMA_VERSION).toBe(70);
+    // and MIGRATIONS[69] (continuity_timers, Overlord W1a)
+    // and MIGRATIONS[70] (plain_memory_settings, launch profiles PR B); the migration above is still entry 11.
+    expect(COORD_SCHEMA_VERSION).toBe(71);
     const row = db.prepare('SELECT kind, reviews FROM runs').get() as { kind: string; reviews: number | null };
     expect(row).toEqual({ kind: 'work', reviews: null });
     db.close();
@@ -2571,7 +2573,46 @@ describe('coord.db: continuity_generations and continuity_cursor, the generation
     expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(COORD_SCHEMA_VERSION);
     expect(db.prepare('SELECT count(*) AS n FROM continuity_generations').get()).toEqual({ n: 0 });
     expect(db.prepare('SELECT lane, choice, updatedAt FROM lane_arm_settings ORDER BY lane').all())
-      .toEqual([{ lane: 'continuity', choice: 'shadow', updatedAt: 0 }, { lane: 'roster-card', choice: 'live', updatedAt: 7 }]);
+      .toEqual([{ lane: 'continuity', choice: 'shadow', updatedAt: 0 }, { lane: 'launch-profile', choice: 'shadow', updatedAt: 0 },
+        { lane: 'roster-card', choice: 'live', updatedAt: 7 }]);
+    db.close();
+  });
+});
+
+describe('coord.db: plain_memory_settings and the launch-profile lane-arm row (Overlord W1a, launch profiles PR B)', () => {
+  /** Found by its DDL, never hard-coded. */
+  const SLOT = MIGRATIONS.findIndex((m) => m.includes('CREATE TABLE plain_memory_settings')) + 1;
+  const ENTRY = /^CREATE TABLE plain_memory_settings \([^;]*\);\s*INSERT INTO plain_memory_settings \(id, choice, updatedAt\) VALUES \(1, 'off', 0\);\s*INSERT INTO lane_arm_settings \(lane, choice, updatedAt\) VALUES \('launch-profile', 'shadow', 0\);$/;
+  it('A NEW TABLE and one seed row each, nothing on an existing table, after the generations\' entry', () => {
+    expect(SLOT).toBeGreaterThan(MIGRATIONS.findIndex((m) => m.includes('CREATE TABLE continuity_generations')) + 1);
+    expect(MIGRATIONS[SLOT - 1]!.replace(/--[^\n]*/g, '').trim()).toMatch(ENTRY);
+  });
+
+  it('lands after card PR B\'s entry 69 and timers PR A\'s entry 70, the slots that merged first: 71 (review 2024 F8, review 2031 F2)', () => {
+    // A box already at user_version 70 has card B's and the timers' tables; this entry must come after them, or it would be
+    // skipped there.
+    const card = MIGRATIONS.findIndex((m) => m.includes('CREATE TABLE continuity_snapshots')) + 1;
+    const timers = MIGRATIONS.findIndex((m) => m.includes('CREATE TABLE continuity_timers')) + 1;
+    expect([card, timers]).toEqual([69, 70]);
+    expect(SLOT).toBe(timers + 1);
+  });
+
+  it('reaches a database ALREADY at the version before it: auto memory for plain reads off, the lane shadow, every row as it was', () => {
+    const p = dbPathIn(mkTmp('ccrc-coord-'));
+    mkdirSync(path.dirname(p), { recursive: true });
+    const raw = new DatabaseSync(p);
+    tx(raw, () => {
+      for (let v = 0; v < SLOT - 1; v++) raw.exec(MIGRATIONS[v]!);
+      raw.exec(`PRAGMA user_version = ${SLOT - 1}`);
+      raw.exec("UPDATE lane_arm_settings SET choice = 'live', updatedAt = 7 WHERE lane = 'roster-card'");
+    });
+    raw.close();
+    const db = openCoordDb(p);
+    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(COORD_SCHEMA_VERSION);
+    expect(db.prepare('SELECT id, choice, updatedAt FROM plain_memory_settings').all()).toEqual([{ id: 1, choice: 'off', updatedAt: 0 }]);
+    expect(db.prepare("SELECT choice, updatedAt FROM lane_arm_settings WHERE lane = 'launch-profile'").get()).toEqual({ choice: 'shadow', updatedAt: 0 });
+    expect(db.prepare("SELECT choice, updatedAt FROM lane_arm_settings WHERE lane = 'roster-card'").get()).toEqual({ choice: 'live', updatedAt: 7 });
+    expect(() => db.prepare('INSERT INTO plain_memory_settings (id, choice, updatedAt) VALUES (2, \'on\', 1)').run()).toThrow();
     db.close();
   });
 });

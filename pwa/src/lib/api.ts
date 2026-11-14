@@ -32,6 +32,7 @@ import {
   declaredRaster, docsAnswerFromError, readDocsEnvelope, readDocsRaster, type DocsAnswer, type DocsLoaders,
 } from '../docs/failures';
 import type { ClaudeRollTargets } from '../../../shared/claudeVersion';
+import type { PlainAutoMemoryChoice, PlainAutoMemoryView } from '../../../shared/plainAutoMemory';
 import type { TestboxAdminFields, TestboxAdminSub } from '../../../shared/testbox-admin';
 import type { ProjectAddAnswer, ProjectAddBody } from '../../../shared/projectAdd';
 import type { LinkingWriteBody, ProjectLinkingWire } from '../../../shared/linking';
@@ -1009,6 +1010,12 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
      *  could not be read" may well have stored the choice. */
     setRollIdle: (targets: ClaudeRollTargets) =>
       postJsonOr<RollIdleView | 'unreadable'>('/api/coord/roll-idle', 'unreadable', { targets }),
+    /** `GET /api/coord/plain-auto-memory` (Overlord W1a launch profiles PR B): Settings › Automation › Auto memory for plain
+     *  sessions, `off` or `on` (`choice` null when the server could not read its row). Session-gated when armed; no box token. */
+    plainAutoMemory: () => getJson<PlainAutoMemoryView & { readonly ok: true }>('/api/coord/plain-auto-memory'),
+    /** `POST /api/coord/plain-auto-memory`: `{choice}`. `postJsonOr`, for `setCoordCaps`' reason. */
+    setPlainAutoMemory: (choice: PlainAutoMemoryChoice) =>
+      postJsonOr<(PlainAutoMemoryView & { readonly ok: true }) | 'unreadable'>('/api/coord/plain-auto-memory', 'unreadable', { choice }),
     /** `GET /api/testbox` (test box plan TB9, D-7411; spec 2026-10-28 §2.7): `{ok, testbox}`, the block the server's
      *  poll last decided, `null` before its first pass. Settings › Automation › Test box reads it through
      *  `useTestboxView`, whose `asTestboxBlock` is the wire guard, so the type here is the envelope only. */
