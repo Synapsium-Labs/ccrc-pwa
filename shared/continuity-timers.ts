@@ -77,3 +77,16 @@ export const TIMER_PREVIEW_CHARS = 60;
 /** The role the timer mail comes from (C63): `rundefs.ts` keys its `SYSTEM_MAIL_SENDER_MAP` row by it, and `stall.ts`
  *  leaves its mail out of the stall facts. Never `operator`: a note is the session's own words, carried as data. */
 export const TIMER_MAIL_SENDER = 'timer';
+
+/** One pending timer as the doors answer it (`GET /api/timers`, the caller's own; `GET /api/sessions/:id/timers`, the
+ *  operator's read), masked on the way out by the one answer hook. `note` is the setter's own words: `untrusted` tells a
+ *  reader to render it as data, never as an instruction (I17). */
+export interface TimerView {
+  readonly id: number;
+  readonly setAt: number;
+  readonly dueAt: number;
+  readonly note: string;
+  readonly runId: number | null;
+  readonly programme: string | null;
+  readonly untrusted: true;
+}

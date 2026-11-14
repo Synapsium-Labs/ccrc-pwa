@@ -657,6 +657,16 @@ export function pendingTimers(db: DatabaseSync): TimersRead {
   } catch (e) { return readFailed(e); }
 }
 
+/** One timer by its id, whatever its state, or null when no row has it: the cancel doors' read (`timerCancelVerdict` tells
+ *  another identity's row from one no longer pending). A row that does not read fails the read, never a null. */
+export type TimerByIdRead = { ok: true; row: TimerRow | null } | { ok: false; detail: string };
+export function timerById(db: DatabaseSync, id: number): TimerByIdRead {
+  try {
+    const r = timersOf(stmt(db, `SELECT ${TIMER_COLUMNS} FROM continuity_timers WHERE id = ?`).all(id) as Record<string, unknown>[]);
+    return r.ok ? { ok: true, row: r.rows[0] ?? null } : r;
+  } catch (e) { return readFailed(e); }
+}
+
 /** The stall hold's read: the setter's earliest pending timer, and its newest timer fired at or after `firedSince`. */
 export function timerHoldFacts(db: DatabaseSync, setter: string, firedSince: number): TimerHoldRead {
   try {

@@ -97,9 +97,10 @@ const CALLS_SRC = read('server/src/coord/coordCallsRoute.ts');
 /** The TWELFTH file that registers routes and the ninth lane source (D-8181): the plan verbs' seven. `plan show` is a session-or-token
  *  read and the six writes are box-token lanes, every one consulting `checkMailToken` in its own registration. */
 const PLAN_SRC = read('server/src/coord/planRoutes.ts');
-/** The THIRTEENTH file that registers routes and the tenth lane source (Overlord W1a, the start report): the continuity routes. Its two
- *  box-token lanes are the hook's start report, `POST /api/sessions/:id/start`, and the card door, `GET /api/sessions/:id/card`
- *  (the card piece), each gated in its own onRequest as the linking read is. */
+/** The THIRTEENTH file that registers routes and the tenth lane source (Overlord W1a, the start report): the continuity routes. Its five
+ *  box-token lanes are the hook's start report, `POST /api/sessions/:id/start`, the card door, `GET /api/sessions/:id/card`
+ *  (the card piece), and the timer doors' three, `POST` and `GET /api/timers` and `POST /api/timers/:id/cancel` (the timers
+ *  piece), each gated in its own onRequest as the linking read is. Its session-gated doors are `CONTINUITY_SESSION_DOORS`. */
 const CONTINUITY_SRC = read('server/src/continuity/routes.ts');
 const GATE_SRC = read('server/src/auth/gate.ts');
 const README = read('README.md');
@@ -289,8 +290,17 @@ const TOKEN_DOORS = ['/api/token/rotate'];
 // …and D-8126's Seen on a big call (`/api/calls/:id/seen`), the operator's, session only, no box token.
 const LEDGER_OPERATOR_DOORS = ['/api/waiting', '/api/items/:id', '/api/items/:id/tick', '/api/items/:id/dismiss', '/api/items/:id/act', '/api/items/:id/decline', '/api/calls/:id/seen', '/api/items/:id/secret', '/api/programmes/:slug/secrets', '/api/programmes/:slug/secrets/:slot'];
 
+/** The continuity routes file's session-gated doors (Overlord W1a, the timers piece, slug continuity-session-doors-list):
+ *  every door `continuity/routes.ts` registers beyond its box-token lanes (`CONTINUITY_LANES`), whichever piece adds it. The
+ *  operator's read and cancel of a session's timers today; renewal hand-offs' `POST /api/sessions/:id/renew` joins it when it
+ *  lands. Hand-kept for the NAMES only, like `LEDGER_OPERATOR_DOORS`: the describe below derives the file's registrations and
+ *  compares in both directions, and none consults the box token or sits in EXEMPT. Because `lanesIn` slices the file from
+ *  each registration to the next, no helper that calls `checkMailToken(` may sit below the file's last registration. */
+const CONTINUITY_SESSION_DOORS = ['/api/sessions/:id/timers', '/api/sessions/:id/timers/:timerId/cancel'];
+
 /** Every session-only route the bullet must describe as carrying no box token. */
-const SESSION_ONLY_ALL = [...SESSION_ONLY_DOORS, KICKOFF, ARCHIVE, DIGEST_CORRECT, ...LEDGER_OPERATOR_DOORS, ...UPDATE_DOORS, ...TOKEN_DOORS];
+const SESSION_ONLY_ALL = [...SESSION_ONLY_DOORS, KICKOFF, ARCHIVE, DIGEST_CORRECT, ...LEDGER_OPERATOR_DOORS, ...UPDATE_DOORS, ...TOKEN_DOORS,
+  ...CONTINUITY_SESSION_DOORS];
 
 /** Number words, index-addressed. Starts the SCAN at `two` for the same reason
  *  `coord-pause-route.test.ts`'s `CARD_RE` does: `one` and `zero` are ordinary
@@ -332,7 +342,9 @@ const WORDS = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'e
   // Overlord W1a: POST /api/sessions/:id/start, the hook's start report, a box-token lane in the continuity file: seventy-five machine lanes in all.
   'seventy-five',
   // Overlord W1a, the card piece: GET /api/sessions/:id/card, a session's own card, a box-token lane in the continuity file: seventy-six machine lanes in all.
-  'seventy-six'];
+  'seventy-six',
+  // Overlord W1a, the timers piece: the session's three timer doors, box-token lanes in the continuity file: seventy-nine machine lanes in all.
+  'seventy-seven', 'seventy-eight', 'seventy-nine'];
 // D-2168: LONGEST FIRST, not numeric order. A JS alternation is leftmost-first,
 // so with `twenty` ahead of `twenty-one` the shorter branch wins and `\b` ends
 // the match at the hyphen — `twenty-one` scanned as `twenty`, and `twenty-two`
@@ -483,7 +495,8 @@ describe('the box-token surface is derived, and no prose site under-claims it', 
     // …and the linking standard's one (D-8147): the session's read, by name; the operator's write beside it is no lane.
     expect(LINKING_LANES, 'linking/routes.ts lost its box-token lane, or a write gained a token check').toEqual(['GET /api/linking']);
     // …and the continuity routes' one (Overlord W1a): the hook's start report, by name.
-    expect(CONTINUITY_LANES, 'continuity/routes.ts lost a box-token lane').toEqual(['POST /api/sessions/:id/start', 'GET /api/sessions/:id/card']);
+    expect(CONTINUITY_LANES, 'continuity/routes.ts lost a box-token lane').toEqual(['POST /api/sessions/:id/start', 'GET /api/sessions/:id/card',
+      'POST /api/timers', 'GET /api/timers', 'POST /api/timers/:id/cancel']);
     expect(ALL_LANES.length).toBe(COORD_LANES.length + 3 + LINEAR_PROXY_LANES.length + LEDGER_LANES.length + LINKING_LANES.length + CALLS_LANES.length + PLAN_LANES.length + CONTINUITY_LANES.length);
     expect(UNGATED_DOORS.length, 'the door list collapsed').toBeGreaterThan(3);
   });
@@ -493,6 +506,17 @@ describe('the box-token surface is derived, and no prose site under-claims it', 
     expect([...rest].sort(), 'ledgersRoutes.ts and LEDGER_OPERATOR_DOORS disagree — a route was added or removed on one side only')
       .toEqual([...LEDGER_OPERATOR_DOORS].sort());
     for (const door of LEDGER_OPERATOR_DOORS) {
+      expect(ALL_LANES.map((k) => k.slice(k.indexOf(' ') + 1)), `${door} consults the box token — it is the operator's door`).not.toContain(door);
+    }
+  });
+
+  it('CONTINUITY_SESSION_DOORS is exactly the rest of what the continuity file registers, in both directions; none is a lane or EXEMPT', () => {
+    const rest = registrationsIn(CONTINUITY_SRC).map((r) => r.key).filter((k) => !CONTINUITY_LANES.includes(k));
+    expect(rest.map((k) => k.slice(k.indexOf(' ') + 1)).sort(),
+      'continuity/routes.ts and CONTINUITY_SESSION_DOORS disagree — a door was registered, or a name listed, on one side only')
+      .toEqual([...CONTINUITY_SESSION_DOORS].sort());
+    for (const key of rest) expect(GATE_SRC, `${key} is EXEMPT — the operator's doors sit behind the auth gate`).not.toContain(`  ['${key}',`);
+    for (const door of CONTINUITY_SESSION_DOORS) {
       expect(ALL_LANES.map((k) => k.slice(k.indexOf(' ') + 1)), `${door} consults the box token — it is the operator's door`).not.toContain(door);
     }
   });
