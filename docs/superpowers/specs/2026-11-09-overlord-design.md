@@ -2,16 +2,16 @@
 
 - **Spec** · 2026-11-09
 - **Status:** Approved by the operator on 2026-11-10, with their rulings on the review's fifteen questions and two
-  further rulings, R16 and R17 (§2, §6.9, "Where things stand"). On 2026-11-12 the operator gave R18: the Overlord
-  draws its accounts from account pools the operator names, and no account is reserved for it (§2, §3.4). The same day
-  the operator gave R19: renewals wait for a break in the conversation and carry the current thread, so the operator
-  never feels one or repeats themselves (§2, §3.3). On 2026-11-14 the operator gave R20: a session may set itself
-  follow-up timers, and what the operator does with each message is measured (§2, §3.3.12, §4.3). Appendix B says
-  what those changed. This is the hardened edition of rev 8: an outside review's calls H1 to
-  H39 are folded in, so that each mechanism is stated once, as it now is. A builder's check was applied to rev 8 by
-  its author. This edition was then checked in nine ways: a builder's check in four slices, its closed vocabularies
-  and state machines, its names and numbers, its claims about the tree, and a red team. Their findings are folded
-  in.
+  further rulings, R16 and R17 (§2, §6.9, "Where things stand"). On 2026-11-12 the operator gave R18: the Overlord draws
+  its accounts from account pools the operator names, and no account is reserved for it (§2, §3.4). The same day the
+  operator gave R19: renewals wait for a break in the conversation and carry the current thread, so the operator never
+  feels one or repeats themselves (§2, §3.3). On 2026-11-14 the operator gave R20: a session may set itself follow-up
+  timers, and what the operator does with each message is measured (§2, §3.3.12, §4.3). Appendix B says what those
+  changed, and records the corrections the W1a builds measured (Table B5). This is the hardened edition of rev 8: an
+  outside review's calls H1 to H39 are folded in, so that each mechanism is stated once, as it now is. A builder's check
+  was applied to rev 8 by its author. This edition was then checked in nine ways: a builder's check in four slices, its
+  closed vocabularies and state machines, its names and numbers, its claims about the tree, and a red team. Their
+  findings are folded in.
 - **Programme:** Overlord (slug `overlord`)
 - **Owner:** the Overlord programme's coordinator
 - **Issue:** #2491
@@ -699,8 +699,9 @@ This subsection says how a renewal or a crash loses at most the turn in progress
 - **The handover note is a structured record.** The ending generation writes it in `checkpointed`, unless a hard
   trigger skipped that state.
   - It has threads (each a reference that must exist, what it waits on, and what comes next), cautions, and a tone
-    note of at most 300 characters. The server refuses a reference that names no row (`reference-unknown`), and
-    drops status words.
+    note of at most 300 characters. The server refuses a reference that is not a live row of the caller's own: a live
+    programme it claims an open run of, an open item it raised or whose programme it claims, or a non-terminal run it
+    claims (`reference-unknown`). It drops status words.
   - Five things are never trusted from it: that something is done, an id, a promise to the operator, authority, and a
     preference. Those are rows, or nothing.
   - Rows outrank the note wherever they disagree, and each disagreement is counted (M23).
@@ -779,8 +780,11 @@ This subsection says how compaction becomes a counted fallback inside one genera
   - **The window is lowered.** On a 1M window Claude Code compacts only near 967k tokens by default. That is deep in
     the zone where quality has already fallen. ccd's auto-compact threshold for a long-lived role is the route's
     `compact` value, which the launch profile sets ten points of the window above the hard cap. ccd's default, 50%,
-    equals the hard cap on a 200k window. Claude Code's own auto-compact window is set to the same figure, so renewal
-    fires first.
+    equals the hard cap on a 200k window. Claude Code's own auto-compact window is set to that point plus 34,000
+    tokens (`AUTO_COMPACT_BUFFER_TOKENS`), clamped to 100,000 to 1,000,000, because Claude Code compacts about 33,000
+    tokens below the window it is given. So its compaction lands at the same point, above the hard cap, and renewal
+    fires first. Where the window is too small or too large for that point to fit (`compactThresholdFor` answers no
+    figure), no compact field is written.
   - **Idle compaction is off,** so the idle trigger at 45 minutes renews before Claude Code's compaction at about 55.
   - **A proactive compaction becomes a renewal.** The PreCompact arm refuses a proactive automatic compaction and marks
     a renewal due (soft, Table 3.3.11b). It is a verdict of its own, ahead of history W3's one print; one event still
@@ -818,9 +822,9 @@ it.
     probes, the drills (§7.5) and the outside audit test behaviour.
 - **C41. Probes measure memory (C41, H15).** The server asks probes after every renewal, after every compaction, and at
   depth. A round asks three to five, drawn across the classes of Table 3.3.5a.
-  - **The thread (R19).** After every renewal, one probe of the round asks for the current thread: the id of the
-    operator message it last answered, and the id of the request or act it last committed to, or `none`. It is graded
-    against the checkpoint's thread. A generation that fails it re-reads before it replies to anything.
+  - **The thread (R19).** From W1, after every renewal, one probe of the round asks for the current thread: the id of
+    the operator message it last answered, and the id of the request or act it last committed to, or `none`. It is
+    graded against the checkpoint's thread. A generation that fails it re-reads before it replies to anything.
   - **Closed-form.** An answer is an id, a choice from a list, or `none`. It is graded against the snapshot the
     generation row names, so a row that moves under the probe is not a failure.
   - **Closed-book.** The server records whether any read door was called between the probe and the answer. Only
@@ -828,10 +832,13 @@ it.
   - **At depth.** While idle, one spot probe each time the context grows by another 50k tokens, about something said
     in this generation that is not on the card. It is graded against the rows written or received in this
     generation (operator messages, notes, act rows), never against the card's snapshot.
-  - **The fitted ceiling** is the deepest depth whose rolling pass rate is at least 95%, never above the hard cap. Until
-    probes at depth have fitted one for the running model class, it is the hard cap. It is fitted again whenever the
-    model class advances. The soft ceiling trigger reads it. The plan fixes the rolling window as a count of spot
-    probes.
+  - **The fitted ceiling** is read bucket by bucket upward from the shallowest, in buckets of 50,000 tokens of depth:
+    the first bucket whose last 20 spot probes pass under 95% caps it at the depth below that bucket, and it is never
+    above the hard cap (`server/src/continuity/probes.ts#fittedCeiling`). A bucket with fewer than 20 probes is skipped
+    and leaves the ceiling unfitted. When the shallowest bucket already fails, no depth holds, and that is an answer of
+    its own, not a number. Until probes at depth have fitted one for the running model class, it is the hard cap. It is
+    fitted again whenever the model class advances. The soft ceiling trigger reads it. The plan fixes the rolling window
+    as a count of spot probes.
   - **Never typed.** Probes arrive as tool output, never as typed text: from the probe door while the generation is
     `probing`, and as inbox rows while it is `active`. There a probe round is the inbox's first row, ahead of band 1
     (§6.8). The checkpoint arrives on the card. Typed text would land in history beside the operator's own rows
@@ -1020,10 +1027,11 @@ Table 3.3.9b applies to it.
 
 - **C50. Coordinators renew too (C50, H12, H13).** A coordinator runs the same machine as the Overlord (§3.3.11): the
   same lane, states, deadlines and receipt.
-  - **Its canonical state** is already on the server. It is its runs and their waves, the plan path each run names,
-    the programme ledger (goals, items, decisions, modifications), its claims, its outstanding mail and its notes. Its
-    checkpoint adds the last ten rulings it received (operator and Overlord mail, and item answers), verbatim. Goals the
-    operator has not ratified are rendered as untrusted data (§3.8).
+  - **Its canonical state** is already on the server. It is its runs and their waves, the plan path each run names (no
+    row stores a run's plan path yet, so the card's run line reads `plan=(not recorded)`), the programme ledger (goals,
+    items, decisions, modifications), its claims, its outstanding mail and its notes. Its checkpoint adds the last ten
+    rulings it received (operator and Overlord mail, and item answers), verbatim. Goals the operator has not ratified
+    are rendered as untrusted data (§3.8).
   - **Its triggers** are the coordinator rows of Table 3.3.11b. One is its own: a wave boundary, once wave N+1's run is
     open and wave N's is closed, with the context above a quarter of the hard cap. A boundary is where a coordinator's
     working set changes most, so it is the cheapest point to renew.
@@ -1158,6 +1166,15 @@ Only the fence is the Overlord's alone.
     through the hook's report door, with the box token and attribution. That covers a planned renewal, a crash
     restart, a swap landing and a wake. The same write voids generation n's act key and moves generation n to
     `ended`, with its outcome. M23 counts planned and unplanned starts apart.
+  - **The starts that mint nothing** (`START_SKIPS`, `server/src/continuity/generationStart.ts`): a compaction and a
+    fork; a start whose registry row is absent (`unregistered`) or whose uuid cannot be read (`uuid-unmeasured`), both
+    held and tried again; a start whose registry names another conversation (`foreign-uuid`); one older than the live
+    generation's start (`late`); and one whose role cannot be told (`undecided`) or is not long-lived
+    (`not-long-lived`). Only the roles with renewal rows, the Overlord and coordinators, mint.
+  - **In shadow,** while the `continuity` lane is not live, a mint writes the row `active` and keeps the walk it would
+    take (`carded` and its deadline) in shadow columns of its own (`effectiveGeneration`,
+    `server/src/continuity/continuityStore.ts`). The lane cannot go live in W1a: its row carries a gate until the
+    renewal act ships, and the Shadow lanes door refuses Live with `lane-gated`.
   - **Deadlines are durable.** Each is a stored column, read through the `Clock` port (§11.5), never a timer that lives
     in one process. After a server restart, the lane resumes the machine where it stood.
 
@@ -1170,7 +1187,7 @@ Only the fence is the Overlord's alone.
 | `carded` | The anchor is injected, the card is read, and the server sees the served hash come back | 45, with one re-nudge |
 | `probing` | The probes run | 165, two rounds at most |
 | `degraded` | For the Overlord, chat only: no holds and no acts. A coordinator keeps acting (C50). One operator item | none; see below |
-| `ended` | A later generation replaced it. Its outcome says how: renewed, crashed, swapped or woken elsewhere. Terminal | none |
+| `ended` | A later generation replaced it. Its outcome says how, one word of `GENERATION_OUTCOMES`: `renewed`, `crashed`, `swapped`, `woken`, `woken-elsewhere`, `cleared` (a typed `/clear` on the same row) or `unmeasured` (an account could not be read). Terminal | none |
 
 *Table 3.3.11a. The states of a generation. When `probing` passes, generation n+1 is `active`. A hold-off is ten
 minutes of observed time in which no soft trigger starts a renewal (Table 11.5b).*
@@ -1179,10 +1196,16 @@ minutes of observed time in which no soft trigger starts a renewal (Table 11.5b)
   outside that budget. From `draining` to `probing`, the doors accept only card, probe and note calls.
 - **The receipt has two halves.** The first: the old conversation ended. The second: the new one started, and read the
   card hash the server served.
-  - A failure before the first half returns the generation to `active` with a hold-off (Table 11.5b) if it was
-    proven, whichever state the renewal began from, and to `degraded` with one operator item if it was not. A
-    generation never becomes `active` without having read its card and passed its probes (plan-driven consistency, the W1a plans: the
-    A2 ruling, which reads these two sentences together).
+  - A failure before the first half returns the generation to `active` with a hold-off (Table 11.5b) if it is
+    proven, and to `degraded` with one operator item if it is not. A generation never becomes `active` without having
+    read its card and passed its probes (plan-driven consistency, the W1a plans: the A2 ruling, which reads these two
+    sentences together).
+  - **`proven` is a column of the generation row,** written from the machine's next view on every step
+    (`server/src/continuity/generationMachine.ts#generationStep`). A mint writes it unset, and passing the probes sets
+    it. A step into `degraded` keeps it only while the old conversation has not ended: once the host has ended it
+    (`hostEnded`), the generation is no longer proven. A `degraded` generation was therefore never proven, or its
+    conversation has ended, so a renewal that begins from `degraded` and fails before the first half returns to
+    `degraded`.
   - A failure after it retries within the state's deadline, then goes to `degraded`.
   - `renew(session, n)` is idempotent on n, so a retry never starts two conversations.
 - **`degraded`** blocks soft triggers only. A hard trigger still renews. The operator's "Renew now" and a rebind (§3.1)
@@ -1402,13 +1425,13 @@ so Figures 10 and 11 sit before Figure 9 in the text.*
     file.
   - **How the census counts them.** The three session doors are box-token doors, attribution-checked, each in
     `auth/gate.ts`'s `EXEMPT` table with its reason (its only caller holds the token and has no cookie), as the claim
-    lanes are. `box-token-census.test.ts` already reads the continuity routes file as a lane source of its own, and
-    its list of that file's box-token lanes, which holds the hook's start report today, gains the three. The
-    operator's read and cancel doors are session-gated. `SESSION_ONLY` harvests only `server/src/coord/routes.ts`, so
-    the census names them in a hand-kept list, `TIMER_OPERATOR_DOORS`, beside `UPDATE_DOORS` and
-    `LEDGER_OPERATOR_DOORS`, checked against the continuity routes file in both directions, as it
-    does for the update doors, and this repository's `CLAUDE.md` box-token paragraph names them. All of it moves in
-    the pull request that adds the doors (§11.2).
+    lanes are. `box-token-census.test.ts` already reads the continuity routes file as a lane source of its own, and its
+    list of that file's box-token lanes, which holds the hook's start report today, gains the three. The operator's read
+    and cancel doors are session-gated. `SESSION_ONLY` harvests only `server/src/coord/routes.ts`, so the census names
+    them in a hand-kept list, `CONTINUITY_SESSION_DOORS`: the one list of every session-gated door of the continuity
+    routes file, not a list of the timers' own. It sits beside `UPDATE_DOORS` and `LEDGER_OPERATOR_DOORS`, checked
+    against the continuity routes file in both directions, as it does for the update doors, and this repository's
+    `CLAUDE.md` box-token paragraph names them. All of it moves in the pull request that adds the doors (§11.2).
 - **C62. One lane fires them, on `LANE_SCHEDULE`** (R20).
   - **One row, `timers`,** with a cadence of one minute. Like every row, it throttles on the monotonic clock, and its
     verdicts read the wall clock through `Clock` (`server/src/laneSchedule.ts`). It is not a second poller: it is a
@@ -1443,14 +1466,15 @@ so Figures 10 and 11 sit before Figure 9 in the text.*
     reminder is still wanted, and one grouped mail per setter and run is no burst.
   - **The cleanup arm** cancels:
     - a timer bound to a run, when that run reaches a terminal state (`run-closed`);
-    - a timer bound to a programme, when the programme's own row records its end (`programme-ended`): `planEnd` is
-      set, as `CoordStore.programmeLive` reads it. `planEnd` has one writer, `closePlan`, which the plan's close and
-      the operator's end of a programme from an item (`endProgrammeByOperator`) call. The archive door's
-      `programme:'end'` abandons the programme's runs and writes no `planEnd`. So there the run-bound timers are
-      cancelled `run-closed` and the coordinator's own `setter-archived`, and another setter's programme-bound timer
-      is left to fire: a timer only mails, and its mail names the programme. A programme with no open run is between
-      waves, not ended: `programs.state` reads `done` whenever the open-run count reaches zero, and nothing sets it
-      back when the next wave opens. So `done`, `abandoned` and `unknown` cancel nothing;
+    - a timer bound to a programme, when the programme's own row records its end (`programme-ended`): `planEnd` is set,
+      as `CoordStore.programmeLive` reads it, or the programme has no row at all, which `programmeLive` reads as not
+      live too. `planEnd` has one writer, `closePlan`, which the plan's close and the operator's end of a programme from
+      an item (`endProgrammeByOperator`) call. The archive door's `programme:'end'` abandons the programme's runs and
+      writes no `planEnd`. So there the run-bound timers are cancelled `run-closed` and the coordinator's own
+      `setter-archived`, and another setter's programme-bound timer is left to fire: a timer only mails, and its mail
+      names the programme. A programme with no open run is between waves, not ended: `programs.state` reads `done`
+      whenever the open-run count reaches zero, and nothing sets it back when the next wave opens. So `done`,
+      `abandoned` and `unknown` cancel nothing;
     - a setter's timers when its workspace is archived or reclaimed (`setter-archived`), or when `incarnationOf`
       answers `unmeasured` with the reason `absent` (ccd removes `.generation` only with the row it purges), or
       `measured` with another `.generation` than the stamp (`setter-gone`);
@@ -1492,24 +1516,38 @@ so Figures 10 and 11 sit before Figure 9 in the text.*
     request's checks needs a wake it can name. Worker clause 17 lists the wakes a turn may end on, and its rewording
     adds "a timer the server accepted (`ccrc-api timer set`)", in the same pull request, under the size ratchet
     (§11.3). The wording names the server's acceptance because the fleet box rolls first: a reworded clause can reach
-    a home before its server advertises `timers-v1`, and there `ccrc-api timer set` answers `capability-missing`, so
-    no timer was accepted and the clause's other wakes stand. The coordinator's clause 7 already ends a turn on mail,
-    so it needs no change.
+    a home before its server advertises `timers-v1`. There no timer is accepted, and the clause's other wakes stand.
+    `ccrc-api timer` answers `capability-missing` itself only when the box's server capability file is current and
+    well-formed and lacks `timers-v1`. An absent, stale, torn or future-dated file sends, as every client gate in
+    `ccd/ccrc-api` does (it fails open), and a server without the doors answers its own 404, which accepts no timer
+    either. The coordinator's clause 7 already ends a turn on mail, so it needs no change.
   - **The Overlord in W1,** through its door process, which ships then.
-  - **The card lists them.** Each pending timer is one line of the card's live state, with its due time and the
-    first words of its note as untrusted data (§3.3.3).
+  - **The card lists them.** The card's live state carries one trusted line, how many timers are pending and when
+    the next is due, then one block of untrusted data with a line per pending timer, soonest first: its id, its due
+    time, its run or programme, and the note's first words, at most 60 characters with the ellipsis (`timerPreview`)
+    (§3.3.3).
   - **A worker's own pending timer holds the stall watch's quiet arm** (the coordinator's rulings on the two reviews
     of R20). Today the quiet arm mails a worker silent for `STALL_QUIET_MS` (two hours) a `stall-check:`, then its
     coordinator a `stall:`, then pushes the operator (`server/src/coord/stall.ts`). A worker that ended its turn on a
-    timer is waiting, not stalled. So the stall watch's hold map gains one hold: while the worker has `pending`
-    timers, the quiet arm waits until the earliest one's `dueAt` plus one quiet period, and never past `quietSince`
-    plus 24 hours. `quietSince` is the clock the arm already reads for the worker's last turn (`stall.ts#stallFacts`:
-    the latest of its idle-since, its last mail sent or received, its dispatch and its reactivation), so a fired
-    timer's mail restarts it as any inbound mail does. Past the cap the stall watch runs as today, and every other arm
-    runs as today. The hold is visible: a stall notice sent after it names the timer, its due time and the first
-    words of its note. The plan records how the hold sits beside the stall watch's 24-hour backlog horizon
-    (`BACKLOG_HORIZON_MS`), for which its backoff ceiling is 16 hours: a hold is not a backoff, and a run worker's run
-    mail is read without that horizon.
+    timer is waiting, not stalled. So the stall watch's hold map gains one hold, `timer`
+    (`server/src/coord/stall.ts#timerHoldUntil`), which holds the quiet arm's first rung:
+    - **Which timer holds.** The worker's earliest `pending` timer; when it has none, its newest timer fired since the
+      ladder's quiet start (the start r1 is timed from, `server/src/coord/stall.ts#stallR1QuietFrom`).
+    - **Until when.** A pending timer holds until its `dueAt` plus one quiet period, and one whose `dueAt` has passed
+      holds until it fires (the lane may be held by `mail-disabled`, or a pass behind). A fired one holds until its
+      fire time plus one quiet period, however late it fired. No hold runs past the ladder's quiet start plus 24 hours
+      (`TIMER_HOLD_CAP_MS`), and a timer read that failed holds nothing.
+    - **A timer's mail is no exchange.** It moves neither the worker's quiet start nor the ball
+      (`server/src/coord/stall.ts#stallFacts` leaves the `timer` sender out), so the fired timer's own hold, not its
+      mail, covers the quiet period after it fires.
+    - Past the cap the stall watch runs as today, and every other arm runs as today.
+    - **The hold is visible, by its id and its times only.** When a timer held the episode, r1's check mail names it:
+      its id, its due time, and when the hold ended. It never carries the timer's note or a preview of it: stall notices
+      go out as `operator` and carry measured facts only, and a session's words in that envelope are what H7 and C63
+      keep out. r2 and the r3 push do not repeat the line.
+    - The plan records how the hold sits beside the stall watch's 24-hour backlog horizon (`BACKLOG_HORIZON_MS`), for
+      which its backoff ceiling is 16 hours: a hold is not a backoff, and a run worker's run mail is read without that
+      horizon.
   - **The follow-up arm keeps a row of its own** (§5.4). Putting follow-ups and timers in one table would give a
     request's clock a second home and a second writer: `followUpAt` is the server's clock on the request row, written
     by the server at each move, and `followUpDue` decides whether a nudge is due and may move the request to
@@ -5918,7 +5956,7 @@ name that owner.
 | `FLEET_ROLES` (long-lived, the `SessionRole` view, launch profile, card renderer, compaction instructions and probe set as columns), `roleOf`. Where a fact is unmeasured `roleOf` gives a typed undecided answer, never a guess (§3.3.9) | K, L0; C3, L1 | code | n/a | n/a | W1a | n/a | `SessionRole` as today |
 | `renewalDue`, the generation state machine, the fence check (C3); `MAIL_PACE` (C5). `MAIL_PACE` and the renewal triggers are records keyed by role, total over `FLEET_ROLES` | C3 and C5, L1 | code | n/a | n/a | W1a (fence W1) | n/a | No renewal; today's two mail-pace pairs |
 | `INJECTED_PROMPTS`; the refusal-word list, generated from §11.6 | K, L0 | code | n/a | n/a | W1, growing | n/a | History tags injected text `operator`, as today |
-| `TIMER_TRANSITIONS`, the timer bounds by role, and `timer` in `SYSTEM_MAIL_SENDER_MAP` (§3.3.12); the timer hold in the stall watch's hold map (`STALL_HOLD_MAP`, `server/src/coord/stall.ts`): a worker's own pending timers hold the quiet arm until the earliest one's `dueAt` plus one quiet period, never past `quietSince` plus 24 hours, and a stall notice after it names the timer | C3, L0; C5, L1 | code | n/a | n/a | W1a | n/a | No timers and no hold; an older mail lane reads a sender it does not know (§11.5) |
+| `TIMER_TRANSITIONS`, the timer bounds by role, and `timer` in `SYSTEM_MAIL_SENDER_MAP` (§3.3.12); the timer hold in the stall watch's hold map (`STALL_HOLD_MAP`, `server/src/coord/stall.ts`): a worker's own timer holds the quiet arm before its first rung, a pending one until the earliest one's `dueAt` plus one quiet period, a fired one until its fire time plus one quiet period, never past the ladder's quiet start plus 24 hours (`TIMER_HOLD_CAP_MS`), and r1's check mail after it names the timer by its id and due time only | C3, L0; C5, L1 | code | n/a | n/a | W1a | n/a | No timers and no hold; an older mail lane reads a sender it does not know (§11.5) |
 | `RESPONSE_OUTCOMES`, `responseOutcome`, `responsesFor`; `RESPONSE_CLASSES` (H35's kinds of push that a state can change, beside `pushAdmission`) and `RESPONSE_CLASS_MOVES`, whose only server move is an unpinned class to `quiet` (§4.3) | C6, L0 and L1 | code | n/a | n/a | W1 (outcomes and figures), W3 (classes and moves) | n/a | n/a |
 | The message moves table: delivered and queued (the delivery lane), picked up (the hook's report door), settled and spent (the door that cites the message, or the prompt route's settlement mark) | OM, L0 | code | n/a | n/a | W1 | n/a | n/a |
 | `decideSleep`'s `overlord` hold, the roll lane's hold | C4, L1 | code | n/a | n/a | W1 | n/a | The Overlord may sleep or roll |
@@ -5992,7 +6030,7 @@ tested over its whole input domain (§11.7).*
 | The Overlord's reads: board, `messages`, inbox, history, model, feed. The inbox read's contract, its row shape and its order, is fixed in W1: later waves add bands and kinds of row, and change nothing a W1 caller reads | C5, L4 | the read ledger | each its own line | n/a | W1 (board, messages, history, and the inbox with band 1 and probes, §6.8), W2 (band 3 joins the inbox), W3 (band 2, packets, admission and background work join it; a drill joins every Overlord read that would show a real row of its kind, §7.5), W4 (model, feed) | n/a | No route |
 | The sequence read: one cursor over `overlord_sequence`, which answers a gap explicitly | C5, L4 | the read ledger | it | n/a | W1 | n/a | No route |
 | Card, probe and note: `GET /api/sessions/:id/card`, `ccrc-api card`, `ccrc-api probe`, the note door | C3, L4 | generation, probe and note rows | each its own | n/a | W1a | n/a | No route |
-| The timer doors: `POST /api/timers`, `GET /api/timers`, `POST /api/timers/:id/cancel` (`ccrc-api timer set`, `list`, `cancel`), each for the caller's own identity only, registered from the continuity routes file (§3.3.12) | C3, L4 | `continuity_timers` | each its own move | n/a | W1a (the Overlord's, through its door process, W1) | n/a | No route: `ccrc-api` answers `capability-missing`, naming `timers-v1` |
+| The timer doors: `POST /api/timers`, `GET /api/timers`, `POST /api/timers/:id/cancel` (`ccrc-api timer set`, `list`, `cancel`), each for the caller's own identity only, registered from the continuity routes file (§3.3.12) | C3, L4 | `continuity_timers` | each its own move | n/a | W1a (the Overlord's, through its door process, W1) | n/a | No route. `ccrc-api` answers `capability-missing`, naming `timers-v1`, only when a current, well-formed server capability file lacks the word. An absent, stale, torn or future-dated file sends (it fails open, like every client gate), and the older server answers its own 404. Either way no timer is accepted |
 | The operator's timer read and cancel: `GET /api/sessions/:id/timers` (that session's timers, and the `overlord` timers for the session the designation binds) and `POST /api/sessions/:id/timers/:timerId/cancel`, session-gated, registered from the continuity routes file and named in the census's hand-kept list (§3.3.12) | C3, L4 | `continuity_timers` | the cancel, with the reason `operator` | n/a | W1a | n/a | No route |
 | The receipts door, `POST /api/responses/receipts` (`shown` and `opened`, from the service worker and the console), session-gated, registered from `server.ts` beside the push routes. It writes no coordination state, so it stays outside the box-token census, as `POST /api/push/subscribe` does (§4.3) | C6, L4 | `response_receipts` | it | n/a | W1 | n/a | No route: pushes read `unmeasured` |
 | "I handled this elsewhere", the operator's correction of a response row, `POST /api/responses/:id/handled`, session-gated, registered from `server.ts` beside the receipts door. It writes no coordination state, so it stays outside the box-token census too (§4.3) | C6, L4 | `operator_responses` | it | n/a | W1 | n/a | No route |
@@ -6086,14 +6124,14 @@ one fixed order, so the first refusal is the same on every door.
   session that is not the designated one: the box token and attribution, for the caller's own session only. The gate
   order above binds them only when the designated session calls.
 - **The timer doors sit beside them** (§3.3.12). For every other session they are in the hook's group too, for the
-  caller's own identity only. When the designated session calls, they take steps 1 to 9 of the gate order above,
-  then only step 11's own checks of the door (`timer-key-unknown`, `timer-not-yours`; its stamp is the designation's
-  `designatedTerm`, so `timer-unmeasured` never applies to it): a timer is no act kind, so neither the rung by act
-  kind nor `overlordMayAct` applies, and it writes no act row. They are box-token doors in
-  `auth/gate.ts`'s `EXEMPT` table, one reason each, read by the census from the continuity routes file. The
-  operator's timer read and cancel are session-gated and register from the continuity routes file, which the census
-  checks against its hand-kept list `TIMER_OPERATOR_DOORS` in both directions, as it checks `UPDATE_DOORS`. The
-  receipts door and the correction of a response row are session-gated and register from `server.ts`. They write no
+  caller's own identity only. When the designated session calls, they take steps 1 to 9 of the gate order above, then
+  only step 11's own checks of the door (`timer-key-unknown`, `timer-not-yours`; its stamp is the designation's
+  `designatedTerm`, so `timer-unmeasured` never applies to it): a timer is no act kind, so neither the rung by act kind
+  nor `overlordMayAct` applies, and it writes no act row. They are box-token doors in `auth/gate.ts`'s `EXEMPT` table,
+  one reason each, read by the census from the continuity routes file. The operator's timer read and cancel are
+  session-gated and register from the continuity routes file, which the census checks against its hand-kept list
+  `CONTINUITY_SESSION_DOORS` (every session-gated door of that file) in both directions, as it checks `UPDATE_DOORS`.
+  The receipts door and the correction of a response row are session-gated and register from `server.ts`. They write no
   coordination state, so they stay outside the box-token census, as `POST /api/push/subscribe` does.
 - **The server's own bodies only read.** The replay body and the auditor pass step 1 by their per-run key, for reads
   only. Their reads skip steps 3 to 11, and every write they call is refused `not-the-overlord`. The replay key
@@ -6291,7 +6329,7 @@ values too. They are values of the renewal triggers' record, keyed by role, and 
 | Ten minutes | The `responses` row's cadence | W1 | monotonic cadence, wall verdict |
 | 180 days by default, the operator's setting under §9.4 | How long response rows and receipts are kept, deleted past it by the response lane | W1 | wall |
 | 90 days | How long fired and cancelled timers are kept | W1a | wall |
-| 24 hours from `quietSince` | The longest a worker's own pending timers hold the stall watch's quiet arm, which otherwise waits until the earliest one's `dueAt` plus one quiet period | W1a | wall |
+| 24 hours from the ladder's quiet start (`TIMER_HOLD_CAP_MS`) | The longest a worker's own timer holds the stall watch's quiet arm, which otherwise waits until the earliest pending one's `dueAt`, or the newest fired one's fire time, plus one quiet period | W1a | wall |
 | At least 30 measured messages admitted since the class's last change of state, over at most 28 days; half acted on to propose "let it interrupt" to the operator, withheld while more than half of the rows not acted on read `unmeasured`; under 20% acted on to send an unpinned interrupting class back to quiet | The response figures and the class moves (§4.3) | W3 | wall |
 | 16,000 bytes | How far into a `SKILL.md` its contract may end: 5,000 tokens at 3.2 bytes a token | W1a | n/a |
 | 1,500 characters | The Overlord's part of a relay | W2 | n/a |
@@ -6350,7 +6388,7 @@ The egress refusal is the one exception, because a detailed answer there is an o
 | Word | Door or lane | Meaning | Call |
 |---|---|---|---|
 | `not-the-overlord` | Every Overlord door | The caller is not the designated session, or one of the server's own bodies (the replay body, the auditor) called a write | C2, H2 |
-| `capability-missing` | Every Overlord door; designate and rebind, when ccd does not advertise `pool-set`, `keep-awake` or `hibernate-fresh` | The build does not carry the door's capability word yet (Table 11.1d). The answer names the word. At designate and rebind it is checked before the session is created, so a refused start leaves no session behind | H32 |
+| `capability-missing` | Every Overlord door; designate and rebind, when ccd does not advertise `pool-set`, `keep-awake` or `hibernate-fresh`; `ccrc-api timer`, on the client, before it sends | The build does not carry the door's capability word yet (Table 11.1d). The answer names the word. At designate and rebind it is checked before the session is created, so a refused start leaves no session behind. `ccrc-api timer` answers it only when a current, well-formed server capability file lacks `timers-v1`; an absent, stale, torn or future-dated file sends (it fails open) | H32, C65 |
 | `overlord-off` | Every Overlord door but card, probe and note | The operator's rung is `off` | H25 |
 | `rung-below` | Every Overlord write door | The effective rung does not allow this act kind. The answer names the rung it needs | H25 |
 | `act-ceiling` | Every Overlord write door | The act kind's ceiling for the window is reached (Table 11.5b) | H25 |
@@ -6399,16 +6437,17 @@ The egress refusal is the one exception, because a detailed answer there is an o
 | `coordinator-paused` | Start, re-kick | The coordinator pause stands | C7 |
 | `mail-disabled` | The answer doors | `mail-disabled` stands | C7 |
 | `prediction-late` | `seal-prediction` | The prediction was filed after the operator's first pick or answer | C20 |
-| `reference-unknown` | The note door (a handover note's thread), `goals modify` | The reference names no row; or, at `goals modify`, it is not a live grant, an answered item of this programme, or a relayed request this programme owns | C37, C19 |
+| `reference-unknown` | The note door (a handover note's thread), `goals modify` | The reference names no live row of the caller's own, as a note's key must (`note-key-unknown`); or, at `goals modify`, it is not a live grant, an answered item of this programme, or a relayed request this programme owns. At the note door, a reference that cannot be measured now answers `unmeasured` (502), unless another thread's reference names no row | C37, C19 |
 | `probe-none-open` | The probe door | The session has no open probe round (plan-driven consistency, the W1a plans) | C41 |
 | `probe-closed` | The probe door | The round was already answered (plan-driven consistency, the W1a plans) | C41 |
 | `card-changed` | The card door | A later page names a card hash that no longer matches the current render; the caller starts again at page 1 (plan-driven consistency, the W1a plans) | C38 |
-| `note-key-unknown` | The note door | The note's key names no live programme, open item or non-terminal run of the caller's, or cannot be measured (plan-driven consistency) | C37 |
+| `note-key-unknown` | The note door | The note's key names no live programme, open item or non-terminal run of the caller's (plan-driven consistency). A key that cannot be measured now is no refusal of the key: the door answers `unmeasured` (502), unless another fact already refuses the note | C37 |
 | `note-cap` | The note door | The identity holds its cap of live notes (Table 11.5b) (plan-driven consistency) | C37 |
 | `note-too-long` | The note door | A field is over its length cap (Table 11.5b) (plan-driven consistency) | C37 |
 | `note-not-asked` | The note door (the handover note) | The caller's generation is not `checkpointed`, so no handover was asked (plan-driven consistency) | C37, H12 |
 | `renew-pending` | Renew now | A Renew now request for the session has not been read by the renewal lane yet (plan-driven consistency) | H12 |
 | `renew-not-long-lived` | Renew now | The session's role is not long-lived (plan-driven consistency) | C36 |
+| `lane-gated` | The Shadow lanes door, arming `continuity` | The lane's row carries a gate: Live waits for the renewal act, so nothing moves a generation on from its start until it ships. Answered 409 | C49, H12 |
 | `baseline-missing` | The Shadow lanes door, arming `continuity`, `launch-profile` or `anchor-slot` | The replay quiz's baseline run is not recorded yet (W0-28) (plan-driven consistency) | C52, C53 |
 | `proposal-limit` | The propose doors | More than one open proposal for one target, or more than three open `propose-command` proposals in all | C59, H8 |
 | `kickoff-names-overlord` | Start, re-kick | The kickoff names the `ccrc-overlord` skill | C4, R7 |
@@ -6418,9 +6457,10 @@ The egress refusal is the one exception, because a detailed answer there is an o
 | `timer-too-late` | The timer set door | The duration is longer than the longest due time | C65 |
 | `timer-too-long` | The timer set door | The note is over its length cap | C65 |
 | `timer-masked` | The timer set door | The egress mask changed the note | C61 |
-| `timer-unmeasured` | The timer set door, for any session but the designated one | The caller's registry `.generation` could not be measured, so the timer would carry no stamp: retry | C61 |
+| `timer-unmeasured` | The timer set door, for any session but the designated one; every timer list and cancel door | At the set door, the caller's registry `.generation` could not be measured, so the timer would carry no stamp, or a count or binding it needs could not be read. At a list or cancel door, the timers could not be read. Retry | C61 |
 | `timer-key-unknown` | The timer set door | The bound run or programme names no row, or is not the caller's own | C61 |
-| `timer-not-yours` | The timer cancel door | The timer belongs to another identity | C61 |
+| `timer-not-yours` | The timer cancel doors | The timer belongs to another identity: at the setter's cancel, another identity's; at the operator's, another session's than the path names. At the setter's cancel an id that names no row answers the same word, so the door is no oracle for which ids exist | C61 |
+| `timer-not-found` | The operator's timer cancel door | The id names no timer, answered 404. The signed-in operator may know which ids exist, so only the operator's cancel answers it | C61 |
 | `timer-not-pending` | The timer cancel doors | The timer has already fired or been cancelled | C61 |
 | `not-ready:<word>` | A hold's release reason | The readiness word (§6.4) was not `ready`, such as `not-ready:saturated` | H19, H20 |
 | `server-gap` | A hold's release reason | The deadline passed while the server was down | H18, H32 |
@@ -6628,7 +6668,7 @@ names the hardening calls that changed a call from its rev 8 form. §13.1 lists 
 | C62 | How timers fire | a poller of its own, a row of `LANE_SCHEDULE` | One `timers` row, every minute. Each pass first cancels: a run-bound timer when its run ends; a programme-bound one when the programme's row records `planEnd` (the plan's close, or the operator's end of a programme from an item; the archive door's end writes none, so there run-bound timers end with their runs, the coordinator's with its archive, and another setter's programme-bound timer fires; never `done` between waves, never `unknown`); a setter's when its workspace is archived, or its registry row is gone or carries another stamp; the Overlord's when the designation is retired, binds no session or is replaced. A registry that cannot be measured leaves timers pending, never delivered, until the stamp is matched. Then, per setter and run, it marks due timers `fired` and queues one mail, in one transaction, so nothing fires twice or is lost. Each mail fits the 8 KiB body and 200-byte subject caps; the timers that do not fit fire on the next pass. A run's timer mail carries its `runId` and is revived like the run's mail; run-less timer mail is not. It starts no run: the mail may wake a sleeping setter under the wake budget. `mail-disabled` holds firing, not cleanup. After a gap, due timers fire once, late. A restore can fire one again while its stamp matches | Proposed with R20 | R20 |
 | C63 | Who the timer mail is from | `operator`, the setter, a role of its own | The role `timer`, a new row of `SYSTEM_MAIL_SENDER_MAP`. `operator` would carry a session's words in the envelope of the operator's own notices, which H7 closed. The setter did not send it at that moment, and the peer quotas would count it. No session can send as `timer`, because `POST /api/mail` needs a registry row for its sender | Proposed with R20 | R20, H7 |
 | C64 | Recurring timers | yes, no | Not in version 1. The schedules the Overlord keeps (briefing times, the digest, the backstop, the distillation, the weekly check and quiz) are the server's already, as `LANE_SCHEDULE` rows and daily beats. A session repeats by setting the next timer when one fires. Later, if chained timers are a large share of all timers | Proposed with R20 | R20 |
-| C65 | Bounds, who gets timers first, the stall watch, and follow-ups | one bound for all, bounds by role; follow-ups on the timers row, on a row of their own | Bounds: 50 pending for the Overlord, 20 for a coordinator, 5 for any other session (`timer-cap`); 30 sets an hour (`timer-rate`); five minutes to 30 days; 500 characters. Coordinators and workers in W1a, behind `timers-v1`, with worker clause 17 naming "a timer the server accepted" as a wake; the Overlord in W1. A worker's pending timers hold the stall watch's quiet arm until the earliest one's due time plus one quiet period, never past 24 hours from `quietSince`, the worker's last turn as the arm reads it, and a later stall notice names the timer (the coordinator's rulings). Follow-ups keep a `LANE_SCHEDULE` row of their own: one table would give a request's clock, which `followUpDue` decides, a second home and a second writer, while a timer is a session's own reminder. Two rows of one table are no second mechanism | Proposed with R20 | R20 |
+| C65 | Bounds, who gets timers first, the stall watch, and follow-ups | one bound for all, bounds by role; follow-ups on the timers row, on a row of their own | Bounds: 50 pending for the Overlord, 20 for a coordinator, 5 for any other session (`timer-cap`); 30 sets an hour (`timer-rate`); five minutes to 30 days; 500 characters. Coordinators and workers in W1a, behind `timers-v1`, with worker clause 17 naming "a timer the server accepted" as a wake; the Overlord in W1. A worker's own timer holds the stall watch's quiet arm before its first rung: its earliest pending timer until that one's due time plus one quiet period (an overdue one until it fires), else its newest fired one until its fire time plus one quiet period, never past 24 hours from the ladder's quiet start. A timer's mail moves no quiet clock. r1's check mail then names the timer that held by its id and due time only, never its note (the coordinator's rulings; corrected from the W1a builds, Appendix B). Follow-ups keep a `LANE_SCHEDULE` row of their own: one table would give a request's clock, which `followUpDue` decides, a second home and a second writer, while a timer is a session's own reminder. Two rows of one table are no second mechanism | Proposed with R20 | R20 |
 | C66 | What is recorded about each message to the operator | nothing, a guess at intent, what the server received | One row of `operator_responses` per push the service accepted, Waiting on you row, digest line and chat reply, with ids, kinds and times only, sealed when its window closes. Outcomes, first match: `acted` (and how), `settled-elsewhere`, `not-actionable`, `unmeasured` (with its reason), `opened`, `not-opened`. It records only what the server received: only a push is ever `not-opened`, and only when every subscription it was accepted for reported showing it and none reported a tap; an `opened` lost after a `shown` is the one known undercount of opens. An ask ended `stale` or `unknown` is `unmeasured`, never settled. A repeat or a resend carries the original push id and counts on its row; a push a batch carried keeps its own row and class, and one the operator first saw in the console, with no push sent, has none. A failed reader defers the seal up to a day. Approvals are out of scope. The operator's privacy controls cover the rows: wipe removes them, a replayed wipe removes them again after a restore, and their 180-day retention is the operator's setting (the coordinator's ruling) | Proposed with R20 | R20 |
 | C67 | How delivery, shows and opens are measured | assume them, build them | Built in W1, and `unmeasured` until built. Today the push path returns no verdict, a push lives ten minutes and may never reach an offline device, and a tap carries nothing that names the push. W1 writes the response row `pending` before each send, with a random push id stored on the outbox row so a resend keeps it; a per-send verdict from `PushService` names the subscriptions that accepted. Response receipts: the service worker reports `shown` when it shows a push, and at a tap issues `opened` first without awaiting it before the open; the console reports `opened` for the messages it shows; one session-gated door writes `response_receipts`, ignoring a receipt for a subscription outside the accepted set or from the wrong source. A push is `not-opened` only on a `shown` receipt from every accepted subscription and no `opened`; a missing receipt, an older worker, a push replaced by a later one with its tag, or a change of the server's build or restore generation inside the window reads `unmeasured`. An `opened` lost after a `shown` is a known undercount | Proposed with R20 | R20 |
 | C68 | How the budget uses the figures | not at all, a weight on each push, a state per class | A state per class, `quiet` or `interrupting`, and a pin, in `response_classes`. A class is one of H35's kinds of push that a state can change: escalation, released hold, brief. A batch push is no class: it always waits for a briefing time, and each push it carries counts for its own class, so a quiet class is still measured. New classes start quiet, a Setting on by default and read as on when unreadable: a quiet class waits for the briefing time, never past its urgency's deferral limit. The operator's "Let it interrupt" or "Keep it quiet" pins the class until the operator changes it again (the coordinator's ruling). The acted share counts every delivered row with a verdict, less those settled elsewhere, not actionable, or unread, because acts need no receipts (the coordinator's ruling). The server may only move an unpinned interrupting class to quiet, under 20% acted over 30 measured messages; at the defaults no class is unpinned and interrupting, so it acts only once "start quiet" is off or a class is released with "Let the figures decide". It proposes "let it interrupt" when half of a quiet class's messages were acted on, withheld while more than half of the rows not acted on are unmeasured, and only the operator decides. Evidence counts only messages admitted after the class's last change of state, a carried push by the time it was deferred. Only the pushes the budget rules on are affected, so I9 holds. Shadow first, with the budget. Not a feed of the operator model. Narrowing alone follows ruling 4's direction by the author's analogy, not by the operator's words | Proposed with R20 | R20, H35, H37 |
@@ -6925,6 +6965,8 @@ mechanism leaves something open, the row says what is left.
 - R20, the operator's ruling of 2026-11-14: "Both: self-set follow-up timers (a timer row, one scheduler lane, mail
   delivery) and measuring how you respond to each message" (§3.3.12, §4.3). The calls that carry it, C61 to C69, are
   the author's and wait on you below.
+- **Corrections from the W1a builds (2026-11-14, Appendix B, Table B5).** Where a build measured that the code does
+  otherwise, the body now states what shipped. They are corrections, not new rulings.
 - **The operator approved this spec on 2026-11-10:** the author's calls C1 to C60 as §13 restates them, and the
   hardening calls H1 to H39 (§13.1), subject to the rulings below. C47 is where "everything" stops: it keeps the
   credential stores closed.
@@ -7162,6 +7204,33 @@ trail. The body states only the result.
 | Measures, invariants and refusals | M1 to M35, I1 to I16 | M36 (timers) and M37 (responses); I17 and I18; the `timer-*` refusal words, `timer-rate` and `timer-unmeasured` among them (§11.6) |
 
 *Table B4. What R20 changed.*
+
+**Corrections from the W1a builds, 2026-11-14.** The builds and reviews of W1a measured places where this spec said
+something other than what shipped. These are corrections, not rulings: each row records what the code on `main` does,
+measured there, and the body now states it. The departures files under `docs/superpowers/plans/2026-11-10-overlord/`
+are their source. A departure that only refines a plan changed nothing here.
+
+| What | Before | Now, and its source |
+|---|---|---|
+| The stall hold, and what a stall notice says (C65, Tables 11.1, 11.5b, 13a) | A stall notice after the hold named the timer, its due time and the first words of its note. Pending timers held until the earliest due time plus one quiet period, never past `quietSince` plus 24 hours, and a timer's mail restarted the quiet clock | Only r1's check mail names the timer that held, by its id and due time and when the hold ended, never its note or a preview: stall notices go out as `operator`, and H7 and C63 keep a session's words out of that envelope. A fired timer holds too, until its fire time plus one quiet period; an overdue one holds until it fires; the cap runs from the ladder's quiet start; a timer's mail is no exchange. The timers plan, PR C (`stall-notice-names-no-note`, `only-r1-names-the-timer`, `pending-holds-until-it-fires`, `timer-mail-is-no-exchange`) |
+| The timers' client gate (C65, Tables 11.1d, 11.6) | With no route, `ccrc-api` answered `capability-missing` | Only a current, well-formed capability file that lacks `timers-v1` answers it; an absent, stale, torn or future-dated one sends, as every client gate does, and the older server's 404 accepts no timer either. The timers plan, PR D (`timer-gate-fails-open-like-every-gate`) |
+| A note's key or reference that cannot be measured (Table 11.6) | `note-key-unknown` covered a key that "cannot be measured" | It answers `unmeasured` (502), unless another fact already refuses; the same for a handover thread's reference. The notes plan (`unmeasured-key-is-unmeasured`) |
+| The census's list of the operator's timer doors (§3.3.12, §11.2) | A list of the timers' own, `TIMER_OPERATOR_DOORS` | `CONTINUITY_SESSION_DOORS`, the one hand-kept list of the continuity routes file's session-gated doors. The timers plan, PR B (review F10) |
+| The operator's cancel of an absent id (Table 11.6) | No word | `timer-not-found` (404), the operator's only; the setter's cancel answers `timer-not-yours`, so it is no oracle. The timers plan, PR B (`operator-absent-is-not-found`) |
+| `proven`, and a failed renewal (§3.3.11) | A failure before the receipt's first half returned a proven generation to `active` "whichever state the renewal began from" | `proven` is written from the machine's view on every step and cleared once the conversation has ended (`hostEnded`), so a `degraded` generation is never proven and a renewal begun there returns there. The generations plan (`proven-follows-the-view`) |
+| Claude Code's auto-compact window (C39) | Set to the same figure as ccd's `compact` | That point plus 34,000 tokens, clamped, because Claude Code compacts about 33,000 below the window it is given; no field where the point cannot fit. The launch profiles plan, PR B (`compact-window-carries-the-buffer`) |
+| The fitted ceiling (C41) | The deepest depth whose rolling pass rate is at least 95% | Read in 50,000-token buckets upward; the first failing bucket caps it, a thin bucket is skipped and leaves it unfitted, and a failing first bucket means no depth holds. The probes plan (`bad-depth-caps-the-ceiling`, `no-depth-holds-is-its-own-answer`) |
+| The thread probe (C41) | After every renewal | From W1: W1a's rounds draw no `thread` probe, nor the other classes whose rows are not on the card yet. The probes plan (`probe-classes-carry-thread`) |
+| A coordinator's plan path (C50) | Named by each run on the server | No row stores it yet; the card's run line says so. The card plan (`run-plan-path-not-stored`) |
+| The starts that mint, and the shadow mint (H12) | Every start that is not a compaction mints at `carded` | `START_SKIPS` names the starts that mint nothing, and in shadow, which is all of W1a, a mint writes `active` and keeps the walk in shadow columns. The generations plan (`intent-unread`, `coordinator-first-mint`, `shadow-deadline-column`, `live-gated-until-the-renewal-act`) |
+| A generation's outcomes (Table 3.3.11a) | Renewed, crashed, swapped or woken elsewhere | The seven words of `GENERATION_OUTCOMES`, `cleared` and `unmeasured` among them. The generations plan (`clear-is-not-a-crash`, `swap-before-crash`, `newest-start-trusted`) |
+| `lane-gated` (Table 11.6) | No word | The Shadow lanes door's refusal of Live for `continuity` until the renewal act ships. The generations plan (`live-gated-until-the-renewal-act`) |
+| The timers on the card (C65) | One line per timer | One trusted count line, then one untrusted block with a line per timer. The timers plan, PR D (`timer-lines-in-one-block`) |
+| A programme-bound timer's cleanup (§3.3.12) | When the programme's row records `planEnd` | Also when the programme has no row. The timers plan, PR C (`programme-row-absent-reads-ended`) |
+| A handover thread's reference (§3.3.2, Table 11.6) | Must name a row | Must be a live row of the caller's own, as a note's key must. The notes plan (`handover-refs-are-live-and-yours`) |
+| `timer-unmeasured` (Table 11.6) | The set door only | Every timer list and cancel door too, on a read that failed. The timers plan, PR B |
+
+*Table B5. The corrections from the W1a builds.*
 
 ---
 
