@@ -4,7 +4,7 @@
 // cannot be made on disk. Review Focus 1 and 4 of the plan, case by case. Neutral names throughout.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, symlinkSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { Bus } from '../src/bus.js';
 import { FleetWatcher } from '../src/watch.js';
@@ -104,6 +104,8 @@ describe('the radar lane', () => {
       lstatMeasured: wrap('lstat', (p: string) => localIO.lstatMeasured(p)),
       statMeasured: wrap('stat', (p: string) => localIO.statMeasured(p)),
       readFileMeasured: wrap('read', (p: string, t?: number, s?: AbortSignal) => localIO.readFileMeasured(p, t, s)),
+      // Wave 5i: the probe's bytes come through byte ranges; a bend on 'read' reaches them too.
+      readFileFromBytesMeasured: wrap('read', (p: string, o: number, m: number, t?: number, s?: AbortSignal) => localIO.readFileFromBytesMeasured(p, o, m, t, s)),
     };
   };
 
@@ -279,18 +281,17 @@ describe('the radar lane', () => {
       expect(ok.ok).toBe(true);
     });
 
-    // G9 (review 1225, F4). `parseProbe` checks the bytes against the cap again, so a case through `readRadarProbe`, the
-    // pass or the lane cannot see `readRegular`'s own post-read check: call it directly, with an io whose stat says the
-    // file is within the cap and whose read hands back more than the cap.
-    it('readRegular checks the bytes it read against the cap, whatever the stat said', async () => {
+    // G9 (review 1225, F4), re-pointed at wave 5i's byte ranges: the cap is checked on the stat BEFORE any byte moves, and a
+    // range that hands back more than it was asked is refused, whatever the stat said.
+    it('readRegular asks for no more than the stat promised, and refuses a range that overruns it', async () => {
       const cap = 16;
       const io = {
         lstatMeasured: async () => ({ ok: true as const, kind: 'regular' as const }),
         statMeasured: async () => ({ ok: true as const, mtimeMs: 0, size: cap }),
-        readFileMeasured: async () => ({ ok: true as const, content: 'x'.repeat(cap + 1) }),
+        readFileFromBytesMeasured: async (_p: string, _o: number, m: number) => ({ ok: true as const, bytes: new Uint8Array(m + 1), size: cap }),
       };
       expect(await readRegular(io, '/f', undefined, cap)).toEqual({ ok: false, reason: 'unreadable' });
-      const within = { ...io, readFileMeasured: async () => ({ ok: true as const, content: 'x'.repeat(cap) }) };
+      const within = { ...io, readFileFromBytesMeasured: async (_p: string, _o: number, m: number) => ({ ok: true as const, bytes: new Uint8Array(m).fill(120), size: cap }) };
       expect(await readRegular(within, '/f', undefined, cap), 'a file at the cap reads').toEqual({ ok: true, content: 'x'.repeat(cap) });
     });
 
@@ -384,7 +385,7 @@ describe('the radar lane', () => {
   });
 
   describe('the lane costs little and fails alone (Review Focus 4)', () => {
-    it('one listing, then one lstat, one stat and one read per project a session names', async () => {
+    it('one listing, then one lstat, two stats (before and after the ranges, wave 5i) and one read per project a session names', async () => {
       plantRow(ALPHA); plantRow('claude-a-proj-b-alpha', { project: 'proj-b' });
       plantProbe(worked()); plantProbe(worked({ project: 'proj-b', heads: [], pairs: [], pairHeads: [] }), 'proj-b');
       mkdirSync(probeDir('proj-c'), { recursive: true });   // a project no session names: never read
@@ -396,7 +397,7 @@ describe('the radar lane', () => {
       expect(landing.filter((s) => s.startsWith('readdir '))).toHaveLength(1);
       for (const project of ['proj-a', 'proj-b']) {
         const mine = landing.filter((s) => s.endsWith(`${path.sep}${project}${path.sep}probe`));
-        expect(mine.map((s) => s.split(' ')[0]).sort(), project).toEqual(['lstat', 'read', 'stat']);
+        expect(mine.map((s) => s.split(' ')[0]).sort(), project).toEqual(['lstat', 'read', 'stat', 'stat']);
       }
       expect(landing.filter((s) => s.includes('proj-c'))).toEqual([]);
     });
@@ -432,8 +433,8 @@ describe('the radar lane', () => {
       const io: FleetIO = {
         ...localIO,
         statMeasured: (p) => (hang && p.includes(`${path.sep}proj-a${path.sep}`) ? new Promise<never>(() => undefined) : localIO.statMeasured(p)),
-        readFileMeasured: async (p, t, s) => {
-          const r = await localIO.readFileMeasured(p, t, s);
+        readFileFromBytesMeasured: async (p, o, m, t, s) => {
+          const r = await localIO.readFileFromBytesMeasured(p, o, m, t, s);
           if (hang && p.includes(`${path.sep}proj-b${path.sep}`)) bobRead();
           return r;
         },
@@ -458,10 +459,10 @@ describe('the radar lane', () => {
       let signal: AbortSignal | undefined;
       const io: FleetIO = {
         ...localIO,
-        readFileMeasured: (_p, _t, s) => { signal = s; return new Promise<never>(() => undefined); },
+        readFileFromBytesMeasured: (_p, _o, _m, _t, s) => { signal = s; return new Promise<never>(() => undefined); },
       };
       const r = await readRadarPass(io, reg, new Set(['proj-a']), NOW, 20);
-      expect(r).toEqual({ ok: true, reads: new Map([['proj-a', { ok: false, reason: 'late' }]]) });
+      expect(r).toEqual({ ok: true, reads: new Map([['proj-a', { ok: false, reason: 'late' }]]), controls: new Map() });
       expect(signal?.aborted).toBe(true);
     });
 
@@ -743,6 +744,109 @@ describe('the radar lane', () => {
       await w.sweepRadar(await rows(), NOW);
       expect(warn.mock.calls.map((c) => String(c[0])).filter((m) => m.includes('landing radar'))).toEqual([]);
     });
+  });
+});
+
+describe('wave 5i: the control bundle through the pass', () => {
+  let home: string;
+  let reg: string;
+  beforeEach(() => { home = mkTmp('ccrc-radar-ctl-'); reg = path.join(home, '.cc-sessions'); mkdirSync(reg, { recursive: true }); });
+  afterEach(() => { vi.useRealTimers(); });
+
+  const dirOf = (project: string): string => path.join(reg, 'landing', project);
+  const plantAll = (project: string, probeBody?: string): void => {
+    mkdirSync(dirOf(project), { recursive: true });
+    writeFileSync(path.join(dirOf(project), 'probe'), probeBody ?? JSON.stringify(worked({ project, heads: [], pairs: [], pairHeads: [] })));
+    writeFileSync(path.join(dirOf(project), 'lander'), JSON.stringify({ v: 1, project, lander: 'coordinator', at: iso(-2) }));
+    writeFileSync(path.join(dirOf(project), 'main-health'), JSON.stringify({
+      v: 1, project, at: iso(0), sha: sha(9), state: 'green', required: [{ name: 'required-a', app: null }], failing: [], pending: [],
+    }));
+  };
+  const spied = (seen: string[], over: Partial<FleetIO> = {}): FleetIO => ({
+    ...localIO,
+    lstatMeasured: (p) => { seen.push(`lstat ${p}`); return localIO.lstatMeasured(p); },
+    statMeasured: (p) => { seen.push(`stat ${p}`); return localIO.statMeasured(p); },
+    readFileFromBytesMeasured: (p, o, m, t, s) => { seen.push(`range ${m} ${p}`); return localIO.readFileFromBytesMeasured(p, o, m, t, s); },
+    ...over,
+  });
+
+  it('no controlsWanted: the existing reads only, an empty controls map', async () => {
+    plantAll('proj-a');
+    const r = await readRadarPass(localIO, reg, new Set(['proj-a']), NOW, 5000);
+    expect(r.ok && r.controls.size).toBe(0);
+    expect(r.ok && r.reads.get('proj-a')?.ok).toBe(true);
+  });
+
+  it('each wanted project gets one bundle, and its probe is read once', async () => {
+    plantAll('proj-a'); plantAll('proj-b');
+    const seen: string[] = [];
+    const r = await readRadarPass(spied(seen), reg, new Set(['proj-a']), NOW, 5000, new Set(['proj-a', 'proj-b']));
+    if (!r.ok) throw new Error('pass');
+    expect([...r.reads.keys()]).toEqual(['proj-a']);
+    expect([...r.controls.keys()].sort()).toEqual(['proj-a', 'proj-b']);
+    const c = r.controls.get('proj-a')!;
+    expect(c.lander.ok && c.health.ok && c.probe.ok).toBe(true);
+    expect(c.probe).toBe(r.reads.get('proj-a'));
+    for (const project of ['proj-a', 'proj-b']) {
+      expect(seen.filter((x) => x.startsWith('range ') && x.endsWith(`${path.sep}${project}${path.sep}probe`)), project).toHaveLength(1);
+    }
+  });
+
+  it('a wanted project the listing does not return is absent, a refused name is refused, and a failed listing yields none', async () => {
+    plantAll('proj-a');
+    mkdirSync(path.join(reg, 'landing', 'bad name'), { recursive: true });
+    const r = await readRadarPass(localIO, reg, new Set(), NOW, 5000, new Set(['proj-z', 'bad name']));
+    if (!r.ok) throw new Error('pass');
+    const absent = { ok: false, reason: 'absent' } as const;
+    expect(r.controls.get('proj-z')).toEqual({ lander: absent, probe: absent, health: absent });
+    const refused = { ok: false, reason: 'refused' } as const;
+    expect(r.controls.get('bad name')).toEqual({ lander: refused, probe: refused, health: refused });
+    const gone = await readRadarPass(localIO, path.join(home, 'nowhere'), new Set(), NOW, 5000, new Set(['proj-a']));
+    expect(gone).toEqual({ ok: false, reason: 'absent' });
+  });
+
+  it('a bundle that misses the deadline is late in all three documents', async () => {
+    plantAll('proj-a');
+    const io: FleetIO = { ...localIO, lstatMeasured: (p) => (p.endsWith(`${path.sep}probe`) ? new Promise<never>(() => undefined) : localIO.lstatMeasured(p)) };
+    const r = await readRadarPass(io, reg, new Set(), NOW, 30, new Set(['proj-a']));
+    const late = { ok: false, reason: 'late' } as const;
+    expect(r.ok && r.controls.get('proj-a')).toEqual({ lander: late, probe: late, health: late });
+  });
+
+  it('M10: an oversize file moves no byte, and no range ever exceeds 262144', async () => {
+    plantAll('proj-a');
+    const seen: string[] = [];
+    const over = spied(seen, { statMeasured: (p) => (p.endsWith('main-health') || p.endsWith('/probe') ? Promise.resolve({ ok: true as const, mtimeMs: 0, size: RADAR_PROBE_MAX_BYTES + 1 }) : localIO.statMeasured(p)) });
+    const r = await readRadarPass(over, reg, new Set(['proj-a']), NOW, 5000, new Set(['proj-a']));
+    if (!r.ok) throw new Error('pass');
+    const c = r.controls.get('proj-a')!;
+    expect(c.health).toEqual({ ok: false, reason: 'oversize', size: RADAR_PROBE_MAX_BYTES + 1 });
+    expect(c.probe).toEqual({ ok: false, reason: 'oversize', size: RADAR_PROBE_MAX_BYTES + 1 });
+    expect(seen.filter((x) => x.startsWith('range ') && !x.endsWith('lander')), 'an oversize file was read').toEqual([]);
+
+    const body = JSON.stringify(worked({ project: 'proj-b', heads: [], pairs: [], pairHeads: [] }));
+    plantAll('proj-b', body + ' '.repeat(RADAR_PROBE_MAX_BYTES - body.length));
+    const seen2: string[] = [];
+    const r2 = await readRadarPass(spied(seen2), reg, new Set(['proj-b']), NOW, 5000, new Set(['proj-b']));
+    expect(r2.ok && r2.reads.get('proj-b')?.ok).toBe(true);
+    const sizes = seen2.filter((x) => x.startsWith('range ')).map((x) => Number(x.split(' ')[1]));
+    expect(sizes.length).toBeGreaterThan(0);
+    expect(Math.max(...sizes)).toBeLessThanOrEqual(262144);
+    expect(seen2.filter((x) => x.startsWith('range ') && x.endsWith(`${path.sep}proj-b${path.sep}probe`)), 'a 524288-byte probe takes at most two ranges').toHaveLength(2);
+  });
+
+  it('M9: a symlinked marker ancestor is absent for the lander, and its target is never byte-read', async () => {
+    plantAll('proj-a');
+    const target = path.join(home, 'project-target');
+    mkdirSync(target, { recursive: true });
+    for (const n of ['probe', 'lander', 'main-health']) writeFileSync(path.join(target, n), readFileSync(path.join(dirOf('proj-a'), n)));
+    execFileSync('mv', [dirOf('proj-a'), path.join(home, 'aside')]);
+    symlinkSync(target, dirOf('proj-a'));
+    const seen: string[] = [];
+    const r = await readRadarPass(spied(seen), reg, new Set(['proj-a']), NOW, 5000, new Set(['proj-a']));
+    if (!r.ok) throw new Error('pass');
+    expect(r.controls.get('proj-a')!.lander).toEqual({ ok: false, reason: 'absent' });
+    expect(seen.filter((x) => x.startsWith('range ') && x.endsWith(`${path.sep}lander`)), 'target bytes of the marker').toEqual([]);
   });
 });
 

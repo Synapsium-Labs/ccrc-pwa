@@ -88,3 +88,12 @@ describe('localIO lists names only', () => {
     expect(localIO.readdirWithTimesMeasured).toBeUndefined();
   });
 });
+
+describe('the landing control readers (wave 5i) use only measured seams', () => {
+  it('lineageRead.ts reads no collapsing sibling, and the byte-range member states its failure contract', () => {
+    const text = readFileSync(path.join(SRC, 'coord', 'lineageRead.ts'), 'utf8');
+    expect(text).not.toMatch(/\bio\.(readFile|readFileFrom|readdir|stat)\(/);
+    expect(text).not.toMatch(/\b(?:b|l)?io\.readFileMeasured\(file, undefined, signal, /);
+    expect(docs(fleetIoBody()).get('readFileFromBytesMeasured') ?? '').toMatch(/Failure contract:/);
+  });
+});
