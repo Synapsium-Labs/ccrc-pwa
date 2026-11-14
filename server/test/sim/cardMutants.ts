@@ -100,6 +100,9 @@ function bareLines(text: string): string[] {
   return out;
 }
 const forged = (text: string): boolean => bareLines(text).some((l) => /^FORGED|[\r\u2028\u2029\u202e]/.test(l));
+/** A field that is escaped to one line (a note's, a handover's: review 2039 F9) cannot forge a line, so its fence is held by
+ *  this: none of its text stands outside every fence. */
+const exposed = (text: string): boolean => bareLines(text).some((l) => l.includes('FORGED'));
 const card = (m: Card, f: CardFacts): string => join(m.renderCard('coordinator', f));
 
 export const CARD_ONE_LINE_SET: MutantSet<Card> = {
@@ -131,8 +134,9 @@ export const CARD_ONE_LINE_SET: MutantSet<Card> = {
 export const CARD_BLOCK_SET: MutantSet<Card> = {
   modulePath: CARD_TS,
   mutants: [
-    { id: 'M1', old: "block(`waits on: ${n.waitsOn}\\nnext: ${n.next}`, SHORT_CAP_BYTES, `in \\`ccrc-api note list\\``)", new: '`waits on: ${n.waitsOn}\\nnext: ${n.next}`' },
-    { id: 'M2', old: "${block(lines.join('\\n'), CHECKPOINT_CAP_BYTES, 'on the handover row')}", new: "${lines.join('\\n')}" },
+    { id: 'M1', old: '${block(fieldLine(n.next), NOTE_FIELD_CAP_BYTES, at)}', new: '${fieldLine(n.next)}' },
+    { id: 'M7', old: '${block(fieldLine(n.waitsOn), NOTE_FIELD_CAP_BYTES, at)}', new: '${fieldLine(n.waitsOn)}' },
+    { id: 'M2', old: "${block(lines.join('\\n'), CHECKPOINT_CAP_BYTES, 'stored on the handover row, which nothing reads back in W1a')}", new: "${lines.join('\\n')}" },
     { id: 'M3', old: "block(it.text, SHORT_CAP_BYTES, `on item ${it.id}'s row`)", new: 'it.text' },
     { id: 'M4', old: "block(p.decisions.map((d) => `${iso(d.at)}: ${d.text}`).join('\\n'), SHORT_CAP_BYTES, where)", new: "p.decisions.map((d) => `${iso(d.at)}: ${d.text}`).join('\\n')" },
     { id: 'M5', old: "block(ratified.join('\\n'), SHORT_CAP_BYTES, where)", new: "ratified.join('\\n')" },
@@ -142,8 +146,18 @@ export const CARD_BLOCK_SET: MutantSet<Card> = {
     const ledger = (over: Partial<CardFacts['ledger'] extends Fact<infer T> ? T extends readonly (infer P)[] ? P : never : never>) =>
       empty({ ledger: read([{ slug: 'prog-a', goals: [], openItems: [], decisions: [], ...over }]) });
     return {
-      'a note is fenced': () => { expect(forged(card(m, empty({ notes: read([noteOf(8, AT, H)]) })))).toBe(false); },
-      'a checkpoint is fenced': () => { expect(forged(card(m, empty({ checkpoint: read(cpOf(AT, H)) })))).toBe(false); },
+      'a note is fenced': () => {
+        const t = card(m, empty({ notes: read([noteOf(8, AT, H)]) }));
+        expect([forged(t), exposed(t)]).toEqual([false, false]);
+      },
+      'a note\'s waits-on is fenced': () => {
+        const t = card(m, empty({ notes: read([{ ...noteOf(8, AT, 'n'), waitsOn: H }]) }));
+        expect([forged(t), exposed(t)]).toEqual([false, false]);
+      },
+      'a checkpoint is fenced': () => {
+        const t = card(m, empty({ checkpoint: read(cpOf(AT, H)) }));
+        expect([forged(t), exposed(t)]).toEqual([false, false]);
+      },
       'an item text is fenced': () => {
         expect(forged(card(m, empty({ itemsRaised: read([{ id: 6, programme: 'prog-a', kind: 'decide', state: 'open', neededBy: 'soon', at: AT, text: H, everTicked: false, held: false }]) })))).toBe(false);
       },

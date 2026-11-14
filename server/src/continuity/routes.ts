@@ -11,7 +11,7 @@ import type { AttributionRead } from '../coord/openRun.js';
 import type { CoordStore } from '../coord/store.js';
 import { MAIL_TOKEN_HEADER, checkMailToken, type BoxTokenHolder } from '../coord/token.js';
 import { refuseRoute } from '../refuse.js';
-import { REG_GENERATION_SHAPE } from '../../../shared/api.js';
+import { REG_GENERATION_SHAPE, shapeProgramSlug } from '../../../shared/api.js';
 import { CARD_BUDGET_TOKENS } from '../../../shared/continuity-card.js';
 import {
   isNoteKeyKind, isNoteKind, noteKeyText, type HandoverNote, type HandoverThread, type KeyFact, type NoteKey,
@@ -24,7 +24,8 @@ import { gatherCardFacts, type CardFactsDeps } from './cardFacts.js';
 import { effectiveGeneration } from './continuityStore.js';
 import { noteKeyReader } from './noteKeys.js';
 import {
-  handoverAsked, handoverVerdict, noteKeyFact, noteVerdict, revisedNoteFact, type NoteInput, type NoteVerdictRefusal, type RevisedFact,
+  NOTE_LIST_LIMIT, handoverAsked, handoverVerdict, noteKeyFact, notesPage, noteVerdict, revisedNoteFact, type NoteInput,
+  type NoteVerdictRefusal, type RevisedFact,
 } from './notes.js';
 
 export interface ContinuityRouteDeps {
@@ -69,15 +70,17 @@ const HASH_RE = /^[0-9a-f]{64}$/;
 const CARD_MEMO_MAX = 512;
 const sha256 = (text: string): string => createHash('sha256').update(text, 'utf8').digest('hex');
 
-/** A programme slug in a note's key: a bounded line with no control or separator character. */
-const KEY_SLUG_RE = /^[^\p{Cc}\p{Cf}\p{Zl}\p{Zp}]{1,128}$/u;
 const isPosInt = (v: unknown): v is number => typeof v === 'number' && Number.isSafeInteger(v) && v > 0;
 /** A note's key as the body carries it, or null when it is not one. */
 function noteKeyOf(v: unknown): NoteKey | null {
   if (typeof v !== 'object' || v === null) return null;
   const k = v as Record<string, unknown>;
   if (!isNoteKeyKind(k['kind'])) return null;
-  if (k['kind'] === 'programme') return typeof k['slug'] === 'string' && KEY_SLUG_RE.test(k['slug']) ? { kind: 'programme', slug: k['slug'] } : null;
+  if (k['kind'] === 'programme') {
+    // The one programme slug grammar (`shapeProgramSlug`), held exactly: a slug it would trim is not this slug.
+    const shaped = typeof k['slug'] === 'string' ? shapeProgramSlug(k['slug']) : null;
+    return shaped !== null && shaped.ok && shaped.slug === k['slug'] ? { kind: 'programme', slug: shaped.slug } : null;
+  }
   return isPosInt(k['id']) ? { kind: k['kind'], id: k['id'] } : null;
 }
 /** Each note refusal's detail: what the caller can do about it. */
@@ -88,7 +91,14 @@ const NOTE_DETAIL: Readonly<Record<NoteVerdictRefusal, string>> = {
   [NOTE_REFUSALS.referenceUnknown]: 'a thread names no live programme, open item or non-terminal run of yours',
   [NOTE_REFUSALS.notAsked]: 'no handover was asked: your generation is not checkpointed',
   unmeasured: 'could not check: a row it needs could not be read; try again',
+  'bad-request': 'a thread names its next act (next is not blank), and a close names the note it closes in revises',
 };
+/** A list query's positive whole number (`before`, `limit`). */
+const QUERY_NAT_RE = /^[1-9][0-9]{0,15}$/;
+/** The handover door's body limit: a handover at every field cap, in four-byte or escaped text, parses, so the decider
+ *  refuses it `note-too-long` (`HANDOVER_MAX_BYTES`) rather than the parser answering 413 (review 2039, F3). The box
+ *  token is checked before the body is read. */
+const HANDOVER_BODY_LIMIT_BYTES = 4 * 1024 * 1024;
 
 export function registerContinuityRoutes(app: FastifyInstance, deps: ContinuityRouteDeps): void {
   /**
@@ -247,7 +257,9 @@ export function registerContinuityRoutes(app: FastifyInstance, deps: ContinuityR
    * `POST /api/sessions/:id/notes { byId, byUuid, key, kind, waitsOn, next, revises?, closes? }`: append one note. A
    * revision names the note it supersedes (`revises`); a close is a revision with `closes: true` and takes the closed
    * note's key and kind (its `key`, `kind`, `waitsOn` and `next` are not read). `202 { ok, id }`. Refusals: `note-key-unknown`
-   * 403, `note-cap` 409, `note-too-long` 400, `unmeasured` 502 (a row it needs could not be read).
+   * 403, `note-cap` 409, `note-too-long` 400, `bad-request` 400 (a thread with a blank `next`, review 2039 F1), `unmeasured`
+   * 502 (a row it needs could not be read). A detail names the key only when the revised note, if any, is the caller's and
+   * live; otherwise `note <revises>` (F5). A revision may change the note's key and kind (slug revision-may-rekey).
    */
   app.post('/api/sessions/:id/notes', {
     onRequest: async (req: FastifyRequest, reply: FastifyReply) => {
@@ -276,8 +288,9 @@ export function registerContinuityRoutes(app: FastifyInstance, deps: ContinuityR
     const coord = deps.coord;
     if (coord === undefined) return refuseRoute(reply, 'unavailable');
 
-    // The revised note, as read. A close takes its key and kind; when it could not be read or there is none, `revised` is
-    // not `live` and the verdict refuses, so the stand-in key below is never written.
+    // The revised note, as read. A close takes its key and kind; when it is not a live note of the caller's, `revised` is
+    // not `live` and the verdict refuses, so that key is never written, and the refusal names the note's id, never its key
+    // (review 2039 F5: a refusal never tells what another identity's note is keyed to).
     let revised: RevisedFact = 'not-revising';
     let closed: { key: NoteKey; kind: NoteInput['kind'] } | null = null;
     if (revises !== null) {
@@ -294,7 +307,9 @@ export function registerContinuityRoutes(app: FastifyInstance, deps: ContinuityR
     const gen = liveGenerationOf(coord, id);
     if (gen === 'unmeasured') return refuseNote(reply, 'unmeasured', ' (the generations)');
     const verdict = noteVerdict(input, keyFact, live.ok ? live.notes.length : 'unmeasured', revised);
-    if (!verdict.ok) return refuseNote(reply, verdict.refusal, ` (${noteKeyText(input.key)})`);
+    // The detail names the key only when the revised note, if any, is a live note of the caller's; else the note's id.
+    const named = revises !== null && revised !== 'live' ? `note ${revises}` : noteKeyText(input.key);
+    if (!verdict.ok) return refuseNote(reply, verdict.refusal, ` (${named})`);
     const r = coord.appendNote({
       identity: id, sessionId: id, generationId: gen === 'no-generation' ? null : gen.row.id, key: input.key, kind: input.kind,
       waitsOn: input.waitsOn, next: input.next, revises, closes, at: deps.wall(),
@@ -307,9 +322,11 @@ export function registerContinuityRoutes(app: FastifyInstance, deps: ContinuityR
   });
 
   /**
-   * `GET /api/sessions/:id/notes?byId&byUuid`: the caller's live notes, newest first, each with its key's fact now (`live`,
-   * `gone`, `not-yours` or `unmeasured`: a note whose key is gone is reported as such, never dropped). The answer is masked
-   * by the one answer hook (`MASKED_GET_ROUTES` in `server.ts` lists the route). `200 { ok, notes }`.
+   * `GET /api/sessions/:id/notes?byId&byUuid[&before][&limit]`: one page of the caller's live notes, newest first, each with
+   * its key's fact now (`live`, `gone`, `not-yours` or `unmeasured`: a note whose key is gone is reported as such, never
+   * dropped). A page holds the notes older than `before` (every one when absent), at most `limit` (`NOTE_LIST_LIMIT`), and
+   * stays under the tool result cut (`notesPage`); `more` says older ones remain, read `before` the last id. The answer is
+   * masked by the one answer hook (`MASKED_GET_ROUTES` in `server.ts` lists the route). `200 { ok, notes, more }`.
    */
   app.get('/api/sessions/:id/notes', {
     onRequest: async (req: FastifyRequest, reply: FastifyReply) => {
@@ -324,16 +341,20 @@ export function registerContinuityRoutes(app: FastifyInstance, deps: ContinuityR
     if (!attributed.ok) return refuseRoute(reply, attributed.error, { detail: attributed.detail });
     const coord = deps.coord;
     if (coord === undefined) return refuseRoute(reply, 'unavailable');
+    const rawBefore = c.b['before']; const rawLimit = c.b['limit'];
+    if ((rawBefore !== undefined && (typeof rawBefore !== 'string' || !QUERY_NAT_RE.test(rawBefore)))
+      || (rawLimit !== undefined && (typeof rawLimit !== 'string' || !QUERY_NAT_RE.test(rawLimit) || Number(rawLimit) > NOTE_LIST_LIMIT.max))) {
+      return refuseRoute(reply, 'bad-request', { detail: `before is a note id, and limit a whole number from 1 to ${NOTE_LIST_LIMIT.max}` });
+    }
     const live = coord.liveNotes(c.id);
     if (!live.ok) return refuseRoute(reply, 'unmeasured', { detail: 'could not check: continuity_notes could not be read' });
     const read = noteKeyReader(coord, c.id);
-    return reply.code(200).send({
-      ok: true,
-      notes: live.notes.map((n) => ({
-        id: n.id, key: n.key, kind: n.kind, waitsOn: n.waitsOn, next: n.next, revises: n.revises, at: n.at,
-        keyFact: noteKeyFact(read(n.key), c.id),
-      })),
-    });
+    const wire = live.notes.map((n) => ({
+      id: n.id, key: n.key, kind: n.kind, waitsOn: n.waitsOn, next: n.next, revises: n.revises, at: n.at,
+    }));
+    const { page, more } = notesPage(wire, rawBefore === undefined ? null : Number(rawBefore),
+      rawLimit === undefined ? NOTE_LIST_LIMIT.default : Number(rawLimit), (n) => Buffer.byteLength(JSON.stringify(n), 'utf8'));
+    return reply.code(200).send({ ok: true, notes: page.map((n) => ({ ...n, keyFact: noteKeyFact(read(n.key), c.id) })), more });
   });
 
   /**
@@ -341,9 +362,11 @@ export function registerContinuityRoutes(app: FastifyInstance, deps: ContinuityR
    * (C37), accepted only while the caller's live generation is `checkpointed` as `effectiveGeneration` reads it (otherwise
    * `note-not-asked` 409; `unmeasured` 502 when the generations could not be read). Every thread's reference must be a live
    * row of the caller's (`reference-unknown` 400; `unmeasured` 502 when one could not be read); status words are dropped
-   * and counted. One row per generation: `202 { ok, generationId, dropped, fresh }`, `fresh: false` when one was stored.
+   * and counted. One row per generation: `202 { ok, generationId, dropped, fresh }`, `fresh: false` when one was stored, and
+   * then `dropped` is the stored row's count (review 2039, F6).
    */
   app.post('/api/sessions/:id/handover', {
+    bodyLimit: HANDOVER_BODY_LIMIT_BYTES,
     onRequest: async (req: FastifyRequest, reply: FastifyReply) => {
       const verdict = checkMailToken(deps.mailToken(), req.headers[MAIL_TOKEN_HEADER], 'POST /api/sessions/:id/handover');
       if (verdict !== 'ok') return refuseRoute(reply, 'unauthenticated', { detail: TOKEN_DETAIL[verdict] });
@@ -382,6 +405,6 @@ export function registerContinuityRoutes(app: FastifyInstance, deps: ContinuityR
     if (!verdict.ok) return refuseNote(reply, verdict.refusal);
     const r = coord.putHandover({ generationId: gen.row.id, note: verdict.cleaned, dropped: verdict.dropped, at: deps.wall() });
     if (!r.ok) return refuseRoute(reply, 'write-failed', { detail: 'continuity_handovers could not be written' });
-    return reply.code(202).send({ ok: true, generationId: gen.row.id, dropped: verdict.dropped, fresh: r.fresh });
+    return reply.code(202).send({ ok: true, generationId: gen.row.id, dropped: r.dropped, fresh: r.fresh });
   });
 }

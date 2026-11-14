@@ -8,7 +8,9 @@ import { CoordStore } from '../src/coord/store.js';
 import { MASKED_GET_ROUTES } from '../src/server.js';
 import { genExpectOf, type GenRow, type MintInput } from '../src/continuity/continuityStore.js';
 import { GEN_ACTIVE } from '../src/continuity/generationMachine.js';
-import { NOTES_CAP } from '../../shared/continuity.js';
+import { TOOL_RESULT_CUT_BYTES } from '../../shared/continuity-card.js';
+import { HANDOVER_TONE_MAX_CHARS, NOTES_CAP } from '../../shared/continuity.js';
+import { NOTE_LIST_LIMIT, STATUS_WORD_MARK } from '../src/continuity/notes.js';
 import { fakeTime, type FakeTime } from './fakeTime.js';
 import { ID_GATE_TOKEN, appFor, recorder, seedRow } from './idGateFixture.js';
 import { mkTmp, removeTmpFixtures } from './tmpHelpers.js';
@@ -88,6 +90,10 @@ describe('the note door: who may write and read', () => {
       note({ kind: 'request', id: 1 }), note({ kind: 'run', id: 0 }), note({ kind: 'run', id: '1' }), note({ kind: 'programme', slug: '' }),
       note({ kind: 'programme', slug: 'a\nb' }), note({ kind: 'run', id: 1 }, { kind: 'miss' }), note({ kind: 'run', id: 1 }, { next: 3 }),
       note({ kind: 'run', id: 1 }, { revises: -1 }), note({ kind: 'run', id: 1 }, { closes: 'yes' }), { closes: true },
+      // The one programme slug grammar (`shapeProgramSlug`, a nit of review 2039), held exactly.
+      note({ kind: 'programme', slug: 'prog a' }), note({ kind: 'programme', slug: ' prog-a' }), note({ kind: 'programme', slug: 'prog/a' }),
+      // A thread names its next act (review 2039, F1).
+      note({ kind: 'run', id: 1 }, { next: '' }), note({ kind: 'run', id: 1 }, { next: ' \n ' }),
     ];
     for (const b of bad) {
       const res = await post(app, b);
@@ -115,7 +121,11 @@ describe('POST /api/sessions/:id/notes: a note keys to a live row of the caller\
       const res = await post(app, note(key));
       expect([res.statusCode, res.json().error], JSON.stringify(key)).toEqual([403, 'note-key-unknown']);
     }
-    expect(rows().map((r) => [r.identity, r.keyKind, r.keyRef])).toEqual([[ID, 'programme', 'prog-a'], [ID, 'run', String(mine)], [ID, 'item', String(item)]]);
+    // A caution names no next act, so its `next` may be blank.
+    expect((await post(app, note({ kind: 'run', id: mine }, { kind: 'caution', next: '' }))).statusCode).toBe(202);
+    expect(rows().map((r) => [r.identity, r.keyKind, r.keyRef])).toEqual([
+      [ID, 'programme', 'prog-a'], [ID, 'run', String(mine)], [ID, 'item', String(item)], [ID, 'run', String(mine)],
+    ]);
   });
 
   it('a key that could not be read is 502 unmeasured, never note-key-unknown', async () => {
@@ -194,6 +204,11 @@ describe('POST /api/sessions/:id/notes: a note keys to a live row of the caller\
     for (const revises of [theirs.id, 999]) {
       const res = await post(app, note({ kind: 'run', id: run }, { revises }));
       expect([res.statusCode, res.json().error]).toEqual([403, 'note-key-unknown']);
+      // The detail names the note, never what another identity's note is keyed to (review 2039, F5).
+      expect(res.json().detail).toMatch(new RegExp(`\\(note ${revises}\\)$`));
+      const close = await post(app, { closes: true, revises });
+      expect([close.statusCode, close.json().error, close.json().detail.endsWith(`(note ${revises})`)]).toEqual([403, 'note-key-unknown', true]);
+      expect(close.json().detail).not.toMatch(/prog-b|run 999/);
     }
     const mine = (await post(app, note({ kind: 'run', id: run }))).json().id as number;
     expect((await post(app, { closes: true, revises: mine })).statusCode).toBe(202);
@@ -305,15 +320,33 @@ describe('POST /api/sessions/:id/handover: only when asked, every reference a li
     walkTo('checkpointed', true);
     const res = await handover(app, goodHandover(run));
     expect([res.statusCode, res.json()]).toEqual([202, { ok: true, generationId: gen.id, dropped: 2, fresh: true }]);
-    const again = await handover(app, { ...goodHandover(run), tone: 'second' });
+    // A second answers the STORED row's count, not the refused attempt's (review 2039, F6): this one would drop three.
+    const again = await handover(app, { ...goodHandover(run), tone: 'done, merged, closed' });
     expect(again.json()).toEqual({ ok: true, generationId: gen.id, dropped: 2, fresh: false });
     const row = c().db.prepare('SELECT note, dropped FROM continuity_handovers WHERE generationId = ?').get(gen.id) as { note: string; dropped: number };
     expect([JSON.parse(row.note), row.dropped]).toEqual([{
-      threads: [{ ref: { kind: 'run', id: run }, waitsOn: 'PR is and', next: 'close the run' }], cautions: ['the radar is slow'], tone: 'calm',
+      threads: [{ ref: { kind: 'run', id: run }, waitsOn: `PR is ${STATUS_WORD_MARK} and ${STATUS_WORD_MARK}`, next: 'close the run' }],
+      cautions: ['the radar is slow'], tone: 'calm',
     }, 2]);
     // The next generation reads it as the one before it.
     const next = mint();
     expect(c().handoverBefore(ID, next.id)).toMatchObject({ ok: true, handover: { generationId: gen.id, dropped: 2 } });
+  });
+
+  it('a handover at every field cap, in four-byte text, is 400 note-too-long, never 413 (review 2039, F3)', async () => {
+    app = await open();
+    const run = runOf('prog-a', ID);
+    mint();
+    walkTo('checkpointed', true);
+    const wide = (n: number) => '🙂'.repeat(n);
+    const body = {
+      threads: Array.from({ length: NOTES_CAP.count }, () => ({ ref: { kind: 'run', id: run }, waitsOn: wide(NOTES_CAP.chars), next: wide(NOTES_CAP.chars) })),
+      cautions: Array.from({ length: NOTES_CAP.count }, () => wide(NOTES_CAP.chars)), tone: wide(HANDOVER_TONE_MAX_CHARS),
+    };
+    expect(Buffer.byteLength(JSON.stringify(body))).toBeGreaterThan(1024 * 1024);
+    const res = await handover(app, body);
+    expect([res.statusCode, res.json().error]).toEqual([400, 'note-too-long']);
+    expect(c().db.prepare('SELECT count(*) AS n FROM continuity_handovers').get()).toEqual({ n: 0 });
   });
 
   it('a tone over 300 characters is 400 note-too-long; a malformed body 400 bad-request', async () => {
@@ -326,6 +359,60 @@ describe('POST /api/sessions/:id/handover: only when asked, every reference a li
     for (const b of [{ threads: 'x', cautions: [], tone: '' }, { threads: [], cautions: [1], tone: '' }, { threads: [{ ref: { kind: 'run' } }], cautions: [], tone: '' }]) {
       const res = await handover(app, b);
       expect([res.statusCode, res.json().error], JSON.stringify(b)).toEqual([400, 'bad-request']);
+    }
+  });
+});
+
+describe('GET /api/sessions/:id/notes: paged, every page under the tool result cut (review 2039, F2)', () => {
+  const fill = (run: number, n: number, text: string): number[] => Array.from({ length: n }, (_, i) => {
+    const r = c().appendNote({ identity: ID, sessionId: ID, generationId: null, key: { kind: 'run', id: run }, kind: 'thread',
+      waitsOn: text, next: `${i} ${text}`.slice(0, NOTES_CAP.chars), revises: null, closes: false, at: NOW + i });
+    if (!r.ok) throw new Error('fixture');
+    return r.id;
+  });
+
+  it('200 notes of 500 characters, ASCII and four-byte: paging with --before reads every live note once, newest first', async () => {
+    app = await open();
+    const run = runOf('prog-a', ID);
+    for (const text of ['x'.repeat(NOTES_CAP.chars), '🙂'.repeat(NOTES_CAP.chars)]) {
+      c().db.prepare('DELETE FROM continuity_notes').run();
+      const ids = fill(run, NOTES_CAP.count, text);
+      const seen: number[] = [];
+      let before: number | null = null;
+      for (let pages = 0; ; pages += 1) {
+        expect(pages).toBeLessThan(NOTES_CAP.count);
+        const q: Record<string, string> = { limit: String(NOTE_LIST_LIMIT.max), ...(before === null ? {} : { before: String(before) }) };
+        const res = await get(app, q);
+        expect(res.statusCode).toBe(200);
+        expect(Buffer.byteLength(res.body), `page ${pages}`).toBeLessThan(TOOL_RESULT_CUT_BYTES - 1000);
+        const body = res.json() as { notes: { id: number; keyFact: string }[]; more: boolean };
+        expect(body.notes.length).toBeGreaterThan(0);
+        expect(body.notes.every((n) => n.keyFact === 'live')).toBe(true);
+        seen.push(...body.notes.map((n) => n.id));
+        if (!body.more) break;
+        before = body.notes.at(-1)!.id;
+      }
+      expect(seen).toEqual([...ids].reverse());
+    }
+  });
+
+  it('the default page is NOTE_LIST_LIMIT.default; --before is exclusive; --limit 1 reads one note', async () => {
+    app = await open();
+    const run = runOf('prog-a', ID);
+    const ids = fill(run, 30, 'short');
+    const first = (await get(app)).json() as { notes: { id: number }[]; more: boolean };
+    expect([first.notes.length, first.more]).toEqual([NOTE_LIST_LIMIT.default, true]);
+    const one = (await get(app, { before: String(ids[9]! + 1), limit: '1' })).json() as { notes: { id: number }[]; more: boolean };
+    expect([one.notes.map((n) => n.id), one.more]).toEqual([[ids[9]], true]);
+    const last = (await get(app, { before: String(ids[0]) })).json() as { notes: unknown[]; more: boolean };
+    expect([last.notes, last.more]).toEqual([[], false]);
+  });
+
+  it('refuses a before or limit that is not a positive whole number in range 400', async () => {
+    app = await open();
+    for (const q of [{ limit: '0' }, { limit: String(NOTE_LIST_LIMIT.max + 1) }, { limit: 'x' }, { before: '0' }, { before: '-1' }, { before: '1.5' }] as Record<string, string>[]) {
+      const res = await get(app, q);
+      expect([res.statusCode, res.json().error], JSON.stringify(q)).toEqual([400, 'bad-request']);
     }
   });
 });

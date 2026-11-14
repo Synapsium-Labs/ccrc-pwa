@@ -5399,7 +5399,7 @@ export class CoordStore {
   appendNote(n: NoteInsert): { ok: true; id: number } | { ok: false; kind: 'superseded' | 'write-failed' } { return appendNote(this.db, n); }
   liveNotes(identity: string): NotesRead { return liveNotes(this.db, identity); }
   noteById(id: number): NoteByIdRead { return noteById(this.db, id); }
-  putHandover(h: { generationId: number; note: HandoverNote; dropped: number; at: number }): { ok: true; fresh: boolean } | { ok: false } { return putHandover(this.db, h); }
+  putHandover(h: { generationId: number; note: HandoverNote; dropped: number; at: number }): { ok: true; fresh: boolean; dropped: number } | { ok: false } { return putHandover(this.db, h); }
   handoverBefore(identity: string, liveGenerationId: number): HandoverRead { return handoverBefore(this.db, identity, liveGenerationId); }
 
   /** D-6909: the review-cap state of a batch of runs (`reviewCapStore.ts`). */

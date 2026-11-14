@@ -1,5 +1,5 @@
 // The note deciders' mutant sets (Overlord W1a, the notes plan, Task 1; the floors rule is D-8217's): `noteVerdict`,
-// `handoverVerdict` and `noteKeyFact`, each run against the cases `continuity-notes.test.ts` asserts, loaded from the
+// `handoverVerdict`, `noteKeyFact` and `notesPage` (review 2039, F2), each run against the cases `continuity-notes.test.ts` asserts, loaded from the
 // mutated copy of server/src/continuity/notes.ts. Registered in mutation-floors.test.ts's MUTANT_SETS, with a floor each in
 // mutation-floors.json.
 import path from 'node:path';
@@ -26,6 +26,9 @@ const NOTE_VERDICT_SET: MutantSet<typeof NotesModule> = {
     { id: 'N10 an unreadable fact outranks a definite one', old: "refusals.find((r) => r !== 'unmeasured') ?? refusals[0] ?? null", new: 'refusals[0] ?? null' },
     { id: 'N11 an unmeasured count accepted', old: "    if (liveCount === 'unmeasured') return { ok: false, refusal: 'unmeasured' };\n", new: '' },
     { id: 'N12 a mismatched revision fact accepted', old: "  if ((n.revises === null) !== (revised === 'not-revising')) return { ok: false, refusal: 'unmeasured' };\n", new: '' },
+    { id: 'N13 a thread with a blank next accepted', old: "  if (!n.closes && n.kind === 'thread' && n.next.trim() === '') return { ok: false, refusal: 'bad-request' };\n", new: '' },
+    { id: 'N14 a caution needs a next', old: "n.kind === 'thread' && n.next.trim() === ''", new: "n.next.trim() === ''" },
+    { id: 'N15 a close that names no note accepted', old: "  if (n.closes && n.revises === null) return { ok: false, refusal: 'bad-request' };\n", new: '' },
   ],
   suite,
 };
@@ -34,7 +37,7 @@ const HANDOVER_VERDICT_SET: MutantSet<typeof NotesModule> = {
   modulePath: NOTES_TS,
   mutants: [
     { id: 'H1 the tone cap off by one', old: 'overCap(h.tone, HANDOVER_TONE_MAX_CHARS)', new: 'overCap(h.tone, HANDOVER_TONE_MAX_CHARS + 1)' },
-    { id: 'H2 the tone unchecked', old: ' || overCap(h.tone, HANDOVER_TONE_MAX_CHARS);', new: ';' },
+    { id: 'H2 the tone unchecked', old: ' || overCap(h.tone, HANDOVER_TONE_MAX_CHARS)\n', new: '\n' },
     { id: 'H3 cautions unchecked', old: '    || h.cautions.some((c) => overCap(c, NOTES_CAP.chars))', new: '    ' },
     { id: 'H4 the thread count unchecked', old: 'h.threads.length > NOTES_CAP.count || ', new: '' },
     { id: 'H5 the caution count unchecked', old: ' || h.cautions.length > NOTES_CAP.count', new: '' },
@@ -46,7 +49,11 @@ const HANDOVER_VERDICT_SET: MutantSet<typeof NotesModule> = {
     { id: 'H11 the drop count not kept', old: 'dropped += r.dropped;', new: '' },
     { id: 'H12 status words matched case-sensitively', old: "'giu');", new: "'gu');" },
     { id: 'H13 a word inside a word dropped', old: '(?<![\\\\p{L}\\\\p{N}_-])(?:', new: '(?:' },
-    { id: 'H14 spaces left open', old: ".map((l) => l.replace(/[ \\t]{2,}/g, ' ').trim())", new: '' },
+    { id: 'H14 a dropped word leaves no mark', old: 'dropped += 1; return STATUS_WORD_MARK;', new: "dropped += 1; return '';" },
+    { id: 'H15 a word followed by a letter dropped', old: "|')})(?![\\\\p{L}\\\\p{N}_-])`", new: "|')})`" },
+    { id: 'H16 matched before the NFKC fold', old: "text.normalize('NFKC').replace(", new: 'text.replace(' },
+    { id: 'H17 format characters kept', old: ".replace(/\\p{Cf}/gu, '')", new: '' },
+    { id: 'H18 the whole note uncapped', old: '\n    || utf8Bytes(JSON.stringify(h)) > HANDOVER_MAX_BYTES;', new: ';' },
   ],
   suite,
 };
@@ -67,6 +74,21 @@ const NOTE_KEY_SET: MutantSet<typeof NotesModule> = {
     { id: 'K11 a superseded note revisable', old: "  return r.live ? 'live' : 'gone';", new: "  return 'live';" },
     { id: 'K12 an unread note is gone', old: "  if (r === 'unmeasured') return 'unmeasured';\n  if (r === 'absent')", new: "  if (r === 'unmeasured') return 'gone';\n  if (r === 'absent')" },
     { id: 'K9 handover asked outside checkpointed', old: "gen === 'checkpointed' ? 'asked' : 'not-asked'", new: "gen !== 'no-generation' ? 'asked' : 'not-asked'" },
+    { id: 'K14 an absent revised note unmeasured', old: "  if (r === 'absent') return 'gone';", new: "  if (r === 'absent') return 'unmeasured';" },
+    { id: 'K15 unread generations not asked', old: "return gen === 'unmeasured' ? 'unmeasured' :", new: "return gen === 'unmeasured' ? 'not-asked' :" },
+  ],
+  suite,
+};
+
+const NOTES_PAGE_SET: MutantSet<typeof NotesModule> = {
+  modulePath: NOTES_TS,
+  mutants: [
+    { id: 'P1 before is inclusive', old: 'before === null || n.id < before', new: 'before === null || n.id <= before' },
+    { id: 'P2 the limit ignored', old: 'if (page.length >= limit || (', new: 'if ((' },
+    { id: 'P3 the page bytes ignored', old: ' || (page.length > 0 && bytes + b > NOTE_LIST_PAGE_BYTES)) break;', new: ') break;' },
+    { id: 'P4 a lone note over the page dropped', old: '(page.length > 0 && bytes + b > NOTE_LIST_PAGE_BYTES)', new: '(bytes + b > NOTE_LIST_PAGE_BYTES)' },
+    { id: 'P5 more never said', old: 'more: page.length < older.length', new: 'more: false' },
+    { id: 'P6 the page as large as the cut', old: 'TOOL_RESULT_CUT_BYTES - 4_000', new: 'TOOL_RESULT_CUT_BYTES' },
   ],
   suite,
 };
@@ -76,4 +98,5 @@ export const NOTES_MUTANT_SETS: Record<string, MutantSet<never>> = {
   'server/src/continuity/notes.ts#noteVerdict': NOTE_VERDICT_SET as MutantSet<never>,
   'server/src/continuity/notes.ts#handoverVerdict': HANDOVER_VERDICT_SET as MutantSet<never>,
   'server/src/continuity/notes.ts#noteKeyFact': NOTE_KEY_SET as MutantSet<never>,
+  'server/src/continuity/notes.ts#notesPage': NOTES_PAGE_SET as MutantSet<never>,
 };

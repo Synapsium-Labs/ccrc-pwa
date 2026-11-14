@@ -144,6 +144,10 @@ export function isKeyFact(v: unknown): v is KeyFact {
 }
 /** C37: the handover note's tone line, at most this many characters. */
 export const HANDOVER_TONE_MAX_CHARS = 300;
+/** The handover note's whole size as it is stored (its JSON, in UTF-8 bytes), at most: one over it is refused `note-too-long`
+ *  at write, so the row the renewal act reads later stays inside one tool result (review 2039, F3; slug handover-body-cap).
+ *  The field caps alone allowed a note of megabytes. */
+export const HANDOVER_MAX_BYTES = 16_384;
 /** One thread of a handover note: a reference that must exist, what it waits on and what comes next. */
 export interface HandoverThread { readonly ref: NoteKey; readonly waitsOn: string; readonly next: string }
 /** C37: the handover note the ending generation writes in `checkpointed`. Its claims of done, its ids, its promises, its

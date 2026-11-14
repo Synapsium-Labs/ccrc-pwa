@@ -606,13 +606,17 @@ export function noteById(db: DatabaseSync, id: number): NoteByIdRead {
 export interface HandoverRow { readonly generationId: number; readonly n: number; readonly note: HandoverNote; readonly dropped: number; readonly at: number }
 export type HandoverRead = { ok: true; handover: HandoverRow | null } | { ok: false; detail: string };
 
-/** The note door's handover writer: one row per generation. A second answers `fresh: false` and the first stands. */
+/** The note door's handover writer: one row per generation. A second answers `fresh: false` and the first stands, and
+ *  `dropped` is always the STORED row's count, never the refused attempt's (review 2039, F6). */
 export function putHandover(db: DatabaseSync, h: { generationId: number; note: HandoverNote; dropped: number; at: number }):
-  { ok: true; fresh: boolean } | { ok: false } {
+  { ok: true; fresh: boolean; dropped: number } | { ok: false } {
   try {
     const res = stmt(db, 'INSERT INTO continuity_handovers (generationId, note, dropped, at) VALUES (?, ?, ?, ?) ON CONFLICT (generationId) DO NOTHING')
       .run(h.generationId, JSON.stringify(h.note), h.dropped, h.at);
-    return { ok: true, fresh: Number(res.changes) === 1 };
+    if (Number(res.changes) === 1) return { ok: true, fresh: true, dropped: h.dropped };
+    const held = stmt(db, 'SELECT dropped FROM continuity_handovers WHERE generationId = ?').get(h.generationId) as { dropped?: unknown } | undefined;
+    const dropped = intOrNull(held?.dropped);
+    return dropped === null ? { ok: false } : { ok: true, fresh: false, dropped };
   } catch {
     return { ok: false };
   }

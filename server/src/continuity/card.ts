@@ -25,7 +25,7 @@
 import {
   BYTES_PER_TOKEN, CARD_MAIL_MAX, CARD_PAGE_CHARS, type CardFacts, type CardItem, type CardMail, type CardRenderer, type CardRun, type CardSection, type Fact,
 } from '../../../shared/continuity-card.js';
-import type { KeyFact } from '../../../shared/continuity.js';
+import { NOTES_CAP, type KeyFact } from '../../../shared/continuity.js';
 import { FLEET_ROLES, type FleetRole } from '../../../shared/fleetRoles.js';
 import { utf8Bytes } from '../../../shared/utf8.js';
 import { CARD_TEXT_PREFACE, untrustedBlock } from '../coord/untrusted.js';
@@ -40,9 +40,12 @@ export const CARD_AUTHORITY_LINE =
 /** The Overlord's card until W1 ships it, so the renderer table is total and nothing renders an Overlord card early. */
 export const CARD_OVERLORD_LINE = "The Overlord's card ships with W1 (`overlord-v1`).";
 
-/** A short text's cap on the card (a subject, an item, a goal, a note); a checkpoint takes the larger. */
+/** A short text's cap on the card (a subject, an item, a goal); a checkpoint takes the larger. */
 const SHORT_CAP_BYTES = 1024;
 const CHECKPOINT_CAP_BYTES = 4096;
+/** A note field's cap on the card, sized to the field's own cap (`NOTES_CAP.chars`) at the longest a character can render
+ *  (`fieldLine`'s widest escape, longer than any four-byte character), so no field at its cap is ever cut (review 2039, F2). */
+const NOTE_FIELD_CAP_BYTES = NOTES_CAP.chars * '\\u{10ffff}'.length;
 /** Dropped sections named by key on the left-out line, at most. */
 const LEFT_OUT_KEYS_SHOWN = 20;
 
@@ -58,6 +61,10 @@ export function oneLine(v: string, max: number = ONE_LINE_MAX_CHARS): string {
   const chars = [...escaped];
   return chars.length > max ? `${chars.slice(0, max).join('')}…` : escaped;
 }
+
+/** A note's or a handover's field inside its block, on one line: what `oneLine` escapes is escaped, so a newline in one
+ *  field never poses as the next field's line (review 2039, F9); nothing is cut, the block's cap does that. */
+const fieldLine = (v: string): string => oneLine(v, Infinity);
 
 /** The line naming a fact that could not be read. */
 export const couldNotRead = (what: string): string => `Could not read ${oneLine(what)}.`;
@@ -171,32 +178,39 @@ const KEY_NOW: Readonly<Record<KeyFact, string>> = {
 };
 
 /** The notes, newest first (C38's live state, ranked by recency): trimming drops the oldest first, and the left-out line
- *  counts them. Each note's own words ride one untrusted block; its id, kind, key and time are row fields. */
+ *  counts them. Each of a note's own fields rides an untrusted block of its own, `next` first (what the continuation probe
+ *  asks for), escaped to one line and capped to the field's cap, so neither field ever crowds out the other (review 2039,
+ *  F2); its id, kind, key and time are row fields. A block's pointer is the exact command that reads that note whole. */
 function notesSections(f: CardFacts): readonly CardSection[] {
   return factSections('notes', f.notes, (notes) => {
     const sorted = [...notes].sort((a, b) => b.at - a.at || b.id - a.id);
-    return sorted.map((n, i) => ({
-      key: `note:${n.id}`, rank: banded(RANK.note, sorted.length - 1 - i, sorted.length), keep: false,
-      text: `Note ${n.id} (${oneLine(n.kind)}, on ${oneLine(n.key)}${KEY_NOW[n.keyFact]}), written ${iso(n.at)}:\n`
-        + block(`waits on: ${n.waitsOn}\nnext: ${n.next}`, SHORT_CAP_BYTES, `in \`ccrc-api note list\``),
-    }));
+    return sorted.map((n, i) => {
+      const at = `in \`ccrc-api note list ${oneLine(f.sessionId)} --before ${n.id + 1} --limit 1\``;
+      return {
+        key: `note:${n.id}`, rank: banded(RANK.note, sorted.length - 1 - i, sorted.length), keep: false,
+        text: `Note ${n.id} (${oneLine(n.kind)}, on ${oneLine(n.key)}${KEY_NOW[n.keyFact]}), written ${iso(n.at)}. Next:\n`
+          + `${block(fieldLine(n.next), NOTE_FIELD_CAP_BYTES, at)}\nWaits on:\n${block(fieldLine(n.waitsOn), NOTE_FIELD_CAP_BYTES, at)}`,
+      };
+    });
   });
 }
 
-/** The checkpoint: in W1a, the handover note the generation this one replaced wrote, as one untrusted block. */
+/** The checkpoint: in W1a, the handover note the generation this one replaced wrote, as one untrusted block of one line a
+ *  field (each escaped to one line, review 2039 F9): the tone, then the cautions, then the threads, so the short parts
+ *  survive a cut (F3). Nothing reads the handover row back in W1a, and the pointer says so. */
 function checkpointSections(f: CardFacts): readonly CardSection[] {
   return factSections('checkpoint', f.checkpoint, (cp) => {
     if (cp === null) return [];
     const h = cp.handover;
     const lines = [
-      ...h.threads.map((t) => `thread on ${t.ref}: waits on: ${t.waitsOn}; next: ${t.next}`),
-      ...h.cautions.map((c) => `caution: ${c}`),
-      `tone: ${h.tone}`,
+      `tone: ${fieldLine(h.tone)}`,
+      ...h.cautions.map((c) => `caution: ${fieldLine(c)}`),
+      ...h.threads.map((t) => `thread on ${fieldLine(t.ref)}: waits on: ${fieldLine(t.waitsOn)}; next: ${fieldLine(t.next)}`),
     ];
     return [{
       key: 'checkpoint', rank: RANK.checkpoint, keep: false,
       text: `Checkpoint from ${iso(cp.at)}: the handover note of generation ${h.generation}, ${h.dropped} status word(s) dropped `
-        + `(its claims of done, ids, promises, authority and preferences are not rows):\n${block(lines.join('\n'), CHECKPOINT_CAP_BYTES, 'on the handover row')}`,
+        + `(its claims of done, ids, promises, authority and preferences are not rows):\n${block(lines.join('\n'), CHECKPOINT_CAP_BYTES, 'stored on the handover row, which nothing reads back in W1a')}`,
     }];
   });
 }

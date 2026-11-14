@@ -275,7 +275,7 @@ declare -A ROUTES=(
   # `calls.record` rule: a body that names either is refused, unsent).
   [note.add]='POST|/api/sessions/{id}/notes|yes|-'
   [note.close]='POST|/api/sessions/{id}/notes|yes|-'
-  [note.list]='GET|/api/sessions/{id}/notes|yes|-'
+  [note.list]='GET|/api/sessions/{id}/notes|yes|before,limit'
   [note.handover]='POST|/api/sessions/{id}/handover|yes|-'
   # The plan verbs (Linear hierarchy design, D-8181): `{id}` is the programme's slug. Every one but `plan.show` carries the pane's
   # identity in the QUERY (the `linear.*` block's rule, never the body); `plan.show` is a session-or-token read and sends none. All
@@ -498,6 +498,20 @@ splice_body_field() {   # field, value, not-an-object detail
   restnb="${rest//[[:space:]]/}"
   if [[ "$restnb" == '}' ]]; then body="{\"$1\":\"$2\"}"
   else body="{\"$1\":\"$2\",$rest"; fi
+}
+
+append_body_field() {   # field, value, not-an-object detail: the field goes LAST, so a parser that keeps the later of two
+  # duplicate keys keeps this one (review 2039, F7). Same safety as splice_body_field: SAFE_RE admits no quote in the value.
+  local lead rest trail inner
+  lead="${body%%[![:space:]]*}"
+  rest="${body#"$lead"}"
+  trail="${rest##*[![:space:]]}"
+  rest="${rest%"$trail"}"
+  [[ "$rest" == '{'* && "$rest" == *'}' ]] || refuse 'bad-body' "$3"
+  inner="${rest#\{}"
+  inner="${inner%\}}"
+  if [[ -z "${inner//[[:space:]]/}" ]]; then body="{\"$1\":\"$2\"}"
+  else body="{$inner,\"$1\":\"$2\"}"; fi
 }
 
 cmd_whoami() {
@@ -985,7 +999,9 @@ main() {
   # body that names `byId` or `byUuid` is REFUSED, unsent, and both are spliced from `derive_identity`; a bodyless POST, a
   # body that is not a JSON object and a pane with no identity are refused and nothing is sent. `note list` carries the pair
   # in the query. `note close` and `note add` are one route: the body says which (`"closes":true`), and the server refuses a
-  # body that is neither a whole note nor a close.
+  # body that is neither a whole note nor a close. The pair goes LAST (review 2039, F7): the server's JSON parse keeps the later
+  # of two duplicate keys, so a spelling of `byId` the textual test misses can never outrank the pane's. `note list` pages with
+  # `--before <id>` and `--limit <n>`, so every page stays under the tool result cut.
   if [[ "$key" == 'note.add' || "$key" == 'note.close' || "$key" == 'note.handover' ]]; then
     [[ -n "$body" ]] || refuse 'no-body' "${key/./ } needs a body on --json"
     local notebody="${body//[[:space:]]/}"
@@ -994,8 +1010,8 @@ main() {
         refuse 'bad-body' 'the body names byId or byUuid; a note is attributed to this pane, and the client fills both' ;;
     esac
     derive_identity
-    splice_body_field 'byUuid' "$DERIVED_UUID" 'the note body is not a JSON object; byUuid cannot be added'
-    splice_body_field 'byId' "$DERIVED_ID" 'the note body is not a JSON object; byId cannot be added'
+    append_body_field 'byId' "$DERIVED_ID" 'the note body is not a JSON object; byId cannot be added'
+    append_body_field 'byUuid' "$DERIVED_UUID" 'the note body is not a JSON object; byUuid cannot be added'
   fi
   if [[ "$key" == 'note.list' ]]; then
     derive_identity

@@ -33,5 +33,6 @@
   "server/src/continuity/generationStart.ts#judgedForDue": 1,
   "server/src/continuity/notes.ts#noteVerdict": 1,
   "server/src/continuity/notes.ts#handoverVerdict": 1,
-  "server/src/continuity/notes.ts#noteKeyFact": 1
+  "server/src/continuity/notes.ts#noteKeyFact": 1,
+  "server/src/continuity/notes.ts#notesPage": 1
 }

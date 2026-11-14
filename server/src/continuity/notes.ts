@@ -12,11 +12,13 @@
  * status words ("done", "merged", ...) are dropped and counted, because a claim of done is a row or nothing (C37).
  */
 import { TERMINAL_RUN_STATES, type RunState } from '../../../shared/api.js';
+import { TOOL_RESULT_CUT_BYTES } from '../../../shared/continuity-card.js';
 import {
-  HANDOVER_TONE_MAX_CHARS, NOTES_CAP, type GenerationState, type HandoverNote, type KeyFact, type NoteKey, type NoteKind,
+  HANDOVER_MAX_BYTES, HANDOVER_TONE_MAX_CHARS, NOTES_CAP, type GenerationState, type HandoverNote, type KeyFact, type NoteKey, type NoteKind,
 } from '../../../shared/continuity.js';
 import { OPEN_ITEM_STATES, type ItemState } from '../../../shared/ledgers.js';
 import { NOTE_REFUSALS, type NoteRefusal } from '../../../shared/refusal.js';
+import { utf8Bytes } from '../../../shared/utf8.js';
 
 /** What a session asks to write. `revises` names the note it supersedes; `closes` ends that note with no successor. */
 export interface NoteInput {
@@ -31,8 +33,9 @@ export interface NoteInput {
 /** The revised note's fact: one of `KeyFact` (`live` is a live note of the caller's), or `not-revising` for a new note. */
 export type RevisedFact = KeyFact | 'not-revising';
 
-/** A refusal: the note door's own words, or `unmeasured` for a fact it could not read. */
-export type NoteVerdictRefusal = NoteRefusal | 'unmeasured';
+/** A refusal: the note door's own words, `unmeasured` for a fact it could not read, or `bad-request` for a note that is not
+ *  one (a thread with no next act, a close that names no note). */
+export type NoteVerdictRefusal = NoteRefusal | 'unmeasured' | 'bad-request';
 export type NoteVerdict = { readonly ok: true } | { readonly ok: false; readonly refusal: NoteVerdictRefusal };
 
 const chars = (s: string): number => [...s].length;
@@ -51,13 +54,17 @@ function worst(facts: readonly KeyFact[]): NoteVerdictRefusal | null {
 }
 
 /**
- * May this note be appended? In order: a field over `NOTES_CAP.chars` (`note-too-long`); the key and the revised note (a
+ * May this note be appended? In order: a thread whose `next` is blank, or a close that names no note (`bad-request`: a
+ * thread is a thing to do next, and the continuation probe asks for it, review 2039 F1); a field over `NOTES_CAP.chars`
+ * (`note-too-long`); the key and the revised note (a
  * key that is not a live row of the caller's, or a revised note that is not a live note of the caller's, is
  * `note-key-unknown`; one that could not be read is `unmeasured`); and, for a new note only, the cap of live notes
  * (`note-cap`): a revision supersedes one live note, so it never raises the count. A close needs no live key: it ends a
  * note whose row may be gone (slug close-needs-no-live-key), so a dead key never pins a note against the cap.
  */
 export function noteVerdict(n: NoteInput, key: KeyFact, liveCount: number | 'unmeasured', revised: RevisedFact): NoteVerdict {
+  if (n.closes && n.revises === null) return { ok: false, refusal: 'bad-request' };
+  if (!n.closes && n.kind === 'thread' && n.next.trim() === '') return { ok: false, refusal: 'bad-request' };
   if (overCap(n.waitsOn, NOTES_CAP.chars) || overCap(n.next, NOTES_CAP.chars)) return { ok: false, refusal: NOTE_REFUSALS.tooLong };
   // A revision with no fact for the note it revises, or a new note with one, is a caller that measured the wrong thing.
   if ((n.revises === null) !== (revised === 'not-revising')) return { ok: false, refusal: 'unmeasured' };
@@ -73,18 +80,24 @@ export function noteVerdict(n: NoteInput, key: KeyFact, liveCount: number | 'unm
   return { ok: true };
 }
 
-/** The words a handover note may not use to claim a state (C37: "drops status words"). Whole words, any case. */
+/** The words a handover note may not use to claim a state (C37: "drops status words"). Whole words, any case, matched on
+ *  the text NFKC-folded with its format characters (`\p{Cf}`: zero-width and soft hyphen among them) stripped. */
 export const HANDOVER_STATUS_WORDS = [
   'done', 'merged', 'fixed', 'approved', 'complete', 'completed', 'finished', 'landed', 'shipped', 'resolved', 'passed',
   'green', 'closed', 'released', 'accepted', 'verified',
 ] as const;
 const STATUS_RE = new RegExp(`(?<![\\p{L}\\p{N}_-])(?:${HANDOVER_STATUS_WORDS.join('|')})(?![\\p{L}\\p{N}_-])`, 'giu');
 
-/** `text` with every status word dropped, its spaces closed up, and how many it dropped. */
+/** What a dropped status word leaves in its place, so the reader sees that a word was there (`not done` must not read
+ *  `not`, review 2039 F8). It holds no status word itself. */
+export const STATUS_WORD_MARK = '[status word dropped]';
+
+/** `text` NFKC-folded with its format characters stripped, each status word in it replaced by `STATUS_WORD_MARK`, and how
+ *  many it replaced. Nothing else changes: no spacing is closed up. */
 export function dropStatusWords(text: string): { readonly text: string; readonly dropped: number } {
   let dropped = 0;
-  const out = text.replace(STATUS_RE, () => { dropped += 1; return ''; });
-  return { text: dropped === 0 ? text : out.split('\n').map((l) => l.replace(/[ \t]{2,}/g, ' ').trim()).join('\n'), dropped };
+  const out = text.normalize('NFKC').replace(/\p{Cf}/gu, '').replace(STATUS_RE, () => { dropped += 1; return STATUS_WORD_MARK; });
+  return { text: out, dropped };
 }
 
 export type HandoverVerdict =
@@ -93,14 +106,16 @@ export type HandoverVerdict =
 
 /**
  * May this handover note be stored, and as what? In order: a thread's field or a caution over `NOTES_CAP.chars`, the tone
- * over `HANDOVER_TONE_MAX_CHARS`, or more threads or cautions than `NOTES_CAP.count` (`note-too-long`); then each thread's
+ * over `HANDOVER_TONE_MAX_CHARS`, more threads or cautions than `NOTES_CAP.count`, or the whole note's JSON over
+ * `HANDOVER_MAX_BYTES` (`note-too-long`); then each thread's
  * reference, `refs[i]` for `threads[i]` (one that is not a live row of the caller's is `reference-unknown`, one that could
  * not be read `unmeasured`, never `reference-unknown`); then the status words, dropped from every free text and counted.
  */
 export function handoverVerdict(h: HandoverNote, refs: readonly KeyFact[]): HandoverVerdict {
   const long = h.threads.length > NOTES_CAP.count || h.cautions.length > NOTES_CAP.count
     || h.threads.some((t) => overCap(t.waitsOn, NOTES_CAP.chars) || overCap(t.next, NOTES_CAP.chars))
-    || h.cautions.some((c) => overCap(c, NOTES_CAP.chars)) || overCap(h.tone, HANDOVER_TONE_MAX_CHARS);
+    || h.cautions.some((c) => overCap(c, NOTES_CAP.chars)) || overCap(h.tone, HANDOVER_TONE_MAX_CHARS)
+    || utf8Bytes(JSON.stringify(h)) > HANDOVER_MAX_BYTES;
   if (long) return { ok: false, refusal: NOTE_REFUSALS.tooLong };
   if (refs.length !== h.threads.length) return { ok: false, refusal: 'unmeasured' };
   const refused = worst(refs);
@@ -113,6 +128,32 @@ export function handoverVerdict(h: HandoverNote, refs: readonly KeyFact[]): Hand
     tone: clean(h.tone),
   };
   return { ok: true, cleaned, dropped };
+}
+
+/** `ccrc-api note list`'s page: at most this many notes when the caller names no `--limit`, and never more than the cap. */
+export const NOTE_LIST_LIMIT = { default: 20, max: NOTES_CAP.count } as const;
+/** A page's notes, as JSON, stay within this many bytes, so the whole answer stays under the tool result cut with room for
+ *  its envelope and the masker's marks (review 2039, F2). */
+export const NOTE_LIST_PAGE_BYTES = TOOL_RESULT_CUT_BYTES - 4_000;
+
+/**
+ * One page of the live notes, newest first: those older than `before` (every one when it is null), at most `limit`, and
+ * within `NOTE_LIST_PAGE_BYTES` as `bytesOf` sizes them, but always the first when there is one (a note at its caps is far
+ * under the page). `more` says older live notes remain: the next page is `before` the last one here.
+ */
+export function notesPage<T extends { readonly id: number }>(
+  newestFirst: readonly T[], before: number | null, limit: number, bytesOf: (n: T) => number,
+): { readonly page: readonly T[]; readonly more: boolean } {
+  const older = newestFirst.filter((n) => before === null || n.id < before);
+  const page: T[] = [];
+  let bytes = 0;
+  for (const n of older) {
+    const b = bytesOf(n);
+    if (page.length >= limit || (page.length > 0 && bytes + b > NOTE_LIST_PAGE_BYTES)) break;
+    page.push(n);
+    bytes += b;
+  }
+  return { page, more: page.length < older.length };
 }
 
 /** What the door read of one key, before any decision: a row's fields, `absent`, or `unmeasured`. */

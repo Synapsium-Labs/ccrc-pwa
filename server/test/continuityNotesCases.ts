@@ -1,9 +1,11 @@
 // The note deciders' cases (Overlord W1a, the notes plan, Task 1), over a loaded module: `continuity-notes.test.ts` runs them
 // on the source, and `sim/notesMutants.ts` on each mutated copy, so the floors and the suite assert the same things.
 import { expect } from 'vitest';
-import { HANDOVER_TONE_MAX_CHARS, KEY_FACTS, NOTES_CAP, type GenerationState, type HandoverNote, type KeyFact } from '../../shared/continuity.js';
+import { TOOL_RESULT_CUT_BYTES } from '../../shared/continuity-card.js';
+import { HANDOVER_MAX_BYTES, HANDOVER_TONE_MAX_CHARS, KEY_FACTS, NOTES_CAP, type GenerationState, type HandoverNote, type KeyFact } from '../../shared/continuity.js';
 import { GENERATION_STATES } from '../../shared/continuity.js';
 import { NOTE_REFUSALS } from '../../shared/refusal.js';
+import { utf8Bytes } from '../../shared/utf8.js';
 import type * as NotesModule from '../src/continuity/notes.js';
 
 type Notes = typeof NotesModule;
@@ -22,6 +24,8 @@ const ORDER: readonly KeyFact[] = ['live', 'unmeasured', 'not-yours', 'gone'];
 
 /** The verdict, written out independently of the decider: the expectation the exhaustive case checks. */
 function expected(n: NotesModule.NoteInput, key: KeyFact, count: number | 'unmeasured', revised: NotesModule.RevisedFact): string {
+  if (n.closes && n.revises === null) return 'bad-request';
+  if (!n.closes && n.kind === 'thread' && n.next.trim() === '') return 'bad-request';
   if ([...n.waitsOn].length > NOTES_CAP.chars || [...n.next].length > NOTES_CAP.chars) return NOTE_REFUSALS.tooLong;
   if ((n.revises === null) !== (revised === 'not-revising')) return 'unmeasured';
   const facts = [...(revised === 'not-revising' ? [] : [revised]), ...(n.closes ? [] : [key])];
@@ -44,14 +48,15 @@ export function notesCases(m: Notes): Record<string, Case> {
       const texts = [s(NOTES_CAP.chars - 1), s(NOTES_CAP.chars), s(NOTES_CAP.chars + 1), '🙂'.repeat(NOTES_CAP.chars)];
       const counts: (number | 'unmeasured')[] = [0, CAP - 1, CAP, CAP + 1, 'unmeasured'];
       let n = 0;
+      const pairs = [[texts[0]!, texts[1]!], [texts[2]!, 'x'], ['x', texts[2]!], [texts[3]!, texts[3]!], ['x', ' \t ']] as const;
       for (const key of KEY_FACTS) for (const revised of REVISED) for (const count of counts) for (const closes of [false, true])
-        for (const revises of [null, 7]) for (const [waitsOn, next] of [[texts[0]!, texts[1]!], [texts[2]!, 'x'], ['x', texts[2]!], [texts[3]!, texts[3]!]]) {
-          const input = note({ waitsOn: waitsOn!, next: next!, revises, closes });
-          expect(word(m.noteVerdict(input, key, count, revised)), JSON.stringify({ key, revised, count, closes, revises, w: waitsOn!.length, x: next!.length }))
+        for (const revises of [null, 7]) for (const kind of ['thread', 'caution'] as const) for (const [waitsOn, next] of pairs) {
+          const input = note({ kind, waitsOn, next, revises, closes });
+          expect(word(m.noteVerdict(input, key, count, revised)), JSON.stringify({ key, revised, count, closes, revises, kind, w: waitsOn.length, x: next.length }))
             .toBe(expected(input, key, count, revised));
           n += 1;
         }
-      expect(n).toBe(4 * 5 * 5 * 2 * 2 * 4);
+      expect(n).toBe(4 * 5 * 5 * 2 * 2 * 2 * 5);
     },
     'noteVerdict: the plan\'s named cases': () => {
       expect(m.noteVerdict(note(), 'live', CAP - 1, 'not-revising')).toEqual({ ok: true });
@@ -64,6 +69,12 @@ export function notesCases(m: Notes): Record<string, Case> {
       expect(m.noteVerdict(note({ revises: 3, closes: true }), 'gone', CAP, 'live')).toEqual({ ok: true });
       expect(m.noteVerdict(note({ revises: 3, closes: true }), 'live', 0, 'unmeasured')).toEqual({ ok: false, refusal: 'unmeasured' });
       expect(m.noteVerdict(note({ next: s(NOTES_CAP.chars + 1) }), 'unmeasured', CAP, 'not-revising')).toEqual({ ok: false, refusal: 'note-too-long' });
+      // A thread names its next act; a caution need not; a close names the note it closes (review 2039, F1 and a nit).
+      expect(m.noteVerdict(note({ next: '' }), 'live', 0, 'not-revising')).toEqual({ ok: false, refusal: 'bad-request' });
+      expect(m.noteVerdict(note({ next: '  \n ' }), 'live', 0, 'not-revising')).toEqual({ ok: false, refusal: 'bad-request' });
+      expect(m.noteVerdict(note({ kind: 'caution', next: '' }), 'live', 0, 'not-revising')).toEqual({ ok: true });
+      expect(m.noteVerdict(note({ next: '', revises: 3, closes: true }), 'live', 0, 'live')).toEqual({ ok: true });
+      expect(m.noteVerdict(note({ closes: true }), 'live', 0, 'not-revising')).toEqual({ ok: false, refusal: 'bad-request' });
       // A definite refusal outranks an unreadable fact, whichever of the two it is.
       expect(m.noteVerdict(note({ revises: 3 }), 'unmeasured', 0, 'gone')).toEqual({ ok: false, refusal: 'note-key-unknown' });
       expect(m.noteVerdict(note({ revises: 3 }), 'not-yours', 0, 'unmeasured')).toEqual({ ok: false, refusal: 'note-key-unknown' });
@@ -112,6 +123,21 @@ export function notesCases(m: Notes): Record<string, Case> {
         expect(m.handoverVerdict(handover({ threads: Array.from({ length: n }, () => t) }), Array.from({ length: n }, () => 'live' as const)).ok).toBe(ok);
         expect(m.handoverVerdict(handover({ cautions: Array.from({ length: n }, () => 'c') }), ['live']).ok).toBe(ok);
       }
+      // The whole note's JSON is capped too (review 2039, F3): at `HANDOVER_MAX_BYTES` it is stored, one byte over it is not.
+      const sized = (bytes: number): HandoverNote => {
+        for (let full = Math.floor(bytes / (NOTES_CAP.chars + 3)); full >= 0; full -= 1) {
+          const base = handover({ cautions: [...Array.from({ length: full }, () => s(NOTES_CAP.chars)), ''] });
+          const rest = bytes - utf8Bytes(JSON.stringify(base));
+          if (rest >= 0 && rest <= NOTES_CAP.chars) return handover({ cautions: [...base.cautions.slice(0, -1), s(rest)] });
+        }
+        throw new Error(`no handover of ${bytes} bytes`);
+      };
+      expect(utf8Bytes(JSON.stringify(sized(HANDOVER_MAX_BYTES)))).toBe(HANDOVER_MAX_BYTES);
+      expect(m.handoverVerdict(sized(HANDOVER_MAX_BYTES), ['live']).ok).toBe(true);
+      expect(m.handoverVerdict(sized(HANDOVER_MAX_BYTES + 1), ['live'])).toEqual({ ok: false, refusal: 'note-too-long' });
+      // In bytes, not characters: four-byte text reaches the cap at a quarter of the characters.
+      const wide = handover({ cautions: Array.from({ length: 9 }, () => '🙂'.repeat(NOTES_CAP.chars)) });
+      expect(m.handoverVerdict(wide, ['live'])).toEqual({ ok: false, refusal: 'note-too-long' });
       // A field over its cap is refused before its reference is read.
       expect(m.handoverVerdict(tone(HANDOVER_TONE_MAX_CHARS + 1), ['gone'])).toEqual({ ok: false, refusal: 'note-too-long' });
     },
@@ -120,15 +146,37 @@ export function notesCases(m: Notes): Record<string, Case> {
         threads: [{ ref: { kind: 'run', id: 11 }, waitsOn: 'PR is merged and approved', next: 'Done: ship it' }],
         cautions: ['the fix is FIXED, not green-ish', 'landed\nnot verified yet'], tone: 'calm, all resolved',
       }), ['live']);
+      const X = m.STATUS_WORD_MARK;
       expect(r).toEqual({
         ok: true, dropped: 7, cleaned: {
-          threads: [{ ref: { kind: 'run', id: 11 }, waitsOn: 'PR is and', next: ': ship it' }],
-          cautions: ['the fix is , not green-ish', '\nnot yet'], tone: 'calm, all',
+          threads: [{ ref: { kind: 'run', id: 11 }, waitsOn: `PR is ${X} and ${X}`, next: `${X}: ship it` }],
+          cautions: [`the fix is ${X}, not green-ish`, `${X}\nnot ${X} yet`], tone: `calm, all ${X}`,
         },
       });
       expect(m.dropStatusWords('undone, mergedness, re-merged, done_x')).toEqual({ text: 'undone, mergedness, re-merged, done_x', dropped: 0 });
       expect(m.dropStatusWords('  keep   my   spacing ')).toEqual({ text: '  keep   my   spacing ', dropped: 0 });
-      for (const w of m.HANDOVER_STATUS_WORDS) expect(m.dropStatusWords(`a ${w} b`), w).toEqual({ text: 'a b', dropped: 1 });
+      for (const w of m.HANDOVER_STATUS_WORDS) expect(m.dropStatusWords(`a ${w} b`), w).toEqual({ text: `a ${X} b`, dropped: 1 });
+      // The mark keeps the sense visible and spacing is never closed up, on the line or any other (review 2039, F8).
+      expect(m.dropStatusWords('it is not  merged;\n  do not   merge')).toEqual({ text: `it is not  ${X};\n  do not   merge`, dropped: 1 });
+      // Matched on the NFKC fold with format characters stripped: fullwidth letters, a soft hyphen, a zero-width space.
+      expect(m.dropStatusWords('ｄｏｎｅ, me\u00adrged, ap\u200bproved')).toEqual({ text: `${X}, ${X}, ${X}`, dropped: 3 });
+      expect(m.STATUS_WORD_MARK.match(new RegExp(`\\b(?:${m.HANDOVER_STATUS_WORDS.join('|')})\\b`, 'i'))).toBeNull();
+    },
+    'notesPage: older than before, at most limit, under the page bytes, always the first, and more': () => {
+      const ns = [9, 7, 5, 4, 2].map((id) => ({ id }));
+      const ids = (r: { page: readonly { id: number }[]; more: boolean }) => [r.page.map((n) => n.id), r.more];
+      expect(ids(m.notesPage(ns, null, 20, () => 1))).toEqual([[9, 7, 5, 4, 2], false]);
+      expect(ids(m.notesPage(ns, null, 2, () => 1))).toEqual([[9, 7], true]);
+      expect(ids(m.notesPage(ns, 7, 2, () => 1))).toEqual([[5, 4], true]);
+      expect(ids(m.notesPage(ns, 5, 20, () => 1))).toEqual([[4, 2], false]);
+      expect(ids(m.notesPage(ns, 2, 20, () => 1))).toEqual([[], false]);
+      expect(ids(m.notesPage(ns, 10, 1, () => 1))).toEqual([[9], true]);
+      const half = Math.floor(m.NOTE_LIST_PAGE_BYTES / 2);
+      expect(ids(m.notesPage(ns, null, 20, () => half))).toEqual([[9, 7], true]);
+      expect(ids(m.notesPage(ns, null, 20, () => half + 1))).toEqual([[9], true]);
+      expect(ids(m.notesPage(ns, null, 20, () => m.NOTE_LIST_PAGE_BYTES * 2))).toEqual([[9], true]);
+      expect(m.NOTE_LIST_PAGE_BYTES).toBeLessThan(TOOL_RESULT_CUT_BYTES);
+      expect(m.NOTE_LIST_LIMIT.max).toBe(CAP);
     },
     'noteKeyFact: a programme, an item and a run, for the caller': () => {
       const f = m.noteKeyFact;

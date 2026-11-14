@@ -169,10 +169,11 @@ function abstentionPool(s: CardFacts, entropy: Entropy): Pool {
 }
 
 /** continuation: what a note says comes next, beside two other notes' `next`: the note's own next act, which the notes piece
- *  gave it (it read the note's whole text until then, slug continuation-reads-note-text). Skipped with fewer than three
- *  notes of distinct next acts. */
+ *  gave it (it read the note's whole text until then, slug continuation-reads-note-text). Only threads with a next act that
+ *  is not blank, as subjects and as decoys alike: a caution names no next act, and a blank choice would let a blank answer
+ *  pass (review 2039, F1). Skipped with fewer than three such notes of distinct next acts. */
 function continuationPool(s: CardFacts, entropy: Entropy): Pool {
-  const notes: readonly CardNote[] = valueOf(s.notes) ?? [];
+  const notes: readonly CardNote[] = (valueOf(s.notes) ?? []).filter((n) => n.kind === 'thread' && fold(n.next) !== '');
   const drafts: Draft[] = [];
   for (const n of notes) {
     const others = notes.filter((o) => fold(o.next) !== fold(n.next));
@@ -183,7 +184,7 @@ function continuationPool(s: CardFacts, entropy: Entropy): Pool {
       choices: shuffle([n.next, ...sample(distinct, 2, entropy).map((o) => o.next)], entropy), expected: n.next,
     });
   }
-  return pool(drafts, 'fewer than three notes of distinct text', unreadOf(s.notes));
+  return pool(drafts, 'fewer than three threads of distinct next acts', unreadOf(s.notes));
 }
 
 /** The classes whose rows a card snapshot does not carry in W1a. */
