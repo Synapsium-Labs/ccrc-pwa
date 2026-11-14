@@ -26,9 +26,8 @@ into its ledger. Each entry is a plain slug. None carries a number: the programm
 
 ## The character choice (Tasks 6 and 7)
 
-- **face-migration-66, slot** — the table is migration 66 (`user_version 65 -> 66`), measured as the next free slot on
-  `main` when this was built. If another migration lands first, this one moves to the next free number, and its count
-  pins move with it.
+- **face-migration-67, slot** — the coordinator reserved migration 66 for the start report (#2740), so the face's table
+  is migration 67 (`user_version 66 -> 67`), taken once #2740 is on this branch. The schema version's pins move with it.
 - **coord-db-version-pins-edited, the schema version's pins** — `coord-db.test.ts` hard-codes the schema version, and
   those pins moved from 65 to 66 with the migration.
 - **character-choice-request-order, ordering** — the device copy numbers every request it sends: the boot read and each
@@ -45,7 +44,7 @@ into its ledger. Each entry is a plain slug. None carries a number: the programm
 
 ## The face in the bar (Task 8)
 
-- **instrument-face-after-the-doors-nav, placement** — in Instrument the face comes after the doors nav, not inside the
+- **instrument-face-after-the-doors-nav, placement (accepted by the coordinator)** — in Instrument the face comes after the doors nav, not inside the
   home door with the wordmark. A button's children are presentational, so inside the door the face's name (the mood and
   its cause) never reached assistive tech, and a tap on the face went home. The nav holds doors only
   (`instrument-shell.test.tsx`). In Refined's two bars the face sits straight after the wordmark, as planned. Moving it
@@ -65,8 +64,8 @@ into its ledger. Each entry is a plain slug. None carries a number: the programm
   the bar's children. The 32 px face is centred in the 44 px line, so its top sits lower. The check compares centres
   instead, and a wrapped bar still fails it by a whole row.
 - **face-play-rate-later, a follow-up** — each change of mood plays 5 s, as the plan says. A fleet whose mood flips every
-  few seconds would therefore move almost all the time. A cap on how often the face plays (for example, at most once a
-  minute) is left for the coordinator to rule on, and is not built here.
+  few seconds would therefore move almost all the time. The coordinator kept the plan as written: a cap on how often the
+  face plays (for example, one play a minute) is a possible follow-up for the operator, not built here.
 
 ## The splash (Task 9)
 
