@@ -1,0 +1,94 @@
+// The anchor's mutant set (Overlord W1a, the anchor piece, plan `w1a-anchor.md` Task 1; the floors rule is D-8217's):
+// `renderAnchor`, run against suite cases that load the mutated copy of server/src/continuity/anchor.ts. Registered in
+// mutation-floors.test.ts's MUTANT_SETS, with a floor in mutation-floors.json. The plan's four mutants come first (A1 to
+// A4); the rest hold the null rule, the ceiling's arithmetic and the role line's cut.
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { expect } from 'vitest';
+import type { AnchorGeneration, CardFacts, CardRun, Fact } from '../../../shared/continuity-card.js';
+import { utf8Bytes } from '../../../shared/utf8.js';
+import type * as AnchorModule from '../../src/continuity/anchor.js';
+import type { MutantSet, SuiteCase } from './mutate.js';
+
+type Anchor = typeof AnchorModule;
+const ANCHOR_TS = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../src/continuity/anchor.ts');
+export const ANCHOR_RENDER_KEY = 'server/src/continuity/anchor.ts#renderAnchor';
+
+const AT = Date.UTC(2026, 10, 14, 12, 0, 0);
+const read = <T>(value: T): Fact<T> => ({ kind: 'read', value });
+const unmeasured = (what: string): Fact<never> => ({ kind: 'unmeasured', what });
+const HASH = 'abcdef0123456789'.repeat(4);
+const facts = (over: Partial<CardFacts> = {}): CardFacts => ({
+  sessionId: 'lane-a-project-a', role: 'coordinator', roleWhy: 'fixture', at: AT,
+  runs: read([]), ledger: read([]), claims: read([]), intent: read(false), itemsRaised: read([]),
+  mailOutstanding: read([]), mailMore: false, notes: read([]), checkpoint: read(null),
+  history: read({ verb: 'ccrc history describe', node: null }), ...over,
+});
+const run = (id: number, programme: string): CardRun => ({ id, programme, wave: 1, waveOf: 2, state: 'working', planPath: null, kind: 'work' });
+const gen = (g: AnchorGeneration) => ({ cardHash: HASH, generation: g });
+const LIVE = gen({ kind: 'live', term: 2, n: 5, starting: false });
+const CANARY = `term 2 · generation 5 · card ${HASH.slice(0, 12)}`;
+
+export const ANCHOR_RENDER_SET: MutantSet<Anchor> = {
+  modulePath: ANCHOR_TS,
+  mutants: [
+    // A1, the plan's: the canaries clipped before the role line (the role line takes the canaries' room).
+    { id: 'A1', old: 'const room = ANCHOR_CEILING.start - utf8Bytes(head) - utf8Bytes(fixed) - 1;', new: 'const room = ANCHOR_CEILING.start - utf8Bytes(head) - 1;' },
+    // A2, the plan's: the instruction dropped.
+    { id: 'A2', old: "form === 'start' ? [canaryLine(a), countsLine(f), ANCHOR_INSTRUCTION] :", new: "form === 'start' ? [canaryLine(a), countsLine(f)] :" },
+    // A3, the plan's: the prompt form past 600.
+    { id: 'A3', old: "if (form === 'prompt') return `${ANCHOR_PREFIX} ${fixed}`;", new: '' },
+    // A4, the plan's: `n` read for a start not yet minted.
+    { id: 'A4', old: '(g.starting ? `${g.n + 1} starting` : String(g.n))', new: 'String(g.n)' },
+    { id: 'A5', old: "const term = g.kind === 'live' ? String(g.term) : g.kind === 'none' ? 'none' : ANCHOR_UNMEASURED;", new: "const term = g.kind === 'live' ? String(g.term) : 'none';" },
+    { id: 'A6', old: "fact.kind === 'unmeasured' ? `${what} ${ANCHOR_UNMEASURED}` : `${fact.value.length} ${what}`", new: "fact.kind === 'unmeasured' ? `0 ${what}` : `${fact.value.length} ${what}`" },
+    { id: 'A7', old: "if (f.ledger.kind === 'unmeasured' || f.itemsRaised.kind === 'unmeasured')", new: "if (f.ledger.kind === 'unmeasured')" },
+    { id: 'A8', old: 'const role = fitBytes(mask(roleLine(f)), room);', new: 'const role = fitBytes(roleLine(f), room);' },
+    { id: 'A9', old: 'if (used + b > room) break;', new: 'if (used > room) break;' },
+    { id: 'A10', old: "if (f.role === 'undecided') return `role: undecided (${oneLine(f.roleWhy)})`;", new: "if (f.role === 'undecided') return 'role: undecided';" },
+  ],
+  suite(m): Record<string, SuiteCase> {
+    return {
+      'the four parts, in order': () => {
+        expect(m.renderAnchor(facts({ runs: read([run(1, 'prog-a')]) }), LIVE, 'start').split('\n'))
+          .toEqual([`${m.ANCHOR_PREFIX} role: coordinator of prog-a`, CANARY, 'counts: 1 runs · 0 open items and asks · 0 outstanding mail · 0 notes', m.ANCHOR_INSTRUCTION]);
+      },
+      'a long role line is cut first, under the ceiling, the canaries whole': () => {
+        const many = Array.from({ length: 20 }, (_, i) => run(i + 1, `prog-${i}-${'a'.repeat(150)}`));
+        const t = m.renderAnchor(facts({ runs: read(many) }), LIVE, 'start');
+        expect(utf8Bytes(t)).toBeLessThanOrEqual(1500);
+        expect(t.split('\n').slice(1)).toEqual([CANARY, 'counts: 20 runs · 0 open items and asks · 0 outstanding mail · 0 notes', m.ANCHOR_INSTRUCTION]);
+      },
+      'four-byte text stays under the ceiling, cut on a code point': () => {
+        const t = m.renderAnchor(facts({ runs: read([run(1, '\u{1F600}'.repeat(900))]) }), LIVE, 'start');
+        expect(utf8Bytes(t)).toBeLessThanOrEqual(1500);
+        expect(t.isWellFormed()).toBe(true);
+      },
+      'the prompt form stays under 600, whatever the role line': () => {
+        const many = Array.from({ length: 8 }, (_, i) => run(i + 1, `prog-${i}-${'a'.repeat(150)}`));
+        const t = m.renderAnchor(facts({ runs: read(many) }), LIVE, 'prompt');
+        expect(utf8Bytes(t)).toBeLessThanOrEqual(600);
+        expect(t).not.toContain('role:');
+      },
+      'an unminted start reads n+1 starting': () => {
+        expect(m.renderAnchor(facts(), gen({ kind: 'live', term: 2, n: 5, starting: true }), 'prompt')).toContain('generation 6 starting');
+      },
+      'unread facts render as unmeasured': () => {
+        const f = facts({ role: 'undecided', roleWhy: 'its runs could not be read', runs: unmeasured('r'), itemsRaised: unmeasured('i'), notes: unmeasured('n') });
+        const t = m.renderAnchor(f, gen({ kind: 'unmeasured', what: 'g' }), 'start');
+        expect(t).toContain('role: undecided (its runs could not be read)');
+        expect(t).toContain('term unmeasured · generation unmeasured');
+        expect(t).toContain('counts: runs unmeasured · open items and asks unmeasured · 0 outstanding mail · notes unmeasured');
+      },
+      'the role line is masked before it is fitted': () => {
+        const t = m.renderAnchor(facts({ runs: read([run(1, 'prog-key')]) }), LIVE, 'start', (s) => s.replace('prog-key', '[masked]'));
+        expect(t).toContain('role: coordinator of [masked]');
+        expect(t).not.toContain('prog-key');
+      },
+    };
+  },
+};
+
+export const ANCHOR_MUTANT_SETS: Record<string, MutantSet<never>> = {
+  [ANCHOR_RENDER_KEY]: ANCHOR_RENDER_SET as MutantSet<never>,
+};
