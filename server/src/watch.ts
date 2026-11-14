@@ -172,7 +172,8 @@ import { runStuckPass } from './coord/runStuckPass.js';
 import { isUntoldNotice, untoldPass } from './coord/untold.js';
 import { casesPass } from './coord/casesLane.js';
 import { gatherGenerationReadings, generationsPass, type CompactionsMemo } from './continuity/generationsLane.js';
-import { runTimersLane } from './continuity/timerLane.js';
+import { runTimersLane, timerListingOf } from './continuity/timerLane.js';
+import { TIMER_MAIL_SENDER } from '../../shared/continuity-timers.js';
 import { LAUNCH_PROFILE_LANE_ROW, profilePass, steerMarkerOf, type ProfileLaneMemory } from './continuity/profileLane.js';
 import { declaredIntentOf } from './continuity/profileFor.js';
 import { intentOfCheckpoint } from './continuity/declaredIntent.js';
@@ -3298,7 +3299,8 @@ export class FleetWatcher {
         runId: m.runId,
         tag: `mail-${m.toId}-${m.mailId}`,
         recordAlways: true,
-        ...(isAskNudgeMail(m) || isApprovalNudgeMail(m) || stall === 'check' || stall === 'reply' || stall === 'self-wake' || isUntoldNotice(m.subject) || isRunCloseWarning(m.subject) ? { recordOnly: true } : {}),
+        // A fired timer is the session's own reminder, never news for the operator (review 2053 F2): recorded, never pushed.
+        ...(isAskNudgeMail(m) || isApprovalNudgeMail(m) || stall === 'check' || stall === 'reply' || stall === 'self-wake' || isUntoldNotice(m.subject) || isRunCloseWarning(m.subject) || m.fromId === TIMER_MAIL_SENDER ? { recordOnly: true } : {}),
       }, projects);
       this.lastMailNotifyId = m.deliveryId;
     }
@@ -6140,9 +6142,7 @@ export class FleetWatcher {
     const coord = this.deps.coord;
     if (!coord) return;
     await this.runLane('timers', () => runTimersLane({ coord, clock: this.deps.time.clock, io: this.deps.io,
-      registryDir: this.deps.cfg.registryDir, log: (line) => console.warn(line) }, { listedAt, listedIds,
-      archivedIds: new Set(records.filter((r) => r.archivedAt !== null).map((r) => r.id)),
-      mailDisabled: names.includes(MAIL_DISABLED_MARKER) }));
+      registryDir: this.deps.cfg.registryDir, log: (line) => console.warn(line) }, timerListingOf(records, listedIds, listedAt, names)));
   }
 
   /** One pass of the dead-coordinator lane — `sweepDeadCoordinators`'s body, run only while no other pass runs. */
