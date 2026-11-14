@@ -574,15 +574,19 @@ describe.skipIf(!PY)('the request markers: the turn-state header and the turn (D
       [[{ role: 'user', content: 'task A' }], 'ccrc:sess-fx1'],
       [[userA, call, result, { role: 'assistant', content: 'done' }, userB], 'ccrc:sess-fx1'],
       [[userA], 'ccrc:sess-fx1:agent-fx1'],
+      // a later turn that opens on the same words is a turn of its own (its message's place differs)
+      [[userA, call, result, { role: 'assistant', content: 'done' }, userA], 'ccrc:sess-fx1'],
       [[result], 'ccrc:sess-fx1'],
       [[], 'ccrc:sess-fx1'],
       ['not a list', 'ccrc:sess-fx1'],
     ] }]);
-    const [a, loop, beside, asString, b, subagent, none, empty, odd] = line.keys as (string | null)[];
+    const [a, loop, beside, asString, b, subagent, again, none, empty, odd] = line.keys as (string | null)[];
     expect(a).toMatch(/^[0-9a-f]{64}$/);
     expect([loop, beside, asString]).toEqual([a, a, a]);
     expect(b).not.toBe(a);
     expect(subagent).not.toBe(a);
+    expect(again).toMatch(/^[0-9a-f]{64}$/);
+    expect([a, b]).not.toContain(again);
     expect([none, empty, odd]).toEqual([null, null, null]);
   });
 });

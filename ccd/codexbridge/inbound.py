@@ -131,13 +131,16 @@ def turn_key(messages: object, prompt_cache_key: str) -> Optional[str]:
     """D-8623: the Claude Code TURN a request belongs to, as a hash that holds no text. A turn is the stretch of
     requests sharing the same latest user message that holds no `tool_result` block: a tool loop's follow-up ends in a
     tool_result-bearing user message, and Claude Code's text beside tool results lives in such a message, so neither
-    starts a turn. The key is the sha256 of `prompt_cache_key` (so a subagent's turns are its own) and that message's
-    content, a string read as one text block and every block's `cache_control` dropped (Claude Code moves its cache
-    breakpoint onto the newest message, so the turn's own message loses it mid-turn). None when no message is such a
+    starts a turn. The key is the sha256 of `prompt_cache_key` (so a subagent's turns are its own), that message's
+    index in `messages` and its content, a string read as one text block and every block's `cache_control` dropped
+    (Claude Code moves its cache breakpoint onto the newest message, so the turn's own message loses it mid-turn). The
+    index keeps two turns that open on the same words ("continue", "yes") apart: a tool loop only appends after the
+    turn's message, so its index holds through the turn and grows at the next one. None when no message is such a
     one."""
     if not isinstance(messages, list):
         return None
-    for message in reversed(messages):
+    for index in range(len(messages) - 1, -1, -1):
+        message = messages[index]
         if not isinstance(message, dict) or message.get("role") != "user":
             continue
         content = message.get("content")
@@ -148,7 +151,7 @@ def turn_key(messages: object, prompt_cache_key: str) -> Optional[str]:
         if any(isinstance(b, dict) and b.get("type") == "tool_result" for b in content):
             continue
         blocks = [{k: v for k, v in b.items() if k != "cache_control"} if isinstance(b, dict) else b for b in content]
-        raw = json.dumps([prompt_cache_key, blocks], sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+        raw = json.dumps([prompt_cache_key, index, blocks], sort_keys=True, separators=(",", ":"), ensure_ascii=True)
         return hashlib.sha256(raw.encode("ascii")).hexdigest()
     return None
 

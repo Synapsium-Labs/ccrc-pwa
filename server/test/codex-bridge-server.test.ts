@@ -1869,6 +1869,30 @@ describe.skipIf(!PY)('the request markers, their 400 fallback and the turn-state
     });
   });
 
+  it('two turns whose user messages say the same thing are two turns: the second never echoes the first one\'s state', async () => {
+    const [a, b] = [token('a'), token('b')];
+    /** The session's history: turn one ("continue", one tool round, a reply), then turn two opening on the same words. */
+    const turnOne = (turnBody('continue', 1).messages as Json[]);
+    const secondTurn = (n: number): Json => {
+      const history: Json[] = [...turnOne, { role: 'assistant', content: [{ type: 'text', text: 'done' }] }, userMsg('continue')];
+      for (let i = 1; i <= n; i += 1) {
+        history.push({ role: 'assistant', content: [{ type: 'tool_use', id: `call_fx2${i}`, name: 'Read', input: { file_path: `2${i}.txt` } }] });
+        history.push({ role: 'user', content: [{ type: 'tool_result', tool_use_id: `call_fx2${i}`, content: `S${i}` }] });
+      }
+      return { ...messages(), tools: [READ_TOOL], messages: history };
+    };
+    await withBridge([withState(a), withState(null), withState(b), withState(null)], async ({ bridge, up, lane }) => {
+      touch(lane, [TURN_STATE]);
+      for (const body of [turnBody('continue', 0), turnBody('continue', 1), secondTurn(0), secondTurn(1)]) {
+        const r = await call(bridge, '/v1/messages', { body, headers: session });
+        expect(r.status, r.text).toBe(200);
+      }
+      expect(sentState(up)).toEqual([null, a, null, b]);
+      expect(await bridge.stop()).toEqual({ code: 0, signal: null });
+      expect(readStats(lane).parity[KEY].turnState).toEqual({ captured: 2, echoed: 2 });
+    });
+  });
+
   it('the map holds TURN_STATES_MAX turns, the least recently used dropped first', async () => {
     const [a, b, c] = [token('a'), token('b'), token('c')];
     const answers = [withState(a), withState(b), withState(null), withState(c), withState(null), withState(null)];

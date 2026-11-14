@@ -2589,7 +2589,8 @@ until an operator touches its file in the lane directory (no ccrc code writes th
   in one `text` object with an output format;
 - `bridge-turn-state` sends back the `x-codex-turn-state` header the backend set at the start of a Claude Code turn, on
   every later request of that turn. A turn is the requests that share their latest user message holding no tool
-  result. The value is kept in memory only, for at most 256 turns, and is cleared when the credential's account changes.
+  result: the same message at the same place in the conversation, so two turns that open on the same words are two.
+  The value is kept in memory only, for at most 256 turns, and is cleared when the credential's account changes.
 
 The bridge never sends Codex's internal Lite header. When the backend answers 400 to a request that carried any of
 these, the bridge sends it once more without them, and sends none of them for the rest of that message; it does not
