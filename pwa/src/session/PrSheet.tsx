@@ -16,6 +16,7 @@ import { GHOST_ANCHOR } from '../lib/ghostAnchor';
 import { api, apiErrorText } from '../lib/api';
 import { ArchiveConflictSheet, runOpenRuns, type ArchiveConflictRun } from '../fleet/ArchiveConflictSheet';
 import { boundOpenRun } from '../fleet/runWords';
+import { useHeard } from '../fleet/useHeard';
 import { useFleetStore, type FleetStore } from '../stores/fleet';
 import { checkPhrase, prSentence, tooltipSentence, UNCHECKED_PR } from './PrKeycap';
 import './chat.css';
@@ -114,15 +115,13 @@ export function PrSheet({
   // one is open. The reads are HOOKS, so they run above the `session === null`
   // guard like every other hook here.
   //
-  // Gated on `runsFrameSeen` — an empty `runs` before the first frame is not
-  // evidence of no runs, the store's own idiom — and DEGRADING to the plain
-  // sentence rather than asserting a claim from a list that has not arrived.
-  // The plain sentence is true of every unarchived merged workspace, so
-  // degrading to it says less than we know, never more.
-  const runsFrameSeen = fleet((s) => s.runsFrameSeen);
-  const runs = fleet((s) => s.runs);
-  const openRun = session === null ? null : boundOpenRun(runs, session);
-  const claimingRun = runsFrameSeen ? openRun : null;
+  // Read through `useHeard`, the one rule: runs before the first runs frame
+  // answer null — an empty `runs` then is not evidence of no runs — and the
+  // note DEGRADES to the plain sentence rather than asserting a claim from a
+  // list that has not arrived. The plain sentence is true of every unarchived
+  // merged workspace, so degrading to it says less than we know, never more.
+  const { runs } = useHeard(fleet);
+  const claimingRun = session === null || runs === null ? null : boundOpenRun(runs, session);
 
   if (!session) return null;
   // The fresh one-shot GET wins over the cached fleet-sweep value once it

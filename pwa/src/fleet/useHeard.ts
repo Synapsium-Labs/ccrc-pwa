@@ -1,9 +1,11 @@
 // useHeard — the fleet rows and runs this console has HEARD, or `null` for each it has not (L4; it reads the store and decides
 // nothing). Before a frame lands, `sessions` and `runs` hold the offline snapshot's, which is not a fact the console has
-// heard, so a reader handed them would claim a calm it never measured. This is the face's and the ledgers' reader of that
-// gate: the Waiting on you routes, the programme's Goals page and the face's mood (`face/useMood.ts`) take their rows and
-// runs from here. It is not yet the ONLY reader: `useNavBadges`, the two phone bars and the PR sheet still spell the same
-// ternaries. Routing them through this hook is a follow-up (the coordinator carries it).
+// heard, so a reader handed them would claim a calm it never measured. The flags are sticky: once a frame landed, a lost
+// link leaves its rows heard (the last the console heard), so the three states are not heard yet (null), heard and link
+// lost (both the rows). This is the one rule: the Waiting on you routes, the programme's Goals page, the face's mood
+// (`face/useMood.ts`), the navigation's counts (`useNavBadges`), Instrument's status bar, Refined's phone header and the
+// PR sheet take their rows and runs from here. A census (`test/use-heard.test.tsx`) refuses a new hand-written
+// `fleetFrameSeen ?`/`runsFrameSeen ?` ternary anywhere else, and lists the screens that still carry one; each only shrinks.
 import type { FleetSession, RunSummary } from '../../../shared/api';
 import type { FleetStore } from '../stores/fleet';
 
