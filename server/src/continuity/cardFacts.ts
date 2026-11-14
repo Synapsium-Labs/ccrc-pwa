@@ -25,7 +25,6 @@ import {
   type CardRenderer, type CardRun, type Fact,
 } from '../../../shared/continuity-card.js';
 import type { CoordStore } from '../coord/store.js';
-import { delegationIntentKey } from '../coord/delegation-model.js';
 import { operatorWasShown, type ItemRow } from '../coord/ledgersStore.js';
 import { roleFactsOf } from '../roleOf.js';
 import { CARD_REGISTRY_UNREAD, cardRoleOf } from './card.js';
@@ -41,16 +40,9 @@ export interface CardFactsDeps {
   childMark(id: string): Promise<ChildMark | typeof CARD_REGISTRY_UNREAD>;
   /** The registry row's incarnation (`childReclaimGenerationRead`): the key declared intent is stored under. */
   incarnation(id: string): Promise<ChildReclaimGeneration>;
-  /** Declared coordinator intent on one incarnation, from the delegation checkpoint (`coordinatorIntentByParent`, the
-   *  authority; the SQLite projection can lag it), or `not-ready` while the delegation lane has no ready checkpoint. */
+  /** Declared coordinator intent on one incarnation, from the delegation checkpoint (`intentOfCheckpoint`, the one reader,
+   *  `declaredIntent.ts`), or `not-ready` while the delegation lane has no ready checkpoint. */
   declaredIntent(id: string, incarnation: string): boolean | 'not-ready';
-}
-
-/** Declared coordinator intent on one incarnation, read from a delegation checkpoint (`FleetWatcher.
- *  delegationCheckpointIfReady`; null while the lane has none ready): the `declaredIntent` port's one reading. */
-export function intentOfCheckpoint(cp: { readonly coordinatorIntentByParent: Readonly<Record<string, string>> } | null,
-  id: string, incarnation: string): boolean | 'not-ready' {
-  return cp === null ? 'not-ready' : Object.hasOwn(cp.coordinatorIntentByParent, delegationIntentKey(id, incarnation));
 }
 
 /** The history line's verb (C52). No read names a session's newest node yet (slug history-line-without-a-node). */

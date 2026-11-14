@@ -85,7 +85,7 @@ import { registerLinearProxyRoutes } from './linear/proxyRoutes.js';
 import { registerLinkingRoutes } from './linking/routes.js';
 import { registerContinuityRoutes } from './continuity/routes.js';
 import { CARD_REGISTRY_UNREAD } from './continuity/card.js';
-import { intentOfCheckpoint } from './continuity/cardFacts.js';
+import { intentOfCheckpoint } from './continuity/declaredIntent.js';
 import { childReclaimGenerationRead } from './coord/childReclaim.js';
 import { registerPlanRoutes } from './coord/planRoutes.js';
 import { registerHierarchyRoutes } from './coord/hierarchyRoutes.js';

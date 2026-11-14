@@ -43,7 +43,10 @@ deviation number was taken. The coordinator folds these into the ledger.
   one-page card is a full read and adds a row; retention comes later.
 - **card-intent-reads-the-checkpoint** (was card-intent-reads-the-projection; fix round 1, F4). Declared intent is read
   from the delegation lane's checkpoint, the authority (`coordinatorIntentByParent`, through
-  `FleetWatcher.delegationCheckpointIfReady` and `intentOfCheckpoint`), on the current registry incarnation. The SQLite
+  `FleetWatcher.delegationCheckpointIfReady` and `intentOfCheckpoint`), on the current registry incarnation.
+  `intentOfCheckpoint` lives in `server/src/continuity/declaredIntent.ts`, the ONE reader of that fact: the launch-profile
+  lane (#2794) carries a byte-identical copy of the file, agreed between the two workers, so whichever PR lands second
+  merges it as the same file and imports nothing twice (the coordinator's addendum to F4). The SQLite
   projection is written after the checkpoint and can lag it, so a declaration not yet projected read as a definite "no
   intent" there; the projection reader is gone. A checkpoint that is not ready is `unmeasured`, never "no intent". A row
   with no `.generation` file reads as no intent (the intent door refuses to declare without one); an unreadable one is
