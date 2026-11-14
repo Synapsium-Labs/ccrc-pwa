@@ -2960,6 +2960,43 @@ export const MIGRATIONS: readonly string[] = [
   CREATE INDEX continuity_card_reads_by_conversation ON continuity_card_reads(sessionId, uuid, id);
   CREATE INDEX continuity_card_reads_by_snapshot ON continuity_card_reads(snapshotId);
   `,
+  // ── 70: user_version 69 -> 70 ─────────────────────────────────────────────
+  // The timers (Overlord spec §3.3.12 C61 to C65, Table 3.3.12a, I17; W1a, the timers piece): `continuity_timers`, one row
+  // per timer a session set itself. Its moves are `TIMER_TRANSITIONS` (`shared/continuity-timers.ts`), each with ONE
+  // writer in `server/src/continuity/continuityStore.ts`: the set (`insertTimer`), the fire (`markTimersFired`, in the
+  // transaction that queues its one mail), the cancel (`cancelTimer`, its reason checked against its actor) and the purge
+  // of terminal rows past `TIMER_KEEP_MS` (`purgeTimers`). `setterIncarnation` is the setter row's `.generation` at the
+  // set (W1's designation term for the Overlord's), so a renewed generation of the same identity gets the mail and a
+  // different session under the same id never does. A timer binds a run or a programme, never both (the CHECK).
+  //
+  // A NEW TABLE and its indexes, nothing on an existing table: an older build opening a file at `user_version 70` takes
+  // rule 3 (it warns, reads as-is and migrates nothing), never names the table, and boots. Every earlier entry is frozen.
+  // RE-MEASURE the slot before the PR and before merge (it must print 69 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE continuity_timers (
+    id                INTEGER PRIMARY KEY,
+    setter            TEXT NOT NULL,          -- a session id, or 'overlord' from W1
+    setterIncarnation TEXT NOT NULL,          -- the registry row's .generation; the designation's designatedTerm from W1
+    setById           TEXT NOT NULL,          -- the caller as attributed at the set
+    setByUuid         TEXT NOT NULL,
+    role              TEXT NOT NULL,          -- roleOf at the set, or 'undecided'
+    note              TEXT NOT NULL,
+    runId             INTEGER,
+    programme         TEXT,
+    setAt             INTEGER NOT NULL,
+    dueAt             INTEGER NOT NULL,
+    state             TEXT NOT NULL DEFAULT 'pending',
+    firedAt           INTEGER,
+    mailId            INTEGER,
+    cancelledAt       INTEGER,
+    cancelReason      TEXT,
+    CHECK (runId IS NULL OR programme IS NULL)
+  );
+  CREATE INDEX continuity_timers_pending ON continuity_timers(state, dueAt);
+  CREATE INDEX continuity_timers_by_setter ON continuity_timers(setter, setAt);
+  `,
 ];
 
 /** The version this build writes. `MIGRATIONS.length` and nothing else: a
