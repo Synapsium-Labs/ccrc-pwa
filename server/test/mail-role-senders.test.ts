@@ -27,6 +27,7 @@ import { TIMER_MAIL_SENDER } from '../../shared/continuity-timers.js';
 import type { PushPayload } from '../src/push.js';
 import { testDeps, withFakeClock } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
+import { quietAtTestEnd } from './laneQuiet.js';   // D-8140: nothing a watcher fires outlives its test
 
 const NOW = 1_800_000_000_000;
 const ID = 'lane-a-project-a';
@@ -76,7 +77,7 @@ const primedWatcher = async (h: { home: string; run: Runner }, coord: CoordStore
                              sent: PushPayload[]): Promise<FleetWatcher> => {
   const deps: Deps = { ...testDeps(h.home, h.run), coord,
     push: { notify: async (p: PushPayload) => { sent.push(p); } } as never };
-  const w = new FleetWatcher(withFakeClock(deps), new Bus(), 2000);
+  const w = quietAtTestEnd(new FleetWatcher(withFakeClock(deps), new Bus(), 2000));
   await w.tick();
   return w;
 };

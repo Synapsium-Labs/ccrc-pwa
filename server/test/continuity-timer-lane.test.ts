@@ -14,6 +14,7 @@ import type { SessionRecord } from '../src/registry.js';
 import { MAIL_DISABLED_MARKER } from '../../shared/switches.js';
 import { testDeps, withFakeClock } from './helpers.js';
 import { fakeTime } from './fakeTime.js';
+import { quietAtTestEnd } from './laneQuiet.js';   // D-8140: nothing a watcher fires outlives its test
 import type { TimerInsert } from '../src/continuity/continuityStore.js';
 import {
   gatherTimerFacts, runTimersLane, setterIncarnationOf, timersPass, type IncarnationRead, type TimerListing, type TimersPassResult,
@@ -302,7 +303,7 @@ describe('FleetWatcher.sweepTimers: the tick\'s own listing, passed in', () => {
   afterEach(() => { vi.useRealTimers(); });
   /** A watcher over `home`'s registry, its store `s`. Only the record fields the lane reads are set. */
   const watcher = (home: string, s: CoordStore): FleetWatcher =>
-    new FleetWatcher(withFakeClock({ ...testDeps(home), coord: s, time: fakeTime({ wallMs: NOW }).ports }), new Bus(), 2000);
+    quietAtTestEnd(new FleetWatcher(withFakeClock({ ...testDeps(home), coord: s, time: fakeTime({ wallMs: NOW }).ports }), new Bus(), 2000));
   const rec = (id: string, archivedAt: number | null = null): SessionRecord => ({ id, archivedAt }) as unknown as SessionRecord;
   const home = (): string => { const h = mkTmp('ccrc-timer-lane-w-'); mkdirSync(path.join(h, '.cc-sessions'), { recursive: true }); return h; };
 
