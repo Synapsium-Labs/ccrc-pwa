@@ -49,7 +49,8 @@ const CASES: Case[] = [
   ['C14 an operator pause keeps the order and names no head', [e(1, { pinnedAt: 200 }), e(2, { pinnedAt: 100 })], OP, [2, 1], 'paused', ['operator']],
   ['C15 a main-red hold pauses the line', [e(1)], RED, [1], 'paused', ['main-red']],
   ['C16 both flags: operator first', [e(1)], BOTH, [1], 'paused', ['operator', 'main-red']],
-  ['C17 a fixesMain entry is held by main-red too (the literal ruling)', [e(1, { fixesMain: true })], RED, [1], 'paused', ['main-red']],
+  // Amendment A (D-8625) replaces the literal 5e ruling (D-7623) these rows used: the selected fixesMain head survives main-red.
+  ['C17 the selected fixesMain head survives main-red alone (Amendment A, D-8625)', [e(1, { fixesMain: true })], RED, [1], 1, null],
   ['C18 an edge to an unknown entry holds the entry back',
     [e(1, { pinnedAt: 100, afterIds: [109] }), e(9, { state: 'unknown' }), e(3, { pinnedAt: 200 })], OPEN, [3, 1], 3, null],
 ];
@@ -60,6 +61,38 @@ describe('landingOrder: the cases, as data', () => {
     expect(prs(o)).toEqual(wantOrder);
     expect(head(o)).toEqual(wantHead);
     expect(o.paused ? o.by : null).toEqual(wantBy);
+  });
+});
+
+describe('landingOrder: the main-red exception of the selected fixesMain head (Amendment A, D-8625)', () => {
+  it('ORDER-A1 a selected fixesMain head survives main-red alone; an ordinary selected head cannot', () => {
+    expect(landingOrder([e(1), e(2, { fixesMain: true })], RED)).toMatchObject({ paused: false, head: { pr: 2 } });
+    expect(landingOrder([e(1)], RED)).toMatchObject({ paused: true, by: ['main-red'] });
+  });
+  it('ORDER-fix-blocked a fixesMain entry behind an outstanding after target never jumps', () => {
+    const o = landingOrder([e(1), e(2, { fixesMain: true, afterIds: [101] })], RED);
+    expect(o).toMatchObject({ paused: true, by: ['main-red'] });
+    expect(prs(o)).toEqual([1, 2]);
+    // behind an ejected or unknown target the entry goes last and no head is selected at all
+    expect(landingOrder([e(1, { state: 'ejected', ejections: 1 }), e(2, { fixesMain: true, afterIds: [101] })], RED))
+      .toMatchObject({ paused: true, by: ['main-red'] });
+  });
+  it('a cycle of fixesMain entries never heads', () => {
+    expect(landingOrder([e(1, { fixesMain: true, afterIds: [102] }), e(2, { fixesMain: true, afterIds: [101] })], RED))
+      .toMatchObject({ paused: true, by: ['main-red'] });
+  });
+  it('an operator pause always suppresses the head, and names both words with main-red', () => {
+    expect(landingOrder([e(2, { fixesMain: true })], BOTH)).toMatchObject({ paused: true, by: ['operator', 'main-red'] });
+    expect(landingOrder([e(2, { fixesMain: true })], OP)).toMatchObject({ paused: true, by: ['operator'] });
+  });
+  it('recovery still has no head, and the red exception does not bypass it', () => {
+    const recovery = { subjects: [], hold: { reason: 'landing-recovery-unresolved' as const, subjectIds: [102] } };
+    expect(landingOrder([e(2, { fixesMain: true })], RED, recovery)).toMatchObject({ paused: false, head: null, held: { subjectIds: [102] } });
+    expect(landingOrder([e(2, { fixesMain: true })], OPEN, recovery)).toMatchObject({ paused: false, head: null });
+  });
+  it('the healthy later entry is not searched when the chosen head is an unhealthy ordinary one', () => {
+    const o = landingOrder([e(1, { pinnedAt: 100 }), e(2, { pinnedAt: 200 })], RED);
+    expect(o).toMatchObject({ paused: true, by: ['main-red'] });
   });
 });
 
@@ -166,8 +199,8 @@ describe('landingLine.ts is the pure L1 module its header says it is', () => {
     expect(clockAndFsReferences(p), 'landingLine.ts reads the clock or reaches for a filesystem').toEqual([]);
     expect(nodeBuiltinSpecifiers(p), 'landingLine.ts imports a node builtin').toEqual([]);
   });
-  it('imports values only from shared/landingLine.ts (L0)', () => {
-    expect(valueSpecifiers(parsedFile(FILE))).toEqual(['../../../shared/landingLine.js']);
+  it('imports values only from the L0 files (shared/landingLine.ts, and shared/api.ts for freshWithin)', () => {
+    expect(valueSpecifiers(parsedFile(FILE))).toEqual(['../../../shared/landingLine.js', '../../../shared/api.js']);
   });
   it('has no side-effect import, dynamic import or re-export', () => {
     const p = parsedFile(FILE);

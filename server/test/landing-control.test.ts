@@ -12,6 +12,9 @@ import { localIO, type FleetIO } from '../src/io.js';
 import { READ_FROM_MAX_BYTES } from '../../shared/agent-protocol.js';
 import { CONTROL_BASE_SHA, CONTROL_HEAD_SHA, CONTROL_NOW as now, controlRead } from './landingFixture.js';
 import { mkTmp } from './tmpHelpers.js';
+import { landingBindingOf, mainRedNext } from '../src/coord/landingLine.js';
+import type { LandingMutationFacts } from '../src/coord/landingWrites.js';
+import type { LandingEntry } from '../../shared/landingLine.js';
 
 const iso = (offsetS: number): string => new Date(now + offsetS * 1000).toISOString().replace(/\.\d{3}Z$/, 'Z');
 const P = 'project-a';
@@ -337,5 +340,204 @@ describe('readLandingControl', () => {
       };
       expect((await readLandingControl(io, reg, P, probeRead(), now)).lander).toEqual({ ok: false, reason: 'absent' });
     });
+  });
+});
+
+// ---- wave 5i, Task 3: the binding head and the main-red transition (pure L1, `coord/landingLine.ts`) -------------------
+const entry = (pr: number, over: Partial<LandingEntry> = {}): LandingEntry => ({
+  id: pr + 100, project: P, pr, pinnedSha: CONTROL_HEAD_SHA, handoffCommit: CONTROL_HEAD_SHA, runId: pr * 10, state: 'pinned',
+  baseSha: null, ejectionKind: null, ejections: 0, afterIds: [], fixesMain: false, setBy: 'coordinator-a', pinnedAt: now - 3000 + pr, ...over,
+});
+const factsOf = (entries: LandingEntry[] = [entry(7)], over: Partial<LandingMutationFacts> = {}): LandingMutationFacts => ({
+  project: P, flags: { operatorPaused: false, mainRedHold: false }, entries,
+  projections: entries.map((x) => ({ id: x.id, value: { kind: 'readable' as const, quarantine: null } })),
+  dependencies: entries.map((x) => ({ id: x.id, value: { kind: 'readable' as const, afterIds: x.afterIds } })),
+  recovery: { subjects: [], hold: null }, nextId: 200, foreignIds: [],
+  coordinators: entries.map((x) => ({ id: x.id, value: { kind: 'no-run' as const } })), ...over,
+});
+const probeWith = (over: Record<string, unknown> = {}, headOver: Record<string, unknown> = {}) => {
+  const base = controlRead();
+  if (!base.probe.ok) throw new Error('fixture');
+  const doc = base.probe.doc;
+  return { ok: true as const, doc: { ...doc, ...over, heads: over.heads ?? [{ ...doc.heads[0]!, ...headOver }] } } as ProbeRead;
+};
+const healthWith = (over: Record<string, unknown> = {}) => {
+  const base = controlRead();
+  if (!base.health.ok) throw new Error('fixture');
+  return { ok: true as const, doc: { ...base.health.doc, ...over } } as typeof base.health;
+};
+const RED_HEALTH = { state: 'red', failing: ['required-a'] };
+const OTHER_BASE = 'c'.repeat(40);
+
+describe('landingBindingOf: precedence and the evidence it binds', () => {
+  it('baseline: ready, with every fact the cue needs and no persisted readiness', () => {
+    expect(landingBindingOf(factsOf(), controlRead(), now)).toEqual({
+      mode: 'ready', entryId: 107, pr: 7, pinnedSha: CONTROL_HEAD_SHA, baseSha: CONTROL_BASE_SHA,
+      landerAt: '2026-11-14T11:59:58Z', probeAt: '2026-11-14T11:59:59Z', healthAt: '2026-11-14T12:00:00Z', fixesMain: false,
+    });
+  });
+  it('proven marker absence is inert; every other marker failure holds opt-in-unknown; undefined control is unmeasured', () => {
+    expect(landingBindingOf(factsOf(), controlRead({ lander: { ok: false, reason: 'absent' } }), now)).toEqual({ mode: 'inert' });
+    for (const reason of ['unreadable', 'oversize', 'malformed', 'stale', 'unmeasured', 'late', 'refused'] as const) {
+      expect(landingBindingOf(factsOf(), controlRead({ lander: { ok: false, reason } }), now), reason)
+        .toEqual({ mode: 'held', reason: 'opt-in-unknown', entryId: 107 });
+    }
+    expect(landingBindingOf(factsOf(), undefined, now)).toEqual({ mode: 'held', reason: 'opt-in-unknown', entryId: 107 });
+    expect(landingBindingOf(factsOf([]), undefined, now)).toEqual({ mode: 'held', reason: 'opt-in-unknown', entryId: null });
+  });
+  it('CONTROL-foreign: documents of another project hold; a stale marker at decision time holds opt-in-unknown', () => {
+    const other = (r: { ok: true; doc: object }) => ({ ...r, doc: { ...r.doc, project: 'project-b' } });
+    const c = controlRead();
+    const foreign = { lander: other(c.lander as { ok: true; doc: object }), probe: other(c.probe as { ok: true; doc: object }), health: other(c.health as { ok: true; doc: object }) } as unknown as typeof c;
+    expect(landingBindingOf(factsOf(), foreign, now)).toMatchObject({ mode: 'held', reason: 'opt-in-unknown' });
+    expect(landingBindingOf(factsOf(), controlRead(), now + 1300 * 1000)).toMatchObject({ mode: 'held' });
+    const lonely = controlRead({ probe: other(c.probe as { ok: true; doc: object }) as never });
+    expect(landingBindingOf(factsOf(), lonely, now)).toMatchObject({ mode: 'held', reason: 'probe-unmeasured' });
+    const lonelyH = controlRead({ health: other(c.health as { ok: true; doc: object }) as never });
+    expect(landingBindingOf(factsOf(), lonelyH, now)).toMatchObject({ mode: 'held', reason: 'health-unmeasured' });
+  });
+  it('CONTROL-prepass: a marker many seconds older than the probe is ready while every window passes', () => {
+    const c = controlRead();
+    const old = { ok: true as const, doc: { ...(c.lander as { ok: true; doc: { project: string; lander: 'coordinator'; at: string } }).doc, at: '2026-11-14T11:55:00Z' } };
+    expect(landingBindingOf(factsOf(), controlRead({ lander: old }), now)).toMatchObject({ mode: 'ready', landerAt: '2026-11-14T11:55:00Z' });
+  });
+  it('an operator pause holds paused, after the marker and before recovery', () => {
+    const paused = factsOf([entry(7)], { flags: { operatorPaused: true, mainRedHold: false } });
+    expect(landingBindingOf(paused, controlRead(), now)).toEqual({ mode: 'held', reason: 'paused', entryId: 107 });
+    expect(landingBindingOf(paused, controlRead({ lander: { ok: false, reason: 'unmeasured' } }), now)).toMatchObject({ reason: 'opt-in-unknown' });
+    expect(landingBindingOf(paused, controlRead({ lander: { ok: false, reason: 'absent' } }), now)).toEqual({ mode: 'inert' });
+    const both = factsOf([entry(7)], { flags: { operatorPaused: true, mainRedHold: false }, recovery: { subjects: [], hold: { reason: 'landing-recovery-unresolved', subjectIds: [107] } } });
+    expect(landingBindingOf(both, controlRead(), now)).toMatchObject({ reason: 'paused' });
+  });
+  it('recovery holds with no head to bind; an unreadable open projection holds independently of the journal', () => {
+    const rec = factsOf([entry(7)], { recovery: { subjects: [], hold: { reason: 'landing-recovery-unresolved', subjectIds: [107] } } });
+    expect(landingBindingOf(rec, controlRead(), now)).toEqual({ mode: 'held', reason: 'recovery', entryId: 107 });
+    const bad = factsOf([entry(7), entry(9, { state: 'unknown' })], {
+      projections: [{ id: 107, value: { kind: 'readable', quarantine: null } }, { id: 109, value: { kind: 'unreadable' } }] });
+    expect(landingBindingOf(bad, controlRead(), now)).toMatchObject({ mode: 'held', reason: 'projection-unreadable' });
+    const missing = factsOf([entry(7)], { projections: [] });
+    expect(landingBindingOf(missing, controlRead(), now)).toMatchObject({ reason: 'projection-unreadable' });
+    const dep = factsOf([entry(7)], { dependencies: [{ id: 107, value: { kind: 'unreadable' } }] });
+    expect(landingBindingOf(dep, controlRead(), now)).toMatchObject({ reason: 'projection-unreadable' });
+  });
+  it('ORDER-unknown: an unreadable terminal row is not an open blocker, an unreadable open one is', () => {
+    const terminal = factsOf([entry(7), entry(5, { state: 'landed' })], {
+      projections: [{ id: 107, value: { kind: 'readable', quarantine: null } }, { id: 105, value: { kind: 'unreadable' } }] });
+    expect(landingBindingOf(terminal, controlRead(), now).mode).toBe('ready');
+    const open = factsOf([entry(7), entry(8, { state: 'ejected', ejections: 1 })], {
+      projections: [{ id: 107, value: { kind: 'readable', quarantine: null } }, { id: 108, value: { kind: 'unreadable' } }] });
+    expect(landingBindingOf(open, controlRead(), now)).toMatchObject({ reason: 'projection-unreadable' });
+  });
+  it('an empty line or a blocked remainder holds empty-or-blocked with no entry', () => {
+    expect(landingBindingOf(factsOf([]), controlRead(), now)).toEqual({ mode: 'held', reason: 'empty-or-blocked', entryId: null });
+    const cyc = factsOf([entry(1, { afterIds: [102] }), entry(2, { afterIds: [101] })]);
+    expect(landingBindingOf(cyc, controlRead(), now)).toEqual({ mode: 'held', reason: 'empty-or-blocked', entryId: null });
+  });
+  it('probe and health availability: every failure, a cut head list and a stale reading hold their own reason', () => {
+    for (const reason of ['absent', 'unreadable', 'oversize', 'malformed', 'stale', 'unmeasured', 'late', 'refused'] as const) {
+      expect(landingBindingOf(factsOf(), controlRead({ probe: { ok: false, reason } as never }), now), `probe ${reason}`)
+        .toEqual({ mode: 'held', reason: 'probe-unmeasured', entryId: 107 });
+      expect(landingBindingOf(factsOf(), controlRead({ health: { ok: false, reason } }), now), `health ${reason}`)
+        .toEqual({ mode: 'held', reason: 'health-unmeasured', entryId: 107 });
+    }
+    expect(landingBindingOf(factsOf(), controlRead({ probe: probeWith({ headsCut: true }) }), now)).toMatchObject({ reason: 'probe-unmeasured' });
+    expect(landingBindingOf(factsOf(), controlRead({ probe: probeWith({ at: '2026-11-14T11:30:00Z' }) }), now)).toMatchObject({ reason: 'probe-unmeasured' });
+    expect(landingBindingOf(factsOf(), controlRead({ health: healthWith({ at: '2026-11-14T11:30:00Z' }) }), now)).toMatchObject({ reason: 'health-unmeasured' });
+    expect(landingBindingOf(factsOf(), controlRead({ health: healthWith({ state: 'unmeasured', why: 'pending', pending: ['required-a'] }) }), now)).toMatchObject({ reason: 'health-unmeasured' });
+    expect(landingBindingOf(factsOf(), controlRead({ health: healthWith({ state: 'unmeasured', sha: null, why: 'fetch-failed' }) }), now)).toMatchObject({ reason: 'health-unmeasured' });
+  });
+  it('freshness rechecked at use: a boundary reading follows freshWithin, a future one is refused', () => {
+    expect(landingBindingOf(factsOf(), controlRead({ probe: probeWith({ at: '2026-11-14T11:40:00Z' }) }), now).mode).toBe('ready');
+    expect(landingBindingOf(factsOf(), controlRead({ probe: probeWith({ at: '2026-11-14T11:39:59Z' }) }), now)).toMatchObject({ reason: 'probe-unmeasured' });
+    expect(landingBindingOf(factsOf(), controlRead({ health: healthWith({ at: '2026-11-14T13:00:00Z' }) }), now)).toMatchObject({ reason: 'health-unmeasured' });
+  });
+  it('base mismatch: health and probe must name the same full base sha', () => {
+    expect(landingBindingOf(factsOf(), controlRead({ health: healthWith({ sha: OTHER_BASE }) }), now)).toEqual({ mode: 'held', reason: 'base-mismatch', entryId: 107 });
+    expect(landingBindingOf(factsOf(), controlRead({ probe: probeWith({ baseSha: OTHER_BASE }) }), now)).toMatchObject({ reason: 'base-mismatch' });
+  });
+  it('head mismatch: the exact PR and full pinned sha; absent, other or doubled heads hold', () => {
+    expect(landingBindingOf(factsOf(), controlRead({ probe: probeWith({}, { head: 'd'.repeat(40) }) }), now)).toEqual({ mode: 'held', reason: 'head-mismatch', entryId: 107 });
+    expect(landingBindingOf(factsOf(), controlRead({ probe: probeWith({}, { pr: 8 }) }), now)).toMatchObject({ reason: 'head-mismatch' });
+    expect(landingBindingOf(factsOf(), controlRead({ probe: probeWith({ heads: [] }) }), now)).toMatchObject({ reason: 'head-mismatch' });
+    const h = { pr: 7, head: CONTROL_HEAD_SHA, branch: 'ws/alpha', id: null, base: { state: 'clean' } };
+    expect(landingBindingOf(factsOf(), controlRead({ probe: probeWith({ heads: [h, { ...h, branch: 'ws/beta' }] }) }), now)).toMatchObject({ reason: 'head-mismatch' });
+  });
+  it('a no-run head (id null) binds by PR and full sha; the entry id still comes from the line', () => {
+    const noRun = factsOf([entry(7, { runId: null })]);
+    expect(landingBindingOf(noRun, controlRead({ probe: probeWith({}, { id: null }) }), now)).toMatchObject({ mode: 'ready', entryId: 107, pr: 7 });
+  });
+  it('ORDER-no-skip: a conflicting selected head holds on its own entry and never searches the next PR', () => {
+    const f = factsOf([entry(7), entry(8)]);
+    const probe = probeWith({ heads: [
+      { pr: 7, head: CONTROL_HEAD_SHA, branch: 'ws/a', id: null, base: { state: 'conflict', paths: ['x'], pathsCut: false } },
+      { pr: 8, head: CONTROL_HEAD_SHA, branch: 'ws/b', id: null, base: { state: 'clean' } }] });
+    expect(landingBindingOf(f, controlRead({ probe }), now)).toEqual({ mode: 'held', reason: 'composition-not-clean', entryId: 107 });
+    const unmeasured = probeWith({}, { base: { state: 'unmeasured' } });
+    expect(landingBindingOf(factsOf(), controlRead({ probe: unmeasured }), now)).toMatchObject({ reason: 'composition-not-clean' });
+  });
+  it('pairwise annotations select no successor and need no unrelated pending PR to pass', () => {
+    const probe = probeWith({ pairsCut: true, pairHeads: [7, 8], pairs: [{ a: 7, b: 8, answer: { state: 'conflict', paths: [], pathsCut: false } }] });
+    expect(landingBindingOf(factsOf([entry(7), entry(8)]), controlRead({ probe }), now)).toMatchObject({ mode: 'ready', pr: 7 });
+  });
+  it('health policy: red holds main-red for an ordinary head; only the selected fixesMain head is ready under red', () => {
+    const red = controlRead({ health: healthWith(RED_HEALTH) });
+    expect(landingBindingOf(factsOf(), red, now)).toEqual({ mode: 'held', reason: 'main-red', entryId: 107 });
+    const fix = factsOf([entry(6), entry(7, { fixesMain: true })], { flags: { operatorPaused: false, mainRedHold: true } });
+    expect(landingBindingOf(fix, red, now)).toMatchObject({ mode: 'ready', pr: 7, fixesMain: true });
+    expect(landingBindingOf(fix, controlRead({ health: healthWith({ state: 'unmeasured', why: 'pending', pending: ['required-a'] }) }), now))
+      .toMatchObject({ mode: 'held', reason: 'health-unmeasured' });
+    const behind = factsOf([entry(6), entry(7, { fixesMain: true, afterIds: [106] })]);
+    const two = probeWith({ heads: [
+      { pr: 6, head: CONTROL_HEAD_SHA, branch: 'ws/a', id: null, base: { state: 'clean' } },
+      { pr: 7, head: CONTROL_HEAD_SHA, branch: 'ws/b', id: null, base: { state: 'clean' } }] });
+    expect(landingBindingOf(behind, controlRead({ probe: two, health: healthWith(RED_HEALTH) }), now)).toEqual({ mode: 'held', reason: 'main-red', entryId: 106 });
+  });
+  it('a persisted flag is a fact, not a gate: green evidence with the flag still set binds ready for the same head', () => {
+    const stale = factsOf([entry(7)], { flags: { operatorPaused: false, mainRedHold: true } });
+    expect(landingBindingOf(stale, controlRead(), now).mode).toBe('ready');
+    expect(landingBindingOf(stale, controlRead({ health: { ok: false, reason: 'unmeasured' } }), now)).toMatchObject({ reason: 'health-unmeasured' });
+  });
+});
+
+describe('mainRedNext: the transition matrix', () => {
+  const RED_CTL = controlRead({ health: healthWith(RED_HEALTH) });
+  const PENDING = controlRead({ health: healthWith({ state: 'unmeasured', why: 'pending', pending: ['required-a'] }) });
+  it('green is the only clearing input; red sets; a no-change reading keeps', () => {
+    expect(mainRedNext(true, controlRead(), now, P)).toEqual({ kind: 'set', value: false, sha: CONTROL_BASE_SHA, at: '2026-11-14T12:00:00Z' });
+    expect(mainRedNext(false, RED_CTL, now, P)).toEqual({ kind: 'set', value: true, sha: CONTROL_BASE_SHA, at: '2026-11-14T12:00:00Z' });
+    expect(mainRedNext(true, RED_CTL, now, P)).toEqual({ kind: 'keep', value: true });
+    expect(mainRedNext(false, controlRead(), now, P)).toEqual({ kind: 'keep', value: false });
+  });
+  it('pending and unmeasured readings keep either prior value', () => {
+    for (const prev of [true, false]) {
+      expect(mainRedNext(prev, PENDING, now, P)).toEqual({ kind: 'keep', value: prev });
+      expect(mainRedNext(prev, controlRead({ health: healthWith({ state: 'unmeasured', sha: null, why: 'fetch-failed' }) }), now, P)).toEqual({ kind: 'keep', value: prev });
+    }
+  });
+  it('every failure of any document keeps the prior value', () => {
+    for (const prev of [true, false]) {
+      for (const reason of ['absent', 'unreadable', 'oversize', 'malformed', 'stale', 'unmeasured', 'late', 'refused'] as const) {
+        const keep = { kind: 'keep', value: prev };
+        expect(mainRedNext(prev, controlRead({ health: { ok: false, reason } }), now, P), `health ${reason}`).toEqual(keep);
+        expect(mainRedNext(prev, controlRead({ probe: { ok: false, reason } as never, health: healthWith(RED_HEALTH) }), now, P), `probe ${reason}`).toEqual(keep);
+        expect(mainRedNext(prev, controlRead({ lander: { ok: false, reason }, health: healthWith(RED_HEALTH) }), now, P), `lander ${reason}`).toEqual(keep);
+      }
+    }
+  });
+  it('a mismatched base, a stale or future reading, or a foreign project keeps the prior value', () => {
+    expect(mainRedNext(true, controlRead({ health: healthWith({ sha: OTHER_BASE }) }), now, P)).toEqual({ kind: 'keep', value: true });
+    expect(mainRedNext(false, controlRead({ health: healthWith({ ...RED_HEALTH, sha: OTHER_BASE }) }), now, P)).toEqual({ kind: 'keep', value: false });
+    expect(mainRedNext(true, controlRead({ health: healthWith({ at: '2026-11-14T11:30:00Z' }) }), now, P)).toEqual({ kind: 'keep', value: true });
+    expect(mainRedNext(false, controlRead({ probe: probeWith({ at: '2026-11-14T11:30:00Z' }), health: healthWith(RED_HEALTH) }), now, P)).toEqual({ kind: 'keep', value: false });
+    expect(mainRedNext(false, controlRead({ health: healthWith({ ...RED_HEALTH, at: '2026-11-14T13:00:00Z' }) }), now, P)).toEqual({ kind: 'keep', value: false });
+  });
+  it('CONTROL-foreign: documents of another project keep the previous red', () => {
+    expect(mainRedNext(true, controlRead(), now, 'project-b')).toEqual({ kind: 'keep', value: true });
+    expect(mainRedNext(false, RED_CTL, now, 'project-b')).toEqual({ kind: 'keep', value: false });
+    expect(mainRedNext(true, controlRead({ health: healthWith({ project: 'project-b' }) }), now, P)).toEqual({ kind: 'keep', value: true });
+  });
+  it('a positive lander reading is required: absent opt-in keeps the flags', () => {
+    expect(mainRedNext(false, controlRead({ lander: { ok: false, reason: 'absent' }, health: healthWith(RED_HEALTH) }), now, P)).toEqual({ kind: 'keep', value: false });
+    expect(mainRedNext(true, controlRead({ lander: { ok: false, reason: 'absent' } }), now, P)).toEqual({ kind: 'keep', value: true });
   });
 });
