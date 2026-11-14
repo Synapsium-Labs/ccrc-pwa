@@ -13,7 +13,6 @@
 import { FLEET_ROLES, type FleetRole } from '../../../shared/fleetRoles.js';
 import { PLAIN_AUTO_MEMORY_DEFAULT, isPlainAutoMemoryChoice, type PlainAutoMemoryChoice } from '../../../shared/plainAutoMemory.js';
 import type { ChildReclaimGeneration } from '../../../shared/api.js';
-import { delegationIntentKey } from '../coord/delegation-model.js';
 import type { RoleAmbiguity, RoleReading } from '../roleOf.js';
 import { compactThresholdFor } from './launchProfile.js';
 
@@ -60,17 +59,10 @@ export function plainAutoMemoryOf(r: PlainAutoMemoryRead): PlainAutoMemoryChoice
   return isPlainAutoMemoryChoice(r.choice) ? r.choice : null;
 }
 
-/** Declared coordinator intent on one incarnation, read from a delegation checkpoint (`FleetWatcher.
- *  delegationCheckpointIfReady`; null while the lane has none ready). THE ONE READER of that fact, agreed with card PR B
- *  (#2793, `server/src/continuity/cardFacts.ts` carries the same function): whichever of the two lands second deletes its
- *  copy and imports the other's (review 2024 F2). */
-export function intentOfCheckpoint(cp: { readonly coordinatorIntentByParent: Readonly<Record<string, string>> } | null,
-  id: string, incarnation: string): boolean | 'not-ready' {
-  return cp === null ? 'not-ready' : Object.hasOwn(cp.coordinatorIntentByParent, delegationIntentKey(id, incarnation));
-}
-
-/** The lane's declared intent for one session: a registry row with no incarnation declared none (the card's fold); an
- *  incarnation that could not be read, or a checkpoint not ready, is unmeasured, and the lane then skips the row. */
+/** The lane's declared intent for one session, from the ONE reader of that fact (`intentOfCheckpoint`, in
+ *  `declaredIntent.ts`, shared byte for byte with card PR B #2793; review 2024 F2): a registry row with no incarnation declared
+ *  none (the card's fold); an incarnation that could not be read, or a checkpoint not ready, is unmeasured, and the lane then
+ *  skips the row (the card renders it unmeasured: each keeps its own fold). */
 export function declaredIntentOf(incarnation: ChildReclaimGeneration, readCheckpoint: (id: string, incarnation: string) =>
   boolean | 'not-ready', id: string): boolean | 'unmeasured' {
   if (incarnation.kind === 'absent') return false;

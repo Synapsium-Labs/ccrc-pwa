@@ -20,9 +20,27 @@ import type { LaneArmRead } from '../src/coord/laneArm.js';
 import type { PlainAutoMemoryRead } from '../src/continuity/profileFor.js';
 import type { UsageRead } from '../src/usage.js';
 import { profileForCases } from './sim/launchProfileSets.js';
+import { declaredIntentOf } from '../src/continuity/profileFor.js';
+import { intentOfCheckpoint } from '../src/continuity/declaredIntent.js';
+import { delegationIntentKey } from '../src/coord/delegation-model.js';
 
 describe('profileFor and plainAutoMemoryOf (Task 5, Task 6)', () => {
   for (const [name, run] of Object.entries(profileForCases(profileForModule))) it(name, run);
+});
+
+describe('declared intent: the shared checkpoint reader, and the lane\'s fold of the incarnation (review 2024 F2)', () => {
+  const cp = { coordinatorIntentByParent: { [delegationIntentKey('lane-a-project-a', 'g1')]: '2026-11-14T00:00:00Z' } };
+  const read = (id: string, inc: string): boolean | 'not-ready' => intentOfCheckpoint(cp, id, inc);
+  it('declared on this incarnation reads true; another incarnation, or none recorded, reads false', () => {
+    expect(declaredIntentOf({ kind: 'value', v: 'g1' }, read, 'lane-a-project-a')).toBe(true);
+    expect(declaredIntentOf({ kind: 'value', v: 'g2' }, read, 'lane-a-project-a')).toBe(false);
+    expect(declaredIntentOf({ kind: 'value', v: 'g1' }, read, 'lane-a-project-b')).toBe(false);
+    expect(declaredIntentOf({ kind: 'absent' }, read, 'lane-a-project-a')).toBe(false);
+  });
+  it('an unreadable incarnation, or a checkpoint not ready, is unmeasured, never false', () => {
+    expect(declaredIntentOf({ kind: 'unreadable' }, read, 'lane-a-project-a')).toBe('unmeasured');
+    expect(declaredIntentOf({ kind: 'value', v: 'g1' }, (id, inc) => intentOfCheckpoint(null, id, inc), 'lane-a-project-a')).toBe('unmeasured');
+  });
 });
 
 const NONE: ChildMark = { kind: 'none' };
