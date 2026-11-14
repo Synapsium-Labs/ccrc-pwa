@@ -298,6 +298,8 @@ describe('the token gate is total, with the operator routes excluded BY NAME', (
     '/api/coord/run-close',
     // D-7453: Settings › Automation › Roll idle sessions, an operator dial, session-gated like the stall-watch door.
     '/api/coord/roll-idle',
+    // Overlord W1a launch profiles PR B: Settings › Automation › Auto memory for plain sessions, an operator dial, the roll-idle shape.
+    '/api/coord/plain-auto-memory',
     // D-7411: the test box remote switch, an act for the operator alone (its read and its sync take the box token too, D-7554).
     '/api/testbox/switch',
     // D-8289: Capture again on a failed Claude Code build, an act for the operator alone: it moves the queue of the trusted set, so

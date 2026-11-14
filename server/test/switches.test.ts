@@ -123,6 +123,7 @@ describe('the switchboard: SWITCHES rows and readSwitches (D-5855)', () => {
       'run-close-never-started-choice': 'run_close_settings.neverStarted',
       'run-close-claimant-crashed-choice': 'run_close_settings.claimantCrashed',
       'run-close-claimant-gone-choice': 'run_close_settings.claimantGone',
+      'plain-auto-memory': 'plain_memory_settings.choice',
     });
   });
 
@@ -135,7 +136,7 @@ describe('the switchboard: SWITCHES rows and readSwitches (D-5855)', () => {
     }
   });
 
-  it('the writers are the ones the tree has or a named task adds: six route-backed ccd verbs, four settings routes, the rest by hand (the sixth, delegation-adopt, D-8112)', () => {
+  it('the writers are the ones the tree has or a named task adds: six route-backed ccd verbs, five settings routes, the rest by hand (the sixth, delegation-adopt, D-8112; the fifth route, plain-auto-memory)', () => {
     const writers = Object.fromEntries(rows.filter(([, r]) => r.writer !== 'hand-only').map(([k, r]) => [k, r.writer]));
     expect(writers).toEqual({
       'coordinator-paused': 'ccd coord-pause, through POST /api/coord/pause',
@@ -151,6 +152,7 @@ describe('the switchboard: SWITCHES rows and readSwitches (D-5855)', () => {
       'run-close-never-started-choice': 'POST /api/coord/run-close',
       'run-close-claimant-crashed-choice': 'POST /api/coord/run-close',
       'run-close-claimant-gone-choice': 'POST /api/coord/run-close',
+      'plain-auto-memory': 'POST /api/coord/plain-auto-memory',
     });
   });
 
@@ -203,9 +205,9 @@ describe('the switchboard: SWITCHES rows and readSwitches (D-5855)', () => {
     expect(readSwitches(null)[TESTBOX_REMOTE_LIVE_MARKER]).toBe('unmeasurable');
   });
 
-  it('the table has 47 rows: 37 markers, 7 settings and 3 ~/.ccrc files (30 at the test box contract\'s base; roll-idle-targets the third setting, dispatch-abandon-choice the fourth; pane-scope-stop-live, D-7902; the sweep\'s two switches, D-7994; delegation-adopt, delegation PR7; runs-expire-never-started, D-8077; the two run-close choices, D-8077; runs-expire-coordinator-gone and its choice, D-8078; stall-watch-disabled, D-8339; autocompact-disabled and the three ~/.ccrc off switches, D-8382)', () => {
+  it('the table has 48 rows: 37 markers, 8 settings and 3 ~/.ccrc files (30 at the test box contract\'s base; roll-idle-targets the third setting, dispatch-abandon-choice the fourth; pane-scope-stop-live, D-7902; the sweep\'s two switches, D-7994; delegation-adopt, delegation PR7; runs-expire-never-started, D-8077; the two run-close choices, D-8077; runs-expire-coordinator-gone and its choice, D-8078; stall-watch-disabled, D-8339; autocompact-disabled and the three ~/.ccrc off switches, D-8382; plain-auto-memory, Overlord W1a launch profiles PR B)', () => {
     const fileRows = rows.filter(([, r]) => 'ccrcFile' in r.storage);
-    expect([rows.length, markerRows.length, settingRows.length, fileRows.length]).toEqual([47, 37, 7, 3]);
+    expect([rows.length, markerRows.length, settingRows.length, fileRows.length]).toEqual([48, 37, 8, 3]);
   });
 
   it('D-8339: stall-watch-disabled is C5\'s, hand-only, absent means the watch runs, and the stall lane reads the same constant', () => {

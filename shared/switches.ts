@@ -374,6 +374,11 @@ export const SWITCHES = {
     meaning: 'The claimant-gone group of the run-close lane (rows E3, E3s and E5): off, shadow (it records what it would close) or on (D-8078). A standing runs-expire-coordinator-gone marker is an emergency override that arms it.',
     writer: 'POST /api/coord/run-close',
   },
+  'plain-auto-memory': {
+    storage: { setting: 'plain_memory_settings.choice' }, default: 'off', owner: 'C3',
+    meaning: 'Whether a plain session keeps Claude Code\'s auto memory from its next launch (Overlord H14, Table 11.1d); applied only while the launch-profile lane is live, and every other role has it off.',
+    writer: 'POST /api/coord/plain-auto-memory',
+  },
   [SCOPE_SWEEP_LIVE_MARKER]: {
     storage: { marker: SCOPE_SWEEP_LIVE_MARKER }, default: 'absent: shadow, the sweep records what it would stop',
     owner: 'C4', meaning: 'The pane-scope sweep acts: an inert scope of a dead pane is stopped, three a minute at most.',
