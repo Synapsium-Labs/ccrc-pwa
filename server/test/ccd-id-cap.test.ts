@@ -110,6 +110,8 @@ const ID_NAME_TEMPLATES: readonly IdNameTemplate[] = [
   { file: 'ccd/session-hook.sh', template: '.<id>.compactions-stage.<pid>.<R>.<R>.tmp', overhead: 43 },
   // Overlord W1a, context readings: the compaction events file's rotation, a field longer than the family's FIELD_MAX.
   { file: 'ccd/session-hook.sh', template: '<id>.compacteventsprev', overhead: 18 },
+  // Overlord W1a, the anchor: the owed mark after an automatic compaction, a field the family's grammar does not take (a hyphen).
+  { file: 'ccd/session-hook.sh', template: '<id>.anchor-owed', overhead: 12 },
   { file: 'ccd/session-hook.sh', template: '.<id>.compactpost.<pid>.<R>.<R>.claim', overhead: 39 },
 ];
 

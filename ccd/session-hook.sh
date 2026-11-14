@@ -3277,7 +3277,8 @@ _hook_anchor_fetch() {   # <form: start|prompt|fork> -> ANCHOR_WORD (text, dark,
 _hook_roster_card() {   # <event word> -> sets CARD_ROSTER (armed) or appends the shadow log (unarmed); 0 on every path
   local body="" card="" log="$HOME/.ccrc/roster-card-shadow.log"
   CARD_ROSTER=""
-  _hook_roster_eligible && [[ -z "${ANCHOR_HUNG-}" ]] || return 0
+  _hook_roster_eligible || return 0
+  [[ -z "${ANCHOR_HUNG-}" ]] || return 0   # the anchor's read just timed out: so would this one (a-hung-server-costs-one-bound)
   body=$(_hook_timeout 4 "$HOME/.local/bin/ccrc-api" runs list 2>/dev/null) || return 0
   card=$(jq -L "$ROSTER_CARD_LIB" -r --arg me "$id" --argjson now "$(_hook_epoch_ms)" \
     --argjson max $(( ROSTER_CARD_MAX_CHARS - 64 )) 'include "roster-card"; roster_card($me; $now; $max)' <<<"$body" 2>/dev/null) || return 0
