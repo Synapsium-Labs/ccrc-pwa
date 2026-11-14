@@ -221,6 +221,15 @@
 .ref-bar-mark {
   flex: none;
 }
+/* The face after the wordmark (Overlord face plan, Task 8): one 32px cell that never shrinks. On the phone's row, which
+   spreads its children apart, its auto margin keeps it beside the wordmark and the doors at the far edge. */
+.ref-bar .face-mark,
+.ref-phone-row .face-mark {
+  flex: none;
+}
+.ref-phone-row .face-mark {
+  margin-right: auto;
+}
 .ref-tabs {
   display: flex;
   flex: none;

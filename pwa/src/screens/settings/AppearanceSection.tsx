@@ -17,32 +17,22 @@
 // here, and `preventDefault` keeps the browser's own radio arrowing from moving it a second time: one press is one
 // `setTheme`, one storage write. The checked card is `useThemeChoice()`, the choice in force as the boot read it from
 // storage or `setTheme` last made it (D-5572), never a copy of the last tap.
-import { useId, type KeyboardEvent, type ReactNode } from 'react';
+import { useId, type ReactNode } from 'react';
 import { Radio, SYSTEM, Section } from '@ccrc/ui';
-import { AppearanceFieldset, THEME_CHOICES } from '../AppearanceRow';
+import { AppearanceFieldset, THEME_CHOICES, radioArrows } from '../AppearanceRow';
+import { CharacterFieldset } from './CharacterFieldset';
 import { SkinFieldset } from '../SkinFieldset';
 import { SETTINGS_CARDS } from '../../fleet/settingsText';
 import { setTheme, useThemeChoice } from '../../lib/theme';
 import '../../fleet/fleet.css';
 import './settings.css';
 
-const STEP: Record<string, number> = { ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1 };
-
 function ThemeGrid(): ReactNode {
   const current = useThemeChoice();
   const noteId = useId();
   const at = Math.max(0, THEME_CHOICES.findIndex((c) => c.id === current));
   const checked = THEME_CHOICES[at]!;
-
-  const onKeyDown = (e: KeyboardEvent<HTMLDivElement>): void => {
-    const step = STEP[e.key];
-    if (step === undefined) return;
-    e.preventDefault();
-    const n = THEME_CHOICES.length;
-    const next = (at + step + n) % n;
-    setTheme(THEME_CHOICES[next]!.id);
-    e.currentTarget.querySelectorAll<HTMLInputElement>('input[type="radio"]')[next]?.focus();
-  };
+  const onKeyDown = radioArrows(THEME_CHOICES.length, at, (next) => setTheme(THEME_CHOICES[next]!.id));
 
   return (
     <AppearanceFieldset legend="Theme" command="switch-theme">
@@ -89,9 +79,12 @@ function ThemeGrid(): ReactNode {
 export function AppearanceSection(): ReactNode {
   const card = SETTINGS_CARDS.appearance.look;
   return (
-    <Section level={3} scope={card.scope} title={card.title} purpose={card.purpose}>
-      <SkinFieldset />
-      <ThemeGrid />
-    </Section>
+    <>
+      <Section level={3} scope={card.scope} title={card.title} purpose={card.purpose}>
+        <SkinFieldset />
+        <ThemeGrid />
+      </Section>
+      <CharacterFieldset />
+    </>
   );
 }

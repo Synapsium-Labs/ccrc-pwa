@@ -2,7 +2,7 @@
 // no health answer yet reads "checking", never an all-clear.
 import { describe, expect, it } from 'vitest';
 import type { FleetHealth } from '../../shared/api';
-import { agentLink } from '../src/fleet/agentLink';
+import { agentDown, agentLink } from '../src/fleet/agentLink';
 
 const health = (over: Partial<FleetHealth>): FleetHealth => ({ mode: 'remote', connected: true, downSince: null, ...over } as FleetHealth);
 
@@ -19,5 +19,16 @@ describe('agentLink', () => {
   it('no answer yet is never an all-clear', () => {
     expect(agentLink(null).dot).not.toBe('done');
     expect(agentLink(null).word).not.toMatch(/connected/);
+  });
+});
+
+describe('agentDown', () => {
+  it.each([
+    ['no answer yet', null, false],
+    ['local mode, even unconnected', health({ mode: 'local', connected: false }), false],
+    ['remote and connected', health({ connected: true }), false],
+    ['remote and not connected', health({ connected: false, downSince: 1 }), true],
+  ] as const)('%s', (_name, h, down) => {
+    expect(agentDown(h)).toBe(down);
   });
 });

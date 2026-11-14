@@ -97,7 +97,12 @@ describe('the bar fits on one line with every badge at 99+', () => {
             const m = await page.evaluate(() => {
               const bar = document.querySelector<HTMLElement>('.ins-topbar')!;
               const b = bar.getBoundingClientRect();
-              const tops = [...bar.children].map((c) => Math.round(c.getBoundingClientRect().top));
+              // One line: every child but the face has the line's top. The face is a 32px cell centred in the 44px line, so its
+              // top is lower: its centre is the line's, and its height is bounded by the line (below).
+              const kids = [...bar.children].map((c) => ({ face: c.classList.contains('face-mark'), r: c.getBoundingClientRect() }));
+              const tops = kids.filter((k) => !k.face).map((k) => Math.round(k.r.top));
+              const centres = kids.map((k) => Math.round((k.r.top + k.r.bottom) / 2));
+              const faceHeights = kids.filter((k) => k.face).map((k) => k.r.height);
               const parts: [string, Element | null][] = [
                 ...[...bar.querySelectorAll('nav.ins-doors > .ins-door')].map((d): [string, Element] => [d.getAttribute('aria-label')!, d]),
                 ['⌘K', bar.querySelector('.ins-command > :last-child')],
@@ -113,7 +118,7 @@ describe('the bar fits on one line with every badge at 99+', () => {
               const doors = document.querySelector('nav.ins-doors')!.getBoundingClientRect();
               const field = bar.querySelector('.ins-command')!.getBoundingClientRect();
               return {
-                tops, outside, doorCount: parts.length - 4,
+                tops, centres, faceHeights, line: b.height, outside, doorCount: parts.length - 4,
                 barScroll: bar.scrollWidth - bar.clientWidth,
                 pageScroll: document.documentElement.scrollWidth - window.innerWidth,
                 figure: { bar: Math.round(b.width), doors: Math.round(doors.width), field: Math.round(field.width) },
@@ -122,6 +127,12 @@ describe('the bar fits on one line with every badge at 99+', () => {
             console.log(`DESK-NAV-FIGURE ${viewName(view)}: bar ${m.figure.bar} px, doors ${m.figure.doors} px, command field ${m.figure.field} px`);
             expect(m.doorCount, 'the wordmark door and six doors are measured').toBe(7);
             for (const t of m.tops) expect(Math.abs(t - m.tops[0]!), `one line: tops ${m.tops.join(', ')}`).toBeLessThanOrEqual(1);
+            expect(m.faceHeights, 'the face is in the bar').toHaveLength(1);
+            for (const c of m.centres) expect(Math.abs(c - m.centres[0]!), `one line: centres ${m.centres.join(', ')}`).toBeLessThanOrEqual(1);
+            // Bounded by the cells' own sizes, not by the auto-height bar: a 48 px face would grow the bar and pass a check
+            // against it (review 2002 N-H). The face is one 32 px cell, the bar one 44 px line.
+            for (const h of m.faceHeights) expect(h, 'the face is one 32 px cell').toBeLessThanOrEqual(32.5);
+            expect(m.line, 'the bar is one 44 px line').toBeLessThanOrEqual(44.5);
             expect(m.outside, 'every door, ⌘K, the bell, Settings and + inside the bar').toEqual([]);
             expect(m.barScroll, 'the bar does not scroll sideways').toBeLessThanOrEqual(0);
             expect(m.pageScroll, 'the page does not scroll sideways').toBeLessThanOrEqual(0);

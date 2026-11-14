@@ -104,7 +104,7 @@ describe('the store: three states per group, default shadow', () => {
       ALTER TABLE programs DROP COLUMN planBy; ALTER TABLE programs DROP COLUMN planAt; ALTER TABLE programs DROP COLUMN planRequired;
       ALTER TABLE programs DROP COLUMN planEnd; ALTER TABLE programs DROP COLUMN planEndWhy; ALTER TABLE programs DROP COLUMN planEndAt;
       DELETE FROM programs WHERE slug = 'linear-sync';`);
-    fresh.exec('DROP TABLE continuity_starts; DROP INDEX mail_answers_once; ALTER TABLE mail DROP COLUMN answersMail; DROP TABLE testbox_staged_changes; ALTER TABLE claims DROP COLUMN chainedFrom; ALTER TABLE nodes DROP COLUMN reportedSweep; DROP TABLE claude_builds; DROP TABLE practice_cases; DROP TABLE testbox_events; DROP TABLE lane_arm_settings; DROP TABLE coordinator_calls; ALTER TABLE run_close_settings DROP COLUMN claimantGone; PRAGMA user_version = 53;');
+    fresh.exec('DROP TABLE face_settings; DROP TABLE continuity_starts; DROP INDEX mail_answers_once; ALTER TABLE mail DROP COLUMN answersMail; DROP TABLE testbox_staged_changes; ALTER TABLE claims DROP COLUMN chainedFrom; ALTER TABLE nodes DROP COLUMN reportedSweep; DROP TABLE claude_builds; DROP TABLE practice_cases; DROP TABLE testbox_events; DROP TABLE lane_arm_settings; DROP TABLE coordinator_calls; ALTER TABLE run_close_settings DROP COLUMN claimantGone; PRAGMA user_version = 53;');
     fresh.close();
     const coord = new CoordStore(openCoordDb(file));
     expect(coord.runCloseSetting()).toEqual({ kind: 'row', neverStarted: 'on', claimantCrashed: 'off', claimantGone: 'shadow', updatedAt: 9 });

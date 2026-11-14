@@ -2839,6 +2839,26 @@ export const MIGRATIONS: readonly string[] = [
   );
   CREATE INDEX continuity_starts_by_session ON continuity_starts(sessionId, receivedAt);
   `,
+  // ── 67: user_version 66 -> 67 ─────────────────────────────────────────────
+  // The Overlord face plan, Task 6: the operator's character choice, `face_settings`, one row seeded `(1, 'orb', 0)`
+  // (`updatedAt` 0 = never chosen). Its one writer is `CoordStore.setFaceCharacter`, behind `POST /api/face`; its one reader
+  // is `CoordStore.faceSettings`, which reads a word `isCharacter` refuses, or a lost row, as the default character.
+  // `character` carries NO CHECK, `collect_lane_settings.choice`'s reason: a word a newer build writes must not stop an
+  // older build opening the file.
+  //
+  // ONE NEW TABLE AND ITS SEED, nothing else: an older build opening a file at `user_version 67` takes rule 3 (it warns,
+  // reads as-is and migrates nothing) and never names the table. Every earlier entry is frozen. RE-MEASURE the slot before
+  // the PR and before merge (it must print 66 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE face_settings (
+    id        INTEGER PRIMARY KEY CHECK (id = 1),
+    character TEXT NOT NULL,
+    updatedAt INTEGER NOT NULL
+  );
+  INSERT INTO face_settings (id, character, updatedAt) VALUES (1, 'orb', 0);
+  `,
 ];
 
 /** The version this build writes. `MIGRATIONS.length` and nothing else: a

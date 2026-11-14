@@ -118,7 +118,7 @@ describe("the ids are W2's door table's", () => {
     expect(baseCommands().map((c) => c.id).sort()).toEqual([
       'go-fleet', 'go-inbox', 'go-runs', 'go-accounts', 'go-archive', 'go-settings', 'go-waiting',
       'open-session', 'next-session', 'prev-session',
-      'switch-layout', 'switch-theme', 'show-shortcuts',
+      'switch-layout', 'switch-theme', 'switch-character', 'show-shortcuts',
       // W2 Task S2b registers these three (§The door table's last column).
       'go-docs', 'new-session', 'open-palette',
       // Settings Task R2b1 (D-5504): one per section, its door the section's index row.
@@ -141,7 +141,7 @@ describe("the ids are W2's door table's", () => {
 
 describe('the session commands (W2 Task S2d)', () => {
   const ctx = (session: CommandContext['session']): CommandContext => ({
-    path: '/s/project-a-one', sessions: [], runs: [], navigate: () => {}, setSkin: () => {}, setTheme: () => {},
+    path: '/s/project-a-one', sessions: [], runs: [], navigate: () => {}, setSkin: () => {}, setTheme: () => {}, setCharacter: () => {},
     openShortcuts: () => {}, openNewSession: () => {}, openPalette: () => {}, paletteOpen: false, session, inspector: null,
   });
 
@@ -229,12 +229,14 @@ describe('the top search: terms, tier and search-only (D-6714)', () => {
     // the new command's own place is pinned in the empty list below.
     // W5h-a reads the table without go-measure-highlighting the same way; its own rank row and place are pinned below.
     // D-8121 reads it without session-browser the same way; its own rank row and place are pinned below.
-    const ranked = (q: string): string[] => rankCommands(q, baseCommands()).map((c) => c.id).filter((id) => id !== 'toggle-inspector' && id !== 'go-measure-highlighting' && id !== 'go-reader-lab' && id !== 'session-browser');
+    // The Overlord face plan's Switch character is read without the same way; its place is pinned below.
+    const ranked = (q: string): string[] => rankCommands(q, baseCommands()).map((c) => c.id).filter((id) => id !== 'toggle-inspector' && id !== 'go-measure-highlighting' && id !== 'go-reader-lab' && id !== 'session-browser' && id !== 'switch-character');
     // Desktop-polish PL5a adds `go-waiting` (a top route's door); the table is read without it, and its own place is below.
     const rankedBefore = (q: string): string[] => ranked(q).filter((id) => id !== 'go-waiting');
     for (const [q, ids] of BEFORE) expect(rankedBefore(q), JSON.stringify(q)).toEqual(ids);
     // The command's own rank row: the one command whose title holds "inspector".
     expect(rankCommands('inspector', baseCommands()).map((c) => c.id)).toEqual(['toggle-inspector']);
+    expect(rankCommands('character', baseCommands()).map((c) => c.id)).toEqual(['switch-character']);
     // This pin couples to the registry's order on purpose: moving the command is a decision, not a drift.
     const empty = rankCommands('', baseCommands()).map((c) => c.id);
     expect(empty.indexOf('toggle-inspector'), 'after the session commands, before Switch layout').toBe(empty.indexOf('session-pr') + 1);

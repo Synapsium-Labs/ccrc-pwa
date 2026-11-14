@@ -178,6 +178,8 @@ describe('Wordmark', () => {
       expect(worse, extra).not.toBe(WORDMARK_CSS);
       expect(() => checkSheet(worse, allow), extra).toThrow(/refused property/);
     }
+    // The keyframe allow-list: a glow keyframes planted beside the wordmark's two is refused by name.
+    expect(() => checkSheet(`${WORDMARK_CSS}@keyframes wordmark-glow{from{opacity:1}}`, allow)).toThrow(/refused keyframes/);
     // Played once: the typing's shorthand carries count 1 and `forwards`, and only the cursor loops.
     const type = rule('.wordmark-type').match(/animation:([^;]*)/)?.[1] ?? '';
     expect(type.split(/\s+/)).toEqual(expect.arrayContaining(['1', 'forwards']));

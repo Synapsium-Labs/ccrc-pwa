@@ -17,6 +17,8 @@
 import { Suspense, useEffect, useLayoutEffect, useRef } from 'react';
 import type { ReactNode } from 'react';
 import { BlockScreen } from './components/BlockScreen';
+import { Splash } from './face/SplashScreen';
+import { AppBadge } from './face/AppBadge';
 import { LoginScreen } from './components/LoginScreen';
 import { RenderBoundary, ScreenFallback } from './components/RenderBoundary';
 import { ToastHost } from '@ccrc/ui';
@@ -233,6 +235,7 @@ export function App(): ReactNode {
   return (
     <FleetChromeProvider store={useFleetStore}>
       <SettingsDataProvider active={settings}>
+      <Splash />
       {authLost && <LoginScreen />}
       {blocked && <BlockScreen />}
       <ShellFrame set={set} view={view} detailRef={detail}
@@ -247,6 +250,7 @@ export function App(): ReactNode {
       {/* The ⌘K palette, the shortcut sheet and the global keys (D-5103),
           above the frame so a skin switch keeps an open palette (D-5467). */}
       <ShellCommands />
+      <AppBadge />
       <ToastHost />
       </SettingsDataProvider>
     </FleetChromeProvider>

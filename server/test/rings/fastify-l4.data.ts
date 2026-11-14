@@ -35,4 +35,5 @@ export const FASTIFY_L4_ALLOWLIST: EntrySet = {
   'server/src/testboxAdmin.ts': { reason: "the test box connect routes (D-8166): the status read and the act behind the account gate, with the TestboxAdminOps port they run", since: '2026-11-10' },
   'server/src/update/routes.ts': { reason: "the update control plane's HTTP routes", since: '2026-10-20' },
   'server/src/readerLab/routes.ts': { reason: "the reader lab door's counter hook and HTTP routes (the reader lab plan, Task 3)", since: '2026-11-04' },
+  'server/src/face/routes.ts': { reason: "the character choice's two HTTP routes (the face plan, Task 6)", since: '2026-11-13' },
 };

@@ -3,6 +3,7 @@
 // palette in each, and Instrument's top-bar field in W2), so a command added
 // here is in every skin, the palette and the shortcut sheet at once.
 import type { FleetSession, RunSummary } from '../../../shared/api';
+import type { Character as CharacterName } from '../../../shared/face';
 
 /** Instrument's command field's words and accessible name (`TopBar.tsx`). The palette's words live here, beside what
  *  a command is, so the field and the palette say them from one home. */
@@ -26,6 +27,7 @@ export interface CommandContext {
   navigate: (href: string) => void;
   setSkin: (choice: string) => void;
   setTheme: (choice: string) => void;
+  setCharacter: (choice: CharacterName) => void;
   openShortcuts: () => void;
   /** The fleet flows' New session sheet (`useFleetFlows().openNewSession`, D-5468). */
   openNewSession: () => void;
