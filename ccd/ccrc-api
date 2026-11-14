@@ -694,7 +694,7 @@ cmd_inbox() {   # url of the read
 }
 
 # AN EXPLICIT TEMPLATE, because BSD `mktemp` IGNORES `$TMPDIR` when given
-# none (install.sh:54 measured it) — and this file cannot source ccd's
+# none (measured in install.sh) — and this file cannot source ccd's
 # platform block, so the template is spelled locally, unconditionally, the
 # same shape install.sh uses. GNU mktemp honours the template identically.
 # ONE file and ONE trap for the whole run, armed before the first request (D-6780): curl's `-o` rewrites it on
