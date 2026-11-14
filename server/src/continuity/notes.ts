@@ -14,7 +14,7 @@
 import { TERMINAL_RUN_STATES, type RunState } from '../../../shared/api.js';
 import { TOOL_RESULT_CUT_BYTES } from '../../../shared/continuity-card.js';
 import {
-  HANDOVER_MAX_BYTES, HANDOVER_TONE_MAX_CHARS, NOTES_CAP, type GenerationState, type HandoverNote, type KeyFact, type NoteKey, type NoteKind,
+  HANDOVER_MAX_BYTES, HANDOVER_TONE_MAX_CHARS, KEY_FACTS, NOTES_CAP, isBlankText, type GenerationState, type HandoverNote, type KeyFact, type NoteKey, type NoteKind,
 } from '../../../shared/continuity.js';
 import { OPEN_ITEM_STATES, type ItemState } from '../../../shared/ledgers.js';
 import { NOTE_REFUSALS, type NoteRefusal } from '../../../shared/refusal.js';
@@ -64,7 +64,7 @@ function worst(facts: readonly KeyFact[]): NoteVerdictRefusal | null {
  */
 export function noteVerdict(n: NoteInput, key: KeyFact, liveCount: number | 'unmeasured', revised: RevisedFact): NoteVerdict {
   if (n.closes && n.revises === null) return { ok: false, refusal: 'bad-request' };
-  if (!n.closes && n.kind === 'thread' && n.next.trim() === '') return { ok: false, refusal: 'bad-request' };
+  if (!n.closes && n.kind === 'thread' && isBlankText(n.next)) return { ok: false, refusal: 'bad-request' };
   if (overCap(n.waitsOn, NOTES_CAP.chars) || overCap(n.next, NOTES_CAP.chars)) return { ok: false, refusal: NOTE_REFUSALS.tooLong };
   // A revision with no fact for the note it revises, or a new note with one, is a caller that measured the wrong thing.
   if ((n.revises === null) !== (revised === 'not-revising')) return { ok: false, refusal: 'unmeasured' };
@@ -80,8 +80,9 @@ export function noteVerdict(n: NoteInput, key: KeyFact, liveCount: number | 'unm
   return { ok: true };
 }
 
-/** The words a handover note may not use to claim a state (C37: "drops status words"). Whole words, any case, matched on
- *  the text NFKC-folded with its format characters (`\p{Cf}`: zero-width and soft hyphen among them) stripped. */
+/** The words a handover note may not use to claim a state (C37: "drops status words"). Whole words, any case, MATCHED on
+ *  the text NFKC-folded with its format characters (`\p{Cf}`: zero-width and soft hyphen among them) stripped; the text
+ *  STORED is the author's, as written, but for the mark where a word was (review 2046, F4). */
 export const HANDOVER_STATUS_WORDS = [
   'done', 'merged', 'fixed', 'approved', 'complete', 'completed', 'finished', 'landed', 'shipped', 'resolved', 'passed',
   'green', 'closed', 'released', 'accepted', 'verified',
@@ -92,31 +93,60 @@ const STATUS_RE = new RegExp(`(?<![\\p{L}\\p{N}_-])(?:${HANDOVER_STATUS_WORDS.jo
  *  `not`, review 2039 F8). It holds no status word itself. */
 export const STATUS_WORD_MARK = '[status word dropped]';
 
-/** `text` NFKC-folded with its format characters stripped, each status word in it replaced by `STATUS_WORD_MARK`, and how
- *  many it replaced. Nothing else changes: no spacing is closed up. */
+/** `text` folded for matching, a character at a time (NFKC, format characters dropped), with each folded UTF-16 unit's
+ *  span in the original: `from[k]` to `to[k]`. */
+function foldForMatching(text: string): { readonly folded: string; readonly from: readonly number[]; readonly to: readonly number[] } {
+  let folded = '';
+  const from: number[] = [];
+  const to: number[] = [];
+  let at = 0;
+  for (const ch of text) {
+    const f = /\p{Cf}/u.test(ch) ? '' : ch.normalize('NFKC');
+    for (let k = 0; k < f.length; k += 1) { from.push(at); to.push(at + ch.length); }
+    folded += f;
+    at += ch.length;
+  }
+  return { folded, from, to };
+}
+
+/** `text` as written, with each status word found in its fold replaced by `STATUS_WORD_MARK` (the whole stretch of the
+ *  original it came from, format characters inside it included), and how many it replaced. Nothing else changes. */
 export function dropStatusWords(text: string): { readonly text: string; readonly dropped: number } {
+  const { folded, from, to } = foldForMatching(text);
+  let out = '';
+  let last = 0;
   let dropped = 0;
-  const out = text.normalize('NFKC').replace(/\p{Cf}/gu, '').replace(STATUS_RE, () => { dropped += 1; return STATUS_WORD_MARK; });
-  return { text: out, dropped };
+  for (const m of folded.matchAll(STATUS_RE)) {
+    const start = from[m.index]!;
+    if (start < last) continue;
+    out += text.slice(last, start) + STATUS_WORD_MARK;
+    last = to[m.index + m[0].length - 1]!;
+    dropped += 1;
+  }
+  return { text: dropped === 0 ? text : out + text.slice(last), dropped };
 }
 
 export type HandoverVerdict =
   | { readonly ok: true; readonly cleaned: HandoverNote; readonly dropped: number }
   | { readonly ok: false; readonly refusal: typeof NOTE_REFUSALS.referenceUnknown | typeof NOTE_REFUSALS.tooLong | 'unmeasured' };
 
+/** Is a handover over a cap: a field, the tone, the counts, or its whole JSON in bytes? */
+function handoverOverCap(h: HandoverNote): boolean {
+  return h.threads.length > NOTES_CAP.count || h.cautions.length > NOTES_CAP.count
+    || h.threads.some((t) => overCap(t.waitsOn, NOTES_CAP.chars) || overCap(t.next, NOTES_CAP.chars))
+    || h.cautions.some((c) => overCap(c, NOTES_CAP.chars)) || overCap(h.tone, HANDOVER_TONE_MAX_CHARS)
+    || utf8Bytes(JSON.stringify(h)) > HANDOVER_MAX_BYTES;
+}
+
 /**
  * May this handover note be stored, and as what? In order: a thread's field or a caution over `NOTES_CAP.chars`, the tone
  * over `HANDOVER_TONE_MAX_CHARS`, more threads or cautions than `NOTES_CAP.count`, or the whole note's JSON over
- * `HANDOVER_MAX_BYTES` (`note-too-long`); then each thread's
+ * `HANDOVER_MAX_BYTES` (`note-too-long`), measured on the note as sent and again on the note as it would be stored; then each thread's
  * reference, `refs[i]` for `threads[i]` (one that is not a live row of the caller's is `reference-unknown`, one that could
  * not be read `unmeasured`, never `reference-unknown`); then the status words, dropped from every free text and counted.
  */
 export function handoverVerdict(h: HandoverNote, refs: readonly KeyFact[]): HandoverVerdict {
-  const long = h.threads.length > NOTES_CAP.count || h.cautions.length > NOTES_CAP.count
-    || h.threads.some((t) => overCap(t.waitsOn, NOTES_CAP.chars) || overCap(t.next, NOTES_CAP.chars))
-    || h.cautions.some((c) => overCap(c, NOTES_CAP.chars)) || overCap(h.tone, HANDOVER_TONE_MAX_CHARS)
-    || utf8Bytes(JSON.stringify(h)) > HANDOVER_MAX_BYTES;
-  if (long) return { ok: false, refusal: NOTE_REFUSALS.tooLong };
+  if (handoverOverCap(h)) return { ok: false, refusal: NOTE_REFUSALS.tooLong };
   if (refs.length !== h.threads.length) return { ok: false, refusal: 'unmeasured' };
   const refused = worst(refs);
   if (refused !== null) return { ok: false, refusal: refused === 'unmeasured' ? 'unmeasured' : NOTE_REFUSALS.referenceUnknown };
@@ -127,6 +157,9 @@ export function handoverVerdict(h: HandoverNote, refs: readonly KeyFact[]): Hand
     cautions: h.cautions.map(clean),
     tone: clean(h.tone),
   };
+  // The caps measure what is STORED (review 2046, F1): a mark is longer than the word it replaces, so a note that fits as
+  // sent can be over as stored.
+  if (handoverOverCap(cleaned)) return { ok: false, refusal: NOTE_REFUSALS.tooLong };
   return { ok: true, cleaned, dropped };
 }
 
@@ -135,6 +168,12 @@ export const NOTE_LIST_LIMIT = { default: 20, max: NOTES_CAP.count } as const;
 /** A page's notes, as JSON, stay within this many bytes, so the whole answer stays under the tool result cut with room for
  *  its envelope and the masker's marks (review 2039, F2). */
 export const NOTE_LIST_PAGE_BYTES = TOOL_RESULT_CUT_BYTES - 4_000;
+
+/** The widest `keyFact` word an answer can carry. */
+const WIDEST_KEY_FACT = KEY_FACTS.reduce((a, b) => (b.length > a.length ? b : a));
+/** One note's bytes in a list answer, sized as if its key fact were the widest and with its comma, so a page stays under
+ *  the cut whatever the facts are when they are read (review 2046, F2). */
+export const noteListBytes = (n: object): number => utf8Bytes(JSON.stringify({ ...n, keyFact: WIDEST_KEY_FACT })) + 1;
 
 /**
  * One page of the live notes, newest first: those older than `before` (every one when it is null), at most `limit`, and

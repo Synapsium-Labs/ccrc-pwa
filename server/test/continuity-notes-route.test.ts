@@ -94,6 +94,8 @@ describe('the note door: who may write and read', () => {
       note({ kind: 'programme', slug: 'prog a' }), note({ kind: 'programme', slug: ' prog-a' }), note({ kind: 'programme', slug: 'prog/a' }),
       // A thread names its next act (review 2039, F1).
       note({ kind: 'run', id: 1 }, { next: '' }), note({ kind: 'run', id: 1 }, { next: ' \n ' }),
+      // Only invisible characters is blank too (review 2046, F3).
+      note({ kind: 'run', id: 1 }, { next: '\u200b' }), note({ kind: 'run', id: 1 }, { next: '\u2800\u3164' }),
     ];
     for (const b of bad) {
       const res = await post(app, b);
@@ -393,6 +395,36 @@ describe('GET /api/sessions/:id/notes: paged, every page under the tool result c
         before = body.notes.at(-1)!.id;
       }
       expect(seen).toEqual([...ids].reverse());
+    }
+  });
+
+  it('WORST CASE: 200 small notes whose key facts read the widest words, at --limit 200, every page under the cut (review 2046, F2)', async () => {
+    app = await open();
+    const theirs = runOf('prog-b', OTHER);
+    const mine = runOf('prog-a', ID);
+    // About 130 bytes a note, so 200 of them fill a page's budget. Keys the caller does not claim read `not-yours`; with
+    // every run read failing, every key reads `unmeasured`.
+    for (let i = 0; i < NOTES_CAP.count; i += 1) {
+      const r = c().appendNote({ identity: ID, sessionId: ID, generationId: null, key: { kind: 'run', id: i % 2 === 0 ? theirs : mine },
+        kind: 'thread', waitsOn: 'w'.repeat(20), next: `n${i}`, revises: null, closes: false, at: NOW + i });
+      if (!r.ok) throw new Error('fixture');
+    }
+    for (const unread of [false, true]) {
+      if (unread) c().run = () => ({ ok: false, kind: 'run-unreadable', detail: 'x' });
+      const seen: number[] = [];
+      let before: number | null = null;
+      for (let pages = 0; pages < NOTES_CAP.count; pages += 1) {
+        const res = await get(app, { limit: String(NOTE_LIST_LIMIT.max), ...(before === null ? {} : { before: String(before) }) });
+        expect(res.statusCode).toBe(200);
+        expect(Buffer.byteLength(res.body), `page ${pages}, unread ${unread}`).toBeLessThan(TOOL_RESULT_CUT_BYTES - 1000);
+        const body = res.json() as { notes: { id: number; keyFact: string }[]; more: boolean };
+        if (unread) expect(new Set(body.notes.map((n) => n.keyFact))).toEqual(new Set(['unmeasured']));
+        else expect(body.notes.some((n) => n.keyFact === 'not-yours')).toBe(true);
+        seen.push(...body.notes.map((n) => n.id));
+        if (!body.more) break;
+        before = body.notes.at(-1)!.id;
+      }
+      expect(seen).toHaveLength(NOTES_CAP.count);
     }
   });
 

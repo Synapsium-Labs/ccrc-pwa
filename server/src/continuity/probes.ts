@@ -13,7 +13,7 @@
 //   (no table of its own, §3.3.6's one rule for derived values).
 import type { CardFacts, CardItem, CardNote, Fact } from '../../../shared/continuity-card.js';
 import {
-  FIT_PASS_RATE, FIT_WINDOW, PROBE_NONE, PROBE_ROUND_MAX, PROBE_ROUND_MIN, SPOT_PROBE_EVERY_TOKENS, type ProbeClass,
+  FIT_PASS_RATE, FIT_WINDOW, PROBE_NONE, PROBE_ROUND_MAX, PROBE_ROUND_MIN, SPOT_PROBE_EVERY_TOKENS, isBlankText, type ProbeClass,
 } from '../../../shared/continuity.js';
 import { FLEET_ROLES, type FleetRole } from '../../../shared/fleetRoles.js';
 import { TERMINAL_RUN_STATES } from '../../../shared/api.js';
@@ -170,10 +170,10 @@ function abstentionPool(s: CardFacts, entropy: Entropy): Pool {
 
 /** continuation: what a note says comes next, beside two other notes' `next`: the note's own next act, which the notes piece
  *  gave it (it read the note's whole text until then, slug continuation-reads-note-text). Only threads with a next act that
- *  is not blank, as subjects and as decoys alike: a caution names no next act, and a blank choice would let a blank answer
- *  pass (review 2039, F1). Skipped with fewer than three such notes of distinct next acts. */
+ *  is not blank (`isBlankText`: invisible characters are blank too, review 2046 F3), as subjects and as decoys alike: a
+ *  caution names no next act, and a blank choice would let a blank answer pass (review 2039, F1). Skipped with fewer than three such notes of distinct next acts. */
 function continuationPool(s: CardFacts, entropy: Entropy): Pool {
-  const notes: readonly CardNote[] = (valueOf(s.notes) ?? []).filter((n) => n.kind === 'thread' && fold(n.next) !== '');
+  const notes: readonly CardNote[] = (valueOf(s.notes) ?? []).filter((n) => n.kind === 'thread' && !isBlankText(n.next));
   const drafts: Draft[] = [];
   for (const n of notes) {
     const others = notes.filter((o) => fold(o.next) !== fold(n.next));

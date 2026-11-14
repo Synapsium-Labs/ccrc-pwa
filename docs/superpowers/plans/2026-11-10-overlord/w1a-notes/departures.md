@@ -65,15 +65,23 @@ are built as written.
   A page's notes stay within `NOTE_LIST_PAGE_BYTES` (the tool result cut less 4,000 bytes), and the first note is always
   included. The decider is `notesPage` (L1), with its own mutant set. Measured: 200 notes of 500 characters, in ASCII and
   in four-byte text, page through with every answer more than 1,000 bytes under the cut. Each note is read once, newest
-  first.
+  first. After review 2046 (F2), each note is sized with the widest key fact word (`unmeasured`) and its comma
+  (`noteListBytes`). Before that, a page of many small notes whose keys read `not-yours` or `unmeasured` went past the cut
+  at `--limit 200`. A worst-case door test pins it: 200 notes of about 130 bytes, all `not-yours` or all `unmeasured`. It
+  was measured red with the old sizing.
 - **thread-needs-a-next.** `noteVerdict` refuses `bad-request` in two cases (review 2039, F1 and a nit):
-  - a thread whose `next` is blank after trimming;
+  - a thread whose `next` is blank: since review 2046 (F3), that is `isBlankText` (`shared/continuity.ts`), so a `next`
+    of whitespace, format characters (`\p{Cf}`) or the blank fillers (braille blank, the Hangul fillers, U+034F) is blank.
+    The continuation pool uses the same test;
   - a close that names no note in `revises`.
 
   A caution may have a blank `next`, because it names no next act. A close is checked against neither rule, since it takes
   the closed note's fields. `bad-request` joins `NoteVerdictRefusal`, with one detail covering both cases.
 - **handover-body-cap.** A handover note's whole JSON is capped at `HANDOVER_MAX_BYTES` (16,384 bytes) and refused
-  `note-too-long` above it (review 2039, F3). The field caps alone allowed a note of megabytes. Raising the door's body
+  `note-too-long` above it (review 2039, F3). Since review 2046 (F1), this cap, the field caps and the tone cap are checked
+  twice: on the note as sent, and again on the note as it would be stored, with each status word replaced by the longer
+  mark. So the stored row stays within them. A cases test checks a note that fits as sent but not as stored, for one field
+  and for the whole note. The field caps alone allowed a note of megabytes. Raising the door's body
   limit to 4 MiB makes a handover at every field cap parse. So it is refused `note-too-long`, never 413. The box token is
   checked before the body is read. With 200 threads, a thread can now carry about 80 bytes. The count caps still stand,
   but the byte cap binds first. The card renders the checkpoint as the tone, then the cautions, then the threads. Its
@@ -94,7 +102,9 @@ are built as written.
   merged, fixed, approved, complete, completed, finished, landed, shipped, resolved, passed, green, closed, released,
   accepted and verified, matched as whole words in any case. The spec names the rule, not the list. After review 2039
   (F8):
-  - Matching runs on the text NFKC-folded, with its format characters (`\p{Cf}`) stripped. The stored text is that fold.
+  - Matching runs on the text NFKC-folded, with its format characters (`\p{Cf}`) stripped, a character at a time, and each
+    match maps back to the stretch of the original it came from. Since review 2046 (F4), the stored text is the author's,
+    as written, but for the mark: `x² ½ ﬁle`, a ZWJ emoji and a ZWNJ word are stored unchanged.
   - Each dropped word leaves a visible `[status word dropped]` (`STATUS_WORD_MARK`), so `not done` does not read as `not`.
   - No spacing is closed up on any line.
 
@@ -104,6 +114,17 @@ are built as written.
   box-token machine lanes in `auth/gate.ts`'s EXEMPT table, which that paragraph does not enumerate (the card door and
   the start report are not in it either), and `box-token-census.test.ts` does not ask for them there. So `CLAUDE.md` is
   unchanged.
+
+## Review 2046: recorded, not changed (the coordinator's ruling)
+
+- **F5:** a combining mark the fold cannot merge leaves a word matchable (`done` with a combining low line becomes the mark
+  followed by the combining mark). The mark can also be typed by hand. The header's `dropped` count is measured, so it
+  tells the truth.
+- **F6:** `NOTE_FIELD_CAP_BYTES` is sized so a field at its cap is never cut. So the `--before … --limit 1` pointer shows
+  only for a stored field over its cap. If the note was revised after the snapshot, the pointer returns the older note;
+  the id in the answer shows which.
+- **F7:** each note carries two copies of the untrusted preface, about 330 bytes of overhead. 200 short notes take about
+  40% of the card's budget. No note section exceeds the budget on its own.
 
 ## Review 2039: what this round did not change
 

@@ -2,7 +2,7 @@
 // on the source, and `sim/notesMutants.ts` on each mutated copy, so the floors and the suite assert the same things.
 import { expect } from 'vitest';
 import { TOOL_RESULT_CUT_BYTES } from '../../shared/continuity-card.js';
-import { HANDOVER_MAX_BYTES, HANDOVER_TONE_MAX_CHARS, KEY_FACTS, NOTES_CAP, type GenerationState, type HandoverNote, type KeyFact } from '../../shared/continuity.js';
+import { HANDOVER_MAX_BYTES, HANDOVER_TONE_MAX_CHARS, KEY_FACTS, NOTES_CAP, isBlankText, type GenerationState, type HandoverNote, type KeyFact } from '../../shared/continuity.js';
 import { GENERATION_STATES } from '../../shared/continuity.js';
 import { NOTE_REFUSALS } from '../../shared/refusal.js';
 import { utf8Bytes } from '../../shared/utf8.js';
@@ -25,7 +25,7 @@ const ORDER: readonly KeyFact[] = ['live', 'unmeasured', 'not-yours', 'gone'];
 /** The verdict, written out independently of the decider: the expectation the exhaustive case checks. */
 function expected(n: NotesModule.NoteInput, key: KeyFact, count: number | 'unmeasured', revised: NotesModule.RevisedFact): string {
   if (n.closes && n.revises === null) return 'bad-request';
-  if (!n.closes && n.kind === 'thread' && n.next.trim() === '') return 'bad-request';
+  if (!n.closes && n.kind === 'thread' && isBlankText(n.next)) return 'bad-request';
   if ([...n.waitsOn].length > NOTES_CAP.chars || [...n.next].length > NOTES_CAP.chars) return NOTE_REFUSALS.tooLong;
   if ((n.revises === null) !== (revised === 'not-revising')) return 'unmeasured';
   const facts = [...(revised === 'not-revising' ? [] : [revised]), ...(n.closes ? [] : [key])];
@@ -48,7 +48,7 @@ export function notesCases(m: Notes): Record<string, Case> {
       const texts = [s(NOTES_CAP.chars - 1), s(NOTES_CAP.chars), s(NOTES_CAP.chars + 1), '🙂'.repeat(NOTES_CAP.chars)];
       const counts: (number | 'unmeasured')[] = [0, CAP - 1, CAP, CAP + 1, 'unmeasured'];
       let n = 0;
-      const pairs = [[texts[0]!, texts[1]!], [texts[2]!, 'x'], ['x', texts[2]!], [texts[3]!, texts[3]!], ['x', ' \t ']] as const;
+      const pairs = [[texts[0]!, texts[1]!], [texts[2]!, 'x'], ['x', texts[2]!], [texts[3]!, texts[3]!], ['x', ' \t '], ['x', '\u200b\u2800']] as const;
       for (const key of KEY_FACTS) for (const revised of REVISED) for (const count of counts) for (const closes of [false, true])
         for (const revises of [null, 7]) for (const kind of ['thread', 'caution'] as const) for (const [waitsOn, next] of pairs) {
           const input = note({ kind, waitsOn, next, revises, closes });
@@ -56,7 +56,7 @@ export function notesCases(m: Notes): Record<string, Case> {
             .toBe(expected(input, key, count, revised));
           n += 1;
         }
-      expect(n).toBe(4 * 5 * 5 * 2 * 2 * 2 * 5);
+      expect(n).toBe(4 * 5 * 5 * 2 * 2 * 2 * 6);
     },
     'noteVerdict: the plan\'s named cases': () => {
       expect(m.noteVerdict(note(), 'live', CAP - 1, 'not-revising')).toEqual({ ok: true });
@@ -73,6 +73,11 @@ export function notesCases(m: Notes): Record<string, Case> {
       expect(m.noteVerdict(note({ next: '' }), 'live', 0, 'not-revising')).toEqual({ ok: false, refusal: 'bad-request' });
       expect(m.noteVerdict(note({ next: '  \n ' }), 'live', 0, 'not-revising')).toEqual({ ok: false, refusal: 'bad-request' });
       expect(m.noteVerdict(note({ kind: 'caution', next: '' }), 'live', 0, 'not-revising')).toEqual({ ok: true });
+      // Invisible characters are blank too (review 2046, F3): a zero-width space, the braille blank, a Hangul filler.
+      for (const next of ['\u200b', '\u2800', '\u3164 \u00ad', '\u200d\u2060\ufeff']) {
+        expect(m.noteVerdict(note({ next }), 'live', 0, 'not-revising'), JSON.stringify(next)).toEqual({ ok: false, refusal: 'bad-request' });
+      }
+      expect(m.noteVerdict(note({ next: '\u200bgo' }), 'live', 0, 'not-revising')).toEqual({ ok: true });
       expect(m.noteVerdict(note({ next: '', revises: 3, closes: true }), 'live', 0, 'live')).toEqual({ ok: true });
       expect(m.noteVerdict(note({ closes: true }), 'live', 0, 'not-revising')).toEqual({ ok: false, refusal: 'bad-request' });
       // A definite refusal outranks an unreadable fact, whichever of the two it is.
@@ -135,6 +140,17 @@ export function notesCases(m: Notes): Record<string, Case> {
       expect(utf8Bytes(JSON.stringify(sized(HANDOVER_MAX_BYTES)))).toBe(HANDOVER_MAX_BYTES);
       expect(m.handoverVerdict(sized(HANDOVER_MAX_BYTES), ['live']).ok).toBe(true);
       expect(m.handoverVerdict(sized(HANDOVER_MAX_BYTES + 1), ['live'])).toEqual({ ok: false, refusal: 'note-too-long' });
+      // The caps measure the note as STORED (review 2046, F1): a mark is longer than the word it replaces. A field that fits
+      // as sent but not as stored, and a whole note that fits as sent but not as stored, are both refused.
+      const doneField = 'done '.repeat(NOTES_CAP.chars / 5).trimEnd();
+      expect([...doneField].length).toBeLessThanOrEqual(NOTES_CAP.chars);
+      expect(m.handoverVerdict(handover({ cautions: [doneField] }), ['live'])).toEqual({ ok: false, refusal: 'note-too-long' });
+      const many = handover({ cautions: Array.from({ length: 40 }, () => 'done '.repeat(20).trimEnd()) });
+      expect(utf8Bytes(JSON.stringify(many))).toBeLessThan(HANDOVER_MAX_BYTES);
+      const stored = { ...many, cautions: many.cautions.map((c) => m.dropStatusWords(c).text) };
+      expect(stored.cautions.every((c) => [...c].length <= NOTES_CAP.chars)).toBe(true);
+      expect(utf8Bytes(JSON.stringify(stored))).toBeGreaterThan(HANDOVER_MAX_BYTES);
+      expect(m.handoverVerdict(many, ['live'])).toEqual({ ok: false, refusal: 'note-too-long' });
       // In bytes, not characters: four-byte text reaches the cap at a quarter of the characters.
       const wide = handover({ cautions: Array.from({ length: 9 }, () => '🙂'.repeat(NOTES_CAP.chars)) });
       expect(m.handoverVerdict(wide, ['live'])).toEqual({ ok: false, refusal: 'note-too-long' });
@@ -159,7 +175,12 @@ export function notesCases(m: Notes): Record<string, Case> {
       // The mark keeps the sense visible and spacing is never closed up, on the line or any other (review 2039, F8).
       expect(m.dropStatusWords('it is not  merged;\n  do not   merge')).toEqual({ text: `it is not  ${X};\n  do not   merge`, dropped: 1 });
       // Matched on the NFKC fold with format characters stripped: fullwidth letters, a soft hyphen, a zero-width space.
-      expect(m.dropStatusWords('ｄｏｎｅ, me\u00adrged, ap\u200bproved')).toEqual({ text: `${X}, ${X}, ${X}`, dropped: 3 });
+      expect(m.dropStatusWords('ｄｏｎｅ, me\u00adrged, ap\u200bproved, ﬁxed')).toEqual({ text: `${X}, ${X}, ${X}, ${X}`, dropped: 4 });
+      // The fold is for matching only: what is stored is the author's text as written, but for the mark (review 2046, F4).
+      const written = 'x² ½ ﬁle ™ … 👨\u200d👩\u200d👧 می\u200cخواهم';
+      expect(m.dropStatusWords(written)).toEqual({ text: written, dropped: 0 });
+      expect(m.dropStatusWords(`x² done ½ ${written}`)).toEqual({ text: `x² ${X} ½ ${written}`, dropped: 1 });
+      expect(m.dropStatusWords('\u200bdone\u200b')).toEqual({ text: `\u200b${X}\u200b`, dropped: 1 });
       expect(m.STATUS_WORD_MARK.match(new RegExp(`\\b(?:${m.HANDOVER_STATUS_WORDS.join('|')})\\b`, 'i'))).toBeNull();
     },
     'notesPage: older than before, at most limit, under the page bytes, always the first, and more': () => {
@@ -176,7 +197,15 @@ export function notesCases(m: Notes): Record<string, Case> {
       expect(ids(m.notesPage(ns, null, 20, () => half + 1))).toEqual([[9], true]);
       expect(ids(m.notesPage(ns, null, 20, () => m.NOTE_LIST_PAGE_BYTES * 2))).toEqual([[9], true]);
       expect(m.NOTE_LIST_PAGE_BYTES).toBeLessThan(TOOL_RESULT_CUT_BYTES);
+      // A note is sized with the widest key fact and its comma (review 2046, F2).
+      expect(m.noteListBytes({ id: 1 })).toBe(utf8Bytes('{"id":1,"keyFact":"unmeasured"}') + 1);
       expect(m.NOTE_LIST_LIMIT.max).toBe(CAP);
+    },
+    'isBlankText: whitespace and invisible characters are blank; any visible character is not': () => {
+      for (const b of ['', ' ', '\n\t', '\u00a0', '\u3000', '\u200b', '\u200c\u200d', '\u2060', '\u00ad', '\u2800', '\u3164', '\u115f\u1160', '\uffa0', '\u034f', '\u061c', '\u200e', '\ufeff']) {
+        expect(isBlankText(b), JSON.stringify(b)).toBe(true);
+      }
+      for (const v of ['a', '.', '\u200ba', '🙂', '-', '\u0301']) expect(isBlankText(v), JSON.stringify(v)).toBe(false);
     },
     'noteKeyFact: a programme, an item and a run, for the caller': () => {
       const f = m.noteKeyFact;

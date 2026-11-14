@@ -24,7 +24,7 @@ import { gatherCardFacts, type CardFactsDeps } from './cardFacts.js';
 import { effectiveGeneration } from './continuityStore.js';
 import { noteKeyReader } from './noteKeys.js';
 import {
-  NOTE_LIST_LIMIT, handoverAsked, handoverVerdict, noteKeyFact, notesPage, noteVerdict, revisedNoteFact, type NoteInput,
+  NOTE_LIST_LIMIT, handoverAsked, handoverVerdict, noteKeyFact, noteListBytes, notesPage, noteVerdict, revisedNoteFact, type NoteInput,
   type NoteVerdictRefusal, type RevisedFact,
 } from './notes.js';
 
@@ -353,7 +353,7 @@ export function registerContinuityRoutes(app: FastifyInstance, deps: ContinuityR
       id: n.id, key: n.key, kind: n.kind, waitsOn: n.waitsOn, next: n.next, revises: n.revises, at: n.at,
     }));
     const { page, more } = notesPage(wire, rawBefore === undefined ? null : Number(rawBefore),
-      rawLimit === undefined ? NOTE_LIST_LIMIT.default : Number(rawLimit), (n) => Buffer.byteLength(JSON.stringify(n), 'utf8'));
+      rawLimit === undefined ? NOTE_LIST_LIMIT.default : Number(rawLimit), noteListBytes);
     return reply.code(200).send({ ok: true, notes: page.map((n) => ({ ...n, keyFact: noteKeyFact(read(n.key), c.id) })), more });
   });
 

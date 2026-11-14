@@ -142,6 +142,14 @@ export const KEY_FACTS = Object.keys(KEY_FACT_MAP) as KeyFact[];
 export function isKeyFact(v: unknown): v is KeyFact {
   return typeof v === 'string' && (KEY_FACTS as readonly string[]).includes(v);
 }
+/** Characters that show nothing: format characters (`\p{Cf}`: zero-width spaces and joiners, the soft hyphen, direction
+ *  marks), whitespace, the combining grapheme joiner and the blank fillers (braille blank, the Hangul fillers). */
+const INVISIBLE_RE = /[\p{Cf}\s\p{Zs}\u034f\u115f\u1160\u2800\u3164\uffa0]/gu;
+/** Is `s` blank to a reader, though it may hold characters (review 2046, F3)? The one blank test of a note's `next`, at
+ *  the note door (`noteVerdict`) and in the continuation probe's pool alike. */
+export function isBlankText(s: string): boolean {
+  return s.replace(INVISIBLE_RE, '') === '';
+}
 /** C37: the handover note's tone line, at most this many characters. */
 export const HANDOVER_TONE_MAX_CHARS = 300;
 /** The handover note's whole size as it is stored (its JSON, in UTF-8 bytes), at most: one over it is refused `note-too-long`
