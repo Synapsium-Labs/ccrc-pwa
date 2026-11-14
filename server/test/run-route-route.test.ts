@@ -16,6 +16,8 @@ import { mkTmp } from './tmpHelpers.js';
 import { unreadableField } from './ioDoubles.js';
 import { ACTOR_FLAGS_CAP, ROUTE_CAP } from '../src/ccdargv.js';
 import { legacyOpens } from './helpers/plan.js';
+import { ROUTE_LANE_ONLY_FIELDS } from '../../shared/api.js';
+const LANE_ONLY_VALUE: Record<string, string> = { profile: 'coordinator', automem: 'off', compactwindow: '350000' };
 
 const PROJECT = 'demo';
 const CLAIMED_BY = 'ccrc-pwa-coordinator';
@@ -824,6 +826,27 @@ describe('POST /api/runs/:id/route', () => {
     const res = await postRoute(w.app, id, { target: 'worker', why: 'operator judgement', field: 'compact', value: 'x'.repeat(40) });
     expect(res.statusCode).toBe(400);
     expect(res.json()).toMatchObject({ ok: false, error: 'bad-request' });
+    expect(calls.filter((c) => c[0] === 'route')).toEqual([]);
+  });
+
+  // Overlord W1a, F1: the launch-profile fields are the lane's alone, so a coordinator's manual write of one, to its
+  // worker or to itself, is a 400 naming the field and never reaches ccd; `demote` names only class or effort.
+  it('400s a launch-profile field on the manual arm, worker or coordinator target, naming it, and a demote of one', async () => {
+    const home = mkTmp('ccrc-route-');
+    const { run, calls } = makeRunner(home, { wsAddCreates: ['demo-w13'] });
+    const w = await openApp(home, run, { fleetState: ROUTE_READY_FLEET }); app = w.app;
+    const { id } = await dispatchedRun(w.app, 'demo-w13');
+
+    expect(ROUTE_LANE_ONLY_FIELDS).toHaveLength(3);
+    for (const target of ['worker', 'coordinator']) {
+      for (const field of ROUTE_LANE_ONLY_FIELDS) {
+        const res = await postRoute(w.app, id, { target, why: 'operator judgement', field, value: LANE_ONLY_VALUE[field] });
+        expect(res.statusCode, `${target} ${field}`).toBe(400);
+        expect(JSON.stringify(res.json()), `${target} ${field}`).toContain(`lane-only ${field}`);
+      }
+      const demote = await postRoute(w.app, id, { target, why: 'operator judgement', demote: 'profile' });
+      expect(demote.statusCode, `${target} demote`).toBe(400);
+    }
     expect(calls.filter((c) => c[0] === 'route')).toEqual([]);
   });
 });

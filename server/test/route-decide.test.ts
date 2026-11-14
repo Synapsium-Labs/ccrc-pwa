@@ -10,7 +10,7 @@ import {
   decideRoute, foldRouteTrail, parseRouteRequest,
   type RegistryRead, type RouteAsk, type RouteFacts, type RouteTrailEvent,
 } from '../src/coord/route.js';
-import { RUN_ROUTE_REFUSE_CODES } from '../../shared/api.js';
+import { ROUTE_LANE_ONLY_FIELDS, RUN_ROUTE_REFUSE_CODES } from '../../shared/api.js';
 import { parsedFile } from './scan/symbols.js';
 import { stripTs } from './growthCheck.js';
 
@@ -64,10 +64,20 @@ describe('parseRouteRequest', () => {
     ['kind', 7, { ...good, kind: 'nope' }, 'kind must be one of shallow/ceiling/unclear'],
     ['demote', 7, { target: 'worker', why: 'x', demote: 'subagent' }, 'demote must be "class" or "effort"'],
     ['field only', 7, { target: 'worker', why: 'x', field: 'effort' }, 'field/value invalid: effort must be a non-empty string'],
+    ['demote of a launch-profile field', 7, { target: 'coordinator', why: 'x', demote: 'profile' }, 'demote must be "class" or "effort"'],
   ])('refuses a bad %s', (_n, id, body, detail) => {
     const r = parseRouteRequest(id, body);
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.detail).toContain(detail.split(':')[0]);
+  });
+  it('refuses each launch-profile field on the manual arm, naming it (Overlord W1a, F1: the lane writes those)', () => {
+    expect(ROUTE_LANE_ONLY_FIELDS).toHaveLength(3);
+    for (const field of ROUTE_LANE_ONLY_FIELDS) {
+      for (const target of ['worker', 'coordinator']) {
+        expect(parseRouteRequest(7, { target, why: 'x', field, value: 'off' }))
+          .toEqual({ ok: false, detail: `field/value invalid: lane-only ${field}` });
+      }
+    }
   });
   it('treats a missing body as empty', () => {
     expect(parseRouteRequest(7, undefined)).toMatchObject({ ok: false, detail: 'target must be "worker" or "coordinator"' });

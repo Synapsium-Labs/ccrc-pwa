@@ -20,8 +20,10 @@ import { ACTOR_FLAGS_CAP, BROWSER_ROUTE_CAP, CCD_ARGV, ROUTE_ARGV_CAP, ROUTE_CAP
 import { configDirFor } from '../src/config.js';
 import { testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
+import { ROUTE_LANE_ONLY_FIELDS } from '../../shared/api.js';
 
 const PROJECT = 'demo';
+const LANE_ONLY_VALUE: Record<string, string> = { profile: 'coordinator', automem: 'off', compactwindow: '350000' };
 
 /** A full registry row — same field set `run-routes.test.ts`'s own `seed`
  *  writes, so a fixture session reads exactly like a real ccd one. */
@@ -270,6 +272,16 @@ describe('dispatch writes the routing record it was given (routing spec §5.3, s
     const out = await h.dispatch({ nope: 'x' });
     expect(out).toEqual({ ok: false, kind: 'bad-request', detail: 'route: unknown-field nope' });
     expect(h.calls).toEqual([]);
+  });
+
+  it('a route naming a launch-profile field is refused lane-only, naming it, before any fleet act (Overlord W1a, F1)', async () => {
+    expect(ROUTE_LANE_ONLY_FIELDS).toHaveLength(3);
+    for (const field of ROUTE_LANE_ONLY_FIELDS) {
+      const h = await harness({ wave: 1 });
+      const out = await h.dispatch({ class: 'opus', [field]: LANE_ONLY_VALUE[field] });
+      expect(out, field).toEqual({ ok: false, kind: 'bad-request', detail: `route: lane-only ${field}` });
+      expect(h.calls).toEqual([]);
+    }
   });
 
   it('a route naming a ccd-only field (degraded/inert) is unknown-field too', async () => {

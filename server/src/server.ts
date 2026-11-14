@@ -2595,7 +2595,9 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     const body = (req.body ?? {}) as { field?: unknown; value?: unknown };
     const parsed = parseRouteFields(typeof body.field === 'string' ? { [body.field]: body.value } : null);
     if (!parsed.ok || Object.keys(parsed.route).length !== 1) {
-      return reply.code(400).send({ ok: false, error: 'bad-request' });
+      // A launch-profile field is real but the lane's alone (`ROUTE_LANE_ONLY_FIELDS`), so the 400 says which and why.
+      const laneOnly = !parsed.ok && parsed.why === 'lane-only' ? { detail: routeParseDetail(parsed) } : {};
+      return reply.code(400).send({ ok: false, error: 'bad-request', ...laneOnly });
     }
     if (!ccdCan(deps.fleetState, 'routeApply')) return reply.code(501).send({ ok: false, error: 'unsupported' });
     // D-8121: the `browser` field needs `browser-route-v1` (an older ccd refuses it by name). It is applied at the

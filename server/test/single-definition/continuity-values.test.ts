@@ -27,7 +27,8 @@ const spells = (text: string, n: number): boolean => {
 /** The deciders that read these values, by name: a later decider joins this list. Not the whole of
  *  `server/src/continuity/`, whose other files (a store, a route, a card) keep figures of their own, such as the
  *  compaction pairing window, which is ten minutes too (review 1894, F2). */
-const DECIDERS = ['server/src/continuity/renewalDue.ts', 'server/src/continuity/softRenewal.ts', 'server/src/time/observed.ts'];
+const DECIDERS = ['server/src/continuity/renewalDue.ts', 'server/src/continuity/softRenewal.ts', 'server/src/time/observed.ts',
+  'server/src/continuity/launchProfile.ts'];
 
 describe('the generation machine\'s starting values are defined once, in shared/continuity.ts', () => {
   const all = ROOTS.filter((r) => existsSync(r)).flatMap(sources);

@@ -5,7 +5,7 @@
 // this suite never asserts a value judgement, only the wire shape.
 import { describe, it, expect } from 'vitest';
 import {
-  ROUTE_WRITABLE_FIELDS, parseRouteFields, routeFieldsOrNull, routeParseDetail, type RouteField,
+  ROUTE_LANE_ONLY_FIELDS, ROUTE_WRITABLE_FIELDS, parseRouteFields, routeFieldsOrNull, routeParseDetail, type RouteField,
 } from '../../shared/api.js';
 
 /**
@@ -26,6 +26,7 @@ import {
  */
 const ALL_FIELDS: Record<RouteField, true> = {
   class: true, effort: true, subagent: true, workflow: true, compact: true, browser: true,
+  profile: true, automem: true, compactwindow: true,
 };
 void ALL_FIELDS;   // its whole job is the type error above, not a runtime read
 
@@ -33,17 +34,27 @@ describe('ROUTE_WRITABLE_FIELDS', () => {
   // A LITERAL RATCHET, not a value computed from the thing under test: `6` is
   // typed out here, so a seventh field (or a lost one) reds this line and forces
   // the author past it, rather than the expectation moving with the code. D-8121
-  // moved it from 5 to 6 (`browser`).
-  it('is exactly six fields', () => {
-    expect(ROUTE_WRITABLE_FIELDS).toHaveLength(6);
+  // moved it from 5 to 6 (`browser`); the launch profile (Overlord W1a) from 6 to 9
+  // (`profile`, `automem`, `compactwindow`).
+  it('is exactly nine fields', () => {
+    expect(ROUTE_WRITABLE_FIELDS).toHaveLength(9);
   });
 
-  it('every field the list names is one parseRouteFields accepts', () => {
+  it('every field the list names is one parseRouteFields accepts, except the lane-only ones, which it refuses by name', () => {
     // Iterates the IMPORTED list — a field added to the array but not handled
     // by the parser reds here without anyone respelling a name.
     for (const f of ROUTE_WRITABLE_FIELDS) {
-      expect(parseRouteFields({ [f]: 'x' }), f).toEqual({ ok: true, route: { [f]: 'x' } });
+      expect(parseRouteFields({ [f]: 'x' }), f).toEqual(ROUTE_LANE_ONLY_FIELDS.includes(f)
+        ? { ok: false, why: 'lane-only', field: f }
+        : { ok: true, route: { [f]: 'x' } });
     }
+  });
+
+  it('the lane-only fields are the launch profile\'s three, the tail of the list (Overlord W1a, F1)', () => {
+    expect(ROUTE_LANE_ONLY_FIELDS).toStrictEqual(ROUTE_WRITABLE_FIELDS.slice(6));
+    expect(ROUTE_LANE_ONLY_FIELDS).toHaveLength(3);
+    expect(ROUTE_LANE_ONLY_FIELDS[0]).toBe('profile');
+    expect(routeParseDetail({ ok: false, why: 'lane-only', field: 'automem' })).toBe('route: lane-only automem');
   });
 
   it('does not carry ccd\'s own fields — degraded/inert are never body-settable, and neither is a made-up word', () => {

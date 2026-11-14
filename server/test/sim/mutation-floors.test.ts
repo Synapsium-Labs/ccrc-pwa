@@ -8,6 +8,7 @@ import { mergeBaseText } from '../mergeBase.js';
 import { COORD_BLOCKED_INVARIANTS, coordBlockedDay, type CoordBlockedModule } from './coordBlockedDay.js';
 import { floorsFallen, rewriteRelativeImports, runMutants, type MutantSet, type SuiteCase } from './mutate.js';
 import { MAIL_PACE_MUTANT_SETS } from './mailPaceSets.js';
+import { LAUNCH_PROFILE_MUTANT_SETS } from './launchProfileSets.js';
 import { RENEWAL_MUTANT_SETS } from './renewalDeciderSets.js';
 import { simulate } from './run.js';
 import {
@@ -136,6 +137,7 @@ const MUTANT_SETS: Record<string, MutantSet<never>> = {
   [COMPACTIONS_KEY]: COMPACTIONS_SET as MutantSet<never>,
   ...RENEWAL_MUTANT_SETS,
   ...MAIL_PACE_MUTANT_SETS,
+  ...LAUNCH_PROFILE_MUTANT_SETS,
 };
 
 it('rewriteRelativeImports makes ./ and ../ absolute and leaves bare specifiers', () => {
