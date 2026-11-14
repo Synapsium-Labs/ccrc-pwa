@@ -46,6 +46,8 @@ _ci_resume_follow -> _reg_set
 _compact_no_turns -> _reg_get
 _compact_note -> _reg_get
 _compact_note -> _reg_set
+_compact_text_to -> _reg_get_to
+_compact_text_to -> _route_get
 _dispatch_swap -> _svc_run_detached
 _docs_py -> _gh_repo_slug
 _end_cause -> _reg_get
