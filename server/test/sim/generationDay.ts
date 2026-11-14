@@ -7,7 +7,8 @@
 // deciders' modules are a parameter, so a mutated copy can be handed to the same scenario.
 //
 // The pass is synchronous: it awaits nothing, so the simulator's "an async lane runs after the timers" limit does not apply
-// to it, and a crash is placed inside it by a write that aborts (and every write after it), not by an interleaving.
+// to it, and a crash is placed inside it by a write that aborts (and every write after it, the countdown kept outside the
+// aborting transaction), not by an interleaving. The `continuity` row is drawn per seed, so shadow runs under crashes too.
 //
 // Durable state (coord.db: the generations, the starts, the cursor; and the renewal act's stand-in records, the soft
 // renewals' stamps) survives a crash; the server's timers do not. The world (the sessions, their hosts, the operator) keeps its own timers, which survive. The predicates read
@@ -19,8 +20,10 @@ import { CONTINUITY_LANE } from '../../../shared/lane-arm.js';
 import { LEAST_AGE_MS, RENEWAL_BUDGET_S, RENEWAL_LANE_PERIOD_MS, SOFT_BUDGET, STATE_DEADLINE_S } from '../../../shared/continuity.js';
 import { MIGRATIONS } from '../../src/coord/schema.js';
 import { CoordStore } from '../../src/coord/store.js';
-import { genExpectOf, genViewOf, type GenRow } from '../../src/continuity/continuityStore.js';
-import { GENERATIONS_LANE, generationsPass, softTimesOf, type GenerationsResult } from '../../src/continuity/generationsLane.js';
+import { effectiveGeneration, genExpectOf, genViewOf, type GenRow } from '../../src/continuity/continuityStore.js';
+import {
+  GENERATIONS_LANE, generationsPass, softTimesOf, type GenerationsCoord, type GenerationsResult,
+} from '../../src/continuity/generationsLane.js';
 import type { GenEvent } from '../../src/continuity/generationMachine.js';
 import type { Reading, RenewalInputs } from '../../src/continuity/renewalDue.js';
 import type { SoftInputs } from '../../src/continuity/softRenewal.js';
@@ -35,11 +38,13 @@ export interface GenDayModules {
   readonly soft: Pick<typeof import('../../src/continuity/softRenewal.js'), 'softRenewalMay'>;
   readonly machine: Pick<typeof import('../../src/continuity/generationMachine.js'), 'generationStep' | 'GEN_ACTIVE' | 'GEN_MINTED'>;
   readonly observed: Pick<typeof import('../../src/time/observed.js'), 'observeTime' | 'observedStepCapMs'>;
+  /** The store as the lane's pass sees it; the store itself unless a mutation row hands a wrapper of it (review 2003 F9). */
+  readonly coord?: (store: CoordStore) => GenerationsCoord;
 }
 
 export const GEN_DAY_EDGES = ['soft-renewal', 'hard-renewal', 'renewed', 'crash-gap', 'freeze-gap', 'start-while-down', 'degraded',
   'hold-off', 'budget-wait', 'probe-retry', 'renudge', 'unplanned-start', 'overlord-first', 'clearing-timeout-back',
-  'clearing-timeout-degraded', 'soft-due-in-degraded', 'probing-timeout', 'crash-mid-pass'] as const;
+  'clearing-timeout-degraded', 'soft-due-in-degraded', 'probing-timeout', 'crash-mid-pass', 'live-arm', 'shadow-arm'] as const;
 export type GenDayEdge = (typeof GEN_DAY_EDGES)[number];
 
 const START = Date.parse('2026-11-13T00:00:00Z');
@@ -55,24 +60,28 @@ const M = <T>(value: T): Reading<T> => ({ kind: 'measured', value });
 const U: Reading<never> = { kind: 'unmeasured', why: 'stale' };
 const NA = { kind: 'not-applicable' } as const;
 
-/** `sim_fault.left` while no crash is placed inside a pass. */
+/** `fault.left` while no crash is placed inside a pass. */
 const DISARMED = 1_000_000_000;
+/** The crash countdown, kept in JS (review 2003 F8): a counter in a table would be rolled back with the transaction its
+ *  abort ends, so the next write would commit. Every write to the generations or the cursor ticks it (`sim_tick`, a
+ *  trigger's function); once below zero every write aborts, and `fired` says an abort landed. */
+const fault = { left: DISARMED, fired: false };
+const arm = (left: number): void => { fault.left = left; fault.fired = false; };
 /** ONE database for every seed, migrated once: seeds run one after another (`simulate` refuses a second in flight), and
  *  each setup empties the tables the day writes. A database per seed churned native memory the collector does not see,
- *  past the test slice's cap over 5,000 seeds. A crash inside a pass is a write that aborts, and every write after it:
- *  `sim_fault.left` counts the writes to the generations and the cursor down. */
+ *  past the test slice's cap over 5,000 seeds. */
 let simDb: DatabaseSync | null = null;
 function dayDb(): DatabaseSync {
   if (simDb === null) {
     simDb = new DatabaseSync(':memory:');
     for (const m of MIGRATIONS) simDb.exec(m);
     simDb.exec(`PRAGMA user_version = ${MIGRATIONS.length}`);
-    simDb.exec(`CREATE TABLE sim_fault (left INTEGER NOT NULL); INSERT INTO sim_fault VALUES (${DISARMED});
-      ${['INSERT', 'UPDATE'].flatMap((op) => ['continuity_generations', 'continuity_cursor'].map((t) => `CREATE TRIGGER sim_fault_${op}_${t}
-        BEFORE ${op} ON ${t} BEGIN UPDATE sim_fault SET left = left - 1;
-        SELECT RAISE(ABORT, 'sim crash') WHERE (SELECT left FROM sim_fault) < 0; END;`)).join('\n')}`);
+    simDb.function('sim_tick', () => { fault.left -= 1; if (fault.left < 0) fault.fired = true; return fault.left; });
+    simDb.exec(['INSERT', 'UPDATE'].flatMap((op) => ['continuity_generations', 'continuity_cursor'].map((t) => `CREATE TRIGGER
+      sim_fault_${op}_${t} BEFORE ${op} ON ${t} BEGIN SELECT RAISE(ABORT, 'sim crash') WHERE sim_tick() < 0; END;`)).join('\n'));
   }
-  simDb.exec(`UPDATE sim_fault SET left = ${DISARMED}; DELETE FROM continuity_generations; DELETE FROM continuity_cursor;
+  arm(DISARMED);
+  simDb.exec(`DELETE FROM continuity_generations; DELETE FROM continuity_cursor;
     DELETE FROM continuity_starts; DELETE FROM runs; DELETE FROM programs;`);
   return simDb;
 }
@@ -90,13 +99,18 @@ export function generationDay(mods: GenDayModules): Scenario<GenDayEdge> {
       const wall = (): number => server.clock.wall();
 
       // ---- DURABLE: a real coord.db (`dayDb`), its generations written only through the store and the lane, which
-      // survive a crash. The coordinator claims an open work run, so `roleOf` reads it as one; the `continuity` row is
-      // live, so a walk moves `state`.
+      // survive a crash. The coordinator claims an open work run, so `roleOf` reads it as one. The `continuity` row is
+      // drawn per seed (review 2003 F10): live, a walk moves `state`; shadow, it moves `shadowState` and `state` stays
+      // `active`, and every machine read goes through the one accessor.
       const db = dayDb();
       const store = new CoordStore(db);
+      const lane = mods.coord === undefined ? store : mods.coord(store);
       db.exec("INSERT INTO programs (slug, title, createdAt, state) VALUES ('prog-a', 'P', 0, 'active')");
       db.prepare("INSERT INTO runs (program, wave, waveOf, project, state, claimedBy, openedAt) VALUES ('prog-a', 1, 9, 'project-a', 'working', ?, 0)").run(COORD);
-      store.setLaneArm(CONTINUITY_LANE, 'live', 0);
+      const live = chance(entropy, 0.5);
+      store.setLaneArm(CONTINUITY_LANE, live ? 'live' : 'shadow', 0);
+      cover(live ? 'live-arm' : 'shadow-arm');
+      line('arm', CONTINUITY_LANE, live ? 'live' : 'shadow', 'sim');
       const uuids = new Map<string, string>();
       let reports = 0;
       /** The live generations as last read, dropped by every write (`wrote`), so a beat reads the table once per change. */
@@ -127,10 +141,10 @@ export function generationDay(mods: GenDayModules): Scenario<GenDayEdge> {
         const id = report(who, 'startup', false);
         const m = wrote(store.mintGeneration({ identity: who, sessionId: who, role: who === COORD ? 'coordinator' : 'overlord', term: 1,
           rowIncarnation: 'inc', startId: id, startReportedAt: wall(), resumed: false, model: null, lane: 'lane-a', host: null,
-          outcome: 'woken', mono: server.clock.mono(), proc, now: wall() }, null, true));
+          outcome: 'woken', mono: server.clock.mono(), proc, now: wall() }, null, live));
         if (!m.ok) throw new Error('generation-day: the first mint failed');
         const g = row(who);
-        wrote(store.stepGeneration(g.id, genExpectOf(g), mods.machine.GEN_ACTIVE, true, wall()));
+        wrote(store.stepGeneration(g.id, genExpectOf(g), mods.machine.GEN_ACTIVE, live, wall()));
       }
       overlordStarts.length = 0;
       store.advanceCursor({ lane: GENERATIONS_LANE, from: 0, to: reports });
@@ -162,7 +176,7 @@ export function generationDay(mods: GenDayModules): Scenario<GenDayEdge> {
           rowIncarnation: 'inc', reportedAt: wall(), receivedAt: wall() });
         if (!r.ok) throw new Error('generation-day: a start was not recorded');
         if (who !== COORD) overlordStarts.push(r.id);
-        line('report', who, `start=${r.id}`, 'host');
+        line('report', who, `start=${r.id};source=${source};uuid=${uuids.get(who)!}`, 'host');
         return r.id;
       }
       const reportStart = (who: string, e: Extract<GenEvent, { kind: 'started' }>): void => {
@@ -173,12 +187,12 @@ export function generationDay(mods: GenDayModules): Scenario<GenDayEdge> {
        *  comes here: it is reported, and the lane mints. */
       const apply = (who: string, e: GenEvent): void => {
         const r = row(who);
-        const prev = genViewOf(r, true);
+        const prev = genViewOf(r, live);
         if (e.kind === 'card-read' && prev.state === 'carded') line('card', idOf(who, r.n), e.hashMatches ? 'match' : 'mismatch', 'lane');
         if (e.kind === 'probes' && prev.state === 'probing') line('probes', idOf(who, r.n), e.passed ? 'passed' : 'failed', 'lane');
         const step = mods.machine.generationStep(prev, e);
         if (step.actions.includes('mint-next') || step.actions.includes('end-this')) throw new Error('generation-day: a start reached apply');
-        if (!wrote(store.stepGeneration(r.id, genExpectOf(r), step.next, true, wall())).changed && step.next !== prev) {
+        if (!wrote(store.stepGeneration(r.id, genExpectOf(r), step.next, live, wall())).changed && step.next !== prev) {
           throw new Error(`generation-day: a step of ${idOf(who, r.n)} was refused`);
         }
         if (step.next.state !== prev.state) line('gen', idOf(who, r.n), step.next.state, 'lane');
@@ -303,23 +317,26 @@ export function generationDay(mods: GenDayModules): Scenario<GenDayEdge> {
           notLocal: no, waveBoundary: M(f.wave), renewNow: pressed };
       };
 
-      /** The lines the store's rows say about one identity after a pass: a gap and the accumulator, then each start the
-       *  pass minted from (the generation it ended, the one it minted). */
+      /** The lines the store's rows say about one identity after a pass: a gap and the accumulator, then each generation
+       *  the pass ended and minted. G5 counts the mints against the `report` lines, which the host writes. */
       const passLines = (who: string, before: GenRow, gaps: GenerationsResult['gaps']): void => {
         const after = row(who);
         const old = before.n === after.n ? after : (store.db.prepare('SELECT observed FROM continuity_generations WHERE identity = ? AND n = ?')
           .get(who, before.n) as { observed: string } | undefined);
         const was = old === after ? after.observed : JSON.parse((old as { observed: string }).observed) as GenRow['observed'];
-        // The accumulator moved this pass only when its write committed: a crash inside the pass may have stopped it.
-        const advanced = was.mono === server.clock.mono() && was.proc === proc;
+        // Did the accumulator's write commit this pass? Decided by the scenario, never by the stamp the decider under test
+        // wrote (review 2003 F6): a pass no abort cut short advanced every identity; one an abort cut short advanced those
+        // whose stored observed time moved.
+        const moved = was.ms !== before.observed.ms || was.mono !== before.observed.mono || was.proc !== before.observed.proc;
+        const advanced = !fault.fired || moved;
         // The gap the pass recorded, as the decider answered it (never re-derived from the rows).
         if (advanced) for (const gp of gaps) if (gp.identity === who) line('obs-gap', who, `kind=${gp.kind};deltaMs=${gp.deltaMs}`, 'lane');
         for (let k = before.n + 1; k <= after.n; k += 1) {
-          line('start', who, 'applied', 'host');
           line('gen', idOf(who, k - 1), 'ended', 'lane');
           line('gen', idOf(who, k), 'carded', 'mint');
         }
-        if (advanced) line('obs', who, `ms=${after.observed.ms};mono=${after.observed.mono}`, 'lane');
+        // The scenario's own monotonic clock, so G4 holds the accumulator to the clock it was read on.
+        if (advanced) line('obs', who, `ms=${was.ms};mono=${server.clock.mono()}`, 'lane');
         if (after.n > before.n) sessionReadsCard(who, after.n);
       };
 
@@ -330,32 +347,35 @@ export function generationDay(mods: GenDayModules): Scenario<GenDayEdge> {
           line('server', 'thaw', 'thawed', 'sim');
           for (const [who, n, e] of frozenQueue.splice(0)) deliver(who, n, e);
         }
-        // A crash inside the pass, at its k-th write to the generations or the cursor, more often while a start waits.
+        // A crash inside the pass, at its k-th write to the generations or the cursor, more often while a start waits; a
+        // busy pass writes about a dozen times (two accumulators, a mint's end, insert and cursor, two due records, the
+        // Overlord's mint), so the draw reaches its last writes (review 2003 F8).
         const waiting = (store.generationsCursor(GENERATIONS_LANE) as { lastStartId: number }).lastStartId < reports || overlordStarts.length > 0;
         const crashes = chance(entropy, waiting ? 0.3 : 0.001);
-        const at = between(0, 6);
+        const at = between(0, 14);
         const downFor = between(1, 10) * MIN;
-        if (crashes) db.prepare('UPDATE sim_fault SET left = ?').run(at);
+        if (crashes) arm(at);
         const before = new Map(WHO.map(([who]) => [who, row(who)]));
-        const passed = wrote(generationsPass({ coord: store, clock: server.clock, proc, log: () => {}, observe: mods.observed.observeTime },
+        const passed = wrote(generationsPass({ coord: lane, clock: server.clock, proc, log: () => {}, observe: mods.observed.observeTime },
           { registry: WHO.map(([who]) => ({ id: who, uuid: uuids.get(who)!, lane: 'lane-a', child: { kind: 'none' as const } })), readings: new Map() }));
         // W1's designation, stood in for: the Overlord's starts mint through the same store function, in order.
         while (overlordStarts.length > 0) {
           const id = overlordStarts[0]!;
           const s = (store.startsSince(id - 1, 1) as { rows: { reportedAt: number; source: string }[] }).rows[0]!;
-          const live = row('overlord');
+          const held = row('overlord');
           const w = wrote(store.mintGeneration({ identity: 'overlord', sessionId: 'overlord', role: 'overlord', term: 1, rowIncarnation: 'inc',
             startId: id, startReportedAt: s.reportedAt, resumed: s.source === 'resume', model: null, lane: 'lane-a', host: null,
-            outcome: genViewOf(live, true).state === 'clearing' ? 'renewed' : 'woken', mono: server.clock.mono(), proc, now: wall() },
-          genExpectOf(live), true));
+            outcome: genViewOf(held, live).state === 'clearing' ? 'renewed' : 'woken', mono: server.clock.mono(), proc, now: wall() },
+          genExpectOf(held), live));
           if (!w.ok && w.kind === 'write-failed') break;
           overlordStarts.shift();
         }
         for (const [who] of WHO) passLines(who, before.get(who)!, passed.gaps);
-        // G8 reads the live generations after a pass that ran to its end; a pass the crash cut short is judged by the next.
-        if (!crashes) line('pass', 'server', WHO.map(([who]) => `${who}=${row(who).startId}`).join(';'), 'lane');
+        // G5 and G8 read the live generations after a pass that ran to its end; a pass an abort cut short is judged by the
+        // next. The edge is covered only when an abort landed (review 2003 F8), not when one was drawn.
+        if (!fault.fired) line('pass', 'server', WHO.map(([who]) => `${who}=${row(who).startId}`).join(';'), 'lane');
         if (crashes) {
-          cover('crash-mid-pass');
+          if (fault.fired) cover('crash-mid-pass');
           line('server', 'crash', 'down', 'sim');
           world.crash(downFor);
           return;
@@ -367,19 +387,20 @@ export function generationDay(mods: GenDayModules): Scenario<GenDayEdge> {
           const loadMove = chance(entropy, 0.0003);
           const held = chance(entropy, 0.2);
           let r = row(who);
-          let v = genViewOf(r, true);
-          if (v.state === 'carded' && !v.renudged && r.deadlineAt !== null && wall() >= r.deadlineAt - RENEWAL_LANE_PERIOD_MS) {
+          let v = genViewOf(r, live);
+          let deadline = effectiveGeneration(r, live).deadlineAt;
+          if (v.state === 'carded' && !v.renudged && deadline !== null && wall() >= deadline - RENEWAL_LANE_PERIOD_MS) {
             apply(who, { kind: 'nudge-due' });
-            r = row(who); v = genViewOf(r, true);
+            r = row(who); v = genViewOf(r, live); deadline = effectiveGeneration(r, live).deadlineAt;
           }
-          if (TRANSIENT.has(v.state) && r.deadlineAt !== null && wall() >= r.deadlineAt) {
-            line('deadline', `${idOf(who, r.n)}:${v.state}:${r.deadlineAt}`, 'fired', 'lane');
+          if (TRANSIENT.has(v.state) && deadline !== null && wall() >= deadline) {
+            line('deadline', `${idOf(who, r.n)}:${v.state}:${deadline}`, 'fired', 'lane');
             if (v.state === 'clearing') cover(v.hostEnded ? 'clearing-timeout-degraded' : 'clearing-timeout-back');
             if (v.state === 'probing') cover('probing-timeout');
             apply(who, { kind: 'deadline' });
-            r = row(who); v = genViewOf(r, true);
+            r = row(who); v = genViewOf(r, live);
           }
-          if (v.state === 'draining' && facts.get(who)!.readers === 0) { apply(who, { kind: 'drained' }); r = row(who); v = genViewOf(r, true); }
+          if (v.state === 'draining' && facts.get(who)!.readers === 0) { apply(who, { kind: 'drained' }); r = row(who); v = genViewOf(r, live); }
           if (v.state !== 'active' && v.state !== 'degraded') continue;
           const due = mods.renewal.renewalDue(renewalInputs(who, role, stale, pressed, loadMove));
           if (!due.due) { dueSinceObs.set(who, null); continue; }
@@ -398,7 +419,7 @@ export function generationDay(mods: GenDayModules): Scenario<GenDayEdge> {
             operatorQuietObservedMs: M(obs - lastOperatorObs),
             placeHiddenObservedMs: role === 'overlord' ? U : NA, mode: 'when-away', dueSinceObservedMs: obs - since,
             generationAgeObservedMs: times.generationAgeObservedMs, holdOffUntilObservedMs: times.holdOffUntilObservedMs,
-            softRenewalsInWindow: inWindow, overlordOutsideActive: genViewOf(row('overlord'), true).state !== 'active' };
+            softRenewalsInWindow: inWindow, overlordOutsideActive: genViewOf(row('overlord'), live).state !== 'active' };
           const may = mods.soft.softRenewalMay(si);
           if (!may.start) {
             if (may.waitFor === 'budget') cover('budget-wait');
@@ -408,7 +429,7 @@ export function generationDay(mods: GenDayModules): Scenario<GenDayEdge> {
           const was = v.state; const stamp = `obs=${obs};age=${times.generationAgeObservedMs};n=${r.n};from=${was}`;
           apply(who, { kind: 'due', cls: 'soft' });
           if (was === 'degraded') cover('soft-due-in-degraded');
-          if (genViewOf(row(who), true).state === was) continue;
+          if (genViewOf(row(who), live).state === was) continue;
           cover('soft-renewal');
           line('soft-renewal', who, stamp, 'lane');
           softStamps.set(who, [...stamps, obs]);
@@ -419,7 +440,7 @@ export function generationDay(mods: GenDayModules): Scenario<GenDayEdge> {
 
       world.onBoot(() => {
         proc = `p${boots++}`;
-        db.prepare('UPDATE sim_fault SET left = ?').run(DISARMED);
+        arm(DISARMED);
         // A crash right after a thaw loses what waited in the socket, except a start (the start-while-down rule).
         for (const [who, , e] of frozenQueue.splice(0)) if (e.kind === 'started') startQueue.push([who, e]);
         thawPending = false;
@@ -565,19 +586,34 @@ export const GEN_DAY_INVARIANTS: readonly Invariant[] = [
       }
       return null;
     } },
-  { name: 'G5', says: 'every start mints exactly one generation',
+  { name: 'G5', says: 'every reported start mints at most one generation, the next number, and each start that has to mint does: at the first pass that runs to its end after it, a startup, or a start whose conversation is the identity\'s newest reported one (slug uuid-checked-against-the-current-row: a start whose conversation a later start replaced before it was judged may mint nothing); the day\'s first start is n=1\'s',
     check(lines) {
-      const starts = new Map<string, number>(); const mints = new Map<string, number>();
+      interface Rep { uuid: string | undefined; source: string | undefined }
+      const reports = new Map<string, Rep[]>(); const settled = new Map<string, number>();
+      const must = new Map<string, number>(); const mints = new Map<string, number>();
       for (const l of lines) {
-        if (l.kind === 'start') starts.set(l.id, (starts.get(l.id) ?? 0) + 1);
+        if (l.kind === 'report') {
+          const xs = reports.get(l.id) ?? [];
+          xs.push({ uuid: /uuid=([^;]+)/.exec(l.state)?.[1], source: /source=([^;]+)/.exec(l.state)?.[1] });
+          reports.set(l.id, xs);
+        }
         if (l.kind === 'gen' && l.actor === 'mint') {
           const who = l.id.slice(0, l.id.lastIndexOf('#'));
           mints.set(who, (mints.get(who) ?? 0) + 1);
-          if ((mints.get(who) ?? 0) !== (starts.get(who) ?? 0)) return violation('G5', l, `${who}: a mint with no start`);
+          if (mints.get(who)! > (reports.get(who)?.length ?? 0) - 1) return violation('G5', l, `${who}: a mint with no start`);
           if (Number(l.id.slice(l.id.lastIndexOf('#') + 1)) !== mints.get(who)! + 1) return violation('G5', l, `${l.id}: not the next number`);
         }
-        if (l.kind === 'sim' && l.state === 'end') {
-          for (const [who, n] of starts) if ((mints.get(who) ?? 0) !== n) return violation('G5', l, `${who}: ${n} starts, ${mints.get(who) ?? 0} mints`);
+        if (l.kind === 'pass') {
+          for (const [who, xs] of reports) {
+            const newest = xs.at(-1)!.uuid;
+            for (let k = Math.max(1, settled.get(who) ?? 1); k < xs.length; k += 1) {
+              if (xs[k]!.source === 'startup' || xs[k]!.uuid === newest) must.set(who, (must.get(who) ?? 0) + 1);
+            }
+            settled.set(who, xs.length);
+            if ((mints.get(who) ?? 0) < (must.get(who) ?? 0)) {
+              return violation('G5', l, `${who}: ${must.get(who)} reported starts had to mint, ${mints.get(who) ?? 0} minted`);
+            }
+          }
         }
       }
       return null;

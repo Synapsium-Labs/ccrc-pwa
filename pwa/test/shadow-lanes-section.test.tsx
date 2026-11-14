@@ -4,7 +4,7 @@
 // L0's `LANE_ARM_TEXT`, read by name. The card at every width is `browser/shadow-lanes-card.browser.test.ts`.
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import { LANE_ARM_TEXT as T, ROSTER_CARD_SHADOW_LOG, type LaneArmRowView, type LaneArmView } from '../../shared/lane-arm';
+import { LANE_ARM_TEXT as T, ROSTER_CARD_SHADOW_LOG, laneArmGate, type LaneArmRowView, type LaneArmView } from '../../shared/lane-arm';
 import { COORDINATOR_ROSTER_CARD_LIVE_MARKER } from '../../shared/switches';
 import { ShadowLanesSection } from '../src/fleet/ShadowLanesSection';
 import { asLaneArmConfirm, asLaneArmView, laneArmLines } from '../src/fleet/laneArmWords';
@@ -53,6 +53,22 @@ describe('Settings › Automation › Shadow lanes (D-8274)', () => {
     const own = within(screen.getByRole('group', { name: C.legend }));
     expect(own.getByText(C.liveNote)).toBeInTheDocument();
     expect(own.queryByText(/Shadow record:/)).toBeNull();
+  });
+
+  it('the continuity row says why it cannot go live yet, and a Live tap the server refuses lane-gated says the server\'s reason (review 2003 F3)', async () => {
+    const C = T.rows.continuity;
+    const gate = laneArmGate('continuity')!;
+    expect(gate).toBe(C.gate);
+    const read = vi.spyOn(api, 'laneArm').mockResolvedValue({ lanes: [row({ lane: 'continuity', marker: null })] });
+    vi.spyOn(api, 'setLaneArm').mockRejectedValue(new ApiError(409, { ok: false, error: 'lane-gated', detail: gate }));
+    mount();
+    await waitFor(() => expect(radio(T.shadow).checked).toBe(true));
+    expect(screen.getByText(gate)).toBeInTheDocument();
+    expect(laneArmLines(row(), ROSTER_CARD_SHADOW_LOG).map((l) => l.text)).not.toContain(gate);
+    fireEvent.click(radio(T.live));
+    expect(await screen.findByText(`${T.refused} (${gate})`)).toBeInTheDocument();
+    await waitFor(() => expect(read).toHaveBeenCalledTimes(2));
+    expect(radio(T.shadow).checked).toBe(true);
   });
 
   it('Live is one tap then a confirm: the tap sends no key, the server\'s 409 opens the sheet, Go live sends its key', async () => {

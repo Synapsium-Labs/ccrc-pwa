@@ -13,7 +13,8 @@ import { NotifyLog } from '../src/notifylog.js';
 import { Bus } from '../src/bus.js';
 import { NO_SESSION, type GateDecision } from '../src/auth/gate.js';
 import { decideLaneArmBody, decideLaneArmImport, laneArmConfirmKey, laneArmRowViewOf, rosterCardFieldOf } from '../src/coord/laneArm.js';
-import { LANE_ARM_FEED_TITLE, LANE_ARM_REFUSALS, ROSTER_CARD_SHADOW_LOG, RUNS_ROSTER_CARD_FIELD } from '../../shared/lane-arm.js';
+import { LANE_ARM_FEED_TITLE, LANE_ARM_REFUSALS, ROSTER_CARD_SHADOW_LOG, RUNS_ROSTER_CARD_FIELD, laneArmGate } from '../../shared/lane-arm.js';
+import { REFUSAL_STATUS } from '../../shared/refusal.js';
 import { COORDINATOR_ROSTER_CARD_LIVE_MARKER } from '../../shared/switches.js';
 import { testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
@@ -165,6 +166,22 @@ describe('GET/POST /api/coord/lane-arm (D-8274)', () => {
       expect((await post(app, { lane: 'roster-card', choice: 'shadow' })).statusCode).toBe(200);
     }
     expect(LANE_ARM_REFUSALS).toContain('sign-in-unarmed');
+  });
+
+  it('the continuity row\'s gate: Live is refused 409 lane-gated with its reason, signed in, with a key or without, and Shadow is not (review 2003 F3)', async () => {
+    const { app, coord } = await setup();
+    for (const payload of [{ lane: 'continuity', choice: 'live' }, { lane: 'continuity', choice: 'live', confirm: 'continuity:shadow:0' }]) {
+      const res = await post(app, payload);
+      expect(res.statusCode).toBe(409);
+      expect(res.json()).toMatchObject({ ok: false, error: 'lane-gated', detail: laneArmGate('continuity') });
+    }
+    expect(coord.laneArmSetting('continuity')).toMatchObject({ choice: 'shadow', updatedAt: 0 });
+    expect((await post(app, { lane: 'continuity', choice: 'shadow' })).statusCode).toBe(200);
+    // The gate is words a person reads, and only the continuity row has one.
+    expect(laneArmGate('continuity')).toMatch(/renewal act/);
+    expect(laneArmGate('roster-card')).toBeNull();
+    expect(LANE_ARM_REFUSALS).toContain('lane-gated');
+    expect(REFUSAL_STATUS['lane-gated']).toBe(409);
   });
 
   it('refuses any other body with bad-request before anything else, and writes nothing', async () => {

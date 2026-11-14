@@ -8,6 +8,8 @@ import * as soft from '../../src/continuity/softRenewal.js';
 import * as observed from '../../src/time/observed.js';
 import { GEN_DAY_INVARIANTS, generationDay, type GenDayModules } from './generationDay.js';
 import { assertScenario, simSeeds, simulate } from './run.js';
+import type { CoordStore } from '../../src/coord/store.js';
+import type { GenerationsCoord } from '../../src/continuity/generationsLane.js';
 import type { SequenceLine } from './sequence.js';
 
 type Row = [kind: string, id: string, state: string, actor: string];
@@ -106,11 +108,24 @@ describe('the generation day\'s invariants go red on a hand-made sequence', () =
     expect(byName('G8').check(day(1))?.invariant).toBe('G8');
     expect(byName('G8').check(day(2))).toBeNull();
   });
-  it('CONTROL: G5 is red on a mint with no start, and on a start that minted nothing', () => {
-    expect(byName('G5').check(seqOf([['gen', 'o#2', 'carded', 'mint']]))?.invariant).toBe('G5');
-    expect(byName('G5').check(seqOf([['start', 'o', 'applied', 'host'], ['sim', 'generation-day', 'end', 'sim']]))?.invariant).toBe('G5');
-    expect(byName('G5').check(seqOf([['start', 'o', 'applied', 'host'], ['gen', 'o#2', 'carded', 'mint'], ['sim', 'g', 'end', 'sim']]))).toBeNull();
-    expect(byName('G5').check(seqOf([['start', 'o', 'applied', 'host'], ['gen', 'o#3', 'carded', 'mint']]))?.invariant).toBe('G5');   // not the next number (F18)
+  it('CONTROL: G5 counts the reported starts (review 2003 F7): red on a mint with no start, and on a start that had to mint and did not', () => {
+    const r = (n: number, uuid = 'u1', source = 'clear'): Row => ['report', 'o', `start=${n};source=${source};uuid=${uuid}`, 'host'];
+    const pass: Row = ['pass', 'server', 'o=1', 'lane'];
+    // The day's first start is n=1's; a mint beyond the starts reported after it is a mint with no start.
+    expect(byName('G5').check(seqOf([r(1), ['gen', 'o#2', 'carded', 'mint']]))?.invariant).toBe('G5');
+    expect(byName('G5').check(seqOf([r(1), r(2), pass]))?.invariant).toBe('G5');
+    expect(byName('G5').check(seqOf([r(1), r(2), ['gen', 'o#2', 'carded', 'mint'], pass]))).toBeNull();
+    // Two starts of the current conversation in one batch, the older skipped: G8 stays green (the newest minted), G5 does not.
+    const skippedOlder = seqOf([r(1), r(2), r(3), ['gen', 'o#2', 'carded', 'mint'], ['pass', 'server', 'o=3', 'lane']]);
+    expect(byName('G5').check(skippedOlder)?.invariant).toBe('G5');
+    expect(byName('G8').check(skippedOlder)).toBeNull();
+    // A start whose conversation a later start replaced before a pass judged it may mint nothing (the uuid rule's cost).
+    expect(byName('G5').check(seqOf([r(1), r(2, 'u1', 'resume'), r(3, 'u2'), ['gen', 'o#2', 'carded', 'mint'], pass]))).toBeNull();
+    // ... but once a completed pass found it current, it had to mint.
+    expect(byName('G5').check(seqOf([r(1), r(2, 'u1', 'resume'), pass, r(3, 'u2'), ['gen', 'o#2', 'carded', 'mint'], pass]))?.invariant).toBe('G5');
+    // A pass an abort cut short writes no pass line: the starts it left are judged at the next one.
+    expect(byName('G5').check(seqOf([r(1), r(2), ['server', 'crash', 'down', 'sim']]))).toBeNull();
+    expect(byName('G5').check(seqOf([r(1), r(2), ['gen', 'o#3', 'carded', 'mint']]))?.invariant).toBe('G5');   // not the next number (F18)
   });
 });
 
@@ -161,6 +176,25 @@ describe('the generation day over seeded runs', () => {
       const st = observed.observeTime(p, mono, proc, cap);
       return st.gap?.kind === 'step' ? { ...st, gap: null } : st;
     }), 'G4')).not.toBeNull();
+  }, BOUND_MS);
+
+  it('MUTATION: an observeTime that leaves the stored mono stale goes red on G4 within the CI seeds (review 2003 F6: the oracle is the scenario\'s clock)', async () => {
+    expect(await redSeed(withObserve((p, mono, proc, cap) => {
+      const st = observed.observeTime(p, mono, proc, cap);
+      // Every pass, a gap's included: under the old oracle (an obs line only when the stored mono was the clock's) no line
+      // was ever written after the first, and G4 held vacuously.
+      return p !== null ? { ...st, at: { ...st.at, mono: p.mono } } : st;
+    }), 'G4')).not.toBeNull();
+  }, BOUND_MS);
+
+  it('MUTATION: a cursor advanced before the mint it covers goes red on G8 within the CI seeds (review 2003 F9)', async () => {
+    const cursorFirst = (store: CoordStore): GenerationsCoord => Object.assign(Object.create(store) as CoordStore, {
+      mintGeneration: (...[i, e, live, c]: Parameters<CoordStore['mintGeneration']>) => {
+        if (c !== null && c !== undefined) store.advanceCursor(c);
+        return store.mintGeneration(i, e, live, null);
+      },
+    });
+    expect(await redSeed({ ...REAL, coord: cursorFirst }, 'G8')).not.toBeNull();
   }, BOUND_MS);
 
   it('MUTATION: a softRenewalMay that ignores the budget goes red on G2 within the CI seeds', async () => {
