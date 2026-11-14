@@ -114,7 +114,7 @@ describe('gatherCardFacts: each fact is read from its rows', () => {
     const { facts: f, renderer } = await gather(store());
     expect(f.role).toBe('plain');
     expect(renderer).toBe('plain');
-    for (const k of ['runs', 'ledger', 'claims', 'itemsRaised', 'mailOutstanding'] as const) expect(value(f[k])).toEqual([]);
+    for (const k of ['runs', 'ledger', 'claims', 'itemsRaised', 'mailOutstanding'] as const) expect(f[k]).toEqual({ kind: 'read', value: [] });
   });
 
   it('a worker: the run it is bound to, by its child mark and the run kind', async () => {

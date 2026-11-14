@@ -19,6 +19,14 @@
 // so every generation minted in shadow carries the `renewalDue` answer of its last pass and the triggers it could not
 // read. The walk's own column still records the would-be states.
 //
+// THE CARD READ (the card piece, PR B, plan `w1a-card.md` Task 5). A generation whose effective state is `carded` (read only
+// through `effectiveGeneration`, review 1902 F6: in shadow a mint leaves `state` at `active` and `shadowState` at `carded`)
+// is fed `card-read` from the card door's rows (`cardReadOfStart`: the newest full read by the conversation its start
+// reported, and whether it was the session's current card), and the machine's next view is written with the card hash and
+// snapshot it read. In shadow this is a record on the shadow column, and the probes piece takes it on from `probing`. The
+// feed (`cardReadFeed`) is one source of stamped events and the apply loop is separate, so the renewal act's ordered feed
+// replaces the feed and keeps the loop (review 1902 F6).
+//
 // TWO HALVES. `gatherGenerationReadings` (async) makes the fleet reads for the generations a pass will judge; then
 // `generationsPass` (synchronous, one transaction per write, nothing awaited) reads `coord.db`, decides and writes. So a
 // pass after a restart resumes from the cursor and the stored columns, never from memory, and the simulator drives the
@@ -39,7 +47,8 @@ import { observeTime, observedStepCapMs, type ObservedGap } from '../time/observ
 import type { MeasuredStat } from '../io.js';
 import type { UsageRead } from '../usage.js';
 import { compactionsSince, type CompactionsRead } from './compactions.js';
-import { effectiveGeneration, genExpectOf, type GenRow, type MintInput } from './continuityStore.js';
+import { effectiveGeneration, genExpectOf, genViewOf, type GenRow, type MintInput } from './continuityStore.js';
+import { generationStep, type GenEvent } from './generationMachine.js';
 import type { StartRow } from '../../../shared/continuity.js';
 import {
   START_SKIPS, firstMintOf, judgedForDue, planStartBatch, startVerdict, waveBoundaryOf, type HoldClock, type StartFacts, type StartSkip,
@@ -59,7 +68,7 @@ export const FIRST_MINT_LOOKBACK = 20;
 /** The store members the pass reaches, declared by this consumer, so a test can hand a small fake. */
 export type GenerationsCoord = Pick<CoordStore, 'startsSince' | 'startsOf' | 'liveGenerations' | 'mintGeneration' | 'advanceObserved'
   | 'setGenerationDue' | 'clearShadowWalk' | 'generationsCursor' | 'advanceCursor' | 'laneArmSetting' | 'openCoordinatorIds'
-  | 'run' | 'bindingRunsOf'>;
+  | 'run' | 'bindingRunsOf' | 'cardReadOfStart' | 'stepGeneration'>;
 
 /** What the registry says of one row at the pass: its current conversation (null: unreadable), its account and its child
  *  mark. */
@@ -114,11 +123,13 @@ export interface GenerationsResult {
   /** The observed-time gaps the pass measured, one per identity that had one. */
   readonly gaps: readonly (ObservedGap & { readonly identity: string })[];
   readonly due: number;
+  /** Generations in `carded` that a card read of the current hash moved to `probing` (in shadow, on the shadow column). */
+  readonly cardRead: number;
   /** Generations whose due write named at least one trigger it could not read. */
   readonly blind: number;
   readonly cleared: number;
   /** A read that failed and stopped part of the pass, or null. */
-  readonly unread: 'cursor' | 'starts' | 'generations' | 'registry' | null;
+  readonly unread: 'cursor' | 'starts' | 'generations' | 'registry' | 'card-reads' | null;
   /** A mint that could not be written stopped the batch. */
   readonly stopped: boolean;
 }
@@ -133,6 +144,7 @@ export function generationsPass(deps: GenerationsDeps, input: GenerationsInput):
   const skipped = zeroSkips();
   const gaps: (ObservedGap & { identity: string })[] = [];
   let read = 0; let minted = 0; let firstMinted = 0; let held = 0; let superseded = 0; let due = 0; let blind = 0; let cleared = 0;
+  let cardRead = 0;
   let stopped = false;
   // Every read that failed, each with what it stopped at the point it failed (review 2006 N3); `unread` is the first.
   const failures: Failure[] = [];
@@ -141,7 +153,7 @@ export function generationsPass(deps: GenerationsDeps, input: GenerationsInput):
   };
   const result = (): GenerationsResult => {
     logPass(deps.log, { skipped, held, superseded, stopped, failures, gaps });
-    return { live, read, minted, firstMinted, skipped, held, superseded, gaps, due, blind, cleared, unread: failures[0]?.what ?? null, stopped };
+    return { live, read, minted, firstMinted, skipped, held, superseded, gaps, due, cardRead, blind, cleared, unread: failures[0]?.what ?? null, stopped };
   };
 
   // ---- ONE: every live generation's accumulator advances by the lane's step cap (review 1896 R4.1), before any mint, so a
@@ -264,6 +276,19 @@ export function generationsPass(deps: GenerationsDeps, input: GenerationsInput):
     }
   }
 
+  // ---- THE CARD READ: a `carded` generation's read of its card, fed to the machine and written with what it read.
+  const carded = coord.liveGenerations();
+  if (!carded.ok) fail('generations', carded.detail, 'no card read is recorded');
+  else {
+    const feed = cardReadFeed(coord, carded.rows, live);
+    for (const f of feed.failed) fail('card-reads', f, 'that generation\'s card read waits for the next pass');
+    for (const { gen, event, card } of feed.events) {
+      const step = generationStep(genViewOf(gen, live), event);
+      if (step.next.state === effectiveGeneration(gen, live).state) continue;
+      if (coord.stepGeneration(gen.id, genExpectOf(gen), step.next, live, now, card).changed) cardRead += 1;
+    }
+  }
+
   // ---- THREE: the `renewalDue` answer is recorded for every generation whose `state` is at rest (`active` or `degraded`),
   // whatever a shadow walk holds (review 2003 F1).
   const gens = coord.liveGenerations();
@@ -281,6 +306,31 @@ export function generationsPass(deps: GenerationsDeps, input: GenerationsInput):
       ? { due: true, why: d.why, cls: d.cls, at: now, observedMs: g.observed.ms } : { due: false }, d.blind);
   }
   return result();
+}
+
+/** One event for one generation, and the card it read when the event is a card read. */
+export interface FedEvent {
+  readonly gen: GenRow;
+  readonly event: GenEvent;
+  readonly card: { readonly hash: string; readonly snapshotId: string } | null;
+}
+
+/** The card reads, as events: for each generation whose effective state is `carded` (`effectiveGeneration`, never `state` or
+ *  `shadowState` directly), its newest full read by the conversation its start reported, with `hashMatches` true only when
+ *  that read was of the session's current card. A generation that has read nothing yet gets no event. One read that fails
+ *  is named and that generation waits; the others are fed. */
+export function cardReadFeed(coord: Pick<GenerationsCoord, 'cardReadOfStart'>, gens: readonly GenRow[], live: boolean):
+  { readonly events: readonly FedEvent[]; readonly failed: readonly string[] } {
+  const events: FedEvent[] = [];
+  const failed: string[] = [];
+  for (const gen of gens) {
+    if (effectiveGeneration(gen, live).state !== 'carded') continue;
+    const r = coord.cardReadOfStart(gen.startId);
+    if (!r.ok) { failed.push(r.detail); continue; }
+    if (r.read === null) continue;
+    events.push({ gen, event: { kind: 'card-read', hashMatches: r.read.current }, card: { hash: r.read.hash, snapshotId: r.read.snapshotId } });
+  }
+  return { events, failed };
 }
 
 /** A read that failed, and what it stopped where it failed. */

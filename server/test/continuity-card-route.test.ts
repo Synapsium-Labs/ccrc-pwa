@@ -89,7 +89,8 @@ describe('GET /api/sessions/:id/card: who may read it', () => {
 
   it('refuses a malformed query 400: a page that is not a positive integer, a hash that is not one, a later page with no hash', async () => {
     app = await open();
-    for (const q of [{ page: '0' }, { page: 'x' }, { page: '-1' }, { hash: 'nope' }, { page: 2 }]) {
+    const bad: Record<string, string | number>[] = [{ page: '0' }, { page: 'x' }, { page: '-1' }, { hash: 'nope' }, { page: 2 }];
+    for (const q of bad) {
       const res = await card(app, q);
       expect([res.statusCode, res.json().error]).toEqual([400, 'bad-request']);
     }

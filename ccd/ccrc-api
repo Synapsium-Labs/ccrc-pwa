@@ -21,7 +21,7 @@
 #     this process's caller does not supply. Absent, it REFUSES; it never guesses
 #     a host. (A worker guessed one on 2026-08-25 and reported success against
 #     nothing.)
-#   * The route comes from ROUTES below, seventy-three rows, and nothing else; the
+#   * The route comes from ROUTES below, seventy-four rows, and nothing else; the
 #     four claimant rows name the question door family's template, their only
 #     door since the old ones were retired (D-7324), refused here, unsent, when a
 #     current cap file says the server lacks `questions-v1` (D-7328); `runs
@@ -92,7 +92,7 @@ SAFE_RE='^[A-Za-z0-9_-]+$'
 # (`/api/questions/<ask|approval>-{id}/<rule|release>`): from Q3j it was their
 # fifth field, sent only while the server advertised `questions-v1` (D-7325), and
 # since the old doors were retired it is their path (D-7324). Every row has four.
-# Seventy-three rows, and that word is SCANNED: `server/test/ccrc-api.test.ts`
+# Seventy-four rows, and that word is SCANNED: `server/test/ccrc-api.test.ts`
 # derives the count from the table below and reds if this line or the bullet at
 # the top of this file states a different one. The original rows were chosen on
 # 2026-08-26 by measuring the skill corpora; the standing executable-corpus
@@ -262,6 +262,10 @@ declare -A ROUTES=(
   # session's id; the body (`fromId`, `fromUuid`, `startedUuid`, `reportId`, `source`, `model`, `rowIncarnation`, `reportedAt`) is
   # one JSON report, as the hook builds it or keeps it on one line of its spool.
   [sessions.start]='POST|/api/sessions/{id}/start|yes|-'
+  # The card (Overlord W1a, the card piece; spec §3.3.3 C38): a session reads its OWN card, one page per request. `{id}` is the
+  # session's id and the query carries the pane's pair (`byId`, `byUuid`), the page and, after the first, the card's hash.
+  # `ccrc-api card` (`cmd_card`) reads every page of one hash through this row and prints the text; this row is the raw read.
+  [sessions.card]='GET|/api/sessions/{id}/card|yes|byId,byUuid,page,hash'
   # The plan verbs (Linear hierarchy design, D-8181): `{id}` is the programme's slug. Every one but `plan.show` carries the pane's
   # identity in the QUERY (the `linear.*` block's rule, never the body); `plan.show` is a session-or-token read and sends none. All
   # are refused locally `no-plan-door` when a CURRENT cap file omits `plan-v1`. The second operand of a verb (a checkpoint, a
@@ -368,6 +372,7 @@ usage() {
     done
     printf '  %-18s %s\n' '' 'coordinators intent takes set|clear --session <this session'"'"'s id> and nothing else'
     printf '  %-18s %s\n' 'whoami' 'this session'"'"'s {id,uuid}, from tmux + the registry'
+    printf '  %-18s %s\n' 'card' 'this session'"'"'s card, every page of one hash, printed as plain text'
     printf '  %-18s %s\n' '' 'mail inbox takes nothing: it prints this pane'"'"'s unacked mail as plain text, not JSON,'
     printf '  %-18s %s\n' '' 'and acks each entry it printed. Run it bare: no pipe, no redirect, no head or tail.'
     printf '  %-18s %s\n' '' '(ledger allocate fills "byId" from this pane; --by <id> for a caller with none)'
@@ -688,10 +693,77 @@ cmd_inbox() {   # url of the read
   exit 0
 }
 
+# AN EXPLICIT TEMPLATE, because BSD `mktemp` IGNORES `$TMPDIR` when given
+# none (install.sh:54 measured it) — and this file cannot source ccd's
+# platform block, so the template is spelled locally, unconditionally, the
+# same shape install.sh uses. GNU mktemp honours the template identically.
+# ONE file and ONE trap for the whole run, armed before the first request (D-6780): curl's `-o` rewrites it on
+# each request, and `send_request` never arms one of its own. `main` arms it for a row, and `cmd_card` for its pages.
+arm_req_out() {
+  REQ_OUT=$(mktemp "${TMPDIR:-/tmp}/ccrc-api.XXXXXXXXXX") || refuse 'no-tmp' 'cannot create a temp file'
+  # shellcheck disable=SC2064
+  trap "rm -f '$REQ_OUT'" EXIT
+}
+
+# `card` (Overlord W1a, the card piece, plan `w1a-card.md` Task 5): this pane's own card, read whole. Every page of ONE
+# card hash is read in order through the `sessions.card` row (page 1 names the hash, each later page carries it), and the
+# text is printed only once the last page arrived, then one line naming the hash and the page count. A `card-changed` (409)
+# means the card was rendered anew between two pages: the read starts again at page 1, at most CARD_RESTARTS times. Any
+# other answer is printed as it came, with its status on stderr. Exit 0 for an answer, 3 for none. It takes no argument:
+# a session reads its own card, the pane's. NEVER call it inside $( ): it prints, refuses and exits.
+CARD_RESTARTS=3
+cmd_card() {
+  (( $# == 0 )) || refuse 'bad-args' "card takes no argument: $1"
+  command -v jq >/dev/null 2>&1 || refuse 'no-jq' 'card reads each page with jq, and jq is not on PATH; nothing was read'
+  derive_identity
+  local method tmpl _needs _qkeys
+  IFS='|' read -r method tmpl _needs _qkeys <<< "${ROUTES[sessions.card]}"
+  server_url
+  read_token
+  arm_req_out
+  local base="$SERVER_URL${tmpl/\{id\}/$DERIVED_ID}?byId=$DERIVED_ID&byUuid=$DERIVED_UUID"
+  local restarts=0 page hash pages text shape got
+  while :; do
+    page=1; hash=''; pages=1; text=''
+    while (( page <= pages )); do
+      if ! send_request "$method" "$base&page=$page${hash:+&hash=$hash}" ''; then TOKEN=""; transport_exit; fi
+      if [[ "$REQ_CODE" == '409' ]] && [[ "$(jq -r '.error // empty' "$REQ_OUT" 2>/dev/null)" == 'card-changed' ]]; then
+        break
+      fi
+      shape=$(jq -r 'if (.ok == true and (.hash | type) == "string" and (.hash | test("^[0-9a-f]{64}$"))
+            and (.pages | type) == "number" and .pages >= 1 and .pages == (.pages | floor) and (.text | type) == "string")
+          then "\(.hash) \(.pages)" else "bad" end' "$REQ_OUT" 2>/dev/null) || shape='bad'
+      if [[ "$REQ_CODE" != '200' || ! "$shape" =~ ^([0-9a-f]{64})\ ([0-9]+)$ ]]; then
+        TOKEN=""
+        print_body
+        printf 'http %s\n' "$REQ_CODE" >&2
+        exit 0
+      fi
+      [[ -z "$hash" ]] && { hash="${BASH_REMATCH[1]}"; pages="${BASH_REMATCH[2]}"; }
+      # A page's text may end in a newline, which `$( )` would strip: a sentinel byte keeps it, and is cut after.
+      got=$(jq -j '.text, "."' "$REQ_OUT" 2>/dev/null) || got='.'
+      text+="${got%.}"
+      page=$(( page + 1 ))
+    done
+    (( page > pages )) && break
+    restarts=$(( restarts + 1 ))
+    if (( restarts > CARD_RESTARTS )); then
+      TOKEN=""
+      printf 'card: the card changed %s times while it was being read; run ccrc-api card again\n' "$restarts"
+      exit 0
+    fi
+  done
+  TOKEN=""
+  printf '%s\n' "$text"
+  printf 'card: read whole, hash %s, %s page(s)\n' "$hash" "$pages"
+  exit 0
+}
+
 main() {
   (( $# >= 1 )) || { usage; refuse 'no-verb' 'no group given'; }
 
   [[ "$1" == 'whoami' ]] && { cmd_whoami; exit 0; }
+  [[ "$1" == 'card' ]] && { shift; cmd_card "$@"; }
   [[ "$1" == '-h' || "$1" == '--help' ]] && { usage; exit 0; }
 
   (( $# >= 2 )) || { usage; refuse 'no-verb' "group '$1' needs a verb"; }
@@ -1035,15 +1107,7 @@ main() {
   path="${tmpl/\{id\}/$id}"
   url="$SERVER_URL$path${query:+?$query}"
 
-  # AN EXPLICIT TEMPLATE, because BSD `mktemp` IGNORES `$TMPDIR` when given
-  # none (install.sh:54 measured it) — and this file cannot source ccd's
-  # platform block, so the template is spelled locally, unconditionally, the
-  # same shape install.sh uses. GNU mktemp honours the template identically.
-  # ONE file and ONE trap for the whole run, armed before the first request (D-6780): curl's `-o` rewrites it on
-  # each request, and `send_request` never arms one of its own.
-  REQ_OUT=$(mktemp "${TMPDIR:-/tmp}/ccrc-api.XXXXXXXXXX") || refuse 'no-tmp' 'cannot create a temp file'
-  # shellcheck disable=SC2064
-  trap "rm -f '$REQ_OUT'" EXIT
+  arm_req_out
 
   [[ "$key" != 'mail.inbox' ]] || cmd_inbox "$url"
 
