@@ -4,7 +4,7 @@
 // later page of a superseded card answers 409 `card-changed`, and a full read is recorded only once every page of one hash
 // has been served to that conversation; the text is masked once, whole, before it is paged (review 2023 F2), and every
 // answer says whether it `recorded` the read (F8). Fixture HOMEs only.
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createHash } from 'node:crypto';
 import path from 'node:path';
 import Fastify, { type FastifyInstance } from 'fastify';
@@ -15,7 +15,8 @@ import { MASKED_GET_ROUTES } from '../src/server.js';
 import { registerContinuityRoutes, type ContinuityRouteDeps } from '../src/continuity/routes.js';
 import { SECRET_MASK } from '../../shared/api.js';
 import { CARD_NOTHING_LINE } from '../src/continuity/card.js';
-import { CARD_PAGE_CHARS, TOOL_RESULT_CUT_BYTES } from '../../shared/continuity-card.js';
+import { ANCHOR_CARD_MAX_CHARS, ANCHOR_PROMPT_MAX_CHARS, CARD_PAGE_CHARS, TOOL_RESULT_CUT_BYTES } from '../../shared/continuity-card.js';
+import { ANCHOR_INSTRUCTION } from '../src/continuity/anchor.js';
 import { NOTES_CAP } from '../../shared/continuity.js';
 import { fakeTime, type FakeTime } from './fakeTime.js';
 import { ID_GATE_TOKEN, appFor, recorder, seedRow } from './idGateFixture.js';
@@ -372,3 +373,118 @@ describe('the card with 200 notes of 500 characters (the notes piece; Table 11.5
     expect(reads()).toEqual([expect.objectContaining({ hash: p1.hash, pages: p1.pages })]);
   });
 });
+
+// The anchor piece (plan `w1a-anchor.md` Tasks 1 and 2; C38): `part=anchor` on the same door, dark until the Shadow lanes
+// row `anchor-slot` is live.
+describe('GET /api/sessions/:id/card?part=anchor: the card\'s short part, for the session hook', () => {
+  const anchor = (a: FastifyInstance, form?: string, q: Record<string, string | number> = {}) =>
+    card(a, { part: 'anchor', ...(form === undefined ? {} : { form }), ...q });
+  const arm = (): void => { expect(coord!.setLaneArm('anchor-slot', 'live', 1)).toMatchObject({ kind: 'row', choice: 'live' }); };
+  const openRunAs = (program: string): number =>
+    (coord!.openRun({ program, title: 'PROG', project: 'project-a', wave: 1, waveOf: 2, claimedBy: ID }) as { id?: number }).id ?? 0;
+
+  it('SHADOW (the seed): every form answers dark with no text, stores no snapshot and records no read', async () => {
+    app = await open();
+    for (const form of [undefined, 'start', 'prompt', 'fork']) {
+      const res = await anchor(app, form);
+      expect([res.statusCode, res.json()], String(form)).toEqual([200, { ok: true, dark: true }]);
+    }
+    expect([snapshots(), reads()]).toEqual([[], []]);
+  });
+
+  it('SHADOW still renders, and logs the anchor\'s size once per card hash, so the shadow week measures it', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      app = await open();
+      await anchor(app);
+      await anchor(app);
+      const lines = warn.mock.calls.flat().map(String).filter((l) => l.startsWith('ccrc-server: anchor-slot shadow:'));
+      expect(lines).toHaveLength(1);
+      expect(lines[0]).toMatch(/^ccrc-server: anchor-slot shadow: the start anchor for lane-a-project-a is \d+ characters, \d+ bytes \(card [0-9a-f]{12}\); not served$/);
+    } finally { warn.mockRestore(); }
+  });
+
+  it('LIVE: the anchor names the hash of the card the same facts render, in four parts, and writes nothing', async () => {
+    app = await open();
+    arm();
+    openRunAs('prog-a');
+    const res = await anchor(app);
+    expect(res.statusCode).toBe(200);
+    const a = res.json() as { ok: boolean; hash: string; text: string };
+    expect(Object.keys(a).sort()).toEqual(['hash', 'ok', 'text']);
+    expect([snapshots(), reads()], 'the anchor stores no snapshot and records no read').toEqual([[], []]);
+    const c = (await card(app)).json() as { hash: string };
+    expect(a.hash).toBe(c.hash);
+    expect(a.text.split('\n')).toEqual([
+      'ccrc-anchor: role: coordinator of prog-a',
+      `term none · generation none · card ${c.hash.slice(0, 12)}`,
+      'counts: 1 runs · 0 open items and asks · 0 outstanding mail · 0 notes',
+      ANCHOR_INSTRUCTION,
+    ]);
+    const p = (await anchor(app, 'prompt')).json() as { text: string };
+    expect(p.text.split('\n')).toEqual([`ccrc-anchor: term none · generation none · card ${c.hash.slice(0, 12)}`, ANCHOR_INSTRUCTION]);
+    expect(Buffer.byteLength(p.text, 'utf8')).toBeLessThanOrEqual(ANCHOR_PROMPT_MAX_CHARS);
+  });
+
+  it('LIVE: a fork answers live alone, with no text, and gathers nothing', async () => {
+    app = await open();
+    arm();
+    const res = await anchor(app, 'fork');
+    expect([res.statusCode, res.json()]).toEqual([200, { ok: true, live: true }]);
+    expect(snapshots()).toEqual([]);
+  });
+
+  // A programme slug fits the run's hold reason (127 characters), so twenty runs make the long role line.
+  it('THE SIZE PIN at the door, ASCII: the anchor stays under ANCHOR_CARD_MAX_CHARS bytes, its canaries and instruction whole', async () => {
+    app = await open();
+    arm();
+    for (let i = 0; i < 20; i += 1) expect(openRunAs(`prog-${String(i).padStart(2, '0')}-${'a'.repeat(90)}`)).toBeGreaterThan(0);
+    const a = (await anchor(app)).json() as { text: string };
+    expect(Buffer.byteLength(a.text, 'utf8')).toBeLessThanOrEqual(ANCHOR_CARD_MAX_CHARS);
+    expect(Buffer.byteLength(a.text, 'utf8')).toBeLessThan(TOOL_RESULT_CUT_BYTES);
+    const lines = a.text.split('\n');
+    expect(lines[0]!.endsWith('…')).toBe(true);
+    expect(lines.slice(1)).toEqual([expect.stringMatching(/^term none · generation none · card [0-9a-f]{12}$/),
+      'counts: 20 runs · 0 open items and asks · 0 outstanding mail · 0 notes', ANCHOR_INSTRUCTION]);
+  });
+
+  it('THE SIZE PIN in four-byte text is the renderer\'s (continuity-anchor.test.ts): no slug the store takes can carry it', async () => {
+    app = await open();
+    expect(openRunAs(`prog-${'\u{1F642}'.repeat(20)}`), 'the hold grammar refuses a four-byte programme slug').toBe(0);
+  });
+
+  it('the anchor is card text: the card\'s masker masks a secret in the role line, and no part of it is served', async () => {
+    const fill = (n: number): string => {
+      let out = '';
+      for (let i = 0; out.length < n; i++) out += createHash('sha256').update(`anchor:${i}`).digest('base64url');
+      return out.slice(0, n);
+    };
+    // Short enough for a run's hold reason, long enough for the masker's shape.
+    const SECRET = ['sk', 'ant', 'oat01', fill(86)].join('-');
+    app = await open();
+    arm();
+    expect(openRunAs(SECRET)).toBeGreaterThan(0);
+    const a = (await anchor(app)).json() as { text: string };
+    expect(a.text).toContain(SECRET_MASK);
+    for (const piece of [SECRET, SECRET.slice(0, 20), SECRET.slice(-40)]) expect(a.text).not.toContain(piece);
+  });
+
+  it('refuses a malformed anchor query 400: another part, a form without the part, a page or hash with it, an unknown form', async () => {
+    app = await open();
+    const bad: Record<string, string | number>[] = [{ part: 'card' }, { form: 'start' }, { part: 'anchor', page: 1 },
+      { part: 'anchor', hash: 'a'.repeat(64) }, { part: 'anchor', form: 'other' }];
+    for (const q of bad) {
+      const res = await card(app, q);
+      expect([res.statusCode, res.json().error], JSON.stringify(q)).toEqual([400, 'bad-request']);
+    }
+  });
+
+  it('takes the card\'s checks: no token is 401, another session\'s anchor is not-owner', async () => {
+    app = await open();
+    const none = await card(app, { part: 'anchor' }, ID, null);
+    expect([none.statusCode, none.json().error]).toEqual([401, 'unauthenticated']);
+    const other = await card(app, { part: 'anchor' }, OTHER);
+    expect([other.statusCode, other.json().error]).toEqual([403, 'not-owner']);
+  });
+});
+

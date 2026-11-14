@@ -12,13 +12,15 @@ import type { CoordStore } from '../coord/store.js';
 import { MAIL_TOKEN_HEADER, checkMailToken, type BoxTokenHolder } from '../coord/token.js';
 import { refuseRoute } from '../refuse.js';
 import { REG_GENERATION_SHAPE, shapeProgramSlug } from '../../../shared/api.js';
-import { CARD_BUDGET_TOKENS } from '../../../shared/continuity-card.js';
+import { CARD_BUDGET_TOKENS, isAnchorForm, type AnchorForm, type Fact } from '../../../shared/continuity-card.js';
 import {
   isNoteKeyKind, isNoteKind, noteKeyText, type HandoverNote, type HandoverThread, type KeyFact, type NoteKey,
 } from '../../../shared/continuity.js';
-import { CONTINUITY_LANE, laneArmGate } from '../../../shared/lane-arm.js';
+import { ANCHOR_SLOT_LANE, CONTINUITY_LANE, laneArmGate } from '../../../shared/lane-arm.js';
+import { utf8Bytes } from '../../../shared/utf8.js';
 import { CARD_REFUSALS, NOTE_REFUSALS } from '../../../shared/refusal.js';
 import { laneArmRowViewOf } from '../coord/laneArm.js';
+import { anchorAnswer, anchorGeneration, renderAnchor, type AnchorGenRow, type AnchorStart } from './anchor.js';
 import { cardPages, renderCard, snapshotFactsJson, trimCard } from './card.js';
 import { gatherCardFacts, type CardFactsDeps } from './cardFacts.js';
 import { effectiveGeneration } from './continuityStore.js';
@@ -159,6 +161,28 @@ export function registerContinuityRoutes(app: FastifyInstance, deps: ContinuityR
     if (served.size > (deps.cardMemoMax ?? CARD_MEMO_MAX)) served.delete(served.keys().next().value!);
   };
 
+  // THE ANCHOR'S SHADOW RECORD (the anchor piece): while the `anchor-slot` row is shadow the door renders each anchor it
+  // would serve and logs its size, once per session, form and card hash, so the shadow week measures it without a line per
+  // start. Bookkeeping, bounded as the memo above; a restart logs again.
+  const anchorLogged = new Map<string, string>();
+  const logShadowAnchor = (id: string, form: AnchorForm, hash: string, text: string): void => {
+    const key = `${id}\n${form}`;
+    if (anchorLogged.get(key) === hash) return;
+    anchorLogged.delete(key);
+    anchorLogged.set(key, hash);
+    if (anchorLogged.size > (deps.cardMemoMax ?? CARD_MEMO_MAX)) anchorLogged.delete(anchorLogged.keys().next().value!);
+    console.warn(`ccrc-server: anchor-slot shadow: the ${form} anchor for ${id} is ${[...text].length} characters, ${utf8Bytes(text)} bytes (card ${hash.slice(0, 12)}); not served`);
+  };
+  /** The generation canary's two reads: the identity's live generation, and the session's newest start. */
+  const anchorReads = (coord: CoordStore, id: string): { live: Fact<AnchorGenRow | null>; newest: Fact<AnchorStart | null> } => {
+    const gens = coord.liveGenerations();
+    const starts = coord.startsOf(id, 1);
+    return {
+      live: gens.ok ? { kind: 'read', value: gens.rows.find((g) => g.identity === id) ?? null } : { kind: 'unmeasured', what: 'the generations' },
+      newest: starts.ok ? { kind: 'read', value: starts.rows[0] ?? null } : { kind: 'unmeasured', what: "the session's starts" },
+    };
+  };
+
   /**
    * `GET /api/sessions/:id/card?byId&byUuid&page&hash`: the caller's own card (spec §3.3.3 C38, §11.2). A box-token lane,
    * an `auth/gate.ts` EXEMPT entry: the token first (never the cookie), then the path's session is the caller
@@ -171,6 +195,13 @@ export function registerContinuityRoutes(app: FastifyInstance, deps: ContinuityR
    * trimmed text is masked here, once and whole, before it is hashed and paged: a secret that crosses a page edge is masked
    * as one string (review 2023 F2; `secret-mask.test.ts` lists the route under INLINE, as `/api/mail/inbox`). `200 { ok,
    * hash, snapshotId, page, pages, text, recorded }`, `recorded` true when this answer recorded the full read.
+   *
+   * `part=anchor&form=start|prompt|fork` (the anchor piece, C38): the card's short part, for the session hook. The same
+   * checks, gather, render, trim and mask, so the anchor names the hash of the card the same facts render, then
+   * `renderAnchor` (L1) with the same masker; it takes no page or hash, stores no snapshot and records no read. Its answer
+   * is `anchorAnswer`'s: `{ ok, dark }` with no text while the Shadow lanes row `anchor-slot` is shadow (the door still
+   * renders, and logs the size once per card), and once it is live `{ ok, hash, text }`, or, for a fork, `{ ok, live }`
+   * alone, read before any gather.
    */
   app.get('/api/sessions/:id/card', {
     onRequest: async (req: FastifyRequest, reply: FastifyReply) => {
@@ -190,15 +221,30 @@ export function registerContinuityRoutes(app: FastifyInstance, deps: ContinuityR
     const asked = q['hash'];
     if (asked !== undefined && (typeof asked !== 'string' || !HASH_RE.test(asked))) return refuseRoute(reply, 'bad-request', { detail: 'hash is a card hash' });
     if (page > 1 && asked === undefined) return refuseRoute(reply, 'bad-request', { detail: 'a page after the first names its card hash' });
+    const part = q['part'];
+    const form = q['form'] ?? 'start';
+    if (part !== undefined && part !== 'anchor') return refuseRoute(reply, 'bad-request', { detail: 'part is anchor, or absent for the card' });
+    if (part === undefined && q['form'] !== undefined) return refuseRoute(reply, 'bad-request', { detail: 'form is part=anchor\'s' });
+    if (part === 'anchor' && (q['page'] !== undefined || asked !== undefined)) return refuseRoute(reply, 'bad-request', { detail: 'part=anchor takes no page or hash' });
+    if (!isAnchorForm(form)) return refuseRoute(reply, 'bad-request', { detail: 'form is start, prompt or fork' });
     const attributed = await deps.attributeReader(id, uuid);
     if (!attributed.ok) return refuseRoute(reply, attributed.error, { detail: attributed.detail });
 
     const coord = deps.coord;
     if (coord === undefined) return refuseRoute(reply, 'unavailable');
+    const anchorLive = part === 'anchor' && laneArmRowViewOf(ANCHOR_SLOT_LANE, coord.laneArmSetting(ANCHOR_SLOT_LANE), laneArmGate(ANCHOR_SLOT_LANE)).live;
+    if (part === 'anchor' && form === 'fork') return reply.code(200).send(anchorAnswer(anchorLive, null));
     const at = deps.wall();
+    const masker = deps.masker ?? SHAPE_ONLY_MASKER;
     const { facts, renderer } = await gatherCardFacts({ coord, ...deps.cardRegistry }, id, at);
-    const text = (deps.masker ?? SHAPE_ONLY_MASKER).maskText(trimCard(renderCard(renderer, facts), CARD_BUDGET_TOKENS).text);
+    const text = masker.maskText(trimCard(renderCard(renderer, facts), CARD_BUDGET_TOKENS).text);
     const hash = sha256(text);
+    if (part === 'anchor') {
+      const { live, newest } = anchorReads(coord, id);
+      const anchor = renderAnchor(facts, { cardHash: hash, generation: anchorGeneration(live, newest) }, form === 'prompt' ? 'prompt' : 'start', (t) => masker.maskText(t));
+      if (!anchorLive) logShadowAnchor(id, form, hash, anchor);
+      return reply.code(200).send(anchorAnswer(anchorLive, { hash, text: anchor }));
+    }
     const factsJson = snapshotFactsJson(facts);
     const snapshotId = sha256(factsJson);
     const stored = coord.insertSnapshot({ id: snapshotId, sessionId: id, at, facts: factsJson, hash });
