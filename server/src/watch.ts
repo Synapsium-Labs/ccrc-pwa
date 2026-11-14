@@ -6120,7 +6120,7 @@ export class FleetWatcher {
           steerMarker: async (id) => {
             try {
               const st = await io.statMeasured(`${cfg.ccrcDir}/${HISTORY_STEER_ON_DIR}/${id}`);
-              return st.ok ? 'present' : st.reason === 'absent' ? 'absent' : 'unreadable';
+              return st.ok ? 'present' : st.reason;
             } catch { return 'unreadable'; }
           },
         },

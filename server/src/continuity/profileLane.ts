@@ -18,7 +18,8 @@
 // write (`unknown routing field`). The lane's call carries only its own fields, so such a refusal loses nothing else; it
 // is counted as failed and logged, and no capability word is added (the departure `no-cap-word-the-lane-call-is-its-own`).
 import { CONTINUITY_LANE, LAUNCH_PROFILE_LANE, laneArmGate, type LaneArmLane } from '../../../shared/lane-arm.js';
-import type { ChildMark, RouteField, RouteFields, RunKind } from '../../../shared/api.js';
+import { ROUTE_LANE_ONLY_FIELDS, type ChildMark, type RouteField, type RouteFields, type RunKind } from '../../../shared/api.js';
+import type { ReadFailure } from '../../../shared/agent-protocol.js';
 import { FLEET_ROLES } from '../../../shared/fleetRoles.js';
 import { CCD_ARGV, ccdCan, sweepDec } from '../ccdargv.js';
 import type { CoordStore } from '../coord/store.js';
@@ -34,9 +35,11 @@ import { plainAutoMemoryOf, profileFor } from './profileFor.js';
 export const LAUNCH_PROFILE_LANE_ROW = 'launchProfile';
 /** At most this many route writes a pass (the plan's five): a fleet armed at once converges over a few passes. */
 export const PROFILE_WRITES_PER_PASS = 5;
-/** The route fields the lane writes, in the order it diffs and counts them. */
-export const PROFILE_ROUTE_FIELDS = ['profile', 'automem', 'compact', 'compactwindow'] as const satisfies readonly RouteField[];
-type ProfileField = (typeof PROFILE_ROUTE_FIELDS)[number];
+type ProfileField = Extract<RouteField, 'compact' | 'profile' | 'automem' | 'compactwindow'>;
+/** The route fields the lane writes, in the order it diffs and counts them: `compact`, and the lane-only fields less the
+ *  generations lane's `precompact`. Derived, so the route vocabulary stays spelled once (`ROUTE_WRITABLE_FIELDS`). */
+const LANE_ONLY_BUT_PRECOMPACT = ROUTE_LANE_ONLY_FIELDS.filter((f) => f !== 'precompact');
+export const PROFILE_ROUTE_FIELDS = ['compact', ...LANE_ONLY_BUT_PRECOMPACT] as readonly ProfileField[];
 /** The history W3 steer marker's directory under the fleet node's `~/.ccrc` (`cfg.ccrcDir`): the session hook reads
  *  `$HOME/.ccrc/history/steer-on/<id>`. A second spelling of `ccd/history/lib.mjs`'s `SWITCHES.steerOnDir` (another
  *  package, which server code does not import), held equal to it by `continuity-profile-lane.test.ts`. */
@@ -59,8 +62,8 @@ export interface ProfileRow {
 export interface ProfileReads {
   /** The session's usage sidecar (its `ctxWindow`), read only for a role whose profile has compaction while `continuity` is live. */
   usage(id: string): Promise<UsageRead>;
-  /** The history W3 steer marker for this session: `present`, `absent`, or `unreadable` (read only for a would-be write). */
-  steerMarker(id: string): Promise<'present' | 'absent' | 'unreadable'>;
+  /** The history W3 steer marker for this session: `present`, or why there is none (read only for a would-be write). */
+  steerMarker(id: string): Promise<'present' | ReadFailure>;
 }
 
 /** The lane's memory across passes: the last line it logged, so an unchanged pass logs nothing. Never a decision's state. */
