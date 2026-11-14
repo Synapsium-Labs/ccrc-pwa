@@ -200,6 +200,15 @@ export type EndRequestRefusal = (typeof END_REQUEST_REFUSALS)[keyof typeof END_R
  *  for it. */
 export const CARD_REFUSALS = { cardChanged: 'card-changed' } as const;
 export type CardRefusal = (typeof CARD_REFUSALS)[keyof typeof CARD_REFUSALS];
+/** The note door's own words (Overlord W1a, the notes piece; spec Table 13.2): a key that names no live row of the caller's,
+ *  a cap of live notes reached, a field over its length cap, a handover thread whose reference names no live row of the
+ *  caller's, and a handover sent while no handover was asked. A key the door could not read is the generic `unmeasured`
+ *  (slug unmeasured-key-is-unmeasured), never one of these. Box-facing, so the console has no sentence for them. */
+export const NOTE_REFUSALS = {
+  keyUnknown: 'note-key-unknown', cap: 'note-cap', tooLong: 'note-too-long', referenceUnknown: 'reference-unknown',
+  notAsked: 'note-not-asked',
+} as const;
+export type NoteRefusal = (typeof NOTE_REFUSALS)[keyof typeof NOTE_REFUSALS];
 /** The timer doors' own words (Overlord W1a, the timers piece; spec §11.6, the `timer-*` words), each with its one status,
  *  declared once here and spread into `REFUSAL_STATUS` (`LEASE_DOOR_REFUSALS`' idiom). CHOSEN, not measured: 409 for the
  *  caller's cap and for a timer no longer pending, 429 for the hourly rate, 400 for a body the caller can fix, 503 for a
@@ -231,6 +240,8 @@ export type RouteRefusal = ClaimRefusal | MailRouteRefusal | UpdateRouteError | 
   | EndRequestRefusal
   // The card door (Overlord W1a): its one word of its own.
   | CardRefusal
+  // The note door (Overlord W1a): its five words of its own.
+  | NoteRefusal
   // The timer doors (Overlord W1a, the timers piece): their ten words, each with its status in `TIMER_REFUSALS`.
   | TimerRefusal
   // The lane routes, Check and the kill switch (accounts plan Task A14, D-7732): their four words of their own.
@@ -437,6 +448,11 @@ export const REFUSAL_STATUS: Readonly<Record<RouteRefusal, number>> = {
   [END_REQUEST_REFUSALS.notYours]: 403, [END_REQUEST_REFUSALS.alreadyAsked]: 409, [END_REQUEST_REFUSALS.recentlyAsked]: 409,
   // The card door (Overlord W1a): CHOSEN, not measured. 409: the card the caller pages through was superseded by a newer render.
   [CARD_REFUSALS.cardChanged]: 409,
+  // The note door (Overlord W1a): CHOSEN, not measured. 403 for a key that is not a live row of the caller's (as `not-owner`);
+  // 409 for a cap held and for a handover nobody asked (a state of the world, not a fault in the body); 400 for a field over
+  // its cap and for a handover thread naming no live row (the caller's text to fix).
+  [NOTE_REFUSALS.keyUnknown]: 403, [NOTE_REFUSALS.cap]: 409, [NOTE_REFUSALS.tooLong]: 400,
+  [NOTE_REFUSALS.referenceUnknown]: 400, [NOTE_REFUSALS.notAsked]: 409,
   // The timer doors (Overlord W1a): CHOSEN, not measured, each status declared once in `TIMER_REFUSALS`.
   ...TIMER_REFUSALS,
   // D-8126: CHOSEN, not measured. 400 for both: the coordinator sent a list of the wrong shape, or a change with nothing

@@ -275,3 +275,78 @@ describe('cardRoleOf: every role is drawn by its FLEET_ROLES renderer', () => {
     expect(at({ kind: 'none' }, 'unmeasured', false, false).renderer).toBe('plain');
   });
 });
+
+describe('gatherCardFacts: the notes and the checkpoint (the notes piece, Task 3)', () => {
+  const note = (c: CoordStore, key: { kind: 'run'; id: number } | { kind: 'programme'; slug: string }, next: string, at: number, identity = ME): number => {
+    const r = c.appendNote({ identity, sessionId: identity, generationId: null, key, kind: 'thread', waitsOn: 'w', next, revises: null, closes: false, at });
+    if (!r.ok) throw new Error('note');
+    return r.id;
+  };
+  let reports = 0;
+  const mint = (c: CoordStore, live = true): number => {
+    reports += 1;
+    const s = c.insertStart({ sessionId: ME, reportId: `r-${reports}`, uuid: 'u', source: 'clear', model: null, rowIncarnation: null, reportedAt: NOW, receivedAt: NOW });
+    if (!s.ok) throw new Error('start');
+    const gens = c.liveGenerations();
+    if (!gens.ok) throw new Error(gens.detail);
+    const prev = gens.rows.find((g) => g.identity === ME) ?? null;
+    const m = c.mintGeneration({ identity: ME, sessionId: ME, role: 'coordinator', term: 1, rowIncarnation: null, startId: s.id, startReportedAt: NOW,
+      resumed: false, model: null, lane: 'lane-a', host: null, outcome: 'renewed', mono: 1, proc: 'p', now: NOW },
+    prev === null ? null : { term: prev.term, n: prev.n, state: prev.state, shadowState: prev.shadowState, walk: prev.walk }, live);
+    if (!m.ok) throw new Error(m.kind);
+    return m.id;
+  };
+
+  it('the live notes, newest first, each with what its row is now; another identity\'s notes are not read', async () => {
+    const c = store();
+    const run = openRun(c, 'prog-a', ME);
+    const closed = openRun(c, 'prog-b', ME);
+    const a = note(c, { kind: 'run', id: run }, 'one', NOW - 3_000);
+    const b = note(c, { kind: 'run', id: closed }, 'two', NOW - 2_000);
+    const d = note(c, { kind: 'programme', slug: 'prog-z' }, 'three', NOW - 1_000);
+    note(c, { kind: 'run', id: run }, 'theirs', NOW, OTHER);
+    c.db.prepare("UPDATE runs SET state = 'done' WHERE id = ?").run(closed);
+    const notes = value((await gather(c)).facts.notes);
+    expect(notes.map((n) => [n.id, n.key, n.keyFact, n.next])).toEqual([
+      [d, 'programme prog-z', 'not-yours', 'three'], [b, `run ${closed}`, 'gone', 'two'], [a, `run ${run}`, 'live', 'one']]);
+  });
+
+  it('a notes read that fails is unmeasured, naming the notes; a key read that fails is that note\'s fact, never a dropped note', async () => {
+    const c = store();
+    const run = openRun(c, 'prog-a', ME);
+    note(c, { kind: 'run', id: run }, 'one', NOW);
+    c.run = () => ({ ok: false, kind: 'run-unreadable', detail: 'x' }) as never;
+    const f = (await gather(c)).facts;
+    expect(value(f.notes).map((n) => n.keyFact)).toEqual(['unmeasured']);
+    c.liveNotes = () => ({ ok: false, detail: 'x' });
+    expect((await gather(c)).facts.notes).toEqual({ kind: 'unmeasured', what: 'the notes' });
+  });
+
+  it('the checkpoint is the handover note of the generation the live one replaced, and null when it wrote none', async () => {
+    const c = store();
+    expect((await gather(c)).facts.checkpoint).toEqual({ kind: 'read', value: null });
+    const first = mint(c);
+    expect((await gather(c)).facts.checkpoint).toEqual({ kind: 'read', value: null });
+    expect(c.putHandover({ generationId: first, note: { threads: [{ ref: { kind: 'run', id: 4 }, waitsOn: 'w', next: 'n' }], cautions: ['c'], tone: 't' }, dropped: 1, at: NOW - 9 }).ok).toBe(true);
+    // Still the first generation: no generation before it wrote a note.
+    expect((await gather(c)).facts.checkpoint).toEqual({ kind: 'read', value: null });
+    mint(c);
+    expect((await gather(c)).facts.checkpoint).toEqual({ kind: 'read', value: {
+      at: NOW - 9, handover: { generation: 1, dropped: 1, threads: [{ ref: 'run 4', waitsOn: 'w', next: 'n' }], cautions: ['c'], tone: 't' },
+    } });
+    // A third generation whose predecessor wrote none: null, never the older note.
+    mint(c);
+    expect((await gather(c)).facts.checkpoint).toEqual({ kind: 'read', value: null });
+  });
+
+  it('a generations or handover read that fails is an unmeasured checkpoint, never null', async () => {
+    for (const breakIt of [(c: CoordStore) => { c.liveGenerations = () => ({ ok: false, detail: 'x' }); },
+      (c: CoordStore) => { c.handoverBefore = () => ({ ok: false, detail: 'x' }); },
+      (c: CoordStore) => { c.handoverBefore = () => { throw new Error('disk'); }; }]) {
+      const c = store();
+      mint(c);
+      breakIt(c);
+      expect((await gather(c)).facts.checkpoint).toEqual({ kind: 'unmeasured', what: 'the checkpoint (the handover note)' });
+    }
+  });
+});
