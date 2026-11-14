@@ -233,6 +233,16 @@ describe('the face', () => {
     });
   });
 
+  // Review of the merge queue: the browser fixtures send session rows with no `limitWait` key (an older server's frame), and
+  // the Crying arm read `limitWait.waitingBy` off `undefined`: the whole shell fell to the error boundary. A face over such
+  // rows must mount and name a mood.
+  it('rows with no limitWait key at all mount a face and name a mood', () => {
+    const row: Record<string, unknown> = { ...fleetSession({ id: 'lane-a-1', bucket: 'idle' }) };
+    delete row.limitWait;
+    mountFace(heard({ sessions: [row as unknown as ReturnType<typeof fleetSession>] }));
+    expect(face().getAttribute('aria-label')).toContain('nothing needs anyone');
+  });
+
   it('reduced motion is still from the start', () => {
     reduced = true;
     mountFace(heard());

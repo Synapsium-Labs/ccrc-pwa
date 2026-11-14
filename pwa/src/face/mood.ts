@@ -4,7 +4,7 @@
 // a reader never claims calm (Neutral, with the readers named), and never claims a thing that reader would have said.
 // The accounts read is three values, not a nullable (`LanesRead`): not read yet, read with no lanes served to this reader,
 // read with lanes. Only the first holds the calm moods back; the second only switches Dizzy's lane arm off.
-import type { FleetSession, LaneWire, RestartCause, RunSummary, SessionBucket } from '../../../shared/api';
+import type { FleetSession, LaneWire, LimitWait, RestartCause, RunSummary, SessionBucket } from '../../../shared/api';
 import { recentLastEnd } from '../../../shared/api';
 import type { Mood } from '../../../shared/face';
 import { operatorAsk } from '../fleet/rollup';
@@ -158,7 +158,12 @@ const NOT_LIVE: ReadonlySet<SessionBucket> = new Set<SessionBucket>(['dead', 'ar
 /** A limit nobody chose to wait out (item 219: "no Crying for a wait you chose"). `LimitWait.waitingBy` says whose choice
  *  stands: `'operator'` is the operator's own "Wait until reset", which is no cause to cry; `'auto'` (ccd's own wait where no
  *  account had room) and `null` (a limit with no choice yet, `waiting: false`) are not the operator's, so they still do. */
-const limitNotChosen = (s: FleetSession): boolean => s.limitWait !== null && s.limitWait.waitingBy !== 'operator';
+const limitNotChosen = (s: FleetSession): boolean => {
+  // The key can be ABSENT, not only null: a live frame from an older server omits it (`reviveFleetSession` reads absent as null,
+  // but only the snapshot path runs it), so a row with no `limitWait` has no limit wait and must not throw here.
+  const wait: LimitWait | null | undefined = s.limitWait;
+  return wait !== undefined && wait !== null && wait.waitingBy !== 'operator';
+};
 
 /** The lanes a live session is on now: each session's `wrapper`, which is the lane's id on `GET /api/accounts` (the same
  *  key `LanesRead` carries). A session in a `NOT_LIVE` bucket holds no lane, and neither does one in a wait the operator

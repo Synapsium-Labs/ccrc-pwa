@@ -98,6 +98,15 @@ describe('moodOf', () => {
       fleetSession({ id: 'project-a-y', limitWait: limitWait('auto') })] });
     expect(mood(f)).toBe('crying');
   });
+  it('a session whose frame carries no limitWait key at all has no limit wait: not Crying, and no throw', () => {
+    // An older server's live frame omits the key; the fixture builder always sets it, so delete it here.
+    const row: Record<string, unknown> = { ...fleetSession({ id: 'project-a-x' }) };
+    delete row.limitWait;
+    const f = base({ sessions: [...base().sessions!, row as unknown as ReturnType<typeof fleetSession>] });
+    expect('limitWait' in f.sessions![f.sessions!.length - 1]!).toBe(false);
+    expect(mood(f)).not.toBe('crying');
+    expect(mood({ ...f, lanes: { kind: 'served', lanes: { 'lane-a': rateLimited } } })).toBe('dizzy');
+  });
   it('the Crying cause says the limit was not chosen', () => {
     expect(moodOf(withSession({ limitWait: limitWait('auto') })).cause).toBe(MOOD_RULES.crying.kind === 'measured' ? MOOD_RULES.crying.cause : '');
     expect(MOOD_RULES.crying.kind === 'measured' && MOOD_RULES.crying.cause).toContain('did not choose');

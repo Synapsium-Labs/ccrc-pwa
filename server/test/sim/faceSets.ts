@@ -118,6 +118,13 @@ export function moodCases(m: MoodModule): Record<string, SuiteCase> {
       expect(mood(withSession({ limitWait: limitWait('operator') }))).not.toBe('crying');
       expect(mood(withSession({ limitWait: limitWait('operator', { reset: null }) }))).not.toBe('crying');
     },
+    'a session whose frame carries no limitWait key has no limit wait: not Crying, no throw': () => {
+      const row: Record<string, unknown> = { ...fleetSession({ id: 'project-a-x' }) };
+      delete row.limitWait;
+      const f = base({ sessions: [...base().sessions!, row as unknown as FleetSession] });
+      expect(mood(f)).not.toBe('crying');
+      expect(mood({ ...f, lanes: serving({ 'lane-a': rateLimited }) })).toBe('dizzy');
+    },
     "one session's chosen wait does not hide another's limit nobody chose": () => {
       const f = base({ sessions: [...base().sessions!, fleetSession({ id: 'project-a-x', limitWait: limitWait('operator') }),
         fleetSession({ id: 'project-a-y', limitWait: limitWait('auto') })] });
@@ -243,9 +250,10 @@ const MOOD_SET: MutantSet<MoodModule> = {
     { id: 'O2', old: "consoleLinkLost(f) || f.agentDown", new: "consoleLinkLost(f)" },
     { id: 'N1', old: "['neutral', (f) => f.sessions === null]", new: "['neutral', (f) => false]" },
     { id: 'C1', old: ' || limitNotChosen(s))]', new: ')]' },
-    { id: 'C7', old: "s.limitWait !== null && s.limitWait.waitingBy !== 'operator'", new: 's.limitWait !== null' },
-    { id: 'C8', old: "s.limitWait.waitingBy !== 'operator'", new: "s.limitWait.waitingBy === 'operator'" },
-    { id: 'C9', old: "s.limitWait !== null && s.limitWait.waitingBy !== 'operator'", new: "s.limitWait?.waitingBy !== 'operator'" },
+    { id: 'C10', old: "return wait !== undefined && wait !== null && wait.waitingBy", new: "return wait !== null && wait.waitingBy" },
+    { id: 'C7', old: "wait !== undefined && wait !== null && wait.waitingBy !== 'operator'", new: 'wait !== undefined && wait !== null' },
+    { id: 'C8', old: "wait.waitingBy !== 'operator'", new: "wait.waitingBy === 'operator'" },
+    { id: 'C9', old: "wait !== undefined && wait !== null && wait.waitingBy !== 'operator'", new: "wait?.waitingBy !== 'operator'" },
     { id: 'C2', old: 'within(deathAt(s, f.nowMs), CRY_WINDOW_MS, f.nowMs)', new: '(deathAt(s, f.nowMs) !== null)' },
     { id: 'C3', old: 'return e !== null && DEATH_CAUSE[e.cause] ? e.at : null;', new: 'return e !== null ? e.at : null;' },
     { id: 'C4', old: "if (s.bucket !== 'dead' || s.hibernatedAt !== null || s.stoppedBy !== null) return null;", new: "if (s.bucket !== 'dead') return null;" },

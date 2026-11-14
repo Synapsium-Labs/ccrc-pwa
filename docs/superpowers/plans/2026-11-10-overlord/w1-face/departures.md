@@ -157,6 +157,14 @@ about to use, is limited."
   `'operator'` when waiting, so its operator waits stop crying too. `MOOD_RULES.crying.cause` now reads "a session died or is
   stuck at a limit you did not choose to wait out", so the name stays true. One session's chosen wait never hides another's
   limit that nobody chose (the rule is per session).
+- **limit-wait-key-can-be-absent, a defect the merge queue measured (merge-group run, #2791 dequeued)** — the Crying arm read
+  `s.limitWait.waitingBy`, and a live fleet frame from an older server omits the `limitWait` key (`reviveFleetSession` reads
+  absent as null, but only the snapshot path runs it). The browser fixtures send such rows, so the read threw a `TypeError` in
+  `moodOf`, the shell fell to its error boundary ("ccrc could not draw this screen"), and ten browser files waited out their
+  20 s selectors until the shards hit their limit. The pull request's fast run skips the browser suites, so it was green.
+  `limitNotChosen` now reads the value as `LimitWait | null | undefined`: a row with no key has no limit wait. Guards: a
+  `face-mood` row and a `faceSets` case on a session row with the key deleted (red without the fix, mutants C9 and C10), and a
+  `face-mark` row that mounts a face over such rows. Measured: all three browser shards green locally.
 - **dizzy-only-for-lanes-in-use, a rule the operator asked for (item 219)** — a rate-limited lane gives Dizzy only when a live
   session (a bucket that is not `dead`, `archived` or `cleanup`, the set Angry already uses) is on it now: the lane's id on
   `GET /api/accounts` is the session's `wrapper`. A spare account at its cap that no session is on gives no Dizzy. The swap
