@@ -3757,21 +3757,36 @@ _check_auto-memory() {
       return 2
     fi
   fi
+  # Bounded, and never a PASS unmeasured (review 2024 F5): a directory it cannot list, or a walk past the transcript walk's
+  # deadline, ends it with one `!failed <name>` or `!timeout` line. Scratch slugs are skipped as `_check_memory` skips them.
   out="$(
     shopt -s dotglob nullglob
-    seen=$'\n'
+    seen=$'\n' start=$SECONDS
     while IFS=$'\t' read -r a dir; do
       [ -n "$dir" ] || continue
-      for m in "$dir"/projects/*/memory; do
+      { [ -e "$dir/projects" ] || [ -L "$dir/projects" ]; } || continue
+      [ -d "$dir/projects" ] && [ -r "$dir/projects" ] && [ -x "$dir/projects" ] || { printf '!failed %s/projects\n' "$a"; exit 0; }
+      for s in "$dir"/projects/*; do
+        [ $((SECONDS - start)) -lt "$_DR_TW_DEADLINE_S" ] || { printf '!timeout\n'; exit 0; }
+        m="$s/memory"; slug="${s##*/}"
+        [ -d "$s" ] && ! _dr_mem_is_scratch "$slug" || continue
+        [ -x "$s" ] || { printf '!failed %s/projects/%s\n' "$a" "$slug"; exit 0; }
         [ -d "$m" ] || continue
+        [ -r "$m" ] && [ -x "$m" ] || { printf '!failed %s/projects/%s/memory\n' "$a" "$slug"; exit 0; }
         real="$(cd -P -- "$m" 2>/dev/null && pwd)" || real="$m"
         case "$seen" in *$'\n'"$real"$'\n'*) continue ;; esac
         has=""; for f in "$m"/*; do [ -f "$f" ] && { has=1; break; }; done; [ -n "$has" ] || continue
         seen+="$real"$'\n'
-        s="${m%/memory}"; printf '%s/projects/%s/memory\n' "$a" "${s##*/}"
+        printf '%s/projects/%s/memory\n' "$a" "$slug"
       done
     done <<< "$am_pairs"
   )"
+  case "${out##*$'\n'}" in
+    '!timeout') _dr_warn auto-memory "the walk of the auto-memory directories did not finish within ${_DR_TW_DEADLINE_S}s, so they are unmeasured" \
+      "re-run ccrc doctor when the box is quieter"; return 2 ;;
+    '!failed '*) _dr_warn auto-memory "${out##*!failed } could not be listed, so the auto-memory directories are unmeasured" \
+      "give the fleet user read and search permission on it (or remove it), then re-run ccrc doctor"; return 2 ;;
+  esac
   [ -n "$out" ] || { _dr_pass auto-memory "no rostered config dir holds an auto-memory directory with a file in it"; return 0; }
   local -a am_dirs; mapfile -t am_dirs <<< "$out"   # builtins only: a check is handed no tools it did not stub
   n=${#am_dirs[@]}; first="${am_dirs[0]}"
@@ -6221,6 +6236,14 @@ _check_fleet() {
 # `.claude*` directory is the right answer — a silent blind spot for a name
 # this tool has no business knowing is worse than one more row in the census.
 # shellcheck disable=SC2128,SC2178  # unmeasured is a local string here; the arrays named unmeasured are other functions' locals (shellcheck does not scope names by function)
+# A scratch project slug (a temp directory's), skipped by both memory checks. THE PATTERN LIST IS SPELLED HERE, and that is
+# D-92's trade rather than an oversight — the same one this file already records for `ccd`'s `POOL_NAME_RE`: this table is
+# sourced under `set -u` by things that are NOT `ccrc` (`ccrc-doctor.test.ts`'s `tableNames()`), so it cannot reach
+# `_mem_is_scratch`, and a `declare -F` guard would be the second spelling with a branch in front of it.
+# `single-definition.test.ts` compares all three literals and reds on a drift. `_mem_is_scratch` in `ccrc` carries the
+# rule and the measurement (D-2375; A4 adds the child root).
+_dr_mem_is_scratch() { case "$1" in -tmp*|-private-tmp*|-var-folders*|-private-var-folders*|*--cc-tmp-*) return 0 ;; esac; return 1; }
+
 _check_memory() {
   # A server-role box hosts no sessions (D-3111): the installer converges
   # nothing per account there, so this check measures nothing there either —
@@ -6255,15 +6278,8 @@ _check_memory() {
     for d in "${h}projects"/*/; do
       [ -d "$d" ] || continue
       slug="${d%/}"; slug="${slug##*/}"
-      # THE PATTERN LIST IS SPELLED HERE, and that is D-92's trade rather
-      # than an oversight — the same one this file already records for `ccd`'s
-      # `POOL_NAME_RE`: this table is sourced under `set -u` by things that are
-      # NOT `ccrc` (`ccrc-doctor.test.ts`'s `tableNames()`), so it cannot reach
-      # `_mem_is_scratch`, and a `declare -F` guard would be the second
-      # spelling with a branch in front of it. `single-definition.test.ts`
-      # compares all three literals and reds on a drift. `_mem_is_scratch` in
-      # `ccrc` carries the rule and the measurement (D-2375; A4 adds the child root).
-      case "$slug" in -tmp*|-private-tmp*|-var-folders*|-private-var-folders*|*--cc-tmp-*) continue ;; esac
+      # A scratch slug: the shared skip (`_dr_mem_is_scratch`, above).
+      _dr_mem_is_scratch "$slug" && continue
       link="${d}memory"
       [ -e "$link" ] || [ -L "$link" ] || continue
       store="$HOME/.ccrc/memory/$slug"

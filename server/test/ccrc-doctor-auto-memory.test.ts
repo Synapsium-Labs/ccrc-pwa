@@ -91,6 +91,39 @@ describe('doctor auto-memory (Task 7: lists, never reads, never deletes)', () =>
     } finally { chmodSync(join(d, 'MEMORY.md'), 0o644); }
   });
 
+  it('a directory it cannot list is WARN unmeasured, never PASS: a memory directory, a project directory, projects/ itself (review 2024 F5)', () => {
+    const cases: [string, (home: string) => string, string][] = [
+      ['memory', (home) => memory(home, '.claude-lane-a', '-w-project-a', ['MEMORY.md']), 'lane-a/projects/-w-project-a/memory'],
+      ['project', (home) => join(memory(home, '.claude-lane-a', '-w-project-a', ['MEMORY.md']), '..'), 'lane-a/projects/-w-project-a'],
+      ['projects', (home) => join(memory(home, '.claude-lane-b', '-w-project-a', ['MEMORY.md']), '..', '..'), 'lane-b/projects'],
+    ];
+    for (const [what, make, named] of cases) {
+      const home = box(`ccrc-doctor-automem-unlist-${what}-`);
+      const d = make(home);
+      chmodSync(d, 0o000);
+      try {
+        const r = check(home);
+        expect(r.line, what).toBe(`WARN auto-memory: ${named} could not be listed, so the auto-memory directories are unmeasured`);
+        expect(r.remedy, what).toMatch(/read and search permission/);
+      } finally { chmodSync(d, 0o755); }
+    }
+  });
+
+  it('a walk past its deadline is WARN unmeasured, never PASS', () => {
+    const home = box('ccrc-doctor-automem-slow-');
+    memory(home, '.claude-lane-a', '-w-project-a', ['MEMORY.md']);
+    const r = spawnSyncGroup(BASH, ['-c', `set -uo pipefail\n. ${shq(CCRC_SRC)}\n. ${shq(CHECKS_SRC)}\n_DR_TW_DEADLINE_S=0\n_check_auto-memory`],
+      { env: doctorEnv(home), encoding: 'utf8', timeout: 30_000 });
+    expect(r.stdout).toMatch(/^WARN auto-memory: the walk of the auto-memory directories did not finish within 0s, so they are unmeasured$/m);
+  });
+
+  it('a scratch project (a temp directory\'s slug) is skipped, as the memory check skips it (review 2024 F6)', () => {
+    const home = box('ccrc-doctor-automem-scratch-');
+    memory(home, '.claude-lane-a', '-tmp-ccrc-x', ['MEMORY.md']);
+    memory(home, '.claude-lane-a', '-home-u--cc-tmp-a', ['MEMORY.md']);
+    expect(check(home).line).toBe(NONE);
+  });
+
   it('a server-role box is SKIP', () => {
     const home = box('ccrc-doctor-automem-server-');
     writeFileSync(join(home, '.ccrc', 'ccrc.env'), 'CCRC_ROLE=server\n', { flag: 'a' });
