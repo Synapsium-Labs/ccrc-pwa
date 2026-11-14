@@ -23,7 +23,8 @@ the record's lock, so two requests never interleave; a short write is cut back t
 A FAILURE (a full disk, a permission, a symlink or a directory in the file's place) never raises into a request and
 never changes the client's answer: it is counted in the stats file's `outcomes` as WRITE_FAILED (beside
 `stats:flush-failed` and the `store:*` keys, outside the closed outcome list) and logged at most once per process,
-`record-requests write-failed <errno name>`, never a path or a value.
+whatever its cause, as `record-requests write-failed <errno name>` naming the first failure's cause (WRITE_FAILED_LOG),
+never a path or a value; every later failure, of any cause, is counted only.
 
 THE ROW (`row`), ROW_VERSION 1, its keys in this order, every value bounded:
   v, at, postAt, session, subagent, message, post, route, model, status, outcome, served, effort, inputTokens,
@@ -44,13 +45,14 @@ THE ROW (`row`), ROW_VERSION 1, its keys in this order, every value bounded:
   stats file counts in the parity row's `fallbacks`, never as an outcome. Bounded by NAME_RE.
 - `served`, the four token counts, `inputTransformations`: from the terminal `response.completed` or
   `response.incomplete` the parity section counted (`stats.served_word`, `stats.count_transformations`); null when
-  this answer reached none (a non-2xx, a stream that broke), and a token count null when the terminal's usage carried
-  no valid one. `inputTransformations` is null too when the response carried no array, and is capped as the parity
-  row's map is (PARITY_TRANSFORMS_MAX keys, then OVERFLOW).
+  this answer reached none (a non-2xx, a stream that broke: `Answer.measured` false), and a token count null when the
+  terminal's usage carried no valid one. `inputTransformations` is null too when the response carried no array, and
+  is capped as the parity row's map is (PARITY_TRANSFORMS_MAX keys, then OVERFLOW).
 - `effort`: `stats.effort_word` of the body this POST sent: its `reasoning.effort`, or `none`.
 - `firstOutputMs`, `totalMs`: integers, the parity section's own instants (the POST's start to the first output released
   and to the terminal event) rounded UP, so each lies in the bucket the parity histogram counted it in; null when not
-  reached. A stream that released output and then broke has a `firstOutputMs` and no `totalMs`.
+  reached, and null whenever the parity section counted no response for this answer (`measured` false), so the
+  histograms rebuilt from the rows are the parity row's: a stream that released output and then broke has neither.
 - `replay`: the message's reasoning-store lookups by `stats.REPLAY_OUTCOMES`, on its `post` 0 row only.
 - `markers`: the request markers (`backend.MARKERS`) this POST carried; `fallback`: true on the row whose 400 started
   the fallback; `turnState`: `captured` or `echoed` (`stats.TURN_STATE_EVENTS`) when this POST did either.
@@ -80,6 +82,7 @@ ROW_VERSION = 1
 SESSION_RE = re.compile(r"^[A-Za-z0-9._-]{1,128}$")  # a Claude Code session id's shape (a UUID), bounded
 FALLBACK = "fallback"  # the outcome of the 400 that started Task 5's fallback (the parity row's `fallbacks`)
 WRITE_FAILED = "requests:write-failed"  # the stats file's outcome key for a row that could not be written
+WRITE_FAILED_LOG = "write-failed"  # the once-only key of the write-failure log line: one line per process, any cause
 UNNAMED = ("record-requests unnamed: lane.json names no bridgeFiles.requests, so no request record is written; run "
            "'ccrc update', which re-renders it")
 _CODE_RE = re.compile(r"^[a-z0-9_-]{1,32}$")
@@ -156,8 +159,9 @@ def row(ans: Answer, *, session: object, subagent: bool, route: str, outcome: st
     for name, field in stats.PARITY_TOKENS:
         value = ans.usage.get(name) if ans.measured else None
         out[field] = value if stats.is_count(value) else None
-    out["firstOutputMs"] = _ms(ans.first_ms)
-    out["totalMs"] = _ms(ans.total_ms)
+    # the parity histograms count these instants only for a measured answer (`server._observe`), so the row does too
+    out["firstOutputMs"] = _ms(ans.first_ms) if ans.measured else None
+    out["totalMs"] = _ms(ans.total_ms) if ans.measured else None
     held = None  # type: Optional[Dict[str, int]]
     if ans.measured and ans.transformations is not None:
         held = {}
@@ -220,11 +224,13 @@ class RequestRecord:
         """Whether the operator's marker is in the lane directory, read now."""
         return os.path.exists(os.path.join(self._lane_dir, REQUESTS_MARKER))
 
-    def _say_once(self, line: str) -> None:
+    def _say_once(self, line: str, key: Optional[str] = None) -> None:
+        """Log `line` unless a line under `key` (default: the line itself) was already logged by this process."""
+        key = line if key is None else key
         with self._lock:
-            if line in self._said:
+            if key in self._said:
                 return
-            self._said.add(line)
+            self._said.add(key)
         try:
             self._log(line)
         except Exception:  # a log that cannot be written is dropped
@@ -232,7 +238,7 @@ class RequestRecord:
 
     def write(self, build: Callable[[], Dict[str, object]]) -> bool:
         """Append the row `build` makes, when the marker exists and lane.json named the file; True when written. Never
-        raises: a failure is counted (WRITE_FAILED) and logged once per process."""
+        raises: a failure is counted (WRITE_FAILED) and logged once per process, whatever its cause."""
         try:
             if not self.on():
                 return False
@@ -248,7 +254,8 @@ class RequestRecord:
                 self._outcome(WRITE_FAILED)
             except Exception:
                 pass
-            self._say_once("record-requests write-failed " + _code(e))
+            # D-8619 R2: once per process, not once per cause
+            self._say_once("record-requests write-failed " + _code(e), WRITE_FAILED_LOG)
             return False
 
     def _append(self, line: bytes) -> None:

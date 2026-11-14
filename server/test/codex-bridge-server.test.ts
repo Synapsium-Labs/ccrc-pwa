@@ -10,7 +10,7 @@
 // lowered through the driver's `consts`, never waited out. Tokens are synthetic JWTs built at runtime.
 import { afterEach, describe, it, expect } from 'vitest';
 import {
-  existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync,
+  chmodSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync,
 } from 'node:fs';
 import { request as httpRequest, type IncomingHttpHeaders } from 'node:http';
 import { connect } from 'node:net';
@@ -2188,8 +2188,11 @@ describe.skipIf(!PY)('the per-request record behind the record-requests marker (
         status: 200, outcome: '5xx', served: null, inputTokens: null, cachedTokens: null, outputTokens: null,
         reasoningTokens: null, totalMs: null, inputTransformations: null,
       });
-      expect(Number.isInteger(rows[0].firstOutputMs)).toBe(true); // its first output was released before the break
+      // Its first output was released before the break, but the parity histogram counts no instant of a response it
+      // did not count, so neither does the row: the two sinks agree (R3, R4).
+      expect(rows[0].firstOutputMs).toBeNull();
       expect(readStats(lane).parity[KEY].responses).toBe(0);
+      expect(Object.values(readStats(lane).parity[KEY].firstOutputMs as Json).reduce((n: number, c) => n + (c as number), 0)).toBe(0);
     });
   });
 
@@ -2274,7 +2277,9 @@ describe.skipIf(!PY)('the per-request record behind the record-requests marker (
       sse: created(n) + done(0, msgItem(`msg_fx${n}`, `part ${n}`)) + completed({ input: 300 + n, cached: n, output: 4, reasoning: 2 },
         { model: n === 2 ? 'model-6.1-beta' : MODEL, input_transformations: [removed('turn_boundary')], ...(last ? {} : { end_turn: false }) }),
     });
-    await withBridge([unsupported, part(1, false), part(2, true), { status: 200, sse: live({ input: 7 }) }], async ({ bridge, lane }) => {
+    // a stream that releases output and then breaks: the parity row counts no response for it, so no instant either
+    const broken: ResponsesAnswer = { status: 200, sse: created() + added(0, 'msg_fx1') + delta(0, 'msg_fx1', 'par') };
+    await withBridge([unsupported, part(1, false), part(2, true), { status: 200, sse: live({ input: 7 }) }, broken], async ({ bridge, lane }) => {
       arm(lane);
       writeFileSync(join(lane.laneDir, ALL_TURNS), '');
       writeBridgeCatalogue(lane.catalogue, BRIDGE_MODELS, { [MODEL]: LITE });
@@ -2282,6 +2287,8 @@ describe.skipIf(!PY)('the per-request record behind the record-requests marker (
       expect(a.status, a.text).toBe(200);
       const b = await call(bridge, '/v1/messages', { body: messages(), headers: session });
       expect(b.status, b.text).toBe(200);
+      const c = await call(bridge, '/v1/messages', { body: messages(), headers: session });
+      expect(events(c)).toContain('error');
       expect(await bridge.stop()).toEqual({ code: 0, signal: null });
       const rows = rowsOf(lane);
       shaped(rows);
@@ -2298,6 +2305,15 @@ describe.skipIf(!PY)('the per-request record behind the record-requests marker (
       expect(transforms).toEqual(row.inputTransformations);
       expect(rows.filter((r) => r.fallback).flatMap((r) => r.markers as string[])).toEqual(
         Object.entries(row.fallbacks as Json).filter(([, n]) => n > 0).flatMap(([m, n]) => Array(n).fill(m)));
+      // the histograms rebuilt from the rows: each integer lies in the bucket the parity row counted its instant in
+      const BOUNDS = [250, 500, 1000, 2000, 4000, 8000, 16000, 32000, 64000];
+      const bucketOf = (ms: number): string => String(BOUNDS.find((b) => ms <= b) ?? 'inf');
+      for (const k of ['firstOutputMs', 'totalMs']) {
+        const rebuilt: Json = Object.fromEntries(Object.keys(row[k] as Json).map((b) => [b, 0]));
+        for (const r of rows) if (r[k] !== null) rebuilt[bucketOf(r[k] as number)] += 1;
+        expect(rebuilt, k).toEqual(row[k]);
+      }
+      expect(rows.filter((r) => r.status === 200 && r.served === null), 'the broken stream has its row').toHaveLength(1);
     });
   });
 
@@ -2338,17 +2354,21 @@ describe.skipIf(!PY)('the per-request record behind the record-requests marker (
       expect(lstatSync(recordFile(lane)).isSymbolicLink()).toBe(true);
       expect(readStats(lane).outcomes['requests:write-failed']).toBe(1);
     });
-    await withBridge([1, 2].map(() => ({ status: 200, sse: textReply('ok') })), async ({ bridge, lane }) => {
+    await withBridge([1, 2, 3].map(() => ({ status: 200, sse: textReply('ok') })), async ({ bridge, lane, home }) => {
       arm(lane);
       mkdirSync(recordFile(lane));
-      for (let i = 0; i < 2; i += 1) {
+      for (let i = 0; i < 3; i += 1) {
+        // the third request meets another cause (a dangling symlink, ELOOP): still counted, never logged again
+        if (i === 2) { rmSync(recordFile(lane), { recursive: true }); symlinkSync(join(home, 'no-such.jsonl'), recordFile(lane)); }
         const a = await call(bridge, '/v1/messages', { body: messages(), headers: session });
         expect(a.status, a.text).toBe(200);
         expect(textOf(a)).toBe('ok');
       }
       expect(await bridge.stop()).toEqual({ code: 0, signal: null });
-      expect(readStats(lane).outcomes['requests:write-failed']).toBe(2);
-      expect(readStats(lane).outcomes['2xx']).toBe(2);
+      expect(readStats(lane).outcomes['requests:write-failed']).toBe(3);
+      expect(readStats(lane).outcomes['2xx']).toBe(3);
+      expect(existsSync(join(home, 'no-such.jsonl')), 'nothing created through the symlink').toBe(false);
+      // once per bridge process, whatever the cause: the first one's errno word
       expect(stderrLines(bridge, /record-requests/)).toEqual(['ccgpt-proxy: direct: record-requests write-failed eisdir']);
     });
   });
@@ -2365,6 +2385,63 @@ describe.skipIf(!PY)('the per-request record behind the record-requests marker (
       expect(rows.map((r) => r.message).sort()).toEqual([1, 2]);
       expect(text(lane).split('\n')).toHaveLength(3);
     });
+  });
+
+  it('a record file that is already there at another mode is put back to 0600 and appended to', async () => {
+    await withBridge([{ status: 200, sse: textReply('ok') }], async ({ bridge, lane }) => {
+      arm(lane);
+      writeFileSync(recordFile(lane), '{"v":1,"planted":true}\n', { mode: 0o644 });
+      chmodSync(recordFile(lane), 0o644);
+      expect(statSyncMode(recordFile(lane)), 'CONTROL: planted at 0644').toBe(0o644);
+      const a = await call(bridge, '/v1/messages', { body: messages(), headers: session });
+      expect(a.status, a.text).toBe(200);
+      expect(await bridge.stop()).toEqual({ code: 0, signal: null });
+      expect(statSyncMode(recordFile(lane))).toBe(0o600);
+      const rows = rowsOf(lane);
+      expect(rows).toHaveLength(2);
+      expect(rows[0]).toEqual({ v: 1, planted: true });
+      shaped(rows.slice(1));
+    });
+  });
+
+  // The record's lock serialises the rotation, not only the append: two writers that both find the file at the cap
+  // would otherwise rotate twice, and the second rename would move the first one's fresh file over the full older
+  // generation. The window is widened by a slow open, so without the lock the double rotation is certain.
+  it('two writers at the cap rotate once: the older generation is the full one, and no row is lost', () => {
+    const dir = mkTmp('cb-reqrecord-lock-');
+    const script = [
+      'import json, os, sys, threading, time',
+      'sys.dont_write_bytecode = True',
+      'sys.path.insert(0, sys.argv[1])',
+      'from codexbridge import reqrecord',
+      'd = sys.argv[2]',
+      'open(os.path.join(d, reqrecord.REQUESTS_MARKER), "w").close()',
+      'path = os.path.join(d, "bridge.requests.jsonl")',
+      'line = lambda n: json.dumps({"n": n}, separators=(",", ":")) + "\\n"',
+      'with open(path, "w") as f: f.write("".join(line(n) for n in (1, 2, 3)))',
+      'reqrecord.REQUESTS_MAX_BYTES = 3 * len(line(1))  # the file is at the cap',
+      'real = reqrecord._open',
+      'def slow(p):',
+      '    fd = real(p)',
+      '    time.sleep(0.3)',
+      '    return fd',
+      'reqrecord._open = slow',
+      'failed = []',
+      'rec = reqrecord.RequestRecord(d, path, failed.append, lambda s: None)',
+      'ts = [threading.Thread(target=rec.write, args=((lambda n=n: {"n": n}),)) for n in (4, 5)]',
+      'for t in ts: t.start()',
+      'for t in ts: t.join()',
+      'read = lambda p: [json.loads(l)["n"] for l in open(p)] if os.path.exists(p) else None',
+      'print(json.dumps({"older": read(path + reqrecord.GENERATION), "current": read(path), "failed": failed}))',
+    ].join('\n');
+    const r = spawnSync(PY!, ['-I', '-c', script, CCD_DIR, dir], {
+      encoding: 'utf8', timeout: 30_000, env: { PATH: process.env.PATH ?? '/usr/bin:/bin' },
+    });
+    expect(r.status, r.stderr).toBe(0);
+    const out = JSON.parse(r.stdout) as { older: number[] | null; current: number[] | null; failed: string[] };
+    expect(out.failed).toEqual([]);
+    expect(out.older).toEqual([1, 2, 3]);
+    expect([...(out.current ?? [])].sort()).toEqual([4, 5]);
   });
 
   it('a lane.json without bridgeFiles.requests: the bridge starts and serves, writes no record, and says so once', async () => {
