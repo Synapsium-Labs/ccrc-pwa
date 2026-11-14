@@ -1057,8 +1057,11 @@ describe.skipIf(!PY)('the live probe: the first live step, bounded (codex-bridge
 describe('the consent markers have no writer in the tree (codex-bridge Task 18, the whole-wave fix round)', () => {
   const REPO_ROOT = path.dirname(CCD_DIR);
   const ROOTS = ['ccd', 'shared', 'deploy', path.join('server', 'src'), path.join('agent', 'src')];
-  const NAMES = /liveprobe-allowed|record-streams|\bALLOW_MARKER\b|\bRECORD_MARKER\b/;
-  const MARK = '(?:liveprobe-allowed|record-streams|ALLOW_MARKER|RECORD_MARKER)';
+  // D-8622: the bridge's three request markers, and backend.py's constants that spell them, are the operator's too
+  const NAMES = new RegExp(String.raw`liveprobe-allowed|record-streams|\bALLOW_MARKER\b|\bRECORD_MARKER\b|`
+    + String.raw`bridge-reasoning-all-turns|bridge-verbosity|bridge-turn-state|\b(?:ALL_TURNS|VERBOSITY|TURN_STATE)_MARKER\b`);
+  const MARK = '(?:liveprobe-allowed|record-streams|ALLOW_MARKER|RECORD_MARKER|bridge-reasoning-all-turns|bridge-verbosity'
+    + '|bridge-turn-state|ALL_TURNS_MARKER|VERBOSITY_MARKER|TURN_STATE_MARKER)';
   const WRITE = new RegExp([
     String.raw`(?:^|[^\w.-])(?:touch|tee|cp|mv|ln|install|truncate)(?:\s|["'],)`,   // a command, or an argv's head
     String.raw`(?<![=\-<>])>>?\|?\s*[^\s<>|;&()]*` + MARK,                              // a redirect onto it
@@ -1082,7 +1085,8 @@ describe('the consent markers have no writer in the tree (codex-bridge Task 18, 
 
   it('CONTROL: the scan walks the shipped roots, and its write shapes catch a writer and pass a reader', () => {
     const named = shipped().filter((f) => codeLines(f).some(([, l]) => NAMES.test(l))).map(rel);
-    expect(named).toEqual(expect.arrayContaining(['ccd/ccrc', 'ccd/codexbridge/liveprobe.py', 'ccd/codexbridge/record.py']));
+    expect(named).toEqual(expect.arrayContaining(['ccd/ccrc', 'ccd/codexbridge/liveprobe.py', 'ccd/codexbridge/record.py',
+      'ccd/codexbridge/backend.py']));
     for (const w of [
       'touch "$dir/record-streams"', ': > "$d/liveprobe-allowed"', 'printf x >>"$d"/record-streams',
       'cp /dev/null "$d/record-streams"', 'open(os.path.join(lane_dir, ALLOW_MARKER), "w").close()',
@@ -1090,6 +1094,9 @@ describe('the consent markers have no writer in the tree (codex-bridge Task 18, 
       'subprocess.run(["touch", os.path.join(d, ALLOW_MARKER)])', "writeFileSync(join(dir, 'record-streams'), '')",
       "await fs.promises.writeFile(path.join(d, 'liveprobe-allowed'), '')", '  *) touch "$d/record-streams" ;;',
       'open(os.path.join(d, RECORD_MARKER), mode="w")',
+      'touch "$dir/bridge-reasoning-all-turns"', ': > "$d/bridge-verbosity"', "writeFileSync(join(dir, 'bridge-turn-state'), '')",
+      'pathlib.Path(lane_dir, TURN_STATE_MARKER).touch()', 'open(os.path.join(d, VERBOSITY_MARKER), "w").close()',
+      'fd = os.open(os.path.join(d, ALL_TURNS_MARKER), os.O_CREAT | os.O_WRONLY)',
     ]) expect(!COMMENT.test(w) && NAMES.test(w) && WRITE.test(w), w).toBe(true);
     for (const r of [
       'if not os.path.exists(os.path.join(lane_dir, ALLOW_MARKER)):', 'ALLOW_MARKER = "liveprobe-allowed"',
@@ -1097,10 +1104,13 @@ describe('the consent markers have no writer in the tree (codex-bridge Task 18, 
       'rm -f -- "$dir/record-streams" 2>/dev/null', "const armed = (n: string) => n === 'record-streams';",
       'raise Refused("no-marker", "the lane directory holds no " + ALLOW_MARKER + " marker; the operator touches it "',
       'with open(os.path.join(lane_dir, RECORD_MARKER), "rb") as f:',
+      'ALL_TURNS_MARKER = "bridge-reasoning-all-turns"', 'VERBOSITY_MARKER = "bridge-verbosity"',
+      'TURN_STATE_MARKER = "bridge-turn-state"', 'MARKERS = (ALL_TURNS_MARKER, VERBOSITY_MARKER, TURN_STATE_MARKER)',
+      'rm -f -- "$dir/bridge-turn-state" 2>/dev/null',
     ]) expect(NAMES.test(r) && !WRITE.test(r), r).toBe(true);
   });
 
-  it('no code line of shipped code writes liveprobe-allowed or record-streams', () => {
+  it('no code line of shipped code writes liveprobe-allowed, record-streams or a request marker', () => {
     const found = shipped().flatMap((f) => codeLines(f)
       .filter(([, l]) => NAMES.test(l) && WRITE.test(l)).map(([n, l]) => `${rel(f)}:${n}: ${l.trim()}`));
     expect(found).toEqual([]);

@@ -18,7 +18,8 @@ THE FILE, VERSION 1 (`bridge.stats.json` in the lane directory; the name is `lan
               "effort": {"<level>" | "none": n}, "served": {"same", "other", "absent"}, "servedOther": {"<model>": n},
               "inputTransformations": {"<type>:<action>:<reason>": n}, "responsesWithTransformations",
               "replay": {"text-hit", "text-empty", "text-absent", "call-hit", "call-absent"},
-              "firstOutputMs": {"<bucket>": n}, "totalMs": {"<bucket>": n}}}}
+              "firstOutputMs": {"<bucket>": n}, "totalMs": {"<bucket>": n},
+              "markers": {"<marker>": n}, "fallbacks": {"<marker>": n}, "turnState": {"captured", "echoed"}}}}
 `since` is the file's first start, carried across restarts; `startedAt` is this process's. `promptTokensMax` is the
 largest upstream `input_tokens` of a reply the model accepted (the caller reports only those); a refusal's `tokens`
 is D24's estimate, so it says `estimated: true`. Times are ISO-8601 UTC with milliseconds.
@@ -64,6 +65,12 @@ outcomes. A row counts:
 - `firstOutputMs` and `totalMs`: milliseconds from the upstream POST's start (`time.monotonic()`) to the first output
   the reducer released (a text delta or a finished block) and to the terminal event, in PARITY_BUCKETS_MS (each an
   inclusive upper bound) or PARITY_INF; a response that released no output counts in `totalMs` only.
+- `markers` (D-8622): one per upstream POST that carried a request marker's addition, by the marker
+  (`backend.MARKERS`): the body's `reasoning.context` or `text.verbosity`, or the echoed `x-codex-turn-state`; a marker
+  present that added nothing (the row not eligible, nothing captured yet) is not counted. `fallbacks`: one per marker a
+  400's fallback dropped (the POST it answered carried it). Both are zero-filled over `backend.MARKERS`.
+- `turnState` (D-8623): `captured`, each turn's first sticky-routing token kept, and `echoed`, each POST that sent one
+  back. The token itself is never in this file (TOKEN_HEADERS).
 A writer ignores a malformed argument (a level, a model or an outcome that is not a string, a count that is not a
 positive int, a usage that is not a mapping, a time that is not a finite number of at least 0, a key outside its
 shape); the load re-checks every bound and drops what fails it, never resetting.
@@ -116,7 +123,7 @@ import threading
 import time
 from typing import Dict, Mapping, Optional
 
-from . import count, errors, known, reducer, store
+from . import backend, count, errors, known, reducer, store
 
 VERSION = 1
 FAMILIES = tuple(known.KNOWN)  # the eleven D3 families, in the plan's order; spelled once, in known.KNOWN
@@ -158,6 +165,7 @@ PARITY_INF = "inf"  # the bucket past the last bound
 NO_EFFORT = "none"  # a body that carried no reasoning.effort
 SERVED = ("same", "other", "absent")
 REPLAY_OUTCOMES = ("text-hit", "text-empty", "text-absent", "call-hit", "call-absent")
+TURN_STATE_EVENTS = ("captured", "echoed")  # D-8623: the turnState counts
 # The terminal usage counts the reducer reads (`reducer.Reducer.diagnostics`), each with the field it sums into.
 PARITY_TOKENS = (("input", "inputTokens"), ("cached", "cachedTokens"), ("output", "outputTokens"),
                  ("reasoning", "reasoningTokens"))
@@ -235,7 +243,9 @@ def _parity_row() -> dict:
     """A parity row that has counted nothing: the fixed vocabularies zero-filled, the open maps empty."""
     row = {"responses": 0, "responsesWithTransformations": 0, "effort": {}, "servedOther": {},
            "inputTransformations": {}, "served": {k: 0 for k in SERVED}, "replay": {k: 0 for k in REPLAY_OUTCOMES},
-           "firstOutputMs": {k: 0 for k in _buckets()}, "totalMs": {k: 0 for k in _buckets()}}  # type: dict
+           "firstOutputMs": {k: 0 for k in _buckets()}, "totalMs": {k: 0 for k in _buckets()},
+           "markers": {k: 0 for k in backend.MARKERS}, "fallbacks": {k: 0 for k in backend.MARKERS},
+           "turnState": {k: 0 for k in TURN_STATE_EVENTS}}  # type: dict
     for _, field in PARITY_TOKENS:
         row[field] = 0
     return row
@@ -255,7 +265,7 @@ def _carried_row(old: dict) -> dict:
     for field in ("responses", "responsesWithTransformations") + tuple(f for _, f in PARITY_TOKENS):
         if _is_int(old.get(field)):
             row[field] = old[field]
-    for field in ("served", "replay", "firstOutputMs", "totalMs"):
+    for field in ("served", "replay", "firstOutputMs", "totalMs", "markers", "fallbacks", "turnState"):
         held = old.get(field)
         for k in row[field] if isinstance(held, dict) else ():
             if _is_int(held.get(k)):
@@ -550,6 +560,27 @@ class Stats:
                 if at is not None:
                     row[field][at] += 1
             self._dirty = True
+
+    def _parity_fixed(self, route: str, model: str, field: str, key: object) -> None:
+        """One count of `key` in a zero-filled map of the row; a key outside that map counts nothing and makes no
+        row."""
+        if not (isinstance(key, str) and key in _parity_row()[field]):
+            return
+        with self._lock:
+            self._parity(route, model)[field][key] += 1
+            self._dirty = True
+
+    def parity_marker(self, route: str, model: str, marker: str) -> None:
+        """D-8622: one upstream POST that carried `marker`'s addition, one of `backend.MARKERS`."""
+        self._parity_fixed(route, model, "markers", marker)
+
+    def parity_fallback(self, route: str, model: str, marker: str) -> None:
+        """D-8622: one `marker` a 400's fallback dropped, one of `backend.MARKERS`."""
+        self._parity_fixed(route, model, "fallbacks", marker)
+
+    def parity_turn_state(self, route: str, model: str, event: str) -> None:
+        """D-8623: one turn-state token `captured` or `echoed` (TURN_STATE_EVENTS); never the token."""
+        self._parity_fixed(route, model, "turnState", event)
 
     def refusal(self, route: str, model: str, tokens: int, window: int, *, now: Optional[float] = None) -> None:
         """The latest context refusal per route and model (spec §2.7): D24's estimate and the lane's window then. `now`

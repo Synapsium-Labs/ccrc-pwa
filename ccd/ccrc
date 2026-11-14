@@ -14617,10 +14617,10 @@ _codex_tier_stale() {   # <id> <tier>
 # and this file half runs AFTER it — a pidfile removed under a live tier is a handle lost for good.
 _codex_reap_files() {   # <id>
   local id="${1:-}" dir f t rc=0 had_nullglob=0 rec='' st='' d='[0-9]'
-  # The bridge's markers (codex-bridge Stage 2, Task 11), which an operator touches and no ccrc code writes; then
-  # liveprobe.count and its tmp, and the stats file's tmp (below), which a killed write_count or stats flush leaves.
+  # The bridge's markers (codex-bridge Stage 2, Task 11; the three request markers, D-8622), which an operator touches
+  # and no ccrc code writes; then liveprobe.count and its tmp, and the stats file's tmp (below), which a killed write_count or stats flush leaves.
   local -a names=(lane.json runtime.env litellm.yaml litellm.yaml.prev .lock
-                  bridge-instructions record-streams liveprobe-allowed liveprobe.count liveprobe.count.tmp)
+                  bridge-instructions bridge-reasoning-all-turns bridge-verbosity bridge-turn-state record-streams liveprobe-allowed liveprobe.count liveprobe.count.tmp)
   local -a tmps=() bf=()
   _codex_shape || return 1
   if ! [[ "$id" =~ $WRAPPER_ID_RE ]]; then
