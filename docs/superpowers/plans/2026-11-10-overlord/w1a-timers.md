@@ -59,8 +59,8 @@ coordinator's ruling on review 2030 kept all four, and the departures note recor
 
 ## What exists today
 
-- `server/src/continuity/routes.ts#registerContinuityRoutes` registers the start report (and, once card PR B #2793
-  merges, the card door). `box-token-census.test.ts` reads it as a lane source of its own (`CONTINUITY_SRC`,
+- `server/src/continuity/routes.ts#registerContinuityRoutes` registers the start report and the card door (card PR B,
+  #2793, merged). `box-token-census.test.ts` reads it as a lane source of its own (`CONTINUITY_SRC`,
   `CONTINUITY_LANES`); `lanesIn` slices the file from each registration to the next and counts a slice that calls
   `checkMailToken(` as a box-token lane. The file has no session-gated door yet.
 - `server/src/coord/delegationLeaseDoor.ts#incarnationOf` reads `$REG/<id>.generation` twice (`settleParentIncarnations`
@@ -92,9 +92,16 @@ coordinator's ruling on review 2030 kept all four, and the departures note recor
   dispatch and its reactivation), `stallVerdictInner`, `stallWaveOneLadder` and the marker ladder, `STALL_QUIET_MS`
   (two hours, overridable from Settings through `stallQuietMs`; the marker ladder reads `stallBackoff(input).quietMs`),
   `BACKLOG_HORIZON_MS` (24 hours), `STALL_BACKOFF_CEILING_MS` (16 hours). The quiet arm is a run worker's: the stall pass
-  hands it the run's mail through `stallRunMail`, which keeps only rows with a `runId`, so a run-bound timer mail
-  restarts `quietSince` and a run-less one does not. Stall notices go out as `operator` (`STALL_SENDER`), and the stall
-  text rule says they carry measured facts only, never text a session wrote.
+  hands it the run's mail through `stallRunMail`, which keeps only rows with a `runId` and tests no sender. In
+  `stallFacts`, any mail of that set that is not a watch notice (`isWatchNotice`, which classes only `operator`
+  notices) is `relevant`: it moves `ball` (`ballToCoordinator` decides who holds it), `lastExchangeAt` (the 30-hour
+  ball cap's clock) and `quietSince`, and the coordinator-deaf check and the cap run only while `ball` is
+  `coordinator`. The two ladders start r1's quiet period from different points (`stallWaveOneLadder` from
+  `f.quietSince`, the marker ladder from the Stop through `stallMarkQuiet`), and `stallR1QuietFrom(input, facts)` owns
+  which. `judgeStall` (`server/src/watch.ts`) builds `StallInput` before any `quietSince` exists. The notice builders
+  `stallCheckMail`, `stallReportMail` and `stallPushText` take `input`; the verdict's `StallNotify` names no timer.
+  `stall-vocabulary.test.ts` pins `stall.ts`'s value imports to six modules. Stall notices go out as `operator`
+  (`STALL_SENDER`), and the stall text rule says they carry measured facts only, never text a session wrote.
 - `server/src/coord/untrusted.ts`: `untrustedBlock(text, capBytes, fullAt?, preface?)`, `UNTRUSTED_CAP_BYTES` (4,096)
   and `CARD_TEXT_PREFACE` ("untrusted text a session or a person wrote"). The egress masker is `SecretMasker`
   (`server/src/accounts/mask.ts`); `maskText` returns only the string, so "the mask changed it" is `maskText(t) !== t`.
@@ -109,8 +116,13 @@ coordinator's ruling on review 2030 kept all four, and the departures note recor
   through `_api_server_cap`. Every gate there fails open on an absent, stale or torn file and refuses locally, through
   `refuse()` (`ok`, `error`, `detail`), only on a current file that omits the word (`no-plan-door` for `plan-v1`). No
   client answers `capability-missing` today.
-- `ccd/ccrc-api#ROUTES` holds seventy-three rows at `main` (seventy-four once card PR B merges). The count is scanned in
+- `ccd/ccrc-api#ROUTES` holds seventy-four rows at `main` (card PR B added `sessions.card`). The count is scanned in
   `server/test/ccrc-api.test.ts` (`toHaveLength`, `WORDS`) and `server/test/ccrc-api-closed.test.ts` (`routeKeys().size`).
+  `ccrc-api.test.ts` also exercises every row (`ROWS`), runs the verbs that derive identity in a pane (`paned`), and
+  holds every non-claimant row byte-identical with and without a current cap file of the default `SERVER_CAPS`.
+  `server/test/census-w3/claimant.test.ts` pins every cap-reader gate line in the client (`capReaderCalls`), and
+  `claimant.ts` recognises each gate's shape. The client's `json_escape` escapes five characters only; `cmd_card` and
+  `mail inbox` build JSON with `jq` and refuse `no-jq` without it.
   The closed test also allows exactly the identity flags `--by`, `--json` and `--session` as `case` labels, and only two
   routes whose body is spliced (`splice_body_field`). Card PR B's `cmd_card` derives the pair and parses with
   `if`/`elif`.
@@ -121,11 +133,11 @@ coordinator's ruling on review 2030 kept all four, and the departures note recor
   reworded clause earns no bytes (`skill-size-ratchet.test.ts`, rules R4 and R5).
 - `ccrc rollback` (`ccd/ccrc#cmd_rollback`) reads no server, no `coord.db` and no capability word: it talks to the
   release host only, flips or reinstalls, then runs the health gate and the supervisor sweep.
-- Card PR B (#2793, in review) adds `server/src/continuity/cardFacts.ts#gatherCardFacts`, the routes' `cardRegistry`
+- Card PR B (#2793, merged) added `server/src/continuity/cardFacts.ts#gatherCardFacts`, the routes' `cardRegistry`
   deps (`childMark`, `incarnation`, a single `.generation` read that keys declared intent, and `declaredIntent`),
   `attributeReader`, the masker on the routes' deps, and `CardFacts` fields in `shared/continuity-card.ts`. It computes
-  the role inline in `gatherCardFacts`, through `roleFactsOf` and `cardRoleOf`, and the `intent` fact is both a role
-  input and a card field. Its renderers show untrusted text with `CARD_TEXT_PREFACE`, which brings
+  the role inline in `gatherCardFacts`, through `roleFactsOf` and `cardRoleOf` (`CardRole { role, roleWhy, renderer }`),
+  and the `intent` fact is both a role input and a card field. Its renderers show untrusted text with `CARD_TEXT_PREFACE`, which brings
   `CARD_AUTHORITY_LINE` onto the card.
 - Migrations: `server/src/coord/schema.ts#MIGRATIONS`. The slot is measured at build time, never fixed here.
 
@@ -175,7 +187,9 @@ coordinator's ruling on review 2030 kept all four, and the departures note recor
    is untrusted data from the role `timer`, never `operator`. A stall notice names a timer by id and due time only.
 4. **The brakes.** `mail-disabled` holds firing and not cleanup; a server gap fires late, once; nothing is re-timed.
 5. **The hold is a hold, not a backoff.** It defers only the quiet arm, from the earliest pending timer or the newest
-   one fired since `quietSince`, never past `quietSince` plus 24 hours, and a notice after it names the timer.
+   one fired since the ladder's own start, a full quiet period after a fire, never past that start plus 24 hours, and
+   a notice after it names the timer by id and due time. A timer mail is no exchange: it moves no `ball`, no
+   `lastExchangeAt` and no `quietSince`.
 
 ## The PR split
 
@@ -187,14 +201,15 @@ coordinator's ruling on review 2030 kept all four, and the departures note recor
 | D, what a session sees | 10 to 12 | Pending timers on the card, `ccrc-api timer`, clause 17, the word `timers-v1` | PRs B and C, card PR B | `shared/api.ts` about +5; the worker `SKILL.md` 0 bytes net (the ratchet) |
 | E, the operator's view | 13 | The session page's and the run page's timers, with Cancel | PR B | `pwa/src/lib/api.ts` about +16 |
 
-**What starts before card PR B merges:** PR A at once, and PR C once PR A has merged (it reads only PR A's store and
-what is on `main`: `incarnationOf`, `programmeLive`, `archivedAt`, `listedIds`, `MAIL_DISABLED_MARKER`,
-`insertSystemMailTx`, `tx`). **What waits for card PR B:** PR B (Task 4 extracts the role read card PR B writes, and
-the doors share its routes file and deps), PR D (Task 10 extends `CardFacts` and the gatherer), and so PR E, which
-needs PR B. PR C's `watch.ts` estimate leaves about six lines of headroom: the builder measures it before Task 9.
+**Order:** card PR B (#2793) has merged, so every need is inside this plan. PR A at once; PR B and PR C once PR A has
+merged, in parallel (PR C reads only PR A's store and what is on `main`: `incarnationOf`, `programmeLive`,
+`archivedAt`, `listedIds`, `MAIL_DISABLED_MARKER`, `insertSystemMailTx`, `tx`); PR D once PRs B and C have merged; PR E
+once PR B has. PR C's `watch.ts` estimate leaves about six lines of headroom, and Task 9's read and its `ports.ts`
+member add to it: the builder re-measures before Task 9.
 
 **Why the word comes last.** `timers-v1` is added by Task 12, the last commit of PR D, once every door, the lane and the
-client have merged. A client on a box whose current cap file lacks the word refuses locally, so until then no session
+client have merged. Until that commit the client's three `timer.*` rows stay out of `ccrc-api.test.ts`'s byte-identical
+case (Task 11), and the commit that adds the word puts them back. A client on a box whose current cap file lacks the word refuses locally, so until then no session
 sets a timer through `ccrc-api`. A timer set by hand before then (a raw call) is still kept and fires once the lane has
 merged: late, never lost.
 
@@ -246,8 +261,11 @@ export const TIMER_DUE_MAX_MS = 2_592_000_000;     // 30 days
 export const TIMER_SETS_PER_HOUR = 30;
 export const TIMER_LANE_PERIOD_MS = 60_000;
 export const TIMER_KEEP_MS = 7_776_000_000;        // 90 days, fired and cancelled rows
-export const TIMER_HOLD_CAP_MS = 86_400_000;       // 24 hours from quietSince
+export const TIMER_HOLD_CAP_MS = 86_400_000;       // 24 hours from the stall ladder's start
 export const TIMER_PREVIEW_CHARS = 60;             // the first words the card line shows
+/** The role the timer mail comes from (C63): `rundefs.ts` keys its `SYSTEM_MAIL_SENDER_MAP` row by it, and `stall.ts`
+ *  leaves its mail out of the stall facts (Task 9). */
+export const TIMER_MAIL_SENDER = 'timer';
 ```
 
 The due-time bounds are named `TIMER_DUE_MIN_MS` and `TIMER_DUE_MAX_MS`, because `TIMER_MAX_MS` is already the
@@ -408,7 +426,7 @@ CREATE INDEX continuity_timers_by_setter ON continuity_timers(setter, setAt);
 when any row has moved, so the caller's transaction rolls back, mail included); `pendingTimersOf(db, setter):
 TimersRead`; `pendingTimers(db): TimersRead` (the lane's read, every pending row); `timerHoldFacts(db, setter,
 firedSince): { ok: true; earliestPending: TimerRow | null; newestFired: TimerRow | null } | { ok: false; detail }`
-(the stall hold's read, Task 9); `setsSince(db, setter, since): number`; `purgeTimers(db, before): { removed: number }`
+(the stall hold's read, Task 9; each row carries `dueAt` and, when fired, `firedAt`); `setsSince(db, setter, since): number`; `purgeTimers(db, before): { removed: number }`
 (fired and cancelled rows whose `firedAt` or `cancelledAt` is older than `TIMER_KEEP_MS`). `TimersRead` is
 `{ ok: true; rows } | { ok: false; detail }`, never an empty list for a failed read.
 
@@ -430,8 +448,8 @@ firedSince): { ok: true; earliestPending: TimerRow | null; newestFired: TimerRow
 
 **Files:**
 - Modify: `server/src/continuity/cardFacts.ts` (move the role's assembly out of `gatherCardFacts` into an exported
-  `sessionRoleRead(deps, id)`, answering the role, its `roleWhy` and the `intent` fact; `gatherCardFacts` then calls it
-  and takes `intent` from its answer)
+  `sessionRoleRead(deps, id)`, answering the role, its `roleWhy`, the `renderer` and the `intent` fact;
+  `gatherCardFacts` then calls it and takes `renderer` and `intent` from its answer)
 - Test: `server/test/continuity-card-facts.test.ts`
 
 The set door needs the caller's role for its cap (Table 3.3.12a's `role`, from `roleOf`). Card PR B already assembles
@@ -439,7 +457,7 @@ it, so this task makes that assembly one function both call, rather than a secon
 `intent` fact is both a role input and a card field, the move changes `gatherCardFacts`' call site as well as where the
 code lives; the characterization holds its outputs unchanged.
 
-- [ ] **Step 1: Characterization first.** Pin, on `main` after card PR B, the role, `roleWhy` and `intent` that
+- [ ] **Step 1: Characterization first.** Pin, on `main`, the role, `roleWhy`, `renderer` and `intent` that
   `gatherCardFacts` answers for a coordinator, a child worker, a child reviewer, a plain session and an unreadable
   registry. Green.
 - [ ] **Step 2: Move.** The commit changes where the code lives, `gatherCardFacts`' call to it, and the test's imports.
@@ -456,8 +474,9 @@ code lives; the characterization holds its outputs unchanged.
   the set, "a session sets a timer for itself: box token and attribution, the caller's own identity"; the list, "a
   session reads its own pending timers"; the cancel, "a session cancels one of its own timers"; the header's route
   count and the machine-lane number words), `server/test/auth-gate.test.ts` (the route counts, the sorted EXEMPT literal
-  list and its number-word title), `server/test/box-token-census.test.ts` (`CONTINUITY_LANES` gains the three; the
-  machine-lane count word three higher than it stands at merge, measured), `server/test/rings/fastify-l4.data.ts`,
+  list and its number-word title), `server/test/box-token-census.test.ts` (`CONTINUITY_LANES` gains the three; `WORDS`, which `word()` reads against
+  `ALL_LANES.length`, gains the three words past the one it ends on at merge, measured: `seventy-seven` to
+  `seventy-nine` on `main` today; the `CONTINUITY_SRC` docstring's count of its box-token lanes), `server/test/rings/fastify-l4.data.ts`,
   `server/test/secret-mask.test.ts` (`GET /api/timers`), the README's auth paragraph, `CLAUDE.md`'s box-token paragraph
 - Test: `server/test/continuity-timers-route.test.ts` (new)
 
@@ -539,8 +558,8 @@ the same list when it lands. Because `lanesIn` slices the file from each registr
 ### Task 7: The `timer` sender
 
 **Files:**
-- Modify: `server/src/coord/rundefs.ts` (`SYSTEM_MAIL_SENDER_MAP` gains `timer`, glossed "the timer lane: a reminder
-  its recipient set itself; the note inside is that session's own words, untrusted")
+- Modify: `server/src/coord/rundefs.ts` (`SYSTEM_MAIL_SENDER_MAP` gains a row keyed `[TIMER_MAIL_SENDER]`, glossed "the
+  timer lane: a reminder its recipient set itself; the note inside is that session's own words, untrusted")
 - Test: `server/test/mail-role-senders.test.ts` (new), `server/test/mail-revive.test.ts`
 
 - [ ] **Step 1: Characterization first, green on `main`:** a parked mail whose `fromId` is `timer` makes
@@ -566,8 +585,9 @@ the same list when it lands. Because `lanesIn` slices the file from each registr
   TIMER_LANE_PERIOD_MS, clock: 'mono', flight: 'skip', warnKey: 'ccrc-server: the timers lane failed', derivedFrom: null }`)
 - Create: `server/src/continuity/timerLane.ts` (L4: `gatherTimerFacts` and `timersPass`)
 - Modify: `server/src/coord/ports.ts` (`WatcherCoordMember` gains the store reads and writes the lane calls)
-- Modify: `server/src/watch.ts` (`FleetWatcher.sweepTimers(records, listedAt, names)`, reading `this.listedIds` for the
-  listing's ids, and its one call from the poll tick, never awaited, beside `sweepGenerations`; growth-checked)
+- Modify: `server/src/watch.ts` (`FleetWatcher.sweepTimers(records, listedIds, listedAt, names)`, the tick's own values
+  passed as arguments rather than read from `this.listedIds` mid-pass, and its one call from the poll tick, never
+  awaited, beside `sweepGenerations`; growth-checked)
 - Modify: `server/src/index.ts` if the deps need wiring (not growth-checked)
 - Test: `server/test/continuity-timer-lane.test.ts` (new); `server/test/sim/timerDay.ts` and
   `server/test/sim/timer-day.test.ts` (new, in `generationDay.ts`'s shape)
@@ -584,11 +604,15 @@ the same list when it lands. Because `lanesIn` slices the file from each registr
    `cancelTimer(…, 'cleanup', reason, now)`.
 3. **Fire** (skipped while `MAIL_DISABLED_MARKER` stands in the listing's names): the timers that answered `keep` and
    whose `dueAt <= now`, through `packTimerMail`; for each mail, one `tx(coord.db, …)` that calls `insertSystemMailTx`
-   (`fromId: 'timer'`, `toId: setter`, the mail's `runId`, `kind: 'status'`) and then `markTimersFired(ids, mailId,
-   now)`. A throw rolls back that mail and its timers alone; the next mail's transaction still runs.
+   (`fromId: TIMER_MAIL_SENDER`, `toId: setter`, the mail's `runId`, `kind: 'status'`; its `run` argument is the bound
+   run's row for a run-bound mail, so the envelope names the programme and wave, and `null` for the run-less mail,
+   which can hold timers of several programmes and of none; each programme-bound timer names its programme in its own
+   lines of the body) and then `markTimersFired(ids, mailId, now)`. A throw rolls back that mail and its timers alone; the next mail's transaction still runs.
 4. **Purge** once a pass: `purgeTimers(now - TIMER_KEEP_MS)`.
 
-The lane takes `Clock` from the composition root (§11.5); `now` is `clock.wall()`. The ambient-clock scan already
+The lane takes `Clock` from the composition root (§11.5); `now` is `clock.wall()`. `listedAt` is the tick's
+`Date.now()` while `setAt` is the door's `deps.wall()`, the same mix the generations lane has; both read the same wall
+clock in production. The ambient-clock scan already
 covers `server/src/continuity/` and `shared/continuity*` (`TIME_PORT_FAMILIES`), so no list changes. The lane starts no
 run and queues no wake of its own: the mail may wake a sleeping setter as any mail does, under the wake budget.
 
@@ -622,51 +646,91 @@ run and queues no wake of its own: the mail may wake a sleeping setter as any ma
 
 **Files:**
 - Modify: `server/src/coord/stall.ts` (`STALL_HOLD_MAP` gains `timer`; `StallInput` gains an optional `timers`;
-  `timerHoldUntil`; step 10's quiet rung asks it in both ladders; the `stall-check:` body and the `stall:` report name
-  the timer that held)
-- Modify: `server/src/watch.ts` (the stall pass reads the worker's hold facts once, `timerHoldFacts(id, quietSince)`,
-  and passes them; a failed read is `unmeasured`; growth-checked, counted in PR C's estimate)
+  `stallFacts` leaves timer mail out of `relevant`; `timerHoldUntil`; step 10's quiet rung asks it in both ladders; the
+  `stall-check:` and `stall:` builders and the r3 push name the timer that held)
+- Modify: `server/test/stall-vocabulary.test.ts` (`STALL_HOLDS` gains `timer`; the value-import pin admits
+  `../../../shared/continuity-timers.js`, for `TIMER_MAIL_SENDER` and `TIMER_HOLD_CAP_MS`, slug
+  `stall-import-pin-admits-the-timer-vocabulary`, a widening like D-8236's)
+- Modify: `server/src/coord/ports.ts` (`WatcherCoordMember` gains `timerHoldFacts`, in its sorted place) and
+  `server/test/rings/watcher-store-port.test.ts` if its list is hand-kept
+- Modify: `server/src/watch.ts` (`judgeStall` reads the worker's hold facts once, `timerHoldFacts(id, now -
+  TIMER_HOLD_CAP_MS)`, and passes them on `StallInput`; a failed read is `unmeasured`; growth-checked, counted in PR C's
+  estimate, which the builder re-measures before this task)
 - Modify: `pwa/` only if a hold vocabulary is rendered there (measure `grep -rn "restart-grace" pwa/src`)
-- Test: `server/test/stall-timer-hold.test.ts` (new), `server/test/stall-vocabulary.test.ts` (`STALL_HOLDS` gains
-  `timer`), the stall suites (measure: `grep -ln "stallVerdict\|STALL_HOLD" server/test`)
+- Test: `server/test/stall-timer-hold.test.ts` (new), `server/test/stall-vocabulary.test.ts`, the stall suites
+  (measure: `grep -ln "stallVerdict\|STALL_HOLD" server/test`), `server/test/rings/watcher-store-port.test.ts`
 
-**The rule** (C65, ruled spec-faithful on review 2030 F2): `StallInput.timers?` is `{ held: { id, dueAt } } | null |
-'unmeasured'`; absent means none, as `w2?` and `quietMs?` are, so no existing `StallInput` literal changes. The timer
-that holds is **the earliest pending timer when the worker has one, otherwise the newest timer fired at or after
-`quietSince`** (read by `firedAt`) (slug `hold-follows-the-newest-fired-timer`). Without the second arm the hold would
-end the moment the lane fires the timer, at `dueAt`, while a run-less timer mail restarts nothing in the verdict
-(`stallRunMail` keeps run mail only), so a `stall-check:` could go out at once.
-`timerHoldUntil(quietSince, held.dueAt, quietMs) = min(held.dueAt + quietMs, quietSince + TIMER_HOLD_CAP_MS)`, where
-`quietMs` is the one the ladder's quiet rung compares against (`stallQuietMs(input)` in `stallWaveOneLadder`,
-`stallBackoff(input).quietMs` in the marker ladder). While `now` is before it, the quiet arm answers `hold` with
-`timer`, at step 10 only, after step 9, in both ladders. Every other arm runs as today, and so does the quiet arm past
-the cap, with no timers, or when the read is `unmeasured` (a hold never rests on a read that failed: it fails towards
-the operator). A run-bound timer's mail still restarts `quietSince` as any run mail does.
+**A timer mail is no exchange** (slug `timer-mail-is-no-exchange`, the coordinator's ruling on review 2033 N1).
+`stallFacts` leaves mail whose `fromId` is `TIMER_MAIL_SENDER` out of `relevant` entirely, so it moves neither `ball`,
+nor `lastExchangeAt` (the 30-hour ball cap's clock), nor `quietSince`. A run-bound timer mail survives `stallRunMail`
+and is no watch notice, so without this a worker that sent wave-done and then got its own reminder would pass the ball
+to itself: the coordinator-deaf check and the 30-hour cap, which sit under `ball === 'coordinator'`, would go blind, and
+the worker would get a `stall-check:` while it waits on its coordinator. A timer is a self-reminder, not a
+counterparty's act. The timer hold, below, is what covers a worker waiting on its own timer.
+
+**The rule** (C65, ruled spec-faithful on review 2030 F2, timed by review 2033 N3 and N4). `StallInput.timers?` is
+`{ readonly earliestPending: { id, dueAt } | null; readonly newestFired: { id, dueAt, firedAt } | null } | 'unmeasured'`;
+absent means none, as `w2?` and `quietMs?` are, so no existing `StallInput` literal changes. The watch reads it once a
+pass with `firedSince = now - TIMER_HOLD_CAP_MS`: a fired timer that can still hold fired after the ladder's start,
+which is less than 24 hours ago. The pure side decides everything else against **the ladder's own start**,
+`stallR1QuietFrom(input, facts)`, the one owner of "where r1's quiet period starts" (`f.quietSince` in
+`stallWaveOneLadder`; the marker ladder's `stallMarkQuiet` start, from the Stop, which can be earlier or later than
+`live.since`) (slug `hold-starts-at-the-ladders-start`):
+- **The timer that holds** is the earliest pending timer when there is one; otherwise the newest timer fired at or after
+  the ladder's start.
+- **When its hold ends:** for a pending timer, its `dueAt` plus one quiet period; a pending timer whose `dueAt` has
+  passed has not fired yet (the lane is held by `mail-disabled`, or a pass behind), so it holds until it fires. For a
+  fired timer, its `firedAt` plus one quiet period: after a fire, the first hold period is a full quiet period from the
+  fire, however late it was (slug `a-fire-starts-a-full-quiet-period`, review 2033 N4).
+- **The cap:** never past the ladder's start plus `TIMER_HOLD_CAP_MS`.
+- **`quietMs`** is the one the ladder's quiet rung compares against: `stallQuietMs(input)` in `stallWaveOneLadder`,
+  `stallBackoff(input).quietMs` in the marker ladder.
+
+`timerHoldUntil(start, held, quietMs, now)` is the L1 function that answers that time, or `null` when no timer holds.
+While `now` is before it, the quiet arm answers `hold` with `timer`, at step 10 only, after step 9, in both ladders.
+Every other arm runs as today, and so does the quiet arm past the cap, with no timers, or when the read is
+`unmeasured` (a hold never rests on a read that failed: it fails towards the operator).
 
 **What a notice says** (slug `stall-notice-names-no-note`, the coordinator's ruling on review 2030 F3, a spec
-departure): a `stall-check:` or `stall:` sent after a hold names the timer by its id and its due time only. Stall
-notices go out as `operator`, and C63's reasoning (H7) and the stall text rule ("measured facts only") keep a session's
-words out of that envelope. The note stays on the card and in `ccrc-api timer list`. C65 says the notice carries "the
-first words of its note"; the departures note records this for the spec's next correction.
+departure; its shape from review 2033 N5): a notice names a timer only when that timer held this episode, which is
+when the same pick, timed against the same ladder start, gives a hold that ended at or before `now` and later than the
+ladder's start plus one quiet period. The builders read `input.timers` and recompute the pick, because the verdict's
+`StallNotify` carries no timer: `stallCheckMail` (r1), `stallReportMail` (r2) and `stallPushText` (r3) each add one line,
+"Held by your timer <id> (due <UTC>) until <UTC>." (for r2 and r3, "the worker's timer"). The id is printed as an
+integer and the times in server UTC. The note never appears: stall notices go out as `operator`, and C63's reasoning
+(H7) and the stall text rule ("measured facts only") keep a session's words out of that envelope. The note stays on
+the card and in `ccrc-api timer list`. The limit, dialog and frozen arms, and every arm but the quiet one, name no
+timer. C65 says the notice carries "the first words of its note"; the departures note records this for the spec's next
+correction.
 
 **Beside the backlog horizon** (the spec asks the plan to record it): the hold is not a backoff. It sends nothing,
 records no rung and moves no episode key, so `STALL_BACKOFF_CEILING_MS` (16 hours) and `STALL_WORKING_BACKOFF_CAP` do
 not apply to it. Its facts are rows of `continuity_timers`, not mail, so `BACKLOG_HORIZON_MS` never bounds what it
-reads. Its cap, 24 hours from `quietSince`, equals that horizon, and the quiet arm's own clock is safe past it: a run
-worker's run mail is read without the horizon, so its `quietSince` stays exact.
+reads. Its cap, 24 hours from the ladder's start, equals that horizon, and the quiet arm's own clock is safe past it: a
+run worker's run mail is read without the horizon.
 
-- [ ] **Step 1: Failing tests:** a worker quiet for three hours with a timer due in one hour holds `timer`; at the due
-  time plus one quiet period, with no mail, the check fires and its body names the timer by id and due time and
-  carries no word of its note; a timer due in 40 hours holds only until `quietSince` plus 24 hours; a timer read that
-  failed holds nothing; a run-bound timer's mail restarts `quietSince`; the marker ladder holds with its own `quietMs`;
-  the `dead` and `frozen` arms are unchanged with a timer pending; `STALL_HOLD_MAP` lists `timer` once.
-  **Lane-level:** a run worker's run-less timer fires through the lane, its mail is not delivered, and no
-  `stall-check:` goes out until `dueAt` plus one quiet period.
-- [ ] **Step 2: Run.** Red. **Step 3: Implement.** **Step 4: Run** this suite, `test/stall-vocabulary.test.ts` and the
-  stall suites, both `tsc` runs. Green. Register `timerHoldUntil`'s floor.
-- [ ] **Step 5: Mutation.** Drop the 24-hour cap: the 40-hour case goes red. Hold on `unmeasured`: red. Read pending
-  timers only: the lane-level case goes red. Put the note's preview in the notice: the no-note case goes red. Revert
-  each.
+- [ ] **Step 1: Failing tests:**
+  - **N1:** a worker sends wave-done, then a run-bound timer of its fires: `ball` stays `coordinator`, the
+    coordinator-deaf check still fires, and the 30-hour cap's clock does not restart; a timer mail moves no `quietSince`.
+  - **The hold, wave-one ladder:** a worker quiet for three hours with a timer due in one hour holds `timer`; a timer
+    due in 40 hours holds only until the ladder's start plus 24 hours; a timer read that failed holds nothing; the
+    `dead` and `frozen` arms are unchanged with a timer pending; `STALL_HOLD_MAP` lists `timer` once.
+  - **The hold, marker ladder** (its own `quietMs` and start): with a Stop older than `live.since`, a timer fired
+    between the two holds; with a Stop newer than `live.since`, a timer fired before the Stop does not.
+  - **Late fires:** a pending timer past its `dueAt` holds until it fires; a timer fired three hours late holds for one
+    full quiet period from `firedAt`.
+  - **Notices:** after a hold, the r1 check names the timer by id and due time and carries no word of its note; r2 and
+    the r3 push name it too; a notice for an episode no timer held names none; the limit, dialog and frozen arms name
+    none.
+  - **Lane-level:** a run worker's run-less timer fires through the lane, its mail is not delivered, and no
+    `stall-check:` goes out until `firedAt` plus one quiet period; `mail-disabled` lifts, the lane fires a timer three
+    hours late, and no `stall-check:` goes out for one quiet period.
+- [ ] **Step 2: Run.** Red. **Step 3: Implement.** **Step 4: Run** this suite, `test/stall-vocabulary.test.ts`, the
+  stall suites, `test/rings/watcher-store-port.test.ts`, both `tsc` runs. Green. Register `timerHoldUntil`'s floor.
+- [ ] **Step 5: Mutation.** Let timer mail into `relevant`: the N1 case goes red. Drop the 24-hour cap: the 40-hour case
+  goes red. Hold on `unmeasured`: red. Read pending timers only: the lane-level case goes red. Time the fired arm from
+  `dueAt`: the three-hours-late case goes red. Time from `f.quietSince` in the marker ladder: the Stop-older case goes
+  red. Put the note in the notice: the no-note case goes red. Revert each.
 - [ ] **Step 6: Commit.** `feat(coord): a worker's own timer holds the stall watch's quiet arm, never past 24 hours (C65)`
 
 **PR C ends here.**
@@ -700,34 +764,55 @@ worker's run mail is read without the horizon, so its `quietSince` stays exact.
 - Modify: `ccd/ccrc-api` (`[timer.set]='POST|/api/timers|no|-'`, `[timer.list]='GET|/api/timers|no|-'`,
   `[timer.cancel]='POST|/api/timers/{id}/cancel|yes|-'`; the count word three higher than it stands at merge,
   measured, at both of its prose sites; a `parse_timer` special; the gate beside the `plan.*` block)
-- Modify: `server/test/ccrc-api.test.ts` (`toHaveLength`, `WORDS`), `server/test/ccrc-api-closed.test.ts`
-  (`routeKeys().size`)
+- Modify: `server/test/ccrc-api.test.ts`, at four sites: `toHaveLength` and `WORDS`; `ROWS` gains the three keys, or
+  "has exactly the rows exercised above" goes red; the `paned` predicate includes `timer`, because the verbs derive
+  identity and otherwise refuse `no-pane` and send nothing; and the byte-identical case ("every non-claimant row sends a
+  request byte-identical to its no-file request") leaves the three `timer.*` rows out, with the reason in a comment, as
+  below
+- Modify: `server/test/ccrc-api-closed.test.ts` (`routeKeys().size`)
+- Modify: `server/test/census-w3/claimant.ts` (the cap-reader recogniser learns the `timer.*` gate, beside `plan.*`) and
+  `server/test/census-w3/claimant.test.ts` (`capReaderCalls()` pins one more gate line)
 - Test: `server/test/ccrc-api-timer.test.ts` (new, a stub server and a fixture HOME)
 
 **The client derives the identity pair for all three verbs** (slug `timer-verbs-derive-identity`), through
-`derive_identity` as `mail inbox` and card PR B's `cmd_card` do, and refuses a typed pair, so a session sends no JSON
-and cannot pass another session's pair: `set` builds its body whole, `{ fromId, fromUuid, durationMs, note, runId? |
-programme? }`, from `set <duration> <note> [--run <id> | --programme <slug>]`; `list` appends `byId` and `byUuid` to
-its query; `cancel <id>` builds `{ fromId, fromUuid }` whole (never through `splice_body_field`, whose census admits two
-routes). `parse_timer` parses its flags with `if`/`elif`, never `case` labels, because the closed test's identity-flag
-census reads every `--flag)` label in the client. **The duration** is `<n>m`, `<n>h` or `<n>d` (`90m`, `2h`, `3d`),
-turned into `durationMs` by the client; the bounds are the server's. **The gate:** on a current `server-caps` file that
-omits `timers-v1`, every `timer.*` verb answers through `refuse 'capability-missing' 'the server this box talks to does
-not keep timers yet (it does not advertise timers-v1); no timer was set'` and sends nothing: the envelope stays `ok`,
-`error`, `detail`, with the word named in `detail`. An absent, stale or torn file sends the request, as every gate in
-the client does (slug `timer-gate-fails-open-like-every-gate`, a spec departure: Table 11.1d and C65 say `ccrc-api`
-answers `capability-missing`); a server without the doors then answers its own 404, which is no acceptance either, so
-clause 17's "a timer the server accepted" holds. On the fleet box the update sync rewrites the file every minute
-against a 180 s lease, so the request goes out without the check only on a degraded box.
+`derive_identity` as `mail inbox` and `cmd_card` do, and refuses a typed pair, so a session sends no JSON and cannot
+pass another session's pair. `set` builds its body whole with `jq --arg` and `--argjson`, as `cmd_card` and `mail inbox`
+do, with their `no-jq` refusal when `jq` is not on PATH: `{ fromId, fromUuid, durationMs, note, runId? | programme? }`,
+from `set <duration> <note> [--run <id> | --programme <slug>]`. `jq --arg` escapes every control character, where the
+client's `json_escape` handles only five (slug `timer-body-built-by-jq`). `list` appends `byId` and `byUuid` to its
+query. `cancel <id>` builds `{ fromId, fromUuid }` whole (never through `splice_body_field`, whose census admits two
+routes); its `<id>` passes the client's generic `SAFE_RE`, and the client leaves the integer check to the server, which
+refuses a non-integer id `400 bad-request`. `parse_timer` parses its flags with `if`/`elif`, never `case` labels,
+because the closed test's identity-flag census reads every `--flag)` label in the client. **The duration** is `<n>m`,
+`<n>h` or `<n>d` (`90m`, `2h`, `3d`), turned into `durationMs` by the client; the bounds are the server's.
+
+**The gate:** on a current `server-caps` file that omits `timers-v1`, every `timer.*` verb answers through
+`refuse 'capability-missing' 'the server this box talks to does not keep timers yet (it does not advertise timers-v1); no timer was set'`
+and sends nothing: the envelope stays `ok`, `error`, `detail`, with the word named in `detail`. An absent, stale or
+torn file sends the request, as every gate in the client does (slug `timer-gate-fails-open-like-every-gate`, a spec
+departure: Table 11.1d and C65 say `ccrc-api` answers `capability-missing`); a server without the doors then answers
+its own 404, which is no acceptance either, so clause 17's "a timer the server accepted" holds. On the fleet box the
+update sync rewrites the file every minute against a 180 s lease, so the request goes out without the check only on a
+degraded box.
+
+**Why the timer rows stay out of the byte-identical case until Task 12** (slug `word-last`, the coordinator's ruling on
+review 2033 N2). That case writes a current cap file of the default `SERVER_CAPS`, which at this task lacks
+`timers-v1`, so the gated rows refuse locally and their sends differ; the `plan.*`, `goals.show` and `calls.record`
+gates pass it only because their words are already in `SERVER_CAPS`. Adding the word here would let a session set a
+timer from a commit before the last, so the three rows are left out, with the comment "left out until `timers-v1` is
+advertised (the timers plan, Task 12, slug `word-last`)", and Task 12 puts them back in the commit that adds the word.
 
 - [ ] **Step 1: Failing tests:** `timer set 2h "check the checks"` posts `durationMs: 7200000` with the derived
-  identity; `--run 7` adds `runId: 7`; a typed `--by` or identity pair is refused; `timer set 3w x` refuses locally;
+  identity; a note carrying `\x01` and `\x1b` posts valid JSON; without `jq` on PATH, `set` refuses `no-jq` and sends
+  nothing; `--run 7` adds `runId: 7`; a typed `--by` or identity pair is refused; `timer set 3w x` refuses locally;
   `timer list` sends the derived pair in its query and `timer cancel 12` sends the derived body; a current cap file
   without `timers-v1` answers `capability-missing` naming the word in `detail`, with no call (the stub's log stays
   empty); a stale one makes the call; the count words match.
 - [ ] **Step 2: Run.** Red. **Step 3: Implement.** **Step 4: Run** this suite, `test/ccrc-api.test.ts`,
-  `test/ccrc-api-closed.test.ts` (its route count, identity-flag and splice censuses), the shellcheck ratchet. Green.
-- [ ] **Step 5: Mutation.** Drop the gate: the no-call case goes red. Accept a typed pair: red. Revert each.
+  `test/ccrc-api-closed.test.ts` (its route count, identity-flag and splice censuses), `test/census-w3/claimant.test.ts`
+  and the rest of `test/census-w3/`, the shellcheck ratchet. Green.
+- [ ] **Step 5: Mutation.** Drop the gate: the no-call case goes red. Accept a typed pair: red. Build the body with
+  `json_escape`: the control-character case goes red. Revert each.
 - [ ] **Step 6: Commit.** `feat(ccrc-api): timer set, list and cancel, refused locally without timers-v1`
 
 ### Task 12: Worker clause 17, and the word
@@ -735,14 +820,22 @@ against a 180 s lease, so the request goes out without the check only on a degra
 **Files:**
 - Modify: `ccd/worker-skill/SKILL.md` (clause 17, and a trim outside the contract that pays for it)
 - Modify: `server/test/worker-skill.test.ts`: `CONTRACT[16]`, byte for byte the same text; the S3 row's last-member
-  check (it expects the new last member, `or a timer the server accepted (\`ccrc-api timer set\`).`); and the
-  allowlist row with its comment block (D-3806, D-3807), which gains a fourth member shape, a server timer
-  (`/^an? timer the server accepted \(`ccrc-api timer set`\)$/i`), with the reason recorded in the comment: the
-  operator approved clause 17 naming it (C65, item 227), and the coordinator ruled the widening on review 2030 B1
-  (slug `stop-clause-allowlist-admits-a-server-timer`)
+  check (it expects the new last member, ``or a timer the server accepted (`ccrc-api timer set`).``); and the
+  allowlist row with its comment block (D-3806, D-3807), as below
 - Modify: `server/test/skill-size-caps.json` only if the file shrank (lowered to the size R2 prints)
 - Modify: `shared/api.ts` (`SERVER_CAP_MAP` gains `timers-v1`, commented "W1a: the timer doors, the timers lane and
   `ccrc-api timer`"; growth-checked) and the suites that pin `SERVER_CAPS` (measure: `grep -ln SERVER_CAPS server/test`)
+- Modify: `server/test/ccrc-api.test.ts` (the three `timer.*` rows return to the byte-identical case, in the commit that
+  adds the word; Task 11's comment goes)
+
+**The allowlist** (slug `stop-clause-allowlist-admits-a-server-timer`, the coordinator's ruling on review 2030 B1;
+its test shape from review 2033 N7). The row reads one line of the real `SKILL.md`, so as it stands it can only go red
+when `SKILL.md` changes. This task turns its member check into a predicate over a given line, `stopClauseVerdict(line)`,
+which the row applies to the real clause and to fixtures, as the collector-switch row does with a scratch copy. The
+predicate gains a fourth member shape, the exact server-timer wording, ``/^an? timer the server accepted \(`ccrc-api timer set`\)$/i``,
+with the reason in the comment block: the operator approved clause 17 naming it (C65, item 227), and the coordinator
+ruled the widening. The comment's known-evasion note ("or until a timer fires") stays an evasion and says why: it
+names no timer anything accepted.
 
 **Clause 17** becomes (the only change: the list of wakes gains a fourth, after the structured ask):
 
@@ -762,14 +855,16 @@ clause stays ASCII, with no double quote and no "workflow" (`CONTRACT[16]`'s own
 clause 17 is not pinned and is already out of date; it is left alone.
 
 - [ ] **Step 1: Failing tests:** `CONTRACT[16]` holds the new text (red until `SKILL.md` matches); the S3 row expects
-  the new last member; the allowlist row admits the server timer and still refuses a background shell, a Monitor and a
-  timer of any other wording; `SERVER_CAPS` includes `timers-v1`.
-- [ ] **Step 2: Run.** Red. **Step 3: Implement** the clause, the trim, the two rows, then the word as the last commit.
+  the new last member; `stopClauseVerdict` admits the real clause and refuses fixtures naming a background shell, a
+  Monitor, "a timer", "a timer that fires" and "or until a timer fires"; `SERVER_CAPS` includes `timers-v1`; the
+  byte-identical case covers the three `timer.*` rows again.
+- [ ] **Step 2: Run.** Red. **Step 3: Implement** the clause, the trim, the predicate and its rows, then the word and
+  the rows' return to the byte-identical case as the last commit.
 - [ ] **Step 4: Run** `test/worker-skill.test.ts`, `test/skill-size-ratchet.test.ts` (after `git fetch origin main`),
-  `test/coordinator-skill.test.ts`, `test/reviewer-skill.test.ts`, the `SERVER_CAPS` suites, both `tsc` runs and pwa's
-  `tsc`. Green.
-- [ ] **Step 5: Mutation.** Drop the fourth member shape: the allowlist row goes red on the new clause. Widen it to any
-  "timer": the other-wording case goes red. Revert each.
+  `test/coordinator-skill.test.ts`, `test/reviewer-skill.test.ts`, `test/ccrc-api.test.ts`, the `SERVER_CAPS` suites,
+  both `tsc` runs and pwa's `tsc`. Green.
+- [ ] **Step 5: Mutation.** Drop the fourth member shape: the real clause goes red. Widen it to any "timer": the
+  `a timer` and `a timer that fires` fixtures go red. Revert each.
 - [ ] **Step 6: Commit** twice: `feat(skill): worker clause 17 names a timer the server accepted as a wake (C65)`, then
   `feat(continuity): advertise timers-v1`
 
@@ -846,7 +941,21 @@ Decisions this plan takes, by slug:
   did not name, or a measured other stamp). The listing supplies `archived` and whether the row was named; a row named
   but unbuilt, and a timer set after the tick's listing began, wait (the coordinator's ruling on review 2030 F1).
 - **hold-follows-the-newest-fired-timer** — the stall hold reads the earliest pending timer, or else the newest one
-  fired since `quietSince`, so it lasts to `dueAt` plus one quiet period after the lane fires it (review 2030 F2).
+  fired since the ladder's start, so it lasts past the fire (review 2030 F2).
+- **hold-starts-at-the-ladders-start** — the hold's fired arm and its 24-hour cap are timed from the start the ladder's
+  own r1 uses, `stallR1QuietFrom`, read once with `firedSince = now - TIMER_HOLD_CAP_MS` (review 2033 N3).
+- **a-fire-starts-a-full-quiet-period** — a fired timer holds until its `firedAt` plus one quiet period, and an overdue
+  pending timer holds until it fires (review 2033 N4).
+- **timer-mail-is-no-exchange** — `stallFacts` leaves timer mail out of `relevant`: it moves no `ball`, no
+  `lastExchangeAt` and no `quietSince` (the coordinator's ruling on review 2033 N1).
+- **notice-names-the-timer-that-held** — a stall notice names a timer only when that timer held the episode, recomputed
+  by the r1, r2 and r3 builders from `input.timers` (review 2033 N5).
+- **stall-import-pin-admits-the-timer-vocabulary** — `stall.ts`'s value-import pin admits `shared/continuity-timers.js`,
+  for `TIMER_MAIL_SENDER` and `TIMER_HOLD_CAP_MS`.
+- **timer-body-built-by-jq** — the client builds the set body with `jq --arg`, which escapes every control character
+  (review 2033 N9).
+- **word-last-keeps-the-rows-out** — until the word, the three `timer.*` client rows stay out of `ccrc-api.test.ts`'s
+  byte-identical case, and the word's commit puts them back (the coordinator's ruling on review 2033 N2).
 - **setter-stamp-is-a-double-read** — the doors' `setterStamp` and the card's `cardRegistry.incarnation` are two
   readers of `.generation`, legitimately different by safety direction (Task 5).
 - **continuity-session-doors-list** — one hand-kept list, `CONTINUITY_SESSION_DOORS`, for every session-gated door in
@@ -872,12 +981,13 @@ Decisions this plan takes, by slug:
 
 ## Where things stand
 
-**Needs before it starts:** PR A needs nothing beyond `main`. PR C needs PR A. PR B needs PR A and card PR B (#2793).
-PR D needs PRs B and C and card PR B. PR E needs PR B.
+**Needs before it starts:** PR A needs nothing beyond `main`. PR B and PR C need PR A. PR D needs PRs B and C. PR E
+needs PR B. Card PR B (#2793), which PR B and PR D build on, has merged.
 
 **What depends on it:** W1's Overlord timers (stamped with `designatedTerm`, the `retired` cleanup, the gate order of
 §11.2 for the designated session); W2's band 3 of the inbox (the Overlord's fired timers); M36's report; renewal
-hand-offs' `renew` door, which joins `CONTINUITY_SESSION_DOORS`.
+hand-offs' `renew` door, which joins `CONTINUITY_SESSION_DOORS`. Its own plan (`w1a-renewal-handoffs.md`) still sends that
+door to `SESSION_ONLY`; the index's "Where lanes meet" carries the rule, and this plan does not edit that piece's text.
 
 **What a merge arms:** nothing changes what a session sees until it sets a timer. The doors only record, the lane fires
 only rows a session set, and the clause names a wake a session may choose. No Shadow lanes row is added: a timer is the
