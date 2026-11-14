@@ -290,8 +290,9 @@ describeCodex('ccrc doctor: codex, a direct lane\'s rows (codex bridge Stage 2, 
 
   // D-8619: the per-request record and its one older generation are created 0600 by the bridge, as the stats file is,
   // and hold the lane's Claude Code session ids and each request's timings. Named by lane.json's `bridgeFiles.requests`;
-  // a lane.json an older laneManifest wrote names none, and that is no finding.
-  it('the request record and its older generation are checked like the stats file; a lane.json naming none is no FAIL', async () => {
+  // a lane.json an older laneManifest wrote names none: no record file is looked for, and the lane.json itself reads
+  // stale against its roster row (the update's codex-lanes step and `doctor --fix` re-render it).
+  it('the request record and its older generation are checked like the stats file; a lane.json naming none is stale, never a record FAIL', async () => {
     const home = await healthyCodexBox('ccrc-doctor-codex-direct-requests-', ['codex-a', 'codex-b']);
     plantDirectLane(home, 'codex-b');
     const rec = bridgeFile(home, 'codex-a', 'requests');
@@ -322,6 +323,10 @@ describeCodex('ccrc doctor: codex, a direct lane\'s rows (codex bridge Stage 2, 
     }
     const r2 = runDoctor(home);
     expect(r2.stdout).not.toMatch(/bridge request record/);
+    for (const id of ['codex-a', 'codex-b']) {
+      expect(r2.stdout, r2.stdout).toMatch(new RegExp(`^FAIL codex: ${id}'s lane\\.json disagrees with its roster row \\(`, 'm'));
+    }
+    expect(r2.stdout).not.toMatch(/lane\.json disagrees with what its roster row and class registry render/);
     noRunnerBugLine(r2.stdout, 'codex');
   });
 

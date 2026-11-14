@@ -2608,8 +2608,10 @@ directory (no ccrc code writes it), and it is read at every answer; with no mark
 changes nothing on the wire or in the client's answer. The file is `lane.json`'s `bridgeFiles.requests`,
 `bridge.requests.jsonl`, mode 0600, appended one whole line at a time and never through a symlink; at 16 MiB it is
 renamed to `bridge.requests.jsonl.1`, replacing the older one, so at most two generations (32 MiB) are kept. A
-`lane.json` rendered before the record existed names no file: the bridge, the live probe, doctor and lane removal all
-accept it, the bridge then writes no record and says so once in its log, and the hourly refresh's render adds the name.
+`lane.json` rendered before the record existed names no file: the bridge, the live probe and lane removal accept it,
+and the bridge then writes no record and says so once in its log. ccrc reads such a `lane.json` as stale, as one from
+before the bridge, so `ccrc update` re-renders it (its codex-lanes step), as do a lane start and `ccrc doctor --fix`;
+until then doctor FAILs it as a `lane.json` that disagrees with its roster row, never as a record file.
 Each row holds, in order: `v` (1), `at` and `postAt` (UTC milliseconds when the answer ended and when the request
 started), `session` (the session id when it has the shape of one, at most 128 characters, else null), `subagent` (true
 for a subagent's request, never its id), `message` and `post` (the client message's number in this process, and the
@@ -2619,10 +2621,13 @@ request's index within it: continuations and retries count on), `route` and `mod
 400 that started a fallback), `served`, `effort`, the four token counts, `firstOutputMs` and `totalMs` (whole
 milliseconds, from the same instants the `parity` histograms bucket), `inputTransformations`, `replay` (the message's
 reasoning-store lookups, on its first request only), `markers`, `fallback` and, when set, `turnState`. A field the
-answer did not reach (a non-2xx, a stream that broke) is null. It never holds conversation text, a tool name, the
+answer did not reach is null, and so are `served`, the token counts, `inputTransformations`, `firstOutputMs` and
+`totalMs` of every answer the `parity` row counted no response for (a non-2xx, a stream that broke, even one that
+released output first), so the `parity` histograms rebuilt from the rows are the stats file's own. It never holds conversation text, a tool name, the
 prompt cache key, a turn-state value, a header value other than the session id, an account id or a token. A row that
 cannot be written (a full disk, a directory in the file's place) never fails the request: the stats file counts it as
-the outcome `requests:write-failed`, and the log says so once per bridge process.
+the outcome `requests:write-failed` every time, and the log says so once per bridge process, whatever the cause,
+naming the first one's (`record-requests write-failed eisdir`, say).
 
 **A restart cuts long streams.** The bridge runs under the shim's unit, so a restart (a rollout's install restarts a
 running bridge whose bytes are stale; a switch stops it) is a stop, then a start. On the stop the bridge closes its

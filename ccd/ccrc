@@ -13803,7 +13803,7 @@ _codex_row() {   # <id>
 # single-definition forbids, and its only input — `id` — IS compared.
 # `bridge`, `upstream` and `bridgeFiles` (codex-bridge Stage 2, Task 10) are
 # checked for PRESENCE too, for the same reason and one more: a lane.json
-# rendered before the bridge existed lacks them, reads `stale`, and is
+# rendered before the bridge (or before its request record, D-8619) lacks them, reads `stale`, and is
 # re-rendered by the one writer. Whether the words MATCH the roster is
 # `materialise --check`'s question (the doctor's), the one comparison: this
 # file reads the roster's codex row through `_codex_row`, which never reads
@@ -13826,7 +13826,7 @@ _codex_lane_json_state() {   # <id>
        and (.units.shim | type) == "string" and (.units.shim | length) > 0
        and (.bridge | type) == "string" and (.upstream | type) == "string"
        and (.bridgeFiles | type) == "object"
-       and all(.bridgeFiles.stats, .bridgeFiles.store, .bridgeFiles.recordings, (if .bridgeFiles | has("requests") then .bridgeFiles.requests else "-" end);
+       and all(.bridgeFiles.stats, .bridgeFiles.store, .bridgeFiles.recordings, .bridgeFiles.requests;
                type == "string" and length > 0))' "$lane" >/dev/null 2>&1; then
     printf 'current\n'
   else
