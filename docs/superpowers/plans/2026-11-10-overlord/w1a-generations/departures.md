@@ -125,7 +125,8 @@ the programme's ledger. The plan's own decisions (its "Deviations found" list) s
   boundary, never an interleaving. Measured: committing the cursor before the mint's transaction turns G8 red on seed 3.
 - **sim-real-store** — the generations live in an in-memory coord.db migrated by `MIGRATIONS`, with `continuity` live;
   the lane mints and ends the coordinator's generations from the reported starts, and every machine step goes through
-  `stepGeneration` with its compare-and-set. Each seed closes the one before it.
+  `stepGeneration` with its compare-and-set. One database serves every seed (migrated once, its day's tables emptied
+  per seed): a database per seed churned native memory past the test slice's cap over `CCRC_SIM=full`'s 5,000 seeds.
 - **sim-overlord-mints** — W1a's lane cannot tell the Overlord's role (no designation before W1), so the scenario mints the
   Overlord's generations from its reported starts through the same `mintGeneration`, in the lane's order, standing in for
   W1's designation.

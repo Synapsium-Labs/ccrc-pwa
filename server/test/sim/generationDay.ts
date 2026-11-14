@@ -57,9 +57,25 @@ const NA = { kind: 'not-applicable' } as const;
 
 /** `sim_fault.left` while no crash is placed inside a pass. */
 const DISARMED = 1_000_000_000;
-/** The last seed's database: seeds run one after another (`simulate` refuses a second in flight), so each setup closes
- *  the one before rather than leave it for the collector. */
-let previousDb: DatabaseSync | null = null;
+/** ONE database for every seed, migrated once: seeds run one after another (`simulate` refuses a second in flight), and
+ *  each setup empties the tables the day writes. A database per seed churned native memory the collector does not see,
+ *  past the test slice's cap over 5,000 seeds. A crash inside a pass is a write that aborts, and every write after it:
+ *  `sim_fault.left` counts the writes to the generations and the cursor down. */
+let simDb: DatabaseSync | null = null;
+function dayDb(): DatabaseSync {
+  if (simDb === null) {
+    simDb = new DatabaseSync(':memory:');
+    for (const m of MIGRATIONS) simDb.exec(m);
+    simDb.exec(`PRAGMA user_version = ${MIGRATIONS.length}`);
+    simDb.exec(`CREATE TABLE sim_fault (left INTEGER NOT NULL); INSERT INTO sim_fault VALUES (${DISARMED});
+      ${['INSERT', 'UPDATE'].flatMap((op) => ['continuity_generations', 'continuity_cursor'].map((t) => `CREATE TRIGGER sim_fault_${op}_${t}
+        BEFORE ${op} ON ${t} BEGIN UPDATE sim_fault SET left = left - 1;
+        SELECT RAISE(ABORT, 'sim crash') WHERE (SELECT left FROM sim_fault) < 0; END;`)).join('\n')}`);
+  }
+  simDb.exec(`UPDATE sim_fault SET left = ${DISARMED}; DELETE FROM continuity_generations; DELETE FROM continuity_cursor;
+    DELETE FROM continuity_starts; DELETE FROM runs; DELETE FROM programs;`);
+  return simDb;
+}
 interface Facts {
   ctx: number; turns: number; compactions: number; idleSince: number | null; wave: boolean; readers: number;
 }
@@ -73,18 +89,10 @@ export function generationDay(mods: GenDayModules): Scenario<GenDayEdge> {
       const between = (lo: number, hi: number): number => lo + entropy.below(hi - lo + 1);
       const wall = (): number => server.clock.wall();
 
-      // ---- DURABLE: a real coord.db, its generations written only through the store and the lane, which survive a
-      // crash. The coordinator claims an open work run, so `roleOf` reads it as one; the `continuity` row is live, so a
-      // walk moves `state`. A crash inside a pass is a write that aborts and every write after it (`sim_fault`).
-      previousDb?.close();
-      const db = new DatabaseSync(':memory:');
-      previousDb = db;
-      for (const m of MIGRATIONS) db.exec(m);
-      db.exec(`PRAGMA user_version = ${MIGRATIONS.length}`);
-      db.exec(`CREATE TABLE sim_fault (left INTEGER NOT NULL); INSERT INTO sim_fault VALUES (${DISARMED});
-        ${['INSERT', 'UPDATE'].flatMap((op) => ['continuity_generations', 'continuity_cursor'].map((t) => `CREATE TRIGGER sim_fault_${op}_${t}
-          BEFORE ${op} ON ${t} BEGIN UPDATE sim_fault SET left = left - 1;
-          SELECT RAISE(ABORT, 'sim crash') WHERE (SELECT left FROM sim_fault) < 0; END;`)).join('\n')}`);
+      // ---- DURABLE: a real coord.db (`dayDb`), its generations written only through the store and the lane, which
+      // survive a crash. The coordinator claims an open work run, so `roleOf` reads it as one; the `continuity` row is
+      // live, so a walk moves `state`.
+      const db = dayDb();
       const store = new CoordStore(db);
       db.exec("INSERT INTO programs (slug, title, createdAt, state) VALUES ('prog-a', 'P', 0, 'active')");
       db.prepare("INSERT INTO runs (program, wave, waveOf, project, state, claimedBy, openedAt) VALUES ('prog-a', 1, 9, 'project-a', 'working', ?, 0)").run(COORD);
