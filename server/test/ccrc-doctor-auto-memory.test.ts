@@ -109,6 +109,29 @@ describe('doctor auto-memory (Task 7: lists, never reads, never deletes)', () =>
     }
   });
 
+  it('a memory LINK it cannot follow is WARN unmeasured; a link to nothing is skipped; an unsearchable config dir is unmeasured (review 2031 F3)', () => {
+    // `memory` is normally a symlink to ~/.ccrc/memory/<slug> (the memory store): its target's parent unsearchable is EACCES.
+    const home = box('ccrc-doctor-automem-link-');
+    const store = join(home, '.ccrc', 'memory');
+    mkdirSync(join(store, '-w-project-a'), { recursive: true });
+    writeFileSync(join(store, '-w-project-a', 'MEMORY.md'), 'remember\n');
+    mkdirSync(join(home, '.claude-lane-a', 'projects', '-w-project-a'), { recursive: true });
+    symlinkSync(join(store, '-w-project-a'), join(home, '.claude-lane-a', 'projects', '-w-project-a', 'memory'));
+    mkdirSync(join(home, '.claude-lane-a', 'projects', '-w-project-b'), { recursive: true });
+    symlinkSync(join(store, '-w-project-gone'), join(home, '.claude-lane-a', 'projects', '-w-project-b', 'memory'));   // dangling
+    expect(check(home).line).toBe('WARN auto-memory: 1 auto-memory directory holds files: lane-a/projects/-w-project-a/memory');
+    chmodSync(store, 0o000);
+    try {
+      expect(check(home).line).toBe('WARN auto-memory: lane-a/projects/-w-project-a/memory could not be listed, so the auto-memory directories are unmeasured');
+    } finally { chmodSync(store, 0o755); }
+    const cfg = join(home, '.claude-lane-b');
+    mkdirSync(cfg, { recursive: true });
+    chmodSync(cfg, 0o600);
+    try {
+      expect(check(home).line).toBe('WARN auto-memory: lane-b could not be listed, so the auto-memory directories are unmeasured');
+    } finally { chmodSync(cfg, 0o755); }
+  });
+
   it('a walk past its deadline is WARN unmeasured, never PASS', () => {
     const home = box('ccrc-doctor-automem-slow-');
     memory(home, '.claude-lane-a', '-w-project-a', ['MEMORY.md']);
