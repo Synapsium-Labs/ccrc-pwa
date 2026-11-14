@@ -474,7 +474,7 @@ export function registerContinuityRoutes(app: FastifyInstance, deps: ContinuityR
    * otherwise (`bookOf`), and the round's verdict is `roundVerdict`'s. `200 { ok, roundId, verdict, grades: [{ id, grade }],
    * book }`; what a question expected is never answered. `probe-none-open` 409 when no round of the caller's carries the id
    * (another session's round is invisible), `probe-closed` 409 when it was answered already, `bad-request` 400 for an answer
-   * id the round does not ask, a repeated id, or an answer over `PROBE_ANSWER_MAX_CHARS`. The answer is stored masked.
+   * id the round does not ask, a repeated id, or an answer over `PROBE_ANSWER_MAX_CHARS`. The answer is graded and stored masked.
    */
   app.post('/api/sessions/:id/probe', {
     onRequest: async (req: FastifyRequest, reply: FastifyReply) => {
@@ -507,15 +507,16 @@ export function registerContinuityRoutes(app: FastifyInstance, deps: ContinuityR
     if (!round.ok) return refuseRoute(reply, 'unmeasured', { detail: 'could not check: continuity_probes could not be read' });
     const first = round.rows[0];
     if (first === undefined) return refuseRoute(reply, PROBE_REFUSALS.noneOpen, { detail: `no probe round of yours is ${roundId}` });
-    if (round.rows.some((r) => r.answeredAt !== null)) return refuseRoute(reply, PROBE_REFUSALS.closed, { detail: `round ${roundId} was answered already` });
     const asked = new Set(round.rows.map((r) => r.qid));
     const stray = [...answers.keys()].filter((q) => !asked.has(q));
     if (stray.length > 0) return refuseRoute(reply, 'bad-request', { detail: `round ${roundId} asks no ${stray.join(', ')}` });
-    const graded = gradeAnswers(round.rows.map((r) => maskedQuestion(r, mask)), answers);
+    // The answer is masked as the question is, so one copied from a masked choice and one given whole from memory both match.
+    const graded = gradeAnswers(round.rows.map((r) => maskedQuestion(r, mask)), new Map([...answers].map(([q, a]) => [q, mask(a)])));
     const last = coord.lastContinuityRead(id);
     const lastRead: LastRead = last.ok ? { kind: 'read', at: last.at } : { kind: 'unmeasured' };
     const book = bookOf(lastRead, first.askedAt);
-    const w = coord.answerRound(roundId, id, graded.map((g) => ({ ...g, answer: g.answer === null ? null : mask(g.answer) })), book, deps.wall());
+    // `answerRound` compares and sets on every question being unanswered: a round answered already is refused there.
+    const w = coord.answerRound(roundId, id, graded, book, deps.wall());
     if (!w.ok) {
       return w.kind === 'closed' ? refuseRoute(reply, PROBE_REFUSALS.closed, { detail: `round ${roundId} was answered already` })
         : refuseRoute(reply, 'write-failed', { detail: 'continuity_probes could not be written' });

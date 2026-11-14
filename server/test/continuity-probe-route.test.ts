@@ -162,6 +162,14 @@ describe('GET: the open round, without what it expects', () => {
     const res = await post(app, answers(r, [['p1', masked[0]!]]));
     expect(res.json()).toMatchObject({ verdict: 'passed', grades: [{ id: 'p1', grade: 'pass' }] });
     expect(JSON.stringify(stored(r))).not.toContain(SECRET.slice(-40));
+    // An answer given whole from memory, the secret in it, is masked as the question is: it passes, and is stored masked.
+    const r2 = round(mint(), { roundId: 'r-raw', questions: [
+      { qid: 'p1', cls: 'continuation', question: 'What does your note 61 say comes next?',
+        choices: [`rotate ${SECRET}`, 'ask the operator', 'dispatch the review run'], expected: `rotate ${SECRET}` },
+    ] });
+    expect((await post(app, answers(r2, [['p1', `rotate ${SECRET}`]]))).json().verdict).toBe('passed');
+    expect(JSON.stringify(stored(r2))).not.toContain(SECRET.slice(-40));
+    expect(stored(r2)[0]!.answer).toContain(SECRET_MASK);
   });
 
   it('a long round is paged under the tool result cut, every page and every question whole across the pages', async () => {
@@ -279,5 +287,53 @@ describe('closed-book, recorded honestly (Review Focus 3)', () => {
     time.advance(5_000);
     expect((await app.inject({ method: 'GET', url: `/api/sessions/${OTHER}/notes?${new URLSearchParams({ byId: OTHER, byUuid: OTHER_UUID })}`, headers: headers() })).statusCode).toBe(200);
     expect((await post(app, answers(r, RIGHT))).json().book).toBe('unmeasured');
+  });
+});
+
+describe('the store: one open round, answered once, reads stamped (each guard on its own)', () => {
+  it('openRound refuses an empty round and a second open round of one generation, and opens the next once the first is answered', async () => {
+    app = await open();
+    const g = mint();
+    expect(c().openRound({ roundId: 'r-empty', sessionId: ID, generationId: g.id, kind: 'start', questions: [], snapshotId: null,
+      depthTokens: null, modelClass: null, roundUnmeasured: false, askedAt: now() })).toEqual({ ok: false, kind: 'empty' });
+    const r1 = round(g, { roundId: 'r-one' });
+    expect(c().openRound({ roundId: 'r-two', sessionId: ID, generationId: g.id, kind: 'spot', questions: [QUESTIONS[0]!], snapshotId: null,
+      depthTokens: 60_000, modelClass: 'opus', roundUnmeasured: false, askedAt: now() })).toEqual({ ok: false, kind: 'open' });
+    expect(c().answerRound(r1, ID, QUESTIONS.map((q) => ({ qid: q.qid, answer: 'x', grade: 'fail' as const })), 'unmeasured', now())).toEqual({ ok: true });
+    expect(round(g, { roundId: 'r-three' })).toBe('r-three');
+  });
+
+  it('answerRound refuses a round answered already, a list that is not every question, and another session\'s round', async () => {
+    app = await open();
+    const r = round(mint());
+    const all = QUESTIONS.map((q) => ({ qid: q.qid, answer: 'x', grade: 'pass' as const }));
+    expect(c().answerRound(r, OTHER, all, 'unmeasured', now())).toEqual({ ok: false, kind: 'closed' });
+    expect(c().answerRound(r, ID, all.slice(0, 2), 'unmeasured', now())).toEqual({ ok: false, kind: 'closed' });
+    // Every question counted, but one id the round does not ask: nothing is written.
+    expect(c().answerRound(r, ID, [...all.slice(0, 2), { qid: 'p9', answer: 'x', grade: 'pass' }], 'unmeasured', now())).toEqual({ ok: false, kind: 'closed' });
+    expect(stored(r).every((x) => x.answeredAt === null)).toBe(true);
+    expect(c().answerRound(r, ID, all, 'open', now())).toEqual({ ok: true });
+    expect(c().answerRound(r, ID, all, 'open', now())).toEqual({ ok: false, kind: 'closed' });
+  });
+
+  it('a read stamp keeps the newest time per door, and the last read is the newest of both doors', async () => {
+    app = await open();
+    expect(c().lastContinuityRead(ID)).toEqual({ ok: true, at: null });
+    c().stampContinuityRead(ID, 'card', 500);
+    c().stampContinuityRead(ID, 'card', 300);
+    expect(c().lastContinuityRead(ID)).toEqual({ ok: true, at: 500 });
+    c().stampContinuityRead(ID, 'notes', 700);
+    expect(c().lastContinuityRead(ID)).toEqual({ ok: true, at: 700 });
+    expect(c().lastContinuityRead(OTHER)).toEqual({ ok: true, at: null });
+  });
+
+  it('a row this build cannot read fails the read whole, never a partial list', async () => {
+    app = await open();
+    const g = mint();
+    const r = round(g);
+    c().db.prepare("UPDATE continuity_probes SET grade = 'maybe' WHERE qid = 'p2'").run();
+    for (const read of [c().probeRows(g.id), c().openProbeRound(ID), c().probeRoundRows(r, ID)]) {
+      expect(read.ok).toBe(false);
+    }
   });
 });

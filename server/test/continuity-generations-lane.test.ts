@@ -1051,6 +1051,8 @@ describe('the probes (the probes piece, PR B, Tasks 5 and 6)', () => {
       return r.id;
     };
     note('an old thread', g.id, g.enteredAt - 1);
+    // A note written since, but not by this generation (no generation recorded), is not this generation's row either.
+    note('a stray thread', null, f.t.ports.clock.wall());
     const mine = [note('merge wave 2', g.id, f.t.ports.clock.wall()), note('ask the operator', g.id, f.t.ports.clock.wall() + 1),
       note('dispatch the review', g.id, f.t.ports.clock.wall() + 2)];
     const mailBefore = (f.s.db.prepare('SELECT count(*) AS n FROM mail').get() as { n: number }).n;
@@ -1063,6 +1065,7 @@ describe('the probes (the probes piece, PR B, Tasks 5 and 6)', () => {
     if (asked !== undefined) expect(ids).toContain(asked);
     else expect((JSON.parse(q.choices) as string[]).every((c) => ids.includes(c)), q.choices).toBe(true);
     expect(q.choices).not.toContain('an old thread');
+    expect(q.choices ?? '').not.toContain('a stray thread');
     expect((f.s.db.prepare('SELECT count(*) AS n FROM mail').get() as { n: number }).n).toBe(mailBefore);
     // Crossing again before an answer opens nothing more.
     expect(f.pass(at(f, usage(120_000, 1_000_000), turn('idle')))).toMatchObject({ roundsOpened: 0 });

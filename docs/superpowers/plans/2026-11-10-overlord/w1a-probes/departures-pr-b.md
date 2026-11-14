@@ -8,7 +8,10 @@ ledger.
 
 - **spot-mail-waits-on-the-renewal-act** (the coordinator's ruling on this PR's ask). Task 6 says a spot round queues one system
   mail. The brief says nothing here acts on a session, and the lane's import pin allows nothing that sends. The coordinator
-  ruled: no mail in this PR. A spot round is recorded only; the announcement comes with the renewal act's nudges. The lane still
+  ruled (ask 415): no mail in this PR. The lane decides a spot probe is due and records the round, in shadow and live alike, so
+  the counts show what would be sent; the door, the table and the reader are built in full, so a session can answer a round it
+  was asked by hand. The renewal-act piece adds the mail, beside the act that sends the ask-handover mail, when it lifts the
+  continuity gate, since it owns the lane's acts. The lane still
   imports nothing that sends, and its import pin grows by four modules, none of which sends (`shared/continuity-card.js`,
   `./card.js`, `./probes.js`, `./probeSchedule.js`).
 
@@ -32,8 +35,8 @@ ledger.
   (`cardPages`), so a round with long choices stays under the measured tool result cut. Each question and its choices are one
   untrusted block, the choices as JSON strings, so a newline inside one never reads as another choice (review 1999 F11).
 - **mask-at-the-door** (notes review 2039 F12). Every question, choice and expected answer is masked once with the card's
-  masker before it is served or graded, so an answer copied from a masked choice passes and no secret goes out. The answer is
-  stored masked too.
+  masker before it is served or graded, and so is the answer, so an answer copied from a masked choice and one given whole from
+  memory both pass, and no secret goes out. The answer is stored masked.
 - **missing-answer-fails**. A question left out of the answer list grades `fail`. An answer id the round does not ask, an id
   given twice, or an answer longer than 2,000 characters is `bad-request`.
 - **probe-refusal-statuses**. `probe-none-open` and `probe-closed` are both 409: a state of the world, as `note-not-asked`.
