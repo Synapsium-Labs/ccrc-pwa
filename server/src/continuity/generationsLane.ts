@@ -1,7 +1,10 @@
 // L4 delivery, context C3 (Session Conversation): the generations lane (Overlord spec §3.3.11, H12, Table 11.1c "The renewal
-// lane"; W1a, the generations piece), in shadow. It decides nothing: `startVerdict` (generationStart.ts) decides what a start
-// does, `planStartBatch` which starts a pass judges and where the cursor moves, `firstMintOf` a coordinator's first
-// generation, `roleOf` the role, `renewalDue` whether a generation is due and `observeTime` the observed clock. It reads the
+// lane"; W1a, the generations piece), in shadow. Its rules are decided elsewhere: `startVerdict` (generationStart.ts) decides
+// what a start does, `planStartBatch` which starts a pass judges and where the cursor moves, `firstMintOf` a coordinator's
+// first generation, `roleOf` the role, `renewalDue` whether a generation is due and `observeTime` the observed clock. Three
+// small policies of its own bookkeeping stay here, each said where it sits (review 2014 F7): which identities a first mint
+// is tried for (an open coordinator with no generation), that the cursor rides the last judged start's mint, and the
+// memo of held starts (THE MEMO'S POLICY, below). It reads the
 // starts after its cursor, mints and ends generations, advances each live generation's accumulator and records the
 // `renewalDue` answer, all through the store's compare-and-set writes, and it is the only writer of
 // `continuity_generations` and `continuity_cursor`.
@@ -176,10 +179,14 @@ export function generationsPass(deps: GenerationsDeps, input: GenerationsInput):
       const heldNow = new Set<number>();
       let openCoordinators: ReadonlySet<string> | 'unmeasured';
       try { openCoordinators = new Set(coord.openCoordinatorIds()); } catch { openCoordinators = 'unmeasured'; }
+      // A child's run kind; a run row that cannot be read, or whose read throws (a malformed row), is unmeasured for this one
+      // reading (review 2014 F1, as R4 for the wave read), so it never stalls the cursor or step THREE.
       const runKind = (child: ChildMark): RunKind | 'unmeasured' => {
         if (child.kind !== 'child') return 'unmeasured';
-        const r = coord.run(child.runId);
-        return r.ok && r.run !== null ? r.run.kind : 'unmeasured';
+        try {
+          const r = coord.run(child.runId);
+          return r.ok && r.run !== null ? r.run.kind : 'unmeasured';
+        } catch { return 'unmeasured'; }
       };
       const roleFor = (sessionId: string): RoleReading => {
         const child: ChildMark = registry.get(sessionId)?.child ?? { kind: 'unreadable' };
@@ -239,14 +246,19 @@ export function generationsPass(deps: GenerationsDeps, input: GenerationsInput):
           const mine = coord.startsOf(id, FIRST_MINT_LOOKBACK);
           if (!mine.ok) { fail('starts', mine.detail, `the batch ran, and ${id}'s first generation is not minted`); continue; }
           const first = firstMintOf(mine.rows, passed.lastStartId, registryOf(id), role, hold);
-          if (first.kind === 'held') { held += 1; if (first.why === 'read') heldNow.add(first.start.id); continue; }
+          for (const sid of first.readHolds) heldNow.add(sid);
+          if (first.kind === 'held') { held += 1; continue; }
           if (first.kind === 'none') continue;
           const w = coord.mintGeneration(mintInput(first.start, first.verdict), null, live, null);
           if (w.ok) { minted += 1; firstMinted += 1; } else if (w.kind === 'superseded') superseded += 1;
           else { stopped = true; break; }
         }
       }
-      // This process has now held these once; one it no longer holds is forgotten (review 2006 R3).
+      // THE MEMO'S POLICY (review 2006 R3; review 2014 F2 and F7), in L4 because it is the lane's own bookkeeping across
+      // passes: after a pass whose batch and first mints ran, the memo is exactly the starts that pass held for a failed
+      // read, in the batch (`heldForRead`) or in a first-mint walk, plus every start a first-mint walk passed because the
+      // memo already held it (`readHolds`), since those stay below the cursor and are walked again. A start the batch
+      // released is past the cursor and is forgotten; a pass whose reads failed before the batch leaves the memo as it was.
       deps.retried.clear();
       for (const id of heldNow) deps.retried.add(id);
     }

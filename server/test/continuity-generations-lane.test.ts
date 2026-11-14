@@ -144,6 +144,20 @@ describe('the pass mints and ends generations from the starts (Task 2)', () => {
     expect(all(f.s)).toEqual([]);
   });
 
+  it('a child\'s run row that throws when read is unmeasured for that one reading: the start is judged, the cursor moves and the due is recorded (review 2014 F1)', () => {
+    const f = fixture();
+    f.start('startup', U1);
+    f.pass();
+    f.s.db.prepare("INSERT INTO runs (program, wave, waveOf, project, state, claimedBy, openedAt, sessionId, prLineage) VALUES ('prog-a', 1, 2, 'project-a', 'working', 'lane-b-other', 1, ?, '{not json')").run(WORKER);
+    const runId = (f.s.db.prepare('SELECT max(id) AS id FROM runs').get() as { id: number }).id;
+    f.registry.push({ id: WORKER, uuid: U3, lane: 'lane-a', child: { kind: 'child', runId } as ChildMark });
+    f.start('startup', U3, undefined, WORKER);
+    f.s.db.exec('UPDATE continuity_generations SET blind = NULL');
+    expect(f.pass()).toMatchObject({ read: 1, minted: 0, skipped: { undecided: 1 } });
+    expect(f.s.generationsCursor(GENERATIONS_LANE)).toEqual({ ok: true, lastStartId: 2 });
+    expect(live(f.s)[0]!.blind).not.toBeNull();
+  });
+
   it('an unmeasured claim read (undecided coordinator-or-plain) mints nothing, and is counted and logged once', () => {
     const f = fixture();
     f.s.openCoordinatorIds = () => { throw new Error('runs unreadable'); };
@@ -201,6 +215,27 @@ describe('the pass mints and ends generations from the starts (Task 2)', () => {
     setRegistry(f, U2);
     expect(f.pass()).toMatchObject({ firstMinted: 1 });
     expect(live(f.s).map((g) => [g.n, g.startId])).toEqual([[1, 2]]);
+  });
+
+  it('two read-held starts above a minting startup do not take turns being held for ever: the walk reaches the startup (review 2014 F2)', () => {
+    const f = fixture();
+    closeRuns(f.s);
+    f.start('startup', U1);
+    setRegistry(f, U2);
+    f.start('clear', U2);
+    f.start('resume', U2);
+    // No run: all three are skipped undecided, and the cursor passes them.
+    expect(f.pass()).toMatchObject({ skipped: { undecided: 3 } });
+    f.t.advance(START_RETRY_MS + 30_000);
+    f.s.db.prepare("INSERT INTO runs (program, wave, waveOf, project, state, claimedBy, openedAt) VALUES ('prog-a', 2, 2, 'project-a', 'working', ?, 2)").run(COORD);
+    f.registry[0] = { ...f.registry[0]!, uuid: null };
+    // Each aged start is held once by this process, then passed; the startup needs no uuid and mints.
+    expect(f.pass()).toMatchObject({ firstMinted: 0, held: 1 });
+    f.t.advance(30_000);
+    expect(f.pass()).toMatchObject({ firstMinted: 0, held: 1 });
+    f.t.advance(30_000);
+    expect(f.pass()).toMatchObject({ firstMinted: 1, held: 0 });
+    expect(live(f.s).map((g) => [g.n, g.startId, g.lane])).toEqual([[1, 1, null]]);
   });
 
   it('a start whose registry uuid could not be read is held, the cursor stays at it, and a later pass mints it (review 2003 F2)', () => {

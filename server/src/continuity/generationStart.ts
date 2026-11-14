@@ -97,8 +97,10 @@ export interface StartBatchPlan<S extends PlanStart> {
 /** Which starts after the cursor (`from`) a pass judges. In their sessions' own order: a held start waits (`startHold`),
  *  and so does every start after it, unless that start has itself waited out `START_RETRY_MS` (review 2006 R8: no start
  *  waits longer than the bound for another's hold). The cursor moves past every start when none waits, else to just below
- *  the lowest waiting id, so a waiting start is read again; one the pass judged above it is judged again next pass and
- *  answers as before (a mint already written is superseded). */
+ *  the lowest waiting id, so a waiting start is read again. A start the pass judged above that point is judged again next
+ *  pass, and its answer may differ (review 2014 F4): it never mints twice (a mint already written answers `superseded`),
+ *  but a start skipped `undecided` can mint once its role reads, and a minted one can answer `late`; the pass's counts
+ *  count it again each time, for as long as the hold stands. */
 export function planStartBatch<S extends PlanStart>(starts: readonly S[], from: number,
   registryOf: (sessionId: string) => StartFacts['registry'], at: HoldClock): StartBatchPlan<S> {
   const ordered = [...starts].sort(startBefore);
@@ -121,28 +123,35 @@ export function planStartBatch<S extends PlanStart>(starts: readonly S[], from: 
 }
 
 /** A coordinator's first generation (review 2003 F2, slug coordinator-first-mint): the start it mints from, a start that
- *  stops the walk because it is held, or none. */
-export type FirstMint<S extends PlanStart> =
+ *  stops the walk because it is held, or none. `readHolds` names every start the walk reached whose skip a failed read
+ *  gave, whether it held it now or passed it because this process had held it before (review 2014 F2): the lane keeps
+ *  them all in its memo, so two such starts cannot take turns being held for ever. */
+export type FirstMint<S extends PlanStart> = { readonly readHolds: readonly number[] } & (
   | { readonly kind: 'mint'; readonly start: S; readonly verdict: Extract<StartVerdict, { mint: true }> }
   | { readonly kind: 'held'; readonly start: S; readonly why: StartHoldWhy }
-  | { readonly kind: 'none' };
+  | { readonly kind: 'none' });
 
 /** An identity with no generation mints n=1 from its newest start that mints, among the starts the cursor has passed
- *  (`passed`; one above it is the batch's). The walk runs newest first and STOPS at a start that is held (review 2006 R2):
- *  it would read on a later pass, so falling through to an older conversation would mint from the wrong one for good. */
+ *  (`passed`). The walk runs newest first and STOPS at a start that is held (review 2006 R2): it may read on a later pass,
+ *  so falling through to an older conversation now could mint from the wrong one. A start above the cursor that waits in
+ *  the batch does not stop the walk (review 2014 F3): an older start may mint n=1 with no account, and the waiting start,
+ *  once judged, mints n=2 and ends n=1 `unmeasured`, so nothing is lost for good. */
 export function firstMintOf<S extends PlanStart & { readonly rowIncarnation: string | null }>(starts: readonly S[], passed: number,
   registry: StartFacts['registry'], role: RoleReading, at: HoldClock): FirstMint<S> {
   const mine = starts.filter((s) => s.id <= passed).sort((a, b) => startBefore(b, a));
+  const readHolds: number[] = [];
   for (const s of mine) {
-    const why = startHold(startReadSkip({ source: s.source, uuid: s.uuid, registry }), s, at);
-    if (why !== null) return { kind: 'held', start: s, why };
+    const skip = startReadSkip({ source: s.source, uuid: s.uuid, registry });
+    if (skip !== null && RETRIED_SKIPS.has(skip)) readHolds.push(s.id);
+    const why = startHold(skip, s, at);
+    if (why !== null) return { kind: 'held', start: s, why, readHolds };
     const verdict = startVerdict({
       source: s.source, uuid: s.uuid, reportedAt: s.reportedAt, rowIncarnation: s.rowIncarnation, registry, role,
       live: null, newest: newestStart(s, starts),
     });
-    if (verdict.mint) return { kind: 'mint', start: s, verdict };
+    if (verdict.mint) return { kind: 'mint', start: s, verdict, readHolds };
   }
-  return { kind: 'none' };
+  return { kind: 'none', readHolds };
 }
 
 /** A long-lived role is one `renewalDue` has rows for (Table 3.3.11b): every other role's wave is its renewal. */

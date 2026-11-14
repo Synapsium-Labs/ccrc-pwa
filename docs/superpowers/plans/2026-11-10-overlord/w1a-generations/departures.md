@@ -49,7 +49,9 @@ the programme's ledger. The plan's own decisions (its "Deviations found" list) s
   four stands), and no stand-in value is left for a column that cannot be null. A read that throws (a claimed run whose
   row cannot be hydrated, such as a malformed `prLineage`) answers `ok: false` with the error, as the continuity adapter's
   read did before the move (review 2006 R4): the wave reading is unmeasured and named in `blind`, and the pass, its later
-  generations and its log go on. Each coordinator generation still costs two `run(id)` hydrations a pass where it needs
+  generations and its log go on. The lane's other run read, a child's run kind for its role (`runKind`), is guarded the
+  same way (review 2014 F1): a throw makes that one reading unmeasured (the role reads undecided), so a malformed run row
+  never stalls the cursor or step THREE. Each coordinator generation still costs two `run(id)` hydrations a pass where it needs
   only kind, state and programme (review 2006 N8): left, since a narrower read would be a new store member for one caller.
 
 ## The pass mints and ends (Task 2)
@@ -72,9 +74,14 @@ the programme's ledger. The plan's own decisions (its "Deviations found" list) s
   role still reads undecided, so the batch skips it. On every pass, an identity that reads as a coordinator (it claims an
   open run) and has no generation mints n=1 from its newest start that mints, among the starts the cursor has passed (at
   most `FIRST_MINT_LOOKBACK`, 20, looked through; a start above the cursor is the batch's to judge). The walk is
-  `firstMintOf` (L1) and runs newest first; it STOPS at a start `startHold` holds (review 2006 R2), so a start that would
-  read on a later pass is never passed over for an older conversation, which would then be n=1 for good. Past the bound
-  (and once this process has held it) the start no longer holds, and the walk falls through as the batch does. Its account
+  `firstMintOf` (L1) and runs newest first; it STOPS at a start `startHold` holds (review 2006 R2), so a start at or below
+  the cursor that may read on a later pass is not passed over for an older conversation. Past the bound (and once this
+  process has held it) the start no longer holds, and the walk falls through as the batch does. A start ABOVE the cursor
+  that waits in the batch does not stop the walk (review 2014 F3): an older start may then mint n=1 with no account, and
+  the waiting start, once judged, mints n=2 and ends n=1 `unmeasured`; nothing is lost for good. The walk names every
+  start a failed read skipped that it reached, held now or passed because the memo already held it (`readHolds`), and the
+  lane keeps them all in its memo (review 2014 F2), so two such starts above a minting start cannot take turns being held
+  for ever while the uuid stays unreadable. Its account
   is recorded only when the start is the identity's newest as the account goes (`newestStart`, slug newest-start-trusted).
   No cursor rides this mint.
 - **start-held-on-a-failed-read** (review 2003 F2; review 2006 R3 and R8) — a start skipped as `unregistered` or
@@ -82,7 +89,10 @@ the programme's ledger. The plan's own decisions (its "Deviations found" list) s
   it while the server received it less than `START_RETRY_MS` (five lane periods, 150 s) ago. The batch stops at the first
   held start: it and every start after it wait for a later pass, and the cursor stays below the lowest id among them; past
   the bound the start is skipped, counted and logged, and the starts behind it go on in the same pass. Starts judged in the
-  same pass above the held one are judged again next pass (a mint answers `superseded`, a skip is counted again).
+  same pass above the held one are judged again next pass, and the answer may differ (review 2014 F4): never a second mint
+  (a mint already written answers `superseded`), but a start skipped `undecided` can mint once its role reads, and a minted
+  one can answer `late`. The pass's counts (`read`, the skips, `superseded`) count such a start again on every pass while
+  the hold stands, so the pass line over-reports for up to about five passes.
   - **The bound is wall time, by ruling (review 2006 R3).** Spec §11.5 allows the wall clock for a timer whose expiry
     permits nothing, and giving up on a start permits nothing: it only stops waiting for a registry read. Two guards keep
     the wall clock from costing a start its retry. A clock that reads earlier than the start's receipt reads as the receipt
@@ -91,6 +101,14 @@ the programme's ledger. The plan's own decisions (its "Deviations found" list) s
     the watcher's own set), and a start past the bound that this process has not held yet is held once more. So a server
     restart, an update's supervisor sweep (when half-written rows are likeliest) or a slow tick never skips a start with no
     retry. The memo is not durable, and losing it only adds a retry.
+  - **The memo's policy, in words (review 2014 F7).** It is the lane's own bookkeeping across passes, so it stays in L4,
+    said where it sits (THE MEMO'S POLICY in `generationsLane.ts`): after a pass whose batch and first mints ran, the memo
+    is exactly the starts that pass held for a failed read (the batch's `heldForRead`, a first-mint walk's holds) plus the
+    starts a first-mint walk passed because the memo held them (`readHolds`), since those stay below the cursor and are
+    walked again. A start the batch released is past the cursor and is forgotten. A pass whose reads failed before the
+    batch leaves the memo as it was. The other two policies left in L4 are which identities a first mint is tried for (an
+    open coordinator with no generation) and that the cursor rides the last judged start's mint (slug
+    cursor-rides-the-last-mint).
   - **No start waits longer than the bound for another start's hold (review 2006 R8).** A start behind a hold that has
     itself waited out `START_RETRY_MS` since its own receipt is judged past the hold, so a chain of holds (each a late
     resend reported before it) cannot keep it waiting. It may then mint before an older held start of the same identity,
@@ -101,7 +119,13 @@ the programme's ledger. The plan's own decisions (its "Deviations found" list) s
   `foreign-uuid` and be skipped for good. The watcher passes the listing's time (`GenerationsInput.listedAt`, the tick's
   own `listedAt`), and a start the server received at or after it is held for a pass whatever its skip; the next pass's
   listing knows it. The same hold keeps an older listing's account off a start it predates (slug newest-start-trusted's
-  second window). The simulator's stand-in registry is listed after each beat's deliveries.
+  second window). The listing time is the tick's `Date.now()`, and `receivedAt` and the pass's `now` are
+  `deps.time.clock.wall()`: in production one clock, but under a fake clock the comparison mixes the two, and no
+  watcher-level case covers it (review 2014 F6).
+  - **The simulator does not reach the holds (review 2014 F6).** Its stand-in registry is listed after each beat's
+    deliveries and always reads a uuid, so neither the listing hold nor the read hold fires in a simulated day. The holds
+    are covered by the decider's cases and mutants (`startHold`, `planStartBatch`, `firstMintOf` in
+    `generationStartSets.ts`) and by the lane's cases.
 - **batch-split-in-l1** (review 2006 R6) — which starts a pass judges, which wait and where the cursor moves
   (`planStartBatch`), the coordinator's first-mint walk (`firstMintOf`) and the "newest start" rule (`newestStart`) are
   decisions, so they are L1 in `generationStart.ts`, each with its exhaustive cases and a mutant set with a floor. The

@@ -6,7 +6,7 @@
 // for `dispatch-abandon.ts`'s reason: other programmes append at that file's foot.
 //
 // ONE ROW PER SWITCH, ONE STORE, ONE ROUTE (R-6). A lane is live when, and only when, its row's stored choice is exactly
-// `live`. The row a lane gets lives in `lane_arm_settings` (coord.db), seeded `shadow`, written only by
+// `live` and the row's gate is open (`laneArmLive`; review 2006 N1). The row a lane gets lives in `lane_arm_settings` (coord.db), seeded `shadow`, written only by
 // `POST /api/coord/lane-arm`. A switch that has a marker today imports it ONCE: the first server pass that can list the
 // registry after the upgrade sets a never-written row Live when the marker stands, journals it in the feed naming the file,
 // and from then on the marker is not read. A later lane joins by adding its name here and its seed row in a migration.
@@ -60,7 +60,9 @@ export function isLaneArmImport(v: unknown): v is LaneArmImport {
 /** One row of the card, as the server read it.
  *  - `stored`: the row's choice as this build reads it; `unknown` is a token this build does not know, `absent` a lost
  *    row, `unreadable` a read that failed (`detail` says why). None of the three arms the lane.
- *  - `live`: whether the lane is armed, which is `stored === 'live'` and nothing else.
+ *  - `live`: whether the lane is armed: `stored === 'live'` while the row's gate is open (`laneArmLive`). The card works it
+ *    out again from the same rule and its own bundle's gate table, so it can differ from this field only across a PWA and
+ *    server build skew, and the two ship together.
  *  - `updatedAt`: the row's last write (epoch ms; 0 is the seed), or null when there is no row to read.
  *  - `imported`: the one-time import of the row's marker, or null while it has not run (or the lane has no marker).
  *  - `marker`: the retired marker's name, or null for a lane that never had one. */

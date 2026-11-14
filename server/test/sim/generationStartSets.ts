@@ -258,6 +258,14 @@ export function firstMintCases(m: GenerationStartModule): Record<string, SuiteCa
       // Past the bound, once this process has held it, it falls through as the batch does.
       expect(pick(first([ps(1, 'c', 'startup', 10, NOW - RETRY_MS), ps(2, 'c', 'clear', 20, NOW - RETRY_MS)], 2, unread, listed(NOW, [2])))).toEqual(['mint', 1]);
     },
+    'readHolds names every start a failed read skipped that the walk reached, held now or passed as held before (review 2014 F2)': () => {
+      const aged = [ps(1, 'c', 'startup', 10, NOW - RETRY_MS), ps(2, 'c', 'clear', 20, NOW - RETRY_MS), ps(3, 'c', 'resume', 30, NOW - RETRY_MS)];
+      const held = first(aged, 3, unread, listed(NOW, [3]));
+      expect([pick(held), held.readHolds]).toEqual([['held', 2], [3, 2]]);
+      const minted = first(aged, 3, unread, listed(NOW, [2, 3]));
+      expect([pick(minted), minted.readHolds]).toEqual([['mint', 1], [3, 2]]);
+      expect(first(aged, 3, own, listed(NOW)).readHolds).toEqual([]);
+    },
     'a start that does not mint falls through, and an older start records no account': () => {
       const foreign = { kind: 'row' as const, uuid: OTHER, lane: 'lane-a' };
       const r = first([ps(1, 'c', 'startup', 10, NOW - 99), ps(2, 'c', 'clear', 20, NOW - 99)], 2, foreign, listed(NOW));
@@ -315,8 +323,9 @@ const FIRST_SET: MutantSet<GenerationStartModule> = {
   mutants: [
     { id: 'F1 a start above the cursor mints', old: 'starts.filter((s) => s.id <= passed)', new: 'starts.filter(() => true)' },
     { id: 'F2 oldest first', old: '.sort((a, b) => startBefore(b, a))', new: '.sort(startBefore)' },
-    { id: 'F3 falls through a held start', old: "    if (why !== null) return { kind: 'held', start: s, why };\n", new: '' },
+    { id: 'F3 falls through a held start', old: "    if (why !== null) return { kind: 'held', start: s, why, readHolds };\n", new: '' },
     { id: 'F4 every start newest', old: 'live: null, newest: newestStart(s, starts),', new: 'live: null, newest: true,' },
+    { id: 'F5 only the stopping start is kept', old: '    if (skip !== null && RETRIED_SKIPS.has(skip)) readHolds.push(s.id);\n', new: '' },
   ],
   suite: firstMintCases,
 };
