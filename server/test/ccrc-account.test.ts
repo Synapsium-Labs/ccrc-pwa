@@ -5853,7 +5853,8 @@ describe('ccrc account remove', () => {
     writeFileSync(join(dir, 'lane.json'), `${JSON.stringify({ ...lj, bridge: 'direct', upstream: 'backend',
       bridgeFiles: { stats: 'bridge.stats.json', store: 'reasoning.sqlite', recordings: 'recordings' } }, null, 2)}\n`);
     const bridgeFiles = ['bridge.stats.json', 'reasoning.sqlite', 'reasoning.sqlite-wal', 'reasoning.sqlite-shm',
-      'record-streams', 'bridge-instructions'].map((f) => join(dir, f));
+      'record-streams', 'bridge-instructions', 'bridge-reasoning-all-turns', 'bridge-verbosity', 'bridge-turn-state',
+    ].map((f) => join(dir, f));
     for (const f of bridgeFiles) writeFileSync(f, 'fixture\n', { mode: 0o600 });
     mkdirSync(join(dir, 'recordings'), { mode: 0o700 });
     writeFileSync(join(dir, 'recordings', 'r1.sse'), 'event: fixture\n\n');

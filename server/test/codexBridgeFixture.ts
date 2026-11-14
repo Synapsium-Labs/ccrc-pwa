@@ -125,6 +125,7 @@ export type ResponsesScript = ResponsesAnswer[];
  *  kept. The authorization value is recorded only as its sha256, so a case can tell which token was sent. */
 export const RESPONSES_HEADER_VALUES = [
   'originator', 'user-agent', 'session-id', 'chatgpt-account-id', 'content-type', 'accept', 'accept-encoding',
+  'x-codex-turn-state', // D-8623: a synthetic sticky-routing token, so a case can tell which one was echoed
 ] as const;
 
 /** One request `fakeResponses` saw: the method and path; `headers`, every header NAME, lower-cased, in the order
@@ -306,11 +307,14 @@ export function plantBridgeLane(
   };
 }
 
-/** (Re)write a lane catalogue listing `models`, in the shape `deploy/models-op.mjs`'s `readCatalogue` reads. */
-export function writeBridgeCatalogue(file: string, models: readonly string[]): void {
+/** (Re)write a lane catalogue listing `models`, in the shape `deploy/models-op.mjs`'s `readCatalogue` reads; `fields`
+ *  adds keys to a model's row by its id (D-8620's request-shape fields, say). */
+export function writeBridgeCatalogue(
+  file: string, models: readonly string[], fields: Record<string, Record<string, unknown>> = {},
+): void {
   writeFileSync(file, JSON.stringify({
     fetchedAt: new Date().toISOString(), stale: false,
-    models: models.map((id) => ({ id, hidden: false, efforts: [] })),
+    models: models.map((id) => ({ id, hidden: false, efforts: [], ...(fields[id] ?? {}) })),
   }));
 }
 

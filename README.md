@@ -2501,7 +2501,8 @@ It runs on the system `python3`, 3.9 or later (below that `ccrc codex start` ref
 needs no LiteLLM runtime. It sends `originator: ccrc` and a ccrc user agent, never presenting itself as Codex. Claude
 Code's top-level system prompt travels as the first developer message, with no `instructions` field and no prompt of the
 bridge's own; a lane directory holding the marker file `bridge-instructions` (no ccrc code writes it) sends it as
-`instructions` instead. A
+`instructions` instead. Three more marker files, `bridge-reasoning-all-turns`, `bridge-verbosity` and
+`bridge-turn-state`, each add one part of native Codex's request (below). A
 mid-conversation `role: "system"` entry becomes a developer message in its place, and effort follows the shim's own rule
 (above). Each reply's blocks are built from the upstream's finished items, except that a message's first text part
 streams live as it arrives (so a long compaction summary shows as it is written), and each reply streams zero usage in
@@ -2512,8 +2513,9 @@ every 15 seconds, and the upstream idle bound is 300 seconds, as in Codex. A con
 Code's own `prompt is too long: N tokens > M maximum`, so it compacts; N is the bridge's estimate, because the backend's
 overflow message carries no counts. A usage limit is a 429 `billing_error` and a policy refusal a 400 `policy_blocked`,
 each with `x-should-retry: false`. Retries are Claude Code's: the bridge never retries an upstream request, except once
-after it refreshed a token the upstream answered 401 (a reply the upstream marks unfinished is continued inside the same
-message, at most three times). `count_tokens` is answered locally, from an estimate seeded at 3.5 bytes per token and
+after it refreshed a token the upstream answered 401, and once without the request markers' additions after a 400
+(below; a reply the upstream marks unfinished is continued inside the same message, at most three times).
+`count_tokens` is answered locally, from an estimate seeded at 3.5 bytes per token and
 calibrated on the lane's own replies, for any model. A `/v1/messages` request for a model the lane's catalogue does not
 list is answered 404 locally and never sent upstream.
 The credential's refresher is the bridge: it checks every minute and refreshes at about half the token's lifetime,
@@ -2566,7 +2568,7 @@ stopped one), foreign and unmeasured
 rows; a FAIL, `runs a retired refresher`, when the lane's LiteLLM tier or shim runs beside it; a FAIL for the `siwc`
 route; no half-up row and no `litellm.yaml` row. On a lane in either mode, a stats file or store that is not a regular
 file of mode 0600 is a FAIL. Removing the lane reaps both files, the store's set-aside copy, the recordings directory and the
-marker files with the rest of its state.
+marker files, the three request markers below among them, with the rest of its state.
 
 **The stats file's `parity` section** measures what parity with native Codex hinges on, per route and model, from what
 the bridge already receives and sends, so nothing new goes on the wire (D-8618). Each row counts the upstream responses
@@ -2576,7 +2578,27 @@ for; the backend's `input_transformations` by type, action and reason, so `reaso
 earlier reasoning the backend dropped; each reasoning-store lookup by what it found (per lookup, so a long conversation
 counts its old turns again); and the milliseconds to the first output and to the end, in fixed buckets. Every name in
 it is bounded like the others. It is not drift: nothing in it reaches doctor's WARN or the watch's drift check, and
-`ccrc codex status` does not show it.
+`ccrc codex status` does not show it. The stats file is written at most every 10 seconds while answers come, and again
+once the bridge has been idle for 10 seconds after its last answer, so a run's figures are on disk soon after the run
+ends rather than at the next request (D-8624).
+
+**The request markers** close three gaps between the bridge's request and native Codex's (D-8622, D-8623). Each is off
+until an operator touches its file in the lane directory (no ccrc code writes them), and each is read at every request:
+- `bridge-reasoning-all-turns` adds `reasoning.context: "all_turns"`, after the effort, for a model whose catalogue row
+  says `useResponsesLite: true`;
+- `bridge-verbosity` adds `text.verbosity`, the row's `defaultVerbosity`, for a row that says `supportVerbosity: true`,
+  in one `text` object with an output format;
+- `bridge-turn-state` sends back the `x-codex-turn-state` header the backend set at the start of a Claude Code turn, on
+  every later request of that turn. A turn is the requests that share their latest user message holding no tool
+  result: the same message at the same place in the conversation, so two turns that open on the same words are two.
+  The value is kept in memory only, for at most 256 turns, and is cleared when the credential's account changes.
+
+The bridge never sends Codex's internal Lite header. When the backend answers 400 to a request that carried any of
+these, the bridge sends it once more without them, and sends none of them for the rest of that message; it does not
+for a context overflow or a policy refusal, which no removed field cures. The client sees only the second answer, and
+the first is not written to the credential's status file. The `parity` row counts the requests that carried each
+marker (`markers`), each marker a fallback dropped (`fallbacks`), and the turn-state values captured and sent back
+(`turnState`), never a value.
 
 **A restart cuts long streams.** The bridge runs under the shim's unit, so a restart (a rollout's install restarts a
 running bridge whose bytes are stale; a switch stops it) is a stop, then a start. On the stop the bridge closes its

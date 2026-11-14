@@ -571,6 +571,7 @@ if [ "$TARGET" = "agent" ]; then
     && { [ ! -f ~/.local/libexec/ccrc/shared/redact.mjs ] || cp -a ~/.local/libexec/ccrc/shared/redact.mjs ~/ccrc-backups/$TS/ccd-shared-redact.mjs; } && { [ ! -f ~/.local/libexec/ccrc/shared/redact-cli.mjs ] || cp -a ~/.local/libexec/ccrc/shared/redact-cli.mjs ~/ccrc-backups/$TS/ccd-shared-redact-cli.mjs; } \
     && { [ ! -f ~/.local/libexec/ccrc/lib/disk-retention.sh ] || cp -a ~/.local/libexec/ccrc/lib/disk-retention.sh ~/ccrc-backups/$TS/ccd-lib-disk-retention.sh; } && { [ ! -f ~/.local/libexec/ccrc/lib/train-proof.sh ] || cp -a ~/.local/libexec/ccrc/lib/train-proof.sh ~/ccrc-backups/$TS/ccd-lib-train-proof.sh; } && { [ ! -f ~/.local/libexec/ccrc/lib/delegation-lease.sh ] || cp -a ~/.local/libexec/ccrc/lib/delegation-lease.sh ~/ccrc-backups/$TS/ccd-lib-delegation-lease.sh; } && { [ ! -f ~/.local/libexec/ccrc/ccd ] || cp -a ~/.local/libexec/ccrc/ccd ~/ccrc-backups/$TS/ccd-body; } \
     && { [ ! -f ~/.cc-sessions/notify.sh ] || cp -a ~/.cc-sessions/notify.sh ~/ccrc-backups/$TS/notify.sh; } \
+    && { [ ! -f ~/.cc-sessions/lib/launch-profiles.json ] || cp -a ~/.cc-sessions/lib/launch-profiles.json ~/ccrc-backups/$TS/launch-profiles.json; } \
     && { [ ! -f ~/.cc-sessions/session-hook.sh ] || cp -a ~/.cc-sessions/session-hook.sh ~/ccrc-backups/$TS/session-hook.sh; } \
     && { [ ! -f ~/.cc-sessions/compact-card.mjs ] || cp -a ~/.cc-sessions/compact-card.mjs ~/ccrc-backups/$TS/compact-card.mjs; } && { [ ! -f ~/.cc-sessions/approval-verify.mjs ] || cp -a ~/.cc-sessions/approval-verify.mjs ~/ccrc-backups/$TS/approval-verify.mjs; } && { [ ! -f ~/.cc-sessions/lib/transcript.jq ] || cp -a ~/.cc-sessions/lib/transcript.jq ~/ccrc-backups/$TS/transcript.jq; } && { [ ! -f ~/.cc-sessions/lib/roster-card.jq ] || cp -a ~/.cc-sessions/lib/roster-card.jq ~/ccrc-backups/$TS/roster-card.jq; } && { [ ! -f ~/.cc-sessions/lib/carry-dedupe.py ] || cp -a ~/.cc-sessions/lib/carry-dedupe.py ~/ccrc-backups/$TS/carry-dedupe.py; } && { [ ! -f ~/.cc-sessions/lib/inflight-manifest.py ] || cp -a ~/.cc-sessions/lib/inflight-manifest.py ~/ccrc-backups/$TS/inflight-manifest.py; } \
     && { [ ! -f ~/.config/systemd/user/ccrc-agent.service ] || cp -a ~/.config/systemd/user/ccrc-agent.service ~/ccrc-backups/$TS/ccrc-agent.service; } \
@@ -638,6 +639,8 @@ if [ "$TARGET" = "agent" ]; then
   # The roster card's one builder (D4; its wake arm R-5a, D-8201), 644: data for jq, loaded by the hook with `jq -L`.
   # BEFORE the hook that loads it; a missing file only costs the card.
   install_atomic ccd/lib/roster-card.jq .cc-sessions/lib/roster-card.jq 644
+  # The launch profiles ccd renders at every spawn whose route names one (Overlord W1a), 644: data for jq.
+  install_atomic ccd/lib/launch-profiles.json .cc-sessions/lib/launch-profiles.json 644
   # `ccd carry-dedupe`'s program (#317), 644: a script python3 runs, never executed directly.
   install_atomic ccd/lib/carry-dedupe.py .cc-sessions/lib/carry-dedupe.py 644
   # the in-flight manifest's program (session-continuity 6b, D-8368), 644.

@@ -1655,3 +1655,380 @@ describe.skipIf(!PY)('the parity section, measured per response (D-8618)', () =>
     });
   });
 });
+
+// ── the request markers on the wire, the 400 fallback, the turn-state echo and the idle flush (D-8622..D-8624) ─────
+// Each marker is touched in the fixture lane directory; each is read at each POST. The catalogue row is D-8620's.
+describe.skipIf(!PY)('the request markers, their 400 fallback and the turn-state echo (D-8622, D-8623)', () => {
+  const KEY = `backend/${MODEL}`;
+  const ALL_TURNS = 'bridge-reasoning-all-turns';
+  const VERBOSITY = 'bridge-verbosity';
+  const TURN_STATE = 'bridge-turn-state';
+  const MARKERS = [ALL_TURNS, VERBOSITY, TURN_STATE];
+  const LITE = { useResponsesLite: true, supportVerbosity: true, defaultVerbosity: 'low' };
+  const session = { 'x-claude-code-session-id': 'sess-fx1' };
+  const zeros = (): Json => Object.fromEntries(MARKERS.map((m) => [m, 0]));
+  const counts = (o: Json): Json => ({ ...zeros(), ...o });
+  const touch = (lane: BridgeLane, names: string[]): void => { for (const n of names) writeFileSync(join(lane.laneDir, n), ''); };
+  const lite = (lane: BridgeLane, fields: Json = LITE): void => writeBridgeCatalogue(lane.catalogue, BRIDGE_MODELS, { [MODEL]: fields });
+  const highBody = (): Json => ({ ...messages(), output_config: { effort: 'high' } });
+  /** The backend refusing a parameter it does not take, an invalid_request_error that is no overflow and no policy. */
+  const unsupported: ResponsesAnswer = {
+    status: 400, headers: { 'x-request-id': 'req_fx400' },
+    body: { error: { type: 'invalid_request_error', code: 'unsupported_parameter', param: 'reasoning.context', message: 'Unsupported parameter: reasoning.context' } },
+  };
+  const statusText = (lane: BridgeLane): string | null => (existsSync(lane.status) ? readFileSync(lane.status, 'utf8') : null);
+
+  it('a marker present but the row not eligible sends nothing new, and counts nothing', async () => {
+    await withBridge([{ status: 200, sse: textReply('ok') }, { status: 200, sse: textReply('ok') }], async ({ bridge, up, lane }) => {
+      touch(lane, [ALL_TURNS, VERBOSITY]);
+      lite(lane, { useResponsesLite: false, supportVerbosity: false, defaultVerbosity: 'low' });
+      const a = await call(bridge, '/v1/messages', { body: highBody(), headers: session });
+      lite(lane, {}); // a row that says nothing is no Lite row either
+      const b = await call(bridge, '/v1/messages', { body: highBody(), headers: session });
+      for (const x of [a, b]) expect(x.status, x.text).toBe(200);
+      for (const r of up.requests) {
+        expect(r.body!.reasoning).toEqual({ effort: 'high' });
+        expect(Object.keys(r.body!)).not.toContain('text');
+      }
+      expect(await bridge.stop()).toEqual({ code: 0, signal: null });
+      const row = readStats(lane).parity[KEY];
+      expect(row.markers).toEqual(zeros());
+      expect(row.fallbacks).toEqual(zeros());
+    });
+  });
+
+  it('a 400 to a marked POST is retried once without the field: the client gets the 200, counted, and nothing else moves', async () => {
+    await withBridge([unsupported, { status: 200, sse: textReply('after the fallback') }], async ({ bridge, up, lane }) => {
+      touch(lane, [ALL_TURNS, VERBOSITY]);
+      lite(lane);
+      const before = statusText(lane);
+      const a = await call(bridge, '/v1/messages', { body: highBody(), headers: session });
+      expect(a.status, a.text).toBe(200);
+      expect(textOf(a)).toBe('after the fallback');
+      expect(up.requests).toHaveLength(2);
+      expect(up.requests[0].body!.reasoning).toEqual({ effort: 'high', context: 'all_turns' });
+      expect(up.requests[0].body!.text).toEqual({ verbosity: 'low' });
+      // the retry is the unmarked body, byte for byte in its keys
+      expect(up.requests[1].body!.reasoning).toEqual({ effort: 'high' });
+      expect(Object.keys(up.requests[1].body!)).toEqual(['model', 'stream', 'input', 'tools', 'tool_choice', 'parallel_tool_calls',
+        'reasoning', 'store', 'include', 'prompt_cache_key']);
+      expect({ ...up.requests[1].body!, reasoning: null }).toEqual({ ...up.requests[0].body!, reasoning: null, text: undefined });
+      expect(await bridge.stop()).toEqual({ code: 0, signal: null });
+      const stats = readStats(lane);
+      expect(stats.outcomes).toEqual({ '2xx': 1 }); // no 4xx: the client never saw the first answer
+      expect(stats.routes[KEY].requests).toBe(1); // the retry is not a second request
+      expect(stats.lastUpstreamRequestId).toBeNull();
+      const row = stats.parity[KEY];
+      expect(row.markers).toEqual(counts({ [ALL_TURNS]: 1, [VERBOSITY]: 1 }));
+      expect(row.fallbacks).toEqual(counts({ [ALL_TURNS]: 1, [VERBOSITY]: 1 }));
+      expect(row.effort).toEqual({ high: 2 }); // each body actually sent
+      expect(statusText(lane)).toBe(before); // the first 400 never reached the status file
+      expect(bridge.stderr()).not.toContain('req_fx400');
+    });
+  });
+
+  it('a 400 that is an overflow or a policy refusal is answered at once: removing a field cannot cure it', async () => {
+    const overflow: ResponsesAnswer = { status: 400, body: { error: { type: 'invalid_request_error', message: 'Your input exceeds the context window of this model.' } } };
+    const policy: ResponsesAnswer = { status: 400, body: { error: { type: 'invalid_request_error', code: 'invalid_prompt', message: 'flagged' } } };
+    await withBridge([overflow, policy], async ({ bridge, up, lane }) => {
+      touch(lane, [ALL_TURNS]);
+      lite(lane);
+      const o = await call(bridge, '/v1/messages', { body: highBody(), headers: session });
+      expect(o.status).toBe(400);
+      expect(o.json?.error.message).toMatch(/^prompt is too long: \d+ tokens > \d+ maximum$/);
+      const p = await call(bridge, '/v1/messages', { body: highBody(), headers: session });
+      expect(p.status).toBe(400);
+      expect(p.json?.error.type).toBe('policy_blocked');
+      expect(up.requests).toHaveLength(2);
+      expect(up.requests.map((r) => r.body!.reasoning)).toEqual([{ effort: 'high', context: 'all_turns' }, { effort: 'high', context: 'all_turns' }]);
+      expect(await bridge.stop()).toEqual({ code: 0, signal: null });
+      const row = readStats(lane).parity[KEY];
+      expect(row.markers).toEqual(counts({ [ALL_TURNS]: 2 }));
+      expect(row.fallbacks).toEqual(zeros());
+    });
+  });
+
+  it('a second 400 is answered as today, once, and recorded', async () => {
+    const second: ResponsesAnswer = { ...unsupported, headers: { 'x-request-id': 'req_fx400b' } };
+    await withBridge([unsupported, second], async ({ bridge, up, lane }) => {
+      touch(lane, [ALL_TURNS]);
+      lite(lane);
+      const a = await call(bridge, '/v1/messages', { body: highBody(), headers: session });
+      expect(a.status).toBe(400);
+      expect(a.json?.error.type).toBe('invalid_request_error');
+      expect(up.requests).toHaveLength(2);
+      expect(await bridge.stop()).toEqual({ code: 0, signal: null });
+      const stats = readStats(lane);
+      expect(stats.outcomes['4xx']).toBe(1);
+      expect(stats.parity[KEY].fallbacks).toEqual(counts({ [ALL_TURNS]: 1 }));
+      expect(stats.parity[KEY].markers).toEqual(counts({ [ALL_TURNS]: 1 }));
+      expect(JSON.parse(statusText(lane)!).lastRequestId).toBe('req_fx400b');
+    });
+  });
+
+  it('a 400 with no marker field sent is answered as today, with no retry', async () => {
+    await withBridge([unsupported, { status: 200, sse: textReply('never sent') }], async ({ bridge, up, lane }) => {
+      touch(lane, [ALL_TURNS]);
+      lite(lane, { useResponsesLite: false });
+      const a = await call(bridge, '/v1/messages', { body: highBody(), headers: session });
+      expect(a.status).toBe(400);
+      expect(up.requests).toHaveLength(1);
+    });
+  });
+
+  it('the fallback holds for the rest of the message, and the next message tries the marker again', async () => {
+    const part = (n: number, last: boolean): ResponsesAnswer => ({
+      status: 200, sse: created(n) + done(0, msgItem(`msg_fx${n}`, `part ${n}`)) + completed({}, last ? {} : { end_turn: false }),
+    });
+    await withBridge([unsupported, part(1, false), part(2, true), { status: 200, sse: textReply('next') }], async ({ bridge, up, lane }) => {
+      touch(lane, [ALL_TURNS]);
+      lite(lane);
+      const a = await call(bridge, '/v1/messages', { body: highBody(), headers: session });
+      expect(a.status, a.text).toBe(200);
+      expect(up.requests).toHaveLength(3);
+      expect(up.requests.map((r) => r.body!.reasoning)).toEqual([
+        { effort: 'high', context: 'all_turns' }, { effort: 'high' }, { effort: 'high' },
+      ]);
+      const b = await call(bridge, '/v1/messages', { body: highBody(), headers: session });
+      expect(b.status, b.text).toBe(200);
+      expect(up.requests[3].body!.reasoning).toEqual({ effort: 'high', context: 'all_turns' });
+      expect(await bridge.stop()).toEqual({ code: 0, signal: null });
+      const row = readStats(lane).parity[KEY];
+      expect(row.markers).toEqual(counts({ [ALL_TURNS]: 2 }));
+      expect(row.fallbacks).toEqual(counts({ [ALL_TURNS]: 1 }));
+      expect(readStats(lane).routes[KEY].requests).toBe(3); // the fallback's retry is not a request of its own
+    });
+  });
+
+  it('a 400 once the message has reached the client is answered as today: the fallback never runs after the commit', async () => {
+    const first: ResponsesAnswer = { status: 200, sse: created(1) + done(0, msgItem('msg_fx1', 'part 1')) + completed({}, { end_turn: false }) };
+    await withBridge([first, unsupported, { status: 200, sse: textReply('never sent') }], async ({ bridge, up, lane }) => {
+      touch(lane, [ALL_TURNS]);
+      lite(lane);
+      const a = await call(bridge, '/v1/messages', { body: highBody(), headers: session });
+      expect(a.status).toBe(200); // committed with the first response
+      expect(events(a)).toContain('error');
+      expect(up.requests).toHaveLength(2);
+      expect(up.requests.map((r) => r.body!.reasoning)).toEqual([
+        { effort: 'high', context: 'all_turns' }, { effort: 'high', context: 'all_turns' },
+      ]);
+      expect(await bridge.stop()).toEqual({ code: 0, signal: null });
+      expect(readStats(lane).parity[KEY].fallbacks).toEqual(zeros());
+    });
+  });
+
+  it('a buffered (stream:false) message falls back on a continuation\'s 400: nothing of it has reached the client yet', async () => {
+    const part = (n: number, last: boolean): ResponsesAnswer => ({
+      status: 200, sse: created(n) + done(0, msgItem(`msg_fx${n}`, `part ${n}`)) + completed({}, last ? {} : { end_turn: false }),
+    });
+    await withBridge([part(1, false), unsupported, part(2, true)], async ({ bridge, up, lane }) => {
+      touch(lane, [ALL_TURNS]);
+      lite(lane);
+      const a = await call(bridge, '/v1/messages', { body: { ...messages({ stream: false }), output_config: { effort: 'high' } }, headers: session });
+      expect(a.status, a.text).toBe(200);
+      expect(a.json).toMatchObject({ type: 'message', stop_reason: 'end_turn' });
+      expect((a.json!.content as Json[]).map((b) => b.text).join('')).toBe('part 1part 2');
+      expect(up.requests).toHaveLength(3);
+      expect(up.requests.map((r) => r.body!.reasoning)).toEqual([
+        { effort: 'high', context: 'all_turns' }, { effort: 'high', context: 'all_turns' }, { effort: 'high' },
+      ]);
+      expect(await bridge.stop()).toEqual({ code: 0, signal: null });
+      const stats = readStats(lane);
+      expect(stats.outcomes['4xx']).toBeUndefined();
+      expect(stats.parity[KEY].markers).toEqual(counts({ [ALL_TURNS]: 2 }));
+      expect(stats.parity[KEY].fallbacks).toEqual(counts({ [ALL_TURNS]: 1 }));
+    });
+  });
+
+  // ── the turn-state echo (D-8623) ──
+  const token = (tag: string): string => `ts-fx-${tag}-${randomBytes(12).toString('hex')}`;
+  const withState = (value: string | null, text = 'ok'): ResponsesAnswer => ({
+    status: 200, sse: textReply(text), ...(value === null ? {} : { headers: { 'x-codex-turn-state': value } }),
+  });
+  const userMsg = (text: string): Json => ({ role: 'user', content: [{ type: 'text', text }] });
+  /** One tool round of the turn opened by `text`, `n` rounds in: the user message, then n tool calls and results. */
+  const turnBody = (text: string, n: number): Json => {
+    const history: Json[] = [userMsg(text)];
+    for (let i = 1; i <= n; i += 1) {
+      history.push({ role: 'assistant', content: [{ type: 'tool_use', id: `call_fx${i}`, name: 'Read', input: { file_path: `${i}.txt` } }] });
+      history.push({ role: 'user', content: [{ type: 'tool_result', tool_use_id: `call_fx${i}`, content: `R${i}` }, ...(i === n ? [{ type: 'text', text: 'beside the result' }] : [])] });
+    }
+    return { ...messages(), tools: [READ_TOOL], messages: history };
+  };
+  const sentState = (up: Ctx['up']): (string | null)[] => up.requests.map((r) => r.values['x-codex-turn-state'] ?? null);
+
+  it('captured from the first response of a turn that carries it, echoed through its tool loop, never into the next turn', async () => {
+    const [a1, a2, b1, c1] = [token('a1'), token('a2'), token('b1'), token('c1')];
+    const answers = [withState(null), withState(a1), withState(a2), withState(null), withState(b1), withState(null), withState(c1)];
+    await withBridge(answers, async ({ bridge, up, lane }) => {
+      touch(lane, [TURN_STATE]);
+      const send = async (body: Json): Promise<void> => {
+        const a = await call(bridge, '/v1/messages', { body, headers: session });
+        expect(a.status, a.text).toBe(200);
+      };
+      await send(turnBody('task A', 0)); // the turn's first response carries no state
+      await send(turnBody('task A', 1)); // nothing to echo yet; its response's state is captured
+      await send(turnBody('task A', 2)); // echoed; its response's other state does not replace it
+      await send(turnBody('task A', 3)); // still the first one
+      await send(turnBody('task B', 0)); // a new turn: nothing echoed, its state captured
+      await send(turnBody('task B', 1)); // echoed
+      plantBackendCredential(lane.authDir, { accountId: 'acct-fixture-1' }); // the credential's account changes
+      await send(turnBody('task B', 2)); // cleared: nothing echoed, and the new owner's state is captured
+      expect(sentState(up)).toEqual([null, null, a1, a1, null, b1, null]);
+      expect(up.requests.map((r) => r.values['chatgpt-account-id'])).toEqual([...Array(6).fill(FIXTURE_ACCOUNT_ID), 'acct-fixture-1']);
+      expect(await bridge.stop()).toEqual({ code: 0, signal: null });
+      const statsText = readFileSync(lane.stats, 'utf8');
+      const stats = JSON.parse(statsText) as Json;
+      expect(stats.parity[KEY].turnState).toEqual({ captured: 3, echoed: 3 });
+      expect(stats.parity[KEY].markers).toEqual(counts({ [TURN_STATE]: 3 }));
+      // the value reaches no stats, status or log output; the header's name is still counted
+      for (const v of [a1, a2, b1, c1]) {
+        expect(statsText).not.toContain(v);
+        expect(statusText(lane) ?? '').not.toContain(v);
+        expect(bridge.stderr()).not.toContain(v);
+        expect(bridge.stdout()).not.toContain(v);
+      }
+      expect(stats.names.responseHeader['x-codex-turn-state']).toBe(4);
+    });
+  });
+
+  it('two turns whose user messages say the same thing are two turns: the second never echoes the first one\'s state', async () => {
+    const [a, b] = [token('a'), token('b')];
+    /** The session's history: turn one ("continue", one tool round, a reply), then turn two opening on the same words. */
+    const turnOne = (turnBody('continue', 1).messages as Json[]);
+    const secondTurn = (n: number): Json => {
+      const history: Json[] = [...turnOne, { role: 'assistant', content: [{ type: 'text', text: 'done' }] }, userMsg('continue')];
+      for (let i = 1; i <= n; i += 1) {
+        history.push({ role: 'assistant', content: [{ type: 'tool_use', id: `call_fx2${i}`, name: 'Read', input: { file_path: `2${i}.txt` } }] });
+        history.push({ role: 'user', content: [{ type: 'tool_result', tool_use_id: `call_fx2${i}`, content: `S${i}` }] });
+      }
+      return { ...messages(), tools: [READ_TOOL], messages: history };
+    };
+    await withBridge([withState(a), withState(null), withState(b), withState(null)], async ({ bridge, up, lane }) => {
+      touch(lane, [TURN_STATE]);
+      for (const body of [turnBody('continue', 0), turnBody('continue', 1), secondTurn(0), secondTurn(1)]) {
+        const r = await call(bridge, '/v1/messages', { body, headers: session });
+        expect(r.status, r.text).toBe(200);
+      }
+      expect(sentState(up)).toEqual([null, a, null, b]);
+      expect(await bridge.stop()).toEqual({ code: 0, signal: null });
+      expect(readStats(lane).parity[KEY].turnState).toEqual({ captured: 2, echoed: 2 });
+    });
+  });
+
+  it('only a 2xx answer sets the turn\'s state: a refused answer\'s header is never captured', async () => {
+    const [bad, good] = [token('bad'), token('good')];
+    const refused: ResponsesAnswer = { ...unsupported, headers: { ...unsupported.headers, 'x-codex-turn-state': bad } };
+    await withBridge([refused, withState(good), withState(null)], async ({ bridge, up, lane }) => {
+      touch(lane, [TURN_STATE]);
+      const r0 = await call(bridge, '/v1/messages', { body: turnBody('task A', 0), headers: session });
+      expect(r0.status).toBe(400); // nothing was echoed, so nothing carried: answered as today
+      for (const body of [turnBody('task A', 1), turnBody('task A', 2)]) {
+        const r = await call(bridge, '/v1/messages', { body, headers: session });
+        expect(r.status, r.text).toBe(200);
+      }
+      expect(sentState(up)).toEqual([null, null, good]);
+      expect(await bridge.stop()).toEqual({ code: 0, signal: null });
+      expect(readStats(lane).parity[KEY].turnState).toEqual({ captured: 1, echoed: 1 });
+    });
+  });
+
+  it('the map holds TURN_STATES_MAX turns, the least recently used dropped first', async () => {
+    const [a, b, c] = [token('a'), token('b'), token('c')];
+    const answers = [withState(a), withState(b), withState(null), withState(c), withState(null), withState(null)];
+    await withBridge(answers, async ({ bridge, up, lane }) => {
+      touch(lane, [TURN_STATE]);
+      for (const body of [
+        turnBody('task A', 0), turnBody('task B', 0), // both held
+        turnBody('task A', 1), // A echoed, so B is now the least recently used
+        turnBody('task C', 0), // C held, B dropped
+        turnBody('task A', 2), turnBody('task B', 1),
+      ]) {
+        const r = await call(bridge, '/v1/messages', { body, headers: session });
+        expect(r.status, r.text).toBe(200);
+      }
+      expect(sentState(up)).toEqual([null, null, a, null, a, null]);
+    }, { consts: { 'server.TURN_STATES_MAX': 2 } });
+  });
+
+  it('a 400 to a POST that echoed the state is retried without it, and the turn keeps it for its next message', async () => {
+    const a = token('a');
+    await withBridge([withState(a), unsupported, withState(null, 'retried'), withState(null)], async ({ bridge, up, lane }) => {
+      touch(lane, [TURN_STATE]);
+      for (const body of [turnBody('task A', 0), turnBody('task A', 1), turnBody('task A', 2)]) {
+        const r = await call(bridge, '/v1/messages', { body, headers: session });
+        expect(r.status, r.text).toBe(200);
+      }
+      expect(sentState(up)).toEqual([null, a, null, a]);
+      expect(await bridge.stop()).toEqual({ code: 0, signal: null });
+      const row = readStats(lane).parity[KEY];
+      expect(row.fallbacks).toEqual(counts({ [TURN_STATE]: 1 }));
+      expect(row.turnState).toEqual({ captured: 1, echoed: 2 });
+    });
+  });
+
+  it('no marker at all: the upstream body, its headers and the client\'s answer are the unmarked bridge\'s, byte for byte', async () => {
+    const state = token('n');
+    await withBridge([withState(state, 'Hello'), withState(null, 'Hello')], async ({ bridge, up, lane }) => {
+      lite(lane);
+      const a = await call(bridge, '/v1/messages', { body: highBody(), headers: session });
+      expect(a.status, a.text).toBe(200);
+      const follow = await call(bridge, '/v1/messages', { body: { ...turnBody('hello there', 1), output_config: { effort: 'high' } }, headers: session });
+      expect(follow.status, follow.text).toBe(200);
+      expect(up.requests[0].body).toEqual({
+        model: MODEL, stream: true,
+        input: [
+          { type: 'message', role: 'developer', content: [{ type: 'input_text', text: 'You are a helper.' }] },
+          { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'hello there' }] },
+        ],
+        tools: [], tool_choice: 'auto', parallel_tool_calls: true, reasoning: { effort: 'high' }, store: false,
+        include: ['reasoning.encrypted_content'], prompt_cache_key: 'ccrc:sess-fx1',
+      });
+      expect(Object.keys(up.requests[0].body!)).toEqual(['model', 'stream', 'input', 'tools', 'tool_choice', 'parallel_tool_calls',
+        'reasoning', 'store', 'include', 'prompt_cache_key']);
+      expect(Object.keys(up.requests[1].body!)).toEqual(Object.keys(up.requests[0].body!));
+      const names = ['host', 'authorization', 'chatgpt-account-id', 'originator', 'user-agent', 'session-id', 'content-type',
+        'accept', 'accept-encoding', 'content-length'];
+      for (const r of up.requests) expect(r.headers).toEqual(names);
+      const id = a.frames[0].data.message.id as string;
+      const f = (o: Json): string => `event: ${String(o.type)}\ndata: ${JSON.stringify(o)}\n\n`;
+      const zero = { input_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, output_tokens: 0 };
+      expect(a.text).toBe([
+        f({ type: 'message_start', message: { id, type: 'message', role: 'assistant', model: MODEL, content: [], stop_reason: null, stop_sequence: null, usage: zero } }),
+        f({ type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } }),
+        f({ type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'Hello' } }),
+        f({ type: 'content_block_stop', index: 0 }),
+        f({ type: 'message_delta', delta: { stop_reason: 'end_turn', stop_sequence: null },
+          usage: { input_tokens: 100, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, output_tokens: 5 } }),
+        f({ type: 'message_stop' }),
+      ].join(''));
+      expect(await bridge.stop()).toEqual({ code: 0, signal: null });
+      const row = readStats(lane).parity[KEY];
+      expect(row.markers).toEqual(zeros());
+      expect(row.turnState).toEqual({ captured: 0, echoed: 0 });
+    });
+  });
+});
+
+describe.skipIf(!PY)('the stats file is written once the bridge is idle for FLUSH_S (D-8624)', () => {
+  it('a response\'s counts reach the file about FLUSH_S after it, with no further request', async () => {
+    const answers = [1, 2].map(() => ({ status: 200, sse: textReply('ok') }));
+    await withBridge(answers, async ({ bridge, lane }) => {
+      for (let i = 0; i < 2; i += 1) {
+        const a = await call(bridge, '/v1/messages', { body: messages() });
+        expect(a.status, a.text).toBe(200);
+      }
+      const t0 = Date.now();
+      // both answers came inside FLUSH_S of the start's forced flush, so neither request's own flush wrote
+      expect(readStats(lane).outcomes['2xx']).toBeUndefined();
+      let doc = readStats(lane);
+      while (doc.outcomes['2xx'] !== 2 && Date.now() - t0 < 12_000) {
+        await sleep(100);
+        doc = readStats(lane);
+      }
+      expect(doc.outcomes['2xx']).toBe(2);
+      expect(Date.now() - t0).toBeLessThan(12_000);
+      expect(bridge.exited()).toBeNull();
+    }, { consts: { 'stats.FLUSH_S': 4 } });
+  });
+});

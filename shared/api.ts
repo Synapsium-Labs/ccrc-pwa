@@ -6476,8 +6476,20 @@ export function parseWaveDoneSignals(body: string): WaveDoneSignals {
  * browser MCP servers (absent: the box default, `CCRC_BROWSER_MCP_DEFAULT`). It
  * has no keystroke and is never applied live; `FleetSession.browserMcp` says
  * what the running pane's spawn applied.
+ *
+ * `profile`, `automem` and `compactwindow` (Overlord W1a, spec §3.6 H1) name the
+ * launch profile a session's spawn applies: a `FLEET_ROLES` key, the memory choice
+ * for `plain` (`on`/`off`), and Claude Code's own auto-compact window in tokens.
+ * ccd renders them at every spawn (`_profile_spawn_compose`) from
+ * `ccd/lib/launch-profiles.json`; like `browser`, none is applied live. They are
+ * `ROUTE_LANE_ONLY_FIELDS`: no door's body may name them.
  */
-export const ROUTE_WRITABLE_FIELDS = ['class', 'effort', 'subagent', 'workflow', 'compact', 'browser'] as const;
+export const ROUTE_WRITABLE_FIELDS = ['class', 'effort', 'subagent', 'workflow', 'compact', 'browser', 'profile', 'automem', 'compactwindow'] as const;
+/** The route fields only the launch-profile lane writes (Overlord W1a; "one writer per route field: the lane"):
+ *  `parseRouteFields`, the one door parse, refuses each as `lane-only` with a 400 naming it, at the operator's route
+ *  door, the spawn and dispatch `route` bodies, and the coordinator's `POST /api/runs/:id/route`. The lane composes
+ *  `CCD_ARGV.routeSet` itself and never passes a door. Derived: `ROUTE_WRITABLE_FIELDS` from `profile` on. */
+export const ROUTE_LANE_ONLY_FIELDS: readonly RouteField[] = ROUTE_WRITABLE_FIELDS.slice(ROUTE_WRITABLE_FIELDS.indexOf('profile'));
 export type RouteField = (typeof ROUTE_WRITABLE_FIELDS)[number];
 export type RouteFields = Partial<Record<RouteField, string>>;
 
@@ -6530,11 +6542,13 @@ export const ROUTE_CONTROL_CHAR_RE = /[\x00-\x1f\x7f]/;
  * `why` is `not-object` for a body that is not a plain object at all (an
  * array, a primitive, `null`); `unknown-field`/`bad-value` name the offending
  * `field` — two conditions a caller must be able to tell apart, so they never
- * collapse onto one bare `false`.
+ * collapse onto one bare `false`. `lane-only` names a `ROUTE_LANE_ONLY_FIELDS`
+ * member: a real field, but one no door may write (every caller of this parse
+ * is a door).
  */
 export type RouteFieldsParse =
   | { ok: true; route: RouteFields }
-  | { ok: false; why: 'not-object' | 'unknown-field' | 'bad-value'; field?: string };
+  | { ok: false; why: 'not-object' | 'unknown-field' | 'bad-value' | 'lane-only'; field?: string };
 
 export function parseRouteFields(v: unknown): RouteFieldsParse {
   if (typeof v !== 'object' || v === null || Array.isArray(v)) {
@@ -6545,6 +6559,7 @@ export function parseRouteFields(v: unknown): RouteFieldsParse {
     if (!(ROUTE_WRITABLE_FIELDS as readonly string[]).includes(field)) {
       return { ok: false, why: 'unknown-field', field };
     }
+    if (ROUTE_LANE_ONLY_FIELDS.includes(field as RouteField)) return { ok: false, why: 'lane-only', field };
     if (typeof value !== 'string' || value.length === 0 || ROUTE_CONTROL_CHAR_RE.test(value)
         // `TextEncoder`, not `.length`: a web global, not `node:*` — L0 may
         // use it, and `.length` counts UTF-16 units, which would let a
