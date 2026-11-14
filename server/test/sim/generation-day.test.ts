@@ -55,7 +55,7 @@ describe('the generation day\'s invariants go red on a hand-made sequence', () =
     expect(byName('G4').check(seqOf([['deadline', 'o#1:draining:9', 'fired', 'lane'], ['deadline', 'o#1:draining:9', 'fired', 'lane']]))?.invariant).toBe('G4');
   });
   it('CONTROL: G4 reads a freeze as observed time advanced by the cap, never frozen and never past it (review 1894, F1)', () => {
-    const freeze = (after: number): SequenceLine[] => seqOf([['obs', 'server', 'ms=500', 'lane'],
+    const freeze = (after: number): SequenceLine[] => seqOf([['obs', 'server', 'ms=500', 'lane'], ['server', 'freeze', 'frozen;for=600000', 'sim'],
       ['obs-gap', 'server', 'kind=step;deltaMs=600000', 'lane'], ['obs', 'server', `ms=${after}`, 'lane']]);
     expect(byName('G4').check(freeze(500 + 60_000))).toBeNull();
     expect(byName('G4').check(freeze(500))?.invariant).toBe('G4');
@@ -75,6 +75,19 @@ describe('the generation day\'s invariants go red on a hand-made sequence', () =
       ...(gap ? [['obs-gap', 'server', 'kind=step;deltaMs=330000', 'lane', 330_000] as TRow] : []), ['obs', 'server', 'ms=60000', 'lane', 330_000]]);
     expect(byName('G4').check(thaw(true))).toBeNull();
     expect(byName('G4').check(thaw(false))?.invariant).toBe('G4');
+  });
+  it('CONTROL: G4 is red on a step gap no freeze, crash or boot caused, unless the clock itself stepped that far (review 2006 R7)', () => {
+    const step = (before: TRow | null, deltaMs: number): SequenceLine[] => timed([['obs', 'server', 'ms=0', 'lane', 0],
+      ...(before === null ? [] : [before]), ['obs-gap', 'server', `kind=step;deltaMs=${deltaMs};mono=30000`, 'lane', 30_000],
+      ['obs', 'server', 'ms=60000', 'lane', 30_000]]);
+    // A stored stamp skewed 31 s behind: the clock stepped 30 s, the gap says 61 s.
+    expect(byName('G4').check(step(null, 61_000))?.invariant).toBe('G4');
+    expect(byName('G4').check(step(['server', 'freeze', 'frozen;for=31000', 'sim', 10_000], 61_000))).toBeNull();
+    // A crash or a boot is a cause too (what G4 then says of the restart is its own rule, not this one).
+    expect(byName('G4').check(step(['server', 'crash', 'down', 'sim', 10_000], 61_000))?.message ?? '').not.toContain('R7');
+    expect(byName('G4').check(step(['server', 'boot', 'up', 'sim', 10_000], 61_000))?.message ?? '').not.toContain('R7');
+    // A gap whose delta is the clock's own step needs no other cause.
+    expect(byName('G4').check(step(null, 30_000))).toBeNull();
   });
   it('CONTROL: G6 bounds each transient state at its deadline plus one lane period, and a landed renewal at the budget plus one period per state; a crash or a freeze waives both (review 1912, F10)', () => {
     // Every state at its bound: checkpointed 60+30, clearing 90+30, carded 45+30, probing 165+30, 480 s in all.
@@ -184,6 +197,13 @@ describe('the generation day over seeded runs', () => {
       // Every pass, a gap's included: under the old oracle (an obs line only when the stored mono was the clock's) no line
       // was ever written after the first, and G4 held vacuously.
       return p !== null ? { ...st, at: { ...st.at, mono: p.mono } } : st;
+    }), 'G4')).not.toBeNull();
+  }, BOUND_MS);
+
+  it('MUTATION: an observeTime that stores a mono 31 s behind the clock goes red on G4 within the CI seeds (review 2006 R7: each beat then answers a step gap)', async () => {
+    expect(await redSeed(withObserve((p, mono, proc, cap) => {
+      const st = observed.observeTime(p, mono, proc, cap);
+      return { ...st, at: { ...st.at, mono: st.at.mono - 31_000 } };
     }), 'G4')).not.toBeNull();
   }, BOUND_MS);
 

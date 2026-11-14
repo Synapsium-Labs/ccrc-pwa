@@ -133,6 +133,8 @@ export function generationDay(mods: GenDayModules): Scenario<GenDayEdge> {
       const overlordStarts: number[] = [];
       let proc = 'p0';
       let boots = 0;
+      // The lane's per-process memo of the starts it held (review 2006 R3): a boot forgets it, as a restarted server does.
+      let retried = new Set<number>();
 
       // Both generations working when the day begins: n=1 minted from a startup, then active (a generation that was
       // working when the machine began), and the cursor past both starts.
@@ -330,7 +332,8 @@ export function generationDay(mods: GenDayModules): Scenario<GenDayEdge> {
         const moved = was.ms !== before.observed.ms || was.mono !== before.observed.mono || was.proc !== before.observed.proc;
         const advanced = !fault.fired || moved;
         // The gap the pass recorded, as the decider answered it (never re-derived from the rows).
-        if (advanced) for (const gp of gaps) if (gp.identity === who) line('obs-gap', who, `kind=${gp.kind};deltaMs=${gp.deltaMs}`, 'lane');
+        // It carries the scenario's mono, so G4 can tell a step the clock took from one a skewed stamp made (review 2006 R7).
+        if (advanced) for (const gp of gaps) if (gp.identity === who) line('obs-gap', who, `kind=${gp.kind};deltaMs=${gp.deltaMs};mono=${server.clock.mono()}`, 'lane');
         for (let k = before.n + 1; k <= after.n; k += 1) {
           line('gen', idOf(who, k - 1), 'ended', 'lane');
           line('gen', idOf(who, k), 'carded', 'mint');
@@ -356,8 +359,12 @@ export function generationDay(mods: GenDayModules): Scenario<GenDayEdge> {
         const downFor = between(1, 10) * MIN;
         if (crashes) arm(at);
         const before = new Map(WHO.map(([who]) => [who, row(who)]));
-        const passed = wrote(generationsPass({ coord: lane, clock: server.clock, proc, log: () => {}, observe: mods.observed.observeTime },
-          { registry: WHO.map(([who]) => ({ id: who, uuid: uuids.get(who)!, lane: 'lane-a', child: { kind: 'none' as const } })), readings: new Map() }));
+        // The stand-in registry is listed after this beat's deliveries (it names every conversation reported so far), so its
+        // listing postdates every start received yet.
+        // The day drives the live walk too (its arm drawn per seed), so it opens the continuity row's gate.
+        const passed = wrote(generationsPass({ coord: lane, clock: server.clock, proc, log: () => {}, observe: mods.observed.observeTime, retried, gate: () => null },
+          { registry: WHO.map(([who]) => ({ id: who, uuid: uuids.get(who)!, lane: 'lane-a', child: { kind: 'none' as const } })),
+            listedAt: wall() + 1, readings: new Map() }));
         // W1's designation, stood in for: the Overlord's starts mint through the same store function, in order.
         while (overlordStarts.length > 0) {
           const id = overlordStarts[0]!;
@@ -440,6 +447,7 @@ export function generationDay(mods: GenDayModules): Scenario<GenDayEdge> {
 
       world.onBoot(() => {
         proc = `p${boots++}`;
+        retried = new Set<number>();
         arm(DISARMED);
         // A crash right after a thaw loses what waited in the socket, except a start (the start-while-down rule).
         for (const [who, , e] of frozenQueue.splice(0)) if (e.kind === 'started') startQueue.push([who, e]);
@@ -494,24 +502,35 @@ export const GEN_DAY_INVARIANTS: readonly Invariant[] = [
       }
       return null;
     } },
-  { name: 'G4', says: 'per identity: a restart never advances observed time; a freeze advances it by the step cap and answers a step gap; within one process with no gap, observed time advances exactly as the monotonic clock does (an obs line carries its mono stamp; one without reads its wall stamp, which no day skews); no deadline fires twice',
+  { name: 'G4', says: 'per identity: a restart never advances observed time; a freeze advances it by the step cap and answers a step gap; a step gap follows a freeze, a crash or a boot, or a step of the clock itself past the cap; within one process with no gap, observed time advances exactly as the monotonic clock does (an obs line carries its mono stamp; one without reads its wall stamp, which no day skews); no deadline fires twice',
     check(lines) {
-      interface Track { last: number | null; lastClock: number; lastBeforeCrash: number | null; afterBoot: boolean; stepGap: boolean; gapSince: boolean; frozeSince: boolean }
+      interface Track { last: number | null; lastClock: number; lastBeforeCrash: number | null; afterBoot: boolean; stepGap: boolean; gapSince: boolean; frozeSince: boolean; lastObsSeq: number }
       const by = new Map<string, Track>();
       const of = (id: string): Track => {
         let t = by.get(id);
-        if (t === undefined) { t = { last: null, lastClock: 0, lastBeforeCrash: null, afterBoot: false, stepGap: false, gapSince: false, frozeSince: false }; by.set(id, t); }
+        if (t === undefined) { t = { last: null, lastClock: 0, lastBeforeCrash: null, afterBoot: false, stepGap: false, gapSince: false, frozeSince: false, lastObsSeq: -1 }; by.set(id, t); }
         return t;
       };
       const fired = new Set<string>();
+      // The newest freeze, crash or boot line: a step gap after it has a cause, for an identity first seen after it too.
+      let causeSeq = -1;
       for (const l of lines) {
+        if (l.kind === 'server' && (l.state === 'down' || l.state === 'up' || l.state.startsWith('frozen'))) causeSeq = l.seq;
         if (l.kind === 'server' && l.state === 'down') for (const t of by.values()) { t.lastBeforeCrash = t.last; t.gapSince = true; t.frozeSince = false; }
         if (l.kind === 'server' && l.state === 'up') for (const t of by.values()) { t.afterBoot = true; t.gapSince = true; }
         if (l.kind === 'server' && l.state.startsWith('frozen')) for (const t of by.values()) { t.frozeSince = true; t.gapSince = true; }
         if (l.kind === 'obs-gap') {
           const t = of(l.id);
           t.gapSince = true;
-          if (l.state.startsWith('kind=step;')) t.stepGap = true;
+          if (l.state.startsWith('kind=step;')) {
+            t.stepGap = true;
+            // A step gap with no freeze, crash or boot before it is honest only when the clock itself stepped that far
+            // since the last observation (review 2006 R7): a skewed stored stamp answers step gaps the clock never took.
+            const mono = num(l.state, 'mono');
+            if (causeSeq <= t.lastObsSeq && (t.last === null || Number.isNaN(mono) || num(l.state, 'deltaMs') !== mono - t.lastClock)) {
+              return violation('G4', l, `${l.id}: a step gap of ${num(l.state, 'deltaMs')} ms with no freeze, crash or boot before it, in ${mono - t.lastClock} of clock (review 2006 R7)`);
+            }
+          }
           if (l.state.startsWith('kind=process;')) t.frozeSince = false;   // a freeze right after a boot: the restart's gap answers it
         }
         if (l.kind === 'obs') {
@@ -535,7 +554,7 @@ export const GEN_DAY_INVARIANTS: readonly Invariant[] = [
           if (!t.gapSince && last !== null && ms - last !== clock - t.lastClock) {
             return violation('G4', l, `${l.id}: observed time moved ${ms - last} ms in ${clock - t.lastClock} of clock (review 1912, F2; review 1920, R5)`);
           }
-          t.afterBoot = false; t.stepGap = false; t.gapSince = false; t.frozeSince = false; t.last = ms; t.lastClock = clock;
+          t.afterBoot = false; t.stepGap = false; t.gapSince = false; t.frozeSince = false; t.lastObsSeq = l.seq; t.last = ms; t.lastClock = clock;
         }
         if (l.kind === 'deadline') {
           if (fired.has(l.id)) return violation('G4', l, `deadline ${l.id} fired twice`);

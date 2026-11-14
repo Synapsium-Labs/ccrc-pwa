@@ -46,7 +46,11 @@ the programme's ledger. The plan's own decisions (its "Deviations found" list) s
   (`coord/bindingReads.ts`), not by the continuity adapter: the coordinator's binding series (`bindingRunsOf`), the runs it
   claims (`runsClaimedBy`, the binding module's own rule beside `childrenOf`), newest first, and each run's kind and
   programme from `run(id)`, until two work runs. No session-keyed reader is added to `CoordStore` (the census's ceiling of
-  four stands), and no stand-in value is left for a column that cannot be null.
+  four stands), and no stand-in value is left for a column that cannot be null. A read that throws (a claimed run whose
+  row cannot be hydrated, such as a malformed `prLineage`) answers `ok: false` with the error, as the continuity adapter's
+  read did before the move (review 2006 R4): the wave reading is unmeasured and named in `blind`, and the pass, its later
+  generations and its log go on. Each coordinator generation still costs two `run(id)` hydrations a pass where it needs
+  only kind, state and programme (review 2006 N8): left, since a narrower read would be a new store member for one caller.
 
 ## The pass mints and ends (Task 2)
 
@@ -67,28 +71,67 @@ the programme's ledger. The plan's own decisions (its "Deviations found" list) s
 - **coordinator-first-mint** (review 2003 F2) — a coordinator's own `startup` lands before it opens its first run, when its
   role still reads undecided, so the batch skips it. On every pass, an identity that reads as a coordinator (it claims an
   open run) and has no generation mints n=1 from its newest start that mints, among the starts the cursor has passed (at
-  most `FIRST_MINT_LOOKBACK`, 20, looked through; a start above the cursor is the batch's to judge, and a held one waits).
-  Its account is recorded only when no newer start than it but a compaction or a fork exists. No cursor rides this mint.
-- **start-held-on-a-failed-read** (review 2003 F2) — a start skipped as `unregistered` or `uuid-unmeasured` (a registry
-  read that failed this pass) is not judged for good on first sight: `startHeld` (L1) holds it while the server received
-  it less than `START_RETRY_MS` (five lane periods, 150 s) ago. The batch stops at the first held start: it and every start
-  after it wait for a later pass, and the cursor stays below the lowest id among them; past the bound the start is
-  skipped, counted and logged, and the starts behind it go on in the same pass. A start the server's clock reads as
-  received in the future is skipped at once. Starts judged in the same pass above the held one are judged again next pass
-  (a mint answers `superseded`, a skip is counted again).
+  most `FIRST_MINT_LOOKBACK`, 20, looked through; a start above the cursor is the batch's to judge). The walk is
+  `firstMintOf` (L1) and runs newest first; it STOPS at a start `startHold` holds (review 2006 R2), so a start that would
+  read on a later pass is never passed over for an older conversation, which would then be n=1 for good. Past the bound
+  (and once this process has held it) the start no longer holds, and the walk falls through as the batch does. Its account
+  is recorded only when the start is the identity's newest as the account goes (`newestStart`, slug newest-start-trusted).
+  No cursor rides this mint.
+- **start-held-on-a-failed-read** (review 2003 F2; review 2006 R3 and R8) — a start skipped as `unregistered` or
+  `uuid-unmeasured` (a registry read that failed this pass) is not judged for good on first sight: `startHold` (L1) holds
+  it while the server received it less than `START_RETRY_MS` (five lane periods, 150 s) ago. The batch stops at the first
+  held start: it and every start after it wait for a later pass, and the cursor stays below the lowest id among them; past
+  the bound the start is skipped, counted and logged, and the starts behind it go on in the same pass. Starts judged in the
+  same pass above the held one are judged again next pass (a mint answers `superseded`, a skip is counted again).
+  - **The bound is wall time, by ruling (review 2006 R3).** Spec §11.5 allows the wall clock for a timer whose expiry
+    permits nothing, and giving up on a start permits nothing: it only stops waiting for a registry read. Two guards keep
+    the wall clock from costing a start its retry. A clock that reads earlier than the start's receipt reads as the receipt
+    (`startAged`), so a backward step keeps it held. And every held start gets at least one retry on a pass of the current
+    process before it is skipped: the lane keeps a process-local memo of the starts it held (`GenerationsDeps.retried`,
+    the watcher's own set), and a start past the bound that this process has not held yet is held once more. So a server
+    restart, an update's supervisor sweep (when half-written rows are likeliest) or a slow tick never skips a start with no
+    retry. The memo is not durable, and losing it only adds a retry.
+  - **No start waits longer than the bound for another start's hold (review 2006 R8).** A start behind a hold that has
+    itself waited out `START_RETRY_MS` since its own receipt is judged past the hold, so a chain of holds (each a late
+    resend reported before it) cannot keep it waiting. It may then mint before an older held start of the same identity,
+    which reads `late` when its own read succeeds.
+- **start-held-after-the-listing** (review 2006 R1) — the tick lists the registry, then awaits its other sweeps and the
+  gather's fleet reads before the pass reads its starts, and the start door attributes a start against a fresh registry
+  read. So a `/clear` accepted in that window carries a conversation the pass's listing has not seen, and would read
+  `foreign-uuid` and be skipped for good. The watcher passes the listing's time (`GenerationsInput.listedAt`, the tick's
+  own `listedAt`), and a start the server received at or after it is held for a pass whatever its skip; the next pass's
+  listing knows it. The same hold keeps an older listing's account off a start it predates (slug newest-start-trusted's
+  second window). The simulator's stand-in registry is listed after each beat's deliveries.
+- **batch-split-in-l1** (review 2006 R6) — which starts a pass judges, which wait and where the cursor moves
+  (`planStartBatch`), the coordinator's first-mint walk (`firstMintOf`) and the "newest start" rule (`newestStart`) are
+  decisions, so they are L1 in `generationStart.ts`, each with its exhaustive cases and a mutant set with a floor. The
+  lane (L4) reads, asks and writes.
 - **other-source-mints** — a start whose source is `other` (a word outside the vocabulary) mints like `startup`'s
   siblings; only `compact` and `fork` are skipped by source.
 - **swap-before-crash** — the outcome is `renewed` for a generation that was `clearing`; else `unmeasured` when either
-  account is not known (review 2003 F4: a swap cannot be ruled out); else `swapped` when the account changed; else
-  `crashed` when it was `active` on the same row incarnation (both incarnations known); else `woken`. The plan lists
-  `crashed` before `swapped`; a start on another account is a swap even when the incarnation stayed.
-- **newest-start-trusted** (review 2003 F4) — the registry is read at the pass, not at the start, so its account describes
-  only an identity's newest start in the pass. An older start judged in the same pass ends the live generation with the
-  outcome `unmeasured` and mints a generation with no account (`lane` null). `GENERATION_OUTCOMES` gains `unmeasured`
-  (`shared/continuity.ts`, appended with the claim holder's agreement); `startVerdict` takes `newest` and answers `lane`.
+  account is not known (review 2003 F4: a swap cannot be ruled out); else `swapped` when the account changed; else, on the
+  same row incarnation (both known), `cleared` for a `clear` (slug clear-is-not-a-crash) and `crashed` for any other start
+  while it was `active`; else `woken`. The plan lists `crashed` before `swapped`; a start on another account is a swap even
+  when the incarnation stayed.
+- **newest-start-trusted** (review 2003 F4; review 2006 R5 and R6) — the registry is read at the pass, not at the start,
+  so its account describes only an identity's newest start in the pass. An older start judged in the same pass ends the
+  live generation with the outcome `unmeasured` and mints a generation with no account (`lane` null). `GENERATION_OUTCOMES`
+  gains `unmeasured` (`shared/continuity.ts`, appended with the claim holder's agreement); `startVerdict` takes `newest`
+  and answers `lane`. "Newest" is one L1 rule (`newestStart`), asked by the batch and the first mint alike: only a later
+  start of the same identity that could move the account makes a start older, and a `compact` or a `fork` cannot (review
+  2006 R6). "Newest in the pass" is not "newest in fact", and one window remains (review 2006 R5): a start accepted but not
+  yet judged, then a swap that flips the row's account, then the swap's own start still in the hook's spool (resends wait
+  5 to 30 s, longer behind a hold). The first start is judged as newest and records the new account (its outcome can read
+  `swapped`), and the swap's start then compares new with new. Nothing in W1a acts on an outcome, and `lane` feeds only
+  the next start's outcome, so the cost is mislabelled shadow data. The second window the review named (a listing older
+  than the batch) is closed by slug start-held-after-the-listing.
 - **outcome-from-the-state-column** (review 2003 F1) — the outcome reads the ended generation's `state` column, what the
   session lived, never a shadow walk's would-be state: in shadow `state` stands `active`, so an unplanned start on the same
   incarnation is `crashed` (now reachable), and a start never reads `renewed` while nothing renews.
+- **clear-is-not-a-crash** (review 2006, the coordinator's ruling on the plan note) — `startOutcome` takes the start's
+  source. A `clear` on the same row incarnation and account ends the generation `cleared`, a word appended to
+  `GENERATION_OUTCOMES`; `crashed` stays for a start with no planned cause. A deliberate `/clear` would otherwise have made
+  up most of the `crashed` column in shadow.
 - **intent-unread** (review 2003 F2) — `roleFactsOf` gets `intentDeclared: 'unmeasured'`, as the mail pace does: the
   declared intent has no store read. A start of a session that claims no open run therefore reads undecided
   `coordinator-or-plain` and is skipped for good, counted (`skipped.undecided`) and logged: a plain session gets no
@@ -106,11 +149,14 @@ the programme's ledger. The plan's own decisions (its "Deviations found" list) s
   already answers `superseded`.
 - **registry-from-the-tick** — the pass takes the tick's registry records; when the registry could not be listed it judges
   no start and leaves the cursor. A row the listing dropped (a half-written row) reads `unregistered` and is held (slug
-  start-held-on-a-failed-read).
-- **pass-logs-its-counts** (review 2003 F5) — the pass logs, once, every non-zero skip count, the held and superseded
-  starts and a batch stopped by a mint that could not be written, and in a line of its own a read that failed, naming
-  what it stopped (`liveGenerations` that does not read: no start mints and no due is recorded). The watcher still
-  discards the result; the pass's own log is the record.
+  start-held-on-a-failed-read), and a start that landed after the listing is held a pass (slug
+  start-held-after-the-listing).
+- **pass-logs-its-counts** (review 2003 F5; review 2006 N3) — the pass logs, once, every non-zero skip count, the held and
+  superseded starts and a batch stopped by a mint that could not be written, and in a line of its own each read that
+  failed, naming what it stopped where it failed: before the batch, no start is judged and the cursor stays; after it,
+  the batch ran and only the first mint's read is lost; at the end, no due is recorded. The watcher still discards the
+  result; the pass's own log is the record. Starts above a standing hold are judged again each pass and counted again,
+  and a write that changes nothing is not counted.
 - **lane-wired-in-the-watcher** — the plan names `server/src/index.ts` for the wiring; the lane runs from the watcher's
   tick, as the case lane does (`FleetWatcher.sweepGenerations`, never awaited), with `Deps.time` from the watcher's deps
   and this process's id drawn once from `Deps.time.entropy`. `index.ts` is unchanged. The watcher's store port
@@ -152,9 +198,18 @@ the programme's ledger. The plan's own decisions (its "Deviations found" list) s
   the card's shadow note say. A generation on a live walk (`state` past `active`) is not judged.
 - **live-gated-until-the-renewal-act** (review 2003 F3, also settling F15) — the `continuity` row carries a gate:
   `LANE_ARM_TEXT.rows.continuity.gate` says why, `laneArmGate` reads it, and while it stands the door refuses Live with
-  `lane-gated` (409, its reason in `detail`) before any other check, and the Shadow lanes card shows the reason under the
-  row. Nothing steps a generation in W1a, so a live walk would stand at `carded` and fire every deadline when the renewal
-  act arrives; that piece lifts the gate. The per-walk ruling stands.
+  `lane-gated` (409, its reason in `detail`). The route checks the body (400) and an unconfigured store first; within
+  `decideLaneArmPost` the gate comes before sign-in, an unreadable row and the confirm (review 2006 N2). The Shadow lanes
+  card shows the reason under the row. Nothing steps a generation in W1a, so a live walk would stand at `carded` and fire
+  every deadline when the renewal act arrives; that piece lifts the gate. The per-walk ruling stands.
+  - **The gate is in the view too (review 2006 N1).** A row is live only when its stored word is `live` AND its gate is
+    open (`laneArmLive`, L0, one rule): `laneArmRowViewOf` answers `live: false` for a `continuity` row stored `live`
+    (which only a box that ran this branch before the gate could hold), so the lane mints shadow walks, and the card checks
+    neither radio under the gate's words. The view and the lane take the gate as an argument that defaults to
+    `laneArmGate`; only the lane's own cases and the simulator open it (`GenerationsDeps.gate`), to drive the live walk
+    the renewal act will arm. Nothing in the server passes one.
+  - The card's gate line, its longest, is drawn and measured at every width in both skins in a real browser
+    (`pwa/browser/shadow-lanes-card.browser.test.ts`, review 2006 N7), not only in jsdom.
 - **word-columns-fail-the-row** (review 2003 F13) — a non-null `walkClass`, `dueWhy`, `dueClass` or `outcome` this build
   does not know, or a `blind` that is not a list of known triggers, fails the row as `state` does; null still reads as not
   written.
@@ -198,11 +253,15 @@ the programme's ledger. The plan's own decisions (its "Deviations found" list) s
   compares with the monotonic clock, and a line without one (the control rows) with its wall stamp, which no day skews.
   The stamp is the scenario's own clock, and whether a pass advanced the accumulator is the scenario's answer (no abort
   landed, or the stored time moved), never the stamp the decider under test wrote: an `observeTime` that leaves the
-  stored mono stale escaped all 200 seeds under the old oracle and is red now (a MUTATION row).
+  stored mono stale escaped all 200 seeds under the old oracle and is red now (a MUTATION row). A step gap must have a
+  cause (review 2006 R7): a freeze, a crash or a boot line since the identity's last observation, or a `deltaMs` equal to
+  the clock's own step, which the `obs-gap` line now carries as `mono`. A stored stamp skewed 31 s behind the clock (each
+  30 s beat then answers a step gap) passed G4, G2 and G3 before, and is red now (a MUTATION row).
 - **g5-counts-reports** (review 2003 F7) — G5 counts the `report` lines the host writes, the day's first (n=1's) aside:
   at every pass that runs to its end, each start that had to mint did, and no mint is without a start or out of number.
   A start has to mint when it is a `startup` or its conversation is the identity's newest reported one at the first
-  completed pass after it; a start whose conversation a later start replaced before it was judged may mint nothing (slug
+  completed pass after it; a start whose conversation a later start replaced before a completed pass judged it may mint
+  nothing (an aborted pass may have judged it already; slug
   uuid-checked-against-the-current-row: measured on seed 67, an unplanned resume of the old conversation and the
   renewal's clear landing in one beat). A `report` line carries the start's source and conversation.
 - **gaps-from-the-pass** — the scenario's `obs-gap` lines are the gaps the pass recorded (`GenerationsResult.gaps`, now
@@ -216,10 +275,11 @@ the programme's ledger. The plan's own decisions (its "Deviations found" list) s
 - **review-1925-n3-n5a** — the REACHABLE row is retitled (it is one degraded view, reached by two chains), and X6's comment
   in `check.py` gives each reason a degraded generation is unproven. N1 (have `check.py`'s mutation modes diff
   `reachable`) is optional and not taken here.
-- **census-names-three-non-binding-sites** (narrowed by review 2003 F11) — the run/session census (ARCH-62) counts two
-  new sites that decide no binding, each named in `NOT_BINDING_SITES` with its reason: the live generation looked up by
-  the start's session (a coordinator's identity is its session id) and the compactions cache pruned by session id. The
-  wave boundary's read is now the binding module's own rule (`runsClaimedBy`, counted beside `childrenOf`).
+- **census-names-three-non-binding-sites** (narrowed by review 2003 F11; its count made true again by review 2006 N7 and
+  R6) — the run/session census (ARCH-62) counts three sites of this piece that decide no binding, each named in
+  `NOT_BINDING_SITES` with its reason: the live generation looked up by the start's session (a coordinator's identity is
+  its session id), the compactions cache pruned by session id, and `newestStart`'s test that a later start is of the same
+  identity. The wave boundary's read is the binding module's own rule (`runsClaimedBy`, counted beside `childrenOf`).
 - **process-id-is-a-uuid** — the watcher draws the lane's process id with `Deps.time.entropy.uuid()`: the entropy port
   refuses fewer than 16 bytes, and a first draft's `hex(8)` failed every pass (seen in CI's log, not in a red case). A
   watcher case now runs one real sweep over the real time ports and goes red on it.
