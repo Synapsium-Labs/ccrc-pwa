@@ -8,8 +8,8 @@ section after it is for the coordinator only.
 ## Turn auto memory off for fleet sessions?
 
 **What was measured.** Claude Code's auto memory is on for every account on the fleet box. W0b counted 8 to 14 non-empty
-project-memory directories in each account, most of them shared across accounts by a link. No account sets
-`autoMemoryEnabled`. W0-09 measured that one launch setting, `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1`, keeps project memory out
+auto-memory directories in each account, most of them shared across accounts by a link. No account sets
+`autoMemoryEnabled`. W0-09 measured that one launch setting, `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1`, keeps auto memory out
 of a session's requests, both before and after an account swap.
 
 **Why it matters.** A session loads whatever memory its account has stored as if it were the session's own knowledge, and
@@ -19,9 +19,11 @@ renewed and checked against a replay baseline, an unreviewed memory changes what
 **What arming the `launch-profile` lane does.** It is a row on Settings › Automation › Shadow lanes.
 - From each session's next launch, its route names its role's launch profile, and ccd applies it.
 - Auto memory is off for every role except plain sessions.
+- A session that claims no open run is a coordinator if it has declared coordinator intent, and plain if it has measurably
+  declared none. One whose intent, or the list of open runs, cannot be read is left as it is until it can.
 - Plain sessions follow the Settings row "Auto memory for plain sessions" (Settings › Automation). Its default is off.
 - The Overlord's profile also turns off forks and the agent view. Those apply once W1's Overlord exists.
-- The lane writes at most five routes a minute, so a fleet converges over a few minutes. A route only changes the
+- The lane makes at most five successful route writes a minute, so a fleet converges over a few minutes. A route only changes the
   session's next launch, never a running one.
 
 **What it does not do.**
@@ -31,8 +33,9 @@ renewed and checked against a replay baseline, an unreviewed memory changes what
 - It leaves alone any session that carries the history programme's W3 steer marker, for as long as the marker stands.
 
 **Options.**
-1. **Arm now.** Auto memory goes off for coordinators, workers, reviewers and the rest from their next launch; plain
-   sessions follow their Settings row.
+1. **Arm now.** Auto memory goes off for coordinators, workers, reviewers and the rest from their next launch. A
+   coordinator between runs keeps memory off only if it has declared its intent; without a declaration it is plain and
+   follows the Settings row, like every other plain session.
 2. **Arm for long-lived roles only, first.** A one-line change to `profileFor` (recorded as a departure) makes every role
    but `coordinator` and `overlord` keep its memory until a later item.
 3. **Keep it in shadow.** The lane keeps logging the writes it would make. Nothing changes.

@@ -17,7 +17,6 @@
   "pwa/src/face/splash.ts#splashShows": 1,
   "pwa/src/face/badgeAct.ts#badgeAct": 1,
   "server/src/continuity/launchProfile.ts#compactThresholdFor": 1,
-  "server/src/continuity/launchProfile.ts#compactThresholdFor": 1,
   "server/src/continuity/profileFor.ts#profileFor": 1,
   "server/src/continuity/profileFor.ts#plainAutoMemoryOf": 1,
   "server/src/continuity/compaction.ts#compactInstructionsFor": 1,
