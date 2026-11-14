@@ -15,8 +15,11 @@ import { COORDINATOR_ROSTER_CARD_LIVE_MARKER } from './switches.js';
 
 /** The roster card's row (durability D4, #757): the first lane on the card. */
 export const ROSTER_CARD_LANE = 'roster-card';
+/** The renewal lane's row (Overlord W1a, the generations piece): long-lived sessions renewed through their generations.
+ *  In shadow the lane records each generation's would-be states in `shadowState`; live, it moves `state`. */
+export const CONTINUITY_LANE = 'continuity';
 /** The lanes the Shadow lanes card has a row for, in the card's order. */
-export const LANE_ARM_LANES = [ROSTER_CARD_LANE] as const;
+export const LANE_ARM_LANES = [ROSTER_CARD_LANE, CONTINUITY_LANE] as const;
 export type LaneArmLane = (typeof LANE_ARM_LANES)[number];
 export function isLaneArmLane(v: unknown): v is LaneArmLane {
   return typeof v === 'string' && (LANE_ARM_LANES as readonly string[]).includes(v);
@@ -111,6 +114,14 @@ export const LANE_ARM_TEXT = {
         + 'gets no roster; the card it would have had is appended to the shadow log on the fleet box.',
       liveNote: 'After a compaction, resume or clear, and on its first wake after an idle compaction, a coordinator\'s '
         + 'context lists the open runs it claims and what is awaiting you.',
+      gate: null,
+    },
+    [CONTINUITY_LANE]: {
+      legend: 'Renew long-lived sessions',
+      shadowNote: 'Each start of a coordinator mints a generation and every pass records whether a renewal would be due; '
+        + 'nothing is held, refused or renewed.',
+      liveNote: 'A coordinator\'s generations move through the renewal states; until the renewal act ships, this changes '
+        + 'nothing a session sees.',
       gate: null,
     },
   },

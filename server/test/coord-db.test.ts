@@ -720,9 +720,10 @@ describe('coord.db: migration 4 — runs.dispatchStartedAt', () => {
     // (testbox_events.changes and testbox_staged_changes, the ledger's old and new values, D-8399)
     // and MIGRATIONS[63] (project_linking's team source, evidence and candidates, the automatic team link, D-8405)
     // and MIGRATIONS[64] (mail.answersMail and mail_answers_once, the invited reply, #2726)
-    // and MIGRATIONS[65] (continuity_starts, the start report, Overlord W1a).
-    expect(COORD_SCHEMA_VERSION).toBe(66);
-    expect(MIGRATIONS.length).toBe(66);
+    // and MIGRATIONS[65] (continuity_starts, the start report, Overlord W1a)
+    // and MIGRATIONS[66] (continuity_generations, continuity_cursor and the continuity lane-arm row, Overlord W1a).
+    expect(COORD_SCHEMA_VERSION).toBe(67);
+    expect(MIGRATIONS.length).toBe(67);
   });
 
   it('is ADDITIVE: every column migration 1 wrote is still on the table, unchanged', () => {
@@ -813,8 +814,9 @@ describe('coord.db: migration 11 — runs.kind and runs.reviews (design 2026-09-
     // and MIGRATIONS[61] (claims.chainedFrom, D-8395) and MIGRATIONS[62] (testbox_events.changes and testbox_staged_changes, D-8399)
     // and MIGRATIONS[63] (project_linking's team link columns, D-8405)
     // and MIGRATIONS[64] (mail.answersMail, #2726)
-    // and MIGRATIONS[65] (continuity_starts, the start report, Overlord W1a); the migration above is still entry 11.
-    expect(COORD_SCHEMA_VERSION).toBe(66);
+    // and MIGRATIONS[65] (continuity_starts, the start report, Overlord W1a)
+    // and MIGRATIONS[66] (continuity_generations, Overlord W1a); the migration above is still entry 11.
+    expect(COORD_SCHEMA_VERSION).toBe(67);
     const row = db.prepare('SELECT kind, reviews FROM runs').get() as { kind: string; reviews: number | null };
     expect(row).toEqual({ kind: 'work', reviews: null });
     db.close();
@@ -2536,6 +2538,34 @@ describe('coord.db: review_cap.granted, askHandledAt and review_cap_lifts (D-812
     expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(COORD_SCHEMA_VERSION);
     expect(db.prepare('SELECT workRunId, askedAt, liftedAt, granted, askHandledAt FROM review_cap').get())
       .toEqual({ workRunId: 1, askedAt: 7, liftedAt: 9, granted: null, askHandledAt: null });
+    db.close();
+  });
+});
+
+describe('coord.db: continuity_generations and continuity_cursor, the generations (Overlord §3.3.11, H12)', () => {
+  /** Found by its DDL, never hard-coded. */
+  const SLOT = MIGRATIONS.findIndex((m) => m.includes('CREATE TABLE continuity_generations')) + 1;
+  const ENTRY = /^CREATE TABLE continuity_generations \([^;]*\);\s*CREATE UNIQUE INDEX continuity_generations_live ON continuity_generations\(identity\) WHERE state <> 'ended';\s*CREATE TABLE continuity_cursor \([^;]*\);\s*INSERT INTO lane_arm_settings \(lane, choice, updatedAt\) VALUES \('continuity', 'shadow', 0\);$/;
+  it('NEW TABLES, an index and one seed row, nothing on an existing table, after the start report\'s table', () => {
+    expect(SLOT).toBeGreaterThan(MIGRATIONS.findIndex((m) => m.includes('CREATE TABLE continuity_starts')) + 1);
+    expect(MIGRATIONS[SLOT - 1]!.replace(/--[^\n]*/g, '').trim()).toMatch(ENTRY);
+  });
+
+  it('reaches a database ALREADY at the version before it: the seed row lands and every existing row is as it was', () => {
+    const p = dbPathIn(mkTmp('ccrc-coord-'));
+    mkdirSync(path.dirname(p), { recursive: true });
+    const raw = new DatabaseSync(p);
+    tx(raw, () => {
+      for (let v = 0; v < SLOT - 1; v++) raw.exec(MIGRATIONS[v]!);
+      raw.exec(`PRAGMA user_version = ${SLOT - 1}`);
+      raw.exec("UPDATE lane_arm_settings SET choice = 'live', updatedAt = 7 WHERE lane = 'roster-card'");
+    });
+    raw.close();
+    const db = openCoordDb(p);
+    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(COORD_SCHEMA_VERSION);
+    expect(db.prepare('SELECT count(*) AS n FROM continuity_generations').get()).toEqual({ n: 0 });
+    expect(db.prepare('SELECT lane, choice, updatedAt FROM lane_arm_settings ORDER BY lane').all())
+      .toEqual([{ lane: 'continuity', choice: 'shadow', updatedAt: 0 }, { lane: 'roster-card', choice: 'live', updatedAt: 7 }]);
     db.close();
   });
 });

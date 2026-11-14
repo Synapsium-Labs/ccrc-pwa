@@ -1,8 +1,17 @@
-// L3 adapter: the start report's table (Overlord spec §3.3.11, H12, W1a). `continuity_starts` has one writer,
-// `insertStart`, and one read, `startsSince` (the generations lane's); `CoordStore` keeps one-line delegates of the same
-// names. Nothing here decides: the door (`routes.ts`) validates, this file records and measures.
+// L3 adapter: the start report's table and the generations' (Overlord spec §3.3.11, H12, W1a). `continuity_starts` has one
+// writer, `insertStart`, and one read, `startsSince` (the generations lane's); `continuity_generations` and
+// `continuity_cursor` are written only through the generation functions below, by the generations lane. `CoordStore` keeps
+// one-line delegates of the same names. Nothing here decides: the door (`routes.ts`) validates, the lane's deciders decide,
+// and this file records and measures.
 import type { DatabaseSync } from 'node:sqlite';
-import { startSourceOf, type StartRow } from '../../../shared/continuity.js';
+import {
+  GENERATION_STATES, HOLD_OFF_MS, STATE_DEADLINE_S, isGenerationOutcome, isGenerationState, isRenewalTrigger, isTriggerClass,
+  startSourceOf, type GenerationOutcome, type GenerationState, type RenewalTrigger, type StartRow, type TriggerClass,
+} from '../../../shared/continuity.js';
+import { isFleetRole, type FleetRole } from '../../../shared/fleetRoles.js';
+import type { Observed } from '../time/observed.js';
+import type { GenView } from './generationMachine.js';
+import { tx } from '../coord/tx.js';
 
 /** What the door hands the writer: `source` is the payload's word as it came. */
 export interface StartInsert {
@@ -38,15 +47,349 @@ export function insertStart(db: DatabaseSync, row: StartInsert): StartInsertResu
   }
 }
 
-/** Every recorded start after `sinceId`, in id order: the generations lane's read. A failed read answers ok: false. */
-export function startsSince(db: DatabaseSync, sinceId: number): StartsRead {
+/** Every recorded start after `sinceId`, in id order, at most `limit` of them (all when negative): the generations lane's
+ *  read. A failed read answers ok: false. */
+export function startsSince(db: DatabaseSync, sinceId: number, limit = -1): StartsRead {
   try {
     const rows = db.prepare(
-      'SELECT id, sessionId, reportId, uuid, source, model, rowIncarnation, reportedAt, receivedAt FROM continuity_starts WHERE id > ? ORDER BY id',
-    ).all(sinceId) as unknown as (Omit<StartRow, 'source'> & { source: string })[];
+      'SELECT id, sessionId, reportId, uuid, source, model, rowIncarnation, reportedAt, receivedAt FROM continuity_starts WHERE id > ? ORDER BY id LIMIT ?',
+    ).all(sinceId, limit) as unknown as (Omit<StartRow, 'source'> & { source: string })[];
     // The table has no CHECK, so a word a newer build wrote reads through the same rule as the writer (review 1911, F10).
     return { ok: true, rows: rows.map((r) => ({ ...r, source: startSourceOf(r.source) })) };
   } catch (e) {
     return { ok: false, detail: `continuity_starts read failed: ${e instanceof Error ? e.message : String(e)}` };
+  }
+}
+
+// ------------------------------------------------------------------------------------------------- the generations
+// `continuity_generations` and `continuity_cursor` (Overlord spec §3.3.1 C36, §3.3.11 H12, W1a; migration 67). ONE
+// writer, the generations lane (`generationsLane.ts`), through the functions below; `CoordStore` keeps one-line
+// delegates. Every write is a compare-and-set on the row the caller read (`GenExpect`), so a pass that raced another
+// writer, or a restart, changes nothing it did not read.
+//
+// TWO STATE COLUMNS, ONE WALK (reviews 1896 R1, 1902 F1). A walk is a generation's way out of `active` or `degraded` and
+// back: from a mint at `carded`, or from a due trigger. `walk` records the mode it began in, read once a pass from the
+// `continuity` row: a live walk moves `state` and `deadlineAt`, a shadow walk moves `shadowState` and
+// `shadowDeadlineAt`, and a walk keeps its mode to its end (`active`, `degraded` or `ended`) whatever the row says
+// meanwhile. So shadow never moves `state` (the mail gate and the prompt route read it), a live walk finishes on `state`
+// after the row drops to shadow, and a deadline set by a shadow walk never stands on a row whose `state` is `active`.
+// When the row is live and a shadow walk's residue stands, `clearShadowWalk` removes it, and the next due trigger starts
+// a live walk; nothing begun in shadow is carried into `state`.
+
+/** The mode a walk began in. */
+export type WalkMode = 'live' | 'shadow';
+
+/** One row of `continuity_generations`, as read. Every column the machine's view needs is here, so a pass after a restart
+ *  resumes from the row and never from memory. */
+export interface GenRow {
+  readonly id: number; readonly identity: string; readonly sessionId: string; readonly role: FleetRole;
+  readonly term: number; readonly rowIncarnation: string | null; readonly n: number;
+  readonly state: GenerationState; readonly shadowState: GenerationState | null; readonly walk: WalkMode | null;
+  readonly walkClass: TriggerClass | null; readonly enteredAt: number;
+  readonly deadlineAt: number | null; readonly shadowDeadlineAt: number | null;
+  readonly dueSince: number | null; readonly dueWhy: RenewalTrigger | null; readonly dueClass: TriggerClass | null;
+  readonly dueSinceObservedMs: number | null;
+  readonly proven: boolean; readonly renudged: boolean; readonly probeRounds: number; readonly hostEnded: boolean;
+  readonly blind: readonly RenewalTrigger[] | null;
+  readonly model: string | null; readonly prevModel: string | null; readonly lane: string | null; readonly host: string | null;
+  readonly cardHash: string | null; readonly snapshotId: string | null; readonly attempts: number;
+  readonly outcome: GenerationOutcome | null; readonly resumed: boolean;
+  readonly startId: number; readonly startReportedAt: number;
+  readonly observed: Observed; readonly mintedObservedMs: number;
+  readonly softRenewalObservedMs: number | null; readonly holdOffUntilObservedMs: number | null;
+}
+
+/** What a compare-and-set compares: the row's place in its identity's line and both state columns with the walk, as the
+ *  caller read them (the key `(identity, term, n, state)`, with the shadow column beside `state`). */
+export type GenExpect = Pick<GenRow, 'term' | 'n' | 'state' | 'shadowState' | 'walk'>;
+export const genExpectOf = (r: GenRow): GenExpect =>
+  ({ term: r.term, n: r.n, state: r.state, shadowState: r.shadowState, walk: r.walk });
+
+/** The column a walk moves. */
+export type GenColumn = 'state' | 'shadowState';
+
+/** THE ONE ACCESSOR for a generation's effective state (review 1902 F6): the state of the walk in flight, else, outside a
+ *  walk, `state` while `continuity` is live and the shadow column's last word (or `state`) while it is shadow. The
+ *  deadline is the same column's; the nudge point is derived from it (`CARDED_NUDGE_AT_MS`, review 1912 F3: the carded
+ *  deadline less the lane period), so it is never a second stored fact. `column` is where the next step writes. */
+export interface EffectiveGeneration {
+  readonly state: GenerationState;
+  readonly deadlineAt: number | null;
+  readonly column: GenColumn;
+  /** The shadow column holds what a walk begun in shadow left, and the row is live: `clearShadowWalk` removes it. */
+  readonly shadowResidue: boolean;
+}
+export function effectiveGeneration(r: GenRow, live: boolean): EffectiveGeneration {
+  const shadowResidue = live && r.walk !== 'live' && (r.shadowState !== null || r.walk === 'shadow');
+  if (r.walk === 'live' || (r.walk === null && live)) return { state: r.state, deadlineAt: r.deadlineAt, column: 'state', shadowResidue };
+  return { state: r.shadowState ?? r.state, deadlineAt: r.shadowState === null ? null : r.shadowDeadlineAt, column: 'shadowState', shadowResidue };
+}
+
+/** The machine's view of a generation (`generationStep`'s argument), from its effective state and its columns. */
+export function genViewOf(r: GenRow, live: boolean): GenView {
+  return {
+    state: effectiveGeneration(r, live).state, tries: r.attempts, cls: r.walkClass, renudged: r.renudged,
+    probeRounds: r.probeRounds, hostEnded: r.hostEnded, proven: r.proven,
+  };
+}
+
+/** The states a walk ends in: outside them a walk is in flight. */
+const WALK_ENDS: ReadonlySet<GenerationState> = new Set<GenerationState>(['active', 'degraded', 'ended']);
+const deadlineFor = (s: GenerationState, now: number): number | null => {
+  const sec = (STATE_DEADLINE_S as Readonly<Partial<Record<GenerationState, number>>>)[s];
+  return sec === undefined ? null : now + sec * 1_000;
+};
+
+const GEN_COLUMNS = 'id, identity, sessionId, role, term, rowIncarnation, n, state, shadowState, walk, walkClass, enteredAt, '
+  + 'deadlineAt, shadowDeadlineAt, dueSince, dueWhy, dueClass, dueSinceObservedMs, proven, renudged, probeRounds, hostEnded, '
+  + 'blind, model, prevModel, lane, host, cardHash, snapshotId, attempts, outcome, resumed, startId, startReportedAt, observed, '
+  + 'mintedObservedMs, softRenewalObservedMs, holdOffUntilObservedMs';
+
+const intOrNull = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) ? v : typeof v === 'bigint' ? Number(v) : null);
+const strOrNull = (v: unknown): string | null => (typeof v === 'string' ? v : null);
+function observedOf(v: unknown): Observed | null {
+  if (typeof v !== 'string') return null;
+  try {
+    const o = JSON.parse(v) as Record<string, unknown>;
+    return typeof o.ms === 'number' && typeof o.mono === 'number' && typeof o.proc === 'string' ? { ms: o.ms, mono: o.mono, proc: o.proc } : null;
+  } catch { return null; }
+}
+function blindOf(v: unknown): RenewalTrigger[] | null {
+  if (typeof v !== 'string') return null;
+  try { const a: unknown = JSON.parse(v); return Array.isArray(a) ? a.filter(isRenewalTrigger) : null; } catch { return null; }
+}
+
+/** A row as stored, or the reason it is not one this build can read: a token outside a vocabulary, or a column a
+ *  newer build wrote in a shape this one does not know. A row that does not read is never guessed into one. */
+function genRowOf(raw: Record<string, unknown>): GenRow | string {
+  const state = raw.state; const shadow = raw.shadowState; const walk = raw.walk; const role = raw.role;
+  const observed = observedOf(raw.observed);
+  const num = (k: string): number | null => intOrNull(raw[k]);
+  if (!isGenerationState(state)) return `state ${String(state)}`;
+  if (shadow !== null && !isGenerationState(shadow)) return `shadowState ${String(shadow)}`;
+  if (walk !== null && walk !== 'live' && walk !== 'shadow') return `walk ${String(walk)}`;
+  if (!isFleetRole(role)) return `role ${String(role)}`;
+  if (observed === null) return 'observed';
+  const id = num('id'); const term = num('term'); const n = num('n'); const enteredAt = num('enteredAt');
+  const startId = num('startId'); const startReportedAt = num('startReportedAt'); const minted = num('mintedObservedMs');
+  if (id === null || term === null || n === null || enteredAt === null || startId === null || startReportedAt === null || minted === null) return 'a counter';
+  const walkClass = raw.walkClass; const dueWhy = raw.dueWhy; const dueClass = raw.dueClass; const outcome = raw.outcome;
+  return {
+    id, identity: String(raw.identity), sessionId: String(raw.sessionId), role, term, rowIncarnation: strOrNull(raw.rowIncarnation),
+    n, state, shadowState: shadow as GenerationState | null, walk: walk as WalkMode | null,
+    walkClass: isTriggerClass(walkClass) ? walkClass : null, enteredAt,
+    deadlineAt: num('deadlineAt'), shadowDeadlineAt: num('shadowDeadlineAt'),
+    dueSince: num('dueSince'), dueWhy: isRenewalTrigger(dueWhy) ? dueWhy : null, dueClass: isTriggerClass(dueClass) ? dueClass : null,
+    dueSinceObservedMs: num('dueSinceObservedMs'),
+    proven: num('proven') === 1, renudged: num('renudged') === 1, probeRounds: num('probeRounds') ?? 0, hostEnded: num('hostEnded') === 1,
+    blind: blindOf(raw.blind), model: strOrNull(raw.model), prevModel: strOrNull(raw.prevModel), lane: strOrNull(raw.lane),
+    host: strOrNull(raw.host), cardHash: strOrNull(raw.cardHash), snapshotId: strOrNull(raw.snapshotId), attempts: num('attempts') ?? 0,
+    outcome: isGenerationOutcome(outcome) ? outcome : null, resumed: num('resumed') === 1, startId, startReportedAt,
+    observed, mintedObservedMs: minted, softRenewalObservedMs: num('softRenewalObservedMs'),
+    holdOffUntilObservedMs: num('holdOffUntilObservedMs'),
+  };
+}
+
+export type GenerationsRead = { ok: true; rows: GenRow[] } | { ok: false; detail: string };
+
+/** Every generation that is not ended, in id order: the lane's read. ALL-OR-FAILURE: one row this build cannot read
+ *  fails the read, so a pass acts on no partial picture. */
+export function liveGenerations(db: DatabaseSync): GenerationsRead {
+  try {
+    const raws = db.prepare(`SELECT ${GEN_COLUMNS} FROM continuity_generations WHERE state <> 'ended' ORDER BY id`).all() as Record<string, unknown>[];
+    const rows: GenRow[] = [];
+    for (const raw of raws) {
+      const r = genRowOf(raw);
+      if (typeof r === 'string') return { ok: false, detail: `continuity_generations row ${String(raw.id)}: ${r}` };
+      rows.push(r);
+    }
+    return { ok: true, rows };
+  } catch (e) {
+    return { ok: false, detail: `continuity_generations read failed: ${e instanceof Error ? e.message : String(e)}` };
+  }
+}
+
+/** The WHERE clause of every compare-and-set, and its arguments. */
+const CAS = 'id = ? AND term = ? AND n = ? AND state = ? AND shadowState IS ? AND walk IS ?';
+const casArgs = (id: number, e: GenExpect): (number | string | null)[] => [id, e.term, e.n, e.state, e.shadowState, e.walk];
+const changedOf = (r: { changes: number | bigint }): { changed: boolean } => ({ changed: Number(r.changes) === 1 });
+
+export interface MintInput {
+  identity: string; sessionId: string; role: FleetRole; term: number; rowIncarnation: string | null;
+  startId: number; startReportedAt: number; resumed: boolean; model: string | null; lane: string | null; host: string | null;
+  /** The outcome written on the generation this start ends, when there is one. */
+  outcome: GenerationOutcome;
+  /** This process's monotonic reading and id: the new row's accumulator is re-anchored on them with no advance. */
+  mono: number; proc: string;
+  now: number;
+}
+export type MintResult = { ok: true; id: number; n: number } | { ok: false; kind: 'superseded' | 'write-failed' };
+
+class Superseded extends Error {}
+
+/** In ONE transaction: end the identity's live generation with `outcome` and insert the next at `carded`. `expect` is the
+ *  live row the caller read, or null when it read none; `superseded` when the live row is not that, or the start was
+ *  minted already. The new row walks live when the pass is live or the row it ends was on a live walk (a live walk that a
+ *  start completes goes on, live, on the next generation, ruling F1), and in shadow otherwise, so a shadow mint never
+ *  writes `state` past `active` and a walk begun in shadow is never carried into `state`. Its accumulator is the identity's newest row's `observed.ms`, re-anchored with no advance
+ *  (0 for an identity's first). `cursor`, when given, advances the lane's cursor in the same transaction, so a crash never
+ *  separates the last mint of a pass from the cursor that covers it. */
+export function mintGeneration(db: DatabaseSync, input: MintInput, expect: GenExpect | null, live: boolean,
+  cursor: CursorAdvance | null = null): MintResult {
+  try {
+    return tx(db, () => {
+      const held = db.prepare(`SELECT ${GEN_COLUMNS} FROM continuity_generations WHERE identity = ? AND state <> 'ended'`)
+        .all(input.identity) as Record<string, unknown>[];
+      const old = held.length === 0 ? null : genRowOf(held[0]!);
+      if (typeof old === 'string') throw new Superseded();
+      if (expect === null ? old !== null : old === null || old.term !== expect.term || old.n !== expect.n || old.state !== expect.state
+        || old.shadowState !== expect.shadowState || old.walk !== expect.walk) throw new Superseded();
+      if (db.prepare('SELECT 1 FROM continuity_generations WHERE startId = ?').get(input.startId) !== undefined) throw new Superseded();
+      const newest = db.prepare('SELECT observed, n, model FROM continuity_generations WHERE identity = ? AND term = ? ORDER BY n DESC LIMIT 1')
+        .get(input.identity, input.term) as { observed: unknown; n: unknown; model: unknown } | undefined;
+      const carried = observedOf(newest?.observed)?.ms ?? 0;
+      const n = (intOrNull(newest?.n) ?? 0) + 1;
+      if (old !== null) {
+        const ended = db.prepare("UPDATE continuity_generations SET state = 'ended', outcome = ?, walk = NULL, deadlineAt = NULL, "
+          + `shadowDeadlineAt = NULL WHERE ${CAS}`).run(input.outcome, ...casArgs(old.id, old));
+        if (Number(ended.changes) !== 1) throw new Superseded();
+      }
+      const mode: WalkMode = old?.walk === 'live' || live ? 'live' : 'shadow';
+      const deadline = deadlineFor('carded', input.now);
+      const observed: Observed = { ms: carried, mono: input.mono, proc: input.proc };
+      const res = db.prepare(
+        'INSERT INTO continuity_generations (identity, sessionId, role, term, rowIncarnation, n, state, shadowState, walk, enteredAt, '
+        + 'deadlineAt, shadowDeadlineAt, proven, resumed, startId, startReportedAt, model, prevModel, lane, host, observed, mintedObservedMs) '
+        + 'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      ).run(input.identity, input.sessionId, input.role, input.term, input.rowIncarnation, n,
+        mode === 'live' ? 'carded' : 'active', mode === 'live' ? null : 'carded', mode, input.now,
+        mode === 'live' ? deadline : null, mode === 'live' ? null : deadline,
+        input.resumed ? 1 : 0, input.startId, input.startReportedAt, input.model, strOrNull(newest?.model), input.lane, input.host,
+        JSON.stringify(observed), carried);
+      if (cursor !== null && !advanceCursorIn(db, cursor)) throw new Superseded();
+      return { ok: true as const, id: Number(res.lastInsertRowid), n };
+    });
+  } catch (e) {
+    return { ok: false, kind: e instanceof Superseded ? 'superseded' : 'write-failed' };
+  }
+}
+
+/** One step of a walk: the machine's next view, written to the walk's column (`effectiveGeneration`'s `column`).
+ *  Entering a state with a deadline sets that column's deadline from `STATE_DEADLINE_S`; staying in a state leaves it
+ *  as it was (ruling I2: no function takes a new deadline for a state the row is already in); entering `active` or
+ *  `degraded` clears it and ends the walk. A step never ends a generation: only a mint does, so `ended` is refused. */
+export function stepGeneration(db: DatabaseSync, id: number, expect: GenExpect, next: GenView, live: boolean, now: number): { changed: boolean } {
+  if (next.state === 'ended' || !GENERATION_STATES.includes(next.state)) return { changed: false };
+  const mode: WalkMode = expect.walk ?? (live ? 'live' : 'shadow');
+  const current = mode === 'live' ? expect.state : (expect.shadowState ?? expect.state);
+  const entering = next.state !== current;
+  const walk = WALK_ENDS.has(next.state) ? null : mode;
+  const stateCol = mode === 'live' ? 'state' : 'shadowState';
+  const deadlineCol = mode === 'live' ? 'deadlineAt' : 'shadowDeadlineAt';
+  const deadlineSet = entering ? `, ${deadlineCol} = ?` : '';
+  const args: (number | string | null)[] = [next.state, walk, next.cls, next.proven ? 1 : 0, next.renudged ? 1 : 0, next.probeRounds,
+    next.hostEnded ? 1 : 0, next.tries];
+  if (entering) args.push(now, deadlineFor(next.state, now));
+  try {
+    return changedOf(db.prepare(`UPDATE continuity_generations SET ${stateCol} = ?, walk = ?, walkClass = ?, proven = ?, renudged = ?, `
+      + `probeRounds = ?, hostEnded = ?, attempts = ?${entering ? ', enteredAt = ?' : ''}${deadlineSet} WHERE ${CAS}`)
+      .run(...args, ...casArgs(id, expect)));
+  } catch {
+    return { changed: false };
+  }
+}
+
+/** The row is live and a walk begun in shadow left its residue: remove it. The row is a working generation again, as
+ *  `GEN_ACTIVE` (proven, no counters), and the next due trigger starts a live walk. */
+export function clearShadowWalk(db: DatabaseSync, id: number, expect: GenExpect, now: number): { changed: boolean } {
+  if (expect.walk === 'live') return { changed: false };
+  try {
+    return changedOf(db.prepare('UPDATE continuity_generations SET shadowState = NULL, shadowDeadlineAt = NULL, walk = NULL, '
+      + `walkClass = NULL, proven = 1, renudged = 0, probeRounds = 0, hostEnded = 0, attempts = 0, enteredAt = ? WHERE ${CAS}`)
+      .run(now, ...casArgs(id, expect)));
+  } catch {
+    return { changed: false };
+  }
+}
+
+/** What a pass learnt of `renewalDue`: due (the trigger, its class, the wall time and the accumulator at which it became
+ *  due) or not, and always the triggers it could not read. A generation already due keeps the time it became due. */
+export type DueWrite = { due: true; why: RenewalTrigger; cls: TriggerClass; at: number; observedMs: number } | { due: false };
+export function setGenerationDue(db: DatabaseSync, id: number, expect: GenExpect, due: DueWrite, blind: readonly RenewalTrigger[]): { changed: boolean } {
+  try {
+    const b = JSON.stringify(blind);
+    if (!due.due) {
+      return changedOf(db.prepare('UPDATE continuity_generations SET dueSince = NULL, dueWhy = NULL, dueClass = NULL, '
+        + `dueSinceObservedMs = NULL, blind = ? WHERE ${CAS}`).run(b, ...casArgs(id, expect)));
+    }
+    return changedOf(db.prepare('UPDATE continuity_generations SET dueSince = COALESCE(dueSince, ?), dueWhy = ?, dueClass = ?, '
+      + `dueSinceObservedMs = COALESCE(dueSinceObservedMs, ?), blind = ? WHERE ${CAS}`)
+      .run(due.at, due.why, due.cls, due.observedMs, b, ...casArgs(id, expect)));
+  } catch {
+    return { changed: false };
+  }
+}
+
+/** The identity's accumulator, advanced by the pass (`observeTime`). */
+export function advanceObserved(db: DatabaseSync, id: number, expect: GenExpect, observed: Observed): { changed: boolean } {
+  try {
+    return changedOf(db.prepare(`UPDATE continuity_generations SET observed = ? WHERE ${CAS}`)
+      .run(JSON.stringify(observed), ...casArgs(id, expect)));
+  } catch {
+    return { changed: false };
+  }
+}
+
+/** The hold-off after a renewal that went back to `active` (the machine's `set-hold-off`; review 1902 F4): stored
+ *  ABSOLUTE on the identity's accumulator, `observed.ms + HOLD_OFF_MS`, so the gather subtracts `mintedObservedMs` to put
+ *  it on the generation's own age (`softTimesOf`). */
+export function setHoldOff(db: DatabaseSync, id: number, expect: GenExpect): { changed: boolean } {
+  try {
+    return changedOf(db.prepare('UPDATE continuity_generations SET holdOffUntilObservedMs = '
+      + `CAST(json_extract(observed, '$.ms') AS INTEGER) + ? WHERE ${CAS}`).run(HOLD_OFF_MS, ...casArgs(id, expect)));
+  } catch {
+    return { changed: false };
+  }
+}
+
+/** The lane's place in `continuity_starts`. */
+export interface CursorAdvance { lane: string; from: number; to: number }
+export type CursorRead = { ok: true; lastStartId: number } | { ok: false; detail: string };
+
+/** The cursor of `lane`: 0 when it has never advanced. */
+export function generationsCursor(db: DatabaseSync, lane: string): CursorRead {
+  try {
+    const row = db.prepare('SELECT lastStartId FROM continuity_cursor WHERE lane = ?').get(lane) as { lastStartId: unknown } | undefined;
+    if (row === undefined) return { ok: true, lastStartId: 0 };
+    const v = intOrNull(row.lastStartId);
+    return v === null ? { ok: false, detail: 'continuity_cursor.lastStartId is not a number' } : { ok: true, lastStartId: v };
+  } catch (e) {
+    return { ok: false, detail: `continuity_cursor read failed: ${e instanceof Error ? e.message : String(e)}` };
+  }
+}
+
+function advanceCursorIn(db: DatabaseSync, c: CursorAdvance): boolean {
+  if (!(c.to >= c.from)) return false;
+  const r = c.from === 0
+    ? db.prepare('INSERT INTO continuity_cursor (lane, lastStartId) VALUES (?, ?) ON CONFLICT (lane) DO UPDATE SET lastStartId = excluded.lastStartId '
+      + 'WHERE continuity_cursor.lastStartId = 0').run(c.lane, c.to)
+    : db.prepare('UPDATE continuity_cursor SET lastStartId = ? WHERE lane = ? AND lastStartId = ?').run(c.to, c.lane, c.from);
+  return Number(r.changes) === 1;
+}
+
+/** Advance the cursor from `from` (what the caller read) to `to`; a cursor that moved meanwhile changes nothing. */
+export function advanceCursor(db: DatabaseSync, c: CursorAdvance): { changed: boolean } {
+  try { return { changed: advanceCursorIn(db, c) }; } catch { return { changed: false }; }
+}
+
+/** The two newest work runs a coordinator claims, newest first (the wave boundary's read): their states and programmes. */
+export type ClaimedWorkRuns = { ok: true; runs: { id: number; state: string; program: string }[] } | { ok: false; detail: string };
+export function newestClaimedWorkRuns(db: DatabaseSync, claimedBy: string): ClaimedWorkRuns {
+  try {
+    const rows = db.prepare("SELECT id, state, program FROM runs WHERE claimedBy = ? AND kind = 'work' ORDER BY id DESC LIMIT 2")
+      .all(claimedBy) as { id: unknown; state: unknown; program: unknown }[];
+    return { ok: true, runs: rows.map((r) => ({ id: intOrNull(r.id) ?? -1, state: String(r.state), program: String(r.program) })) };
+  } catch (e) {
+    return { ok: false, detail: `runs read failed: ${e instanceof Error ? e.message : String(e)}` };
   }
 }

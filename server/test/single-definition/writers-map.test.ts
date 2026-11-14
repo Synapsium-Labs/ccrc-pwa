@@ -308,7 +308,7 @@ describe('section 2.2\'s facts each map to the writers pins that hold them (#236
 // new method, or from outside `CoordStore`, reds here. KNOWN WIDTH: a statement whose table name is built at run time
 // (the delegation tables' `delegationInsertSql`) or split from its verb across string pieces is not seen.
 const TABLES = ['run_events', 'mail_deliveries', 'feed_events', 'lifecycle_events', 'lifecycle_generations',
-  'lifecycle_gaps', 'asks', 'approvals', 'practice_cases', 'continuity_starts'] as const;
+  'lifecycle_gaps', 'asks', 'approvals', 'practice_cases', 'continuity_starts', 'continuity_generations', 'continuity_cursor'] as const;
 
 /** Each table's writers, `file#Class.method`, sorted and unique. */
 export const tableWriters = (files: readonly string[]): Record<string, string[]> => {
@@ -366,6 +366,9 @@ describe(TABLES_PIN, () => {
         'markApprovalOperatorRows', 'pruneApprovalInputs', 'staleApproval', 'takeApprovalForRule'].map((m) => `${S}${m}`),
       practice_cases: ['server/src/coord/practiceCasesStore.ts#openPracticeCase'],
       continuity_starts: ['server/src/continuity/continuityStore.ts#insertStart'],
+      continuity_generations: ['advanceObserved', 'clearShadowWalk', 'mintGeneration', 'setGenerationDue', 'setHoldOff', 'stepGeneration']
+        .map((f) => `server/src/continuity/continuityStore.ts#${f}`),
+      continuity_cursor: ['server/src/continuity/continuityStore.ts#advanceCursorIn'],
     });
   });
 });

@@ -43,6 +43,18 @@ describe('Settings › Automation › Shadow lanes (D-8274)', () => {
     expect(screen.getByText(R.liveNote)).toBeInTheDocument();
   });
 
+  it('the continuity row (Overlord W1a, generations) is listed after the roster card, in its own words, with no shadow record', async () => {
+    const C = T.rows.continuity;
+    vi.spyOn(api, 'laneArm').mockResolvedValue({ lanes: [row(), row({ lane: 'continuity', marker: null })] });
+    mount();
+    await waitFor(() => expect(screen.getByRole('group', { name: C.legend })).toBeInTheDocument());
+    const groups = screen.getAllByRole('group').map((g) => g.getAttribute('aria-label') ?? g.querySelector('legend')?.textContent);
+    expect(groups.indexOf(C.legend)).toBeGreaterThan(groups.indexOf(R.legend));
+    const own = within(screen.getByRole('group', { name: C.legend }));
+    expect(own.getByText(C.liveNote)).toBeInTheDocument();
+    expect(own.queryByText(/Shadow record:/)).toBeNull();
+  });
+
   it('Live is one tap then a confirm: the tap sends no key, the server\'s 409 opens the sheet, Go live sends its key', async () => {
     vi.spyOn(api, 'laneArm').mockResolvedValue(view());
     const set = vi.spyOn(api, 'setLaneArm')

@@ -111,6 +111,8 @@ describe('GET/POST /api/coord/lane-arm (D-8274)', () => {
     expect(res.json()).toEqual({ ok: true, lanes: [{
       lane: 'roster-card', stored: 'shadow', detail: null, live: false, updatedAt: 0, imported: null,
       marker: COORDINATOR_ROSTER_CARD_LIVE_MARKER,
+    }, {
+      lane: 'continuity', stored: 'shadow', detail: null, live: false, updatedAt: 0, imported: null, marker: null,
     }] });
   });
 
