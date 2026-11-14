@@ -137,6 +137,31 @@ into its ledger. Each entry is a plain slug. None carries a number: the programm
   inside five seconds of leaving it" cannot hold: a calming change now waits for the cool-down. The row waits the
   cool-down out and asserts the return plays again at its end.
 
+## Narrowing Crying and Dizzy (programme item 219, wave 26)
+
+The operator's answer to item 219: "Narrow both: no Crying for a wait you chose; Dizzy only when a lane a session is using, or
+about to use, is limited."
+
+- **crying-skips-the-operators-wait, a rule the operator asked for (item 219)** — a session's `limitWait` makes the face Cry
+  only when the wait was not the operator's choice. `LimitWait.waitingBy` already says whose choice stands: `'operator'`
+  (the operator's "Wait until reset") gives no Crying; `'auto'` (ccd's own wait where no account had room) and `null` (a limit
+  with no choice yet, `waiting: false`) still Cry. Crying for a death is unchanged. An older server's value revives as
+  `'operator'` when waiting, so its operator waits stop crying too. `MOOD_RULES.crying.cause` now reads "a session died or is
+  stuck at a limit you did not choose to wait out", so the name stays true. One session's chosen wait never hides another's
+  limit that nobody chose (the rule is per session).
+- **dizzy-only-for-lanes-in-use, a rule the operator asked for (item 219)** — a rate-limited lane gives Dizzy only when a live
+  session (a bucket that is not `dead`, `archived` or `cleanup`, the set Angry already uses) is on it now: the lane's id on
+  `GET /api/accounts` is the session's `wrapper`. A spare account at its cap that no session is on gives no Dizzy. The swap
+  arm of Dizzy is unchanged, and `MOOD_RULES.dizzy.cause` now reads "an account a session is on is rate-limited, or a
+  session just swapped".
+- **dizzy-about-to-use-has-no-wire-field, a follow-up (for the coordinator)** — measured: nothing the PWA receives names a
+  lane a session is ABOUT to use. A session carries `wrapper` (the lane it is on) and `limitWait.account` (the lane it is at
+  the limit on, so "in use", not next); `swapBlocked` and `stranded` are refusals with a reason and no lane. There is no
+  pending-swap field. `ProjectedHome` and `ProjectPlacement` forecast where a NEW workspace would land, a project's, not any
+  session's next lane, and the face does not read them. So only the "using now" half is built. The "about to use" half would
+  need a new wire field (the next account a pending swap or a pool placement has chosen for a session), which this change adds
+  none of.
+
 ## The splash (Task 9)
 
 - **ui-exports-reduced-motion-hook, export** — `@ccrc/ui` now exports `usePrefersReducedMotion`, which the splash reads.

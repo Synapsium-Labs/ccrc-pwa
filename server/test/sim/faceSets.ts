@@ -8,7 +8,7 @@
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { expect } from 'vitest';
-import { sessionBucket, type FleetSession, type LaneWire, type RunSummary } from '../../../shared/api.js';
+import { sessionBucket, type FleetSession, type LaneWire, type LimitWait, type RunSummary } from '../../../shared/api.js';
 import type { MutantSet, SuiteCase } from './mutate.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
@@ -56,7 +56,7 @@ const deadRow = (over: Partial<Record<keyof FleetSession, unknown>> = {}): Parti
   status: 'dead', statusUpdatedAt: null, ...over,
 });
 const endedAgo = (ago: number, cause = 'exited') => ({ at: NOW - ago, cause });
-const idle = (n: string) => fleetSession({ id: `lane-a-${n}`, bucket: 'idle' });
+const idle = (n: string) => fleetSession({ id: `lane-a-${n}`, wrapper: 'lane-a', bucket: 'idle' });
 const base = (over: Partial<MoodFacts> = {}): MoodFacts => ({
   conn: 'open', linkLost: false, agentDown: false,
   sessions: [idle('1'), idle('2'), idle('3')], runs: [], waitingItems: 0, lanes: SERVED, stallQuietMs: 600_000, nowMs: NOW,
@@ -65,6 +65,9 @@ const base = (over: Partial<MoodFacts> = {}): MoodFacts => ({
 const withSession = (s: Parameters<typeof fleetSession>[0], over: Partial<MoodFacts> = {}) =>
   base({ sessions: [...base().sessions!, fleetSession({ id: 'project-a-x', ...s })], ...over });
 const merged = (ago: number) => ({ pr: { mergedAt: NOW - ago } as never });
+/** A `limitWait` as the wire carries it (D-8123, D-8173). */
+const limitWait = (waitingBy: LimitWait['waitingBy'], over: Partial<LimitWait> = {}): LimitWait =>
+  ({ since: NOW - MIN, reset: NOW + 30 * MIN, account: 'lane-a', waiting: waitingBy !== null, waitingBy, ...over });
 const rateLimited = { state: { word: 'rate-limited', source: 'x' } } as unknown as LaneWire;
 const review = (movedAgo: number) => runRow({ id: 1, program: 'project-a', state: 'awaiting-review', lastMoveAt: NOW - movedAgo });
 
@@ -107,7 +110,19 @@ export function moodCases(m: MoodModule): Record<string, SuiteCase> {
       }
       for (const cause of ['oom', 'tmux-server', 'exited', 'unknown']) expect(mood(withSession(deadRow({ lastEnd: endedAgo(MIN, cause) })))).toBe('crying');
     },
-    'a limit wait is Crying': () => { expect(mood(withSession({ limitWait: { at: NOW } as never }))).toBe('crying'); },
+    'a limit wait nobody chose is Crying: ccd waiting by itself, or no choice yet': () => {
+      expect(mood(withSession({ limitWait: limitWait('auto') }))).toBe('crying');
+      expect(mood(withSession({ limitWait: limitWait(null, { waiting: false }) }))).toBe('crying');
+    },
+    'a limit wait the operator chose is not Crying': () => {
+      expect(mood(withSession({ limitWait: limitWait('operator') }))).not.toBe('crying');
+      expect(mood(withSession({ limitWait: limitWait('operator', { reset: null }) }))).not.toBe('crying');
+    },
+    "one session's chosen wait does not hide another's limit nobody chose": () => {
+      const f = base({ sessions: [...base().sessions!, fleetSession({ id: 'project-a-x', limitWait: limitWait('operator') }),
+        fleetSession({ id: 'project-a-y', limitWait: limitWait('auto') })] });
+      expect(mood(f)).toBe('crying');
+    },
     'a hibernated or stopped session does not cry': () => {
       expect(mood(withSession(deadRow({ lastEnd: endedAgo(MIN), hibernatedAt: NOW - MIN })))).not.toBe('crying');
       expect(mood(withSession(deadRow({ lastEnd: endedAgo(MIN), stoppedBy: { at: NOW, surface: 'pwa' } as never })))).not.toBe('crying');
@@ -130,7 +145,22 @@ export function moodCases(m: MoodModule): Record<string, SuiteCase> {
       expect(mood(base({ waitingItems: 2 }))).toBe('sad');
       expect(mood(base({ waitingItems: 0 }))).not.toBe('sad');
     },
-    'a rate-limited lane is Dizzy': () => { expect(mood(base({ lanes: serving({ 'lane-a': rateLimited }) }))).toBe('dizzy'); },
+    'a rate-limited lane a live session is on is Dizzy': () => { expect(mood(base({ lanes: serving({ 'lane-a': rateLimited }) }))).toBe('dizzy'); },
+    'a rate-limited spare lane that no session is on gives no Dizzy': () => {
+      expect(mood(base({ lanes: serving({ 'lane-b': rateLimited }) }))).not.toBe('dizzy');
+      expect(mood(base({ lanes: serving({ 'lane-a': { state: { word: 'ok', source: 'x' } } as unknown as LaneWire, 'lane-b': rateLimited }) }))).not.toBe('dizzy');
+    },
+    'a limited lane only a dead, archived or cleaned-up session was on gives no Dizzy': () => {
+      const lanes = serving({ 'lane-b': rateLimited });
+      expect(mood(base({ lanes, sessions: [...base().sessions!, fleetSession({ id: 'lane-b-x', wrapper: 'lane-b', ...deadRow() })] }))).not.toBe('dizzy');
+      expect(mood(base({ lanes, sessions: [...base().sessions!, fleetSession({ id: 'lane-b-x', wrapper: 'lane-b', bucket: 'archived' })] }))).not.toBe('dizzy');
+      expect(mood(base({ lanes, sessions: [...base().sessions!, fleetSession({ id: 'lane-b-x', wrapper: 'lane-b', bucket: 'cleanup' })] }))).not.toBe('dizzy');
+    },
+    'a limited lane any live session is on is Dizzy': () => {
+      const lanes = serving({ 'lane-b': rateLimited });
+      for (const bucket of ['working', 'idle'])
+        expect(mood(base({ lanes, sessions: [...base().sessions!, fleetSession({ id: 'lane-b-x', wrapper: 'lane-b', bucket })] }))).toBe('dizzy');
+    },
     'a recent swap is Dizzy, an older one is not': () => {
       expect(mood(withSession({ lastEnd: { at: NOW - 10_000, cause: 'swap-manual' } }))).toBe('dizzy');
       expect(mood(withSession({ lastEnd: { at: NOW - m.DIZZY_SWAP_MS - 1, cause: 'swap-manual' } }))).not.toBe('dizzy');
@@ -165,7 +195,7 @@ export function moodCases(m: MoodModule): Record<string, SuiteCase> {
       expect(mood(base())).not.toBe('thinking');
     },
     'the higher rank wins': () => {
-      expect(mood(withSession({ bucket: 'attention', limitWait: { at: NOW } as never }))).toBe('alert');
+      expect(mood(withSession({ bucket: 'attention', limitWait: limitWait('auto') }))).toBe('alert');
       expect(mood(base({ sessions: [fleetSession({ bucket: 'attention' }), fleetSession({ bucket: 'working' })] }))).toBe('alert');
       expect(mood(withSession({ bucket: 'attention' }, { conn: 'down', linkLost: true }))).toBe('offline');
       expect(mood(withSession({ bucket: 'attention' }, { agentDown: true }))).toBe('offline');
@@ -206,7 +236,10 @@ const MOOD_SET: MutantSet<MoodModule> = {
     { id: 'O4', old: "const consoleLinkLost = (f: MoodFacts): boolean => f.conn !== 'open' && f.linkLost;", new: "const consoleLinkLost = (f: MoodFacts): boolean => f.linkLost;" },
     { id: 'O2', old: "consoleLinkLost(f) || f.agentDown", new: "consoleLinkLost(f)" },
     { id: 'N1', old: "['neutral', (f) => f.sessions === null]", new: "['neutral', (f) => false]" },
-    { id: 'C1', old: ' || s.limitWait !== null)]', new: ')]' },
+    { id: 'C1', old: ' || limitNotChosen(s))]', new: ')]' },
+    { id: 'C7', old: "s.limitWait !== null && s.limitWait.waitingBy !== 'operator'", new: 's.limitWait !== null' },
+    { id: 'C8', old: "s.limitWait.waitingBy !== 'operator'", new: "s.limitWait.waitingBy === 'operator'" },
+    { id: 'C9', old: "s.limitWait !== null && s.limitWait.waitingBy !== 'operator'", new: "s.limitWait?.waitingBy !== 'operator'" },
     { id: 'C2', old: 'within(deathAt(s, f.nowMs), CRY_WINDOW_MS, f.nowMs)', new: '(deathAt(s, f.nowMs) !== null)' },
     { id: 'C3', old: 'return e !== null && DEATH_CAUSE[e.cause] ? e.at : null;', new: 'return e !== null ? e.at : null;' },
     { id: 'C4', old: "if (s.bucket !== 'dead' || s.hibernatedAt !== null || s.stoppedBy !== null) return null;", new: "if (s.bucket !== 'dead') return null;" },
@@ -217,7 +250,12 @@ const MOOD_SET: MutantSet<MoodModule> = {
     { id: 'W2', old: 'at - nowMs > FUTURE_SKEW_MS ? null', new: 'false ? null' },
     { id: 'A1', old: '!NOT_LIVE.has(s.bucket) && s.swapBlocked', new: 's.swapBlocked' },
     { id: 'S1', old: 'f.waitingItems > 0', new: 'f.waitingItems >= 0' },
-    { id: 'D1', old: "f.lanes.kind === 'served' && Object.values(f.lanes.lanes).some((l) => l.state.word === 'rate-limited')", new: 'false' },
+    { id: 'D1', old: "f.lanes.kind === 'served' && Object.entries(f.lanes.lanes).some(([id, l]) => l.state.word === 'rate-limited' && lanesInUse(ss).has(id))", new: 'false' },
+    { id: 'D2', old: " && lanesInUse(ss).has(id)", new: '' },
+    { id: 'D3', old: 'sessions.filter((s) => !NOT_LIVE.has(s.bucket)).map', new: 'sessions.map' },
+    { id: 'D4', old: '.map((s) => s.wrapper)', new: '.map((s) => s.project)' },
+    { id: 'D5', old: "&& lanesInUse(ss).has(id)", new: "&& !lanesInUse(ss).has(id)" },
+    { id: 'D6', old: "new Set(sessions.filter((s) => !NOT_LIVE.has(s.bucket))", new: "new Set(sessions.filter((s) => s.bucket !== 'dead')" },
     { id: 'G1', old: "f.lanes.kind !== 'unread'\n    && ss.some((s) => within(s.pr", new: "f.lanes.kind === 'served'\n    && ss.some((s) => within(s.pr" },
     { id: 'G2', old: "f.lanes.kind !== 'unread'\n    && !ss.some", new: "f.lanes.kind === 'served'\n    && !ss.some" },
     { id: 'H1', old: "['happy', (f, ss) => f.runs !== null && f.waitingItems", new: "['happy', (f, ss) => f.waitingItems" },

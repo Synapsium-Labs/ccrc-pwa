@@ -54,10 +54,10 @@ export const MOOD_RULES: Readonly<Record<Mood, MoodRule>> = {
   offline: { kind: 'measured', rank: 1, cause: 'the console has lost its link to the server' },
   neutral: { kind: 'measured', rank: 2, cause: 'not heard from the fleet yet' },
   alert: { kind: 'measured', rank: 3, cause: 'a session has a question for you' },
-  crying: { kind: 'measured', rank: 4, cause: 'a session died or is waiting out a limit' },
+  crying: { kind: 'measured', rank: 4, cause: 'a session died or is stuck at a limit you did not choose to wait out' },
   angry: { kind: 'measured', rank: 5, cause: 'a swap was refused and the refusal stands' },
   sad: { kind: 'measured', rank: 6, cause: 'items wait on you' },
-  dizzy: { kind: 'measured', rank: 7, cause: 'an account is rate-limited or a session just swapped' },
+  dizzy: { kind: 'measured', rank: 7, cause: 'an account a session is on is rate-limited, or a session just swapped' },
   confused: { kind: 'measured', rank: 8, cause: 'a run worker has gone quiet' },
   suspicious: { kind: 'measured', rank: 9, cause: 'a review is under way' },
   happy: { kind: 'measured', rank: 10, cause: 'a pull request just merged' },
@@ -155,6 +155,18 @@ function edges(f: MoodFacts, sessions: readonly FleetSession[]): number[] {
 /** Buckets where a session is not live ("any live session" in the angry rule). */
 const NOT_LIVE: ReadonlySet<SessionBucket> = new Set<SessionBucket>(['dead', 'archived', 'cleanup']);
 
+/** A limit nobody chose to wait out (item 219: "no Crying for a wait you chose"). `LimitWait.waitingBy` says whose choice
+ *  stands: `'operator'` is the operator's own "Wait until reset", which is no cause to cry; `'auto'` (ccd's own wait where no
+ *  account had room) and `null` (a limit with no choice yet, `waiting: false`) are not the operator's, so they still do. */
+const limitNotChosen = (s: FleetSession): boolean => s.limitWait !== null && s.limitWait.waitingBy !== 'operator';
+
+/** The lanes a live session is on now: each session's `wrapper`, which is the lane's id on `GET /api/accounts` (the same
+ *  key `LanesRead` carries). A session in a `NOT_LIVE` bucket holds no lane. Nothing on the wire names a lane a session is
+ *  ABOUT to use (no pending-swap field, and `limitWait.account` is the lane the session is on), so "using now" is the
+ *  whole of Dizzy's lane arm (departure `dizzy-about-to-use-has-no-wire-field`). */
+const lanesInUse = (sessions: readonly FleetSession[]): ReadonlySet<string> =>
+  new Set(sessions.filter((s) => !NOT_LIVE.has(s.bucket)).map((s) => s.wrapper));
+
 type Rule = (f: MoodFacts, sessions: readonly FleetSession[]) => boolean;
 
 const within = (at: number | null | undefined, window: number, nowMs: number): boolean => {
@@ -167,11 +179,11 @@ export const MEASURED: readonly (readonly [Mood, Rule])[] = [
   ['offline', (f) => consoleLinkLost(f) || f.agentDown],
   ['neutral', (f) => f.sessions === null],
   ['alert', (_f, ss) => ss.some(operatorAsk)],
-  ['crying', (f, ss) => ss.some((s) => within(deathAt(s, f.nowMs), CRY_WINDOW_MS, f.nowMs) || s.limitWait !== null)],
+  ['crying', (f, ss) => ss.some((s) => within(deathAt(s, f.nowMs), CRY_WINDOW_MS, f.nowMs) || limitNotChosen(s))],
   ['angry', (_f, ss) => ss.some((s) => !NOT_LIVE.has(s.bucket) && s.swapBlocked !== null)],
   ['sad', (f) => f.waitingItems !== null && f.waitingItems > 0],
   ['dizzy', (f, ss) =>
-    (f.lanes.kind === 'served' && Object.values(f.lanes.lanes).some((l) => l.state.word === 'rate-limited'))
+    (f.lanes.kind === 'served' && Object.entries(f.lanes.lanes).some(([id, l]) => l.state.word === 'rate-limited' && lanesInUse(ss).has(id)))
     || ss.some((s) => { const at = swapEnd(s, f.nowMs); return at !== null && within(at, DIZZY_SWAP_MS, f.nowMs); })],
   ['confused', (f) => (f.runs ?? []).some((r) => !isRunClosed(r) && workerSeenNote(r, f.nowMs, f.stallQuietMs)?.quiet === true)],
   ['suspicious', (f) => (f.runs ?? []).some((r) => {
