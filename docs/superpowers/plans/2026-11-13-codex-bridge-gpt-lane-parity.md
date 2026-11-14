@@ -193,6 +193,18 @@ Work started 2026-11-13 on a branch stacked on Tasks 1 and 2:
   - It is sent only for a row whose `defaultReasoningLevel` is a bounded effort word. With no row, or no valid
     default, the body keeps the client's effort.
   - It is one more marker addition under D-8622's fallback, so a 400 retries with the client's effort.
+- [ ] `bridge-service-tier-fast` (D-8632), added 2026-11-14 for the operator's priority, the stalls: the body carries
+  `service_tier: "priority"`, which is what native Codex's Fast mode sends.
+  - It sits after `stream`, as in Codex's request struct, on every message request the lane sends while the marker is
+    present, compaction included: a compaction is the longest single wait a session shows. The included limits are
+    used faster while it is on.
+  - It is not keyed on the catalogue, because the probe does not keep the catalogue's service tiers. A model that
+    refuses it answers 400, and D-8622's fallback retries without it.
+  - The parity row counts the tier each response was actually served at, from the response's own `service_tier`, so
+    the counts show whether the backend honoured the request.
+- [ ] The reasoning-time split (D-8633): each response's time to its last reasoning item before the first released
+  block, as a parity histogram beside `firstOutputMs` and `totalMs`, and as an exact value in the per-request row.
+  It shows how much of a step each marker saves in reasoning, and how much in output.
 - [ ] Deferred until the eval reads them: who rules on effort for good (the operator's, after the trial),
   tool-output truncation, the 272k window (the operator's), the Lite tool shape, and folding text beside tool results
   into the developer item.
@@ -299,12 +311,28 @@ Design and dry run first, with no live run. A live run spends subscription quota
   - It is sent only for a row with a bounded effort word as its default; otherwise the body is unchanged.
   - It is a marker addition under D-8622: counted in `markers`, dropped by the 400 fallback, reaped with the lane, and
     with no writer in the tree. The `parity` section's `effort` counts the level each body carried, as before.
+- **D-8632 (2026-11-14)** — `bridge-service-tier-fast`: behind a fifth request marker, `bridge-service-tier-fast`,
+  every message request carries `service_tier: "priority"`, after `stream`, as Codex's `ServiceTier::Fast` sends it.
+  - Why: the operator's priority of 2026-11-14 is that GPT lanes stall far more than Claude lanes. The measured cause
+    is step time: three to four times the Claude lanes', with nothing reaching Claude Code until a reply is done.
+  - Compaction requests carry it too. The bridge answers `count_tokens` itself, so that path has no upstream body.
+  - It is not keyed on the catalogue, which the probe does not keep. A refusal is a 400, under D-8622's fallback.
+  - The parity row gains the served tier: the response's own `service_tier`, bounded, so a request the backend did
+    not honour is visible.
+  - Native Codex's catalogue also sets a default tier of priority on two of the models these lanes use. Following
+    that default is a later change keyed on the catalogue, and it is the operator's.
+- **D-8633 (2026-11-14)** — `bridge-reasoning-time`: the time from the POST to the last reasoning item done before
+  the first released block, per response, as a fixed-bucket histogram in the parity row (`reasoningMs`) and as an
+  exact value in the per-request row. A response with no reasoning item before its first block counts none, and its
+  row reads null.
 
 ## Where things stand
 
 **Agreed:** the operator's directive (2026-11-13), the order of work above, and the Stage 4 rulings it sits beside.
 The operator added a bar on 2026-11-14: "codex lanes must NOT underperform compared to claude lanes, except for
-reasons related to the model itself." It applies beyond parity with native Codex.
+reasons related to the model itself." It applies beyond parity with native Codex. Later that day the operator said
+that parity means equal capabilities, cost and speed, the quality being the model's, and set a priority: GPT lanes
+stall far more than Claude lanes, so that is repaired first.
 
 **Waiting on you:** the four operator questions above.
 
@@ -323,11 +351,22 @@ reasons related to the model itself." It applies beyond parity with native Codex
 - Every response was served by the model asked for. The cached share of input was 91% to 99% by model.
 - The median time to first output was 8-16 s on three of the four model routes, and under 8 s on the fourth.
 
+**The stall, measured (2026-11-14, 72 hours of main-session transcripts):**
+- A full step (a tool result to the last block of the reply) took a median of 20.4 s on lane-a and 12.6 s on lane-b
+  with the largest GPT model (p90 66 s and 38 s), against 4.3-4.9 s (p90 14-15 s) on the Claude lanes. That is about
+  30-37 output tokens a second against 92-102.
+- The first output reaches Claude Code only when the reply is done: reasoning and calls are released at their done
+  events, by design, so a session looks frozen for 15-60 s a step.
+- About 300 of 730 output tokens per reply were reasoning, at `xhigh`, so effort is a real share of the step.
+- Not causes: replies that end early, and 5xx (about 0.1%). Compaction near the 167k window was a cause until the
+  400k window landed on 2026-11-13.
+
 **Trials (the operator's):** `bridge-reasoning-all-turns` on lane-b from 2026-11-14 22:47Z. The effort trial on lane-b
 follows it, behind D-8631's marker.
 
 **In flight:**
 - D-8631's marker is building.
+- D-8632's marker and D-8633's split follow in one pull request after it.
 - Task 6's design is draft #2778.
 
 **Later:**
