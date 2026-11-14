@@ -27,7 +27,7 @@ import {
 import type { CoordStore } from '../coord/store.js';
 import { operatorWasShown, type ItemRow } from '../coord/ledgersStore.js';
 import { roleFactsOf } from '../roleOf.js';
-import { CARD_REGISTRY_UNREAD, cardRoleOf } from './card.js';
+import { CARD_REGISTRY_UNREAD, cardRoleOf, type CardRole } from './card.js';
 
 /** The store reads the gatherer makes, declared by this consumer. */
 export type CardFactsCoord = Pick<CoordStore, 'bindingsOf' | 'bindingRunsOf' | 'openCoordinatorIds' | 'run' | 'activeClaims'
@@ -69,15 +69,56 @@ const cardItemOf = (i: ItemRow, held: boolean): CardItem => ({
   everTicked: i.tickedAt !== null, held,
 });
 
-/** One session's card facts, and the renderer its role is drawn by. `now` is the server's time of rendering: it is
- *  `CardFacts.at`, and the hold filter of `itemsFor` (an item still held is not yet shown to anyone). */
-export async function gatherCardFacts(deps: CardFactsDeps, id: string, now: number):
-  Promise<{ readonly facts: CardFacts; readonly renderer: CardRenderer }> {
+/** The role read's ports: the store's two reads it makes, and the registry reads the card takes (`CardFactsDeps`). */
+export type RoleReadDeps = Omit<CardFactsDeps, 'coord'> & { readonly coord: Pick<CoordStore, 'run' | 'openCoordinatorIds'> };
+/** One session's role, its reason, the renderer it is drawn by, and the declared-intent fact, which is both a role input
+ *  and a card field. */
+export interface SessionRoleRead extends CardRole { readonly intent: Fact<boolean> }
+
+/**
+ * ONE ROLE READ (plan `w1a-timers.md` Task 4, slug one-role-read): the card and the timer set door (its cap by role) both
+ * call it, so the role is assembled in one place. It reads the child mark, the registry incarnation and declared intent on
+ * it, the child's run kind and the open claimants, then `cardRoleOf(roleFactsOf(…))` (L1) decides. A read that fails or
+ * throws is kept apart (`CARD_REGISTRY_UNREAD`, an unreadable incarnation, `unmeasured` facts), never folded into "none".
+ */
+export async function sessionRoleRead(deps: RoleReadDeps, id: string): Promise<SessionRoleRead> {
   const { coord } = deps;
   let child: ChildMark | typeof CARD_REGISTRY_UNREAD;
   try { child = await deps.childMark(id); } catch { child = CARD_REGISTRY_UNREAD; }
   let incarnation: ChildReclaimGeneration;
   try { incarnation = await deps.incarnation(id); } catch { incarnation = { kind: 'unreadable' }; }
+
+  const intent: Fact<boolean> = incarnation.kind === 'absent' ? read(false)
+    : incarnation.kind === 'unreadable' ? unmeasured('declared coordinator intent (the registry incarnation)')
+    : ((): Fact<boolean> => {
+      let r: boolean | 'not-ready';
+      try { r = deps.declaredIntent(id, incarnation.v); } catch { return unmeasured('declared coordinator intent'); }
+      return r === 'not-ready' ? unmeasured('declared coordinator intent (the delegation checkpoint is not ready)') : read(r);
+    })();
+
+  const childRunKind = ((): RunKind | 'unmeasured' => {
+    if (child === CARD_REGISTRY_UNREAD || child.kind !== 'child') return 'unmeasured';
+    try {
+      const r = coord.run(child.runId);
+      return r.ok && r.run !== null ? r.run.kind : 'unmeasured';
+    } catch { return 'unmeasured'; }
+  })();
+  let openCoordinators: ReadonlySet<string> | 'unmeasured';
+  try { openCoordinators = new Set(coord.openCoordinatorIds()); } catch { openCoordinators = 'unmeasured'; }
+  const role = cardRoleOf(child === CARD_REGISTRY_UNREAD ? CARD_REGISTRY_UNREAD : roleFactsOf(id, {
+    child, childRunKind, openCoordinators, intentDeclared: intent.kind === 'read' ? intent.value : 'unmeasured',
+  }));
+  return { ...role, intent };
+}
+
+/** One session's card facts, and the renderer its role is drawn by. `now` is the server's time of rendering: it is
+ *  `CardFacts.at`, and the hold filter of `itemsFor` (an item still held is not yet shown to anyone). The role and the
+ *  intent fact are `sessionRoleRead`'s. */
+export async function gatherCardFacts(deps: CardFactsDeps, id: string, now: number):
+  Promise<{ readonly facts: CardFacts; readonly renderer: CardRenderer }> {
+  const { coord } = deps;
+  const role = await sessionRoleRead(deps, id);
+  const { intent } = role;
 
   // The runs: the open runs it claims and the open runs it works, each read whole by its id for its state and kind.
   const bindings = coord.bindingsOf(id);
@@ -96,14 +137,6 @@ export async function gatherCardFacts(deps: CardFactsDeps, id: string, now: numb
   });
   const claims = attempt<readonly CardClaim[]>('the claims', () => coord.activeClaims()
     .filter((c) => c.heldBy === id).map((c) => ({ id: c.id, paths: c.paths, runId: c.runId })));
-
-  const intent: Fact<boolean> = incarnation.kind === 'absent' ? read(false)
-    : incarnation.kind === 'unreadable' ? unmeasured('declared coordinator intent (the registry incarnation)')
-    : ((): Fact<boolean> => {
-      let r: boolean | 'not-ready';
-      try { r = deps.declaredIntent(id, incarnation.v); } catch { return unmeasured('declared coordinator intent'); }
-      return r === 'not-ready' ? unmeasured('declared coordinator intent (the delegation checkpoint is not ready)') : read(r);
-    })();
 
   // Every open item, the hold disregarded, split by the hold's one rule: an item the operator is shown, and a held one,
   // which only the coordinator whose hold it is (the claimant of the item's run) sees, marked held (ruling F14).
@@ -151,19 +184,6 @@ export async function gatherCardFacts(deps: CardFactsDeps, id: string, now: numb
   const mailOutstanding: Fact<readonly CardMail[]> = mailRead.kind === 'unmeasured' ? mailRead : read(mailRead.value
     .slice(0, CARD_MAIL_MAX).map((m) => ({ deliveryId: m.deliveryId, fromId: m.fromId, at: m.at, subject: m.subject, parked: !OUTSTANDING.has(m.state) })));
   const mailMore = mailRead.kind === 'read' && mailRead.value.length > CARD_MAIL_MAX;
-
-  const childRunKind = ((): RunKind | 'unmeasured' => {
-    if (child === CARD_REGISTRY_UNREAD || child.kind !== 'child') return 'unmeasured';
-    try {
-      const r = coord.run(child.runId);
-      return r.ok && r.run !== null ? r.run.kind : 'unmeasured';
-    } catch { return 'unmeasured'; }
-  })();
-  let openCoordinators: ReadonlySet<string> | 'unmeasured';
-  try { openCoordinators = new Set(coord.openCoordinatorIds()); } catch { openCoordinators = 'unmeasured'; }
-  const role = cardRoleOf(child === CARD_REGISTRY_UNREAD ? CARD_REGISTRY_UNREAD : roleFactsOf(id, {
-    child, childRunKind, openCoordinators, intentDeclared: intent.kind === 'read' ? intent.value : 'unmeasured',
-  }));
 
   return {
     renderer: role.renderer,

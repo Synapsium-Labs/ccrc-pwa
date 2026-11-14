@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import path from 'node:path';
 import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
-import { gatherCardFacts, type CardFactsDeps } from '../src/continuity/cardFacts.js';
+import { gatherCardFacts, sessionRoleRead, type CardFactsDeps } from '../src/continuity/cardFacts.js';
 import { CARD_REGISTRY_UNREAD } from '../src/continuity/card.js';
 import type { ChildMark, ChildReclaimGeneration } from '../../shared/api.js';
 import { mkTmp, removeTmpFixtures } from './tmpHelpers.js';
@@ -25,10 +25,12 @@ const deps = (coord: CoordStore, over: Partial<CardFactsDeps> = {}): CardFactsDe
 const openRun = (c: CoordStore, claimedBy: string, kind: 'work' | 'review' = 'work'): number =>
   (c.openRun({ program: `prog-${kind}`, title: 'P', project: 'project-a', wave: 1, waveOf: 2, claimedBy, kind }) as { id: number }).id;
 
-/** What the card answers for the role: the four outputs the move must keep. */
+/** What the card answers for the role: the four outputs the move must keep. The role read answers the same four, once. */
 const cardRole = async (c: CoordStore, over: Partial<CardFactsDeps> = {}) => {
   const { facts, renderer } = await gatherCardFacts(deps(c, over), ME, NOW);
-  return { role: facts.role, roleWhy: facts.roleWhy, renderer, intent: facts.intent };
+  const card = { role: facts.role, roleWhy: facts.roleWhy, renderer, intent: facts.intent };
+  expect(await sessionRoleRead(deps(c, over), ME)).toEqual(card);
+  return card;
 };
 
 describe('the role the card answers (characterization of card PR B, before and after the move)', () => {
@@ -84,5 +86,14 @@ describe('the role the card answers (characterization of card PR B, before and a
     const r = await cardRole(store(), { incarnation: async () => ({ kind: 'absent' }), declaredIntent: () => { asked += 1; return true; } });
     expect(r.intent).toEqual({ kind: 'read', value: false });
     expect(asked).toBe(0);
+  });
+
+  it('the card reads the registry once for its role: one child-mark read and one incarnation read a card', async () => {
+    const n = { child: 0, inc: 0 };
+    await gatherCardFacts(deps(store(), {
+      childMark: async () => { n.child += 1; return { kind: 'none' }; },
+      incarnation: async () => { n.inc += 1; return { kind: 'value', v: INC }; },
+    }), ME, NOW);
+    expect(n).toEqual({ child: 1, inc: 1 });
   });
 });
