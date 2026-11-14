@@ -133,18 +133,37 @@ task. A new file in the lane directory also needs `laneManifest`'s `bridgeFiles`
 `ccd/ccrc` (`_codex_reap_files`) and their tests. `ccd/ccrc` was claimed by another programme on 2026-11-13, so this
 task waits for that claim to be released.
 
-## Task 5: the request gaps, each behind a lane marker
+## Task 5: the request gaps, each behind a lane marker (D-8622, D-8623, D-8624)
 
-Each change is opt-in, by a marker in the lane directory. As with `bridge-instructions`, no writer of the marker is in
-the tree. Each change also falls back: an upstream 400 on a first attempt that carried the new field is retried once
-without it, counted, and the retry never reaches the client twice.
+Each change is opt-in, by a marker in the lane directory. As with `bridge-instructions`, the marker is existence-only,
+read at each POST, and has no writer in the tree. The lane removal list in `ccd/ccrc` (`_codex_reap_files`) names each
+marker, so removing a lane removes them.
+
+The fallback is D-8622:
+- a POST that carried any marker's addition and is answered 400 is retried once without all of them, and the rest of
+  that client message sends none;
+- an overflow or a policy refusal is never retried, because removing a field cannot cure them;
+- the retry happens before any byte reaches the client;
+- it is counted in the `parity` section, with `markers` and `fallbacks` per marker. It is not written to the status file
+  or counted as a client-facing 4xx.
+
+Work started 2026-11-13 on a branch stacked on Tasks 1 and 2:
 - [ ] `bridge-reasoning-all-turns`: `reasoning.context: "all_turns"` on a model whose catalogue row says
-  `useResponsesLite`. Whether the backend needs the Lite header for it is not known, and the 400 fallback is what makes
-  trying it safe. Done when Task 1's `reasoning:removed:turn_boundary` counts fall to about zero on that lane.
+  `useResponsesLite`.
+  - The bridge never sends Codex's internal Lite header. It presents itself as ccrc, never as Codex.
+  - Whether the backend takes `all_turns` without that header is what the fallback and the counts find out. Sending the
+    header is an operator decision.
+  - Done when Task 1's `reasoning:removed:turn_boundary` counts fall to about zero on that lane.
 - [ ] `bridge-verbosity`: `text.verbosity` at the row's `defaultVerbosity` when `supportVerbosity` is true. It shares
-  one `text` object with `text.format`.
-- [ ] `bridge-turn-state`: echo `x-codex-turn-state` within one Claude Code turn. The value is held in memory only,
-  never written to the stats file, a log or the status file.
+  one `text` object with `text.format`, in Codex's key order.
+- [ ] `bridge-turn-state` (D-8623): echo `x-codex-turn-state` within one Claude Code turn.
+  - A turn is the stretch of requests whose latest user message holding no `tool_result` block is the same. Text beside
+    tool results lives in a tool-result message, so it never starts a turn.
+  - The turn key is a hash of the cache key and that message.
+  - The value is held in memory only, in a bounded map, cleared when the credential's account changes. It is never
+    written to the stats file, a log or the status file.
+- [ ] The stats idle flush (D-8624): the stats file is written once the bridge has been idle for `FLUSH_S` after a
+  response, so a reader taking deltas between runs never sees one run's figures land in the next.
 - [ ] Deferred until the eval reads them: the effort policy (the operator's), tool-output truncation, the 272k window
   (the operator's), the Lite tool shape, and folding text beside tool results into the developer item.
 
@@ -169,6 +188,14 @@ Design and dry run first, with no live run. A live run spends subscription quota
   At 75 paired runs the eval detects only gaps of about 10 points.
 - [ ] The dry run checks that each bug-fix task's revert makes its test fail and the fix makes it pass, with no model
   call.
+- [ ] The design is the draft spec `docs/superpowers/specs/2026-11-13-gpt-lane-parity-eval-design.md` (#2778), revised
+  after a statistics review and a safety review:
+  - one run at a time;
+  - a class-stratified, task-clustered bound, its method fixed in advance by a simulation check;
+  - three verdicts on one -5 point margin, with "inconclusive" the likely result at 75 pairs;
+  - every arm and grader as a dedicated UNIX user, on its own eval lane and account.
+  The first dry run examined 22 fix commits and accepted 10. It predates the revised task rules, so it feeds no verdict.
+  The spec's open decisions (O1-O7, D3, D9, D11) are the operator's.
 
 ## Waiting on the operator
 
@@ -202,6 +229,25 @@ Design and dry run first, with no live run. A live run spends subscription quota
   a JSON fact family of its own, `catalogue field`: the model slugs, each model's keys, and every scalar value or small
   all-scalar array or object. Text blocks are never facts, so a prompt edit upstream is not a finding and no prompt text
   reaches an issue body.
+- **D-8622 (2026-11-13)** — `bridge-request-markers`: Task 5's request changes each sit behind their own lane marker,
+  `bridge-reasoning-all-turns` and `bridge-verbosity`, keyed on the catalogue row's `useResponsesLite` and
+  `supportVerbosity`/`defaultVerbosity`. Each marker is existence-only, read at each POST, and has no writer in the
+  tree.
+  - The bridge never sends Codex's internal Lite header.
+  - A 400 to a POST that carried any marker's addition is retried once without all of them for the rest of that client
+    message. An overflow or a policy refusal is never retried.
+  - The retry is counted in the `parity` section (`markers`, `fallbacks`), not in the status file or as a client-facing
+    4xx.
+- **D-8623 (2026-11-13)** — `bridge-turn-state-echo`: behind `bridge-turn-state`, the bridge echoes `x-codex-turn-state`
+  within one Claude Code turn, as Codex does within its own.
+  - The bridge's turn is the stretch of requests whose latest user message holding no `tool_result` block is the same,
+    keyed by a hash of the cache key and that message.
+  - The value lives in memory only, in a map of at most 256 turns, cleared when the credential's account changes.
+  - Counted as `turnState` (`captured`, `echoed`) in the `parity` section.
+- **D-8624 (2026-11-13)** — `bridge-stats-idle-flush`: the stats file is written once the bridge has been idle for
+  `FLUSH_S` after a response, not only at the next request, by at most one timer that each response re-arms and the
+  drain stops. A reader taking deltas between runs, as the eval spec's serial join does, never sees one run's figures
+  land in the next.
 
 ## Where things stand
 
@@ -209,5 +255,13 @@ Design and dry run first, with no live run. A live run spends subscription quota
 
 **Waiting on you:** the four operator questions above.
 
-**Later:** Task 4 (once `ccd/ccrc` is free), Task 5 (once Task 1's first counts and Task 2 are in), and Task 6's live
-run.
+**In flight (2026-11-13):**
+- Task 1 is #2777, Task 2 #2776 and Task 3 #2775.
+- Task 3 also fixes the daily watch's releases listing, which answered HTTP 504 at 100 a page on four of six runs.
+- Task 5 is building on a branch stacked on Tasks 1 and 2.
+- Task 6's design is draft #2778.
+
+**Later:**
+- Task 4, once `ccd/ccrc` is free.
+- Task 5's pull request, once Tasks 1 and 2 merge.
+- Task 6's live run.
