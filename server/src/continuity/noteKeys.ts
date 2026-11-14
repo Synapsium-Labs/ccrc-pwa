@@ -6,10 +6,11 @@ import type { NoteKey } from '../../../shared/continuity.js';
 import type { KeyReading } from './notes.js';
 
 /** The store reads a key needs, declared by this consumer. */
-export type NoteKeysCoord = Pick<CoordStore, 'claimsProgramme' | 'itemById' | 'run'>;
+export type NoteKeysCoord = Pick<CoordStore, 'claimsProgramme' | 'itemById' | 'run' | 'bindingsOf'>;
 
-/** A reader for one caller. `claimsProgramme` is asked once per slug and remembered for the reader's life (one request), so
- *  a card of 200 notes on one programme reads the caller's runs once. */
+/** A reader for one caller. `claimsProgramme` is asked once per slug, and the caller's open claimed runs once, through the
+ *  binding's own reader (`bindingsOf(caller).claimant()`, ARCH-62), each remembered for the reader's life (one request), so
+ *  a card of 200 notes reads the caller's runs once. */
 export function noteKeyReader(coord: NoteKeysCoord, caller: string): (key: NoteKey) => KeyReading {
   const claims = new Map<string, boolean | 'unmeasured'>();
   const claimsOf = (slug: string): boolean | 'unmeasured' => {
@@ -19,6 +20,16 @@ export function noteKeyReader(coord: NoteKeysCoord, caller: string): (key: NoteK
       claims.set(slug, v);
     }
     return v;
+  };
+  let claimed: ReadonlySet<number> | 'unmeasured' | undefined;
+  const claimedRuns = (): ReadonlySet<number> | 'unmeasured' => {
+    if (claimed === undefined) {
+      try {
+        const r = coord.bindingsOf(caller).claimant();
+        claimed = r.ok ? new Set(r.siblings.map((s) => s.id)) : 'unmeasured';
+      } catch { claimed = 'unmeasured'; }
+    }
+    return claimed;
   };
   return (key) => {
     switch (key.kind) {
@@ -35,7 +46,9 @@ export function noteKeyReader(coord: NoteKeysCoord, caller: string): (key: NoteK
         let r: ReturnType<NoteKeysCoord['run']>;
         try { r = coord.run(key.id); } catch { return { kind: 'run', run: 'unmeasured' }; }
         if (!r.ok) return { kind: 'run', run: 'unmeasured' };
-        return { kind: 'run', run: r.run === null ? 'absent' : { state: r.run.state, claimedBy: r.run.claimedBy } };
+        if (r.run === null) return { kind: 'run', run: 'absent' };
+        const mine = claimedRuns();
+        return { kind: 'run', run: { state: r.run.state, claimedByCaller: mine === 'unmeasured' ? 'unmeasured' : mine.has(key.id) } };
       }
     }
   };

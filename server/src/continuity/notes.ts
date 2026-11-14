@@ -126,7 +126,12 @@ export type KeyReading =
       readonly state: ItemState; readonly raisedBy: string; readonly program: string; readonly claimsProgramme: boolean | 'unmeasured';
     } | 'absent' | 'unmeasured';
   }
-  | { readonly kind: 'run'; readonly run: { readonly state: RunState; readonly claimedBy: string | null } | 'absent' | 'unmeasured' };
+  | {
+    readonly kind: 'run';
+    /** The run's row, with whether it is among the caller's open claimed runs, as the binding's own reader answers
+     *  (`bindingsOf(caller).claimant()`, ARCH-62: no run/session equality is decided here), or `absent`, or `unmeasured`. */
+    readonly run: { readonly state: RunState; readonly claimedByCaller: boolean | 'unmeasured' } | 'absent' | 'unmeasured';
+  };
 
 const OPEN_ITEMS: ReadonlySet<ItemState> = new Set(OPEN_ITEM_STATES);
 const TERMINAL_RUNS: ReadonlySet<RunState> = new Set(TERMINAL_RUN_STATES);
@@ -146,7 +151,7 @@ export function noteKeyFact(r: KeyReading, caller: string): KeyFact {
     case 'run':
       if (r.run === 'unmeasured') return 'unmeasured';
       if (r.run === 'absent' || TERMINAL_RUNS.has(r.run.state)) return 'gone';
-      return r.run.claimedBy === caller ? 'live' : 'not-yours';
+      return r.run.claimedByCaller === 'unmeasured' ? 'unmeasured' : r.run.claimedByCaller ? 'live' : 'not-yours';
   }
 }
 

@@ -146,13 +146,13 @@ export function notesCases(m: Notes): Record<string, Case> {
         expect(it(state, 'lane-b', 'unmeasured'), state).toBe('unmeasured');
       }
       for (const state of ['done', 'withdrawn', 'dismissed']) expect(it(state, CALLER, true), state).toBe('gone');
-      const run = (state: string, claimedBy: string | null) => f({ kind: 'run', run: { state: state as 'working', claimedBy } }, CALLER);
+      const run = (state: string, claimedByCaller: boolean | 'unmeasured') => f({ kind: 'run', run: { state: state as 'working', claimedByCaller } }, CALLER);
       expect(f({ kind: 'run', run: 'absent' }, CALLER)).toBe('gone');
       expect(f({ kind: 'run', run: 'unmeasured' }, CALLER)).toBe('unmeasured');
       for (const state of ['planned', 'dispatched', 'working', 'awaiting-review', 'merging', 'closing', 'unknown']) {
-        expect([run(state, CALLER), run(state, 'lane-b'), run(state, null)], state).toEqual(['live', 'not-yours', 'not-yours']);
+        expect([run(state, true), run(state, false), run(state, 'unmeasured')], state).toEqual(['live', 'not-yours', 'unmeasured']);
       }
-      for (const state of ['done', 'failed']) expect(run(state, CALLER), state).toBe('gone');
+      for (const state of ['done', 'failed']) expect(run(state, true), state).toBe('gone');
     },
     'revisedNoteFact: a live note of the caller\'s, a superseded one, another\'s, none, unread': () => {
       const f = m.revisedNoteFact;
