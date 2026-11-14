@@ -3,10 +3,14 @@
 // TypeScript caller import it with types. The names and the shape are
 // `shared/models.ts`'s exactly.
 import type {
-  Catalogue, CatalogueModel, DerivedModels, LaneClassModels, ModelClass, ModelWindows, ProbeKind, Registry,
+  Catalogue, CatalogueModel, CatalogueVerbosity, DerivedModels, LaneClassModels, ModelClass, ModelWindows, ProbeKind,
+  Registry, TruncationMode, TruncationPolicy,
 } from './models.js';
 
-export type { Catalogue, CatalogueModel, DerivedModels, LaneClassModels, ModelClass, ModelWindows, ProbeKind, Registry };
+export type {
+  Catalogue, CatalogueModel, CatalogueVerbosity, DerivedModels, LaneClassModels, ModelClass, ModelWindows, ProbeKind,
+  Registry, TruncationMode, TruncationPolicy,
+};
 // Fix round 1, finding 3 (2026-09-08): the runtime twin of `shared/models.ts`'s
 // own `as const` `CLASSES`/`PROBE_KINDS` — see `shared/models.mjs` for why
 // that file keeps a separate export rather than this one re-exporting it.
@@ -55,6 +59,10 @@ export declare function modelsPushDecision(message: unknown, roster: ModelsPushR
 export declare class RegistryInvalid extends Error { readonly field: string }
 export declare class CatalogueInvalid extends Error {}
 export declare function parseCatalogue(json: unknown): Catalogue;
+// D-8620: the bounds of a Codex catalogue row's request-shape fields — see `shared/models.mjs`.
+export declare const CATALOGUE_VERBOSITIES: readonly CatalogueVerbosity[];
+export declare const CATALOGUE_TRUNCATION_MODES: readonly TruncationMode[];
+export declare const CATALOGUE_TRUNCATION_LIMIT_MAX: number;
 export declare function parseRegistry(json: unknown, catalogue?: Catalogue | null): Registry;
 // Codex-bridge spec §2.7: a lane's measured context windows — see
 // `shared/models.mjs` for why they are a sibling file and not a registry key.

@@ -278,6 +278,41 @@ export class CatalogueInvalid extends Error {
 const isObj = (v) => typeof v === 'object' && v !== null && !Array.isArray(v);
 const num = (v) => (typeof v === 'number' && Number.isFinite(v) ? v : null);
 
+/** A non-empty string: the bound `parseRegistry`'s `effort` map and `parseCatalogue`'s `defaultReasoningLevel`
+ *  apply (D-8620), and the same bound the probe's Codex arm applies to each `supported_reasoning_levels` name and to
+ *  `default_reasoning_level` (`effort_name`, ccd/ccrc-models-probe). `parseCatalogue`'s `efforts` filter is NOT
+ *  bound by it: that filter keeps any string, unchanged, so a row reads exactly as it did before D-8620. */
+const isEffortName = (v) => typeof v === 'string' && v.length > 0;
+
+/** D-8620: the bounds of the Codex catalogue's request-shape fields (`CatalogueModel`, shared/models.ts), defined
+ *  ONCE here for every JavaScript reader. `CatalogueVerbosity` and `TruncationMode` are their TYPES, pinned to these
+ *  lists by `server/test/models.test.ts`; the probe's Python spells the same bounds in its own language, and
+ *  `server/test/models-probe.test.ts` runs every candidate through both and reds on any disagreement. The words are
+ *  upstream Codex's own: `text.verbosity`'s three values and `truncation_policy.mode`'s two. */
+export const CATALOGUE_VERBOSITIES = Object.freeze(['low', 'medium', 'high']);
+export const CATALOGUE_TRUNCATION_MODES = Object.freeze(['tokens', 'bytes']);
+/** A truncation policy's `limit` is an integer in `1..CATALOGUE_TRUNCATION_LIMIT_MAX` (D-8620). */
+export const CATALOGUE_TRUNCATION_LIMIT_MAX = 10_000_000;
+
+/** D-8620: the request-shape keys of one Codex catalogue row, each kept only when valid and otherwise ABSENT, never
+ *  null or a default: a model without them must read exactly as before, and a genuine `false` is a fact a later
+ *  reader acts on, so it must stay distinct from "the catalogue did not say". Of a truncation policy, only `mode`
+ *  and `limit` are kept. */
+function requestShapeOf(raw) {
+  const out = {};
+  if (typeof raw['useResponsesLite'] === 'boolean') out.useResponsesLite = raw['useResponsesLite'];
+  if (typeof raw['supportVerbosity'] === 'boolean') out.supportVerbosity = raw['supportVerbosity'];
+  if (CATALOGUE_VERBOSITIES.includes(raw['defaultVerbosity'])) out.defaultVerbosity = raw['defaultVerbosity'];
+  if (isEffortName(raw['defaultReasoningLevel'])) out.defaultReasoningLevel = raw['defaultReasoningLevel'];
+  const policy = raw['truncationPolicy'];
+  if (isObj(policy) && CATALOGUE_TRUNCATION_MODES.includes(policy['mode'])
+    && Number.isInteger(policy['limit']) && policy['limit'] >= 1
+    && policy['limit'] <= CATALOGUE_TRUNCATION_LIMIT_MAX) {
+    out.truncationPolicy = { mode: policy['mode'], limit: policy['limit'] };
+  }
+  return out;
+}
+
 /** `(json: unknown) => Catalogue`. Validates a catalogue read off disk and
  *  fills its optional fields. Refuses the WHOLE file on a model with no `id`
  *  (§11): a partial catalogue would retire every model the probe happened to
@@ -312,6 +347,8 @@ export function parseCatalogue(json) {
       hidden: raw['hidden'] === true,
       priceIn: num(raw['priceIn']),
       priceOut: num(raw['priceOut']),
+      // D-8620: kept on a Codex catalogue only, the one probe whose reply carries them.
+      ...(probe === 'codex' ? requestShapeOf(raw) : {}),
     };
   });
   const out = { probe, fetchedAt, stale: json['stale'] === true, models };
@@ -491,7 +528,7 @@ export function parseRegistry(json, catalogue) {
         throw new RegistryInvalid(`effort.${key}`,
           `effort.${key} is an unknown key — the keys are ${CLASSES.join(', ')}.`);
       }
-      if (typeof value !== 'string' || value.length === 0) {
+      if (!isEffortName(value)) {
         throw new RegistryInvalid(`effort.${key}`,
           `effort.${key} is ${JSON.stringify(value)}. Set it to one of the classed model's own `
           + "effort levels — run 'ccrc models <id> show' to see them.");
