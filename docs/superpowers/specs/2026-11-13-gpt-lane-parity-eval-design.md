@@ -27,8 +27,9 @@ file's `parity` section; Task 4, the per-request record, landed in #2788), `docs
   parity only if the arms disagree on fewer than about 7% of pairs, so "inconclusive" is the likely result. The pilot
   now estimates that disagreement rate, and the Stage 1 sign-off shows the predicted chance of each verdict (§5.2).
 - **Every arm and every grader runs as a dedicated UNIX user** that owns only the eval lane, its own ccrc install and
-  the run root (§3.4, O7). Until that user exists, only tasks whose source lies in `server/src` or `agent/src` are
-  admitted, and no live stage may start.
+  the run root (§3.4, O7). For the pilot, an existing lane, lane-a, run as the live user with per-request rows, is the
+  recommended option (§3.5). It is not ruled, and the dedicated user and lane-c remain the alternative. Until that user
+  exists, only tasks whose source lies in `server/src` or `agent/src` are admitted, and no live stage may start.
 - The dry run of task mining is in §8: 22 fix commits examined, 10 accepted, 12 rejected. That run predates this
   revision and does not meet it: its prompts are paraphrases, not the D5 template, and 7 of the 10 change files
   outside `server/src` and `agent/src`. Every commit it names is now public here, so none may enter the verdict set.
@@ -436,8 +437,9 @@ only to its own credential.*
   tree and every served docs root. It is removed after grading. The run, its worktree and its client process never
   share state with another run.
 - **The dedicated eval lane** (lane-c, D3) is used only by the eval, so its markers, its stats and its quota belong to
-  the eval. lane-a and lane-b, and their live sessions, are never used. The drained-lane fallback is withdrawn: an
-  existing lane belongs to the live user, so it cannot sit inside the eval user's boundary.
+  the eval. In this design lane-a and lane-b, and their live sessions, are never used: an existing lane belongs to the
+  live user, so it cannot sit inside the eval user's boundary. §3.5 sets out the other option, an existing lane for the
+  pilot, with what it gives up.
 - **Codex's home.** Native Codex runs with `CODEX_HOME` set to the eval user's Codex home. A fresh home per run would
   need its credential copied, which the harness never does. So the home is shared, its config is hash-checked before
   every run, and each run's rollout files are found by thread id.
@@ -454,6 +456,39 @@ only to its own credential.*
 - **Where the harness may run.** Its live modes refuse inside a tmux pane or a Claude Code session (`TMUX_PANE` or
   `CLAUDECODE` set). Its dry-run mode is exempt, since it makes no model call and needs no credential: a session may
   run it.
+
+### 3.5 The option recommended for the pilot: lane-a (not ruled)
+
+The operator asked on 2026-11-14 whether an existing lane and account could carry the trial. For the pilot only, the
+recommendation is lane-a, which is the quieter of the two existing lanes, with no eval user and no lane-c. This option
+is recommended, not ruled. The dedicated user and lane-c (§3.4) remain the alternative, and a full eval would return
+to them.
+
+- **How runs are separated from live traffic.** `record-requests` (the parity plan's Task 4) is turned on for lane-a during the pilot.
+  Each row carries its session id, so the harness joins every request to its run by session id and time window, and
+  live traffic is the rows with any other session id. Stats deltas are not used: on a shared lane they mix in live
+  traffic.
+- **Who runs it.** The harness and every arm run as the live user, under the allowed-roots rule of §2.2 (tasks whose
+  source lies in `server/src` or `agent/src` only). The fresh worktree per run, the fresh environment and the shims
+  stay.
+- **Native Codex** signs in to lane-a's account with its own `CODEX_HOME`, as a separate credential, by the operator's
+  hand. The pilot checks that lane-a's bridge still answers after that sign-in (O2).
+- **Quota.** The pilot needs about one lane-day of requests (§5.2). It shares lane-a's limits with any live session on
+  that lane while it runs.
+
+What it gives up, stated plainly:
+
+| | lane-a, the live user | lane-c, the eval user |
+|---|---|---|
+| Isolation | Conventions only. Every agent runs with the live user's rights, so the live home, secrets, `gh` token, `ccd`, `ccrc` and tmux are readable or reachable by name. The shims cover bare names only, the account deny rules and the command flag rule (§2.4) are speed bumps, and hooks are off in print mode | The uid boundary: none of the live fleet's files is readable, measured by R12 before any live stage |
+| A leaked credential costs | The live lane's account, which live sessions use | The eval account only |
+| Markers | Shared with live sessions: whatever stage 0 kept is on for everyone on lane-a during the pilot | The eval's own |
+| Separation of figures | Per-request rows, joined by session id | The lane's own stats, or the same rows |
+| Cost to set up | None beyond turning on `record-requests` and the sign-in | A new UNIX user, a ccrc install, a new account and plan, and the roster entry |
+| Ready | Now | After the operator's acts (O7, D3) |
+
+The isolation row is the real cost. It is acceptable only because the pilot is small (30 runs), its tasks touch only
+`server/src` or `agent/src`, and its runs are watched. It is not acceptable for a full eval, which returns to §3.4.
 
 ## 4. Metrics and their sources
 
@@ -724,8 +759,8 @@ rules otherwise.
 | O4 | Sign-off | The whole eval at once, or each stage | Each stage, after the previous stage's report. G1 makes the pilot the only stage signed so far | Ruled 2026-11-14 (G1) |
 | O5 | Models | gpt-6.1-sol alone, or a second model such as gpt-6.1-terra or gpt-6-astra | gpt-6.1-sol first. It has the largest effort gap and no Fast-tier default. A second model doubles the cost | Open |
 | O6 | The P1 margin | −5 points with "inconclusive" likely, −10 points, or more tasks | Decide at the Stage 1 sign-off, from the pilot's ψ and ρ and the predicted verdict odds. A certified −5 needs about 250 to 790 pairs (§1.4) | Open |
-| O7 | A dedicated UNIX user for the eval | A dedicated user, or the live user with conventions | A dedicated user that owns only lane-c, its ccrc install, the Codex home and the run root. Creating it, installing ccrc for it and rostering lane-c are the operator's acts. No live stage starts before R12 passes | Ruled 2026-11-14 for the pilot (G1); creating the user is the operator's act |
-| D3 | Where lane runs go | A dedicated lane-c on its own ChatGPT account and plan, or a drained existing lane | lane-c on its own account, so markers, stats deltas and quota are the eval's alone, and a leaked eval credential costs only the eval. Adding it is a roster act and a paid plan, both the operator's. The plan tier and its cost go in the operator's open record, not in this public doc. The drained-lane fallback is withdrawn (§3.4) | Ruled 2026-11-14 for the pilot (G1); adding the lane is the operator's act |
+| O7 | A dedicated UNIX user for the eval | A dedicated user, or the live user with conventions | A dedicated user that owns only lane-c, its ccrc install, the Codex home and the run root. Creating it, installing ccrc for it and rostering lane-c are the operator's acts. No live stage starts before R12 passes. For the pilot, running as the live user on lane-a is the recommended option (§3.5), with its isolation cost stated | Open: the live user recommended for the pilot |
+| D3 | Where lane runs go | A dedicated lane-c on its own ChatGPT account and plan, or a drained existing lane | lane-c on its own account, so markers, stats deltas and quota are the eval's alone, and a leaked eval credential costs only the eval. Adding it is a roster act and a paid plan, both the operator's. The plan tier and its cost go in the operator's open record, not in this public doc. For the pilot, an existing lane, lane-a, with per-request rows is the recommended option (§3.5), lane-c the alternative | Open: lane-a recommended for the pilot |
 | D5 | Bug-fix and feature prompt | A visible failing test, or a hand-written symptom | The visible test, by a generated template, with the leak scan over the prompt. The dry run's paraphrased prompts do not meet it and are regenerated | Proposed |
 | D6 | The base for C arms | B (lane effort) or B′ (native effort) | Superseded: markers are judged on a live lane in stage 0 (G1), at the Claude lanes' effort (G2) | Superseded |
 | D7 | Task 4 before Stages 2 and 3 | Wait for it, or use serial stats deltas | Met: Task 4 landed (#2788, v0.0.1190) | Met |
@@ -733,7 +768,7 @@ rules otherwise.
 | D9 | The pilot and Stage 1 before Task 4 | Run them on serial stats deltas, or wait for Task 4 as the plan's order says | Run them on serial stats deltas at one run at a time, with the idle flush (D10) and the two-sided check. Moot: Task 4 landed (#2788), so the per-request record is there | Moot |
 | D10 | The stats file's idle flush | A timer in Task 1, or a harness that waits for the next request | Task 1 writes the stats file once the bridge is idle for `FLUSH_S` after a response, so a run's figures never land in the next run's delta | Proposed |
 | D11 | Tool errors in the bar | Gate "no higher", as the study asked, or report only | Report only. The tool sets differ by design (D-6420), so the rate measures the tool design. This amends the study's bar | Ruled 2026-11-14 (G4) |
-| G1 | The order of the eval | The full staged eval, or the wire first and then a pilot only | The wire first: each fix on one live lane at a time, kept only if its numbers improve. Then the pilot, on the eval user and lane-c. The full eval is decided from the pilot | Ruled 2026-11-14 |
+| G1 | The order of the eval | The full staged eval, or the wire first and then a pilot only | The wire first: each fix on one live lane at a time, kept only if its numbers improve. Then the pilot. The full eval is decided from the pilot | Ruled 2026-11-14 |
 | G2 | The lane's effort | Claude Code's level, or the catalogue's default | Claude Code's level, mapped 1:1 to the Claude lanes' levels, as the parity plan builds it | Ruled 2026-11-14 |
 | G3 | The parity target | Equal results, or equal requests | Equal results: pass rate, cost and speed. The quality is the model's, and the requests differ by design (D-6420) | Ruled 2026-11-14 |
 
@@ -755,13 +790,12 @@ rules otherwise.
   depart from it for the pilot and Stage 1.
 - Prompt and tool parity stays out of scope (D-6420).
 - The operator's rulings of 2026-11-14: wire first, then the pilot only (G1); the lane's effort mapped 1:1 to the
-  Claude lanes' (G2); equal results as the target (G3); tool errors reported, not gated (G4, D11). The pilot runs on
-  the eval user and lane-c (O7, D3).
+  Claude lanes' (G2); equal results as the target (G3); tool errors reported, not gated (G4, D11).
 
 ### Waiting on you
 
-- The acts for the pilot: creating the eval user and lane-c (O7, D3), installing the Codex CLI (O1) and the sign-in
-  (O2). No live stage can start without them.
+- Where the pilot runs (D3, O7): lane-a as the live user with per-request rows (recommended, §3.5), or the eval user
+  and lane-c. Then installing the Codex CLI (O1) and the sign-in (O2). No live stage can start without them.
 - O3, O5 and O6: the budget, the models, and the P1 margin, best decided from the pilot's figures.
 
 ### Later
