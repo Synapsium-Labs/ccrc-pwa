@@ -99,7 +99,7 @@ describe('auto memory for plain sessions, the Settings row and its door (Task 6)
     const sent: string[][] = [];
     await profilePass({
       coord, log: () => {}, memory: { lastLine: null },
-      reads: { usage: async () => ({ kind: 'absent' }), steerMarker: async () => 'absent' },
+      reads: { usage: async () => ({ kind: 'absent' }), steerMarker: async () => 'absent', declaredIntent: async () => false },
       act: { runCcd: async (argv) => { sent.push([...argv]); return { ok: true, stdout: '', stderr: '', ran: true } as never; }, fleetState: { ccdVerbs: [ROUTE_CAP] } },
     }, [{ id: 'lane-a-project-a', child: { kind: 'none' }, route: null }]);
     expect(sent.map((a) => a.filter((_, i) => a[i - 1] === '--set'))).toEqual([['profile=plain', 'automem=on']]);
