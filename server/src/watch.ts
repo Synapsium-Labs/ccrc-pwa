@@ -6095,8 +6095,8 @@ export class FleetWatcher {
         release: () => this.nodeRelease(),
       }, this.generationsCompactions);
       this.generationsProc ??= this.deps.time.entropy.uuid();
-      generationsPass({ coord, clock: this.deps.time.clock, proc: this.generationsProc, log: (line) => console.warn(line),
-        retried: this.generationsRetried }, {
+      generationsPass({ coord, clock: this.deps.time.clock, entropy: this.deps.time.entropy, proc: this.generationsProc,
+        log: (line) => console.warn(line), retried: this.generationsRetried }, {
         registry: records.map((r) => ({ id: r.id, uuid: r.unmeasured.includes('uuid') ? null : r.uuid,
           lane: r.unmeasured.includes('wrapper') ? null : r.wrapper, child: r.child })),
         // When this tick's registry read began: a start received since is held a pass (review 2006 R1).

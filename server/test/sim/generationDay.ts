@@ -362,7 +362,7 @@ export function generationDay(mods: GenDayModules): Scenario<GenDayEdge> {
         // The stand-in registry is listed after this beat's deliveries (it names every conversation reported so far), so its
         // listing postdates every start received yet.
         // The day drives the live walk too (its arm drawn per seed), so it opens the continuity row's gate.
-        const passed = wrote(generationsPass({ coord: lane, clock: server.clock, proc, log: () => {}, observe: mods.observed.observeTime, retried, gate: () => null },
+        const passed = wrote(generationsPass({ coord: lane, clock: server.clock, entropy, proc, log: () => {}, observe: mods.observed.observeTime, retried, gate: () => null },
           { registry: WHO.map(([who]) => ({ id: who, uuid: uuids.get(who)!, lane: 'lane-a', child: { kind: 'none' as const } })),
             listedAt: wall() + 1, readings: new Map() }));
         // W1's designation, stood in for: the Overlord's starts mint through the same store function, in order.
