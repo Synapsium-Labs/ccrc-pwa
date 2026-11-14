@@ -18,7 +18,7 @@ file's `parity` section; Task 4, the per-request record, landed in #2788), `docs
   - **The target is equal results:** pass rate, cost and speed. The quality is the model's, and the requests differ by
     design (D-6420).
   - **Tool errors are reported, not gated** (D11).
-  - **A lane's effort maps 1:1 to the Claude lanes' levels** (D-8631), so arm B runs at Claude's level.
+  - **A lane's effort maps 1:1 to the Claude lanes' levels**, so arm B runs at Claude's level.
 - The eval is **paired**: each task is run by every arm in one time slot, three slots per task, one run at a time on
   the eval account. The pass-rate difference is bounded by a class-stratified, task-clustered interval whose method is
   chosen in advance by a simulation check (§1.3, R8). Parity needs that bound to be at least −5 points, plus bounds on
@@ -310,7 +310,7 @@ This section defines the arms, how they are scheduled and how each run is isolat
 ### 3.1 Arms
 
 Every comparison uses one model id on both sides. The proposed primary model is `gpt-6.1-sol` (O5). Its catalogue
-default effort is low. The lane runs it at the Claude lanes' level for its class (G2, D-8631: `high` for the opus class
+default effort is low. The lane runs it at the Claude lanes' level for its class (G2: `high` for the opus class
 today), which is the largest effort gap in today's lane classes. It
 has `default_service_tier` null, so native Codex does not default it to the Fast tier as it does for `gpt-6-sol` and
 `gpt-6-luna`.
@@ -734,7 +734,7 @@ rules otherwise.
 | D10 | The stats file's idle flush | A timer in Task 1, or a harness that waits for the next request | Task 1 writes the stats file once the bridge is idle for `FLUSH_S` after a response, so a run's figures never land in the next run's delta | Proposed |
 | D11 | Tool errors in the bar | Gate "no higher", as the study asked, or report only | Report only. The tool sets differ by design (D-6420), so the rate measures the tool design. This amends the study's bar | Ruled 2026-11-14 (G4) |
 | G1 | The order of the eval | The full staged eval, or the wire first and then a pilot only | The wire first: each fix on one live lane at a time, kept only if its numbers improve. Then the pilot, on the eval user and lane-c. The full eval is decided from the pilot | Ruled 2026-11-14 |
-| G2 | The lane's effort | Claude Code's level, or the catalogue's default | Claude Code's level, mapped 1:1 to the Claude lanes' levels (D-8631) | Ruled 2026-11-14 |
+| G2 | The lane's effort | Claude Code's level, or the catalogue's default | Claude Code's level, mapped 1:1 to the Claude lanes' levels, as the parity plan builds it | Ruled 2026-11-14 |
 | G3 | The parity target | Equal results, or equal requests | Equal results: pass rate, cost and speed. The quality is the model's, and the requests differ by design (D-6420) | Ruled 2026-11-14 |
 
 ## 10. Out of scope
@@ -768,7 +768,7 @@ rules otherwise.
 
 - The plan that builds the harness, re-mining the task pools under §2.2, and then the dry run that completes §8.
 - Stage 0, the wire trials on a live lane (G1): `bridge-reasoning-all-turns` first (on lane-b since 2026-11-14), then
-  Fast mode (D-8632), then effort parity (D-8631).
+  Fast mode, then effort parity, each as the parity plan builds it.
 - Arms for the deferred fixes (§10), each once its marker exists.
 
 ---
