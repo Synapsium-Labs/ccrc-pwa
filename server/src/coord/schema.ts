@@ -2859,6 +2859,68 @@ export const MIGRATIONS: readonly string[] = [
   );
   INSERT INTO face_settings (id, character, updatedAt) VALUES (1, 'orb', 0);
   `,
+  // ── 68: user_version 67 -> 68 ─────────────────────────────────────────────
+  // The generations (Overlord spec §3.3.1 C36, §3.3.11 H12, Table 11.1a, W1a): `continuity_generations`, one row per life
+  // of a long-lived identity, minted at each reported start, and `continuity_cursor`, the renewal lane's place in
+  // `continuity_starts`. Both have ONE writer, the generations lane, through `server/src/continuity/continuityStore.ts`
+  // (every write a compare-and-set on `(identity, term, n)` and both state columns). `state` moves only on a walk begun
+  // while `continuity` was live, `shadowState` only on one begun in shadow (`walk` records which; reviews 1896 R1, 1902
+  // F1), and each carries its own deadline column, so a shadow walk's deadline never stands on a live row. Every
+  // observed-time column is the identity's accumulator (`observed`, carried across mints), and a deadline is wall time.
+  // The seed row `continuity` = `shadow` adds the lane to the Shadow lanes card.
+  //
+  // NEW TABLES, AN INDEX AND ONE SEED ROW, nothing on an existing table: an older build opening a file at `user_version 68`
+  // takes rule 3 (it warns, reads as-is and migrates nothing), never names either table, reads the `continuity` lane-arm
+  // row as no lane it knows, and boots. Every earlier entry is frozen. RE-MEASURE the slot before the PR and before merge
+  // (it must print 67 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE continuity_generations (
+    id          INTEGER PRIMARY KEY,
+    identity    TEXT NOT NULL,          -- a coordinator's session id ('overlord' from W1)
+    sessionId   TEXT NOT NULL,
+    role        TEXT NOT NULL,          -- a FleetRole word
+    term        INTEGER NOT NULL,       -- 1 in W1a
+    rowIncarnation TEXT,                -- the registry row's incarnation at the start, or null
+    n           INTEGER NOT NULL,
+    state       TEXT NOT NULL,          -- a GenerationState word; moves only on a live walk
+    shadowState TEXT,                   -- the would-be state of a walk begun in shadow, else null
+    walk        TEXT,                   -- 'live' | 'shadow': the mode the walk in flight began in; null outside a walk
+    walkClass   TEXT,                   -- the walk's TriggerClass, or null
+    enteredAt   INTEGER NOT NULL,       -- wall ms the walk's column last changed state
+    deadlineAt  INTEGER,                -- wall ms, state's deadline, set once on entry; null outside a timed state
+    shadowDeadlineAt INTEGER,           -- wall ms, shadowState's deadline, the same rule
+    dueSince    INTEGER,                -- wall ms, shown to the operator; never read for a decision
+    dueWhy      TEXT,
+    dueClass    TEXT,
+    dueSinceObservedMs INTEGER,         -- the accumulator when the trigger became due
+    proven      INTEGER NOT NULL DEFAULT 0,
+    renudged    INTEGER NOT NULL DEFAULT 0,
+    probeRounds INTEGER NOT NULL DEFAULT 0,  -- failed rounds in this probing (0 or 1)
+    hostEnded   INTEGER NOT NULL DEFAULT 0,  -- the receipt's first half came in this clearing
+    blind       TEXT,                   -- JSON array of the RenewalTrigger words the last pass could not read
+    model       TEXT,
+    prevModel   TEXT,                   -- the ended generation's model, for a resumed start's class
+    lane        TEXT,
+    host        TEXT,
+    cardHash    TEXT,
+    snapshotId  TEXT,
+    attempts    INTEGER NOT NULL DEFAULT 0,
+    outcome     TEXT,                   -- a GenerationOutcome word, set when ended
+    resumed     INTEGER NOT NULL,
+    startId     INTEGER NOT NULL UNIQUE REFERENCES continuity_starts(id),
+    startReportedAt INTEGER NOT NULL,   -- the start's reportedAt: the hook's clock, the order of a session's starts
+    observed    TEXT NOT NULL,          -- JSON Observed, the identity's accumulator
+    mintedObservedMs INTEGER NOT NULL,
+    softRenewalObservedMs INTEGER,
+    holdOffUntilObservedMs INTEGER,     -- absolute, on the accumulator; the gather subtracts mintedObservedMs
+    UNIQUE (identity, term, n)
+  );
+  CREATE UNIQUE INDEX continuity_generations_live ON continuity_generations(identity) WHERE state <> 'ended';
+  CREATE TABLE continuity_cursor (lane TEXT PRIMARY KEY, lastStartId INTEGER NOT NULL);
+  INSERT INTO lane_arm_settings (lane, choice, updatedAt) VALUES ('continuity', 'shadow', 0);
+  `,
 ];
 
 /** The version this build writes. `MIGRATIONS.length` and nothing else: a

@@ -2,6 +2,7 @@
 // cadences, and `LaneRunner` (behind `FleetWatcher.runLane`) is the one place a lane is throttled, kept to a single
 // flight and caught. The rows here pin the table's own rules and the runner's four flight modes on an injected clock;
 // `lane-beats-characterization.test.ts` pins the same four beats through `tick`.
+import { RENEWAL_LANE_PERIOD_MS } from '../../shared/continuity.js';
 import { describe, it, expect, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
@@ -64,7 +65,10 @@ describe('LANE_SCHEDULE — the table', () => {
     for (const r of LANE_SCHEDULE) {
       if (r.derivedFrom === null) continue;
       const named = LANE_SCHEDULE.find((o) => o.name === r.derivedFrom!.name);
-      const declared = new RegExp(`export const ${r.derivedFrom.name}\\b`).test(text('laneSchedule.ts'));
+      // Declared here, or imported here by name from the one module that declares it (the generations row's
+      // RENEWAL_LANE_PERIOD_MS, whose home is shared/continuity.ts beside the observed step cap it bounds).
+      const declared = new RegExp(`export const ${r.derivedFrom.name}\\b`).test(text('laneSchedule.ts'))
+        || new RegExp(`^import \\{[^}]*\\b${r.derivedFrom.name}\\b[^}]*\\} from `, 'm').test(text('laneSchedule.ts'));
       expect(named !== undefined || declared, `${r.name} is derived from ${r.derivedFrom.name}, which exists nowhere`).toBe(true);
       expect(r.derivedFrom.reason.length, `${r.name}'s derivation carries no reason`).toBeGreaterThan(0);
     }
@@ -514,9 +518,9 @@ describe('the four reclaim lanes (D-5862, PR 3)', () => {
 });
 
 describe('every throttle is on the monotonic clock (OA-C4, ruled (a) on #803)', () => {
-  it('no row of LANE_SCHEDULE is on the wall clock: 41 of 41 are monotonic (the disk alarm, the tmp census and the stale-archive arm are rows, D-7895; the stuck verdict pass, D-8071; the run-close lane, D-8077; the case lane, Overlord §10.5)', () => {
+  it('no row of LANE_SCHEDULE is on the wall clock: 42 of 42 are monotonic (the disk alarm, the tmp census and the stale-archive arm are rows, D-7895; the stuck verdict pass, D-8071; the run-close lane, D-8077; the case lane, Overlord §10.5; the generations lane, Overlord §3.3.11)', () => {
     expect(LANE_SCHEDULE.filter((r) => r.clock === 'wall').map((r) => r.name), 'a throttle on Date.now()').toEqual([]);
-    expect(LANE_SCHEDULE.filter((r) => r.clock === 'mono')).toHaveLength(41);
+    expect(LANE_SCHEDULE.filter((r) => r.clock === 'mono')).toHaveLength(42);
   });
 
   it('the runner throttles a monotonic row on the monotonic reading: a wall step back runs it at its cadence, a step forward never early', () => {
@@ -574,6 +578,15 @@ describe('the two sleep lanes (ARCH-43)', () => {
     expect(await other).toBe('ran');
     held.resolve();
     await first;
+  });
+});
+
+describe('the generations lane row (Overlord spec §3.3.11, Table 11.1c "The renewal lane")', () => {
+  it('rides the renewal lane\'s period by reference, the period the observed step cap is computed from, and skips an overlap', () => {
+    expect(laneRow('generations')).toMatchObject({
+      cadenceMs: RENEWAL_LANE_PERIOD_MS, clock: 'mono', flight: 'skip',
+      warnKey: 'ccrc-server: the generations lane failed', derivedFrom: { name: 'RENEWAL_LANE_PERIOD_MS' },
+    });
   });
 });
 

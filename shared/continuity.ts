@@ -27,6 +27,8 @@ const GENERATION_OUTCOME_MAP = {
   swapped: 'a swap landing replaced it',
   woken: 'a wake on the same host replaced it',
   'woken-elsewhere': 'a wake on another host replaced it',
+  unmeasured: 'a start replaced it, and what that start was cannot be told from what the lane read',
+  cleared: 'a /clear on the same row and account replaced it: asked for, but not by a renewal (review 2006)',
 } as const;
 export type GenerationOutcome = keyof typeof GENERATION_OUTCOME_MAP;
 export const GENERATION_OUTCOMES = Object.keys(GENERATION_OUTCOME_MAP) as GenerationOutcome[];

@@ -18,7 +18,7 @@ import { useState } from 'react';
 import type { ReactNode } from 'react';
 import { QuickConfirm, Section, Skeleton } from '@ccrc/ui';
 import {
-  LANE_ARM_TEXT, ROSTER_CARD_LANE, ROSTER_CARD_SHADOW_LOG,
+  CONTINUITY_LANE, LANE_ARM_TEXT, ROSTER_CARD_LANE, ROSTER_CARD_SHADOW_LOG,
   type LaneArmChoice, type LaneArmConfirmRequired, type LaneArmLane, type LaneArmRefusal, type LaneArmRequest, type LaneArmRowView,
 } from '../../../shared/lane-arm';
 import { api, refusalText } from '../lib/api';
@@ -38,7 +38,10 @@ const OWN_REFUSAL_TEXT: Readonly<Record<Extract<LaneArmRefusal, 'sign-in-unarmed
 };
 
 /** The shadow record each row names, where it has one. */
-const SHADOW_LOG: Readonly<Record<LaneArmLane, string | null>> = { [ROSTER_CARD_LANE]: ROSTER_CARD_SHADOW_LOG };
+const SHADOW_LOG: Readonly<Record<LaneArmLane, string | null>> = {
+  [ROSTER_CARD_LANE]: ROSTER_CARD_SHADOW_LOG,
+  [CONTINUITY_LANE]: null,
+};
 
 export function ShadowLanesSection({ pollMs }: { pollMs?: number }): ReactNode {
   const poll = useLaneArmView(pollMs);

@@ -22,5 +22,11 @@
   "server/src/continuity/precompact.ts#precompactDecision": 1,
   "server/src/continuity/probes.ts#probeRound": 1,
   "server/src/continuity/probes.ts#gradeProbe": 1,
-  "server/src/continuity/probes.ts#fittedCeiling": 1
+  "server/src/continuity/probes.ts#fittedCeiling": 1,
+  "server/src/continuity/generationStart.ts#startVerdict": 1,
+  "server/src/continuity/generationStart.ts#waveBoundaryOf": 1,
+  "server/src/continuity/generationStart.ts#startHold": 1,
+  "server/src/continuity/generationStart.ts#planStartBatch": 1,
+  "server/src/continuity/generationStart.ts#firstMintOf": 1,
+  "server/src/continuity/generationStart.ts#judgedForDue": 1
 }

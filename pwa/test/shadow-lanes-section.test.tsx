@@ -4,7 +4,7 @@
 // L0's `LANE_ARM_TEXT`, read by name. The card at every width is `browser/shadow-lanes-card.browser.test.ts`.
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import { LANE_ARM_TEXT as T, ROSTER_CARD_SHADOW_LOG, type LaneArmRowView, type LaneArmView } from '../../shared/lane-arm';
+import { LANE_ARM_TEXT as T, ROSTER_CARD_SHADOW_LOG, laneArmGate, type LaneArmRowView, type LaneArmView } from '../../shared/lane-arm';
 import { COORDINATOR_ROSTER_CARD_LIVE_MARKER } from '../../shared/switches';
 import { ShadowLanesSection } from '../src/fleet/ShadowLanesSection';
 import { asLaneArmConfirm, asLaneArmView, laneArmLines } from '../src/fleet/laneArmWords';
@@ -41,6 +41,34 @@ describe('Settings › Automation › Shadow lanes (D-8274)', () => {
     expect(screen.getByRole('group', { name: R.legend })).toBeInTheDocument();
     expect(screen.getByText(T.shadowLog(ROSTER_CARD_SHADOW_LOG))).toBeInTheDocument();
     expect(screen.getByText(R.liveNote)).toBeInTheDocument();
+  });
+
+  it('the continuity row (Overlord W1a, generations) is listed after the roster card, in its own words, with no shadow record', async () => {
+    const C = T.rows.continuity;
+    vi.spyOn(api, 'laneArm').mockResolvedValue({ lanes: [row(), row({ lane: 'continuity', marker: null })] });
+    mount();
+    await waitFor(() => expect(screen.getByRole('group', { name: C.legend })).toBeInTheDocument());
+    const groups = screen.getAllByRole('group').map((g) => g.getAttribute('aria-label') ?? g.querySelector('legend')?.textContent);
+    expect(groups.indexOf(C.legend)).toBeGreaterThan(groups.indexOf(R.legend));
+    const own = within(screen.getByRole('group', { name: C.legend }));
+    expect(own.getByText(C.liveNote)).toBeInTheDocument();
+    expect(own.queryByText(/Shadow record:/)).toBeNull();
+  });
+
+  it('the continuity row says why it cannot go live yet, and a Live tap the server refuses lane-gated says the server\'s reason (review 2003 F3)', async () => {
+    const C = T.rows.continuity;
+    const gate = laneArmGate('continuity')!;
+    expect(gate).toBe(C.gate);
+    const read = vi.spyOn(api, 'laneArm').mockResolvedValue({ lanes: [row({ lane: 'continuity', marker: null })] });
+    vi.spyOn(api, 'setLaneArm').mockRejectedValue(new ApiError(409, { ok: false, error: 'lane-gated', detail: gate }));
+    mount();
+    await waitFor(() => expect(radio(T.shadow).checked).toBe(true));
+    expect(screen.getByText(gate)).toBeInTheDocument();
+    expect(laneArmLines(row(), ROSTER_CARD_SHADOW_LOG).map((l) => l.text)).not.toContain(gate);
+    fireEvent.click(radio(T.live));
+    expect(await screen.findByText(`${T.refused} (${gate})`)).toBeInTheDocument();
+    await waitFor(() => expect(read).toHaveBeenCalledTimes(2));
+    expect(radio(T.shadow).checked).toBe(true);
   });
 
   it('Live is one tap then a confirm: the tap sends no key, the server\'s 409 opens the sheet, Go live sends its key', async () => {
@@ -104,6 +132,15 @@ describe('Settings › Automation › Shadow lanes (D-8274)', () => {
     fireEvent.click(radio(T.shadow));
     expect(await screen.findByText(UNCONFIRMED_TEXT)).toBeInTheDocument();
     await waitFor(() => expect(read).toHaveBeenCalledTimes(2));
+  });
+
+  it('a Live the continuity row\'s gate holds checks neither radio, under the gate\'s words (review 2006 N1)', async () => {
+    const gate = laneArmGate('continuity')!;
+    vi.spyOn(api, 'laneArm').mockResolvedValue({ lanes: [row({ lane: 'continuity', stored: 'live', live: false, marker: null })] });
+    mount();
+    expect(await screen.findByText(gate)).toBeInTheDocument();
+    expect(radio(T.shadow).checked).toBe(false);
+    expect(radio(T.live).checked).toBe(false);
   });
 
   it('a marker imported at the upgrade is said on the row; a token this build does not know checks neither radio', async () => {

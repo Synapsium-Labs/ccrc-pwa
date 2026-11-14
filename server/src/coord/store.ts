@@ -31,7 +31,14 @@ import type { BuildCaptureResult, BuildCaptureTry, ClaudeBuildRecord } from '../
 import type { LinkingWriteBody, ProjectLinkingWire } from '../../../shared/linking.js';
 import { openPracticeCase, practiceCaseNewest, type PracticeCaseNewestRead, type PracticeCaseOpen } from './practiceCasesStore.js';
 import type { CaseDue } from './practiceCases.js';
-import { insertStart, startsSince, type StartInsert, type StartInsertResult, type StartsRead } from '../continuity/continuityStore.js';
+import {
+  advanceCursor, advanceObserved, clearShadowWalk, generationsCursor, insertStart, liveGenerations, mintGeneration, setGenerationDue,
+  setHoldOff, startsOf, startsSince, stepGeneration, type CursorAdvance, type CursorRead, type DueWrite,
+  type GenExpect, type GenerationsRead, type MintInput, type MintResult, type StartInsert, type StartInsertResult, type StartsRead,
+} from '../continuity/continuityStore.js';
+import type { GenView } from '../continuity/generationMachine.js';
+import type { Observed } from '../time/observed.js';
+import type { RenewalTrigger } from '../../../shared/continuity.js';
 import type { Invitation } from './peerBound.js';
 import { liftReviewCapByCoordinator, raiseReviewCapAsk, reviewCapGate, reviewCapStatesOf, type CoordLiftResult, type ReviewCapState } from './reviewCapStore.js';
 import { renderEnvelope } from './envelope.js';
@@ -5367,7 +5374,18 @@ export class CoordStore {
   /** Overlord §3.3.11: the start report's one writer, idempotent on the hook's report id (`continuityStore.ts`). */
   insertStart(row: StartInsert): StartInsertResult { return insertStart(this.db, row); }
   /** Overlord §3.3.11: every reported start after an id, the generations lane's read (`continuityStore.ts`). */
-  startsSince(sinceId: number): StartsRead { return startsSince(this.db, sinceId); }
+  startsSince(sinceId: number, limit?: number): StartsRead { return startsSince(this.db, sinceId, limit); }
+  startsOf(sessionId: string, limit: number): StartsRead { return startsOf(this.db, sessionId, limit); }
+  /** Overlord §3.3.11, H12: the generations, written only by the generations lane through `continuityStore.ts`. */
+  liveGenerations(): GenerationsRead { return liveGenerations(this.db); }
+  mintGeneration(i: MintInput, e: GenExpect | null, live: boolean, c: CursorAdvance | null = null): MintResult { return mintGeneration(this.db, i, e, live, c); }
+  stepGeneration(id: number, e: GenExpect, next: GenView, live: boolean, now: number): { changed: boolean } { return stepGeneration(this.db, id, e, next, live, now); }
+  clearShadowWalk(id: number, e: GenExpect, now: number): { changed: boolean } { return clearShadowWalk(this.db, id, e, now); }
+  setGenerationDue(id: number, e: GenExpect, due: DueWrite, blind: readonly RenewalTrigger[]): { changed: boolean } { return setGenerationDue(this.db, id, e, due, blind); }
+  advanceObserved(id: number, e: GenExpect, o: Observed): { changed: boolean } { return advanceObserved(this.db, id, e, o); }
+  setHoldOff(id: number, e: GenExpect): { changed: boolean } { return setHoldOff(this.db, id, e); }
+  generationsCursor(lane: string): CursorRead { return generationsCursor(this.db, lane); }
+  advanceCursor(c: CursorAdvance): { changed: boolean } { return advanceCursor(this.db, c); }
 
   /** D-6909: the review-cap state of a batch of runs (`reviewCapStore.ts`). */
   reviewCapStates(ids: readonly number[]): Map<number, ReviewCapState> {

@@ -171,6 +171,8 @@ import { createWorkerSeen, workerSeenOf, type WorkerSeen, type WorkerSeenBoard }
 import { runStuckPass } from './coord/runStuckPass.js';
 import { isUntoldNotice, untoldPass } from './coord/untold.js';
 import { casesPass } from './coord/casesLane.js';
+import { gatherGenerationReadings, generationsPass, type CompactionsMemo } from './continuity/generationsLane.js';
+import { compactionsPaths, readCompactionsMeasured } from './continuity/compactions.js';
 import { createRunCloseMemory, isRunCloseWarning, runClosePass } from './coord/runCloseLane.js';
 import { readBranchFacts, readBranchOpenPr } from './coord/runCloseFacts.js';
 import { abandonRefusal } from './coord/close.js';
@@ -272,7 +274,7 @@ import {
 } from './coord/wakeBudget.js';
 import { HIBERNATE_AFTER_HOURS_FILE } from './coord/hibernate.js';
 import { liveRowFor, liveWordFor, processStartedAtFor, turnMarkFor, turnReadDeps, turnVerdictFor } from './turnverdict.js';
-import { rollPass, type RollSweepMemory } from './rollLane.js';
+import { rollPass, type ReleaseRead, type RollSweepMemory } from './rollLane.js';
 import { rollTargetsOf } from './coord/rollTarget.js';
 import { NODE_FILES } from '../../shared/agent-protocol.js';
 import {
@@ -1985,6 +1987,11 @@ export class FleetWatcher {
   /** The delegation lane (wave 3, Task 13; see `DelegationLane`), made on first use: a parameter property is not yet assigned when a
    *  field initialiser runs, so it cannot be built beside the other fields. */
   private delegationLaneMemo: DelegationLane | null = null;
+  /** The generations lane's compactions read cache, and this process's id for its observed stamps. */
+  private readonly generationsCompactions: CompactionsMemo = new Map();
+  private generationsProc: string | undefined;
+  /** The starts this process held for a failed read (`GenerationsDeps.retried`). */
+  private readonly generationsRetried = new Set<number>();
   private delegationLane(): DelegationLane {
     this.delegationLaneMemo ??= new DelegationLane(this.deps, () => this.delegationCensus, this.lanes, () => this.listedIds);
     return this.delegationLaneMemo;
@@ -2415,12 +2422,7 @@ export class FleetWatcher {
         await rollPass({
           coord, viewers: this.deps.viewers,
           targets: () => (coord === undefined ? null : rollTargetsOf(coord.rollSettings())),
-          release: async () => {
-            try {
-              const st = await this.deps.io.statMeasured(`${this.deps.cfg.ccrcDir}/${NODE_FILES.installed}`);
-              return st.ok ? { kind: 'installed', at: st.mtimeMs } : st.reason === 'absent' ? { kind: 'none' } : { kind: 'unreadable' };
-            } catch { return { kind: 'unreadable' }; }
-          },
+          release: () => this.nodeRelease(),
           liveWord: (rec) => liveWordFor(reads, rec), mark: (rec) => turnMarkFor(reads, rec),
           processStartedAt: (rec) => processStartedAtFor(reads, rec),
           readAfterHours: () => this.deps.io.readFile(`${this.deps.cfg.registryDir}/${HIBERNATE_AFTER_HOURS_FILE}`),
@@ -2783,6 +2785,8 @@ export class FleetWatcher {
       void this.sweepUntold().catch(() => { /* one bad sweep must not kill the poll */ });
       // NEVER awaited, the same reasons: the CASE lane (Overlord §10.5, Table 11.1c's `cases` row), in shadow: it records cases and sends nothing.
       void this.sweepCases().catch(() => { /* one bad sweep must not kill the poll */ });
+      // NEVER awaited, the same reasons: the GENERATIONS lane (Overlord §3.3.11, W1a), in shadow: it mints and records, and acts on no session.
+      void this.sweepGenerations(records, listedAt).catch(() => { /* one bad sweep must not kill the poll */ });
       // NEVER awaited, the same reasons: the RUN-CLOSE lane (D-8077), rows E1 and E1r, in shadow until its group is armed.
       void this.sweepRunClose(registryRead).catch(() => { /* one bad sweep must not kill the poll */ });
       // NEVER awaited, same reasoning as sweepNames immediately above: this one
@@ -6054,6 +6058,45 @@ export class FleetWatcher {
     const coord = this.deps.coord;
     if (!coord) return;
     await this.runLane('cases', () => casesPass({ coord, now: () => this.deps.time.clock.wall() }));
+  }
+
+  /** When the node's current ccrc install completed (`~/.ccrc/installed`'s time): the roll's release read and the
+   *  generations lane's "behind" test, one read for both. */
+  private async nodeRelease(): Promise<ReleaseRead> {
+    try {
+      const st = await this.deps.io.statMeasured(`${this.deps.cfg.ccrcDir}/${NODE_FILES.installed}`);
+      return st.ok ? { kind: 'installed', at: st.mtimeMs } : st.reason === 'absent' ? { kind: 'none' } : { kind: 'unreadable' };
+    } catch { return { kind: 'unreadable' }; }
+  }
+
+  /** The generations lane (Overlord §3.3.11, W1a), in shadow: the fleet reads first, then one synchronous pass that mints,
+   *  ends and records through the store. It acts on no session; the pass logs what it skipped, held and could not read
+   *  (review 2003 F5). */
+  async sweepGenerations(records: readonly SessionRecord[], listedAt: number): Promise<void> {
+    const coord = this.deps.coord;
+    if (!coord) return;
+    await this.runLane('generations', async () => {
+      const { io, cfg } = this.deps;
+      const reads = turnReadDeps(this.deps, this);
+      const rec = (id: string): SessionRecord | undefined => records.find((r) => r.id === id);
+      const readings = await gatherGenerationReadings(coord, {
+        usage: (id) => readUsageMeasured(io, cfg.registryDir, id, Math.floor(this.deps.time.clock.wall() / 1000)),
+        eventsStamp: (id) => io.statMeasured(compactionsPaths(cfg.registryDir, id).pre),
+        compactions: (id) => readCompactionsMeasured(io, cfg.registryDir, id),
+        turnMark: async (id) => { const r = rec(id); return r === undefined ? { ok: false, reason: 'unmeasured' } : turnMarkFor(reads, r); },
+        processStartedAt: async (id) => { const r = rec(id); return r === undefined ? null : processStartedAtFor(reads, r); },
+        release: () => this.nodeRelease(),
+      }, this.generationsCompactions);
+      this.generationsProc ??= this.deps.time.entropy.uuid();
+      generationsPass({ coord, clock: this.deps.time.clock, proc: this.generationsProc, log: (line) => console.warn(line),
+        retried: this.generationsRetried }, {
+        registry: records.map((r) => ({ id: r.id, uuid: r.unmeasured.includes('uuid') ? null : r.uuid,
+          lane: r.unmeasured.includes('wrapper') ? null : r.wrapper, child: r.child })),
+        // When this tick's registry read began: a start received since is held a pass (review 2006 R1).
+        listedAt,
+        readings,
+      });
+    });
   }
 
   /** One pass of the dead-coordinator lane — `sweepDeadCoordinators`'s body, run only while no other pass runs. */

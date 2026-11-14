@@ -6,7 +6,7 @@
 // for `dispatch-abandon.ts`'s reason: other programmes append at that file's foot.
 //
 // ONE ROW PER SWITCH, ONE STORE, ONE ROUTE (R-6). A lane is live when, and only when, its row's stored choice is exactly
-// `live`. The row a lane gets lives in `lane_arm_settings` (coord.db), seeded `shadow`, written only by
+// `live` and the row's gate is open (`laneArmLive`; review 2006 N1). The row a lane gets lives in `lane_arm_settings` (coord.db), seeded `shadow`, written only by
 // `POST /api/coord/lane-arm`. A switch that has a marker today imports it ONCE: the first server pass that can list the
 // registry after the upgrade sets a never-written row Live when the marker stands, journals it in the feed naming the file,
 // and from then on the marker is not read. A later lane joins by adding its name here and its seed row in a migration.
@@ -15,8 +15,11 @@ import { COORDINATOR_ROSTER_CARD_LIVE_MARKER } from './switches.js';
 
 /** The roster card's row (durability D4, #757): the first lane on the card. */
 export const ROSTER_CARD_LANE = 'roster-card';
+/** The renewal lane's row (Overlord W1a, the generations piece): long-lived sessions renewed through their generations.
+ *  In shadow the lane records each generation's would-be states in `shadowState`; live, it moves `state`. */
+export const CONTINUITY_LANE = 'continuity';
 /** The lanes the Shadow lanes card has a row for, in the card's order. */
-export const LANE_ARM_LANES = [ROSTER_CARD_LANE] as const;
+export const LANE_ARM_LANES = [ROSTER_CARD_LANE, CONTINUITY_LANE] as const;
 export type LaneArmLane = (typeof LANE_ARM_LANES)[number];
 export function isLaneArmLane(v: unknown): v is LaneArmLane {
   return typeof v === 'string' && (LANE_ARM_LANES as readonly string[]).includes(v);
@@ -57,7 +60,9 @@ export function isLaneArmImport(v: unknown): v is LaneArmImport {
 /** One row of the card, as the server read it.
  *  - `stored`: the row's choice as this build reads it; `unknown` is a token this build does not know, `absent` a lost
  *    row, `unreadable` a read that failed (`detail` says why). None of the three arms the lane.
- *  - `live`: whether the lane is armed, which is `stored === 'live'` and nothing else.
+ *  - `live`: whether the lane is armed: `stored === 'live'` while the row's gate is open (`laneArmLive`). The card works it
+ *    out again from the same rule and its own bundle's gate table, so it can differ from this field only across a PWA and
+ *    server build skew, and the two ship together.
  *  - `updatedAt`: the row's last write (epoch ms; 0 is the seed), or null when there is no row to read.
  *  - `imported`: the one-time import of the row's marker, or null while it has not run (or the lane has no marker).
  *  - `marker`: the retired marker's name, or null for a lane that never had one. */
@@ -88,11 +93,24 @@ export interface LaneArmConfirmRequired {
   facts: { stored: LaneArmRowView['stored']; updatedAt: number | null; shadowLog: string | null };
 }
 
-/** The words the POST refuses with (each already a word of `REFUSAL_STATUS`), spelled once for the PWA's reader. */
-export const LANE_ARM_REFUSALS = ['bad-request', 'not-configured', 'sign-in-unarmed', 'state-unreadable'] as const;
+/** The words the POST refuses with (each a word of `REFUSAL_STATUS`), spelled once for the PWA's reader. `lane-gated` is the
+ *  card's own (review 2003 F3): Live refused while the row's gate stands (`laneArmGate`). */
+export const LANE_ARM_REFUSALS = ['bad-request', 'not-configured', 'sign-in-unarmed', 'state-unreadable', 'lane-gated'] as const;
 export type LaneArmRefusal = (typeof LANE_ARM_REFUSALS)[number];
 export function isLaneArmRefusal(v: unknown): v is LaneArmRefusal {
   return typeof v === 'string' && (LANE_ARM_REFUSALS as readonly string[]).includes(v);
+}
+
+/** A row's GATE (review 2003 F3): while it stands, Live is refused at the door (`lane-gated`) and the card says why. Null
+ *  for a row that can go live. The words are the gate: a row is gated exactly when it has them. */
+export function laneArmGate(lane: LaneArmLane): string | null {
+  return LANE_ARM_TEXT.rows[lane].gate;
+}
+
+/** Is a row live? Only on an exact stored `live` while its gate is open (review 2006 N1): a row stored `live` before its
+ *  gate stood is not. The one rule the lanes, the server's view and the card read. */
+export function laneArmLive(stored: string, gate: string | null): boolean {
+  return stored === 'live' && gate === null;
 }
 
 /** The feed row's title when a row changes, and when the import sets a row Live. */
@@ -112,6 +130,15 @@ export const LANE_ARM_TEXT = {
       liveNote: 'After a compaction, resume or clear, and on its first wake after an idle compaction, a coordinator\'s '
         + 'context lists the open runs it claims and what is awaiting you.',
       gate: null,
+    },
+    [CONTINUITY_LANE]: {
+      legend: 'Renew long-lived sessions',
+      shadowNote: 'Each start of a coordinator mints a generation and every pass records whether a renewal would be due; '
+        + 'nothing is held, refused or renewed.',
+      liveNote: 'A coordinator\'s generations move through the renewal states; until the renewal act ships, this changes '
+        + 'nothing a session sees.',
+      gate: 'Live waits for the renewal act: until it ships, nothing moves a generation on from its start, so a live walk '
+        + 'would stand still and fire every deadline at once when it arrives. Live is refused until then.',
     },
   },
   shadowLog: (path: string): string => `Shadow record: ${path} on the fleet box. Read it before going live.`,

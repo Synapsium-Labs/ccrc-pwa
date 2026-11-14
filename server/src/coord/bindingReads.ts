@@ -1,5 +1,5 @@
 import type { SessionRun } from '../../../shared/api.js';
-import { bindingOf, childParentOf, claimantsOf, parentOf, unbornIncarnation, type BindingRun, type Incarnation } from './runBinding.js';
+import { bindingOf, childParentOf, claimantsOf, parentOf, runsClaimedBy, unbornIncarnation, type BindingRun, type Incarnation } from './runBinding.js';
 import type { OpenSiblingsResult, RunReadResult, RunsNamingSessionResult } from './store.js';
 
 /**
@@ -60,6 +60,34 @@ export function runsTouching(
   const series = port.bindingRunsOf(sessionId);
   if (!series.ok) return { ok: false, detail: `runsTouching: ${series.detail}` };
   return { ok: true, runs: series.runs.map((r) => ({ id: r.id, sessionId: r.sessionId, claimedBy: r.claimedBy })) };
+}
+
+/** `newestClaimedWorkRuns`' answer: the runs newest first, each with its state and programme. */
+export type ClaimedWorkRuns =
+  | { readonly ok: true; readonly runs: readonly { readonly state: string; readonly program: string }[] }
+  | { readonly ok: false; readonly detail: string };
+
+/** Overlord Table 3.3.11b's wave boundary (`waveBoundaryOf`, the generations lane): the two newest WORK runs `claimantId`
+ *  claims, newest first, in any state, with their programmes. The series is the binding's own (`bindingRunsOf`, proven
+ *  ids), read for the runs it claims, and each run's kind and programme are `run(id)`'s (review 2003 F11: Coordination's
+ *  table is read here, never from the continuity adapter). A series or a run that cannot be read answers ok: false, and so
+ *  does a read that throws (a claimed run's malformed row: review 2006 R4), so one bad row never stops a caller's pass. */
+export function newestClaimedWorkRuns(port: Pick<BindingReadPort, 'bindingRunsOf' | 'run'>, claimantId: string): ClaimedWorkRuns {
+  try {
+    const series = port.bindingRunsOf(claimantId);
+    if (!series.ok) return { ok: false, detail: `newestClaimedWorkRuns: ${series.detail}` };
+    const runs: { state: string; program: string }[] = [];
+    for (const r of runsClaimedBy(series.runs, claimantId)) {
+      const read = port.run(r.id);
+      if (!read.ok) return { ok: false, detail: `newestClaimedWorkRuns: ${read.detail}` };
+      if (read.run === null || read.run.kind !== 'work') continue;
+      runs.push({ state: read.run.state, program: read.run.program });
+      if (runs.length === 2) break;
+    }
+    return { ok: true, runs };
+  } catch (err) {
+    return { ok: false, detail: `newestClaimedWorkRuns: ${err instanceof Error ? err.message : String(err)}` };
+  }
 }
 
 const toSessionRun = (r: BindingRun | null): SessionRun | null => r === null ? null : { id: r.id, state: r.state, claimedBy: r.claimedBy };

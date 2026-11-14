@@ -144,6 +144,12 @@ export type AutoRollVerdict =
   | { readonly act: 'skip'; readonly reason: Exclude<AutoRollSkip, 'idle-gate'> }
   | { readonly act: 'skip'; readonly reason: 'idle-gate'; readonly hold: HibernateHold };
 
+/** THE ONE "behind the install" test (review 2003 N3): this session's process started before the node's current ccrc install
+ *  completed. The roll's `current` is its negation; the generations lane's `installBehind` reads it as it is. */
+export function startedBeforeRelease(startedAt: number, release: number): boolean {
+  return startedAt < release;
+}
+
 /** Roll this session onto the current release and build now? */
 export function autoRollVerdict(i: AutoRollInput): AutoRollVerdict {
   if (i.targets === null) return { act: 'skip', reason: 'setting-unreadable' };
@@ -153,7 +159,7 @@ export function autoRollVerdict(i: AutoRollInput): AutoRollVerdict {
   if (i.sleep.live.kind === 'unread') return { act: 'measure' };
   if (i.startedAt === null) return { act: 'skip', reason: 'start-unmeasured' };
   const buildBehind = i.build.kind === 'behind' && i.build.reach !== null && i.rolledFor !== i.build.reach;
-  if (i.startedAt >= i.release && !buildBehind) return { act: 'current' };
+  if (!startedBeforeRelease(i.startedAt, i.release) && !buildBehind) return { act: 'current' };
   if (i.optedOut.roll) return { act: 'skip', reason: 'no-roll' };
   const sleep = { ...i.sleep, optedOut: false };
   const gate = hibernateVerdict(sleep, i.now, ROLL_QUIET_MS, ROLL_IDLE_GATE);

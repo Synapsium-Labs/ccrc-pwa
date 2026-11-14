@@ -12,6 +12,7 @@ import { MAIL_PACE_MUTANT_SETS } from './mailPaceSets.js';
 import { LAUNCH_PROFILE_MUTANT_SETS } from './launchProfileSets.js';
 import { COMPACTION_MUTANT_SETS } from './compactionSets.js';
 import { RENEWAL_MUTANT_SETS } from './renewalDeciderSets.js';
+import { GENERATION_START_MUTANT_SETS } from './generationStartSets.js';
 import { PROBE_MUTANT_SETS } from './probeSets.js';
 import { simulate } from './run.js';
 import {
@@ -139,6 +140,7 @@ const MUTANT_SETS: Record<string, MutantSet<never>> = {
   [CARD_BLOCK_KEY]: CARD_BLOCK_SET as MutantSet<never>,
   [COMPACTIONS_KEY]: COMPACTIONS_SET as MutantSet<never>,
   ...RENEWAL_MUTANT_SETS,
+  ...GENERATION_START_MUTANT_SETS,
   ...MAIL_PACE_MUTANT_SETS,
   ...FACE_MUTANT_SETS,
   ...LAUNCH_PROFILE_MUTANT_SETS,
