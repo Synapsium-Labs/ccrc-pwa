@@ -136,7 +136,8 @@ function classNameOffences(tag: string): string[] {
   if (!attr) return out;
   let value = (attr[1] as string).trim();
   if (value.startsWith('{')) {
-    const inner = value.replace(/^\{\s*/, '').replace(/\s*\}\s*$/, '');
+    // The capture runs to the tag's end, so a self-closing ` /` trails the brace: trim it before the brace strip.
+    const inner = value.replace(/^\{\s*/, '').replace(/[\s/]+$/, '').replace(/\s*\}\s*$/, '');
     if (!/^(?:"[^"]*"|'[^']*'|`[^`$]*`)$/.test(inner)) return [...out, `className is not a literal (${inner.trim()})`];
     value = inner;
   }
@@ -175,7 +176,7 @@ describe('what a caller may add to a Character through className', () => {
     ['an arbitrary shadow', 'className="shadow-[0_0_2px_red]"', /shadow-\[/],
     ['a bare filter', 'className="filter"', /"filter"/],
     ['an arbitrary property', 'className="[filter:blur(1px)]"', /\[filter/],
-    ['a literal inside braces', "className={'animate-ping'}", /animate-ping/],
+    ['a literal inside braces', "className={'animate-ping'}", /"animate-ping" is a glow/],
     ['a non-literal className', 'className={cls}', /not a literal/],
     ['a template with a hole', 'className={`a ${b}`}', /not a literal/],
     ['a prop spread', '{...rest}', /spreads props/],
@@ -185,6 +186,7 @@ describe('what a caller may add to a Character through className', () => {
   it('CONTROL: a plain literal and an absent className pass', () => {
     expect(classNameOffencesIn(tag('className="face-mark"'))).toEqual([]);
     expect(classNameOffencesIn(tag(''))).toEqual([]);
+    expect(classNameOffencesIn(tag("className={'face-mark'}"))).toEqual([]);
   });
   it('the real tree goes red when a planted caller is added', () => {
     const files = { ...real(), 'pwa/src/planted.tsx': tag('className="drop-shadow-xl"')['planted.tsx'] as string };

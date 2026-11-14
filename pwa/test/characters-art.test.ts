@@ -12,7 +12,7 @@ import path from 'node:path';
 import { ART, CHARACTER_CLASSES } from '../../ui/src/characters/art';
 import type { ArtNode } from '../../ui/src/characters/art';
 import { CHARACTERS, MOODS, isCharacter, isMood } from '../../shared/face';
-import { compileAll, crop, parseArt, restingStyles, stillGrid } from '../../ui/design/make-characters.mjs';
+import { checkSheet, compileAll, crop, parseArt, restingStyles, stillGrid } from '../../ui/design/make-characters.mjs';
 import { colourLiteralsIn, parseCss } from './sourceScan';
 
 const REPO = path.join(import.meta.dirname, '..', '..');
@@ -293,6 +293,9 @@ describe('the generator refuses what is outside the measured vocabulary', () => 
     ['a keyframe name that holds steps( and no timing', base.replace('</style>', '.md-zz{animation:md-up2 1s a-steps(1)}</style>'), /refused animation.*a-steps\(1\)/],
     ['a steps( with a count that is not an integer', base.replace('</style>', '.md-zz{animation:md-up2 1s steps(1.5)}</style>'), /refused animation.*steps\(1\.5\)/],
     ['an easing function beside a stepped one', base.replace('</style>', '.md-zz{animation:md-up2 1s steps(1) cubic-bezier(0,0,1,1)}</style>'), /refused animation.*cubic-bezier/],
+    ['an eased keyword after steps(), which is no keyframe name and no stepped timing', base.replace('</style>', '.md-zz{animation:md-up2 1s steps(1) ease-in}</style>'), /refused animation.*ease-in/],
+    ['a steps( token with a trailing character', base.replace('</style>', '.md-zz{animation:md-up2 1s steps(1)x}</style>'), /refused animation.*steps\(1\)x/],
+    ['a steps( jump term outside the closed list', base.replace('</style>', '.md-zz{animation:md-up2 1s steps(2, ease)}</style>'), /refused animation.*steps\(2, ease\)/],
     ['a style rule of two classes', base.replace('</style>', '.a .b{opacity:0}</style>'), /refused inline style/],
     ['a style rule on an element', base.replace('</style>', 'div{opacity:0}</style>'), /refused inline style/],
     ['a style rule on a pseudo-class', base.replace('</style>', '.a:hover{opacity:0}</style>'), /refused inline style/],
@@ -369,5 +372,21 @@ describe('the generator refuses what is outside the measured vocabulary', () => 
     const other = base.replace('.md-hop{animation:md-up2 1.2s', '.md-hop{animation:md-up2 1.3s');
     expect(other).not.toBe(base);
     expect(() => compileAll({ 'orb-neutral.svg': base, 'orb-happy.svg': other })).toThrow(/defined two ways/);
+  });
+});
+
+describe('checkSheet refuses a keyframe outside its allow-list and a reduced-motion rule that is not animation:none', () => {
+  const allow = { classProps: ['animation'], keyframeProps: ['opacity'], keyframeNames: ['kf-a'] };
+  const sheet = '.x{animation:kf-a 1s steps(1)}@keyframes kf-a{from{opacity:0}to{opacity:1}}';
+  it('CONTROL: the sheet passes with its allow-list', () => {
+    expect(() => checkSheet(sheet, allow)).not.toThrow();
+  });
+  it('refuses a keyframes the allow-list does not name', () => {
+    expect(() => checkSheet(`${sheet}@keyframes kf-glow{from{opacity:1}}`, allow)).toThrow(/refused keyframes.*kf-glow.*outside/);
+  });
+  it('refuses a reduced-motion rule that is not animation:none', () => {
+    const rm = (body: string): string => `${sheet}@media (prefers-reduced-motion:reduce){.x{${body}}}`;
+    expect(() => checkSheet(rm('animation:none'), allow)).not.toThrow();
+    expect(() => checkSheet(rm('animation:kf-a 1s steps(1)'), allow)).toThrow(/refused inline style.*not animation:none/);
   });
 });

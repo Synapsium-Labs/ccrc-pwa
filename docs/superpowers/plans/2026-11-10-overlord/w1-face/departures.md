@@ -134,12 +134,16 @@ into its ledger. Each entry is a plain slug. None carries a number: the programm
 - **character-classname-scan, review carry R2-12 (review 1918)** — a scan of every `<Character` in `pwa/src` and `ui/src` refuses
   glow and loop utilities in its `className` (`drop-shadow-*`, including the arbitrary form, `animate-*`, `shadow-*`,
   `blur-*`, `filter`). It also refuses a non-literal `className` or a spread of props, which it cannot read. No caller
-  passes one today.
+  passes one today. Review 1992 (F7) fixed the braced-literal path: a self-closing ` /` is trimmed before the brace strip, so a
+  braced banned utility is refused by its own message, and a control row pins that `className={'face-mark'}` passes.
 - **animation-tokens-closed, review carries R3-1, R3-2 and R3-5 (review 1924)** — every token of an `animation` entry in `checkSheet`
   must be a number, a time, a known keyword, a `steps(…)` timing token (matched as a whole token, in any case) or a
-  keyframe the sheet defines. Keyframe stops may be written `.5%`.
+  keyframe the sheet defines. Keyframe stops may be written `.5%`. No eased keyword (`linear`, `ease`, `ease-*`) is a known
+  keyword (review 1992, N1), so `steps(1) ease-in` is refused; rows pin the `$` anchor and the closed jump list too.
 - **var-refusal-rides-the-token-rule, review carry R3-2 (review 1924)** — `var(` is not a legal token, so the closed token rule refuses
   it, and a refusal row pins that. No separate `var(` check was added, because one could never fail on its own.
 - **argv-guarded, review carry R3-3 (review 1924)** — both generators (`make-characters.mjs` and `icon-gen.mjs`) check that
   `process.argv[1]` exists before resolving its real path.
-- **keyframe-set-built-once, review carry R3-4 (review 1924)** — `checkSheet` builds its set of keyframe names once.
+- **keyframe-set-built-once, review carry R3-4 (review 1924)** — `checkSheet` builds its set of keyframe names once. Its refusal
+  of a keyframes outside the allow-list is now pinned (review 1992, F6) in `characters-art.test.ts` and `wordmark.test.tsx`, with
+  the reduced-motion `animation:none` refusal beside it.

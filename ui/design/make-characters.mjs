@@ -144,10 +144,11 @@ function splitTop(text, sep) {
   return out;
 }
 
-/** The words of an `animation` entry that name no timing, count, direction or fill: the keyframes it plays. */
+/** The words of an `animation` entry that name no timing, count, direction or fill: the keyframes it plays. No eased
+ *  keyword (`linear`, `ease*`) is here: this sheet steps, never eases, and an eased word would read as a keyframe name. */
 const ANIMATION_WORDS = new Set([
   'none', 'infinite', 'forwards', 'backwards', 'both', 'normal', 'reverse', 'alternate', 'alternate-reverse',
-  'running', 'paused', 'linear', 'ease', 'ease-in', 'ease-out', 'ease-in-out', 'step-start', 'step-end',
+  'running', 'paused', 'step-start', 'step-end',
 ]);
 const NUMBER = /^[+-]?(?:\d+\.?\d*|\.\d+)$/;
 const TIME = /^[+-]?(?:\d+\.?\d*|\.\d+)(?:s|ms)$/i;
