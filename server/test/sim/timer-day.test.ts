@@ -21,7 +21,7 @@ const FILE = 'test/sim/timer-day.test.ts';
 /** 32 seeds in CI; CCRC_SIM=full runs 1,000. */
 const DEFAULTS = Array.from({ length: process.env.CCRC_SIM === 'full' ? 1_000 : 32 }, (_, i) => i + 1);
 const BOUND_MS = process.env.CCRC_SIM === 'full' ? 3_600_000 : 600_000;
-const ok = 'mails=1;to=a;setter=a;stamp=s1;now=s1;listed=true';
+const ok = 'mails=1;to=a;setter=a;stamp=s1;now=s1;read=s1;bornAfter=false;listing=listed';
 
 describe('the timer day\'s invariants go red on a hand-made sequence', () => {
   it('CONTROL: T1 is red on a fired timer with no mail, two mails, or a mail to another identity', () => {
@@ -30,24 +30,33 @@ describe('the timer day\'s invariants go red on a hand-made sequence', () => {
     expect(byName('T1').check(seqOf([['fire', 't1', 'mails=2;to=a,a;setter=a;stamp=s1;now=s1']]))?.invariant).toBe('T1');
     expect(byName('T1').check(seqOf([['fire', 't1', 'mails=1;to=b;setter=a;stamp=s1;now=s1']]))?.invariant).toBe('T1');
   });
-  it('CONTROL: T2 is red on a fire whose stamp differed, or whose setter was gone', () => {
-    expect(byName('T2').check(seqOf([['fire', 't1', 'mails=1;to=a;setter=a;stamp=s1;now=s2']]))?.invariant).toBe('T2');
-    expect(byName('T2').check(seqOf([['fire', 't1', 'mails=1;to=a;setter=a;stamp=s1;now=absent']]))?.invariant).toBe('T2');
+  it('CONTROL: T2 is red on a fire whose stamp differed, whose setter was gone, or that the lane read as anything but a measured match', () => {
+    expect(byName('T2').check(seqOf([['fire', 't1', ok.replace('now=s1', 'now=s2')]]))?.invariant).toBe('T2');
+    expect(byName('T2').check(seqOf([['fire', 't1', ok.replace('now=s1', 'now=absent')]]))?.invariant).toBe('T2');
+    for (const [from, to] of [['read=s1', 'read=unreadable'], ['read=s1', 'read=absent'], ['bornAfter=false', 'bornAfter=true'],
+      ['listing=listed', 'listing=unmeasured'], ['listing=listed', 'listing=unlisted']]) {
+      expect(byName('T2').check(seqOf([['fire', 't1', ok.replace(from!, to!)]]))?.invariant, to).toBe('T2');
+    }
     expect(byName('T2').check(seqOf([['fire', 't1', ok]]))).toBeNull();
   });
   it('CONTROL: T3 is red on a timer fired twice', () => {
     expect(byName('T3').check(seqOf([['fire', 't1', ok], ['fire', 't1', ok]]))?.invariant).toBe('T3');
     expect(byName('T3').check(seqOf([['fire', 't1', ok], ['fire', 't2', ok]]))).toBeNull();
   });
-  it('CONTROL: T4 is red on a listed, live setter\'s timer cancelled setter-gone', () => {
-    expect(byName('T4').check(seqOf([['cancel', 't1', 'setter-gone;listed=true;now=s1;stamp=s1']]))?.invariant).toBe('T4');
-    expect(byName('T4').check(seqOf([['cancel', 't1', 'setter-gone;listed=false;now=absent;stamp=s1']]))).toBeNull();
-    expect(byName('T4').check(seqOf([['cancel', 't1', 'setter-gone;listed=true;now=s2;stamp=s1']]))).toBeNull();
+  it('CONTROL: T4 is red on a live setter\'s timer cancelled setter-gone, listed or not', () => {
+    expect(byName('T4').check(seqOf([['cancel', 't1', 'setter-gone;listed=listed;now=s1;stamp=s1']]))?.invariant).toBe('T4');
+    expect(byName('T4').check(seqOf([['cancel', 't1', 'setter-gone;listed=unlisted;now=s1;stamp=s1']]))?.invariant).toBe('T4');
+    expect(byName('T4').check(seqOf([['cancel', 't1', 'setter-gone;listed=unlisted;now=absent;stamp=s1']]))).toBeNull();
+    expect(byName('T4').check(seqOf([['cancel', 't1', 'setter-gone;listed=listed;now=s2;stamp=s1']]))).toBeNull();
+  });
+  it('CONTROL: T5 is red on a pass that threw with no fault armed', () => {
+    expect(byName('T5').check(seqOf([['server', 'threw', 'armed=false;boom']]))?.invariant).toBe('T5');
+    expect(byName('T5').check(seqOf([['server', 'threw', 'armed=true;sim crash']]))).toBeNull();
   });
 });
 
 describe('the timer day on the real lane (I17)', () => {
-  it('holds T1 to T4 on every default seed and reaches every edge', async () => {
+  it('holds T1 to T5 on every default seed and reaches every edge', async () => {
     await assertScenario(timerDay(), TIMER_DAY_INVARIANTS, { seeds: simSeeds(DEFAULTS), testFile: FILE });
   }, BOUND_MS);
 });
@@ -62,7 +71,7 @@ describe('the named case: a worker sets a two-hour timer, is renewed, and the ma
       note: 'check the PR\'s checks', runId: null, programme: null, setAt: T0, dueAt: T0 + 2 * 3_600_000 });
     if (!set.ok) throw new Error('timer not set');
     // The renewal: a new conversation in the same registry row, whose `.generation` is unchanged.
-    const listing = (at: number) => ({ listedAt: at - 1_000, listedIds: new Set([ID]), archivedIds: new Set<string>(), mailDisabled: false });
+    const listing = (at: number) => ({ listedAt: at - 1_000, listedIds: new Set([ID]), archivedIds: new Set<string>(), unmeasuredIds: new Set<string>(), mailDisabled: false });
     const reads = async () => ({ kind: 'measured' as const, incarnation: STAMP });
     const at = async (now: number) => timersPass({ coord: s, now, log: () => {} }, listing(now), await gatherTimerFacts(s, reads));
     expect((await at(T0 + 3_600_000)).fired).toEqual([]);

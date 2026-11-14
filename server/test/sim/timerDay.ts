@@ -1,24 +1,29 @@
 // A timer day (Overlord W1a, the timers piece, Task 8; spec §3.3.12, I17, §11.7): two setters (a run worker and a
 // coordinator) set, cancel and wait on timers through a seeded day of renewals (the stamp unchanged), purges of a
-// setter's row (the stamp gone, then a new row with a new stamp), listings that name a row they could not build, timers
-// set after a tick's listing began, `mail-disabled` windows, and server crashes between passes and inside one, at any
-// of its writes. The server side is the real lane pass (`timersPass`) over a real `coord.db`; the world is the fleet.
+// setter's row (the stamp gone, then a new row with a new stamp, which may set its first timer while its row is still being
+// made), listings that name a row they could not build (its `.generation` absent or already its own stamp: review 2053 F1),
+// a listing that was not read, timers set after a tick's listing began, `mail-disabled` windows, and server crashes
+// between passes and inside one, at any of its writes. The server side is the real lane pass (`timersPass`, its listing
+// from `timerListingOf`) over a real `coord.db`; the world is the fleet.
 //
 // The pass is synchronous, so the scenario builds its facts the way `gatherTimerFacts` does (the pending read, then each
 // setter's stamp through `setterIncarnationOf`) without an await, and the simulator's async limit does not apply. A crash
-// inside a pass is a write that aborts (and every write after it), counted outside the aborting transaction. The
-// predicates read only the sequence's lines.
+// inside a pass is a write that aborts (and every write after it), counted outside the aborting transaction; a pass that
+// throws records a `threw` line, and a throw no fault armed is a violation (T5). Each fire line carries what the lane
+// read (`read`, `bornAfter`, `listing`), so a fire on anything but a measured match is red (T2), whatever the stamps
+// say (review 2053 F4). The predicates read only the sequence's lines.
 import { DatabaseSync } from 'node:sqlite';
 import { TIMER_LANE_PERIOD_MS, TIMER_MAIL_SENDER } from '../../../shared/continuity-timers.js';
 import { MIGRATIONS } from '../../src/coord/schema.js';
 import { CoordStore } from '../../src/coord/store.js';
-import { setterIncarnationOf, timersPass, type IncarnationRead } from '../../src/continuity/timerLane.js';
+import { setterIncarnationOf, timerListingOf, timersPass, type IncarnationRead } from '../../src/continuity/timerLane.js';
 import type { Scenario } from './run.js';
 import type { Invariant, SequenceLine, Violation } from './sequence.js';
 import { chance } from './world.js';
 
 export const TIMER_DAY_EDGES = ['fired', 'fired-late', 'renewed-fired', 'setter-gone', 'unbuilt-wait', 'born-after-wait',
-  'run-closed', 'setter-cancel', 'mail-held', 'crash-gap', 'crash-mid-pass', 'unreadable-wait'] as const;
+  'run-closed', 'setter-cancel', 'mail-held', 'crash-gap', 'crash-mid-pass', 'unreadable-wait', 'unbuilt-matching-wait',
+  'listing-unread-wait', 'being-made-wait'] as const;
 export type TimerDayEdge = (typeof TIMER_DAY_EDGES)[number];
 
 const START = Date.parse('2026-11-14T00:00:00Z');
@@ -79,16 +84,20 @@ export function timerDay(): Scenario<TimerDayEdge> {
           const set = chance(entropy, 0.08); const due = between(5 * MIN, 3 * 60 * MIN);
           const cancel = chance(entropy, 0.02); const renew = chance(entropy, 0.02); const purge = chance(entropy, 0.004);
           const unbuilt = chance(entropy, 0.05); const unreadable = chance(entropy, 0.03);
+          const reborn = chance(entropy, 0.05); const making = chance(entropy, 0.5);
           r.unbuilt = unbuilt; r.unreadable = unreadable;
-          if (r.stamp === null) {
-            if (purge) { r.stamp = stampOf(++gens); r.bornAt = wall(); line('row', id, `born;stamp=${r.stamp}`, 'fleet'); }
-            continue;
+          const born = r.stamp === null;
+          if (born) {
+            if (!reborn) continue;
+            // A new row, which may set its first timer at once while the fleet is still making it (no `.generation` read yet).
+            r.stamp = stampOf(++gens); r.bornAt = wall(); r.unbuilt = making; line('row', id, `born;stamp=${r.stamp}`, 'fleet');
           }
-          if (set) {
+          const stamp = r.stamp!;
+          if (set || born) {
             const runBound = id === WORKER && !runClosed;
-            const t = store.insertTimer({ setter: id, setterIncarnation: r.stamp, setById: id, setByUuid: 'u', role: 'worker', note: 'n',
+            const t = store.insertTimer({ setter: id, setterIncarnation: stamp, setById: id, setByUuid: 'u', role: 'worker', note: 'n',
               runId: runBound ? runId : null, programme: id === COORD ? 'prog-a' : null, setAt: wall(), dueAt: wall() + due });
-            if (t.ok) { stampOfTimer.set(t.id, r.stamp); line('set', `t${t.id}`, `setter=${id};stamp=${r.stamp}`, 'door'); }
+            if (t.ok) { stampOfTimer.set(t.id, stamp); line('set', `t${t.id}`, `setter=${id};stamp=${stamp}`, 'door'); }
           }
           if (cancel) {
             const p = store.pendingTimersOf(id);
@@ -116,15 +125,23 @@ export function timerDay(): Scenario<TimerDayEdge> {
 
       // ---- SERVER: the lane, once a minute from each boot. A crash cancels its timer; a boot re-arms it.
       const pass = (): void => {
-        const lag = between(0, 20_000); const armFault = chance(entropy, 0.02); const writes = between(0, 6);
+        const lag = between(0, 45_000); const armFault = chance(entropy, 0.02); const writes = between(0, 6);
+        const unread = chance(entropy, 0.02); const unbuiltReads = chance(entropy, 0.5);
         const listedAt = wall() - lag;
-        const listedIds = new Set(SETTERS.filter((id) => { const r = rows.get(id)!; return r.stamp !== null && r.bornAt < listedAt; }));
+        const named = SETTERS.filter((id) => { const r = rows.get(id)!; return r.stamp !== null && r.bornAt < listedAt; });
+        // The tick's built records: a named row the fleet is still making is listed but not built (F1).
+        const records = named.filter((id) => !rows.get(id)!.unbuilt).map((id) => ({ id, archivedAt: null }));
+        const listing = timerListingOf(records, unread ? null : new Set(named), listedAt, mailDisabled ? ['mail-disabled'] : []);
         const reads = new Map<string, IncarnationRead>();
         for (const id of SETTERS) {
           const r = rows.get(id)!;
-          reads.set(id, r.stamp === null || r.unbuilt ? { kind: 'unmeasured', reason: 'absent' }
+          // An unbuilt row's `.generation` is absent, or already written with its own stamp (F1's matching case).
+          reads.set(id, r.stamp === null || (r.unbuilt && !unbuiltReads) ? { kind: 'unmeasured', reason: 'absent' }
             : r.unreadable ? { kind: 'unmeasured', reason: 'unreadable' } : { kind: 'measured', incarnation: r.stamp });
         }
+        const readOf = (id: string): string => { const x = reads.get(id)!; return x.kind === 'measured' ? x.incarnation : x.reason; };
+        const listingOf = (id: string): string => listing.listedIds === null || listing.unmeasuredIds.has(id) ? 'unmeasured'
+          : listing.listedIds.has(id) ? 'listed' : 'unlisted';
         if (armFault) { fault.left = writes; fault.fired = false; }
         const pending = store.pendingTimers();
         const incarnations = new Map(SETTERS.map((id) => [id, setterIncarnationOf(reads.get(id)!)]));
@@ -135,13 +152,12 @@ export function timerDay(): Scenario<TimerDayEdge> {
         const ambient = Date.now;
         Date.now = wall;
         try {
-          const r = timersPass({ coord: store, now: wall(), log: () => {} }, { listedAt, listedIds, archivedIds: new Set(), mailDisabled },
-            { pending, incarnations });
+          const r = timersPass({ coord: store, now: wall(), log: () => {} }, listing, { pending, incarnations });
           for (const t of before.values()) {
             const reason = r.cancelled.find((c) => c.id === t.id)?.reason;
             if (reason !== undefined) {
               const row = rows.get(t.setter)!;
-              line('cancel', `t${t.id}`, `${reason};listed=${listedIds.has(t.setter)};now=${row.stamp ?? 'absent'};stamp=${t.setterIncarnation}`, 'lane');
+              line('cancel', `t${t.id}`, `${reason};listed=${listingOf(t.setter)};now=${row.stamp ?? 'absent'};stamp=${t.setterIncarnation}`, 'lane');
               if (reason === 'setter-gone') cover('setter-gone');
               if (reason === 'run-closed') cover('run-closed');
             }
@@ -149,8 +165,9 @@ export function timerDay(): Scenario<TimerDayEdge> {
           if (r.waited > 0) {
             for (const t of before.values()) {
               const row = rows.get(t.setter)!;
-              if (t.setAt >= listedAt) cover('born-after-wait');
-              else if (row.unbuilt && listedIds.has(t.setter)) cover('unbuilt-wait');
+              if (t.setAt >= listedAt) cover(row.unbuilt && reads.get(t.setter)!.kind !== 'measured' ? 'being-made-wait' : 'born-after-wait');
+              else if (listing.listedIds === null) cover('listing-unread-wait');
+              else if (row.unbuilt && listing.unmeasuredIds.has(t.setter)) cover(readOf(t.setter) === t.setterIncarnation ? 'unbuilt-matching-wait' : 'unbuilt-wait');
               else if (row.unreadable && row.stamp !== null) cover('unreadable-wait');
             }
           }
@@ -160,13 +177,17 @@ export function timerDay(): Scenario<TimerDayEdge> {
               const t = before.get(id)!;
               const mails = db.prepare('SELECT toId FROM mail WHERE fromId = ? AND body LIKE ?').all(TIMER_MAIL_SENDER, `%Timer ${id}: %`) as { toId: string }[];
               line('fire', `t${id}`, `mails=${mails.length};to=${mails.map((m) => m.toId).join(',')};setter=${t.setter};`
-                + `stamp=${stampOfTimer.get(id)};now=${rows.get(t.setter)!.stamp ?? 'absent'};listed=${listedIds.has(t.setter)}`, 'lane');
+                + `stamp=${stampOfTimer.get(id)};now=${rows.get(t.setter)!.stamp ?? 'absent'};read=${readOf(t.setter)};`
+                + `bornAfter=${t.setAt >= listedAt};listing=${listingOf(t.setter)}`, 'lane');
               cover('fired');
               if (renewed.has(id)) cover('renewed-fired');
               if (wasHeld && wall() - t.dueAt > BEAT_MS) cover('fired-late');
             }
           }
-        } catch { threw = true; } finally { Date.now = ambient; }
+        } catch (err) {
+          threw = true;
+          line('server', 'threw', `armed=${armFault && fault.fired};${err instanceof Error ? err.message : String(err)}`, 'lane');
+        } finally { Date.now = ambient; }
         if (armFault && (fault.fired || threw)) {
           cover('crash-mid-pass'); line('server', 'crash', 'mid-pass', 'sim');
           fault.left = DISARMED;
@@ -195,9 +216,12 @@ export const TIMER_DAY_INVARIANTS: readonly Invariant[] = [
     }
     return null;
   } },
-  { name: 'T2', says: 'no timer whose stamp differed from its setter\'s was fired', check(lines) {
+  { name: 'T2', says: 'a timer fires only on a measured read of its own stamp, a row the listing named and built, set before the listing began', check(lines) {
     for (const l of lines) {
-      if (l.kind === 'fire' && field(l.state, 'stamp') !== field(l.state, 'now')) return violation('T2', l, `${l.id}: ${l.state}`);
+      if (l.kind !== 'fire') continue;
+      const stamp = field(l.state, 'stamp');
+      if (stamp !== field(l.state, 'now') || stamp !== field(l.state, 'read') || field(l.state, 'bornAfter') !== 'false'
+        || field(l.state, 'listing') !== 'listed') return violation('T2', l, `${l.id}: ${l.state}`);
     }
     return null;
   } },
@@ -210,10 +234,16 @@ export const TIMER_DAY_INVARIANTS: readonly Invariant[] = [
     }
     return null;
   } },
-  { name: 'T4', says: 'no live, listed setter\'s timer was cancelled setter-gone', check(lines) {
+  { name: 'T4', says: 'no live setter\'s timer (its row still carries the timer\'s stamp) was cancelled setter-gone, listed or not', check(lines) {
     for (const l of lines) {
       if (l.kind !== 'cancel' || !l.state.startsWith('setter-gone')) continue;
-      if (field(l.state, 'listed') === 'true' && field(l.state, 'now') === field(l.state, 'stamp')) return violation('T4', l, `${l.id}: ${l.state}`);
+      if (field(l.state, 'now') === field(l.state, 'stamp')) return violation('T4', l, `${l.id}: ${l.state}`);
+    }
+    return null;
+  } },
+  { name: 'T5', says: 'a pass throws only when a fault was armed and fired inside it', check(lines) {
+    for (const l of lines) {
+      if (l.kind === 'server' && l.id === 'threw' && field(l.state, 'armed') !== 'true') return violation('T5', l, `a pass threw unarmed: ${l.state}`);
     }
     return null;
   } },
