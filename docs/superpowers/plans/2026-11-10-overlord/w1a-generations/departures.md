@@ -152,3 +152,6 @@ the programme's ledger. The plan's own decisions (its "Deviations found" list) s
   binding, so each is named in `NOT_BINDING_SITES` with its reason: the live generation looked up by the start's session
   (a coordinator's identity is its session id), the compactions cache pruned by session id, and the wave boundary's read of
   the coordinator's two newest claimed work runs.
+- **process-id-is-a-uuid** — the watcher draws the lane's process id with `Deps.time.entropy.uuid()`: the entropy port
+  refuses fewer than 16 bytes, and a first draft's `hex(8)` failed every pass (seen in CI's log, not in a red case). A
+  watcher case now runs one real sweep over the real time ports and goes red on it.

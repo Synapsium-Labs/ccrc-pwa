@@ -1,7 +1,13 @@
 // Overlord W1a, the generations (Tasks 2 and 3): the lane's pass mints and ends generations from the reported starts,
 // advances each identity's observed accumulator, and records `renewalDue` on every generation at rest. A real coord.db,
 // the fake time ports and a fake registry; nothing here reaches the fleet.
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, vi } from 'vitest';
+import { mkdirSync } from 'node:fs';
+import { Bus } from '../src/bus.js';
+import { FleetWatcher } from '../src/watch.js';
+import { loadConfig } from '../src/config.js';
+import { seedRoster, testDeps } from './helpers.js';
+import { quietWatcher } from './laneQuiet.js';
 import path from 'node:path';
 import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
@@ -356,6 +362,34 @@ describe('the gather', () => {
     const calls: string[] = [];
     expect((await gatherGenerationReadings(f.s, ports(calls, () => ({ ok: false, reason: 'absent' })), new Map())).size).toBe(0);
     expect(calls).toEqual([]);
+  });
+});
+
+describe('the watcher', () => {
+  it('tick() dispatches the lane, and a sweep over the real time ports mints and fails nothing', async () => {
+    const home = mkTmp('ccrc-genlane-tick-');
+    seedRoster(home);
+    mkdirSync(path.join(home, '.cc-sessions'), { recursive: true });
+    const cfg = loadConfig({ CCRC_HOME: home, CCRC_PROJECTS_ROOT: mkTmp('ccrc-projects-') } as never);
+    const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
+    const deps = { ...testDeps(home, async () => ({ ran: true, code: 1, stdout: '', stderr: '' })), cfg, coord };
+    const w = new FleetWatcher(deps as never, new Bus(), 10_000);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      coord.insertStart({ sessionId: COORD, reportId: 'r-1', uuid: U1, source: 'clear', model: null, rowIncarnation: null, reportedAt: 1, receivedAt: 1 });
+      await w.sweepGenerations([]);
+      // The registry lists no row, so the start mints nothing; the pass ran to its end and moved the cursor.
+      expect(warn.mock.calls.flat().filter((l) => String(l).includes('generations lane failed'))).toEqual([]);
+      expect(coord.generationsCursor(GENERATIONS_LANE)).toEqual({ ok: true, lastStartId: 1 });
+      const spy = vi.spyOn(w, 'sweepGenerations').mockResolvedValue(undefined);
+      await w.tick();
+      await w.tick();
+      expect(spy).toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
+      await quietWatcher(w);
+      coord.db.close();
+    }
   });
 });
 

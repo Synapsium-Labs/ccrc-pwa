@@ -6084,7 +6084,7 @@ export class FleetWatcher {
         processStartedAt: async (id) => { const r = rec(id); return r === undefined ? null : processStartedAtFor(reads, r); },
         release: () => this.nodeRelease(),
       }, this.generationsCompactions);
-      this.generationsProc ??= this.deps.time.entropy.hex(8);
+      this.generationsProc ??= this.deps.time.entropy.uuid();
       generationsPass({ coord, clock: this.deps.time.clock, proc: this.generationsProc, log: (line) => console.warn(line) }, {
         registry: records.map((r) => ({ id: r.id, uuid: r.unmeasured.includes('uuid') ? null : r.uuid,
           lane: r.unmeasured.includes('wrapper') ? null : r.wrapper, child: r.child })),
