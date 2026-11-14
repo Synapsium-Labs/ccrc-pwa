@@ -139,3 +139,46 @@ describe('the raw row, sessions card <id> (review 2023 F13)', () => {
     expect(seen).toEqual([]);
   });
 });
+
+// The anchor piece (plan `w1a-anchor.md` Task 2): `card --anchor [--form F]` asks the card door's `part=anchor` for the
+// session hook, and prints the answer as it came, its status on stderr, for the hook's one jq read.
+describe('ccrc-api card --anchor: the card\'s short part, for the session hook', () => {
+  const anchorAsked = () => seen.map((u) => [u.pathname, u.searchParams.get('byId'), u.searchParams.get('byUuid'),
+    u.searchParams.get('part'), u.searchParams.get('form'), u.searchParams.get('page'), u.searchParams.get('hash')]);
+
+  it('asks part=anchor with the pane\'s pair, form start by default, and no page or hash; prints the body as it came', async () => {
+    answer = () => ({ code: 200, body: { ok: true, dark: true } });
+    const r = await run(['card', '--anchor']);
+    expect([r.status, r.stdout]).toEqual([0, '{"ok":true,"dark":true}\n']);
+    expect(r.stderr).toContain('http 200');
+    answer = () => ({ code: 200, body: { ok: true, hash: H1, text: 'ccrc-anchor: x' } });
+    expect(JSON.parse((await run(['card', '--anchor', '--form', 'prompt'])).stdout)).toEqual({ ok: true, hash: H1, text: 'ccrc-anchor: x' });
+    answer = () => ({ code: 200, body: { ok: true, live: true } });
+    expect(JSON.parse((await run(['card', '--form', 'fork', '--anchor'])).stdout)).toEqual({ ok: true, live: true });
+    expect(anchorAsked()).toEqual([
+      [`/api/sessions/${PANE_ID}/card`, PANE_ID, PANE_UUID, 'anchor', 'start', null, null],
+      [`/api/sessions/${PANE_ID}/card`, PANE_ID, PANE_UUID, 'anchor', 'prompt', null, null],
+      [`/api/sessions/${PANE_ID}/card`, PANE_ID, PANE_UUID, 'anchor', 'fork', null, null],
+    ]);
+    expect(fs.readdirSync(tmp)).toEqual([]);
+  });
+
+  it('a refusal is printed as it came, its status on stderr, exit 0', async () => {
+    answer = () => ({ code: 403, body: { ok: false, error: 'stale-uuid' } });
+    const r = await run(['card', '--anchor']);
+    expect([r.status, r.stdout]).toEqual([0, '{"ok":false,"error":"stale-uuid"}\n']);
+    expect(r.stderr).toContain('http 403');
+  });
+
+  it('refuses bad arguments and sends nothing: an unknown form, a form without --anchor, a page or hash with it', async () => {
+    answer = () => ({ code: 200, body: { ok: true, dark: true } });
+    for (const args of [['card', '--anchor', '--form', 'other'], ['card', '--form', 'start'], ['card', '--anchor', '--page', '2', '--hash', H1],
+      ['card', '--anchor', '--hash', H1], ['card', '--anchor', '--form']]) {
+      const r = await run(args);
+      expect(r.status, args.join(' ')).toBe(2);
+      expect(JSON.parse(r.stdout), args.join(' ')).toMatchObject({ ok: false, error: 'bad-args' });
+    }
+    expect(seen).toEqual([]);
+  });
+});
+

@@ -384,6 +384,7 @@ usage() {
     printf '  %-18s %s\n' '' 'coordinators intent takes set|clear --session <this session'"'"'s id> and nothing else'
     printf '  %-18s %s\n' 'whoami' 'this session'"'"'s {id,uuid}, from tmux + the registry'
     printf '  %-18s %s\n' 'card' 'this session'"'"'s card, one page per call (--page N --hash H), as plain text'
+    printf '  %-18s %s\n' 'card --anchor' 'its short part for the session hook (--form start|prompt|fork), the answer as it came'
     printf '  %-18s %s\n' '' 'mail inbox takes nothing: it prints this pane'"'"'s unacked mail as plain text, not JSON,'
     printf '  %-18s %s\n' '' 'and acks each entry it printed. Run it bare: no pipe, no redirect, no head or tail.'
     printf '  %-18s %s\n' '' '(ledger allocate fills "byId" from this pane; --by <id> for a caller with none)'
@@ -739,11 +740,16 @@ arm_req_out() {
 # restart forgets a half-read card) says so, with the command that reads the card again. A `card-changed` (409) means the
 # card was rendered anew since page 1: nothing is printed but that line and the command to start again. Any other answer is
 # printed as it came, with its status on stderr. Exit 0 for an answer, 3 for none. A session reads its own card, the pane's.
+# `card --anchor [--form start|prompt|fork]` (Overlord W1a, the anchor piece): the card door's `part=anchor`, the card's
+# short part, which the session hook asks for at a start and on the prompt after an automatic compaction. Its answer is
+# printed as it came (`{ok, dark}`, `{ok, live}` or `{ok, hash, text}`), with its status on stderr: the hook reads it with
+# jq. It takes no page or hash.
 # NEVER call it inside $( ): it prints, refuses and exits.
 cmd_card() {
-  local page=1 hash='' flag
+  local page=1 hash='' flag anchor='' form=''
   while (( $# > 0 )); do
     flag="$1"
+    if [[ "$flag" == '--anchor' ]]; then anchor=1; shift; continue; fi
     (( $# >= 2 )) || refuse 'bad-args' "card: $flag needs a value"
     # Neither is an identity flag (`ccrc-api-closed.test.ts` reads the client's case labels for those): the page and its card.
     if [[ "$flag" == '--page' ]]; then
@@ -752,11 +758,16 @@ cmd_card() {
     elif [[ "$flag" == '--hash' ]]; then
       [[ "$2" =~ ^[0-9a-f]{64}$ ]] || refuse 'bad-args' "card: --hash is a card hash (64 hex characters): $2"
       hash="$2"
+    elif [[ "$flag" == '--form' ]]; then
+      [[ "$2" =~ ^(start|prompt|fork)$ ]] || refuse 'bad-args' "card: --form is start, prompt or fork: $2"
+      form="$2"
     else
-      refuse 'bad-args' "card takes --page N and --hash H only: $flag"
+      refuse 'bad-args' "card takes --page N and --hash H, or --anchor and --form F, only: $flag"
     fi
     shift 2
   done
+  [[ -z "$form" || -n "$anchor" ]] || refuse 'bad-args' 'card: --form is --anchor'"'"'s'
+  [[ -z "$anchor" ]] || { (( page == 1 )) && [[ -z "$hash" ]]; } || refuse 'bad-args' 'card: --anchor takes no --page or --hash'
   (( page == 1 )) || [[ -n "$hash" ]] || refuse 'bad-args' 'card: a page after the first names its card hash (--hash), from page 1'"'"'s last line'
   command -v jq >/dev/null 2>&1 || refuse 'no-jq' 'card reads the page with jq, and jq is not on PATH; nothing was read'
   derive_identity
@@ -766,8 +777,10 @@ cmd_card() {
   read_token
   arm_req_out
   local url="$SERVER_URL${tmpl/\{id\}/$DERIVED_ID}?byId=$DERIVED_ID&byUuid=$DERIVED_UUID&page=$page${hash:+&hash=$hash}"
+  [[ -z "$anchor" ]] || url="$SERVER_URL${tmpl/\{id\}/$DERIVED_ID}?byId=$DERIVED_ID&byUuid=$DERIVED_UUID&part=anchor&form=${form:-start}"
   if ! send_request "$method" "$url" ''; then TOKEN=""; transport_exit; fi
   TOKEN=""
+  if [[ -n "$anchor" ]]; then print_body; printf 'http %s\n' "$REQ_CODE" >&2; exit 0; fi
   if [[ "$REQ_CODE" == '409' ]] && [[ "$(jq -r '.error // empty' "$REQ_OUT" 2>/dev/null)" == 'card-changed' ]]; then
     printf 'card: the card changed since page 1 was read; read it again from page 1: ccrc-api card\n'
     exit 0
