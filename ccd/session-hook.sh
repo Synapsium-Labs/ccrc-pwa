@@ -3,7 +3,7 @@
 #
 # Runs on the HOT PATH of every tool call in every fleet session, so the
 # contract is absolute: exit 0 on every path, write atomically or not at
-# all, no network — and on the HOT PATH, no locks and no waiting. FOUR declared exceptions, all OFF the hot path:
+# all, no network — and on the HOT PATH, no locks and no waiting. FIVE declared exceptions, all OFF the hot path:
 # the first two in the compaction arms alone, the helper's one hookstate-first, COMPACT_HELPER_TIMEOUT-bounded,
 # locally resolved `timeout`/`gtimeout` deadline; and, since D-2605, the row's
 # permanent stable lock, taken with a bounded `flock -w` of COMPACT_LOCK_WAIT
@@ -11,7 +11,9 @@
 # is waiting on) and never held across a fork the arm does not reap. A miss
 # publishes nothing; there is no unlocked fallback. The THIRD (D4, #757): the roster card, one `_hook_timeout 4` server
 # read (`ccrc-api runs list`) on compact, resume and clear of a non-child session, and on its wake arm (R-5a, D-8201: a server wake prompt after an idle compaction), fail-open
-# (no roster line on any failure), made even when unarmed (shadow). The FOURTH (Overlord W1a): the start report, a send on a non-child SessionStart and a resend pass on it and on UserPromptSubmit, all inside one 4 s budget (`_hook_start_report`), fail-open. Every OTHER event — every
+# (no roster line on any failure), made even when unarmed (shadow). The FOURTH (Overlord W1a): the start report, a send on a non-child SessionStart and a resend pass on it and on UserPromptSubmit, all inside one 4 s budget (`_hook_start_report`), fail-open. The FIFTH (Overlord W1a, the anchor piece): the anchor, one `_hook_timeout 4` read
+# (`ccrc-api card --anchor`) on a non-child SessionStart, and on the first UserPromptSubmit after an automatic compaction
+# that brought no start (`_hook_anchor_owed`, after the hookstate write), fail-open (today's role card, no prompt context). Every OTHER event — every
 # PreToolUse, PostToolUse and Stop, which is where the hot path actually is —
 # still takes no lock and waits on nothing. A hook that can slow or break a
 # session is worse than no hook. Consumed read-only by the ccrc server via the agent
@@ -108,7 +110,7 @@ _hook_timeout() {
 # the header states — the hookstate-first bounded helper wait, D-2605's bounded
 # stable-lock acquisition, and the roster card's one bounded server read. Every
 # other read below is a local file or a git ref.
-_hook_emit_context() {   # <standing> [<compact>] [<roster>, D4 #757, after both clips under ROSTER_CARD_MAX_CHARS] -> one JSON line on stdout, or nothing at all
+_hook_emit_context() {   # <standing> [<compact>] [<roster>, D4 #757, after both clips under ROSTER_CARD_MAX_CHARS] [<anchor>, FIRST, under ANCHOR_CARD_MAX_CHARS] -> one JSON line on stdout, or nothing at all
   local j="" text=""
   # THE STANDING CLIP LIVES HERE, at the ONE site every subject passes through.
   # A per-subject clip is one each new subject can forget; this one cannot be.
@@ -126,6 +128,9 @@ _hook_emit_context() {   # <standing> [<compact>] [<roster>, D4 #757, after both
     text="${text:+$text }${2:0:$COMPACT_CARD_MAX_CHARS}"  # @anchor emit-context-compact-ceiling
     text="${text:0:$CARD_TOTAL_MAX_CHARS}"
   fi; [ -z "${3:-}" ] || text="${text:+$text }${3:0:$ROSTER_CARD_MAX_CHARS}"
+  # THE ANCHOR'S SLOT (Overlord C38, the anchor piece): FIRST, before the standing clip's text, under its own ceiling, so
+  # every other slot keeps its clip and the sum `session-hook.test.ts` pins is 1500 + 1 + 2400 + 1 + 4000 + 1 + 2048.
+  [ -z "${4:-}" ] || text="${4:0:$ANCHOR_CARD_MAX_CHARS}${text:+ $text}"
   # RETURNS 1 when the envelope could not be built — nothing was printed, and
   # the SessionStart arm must not stamp `served` for a card that never went
   # out. Every existing caller ignores the code, so nothing else changes.
@@ -3249,6 +3254,24 @@ _hook_roster_eligible() {   # -> 0 iff this event may carry a roster card: main 
   [ -e "$CCRC_CARD_OFF" ] || [ -e "$REG/$id.child" ] || [ -L "$REG/$id.child" ] && return 1
   return 0
 }
+# THE ANCHOR (Overlord W1a, the anchor piece; spec §3.3.3 C38, plan `w1a-anchor.md`): the card's short part, which the
+# server renders (`server/src/continuity/anchor.ts#renderAnchor`) and serves from the card door's `part=anchor`. This file
+# decides nothing about its text: it asks, with one `_hook_timeout 4` read, and prints what came back in the emitter's
+# FIRST slot under ANCHOR_CARD_MAX_CHARS (the server fits the text under the same number, in bytes). The door's word is the
+# switch, the Shadow lanes row `anchor-slot`: `dark` while it is shadow, the text (or, for a fork, `live`) only once it is
+# live, so a merge arms nothing. A `dark` answer and a failed read look alike to a start (the slot stays empty and today's
+# role card prints); only the owed prompt below tells them apart. Eligibility is the roster card's one rule
+# (`_hook_roster_eligible`: main thread, not a child, no card kill switch); a child makes no read.
+ANCHOR_CARD_MAX_CHARS=1500
+ANCHOR_PROMPT_MAX_CHARS=600
+_hook_anchor_fetch() {   # <form: start|prompt|fork> -> ANCHOR_WORD (text, dark, live, or "" for no answer) and ANCHOR_TEXT; 0 on every path
+  local out=""; ANCHOR_WORD="" ANCHOR_TEXT=""
+  _hook_roster_eligible || return 0
+  out=$(_hook_timeout 4 "$HOME/.local/bin/ccrc-api" card --anchor --form "$1" 2>/dev/null) || return 0
+  { IFS= read -r ANCHOR_WORD; IFS= read -r -d '' ANCHOR_TEXT; } < <(jq -j 'if .ok != true then empty elif .dark == true then "dark\n" elif .live == true then "live\n"
+    elif (.text | type) == "string" and .text != "" then "text\n", .text else empty end' <<<"$out" 2>/dev/null) 2>/dev/null
+  return 0
+}
 _hook_roster_card() {   # <event word> -> sets CARD_ROSTER (armed) or appends the shadow log (unarmed); 0 on every path
   local body="" card="" log="$HOME/.ccrc/roster-card-shadow.log"
   CARD_ROSTER=""
@@ -3413,10 +3436,14 @@ case "$event" in
     }
     # THE ROSTER CARD (D4, #757): `_hook_roster_card`, above the `case` (R-5a, D-8201), on compact, resume and clear
     # of a main-thread session; the wake arm in the tail is its other caller.
-    CARD_ROLE=""
+    CARD_ROLE=""; CARD_ANCHOR=""; ANCHOR_WORD=""
+    # THE ANCHOR'S SLOT (the anchor piece): a start's anchor, or a fork's one line only on the door's `live` (ruling R6); a
+    # `dark` answer or none leaves the slot empty, and the role card below prints as it did before the anchor.
+    case "$src" in startup|resume|clear|compact) _hook_anchor_fetch start; [[ "$ANCHOR_WORD" == text ]] && CARD_ANCHOR="$ANCHOR_TEXT" ;;
+      fork) _hook_anchor_fetch fork; [[ "$ANCHOR_WORD" == live ]] && CARD_ANCHOR='ccrc-anchor: a forked copy is not this session; it has no card.' ;; esac
     _hook_graph_card || true
     _hook_hold_card  || true
-    _hook_role_card  || true
+    [ -n "$CARD_ANCHOR" ] || _hook_role_card  || true
     _hook_ccrc_card  || true; case "$src" in compact|resume|clear) _hook_roster_card "$src" || true ;; esac
     # THE FOURTH SUBJECT, compact only (compaction-card spec §3.3): a card
     # describes the compacted context and nothing else, so startup, resume
@@ -3429,9 +3456,11 @@ case "$event" in
     [ -z "$CARD_CCRC" ] || CARD="${CARD:+$CARD }$CARD_CCRC"
     # The stamp follows the PRINT, never the intent: only an emitter that
     # returned 0 with a compact subject in hand records `served`.
-    if [ -n "$CARD$CARD_COMPACT$CARD_ROSTER" ]; then
-      if _hook_emit_context "$CARD" "$CARD_COMPACT" "$CARD_ROSTER" && [ -n "$CARD_COMPACT" ]; then _hook_compact_mark_served || true; fi  # @anchor compact-arm-emit-call
+    if [ -n "$CARD$CARD_COMPACT$CARD_ROSTER$CARD_ANCHOR" ]; then
+      if _hook_emit_context "$CARD" "$CARD_COMPACT" "$CARD_ROSTER" "$CARD_ANCHOR" && [ -n "$CARD_COMPACT" ]; then _hook_compact_mark_served || true; fi  # @anchor compact-arm-emit-call
     fi
+    # A compact start the door answered owes no prompt anchor (Task 3): its own start carried it, or the slot is dark.
+    [[ "$src" == compact && -n "$ANCHOR_WORD" ]] && rm -f -- "$REG/$id.anchor-owed" 2>/dev/null
     # THE RETAINED SERVE LOCK ENDS HERE, on every path through this arm — the
     # marker, when one was published, was the last act inside it.
     _hook_compact_serve_end || true
@@ -4248,6 +4277,12 @@ _hook_compact_pre_line() {   # [phase] -> one line on $REG/<id>.compactevents; r
     if (( rot == 0 )) && _hook_lock_still_canonical "$lockfd"; then
       { printf '%s\n' "$line" >> "$f"; } 2>/dev/null && rc=0
     fi
+    # THE ANCHOR OWED (the anchor piece, Task 3; slug anchor-owed-mark, ruling R7a): an automatic compaction may bring no
+    # SessionStart (W0-05), so a main-scope `pre` line of an `auto` PreCompact, once written, marks the next prompt to carry
+    # the anchor. A `refused` line, and a subagent's, an ambiguous or an unread scope, mark nothing. One writer, this lock;
+    # the mark holds the prompt's tries (`_hook_anchor_owed`), and it is dot-free, so `_reg_purge`'s glob takes it.
+    (( rc == 0 )) && [[ "${1-pre}" == pre && "$line" == *'"trigger":"auto","scope":"main",'* && ! -L "$REG/$id.anchor-owed" ]] \
+      && { printf '0\n' > "$REG/$id.anchor-owed"; } 2>/dev/null
   fi
   _hook_lock_release "$lockfd"
   return "$rc"
@@ -6117,11 +6152,32 @@ _hook_roster_wake() {   # UserPromptSubmit: prints at most one envelope carrying
   [ -n "$CARD_ROSTER" ] || return 0
   j=$(jq -cn --arg c "${CARD_ROSTER:0:$ROSTER_CARD_MAX_CHARS}" \
     '{hookSpecificOutput:{hookEventName:"UserPromptSubmit", additionalContext:$c}}' 2>/dev/null) || return 0
-  printf '%s\n' "$j"
+  printf '%s\n' "$j" && ROSTER_WOKE=1
 }
+ROSTER_WOKE=""
 if [[ "$event" == UserPromptSubmit && ( "$payload" == *"$ROSTER_WAKE_MAIL"* || "$payload" == *"${ROSTER_WAKE_IDLE:0:30}"* ) ]]; then
   _hook_roster_wake || true
 fi
+# ── THE ANCHOR OWED (the anchor piece, Task 3; Proposal 2 of the W0 results) ───────────────────────────────────────
+# An automatic compaction that brought no SessionStart left `$REG/<id>.anchor-owed` (`_hook_compact_pre_line`). The next
+# prompt asks the door for the prompt anchor HERE, after the hookstate write, so the read never delays the `working` edge
+# (m-B10, slug prompt-fetch-after-hookstate), and prints it as this prompt's one envelope. A `dark` answer clears the mark
+# with nothing printed; no answer keeps it for the next prompt, at most ANCHOR_OWED_TRIES prompts (the count in the
+# mark). A prompt whose roster wake printed keeps the mark untouched: one envelope per event.
+ANCHOR_OWED_TRIES=3
+_hook_anchor_owed() {   # UserPromptSubmit: prints at most one envelope carrying the prompt anchor; 0 on every path
+  local m="$REG/$id.anchor-owed" t="" j=""
+  { IFS= read -r t < "$m"; } 2>/dev/null; [[ "$t" =~ ^[0-9]$ ]] || t=0
+  _hook_anchor_fetch prompt
+  case "$ANCHOR_WORD" in
+    text) j=$(jq -cn --arg c "${ANCHOR_TEXT:0:$ANCHOR_PROMPT_MAX_CHARS}" '{hookSpecificOutput:{hookEventName:"UserPromptSubmit", additionalContext:$c}}' 2>/dev/null) \
+      && printf '%s\n' "$j" && rm -f -- "$m" ;;
+    dark) rm -f -- "$m" ;;
+    *) if (( t + 1 >= ANCHOR_OWED_TRIES )); then rm -f -- "$m"; else printf '%s\n' "$(( t + 1 ))" > "$m"; fi ;;
+  esac 2>/dev/null
+  return 0
+}
+[[ "$event" == UserPromptSubmit && -z "$ROSTER_WOKE" && -f "$REG/$id.anchor-owed" && ! -L "$REG/$id.anchor-owed" ]] && { _hook_anchor_owed || true; }
 # ── THE APPROVAL WAIT (plan Task 14, spec §6.3 hook steps 1 to 7; D-5297, D-5439, D-5440, D-5441) ────────
 # A dispatched child's PermissionRequest (any tool but AskUserQuestion: the arm above set `apr`) may be ruled by its
 # coordinator, and this hook prints that ruling ONLY when the server signed it for this exact request. Here, after
