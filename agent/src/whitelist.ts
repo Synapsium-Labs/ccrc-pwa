@@ -1,4 +1,4 @@
-import { realpath } from 'node:fs/promises';
+import { lstat, realpath } from 'node:fs/promises';
 import path from 'node:path';
 import { CCRC_DIR_NAME, HISTORY_STEER_ON_DIR, LANE_STATE_DIR_NAME, NODE_FILE_BASENAMES } from '../../shared/agent-protocol.js';
 import { isRegistryId } from '../../shared/api.js';
@@ -210,20 +210,33 @@ export async function checkCcrcSwitchStat(targetPath: string, cfg: WhitelistConf
  * host's file read by the server across the link, and only `stat` of one marker path (existence, size, time); `read`,
  * `readdir` and `lstat` admit none of it, and the directory stays unlistable.
  *
- * The name must be a registry id (`isRegistryId`), the directory's canonical form must be the canonical
- * `~/.ccrc/history/steer-on`, and the marker's canonical form that same path: a live symlink at the marker is refused (the
- * server then reads the marker unreadable and skips the session, the safe direction), and a dangling one answers absent.
+ * The name must be a registry id (`isRegistryId`). `~/.ccrc` itself may be a link, followed as the sibling grants follow it;
+ * under it, `history` and `steer-on` must each be a real directory or absent, never a symlink (`lstat`, review 2031 F1), so
+ * the grant cannot be pointed at another directory; the requested path's directory must be that one, and the marker's
+ * canonical form must be the marker's own path: a live symlink at the marker is refused (the server then reads the marker
+ * unreadable and skips the session, the safe direction), and a dangling one answers absent. A HARD link at a marker's name
+ * cannot be told from a file: the same user who could make one can read its target anyway, and `stat` answers only its
+ * existence, size and time.
  */
 export async function checkSteerOnStat(targetPath: string, cfg: WhitelistConfig): Promise<string | null> {
   if (typeof targetPath !== 'string' || targetPath.length === 0) return null;
   const literal = path.resolve(targetPath);
   const base = path.basename(literal);
   if (!isRegistryId(base)) return null;
-  const [canonicalDir, canonicalParent, canonicalTarget] = await Promise.all([
-    canonicalize(path.join(cfg.home, CCRC_DIR_NAME, HISTORY_STEER_ON_DIR)),
+  const [canonicalCcrc, canonicalParent, canonicalTarget] = await Promise.all([
+    canonicalize(path.join(cfg.home, CCRC_DIR_NAME)),
     canonicalize(path.dirname(literal)),
     canonicalize(literal),
   ]);
+  let canonicalDir = canonicalCcrc;
+  for (const level of HISTORY_STEER_ON_DIR.split('/')) {
+    canonicalDir = path.join(canonicalDir, level);
+    try {
+      if (!(await lstat(canonicalDir)).isDirectory()) return null;   // a symlink, or not a directory: refused
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') return null;   // absent is fine: the stat answers absent
+    }
+  }
   const admitted = path.join(canonicalDir, base);
   return canonicalParent === canonicalDir && canonicalTarget === admitted ? admitted : null;
 }

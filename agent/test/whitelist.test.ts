@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach } from 'vitest';
-import { mkdirSync, symlinkSync, writeFileSync } from 'node:fs';
+import { mkdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { canonicalize, checkCcrcSwitchStat, checkPath, checkSteerOnStat, FORBIDDEN_COMMANDS, isExecAllowed } from '../src/whitelist.js';
 import { CCRC_SWITCH_FILES } from '../../shared/switches.js';
@@ -394,6 +394,39 @@ describe('whitelist.checkSteerOnStat', () => {
     writeFileSync(p, '');
     expect(await checkSteerOnStat(p, cfg)).toBe(path.join(canonicalDir, 'lane-a-project-a'));
     expect(await checkPath(p, cfg, 'read')).toBeNull();
+  });
+
+  it('refuses a symlink at the history or steer-on level (review 2031 F1); ~/.ccrc itself may be a link, as the sibling grants allow', async () => {
+    for (const level of ['history', 'steer-on'] as const) {
+      const { home, cfg, outside } = seed();
+      const real = path.join(outside, 'elsewhere');
+      mkdirSync(path.join(real, 'steer-on'), { recursive: true });
+      writeFileSync(path.join(real, 'steer-on', 'lane-a-project-a'), '');
+      writeFileSync(path.join(real, 'lane-a-project-a'), '');
+      const at = level === 'history' ? path.join(home, '.ccrc', 'history') : path.join(home, '.ccrc', 'history', 'steer-on');
+      rmSync(at, { recursive: true, force: true });
+      symlinkSync(level === 'history' ? real : path.join(real, 'steer-on'), at);
+      expect(await checkSteerOnStat(path.join(home, '.ccrc', 'history', 'steer-on', 'lane-a-project-a'), cfg), level).toBeNull();
+    }
+    // Each level must be a real directory: a plain file standing at `steer-on` is refused too, by the `lstat`.
+    const { dir: fileAt, cfg: fileCfg } = seed();
+    rmSync(fileAt, { recursive: true, force: true });
+    writeFileSync(fileAt, '');
+    expect(await checkSteerOnStat(path.join(fileAt, 'lane-a-project-a'), fileCfg), 'a file at steer-on').toBeNull();
+    const home = mkTmp('ccrc-wl-steer-linked-home-');
+    const realCcrc = path.join(mkTmp('ccrc-wl-steer-real-ccrc-'), 'ccrc');
+    mkdirSync(path.join(realCcrc, 'history', 'steer-on'), { recursive: true });
+    symlinkSync(realCcrc, path.join(home, '.ccrc'));
+    const cfg = { home, projectsRoot: mkTmp('ccrc-wl-steer-proj-') };
+    expect(await checkSteerOnStat(path.join(home, '.ccrc', 'history', 'steer-on', 'lane-a-project-a'), cfg))
+      .toBe(path.join(await canonicalize(realCcrc), 'history', 'steer-on', 'lane-a-project-a'));
+  });
+
+  it('a home with no history directory yet answers through the grant (the stat then reads absent), never a refusal', async () => {
+    const home = mkTmp('ccrc-wl-steer-bare-');
+    mkdirSync(path.join(home, '.ccrc'), { recursive: true });
+    const cfg = { home, projectsRoot: mkTmp('ccrc-wl-steer-proj-') };
+    expect(await checkSteerOnStat(path.join(home, '.ccrc', 'history', 'steer-on', 'lane-a-project-a'), cfg)).not.toBeNull();
   });
 
   it('refuses a name that is no registry id, the directory, a look-alike elsewhere, a deeper path and a symlink out', async () => {
