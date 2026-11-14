@@ -37,6 +37,7 @@ import { quietAtTestEnd } from './laneQuiet.js';   // D-8140: nothing a watcher 
 import { callsIn, inlinedSourceOf, parsedFile, symbolOf } from './scan/symbols.js';
 import { degradedReadIO } from './ioDoubles.js';
 import { MAIL_GATE_BUSY_MARKER, MAIL_GATE_BUSY_SHADOW_MARKER, MAIL_GATE_STRICT_MARKER, mailTurnModeOf } from '../src/turnidle.js';
+import { gatherTimerFacts, timersPass } from '../src/continuity/timerLane.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 
@@ -2586,5 +2587,59 @@ describe('sweepStalls: coord-blocked (D-6942)', () => {
     const states = (coord.db.prepare('SELECT state FROM mail_deliveries WHERE toId = ?').all(COORD) as unknown as { state: string }[]).map((r) => r.state);
     expect(states).toEqual(['queued']);
     expect(h.calls.filter((a) => a[0] === 'send-keys')).toEqual([]);
+  });
+});
+
+describe('sweepStalls: a worker\'s own timer holds the quiet arm (Overlord §3.3.12, C65; the timers piece, Task 9)', () => {
+  const STAMP = '00000001-0000-4000-8000-000000000000';
+  const MIN = 60_000;
+  const setTimer = (coord: CoordStore, dueAt: number): number => {
+    const r = coord.insertTimer({ setter: WORKER, setterIncarnation: STAMP, setById: WORKER, setByUuid: UUID, role: 'worker',
+      note: 'check the checks', runId: null, programme: null, setAt: IDLE_AT, dueAt });
+    if (!r.ok) throw new Error('timer not set');
+    return r.id;
+  };
+  /** One pass of the timers lane at the faked now, its setter listed with its own stamp. */
+  const lanePass = async (coord: CoordStore, mailDisabled = false): Promise<ReturnType<typeof timersPass>> => {
+    const facts = await gatherTimerFacts(coord, async () => ({ kind: 'measured', incarnation: STAMP }));
+    return timersPass({ coord, now: Date.now(), log: () => {} },
+      { listedAt: Date.now() - 1_000, listedIds: new Set([WORKER]), archivedIds: new Set(), unmeasuredIds: new Set(), mailDisabled }, facts);
+  };
+  const checks = (coord: CoordStore): MailRow[] => operatorMail(coord).filter((m) => m.subject.startsWith(STALL_CHECK_PREFIX));
+  const sweep = async (w: FleetWatcher, ms: number): Promise<void> => { at(ms); await w.sweepStalls([fleetRow(WORKER)], LIVE, tickOf()); };
+
+  it('a run worker\'s run-less timer fires through the lane, undelivered, and no stall-check goes out until its fire plus one quiet period', async () => {
+    const { coord, w } = await rig();
+    seedRun(coord, { program: 'demo-program' });
+    const id = setTimer(coord, IDLE_AT + 30 * MIN);
+    const firedAt = IDLE_AT + 60 * MIN;
+    at(firedAt);
+    expect((await lanePass(coord)).fired.map((f) => f.ids)).toEqual([[id]]);
+    await sweep(w, R1_AT);
+    expect(checks(coord)).toEqual([]);
+    await sweep(w, firedAt + STALL_QUIET_MS - STALL_SWEEP_MS);
+    expect(checks(coord)).toEqual([]);
+    await sweep(w, firedAt + STALL_QUIET_MS);
+    const sent = checks(coord);
+    expect(sent).toHaveLength(1);
+    expect(mailBody(coord, sent[0]!.id)).toContain(`Held by your timer ${id} (due `);
+    expect(mailBody(coord, sent[0]!.id)).not.toContain('check the checks');
+  });
+
+  it('mail-disabled lifts, the lane fires a timer three hours late, and no stall-check goes out for one quiet period', async () => {
+    const { coord, w } = await rig();
+    seedRun(coord, { program: 'demo-program' });
+    const id = setTimer(coord, IDLE_AT + 30 * MIN);
+    at(IDLE_AT + 40 * MIN);
+    expect((await lanePass(coord, true)).fired).toEqual([]);
+    await sweep(w, R1_AT);
+    expect(checks(coord)).toEqual([]);
+    const firedAt = IDLE_AT + 30 * MIN + 3 * 3_600_000;
+    at(firedAt);
+    expect((await lanePass(coord)).fired.map((f) => f.ids)).toEqual([[id]]);
+    await sweep(w, firedAt + STALL_QUIET_MS - STALL_SWEEP_MS);
+    expect(checks(coord)).toEqual([]);
+    await sweep(w, firedAt + STALL_QUIET_MS);
+    expect(checks(coord)).toHaveLength(1);
   });
 });

@@ -67,11 +67,12 @@ describe('the arms, holds and markers are derived from their Records', () => {
       'coord-blocked',
     ]);
   });
-  it('waves 1 and 2 have fifteen holds, wave 1 first', () => {
+  it('waves 1 and 2 have fifteen holds, wave 1 first, and the timer hold (Overlord §3.3.12, C65) is the sixteenth, once', () => {
     expect(STALL_HOLDS).toEqual([
       'run-unnamed', 'absent', 'unmeasured', 'lifecycle', 'ask', 'dialog', 'limit', 'busy', 'coordinator-unmeasurable',
-      'restart-grace', 'delegates', 'lifecycle-stopped', 'mail-disabled', 'failed-account', 'failed-unknown',
+      'restart-grace', 'delegates', 'lifecycle-stopped', 'mail-disabled', 'failed-account', 'failed-unknown', 'timer',
     ]);
+    expect(STALL_HOLDS.filter((h) => h === 'timer')).toHaveLength(1);
   });
   it('the lane reads four markers', () => {
     expect(STALL_MARKERS).toEqual(['stall-watch-disabled', 'stall-watch-live', 'stall-watch-escalate', 'stall-watch-w2-live']);
@@ -298,14 +299,18 @@ describe('stall.ts is the pure L1 module its docstring says it is', () => {
     expect(code(), 'stall.ts answers HTTP').not.toMatch(/\breply\s*\.|\bFastify|\bapp\s*\./);
     expect(code(), 'stall.ts reaches the store').not.toMatch(/CoordStore|\bcoord\s*\.|\bstore\s*\.|\bdb\s*\.|\.prepare\s*\(/);
   });
-  it('imports values only from shared/api.ts, shared/stall-watch.ts, shared/switches.ts and shared/hook-events.ts (L0), stallWatchSays and turnWordOf from sessionReading and sessionRoleOf from roleOf (both L1, importing only L0); anything else is a type import', () => {
+  it('imports values only from shared/api.ts, shared/stall-watch.ts, shared/switches.ts, shared/hook-events.ts and shared/continuity-timers.ts (L0), stallWatchSays and turnWordOf from sessionReading and sessionRoleOf from roleOf (both L1, importing only L0); anything else is a type import', () => {
     const c = code();
     expect(c, 'a side-effect import').not.toMatch(SIDE_EFFECT_IMPORT);
     expect(c, 'a dynamic import').not.toMatch(/\bimport\s*\(/);
     expect(c, 'a re-export').not.toMatch(RE_EXPORT);
     for (const spec of valueImportSpecifiers(c)) {
-      expect(['../../../shared/api.js', '../../../shared/stall-watch.js', '../../../shared/switches.js', '../../../shared/hook-events.js', '../sessionReading.js', '../roleOf.js'], `stall.ts takes a value import from ${spec}`).toContain(spec);
+      expect(['../../../shared/api.js', '../../../shared/stall-watch.js', '../../../shared/switches.js', '../../../shared/hook-events.js', '../../../shared/continuity-timers.js', '../sessionReading.js', '../roleOf.js'], `stall.ts takes a value import from ${spec}`).toContain(spec);
     }
+    // From shared/continuity-timers.ts (L0; slug stall-import-pin-admits-the-timer-vocabulary, a widening like D-8236's), the
+    // timer mail's sender and the hold's cap ALONE: the lane leaves timer mail out of its facts and caps the hold, nothing else.
+    const fromTimers = [...c.matchAll(/^\s*import\s[^'"]*?\bfrom\s*(['"])\.\.\/\.\.\/\.\.\/shared\/continuity-timers\.js\1;?$/gm)].map((m) => m[0].trim());
+    expect(fromTimers, 'the one import from continuity-timers').toEqual([`import { TIMER_HOLD_CAP_MS, TIMER_MAIL_SENDER } from '../../../shared/continuity-timers.js';`]);
     // From shared/switches.ts (L0, D-8339), the kill switch's constant ALONE: the lane reads no other row's name, and no
     // reader of the switchboard.
     const fromSwitches = [...c.matchAll(/^\s*import\s[^'"]*?\bfrom\s*(['"])\.\.\/\.\.\/\.\.\/shared\/switches\.js\1;?$/gm)].map((m) => m[0].trim());

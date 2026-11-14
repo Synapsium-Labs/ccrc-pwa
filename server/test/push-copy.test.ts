@@ -24,6 +24,7 @@ import type { CataloguePoller } from '../src/update/catalogue.js';
 import { FLEET_LABEL, SERVER_LABEL } from '../src/update/inventory.js';
 import { UpdateIntentLog, defaultUpdateIntentLogPath } from '../src/coord/updateintentlog.js';
 import { NODE_FILES } from '../../shared/agent-protocol.js';
+import { TIMER_MAIL_SENDER } from '../../shared/continuity-timers.js';
 import type { FleetState } from '../src/fleetstate.js';
 import { UNTOLD_SUBJECT_PREFIX } from '../src/coord/untold.js';
 import { RUN_CLOSE_WARNING_PREFIX } from '../src/coord/runCloseLane.js';
@@ -1793,6 +1794,17 @@ describe('the stall watch on the phone — pushNewMail\'s stall classes', () => 
     await w.tick();
     expect(sent.filter((p) => p.tag?.startsWith('mail-'))).toEqual([]);
     expect(log.seq).toBeGreaterThanOrEqual(1);
+  });
+
+  it('a fired timer\'s mail (from the role timer) is recorded, never pushed; the same mail from a session is pushed (review 2053 F2)', async () => {
+    const { sent, log, w, mail } = await stallRig();
+    mail(TIMER_MAIL_SENDER, 'cc-a', 'cc-a', 'timer: 1 due (7)');
+    await w.tick();
+    expect(sent.filter((p) => p.tag?.startsWith('mail-'))).toEqual([]);
+    expect(log.seq).toBeGreaterThanOrEqual(1);
+    mail('cc-b', 'cc-a', 'cc-a', 'timer: 1 due (7)');
+    await w.tick();
+    expect(sent.filter((p) => p.tag?.startsWith('mail-')).map((p) => p.body)).toEqual(['timer: 1 due (7)']);
   });
 
   it('a BOUND reply (the run\'s worker, after the first check on that run) is recorded, never pushed', async () => {

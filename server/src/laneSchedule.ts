@@ -14,6 +14,7 @@
 // D-8614), which finds such a clock in the watcher and in the composition root by its shape.
 
 import { RENEWAL_LANE_PERIOD_MS } from '../../shared/continuity.js';
+import { TIMER_LANE_PERIOD_MS } from '../../shared/continuity-timers.js';
 
 /** The catalogue lane's cadence (design 2026-09-20 §7), the SCHEDULED poll's own: `catalogue.ts` re-exports it, so
  *  `routes.ts`'s refresh-door interval derives `SCHEDULED_POLLS_PER_HOUR` from the SAME constant the watcher polls on
@@ -188,7 +189,7 @@ export type LaneName =
   | 'claimRenew' | 'claimLapse' | 'stalls' | 'idleNudge' | 'mail' | 'asks' | 'approvalPrune' | 'digestBeat'
   | 'childReclaim' | 'collect' | 'archivedExpiry' | 'deadCoordinator' | 'orphanTrees' | 'delegation'
   | 'sleepRunDone' | 'sleepIdleHours' | 'rollIdle' | 'diskAlarm' | 'tmpCensus' | 'staleArchive' | 'runStuck' | 'runUntold' | 'runClose' | 'cases' | 'generations'
-  | 'launchProfile';
+  | 'launchProfile' | 'timers';
 
 export interface LaneRow {
   readonly name: LaneName | (string & {});
@@ -355,6 +356,9 @@ export const LANE_SCHEDULE: readonly LaneRow[] = [
     name: 'launchProfile', cadenceMs: USAGE_SWEEP_MS, clock: 'mono', flight: 'skip', warnKey: 'ccrc-server: the launch-profile lane failed',
     derivedFrom: { name: 'USAGE_SWEEP_MS', reason: 'the lane reads the usage sidecar\'s window, which changes no faster than that lane reads it, and a route it writes is applied only at the session\'s next launch' },
   },
+  // The timers lane (Overlord spec §3.3.12, Table 11.1c; W1a): one pass at a time, once a minute. It cleans up, fires each due
+  // timer with its one mail in one transaction and purges; a thrown pass is caught here.
+  { name: 'timers', cadenceMs: TIMER_LANE_PERIOD_MS, clock: 'mono', flight: 'skip', warnKey: 'ccrc-server: the timers lane failed', derivedFrom: null },
 ];
 
 export function laneRow(name: string): LaneRow {
