@@ -2567,9 +2567,7 @@ stopped one), foreign and unmeasured
 rows; a FAIL, `runs a retired refresher`, when the lane's LiteLLM tier or shim runs beside it; a FAIL for the `siwc`
 route; no half-up row and no `litellm.yaml` row. On a lane in either mode, a stats file or store that is not a regular
 file of mode 0600 is a FAIL. Removing the lane reaps both files, the store's set-aside copy, the recordings directory and the
-marker files `bridge-instructions`, `record-streams` and `liveprobe-allowed` with the rest of its state. The three
-request markers below are not on that list yet: a lane holding one keeps that file and its directory after removal, so
-delete the marker before removing the lane.
+marker files, the three request markers below among them, with the rest of its state.
 
 **The stats file's `parity` section** measures what parity with native Codex hinges on, per route and model, from what
 the bridge already receives and sends, so nothing new goes on the wire (D-8618). Each row counts the upstream responses
