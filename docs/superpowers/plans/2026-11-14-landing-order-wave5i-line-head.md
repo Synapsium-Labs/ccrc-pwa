@@ -1,8 +1,8 @@
 # Landing order wave 5i — binding head and next-to-land cue Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development or superpowers:executing-plans to implement this plan task-by-task, as the dispatch specifies. Steps use checkbox syntax. This draft does not dispatch a worker or authorise execution.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development or superpowers:executing-plans to implement this plan task-by-task, as the dispatch specifies. Steps use checkbox syntax. This plan does not itself dispatch a worker; execution waits for its normal landing and the coordinator's dispatch.
 
-**Status: UNAPPROVED PROPOSAL.** All mechanics labelled P1–P6 are coordinator proposals for approval, not operator-approved decisions. Approval must include the two explicit invariant amendments below. No implementation, test execution, live arming or rollout has happened as part of drafting.
+**Status: APPROVED AS WRITTEN (2026-11-14, item 312).** The operator approved P1–P6, both invariant amendments A/B, the recovery vocabulary, exact cue identity and bounded snapshot limit. The coordinator records the approved spec amendments on ledger PR #2801, lands it through the normal gates, then dispatches run 1850 for these seven tasks. No implementation, implementation-test execution, live arming or rollout has occurred as part of planning. Documentation checks are separate from implementation evidence.
 
 **Goal:** Make an opted-in project's recorded head binding, maintain its measured main-red hold, and durably mail its current recipient once per exact landing episode and measured base, while repairing a bounded class of unknown rows without inventing a pin.
 
@@ -43,9 +43,10 @@
 
 ---
 
-## 1. Proposed mechanics and approval boundary
+## 1. Approved mechanics and execution boundary
 
-These choices make the draft executable. They are not inferred approvals.
+These choices were proposed as P1–P6 and explicitly approved as written in item 312 on 2026-11-14.
+The table records the approved design; landing, dispatch and implementation verification remain separate gates.
 
 | Proposal | Concrete choice | Approval consequence |
 |---|---|---|
@@ -56,11 +57,11 @@ These choices make the draft executable. They are not inferred approvals.
 | P5 — unknown repair | Permit only a fresh PR-keyed terminal observation of an exact existing, unquarantined row with trustworthy identity/dependencies/counters/binding; preserve invalid pin metadata verbatim. | Amendment B below widens the terminal-mark gate, never the pin gate. |
 | P6 — binding delivery | Add an additive `binding` result to the landing read, computed by one pure owner from current DB facts plus the watcher's measured control snapshot. Opted-out projects remain inert; unknown opt-in/readiness holds. | Skill text becomes binding only on positive opt-in; 404 remains the documented older-server fallback. |
 
-**Amendment A — exact proposed replacement for the two-flag rule:**
+**Amendment A — exact approved replacement for the two-flag rule (item 312):**
 “`operatorPaused` always suppresses the head. `mainRedHold` suppresses an ordinary head; it does not suppress the dependency-eligible head already selected by `landingOrder` when that head has `fixesMain`. Neither exception bypasses recovery, unreadable open projections, fresh composition evidence or any canonical required-checks gate.”
-This intentionally permits `mainRedHold:true` beside `order.paused:false` and a fixesMain head. Update the shared flag/order comments and the spec's Data explanation together. Do not disguise this as existing approved behaviour.
+This intentionally permits `mainRedHold:true` beside `order.paused:false` and a fixesMain head. The coordinator records the spec's Data explanation on this ledger PR; the worker updates the shared flag/order comments with the implementation. Do not disguise this as already implemented behaviour.
 
-**Amendment B — exact proposed addition to the terminal-mark invariant:**
+**Amendment B — exact approved addition to the terminal-mark invariant (item 312):**
 “A fresh PR-keyed merged/closed/absent observation may retire an exact existing row whose pin-only metadata is unreadable, provided identity, retained ordering data, counters, pin time and current association are measurable and no quarantine or own recovery conflict stands. This changes only state/detail. It restores no metadata, head, pin, association or witness. A quarantined row remains unknown until a verified pin with readable retained fields.”
 This is narrower than arbitrary unknown-row repair. Missing projections, invalid identity, unreadable dependencies/counters/pin time and historical binding conflicts remain visible holds, not guessed repairs. Their response names repair rather than promising a restart will fix data. A closed row with retained unreadable pin metadata stays terminal and cannot re-enter through the formerly unconditional closed-row re-pin branch: `decideLandingWrite` keeps it closed unless its projection is readable and unquarantined. This follow-through restriction applies to every closed row, not only those the terminal exception retired; ordinary readable closed rows still re-pin. No setter or witness is fabricated to make it readable.
 
@@ -515,34 +516,38 @@ Each row has one owner and a concrete red assertion. Mutating a type guard may b
 | Reviews 1413 / 1357 / 1425 | Task 4 equal-head refusal, truthful repair recovery, ambient boundary and bounded terminal repair; Task 2 project symlink mutation; Task 4 seeded prior-ejection test |
 | Waves 5j / 5k boundary | No pause/withdraw route, successor-selection door, PWA screen or account/live-arm change in this wave |
 
-## 6. Proposed departures — local draft only
+## 6. Approved design departures
 
-These labels reserve no numeric IDs. Approval accepts a design choice, not a fabricated allocator receipt.
+The coordinator issued and defined these IDs once before publication. Item 312 explicitly approved all five
+choices as written; it did not execute or verify them. Do not allocate replacements.
 
-| Local label | Proposal / reason | Resolution required before execution/publication |
+| Issued ID | Approved choice / reason | Implementation boundary |
 |---|---|---|
-| D-8625 | Amendment A permits only the already-selected fixesMain head through main-red; all other gates remain. | Explicit plan/spec approval; issued ID only through the coordinator's allocator act. |
-| D-8626 | Amendment B retires bounded unreadable pin metadata on fresh terminal evidence, preserving all retained values and quarantine. | Explicit invariant amendment approval; do not broaden the eligible damage set during implementation. |
-| D-8627 | `recovery:'repair'` states that data damage is not fixed by restart. | Approve additive vocabulary and exhaustive-reader updates together. |
-| D-8628 | Durable tuple includes current run episode or no-run creation seq, full base/head and recipient; return to an already-told recipient is duplicate. | Approve recipient and once-only semantics, not just the subject spelling. |
-| D-8629 | Existing bounded byte ranges plus metadata checks, one freshness window and explicit same-size replacement residual; no new wire operation. | Accept cue-only measurement limit; fresh canonical landing checks remain mandatory. |
+| D-8625 | Amendment A permits only the already-selected fixesMain head through main-red; all other gates remain. | Approved in item 312; no bypass of readiness or canonical checks. |
+| D-8626 | Amendment B retires bounded unreadable pin metadata on fresh terminal evidence, preserving all retained values and quarantine. | Approved in item 312; do not broaden the eligible damage set during implementation. |
+| D-8627 | `recovery:'repair'` states that data damage is not fixed by restart. | Approved additive vocabulary and exhaustive-reader updates; fence recovery stays replay/restart. |
+| D-8628 | Durable tuple includes current run episode or no-run creation seq, full base/head and recipient; return to an already-told recipient is duplicate. | Approved recipient and once-only semantics, not just the subject spelling. |
+| D-8629 | Existing bounded byte ranges plus metadata checks, one freshness window and explicit same-size replacement residual; no new wire operation. | Accepted cue-only measurement limit; fresh canonical landing checks remain mandatory. |
 
 ## Deviations found
 
-The coordinator issued the five plan-proposal IDs below together and defines them here. They are proposals awaiting plan approval, not as-built departures or execution permission. Existing numbered carries remain authoritative history. A worker reports actual execution departures by slug; the coordinator numbers and records them.
+The coordinator issued the five design-departure IDs below together and defines them here. Item 312 approved
+them as written on 2026-11-14; they are approved design, not as-built evidence or a dispatch. Existing numbered
+carries remain authoritative history. A worker reports actual execution departures by slug; the coordinator
+numbers and records them.
 
-- **D-8625 (2026-11-14)** — `fixes-main-red-exception`: Amendment A permits only the already-selected, dependency-eligible fixesMain head through main-red, while operator pause, recovery, measured readiness and canonical required checks remain gates. Proposed for explicit approval, not an existing operator ruling.
-- **D-8626 (2026-11-14)** — `terminal-evidence-repair`: Amendment B permits terminal-evidence retirement of narrowly eligible, unquarantined pin-metadata damage without inventing retained fields or witnesses. A closed row with unreadable projection remains kept/closed on a pin attempt; ordinary readable closed rows still re-pin. Proposed for explicit approval.
-- **D-8627 (2026-11-14)** — `projection-repair-word`: An unreadable projection answers recovery repair instead of promising that restart fixes damaged retained data. Replay/restart fences keep their existing separate recovery contract. Proposed additive vocabulary for approval.
-- **D-8628 (2026-11-14)** — `next-cue-episode`: The once-only cue identity binds exact entry/pin or creation episode, full head/base and recipient; mail and DB eligibility are committed atomically through existing owners. Returning to an already-told recipient does not re-arm the same identity. Proposed for approval.
-- **D-8629 (2026-11-14)** — `bounded-control-snapshot`: The existing bounded FleetIO ranges and metadata rechecks produce a cue snapshot under the existing freshness window, not an atomic no-follow handle or proof about later GitHub main. Fresh canonical landing checks remain mandatory. Proposed measured-limit acceptance for approval.
+- **D-8625 (2026-11-14)** — `fixes-main-red-exception`: Amendment A permits only the already-selected, dependency-eligible fixesMain head through main-red, while operator pause, recovery, measured readiness and canonical required checks remain gates. Approved as written in item 312; not yet implemented.
+- **D-8626 (2026-11-14)** — `terminal-evidence-repair`: Amendment B permits terminal-evidence retirement of narrowly eligible, unquarantined pin-metadata damage without inventing retained fields or witnesses. A closed row with unreadable projection remains kept/closed on a pin attempt; ordinary readable closed rows still re-pin. Approved as written in item 312; not yet implemented.
+- **D-8627 (2026-11-14)** — `projection-repair-word`: An unreadable projection answers recovery repair instead of promising that restart fixes damaged retained data. Replay/restart fences keep their existing separate recovery contract. Approved additive vocabulary in item 312; not yet implemented.
+- **D-8628 (2026-11-14)** — `next-cue-episode`: The once-only cue identity binds exact entry/pin or creation episode, full head/base and recipient; mail and DB eligibility are committed atomically through existing owners. Returning to an already-told recipient does not re-arm the same identity. Approved as written in item 312; not yet implemented.
+- **D-8629 (2026-11-14)** — `bounded-control-snapshot`: The existing bounded FleetIO ranges and metadata rechecks produce a cue snapshot under the existing freshness window, not an atomic no-follow handle or proof about later GitHub main. Fresh canonical landing checks remain mandatory. Measured-limit acceptance approved in item 312; no implementation measurement is claimed.
 
 ## Where things stand
 
-**Agreed scope:** 5i's head/health/marker/mail and the named hardening; no automatic landing, new merge authority or PWA doors. Existing journal and canonical landing safeguards survive.
+**Agreed:** Item 312 approves P1–P6, amendments A/B, `recovery:'repair'`, the recipient/episode tuple and the bounded snapshot residual as written. Scope remains 5i's head/health/marker/mail and the named hardening; no automatic landing, new merge authority or PWA doors. Existing journal and canonical landing safeguards survive.
 
-**Waiting on approval:** P1–P6, especially amendments A/B, `recovery:'repair'`, the recipient/episode tuple and the bounded snapshot residual. These are approval questions, not missing technical contracts. No unavoidable technical blocker was found while drafting.
+**Waiting on coordinator:** record the approved spec amendments on ledger PR #2801, land the plan through normal checks and the native queue, reconcile the eventual dispatch base, then dispatch run 1850. No operator decision remains on this plan; no worker has been dispatched by this record.
 
 **Later:** 5j/5k doors/UI; any broader corrupt-identity, lost-projection or historical-binding repair requires a separately approved recovery design. This wave reports those holds accurately rather than claiming terminal repair solves them.
 
-**Self-review:** Seven cohesive tasks, concrete inputs/outputs, foreground red/green selections and mutation owners are specified. All five Review Focus classes map to assertions. No source execution or verification result is claimed here. Before dispatch, the coordinator must reconcile the eventual base and review this draft; completion of planning is not review or approval.
+**Self-review:** Seven cohesive tasks, concrete inputs/outputs, foreground red/green selections and mutation owners are specified. All five Review Focus classes map to assertions. No implementation execution or verification result is claimed here. The static review and operator approval do not replace the worker's task reviews, held-out wave review or normal landing gates.
