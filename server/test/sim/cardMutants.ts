@@ -4,7 +4,7 @@
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { expect } from 'vitest';
-import type { CardFacts, CardSection, Fact } from '../../../shared/continuity-card.js';
+import type { CardCheckpoint, CardFacts, CardNote, CardSection, Fact } from '../../../shared/continuity-card.js';
 import type * as CardModule from '../../src/continuity/card.js';
 import type { MutantSet, SuiteCase } from './mutate.js';
 
@@ -18,6 +18,12 @@ export const CARD_BLOCK_KEY = 'server/src/continuity/card.ts#block';
 const AT = Date.UTC(2026, 10, 13, 12, 0, 0);
 const read = <T>(value: T): Fact<T> => ({ kind: 'read', value });
 const unmeasured = (what: string): Fact<never> => ({ kind: 'unmeasured', what });
+/** A live thread note whose next act is `next` (the notes piece's shape). */
+const noteOf = (id: number, at: number, next: string): CardNote =>
+  ({ id, at, kind: 'thread', key: 'run 11', keyFact: 'live', waitsOn: 'w', next });
+/** A checkpoint whose handover note's tone is `tone`, with no threads or cautions. */
+const cpOf = (at: number, tone: string): CardCheckpoint =>
+  ({ at, handover: { generation: 1, dropped: 0, threads: [], cautions: [], tone } });
 const empty = (over: Partial<CardFacts> = {}): CardFacts => ({
   sessionId: 'lane-a-project-a', role: 'coordinator', roleWhy: 'fixture', at: AT,
   runs: read([]), ledger: read([]), claims: read([]), intent: read(false), itemsRaised: read([]),
@@ -125,8 +131,8 @@ export const CARD_ONE_LINE_SET: MutantSet<Card> = {
 export const CARD_BLOCK_SET: MutantSet<Card> = {
   modulePath: CARD_TS,
   mutants: [
-    { id: 'M1', old: "${block(n.text, SHORT_CAP_BYTES, `on note ${n.id}'s row`)}", new: '${n.text}' },
-    { id: 'M2', old: "${block(cp.text, CHECKPOINT_CAP_BYTES, 'on the checkpoint row')}", new: '${cp.text}' },
+    { id: 'M1', old: "block(`waits on: ${n.waitsOn}\\nnext: ${n.next}`, SHORT_CAP_BYTES, `in \\`ccrc-api note list\\``)", new: '`waits on: ${n.waitsOn}\\nnext: ${n.next}`' },
+    { id: 'M2', old: "${block(lines.join('\\n'), CHECKPOINT_CAP_BYTES, 'on the handover row')}", new: "${lines.join('\\n')}" },
     { id: 'M3', old: "block(it.text, SHORT_CAP_BYTES, `on item ${it.id}'s row`)", new: 'it.text' },
     { id: 'M4', old: "block(p.decisions.map((d) => `${iso(d.at)}: ${d.text}`).join('\\n'), SHORT_CAP_BYTES, where)", new: "p.decisions.map((d) => `${iso(d.at)}: ${d.text}`).join('\\n')" },
     { id: 'M5', old: "block(ratified.join('\\n'), SHORT_CAP_BYTES, where)", new: "ratified.join('\\n')" },
@@ -136,8 +142,8 @@ export const CARD_BLOCK_SET: MutantSet<Card> = {
     const ledger = (over: Partial<CardFacts['ledger'] extends Fact<infer T> ? T extends readonly (infer P)[] ? P : never : never>) =>
       empty({ ledger: read([{ slug: 'prog-a', goals: [], openItems: [], decisions: [], ...over }]) });
     return {
-      'a note is fenced': () => { expect(forged(card(m, empty({ notes: read([{ id: 8, at: AT, text: H }]) })))).toBe(false); },
-      'a checkpoint is fenced': () => { expect(forged(card(m, empty({ checkpoint: read({ at: AT, text: H }) })))).toBe(false); },
+      'a note is fenced': () => { expect(forged(card(m, empty({ notes: read([noteOf(8, AT, H)]) })))).toBe(false); },
+      'a checkpoint is fenced': () => { expect(forged(card(m, empty({ checkpoint: read(cpOf(AT, H)) })))).toBe(false); },
       'an item text is fenced': () => {
         expect(forged(card(m, empty({ itemsRaised: read([{ id: 6, programme: 'prog-a', kind: 'decide', state: 'open', neededBy: 'soon', at: AT, text: H, everTicked: false, held: false }]) })))).toBe(false);
       },
@@ -179,7 +185,7 @@ export const CARD_NEVER_EMPTY_SET: MutantSet<Card> = {
       'a reviewer with only its run has content': () => { expect(has('reviewer', empty({ runs: read([RUN]) }))).toBe(false); },
       'plain does not read the runs': () => { expect(has('plain', empty({ runs: unmeasured('the runs') }))).toBe(true); },
       'a coordinator with only a note has content': () => {
-        expect(has('coordinator', empty({ notes: read([{ id: 1, at: AT, text: 'n' }]) }))).toBe(false);
+        expect(has('coordinator', empty({ notes: read([noteOf(1, AT, 'n')]) }))).toBe(false);
       },
     };
   },

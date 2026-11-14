@@ -25,6 +25,7 @@
 import {
   BYTES_PER_TOKEN, CARD_MAIL_MAX, CARD_PAGE_CHARS, type CardFacts, type CardItem, type CardMail, type CardRenderer, type CardRun, type CardSection, type Fact,
 } from '../../../shared/continuity-card.js';
+import type { KeyFact } from '../../../shared/continuity.js';
 import { FLEET_ROLES, type FleetRole } from '../../../shared/fleetRoles.js';
 import { utf8Bytes } from '../../../shared/utf8.js';
 import { CARD_TEXT_PREFACE, untrustedBlock } from '../coord/untrusted.js';
@@ -163,21 +164,41 @@ function programmeSections(f: CardFacts): readonly CardSection[] {
   });
 }
 
+/** What a note's key is now, after its key phrase: nothing for a live row, else the fact in words (a note whose row is gone
+ *  stays on the card and says so). */
+const KEY_NOW: Readonly<Record<KeyFact, string>> = {
+  live: '', gone: '; that row is gone or closed', 'not-yours': '; that row is no longer yours', unmeasured: '; that row could not be read',
+};
+
+/** The notes, newest first (C38's live state, ranked by recency): trimming drops the oldest first, and the left-out line
+ *  counts them. Each note's own words ride one untrusted block; its id, kind, key and time are row fields. */
 function notesSections(f: CardFacts): readonly CardSection[] {
   return factSections('notes', f.notes, (notes) => {
-    const sorted = [...notes].sort((a, b) => a.at - b.at || a.id - b.id);
+    const sorted = [...notes].sort((a, b) => b.at - a.at || b.id - a.id);
     return sorted.map((n, i) => ({
-      key: `note:${n.id}`, rank: banded(RANK.note, i, sorted.length), keep: false,
-      text: `Note ${n.id}, written ${iso(n.at)}:\n${block(n.text, SHORT_CAP_BYTES, `on note ${n.id}'s row`)}`,
+      key: `note:${n.id}`, rank: banded(RANK.note, sorted.length - 1 - i, sorted.length), keep: false,
+      text: `Note ${n.id} (${oneLine(n.kind)}, on ${oneLine(n.key)}${KEY_NOW[n.keyFact]}), written ${iso(n.at)}:\n`
+        + block(`waits on: ${n.waitsOn}\nnext: ${n.next}`, SHORT_CAP_BYTES, `in \`ccrc-api note list\``),
     }));
   });
 }
 
+/** The checkpoint: in W1a, the handover note the generation this one replaced wrote, as one untrusted block. */
 function checkpointSections(f: CardFacts): readonly CardSection[] {
-  return factSections('checkpoint', f.checkpoint, (cp) => cp === null ? [] : [{
-    key: 'checkpoint', rank: RANK.checkpoint, keep: false,
-    text: `Checkpoint from ${iso(cp.at)}:\n${block(cp.text, CHECKPOINT_CAP_BYTES, 'on the checkpoint row')}`,
-  }]);
+  return factSections('checkpoint', f.checkpoint, (cp) => {
+    if (cp === null) return [];
+    const h = cp.handover;
+    const lines = [
+      ...h.threads.map((t) => `thread on ${t.ref}: waits on: ${t.waitsOn}; next: ${t.next}`),
+      ...h.cautions.map((c) => `caution: ${c}`),
+      `tone: ${h.tone}`,
+    ];
+    return [{
+      key: 'checkpoint', rank: RANK.checkpoint, keep: false,
+      text: `Checkpoint from ${iso(cp.at)}: the handover note of generation ${h.generation}, ${h.dropped} status word(s) dropped `
+        + `(its claims of done, ids, promises, authority and preferences are not rows):\n${block(lines.join('\n'), CHECKPOINT_CAP_BYTES, 'on the handover row')}`,
+    }];
+  });
 }
 
 /** The history line (C52): the session's newest node and the one verb that reads it, or the verb alone while no read

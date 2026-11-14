@@ -21,7 +21,7 @@
 #     this process's caller does not supply. Absent, it REFUSES; it never guesses
 #     a host. (A worker guessed one on 2026-08-25 and reported success against
 #     nothing.)
-#   * The route comes from ROUTES below, seventy-four rows, and nothing else; the
+#   * The route comes from ROUTES below, seventy-eight rows, and nothing else; the
 #     four claimant rows name the question door family's template, their only
 #     door since the old ones were retired (D-7324), refused here, unsent, when a
 #     current cap file says the server lacks `questions-v1` (D-7328); `runs
@@ -92,7 +92,7 @@ SAFE_RE='^[A-Za-z0-9_-]+$'
 # (`/api/questions/<ask|approval>-{id}/<rule|release>`): from Q3j it was their
 # fifth field, sent only while the server advertised `questions-v1` (D-7325), and
 # since the old doors were retired it is their path (D-7324). Every row has four.
-# Seventy-four rows, and that word is SCANNED: `server/test/ccrc-api.test.ts`
+# Seventy-eight rows, and that word is SCANNED: `server/test/ccrc-api.test.ts`
 # derives the count from the table below and reds if this line or the bullet at
 # the top of this file states a different one. The original rows were chosen on
 # 2026-08-26 by measuring the skill corpora; the standing executable-corpus
@@ -267,6 +267,16 @@ declare -A ROUTES=(
   # `byUuid`) is filled from `derive_identity` after them, never typed (review 2023 F13, the `runs review-rounds` rule of
   # D-8125). `ccrc-api card` (`cmd_card`) reads one page through this row and prints its text; this row is the raw read.
   [sessions.card]='GET|/api/sessions/{id}/card|yes|page,hash'
+  # The note door (Overlord W1a, the notes piece; spec §3.3.2 C37): a session's OWN working notes. `{id}` is the session's id.
+  # `note add` appends one (`{"key":{"kind":"run","id":12},"kind":"thread","waitsOn":"…","next":"…"}`, `"revises":<id>` to
+  # supersede one), `note close` ends one (`{"revises":<id>,"closes":true}`), `note list` reads the live ones, newest first,
+  # and `note handover` writes the handover note while the generation is checkpointed. The pane's pair (`byId`, `byUuid`)
+  # is filled from `derive_identity`, into the body of the three POSTs and the query of the list, and never typed (the
+  # `calls.record` rule: a body that names either is refused, unsent).
+  [note.add]='POST|/api/sessions/{id}/notes|yes|-'
+  [note.close]='POST|/api/sessions/{id}/notes|yes|-'
+  [note.list]='GET|/api/sessions/{id}/notes|yes|-'
+  [note.handover]='POST|/api/sessions/{id}/handover|yes|-'
   # The plan verbs (Linear hierarchy design, D-8181): `{id}` is the programme's slug. Every one but `plan.show` carries the pane's
   # identity in the QUERY (the `linear.*` block's rule, never the body); `plan.show` is a session-or-token read and sends none. All
   # are refused locally `no-plan-door` when a CURRENT cap file omits `plan-v1`. The second operand of a verb (a checkpoint, a
@@ -969,6 +979,27 @@ main() {
     derive_identity
     splice_body_field 'byUuid' "$DERIVED_UUID" 'the call body is not a JSON object; byUuid cannot be added'
     splice_body_field 'byId' "$DERIVED_ID" 'the call body is not a JSON object; byId cannot be added'
+  fi
+
+  # THE NOTE DOOR'S IDENTITY (Overlord W1a, the notes piece), the `calls.record` rule: a note is attributed to this pane, so a
+  # body that names `byId` or `byUuid` is REFUSED, unsent, and both are spliced from `derive_identity`; a bodyless POST, a
+  # body that is not a JSON object and a pane with no identity are refused and nothing is sent. `note list` carries the pair
+  # in the query. `note close` and `note add` are one route: the body says which (`"closes":true`), and the server refuses a
+  # body that is neither a whole note nor a close.
+  if [[ "$key" == 'note.add' || "$key" == 'note.close' || "$key" == 'note.handover' ]]; then
+    [[ -n "$body" ]] || refuse 'no-body' "${key/./ } needs a body on --json"
+    local notebody="${body//[[:space:]]/}"
+    case "$notebody" in
+      *'"byId":'*|*'"byUuid":'*)
+        refuse 'bad-body' 'the body names byId or byUuid; a note is attributed to this pane, and the client fills both' ;;
+    esac
+    derive_identity
+    splice_body_field 'byUuid' "$DERIVED_UUID" 'the note body is not a JSON object; byUuid cannot be added'
+    splice_body_field 'byId' "$DERIVED_ID" 'the note body is not a JSON object; byId cannot be added'
+  fi
+  if [[ "$key" == 'note.list' ]]; then
+    derive_identity
+    query+="${query:+&}byId=$DERIVED_ID&byUuid=$DERIVED_UUID"
   fi
 
   # `approvals show` reads one row as the claimant it was held for (plan Task 16): the identity pair is the pane's,

@@ -17,21 +17,28 @@
  * `coordinatorIntentByParent` on the registry incarnation, `unmeasured` while the checkpoint is not ready: the coordinator's
  * ruling F4 on review 2023), the items (`itemsFor`, all programmes, once, the hold disregarded: the session's raised items,
  * each programme's open items, and the held items of the runs it claims), each programme's goals and modifications
- * (`goalsFor`), and the outstanding mail (`outstandingMailFor`).
+ * (`goalsFor`), and the outstanding mail (`outstandingMailFor`). The notes piece adds the identity's live notes
+ * (`liveNotes`, each key measured now through `noteKeyReader`, the note door's own reader) and the checkpoint: the handover
+ * note of the generation the identity's live one replaced (`liveGenerations`, then `handoverBefore`, which finds that
+ * generation by its place in the line and reads no state column).
  */
 import { OUTSTANDING_DELIVERY_STATES, type ChildMark, type ChildReclaimGeneration, type RunKind } from '../../../shared/api.js';
 import {
-  CARD_MAIL_MAX, type CardClaim, type CardFacts, type CardHistory, type CardItem, type CardMail, type CardProgramme,
-  type CardRenderer, type CardRun, type Fact,
+  CARD_MAIL_MAX, type CardCheckpoint, type CardClaim, type CardFacts, type CardHistory, type CardItem, type CardMail,
+  type CardNote, type CardProgramme, type CardRenderer, type CardRun, type Fact,
 } from '../../../shared/continuity-card.js';
+import { noteKeyText } from '../../../shared/continuity.js';
 import type { CoordStore } from '../coord/store.js';
 import { operatorWasShown, type ItemRow } from '../coord/ledgersStore.js';
 import { roleFactsOf } from '../roleOf.js';
 import { CARD_REGISTRY_UNREAD, cardRoleOf } from './card.js';
+import { noteKeyReader } from './noteKeys.js';
+import { noteKeyFact } from './notes.js';
 
 /** The store reads the gatherer makes, declared by this consumer. */
 export type CardFactsCoord = Pick<CoordStore, 'bindingsOf' | 'bindingRunsOf' | 'openCoordinatorIds' | 'run' | 'activeClaims'
-  | 'outstandingMailFor' | 'itemsFor' | 'goalsFor'>;
+  | 'outstandingMailFor' | 'itemsFor' | 'goalsFor' | 'liveNotes' | 'claimsProgramme' | 'itemById' | 'liveGenerations'
+  | 'handoverBefore'>;
 
 export interface CardFactsDeps {
   readonly coord: CardFactsCoord;
@@ -152,6 +159,36 @@ export async function gatherCardFacts(deps: CardFactsDeps, id: string, now: numb
     .slice(0, CARD_MAIL_MAX).map((m) => ({ deliveryId: m.deliveryId, fromId: m.fromId, at: m.at, subject: m.subject, parked: !OUTSTANDING.has(m.state) })));
   const mailMore = mailRead.kind === 'read' && mailRead.value.length > CARD_MAIL_MAX;
 
+  // The notes: the identity's live ones (the identity is the session id), each with what its key's row is now.
+  const keyOf = noteKeyReader(coord, id);
+  const notes = attempt<readonly CardNote[]>('the notes', () => {
+    const r = coord.liveNotes(id);
+    return !r.ok ? null : r.notes.map((n) => ({
+      id: n.id, at: n.at, kind: n.kind, key: noteKeyText(n.key), keyFact: noteKeyFact(keyOf(n.key), id), waitsOn: n.waitsOn, next: n.next,
+    }));
+  });
+  // The checkpoint: the handover note of the generation the live one replaced, or null when it wrote none.
+  // A read that failed is `unmeasured`; no live generation, or one whose predecessor wrote no note, is a read null.
+  const checkpoint = ((): Fact<CardCheckpoint | null> => {
+    const what = 'the checkpoint (the handover note)';
+    try {
+      const gens = coord.liveGenerations();
+      if (!gens.ok) return unmeasured(what);
+      const live = gens.rows.find((g) => g.identity === id);
+      if (live === undefined) return read(null);
+      const h = coord.handoverBefore(id, live.id);
+      if (!h.ok) return unmeasured(what);
+      if (h.handover === null) return read(null);
+      const { n, at, dropped, note } = h.handover;
+      return read({ at, handover: {
+        generation: n, dropped, cautions: note.cautions, tone: note.tone,
+        threads: note.threads.map((t) => ({ ref: noteKeyText(t.ref), waitsOn: t.waitsOn, next: t.next })),
+      } });
+    } catch {
+      return unmeasured(what);
+    }
+  })();
+
   const childRunKind = ((): RunKind | 'unmeasured' => {
     if (child === CARD_REGISTRY_UNREAD || child.kind !== 'child') return 'unmeasured';
     try {
@@ -169,7 +206,7 @@ export async function gatherCardFacts(deps: CardFactsDeps, id: string, now: numb
     renderer: role.renderer,
     facts: {
       sessionId: id, role: role.role, roleWhy: role.roleWhy, at: now, runs, ledger, claims, intent, itemsRaised, mailOutstanding, mailMore,
-      notes: read([]), checkpoint: read(null), history: read(CARD_HISTORY),
+      notes, checkpoint, history: read(CARD_HISTORY),
     },
   };
 }

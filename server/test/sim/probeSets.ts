@@ -42,10 +42,12 @@ const run = (id: number, programme: string, state: string, planPath: string | nu
   ({ id, programme, wave: 1, waveOf: 3, state, planPath, kind: 'work' });
 const mail = (deliveryId: number, at: number) => ({ deliveryId, fromId: 'lane-a-project-a', at, subject: `m${deliveryId}`, parked: false });
 
+const note = (id: number, at: number, next: string): CardNote =>
+  ({ id, at, kind: 'thread', key: 'run 41', keyFact: 'live', waitsOn: 'the review of wave 2', next });
 const NOTES: readonly CardNote[] = [
-  { id: 61, at: AT - 40 * MIN, text: 'merge wave 2, then open wave 3' },
-  { id: 62, at: AT - 20 * MIN, text: 'ask the operator about the floor' },
-  { id: 63, at: AT - 9 * MIN, text: 'dispatch the review run' },
+  note(61, AT - 40 * MIN, 'merge wave 2, then open wave 3'),
+  note(62, AT - 20 * MIN, 'ask the operator about the floor'),
+  note(63, AT - 9 * MIN, 'dispatch the review run'),
 ];
 /** Two open runs of two programmes and a closed one, two claimed paths, three deliveries, three notes. Items: 7 and 9
  *  open and never ticked; 10 open but ticked and returned (it carries a ruling); 8 done; 12 withdrawn, never ticked. */
@@ -107,7 +109,7 @@ export function probeRoundCases(m: ProbesModule): Record<string, SuiteCase> {
           if (q.text.startsWith('Which of these notes')) expect(q.expected).toBe('63');
           if (q.cls === 'continuation') {
             const n = NOTES.find((x) => q.text === `What does your note ${x.id} say comes next?`)!;
-            expect(q.expected).toBe(n.text);
+            expect(q.expected).toBe(n.next);
           }
         }
       }
@@ -193,7 +195,7 @@ export function probeRoundCases(m: ProbesModule): Record<string, SuiteCase> {
       }
     },
     'continuation reads the snapshot\'s notes and is skipped with fewer than three of distinct text': () => {
-      const twoTexts = [NOTES[0]!, NOTES[1]!, { ...NOTES[2]!, text: ` ${NOTES[0]!.text.toUpperCase()} ` }];
+      const twoTexts = [NOTES[0]!, NOTES[1]!, { ...NOTES[2]!, next: ` ${NOTES[0]!.next.toUpperCase()} ` }];
       for (const seed of SEEDS) {
         expect(round({ ...RICH, notes: read(twoTexts) }, seed).questions.filter((q) => q.cls === 'continuation')).toEqual([]);
       }

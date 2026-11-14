@@ -168,19 +168,19 @@ function abstentionPool(s: CardFacts, entropy: Entropy): Pool {
     unreadOf(s.ledger, s.itemsRaised));
 }
 
-/** continuation: what a note says comes next, beside two other notes' text. Until the notes piece gives a note its own
- *  `next`, a note's text is what it says comes next (slug continuation-reads-note-text). Skipped with fewer than three
- *  notes of distinct text. */
+/** continuation: what a note says comes next, beside two other notes' `next`: the note's own next act, which the notes piece
+ *  gave it (it read the note's whole text until then, slug continuation-reads-note-text). Skipped with fewer than three
+ *  notes of distinct next acts. */
 function continuationPool(s: CardFacts, entropy: Entropy): Pool {
   const notes: readonly CardNote[] = valueOf(s.notes) ?? [];
   const drafts: Draft[] = [];
   for (const n of notes) {
-    const others = notes.filter((o) => fold(o.text) !== fold(n.text));
-    const distinct = others.filter((o, i) => others.findIndex((x) => fold(x.text) === fold(o.text)) === i);
+    const others = notes.filter((o) => fold(o.next) !== fold(n.next));
+    const distinct = others.filter((o, i) => others.findIndex((x) => fold(x.next) === fold(o.next)) === i);
     if (distinct.length < 2) continue;
     drafts.push({
       cls: 'continuation', text: `What does your note ${n.id} say comes next?`,
-      choices: shuffle([n.text, ...sample(distinct, 2, entropy).map((o) => o.text)], entropy), expected: n.text,
+      choices: shuffle([n.next, ...sample(distinct, 2, entropy).map((o) => o.next)], entropy), expected: n.next,
     });
   }
   return pool(drafts, 'fewer than three notes of distinct text', unreadOf(s.notes));
