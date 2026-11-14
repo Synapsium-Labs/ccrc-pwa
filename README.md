@@ -2539,7 +2539,8 @@ it, set `exec.upstream` back to `backend` (or remove it) in `~/.ccrc/accounts.js
 does not change), then re-run.
 
 **What a `direct` lane writes.** Beside `lane.json`, whose `bridgeFiles` names them, the bridge keeps two files in the
-lane directory, each 0600: `bridge.stats.json`, its one non-secret output, and `reasoning.sqlite`, the reasoning store.
+lane directory, each 0600: `bridge.stats.json`, its one non-secret output, and `reasoning.sqlite`, the reasoning store
+(and, only behind its marker, the per-request record below).
 The stats file holds counts, sizes, names and request ids: requests and the largest prompt accepted per route and
 model, each context refusal with the size it estimated and when, outcome counters, the protocol names it met (bounded,
 else `unrecognised`) and those it does not know, the upstream request id of its last error, and the `x-codex-` usage
@@ -2566,9 +2567,10 @@ which restarts a running, proven, stale bridge, or by `ccrc codex stop` then `st
 only when the same run re-placed the shim, the runtime or the auth library for another finding, and neither starts a
 stopped one), foreign and unmeasured
 rows; a FAIL, `runs a retired refresher`, when the lane's LiteLLM tier or shim runs beside it; a FAIL for the `siwc`
-route; no half-up row and no `litellm.yaml` row. On a lane in either mode, a stats file or store that is not a regular
-file of mode 0600 is a FAIL. Removing the lane reaps both files, the store's set-aside copy, the recordings directory and the
-marker files, the three request markers below among them, with the rest of its state.
+route; no half-up row and no `litellm.yaml` row. On a lane in either mode, a stats file, store, request record or its
+older generation that is not a regular file of mode 0600 is a FAIL. Removing the lane reaps both files, the store's
+set-aside copy, the recordings directory, the request record with its older generation, and the marker files, the three
+request markers and `record-requests` below among them, with the rest of its state.
 
 **The stats file's `parity` section** measures what parity with native Codex hinges on, per route and model, from what
 the bridge already receives and sends, so nothing new goes on the wire (D-8618). Each row counts the upstream responses
@@ -2599,6 +2601,28 @@ for a context overflow or a policy refusal, which no removed field cures. The cl
 the first is not written to the credential's status file. The `parity` row counts the requests that carried each
 marker (`markers`), each marker a fallback dropped (`fallbacks`), and the turn-state values captured and sent back
 (`turnState`), never a value.
+
+**The per-request record** (D-8619) is one JSON line per upstream answer, for the parity eval, which joins a run's rows by
+its Claude Code session id and a time window. It is off until an operator touches `record-requests` in the lane
+directory (no ccrc code writes it), and it is read at every answer; with no marker nothing is written, and the marker
+changes nothing on the wire or in the client's answer. The file is `lane.json`'s `bridgeFiles.requests`,
+`bridge.requests.jsonl`, mode 0600, appended one whole line at a time and never through a symlink; at 16 MiB it is
+renamed to `bridge.requests.jsonl.1`, replacing the older one, so at most two generations (32 MiB) are kept. A
+`lane.json` rendered before the record existed names no file: the bridge, the live probe, doctor and lane removal all
+accept it, the bridge then writes no record and says so once in its log, and the hourly refresh's render adds the name.
+Each row holds, in order: `v` (1), `at` and `postAt` (UTC milliseconds when the answer ended and when the request
+started), `session` (the session id when it has the shape of one, at most 128 characters, else null), `subagent` (true
+for a subagent's request, never its id), `message` and `post` (the client message's number in this process, and the
+request's index within it: continuations and retries count on), `route` and `model` (the `parity` row's), `status`
+(null when no answer came), `outcome` (the word the stats file counts for what the bridge did with the answer: `2xx`,
+`continuations`, `continuation-cap`, `refresh-after-401`, `4xx`, `5xx`, `client-gone`, `drain-cut`, or `fallback` for the
+400 that started a fallback), `served`, `effort`, the four token counts, `firstOutputMs` and `totalMs` (whole
+milliseconds, from the same instants the `parity` histograms bucket), `inputTransformations`, `replay` (the message's
+reasoning-store lookups, on its first request only), `markers`, `fallback` and, when set, `turnState`. A field the
+answer did not reach (a non-2xx, a stream that broke) is null. It never holds conversation text, a tool name, the
+prompt cache key, a turn-state value, a header value other than the session id, an account id or a token. A row that
+cannot be written (a full disk, a directory in the file's place) never fails the request: the stats file counts it as
+the outcome `requests:write-failed`, and the log says so once per bridge process.
 
 **A restart cuts long streams.** The bridge runs under the shim's unit, so a restart (a rollout's install restarts a
 running bridge whose bytes are stale; a switch stops it) is a stop, then a start. On the stop the bridge closes its

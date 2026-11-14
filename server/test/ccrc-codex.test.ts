@@ -344,6 +344,9 @@ describe('_codex_lane_json_ensure — lane.json equals the roster, written only 
     ['a non-string upstream', (j: Record<string, unknown>): void => { j['upstream'] = 1; }],
     ['a non-string bridgeFiles.stats', (j: Record<string, unknown>): void => { (j['bridgeFiles'] as Record<string, unknown>)['stats'] = ['bridge.stats.json']; }],
     ['a bridgeFiles that is not an object', (j: Record<string, unknown>): void => { j['bridgeFiles'] = 'bridge.stats.json'; }],
+    // D-8619: the request record's name is optional, but a present one is checked like the others
+    ['an empty-string bridgeFiles.requests', (j: Record<string, unknown>): void => { (j['bridgeFiles'] as Record<string, unknown>)['requests'] = ''; }],
+    ['a non-string bridgeFiles.requests', (j: Record<string, unknown>): void => { (j['bridgeFiles'] as Record<string, unknown>)['requests'] = null; }],
   ] as const)('an older lane.json with no bridge reads stale and is re-rendered (%s)', async (_what, edit) => {
     const { h } = await initialised('ccrc-codex-lanejson-bridge-');
     const f = join(laneDir(h, 'codex-a'), 'lane.json');
@@ -355,6 +358,19 @@ describe('_codex_lane_json_ensure — lane.json equals the roster, written only 
     const r = lib(h, '_codex_lane_json_ensure codex-a');
     expect(r.code, r.stderr).toBe(0);
     expect(laneJson(h, 'codex-a')).toEqual(rendered);
+    expect(lib(h, '_codex_lane_json_state codex-a').stdout).toBe('current\n');
+  });
+
+  // D-8619: a lane.json an older laneManifest wrote names no request record. It is still current: the record is
+  // optional for every reader, and the hourly refresh's materialise adds the name.
+  it('a lane.json that names no request record reads current', async () => {
+    const { h } = await initialised('ccrc-codex-lanejson-requests-');
+    const f = join(laneDir(h, 'codex-a'), 'lane.json');
+    const j = laneJson(h, 'codex-a');
+    const files = j['bridgeFiles'] as Record<string, unknown>;
+    expect(files['requests'], 'CONTROL: the render names it').toBe('bridge.requests.jsonl');
+    delete files['requests'];
+    fs.writeFileSync(f, JSON.stringify(j));
     expect(lib(h, '_codex_lane_json_state codex-a').stdout).toBe('current\n');
   });
 
