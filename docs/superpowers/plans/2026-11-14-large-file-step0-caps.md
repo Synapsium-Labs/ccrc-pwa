@@ -44,7 +44,11 @@ the merge-base or HEAD):
      the rise (`cap`, in the exemption, bounds the rise), with the growth check's own files untouched. An exemption
      names one PR, so it raises a cap once;
    - the cap file is gone at HEAD while the file still has code lines (a cap may only fall; a deleted file takes its
-     cap with it).
+     cap with it);
+   - the cap is new on this PR and the file grew past the per-PR limit of the stage it held at the merge-base: 10 if a
+     freeze names it at either sha (no waiver counts), else 40 with the listed waivers (a file no list named is judged
+     as listed in the PR that caps it), the named exemption passing either. Without this, a PR could grow a listed or
+     frozen file by any amount by adding its cap file at the new code lines plus 40.
 2. **Frozen** (a freeze file at the merge-base or at HEAD names it, and no cap does): the row fails when the file grew
    by more than `SPINE_LIMIT` (10) net code lines, unless an exemption on `origin/main` names this PR and file and
    covers the delta. No waiver of any kind counts. Reading the merge-base too means a PR cannot unfreeze itself.
@@ -112,6 +116,12 @@ The cap-only files (§3; Q5, Q6):
   (1,487; it is a ccd library, so already held at 40 per PR).
 - **`SPINE_LIMIT` is defined here,** with the frozen stage, at 10. The ccd file-split plan's Task 8 names the same
   constant for `ccd/ccd`; when it lands it reuses this one.
+
+## Known limits
+
+- **A rename escapes a cap.** `git mv` of a capped file plus deleting its cap file reads as the old path gone (and its
+  cap with it) and the new path neither listed nor capped. Listed files have the same hole today (a renamed listed file
+  leaves the hand list behind). Closing it needs rename detection in the measured diff; a later follow-up.
 
 ## Open follow-up
 

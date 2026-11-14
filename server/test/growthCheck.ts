@@ -52,7 +52,8 @@
 // waiver of any kind counts: only the named exemption passes it. A CAPPED file (`growth-caps/`) drops the per-PR limit
 // and every waiver: its code lines at HEAD stay within the cap at HEAD, the cap at HEAD within the merge-base's (it may
 // only fall), a new cap is at most the code lines plus GROWTH_LIMIT, and the named exemption may raise it once, for its
-// one PR. Both directories hold one JSON file per file (`stageFileName`), read at the merge-base and at HEAD, so a PR
+// one PR. The PR that adds a cap is still judged by the stage the file held at the merge-base (`prior`): frozen, or
+// listed for any other file, so a cap written in the same PR never lifts the per-PR limit it grows under. Both directories hold one JSON file per file (`stageFileName`), read at the merge-base and at HEAD, so a PR
 // cannot unfreeze or uncap itself; either one malformed at either sha is a failing row of its own.
 import { execFileSync } from 'node:child_process';
 import { appendFileSync, readdirSync, readFileSync } from 'node:fs';
@@ -360,7 +361,9 @@ export function growthOver(rows: readonly GrowthRow[], added: readonly string[],
   return rows
     .filter((r) => {
       // D-8635: a capped file has no per-PR limit (its verdict reads the cap); a frozen one has SPINE_LIMIT and no waiver.
-      const stage = stageOf(r.file).stage;
+      // The PR that adds a cap is judged by the stage the file held before it.
+      const s = stageOf(r.file);
+      const stage = s.stage === 'capped' && s.base === null ? s.prior : s.stage;
       if (stage === 'capped') return false;
       if (stage === 'frozen') return r.delta > SPINE_LIMIT;
       return r.delta > GROWTH_LIMIT
@@ -646,11 +649,12 @@ export interface GrowthCap { file: string; cap: number; d: string; since: string
 /** One freeze: `file` grows by at most SPINE_LIMIT per PR, from `since`, under `d`. */
 export interface GrowthFreeze { file: string; d: string; since: string }
 
-/** A measured file's stage. A capped file carries its cap at the merge-base and at HEAD (null where none). */
+/** A measured file's stage. A capped file carries its cap at the merge-base and at HEAD (null where none), and the
+ *  stage it held before any cap (`prior`), which judges the PR that adds the cap (no cap at the merge-base). */
 export type Stage =
   | { stage: 'listed' }
   | { stage: 'frozen' }
-  | { stage: 'capped'; base: number | null; head: number | null };
+  | { stage: 'capped'; base: number | null; head: number | null; prior: 'listed' | 'frozen' };
 export type StageOf = (file: string) => Stage;
 /** Every file listed: the stage when no cap or freeze is read. */
 export const ALL_LISTED: StageOf = () => ({ stage: 'listed' });
@@ -735,7 +739,9 @@ export function stagesAt(files: readonly string[], sha: string, cwd: string, tod
 }
 
 /** Each file's stage between `baseSha` and `headSha`: capped when a cap names it at either sha, else frozen when a
- *  freeze does at either, else listed. Reading both shas is what keeps a PR from uncapping or unfreezing itself. */
+ *  freeze does at either, else listed. Reading both shas is what keeps a PR from uncapping or unfreezing itself. A
+ *  capped file's `prior` is frozen when a freeze names it at either sha, else listed (a file no list named is judged as
+ *  listed in the PR that caps it). */
 export function stagesInDiff(files: readonly string[], baseSha: string, headSha: string, cwd: string,
   today: Date = new Date()): { stageOf: StageOf; capped: string[]; problems: string[] } {
   const b = stagesAt(files, baseSha, cwd, today);
@@ -743,7 +749,8 @@ export function stagesInDiff(files: readonly string[], baseSha: string, headSha:
   const capOf = (caps: readonly GrowthCap[], f: string): number | null => caps.find((c) => c.file === f)?.cap ?? null;
   const capped = [...new Set([...b.caps, ...h.caps].map((c) => c.file))].sort();
   const frozen = new Set([...b.frozen, ...h.frozen].map((f) => f.file));
-  const stageOf: StageOf = (f) => (capped.includes(f) ? { stage: 'capped', base: capOf(b.caps, f), head: capOf(h.caps, f) }
+  const stageOf: StageOf = (f) => (capped.includes(f)
+    ? { stage: 'capped', base: capOf(b.caps, f), head: capOf(h.caps, f), prior: frozen.has(f) ? 'frozen' : 'listed' }
     : frozen.has(f) ? { stage: 'frozen' } : { stage: 'listed' });
   return { stageOf, capped,
     problems: [...b.problems.map((p) => `base: ${p}`), ...h.problems.map((p) => `head: ${p}`)] };
@@ -848,11 +855,8 @@ export function growthVerdicts(rows: readonly GrowthRow[], over: readonly string
   entries: readonly GrowthExemption[], pr: number | null, touched: readonly string[],
   waivers: readonly GrowthWaiver[] = [], stageOf: StageOf = ALL_LISTED): GrowthVerdict[] {
   const matches = matchExemptions(over, rows, entries, pr, touched);
-  return rows.map((r) => {
-    const s = stageOf(r.file);
-    if (s.stage === 'capped') return capVerdict(r, s, entries, pr, touched);
-    // D-8635: a frozen file is held at SPINE_LIMIT, and no ledger waiver passes it.
-    const frozen = s.stage === 'frozen';
+  // D-8635: a frozen file is held at SPINE_LIMIT, and no ledger waiver passes it.
+  const perPr = (r: GrowthRow, frozen: boolean): GrowthVerdict => {
     const isOver = over.includes(r.file);
     const m = matches.find((x) => x.file === r.file);
     const w = isOver && !frozen ? matchWaiver(r, waivers) : undefined;
@@ -873,6 +877,16 @@ export function growthVerdicts(rows: readonly GrowthRow[], over: readonly string
       title: `${r.file}: delta ${signed(r.delta)}${isOver ? ` (GROWTH_OVER${notes.map((n) => `, ${n}`).join('')})` : ''}`,
       why: `${r.file} grew by ${r.delta} net code lines, ${reason}`,
     };
+  };
+  return rows.map((r) => {
+    const s = stageOf(r.file);
+    if (s.stage !== 'capped') return perPr(r, s.stage === 'frozen');
+    const c = capVerdict(r, s, entries, pr, touched);
+    // D-8635: the PR that adds a cap is judged by its prior stage too, so the new cap never lifts that stage's limit.
+    if (s.base !== null || !over.includes(r.file)) return c;
+    const p = perPr(r, s.prior === 'frozen');
+    return { ...p, fails: c.fails || p.fails, title: `${c.title}, ${p.title.slice(r.file.length + 2)}`,
+      why: !p.fails ? c.why : c.fails ? `${c.why}; ${p.why}` : p.why };
   });
 }
 

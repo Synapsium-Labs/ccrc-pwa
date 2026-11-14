@@ -114,7 +114,8 @@ describe('growth caps: the decision, per stage (D-8635)', () => {
   });
 
   it('a capped file drops the per-PR limit and its waivers, and holds its cap', () => {
-    const capped = (base: number | null, head: number | null) => stages({ 'shared/api.ts': { stage: 'capped', base, head } });
+    const capped = (base: number | null, head: number | null) =>
+      stages({ 'shared/api.ts': { stage: 'capped', base, head, prior: 'listed' } });
     // +500 in one PR is not over the per-PR limit: a capped file has none.
     expect(growthOver([row('shared/api.ts', 4000, 4500)], [], () => null, capped(5140, 5140))).toEqual([]);
     const one = (r: GrowthRow, s: StageOf, pr: number | null = 1100, touched: string[] = []) => {
@@ -152,6 +153,34 @@ describe('growth caps: the decision, per stage (D-8635)', () => {
     expect(one(row('shared/api.ts', 5100, 0), capped(5140, null)).fails, 'the file is gone with its cap').toBe(false);
   });
 
+  it('the PR that adds a cap is still judged by the stage the file held at the merge-base', () => {
+    const fresh = (prior: 'listed' | 'frozen', head: number) => stages({ 'ccd/ccd': { stage: 'capped', base: null, head, prior } });
+    const verdict = (r: GrowthRow, s: StageOf, entries = e, waivers: Parameters<typeof growthVerdicts>[5] = []) =>
+      growthVerdicts([r], growthOver([r], [], () => null, s), entries, 1100, [], waivers, s)[0]!;
+    // The review's case: a frozen ccd/ccd at 1000 code lines grows to 1500 in the PR that adds a cap of 1540.
+    const big = row('ccd/ccd', 1000, 1500);
+    expect(growthOver([big], [], () => null, fresh('frozen', 1540)), 'over the frozen limit').toEqual(['ccd/ccd']);
+    expect({ fails: verdict(big, fresh('frozen', 1540)).fails, why: verdict(big, fresh('frozen', 1540)).why }).toEqual({
+      fails: true, why: 'ccd/ccd grew by 500 net code lines, over the frozen limit of 10' });
+    expect(verdict(big, fresh('listed', 1540)).fails, 'over the listed limit').toBe(true);
+    expect(verdict(big, fresh('listed', 1540)).title).toBe('ccd/ccd: 1500 code lines, cap 1540, delta +500 (GROWTH_OVER)');
+    // At the stage's limit the new cap passes; one past it fails.
+    expect(verdict(row('ccd/ccd', 1000, 1000 + SPINE_LIMIT), fresh('frozen', 1050)).fails).toBe(false);
+    expect(verdict(row('ccd/ccd', 1000, 1001 + SPINE_LIMIT), fresh('frozen', 1051)).fails).toBe(true);
+    expect(verdict(row('ccd/ccd', 1000, 1000 + GROWTH_LIMIT), fresh('listed', 1080)).fails).toBe(false);
+    expect(verdict(row('ccd/ccd', 1000, 1001 + GROWTH_LIMIT), fresh('listed', 1081)).fails).toBe(true);
+    // A ledger waiver passes the listed stage and never the frozen one; the named exemption passes either.
+    const waiver = { file: 'ccd/ccd', maxDelta: 100, d: 'D-6223', reason: 'x', added: '2026-11-14', createdAt: '2026-11-14' };
+    const grew = row('ccd/ccd', 1000, 1050);
+    expect(verdict(grew, fresh('listed', 1090), [], [waiver]).fails, 'listed, waived').toBe(false);
+    expect(verdict(grew, fresh('frozen', 1090), [], [waiver]).fails, 'frozen, no waiver counts').toBe(true);
+    const named = parseExemptions(JSON.stringify({ exemptions: [exemption({ file: 'ccd/ccd' })] }), ['ccd/ccd'], today).entries;
+    expect(verdict(grew, fresh('frozen', 1090), named).fails, 'frozen, the named exemption').toBe(false);
+    expect(verdict(row('ccd/ccd', 1000, 1061), fresh('frozen', 1101), named).fails, 'past the exemption cap').toBe(true);
+    // The cap rule still holds beside the stage's: within the limit, a new cap past code lines + 40 fails.
+    expect(verdict(row('ccd/ccd', 1000, 1005), fresh('frozen', 1046)).fails).toBe(true);
+  });
+
   it('the summary names each capped file with its code lines and cap', () => {
     const md = growthSummary({ base: 'abcdef1234567', rows: [row('shared/api.ts', 5100, 5101)], over: [],
       methods: { base: 1, head: 1 }, armed: true, caps: [{ file: 'shared/api.ts', head: 5101, cap: 5140 }] });
@@ -180,6 +209,7 @@ describe('growth caps: the armed path, end to end (D-8635)', () => {
     git('config', 'maintenance.auto', 'false');
     put('server/src/mid.ts', pure(100));
     put('ccd/ccd', bash(100));
+    put('ccd/ccrc', bash(100));
     put(GROWTH_EXEMPTIONS_FILE, JSON.stringify({ exemptions: [] }));
     cap('server/src/mid.ts', 140);
     put(`${GROWTH_FROZEN_DIR}/${stageFileName('ccd/ccd')}`, frozenItem().text);
@@ -212,6 +242,16 @@ describe('growth caps: the armed path, end to end (D-8635)', () => {
     expect(fails(run('closing', () => {
       put('ccd/ccd', bash(80)); rmSync(path.join(dir, GROWTH_FROZEN_DIR), { recursive: true }); cap('ccd/ccd', 120);
     }), 'ccd/ccd'), 'capped at its code lines plus 40').toBe(false);
+    // A cap added in the PR that grows the file does not lift the stage the merge-base held (frozen 10, listed 40).
+    expect(fails(run('frozen-capped-ok', () => { put('ccd/ccd', bash(110)); cap('ccd/ccd', 150); }), 'ccd/ccd')).toBe(false);
+    expect(fails(run('frozen-capped-over', () => { put('ccd/ccd', bash(111)); cap('ccd/ccd', 151); }), 'ccd/ccd'),
+      'a frozen file grows past 10 in the PR that adds its cap').toBe(true);
+    expect(fails(run('frozen-capped-unfrozen', () => {
+      put('ccd/ccd', bash(111)); rmSync(path.join(dir, GROWTH_FROZEN_DIR), { recursive: true }); cap('ccd/ccd', 151);
+    }), 'ccd/ccd'), 'nor with its freeze removed').toBe(true);
+    expect(fails(run('listed-capped-ok', () => { put('ccd/ccrc', bash(140)); cap('ccd/ccrc', 180); }), 'ccd/ccrc')).toBe(false);
+    expect(fails(run('listed-capped-over', () => { put('ccd/ccrc', bash(141)); cap('ccd/ccrc', 181); }), 'ccd/ccrc'),
+      'a listed file grows past 40 in the PR that adds its cap').toBe(true);
     // A malformed cap directory is a failing row of its own.
     const broken = run('broken', () => put(`${GROWTH_CAPS_DIR}/${stageFileName('server/src/mid.ts')}`, '{'));
     expect(broken.verdicts.filter((v) => v.fails).map((v) => v.file)).toContain(GROWTH_CAPS_DIR);
