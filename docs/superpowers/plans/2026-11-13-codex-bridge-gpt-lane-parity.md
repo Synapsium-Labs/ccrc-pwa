@@ -183,8 +183,8 @@ Work started 2026-11-13 on a branch stacked on Tasks 1 and 2:
     written to the stats file, a log or the status file.
 - [ ] The stats idle flush (D-8624): the stats file is written once the bridge has been idle for `FLUSH_S` after a
   response, so a reader taking deltas between runs never sees one run's figures land in the next.
-- [ ] `bridge-effort` (D-8631), added 2026-11-14 for the operator's effort trial: `reasoning.effort` at the row's
-  `defaultReasoningLevel`, whatever effort the client sent.
+- [ ] `bridge-effort-catalogue` (D-8631), added 2026-11-14 for the operator's effort trial: `reasoning.effort` at
+  the row's `defaultReasoningLevel`, whatever effort the client sent.
   - Measured first: every upstream body on both lanes carried `xhigh`. It is the client's own effort, sent on every
     request for every model, and it outranks the lane's per-class effort file, so `ccrc models <id> set-effort` alone
     changes nothing on the wire.
@@ -290,8 +290,9 @@ Design and dry run first, with no live run. A live run spends subscription quota
   `FLUSH_S` after a response, not only at the next request, by at most one timer that each response re-arms and the
   drain stops. A reader taking deltas between runs, as the eval spec's serial join does, never sees one run's figures
   land in the next.
-- **D-8631 (2026-11-14)** — `bridge-effort-catalogue-default`: behind a fourth request marker, `bridge-effort`, the
-  bridge sends the catalogue row's `defaultReasoningLevel` as `reasoning.effort`, in place of the client's effort.
+- **D-8631 (2026-11-14)** — `bridge-effort-catalogue-default`: behind a fourth request marker,
+  `bridge-effort-catalogue`, the bridge sends the catalogue row's `defaultReasoningLevel` as `reasoning.effort`, in
+  place of the client's effort.
   - Why: every upstream body carried the client's `xhigh`, which outranks the lane's per-class effort file. A
     settings edit could not reach a session's own route effort and would need every session relaunched. The marker
     is read at each POST.
