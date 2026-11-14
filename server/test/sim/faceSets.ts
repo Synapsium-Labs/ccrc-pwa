@@ -8,21 +8,23 @@
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { expect } from 'vitest';
-import type { FleetSession, LaneWire, RunSummary } from '../../../shared/api.js';
+import { sessionBucket, type FleetSession, type LaneWire, type RunSummary } from '../../../shared/api.js';
 import type { MutantSet, SuiteCase } from './mutate.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
 
 // The loaded modules' shapes, written here and only as far as the suite uses them: a type edge into `pwa/` would pull
 // pwa sources into the server's node16 resolution (TS2835), and `modulePath` below is a runtime load, not a type edge.
+type LanesRead = { kind: 'unread' } | { kind: 'not-served' } | { kind: 'served'; lanes: Readonly<Record<string, LaneWire>> };
 interface MoodFacts {
   conn: 'connecting' | 'open' | 'down'; linkLost: boolean; agentDown: boolean;
   sessions: readonly FleetSession[] | null; runs: readonly RunSummary[] | null; waitingItems: number | null;
-  lanes: Readonly<Record<string, LaneWire>> | null; stallQuietMs: number | null; nowMs: number;
+  lanes: LanesRead; stallQuietMs: number | null; nowMs: number;
 }
 interface MoodModule {
   moodOf(f: MoodFacts): { mood: string; cause: string; next: number | null };
   fallbackCause(f: Pick<MoodFacts, 'sessions' | 'runs' | 'waitingItems' | 'lanes'>): string;
+  OFFLINE_AGENT_CAUSE: string; FUTURE_SKEW_MS: number;
   CRY_WINDOW_MS: number; HAPPY_WINDOW_MS: number; DIZZY_SWAP_MS: number; SUSPICIOUS_WINDOW_MS: number; MOOD_FALLBACK: string;
 }
 interface SplashFacts { standalone: boolean; sinceMs: number; frameSeen: boolean; reducedMotion: boolean }
@@ -40,10 +42,21 @@ const runRow = (over: Partial<Record<keyof RunSummary, unknown>> & { id: number;
 
 const NOW = 1_700_000_000_000;
 const MIN = 60_000;
+const SERVED: LanesRead = { kind: 'served', lanes: {} };
+const UNREAD: LanesRead = { kind: 'unread' };
+const NOT_SERVED: LanesRead = { kind: 'not-served' };
+const serving = (lanes: Record<string, LaneWire>): LanesRead => ({ kind: 'served', lanes });
+/** A row the server files for a gone pane: `sessionBucket`'s own answer for `status: 'dead'` with no stamp (`assembleFleet`
+ *  sets `statusUpdatedAt` only in the live-pane arm), so its `bucketSince` is what the ladder yields, never a death time. */
+const deadRow = (over: Partial<Record<keyof FleetSession, unknown>> = {}): Partial<Record<keyof FleetSession, unknown>> => ({
+  ...sessionBucket({ status: 'dead', statusUpdatedAt: null, dialogPending: false, hookState: null, archivedAt: null, pr: null, background: null }, null),
+  status: 'dead', statusUpdatedAt: null, ...over,
+});
+const endedAgo = (ago: number, cause = 'exited') => ({ at: NOW - ago, cause });
 const idle = (n: string) => fleetSession({ id: `lane-a-${n}`, bucket: 'idle' });
 const base = (over: Partial<MoodFacts> = {}): MoodFacts => ({
   conn: 'open', linkLost: false, agentDown: false,
-  sessions: [idle('1'), idle('2'), idle('3')], runs: [], waitingItems: 0, lanes: {}, stallQuietMs: 600_000, nowMs: NOW,
+  sessions: [idle('1'), idle('2'), idle('3')], runs: [], waitingItems: 0, lanes: SERVED, stallQuietMs: 600_000, nowMs: NOW,
   ...over,
 });
 const withSession = (s: Parameters<typeof fleetSession>[0], over: Partial<MoodFacts> = {}) =>
@@ -58,40 +71,63 @@ export function moodCases(m: MoodModule): Record<string, SuiteCase> {
     'a calm fleet is Sleeping': () => { expect(mood(base())).toBe('sleeping'); },
     'no fleet frame yet is Neutral, never Sleeping': () => { expect(mood(base({ sessions: null }))).toBe('neutral'); },
     'each null reader turns a calm mood into Neutral': () => {
-      for (const over of [{ runs: null }, { waitingItems: null }, { lanes: null }] as Partial<MoodFacts>[]) {
+      for (const over of [{ runs: null }, { waitingItems: null }, { lanes: UNREAD }] as Partial<MoodFacts>[]) {
         expect(mood(base(over))).toBe('neutral');
         expect(mood(withSession(merged(MIN), over))).toBe('neutral');
       }
       expect(mood(withSession(merged(MIN)))).toBe('happy');
     },
-    'a null reader does not hide a measured rule': () => { expect(mood(withSession({ bucket: 'attention' }, { lanes: null }))).toBe('alert'); },
+    'a null reader does not hide a measured rule': () => { expect(mood(withSession({ bucket: 'attention' }, { lanes: UNREAD }))).toBe('alert'); },
+    'lanes not served to this reader do not hold the calm moods back': () => {
+      expect(mood(base({ lanes: NOT_SERVED }))).toBe('sleeping');
+      expect(mood(withSession(merged(MIN), { lanes: NOT_SERVED }))).toBe('happy');
+    },
+    'lanes not served switch only the lane arm of Dizzy off': () => {
+      expect(mood(base({ lanes: NOT_SERVED }))).not.toBe('dizzy');
+      expect(mood(withSession({ lastEnd: { at: NOW - 10_000, cause: 'swap-manual' } }, { lanes: NOT_SERVED }))).toBe('dizzy');
+    },
+    'Offline names the link that is down': () => {
+      expect(m.moodOf(base({ conn: 'down', linkLost: true })).cause).toContain('console');
+      expect(m.moodOf(base({ agentDown: true })).cause).toBe(m.OFFLINE_AGENT_CAUSE);
+      expect(m.moodOf(base({ conn: 'down', linkLost: true, agentDown: true })).cause).toContain('console');
+    },
     'the first connect is not Offline': () => { expect(mood(base({ conn: 'connecting', linkLost: false }))).not.toBe('offline'); },
     'a down socket is Offline': () => { expect(mood(base({ conn: 'down', linkLost: true }))).toBe('offline'); },
     'a reconnect during an outage stays Offline': () => { expect(mood(base({ conn: 'connecting', linkLost: true }))).toBe('offline'); },
     'an open link with a stale linkLost is not Offline': () => { expect(mood(base({ conn: 'open', linkLost: true }))).not.toBe('offline'); },
     'a remote fleet whose agent is down is Offline': () => { expect(mood(base({ agentDown: true }))).toBe('offline'); },
     'a session with a question is Alert': () => { expect(mood(withSession({ bucket: 'attention' }))).toBe('alert'); },
-    'a recent unchosen death is Crying': () => { expect(mood(withSession({ bucket: 'dead', bucketSince: NOW - 10 * MIN }))).toBe('crying'); },
+    'a recent unchosen death is Crying, dated from lastEnd': () => { expect(mood(withSession(deadRow({ lastEnd: endedAgo(10 * MIN) })))).toBe('crying'); },
+    'a swap or a limit restart is no death': () => {
+      for (const cause of ['swap-auto-home', 'swap-auto-rescue', 'swap-auto', 'swap-manual', 'limit-resume']) {
+        expect(mood(withSession(deadRow({ lastEnd: endedAgo(MIN, cause) })))).not.toBe('crying');
+      }
+      for (const cause of ['oom', 'tmux-server', 'exited', 'unknown']) expect(mood(withSession(deadRow({ lastEnd: endedAgo(MIN, cause) })))).toBe('crying');
+    },
     'a limit wait is Crying': () => { expect(mood(withSession({ limitWait: { at: NOW } as never }))).toBe('crying'); },
     'a hibernated or stopped session does not cry': () => {
-      expect(mood(withSession({ bucket: 'dead', bucketSince: NOW - MIN, hibernatedAt: NOW - MIN }))).not.toBe('crying');
-      expect(mood(withSession({ bucket: 'dead', bucketSince: NOW - MIN, stoppedBy: { at: NOW, surface: 'pwa' } as never }))).not.toBe('crying');
+      expect(mood(withSession(deadRow({ lastEnd: endedAgo(MIN), hibernatedAt: NOW - MIN })))).not.toBe('crying');
+      expect(mood(withSession(deadRow({ lastEnd: endedAgo(MIN), stoppedBy: { at: NOW, surface: 'pwa' } as never })))).not.toBe('crying');
     },
-    'a death with no time does not cry': () => { expect(mood(withSession({ bucket: 'dead', bucketSince: null }))).not.toBe('crying'); },
+    'a death with no recorded end does not cry': () => { expect(mood(withSession(deadRow({ lastEnd: null })))).not.toBe('crying'); },
+    'a live session with a recent process end does not cry': () => {
+      expect(mood(withSession({ bucket: 'working', lastEnd: endedAgo(MIN) }))).not.toBe('crying');
+    },
     'a death older than the window does not cry': () => {
-      expect(mood(withSession({ bucket: 'dead', bucketSince: NOW - m.CRY_WINDOW_MS - 1 }))).not.toBe('crying');
+      expect(mood(withSession(deadRow({ lastEnd: endedAgo(m.CRY_WINDOW_MS) })))).not.toBe('crying');
+      expect(mood(withSession(deadRow({ lastEnd: endedAgo(m.CRY_WINDOW_MS - 1) })))).toBe('crying');
     },
     'a standing swap refusal is Angry': () => {
       expect(mood(withSession({ bucket: 'working', swapBlocked: { at: NOW, reason: 'x' } }))).toBe('angry');
     },
     'a dead session with a standing refusal is not Angry': () => {
-      expect(mood(withSession({ bucket: 'dead', swapBlocked: { at: NOW, reason: 'x' } }))).not.toBe('angry');
+      expect(mood(withSession(deadRow({ swapBlocked: { at: NOW, reason: 'x' } })))).not.toBe('angry');
     },
     'items waiting are Sad, none waiting is not': () => {
       expect(mood(base({ waitingItems: 2 }))).toBe('sad');
       expect(mood(base({ waitingItems: 0 }))).not.toBe('sad');
     },
-    'a rate-limited lane is Dizzy': () => { expect(mood(base({ lanes: { 'lane-a': rateLimited } }))).toBe('dizzy'); },
+    'a rate-limited lane is Dizzy': () => { expect(mood(base({ lanes: serving({ 'lane-a': rateLimited }) }))).toBe('dizzy'); },
     'a recent swap is Dizzy, an older one is not': () => {
       expect(mood(withSession({ lastEnd: { at: NOW - 10_000, cause: 'swap-manual' } }))).toBe('dizzy');
       expect(mood(withSession({ lastEnd: { at: NOW - m.DIZZY_SWAP_MS - 1, cause: 'swap-manual' } }))).not.toBe('dizzy');
@@ -115,6 +151,12 @@ export function moodCases(m: MoodModule): Record<string, SuiteCase> {
       expect(mood(withSession(merged(MIN)))).toBe('happy');
       expect(mood(withSession(merged(m.HAPPY_WINDOW_MS + 1)))).not.toBe('happy');
     },
+    'a merge stamped ahead by skew counts as now, one far ahead is not trusted': () => {
+      const f = withSession({ pr: { mergedAt: NOW + m.FUTURE_SKEW_MS } as never });
+      expect(mood(f)).toBe('happy');
+      expect(m.moodOf(f).next).toBe(NOW + m.HAPPY_WINDOW_MS);
+      expect(mood(withSession({ pr: { mergedAt: NOW + 15 * MIN } as never }))).not.toBe('happy');
+    },
     'a working session is Thinking, an idle one is not': () => {
       expect(mood(withSession({ bucket: 'working' }))).toBe('thinking');
       expect(mood(base())).not.toBe('thinking');
@@ -126,18 +168,18 @@ export function moodCases(m: MoodModule): Record<string, SuiteCase> {
       expect(mood(withSession({ bucket: 'attention' }, { agentDown: true }))).toBe('offline');
     },
     'next is the nearest window edge': () => {
-      expect(m.moodOf(withSession({ bucket: 'dead', bucketSince: NOW - 10 * MIN })).next).toBe(NOW + 50 * MIN);
+      expect(m.moodOf(withSession(deadRow({ lastEnd: endedAgo(10 * MIN) }))).next).toBe(NOW + 50 * MIN);
       expect(m.moodOf(base()).next).toBeNull();
       expect(m.moodOf(base({ runs: [review(5 * MIN)] })).next).toBe(NOW - 5 * MIN + m.SUSPICIOUS_WINDOW_MS);
       expect(m.moodOf(withSession(merged(MIN))).next).toBe(NOW - MIN + m.HAPPY_WINDOW_MS);
     },
     'next is the smallest of several edges': () => {
-      const f = base({ sessions: [...base().sessions!, fleetSession({ id: 'project-a-d', bucket: 'dead', bucketSince: NOW - 10 * MIN }),
+      const f = base({ sessions: [...base().sessions!, fleetSession({ id: 'project-a-d', ...deadRow({ lastEnd: endedAgo(10 * MIN) }) }),
         fleetSession({ id: 'project-a-m', ...merged(MIN) })] });
       expect(m.moodOf(f).next).toBe(NOW - MIN + m.HAPPY_WINDOW_MS);
     },
     'an edge at this very instant is not a next edge': () => {
-      const f = withSession({ bucket: 'dead', bucketSince: NOW - m.CRY_WINDOW_MS });
+      const f = withSession(deadRow({ lastEnd: endedAgo(m.CRY_WINDOW_MS) }));
       expect(m.moodOf(f).next).toBeNull();
     },
     'the fallback names the readers it waits on': () => {
@@ -146,9 +188,10 @@ export function moodCases(m: MoodModule): Record<string, SuiteCase> {
       expect(a.cause).not.toBe('');
       expect(m.moodOf(base({ runs: null })).cause).toContain('the runs');
       expect(m.moodOf(base({ waitingItems: null })).cause).toContain('the waiting items');
-      expect(m.moodOf(base({ lanes: null })).cause).toContain('the lanes');
-      expect(m.fallbackCause({ sessions: null, runs: null, waitingItems: null, lanes: null })).toContain('the sessions');
-      expect(m.moodOf(base({ runs: null, lanes: null })).cause).toBe('not heard yet: the runs, the lanes');
+      expect(m.moodOf(base({ lanes: UNREAD })).cause).toContain('the accounts');
+      expect(m.fallbackCause({ sessions: null, runs: null, waitingItems: null, lanes: UNREAD })).toContain('the sessions');
+      expect(m.moodOf(base({ runs: null, lanes: UNREAD })).cause).toBe('not heard yet: the runs, the accounts');
+      expect(m.moodOf(base({ runs: null, lanes: NOT_SERVED })).cause).toBe('not heard yet: the runs');
     },
   };
 }
@@ -156,14 +199,24 @@ export function moodCases(m: MoodModule): Record<string, SuiteCase> {
 const MOOD_SET: MutantSet<MoodModule> = {
   modulePath: path.join(ROOT, 'pwa/src/face/mood.ts'),
   mutants: [
-    { id: 'O1', old: "(f.conn !== 'open' && f.linkLost) || f.agentDown", new: 'f.linkLost || f.agentDown' },
-    { id: 'O2', old: "(f.conn !== 'open' && f.linkLost) || f.agentDown", new: "(f.conn !== 'open' && f.linkLost)" },
+    { id: 'O1', old: "consoleLinkLost(f) || f.agentDown", new: 'f.linkLost || f.agentDown' },
+    { id: 'O4', old: "const consoleLinkLost = (f: MoodFacts): boolean => f.conn !== 'open' && f.linkLost;", new: "const consoleLinkLost = (f: MoodFacts): boolean => f.linkLost;" },
+    { id: 'O2', old: "consoleLinkLost(f) || f.agentDown", new: "consoleLinkLost(f)" },
     { id: 'N1', old: "['neutral', (f) => f.sessions === null]", new: "['neutral', (f) => false]" },
     { id: 'C1', old: ' || s.limitWait !== null)]', new: ')]' },
-    { id: 'C2', old: 'within(s.bucketSince, CRY_WINDOW_MS, f.nowMs)', new: 'true' },
+    { id: 'C2', old: 'within(deathAt(s, f.nowMs), CRY_WINDOW_MS, f.nowMs)', new: '(deathAt(s, f.nowMs) !== null)' },
+    { id: 'C3', old: 'return e !== null && DEATH_CAUSE[e.cause] ? e.at : null;', new: 'return e !== null ? e.at : null;' },
+    { id: 'C4', old: "if (s.bucket !== 'dead' || s.hibernatedAt !== null || s.stoppedBy !== null) return null;", new: "if (s.bucket !== 'dead') return null;" },
+    { id: 'C5', old: 'return e !== null && DEATH_CAUSE[e.cause] ? e.at : null;', new: 'return null;' },
+    { id: 'C6', old: 'if (diedAt !== null) out.push(diedAt + CRY_WINDOW_MS);', new: '' },
+    { id: 'O3', old: "if (m === 'offline' && !consoleLinkLost(f)) return OFFLINE_AGENT_CAUSE;", new: '' },
+    { id: 'W1', old: ': Math.min(at, nowMs);', new: ': at;' },
+    { id: 'W2', old: 'at - nowMs > FUTURE_SKEW_MS ? null', new: 'false ? null' },
     { id: 'A1', old: '!NOT_LIVE.has(s.bucket) && s.swapBlocked', new: 's.swapBlocked' },
     { id: 'S1', old: 'f.waitingItems > 0', new: 'f.waitingItems >= 0' },
-    { id: 'D1', old: "f.lanes !== null && Object.values(f.lanes).some((l) => l.state.word === 'rate-limited')", new: 'false' },
+    { id: 'D1', old: "f.lanes.kind === 'served' && Object.values(f.lanes.lanes).some((l) => l.state.word === 'rate-limited')", new: 'false' },
+    { id: 'G1', old: "f.lanes.kind !== 'unread'\n    && ss.some((s) => within(s.pr", new: "f.lanes.kind === 'served'\n    && ss.some((s) => within(s.pr" },
+    { id: 'G2', old: "f.lanes.kind !== 'unread'\n    && !ss.some", new: "f.lanes.kind === 'served'\n    && !ss.some" },
     { id: 'H1', old: "['happy', (f, ss) => f.runs !== null && f.waitingItems", new: "['happy', (f, ss) => f.waitingItems" },
     { id: 'Z1', old: "['sleeping', (f, ss) => f.runs !== null && f.waitingItems !== null && f.lanes", new: "['sleeping', (f, ss) => f.runs !== null && f.lanes" },
     { id: 'U1', old: "!isRunClosed(r) && r.state === 'awaiting-review' && within", new: '!isRunClosed(r) && within' },
@@ -173,7 +226,8 @@ const MOOD_SET: MutantSet<MoodModule> = {
     { id: 'F1', old: "f.sessions === null ? 'the sessions' : null,", new: 'null,' },
     { id: 'F2', old: "f.runs === null ? 'the runs' : null,", new: 'null,' },
     { id: 'F3', old: "f.waitingItems === null ? 'the waiting items' : null,", new: 'null,' },
-    { id: 'F4', old: "f.lanes === null ? 'the lanes' : null,", new: 'null,' },
+    { id: 'F4', old: "f.lanes.kind === 'unread' ? 'the accounts' : null,", new: 'null,' },
+    { id: 'F5', old: "f.lanes.kind === 'unread' ? 'the accounts' : null,", new: "f.lanes.kind !== 'served' ? 'the accounts' : null," },
   ],
   suite: moodCases,
 };

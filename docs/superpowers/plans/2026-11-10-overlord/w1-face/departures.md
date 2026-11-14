@@ -11,8 +11,9 @@ into its ledger. Each entry is a plain slug. None carries a number: the programm
   stale `linkLost` is not Offline. That row is what fails when the `conn` clause is dropped. The rule is not reduced to
   `linkLost` alone.
 - **mood-fallback-names-its-cause, review carry R3-2 (review 1898)** — when no rule matches, `moodOf` answers `MOOD_FALLBACK` with a
-  cause that names the readers it has not heard yet ("not heard yet: the runs, the lanes"). The cause is never empty.
-  `fallbackCause` is exported and has one test case per null reader.
+  cause that names the readers it has not heard yet ("not heard yet: the runs, the accounts"). The cause is never empty.
+  `fallbackCause` is exported and has one test case per unheard reader. The accounts are named only while the read has not
+  landed (`calm-moods-gate-on-the-accounts-read`); lanes not served to this reader are never named as unheard.
 - **worker-quiet-at-shared, one reader** — the Confused window's edge needs the instant a run's worker turns quiet.
   `pwa/src/fleet/runWords.ts#workerQuietAt` answers that instant. `workerSeenNote` now reads its `quiet` through it,
   unchanged, and the decider's `next` uses it too, so neither re-derives quiet from `workerLastSeen`.
@@ -22,6 +23,29 @@ into its ledger. Each entry is a plain slug. None carries a number: the programm
   already run `stateWordFor` into the wire, and the face does not hold the usage figures `stateWordFor` needs.
 - **angry-live-means-not-dead-archived-cleanup, reading** — "any live session" is a session whose bucket is not `dead`,
   `archived` or `cleanup`. The set is typed against `SessionBucket`.
+- **calm-moods-gate-on-the-accounts-read, review fix F2** — the plan's "null before the first accounts read" made Happy and
+  Sleeping wait on `lanes !== null`, but `GET /api/accounts` sends no `lanes` to an unarmed box or a signed-out reader, so a
+  calm fleet there was Neutral forever with a false "not heard" cause. `MoodFacts.lanes` is now `LanesRead`, one field of
+  three values (`unread`, `not-served`, `served`), built by `lanesRead(accountsHeard, lanes)`; a flag beside a nullable
+  `lanes` would let "heard, with lanes" be written as "not heard". The store gains `accountsHeard`, written only by
+  `landAccounts` once an answer carrying a roster lands. Only `unread` holds the calm moods back; `not-served` only switches
+  Dizzy's lane arm off.
+- **a-death-dates-from-last-end, review fix F3** — the plan dated a death from `bucketSince`, which is null on every dead
+  row the server files (`statusUpdatedAt` is set only in the live-pane arm), so the arm never fired. A death is now a `dead`
+  row, neither hibernated nor stopped, with a `recentLastEnd` (the registry's record of the process end, written by the
+  supervisor's `gone` exit) of a death cause (`oom`, `tmux-server`, `exited`, `unknown`; a swap or a limit restart is not
+  one, typed per cause so a new `RestartCause` must be placed). Fixtures are built from `sessionBucket`'s own output. A
+  stale `lastEnd` on a row that later died unrecorded would date its death early; that only shortens the cry.
+- **heard-is-one-fleet-hook, review fix F10** — `useHeard` moved from `ledgers/WaitingRoutes.tsx` to `fleet/useHeard.ts`.
+  The Waiting routes, the programme's Goals page and `useMood` all read it, and a test scans `face/` and `ledgers/` for a
+  second reader of the frame-seen flags.
+- **offline-names-the-link-that-is-down, review nit N2** — Offline has two causes: the console's own link to the server
+  (`MOOD_RULES.offline`) and the server's link to the fleet's agent (`OFFLINE_AGENT_CAUSE`). `moodOf` picks by the arm that
+  matched, the console's winning when both do.
+- **future-stamps-count-as-now-within-a-minute, review nit N3** — a stamp up to `FUTURE_SKEW_MS` (a minute, as
+  `recentLastEnd` allows) ahead of the clock counts as now, and its window and edge run from now. A stamp further ahead is
+  not trusted and opens no window. A plain "counts as now" would hold Happy for the stamp's lead plus the window, since each
+  render clamps afresh; the cut-off is what bounds it.
 - **crying-window-strict, value** — every window is `now - at < window`, so the edge instant itself is outside it.
 
 ## The character choice (Tasks 6 and 7)

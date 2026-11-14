@@ -8,7 +8,7 @@ import { INSTRUMENT, REFINED } from '@ccrc/ui';
 import { FleetChromeProvider } from '../src/fleet/FleetChrome';
 import { createFleetStore, type FleetStore } from '../src/stores/fleet';
 import { FaceMark, MOOD_PLAY_MS } from '../src/face/FaceMark';
-import { HAPPY_WINDOW_MS, MOOD_RULES } from '../src/face/mood';
+import { HAPPY_WINDOW_MS, MOOD_RULES, OFFLINE_AGENT_CAUSE } from '../src/face/mood';
 import { api } from '../src/lib/api';
 import { setCharacter } from '../src/lib/character';
 import { fleetSession } from './fleetFixture';
@@ -64,7 +64,7 @@ function heard(over: Partial<ReturnType<FleetStore['getState']>> = {}): FleetSto
   const store = createFleetStore();
   store.setState({
     conn: 'open', sessions: [fleetSession({ id: 'lane-a-1', bucket: 'idle' })], fleetFrameSeen: true, runs: [], runsFrameSeen: true,
-    waiting: waitingView({ items: [] }), lanes: {}, ...over,
+    waiting: waitingView({ items: [] }), accountsHeard: true, lanes: {}, ...over,
   });
   return store;
 }
@@ -146,6 +146,24 @@ describe('the face', () => {
     expect(face().getAttribute('aria-label')).toContain('not heard from the fleet yet');
   });
 
+  // The accounts route answers `lanes` to a signed-in reader only: an unarmed box sends the answer with none. A calm fleet is
+  // still calm there; only the face before any answer says it has not heard the accounts.
+  it('before the accounts read lands the face is Neutral and names the accounts', () => {
+    mountFace(heard({ accountsHeard: false, lanes: null }));
+    expect(face().getAttribute('aria-label')).toContain('not heard yet: the accounts');
+  });
+
+  it('an accounts answer with no lanes (sign-in unarmed) lets a calm fleet sleep', async () => {
+    const store = createFleetStore({ fetchAccounts: async () => ({ accounts: [], projected: null, roster: [] }) as never });
+    store.setState({ conn: 'open', sessions: [fleetSession({ id: 'lane-a-1', bucket: 'idle' })], fleetFrameSeen: true, runs: [], runsFrameSeen: true, waiting: waitingView({ items: [] }) });
+    mountFace(store);
+    expect(face().getAttribute('aria-label')).toContain('not heard yet: the accounts');
+    await act(async () => { await store.getState().refreshAccounts(); });
+    expect(store.getState().lanes).toBeNull();
+    expect(store.getState().accountsHeard).toBe(true);
+    expect(face().getAttribute('aria-label')).toContain('nothing needs anyone');
+  });
+
   it("the face's name says the cause", () => {
     mountFace(heard());
     expect(face().getAttribute('aria-label')).toBe('The Orb asleep: its eye closed in a downward curve, with small letter Zs drifting up: nothing needs anyone');
@@ -192,7 +210,7 @@ describe('the face is Offline for each input of the bar', () => {
     vi.spyOn(api, 'fleetHealth').mockResolvedValue({ mode: 'remote', connected: false, downSince: NOW - MIN } as never);
     mountFace(heard());
     await act(async () => { await vi.advanceTimersByTimeAsync(0); });
-    expect(label()).toContain(offlineCause);
+    expect(label()).toContain(OFFLINE_AGENT_CAUSE);
   });
 
   it('control: reconnecting with no lost link is not Offline', () => {
@@ -204,7 +222,7 @@ describe('the face is Offline for each input of the bar', () => {
     vi.spyOn(api, 'fleetHealth').mockResolvedValue({ mode: 'remote', connected: true, downSince: null } as never);
     mountFace(heard());
     await act(async () => { await vi.advanceTimersByTimeAsync(0); });
-    expect(label()).not.toContain(offlineCause);
+    expect(label()).not.toContain(OFFLINE_AGENT_CAUSE);
   });
 });
 
