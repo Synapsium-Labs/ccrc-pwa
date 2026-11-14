@@ -15,7 +15,6 @@ describe('FLEET_ROLES (Overlord spec §3.3.9, C49)', () => {
   it('every column that waits for a later piece is null on every row', () => {
     // One line per column, so the piece that fills a column deletes its own line (plan review I14).
     for (const r of FLEET_ROLE_NAMES) {
-      expect(FLEET_ROLES[r].compactInstructions, r).toBeNull();
       expect(FLEET_ROLES[r].probeSet, r).toBeNull();
     }
   });
@@ -34,13 +33,18 @@ describe('FLEET_ROLES (Overlord spec §3.3.9, C49)', () => {
     for (const r of FLEET_ROLE_NAMES.filter((x) => x !== 'overlord')) expect(FLEET_ROLES[r].launchProfile.env, r).toStrictEqual({});
     for (const r of FLEET_ROLE_NAMES) expect(FLEET_ROLES[r].launchProfile.settings, r).toStrictEqual({});
   });
+  it('every role carries its compaction text; auditor and replay take plain\'s (C51)', () => {
+    for (const r of FLEET_ROLE_NAMES) expect(typeof FLEET_ROLES[r].compactInstructions, r).toBe('string');
+    expect(FLEET_ROLES.auditor.compactInstructions).toBe(FLEET_ROLES.plain.compactInstructions);
+    expect(FLEET_ROLES.replay.compactInstructions).toBe(FLEET_ROLES.plain.compactInstructions);
+  });
   it('the card renderer: one per role, auditor and replay take plain (C51)', () => {
     expect(FLEET_ROLE_NAMES.map((r) => FLEET_ROLES[r].cardRenderer))
       .toEqual(['overlord', 'plain', 'plain', 'worker', 'reviewer', 'coordinator', 'plain']);
   });
   it('a row must carry every column (a compile-time pin, read by the test typecheck)', () => {
     // @ts-expect-error a row with no sessionRole is not a FleetRoleRow
-    const partial: FleetRoleRow = { longLived: false, launchProfile: { env: {}, settings: {}, autoMemory: 'off', compaction: null }, cardRenderer: 'plain', compactInstructions: null, probeSet: null };
+    const partial: FleetRoleRow = { longLived: false, launchProfile: { env: {}, settings: {}, autoMemory: 'off', compaction: null }, cardRenderer: 'plain', compactInstructions: '', probeSet: null };
     expect(partial.longLived).toBe(false);
   });
   it('isFleetRole accepts exactly the table keys', () => {

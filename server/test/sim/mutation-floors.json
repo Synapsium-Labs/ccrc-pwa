@@ -13,5 +13,6 @@
   "server/src/continuity/compactions.ts#compactionsSince": 1,
   "server/src/continuity/generationMachine.ts#generationStep": 1,
   "server/src/coord/mailPace.ts#mailPaceOf": 1,
-  "server/src/continuity/launchProfile.ts#compactThresholdFor": 1
+  "server/src/continuity/launchProfile.ts#compactThresholdFor": 1,
+  "server/src/continuity/compaction.ts#compactInstructionsFor": 1
 }
