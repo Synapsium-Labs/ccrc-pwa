@@ -105,10 +105,12 @@ describe('auto memory for plain sessions, the Settings row and its door (Task 6)
     expect(sent.map((a) => a.filter((_, i) => a[i - 1] === '--set'))).toEqual([['profile=plain', 'automem=on']]);
   });
 
-  it('nothing reads a switchboard row for this setting: every reader goes through the store, so the row\'s absence changes nothing (the ruling on ask 404)', () => {
-    // The `SWITCHES` row follows in its own PR (consolidation-path-guard); until then, and after, the setting is read only
+  it('nothing reads the switchboard row for this setting: every reader goes through the store, and the row only describes it (the ruling on ask 404; review 2024 F7)', () => {
+    // The `SWITCHES` row (`shared/switches.ts`) landed in its own PR (consolidation-path-guard). It names the setting, its
+    // table and `SWITCHES`, so it is the one file exempt below, and only as the row itself; the setting is still read only
     // from `plain_memory_settings`, by the store, and the lane and the door read the store. A file that indexed `SWITCHES`
-    // for this setting would read a row this PR does not carry.
+    // for this setting would be a second reader of it. A generic reader walks only the derived marker, `~/.ccrc` and
+    // override lists, which this row is in none of (`switches.test.ts`).
     const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
     const roots = ['server/src', 'shared', 'pwa/src'].map((r) => path.join(repo, r));
     const files: string[] = [];
@@ -122,9 +124,16 @@ describe('auto memory for plain sessions, the Settings row and its door (Task 6)
     const text = (f: string): string => codeOnly(readFileSync(f, 'utf8'));   // code only: a comment may name another SWITCHES
     const rel = (f: string): string => path.relative(repo, f);
     const naming = files.filter((f) => /plain-auto-memory|plainAutoMemory|plain_memory_settings/.test(text(f)));
+    const ROW = 'shared/switches.ts';
     expect(naming.length, 'the setting\'s readers were found').toBeGreaterThan(3);
-    expect(naming.filter((f) => /\bSWITCHES\b/.test(text(f))).map(rel)).toEqual([]);
+    expect(naming.map(rel), 'the switchboard names the setting in its row').toContain(ROW);
+    expect(naming.filter((f) => rel(f) !== ROW && /\bSWITCHES\b/.test(text(f))).map(rel)).toEqual([]);
     expect(files.filter((f) => /\bplain_memory_settings\b/.test(text(f))).map(rel).sort())
-      .toEqual(['server/src/coord/schema.ts', 'server/src/coord/store.ts']);
+      .toEqual(['server/src/coord/schema.ts', 'server/src/coord/store.ts', ROW]);
+    // The exemption is the row and nothing else: in code, the switchboard names the setting as its row's key and in its
+    // writer's route, and its table once, as that row's storage. Any other mention there (a reader of the row inside the
+    // switchboard) is red here.
+    const row = text(path.join(repo, ROW));
+    expect(row.match(/plain-auto-memory|plainAutoMemory|plain_memory_settings/g)).toEqual(['plain-auto-memory', 'plain_memory_settings', 'plain-auto-memory']);
   });
 });

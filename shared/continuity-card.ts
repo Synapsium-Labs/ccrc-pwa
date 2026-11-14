@@ -1,3 +1,4 @@
+import type { KeyFact, NoteKind } from './continuity.js';
 import type { FleetRole } from './fleetRoles.js';
 import type { ItemKind, ItemState, NeededBy } from './ledgers.js';
 
@@ -100,11 +101,34 @@ export interface CardMail {
   readonly parked: boolean;
 }
 
-/** One note the session or its earlier generation left (the notes piece fills these). Its text is untrusted. */
-export interface CardNote { readonly id: number; readonly at: number; readonly text: string }
+/** One live note of the session's identity (the notes piece, spec §3.3.2 C37): what a thread waits on and what comes next,
+ *  keyed to a row. `key` is the key as one phrase (`noteKeyText`), and `keyFact` what that row is now: a note whose row is
+ *  gone stays on the card and says so, never dropped. Its `waitsOn` and `next` are untrusted. */
+export interface CardNote {
+  readonly id: number;
+  readonly at: number;
+  readonly kind: NoteKind;
+  readonly key: string;
+  readonly keyFact: KeyFact;
+  readonly waitsOn: string;
+  readonly next: string;
+}
 
-/** The checkpoint carried across a renewal (the notes and renewal-act pieces fill it). Its text is untrusted. */
-export interface CardCheckpoint { readonly at: number; readonly text: string }
+/** One thread of a handover note, its reference as one phrase (`noteKeyText`). Untrusted. */
+export interface CardHandoverThread { readonly ref: string; readonly waitsOn: string; readonly next: string }
+/** The handover note the generation before this one wrote in `checkpointed` (the notes piece), its status words already
+ *  dropped (`dropped` counts them). Its claims of done, ids, promises, authority and preferences are never rows (C37), and
+ *  all of its text is untrusted. */
+export interface CardHandover {
+  readonly generation: number;
+  readonly dropped: number;
+  readonly threads: readonly CardHandoverThread[];
+  readonly cautions: readonly string[];
+  readonly tone: string;
+}
+/** The checkpoint carried across a renewal: in W1a, the handover note of the generation this one replaced (the notes piece;
+ *  the renewal-act piece adds the thread). `at` is when the note was written. */
+export interface CardCheckpoint { readonly at: number; readonly handover: CardHandover }
 
 /** The history line's facts: the verb that reads a node, and this session's newest node when a read names it. */
 export interface CardHistory { readonly verb: string; readonly node: string | null }
@@ -124,9 +148,9 @@ export interface CardFacts {
   readonly mailOutstanding: Fact<readonly CardMail[]>;
   /** More outstanding deliveries exist than the card read (`CARD_MAIL_MAX`). */
   readonly mailMore: boolean;
-  /** Empty until the notes piece fills it. */
+  /** The identity's live notes, newest first. */
   readonly notes: Fact<readonly CardNote[]>;
-  /** Null except at a renewal. */
+  /** Null while the generation this one replaced wrote no handover note (or there is none). */
   readonly checkpoint: Fact<CardCheckpoint | null>;
   readonly history: Fact<CardHistory>;
 }
