@@ -41,10 +41,10 @@ export type TimersRead =
   | { readonly kind: 'unread' };
 
 const intOrNull = (v: unknown): number | null => (Number.isSafeInteger(v) ? (v as number) : null);
-/** The largest instant a `Date` can hold, in ms either side of the epoch: a due time beyond it is unread, never printed as
- *  "NaN:NaN" (review 2060 F5). */
-const DATE_RANGE_MS = 8.64e15;
-const instantOrNull = (v: unknown): number | null => (isNum(v) && Math.abs(v) <= DATE_RANGE_MS ? v : null);
+/** A due time a `Date` can hold: beyond its range it is unread, never printed as "NaN:NaN" (review 2060 F5). `Date` itself
+ *  decides, so the bound is not spelled a second time (the server's owner is `STALL_EPOCH_MAX`, which the single-definition
+ *  scan keeps to one spelling). */
+const instantOrNull = (v: unknown): number | null => (isNum(v) && !Number.isNaN(new Date(v).getTime()) ? v : null);
 const textOrNull = (v: unknown): string | null => (typeof v === 'string' ? v : null);
 
 /** One row of the answer, field by field: whatever is not there, or not of its type, reads `null`. */

@@ -78,7 +78,10 @@ D-number is taken here: each departure is a plain-words slug.
   empty".
 - **busy-cancel-is-aria-busy** (F4, fixed) — the Cancel whose cancel is in flight carries `aria-busy`, as most busy buttons in
   `pwa/src` do.
-- **due-time-in-date-range** (F5, fixed) — a `dueAt` beyond the range a `Date` holds (±8.64e15 ms) reads as an unread due
-  time, never printed. A words case reads 1e20 and one past the negative bound as unread and the bound itself as read.
+- **due-time-in-date-range** (F5, fixed) — a `dueAt` beyond the range a `Date` holds reads as an unread due time, never
+  printed. `Date` itself decides (`new Date(v)` is a valid date), so the bound is not spelled a second time: the first
+  push of this round spelled it as a literal, and `single-definition/update-stall.test.ts`, which keeps that number to one
+  spelling (`STALL_EPOCH_MAX`, `server/src/coord/stall.ts`, which the PWA cannot import), went red in the PR's fast run.
+  A words case reads 1e20 and one past the negative bound as unread and the bound itself (computed with `Date.UTC`) as read.
 - **fix-round-measured-red** — each of the six new cases was run red against 6aac08c70's code before its fix, and is green
   after it.

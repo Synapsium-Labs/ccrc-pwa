@@ -60,8 +60,10 @@ describe('the words', () => {
   });
 
   it('reads a due time outside the representable date range as unread, never printed (review 2060 F5)', () => {
-    const r = readTimers(answer([view({ id: 1, dueAt: 1e20 }), view({ id: 2, dueAt: -8.64e15 - 1 }), view({ id: 3, dueAt: 8.64e15 })]));
-    expect(r.kind === 'listed' ? r.timers.map((t) => [t.id, t.dueAt]) : null).toEqual([[3, 8.64e15], [1, null], [2, null]]);
+    // The last instant a Date holds, 13 September 275760 UTC, computed rather than spelled.
+    const edge = Date.UTC(275760, 8, 13);
+    const r = readTimers(answer([view({ id: 1, dueAt: 1e20 }), view({ id: 2, dueAt: -edge - 1 }), view({ id: 3, dueAt: edge })]));
+    expect(r.kind === 'listed' ? r.timers.map((t) => [t.id, t.dueAt]) : null).toEqual([[3, edge], [1, null], [2, null]]);
   });
 
   it('says how long until a timer comes due', () => {
