@@ -3063,6 +3063,22 @@ export const MIGRATIONS: readonly string[] = [
     at           INTEGER NOT NULL       -- wall ms it was written
   );
   `,
+  // ── 73: user_version 72 -> 73 ─────────────────────────────────────────────
+  // The anchor piece (Overlord spec §3.3.3 C38; W1a, plan `w1a-anchor.md` Task 2): the seed row `anchor-slot` = `shadow`
+  // adds the anchor's switch to the Shadow lanes card. Shadow, the card door's `part=anchor` renders the anchor, logs its
+  // size and answers `dark`, so the session hook prints today's role card; only `live`, set by the operator at
+  // `POST /api/coord/lane-arm`, serves it. The merge arms nothing.
+  //
+  // ONE SEED ROW, nothing else: an older build opening a file at `user_version 73` takes rule 3 (it warns, reads as-is and
+  // migrates nothing), reads the `anchor-slot` lane-arm row as no lane it knows, and boots. Every earlier entry is frozen.
+  // Probes PR B and timers PR C may add migrations too: whichever lands later takes the next free slot, pinned to the entry
+  // before it (the coordinator's ruling on ask 416). RE-MEASURE the slot before the PR and before merge (it must print 72
+  // before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  INSERT INTO lane_arm_settings (lane, choice, updatedAt) VALUES ('anchor-slot', 'shadow', 0);
+  `,
 ];
 
 /** The version this build writes. `MIGRATIONS.length` and nothing else: a
