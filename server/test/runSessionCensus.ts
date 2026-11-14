@@ -237,6 +237,12 @@ export const NOT_BINDING_SITES: readonly NotBindingSite[] = [
     why: "a delegation checkpoint row (observation interval, bucket cursor or activity) against the owner session of the pass: the delegation lane's own records, no run is read" },
   { file: 'server/src/watch.ts', text: 'a.parentId === event.sessionId',
     why: "a delegation checkpoint row (observation interval, bucket cursor or activity) against the owner session of the pass: the delegation lane's own records, no run is read" },
+  { file: 'server/src/continuity/generationsLane.ts', text: 'g.identity === s.sessionId',
+    why: 'the live generation of the identity a reported start names: a coordinator\'s identity is its session id (Overlord §3.3.9), and no run is read' },
+  { file: 'server/src/continuity/generationsLane.ts', text: 'g.sessionId === id',
+    why: 'the compactions read cache pruned to the generations the gather still reads: a cache key, no run is read' },
+  { file: 'server/src/continuity/continuityStore.ts', text: "SELECT id, state, program FROM runs WHERE claimedBy = ? AND kind = 'work' ORDER BY id DESC LIMIT 2",
+    why: 'the wave boundary (Overlord Table 3.3.11b): the states of the two newest work runs a coordinator already claims, read as facts of those runs; no session is asked which run is its' },
 ];
 
 /** The sites that still decide a binding by hand: every site but the `NOT_BINDING_SITES` ones. */

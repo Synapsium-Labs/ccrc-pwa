@@ -148,3 +148,7 @@ the programme's ledger. The plan's own decisions (its "Deviations found" list) s
 - **review-1925-n3-n5a** — the REACHABLE row is retitled (it is one degraded view, reached by two chains), and X6's comment
   in `check.py` gives each reason a degraded generation is unproven. N1 (have `check.py`'s mutation modes diff
   `reachable`) is optional and not taken here.
+- **census-names-three-non-binding-sites** — the run/session census (ARCH-62) counts three new sites; none decides a
+  binding, so each is named in `NOT_BINDING_SITES` with its reason: the live generation looked up by the start's session
+  (a coordinator's identity is its session id), the compactions cache pruned by session id, and the wave boundary's read of
+  the coordinator's two newest claimed work runs.
