@@ -161,6 +161,9 @@ const CENSUS: readonly Row[] = [
   { source: 'presence-reader', file: 'pwa/src/screens/SessionScreen.tsx', hits: 1, stances: ['consults'],
     why: 'the header\'s coordinator reads `coordinatorPresence` (D-7181): a sleeping coordinator reads `hibernated`, '
       + 'never "coordinator gone"' },
+  { source: 'dead-compare', file: 'pwa/src/face/mood.ts', hits: 1, stances: ['consults'],
+    why: 'the Overlord face\'s mood (`cryDeath`): the face cries for a dead row only when `hibernatedAt` is null (and no operator stop), '
+      + 'because a sleep is one the operator chose, so a hibernated session never makes the face cry (the face plan, Task 5)' },
   { source: 'dead-compare', file: 'pwa/src/fleet/orphanWords.ts', hits: 1, stances: ['consults'],
     why: 'the orphan marker reads `coordinatorPresence`, and says `coordinator hibernated` for a sleeper, never '
       + '"coordinator gone"' },

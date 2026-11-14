@@ -6,6 +6,7 @@ import { App } from './app';
 import { RenderBoundary, RootFallback } from './components/RenderBoundary';
 import { initTheme } from './lib/theme';
 import { initSkin } from './lib/skin';
+import { initCharacter } from './lib/character';
 import { noteActivated, setBlockProbe, setReloadHold, setUpdater, startReloadGate } from './lib/swupdate';
 import { anySendUnresolved } from './stores/session';
 import { useFleetStore } from './stores/fleet';
@@ -17,6 +18,8 @@ initTheme();
 // The skin likewise (D-5093): index.html stamped the stored value verbatim;
 // this resolves it against the catalogue, so an unknown one becomes Refined.
 initSkin();
+// The character: the device copy now, the server's row when it answers.
+initCharacter();
 
 // The root boundary (design 2026-10-01 section 4.12): a throw anywhere in the
 // app while rendering shows "ccrc could not draw this screen." and Reload

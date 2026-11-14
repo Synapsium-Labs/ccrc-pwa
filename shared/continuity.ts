@@ -162,3 +162,38 @@ export interface StartRow {
   reportedAt: number;
   receivedAt: number;
 }
+
+/** The probe classes (Overlord design spec §3.3.5, C41 and Table 3.3.5a, in its order; C52 for a coordinator's). A role's
+ *  set is its `FLEET_ROLES` row's `probeSet` column; `probeRound` (`server/src/continuity/probes.ts`) draws a round across
+ *  it. `thread` is not a row of Table 3.3.5a: it is C41's probe after every renewal (R19), the Overlord's in W1a, and a
+ *  coordinator's if the operator's item rules so (the probes plan, Task 7), so it sits in this one list rather than a
+ *  second one. */
+const PROBE_CLASS_MAP = {
+  fact: 'an extracted fact, graded by the id or choice in the snapshot',
+  update: 'a preference that was superseded, graded by the entry that stands now',
+  temporal: 'an order in time, graded by the rows\' times',
+  abstention: 'a question with no answer on record, graded by `none`',
+  continuation: 'what a thread does next, graded by the note\'s next act',
+  decision: 'which entries decided an act, graded by the ids its act row cites',
+  contradiction: 'a superseded entry crossed with a scope, graded by the entry that applies there',
+  application: 'a case that uses an entry, graded by the option the entry implies',
+  thread: 'the current thread after a renewal, graded against the checkpoint\'s thread (R19)',
+} as const;
+export type ProbeClass = keyof typeof PROBE_CLASS_MAP;
+export const PROBE_CLASSES = Object.keys(PROBE_CLASS_MAP) as ProbeClass[];
+export function isProbeClass(v: unknown): v is ProbeClass {
+  return typeof v === 'string' && (PROBE_CLASSES as readonly string[]).includes(v);
+}
+/** §3.3.5, C41: a round asks three to five. A spot probe at depth is a round of one (the probes plan, Task 6). */
+export const PROBE_ROUND_MIN = 3;
+export const PROBE_ROUND_MAX = 5;
+/** §3.3.5, C41: while idle, one spot probe each time the context grows by another this many tokens. Also the width of
+ *  one depth bucket of the fitted ceiling. */
+export const SPOT_PROBE_EVERY_TOKENS = 50_000;
+/** §3.3.5, C41: the fitted ceiling is the deepest depth whose rolling pass rate is at least this. */
+export const FIT_PASS_RATE = 0.95;
+/** §3.3.5, C41, "the plan fixes the rolling window as a count" (slug fit-window-twenty): the last this many closed-book
+ *  spot probes of one depth and model class. */
+export const FIT_WINDOW = 20;
+/** The one answer an abstention question expects (C41: "an answer is an id, a choice from a list, or `none`"). */
+export const PROBE_NONE = 'none';

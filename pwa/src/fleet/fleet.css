@@ -3539,6 +3539,17 @@ button.proj-card-pool::before {
    class chooser. No row gap: every control on the group is already a 44px
    box. */
 .fleet-head > .fleet-head-right { flex-wrap: wrap; justify-content: flex-end; row-gap: 0; }
+/* The face beside the wordmark (Overlord face plan, Task 8; review fixes F1 and R2-1). The head spreads its children apart
+   and sits them on the text baseline, so a face set loose in it shrinks (30px at 390, not 32), lies on the baseline and, at
+   390, squeezes the wordmark onto two lines (head 48px -> 83px). So the wordmark and the face are ONE group, `.fleet-id`:
+   the face is centred on the wordmark inside the group, so it is level with the wordmark on the head's first row whether the
+   right group wraps or not, and the group takes the head's baseline from the wordmark, as the bare wordmark did. The wordmark
+   keeps its one line and the face its one whole 32px cell. Where the right group cannot fit beside them (390 and below,
+   with a session count) it takes a second row, as it already did at 360, and the head grows by one 32px cell: 76px against
+   48px at 390, the wordmark never wrapping. Layout only: no animation, filter or shadow. */
+.fleet-head > .fleet-id { flex: none; display: flex; align-items: center; gap: var(--sp-2); }
+.fleet-head .fleet-id > .wordmark { flex: none; white-space: nowrap; }
+.fleet-head .fleet-id > .face-mark { flex: none; }
 
 /* — centralised update management W3, Task 7: SettingsScreen's Updates section —
    The section is a hairline-topped block on the screen's own ground, not a

@@ -115,7 +115,8 @@ export interface CardFacts {
   readonly ledger: Fact<readonly CardProgramme[]>;      // per programme: goals (ratified or not), open items, decisions
   readonly claims: Fact<readonly CardClaim[]>;
   readonly intent: Fact<boolean>;
-  readonly itemsRaised: Fact<readonly CardItem[]>;
+  readonly itemsRaised: Fact<readonly CardItem[]>;    // every CardItem (here and in the ledger's open items) carries
+                                                        // everTicked: true when its tickedAt is set (the probes piece)
   readonly mailOutstanding: Fact<readonly CardMail[]>;  // subject (untrusted), from, delivery id, queuedAt (absolute)
   readonly notes: Fact<readonly CardNote[]>;            // the notes piece fills it; empty until then
   readonly checkpoint: Fact<CardCheckpoint | null>;     // the notes and renewal-act pieces fill it

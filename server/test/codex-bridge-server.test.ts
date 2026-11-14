@@ -9,7 +9,9 @@
 // CCRC_CODEX_AUTH_BASE; a case that needs neither leaves both at CLOSED_AUTH_BASE. Every timer a case exercises is
 // lowered through the driver's `consts`, never waited out. Tokens are synthetic JWTs built at runtime.
 import { afterEach, describe, it, expect } from 'vitest';
-import { existsSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  chmodSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync,
+} from 'node:fs';
 import { request as httpRequest, type IncomingHttpHeaders } from 'node:http';
 import { connect } from 'node:net';
 import path, { join } from 'node:path';
@@ -23,7 +25,7 @@ import {
   type AuthScript,
 } from './codexAuthFixture.js';
 import {
-  BRIDGE_AUTH_LIB, BRIDGE_MODELS, CCD_DIR, driverLines, fakeResponses, killBridges, plantBridgeLane, runBridgeDriver, spawnBridge,
+  BRIDGE_AUTH_LIB, BRIDGE_FILES, BRIDGE_MODELS, CCD_DIR, driverLines, fakeResponses, killBridges, plantBridgeLane, runBridgeDriver, spawnBridge,
   writeBridgeCatalogue, type BridgeLane, type ResponsesAnswer, type SpawnedBridge,
 } from './codexBridgeFixture.js';
 
@@ -2032,3 +2034,471 @@ describe.skipIf(!PY)('the stats file is written once the bridge is idle for FLUS
     }, { consts: { 'stats.FLUSH_S': 4 } });
   });
 });
+
+// ── the per-request record (D-8619) ──────────────────────────────────────────────────────────────────────────────
+// One JSON line per upstream answer in lane.json's `bridgeFiles.requests`, written only while the lane directory holds
+// the operator's `record-requests` marker. Every case runs the real bridge; the rows are read back from the file.
+describe.skipIf(!PY)('the per-request record behind the record-requests marker (D-8619)', () => {
+  const KEY = `backend/${MODEL}`;
+  const MARKER = 'record-requests';
+  const ALL_TURNS = 'bridge-reasoning-all-turns';
+  const LITE = { useResponsesLite: true };
+  const session = { 'x-claude-code-session-id': 'sess-fx1' };
+  const REPLAY_ZERO = { 'text-hit': 0, 'text-empty': 0, 'text-absent': 0, 'call-hit': 0, 'call-absent': 0 };
+  /** A row's keys, in the order the record writes them: `replay` on a message's first POST only, `turnState` when set. */
+  const fieldsOf = (r: Json): string[] => [
+    'v', 'at', 'postAt', 'session', 'subagent', 'message', 'post', 'route', 'model', 'status', 'outcome', 'served', 'effort',
+    'inputTokens', 'cachedTokens', 'outputTokens', 'reasoningTokens', 'firstOutputMs', 'totalMs', 'inputTransformations',
+    ...(r.post === 0 ? ['replay'] : []), 'markers', 'fallback', ...('turnState' in r ? ['turnState'] : []),
+  ];
+  const recordFile = (lane: BridgeLane): string => join(lane.laneDir, 'bridge.requests.jsonl');
+  const arm = (lane: BridgeLane): void => writeFileSync(join(lane.laneDir, MARKER), '');
+  const text = (lane: BridgeLane, suffix = ''): string => readFileSync(recordFile(lane) + suffix, 'utf8');
+  /** The record's rows, each line parsed, every line whole (a split row is a parse failure here). */
+  const rowsOf = (lane: BridgeLane, suffix = ''): Json[] => {
+    if (!existsSync(recordFile(lane) + suffix)) return [];
+    const t = text(lane, suffix);
+    expect(t === '' || t.endsWith('\n'), 'the record ends on a whole line').toBe(true);
+    return t.split('\n').filter((l) => l !== '').map((l) => JSON.parse(l) as Json);
+  };
+  /** Every row's shape: its keys in order, the bounded fields typed, `at` after `postAt`, and the times integers. */
+  const shaped = (rows: Json[]): void => {
+    for (const r of rows) {
+      expect(Object.keys(r), JSON.stringify(r)).toEqual(fieldsOf(r));
+      expect(r.v).toBe(1);
+      expect(Number.isInteger(r.at) && Number.isInteger(r.postAt) && r.at >= r.postAt, JSON.stringify(r)).toBe(true);
+      for (const k of ['firstOutputMs', 'totalMs']) expect(r[k] === null || (Number.isInteger(r[k]) && r[k] >= 0), k).toBe(true);
+      if (r.firstOutputMs !== null && r.totalMs !== null) expect(r.firstOutputMs).toBeLessThanOrEqual(r.totalMs);
+      expect(r.route).toBe('backend');
+    }
+  };
+  const stderrLines = (b: SpawnedBridge, re: RegExp): string[] => b.stderr().split('\n').filter((l) => re.test(l));
+  const live = (u: U, extra: Json = {}): string => created() + added(0, 'msg_fx1') + delta(0, 'msg_fx1', 'Hel')
+    + done(0, msgItem('msg_fx1', 'Hello')) + completed(u, extra);
+  const removed = (reason: string): Json => ({ type: 'reasoning', id: 'rs_fx9', action: 'removed', reason });
+  const unsupported: ResponsesAnswer = {
+    status: 400, headers: { 'x-request-id': 'req_fx400' },
+    body: { error: { type: 'invalid_request_error', code: 'unsupported_parameter', param: 'reasoning.context', message: 'Unsupported parameter: reasoning.context' } },
+  };
+  const highBody = (): Json => ({ ...messages(), output_config: { effort: 'high' } });
+
+  it('no marker: no record, and the wire and the answer are the same with the marker as without it', async () => {
+    const answers = [1, 2].map(() => ({ status: 200, sse: live({ input: 50, output: 3 }, { model: MODEL }) }));
+    await withBridge(answers, async ({ bridge, up, lane }) => {
+      const a = await call(bridge, '/v1/messages', { body: highBody(), headers: session });
+      expect(a.status, a.text).toBe(200);
+      expect(existsSync(recordFile(lane)), 'a record without the marker').toBe(false);
+      expect(readdirSync(lane.laneDir).filter((f) => f.includes('requests'))).toEqual([]);
+      arm(lane); // read at each upstream answer: the next one is recorded, with no restart
+      const b = await call(bridge, '/v1/messages', { body: highBody(), headers: session });
+      expect(b.status, b.text).toBe(200);
+      expect(up.requests).toHaveLength(2);
+      expect(up.requests[1].body).toEqual(up.requests[0].body);
+      expect(Object.keys(up.requests[1].body!)).toEqual(Object.keys(up.requests[0].body!));
+      expect(up.requests[1].headers).toEqual(up.requests[0].headers);
+      expect({ ...up.requests[1].values }).toEqual({ ...up.requests[0].values });
+      const idOf = (x: Answer): string => x.frames[0].data.message.id as string;
+      expect(b.text.split(idOf(b)).join('ID')).toBe(a.text.split(idOf(a)).join('ID'));
+      expect(await bridge.stop()).toEqual({ code: 0, signal: null }); // the row follows the answer: read after the drain
+      const rows = rowsOf(lane);
+      expect(rows).toHaveLength(1);
+      expect(rows[0].message).toBe(2); // the per-process sequence counts the unrecorded message too
+    });
+  });
+
+  it('a completed answer: one row, its fields in order, its values the answer\'s', async () => {
+    const sse = live({ input: 120, cached: 20, output: 7, reasoning: 3 }, {
+      model: MODEL, input_transformations: [removed('turn_boundary'), removed('prefix_mismatch'), removed('turn_boundary')],
+    });
+    await withBridge([{ status: 200, sse }], async ({ bridge, lane }) => {
+      arm(lane);
+      const t0 = Date.now();
+      const a = await call(bridge, '/v1/messages', { body: highBody(), headers: session });
+      const t1 = Date.now();
+      expect(a.status, a.text).toBe(200);
+      expect(await bridge.stop()).toEqual({ code: 0, signal: null }); // the row follows the answer: read after the drain
+      const rows = rowsOf(lane);
+      shaped(rows);
+      expect(rows).toHaveLength(1);
+      const r = rows[0];
+      expect(r).toEqual({
+        v: 1, at: r.at, postAt: r.postAt, session: 'sess-fx1', subagent: false, message: 1, post: 0, route: 'backend',
+        model: MODEL, status: 200, outcome: '2xx', served: 'same', effort: 'high', inputTokens: 120, cachedTokens: 20,
+        outputTokens: 7, reasoningTokens: 3, firstOutputMs: r.firstOutputMs, totalMs: r.totalMs,
+        inputTransformations: { 'reasoning:removed:turn_boundary': 2, 'reasoning:removed:prefix_mismatch': 1 },
+        replay: REPLAY_ZERO, markers: [], fallback: false,
+      });
+      expect(r.postAt).toBeGreaterThanOrEqual(t0 - 1);
+      expect(r.at).toBeLessThanOrEqual(t1 + 1);
+      expect(Number.isInteger(r.firstOutputMs) && Number.isInteger(r.totalMs)).toBe(true);
+      expect(r.at - r.postAt).toBeGreaterThanOrEqual(r.totalMs - 1);
+      expect((statSyncMode(recordFile(lane)))).toBe(0o600);
+    });
+  });
+
+  it('an incomplete answer, one answered as an error, a plain 4xx and an unreachable upstream each write one row', async () => {
+    const incomplete = (reason: string, model: string): string => created() + ev('response.incomplete', { response: {
+      id: 'resp_fx1', status: 'incomplete', incomplete_details: { reason }, model, output: [msgItem('msg_fx1', 'cut')],
+      usage: usage({ input: 40, output: 9 }),
+    } });
+    await withBridge([{ status: 200, sse: incomplete('max_output_tokens', MODEL) }, { status: 200, sse: incomplete('fx_new_reason', 'model-6.1-beta') }, unsupported],
+      async ({ bridge, lane }) => {
+        arm(lane);
+        const a = await call(bridge, '/v1/messages', { body: messages(), headers: session });
+        expect(a.status, a.text).toBe(200);
+        const b = await call(bridge, '/v1/messages', { body: messages(), headers: session });
+        expect(b.status).toBe(503);
+        const c = await call(bridge, '/v1/messages', { body: messages(), headers: session });
+        expect(c.status).toBe(400); // no marker carried, so no fallback: answered to the client
+        expect(await bridge.stop()).toEqual({ code: 0, signal: null });
+        const rows = rowsOf(lane);
+        shaped(rows);
+        expect(rows.map((r) => [r.message, r.post, r.status, r.outcome, r.served, r.inputTokens, r.outputTokens, r.effort])).toEqual([
+          [1, 0, 200, '2xx', 'same', 40, 9, 'none'],
+          [2, 0, 200, '5xx', 'other', 40, 9, 'none'],
+          [3, 0, 400, '4xx', null, null, null, 'none'],
+        ]);
+        expect(rows[2].totalMs).toBeNull();
+        expect(rows[2].firstOutputMs).toBeNull();
+        expect(rows[2].inputTransformations).toBeNull();
+      });
+    await withBridge([], async ({ bridge, lane }) => {
+      arm(lane);
+      const a = await call(bridge, '/v1/messages', { body: messages(), headers: session });
+      expect(a.status).toBe(503);
+      expect(await bridge.stop()).toEqual({ code: 0, signal: null }); // the row follows the answer: read after the drain
+      const rows = rowsOf(lane);
+      shaped(rows);
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toMatchObject({ status: null, outcome: '5xx', served: null, inputTokens: null, totalMs: null, post: 0 });
+    }, { env: { CCGPT_BRIDGE_UPSTREAM_BASE: CLOSED_AUTH_BASE } });
+  });
+
+  it('a stream that breaks before its terminal: a row with its status, no counted response, and the error outcome', async () => {
+    const broken: ResponsesAnswer = { status: 200, sse: created() + added(0, 'msg_fx1') + delta(0, 'msg_fx1', 'par') };
+    await withBridge([broken], async ({ bridge, lane }) => {
+      arm(lane);
+      const a = await call(bridge, '/v1/messages', { body: messages(), headers: session });
+      expect(events(a)).toContain('error');
+      expect(await bridge.stop()).toEqual({ code: 0, signal: null });
+      const rows = rowsOf(lane);
+      shaped(rows);
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toMatchObject({
+        status: 200, outcome: '5xx', served: null, inputTokens: null, cachedTokens: null, outputTokens: null,
+        reasoningTokens: null, totalMs: null, inputTransformations: null,
+      });
+      // Its first output was released before the break, but the parity histogram counts no instant of a response it
+      // did not count, so neither does the row: the two sinks agree (R3, R4).
+      expect(rows[0].firstOutputMs).toBeNull();
+      expect(readStats(lane).parity[KEY].responses).toBe(0);
+      expect(Object.values(readStats(lane).parity[KEY].firstOutputMs as Json).reduce((n: number, c) => n + (c as number), 0)).toBe(0);
+    });
+  });
+
+  it('a continued message: one row per POST, numbered within the message, replay on its first only', async () => {
+    const part = (n: number, last: boolean): ResponsesAnswer => ({
+      status: 200,
+      sse: created(n) + done(0, msgItem(`msg_fx${n}`, `part ${n}`))
+        + completed({ input: 1000 + n, output: 2 }, { model: MODEL, ...(last ? {} : { end_turn: false }) }),
+    });
+    await withBridge([part(1, false), part(2, true)], async ({ bridge, lane }) => {
+      arm(lane);
+      const a = await call(bridge, '/v1/messages', { body: messages(), headers: session });
+      expect(a.status, a.text).toBe(200);
+      expect(await bridge.stop()).toEqual({ code: 0, signal: null }); // the row follows the answer: read after the drain
+      const rows = rowsOf(lane);
+      shaped(rows);
+      expect(rows.map((r) => [r.message, r.post, r.outcome, r.inputTokens, 'replay' in r])).toEqual([
+        [1, 0, 'continuations', 1001, true], [1, 1, '2xx', 1002, false],
+      ]);
+      expect(rows[0].replay).toEqual(REPLAY_ZERO);
+    });
+  });
+
+  it('a 401 then its retry: two rows, the first naming the refresh it started', async () => {
+    const now = Math.floor(Date.now() / 1000);
+    const no = { status: 401, body: { error: { code: 'token_expired', message: 'expired' } } };
+    await withBridge([no, { status: 200, sse: textReply('ok') }], async ({ bridge, lane }) => {
+      arm(lane);
+      const a = await call(bridge, '/v1/messages', { body: messages(), headers: session });
+      expect(a.status, a.text).toBe(200);
+      expect(await bridge.stop()).toEqual({ code: 0, signal: null }); // the row follows the answer: read after the drain
+      const rows = rowsOf(lane);
+      shaped(rows);
+      expect(rows.map((r) => [r.message, r.post, r.status, r.outcome, r.served])).toEqual([
+        [1, 0, 401, 'refresh-after-401', null], [1, 1, 200, '2xx', 'absent'],
+      ]);
+    }, { auth: { token: [{ status: 200, body: issuedAnswer({ iatAgo: 600 }) }] }, plant: { credential: { accessClaims: { iat: now - 600 } } } });
+  });
+
+  it('the Task 5 fallback: the 400 that started it is a row of its own, marked, and its retry is the next', async () => {
+    await withBridge([unsupported, { status: 200, sse: textReply('after') }], async ({ bridge, lane }) => {
+      arm(lane);
+      writeFileSync(join(lane.laneDir, ALL_TURNS), '');
+      writeBridgeCatalogue(lane.catalogue, BRIDGE_MODELS, { [MODEL]: LITE });
+      const a = await call(bridge, '/v1/messages', { body: highBody(), headers: session });
+      expect(a.status, a.text).toBe(200);
+      expect(await bridge.stop()).toEqual({ code: 0, signal: null }); // the row follows the answer: read after the drain
+      const rows = rowsOf(lane);
+      shaped(rows);
+      expect(rows.map((r) => [r.post, r.status, r.outcome, r.fallback, r.markers, r.effort])).toEqual([
+        [0, 400, 'fallback', true, [ALL_TURNS], 'high'], [1, 200, '2xx', false, [], 'high'],
+      ]);
+    });
+  });
+
+  it('the session id: a bounded one is kept, an over-long or ill-shaped one is null, and a subagent is a flag only', async () => {
+    const answers = [1, 2, 3, 4].map(() => ({ status: 200, sse: textReply('ok') }));
+    const long = 'a'.repeat(128);
+    await withBridge(answers, async ({ bridge, lane }) => {
+      arm(lane);
+      for (const headers of [
+        { 'x-claude-code-session-id': long, 'x-claude-code-agent-id': 'agent-fx-private-7' } as Record<string, string>,
+        { 'x-claude-code-session-id': `${long}b` },
+        { 'x-claude-code-session-id': 'sess fx/1' },
+        {},
+      ]) {
+        const a = await call(bridge, '/v1/messages', { body: messages(), headers });
+        expect(a.status, a.text).toBe(200);
+      }
+      expect(await bridge.stop()).toEqual({ code: 0, signal: null });
+      const rows = rowsOf(lane);
+      shaped(rows);
+      expect(rows.map((r) => [r.session, r.subagent])).toEqual([[long, true], [null, false], [null, false], [null, false]]);
+      expect(text(lane)).not.toContain('agent-fx-private-7');
+      expect(text(lane)).not.toContain('sess fx');
+    });
+  });
+
+  it('the rows agree with the parity section\'s deltas over the same requests', async () => {
+    const part = (n: number, last: boolean): ResponsesAnswer => ({
+      status: 200,
+      sse: created(n) + done(0, msgItem(`msg_fx${n}`, `part ${n}`)) + completed({ input: 300 + n, cached: n, output: 4, reasoning: 2 },
+        { model: n === 2 ? 'model-6.1-beta' : MODEL, input_transformations: [removed('turn_boundary')], ...(last ? {} : { end_turn: false }) }),
+    });
+    // a stream that releases output and then breaks: the parity row counts no response for it, so no instant either
+    const broken: ResponsesAnswer = { status: 200, sse: created() + added(0, 'msg_fx1') + delta(0, 'msg_fx1', 'par') };
+    await withBridge([unsupported, part(1, false), part(2, true), { status: 200, sse: live({ input: 7 }) }, broken], async ({ bridge, lane }) => {
+      arm(lane);
+      writeFileSync(join(lane.laneDir, ALL_TURNS), '');
+      writeBridgeCatalogue(lane.catalogue, BRIDGE_MODELS, { [MODEL]: LITE });
+      const a = await call(bridge, '/v1/messages', { body: highBody(), headers: session });
+      expect(a.status, a.text).toBe(200);
+      const b = await call(bridge, '/v1/messages', { body: messages(), headers: session });
+      expect(b.status, b.text).toBe(200);
+      const c = await call(bridge, '/v1/messages', { body: messages(), headers: session });
+      expect(events(c)).toContain('error');
+      expect(await bridge.stop()).toEqual({ code: 0, signal: null });
+      const rows = rowsOf(lane);
+      shaped(rows);
+      const row = readStats(lane).parity[KEY];
+      const sum = (k: string): number => rows.reduce((n, r) => n + (r[k] ?? 0), 0);
+      expect(rows.filter((r) => r.served !== null)).toHaveLength(row.responses);
+      expect([sum('inputTokens'), sum('cachedTokens'), sum('outputTokens'), sum('reasoningTokens')])
+        .toEqual([row.inputTokens, row.cachedTokens, row.outputTokens, row.reasoningTokens]);
+      const tally = (vals: string[]): Json => vals.reduce((o: Json, v) => ({ ...o, [v]: (o[v] ?? 0) + 1 }), {});
+      expect(tally(rows.map((r) => r.effort))).toEqual(row.effort);
+      expect({ same: 0, other: 0, absent: 0, ...tally(rows.filter((r) => r.served !== null).map((r) => r.served)) }).toEqual(row.served);
+      const transforms: Json = {};
+      for (const r of rows) for (const [k, n] of Object.entries((r.inputTransformations ?? {}) as Json)) transforms[k] = (transforms[k] ?? 0) + n;
+      expect(transforms).toEqual(row.inputTransformations);
+      expect(rows.filter((r) => r.fallback).flatMap((r) => r.markers as string[])).toEqual(
+        Object.entries(row.fallbacks as Json).filter(([, n]) => n > 0).flatMap(([m, n]) => Array(n).fill(m)));
+      // the histograms rebuilt from the rows: each integer lies in the bucket the parity row counted its instant in
+      const BOUNDS = [250, 500, 1000, 2000, 4000, 8000, 16000, 32000, 64000];
+      const bucketOf = (ms: number): string => String(BOUNDS.find((b) => ms <= b) ?? 'inf');
+      for (const k of ['firstOutputMs', 'totalMs']) {
+        const rebuilt: Json = Object.fromEntries(Object.keys(row[k] as Json).map((b) => [b, 0]));
+        for (const r of rows) if (r[k] !== null) rebuilt[bucketOf(r[k] as number)] += 1;
+        expect(rebuilt, k).toEqual(row[k]);
+      }
+      expect(rows.filter((r) => r.status === 200 && r.served === null), 'the broken stream has its row').toHaveLength(1);
+    });
+  });
+
+  it('bounded: the file turns over at the cap into one older generation, never a third, and never splits a row', async () => {
+    const answers = Array.from({ length: 8 }, () => ({ status: 200, sse: textReply('ok') }));
+    await withBridge(answers, async ({ bridge, lane }) => {
+      arm(lane);
+      for (let i = 0; i < 8; i += 1) {
+        const a = await call(bridge, '/v1/messages', { body: messages(), headers: session });
+        expect(a.status, a.text).toBe(200);
+      }
+      expect(await bridge.stop()).toEqual({ code: 0, signal: null });
+      const names = readdirSync(lane.laneDir).filter((f) => f.startsWith('bridge.requests.jsonl')).sort();
+      expect(names).toEqual(['bridge.requests.jsonl', 'bridge.requests.jsonl.1']);
+      const [older, current] = [rowsOf(lane, '.1'), rowsOf(lane)];
+      shaped([...older, ...current]);
+      for (const suffix of ['', '.1']) {
+        expect(Buffer.byteLength(text(lane, suffix))).toBeLessThanOrEqual(1200);
+        expect(statSyncMode(recordFile(lane) + suffix)).toBe(0o600);
+      }
+      // the newest rows are kept, in order, and the generations meet without a gap
+      const seq = [...older, ...current].map((r) => r.message as number);
+      expect(seq).toEqual(Array.from({ length: seq.length }, (_, i) => 9 - seq.length + i));
+      expect(current.length).toBeGreaterThan(0);
+    }, { consts: { 'reqrecord.REQUESTS_MAX_BYTES': 1200 } });
+  });
+
+  it('a symlink in the record\'s place is never written through; a directory there is counted, logged once, and never fails a request', async () => {
+    await withBridge([{ status: 200, sse: textReply('ok') }], async ({ bridge, lane, home }) => {
+      arm(lane);
+      const elsewhere = join(home, 'elsewhere.jsonl');
+      writeFileSync(elsewhere, 'keep\n', { mode: 0o600 });
+      symlinkSync(elsewhere, recordFile(lane));
+      const a = await call(bridge, '/v1/messages', { body: messages(), headers: session });
+      expect(a.status, a.text).toBe(200);
+      expect(await bridge.stop()).toEqual({ code: 0, signal: null });
+      expect(readFileSync(elsewhere, 'utf8')).toBe('keep\n');
+      expect(lstatSync(recordFile(lane)).isSymbolicLink()).toBe(true);
+      expect(readStats(lane).outcomes['requests:write-failed']).toBe(1);
+    });
+    await withBridge([1, 2, 3].map(() => ({ status: 200, sse: textReply('ok') })), async ({ bridge, lane, home }) => {
+      arm(lane);
+      mkdirSync(recordFile(lane));
+      for (let i = 0; i < 3; i += 1) {
+        // the third request meets another cause (a dangling symlink, ELOOP): still counted, never logged again
+        if (i === 2) { rmSync(recordFile(lane), { recursive: true }); symlinkSync(join(home, 'no-such.jsonl'), recordFile(lane)); }
+        const a = await call(bridge, '/v1/messages', { body: messages(), headers: session });
+        expect(a.status, a.text).toBe(200);
+        expect(textOf(a)).toBe('ok');
+      }
+      expect(await bridge.stop()).toEqual({ code: 0, signal: null });
+      expect(readStats(lane).outcomes['requests:write-failed']).toBe(3);
+      expect(readStats(lane).outcomes['2xx']).toBe(3);
+      expect(existsSync(join(home, 'no-such.jsonl')), 'nothing created through the symlink').toBe(false);
+      // once per bridge process, whatever the cause: the first one's errno word
+      expect(stderrLines(bridge, /record-requests/)).toEqual(['ccgpt-proxy: direct: record-requests write-failed eisdir']);
+    });
+  });
+
+  it('two requests at once write two whole lines', async () => {
+    const answers = [1, 2].map(() => ({ status: 200, sse: { chunks: [created(), done(0, msgItem('msg_fx1', 'ok')) + completed({})], delayMs: 300 } }));
+    await withBridge(answers, async ({ bridge, lane }) => {
+      arm(lane);
+      const both = await Promise.all([0, 1].map(() => call(bridge, '/v1/messages', { body: messages(), headers: session })));
+      for (const a of both) expect(a.status, a.text).toBe(200);
+      expect(await bridge.stop()).toEqual({ code: 0, signal: null }); // the row follows the answer: read after the drain
+      const rows = rowsOf(lane);
+      shaped(rows);
+      expect(rows.map((r) => r.message).sort()).toEqual([1, 2]);
+      expect(text(lane).split('\n')).toHaveLength(3);
+    });
+  });
+
+  it('a record file that is already there at another mode is put back to 0600 and appended to', async () => {
+    await withBridge([{ status: 200, sse: textReply('ok') }], async ({ bridge, lane }) => {
+      arm(lane);
+      writeFileSync(recordFile(lane), '{"v":1,"planted":true}\n', { mode: 0o644 });
+      chmodSync(recordFile(lane), 0o644);
+      expect(statSyncMode(recordFile(lane)), 'CONTROL: planted at 0644').toBe(0o644);
+      const a = await call(bridge, '/v1/messages', { body: messages(), headers: session });
+      expect(a.status, a.text).toBe(200);
+      expect(await bridge.stop()).toEqual({ code: 0, signal: null });
+      expect(statSyncMode(recordFile(lane))).toBe(0o600);
+      const rows = rowsOf(lane);
+      expect(rows).toHaveLength(2);
+      expect(rows[0]).toEqual({ v: 1, planted: true });
+      shaped(rows.slice(1));
+    });
+  });
+
+  // The record's lock serialises the rotation, not only the append: two writers that both find the file at the cap
+  // would otherwise rotate twice, and the second rename would move the first one's fresh file over the full older
+  // generation. The window is widened by a slow open, so without the lock the double rotation is certain.
+  it('two writers at the cap rotate once: the older generation is the full one, and no row is lost', () => {
+    const dir = mkTmp('cb-reqrecord-lock-');
+    const script = [
+      'import json, os, sys, threading, time',
+      'sys.dont_write_bytecode = True',
+      'sys.path.insert(0, sys.argv[1])',
+      'from codexbridge import reqrecord',
+      'd = sys.argv[2]',
+      'open(os.path.join(d, reqrecord.REQUESTS_MARKER), "w").close()',
+      'path = os.path.join(d, "bridge.requests.jsonl")',
+      'line = lambda n: json.dumps({"n": n}, separators=(",", ":")) + "\\n"',
+      'with open(path, "w") as f: f.write("".join(line(n) for n in (1, 2, 3)))',
+      'reqrecord.REQUESTS_MAX_BYTES = 3 * len(line(1))  # the file is at the cap',
+      'real = reqrecord._open',
+      'def slow(p):',
+      '    fd = real(p)',
+      '    time.sleep(0.3)',
+      '    return fd',
+      'reqrecord._open = slow',
+      'failed = []',
+      'rec = reqrecord.RequestRecord(d, path, failed.append, lambda s: None)',
+      'ts = [threading.Thread(target=rec.write, args=((lambda n=n: {"n": n}),)) for n in (4, 5)]',
+      'for t in ts: t.start()',
+      'for t in ts: t.join()',
+      'read = lambda p: [json.loads(l)["n"] for l in open(p)] if os.path.exists(p) else None',
+      'print(json.dumps({"older": read(path + reqrecord.GENERATION), "current": read(path), "failed": failed}))',
+    ].join('\n');
+    const r = spawnSync(PY!, ['-I', '-c', script, CCD_DIR, dir], {
+      encoding: 'utf8', timeout: 30_000, env: { PATH: process.env.PATH ?? '/usr/bin:/bin' },
+    });
+    expect(r.status, r.stderr).toBe(0);
+    const out = JSON.parse(r.stdout) as { older: number[] | null; current: number[] | null; failed: string[] };
+    expect(out.failed).toEqual([]);
+    expect(out.older).toEqual([1, 2, 3]);
+    expect([...(out.current ?? [])].sort()).toEqual([4, 5]);
+  });
+
+  it('a lane.json without bridgeFiles.requests: the bridge starts and serves, writes no record, and says so once', async () => {
+    const { requests: _none, ...older } = BRIDGE_FILES;
+    await withBridge([1, 2].map(() => ({ status: 200, sse: textReply('ok') })), async ({ bridge, lane }) => {
+      arm(lane);
+      for (let i = 0; i < 2; i += 1) {
+        const a = await call(bridge, '/v1/messages', { body: messages(), headers: session });
+        expect(a.status, a.text).toBe(200);
+      }
+      expect(await bridge.stop()).toEqual({ code: 0, signal: null });
+      expect(readdirSync(lane.laneDir).filter((f) => f.includes('requests'))).toEqual([MARKER]);
+      expect(stderrLines(bridge, /record-requests/)).toEqual([
+        "ccgpt-proxy: direct: record-requests unnamed: lane.json names no bridgeFiles.requests, so no request record is written; run 'ccrc update', which re-renders it",
+      ]);
+      expect(readStats(lane).outcomes['requests:write-failed']).toBeUndefined();
+    }, { plant: { bridgeFiles: older } });
+  });
+
+  it('a present but malformed bridgeFiles.requests refuses the start, like the other keys', async () => {
+    const home = mkTmp('cb-server-');
+    plantBridgeLane(home, LANE, { bridgeFiles: { ...BRIDGE_FILES, requests: '../elsewhere.jsonl' } });
+    await expect(spawnBridge(home, LANE, { consts: BASE_CONSTS, timeoutMs: 5000 }))
+      .rejects.toThrow("lane.json's bridgeFiles.requests is not a file name");
+  });
+
+  it('nothing private: no conversation text, tool name, cache key, turn-state value or header value in the record', async () => {
+    const state = `ts-fx-private-${randomBytes(8).toString('hex')}`;
+    const call1 = created() + done(0, { type: 'function_call', id: 'fc_fx1', call_id: 'call_fx1', name: 'Read', arguments: '{"file_path":"secret-path.txt"}' })
+      + completed({}, { model: MODEL });
+    await withBridge([
+      { status: 200, sse: call1, headers: { 'x-codex-turn-state': state, 'x-request-id': 'req-fx-private' } },
+      { status: 200, sse: textReply('private reply words') },
+    ], async ({ bridge, lane }) => {
+      arm(lane);
+      writeFileSync(join(lane.laneDir, 'bridge-turn-state'), '');
+      const body: Json = { ...messages({ text: 'private user words' }), tools: [READ_TOOL] };
+      const a = await call(bridge, '/v1/messages', { body, headers: session });
+      expect(a.status, a.text).toBe(200);
+      const body2 = { ...body, messages: [...(body.messages as Json[]),
+        { role: 'assistant', content: [{ type: 'tool_use', id: 'call_fx1', name: 'Read', input: { file_path: 'secret-path.txt' } }] },
+        { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'call_fx1', content: 'private file body' }] }] };
+      const b = await call(bridge, '/v1/messages', { body: body2, headers: session });
+      expect(b.status, b.text).toBe(200);
+      expect(await bridge.stop()).toEqual({ code: 0, signal: null });
+      const rows = rowsOf(lane);
+      shaped(rows);
+      expect(rows.map((r) => r.turnState)).toEqual(['captured', 'echoed']);
+      const t = text(lane);
+      for (const s of ['private user words', 'private reply words', 'private file body', 'secret-path', 'You are a helper',
+        'Read', 'ccrc:sess-fx1', state, 'req-fx-private', 'x-anthropic', lane.key, lane.cred!.access, FIXTURE_ACCOUNT_ID]) {
+        expect(t, s).not.toContain(s);
+      }
+    });
+  });
+});
+
+function statSyncMode(f: string): number {
+  return statSync(f).mode & 0o777;
+}

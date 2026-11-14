@@ -721,9 +721,10 @@ describe('coord.db: migration 4 — runs.dispatchStartedAt', () => {
     // and MIGRATIONS[63] (project_linking's team source, evidence and candidates, the automatic team link, D-8405)
     // and MIGRATIONS[64] (mail.answersMail and mail_answers_once, the invited reply, #2726)
     // and MIGRATIONS[65] (continuity_starts, the start report, Overlord W1a)
-    // and MIGRATIONS[66] (continuity_generations, continuity_cursor and the continuity lane-arm row, Overlord W1a).
-    expect(COORD_SCHEMA_VERSION).toBe(67);
-    expect(MIGRATIONS.length).toBe(67);
+    // and MIGRATIONS[66] (face_settings, the operator's character choice, the Overlord face plan Task 6)
+    // and MIGRATIONS[67] (continuity_generations, continuity_cursor and the continuity lane-arm row, Overlord W1a).
+    expect(COORD_SCHEMA_VERSION).toBe(68);
+    expect(MIGRATIONS.length).toBe(68);
   });
 
   it('is ADDITIVE: every column migration 1 wrote is still on the table, unchanged', () => {
@@ -815,8 +816,9 @@ describe('coord.db: migration 11 — runs.kind and runs.reviews (design 2026-09-
     // and MIGRATIONS[63] (project_linking's team link columns, D-8405)
     // and MIGRATIONS[64] (mail.answersMail, #2726)
     // and MIGRATIONS[65] (continuity_starts, the start report, Overlord W1a)
-    // and MIGRATIONS[66] (continuity_generations, Overlord W1a); the migration above is still entry 11.
-    expect(COORD_SCHEMA_VERSION).toBe(67);
+    // and MIGRATIONS[66] (face_settings)
+    // and MIGRATIONS[67] (continuity_generations, Overlord W1a); the migration above is still entry 11.
+    expect(COORD_SCHEMA_VERSION).toBe(68);
     const row = db.prepare('SELECT kind, reviews FROM runs').get() as { kind: string; reviews: number | null };
     expect(row).toEqual({ kind: 'work', reviews: null });
     db.close();

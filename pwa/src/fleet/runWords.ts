@@ -136,6 +136,16 @@ export interface WorkerSeenNote {
 
 const WORKER_TURN_WORD: Record<'working' | 'failed', string> = { working: 'in a turn', failed: 'turn failed' };
 
+/** The first instant (epoch ms) at which `workerSeenNote` reads the run quiet, or null when it never will: no finite
+ *  heartbeat, a turn still open, or no `quietMs`. The ONE place "quiet" is defined: quiet iff `nowMs - at > quietMs`,
+ *  that is, from `at + quietMs + 1` (whole milliseconds). */
+export function workerQuietAt(run: RunSummary, quietMs: number | null): number | null {
+  const at = run.workerLastSeen;
+  if (typeof at !== 'number' || !Number.isFinite(at)) return null;
+  if (run.workerLastTurn?.state === 'working' || quietMs === null) return null;
+  return at + quietMs + 1;
+}
+
 /** The ONE reader of `RunSummary.workerLastSeen` and `.workerLastTurn` (D-8285). Absent or not a finite number (an older
  *  server, a marker the sweep could not read, no sweep yet) draws nothing: "not measured" is never "dead". `quietMs` is the
  *  runs frame's `stallQuietMs`, the threshold `lastMoveAt`'s stalled word uses; null (no frame yet, an older server) is never
@@ -145,7 +155,8 @@ export function workerSeenNote(run: RunSummary, nowMs: number, quietMs: number |
   if (typeof at !== 'number' || !Number.isFinite(at)) return null;
   const state = run.workerLastTurn?.state;
   const open = state === 'working';
-  const quiet = !open && quietMs !== null && nowMs - at > quietMs;
+  const quietAt = workerQuietAt(run, quietMs);
+  const quiet = quietAt !== null && nowMs >= quietAt;
   const ago = formatAge(Math.floor((nowMs - at) / 1000));
   const tail = state === 'working' || state === 'failed' ? ` · ${WORKER_TURN_WORD[state]}` : quiet ? ' · quiet' : '';
   const when = new Date(at).toISOString().replace('T', ' ').slice(0, 16);

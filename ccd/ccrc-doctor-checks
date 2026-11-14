@@ -7968,7 +7968,7 @@ _dr_cx_lane() {   # <id> <models: 1 = its model state is measurable> <roster> â€
       _dr_cx_fail "$id has no lane.json ($(_codex_lane_dir "$id")/lane.json), which the launcher, the shim and the usage publisher all read" \
         "render it: ccrc codex start $id renders lane.json from the roster before it starts the lane (every session launch runs the same start)" ;;
     stale)
-      _dr_cx_fail "$id's lane.json disagrees with its roster row (its id, configDir, authDir, a port, its unit names, or no mode, upstream or bridge file names at all), so the shim and the usage publisher read the lane's old shape" \
+      _dr_cx_fail "$id's lane.json disagrees with its roster row (its id, configDir, authDir, a port, its unit names, or a mode, an upstream or a bridge file name it lacks, as one an older build wrote may), so the shim and the usage publisher read the lane's old shape" \
         "re-render it: ccrc codex start $id renders lane.json from the roster before it starts the lane" ;;
     *)
       _dr_cx_fail "whether $id's lane.json matches its roster row could not be measured" \
@@ -8263,11 +8263,15 @@ _dr_cx_tier_unmeasured() {   # <id> <tier>
     "run: ccrc codex status $1 â€” it asks the same question and says what it could see"
 }
 
-# A lane's two bridge files (codex-bridge Stage 2, Task 13), named by
+# A lane's bridge files (codex-bridge Stage 2, Task 13), named by
 # lane.json's `bridgeFiles` (whose one spelling is `laneManifest`'s, read here
 # as `_codex_reap_files` reads it, a bare file name only): the stats file,
-# which names the lane's upstream request ids and its usage, and the reasoning
-# store, which holds its encrypted reasoning. The bridge creates each 0600, so
+# which names the lane's upstream request ids and its usage, the reasoning
+# store, which holds its encrypted reasoning, and (D-8619) the request record
+# and its older generation `<name>.1`, which name the lane's Claude Code
+# session ids and each request's time and size; `bridgeFiles.requests` is
+# optional, and a lane.json that names none has no record to check. The
+# bridge creates each 0600, so
 # one that is not a regular file (a symlink included: `-L` first, the
 # exposure row's rule), or whose mode is not 600, is a FAIL. An absent one is
 # no finding (no bridge has served on this lane yet), and the rows are asked in
@@ -8279,16 +8283,20 @@ _dr_cx_bridge_files() {   # <id>
   dir="$(_codex_lane_dir "$id")"; lj="$dir/lane.json"
   [ -f "$lj" ] || return 0
   mapfile -t bf < <(jq -r 'if type == "object" and (.bridgeFiles | type) == "object"
-      then (.bridgeFiles.stats, .bridgeFiles.store) | if type == "string" then . else "" end
+      then (.bridgeFiles.stats, .bridgeFiles.store, .bridgeFiles.requests) | if type == "string" then . else "" end
       else empty end' "$lj" 2>/dev/null)
-  [ "${#bf[@]}" -eq 2 ] || return 0
-  for i in 0 1; do
+  [ "${#bf[@]}" -eq 3 ] || return 0
+  # the record's older generation, only beside a name that passed the bare-name check
+  if [[ "${bf[2]}" =~ ^[A-Za-z0-9._-]+$ ]] && [ "${bf[2]}" != . ] && [ "${bf[2]}" != .. ]; then bf+=("${bf[2]}.1"); else bf+=(''); fi
+  for i in 0 1 2 3; do
     [[ "${bf[$i]}" =~ ^[A-Za-z0-9._-]+$ ]] && [ "${bf[$i]}" != . ] && [ "${bf[$i]}" != .. ] || continue
     p="$dir/${bf[$i]}"
     if [ "$i" -eq 0 ]; then
       what='stats file'; why="it names the lane's upstream request ids and its usage"
-    else
+    elif [ "$i" -eq 1 ]; then
       what='reasoning store'; why="it holds the lane's encrypted reasoning"
+    else
+      what='request record'; why="it names the lane's Claude Code session ids and the time and size of each of its requests"
     fi
     { [ -e "$p" ] || [ -L "$p" ]; } || continue
     if [ -L "$p" ] || [ ! -f "$p" ]; then

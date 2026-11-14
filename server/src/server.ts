@@ -86,6 +86,7 @@ import { registerLinkingRoutes } from './linking/routes.js';
 import { registerContinuityRoutes } from './continuity/routes.js';
 import { registerPlanRoutes } from './coord/planRoutes.js';
 import { registerHierarchyRoutes } from './coord/hierarchyRoutes.js';
+import { registerFaceRoutes } from './face/routes.js';
 import { readLinearStore } from './linear/store.js';
 import { trackerIdsIn } from './linking/policy.js';
 import { UNSET_LINKING } from './coord/linkingStore.js';
@@ -2260,6 +2261,8 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     registerDocsRefreshRoute(app, docs.readers, docs.fetchers, docs.lanes);
   });
   registerReaderLabRoutes(app, readerLab);
+  // The operator's character choice (the Overlord face plan, Task 6), from its own file: two session-gated routes, no box token.
+  registerFaceRoutes(app, { coord: deps.coord });
 
   app.get('/ws/session/:id', { websocket: true }, (socket, req) => {
     const { id } = req.params as { id: string };

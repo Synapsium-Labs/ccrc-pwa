@@ -76,7 +76,7 @@ export function startsOf(db: DatabaseSync, sessionId: string, limit: number): St
 }
 
 // ------------------------------------------------------------------------------------------------- the generations
-// `continuity_generations` and `continuity_cursor` (Overlord spec §3.3.1 C36, §3.3.11 H12, W1a; migration 67). ONE
+// `continuity_generations` and `continuity_cursor` (Overlord spec §3.3.1 C36, §3.3.11 H12, W1a; migration 68). ONE
 // writer, the generations lane (`generationsLane.ts`), through the functions below; `CoordStore` keeps one-line
 // delegates. Every write is a compare-and-set on the row the caller read (`GenExpect`), so a pass that raced another
 // writer, or a restart, changes nothing it did not read.

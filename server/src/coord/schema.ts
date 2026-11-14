@@ -2840,6 +2840,26 @@ export const MIGRATIONS: readonly string[] = [
   CREATE INDEX continuity_starts_by_session ON continuity_starts(sessionId, receivedAt);
   `,
   // ── 67: user_version 66 -> 67 ─────────────────────────────────────────────
+  // The Overlord face plan, Task 6: the operator's character choice, `face_settings`, one row seeded `(1, 'orb', 0)`
+  // (`updatedAt` 0 = never chosen). Its one writer is `CoordStore.setFaceCharacter`, behind `POST /api/face`; its one reader
+  // is `CoordStore.faceSettings`, which reads a word `isCharacter` refuses, or a lost row, as the default character.
+  // `character` carries NO CHECK, `collect_lane_settings.choice`'s reason: a word a newer build writes must not stop an
+  // older build opening the file.
+  //
+  // ONE NEW TABLE AND ITS SEED, nothing else: an older build opening a file at `user_version 67` takes rule 3 (it warns,
+  // reads as-is and migrates nothing) and never names the table. Every earlier entry is frozen. RE-MEASURE the slot before
+  // the PR and before merge (it must print 66 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE face_settings (
+    id        INTEGER PRIMARY KEY CHECK (id = 1),
+    character TEXT NOT NULL,
+    updatedAt INTEGER NOT NULL
+  );
+  INSERT INTO face_settings (id, character, updatedAt) VALUES (1, 'orb', 0);
+  `,
+  // ── 68: user_version 67 -> 68 ─────────────────────────────────────────────
   // The generations (Overlord spec §3.3.1 C36, §3.3.11 H12, Table 11.1a, W1a): `continuity_generations`, one row per life
   // of a long-lived identity, minted at each reported start, and `continuity_cursor`, the renewal lane's place in
   // `continuity_starts`. Both have ONE writer, the generations lane, through `server/src/continuity/continuityStore.ts`
@@ -2849,10 +2869,10 @@ export const MIGRATIONS: readonly string[] = [
   // observed-time column is the identity's accumulator (`observed`, carried across mints), and a deadline is wall time.
   // The seed row `continuity` = `shadow` adds the lane to the Shadow lanes card.
   //
-  // NEW TABLES, AN INDEX AND ONE SEED ROW, nothing on an existing table: an older build opening a file at `user_version 67`
+  // NEW TABLES, AN INDEX AND ONE SEED ROW, nothing on an existing table: an older build opening a file at `user_version 68`
   // takes rule 3 (it warns, reads as-is and migrates nothing), never names either table, reads the `continuity` lane-arm
   // row as no lane it knows, and boots. Every earlier entry is frozen. RE-MEASURE the slot before the PR and before merge
-  // (it must print 66 before this entry is counted):
+  // (it must print 67 before this entry is counted):
   //     git fetch origin main
   //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
   `
