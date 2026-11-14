@@ -26138,6 +26138,8 @@ _fleet_spawn_compose() {   # id launchflags -> sets FLEET_SPAWN_FLAGS; never fai
 # anchors are `\A`/`\z`, since jq's `$` also matches before a final newline (a value `"1\n"` would cut the env line).
 # The word is read raw, not through `_route_get`, whose unmeasured note names the roster projection: a profiles file
 # that cannot be read journals its own `route-unmeasured` line here, floored by the same `routeunmeasprofile` marker.
+# The raw read keeps `_route_get`'s other two lines itself (review 1970 N1): a `.profile` present but unreadable journals
+# `_route_unread_note`'s line, and a word that is not a row (or bytes of no word's shape) `_route_reject_note`'s.
 LAUNCH_PROFILES_JSON="${BASH_SOURCE[0]%/*}/lib/launch-profiles.json"
 [[ -f "$LAUNCH_PROFILES_JSON" ]] || LAUNCH_PROFILES_JSON="$HOME/.cc-sessions/lib/launch-profiles.json"
 PROFILE_ROW_JQ='.[$r] as $x
@@ -26150,16 +26152,20 @@ PROFILE_ROW_JQ='.[$r] as $x
        + (if $x.autoMemory == "off" or $am == "off" then ["CLAUDE_CODE_DISABLE_AUTO_MEMORY=1"] else [] end)
        + (if $cw == "" then [] else ["CLAUDE_CODE_AUTO_COMPACT_WINDOW=" + $cw] end) | join(" "))'
 _profile_spawn_compose() {   # id launchflags -> sets PROFILE_SPAWN_FLAGS, PROFILE_SPAWN_ENV; never fails, never half-applies
-  local id="$1" p="" am cw out="" pset="" penv=""
+  local id="$1" p="" am cw out="" pset="" penv="" unread=""
   PROFILE_SPAWN_FLAGS="$2"; PROFILE_SPAWN_ENV=""
   [[ -e "$REG/$id.profile" || -L "$REG/$id.profile" ]] || return 0
-  _reg_get_to p "$id" profile 2>/dev/null; am=$(_route_get "$id" automem); cw=$(_route_get "$id" compactwindow)
+  _reg_get_to p "$id" profile 2>/dev/null || { _route_unread_note "$id" profile; unread=1; }
+  am=$(_route_get "$id" automem); cw=$(_route_get "$id" compactwindow)
   [[ "$p" =~ ^[a-z]{1,16}$ ]] && out=$(jq -r --arg r "$p" --arg am "$am" --arg cw "$cw" "$PROFILE_ROW_JQ" "$LAUNCH_PROFILES_JSON" 2>/dev/null) || out=""
   IFS=$'\t' read -r pset penv <<< "$out"
   if [[ -z "$pset" ]]; then
-    [[ "$p" =~ ^[a-z]{1,16}$ ]] || p="<$(_route_bytes "$p") bytes>"
-    jq -e 'type == "object"' "$LAUNCH_PROFILES_JSON" >/dev/null 2>&1 || _route_note_floored "$id" routeunmeasprofile \
+    if ! jq -e 'type == "object"' "$LAUNCH_PROFILES_JSON" >/dev/null 2>&1; then _route_note_floored "$id" routeunmeasprofile \
       || echo "$(date '+%F %T') route-unmeasured $id: field profile could not be checked — this box's launch profiles ($LAUNCH_PROFILES_JSON) cannot be read; treated as absent — re-run ccrc install" >> "$REG/swap.log"
+    elif [[ -z "$unread" ]] && ! { [[ "$p" =~ ^[a-z]{1,16}$ ]] && jq -e --arg r "$p" 'has($r)' "$LAUNCH_PROFILES_JSON" >/dev/null 2>&1; }; then
+      _route_reject_note "$id" profile "$(_route_bytes "$p")"   # a word that is not a row, or bytes of no word's shape (review 1970 N1)
+    fi
+    [[ "$p" =~ ^[a-z]{1,16}$ ]] || p="<$(_route_bytes "$p") bytes>"
     echo "ccd: warn: $id: launch profile $p unreadable — spawning without it" >&2; return 0
   fi
   [[ "$pset" == '{}' ]] || { _spawn_settings_last "$id" "$2" "$pset" "launch profile $p" || return 0; PROFILE_SPAWN_FLAGS="$SPAWN_SETTINGS_FLAGS"; }

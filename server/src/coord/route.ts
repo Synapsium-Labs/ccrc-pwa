@@ -1,6 +1,6 @@
 import {
   FAILURE_KINDS, ROUTE_CONTROL_CHAR_RE, RUN_STATES, TERMINAL_RUN_STATES, isRegistryId,
-  parseRouteEventDetail, parseRouteFields, routeNamesFable,
+  parseRouteEventDetail, parseRouteFields, routeNamesFable, routeParseWhy,
 } from '../../../shared/api.js';
 import type {
   FailureKind, RouteField, RouteMode, RunRouteRefuseCode, RunState, RunSummary,
@@ -105,7 +105,7 @@ export function parseRouteRequest(id: number | null, raw: unknown): RouteRequest
   }
   const parsed = parseRouteFields(typeof body.field === 'string' ? { [body.field]: body.value } : null);
   if (!parsed.ok || Object.keys(parsed.route).length !== 1) {
-    return { ok: false, detail: !parsed.ok ? `field/value invalid: ${parsed.why}${parsed.field === undefined ? '' : ` ${parsed.field}`}` : 'field and value are required' };
+    return { ok: false, detail: !parsed.ok ? `field/value invalid: ${routeParseWhy(parsed)}` : 'field and value are required' };
   }
   const [field, value] = Object.entries(parsed.route)[0] as [RouteField, string];
   return { ok: true, id, ask: { target, why, how: { by: 'manual', field, value } } };

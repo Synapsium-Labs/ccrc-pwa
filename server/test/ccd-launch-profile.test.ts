@@ -225,6 +225,46 @@ describe('an unknown or unreadable profile never half-applies (Review Focus 2)',
   });
 });
 
+describe('the profile\'s own journal lines, read raw (review 1970 N1)', () => {
+  const journal = (kind: string): string[] => {
+    const p = path.join(h.home, '.cc-sessions', 'swap.log');
+    return fs.existsSync(p) ? fs.readFileSync(p, 'utf8').split('\n').filter((l) => l.includes(`${kind} ${ID}: field profile`)) : [];
+  };
+  it('a stored word that is not a row journals route-reject with its byte count, once a window; so do bytes of no word\'s shape', () => {
+    seed([['profile', 'nosuchrow']]);
+    for (let i = 0; i < 2; i++) spawn('new');
+    expect(journal('route-reject')).toHaveLength(1);
+    expect(journal('route-reject')[0]).toMatch(/route-reject lane-a-project-a: field profile holds an unrecognised value \(9 bytes\) — treated as absent$/);
+    h.sh(`printf 'a\\001b' > "$HOME/.cc-sessions/${ID}.profile"; rm -f "$HOME/.cc-sessions/${ID}.routenoteprofile"`);
+    const r = spawn('new');
+    expect(r.lines).toStrictEqual(RECORDED['first start']);
+    expect(journal('route-reject')).toHaveLength(2);
+    expect(journal('route-reject')[1]).toContain('holds an unrecognised value (3 bytes)');
+    expect(journal('route-reject').join('\n')).not.toContain('\u0001');
+  });
+  it('a .profile present but unreadable (a link, or mode 000) journals route-unmeasured … present but could not be read', () => {
+    seed([['profile', 'coordinator']]);
+    const f = path.join(h.home, '.cc-sessions', `${ID}.profile`);
+    fs.rmSync(f);
+    fs.writeFileSync(path.join(h.home, 'elsewhere'), 'coordinator');
+    fs.symlinkSync(path.join(h.home, 'elsewhere'), f);
+    expect(spawn('new').lines).toStrictEqual(RECORDED['first start']);
+    expect(journal('route-unmeasured')).toEqual([expect.stringMatching(/route-unmeasured lane-a-project-a: field profile is present but could not be read — treated as absent/)]);
+    expect(journal('route-reject')).toEqual([]);   // nothing was read, so nothing was judged
+    fs.rmSync(f); fs.writeFileSync(f, 'coordinator'); fs.chmodSync(f, 0o000);
+    fs.rmSync(path.join(h.home, '.cc-sessions', `${ID}.routeunreadprofile`));
+    try {
+      expect(spawn('new').lines).toStrictEqual(RECORDED['first start']);
+      expect(journal('route-unmeasured')).toHaveLength(2);
+    } finally { fs.chmodSync(f, 0o644); }
+  });
+  it('a row of the wrong shape is the file\'s fault, not the word\'s: no route-reject line', () => {
+    seed([['profile', 'worker']]);
+    spawn('new', altFile({ worker: { env: { PATH: '/x' }, settings: {}, autoMemory: 'off', compactionSettings: {} } }));
+    expect(journal('route-reject')).toEqual([]);
+  });
+});
+
 describe('the route fields: written by cmd_route, checked by _route_valid, skipped by _route_any', () => {
   it('cmd_route writes the three and refuses what is not in their vocabulary', () => {
     seed();
