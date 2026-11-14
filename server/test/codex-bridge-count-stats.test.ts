@@ -970,12 +970,15 @@ describe.skipIf(!PY)('the store entry: the reasoning store\'s state for this pro
 const BUCKETS = ['250', '500', '1000', '2000', '4000', '8000', '16000', '32000', '64000', 'inf'];
 const zeros = (keys: string[]): Record<string, number> => Object.fromEntries(keys.map((k) => [k, 0]));
 const REPLAY = ['text-hit', 'text-empty', 'text-absent', 'call-hit', 'call-absent'];
+/** D-8622: the request markers, in backend.MARKERS' order. */
+const MARKERS = ['bridge-reasoning-all-turns', 'bridge-verbosity', 'bridge-turn-state'];
 /** A parity row as the writers leave it when they have counted nothing, with `over` laid on top. */
 function parityRow(over: Record<string, unknown> = {}): Line {
   return {
     responses: 0, inputTokens: 0, cachedTokens: 0, outputTokens: 0, reasoningTokens: 0, effort: {},
     served: { same: 0, other: 0, absent: 0 }, servedOther: {}, inputTransformations: {}, responsesWithTransformations: 0,
-    replay: zeros(REPLAY), firstOutputMs: zeros(BUCKETS), totalMs: zeros(BUCKETS), ...over,
+    replay: zeros(REPLAY), firstOutputMs: zeros(BUCKETS), totalMs: zeros(BUCKETS),
+    markers: zeros(MARKERS), fallbacks: zeros(MARKERS), turnState: { captured: 0, echoed: 0 }, ...over,
   };
 }
 const hist = (counts: Record<string, number>): Record<string, number> => ({ ...zeros(BUCKETS), ...counts });
@@ -1197,5 +1200,86 @@ describe.skipIf(!PY)('the parity section (D-8618)', () => {
     // nothing the load changed, so the file is the old process's until a flush
     expect(readDoc(file)).toEqual(planted);
     expect(snap.doc.parity).toEqual({ [ROUTE_KEY]: parityRow({ effort: { medium: 1 } }) });
+  });
+});
+
+// D-8622, D-8623: the request markers' counts in the same rows. `markers` counts the POSTs that carried each marker's
+// addition, `fallbacks` each one a 400's fallback dropped, and `turnState` the sticky-routing tokens captured and echoed:
+// fixed vocabularies, zero-filled like `served` and `replay`, so no cap can be reached and no name is ever free text.
+describe.skipIf(!PY)('the parity section: the request markers (D-8622, D-8623)', () => {
+  it('each marker, fallback and turn-state event is counted once per call, under its own name', async () => {
+    const { home, file } = lane('cb-parity-markers-');
+    const [, ...rest] = await run(home, [
+      open(file),
+      call('parity_marker', ['backend', MODEL, 'bridge-reasoning-all-turns']),
+      call('parity_marker', ['backend', MODEL, 'bridge-reasoning-all-turns']),
+      call('parity_marker', ['backend', MODEL, 'bridge-verbosity']),
+      call('parity_marker', ['backend', MODEL, 'bridge-turn-state']),
+      call('parity_fallback', ['backend', MODEL, 'bridge-reasoning-all-turns']),
+      call('parity_turn_state', ['backend', MODEL, 'captured']),
+      call('parity_turn_state', ['backend', MODEL, 'echoed']),
+      call('parity_turn_state', ['backend', MODEL, 'echoed']),
+      { op: 'stats-snapshot' },
+    ]);
+    expect(rest.at(-1)!.doc.parity).toEqual({ [ROUTE_KEY]: parityRow({
+      markers: { 'bridge-reasoning-all-turns': 2, 'bridge-verbosity': 1, 'bridge-turn-state': 1 },
+      fallbacks: { ...zeros(MARKERS), 'bridge-reasoning-all-turns': 1 },
+      turnState: { captured: 1, echoed: 2 },
+    }) });
+    // a measurement, never drift
+    expect(rest.at(-1)!.doc.names).toEqual({});
+    expect(rest.at(-1)!.doc.unexplained).toEqual({});
+  });
+
+  it('a name outside the vocabularies counts nothing, and makes no row', async () => {
+    const { home, file } = lane('cb-parity-markers-bad-');
+    const [, ...rest] = await run(home, [
+      open(file),
+      call('parity_marker', ['backend', MODEL, 'bridge-instructions']),
+      call('parity_marker', ['backend', MODEL, 'overflow']),
+      call('parity_marker', ['backend', MODEL, ['bridge-verbosity']]),
+      call('parity_marker', ['backend', MODEL, null]),
+      call('parity_fallback', ['backend', MODEL, 'record-streams']),
+      call('parity_fallback', ['backend', MODEL, 7]),
+      call('parity_turn_state', ['backend', MODEL, 'replaced']),
+      call('parity_turn_state', ['backend', MODEL, 'ts-fixture-token']),
+      { op: 'stats-snapshot' },
+    ]);
+    expect(rest.at(-1)!.doc.parity).toEqual({});
+  });
+
+  it('a restart carries the counts and re-checks them; a row from before them loads zero-filled', async () => {
+    const { home, file } = lane('cb-parity-markers-load-');
+    const good = parityRow({
+      responses: 1, markers: { 'bridge-reasoning-all-turns': 4, 'bridge-verbosity': 0, 'bridge-turn-state': 2 },
+      fallbacks: { 'bridge-reasoning-all-turns': 1, 'bridge-verbosity': 0, 'bridge-turn-state': 0 },
+      turnState: { captured: 3, echoed: 7 },
+    });
+    const before = parityRow({ responses: 2 }) as Record<string, unknown>;
+    delete before.markers;
+    delete before.fallbacks;
+    delete before.turnState;
+    const planted = {
+      version: 1, lane: 'lane-a', since: '2026-01-01T00:00:00.000Z', startedAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:00:00.000Z', routes: {}, refusals: {}, outcomes: {}, names: {}, unexplained: {},
+      usageHeaders: null, lastUpstreamRequestId: null,
+      parity: {
+        [ROUTE_KEY]: good,
+        'backend/model-b': before,
+        'backend/model-c': {
+          markers: { 'bridge-reasoning-all-turns': -1, 'bridge-verbosity': '2', 'bridge-turn-state': 5, 'other-marker': 9 },
+          fallbacks: 'many', turnState: { captured: 1.5, echoed: 2, value: 3 },
+        },
+      },
+    };
+    writeFileSync(file, JSON.stringify(planted), { mode: 0o600 });
+    const [o] = await run(home, [open(file)]);
+    expect(o.doc.parity).toEqual({
+      [ROUTE_KEY]: good,
+      'backend/model-b': parityRow({ responses: 2 }),
+      'backend/model-c': parityRow({
+        markers: { ...zeros(MARKERS), 'bridge-turn-state': 5 }, turnState: { captured: 0, echoed: 2 },
+      }),
+    });
   });
 });
