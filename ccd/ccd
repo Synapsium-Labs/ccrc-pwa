@@ -10089,6 +10089,9 @@ cmd_route() {   # ccd route --session <id> --set <field>=<value> [--set ...] [--
     f="${kv%%=*}"; v="${kv#*=}"
     _route_word_in "$f" "${ROUTE_FIELDS[*]}" || die "unknown routing field '$f' (want one of: ${ROUTE_FIELDS[*]})"
     [[ "$f" == degraded || "$f" == inert ]] && die "'$f' is written by ccd only"
+    # AN EMPTY VALUE CLEARS a compaction field (the launch-profile lane, review 2024 F2 c): the field is removed, which every
+    # reader takes as absent (ccd's own threshold, no auto-compact window). No other field has an empty form.
+    [[ -z "$v" && ( "$f" == compact || "$f" == compactwindow ) ]] && continue
     # THREE ANSWERS, THREE SENTENCES (fix round 2, Finding 1). `_route_valid`
     # answers 2 when the field's vocabulary itself could not be read — `subagent`,
     # whose list is PROJECTED into `$HOME/.ccrc/accounts.sh` by `ccrc install`, and
@@ -10138,9 +10141,10 @@ cmd_route() {   # ccd route --session <id> --set <field>=<value> [--set ...] [--
     raw=$(_reg_get "$id" "$f" 2>/dev/null)
     old=$(_route_get "$id" "$f")
     if [[ -n "$raw" && -z "$old" ]]; then old="<$(_route_bytes "$raw") bytes, unrecognised>"; fi
-    _reg_set "$id" "$f" "$v" || die "could not write $f for $id — the record is unchanged from this field on"
-    _lc_done route "$id" "" dec.actor "$actor" dec.reason "$reason" detail "$f: ${old:-∅} -> $v"
-    echo "$(date '+%F %T') route $id: $f ${old:-∅} -> $v${actor:+ [actor=$actor]}${reason:+ ($reason)}" >> "$REG/swap.log"
+    if [[ -z "$v" ]]; then rm -f -- "$REG/$id.$f" || die "could not clear $f for $id — the record is unchanged from this field on"
+    else _reg_set "$id" "$f" "$v" || die "could not write $f for $id — the record is unchanged from this field on"; fi
+    _lc_done route "$id" "" dec.actor "$actor" dec.reason "$reason" detail "$f: ${old:-∅} -> ${v:-∅}"
+    echo "$(date '+%F %T') route $id: $f ${old:-∅} -> ${v:-∅}${actor:+ [actor=$actor]}${reason:+ ($reason)}" >> "$REG/swap.log"
     echo "set $id $f=$v"
     # A `degraded` STAMP IS ABOUT THE CLASS IT REPLACED, so a new class may void
     # it — one reader for that decision, `_route_stale_degrade_clear`.

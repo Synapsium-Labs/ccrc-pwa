@@ -279,6 +279,22 @@ describe('the route fields: written by cmd_route, checked by _route_valid, skipp
       expect(r.out, bad).toMatch(/not in its vocabulary/);
     }
   });
+  it('an empty value clears compact and compactwindow, journals the old value to ∅, and is refused for every other field (review 2024 F2 c)', () => {
+    seed([['compact', '60'], ['compactwindow', '154000'], ['profile', 'coordinator']]);
+    const r = route(`--session ${ID} --set compact= --set profile=plain --set compactwindow=`);
+    expect(r.status, r.out).toBe(0);
+    expect(fs.existsSync(path.join(h.home, '.cc-sessions', `${ID}.compact`))).toBe(false);
+    expect(fs.existsSync(path.join(h.home, '.cc-sessions', `${ID}.compactwindow`))).toBe(false);
+    expect(h.reg(ID, 'profile')).toBe('plain');
+    const log = fs.readFileSync(path.join(h.home, '.cc-sessions', 'swap.log'), 'utf8');
+    expect(log).toMatch(new RegExp(`route ${ID}: compact 60 -> ∅`));
+    expect(log).toMatch(new RegExp(`route ${ID}: compactwindow 154000 -> ∅`));
+    expect(route(`--session ${ID} --set compactwindow=`).status).toBe(0);   // clearing an absent field is a no-op
+    for (const bad of ['automem=', 'class=', 'effort=']) {
+      const b = route(`--session ${ID} --set ${bad}`);
+      expect(b.status, bad).not.toBe(0);
+    }
+  });
   it('an unreadable profiles file is "vocabulary unavailable", not a bad value', () => {
     seed();
     const r = route(`--session ${ID} --set profile=worker`, 'LAUNCH_PROFILES_JSON="$HOME/no-such.json";');
