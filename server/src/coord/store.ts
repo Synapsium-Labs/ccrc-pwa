@@ -1921,9 +1921,6 @@ const feedDedupeHash = (key: string): string => createHash('sha256').update(key)
  * read, which is exactly what makes "an older build ignores unknown columns"
  * (spec:78-81) true rather than aspirational.
  */
-/** `newestClaimedWorkRuns`' answer: the runs newest first, each with its state and programme. */
-export type ClaimedWorkRuns = { ok: true; runs: { state: string; program: string }[] } | { ok: false; detail: string };
-
 export class CoordStore {
   /** Landing order wave 5f: null open; `replay` closed until `replayLandingJournal` proves the history; `restart` closed for good. */
   private landingFence: 'replay' | 'restart' | null;
@@ -4442,18 +4439,6 @@ export class CoordStore {
       'SELECT DISTINCT claimedBy FROM runs ' +
       `WHERE claimedBy IS NOT NULL AND state NOT IN ${TERMINAL_RUN_STATES_SQL}`,
     ).all() as { claimedBy: string }[]).map((r) => r.claimedBy);
-  }
-
-  /** Overlord Table 3.3.11b's wave boundary (`waveBoundaryOf`): the two newest WORK runs `claimedBy` claims, newest first,
-   *  in any state, with their programmes (review 2003 F11: Coordination's table, read here). A failed read is ok: false. */
-  newestClaimedWorkRuns(claimedBy: string): ClaimedWorkRuns {
-    try {
-      const runs = this.db.prepare("SELECT state, program FROM runs WHERE claimedBy = ? AND kind = 'work' ORDER BY id DESC LIMIT 2")
-        .all(claimedBy) as { state: string; program: string }[];
-      return { ok: true, runs };
-    } catch (e) {
-      return { ok: false, detail: `runs read failed: ${e instanceof Error ? e.message : String(e)}` };
-    }
   }
 
   /** The dead-coordinator lane's durable anchors (`dead_claimants`, migration 18; workspace lifecycle spec §5.4) —

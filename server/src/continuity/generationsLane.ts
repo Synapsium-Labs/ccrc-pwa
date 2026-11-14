@@ -26,6 +26,7 @@ import type { ChildMark, RunKind } from '../../../shared/api.js';
 import type { CoordStore } from '../coord/store.js';
 import type { TurnMarkRead } from '../coord/stall.js';
 import { laneArmRowViewOf } from '../coord/laneArm.js';
+import { newestClaimedWorkRuns } from '../coord/bindingReads.js';
 import { roleFactsOf, roleOf, type RoleReading } from '../roleOf.js';
 import { startedBeforeRelease } from '../coord/rollTarget.js';
 import type { ReleaseRead } from '../rollLane.js';
@@ -53,7 +54,7 @@ export const FIRST_MINT_LOOKBACK = 20;
 /** The store members the pass reaches, declared by this consumer, so a test can hand a small fake. */
 export type GenerationsCoord = Pick<CoordStore, 'startsSince' | 'startsOf' | 'liveGenerations' | 'mintGeneration' | 'advanceObserved'
   | 'setGenerationDue' | 'clearShadowWalk' | 'generationsCursor' | 'advanceCursor' | 'laneArmSetting' | 'openCoordinatorIds'
-  | 'run' | 'newestClaimedWorkRuns'>;
+  | 'run' | 'bindingRunsOf'>;
 
 /** What the registry says of one row at the pass: its current conversation (null: unreadable), its account and its child
  *  mark. */
@@ -262,7 +263,7 @@ export function generationsPass(deps: GenerationsDeps, input: GenerationsInput):
   for (const g of gens.rows) {
     if (!judgedForDue(g)) continue;
     const wave: Reading<boolean> = g.role !== 'coordinator' ? { kind: 'unmeasured', why: 'not a coordinator' } : (() => {
-      const runs = coord.newestClaimedWorkRuns(g.identity);
+      const runs = newestClaimedWorkRuns(coord, g.identity);
       return runs.ok ? { kind: 'measured', value: waveBoundaryOf(runs.runs) } : { kind: 'unmeasured', why: runs.detail };
     })();
     const d = renewalDue(renewalInputsOf(g, input.readings.get(g.id), wave, now));

@@ -423,6 +423,17 @@ describe('the pass records renewalDue on every generation at rest (Task 3)', () 
     expect(live(f.s)[0]).toMatchObject({ dueWhy: 'wave-boundary', dueClass: 'soft' });
   });
 
+  it('the wave boundary reads only the work runs the coordinator claims: a newer run it works for another, and its review run, are not waves (review 2003 F11)', () => {
+    const { f, id } = atRest();
+    f.s.db.prepare("UPDATE runs SET state = 'done' WHERE claimedBy = ?").run(COORD);
+    const wave2 = f.s.db.prepare("INSERT INTO runs (program, wave, waveOf, project, state, claimedBy, openedAt) VALUES ('prog-a', 2, 2, 'project-a', 'working', ?, 2)").run(COORD);
+    f.s.db.exec("INSERT INTO programs (slug, title, createdAt, state) VALUES ('prog-b', 'P', 1, 'active')");
+    f.s.db.prepare("INSERT INTO runs (program, wave, waveOf, project, state, claimedBy, sessionId, openedAt) VALUES ('prog-b', 1, 2, 'project-b', 'working', 'lane-b-other', ?, 3)").run(COORD);
+    f.s.db.prepare("INSERT INTO runs (program, wave, waveOf, project, state, claimedBy, openedAt, kind, reviews) VALUES ('prog-a', 2, 2, 'project-a', 'working', ?, 4, 'review', ?)").run(COORD, Number(wave2.lastInsertRowid));
+    f.pass(new Map([[id, readings(usage(70_000, 1_000_000))]]));
+    expect(live(f.s)[0]).toMatchObject({ dueWhy: 'wave-boundary', dueClass: 'soft' });
+  });
+
   it('in shadow a generation on a walk is judged: its `state` is active, whatever the walk holds (review 2003 F1)', () => {
     const f = fixture();
     f.start('startup', U1);
@@ -570,7 +581,7 @@ describe('the watcher', () => {
 describe('shadow is structural: the lane imports nothing that sends', () => {
   it('its value imports are within the allowed list', () => {
     const allowed = ['../../../shared/lane-arm.js', '../../../shared/continuity.js', '../../../shared/models.js', '../coord/laneArm.js',
-      '../coord/rollTarget.js',
+      '../coord/rollTarget.js', '../coord/bindingReads.js',
       '../roleOf.js', '../time/observed.js', './compactions.js', './continuityStore.js', './generationStart.js', './renewalDue.js'];
     const edges = parsedFile('server/src/continuity/generationsLane.ts').imports.filter((e) =>
       e.kind !== 'type-query' && !e.typeOnly && !(e.names.length > 0 && e.names.every((n) => (e.typeNames ?? []).includes(n))));

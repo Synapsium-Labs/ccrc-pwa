@@ -234,6 +234,13 @@ export function childrenOf(
     .sort((a, b) => a.id - b.id);
 }
 
+/** Every run `coordinatorId` claims, in any state, newest first: a coordinator's own runs (the generations lane's wave
+ *  boundary, Overlord Table 3.3.11b; review 2003 F11). The claimant column names the run's coordinator, so no birth is
+ *  asked. */
+export function runsClaimedBy<R extends Pick<BindingRun, 'id' | 'claimedBy'>>(runs: readonly R[], coordinatorId: string): R[] {
+  return runs.filter((r) => r.claimedBy === coordinatorId).sort((a, b) => b.id - a.id);
+}
+
 /** One run's names and interval, as the delegation frame's R9 reads them (`CoordStore.delegationRunStamps`). */
 export interface StampedRun {
   readonly id: number; readonly sessionId: string | null; readonly claimedBy: string | null; readonly openedAt: number; readonly closedAt: number | null;
