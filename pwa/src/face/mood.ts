@@ -4,7 +4,7 @@
 // a reader never claims calm (Neutral, with the readers named), and never claims a thing that reader would have said.
 // The accounts read is three values, not a nullable (`LanesRead`): not read yet, read with no lanes served to this reader,
 // read with lanes. Only the first holds the calm moods back; the second only switches Dizzy's lane arm off.
-import type { FleetSession, LaneWire, RestartCause, RunSummary, SessionBucket } from '../../../shared/api';
+import type { FleetSession, LaneWire, LimitWait, RestartCause, RunSummary, SessionBucket } from '../../../shared/api';
 import { recentLastEnd } from '../../../shared/api';
 import type { Mood } from '../../../shared/face';
 import { operatorAsk } from '../fleet/rollup';
@@ -54,10 +54,10 @@ export const MOOD_RULES: Readonly<Record<Mood, MoodRule>> = {
   offline: { kind: 'measured', rank: 1, cause: 'the console has lost its link to the server' },
   neutral: { kind: 'measured', rank: 2, cause: 'not heard from the fleet yet' },
   alert: { kind: 'measured', rank: 3, cause: 'a session has a question for you' },
-  crying: { kind: 'measured', rank: 4, cause: 'a session died or is waiting out a limit' },
+  crying: { kind: 'measured', rank: 4, cause: 'a session died or is stuck at a limit you did not choose to wait out' },
   angry: { kind: 'measured', rank: 5, cause: 'a swap was refused and the refusal stands' },
   sad: { kind: 'measured', rank: 6, cause: 'items wait on you' },
-  dizzy: { kind: 'measured', rank: 7, cause: 'an account is rate-limited or a session just swapped' },
+  dizzy: { kind: 'measured', rank: 7, cause: 'an account a session is on is rate-limited, or a session just swapped' },
   confused: { kind: 'measured', rank: 8, cause: 'a run worker has gone quiet' },
   suspicious: { kind: 'measured', rank: 9, cause: 'a review is under way' },
   happy: { kind: 'measured', rank: 10, cause: 'a pull request just merged' },
@@ -77,6 +77,10 @@ export const CRY_WINDOW_MS = 3_600_000;
 export const HAPPY_WINDOW_MS = 600_000;
 export const DIZZY_SWAP_MS = 60_000;
 export const SUSPICIOUS_WINDOW_MS = 1_800_000;
+/** How long the face keeps its mood before it may change to an equal or calmer one (`shownMood`). The operator asked for
+ *  this cool-down on emotion change (programme item 218: "put cool down on emotion change. Also, we can tune this later"),
+ *  so the number is a starting point to tune, not a measured value: change it here and nowhere else. */
+export const MOOD_COOLDOWN_MS = 60_000;
 /** A stamp this far ahead of the clock is skew and counts as now; one further ahead is not trusted (no window at all),
  *  as `recentLastEnd` does for a `lastEnd` (`shared/api.ts`). */
 export const FUTURE_SKEW_MS = 60_000;
@@ -151,6 +155,25 @@ function edges(f: MoodFacts, sessions: readonly FleetSession[]): number[] {
 /** Buckets where a session is not live ("any live session" in the angry rule). */
 const NOT_LIVE: ReadonlySet<SessionBucket> = new Set<SessionBucket>(['dead', 'archived', 'cleanup']);
 
+/** A limit nobody chose to wait out (item 219: "no Crying for a wait you chose"). `LimitWait.waitingBy` says whose choice
+ *  stands: `'operator'` is the operator's own "Wait until reset", which is no cause to cry; `'auto'` (ccd's own wait where no
+ *  account had room) and `null` (a limit with no choice yet, `waiting: false`) are not the operator's, so they still do. */
+const limitNotChosen = (s: FleetSession): boolean => {
+  // The key can be ABSENT, not only null: a live frame from an older server omits it (`reviveFleetSession` reads absent as null,
+  // but only the snapshot path runs it), so a row with no `limitWait` has no limit wait and must not throw here.
+  const wait: LimitWait | null | undefined = s.limitWait;
+  return wait !== undefined && wait !== null && wait.waitingBy !== 'operator';
+};
+
+/** The lanes a live session is on now: each session's `wrapper`, which is the lane's id on `GET /api/accounts` (the same
+ *  key `LanesRead` carries). A session in a `NOT_LIVE` bucket holds no lane, and neither does one in a wait the operator
+ *  chose (`waitingBy: 'operator'`, item 219 ruling: such a wait is calm, so it is no reason for Dizzy either; an `'auto'`
+ *  wait or a limit with no choice yet still counts, though Crying outranks Dizzy while it stands). Nothing on the wire names a lane a session is
+ *  ABOUT to use (no pending-swap field, and `limitWait.account` is the lane the session is on), so "using now" is the
+ *  whole of Dizzy's lane arm (departure `dizzy-about-to-use-has-no-wire-field`). */
+const lanesInUse = (sessions: readonly FleetSession[]): ReadonlySet<string> =>
+  new Set(sessions.filter((s) => !NOT_LIVE.has(s.bucket) && s.limitWait?.waitingBy !== 'operator').map((s) => s.wrapper));
+
 type Rule = (f: MoodFacts, sessions: readonly FleetSession[]) => boolean;
 
 const within = (at: number | null | undefined, window: number, nowMs: number): boolean => {
@@ -163,11 +186,11 @@ export const MEASURED: readonly (readonly [Mood, Rule])[] = [
   ['offline', (f) => consoleLinkLost(f) || f.agentDown],
   ['neutral', (f) => f.sessions === null],
   ['alert', (_f, ss) => ss.some(operatorAsk)],
-  ['crying', (f, ss) => ss.some((s) => within(deathAt(s, f.nowMs), CRY_WINDOW_MS, f.nowMs) || s.limitWait !== null)],
+  ['crying', (f, ss) => ss.some((s) => within(deathAt(s, f.nowMs), CRY_WINDOW_MS, f.nowMs) || limitNotChosen(s))],
   ['angry', (_f, ss) => ss.some((s) => !NOT_LIVE.has(s.bucket) && s.swapBlocked !== null)],
   ['sad', (f) => f.waitingItems !== null && f.waitingItems > 0],
   ['dizzy', (f, ss) =>
-    (f.lanes.kind === 'served' && Object.values(f.lanes.lanes).some((l) => l.state.word === 'rate-limited'))
+    (f.lanes.kind === 'served' && Object.entries(f.lanes.lanes).some(([id, l]) => l.state.word === 'rate-limited' && lanesInUse(ss).has(id)))
     || ss.some((s) => { const at = swapEnd(s, f.nowMs); return at !== null && within(at, DIZZY_SWAP_MS, f.nowMs); })],
   ['confused', (f) => (f.runs ?? []).some((r) => !isRunClosed(r) && workerSeenNote(r, f.nowMs, f.stallQuietMs)?.quiet === true)],
   ['suspicious', (f) => (f.runs ?? []).some((r) => {
@@ -189,4 +212,42 @@ export function moodOf(f: MoodFacts): { readonly mood: Mood; readonly cause: str
     if (matches(f, sessions)) return { mood, cause: causeOf(mood, f), next: nextEdge };
   }
   return { mood: MOOD_FALLBACK, cause: fallbackCause(f), next: nextEdge };
+}
+
+/** How urgent a mood is: its rank (1 most urgent). A mood with no measured rule (`afraid`, `laughing`) is the least urgent,
+ *  so a change to it waits like any calming change; `moodOf` never answers one today. */
+export const moodRank = (m: Mood): number => {
+  const r = MOOD_RULES[m];
+  return r.kind === 'measured' ? r.rank : Number.POSITIVE_INFINITY;
+};
+
+/** The mood the face shows, with the instant it last changed. */
+export interface ShownMood {
+  readonly mood: Mood;
+  readonly cause: string;
+  /** When the face last changed its mood (the first mood: when it was first shown). */
+  readonly since: number;
+}
+
+/** What the face shows now, given what it showed and what `moodOf` decided: a cool-down on mood change (item 218).
+ *  A change to a MORE urgent mood (a lower rank, Offline included) shows at once, so the face never hides something urgent
+ *  to keep its cool. A change to an equal or less urgent mood shows only once `MOOD_COOLDOWN_MS` has passed since the last
+ *  change; until then the face keeps its mood and its cause, and `holdUntil` says when to look again (null: nothing is
+ *  held). When the cool-down ends the face shows what `moodOf` decides then, never a queue of the changes it missed, and a
+ *  decision back to the mood on show (A, B, A) changes nothing. The same mood with a new cause shows the new cause.
+ *  One exception to the hold, which the ruling did not name: leaving Neutral (`MOOD_FALLBACK`, "not heard yet") shows at once.
+ *  Neutral is no emotion to cool down from but the start-up reading, and holding it would make the face say "not heard
+ *  yet" for a minute after every reader had answered (recorded in the face plan's departures as `neutral-leaves-at-once`).
+ *  `nowMs` is an argument: no clock is read. */
+export function shownMood(
+  previous: ShownMood | null,
+  decided: { readonly mood: Mood; readonly cause: string },
+  nowMs: number,
+): ShownMood & { readonly holdUntil: number | null } {
+  if (previous === null) return { ...decided, since: nowMs, holdUntil: null };
+  if (decided.mood === previous.mood) return { mood: previous.mood, cause: decided.cause, since: previous.since, holdUntil: null };
+  const escalates = moodRank(decided.mood) < moodRank(previous.mood);
+  const endsAt = previous.since + MOOD_COOLDOWN_MS;
+  if (escalates || previous.mood === MOOD_FALLBACK || nowMs >= endsAt) return { ...decided, since: nowMs, holdUntil: null };
+  return { ...previous, holdUntil: endsAt };
 }

@@ -113,6 +113,77 @@ into its ledger. Each entry is a plain slug. None carries a number: the programm
   few seconds would therefore move almost all the time. The coordinator kept the plan as written: a cap on how often the
   face plays (for example, one play a minute) is a possible follow-up for the operator, not built here.
 
+## The mood cool-down (programme item 218, wave 26)
+
+- **mood-cooldown, a rule the operator asked for (item 218: "Keep animations always, but put cool down on emotion change.
+  Also, we can tune this later.")** — every mood change the face shows still plays its 5 s (`every-change-plays` stands),
+  but the face does not calm until `MOOD_COOLDOWN_MS` has passed since its last change. The constant is one named value
+  in `pwa/src/face/mood.ts`, 60 000 ms to start, **to be tuned later by the operator**; nothing else holds the number.
+  `shownMood(previous, decided, nowMs)` (L1, pure, time an argument) chooses what the face shows: a change to a more
+  urgent mood (a lower rank, Offline included) shows at once; a change to an equal or less urgent mood shows only once the
+  cool-down has passed, and until then the face keeps its mood and its cause. At the end it shows what `moodOf` decides
+  then, never a queue of missed changes; a flip-flop (A, B, A) inside the cool-down shows A throughout. Leaving Offline for
+  a calmer mood waits like any calming change. The name always carries the shown mood and its cause. `useMood` keeps what
+  was shown last and arms one timeout to the cool-down's end (cleaned up on unmount, no polling). `shownMood` joins the
+  server's mutation floors (`pwa/src/face/mood.ts#shownMood`, floor 1) beside `moodOf`.
+- **neutral-leaves-at-once, a reading the ruling did not name (for the coordinator)** — leaving Neutral ("not heard yet", the
+  start-up reading) shows at once, as an escalation does. Held to the cool-down, a console opened on a calm fleet would
+  say "not heard yet" for a minute after every reader had answered, a false cause in the name. Neutral is no emotion to
+  cool down from. Arriving at Neutral still follows the ranks (from a calmer mood it is an escalation; from Offline it
+  waits). Removing the exception is one clause in `shownMood` (mutant K5 pins leaving Neutral at once; K3, the general escalation mutant, also pins arriving at Neutral from a calmer mood).
+- **face-play-rate-later, closed in part** — the follow-up above (a cap on how often the face plays) is now met by this
+  cool-down for calming changes; an escalation still plays at once.
+- **return-to-settled-test-rewritten, a test** — `face-mark.test.tsx`'s "a return to a mood that had settled plays again,
+  inside five seconds of leaving it" cannot hold: a calming change now waits for the cool-down. The row waits the
+  cool-down out and asserts the return plays again at its end. The old row's mid-play guard (a change 4 s into a running
+  play, still false at 4999 ms and true at 5000 ms) moved to a new row on an escalation, which the cool-down never holds
+  (review 2010 F1): it kills a `FaceMark` whose old play timer survives a mood change.
+- **held-mood-resets-on-a-remount, a known residual (review 2010 F4)** — the held mood and its time live in each `FaceMark`'s
+  own state (`useMood`), so a remount starts from `shownMood(null, …)`: a calmer decided mood then shows at once, skips the
+  rest of the cool-down and plays again. Two rare triggers only: crossing the 900 px desk and phone line (the bar's face is
+  swapped for the column head's) and switching skin; navigation never remounts the face. It fails toward showing the truth
+  and never hides a more urgent mood. Moving the held mood into one owner outside the component (the chrome store) is the
+  fix, left for the operator's tuning pass because it adds a field to a shared store.
+
+## Narrowing Crying and Dizzy (programme item 219, wave 26)
+
+The operator's answer to item 219: "Narrow both: no Crying for a wait you chose; Dizzy only when a lane a session is using, or
+about to use, is limited."
+
+- **crying-skips-the-operators-wait, a rule the operator asked for (item 219)** — a session's `limitWait` makes the face Cry
+  only when the wait was not the operator's choice. `LimitWait.waitingBy` already says whose choice stands: `'operator'`
+  (the operator's "Wait until reset") gives no Crying; `'auto'` (ccd's own wait where no account had room) and `null` (a limit
+  with no choice yet, `waiting: false`) still Cry. Crying for a death is unchanged. An older server's value revives as
+  `'operator'` when waiting, so its operator waits stop crying too. `MOOD_RULES.crying.cause` now reads "a session died or is
+  stuck at a limit you did not choose to wait out", so the name stays true. One session's chosen wait never hides another's
+  limit that nobody chose (the rule is per session).
+- **limit-wait-key-can-be-absent, a defect the merge queue measured (merge-group run, #2791 dequeued)** — the Crying arm read
+  `s.limitWait.waitingBy`, and a live fleet frame from an older server omits the `limitWait` key (`reviveFleetSession` reads
+  absent as null, but only the snapshot path runs it). The browser fixtures send such rows, so the read threw a `TypeError` in
+  `moodOf`, the shell fell to its error boundary ("ccrc could not draw this screen"), and ten browser files waited out their
+  20 s selectors until the shards hit their limit. The pull request's fast run skips the browser suites, so it was green.
+  `limitNotChosen` now reads the value as `LimitWait | null | undefined`: a row with no key has no limit wait. Guards: a
+  `face-mood` row and a `faceSets` case on a session row with the key deleted (red without the fix, mutants C9 and C10), and a
+  `face-mark` row that mounts a face over such rows. Measured: all three browser shards green locally.
+- **dizzy-only-for-lanes-in-use, a rule the operator asked for (item 219)** — a rate-limited lane gives Dizzy only when a live
+  session (a bucket that is not `dead`, `archived` or `cleanup`, the set Angry already uses) is on it now: the lane's id on
+  `GET /api/accounts` is the session's `wrapper`. A spare account at its cap that no session is on gives no Dizzy. The swap
+  arm of Dizzy is unchanged, and `MOOD_RULES.dizzy.cause` now reads "an account a session is on is rate-limited, or a
+  session just swapped". A session in a wait the operator chose does not count as using its lane either (review 2010 F2,
+  the coordinator's ruling): such a wait is calm, so it is no reason for Dizzy. Without that rule the session, live and on
+  the lane named by `limitWait.account`, made the face Dizzy once the lane's telemetry read `rate-limited`. An `'auto'` wait
+  or a limit with no choice yet still counts as using the lane, though Crying outranks Dizzy while it stands. Another live
+  session on the same lane still uses it.
+- **dizzy-about-to-use-has-no-wire-field, a follow-up (for the coordinator)** — measured: nothing the PWA receives names a
+  lane a session is ABOUT to use. A session carries `wrapper` (the lane it is on) and `limitWait.account` (the lane it is at
+  the limit on, so "in use", not next); `swapBlocked` and `stranded` are refusals with a reason and no lane. There is no
+  pending-swap field. `FleetSession.home` is the session's home-account affinity, the lane ccd's auto-swap returns it to when
+  that lane has room (gated by cooldown, quiet turn and manual pin; `ccd swap` never changes it): a standing affinity, not
+  a pending move, so it does not count as "about to use" either. `ProjectedHome` and `ProjectPlacement` forecast where a NEW workspace would land, a project's, not any
+  session's next lane, and the face does not read them. So only the "using now" half is built. The "about to use" half would
+  need a new wire field (the next account a pending swap or a pool placement has chosen for a session), which this change adds
+  none of.
+
 ## The splash (Task 9)
 
 - **ui-exports-reduced-motion-hook, export** — `@ccrc/ui` now exports `usePrefersReducedMotion`, which the splash reads.
