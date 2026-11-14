@@ -82,7 +82,7 @@ export type WatcherCoordMember =
   | 'markLanded' | 'markParkEscalated' | 'markReleaseNotified' | 'markUnreachable' | 'maxMailDeliveryId'
   | 'maxRunEventId' | 'mergingRuns' | 'mintGeneration' | 'moveItem' | 'node' | 'nodeByLabel' | 'nodes' | 'noteClaudeBuildsSeen' | 'noteDispatchRefusal' | 'noteGate'
   | 'noteLeaseDetail' | 'openAllocations' | 'openCloseRefusedItems' | 'openCoordinatorIds' | 'openPracticeCase' | 'openReleaseReviewItems' | 'outstandingMailFor' | 'parkDelivery'
-  | 'parkedDeliveries' | 'poolEpoch' | 'practiceCaseNewest' | 'programOpenRunCount' | 'programmeActivity' | 'programmeLeftPlannedAt' | 'programmeLive' | 'projectDelegationCheckpoint'
+  | 'parkedDeliveries' | 'plainAutoMemorySettings' | 'poolEpoch' | 'practiceCaseNewest' | 'programOpenRunCount' | 'programmeActivity' | 'programmeLeftPlannedAt' | 'programmeLive' | 'projectDelegationCheckpoint'
   | 'projectDelegationCheckpointChanges' | 'pruneApprovalInputs' | 'pruneAskQuestions' | 'queueDelivery' | 'queueRunCloseWarning'
   | 'raiseItemWithMail' | 'raiseLedgerFloor' | 'readLanding' | 'recentProvenance' | 'recordClaudeBuildVerdict' | 'recordDriftPass' | 'recordFeedEvent' | 'recordGap' | 'recordLinkingReading'
   | 'recordObservation' | 'recordRejection' | 'recordRunCloseRefusal' | 'recordRunEvent' | 'recordShadowVerdict' | 'recordStallObservation'

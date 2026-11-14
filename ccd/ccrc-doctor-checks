@@ -204,7 +204,7 @@ CCRC_DOCTOR_CHECKS=(
   wrappers
   skills
   accounts
-  credentials
+  credentials auto-memory   # one line, as `flock timeout`: _check_auto-memory follows _check_credentials (Overlord W1a launch profiles PR B)
   pools
   pool-sync
   transcripts transcript_work   # one line, as `flock timeout`: _check_transcript_work is at the END of this file
@@ -3736,6 +3736,57 @@ _check_credentials() {
   _dr_pass credentials "$n account(s) declaring an OAuth setup-token credential, each with a readable token file"
 }
 
+# AUTO MEMORY (Overlord W1a launch profiles PR B; spec §3.3.7 H14): the auto-memory directories that exist today, in every
+# rostered config dir (`~/.ccrc/accounts.sh`'s `_ccrc_cfg_dir`, as `_check_transcript_work` reads it): each
+# `projects/<slug>/memory/` that holds at least one file. LISTS, NEVER READS, NEVER DELETES: the walk is globs and `-d`/`-f`
+# tests, so no file is opened, and nothing here writes. A directory reached from two accounts by a link is counted once
+# (by its physical path). WARN names the count and the first three, as `<account>/projects/<slug>/memory`; PASS when there
+# are none. The launch-profile lane, once live, turns auto memory off at each session's next launch (every role but plain,
+# whose Settings row decides); what is already stored stays until the operator removes it.
+_check_auto-memory() {
+  local _srv_role="" sh="$HOME/.ccrc/accounts.sh" am_pairs="" a dir out n first
+  [ -f "${BOX_ENV_FILE:-}" ] && [ -r "${BOX_ENV_FILE:-}" ] && _srv_role="$(_box_env_value "$BOX_ENV_FILE" CCRC_ROLE)"
+  [ "$_srv_role" = server ] && { _dr_skip auto-memory "this box records CCRC_ROLE=server, so it hosts no sessions and keeps no auto memory"; return 3; }
+  if [ -e "$sh" ]; then
+    # shellcheck disable=SC1090
+    if [ ! -r "$sh" ] || ! am_pairs="$( { . "$sh" && declare -F _ccrc_cfg_dir; } >/dev/null 2>&1 || exit 1
+          for a in "${CCRC_ACCOUNTS[@]}"; do dir="$(_ccrc_cfg_dir "$a" 2>/dev/null)" && [ -n "$dir" ] && printf '%s\t%s\n' "$a" "$dir"; done
+          exit 0 )"; then
+      _dr_warn auto-memory "the roster projection at ~/.ccrc/accounts.sh could not be read, so the auto-memory directories are unmeasured" \
+        "re-run ccrc install to regenerate ~/.ccrc/accounts.sh — the wrappers check owns the roster's health"; return 2
+    fi
+  fi
+  # Bounded, and never a PASS unmeasured (review 2024 F5): a directory it cannot list, or a walk past the transcript walk's
+  # deadline, ends it with one `!failed <name>` or `!timeout` line. Scratch slugs are skipped as `_check_memory` skips them.
+  out="$(
+    shopt -s dotglob nullglob
+    seen=$'\n' start=$SECONDS
+    while IFS=$'\t' read -r a dir; do
+      p="$dir/projects"; [ -n "$dir" ] || continue; [ ! -e "$dir" ] || [ -x "$dir" ] || { printf '!failed %s\n' "$a"; exit 0; }
+      { [ -e "$p" ] || [ -L "$p" ]; } || continue; [ -d "$p" ] && [ -r "$p" ] && [ -x "$p" ] || { printf '!failed %s/projects\n' "$a"; exit 0; }
+      for s in "$p"/*; do
+        [ $((SECONDS - start)) -lt "$_DR_TW_DEADLINE_S" ] || { printf '!timeout\n'; exit 0; }
+        m="$s/memory"; slug="${s##*/}"; [ -d "$s" ] && ! _dr_mem_is_scratch "$slug" || continue
+        [ -x "$s" ] || { printf '!failed %s/projects/%s\n' "$a" "$slug"; exit 0; }
+        # Not a directory: absent, or a link to nothing or to a file, is skipped; a link it cannot follow is unmeasured.
+        [ -d "$m" ] || { [ -L "$m" ] || continue; case "$(export LC_ALL=C; cd -P -- "$m" 2>&1 || exit)" in *'No such file'*|*'Not a directory'*) continue ;; esac
+          printf '!failed %s/projects/%s/memory\n' "$a" "$slug"; exit 0; }
+        [ -r "$m" ] && [ -x "$m" ] || { printf '!failed %s/projects/%s/memory\n' "$a" "$slug"; exit 0; }
+        real="$(cd -P -- "$m" 2>/dev/null && pwd)" || real="$m"; case "$seen" in *$'\n'"$real"$'\n'*) continue ;; esac
+        for f in "$m"/*; do [ -f "$f" ] && { seen+="$real"$'\n'; printf '%s/projects/%s/memory\n' "$a" "$slug"; break; }; done
+      done
+    done <<< "$am_pairs"
+  )"
+  case "${out##*$'\n'}" in
+    '!timeout') _dr_warn auto-memory "the walk of the auto-memory directories did not finish within ${_DR_TW_DEADLINE_S}s, so they are unmeasured" "re-run ccrc doctor when the box is quieter"; return 2 ;;
+    '!failed '*) _dr_warn auto-memory "${out##*!failed } could not be listed, so the auto-memory directories are unmeasured" "give the fleet user read and search permission on it (or remove it), then re-run ccrc doctor"; return 2 ;;
+  esac
+  [ -n "$out" ] || { _dr_pass auto-memory "no rostered config dir holds an auto-memory directory with a file in it"; return 0; }
+  local -a am_dirs; mapfile -t am_dirs <<< "$out"; n=${#am_dirs[@]}; first="${am_dirs[0]}"   # builtins only: no tool is stubbed
+  [ "$n" -gt 1 ] && first+=", ${am_dirs[1]}"; [ "$n" -gt 2 ] && first+=", ${am_dirs[2]}"; [ "$n" -gt 3 ] && first+=", …"; if [ "$n" -eq 1 ]; then n="1 auto-memory directory holds"; else n="$n auto-memory directories hold"; fi
+  _dr_warn auto-memory "$n files: $first" "nothing is deleted here: once the launch-profile lane is live (Settings › Automation › Shadow lanes), each session's next launch loads none of this, except plain sessions whose Settings row keeps it on; review these directories and remove what you do not want kept"
+}
+
 # ── the project pool tags (account pools, spec §5.4.6) ────────────────────
 # `$HOME/.cc-sessions/pools/<project>` is one file per tagged project, holding
 # one token. This check REPORTS and RESOLVES NOTHING — `_check_wrappers`'s own
@@ -6000,6 +6051,14 @@ _check_fleet() {
   _dr_pass fleet "the two boxes agree — same build, and the same generated ~/.ccrc/accounts.sh (measured by the server at $addr, in remote mode, connected)"
 }
 
+# A scratch project slug (a temp directory's), skipped by both memory checks. THE PATTERN LIST IS SPELLED HERE, and that is
+# D-92's trade rather than an oversight — the same one this file already records for `ccd`'s `POOL_NAME_RE`: this table is
+# sourced under `set -u` by things that are NOT `ccrc` (`ccrc-doctor.test.ts`'s `tableNames()`), so it cannot reach
+# `_mem_is_scratch`, and a `declare -F` guard would be the second spelling with a branch in front of it.
+# `single-definition.test.ts` compares all three literals and reds on a drift. `_mem_is_scratch` in `ccrc` carries the
+# rule and the measurement (D-2375; A4 adds the child root).
+_dr_mem_is_scratch() { case "$1" in -tmp*|-private-tmp*|-var-folders*|-private-var-folders*|*--cc-tmp-*) return 0 ;; esac; return 1; }
+
 # ── memory convergence ────────────────────────────────────────────────────
 # THE WHOLE DEFECT EXISTED BECAUSE A FORK IS SILENT. Nothing on this box
 # reported that two homes disagreed about a project's memory, so a session read
@@ -6210,15 +6269,8 @@ _check_memory() {
     for d in "${h}projects"/*/; do
       [ -d "$d" ] || continue
       slug="${d%/}"; slug="${slug##*/}"
-      # THE PATTERN LIST IS SPELLED HERE, and that is D-92's trade rather
-      # than an oversight — the same one this file already records for `ccd`'s
-      # `POOL_NAME_RE`: this table is sourced under `set -u` by things that are
-      # NOT `ccrc` (`ccrc-doctor.test.ts`'s `tableNames()`), so it cannot reach
-      # `_mem_is_scratch`, and a `declare -F` guard would be the second
-      # spelling with a branch in front of it. `single-definition.test.ts`
-      # compares all three literals and reds on a drift. `_mem_is_scratch` in
-      # `ccrc` carries the rule and the measurement (D-2375; A4 adds the child root).
-      case "$slug" in -tmp*|-private-tmp*|-var-folders*|-private-var-folders*|*--cc-tmp-*) continue ;; esac
+      # A scratch slug: the shared skip (`_dr_mem_is_scratch`, above).
+      _dr_mem_is_scratch "$slug" && continue
       link="${d}memory"
       [ -e "$link" ] || [ -L "$link" ] || continue
       store="$HOME/.ccrc/memory/$slug"

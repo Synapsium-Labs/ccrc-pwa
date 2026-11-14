@@ -2997,6 +2997,34 @@ export const MIGRATIONS: readonly string[] = [
   CREATE INDEX continuity_timers_pending ON continuity_timers(state, dueAt);
   CREATE INDEX continuity_timers_by_setter ON continuity_timers(setter, setAt);
   `,
+  // ── 71: user_version 70 -> 71 ─────────────────────────────────────────────
+  // Launch profiles PR B (Overlord spec §3.6 H1, §3.3.7 H14, Table 11.1d; W1a): the seed row `launch-profile` = `shadow`
+  // adds the launch-profile lane to the Shadow lanes card, and `plain_memory_settings` is the Settings row "Auto memory for
+  // plain sessions". ONE ROW, `CHECK (id = 1)`, the `roll_settings` idiom. `choice` is a `PlainAutoMemoryChoice` (`off` or
+  // `on`), read back through `isPlainAutoMemoryChoice`, never cast, so NO CHECK: a word a newer build writes reads as
+  // unknown here, and the lane writes nothing from it (`plainAutoMemoryOf`). Its one writer is
+  // `CoordStore.setPlainAutoMemory`, called only by `POST /api/coord/plain-auto-memory`; its one reader
+  // `CoordStore.plainAutoMemorySettings`.
+  //
+  // THE SEED IS THE SPEC'S DEFAULT (H14): `off` on a fleet host. A lost row reads as the same default. Nothing changes a
+  // session from this row while the `launch-profile` row is shadow.
+  //
+  // A NEW TABLE AND ONE SEED ROW, nothing on an existing table: an older build opening a file at `user_version 71` takes
+  // rule 3 (it warns, reads as-is and migrates nothing), never names the table, reads the `launch-profile` lane-arm row as
+  // no lane it knows, and boots. Every earlier entry is frozen. It lands after card PR B's entry 69 (#2793) and timers
+  // PR A's entry 70 (#2797), which took those slots first; `coord-db.test.ts` holds the order. RE-MEASURE the slot before
+  // merge (it must print 70 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE plain_memory_settings (
+    id        INTEGER PRIMARY KEY CHECK (id = 1),
+    choice    TEXT    NOT NULL,
+    updatedAt INTEGER NOT NULL
+  );
+  INSERT INTO plain_memory_settings (id, choice, updatedAt) VALUES (1, 'off', 0);
+  INSERT INTO lane_arm_settings (lane, choice, updatedAt) VALUES ('launch-profile', 'shadow', 0);
+  `,
 ];
 
 /** The version this build writes. `MIGRATIONS.length` and nothing else: a
