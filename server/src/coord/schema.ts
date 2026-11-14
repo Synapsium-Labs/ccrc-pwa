@@ -3063,6 +3063,54 @@ export const MIGRATIONS: readonly string[] = [
     at           INTEGER NOT NULL       -- wall ms it was written
   );
   `,
+  // ── 73: user_version 72 -> 73 ─────────────────────────────────────────────
+  // The probes (Overlord spec §3.3.5 C41, §3.3.9 C52, W1a, the probes piece, PR B): `continuity_probes`, one row per question
+  // of a round. Two writers through `continuityStore.ts`, one per fact: the generations lane opens a round (`openRound`: the
+  // questions and what each expects), and the probe door records its answers (`answerRound`: the answer, the grade and
+  // whether the session read its card or notes in between, `book`). `roundUnmeasured` is the round's own fact, on each of its
+  // rows: the round was short because a read its composition needed had failed, so it is never graded `failed` for that.
+  // `continuity_reads` is when a session last read its card or its notes through the continuity doors, one row per door
+  // (ONE writer, `stampContinuityRead`, from the card and note GETs): the probe door marks an answer `open` when it follows
+  // such a read (slug closed-book-is-unmeasured-in-w1a).
+  //
+  // NEW TABLES AND AN INDEX, nothing on an existing table: an older build opening a file at `user_version 73` takes rule 3
+  // (it warns, reads as-is and migrates nothing), never names either table, and boots. Every earlier entry is frozen.
+  // RE-MEASURE the slot before the PR and before merge (it must print 72 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE continuity_probes (
+    id              INTEGER PRIMARY KEY,
+    roundId         TEXT NOT NULL,      -- the round's id, shared by its questions
+    qid             TEXT NOT NULL,      -- the question's id inside its round (p1 to p5), what the door serves
+    sessionId       TEXT NOT NULL,
+    generationId    INTEGER NOT NULL REFERENCES continuity_generations(id),
+    kind            TEXT NOT NULL,      -- start | compaction | spot (ProbeKind)
+    cls             TEXT NOT NULL,      -- the probe class (ProbeClass)
+    question        TEXT NOT NULL,
+    choices         TEXT,               -- the choices as a JSON list, or NULL for an id or none
+    expected        TEXT NOT NULL,      -- never leaves the server
+    snapshotId      TEXT,               -- the snapshot a start or compaction round was drawn from; NULL for a spot round
+    depthTokens     INTEGER,            -- the context depth a spot or compaction round opened at (the spot baseline)
+    modelClass      TEXT,               -- a spot round's model class when it opened
+    roundUnmeasured INTEGER NOT NULL DEFAULT 0,
+    askedAt         INTEGER NOT NULL,   -- wall ms the round opened
+    answeredAt      INTEGER,
+    answer          TEXT,
+    grade           TEXT,               -- pass | fail | unmeasured (ProbeGrade)
+    book            TEXT,               -- closed | open | unmeasured (BookState)
+    UNIQUE (roundId, qid),
+    UNIQUE (roundId, cls, question)
+  );
+  CREATE INDEX continuity_probes_by_generation ON continuity_probes(generationId, id);
+  CREATE INDEX continuity_probes_by_session ON continuity_probes(sessionId, id);
+  CREATE TABLE continuity_reads (
+    sessionId TEXT NOT NULL,
+    door      TEXT NOT NULL,            -- card | notes
+    at        INTEGER NOT NULL,         -- wall ms of the newest read through that door
+    PRIMARY KEY (sessionId, door)
+  );
+  `,
 ];
 
 /** The version this build writes. `MIGRATIONS.length` and nothing else: a

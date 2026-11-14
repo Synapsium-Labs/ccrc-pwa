@@ -28,7 +28,7 @@ import {
 } from '../../../shared/continuity-card.js';
 import { TIMER_PREVIEW_CHARS } from '../../../shared/continuity-timers.js';
 import { NOTES_CAP, type KeyFact } from '../../../shared/continuity.js';
-import { FLEET_ROLES, FLEET_ROLE_NAMES, type FleetRole } from '../../../shared/fleetRoles.js';
+import { FLEET_ROLES, FLEET_ROLE_NAMES, isFleetRole, type FleetRole } from '../../../shared/fleetRoles.js';
 import { utf8Bytes } from '../../../shared/utf8.js';
 import { CARD_TEXT_PREFACE, untrustedBlock } from '../coord/untrusted.js';
 import { roleOf, type RoleFacts } from '../roleOf.js';
@@ -398,4 +398,44 @@ export function cardPages(text: string): readonly string[] {
 export function snapshotFactsJson(f: CardFacts): string {
   const { at: _at, ...rest } = f;
   return JSON.stringify(rest);
+}
+
+/** A stored snapshot read back as facts (the probes piece: a round is drawn from the snapshot its generation was carded
+ *  with), `at` the snapshot row's own time. Null when the text is not a snapshot's object at all. A fact whose shape this
+ *  build does not read, such as an item from before `everTicked` existed, reads `unmeasured` (`the snapshot's <name>`),
+ *  never as a guess: an item read as never ticked would let an abstention probe ask about one that carries a ruling. */
+export function snapshotFactsOf(json: string, at: number): CardFacts | null {
+  let o: unknown;
+  try { o = JSON.parse(json); } catch { return null; }
+  if (typeof o !== 'object' || o === null || Array.isArray(o)) return null;
+  const v = o as Record<string, unknown>;
+  if (typeof v.sessionId !== 'string') return null;
+  const isObj = (x: unknown): x is Record<string, unknown> => typeof x === 'object' && x !== null && !Array.isArray(x);
+  const num = (x: unknown): boolean => typeof x === 'number' && Number.isFinite(x);
+  const str = (x: unknown): boolean => typeof x === 'string';
+  const item = (x: unknown): boolean => isObj(x) && num(x.id) && str(x.state) && num(x.at) && typeof x.everTicked === 'boolean' && str(x.programme);
+  const listOf = (ok: (x: unknown) => boolean) => (x: unknown): boolean => Array.isArray(x) && x.every(ok);
+  const fact = <T>(name: string, ok: (x: unknown) => boolean): Fact<T> => {
+    const f = v[name];
+    const what = `the snapshot's ${name}`;
+    if (!isObj(f)) return { kind: 'unmeasured', what };
+    if (f.kind === 'unmeasured') return { kind: 'unmeasured', what: str(f.what) ? (f.what as string) : what };
+    return f.kind === 'read' && ok(f.value) ? { kind: 'read', value: f.value as T } : { kind: 'unmeasured', what };
+  };
+  const role = v.role;
+  return {
+    sessionId: v.sessionId, role: role === 'undecided' || isFleetRole(role) ? role : 'undecided', roleWhy: str(v.roleWhy) ? (v.roleWhy as string) : '', at,
+    runs: fact('runs', listOf((x) => isObj(x) && num(x.id) && str(x.programme) && str(x.state) && (x.planPath === null || str(x.planPath)))),
+    ledger: fact('ledger', listOf((x) => isObj(x) && str(x.slug) && listOf(item)(x.openItems))),
+    claims: fact('claims', listOf((x) => isObj(x) && listOf(str)(x.paths))),
+    intent: fact('intent', (x) => typeof x === 'boolean'),
+    itemsRaised: fact('itemsRaised', listOf(item)),
+    mailOutstanding: fact('mailOutstanding', listOf((x) => isObj(x) && num(x.deliveryId) && num(x.at))),
+    mailMore: v.mailMore === true,
+    notes: fact('notes', listOf((x) => isObj(x) && num(x.id) && num(x.at) && str(x.kind) && str(x.next))),
+    checkpoint: fact('checkpoint', (x) => x === null || isObj(x)),
+    history: fact('history', isObj),
+    timers: fact('timers', listOf((x) => isObj(x) && num(x.id) && num(x.dueAt) && str(x.preview)
+      && (x.runId === null || num(x.runId)) && (x.programme === null || str(x.programme)))),
+  };
 }
