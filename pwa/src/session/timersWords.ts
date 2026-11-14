@@ -41,13 +41,17 @@ export type TimersRead =
   | { readonly kind: 'unread' };
 
 const intOrNull = (v: unknown): number | null => (Number.isSafeInteger(v) ? (v as number) : null);
+/** The largest instant a `Date` can hold, in ms either side of the epoch: a due time beyond it is unread, never printed as
+ *  "NaN:NaN" (review 2060 F5). */
+const DATE_RANGE_MS = 8.64e15;
+const instantOrNull = (v: unknown): number | null => (isNum(v) && Math.abs(v) <= DATE_RANGE_MS ? v : null);
 const textOrNull = (v: unknown): string | null => (typeof v === 'string' ? v : null);
 
 /** One row of the answer, field by field: whatever is not there, or not of its type, reads `null`. */
 function timerRowOf(v: unknown): TimerRow {
   const r = isRecord(v) ? v : {};
   return {
-    id: intOrNull(r.id), dueAt: isNum(r.dueAt) ? r.dueAt : null, note: textOrNull(r.note),
+    id: intOrNull(r.id), dueAt: instantOrNull(r.dueAt), note: textOrNull(r.note),
     runId: intOrNull(r.runId), programme: textOrNull(r.programme),
   };
 }

@@ -60,3 +60,25 @@ D-number is taken here: each departure is a plain-words slug.
   red), no stale-read guard (1 red), the quiet mode ignored (1 red), the gone words emptied (3 red), the note set as HTML (1
   red), a `null` row read without the record check (1 red). The harness default removed reds the browser file's
   no-timers cases.
+
+## Review 2060, fix round 1 (the coordinator's rulings)
+
+- **one-cancel-in-flight** (F1, fixed) — one cancel is in flight at a time across the whole section: while any cancel is out
+  every Cancel is disabled, and `cancel()` returns at once (a ref, so a second tap in the same render is refused before any
+  state moves). A jsdom case with two rows: with one cancel pending both buttons are disabled and a second tap sends nothing,
+  and the first's answer enables both again.
+- **cancel-joins-the-read-sequence** (F2, fixed) — a cancel bumps the section's read sequence when it starts and checks it in
+  both callbacks, so a cancel that answers after the section moved to another session writes no notice and reads nothing
+  into it. A read when the page turns visible waits while a cancel is in flight, because the cancel reads the list itself
+  when it answers. A jsdom case moves the section to another session while a cancel is out.
+- **notice-cleared-by-the-next-read** (F3, fixed) — a cancel's notice survives the one read that follows it (the re-read after
+  a "gone" answer), so the operator sees it, and the next successful read clears it, the page clock's included. On the quiet
+  session page a session whose list is empty once the notice clears draws nothing again, as ask 417 ruled. The `aria-live`
+  line is always mounted, empty, so its text is announced. Two jsdom cases: the empty live region, and quiet "gone, then
+  empty".
+- **busy-cancel-is-aria-busy** (F4, fixed) — the Cancel whose cancel is in flight carries `aria-busy`, as most busy buttons in
+  `pwa/src` do.
+- **due-time-in-date-range** (F5, fixed) — a `dueAt` beyond the range a `Date` holds (±8.64e15 ms) reads as an unread due
+  time, never printed. A words case reads 1e20 and one past the negative bound as unread and the bound itself as read.
+- **fix-round-measured-red** — each of the six new cases was run red against 6aac08c70's code before its fix, and is green
+  after it.

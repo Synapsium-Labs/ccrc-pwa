@@ -26,8 +26,9 @@ const NOTE = 'm-0 whitespace-pre-wrap border-l-2 border-edge-subtle pl-3 text-me
 // A state line or a notice: the design system's one-sentence line, never a second spelling of it (the literal census).
 const STATUS = SECTION_PURPOSE;
 
-function TimerItem({ t, nowMs, busy, onCancel }: {
-  t: TimerRow; nowMs: number; busy: boolean; onCancel: (id: number) => void;
+function TimerItem({ t, nowMs, busy, locked, onCancel }: {
+  /** `busy`: this row's cancel is in flight. `locked`: some cancel is (review 2060 F1). */
+  t: TimerRow; nowMs: number; busy: boolean; locked: boolean; onCancel: (id: number) => void;
 }): ReactNode {
   const id = t.id;
   return (
@@ -35,7 +36,9 @@ function TimerItem({ t, nowMs, busy, onCancel }: {
       <div className={ROW_HEAD}>
         <p className={ROW_FACTS}>{`${timerDueLine(t, nowMs)} · ${timerBinding(t)}`}</p>
         {id !== null && (
-          <Button variant="ghost" size="fit" disabled={busy} aria-label={`Cancel timer ${id}`} onClick={() => onCancel(id)}>
+          <Button
+            variant="ghost" size="fit" disabled={locked} aria-busy={busy} aria-label={`Cancel timer ${id}`} onClick={() => onCancel(id)}
+          >
             {busy ? TIMERS_WORDS.cancelling : TIMERS_WORDS.cancel}
           </Button>
         )}
@@ -56,34 +59,60 @@ export function TimersSection({ sessionId, title = TIMERS_WORDS.title, quiet = f
   const [read, setRead] = useState<TimersRead>({ kind: 'loading' });
   const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState<number | null>(null);
-  // The newest read wins: a read started for another session, or before a newer one, lands nowhere.
+  // The newest read or cancel wins: one started for another session, or before a newer one, lands nowhere (review 2060 F2).
   const seq = useRef(0);
+  // The cancel in flight, if any: one at a time across the section (review 2060 F1). A ref, so a second tap in the same
+  // render is refused before any state has moved.
+  const inFlight = useRef<number | null>(null);
+  // A notice survives the one read that follows it (the re-read after a cancel), so the operator sees it; the next
+  // successful read clears it (review 2060 F3).
+  const keepNotice = useRef(false);
   const load = useCallback((): void => {
     const mine = ++seq.current;
     // Through `then`, so a client without the call (an older build's stub) is an unread read, never a throw.
     Promise.resolve().then(() => api.sessionTimers(sessionId)).then(
-      (body) => { if (seq.current === mine) setRead(readTimers(body)); },
+      (body) => {
+        if (seq.current !== mine) return;
+        setRead(readTimers(body));
+        if (keepNotice.current) keepNotice.current = false;
+        else setNotice(null);
+      },
       () => { if (seq.current === mine) setRead({ kind: 'unread' }); },
     );
   }, [sessionId]);
   useEffect(() => {
     setRead({ kind: 'loading' });
     setNotice(null);
+    setBusy(null);
+    inFlight.current = null;
+    keepNotice.current = false;
     load();
-    const stop = onPageVisible(load);
+    // A cancel in flight reads the list itself when it answers; a read beside it would drop that answer.
+    const stop = onPageVisible(() => { if (inFlight.current === null) load(); });
     return () => { seq.current += 1; stop(); };
   }, [load]);
   const listed = read.kind === 'listed' ? read.timers : [];
   const nowMs = useNow(30_000, listed.length > 0);
 
   const cancel = useCallback((timerId: number): void => {
+    if (inFlight.current !== null) return;
+    inFlight.current = timerId;
+    const mine = ++seq.current;
     setBusy(timerId);
     setNotice(null);
+    keepNotice.current = false;
+    const done = (): boolean => {
+      if (seq.current !== mine) return false;
+      inFlight.current = null;
+      setBusy(null);
+      return true;
+    };
     Promise.resolve().then(() => api.cancelSessionTimer(sessionId, timerId)).then(
-      () => { setBusy(null); load(); },
+      () => { if (done()) load(); },
       (err: unknown) => {
-        setBusy(null);
+        if (!done()) return;
         const outcome = cancelOutcome(err);
+        keepNotice.current = outcome.kind === 'gone';
         setNotice(outcome.kind === 'gone' ? TIMERS_WORDS.gone : outcome.text);
         if (outcome.kind === 'gone') load();
       },
@@ -101,11 +130,14 @@ export function TimersSection({ sessionId, title = TIMERS_WORDS.title, quiet = f
       {listed.length > 0 && (
         <ul className={LIST}>
           {listed.map((t, i) => (
-            <TimerItem key={t.id ?? `unread-${i}`} t={t} nowMs={nowMs} busy={busy !== null && busy === t.id} onCancel={cancel} />
+            <TimerItem
+              key={t.id ?? `unread-${i}`} t={t} nowMs={nowMs} busy={busy !== null && busy === t.id} locked={busy !== null} onCancel={cancel}
+            />
           ))}
         </ul>
       )}
-      {notice !== null && <p className={STATUS} aria-live="polite">{notice}</p>}
+      {/* Mounted empty, so a notice that arrives is announced (review 2060 F3). */}
+      <p className={STATUS} aria-live="polite">{notice ?? ''}</p>
     </Section>
   );
 }
