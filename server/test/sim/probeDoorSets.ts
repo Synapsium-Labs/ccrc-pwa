@@ -514,6 +514,7 @@ export function spotFactsOfCases(m: ProbeScheduleModule): Record<string, SuiteCa
       expect([f.runs, f.ledger, f.claims, f.itemsRaised]).toEqual([empty, empty, empty, empty]);
       expect([f.intent, f.checkpoint]).toEqual([{ kind: 'read', value: false }, { kind: 'read', value: null }]);
       expect(f.history).toEqual({ kind: 'read', value: { verb: 'ccrc history describe', node: null } });
+      expect(f.timers).toEqual(empty);
       expect([f.sessionId, f.role, f.at, f.mailMore]).toEqual(['lane-a-project-a', 'coordinator', AT, false]);
       expect(f.roleWhy).toContain('spot round');
     },
@@ -533,8 +534,9 @@ const GOOD: CardFacts = {
   claims: read([{ id: 1, paths: ['server/src/a.ts'], runId: 41 }]),
   intent: read(true), itemsRaised: read([item(7)]), mailOutstanding: read([MAIL(501, AT - MIN)]), mailMore: true,
   notes: read([NOTE(61, AT - MIN)]), checkpoint: read(null), history: read({ verb: 'ccrc history describe', node: null }),
+  timers: read([{ id: 3, dueAt: AT + MIN, preview: 'check the checks', runId: 41, programme: null }]),
 };
-const FACT_NAMES = ['runs', 'ledger', 'claims', 'intent', 'itemsRaised', 'mailOutstanding', 'notes', 'checkpoint', 'history'] as const;
+const FACT_NAMES = ['runs', 'ledger', 'claims', 'intent', 'itemsRaised', 'mailOutstanding', 'notes', 'checkpoint', 'history', 'timers'] as const;
 type Json = Record<string, unknown>;
 const without = (o: Json, key: string): Json => { const { [key]: _gone, ...rest } = o; return rest; };
 
@@ -573,6 +575,13 @@ export function snapshotFactsOfCases(m: CardModule): Record<string, SuiteCase> {
       badFact('runs', 'none');
       badFact('claims', { paths: [] });
       badFact('notes', null);
+    },
+    'a timer row with a field this build needs missing or mistyped reads the timers unmeasured; a snapshot from before timers reads them unmeasured': () => {
+      const t = { id: 3, dueAt: AT + MIN, preview: 'check the checks', runId: 41, programme: null };
+      for (const [key, bad] of [['id', 'x'], ['dueAt', null], ['preview', 5], ['runId', '41'], ['programme', 7]] as const) badFact('timers', [{ ...t, [key]: bad }]);
+      expect(parse({ ...stored(), timers: { kind: 'read', value: [{ ...t, runId: null, programme: 'prog-a' }] } })!.timers)
+        .toEqual({ kind: 'read', value: [{ ...t, runId: null, programme: 'prog-a' }] });
+      expect(parse(without(stored(), 'timers'))!.timers).toEqual({ kind: 'unmeasured', what: "the snapshot's timers" });
     },
     'a fact missing, or stored as a bare value, reads unmeasured': () => {
       for (const name of FACT_NAMES) {
@@ -788,6 +797,7 @@ const SPOT_FACTS_SET: MutantSet<ProbeScheduleModule> = {
     { id: 'T4 notes at the window start dropped', old: 'n.at >= since', new: 'n.at > since' },
     { id: 'T5 the card more flag set', old: 'mailMore: false', new: 'mailMore: true' },
     { id: 'T6 a stamp of zero', old: ' at, runs: read([])', new: ' at: 0, runs: read([])' },
+    { id: 'T7 the timers unmeasured', old: 'timers: read([]),', new: "timers: { kind: 'unmeasured', what: 'x' }," },
   ],
   suite: spotFactsOfCases,
 };
@@ -846,6 +856,12 @@ const SNAPSHOT_FACTS_SET: MutantSet<CardModule> = {
     { id: 'N26 the stored time kept', old: 'roleWhy: str(v.roleWhy) ? (v.roleWhy as string) : \'\', at,', new: 'roleWhy: str(v.roleWhy) ? (v.roleWhy as string) : \'\', at: 0,' },
     { id: 'N27 a list that is not a list', old: 'Array.isArray(x) && x.every(ok)', new: 'x.every(ok)' },
     { id: 'N28 an item list not checked', old: "itemsRaised: fact('itemsRaised', listOf(item))", new: "itemsRaised: fact('itemsRaised', () => true)" },
+    { id: 'N29 a timer without an id', old: 'isObj(x) && num(x.id) && num(x.dueAt)', new: 'isObj(x) && num(x.dueAt)' },
+    { id: 'N30 a timer without a due time', old: 'num(x.id) && num(x.dueAt) && str(x.preview)', new: 'num(x.id) && str(x.preview)' },
+    { id: 'N31 a timer without a preview', old: 'num(x.dueAt) && str(x.preview)', new: 'num(x.dueAt)' },
+    { id: 'N32 a timer run of any shape', old: '(x.runId === null || num(x.runId))', new: 'true' },
+    { id: 'N33 a timer programme of any shape', old: '(x.programme === null || str(x.programme))', new: 'true' },
+    { id: 'N34 timer rows not checked', old: "    timers: fact('timers', listOf(", new: "    timers: fact('timers', (x: unknown) => Array.isArray(x) || listOf(" },
   ],
   suite: snapshotFactsOfCases,
 };

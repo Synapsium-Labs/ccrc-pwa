@@ -51,6 +51,7 @@ import { orphanGuidance } from '../fleet/orphanWords';
 import { placementOfRow, poolOfPlacement } from '../fleet/placementWords';
 import { isRunClosed, programmeTitle, sessionProgramme } from '../fleet/runWords';
 import { HistoryTab } from '../session/HistoryTab';
+import { TimersSection } from '../session/TimersSection';
 import { TerminalDrawer } from '../session/TerminalDrawer';
 import { modelOptions, effortOptions, type PickOption } from '../lib/models';
 import { useLaneModels } from '../lib/useLaneModels';
@@ -730,6 +731,10 @@ export function SessionScreen({
             plan — one line each, the facts Claude Code's own row prints; the head
             opens their phases and agents. Read-only. */}
         <WorkflowStrip workflows={workflows} unreadable={workflowsUnreadable} />
+
+        {/* Overlord W1a, timers Task 13: the reminders this session set itself, with Cancel. Quiet: no line while it has
+            no pending timer, as the workflow strip; a failed read says so. */}
+        <TimersSection sessionId={id} quiet className="mx-4 mb-2 flex-none" />
 
         {/* Sits between the conversation and the composer — where the TUI puts it,
             directly above the prompt you're about to type into. */}

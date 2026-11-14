@@ -174,6 +174,6 @@ export function spotFactsOf(sessionId: string, role: FleetRole, at: number, note
   return {
     sessionId, role, roleWhy: 'a spot round reads this generation\'s rows', at, runs: read([]), ledger: read([]), claims: read([]),
     intent: read(false), itemsRaised: read([]), mailOutstanding: read(mail.filter((m) => m.at >= since)), mailMore: false,
-    notes: read(notes.filter((n) => n.at >= since)), checkpoint: read(null), history: read({ verb: 'ccrc history describe', node: null }),
+    notes: read(notes.filter((n) => n.at >= since)), checkpoint: read(null), history: read({ verb: 'ccrc history describe', node: null }), timers: read([]),
   };
 }

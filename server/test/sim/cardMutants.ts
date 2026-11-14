@@ -27,7 +27,7 @@ const cpOf = (at: number, tone: string): CardCheckpoint =>
 const empty = (over: Partial<CardFacts> = {}): CardFacts => ({
   sessionId: 'lane-a-project-a', role: 'coordinator', roleWhy: 'fixture', at: AT,
   runs: read([]), ledger: read([]), claims: read([]), intent: read(false), itemsRaised: read([]),
-  mailOutstanding: read([]), mailMore: false, notes: read([]), checkpoint: read(null),
+  mailOutstanding: read([]), mailMore: false, notes: read([]), checkpoint: read(null), timers: read([]),
   history: read({ verb: 'ccrc history describe', node: null }), ...over,
 });
 const RUN = { id: 11, programme: 'prog-a', wave: 1, waveOf: 2, state: 'working', planPath: null, kind: 'work' };
@@ -141,6 +141,7 @@ export const CARD_BLOCK_SET: MutantSet<Card> = {
     { id: 'M4', old: "block(p.decisions.map((d) => `${iso(d.at)}: ${d.text}`).join('\\n'), SHORT_CAP_BYTES, where)", new: "p.decisions.map((d) => `${iso(d.at)}: ${d.text}`).join('\\n')" },
     { id: 'M5', old: "block(ratified.join('\\n'), SHORT_CAP_BYTES, where)", new: "ratified.join('\\n')" },
     { id: 'M6', old: "block(unratified.join('\\n'), SHORT_CAP_BYTES, where)", new: "unratified.join('\\n')" },
+    { id: 'M8', old: "block(lines.join('\\n'), TIMERS_CAP_BYTES, 'in `ccrc-api timer list`')", new: "lines.join('\\n')" },
   ],
   suite(m): Record<string, SuiteCase> {
     const ledger = (over: Partial<CardFacts['ledger'] extends Fact<infer T> ? T extends readonly (infer P)[] ? P : never : never>) =>
@@ -164,6 +165,10 @@ export const CARD_BLOCK_SET: MutantSet<Card> = {
       'a decision is fenced': () => { expect(forged(card(m, ledger({ decisions: [{ at: AT, text: H }] })))).toBe(false); },
       'a ratified goal is fenced': () => { expect(forged(card(m, ledger({ goals: [{ text: H, ratified: true }] })))).toBe(false); },
       'an unratified goal is fenced': () => { expect(forged(card(m, ledger({ goals: [{ text: H, ratified: false }] })))).toBe(false); },
+      'a timer preview is fenced': () => {
+        const t = card(m, empty({ timers: read([{ id: 9, dueAt: AT, preview: H, runId: null, programme: null }]) }));
+        expect([forged(t), exposed(t)]).toEqual([false, false]);
+      },
       'a mail subject is fenced': () => { expect(forged(card(m, empty({ mailOutstanding: read([{ ...MAIL, subject: H }]) })))).toBe(false); },
     };
   },

@@ -532,7 +532,7 @@ const SNAPSHOT_FACTS: CardFacts = {
   itemsRaised: { kind: 'read', value: [{ id: 7, programme: 'prog-a', kind: 'decide', state: 'open', neededBy: 'soon', at: 1, text: 'i',
     everTicked: false, held: false }] },
   mailOutstanding: { kind: 'read', value: [] }, mailMore: false, notes: { kind: 'read', value: [] }, checkpoint: { kind: 'read', value: null },
-  history: { kind: 'read', value: { verb: 'ccrc history describe', node: null } },
+  history: { kind: 'read', value: { verb: 'ccrc history describe', node: null } }, timers: { kind: 'read', value: [] },
 };
 const SNAPSHOT = snapshotFactsJson(SNAPSHOT_FACTS);
 const usage = (ctxTokens: number, ctxWindow: number, stale = false): UsageRead => ({ kind: 'reading', usage: {

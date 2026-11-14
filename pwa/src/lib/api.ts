@@ -1095,6 +1095,11 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
       })).json() as Promise<SecretRemoveAnswer>,
     /** `POST /api/items/:id/dismiss` (PL4): refused `programme-live` while the programme has an open run. */
     dismissItem: (id: number) => postJson<{ readonly ok: true; readonly item: ItemView }>(`/api/items/${id}/dismiss`),
+    /** `GET /api/sessions/:id/timers` (Overlord W1a, timers Task 13): the session's pending timers, notes masked and marked
+     *  untrusted. `unknown`: `timersWords.ts`' `readTimers` is the one reader. Session-gated when armed. */
+    sessionTimers: (id: string) => getJson<unknown>(`${sid(id)}/timers`),
+    /** `POST /api/sessions/:id/timers/:timerId/cancel`: the operator cancels one; a refusal rejects with its `ApiError`. */
+    cancelSessionTimer: (id: string, timerId: number) => postJson<unknown>(`${sid(id)}/timers/${timerId}/cancel`),
     commands: (id: string) =>
       getJson<{ builtins: SlashCommand[]; skills: SlashCommand[] }>(`${sid(id)}/commands`),
     upload: async (id: string, file: File): Promise<StagedClip> => {
