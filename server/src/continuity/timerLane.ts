@@ -23,6 +23,8 @@ import { tx } from '../coord/tx.js';
 import { insertSystemMailTx } from '../coord/rundefsTx.js';
 import { incarnationOf } from '../coord/delegationLeaseDoor.js';
 import type { FleetIO } from '../io.js';
+import type { SessionRecord } from '../registry.js';
+import { MAIL_DISABLED_MARKER } from '../../../shared/switches.js';
 import type { Clock } from '../time/ports.js';
 import type { TimerRow, TimersRead } from './continuityStore.js';
 import { packTimerMail, timerCleanupVerdict, type CleanupFacts, type DueTimer } from './timers.js';
@@ -39,13 +41,27 @@ export function setterIncarnationOf(r: IncarnationRead): SetterIncarnation {
 }
 
 /** The tick's own registry facts, passed in rather than read mid-pass: when its listing began (`listedAt`, D-6436), every id
- *  it named (`listedIds`, built or not; null when it was not read), the ids whose row carries an archive stamp, and whether
- *  the `mail-disabled` marker stood in it. */
+ *  it named (`listedIds`, built or not; null when it was not read), the ids whose row carries an archive stamp, the ids it
+ *  named but could not measure (`unmeasuredIds`: a row `buildRecord` left unbuilt, or one whose plain fields, `.archived`
+ *  among them, read unreadable), and whether the `mail-disabled` marker stood in it. */
 export interface TimerListing {
   readonly listedAt: number | null;
   readonly listedIds: ReadonlySet<string> | null;
   readonly archivedIds: ReadonlySet<string>;
+  readonly unmeasuredIds: ReadonlySet<string>;
   readonly mailDisabled: boolean;
+}
+
+/** The tick's listing as the lane reads it, from the tick's built records and its listing (review 2053 F1): a listed id with
+ *  no built record, or with a plain field that read unreadable, is unmeasured, so its timers wait whatever its
+ *  `.generation` reads (the Review Focus: such a row delivers nothing and cancels nothing). */
+export function timerListingOf(records: readonly Pick<SessionRecord, 'id' | 'archivedAt' | 'plainFieldUnreadable'>[],
+                               listedIds: ReadonlySet<string> | null, listedAt: number | null, names: readonly string[]): TimerListing {
+  const built = new Set(records.map((r) => r.id));
+  const unmeasuredIds = new Set([...listedIds ?? []].filter((id) => !built.has(id)));
+  for (const r of records) if (r.plainFieldUnreadable === true) unmeasuredIds.add(r.id);
+  return { listedAt, listedIds, unmeasuredIds, mailDisabled: names.includes(MAIL_DISABLED_MARKER),
+    archivedIds: new Set(records.filter((r) => r.archivedAt !== null).map((r) => r.id)) };
 }
 
 /** The gather's answer: the pending timers (a failed read is a fact, never an empty list) and each setter's stamp. */
@@ -71,6 +87,8 @@ export interface TimersPassResult {
   readonly cancelled: readonly { readonly id: number; readonly reason: TimerCancelReason }[];
   readonly fired: readonly { readonly mailId: number; readonly ids: readonly number[] }[];
   readonly failed: number;
+  /** Mail rolled back because a timer it carried was cancelled since the gather (review 2053 F6): a race, not a fault. */
+  readonly skipped: number;
   readonly waited: number;
   readonly purged: number;
 }
@@ -84,6 +102,7 @@ export function timersPass(d: { coord: WatcherCoordPort; now: number; log: (line
   const cancelled: { id: number; reason: TimerCancelReason }[] = [];
   const fired: { mailId: number; ids: number[] }[] = [];
   let failed = 0;
+  let skipped = 0;
   let waited = 0;
   const unread = facts.pending.ok ? null : facts.pending.detail;
   if (unread !== null) d.log(`ccrc-server: the timers lane could not read its pending timers: ${unread}`);
@@ -108,13 +127,18 @@ export function timersPass(d: { coord: WatcherCoordPort; now: number; log: (line
       boundRun: typeof run === 'string' ? run : { state: run.row.state },
       boundProgramme: programmeOf(t.programme),
       setAt: t.setAt, listedAt: listing.listedAt,
-      listing: listing.listedIds === null ? 'unmeasured'
+      listing: listing.listedIds === null || listing.unmeasuredIds.has(t.setter) ? 'unmeasured'
         : { listed: listing.listedIds.has(t.setter), archived: listing.archivedIds.has(t.setter) },
       incarnation: facts.incarnations.get(t.setter) ?? { kind: 'unmeasured' },
       stamp: t.setterIncarnation,
     });
     if (verdict.act === 'cancel') {
-      if (coord.cancelTimer(t.id, 'cleanup', verdict.reason, now).changed) cancelled.push({ id: t.id, reason: verdict.reason });
+      try {
+        if (coord.cancelTimer(t.id, 'cleanup', verdict.reason, now).changed) cancelled.push({ id: t.id, reason: verdict.reason });
+      } catch (err) {
+        failed += 1;
+        d.log(`ccrc-server: the timers lane could not cancel timer ${t.id}: ${err instanceof Error ? err.message : String(err)}`);
+      }
     } else if (verdict.act === 'wait') {
       waited += 1;
     } else if (t.dueAt <= now) {
@@ -133,8 +157,14 @@ export function timersPass(d: { coord: WatcherCoordPort; now: number; log: (line
         });
         fired.push({ mailId, ids: [...m.ids] });
       } catch (err) {
-        failed += 1;
-        d.log(`ccrc-server: the timers lane could not fire timers ${m.ids.join(', ')}: ${err instanceof Error ? err.message : String(err)}`);
+        const why = err instanceof Error ? err.message : String(err);
+        if (cancelledSince(coord, m.ids)) {
+          skipped += 1;
+          d.log(`ccrc-server: the timers lane skipped timers ${m.ids.join(', ')}: one was cancelled since the gather (${why})`);
+        } else {
+          failed += 1;
+          d.log(`ccrc-server: the timers lane could not fire timers ${m.ids.join(', ')}: ${why}`);
+        }
       }
     }
   }
@@ -142,7 +172,18 @@ export function timersPass(d: { coord: WatcherCoordPort; now: number; log: (line
   try { purged = coord.purgeTimers(now - TIMER_KEEP_MS).removed; } catch (err) {
     d.log(`ccrc-server: the timers lane could not purge: ${err instanceof Error ? err.message : String(err)}`);
   }
-  return { unread, cancelled, fired, failed, waited, purged };
+  return { unread, cancelled, fired, failed, skipped, waited, purged };
+}
+
+/** After a fire rolled back: whether a timer it carried is measured no longer pending (a setter's or the operator's cancel
+ *  between the gather and the pass). A read that fails, or every timer still pending, is a fault, never a race. */
+function cancelledSince(coord: Pick<WatcherCoordPort, 'pendingTimers'>, ids: readonly number[]): boolean {
+  try {
+    const now = coord.pendingTimers();
+    if (!now.ok) return false;
+    const still = new Set(now.rows.map((t) => t.id));
+    return ids.some((id) => !still.has(id));
+  } catch { return false; }
 }
 
 const dueOf = (t: TimerRow): DueTimer => ({ id: t.id, setter: t.setter, dueAt: t.dueAt, note: t.note, setAt: t.setAt,

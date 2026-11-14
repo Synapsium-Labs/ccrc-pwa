@@ -2603,7 +2603,7 @@ describe('sweepStalls: a worker\'s own timer holds the quiet arm (Overlord §3.3
   const lanePass = async (coord: CoordStore, mailDisabled = false): Promise<ReturnType<typeof timersPass>> => {
     const facts = await gatherTimerFacts(coord, async () => ({ kind: 'measured', incarnation: STAMP }));
     return timersPass({ coord, now: Date.now(), log: () => {} },
-      { listedAt: Date.now() - 1_000, listedIds: new Set([WORKER]), archivedIds: new Set(), mailDisabled }, facts);
+      { listedAt: Date.now() - 1_000, listedIds: new Set([WORKER]), archivedIds: new Set(), unmeasuredIds: new Set(), mailDisabled }, facts);
   };
   const checks = (coord: CoordStore): MailRow[] => operatorMail(coord).filter((m) => m.subject.startsWith(STALL_CHECK_PREFIX));
   const sweep = async (w: FleetWatcher, ms: number): Promise<void> => { at(ms); await w.sweepStalls([fleetRow(WORKER)], LIVE, tickOf()); };

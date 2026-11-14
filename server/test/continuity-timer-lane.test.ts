@@ -17,7 +17,8 @@ import { fakeTime } from './fakeTime.js';
 import { quietAtTestEnd } from './laneQuiet.js';   // D-8140: nothing a watcher fires outlives its test
 import type { TimerInsert } from '../src/continuity/continuityStore.js';
 import {
-  gatherTimerFacts, runTimersLane, setterIncarnationOf, timersPass, type IncarnationRead, type TimerListing, type TimersPassResult,
+  gatherTimerFacts, runTimersLane, setterIncarnationOf, timerListingOf, timersPass, type IncarnationRead, type TimerListing,
+  type TimersPassResult,
 } from '../src/continuity/timerLane.js';
 import { TIMER_KEEP_MS, TIMER_MAIL_SENDER } from '../../shared/continuity-timers.js';
 import { mkTmp, removeTmpFixtures } from './tmpHelpers.js';
@@ -53,7 +54,8 @@ const timerMail = (s: CoordStore) => s.db.prepare(
   + 'JOIN mail_deliveries d ON d.mailId = m.id WHERE m.fromId = ? ORDER BY m.id').all(TIMER_MAIL_SENDER) as
   { id: number; toId: string; runId: number | null; kind: string; subject: string; body: string; deliverTo: string; state: string }[];
 
-const LISTED: TimerListing = { listedAt: NOW - 1_000, listedIds: new Set([ID, OTHER]), archivedIds: new Set(), mailDisabled: false };
+const LISTED: TimerListing = { listedAt: NOW - 1_000, listedIds: new Set([ID, OTHER]), archivedIds: new Set(), unmeasuredIds: new Set(),
+  mailDisabled: false };
 const measured = (v: string): IncarnationRead => ({ kind: 'measured', incarnation: v });
 const absent: IncarnationRead = { kind: 'unmeasured', reason: 'absent' };
 
@@ -132,6 +134,25 @@ describe('the timers lane: a due timer fires once, with its one mail (I17)', () 
     expect(r.fired.map((f) => f.ids)).toEqual([[b]]);
     expect(timer(s, a)!.state).toBe('pending');
   });
+
+  it('a timer cancelled between the gather and the pass is never fired, and its mail counts as skipped, not failed (review 2053 F6)', async () => {
+    const s = store();
+    const id = set(s);
+    const facts = await gatherTimerFacts(s, async () => measured(STAMP));
+    expect(s.cancelTimer(id, 'setter-cancel', 'setter', NOW - 1).changed).toBe(true);
+    const logs: string[] = [];
+    const r = timersPass({ coord: s, now: NOW, log: (l) => logs.push(l) }, LISTED, facts);
+    expect(r).toMatchObject({ fired: [], failed: 0, skipped: 1 });
+    expect(timerMail(s)).toEqual([]);
+    expect(logs.join('\n')).toContain(`skipped timers ${id}`);
+  });
+
+  it('a move that fails while every timer is still pending is a failure, never a skip', async () => {
+    const s = store();
+    set(s);
+    s.markTimersFired = () => { throw new Error('the disk went away'); };
+    expect(await pass(s)).toMatchObject({ fired: [], failed: 1, skipped: 0 });
+  });
 });
 
 describe('cleanup runs before the fire', () => {
@@ -201,6 +222,40 @@ describe('the cleanup arm: setter-gone from the stamp only, and every unmeasured
     expect(first).toMatchObject({ cancelled: [], fired: [], waited: 1 });
     expect(timer(s, id)!.state).toBe('pending');
     expect((await pass(s, { now: NOW + MIN })).fired).toHaveLength(1);
+  });
+
+  it('a row the listing named but left unbuilt waits even when its .generation matches the stamp, and a changed one cancels nothing (review 2053 F1)', async () => {
+    const s = store();
+    const id = set(s);
+    expect(await pass(s, { listing: { unmeasuredIds: new Set([ID]) } })).toMatchObject({ cancelled: [], fired: [], waited: 1 });
+    expect(await pass(s, { listing: { unmeasuredIds: new Set([ID]) }, reads: { [ID]: measured(LATER) } }))
+      .toMatchObject({ cancelled: [], fired: [], waited: 1 });
+    expect(timer(s, id)!.state).toBe('pending');
+    expect((await pass(s, { now: NOW + MIN })).fired).toHaveLength(1);
+  });
+
+  it('a setter missing from the gathered stamps waits, never reads absent', async () => {
+    const s = store();
+    set(s);
+    const facts = await gatherTimerFacts(s, async () => measured(STAMP));
+    const r = timersPass({ coord: s, now: NOW, log: () => {} }, { ...LISTED, listedIds: new Set([OTHER]) },
+      { ...facts, incarnations: new Map() });
+    expect(r).toMatchObject({ waited: 1, fired: [], cancelled: [] });
+  });
+
+  it('a cancel that throws is logged and counted, and the rest of the pass runs (review 2053 F6)', async () => {
+    const s = store();
+    const closed = openRun(s);
+    expect(s.advance(closed, 'failed', 'operator')).toMatchObject({ ok: true });
+    set(s, { runId: closed });
+    const due = set(s, { setter: OTHER, setById: OTHER });
+    s.cancelTimer = () => { throw new Error('the disk went away'); };
+    const logs: string[] = [];
+    const facts = await gatherTimerFacts(s, async () => measured(STAMP));
+    const r = timersPass({ coord: s, now: NOW, log: (l) => logs.push(l) }, LISTED, facts);
+    expect(r).toMatchObject({ cancelled: [], failed: 1 });
+    expect(r.fired.map((f) => f.ids)).toEqual([[due]]);
+    expect(logs.join('\n')).toContain('could not cancel timer');
   });
 
   it('a setter born after the listing began (its timer set at or after listedAt) waits, and fires on the next pass', async () => {
@@ -319,6 +374,28 @@ describe('FleetWatcher.sweepTimers: the tick\'s own listing, passed in', () => {
     expect(timer(s, id)!.state).toBe('fired');
   });
 
+  it('a listed row left unbuilt waits even with a matching .generation; once built, it fires (review 2053 F1)', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(NOW);
+    const h = home();
+    writeFileSync(path.join(h, '.cc-sessions', `${ID}.generation`), STAMP);
+    const s = store();
+    const id = set(s);
+    await watcher(h, s).sweepTimers([], new Set([ID]), NOW - 1_000, []);
+    expect(timer(s, id)!.state).toBe('pending');
+    await watcher(h, s).sweepTimers([rec(ID)], new Set([ID]), NOW - 1_000, []);
+    expect(timer(s, id)!.state).toBe('fired');
+  });
+
+  it('a row whose plain fields read unreadable (its archive stamp unmeasured) waits', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(NOW);
+    const h = home();
+    writeFileSync(path.join(h, '.cc-sessions', `${ID}.generation`), STAMP);
+    const s = store();
+    const id = set(s);
+    await watcher(h, s).sweepTimers([{ ...rec(ID), plainFieldUnreadable: true }], new Set([ID]), NOW - 1_000, []);
+    expect(timer(s, id)!.state).toBe('pending');
+  });
+
   it('a row the listing did not name, with no .generation, is cancelled setter-gone', async () => {
     vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(NOW);
     const s = store();
@@ -342,5 +419,18 @@ describe('FleetWatcher.sweepTimers: the tick\'s own listing, passed in', () => {
     await watcher(h, s).sweepTimers([rec(ID)], new Set([ID]), NOW - 1_000, []);
     expect(timer(s, held)!.state).toBe('fired');
     expect(timer(s, late)!.state).toBe('pending');
+  });
+});
+
+describe('timerListingOf: the tick\'s listing as the lane reads it (review 2053 F1)', () => {
+  const r = (id: string, o: { archivedAt?: number | null; plainFieldUnreadable?: true } = {}) => ({ id, archivedAt: null, ...o });
+  it('a listed id with no built record, or a record with an unreadable plain field, is unmeasured; archived and mail-disabled are read', () => {
+    const l = timerListingOf([r(ID, { archivedAt: 5 }), r(OTHER, { plainFieldUnreadable: true })], new Set([ID, OTHER, 'lane-c-project-a']),
+      NOW - 1_000, [MAIL_DISABLED_MARKER]);
+    expect(l).toEqual({ listedAt: NOW - 1_000, listedIds: new Set([ID, OTHER, 'lane-c-project-a']), archivedIds: new Set([ID]),
+      unmeasuredIds: new Set(['lane-c-project-a', OTHER]), mailDisabled: true });
+  });
+  it('no listing leaves listedIds null and nothing unmeasured by it', () => {
+    expect(timerListingOf([r(ID)], null, null, [])).toMatchObject({ listedIds: null, unmeasuredIds: new Set(), mailDisabled: false });
   });
 });
