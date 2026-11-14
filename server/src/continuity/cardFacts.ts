@@ -20,12 +20,13 @@
  * (`goalsFor`), and the outstanding mail (`outstandingMailFor`). The notes piece adds the identity's live notes
  * (`liveNotes`, each key measured now through `noteKeyReader`, the note door's own reader) and the checkpoint: the handover
  * note of the generation the identity's live one replaced (`liveGenerations`, then `handoverBefore`, which finds that
- * generation by its place in the line and reads no state column).
+ * generation by its place in the line and reads no state column). The timers piece adds the session's own pending timers
+ * (`pendingTimersOf`, oldest due first), each carried with `timerPreview`'s cut of its note and never the note itself.
  */
 import { OUTSTANDING_DELIVERY_STATES, type ChildMark, type ChildReclaimGeneration, type RunKind } from '../../../shared/api.js';
 import {
   CARD_MAIL_MAX, type CardCheckpoint, type CardClaim, type CardFacts, type CardHistory, type CardItem, type CardMail,
-  type CardNote, type CardProgramme, type CardRenderer, type CardRun, type Fact,
+  type CardNote, type CardProgramme, type CardRenderer, type CardRun, type CardTimer, type Fact,
 } from '../../../shared/continuity-card.js';
 import { noteKeyText } from '../../../shared/continuity.js';
 import type { CoordStore } from '../coord/store.js';
@@ -34,11 +35,12 @@ import { roleFactsOf } from '../roleOf.js';
 import { CARD_REGISTRY_UNREAD, cardRoleOf, type CardRole } from './card.js';
 import { noteKeyReader } from './noteKeys.js';
 import { noteKeyFact } from './notes.js';
+import { timerPreview } from './timers.js';
 
 /** The store reads the gatherer makes, declared by this consumer. */
 export type CardFactsCoord = Pick<CoordStore, 'bindingsOf' | 'bindingRunsOf' | 'openCoordinatorIds' | 'run' | 'activeClaims'
   | 'outstandingMailFor' | 'itemsFor' | 'goalsFor' | 'liveNotes' | 'claimsProgramme' | 'itemById' | 'liveGenerations'
-  | 'handoverBefore'>;
+  | 'handoverBefore' | 'pendingTimersOf'>;
 
 export interface CardFactsDeps {
   readonly coord: CardFactsCoord;
@@ -222,11 +224,17 @@ export async function gatherCardFacts(deps: CardFactsDeps, id: string, now: numb
     }
   })();
 
+  // The pending timers: the session's own, oldest due first, each note cut to its preview (the one cut, `timerPreview`).
+  const timers = attempt<readonly CardTimer[]>('your pending timers', () => {
+    const r = coord.pendingTimersOf(id);
+    return !r.ok ? null : r.rows.map((t) => ({ id: t.id, dueAt: t.dueAt, preview: timerPreview(t.note), runId: t.runId, programme: t.programme }));
+  });
+
   return {
     renderer: role.renderer,
     facts: {
       sessionId: id, role: role.role, roleWhy: role.roleWhy, at: now, runs, ledger, claims, intent, itemsRaised, mailOutstanding, mailMore,
-      notes, checkpoint, history: read(CARD_HISTORY),
+      notes, checkpoint, timers, history: read(CARD_HISTORY),
     },
   };
 }
