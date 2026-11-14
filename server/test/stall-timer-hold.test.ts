@@ -224,13 +224,13 @@ describe('what a notice says (notice-names-the-timer-that-held, stall-notice-nam
     expect(body).not.toContain('relay');
   });
 
-  it('r2 and the r3 push name it too', () => {
+  it('r2 and the r3 push never name it, even when r1 changed nothing (only-r1-names-the-timer, review 2053 F3)', () => {
     const i = input({ timers: held });
     const f = stallFacts(i);
     const report = stallReportMail(i, f, { mode: 'live', arm: 'quiet', rung: 1, key: DISPATCHED, at: after }, null, after + H);
-    expect(report.body).toContain(`Held by the worker's ${LINE}`);
+    expect(report.body).not.toContain('Held by');
     const r3: StallNotify = { act: 'notify', arm: 'quiet', rung: 3, key: DISPATCHED, to: 'operator', because: 'still-silent' };
-    expect(stallPushText(i, f, r3, after + 2 * H).body).toContain(`Held by the worker's ${LINE}`);
+    expect(stallPushText(i, f, r3, after + 2 * H).body).not.toContain('Held by');
   });
 
   it('an episode no timer held names none, nor one whose hold ended inside the first quiet period', () => {

@@ -1042,9 +1042,11 @@ function stallR1OrTimerHold(input: StallInput, f: StallFacts, key: number, now: 
   return hold !== null && now < hold.until ? holdVerdict('timer') : { act: 'notify', arm: 'quiet', rung: 1, key, to: 'worker' };
 }
 
-/** The line a quiet-arm notice adds when a timer held this episode (slug notice-names-the-timer-that-held): the same pick,
+/** The line r1's check mail adds when a timer held this episode (slug notice-names-the-timer-that-held): the same pick,
  *  ended at or before `now` and later than the ladder's start plus one quiet period. The id and the times only, never the
- *  note: stall notices go out as `operator` and carry measured facts only (slug stall-notice-names-no-note). */
+ *  note: stall notices go out as `operator` and carry measured facts only (slug stall-notice-names-no-note). r1 alone
+ *  carries it (review 2053 F3, slug only-r1-names-the-timer): r1's own delivery moves the start this reads, so r2 and the
+ *  r3 push would name it only when r1 changed nothing, and naming it there needs a row of r1's own. */
 function stallTimerHeldLine(input: StallInput, f: StallFacts, now: number, whose: string): readonly string[] {
   const { hold, start, quietMs } = stallTimerHold(input, f, now);
   if (hold === null || hold.until > now || hold.until <= start + quietMs) return [];
@@ -1324,8 +1326,8 @@ function stallMailRef(m: StallMailRow | null): string {
 }
 
 /** When the worker's live status last turned idle: wave 1's r1 clock (r1 is sent when that stamp is one quiet time old).
- *  The episode key stands in when the facts carry no quiet start. r2 and r3 never read this: r1's own delivery
- *  restamps it (D-3582 r2-r3-span-from-the-episode). */
+ *  The episode key stands in when the facts carry no quiet start. r2 and r3 never read this, nor the timer line built on
+ *  it (`stallTimerHeldLine`, r1's only): r1's own delivery restamps it (D-3582 r2-r3-span-from-the-episode). */
 function stallQuietFrom(facts: StallFacts): number {
   return facts.quietSince ?? facts.episodeKeyMs;
 }
@@ -1458,7 +1460,6 @@ export function stallReportMail(input: StallInput, facts: StallFacts, r1: StallN
     body: [
       `stall from the ccrc stall watch (server), ${stallRunLabel(run)}, state ${stallSafe(run.state)}.`,
       `Worker ${stallSafe(run.sessionId)} (workspace ${workspace}): no mail from the worker ${stallSilence(run, facts, now, stallUtcSec)}. Its last mail on this run: ${stallMailRef(facts.workerLast)}. Newest mail to it on this run: ${stallMailRef(facts.inboundLast)}.`,
-      ...stallTimerHeldLine(input, facts, now, 'the worker\'s'),
       stallR1Line(r1, check, r1Delivery),
       `Ack this, re-measure the run and the worker's last mail, and act once: mail the worker a resume, mail it a subject beginning "${STALL_WAIT_PREFIX}" naming what it waits for, or re-dispatch a dead worker. A stall mail never licenses re-dispatching a live worker.`,
     ].join('\n'),
@@ -1540,8 +1541,7 @@ export function stallPushText(input: StallInput, facts: StallFacts, n: StallNoti
       // D-3582 r2-r3-span-from-the-episode: the silence since the worker's last mail, not the live stamp's.
       return {
         title: `⚠ stalled › ${ws}`,
-        body: stallSentences(`${label}: no mail from worker ${worker} ${stallSilence(run, facts, now, stallUtc)}. ${stallR3Cause(n.because, input, coordinator)}`,
-          ...stallTimerHeldLine(input, facts, now, 'the worker\'s')),
+        body: `${label}: no mail from worker ${worker} ${stallSilence(run, facts, now, stallUtc)}. ${stallR3Cause(n.because, input, coordinator)}`,
       };
     case 'dialog-cap': {
       // `dialog-cap-keyed-on-the-dialog` (D-3799): the dialog's own stretch, read from the live stamp its key comes from.
