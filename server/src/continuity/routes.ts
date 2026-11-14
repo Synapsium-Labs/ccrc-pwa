@@ -2,8 +2,8 @@
 // `continuityStore.ts`'s, the sender check is `coord/attribution.ts`'s `attributionVerdict`, the gate every box-token
 // lane shares. This file is a lane source of its own for `box-token-census.test.ts`, as `linking/routes.ts` is.
 //
-// W1a registers the start report and the card door. W1's loaded-file report and witness extend this file (Table 11.1e,
-// "The hook's reports").
+// W1a registers the start report, the card door and the note door (the notes piece: a note, the live notes, the handover
+// note). W1's loaded-file report and witness extend this file (Table 11.1e, "The hook's reports").
 import { createHash } from 'node:crypto';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { SHAPE_ONLY_MASKER, type SecretMasker } from '../accounts/mask.js';
@@ -13,9 +13,19 @@ import { MAIL_TOKEN_HEADER, checkMailToken, type BoxTokenHolder } from '../coord
 import { refuseRoute } from '../refuse.js';
 import { REG_GENERATION_SHAPE } from '../../../shared/api.js';
 import { CARD_BUDGET_TOKENS } from '../../../shared/continuity-card.js';
-import { CARD_REFUSALS } from '../../../shared/refusal.js';
+import {
+  isNoteKeyKind, isNoteKind, noteKeyText, type HandoverNote, type HandoverThread, type KeyFact, type NoteKey,
+} from '../../../shared/continuity.js';
+import { CONTINUITY_LANE, laneArmGate } from '../../../shared/lane-arm.js';
+import { CARD_REFUSALS, NOTE_REFUSALS } from '../../../shared/refusal.js';
+import { laneArmRowViewOf } from '../coord/laneArm.js';
 import { cardPages, renderCard, snapshotFactsJson, trimCard } from './card.js';
 import { gatherCardFacts, type CardFactsDeps } from './cardFacts.js';
+import { effectiveGeneration } from './continuityStore.js';
+import { noteKeyReader } from './noteKeys.js';
+import {
+  handoverAsked, handoverVerdict, noteKeyFact, noteVerdict, revisedNoteFact, type NoteInput, type NoteVerdictRefusal, type RevisedFact,
+} from './notes.js';
 
 export interface ContinuityRouteDeps {
   /** The coordination store, or undefined on a server without one (a test, a script): the report answers `unavailable`. */
@@ -34,6 +44,8 @@ export interface ContinuityRouteDeps {
   masker?: SecretMasker;
   /** How many conversations' partly served cards the door remembers (`CARD_MEMO_MAX` when absent; a test sets a small one). */
   cardMemoMax?: number;
+  /** The continuity row's gate (`laneArmGate`), unless a test opens it to drive a live walk, as the generations lane's. */
+  continuityGate?: (lane: typeof CONTINUITY_LANE) => string | null;
 }
 
 /** The identity pair's grammar, the linking read's and the Linear proxy's. */
@@ -56,6 +68,27 @@ const HASH_RE = /^[0-9a-f]{64}$/;
 /** At most this many conversations' partly served cards are remembered (the door's memo, below). */
 const CARD_MEMO_MAX = 512;
 const sha256 = (text: string): string => createHash('sha256').update(text, 'utf8').digest('hex');
+
+/** A programme slug in a note's key: a bounded line with no control or separator character. */
+const KEY_SLUG_RE = /^[^\p{Cc}\p{Cf}\p{Zl}\p{Zp}]{1,128}$/u;
+const isPosInt = (v: unknown): v is number => typeof v === 'number' && Number.isSafeInteger(v) && v > 0;
+/** A note's key as the body carries it, or null when it is not one. */
+function noteKeyOf(v: unknown): NoteKey | null {
+  if (typeof v !== 'object' || v === null) return null;
+  const k = v as Record<string, unknown>;
+  if (!isNoteKeyKind(k['kind'])) return null;
+  if (k['kind'] === 'programme') return typeof k['slug'] === 'string' && KEY_SLUG_RE.test(k['slug']) ? { kind: 'programme', slug: k['slug'] } : null;
+  return isPosInt(k['id']) ? { kind: k['kind'], id: k['id'] } : null;
+}
+/** Each note refusal's detail: what the caller can do about it. */
+const NOTE_DETAIL: Readonly<Record<NoteVerdictRefusal, string>> = {
+  [NOTE_REFUSALS.keyUnknown]: "the key names no live programme, open item or non-terminal run of yours, or the note it revises is not a live note of yours",
+  [NOTE_REFUSALS.cap]: 'you hold the cap of live notes: close or revise one first',
+  [NOTE_REFUSALS.tooLong]: 'a field is over its length cap',
+  [NOTE_REFUSALS.referenceUnknown]: 'a thread names no live programme, open item or non-terminal run of yours',
+  [NOTE_REFUSALS.notAsked]: 'no handover was asked: your generation is not checkpointed',
+  unmeasured: 'could not check: a row it needs could not be read; try again',
+};
 
 export function registerContinuityRoutes(app: FastifyInstance, deps: ContinuityRouteDeps): void {
   /**
@@ -179,5 +212,176 @@ export function registerContinuityRoutes(app: FastifyInstance, deps: ContinuityR
       recorded = true;
     } else remember(key, memo);
     return reply.code(200).send({ ok: true, hash, snapshotId, page, pages: slices.length, text: slices[page - 1], recorded });
+  });
+
+  // THE NOTE DOOR (spec §3.3.2 C37, the notes piece). Three box-token lanes, each an `auth/gate.ts` EXEMPT entry: the token
+  // first (never the cookie), then the path's session is the caller (`not-owner`), then the shape, then the registry's
+  // attribution of `byUuid`. The door measures (the key, the revised note, the live count, the generation) and asks the
+  // deciders (`notes.ts`, L1); it decides nothing itself. A session writes and reads only its own notes; the identity is the
+  // session id. Everything after the attribution is synchronous, so no other request runs between a measure and its write.
+  const identityOf = (req: FastifyRequest): { id: string; by: Record<string, unknown> } => {
+    const { id } = req.params as { id: string };
+    const by = (req.method === 'GET' ? req.query : req.body) as unknown;
+    return { id, by: (typeof by === 'object' && by !== null ? by : {}) as Record<string, unknown> };
+  };
+  /** The caller, attributed, or the refusal already sent. */
+  const caller = async (req: FastifyRequest, reply: FastifyReply): Promise<{ id: string; b: Record<string, unknown> } | null> => {
+    const { id, by } = identityOf(req);
+    if (by['byId'] !== id) { await refuseRoute(reply, 'not-owner', { detail: 'byId must be the session the path names: a session keeps its own notes' }); return null; }
+    const uuid = by['byUuid'];
+    if (!IDENTITY_RE.test(id) || typeof uuid !== 'string' || !IDENTITY_RE.test(uuid)) { await refuseRoute(reply, 'bad-request', { detail: 'byId and byUuid' }); return null; }
+    return { id, b: by };
+  };
+  const refuseNote = (reply: FastifyReply, r: NoteVerdictRefusal, more = '') => refuseRoute(reply, r, { detail: `${NOTE_DETAIL[r]}${more}` });
+  /** The identity's live generation, as the one accessor reads it (`effectiveGeneration`), or what kept it from being read. */
+  const liveGenerationOf = (coord: CoordStore, id: string) => {
+    const gens = coord.liveGenerations();
+    if (!gens.ok) return 'unmeasured' as const;
+    const row = gens.rows.find((g) => g.identity === id);
+    if (row === undefined) return 'no-generation' as const;
+    const live = laneArmRowViewOf(CONTINUITY_LANE, coord.laneArmSetting(CONTINUITY_LANE), (deps.continuityGate ?? laneArmGate)(CONTINUITY_LANE)).live;
+    return { row, state: effectiveGeneration(row, live).state };
+  };
+
+  /**
+   * `POST /api/sessions/:id/notes { byId, byUuid, key, kind, waitsOn, next, revises?, closes? }`: append one note. A
+   * revision names the note it supersedes (`revises`); a close is a revision with `closes: true` and takes the closed
+   * note's key and kind (its `key`, `kind`, `waitsOn` and `next` are not read). `202 { ok, id }`. Refusals: `note-key-unknown`
+   * 403, `note-cap` 409, `note-too-long` 400, `unmeasured` 502 (a row it needs could not be read).
+   */
+  app.post('/api/sessions/:id/notes', {
+    onRequest: async (req: FastifyRequest, reply: FastifyReply) => {
+      const verdict = checkMailToken(deps.mailToken(), req.headers[MAIL_TOKEN_HEADER], 'POST /api/sessions/:id/notes');
+      if (verdict !== 'ok') return refuseRoute(reply, 'unauthenticated', { detail: TOKEN_DETAIL[verdict] });
+      return undefined;
+    },
+  }, async (req, reply) => {
+    const c = await caller(req, reply);
+    if (c === null) return reply;
+    const { id, b } = c;
+    const closes = b['closes'] ?? false;
+    const revises = b['revises'] ?? null;
+    if (typeof closes !== 'boolean') return refuseRoute(reply, 'bad-request', { detail: 'closes is a boolean' });
+    if (revises !== null && !isPosInt(revises)) return refuseRoute(reply, 'bad-request', { detail: 'revises is a note id' });
+    if (closes && revises === null) return refuseRoute(reply, 'bad-request', { detail: 'a close names the note it closes in revises' });
+    const key = closes ? null : noteKeyOf(b['key']);
+    if (!closes && key === null) return refuseRoute(reply, 'bad-request', { detail: 'key is { kind: programme, slug } or { kind: item | run, id }' });
+    const kind = closes ? null : b['kind'];
+    if (!closes && !isNoteKind(kind)) return refuseRoute(reply, 'bad-request', { detail: 'kind is thread or caution' });
+    const waitsOn = closes ? '' : b['waitsOn'];
+    const next = closes ? '' : b['next'];
+    if (typeof waitsOn !== 'string' || typeof next !== 'string') return refuseRoute(reply, 'bad-request', { detail: 'waitsOn and next are strings' });
+    const attributed = await deps.attributeReader(id, b['byUuid'] as string);
+    if (!attributed.ok) return refuseRoute(reply, attributed.error, { detail: attributed.detail });
+    const coord = deps.coord;
+    if (coord === undefined) return refuseRoute(reply, 'unavailable');
+
+    // The revised note, as read. A close takes its key and kind; when it could not be read or there is none, `revised` is
+    // not `live` and the verdict refuses, so the stand-in key below is never written.
+    let revised: RevisedFact = 'not-revising';
+    let closed: { key: NoteKey; kind: NoteInput['kind'] } | null = null;
+    if (revises !== null) {
+      const r = coord.noteById(revises);
+      revised = revisedNoteFact(!r.ok ? 'unmeasured' : r.note === null ? 'absent' : r.note, id);
+      if (r.ok && r.note !== null) closed = { key: r.note.key, kind: r.note.kind };
+    }
+    const input: NoteInput = closes
+      ? { key: closed?.key ?? { kind: 'run', id: revises! }, kind: closed?.kind ?? 'thread', waitsOn: '', next: '', revises, closes }
+      : { key: key!, kind: kind as NoteInput['kind'], waitsOn, next, revises, closes };
+    // A close's key is not read (`noteVerdict` skips it: close-needs-no-live-key), so it is not measured either.
+    const keyFact: KeyFact = closes ? 'unmeasured' : noteKeyFact(noteKeyReader(coord, id)(input.key), id);
+    const live = coord.liveNotes(id);
+    const gen = liveGenerationOf(coord, id);
+    if (gen === 'unmeasured') return refuseNote(reply, 'unmeasured', ' (the generations)');
+    const verdict = noteVerdict(input, keyFact, live.ok ? live.notes.length : 'unmeasured', revised);
+    if (!verdict.ok) return refuseNote(reply, verdict.refusal, ` (${noteKeyText(input.key)})`);
+    const r = coord.appendNote({
+      identity: id, sessionId: id, generationId: gen === 'no-generation' ? null : gen.row.id, key: input.key, kind: input.kind,
+      waitsOn: input.waitsOn, next: input.next, revises, closes, at: deps.wall(),
+    });
+    if (!r.ok) {
+      return r.kind === 'superseded' ? refuseNote(reply, NOTE_REFUSALS.keyUnknown, ': the note it revises was revised first')
+        : refuseRoute(reply, 'write-failed', { detail: 'continuity_notes could not be written' });
+    }
+    return reply.code(202).send({ ok: true, id: r.id });
+  });
+
+  /**
+   * `GET /api/sessions/:id/notes?byId&byUuid`: the caller's live notes, newest first, each with its key's fact now (`live`,
+   * `gone`, `not-yours` or `unmeasured`: a note whose key is gone is reported as such, never dropped). The answer is masked
+   * by the one answer hook (`MASKED_GET_ROUTES` in `server.ts` lists the route). `200 { ok, notes }`.
+   */
+  app.get('/api/sessions/:id/notes', {
+    onRequest: async (req: FastifyRequest, reply: FastifyReply) => {
+      const verdict = checkMailToken(deps.mailToken(), req.headers[MAIL_TOKEN_HEADER], 'GET /api/sessions/:id/notes');
+      if (verdict !== 'ok') return refuseRoute(reply, 'unauthenticated', { detail: TOKEN_DETAIL[verdict] });
+      return undefined;
+    },
+  }, async (req, reply) => {
+    const c = await caller(req, reply);
+    if (c === null) return reply;
+    const attributed = await deps.attributeReader(c.id, c.b['byUuid'] as string);
+    if (!attributed.ok) return refuseRoute(reply, attributed.error, { detail: attributed.detail });
+    const coord = deps.coord;
+    if (coord === undefined) return refuseRoute(reply, 'unavailable');
+    const live = coord.liveNotes(c.id);
+    if (!live.ok) return refuseRoute(reply, 'unmeasured', { detail: 'could not check: continuity_notes could not be read' });
+    const read = noteKeyReader(coord, c.id);
+    return reply.code(200).send({
+      ok: true,
+      notes: live.notes.map((n) => ({
+        id: n.id, key: n.key, kind: n.kind, waitsOn: n.waitsOn, next: n.next, revises: n.revises, at: n.at,
+        keyFact: noteKeyFact(read(n.key), c.id),
+      })),
+    });
+  });
+
+  /**
+   * `POST /api/sessions/:id/handover { byId, byUuid, threads: [{ ref, waitsOn, next }], cautions, tone }`: the handover note
+   * (C37), accepted only while the caller's live generation is `checkpointed` as `effectiveGeneration` reads it (otherwise
+   * `note-not-asked` 409; `unmeasured` 502 when the generations could not be read). Every thread's reference must be a live
+   * row of the caller's (`reference-unknown` 400; `unmeasured` 502 when one could not be read); status words are dropped
+   * and counted. One row per generation: `202 { ok, generationId, dropped, fresh }`, `fresh: false` when one was stored.
+   */
+  app.post('/api/sessions/:id/handover', {
+    onRequest: async (req: FastifyRequest, reply: FastifyReply) => {
+      const verdict = checkMailToken(deps.mailToken(), req.headers[MAIL_TOKEN_HEADER], 'POST /api/sessions/:id/handover');
+      if (verdict !== 'ok') return refuseRoute(reply, 'unauthenticated', { detail: TOKEN_DETAIL[verdict] });
+      return undefined;
+    },
+  }, async (req, reply) => {
+    const c = await caller(req, reply);
+    if (c === null) return reply;
+    const { id, b } = c;
+    const rawThreads = b['threads']; const cautions = b['cautions']; const tone = b['tone'];
+    if (!Array.isArray(rawThreads) || !Array.isArray(cautions) || !cautions.every((x) => typeof x === 'string') || typeof tone !== 'string') {
+      return refuseRoute(reply, 'bad-request', { detail: 'threads and cautions are lists, tone a string' });
+    }
+    const threads: HandoverThread[] = [];
+    for (const t of rawThreads as unknown[]) {
+      const o = (typeof t === 'object' && t !== null ? t : {}) as Record<string, unknown>;
+      const ref = noteKeyOf(o['ref']);
+      if (ref === null || typeof o['waitsOn'] !== 'string' || typeof o['next'] !== 'string') {
+        return refuseRoute(reply, 'bad-request', { detail: 'a thread is { ref, waitsOn, next }' });
+      }
+      threads.push({ ref, waitsOn: o['waitsOn'], next: o['next'] });
+    }
+    const attributed = await deps.attributeReader(id, b['byUuid'] as string);
+    if (!attributed.ok) return refuseRoute(reply, attributed.error, { detail: attributed.detail });
+    const coord = deps.coord;
+    if (coord === undefined) return refuseRoute(reply, 'unavailable');
+
+    const gen = liveGenerationOf(coord, id);
+    const asked = handoverAsked(typeof gen === 'string' ? gen : gen.state);
+    if (asked !== 'asked' || typeof gen === 'string') {
+      return refuseNote(reply, asked === 'unmeasured' ? 'unmeasured' : NOTE_REFUSALS.notAsked, asked === 'unmeasured' ? ' (the generations)' : '');
+    }
+    const read = noteKeyReader(coord, id);
+    const note: HandoverNote = { threads, cautions: cautions as string[], tone };
+    const verdict = handoverVerdict(note, threads.map((t) => noteKeyFact(read(t.ref), id)));
+    if (!verdict.ok) return refuseNote(reply, verdict.refusal);
+    const r = coord.putHandover({ generationId: gen.row.id, note: verdict.cleaned, dropped: verdict.dropped, at: deps.wall() });
+    if (!r.ok) return refuseRoute(reply, 'write-failed', { detail: 'continuity_handovers could not be written' });
+    return reply.code(202).send({ ok: true, generationId: gen.row.id, dropped: verdict.dropped, fresh: r.fresh });
   });
 }

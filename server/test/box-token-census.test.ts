@@ -97,9 +97,10 @@ const CALLS_SRC = read('server/src/coord/coordCallsRoute.ts');
 /** The TWELFTH file that registers routes and the ninth lane source (D-8181): the plan verbs' seven. `plan show` is a session-or-token
  *  read and the six writes are box-token lanes, every one consulting `checkMailToken` in its own registration. */
 const PLAN_SRC = read('server/src/coord/planRoutes.ts');
-/** The THIRTEENTH file that registers routes and the tenth lane source (Overlord W1a, the start report): the continuity routes. Its two
- *  box-token lanes are the hook's start report, `POST /api/sessions/:id/start`, and the card door, `GET /api/sessions/:id/card`
- *  (the card piece), each gated in its own onRequest as the linking read is. */
+/** The THIRTEENTH file that registers routes and the tenth lane source (Overlord W1a, the start report): the continuity routes. Its five
+ *  box-token lanes are the hook's start report, `POST /api/sessions/:id/start`, the card door, `GET /api/sessions/:id/card`
+ *  (the card piece), and the note door's three, `POST` and `GET /api/sessions/:id/notes` and `POST /api/sessions/:id/handover`
+ *  (the notes piece), each gated in its own onRequest as the linking read is. */
 const CONTINUITY_SRC = read('server/src/continuity/routes.ts');
 const GATE_SRC = read('server/src/auth/gate.ts');
 const README = read('README.md');
@@ -332,7 +333,9 @@ const WORDS = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'e
   // Overlord W1a: POST /api/sessions/:id/start, the hook's start report, a box-token lane in the continuity file: seventy-five machine lanes in all.
   'seventy-five',
   // Overlord W1a, the card piece: GET /api/sessions/:id/card, a session's own card, a box-token lane in the continuity file: seventy-six machine lanes in all.
-  'seventy-six'];
+  'seventy-six',
+  // Overlord W1a, the notes piece: the note door's three lanes in the continuity file: seventy-nine machine lanes in all.
+  'seventy-seven', 'seventy-eight', 'seventy-nine'];
 // D-2168: LONGEST FIRST, not numeric order. A JS alternation is leftmost-first,
 // so with `twenty` ahead of `twenty-one` the shorter branch wins and `\b` ends
 // the match at the hyphen — `twenty-one` scanned as `twenty`, and `twenty-two`
@@ -483,7 +486,8 @@ describe('the box-token surface is derived, and no prose site under-claims it', 
     // …and the linking standard's one (D-8147): the session's read, by name; the operator's write beside it is no lane.
     expect(LINKING_LANES, 'linking/routes.ts lost its box-token lane, or a write gained a token check').toEqual(['GET /api/linking']);
     // …and the continuity routes' one (Overlord W1a): the hook's start report, by name.
-    expect(CONTINUITY_LANES, 'continuity/routes.ts lost a box-token lane').toEqual(['POST /api/sessions/:id/start', 'GET /api/sessions/:id/card']);
+    expect(CONTINUITY_LANES, 'continuity/routes.ts lost a box-token lane').toEqual(['POST /api/sessions/:id/start', 'GET /api/sessions/:id/card',
+      'POST /api/sessions/:id/notes', 'GET /api/sessions/:id/notes', 'POST /api/sessions/:id/handover']);
     expect(ALL_LANES.length).toBe(COORD_LANES.length + 3 + LINEAR_PROXY_LANES.length + LEDGER_LANES.length + LINKING_LANES.length + CALLS_LANES.length + PLAN_LANES.length + CONTINUITY_LANES.length);
     expect(UNGATED_DOORS.length, 'the door list collapsed').toBeGreaterThan(3);
   });

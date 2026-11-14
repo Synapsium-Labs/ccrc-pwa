@@ -120,9 +120,11 @@ export type KeyReading =
   | { readonly kind: 'programme'; readonly claims: boolean | 'unmeasured' }
   | {
     readonly kind: 'item';
-    readonly item: { readonly state: ItemState; readonly raisedBy: string; readonly program: string } | 'absent' | 'unmeasured';
-    /** Whether the caller claims an open run of the item's programme; `unmeasured` when it could not be read or was not. */
-    readonly claimsProgramme: boolean | 'unmeasured';
+    /** The item's row, with whether the caller claims an open run of its programme (`unmeasured` when that could not be
+     *  read), or `absent`, or `unmeasured` when the item could not be read. */
+    readonly item: {
+      readonly state: ItemState; readonly raisedBy: string; readonly program: string; readonly claimsProgramme: boolean | 'unmeasured';
+    } | 'absent' | 'unmeasured';
   }
   | { readonly kind: 'run'; readonly run: { readonly state: RunState; readonly claimedBy: string | null } | 'absent' | 'unmeasured' };
 
@@ -139,13 +141,22 @@ export function noteKeyFact(r: KeyReading, caller: string): KeyFact {
       if (r.item === 'unmeasured') return 'unmeasured';
       if (r.item === 'absent' || !OPEN_ITEMS.has(r.item.state)) return 'gone';
       if (r.item.raisedBy === caller) return 'live';
-      return r.claimsProgramme === 'unmeasured' ? 'unmeasured' : r.claimsProgramme ? 'live' : 'not-yours';
+      return r.item.claimsProgramme === 'unmeasured' ? 'unmeasured' : r.item.claimsProgramme ? 'live' : 'not-yours';
     }
     case 'run':
       if (r.run === 'unmeasured') return 'unmeasured';
       if (r.run === 'absent' || TERMINAL_RUNS.has(r.run.state)) return 'gone';
       return r.run.claimedBy === caller ? 'live' : 'not-yours';
   }
+}
+
+/** The note a revision names, as the door read it: its owner and whether it is live, `absent`, or `unmeasured`. A live note
+ *  of the caller's is `live`; a superseded or closed one is `gone`, like an absent one; another identity's is `not-yours`. */
+export function revisedNoteFact(r: { readonly identity: string; readonly live: boolean } | 'absent' | 'unmeasured', caller: string): KeyFact {
+  if (r === 'unmeasured') return 'unmeasured';
+  if (r === 'absent') return 'gone';
+  if (r.identity !== caller) return 'not-yours';
+  return r.live ? 'live' : 'gone';
 }
 
 /** Was a handover asked of the caller? Only while its live generation's effective state (`effectiveGeneration`, the one

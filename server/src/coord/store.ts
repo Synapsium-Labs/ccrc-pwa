@@ -32,14 +32,16 @@ import type { LinkingWriteBody, ProjectLinkingWire } from '../../../shared/linki
 import { openPracticeCase, practiceCaseNewest, type PracticeCaseNewestRead, type PracticeCaseOpen } from './practiceCasesStore.js';
 import type { CaseDue } from './practiceCases.js';
 import {
-  advanceCursor, advanceObserved, cardReadOfStart, clearShadowWalk, generationsCursor, insertCardRead,
-  insertSnapshot, insertStart, liveGenerations, mintGeneration, setGenerationDue, setHoldOff, startsOf, startsSince, stepGeneration,
+  advanceCursor, advanceObserved, appendNote, cardReadOfStart, clearShadowWalk, generationsCursor, handoverBefore, insertCardRead,
+  insertSnapshot, insertStart, liveGenerations, liveNotes, mintGeneration, noteById, putHandover, setGenerationDue, setHoldOff,
+  startsOf, startsSince, stepGeneration,
   type CardReadInsert, type CardReadRead, type CursorAdvance, type CursorRead, type DueWrite, type SnapshotInsert,
   type GenExpect, type GenerationsRead, type MintInput, type MintResult, type StartInsert, type StartInsertResult, type StartsRead,
+  type HandoverRead, type NoteByIdRead, type NoteInsert, type NotesRead,
 } from '../continuity/continuityStore.js';
 import type { GenView } from '../continuity/generationMachine.js';
 import type { Observed } from '../time/observed.js';
-import type { RenewalTrigger } from '../../../shared/continuity.js';
+import type { HandoverNote, RenewalTrigger } from '../../../shared/continuity.js';
 import type { Invitation } from './peerBound.js';
 import { liftReviewCapByCoordinator, raiseReviewCapAsk, reviewCapGate, reviewCapStatesOf, type CoordLiftResult, type ReviewCapState } from './reviewCapStore.js';
 import { renderEnvelope } from './envelope.js';
@@ -5392,6 +5394,13 @@ export class CoordStore {
   insertSnapshot(s: SnapshotInsert): { ok: true; fresh: boolean } | { ok: false } { return insertSnapshot(this.db, s); }
   insertCardRead(r: CardReadInsert): { ok: true; id: number } | { ok: false } { return insertCardRead(this.db, r); }
   cardReadOfStart(startId: number): CardReadRead { return cardReadOfStart(this.db, startId); }
+  /** Overlord §3.3.2 C37 (the notes piece, `continuityStore.ts`): the note door's two writers, append-only, and the reads
+   *  the door and the card's gatherer make. */
+  appendNote(n: NoteInsert): { ok: true; id: number } | { ok: false; kind: 'superseded' | 'write-failed' } { return appendNote(this.db, n); }
+  liveNotes(identity: string): NotesRead { return liveNotes(this.db, identity); }
+  noteById(id: number): NoteByIdRead { return noteById(this.db, id); }
+  putHandover(h: { generationId: number; note: HandoverNote; dropped: number; at: number }): { ok: true; fresh: boolean } | { ok: false } { return putHandover(this.db, h); }
+  handoverBefore(identity: string, liveGenerationId: number): HandoverRead { return handoverBefore(this.db, identity, liveGenerationId); }
 
   /** D-6909: the review-cap state of a batch of runs (`reviewCapStore.ts`). */
   reviewCapStates(ids: readonly number[]): Map<number, ReviewCapState> {

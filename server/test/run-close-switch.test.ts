@@ -88,7 +88,8 @@ describe('the store: three states per group, default shadow', () => {
     const file = path.join(mkTmp('ccrc-runclose-migrate-'), 'coord.db');
     const fresh = openCoordDb(file);
     fresh.prepare("UPDATE run_close_settings SET neverStarted = 'on', claimantCrashed = 'off', updatedAt = 9").run();
-    // Back to version 53: undo migrations 69 (continuity_snapshots and continuity_card_reads, Overlord W1a), 68
+    // Back to version 53: undo migrations 70 (continuity_notes and continuity_handovers, Overlord W1a), 69
+    // (continuity_snapshots and continuity_card_reads, Overlord W1a), 68
     // (continuity_generations and continuity_cursor, Overlord W1a), 67 (face_settings, the
     // Overlord face plan Task 6), 66 (continuity_starts,
     // Overlord W1a), 65 (mail.answersMail and mail_answers_once, #2726),
@@ -97,7 +98,7 @@ describe('the store: three states per group, default shadow', () => {
     // testbox_events.changes, D-8399), 62 (claims.chainedFrom,
     // D-8395), 61 (nodes.reportedSweep, D-8386), 60 (claude_builds, D-8289), 59 (the plan model, D-8181), 58 (practice_cases,
     // Overlord W1a), 57 (testbox_events, D-8166), 56 (lane_arm_settings, D-8274) and 55 (coordinator_calls, D-8126) as well
-    // as 54, so the reopen replays all sixteen.
+    // as 54, so the reopen replays all seventeen.
     fresh.exec(`ALTER TABLE project_linking DROP COLUMN teamSource; ALTER TABLE project_linking DROP COLUMN teamName;
       ALTER TABLE project_linking DROP COLUMN teamEvidence; ALTER TABLE project_linking DROP COLUMN teamAt;
       ALTER TABLE project_linking DROP COLUMN teamCandidates;
@@ -107,7 +108,7 @@ describe('the store: three states per group, default shadow', () => {
       ALTER TABLE programs DROP COLUMN planBy; ALTER TABLE programs DROP COLUMN planAt; ALTER TABLE programs DROP COLUMN planRequired;
       ALTER TABLE programs DROP COLUMN planEnd; ALTER TABLE programs DROP COLUMN planEndWhy; ALTER TABLE programs DROP COLUMN planEndAt;
       DELETE FROM programs WHERE slug = 'linear-sync';`);
-    fresh.exec('DROP TABLE continuity_card_reads; DROP TABLE continuity_snapshots; DROP TABLE continuity_generations; DROP TABLE continuity_cursor; DROP TABLE face_settings; DROP TABLE continuity_starts; DROP INDEX mail_answers_once; ALTER TABLE mail DROP COLUMN answersMail; DROP TABLE testbox_staged_changes; ALTER TABLE claims DROP COLUMN chainedFrom; ALTER TABLE nodes DROP COLUMN reportedSweep; DROP TABLE claude_builds; DROP TABLE practice_cases; DROP TABLE testbox_events; DROP TABLE lane_arm_settings; DROP TABLE coordinator_calls; ALTER TABLE run_close_settings DROP COLUMN claimantGone; PRAGMA user_version = 53;');
+    fresh.exec('DROP TABLE continuity_handovers; DROP TABLE continuity_notes; DROP TABLE continuity_card_reads; DROP TABLE continuity_snapshots; DROP TABLE continuity_generations; DROP TABLE continuity_cursor; DROP TABLE face_settings; DROP TABLE continuity_starts; DROP INDEX mail_answers_once; ALTER TABLE mail DROP COLUMN answersMail; DROP TABLE testbox_staged_changes; ALTER TABLE claims DROP COLUMN chainedFrom; ALTER TABLE nodes DROP COLUMN reportedSweep; DROP TABLE claude_builds; DROP TABLE practice_cases; DROP TABLE testbox_events; DROP TABLE lane_arm_settings; DROP TABLE coordinator_calls; ALTER TABLE run_close_settings DROP COLUMN claimantGone; PRAGMA user_version = 53;');
     fresh.close();
     const coord = new CoordStore(openCoordDb(file));
     expect(coord.runCloseSetting()).toEqual({ kind: 'row', neverStarted: 'on', claimantCrashed: 'off', claimantGone: 'shadow', updatedAt: 9 });

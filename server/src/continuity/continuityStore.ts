@@ -1,12 +1,13 @@
-// L3 adapter: the start report's table and the generations' (Overlord spec §3.3.11, H12, W1a). `continuity_starts` has one
-// writer, `insertStart`, and one read, `startsSince` (the generations lane's); `continuity_generations` and
-// `continuity_cursor` are written only through the generation functions below, by the generations lane. `CoordStore` keeps
-// one-line delegates of the same names. Nothing here decides: the door (`routes.ts`) validates, the lane's deciders decide,
-// and this file records and measures.
+// L3 adapter: the start report's table and the generations' (Overlord spec §3.3.11, H12, W1a), the card's and the notes'
+// (§3.3.3, §3.3.2; each its own section below). `continuity_starts` has one writer, `insertStart`, and one read,
+// `startsSince` (the generations lane's); `continuity_generations` and `continuity_cursor` are written only through the
+// generation functions below, by the generations lane. `CoordStore` keeps one-line delegates of the same names. Nothing
+// here decides: the door (`routes.ts`) validates, the lane's deciders decide, and this file records and measures.
 import type { DatabaseSync, StatementSync } from 'node:sqlite';
 import {
-  GENERATION_STATES, HOLD_OFF_MS, STATE_DEADLINE_S, isGenerationOutcome, isGenerationState, isRenewalTrigger, isTriggerClass,
-  startSourceOf, type GenerationOutcome, type GenerationState, type RenewalTrigger, type StartRow, type TriggerClass,
+  GENERATION_STATES, HOLD_OFF_MS, STATE_DEADLINE_S, isGenerationOutcome, isGenerationState, isNoteKeyKind, isNoteKind,
+  isRenewalTrigger, isTriggerClass, startSourceOf, type GenerationOutcome, type GenerationState, type HandoverNote,
+  type HandoverThread, type NoteKey, type NoteKind, type RenewalTrigger, type StartRow, type TriggerClass,
 } from '../../../shared/continuity.js';
 import { isFleetRole, type FleetRole } from '../../../shared/fleetRoles.js';
 import type { Observed } from '../time/observed.js';
@@ -514,5 +515,146 @@ export function cardReadOfStart(db: DatabaseSync, startId: number): CardReadRead
     return { ok: true, read: { id, hash: row.hash, snapshotId: row.snapshotId, at, current: intOrNull(row.current) === 1 } };
   } catch (e) {
     return { ok: false, detail: `continuity_card_reads read failed: ${e instanceof Error ? e.message : String(e)}` };
+  }
+}
+
+// ------------------------------------------------------------------------------------------------- the notes
+// `continuity_notes` and `continuity_handovers` (Overlord spec §3.3.2 C37, W1a, the notes piece; migration 70). ONE writer,
+// the note door (`routes.ts`), through `appendNote` and `putHandover`; the door and the card's gatherer read through
+// `liveNotes`, `noteById` and `handoverBefore`. APPEND-ONLY: nothing here updates or deletes a note. A failed statement
+// answers ok: false, never a throw; a row this build cannot read fails the read whole, never a partial list.
+
+/** One row of `continuity_notes`, as read. */
+export interface NoteRow {
+  readonly id: number; readonly identity: string; readonly sessionId: string; readonly generationId: number | null;
+  readonly key: NoteKey; readonly kind: NoteKind; readonly waitsOn: string; readonly next: string;
+  readonly revises: number | null; readonly closes: boolean; readonly at: number;
+}
+export type NoteInsert = Omit<NoteRow, 'id'>;
+export type NotesRead = { ok: true; notes: NoteRow[] } | { ok: false; detail: string };
+/** One note and whether it is live (no row revises it and it does not close), or null when there is no such row. */
+export type NoteByIdRead = { ok: true; note: (NoteRow & { readonly live: boolean }) | null } | { ok: false; detail: string };
+
+const NOTE_COLUMNS = 'id, identity, sessionId, generationId, keyKind, keyRef, kind, waitsOn, next, revises, closes, at';
+const NOTE_KEY_REF = /^[1-9][0-9]{0,15}$/;
+
+/** A row as stored, or why it does not read: a word outside a vocabulary, or a key whose reference is not one. */
+function noteRowOf(raw: Record<string, unknown>): NoteRow | string {
+  const id = intOrNull(raw.id); const at = intOrNull(raw.at); const keyRef = raw.keyRef; const keyKind = raw.keyKind;
+  if (id === null || at === null) return 'a counter';
+  if (!isNoteKind(raw.kind)) return `kind ${String(raw.kind)}`;
+  if (!isNoteKeyKind(keyKind) || typeof keyRef !== 'string') return `keyKind ${String(keyKind)}`;
+  if (keyKind !== 'programme' && !NOTE_KEY_REF.test(keyRef)) return `keyRef ${keyRef}`;
+  const key: NoteKey = keyKind === 'programme' ? { kind: 'programme', slug: keyRef } : { kind: keyKind, id: Number(keyRef) };
+  if (typeof raw.waitsOn !== 'string' || typeof raw.next !== 'string') return 'text';
+  return {
+    id, identity: String(raw.identity), sessionId: String(raw.sessionId), generationId: intOrNull(raw.generationId), key,
+    kind: raw.kind, waitsOn: raw.waitsOn, next: raw.next, revises: intOrNull(raw.revises), closes: intOrNull(raw.closes) === 1, at,
+  };
+}
+const keyRefOf = (k: NoteKey): string => (k.kind === 'programme' ? k.slug : String(k.id));
+
+function notesOf(raws: readonly Record<string, unknown>[]): NotesRead {
+  const notes: NoteRow[] = [];
+  for (const raw of raws) {
+    const r = noteRowOf(raw);
+    if (typeof r === 'string') return { ok: false, detail: `continuity_notes row ${String(raw.id)}: ${r}` };
+    notes.push(r);
+  }
+  return { ok: true, notes };
+}
+
+/** The note door's writer. A second revision of one note meets `continuity_notes_one_revision` and answers `superseded`:
+ *  two revisions race to one winner. */
+export function appendNote(db: DatabaseSync, n: NoteInsert): { ok: true; id: number } | { ok: false; kind: 'superseded' | 'write-failed' } {
+  try {
+    const res = stmt(db, 'INSERT INTO continuity_notes (identity, sessionId, generationId, keyKind, keyRef, kind, waitsOn, next, '
+      + 'revises, closes, at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').run(n.identity, n.sessionId, n.generationId, n.key.kind,
+      keyRefOf(n.key), n.kind, n.waitsOn, n.next, n.revises, n.closes ? 1 : 0, n.at);
+    return { ok: true, id: Number(res.lastInsertRowid) };
+  } catch (e) {
+    const unique = e instanceof Error && /UNIQUE constraint failed: continuity_notes\.revises/.test(e.message);
+    return { ok: false, kind: unique ? 'superseded' : 'write-failed' };
+  }
+}
+
+const LIVE_NOTE = 'n.closes = 0 AND NOT EXISTS (SELECT 1 FROM continuity_notes r WHERE r.revises = n.id)';
+
+/** An identity's live notes, newest first. */
+export function liveNotes(db: DatabaseSync, identity: string): NotesRead {
+  try {
+    return notesOf(stmt(db, `SELECT ${NOTE_COLUMNS} FROM continuity_notes n WHERE n.identity = ? AND ${LIVE_NOTE} ORDER BY n.id DESC`)
+      .all(identity) as Record<string, unknown>[]);
+  } catch (e) {
+    return { ok: false, detail: `continuity_notes read failed: ${e instanceof Error ? e.message : String(e)}` };
+  }
+}
+
+/** One note by id, with whether it is live. */
+export function noteById(db: DatabaseSync, id: number): NoteByIdRead {
+  try {
+    const raw = stmt(db, `SELECT ${NOTE_COLUMNS}, (${LIVE_NOTE}) AS live FROM continuity_notes n WHERE n.id = ?`).get(id) as Record<string, unknown> | undefined;
+    if (raw === undefined) return { ok: true, note: null };
+    const r = noteRowOf(raw);
+    return typeof r === 'string' ? { ok: false, detail: `continuity_notes row ${id}: ${r}` } : { ok: true, note: { ...r, live: intOrNull(raw.live) === 1 } };
+  } catch (e) {
+    return { ok: false, detail: `continuity_notes read failed: ${e instanceof Error ? e.message : String(e)}` };
+  }
+}
+
+/** One stored handover note. */
+export interface HandoverRow { readonly generationId: number; readonly n: number; readonly note: HandoverNote; readonly dropped: number; readonly at: number }
+export type HandoverRead = { ok: true; handover: HandoverRow | null } | { ok: false; detail: string };
+
+/** The note door's handover writer: one row per generation. A second answers `fresh: false` and the first stands. */
+export function putHandover(db: DatabaseSync, h: { generationId: number; note: HandoverNote; dropped: number; at: number }):
+  { ok: true; fresh: boolean } | { ok: false } {
+  try {
+    const res = stmt(db, 'INSERT INTO continuity_handovers (generationId, note, dropped, at) VALUES (?, ?, ?, ?) ON CONFLICT (generationId) DO NOTHING')
+      .run(h.generationId, JSON.stringify(h.note), h.dropped, h.at);
+    return { ok: true, fresh: Number(res.changes) === 1 };
+  } catch {
+    return { ok: false };
+  }
+}
+
+function handoverNoteOf(text: string): HandoverNote | null {
+  try {
+    const v = JSON.parse(text) as Record<string, unknown>;
+    const strings = (a: unknown): a is string[] => Array.isArray(a) && a.every((x) => typeof x === 'string');
+    if (!Array.isArray(v.threads) || !strings(v.cautions) || typeof v.tone !== 'string') return null;
+    const threads: HandoverThread[] = [];
+    for (const t of v.threads as Record<string, unknown>[]) {
+      const ref = t?.ref as Record<string, unknown> | undefined;
+      if (typeof t?.waitsOn !== 'string' || typeof t.next !== 'string' || ref === undefined || !isNoteKeyKind(ref.kind)) return null;
+      const key: NoteKey | null = ref.kind === 'programme' ? (typeof ref.slug === 'string' ? { kind: 'programme', slug: ref.slug } : null)
+        : Number.isSafeInteger(ref.id) ? { kind: ref.kind, id: ref.id as number } : null;
+      if (key === null) return null;
+      threads.push({ ref: key, waitsOn: t.waitsOn, next: t.next });
+    }
+    return { threads, cautions: v.cautions, tone: v.tone };
+  } catch {
+    return null;
+  }
+}
+
+/** The handover note of the generation just before `liveGenerationId` in its identity's line (the one the live generation
+ *  replaced), or null when that generation wrote none or there is none. It finds that generation by its place in the line
+ *  (the identity's newest row older than the live one), never by reading a state column. */
+export function handoverBefore(db: DatabaseSync, identity: string, liveGenerationId: number): HandoverRead {
+  try {
+    const row = stmt(db,
+      'SELECT g.id AS gid, g.n AS n, h.note AS note, h.dropped AS dropped, h.at AS at FROM continuity_generations g '
+      + 'LEFT JOIN continuity_handovers h ON h.generationId = g.id WHERE g.identity = ? AND g.id < ? ORDER BY g.id DESC LIMIT 1',
+    ).get(identity, liveGenerationId) as Record<string, unknown> | undefined;
+    if (row === undefined || row.note === null) return { ok: true, handover: null };
+    const note = typeof row.note === 'string' ? handoverNoteOf(row.note) : null;
+    const gid = intOrNull(row.gid); const n = intOrNull(row.n); const dropped = intOrNull(row.dropped); const at = intOrNull(row.at);
+    if (note === null || gid === null || n === null || dropped === null || at === null) {
+      return { ok: false, detail: `continuity_handovers row ${String(row.gid)} does not read` };
+    }
+    return { ok: true, handover: { generationId: gid, n, note, dropped, at } };
+  } catch (e) {
+    return { ok: false, detail: `continuity_handovers read failed: ${e instanceof Error ? e.message : String(e)}` };
   }
 }

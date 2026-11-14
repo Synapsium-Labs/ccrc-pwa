@@ -2960,6 +2960,44 @@ export const MIGRATIONS: readonly string[] = [
   CREATE INDEX continuity_card_reads_by_conversation ON continuity_card_reads(sessionId, uuid, id);
   CREATE INDEX continuity_card_reads_by_snapshot ON continuity_card_reads(snapshotId);
   `,
+  // ── 70: user_version 69 -> 70 ─────────────────────────────────────────────
+  // The notes (Overlord spec §3.3.2 C37, W1a, the notes piece): `continuity_notes`, a long-lived session's working notes,
+  // and `continuity_handovers`, the handover note a generation writes in `checkpointed`. Both have ONE writer, the note door
+  // (`server/src/continuity/routes.ts`), through `continuityStore.ts`, so `continuity_generations` keeps its one writer
+  // (slug handover-table). A note is APPEND-ONLY: a revision is a new row naming the note it supersedes (`revises`), a close
+  // is a revision with `closes` set, and no statement updates or deletes a note. A note is live while no row revises it and
+  // it does not close. `continuity_notes_one_revision` makes a second revision of one note a constraint failure, so two
+  // revisions race to one winner (slug revision-by-unique-index); `continuity_notes_by_identity` keys the live read.
+  //
+  // NEW TABLES AND INDEXES, nothing on an existing table: an older build opening a file at `user_version 70` takes rule 3
+  // (it warns, reads as-is and migrates nothing), never names either table, and boots. Every earlier entry is frozen.
+  // RE-MEASURE the slot before the PR and before merge (it must print 69 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE continuity_notes (
+    id           INTEGER PRIMARY KEY,
+    identity     TEXT NOT NULL,         -- the long-lived identity the note belongs to (a coordinator's session id)
+    sessionId    TEXT NOT NULL,         -- the session that wrote it
+    generationId INTEGER,               -- the identity's live generation when it was written, or NULL
+    keyKind      TEXT NOT NULL,         -- programme | item | run (NoteKey)
+    keyRef       TEXT NOT NULL,         -- the programme's slug, or the item's or run's id
+    kind         TEXT NOT NULL,         -- thread | caution (NoteKind)
+    waitsOn      TEXT NOT NULL,
+    next         TEXT NOT NULL,
+    revises      INTEGER REFERENCES continuity_notes(id),
+    closes       INTEGER NOT NULL DEFAULT 0,
+    at           INTEGER NOT NULL       -- wall ms it was written
+  );
+  CREATE UNIQUE INDEX continuity_notes_one_revision ON continuity_notes(revises) WHERE revises IS NOT NULL;
+  CREATE INDEX continuity_notes_by_identity ON continuity_notes(identity, id);
+  CREATE TABLE continuity_handovers (
+    generationId INTEGER PRIMARY KEY REFERENCES continuity_generations(id),
+    note         TEXT NOT NULL,         -- the HandoverNote JSON, its status words dropped
+    dropped      INTEGER NOT NULL,      -- how many status words were dropped
+    at           INTEGER NOT NULL       -- wall ms it was written
+  );
+  `,
 ];
 
 /** The version this build writes. `MIGRATIONS.length` and nothing else: a

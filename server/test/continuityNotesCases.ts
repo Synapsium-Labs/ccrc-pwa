@@ -134,20 +134,18 @@ export function notesCases(m: Notes): Record<string, Case> {
       const f = m.noteKeyFact;
       expect([true, false, 'unmeasured'].map((claims) => f({ kind: 'programme', claims: claims as boolean | 'unmeasured' }, CALLER)))
         .toEqual(['live', 'not-yours', 'unmeasured']);
-      const item = (state: string, raisedBy: string) => ({ state: state as 'open', raisedBy, program: 'prog-a' });
-      const it = (i: Parameters<typeof f>[0] & { kind: 'item' }) => f(i, CALLER);
-      expect(it({ kind: 'item', item: 'absent', claimsProgramme: true })).toBe('gone');
-      expect(it({ kind: 'item', item: 'unmeasured', claimsProgramme: true })).toBe('unmeasured');
+      const it = (state: string, raisedBy: string, claimsProgramme: boolean | 'unmeasured') =>
+        f({ kind: 'item', item: { state: state as 'open', raisedBy, program: 'prog-a', claimsProgramme } }, CALLER);
+      expect(f({ kind: 'item', item: 'absent' }, CALLER)).toBe('gone');
+      expect(f({ kind: 'item', item: 'unmeasured' }, CALLER)).toBe('unmeasured');
       for (const state of ['open', 'checking']) {
-        expect(it({ kind: 'item', item: item(state, CALLER), claimsProgramme: false }), state).toBe('live');
-        expect(it({ kind: 'item', item: item(state, CALLER), claimsProgramme: 'unmeasured' }), state).toBe('live');
-        expect(it({ kind: 'item', item: item(state, 'lane-b'), claimsProgramme: true }), state).toBe('live');
-        expect(it({ kind: 'item', item: item(state, 'lane-b'), claimsProgramme: false }), state).toBe('not-yours');
-        expect(it({ kind: 'item', item: item(state, 'lane-b'), claimsProgramme: 'unmeasured' }), state).toBe('unmeasured');
+        expect(it(state, CALLER, false), state).toBe('live');
+        expect(it(state, CALLER, 'unmeasured'), state).toBe('live');
+        expect(it(state, 'lane-b', true), state).toBe('live');
+        expect(it(state, 'lane-b', false), state).toBe('not-yours');
+        expect(it(state, 'lane-b', 'unmeasured'), state).toBe('unmeasured');
       }
-      for (const state of ['done', 'withdrawn', 'dismissed']) {
-        expect(it({ kind: 'item', item: item(state, CALLER), claimsProgramme: true }), state).toBe('gone');
-      }
+      for (const state of ['done', 'withdrawn', 'dismissed']) expect(it(state, CALLER, true), state).toBe('gone');
       const run = (state: string, claimedBy: string | null) => f({ kind: 'run', run: { state: state as 'working', claimedBy } }, CALLER);
       expect(f({ kind: 'run', run: 'absent' }, CALLER)).toBe('gone');
       expect(f({ kind: 'run', run: 'unmeasured' }, CALLER)).toBe('unmeasured');
@@ -155,6 +153,13 @@ export function notesCases(m: Notes): Record<string, Case> {
         expect([run(state, CALLER), run(state, 'lane-b'), run(state, null)], state).toEqual(['live', 'not-yours', 'not-yours']);
       }
       for (const state of ['done', 'failed']) expect(run(state, CALLER), state).toBe('gone');
+    },
+    'revisedNoteFact: a live note of the caller\'s, a superseded one, another\'s, none, unread': () => {
+      const f = m.revisedNoteFact;
+      expect([
+        f({ identity: CALLER, live: true }, CALLER), f({ identity: CALLER, live: false }, CALLER), f({ identity: 'lane-b', live: true }, CALLER),
+        f({ identity: 'lane-b', live: false }, CALLER), f('absent', CALLER), f('unmeasured', CALLER),
+      ]).toEqual(['live', 'gone', 'not-yours', 'not-yours', 'gone', 'unmeasured']);
     },
     'handoverAsked: only checkpointed asks': () => {
       for (const g of GENERATION_STATES as readonly GenerationState[]) expect(m.handoverAsked(g), g).toBe(g === 'checkpointed' ? 'asked' : 'not-asked');

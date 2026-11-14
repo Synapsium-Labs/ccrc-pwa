@@ -253,6 +253,8 @@ export const MASKED_GET_ROUTES: ReadonlySet<string> = new Set([
   '/api/programmes/:slug/plan',
   // The hierarchy settings (D-8181): the owner ids are session ids a coordinator took.
   '/api/hierarchy',
+  // A session's live notes (Overlord W1a, the notes piece): what each thread waits on and what comes next, written by it.
+  '/api/sessions/:id/notes',
 ]);
 /** Whether the one answer hook masks a route's answer (D-5995). */
 export const answerMasked = (method: string, url: string | undefined): boolean =>
