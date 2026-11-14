@@ -963,7 +963,8 @@ describe('Overlord W1a compaction: auto-compact types the role\'s compaction ins
     seed(); sessionJson('idle', 600);
     route([['profile', 'coordinator'], ['compactwindow', '350000']]);
     for (const bad of [{}, { compactText: 'two\nlines' }, { compactText: "it's quoted" }, { compactText: 'a $HOME b' },
-      { compactText: 'x'.repeat(601) }, { compactText: '' }, { compactText: 7 }]) {
+      { compactText: 'x'.repeat(601) }, { compactText: '' }, { compactText: 7 },
+      { compactText: 'ends in a semicolon;' }, { compactText: 'a; b' }]) {   // tmux drops a trailing `;` (review 2004 F6)
       reset();
       fs.writeFileSync(path.join(h.home, 'lp.json'), JSON.stringify({ coordinator: bad }));
       tick(AT_PROMPT, 1, 'LAUNCH_PROFILES_JSON="$HOME/lp.json";');

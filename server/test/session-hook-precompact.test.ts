@@ -191,12 +191,14 @@ describe('PreCompact writes one line to its own file (W0-05)', () => {
 });
 
 describe('the line is the last PreCompact arm (plan review 1890 I1)', () => {
-  // The refusal arm, `_hook_compact_refuse`, sets `CS_REFUSED`, and this arm runs last so that it then writes
-  // `"phase":"refused"` (review 1927 M3); its cases are session-hook-precompact-refuse.test.ts's.
+  // The refusal arm, `_hook_compact_refuse`, writes its own `refused` line through this arm's function before it prints
+  // its block (review 2004 F1), and a delivered block (`CS_REFUSED`) skips this last call; its cases are
+  // session-hook-precompact-refuse.test.ts's.
   it('the dispatch calls _hook_compact_refuse first and _hook_compact_pre_line last: refuse, card, history, line', () => {
     const src = fs.readFileSync(HOOK, 'utf8');
     const at = (call: string): number => {
-      const line = `if [[ "$event" == PreCompact ]]; then ${call} || true; fi`;
+      const cond = call === '_hook_compact_pre_line' ? ' && -z "${CS_REFUSED-}"' : '';
+      const line = `if [[ "$event" == PreCompact${cond} ]]; then ${call} || true; fi`;
       expect(src.split(line).length - 1, `${call} is dispatched once`).toBe(1);
       return src.indexOf(line);
     };

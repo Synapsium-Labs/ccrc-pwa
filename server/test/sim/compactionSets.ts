@@ -17,19 +17,21 @@ export const HISTORY_INSTRUCTION = 'End the summary with the history node of thi
 
 export function compactInstructionsCases(m: CompactionModule): Record<string, SuiteCase> {
   return {
-    'total: every role answers a text, one line of printable ASCII, at most 600 characters, no quote character': () => {
+    'total: every role answers a text, one line of printable ASCII, at most 600 characters, no quote character or semicolon': () => {
       for (const r of FLEET_ROLE_NAMES) {
         const t = m.compactInstructionsFor(r);
         expect(typeof t, r).toBe('string');
         expect(t, r).toMatch(/^[\x20-\x7e]+$/);
         expect(t.length, r).toBeLessThanOrEqual(600);
-        expect(t, r).not.toMatch(/['"`\\$]/);
+        expect(t, r).not.toMatch(/['"`\\$;]/);
       }
     },
-    'every text ends with the history instruction and drops tool output (C51)': () => {
+    'every text ends with the history instruction, drops tool output and follows the operator\'s standing instructions (C51)': () => {
       for (const r of FLEET_ROLE_NAMES) {
         expect(m.compactInstructionsFor(r).endsWith(HISTORY_INSTRUCTION), r).toBe(true);
         expect(m.compactInstructionsFor(r), r).toContain('Drop tool output');
+        // the departure compaction-text-follows-standing-instructions: C51's clause, which the plan's Task 1 texts left out
+        expect(m.compactInstructionsFor(r), r).toContain('Drop tool output, and follow any standing compaction instructions the operator gave.');
       }
     },
     'auditor and replay take plain\'s text; the other five are five texts': () => {

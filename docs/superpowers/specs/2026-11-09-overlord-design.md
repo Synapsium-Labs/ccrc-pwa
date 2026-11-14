@@ -776,8 +776,8 @@ This subsection says how compaction becomes a counted fallback inside one genera
     fires first.
   - **Idle compaction is off,** so the idle trigger at 45 minutes renews before Claude Code's compaction at about 55.
   - **A proactive compaction becomes a renewal.** The PreCompact arm refuses a proactive automatic compaction and marks
-    a renewal due (soft, Table 3.3.11b). It is a verdict of its own, ahead of history W3's one print, which adds no
-    print (C53; plan-driven consistency, ruling R7b). It ships dark until W0 proves that a refusal leaves the turn intact.
+    a renewal due (soft, Table 3.3.11b). It is a verdict of its own, ahead of history W3's one print; one event still
+    has one stdout payload (C53; plan-driven consistency, ruling R7b). It ships dark until W0 proves that a refusal leaves the turn intact.
   - **When the soft budget is spent** (§3.3.11), a proactive compaction is allowed through, and counted.
 - **When a compaction does happen,** three things protect what it keeps. The role's compaction instructions (C51) keep
   ids, open commitments and recent corrections, and end the summary with the history node. The anchor on the `compact`
@@ -1074,8 +1074,9 @@ This subsection says how the Overlord uses the memory machinery ccrc already bui
 programmes build that machinery. `ccrc history` is a lossless, DAG-shaped record of every session's conversation
 (`2026-10-05-ccrc-history-lossless-dag-design.md`, with W3 steering and W4 `touched` in progress). Graphify is a
 knowledge graph of each repository's code, with a working-set card at compaction
-(`2026-09-09-graphify-compaction-card-design.md`, `2026-10-28-graphify-shared-graphs-design.md`). The PreCompact hook
-prints nothing today (pinned by tests), and history's W3 is the planned owner of its one print.
+(`2026-09-09-graphify-compaction-card-design.md`, `2026-10-28-graphify-shared-graphs-design.md`). The PreCompact hook's
+one print is history W3's steer text, printed only where the operator has armed W3 steering; otherwise the hook prints
+nothing on PreCompact (pinned by tests). History's W3 owns that one print.
 
 - **C53. Lossless history is the episodic memory of every long-lived role.**
   - **Generations stay one record.** History keys a family by the session id and its registry row's generation
@@ -1085,7 +1086,7 @@ prints nothing today (pinned by tests), and history's W3 is the planned owner of
   - **One PreCompact print, owned by history.** W3 steering makes PreCompact print one text: the instructions for the
     session's own DAG leaf, the `<ccrc-leaf>` block. The role instructions of C51 ride inside that print, as a section
     the role table supplies, before the steer text. The PreCompact arm's refusal (§3.3.4) is a verdict of its own, ahead
-    of that print, which adds no print (R7b). Neither programme adds a second writer. While W3 is not armed for a
+    of that print; one event still has one stdout payload (R7b). Neither programme adds a second writer. While W3 is not armed for a
     session's backend (arming is the operator's, after its compliance bars), only the typed `/compact` carries them.
   - **Leaves first, transcripts on demand.** The daily distillation (§9.2) and the weekly drift reading (C52) read the
     DAG's leaves, the session-written summaries, before any raw transcript. They expand only where a leaf is not
@@ -1237,7 +1238,7 @@ minutes of observed time in which no soft trigger starts a renewal (Table 11.5b)
 | The generation's account is outside its set: the operator changed the set, or the account's pool changed (C46) | hard | overlord | The renewal lane's sweep asks ccd for the generation's pool answer, `ccd pool-answer <id>`, behind the `pool-set` capability (C46): `_pool_ok`'s verdict for the account it runs on, and `_crosspool_valid`'s answer for that account. Due only on a mismatch with no valid crossing, and only when an account in the set can serve it. Not due where no account in the set can serve it: no renewal starts, and the word reads `stranded`, its item naming the cause that holds (C57). Not due for an account a valid crossing marker names: the operator's deliberate move stands until the next renewal, which clears the marker (C46). Not due on an undecidable verdict (a stale pool projection, or a bad set on the route record), on an unreadable crossing record, or when the read itself fails; the lane records the reason on the sweep. Otherwise a renewal lands inside the set, so it is not due again at once |
 | The generation's class is no longer servable on its account | hard | overlord | ccd's serviceability answer, asked by the renewal lane on each sweep. Where no account can serve it at all, no renewal starts: a renewal needs an account to land on, and the word reads `stranded` (Table 3.4b) |
 | Account load: the account's load is past the harder line, 85%, the session is idle, and another listed account that can serve it is under the soft line (C57) | hard | overlord | The limit samples and the turn marker (§3.4). It moves before a limit can hit in the middle of a turn |
-| A proactive compaction the PreCompact arm refused | soft | overlord, coordinator | The PreCompact print's decision |
+| A proactive compaction the PreCompact arm refused | soft | overlord, coordinator | The events file's `refused` line (`$REG/<id>.compactevents`, written by the refusal arm before it prints its block), read by `server/src/continuity/compactions.ts#refusedSince` |
 | The operator changed the designated class in Settings | soft | overlord | The designation row's class, changed after the generation was minted |
 | Evaluation due: the skill, the card template or the model id is not the one this generation was minted with | soft | overlord | A digest of the three, stored on the generation row at its mint. One renewal clears the trigger. Answers stay in shadow until the replay passes that digest (§9.5). The replay lane waits while a renewal is due, so it runs once this one has landed |
 | Not local: the conversation is absent on the host that wakes the session | hard | overlord, coordinator | The host's report |

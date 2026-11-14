@@ -26169,9 +26169,9 @@ _profile_spawn_compose() {   # id launchflags -> sets PROFILE_SPAWN_FLAGS, PROFI
 # `_auto_compact_check` types after `/compact`. Only when the route carries `compactwindow` too, which the lane writes
 # only while `continuity` is live (decision compaction-text-follows-continuity, ruling R8): arming `launch-profile`
 # alone still types a bare `/compact`. The text is checked here as well: one line of printable ASCII, at most 600
-# characters, with no quote, backslash or `$` (instructions-one-line); anything else answers empty, and a bare
+# characters, with no quote, backslash, `$` or `;` (instructions-one-line; tmux drops a trailing `;`, review 2004 F6); anything else answers empty, and a bare
 # `/compact` is typed. The hook's PreCompact print reads the same field (`_hook_role_compact_text`).
-COMPACT_TEXT_JQ='.[$r].compactText | if type == "string" and test("\\A[ -~]{1,600}\\z") and (test("[\\x22\\x27\\x24\\x5c\\x60]") | not) then . else error("not one typeable line") end'
+COMPACT_TEXT_JQ='.[$r].compactText | if type == "string" and test("\\A[ -~]{1,600}\\z") and (test("[\\x22\\x27\\x24\\x3b\\x5c\\x60]") | not) then . else error("not one typeable line") end'
 _compact_text_to() {   # var id -> var = the role's compaction text, or empty (a bare /compact); never fails
   local _ctt_p="" _ctt_out=""
   printf -v "$1" '%s' ''

@@ -2595,7 +2595,8 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     const body = (req.body ?? {}) as { field?: unknown; value?: unknown };
     const parsed = parseRouteFields(typeof body.field === 'string' ? { [body.field]: body.value } : null);
     if (!parsed.ok || Object.keys(parsed.route).length !== 1) {
-      // A launch-profile field is real but the lane's alone (`ROUTE_LANE_ONLY_FIELDS`), so the 400 says which and why.
+      // A lane-only field (`ROUTE_LANE_ONLY_FIELDS`: the launch-profile lane's three and the generations lane's
+      // `precompact`) is real but a lane's alone, so the 400 says which and why.
       const laneOnly = !parsed.ok && parsed.why === 'lane-only' ? { detail: routeParseDetail(parsed) } : {};
       return reply.code(400).send({ ok: false, error: 'bad-request', ...laneOnly });
     }

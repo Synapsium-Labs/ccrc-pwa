@@ -17,7 +17,8 @@ import type { CardRenderer } from './continuity-card.js';
  *  reaches ccd and the hook as `compactText` in `ccd/lib/launch-profiles.json` (the same projection), so ccd types
  *  `/compact <text>` and history's PreCompact print carries it as a section, both only when the route carries
  *  `compactwindow` (decision compaction-text-follows-continuity). Each text is one line of printable ASCII, at most
- *  600 characters, with no quote character, so it is typed as one literal send (instructions-one-line).
+ *  600 characters, with no quote character, backslash, `$` or `;` (tmux drops a trailing one), so it is typed as one
+ *  literal send (instructions-one-line).
  *
  *  Columns typed `null` until their owning piece lands. Each such piece widens its column's type, and
  *  the compiler then refuses every row until it is filled. Nothing reads a `null` column.

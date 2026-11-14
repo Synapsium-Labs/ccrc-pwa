@@ -1,8 +1,10 @@
 // The PreCompact refusal arm, dark (Overlord W1a compaction, Task 4; spec §3.3.4 C39; W0-13; rulings R7a, R7b, R11).
-// `_hook_compact_refuse` is a verdict of its own, dispatched after `_hook_compact_pre` and ahead of `_hook_history_pre`,
-// so no history switch turns it off. It refuses, once a turn, a main-thread automatic compaction whose scope rule answers
-// `main`, only while the route field `precompact` reads `refuse`; refusing, it prints PreCompact's JSON block decision
-// and sets CS_REFUSED, so history's print stays silent and the events line says `"phase":"refused"` in place of `"pre"`.
+// `_hook_compact_refuse` is a verdict of its own, dispatched FIRST of the PreCompact arms, ahead of the card
+// (`_hook_compact_pre`, departure refusal-ahead-of-the-card) and of `_hook_history_pre`, so no history switch turns it off.
+// It refuses, once a turn, a main-thread automatic compaction whose scope rule answers `main`, only while the route field
+// `precompact` reads `refuse`. Refusing, it records first: the `refused` events line is written under the lock, and only
+// then does it print PreCompact's JSON block decision and set CS_REFUSED, so the card and history's print stay silent and
+// no `pre` line follows (review 2004 F1). A refusal that cannot be recorded is not printed.
 // "This turn" starts at the turn marker's existing `turnAt` (ruling on review 1902 n2): a refused line at or after it is
 // this turn's, and a marker that cannot be read answers "refused already".
 //
@@ -11,6 +13,7 @@
 // `continuity-precompact.test.ts` through `precompactDecision`.
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import path from 'node:path';
 import { spawnSyncGroup } from './spawnGroup.js';
 import { mkTmp } from './tmpHelpers.js';
@@ -166,12 +169,54 @@ describe('armed: refuse + auto + main scope is blocked once a turn', () => {
     const t = armed();
     expect(run({ ...preCompact('auto', t), agent_id: 'a1' })).toBe('');
   });
-  it('a print that fails refuses nothing: the line says pre', () => {
+  it('a print that fails: the refused line stands, the compaction\'s own pre line follows, and the turn asks no second refusal', () => {
     const t = armed();
     const r = spawnSyncGroup('bash', ['-c', 'bash "$0" >&-; echo "rc=$?"', HOOK], { input: JSON.stringify(preCompact('auto', t)), encoding: 'utf8', env: env(), timeout: 30_000 });
     expect(r.error).toBeUndefined();
     expect([r.stdout, r.stderr]).toEqual(['rc=0\n', '']);
-    expect(phases()).toEqual(['pre']);
+    expect(phases()).toEqual(['refused', 'pre']);
+    expect(run(preCompact('auto', t))).toBe('');
+    expect(phases()).toEqual(['refused', 'pre', 'pre']);
+  });
+});
+
+// Review 2004 F1: the arm used to print first and leave the `refused` line to the last arm, so any path that wrote no line
+// refused again on every later automatic PreCompact (for a directory or FIFO at prev, every turn). Now it records first,
+// so each such path lets the compaction through, this turn and the next: the arm fails open on both sides.
+describe('a refusal is printed only once it is recorded (review 2004 F1)', () => {
+  const twoTurns = (t: string, label: string): void => {
+    expect(run(preCompact('auto', t)), `${label}: this turn`).toBe('');
+    turn(Date.now() + 1);
+    expect(run(preCompact('auto', t)), `${label}: the next turn`).toBe('');
+  };
+  it('a FIFO at .compacteventsprev: the automatic PreCompact passes, and so does the next turn\'s', () => {
+    const t = armed();
+    execFileSync('mkfifo', [reg(`${ID}.compacteventsprev`)]);
+    twoTurns(t, 'fifo');
+    expect(fs.existsSync(reg(`${ID}.compactevents`)), 'no line was written').toBe(false);
+  });
+  it('a directory at .compacteventsprev: the automatic PreCompact passes, and so does the next turn\'s', () => {
+    const t = armed();
+    fs.mkdirSync(reg(`${ID}.compacteventsprev`));
+    twoTurns(t, 'directory');
+    expect(fs.existsSync(reg(`${ID}.compactevents`)), 'no line was written').toBe(false);
+  });
+  it('a failed append (a read-only events file): the automatic PreCompact passes, and so does the next turn\'s', () => {
+    const t = armed();
+    fs.writeFileSync(reg(`${ID}.compactevents`), '', { mode: 0o444 });
+    twoTurns(t, 'read-only');
+    expect(fs.readFileSync(reg(`${ID}.compactevents`), 'utf8'), 'no line was written').toBe('');
+  });
+  it('another generation (the events line\'s generation check): the automatic PreCompact passes', () => {
+    const t = armed();
+    fs.writeFileSync(reg(`${ID}.generation`), '0189abcd-1234-5678-9abc-0123456789ff');
+    twoTurns(t, 'generation');
+    expect(fs.existsSync(reg(`${ID}.compactevents`)), 'no line was written').toBe(false);
+  });
+  it('CONTROL: with a regular events file the same fixture is refused, and the line is on disk before the block', () => {
+    const t = armed();
+    expect(run(preCompact('auto', t))).toBe(BLOCK);
+    expect(phases()).toEqual(['refused']);
   });
 });
 

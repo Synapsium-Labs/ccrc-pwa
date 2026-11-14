@@ -67,8 +67,8 @@ export type RouteRequest = { ok: true; id: number; ask: RouteAsk } | { ok: false
  * canonical-id seam `routes.test.ts` censuses; `null` is a bad one), the target, the `why` (1..400 bytes, no
  * control characters) and exactly one of `kind`, `demote` or `field`+`value`.
  * The manual value passes `parseRouteFields`, the guard the sibling session
- * route reuses, which also refuses a launch-profile field (`lane-only`: the lane
- * writes those through `CCD_ARGV.routeSet`, never this door; `kind` and `demote`
+ * route reuses, which also refuses a lane-only field (`lane-only`: the launch-profile lane's three
+ * and the generations lane's `precompact`, each written by its lane through `CCD_ARGV.routeSet`, never this door; `kind` and `demote`
  * move only `class` and `effort`): ccd's own `_route_valid` carries no control-character or
  * length arm, so this is the only barrier on shape, and a value that skipped it
  * could poison the `route:` event string the fold parses back off its history.

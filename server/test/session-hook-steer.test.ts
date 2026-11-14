@@ -741,7 +741,7 @@ describe('the unarmed session forks nothing the steering added (Linux, strace -f
     fs.rmSync(path.join(home, '.ccrc', 'history-steer-off'));
     // CONTROL, on hooks without the compaction events arm (Overlord W1a): that arm asks the same scope verdict when the
     // card did not run, so with it in place the armed print's verdict only moves a fork the unarmed run takes too.
-    const EVENTS_LINE = 'if [[ "$event" == PreCompact ]]; then _hook_compact_pre_line || true; fi';
+    const EVENTS_LINE = 'if [[ "$event" == PreCompact && -z "${CS_REFUSED-}" ]]; then _hook_compact_pre_line || true; fi';
     const without = (lines: string[], name: string): string => {
       const kept2 = lines.filter((l) => l !== EVENTS_LINE);
       expect(lines.length - kept2.length, `${name} lost exactly the events arm's call line`).toBe(1);
@@ -1097,6 +1097,23 @@ describe('Overlord W1a compaction: the role section inside the one PreCompact pr
     expect(r.error).toBeUndefined();
     expect([r.status, r.stderr]).toEqual([0, '']);
     expect(r.stdout).toBe(printOf(STEER_GENERIC_TEXT));
+  });
+  it('a projection text with a semicolon is not one typeable line: today\'s text (review 2004 F6)', () => {
+    const dir = path.join(home, 'hookcopy');
+    mk(path.join(dir, 'lib'));
+    fs.copyFileSync(HOOK, path.join(dir, 'session-hook.sh'));
+    const payload = armed();
+    route({ profile: 'coordinator', compactwindow: '350000' });
+    const runCopy = (text: string): string => {
+      fs.writeFileSync(path.join(dir, 'lib', 'launch-profiles.json'), JSON.stringify({ coordinator: { compactText: text } }));
+      for (const f of ['compactset', 'compactcard']) fs.rmSync(reg(`${ID}.${f}`), { force: true });   // each run alone, as run() does
+      const r = spawnSyncGroup('bash', [path.join(dir, 'session-hook.sh')], { input: JSON.stringify(payload), encoding: 'utf8', env: hookEnv(), timeout: 60_000, killSignal: 'SIGKILL' });
+      expect(r.error).toBeUndefined();
+      expect([r.status, r.stderr]).toEqual([0, '']);
+      return r.stdout;
+    };
+    expect(runCopy('keep the run ids.'), 'CONTROL: a typeable text prints its section').toBe(`\nccrc-role-compaction: keep the run ids.\n\n${STEER_GENERIC_TEXT}\n`);
+    for (const t of ['keep the run ids;', 'keep; the run ids.']) expect(runCopy(t), t).toBe(printOf(STEER_GENERIC_TEXT));
   });
   it('parity: the hook\'s COMPACT_TEXT_JQ is ccd\'s, byte for byte (one check of the projection\'s text, two readers)', () => {
     const lineOf = (file: string): string => fs.readFileSync(file, 'utf8').split('\n').find((l) => l.startsWith('COMPACT_TEXT_JQ='))!;
