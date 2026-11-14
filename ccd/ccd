@@ -10047,6 +10047,7 @@ cmd_account_pane() {   # ccd account-pane --id <id> [--method setup-token|openai
 }
 
 cmd_route() {   # ccd route --session <id> --set <field>=<value> [--set ...] [--actor <text>] [--reason <text>]
+  # An empty value (`--set compact=`, `--set compactwindow=`) removes that compaction field; every other field refuses it.
   # Routing spec 2026-09-14 §5.3. WRITES THE RECORD; TYPES ONLY UNDER `--apply`.
   # Without that flag — the COORDINATOR's form, and the default — a session
   # running this against a worker types nothing into that worker's pane and ccd

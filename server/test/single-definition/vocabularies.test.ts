@@ -1341,7 +1341,7 @@ describe('one scratch-slug predicate — four prefixes and one infix, three bash
   it('is spelled identically at exactly three sites, each named here BY NAME', () => {
     expect(holdersOf(PRED)).toEqual([
       'ccd/ccrc',                 // _mem_is_scratch — the rule, and the measurement
-      'ccd/ccrc-doctor-checks',   // _check_memory — spelled here, D-92's trade
+      'ccd/ccrc-doctor-checks',   // _dr_mem_is_scratch (both memory checks) — spelled here, D-92's trade
       'ccd/session-hook.sh',      // the hook's own case — shares nothing with either
     ]);
   });
