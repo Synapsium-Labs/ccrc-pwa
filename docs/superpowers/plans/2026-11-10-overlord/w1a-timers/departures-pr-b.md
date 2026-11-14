@@ -95,6 +95,12 @@ departures are kept here, by slug, and the coordinator folds both into the progr
   naming only the cancel door reds the case.
 - **operator-cancel-token-probe** (F9, fixed) — the armed case shows the box token is no key to the operator's cancel either;
   the operator doors' `timer-unmeasured` and `unavailable` answers have cases on the rig.
+- **notes-first-then-recount** (F6, the coordinator's ruling) — notes (#2796) landed first; this round merges `main` once
+  after it and re-derives every count from the tests: 237 scanned routes, 234 HTTP, 142 gated, 91 exempt; seventy-nine
+  box-token machine lanes and eighty-two machine lanes in all (`WORDS` gains `eighty` to `eighty-two`). `continuity/routes.ts`
+  registers the note door's three lanes, then the timers' three, then the operator's two session-gated doors last, so no
+  slice of a session-gated door holds a token check. `cardFacts.ts` keeps notes' note and checkpoint reads and takes the
+  role and intent from `sessionRoleRead`.
 - F10 (the spec's `TIMER_OPERATOR_DOORS`) is the coordinator's, for the spec's next correction.
 
 ## Claims
