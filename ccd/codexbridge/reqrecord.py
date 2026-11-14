@@ -27,9 +27,10 @@ whatever its cause, as `record-requests write-failed <errno name>` naming the fi
 never a path or a value; every later failure, of any cause, is counted only.
 
 THE ROW (`row`), ROW_VERSION 1, its keys in this order, every value bounded:
-  v, at, postAt, session, subagent, message, post, route, model, status, outcome, served, effort, inputTokens,
-  cachedTokens, outputTokens, reasoningTokens, firstOutputMs, totalMs, inputTransformations, replay (a message's
-  first POST only), markers, fallback, turnState (only when set).
+  v, at, postAt, session, subagent, message, post, route, model, status, outcome, served, servedTier, effort,
+  inputTokens, cachedTokens, outputTokens, reasoningTokens, firstOutputMs, reasoningMs, totalMs, inputTransformations,
+  replay (a message's first POST only), markers, fallback, turnState (only when set). `servedTier` and `reasoningMs`
+  (D-8632, D-8633) are additive keys of version 1.
 - `at`: UTC milliseconds when the answer ended (its terminal event, its error or its close; for a POST that got no
   answer, when that failure was known); `postAt`: UTC milliseconds when the POST started.
 - `session`: the `x-claude-code-session-id` the client sent when it matches SESSION_RE, else null; `subagent`: true
@@ -48,13 +49,19 @@ THE ROW (`row`), ROW_VERSION 1, its keys in this order, every value bounded:
   this answer reached none (a non-2xx, a stream that broke: `Answer.measured` false), and a token count null when the
   terminal's usage carried no valid one. `inputTransformations` is null too when the response carried no array, and
   is capped as the parity row's map is (PARITY_TRANSFORMS_MAX keys, then OVERFLOW).
+- `servedTier` (D-8632): the parity row's `servedTier` key for this answer (`stats.tier_word`: the terminal's
+  `service_tier` bounded by NAME_RE, or `absent`); null when `measured` is false.
 - `effort`: `stats.effort_word` of the body this POST sent: its `reasoning.effort`, or `none`.
 - `firstOutputMs`, `totalMs`: integers, the parity section's own instants (the POST's start to the first output released
   and to the terminal event) rounded UP, so each lies in the bucket the parity histogram counted it in; null when not
   reached, and null whenever the parity section counted no response for this answer (`measured` false), so the
   histograms rebuilt from the rows are the parity row's: a stream that released output and then broke has neither.
+- `reasoningMs` (D-8633): the parity section's instant of the last reasoning item before the first output, from the
+  same POST start, rounded up the same way; null when `firstOutputMs` is, and when no reasoning item came before the
+  first output.
 - `replay`: the message's reasoning-store lookups by `stats.REPLAY_OUTCOMES`, on its `post` 0 row only.
-- `markers`: the request markers (`backend.MARKERS`) this POST carried; `fallback`: true on the row whose 400 started
+- `markers`: the request markers (`backend.MARKERS`, `bridge-service-tier-fast` among them) this POST carried;
+  `fallback`: true on the row whose 400 started
   the fallback; `turnState`: `captured` or `echoed` (`stats.TURN_STATE_EVENTS`) when this POST did either.
 NEVER IN A ROW: any text of the conversation, a tool name, the `prompt_cache_key`, a turn-state value, any header value
 but the bounded session id, an account id, a token, or anything `stats.TOKEN_HEADERS` refuses.
@@ -111,9 +118,11 @@ class Answer:
         self.turn_state = None  # type: Optional[str]
         self.measured = False  # the reducer saw a terminal completed or incomplete response (the parity row counted it)
         self.served = None  # type: Optional[str]
+        self.tier = None  # type: Optional[str]  (D-8632: the terminal's service_tier, unbounded until written)
         self.usage = {}  # type: Dict[str, int]
         self.transformations = None  # type: Optional[list]
         self.first_ms = None  # type: Optional[float]
+        self.reasoning_ms = None  # type: Optional[float]  (D-8633: None when no reasoning preceded the first output)
         self.total_ms = None  # type: Optional[float]
 
     def since_post(self, at: Optional[float]) -> Optional[float]:
@@ -130,6 +139,8 @@ class Answer:
         self.measured = True
         served = diagnostics.get("model")
         self.served = served if isinstance(served, str) else None
+        tier = diagnostics.get("tier")  # D-8632
+        self.tier = tier if isinstance(tier, str) else None
         usage = diagnostics.get("usage")
         self.usage = dict(usage) if isinstance(usage, Mapping) else {}
         transformations = diagnostics.get("transformations")
@@ -155,12 +166,14 @@ def row(ans: Answer, *, session: object, subagent: bool, route: str, outcome: st
            "status": ans.status if isinstance(ans.status, int) and 100 <= ans.status <= 599 else None,
            "outcome": stats.bounded(outcome),
            "served": stats.served_word(ans.served, ans.model) if ans.measured else None,
+           "servedTier": stats.tier_word(ans.tier) if ans.measured else None,  # D-8632
            "effort": stats.effort_word(ans.effort)}  # type: Dict[str, object]
     for name, field in stats.PARITY_TOKENS:
         value = ans.usage.get(name) if ans.measured else None
         out[field] = value if stats.is_count(value) else None
     # the parity histograms count these instants only for a measured answer (`server._observe`), so the row does too
     out["firstOutputMs"] = _ms(ans.first_ms) if ans.measured else None
+    out["reasoningMs"] = _ms(ans.reasoning_ms) if ans.measured else None  # D-8633
     out["totalMs"] = _ms(ans.total_ms) if ans.measured else None
     held = None  # type: Optional[Dict[str, int]]
     if ans.measured and ans.transformations is not None:

@@ -1077,13 +1077,16 @@ describe.skipIf(!PY)('the live probe: the first live step, bounded (codex-bridge
 describe('the consent markers have no writer in the tree (codex-bridge Task 18, the whole-wave fix round)', () => {
   const REPO_ROOT = path.dirname(CCD_DIR);
   const ROOTS = ['ccd', 'shared', 'deploy', path.join('server', 'src'), path.join('agent', 'src')];
-  // D-8622: the bridge's three request markers, and backend.py's constants that spell them, are the operator's too
+  // D-8622: the bridge's request markers, and backend.py's constants that spell them, are the operator's too (D-8632's
+  // bridge-service-tier-fast and SERVICE_TIER_FAST_MARKER among them)
   // D-8619: so are the per-request record's marker and reqrecord.py's constant that spells it
   const NAMES = new RegExp(String.raw`liveprobe-allowed|record-streams|\bALLOW_MARKER\b|\bRECORD_MARKER\b|`
-    + String.raw`bridge-reasoning-all-turns|bridge-verbosity|bridge-turn-state|\b(?:ALL_TURNS|VERBOSITY|TURN_STATE)_MARKER\b|`
+    + String.raw`bridge-reasoning-all-turns|bridge-verbosity|bridge-turn-state|bridge-service-tier-fast|`
+    + String.raw`\b(?:ALL_TURNS|VERBOSITY|TURN_STATE|SERVICE_TIER_FAST)_MARKER\b|`
     + String.raw`record-requests|\bREQUESTS_MARKER\b`);
   const MARK = '(?:liveprobe-allowed|record-streams|ALLOW_MARKER|RECORD_MARKER|bridge-reasoning-all-turns|bridge-verbosity'
-    + '|bridge-turn-state|ALL_TURNS_MARKER|VERBOSITY_MARKER|TURN_STATE_MARKER|record-requests|REQUESTS_MARKER)';
+    + '|bridge-turn-state|bridge-service-tier-fast|ALL_TURNS_MARKER|VERBOSITY_MARKER|TURN_STATE_MARKER|SERVICE_TIER_FAST_MARKER'
+    + '|record-requests|REQUESTS_MARKER)';
   const WRITE = new RegExp([
     String.raw`(?:^|[^\w.-])(?:touch|tee|cp|mv|ln|install|truncate)(?:\s|["'],)`,   // a command, or an argv's head
     String.raw`(?<![=\-<>])>>?\|?\s*[^\s<>|;&()]*` + MARK,                              // a redirect onto it
@@ -1121,6 +1124,9 @@ describe('the consent markers have no writer in the tree (codex-bridge Task 18, 
       'fd = os.open(os.path.join(d, ALL_TURNS_MARKER), os.O_CREAT | os.O_WRONLY)',
       'touch "$dir/record-requests"', 'pathlib.Path(lane_dir, REQUESTS_MARKER).touch()',
       'fd = os.open(os.path.join(d, REQUESTS_MARKER), os.O_WRONLY | os.O_APPEND | os.O_CREAT)',
+      'touch "$dir/bridge-service-tier-fast"', 'printf "" >"$d/bridge-service-tier-fast"',
+      "writeFileSync(join(dir, 'bridge-service-tier-fast'), '')", 'pathlib.Path(lane_dir, SERVICE_TIER_FAST_MARKER).touch()',
+      'open(os.path.join(d, SERVICE_TIER_FAST_MARKER), "w").close()',
     ]) expect(!COMMENT.test(w) && NAMES.test(w) && WRITE.test(w), w).toBe(true);
     for (const r of [
       'if not os.path.exists(os.path.join(lane_dir, ALLOW_MARKER)):', 'ALLOW_MARKER = "liveprobe-allowed"',
@@ -1132,7 +1138,19 @@ describe('the consent markers have no writer in the tree (codex-bridge Task 18, 
       'TURN_STATE_MARKER = "bridge-turn-state"', 'MARKERS = (ALL_TURNS_MARKER, VERBOSITY_MARKER, TURN_STATE_MARKER)',
       'rm -f -- "$dir/bridge-turn-state" 2>/dev/null',
       'REQUESTS_MARKER = "record-requests"', 'return os.path.exists(os.path.join(self._lane_dir, REQUESTS_MARKER))',
+      'SERVICE_TIER_FAST_MARKER = "bridge-service-tier-fast"  # D-8632',
+      'MARKERS = (ALL_TURNS_MARKER, VERBOSITY_MARKER, TURN_STATE_MARKER, SERVICE_TIER_FAST_MARKER)  # a new one goes last',
+      'tier = SERVICE_TIER_PRIORITY if SERVICE_TIER_FAST_MARKER in marks else None  # D-8632: never gated on the row',
+      'rm -f -- "$dir/bridge-service-tier-fast" 2>/dev/null',
     ]) expect(NAMES.test(r) && !WRITE.test(r), r).toBe(true);
+  });
+
+  it('CONTROL: the scan sees bridge-service-tier-fast where backend.py and ccd/ccrc name it (D-8632)', () => {
+    for (const f of ['ccd/codexbridge/backend.py', 'ccd/ccrc']) {
+      const lines = codeLines(path.join(REPO_ROOT, f)).filter(([, l]) => /bridge-service-tier-fast|SERVICE_TIER_FAST_MARKER/.test(l));
+      expect(lines.length, f).toBeGreaterThan(0);
+      for (const [, l] of lines) expect(NAMES.test(l), `${f}: ${l}`).toBe(true);
+    }
   });
 
   it('no code line of shipped code writes liveprobe-allowed, record-streams, record-requests or a request marker', () => {

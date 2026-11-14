@@ -57,8 +57,9 @@ THE OPS, run in order; each prints ONE JSON line `{"op": <name>, ...}` and the r
                    (item ids and keys only, never an item), "counted": {"names", "counts"}, "committable",
                    "emittedToolUse", "refusal", "phases", "emittedText", "warnings", "terminalBeforeEof",
                    "outputItems" (a count), "responseId", "diagnostics" (the reducer's, D-8618: the terminal's
-                   served model, valid usage counts and input_transformations keys, or None), "trace"? (per parsed
-                   event: its type, the events released, and whether terminal and committable were then set)}: one
+                   served model, valid usage counts and input_transformations keys and, D-8632, the service tier, or
+                   None), "reasoningLead" (R22, D-8633), "trace"? (per parsed event: its type, the events released,
+                   whether terminal and committable were then set, and the reducer's reasoningLead then)}: one
                    SseParser and one Reducer, the reducer's release() drained after every event, finish() after the
                    parser is closed
   stop-reasons     -> {"rows": [{"in": [kind, reason, end_turn, emitted_tool_use, refusal], "stop", "cont"}],
@@ -133,8 +134,9 @@ THE COUNT ESTIMATOR, THE KNOWN NAMES AND THE STATS FILE (Task 5): one Stats per 
 THE BACKEND ADAPTER (Task 7). A request is built from an Anthropic body through inbound.from_anthropic (a ListSink,
   no store), never spelled as a neutral request here.
   backend-consts   -> {"DEFAULT_BASE", "RESPONSES_PATH", "ORIGINATOR", "IDLE_TIMEOUT_S", "CONNECT_TIMEOUT_S",
-                   "INSTRUCTIONS_MARKER", "ALL_TURNS_MARKER", "VERBOSITY_MARKER", "TURN_STATE_MARKER", "MARKERS",
-                   "ALL_TURNS", "VERBOSITIES", "TURN_STATE_HEADER"}
+                   "INSTRUCTIONS_MARKER", "ALL_TURNS_MARKER", "VERBOSITY_MARKER", "TURN_STATE_MARKER",
+                   "SERVICE_TIER_FAST_MARKER", "MARKERS", "ALL_TURNS", "VERBOSITIES", "TURN_STATE_HEADER",
+                   "SERVICE_TIER_PRIORITY"}
   backend-base     {environ?} -> {"base"}: backend.upstream_base over `environ` (a plain dict), else over os.environ
   backend-body     {body, headers?, output_config?, laneDir?, row?} -> {"body", "keys": the body's keys in order,
                    "wire": encode_body's bytes as text, "carried": the request markers the body carries}: build_body
@@ -319,7 +321,7 @@ def _reduce(op, cb):
             events.extend([n, d] for n, d in got)
             trace.append({"type": ev.type, "terminal": r.terminal is not None, "committable": r.committable,
                           "released": [n + ":" + d["delta"]["type"] if n == "content_block_delta" else n
-                                       for n, d in got]})
+                                       for n, d in got], "reasoningLead": r.reasoning_lead})
 
     for i in range(0, len(data), size):
         take(parser.feed(data[i:i + size]))
@@ -345,7 +347,7 @@ def _reduce(op, cb):
         "committable": r.committable, "emittedToolUse": r.emitted_tool_use, "refusal": r.refusal,
         "phases": r.phases, "emittedText": {str(k): v for k, v in r.emitted_text.items()},
         "warnings": list(r.warnings), "terminalBeforeEof": before_eof, "outputItems": len(r.output_items),
-        "responseId": r.response_id, "diagnostics": r.diagnostics,
+        "responseId": r.response_id, "diagnostics": r.diagnostics, "reasoningLead": r.reasoning_lead,
     }
     if op.get("trace"):
         out["trace"] = trace
@@ -840,8 +842,9 @@ def _backend_op(name, op, cb):
     if name == "backend-consts":
         return {k: getattr(backend, k) for k in ("DEFAULT_BASE", "RESPONSES_PATH", "ORIGINATOR", "IDLE_TIMEOUT_S",
                                                   "CONNECT_TIMEOUT_S", "INSTRUCTIONS_MARKER", "ALL_TURNS_MARKER",
-                                                  "VERBOSITY_MARKER", "TURN_STATE_MARKER", "MARKERS", "ALL_TURNS",
-                                                  "VERBOSITIES", "TURN_STATE_HEADER")}
+                                                  "VERBOSITY_MARKER", "TURN_STATE_MARKER", "SERVICE_TIER_FAST_MARKER",
+                                                  "MARKERS", "ALL_TURNS", "VERBOSITIES", "TURN_STATE_HEADER",
+                                                  "SERVICE_TIER_PRIORITY")}
     if name == "backend-base":
         return {"base": backend.upstream_base(op["environ"] if "environ" in op else os.environ)}
     if name == "backend-ua":
@@ -853,7 +856,7 @@ def _backend_op(name, op, cb):
     form = backend.instructions_form(op["laneDir"]) if op.get("laneDir") else False
     add = backend.additions(op.get("row"), backend.markers(op["laneDir"]) if op.get("laneDir") else frozenset())
     body = backend.build_body(req, instructions_form=form, reasoning_context=add.reasoning_context,
-                              verbosity=add.verbosity)
+                              verbosity=add.verbosity, service_tier=add.service_tier)
     wire = backend.encode_body(body)
     if name == "backend-body":
         return {"body": body, "keys": list(body), "wire": wire.decode("utf-8"), "carried": list(add.carried)}

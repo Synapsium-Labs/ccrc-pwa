@@ -14620,7 +14620,7 @@ _codex_reap_files() {   # <id>
   # The bridge's markers (codex-bridge Stage 2, Task 11; the three request markers, D-8622; record-requests, D-8619), which an operator touches
   # and no ccrc code writes; then liveprobe.count and its tmp, and the stats file's tmp (below), which a killed write_count or stats flush leaves.
   local -a names=(lane.json runtime.env litellm.yaml litellm.yaml.prev .lock
-                  bridge-instructions bridge-reasoning-all-turns bridge-verbosity bridge-turn-state record-streams record-requests liveprobe-allowed liveprobe.count liveprobe.count.tmp)
+                  bridge-instructions bridge-reasoning-all-turns bridge-verbosity bridge-turn-state bridge-service-tier-fast record-streams record-requests liveprobe-allowed liveprobe.count liveprobe.count.tmp)
   local -a tmps=() bf=()
   _codex_shape || return 1
   if ! [[ "$id" =~ $WRAPPER_ID_RE ]]; then

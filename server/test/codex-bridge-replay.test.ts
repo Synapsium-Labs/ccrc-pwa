@@ -51,6 +51,7 @@ interface Diagnostics {
   model: string | null;
   usage: Record<string, number>;
   transformations: string[] | null;
+  tier: string | null; // D-8632: the terminal response's service_tier
 }
 
 const EXPECT = JSON.parse(readFileSync(path.join(STREAMS_DIR, 'expect.json'), 'utf8')) as {
@@ -468,9 +469,28 @@ describe.skipIf(!PY)('the reducer\'s parity diagnostics (D-8618)', () => {
     expect(failed.terminal.error).toMatchObject({ type: 'api_error', status: 503 });
     for (const line of [stopped, failed]) {
       expect(line.diagnostics).toEqual({
-        model: 'model-b', usage: { input: 3, output: 1 }, transformations: ['reasoning:removed:turn_boundary'],
+        model: 'model-b', usage: { input: 3, output: 1 }, transformations: ['reasoning:removed:turn_boundary'], tier: null,
       });
     }
+  });
+
+  // D-8632: the served tier, read as the served model is: a non-empty string or nothing. It is bounded where it is
+  // written (stats.tier_word), so an unbounded value is kept here as the backend sent it and never reaches a file raw.
+  it('the served tier is the terminal response\'s service_tier, a non-empty string, else none', async () => {
+    const long = `tier-${'x'.repeat(80)}`;
+    const lines = await run([
+      inline([createdEv(), doneEv, end('completed', { service_tier: 'priority' })]),
+      inline([createdEv(), doneEv, end('completed', { service_tier: 'default' })]),
+      inline([createdEv(), doneEv, end('completed', {})]),
+      inline([createdEv({ service_tier: 'priority' }), doneEv, end('completed', {})]),
+      inline([createdEv(), doneEv, end('completed', { service_tier: '' })]),
+      inline([createdEv(), doneEv, end('completed', { service_tier: 5 })]),
+      inline([createdEv(), doneEv, end('completed', { service_tier: ['priority'] })]),
+      inline([createdEv(), doneEv, end('completed', { service_tier: long })]),
+      inline([createdEv(), end('incomplete', { service_tier: 'flex' })]),
+    ]);
+    expect(lines.map((l) => l.diagnostics.tier)).toEqual(['priority', 'default', null, null, null, null, null, long, 'flex']);
+    for (const l of lines.slice(0, 8)) expect(l.terminal.stop).toBe('end_turn');
   });
 
   it('a failed or truncated response has no diagnostics: no terminal the parity section counts', async () => {
@@ -486,5 +506,56 @@ describe.skipIf(!PY)('the reducer\'s parity diagnostics (D-8618)', () => {
       expect(line.terminal.error).not.toBeNull();
       expect(line.diagnostics).toBeNull();
     }
+  });
+});
+
+// D-8633 (R22): the reasoning items released before the first block, which the server times. Clock-free: the reducer
+// only counts, and the count stops at the first block released, so the instant the server notes when it last grew is
+// the last reasoning item's before the first output.
+describe.skipIf(!PY)('the reducer\'s reasoning lead (R22, D-8633)', () => {
+  const say = (id: string, text: string): Record<string, unknown> => ({
+    type: 'message', id, role: 'assistant', status: 'completed', content: [{ type: 'output_text', text }],
+  });
+  const rs = (id: string, enc = true): Record<string, unknown> => ({ type: 'reasoning', id, summary: [], ...(enc ? { encrypted_content: `ENC-${id}` } : {}) });
+  const fc = (id: string): Record<string, unknown> => ({ type: 'function_call', id, call_id: `call_${id}`, name: 'Read', arguments: '{}', status: 'completed' });
+  const created = { type: 'response.created', response: { id: 'resp_fx1', status: 'in_progress', output: [] } };
+  const done = (oi: number, item: Record<string, unknown>): { type: string } & Record<string, unknown> => ({
+    type: 'response.output_item.done', output_index: oi, item,
+  });
+  const completed = { type: 'response.completed', response: { id: 'resp_fx1', status: 'completed', output: [], usage: { input_tokens: 1, output_tokens: 1 } } };
+  const traced = (events: Array<{ type: string } & Record<string, unknown>>): object => ({ ...inline(events), trace: true });
+
+  it('counts every reasoning item before the first block, encrypted or not, and none after it', async () => {
+    const [two, after, plain, none] = await run([
+      traced([created, done(0, rs('rs_fx1')), done(1, rs('rs_fx2')), done(2, fc('fx3')), done(3, rs('rs_fx4')), done(4, say('msg_fx5', 'ok')), completed]),
+      traced([created, done(0, say('msg_fx1', 'first')), done(1, rs('rs_fx2')), done(2, fc('fx3')), completed]),
+      traced([created, done(0, rs('rs_fx1', false)), done(1, say('msg_fx2', 'ok')), completed]),
+      traced([created, done(0, say('msg_fx1', 'ok')), completed]),
+    ]);
+    expect(two.reasoningLead).toBe(2);
+    // the per-event counts: it grows at each reasoning item's done event, and stands still from the first block on
+    expect(two.trace.map((t: Line) => t.reasoningLead)).toEqual([0, 1, 2, 2, 2, 2, 2]);
+    expect(after.reasoningLead).toBe(0);
+    expect(plain.reasoningLead).toBe(1);
+    expect(none.reasoningLead).toBe(0);
+  });
+
+  it('live text is the first block: a reasoning item finished after a delta is not before the first output', async () => {
+    const delta = { type: 'response.output_text.delta', output_index: 0, item_id: 'msg_fx1', content_index: 0, delta: 'Hi' };
+    const added = { type: 'response.output_item.added', output_index: 0, item: { type: 'message', id: 'msg_fx1', role: 'assistant', status: 'in_progress', content: [] } };
+    const [line] = await run([traced([created, added, delta, done(0, say('msg_fx1', 'Hi')), done(1, rs('rs_fx2')), completed])]);
+    expect(line.reasoningLead).toBe(0);
+  });
+
+  it('released in output order: a reasoning item held behind a gap counts only when it is released before a block', async () => {
+    const [behind, ahead] = await run([
+      // index 1's reasoning finishes first but waits for index 0's message, which is released before it
+      traced([created, done(1, rs('rs_fx2')), done(0, say('msg_fx1', 'first')), completed]),
+      // index 1's message waits for index 0's reasoning; both are released at its done event, the reasoning first
+      traced([created, done(1, say('msg_fx2', 'second')), done(0, rs('rs_fx1')), completed]),
+    ]);
+    expect(behind.reasoningLead).toBe(0);
+    expect(ahead.reasoningLead).toBe(1);
+    expect(ahead.trace.map((t: Line) => t.reasoningLead)).toEqual([0, 0, 1, 1]);
   });
 });

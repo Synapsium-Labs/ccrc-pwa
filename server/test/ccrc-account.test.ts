@@ -5854,6 +5854,7 @@ describe('ccrc account remove', () => {
       bridgeFiles: { stats: 'bridge.stats.json', store: 'reasoning.sqlite', recordings: 'recordings', requests: 'bridge.requests.jsonl' } }, null, 2)}\n`);
     const bridgeFiles = ['bridge.stats.json', 'reasoning.sqlite', 'reasoning.sqlite-wal', 'reasoning.sqlite-shm',
       'record-streams', 'bridge-instructions', 'bridge-reasoning-all-turns', 'bridge-verbosity', 'bridge-turn-state',
+      'bridge-service-tier-fast', // Fast mode's marker (D-8632)
       'record-requests', 'bridge.requests.jsonl', 'bridge.requests.jsonl.1', // the request record and its marker (D-8619)
     ].map((f) => join(dir, f));
     for (const f of bridgeFiles) writeFileSync(f, 'fixture\n', { mode: 0o600 });
