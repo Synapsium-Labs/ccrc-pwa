@@ -1,0 +1,107 @@
+{
+  "_comment": "Synthetic catalogue for codex-wire-watch.test.ts, shaped like the upstream model catalogue; not upstream source.",
+  "models": [
+    {
+      "slug": "model-a",
+      "display_name": "Model A",
+      "default_verbosity": "low",
+      "support_verbosity": true,
+      "use_responses_lite": true,
+      "default_reasoning_level": "low",
+      "truncation_policy": {
+        "mode": "tokens",
+        "limit": 10000
+      },
+      "input_modalities": [
+        "text",
+        "image"
+      ],
+      "context_window": 272000,
+      "auto_compact_token_limit": null,
+      "priority": 1,
+      "supported_reasoning_levels": [
+        {
+          "effort": "low",
+          "description": "Fast"
+        },
+        {
+          "effort": "high",
+          "description": "Deep"
+        }
+      ],
+      "base_instructions": "You are a synthetic assistant described only for the codex-wire-watch test. You are a synthetic assistant described only for the codex-wire-watch test. You are a synthetic assistant described only for the codex-wire-watch test. You are a synthetic assistant described only for the codex-wire-watch test. You are a synthetic assistant described only for the codex-wire-watch test.",
+      "model_messages": {
+        "instructions_template": "You are a synthetic assistant described only for the codex-wire-watch test. You are a synthetic assistant described only for the codex-wire-watch test. You are a synthetic assistant described only for the codex-wire-watch test. You are a synthetic assistant described only for the codex-wire-watch test. You are a synthetic assistant described only for the codex-wire-watch test.",
+        "tools": null
+      }
+    },
+    {
+      "slug": "model-b",
+      "display_name": "Model B",
+      "default_verbosity": "medium",
+      "support_verbosity": true,
+      "use_responses_lite": false,
+      "default_reasoning_level": "medium",
+      "truncation_policy": {
+        "mode": "tokens",
+        "limit": 10000
+      },
+      "input_modalities": [
+        "text",
+        "image"
+      ],
+      "context_window": 128000,
+      "auto_compact_token_limit": null,
+      "priority": 2,
+      "supported_reasoning_levels": [
+        {
+          "effort": "low",
+          "description": "Fast"
+        },
+        {
+          "effort": "high",
+          "description": "Deep"
+        }
+      ],
+      "base_instructions": "You are a synthetic assistant described only for the codex-wire-watch test. You are a synthetic assistant described only for the codex-wire-watch test. You are a synthetic assistant described only for the codex-wire-watch test. You are a synthetic assistant described only for the codex-wire-watch test. You are a synthetic assistant described only for the codex-wire-watch test.",
+      "model_messages": {
+        "instructions_template": "You are a synthetic assistant described only for the codex-wire-watch test. You are a synthetic assistant described only for the codex-wire-watch test. You are a synthetic assistant described only for the codex-wire-watch test. You are a synthetic assistant described only for the codex-wire-watch test. You are a synthetic assistant described only for the codex-wire-watch test.",
+        "tools": null
+      }
+    },
+    {
+      "slug": "model-c",
+      "display_name": "Model C",
+      "default_verbosity": "low",
+      "support_verbosity": true,
+      "use_responses_lite": true,
+      "default_reasoning_level": "high",
+      "truncation_policy": {
+        "mode": "tokens",
+        "limit": 10000
+      },
+      "input_modalities": [
+        "text",
+        "image"
+      ],
+      "context_window": 400000,
+      "auto_compact_token_limit": null,
+      "priority": 3,
+      "supported_reasoning_levels": [
+        {
+          "effort": "low",
+          "description": "Fast"
+        },
+        {
+          "effort": "high",
+          "description": "Deep"
+        }
+      ],
+      "base_instructions": "You are a synthetic assistant described only for the codex-wire-watch test. You are a synthetic assistant described only for the codex-wire-watch test. You are a synthetic assistant described only for the codex-wire-watch test. You are a synthetic assistant described only for the codex-wire-watch test. You are a synthetic assistant described only for the codex-wire-watch test.",
+      "model_messages": {
+        "instructions_template": "You are a synthetic assistant described only for the codex-wire-watch test. You are a synthetic assistant described only for the codex-wire-watch test. You are a synthetic assistant described only for the codex-wire-watch test. You are a synthetic assistant described only for the codex-wire-watch test. You are a synthetic assistant described only for the codex-wire-watch test.",
+        "tools": null
+      }
+    }
+  ]
+}

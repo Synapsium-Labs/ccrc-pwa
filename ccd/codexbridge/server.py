@@ -26,6 +26,12 @@ itself (the idle bound, a timeout or transport failure of the post) is recorded 
 too, like every classified one. While the lane directory holds the operator's `record-streams` marker, each 2xx answer
 is also written raw into the lane's recordings directory (`record.start`, Task 18), at most `record.RECORD_MAX` files.
 
+THE PARITY SECTION (D-8618) is measured on that path from what the bridge already holds, so nothing new goes on the
+wire and the client's answer is unchanged: each reasoning-store lookup of the translation (`counted_lookup`), each
+POST's `reasoning.effort` as the body was built (`_post`), and each upstream response whose terminal
+`response.completed` or `response.incomplete` the reducer saw (`_reduce`, on every return, the error ones included):
+its `diagnostics`, and the milliseconds from the POST's start to the first output released and to the terminal.
+
 THE CATALOGUE. A model outside it is the client's: 404 `not_found_error`, counted `modelSubstitution:<model>` when the
 request carries Claude Code's claude-code beta (`inbound.from_claude_code`) and `foreignSubstitution:<model>` when it
 does not (known.py says why), the same answer either way and nothing sent upstream. A catalogue that is absent,
@@ -577,6 +583,31 @@ def _local_error(status: int, etype: str, message: str, retry: bool = True) -> e
     return errors.BridgeError(status, etype, message, None if retry else dict(errors.NO_RETRY), kind="refused")
 
 
+def _replay_outcome(key: object, turn: object) -> str:
+    """What one reasoning-store lookup found, as the parity section counts it (D-8618): `<kind>-hit` when the row
+    holds reasoning to replay, `text-empty` for a text row with none, else `<kind>-absent` (no row, or none the
+    translation could read); the kind is `call` for a call key (`inbound.call_key`), else `text`."""
+    kind = "call" if isinstance(key, str) and key.startswith(inbound.call_key("")) else "text"
+    items = turn.get("items") if isinstance(turn, dict) else None
+    if isinstance(items, list) and any(isinstance(item, dict) for item in items):
+        return kind + "-hit"
+    if kind == "text" and isinstance(turn, dict):
+        return "text-empty"
+    return kind + "-absent"
+
+
+def counted_lookup(get: Callable[[str], object], tally: Dict[str, int]) -> Callable[[str], object]:
+    """`get`, the reasoning store's lookup, with each answer counted into `tally` by `_replay_outcome` (D-8618). The
+    answer is handed back as it came, so the translation is unchanged; the translation asks once per distinct key per
+    request, so each key is counted once per request."""
+    def lookup(key: str) -> object:
+        turn = get(key)
+        outcome = _replay_outcome(key, turn)
+        tally[outcome] = tally.get(outcome, 0) + 1
+        return turn
+    return lookup
+
+
 def _catalogue_unreadable(st: stats.Stats) -> errors.BridgeError:
     """The answer to a request the catalogue could not decide: the bridge's fault, retryable, counted on its own."""
     st.outcome(CATALOGUE_UNREADABLE)
@@ -692,8 +723,11 @@ class _Request:
                 raise _local_error(404, errors.NOT_FOUND, "model not served by this lane (see its catalogue): "
                                    + (model if errors.CODE_RE.fullmatch(model.lower()) else errors.UNRECOGNISED_CODE),
                                    retry=False)
+        replay = {}  # type: Dict[str, int]
         req = inbound.from_anthropic(data, self.h.headers, names=st.stats, output_config=output_config,
-                                     lookup=st.store.get)
+                                     lookup=counted_lookup(st.store.get, replay))
+        for outcome, n in sorted(replay.items()):  # D-8618: counted once the request is translated
+            st.stats.parity_replay(ROUTE, req.model, outcome, n)
         out.model = req.model
         out.buffered = not req.stream
         if not req.stream:
@@ -761,6 +795,8 @@ class _Request:
         st = self.state
         body = backend.build_body(turn, instructions_form=backend.instructions_form(st.cfg.lane_dir))
         st.stats.request(ROUTE, turn.model, turn.countable_bytes)
+        reasoning = body.get("reasoning")  # D-8618: the effort this body carries, as it was built
+        st.stats.parity_effort(ROUTE, turn.model, reasoning.get("effort") if isinstance(reasoning, dict) else None)
         headers = backend.headers_for(reading, turn.session_id, st.ua)
         try:
             return backend.post(st.cfg.upstream_base, backend.encode_body(body), headers)
@@ -830,6 +866,7 @@ class _Request:
         while True:
             if out.closed:  # cut by the drain or the client gone (a refresh may have run since): never post for it
                 return errors.unavailable("the bridge stopped")
+            posted_at = time.monotonic()  # D-8618: the POST's start, which the parity section times from
             up = self._waiting(out, self._post, turn, reading)
             st.stats.header_names(up.headers)
             media = _media_type(up.headers)
@@ -839,7 +876,7 @@ class _Request:
             st.stats.usage_headers(up.headers)
             rid = errors.request_id_of(up.headers)  # the table's bounded reader of x-request-id / request-id / x-oai-request-id
             if 200 <= up.status < 300:
-                return self._reduce(turn, self._recorded(up), out, rid, reading)
+                return self._reduce(turn, self._recorded(up), out, rid, reading, posted_at)
             e = backend.error_of(up, now=time.time())
             if up.status == 401 and not self.retried_401:
                 self.retried_401 = True
@@ -865,14 +902,27 @@ class _Request:
             return up
         return up if rec is None else record.tee(up, rec)  # type: ignore[return-value]
 
+    def _parity(self, turn: inbound.NeutralRequest, red: reducer.Reducer, posted_at: float,
+                first_at: Optional[float], end_at: Optional[float]) -> None:
+        """D-8618: the parity counts of one upstream response, when the reducer saw its terminal `response.completed`
+        or `response.incomplete` (`diagnostics`), whatever the bridge then answered."""
+        d = red.diagnostics
+        if d is None:
+            return
+        ms = (lambda at: None if at is None else (at - posted_at) * 1000.0)
+        self.state.stats.parity_response(ROUTE, turn.model, served=d["model"], usage=d["usage"],
+                                         transformations=d["transformations"], first_output_ms=ms(first_at),
+                                         total_ms=ms(end_at))
+
     def _reduce(self, turn: inbound.NeutralRequest, up: backend.Upstream, out: stream.AnthropicStream,
-                rid: Optional[str], reading: object) -> object:
+                rid: Optional[str], reading: object, posted_at: float) -> object:
         st = self.state
         red = reducer.Reducer(name_map=turn.name_map, names=st.stats, tools_required=turn.tools_required)
         feed = _Feed(up)
         head_at = time.monotonic()
         last_event = head_at
         timed_out = False
+        first_at = end_at = None  # type: Optional[float]  (D-8618: the first output released, the terminal seen)
         try:
             while True:
                 now = time.monotonic()
@@ -888,7 +938,11 @@ class _Request:
                     red.feed(ev)
                     if red.terminal is not None:
                         break
+                if red.terminal is not None and end_at is None:
+                    end_at = now
                 released = red.release()
+                if released and first_at is None:
+                    first_at = now
                 if not out.committed and (red.committable or now - head_at >= HOLD_S):
                     out.commit()
                 if released:
@@ -906,6 +960,7 @@ class _Request:
                     out.ping()
         finally:
             feed.stop()
+            self._parity(turn, red, posted_at, first_at, end_at)  # every return, the error ones included (D-8618)
         term = red.finish()
         released = red.release()
         if released:

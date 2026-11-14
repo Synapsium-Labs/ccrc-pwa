@@ -43,7 +43,7 @@ RESERVED even though it is not on `main` yet. This branch therefore starts at **
 Two collisions were found and fixed while doing it, both of the kind CLAUDE.md warns about
 ("check `origin/main` for landed D-numbers before allocating on a new branch"):
 
-- **D-171 was landed twice**, by PRs merged twenty minutes apart on 2026-08-23 — ws-reap's
+- **Landed twice: D-171**, by PRs merged twenty minutes apart on 2026-08-23 — ws-reap's
   "containment is no longer selected by `@{upstream}`" (#94, first) and this stage's
   unanchored gitignore globs (#93, second). The later one renumbers: the gitignore
   deviation is now **D-196**, at its three sites (`.gitignore`,

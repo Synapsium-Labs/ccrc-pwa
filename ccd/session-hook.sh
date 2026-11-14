@@ -3,7 +3,7 @@
 #
 # Runs on the HOT PATH of every tool call in every fleet session, so the
 # contract is absolute: exit 0 on every path, write atomically or not at
-# all, no network — and on the HOT PATH, no locks and no waiting. THREE declared exceptions, all OFF the hot path:
+# all, no network — and on the HOT PATH, no locks and no waiting. FOUR declared exceptions, all OFF the hot path:
 # the first two in the compaction arms alone, the helper's one hookstate-first, COMPACT_HELPER_TIMEOUT-bounded,
 # locally resolved `timeout`/`gtimeout` deadline; and, since D-2605, the row's
 # permanent stable lock, taken with a bounded `flock -w` of COMPACT_LOCK_WAIT
@@ -11,7 +11,7 @@
 # is waiting on) and never held across a fork the arm does not reap. A miss
 # publishes nothing; there is no unlocked fallback. The THIRD (D4, #757): the roster card, one `_hook_timeout 4` server
 # read (`ccrc-api runs list`) on compact, resume and clear of a non-child session, and on its wake arm (R-5a, D-8201: a server wake prompt after an idle compaction), fail-open
-# (no roster line on any failure), made even when unarmed (shadow). Every OTHER event — every
+# (no roster line on any failure), made even when unarmed (shadow). The FOURTH (Overlord W1a): the start report, a send on a non-child SessionStart and a resend pass on it and on UserPromptSubmit, all inside one 4 s budget (`_hook_start_report`), fail-open. Every OTHER event — every
 # PreToolUse, PostToolUse and Stop, which is where the hot path actually is —
 # still takes no lock and waits on nothing. A hook that can slow or break a
 # session is worse than no hook. Consumed read-only by the ccrc server via the agent
@@ -1375,7 +1375,7 @@ _hook_lock_init() {   # <canonical> -> 0 canonical exists and validates; 1 other
 _hook_lock_acquire() {   # <wait-seconds> -> 0 acquired (HOOK_LOCK_FD set); 1 refused; 2 mechanism absent
   local lock="$REG/.$id.compactions.lock" al="" fd="" tries=0
   HOOK_LOCK_FD=""
-  # WHY, NOT A SECOND STATUS. Every one of this file's five acquire sites reads
+  # WHY, NOT A SECOND STATUS. Every one of this file's six acquire sites reads
   # the acquire as a boolean (`|| return 0`) and ccd's nine read the VALUE, all
   # but `_inflight_write`'s, which reads only whether it holds the lock, with two
   # FUNCTIONS across three of those sites — `cmd_start`, and `_spawn_start`, which
@@ -1387,9 +1387,11 @@ _hook_lock_acquire() {   # <wait-seconds> -> 0 acquired (HOOK_LOCK_FD set); 1 re
   # PostCompact two, which is five, and the two fall-through FUNCTIONS own three
   # SITES between them. A scan in `session-hook.test.ts` now counts both files and
   # reads the numerals out of this sentence and the spec's, so neither can drift
-  # from the code again.) The condition is carried in a named out-parameter
-  # instead, the way `GC_DIRTY_WHY` and `_WS_NESTED_WHY` already carry theirs, and
-  # cleared on entry so a stale one is never read as this call's.
+  # from the code again. Five was right until the Overlord's W1a added a sixth:
+  # the PreCompact events line, `_hook_compact_pre_line`.) The condition is
+  # carried in a named out-parameter instead, the way `GC_DIRTY_WHY` and
+  # `_WS_NESTED_WHY` already carry theirs, and cleared on entry so a stale one is
+  # never read as this call's.
   HOOK_LOCK_WHY=""
   command -v flock  >/dev/null 2>&1 || return 2
   command -v mktemp >/dev/null 2>&1 || return 2
@@ -1589,6 +1591,7 @@ _hook_compact_pre() {
   # a young PostCompact claim, which is the same evidence one settlement step
   # later — a compaction whose set has already been claimed is still in flight.
   if [ -n "$(find "$REG" -maxdepth 1 \( -name "$id.compactset" -o -name ".$id.compactpost.*.claim" \) -mmin "-$mins" 2>/dev/null)" ]; then  # @anchor compact-pre-overlap-find
+    CS_RULE_SCOPE="$CS_SCOPE"; CS_RULE_TRANSCRIPT="$CS_TRANSCRIPT"   # the rule's own answer: the PreCompact line's (Overlord W1a)
     CS_SCOPE="ambiguous"; CS_TRANSCRIPT=""; CS_AGENT=""; ovl="true"
   fi
   # ITEM 3 (r3 R1), and the first of this section's three: `find` ran between
@@ -2727,7 +2730,8 @@ COMPACT_WORKSET_MAX=12
 # its own body would make the other unreachable.
 #
 # COMPACT_LOCK_WAIT is every acquisition EXCEPT compact SessionStart's:
-# PreCompact's two sections, PostCompact's settlement and its final journal
+# PreCompact's three sections (the card's two and the events line's one),
+# PostCompact's settlement and its final journal
 # transaction (round 7 retired the separate final constant — both are off the
 # hot path and both lose a durable artifact on a miss, so they share one
 # bound), and `ccd`'s own row-creation, `_spawn_start` and `_reg_purge`
@@ -3938,6 +3942,87 @@ _hook_launch_record_append() {   # $lrc_line (a row, or a drop row, one TAB, the
 }
 [[ -n "$lrc_line" && -z "$tmsub" ]] && { _hook_launch_record_append || true; }
 # <<< launch-record
+# THE START REPORT (Overlord W1a, spec §3.3.11, H12; the header's FOURTH exception): every SessionStart of a main-thread
+# session that is not a child, compact included (so it runs before the exit below) and `fork` excluded (a fork shares this
+# pane's id under a new uuid, so its report could never be attributed), is reported to `POST /api/sessions/:id/start`
+# through the closed client. The report spends at most START_BUDGET_MS (the roster card's own bound comes before it on a
+# clear, compact or resume start): one deadline set at entry, the fresh report sent first, each send given what is left,
+# and none started with under a second left. The body carries the conversation's uuid as `startedUuid`, data; `fromUuid`,
+# the sender the server attributes, is rewritten to this event's `session_id` on a resend of a `clear`, `resume` or
+# `compact` report, so one spooled before a `/clear` lands once the registry follows. A `startup` report keeps its own
+# `fromUuid`, so another process's `startup` in this pane meets `stale-uuid` and is dropped; another process's `clear`,
+# `resume` or `compact` is rewritten like the row's own and can still land as the row's, its `startedUuid` its own. A report the
+# server did not take is kept in ONE dot-free field, `$REG/<id>.startpending`, so `_reg_purge` and `_ws_slug_residue` take
+# it with the row: line 1 is `<not-before ms>\t<dropped count>`, each later line `<tries>\t<report JSON>`, oldest first.
+# No answer keeps it untried and ends the pass; `stale-uuid` keeps it, counts a try and ends the pass when the send carried
+# this event's `session_id` (the fresh report, or a rewritten one), and lets the pass go on when it did not (a kept
+# `startup`), so a stale `startup` never holds back the reports behind it; a 404 or 401 (an older server,
+# mid-rollout), a 5xx or a local client refusal keeps it, counts a try and ends the pass; any other 4xx drops it. A report
+# tried START_RESEND_TRIES times is dropped, at most START_PENDING_MAX are kept (the oldest dropped first), and every drop
+# is counted. Only SessionStart and UserPromptSubmit resend, never a tool event or Stop, and only after the back-off the
+# last pass stamped by how it ended: START_RESEND_BACKOFF_MS after a send that ended the pass, START_STALE_BACKOFF_MS (one
+# supervisor tick, for `_sync_uuid` to follow) after a `stale-uuid` or a spent budget, each counted from the pass's end; a
+# fresh report taken clears a standing stamp; a stamp past the long back-off (a clock stepped back) reads as the long
+# one. Written only for a row ccd created (its `generation` stands), under the join
+# record's two-sided rule: looked at again after the write here, and taken once more after `generation` by `_reg_purge`,
+# so no purge orphans it. It holds no authority, is never read as truth, prints nothing, and no path through it changes
+# this hook's exit code or stdout.
+START_PENDING_MAX=20 START_RESEND_TRIES=5 START_RESEND_BACKOFF_MS=30000 START_STALE_BACKOFF_MS=5000 START_BUDGET_MS=4000
+_hook_start_send() {   # <report JSON> <deadline ms> -> 0 taken; 1 stale-uuid; 2 no answer; 3 refused for good; 4 kept and tried; 5 no time
+  local out left=$(( $2 - $(_hook_epoch_ms) ))
+  (( left >= 1000 )) || return 5
+  out=$(printf '%s\n' "$1" | CCRC_API_STATUS=line _hook_timeout "$(( left / 1000 )).$(( left % 1000 / 100 ))" "$HOME/.local/bin/ccrc-api" sessions start "$id" --json - 2>&1)
+  case "$?" in 0) ;; 2) return 4 ;; *) return 2 ;; esac
+  case "$out" in *'http 202'*) return 0 ;; *'"stale-uuid"'*) return 1 ;; *'http 40'[14]*|*'http 5'[0-9][0-9]*) return 4 ;; *'http 4'[0-9][0-9]*) return 3 ;; *) return 2 ;; esac
+}
+_hook_start_keep() {   # <tries> <report JSON> <send rc, 6 unsent, 7 stale under another sender> -> the caller's stay, drop, pass and why
+  local t=$1
+  case "$3" in 0) return 0 ;; 3) drop=$(( drop + 1 )); return 0 ;; 1) pass=0 why=$(( why > 1 ? why : 1 )) ;; 5) why=$(( why > 1 ? why : 1 )) ;; 2|4) pass=0 why=2 ;; esac
+  [[ "$3" == [147] ]] && t=$(( t + 1 ))
+  (( t >= START_RESEND_TRIES )) && drop=$(( drop + 1 )) || stay+=("$t"$'\t'"$2")
+}
+_hook_start_report() {
+  local f="$REG/$id.startpending" now dl after=0 drop=0 t j r rc=6 pass=1 why=0 body="" inc="" e kept=() stay=()
+  case "$event" in UserPromptSubmit|SessionStart) ;; *) return 0 ;; esac
+  [[ -z "$paid" && "$id" =~ ^[A-Za-z0-9_-]+$ && -f "$REG/$id.generation" && ! -L "$f" ]] || return 0
+  { [ -e "$REG/$id.child" ] || [ -L "$REG/$id.child" ]; } && return 0
+  now=$(_hook_epoch_ms); dl=$(( now + START_BUDGET_MS ))
+  [[ -f "$f" ]] && { IFS=$'\t' read -r after drop; while IFS=$'\t' read -r t j; do kept+=("$t"$'\t'"$j"); done; } < "$f" 2>/dev/null
+  [[ "$after" =~ ^[0-9]+$ ]] || after=0; [[ "$drop" =~ ^[0-9]+$ ]] || drop=0
+  (( after > now + START_RESEND_BACKOFF_MS )) && after=$(( now + START_RESEND_BACKOFF_MS ))
+  (( now < after )) && pass=0
+  if [[ "$event" == SessionStart && "$src" != fork ]]; then
+    # `_reg_generation_valid`'s grammar (ccd/ccd), which `REG_GENERATION_SHAPE` (shared/api.ts) holds for the server.
+    [[ "${CCRC_SESSION_GENERATION:-}" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]] && inc="$CCRC_SESSION_GENERATION"
+    body=$(jq -c --arg id "$id" --arg rid "$now-$$-$RANDOM" --arg inc "$inc" --argjson at "$now" \
+      '(.session_id // "" | tostring) as $u | {fromId: $id, fromUuid: $u, startedUuid: $u, reportId: $rid,
+        source: (.source // "" | tostring | if . == "" then "other" else .[0:32] end),
+        model: (.model | if type == "string" then .[0:128] elif type == "object" and (.id | type) == "string" then .id[0:128] else null end),
+        rowIncarnation: (if $inc == "" then null else $inc end), reportedAt: $at}' <<<"$payload" 2>/dev/null) || body=""
+    [[ -n "$body" ]] && { _hook_start_send "$body" "$dl"; rc=$?; }
+    [[ "$rc" == [1245] ]] && pass=0
+  fi
+  [[ -n "$psid" ]] || pass=0
+  for e in ${kept[@]+"${kept[@]}"}; do
+    t="${e%%$'\t'*}" j="${e#*$'\t'}"; [[ "$t" =~ ^[0-9]+$ ]] || t=0; r=6
+    (( pass )) && { j=$(jq -c --arg u "$psid" '.startedUuid //= .fromUuid | if .source == "clear" or .source == "resume" or .source == "compact" then .fromUuid = $u else . end' <<<"$j" 2>/dev/null) && { _hook_start_send "$j" "$dl"; r=$?; } || r=3; }
+    [[ "$r" == 5 ]] && pass=0
+    [[ "$r" == 1 && "$j" != *"\"fromUuid\":\"$psid\""* ]] && r=7   # stale under a sender not this event's (a kept startup): a try, and the pass goes on
+    _hook_start_keep "$t" "$j" "$r"
+  done
+  [[ -z "$body" ]] || _hook_start_keep 0 "$body" "$rc"
+  (( rc == 0 )) && after=0
+  now=$(_hook_epoch_ms)
+  (( why == 2 )) && after=$(( now + START_RESEND_BACKOFF_MS ))
+  (( why == 1 )) && after=$(( now + START_STALE_BACKOFF_MS ))
+  while (( ${#stay[@]} > START_PENDING_MAX )); do stay=("${stay[@]:1}"); drop=$(( drop + 1 )); done
+  if (( ${#stay[@]} == 0 && drop == 0 )); then rm -f -- "$f" 2>/dev/null; return 0; fi
+  { { printf '%s\t%s\n' "$after" "$drop"; if (( ${#stay[@]} )); then printf '%s\n' "${stay[@]}"; fi; } > "$f$$" && mv -f -- "$f$$" "$f"; } 2>/dev/null \
+    || rm -f -- "$f$$" 2>/dev/null
+  [[ -e "$REG/$id.generation" ]] || rm -f -- "$f" 2>/dev/null   # a purge during the send: side (a); `_reg_purge` is side (b)
+  return 0
+}
+_hook_start_report || true
 # StopFailure (§5.1) leaves hookstate.json alone and prints nothing: its arm raised
 # the flag and read `err` for the marker above (stopfailure-sets-a-flag (D-3611)), and nothing
 # below may run for it. SessionEnd is a termination hint, captured above in a -hookcap session and otherwise inert; so is a
@@ -4060,6 +4145,63 @@ fi
 # prescribes next, and it is the one with a durable server-side arbiter.
 if [[ -n "$gcmd" && "$gcmd" =~ $CCRC_PEERS_RE  ]]; then cp=$((cp + 1)); fi
 if [[ -n "$gcmd" && "$gcmd" =~ $CCRC_CLAIMS_RE ]]; then cc=$((cc + 1)); fi
+
+# ── THE PRECOMPACT LINE (Overlord W1a, W0-05) ────────────────────────────
+# An automatic compaction can fire PreCompact with no PostCompact after it, so
+# the server counts a compaction from this line, joined to its journal record
+# by trigger, transcript and time. NAMED `compactevents`, never `precompact`,
+# which is a route field (`$REG/<id>.<field>`) that `cmd_route --set` writes.
+# ITS OWN FILE, NOT `.compactions`, and that is
+# legitimately different: every PostCompact commit re-checks the WHOLE journal
+# against JOURNAL_RECORD_PRED, a safety boundary, so a second line shape there
+# would refuse every later commit, an older hook's after a rollback included.
+# AN ARM OF ITS OWN, run after `_hook_compact_pre` and `_hook_history_pre`, so
+# none of the card's early returns (its off switch, a scope that does not
+# resolve, its lock miss) can drop the line. It runs LAST so that the
+# compaction piece's coming refusal arm (_hook_compact_refuse in its plan, not
+# yet in this file), which sets `CS_REFUSED`, is decided before it and makes it
+# write `"phase":"refused"`. Nothing refuses a PreCompact today. One writer (this function),
+# under the row's `.compactions.lock`, so a line and a commit never interleave.
+# Dot-free, so `_reg_purge` and the slug passes take it with the row. BOUNDED
+# BY ROTATION, with no temp file: at PRECOMPACT_KEEP lines it is renamed to
+# `.compacteventsprev` and a fresh file starts, so a reader of both always holds
+# the last PRECOMPACT_KEEP lines. Its own lock miss still drops the line; the
+# server then reads one compaction fewer, never a file it cannot tell apart.
+PRECOMPACT_KEEP=32
+_hook_compact_pre_line() {   # PreCompact -> one line on $REG/<id>.compactevents; silent and total on any failure
+  local f="$REG/$id.compactevents" prev="$REG/$id.compacteventsprev" line="" lockfd="" lines=()
+  # THE SCOPE VERDICT ON EVERY LINE: every PreCompact payload names the parent's
+  # transcript, so `_hook_compact_scope`'s word is all that tells a subagent's
+  # compaction apart. Asked here when the card did not run (its off switch).
+  # The RULE's answer (main, subagent, or ambiguous when the rule cannot
+  # decide), never the card's overlap degrade, which `_hook_compact_pre` writes
+  # over CS_SCOPE for an unconsumed set: a PreCompact with no PostCompact
+  # (W0-05) leaves one for twenty minutes, and a main compaction inside them
+  # must still count (review 1927 I1).
+  [[ -n "${CS_SCOPE+x}" ]] || _hook_history_scope_verdict || true
+  line=$(jq -c --argjson at "$(_hook_epoch_ms)" --arg s "${CS_RULE_SCOPE-${CS_SCOPE-}}" --arg t "${CS_RULE_TRANSCRIPT-${CS_TRANSCRIPT-}}" \
+    '{at:$at, trigger:(.trigger // "auto" | if . == "auto" or . == "manual" then . else "other" end),
+      scope:(if $s=="" then null else $s end), transcript:(if $t=="" then null else $t end), phase:"pre"}' \
+    <<<"$payload" 2>/dev/null) || return 0
+  _hook_lock_acquire "$COMPACT_LOCK_WAIT" || return 0
+  lockfd="$HOOK_LOCK_FD"
+  # A FIFO, a symlink or a directory at either pathname is not this file and is
+  # never opened: an open of a FIFO would block inside the held lock. A bad
+  # `.compacteventsprev` writes no line and moves nothing, so the rotation can
+  # never fail over and over while the current file grows (review 1927 M5).
+  if _hook_generation_ok && [[ ! -L "$f" && ! -L "$prev" ]] && { [[ ! -e "$f" ]] || [[ -f "$f" ]]; } \
+    && { [[ ! -e "$prev" ]] || [[ -f "$prev" ]]; }; then
+    [[ -f "$f" ]] && { mapfile -t lines < "$f"; } 2>/dev/null
+    if (( ${#lines[@]} >= PRECOMPACT_KEEP )) && _hook_lock_still_canonical "$lockfd"; then
+      mv -f "$f" "$prev" 2>/dev/null
+    fi
+    if _hook_lock_still_canonical "$lockfd"; then
+      { printf '%s\n' "$line" >> "$f"; } 2>/dev/null
+    fi
+  fi
+  _hook_lock_release "$lockfd"
+  return 0
+}
 
 # ── R5: THE SEARCH GATE (D-1613) ────────────────────────────────────────
 # The spec DECLINED this gate and the operator reversed it on R4's own reading:
@@ -6339,5 +6481,10 @@ _hook_history_pre() {   # PreCompact: the steer print, then its receipt; silent 
   return 0
 }
 if [[ "$event" == PreCompact ]]; then _hook_history_pre || true; fi
+# LAST of the PreCompact arms (Overlord W1a, plan review 1890 I1): the
+# compaction piece's coming refusal arm (_hook_compact_refuse in its plan) sets
+# `CS_REFUSED` before it, so this line will then say `"phase":"refused"`.
+# Nothing refuses one today.
+if [[ "$event" == PreCompact ]]; then _hook_compact_pre_line || true; fi
 if [[ "$event" == PostCompact ]]; then _hook_compact_post || true; fi
 exit 0

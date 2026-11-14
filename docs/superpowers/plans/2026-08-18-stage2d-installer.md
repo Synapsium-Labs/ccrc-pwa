@@ -535,8 +535,8 @@ Ten items, none merge-blocking; destinations assigned:
 Everything else in the progress ledger's deferred list: ACCEPT-AS-IS per the final review (final-review.md holds the per-item reasoning).
 
 - **`ccd version`'s python3 stamp reader** (F-survey item 3): the fix edits `ccd/ccd:2087-2109`, which a parallel session owns. Queued behind that session's merge; the seam and fix shape are documented in the survey report.
-- **D-72** (roster fingerprint blind to `secretsFile` semantics) and **D-76** (single-definition sees only `.tsx?` + bash-corpus caveats) — own blast radius, unchanged.
-- **D-73** (fleet-role box has no `ccrc.env`): the single-box installer writes one; deciding a fleet-role box's env content and shipping it in the agent lane stays open.
+- Still open, own blast radius, unchanged: **D-72** (roster fingerprint blind to `secretsFile` semantics) and **D-76** (single-definition sees only `.tsx?` + bash-corpus caveats).
+- Still open: **D-73** (fleet-role box has no `ccrc.env`): the single-box installer writes one; deciding a fleet-role box's env content and shipping it in the agent lane stays open.
 - **`CCRC_REMOTE_CONTROL`** — Stage 2e (config default off + pane-heuristic validation in BOTH modes; ccd hardcodes `--remote-control` at both spawn sites today and `_accept_first_run_prompts`' `/rc active` marker is one of five alternatives).
 - **Doctor checks not in spec §5**: mail-token validity (today: boot refusal is the only surface), cert/name (Stage 3b).
 - **`ccrc install --dry-run`**, role flags (`--role server|fleet`), the release-tarball path, `ccrc update`/`uninstall` — Stage 4 surface.

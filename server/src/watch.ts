@@ -56,11 +56,12 @@ import type {
 } from '../../shared/api.js';
 import { APPROVAL_HOOK_WAIT_S, repoLabel } from '../../shared/api.js';
 import { RUN_CLOSE_WHY } from '../../shared/run-close.js';
+import { hookEventIs } from '../../shared/hook-events.js';
 import type { AskMintReleaseReason, DelegationEventEnvelopeV1, DelegationHealthInput, DelegationObservationHealth, DelegationProjectionWire } from '../../shared/api.js';
 // ONE LINE, deliberately: `single-definition.test.ts` scans for `UNCHECKED_PR`
 // arriving from shared/api on a single import line, and a prettier multi-line
 // form is invisible to it.
-import { ASK_OPERATOR_PRINCIPAL, FLEET_SCOPE, IDLE_COMPACT_NUDGE_PROMPT, LEDGER_STALE_MS, RADAR_PROBE_FRESH_S, SERVER_CAPS, MAIL_REPLAY_MS, STALL_FOLLOW_LABEL, STALL_LEVEL_TEXT, TERMINAL_DELIVERY_STATES, UNCHECKED_PR, freshWithin, lifecycleIsDead, sessionLifecycle } from '../../shared/api.js';
+import { ASK_OPERATOR_PRINCIPAL, FLEET_SCOPE, IDLE_COMPACT_NUDGE_PROMPT, LEDGER_STALE_MS, RADAR_PROBE_FRESH_S, SERVER_CAPS, MAIL_REPLAY_MS, STALL_FOLLOW_LABEL, STALL_LEVEL_TEXT, TERMINAL_DELIVERY_STATES, UNCHECKED_PR, freshWithin, sessionLifecycle } from '../../shared/api.js';
 import { JournalMirror } from './coord/mirror.js';
 import { ASKS_DISABLED_MARKER, MAIL_DISABLED_MARKER, PANE_SCOPE_STOP_LIVE_MARKER, readSwitches } from '../../shared/switches.js';
 // The pause marker, reached through `rundefs.ts`'s re-export of its one definition, the `shared/switches.ts` row.
@@ -139,7 +140,7 @@ import {
   type DelegationObservationInterval, type DelegationRecoveryState,
 } from './coord/delegation-model.js';
 import { claimExpiry, claimLivenessProbe, type LivenessProbe } from './coord/claims.js';
-import type { RowStandingFacts } from './sessionReading.js';
+import { readSession, type RowStandingFacts } from './sessionReading.js';
 import { claimantMeasuredDead, measureClaimant, measureClaimantHeld } from './coord/reclaim.js';
 import { heldFor } from './coord/heldFor.js';
 import { buildDigest, digestDayFor, digestPushCopy, digestWindow, readDigestHour } from './coord/digest.js';
@@ -7767,7 +7768,7 @@ export class FleetWatcher {
       if (row.deliveredAt === null) continue;   // defensive; markDelivered always sets it
       if (row.ingestedAt !== null) continue;
       const hs = await hookStateFor(row.toId);
-      if (hs !== null && hs.event === 'UserPromptSubmit' && hs.updatedAt > row.deliveredAt) {
+      if (hs !== null && hookEventIs(hs.event, 'UserPromptSubmit') && hs.updatedAt > row.deliveredAt) {
         this.landed(store.markIngested(row.id, hs.updatedAt), 'markIngested', row.id);
       }
     }
@@ -8204,7 +8205,12 @@ export class FleetWatcher {
         // the herd valve: without it every due row re-spawns a doomed tmux
         // client each sweep against a component that is already unwell.
         const sv = await this.deps.tmux.sessionVerdict(d.toId);
-        if (sv.verdict === 'gone' && rec.hibernatedAt !== null) {
+        // D-8610: the recipient read through `readSession`, the one reading. The lifecycle is read only for a gone pane.
+        const reading = readSession({ row: 'present', pane: sv.verdict, hibernatedAt: rec.hibernatedAt, turn: null,
+          lifecycle: sv.verdict === 'gone' ? sessionLifecycle(lifecycleInputFor(rec, false, now)) : null });
+        // The mail pass's own rule, a different fact from the reading's `asleep` (stopped AND marked): the marker alone holds
+        // and wakes a gone pane, whatever lifecycle is beside it (D-5242; plan 2026-11-13-session-reading-ladders).
+        if (reading.substrate === 'absent' && rec.hibernatedAt !== null) {
           // D-5242: ASLEEP, NOT DEAD. `ccd hibernate` stamps `.stopped` beside `.hibernated`, which the lifecycle rung
           // below reads as `stopped` — a dead lifecycle — and would park. The mail is held under its own gate, never
           // counted toward a park, and the recipient is woken (`ccd ensure`): at most once per recipient per
@@ -8226,7 +8232,7 @@ export class FleetWatcher {
           }
           continue;
         }
-        if (sv.verdict === 'gone') {
+        if (reading.substrate === 'absent') {
           // D-1066 — D-309 REFINED, not reversed (operator ruling 2026-08-30). Its
           // premise — "the mail waits for the session to come back" — is right
           // for a swap, a restart or a reboot, and false for a session somebody
@@ -8249,8 +8255,9 @@ export class FleetWatcher {
           // it is the same kind of fact: a recipient this build can PROVE is
           // gone. Everything else keeps D-309's bare silent wait, including
           // `unmeasurable`: doubt is not evidence, in either direction.
-          const lc = sessionLifecycle(lifecycleInputFor(rec, false, now));
-          if (!lifecycleIsDead(lc)) { gated(d, 'tmux-gone'); continue; }
+          // The reading's `deadCause` is that lifecycle, set exactly when it is one `lifecycleIsDead` names.
+          const cause = reading.deadCause;
+          if (cause === null) { gated(d, 'tmux-gone'); continue; }
           gated(d, 'session-dead');
           // `deliveredAt === null` GATES THE PARK, and `decideSessionDead`'s
           // guard (`coord/delivery.ts`) is not belt-and-braces —
@@ -8294,10 +8301,10 @@ export class FleetWatcher {
           // just without a ceiling that turns a failing SEND into a park" — and
           // that an uncapped counter is exactly what makes MAIL_BACKOFF_MAX_MS
           // reachable rather than decorative.
-          this.settleDelivery(store, d.id, decideSessionDead(d, lc, now));
+          this.settleDelivery(store, d.id, decideSessionDead(d, cause, now));
           continue;
         }
-        if (sv.verdict === 'unknown') {
+        if (sv.verdict === 'unknown') {   // the reading's `paneUnknown`; `sv` carries tmux's own message
           gated(d, 'tmux-unknown');
           this.settleDelivery(store, d.id, decideTmuxUnknown(d, sv.detail, now));
           continue;
@@ -10416,6 +10423,8 @@ class DelegationLane {
   private opening: Promise<DelegationDurability | null> | null = null;
   /** The lane has tried to open the applier: from then on a health is reported (absence before that reads as unknown). */
   private attempted = false;
+  /** The recovery backoff's wall stamp (`DELEGATION_RECOVERY_RETRY_MS`), set by the open and by each recovery and read only while the
+   *  applier is failed: a safety interval, never a row of `LANE_SCHEDULE` (a recorded exception, D-8614). */
   private lastRecoverAt = 0;
   private registryListed = true;
   /** Hours already read after they closed, this process: not read again. Memory only; a restart reads each once more. */
@@ -10506,6 +10515,8 @@ class DelegationLane {
   private droppedAdded = 0;
   private droppedPeak = 0;
   private seams: DelegationLaneSeams = {};
+  /** The UTC hour the hourly upkeep and the UTC day the compaction last spent, on the pass's wall instant: calendar latches, not
+   *  cadences, so never rows of `LANE_SCHEDULE` (recorded exceptions, D-8614; `delegation-clocks.test.ts` pins when each fires). */
   private lastUpkeepHour = -1;
   private lastCompactDay = -1;
   private cursorsPruned = 0;

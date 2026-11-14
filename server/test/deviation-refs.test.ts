@@ -30,10 +30,13 @@ const LEGACY_PER_PLAN_LEDGERS: ReadonlySet<string> = new Set([
 
 /** Numbers already collided on main when this suite was written (the
  *  pre-allocator wreckage). May only shrink; nothing >= 211 may ever join —
- *  211 is the first allocator-era number. */
-const GRANDFATHERED: ReadonlySet<number> = new Set([
-  72, 128, 129, 130, 131, 132, 133, 134, 135, 137, 138, 139, 140, 141, 145, 171,
-]);
+ *  211 is the first allocator-era number. EMPTY since D-8562: the 16 it held
+ *  (72, 128–135, 137–141, 145, 171) were resolved by keeping the earlier merged
+ *  definition, moving every later one to an issued number with a `was D-<old>`
+ *  alias, and rewording the citations written in the definition shape
+ *  (docs/superpowers/plans/2026-11-13-dnumber-collisions.md). Kept as a set so
+ *  the rules below still read it; it may not grow back. */
+const GRANDFATHERED: ReadonlySet<number> = new Set<number>([]);
 
 // Both ledger-entry heading forms in use: `### D-12 (bug) — subject` (plan
 // ledgers through build 7) and `- **D-108 (2026-08-20)** — subject` (the
@@ -579,11 +582,20 @@ describe('the cross-tree collision scan (F7 — before the merge, not after)', (
     const derived = [...byN.entries()]
       .filter(([n, files]) => n < LEDGER_ALLOCATOR_ERA && files.size > 1 && !GRANDFATHERED.has(n))
       .map(([n]) => n).sort((a, b) => a - b);
-    // The premise, established rather than assumed: a derivation that found
-    // nothing would be satisfied by any claim that named nothing.
-    expect(derived.length,
-      `the derivation found ${derived.length} sub-211 collisions outside GRANDFATHERED — a scan that ` +
-      'finds none asserts nothing').toBeGreaterThan(0);
+    // The premise, established rather than assumed: a derivation that READ
+    // nothing would be satisfied by any claim that named nothing. Until D-8562
+    // the premise was a non-empty derived set; D-8562 resolved every sub-211
+    // collision, so the derived set and the marker are both EMPTY, and the
+    // premise is now that the derivation saw the pre-allocator era at all: it
+    // read well over a hundred distinct sub-211 definitions (measured: 124 at
+    // D-8562), so an empty answer is a measurement, not a blind scan.
+    const sub211 = [...byN.keys()].filter((n) => n < LEDGER_ALLOCATOR_ERA).length;
+    expect(sub211,
+      `the derivation read only ${sub211} distinct sub-211 definitions — a scan that reads none ` +
+      'asserts nothing').toBeGreaterThanOrEqual(100);
+    expect(derived,
+      'a sub-211 collision is back: GRANDFATHERED is empty since D-8562, and the era it protected is ' +
+      'resolved — renumber the later definition to an issued number').toEqual([]);
     expect(claimed,
       'the comment names a sub-211 collision set this corpus does not derive').toEqual(derived);
   });

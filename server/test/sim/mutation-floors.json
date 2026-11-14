@@ -10,6 +10,7 @@
   "server/src/continuity/card.ts#renderCard": 1,
   "server/src/continuity/card.ts#oneLine": 1,
   "server/src/continuity/card.ts#block": 1,
+  "server/src/continuity/compactions.ts#compactionsSince": 1,
   "server/src/continuity/generationMachine.ts#generationStep": 1,
   "server/src/coord/mailPace.ts#mailPaceOf": 1,
   "pwa/src/face/mood.ts#moodOf": 1,

@@ -31,6 +31,7 @@ import type { BuildCaptureResult, BuildCaptureTry, ClaudeBuildRecord } from '../
 import type { LinkingWriteBody, ProjectLinkingWire } from '../../../shared/linking.js';
 import { openPracticeCase, practiceCaseNewest, type PracticeCaseNewestRead, type PracticeCaseOpen } from './practiceCasesStore.js';
 import type { CaseDue } from './practiceCases.js';
+import { insertStart, startsSince, type StartInsert, type StartInsertResult, type StartsRead } from '../continuity/continuityStore.js';
 import type { Invitation } from './peerBound.js';
 import { liftReviewCapByCoordinator, raiseReviewCapAsk, reviewCapGate, reviewCapStatesOf, type CoordLiftResult, type ReviewCapState } from './reviewCapStore.js';
 import { renderEnvelope } from './envelope.js';
@@ -5363,6 +5364,10 @@ export class CoordStore {
   practiceCaseNewest(): PracticeCaseNewestRead { return practiceCaseNewest(this.db); }
   /** Overlord §10.5: the table's one writer, a compare-and-set open (`practiceCasesStore.ts`). */
   openPracticeCase(due: CaseDue, seenNewest: number | null, at: number): PracticeCaseOpen { return openPracticeCase(this.db, due, seenNewest, at); }
+  /** Overlord §3.3.11: the start report's one writer, idempotent on the hook's report id (`continuityStore.ts`). */
+  insertStart(row: StartInsert): StartInsertResult { return insertStart(this.db, row); }
+  /** Overlord §3.3.11: every reported start after an id, the generations lane's read (`continuityStore.ts`). */
+  startsSince(sinceId: number): StartsRead { return startsSince(this.db, sinceId); }
 
   /** D-6909: the review-cap state of a batch of runs (`reviewCapStore.ts`). */
   reviewCapStates(ids: readonly number[]): Map<number, ReviewCapState> {

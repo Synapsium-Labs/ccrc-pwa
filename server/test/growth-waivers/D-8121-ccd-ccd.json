@@ -3,5 +3,6 @@
   "maxDelta": 69,
   "d": "D-8121",
   "reason": "browser MCP servers off by default at every spawn: the `browser` routing field (its word list, its validity case, `_route_any` leaving it out and `_route_argv_routes` so a browser-only `--route` keeps the default row on ws-add and start), the box's two settings read through the settings library in a subshell (_browser_mcp_box), the spawn's composition of the `deniedMcpServers` denial into the row's one --settings with its record (_browser_spawn_compose), the settings union widened to that key, and the browser-route-v1 cap; measured +69 net code lines against the merge-base; kept inline because the composition must run in _spawn_start beside the child's and the account file's, on the one --settings they share, and a library split would need a digest-checked install of its own",
-  "added": "2026-11-08"
+  "added": "2026-11-08",
+  "createdAt": "2026-11-08"
 }

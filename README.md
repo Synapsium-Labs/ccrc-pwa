@@ -1498,13 +1498,14 @@ step 10 of
      named here, derived from `gate.ts`'s own EXEMPT reasons (D-1233/D-1234). -->
 
 What is gated, and what is not: **everything except** `/health` (deploy's own
-liveness gate reads the shipped sha out of it), the seventy-four machine lanes the
+liveness gate reads the shipped sha out of it), the seventy-five machine lanes the
 fleet host reaches (thirty-nine box-token-consulting coordination routes plus
 the Linear proxy's routes under `/api/linear/proxy/`, which a session's `ccrc-api linear`
 verbs call and which refuse any call without the token whatever `CCRC_AUTH` says,
 the programme ledgers' item and goal routes (`/api/programmes/:slug/{items,spec,modifications,modifications/merged}`
 and `/api/items/:id/{confirm,return,withdraw,blocking}`),
 the plan verbs' routes (`POST /api/programmes/:slug/plan` and `/api/programmes/:slug/plan/{met,tickets,tickets/move,epics/drop,close}`),
+the hook's start report (`POST /api/sessions/:id/start`),
 `/api/notify`, which refuses an absent token like every lane,
 `/api/pools/epoch` and `/api/updates/intent/:nodeId` — the callers are `curl` inside a
 Claude Code session, `ccd-pool-sync.timer` and, from update-management W4, `ccd-update-sync.timer`, none with a cookie jar, though the
@@ -2566,6 +2567,16 @@ rows; a FAIL, `runs a retired refresher`, when the lane's LiteLLM tier or shim r
 route; no half-up row and no `litellm.yaml` row. On a lane in either mode, a stats file or store that is not a regular
 file of mode 0600 is a FAIL. Removing the lane reaps both files, the store's set-aside copy, the recordings directory and the
 marker files with the rest of its state.
+
+**The stats file's `parity` section** measures what parity with native Codex hinges on, per route and model, from what
+the bridge already receives and sends, so nothing new goes on the wire (D-8618). Each row counts the upstream responses
+that reached `response.completed` or `response.incomplete` and their input, cached, output and reasoning tokens; the
+`reasoning.effort` each request carried (`none` when it carried none); whether the model that answered is the one asked
+for; the backend's `input_transformations` by type, action and reason, so `reasoning:removed:turn_boundary` counts the
+earlier reasoning the backend dropped; each reasoning-store lookup by what it found (per lookup, so a long conversation
+counts its old turns again); and the milliseconds to the first output and to the end, in fixed buckets. Every name in
+it is bounded like the others. It is not drift: nothing in it reaches doctor's WARN or the watch's drift check, and
+`ccrc codex status` does not show it.
 
 **A restart cuts long streams.** The bridge runs under the shim's unit, so a restart (a rollout's install restarts a
 running bridge whose bytes are stale; a switch stops it) is a stop, then a start. On the stop the bridge closes its

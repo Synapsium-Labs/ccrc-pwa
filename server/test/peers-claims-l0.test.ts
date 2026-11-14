@@ -154,7 +154,7 @@ describe('the mail table carries the two peer-lane codes (landed with wave 0)', 
 });
 
 describe('L0 stays import-free: the PWA bundles this file', () => {
-  it('shared/api.ts has exactly seventeen import lines: sixteen types, and one value from an import-free L0 sibling (D-3021)', () => {
+  it('shared/api.ts has exactly eighteen import lines: sixteen types, and two values from import-free L0 siblings (D-3021)', () => {
     // Account-pool membership, release rollout, the box-token console card and
     // the node role each added an L0 sibling shape, and the session's workflow
     // rows (D-5560) a sixth, and the lane state's wire words (D-6058 (3)) a seventh, and the fleet health's disk block (D-6615) an eighth, and the landing checks mail token (a type-only import, `typeof import(...)` being forbidden) a tenth: no duplicate wire types.
@@ -170,6 +170,8 @@ describe('L0 stays import-free: the PWA bundles this file', () => {
     // restating the absent/unreadable pair.
     // The test box connect routes (D-8166) a sixteenth, the verb's act and status types from testbox-admin.ts, which imports
     // values from api.ts: the same `import type`, erased at compile, so again no cycle forms.
+    // The hook event union (D-8613) an eighteenth, `HookEvent` and its compare `hookEventIs`, a value from the import-free
+    // hook-events.ts (`single-definition/hook-events.test.ts` pins that it imports nothing).
     const lines = readFileSync(apiPath, 'utf8').split('\n');
     const imports = lines.filter((l) => /^import\s/.test(l));
     expect(imports).toEqual([
@@ -183,6 +185,7 @@ describe('L0 stays import-free: the PWA bundles this file', () => {
       "import type { WaitingView } from './ledgers.js';",
       "import type { CHECKS_MAIL_TOKEN } from './landing.js';",
       "import type { LandingWrite } from './landingLine.js';",
+      "import { hookEventIs, type HookEvent } from './hook-events.js';",
       "import type { NodeRole } from './node-role.js';",
       // The sign-in's state words (accounts plan Task A21) join the same import-free `accounts.ts` line: no new import.
       "import type { AccountStateAnswer, AuthMethod, AuthStatusState, LaneState } from './accounts.js';",

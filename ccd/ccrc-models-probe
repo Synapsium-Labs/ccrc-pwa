@@ -448,6 +448,48 @@ except ValueError as e:
 def num(v):
     return v if isinstance(v, (int, float)) and not isinstance(v, bool) else None
 
+def effort_name(v):
+    # The one bound this arm puts on an effort level: a non-empty string. Each
+    # `supported_reasoning_levels` name and `default_reasoning_level` (D-8620)
+    # pass through it; shared/models.mjs's `isEffortName` is its JavaScript twin.
+    return v if isinstance(v, str) and v else None
+
+# D-8620: the bounds of the Codex catalogue's request-shape fields. Python
+# cannot import shared/models.mjs's CATALOGUE_VERBOSITIES,
+# CATALOGUE_TRUNCATION_MODES and CATALOGUE_TRUNCATION_LIMIT_MAX, so it spells
+# them here, once; server/test/models-probe.test.ts runs every candidate value
+# through this arm and through parseCatalogue and reds on any disagreement.
+VERBOSITIES = ("low", "medium", "high")
+TRUNCATION_MODES = ("tokens", "bytes")
+TRUNCATION_LIMIT_MAX = 10000000
+
+def codex_request_shape(m):
+    # D-8620: five scalars native Codex shapes each request with, each kept only
+    # when valid and otherwise OMITTED, never null and never a default: a model
+    # without them must read exactly as before, and a genuine false (gpt-5.5's
+    # use_responses_lite) is a fact a reader acts on. Scalars only: never
+    # model_messages, instructions_template, base_instructions or any other text
+    # block, which would grow this file fifty-fold for every reader.
+    shape = {}
+    for src, key in (("use_responses_lite", "useResponsesLite"),
+                     ("support_verbosity", "supportVerbosity")):
+        if isinstance(m.get(src), bool):
+            shape[key] = m[src]
+    verbosity = m.get("default_verbosity")
+    if isinstance(verbosity, str) and verbosity in VERBOSITIES:
+        shape["defaultVerbosity"] = verbosity
+    level = effort_name(m.get("default_reasoning_level"))
+    if level is not None:
+        shape["defaultReasoningLevel"] = level
+    policy = m.get("truncation_policy")
+    if isinstance(policy, dict):
+        mode, limit = policy.get("mode"), policy.get("limit")
+        if (isinstance(mode, str) and mode in TRUNCATION_MODES
+                and isinstance(limit, int) and not isinstance(limit, bool)
+                and 1 <= limit <= TRUNCATION_LIMIT_MAX):
+            shape["truncationPolicy"] = {"mode": mode, "limit": limit}
+    return shape
+
 def codex_models(raw):
     if not isinstance(raw, dict) or not isinstance(raw.get("models"), list):
         fail("the Codex catalogue has no `models` array — the endpoint's shape has drifted")
@@ -461,18 +503,20 @@ def codex_models(raw):
         levels = m.get("supported_reasoning_levels") or m.get("reasoning_levels") or []
         efforts = []
         for e in levels if isinstance(levels, list) else []:
-            name = e.get("effort") if isinstance(e, dict) else e
-            if isinstance(name, str) and name:
+            name = effort_name(e.get("effort") if isinstance(e, dict) else e)
+            if name is not None:
                 efforts.append(name)
         label = m.get("display_name") or m.get("name") or mid
-        out.append({
+        row = {
             "id": mid, "label": label,
             "context": num(m.get("context_window")),
             "maxContext": num(m.get("max_context_window")),
             "efforts": efforts,
             "hidden": m.get("visibility") == "hide",
             "priceIn": None, "priceOut": None,
-        })
+        }
+        row.update(codex_request_shape(m))
+        out.append(row)
     return out
 
 def _price(v):

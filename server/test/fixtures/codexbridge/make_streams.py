@@ -9,7 +9,9 @@ THE CORPUS. 32 streams ported from the throwaway prototype (8 rebuilt from shape
 probe's scripted streams in `ccd/ccgpt-runtime` and the patch driver's in `server/test/ccgpt-runtime.test.ts`; 24
 synthetic until the operator's scrubbed recordings replace them, D-6430), then 16 `synth2-` streams: the second guard
 for each rule the prototype guarded once, and the spec §5 reducer list, then 13 `synth3-` streams for the rule arms
-the Task 3 review found no stream reaching (9 in fix round 1, 2 in fix round 2, 2 in fix round 3). Every stream is
+the Task 3 review found no stream reaching (9 in fix round 1, 2 in fix round 2, 2 in fix round 3), then the one
+`synth-input-transformations` stream of the parity measurements (D-8618), whose expectation alone carries `parity`,
+the reducer's `diagnostics`. Every stream is
 synthetic: tiny texts, ids of the form `<prefix>_fx<n>`, encrypted content `ENC-<n>`, neutral tool names.
 
 THE EXPECTATIONS are written here by hand, never computed by the reducer: per stream, `setup` (the reducer's
@@ -61,9 +63,11 @@ class Stream:
         return "".join(self.parts).encode("utf-8")
 
     # ── the shared shapes ──
-    def created(self):
-        return self.add("response.created", response={"id": "resp_fx1", "object": "response", "status": "in_progress",
-                                                      "output": []})
+    def created(self, model=None):
+        response = {"id": "resp_fx1", "object": "response", "status": "in_progress", "output": []}
+        if model is not None:
+            response["model"] = model
+        return self.add("response.created", response=response)
 
     def added(self, n, item):
         return self.add("response.output_item.added", output_index=n, item=item)
@@ -79,12 +83,14 @@ class Stream:
         fields["delta"] = delta
         return self.add("response.output_text.delta", **fields)
 
-    def completed(self, output, usage=None, end_turn=None):
+    def completed(self, output, usage=None, end_turn=None, extra=None):
+        """`extra`'s fields are added to the response object (D-8618: `model`, `input_transformations`)."""
         response = {"id": "resp_fx1", "object": "response", "status": "completed", "output": output}
         if usage is not None:
             response["usage"] = usage
         if end_turn is not None:
             response["end_turn"] = end_turn
+        response.update(extra or {})
         return self.add("response.completed", response=response)
 
     def incomplete(self, reason, output, usage=None):
@@ -136,7 +142,7 @@ def rs(n, encrypted=True, summary=None):
     return item
 
 
-def usage(inp, out, cached=None, cache_write=None):
+def usage(inp, out, cached=None, cache_write=None, reasoning=None):
     u = {"input_tokens": inp, "output_tokens": out, "total_tokens": inp + out}
     details = {}
     if cached is not None:
@@ -145,6 +151,8 @@ def usage(inp, out, cached=None, cache_write=None):
         details["cache_write_tokens"] = cache_write
     if details:
         u["input_tokens_details"] = details
+    if reasoning is not None:
+        u["output_tokens_details"] = {"reasoning_tokens": reasoning}
     return u
 
 
@@ -181,14 +189,18 @@ TRUNCATED = ERR("api_error", 503, "upstream unavailable (the stream closed befor
 
 
 def expect(blocks=(), stop=None, cont=False, error=None, use=None, reasoning=(), names=(), counts=None,
-           committable=True, phases=None, warnings=(), name_map=None, tools_required=()):
-    return {
+           committable=True, phases=None, warnings=(), name_map=None, tools_required=(), parity=None):
+    """`parity`, when given, is the reducer's `diagnostics` (D-8618); a stream without it is not checked for them."""
+    exp = {
         "setup": {"name_map": name_map or {}, "tools_required": list(tools_required)},
         "blocks": list(blocks), "stop": stop, "continue": cont, "error": error,
         "usage": use if use is not None else AU(0, 0, 0, 0), "reasoning": list(reasoning),
         "counted": {"names": [list(n) for n in names], "counts": counts or {}},
         "committable": committable, "phases": phases or {}, "warnings": list(warnings),
     }
+    if parity is not None:
+        exp["parity"] = parity
+    return exp
 
 
 STREAMS = []  # (name, bytes, expectation)
@@ -510,6 +522,38 @@ stream("synth3-final-output-in-progress-message-at-live-index",
 stream("synth3-final-output-incomplete-call-at-live-index",
        Stream().created().text_delta(0, "Hi").completed([fc(0, '{"q":', status="incomplete")], usage(3, 2)),
        expect([T("Hi")], stop="end_turn", use=AU(3, 0, 0, 2), warnings=[W_UNFINISHED]))
+
+# ── synth: the parity measurements (D-8618) ──
+# The terminal response's diagnostic fields, which change nothing the client is sent: every reason Codex names, one
+# it does not, a missing reason, an entry of another type, an entry that is not an object, parts outside the bound,
+# the reasoning tokens, and a served model other than the one `response.created` named (the terminal's wins).
+TRANSFORMATIONS = [
+    {"type": "reasoning", "id": "rs_fx0", "action": "removed", "reason": "organization_mismatch"},
+    {"type": "reasoning", "action": "removed", "reason": "end_user_mismatch"},
+    {"type": "reasoning", "action": "removed", "reason": "model_mismatch"},
+    {"type": "reasoning", "action": "removed", "reason": "prefix_mismatch"},
+    {"type": "reasoning", "action": "removed", "reason": "turn_boundary"},
+    {"type": "reasoning", "action": "removed", "reason": "turn_boundary"},
+    {"type": "reasoning", "action": "removed", "reason": "fx_new_reason"},
+    {"type": "reasoning", "action": "removed"},
+    {"type": "message", "action": "changed", "reason": "turn_boundary"},
+    "not an object",
+    {"type": "reasoning", "action": "removed", "reason": "two words"},
+    {"type": "reasoning", "action": 5, "reason": None},
+]
+stream("synth-input-transformations",
+       Stream().created(model="model-6.1-alpha").done(0, rs(0)).done(1, say(1, "Kept."))
+       .completed([], usage(9, 4, cached=2, reasoning=3),
+                  extra={"model": "model-6.1-beta", "input_transformations": TRANSFORMATIONS}),
+       expect([T("Kept.")], stop="end_turn", use=AU(7, 2, 0, 4), reasoning=[["text", "Kept."]],
+              parity={"model": "model-6.1-beta", "usage": {"input": 9, "cached": 2, "output": 4, "reasoning": 3},
+                      "transformations": [
+                          "reasoning:removed:organization_mismatch", "reasoning:removed:end_user_mismatch",
+                          "reasoning:removed:model_mismatch", "reasoning:removed:prefix_mismatch",
+                          "reasoning:removed:turn_boundary", "reasoning:removed:turn_boundary",
+                          "reasoning:removed:fx_new_reason", "reasoning:removed:none", "message:changed:turn_boundary",
+                          "unrecognised:unrecognised:unrecognised", "reasoning:removed:unrecognised",
+                          "reasoning:unrecognised:none"]}))
 
 
 def main():

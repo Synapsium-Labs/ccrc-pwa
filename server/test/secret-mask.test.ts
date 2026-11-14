@@ -32,7 +32,7 @@ import { KeyedQueue } from '../src/inject/queue.js';
 import { Bus } from '../src/bus.js';
 import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
-import { SessionStream } from '../src/sessionws.js';
+import { NO_TICK, SessionStream } from '../src/sessionws.js';
 import { createSpawnPty } from '../src/remote/pty.js';
 import type { FleetClient } from '../src/remote/client.js';
 import type { PtyLike } from '../src/pty.js';
@@ -202,7 +202,7 @@ describe('the session socket carries only the mask (D-5513)', () => {
     const cfg = loadConfig({ CCRC_HOME: home });
     const run: Runner = async () => ({ ran: true, code: 0, stdout: '', stderr: '' });
     const deps: Deps = { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue(), time: fakeTime().ports };
-    const stream = new SessionStream(deps, new Bus(), ID, (m) => frames.push(m));
+    const stream = new SessionStream(deps, new Bus(), ID, (m) => frames.push(m), undefined, NO_TICK);
     const send = (stream as unknown as { send(m: SessionStreamMsg): void }).send;
     const ask = { type: 'ask', ask: { questions: [{ question: `use ${OAT}?`, header: 'Key', multiSelect: false, options: [{ label: ORKEY }] }] } };
     send(ask as unknown as SessionStreamMsg);

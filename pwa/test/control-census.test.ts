@@ -103,7 +103,7 @@
 import { describe, expect, it } from 'vitest';
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import path from 'node:path';
-import ts from 'typescript';
+import { ts } from '../../server/test/scan/parse';
 import { buttonVariants } from '@ccrc/ui';
 
 const PKG = path.join(import.meta.dirname, '..', '..');

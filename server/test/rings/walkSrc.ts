@@ -17,7 +17,14 @@ export const rel = (abs: string): string => path.relative(REPO, abs).split(path.
 
 /** Source files a rule reads: TypeScript, TSX and ES modules. Declarations, tests and stories are not sources. */
 export const SOURCE_RE = /\.(?:ts|tsx|mjs)$/;
+/** The PWA walk's extensions for the rules that give `.css` a ring and a context (stage 4: `.css` is L4). */
+export const PWA_RING_EXTENSIONS = /\.(?:ts|tsx|mjs|css)$/;
 const NOT_SOURCE_RE = /\.d\.[cm]?ts$|\.test\.tsx?$|\.stories\.tsx?$/;
+
+/** True when a file name is one a walk with `extensions` returns: not a declaration, test, story or `__` transient
+ *  (D-8563: the growth check asks this of a file one diff adds, without a walk). */
+export const isSourceName = (name: string, extensions: RegExp = SOURCE_RE): boolean =>
+  !name.startsWith('__') && extensions.test(name) && !NOT_SOURCE_RE.test(name);
 
 export interface WalkOptions {
   /** Repo-relative directories to walk. */
@@ -46,7 +53,7 @@ export function walkSrc({ roots, min, flat = false, match, extensions = SOURCE_R
       const abs = path.join(dir, e.name);
       if (e.isDirectory()) {
         if (!flat && e.name !== 'node_modules') visit(abs, depth + 1);
-      } else if (extensions.test(e.name) && !NOT_SOURCE_RE.test(e.name)) {
+      } else if (isSourceName(e.name, extensions)) {
         const r = rel(abs);
         if (!match || match.test(r)) out.push(r);
       }

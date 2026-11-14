@@ -46,8 +46,6 @@ const CENSUS: readonly Row[] = [
     why: 'the push copy\'s active projects (a sleeper\'s pane is not running, true); the delegation lane\'s death memory (`noteSessions`) CONSULTS `hibernatedAt`, so a sleep never feeds '
       + 'its breaker, which suspends at two parent deaths in ten minutes; its owner census skips dead rows, and a sleeper '
       + 'has no delegation running (the `background`, `roster` and `marker-background` holds)' },
-  { source: 'dead-lifecycle', file: 'server/src/watch.ts', hits: 1, stances: ['consults'],
-    why: 'the mail lane\'s `session-dead` rung: the `hibernated` rung ahead of it gates and wakes a sleeper instead' },
   { source: 'stopped-compare', file: 'server/src/watch.ts', hits: 1, stances: ['consults', 'journal'],
     why: 'the dead-coordinator lane\'s released set: it reads `measureClaimant`, which answers a sleeper `alive`; a '
       + 'claimant whose wake failed reads `orphan`, and its journal\'s `hibernate` row makes it deliberate' },

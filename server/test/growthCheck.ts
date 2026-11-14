@@ -39,21 +39,27 @@
 // at either sha waives nothing. The entries are debt that consolidation W5
 // (ccd in place) pays down, every entry; none is ever edited, only added by the PR
 // that needs it or removed once paid.
+//
+// D-8563 (operator ruling 2026-11-13, "measure everything now, tighten later"): every non-test source file over 3,000
+// lines is listed, at the one per-PR limit and with no total ceiling. The blanket new-file waiver (a new file anywhere
+// under `server/src/coord/` or `shared/` passed every listed file) gives way to the ring classifier ARCH-04 stage 4
+// named as its follow-up: a new file waives a listed file's growth only when `rings/ring.ts` gives it the grown file's
+// ring and the spec's context table (read at the merge-base) the grown file's context (`ringHomes`). And every waiver
+// carries a `createdAt` day; the check reports those older than WAIVER_AGE_DAYS by name, a report and never a failure.
 import { execFileSync } from 'node:child_process';
 import { appendFileSync } from 'node:fs';
+import path from 'node:path';
 import { parseSource } from './scan/parse.js';
 import { malformedEntries } from './rings/exemptions.js';
+import { pwaRing, serverRing, type Ring } from './rings/ring.js';
+import { assignContexts, parseContextTable, SPEC_FILE, type ContextRow, type Pkg } from './rings/ringContextMap.js';
+import { isSourceName, PWA_RING_EXTENSIONS, SOURCE_RE } from './rings/walkSrc.js';
+import type { CcdContext } from './ccdContextIds.js';
 
 /** A listed file may grow by this many net code lines before it is named. */
 export const GROWTH_LIMIT = 40;
 
 const signed = (n: number): string => `${n >= 0 ? '+' : ''}${n}`;
-
-/** The waiver list: growth over the limit is waived when the same diff adds a
- *  new file under one of these (the 08-10 architecture spec's ring table: the
- *  `coord/` deciders and the L0 kernel), until ARCH-04 stage 1 replaces this
- *  list with its classifier. */
-export const L1_L2_NEW_FILE_DIRS: readonly string[] = ['server/src/coord/', 'shared/'];
 
 const REGEX_AFTER = new Set('(,=:[!&|?{};+-*%<>~^'.split(''));
 const REGEX_AFTER_WORDS = new Set(['return', 'typeof', 'case', 'in', 'of', 'else', 'do', 'void',
@@ -171,11 +177,38 @@ export function measureBash(src: string): { code: number; heredoc: number } {
   return { code, heredoc };
 }
 
+/** `src` with every CSS comment removed (a `/*` inside a quoted string is content); newlines are kept. */
+export function stripCss(src: string): string {
+  let out = '';
+  let i = 0;
+  while (i < src.length) {
+    const c = src[i]!;
+    if (c === '"' || c === "'") {
+      let j = i + 1;
+      while (j < src.length && src[j] !== c && src[j] !== '\n') j += src[j] === '\\' ? 2 : 1;
+      out += src.slice(i, j + 1);
+      i = j + 1;
+      continue;
+    }
+    if (c === '/' && src[i + 1] === '*') {
+      const end = src.indexOf('*/', i + 2);
+      const stop = end < 0 ? src.length : end + 2;
+      out += src.slice(i, stop).replace(/[^\n]/g, '');
+      i = stop;
+      continue;
+    }
+    out += c;
+    i++;
+  }
+  return out;
+}
+
 /** Net code lines of `src`, by the stripper `file`'s extension picks. */
 export function codeLines(file: string, src: string): number {
   if (/\.(ts|tsx|mts|cts|js|mjs|cjs)$/.test(file)) {
     return stripTs(src).split('\n').filter((l) => l.trim() !== '').length;
   }
+  if (/\.css$/.test(file)) return stripCss(src).split('\n').filter((l) => l.trim() !== '').length;
   const b = measureBash(src);
   return b.code + b.heredoc;
 }
@@ -224,8 +257,8 @@ export function addedFiles(baseSha: string, headSha: string, cwd: string): strin
   return gitRead(['diff', '--name-only', '--diff-filter=A', '-z', baseSha, headSha], cwd).split('\0').filter((p) => p !== '');
 }
 
-/** The files listed by hand: the union of spec §5.2 and the ARCH-01 ticket. The ccd libraries are not here:
- *  `growthFiles` finds them. */
+/** The files listed by hand: the union of spec §5.2 and the ARCH-01 ticket, then (D-8563) every other non-test source
+ *  file over 3,000 lines on 2026-11-13. The ccd libraries are not here: `growthFiles` finds them. */
 export const GROWTH_FILES: readonly string[] = [
   'ccd/ccd',
   'ccd/ccrc',
@@ -236,6 +269,14 @@ export const GROWTH_FILES: readonly string[] = [
   'server/src/server.ts',
   'server/src/sessionws.ts',
   'pwa/src/lib/api.ts',
+  'shared/api.ts',
+  'ccd/ccrc-doctor-checks',
+  'ccd/history/lib.mjs',
+  'ccd/history/sweep.mjs',
+  'deploy/history-replay.mjs',
+  'deploy/account-op.mjs',
+  'server/src/coord/delegation-checkpoint.ts',
+  'pwa/src/fleet/fleet.css',
 ];
 
 /** A file directly in `ccd/lib/` ending `.sh`. The `.jq` and `.py` programs beside them are not libraries. */
@@ -250,15 +291,58 @@ export function growthFiles(baseSha: string, headSha: string, cwd: string): stri
   return [...GROWTH_FILES, ...[...new Set([...at(baseSha), ...at(headSha)])].sort()];
 }
 
+/** A file's place in the 08-10 architecture: its ring by `rings/ring.ts` and its context by the spec's table. */
+export interface Home { ring: Ring; context: CcdContext }
+/** The home of a repo-relative file, or null when it has none (outside `server/src` and `pwa/src`, not a source, no
+ *  context row reaches it, or absent). */
+export type HomeOf = (file: string) => Home | null;
+/** No file has a home, so no new file waives anything: the default when no classifier is wired. */
+export const NO_HOME: HomeOf = () => null;
+
+const sameHome = (a: Home | null, b: Home | null): boolean =>
+  a !== null && b !== null && a.ring === b.ring && a.context === b.context;
+
+const RING_PACKAGE = /^(server|pwa)\/src\/(.+)$/;
+
+/** The ring classifier the growth check reads (D-8563): a `server/src` or `pwa/src` source file's ring by `serverRing`
+ *  or `pwaRing` over its blob at `headSha`, and its context by the spec's `ring-context-map` table as `baseSha` holds
+ *  it, so a row the PR itself writes moves nothing. A table the merge-base lacks or cannot parse gives no file a home.
+ *  Memoised per file. */
+export function ringHomes(root: string, baseSha: string, headSha: string): HomeOf {
+  let rows: ContextRow[] = [];
+  try {
+    const spec = fileAt(SPEC_FILE, baseSha, root);
+    if (spec !== null) rows = parseContextTable(spec);
+  } catch { /* no table at the merge-base: no file has a context */ }
+  const memo = new Map<string, Home | null>();
+  const homeOf = (file: string): Home | null => {
+    const m = RING_PACKAGE.exec(file);
+    if (m === null) return null;
+    const pkg = m[1] as Pkg;
+    const sub = m[2]!;
+    if (!isSourceName(path.basename(file), pkg === 'pwa' ? PWA_RING_EXTENSIONS : SOURCE_RE)) return null;
+    const context = assignContexts(pkg, [sub], rows).context.get(sub);
+    if (context === undefined) return null;
+    const text = fileAt(file, headSha, root);
+    if (text === null) return null;
+    const parsed = /\.css$/.test(file) ? undefined : parseSource(text, path.basename(file));
+    return { ring: (pkg === 'server' ? serverRing(file, parsed) : pwaRing(file, parsed)).ring, context };
+  };
+  return (file) => {
+    if (!memo.has(file)) memo.set(file, homeOf(file));
+    return memo.get(file)!;
+  };
+}
+
 /** The listed files that grew by more than GROWTH_LIMIT, minus the waived: the
- *  same diff adds a file under L1_L2_NEW_FILE_DIRS, or shrinks another listed
- *  file by at least as much as this one grew. A listed file absent at either
- *  sha (deleted, renamed, new) is no shrink and waives nothing. */
-export function growthOver(rows: readonly GrowthRow[], added: readonly string[]): string[] {
-  const newRingFile = added.some((p) => L1_L2_NEW_FILE_DIRS.some((d) => p.startsWith(d)));
+ *  same diff adds another file `homeOf` puts in this file's ring and context
+ *  (D-8563; with no classifier, none), or shrinks another listed file by at
+ *  least as much as this one grew. A listed file absent at either sha (deleted,
+ *  renamed, new) is no shrink and waives nothing. */
+export function growthOver(rows: readonly GrowthRow[], added: readonly string[], homeOf: HomeOf = NO_HOME): string[] {
   return rows
     .filter((r) => r.delta > GROWTH_LIMIT)
-    .filter((r) => !newRingFile)
+    .filter((r) => !added.some((p) => p !== r.file && sameHome(homeOf(r.file), homeOf(p))))
     .filter((r) => !rows.some((o) => o.file !== r.file && o.atBoth && -o.delta >= r.delta))
     .map((r) => r.file);
 }
@@ -353,20 +437,38 @@ export const GROWTH_MACHINERY: readonly string[] = [
   'server/test/rings/exemption-age.data.ts',
   'server/test/rings/exemptions.ts',
   'server/test/scan/parse.ts',
+  // D-8563: the ring classifier that decides which new file waives growth, and what it loads.
+  'server/test/rings/ring.ts',
+  'server/test/rings/ringContextMap.ts',
+  'server/test/rings/walkSrc.ts',
+  'server/test/ccdContextIds.ts',
 ];
 
-/** One ledger entry: `file` may grow by up to `maxDelta` net code lines in the PR whose diff adds it. */
-export interface GrowthWaiver { file: string; maxDelta: number; d: string; reason: string; added: string }
+/** One ledger entry: `file` may grow by up to `maxDelta` net code lines in the PR whose diff adds it. `createdAt`
+ *  (D-8563) is the day the waiver entered the ledger, which its age is counted from. */
+export interface GrowthWaiver { file: string; maxDelta: number; d: string; reason: string; added: string; createdAt: string }
 
-const WAIVER_KEYS: readonly (keyof GrowthWaiver)[] = ['file', 'maxDelta', 'd', 'reason', 'added'];
+const WAIVER_KEYS: readonly (keyof GrowthWaiver)[] = ['file', 'maxDelta', 'd', 'reason', 'added', 'createdAt'];
+
+/** How a ledger is read. `createdAt` is never required: a waiver without one (a ledger from before D-8563, or an open
+ *  PR's waiver written before it) parses, and the age report names it as of unknown age. `createdAtOptional` stays for
+ *  callers that pass it. */
+export interface WaiverReadOptions { createdAtOptional?: boolean }
 
 /** Every problem in one waiver object, pushed onto `problems` under `at`; the object when it is one, else null. */
-function checkWaiverEntry(e: unknown, at: string, files: readonly string[], today: Date, problems: string[]):
-  Record<string, unknown> | null {
+function checkWaiverEntry(e: unknown, at: string, files: readonly string[], today: Date, problems: string[],
+  opts: WaiverReadOptions = {}): Record<string, unknown> | null {
   if (typeof e !== 'object' || e === null || Array.isArray(e)) { problems.push(`${at}: not an object`); return null; }
   const o = e as Record<string, unknown>;
   for (const k of Object.keys(o)) if (!(WAIVER_KEYS as readonly string[]).includes(k)) problems.push(`${at}: unknown key \`${k}\``);
-  for (const k of WAIVER_KEYS) if (!(k in o)) problems.push(`${at}: missing \`${k}\``);
+  for (const k of WAIVER_KEYS) {
+    if (!(k in o) && k !== 'createdAt') problems.push(`${at}: missing \`${k}\``);
+  }
+  if ('createdAt' in o) {
+    if (typeof o['createdAt'] !== 'string') problems.push(`${at}: createdAt must be a string`);
+    else problems.push(...malformedEntries({ [`${at}: createdAt`]: { reason: 'createdAt', since: o['createdAt'] } }, today)
+      .map((p) => p.replace(": since '", " '")));
+  }
   if (typeof o['file'] !== 'string' || !files.includes(o['file'])) problems.push(`${at}: file must be one of the listed files`);
   if (!Number.isInteger(o['maxDelta']) || (o['maxDelta'] as number) <= GROWTH_LIMIT) {
     problems.push(`${at}: maxDelta must be an integer above ${GROWTH_LIMIT}`);
@@ -388,7 +490,7 @@ export const GROWTH_WAIVERS_DIR = 'server/test/growth-waivers';
  *  `<its D-number>-<slug>.json`. Any problem in any file (the name, the JSON, a wrong shape, a second waiver for one
  *  file and D-number) is named with the file, and then no entry is answered: a malformed ledger waives nothing. */
 export function parseWaiverFiles(items: readonly { name: string; text: string }[], files: readonly string[],
-  today: Date = new Date()): { entries: GrowthWaiver[]; problems: string[] } {
+  today: Date = new Date(), opts: WaiverReadOptions = {}): { entries: GrowthWaiver[]; problems: string[] } {
   const problems: string[] = [];
   const entries: GrowthWaiver[] = [];
   const seen = new Set<string>();
@@ -402,7 +504,7 @@ export function parseWaiverFiles(items: readonly { name: string; text: string }[
       problems.push(`${at}: not JSON: ${(e as Error).message}`);
       continue;
     }
-    const o = checkWaiverEntry(raw, at, files, today, problems);
+    const o = checkWaiverEntry(raw, at, files, today, problems, opts);
     if (o === null) continue;
     if (typeof o['d'] === 'string' && !name.startsWith(`${o['d']}-`)) problems.push(`${at}: the name must start with its d, ${o['d']}`);
     const key = `${String(o['file'])} and ${String(o['d'])}`;
@@ -437,15 +539,15 @@ export function parseLegacyWaivers(text: string, files: readonly string[], today
   const list = (raw as { waivers?: unknown } | null)?.waivers;
   if (!Array.isArray(list)) return { entries: [], problems: [`${at}: no \`waivers\` array`] };
   const problems: string[] = [];
-  for (const [i, e] of list.entries()) checkWaiverEntry(e, `${at}#${i}`, files, today, problems);
+  for (const [i, e] of list.entries()) checkWaiverEntry(e, `${at}#${i}`, files, today, problems, { createdAtOptional: true });
   return problems.length ? { entries: [], problems } : { entries: list as GrowthWaiver[], problems };
 }
 
 /** The waiver directory's ledger at `sha`: absent there, it is the legacy single file when that sha holds one, else
  *  nothing; a file in it that is not a `.json` waiver
  *  is a problem, as is any malformed one (and then nothing is answered). */
-export function waiversAt(files: readonly string[], sha: string, cwd: string, today: Date = new Date()):
-  { entries: GrowthWaiver[]; problems: string[] } {
+export function waiversAt(files: readonly string[], sha: string, cwd: string, today: Date = new Date(),
+  opts: WaiverReadOptions = {}): { entries: GrowthWaiver[]; problems: string[] } {
   let listing = '';
   try {
     listing = gitRead(['ls-tree', '--name-only', '-r', sha, '--', `${GROWTH_WAIVERS_DIR}/`], cwd);
@@ -456,18 +558,54 @@ export function waiversAt(files: readonly string[], sha: string, cwd: string, to
     if (legacy !== null) return parseLegacyWaivers(legacy, files, today);
   }
   const items = names.map((name) => ({ name, text: fileAt(`${GROWTH_WAIVERS_DIR}/${name}`, sha, cwd) ?? '' }));
-  return parseWaiverFiles(items, files, today);
+  return parseWaiverFiles(items, files, today, opts);
 }
 
 /** The ledger entries the diff `baseSha..headSha` adds: the waiver files the diff adds. Absent at a sha, the
  *  ledger holds nothing there; malformed at either, nothing is added and the problems say which side. */
 export function waiversInDiff(files: readonly string[], baseSha: string, headSha: string, cwd: string,
   today: Date = new Date()): { added: GrowthWaiver[]; problems: string[] } {
-  const base = waiversAt(files, baseSha, cwd, today);
+  const base = waiversAt(files, baseSha, cwd, today, { createdAtOptional: true });
   const head = waiversAt(files, headSha, cwd, today);
   const problems = [...base.problems.map((p) => `base: ${p}`), ...head.problems.map((p) => `head: ${p}`)];
   return { added: problems.length ? [] : waiversAdded(base.entries, head.entries), problems };
 }
+
+/** A waiver older than this many days is reported by name (D-8563): a report, never a failure. */
+export const WAIVER_AGE_DAYS = 30;
+
+/** One waiver file and its age in whole days since its `createdAt`. */
+export interface AgedWaiver { name: string; days: number | null }
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/** The waiver files whose `createdAt` is more than `maxDays` whole days before `today`, oldest first, then by name, and
+ *  after them every waiver with no `createdAt` (age unknown, `days: null`). A file that is not JSON, or whose `createdAt`
+ *  is malformed, is skipped here: the ledger's parse names it. */
+export function agedWaivers(items: readonly { name: string; text: string }[], today: Date = new Date(),
+  maxDays: number = WAIVER_AGE_DAYS): AgedWaiver[] {
+  const day0 = Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate());
+  const out: AgedWaiver[] = [];
+  for (const { name, text } of items) {
+    let created: unknown;
+    try {
+      created = (JSON.parse(text) as { createdAt?: unknown } | null)?.createdAt;
+    } catch { continue; }
+    if (created === undefined) { out.push({ name, days: null }); continue; }
+    if (typeof created !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(created)) continue;
+    const t = Date.parse(`${created}T00:00:00Z`);
+    if (Number.isNaN(t)) continue;
+    const days = Math.floor((day0 - t) / DAY_MS);
+    if (days > maxDays) out.push({ name, days });
+  }
+  const byName = (a: AgedWaiver, b: AgedWaiver): number => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0);
+  const dated = out.filter((a) => a.days !== null).sort((a, b) => (b.days as number) - (a.days as number) || byName(a, b));
+  return [...dated, ...out.filter((a) => a.days === null).sort(byName)];
+}
+
+/** The aged waivers as one line: each name with its age, or `(none)`. */
+export const agedLine = (aged: readonly AgedWaiver[]): string =>
+  (aged.length ? aged.map((a) => `${a.name} (${a.days === null ? 'age unknown' : `${a.days} days`})`).join(', ') : '(none)');
 
 /** The added entry that best covers one over file: the largest `maxDelta` for it. */
 export interface WaiverMatch { file: string; entry: GrowthWaiver; applies: boolean }
@@ -547,7 +685,7 @@ export function growthVerdicts(rows: readonly GrowthRow[], over: readonly string
 export function armedGrowth(files: readonly string[], root: string, base: string, head: string,
   env: NodeJS.ProcessEnv, today: Date = new Date()) {
   const rows = files.map((f) => netGrowth(f, base, head, root));
-  const over = growthOver(rows, addedFiles(base, head, root));
+  const over = growthOver(rows, addedFiles(base, head, root), ringHomes(root, base, head));
   const pr = prNumberFromEnv(env);
   const onMain = exemptionsOnMain(files, root, today);
   const touched = changedFiles(base, head, root).filter((p) => GROWTH_MACHINERY.includes(p));
@@ -607,6 +745,8 @@ export interface GrowthSummaryInput {
   armed: boolean;
   exemptions?: readonly ExemptionMatch[];
   waivers?: readonly WaiverMatch[];
+  /** D-8563: the ledger's waivers older than WAIVER_AGE_DAYS; the line is left out when not given. */
+  aged?: readonly AgedWaiver[];
 }
 
 /** The CI job summary: one row per listed file with its absolute code lines,
@@ -625,6 +765,7 @@ export function growthSummary(i: GrowthSummaryInput): string {
     '',
     `GROWTH_OVER: ${overLine(i.over, i.exemptions, (f) => `\`${f}\``, i.waivers)}`,
     '',
+    ...(i.aged === undefined ? [] : [`Waivers older than ${WAIVER_AGE_DAYS} days (a report, not a failure): ${agedLine(i.aged)}`, '']),
   ].join('\n');
 }
 

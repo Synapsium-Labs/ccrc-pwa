@@ -15,6 +15,9 @@ import {
   CARD_BLOCK_KEY, CARD_BLOCK_SET, CARD_NEVER_EMPTY_KEY, CARD_NEVER_EMPTY_SET, CARD_ONE_LINE_KEY, CARD_ONE_LINE_SET, CARD_TRIM_KEY,
   CARD_TRIM_SET,
 } from './cardMutants.js';
+import { counterSuite, type Counter } from '../continuityCompactionsCases.js';
+
+interface CompactionsModule { compactionsSince: Counter }
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(HERE, '../../..');
@@ -43,6 +46,24 @@ const COORD_BLOCKED_SET: MutantSet<CoordBlockedModule> = {
     }
     return cases;
   },
+};
+
+// Overlord W1a, context readings: the compaction counter, against the very cases its suite asserts.
+const COMPACTIONS_KEY = 'server/src/continuity/compactions.ts#compactionsSince';
+const COMPACTIONS_SET: MutantSet<CompactionsModule> = {
+  modulePath: path.join(ROOT, 'server/src/continuity/compactions.ts'),
+  mutants: [
+    { id: 'C1 pair across triggers', old: 'return pre.trigger === post.trigger\n    && ', new: 'return ' },
+    { id: 'C2 window <= to <', old: 'post.at - pre.at <= COMPACTION_PAIR_MS', new: 'post.at - pre.at < COMPACTION_PAIR_MS' },
+    { id: 'C3 count posts only', old: 'return pres.length + posts.length - matched;', new: 'return posts.length;' },
+    { id: 'C4 transcripts ignored', old: '(pre.transcript === null || post.transcript === null || pre.transcript === post.transcript)', new: 'true' },
+    { id: 'C5 since exclusive', old: 'l.at >= sinceMs && ', new: 'l.at > sinceMs && ' },
+    { id: 'C6 a post before its pre pairs', old: 'post.at >= pre.at && ', new: '' },
+    { id: 'C7 every scope counted', old: " && l.scope === 'main'", new: '' },
+    { id: 'C8 a refused line counted as a pre', old: "kept.filter((l) => l.phase === 'pre')", new: "kept.filter((l) => l.phase !== 'post')" },
+    { id: 'C9 first-found pairing, not maximum', old: 'if (preOf[i] === -1 || augment(preOf[i]!, seen))', new: 'if (preOf[i] === -1)' },
+  ],
+  suite: (mod) => counterSuite(mod.compactionsSince),
 };
 
 // #2726: the peer bound's decider (plan docs/superpowers/plans/2026-11-10-overlord/w1a-invited-replies.md, Task 6). Its
@@ -113,6 +134,7 @@ const MUTANT_SETS: Record<string, MutantSet<never>> = {
   [CARD_NEVER_EMPTY_KEY]: CARD_NEVER_EMPTY_SET as MutantSet<never>,
   [CARD_ONE_LINE_KEY]: CARD_ONE_LINE_SET as MutantSet<never>,
   [CARD_BLOCK_KEY]: CARD_BLOCK_SET as MutantSet<never>,
+  [COMPACTIONS_KEY]: COMPACTIONS_SET as MutantSet<never>,
   ...RENEWAL_MUTANT_SETS,
   ...MAIL_PACE_MUTANT_SETS,
   ...FACE_MUTANT_SETS,

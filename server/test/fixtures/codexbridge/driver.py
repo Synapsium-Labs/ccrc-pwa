@@ -41,7 +41,9 @@ THE OPS, run in order; each prints ONE JSON line `{"op": <name>, ...}` and the r
                    name kept as repeated lines); `output_config` is passed only when the op names it, and
                    `stored` is the lookup stub: a list of {"call": <id>, "turn"} or {"session", "text", "turn"}, each
                    keyed by `inbound.call_key` / `inbound.text_key`, so a test never spells a key itself; "lookups"
-                   lists the keys asked for, in order
+                   lists the keys asked for, in order; with `counted: true` the lookup is wrapped in
+                   `server.counted_lookup`, as the server's message path wraps the store's, and "replay" is its tally
+                   (D-8618)
   inbound-betas    {headers? | headerLines?} -> {"betas": inbound.betas, "fromClaudeCode": inbound.from_claude_code,
                    "CLAUDE_CODE_BETA"}: the headers read as from-anthropic reads them (a plain dict, or [name, value]
                    pairs put in an http.client.HTTPMessage, a repeated name kept as repeated lines)
@@ -53,9 +55,11 @@ THE OPS, run in order; each prints ONE JSON line `{"op": <name>, ...}` and the r
                    {kind, reason, endTurn, usage, anthropicUsage, stop, continue, error}, "reasoning": [{"id", "key"}]
                    (item ids and keys only, never an item), "counted": {"names", "counts"}, "committable",
                    "emittedToolUse", "refusal", "phases", "emittedText", "warnings", "terminalBeforeEof",
-                   "outputItems" (a count), "responseId", "trace"? (per parsed event: its type, the events released,
-                   and whether terminal and committable were then set)}: one SseParser and one Reducer, the
-                   reducer's release() drained after every event, finish() after the parser is closed
+                   "outputItems" (a count), "responseId", "diagnostics" (the reducer's, D-8618: the terminal's
+                   served model, valid usage counts and input_transformations keys, or None), "trace"? (per parsed
+                   event: its type, the events released, and whether terminal and committable were then set)}: one
+                   SseParser and one Reducer, the reducer's release() drained after every event, finish() after the
+                   parser is closed
   stop-reasons     -> {"rows": [{"in": [kind, reason, end_turn, emitted_tool_use, refusal], "stop", "cont"}],
                    "failedRaises": the class stop_reason raises for a failed terminal,
                    "twoArgContinuationRaises": the class the two-argument needs_continuation call raises (None if it
@@ -336,7 +340,7 @@ def _reduce(op, cb):
         "committable": r.committable, "emittedToolUse": r.emitted_tool_use, "refusal": r.refusal,
         "phases": r.phases, "emittedText": {str(k): v for k, v in r.emitted_text.items()},
         "warnings": list(r.warnings), "terminalBeforeEof": before_eof, "outputItems": len(r.output_items),
-        "responseId": r.response_id,
+        "responseId": r.response_id, "diagnostics": r.diagnostics,
     }
     if op.get("trace"):
         out["trace"] = trace
@@ -720,8 +724,9 @@ def _run(op, pkg, cb):
                 return _STATE["store"].get(key)
             return stored.get(key)
 
+        tally = {}
         sink = cb.ListSink()
-        kwargs = {"names": sink, "lookup": lookup}
+        kwargs = {"names": sink, "lookup": cb.server.counted_lookup(lookup, tally) if op.get("counted") else lookup}
         if "output_config" in op:
             kwargs["output_config"] = op["output_config"]
         headers = op.get("headers") or {}
@@ -737,7 +742,10 @@ def _run(op, pkg, cb):
             return out
         request = req._asdict()
         request["tools_required"] = sorted(request["tools_required"])
-        return {"request": request, "names": [list(n) for n in sink.names], "lookups": lookups}
+        out = {"request": request, "names": [list(n) for n in sink.names], "lookups": lookups}
+        if op.get("counted"):
+            out["replay"] = tally
+        return out
     if name == "inbound-betas":
         inbound = cb.inbound
         headers = op.get("headers") or {}

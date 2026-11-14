@@ -1,0 +1,12 @@
+event: response.created
+data: {"type":"response.created","response":{"id":"resp_fx1","object":"response","status":"in_progress","output":[],"model":"model-6.1-alpha"},"sequence_number":0}
+
+event: response.output_item.done
+data: {"type":"response.output_item.done","output_index":0,"item":{"type":"reasoning","id":"rs_fx0","summary":[],"encrypted_content":"ENC-0"},"sequence_number":1}
+
+event: response.output_item.done
+data: {"type":"response.output_item.done","output_index":1,"item":{"type":"message","id":"msg_fx1","role":"assistant","status":"completed","content":[{"type":"output_text","text":"Kept.","annotations":[]}]},"sequence_number":2}
+
+event: response.completed
+data: {"type":"response.completed","response":{"id":"resp_fx1","object":"response","status":"completed","output":[],"usage":{"input_tokens":9,"output_tokens":4,"total_tokens":13,"input_tokens_details":{"cached_tokens":2},"output_tokens_details":{"reasoning_tokens":3}},"model":"model-6.1-beta","input_transformations":[{"type":"reasoning","id":"rs_fx0","action":"removed","reason":"organization_mismatch"},{"type":"reasoning","action":"removed","reason":"end_user_mismatch"},{"type":"reasoning","action":"removed","reason":"model_mismatch"},{"type":"reasoning","action":"removed","reason":"prefix_mismatch"},{"type":"reasoning","action":"removed","reason":"turn_boundary"},{"type":"reasoning","action":"removed","reason":"turn_boundary"},{"type":"reasoning","action":"removed","reason":"fx_new_reason"},{"type":"reasoning","action":"removed"},{"type":"message","action":"changed","reason":"turn_boundary"},"not an object",{"type":"reasoning","action":"removed","reason":"two words"},{"type":"reasoning","action":5,"reason":null}]},"sequence_number":3}
+

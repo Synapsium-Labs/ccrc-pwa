@@ -3592,6 +3592,40 @@ without the fix. Departures by slug in `c28.md`.
   the pure-bash arm and `login` (F3, F4); each spawn carries the mint's stdin past the shim's pure-bash arm on fd 5
   (`pure-bash-arm-mint-stdin`). Departures are named by slug in `c28.md`.
 
+### Task C32: an item's text wraps inside its card when it holds a long run with no spaces (D-8585) — now
+
+Placed at the end of C28's section, before the acceptance matrix.
+
+**Why.** The operator saw it on a live item on desktop. A How step held a long run with no spaces (path-like lists and ids
+joined by slashes and commas), and the Why paragraph and every How step ran past the card's right border, under the side
+panel, and off the window's edge. Root cause first, measured in a browser at a desktop width; the fix is CSS, and the mobile
+layout stays as it is.
+
+**What was found and done.** `.wi-card` is a grid with one implicit `auto` column, which is at least as wide as its widest
+child's min-content width, and the How list carried no `overflow-wrap`. Measured at 1280 px: the card's border box stayed in
+its 596 px column, but its track was 2588.58 px, the How section's min-content width, so every child of the card (the title,
+the Why text, the steps and the history) was laid out about 2006 px past the card's edge. `.wi-card` now has
+`grid-template-columns: minmax(0, 1fr)`, so no child's min-content can widen its column (the side panel is a `.wi-card` too),
+and `.wi-card .wi-steps` has `overflow-wrap: anywhere`, as the Why text already did. The page's other text was checked the same
+way: no other block overflowed by this cause. A new browser test, `pwa/browser/item-wrap.browser.test.ts`, is red on `main`
+(12 of 12) and green with the fix, and each declaration is load-bearing on its own. Evidence, the checklist and the
+before and after views are in `c32.md`.
+
+**Fix round 1 (review 1938).** A decision option that is not the recommended one, or any option of a decision with no
+recommendation, still overflowed the side panel when it held a long run: its words sit in the shared radio primitive's
+sentence span, which sets no wrap. `.wi-act .wi-opt` now has `overflow-wrap: anywhere`, on the item page only (F1). The test
+holds the run in such options and also asserts that the detail pane has no sideways overflow at desktop widths, where the pane
+clips and the page's own scroll cannot show it (F2); it is red on `main` in all 16 cases and red in 10 without the new rule. The
+note corrects the run's length to 340 characters (F3) and says which checked rows hold no long run (F4).
+
+- **D-8585** - `item-card-auto-track`: Task C32, issued on 2026-11-13. An item card's one implicit `auto` grid column took the
+  min-content width of a How step that could not wrap, so a long run with no spaces pushed all of the card's text past its
+  edge, under the side panel. The card's column is now `minmax(0, 1fr)` and the How steps wrap anywhere; fix round 1 (review
+  1938) makes a decision's options wrap too. Departures are named by slug in `c32.md`.
+
+**Acceptance.** `item-wrap.browser.test.ts` is green at the PR's tip and pwa's whole browser suite passes once before the
+wave-done. The test reds with either declaration removed (the probe case for the column). **Rollback.** A plain revert.
+
 ## Acceptance (the matrix, per PR)
 
 Each rendered task's PR body carries a table: rows Refined and Instrument × dark and light; columns the task's widths (at least 360, 390, 1280 and 1920), each cell a before (`origin/main`) and after pair checked for: no horizontal page scroll; no page errors; no clipped or overlapping text; 44 px targets under coarse emulation; the identity core present; one instance of each moved readout; nothing moved that the task did not intend; and the task's own claim. Mark it ✓, or write the defect and its fix. Fixture names only. Departures are named by slug under `## Departures`, for the coordinator to number.

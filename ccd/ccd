@@ -4097,16 +4097,16 @@ _reg_purge() {   # id -> rm -f every "$REG/$id.<field>" registry file for id
   # to neither. 34 + 2 = 36, re-measured on the merged file rather than added
   # up — the same discipline this paragraph is about. The drawer wave then added
   # `stalenarrownote` and `swapnarrownote` (`_pane_narrow_note`'s per-site log
-  # floors): 38; #166's `child` made 39, D-3526's `carriednote` and `tdate` 41, the stall watch's `turn` 42, continuity's `rescuewait` 43, `typed` 44, `choicekept` 45, the route read-back's `readbackseen` 46, the background-job wait's `bgwait` 47 (#189), D-6180's stand-down lines `standdown`, `standdownaff` and `standdownprobe` 50, D-5941's `prbranch` 51, and D-8271's typing-check log floor `typerefuse` 52, the launch record's `deleg` 53 (D-8367), the fresh start's `fresh` 54 (overlord W1a), and the manifest's `inflight` 55 (D-8374) — by addition, NOT a fresh census of
+  # floors): 38; #166's `child` made 39, D-3526's `carriednote` and `tdate` 41, the stall watch's `turn` 42, continuity's `rescuewait` 43, `typed` 44, `choicekept` 45, the route read-back's `readbackseen` 46, the background-job wait's `bgwait` 47 (#189), D-6180's stand-down lines `standdown`, `standdownaff` and `standdownprobe` 50, D-5941's `prbranch` 51, and D-8271's typing-check log floor `typerefuse` 52, the launch record's `deleg` 53 (D-8367), the fresh start's `fresh` 54 (overlord W1a), the manifest's `inflight` 55 (D-8374), the Overlord's compaction events `compactevents` and `compacteventsprev` 57, and the start report's spool `startpending` 58 (overlord W1a) — by addition, NOT a fresh census of
   # every per-session field, which this list still is not. `ROUTE_FIELDS` (`class`,
   # `effort`, `subagent`, `workflow`, `compact`, `degraded`, `inert`) and
   # `$REG/<id>.stalepress`/`.tscan` are all real per-session fields this list
   # omits; the gap is pre-existing, not new, and this paragraph's count tracks
   # only the additions named above against the last stated total.
-  # The 55: `archived`, `archivedreason`, `archivemanifest`, `base`, `bgwait`, `branch`,
-  # `carriednote`, `child`, `choicekept`, `compactnote`, `compactskip`, `crosspool`, `deleg`, `fresh`, `hold`, `home`, `hookstate`, `inflight`, `lastcompact`, `lastswap`,
+  # The 58: `archived`, `archivedreason`, `archivemanifest`, `base`, `bgwait`, `branch`,
+  # `carriednote`, `child`, `choicekept`, `compactevents`, `compacteventsprev`, `compactnote`, `compactskip`, `crosspool`, `deleg`, `fresh`, `hold`, `home`, `hookstate`, `inflight`, `lastcompact`, `lastswap`,
   # `pool`, `prbranch`, `prcheckedat`, `prhistory`, `prnumber`, `prphase`, `project`, `rc`,
-  # `readbackseen`, `reaping`, `rescuewait`, `setup`, `spawn`, `stalenarrownote`, `standdown`, `standdownaff`, `standdownprobe`, `started`, `stopped`, `stranded`,
+  # `readbackseen`, `reaping`, `rescuewait`, `setup`, `spawn`, `stalenarrownote`, `standdown`, `standdownaff`, `standdownprobe`, `started`, `startpending`, `stopped`, `stranded`,
   # `strandnotify`, `substrate`, `supervised`, `svcfailed`, `swapblocked`,
   # `swapnarrownote`, `tdate`, `tickstuck`, `turn`, `typed`, `typerefuse`, `uuid`, `workdir`, `workspace`, `wrapper`. Note that `pool` here is the per-session
   # CANDIDATE LIST `_pool_for` reads, NOT an account pool name — two meanings
@@ -4296,10 +4296,10 @@ _reg_purge() {   # id -> rm -f every "$REG/$id.<field>" registry file for id
     rm -f "$pf" || _reg_purge_unremoved "$pf"
   done
   # GENERATION LAST, after the archived/reaping tail and every private family, and OUTSIDE the loop above, which skips it: the row's authorization, so while it stands a hook holding it can still take the lock.
-  # `joined`, `joinedprev` and `deleg` (the launch record, D-8367: the hook appends it without a lock under the same two-sided rule) ONCE MORE, AFTER IT, in ONE `rm` call on the same line, and the order is the point: session-hook.sh appends `$REG/$id.joined` on a SubagentStart WITHOUT this lock (and renames it whole to `joinedprev` past 128 lines), only while `generation` stands (it checks before the append and again after it, and removes both names if the row is gone), and the glob loop above passed the names tens of milliseconds before this line.
+  # `joined`, `joinedprev` and `deleg` (the launch record, D-8367: the hook appends it without a lock under the same two-sided rule), and `startpending` (the start report's spool, Overlord W1a: the hook rewrites it without a lock under the same rule), ONCE MORE, AFTER IT, in ONE `rm` call on the same line, and the order is the point: session-hook.sh appends `$REG/$id.joined` on a SubagentStart WITHOUT this lock (and renames it whole to `joinedprev` past 128 lines), only while `generation` stands (it checks before the append and again after it, and removes both names if the row is gone), and the glob loop above passed the names tens of milliseconds before this line.
   # An append that lands before this line is taken by it; one that lands after `generation` has gone sees no row on its re-check and removes itself. Placed earlier, it would leave a hook that still sees the row free to write behind it, and an orphaned dot-free field holds the slug for ever (`_ws_slug_free`'s any-field check; `ws-gc`, keyed on `.uuid`/`.workspace`, never clears it).
   # Its own literal paths and never the loop's `f` (the note beside the `hf` loop: a second unlink through that variable is a second canonical write on the compaction card's allow-list; neither name is on it). ONE call, so the purge's unlink count stays what `ccd-workspaces.test.ts` pins; a refusal names each path still standing. Line-neutral by construction, so no cited anchor below moves.
-  rm -f "$REG/$id.generation" || _reg_purge_unremoved "$REG/$id.generation"; rm -f "$REG/$id.joined" "$REG/$id.joinedprev" "$REG/$id.deleg" || { [[ -e "$REG/$id.joined" ]] && _reg_purge_unremoved "$REG/$id.joined"; [[ -e "$REG/$id.joinedprev" ]] && _reg_purge_unremoved "$REG/$id.joinedprev"; [[ -e "$REG/$id.deleg" ]] && _reg_purge_unremoved "$REG/$id.deleg"; }
+  rm -f "$REG/$id.generation" || _reg_purge_unremoved "$REG/$id.generation"; rm -f "$REG/$id.joined" "$REG/$id.joinedprev" "$REG/$id.deleg" "$REG/$id.startpending" || { [[ -e "$REG/$id.joined" ]] && _reg_purge_unremoved "$REG/$id.joined"; [[ -e "$REG/$id.joinedprev" ]] && _reg_purge_unremoved "$REG/$id.joinedprev"; [[ -e "$REG/$id.deleg" ]] && _reg_purge_unremoved "$REG/$id.deleg"; [[ -e "$REG/$id.startpending" ]] && _reg_purge_unremoved "$REG/$id.startpending"; }
   _compact_lock_release "$_pg_fd"
   return "$_pg_urc"
 }
@@ -6535,7 +6535,7 @@ if mode == 'state':
     # appending needs write on the FILE, not the directory — the unwritable
     # `$REG` never touches it; and `clear`'s `os.remove` and `put`'s tmp-create
     # both raise `PermissionError`, because both need write on the DIRECTORY
-    # (D-132). So for a session that has never run `pr-state` under an
+    # (D-8590). So for a session that has never run `pr-state` under an
     # unwritable `$REG`: the lock cannot be created, the compare-and-set below
     # proceeds UNLOCKED, and two concurrent runs can each reach the prhistory
     # append — the duplicate-append harm this lock exists to prevent — before
@@ -6543,7 +6543,7 @@ if mode == 'state':
     # which `_ws_archive_manifest` later folds into the archive manifest
     # verbatim.
     #
-    # DISCLOSED, NOT CLOSED (ruling, D-139). It takes a read-only `$REG` AND
+    # DISCLOSED, NOT CLOSED (ruling, D-8596). It takes a read-only `$REG` AND
     # concurrent `pr-state` runs AND a session with no lock file yet — all
     # three at once — and the natural closes each trade this rare duplicate
     # for a worse ordinary-case cost: locking `.prhistory` itself adds a new

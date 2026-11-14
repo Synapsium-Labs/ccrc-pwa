@@ -480,6 +480,8 @@ describe('FleetWatcher.tick characterization (console speed S1, Step 0)', () => 
             "class": "opus",
             "cost": 1.25,
             "ctxPct": 12,
+            "ctxTokens": null,
+            "ctxWindow": null,
             "effort": "high",
             "model": "claude-opus-5",
             "stale": true,

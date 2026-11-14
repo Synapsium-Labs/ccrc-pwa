@@ -13,6 +13,7 @@ import { readLocalCcdCaps } from '../src/localcaps.js';
 import { KeyedQueue } from '../src/inject/queue.js';
 import type { BuildInfo } from '../../shared/buildinfo.js';
 import { LIFECYCLE } from '../../shared/lifecycle.js';
+import { WORKSPACE_TRANSITIONS } from '../../shared/workspaceTransitions.js';
 import { RUN_PREFIX, RUN_QUIET_S } from './run-tmp.globalsetup.mjs';
 import { mkTmp } from './tmpHelpers.js';
 import { seedRoster } from './helpers.js';
@@ -1140,6 +1141,20 @@ describe('shared/lifecycle.ts — the policy §4(a) manifest', () => {
     expect(c!.bound).toContain('7 idle days');
     expect(c!.bound).toContain('never while it coordinated');
     expect(c!.ruling).toBeNull();
+  });
+  // D-8612 (consolidation spec C4: "the manifest's workspace row points at the table"): the child-workspaces row names
+  // the table that holds its collectors' refusal edges. L0 imports nothing, so the row names it as text; this pins the
+  // text to the real export, and the export to edges of both verbs the row's collector runs.
+  it('the child-workspaces row names WORKSPACE_TRANSITIONS, the table of its collectors\' refusal edges (D-8612)', () => {
+    const c = LIFECYCLE.find((x) => x.name === 'child-workspaces');
+    expect(c!.collector).toContain('refusal edges: WORKSPACE_TRANSITIONS (shared/workspaceTransitions.ts)');
+    const verbs = new Set(WORKSPACE_TRANSITIONS.map((t) => t.verb));
+    for (const v of ['reclaim', 'expire'] as const) {
+      expect(c!.collector, v).toContain(`ws-${v}`);
+      expect(verbs.has(v), `WORKSPACE_TRANSITIONS has no ${v} edge`).toBe(true);
+    }
+    const src = readFileSync(path.join(REPO_ROOT, 'shared/lifecycle.ts'), 'utf8');
+    expect(src, 'the L0 manifest imports nothing').not.toMatch(/^\s*import\b|\bimport\s*\(|\brequire\s*\(/m);
   });
   // CHARACTERIZATION (D-7278; green on `main` before the deps-shed arm): the manifest's classes, in order, and the
   // policy's containment row for `node_modules` — it has no class of its own and "dies with" its workspace.

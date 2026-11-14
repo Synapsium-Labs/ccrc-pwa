@@ -298,22 +298,23 @@ describe('stall.ts is the pure L1 module its docstring says it is', () => {
     expect(code(), 'stall.ts answers HTTP').not.toMatch(/\breply\s*\.|\bFastify|\bapp\s*\./);
     expect(code(), 'stall.ts reaches the store').not.toMatch(/CoordStore|\bcoord\s*\.|\bstore\s*\.|\bdb\s*\.|\.prepare\s*\(/);
   });
-  it('imports values only from shared/api.ts, shared/stall-watch.ts and shared/switches.ts (L0), stallWatchSays from sessionReading and sessionRoleOf from roleOf (both L1, importing only L0); anything else is a type import', () => {
+  it('imports values only from shared/api.ts, shared/stall-watch.ts, shared/switches.ts and shared/hook-events.ts (L0), stallWatchSays and turnWordOf from sessionReading and sessionRoleOf from roleOf (both L1, importing only L0); anything else is a type import', () => {
     const c = code();
     expect(c, 'a side-effect import').not.toMatch(SIDE_EFFECT_IMPORT);
     expect(c, 'a dynamic import').not.toMatch(/\bimport\s*\(/);
     expect(c, 'a re-export').not.toMatch(RE_EXPORT);
     for (const spec of valueImportSpecifiers(c)) {
-      expect(['../../../shared/api.js', '../../../shared/stall-watch.js', '../../../shared/switches.js', '../sessionReading.js', '../roleOf.js'], `stall.ts takes a value import from ${spec}`).toContain(spec);
+      expect(['../../../shared/api.js', '../../../shared/stall-watch.js', '../../../shared/switches.js', '../../../shared/hook-events.js', '../sessionReading.js', '../roleOf.js'], `stall.ts takes a value import from ${spec}`).toContain(spec);
     }
     // From shared/switches.ts (L0, D-8339), the kill switch's constant ALONE: the lane reads no other row's name, and no
     // reader of the switchboard.
     const fromSwitches = [...c.matchAll(/^\s*import\s[^'"]*?\bfrom\s*(['"])\.\.\/\.\.\/\.\.\/shared\/switches\.js\1;?$/gm)].map((m) => m[0].trim());
     expect(fromSwitches, 'the one import from switches').toEqual([`import { STALL_WATCH_DISABLED_MARKER } from '../../../shared/switches.js';`]);
-    // From sessionReading, `stallWatchSays` ALONE, and on exactly this one line: a second name, or a second import
-    // from the module, would let the lane reach the policy table or `turnSays` and spell a policy name of its own.
+    // From sessionReading, `stallWatchSays` and `turnWordOf` ALONE, on exactly this one line: the lane's policy and the one
+    // reading of the raw word (D-8610). Any other name, or a second import from the module, would let the lane reach the
+    // policy table or `turnSays` and spell a policy name of its own.
     const fromReading = [...c.matchAll(/^\s*import\s[^'"]*?\bfrom\s*(['"])\.\.\/sessionReading\.js\1;?$/gm)].map((m) => m[0].trim());
-    expect(fromReading, 'the one import from sessionReading').toEqual([`import { stallWatchSays } from '../sessionReading.js';`]);
+    expect(fromReading, 'the one import from sessionReading').toEqual([`import { stallWatchSays, turnWordOf } from '../sessionReading.js';`]);
     // From roleOf, `sessionRoleOf` ALONE: a second name would let the lane read the role table or `roleOf` and decide a
     // role of its own. roleOf.ts is L1 and imports only L0.
     const fromRoleOf = [...c.matchAll(/^\s*import\s[^'"]*?\bfrom\s*(['"])\.\.\/roleOf\.js\1;?$/gm)].map((m) => m[0].trim());
@@ -322,6 +323,10 @@ describe('stall.ts is the pure L1 module its docstring says it is', () => {
     // (`StallArm`) is a separate `import type` line.
     const fromStallWatch = [...c.matchAll(/^\s*import\s(?!type\b)[^'"]*?\bfrom\s*(['"])\.\.\/\.\.\/\.\.\/shared\/stall-watch\.js\1;?$/gm)].map((m) => m[0].trim());
     expect(fromStallWatch, 'the one value import from stall-watch').toEqual([`import { STALL_ARMS, isStallArm } from '../../../shared/stall-watch.js';`]);
+    // From shared/hook-events.ts (L0, D-8613), the hook event guard ALONE, beside the union's type: the plumbing list is
+    // typed by the union, and an event is tested against it only once it is known to be one.
+    const fromHookEvents = [...c.matchAll(/^\s*import\s[^'"]*?\bfrom\s*(['"])\.\.\/\.\.\/\.\.\/shared\/hook-events\.js\1;?$/gm)].map((m) => m[0].trim());
+    expect(fromHookEvents, 'the one import from hook-events').toEqual([`import { isHookEvent, type HookEvent } from '../../../shared/hook-events.js';`]);
   });
 });
 

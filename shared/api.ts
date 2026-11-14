@@ -18,6 +18,7 @@ import type { WorkflowView } from './workflows.js';
 import type { WaitingView } from './ledgers.js';
 import type { CHECKS_MAIL_TOKEN } from './landing.js';
 import type { LandingWrite } from './landingLine.js';
+import { hookEventIs, type HookEvent } from './hook-events.js';
 
 export type SessionStatus = 'busy' | 'idle' | 'dead';
 
@@ -972,6 +973,14 @@ export interface SessionUsage {
   readonly class: string | null;
   readonly effort: string | null;
   readonly ctxPct: number | null;
+  /** Overlord W0-18: the context's size in tokens, Claude Code's statusline field
+   *  `context_window.total_input_tokens` (input plus cache read plus cache creation), the figure the renewal triggers
+   *  read. Null when the sidecar has none or it is not a number above zero: never 0 for "no reading". Optional
+   *  because an older sidecar omits it; `parseUsageSidecar` is its one reader. */
+  readonly ctxTokens?: number | null;
+  /** Overlord W0-18: the context window's size in tokens, `context_window.context_window_size`. Null as for
+   *  `ctxTokens`. Optional because an older sidecar omits it; `parseUsageSidecar` is its one reader. */
+  readonly ctxWindow?: number | null;
   readonly cost: number | null;
   /** D-8267: when the main conversation's cached prompt prefix leaves its TTL, in epoch SECONDS (the sidecar's unit):
    *  Claude Code's documented statusline field `prompt_cache.expires_at` (v2.1.251 and later), null when the last
@@ -1825,7 +1834,7 @@ export function sessionBucket(
   // `idle`. D-75's wedge recovery is kept for a Stop with no delegated work.
   const delegated = s.background !== null && s.background.count > 0;
   const finishedAfterStatus =
-    hookNewer && s.hookState === 'done' && hookEvent !== 'SessionStart' && !delegated;
+    hookNewer && s.hookState === 'done' && !hookEventIs(hookEvent, 'SessionStart') && !delegated;
   // NOT the hook's timestamp: the hook rewrites `updatedAt` on every
   // PostToolUse, so a busy session would report a continuously-refreshed
   // "since" — permanently new, and permanently badged. That holds for the
@@ -1846,7 +1855,7 @@ export function sessionBucket(
     // function's own docstring for `hookEvent`. Degrade to `idle`: exactly
     // the bucket a virgin session would report if `SessionStart` had never
     // touched `state` at all, which is the honest fact on the ground.
-    if (hookEvent === 'SessionStart') return { bucket: 'idle', bucketSince: s.statusUpdatedAt };
+    if (hookEventIs(hookEvent, 'SessionStart')) return { bucket: 'idle', bucketSince: s.statusUpdatedAt };
     // D-5231: after a Stop that left delegated work running, `done` is reached
     // only once the live file writes `idle` (the rung above held `working`
     // until then), so it is dated from THAT write when it is the later one —
@@ -3357,6 +3366,7 @@ function reviveUsage(o: Record<string, unknown>, key: string): SessionUsage | nu
     ts: reqNum(u, 'ts'), model: optStr(u, 'model'), class: optStr(u, 'class'),
     effort: optStr(u, 'effort'), ctxPct: optNum(u, 'ctxPct'), cost: optNum(u, 'cost'),
     cacheExpiresAt: optNum(u, 'cacheExpiresAt'), stale: optBool(u, 'stale', false),
+    ctxTokens: optNum(u, 'ctxTokens'), ctxWindow: optNum(u, 'ctxWindow'),   // Overlord W1a (review 1927 M2)
   };
 }
 
@@ -12559,7 +12569,7 @@ export const DELEGATION_EVENT_KINDS = [
   'SubagentStop',
   'UserPromptSubmit',
   'SessionEnd',
-] as const;
+] as const satisfies readonly HookEvent[];
 export type DelegationEventKind = (typeof DELEGATION_EVENT_KINDS)[number];
 
 /** Where an activity (a unit of delegated work the parent started) came from. `bash-worktree` is raw Bash use of

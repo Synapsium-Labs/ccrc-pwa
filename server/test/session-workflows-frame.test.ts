@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { mkdirSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import type { Deps } from '../src/server.js';
-import { SessionStream } from '../src/sessionws.js';
+import { NO_TICK, SessionStream } from '../src/sessionws.js';
 import { Bus } from '../src/bus.js';
 import { loadConfig } from '../src/config.js';
 import { ccdRunner } from '../src/lifecycle.js';
@@ -76,7 +76,7 @@ const open = (opts: { gone?: boolean } = {}): { stream: SessionStream; frames: S
   const run = runner(opts);
   const deps: Deps = { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue(), time: fakeTime().ports };
   const frames: SessionStreamMsg[] = [];
-  return { stream: new SessionStream(deps, new Bus(), ID, (m) => frames.push(m)), frames };
+  return { stream: new SessionStream(deps, new Bus(), ID, (m) => frames.push(m), undefined, NO_TICK), frames };
 };
 const wfFrames = (frames: SessionStreamMsg[]): Array<SessionStreamMsg & { type: 'workflows' }> =>
   frames.filter((f): f is SessionStreamMsg & { type: 'workflows' } => f.type === 'workflows');

@@ -527,7 +527,7 @@ describe.skipIf(NO_DEADLINE_BIN)('D4 — `_pr_py`\'s Python opens in `state` mod
   it('the compare-and-set lock: a FIFO at $REG/.prstate-<id>.lock proceeds UNLOCKED, PROMPTLY', () => {
     // `open(path, 'a')` blocks until a READER appears — `except OSError`
     // cannot fire for a block, only for an error, so the disclosed "proceed
-    // unlocked" arm around `_pr_py`'s own lock-open `try` (D-139, NAMED BY
+    // unlocked" arm around `_pr_py`'s own lock-open `try` (D-8596, NAMED BY
     // FUNCTION, NOT LINE) does not cover a hang. Same
     // guarantee this file's own comment states must survive: "this guard may
     // only remove races, never add a refusal that stops a phase from ever

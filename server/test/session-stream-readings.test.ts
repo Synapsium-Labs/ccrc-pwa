@@ -7,7 +7,7 @@ import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { Deps } from '../src/server.js';
-import { SessionStream } from '../src/sessionws.js';
+import { NO_TICK, SessionStream } from '../src/sessionws.js';
 import { feedFor, type FeedFacts, type FeedReading } from '../src/sessionFeed.js';
 import { Bus } from '../src/bus.js';
 import { loadConfig } from '../src/config.js';
@@ -86,7 +86,7 @@ describe('a session stream\'s four readings (ARCH-52)', () => {
   afterEach(() => { rmSync(home, { recursive: true, force: true }); });
 
   const open = async (bus: Bus, frames: SessionStreamMsg[]): Promise<SessionStream> => {
-    const s = new SessionStream(deps, bus, ID, (m) => frames.push(m));
+    const s = new SessionStream(deps, bus, ID, (m) => frames.push(m), undefined, NO_TICK);
     await s.start();
     return s;
   };
