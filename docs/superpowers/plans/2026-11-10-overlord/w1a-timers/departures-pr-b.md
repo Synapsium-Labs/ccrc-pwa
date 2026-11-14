@@ -68,6 +68,35 @@ departures are kept here, by slug, and the coordinator folds both into the progr
   the answer is the same for every number (NaN, fractions and infinities included). An alert in product code is fixed,
   never dismissed.
 
+## Review 2052, fix round 1 (the coordinator's rulings)
+
+- **cancel-write-fault-is-write-failed** (F1, fixed) — both cancel doors call `cancelTimer` through one helper, `cancelOf`, in
+  the timer doors' failure contract: a row the lane moved answers `timer-not-pending`, and a statement that throws answers
+  `write-failed` (503), never a 500. A case for each door, measured red before the fix.
+- **timer-masked-is-an-exact-match-oracle** (F2, no change) — a box-token holder can test whether an exact candidate string
+  is a known secret's shape (400 `timer-masked`), as it already can through the mail, the card, the call record and the
+  questions door. The body is decided before any read, in the spec's order (C61).
+- **binding-read-after-role** (F3, fixed) — the bound run or programme is read after the role read's awaits, in the one
+  synchronous segment with the counts, the verdict and the write, so a run that closes while the role is read is refused,
+  never stored bound. Measured red before the fix.
+- **verdict-pre-checks-utf16** (F4, fixed) — `timerBodyVerdict` refuses a note of more than twice the bound in UTF-16 units
+  before it spreads it into code points, so a note near the 1 MiB body limit costs no million-entry array. The added line
+  sits above the decider's own rung, so timers PR C's mutant strings still match; it changes no answer (a string of more
+  than 1,000 units has more than 500 code points), so it has no mutant of its own.
+- **operator-absent-is-not-found** (F5, fixed) — the operator's cancel of an id that names no row answers `timer-not-found`
+  (404), a new word in `TIMER_REFUSALS`, decided by `timerCancelVerdict`'s `asker: 'operator'` (the setter's default keeps one
+  answer for absent and foreign rows: no oracle). A foreign row on the operator's path is still `timer-not-yours`. A spec
+  addition for Table 11.6's next correction.
+- **card-role-read-is-not-one-segment** (F7, no change) — the card's `run` and `openCoordinatorIds` reads now happen inside
+  `sessionRoleRead`, before the card's `bindingsOf` and the rest, across a microtask boundary. The card was never one
+  snapshot across the registry's awaits; its outputs, read count and catch coverage are unchanged (the characterization).
+- **census-matches-whole-route** (F8, fixed) — `box-token-census.test.ts` requires CLAUDE.md to name each session-only route
+  ended by its closing backtick, so a path that is a prefix of another is not named by the longer one. Measured: CLAUDE.md
+  naming only the cancel door reds the case.
+- **operator-cancel-token-probe** (F9, fixed) — the armed case shows the box token is no key to the operator's cancel either;
+  the operator doors' `timer-unmeasured` and `unavailable` answers have cases on the rig.
+- F10 (the spec's `TIMER_OPERATOR_DOORS`) is the coordinator's, for the spec's next correction.
+
 ## Claims
 
 - **contested-claims-ruled** — when PR B started, the notes piece (#2796) held every census file and the continuity routes,

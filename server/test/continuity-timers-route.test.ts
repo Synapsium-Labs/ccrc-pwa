@@ -52,6 +52,8 @@ interface Rig {
   stamp: Stamp | (() => never);
   child: ChildMark | typeof CARD_REGISTRY_UNREAD;
   attribution: AttributionRead;
+  /** Runs inside the role read, between its awaits: what changes while the role is being read. */
+  duringRole: () => void;
 }
 
 /** The continuity routes alone, on a real store, with every registry read a counted stub. */
@@ -61,13 +63,14 @@ async function rig(over: Partial<ContinuityRouteDeps> = {}): Promise<Rig> {
   const r: Rig = {
     app: a, coord, reads: { stamp: 0, attribute: 0, role: 0 }, now: NOW,
     stamp: { kind: 'measured', incarnation: INC }, child: { kind: 'none' }, attribution: { ok: true },
+    duringRole: () => undefined,
   };
   const attribute = async (): Promise<AttributionRead> => { r.reads.attribute += 1; return r.attribution; };
   registerContinuityRoutes(a, {
     coord, mailToken: () => TOKEN, wall: () => r.now, attribute, attributeReader: attribute,
     setterStamp: async () => { r.reads.stamp += 1; return typeof r.stamp === 'function' ? r.stamp() : r.stamp; },
     cardRegistry: {
-      childMark: async () => { r.reads.role += 1; return r.child; },
+      childMark: async () => { r.reads.role += 1; r.duringRole(); return r.child; },
       incarnation: async () => ({ kind: 'value', v: INC }), declaredIntent: () => false,
     },
     masker: SHAPE_ONLY_MASKER,
@@ -90,6 +93,8 @@ const cancel = (r: Rig, id: number | string, body: Record<string, unknown> = {},
   method: 'POST', url: `/api/timers/${id}/cancel`, headers: token === null ? {} : { 'x-ccrc-mail-token': token },
   payload: { fromId: ME, fromUuid: UUID, ...body },
 });
+const opCancel = (r: Rig, session: string, id: number | string) =>
+  r.app.inject({ method: 'POST', url: `/api/sessions/${session}/timers/${id}/cancel`, payload: {} });
 const refused = (res: { statusCode: number; json: () => unknown }): [number, unknown] =>
   [res.statusCode, (res.json() as { error?: unknown }).error];
 const rows = (r: Rig) => r.coord.db.prepare('SELECT id, setter, setterIncarnation, setById, setByUuid, role, note, runId, programme, setAt, dueAt, state, cancelReason FROM continuity_timers ORDER BY id').all() as Record<string, unknown>[];
@@ -238,6 +243,14 @@ describe('POST /api/timers: the facts, each refusal through the door', () => {
     }
     r.stamp = () => { throw new Error('io'); };
     expect(refused(await set(r))).toEqual([503, 'timer-unmeasured']);
+    expect(rows(r)).toEqual([]);
+  });
+
+  it('a run that closes while the role is read is refused: the binding is read after the role (review 2052 F3)', async () => {
+    const r = await rig();
+    const run = openRun(r.coord, 'prog-a', ME);
+    r.duringRole = () => { r.coord.db.prepare("UPDATE runs SET state = 'done' WHERE id = ?").run(run); };
+    expect(refused(await set(r, { runId: run }))).toEqual([403, 'timer-key-unknown']);
     expect(rows(r)).toEqual([]);
   });
 
@@ -399,6 +412,14 @@ describe('POST /api/timers/:id/cancel: one of the caller\'s own', () => {
     expect(refused(await cancel(r, id))).toEqual([409, 'timer-not-pending']);
   });
 
+  it('a cancel write that throws answers 503 write-failed, never a 500, and the row stays pending (review 2052 F1)', async () => {
+    const r = await rig();
+    const id = plant(r, ME);
+    r.coord.cancelTimer = () => { throw new Error('SQLITE_BUSY: database is locked'); };
+    expect(refused(await cancel(r, id))).toEqual([503, 'write-failed']);
+    expect(rows(r)[0]).toMatchObject({ state: 'pending' });
+  });
+
   it('a timer the lane moved between the read and the write answers timer-not-pending', async () => {
     const r = await rig();
     const id = plant(r, ME);
@@ -418,6 +439,37 @@ describe('POST /api/timers/:id/cancel: one of the caller\'s own', () => {
     r.attribution = { ok: true };
     r.coord.timerById = () => ({ ok: false, detail: 'unreadable' });
     expect(refused(await cancel(r, id))).toEqual([503, 'timer-unmeasured']);
+  });
+});
+
+describe("the operator's doors on the rig: their refusals", () => {
+  it('a cancel write that throws answers 503 write-failed, never a 500 (review 2052 F1)', async () => {
+    const r = await rig();
+    const id = plant(r, ME);
+    r.coord.cancelTimer = () => { throw new Error('SQLITE_BUSY: database is locked'); };
+    expect(refused(await opCancel(r, ME, id))).toEqual([503, 'write-failed']);
+    expect(rows(r)[0]).toMatchObject({ state: 'pending' });
+  });
+
+  it("an id that names no row is 404 timer-not-found for the operator; another session's timer stays 403 (review 2052 F5)", async () => {
+    const r = await rig();
+    const theirs = plant(r, OTHER);
+    expect(refused(await opCancel(r, ME, 99_999))).toEqual([404, 'timer-not-found']);
+    expect(refused(await opCancel(r, ME, theirs))).toEqual([403, 'timer-not-yours']);
+    // The session's own cancel keeps one answer for both, so it is no oracle of other ids.
+    expect(refused(await cancel(r, 99_999))).toEqual([403, 'timer-not-yours']);
+  });
+
+  it('an unreadable read answers 503 timer-unmeasured at both, and no store answers 503 unavailable', async () => {
+    const r = await rig();
+    const id = plant(r, ME);
+    r.coord.pendingTimersOf = () => ({ ok: false, detail: 'unreadable' });
+    r.coord.timerById = () => ({ ok: false, detail: 'unreadable' });
+    expect(refused(await r.app.inject({ method: 'GET', url: `/api/sessions/${ME}/timers` }))).toEqual([503, 'timer-unmeasured']);
+    expect(refused(await opCancel(r, ME, id))).toEqual([503, 'timer-unmeasured']);
+    const n = await rig({ coord: undefined });
+    expect(refused(await n.app.inject({ method: 'GET', url: `/api/sessions/${ME}/timers` }))).toEqual([503, 'unavailable']);
+    expect(refused(await opCancel(n, ME, 1))).toEqual([503, 'unavailable']);
   });
 });
 
@@ -463,6 +515,9 @@ describe("the operator's doors: GET /api/sessions/:id/timers and POST /api/sessi
     expect(refused(cut)).toEqual([401, 'unauthenticated']);
     const tokened = await a.inject({ method: 'GET', url: `/api/sessions/${ME}/timers`, headers: { 'x-ccrc-mail-token': TOKEN } });
     expect(tokened.statusCode).toBe(401);
+    // …nor to the cancel (review 2052 F9).
+    const tokenedCut = await a.inject({ method: 'POST', url: `/api/sessions/${ME}/timers/${id}/cancel`, headers: { 'x-ccrc-mail-token': TOKEN }, payload: {} });
+    expect(refused(tokenedCut)).toEqual([401, 'unauthenticated']);
     expect(coord.pendingTimersOf(ME)).toMatchObject({ ok: true, rows: [{ id }] });
   });
 

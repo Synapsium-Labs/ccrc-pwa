@@ -77,6 +77,18 @@ const timerIdOf = (raw: unknown): number | null =>
 const timerView = (t: TimerRow): TimerView =>
   ({ id: t.id, setAt: t.setAt, dueAt: t.dueAt, note: t.note, runId: t.runId, programme: t.programme, untrusted: true });
 
+/** The cancel's one write, by `actor` with `reason`, in the timer doors' failure contract (review 2052 F1): a row the lane
+ *  moved between the read and the write is `timer-not-pending`, and a statement that throws is `write-failed` (503), never
+ *  a 500 out of the handler. */
+function cancelOf(coord: CoordStore, id: number, actor: 'setter-cancel' | 'operator-cancel', reason: 'setter' | 'operator', at: number):
+  'ok' | 'timer-not-pending' | 'write-failed' {
+  try {
+    return coord.cancelTimer(id, actor, reason, at).changed ? 'ok' : 'timer-not-pending';
+  } catch {
+    return 'write-failed';
+  }
+}
+
 /** The set door's bound key, measured once (slug bound-key-must-be-live): a run is the caller's own when it is among its
  *  open bindings, claimed or worked (`bindingsOf`), and a programme when it coordinates it and the plan has not ended. A
  *  binding read that fails or throws is `unmeasured`, never `not-own`: a box fault never reads as "not yours". */
@@ -261,9 +273,10 @@ export function registerContinuityRoutes(app: FastifyInstance, deps: ContinuityR
     if (coord === undefined) return refuseRoute(reply, 'unavailable');
     let stamp: Awaited<ReturnType<ContinuityRouteDeps['setterStamp']>>;
     try { stamp = await deps.setterStamp(fromId); } catch { stamp = { kind: 'unmeasured', reason: 'unreadable' }; }
-    const binding = bindingOf(coord, fromId, { runId: runId as number | null, programme: programme as string | null });
     const { role } = await sessionRoleRead({ coord, ...deps.cardRegistry }, fromId);
-    // From here to the write, nothing awaits.
+    // From here to the write, nothing awaits: the binding, the pending count and the rate are read with the verdict and the
+    // write, so a run that closes while the role is read is refused, never stored bound (review 2052 F3).
+    const binding = bindingOf(coord, fromId, { runId: runId as number | null, programme: programme as string | null });
     const now = deps.wall();
     const pending = coord.pendingTimersOf(fromId);
     let setsLastHour: number;
@@ -339,7 +352,8 @@ export function registerContinuityRoutes(app: FastifyInstance, deps: ContinuityR
     if (!t.ok) return refuseRoute(reply, 'timer-unmeasured', { detail: t.detail });
     const verdict = timerCancelVerdict(t.row, fromId);
     if (verdict !== 'ok') return refuseRoute(reply, verdict);
-    if (!coord.cancelTimer(id, 'setter-cancel', 'setter', deps.wall()).changed) return refuseRoute(reply, 'timer-not-pending');
+    const cut = cancelOf(coord, id, 'setter-cancel', 'setter', deps.wall());
+    if (cut !== 'ok') return refuseRoute(reply, cut, cut === 'write-failed' ? { detail: 'continuity_timers could not be written' } : {});
     return reply.code(200).send({ ok: true, id });
   });
 
@@ -363,7 +377,8 @@ export function registerContinuityRoutes(app: FastifyInstance, deps: ContinuityR
 
   /**
    * `POST /api/sessions/:id/timers/:timerId/cancel`: the operator cancels one of a session's pending timers. The timer must
-   * be that session's (`timer-not-yours`) and pending (`timer-not-pending`), then `cancelTimer` by `operator-cancel` with
+   * be that session's (`timer-not-yours`) and pending (`timer-not-pending`); an id that names no row is `timer-not-found`,
+   * because the signed-in operator may know which ids exist (review 2052 F5). Then `cancelTimer` by `operator-cancel` with
    * reason `operator`. `200 { ok, id }`.
    */
   app.post('/api/sessions/:id/timers/:timerId/cancel', async (req, reply) => {
@@ -374,9 +389,10 @@ export function registerContinuityRoutes(app: FastifyInstance, deps: ContinuityR
     if (coord === undefined) return refuseRoute(reply, 'unavailable');
     const t = coord.timerById(timerId);
     if (!t.ok) return refuseRoute(reply, 'timer-unmeasured', { detail: t.detail });
-    const verdict = timerCancelVerdict(t.row, p.id);
+    const verdict = timerCancelVerdict(t.row, p.id, 'operator');
     if (verdict !== 'ok') return refuseRoute(reply, verdict);
-    if (!coord.cancelTimer(timerId, 'operator-cancel', 'operator', deps.wall()).changed) return refuseRoute(reply, 'timer-not-pending');
+    const cut = cancelOf(coord, timerId, 'operator-cancel', 'operator', deps.wall());
+    if (cut !== 'ok') return refuseRoute(reply, cut, cut === 'write-failed' ? { detail: 'continuity_timers could not be written' } : {});
     return reply.code(200).send({ ok: true, id: timerId });
   });
 }

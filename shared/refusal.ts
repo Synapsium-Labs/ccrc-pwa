@@ -204,10 +204,12 @@ export type CardRefusal = (typeof CARD_REFUSALS)[keyof typeof CARD_REFUSALS];
  *  declared once here and spread into `REFUSAL_STATUS` (`LEASE_DOOR_REFUSALS`' idiom). CHOSEN, not measured: 409 for the
  *  caller's cap and for a timer no longer pending, 429 for the hourly rate, 400 for a body the caller can fix, 503 for a
  *  stamp or binding the box could not read (a box fault never reads as "not yours"), 403 for a key or a timer that is not
- *  the caller's. Decided by `server/src/continuity/timers.ts`. */
+ *  the caller's, 404 for an id no row has, to the operator only. Decided by `server/src/continuity/timers.ts`. */
 export const TIMER_REFUSALS = {
   'timer-cap': 409, 'timer-rate': 429, 'timer-too-soon': 400, 'timer-too-late': 400, 'timer-too-long': 400,
   'timer-masked': 400, 'timer-unmeasured': 503, 'timer-key-unknown': 403, 'timer-not-yours': 403, 'timer-not-pending': 409,
+  // The operator's cancel of an id that names no row (timers PR B, review 2052 F5): the session's own cancel never answers it.
+  'timer-not-found': 404,
 } as const;
 export type TimerRefusal = keyof typeof TIMER_REFUSALS;
 

@@ -810,7 +810,9 @@ describe('the box-token surface is derived, and no prose site under-claims it', 
       expect(bullet,
         `the bullet promises to name the coordination writes that carry no box token, ` +
         `and does not name ${routePath} — the class grew and the sentence did not`)
-        .toContain(routePath);
+        // A whole route, ended by its closing backtick: a path that is a prefix of another (`/api/items/:id` of
+        // `/api/items/:id/tick`, `/api/sessions/:id/timers` of its cancel) is not named by the longer one (review 2052 F8).
+        .toContain(`${routePath}\``);
       expect([...new Set(ALL_LANES.map((k) => k.slice(k.indexOf(' ') + 1)))],
         `${routePath} acquired a box-token gate — the bullet is now false`)
         .not.toContain(routePath);
