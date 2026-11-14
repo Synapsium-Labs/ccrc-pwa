@@ -5,7 +5,9 @@
   further rulings, R16 and R17 (§2, §6.9, "Where things stand"). On 2026-11-12 the operator gave R18: the Overlord
   draws its accounts from account pools the operator names, and no account is reserved for it (§2, §3.4). The same day
   the operator gave R19: renewals wait for a break in the conversation and carry the current thread, so the operator
-  never feels one or repeats themselves (§2, §3.3). Appendix B says what those changed. This is the hardened edition of rev 8: an outside review's calls H1 to
+  never feels one or repeats themselves (§2, §3.3). On 2026-11-14 the operator gave R20: a session may set itself
+  follow-up timers, and what the operator does with each message is measured (§2, §3.3.12, §4.3). Appendix B says
+  what those changed. This is the hardened edition of rev 8: an outside review's calls H1 to
   H39 are folded in, so that each mechanism is stated once, as it now is. A builder's check was applied to rev 8 by
   its author. This edition was then checked in nine ways: a builder's check in four slices, its closed vocabularies
   and state machines, its names and numbers, its claims about the tree, and a red team. Their findings are folded
@@ -23,8 +25,8 @@
 
 This document defines no D-numbers. The programme's plan allocates them when its run opens. There are three series of
 numbered decisions, and the operator can approve or overturn each one by number:
-- **R1 to R19** are the operator's rulings (§2).
-- **C1 to C60** are the author's calls. §13 restates each one as it now stands.
+- **R1 to R20** are the operator's rulings (§2).
+- **C1 to C69** are the author's calls. §13 restates each one as it now stands. C61 to C69 carry R20.
 - **H1 to H39** are the hardening review's calls (§13.1). They have a series of their own, so that they never collide
   with the R and C series while the author keeps writing. Appendix A says what each one changed in rev 8.
 - **H40 to H45** follow from R16 and R17 (§6.9, §13.1). Appendix B gives the reason for each.
@@ -47,8 +49,9 @@ moves between them (R11). It does brain work and never execution (R12). The long
 (R13). It survives account swaps and limits and is never tied to one account (R14). It draws its accounts from the pools
 the operator names, and nothing is reserved for it (R18). It is the operator's colleague,
 advisor and majordomo (R15). It is there to make the pair decide better than either alone, with direction the
-operator's (R16). It starts from a profile each operator sets, and gives the picture before the question (R17). The
-operator also gave the hardening review three directions: build it so that it runs
+operator's (R16). It starts from a profile each operator sets, and gives the picture before the question (R17). A
+session can set itself a timer, and what the operator does with each message is measured, the two primitives of an
+always-on agent the design lacked (R20). The operator also gave the hardening review three directions: build it so that it runs
 in containers soon, use a decision model for the yes-or-no questions that code cannot decide, and do not fence whole
 accounts off for it.
 
@@ -57,7 +60,8 @@ accounts off for it.
   disposable: a session that may stop at any instant and loses at most the turn in progress (§3.1, §3.2).
 - **A long life.** One Overlord, many generations. A generation is a row with a state, a deadline and a fence. The
   server renews it from canonical state, re-anchors it at every start, and proves it remembers with probes. Coordinators
-  get the same machine (§3.3).
+  get the same machine. Any session may set itself a timer, a row the server delivers as mail, so a reminder outlives
+  the generation that set it (§3.3).
 - **Its model and its accounts.** It runs the Fable class on accounts in the pools the operator names for it, with at
   least two that can serve it. Nothing is reserved: other sessions keep using every account in those pools. ccd's own
   model fallback decides when Fable cannot be served (§3.4).
@@ -71,7 +75,8 @@ accounts off for it.
   kickoffs are rendered from that record. Everything else it reads is content, which informs and never instructs
   (§3.8).
 - **The home.** The console opens on the Overlord: its readiness, what needs the operator, the portfolio, the requests
-  and the chat. Attention is a budget the server enforces (§4).
+  and the chat. Attention is a budget the server enforces. What the operator does with each message is measured, and
+  a kind of push they rarely act on is batched; only the operator lets a kind interrupt (§4).
 - **Requests are contracts.** One owner, a done test the server evaluates, a read-back, and ways to decline. The
   operator's own rank orders the portfolio, and forecasts come from measured history (§5).
 - **Questions.** A question the Overlord may settle reaches it first. Every other question reaches the operator at once,
@@ -116,7 +121,7 @@ accounts off for it.
 **What it adds to ccrc.** Everything extends an existing owner, and §11.1 names each one:
 - one skill, `ccrc-overlord`, and three clauses in the coordinator skill (22, 23, 24);
 - the designation row, which also holds the account pools it may draw from, and tables for requests, acts, grants,
-  proposals, generations, notes, drills, practice entries, the one sequence and the portfolio;
+  proposals, generations, notes, timers, drills, practice entries, responses, the one sequence and the portfolio;
 - one private store, for the operator's messages and the operator model;
 - three journals that no backup carries: authority, acts and privacy;
 - one role table with a launch profile for each role;
@@ -253,6 +258,7 @@ in each row states the mechanism once.
 | R15 | **A colleague, advisor and majordomo** (the operator, 2026-11-09, after rev 7): when the operator must decide, the Overlord helps them make the best possible decision. It suggests the best options, top 3 only, with reasons and the objective upsides and downsides of each. It may argue its point if it truly disagrees. The operator overrides its objections with "I command" or `/icommand` | A decision brief on every decision the operator owns: a safe default, at most three options with their downsides, the track record of its calls, the best case against and tripwires. One objection, filed as a row with a sealed prediction. A command is the operator's tap on a proposal the server rendered. A ranked decision queue, and an attention budget (§6.6, §4.2) |
 | R16 | **Better together, and direction is the operator's** (the operator, 2026-11-10, on the review's questions): the questions assumed that the operator is always right, which is not the case. The point of the Overlord is to maximise the operator's ability to make the right decisions, with general direction coming from the operator. It should make the operator better, not worse: its strengths and the operator's should combine into a much stronger whole | Direction is never scored. Every decision carries an outcome test sealed before the answer, and is scored by how it turned out, for the operator and the Overlord alike. The Overlord seals its own pick, never a prediction of the operator's. Three records for each kind of decision: the operator's alone, the Overlord's alone and the two together. Agreement that later fails counts against it. The operator sees their own record (§6.9) |
 | R17 | **A starting profile, and the picture first** (the operator, 2026-11-10): the Overlord is not for one operator only, though this operator is a reasonable starting point: strongest in strategy, vision and the higher level, less so in implementation detail of low impact, and thinking from the high level down, so that a low-level question is hard to answer without the picture | A Setting, the operator's profile, says who decides each kind of decision at the start, and the records then correct it. By default direction and operator-only acts are the operator's, an implementation choice with strategic weight is decided together, and a routine answer of class none is the Overlord's. Every brief opens with where the question sits. A premise that several questions share is asked once (§6.9) |
+| R20 | **Timers, and measured responses** (the operator, 2026-11-14, on a comparison of this design with an article on building always-on agents, whose five primitives are an event inbox, timers, memory, permissions and an outbox): "Both: self-set follow-up timers (a timer row, one scheduler lane, mail delivery) and measuring how you respond to each message" | Any session may set itself a timer: a row of its identity, never of a generation, with a note that is data, fired by one `LANE_SCHEDULE` row in the transaction that queues its mail. A timer never acts, and no session sets one for another. Each message to the operator gets one response row, sealed from measured facts, with `unmeasured` a word of its own. The attention budget reads a state per kind of push: it starts quiet, the server may only make a kind quieter, and the operator alone lets one interrupt (§3.3.12, §4.3, Appendix B) |
 
 *Table 2a. The operator's rulings, and the design each one became.*
 
@@ -736,7 +742,7 @@ on hook context.
   1. a pointer to the constitution;
   2. the live grants;
   3. live state: unsettled operator messages, live commands, open holds, open requests, each programme in one
-     line, the notes and recent acts, ranked by recency, importance and age (the Generative Agents retrieval score);
+     line, the notes, pending timers (§3.3.12) and recent acts, ranked by recency, importance and age (the Generative Agents retrieval score);
   4. the operator-model entries of kind `style`, phrased in the third person ("the operator prefers X, since date"),
      and a count of the other entries;
   5. practice notes, three at most, as untrusted data (§9.7);
@@ -1279,6 +1285,158 @@ starting values (Table 11.5b).*
 **As measured (W0b, 2026-11-11 and 2026-11-12).** W0-06's fleet half (2026-11-11): 114 automatic rolls in 9 days, each to its session's next unit start, took p50 0.4 s, p95 1.0 s and max 1.9 s. With the unit start to the hook's restart stamp (p95 6.1 s) and a fresh start, a roll takes about 7.4 s, a sum of three p95s rather than a p95, far under 60 s, so the deadlines stand.
 
 On the subject (W0-21), each `ccd swap` returned in 1.3 to 1.5 s. The operator's typed `/clear` worked four times of four: the uuid rotated, and a card re-read restored the facts. A `/clear` typed by ccrc's own lane was not run, so H13's selection is unchanged. Details: `docs/superpowers/plans/2026-11-11-overlord-w0-spike-results.md`.
+
+#### 3.3.12 Timers a session sets itself (R20)
+
+Until R20 a session could only wait for mail. It could not say "wake me at this time with this note", so a reminder
+lived in one session's memory files and was lost at a renewal, the very event continuity exists to survive. This
+subsection gives every session one more kind of wake: a timer it sets for itself, which the server keeps as a row and
+delivers as mail when it comes due.
+
+```mermaid
+sequenceDiagram
+  participant S as A session, generation n
+  participant D as The timer doors
+  participant T as continuity_timers
+  participant L as The timer lane, a LANE_SCHEDULE row
+  participant M as Mail and its idle gate
+  participant S2 as The same identity, generation n+1
+  S->>D: timer set, a duration and a note
+  D->>T: a pending row, dueAt stamped by the server
+  Note over S,S2: a renewal, a swap or a crash. The row stays
+  L->>T: due rows found on a pass
+  L->>T: marked fired
+  L->>M: one mail from timer to the setter, in the same transaction
+  M->>S2: a one-line nudge once idle and the card is read
+  S2->>M: mail fetch, the note arrives as data
+```
+*Figure 10. A timer outlives the generation that set it. The server stamps the due time, the lane marks the timer
+fired in the transaction that queues its mail, and the mail reaches whichever generation of that identity is
+current. The timer itself never acts.*
+
+- **C61. A timer is a row of its setter's identity, delivered as mail** (R20).
+  - **Why.** The comparison behind R20 set this design against the five primitives of an always-on agent: an event
+    inbox, timers, memory, permissions and an outbox. The design had the other four. A reminder is a commitment, and
+    every commitment is on the server when it is made (C37).
+  - **One table, `continuity_timers`, in `coord.db`,** beside `continuity_notes` (Table 11.1a). Its columns are in
+    Table 3.3.12a.
+  - **The setter is an identity, never a generation.** A coordinator's or a worker's timers belong to its session id,
+    which every generation of that session shares (§3.3.1). The Overlord's belong to the role `overlord`, so a rebind
+    keeps them, and whichever session the designation binds receives them (§3.1).
+  - **Times are the server's** (H32). The set door takes a duration, and the server stamps `dueAt` through the `Clock`
+    port. A session never sends an absolute time.
+  - **The note is data.** It is the setter's own words, capped, and it carries no authority. The mail that delivers
+    it renders the note as untrusted data (`server/src/coord/untrusted.ts`), with one line that says so, as the card
+    renders notes (§3.3.2). A note the egress mask changes is refused (`timer-masked`), not stored masked, so no
+    secret rides a `coord.db` snapshot.
+  - **A timer never acts.** It produces one inbox event, its mail, and nothing else: no key press, no start, and no
+    move of any row but its own.
+  - **Not a note.** A note is append-only and has no state, and the card renders it at every start. A timer has a
+    state that must change exactly once, in the transaction that sends its mail. So it is a table of its own beside
+    the notes, in the same context, and not a kind of note.
+
+| Column | What it holds | Written by |
+|---|---|---|
+| `id` | The timer's number | the server |
+| `setter` | The identity: a session id, or `overlord` | the set door, from the caller's identity, never from the body |
+| `role` | The setter's role when it set the timer, from `roleOf` | the set door |
+| `note` | At most 500 characters, the setter's own words | the set door |
+| `runId`, `programme` | Optional: the run or programme the timer belongs to. Each must be the setter's own | the set door |
+| `setAt`, `dueAt` | `setAt` is when the door accepted it; `dueAt` is `setAt` plus the duration | the set door |
+| `state` | `pending`, `fired` or `cancelled` | the actor `TIMER_TRANSITIONS` names for each move |
+| `firedAt`, `mailId` | When it fired, and the mail row that delivered it | the timer lane |
+| `cancelledAt`, `cancelReason` | When, and one word: `setter`, `operator`, `programme-ended`, `setter-archived`, `setter-gone` or `retired` | the actor of the cancel move |
+
+*Table 3.3.12a. The columns of `continuity_timers`.*
+
+- **One table of moves, `TIMER_TRANSITIONS`.** It is an L0 table in the shape of `REQUEST_TRANSITIONS` (§5.1), with
+  one actor and one target on each move. The setter sets (to `pending`). The timer lane fires (`pending` to `fired`).
+  The setter, the operator and the timer lane's cleanup arm cancel (`pending` to `cancelled`). `fired` and
+  `cancelled` are terminal. A timer is never re-armed or moved: a new time is a new timer, and the old one is
+  cancelled.
+- **The doors: set, list and cancel.** `ccrc-api timer set <duration> <note>`, with an optional `--run <id>` or
+  `--programme <slug>`; `ccrc-api timer list`; `ccrc-api timer cancel <id>`. They are `POST /api/timers`,
+  `GET /api/timers` and `POST /api/timers/:id/cancel`, and they register from the continuity routes file under
+  `server/src/continuity/`, which W1a's start report created (Table 11.1e).
+  - **For every session but the designated one,** they sit in the hook's group of Table 11.2, as the card, probe and
+    note doors do: the box token and attribution, for the caller's own identity only.
+  - **The Overlord calls them through its door process** (§3.6), under the gate order of §11.2. A timer is not an act
+    kind, so the rung by act kind does not apply, and a timer writes no act row.
+  - **No session sets a timer for another.** The set door takes no target. The setter is the caller's identity, read
+    through `CallerIdentity` (today, attribution). A bound run or programme must be the caller's own: a run it
+    claims or works on, or a programme it coordinates, otherwise `timer-key-unknown`. Cancel refuses a timer of
+    another identity (`timer-not-yours`), and list answers the caller's own timers only.
+  - **The operator sees and cancels every timer.** Each session's page and each programme's run page list the pending
+    timers with their notes, as untrusted data. One session-gated door cancels any of them, with the reason
+    `operator`.
+  - **How the census counts them.** The three session doors are box-token doors, attribution-checked, each in
+    `auth/gate.ts`'s `EXEMPT` table with its reason (its only caller holds the token and has no cookie), as the claim
+    lanes are. `box-token-census.test.ts` already reads the continuity routes file as a lane source of its own, and
+    its list of that file's box-token lanes, which holds the hook's start report today, gains the three. The
+    operator's cancel door is session-gated. `SESSION_ONLY` harvests only `server/src/coord/routes.ts`, so the census
+    names it in a hand-kept list checked against the continuity routes file in both directions, as it does for the
+    update doors, and this repository's `CLAUDE.md` box-token paragraph names it. All of it moves in the pull request
+    that adds the doors (§11.2).
+- **C62. One lane fires them, on `LANE_SCHEDULE`** (R20).
+  - **One row, `timers`,** with a cadence of one minute. Like every row, it throttles on the monotonic clock, and its
+    verdicts read the wall clock through `Clock` (`server/src/laneSchedule.ts`). It is not a second poller: it is a
+    row of the watcher's one table.
+  - **Fired and mailed in one transaction.** Each pass finds the `pending` timers whose `dueAt` has passed. For each
+    setter it marks every due timer `fired` and queues one system mail to the setter's identity that lists them all,
+    in one transaction. A restart can neither send a timer twice nor lose one (I17). A setter whose timers come due
+    together gets one nudge, not a burst.
+  - **The mail.** Its sender is the role `timer` (C63), its subject `timer: <ids>`. Its body gives, for each timer, its
+    id, the note as untrusted data, when it was set, how late it fired, and its run or programme.
+  - **It starts no session.** Mail wakes a sleeping setter as any mail does, under the wake budget. The mail gate holds
+    it while a generation renews, so the next generation receives it after reading its card (§3.3.3). For the
+    Overlord, a fired timer is also a row of band 3 of its inbox from W2, when that band ships, behind the one
+    coalesced wake (§6.8). In W1 it arrives as mail only.
+  - **The brakes hold it.** While `mail-disabled` stands, the lane fires nothing. Due timers wait, and fire late when
+    it lifts. None is lost.
+  - **After a server gap** every timer that came due meanwhile fires on the first pass, once, inside the one mail per
+    setter, marked late. Unlike a follow-up (§5.4), it is not re-timed: the setter asked for that moment, a late
+    reminder is still wanted, and one grouped mail per setter is no burst.
+  - **The cleanup arm.** On the same row, it cancels a programme's bound timers when the programme ends
+    (`programme-ended`); a setter's timers when its workspace is archived or reclaimed (`setter-archived`), or when
+    its registry row is measured absent (`setter-gone`); and the Overlord's when the designation is retired
+    (`retired`). A registry that cannot be measured cancels nothing: its timers stay `pending`. A sleeping setter's
+    timers stay too, because its mail wakes it.
+- **C63. The mail comes from the role `timer`.** It joins `SYSTEM_MAIL_SENDER_MAP` (`server/src/coord/rundefs.ts`), so
+  `MAIL_ROLE_IDS` derives it.
+  - **Not `operator`.** The tree's `operator` sender already carries notices the watcher raises (the ask nudge, the
+    stall watch, the landing notices). A timer's note is a session's words. Sent from `operator`, a planted note
+    would arrive in the envelope of the operator's own notices, which is the laundering H7 closed.
+  - **Not the setter.** The setter did not send it at that moment, and its mail would count against the peer quotas
+    to itself.
+  - **The readers that learn `overlord` learn `timer` too** (§11.1). The lane that tells a sender its mail parked
+    tells no one, because the setter is the recipient, and the parked mail shows on the setter's page. The mail-revive
+    lane revives it, as owed work. The reading of a run's last move excludes it, as a role sender.
+- **C64. No recurring timers in version 1.**
+  - **The schedules the Overlord keeps are the server's already.** The briefing times, the digest's beat, the daily
+    backstop, the daily distillation, the weekly check and the weekly replay quiz are `LANE_SCHEDULE` rows or daily
+    beats that produce inbox rows. A recurrence a session owned would be a second scheduler of what the server
+    schedules.
+  - **A session that wants a repeat sets the next timer when one fires.** Each timer stays bounded and visible, and
+    the chain ends with its setter's cleanup.
+  - **Later**, with a trigger: chained timers measured as a large share of all timers set.
+- **C65. Bounds, and who gets it first.**
+  - **Bounds** (Table 11.5b): at most 50 pending timers for the Overlord, 20 for a coordinator and 5 for any other
+    session (`timer-cap`); at most 30 sets an hour by one identity (`timer-cap`); a due time no sooner than five
+    minutes (`timer-too-soon`), because anything sooner is a wait that a background agent or mail already serves, and
+    no later than 30 days (`timer-too-late`); a note of at most 500 characters (`timer-too-long`).
+  - **Coordinators and workers first, in W1a.** They exist today, renewal is W1a's, and a worker waiting on its pull
+    request's checks needs a wake it can name: worker clause 17 lists the wakes a turn may end on, and a timer the
+    worker set is added to that list, reworded in the same pull request, under the size ratchet (§11.3). The
+    coordinator's clause 7 already ends a turn on mail, so it needs no change.
+  - **The Overlord in W1,** through its door process, which ships then.
+  - **The card lists them.** Each pending timer is one line of the card's live state, with its due time and the
+    first words of its note as untrusted data (§3.3.3).
+  - **Follow-ups ride the same row.** From W2, the follow-up arm of §5.4 runs on the `timers` row rather than a row of
+    its own. The two facts stay apart, for a reason the consolidation catalogue admits: `followUpAt` is the server's
+    clock on a request row, written by the server at each move and decided by `followUpDue`, whose answer may move the
+    request to `needs-you`, while a timer is a session's own reminder, set once and delivered whatever happens. One
+    table for both would give a request's clock a second home and a second writer. Both read their due times through
+    `Clock`, on the same beat.
 
 ### 3.4 Its model and its accounts
 
@@ -2459,7 +2617,7 @@ rows, so a quiet Overlord cannot make the operator's view quiet.
 | Cadence | Time | What the server composes |
 |---|---|---|
 | Daily | About two minutes | The "since you were last here" block and the decision queue. The label cards sit behind it, ten a week at most (§3.7) |
-| Weekly | About ten minutes | One Week page: the weekly check (§9.6); the track record per kind and scope, for the operator, the Overlord and the two together (§6.9); overturns; ladder changes and drills; grants expiring; the top entries by influence; programmes not opened in 30 days whose goals or scope changed |
+| Weekly | About ten minutes | One Week page: the weekly check (§9.6); the track record per kind and scope, for the operator, the Overlord and the two together (§6.9); overturns; ladder changes and drills; grants expiring; the top entries by influence; programmes not opened in 30 days whose goals or scope changed; what the operator did with each kind of message, and any kind of push proposed to interrupt (§4.3) |
 | Monthly | Not fixed | Grant renewals and the judge's labels (§7.2, §9.5); "Your decisions", a pull page: each decision of the operator's with how it turned out (§6.9) |
 
 *Table 4.1a. What the operator looks at, and how often.*
@@ -2546,6 +2704,127 @@ operator sets.
   in Settings, which shows the shadow counts beside it.
 - **It is measured.** M25 counts interrupting pushes per active day against the budget, overdrafts and their causes,
   and the minutes deferred.
+- **What the operator does with each push tunes it** (§4.3). A kind of push the operator rarely acts on is batched to
+  the briefing times. Only the operator's tick lets a kind interrupt again.
+
+### 4.3 What the operator does with each message (R20)
+
+The budget of §4.2 admits pushes, and §6.7 records when each reached the operator. Neither says what the operator then
+did with it, so the budget's limits were guesses. This section records that for each message, from facts the server
+measures, and lets the budget narrow a kind of push the operator rarely acts on. It starts quiet, and the operator
+decides what may interrupt.
+
+```mermaid
+flowchart LR
+  S["A message reaches the operator<br/>a push, a Waiting on you row,<br/>a digest line, a chat reply"] --> R[("operator_responses<br/>one row, ids and times only")]
+  E["The console's events<br/>opened"] --> R
+  A["The owners' rows<br/>tick, answer, dismiss,<br/>correction, a message"] --> R
+  R --> L["The response lane<br/>seals the row when its window closes<br/>responseOutcome"]
+  L --> F["responsesFor(class)<br/>acted, opened, not opened,<br/>settled elsewhere, unmeasured"]
+  F --> P{"pushAdmission<br/>reads the class's state"}
+  F --> W["The Week page<br/>and Settings"]
+  W -- "the operator's tick:<br/>let it interrupt" --> C[("response_classes")]
+  F -- "under 20% acted:<br/>back to quiet" --> C
+  C --> P
+  F --> M["M37, and the playbook's<br/>metrics and triggers"]
+```
+*Figure 11. One row per message, sealed from measured facts. The figures can only make a kind of push quieter. The
+operator alone lets a kind interrupt.*
+
+- **C66. One response row per message to the operator, sealed when its window closes** (R20).
+  - **Four kinds of message are in scope**, in Table 4.3a. Approvals stay as today (C17), and are not measured here.
+  - **Only facts the server measures.** Delivery, an open in the console, and the operator's own act on the row the
+    message is about. Nothing infers intent. A reply counts as acted on because the operator sent a message in the
+    same thread, which the record shows, never because that message was judged to answer it.
+  - **Unmeasured is its own word.** When a fact the outcome needs cannot be read, the row says `unmeasured`. It never
+    reads as not acted on.
+
+| Message | Delivered when | Opened, where measurable | Acted on means | Window |
+|---|---|---|---|---|
+| A push, every one the notice funnel sends | The push service accepts it: the outbox's sent mark (§6.7), or the funnel's own send for a notice outside the outbox | The operator taps it, and the console opens with its tag | A tap on one of its actions, or an act on the row it is about, inside the window | 24 hours, or until its row is settled |
+| A Waiting on you row: an item or an ask | It reaches the operator (`reachedOperatorAt`) | Its detail is opened in the console | The operator's tick, answer, dismiss, act or decline | Until the row is settled, at most seven days |
+| A digest line | The digest is composed | The digest page shows it | A correction (`POST /api/digest/correct`) | Until the next digest |
+| A chat reply of the Overlord | It is recorded in the thread | The Overlord place shows it | An operator message in the same thread before the next break (§3.3.11), or a tap on a control a server row beside the reply offers | Until the next break |
+
+*Table 4.3a. The messages measured, and what each fact means for each.*
+
+| Outcome | When, first match wins |
+|---|---|
+| `acted` | The operator acted inside the window. The row keeps how: `tick`, `answer`, `dismiss`, `act`, `decline`, `correct`, `reply`, `push-action`, or `elsewhere` when the operator marked it so (below) |
+| `settled-elsewhere` | Someone else settled the row first: the coordinator withdrew it, the Overlord answered it, its run closed. The operator had nothing left to do |
+| `unmeasured` | A fact the outcome needs could not be read: the console that was open sends no events, the push service answered nothing, or a reader failed |
+| `opened` | Opened, and nothing acted on inside the window |
+| `not-opened` | Delivered, and the console measured no open inside the window. It says the console saw no open, never that the operator did not see it: a glance at a lock screen cannot be measured |
+
+*Table 4.3b. `RESPONSE_OUTCOMES`, one closed L0 list, decided by `responseOutcome`.*
+
+- **Where it lives.** One table, `operator_responses`, in `coord.db`, one row per message (Table 11.1a).
+  - **Ids, kinds and times, never text.** A row holds the message's kind and class; what it was about (a push's tag,
+    an item's or ask's id, a digest line's key, a reply's id in the record); and the times it was delivered, opened
+    and acted on; the outcome and how. A chat reply's words stay in the private store (§9.4).
+  - **One writer for each fact.** The sender inserts the row at delivery: the notice funnel for a push, the questions
+    owner with the reach stamp, the digest's beat, and the prompt route's record of a reply. The console's events
+    write `openedAt`. The response lane writes the outcome when it seals the row. The operator's correction door
+    writes the correction.
+  - **Kept 180 days**, and in a snapshot. The figures read the last 28.
+- **C67. Opens are console events, from W1.** The console's events table, which W3's answer events join (§6.6, §9.5),
+  ships in W1 with one kind, `opened`. Its writer is one session-gated door the console calls. A push's tap carries
+  its tag in the address the service worker opens (`pwa/public/push-sw.js`, its click handler), so an open from a
+  push is recorded as one. A console build without the events leaves its windows `unmeasured`.
+- **The response lane.** A `LANE_SCHEDULE` row of its own, `responses`, every ten minutes. It seals each row whose
+  window has closed, by `responseOutcome`, an L1 decider that reads the owners' rows. A sealed row is never sealed
+  again. Only the operator's correction changes it.
+- **C68. The budget reads a measure per class, and may only narrow** (R20, H35).
+  - **A class is a kind of push.** It is one word from the notice funnel's kinds, `RESPONSE_CLASSES`, derived from the
+    funnel's own table and never kept by hand. A class is not split by programme, so it gathers evidence quickly. The
+    figures per programme are shown and never used.
+  - **The measure.** `responsesFor(class)`, an L1 reader over the sealed rows of the last 28 days, answers the measured
+    count (`acted`, `opened` and `not-opened` rows; `unmeasured` and `settled-elsewhere` are left out of it), the
+    acted share, the opened share, the median time to act and the unmeasured share.
+  - **A class has a state,** `quiet` or `interrupting`, in `response_classes` (Table 11.1a). `pushAdmission` reads it.
+  - **Start quiet.** A class enters `quiet`. A quiet class's pushes that the budget rules on wait for the next
+    briefing time, as a `batchable` push does, and never past their urgency's deferral limit, which does not move
+    (Table 4.2a). So a verified `blocking-now` still pushes at once, and a `blocking-by` pushes at its limit.
+  - **Interrupting is earned, and the operator grants it.** When a quiet class has at least 30 measured messages with
+    an acted share of 50% or more, the Week page proposes "let it interrupt", with its figures. The operator's tick
+    moves it to `interrupting`, where the budget admits it as the operator's Settings allow. The server never moves a
+    class up by itself (ruling 4). Recording starts in W1, two waves before the budget, so by the time the budget
+    leaves shadow most classes have their evidence, and the Week page already proposes the ones that earned it.
+  - **Narrowing is the server's.** An `interrupting` class whose acted share falls under 20% over at least 30 measured
+    messages goes back to `quiet` at once. The change is recorded with its figures, listed under "Changed that
+    matters" in "since you were last here" (§4.1), and only the operator's tick undoes it.
+  - **Bounded by the operator's settings.** A class's state only defers. It never adds a push, never lowers an urgency,
+    never sends a push the budget would defer, and never moves a deferral limit. An `interrupting` class gets exactly
+    what the budget gives without this measure. The direction rule is H37's: narrowing on evidence is automatic, and
+    widening takes the operator's tick.
+  - **What the budget rules on stays as it is** (§4.2): the pushes the Overlord's tier causes. Every other push the
+    funnel sends is recorded and shown, never deferred by this measure, so I9 holds.
+  - **An unmeasured class is never narrowed.** A class whose unmeasured share is over a third shows "mostly
+    unmeasured", and its state does not change on the rest.
+  - **Shadow first.** It ships with the budget, in shadow in W3's first step. It records what it would have deferred,
+    and leaves shadow on the budget's own switch.
+- **What else reads the figures.**
+  - **The measures.** M37 holds the acted share per class (§12).
+  - **The playbook** (§9.7). A response figure may be an entry's metric or guard: an entry that changes how briefs
+    open is judged by the acted share of briefs against its holdout. A class sent back to `quiet` is a trigger key,
+    `response-quiet:<class>`, so one that keeps falling quiet can become a case (§10.5). No entry and no proposal may
+    change the classes, the windows or the thresholds (A14).
+  - **Not the operator model.** Responses are no feed of §9.2. A low acted share has many causes, a busy week and a
+    row handled from a terminal among them, so learning a preference from it would be the inference R20 rules out.
+    How the operator likes to be told things stays what they said (§9.2).
+  - **The board.** Its Attention part carries each class's state and figures, so the Overlord can say why a push was
+    batched (Table 5.2a). It writes none of them.
+- **C69. The operator sees the figures, and corrects a wrong reading.**
+  - **The Week page** (Table 4.1a) shows one table: each class with its state, its count, the acted, opened, not
+    opened, settled elsewhere and unmeasured shares, the median time to act, and the split by programme.
+  - **Settings**, under the budget, shows each class's state with "Let it interrupt" and "Keep it quiet", a "Don't
+    adjust" pin, and the switch "New kinds of push start quiet", on by default. None of them changes authority, so
+    none needs the step-up.
+  - **"I handled this elsewhere."** On any measured message (the item, the push's landing page, the digest line, the
+    reply), the operator can mark it `acted` with how `elsewhere`, under the cookie. It is the operator's own fact, so
+    it outranks the lane's seal, and the class's figures move with it.
+  - **"Don't adjust" keeps a class where it is.** A pinned class stays in its state whatever the figures say, until
+    the operator unpins it. The pin is a Setting, recorded on the class's row.
 
 ## 5. Requests: routing, follow-up and the portfolio
 
@@ -2711,6 +2990,8 @@ and it decides nothing.
 | Brakes and the ladder | fleet-wide | The state of every brake. The operator's rung, the latched cap and its cause, the live conditions, the effective rung, and which kinds of answer are armed (§7.5) |
 | Itself | fleet-wide | Its own readiness word and since when (§6.4). The `server-isolation` word (§7.4). Each property the sandbox check measured (§3.6). A first start that failed that check, with the properties that failed. The Overlord place draws this part for the operator from the same rows, so it shows even when no session is designated |
 | Unread reports | fleet-wide | Reports that arrived while no Overlord was `ready` |
+| Timers | per programme | The coordinator's pending timers: how many, and when the next comes due. Never their notes (§3.3.12) |
+| Attention | fleet-wide | Each kind of push: its state, `quiet` or `interrupting`, and its response figures (§4.3) |
 
 *Table 5.2a. What the board answers.*
 
@@ -2862,6 +3143,9 @@ Overlord acts on what they say.
   - **After a server gap** only a follow-up that came due while the server was down is timed again, spread after
     the boot. One that is not yet due keeps its time. A gap never fires a burst of nudges, and never pushes one
     out.
+  - **The arm runs on the timer lane's row** (C65, §3.3.12). It reads `followUpAt` on the `timers` row of
+    `LANE_SCHEDULE`, at that row's beat. `followUpAt` stays on the request row, with the server as its one writer: a
+    request's clock is not a session's timer.
 - **C16. The operator hears about endings and about what needs them** (C16, H35, H36).
   - **Endings and needs reach the operator.** When a request is `done`, `done-unverified`, `failed`, `dropped` or
     `needs-you`, the Overlord says so in its chat, and the Requests list shows it.
@@ -3648,7 +3932,7 @@ serve in time, a fair share for each programme, and a packet that lets the commo
   second hold of a burst would lapse.
   - **The inbox.** `GET /api/overlord/inbox` lists every row held for it, every row that reached the operator and
     waits for its brief (§6.6), unsettled operator messages, live commands, request moves, follow-ups, read-back
-    flags, and probe rounds while the generation is `active`. The inbox is served in the order below, each row with
+    flags, its own fired timers (§3.3.12), and probe rounds while the generation is `active`. The inbox is served in the order below, each row with
     its time left. The Overlord can settle several in one turn (skill clause 7).
   - **Never typed.** Probes arrive as tool output, never as typed text: from the probe door while the generation is
     `probing`, and as inbox rows while it is `active` (§3.3.5). The checkpoint arrives on the card (§3.3.3). Typed
@@ -3670,7 +3954,7 @@ serve in time, a fair share for each programme, and a packet that lets the commo
   2. rows with a deadline, earliest deadline first: held asks and items, and rows that wait for a brief. A row that
      waits for a brief takes the row's `neededBy` as its deadline, or ten minutes after it reached the operator when
      it has none;
-  3. request moves, follow-ups and read-back flags, oldest first;
+  3. request moves, follow-ups, read-back flags and its own fired timers, oldest first;
   4. background work: distillation, drift reading, briefs prepared ahead and case reviews. Replay cases never
      arrive here: the replay lane serves them to the replay body (§9.5).
   - **Probes come before everything.** While the generation is `probing`, the probe door serves them, and every
@@ -5330,7 +5614,7 @@ builds no stream of its own (H3, H27, H33).
   (#277, #464) can carry the same sequence later, so an outside collector rebuilds the Overlord's history with no new
   mechanism.
 - **One invariant monitor** (L1) reads that sequence: in the tests, in the simulator and on the live server. It checks
-  I1 to I8 and I10 to I16 everywhere. I9 compares against a build without the Overlord, so only the simulator checks it,
+  I1 to I8 and I10 to I16 everywhere, and I17 and I18 over their own tables, which stamp no sequence. I9 compares against a build without the Overlord, so only the simulator checks it,
   by running each seed both ways. A violation is a latch on the ladder: cap `advise`, and one operator item (§7.5). It
   ships in W1, and M24 counts its findings.
 
@@ -5386,6 +5670,7 @@ name that owner.
 | The read ledger | OM, L3 | the private store | The Overlord's read doors, one line per read | none | W1 | yes | Ignores it |
 | `continuity_generations` (and each generation's act key, bound at the mint to the launch nonce ccd put in the door process's environment, and issued once, on the first call that presents it; W0's fallback has no door process and no nonce, so `ccrc-api` writes the key file at the mint, §3.6) | C3, L3 | `coord.db` | The renewal lane | The renewal lane; deadlines are columns | W1a | yes | Ignores it: sessions roll and resume as today |
 | `continuity_notes` (append-only revisions; keyed to a request, programme, item or run, plan-driven consistency, the W1a plans) | C3, L3 | `coord.db` | The note door | none | W1a | yes | Ignores it |
+| `continuity_timers` (setter identity, role, note, optional run or programme, `setAt`, `dueAt`, state, fired and cancel stamps, the delivering mail's id; §3.3.12) | C3, L3 | `coord.db` | Each move through `TIMER_TRANSITIONS`: set, the set door; fire, the timer lane, in the transaction that queues its mail; cancel, the setter's and the operator's cancel doors and the timer lane's cleanup arm | The timer lane (`dueAt`, a column) | W1a (the Overlord's from W1) | yes | Ignores it: nothing fires, and pending timers fire late after a roll forward |
 | Probe rows, the fitted ceiling | C3, L3 | `coord.db` | The probe door | The renewal lane (spot probes while idle) | W1a | yes | Ignores them |
 | The handover note and the checkpoint | C3, L3 | `coord.db`, each in its own table keyed by generation (`continuity_handovers`, `continuity_checkpoints`), so the generation row keeps its one writer (plan-driven consistency, the W1a plans) | Note: the note door. Checkpoint: the renewal lane | `checkpointed` state | W1a | yes | Ignores them |
 | `overlord_requests` (with each cited message id stored beside that message's sha256, `expectedPaths`, from the Overlord's blast-radius read, and `takenFrom`, the state a request was in when the operator took it) | C5, L3 | `coord.db` | The request doors, each move through `REQUEST_TRANSITIONS`. `expectedPaths`: the open-a-request door, and the relay and start doors, which may refine it. `takenFrom`: the operator's take door sets it, and hand back clears it | The done-test lane, the follow-up arm | W2 | yes | Ignores it |
@@ -5399,6 +5684,9 @@ name that owner.
 | Readiness rows, the breaker row | C5, L3 | `coord.db` | The readiness lane, the one lane that asks `overlordReadiness` (Table 11.1c) | The breaker's waits (observed time) | W1 (word), W3 (breaker) | yes | Ignores them |
 | Hold columns `overlordUntil`, `overlordOutcome` (one closed L0 list, §6.1) on asks and items; row revisions | C6, L3 | `coord.db` | `coord/questions.ts` | Its boot re-seed; each hold's deadline | W3 (revisions W2) | yes | Ignores the columns (§11.5) |
 | The push outbox, `reachedOperatorAt`, `pushedAt` | C6, L3 | `coord.db` | Stamp and row: the questions owner. Sent mark: the one sender | The sender and its boot pass | W1 | yes | A build without `push-outbox-v1` sends nothing from it |
+| `operator_responses` (one row per message to the operator: kind, class, what it was about by id, delivered, opened and acted times, the outcome and how, the operator's correction; ids, kinds and times only, never text; §4.3) | C6, L3 | `coord.db` | Insert: the sender at delivery (the notice funnel, the questions owner with the reach stamp, the digest's beat, the prompt route's record of a reply). `openedAt`: the console's events. Outcome: the response lane. Correction: the operator's door | Each row's window; the response lane seals it. Kept 180 days | W1 | yes | Ignores it: nothing is recorded |
+| The console's events (from W1, `opened`; from W3, the answer events of the row below join it) | C6, L3 | `coord.db` | The console's event door, session-gated | Kept 90 days | W1 | yes | Ignores it |
+| `response_classes` (one row per kind of push: state `quiet` or `interrupting`, the pin, since when, by whom, and the figures at each change) | C6, L3 | `coord.db` | Up: the operator's Settings door ("Let it interrupt"). Down: the response lane, on its threshold, and the operator's "Keep it quiet". The pin: the operator's Settings door | none | W3 | yes | Ignores it: today's admission |
 | `overlord_drills` | C5, L3 | `coord.db` | The drill lane | Random times | W3 | yes | Ignores it: no reader of an older build serves one |
 | Sealed predictions, the blind-sample mark, answer events | C5 and C6, L3 | `coord.db` | The prediction door; the server at filing; the console's events | none | W3 | yes | Ignores them |
 | Outcome tests on briefs, the outcome word of each settled decision, and review cards with the operator's confirmations (§6.9) | C5 and C6, L3 | `coord.db` | The prediction door (the tests); the outcome lane, the one lane that asks `decisionOutcome` (the word); the operator's tap (a confirmation) | A sweep on a `LANE_SCHEDULE` cadence, due at each horizon | W3 | yes | Ignores them |
@@ -5439,6 +5727,8 @@ name that owner.
 | `FLEET_ROLES` (long-lived, the `SessionRole` view, launch profile, card renderer, compaction instructions and probe set as columns), `roleOf`. Where a fact is unmeasured `roleOf` gives a typed undecided answer, never a guess (§3.3.9) | K, L0; C3, L1 | code | n/a | n/a | W1a | n/a | `SessionRole` as today |
 | `renewalDue`, the generation state machine, the fence check (C3); `MAIL_PACE` (C5). `MAIL_PACE` and the renewal triggers are records keyed by role, total over `FLEET_ROLES` | C3 and C5, L1 | code | n/a | n/a | W1a (fence W1) | n/a | No renewal; today's two mail-pace pairs |
 | `INJECTED_PROMPTS`; the refusal-word list, generated from §11.6 | K, L0 | code | n/a | n/a | W1, growing | n/a | History tags injected text `operator`, as today |
+| `TIMER_TRANSITIONS`, the timer bounds by role, and `timer` in `SYSTEM_MAIL_SENDER_MAP` (§3.3.12) | C3, L0; C5, L1 | code | n/a | n/a | W1a | n/a | No timers; an older mail lane reads a sender it does not know (§11.5) |
+| `RESPONSE_OUTCOMES`, `RESPONSE_CLASSES` (derived from the notice funnel's kinds), `responseOutcome`, `responsesFor`; the class step, which may only move a class down by itself (§4.3) | C6, L0 and L1 | code | n/a | n/a | W1 (outcomes and figures), W3 (the class step) | n/a | n/a |
 | The message moves table: delivered and queued (the delivery lane), picked up (the hook's report door), settled and spent (the door that cites the message, or the prompt route's settlement mark) | OM, L0 | code | n/a | n/a | W1 | n/a | n/a |
 | `decideSleep`'s `overlord` hold, the roll lane's hold | C4, L1 | code | n/a | n/a | W1 | n/a | The Overlord may sleep or roll |
 | The sandbox check, `overlordReadiness`, the breaker, `effectiveRung`, the invariant monitor | C3 and C5, L1 | code | n/a | n/a | W1 (breaker W3) | n/a | No Overlord |
@@ -5472,8 +5762,10 @@ tested over its whole input domain (§11.7).*
 | `CallerIdentity` port; today's attribution adapter | C8, L2 and L3 | n/a | n/a | n/a | W1 | n/a | n/a |
 | The door process, with `ccrc-api` inside; the reader types it serves | C5, a fleet-host process ccd starts with each generation, with a one-time launch nonce in its environment | n/a | n/a | One per generation | W1 | n/a | If W0 fails it: a shell that runs only `ccrc-api` (§3.6) |
 | The outbox sender | C6, L4 | the push outbox | it marks sent | Drain, and a boot pass | W1 | n/a | n/a |
+| The timer lane, with its cleanup arm, and from W2 the follow-up arm (§3.3.12, §5.4) | C3, L4 (the follow-up arm C5) | `continuity_timers`; mail | it, for fire and cleanup; the mail through the mail owner's insert, in the same transaction | The `timers` row of `LANE_SCHEDULE`, a minute | W1a (the follow-up arm W2) | n/a | n/a |
+| The response lane (§4.3) | C6, L4 | `operator_responses`, `response_classes` (down only) | it | The `responses` row of `LANE_SCHEDULE`, ten minutes | W1 (the class step W3) | n/a | n/a |
 | `DecisionModel` port with adapters `hosted`, `local` and `zero-retention`; `OverlordPolicy` port | C5, L2 and L3 | n/a | n/a | 2 s deadline per decision-model call | W2 | n/a | n/a |
-| The done-test lane, the follow-up arm, the overlaps arm | C5, L4 | `overlord_requests` | it, as the server actor | On news; at `followUpAt`; on a new pair | W2 | n/a | n/a |
+| The done-test lane, the follow-up arm, the overlaps arm | C5, L4 | `overlord_requests` | it, as the server actor | On news; at `followUpAt`, read on the `timers` row's beat (§3.3.12); on a new pair | W2 | n/a | n/a |
 | The hold lapse, inside the questions owner | C6, L4 | hold columns | `coord/questions.ts` | Each hold's deadline | W3 | n/a | n/a |
 | The anchor-set lane, the label queue | C5, L4 | decision-model records | each its own | Daily; weekly | W2 | n/a | n/a |
 | The drill lane, the audit lane, the tripwire lane | C5 and C6, L4 | their own rows | each its own | Random; daily; on `tripwireDue` | W3 | n/a | n/a |
@@ -5492,11 +5784,11 @@ tested over its whole input domain (§11.7).*
 
 | Piece | Context and ring | Store or file | Its one writer | Lane or timer | Wave | In a snapshot | What an older build does |
 |---|---|---|---|---|---|---|---|
-| Capability words, one per wave and one per step of W3: `continuity-v1` (W1a), `push-outbox-v1` and `overlord-v1` (W1), `overlord-route-v1` (W2), `overlord-brief-v1` (W3, step one: brief first), `overlord-answer-v1` (W3, step two: answer first), `overlord-learn-v1` (W4), `practice-v1` (W4b), `overlord-start-v1` (W5), `overlord-propose-v1` (W6) | K, L0 | the server capability file | The update sync on each node | Its lease | as listed | n/a | The word is missing: today's path. A door of a later wave refuses `capability-missing` and names its word |
+| Capability words, one per wave and one per step of W3: `continuity-v1` and `timers-v1` (W1a; the timers have a word of their own, so their piece need not wait for `continuity-v1`), `push-outbox-v1` and `overlord-v1` (W1), `overlord-route-v1` (W2), `overlord-brief-v1` (W3, step one: brief first), `overlord-answer-v1` (W3, step two: answer first), `overlord-learn-v1` (W4), `practice-v1` (W4b), `overlord-start-v1` (W5), `overlord-propose-v1` (W6) | K, L0 | the server capability file | The update sync on each node | Its lease | as listed | n/a | The word is missing: today's path. A door of a later wave refuses `capability-missing` and names its word |
 | ccd's capability words: `pool-set`, the account set on the route record, the pool rule's set and the read `ccd pool-answer` (W1), `hibernate-fresh`, the fresh-start flag (W1a), and `keep-awake`, the sleep markers' verb (W1) | K, L0; C1, C3 and C4 | `ccd caps`, which the agent caches at boot and re-reads on each capability refresh | ccd | Each capability refresh | as listed | n/a | Missing: without `hibernate-fresh` the renewal lane does not run; without `pool-set`, `keep-awake` or `hibernate-fresh`, designate and rebind refuse `capability-missing` |
 | The agent's capability word `overlord-history`, for the read-only history op | K, L0; C3 | the agent's capability list, read on each capability refresh | the agent | Each capability refresh | W1 | n/a | Missing, or advertised by more than one agent: the history door answers `history-unreachable` |
 | Auto memory for `plain` sessions, a row of `SWITCHES` (`shared/switches.ts`) | K switches, L3 | `coord.db` settings | The Settings door | none | W1a | yes | Ignores it: auto memory stays off |
-| Settings: when soft renewals happen, "when I'm away" or "on schedule" (W1a, R19); the daily backstop hour and time zone (W1, where the Overlord's backstop row first reads them; plan-driven consistency, the W1a plans); the designated model class (W1; selecting `fable` keeps the step-up, and `opus` needs none); the designation's account set (W1; widening it keeps the step-up, and narrowing it needs none); `lambda` (W3, because its one reader, `askOrAct`, ships then); `operatorProfile`, with its `takesIn` line (W3, with the briefs; set at designation from then on); the push budget, briefing times, quiet hours, "away until", and the repeat push for an unseen blocking item, two hours (W3, with H35); the blind sample's switch (W3); the retention period (W4); `overlordLiveProgrammes`, `portfolioFocus` (W5) | K settings, L3 | `coord.db` settings | The Settings door, on the operator's own tap, behind the step-up where the change widens authority. For a stated preference that is a setting, the Overlord answers with a link that opens it with the value filled in; it never writes a setting, and files nothing (§9.3) | none | as listed | yes | Ignores them |
+| Settings: when soft renewals happen, "when I'm away" or "on schedule" (W1a, R19); the daily backstop hour and time zone (W1, where the Overlord's backstop row first reads them; plan-driven consistency, the W1a plans); the designated model class (W1; selecting `fable` keeps the step-up, and `opus` needs none); the designation's account set (W1; widening it keeps the step-up, and narrowing it needs none); `lambda` (W3, because its one reader, `askOrAct`, ships then); `operatorProfile`, with its `takesIn` line (W3, with the briefs; set at designation from then on); the push budget, briefing times, quiet hours, "away until", and the repeat push for an unseen blocking item, two hours (W3, with H35); "New kinds of push start quiet", on by default, and each kind's state and its "Don't adjust" pin (W3, with H35; §4.3); the blind sample's switch (W3); the retention period (W4); `overlordLiveProgrammes`, `portfolioFocus` (W5) | K settings, L3 | `coord.db` settings | The Settings door, on the operator's own tap, behind the step-up where the change widens authority. For a stated preference that is a setting, the Overlord answers with a link that opens it with the value filled in; it never writes a setting, and files nothing (§9.3) | none | as listed | yes | Ignores them |
 
 *Table 11.1d. Capability words, switches and settings. Every switch that changes authority is journalled (§7.6).*
 
@@ -5508,6 +5800,10 @@ tested over its whole input domain (§11.7).*
 | The Overlord's reads: board, `messages`, inbox, history, model, feed. The inbox read's contract, its row shape and its order, is fixed in W1: later waves add bands and kinds of row, and change nothing a W1 caller reads | C5, L4 | the read ledger | each its own line | n/a | W1 (board, messages, history, and the inbox with band 1 and probes, §6.8), W2 (band 3 joins the inbox), W3 (band 2, packets, admission and background work join it; a drill joins every Overlord read that would show a real row of its kind, §7.5), W4 (model, feed) | n/a | No route |
 | The sequence read: one cursor over `overlord_sequence`, which answers a gap explicitly | C5, L4 | the read ledger | it | n/a | W1 | n/a | No route |
 | Card, probe and note: `GET /api/sessions/:id/card`, `ccrc-api card`, `ccrc-api probe`, the note door | C3, L4 | generation, probe and note rows | each its own | n/a | W1a | n/a | No route |
+| The timer doors: `POST /api/timers`, `GET /api/timers`, `POST /api/timers/:id/cancel` (`ccrc-api timer set`, `list`, `cancel`), each for the caller's own identity only, registered from the continuity routes file (§3.3.12) | C3, L4 | `continuity_timers` | each its own move | n/a | W1a (the Overlord's, through its door process, W1) | n/a | No route: `ccrc-api` answers `capability-missing`, naming `timers-v1` |
+| The operator's timer cancel, on a session's page and a run page | C3, L4 | `continuity_timers` | it, with the reason `operator` | n/a | W1a | n/a | No route |
+| The console's event door (`opened`; the answer events join it in W3) | C6, L4 | the console's events | it | n/a | W1 | n/a | No route: windows read `unmeasured` |
+| "I handled this elsewhere", the operator's correction of a response row (§4.3) | C6, L4 | `operator_responses` | it | n/a | W1 | n/a | No route |
 | The hook's reports: start (profile digest; the instruction files, settings sources, hooks, tool servers, mods, agents and skills the session loaded), witness (PreToolUse), reader start and stop, model switch | C3, L4 | the start record and counters; the renewal lane mints the generation from the start record | the hook, by direct call | n/a | W1a, W1 | n/a | No route: unmeasured |
 | `acknowledge` | C5, L4 | in W1, only the message row's state, through the private store's one message writer; act rows begin in W2, with `overlord_acts` | it | n/a | W1 (act row W2) | n/a | No route |
 | The ladder: rung, Pause, per-kind arming, engagement | K, L4 | ladder state | it | n/a | W1, W3 | n/a | No route |
@@ -5597,6 +5893,12 @@ one fixed order, so the first refusal is the same on every door.
 - **Card, probe and note for every other role.** These three doors sit in the hook's group of Table 11.2 for every
   session that is not the designated one: the box token and attribution, for the caller's own session only. The gate
   order above binds them only when the designated session calls.
+- **The timer doors sit beside them** (§3.3.12). For every other session they are in the hook's group too, for the
+  caller's own identity only. When the designated session calls, they take the gate order above with no skips but
+  step 10's rung by act kind: a timer is no act kind and writes no act row. They are box-token doors in
+  `auth/gate.ts`'s `EXEMPT` table, one reason each, read by the census from the continuity routes file. The
+  operator's timer cancel, the console's event door and the correction of a response row are session-gated, and the
+  census names each with the routes file that registers it, in both directions, as it names the update doors.
 - **The server's own bodies only read.** The replay body and the auditor pass step 1 by their per-run key, for reads
   only. Their reads skip steps 3 to 11, and every write they call is refused `not-the-overlord`. The replay key
   serves every read as of its question's date (§9.5).
@@ -5729,7 +6031,9 @@ what each older build does (H32).
   renewal, the renewal hold-off, a generation's least age and the soft renewal budget's six hours. Observed time is
   one L1 accumulator in the clock kernel, never a second clock: milliseconds the server observed, kept in a stored
   column and advanced by monotonic deltas within one process, never across a gap. The renewal lane's piece adds it
-  in W1a, because the first three such timers are its own.
+  in W1a, because the first three such timers are its own. A timer a session sets itself (§3.3.12) is of the first
+  kind: its expiry permits nothing, only a mail, so it uses the wall clock. It may fire late, never early and never
+  twice.
 - **The hold-down is ccd's.** ccd is the one writer of the degraded stamp, so the hold-down before it restores the
   designated class runs on ccd's own clock (§3.4, Table 11.5b). The server observes no timer for it.
 - **A fact from another host** is aged from when the server received it.
@@ -5755,6 +6059,8 @@ what each older build does (H32).
 | `requestId` on runs | A new column | Ignored |
 | `requestId` on mail | A new column on mail rows | Ignored |
 | `requestId` on D-8126's goals door (`goals modify`) | A new column on a goals version | Ignored |
+| `timer` as a mail sender | Mail rows and deliveries | With `timers-v1` missing, nothing new is sent. The plan measures what an older mail lane does with a queued `timer` mail, as for `overlord` |
+| Timer states, response outcomes and class states | Their own new tables | Ignored |
 
 *Table 11.5. New persisted words, and what makes a rollback over them safe.*
 
@@ -5778,6 +6084,15 @@ values too. They are values of the renewal triggers' record, keyed by role, and 
 | One sweep of the readiness lane, whose cadence is a `LANE_SCHEDULE` row added in W1 | How long after boot the word reads `unmeasured` | W1 | wall |
 | 90 days | How long `overlord_sequence` is kept | W1 | wall |
 | 200 notes of 500 characters | The caps on `continuity_notes` for one identity | W1a | n/a |
+| 50 for the Overlord, 20 for a coordinator, 5 for any other session | Pending timers one identity may hold | W1a (the Overlord's W1) | n/a |
+| 30 an hour | Timers one identity may set | W1a | wall |
+| Five minutes, and 30 days | The shortest and the longest due time of a timer | W1a | wall |
+| 500 characters | A timer's note | W1a | n/a |
+| One minute | The `timers` row's cadence, so a timer fires at most a minute late while the server runs | W1a | monotonic cadence, wall verdict |
+| 24 hours; until settled, at most seven days; until the next digest; until the next break | The response windows of a push, a Waiting on you row, a digest line and a chat reply (Table 4.3a) | W1 | wall |
+| Ten minutes | The `responses` row's cadence | W1 | monotonic cadence, wall verdict |
+| 180 days, and 90 for the console's events | How long response rows and the console's events are kept | W1 | wall |
+| 28 days, at least 30 measured messages; 50% acted to propose "let it interrupt", under 20% to go back to quiet; over a third unmeasured to change nothing | The response figures and the class step (§4.3) | W3 | wall |
 | 16,000 bytes | How far into a `SKILL.md` its contract may end: 5,000 tokens at 3.2 bytes a token | W1a | n/a |
 | 1,500 characters | The Overlord's part of a relay | W2 | n/a |
 | 1,000 characters, and 600 for its reasons, capped apart | The Overlord's text that travels with a proposal and is shown on its card | W3 | n/a |
@@ -5897,6 +6212,14 @@ The egress refusal is the one exception, because a detailed answer there is an o
 | `baseline-missing` | The Shadow lanes door, arming `continuity`, `launch-profile` or `anchor-slot` | The replay quiz's baseline run is not recorded yet (W0-28) (plan-driven consistency) | C52, C53 |
 | `proposal-limit` | The propose doors | More than one open proposal for one target, or more than three open `propose-command` proposals in all | C59, H8 |
 | `kickoff-names-overlord` | Start, re-kick | The kickoff names the `ccrc-overlord` skill | C4, R7 |
+| `timer-cap` | The timer set door | The identity holds its cap of pending timers, or has set its hourly ceiling (Table 11.5b) | C65 |
+| `timer-too-soon` | The timer set door | The duration is shorter than the shortest due time | C65 |
+| `timer-too-late` | The timer set door | The duration is longer than the longest due time | C65 |
+| `timer-too-long` | The timer set door | The note is over its length cap | C65 |
+| `timer-masked` | The timer set door | The egress mask changed the note | C61 |
+| `timer-key-unknown` | The timer set door | The bound run or programme names no row, or is not the caller's own | C61 |
+| `timer-not-yours` | The timer cancel door | The timer belongs to another identity | C61 |
+| `timer-not-pending` | The timer cancel doors | The timer has already fired or been cancelled | C61 |
 | `not-ready:<word>` | A hold's release reason | The readiness word (§6.4) was not `ready`, such as `not-ready:saturated` | H19, H20 |
 | `server-gap` | A hold's release reason | The deadline passed while the server was down | H18, H32 |
 | `released:<cause>` | A hold's release reason | A cause of Table 6.7c other than a readiness word let a standing hold go: `rung`, `disarmed`, `engagement`, `class-raised`, `grant-ended`, `bypassed` or `deaf` | H18, H39 |
@@ -5923,7 +6246,8 @@ per guard proves the guard exists, not that the machines compose (H33).
   invariants are stated once, as predicates, and checked by tools that compose the machines. I11 and I12 were added
   after a model of the authority and request machines: planted faults that widened authority without the operator,
   or left a request with no clock, broke none of I1 to I10. I13 was added after a model of the privacy and message
-  machines, for the same reason. I14 to I16 were added after a model of the evidence, the gates and the judges.
+  machines, for the same reason. I14 to I16 were added after a model of the evidence, the gates and the judges. I17
+  and I18 came with R20, for the timers and the response measure.
 
 | # | Invariant |
 |---|---|
@@ -5943,6 +6267,8 @@ per guard proves the guard exists, not that the machines compose (H33).
 | I14 | No answer is delivered, and no grant is used, renewed or proposed, while a latch or a condition of Table 7.2a or Table 7.5a forbids it, or on a digest and class the replay has not passed. The server narrows in the transaction that records the cause |
 | I15 | An agreement joins a gate, a cell or a grant's evidence once, and only from an operator's answer scored `blind`, or for the first gate `examined`, against a prediction sealed before the first pick. A drill, a seeded call, a "You decide", an `unmeasured` answer and a question the Overlord raised add nothing |
 | I16 | A drill, the replay body and the auditor cause no effect: no mail, no key press, no push and no act that counts. An armed gate row of the decision model lets an act through only on a clear yes gathered under its current key and line |
+| I17 | A timer fires at most once, and only in the transaction that queues the one mail naming it, to its setter's own identity. A fired timer has exactly one such mail. No timer names an identity other than its setter's, and none causes any effect but that mail |
+| I18 | A response row is sealed once, after its window, from measured rows, unless the operator corrects it. `unmeasured` never counts as not acted on. The response measure never turns a deferral into a push, never lowers an urgency, never moves a deferral limit, and moves a class up only in the transaction of the operator's tick |
 
 *Table 11.7a. The invariants. The invariant monitor (§10.4) checks the same predicates in production, except I9, which
 only the simulator checks, by running each seed both ways.*
@@ -5951,8 +6277,8 @@ only the simulator checks, by running each seed both ways.*
 |---|---|---|
 | A small model, explored exhaustively within bounds and written before the code | First the composition of holds, readiness, generations and restarts, with I5's generation part; then authority and restore, where I5's term and act key join | W0; W1 |
 | Stateful property tests over the real L1 deciders | Each machine: exactly once, never lost, monotonic, fails towards the operator | With each machine's wave |
-| Exhaustive tests of first-match deciders, with a monotonicity property | `overlordReadiness`, `itemClassFloor`, `overlordMayAct`, `renewalDue`, `followUpDue`, `mayHold` | With each |
-| A deterministic simulator: the real lanes and SQLite on a fake clock and a fake agent link, with crash, restore and gap injection, and reach coverage of every state and edge | I1 to I16 under faults | Skeleton in W1a: the new deciders on the fake ports, with crash and gap injection. The real lanes join once the watcher's runner reads `Clock`. Restore injection joins with the first decider that reads a restore |
+| Exhaustive tests of first-match deciders, with a monotonicity property | `overlordReadiness`, `itemClassFloor`, `overlordMayAct`, `renewalDue`, `followUpDue`, `mayHold`, `responseOutcome` and the class step | With each |
+| A deterministic simulator: the real lanes and SQLite on a fake clock and a fake agent link, with crash, restore and gap injection, and reach coverage of every state and edge | I1 to I18 under faults | Skeleton in W1a: the new deciders on the fake ports, with crash and gap injection. The real lanes join once the watcher's runner reads `Clock`. Restore injection joins with the first decider that reads a restore |
 | The invariant monitor on the live sequence, `overlord_sequence` | The same predicates in production, except I9 | W1 |
 | The scenario suite and the replay | The Overlord's behaviour (§9.5) | W3 |
 | Mutation testing of each new L1 decider, with a score floor that only rises | That the tests would catch a broken guard | Daily, from W1a |
@@ -6022,13 +6348,16 @@ from rows the server writes, never from the Overlord's own account.
 | M33 | Together against alone: for each cell, the share of decisions that held up for the operator alone, the Overlord alone and the two together, and the four disagreement counts (`helped`, `hurt`, `operator-right`, `overlord-right`) | Together at or above the better of the two; `hurt` under `helped` | Outcome rows, sealed picks, answer events |
 | M34 | The operator's own record over time: the held share of their scored blind picks, by quarter | Not falling | Outcome rows, answer events |
 | M35 | The picture first: briefs that open with a place line, premises raised and the rows each one settled, and routine questions of class none that still reached the operator under the default profile | Every brief; the rest watched | Brief rows, items, `operatorProfile` |
+| M36 | Timers: set, fired and cancelled by cause, per role; how late each fired, and how long its mail took to deliver; refusals by word; pending timers whose setter is gone | Every fired timer delivered; fired at most a minute late while the server runs; none pending for a setter measured gone | `continuity_timers`, mail deliveries, door refusals |
+| M37 | Responses: for each kind of push, and for Waiting on you rows, digest lines and chat replies, the share acted on, opened, not opened, settled elsewhere and unmeasured, and the median time to act; each kind's state and its changes, with their causes | Interrupting pushes acted on at least half the time; the unmeasured share under 10%; the rest watched | `operator_responses`, `response_classes` |
 
 *Table 12. The measures, in number order.*
 
 ## 13. Decisions (the author's calls)
 
 The rulings are in §2. These are the calls the author made to build them, each stated in its final form. The
-operator approved them on 2026-11-10 ("Where things stand"), and each can still be overturned by number. "Shaped by"
+operator approved them on 2026-11-10 ("Where things stand"), and each can still be overturned by number. C61 to C69
+carry R20 (2026-11-14), and the operator approves them on this revision's pull request. "Shaped by"
 names the hardening calls that changed a call from its rev 8 form. §13.1 lists every H call.
 
 | # | Call | Options considered | Chosen, and why | Status | Shaped by |
@@ -6093,6 +6422,16 @@ names the hardening calls that changed a call from its rev 8 form. §13.1 lists 
 | C58 | How the operator is asked to decide | a recommendation, a free-form note, a brief | A structured brief. It opens with where the question sits (R17). The default is the safe option. At most three options, each with downsides and the catalogue's reversibility, and at most three reasons, each marked measured or judged. Then the cell's track record, the best case against, tripwires, and what only the operator knows. The server picks the reveal mode and measures whether an answer was examined | Approved | H21, H30, H34, H36, H42, H45 |
 | C59 | Disagreement and the override | comply silently, argue freely, argue once | Argue once: an objection is a row with a sealed prediction, and a second one needs a new id (`no-new-evidence`). A command is the operator's tap on a server-rendered proposal, behind a step-up: single use, 15 minutes. Never past SAFETY, R7 or R12, and never an irreversible effect. "You decide" is no command: it is the operator's own answer on the row, picking the recommended option once it is on screen. It is never offered for O2, O4 or an irreversible effect, and it is logged `delegated`, never counted as agreement | Approved | H8 |
 | C60 | The majordomo | answer when asked, manage attention | A decision queue ranked by `decisionRank`, each place with its measured reason. Bundles are rendered by the server, never span classes and never include O2 or O4. Briefs are prepared ahead as background work. An attention budget the operator sets decides when a push may interrupt | Approved | H18, H19, H35, H36, H38 |
+
+| C61 | Where a session's reminder lives | its memory files, a kind of note, a row of its own | A row of `continuity_timers`, keyed to the setter's identity, never a generation: the Overlord's to the role `overlord`, so a rebind keeps them. The server stamps `dueAt` from a duration. The note is the setter's words, capped, masked on the way in and rendered as data. A timer never acts, and no session sets or cancels one for another. Not a kind of note: a note is append-only with no state, and a timer must change state once, with its mail | Proposed with R20 | R20 |
+| C62 | How timers fire | a poller of its own, a row of `LANE_SCHEDULE` | One `timers` row, a minute. Each pass marks a setter's due timers `fired` and queues one mail naming them all, in one transaction, so nothing fires twice or is lost. It starts no session: mail wakes a sleeper under the wake budget, and the gate holds it through a renewal. `mail-disabled` holds the lane. After a gap, due timers fire once, late, not re-timed. A cleanup arm cancels on a programme's end, an archive, a measured absence and a retirement | Proposed with R20 | R20 |
+| C63 | Who the timer mail is from | `operator`, the setter, a role of its own | The role `timer`, a new row of `SYSTEM_MAIL_SENDER_MAP`. `operator` would carry a session's words in the envelope of the operator's own notices, which H7 closed. The setter did not send it then, and the peer quotas would count it | Proposed with R20 | R20, H7 |
+| C64 | Recurring timers | yes, no | Not in version 1. The schedules the Overlord keeps are the server's already, as `LANE_SCHEDULE` rows and daily beats. A session repeats by setting the next timer when one fires. Later, if chained timers are a large share | Proposed with R20 | R20 |
+| C65 | Bounds, roles and the follow-up arm | timers per role, one bound for all; the follow-up arm on its own row or on the timers row | 50 pending for the Overlord, 20 for a coordinator, 5 for any other session; 30 sets an hour; five minutes to 30 days; 500 characters. Coordinators and workers in W1a, with worker clause 17 naming a timer as a wake; the Overlord in W1. The follow-up arm runs on the `timers` row from W2, and `followUpAt` stays on the request: a request's clock is the server's, re-set at each move and decided by `followUpDue`, so one table would give it a second home | Proposed with R20 | R20 |
+| C66 | What is recorded about each message to the operator | nothing, a guess at intent, measured facts | One row of `operator_responses` per push, Waiting on you row, digest line and chat reply, with ids, kinds and times only. Sealed when its window closes, first match: `acted` (and how), `settled-elsewhere`, `unmeasured`, `opened`, `not-opened`. `not-opened` says the console saw no open, never that the operator did not see it. Approvals are out of scope | Proposed with R20 | R20 |
+| C67 | How an open is measured | not at all, the console's events | The console's events, from W1, with one kind, `opened`, written by one session-gated door; a push's tap carries its tag. W3's answer events join the same table. A console without the events leaves its windows `unmeasured` | Proposed with R20 | R20 |
+| C68 | How the budget uses the figures | not at all, a weight on each push, a state per kind of push | A state per kind of push, `quiet` or `interrupting`. Start quiet: a quiet kind waits for the briefing time, never past its urgency's deferral limit. The server only narrows: under 20% acted over 30 measured sends a kind back to quiet. Only the operator's tick lets a kind interrupt, and it then gets what the budget gives. Only the pushes the budget rules on are affected, so I9 holds. Shadow first, with the budget. Not a feed of the operator model | Proposed with R20 | R20, H35, H37 |
+| C69 | Where the operator sees it, and corrects it | Settings only, the Week page and Settings | The figures per kind on the Week page, the states with "Let it interrupt", "Keep it quiet" and "Don't adjust" in Settings, and "I handled this elsewhere" on any measured message, which outranks the lane's seal. None needs the step-up | Proposed with R20 | R20, H36 |
 
 *Table 13a. The author's calls in their final form, and the hardening calls that shaped each one.*
 
@@ -6182,13 +6521,13 @@ prerequisites gate W1, where the Overlord itself begins. Nothing in any wave is 
 | Wave | What it ships |
 |---|---|
 | W0, a spike | It changes nothing that runs: its test-only files ship in the tarball and do nothing. It measures what the design depends on: the hook's cap and the anchor slot; a fresh start as the renewal act, and its time; what a clear or a fresh start does to running readers, queued input and scheduled tasks; whether a compaction rotates the uuid; auto memory, forks, the subagent model, the model-switch hooks and a refused proactive compaction; the door process under a restricted launch (hooks, skills, the permission mode); reader types with no shell; nudge-and-read for the operator's messages; the statusline's token fields; whether the inbox socket can be used with the peer channel closed; a continuity record for each lane; whether its accounts bill Fable to usage credits; how closely the seven-day figure times the Fable share reading tracks the Fable allowance; how ccd picks an account today (no listed order exists yet: that is W1's build); the restart numbers and the first sweep after boot (§6.4); what an account's shared config directory loads into a session; how reliable the typed `/clear` is. It writes the first model of holds, readiness and generations (§11.7). Where the real thing does not exist yet (the renewal verb, probes), it measures the parts with stand-ins, and W1a measures again with the real ones |
-| W1a, continuity for every long-lived role | The one role table and its launch profiles; `continuity_generations`, the receipt and the renewal lane on the `SessionHost` port; the anchor slot and the card door; notes; compaction instructions (after history W3-1); probes and the weekly quiz; the trigger table (stall arms); coordinator clause 23; the skill-size ratchet, with caps measured at its merge, and each role skill's contract moved to the front of its file; the `MAIL_PACE` table (today's two rows first, behind a characterization test; total over `FLEET_ROLES`, with the Overlord's row, once the role table lands); the ports for time and chance; the simulator's skeleton; mutation floors for new deciders; the case lane in shadow; ccd's fresh-start flag and its capability word `hibernate-fresh`; the capability word `continuity-v1` |
-| W1, designate and talk | The private store, with the operator's messages and the read ledger; the designation with its term; the identity port and the isolation word; the door process and the reader types; the history door and its agent op; the sandbox check; the fence; ccd's sleep markers' verb and its capability word `keep-awake`; the ladder at `chat`, and Pause; the readiness word; the inbox, with band 1 (the operator's messages), probes and the coalesced wake; the journal kernel, the authority journal, the privacy journal's file with its record of the highest message id issued, and the "Confirm the restore" door; the push outbox and its capability word `push-outbox-v1`; the account set on the designation, the pool rule's set and ccd's capability word `pool-set`, and the two-account check; the home, the chat with message ticks, the board; the portfolio rank, the limit samples and `portfolioFor`; the refusal on other write lanes; the invariant monitor and `overlord_sequence`, with its cursor read; the capability word `overlord-v1` |
-| W2, route and follow up | The act catalogue, `overlordMayAct`, revisions and operation keys, two-step acts and the act journal; requests as contracts, with `requestId` on runs, on mail and on `goals modify`, and the request doors; the home's Requests groups, the one-tap next steps, and what each request and programme cost; band 3 of the inbox (request moves, follow-ups and read-back flags); the relay door with its checks, and the door that uploads the private-name list; `followUpDue`; overlaps and goal conflicts, with the operator's door that rules a goal-conflict pair; remaining work, forecasts, health and edges; the decision-model port, with its W2 rows in shadow, and the label queue and its cards; the ladder at `advise`; the capability word `overlord-route-v1` |
-| W3, step one: brief first | `operatorClass` and `effect` on rows, with the floors; the operator's profile, the place line, outcome tests, `decisionOutcome` and the three records (§6.9); briefs with their reveal modes, `answerExamined` and `decisionRank`; `attach-brief`, and the inbox's rows that wait for a brief; sealed predictions; the blind sample; proposals and commands; the attention budget and its Settings, in shadow; engagement per programme; the replay body and the scenario suite; the weekly check and the Week page; the handover brief; the capability word `overlord-brief-v1` |
+| W1a, continuity for every long-lived role | The one role table and its launch profiles; `continuity_generations`, the receipt and the renewal lane on the `SessionHost` port; the anchor slot and the card door; notes; compaction instructions (after history W3-1); probes and the weekly quiz; the trigger table (stall arms); coordinator clause 23; the skill-size ratchet, with caps measured at its merge, and each role skill's contract moved to the front of its file; the `MAIL_PACE` table (today's two rows first, behind a characterization test; total over `FLEET_ROLES`, with the Overlord's row, once the role table lands); the ports for time and chance; the simulator's skeleton; mutation floors for new deciders; the case lane in shadow; ccd's fresh-start flag and its capability word `hibernate-fresh`; the capability word `continuity-v1`; timers for coordinators and workers: `continuity_timers`, `TIMER_TRANSITIONS`, the timer doors and the operator's cancel, the `timers` row with its cleanup arm, the `timer` mail sender, pending timers on the card, worker clause 17 naming a timer as a wake, and the capability word `timers-v1` |
+| W1, designate and talk | The private store, with the operator's messages and the read ledger; the designation with its term; the identity port and the isolation word; the door process and the reader types; the history door and its agent op; the sandbox check; the fence; ccd's sleep markers' verb and its capability word `keep-awake`; the ladder at `chat`, and Pause; the readiness word; the inbox, with band 1 (the operator's messages), probes and the coalesced wake; the journal kernel, the authority journal, the privacy journal's file with its record of the highest message id issued, and the "Confirm the restore" door; the push outbox and its capability word `push-outbox-v1`; the account set on the designation, the pool rule's set and ccd's capability word `pool-set`, and the two-account check; the home, the chat with message ticks, the board; the portfolio rank, the limit samples and `portfolioFor`; the refusal on other write lanes; the invariant monitor and `overlord_sequence`, with its cursor read; the Overlord's timers, through its door process; the response record: `operator_responses`, the console's events with `opened`, the response lane, and "I handled this elsewhere", recording only; the capability word `overlord-v1` |
+| W2, route and follow up | The act catalogue, `overlordMayAct`, revisions and operation keys, two-step acts and the act journal; requests as contracts, with `requestId` on runs, on mail and on `goals modify`, and the request doors; the home's Requests groups, the one-tap next steps, and what each request and programme cost; band 3 of the inbox (request moves, follow-ups, read-back flags and the Overlord's fired timers); the relay door with its checks, and the door that uploads the private-name list; `followUpDue`, with the follow-up arm on the `timers` row; overlaps and goal conflicts, with the operator's door that rules a goal-conflict pair; remaining work, forecasts, health and edges; the decision-model port, with its W2 rows in shadow, and the label queue and its cards; the ladder at `advise`; the capability word `overlord-route-v1` |
+| W3, step one: brief first | `operatorClass` and `effect` on rows, with the floors; the operator's profile, the place line, outcome tests, `decisionOutcome` and the three records (§6.9); briefs with their reveal modes, `answerExamined` and `decisionRank`; `attach-brief`, and the inbox's rows that wait for a brief; sealed predictions; the blind sample; proposals and commands; the attention budget and its Settings, in shadow, with the state of each kind of push, start quiet and the class step (§4.3); engagement per programme; the replay body and the scenario suite; the weekly check and the Week page, with the response figures; the handover brief; the capability word `overlord-brief-v1` |
 | W3, step two: answer first | The holds, `mayHold`, retention and the breaker; the inbox's held rows, admission, packets and precedents; `askOrAct`; the answer and escalate doors; the grants door with all of H26, and staging; drills and the outside audit; background work; each kind of answer armed on evidence; the capability word `overlord-answer-v1` |
 | W4, learn | The model and feed reads; the operator-model entries and their feeds; derived basis, candidates and the subject key; the distillation; About you; the privacy controls, and the learning events in the privacy journal; the replay run again, now with the model; the capability word `overlord-learn-v1` |
-| W4b, the playbook | Practice entries, the door and `practiceFor` over the trigger table, which started in W1a; cases and their reviews; coordinator clause 24; the capability word `practice-v1` |
+| W4b, the playbook | Practice entries, the door and `practiceFor` over the trigger table, which started in W1a; the trigger key `response-quiet:<class>`, and response figures as entries' metrics and guards; cases and their reviews; coordinator clause 24; the capability word `practice-v1` |
 | W5, start and re-kick | The start and re-kick doors; retiring as a proposal; `portfolioFocus`; the capability word `overlord-start-v1` |
 | W6, propose and report | Grant proposals raised by the server; scarcity admission, and rank as the first sort key where work waits; the weekly portfolio packet; the Overlord's proposals about its own procedures; the digest section; the capability word `overlord-propose-v1` |
 
@@ -6232,6 +6571,18 @@ prerequisites gate W1, where the Overlord itself begins. Nothing in any wave is 
   (Table 11.1d). The coordinator skill gains clause 23 in W1a, clause 22 in W1 and clause 24 in W4b. Those clause
   numbers are working numbers: each clause takes the next free number at its merge (§11.4).
 - **Migration slots are measured again before each merge.** W1a may land before D-8126's migrations.
+- **R20's pieces, for the plan index** (§3.3.12, §4.3). The plan comes after this revision lands, so these are the
+  sentences the W1a and W1 plan index needs, and no plan file changes here.
+  - **W1a gains one piece, timers.** It ships `continuity_timers`, `TIMER_TRANSITIONS`, the three timer doors in the
+    continuity routes file with their census, the operator's cancel, the `timers` row of `LANE_SCHEDULE` with its
+    cleanup arm, the `timer` mail sender, pending timers on the card, and worker clause 17 reworded to name a timer
+    as a wake, behind its own capability word `timers-v1`. It needs the start report (the continuity routes file and
+    store), the time ports and the card, and nothing else. `continuity-v1` does not wait for it.
+  - **W1 gains the response record and the Overlord's timers.** The record (`operator_responses`, the console's
+    events with `opened`, the response lane and the correction) records only, and changes no push. The Overlord's
+    timers ride its door process.
+  - **W2's follow-up arm runs on the `timers` row,** and W3's first step adds the class states to the budget, in
+    shadow.
 
 ## 15. Non-goals and anti-goals
 
@@ -6324,6 +6675,10 @@ mechanism leaves something open, the row says what is left.
 | The playbook or its own proposals game the measures | A lesson that helps no one goes live, or it loosens its own bounds | Retiring an entry is automatic, and a widening entry needs the operator's tick. Canary holdouts, and outcomes only from measured rows. An entry expires unless its effect is measured. It may never propose a change to what judges, bounds or authorises it (A14) |
 | Forecasts mislead | The operator plans on a date nobody can meet | Only a seeded Monte Carlo over measured cycle times produces a date; no model and no session does. Each 85% date is sealed and scored, and dates are marked "uncalibrated" when they miss their band |
 | The size of the build | The plan stalls, or ships half a guard | W0 measures before anything depends on it. Each H call is marked shape or tightening, and ships with its wave or one wave after. Each wave ships dark behind a capability word. Every guard ships with the test that goes red without it, and the model, the simulator and mutation floors check that the machines compose (§11.7) |
+| Timers become a poll loop, or a flood | A session sets a timer every few minutes and spends its turns waking, or a bug sets hundreds | A due time of at least five minutes, a cap of pending timers per role, 30 sets an hour, and one mail per setter per pass. Each fired timer is mail under the mail gate's pace. M36 counts them by role |
+| A planted note rides a timer | Text a session was steered into writing comes back later as if it were an instruction | The note is the setter's own words, rendered as untrusted data with a line that says so, from the role `timer`, never from `operator`. A timer never acts, and no session can set one for another |
+| The response measure silences what matters | A kind of push the operator needs goes quiet, and they miss it | Quiet only waits for the briefing time, never past the urgency's deferral limit, so a verified `blocking-now` still pushes at once. Only the pushes the budget rules on are affected. `unmeasured` is never evidence, and a mostly unmeasured kind is never narrowed. Every change is listed for the operator, who can mark a message handled elsewhere, pin a kind, or let it interrupt |
+| The response figures are read as a judgement of the operator | A low acted share becomes "the operator does not care about X" | The figures are facts about rows, never a feed of the operator model. `not-opened` says only that the console saw no open |
 | The pair decides worse than the better of the two | The Overlord's pick pulls the operator off a better one, or the operator overrules good calls | Two views formed apart: its pick is sealed, and on a sample and on big decisions the operator picks first. The four disagreement counts show which way it goes, cell by cell. Where it has hurt more than helped, briefs go options first by themselves. Where the operator's own record falls, they do too. M33 and M34 report it. Left: an outcome test shows that a choice did not fail, not that it was the best one |
 | The Overlord writes the tests that score it | An easy test makes a poor call look sound, or makes the operator's choice look wrong | A test is typed predicates the server evaluates, sealed before the answer and never edited. The audit samples tests with the outcome in view. A case that would count against the operator's choice counts only after the operator confirms it on a review card, and then it only leaves the Overlord's record. Outside the profile's routine row, no test moves a cell towards acting sooner than agreement would |
 
@@ -6358,6 +6713,9 @@ mechanism leaves something open, the row says what is left.
 - R19, the operator's ruling of 2026-11-12: renewals and the account moves that ride on them wait for a break in the
   conversation, the checkpoint carries the current thread, and a repeat is counted from the operator's own words, never
   from a control (§3.3.2, §3.3.11).
+- R20, the operator's ruling of 2026-11-14: "Both: self-set follow-up timers (a timer row, one scheduler lane, mail
+  delivery) and measuring how you respond to each message" (§3.3.12, §4.3). The calls that carry it, C61 to C69, are
+  the author's and wait on you below.
 - **The operator approved this spec on 2026-11-10:** the author's calls C1 to C60 as §13 restates them, and the
   hardening calls H1 to H39 (§13.1), subject to the rulings below. C47 is where "everything" stops: it keeps the
   credential stores closed.
@@ -6408,6 +6766,13 @@ mechanism leaves something open, the row says what is left.
   it (C46, C56). This spec names none.
 - **This revision itself (R18).** You approve it on its pull request. The calls it settles under R18 are in C46 and
   Appendix B, each with its reason, and each is open to overrule.
+- **The R20 revision, C61 to C69.** You approve it on its pull request. The calls most worth a look:
+  - **Start quiet (C68).** Once the budget leaves shadow, a kind of push waits for the briefing time until you let it
+    interrupt. It never waits past its urgency's deferral limit. You can turn "New kinds of push start quiet" off.
+  - **No recurring timers in version 1 (C64).** A session repeats by setting the next one.
+  - **Who gets timers first (C65).** Coordinators and workers in W1a, and the Overlord in W1, with worker clause 17
+    reworded to name a timer as a wake.
+  - **Approvals are not measured (C66),** because they stay as today (C17).
 - **The prerequisites.** D-8126 (PR #2487) and its four open questions. D-8125 has merged. The Overlord's W1 starts
   when D-8126 has merged. W0 and W1a do not wait for it.
 - **A design for the split install** (ruling 1). Nothing in this spec waits for it on a server that already runs
@@ -6441,6 +6806,11 @@ mechanism leaves something open, the row says what is left.
   the `done-unverified` share stays high (M20).
 - **Option sets sized by calibration.** Once a cell has 50 blind answers, show the options a calibrated set contains.
   Trigger: M18 shows cells with enough blind answers.
+- **Recurring timers** (C64). A session-owned schedule beside the server's. Trigger: timers set within a minute of the
+  same identity's fired timer, with the same note, are a large share of all timers set (M36).
+- **A push shown on a device.** The service worker could report that a push was shown, so a push shown and not tapped
+  can be told from one never shown. Trigger: the unmeasured or not-opened share of pushes stays high while the operator reports
+  acting on them (M37).
 - **Whole-system deterministic testing** of the containerised topology. Trigger: the container images exist, and the
   in-process simulator has missed a defect that lived in the agent link, in ccd or in a real restart.
 
@@ -6554,6 +6924,28 @@ states only the result.
 | Repeats | Not counted | Counted from the operator's words: a `miss` note the Overlord files, and the audit's sample of first replies. No control: the operator ruled that saying so is enough |
 
 *Table B3. What R19 changed.*
+
+**R20, 2026-11-14: timers, and measured responses.** The operator compared this design with an article on building
+always-on agents, whose five primitives are an event inbox, timers, memory, permissions and an outbox, and which
+advises starting quiet and tuning the volume by evaluation. The design had the inbox (§6.8), memory (§3.3, §9),
+permissions (§7) and the outbox (§6.7). The operator ruled the two missing pieces in: "Both: self-set follow-up timers
+(a timer row, one scheduler lane, mail delivery) and measuring how you respond to each message." This table keeps the
+trail. The body states only the result.
+
+| What | Before | Now, and why |
+|---|---|---|
+| A session's reminders | Only mail could wake a session. A reminder lived in its memory files and was lost at a renewal | A row of `continuity_timers`, keyed to the setter's identity, fired by one `LANE_SCHEDULE` row in the transaction that queues its mail (§3.3.12, C61, C62). A renewal is the event continuity exists to survive, so a reminder must not live only in a context |
+| The sender of a reminder | Did not exist | The role `timer` (C63). `operator` would have carried a session's words in the envelope of the operator's own notices, which H7 closed |
+| Recurring schedules | Did not exist | Not in version 1 (C64). The schedules the Overlord keeps are the server's already, and a session repeats by setting the next timer |
+| The follow-up arm's beat | A lane of its own, at `followUpAt` | The `timers` row (C65), with `followUpAt` still on the request: the clock stays where its writer is, and the beat is shared |
+| Worker clause 17 | A turn ends on a mail sent, a background agent or a structured ask | A timer the worker set is a wake too (C65). A worker waiting on its checks had no wake it could name |
+| The card's live state | Messages, commands, holds, requests, programmes, notes and acts | Pending timers too, so a renewed generation knows what it waits on (§3.3.3) |
+| What the operator did with a message | Nothing recorded after it reached them | One response row per push, Waiting on you row, digest line and chat reply, sealed from measured facts, with `unmeasured` a word of its own (§4.3, C66, C67) |
+| The budget's limits | Settings the operator chose, with nothing to tune them by | A state per kind of push. Start quiet; the server only narrows; only the operator's tick lets a kind interrupt (C68). The article's advice, held to ruling 4: the server may narrow, never widen |
+| The Week page and Settings | No response figures | The figures per kind, the states and their controls, and "I handled this elsewhere" on any measured message (C69) |
+| Measures, invariants and refusals | M1 to M35, I1 to I16 | M36 (timers) and M37 (responses); I17 and I18; the `timer-*` refusal words (§11.6) |
+
+*Table B4. What R20 changed.*
 
 ---
 
