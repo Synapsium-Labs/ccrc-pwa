@@ -62,6 +62,12 @@ departures are kept here, by slug, and the coordinator folds both into the progr
   at and around the bound. The decider's own rung is unchanged, because its mutant set (`sim/timerSets.ts`) was held by
   timers PR C's claim. The guard is measured: with the old unbounded check the case that counts the masker's reads goes red.
 
+- **indent-clamp-as-comparisons** — the second CodeQL run cleared both ReDoS alerts and kept one, js/resource-exhaustion
+  on the masker's `indentOf` (`server/src/accounts/shapes.ts`), whose repeat count was already clamped to 512 by
+  `Math.min`/`Math.max`, which the query does not read as a bound. The clamp is now written as comparisons, which it does;
+  the answer is the same for every number (NaN, fractions and infinities included). An alert in product code is fixed,
+  never dismissed.
+
 ## Claims
 
 - **contested-claims-ruled** — when PR B started, the notes piece (#2796) held every census file and the continuity routes,
