@@ -3,7 +3,7 @@
 // `continuity_cursor` are written only through the generation functions below, by the generations lane. `CoordStore` keeps
 // one-line delegates of the same names. Nothing here decides: the door (`routes.ts`) validates, the lane's deciders decide,
 // and this file records and measures.
-import type { DatabaseSync } from 'node:sqlite';
+import type { DatabaseSync, StatementSync } from 'node:sqlite';
 import {
   GENERATION_STATES, HOLD_OFF_MS, STATE_DEADLINE_S, isGenerationOutcome, isGenerationState, isRenewalTrigger, isTriggerClass,
   startSourceOf, type GenerationOutcome, type GenerationState, type RenewalTrigger, type StartRow, type TriggerClass,
@@ -51,7 +51,7 @@ export function insertStart(db: DatabaseSync, row: StartInsert): StartInsertResu
  *  read. A failed read answers ok: false. */
 export function startsSince(db: DatabaseSync, sinceId: number, limit = -1): StartsRead {
   try {
-    const rows = db.prepare(
+    const rows = stmt(db,
       'SELECT id, sessionId, reportId, uuid, source, model, rowIncarnation, reportedAt, receivedAt FROM continuity_starts WHERE id > ? ORDER BY id LIMIT ?',
     ).all(sinceId, limit) as unknown as (Omit<StartRow, 'source'> & { source: string })[];
     // The table has no CHECK, so a word a newer build wrote reads through the same rule as the writer (review 1911, F10).
@@ -145,6 +145,17 @@ const GEN_COLUMNS = 'id, identity, sessionId, role, term, rowIncarnation, n, sta
   + 'blind, model, prevModel, lane, host, cardHash, snapshotId, attempts, outcome, resumed, startId, startReportedAt, observed, '
   + 'mintedObservedMs, softRenewalObservedMs, holdOffUntilObservedMs';
 
+/** The generation functions' statements, prepared once per database: the lane runs every period over a handful of rows,
+ *  and compiling the same SQL on every call is most of a pass's cost. */
+const PREPARED = new WeakMap<DatabaseSync, Map<string, StatementSync>>();
+function stmt(db: DatabaseSync, sql: string): StatementSync {
+  let byText = PREPARED.get(db);
+  if (byText === undefined) { byText = new Map(); PREPARED.set(db, byText); }
+  let st = byText.get(sql);
+  if (st === undefined) { st = db.prepare(sql); byText.set(sql, st); }
+  return st;
+}
+
 const intOrNull = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) ? v : typeof v === 'bigint' ? Number(v) : null);
 const strOrNull = (v: unknown): string | null => (typeof v === 'string' ? v : null);
 function observedOf(v: unknown): Observed | null {
@@ -196,7 +207,7 @@ export type GenerationsRead = { ok: true; rows: GenRow[] } | { ok: false; detail
  *  fails the read, so a pass acts on no partial picture. */
 export function liveGenerations(db: DatabaseSync): GenerationsRead {
   try {
-    const raws = db.prepare(`SELECT ${GEN_COLUMNS} FROM continuity_generations WHERE state <> 'ended' ORDER BY id`).all() as Record<string, unknown>[];
+    const raws = stmt(db, `SELECT ${GEN_COLUMNS} FROM continuity_generations WHERE state <> 'ended' ORDER BY id`).all() as Record<string, unknown>[];
     const rows: GenRow[] = [];
     for (const raw of raws) {
       const r = genRowOf(raw);
@@ -238,26 +249,26 @@ export function mintGeneration(db: DatabaseSync, input: MintInput, expect: GenEx
   cursor: CursorAdvance | null = null): MintResult {
   try {
     return tx(db, () => {
-      const held = db.prepare(`SELECT ${GEN_COLUMNS} FROM continuity_generations WHERE identity = ? AND state <> 'ended'`)
+      const held = stmt(db, `SELECT ${GEN_COLUMNS} FROM continuity_generations WHERE identity = ? AND state <> 'ended'`)
         .all(input.identity) as Record<string, unknown>[];
       const old = held.length === 0 ? null : genRowOf(held[0]!);
       if (typeof old === 'string') throw new Superseded();
       if (expect === null ? old !== null : old === null || old.term !== expect.term || old.n !== expect.n || old.state !== expect.state
         || old.shadowState !== expect.shadowState || old.walk !== expect.walk) throw new Superseded();
-      if (db.prepare('SELECT 1 FROM continuity_generations WHERE startId = ?').get(input.startId) !== undefined) throw new Superseded();
-      const newest = db.prepare('SELECT observed, n, model FROM continuity_generations WHERE identity = ? AND term = ? ORDER BY n DESC LIMIT 1')
+      if (stmt(db, 'SELECT 1 FROM continuity_generations WHERE startId = ?').get(input.startId) !== undefined) throw new Superseded();
+      const newest = stmt(db, 'SELECT observed, n, model FROM continuity_generations WHERE identity = ? AND term = ? ORDER BY n DESC LIMIT 1')
         .get(input.identity, input.term) as { observed: unknown; n: unknown; model: unknown } | undefined;
       const carried = observedOf(newest?.observed)?.ms ?? 0;
       const n = (intOrNull(newest?.n) ?? 0) + 1;
       if (old !== null) {
-        const ended = db.prepare("UPDATE continuity_generations SET state = 'ended', outcome = ?, walk = NULL, deadlineAt = NULL, "
+        const ended = stmt(db, "UPDATE continuity_generations SET state = 'ended', outcome = ?, walk = NULL, deadlineAt = NULL, "
           + `shadowDeadlineAt = NULL WHERE ${CAS}`).run(input.outcome, ...casArgs(old.id, old));
         if (Number(ended.changes) !== 1) throw new Superseded();
       }
       const mode: WalkMode = old?.walk === 'live' || live ? 'live' : 'shadow';
       const deadline = deadlineFor('carded', input.now);
       const observed: Observed = { ms: carried, mono: input.mono, proc: input.proc };
-      const res = db.prepare(
+      const res = stmt(db, 
         'INSERT INTO continuity_generations (identity, sessionId, role, term, rowIncarnation, n, state, shadowState, walk, enteredAt, '
         + 'deadlineAt, shadowDeadlineAt, proven, resumed, startId, startReportedAt, model, prevModel, lane, host, observed, mintedObservedMs) '
         + 'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
@@ -291,7 +302,7 @@ export function stepGeneration(db: DatabaseSync, id: number, expect: GenExpect, 
     next.hostEnded ? 1 : 0, next.tries];
   if (entering) args.push(now, deadlineFor(next.state, now));
   try {
-    return changedOf(db.prepare(`UPDATE continuity_generations SET ${stateCol} = ?, walk = ?, walkClass = ?, proven = ?, renudged = ?, `
+    return changedOf(stmt(db, `UPDATE continuity_generations SET ${stateCol} = ?, walk = ?, walkClass = ?, proven = ?, renudged = ?, `
       + `probeRounds = ?, hostEnded = ?, attempts = ?${entering ? ', enteredAt = ?' : ''}${deadlineSet} WHERE ${CAS}`)
       .run(...args, ...casArgs(id, expect)));
   } catch {
@@ -304,7 +315,7 @@ export function stepGeneration(db: DatabaseSync, id: number, expect: GenExpect, 
 export function clearShadowWalk(db: DatabaseSync, id: number, expect: GenExpect, now: number): { changed: boolean } {
   if (expect.walk === 'live') return { changed: false };
   try {
-    return changedOf(db.prepare('UPDATE continuity_generations SET shadowState = NULL, shadowDeadlineAt = NULL, walk = NULL, '
+    return changedOf(stmt(db, 'UPDATE continuity_generations SET shadowState = NULL, shadowDeadlineAt = NULL, walk = NULL, '
       + `walkClass = NULL, proven = 1, renudged = 0, probeRounds = 0, hostEnded = 0, attempts = 0, enteredAt = ? WHERE ${CAS}`)
       .run(now, ...casArgs(id, expect)));
   } catch {
@@ -319,10 +330,10 @@ export function setGenerationDue(db: DatabaseSync, id: number, expect: GenExpect
   try {
     const b = JSON.stringify(blind);
     if (!due.due) {
-      return changedOf(db.prepare('UPDATE continuity_generations SET dueSince = NULL, dueWhy = NULL, dueClass = NULL, '
+      return changedOf(stmt(db, 'UPDATE continuity_generations SET dueSince = NULL, dueWhy = NULL, dueClass = NULL, '
         + `dueSinceObservedMs = NULL, blind = ? WHERE ${CAS}`).run(b, ...casArgs(id, expect)));
     }
-    return changedOf(db.prepare('UPDATE continuity_generations SET dueSince = COALESCE(dueSince, ?), dueWhy = ?, dueClass = ?, '
+    return changedOf(stmt(db, 'UPDATE continuity_generations SET dueSince = COALESCE(dueSince, ?), dueWhy = ?, dueClass = ?, '
       + `dueSinceObservedMs = COALESCE(dueSinceObservedMs, ?), blind = ? WHERE ${CAS}`)
       .run(due.at, due.why, due.cls, due.observedMs, b, ...casArgs(id, expect)));
   } catch {
@@ -333,7 +344,7 @@ export function setGenerationDue(db: DatabaseSync, id: number, expect: GenExpect
 /** The identity's accumulator, advanced by the pass (`observeTime`). */
 export function advanceObserved(db: DatabaseSync, id: number, expect: GenExpect, observed: Observed): { changed: boolean } {
   try {
-    return changedOf(db.prepare(`UPDATE continuity_generations SET observed = ? WHERE ${CAS}`)
+    return changedOf(stmt(db, `UPDATE continuity_generations SET observed = ? WHERE ${CAS}`)
       .run(JSON.stringify(observed), ...casArgs(id, expect)));
   } catch {
     return { changed: false };
@@ -345,7 +356,7 @@ export function advanceObserved(db: DatabaseSync, id: number, expect: GenExpect,
  *  it on the generation's own age (`softTimesOf`). */
 export function setHoldOff(db: DatabaseSync, id: number, expect: GenExpect): { changed: boolean } {
   try {
-    return changedOf(db.prepare('UPDATE continuity_generations SET holdOffUntilObservedMs = '
+    return changedOf(stmt(db, 'UPDATE continuity_generations SET holdOffUntilObservedMs = '
       + `CAST(json_extract(observed, '$.ms') AS INTEGER) + ? WHERE ${CAS}`).run(HOLD_OFF_MS, ...casArgs(id, expect)));
   } catch {
     return { changed: false };
@@ -359,7 +370,7 @@ export type CursorRead = { ok: true; lastStartId: number } | { ok: false; detail
 /** The cursor of `lane`: 0 when it has never advanced. */
 export function generationsCursor(db: DatabaseSync, lane: string): CursorRead {
   try {
-    const row = db.prepare('SELECT lastStartId FROM continuity_cursor WHERE lane = ?').get(lane) as { lastStartId: unknown } | undefined;
+    const row = stmt(db, 'SELECT lastStartId FROM continuity_cursor WHERE lane = ?').get(lane) as { lastStartId: unknown } | undefined;
     if (row === undefined) return { ok: true, lastStartId: 0 };
     const v = intOrNull(row.lastStartId);
     return v === null ? { ok: false, detail: 'continuity_cursor.lastStartId is not a number' } : { ok: true, lastStartId: v };
@@ -371,9 +382,9 @@ export function generationsCursor(db: DatabaseSync, lane: string): CursorRead {
 function advanceCursorIn(db: DatabaseSync, c: CursorAdvance): boolean {
   if (!(c.to >= c.from)) return false;
   const r = c.from === 0
-    ? db.prepare('INSERT INTO continuity_cursor (lane, lastStartId) VALUES (?, ?) ON CONFLICT (lane) DO UPDATE SET lastStartId = excluded.lastStartId '
+    ? stmt(db, 'INSERT INTO continuity_cursor (lane, lastStartId) VALUES (?, ?) ON CONFLICT (lane) DO UPDATE SET lastStartId = excluded.lastStartId '
       + 'WHERE continuity_cursor.lastStartId = 0').run(c.lane, c.to)
-    : db.prepare('UPDATE continuity_cursor SET lastStartId = ? WHERE lane = ? AND lastStartId = ?').run(c.to, c.lane, c.from);
+    : stmt(db, 'UPDATE continuity_cursor SET lastStartId = ? WHERE lane = ? AND lastStartId = ?').run(c.to, c.lane, c.from);
   return Number(r.changes) === 1;
 }
 
@@ -386,7 +397,7 @@ export function advanceCursor(db: DatabaseSync, c: CursorAdvance): { changed: bo
 export type ClaimedWorkRuns = { ok: true; runs: { id: number; state: string; program: string }[] } | { ok: false; detail: string };
 export function newestClaimedWorkRuns(db: DatabaseSync, claimedBy: string): ClaimedWorkRuns {
   try {
-    const rows = db.prepare("SELECT id, state, program FROM runs WHERE claimedBy = ? AND kind = 'work' ORDER BY id DESC LIMIT 2")
+    const rows = stmt(db, "SELECT id, state, program FROM runs WHERE claimedBy = ? AND kind = 'work' ORDER BY id DESC LIMIT 2")
       .all(claimedBy) as { id: unknown; state: unknown; program: unknown }[];
     return { ok: true, runs: rows.map((r) => ({ id: intOrNull(r.id) ?? -1, state: String(r.state), program: String(r.program) })) };
   } catch (e) {

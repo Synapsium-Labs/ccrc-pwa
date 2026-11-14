@@ -113,3 +113,37 @@ the programme's ledger. The plan's own decisions (its "Deviations found" list) s
   yet and are passed unmeasured: `not-local` (`W1`), `probe-failed` (the probes piece) and `compaction-refused` (the
   compaction piece). They are named in `blind` on every coordinator and never fire.
 - **at-rest-only** — a generation whose effective state is not `active` or `degraded` is not judged and not gathered.
+
+## The simulator runs the lane (Task 4)
+
+- **crash-invariant-is-g8** — the scenario already had a G6 (the deadline and budget bound) and a G7 (soft renewals
+  from `active` only) from the renewal deciders' fix rounds, so the plan's new crash invariant is **G8**: after every pass
+  that runs to its end, each identity has exactly one live generation, and the newest start it reported minted it.
+- **crash-inside-the-pass** — a crash "at any step" is placed inside a pass by a write that aborts, and every write after
+  it (`sim_fault`, triggers on `continuity_generations` and `continuity_cursor`), at a drawn write index, more often
+  while a start waits; the server goes down after that pass. The pass is synchronous, so this is a crash at a write
+  boundary, never an interleaving. Measured: committing the cursor before the mint's transaction turns G8 red on seed 3.
+- **sim-real-store** — the generations live in an in-memory coord.db migrated by `MIGRATIONS`, with `continuity` live;
+  the lane mints and ends the coordinator's generations from the reported starts, and every machine step goes through
+  `stepGeneration` with its compare-and-set. Each seed closes the one before it.
+- **sim-overlord-mints** — W1a's lane cannot tell the Overlord's role (no designation before W1), so the scenario mints the
+  Overlord's generations from its reported starts through the same `mintGeneration`, in the lane's order, standing in for
+  W1's designation.
+- **sim-day-starts-working** — both identities begin the day at n=1, `active`: minted from a `startup` and stepped to
+  `active` as a generation that was working when the machine began, with the cursor past both starts, as before.
+- **sim-soft-stamps-stand-in** — the soft renewals' stamps and the soft trigger's due start stay the scenario's durable
+  records: the renewal act writes them (`softRenewalObservedMs`), and this piece has no writer for them.
+- **g4-per-identity-on-mono** (review 1925, N5(b)) — every identity has its own accumulator now, so G4 reads each
+  identity's lines apart, and an `obs` line carries its `mono` stamp: "advances exactly as the clock does" compares with
+  the monotonic clock, and a line without one (the control rows) with its wall stamp, which no day skews.
+- **gaps-from-the-pass** — the scenario's `obs-gap` lines are the gaps the pass recorded (`GenerationsResult.gaps`, now
+  with each identity), as the decider answered them, never re-derived from the rows; so an `observeTime` that drops a
+  freeze's gap still goes red on G4.
+- **pass-takes-an-observe-decider** — `GenerationsDeps.observe` is the observed-time decider, `observeTime` unless given,
+  so the scenario hands the pass the mutants its observed-time cases test.
+- **store-statements-prepared-once** — the generation functions (and `startsSince`) prepare each statement once per
+  database: the simulator's day runs 2,880 passes a seed, and compiling the same SQL on every call made 200 seeds take
+  about two minutes (now about 50 s).
+- **review-1925-n3-n5a** — the REACHABLE row is retitled (it is one degraded view, reached by two chains), and X6's comment
+  in `check.py` gives each reason a degraded generation is unproven. N1 (have `check.py`'s mutation modes diff
+  `reachable`) is optional and not taken here.

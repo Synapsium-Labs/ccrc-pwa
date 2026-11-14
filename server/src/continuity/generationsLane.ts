@@ -61,6 +61,8 @@ export interface GenerationsDeps {
   /** This server process's id: an observed stamp from another process is a `process` gap (`observeTime`). */
   readonly proc: string;
   readonly log: (line: string) => void;
+  /** The observed-time decider; `observeTime` unless a simulator hands a mutant of it to the same pass. */
+  readonly observe?: typeof observeTime;
 }
 
 export interface GenerationsInput {
@@ -76,8 +78,8 @@ export interface GenerationsResult {
   readonly minted: number;
   readonly skipped: Readonly<Record<StartSkip, number>>;
   readonly superseded: number;
-  /** The observed-time gaps the pass measured, one per generation that had one. */
-  readonly gaps: readonly ObservedGap[];
+  /** The observed-time gaps the pass measured, one per identity that had one. */
+  readonly gaps: readonly (ObservedGap & { readonly identity: string })[];
   readonly due: number;
   /** Generations whose due write named at least one trigger it could not read. */
   readonly blind: number;
@@ -94,7 +96,7 @@ export function generationsPass(deps: GenerationsDeps, input: GenerationsInput):
   const now = clock.wall();
   const live = laneArmRowViewOf(CONTINUITY_LANE, coord.laneArmSetting(CONTINUITY_LANE)).live;
   const skipped = zeroSkips();
-  const gaps: ObservedGap[] = [];
+  const gaps: (ObservedGap & { identity: string })[] = [];
   let read = 0; let minted = 0; let superseded = 0; let due = 0; let blind = 0; let cleared = 0;
   let unread: GenerationsResult['unread'] = null;
   const result = (): GenerationsResult => ({ live, read, minted, skipped, superseded, gaps, due, blind, cleared, unread });
@@ -111,8 +113,8 @@ export function generationsPass(deps: GenerationsDeps, input: GenerationsInput):
         cleared += 1;
         g = { ...g, shadowState: null, shadowDeadlineAt: null, walk: null };
       }
-      const step = observeTime(g.observed, clock.mono(), deps.proc, cap);
-      if (step.gap !== null) gaps.push(step.gap);
+      const step = (deps.observe ?? observeTime)(g.observed, clock.mono(), deps.proc, cap);
+      if (step.gap !== null) gaps.push({ identity: g.identity, ...step.gap });
       coord.advanceObserved(g.id, genExpectOf(g), step.at);
     }
   }

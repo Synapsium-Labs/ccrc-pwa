@@ -193,7 +193,7 @@ describe('the accumulator (Task 2, Step 4b)', () => {
     expect(live(f.s)[0]!.observed.ms).toBe(30_000);
     f.t.advance(90_000);
     const paused = f.pass();
-    expect(paused.gaps).toEqual([{ kind: 'step', deltaMs: 90_000 }]);
+    expect(paused.gaps).toEqual([{ identity: COORD, kind: 'step', deltaMs: 90_000 }]);
     expect(live(f.s)[0]!.observed.ms).toBe(90_000);
     setRegistry(f, U2);
     f.start('clear', U2);

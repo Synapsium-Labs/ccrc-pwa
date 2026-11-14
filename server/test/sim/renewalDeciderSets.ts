@@ -703,7 +703,7 @@ export function generationStepCases(m: GenModule): Record<string, SuiteCase> {
         if (s.next.state === 'degraded' && g.state !== 'degraded') expect(s.actions, JSON.stringify([g, e])).toContain('raise-item');
       }
     },
-    'REACHABLE: a renewal begun in degraded always returns there when it fails before the first half, from both degraded origins the machine produces (review 1920, R4)': () => {
+    'REACHABLE: a renewal begun in degraded always returns there when it fails before the first half, from the one degraded view the machine produces, reached here by a carded timeout and by a clearing timeout after the first half (review 1920, R4; review 1925, N3)': () => {
       const origins = [runChain(m, m.GEN_MINTED, [ev('deadline')]).views.at(-1)!,
         runChain(m, m.GEN_ACTIVE, [ev('due', { cls: 'hard' }), ev('drained'), ev('host-ended'), ev('deadline')]).views.at(-1)!];
       for (const o of origins) {
