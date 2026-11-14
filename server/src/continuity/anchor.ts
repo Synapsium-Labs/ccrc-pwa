@@ -30,6 +30,37 @@ import {
 import { utf8Bytes } from '../../../shared/utf8.js';
 import { oneLine } from './card.js';
 
+/** The live generation's row, as the generation canary reads it. */
+export interface AnchorGenRow { readonly term: number; readonly n: number; readonly startId: number; readonly startReportedAt: number }
+/** The session's newest recorded start (`startsOf(id, 1)`: newest by `reportedAt`, then id). */
+export interface AnchorStart { readonly id: number; readonly reportedAt: number }
+
+/** The generation canary's facts (C40): the identity's live generation (`null`: it has none) and the session's newest
+ *  start (`null`: none recorded). `n+1 starting` while that start is not the live generation's own and is not older than
+ *  it, which is a start the lane has not minted yet (a start older than the live one is the lane's `late`, never
+ *  minted). A read that failed is `unmeasured` (the null rule): a live generation whose starts could not be read cannot
+ *  say whether it is starting, so the canary says neither. */
+export function anchorGeneration(live: Fact<AnchorGenRow | null>, newest: Fact<AnchorStart | null>): AnchorGeneration {
+  if (live.kind === 'unmeasured') return { kind: 'unmeasured', what: live.what };
+  if (live.value === null) return { kind: 'none' };
+  if (newest.kind === 'unmeasured') return { kind: 'unmeasured', what: newest.what };
+  const g = live.value;
+  const s = newest.value;
+  return { kind: 'live', term: g.term, n: g.n, starting: s !== null && s.id !== g.startId && s.reportedAt >= g.startReportedAt };
+}
+
+/** The card door's answer to `part=anchor` (the anchor piece's switch, the Shadow lanes row `anchor-slot`): `dark`, with no
+ *  text, unless the row is live (so a merge serves nothing); live, the anchor and the card hash it names, or, for a fork,
+ *  which carries no text, `live` alone (the hook then prints its one line). */
+export type AnchorAnswer =
+  | { readonly ok: true; readonly dark: true }
+  | { readonly ok: true; readonly live: true }
+  | { readonly ok: true; readonly hash: string; readonly text: string };
+export function anchorAnswer(live: boolean, served: { readonly hash: string; readonly text: string } | null): AnchorAnswer {
+  if (!live) return { ok: true, dark: true };
+  return served === null ? { ok: true, live: true } : { ok: true, hash: served.hash, text: served.text };
+}
+
 /** The forms `renderAnchor` draws (the `fork` form has no text: the hook prints its own line). */
 export type AnchorTextForm = 'start' | 'prompt';
 

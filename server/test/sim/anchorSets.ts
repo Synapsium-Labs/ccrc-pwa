@@ -89,6 +89,51 @@ export const ANCHOR_RENDER_SET: MutantSet<Anchor> = {
   },
 };
 
+export const ANCHOR_GENERATION_KEY = 'server/src/continuity/anchor.ts#anchorGeneration';
+export const ANCHOR_ANSWER_KEY = 'server/src/continuity/anchor.ts#anchorAnswer';
+const GEN = { term: 2, n: 5, startId: 40, startReportedAt: 1_000 };
+
+export const ANCHOR_GENERATION_SET: MutantSet<Anchor> = {
+  modulePath: ANCHOR_TS,
+  mutants: [
+    { id: 'G1', old: 'starting: s !== null && s.id !== g.startId && s.reportedAt >= g.startReportedAt', new: 'starting: s !== null && s.id !== g.startId' },
+    { id: 'G2', old: 'starting: s !== null && s.id !== g.startId && s.reportedAt >= g.startReportedAt', new: 'starting: s !== null && s.id !== g.startId && s.reportedAt > g.startReportedAt' },
+    { id: 'G3', old: 'starting: s !== null && s.id !== g.startId && s.reportedAt >= g.startReportedAt', new: 'starting: s !== null && s.reportedAt >= g.startReportedAt' },
+    { id: 'G4', old: "if (newest.kind === 'unmeasured') return { kind: 'unmeasured', what: newest.what };", new: '' },
+    { id: 'G5', old: "if (live.value === null) return { kind: 'none' };", new: "if (live.value === null) return { kind: 'unmeasured', what: 'none' };" },
+  ],
+  suite(m): Record<string, SuiteCase> {
+    const g = (s: Fact<{ id: number; reportedAt: number } | null>) => m.anchorGeneration(read(GEN), s);
+    return {
+      'its own start is n': () => { expect(g(read({ id: 40, reportedAt: 1_000 }))).toEqual({ kind: 'live', term: 2, n: 5, starting: false }); },
+      'a newer start is n+1 starting, at the same time too': () => {
+        expect(g(read({ id: 41, reportedAt: 1_000 }))).toEqual({ kind: 'live', term: 2, n: 5, starting: true });
+      },
+      'an older start is n': () => { expect(g(read({ id: 41, reportedAt: 999 }))).toEqual({ kind: 'live', term: 2, n: 5, starting: false }); },
+      'unread starts are unmeasured': () => { expect(g(unmeasured('s'))).toEqual({ kind: 'unmeasured', what: 's' }); },
+      'no generation is none': () => { expect(m.anchorGeneration(read(null), read(null))).toEqual({ kind: 'none' }); },
+    };
+  },
+};
+
+export const ANCHOR_ANSWER_SET: MutantSet<Anchor> = {
+  modulePath: ANCHOR_TS,
+  mutants: [
+    // The plan's Task 2 mutation: the text served in shadow.
+    { id: 'S1', old: '  if (!live) return { ok: true, dark: true };\n', new: '' },
+    { id: 'S2', old: 'return served === null ? { ok: true, live: true } :', new: 'return served === null ? { ok: true, dark: true } :' },
+  ],
+  suite(m): Record<string, SuiteCase> {
+    return {
+      'shadow is dark with no text': () => { expect(m.anchorAnswer(false, { hash: HASH, text: 't' })).toEqual({ ok: true, dark: true }); },
+      'a live fork is live': () => { expect(m.anchorAnswer(true, null)).toEqual({ ok: true, live: true }); },
+      'live serves the text': () => { expect(m.anchorAnswer(true, { hash: HASH, text: 't' })).toEqual({ ok: true, hash: HASH, text: 't' }); },
+    };
+  },
+};
+
 export const ANCHOR_MUTANT_SETS: Record<string, MutantSet<never>> = {
   [ANCHOR_RENDER_KEY]: ANCHOR_RENDER_SET as MutantSet<never>,
+  [ANCHOR_GENERATION_KEY]: ANCHOR_GENERATION_SET as MutantSet<never>,
+  [ANCHOR_ANSWER_KEY]: ANCHOR_ANSWER_SET as MutantSet<never>,
 };

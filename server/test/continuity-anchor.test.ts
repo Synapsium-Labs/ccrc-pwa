@@ -6,7 +6,7 @@ import {
 } from '../../shared/continuity-card.js';
 import { utf8Bytes } from '../../shared/utf8.js';
 import {
-  ANCHOR_CEILING, ANCHOR_HASH_CHARS, ANCHOR_INSTRUCTION, ANCHOR_PREFIX, renderAnchor, type AnchorInput,
+  ANCHOR_CEILING, ANCHOR_HASH_CHARS, ANCHOR_INSTRUCTION, ANCHOR_PREFIX, anchorAnswer, anchorGeneration, renderAnchor, type AnchorInput,
 } from '../src/continuity/anchor.js';
 
 const AT = Date.UTC(2026, 10, 14, 12, 0, 0);
@@ -132,5 +132,36 @@ describe('renderAnchor: the prompt form (after an automatic compaction)', () => 
     expect(utf8Bytes(big)).toBeLessThanOrEqual(ANCHOR_PROMPT_MAX_CHARS);
     expect(utf8Bytes(renderAnchor(f, input({ kind: 'unmeasured', what: 'g' }), 'prompt'))).toBeLessThanOrEqual(ANCHOR_PROMPT_MAX_CHARS);
     expect(ANCHOR_CEILING.start).toBe(1500);
+  });
+});
+
+describe('anchorGeneration: the generation canary\'s facts (C40)', () => {
+  const gen = { term: 2, n: 5, startId: 40, startReportedAt: 1_000 };
+  it('the live generation\'s own start is the newest: n', () => {
+    expect(anchorGeneration(read(gen), read({ id: 40, reportedAt: 1_000 }))).toEqual({ kind: 'live', term: 2, n: 5, starting: false });
+  });
+  it('a newer start the lane has not minted: n+1 starting, at the same report time too', () => {
+    expect(anchorGeneration(read(gen), read({ id: 41, reportedAt: 2_000 }))).toEqual({ kind: 'live', term: 2, n: 5, starting: true });
+    expect(anchorGeneration(read(gen), read({ id: 41, reportedAt: 1_000 }))).toEqual({ kind: 'live', term: 2, n: 5, starting: true });
+  });
+  it('an older start (the lane\'s late, never minted) and no start at all: n', () => {
+    expect(anchorGeneration(read(gen), read({ id: 41, reportedAt: 999 }))).toEqual({ kind: 'live', term: 2, n: 5, starting: false });
+    expect(anchorGeneration(read(gen), read(null))).toEqual({ kind: 'live', term: 2, n: 5, starting: false });
+  });
+  it('no live generation is none, whatever the starts; a failed read of either is unmeasured', () => {
+    expect(anchorGeneration(read(null), read({ id: 41, reportedAt: 2_000 }))).toEqual({ kind: 'none' });
+    expect(anchorGeneration(unmeasured('the generations'), read(null))).toEqual({ kind: 'unmeasured', what: 'the generations' });
+    expect(anchorGeneration(read(gen), unmeasured('the starts'))).toEqual({ kind: 'unmeasured', what: 'the starts' });
+  });
+});
+
+describe('anchorAnswer: the door\'s answer, dark until the anchor-slot row is live', () => {
+  it('shadow answers dark with no text, for a start and for a fork', () => {
+    expect(anchorAnswer(false, { hash: HASH, text: 'ccrc-anchor: x' })).toEqual({ ok: true, dark: true });
+    expect(anchorAnswer(false, null)).toEqual({ ok: true, dark: true });
+  });
+  it('live serves the anchor and its card hash, and a fork\'s live alone', () => {
+    expect(anchorAnswer(true, { hash: HASH, text: 'ccrc-anchor: x' })).toEqual({ ok: true, hash: HASH, text: 'ccrc-anchor: x' });
+    expect(anchorAnswer(true, null)).toEqual({ ok: true, live: true });
   });
 });
