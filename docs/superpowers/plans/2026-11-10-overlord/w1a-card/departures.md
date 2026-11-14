@@ -7,7 +7,7 @@ deviation number was taken. The coordinator folds these into the ledger.
 
 | Fact | Read | New SQL? |
 |---|---|---|
-| Runs by claimant (and a worker's bound run) | the binding's own readers (ARCH-62): `openRunsClaimedBy` and `openRunsForSession`, each run hydrated by `run(id)`; `bindingRunsOf` for the newest run of a session between runs; `openCoordinatorIds` for the role | no |
+| Runs by claimant (and a worker's bound run) | the binding's own readers (ARCH-62, ARCH-42): `bindingsOf(id)`'s `claimant()` and `worker()`, each run hydrated by `run(id)`; `bindingRunsOf` for the newest run of a session between runs; `openCoordinatorIds` for the role | no |
 | A child's run kind | `CoordStore.run(id)` | no |
 | Claims by holder | `CoordStore.activeClaims()`, filtered by `heldBy` | no |
 | Declared coordinator intent | `CoordStore.coordinatorIntentDeclared(sessionId, incarnation)` over `delegation_sessions`, keyed on `$REG/<id>.generation` (`childReclaimGenerationRead`) | **yes, the one new read** |

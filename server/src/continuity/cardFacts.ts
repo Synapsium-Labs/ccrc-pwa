@@ -10,8 +10,8 @@
  * raise time, a decision's time), never an age computed at the request, so unchanged rows give one snapshot and one hash.
  *
  * THE READS (measured in Task 3 Step 1, named in the departures note): the runs, through the binding's own readers
- * (ARCH-62: no run/session equality is decided here): the open runs it claims (`openRunsClaimedBy`) and works
- * (`openRunsForSession`), each hydrated by `run(id)` for its state and kind, and the newest run in its binding series
+ * (ARCH-62 and ARCH-42: no run/session equality is decided here): `bindingsOf`'s open runs it claims (`claimant`) and
+ * works (`worker`), each hydrated by `run(id)` for its state and kind, and the newest run in its binding series
  * (`bindingRunsOf`) for a session that claims no open run; the open claimants (`openCoordinatorIds`) for the
  * role; a child's run kind (`run`), the claims (`activeClaims`, by holder), declared intent (`coordinatorIntentDeclared` on the registry incarnation, the one new read), the items
  * (`itemsFor`, all programmes, once: the session's raised items and each programme's open items), each programme's goals
@@ -23,12 +23,11 @@ import type {
 } from '../../../shared/continuity-card.js';
 import type { CoordStore } from '../coord/store.js';
 import type { ItemRow } from '../coord/ledgersStore.js';
-import { openRunsClaimedBy } from '../coord/bindingReads.js';
 import { roleFactsOf } from '../roleOf.js';
 import { cardRoleOf } from './card.js';
 
 /** The store reads the gatherer makes, declared by this consumer. */
-export type CardFactsCoord = Pick<CoordStore, 'openRunsForSession' | 'bindingRunsOf' | 'openCoordinatorIds' | 'run' | 'activeClaims'
+export type CardFactsCoord = Pick<CoordStore, 'bindingsOf' | 'bindingRunsOf' | 'openCoordinatorIds' | 'run' | 'activeClaims'
   | 'outstandingMailFor' | 'itemsFor' | 'goalsFor' | 'coordinatorIntentDeclared'>;
 
 export interface CardFactsDeps {
@@ -73,8 +72,9 @@ export async function gatherCardFacts(deps: CardFactsDeps, id: string, now: numb
   try { incarnation = await deps.incarnation(id); } catch { incarnation = { kind: 'unreadable' }; }
 
   // The runs: the open runs it claims and the open runs it works, each read whole by its id for its state and kind.
-  const claimedOpen = attempt('the runs', () => { const r = openRunsClaimedBy(coord, id); return r.ok ? r.siblings : null; });
-  const workedOpen = attempt('the runs', () => { const r = coord.openRunsForSession(id); return r.ok ? r.siblings : null; });
+  const bindings = coord.bindingsOf(id);
+  const claimedOpen = attempt('the runs', () => { const r = bindings.claimant(); return r.ok ? r.siblings : null; });
+  const workedOpen = attempt('the runs', () => { const r = bindings.worker(); return r.ok ? r.siblings : null; });
   const runs = attempt<readonly CardRun[]>('the runs', () => {
     if (claimedOpen.kind === 'unmeasured' || workedOpen.kind === 'unmeasured') return null;
     const ids = [...new Set([...claimedOpen.value, ...workedOpen.value].map((r) => r.id))].sort((a, b) => a - b);
