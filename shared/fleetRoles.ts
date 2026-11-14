@@ -1,5 +1,6 @@
 import type { SessionRole } from './api.js';
 import type { CardRenderer } from './continuity-card.js';
+import type { ProbeClass } from './continuity.js';
 
 /** The fleet's role vocabulary and its one table (Overlord design spec §3.3.9, C49; the spec is
  *  `docs/superpowers/specs/2026-11-09-overlord-design.md`). Ring L0, context K: pure vocabulary, type-only
@@ -8,7 +9,8 @@ import type { CardRenderer } from './continuity-card.js';
  *  Columns that ship with values now: `longLived` (Table 3.3.9a), `sessionRole`, today's two-word
  *  view, which becomes a column read with one definition, `cardRenderer` (the card door piece of W1a,
  *  spec §3.3.3, C38 and C51): the renderer each role's card is drawn by; `auditor` and `replay` take `plain`,
- *  and `launchProfile` (the launch-profile piece of W1a, spec §3.6 H1, §3.3.7 H14, §3.3.4 C39): the switches a
+ *  `probeSet` (the probe piece of W1a, spec §3.3.5, C41 and C52): the classes a role's probe rounds draw from, empty for
+ *  a role that is not long-lived, and `launchProfile` (the launch-profile piece of W1a, spec §3.6 H1, §3.3.7 H14, §3.3.4 C39): the switches a
  *  role's sessions launch with. ccd reads it from `ccd/lib/launch-profiles.json`, a projection of this column held
  *  equal by `server/test/launch-profiles-file.test.ts`; a route field `profile` names the row a spawn applies.
  *
@@ -19,10 +21,6 @@ import type { CardRenderer } from './continuity-card.js';
  *  `compactwindow` (decision compaction-text-follows-continuity). Each text is one line of printable ASCII, at most
  *  600 characters, with no quote character, backslash, `$` or `;` (tmux drops a trailing one), so it is typed as one
  *  literal send (instructions-one-line).
- *
- *  Columns typed `null` until their owning piece lands. Each such piece widens its column's type, and
- *  the compiler then refuses every row until it is filled. Nothing reads a `null` column.
- *   - `probeSet`: the probe piece of W1a (spec §3.3.5, C52).
  *
  *  Mail pace and the renewal triggers are not columns: they are L1 records keyed by role (spec
  *  §3.3.9, §11.1), built by their own pieces.
@@ -74,8 +72,8 @@ export interface FleetRoleRow {
   readonly cardRenderer: CardRenderer;
   /** The role's compaction text (C51), read through `compactInstructionsFor`. */
   readonly compactInstructions: string;
-  /** Typed and absent until its piece lands. */
-  readonly probeSet: null;
+  /** The classes a probe round draws from (`server/src/continuity/probes.ts#probeRound`). */
+  readonly probeSet: readonly ProbeClass[];
 }
 
 /** Keys in Table 3.3.9a's order. */
@@ -86,7 +84,9 @@ export const FLEET_ROLES: Readonly<Record<FleetRole, FleetRoleRow>> = {
     launchProfile: { env: { CLAUDE_CODE_FORK_SUBAGENT: '0', CLAUDE_CODE_DISABLE_AGENT_VIEW: '1' }, settings: {}, autoMemory: 'off', compaction: LONG_LIVED_COMPACTION },
     cardRenderer: 'overlord',
     compactInstructions: compactText('overlord', `${COORDINATOR_KEEPS}, every mail you have not answered, every request id, and every operator message id you answered or owe an answer`),
-    probeSet: null,
+    // Every class, spelled out rather than `PROBE_CLASSES`: this file takes only type imports of its siblings (the header).
+    // `fleet-roles.test.ts` holds it equal to `PROBE_CLASSES`, and the `ProbeClass` type refuses a stray word (review 1999, F10).
+    probeSet: ['fact', 'update', 'temporal', 'abstention', 'continuation', 'decision', 'contradiction', 'application', 'thread'],
   },
   auditor: {
     longLived: false,
@@ -94,7 +94,7 @@ export const FLEET_ROLES: Readonly<Record<FleetRole, FleetRoleRow>> = {
     launchProfile: MEMORY_OFF,
     cardRenderer: 'plain',
     compactInstructions: PLAIN_COMPACT,
-    probeSet: null,
+    probeSet: [],
   },
   replay: {
     longLived: false,
@@ -102,7 +102,7 @@ export const FLEET_ROLES: Readonly<Record<FleetRole, FleetRoleRow>> = {
     launchProfile: MEMORY_OFF,
     cardRenderer: 'plain',
     compactInstructions: PLAIN_COMPACT,
-    probeSet: null,
+    probeSet: [],
   },
   worker: {
     longLived: false,
@@ -110,7 +110,7 @@ export const FLEET_ROLES: Readonly<Record<FleetRole, FleetRoleRow>> = {
     launchProfile: MEMORY_OFF,
     cardRenderer: 'worker',
     compactInstructions: compactText('worker', WORKER_KEEPS),
-    probeSet: null,
+    probeSet: [],
   },
   reviewer: {
     longLived: false,
@@ -118,7 +118,7 @@ export const FLEET_ROLES: Readonly<Record<FleetRole, FleetRoleRow>> = {
     launchProfile: MEMORY_OFF,
     cardRenderer: 'reviewer',
     compactInstructions: compactText('reviewer', WORKER_KEEPS),
-    probeSet: null,
+    probeSet: [],
   },
   coordinator: {
     longLived: true,
@@ -126,7 +126,7 @@ export const FLEET_ROLES: Readonly<Record<FleetRole, FleetRoleRow>> = {
     launchProfile: { env: {}, settings: {}, autoMemory: 'off', compaction: LONG_LIVED_COMPACTION },
     cardRenderer: 'coordinator',
     compactInstructions: compactText('coordinator', `${COORDINATOR_KEEPS}, and every mail you have not answered`),
-    probeSet: null,
+    probeSet: ['fact', 'temporal', 'abstention', 'continuation'],
   },
   plain: {
     longLived: false,
@@ -134,7 +134,7 @@ export const FLEET_ROLES: Readonly<Record<FleetRole, FleetRoleRow>> = {
     launchProfile: { env: {}, settings: {}, autoMemory: 'switch', compaction: null },
     cardRenderer: 'plain',
     compactInstructions: PLAIN_COMPACT,
-    probeSet: null,
+    probeSet: [],
   },
 };
 

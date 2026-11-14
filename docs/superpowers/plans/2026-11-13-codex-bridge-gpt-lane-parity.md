@@ -125,13 +125,32 @@ corpus generator.
   them would stop the walk for good, so it is a stop-and-report.
 - [ ] A file over 1 MB is fetched by the raw media type or the blob API.
 
-## Task 4: a per-request record (deferred)
+## Task 4: a per-request record (D-8619)
 
 The eval needs a row per upstream response: the time, the session, the requested and served model, the effort, the
 tokens, the first-output and total times, the removals and the replay counts. Task 1's aggregates cannot be split by
 task. A new file in the lane directory also needs `laneManifest`'s `bridgeFiles`, the lane removal's file list in
 `ccd/ccrc` (`_codex_reap_files`) and their tests. `ccd/ccrc` was claimed by another programme on 2026-11-13, so this
-task waits for that claim to be released.
+task waited until that claim was released on 2026-11-14.
+
+- [ ] The record is opt-in, behind a `record-requests` marker in the lane directory, with no writer in the tree, as
+  `record-streams` turns on the stream recordings. Only the eval's lane needs the rows.
+- [ ] The file is `bridgeFiles.requests` in `lane.json` (`bridge.requests.jsonl`), JSON Lines, mode 0600. Every reader
+  treats the key as optional, so a `lane.json` from before the update never stops a bridge.
+- [ ] It is bounded at 16 MiB, then renamed to `.1`, so at most two generations exist.
+- [ ] Each upstream answer gets one row, a 401 and a fallback's 400 included. A row carries:
+  - the session id, bounded, and whether the request came from a subagent;
+  - the message and POST indexes;
+  - the route and model;
+  - the status and outcome;
+  - the served model and the effort;
+  - the tokens;
+  - the exact first-output and total times;
+  - the removals, the replay counts, and the Task 5 markers.
+  It never carries conversation text, the cache key, a turn-state value or a credential.
+- [ ] The `parity` counts and the row are computed from the same per-answer values.
+- [ ] Lane removal reaps the file, its `.1` generation and the marker. Doctor checks the file's mode like the stats
+  file's.
 
 ## Task 5: the request gaps, each behind a lane marker (D-8622, D-8623, D-8624)
 
@@ -213,9 +232,20 @@ Design and dry run first, with no live run. A live run spends subscription quota
   calibration and have other readers. It is not a new D3 family either: a reasoning removal or a replay miss is a
   measurement, not drift, so it never warns and never fails the Stage 4 watch's drift criterion. Nothing new goes on
   the wire. The per-request record the eval needs is a separate, later change (Task 4).
-- **D-8619 (2026-11-13)** — `bridge-requests-record`: reserved for Task 4's per-request record, a bounded file in the
-  lane directory named by `laneManifest`'s `bridgeFiles` and removed with the lane. It is defined when Task 4's pull
-  request is written. Until then, no code cites it.
+- **D-8619 (2026-11-13, defined 2026-11-14)** — `bridge-requests-record`: Task 4's per-request record.
+  - **Opt-in.** The bridge writes it only while the lane directory holds the operator's `record-requests` marker. The
+    marker is existence-only and has no writer in the tree. With no marker, nothing new is written, and the wire and
+    the client's answer are unchanged.
+  - **The file.** It is named by `lane.json`'s `bridgeFiles.requests` (`bridge.requests.jsonl`, spelled once in
+    `laneManifest`). Every reader treats that key as optional: a `lane.json` without it means no record, never a
+    refusal.
+  - **Bounds.** The file is mode 0600, opened without following a symlink, and written one whole line per call under a
+    lock. Past 16 MiB it is renamed to `.1`, so at most two generations exist.
+  - **Rows.** Each upstream answer gets one bounded row, whatever its status. The `parity` counts and the row come from
+    the same per-answer values. A row never holds conversation text, the cache key, a turn-state value, an account id
+    or a credential.
+  - **Failures.** A failed write is counted, never raised into a request.
+  - **Removal.** Lane removal reaps the file, its `.1` generation and the marker, and doctor checks their mode.
 - **D-8620 (2026-11-13)** — `catalogue-request-shape-fields`: the models probe's Codex arm keeps five optional
   per-model keys:
   - `useResponsesLite`;
@@ -255,13 +285,15 @@ Design and dry run first, with no live run. A live run spends subscription quota
 
 **Waiting on you:** the four operator questions above.
 
-**In flight (2026-11-13):**
-- Task 1 is #2777, Task 2 #2776 and Task 3 #2775.
-- Task 3 also fixes the daily watch's releases listing, which answered HTTP 504 at 100 a page on four of six runs.
-- Task 5 is building on a branch stacked on Tasks 1 and 2.
+**Landed (2026-11-14):**
+- Task 1 (#2777) is in v0.0.1184. Tasks 2 (#2776) and 3 (#2775) are in v0.0.1185.
+- Task 3 also fixed the daily watch's releases listing, which had answered HTTP 504 at 100 a page on four of six runs.
+- Task 5 (#2782) is in v0.0.1187. Each marker stays off until the operator touches it on one lane.
+
+**In flight:**
+- Task 4 is building.
 - Task 6's design is draft #2778.
 
 **Later:**
-- Task 4, once `ccd/ccrc` is free.
-- Task 5's pull request, once Tasks 1 and 2 merge.
+- The first `input_transformations` counts, once the operator's update reaches v0.0.1184 or later.
 - Task 6's live run.
