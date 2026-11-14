@@ -55,6 +55,21 @@ describe('Settings › Automation › Shadow lanes (D-8274)', () => {
     expect(own.queryByText(/Shadow record:/)).toBeNull();
   });
 
+  it('the launch-profile row (Overlord W1a, launch profiles PR B) is listed after continuity, in its own words, ungated, with no shadow record', async () => {
+    const C = T.rows.continuity;
+    const P = T.rows['launch-profile'];
+    vi.spyOn(api, 'laneArm').mockResolvedValue({ lanes: [row(), row({ lane: 'continuity', marker: null }), row({ lane: 'launch-profile', marker: null })] });
+    mount();
+    await waitFor(() => expect(screen.getByRole('group', { name: P.legend })).toBeInTheDocument());
+    const groups = screen.getAllByRole('group').map((g) => g.getAttribute('aria-label') ?? g.querySelector('legend')?.textContent);
+    expect(groups.indexOf(P.legend)).toBeGreaterThan(groups.indexOf(C.legend));
+    const own = within(screen.getByRole('group', { name: P.legend }));
+    expect(own.getByText(P.liveNote)).toBeInTheDocument();
+    expect(own.queryByText(/Shadow record:/)).toBeNull();
+    expect(laneArmGate('launch-profile')).toBeNull();
+    expect((own.getByRole('radio', { name: T.live }) as HTMLInputElement).disabled).toBe(false);
+  });
+
   it('the continuity row says why it cannot go live yet, and a Live tap the server refuses lane-gated says the server\'s reason (review 2003 F3)', async () => {
     const C = T.rows.continuity;
     const gate = laneArmGate('continuity')!;

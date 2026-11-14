@@ -5,12 +5,14 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { expect } from 'vitest';
 import { FLEET_ROLES, FLEET_ROLE_NAMES } from '../../../shared/fleetRoles.js';
-import type { LaunchProfile } from '../../../shared/fleetRoles.js';
+import type { FleetRole, LaunchProfile } from '../../../shared/fleetRoles.js';
+import type { RoleReading } from '../../src/roleOf.js';
 import type { MutantSet, SuiteCase } from './mutate.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
 
 export type LaunchProfileModule = typeof import('../../src/continuity/launchProfile.js');
+export type ProfileForModule = typeof import('../../src/continuity/profileFor.js');
 
 const COORDINATOR = FLEET_ROLES.coordinator.launchProfile;
 /** A profile with a large step above the cap, to reach the 95% ceiling. */
@@ -93,7 +95,92 @@ const COMPACT_THRESHOLD_SET: MutantSet<LaunchProfileModule> = {
   suite: compactThresholdCases,
 };
 
+/** The nine role readings `roleOf` can answer: each role, and the two undecided pairs. */
+const READINGS: readonly RoleReading[] = [
+  ...FLEET_ROLE_NAMES.map((role): RoleReading => ({ kind: 'role', role })),
+  { kind: 'undecided', between: 'worker-or-reviewer' },
+  { kind: 'undecided', between: 'coordinator-or-plain' },
+];
+/** The member each undecided reading takes, written out (C49: the member that does less). */
+const LESS: Readonly<Record<string, FleetRole>> = { 'worker-or-reviewer': 'worker', 'coordinator-or-plain': 'plain' };
+/** The roles whose profile has compaction, written out (Task 1's rows). */
+const LONG_LIVED: readonly FleetRole[] = ['overlord', 'coordinator'];
+/** The compaction fields each window answers for a long-lived role, written out from the threshold cases above. */
+const COMPACT_AT: ReadonlyMap<number | null, { compact: number; compactwindow: number } | null> = new Map([
+  [null, null], [200_000, { compact: 60, compactwindow: 154_000 }], [1_000_000, { compact: 35, compactwindow: 384_000 }],
+]);
+
+export function profileForCases(m: ProfileForModule): Record<string, SuiteCase> {
+  return {
+    'exhaustive: nine readings x two memory choices x three windows x continuity live or not (Task 5)': () => {
+      for (const reading of READINGS) {
+        const role = reading.kind === 'role' ? reading.role : LESS[reading.between]!;
+        for (const mem of ['on', 'off'] as const) {
+          for (const [w, at] of COMPACT_AT) {
+            for (const continuityLive of [false, true]) {
+              const label = `${JSON.stringify(reading)} ${mem} ${w} ${continuityLive}`;
+              const compact = continuityLive && LONG_LIVED.includes(role) ? at : null;
+              expect(m.profileFor(reading, mem, w, continuityLive), label).toStrictEqual({
+                profile: role, automem: role === 'plain' ? mem : 'off',
+                compact: compact === null ? null : compact.compact, compactwindow: compact === null ? null : compact.compactwindow,
+              });
+            }
+          }
+        }
+      }
+    },
+    'with continuity in shadow, no role gets a compaction field, whatever its window (compaction-follows-continuity)': () => {
+      for (const reading of READINGS) {
+        for (const w of [100_000, 200_000, 1_000_000]) {
+          const r = m.profileFor(reading, 'on', w, false);
+          expect([r.compact, r.compactwindow], JSON.stringify(reading)).toStrictEqual([null, null]);
+        }
+      }
+    },
+    'an undecided reading takes the member that does less: worker, and plain (C49)': () => {
+      expect(m.profileFor({ kind: 'undecided', between: 'coordinator-or-plain' }, 'on', 1_000_000, true))
+        .toStrictEqual({ profile: 'plain', automem: 'on', compact: null, compactwindow: null });
+      expect(m.profileFor({ kind: 'undecided', between: 'worker-or-reviewer' }, 'on', 1_000_000, true))
+        .toStrictEqual({ profile: 'worker', automem: 'off', compact: null, compactwindow: null });
+    },
+    'the Settings row: a lost row is off (H14), a failed read or an unknown word is null': () => {
+      expect(m.plainAutoMemoryOf({ kind: 'absent' })).toBe('off');
+      expect(m.plainAutoMemoryOf({ kind: 'row', choice: 'on' })).toBe('on');
+      expect(m.plainAutoMemoryOf({ kind: 'row', choice: 'off' })).toBe('off');
+      for (const choice of ['ON', 'yes', '', null, 1]) expect(m.plainAutoMemoryOf({ kind: 'row', choice }), String(choice)).toBeNull();
+      expect(m.plainAutoMemoryOf({ kind: 'unreadable', detail: 'x' })).toBeNull();
+    },
+  };
+}
+
+/** `profileFor`'s mutants: the plan's three (ignore the memory value; give `plain` the long-lived profile; answer the
+ *  other member for an undecided reading) and one more on `continuityLive`. */
+const PROFILE_FOR_SET: MutantSet<ProfileForModule> = {
+  modulePath: path.join(ROOT, 'server/src/continuity/profileFor.ts'),
+  mutants: [
+    { id: 'P1', old: "const automem = row.autoMemory === 'switch' ? plainAutoMemory : 'off';", new: "const automem = row.autoMemory === 'switch' ? 'off' : 'off';" },
+    { id: 'P2', old: "const row = FLEET_ROLES[profile].launchProfile;", new: "const row = FLEET_ROLES[profile === 'plain' ? 'coordinator' : profile].launchProfile;" },
+    { id: 'P3', old: "  'coordinator-or-plain': 'plain',\n};", new: "  'coordinator-or-plain': 'coordinator',\n};" },
+    { id: 'P4', old: 'const t = continuityLive ? compactThresholdFor(row, windowTokens) : null;', new: 'const t = compactThresholdFor(row, windowTokens);' },
+    { id: 'P5', old: "  'worker-or-reviewer': 'worker',", new: "  'worker-or-reviewer': 'reviewer'," },
+  ],
+  suite: profileForCases,
+};
+
+/** `plainAutoMemoryOf`'s mutants: a lost row read as on, a failed read read as the default, an unknown word let through. */
+const PLAIN_AUTO_MEMORY_SET: MutantSet<ProfileForModule> = {
+  modulePath: path.join(ROOT, 'server/src/continuity/profileFor.ts'),
+  mutants: [
+    { id: 'M1', old: "if (r.kind === 'absent') return PLAIN_AUTO_MEMORY_DEFAULT;", new: "if (r.kind === 'absent') return 'on';" },
+    { id: 'M2', old: "if (r.kind === 'unreadable') return null;", new: "if (r.kind === 'unreadable') return PLAIN_AUTO_MEMORY_DEFAULT;" },
+    { id: 'M3', old: 'return isPlainAutoMemoryChoice(r.choice) ? r.choice : null;', new: 'return r.choice as PlainAutoMemoryChoice;' },
+  ],
+  suite: profileForCases,
+};
+
 /** This piece's sets, keyed as `mutation-floors.json` keys them (`<file>#<decider>`). */
 export const LAUNCH_PROFILE_MUTANT_SETS: Record<string, MutantSet<never>> = {
   'server/src/continuity/launchProfile.ts#compactThresholdFor': COMPACT_THRESHOLD_SET as MutantSet<never>,
+  'server/src/continuity/profileFor.ts#profileFor': PROFILE_FOR_SET as MutantSet<never>,
+  'server/src/continuity/profileFor.ts#plainAutoMemoryOf': PLAIN_AUTO_MEMORY_SET as MutantSet<never>,
 };

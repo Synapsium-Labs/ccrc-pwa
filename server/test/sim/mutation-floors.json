@@ -18,6 +18,8 @@
   "pwa/src/face/badgeAct.ts#badgeAct": 1,
   "server/src/continuity/launchProfile.ts#compactThresholdFor": 1,
   "server/src/continuity/launchProfile.ts#compactThresholdFor": 1,
+  "server/src/continuity/profileFor.ts#profileFor": 1,
+  "server/src/continuity/profileFor.ts#plainAutoMemoryOf": 1,
   "server/src/continuity/compaction.ts#compactInstructionsFor": 1,
   "server/src/continuity/precompact.ts#precompactDecision": 1,
   "server/src/continuity/probes.ts#probeRound": 1,
