@@ -32,8 +32,8 @@ import type { LinkingWriteBody, ProjectLinkingWire } from '../../../shared/linki
 import { openPracticeCase, practiceCaseNewest, type PracticeCaseNewestRead, type PracticeCaseOpen } from './practiceCasesStore.js';
 import type { CaseDue } from './practiceCases.js';
 import {
-  advanceCursor, advanceObserved, clearShadowWalk, generationsCursor, insertStart, liveGenerations, mintGeneration, newestClaimedWorkRuns,
-  setGenerationDue, setHoldOff, startsSince, stepGeneration, type ClaimedWorkRuns, type CursorAdvance, type CursorRead, type DueWrite,
+  advanceCursor, advanceObserved, clearShadowWalk, generationsCursor, insertStart, liveGenerations, mintGeneration, setGenerationDue,
+  setHoldOff, startsOf, startsSince, stepGeneration, type CursorAdvance, type CursorRead, type DueWrite,
   type GenExpect, type GenerationsRead, type MintInput, type MintResult, type StartInsert, type StartInsertResult, type StartsRead,
 } from '../continuity/continuityStore.js';
 import type { GenView } from '../continuity/generationMachine.js';
@@ -1921,6 +1921,9 @@ const feedDedupeHash = (key: string): string => createHash('sha256').update(key)
  * read, which is exactly what makes "an older build ignores unknown columns"
  * (spec:78-81) true rather than aspirational.
  */
+/** `newestClaimedWorkRuns`' answer: the runs newest first, each with its state and programme. */
+export type ClaimedWorkRuns = { ok: true; runs: { state: string; program: string }[] } | { ok: false; detail: string };
+
 export class CoordStore {
   /** Landing order wave 5f: null open; `replay` closed until `replayLandingJournal` proves the history; `restart` closed for good. */
   private landingFence: 'replay' | 'restart' | null;
@@ -4441,6 +4444,18 @@ export class CoordStore {
     ).all() as { claimedBy: string }[]).map((r) => r.claimedBy);
   }
 
+  /** Overlord Table 3.3.11b's wave boundary (`waveBoundaryOf`): the two newest WORK runs `claimedBy` claims, newest first,
+   *  in any state, with their programmes (review 2003 F11: Coordination's table, read here). A failed read is ok: false. */
+  newestClaimedWorkRuns(claimedBy: string): ClaimedWorkRuns {
+    try {
+      const runs = this.db.prepare("SELECT state, program FROM runs WHERE claimedBy = ? AND kind = 'work' ORDER BY id DESC LIMIT 2")
+        .all(claimedBy) as { state: string; program: string }[];
+      return { ok: true, runs };
+    } catch (e) {
+      return { ok: false, detail: `runs read failed: ${e instanceof Error ? e.message : String(e)}` };
+    }
+  }
+
   /** The dead-coordinator lane's durable anchors (`dead_claimants`, migration 18; workspace lifecycle spec §5.4) —
    *  EVERY row, one statement. Both integers ride CAST to TEXT and are proven, ALL-OR-FAILURE (D-2545's rule): an
    *  anchor misread is how an hour gets counted that nobody measured, so one bad row fails the read and the lane acts
@@ -5374,6 +5389,7 @@ export class CoordStore {
   insertStart(row: StartInsert): StartInsertResult { return insertStart(this.db, row); }
   /** Overlord §3.3.11: every reported start after an id, the generations lane's read (`continuityStore.ts`). */
   startsSince(sinceId: number, limit?: number): StartsRead { return startsSince(this.db, sinceId, limit); }
+  startsOf(sessionId: string, limit: number): StartsRead { return startsOf(this.db, sessionId, limit); }
   /** Overlord §3.3.11, H12: the generations, written only by the generations lane through `continuityStore.ts`. */
   liveGenerations(): GenerationsRead { return liveGenerations(this.db); }
   mintGeneration(i: MintInput, e: GenExpect | null, live: boolean, c: CursorAdvance | null = null): MintResult { return mintGeneration(this.db, i, e, live, c); }
@@ -5384,7 +5400,6 @@ export class CoordStore {
   setHoldOff(id: number, e: GenExpect): { changed: boolean } { return setHoldOff(this.db, id, e); }
   generationsCursor(lane: string): CursorRead { return generationsCursor(this.db, lane); }
   advanceCursor(c: CursorAdvance): { changed: boolean } { return advanceCursor(this.db, c); }
-  newestClaimedWorkRuns(claimedBy: string): ClaimedWorkRuns { return newestClaimedWorkRuns(this.db, claimedBy); }
 
   /** D-6909: the review-cap state of a batch of runs (`reviewCapStore.ts`). */
   reviewCapStates(ids: readonly number[]): Map<number, ReviewCapState> {

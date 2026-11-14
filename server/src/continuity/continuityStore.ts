@@ -61,6 +61,20 @@ export function startsSince(db: DatabaseSync, sinceId: number, limit = -1): Star
   }
 }
 
+/** One session's recorded starts, newest first in its own order (`reportedAt`, then id), at most `limit` of them: the
+ *  read a coordinator's first generation is minted from (review 2003 F2). A failed read answers ok: false. */
+export function startsOf(db: DatabaseSync, sessionId: string, limit: number): StartsRead {
+  try {
+    const rows = stmt(db,
+      'SELECT id, sessionId, reportId, uuid, source, model, rowIncarnation, reportedAt, receivedAt FROM continuity_starts '
+      + 'WHERE sessionId = ? ORDER BY reportedAt DESC, id DESC LIMIT ?',
+    ).all(sessionId, limit) as unknown as (Omit<StartRow, 'source'> & { source: string })[];
+    return { ok: true, rows: rows.map((r) => ({ ...r, source: startSourceOf(r.source) })) };
+  } catch (e) {
+    return { ok: false, detail: `continuity_starts read failed: ${e instanceof Error ? e.message : String(e)}` };
+  }
+}
+
 // ------------------------------------------------------------------------------------------------- the generations
 // `continuity_generations` and `continuity_cursor` (Overlord spec §3.3.1 C36, §3.3.11 H12, W1a; migration 67). ONE
 // writer, the generations lane (`generationsLane.ts`), through the functions below; `CoordStore` keeps one-line
@@ -165,9 +179,15 @@ function observedOf(v: unknown): Observed | null {
     return typeof o.ms === 'number' && typeof o.mono === 'number' && typeof o.proc === 'string' ? { ms: o.ms, mono: o.mono, proc: o.proc } : null;
   } catch { return null; }
 }
-function blindOf(v: unknown): RenewalTrigger[] | null {
-  if (typeof v !== 'string') return null;
-  try { const a: unknown = JSON.parse(v); return Array.isArray(a) ? a.filter(isRenewalTrigger) : null; } catch { return null; }
+/** The `blind` column: null when never written, the triggers when every word is one this build knows, else `undefined`
+ *  (the row does not read: review 2003 F13). */
+function blindOf(v: unknown): RenewalTrigger[] | null | undefined {
+  if (v === null) return null;
+  if (typeof v !== 'string') return undefined;
+  try {
+    const a: unknown = JSON.parse(v);
+    return Array.isArray(a) && a.every(isRenewalTrigger) ? a : undefined;
+  } catch { return undefined; }
 }
 
 /** A row as stored, or the reason it is not one this build can read: a token outside a vocabulary, or a column a
@@ -184,18 +204,26 @@ function genRowOf(raw: Record<string, unknown>): GenRow | string {
   const id = num('id'); const term = num('term'); const n = num('n'); const enteredAt = num('enteredAt');
   const startId = num('startId'); const startReportedAt = num('startReportedAt'); const minted = num('mintedObservedMs');
   if (id === null || term === null || n === null || enteredAt === null || startId === null || startReportedAt === null || minted === null) return 'a counter';
+  // A word column is null (not written) or a word this build knows; any other value fails the row, as `state` does (review
+  // 2003 F13): a newer build's class read as "no class" would send a draining row down the soft branch.
   const walkClass = raw.walkClass; const dueWhy = raw.dueWhy; const dueClass = raw.dueClass; const outcome = raw.outcome;
+  if (walkClass !== null && !isTriggerClass(walkClass)) return `walkClass ${String(walkClass)}`;
+  if (dueWhy !== null && !isRenewalTrigger(dueWhy)) return `dueWhy ${String(dueWhy)}`;
+  if (dueClass !== null && !isTriggerClass(dueClass)) return `dueClass ${String(dueClass)}`;
+  if (outcome !== null && !isGenerationOutcome(outcome)) return `outcome ${String(outcome)}`;
+  const blind = blindOf(raw.blind);
+  if (blind === undefined) return `blind ${String(raw.blind)}`;
   return {
     id, identity: String(raw.identity), sessionId: String(raw.sessionId), role, term, rowIncarnation: strOrNull(raw.rowIncarnation),
     n, state, shadowState: shadow as GenerationState | null, walk: walk as WalkMode | null,
-    walkClass: isTriggerClass(walkClass) ? walkClass : null, enteredAt,
+    walkClass, enteredAt,
     deadlineAt: num('deadlineAt'), shadowDeadlineAt: num('shadowDeadlineAt'),
-    dueSince: num('dueSince'), dueWhy: isRenewalTrigger(dueWhy) ? dueWhy : null, dueClass: isTriggerClass(dueClass) ? dueClass : null,
+    dueSince: num('dueSince'), dueWhy, dueClass,
     dueSinceObservedMs: num('dueSinceObservedMs'),
     proven: num('proven') === 1, renudged: num('renudged') === 1, probeRounds: num('probeRounds') ?? 0, hostEnded: num('hostEnded') === 1,
-    blind: blindOf(raw.blind), model: strOrNull(raw.model), prevModel: strOrNull(raw.prevModel), lane: strOrNull(raw.lane),
+    blind, model: strOrNull(raw.model), prevModel: strOrNull(raw.prevModel), lane: strOrNull(raw.lane),
     host: strOrNull(raw.host), cardHash: strOrNull(raw.cardHash), snapshotId: strOrNull(raw.snapshotId), attempts: num('attempts') ?? 0,
-    outcome: isGenerationOutcome(outcome) ? outcome : null, resumed: num('resumed') === 1, startId, startReportedAt,
+    outcome, resumed: num('resumed') === 1, startId, startReportedAt,
     observed, mintedObservedMs: minted, softRenewalObservedMs: num('softRenewalObservedMs'),
     holdOffUntilObservedMs: num('holdOffUntilObservedMs'),
   };
@@ -242,8 +270,8 @@ class Superseded extends Error {}
  *  live row the caller read, or null when it read none; `superseded` when the live row is not that, or the start was
  *  minted already. The new row walks live when the pass is live or the row it ends was on a live walk (a live walk that a
  *  start completes goes on, live, on the next generation, ruling F1), and in shadow otherwise, so a shadow mint never
- *  writes `state` past `active` and a walk begun in shadow is never carried into `state`. Its accumulator is the identity's newest row's `observed.ms`, re-anchored with no advance
- *  (0 for an identity's first). `cursor`, when given, advances the lane's cursor in the same transaction, so a crash never
+ *  writes `state` past `active` and a walk begun in shadow is never carried into `state`. Its accumulator is the identity's newest row's `observed.ms` within the same `term`, re-anchored
+ *  with no advance (0 for an identity's first generation of a term; review 2003 N2). `cursor`, when given, advances the lane's cursor in the same transaction, so a crash never
  *  separates the last mint of a pass from the cursor that covers it. */
 export function mintGeneration(db: DatabaseSync, input: MintInput, expect: GenExpect | null, live: boolean,
   cursor: CursorAdvance | null = null): MintResult {
@@ -310,13 +338,17 @@ export function stepGeneration(db: DatabaseSync, id: number, expect: GenExpect, 
   }
 }
 
-/** The row is live and a walk begun in shadow left its residue: remove it. The row is a working generation again, as
- *  `GEN_ACTIVE` (proven, no counters), and the next due trigger starts a live walk. */
+/** The row is live and a walk begun in shadow left its residue: remove it, and the next due trigger starts a live walk.
+ *  A row whose `state` is `active` is a working generation again, as `GEN_ACTIVE` (proven, no counters); a `degraded` one
+ *  keeps its `proven` and its counters (review 2003 F12), so a generation the machine degraded is never marked proven by
+ *  a shadow walk's clearing. */
 export function clearShadowWalk(db: DatabaseSync, id: number, expect: GenExpect, now: number): { changed: boolean } {
   if (expect.walk === 'live') return { changed: false };
+  const atRest = (col: string, value: number | 'NULL'): string => `${col} = CASE WHEN state = 'active' THEN ${value} ELSE ${col} END`;
   try {
     return changedOf(stmt(db, 'UPDATE continuity_generations SET shadowState = NULL, shadowDeadlineAt = NULL, walk = NULL, '
-      + `walkClass = NULL, proven = 1, renudged = 0, probeRounds = 0, hostEnded = 0, attempts = 0, enteredAt = ? WHERE ${CAS}`)
+      + `${atRest('walkClass', 'NULL')}, ${atRest('proven', 1)}, ${atRest('renudged', 0)}, ${atRest('probeRounds', 0)}, `
+      + `${atRest('hostEnded', 0)}, ${atRest('attempts', 0)}, enteredAt = ? WHERE ${CAS}`)
       .run(now, ...casArgs(id, expect)));
   } catch {
     return { changed: false };
@@ -391,16 +423,4 @@ function advanceCursorIn(db: DatabaseSync, c: CursorAdvance): boolean {
 /** Advance the cursor from `from` (what the caller read) to `to`; a cursor that moved meanwhile changes nothing. */
 export function advanceCursor(db: DatabaseSync, c: CursorAdvance): { changed: boolean } {
   try { return { changed: advanceCursorIn(db, c) }; } catch { return { changed: false }; }
-}
-
-/** The two newest work runs a coordinator claims, newest first (the wave boundary's read): their states and programmes. */
-export type ClaimedWorkRuns = { ok: true; runs: { id: number; state: string; program: string }[] } | { ok: false; detail: string };
-export function newestClaimedWorkRuns(db: DatabaseSync, claimedBy: string): ClaimedWorkRuns {
-  try {
-    const rows = stmt(db, "SELECT id, state, program FROM runs WHERE claimedBy = ? AND kind = 'work' ORDER BY id DESC LIMIT 2")
-      .all(claimedBy) as { id: unknown; state: unknown; program: unknown }[];
-    return { ok: true, runs: rows.map((r) => ({ id: intOrNull(r.id) ?? -1, state: String(r.state), program: String(r.program) })) };
-  } catch (e) {
-    return { ok: false, detail: `runs read failed: ${e instanceof Error ? e.message : String(e)}` };
-  }
 }

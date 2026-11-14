@@ -182,6 +182,22 @@ describe('the walk (ruling F1): a column is decided per walk, not per pass', () 
     expect(genViewOf(c, true)).toEqual(GEN_ACTIVE);
   });
 
+  it('clearing a shadow walk on a degraded row keeps its `proven` and counters: only an active row is reset (review 2003 F12)', () => {
+    const s = store();
+    s.mintGeneration(mintIn(startOf(s)), null, true);
+    let r = only(s);
+    // A live walk degrades: unproven, the conversation ended, the walk over.
+    s.stepGeneration(r.id, genExpectOf(r), view({ state: 'degraded', proven: false, hostEnded: true, tries: 2 }), true, NOW + 1_000);
+    r = only(s);
+    expect(r).toMatchObject({ state: 'degraded', walk: null, proven: false, hostEnded: true, attempts: 2 });
+    // A shadow walk begins on it, then the row goes live and the residue is cleared.
+    s.stepGeneration(r.id, genExpectOf(r), view({ state: 'draining', proven: false, hostEnded: true, tries: 2, cls: 'hard' }), false, NOW + 2_000);
+    r = only(s);
+    expect(r).toMatchObject({ state: 'degraded', shadowState: 'draining', walk: 'shadow' });
+    expect(s.clearShadowWalk(r.id, genExpectOf(r), NOW + 3_000)).toEqual({ changed: true });
+    expect(only(s)).toMatchObject({ state: 'degraded', shadowState: null, walk: null, proven: false, hostEnded: true, attempts: 2, walkClass: 'hard' });
+  });
+
   it('a live walk is never cleared as residue', () => {
     const s = store();
     s.mintGeneration(mintIn(startOf(s)), null, true);
@@ -277,5 +293,33 @@ describe('the due columns, the accumulator and the hold-off', () => {
     s.mintGeneration(mintIn(startOf(s)), null, true);
     s.db.prepare("UPDATE continuity_generations SET state = 'resting'").run();
     expect(s.liveGenerations()).toMatchObject({ ok: false });
+  });
+
+  it.each([
+    ['walkClass', "'newer-class'"], ['dueWhy', "'newer-trigger'"], ['dueClass', "'newer-class'"], ['outcome', "'newer-outcome'"],
+    ['blind', `'["hard-cap","newer-trigger"]'`], ['blind', "'not json'"],
+  ])('a non-null word this build does not know in %s fails the row, as `state` does (review 2003 F13)', (col, value) => {
+    const s = store();
+    s.mintGeneration(mintIn(startOf(s)), null, true);
+    expect(s.liveGenerations()).toMatchObject({ ok: true });
+    s.db.prepare(`UPDATE continuity_generations SET ${col} = ${value}`).run();
+    expect(s.liveGenerations()).toEqual({ ok: false, detail: expect.stringContaining(col) as string });
+  });
+
+  it('null words read as not written, and known ones as themselves', () => {
+    const s = store();
+    s.mintGeneration(mintIn(startOf(s)), null, true);
+    s.db.prepare(`UPDATE continuity_generations SET walkClass = 'hard', dueWhy = 'hard-cap', dueClass = 'hard', blind = '["probe-failed"]'`).run();
+    expect(only(s)).toMatchObject({ walkClass: 'hard', dueWhy: 'hard-cap', dueClass: 'hard', blind: ['probe-failed'], outcome: null });
+  });
+
+  it('startsOf answers one session\'s starts newest first in its own order, at most the limit', () => {
+    const s = store();
+    startOf(s, 'startup', NOW + 5);
+    startOf(s, 'clear', NOW + 1);
+    startOf(s, 'compact', NOW + 9);
+    const r = s.startsOf(ID, 2);
+    expect(r.ok && r.rows.map((x) => [x.source, x.reportedAt])).toEqual([['compact', NOW + 9], ['startup', NOW + 5]]);
+    expect(s.startsOf('lane-b-other', 5)).toEqual({ ok: true, rows: [] });
   });
 });

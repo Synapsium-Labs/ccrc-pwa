@@ -6068,7 +6068,8 @@ export class FleetWatcher {
   }
 
   /** The generations lane (Overlord §3.3.11, W1a), in shadow: the fleet reads first, then one synchronous pass that mints,
-   *  ends and records through the store. It acts on no session. */
+   *  ends and records through the store. It acts on no session; the pass logs what it skipped, held and could not read
+   *  (review 2003 F5). */
   async sweepGenerations(records: readonly SessionRecord[]): Promise<void> {
     const coord = this.deps.coord;
     if (!coord) return;

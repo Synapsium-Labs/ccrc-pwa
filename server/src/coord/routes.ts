@@ -2901,7 +2901,8 @@ export function registerCoordRoutes(
    *  each lane that ships in shadow. One path for both verbs, the dispatch-abandon door's shape: session-gated when
    *  `CCRC_AUTH` is armed, open dark, no box token (no machine lane calls it, and no skill names it). The view is L1's
    *  (`laneArm.ts`): a lane is live on an exact `live` only. The POST takes `{lane, choice, confirm?}` and nothing else, and
-   *  answers in the collector door's order: a bad body first; Live with no signed-in operator is 403 `sign-in-unarmed`
+   *  answers in the collector door's order: a bad body first; Live on a row whose gate stands is 409 `lane-gated`, its reason
+   *  in `detail` (review 2003 F3); Live with no signed-in operator is 403 `sign-in-unarmed`
    *  (dark included), before any read; an unreadable row is 503 `state-unreadable`; Live whose key is missing or stale is
    *  409 `confirm-required` with the facts the server read and the key that binds them; then the one write, a record-only
    *  feed row naming the actor on a change, and the rows read after it. */
@@ -2920,6 +2921,7 @@ export function registerCoordRoutes(
     const before = laneArmRowViewOf(lane, coord.laneArmSetting(lane));
     const signedIn = deps.cfg.authEnabled && sessionAuth(req).reason === 'session';
     const decided = decideLaneArmPost({ request: parsed.request, row: before, signedIn });
+    if (decided.kind === 'gated') return refuseRoute(reply, 'lane-gated', { detail: decided.reason });
     if (decided.kind === 'sign-in-unarmed') return refuseRoute(reply, 'sign-in-unarmed');
     if (decided.kind === 'unreadable') return refuseRoute(reply, 'state-unreadable', { detail: decided.detail });
     if (decided.kind === 'confirm') return reply.code(409).send(decided.body);

@@ -91,11 +91,18 @@ export interface LaneArmConfirmRequired {
   facts: { stored: LaneArmRowView['stored']; updatedAt: number | null; shadowLog: string | null };
 }
 
-/** The words the POST refuses with (each already a word of `REFUSAL_STATUS`), spelled once for the PWA's reader. */
-export const LANE_ARM_REFUSALS = ['bad-request', 'not-configured', 'sign-in-unarmed', 'state-unreadable'] as const;
+/** The words the POST refuses with (each a word of `REFUSAL_STATUS`), spelled once for the PWA's reader. `lane-gated` is the
+ *  card's own (review 2003 F3): Live refused while the row's gate stands (`laneArmGate`). */
+export const LANE_ARM_REFUSALS = ['bad-request', 'not-configured', 'sign-in-unarmed', 'state-unreadable', 'lane-gated'] as const;
 export type LaneArmRefusal = (typeof LANE_ARM_REFUSALS)[number];
 export function isLaneArmRefusal(v: unknown): v is LaneArmRefusal {
   return typeof v === 'string' && (LANE_ARM_REFUSALS as readonly string[]).includes(v);
+}
+
+/** A row's GATE (review 2003 F3): while it stands, Live is refused at the door (`lane-gated`) and the card says why. Null
+ *  for a row that can go live. The words are the gate: a row is gated exactly when it has them. */
+export function laneArmGate(lane: LaneArmLane): string | null {
+  return LANE_ARM_TEXT.rows[lane].gate;
 }
 
 /** The feed row's title when a row changes, and when the import sets a row Live. */
@@ -122,7 +129,8 @@ export const LANE_ARM_TEXT = {
         + 'nothing is held, refused or renewed.',
       liveNote: 'A coordinator\'s generations move through the renewal states; until the renewal act ships, this changes '
         + 'nothing a session sees.',
-      gate: null,
+      gate: 'Live waits for the renewal act: until it ships, nothing moves a generation on from its start, so a live walk '
+        + 'would stand still and fire every deadline at once when it arrives. Live is refused until then.',
     },
   },
   shadowLog: (path: string): string => `Shadow record: ${path} on the fleet box. Read it before going live.`,

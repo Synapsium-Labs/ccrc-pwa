@@ -22,6 +22,7 @@ import type { MeasuredStat } from '../src/io.js';
 import type { ChildMark } from '../../shared/api.js';
 import { CONTINUITY_LANE } from '../../shared/lane-arm.js';
 import { HOLD_OFF_MS } from '../../shared/continuity.js';
+import { START_RETRY_MS } from '../src/continuity/generationStart.js';
 import { parsedFile } from './scan/symbols.js';
 import { fakeTime, FAKE_T0, type FakeTime } from './fakeTime.js';
 import { mkTmp, removeTmpFixtures } from './tmpHelpers.js';
@@ -37,7 +38,7 @@ const U3 = '33333333-3333-4333-8333-333333333333';
 interface Fixture {
   s: CoordStore; t: FakeTime; logs: string[]; registry: RegistryFacts[];
   pass(readings?: ReadonlyMap<number, GenReadings>, proc?: string): ReturnType<typeof generationsPass>;
-  start(source: string, uuid: string, at?: number, sessionId?: string): number;
+  start(source: string, uuid: string, at?: number, sessionId?: string, rowIncarnation?: string): number;
 }
 
 function fixture(): Fixture {
@@ -53,9 +54,9 @@ function fixture(): Fixture {
   return {
     s, t, logs, registry,
     pass: (readings = new Map(), proc = 'p1') => generationsPass(deps(proc), { registry, readings }),
-    start: (source, uuid, at = t.ports.clock.wall(), sessionId = COORD) => {
+    start: (source, uuid, at = t.ports.clock.wall(), sessionId = COORD, rowIncarnation = 'inc-1') => {
       n += 1;
-      const r = s.insertStart({ sessionId, reportId: `r-${n}`, uuid, source, model: 'claude-opus-5-5', rowIncarnation: 'inc-1',
+      const r = s.insertStart({ sessionId, reportId: `r-${n}`, uuid, source, model: 'claude-opus-5-5', rowIncarnation,
         reportedAt: at, receivedAt: t.ports.clock.wall() });
       if (!r.ok) throw new Error('start not recorded');
       return r.id;
@@ -64,11 +65,13 @@ function fixture(): Fixture {
 }
 const all = (s: CoordStore): Record<string, unknown>[] =>
   s.db.prepare('SELECT identity, n, state, shadowState, outcome, startId FROM continuity_generations ORDER BY id').all() as Record<string, unknown>[];
+/** The coordinator's run, closed: it then claims no open run, and reads undecided. */
+const closeRuns = (s: CoordStore): void => { s.db.prepare("UPDATE runs SET state = 'done' WHERE claimedBy = ?").run(COORD); };
 const live = (s: CoordStore): GenRow[] => { const r = s.liveGenerations(); if (!r.ok) throw new Error(r.detail); return r.rows; };
 const setRegistry = (f: Fixture, uuid: string): void => { f.registry[0] = { ...f.registry[0]!, uuid }; };
 
 describe('the pass mints and ends generations from the starts (Task 2)', () => {
-  it('a coordinator\'s startup mints n=1 at carded (in shadow: `shadowState`), and its clear mints n=2 and ends n=1', () => {
+  it('a coordinator\'s startup mints n=1 at carded (in shadow: `shadowState`), and its clear on the same incarnation mints n=2 and ends n=1 crashed', () => {
     const f = fixture();
     f.start('startup', U1);
     expect(f.pass()).toMatchObject({ read: 1, minted: 1, live: false });
@@ -78,7 +81,9 @@ describe('the pass mints and ends generations from the starts (Task 2)', () => {
     f.start('clear', U2);
     expect(f.pass()).toMatchObject({ read: 1, minted: 1 });
     expect(all(f.s)).toEqual([
-      { identity: COORD, n: 1, state: 'ended', shadowState: 'carded', outcome: 'woken', startId: 1 },
+      // In shadow the `state` column stood `active`, so the outcome reads what the session lived (review 2003 F1): an
+      // unplanned start on the same incarnation.
+      { identity: COORD, n: 1, state: 'ended', shadowState: 'carded', outcome: 'crashed', startId: 1 },
       { identity: COORD, n: 2, state: 'active', shadowState: 'carded', outcome: null, startId: 2 },
     ]);
   });
@@ -121,7 +126,125 @@ describe('the pass mints and ends generations from the starts (Task 2)', () => {
     f.s.openCoordinatorIds = () => { throw new Error('runs unreadable'); };
     f.start('startup', U1);
     expect(f.pass()).toMatchObject({ minted: 0, skipped: { undecided: 1 } });
-    expect(f.logs.filter((l) => l.includes('undecided role'))).toHaveLength(1);
+    expect(f.logs.filter((l) => l.includes('1 undecided'))).toHaveLength(1);
+  });
+
+  it('a coordinator\'s startup before its first run opens is not lost: once it reads as a coordinator, n=1 mints from it (review 2003 F2)', () => {
+    const f = fixture();
+    closeRuns(f.s);
+    f.start('startup', U1);
+    expect(f.pass()).toMatchObject({ minted: 0, skipped: { undecided: 1 } });
+    expect(f.s.generationsCursor(GENERATIONS_LANE)).toEqual({ ok: true, lastStartId: 1 });
+    f.t.advance(30_000);
+    // Still no run: nothing more mints, and nothing is read again.
+    expect(f.pass()).toMatchObject({ read: 0, minted: 0, firstMinted: 0 });
+    f.s.db.prepare("INSERT INTO runs (program, wave, waveOf, project, state, claimedBy, openedAt) VALUES ('prog-a', 2, 2, 'project-a', 'working', ?, 2)").run(COORD);
+    f.t.advance(30_000);
+    expect(f.pass()).toMatchObject({ read: 0, minted: 1, firstMinted: 1 });
+    expect(all(f.s)).toEqual([{ identity: COORD, n: 1, state: 'active', shadowState: 'carded', outcome: null, startId: 1 }]);
+    // Minted once: the next pass finds the generation and mints nothing.
+    expect(f.pass()).toMatchObject({ minted: 0, firstMinted: 0 });
+  });
+
+  it('the first mint takes the newest start that mints, past a newer compaction, and records its account', () => {
+    const f = fixture();
+    closeRuns(f.s);
+    f.start('startup', U1);
+    f.t.advance(1_000);
+    setRegistry(f, U2);
+    f.start('clear', U2);
+    f.t.advance(1_000);
+    f.start('compact', U2);
+    f.pass();
+    f.s.db.prepare("INSERT INTO runs (program, wave, waveOf, project, state, claimedBy, openedAt) VALUES ('prog-a', 2, 2, 'project-a', 'working', ?, 2)").run(COORD);
+    expect(f.pass()).toMatchObject({ firstMinted: 1 });
+    expect(live(f.s).map((g) => [g.n, g.startId, g.lane])).toEqual([[1, 2, 'lane-a']]);
+  });
+
+  it('a start whose registry uuid could not be read is held, the cursor stays at it, and a later pass mints it (review 2003 F2)', () => {
+    const f = fixture();
+    f.start('startup', U1);
+    f.pass();
+    f.t.advance(30_000);
+    f.registry[0] = { ...f.registry[0]!, uuid: null };
+    f.start('clear', U2);
+    expect(f.pass()).toMatchObject({ read: 1, minted: 0, held: 1, skipped: { 'uuid-unmeasured': 0 } });
+    expect(f.s.generationsCursor(GENERATIONS_LANE)).toEqual({ ok: true, lastStartId: 1 });
+    expect(f.logs.some((l) => l.includes('1 held for a later pass'))).toBe(true);
+    f.t.advance(30_000);
+    setRegistry(f, U2);
+    expect(f.pass()).toMatchObject({ read: 1, minted: 1, held: 0 });
+    expect(live(f.s).map((g) => [g.n, g.startId])).toEqual([[2, 2]]);
+    expect(f.s.generationsCursor(GENERATIONS_LANE)).toEqual({ ok: true, lastStartId: 2 });
+  });
+
+  it('a start of a row the registry did not list this pass is held, and minted once the row reads', () => {
+    const f = fixture();
+    const row = f.registry.pop()!;
+    f.start('startup', U1);
+    expect(f.pass()).toMatchObject({ minted: 0, held: 1, skipped: { unregistered: 0 } });
+    expect(f.s.generationsCursor(GENERATIONS_LANE)).toEqual({ ok: true, lastStartId: 0 });
+    f.registry.push(row);
+    expect(f.pass()).toMatchObject({ minted: 1, held: 0 });
+  });
+
+  it('the hold is bounded: past START_RETRY_MS the start is skipped for good, counted and logged, and the starts behind it go on', () => {
+    const f = fixture();
+    f.start('startup', U1);
+    f.pass();
+    f.registry[0] = { ...f.registry[0]!, uuid: null };
+    f.start('clear', U2);
+    const other = 'lane-b-project-b';
+    f.registry.push({ id: other, uuid: U3, lane: 'lane-b', child: { kind: 'none' } });
+    f.s.db.prepare("INSERT INTO runs (program, wave, waveOf, project, state, claimedBy, openedAt) VALUES ('prog-a', 1, 2, 'project-b', 'working', ?, 1)").run(other);
+    f.t.advance(1_000);
+    f.start('startup', U3, undefined, other);
+    // Held: the other session's start waits behind it.
+    expect(f.pass()).toMatchObject({ minted: 0, held: 2 });
+    expect(live(f.s).map((g) => g.identity)).toEqual([COORD]);
+    f.t.advance(START_RETRY_MS - 31_000);
+    expect(f.pass()).toMatchObject({ minted: 0, held: 2 });
+    f.t.advance(30_000);
+    // Past the bound: skipped and counted, and the other session's start mints in the same pass.
+    expect(f.pass()).toMatchObject({ minted: 1, held: 0, skipped: { 'uuid-unmeasured': 1 } });
+    expect(f.logs.some((l) => l.includes('1 uuid-unmeasured'))).toBe(true);
+    expect(live(f.s).map((g) => [g.identity, g.n])).toEqual([[COORD, 1], [other, 1]]);
+    expect(f.s.generationsCursor(GENERATIONS_LANE)).toEqual({ ok: true, lastStartId: 3 });
+  });
+
+  it('a swap between two starts in one batch: only the newest start\'s outcome and account are trusted (review 2003 F4)', () => {
+    const f = fixture();
+    f.start('startup', U1);
+    f.pass();
+    f.t.advance(30_000);
+    // Two starts land before the next pass: a clear on lane-a, then the swap's resume on lane-b. The registry, read at
+    // the pass, already says lane-b and the swap's conversation.
+    f.registry[0] = { ...f.registry[0]!, uuid: U2, lane: 'lane-b' };
+    f.start('clear', U2, undefined, COORD, 'inc-1');
+    f.t.advance(1_000);
+    f.start('resume', U2, undefined, COORD, 'inc-2');
+    expect(f.pass()).toMatchObject({ minted: 2 });
+    const rows = f.s.db.prepare('SELECT n, state, outcome, lane FROM continuity_generations ORDER BY n').all();
+    expect(rows).toEqual([
+      // The older start's outcome and account are the registry's at the pass, not at the start: unmeasured, none.
+      { n: 1, state: 'ended', outcome: 'unmeasured', lane: 'lane-a' },
+      { n: 2, state: 'ended', outcome: 'unmeasured', lane: null },
+      { n: 3, state: 'active', outcome: null, lane: 'lane-b' },
+    ]);
+  });
+
+  it('logs every non-zero skip count once a pass, and a generations read that failed (review 2003 F5)', () => {
+    const f = fixture();
+    f.start('startup', U1);
+    f.pass();
+    f.start('compact', U1);
+    f.start('resume', U3);
+    f.pass();
+    expect(f.logs.filter((l) => l.includes('starts this pass'))).toEqual(['ccrc-server: generations: starts this pass: 1 compact, 1 foreign-uuid']);
+    f.s.db.exec("UPDATE continuity_generations SET walkClass = 'newer-class'");
+    f.start('clear', U1);
+    expect(f.pass()).toMatchObject({ unread: 'generations', minted: 0 });
+    expect(f.logs.some((l) => l.includes('the generations could not be read, so no start mints and no due is recorded'))).toBe(true);
   });
 
   it('a nested process\'s resume (a conversation the registry does not name) mints nothing', () => {
@@ -241,14 +364,12 @@ const readings = (u: UsageRead, c: CompactionsRead = { kind: 'absent' }): GenRea
 });
 
 describe('the pass records renewalDue on every generation at rest (Task 3)', () => {
-  /** A coordinator at rest: minted live, its walk cleared as a working generation would be. */
+  /** A coordinator minted in shadow: `state` active, its shadow walk standing at `carded` (nothing steps it in W1a). */
   function atRest(): { f: Fixture; id: number } {
     const f = fixture();
     f.start('startup', U1);
     f.pass();
-    const g = live(f.s)[0]!;
-    f.s.clearShadowWalk(g.id, { term: g.term, n: g.n, state: g.state, shadowState: g.shadowState, walk: g.walk }, f.t.ports.clock.wall());
-    return { f, id: g.id };
+    return { f, id: live(f.s)[0]!.id };
   }
 
   it('a coordinator at 260k tokens on a 1M window is due hard-cap', () => {
@@ -302,13 +423,42 @@ describe('the pass records renewalDue on every generation at rest (Task 3)', () 
     expect(live(f.s)[0]).toMatchObject({ dueWhy: 'wave-boundary', dueClass: 'soft' });
   });
 
-  it('a generation on a walk is not judged: no due write while it is carded', () => {
+  it('in shadow a generation on a walk is judged: its `state` is active, whatever the walk holds (review 2003 F1)', () => {
     const f = fixture();
     f.start('startup', U1);
     f.pass();
     const g = live(f.s)[0]!;
-    f.pass(new Map([[g.id, readings(usage(260_000, 1_000_000))]]));
-    expect(live(f.s)[0]).toMatchObject({ dueWhy: null, blind: null });
+    expect(g).toMatchObject({ state: 'active', shadowState: 'carded', walk: 'shadow' });
+    expect(f.pass(new Map([[g.id, readings(usage(260_000, 1_000_000))]]))).toMatchObject({ due: 1 });
+    // The due record is written; the walk's own column still holds its would-be state.
+    expect(live(f.s)[0]).toMatchObject({ dueWhy: 'hard-cap', shadowState: 'carded', walk: 'shadow' });
+  });
+
+  it('a plain shadow mint followed by passes writes dueSince, dueWhy and blind', () => {
+    const f = fixture();
+    f.start('startup', U1);
+    f.pass();
+    const id = live(f.s)[0]!.id;
+    f.t.advance(30_000);
+    f.pass(new Map([[id, readings(usage(40_000, 1_000_000))]]));
+    expect(live(f.s)[0]).toMatchObject({ dueWhy: null, blind: ['not-local', 'probe-failed', 'compaction-refused'] });
+    f.t.advance(30_000);
+    const at = f.t.ports.clock.wall();
+    f.pass(new Map([[id, readings(usage(260_000, 1_000_000))]]));
+    expect(live(f.s)[0]).toMatchObject({ dueWhy: 'hard-cap', dueSince: at, dueSinceObservedMs: 60_000 });
+    f.t.advance(30_000);
+    f.pass(new Map([[id, readings(usage(260_000, 1_000_000))]]));
+    expect(live(f.s)[0]).toMatchObject({ dueSince: at, dueSinceObservedMs: 60_000 });
+  });
+
+  it('live, a generation on a live walk (`state` carded) is not judged', () => {
+    const f = fixture();
+    f.s.setLaneArm(CONTINUITY_LANE, 'live', 1);
+    f.start('startup', U1);
+    f.pass();
+    const g = live(f.s)[0]!;
+    expect(f.pass(new Map([[g.id, readings(usage(260_000, 1_000_000))]]))).toMatchObject({ due: 0 });
+    expect(live(f.s)[0]).toMatchObject({ state: 'carded', dueWhy: null, blind: null });
   });
 
   it('live, a walk begun in shadow is cleared, and the generation is then judged', () => {
@@ -355,13 +505,37 @@ describe('the gather', () => {
     expect(r1.get(g.id)!.behind).toEqual({ kind: 'measured', value: true });
   });
 
-  it('reads nothing for a generation on a walk', async () => {
+  it('reads for a generation on a shadow walk, and nothing for one on a live walk (review 2003 F1)', async () => {
     const f = fixture();
     f.start('startup', U1);
     f.pass();
     const calls: string[] = [];
-    expect((await gatherGenerationReadings(f.s, ports(calls, () => ({ ok: false, reason: 'absent' })), new Map())).size).toBe(0);
-    expect(calls).toEqual([]);
+    expect((await gatherGenerationReadings(f.s, ports(calls, () => ({ ok: false, reason: 'absent' })), new Map())).size).toBe(1);
+    const g = fixture();
+    g.s.setLaneArm(CONTINUITY_LANE, 'live', 1);
+    g.start('startup', U1);
+    g.pass();
+    const none: string[] = [];
+    expect((await gatherGenerationReadings(g.s, ports(none, () => ({ ok: false, reason: 'absent' })), new Map())).size).toBe(0);
+    expect(none).toEqual([]);
+  });
+
+  it('keeps no failed compactions read: an unreadable read is read again next pass, though the file did not move (review 2003 F14)', async () => {
+    const f = fixture();
+    f.start('startup', U1);
+    f.pass();
+    const calls: string[] = [];
+    let read: CompactionsRead = { kind: 'unreadable' };
+    const p: GatherPorts = { ...ports(calls, () => ({ ok: true, mtimeMs: 1, size: 10 })),
+      compactions: async () => { calls.push('compactions'); return read; } };
+    const memo: CompactionsMemo = new Map();
+    await gatherGenerationReadings(f.s, p, memo);
+    await gatherGenerationReadings(f.s, p, memo);
+    expect(calls.filter((c) => c === 'compactions')).toHaveLength(2);
+    read = { kind: 'absent' };
+    await gatherGenerationReadings(f.s, p, memo);
+    await gatherGenerationReadings(f.s, p, memo);
+    expect(calls.filter((c) => c === 'compactions')).toHaveLength(3);
   });
 });
 
@@ -396,6 +570,7 @@ describe('the watcher', () => {
 describe('shadow is structural: the lane imports nothing that sends', () => {
   it('its value imports are within the allowed list', () => {
     const allowed = ['../../../shared/lane-arm.js', '../../../shared/continuity.js', '../../../shared/models.js', '../coord/laneArm.js',
+      '../coord/rollTarget.js',
       '../roleOf.js', '../time/observed.js', './compactions.js', './continuityStore.js', './generationStart.js', './renewalDue.js'];
     const edges = parsedFile('server/src/continuity/generationsLane.ts').imports.filter((e) =>
       e.kind !== 'type-query' && !e.typeOnly && !(e.names.length > 0 && e.names.every((n) => (e.typeNames ?? []).includes(n))));

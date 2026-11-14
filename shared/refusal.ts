@@ -51,6 +51,7 @@ import type { RunCloseRefusal } from './run-close.js';
 import type { LandingInfrastructureCode, LandingMutationCode } from './landingLine.js';
 import type { ItemMoveRefusal } from './ledgers.js';
 import type { PlanRefusal } from './plan.js';
+import type { LaneArmRefusal } from './lane-arm.js';
 
 /**
  * The named workspace create's own words (named workspaces S5): decided by `planCreate` (`server/src/workspaceCreate.ts`,
@@ -232,7 +233,9 @@ export type RouteRefusal = ClaimRefusal | MailRouteRefusal | UpdateRouteError | 
   // The linking standard's words (D-8147): declared once, `linking.ts#LINKING_REFUSALS`, each with its status below.
   | LinkingRefusal
   // The plan verbs' and the hierarchy routes' words (Linear hierarchy design, D-8181): declared once, `plan.ts#PLAN_REFUSALS`.
-  | PlanRefusal;
+  | PlanRefusal
+  // The Shadow lanes card's own word (review 2003 F3): Live refused while a row's gate stands, `lane-arm.ts#LANE_ARM_REFUSALS`.
+  | Extract<LaneArmRefusal, 'lane-gated'>;
 
 /** The landing family's statuses, declared once (wave 5f, shared contract §5): every infrastructure word is 503, a
  *  missing thing 404, a refused graph or identity 409, an unreadable dependency 503. Spread into `REFUSAL_STATUS` and
@@ -285,7 +288,7 @@ export const REFUSAL_STATUS: Readonly<Record<RouteRefusal, number>> = {
   'claim-conflict': 409, 'claim-terminal': 409, 'claimant-changed': 409, 'no-record': 409, 'no-session': 409,
   'not-held': 409, 'not-waiting': 409, 'not-remote': 409, 'not-seeded': 409, 'pool-mismatch': 409, 'run-closed': 409,
   'sweep-stopped': 409, 'floor': 409, 'no-effort-rungs': 409, 'unrouteable-record': 409, 'marker-still-controls': 409, 'conflict': 409,
-  'incarnation-changed': 409, 'fable-operator-only': 409,
+  'incarnation-changed': 409, 'fable-operator-only': 409, 'lane-gated': 409,
   [SWAP_REFUSALS.sessionBusy]: 409, [SWAP_REFUSALS.statusUnknown]: 409, [SWAP_REFUSALS.hibernated]: 409,
   // 413, 415, 429
   'oversize': 413, 'too-large': 413,

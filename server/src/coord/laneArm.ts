@@ -6,7 +6,7 @@
 // A lane is live when, and only when, its row's stored choice is exactly `live` (`laneArmRowViewOf`). Every other read
 // (a token this build does not know, a lost row, a read that failed) is shadow, so doubt never arms a lane.
 import {
-  LANE_ARM_LANES, LANE_ARM_MARKER, ROSTER_CARD_LANE, ROSTER_CARD_SHADOW_LOG, isLaneArmChoice, isLaneArmImport, isLaneArmLane,
+  LANE_ARM_LANES, LANE_ARM_MARKER, ROSTER_CARD_LANE, ROSTER_CARD_SHADOW_LOG, isLaneArmChoice, isLaneArmImport, isLaneArmLane, laneArmGate,
   type LaneArmChoice, type LaneArmConfirmRequired, type LaneArmImport, type LaneArmLane, type LaneArmRequest,
   type LaneArmRowView, type LaneArmView,
 } from '../../../shared/lane-arm.js';
@@ -65,10 +65,12 @@ export function decideLaneArmBody(body: unknown):
   return { ok: true, request: { lane: b.lane, choice: b.choice, ...(b.confirm === undefined ? {} : { confirm: b.confirm }) } };
 }
 
-/** The POST's verdict, in the collector door's order: Live is refused while sign-in is dark (arming needs a signed-in
- *  operator); an unreadable row is refused (nothing is written over a read that failed); a Live whose key is missing or
+/** The POST's verdict, in the collector door's order, after one of its own: Live is refused while the row's gate stands
+ *  (review 2003 F3: the lane cannot go live yet, whoever asks); Live is refused while sign-in is dark (arming needs a
+ *  signed-in operator); an unreadable row is refused (nothing is written over a read that failed); a Live whose key is missing or
  *  no longer matches the row answers 409 with the facts; anything else is written. Shadow never asks. */
 export type LaneArmPostVerdict =
+  | { readonly kind: 'gated'; readonly reason: string }
   | { readonly kind: 'sign-in-unarmed' }
   | { readonly kind: 'unreadable'; readonly detail: string }
   | { readonly kind: 'confirm'; readonly body: LaneArmConfirmRequired }
@@ -78,6 +80,8 @@ export function decideLaneArmPost(i: {
   readonly request: LaneArmRequest; readonly row: LaneArmRowView; readonly signedIn: boolean;
 }): LaneArmPostVerdict {
   const { request, row } = i;
+  const gate = laneArmGate(request.lane);
+  if (request.choice === 'live' && gate !== null) return { kind: 'gated', reason: gate };
   if (request.choice === 'live' && !i.signedIn) return { kind: 'sign-in-unarmed' };
   if (row.stored === 'unreadable') return { kind: 'unreadable', detail: row.detail ?? 'the row could not be read' };
   if (request.choice === 'live') {
