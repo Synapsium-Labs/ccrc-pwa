@@ -78,6 +78,13 @@ existing file under `docs/superpowers/plans/`, so PR B's departures are this new
   `shared/switches.ts` and `pwa/` together, and this PR needs `pwa/` (the Shadow lanes entry ships with its lane-arm row, or
   the PWA does not compile). It follows in a small PR of its own after this one merges, as the dispatch-abandon switch's
   row did (#1965). Nothing requires a setting-backed switch to have a row, so this PR is complete without it.
+  **Nothing in this PR reads that row** (the ruling's first condition). The setting is read from `plain_memory_settings`
+  only, by the store (`CoordStore.plainAutoMemorySettings`), and its readers read the store: the lane (through
+  `plainAutoMemoryOf`), the door, and the PWA card (through the door). No file indexes `SWITCHES` for it. So the row's
+  absence changes no answer: there is nothing that could read it as on or as a silent off. Pinned by
+  `plain-auto-memory-route.test.ts` ("nothing reads a switchboard row for this setting"), which goes red when a reader
+  of the setting names `SWITCHES` in code, measured. **Owed:** the row, in one small follow-up PR from this workspace
+  after #2794 merges, with no `pwa/` path (`shared/switches.ts` and `server/test/switches.test.ts`'s pins only).
 - **door-census-sites.** Task 6 names `box-token-census.test.ts`'s `SESSION_ONLY`; that set lives in
   `coord-pause-route.test.ts`, and the census checks `CLAUDE.md`'s sentence against it (now "seventeen"). The door also took
   rows in `auth-gate.test.ts`'s counts (and the count in `server/src/auth/gate.ts`'s docstring), `secret-mask.test.ts`'s GET

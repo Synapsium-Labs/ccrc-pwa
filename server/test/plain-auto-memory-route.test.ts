@@ -4,6 +4,8 @@
 // lane reads the stored value. A bare Fastify, the roll-idle route suite's idiom.
 import { afterEach, describe, expect, it } from 'vitest';
 import path from 'node:path';
+import { readFileSync, readdirSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import Fastify, { type FastifyInstance } from 'fastify';
 import type { Deps } from '../src/server.js';
 import { registerCoordRoutes } from '../src/coord/routes.js';
@@ -16,6 +18,7 @@ import { plainAutoMemoryOf } from '../src/continuity/profileFor.js';
 import { profilePass } from '../src/continuity/profileLane.js';
 import { ROUTE_CAP } from '../src/ccdargv.js';
 import { testDeps } from './helpers.js';
+import { codeOnly } from './sourceScan.js';
 import { mkTmp } from './tmpHelpers.js';
 
 const URL = '/api/coord/plain-auto-memory';
@@ -100,5 +103,28 @@ describe('auto memory for plain sessions, the Settings row and its door (Task 6)
       act: { runCcd: async (argv) => { sent.push([...argv]); return { ok: true, stdout: '', stderr: '', ran: true } as never; }, fleetState: { ccdVerbs: [ROUTE_CAP] } },
     }, [{ id: 'lane-a-project-a', child: { kind: 'none' }, route: null }]);
     expect(sent.map((a) => a.filter((_, i) => a[i - 1] === '--set'))).toEqual([['profile=plain', 'automem=on']]);
+  });
+
+  it('nothing reads a switchboard row for this setting: every reader goes through the store, so the row\'s absence changes nothing (the ruling on ask 404)', () => {
+    // The `SWITCHES` row follows in its own PR (consolidation-path-guard); until then, and after, the setting is read only
+    // from `plain_memory_settings`, by the store, and the lane and the door read the store. A file that indexed `SWITCHES`
+    // for this setting would read a row this PR does not carry.
+    const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
+    const roots = ['server/src', 'shared', 'pwa/src'].map((r) => path.join(repo, r));
+    const files: string[] = [];
+    const walk = (d: string): void => {
+      for (const e of readdirSync(d, { withFileTypes: true })) {
+        const f = path.join(d, e.name);
+        if (e.isDirectory()) walk(f); else if (/\.(ts|tsx|mjs)$/.test(e.name)) files.push(f);
+      }
+    };
+    roots.forEach(walk);
+    const text = (f: string): string => codeOnly(readFileSync(f, 'utf8'));   // code only: a comment may name another SWITCHES
+    const rel = (f: string): string => path.relative(repo, f);
+    const naming = files.filter((f) => /plain-auto-memory|plainAutoMemory|plain_memory_settings/.test(text(f)));
+    expect(naming.length, 'the setting\'s readers were found').toBeGreaterThan(3);
+    expect(naming.filter((f) => /\bSWITCHES\b/.test(text(f))).map(rel)).toEqual([]);
+    expect(files.filter((f) => /\bplain_memory_settings\b/.test(text(f))).map(rel).sort())
+      .toEqual(['server/src/coord/schema.ts', 'server/src/coord/store.ts']);
   });
 });
