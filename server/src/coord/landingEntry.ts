@@ -425,7 +425,7 @@ export function landingFactsOf(project: string, rows: LandingStoreRows): Landing
 
 export type LandingHoldGate =
   | { ok: true; own: LandingRecoverySubject | null }
-  | { ok: false; error: Extract<LandingMutationCode, 'landing-recovery-unresolved' | 'landing-identity-conflict'> };
+  | { ok: false; error: 'landing-recovery-unresolved' | 'landing-identity-conflict' };
 
 /**
  * Whether a pin, retreat or mark may go ahead while recovery holds the project (shared contract §6). A hold is refused to every

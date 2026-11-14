@@ -4,7 +4,7 @@
 import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
 import path from 'node:path';
 import { openCoordDb } from '../src/coord/db.js';
-import { CoordStore } from '../src/coord/store.js';
+import { CoordStore, type AdvanceLandingResultOf, type LandingLandResult, type LandingRunAdvance } from '../src/coord/store.js';
 import { NotifyLog } from '../src/notifylog.js';
 import { noticeSink } from '../src/notice.js';
 import { PR_BACKOFF_MAX_MS, PR_SWEEP_MS } from '../src/laneSchedule.js';
@@ -12,7 +12,7 @@ import { landedPass, type LandedLaneDeps, type LandedPassResult } from '../src/c
 import { LANDED_READS_PER_SWEEP, LANDED_STANDING_BACKOFF_MS, type LandedMemory } from '../src/coord/landed.js';
 import type { CcdResult } from '../src/coord/ports.js';
 import type { FleetState } from '../src/fleetstate.js';
-import type { LandingAdvance } from '../src/coord/landingEntry.js';
+import type { LandingAdvance, LandingLand } from '../src/coord/landingEntry.js';
 import type { LandingMutationFacts } from '../src/coord/landingWrites.js';
 import type { LandingRecovery, LandingRecoverySubject } from '../../shared/landingLine.js';
 import { PR_STATE_PR_CAP } from '../src/ccdargv.js';
@@ -449,6 +449,13 @@ describe('the landed reader stamps memory with the start of the pass', () => {
 
 // Review 1846 round 2 (F1, F6): the mark takes the time of the write; every memory stamp is the pass start. A clock that
 // advances on each call tells them apart, so a per-call `deps.now()` in any stamp goes red.
+/** A checked `advanceLanding` stand-in: the land arm answers `refusal`, every other arm goes to the real writer. */
+function refuseLand(r: Rig, refusal: LandingLandResult): void {
+  const real = r.coord.advanceLanding.bind(r.coord);
+  vi.spyOn(r.coord, 'advanceLanding').mockImplementation(<I extends LandingRunAdvance | LandingLand>(input: I): AdvanceLandingResultOf<I> =>
+    ('kind' in input && input.kind === 'land' ? refusal : real(input)) as AdvanceLandingResultOf<I>);
+}
+
 describe('the landed reader on a clock that advances with every call', () => {
   const tick = (r: Rig): number => {
     const t0 = r.clock.t;
@@ -463,17 +470,23 @@ describe('the landed reader on a clock that advances with every call', () => {
     const t0 = tick(r);
     r.answer.fn = (pr) => (pr === 2701 ? ran(mergedLine(pr)) : ran(openLine(pr)));
     expect(await r.pass()).toMatchObject({ read: 2, landed: 1 });
-    expect(detailOf(r.coord, 2701).at, 'the mark is stamped when it is written').toBeGreaterThan(t0);
-    expect([...r.memory.values()].map((m) => [m.lastReadAt, m.nextAt])).toEqual([[t0, t0 + PR_SWEEP_MS]]);
+    expect(detailOf(r.coord, 2701).at, 'the mark is stamped when it is written, the second call of the clock').toBe(t0 + 1000);
+    const waiting = [...r.memory.values()];
+    expect(waiting).toHaveLength(1);
+    expect(waiting[0]!.lastReadAt, 'the waiting entry is remembered at the pass start').toBe(t0);
+    expect(waiting.map((m) => [m.lastReadAt, m.nextAt])).toEqual([[t0, t0 + PR_SWEEP_MS]]);
   });
   it('a mark held at the write is remembered at the pass start', async () => {
     const r = await rig();
     pinned(r.coord, 2711);
     const t0 = tick(r);
     r.answer.fn = (pr) => ran(mergedLine(pr));
-    vi.spyOn(r.coord, 'advanceLanding').mockImplementation((() => ({ ok: false, error: 'landing-recovery-unresolved' })) as never);
+    refuseLand(r, { ok: false, error: 'landing-recovery-unresolved' });
     await r.pass();
-    expect([...r.memory.values()]).toEqual([{ pinnedAt: expect.any(Number), lastReadAt: t0, nextAt: t0, step: PR_SWEEP_MS, missingStreak: 0 }]);
+    const held = [...r.memory.values()];
+    expect(held).toHaveLength(1);
+    expect(held[0]!.nextAt, 'a held mark is due at the pass start').toBe(t0);
+    expect(held).toEqual([{ pinnedAt: expect.any(Number), lastReadAt: t0, nextAt: t0, step: PR_SWEEP_MS, missingStreak: 0 }]);
   });
   it('a link that is down is remembered at the pass start', async () => {
     const r = await rig();
@@ -530,7 +543,7 @@ describe('the landed reader: the decisions the pass makes between its calls', ()
     const r = await rig();
     [3201, 3202].forEach((pr) => pinned(r.coord, pr));
     r.answer.fn = (pr) => ran(mergedLine(pr));
-    vi.spyOn(r.coord, 'advanceLanding').mockImplementation((() => ({ ok: false, error: 'landing-journal-append', recovery: 'restart' })) as never);
+    refuseLand(r, { ok: false, error: 'landing-journal-append', recovery: 'restart' });
     expect(await r.pass()).toMatchObject({ read: 1, landed: 0, stopped: 'store' });
     expect(r.calls).toEqual([3201]);
     expect(r.warns).toEqual(['ccrc-server: landed reader: stopped (landing-journal-append); no entry is read until it clears']);
@@ -540,7 +553,7 @@ describe('the landed reader: the decisions the pass makes between its calls', ()
     const r = await rig();
     pinned(r.coord, 3301);
     r.answer.fn = (pr) => ran(mergedLine(pr));
-    vi.spyOn(r.coord, 'advanceLanding').mockImplementation((() => ({ ok: false, error: 'landing-db-commit', recovery: 'restart' })) as never);
+    refuseLand(r, { ok: false, error: 'landing-db-commit', recovery: 'restart' });
     expect(await r.pass()).toMatchObject({ stopped: 'store' });
     expect(r.warns).toEqual(['ccrc-server: landed reader: the mark of project-a #3301 answered landing-db-commit; the landing line is fenced until the server restarts']);
   });

@@ -5,8 +5,8 @@
  * one closed. The decisions about the entries and the PR are `landed.ts`'s (L1) or `landingEntry.ts`'s (L1): which entries are
  * landable and not held, which are read, what an answer means, when the entry is read again. L4 still makes three choices
  * of its own: whether a `readLanding` refusal skips the project (an unreadable projection) or stops the pass, the pruning
- * of the memory on a complete pass (a held entry's memory goes with it, so it is read at once when the hold clears; on an
- * incomplete pass it is kept, so it is read when its `nextAt` comes), and the mapping of a refused mark (a hold is remembered, a fence or a store failure stops).
+ * of the memory on a complete pass (a held entry's memory goes with it, so it is due at once when the hold clears, still competing for ten reads;
+ * on an incomplete pass it is kept, so it is read when its `nextAt` comes), and the mapping of a refused mark (a hold is remembered, a fence or a store failure stops).
  * It reads the store only through its injected port.
  * It sends the PR-keyed form only behind `ccdCan(…, 'prStatePr')` and treats a call that did not run as a stop, never as
  * an answer about the PR.
