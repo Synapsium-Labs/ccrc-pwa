@@ -2251,7 +2251,7 @@ describe.skipIf(!PY)('the per-request record behind the record-requests marker (
     await withBridge(answers, async ({ bridge, lane }) => {
       arm(lane);
       for (const headers of [
-        { 'x-claude-code-session-id': long, 'x-claude-code-agent-id': 'agent-fx-private-7' },
+        { 'x-claude-code-session-id': long, 'x-claude-code-agent-id': 'agent-fx-private-7' } as Record<string, string>,
         { 'x-claude-code-session-id': `${long}b` },
         { 'x-claude-code-session-id': 'sess fx/1' },
         {},
@@ -2401,10 +2401,10 @@ describe.skipIf(!PY)('the per-request record behind the record-requests marker (
     ], async ({ bridge, lane }) => {
       arm(lane);
       writeFileSync(join(lane.laneDir, 'bridge-turn-state'), '');
-      const body = { ...messages({ text: 'private user words' }), tools: [READ_TOOL] };
+      const body: Json = { ...messages({ text: 'private user words' }), tools: [READ_TOOL] };
       const a = await call(bridge, '/v1/messages', { body, headers: session });
       expect(a.status, a.text).toBe(200);
-      const body2 = { ...body, messages: [...body.messages,
+      const body2 = { ...body, messages: [...(body.messages as Json[]),
         { role: 'assistant', content: [{ type: 'tool_use', id: 'call_fx1', name: 'Read', input: { file_path: 'secret-path.txt' } }] },
         { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'call_fx1', content: 'private file body' }] }] };
       const b = await call(bridge, '/v1/messages', { body: body2, headers: session });

@@ -173,7 +173,9 @@ def row(ans: Answer, *, session: object, subagent: bool, route: str, outcome: st
 
 
 def _code(e: BaseException) -> str:
-    code = errno.errorcode.get(e.errno, "oserror") if isinstance(e, OSError) and isinstance(e.errno, int) else "internal"
+    code = "internal"
+    if isinstance(e, OSError) and isinstance(e.errno, int):
+        code = errno.errorcode.get(e.errno, "oserror")
     code = code.lower()
     return code if _CODE_RE.fullmatch(code) else "unrecognised"
 

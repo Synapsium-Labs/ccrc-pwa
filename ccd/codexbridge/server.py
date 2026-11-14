@@ -48,8 +48,8 @@ owner change). The value reaches no stats, status or log line (stats.TOKEN_HEADE
 recording made under the operator's `record-streams` marker keeps every response header, as it always has).
 
 THE REQUEST RECORD (D-8619). Each upstream POST is observed once, in a `reqrecord.Answer` the request's path fills
-(`_begin` at the POST, `_post` its effort and markers, `_one_response` its status, `_reduce` its terminal and times through
-`_observe`): the parity counts above are read from that object, and so is the row `settle` hands to the lane's
+(`_begin` at the POST, `_post` its effort and markers, `_one_response` its status, `_reduce` its terminal and times
+through `_observe`): the parity counts above are read from that object, and so is the row `settle` hands to the lane's
 `reqrecord.RequestRecord` once the bridge has decided what it did with the answer (its outcome word, the one the stats
 file counts for it). A row is written only while the lane directory holds the operator's `reqrecord.REQUESTS_MARKER`;
 every POST that got an HTTP answer has one (the 401 before its retry, the fallback's 400, an error answered to the
@@ -239,8 +239,9 @@ def _home_relative(home: str, value: object, what: str) -> str:
 
 def read_manifest(home: str, lane_dir: str, lane: str) -> LaneManifest:
     """The lane's `lane.json` in `lane_dir`, read once: its id must be `lane`, every `bridgeFiles` key a file name (an
-    optional key, `_OPTIONAL_FILES`, may be absent, never present and malformed), `authDir` and `configDir` HOME-relative. Raises ManifestError. The one reader of the file in this package: the
-    start (`config_from_env`) exits on the error, and the live probe (`liveprobe.lane_files`) refuses on it."""
+    optional key, `_OPTIONAL_FILES`, may be absent, never present and malformed), `authDir` and `configDir`
+    HOME-relative. Raises ManifestError. The one reader of the file in this package: the start (`config_from_env`)
+    exits on the error, and the live probe (`liveprobe.lane_files`) refuses on it."""
     try:
         with open(os.path.join(lane_dir, LANE_FILE), "rb") as f:
             manifest = json.loads(f.read().decode("utf-8"))
@@ -1368,7 +1369,8 @@ def serve(cfg: BridgeConfig, hooks: Hooks) -> int:
     auth = _Flight()
     idle = _IdleFlush(st)
     requests = reqrecord.RequestRecord(cfg.lane_dir, cfg.requests_path, st.outcome, log_line)  # D-8619
-    state = _State(cfg, hooks, st, rs, flight, auth, backend.user_agent(cfg.ccrc_version), TurnStates(), idle, requests)
+    state = _State(cfg, hooks, st, rs, flight, auth, backend.user_agent(cfg.ccrc_version), TurnStates(), idle,
+                   requests)
     try:
         httpd = _make_server_class(hooks.server_class)(("127.0.0.1", cfg.port), _make_handler(state))
     except OSError as e:
