@@ -3,5 +3,6 @@
   "maxDelta": 480,
   "d": "D-8123",
   "reason": "the limit rescue's reach: the wake fix (a session settled onto an account at its ceiling is started on a rescue target with room), the unmeasured-account and undecidable-class rules, the faster limit detection (the transcript verdict cache bypassed while a menu or banner is up, the pane read deep enough for the auto-opened menu, the lone rescue's jitter cap), the fleet limit watchdog on its own timer with its holds, its no-room record and its act gate, and the Fable degrade that keeps the usage-credits guard when the class gate is dropped; measured +471 net code lines against the merge-base; kept inline because each piece is a decision inside the swap path's existing functions (`_swap_target`, `_auto_swap_check`, `_spawn_start`, `_dispatch_swap`) or the watchdog that calls the same `_rescue_target` and `_dispatch_swap`, and the shared limitRoom helper is the one part that already lives in shared/",
-  "added": "2026-11-09"
+  "added": "2026-11-09",
+  "createdAt": "2026-11-09"
 }

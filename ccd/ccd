@@ -4097,14 +4097,14 @@ _reg_purge() {   # id -> rm -f every "$REG/$id.<field>" registry file for id
   # to neither. 34 + 2 = 36, re-measured on the merged file rather than added
   # up — the same discipline this paragraph is about. The drawer wave then added
   # `stalenarrownote` and `swapnarrownote` (`_pane_narrow_note`'s per-site log
-  # floors): 38; #166's `child` made 39, D-3526's `carriednote` and `tdate` 41, the stall watch's `turn` 42, continuity's `rescuewait` 43, `typed` 44, `choicekept` 45, the route read-back's `readbackseen` 46, the background-job wait's `bgwait` 47 (#189), D-6180's stand-down lines `standdown`, `standdownaff` and `standdownprobe` 50, D-5941's `prbranch` 51, and D-8271's typing-check log floor `typerefuse` 52, the launch record's `deleg` 53 (D-8367), the fresh start's `fresh` 54 (overlord W1a), and the manifest's `inflight` 55 (D-8374) — by addition, NOT a fresh census of
+  # floors): 38; #166's `child` made 39, D-3526's `carriednote` and `tdate` 41, the stall watch's `turn` 42, continuity's `rescuewait` 43, `typed` 44, `choicekept` 45, the route read-back's `readbackseen` 46, the background-job wait's `bgwait` 47 (#189), D-6180's stand-down lines `standdown`, `standdownaff` and `standdownprobe` 50, D-5941's `prbranch` 51, and D-8271's typing-check log floor `typerefuse` 52, the launch record's `deleg` 53 (D-8367), the fresh start's `fresh` 54 (overlord W1a), the manifest's `inflight` 55 (D-8374), and the Overlord's compaction events `compactevents` and `compacteventsprev` 57 — by addition, NOT a fresh census of
   # every per-session field, which this list still is not. `ROUTE_FIELDS` (`class`,
   # `effort`, `subagent`, `workflow`, `compact`, `degraded`, `inert`) and
   # `$REG/<id>.stalepress`/`.tscan` are all real per-session fields this list
   # omits; the gap is pre-existing, not new, and this paragraph's count tracks
   # only the additions named above against the last stated total.
-  # The 55: `archived`, `archivedreason`, `archivemanifest`, `base`, `bgwait`, `branch`,
-  # `carriednote`, `child`, `choicekept`, `compactnote`, `compactskip`, `crosspool`, `deleg`, `fresh`, `hold`, `home`, `hookstate`, `inflight`, `lastcompact`, `lastswap`,
+  # The 57: `archived`, `archivedreason`, `archivemanifest`, `base`, `bgwait`, `branch`,
+  # `carriednote`, `child`, `choicekept`, `compactevents`, `compacteventsprev`, `compactnote`, `compactskip`, `crosspool`, `deleg`, `fresh`, `hold`, `home`, `hookstate`, `inflight`, `lastcompact`, `lastswap`,
   # `pool`, `prbranch`, `prcheckedat`, `prhistory`, `prnumber`, `prphase`, `project`, `rc`,
   # `readbackseen`, `reaping`, `rescuewait`, `setup`, `spawn`, `stalenarrownote`, `standdown`, `standdownaff`, `standdownprobe`, `started`, `stopped`, `stranded`,
   # `strandnotify`, `substrate`, `supervised`, `svcfailed`, `swapblocked`,
@@ -6535,7 +6535,7 @@ if mode == 'state':
     # appending needs write on the FILE, not the directory — the unwritable
     # `$REG` never touches it; and `clear`'s `os.remove` and `put`'s tmp-create
     # both raise `PermissionError`, because both need write on the DIRECTORY
-    # (D-132). So for a session that has never run `pr-state` under an
+    # (D-8590). So for a session that has never run `pr-state` under an
     # unwritable `$REG`: the lock cannot be created, the compare-and-set below
     # proceeds UNLOCKED, and two concurrent runs can each reach the prhistory
     # append — the duplicate-append harm this lock exists to prevent — before
@@ -6543,7 +6543,7 @@ if mode == 'state':
     # which `_ws_archive_manifest` later folds into the archive manifest
     # verbatim.
     #
-    # DISCLOSED, NOT CLOSED (ruling, D-139). It takes a read-only `$REG` AND
+    # DISCLOSED, NOT CLOSED (ruling, D-8596). It takes a read-only `$REG` AND
     # concurrent `pr-state` runs AND a session with no lock file yet — all
     # three at once — and the natural closes each trade this rare duplicate
     # for a worse ordinary-case cost: locking `.prhistory` itself adds a new

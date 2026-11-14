@@ -44,7 +44,7 @@ import { parseAudit, parseReap } from './wsaudit.js';
 import { readTasks } from './tasks/read.js';
 import { Bus, type Notice } from './bus.js';
 import type { FleetWatcher } from './watch.js';
-import { SessionStream, parseSince } from './sessionws.js';
+import { NO_TICK, SessionStream, parseSince } from './sessionws.js';
 import { BEAT_MS } from './sessionws.js';
 // D-5866: the one verb question. Its own line, so the ccdargv import above is left as it stands.
 import { ccdCan } from './ccdargv.js';
@@ -143,6 +143,7 @@ import { moveClaims } from './coord/reclaim.js';
 import { admitArchive } from './coord/archiveAdmission.js';
 import { actArchive, replyArchiveRefused } from './archiveAct.js';
 import { liveRowFor, liveRowWithHookFor, liveWordFor, turnReadDeps, turnVerdictFor } from './turnverdict.js';
+import { turnWordOf } from './sessionReading.js';
 import { ccdSwapRefusal, swapTurnRefusal } from './swapguard.js';
 
 /**
@@ -2258,7 +2259,8 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     const { id } = req.params as { id: string };
     const q = req.query as { since?: string; sinceFile?: string };
     const since = parseSince(q.since, q.sinceFile);
-    const stream = new SessionStream(deps, bus, id, (m: SessionStreamMsg) => socket.send(JSON.stringify(m)), since, watcher);
+    // D-8611: a box with no watcher hands NO_TICK; its streams read for themselves and re-resolve on the backstop alone.
+    const stream = new SessionStream(deps, bus, id, (m: SessionStreamMsg) => socket.send(JSON.stringify(m)), since, watcher ?? NO_TICK);
     void stream.start();
     // A per-connection token, not the session id: one socket's close drops
     // only its OWN claim, so a second tab watching the same session doesn't
@@ -2811,7 +2813,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       if (read.kind !== 'found') return { kind: 'idle' };
       const word = await liveWordFor(turnReads, read.record);
       const identity = measuredIdentity(read.record);
-      if (!word.ok || word.word === 'idle' || identity === null) {
+      if (!word.ok || turnWordOf(word.word) === 'idle' || identity === null) {
         return interruptVerdict({ word, row: null, hookUpdatedAt: null, hookEvent: null });
       }
       return interruptVerdict({ word, ...(await liveRowWithHookFor(turnReads, read.record, identity.uuid)) });

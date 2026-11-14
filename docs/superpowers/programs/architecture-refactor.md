@@ -30,8 +30,8 @@ The refactor is closed on the record (D-8565, defined in `docs/superpowers/plans
 
 The leftovers, filed as standalone tickets:
 
-1. Move the mail pass's status ladder and the raw turn-word readers onto the one session reading.
-2. The session stream drops its own 2-second poll; tests subscribe the way production does.
+1. Move the mail pass's status ladder and the raw turn-word readers onto the one session reading (done in D-8610).
+2. The session stream drops its own 2-second poll; tests subscribe the way production does (fixed in D-8611).
 3. The lifecycle manifest's child-workspace row names the workspace transitions table.
 4. Retype hook events as one shared union across their consumers.
 5. Replace the growth check's blanket new-file waiver with the ring classifier (being built, D-8563).

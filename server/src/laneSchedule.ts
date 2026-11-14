@@ -9,6 +9,9 @@
 // A cadence is how often a lane LOOKS; a safety interval is how long a lane WAITS before it acts on what it saw
 // (`CHILD_RECLAIM_STALL_MS`, `COLLECT_AUDIT_STALL_MS`, the mail and PR backoffs, `DELEGATION_RECOVERY_RETRY_MS`). The
 // two are different facts that happen to share a unit, so a safety interval is never a row and never a row's cadence.
+// A clock kept outside this table on purpose (a safety interval, a UTC hour or day spent once, a timer of the composition
+// root) is named with its reason in the schedule census's `LANE_SCHEDULE_EXCEPTIONS` (`server/test/consolidationCensus.ts`,
+// D-8614), which finds such a clock in the watcher and in the composition root by its shape.
 
 /** The catalogue lane's cadence (design 2026-09-20 §7), the SCHEDULED poll's own: `catalogue.ts` re-exports it, so
  *  `routes.ts`'s refresh-door interval derives `SCHEDULED_POLLS_PER_HOUR` from the SAME constant the watcher polls on

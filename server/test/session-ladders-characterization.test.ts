@@ -23,7 +23,7 @@ import { Tmux, type Runner } from '../src/exec.js';
 import { localIO, type FleetIO } from '../src/io.js';
 import { liveRowFor } from '../src/turnverdict.js';
 import { readSessionRecord } from '../src/registry.js';
-import { SessionStream } from '../src/sessionws.js';
+import { NO_TICK, SessionStream } from '../src/sessionws.js';
 import { FleetWatcher } from '../src/watch.js';
 import { Bus } from '../src/bus.js';
 import { openCoordDb } from '../src/coord/db.js';
@@ -174,7 +174,7 @@ const observe = async (r: Row): Promise<Observed> => {
 
   const deps = { cfg: w.cfg, runCcd: ccdRunner(async () => ({ ran: true, code: 1, stdout: '', stderr: '' }), w.cfg),
     tmux: w.tmux, io: w.io, queue: new KeyedQueue(), time: fakeTime().ports };
-  const stream = new SessionStream(deps, new Bus(), w.id, () => undefined);
+  const stream = new SessionStream(deps, new Bus(), w.id, () => undefined, undefined, NO_TICK);
   const res = await (stream as unknown as { resolve(): Promise<{ ok: boolean; reason?: string; data?: { status: string } }> }).resolve();
   const resolve = res.ok ? `ok:${res.data!.status}` : `no:${res.reason}`;
 

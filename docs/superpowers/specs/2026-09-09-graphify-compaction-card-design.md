@@ -1117,12 +1117,12 @@ slug residue because it intentionally outlives the row. The Bash 4.4+/GNU-or-BSD
    acquire answers "first-ever mint" and behaves exactly as it did before D-2793.
 
    **THE REFUSAL IS A `WHY`, NOT A THIRD STATUS.** `canonical-vanished` is carried in `HOOK_LOCK_WHY` /
-   `COMPACT_LOCK_WHY` beside the ordinary rc 1, because all five hook acquire sites read the acquire as a
-   boolean and two functions across three of its nine sites (`cmd_start`, and `_spawn_start`, which holds
-   two) fall through an unrecognised code into a silent continue (and the ninth, `_inflight_write`'s, reads a boolean
-   and continues silently on any refusal) — a new numeric status would be a distinct refusal nobody distinguishes, and
-   two spawn paths would quietly treat it as mechanism absence. `cmd_ws_add` and `cmd_start` append a conditional remedy
-   clause when it is set, because "retry" is the WRONG remedy for a lock file nothing will recreate.
+   `COMPACT_LOCK_WHY` beside the ordinary rc 1, because all six hook acquire sites read the acquire as a boolean (the
+   sixth is the Overlord's PreCompact events line, `_hook_compact_pre_line`, added in its W1a) and two functions
+   across three of its nine sites (`cmd_start`, and `_spawn_start`, which holds two) fall through an unrecognised code into a
+   silent continue (and the ninth, `_inflight_write`'s, reads a boolean and continues silently on any refusal) — a new
+   numeric status would be a distinct refusal nobody distinguishes, and two spawn paths would quietly treat it as
+   mechanism absence. `cmd_ws_add` and `cmd_start` append a conditional remedy clause when it is set, because "retry" is the WRONG remedy for a lock file nothing will recreate.
 
 The first-publish source never leaks: implementation removes it before taking the common open-alias flow
 (or safely uses it as the initial alias with the same single cleanup). Exact aged cleanup of crashed init or

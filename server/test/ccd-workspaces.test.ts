@@ -1578,6 +1578,9 @@ describe('every _ws_slug_residue and ws-add-refusal assertion is on the disposit
         + 'stating the pair rule, and the assertion itself). The two prose mentions the deferred citation census '
         + 'once added (re-measure evidence quoting `_ws_slug_residue`\'s moved line spans) left with that '
         + 'narrative when the frozen compaction-card documents moved to being measured at their freeze commit' },
+    { file: 'session-hook-precompact.test.ts', grammar: 'residue', count: 2,
+      what: 'the Overlord\'s precompact line (W1a context readings): a case title and one assertion that `_ws_slug_residue` '
+        + 'names a lone dot-free `$REG/<id>.compactevents` or `.compacteventsprev`, the proof that the slug walkers see it' },
     { file: 'ccd-child-tmproot-witness.test.ts', grammar: 'residue', count: 2,
       what: 'the temp-root witness\'s walker census (child-reclamation wave 6): a case title and one assertion that `_ws_slug_residue` names nothing for a slug whose only trace is its dotless `$REG/tmproots/<id>` witness, the proof that the witness is invisible to the slug walkers' },
     { file: 'ccd-collect-record.test.ts', grammar: 'residue', count: 2,

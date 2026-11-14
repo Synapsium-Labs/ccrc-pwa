@@ -410,10 +410,11 @@ describe('one writer per fact (ARCH-40): the switches whose writer set is alread
 
   // D-5853 (Task C0f; ARCH-00 (#525)). The test scanners' TS parser, the operator's option (a) (a TypeScript 6 alias),
   // has ONE importer, `server/test/scan/parse.ts`, and an exact version. The corpus is every tracked or new untracked
-  // .ts/.tsx/.mts/.cts/.js/.jsx/.mjs/.cjs file (not .d.*ts), with comment lines dropped (`stallCodeText`). Under
-  // `server/` any TS parser package counts (the 7.x compiler's `typescript/unstable/*` among them); elsewhere only the
-  // alias does, because the PWA's tests use the PWA's own TypeScript 6. KNOWN WIDTH: a `createRequire` require and a
-  // specifier built at run time are not seen.
+  // .ts/.tsx/.mts/.cts/.js/.jsx/.mjs/.cjs file (not .d.*ts), with comment lines dropped (`stallCodeText`). D-8288
+  // widens it to the whole repository: any TS parser package counts in every package (the 7.x compiler's
+  // `typescript/unstable/*` among them), because the PWA's census and scan suites now read the parser through
+  // `parse.ts` too (its `ts` export) rather than through the PWA's own TypeScript, and no other package declares the
+  // alias. KNOWN WIDTH: a `createRequire` require and a specifier built at run time are not seen.
   const SCAN_PARSER = 'typescript-api';
   const TS_PARSERS = ['typescript', SCAN_PARSER, 'oxc-parser', '@typescript-eslint/parser',
     '@typescript-eslint/typescript-estree', '@babel/parser', '@swc/core', 'acorn', 'esprima'];
@@ -426,8 +427,7 @@ describe('one writer per fact (ARCH-40): the switches whose writer set is alread
     if (r.status !== 0) throw new Error(`git ls-files exited ${String(r.status)}: ${(r.stderr || '').trim()}`);
     return [...new Set(r.stdout.split('\0').filter((f) => f && !/\.d\.[mc]?ts$/.test(f)))]
       .filter((f) => existsSync(path.join(ccrcRoot, f)))
-      .filter((f) => importsPkg(stallCodeText(readFileSync(path.join(ccrcRoot, f), 'utf8')),
-        f.startsWith('server/') ? TS_PARSERS : [SCAN_PARSER]))
+      .filter((f) => importsPkg(stallCodeText(readFileSync(path.join(ccrcRoot, f), 'utf8')), TS_PARSERS))
       .sort();
   };
 
@@ -444,8 +444,17 @@ describe('one writer per fact (ARCH-40): the switches whose writer set is alread
     expect(sees(`import x from ${q('typescript-api-extra')};`)).toBe(false);
   });
 
-  it('only scan/parse.ts imports a TS parser (D-5853)', () => {
+  it('only scan/parse.ts imports a TS parser, in any package (D-5853, D-8288)', () => {
     expect(parserImporters()).toEqual(['server/test/scan/parse.ts']);
+  });
+
+  it('no other package declares the parser alias: the server\'s pin is the one copy (D-8288)', () => {
+    for (const pkg of ['pwa', 'ui', 'agent']) {
+      const m = JSON.parse(readFileSync(path.join(ccrcRoot, pkg, 'package.json'), 'utf8')) as {
+        dependencies?: Record<string, string>; devDependencies?: Record<string, string> };
+      expect({ pkg, dep: m.dependencies?.[SCAN_PARSER], dev: m.devDependencies?.[SCAN_PARSER] })
+        .toEqual({ pkg, dep: undefined, dev: undefined });
+    }
   });
 
   it('the parser is a dev-only dependency pinned exactly, and the lockfile resolves that version (D-5853)', () => {
@@ -1007,6 +1016,21 @@ describe('one lane schedule (ARCH-68): LANE_SCHEDULE and runLane (D-5862)', () =
   it('the delegation lane keeps no clock or guard of its own: its cadence and single flight are the `delegation` row', async () => {
     const { laneClockReported } = await import('../consolidationCensus.js');
     expect(laneClockReported(), 'DelegationLane#lastSweepAt and the three beats\' clocks are rows of LANE_SCHEDULE').toEqual([]);
+  });
+
+  // D-8614 (ARCH-68's follow-up): the clocks that stay outside the table are named, each with its reason, in
+  // `LANE_SCHEDULE_EXCEPTIONS`: the delegation lane's recovery backoff, its hourly and daily latches and its marks warn hour,
+  // the breaker's and the stall watch's gap rules, and the composition root's daily retention timer. A clock the census finds
+  // that no entry names reds here, and so does an entry whose clock is gone. The list only shrinks.
+  it('every hand-made clock outside LANE_SCHEDULE is a recorded exception, and no exception is stale (D-8614)', async () => {
+    const { handClocksOutsideSchedule, LANE_SCHEDULE_EXCEPTIONS } = await import('../consolidationCensus.js');
+    const found = handClocksOutsideSchedule();
+    expect(text(found.filter((x) => x.exception === null)), 'a hand-made clock is a row of LANE_SCHEDULE or a recorded exception').toEqual([]);
+    expect(LANE_SCHEDULE_EXCEPTIONS.filter((e) => !found.some((x) => x.exception === e)).map((e) => e.name), 'an exception whose clock is gone').toEqual([]);
+    expect(LANE_SCHEDULE_EXCEPTIONS.map((e) => `${e.owner ?? e.file}#${e.name}`)).toEqual([
+      'FleetWatcher#lastStallJudgedAt', 'DelegationLane#reconciledWallMs', 'DelegationLane#lastRecoverAt', 'DelegationLane#lastUpkeepHour',
+      'DelegationLane#lastCompactDay', 'DelegationLane#lastMarkWarnHour', 'server/src/index.ts#accountAudit.sweep',
+    ]);
   });
 
   it('no throttle reads the wall clock: every row of LANE_SCHEDULE is monotonic (OA-C4, ruled (a) on #803), 0 wall rows', async () => {
