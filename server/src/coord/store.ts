@@ -125,6 +125,8 @@ import { bodyDigest } from '../../../shared/mark.mjs';
 import { isNewerTag, newestTag } from '../../../shared/semver.js';
 import type { ClaudeRollTargets } from '../../../shared/claudeVersion.js';
 import type { RollSettingsRead } from './rollTarget.js';
+import type { PlainAutoMemoryRead } from '../continuity/profileFor.js';
+import type { PlainAutoMemoryChoice } from '../../../shared/plainAutoMemory.js';
 import {
   SHADOW_JOURNAL_MAX_AGE_MS, SHADOW_JOURNAL_MAX_ROWS, isShadowLane, shadowVerdictKey,
   type ShadowLane, type ShadowVerdictInput, type ShadowVerdictRow,
@@ -6010,6 +6012,35 @@ export class CoordStore {
         this.db.prepare('UPDATE roll_settings SET targets = ?, updatedAt = ? WHERE id = 1').run(targets, at);
       }
       return { before, after: this.rollSettings() };
+    });
+  }
+
+  // ── auto memory for plain sessions (Overlord W1a, launch profiles PR B; spec §3.3.7 H14) ──────────────
+
+  /** The row as read: a row, no row, or a read that failed. Nothing is decided here: `plainAutoMemoryOf` (L1,
+   *  `continuity/profileFor.ts`) decides what the stored word means. */
+  plainAutoMemorySettings(): PlainAutoMemoryRead {
+    try {
+      const r = this.db.prepare('SELECT choice FROM plain_memory_settings WHERE id = 1').get() as { choice: unknown } | undefined;
+      return r === undefined ? { kind: 'absent' } : { kind: 'row', choice: r.choice };
+    } catch (err) {
+      return { kind: 'unreadable', detail: err instanceof Error ? err.message : String(err) };
+    }
+  }
+
+  /** The one writer of `plain_memory_settings`, in one `tx()`: the row before, then the write (an insert for a lost row),
+   *  then the row after. It validates nothing: the route has narrowed `choice`. A write that changes nothing runs no
+   *  `UPDATE`, so `updatedAt` stays. */
+  setPlainAutoMemory(choice: PlainAutoMemoryChoice, at: number): { before: PlainAutoMemoryRead; after: PlainAutoMemoryRead } {
+    return tx(this.db, () => {
+      const before = this.plainAutoMemorySettings();
+      if (before.kind === 'unreadable') throw new Error(`plain auto memory setting unreadable inside the write: ${before.detail}`);
+      if (before.kind === 'absent') {
+        this.db.prepare('INSERT INTO plain_memory_settings (id, choice, updatedAt) VALUES (1, ?, ?)').run(choice, at);
+      } else if (before.choice !== choice) {
+        this.db.prepare('UPDATE plain_memory_settings SET choice = ?, updatedAt = ? WHERE id = 1').run(choice, at);
+      }
+      return { before, after: this.plainAutoMemorySettings() };
     });
   }
 

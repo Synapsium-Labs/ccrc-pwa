@@ -687,7 +687,7 @@ export function purgeTimers(db: DatabaseSync, before: number): { removed: number
 }
 
 // ------------------------------------------------------------------------------------------------- the notes
-// `continuity_notes` and `continuity_handovers` (Overlord spec §3.3.2 C37, W1a, the notes piece; migration 71). ONE writer,
+// `continuity_notes` and `continuity_handovers` (Overlord spec §3.3.2 C37, W1a, the notes piece; migration 72). ONE writer,
 // the note door (`routes.ts`), through `appendNote` and `putHandover`; the door and the card's gatherer read through
 // `liveNotes`, `noteById` and `handoverBefore`. APPEND-ONLY: nothing here updates or deletes a note. A failed statement
 // answers ok: false, never a throw; a row this build cannot read fails the read whole, never a partial list.

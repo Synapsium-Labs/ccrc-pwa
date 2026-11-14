@@ -144,6 +144,10 @@ import {
 } from '../../../shared/api.js';
 import { CLAUDE_ROLL_TARGETS, CLAUDE_ROLL_TARGETS_DEFAULT, isClaudeRollTargets, isClaudeVersion, type ClaudeRollTargets } from '../../../shared/claudeVersion.js';
 import { rollTargetsOf } from './rollTarget.js';
+import { plainAutoMemoryOf } from '../continuity/profileFor.js';
+import {
+  PLAIN_AUTO_MEMORY_CHOICES, PLAIN_AUTO_MEMORY_DEFAULT, isPlainAutoMemoryChoice, type PlainAutoMemoryView,
+} from '../../../shared/plainAutoMemory.js';
 import { planStorePort } from './planStore.js';
 import { planFactsOf } from './planRunFacts.js';
 
@@ -3108,6 +3112,32 @@ export function registerCoordRoutes(
         'record-only', { degraded: 'roll idle sessions written, feed archive degraded' });
     }
     return reply.code(200).send({ ok: true, ...rollIdleView(deps.coord) });
+  });
+
+  /** `GET`/`POST /api/coord/plain-auto-memory` — Settings › Automation › "Auto memory for plain sessions" (Overlord W1a,
+   *  launch profiles PR B; spec §3.3.7 H14, Table 11.1d): `off` (the default on a fleet host) or `on`. The roll-idle door's
+   *  shape: session-gated when sign-in is armed, open dark, since no machine lane calls it and it moves no session until the
+   *  `launch-profile` lane is live. The one writer is `CoordStore.setPlainAutoMemory`; a change is a record-only feed row. */
+  const plainMemoryView = (coord: NonNullable<typeof deps.coord>): PlainAutoMemoryView =>
+    ({ choice: plainAutoMemoryOf(coord.plainAutoMemorySettings()), default: PLAIN_AUTO_MEMORY_DEFAULT, choices: PLAIN_AUTO_MEMORY_CHOICES });
+  app.get('/api/coord/plain-auto-memory', async (_req, reply) => {
+    if (!deps.coord) return notConfigured(reply);
+    return reply.code(200).send({ ok: true, ...plainMemoryView(deps.coord) });
+  });
+  app.post('/api/coord/plain-auto-memory', async (req, reply) => {
+    if (!deps.coord) return notConfigured(reply);
+    const body = req.body as { choice?: unknown } | null | undefined;
+    const choice = body !== null && typeof body === 'object' ? body.choice : undefined;
+    if (!isPlainAutoMemoryChoice(choice)) {
+      return refuseRoute(reply, 'bad-request', { detail: `choice must be one of ${PLAIN_AUTO_MEMORY_CHOICES.join(', ')}` });
+    }
+    const before = plainAutoMemoryOf(deps.coord.setPlainAutoMemory(choice, Date.now()).before);
+    if (before !== choice && deps.notifyLog) {
+      const actor = deps.cfg.authEnabled ? deviceActor(sessionAuth(req).device) : 'flag-off';
+      notice({ kind: 'coord', sessionId: '', title: 'plain auto memory changed', body: `auto memory for plain sessions: ${before ?? 'unreadable'} -> ${choice}; by ${actor}`, runId: null },
+        'record-only', { degraded: 'plain auto memory written, feed archive degraded' });
+    }
+    return reply.code(200).send({ ok: true, ...plainMemoryView(deps.coord) });
   });
 
   /**

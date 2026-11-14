@@ -184,6 +184,11 @@ export const POOL_EPOCH_FILE_NAME = 'pool-epoch';
  * has its own reader and its own parse.
  */
 export const CCRC_DIR_NAME = '.ccrc';
+/** The history programme's W3 steer markers' directory under `~/.ccrc` (`<CCRC_DIR_NAME>/history/steer-on/<registry id>`, the file
+ *  the session hook's W3 gate reads). The agent admits a `stat` of one marker by it (`checkSteerOnStat`), and the server's
+ *  launch-profile lane names the path by it. A second spelling of `ccd/history/lib.mjs`'s `SWITCHES.steerOnDir` (bare Node,
+ *  another package), held equal to it by `continuity-profile-lane.test.ts`. */
+export const HISTORY_STEER_ON_DIR = 'history/steer-on';
 export const NODE_FILES = {
   stamp: 'build.json', installed: 'installed', caps: 'ccrc-caps', floor: 'floor', previous: 'previous',
   nodeId: 'node-id', report: 'update.json', projection: 'update-intent',

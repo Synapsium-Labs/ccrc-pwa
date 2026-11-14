@@ -10,7 +10,7 @@ import {
   decideRoute, foldRouteTrail, parseRouteRequest,
   type RegistryRead, type RouteAsk, type RouteFacts, type RouteTrailEvent,
 } from '../src/coord/route.js';
-import { ROUTE_LANE_ONLY_FIELDS, RUN_ROUTE_REFUSE_CODES } from '../../shared/api.js';
+import { ROUTE_LANE_ONLY_FIELDS, RUN_ROUTE_REFUSE_CODES, routeParseWhy } from '../../shared/api.js';
 import { parsedFile } from './scan/symbols.js';
 import { stripTs } from './growthCheck.js';
 
@@ -78,6 +78,14 @@ describe('parseRouteRequest', () => {
           .toEqual({ ok: false, detail: `field/value invalid: lane-only ${field}` });
       }
     }
+  });
+  it('every manual-arm refusal renders its suffix through the one spelling, routeParseWhy (review 1970 N2)', () => {
+    for (const [field, value, why] of [['nope', 'x', 'unknown-field'], ['effort', '', 'bad-value'], ['automem', 'off', 'lane-only']] as const) {
+      expect(parseRouteRequest(7, { target: 'worker', why: 'x', field, value }))
+        .toEqual({ ok: false, detail: `field/value invalid: ${routeParseWhy({ ok: false, why, field })}` });
+    }
+    expect(routeParseWhy({ ok: false, why: 'not-object' })).toBe('not-object');
+    expect(routeParseWhy({ ok: false, why: 'bad-value', field: 'effort' })).toBe('bad-value effort');
   });
   it('treats a missing body as empty', () => {
     expect(parseRouteRequest(7, undefined)).toMatchObject({ ok: false, detail: 'target must be "worker" or "coordinator"' });

@@ -141,17 +141,20 @@ are built as written.
 
 ## Measured
 
-- Migration slot: this is entry 71. Timers PR A (#2797) landed first, at `dc2a6826a`, and took entry 70
-  (`continuity_timers`). This branch merged `main` once and moved the notes entry after it. The coordinator ruled the
-  move (review 2039, F10). `coord-db.test.ts` pins the slot to the timers' entry plus one, and to 71. The sites moved:
-  - `schema.ts`, the entry's header, its `user_version` sentence and its "must print 70" line;
+- Migration slot: this is entry 72. Timers PR A (#2797, `dc2a6826a`) took entry 70 (`continuity_timers`). Launch
+  profiles PR B (#2794, `6f408451d`) then took 71 (`plain_memory_settings` and the `launch-profile` lane-arm row). This
+  branch merged `main` once after each landing, as the coordinator ruled (review 2039 F10, review 2046 F8). `coord-db.test.ts`
+  pins the slot to launch profiles' entry plus one, and to 72. The sites moved:
+  - `schema.ts`, the entry's header, its `user_version` sentence and its "must print 71" line;
   - `coord-db.test.ts`, the version pins and the comment chains;
-  - `run-close-switch.test.ts`, the undo comment, the DROP list (`continuity_timers` too) and "eighteen";
+  - `run-close-switch.test.ts`, the undo comment, the DROP list (`continuity_timers` and `plain_memory_settings` too) and
+    "nineteen";
   - `writers-map.test.ts`;
-  - the store comment.
-
-  Launch profiles PR B (#2794) also adds a migration. If it lands after this one, it takes 72.
-- `server/src/coord/schema.ts` grows by 38 net lines over `main` with entry 71 (3,005 to 3,043). It was already in
+  - the store comment;
+  - the route counts that launch profiles changed too: `auth-gate.test.ts` `ROUTES.length` 232, an HTTP half of 229
+    with 140 gated and 88 exempt, and `gate.ts`'s "all 229 routes". The box-token lane count (seventy-nine) is
+    unchanged, because launch profiles' two doors are session-gated.
+- `server/src/coord/schema.ts` grows by 38 net lines over `main` with entry 72. It was already in
   `GROWTH_FILES` (`server/test/growthCheck.ts`) on both sides, and 38 is under the 40 allowed.
 - `server/src/coord/store.ts` grows by 9 net lines (the five one-line delegates and their import), under the 40 allowed.
 - The partial unique index, measured: with it dropped, the store-level case of two revisions of one note goes red
