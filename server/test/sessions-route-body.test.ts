@@ -17,7 +17,9 @@ import { buildServer } from '../src/server.js';
 import { testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
 import { POOLS_CAP, ROUTE_ARGV_CAP } from '../src/ccdargv.js';
+import { ROUTE_LANE_ONLY_FIELDS } from '../../shared/api.js';
 
+const LANE_ONLY_VALUE: Record<string, string> = { profile: 'coordinator', automem: 'off', compactwindow: '350000' };
 const WITH_TOKEN = ['ws-add', 'ensure', 'ws-hold', ROUTE_ARGV_CAP];
 const WITH_TOKEN_AND_POOLS = [...WITH_TOKEN, 'enable', 'start', POOLS_CAP];
 
@@ -61,6 +63,21 @@ describe('POST /api/sessions carries an operator route', () => {
     });
     expect(res.statusCode).toBe(400);
     expect(res.json()).toEqual({ ok: false, error: 'bad-request', detail: 'route: unknown-field colour' });
+    expect(calls).toEqual([]);
+    await app.close();
+  });
+
+  it('a launch-profile field: 400 naming it, and no ccd call reaches the fleet at all (Overlord W1a, F1)', async () => {
+    const { app, calls } = await appWithCcdSpy(WITH_TOKEN);
+    expect(ROUTE_LANE_ONLY_FIELDS).toHaveLength(3);
+    for (const field of ROUTE_LANE_ONLY_FIELDS) {
+      const res = await app.inject({
+        method: 'POST', url: '/api/sessions',
+        payload: { wrapper: 'claude', project: 'demo', enable: false, route: { effort: 'high', [field]: LANE_ONLY_VALUE[field] } },
+      });
+      expect(res.statusCode, field).toBe(400);
+      expect(res.json()).toEqual({ ok: false, error: 'bad-request', detail: `route: lane-only ${field}` });
+    }
     expect(calls).toEqual([]);
     await app.close();
   });
@@ -155,6 +172,21 @@ describe('POST /api/projects/:project/workspaces carries an operator route', () 
     });
     expect(res.statusCode).toBe(400);
     expect(res.json()).toEqual({ ok: false, error: 'bad-request', detail: 'route: bad-value effort' });
+    expect(calls).toEqual([]);
+    await app.close();
+  });
+
+  it('a launch-profile field: 400 naming it, and no ccd call reaches the fleet at all (Overlord W1a, F1)', async () => {
+    const { app, calls } = await appWithCcdSpy(WITH_TOKEN);
+    expect(ROUTE_LANE_ONLY_FIELDS).toHaveLength(3);
+    for (const field of ROUTE_LANE_ONLY_FIELDS) {
+      const res = await app.inject({
+        method: 'POST', url: '/api/projects/demo/workspaces',
+        payload: { route: { effort: 'high', [field]: LANE_ONLY_VALUE[field] } },
+      });
+      expect(res.statusCode, field).toBe(400);
+      expect(res.json()).toEqual({ ok: false, error: 'bad-request', detail: `route: lane-only ${field}` });
+    }
     expect(calls).toEqual([]);
     await app.close();
   });

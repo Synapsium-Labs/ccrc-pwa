@@ -1,0 +1,51 @@
+{
+  "auditor": {
+    "autoMemory": "off",
+    "compactionSettings": {},
+    "env": {},
+    "settings": {}
+  },
+  "coordinator": {
+    "autoMemory": "off",
+    "compactionSettings": {
+      "idleCompaction": false
+    },
+    "env": {},
+    "settings": {}
+  },
+  "overlord": {
+    "autoMemory": "off",
+    "compactionSettings": {
+      "idleCompaction": false
+    },
+    "env": {
+      "CLAUDE_CODE_DISABLE_AGENT_VIEW": "1",
+      "CLAUDE_CODE_FORK_SUBAGENT": "0"
+    },
+    "settings": {}
+  },
+  "plain": {
+    "autoMemory": "switch",
+    "compactionSettings": {},
+    "env": {},
+    "settings": {}
+  },
+  "replay": {
+    "autoMemory": "off",
+    "compactionSettings": {},
+    "env": {},
+    "settings": {}
+  },
+  "reviewer": {
+    "autoMemory": "off",
+    "compactionSettings": {},
+    "env": {},
+    "settings": {}
+  },
+  "worker": {
+    "autoMemory": "off",
+    "compactionSettings": {},
+    "env": {},
+    "settings": {}
+  }
+}

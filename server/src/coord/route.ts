@@ -67,7 +67,9 @@ export type RouteRequest = { ok: true; id: number; ask: RouteAsk } | { ok: false
  * canonical-id seam `routes.test.ts` censuses; `null` is a bad one), the target, the `why` (1..400 bytes, no
  * control characters) and exactly one of `kind`, `demote` or `field`+`value`.
  * The manual value passes `parseRouteFields`, the guard the sibling session
- * route reuses: ccd's own `_route_valid` carries no control-character or
+ * route reuses, which also refuses a launch-profile field (`lane-only`: the lane
+ * writes those through `CCD_ARGV.routeSet`, never this door; `kind` and `demote`
+ * move only `class` and `effort`): ccd's own `_route_valid` carries no control-character or
  * length arm, so this is the only barrier on shape, and a value that skipped it
  * could poison the `route:` event string the fold parses back off its history.
  * Each `detail` is the sentence the route sends on its 400, verbatim.
@@ -103,7 +105,7 @@ export function parseRouteRequest(id: number | null, raw: unknown): RouteRequest
   }
   const parsed = parseRouteFields(typeof body.field === 'string' ? { [body.field]: body.value } : null);
   if (!parsed.ok || Object.keys(parsed.route).length !== 1) {
-    return { ok: false, detail: !parsed.ok ? `field/value invalid: ${parsed.why}` : 'field and value are required' };
+    return { ok: false, detail: !parsed.ok ? `field/value invalid: ${parsed.why}${parsed.field === undefined ? '' : ` ${parsed.field}`}` : 'field and value are required' };
   }
   const [field, value] = Object.entries(parsed.route)[0] as [RouteField, string];
   return { ok: true, id, ask: { target, why, how: { by: 'manual', field, value } } };

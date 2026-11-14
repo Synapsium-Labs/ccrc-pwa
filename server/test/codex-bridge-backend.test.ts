@@ -17,6 +17,7 @@ import { ghContainedEnv } from './ccdWsHelpers.js';
 import { mkTmp } from './tmpHelpers.js';
 import { AUTH_LIB, CLOSED_AUTH_BASE, FIXTURE_ACCOUNT_ID, plantBackendCredential, syntheticJwt } from './codexAuthFixture.js';
 import { driverLines, fakeResponses, runBridgeDriver, type ResponsesAnswer } from './codexBridgeFixture.js';
+import { CATALOGUE_VERBOSITIES } from '../../shared/models.js';
 
 const PY = pythonOrSkip();
 
@@ -387,5 +388,205 @@ describe.skipIf(!PY)('the contained environments name the bridge upstream (codex
     expect(runPy(f, { home, env: { CCGPT_BRIDGE_UPSTREAM_BASE: '' } }).stdout.trim()).toBe(CLOSED_AUTH_BASE);
     expect(runPy(f, { home, env: { CCGPT_BRIDGE_UPSTREAM_BASE: mine } }).stdout.trim()).toBe(mine);
     expect((await runPyAsync(f, { home })).stdout.trim()).toBe(CLOSED_AUTH_BASE);
+  });
+});
+
+// ── the request markers (D-8622, D-8623) ──────────────────────────────────────────────────────────────────────────
+// Three markers in the lane directory, each existence-only and off by default, each add one thing native Codex sends:
+// `reasoning.context: "all_turns"` on a Lite model, `text.verbosity` at the model's default, and the `x-codex-turn-state`
+// echo. Codex's shapes (upstream openai/codex @ 826b6e8, codex-rs/codex-api/src/common.rs): `Reasoning` serialises
+// `effort`, `summary`, `context` in that order, `TextControls` `verbosity` then `format`, and the request's `text`
+// follows `prompt_cache_key`. The body's eligibility is the catalogue row's (D-8620's fields), never the model's name.
+const LITE_ROW = { id: 'model-6.1-alpha', hidden: false, efforts: [], useResponsesLite: true, supportVerbosity: true, defaultVerbosity: 'low' };
+const PLAIN_ROW = { id: 'model-6.1-alpha', hidden: false, efforts: [], useResponsesLite: false, supportVerbosity: false, defaultVerbosity: 'low' };
+/** A session id, so every body of a case shares one cache key (an anonymous one is fresh per request). The driver
+ *  prints its lines with sorted keys, so a nested object's key ORDER is asserted on `wire`, the bytes sent. */
+const SESSION_H = { 'x-claude-code-session-id': 'sess-fx1' };
+const FORMAT_CONFIG = { format: { type: 'json_schema', schema: { type: 'object', properties: { ok: { type: 'boolean' } }, required: ['ok'] } } };
+
+/** A fixture lane directory holding the named markers (each an empty file). */
+function markedLane(prefix: string, names: string[]): { home: string; laneDir: string } {
+  const home = mkTmp(prefix);
+  const laneDir = join(home, 'lane');
+  mkdirSync(laneDir, { mode: 0o700 });
+  for (const n of names) writeFileSync(join(laneDir, n), '');
+  return { home, laneDir };
+}
+
+describe.skipIf(!PY)('the request markers: the body (D-8622)', () => {
+  const ALL = ['bridge-reasoning-all-turns', 'bridge-verbosity', 'bridge-turn-state'];
+
+  it('the marker names and the words they send are the backend\'s constants, and its verbosities are the catalogue\'s', async () => {
+    const [c] = await run([{ op: 'backend-consts' }]);
+    expect(c).toMatchObject({
+      ALL_TURNS_MARKER: 'bridge-reasoning-all-turns', VERBOSITY_MARKER: 'bridge-verbosity', TURN_STATE_MARKER: 'bridge-turn-state',
+      ALL_TURNS: 'all_turns', TURN_STATE_HEADER: 'x-codex-turn-state',
+    });
+    expect(c.MARKERS).toEqual(ALL);
+    // the three words of Codex's OpenAiVerbosity, the same bound D-8620's catalogue readers apply
+    expect(c.VERBOSITIES).toEqual([...CATALOGUE_VERBOSITIES]);
+  });
+
+  it('with no marker the body is byte for byte the unmarked body, whatever the row says', async () => {
+    const { home, laneDir } = markedLane('cb-backend-nomark-', []);
+    for (const extra of [{}, { reasoning: { effort: 'high' } }]) {
+      for (const output of [undefined, FORMAT_CONFIG]) {
+        const oc = output === undefined ? {} : { output_config: output };
+        const [base, lite] = await run([
+          { op: 'backend-body', headers: SESSION_H, body: anthropic(extra), ...oc },
+          { op: 'backend-body', headers: SESSION_H, body: anthropic(extra), ...oc, laneDir, row: LITE_ROW },
+        ], { home });
+        expect(lite.wire, JSON.stringify({ extra, output })).toBe(base.wire);
+        expect(lite.carried).toEqual([]);
+      }
+    }
+  });
+
+  it('bridge-reasoning-all-turns on a Lite row: context follows effort in reasoning, or stands alone', async () => {
+    const { home, laneDir } = markedLane('cb-backend-allturns-', ['bridge-reasoning-all-turns']);
+    const [effort, none, formatted] = await run([
+      { op: 'backend-body', headers: SESSION_H, body: anthropic({ reasoning: { effort: 'high' } }), laneDir, row: LITE_ROW },
+      { op: 'backend-body', headers: SESSION_H, body: anthropic(), laneDir, row: LITE_ROW },
+      { op: 'backend-body', headers: SESSION_H, body: anthropic({ reasoning: { effort: 'low' } }), output_config: FORMAT_CONFIG, laneDir, row: LITE_ROW },
+    ], { home });
+    expect(effort.body.reasoning).toEqual({ effort: 'high', context: 'all_turns' });
+    expect(effort.wire).toContain('"parallel_tool_calls":true,"reasoning":{"effort":"high","context":"all_turns"},"store":false,');
+    expect(effort.keys).toEqual(ORDER);
+    expect(effort.carried).toEqual(['bridge-reasoning-all-turns']);
+    // no effort: reasoning is the context alone, in its place
+    expect(none.body.reasoning).toEqual({ context: 'all_turns' });
+    expect(none.wire).toContain('"parallel_tool_calls":true,"reasoning":{"context":"all_turns"},"store":false,');
+    expect(none.keys).toEqual(ORDER);
+    expect(none.keys).not.toContain('text');
+    // an output format is unchanged by it: text is the format alone
+    expect(formatted.body.reasoning).toEqual({ effort: 'low', context: 'all_turns' });
+    expect(formatted.wire).toContain('"prompt_cache_key":"ccrc:sess-fx1","text":{"format":{');
+  });
+
+  it('bridge-reasoning-all-turns sends nothing for a row that is not Lite, says nothing, says it wrongly, or is absent', async () => {
+    const { home, laneDir } = markedLane('cb-backend-allturns-no-', ['bridge-reasoning-all-turns']);
+    const rows = [PLAIN_ROW, { id: 'model-6.1-alpha' }, { ...LITE_ROW, useResponsesLite: 'true' }, { ...LITE_ROW, useResponsesLite: 1 }, undefined];
+    const [base, ...lines] = await run([
+      { op: 'backend-body', headers: SESSION_H, body: anthropic({ reasoning: { effort: 'high' } }) },
+      ...rows.map((row) => ({ op: 'backend-body', headers: SESSION_H, body: anthropic({ reasoning: { effort: 'high' } }), laneDir, ...(row ? { row } : {}) })),
+    ], { home });
+    for (const [i, l] of lines.entries()) {
+      expect(l.wire, JSON.stringify(rows[i])).toBe(base.wire);
+      expect(l.carried).toEqual([]);
+    }
+  });
+
+  it('bridge-verbosity: text.verbosity is the row\'s default, before text.format in the one text object', async () => {
+    const { home, laneDir } = markedLane('cb-backend-verbosity-', ['bridge-verbosity']);
+    const [alone, formatted, high, translated] = await run([
+      { op: 'backend-body', headers: SESSION_H, body: anthropic(), laneDir, row: LITE_ROW },
+      { op: 'backend-body', headers: SESSION_H, body: anthropic(), output_config: FORMAT_CONFIG, laneDir, row: LITE_ROW },
+      { op: 'backend-body', headers: SESSION_H, body: anthropic(), laneDir, row: { ...LITE_ROW, defaultVerbosity: 'high' } },
+      { op: 'from-anthropic', headers: SESSION_H, body: anthropic(), output_config: FORMAT_CONFIG },
+    ], { home });
+    expect(alone.body.text).toEqual({ verbosity: 'low' });
+    expect(alone.keys).toEqual([...ORDER.filter((k) => k !== 'reasoning'), 'text']);
+    expect(alone.wire.endsWith(',"text":{"verbosity":"low"}}')).toBe(true);
+    expect(alone.carried).toEqual(['bridge-verbosity']);
+    expect(formatted.body.text).toEqual({ verbosity: 'low', format: translated.request.output_format });
+    expect(formatted.wire).toContain('"prompt_cache_key":"ccrc:sess-fx1","text":{"verbosity":"low","format":{');
+    expect(formatted.keys.slice(-2)).toEqual(['prompt_cache_key', 'text']);
+    expect(high.body.text).toEqual({ verbosity: 'high' });
+    // reasoning is untouched by it
+    expect(alone.keys).not.toContain('reasoning');
+  });
+
+  it('bridge-verbosity sends nothing without supportVerbosity true and a valid defaultVerbosity', async () => {
+    const { home, laneDir } = markedLane('cb-backend-verbosity-no-', ['bridge-verbosity']);
+    const rows = [
+      PLAIN_ROW, { ...LITE_ROW, supportVerbosity: 'true' }, { ...LITE_ROW, defaultVerbosity: 'terse' },
+      { ...LITE_ROW, defaultVerbosity: 'LOW' }, { ...LITE_ROW, defaultVerbosity: ['low'] },
+      { id: 'model-6.1-alpha', supportVerbosity: true }, undefined,
+    ];
+    for (const output of [undefined, FORMAT_CONFIG]) {
+      const oc = output === undefined ? {} : { output_config: output };
+      const [base, ...lines] = await run([
+        { op: 'backend-body', headers: SESSION_H, body: anthropic(), ...oc },
+        ...rows.map((row) => ({ op: 'backend-body', headers: SESSION_H, body: anthropic(), ...oc, laneDir, ...(row ? { row } : {}) })),
+      ], { home });
+      for (const [i, l] of lines.entries()) {
+        expect(l.wire, JSON.stringify(rows[i])).toBe(base.wire);
+        expect(l.carried).toEqual([]);
+      }
+    }
+  });
+
+  it('every marker on a Lite row: the whole body, in Codex\'s order, and the turn-state marker adds nothing to it', async () => {
+    const { home, laneDir } = markedLane('cb-backend-allmarks-', ALL);
+    const [line, translated] = await run([
+      { op: 'backend-body', headers: SESSION_H, body: anthropic({ reasoning: { effort: 'medium' } }), output_config: FORMAT_CONFIG, laneDir, row: LITE_ROW },
+      { op: 'from-anthropic', headers: SESSION_H, body: anthropic(), output_config: FORMAT_CONFIG },
+    ], { home });
+    expect(line.body).toEqual({
+      model: 'model-6.1-alpha', stream: true,
+      input: [DEVELOPER_ITEM, { type: 'message', role: 'user', content: [{ type: 'input_text', text: USER }] }],
+      tools: [], tool_choice: 'auto', parallel_tool_calls: true, reasoning: { effort: 'medium', context: 'all_turns' },
+      store: false, include: ['reasoning.encrypted_content'], prompt_cache_key: line.body.prompt_cache_key,
+      text: { verbosity: 'low', format: translated.request.output_format },
+    });
+    expect(line.keys).toEqual([...ORDER, 'text']);
+    expect(line.wire).toContain('"reasoning":{"effort":"medium","context":"all_turns"},"store":false,');
+    expect(line.wire).toContain('"prompt_cache_key":"ccrc:sess-fx1","text":{"verbosity":"low","format":{');
+    expect(line.carried).toEqual(['bridge-reasoning-all-turns', 'bridge-verbosity']);
+  });
+});
+
+describe.skipIf(!PY)('the request markers: the turn-state header and the turn (D-8623)', () => {
+  const STATE = `ts-fixture-${'a1b2c3'.repeat(4)}`;
+
+  it('the header is sent only when given, right after session-id, its value as given', async () => {
+    const session = { 'x-claude-code-session-id': 'sess-fx1' };
+    const withState = await post([{ status: 200, sse: COMPLETED }], { body: anthropic(), headers: session, turnState: STATE });
+    const [req] = withState.requests;
+    expect(req.values['x-codex-turn-state']).toBe(STATE);
+    expect(req.headers.filter((h) => h === 'x-codex-turn-state')).toHaveLength(1);
+    expect(req.headers.indexOf('x-codex-turn-state')).toBe(req.headers.indexOf('session-id') + 1);
+    const without = await post([{ status: 200, sse: COMPLETED }], { body: anthropic(), headers: session });
+    expect(without.requests[0].headers).not.toContain('x-codex-turn-state');
+    // everything else is the unmarked request's, in its order
+    expect(req.headers.filter((h) => h !== 'x-codex-turn-state')).toEqual(without.requests[0].headers);
+    // a value outside a header token's shape (a space, a control character, empty) is never sent
+    for (const bad of ['two words', 'tab\there', '']) {
+      const r = await post([{ status: 200, sse: COMPLETED }], { body: anthropic(), headers: session, turnState: bad });
+      expect(r.line.error, JSON.stringify(bad)).toBeNull();
+      expect(r.requests[0].headers, JSON.stringify(bad)).not.toContain('x-codex-turn-state');
+    }
+  });
+
+  it('a turn is its latest user message holding no tool_result, hashed with the cache key', async () => {
+    const userA = { role: 'user', content: [{ type: 'text', text: 'task A' }] };
+    const call = { role: 'assistant', content: [{ type: 'tool_use', id: 'call_fx1', name: 'Read', input: { file_path: 'a' } }] };
+    const result = { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'call_fx1', content: 'A' }] };
+    // Claude Code's text beside tool results lives in the tool-result message: it never starts a turn
+    const resultWithText = { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'call_fx1', content: 'A' }, { type: 'text', text: 'and B' }] };
+    // Claude Code moves its cache breakpoint onto the newest message, so the turn's own message loses it
+    const userAMarked = { role: 'user', content: [{ type: 'text', text: 'task A', cache_control: { type: 'ephemeral' } }] };
+    const userB = { role: 'user', content: 'task B' };
+    const [line] = await run([{ op: 'turn-key', cases: [
+      [[userAMarked], 'ccrc:sess-fx1'],
+      [[userA, call, result], 'ccrc:sess-fx1'],
+      [[userA, call, resultWithText], 'ccrc:sess-fx1'],
+      [[{ role: 'user', content: 'task A' }], 'ccrc:sess-fx1'],
+      [[userA, call, result, { role: 'assistant', content: 'done' }, userB], 'ccrc:sess-fx1'],
+      [[userA], 'ccrc:sess-fx1:agent-fx1'],
+      // a later turn that opens on the same words is a turn of its own (its message's place differs)
+      [[userA, call, result, { role: 'assistant', content: 'done' }, userA], 'ccrc:sess-fx1'],
+      [[result], 'ccrc:sess-fx1'],
+      [[], 'ccrc:sess-fx1'],
+      ['not a list', 'ccrc:sess-fx1'],
+    ] }]);
+    const [a, loop, beside, asString, b, subagent, again, none, empty, odd] = line.keys as (string | null)[];
+    expect(a).toMatch(/^[0-9a-f]{64}$/);
+    expect([loop, beside, asString]).toEqual([a, a, a]);
+    expect(b).not.toBe(a);
+    expect(subagent).not.toBe(a);
+    expect(again).toMatch(/^[0-9a-f]{64}$/);
+    expect([a, b]).not.toContain(again);
+    expect([none, empty, odd]).toEqual([null, null, null]);
   });
 });

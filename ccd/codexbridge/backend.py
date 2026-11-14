@@ -16,6 +16,19 @@ no prompt of the bridge's own is sent. Only with the lane's `bridge-instructions
 `instructions` instead, and then it is not `input[0]`. `max_output_tokens`, `temperature`, `top_p`, `user`, `metadata`,
 `previous_response_id` and `truncation` are never sent.
 
+THE REQUEST MARKERS (D-8622). Three more markers in the lane directory, each existence-only, read at each POST, no
+writer in the tree, each adding one thing native Codex sends and this body otherwise does not:
+`bridge-reasoning-all-turns` adds `"context": "all_turns"` to `reasoning` (Codex's `Reasoning` serialises `effort`,
+`summary`, `context` in that order, so it follows the effort, or is `reasoning`'s only key with none), only for a
+catalogue row saying `useResponsesLite: true`; `bridge-verbosity` adds `text.verbosity`, the row's
+`defaultVerbosity`, only for a row saying `supportVerbosity: true` with a valid `defaultVerbosity`, in the one `text`
+object before `format` (Codex's `TextControls` order); and `bridge-turn-state` echoes the `x-codex-turn-state`
+header (D-8623; the server keeps the turn's value). `additions` decides the body's two from the row and the markers,
+and `build_body` takes them as arguments, so it stays pure.
+(upstream openai/codex @ 826b6e8: codex-rs/codex-api/src/common.rs `Reasoning`, `TextControls`,
+`ResponsesApiRequest`; codex-rs/core/src/client.rs `build_reasoning`.) Codex's internal Lite header
+(`x-openai-internal-codex-responses-lite`) is never sent: the bridge presents itself as ccrc, never as Codex (below).
+
 THE HEADERS are Codex's spellings: `ChatGPT-Account-ID` (codex-rs/model-provider/src/bearer_auth_provider.rs:37-41),
 carrying the CREDENTIAL's account id (`Reading.account_id`, the `chatgpt_account_id` claim), never CCGPT_ACCOUNT_ID,
 which is the lane id; `session-id` (codex-rs/codex-api/src/requests/headers.rs:5-13). The originator is `ccrc` and the
@@ -43,7 +56,7 @@ import platform
 import re
 import socket
 import ssl
-from typing import Callable, Dict, Iterator, List, Mapping, NamedTuple, Optional, Tuple
+from typing import Callable, Dict, FrozenSet, Iterator, List, Mapping, NamedTuple, Optional, Tuple
 
 from . import errors
 from .inbound import NeutralRequest
@@ -58,6 +71,21 @@ CONNECT_TIMEOUT_S = 30.0
 UPSTREAM_BASE_ENV = "CCGPT_BRIDGE_UPSTREAM_BASE"
 # The marker in the lane directory that sends the system text as `instructions` (D-6420); no writer in the tree.
 INSTRUCTIONS_MARKER = "bridge-instructions"
+# D-8622: the request markers, beside INSTRUCTIONS_MARKER; each no writer in the tree, each off until an operator
+# touches it (the module docstring).
+ALL_TURNS_MARKER = "bridge-reasoning-all-turns"
+VERBOSITY_MARKER = "bridge-verbosity"
+TURN_STATE_MARKER = "bridge-turn-state"
+MARKERS = (ALL_TURNS_MARKER, VERBOSITY_MARKER, TURN_STATE_MARKER)
+# Codex's ReasoningContext::AllTurns, as serde writes it.
+ALL_TURNS = "all_turns"
+# Codex's OpenAiVerbosity words: the bound D-8620's catalogue readers put on `defaultVerbosity` (ccd/ccrc-models-probe's
+# VERBOSITIES, shared/models.mjs's CATALOGUE_VERBOSITIES), pinned equal by codex-bridge-backend.test.ts.
+VERBOSITIES = ("low", "medium", "high")
+# D-8623: Codex's sticky-routing header, the same name on the response and on the request.
+TURN_STATE_HEADER = "x-codex-turn-state"
+# A value the bridge keeps and echoes: visible ASCII only, so it is one header token that http.client sends as it is.
+TURN_STATE_RE = re.compile(r"[\x21-\x7e]{1,4096}")
 # What `include` asks for: the encrypted reasoning the store keeps (spec §2.5).
 INCLUDE = ("reasoning.encrypted_content",)
 # The largest read of one chunk of the stream, and of an error answer's body (classify_http reads only its code).
@@ -111,15 +139,48 @@ def instructions_form(lane_dir: str) -> bool:
     return os.path.exists(os.path.join(lane_dir, INSTRUCTIONS_MARKER))
 
 
+def markers(lane_dir: str) -> FrozenSet[str]:
+    """The request markers (D-8622) the lane directory holds now, read at each call."""
+    return frozenset(m for m in MARKERS if os.path.exists(os.path.join(lane_dir, m)))
+
+
+class Additions(NamedTuple):
+    """What the request markers add to one body (D-8622): `reasoning.context` and `text.verbosity`, each None when
+    not sent."""
+    reasoning_context: Optional[str]
+    verbosity: Optional[str]
+
+    @property
+    def carried(self) -> Tuple[str, ...]:
+        """The markers whose field this body carries, in MARKERS' order."""
+        return tuple(m for m, v in ((ALL_TURNS_MARKER, self.reasoning_context), (VERBOSITY_MARKER, self.verbosity))
+                     if v is not None)
+
+
+def additions(row: object, marks: FrozenSet[str]) -> Additions:
+    """D-8622: the body's additions for a request whose model has catalogue `row` (None when it has none), with the
+    markers `marks`: `all_turns` only for a row whose `useResponsesLite` is true, and the row's `defaultVerbosity`
+    only for a row whose `supportVerbosity` is true and whose `defaultVerbosity` is one of VERBOSITIES (D-8620's
+    fields; anything else, a string `"true"` among it, says no)."""
+    fields = row if isinstance(row, dict) else {}
+    context = ALL_TURNS if ALL_TURNS_MARKER in marks and fields.get("useResponsesLite") is True else None
+    value = fields.get("defaultVerbosity")
+    verbosity = (value if VERBOSITY_MARKER in marks and fields.get("supportVerbosity") is True
+                 and isinstance(value, str) and value in VERBOSITIES else None)
+    return Additions(context, verbosity)
+
+
 # ── the body ─────────────────────────────────────────────────────────────────────────────────────────────────────
 def _is_developer_item(item: object, text: str) -> bool:
     return (isinstance(item, dict) and item.get("type") == "message" and item.get("role") == "developer"
             and item.get("content") == [{"type": "input_text", "text": text}])
 
 
-def build_body(req: NeutralRequest, *, instructions_form: bool) -> dict:
+def build_body(req: NeutralRequest, *, instructions_form: bool, reasoning_context: Optional[str] = None,
+               verbosity: Optional[str] = None) -> dict:
     """The Responses body, keys in Codex's order with `stream` second (above). With `instructions_form`, the developer
-    text is `instructions` and is not `input[0]`; otherwise there is never an `instructions` key."""
+    text is `instructions` and is not `input[0]`; otherwise there is never an `instructions` key. `reasoning_context`
+    and `verbosity` are D-8622's additions (`additions`); with both None the body is the unmarked one, byte for byte."""
     items = list(req.items)
     body = {"model": req.model, "stream": True}  # type: Dict[str, object]
     if instructions_form and req.developer is not None:
@@ -130,13 +191,23 @@ def build_body(req: NeutralRequest, *, instructions_form: bool) -> dict:
     body["tools"] = list(req.tools)
     body["tool_choice"] = req.tool_choice if req.tool_choice is not None else "auto"
     body["parallel_tool_calls"] = bool(req.parallel_tool_calls)
+    reasoning = {}  # type: Dict[str, object]
     if req.effort is not None:
-        body["reasoning"] = {"effort": req.effort}
+        reasoning["effort"] = req.effort
+    if reasoning_context is not None:  # D-8622: after the effort, as Codex's struct orders it
+        reasoning["context"] = reasoning_context
+    if reasoning:
+        body["reasoning"] = reasoning
     body["store"] = False
     body["include"] = list(INCLUDE)
     body["prompt_cache_key"] = req.cache_key
+    text = {}  # type: Dict[str, object]
+    if verbosity is not None:  # D-8622: before the format, in one text object, as Codex's struct orders it
+        text["verbosity"] = verbosity
     if req.output_format is not None:
-        body["text"] = {"format": req.output_format}
+        text["format"] = req.output_format
+    if text:
+        body["text"] = text
     return body
 
 
@@ -157,9 +228,11 @@ def user_agent(ccrc_version: str) -> str:
     return _UNPRINTABLE_RE.sub("_", text)
 
 
-def build_headers(token: str, account_id: Optional[str], session_id: Optional[str], ua: str) -> List[Tuple[str, str]]:
+def build_headers(token: str, account_id: Optional[str], session_id: Optional[str], ua: str, *,
+                  turn_state: Optional[str] = None) -> List[Tuple[str, str]]:
     """The request headers, in order. `account_id` is the credential's (`Reading.account_id`), never the lane id;
-    the header is left out when it is None, and `session-id` when no session id is known."""
+    the header is left out when it is None, and `session-id` when no session id is known. `turn_state`, the turn's
+    captured `x-codex-turn-state` (D-8623), follows `session-id`, and only a value in TURN_STATE_RE's shape is sent."""
     headers = [("Authorization", "Bearer " + token)]
     if account_id is not None:
         headers.append(("ChatGPT-Account-ID", account_id))
@@ -167,16 +240,20 @@ def build_headers(token: str, account_id: Optional[str], session_id: Optional[st
     headers.append(("User-Agent", ua))
     if session_id is not None:
         headers.append(("session-id", session_id))
+    if isinstance(turn_state, str) and TURN_STATE_RE.fullmatch(turn_state):
+        headers.append((TURN_STATE_HEADER, turn_state))
     headers.append(("Content-Type", "application/json"))
     headers.append(("Accept", "text/event-stream"))
     headers.append(("Accept-Encoding", "identity"))
     return headers
 
 
-def headers_for(reading: object, session_id: Optional[str], ua: str) -> List[Tuple[str, str]]:
+def headers_for(reading: object, session_id: Optional[str], ua: str, *,
+                turn_state: Optional[str] = None) -> List[Tuple[str, str]]:
     """build_headers over a reading of Stage 1's library (`ensure_fresh` or `refresh_rejected`): its access token and
     its account id, so the lane id has no path into the account header."""
-    return build_headers(getattr(reading, "access_token"), getattr(reading, "account_id"), session_id, ua)
+    return build_headers(getattr(reading, "access_token"), getattr(reading, "account_id"), session_id, ua,
+                         turn_state=turn_state)
 
 
 # ── the transport ────────────────────────────────────────────────────────────────────────────────────────────────
