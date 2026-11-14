@@ -32,10 +32,13 @@ export const PLAIN_AUTO_MEMORY_TEXT = {
   legend: 'Auto memory for plain sessions',
   purpose: 'Whether a session that is neither a coordinator nor a dispatched worker keeps Claude Code\'s auto memory. '
     + 'Every other role has it off.',
+  /** The purpose line while the Launch profiles lane is not live (or its row could not be read): no launch is changed yet. */
+  purposeShadow: 'Whether a session that is neither a coordinator nor a dispatched worker will keep Claude Code\'s auto memory. '
+    + 'Until the Launch profiles lane is live, every session keeps it, whatever its role.',
   choices: { off: 'Off', on: 'On' } satisfies Record<PlainAutoMemoryChoice, string>,
   notes: {
-    off: 'From its next launch, a plain session loads no project memory and writes none. Nothing is deleted.',
-    on: 'Plain sessions keep Claude Code\'s auto memory: each loads its account\'s project memory and may add to it.',
+    off: 'From its next launch, a plain session loads no auto memory and writes none. Nothing is deleted.',
+    on: 'Plain sessions keep Claude Code\'s auto memory: each loads what its account\'s auto memory holds for its project, and may add to it.',
   } satisfies Record<PlainAutoMemoryChoice, string>,
   shadow: 'This applies once the Launch profiles lane is live (Settings › Automation › Shadow lanes); until then no launch changes.',
   unread: 'The server could not read this row, so plain sessions are left as they are.',
