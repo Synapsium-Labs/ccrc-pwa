@@ -12,5 +12,7 @@
   "server/src/continuity/card.ts#block": 1,
   "server/src/continuity/compactions.ts#compactionsSince": 1,
   "server/src/continuity/generationMachine.ts#generationStep": 1,
-  "server/src/coord/mailPace.ts#mailPaceOf": 1
+  "server/src/coord/mailPace.ts#mailPaceOf": 1,
+  "server/src/continuity/generationStart.ts#startVerdict": 1,
+  "server/src/continuity/generationStart.ts#waveBoundaryOf": 1
 }

@@ -13,6 +13,8 @@
 // root) is named with its reason in the schedule census's `LANE_SCHEDULE_EXCEPTIONS` (`server/test/consolidationCensus.ts`,
 // D-8614), which finds such a clock in the watcher and in the composition root by its shape.
 
+import { RENEWAL_LANE_PERIOD_MS } from '../../shared/continuity.js';
+
 /** The catalogue lane's cadence (design 2026-09-20 §7), the SCHEDULED poll's own: `catalogue.ts` re-exports it, so
  *  `routes.ts`'s refresh-door interval derives `SCHEDULED_POLLS_PER_HOUR` from the SAME constant the watcher polls on
  *  (D-3218, D-3404), never a second copy. GitHub's unauthenticated listing budget is 60 requests an hour per IP and
@@ -185,7 +187,7 @@ export type LaneName =
   | 'tasks' | 'usage' | 'pr' | 'names' | 'divergences' | 'lifecycle' | 'readiness' | 'ledgerReconcile' | 'ledgerFloor' | 'drift'
   | 'claimRenew' | 'claimLapse' | 'stalls' | 'idleNudge' | 'mail' | 'asks' | 'approvalPrune' | 'digestBeat'
   | 'childReclaim' | 'collect' | 'archivedExpiry' | 'deadCoordinator' | 'orphanTrees' | 'delegation'
-  | 'sleepRunDone' | 'sleepIdleHours' | 'rollIdle' | 'diskAlarm' | 'tmpCensus' | 'staleArchive' | 'runStuck' | 'runUntold' | 'runClose' | 'cases';
+  | 'sleepRunDone' | 'sleepIdleHours' | 'rollIdle' | 'diskAlarm' | 'tmpCensus' | 'staleArchive' | 'runStuck' | 'runUntold' | 'runClose' | 'cases' | 'generations';
 
 export interface LaneRow {
   readonly name: LaneName | (string & {});
@@ -338,6 +340,13 @@ export const LANE_SCHEDULE: readonly LaneRow[] = [
   {
     name: 'runClose', cadenceMs: RUN_CLOSE_SWEEP_MS, clock: 'mono', flight: 'skip', warnKey: null,
     derivedFrom: { name: 'childReclaim', reason: 'its R7 budget is per pass, and a pass is the destructive lanes\' shared one-minute throttle' },
+  },
+  // The generations lane (Overlord spec §3.3.11, Table 11.1c "The renewal lane"; W1a): one read-and-record pass at a time, at
+  // the renewal lane's period by reference, because its observed-time step cap is two of these periods. In shadow it mints
+  // and records and acts on no session. Its pass catches nothing of its own, so a thrown pass is caught here.
+  {
+    name: 'generations', cadenceMs: RENEWAL_LANE_PERIOD_MS, clock: 'mono', flight: 'skip', warnKey: 'ccrc-server: the generations lane failed',
+    derivedFrom: { name: 'RENEWAL_LANE_PERIOD_MS', reason: 'observed time advances by at most two of the lane\'s periods a step (observedStepCapMs), so the row runs at the period the cap is computed from' },
   },
 ];
 

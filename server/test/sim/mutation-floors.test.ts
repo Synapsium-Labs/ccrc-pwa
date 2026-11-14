@@ -9,6 +9,7 @@ import { COORD_BLOCKED_INVARIANTS, coordBlockedDay, type CoordBlockedModule } fr
 import { floorsFallen, rewriteRelativeImports, runMutants, type MutantSet, type SuiteCase } from './mutate.js';
 import { MAIL_PACE_MUTANT_SETS } from './mailPaceSets.js';
 import { RENEWAL_MUTANT_SETS } from './renewalDeciderSets.js';
+import { GENERATION_START_MUTANT_SETS } from './generationStartSets.js';
 import { simulate } from './run.js';
 import {
   CARD_BLOCK_KEY, CARD_BLOCK_SET, CARD_NEVER_EMPTY_KEY, CARD_NEVER_EMPTY_SET, CARD_ONE_LINE_KEY, CARD_ONE_LINE_SET, CARD_TRIM_KEY,
@@ -135,6 +136,7 @@ const MUTANT_SETS: Record<string, MutantSet<never>> = {
   [CARD_BLOCK_KEY]: CARD_BLOCK_SET as MutantSet<never>,
   [COMPACTIONS_KEY]: COMPACTIONS_SET as MutantSet<never>,
   ...RENEWAL_MUTANT_SETS,
+  ...GENERATION_START_MUTANT_SETS,
   ...MAIL_PACE_MUTANT_SETS,
 };
 
