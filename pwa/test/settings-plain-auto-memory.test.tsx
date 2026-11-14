@@ -81,6 +81,25 @@ describe('Auto memory for plain sessions (Overlord W1a launch profiles PR B, Tas
     expect(screen.getAllByRole('radio').some((r) => (r as HTMLInputElement).checked)).toBe(false);
   });
 
+  it('answers that carry no field (the browser fixture\'s `{}`) read as absent: shadow words, the unread note, no throw (#2794 dequeue)', async () => {
+    const thrown: unknown[] = [];
+    const onRejection = (err: unknown): void => { thrown.push(err); };
+    process.on('unhandledRejection', onRejection);
+    try {
+      vi.spyOn(api, 'laneArm').mockResolvedValue({} as never);
+      vi.spyOn(api, 'plainAutoMemory').mockResolvedValue({} as never);
+      render(<PlainAutoMemorySection />);
+      await settle();
+      await settle();
+      expect(thrown.map(String)).toEqual([]);
+      expect(screen.getByText(T.purposeShadow)).toBeInTheDocument();
+      expect(screen.getByText(T.unread)).toBeInTheDocument();
+      expect(screen.getAllByRole('radio').some((r) => (r as HTMLInputElement).checked)).toBe(false);
+    } finally {
+      process.off('unhandledRejection', onRejection);
+    }
+  });
+
   it('an older server without the door says so and offers no choice', async () => {
     vi.spyOn(api, 'plainAutoMemory').mockRejectedValue(new Error('404'));
     render(<PlainAutoMemorySection />);

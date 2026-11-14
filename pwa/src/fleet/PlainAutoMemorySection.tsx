@@ -15,6 +15,7 @@ import {
 import { LAUNCH_PROFILE_LANE } from '../../../shared/lane-arm';
 import { api } from '../lib/api';
 import { COLLECT_SECTION_TEXT } from './collectLaneWords';
+import { asLaneArmView } from './laneArmWords';
 import {
   NotedRadioSet, ResultLine, SETTINGS_AMBER_NOTE, SETTINGS_CARDS, SETTINGS_WHEN, UNCONFIRMED_TEXT, useResultLine,
 } from './settingsText';
@@ -30,9 +31,14 @@ export function PlainAutoMemorySection(): ReactNode {
 
   useEffect(() => {
     let live = true;
-    api.plainAutoMemory().then((view) => { if (live) setRead({ kind: 'view', view }); }, () => { if (live) setRead({ kind: 'unavailable' }); });
-    // Not live until the row reads live: a lane view that cannot be read leaves the shadow words.
-    api.laneArm().then((v) => { if (live) setLaneLive(v.lanes.some((r) => r.lane === LAUNCH_PROFILE_LANE && r.live)); }, () => {});
+    // A field the answer does not carry is absent, never a crash: a choice this build cannot read is the unread note.
+    api.plainAutoMemory().then((view) => {
+      if (live) setRead({ kind: 'view', view: { ...view, choice: isPlainAutoMemoryChoice(view.choice) ? view.choice : null } });
+    }, () => { if (live) setRead({ kind: 'unavailable' }); });
+    // Not live until the row reads live, through the Shadow lanes card's one reader: a view it cannot read leaves the shadow words.
+    api.laneArm().then((raw) => {
+      if (live) setLaneLive(asLaneArmView(raw)?.lanes.some((r) => r.lane === LAUNCH_PROFILE_LANE && r.live) ?? false);
+    }, () => {});
     return () => { live = false; };
   }, []);
 
