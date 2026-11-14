@@ -13,7 +13,7 @@ scrollback it exists to render.
 | # | scope | deploy class | PRs | state |
 |---|---|---|---|---|
 | 1 | the latch (pin before every attach) + the salvaged reader, with nine corrections | server | [#106](https://github.com/Synapsium-Labs/ccrc-pwa/pull/106) → `6d46bab7` | **MERGED 2026-09-15** |
-| 2 | `ccd win-size` verb + grant + the fleet-box readers standing down | **AGENT-FIRST** | [#117](https://github.com/Synapsium-Labs/ccrc-pwa/pull/117) → `7a6220f6` | **MERGED 2026-09-18** (run 62 closed `done`; six findings to wave 3; fleet deploy still owed) |
+| 2 | `ccd win-size` verb + grant + the fleet-box readers standing down | **AGENT-FIRST** | [#117](https://github.com/Synapsium-Labs/ccrc-pwa/pull/117) → `7a6220f6` | **MERGED 2026-09-18** (run 62 closed `done`; six findings to wave 3; fleet deploy MEASURED LIVE 2026-11-14) |
 | **3 (NEW)** | **anchored tmux targeting `=cc-<id>:` — all four constructions, plus the ingress predicate** | **AGENT-FIRST** | — | **run 83 OPEN** (opened 2026-09-18, not yet dispatched) |
 | 4 | the deliberate un-pin under a measured fit guard (was wave 3) | server | — | planned |
 | 5 | whole-branch pass, README, the CLAUDE.md sentence, ledger reconcile (was wave 4) | docs | — | planned |
@@ -42,7 +42,7 @@ never calls the allocator mid-wave (coordinator clause 10); it names the departu
 mail and the coordinator assigns from the block. **Wave 1 owes none as planned** — both departures an
 earlier draft carried were ruled into the spec instead (§11 rulings 9 and 10).
 
-Run ids: wave 1 = **51** (closed `done`, `final:false`), wave 2 = **62** (closed `done`, `final:false`, 5/6 items), wave 3 = **83** (open). Wave 3 draws a block of twelve minted at its own run-open, starting 2996 — per-RUN, never per-programme.
+Run ids: wave 1 = **51** (closed `done`, `final:false`), wave 2 = **62** (closed `done`, `final:false`, 5/6 items), wave 3 = **83** (open, never dispatched, and NOT closable by the sweep — see the last section). Run **66**, the spurious probe row this ledger records above, was closed by the run-close sweep on 2026-11-14 (`expired:never-started`), without the operator abandon it was waiting for. Wave 3 draws a block of twelve minted at its own run-open, starting 2996 — per-RUN, never per-programme.
 
 **Run 66 is a coordinator error, and it needs an operator act — for a STRONGER reason than this
 paragraph first gave.** Probing whether the DEPLOYED server supports `kind:'review'` runs, this
@@ -989,3 +989,40 @@ first task is the `READER_MIN_COLS` measurement (wrap-ansi over Claude Code's st
 `win-size` verb body, the whitelist entry plus `REQUIRED_VERB_FLAG` and its bypass fixtures, and
 `_pane_measurable` with its sweep over every typing site — and its mandatory security lens is the
 exec grant.
+
+## WHERE THIS PROGRAMME ACTUALLY STANDS (2026-11-14, measured)
+
+Two months after wave 2 merged, nothing has been dispatched. A fresh coordinator should read these
+three measurements before deciding anything, because two of them contradict what this ledger said.
+
+**1. Run 66 is closed, and the sweep did it.** This ledger recorded run 66 as needing an operator
+abandon — `POST /api/runs/:id/abandon` is an ungated operator door, and ungated means ungated against
+the BOX TOKEN only, so with `CCRC_AUTH` armed it answered this session `401
+{"ok":false,"error":"unauthenticated","verdict":"no-session"}`. No person had to act: the run-close
+lane closed it on 2026-11-14 with `expired:never-started`. **A run nobody can abandon is not
+therefore a run that stays open forever** — the lane is the other door.
+
+**2. Run 83 is the opposite case: the sweep will NOT close it, ever, on its own.** Its row reads
+`stuck: {reason: 'never-started', closes: null}`, and `closes: null` is the lane saying so. The rule
+is in `server/src/coord/runCloseLane.ts`: *"A run a close is due for that R1, R6 or a live session
+holds is LISTED, never closed: it reads 'Nothing closes this on its own'."* No operator item was
+raised against it either, which places the hold among the transient kind (a doubt), not among the
+three routed refusals (`open-pr`, `unpushed-commits`, `child-marker-unreadable`). **So "let it lapse"
+is not an available outcome for run 83.** It is closed deliberately from the console, or it stays
+open and this programme stays live on the board.
+
+**3. The workspace run 83 names no longer exists.** `ccd ws-audit --session ccrc-pwa-plain-basin`
+answers `verdict: 'no-such-session'`, `detail: 'no registry entry'`. Wave 3 was opened with that
+`sessionId` to reclaim wave 2's workspace, and a wave ≥ 2 dispatch RESUMES rather than spawns
+(`dispatch.ts`'s `resumeBound`, deviation 1: no ccd verb can spawn fresh into an existing workspace),
+so its first act would be `ccd ensure ccrc-pwa-plain-basin` against a registry with no such row.
+**Wave 3 cannot start from this run row.** If its work is still wanted it wants a fresh run — and a
+fresh brief, since this one was written against a tree that has since moved several thousand files.
+
+**And the one operational act wave 2 left owed is DONE, by measurement, not by someone reporting
+it.** The fleet box's active ccd body (`~/.local/libexec/ccrc/ccd`, the Bash body the installed
+python entry digests) carries **20 `_pane_measurable` references and 35 `KS_WHY`** — the same guard
+count `origin/main`'s `ccd/ccd` carries today. The AGENT-FIRST deploy wave 2's brief required
+happened in the ordinary update flow. The box's body is not byte-identical to main's tip, which is
+expected and is not this programme's business: what wave 2 owed was its guard being live on the box,
+and it is.
