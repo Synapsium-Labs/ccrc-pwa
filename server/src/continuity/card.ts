@@ -23,7 +23,7 @@
  * L1, pure: no `fs`, no store, no clock.
  */
 import {
-  BYTES_PER_TOKEN, type CardFacts, type CardItem, type CardMail, type CardRenderer, type CardRun, type CardSection, type Fact,
+  BYTES_PER_TOKEN, CARD_PAGE_CHARS, type CardFacts, type CardItem, type CardMail, type CardRenderer, type CardRun, type CardSection, type Fact,
 } from '../../../shared/continuity-card.js';
 import { FLEET_ROLES, type FleetRole } from '../../../shared/fleetRoles.js';
 import { utf8Bytes } from '../../../shared/utf8.js';
@@ -315,4 +315,19 @@ export function cardRoleOf(f: RoleFacts): CardRole {
     }
   })();
   return { role, roleWhy: why, renderer: FLEET_ROLES[role].cardRenderer };
+}
+
+/** The card's pages: `CARD_PAGE_CHARS` code points each (never a split surrogate pair), at least one. */
+export function cardPages(text: string): readonly string[] {
+  const chars = [...text];
+  const out: string[] = [];
+  for (let i = 0; i < chars.length; i += CARD_PAGE_CHARS) out.push(chars.slice(i, i + CARD_PAGE_CHARS).join(''));
+  return out.length === 0 ? [''] : out;
+}
+
+/** The snapshot's stored facts, and what its id hashes: every fact but the time of rendering (`at`), so unchanged rows keep
+ *  one snapshot across requests (slug card-absolute-stamps). */
+export function snapshotFactsJson(f: CardFacts): string {
+  const { at: _at, ...rest } = f;
+  return JSON.stringify(rest);
 }

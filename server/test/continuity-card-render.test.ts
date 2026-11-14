@@ -479,3 +479,22 @@ describe('the cardRenderer column', () => {
     for (const r of FLEET_ROLE_NAMES) expect(renderCard(FLEET_ROLES[r].cardRenderer, empty()).length).toBeGreaterThan(0);
   });
 });
+
+describe('cardPages and snapshotFactsJson (PR B, Task 4)', () => {
+  it('pages are CARD_PAGE_CHARS code points each, never splitting a surrogate pair, and at least one', async () => {
+    const { cardPages } = await import('../src/continuity/card.js');
+    const { CARD_PAGE_CHARS } = await import('../../shared/continuity-card.js');
+    expect(cardPages('')).toEqual(['']);
+    const text = `${'a'.repeat(CARD_PAGE_CHARS - 1)}😀b`;
+    const pages = cardPages(text);
+    expect(pages).toEqual([`${'a'.repeat(CARD_PAGE_CHARS - 1)}😀`, 'b']);
+    expect(pages.join('')).toBe(text);
+  });
+
+  it('the snapshot JSON leaves out the time of rendering and nothing else', async () => {
+    const { snapshotFactsJson } = await import('../src/continuity/card.js');
+    const f = { sessionId: 's', role: 'plain', roleWhy: 'w', at: 5, runs: { kind: 'read', value: [] } } as never;
+    expect(JSON.parse(snapshotFactsJson(f))).toEqual({ sessionId: 's', role: 'plain', roleWhy: 'w', runs: { kind: 'read', value: [] } });
+    expect(snapshotFactsJson({ ...(f as object), at: 6 } as never)).toBe(snapshotFactsJson(f));
+  });
+});

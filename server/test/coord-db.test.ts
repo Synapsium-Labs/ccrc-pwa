@@ -722,9 +722,10 @@ describe('coord.db: migration 4 — runs.dispatchStartedAt', () => {
     // and MIGRATIONS[64] (mail.answersMail and mail_answers_once, the invited reply, #2726)
     // and MIGRATIONS[65] (continuity_starts, the start report, Overlord W1a)
     // and MIGRATIONS[66] (face_settings, the operator's character choice, the Overlord face plan Task 6)
-    // and MIGRATIONS[67] (continuity_generations, continuity_cursor and the continuity lane-arm row, Overlord W1a).
-    expect(COORD_SCHEMA_VERSION).toBe(68);
-    expect(MIGRATIONS.length).toBe(68);
+    // and MIGRATIONS[67] (continuity_generations, continuity_cursor and the continuity lane-arm row, Overlord W1a)
+    // and MIGRATIONS[68] (continuity_snapshots and continuity_card_reads, the card door, Overlord W1a).
+    expect(COORD_SCHEMA_VERSION).toBe(69);
+    expect(MIGRATIONS.length).toBe(69);
   });
 
   it('is ADDITIVE: every column migration 1 wrote is still on the table, unchanged', () => {
@@ -817,8 +818,9 @@ describe('coord.db: migration 11 — runs.kind and runs.reviews (design 2026-09-
     // and MIGRATIONS[64] (mail.answersMail, #2726)
     // and MIGRATIONS[65] (continuity_starts, the start report, Overlord W1a)
     // and MIGRATIONS[66] (face_settings)
-    // and MIGRATIONS[67] (continuity_generations, Overlord W1a); the migration above is still entry 11.
-    expect(COORD_SCHEMA_VERSION).toBe(68);
+    // and MIGRATIONS[67] (continuity_generations, Overlord W1a)
+    // and MIGRATIONS[68] (continuity_snapshots and continuity_card_reads, Overlord W1a); the migration above is still entry 11.
+    expect(COORD_SCHEMA_VERSION).toBe(69);
     const row = db.prepare('SELECT kind, reviews FROM runs').get() as { kind: string; reviews: number | null };
     expect(row).toEqual({ kind: 'work', reviews: null });
     db.close();
@@ -2568,6 +2570,34 @@ describe('coord.db: continuity_generations and continuity_cursor, the generation
     expect(db.prepare('SELECT count(*) AS n FROM continuity_generations').get()).toEqual({ n: 0 });
     expect(db.prepare('SELECT lane, choice, updatedAt FROM lane_arm_settings ORDER BY lane').all())
       .toEqual([{ lane: 'continuity', choice: 'shadow', updatedAt: 0 }, { lane: 'roster-card', choice: 'live', updatedAt: 7 }]);
+    db.close();
+  });
+});
+
+describe('coord.db: continuity_snapshots and continuity_card_reads, the card door (Overlord §3.3.3, C38)', () => {
+  /** Found by its DDL, never hard-coded. */
+  const SLOT = MIGRATIONS.findIndex((m) => m.includes('CREATE TABLE continuity_snapshots')) + 1;
+  const ENTRY = /^CREATE TABLE continuity_snapshots \([^;]*\);\s*CREATE INDEX continuity_snapshots_by_session ON continuity_snapshots\(sessionId, served\);\s*CREATE TABLE continuity_card_reads \([^;]*\);\s*CREATE INDEX continuity_card_reads_by_conversation ON continuity_card_reads\(sessionId, uuid, id\);$/;
+  it('NEW TABLES and their indexes, nothing on an existing table, after the generations\' tables', () => {
+    expect(SLOT).toBeGreaterThan(MIGRATIONS.findIndex((m) => m.includes('CREATE TABLE continuity_generations')) + 1);
+    expect(MIGRATIONS[SLOT - 1]!.replace(/--[^\n]*/g, '').trim()).toMatch(ENTRY);
+  });
+
+  it('reaches a database ALREADY at the version before it: both tables land empty and every existing row is as it was', () => {
+    const p = dbPathIn(mkTmp('ccrc-coord-'));
+    mkdirSync(path.dirname(p), { recursive: true });
+    const raw = new DatabaseSync(p);
+    tx(raw, () => {
+      for (let v = 0; v < SLOT - 1; v++) raw.exec(MIGRATIONS[v]!);
+      raw.exec(`PRAGMA user_version = ${SLOT - 1}`);
+      raw.exec("UPDATE lane_arm_settings SET choice = 'live', updatedAt = 7 WHERE lane = 'roster-card'");
+    });
+    raw.close();
+    const db = openCoordDb(p);
+    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(COORD_SCHEMA_VERSION);
+    expect(db.prepare('SELECT count(*) AS n FROM continuity_snapshots').get()).toEqual({ n: 0 });
+    expect(db.prepare('SELECT count(*) AS n FROM continuity_card_reads').get()).toEqual({ n: 0 });
+    expect(db.prepare("SELECT choice, updatedAt FROM lane_arm_settings WHERE lane = 'roster-card'").get()).toEqual({ choice: 'live', updatedAt: 7 });
     db.close();
   });
 });
