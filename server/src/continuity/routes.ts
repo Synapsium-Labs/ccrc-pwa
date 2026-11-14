@@ -732,7 +732,7 @@ export function registerContinuityRoutes(app: FastifyInstance, deps: ContinuityR
     // `answerRound` compares and sets on every question being unanswered: a round answered already is refused there.
     const w = coord.answerRound(roundId, id, graded, book, deps.wall());
     if (!w.ok) {
-      return w.kind === 'closed' ? refuseRoute(reply, PROBE_REFUSALS.closed, { detail: `round ${roundId} was answered already` })
+      return w.kind === 'closed' ? refuseRoute(reply, PROBE_REFUSALS.closed, { detail: `round ${roundId} was answered or closed already` })
         : refuseRoute(reply, 'write-failed', { detail: 'continuity_probes could not be written' });
     }
     return reply.code(200).send({

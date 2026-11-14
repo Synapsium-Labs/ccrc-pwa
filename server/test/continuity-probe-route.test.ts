@@ -48,6 +48,13 @@ const open = async (): Promise<FastifyInstance> => {
 const c = (): CoordStore => coord!;
 const now = (): number => time.ports.clock.wall();
 
+/** A synthetic secret of a shape the masker catches, distinct per `seed`. */
+function secretOf(seed: string): string {
+  let salt = '';
+  for (let i = 0; salt.length < 95; i++) salt += createHash('sha256').update(`${seed}:${i}`).digest('base64url');
+  return ['sk', 'ant', 'oat01', salt.slice(0, 95)].join('-');
+}
+
 let reports = 0;
 /** A live generation of `who`'s identity (the table keys a round to one). */
 function mint(who = ID, uuid = UUID): GenRow {
@@ -74,7 +81,7 @@ const QUESTIONS: RoundInsert['questions'] = [
 function round(g: GenRow, over: Partial<RoundInsert> = {}, who = ID): string {
   const roundId = over.roundId ?? `r-${g.id}-${reports}`;
   const r = c().openRound({ roundId, sessionId: who, generationId: g.id, kind: 'start', questions: QUESTIONS, snapshotId: 'snap-1',
-    depthTokens: null, modelClass: null, roundUnmeasured: false, askedAt: now(), ...over });
+    depthTokens: null, modelClass: null, roundUnmeasured: false, askedAt: now(), supersedes: null, ...over });
   if (!r.ok) throw new Error(r.kind);
   return roundId;
 }
@@ -148,9 +155,7 @@ describe('GET: the open round, without what it expects', () => {
 
   it('a choice that holds a secret is masked, and an answer copied from the masked choice passes (notes review 2039 F12)', async () => {
     app = await open();
-    let salt = '';
-    for (let i = 0; salt.length < 95; i++) salt += createHash('sha256').update(`probe:${i}`).digest('base64url');
-    const SECRET = ['sk', 'ant', 'oat01', salt.slice(0, 95)].join('-');
+    const SECRET = secretOf('probe');
     const r = round(mint(), { questions: [
       { qid: 'p1', cls: 'continuation', question: 'What does your note 61 say comes next?',
         choices: [`rotate ${SECRET}`, 'ask the operator', 'dispatch the review run'], expected: `rotate ${SECRET}` },
@@ -170,6 +175,54 @@ describe('GET: the open round, without what it expects', () => {
     expect((await post(app, answers(r2, [['p1', `rotate ${SECRET}`]]))).json().verdict).toBe('passed');
     expect(JSON.stringify(stored(r2))).not.toContain(SECRET.slice(-40));
     expect(stored(r2)[0]!.answer).toContain(SECRET_MASK);
+  });
+
+  it('two choices that differ only inside a secret collapse when masked: the question grades unmeasured, never pass (review 2063 F1)', async () => {
+    app = await open();
+    const [A, B] = [secretOf('probe-a'), secretOf('probe-b')];
+    const choices = [`rotate ${A} then deploy`, `rotate ${B} then deploy`, 'run the migration'];
+    const r = round(mint(), { questions: [{ qid: 'p1', cls: 'continuation', question: 'What does your note 61 say comes next?', choices, expected: choices[0]! }] });
+    const masked = JSON.parse(/choices: (\[.*\])/.exec((await get(app)).json().text as string)![1]!) as string[];
+    expect(masked[0]).toBe(masked[1]);
+    // The decoy, copied from the served text or given whole from memory: neither passes.
+    const res = await post(app, answers(r, [['p1', masked[1]!]]));
+    expect(res.json()).toMatchObject({ verdict: 'unmeasured', grades: [{ id: 'p1', grade: 'unmeasured' }] });
+    expect(stored(r)[0]).toMatchObject({ grade: 'unmeasured' });
+    const r2 = round(mint(), { roundId: 'r-decoy', questions: [{ qid: 'p1', cls: 'continuation', question: 'Next?', choices, expected: choices[0]! }] });
+    expect((await post(app, answers(r2, [['p1', `rotate ${B} then deploy`]]))).json().verdict).toBe('unmeasured');
+    // A wrong answer elsewhere in the round still fails it: that one is the session's.
+    const r3 = round(mint(), { roundId: 'r-mixed', questions: [
+      { qid: 'p1', cls: 'continuation' as const, question: 'Next?', choices, expected: choices[0]! }, QUESTIONS[0]!].map((q, i) => ({ ...q, qid: `p${i + 1}` })) });
+    expect((await post(app, answers(r3, [['p1', masked[0]!], ['p2', '17']]))).json().verdict).toBe('failed');
+  });
+
+  it('an answer that carries the mask placeholder and matches no choice grades unmeasured: the masker changed between ask and answer (review 2063 F6)', async () => {
+    app = await open();
+    // The served text masked a secret this server no longer masks (a restart before the re-key): the choice is stored as it
+    // was, and the copy the session holds carries the placeholder.
+    const r = round(mint(), { questions: [{ qid: 'p1', cls: 'continuation', question: 'Next?',
+      choices: ['rotate box-key-1 then deploy', 'run the migration', 'ask the operator'], expected: 'rotate box-key-1 then deploy' }] });
+    const res = await post(app, answers(r, [['p1', `rotate ${SECRET_MASK} then deploy`]]));
+    expect(res.json()).toMatchObject({ verdict: 'unmeasured', grades: [{ id: 'p1', grade: 'unmeasured' }] });
+    // An answer with no placeholder that matches no choice is the session's: it fails.
+    const r2 = round(mint(), { roundId: 'r-plain', questions: [{ qid: 'p1', cls: 'continuation', question: 'Next?',
+      choices: ['rotate box-key-1 then deploy', 'run the migration', 'ask the operator'], expected: 'rotate box-key-1 then deploy' }] });
+    expect((await post(app, answers(r2, [['p1', 'rotate the key then deploy']]))).json().verdict).toBe('failed');
+  });
+
+  it("serves only a round of the session's live generation: an older generation's open round is not served (review 2063 F7)", async () => {
+    app = await open();
+    const old = mint();
+    round(old, { roundId: 'r-old' });
+    mint();
+    const res = await get(app);
+    expect([res.statusCode, res.json().error]).toEqual([409, 'probe-none-open']);
+    expect(c().openProbeRound(ID)).toEqual({ ok: true, rows: [] });
+    // A generation that has ended is not live, even when it is the session's newest: its open round is not served either.
+    const last = mint();
+    round(last, { roundId: 'r-last' });
+    c().db.prepare("UPDATE continuity_generations SET state = 'ended' WHERE id = ?").run(last.id);
+    expect([(await get(app)).statusCode, c().openProbeRound(ID)]).toEqual([409, { ok: true, rows: [] }]);
   });
 
   it('a long round is paged under the tool result cut, every page and every question whole across the pages', async () => {
@@ -295,10 +348,10 @@ describe('the store: one open round, answered once, reads stamped (each guard on
     app = await open();
     const g = mint();
     expect(c().openRound({ roundId: 'r-empty', sessionId: ID, generationId: g.id, kind: 'start', questions: [], snapshotId: null,
-      depthTokens: null, modelClass: null, roundUnmeasured: false, askedAt: now() })).toEqual({ ok: false, kind: 'empty' });
+      depthTokens: null, modelClass: null, roundUnmeasured: false, askedAt: now(), supersedes: null })).toEqual({ ok: false, kind: 'empty' });
     const r1 = round(g, { roundId: 'r-one' });
     expect(c().openRound({ roundId: 'r-two', sessionId: ID, generationId: g.id, kind: 'spot', questions: [QUESTIONS[0]!], snapshotId: null,
-      depthTokens: 60_000, modelClass: 'opus', roundUnmeasured: false, askedAt: now() })).toEqual({ ok: false, kind: 'open' });
+      depthTokens: 60_000, modelClass: 'opus', roundUnmeasured: false, askedAt: now(), supersedes: null })).toEqual({ ok: false, kind: 'open' });
     expect(c().answerRound(r1, ID, QUESTIONS.map((q) => ({ qid: q.qid, answer: 'x', grade: 'fail' as const })), 'unmeasured', now())).toEqual({ ok: true });
     expect(round(g, { roundId: 'r-three' })).toBe('r-three');
   });
@@ -314,6 +367,33 @@ describe('the store: one open round, answered once, reads stamped (each guard on
     expect(stored(r).every((x) => x.answeredAt === null)).toBe(true);
     expect(c().answerRound(r, ID, all, 'open', now())).toEqual({ ok: true });
     expect(c().answerRound(r, ID, all, 'open', now())).toEqual({ ok: false, kind: 'closed' });
+  });
+
+  it('a compaction round supersedes an unanswered spot round: the spot round closes unmeasured, and a late answer is probe-closed (review 2063 F3)', async () => {
+    app = await open();
+    const g = mint();
+    const spot = round(g, { roundId: 'r-spot', kind: 'spot', questions: [QUESTIONS[0]!], snapshotId: null, depthTokens: 60_000 });
+    time.advance(1_000);
+    expect(round(g, { roundId: 'r-comp', kind: 'compaction', supersedes: spot })).toBe('r-comp');
+    expect(stored(spot)).toEqual([{ qid: 'p1', answer: null, grade: 'unmeasured', book: 'unmeasured', answeredAt: now() }]);
+    expect((await get(app)).json().roundId).toBe('r-comp');
+    expect((await post(app, answers(spot, [['p1', '41']]))).json().error).toBe('probe-closed');
+  });
+
+  it('supersedes closes only an unanswered spot round of the same generation: a start round named there stays open, another generation\'s spot round too', async () => {
+    app = await open();
+    const g = mint();
+    const start = round(g, { roundId: 'r-start' });
+    expect(c().openRound({ roundId: 'r-comp', sessionId: ID, generationId: g.id, kind: 'compaction', questions: QUESTIONS, snapshotId: 'snap-1',
+      depthTokens: null, modelClass: null, roundUnmeasured: false, askedAt: now(), supersedes: start })).toEqual({ ok: false, kind: 'open' });
+    expect(stored(start).every((x) => x.answeredAt === null)).toBe(true);
+    // Another generation's spot round named there is left open, and this generation's round opens beside it.
+    expect(c().answerRound(start, ID, QUESTIONS.map((q) => ({ qid: q.qid, answer: 'x', grade: 'pass' as const })), 'unmeasured', now())).toEqual({ ok: true });
+    const other = mint(OTHER, OTHER_UUID);
+    const theirs = round(other, { roundId: 'r-theirs', kind: 'spot', questions: [QUESTIONS[0]!], snapshotId: null, depthTokens: 60_000 }, OTHER);
+    expect(c().openRound({ roundId: 'r-comp2', sessionId: ID, generationId: g.id, kind: 'compaction', questions: QUESTIONS, snapshotId: 'snap-1',
+      depthTokens: null, modelClass: null, roundUnmeasured: false, askedAt: now(), supersedes: theirs })).toEqual({ ok: true });
+    expect(stored(theirs)[0]!.answeredAt).toBeNull();
   });
 
   it('a read stamp keeps the newest time per door, and the last read is the newest of both doors', async () => {

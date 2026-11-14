@@ -53,7 +53,7 @@ type Draft = Omit<ProbeQuestion, 'id'>;
 interface Pool { readonly drafts: readonly Draft[]; readonly why: string; readonly unread: readonly string[] }
 
 /** The one fold grading uses: decoys are filtered by it too, so no decoy grades as the answer (review 1999, F5). */
-const fold = (t: string): string => t.trim().toLowerCase();
+export const fold = (t: string): string => t.trim().toLowerCase();
 
 /** Fisher-Yates, drawn from the port. */
 function shuffle<T>(xs: readonly T[], entropy: Entropy): T[] {
@@ -241,12 +241,13 @@ export function gradeProbe(q: ProbeQuestion, answer: string): ProbeGrade {
 }
 
 /** A round passes only when it asked something and every answer passed. A wrong answer fails it whatever else holds:
- *  it is the session's. Otherwise a round the snapshot's failed reads made short (`ProbeRound.unmeasured`) is
- *  `unmeasured`, never `failed`, so the session is not blamed for the server's read (review 1999, F4b); a measured empty
- *  round still fails (slug empty-round-fails). */
+ *  it is the session's. Otherwise a round the snapshot's failed reads made short (`ProbeRound.unmeasured`), or one with a
+ *  question the door could not grade (grade `unmeasured`), is `unmeasured`, never `failed`, so the session is not blamed
+ *  for the server's read (review 1999, F4b; review 2063, F1 and F6); a measured empty round still fails (slug
+ *  empty-round-fails). */
 export function roundVerdict(grades: readonly ProbeGrade[], unmeasured: boolean): RoundVerdict {
   if (grades.some((g) => g === 'fail')) return 'failed';
-  if (unmeasured) return 'unmeasured';
+  if (unmeasured || grades.some((g) => g === 'unmeasured')) return 'unmeasured';
   return grades.length > 0 ? 'passed' : 'failed';
 }
 

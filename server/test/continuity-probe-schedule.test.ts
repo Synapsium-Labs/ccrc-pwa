@@ -4,7 +4,8 @@
 import { describe, it } from 'vitest';
 import * as schedule from '../src/continuity/probeSchedule.js';
 import {
-  compactionWindowStartCases, probeFailedUnfixedOfCases, probeScheduleCases, roundsOfCases, spotFactsOfCases,
+  compactionWindowStartCases, emptyTryKeyCases, probeFailedUnfixedOfCases, probeScheduleCases, roundSnapshotOfCases, roundsOfCases,
+  spotFactsOfCases,
 } from './sim/probeDoorSets.js';
 
 describe('roundsOf: rows grouped into rounds, a round graded when every row is', () => {
@@ -21,4 +22,10 @@ describe('probeSchedule: when a round opens and which one feeds the machine', ()
 });
 describe('spotFactsOf: only this generation\'s rows', () => {
   for (const [name, run] of Object.entries(spotFactsOfCases(schedule))) it(name, run);
+});
+describe('roundSnapshotOf: the snapshot a round is drawn from (review 2063 F2)', () => {
+  for (const [name, run] of Object.entries(roundSnapshotOfCases(schedule))) it(name, run);
+});
+describe('emptyTryKey: what an empty try is remembered by (review 2063 F4)', () => {
+  for (const [name, run] of Object.entries(emptyTryKeyCases(schedule))) it(name, run);
 });

@@ -32,11 +32,14 @@
 // THE PROBES (the probes piece, PR B, plan `w1a-probes.md` Tasks 5 and 6). Each live generation's rounds are read
 // (`probeRows`), and `probeSchedule` (L1) says which graded round to feed the machine and which round to open: the feed goes
 // through the same apply loop as the card read (`applyFedEvents`), so only a step the machine reports `changed` is written,
-// and the round is composed by `probeRound` (L1) over the generation's snapshot (`snapshotFactsOf`), or, for a spot round,
+// and the round is composed by `probeRound` (L1) over a snapshot (`roundSnapshotOf`: the carded one for a start round, the
+// newest the conversation read for a compaction round; read back by `snapshotFactsOf`), or, for a spot round,
 // over the notes it wrote and the mail it was sent since it entered its state (`spotFactsOf`), and opened through the store
 // (`openRound`, one open round per generation, compared and set there). A spot round is RECORDED ONLY: no mail announces it
 // in this piece (the coordinator's ruling, slug spot-mail-waits-on-the-renewal-act), so the lane still sends nothing. The
-// graded compaction rounds give `renewalDue` its `probe-failed` input (`probeFailedUnfixedOf`).
+// graded compaction rounds give `renewalDue` its `probe-failed` input (`probeFailedUnfixedOf`). A composition with no question
+// opens nothing, and is remembered by its key (`emptyTryKey`, in `emptyTries`) so it is neither drawn nor logged again until
+// the key changes (review 2063 F4).
 //
 // TWO HALVES. `gatherGenerationReadings` (async) makes the fleet reads for the generations a pass will judge; then
 // `generationsPass` (synchronous, one transaction per write, nothing awaited) reads `coord.db`, decides and writes. So a
@@ -63,7 +66,7 @@ import { effectiveGeneration, genExpectOf, genViewOf, type GenRow, type MintInpu
 import { generationStep, type GenEvent } from './generationMachine.js';
 import { snapshotFactsOf } from './card.js';
 import { probeRound } from './probes.js';
-import { compactionWindowStart, probeSchedule, roundsOf, spotFactsOf } from './probeSchedule.js';
+import { compactionWindowStart, emptyTryKey, probeSchedule, roundSnapshotOf, roundsOf, spotFactsOf } from './probeSchedule.js';
 import type { StartRow } from '../../../shared/continuity.js';
 import {
   START_SKIPS, firstMintOf, judgedForDue, planStartBatch, startVerdict, waveBoundaryOf, type HoldClock, type StartFacts, type StartSkip,
@@ -115,6 +118,9 @@ export interface GenerationsDeps {
   /** The starts this process held for a failed read on an earlier pass (`HoldClock.retried`), kept by the caller across
    *  passes and rewritten by each pass that judges a batch: a memo, never a decision's durable state (review 2006 R3). */
   readonly retried: Set<number>;
+  /** Each generation's newest probe composition that had no question, by its `emptyTryKey`: a memo kept by the caller across
+   *  passes, never a decision's durable state (review 2063 F4). */
+  readonly emptyTries: Map<number, string>;
 }
 
 export interface GenerationsInput {
@@ -326,18 +332,23 @@ export function generationsPass(deps: GenerationsDeps, input: GenerationsInput):
       probeFailed.set(g.id, s.probeFailedUnfixed);
       if (s.feed !== null) events.push({ gen: g, event: { kind: 'probes', passed: s.feed.passed }, card: null });
       if (s.open === null) continue;
-      const facts = probeFactsOf(coord, g, s.open.kind, now);
-      if (typeof facts === 'string') { fail('probes', facts, `generation ${g.id}'s ${s.open.kind} round waits for the next pass, and`); continue; }
+      const waits = `generation ${g.id}'s ${s.open.kind} round waits for the next pass, and`;
+      const snap = roundSnapshotOf(s.open.kind, g.snapshotId, card.ok ? { kind: 'measured', value: card.read?.snapshotId ?? null } : later(card.detail));
+      if (snap.kind !== 'measured') { fail('card-reads', snap.why, waits); continue; }
+      const key = emptyTryKey(s.open.kind, snap.value, s.open.depthTokens);
+      if (deps.emptyTries.get(g.id) === key) continue;
+      const facts = probeFactsOf(coord, g, s.open.kind, snap.value, now);
+      if (typeof facts === 'string') { fail('probes', facts, waits); continue; }
       const composed = probeRound(g.role, facts, deps.entropy, s.open.kind);
       const spot = s.open.kind === 'spot';
       const w = coord.openRound({
         roundId: `r-${deps.entropy.uuid()}`, sessionId: g.sessionId, generationId: g.id, kind: s.open.kind,
         questions: composed.questions.map((q) => ({ qid: q.id, cls: q.cls, question: q.text, choices: q.choices, expected: q.expected })),
-        snapshotId: spot ? null : g.snapshotId, depthTokens: s.open.depthTokens, modelClass: spot && g.model !== null ? familyClassOf(g.model) : null,
-        roundUnmeasured: composed.unmeasured, askedAt: now,
+        snapshotId: snap.value, depthTokens: s.open.depthTokens, modelClass: spot && g.model !== null ? familyClassOf(g.model) : null,
+        roundUnmeasured: composed.unmeasured, askedAt: now, supersedes: s.open.supersedes,
       });
-      if (w.ok) roundsOpened += 1;
-      else if (w.kind === 'empty') emptyRounds += 1;
+      if (w.ok) { roundsOpened += 1; deps.emptyTries.delete(g.id); }
+      else if (w.kind === 'empty') { emptyRounds += 1; deps.emptyTries.set(g.id, key); }
       else if (w.kind === 'write-failed') fail('probes', 'continuity_probes could not be written', `generation ${g.id}'s round waits for the next pass, and`);
     }
     probesFed += applyFedEvents(coord, events, live, now);
@@ -481,10 +492,10 @@ function probeReadings(r: GenReadings | undefined, since: number): { compactions
   return { compactionsSince: counted, idle, ctxTokens: usageReading(r, 'ctxTokens') };
 }
 
-/** The facts a round of `kind` is drawn from (the snapshot the generation was carded with, or this generation's own rows for
- *  a spot round), or what kept them from being read. */
+/** The facts a round of `kind` is drawn from (the snapshot `roundSnapshotOf` chose, or this generation's own rows for a spot
+ *  round), or what kept them from being read. */
 function probeFactsOf(coord: Pick<GenerationsCoord, 'snapshotFacts' | 'liveNotes' | 'mailForRecipient'>, g: GenRow, kind: ProbeRoundKind,
-  now: number): CardFacts | string {
+  snapshotId: string | null, now: number): CardFacts | string {
   if (kind === 'spot') {
     const notes = coord.liveNotes(g.identity);
     if (!notes.ok) return notes.detail;
@@ -498,11 +509,11 @@ function probeFactsOf(coord: Pick<GenerationsCoord, 'snapshotFacts' | 'liveNotes
     }));
     return spotFactsOf(g.sessionId, g.role, now, mine, mail, g.enteredAt);
   }
-  if (g.snapshotId === null) return `generation ${g.id} names no snapshot`;
-  const s = coord.snapshotFacts(g.snapshotId);
+  if (snapshotId === null) return `generation ${g.id} names no snapshot`;
+  const s = coord.snapshotFacts(snapshotId);
   if (!s.ok) return s.detail;
-  if (s.facts === null) return `snapshot ${g.snapshotId} is not stored`;
-  return snapshotFactsOf(s.facts, now) ?? `snapshot ${g.snapshotId} does not read`;
+  if (s.facts === null) return `snapshot ${snapshotId} is not stored`;
+  return snapshotFactsOf(s.facts, now) ?? `snapshot ${snapshotId} does not read`;
 }
 
 /** The soft renewal's observed times for a generation (`softRenewalMay`'s inputs; review 1902 F4): its age since its mint,

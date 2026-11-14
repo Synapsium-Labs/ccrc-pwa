@@ -1995,8 +1995,8 @@ export class FleetWatcher {
   /** The generations lane's compactions read cache, and this process's id for its observed stamps. */
   private readonly generationsCompactions: CompactionsMemo = new Map();
   private generationsProc: string | undefined;
-  /** The starts this process held for a failed read (`GenerationsDeps.retried`). */
-  private readonly generationsRetried = new Set<number>();
+  /** The starts this process held for a failed read, and each generation's empty probe try (`GenerationsDeps.retried`, `.emptyTries`). */
+  private readonly generationsRetried = new Set<number>(); private readonly generationsEmptyTries = new Map<number, string>();
   /** The launch-profile lane's last logged line (`ProfileLaneMemory`): a log throttle, never a decision's memory. */
   private readonly launchProfileMemory: ProfileLaneMemory = { lastLine: null };
   private delegationLane(): DelegationLane {
@@ -6101,7 +6101,7 @@ export class FleetWatcher {
       }, this.generationsCompactions);
       this.generationsProc ??= this.deps.time.entropy.uuid();
       generationsPass({ coord, clock: this.deps.time.clock, entropy: this.deps.time.entropy, proc: this.generationsProc,
-        log: (line) => console.warn(line), retried: this.generationsRetried }, {
+        log: (line) => console.warn(line), retried: this.generationsRetried, emptyTries: this.generationsEmptyTries }, {
         registry: records.map((r) => ({ id: r.id, uuid: r.unmeasured.includes('uuid') ? null : r.uuid,
           lane: r.unmeasured.includes('wrapper') ? null : r.wrapper, child: r.child })),
         // When this tick's registry read began: a start received since is held a pass (review 2006 R1).

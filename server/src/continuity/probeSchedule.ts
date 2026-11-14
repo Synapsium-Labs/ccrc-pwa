@@ -10,11 +10,13 @@
 //   card was read again after that round was answered. A round graded `unmeasured` feeds nothing (review 1999 F4b: the lane
 //   never records it as `passed: false`), and the generation waits there (slug unmeasured-round-waits).
 // - `active`: a compaction since the newest snapshot round, or since the generation entered `active`, opens a `compaction`
-//   round over the same snapshot. A failed compaction round asks for a re-read: the next compaction round opens only once the
-//   card was read after it, and if that one fails too, `probeFailedUnfixed` reads true (`renewalDue`'s `probe-failed` row).
-//   A spot round opens while the session is idle and its fresh context crossed another `SPOT_PROBE_EVERY_TOKENS` since this
-//   generation's last spot round; a busy session, a stale sidecar or an unread turn marker opens none (unmeasured, never a
-//   guess).
+//   round over the newest snapshot the conversation read (`roundSnapshotOf`, review 2063 F2). A failed compaction round asks
+//   for a re-read: the next compaction round opens only once the card was read after it, and if that one fails too,
+//   `probeFailedUnfixed` reads true (`renewalDue`'s `probe-failed` row). A compaction round supersedes an unanswered spot
+//   round (review 2063 F3): nothing announces a spot round yet, so one left open must not block the compaction rounds.
+//   A spot round opens while the session is idle and its fresh context is `SPOT_PROBE_EVERY_TOKENS` past the baseline: the
+//   depth the newest spot or compaction round opened at, so a compaction resets it (review 2063 F5); a busy session, a stale
+//   sidecar, an unread turn marker or a baseline that was not measured opens none (unmeasured, never a guess).
 // - Any other state opens nothing.
 import { SPOT_PROBE_EVERY_TOKENS, type GenerationState, type ProbeGrade, type ProbeRoundKind } from '../../../shared/continuity.js';
 import type { CardFacts, CardMail, CardNote } from '../../../shared/continuity-card.js';
@@ -80,8 +82,9 @@ export interface ProbeScheduleInput {
 export interface ProbeSchedule {
   /** The graded round to feed the machine as `probes`, or null. */
   readonly feed: { readonly passed: boolean } | null;
-  /** The round to open, or null; a spot round records the depth it opened at. */
-  readonly open: { readonly kind: ProbeRoundKind; readonly depthTokens: number | null } | null;
+  /** The round to open, or null: a spot or compaction round records the depth it opened at (the spot baseline), and a
+   *  compaction round names the unanswered spot round it supersedes. */
+  readonly open: { readonly kind: ProbeRoundKind; readonly depthTokens: number | null; readonly supersedes: string | null } | null;
   /** `renewalDue`'s `probe-failed` input: a mid-generation round failed, and the round after a re-read failed too. */
   readonly probeFailedUnfixed: Reading<boolean>;
 }
@@ -120,28 +123,46 @@ export function probeSchedule(i: ProbeScheduleInput): ProbeSchedule {
     if (isOpen) return none;
     const prev = starts[i.probeRounds - 1];
     if (i.probeRounds === 0 || (prev?.answeredAt != null && reReadAfter(i.cardReadAt, prev.answeredAt))) {
-      return { ...none, open: { kind: 'start', depthTokens: null } };
+      return { ...none, open: { kind: 'start', depthTokens: null, supersedes: null } };
     }
     return none;
   }
 
-  if (i.state !== 'active' || isOpen) return none;
+  if (i.state !== 'active') return none;
+  const openRound = i.rounds.find((r) => r.answeredAt === null);
+  if (openRound !== undefined && openRound.kind !== 'spot') return none;
+  const depth = i.ctxTokens.kind === 'measured' ? i.ctxTokens.value : null;
+  const compaction = { ...none, open: { kind: 'compaction' as const, depthTokens: depth, supersedes: openRound?.roundId ?? null } };
   const comps = answered(i.rounds.filter((r) => r.kind === 'compaction'));
   const lastComp = comps[comps.length - 1];
   const awaitingReRead = lastComp?.verdict === 'failed' && !(probeFailedUnfixed.kind === 'measured' && probeFailedUnfixed.value);
   if (awaitingReRead) {
-    if (reReadAfter(i.cardReadAt, lastComp.answeredAt!)) return { ...none, open: { kind: 'compaction', depthTokens: null } };
+    if (reReadAfter(i.cardReadAt, lastComp.answeredAt!)) return compaction;
   } else if (i.compactionsSince.kind === 'measured' && i.compactionsSince.value >= 1) {
-    return { ...none, open: { kind: 'compaction', depthTokens: null } };
+    return compaction;
   }
-  if (i.idle.kind !== 'measured' || !i.idle.value || i.ctxTokens.kind !== 'measured') return none;
-  const spots = i.rounds.filter((r) => r.kind === 'spot');
-  const lastDepth = spots[spots.length - 1]?.depthTokens ?? 0;
-  const step = (t: number): number => Math.floor(t / SPOT_PROBE_EVERY_TOKENS);
-  if (step(i.ctxTokens.value) >= 1 && step(i.ctxTokens.value) > step(lastDepth)) {
-    return { ...none, open: { kind: 'spot', depthTokens: i.ctxTokens.value } };
-  }
+  if (openRound !== undefined || i.idle.kind !== 'measured' || !i.idle.value || depth === null) return none;
+  const marks = i.rounds.filter((r) => r.kind === 'spot' || r.kind === 'compaction');
+  const baseline = marks.length === 0 ? 0 : marks[marks.length - 1]!.depthTokens;
+  if (baseline !== null && depth - baseline >= SPOT_PROBE_EVERY_TOKENS) return { ...none, open: { kind: 'spot', depthTokens: depth, supersedes: null } };
   return none;
+}
+
+/** The snapshot a round of `kind` is drawn from: none for a spot round; the one the generation was carded with for a start
+ *  round; and for a compaction round the newest snapshot the conversation read (review 2063 F2: a row that moved hours
+ *  before the ask is not the session's to be failed on), the carded one when it has read none since, and unmeasured when
+ *  that read failed, so the round waits. */
+export function roundSnapshotOf(kind: ProbeRoundKind, carded: string | null, newestRead: Reading<string | null>): Reading<string | null> {
+  if (kind === 'spot') return measured(null);
+  if (kind === 'start') return measured(carded);
+  if (newestRead.kind !== 'measured') return newestRead;
+  return measured(newestRead.value ?? carded);
+}
+
+/** What an empty try is remembered by (review 2063 F4): a start or compaction round's snapshot, or a spot round's 50k step,
+ *  so a composition with no question is not drawn and logged again until the key changes. */
+export function emptyTryKey(kind: ProbeRoundKind, snapshotId: string | null, depthTokens: number | null): string {
+  return kind === 'spot' ? `spot:${Math.floor((depthTokens ?? 0) / SPOT_PROBE_EVERY_TOKENS)}` : `${kind}:${snapshotId ?? ''}`;
 }
 
 /** The facts a spot round is drawn from: only the rows of this generation, the notes it wrote and the mail it was sent since

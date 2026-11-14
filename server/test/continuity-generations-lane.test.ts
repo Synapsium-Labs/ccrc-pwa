@@ -25,6 +25,7 @@ import { HOLD_OFF_MS } from '../../shared/continuity.js';
 import { START_RETRY_MS } from '../src/continuity/generationStart.js';
 import { parsedFile } from './scan/symbols.js';
 import { snapshotFactsJson } from '../src/continuity/card.js';
+import { gradeAnswers, maskedQuestion } from '../src/continuity/probeDoor.js';
 import type { CardFacts } from '../../shared/continuity-card.js';
 import type { TurnMarkRead } from '../src/coord/stall.js';
 import { fakeTime, FAKE_T0, type FakeTime } from './fakeTime.js';
@@ -56,11 +57,13 @@ function fixture(): Fixture {
   const registry: RegistryFacts[] = [{ id: COORD, uuid: U1, lane: 'lane-a', child: { kind: 'none' } }];
   let n = 0;
   const memos = new Map<string, Set<number>>();
+  const empties = new Map<string, Map<number, string>>();
   const deps = (proc: string): GenerationsDeps => {
     if (!memos.has(proc)) memos.set(proc, new Set());
+    if (!empties.has(proc)) empties.set(proc, new Map());
     // The continuity row is gated until the renewal act ships; these cases drive its live walk, so they open the gate
     // (review 2006 N1). The case below holds that the real gate keeps a stored Live shadow.
-    return { coord: s, clock: t.ports.clock, entropy: t.ports.entropy, proc, log: (l) => logs.push(l), retried: memos.get(proc)!, gate: () => null };
+    return { coord: s, clock: t.ports.clock, entropy: t.ports.entropy, proc, log: (l) => logs.push(l), retried: memos.get(proc)!, emptyTries: empties.get(proc)!, gate: () => null };
   };
   return {
     s, t, logs, registry,
@@ -116,7 +119,7 @@ describe('the pass mints and ends generations from the starts (Task 2)', () => {
     const f = fixture();
     f.s.setLaneArm(CONTINUITY_LANE, 'live', 1);
     f.start('startup', U1);
-    const r = generationsPass({ coord: f.s, clock: f.t.ports.clock, entropy: f.t.ports.entropy, proc: 'p1', log: () => {}, retried: new Set() },
+    const r = generationsPass({ coord: f.s, clock: f.t.ports.clock, entropy: f.t.ports.entropy, proc: 'p1', log: () => {}, retried: new Set(), emptyTries: new Map() },
       { registry: f.registry, listedAt: f.t.ports.clock.wall() + 1, readings: new Map() });
     expect(r).toMatchObject({ live: false, minted: 1 });
     expect(all(f.s)).toEqual([{ identity: COORD, n: 1, state: 'active', shadowState: 'carded', outcome: null, startId: 1 }]);
@@ -472,7 +475,7 @@ describe('the pass mints and ends generations from the starts (Task 2)', () => {
   it('a registry that could not be listed judges no start and leaves the cursor', () => {
     const f = fixture();
     f.start('startup', U1);
-    const r = generationsPass({ coord: f.s, clock: f.t.ports.clock, entropy: f.t.ports.entropy, proc: 'p1', log: () => {}, retried: new Set() },
+    const r = generationsPass({ coord: f.s, clock: f.t.ports.clock, entropy: f.t.ports.entropy, proc: 'p1', log: () => {}, retried: new Set(), emptyTries: new Map() },
       { registry: null, listedAt: f.t.ports.clock.wall() + 1, readings: new Map() });
     expect(r).toMatchObject({ unread: 'registry', minted: 0 });
     expect(f.s.generationsCursor(GENERATIONS_LANE)).toEqual({ ok: true, lastStartId: 0 });
@@ -999,8 +1002,24 @@ describe('the probes (the probes piece, PR B, Tasks 5 and 6)', () => {
     readCardOf(f, snapshotFactsJson({ ...SNAPSHOT_FACTS, runs: { kind: 'read', value: [] }, itemsRaised: { kind: 'read', value: [] } }));
     expect(f.pass()).toMatchObject({ cardRead: 1, roundsOpened: 0, unread: null });
     expect(f.pass()).toMatchObject({ roundsOpened: 0, unread: null });
+    expect(f.pass()).toMatchObject({ roundsOpened: 0, unread: null });
     expect(rounds(f.s)).toEqual([]);
-    expect(f.logs.some((l) => l.includes('had no question to ask'))).toBe(true);
+    // Remembered by its snapshot: drawn and logged once, not every pass (review 2063 F4).
+    expect(f.logs.filter((l) => l.includes('had no question to ask'))).toHaveLength(1);
+  });
+
+  it('an empty try is remembered per generation and key: a spot step with nothing to ask is drawn once, and the next step is tried again (review 2063 F4)', () => {
+    const f = active();
+    let tries = 0;
+    const real = f.s.liveNotes.bind(f.s);
+    f.s.liveNotes = (identity) => { tries += 1; return real(identity); };
+    // No note and no mail of this generation's: a spot round has nothing to ask.
+    expect(f.pass(at(f, usage(60_000, 1_000_000), turn('idle')))).toMatchObject({ roundsOpened: 0 });
+    expect(f.pass(at(f, usage(70_000, 1_000_000), turn('idle')))).toMatchObject({ roundsOpened: 0 });
+    expect(f.pass(at(f, usage(99_999, 1_000_000), turn('idle')))).toMatchObject({ roundsOpened: 0 });
+    expect([tries, f.logs.filter((l) => l.includes('had no question to ask')).length]).toEqual([1, 1]);
+    expect(f.pass(at(f, usage(100_000, 1_000_000), turn('idle')))).toMatchObject({ roundsOpened: 0 });
+    expect(tries).toBe(2);
   });
 
   /** A live coordinator proven active by a passed start round. */
@@ -1013,7 +1032,7 @@ describe('the probes (the probes piece, PR B, Tasks 5 and 6)', () => {
     return f;
   };
 
-  it('a compaction counted since the last round opens a compaction round on an active generation, over the same snapshot', () => {
+  it('a compaction counted since the last round opens a compaction round on an active generation, over the newest snapshot it read', () => {
     const f = active();
     expect(f.pass(at(f, usage(10_000, 1_000_000), turn('working')))).toMatchObject({ roundsOpened: 0 });
     const r = f.pass(at(f, usage(10_000, 1_000_000), turn('working'), lines(1, f.t.ports.clock.wall() - 1_000)));
@@ -1041,7 +1060,49 @@ describe('the probes (the probes piece, PR B, Tasks 5 and 6)', () => {
     expect(gen(f).blind).not.toContain('probe-failed');
   });
 
-  it('crossing another 50k while idle opens one spot round about this generation\'s own rows, and sends no mail (slug spot-mail-waits-on-the-renewal-act)', () => {
+  it('a compaction round is drawn from the newest snapshot the conversation read: a run that moved before the compaction is asked as it now stands (review 2063 F2)', () => {
+    const f = active();
+    const carded = gen(f).snapshotId;
+    // Run 41 closed and run 6 opened before the compaction; the session read its card again since.
+    const moved = readCardOf(f, snapshotFactsJson({ ...SNAPSHOT_FACTS,
+      runs: { kind: 'read', value: [{ id: 6, programme: 'prog-a', wave: 2, waveOf: 2, state: 'working', planPath: null, kind: 'work' }] } }));
+    f.t.advance(1_000);
+    expect(f.pass(at(f, usage(10_000, 1_000_000), turn('working'), lines(1, f.t.ports.clock.wall() - 500)))).toMatchObject({ roundsOpened: 1 });
+    expect(rounds(f.s)[1]).toMatchObject({ kind: 'compaction', snapshotId: moved });
+    expect(moved).not.toBe(carded);
+    const open = f.s.openProbeRound(COORD);
+    if (!open.ok) throw new Error(open.detail);
+    const run = open.rows.find((r) => r.question.includes('Which run'));
+    expect(run).toBeDefined();
+    const graded = gradeAnswers([maskedQuestion(run!, (t) => t)], new Map([[run!.qid, '6']]));
+    expect(graded[0]!.grade).toBe('pass');
+  });
+
+  it('a compaction round waits while the newest card read cannot be read: no round over a guessed snapshot (review 2063 F2)', () => {
+    const f = active();
+    f.s.db.prepare("UPDATE continuity_card_reads SET hash = x'07' WHERE id = (SELECT max(id) FROM continuity_card_reads)").run();
+    const r = f.pass(at(f, usage(10_000, 1_000_000), turn('working'), lines(1, f.t.ports.clock.wall() - 500)));
+    expect(r).toMatchObject({ roundsOpened: 0, unread: 'card-reads' });
+    expect(rounds(f.s).map((x) => x.kind)).toEqual(['start']);
+  });
+
+  it('a compaction supersedes an unanswered spot round: the spot round closes unmeasured, and the compaction round opens (review 2063 F3)', () => {
+    const f = active();
+    const g = gen(f);
+    for (const k of ['a', 'b', 'c']) {
+      if (!f.s.appendNote({ identity: COORD, sessionId: COORD, generationId: g.id, key: { kind: 'run', id: 1 }, kind: 'thread', waitsOn: 'w', next: `next ${k}`, revises: null, closes: false, at: f.t.ports.clock.wall() }).ok) throw new Error('note');
+    }
+    expect(f.pass(at(f, usage(60_000, 1_000_000), turn('idle')))).toMatchObject({ roundsOpened: 1 });
+    f.t.advance(1_000);
+    expect(f.pass(at(f, usage(20_000, 1_000_000), turn('working'), lines(1, f.t.ports.clock.wall() - 500)))).toMatchObject({ roundsOpened: 1 });
+    expect(rounds(f.s).map((x) => [x.kind, x.depthTokens])).toEqual([['start', null], ['spot', 60_000], ['compaction', 20_000]]);
+    const spot = f.s.db.prepare("SELECT grade, answer FROM continuity_probes WHERE kind = 'spot'").all();
+    expect(spot).toEqual([{ grade: 'unmeasured', answer: null }]);
+    // The superseded spot round never reads failed, and the compaction round is the one served.
+    expect(f.s.openProbeRound(COORD).ok && (f.s.openProbeRound(COORD) as { rows: { kind: string }[] }).rows[0]!.kind).toBe('compaction');
+  });
+
+  it('50k past the last spot depth while idle opens one spot round about this generation\'s own rows, and sends no mail (slug spot-mail-waits-on-the-renewal-act)', () => {
     const f = active();
     const g = gen(f);
     // A note from before this generation entered active is not asked about; three written since are.
@@ -1069,10 +1130,11 @@ describe('the probes (the probes piece, PR B, Tasks 5 and 6)', () => {
     expect((f.s.db.prepare('SELECT count(*) AS n FROM mail').get() as { n: number }).n).toBe(mailBefore);
     // Crossing again before an answer opens nothing more.
     expect(f.pass(at(f, usage(120_000, 1_000_000), turn('idle')))).toMatchObject({ roundsOpened: 0 });
-    // Answered, the next crossing of a 50k step opens the next; the same step does not.
+    // Answered, the next opens at the last spot depth plus 50k (review 2063 F5), not at the next 50k bucket.
     answer(f, 'pass');
-    expect(f.pass(at(f, usage(99_000, 1_000_000), turn('idle')))).toMatchObject({ roundsOpened: 0 });
-    expect(f.pass(at(f, usage(101_000, 1_000_000), turn('idle')))).toMatchObject({ roundsOpened: 1 });
+    expect(f.pass(at(f, usage(101_000, 1_000_000), turn('idle')))).toMatchObject({ roundsOpened: 0 });
+    expect(f.pass(at(f, usage(109_999, 1_000_000), turn('idle')))).toMatchObject({ roundsOpened: 0 });
+    expect(f.pass(at(f, usage(110_000, 1_000_000), turn('idle')))).toMatchObject({ roundsOpened: 1 });
   });
 
   it('a busy session, a stale sidecar, an unread turn marker or no readings open no spot round (unmeasured, never a guess)', () => {

@@ -859,6 +859,8 @@ export interface RoundInsert {
   readonly roundId: string; readonly sessionId: string; readonly generationId: number; readonly kind: ProbeRoundKind;
   readonly questions: readonly ProbeInsertQuestion[]; readonly snapshotId: string | null; readonly depthTokens: number | null;
   readonly modelClass: string | null; readonly roundUnmeasured: boolean; readonly askedAt: number;
+  /** An unanswered spot round of the same generation this round supersedes (review 2063 F3), or null. */
+  readonly supersedes: string | null;
 }
 /** One row of `continuity_probes`, as read. */
 export interface ProbeRow extends ProbeInsertQuestion {
@@ -916,11 +918,16 @@ class RoundHeld extends Error {}
 
 /** The lane's writer: every question of one round, in ONE transaction. `open` when the generation already has a round with
  *  no answer (one open round at a time, compared and set here, so two passes never open two); a round with no question is
- *  never written (`empty`). */
+ *  never written (`empty`). A round that supersedes an unanswered spot round closes it first, in the same transaction, every
+ *  question graded `unmeasured` with no answer (review 2063 F3): it was never the session's to answer, so it never fails. */
 export function openRound(db: DatabaseSync, r: RoundInsert): { ok: true } | { ok: false; kind: 'open' | 'empty' | 'write-failed' } {
   if (r.questions.length === 0) return { ok: false, kind: 'empty' };
   try {
     return tx(db, () => {
+      if (r.supersedes !== null) {
+        stmt(db, "UPDATE continuity_probes SET answeredAt = ?, answer = NULL, grade = 'unmeasured', book = 'unmeasured' "
+          + "WHERE roundId = ? AND generationId = ? AND kind = 'spot' AND answeredAt IS NULL").run(r.askedAt, r.supersedes, r.generationId);
+      }
       if (stmt(db, 'SELECT 1 FROM continuity_probes WHERE generationId = ? AND answeredAt IS NULL LIMIT 1').get(r.generationId) !== undefined) {
         throw new RoundHeld();
       }
@@ -969,12 +976,14 @@ export function probeRows(db: DatabaseSync, generationId: number): ProbeRowsRead
   } catch (e) { return probeReadFailed(e); }
 }
 
-/** The session's open round: the questions of its newest round with no answer, in id order, or an empty list when none is
- *  open. The door's read. */
+/** The session's open round: the questions of the newest round with no answer of the session's live generation (its newest
+ *  that has not ended, review 2063 F7), in id order, or an empty list when none is open. The door's read. */
 export function openProbeRound(db: DatabaseSync, sessionId: string): ProbeRowsRead {
   try {
     return probeRowsOf(stmt(db, `SELECT ${PROBE_COLUMNS} FROM continuity_probes WHERE roundId = (SELECT roundId FROM continuity_probes `
-      + 'WHERE sessionId = ? AND answeredAt IS NULL ORDER BY id DESC LIMIT 1) AND sessionId = ? ORDER BY id').all(sessionId, sessionId) as Record<string, unknown>[]);
+      + 'WHERE sessionId = ? AND answeredAt IS NULL AND generationId = (SELECT max(id) FROM continuity_generations '
+      + "WHERE sessionId = ? AND state <> 'ended') ORDER BY id DESC LIMIT 1) AND sessionId = ? ORDER BY id")
+      .all(sessionId, sessionId, sessionId) as Record<string, unknown>[]);
   } catch (e) { return probeReadFailed(e); }
 }
 

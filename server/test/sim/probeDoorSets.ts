@@ -5,6 +5,7 @@
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { expect } from 'vitest';
+import { SECRET_MASK, SECRET_MASK_TOO_LARGE } from '../../../shared/api.js';
 import type { CardFacts, CardItem, CardMail, CardNote } from '../../../shared/continuity-card.js';
 import { BOOK_STATES, GENERATION_STATES, SPOT_PROBE_EVERY_TOKENS, type ProbeGrade, type ProbeRoundKind } from '../../../shared/continuity.js';
 import { CARD_TEXT_PREFACE } from '../../src/coord/untrusted.js';
@@ -74,6 +75,31 @@ export function gradeAnswersCases(m: ProbeDoorModule): Record<string, SuiteCase>
     'a wrong answer fails, and an answer for an unknown id is not graded': () => {
       const got = m.gradeAnswers([qs[0]!], new Map([['p1', '42'], ['p9', '41']]));
       expect(got).toEqual([{ qid: 'p1', answer: '42', grade: 'fail' }]);
+    },
+    'choices that collide once masked, or fold equal, grade unmeasured whatever the answer, a missing one too (review 2063 F1)': () => {
+      const twins = q('p5', [`rotate ${SECRET_MASK}`, `rotate ${SECRET_MASK}`, 'run'], `rotate ${SECRET_MASK}`);
+      for (const a of [`rotate ${SECRET_MASK}`, 'run', 'other']) expect(m.gradeAnswers([twins], new Map([['p5', a]]))[0]!.grade).toBe('unmeasured');
+      expect(m.gradeAnswers([twins], new Map())[0]).toEqual({ qid: 'p5', answer: null, grade: 'unmeasured' });
+      const folded = q('p6', ['Run', 'run ', 'stop'], 'stop');
+      expect(m.gradeAnswers([folded], new Map([['p6', 'stop']]))[0]!.grade).toBe('unmeasured');
+    },
+    'a masked expected answer that is none of the masked choices grades unmeasured (review 2063 F1)': () => {
+      const lost = q('p7', ['a', 'b', 'c'], 'd');
+      expect(m.gradeAnswers([lost], new Map([['p7', 'd']]))[0]!.grade).toBe('unmeasured');
+      expect(m.gradableAsServed(lost)).toBe(false);
+      expect(m.gradableAsServed(q('p8', ['a', 'b'], 'B '))).toBe(true);
+      expect(m.gradableAsServed(q('p9', null, 'none'))).toBe(true);
+    },
+    'an answer with a mask placeholder that matches no choice grades unmeasured; one that matches a choice is graded (review 2063 F6)': () => {
+      const qq = q('p1', ['rotate key-1', 'b', 'c'], 'rotate key-1');
+      expect(m.gradeAnswers([qq], new Map([['p1', `rotate ${SECRET_MASK}`]]))[0]!.grade).toBe('unmeasured');
+      expect(m.gradeAnswers([qq], new Map([['p1', `rotate ${SECRET_MASK_TOO_LARGE}`]]))[0]!.grade).toBe('unmeasured');
+      const served = q('p2', [`rotate ${SECRET_MASK}`, 'b', 'c'], `rotate ${SECRET_MASK}`);
+      expect(m.gradeAnswers([served], new Map([['p2', ` ROTATE ${SECRET_MASK} `]]))[0]!.grade).toBe('pass');
+      expect(m.gradeAnswers([served], new Map([['p2', 'b']]))[0]!.grade).toBe('fail');
+      const byId = q('p3', null, `x ${SECRET_MASK}`);
+      expect(m.gradeAnswers([byId], new Map([['p3', `x ${SECRET_MASK}`]]))[0]!.grade).toBe('pass');
+      expect(m.gradeAnswers([byId], new Map([['p3', `y ${SECRET_MASK}`]]))[0]!.grade).toBe('unmeasured');
     },
     'an empty answer is an answer: it is given, and it fails': () => {
       expect(m.gradeAnswers([qs[0]!], new Map([['p1', '']]))).toEqual([{ qid: 'p1', answer: '', grade: 'fail' }]);
@@ -285,7 +311,7 @@ export function probeScheduleCases(m: ProbeScheduleModule): Record<string, Suite
     // ---- probing
     'probing, no round yet: the first start round opens at once, with no depth and nothing fed': () => {
       const s = go({ state: 'probing' });
-      expect([s.feed, s.open]).toEqual([null, { kind: 'start', depthTokens: null }]);
+      expect([s.feed, s.open]).toEqual([null, { kind: 'start', depthTokens: null, supersedes: null }]);
     },
     'probing, the first round graded passed or failed is fed, and opens nothing': () => {
       expect(go({ state: 'probing', rounds: [DONE('r1', 'start', 'passed')] })).toMatchObject({ feed: { passed: true }, open: null });
@@ -310,7 +336,7 @@ export function probeScheduleCases(m: ProbeScheduleModule): Record<string, Suite
     'probing, the second start round opens only after the card was read again after the first was answered': () => {
       const failed = DONE('r1', 'start', 'failed', { answeredAt: 5000 });
       const at = (cardReadAt: Input['cardReadAt']) => go({ state: 'probing', probeRounds: 1, rounds: [failed], cardReadAt }).open;
-      expect(at(M(5001))).toEqual({ kind: 'start', depthTokens: null });
+      expect(at(M(5001))).toEqual({ kind: 'start', depthTokens: null, supersedes: null });
       expect(at(M(null))).toBeNull();
       expect(at(M(4999))).toBeNull();
       expect(at(NOPE)).toBeNull();
@@ -329,9 +355,9 @@ export function probeScheduleCases(m: ProbeScheduleModule): Record<string, Suite
       expect(opens({ state: 'probing', probeRounds: 1, rounds: [failed, OPENR('s1', 'spot')], cardReadAt: M(9000) })).toBeNull();
     },
     // ---- active
-    'active, a compaction since the window opens a compaction round, with no depth': () => {
-      expect(opens({ compactionsSince: M(1) })).toEqual({ kind: 'compaction', depthTokens: null });
-      expect(opens({ compactionsSince: M(3), rounds: [DONE('r1', 'start', 'passed')] })).toEqual({ kind: 'compaction', depthTokens: null });
+    'active, a compaction since the window opens a compaction round at the depth it reads': () => {
+      expect(opens({ compactionsSince: M(1) })).toEqual({ kind: 'compaction', depthTokens: 0, supersedes: null });
+      expect(opens({ compactionsSince: M(3), rounds: [DONE('r1', 'start', 'passed')] })).toEqual({ kind: 'compaction', depthTokens: 0, supersedes: null });
     },
     'active, no compaction since the window opens no compaction round; a count that could not be read opens none': () => {
       expect(opens({ compactionsSince: M(0) })).toBeNull();
@@ -339,7 +365,7 @@ export function probeScheduleCases(m: ProbeScheduleModule): Record<string, Suite
     },
     'active, a failed compaction round asks for a re-read: the next opens only once the card was read after it': () => {
       const failed = [DONE('c1', 'compaction', 'failed', { answeredAt: 5000 })];
-      expect(opens({ rounds: failed, cardReadAt: M(5001) })).toEqual({ kind: 'compaction', depthTokens: null });
+      expect(opens({ rounds: failed, cardReadAt: M(5001) })).toEqual({ kind: 'compaction', depthTokens: 0, supersedes: null });
       expect(opens({ rounds: failed, cardReadAt: M(5000) })).toBeNull();
       expect(opens({ rounds: failed, cardReadAt: M(null) })).toBeNull();
       expect(opens({ rounds: failed, cardReadAt: NOPE })).toBeNull();
@@ -352,15 +378,27 @@ export function probeScheduleCases(m: ProbeScheduleModule): Record<string, Suite
       const two = [DONE('c1', 'compaction', 'failed', { answeredAt: 5000 }), DONE('c2', 'compaction', 'failed', { answeredAt: 6000 })];
       const s = go({ rounds: two, cardReadAt: M(7000), compactionsSince: M(0) });
       expect([s.open, s.probeFailedUnfixed]).toEqual([null, { kind: 'measured', value: true }]);
-      expect(opens({ rounds: two, cardReadAt: M(7000), compactionsSince: M(1) })).toEqual({ kind: 'compaction', depthTokens: null });
+      expect(opens({ rounds: two, cardReadAt: M(7000), compactionsSince: M(1) })).toEqual({ kind: 'compaction', depthTokens: 0, supersedes: null });
     },
     'active, a compaction round that passed asks for no re-read': () => {
       const passed = [DONE('c1', 'compaction', 'passed', { answeredAt: 5000 })];
       expect(opens({ rounds: passed, cardReadAt: M(9000), compactionsSince: M(0) })).toBeNull();
     },
-    'active, no round opens while one is open': () => {
+    'active, an open start or compaction round blocks every round; an open spot round blocks only spot rounds': () => {
       expect(opens({ rounds: [OPENR('r1', 'start')], compactionsSince: M(2), idle: M(true), ctxTokens: M(3 * K) })).toBeNull();
-      expect(opens({ rounds: [OPENR('s1', 'spot')], compactionsSince: M(2) })).toBeNull();
+      expect(opens({ rounds: [OPENR('c1', 'compaction')], compactionsSince: M(2), idle: M(true), ctxTokens: M(3 * K) })).toBeNull();
+      expect(opens({ rounds: [{ ...OPENR('s1', 'spot'), depthTokens: K }], idle: M(true), ctxTokens: M(9 * K) })).toBeNull();
+    },
+    'active, a compaction round supersedes an unanswered spot round (review 2063 F3)': () => {
+      expect(opens({ rounds: [OPENR('s1', 'spot')], compactionsSince: M(1), ctxTokens: M(K) }))
+        .toEqual({ kind: 'compaction', depthTokens: K, supersedes: 's1' });
+      const failed = DONE('c1', 'compaction', 'failed', { answeredAt: 5000 });
+      expect(opens({ rounds: [failed, OPENR('s1', 'spot')], cardReadAt: M(5001), ctxTokens: M(K) }))
+        .toEqual({ kind: 'compaction', depthTokens: K, supersedes: 's1' });
+    },
+    'active, a compaction round records the depth it opened at, the spot baseline; none when the context was not read': () => {
+      expect(opens({ compactionsSince: M(1), ctxTokens: M(31_000) })).toEqual({ kind: 'compaction', depthTokens: 31_000, supersedes: null });
+      expect(opens({ compactionsSince: M(1), ctxTokens: NOPE })).toEqual({ kind: 'compaction', depthTokens: null, supersedes: null });
     },
     'no state but probing and active opens a round, however many compactions or tokens': () => {
       for (const state of GENERATION_STATES.filter((x) => x !== 'probing' && x !== 'active')) {
@@ -369,11 +407,11 @@ export function probeScheduleCases(m: ProbeScheduleModule): Record<string, Suite
       }
     },
     // ---- spot
-    'active, idle and past the first step: a spot round opens and records the depth it opened at': () => {
-      expect(opens({ idle: M(true), ctxTokens: M(K) })).toEqual({ kind: 'spot', depthTokens: K });
-      expect(opens({ idle: M(true), ctxTokens: M(2 * K + 17) })).toEqual({ kind: 'spot', depthTokens: 2 * K + 17 });
+    'active, idle and 50k past a zero baseline: a spot round opens and records the depth it opened at': () => {
+      expect(opens({ idle: M(true), ctxTokens: M(K) })).toEqual({ kind: 'spot', depthTokens: K, supersedes: null });
+      expect(opens({ idle: M(true), ctxTokens: M(2 * K + 17) })).toEqual({ kind: 'spot', depthTokens: 2 * K + 17, supersedes: null });
     },
-    'active, below the first step no spot round opens': () => {
+    'active, less than 50k past the baseline no spot round opens': () => {
       expect(opens({ idle: M(true), ctxTokens: M(K - 1) })).toBeNull();
       expect(opens({ idle: M(true), ctxTokens: M(0) })).toBeNull();
     },
@@ -382,28 +420,71 @@ export function probeScheduleCases(m: ProbeScheduleModule): Record<string, Suite
       expect(opens({ idle: { kind: 'unmeasured', why: 'x' }, ctxTokens: M(3 * K) })).toBeNull();
       expect(opens({ idle: M(true), ctxTokens: { kind: 'unmeasured', why: 'x' } })).toBeNull();
     },
-    'active, the same 50k step opens no second spot round; the next step does': () => {
+    'active, the next spot round opens at the last spot depth plus 50k, not at the next 50k bucket (review 2063 F5)': () => {
       const spot = (d: number) => DONE('s1', 'spot', 'passed', { depthTokens: d });
-      expect(opens({ rounds: [spot(K + 5)], idle: M(true), ctxTokens: M(K + 9_000) })).toBeNull();
-      expect(opens({ rounds: [spot(K + 5)], idle: M(true), ctxTokens: M(2 * K) })).toEqual({ kind: 'spot', depthTokens: 2 * K });
+      expect(opens({ rounds: [spot(2 * K - 1_000)], idle: M(true), ctxTokens: M(2 * K) })).toBeNull();
+      expect(opens({ rounds: [spot(2 * K - 1_000)], idle: M(true), ctxTokens: M(3 * K - 1_001) })).toBeNull();
+      expect(opens({ rounds: [spot(2 * K - 1_000)], idle: M(true), ctxTokens: M(3 * K - 1_000) }))
+        .toEqual({ kind: 'spot', depthTokens: 3 * K - 1_000, supersedes: null });
     },
-    'active, the newest spot round sets the step, not the first': () => {
+    'active, the newest spot round sets the baseline, not the first': () => {
       const rs = [DONE('s1', 'spot', 'passed', { depthTokens: K }), DONE('s2', 'spot', 'passed', { depthTokens: 4 * K })];
-      expect(opens({ rounds: rs, idle: M(true), ctxTokens: M(4 * K + 1) })).toBeNull();
-      expect(opens({ rounds: rs, idle: M(true), ctxTokens: M(5 * K) })).toEqual({ kind: 'spot', depthTokens: 5 * K });
+      expect(opens({ rounds: rs, idle: M(true), ctxTokens: M(5 * K - 1) })).toBeNull();
+      expect(opens({ rounds: rs, idle: M(true), ctxTokens: M(5 * K) })).toEqual({ kind: 'spot', depthTokens: 5 * K, supersedes: null });
     },
-    'active, a start round is not a spot round: the step counts from zero without one': () => {
+    'active, a compaction resets the baseline to the depth after it (review 2063 F5)': () => {
+      const rs = [DONE('s1', 'spot', 'passed', { depthTokens: 3 * K }), DONE('c1', 'compaction', 'passed', { depthTokens: 30_000 })];
+      expect(opens({ rounds: rs, idle: M(true), ctxTokens: M(30_000 + K - 1) })).toBeNull();
+      expect(opens({ rounds: rs, idle: M(true), ctxTokens: M(30_000 + K) })).toEqual({ kind: 'spot', depthTokens: 30_000 + K, supersedes: null });
+    },
+    'active, a newest compaction round whose depth was not measured leaves the baseline unmeasured: no spot round': () => {
+      const rs = [DONE('s1', 'spot', 'passed', { depthTokens: K }), DONE('c1', 'compaction', 'passed', { depthTokens: null })];
+      expect(opens({ rounds: rs, idle: M(true), ctxTokens: M(9 * K) })).toBeNull();
+    },
+    'active, a start round is not a mark: the baseline counts from zero without a spot or compaction round': () => {
       const rs = [DONE('r1', 'start', 'passed', { depthTokens: 9 * K })];
-      expect(opens({ rounds: rs, idle: M(true), ctxTokens: M(K) })).toEqual({ kind: 'spot', depthTokens: K });
+      expect(opens({ rounds: rs, idle: M(true), ctxTokens: M(K) })).toEqual({ kind: 'spot', depthTokens: K, supersedes: null });
     },
     'active, a compaction round wins over a spot round the same pass': () => {
-      expect(opens({ compactionsSince: M(1), idle: M(true), ctxTokens: M(3 * K) })).toEqual({ kind: 'compaction', depthTokens: null });
+      expect(opens({ compactionsSince: M(1), idle: M(true), ctxTokens: M(3 * K) })).toEqual({ kind: 'compaction', depthTokens: 3 * K, supersedes: null });
     },
     'the verdict of probeFailedUnfixed rides every answer, in every state': () => {
       const two = [DONE('c1', 'compaction', 'failed'), DONE('c2', 'compaction', 'failed')];
       for (const state of GENERATION_STATES) {
         expect(go({ state, rounds: two }).probeFailedUnfixed, state).toEqual({ kind: 'measured', value: true });
       }
+    },
+  };
+}
+
+export function roundSnapshotOfCases(m: ProbeScheduleModule): Record<string, SuiteCase> {
+  return {
+    'a spot round is drawn from no snapshot, a start round from the carded one whatever was read since': () => {
+      expect(m.roundSnapshotOf('spot', 'snap-1', M('snap-2'))).toEqual(M(null));
+      expect(m.roundSnapshotOf('start', 'snap-1', M('snap-2'))).toEqual(M('snap-1'));
+      expect(m.roundSnapshotOf('start', 'snap-1', NOPE)).toEqual(M('snap-1'));
+    },
+    'a compaction round is drawn from the newest snapshot the conversation read (review 2063 F2)': () => {
+      expect(m.roundSnapshotOf('compaction', 'snap-1', M('snap-2'))).toEqual(M('snap-2'));
+    },
+    'a compaction round with no read since falls back to the carded snapshot; a read that failed leaves it unmeasured': () => {
+      expect(m.roundSnapshotOf('compaction', 'snap-1', M(null))).toEqual(M('snap-1'));
+      expect(m.roundSnapshotOf('compaction', 'snap-1', NOPE)).toEqual(NOPE);
+    },
+  };
+}
+
+export function emptyTryKeyCases(m: ProbeScheduleModule): Record<string, SuiteCase> {
+  return {
+    'a start or compaction try is keyed by its kind and snapshot': () => {
+      expect(m.emptyTryKey('start', 'snap-1', null)).toBe('start:snap-1');
+      expect(m.emptyTryKey('compaction', 'snap-1', 40_000)).toBe('compaction:snap-1');
+      expect(m.emptyTryKey('compaction', 'snap-2', null)).not.toBe(m.emptyTryKey('compaction', 'snap-1', null));
+    },
+    'a spot try is keyed by its 50k step, so it is tried again only one step on (review 2063 F4)': () => {
+      expect(m.emptyTryKey('spot', null, K + 5)).toBe(m.emptyTryKey('spot', null, 2 * K - 1));
+      expect(m.emptyTryKey('spot', null, 2 * K)).not.toBe(m.emptyTryKey('spot', null, 2 * K - 1));
+      expect(m.emptyTryKey('spot', 'snap-1', 2 * K)).toBe('spot:2');
     },
   };
 }
@@ -574,11 +655,20 @@ const MASKED_QUESTION_SET: MutantSet<ProbeDoorModule> = {
 const GRADE_ANSWERS_SET: MutantSet<ProbeDoorModule> = {
   modulePath: DOOR,
   mutants: [
-    { id: 'A1 a missing answer passes', old: "a === undefined ? 'fail' : gradeProbe(q, a)", new: "a === undefined ? 'pass' : gradeProbe(q, a)" },
-    { id: 'A2 every given answer passes', old: "a === undefined ? 'fail' : gradeProbe(q, a)", new: "a === undefined ? 'fail' : 'pass'" },
+    { id: 'A1 a missing answer passes', old: "a === undefined ? 'fail'", new: "a === undefined ? 'pass'" },
+    { id: 'A2 every given answer passes', old: "'unmeasured' : gradeProbe(q, a)", new: "'unmeasured' : 'pass'" },
     { id: 'A3 a missing answer as an empty string', old: 'answer: a ?? null', new: "answer: a ?? ''" },
     { id: 'A4 an empty answer taken for missing', old: 'a === undefined ?', new: "a === undefined || a === '' ?" },
     { id: 'A5 the answer read by the wrong id', old: 'answers.get(q.id)', new: 'answers.get(q.cls)' },
+    { id: 'A6 a question that cannot be graded is graded', old: "!gradableAsServed(q) ? 'unmeasured' : ", new: '' },
+    { id: 'A7 an answer masked away is graded', old: "maskedAway(q, a) ? 'unmeasured' : ", new: '' },
+    { id: 'A8 colliding choices accepted', old: 'new Set(folded).size === folded.length && ', new: '' },
+    { id: 'A9 an expected answer outside the choices accepted', old: ' && folded.filter((c) => c === fold(q.expected)).length === 1', new: '' },
+    { id: 'A10 choices compared unfolded', old: 'q.choices.map(fold)', new: 'q.choices' },
+    { id: 'A11 the too-large placeholder not read', old: ' || answer.includes(SECRET_MASK_TOO_LARGE)', new: '' },
+    { id: 'A12 a placeholder answer that matches a choice masked away', old: '\n  && !(q.choices ?? [q.expected]).some((c) => fold(c) === fold(answer))', new: '' },
+    { id: 'A13 an id answer with a placeholder always masked away', old: '(q.choices ?? [q.expected])', new: '(q.choices ?? [])' },
+    { id: 'A14 a placeholder answer matched unfolded', old: '.some((c) => fold(c) === fold(answer))', new: '.some((c) => c === answer)' },
   ],
   suite: gradeAnswersCases,
 };
@@ -665,20 +755,26 @@ const SCHEDULE_SET: MutantSet<ProbeScheduleModule> = {
     { id: 'C4 the first start round as target', old: 'starts[i.probeRounds]', new: 'starts[0]' },
     { id: 'C5 a re-read in the same millisecond', old: 'card.value > at', new: 'card.value >= at' },
     { id: 'C6 a spot round on a busy session', old: '|| !i.idle.value ||', new: '||' },
-    { id: 'C7 the same step opens a second spot', old: 'step(i.ctxTokens.value) > step(lastDepth)', new: 'i.ctxTokens.value > lastDepth' },
-    { id: 'C8 a spot below the first step', old: 'Math.floor(t / SPOT_PROBE_EVERY_TOKENS)', new: 'Math.ceil(t / SPOT_PROBE_EVERY_TOKENS)' },
+    { id: 'C7 the delta read as a 50k bucket', old: 'depth - baseline >= SPOT_PROBE_EVERY_TOKENS', new: 'Math.floor(depth / SPOT_PROBE_EVERY_TOKENS) > Math.floor(baseline / SPOT_PROBE_EVERY_TOKENS)' },
+    { id: 'C8 a spot at exactly 50k past waits', old: 'baseline >= SPOT_PROBE_EVERY_TOKENS', new: 'baseline > SPOT_PROBE_EVERY_TOKENS' },
     { id: 'C9 the compaction trigger on zero compactions', old: 'i.compactionsSince.value >= 1', new: 'i.compactionsSince.value >= 0' },
     { id: 'C10 a compaction follow-up without a re-read', old: 'if (reReadAfter(i.cardReadAt, lastComp.answeredAt!))', new: 'if (true)' },
-    { id: 'C11 a round opened on active while one is open', old: "if (i.state !== 'active' || isOpen) return none;", new: "if (i.state !== 'active') return none;" },
-    { id: 'C12 rounds opened in any state', old: "if (i.state !== 'active' || isOpen) return none;", new: 'if (isOpen) return none;' },
+    { id: 'C11 a round opened on active while a start or compaction round is open', old: "if (openRound !== undefined && openRound.kind !== 'spot') return none;", new: '' },
+    { id: 'C12 rounds opened in any state', old: "  if (i.state !== 'active') return none;", new: '' },
     { id: 'C13 a new compaction opens during a re-read wait', old: '} else if (i.compactionsSince.kind', new: '}\n  if (i.compactionsSince.kind' },
     { id: 'C14 an unfixed pair still waits for a re-read', old: '!(probeFailedUnfixed.kind === \'measured\' && probeFailedUnfixed.value)', new: 'true' },
     { id: 'C15 any compaction round asks for a re-read', old: "lastComp?.verdict === 'failed' &&", new: 'lastComp !== undefined &&' },
-    { id: 'C16 the first spot round sets the step', old: 'spots[spots.length - 1]?.depthTokens', new: 'spots[0]?.depthTokens' },
-    { id: 'C17 a spot round without its depth', old: 'depthTokens: i.ctxTokens.value }', new: 'depthTokens: null }' },
+    { id: 'C16 the first mark sets the baseline', old: 'marks[marks.length - 1]!.depthTokens', new: 'marks[0]!.depthTokens' },
+    { id: 'C17 a spot round without its depth', old: "open: { kind: 'spot', depthTokens: depth,", new: "open: { kind: 'spot', depthTokens: null," },
     { id: 'C18 the first round never opens at zero failures', old: 'i.probeRounds === 0 ||', new: 'false ||' },
     { id: 'C19 a fed failure reads as passed', old: "passed: target.verdict === 'passed'", new: 'passed: true' },
-    { id: 'C20 spot rounds ignored among the open', old: "i.rounds.some((r) => r.answeredAt === null)", new: "i.rounds.filter((r) => r.kind !== 'spot').some((r) => r.answeredAt === null)" },
+    { id: 'C20 an open spot round opens another spot round', old: 'if (openRound !== undefined || i.idle', new: 'if (i.idle' },
+    { id: 'C21 a compaction does not reset the baseline', old: "r.kind === 'spot' || r.kind === 'compaction'", new: "r.kind === 'spot'" },
+    { id: 'C22 an unmeasured baseline read as zero', old: 'baseline !== null && depth - baseline', new: 'depth - (baseline ?? 0)' },
+    { id: 'C23 an open spot round not superseded', old: 'supersedes: openRound?.roundId ?? null', new: 'supersedes: null' },
+    { id: 'C24 a compaction round without its depth', old: "kind: 'compaction' as const, depthTokens: depth", new: "kind: 'compaction' as const, depthTokens: null" },
+    { id: 'C25 a start round counts as a mark', old: "r.kind === 'spot' || r.kind === 'compaction'", new: 'true' },
+    { id: 'C26 spot rounds opened in probing', old: "    if (isOpen) return none;\n", new: "    if (isOpen && i.rounds.some((r) => r.answeredAt === null && r.kind !== 'spot')) return none;\n" },
   ],
   suite: probeScheduleCases,
 };
@@ -694,6 +790,29 @@ const SPOT_FACTS_SET: MutantSet<ProbeScheduleModule> = {
     { id: 'T6 a stamp of zero', old: ' at, runs: read([])', new: ' at: 0, runs: read([])' },
   ],
   suite: spotFactsOfCases,
+};
+
+const ROUND_SNAPSHOT_SET: MutantSet<ProbeScheduleModule> = {
+  modulePath: SCHEDULE,
+  mutants: [
+    { id: 'R1 a spot round drawn from a snapshot', old: "if (kind === 'spot') return measured(null);", new: '' },
+    { id: 'R2 a start round drawn from the newest read', old: "if (kind === 'start') return measured(carded);", new: '' },
+    { id: 'R3 a failed read taken as the carded snapshot', old: 'if (newestRead.kind !== \'measured\') return newestRead;', new: 'if (newestRead.kind !== \'measured\') return measured(carded);' },
+    { id: 'R4 no read since leaves no snapshot', old: 'newestRead.value ?? carded', new: 'newestRead.value' },
+    { id: 'R5 a compaction round drawn from the carded snapshot', old: 'measured(newestRead.value ?? carded)', new: 'measured(carded)' },
+  ],
+  suite: roundSnapshotOfCases,
+};
+
+const EMPTY_TRY_SET: MutantSet<ProbeScheduleModule> = {
+  modulePath: SCHEDULE,
+  mutants: [
+    { id: 'E1 a spot try keyed by its exact depth', old: 'Math.floor((depthTokens ?? 0) / SPOT_PROBE_EVERY_TOKENS)', new: '(depthTokens ?? 0)' },
+    { id: 'E2 a try keyed without its kind', old: "`${kind}:${snapshotId ?? ''}`", new: "`${snapshotId ?? ''}`" },
+    { id: 'E3 a try keyed without its snapshot', old: "`${kind}:${snapshotId ?? ''}`", new: '`${kind}:`' },
+    { id: 'E4 a spot try keyed like a snapshot try', old: "kind === 'spot' ?", new: 'false ?' },
+  ],
+  suite: emptyTryKeyCases,
 };
 
 const SNAPSHOT_FACTS_SET: MutantSet<CardModule> = {
@@ -742,5 +861,7 @@ export const PROBE_DOOR_MUTANT_SETS: Record<string, MutantSet<never>> = {
   'server/src/continuity/probeSchedule.ts#probeFailedUnfixedOf': FAILED_UNFIXED_SET as MutantSet<never>,
   'server/src/continuity/probeSchedule.ts#probeSchedule': SCHEDULE_SET as MutantSet<never>,
   'server/src/continuity/probeSchedule.ts#spotFactsOf': SPOT_FACTS_SET as MutantSet<never>,
+  'server/src/continuity/probeSchedule.ts#roundSnapshotOf': ROUND_SNAPSHOT_SET as MutantSet<never>,
+  'server/src/continuity/probeSchedule.ts#emptyTryKey': EMPTY_TRY_SET as MutantSet<never>,
   'server/src/continuity/card.ts#snapshotFactsOf': SNAPSHOT_FACTS_SET as MutantSet<never>,
 };

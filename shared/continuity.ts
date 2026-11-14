@@ -265,7 +265,7 @@ export const PROBE_NONE = 'none';
  *  while idle. A `continuity_probes` row's `kind`. */
 const PROBE_ROUND_KIND_MAP = {
   start: 'after a start: drawn from the snapshot the generation was carded with',
-  compaction: 'after a compaction: drawn from the same snapshot',
+  compaction: 'after a compaction: drawn from the newest snapshot the conversation read',
   spot: 'at depth while idle: one question about the rows of this generation',
 } as const;
 export type ProbeRoundKind = keyof typeof PROBE_ROUND_KIND_MAP;
@@ -273,8 +273,12 @@ export const PROBE_ROUND_KINDS = Object.keys(PROBE_ROUND_KIND_MAP) as ProbeRound
 export function isProbeRoundKind(v: unknown): v is ProbeRoundKind {
   return typeof v === 'string' && (PROBE_ROUND_KINDS as readonly string[]).includes(v);
 }
-/** One answer's grade, closed-form (C41). */
-const PROBE_GRADE_MAP = { pass: 'the expected id, choice or `none`', fail: 'anything else' } as const;
+/** One answer's grade, closed-form (C41). `unmeasured` is the door's, never the session's: the question could not be graded
+ *  as served (its masked choices collide, or its masked expected answer is not exactly one of them), the answer carries the
+ *  mask placeholder and matches no choice (the masker changed between ask and answer), or the round was superseded. */
+const PROBE_GRADE_MAP = {
+  pass: 'the expected id, choice or `none`', fail: 'anything else', unmeasured: 'could not be graded as served',
+} as const;
 export type ProbeGrade = keyof typeof PROBE_GRADE_MAP;
 export const PROBE_GRADES = Object.keys(PROBE_GRADE_MAP) as ProbeGrade[];
 export function isProbeGrade(v: unknown): v is ProbeGrade {

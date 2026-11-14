@@ -8,13 +8,20 @@
 // masker, before it serves or grades: the session sees the masked choice, and an answer copied from it grades against the
 // masked expected answer, so it matches, and no secret goes out.
 //
+// GRADABLE AS SERVED (review 2063, F1 and F6). Masking runs per text, so two choices that differ only inside a secret
+// collapse to one served text, and the masker can change between the GET that served a round and the POST that answers it (a
+// restart forgets a box token until its re-key). Neither is the session's: a question whose masked choices are not
+// fold-distinct, or whose masked expected answer is not exactly one masked choice, grades `unmeasured`, and so does an answer
+// that carries the mask placeholder and matches no masked choice. The round then reads `unmeasured` (`roundVerdict`).
+//
 // UNTRUSTED (review 1999, F11). A question names slugs, paths and a note's next act, all text a session or a person wrote,
 // so each question and its choices are rendered as one untrusted block, the choices as JSON strings so that a newline in
 // one can never read as another choice.
+import { SECRET_MASK, SECRET_MASK_TOO_LARGE } from '../../../shared/api.js';
 import { BOOK_STATES, PROBE_NONE, type BookState, type ProbeGrade, type ProbeRoundKind } from '../../../shared/continuity.js';
 import { CARD_TEXT_PREFACE, untrustedBlock } from '../coord/untrusted.js';
 import { cardPages } from './card.js';
-import { gradeProbe, type ProbeQuestion } from './probes.js';
+import { fold, gradeProbe, type ProbeQuestion } from './probes.js';
 
 /** An answer longer than this is refused `bad-request`: the longest choice is a note's next act or a claimed path, each a few
  *  hundred characters, so an answer this long was never copied from one. */
@@ -39,12 +46,28 @@ export function maskedQuestion(q: StoredQuestion, mask: (text: string) => string
 /** One answer graded: the session's text (null when it gave none for that question) and its grade. */
 export interface GradedAnswer { readonly qid: string; readonly answer: string | null; readonly grade: ProbeGrade }
 
-/** Every question of a round graded against the answers by question id. A question with no answer fails: closed-form, an
- *  answer that is not given is not the expected one. */
+/** The question can be graded as served: its masked choices are fold-distinct and its masked expected answer is exactly one
+ *  of them (a question with no choices, an id or `none`, always can). */
+export function gradableAsServed(q: ProbeQuestion): boolean {
+  if (q.choices === null) return true;
+  const folded = q.choices.map(fold);
+  return new Set(folded).size === folded.length && folded.filter((c) => c === fold(q.expected)).length === 1;
+}
+
+/** The answer carries a mask placeholder and is none of the served choices (nor the expected id): it was copied from a text
+ *  the masker has since changed, so it proves nothing either way. */
+const maskedAway = (q: ProbeQuestion, answer: string): boolean =>
+  (answer.includes(SECRET_MASK) || answer.includes(SECRET_MASK_TOO_LARGE))
+  && !(q.choices ?? [q.expected]).some((c) => fold(c) === fold(answer));
+
+/** Every question of a round graded against the answers by question id. A question the door cannot grade as served, or an
+ *  answer masked away, is `unmeasured`; otherwise a question with no answer fails: closed-form, an answer that is not given
+ *  is not the expected one. */
 export function gradeAnswers(questions: readonly ProbeQuestion[], answers: ReadonlyMap<string, string>): readonly GradedAnswer[] {
   return questions.map((q) => {
     const a = answers.get(q.id);
-    return { qid: q.id, answer: a ?? null, grade: a === undefined ? 'fail' : gradeProbe(q, a) };
+    const grade: ProbeGrade = !gradableAsServed(q) ? 'unmeasured' : a === undefined ? 'fail' : maskedAway(q, a) ? 'unmeasured' : gradeProbe(q, a);
+    return { qid: q.id, answer: a ?? null, grade };
   });
 }
 

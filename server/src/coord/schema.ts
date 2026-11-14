@@ -3091,13 +3091,13 @@ export const MIGRATIONS: readonly string[] = [
     choices         TEXT,               -- the choices as a JSON list, or NULL for an id or none
     expected        TEXT NOT NULL,      -- never leaves the server
     snapshotId      TEXT,               -- the snapshot a start or compaction round was drawn from; NULL for a spot round
-    depthTokens     INTEGER,            -- a spot round's context depth when it opened
+    depthTokens     INTEGER,            -- the context depth a spot or compaction round opened at (the spot baseline)
     modelClass      TEXT,               -- a spot round's model class when it opened
     roundUnmeasured INTEGER NOT NULL DEFAULT 0,
     askedAt         INTEGER NOT NULL,   -- wall ms the round opened
     answeredAt      INTEGER,
     answer          TEXT,
-    grade           TEXT,               -- pass | fail (ProbeGrade)
+    grade           TEXT,               -- pass | fail | unmeasured (ProbeGrade)
     book            TEXT,               -- closed | open | unmeasured (BookState)
     UNIQUE (roundId, qid),
     UNIQUE (roundId, cls, question)
