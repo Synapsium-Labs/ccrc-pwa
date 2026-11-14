@@ -21,6 +21,8 @@ const FILE = 'test/sim/generation-day.test.ts';
 /** 200 seeds in CI; CCRC_SIM=full runs 5,000. */
 const DEFAULTS = Array.from({ length: process.env.CCRC_SIM === 'full' ? 5_000 : 200 }, (_, i) => i + 1);
 const H = 3_600_000;
+/** A case's time bound: about 0.3 s a seed since the day runs the real lane and store, so 5,000 seeds need more. */
+const BOUND_MS = process.env.CCRC_SIM === 'full' ? 3_600_000 : 600_000;
 
 describe('the generation day\'s invariants go red on a hand-made sequence', () => {
   it('CONTROL: G1 is red on a minted generation that is active without a passed round', () => {
@@ -97,6 +99,13 @@ describe('the generation day\'s invariants go red on a hand-made sequence', () =
     expect(byName('G7').check(seqOf([['hold-off', 'o#1', `until=${H}`, 'lane'], soft(H)]))).toBeNull();
     expect(byName('G7').check(seqOf([['hold-off', 'o#2', `until=${H}`, 'lane'], soft(H - 1)]))).toBeNull();
   });
+  it('CONTROL: G8 is red when a pass leaves the live generation minted by a start older than the newest reported one', () => {
+    const day = (live: number): SequenceLine[] => seqOf([['report', 'c', 'start=1', 'host'], ['pass', 'server', 'c=1', 'lane'],
+      ['report', 'c', 'start=2', 'host'], ['server', 'crash', 'down', 'sim'], ['server', 'boot', 'up', 'sim'],
+      ['pass', 'server', `c=${live}`, 'lane']]);
+    expect(byName('G8').check(day(1))?.invariant).toBe('G8');
+    expect(byName('G8').check(day(2))).toBeNull();
+  });
   it('CONTROL: G5 is red on a mint with no start, and on a start that minted nothing', () => {
     expect(byName('G5').check(seqOf([['gen', 'o#2', 'carded', 'mint']]))?.invariant).toBe('G5');
     expect(byName('G5').check(seqOf([['start', 'o', 'applied', 'host'], ['sim', 'generation-day', 'end', 'sim']]))?.invariant).toBe('G5');
@@ -117,53 +126,53 @@ type Observe = typeof observed.observeTime;
 const withObserve = (f: Observe): GenDayModules => ({ ...REAL, observed: { ...observed, observeTime: f } });
 
 describe('the generation day over seeded runs', () => {
-  it('holds G1 to G7 on every seed and reaches every edge', async () => {
+  it('holds G1 to G8 on every seed and reaches every edge', async () => {
     await assertScenario(generationDay(REAL), GEN_DAY_INVARIANTS, { seeds: simSeeds(DEFAULTS), testFile: FILE });
-  }, 600_000);
+  }, BOUND_MS);
 
   it('MUTATION: a generationStep that takes any card read as a match goes red on G1 within the CI seeds (review I4)', async () => {
     expect(await redSeed({ ...REAL, machine: { ...machine,
       generationStep: (g, e) => machine.generationStep(g, e.kind === 'card-read' ? { kind: 'card-read', hashMatches: true } : e) } }, 'G1')).not.toBeNull();
-  }, 600_000);
+  }, BOUND_MS);
 
   it('MUTATION: an observeTime that advances nothing across a freeze goes red on G4 within the CI seeds (review 1894, F1)', async () => {
     expect(await redSeed(withObserve((p, mono, proc, cap) => {
       const st = observed.observeTime(p, mono, proc, cap);
       return st.gap?.kind === 'step' && p !== null ? { at: { ...st.at, ms: p.ms }, gap: st.gap } : st;
     }), 'G4')).not.toBeNull();
-  }, 600_000);
+  }, BOUND_MS);
 
   it('MUTATION: an observeTime that counts each step twice, under the cap, goes red on G4 within the CI seeds (review 1912, F2)', async () => {
     expect(await redSeed(withObserve((p, mono, proc, cap) => {
       const st = observed.observeTime(p, mono, proc, cap);
       return st.gap === null && p !== null ? { ...st, at: { ...st.at, ms: p.ms + Math.min(cap, 2 * (st.at.ms - p.ms)) } } : st;
     }), 'G4')).not.toBeNull();
-  }, 600_000);
+  }, BOUND_MS);
 
   it('MUTATION: an observeTime that counts half of each step goes red on G4 within the CI seeds (review 1920, R5)', async () => {
     expect(await redSeed(withObserve((p, mono, proc, cap) => {
       const st = observed.observeTime(p, mono, proc, cap);
       return st.gap === null && p !== null ? { ...st, at: { ...st.at, ms: p.ms + Math.floor((st.at.ms - p.ms) / 2) } } : st;
     }), 'G4')).not.toBeNull();
-  }, 600_000);
+  }, BOUND_MS);
 
   it('MUTATION: an observeTime that answers no gap for a freeze goes red on G4 within the CI seeds (review 1912, F7)', async () => {
     expect(await redSeed(withObserve((p, mono, proc, cap) => {
       const st = observed.observeTime(p, mono, proc, cap);
       return st.gap?.kind === 'step' ? { ...st, gap: null } : st;
     }), 'G4')).not.toBeNull();
-  }, 600_000);
+  }, BOUND_MS);
 
   it('MUTATION: a softRenewalMay that ignores the budget goes red on G2 within the CI seeds', async () => {
     expect(await redSeed({ ...REAL, soft: { softRenewalMay: (i) => soft.softRenewalMay({ ...i, softRenewalsInWindow: 0 }) } }, 'G2')).not.toBeNull();
-  }, 600_000);
+  }, BOUND_MS);
 
   it('MUTATION: a softRenewalMay that ignores the hold-off goes red on G7 within the CI seeds (review 1912, F9)', async () => {
     expect(await redSeed({ ...REAL, soft: { softRenewalMay: (i) => soft.softRenewalMay({ ...i, holdOffUntilObservedMs: null }) } }, 'G7')).not.toBeNull();
-  }, 600_000);
+  }, BOUND_MS);
 
   it('MUTATION: a generationStep that drains on a soft due in degraded goes red on G7 within the CI seeds (review 1912, F9)', async () => {
     expect(await redSeed({ ...REAL, machine: { ...machine,
       generationStep: (g, e) => machine.generationStep(g, e.kind === 'due' && g.state === 'degraded' ? { kind: 'due', cls: 'hard' } : e) } }, 'G7')).not.toBeNull();
-  }, 600_000);
+  }, BOUND_MS);
 });
