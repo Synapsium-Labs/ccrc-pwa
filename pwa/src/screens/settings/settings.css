@@ -150,6 +150,8 @@
   font-size: var(--fs-meta);
   font-weight: var(--weight-medium);
 }
+/* The character card's face and its name, apart (layout only; its own rule, the palette card keeps its gap). */
+.settings-character-hit { gap: var(--sp-2); }
 .settings-palette[data-active='true'] .settings-palette-name { font-weight: var(--weight-semibold); }
 /* The note and the check name the card in their selectors, so the gate measures each on the card's two grounds. */
 .settings-palette-note { display: none; font-size: var(--fs-meta); line-height: var(--lh-normal); }

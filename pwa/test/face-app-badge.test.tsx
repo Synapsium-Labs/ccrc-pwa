@@ -2,7 +2,7 @@
 import type { ReactNode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, render } from '@testing-library/react';
-import { badgeAct } from '../src/face/appBadge';
+import { badgeAct } from '../src/face/badgeAct';
 import { AppBadge } from '../src/face/AppBadge';
 import { resetAppBadgeForTests } from '../src/face/useAppBadge';
 import { FleetChromeProvider } from '../src/fleet/FleetChrome';

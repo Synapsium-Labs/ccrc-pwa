@@ -16,6 +16,7 @@ import { Door, SETTINGS_GLYPH } from '@ccrc/ui';
 import { NotificationBell } from '../fleet/NotificationBell';
 import { PoolLag } from './poolLag';
 import { navigate } from '../lib/router';
+import { FaceMark } from '../face/FaceMark';
 import '../fleet/fleet.css';
 
 export function FleetHead(
@@ -37,6 +38,7 @@ export function FleetHead(
   return (
     <header className="fleet-head">
         {chrome && <span className="wordmark">ccrc</span>}
+        {chrome && <FaceMark />}
         <div className="fleet-head-right">
           {countLine !== null && <span className="fleet-count">{countLine}</span>}
           {poolLag !== null && <PoolLag text={poolLag} />}

@@ -235,4 +235,22 @@ describe('the bars', () => {
       act(() => { navigate('/'); setSkin(REFINED); });
     });
   }
+
+  it('the shared fleet head (Instrument on a phone) shows one face, straight after the wordmark', () => {
+    vi.useRealTimers();
+    stubMedia(390);
+    act(() => { setSkin(INSTRUMENT); navigate('/'); });
+    render(<App />);
+    act(() => useFleetStore.setState({ conn: 'open', sessions: [fleetSession({ id: 'lane-a-1', bucket: 'idle' })], fleetFrameSeen: true }));
+    const faces = document.querySelectorAll('svg.face-mark');
+    expect(faces).toHaveLength(1);
+    const head = document.querySelector('header.fleet-head');
+    expect(head).not.toBeNull();
+    const mark = head!.querySelector('.wordmark');
+    expect(mark).not.toBeNull();
+    const named = screen.getAllByRole('img', { name: /not heard yet: the runs/ });
+    expect(named).toEqual([faces[0]]);
+    expect(faces[0]!.previousElementSibling).toBe(mark);
+    act(() => { navigate('/'); setSkin(REFINED); });
+  });
 });

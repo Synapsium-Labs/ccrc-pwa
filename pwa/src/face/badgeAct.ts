@@ -1,4 +1,4 @@
-// appBadge — what the installed icon's count does for a frame (the Overlord face plan, Task 10; L1: pure, no navigator).
+// badgeAct — what the installed icon's count does for a frame (the Overlord face plan, Task 10; L1: pure, no navigator).
 //
 // `count` is the Waiting on you door's count (`useNavBadges().waitingItems`); `last` is the count last WRITTEN to the badge,
 // `null` before any write. "Not heard yet" (count null) and "heard that nothing waits" (0) are two different answers:

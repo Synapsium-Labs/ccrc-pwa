@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react';
 import { act, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { Splash } from '../src/face/Splash';
+import { Splash } from '../src/face/SplashScreen';
 import { SPLASH_MAX_MS, SPLASH_MOTTO, SPLASH_TAGLINE, SPLASH_TYPE_MS, splashShows, type SplashFacts } from '../src/face/splash';
 import { FleetChromeProvider } from '../src/fleet/FleetChrome';
 import { useFleetStore } from '../src/stores/fleet';

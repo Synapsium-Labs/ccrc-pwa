@@ -1,5 +1,5 @@
 // The Overlord face's three deciders: their oracle cases and mutant sets (the face plan, Task F). Each decider is a pure
-// L1 function in the PWA (`pwa/src/face/{mood,splash,appBadge}.ts`); its cases are restated here, over a loaded module,
+// L1 function in the PWA (`pwa/src/face/{mood,splash,badgeAct}.ts`); its cases are restated here, over a loaded module,
 // so `mutation-floors.test.ts` can run them against each textual mutant (every-run floors). The pwa suites pin the same
 // behaviour against the real module; the duplication is the point, the server runner needs a suite it can hand a copy.
 // The sets load the pwa deciders by path at runtime, so vitest's import graph does not tie them to
@@ -242,7 +242,7 @@ export function badgeCases(m: BadgeModule): Record<string, SuiteCase> {
 }
 
 const BADGE_SET: MutantSet<BadgeModule> = {
-  modulePath: path.join(ROOT, 'pwa/src/face/appBadge.ts'),
+  modulePath: path.join(ROOT, 'pwa/src/face/badgeAct.ts'),
   mutants: [
     { id: 'B1', old: "if (count === last) return { kind: 'leave' };", new: '' },
     { id: 'B2', old: 'if (count === 0)', new: 'if (count <= 1)' },
@@ -256,5 +256,5 @@ const BADGE_SET: MutantSet<BadgeModule> = {
 export const FACE_MUTANT_SETS: Record<string, MutantSet<never>> = {
   'pwa/src/face/mood.ts#moodOf': MOOD_SET as MutantSet<never>,
   'pwa/src/face/splash.ts#splashShows': SPLASH_SET as MutantSet<never>,
-  'pwa/src/face/appBadge.ts#badgeAct': BADGE_SET as MutantSet<never>,
+  'pwa/src/face/badgeAct.ts#badgeAct': BADGE_SET as MutantSet<never>,
 };

@@ -14,5 +14,5 @@
   "server/src/coord/mailPace.ts#mailPaceOf": 1,
   "pwa/src/face/mood.ts#moodOf": 1,
   "pwa/src/face/splash.ts#splashShows": 1,
-  "pwa/src/face/appBadge.ts#badgeAct": 1
+  "pwa/src/face/badgeAct.ts#badgeAct": 1
 }

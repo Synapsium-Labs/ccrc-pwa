@@ -141,7 +141,7 @@ describe('Appearance', () => {
   it('Appearance renders Layout above Theme', () => {
     render(<AppearanceSection />);
     const legends = [...document.querySelectorAll('legend')].map((l) => l.textContent);
-    expect(legends).toEqual(['Layout', 'Theme']);
+    expect(legends).toEqual(['Layout', 'Theme', 'Character']);
   });
 
   // The plan's "the fonts line links /licenses/Geist-OFL.txt" waits for #402:

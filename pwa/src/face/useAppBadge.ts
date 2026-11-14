@@ -1,12 +1,12 @@
 // useAppBadge — the count on the installed icon (the Overlord face plan, Task 10; L4: it holds what it last wrote and the
-// stopped latch, calls the navigator, and decides nothing: `badgeAct`, `face/appBadge.ts`, decides).
+// stopped latch, calls the navigator, and decides nothing: `badgeAct`, `face/badgeAct.ts`, decides).
 //
 // The count is `useNavBadges().waitingItems`, the one source (never recomputed here). The API is used only when both
 // `setAppBadge` and `clearAppBadge` exist. A refusal (a rejection such as `NotAllowedError`, or a synchronous throw) warns
 // once and stops the writes for the page's life.
 import { useEffect } from 'react';
 import { useNavBadges } from '../fleet/navBadges';
-import { badgeAct } from './appBadge';
+import { badgeAct } from './badgeAct';
 
 /** The count last written to the badge; null before any write. Module state: one icon per page. */
 let last: number | null = null;

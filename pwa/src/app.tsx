@@ -17,7 +17,7 @@
 import { Suspense, useEffect, useLayoutEffect, useRef } from 'react';
 import type { ReactNode } from 'react';
 import { BlockScreen } from './components/BlockScreen';
-import { Splash } from './face/Splash';
+import { Splash } from './face/SplashScreen';
 import { AppBadge } from './face/AppBadge';
 import { LoginScreen } from './components/LoginScreen';
 import { RenderBoundary, ScreenFallback } from './components/RenderBoundary';
