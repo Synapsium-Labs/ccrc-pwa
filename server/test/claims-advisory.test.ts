@@ -75,6 +75,12 @@ describe('claims are advisory (D12)', () => {
                              // nothing; the port only narrows what the watcher (already allowed
                              // above, count-pinned) may call. The pin below holds that single
                              // quoted occurrence, so a call landing here still fails.
+      'continuity/cardFacts.ts', // Overlord W1a, the card piece: the card's gatherer reads the live claims
+                             // once per card request and keeps the caller's own (`heldBy`) as
+                             // display facts, printed on that session's own card. It decides
+                             // nothing, never refuses, delays or redirects any work, and holds
+                             // nothing: a claim's only effect is a line on its holder's card. The
+                             // call count pin below keeps a second use out.
     ]);
     const holders = walk(srcRoot)
       .filter((f) => f.endsWith('.ts'))
@@ -124,5 +130,9 @@ describe('claims are advisory (D12)', () => {
       'depsShedPass.ts gained or lost an activeClaims call site — argue the D12 shape here before re-pinning')
       .toEqual(['deps.coord.activeClaims']);
     expect(shedCalls('depsShed.ts'), 'the deps-shed verdict reads the store through the pass, never itself').toEqual([]);
+    // The card's gatherer (Overlord W1a), held by COUNT of CALLS the same way: ONE `coord.activeClaims()`, read for display.
+    expect(shedCalls('continuity/cardFacts.ts'),
+      'cardFacts.ts gained or lost an activeClaims call site — argue the D12 shape here before re-pinning')
+      .toEqual(['coord.activeClaims']);
   });
 });

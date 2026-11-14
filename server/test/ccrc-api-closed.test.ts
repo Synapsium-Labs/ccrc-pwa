@@ -413,7 +413,8 @@ describe('the client stays closed', () => {
     // and byUuid, so it is counted by its own scan (`calls.record` below), not by the keyed fills' spelling.
     // `mail.inbox` (D-6780) took it to sixty-five; its read takes no body, and the ack body it synthesizes is pinned below.
     // The seven `plan` rows (D-8181) took it to seventy-two; `sessions.start` (Overlord W1a, the start report, no body fill) to seventy-three.
-    expect(routeKeys().size).toBe(73);
+    // `sessions.card` (Overlord W1a, the card piece, no body fill) took it to seventy-four.
+    expect(routeKeys().size).toBe(74);
     // The call record's fill is the one that REFUSES a caller's identity (D-8126): it tests the stripped copy for both keys and
     // refuses, then derives the pair from the pane, and fills nowhere else.
     const callFill = code.slice(code.indexOf("if [[ \"$key\" == 'calls.record' ]]; then"));

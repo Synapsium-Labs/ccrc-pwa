@@ -21,8 +21,16 @@ export const CARD_RENDERERS = Object.keys(CARD_RENDERER_MAP) as readonly CardRen
 
 /** The card's budget, counted as a tool result (C38: 15k tokens). */
 export const CARD_BUDGET_TOKENS = 15_000;
-/** One page of the card door's answer, in characters: under the size at which Claude Code cuts a tool result. */
-export const CARD_PAGE_CHARS = 12_000;
+/** The size at which Claude Code stops showing a Bash tool result whole, in UTF-8 BYTES, as measured in a fleet pane on
+ *  build 2.1.325 (2026-11-14): 29,900 ASCII characters arrived whole, while 30,050 characters, and 29,443 characters that were
+ *  30,243 bytes, were each replaced by a 2 KB preview and a file path. So the cut counts bytes, at about 30,000 (slug
+ *  card-page-chars). Re-measure it on a new build, and keep `CARD_PAGE_CHARS` under it. */
+export const TOOL_RESULT_CUT_BYTES = 30_000;
+/** One page of the card, in code points: `ccrc-api card` prints one page and a footer line per call, so a page of four-byte
+ *  characters (28,000 bytes) still sits under `TOOL_RESULT_CUT_BYTES` with room for the footer. */
+export const CARD_PAGE_CHARS = 7_000;
+/** At most this many outstanding deliveries are listed on a card; `mailMore` says when more exist. */
+export const CARD_MAIL_MAX = 100;
 /** The UTF-8 bytes counted as one token when the card is measured against its budget. */
 export const BYTES_PER_TOKEN = 3.2;
 
@@ -60,6 +68,9 @@ export interface CardItem {
   /** True when the operator ever ticked it (its `tickedAt` is set), even if it was returned to `open` since: a ticked
    *  item carries a ruling, so an abstention probe never asks about one (review 1999, F2a). */
   readonly everTicked: boolean;
+  /** Still inside its coordinator-first hold (`heldUntil` in the future): the operator is not shown it yet. Only the card of
+   *  the coordinator whose hold it is carries a held item (the coordinator's ruling F14 on review 2023). */
+  readonly held: boolean;
 }
 
 /** One programme's ledger, by slug. */
@@ -84,6 +95,9 @@ export interface CardMail {
   readonly fromId: string;
   readonly at: number;
   readonly subject: string;
+  /** The delivery lane stopped retrying it (a terminal delivery state that the mailbox still shows): it never reached the
+   *  session as a nudge. */
+  readonly parked: boolean;
 }
 
 /** One note the session or its earlier generation left (the notes piece fills these). Its text is untrusted. */
@@ -108,6 +122,8 @@ export interface CardFacts {
   readonly intent: Fact<boolean>;
   readonly itemsRaised: Fact<readonly CardItem[]>;
   readonly mailOutstanding: Fact<readonly CardMail[]>;
+  /** More outstanding deliveries exist than the card read (`CARD_MAIL_MAX`). */
+  readonly mailMore: boolean;
   /** Empty until the notes piece fills it. */
   readonly notes: Fact<readonly CardNote[]>;
   /** Null except at a renewal. */

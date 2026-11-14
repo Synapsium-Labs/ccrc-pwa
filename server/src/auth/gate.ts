@@ -5,7 +5,7 @@ import { SESSION_COOKIE, expireCookie, parseCookies } from './cookie.js';
 import type { SessionStore } from './sessions.js';
 
 /**
- * THE GATE. One `onRequest` hook stands in front of all 223 routes, the static
+ * THE GATE. One `onRequest` hook stands in front of all 224 routes, the static
  * wildcard, the SPA fallback and all three websocket upgrades.
  *
  * ONE HOOK, NOT A PER-ROUTE CHECK, and that is the whole design: a route added
@@ -72,14 +72,15 @@ import type { SessionStore } from './sessions.js';
  *     the moment the operator arms the flag. It publishes an `ok` and a build
  *     stamp and nothing about the fleet.
  *
- *  2. The seventy-two box-token machine lanes (the coordination routes, the Linear proxy's routes, #1444, and the programme
- *     ledgers' coordinator lanes, the coordinator call record's one, the plan verbs' and the hook's start report) plus
+ *  2. The seventy-three box-token machine lanes (the coordination routes, the Linear proxy's routes, #1444, and the programme
+ *     ledgers' coordinator lanes, the coordinator call record's one, the plan verbs', the hook's start report and the
+ *     card door) plus
  *     `/api/notify`, `/api/pools/epoch`
  *     and `/api/updates/intent/:nodeId` — the fleet host's ingress. These callers
  *     are `curl` inside a Claude Code session, ccd's `notify.sh`, `ccd-pool-sync.timer`
  *     (account-pool-membership wave 1, T7, D-3084) and, from update-management W4,
  *     `ccd-update-sync.timer`; none of them has a cookie jar and never
- *     will. All seventy-five CHECK the box token (`checkMailToken`), and the mail pair
+ *     will. All seventy-six CHECK the box token (`checkMailToken`), and the mail pair
  *     records every refusal — but "checks" is not "requires", and the difference is
  *     worth stating rather than rounding off, in BOTH directions rather than only
  *     one (D-1242: this paragraph used to say it in one, and was wrong in kind
@@ -568,6 +569,11 @@ export const EXEMPT: ReadonlyMap<string, string> = new Map([
     "the hook's report: box token and attribution — a session's hook reports its own SessionStart (source, " +
     "conversation uuid, model, the row's incarnation), box-token gated in its own onRequest whatever the flag, no cookie " +
     "accepted, the path's session the sender, attribution checked against the registry, recorded once per report id"],
+  // The card door (Overlord §3.3.3, W1a): a session reads its own card, page by page.
+  ['GET /api/sessions/:id/card',
+    "a session reads its own card: box token and attribution — box-token gated in its own onRequest whatever the flag, no " +
+    "cookie accepted, the path's session the caller (byId), attribution of byUuid checked against the registry, the card " +
+    'rendered from the rows for that session only'],
 
   ['POST /api/token/claim',
     'a door that authenticates by a single-use code it issued itself: the fleet box trades a code ' +
@@ -1005,8 +1011,8 @@ export function originVerdict(origin: unknown, expected: string): OriginVerdict 
  * clause. Checking reads would additionally refuse `<img>`/`<link>` style
  * same-site loads of the SPA shell for no gain.
  *
- * EXEMPT ROUTES ARE SKIPPED, and it costs nothing: the seventy-two box-token machine
- * lanes plus `/api/notify`, `/api/pools/epoch` and `/api/updates/intent/:nodeId` — seventy-five in all — are `curl` inside a Claude Code session (no `Origin`
+ * EXEMPT ROUTES ARE SKIPPED, and it costs nothing: the seventy-three box-token machine
+ * lanes plus `/api/notify`, `/api/pools/epoch` and `/api/updates/intent/:nodeId` — seventy-six in all — are `curl` inside a Claude Code session (no `Origin`
  * at all, hence `'absent'`, hence permitted even if they were checked), and
  * their real guard is a header a cross-site page cannot add without triggering a
  * preflight it will fail. (ORDER-PINNED, like reason 2 above and for the same

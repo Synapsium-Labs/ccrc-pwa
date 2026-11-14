@@ -195,6 +195,11 @@ export const isReviewRoundsRefusal = (word: string): word is ReviewRoundsRefusal
  *  `run-closed`. Box-facing, so the console has no sentence for them. */
 export const END_REQUEST_REFUSALS = { notYours: 'not-yours', alreadyAsked: 'already-asked', recentlyAsked: 'recently-asked' } as const;
 export type EndRequestRefusal = (typeof END_REQUEST_REFUSALS)[keyof typeof END_REQUEST_REFUSALS];
+/** The card door's own word (Overlord W1a, the card piece; spec Table 13.2 `card-changed`): a later page names a card hash that
+ *  no longer matches the current render, and the caller starts again at page 1. Box-facing, so the console has no sentence
+ *  for it. */
+export const CARD_REFUSALS = { cardChanged: 'card-changed' } as const;
+export type CardRefusal = (typeof CARD_REFUSALS)[keyof typeof CARD_REFUSALS];
 
 /** The approval routes' own words (plan Task 16, D-5298): typed from the start, as D-5381 set out to make them. */
 export type RouteRefusal = ClaimRefusal | MailRouteRefusal | UpdateRouteError | CollectLaneRouteRefusal | SwapRefusal | GenericRefusal
@@ -214,6 +219,8 @@ export type RouteRefusal = ClaimRefusal | MailRouteRefusal | UpdateRouteError | 
   | ReviewRoundsRefusal
   // The end-request route (D-8076): its three words of its own.
   | EndRequestRefusal
+  // The card door (Overlord W1a): its one word of its own.
+  | CardRefusal
   // The lane routes, Check and the kill switch (accounts plan Task A14, D-7732): their four words of their own.
   | AccountRouteRefusal
   // The test box connect routes (D-8166): their one word of their own.
@@ -416,6 +423,8 @@ export const REFUSAL_STATUS: Readonly<Record<RouteRefusal, number>> = {
   // The end-request route (D-8076): CHOSEN, not measured. 403 for a session that is no party to the run (the family of
   // `not-owner`); 409 for a request already open and for one repeated inside the 24 hours (the family of `duplicate`).
   [END_REQUEST_REFUSALS.notYours]: 403, [END_REQUEST_REFUSALS.alreadyAsked]: 409, [END_REQUEST_REFUSALS.recentlyAsked]: 409,
+  // The card door (Overlord W1a): CHOSEN, not measured. 409: the card the caller pages through was superseded by a newer render.
+  [CARD_REFUSALS.cardChanged]: 409,
   // D-8126: CHOSEN, not measured. 400 for both: the coordinator sent a list of the wrong shape, or a change with nothing
   // to stand on; either is theirs to fix, as `bad-in-short`.
   [LEDGER_ROUTE_REFUSALS.badDoneWhen]: 400, [LEDGER_ROUTE_REFUSALS.doneWhenNeedsRuling]: 400,
