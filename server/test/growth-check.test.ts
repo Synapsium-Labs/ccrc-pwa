@@ -43,6 +43,7 @@ import {
   prNumberFromEnv, parseExemptions, exemptionsOnMain, matchExemptions, GROWTH_EXEMPTIONS_FILE,
   GROWTH_EXEMPTIONS_STAMP, GROWTH_MACHINERY, overLine, growthVerdicts, armedGrowth, gitRead, type GrowthRow, type GrowthExemption,
   GROWTH_WAIVERS_DIR, GROWTH_WAIVERS_LEGACY_FILE, parseWaiverFiles, waiversAdded, waiversAt, waiversInDiff, type GrowthWaiver,
+  definedDNumbers,
 } from './growthCheck.js';
 import { EXEMPTION_SET_STAMPS } from './rings/exemption-age.data.js';
 import { parseFile } from './scan/parse.js';
@@ -861,7 +862,7 @@ describe('growthCheck: the reviewed waiver ledger (D-6223)', () => {
     const got = parseWaiverFiles(waiverItemsAtHead(), LISTED_AT_HEAD);
     expect(got.problems).toEqual([]);
     expect(got.entries.length, 'the directory holds the migrated waivers').toBeGreaterThan(0);
-    const defined = definedDNumbers();
+    const defined = definedDNumbers(ROOT);
     expect(got.entries.filter((e) => !defined.has(e.d)).map((e) => `${e.file} ${e.d}`), 'define the D-number in a plan first').toEqual([]);
     // The ledger's own number is defined once, in the W0 plan, and names W5 as the payer.
     const w0 = readFileSync(path.join(ROOT, 'docs/superpowers/plans/2026-10-19-consolidation-w0-pins.md'), 'utf8')
@@ -1060,19 +1061,6 @@ describe('growthCheck: every large file is measured, a new file waives only in i
   });
 });
 
-/** The D-numbers a plan defines: a `- **D-N**` bullet or a `## D-N` heading, deviation-refs' DEFINED shape. */
-function definedDNumbers(): Set<string> {
-  const dir = path.join(ROOT, 'docs/superpowers/plans');
-  const out = new Set<string>();
-  for (const f of readdirSync(dir).filter((n) => n.endsWith('.md'))) {
-    for (const line of readFileSync(path.join(dir, f), 'utf8').split('\n')) {
-      const m = /^(?:#{2,4} |- \*\*)(D-\d+)\b/.exec(line);
-      if (m) out.add(m[1]!);
-    }
-  }
-  return out;
-}
-
 /** The base, or why the growth rows cannot measure. */
 function resolveBase(): { base: string } | { skip: string } {
   if (!process.env['CI'] && !process.env['GROWTH_CHECK']) {
@@ -1146,7 +1134,7 @@ const measured = 'base' in resolved
       // D-6119: absolute numbers go to the job summary only, never an assertion.
       const methods = methodCounts(METHOD_COUNT_FILE, METHOD_COUNT_CLASS, resolved.base, head, ROOT);
       const summaryWritten = appendJobSummary(growthSummary({ base: resolved.base, rows: armed.rows, over: armed.over,
-        methods, armed: GROWTH_ARMED, exemptions: armed.exemptions, waivers: armed.waivers, aged: AGED }));
+        methods, armed: GROWTH_ARMED, exemptions: armed.exemptions, waivers: armed.waivers, aged: AGED, caps: armed.caps }));
       return { ...armed, files, summaryWritten };
     })()
   : null;
@@ -1157,6 +1145,7 @@ if (measured === null) {
   console.log(['growth-check: net code lines against the merge-base',
     ...measured.rows.map((r) => `  ${r.file.padEnd(42)} base ${String(r.base).padStart(6)}  head ${String(r.head).padStart(6)}  delta ${r.delta >= 0 ? '+' : ''}${r.delta}`),
     `GROWTH_OVER: ${overLine(measured.over, measured.exemptions, (f) => f, measured.waivers)}`,
+    `Caps (D-8635): ${measured.caps.map((c) => `${c.file} ${c.head} of ${c.cap}`).join(', ') || '(none)'}`,
     `PR: ${measured.pr === null ? '(none: no entry applies)' : `#${measured.pr}`}; `
       + `exemption entries on origin/main: ${measured.onMain.entries.length}; `
       + `growth-check files this diff edits: ${measured.touched.length ? measured.touched.join(', ') : '(none)'}; `
@@ -1188,7 +1177,7 @@ describe.skipIf(measured === null)('growth-check: the listed files against the m
     };
     const edited = head.filter((h) => base.some((b) => b.file === h.file && b.d === h.d && JSON.stringify(b) !== JSON.stringify(asOnBase(b, h))));
     expect(edited.map((e) => `${e.file} ${e.d}`), 'an entry on the merge-base is never edited; add a new one under its own D-number').toEqual([]);
-    const defined = definedDNumbers();
+    const defined = definedDNumbers(ROOT);
     expect(waiversAdded(base, head).filter((w) => !defined.has(w.d)).map((w) => w.d)).toEqual([]);
   });
   it('every ccd/lib/*.sh in the tree has a measured row (#2006)', () => {
