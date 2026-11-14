@@ -2,7 +2,7 @@
 // for the card's view and the 409 confirm, the radio a row checks, and each row's lines. The words themselves are L0's
 // (`LANE_ARM_TEXT`, `shared/lane-arm.ts`); nothing here retypes one.
 import {
-  LANE_ARM_TEXT, isLaneArmChoice, isLaneArmImport, isLaneArmLane, laneArmGate,
+  LANE_ARM_TEXT, isLaneArmChoice, isLaneArmImport, isLaneArmLane, laneArmGate, laneArmLive,
   type LaneArmChoice, type LaneArmConfirmRequired, type LaneArmRowView, type LaneArmView,
 } from '../../../shared/lane-arm';
 import { isOneOf, isRecord } from '../lib/wire';
@@ -53,9 +53,10 @@ export function asLaneArmConfirm(raw: unknown): LaneArmConfirmRequired | null {
   };
 }
 
-/** The radio a row checks: its stored choice, or neither for a token it does not know, a lost row or an unreadable one
- *  (so either tap can replace it). */
+/** The radio a row checks: its stored choice, or neither for a token it does not know, a lost row, an unreadable one, or
+ *  a Live its gate holds (so either tap can replace it; review 2006 N1: one rule with the server's view, `laneArmLive`). */
 export function laneArmChecked(row: LaneArmRowView): LaneArmChoice | null {
+  if (row.stored === 'live') return laneArmLive(row.stored, laneArmGate(row.lane)) ? 'live' : null;
   return isLaneArmChoice(row.stored) ? row.stored : null;
 }
 

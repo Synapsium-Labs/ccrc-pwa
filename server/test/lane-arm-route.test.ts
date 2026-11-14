@@ -184,6 +184,17 @@ describe('GET/POST /api/coord/lane-arm (D-8274)', () => {
     expect(REFUSAL_STATUS['lane-gated']).toBe(409);
   });
 
+  it('a Live already stored on the gated continuity row reads shadow in the view, and the roster card\'s Live stays live (review 2006 N1)', async () => {
+    const { app, coord } = await setup();
+    coord.setLaneArm('continuity', 'live', 1);
+    coord.setLaneArm('roster-card', 'live', 1);
+    const res = await get(app);
+    const lanes = (res.json() as { lanes: { lane: string; stored: string; live: boolean }[] }).lanes;
+    expect(lanes.find((l) => l.lane === 'continuity')).toMatchObject({ stored: 'live', live: false });
+    expect(lanes.find((l) => l.lane === 'roster-card')).toMatchObject({ stored: 'live', live: true });
+    expect(laneArmRowViewOf('continuity', { kind: 'row', choice: 'live', updatedAt: 1, importedAt: null, imported: null }).live).toBe(false);
+  });
+
   it('refuses any other body with bad-request before anything else, and writes nothing', async () => {
     const { app, coord } = await setup();
     for (const body of [{}, { lane: 'roster-card' }, { lane: 'other', choice: 'live' }, { lane: 'roster-card', choice: 'LIVE' },

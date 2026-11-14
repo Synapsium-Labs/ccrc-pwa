@@ -134,6 +134,15 @@ describe('Settings › Automation › Shadow lanes (D-8274)', () => {
     await waitFor(() => expect(read).toHaveBeenCalledTimes(2));
   });
 
+  it('a Live the continuity row\'s gate holds checks neither radio, under the gate\'s words (review 2006 N1)', async () => {
+    const gate = laneArmGate('continuity')!;
+    vi.spyOn(api, 'laneArm').mockResolvedValue({ lanes: [row({ lane: 'continuity', stored: 'live', live: false, marker: null })] });
+    mount();
+    expect(await screen.findByText(gate)).toBeInTheDocument();
+    expect(radio(T.shadow).checked).toBe(false);
+    expect(radio(T.live).checked).toBe(false);
+  });
+
   it('a marker imported at the upgrade is said on the row; a token this build does not know checks neither radio', async () => {
     vi.spyOn(api, 'laneArm').mockResolvedValue(view({ stored: 'live', live: true, imported: { result: 'stood', at: 1 } }));
     mount();

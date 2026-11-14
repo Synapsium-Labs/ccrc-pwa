@@ -105,6 +105,12 @@ export function laneArmGate(lane: LaneArmLane): string | null {
   return LANE_ARM_TEXT.rows[lane].gate;
 }
 
+/** Is a row live? Only on an exact stored `live` while its gate is open (review 2006 N1): a row stored `live` before its
+ *  gate stood is not. The one rule the lanes, the server's view and the card read. */
+export function laneArmLive(stored: string, gate: string | null): boolean {
+  return stored === 'live' && gate === null;
+}
+
 /** The feed row's title when a row changes, and when the import sets a row Live. */
 export const LANE_ARM_FEED_TITLE = { changed: 'shadow lane changed', imported: 'shadow lane marker imported' } as const;
 
