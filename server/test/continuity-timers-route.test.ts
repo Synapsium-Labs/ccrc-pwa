@@ -18,7 +18,8 @@ import { hashLine, type ScryptParams } from '../src/auth/secret.js';
 import type { AttributionRead } from '../src/coord/openRun.js';
 import type { ChildMark } from '../../shared/api.js';
 import { FLEET_ROLES, LEAST_TIMER_CAP, timerCapOf } from '../../shared/fleetRoles.js';
-import { TIMER_DUE_MAX_MS, TIMER_DUE_MIN_MS, TIMER_NOTE_MAX_CHARS, TIMER_SETS_PER_HOUR, type TimerView } from '../../shared/continuity-timers.js';
+import { TIMER_DUE_MAX_MS, TIMER_DUE_MIN_MS, TIMER_NOTE_MAX_CHARS, TIMER_SETS_PER_HOUR, timerNoteFits, type TimerView } from '../../shared/continuity-timers.js';
+import { timerBodyVerdict } from '../src/continuity/timers.js';
 import { REFUSAL_STATUS, TIMER_REFUSALS } from '../../shared/refusal.js';
 import { testDeps } from './helpers.js';
 import { ID_GATE_TOKEN, recorder, seedRow } from './idGateFixture.js';
@@ -110,6 +111,30 @@ describe('the vocabulary the doors read', () => {
     expect(timerCapOf('undecided')).toBe(LEAST_TIMER_CAP);
     expect(timerCapOf('coordinator')).toBe(FLEET_ROLES.coordinator.timerCap);
     expect(timerCapOf('worker')).toBe(5);
+  });
+});
+
+describe('the masker reads a bounded note only (CodeQL js/polynomial-redos, js/resource-exhaustion)', () => {
+  const notes: unknown[] = [
+    '', 'x'.repeat(499), 'x'.repeat(500), 'x'.repeat(501), 'x'.repeat(1_000), 'x'.repeat(1_001), 'x'.repeat(200_000),
+    '😀'.repeat(500), '😀'.repeat(501), `${'😀'.repeat(250)}${'x'.repeat(250)}`, `${'😀'.repeat(250)}${'x'.repeat(251)}`,
+    undefined, null, 7, {}, ['a'],
+  ];
+  it('timerNoteFits agrees with the verdict\'s timer-too-long on every note, at and around the bound', () => {
+    for (const note of notes) {
+      const tooLong = (r => !r.ok && r.refusal === 'timer-too-long')(timerBodyVerdict({ durationMs: TIMER_DUE_MIN_MS, note, masked: false }));
+      expect(timerNoteFits(note), typeof note === 'string' ? `${note.length} units` : String(note)).toBe(!tooLong);
+    }
+  });
+
+  it('a note over its bound is refused too long without the masker reading it', async () => {
+    let read = 0;
+    const masker = { maskText: (t: string) => { read += 1; return t; } } as unknown as typeof SHAPE_ONLY_MASKER;
+    const r = await rig({ masker });
+    expect(refused(await set(r, { note: 'x'.repeat(200_000) }))).toEqual([400, 'timer-too-long']);
+    expect(read).toBe(0);
+    expect((await set(r, { note: 'x'.repeat(TIMER_NOTE_MAX_CHARS) })).statusCode).toBe(201);
+    expect(read).toBe(1);
   });
 });
 

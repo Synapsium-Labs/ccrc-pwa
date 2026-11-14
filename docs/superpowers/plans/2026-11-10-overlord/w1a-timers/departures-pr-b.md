@@ -52,6 +52,16 @@ departures are kept here, by slug, and the coordinator folds both into the progr
   `bindingsOf`'s failure to `not-own` reds the `ok: false` case. `CONTINUITY_SESSION_DOORS`'s both-directions case reds with
   a door's name dropped and with a name that has no registration.
 
+## CI round 1
+
+- **masker-reads-a-bounded-note** — CodeQL flagged three alerts in the egress masker's patterns (polynomial ReDoS and a
+  string of user-controlled length), reached from the set door, which asked the masker about the note before
+  `timerBodyVerdict` refused one too long. The door now hands the masker only a note within its bound, through an L0
+  predicate, `timerNoteFits` (`shared/continuity-timers.ts`), which checks the UTF-16 length first. `timerBodyVerdict`
+  alone still refuses `timer-too-long`, and the route suite holds the predicate and that refusal in agreement on every note
+  at and around the bound. The decider's own rung is unchanged, because its mutant set (`sim/timerSets.ts`) was held by
+  timers PR C's claim. The guard is measured: with the old unbounded check the case that counts the masker's reads goes red.
+
 ## Claims
 
 - **contested-claims-ruled** — when PR B started, the notes piece (#2796) held every census file and the continuity routes,

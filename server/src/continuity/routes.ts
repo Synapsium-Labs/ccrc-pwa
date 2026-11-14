@@ -13,7 +13,7 @@ import { MAIL_TOKEN_HEADER, checkMailToken, type BoxTokenHolder } from '../coord
 import { refuseRoute } from '../refuse.js';
 import { REG_GENERATION_SHAPE, shapeProgramSlug } from '../../../shared/api.js';
 import { CARD_BUDGET_TOKENS } from '../../../shared/continuity-card.js';
-import type { TimerView } from '../../../shared/continuity-timers.js';
+import { timerNoteFits, type TimerView } from '../../../shared/continuity-timers.js';
 import { timerCapOf } from '../../../shared/fleetRoles.js';
 import { CARD_REFUSALS } from '../../../shared/refusal.js';
 import { cardPages, renderCard, snapshotFactsJson, trimCard } from './card.js';
@@ -248,9 +248,10 @@ export function registerContinuityRoutes(app: FastifyInstance, deps: ContinuityR
       if (shaped === null || !shaped.ok || shaped.slug !== programme) return refuseRoute(reply, 'bad-request', { detail: 'programme is a programme slug' });
     }
     if (runId !== null && programme !== null) return refuseRoute(reply, 'bad-request', { detail: 'a timer binds a run or a programme, not both' });
+    // The masker reads a note only within its bound (`timerNoteFits`): one that is not is refused too long by the verdict.
     const note = b['note'];
     const body = timerBodyVerdict({
-      durationMs: b['durationMs'], note, masked: typeof note === 'string' && (deps.masker ?? SHAPE_ONLY_MASKER).maskText(note) !== note,
+      durationMs: b['durationMs'], note, masked: timerNoteFits(note) && (deps.masker ?? SHAPE_ONLY_MASKER).maskText(note) !== note,
     });
     if (!body.ok) return refuseRoute(reply, body.refusal);
     const attributed = await deps.attribute(fromId, fromUuid);

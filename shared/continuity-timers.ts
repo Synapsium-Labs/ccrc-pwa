@@ -60,6 +60,13 @@ export const cancelActorOf = (r: TimerCancelReason): TimerActor => TIMER_CANCEL_
 
 /** The bounds (Table 11.5b). Text lengths are Unicode code points (`[...note].length`), in the door and the deciders. */
 export const TIMER_NOTE_MAX_CHARS = 500;
+/** Whether a note is within its bound: a string of at most `TIMER_NOTE_MAX_CHARS` code points. The set door asks it before
+ *  the egress masker reads a note, so the masker's patterns never run over an unbounded string (CodeQL js/polynomial-redos
+ *  and js/resource-exhaustion); `timerBodyVerdict` alone refuses `timer-too-long`, and a test holds the two in agreement.
+ *  The UTF-16 length is checked first: a string of more than twice the bound in code units is over it in code points. */
+export function timerNoteFits(note: unknown): note is string {
+  return typeof note === 'string' && note.length <= 2 * TIMER_NOTE_MAX_CHARS && [...note].length <= TIMER_NOTE_MAX_CHARS;
+}
 /** The earliest a timer may come due: five minutes. Not `TIMER_MAX_MS`, which is the `Scheduler`'s ceiling (D-8223). */
 export const TIMER_DUE_MIN_MS = 300_000;
 /** The latest a timer may come due: 30 days. */
