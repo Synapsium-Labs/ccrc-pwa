@@ -22734,7 +22734,7 @@ _auto_compact_check() {   # id — at a clean idle turn boundary, /compact a ses
   # "we cannot see this session at all", the first of the two shapes above, reached one rung
   # earlier than the read that used to be the first place it could be said.
   [[ -f "$AUTOCOMPACT_DISABLE_FILE" ]] && return 0
-  local id="$1" now last lastswap fromswap=0 pane pct thr wrapper t
+  local id="$1" now last lastswap fromswap=0 pane pct thr wrapper t ctext
   _now_s_to now   # D-4961: the clock seam — fork-free under bash 5 ($EPOCHSECONDS)
   _reg_get_to last "$id" lastcompact   # D-4963: a builtin read, no subshell (tick-diet spec §6.4)
   [[ "$last" =~ ^[0-9]+$ && $((now - last)) -lt "$COMPACT_COOLDOWN" ]] && return 0
@@ -22836,7 +22836,8 @@ _auto_compact_check() {   # id — at a clean idle turn boundary, /compact a ses
   _compact_note_clear "$id"
   _reg_set "$id" lastcompact "$now"
   echo "$(date '+%F %T') auto-compact $id: ctx ${pct}% >= ${thr}% [wrapper=$wrapper]" >> "$REG/swap.log"
-  _tmx send-keys -t "$t" -l "/compact"; sleep 1; _tmx send-keys -t "$t" Enter
+  _compact_text_to ctext "$id"   # the role's text, or empty: a bare /compact (Overlord W1a compaction, C51)
+  _tmx send-keys -t "$t" -l "/compact${ctext:+ $ctext}"; sleep 1; _tmx send-keys -t "$t" Enter
 }
 
 # ── APPLYING THE RECORD TO A LIVE SESSION (routing spec §5.3; slice 4, Task 4) ─
@@ -26159,6 +26160,21 @@ _profile_spawn_compose() {   # id launchflags -> sets PROFILE_SPAWN_FLAGS, PROFI
   fi
   [[ "$pset" == '{}' ]] || { _spawn_settings_last "$id" "$2" "$pset" "launch profile $p" || return 0; PROFILE_SPAWN_FLAGS="$SPAWN_SETTINGS_FLAGS"; }
   PROFILE_SPAWN_ENV="$penv"
+}
+# THE ROLE'S COMPACTION TEXT (Overlord W1a compaction, spec §3.3.9 C51): the row's `compactText`, which
+# `_auto_compact_check` types after `/compact`. Only when the route carries `compactwindow` too, which the lane writes
+# only while `continuity` is live (decision compaction-text-follows-continuity, ruling R8): arming `launch-profile`
+# alone still types a bare `/compact`. The text is checked here as well: one line of printable ASCII, at most 600
+# characters, with no quote, backslash or `$` (instructions-one-line); anything else answers empty, and a bare
+# `/compact` is typed. The hook's PreCompact print reads the same field (`_hook_role_compact_text`).
+COMPACT_TEXT_JQ='.[$r].compactText | if type == "string" and test("\\A[ -~]{1,600}\\z") and (test("[\\x22\\x27\\x24\\x5c\\x60]") | not) then . else error("not one typeable line") end'
+_compact_text_to() {   # var id -> var = the role's compaction text, or empty (a bare /compact); never fails
+  local _ctt_p="" _ctt_out=""
+  printf -v "$1" '%s' ''
+  [[ -n "$(_route_get "$2" compactwindow)" ]] && _reg_get_to _ctt_p "$2" profile 2>/dev/null && [[ "$_ctt_p" =~ ^[a-z]{1,16}$ ]] || return 0
+  _ctt_out=$(jq -r --arg r "$_ctt_p" "$COMPACT_TEXT_JQ" "$LAUNCH_PROFILES_JSON" 2>/dev/null) \
+    || { echo "ccd: warn: $2: compaction text for launch profile $_ctt_p unreadable — typing a bare /compact" >&2; return 0; }
+  printf -v "$1" '%s' "$_ctt_out"
 }
 
 # ── THE TEMP ROOT'S POSITIVE WITNESS (child-workspace reclamation, spec §5.2) ─

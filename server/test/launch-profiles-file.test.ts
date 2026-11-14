@@ -8,6 +8,7 @@ import { describe, expect, it } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import { FLEET_ROLES, FLEET_ROLE_NAMES } from '../../shared/fleetRoles.js';
+import { compactInstructionsFor } from '../src/continuity/compaction.js';
 
 const FILE = path.resolve(__dirname, '../../ccd/lib/launch-profiles.json');
 
@@ -17,12 +18,14 @@ const sorted = (v: unknown): unknown => {
   return Object.fromEntries(Object.keys(v).sort().map((k) => [k, sorted((v as Record<string, unknown>)[k])]));
 };
 
-/** The projection: `{ role: { env, settings, autoMemory, compactionSettings } }`, `compactionSettings` being
- *  `compaction.settings` or `{}`. `aboveHardCapPts` stays server-side (the threshold is computed per session and rides
+/** The projection: `{ role: { env, settings, autoMemory, compactionSettings, compactText } }`, `compactionSettings`
+ *  being `compaction.settings` or `{}`, and `compactText` the role's compaction instructions (`compactInstructionsFor`,
+ *  Overlord W1a compaction, decision compaction-text-rides-the-profile-projection), which ccd's auto-compact types and
+ *  the hook's PreCompact print carries, both only when the route carries `compactwindow`. `aboveHardCapPts` stays server-side (the threshold is computed per session and rides
  *  the route's `compactwindow`), so ccd's copy does not carry it. */
 const projection = (): unknown => sorted(Object.fromEntries(FLEET_ROLE_NAMES.map((r) => {
   const p = FLEET_ROLES[r].launchProfile;
-  return [r, { env: p.env, settings: p.settings, autoMemory: p.autoMemory, compactionSettings: p.compaction?.settings ?? {} }];
+  return [r, { env: p.env, settings: p.settings, autoMemory: p.autoMemory, compactionSettings: p.compaction?.settings ?? {}, compactText: compactInstructionsFor(r) }];
 })));
 const expectedText = (): string => `${JSON.stringify(projection(), null, 2)}\n`;
 
@@ -39,7 +42,7 @@ describe('ccd/lib/launch-profiles.json is the role table, projected (H1)', () =>
     const parsed = JSON.parse(fs.readFileSync(FILE, 'utf8')) as Record<string, Record<string, unknown>>;
     expect(Object.keys(parsed).sort()).toEqual([...FLEET_ROLE_NAMES].sort());
     for (const r of Object.keys(parsed)) {
-      expect(Object.keys(parsed[r]!).sort(), r).toEqual(['autoMemory', 'compactionSettings', 'env', 'settings']);
+      expect(Object.keys(parsed[r]!).sort(), r).toEqual(['autoMemory', 'compactText', 'compactionSettings', 'env', 'settings']);
     }
   });
   it('ships where ccd reads it: both installers place it in ~/.cc-sessions/lib, ccd fallback path, and uninstall removes it', () => {

@@ -911,3 +911,63 @@ describe('D-8116: `_idle_for_keystroke` refuses an open dialog as no-box', () =>
     expect(idle(AT_PROMPT)).toBe('idle');
   });
 });
+
+// ── Overlord W1a compaction, Task 2: the role's compaction instructions (C51) ──
+//
+// ccd types `/compact <the role's text>` only when the route carries BOTH `profile` and `compactwindow`; the second is
+// written by the launch-profile lane only while `continuity` is live (decision compaction-text-follows-continuity,
+// ruling R8), so arming `launch-profile` alone changes no `/compact` text. The text is the projection's `compactText`
+// (`ccd/lib/launch-profiles.json`), held equal to `FLEET_ROLES` by `launch-profiles-file.test.ts`.
+describe('Overlord W1a compaction: auto-compact types the role\'s compaction instructions (C51, R8)', () => {
+  const PROJECTION = path.resolve(__dirname, '../../ccd/lib/launch-profiles.json');
+  const COORDINATOR_TEXT = (JSON.parse(fs.readFileSync(PROJECTION, 'utf8')) as Record<string, { compactText: string }>).coordinator!.compactText;
+  /** The sends, in order, without the `send-keys -t <target>` head: the slash command typed with `-l`, then Enter. */
+  const sends = (): string[] => sendKeys().map((l) => l.replace(/^tmux send-keys -t \S+ /, ''));
+  const route = (fields: readonly (readonly [string, string])[]): void => {
+    h.sh(fields.map(([f, v]) => `_reg_set ${ID} ${f} '${v}'`).join('\n'));
+  };
+  /** Forget the last tick's compaction, so the next tick may compact again. */
+  const reset = (): void => { h.sh(`rm -f "$HOME/ccd-calls" "$HOME/.cc-sessions/${ID}.lastcompact"`); };
+
+  it('profile=coordinator with compactwindow sends /compact and the text as ONE literal send, then Enter', () => {
+    seed(); sessionJson('idle', 600);
+    route([['profile', 'coordinator'], ['compactwindow', '350000']]);
+    tick(AT_PROMPT);
+    expect(COORDINATOR_TEXT.startsWith('Compaction instructions (coordinator): ')).toBe(true);
+    expect(sends()).toEqual([`-l /compact ${COORDINATOR_TEXT}`, 'Enter']);
+  });
+  it('profile=coordinator with NO compactwindow (launch-profile live, continuity shadow) sends bare /compact', () => {
+    seed(); sessionJson('idle', 600);
+    route([['profile', 'coordinator']]);
+    tick(AT_PROMPT);
+    expect(sends()).toEqual(['-l /compact', 'Enter']);
+  });
+  it('no profile sends bare /compact, with or without compactwindow', () => {
+    seed(); sessionJson('idle', 600);
+    tick(AT_PROMPT);
+    expect(sends()).toEqual(['-l /compact', 'Enter']);
+    reset();
+    route([['compactwindow', '350000']]);
+    tick(AT_PROMPT);
+    expect(sends()).toEqual(['-l /compact', 'Enter']);
+  });
+  it('a missing projection sends bare /compact and warns', () => {
+    seed(); sessionJson('idle', 600);
+    route([['profile', 'coordinator'], ['compactwindow', '350000']]);
+    const out = h.sh(`${STUBS} PANE_TEXT=${JSON.stringify(AT_PROMPT)}
+      LAUNCH_PROFILES_JSON="$HOME/no-such-profiles.json"; _auto_compact_check ${ID} 2>&1`);
+    expect(sends()).toEqual(['-l /compact', 'Enter']);
+    expect(out).toContain(`ccd: warn: ${ID}: compaction text for launch profile coordinator unreadable — typing a bare /compact`);
+  });
+  it('a row with no compactText, or one that is not one typeable line, sends bare /compact', () => {
+    seed(); sessionJson('idle', 600);
+    route([['profile', 'coordinator'], ['compactwindow', '350000']]);
+    for (const bad of [{}, { compactText: 'two\nlines' }, { compactText: "it's quoted" }, { compactText: 'a $HOME b' },
+      { compactText: 'x'.repeat(601) }, { compactText: '' }, { compactText: 7 }]) {
+      reset();
+      fs.writeFileSync(path.join(h.home, 'lp.json'), JSON.stringify({ coordinator: bad }));
+      tick(AT_PROMPT, 1, 'LAUNCH_PROFILES_JSON="$HOME/lp.json";');
+      expect(sends(), JSON.stringify(bad)).toEqual(['-l /compact', 'Enter']);
+    }
+  });
+});
