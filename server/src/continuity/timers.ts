@@ -29,6 +29,9 @@ type Refused = { readonly ok: false; readonly refusal: TimerRefusal };
 export function timerBodyVerdict(b: { durationMs: unknown; note: unknown; masked: boolean }):
   { readonly ok: true; readonly durationMs: number; readonly note: string } | Refused {
   const { durationMs, note } = b;
+  // The UTF-16 length first, so an over-long note is refused before it is spread into code points (review 2052 F4): a string
+  // of more than twice the bound in code units is over it in code points too.
+  if (typeof note === 'string' && note.length > 2 * TIMER_NOTE_MAX_CHARS) return { ok: false, refusal: 'timer-too-long' };
   if (typeof note !== 'string' || [...note].length > TIMER_NOTE_MAX_CHARS) return { ok: false, refusal: 'timer-too-long' };
   if (b.masked) return { ok: false, refusal: 'timer-masked' };
   if (typeof durationMs === 'number' && durationMs > TIMER_DUE_MAX_MS) return { ok: false, refusal: 'timer-too-late' };
@@ -61,9 +64,14 @@ export function timerSetVerdict(f: SetFacts): { readonly ok: true } | Refused {
   return { ok: true };
 }
 
-/** A setter's cancel. A row that is absent and a row of another identity answer the same word, so the door is no oracle
- *  for which ids exist (slug cancel-is-no-oracle). */
-export function timerCancelVerdict(t: { state: TimerState; setter: string } | null, caller: string): 'ok' | TimerRefusal {
+/** A cancel, by the setter (the default) or the operator. For the setter a row that is absent and a row of another
+ *  identity answer the same word, so the door is no oracle for which ids exist (slug cancel-is-no-oracle). The signed-in
+ *  operator may know which ids exist, so an absent row is `timer-not-found` for it (review 2052 F5); a row of another
+ *  session than the path's is still `timer-not-yours`. */
+export function timerCancelVerdict(
+  t: { state: TimerState; setter: string } | null, caller: string, asker: 'setter' | 'operator' = 'setter',
+): 'ok' | TimerRefusal {
+  if (t === null && asker === 'operator') return 'timer-not-found';
   if (t === null || t.setter !== caller) return 'timer-not-yours';
   if (t.state !== 'pending') return 'timer-not-pending';
   return 'ok';

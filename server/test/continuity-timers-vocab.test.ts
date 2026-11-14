@@ -69,6 +69,7 @@ describe('the timers vocabulary (C61, C65)', () => {
     const want: Record<string, number> = {
       'timer-cap': 409, 'timer-rate': 429, 'timer-too-soon': 400, 'timer-too-late': 400, 'timer-too-long': 400,
       'timer-masked': 400, 'timer-unmeasured': 503, 'timer-key-unknown': 403, 'timer-not-yours': 403, 'timer-not-pending': 409,
+      'timer-not-found': 404,
     };
     expect({ ...TIMER_REFUSALS }).toEqual(want);
     for (const [w, status] of Object.entries(want)) {
