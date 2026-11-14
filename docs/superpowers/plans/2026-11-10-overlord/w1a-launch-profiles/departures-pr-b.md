@@ -18,11 +18,18 @@ replacing `intent-unmeasured-reads-plain`), `compaction-cleared-on-a-role-withou
 (F12), `doctor-second-memory-walker` (F5, F6) and `no-overlord-profile-before-w1` (F13 c).
 
 **Fix round 2 (review 2031, the coordinator's rulings).** F1 tightens the steer-marker grant
-(`steered-sessions-skipped-whole`); F2 is the migration move (`migration-slot-70`, which replaces `migration-slot-69`);
+(`steered-sessions-skipped-whole`); F2 is the migration move (`migration-slot-71`, which replaces `migration-slot-70` and `-69`);
 F3 widens what the doctor reads as unmeasured (`doctor-second-memory-walker`); F4 corrects the band's comment
 (`compact-window-carries-the-buffer`). Nits taken: `cmd_route`'s header says an empty compaction value clears it, the
 scratch census names `_dr_mem_is_scratch`, and the band is stated as the 10-point profile's. Nits recorded, not changed:
 under `slight-nits-recorded`.
+
+**Dequeue fix (the merge queue's browser shards).** The queue's full run failed every Settings browser case on one
+console error, `Cannot read properties of undefined (reading 'some')`: the auto-memory card read `GET /api/coord/lane-arm`
+raw, and the browser fixture answers `{}` for a door it does not list. The card now reads that answer through
+`asLaneArmView`, the Shadow lanes card's one reader, and reads a door answer whose choice it cannot read as the unread
+note (`plain-memory-l0-file`). Timers PR A (#2797) took migration 70 meanwhile, so this push merged `main` once more and
+the entry is 71 (`migration-slot-71`).
 
 ## Measured for the brief
 
@@ -193,15 +200,18 @@ under `slight-nits-recorded`.
   `_route_get` and its E0c closure are untouched; two `contexts-edges.tsv` rows. N2: `routeParseWhy` in `shared/api.ts` is
   the one spelling of the refusal suffix, used by `routeParseDetail` and `parseRouteRequest`. N3: the docstring names the
   lane-only refusal.
-- **migration-slot-70 (review 2031 F2; replaces `migration-slot-69`).** Card PR B (#2793) merged first with migration 69 (the
-  card door's tables), so this PR merged `main` once (at 44f68ea36) and its entry is 70, after card B's. Moved, every site:
-  `server/src/coord/schema.ts`'s banner `── 70: user_version 69 -> 70` (the banner `coord-db.test.ts` holds as
-  `[i+1, i, i+1]`, so a stale one is red), its notes (`user_version 70`, "must print 69"); `coord-db.test.ts`'s version
-  pins (two `COORD_SCHEMA_VERSION` and `MIGRATIONS.length`, now 70) and its two `MIGRATIONS[69]` comment lines;
-  `run-close-switch.test.ts`'s rewind (its comment names 70, 69 and 68, the `DROP TABLE` list carries both PRs' tables,
-  and the count reads seventeen); the route counts (`server/src/auth/gate.ts`'s docstring 226, `auth-gate.test.ts`'s
-  `ROUTES` 229, its HTTP-route comments 226, exempt 85). A new test holds the order: card B's entry is 69 and this one
-  70 (swapping them turns it and the banner test red, measured). `declaredIntent.ts` merged as one file, byte-identical.
+- **migration-slot-71 (review 2031 F2; replaces `migration-slot-70` and `migration-slot-69`).** Card PR B (#2793) merged
+  first with migration 69 (the card door's tables), then timers PR A (#2797) with 70 (`continuity_timers`), so this PR
+  merged `main` twice, once for each (at 44f68ea36, then on the dequeue fix's push), and its entry is 71. Moved, every
+  site: `server/src/coord/schema.ts`'s banner `── 71: user_version 70 -> 71` (the banner `coord-db.test.ts` holds as
+  `[i+1, i, i+1]`, so a stale one is red), its notes (`user_version 71`, "must print 70"); `coord-db.test.ts`'s version
+  pins (two `COORD_SCHEMA_VERSION` and `MIGRATIONS.length`, now 71) and its `MIGRATIONS[69]`/`MIGRATIONS[70]` comment
+  lines; `run-close-switch.test.ts`'s rewind (its comment names 71, 70, 69 and 68, the `DROP TABLE` list carries all three
+  PRs' tables, and the count reads eighteen); the route counts (`server/src/auth/gate.ts`'s docstring 226,
+  `auth-gate.test.ts`'s `ROUTES` 229, its HTTP-route comments 226, exempt 85). A test holds the order: card B's entry is
+  69, the timers' 70 and this one 71. `writers-map.test.ts` needs no change: it pins no slot, and its `TABLES` are the
+  §2.2 fact tables, which a settings row (like `roll_settings` or `lane_arm_settings`) is not. `declaredIntent.ts` merged
+  as one file, byte-identical.
 - **slight-nits-recorded (review 2031).** Not changed: `--set compact= --apply` from a hand shell writes `compact=` into
   `routeapplied` (reads back empty, harmless); once `continuity` is live, clearing `compact` on a session whose only
   routing field it was makes `_route_any` false, so that session's next operator spawn seeds the default routing row, as
