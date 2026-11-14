@@ -316,8 +316,10 @@ export function mintGeneration(db: DatabaseSync, input: MintInput, expect: GenEx
 /** One step of a walk: the machine's next view, written to the walk's column (`effectiveGeneration`'s `column`).
  *  Entering a state with a deadline sets that column's deadline from `STATE_DEADLINE_S`; staying in a state leaves it
  *  as it was (ruling I2: no function takes a new deadline for a state the row is already in); entering `active` or
- *  `degraded` clears it and ends the walk. A step never ends a generation: only a mint does, so `ended` is refused. */
-export function stepGeneration(db: DatabaseSync, id: number, expect: GenExpect, next: GenView, live: boolean, now: number): { changed: boolean } {
+ *  `degraded` clears it and ends the walk. A step never ends a generation: only a mint does, so `ended` is refused.
+ *  `card`, when given (a `card-read` step), records the card hash and snapshot the generation read, in the same write. */
+export function stepGeneration(db: DatabaseSync, id: number, expect: GenExpect, next: GenView, live: boolean, now: number,
+  card: { readonly hash: string; readonly snapshotId: string } | null = null): { changed: boolean } {
   if (next.state === 'ended' || !GENERATION_STATES.includes(next.state)) return { changed: false };
   const mode: WalkMode = expect.walk ?? (live ? 'live' : 'shadow');
   const current = mode === 'live' ? expect.state : (expect.shadowState ?? expect.state);
@@ -329,9 +331,11 @@ export function stepGeneration(db: DatabaseSync, id: number, expect: GenExpect, 
   const args: (number | string | null)[] = [next.state, walk, next.cls, next.proven ? 1 : 0, next.renudged ? 1 : 0, next.probeRounds,
     next.hostEnded ? 1 : 0, next.tries];
   if (entering) args.push(now, deadlineFor(next.state, now));
+  if (card !== null) args.push(card.hash, card.snapshotId);
+  const cardSet = card === null ? '' : ', cardHash = ?, snapshotId = ?';
   try {
     return changedOf(stmt(db, `UPDATE continuity_generations SET ${stateCol} = ?, walk = ?, walkClass = ?, proven = ?, renudged = ?, `
-      + `probeRounds = ?, hostEnded = ?, attempts = ?${entering ? ', enteredAt = ?' : ''}${deadlineSet} WHERE ${CAS}`)
+      + `probeRounds = ?, hostEnded = ?, attempts = ?${entering ? ', enteredAt = ?' : ''}${deadlineSet}${cardSet} WHERE ${CAS}`)
       .run(...args, ...casArgs(id, expect)));
   } catch {
     return { changed: false };
@@ -423,4 +427,101 @@ function advanceCursorIn(db: DatabaseSync, c: CursorAdvance): boolean {
 /** Advance the cursor from `from` (what the caller read) to `to`; a cursor that moved meanwhile changes nothing. */
 export function advanceCursor(db: DatabaseSync, c: CursorAdvance): { changed: boolean } {
   try { return { changed: advanceCursorIn(db, c) }; } catch { return { changed: false }; }
+}
+
+// ------------------------------------------------------------------------------------------------- the card
+// `continuity_snapshots` and `continuity_card_reads` (Overlord spec §3.3.3 C38, §3.3.5, W1a, the card piece; migration 69).
+// ONE writer, the card door (`routes.ts`), through `insertSnapshot` and `insertCardRead`; the generations lane reads a
+// generation's card read through `cardReadOfStart`. A failed statement answers ok: false, never a throw.
+
+export interface SnapshotInsert {
+  /** sha256 of the facts JSON, the time of rendering left out. */
+  readonly id: string;
+  readonly sessionId: string;
+  readonly at: number;
+  readonly facts: string;
+  /** The card hash this render produced. */
+  readonly hash: string;
+}
+
+/** Store one render's snapshot: a new id inserts a row; a stored id keeps its row (one snapshot per id) and records this
+ *  serve, its hash and its place in the serve sequence, so the session's current card is the snapshot served last. */
+export function insertSnapshot(db: DatabaseSync, s: SnapshotInsert): { ok: true; fresh: boolean } | { ok: false } {
+  try {
+    return tx(db, () => {
+      const held = stmt(db, 'SELECT 1 FROM continuity_snapshots WHERE id = ?').get(s.id) !== undefined;
+      const next = 'COALESCE((SELECT MAX(served) FROM continuity_snapshots), 0) + 1';
+      if (held) stmt(db, `UPDATE continuity_snapshots SET hash = ?, served = ${next} WHERE id = ?`).run(s.hash, s.id);
+      else {
+        stmt(db, `INSERT INTO continuity_snapshots (id, sessionId, at, facts, hash, served) VALUES (?, ?, ?, ?, ?, ${next})`)
+          .run(s.id, s.sessionId, s.at, s.facts, s.hash);
+      }
+      return { ok: true as const, fresh: !held };
+    });
+  } catch {
+    return { ok: false };
+  }
+}
+
+export interface CardReadInsert {
+  readonly sessionId: string;
+  /** The conversation that read it: the door's attributed `byUuid`. */
+  readonly uuid: string;
+  readonly snapshotId: string;
+  readonly hash: string;
+  readonly pages: number;
+  readonly at: number;
+}
+
+/** Record one full read: every page of one card hash was served to the session. */
+export function insertCardRead(db: DatabaseSync, r: CardReadInsert): { ok: true; id: number } | { ok: false } {
+  try {
+    const res = stmt(db, 'INSERT INTO continuity_card_reads (sessionId, uuid, snapshotId, hash, pages, at) VALUES (?, ?, ?, ?, ?, ?)')
+      .run(r.sessionId, r.uuid, r.snapshotId, r.hash, r.pages, r.at);
+    return { ok: true, id: Number(res.lastInsertRowid) };
+  } catch {
+    return { ok: false };
+  }
+}
+
+/** A generation's card read: the newest full read by the conversation its start reported, with whether its hash is the
+ *  session's current card (the hash of the snapshot served last). `read: null` when that conversation has read none. */
+export interface CardReadOfStart {
+  readonly id: number; readonly hash: string; readonly snapshotId: string; readonly at: number; readonly current: boolean;
+}
+export type CardReadRead = { ok: true; read: CardReadOfStart | null } | { ok: false; detail: string };
+
+/** The generations lane's read (`card-read` for a generation in `carded`): matched by the start's session and conversation
+ *  uuid, so a read made before the lane minted the generation still counts and no cursor can pass over it. */
+export function cardReadOfStart(db: DatabaseSync, startId: number): CardReadRead {
+  try {
+    const row = stmt(db,
+      'SELECT r.id AS id, r.hash AS hash, r.snapshotId AS snapshotId, r.at AS at, '
+      + '(r.hash = (SELECT c.hash FROM continuity_snapshots c WHERE c.sessionId = r.sessionId ORDER BY c.served DESC LIMIT 1)) AS current '
+      + 'FROM continuity_starts s JOIN continuity_card_reads r ON r.sessionId = s.sessionId AND r.uuid = s.uuid '
+      + 'WHERE s.id = ? ORDER BY r.id DESC LIMIT 1',
+    ).get(startId) as Record<string, unknown> | undefined;
+    if (row === undefined) return { ok: true, read: null };
+    const id = intOrNull(row.id); const at = intOrNull(row.at);
+    if (id === null || at === null || typeof row.hash !== 'string' || typeof row.snapshotId !== 'string') {
+      return { ok: false, detail: `continuity_card_reads row ${String(row.id)} does not read` };
+    }
+    return { ok: true, read: { id, hash: row.hash, snapshotId: row.snapshotId, at, current: intOrNull(row.current) === 1 } };
+  } catch (e) {
+    return { ok: false, detail: `continuity_card_reads read failed: ${e instanceof Error ? e.message : String(e)}` };
+  }
+}
+
+/** Declared coordinator intent on one incarnation of a session (the delegation lane's `delegation_sessions` projection,
+ *  which the intent door writes through its checkpoint): true when that row carries an `explicitIntentAt`. The card's read
+ *  (slug card-intent-reads-the-projection). */
+export function coordinatorIntentDeclared(db: DatabaseSync, sessionId: string, incarnation: string):
+  { ok: true; declared: boolean } | { ok: false; detail: string } {
+  try {
+    const row = stmt(db, 'SELECT explicitIntentAt FROM delegation_sessions WHERE sessionId = ? AND parentIncarnation = ?')
+      .get(sessionId, incarnation) as { explicitIntentAt: unknown } | undefined;
+    return { ok: true, declared: row !== undefined && intOrNull(row.explicitIntentAt) !== null };
+  } catch (e) {
+    return { ok: false, detail: `delegation_sessions read failed: ${e instanceof Error ? e.message : String(e)}` };
+  }
 }

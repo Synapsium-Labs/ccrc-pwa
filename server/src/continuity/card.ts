@@ -25,8 +25,10 @@
 import {
   BYTES_PER_TOKEN, type CardFacts, type CardItem, type CardMail, type CardRenderer, type CardRun, type CardSection, type Fact,
 } from '../../../shared/continuity-card.js';
+import { FLEET_ROLES, type FleetRole } from '../../../shared/fleetRoles.js';
 import { utf8Bytes } from '../../../shared/utf8.js';
 import { CARD_TEXT_PREFACE, untrustedBlock } from '../coord/untrusted.js';
+import { roleOf, type RoleFacts } from '../roleOf.js';
 
 /** The line a card carries when the session holds nothing its role's card reads, and every read answered (C51). */
 export const CARD_NOTHING_LINE = 'No runs, claims or coordinator intent were measured for this session.';
@@ -278,4 +280,39 @@ export function trimCard(s: readonly CardSection[], budgetTokens: number): { rea
   const counted = withLine(leftOutCount);
   if (cardTokens(counted) <= budgetTokens || utf8Bytes(counted) <= utf8Bytes(untrimmed)) return { text: counted, leftOut: dropped.size };
   return { text: untrimmed, leftOut: 0 };
+}
+
+/** The card's role, the reason it names, and the renderer that draws it (C49, C51; the card piece's PR B). The role is
+ *  `roleOf`'s reading of the facts the gatherer measured; an undecided reading is drawn by the wider of the two cards it
+ *  cannot tell apart (`coordinator` for coordinator-or-plain, `worker` for worker-or-reviewer, whose card is the
+ *  reviewer's), so a card the server cannot place still shows everything either role would (slug
+ *  undecided-renders-the-wider-card), and its reason names the fact that could not be measured. */
+export interface CardRole { readonly role: FleetRole | 'undecided'; readonly roleWhy: string; readonly renderer: CardRenderer }
+export function cardRoleOf(f: RoleFacts): CardRole {
+  const r = roleOf(f);
+  if (r.kind === 'undecided') {
+    if (r.between === 'worker-or-reviewer') {
+      const why = f.child.kind === 'child'
+        ? `a child of run ${f.child.runId}, whose kind could not be read: worker or reviewer`
+        : 'its child marker could not be read: worker or reviewer';
+      return { role: 'undecided', roleWhy: why, renderer: 'worker' };
+    }
+    const unread = [f.claimsOpenRun === 'unmeasured' ? 'its runs' : null, f.declaredIntent === 'unmeasured' ? 'its declared coordinator intent' : null]
+      .filter((x): x is string => x !== null);
+    return { role: 'undecided', roleWhy: `${unread.join(' and ')} could not be read: coordinator or plain`, renderer: 'coordinator' };
+  }
+  const role = r.role;
+  const why = ((): string => {
+    switch (role) {
+      case 'overlord': return 'the designation names this session';
+      case 'auditor': return 'the audit lane wrote this session';
+      case 'replay': return 'the replay lane wrote this session';
+      case 'worker': case 'reviewer':
+        return `a child of run ${f.child.kind === 'child' ? f.child.runId : '?'}, a ${role === 'worker' ? 'work' : 'review'} run`;
+      case 'coordinator':
+        return f.claimsOpenRun === 'yes' ? 'it claims an open run' : 'it declared coordinator intent';
+      case 'plain': return 'it claims no open run and declared no coordinator intent';
+    }
+  })();
+  return { role, roleWhy: why, renderer: FLEET_ROLES[role].cardRenderer };
 }

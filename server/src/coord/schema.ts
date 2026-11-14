@@ -2921,6 +2921,41 @@ export const MIGRATIONS: readonly string[] = [
   CREATE TABLE continuity_cursor (lane TEXT PRIMARY KEY, lastStartId INTEGER NOT NULL);
   INSERT INTO lane_arm_settings (lane, choice, updatedAt) VALUES ('continuity', 'shadow', 0);
   `,
+  // ── 69: user_version 68 -> 69 ─────────────────────────────────────────────
+  // The card door (Overlord spec §3.3.3 C38, §3.3.5, W1a, the card piece): `continuity_snapshots`, the facts each card was
+  // rendered from, and `continuity_card_reads`, one row per full read (every page of one card hash served to the session).
+  // Both have ONE writer, the card door (`server/src/continuity/routes.ts`), through `continuityStore.ts`. A snapshot's id
+  // is the sha256 of its facts with the time of rendering left out, so unchanged facts keep one row; `hash` is the card
+  // hash it rendered to when last served and `served` a sequence that orders the serves, so the session's current card is
+  // its snapshot with the highest `served` (slug card-current-hash-is-the-last-served). A read carries the conversation's
+  // uuid, so the generations lane matches it to the start that minted a generation (slug card-read-by-the-start).
+  //
+  // NEW TABLES AND INDEXES, nothing on an existing table: an older build opening a file at `user_version 69` takes rule 3
+  // (it warns, reads as-is and migrates nothing), never names either table, and boots. Every earlier entry is frozen.
+  // RE-MEASURE the slot before the PR and before merge (it must print 68 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE continuity_snapshots (
+    id         TEXT PRIMARY KEY,        -- sha256 of the facts JSON, the time of rendering left out
+    sessionId  TEXT NOT NULL,
+    at         INTEGER NOT NULL,        -- wall ms it was first rendered
+    facts      TEXT NOT NULL,           -- the CardFacts JSON, without \`at\`
+    hash       TEXT NOT NULL,           -- the card hash (sha256 of the trimmed text) it rendered to when last served
+    served     INTEGER NOT NULL         -- a sequence over every serve: the session's highest is its current card
+  );
+  CREATE INDEX continuity_snapshots_by_session ON continuity_snapshots(sessionId, served);
+  CREATE TABLE continuity_card_reads (
+    id         INTEGER PRIMARY KEY,
+    sessionId  TEXT NOT NULL,
+    uuid       TEXT NOT NULL,           -- the conversation that read it (the door's attributed byUuid)
+    snapshotId TEXT NOT NULL REFERENCES continuity_snapshots(id),
+    hash       TEXT NOT NULL,
+    pages      INTEGER NOT NULL,
+    at         INTEGER NOT NULL         -- wall ms the last page was served
+  );
+  CREATE INDEX continuity_card_reads_by_conversation ON continuity_card_reads(sessionId, uuid, id);
+  `,
 ];
 
 /** The version this build writes. `MIGRATIONS.length` and nothing else: a
