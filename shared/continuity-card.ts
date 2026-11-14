@@ -130,6 +130,17 @@ export interface CardHandover {
  *  the renewal-act piece adds the thread). `at` is when the note was written. */
 export interface CardCheckpoint { readonly at: number; readonly handover: CardHandover }
 
+/** One pending timer of the session's own (the timers piece of W1a, plan `w1a-timers.md` Task 10): its id, its due time
+ *  (an absolute stamp), the first words of its note (`timerPreview`, the one cut: the note itself never rides the card),
+ *  and the run or programme it is bound to. The preview is untrusted. */
+export interface CardTimer {
+  readonly id: number;
+  readonly dueAt: number;
+  readonly preview: string;
+  readonly runId: number | null;
+  readonly programme: string | null;
+}
+
 /** The history line's facts: the verb that reads a node, and this session's newest node when a read names it. */
 export interface CardHistory { readonly verb: string; readonly node: string | null }
 
@@ -152,6 +163,8 @@ export interface CardFacts {
   readonly notes: Fact<readonly CardNote[]>;
   /** Null while the generation this one replaced wrote no handover note (or there is none). */
   readonly checkpoint: Fact<CardCheckpoint | null>;
+  /** The session's own pending timers, oldest due first (the timers piece). */
+  readonly timers: Fact<readonly CardTimer[]>;
   readonly history: Fact<CardHistory>;
 }
 

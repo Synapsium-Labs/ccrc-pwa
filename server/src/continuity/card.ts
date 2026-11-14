@@ -23,10 +23,12 @@
  * L1, pure: no `fs`, no store, no clock.
  */
 import {
-  BYTES_PER_TOKEN, CARD_MAIL_MAX, CARD_PAGE_CHARS, type CardFacts, type CardItem, type CardMail, type CardRenderer, type CardRun, type CardSection, type Fact,
+  BYTES_PER_TOKEN, CARD_MAIL_MAX, CARD_PAGE_CHARS, type CardFacts, type CardItem, type CardMail, type CardRenderer, type CardRun, type CardSection,
+  type CardTimer, type Fact,
 } from '../../../shared/continuity-card.js';
+import { TIMER_PREVIEW_CHARS } from '../../../shared/continuity-timers.js';
 import { NOTES_CAP, type KeyFact } from '../../../shared/continuity.js';
-import { FLEET_ROLES, type FleetRole } from '../../../shared/fleetRoles.js';
+import { FLEET_ROLES, FLEET_ROLE_NAMES, type FleetRole } from '../../../shared/fleetRoles.js';
 import { utf8Bytes } from '../../../shared/utf8.js';
 import { CARD_TEXT_PREFACE, untrustedBlock } from '../coord/untrusted.js';
 import { roleOf, type RoleFacts } from '../roleOf.js';
@@ -46,6 +48,11 @@ const CHECKPOINT_CAP_BYTES = 4096;
 /** A note field's cap on the card, sized to the field's own cap (`NOTES_CAP.chars`) at the longest a character can render
  *  (`fieldLine`'s widest escape, longer than any four-byte character), so no field at its cap is ever cut (review 2039, F2). */
 const NOTE_FIELD_CAP_BYTES = NOTES_CAP.chars * '\\u{10ffff}'.length;
+/** One timer line's cap on the card (the timers piece): its head (the id, the due time and a bare-printed binding, at most
+ *  `ONE_LINE_MAX_CHARS` of it, all under 300 bytes) and its preview at the longest a character can render, so the block of
+ *  the most timers any role may hold (`timerCap`) is never cut. */
+const TIMER_LINE_CAP_BYTES = 300 + TIMER_PREVIEW_CHARS * '\\u{10ffff}'.length;
+const TIMERS_CAP_BYTES = Math.max(...FLEET_ROLE_NAMES.map((r) => FLEET_ROLES[r].timerCap)) * TIMER_LINE_CAP_BYTES;
 /** Dropped sections named by key on the left-out line, at most. */
 const LEFT_OUT_KEYS_SHOWN = 20;
 
@@ -215,6 +222,21 @@ function checkpointSections(f: CardFacts): readonly CardSection[] {
   });
 }
 
+/** The pending timers (the timers piece, plan `w1a-timers.md` Task 10): one trusted line with the count and the next due
+ *  time, then one line per timer, oldest due first, with its id, due time, binding and preview, inside one untrusted block
+ *  (the preview is the session's own words; the line's other fields ride inside with it, escaped to one line). Kept: the
+ *  role's `timerCap` bounds it, and a renewed generation must know what it waits on (slug timer-lines-kept). */
+function timersSections(f: CardFacts): readonly CardSection[] {
+  return factSections('timers', f.timers, (timers) => {
+    if (timers.length === 0) return [];
+    const sorted = [...timers].sort((a, b) => a.dueAt - b.dueAt || a.id - b.id);
+    const bound = (t: CardTimer): string => t.runId !== null ? `run ${t.runId}` : t.programme !== null ? `programme ${oneLine(t.programme)}` : 'no run or programme';
+    const lines = sorted.map((t) => `timer ${t.id}, due ${iso(t.dueAt)}, ${bound(t)}: ${fieldLine(t.preview)}`);
+    return [keepLine('timers', `Pending timers: ${sorted.length} pending; the next is due at ${iso(sorted[0]!.dueAt)}.\n`
+      + block(lines.join('\n'), TIMERS_CAP_BYTES, 'in `ccrc-api timer list`'))];
+  });
+}
+
 /** The history line (C52): the session's newest node and the one verb that reads it, or the verb alone while no read
  *  names that node. */
 function historySections(f: CardFacts): readonly CardSection[] {
@@ -258,12 +280,12 @@ function bodyOf(role: Exclude<CardRenderer, 'overlord'>, f: CardFacts): readonly
   switch (role) {
     case 'coordinator':
       return [...programmeSections(f), ...runsSections(f, 'Runs you claim or work:'), ...intentSections(f), ...claimsSections(f),
-        ...itemsSections(f, true), ...mailSections(f), ...notesSections(f), ...checkpointSections(f)];
+        ...itemsSections(f, true), ...mailSections(f), ...timersSections(f), ...notesSections(f), ...checkpointSections(f)];
     case 'worker':
     case 'reviewer':
-      return [...runsSections(f, 'The run you serve:'), ...claimsSections(f), ...mailSections(f)];
+      return [...runsSections(f, 'The run you serve:'), ...claimsSections(f), ...mailSections(f), ...timersSections(f)];
     case 'plain':
-      return [...claimsSections(f), ...intentSections(f), ...itemsSections(f, false), ...mailSections(f)];
+      return [...claimsSections(f), ...intentSections(f), ...itemsSections(f, false), ...mailSections(f), ...timersSections(f)];
   }
 }
 

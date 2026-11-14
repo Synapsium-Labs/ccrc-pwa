@@ -21,7 +21,7 @@ function facts(over: Partial<CardFacts> = {}): CardFacts {
   return {
     sessionId: 'lane-a-project-a', role: 'coordinator', roleWhy: 'it claims an open run', at: AT,
     runs: read([]), ledger: read([]), claims: read([]), intent: read(false), itemsRaised: read([]),
-    mailOutstanding: read([]), mailMore: false, notes: read([]), checkpoint: read(null),
+    mailOutstanding: read([]), mailMore: false, notes: read([]), timers: read([]), checkpoint: read(null),
     history: read({ verb: 'ccrc history describe', node: null }), ...over,
   };
 }

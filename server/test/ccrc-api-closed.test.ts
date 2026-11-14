@@ -414,8 +414,9 @@ describe('the client stays closed', () => {
     // `mail.inbox` (D-6780) took it to sixty-five; its read takes no body, and the ack body it synthesizes is pinned below.
     // The seven `plan` rows (D-8181) took it to seventy-two; `sessions.start` (Overlord W1a, the start report, no body fill) to seventy-three.
     // `sessions.card` (Overlord W1a, the card piece, no body fill) took it to seventy-four, and the note door's four (the notes
-    // piece) to seventy-eight: the three POSTs take the `calls.record` fill's rule, pinned below.
-    expect(routeKeys().size).toBe(78);
+    // piece) to seventy-eight: the three POSTs take the `calls.record` fill's rule, pinned below. The three `timer` rows (the
+    // timers piece) took it to eighty-one: `parse_timer` builds each body whole from the pane's pair, no splice and no fill.
+    expect(routeKeys().size).toBe(81);
     // The call record's fill is the one that REFUSES a caller's identity (D-8126): it tests the stripped copy for both keys and
     // refuses, then derives the pair from the pane, and fills nowhere else.
     const callFill = code.slice(code.indexOf("if [[ \"$key\" == 'calls.record' ]]; then"));

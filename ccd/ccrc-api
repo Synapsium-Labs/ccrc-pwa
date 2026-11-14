@@ -21,13 +21,14 @@
 #     this process's caller does not supply. Absent, it REFUSES; it never guesses
 #     a host. (A worker guessed one on 2026-08-25 and reported success against
 #     nothing.)
-#   * The route comes from ROUTES below, seventy-eight rows, and nothing else; the
+#   * The route comes from ROUTES below, eighty-one rows, and nothing else; the
 #     four claimant rows name the question door family's template, their only
 #     door since the old ones were retired (D-7324), refused here, unsent, when a
 #     current cap file says the server lacks `questions-v1` (D-7328); `runs
 #     review-rounds` is refused the same way for `review-rounds-v1` (D-8125),
 #     `goals show` for `goals-read-v1` (D-8126), and `calls record` for `calls-v1`;
-#     the seven `plan` rows are refused `no-plan-door` the same way for `plan-v1` (D-8181).
+#     the seven `plan` rows are refused `no-plan-door` the same way for `plan-v1` (D-8181), and the three
+#     `timer` rows `capability-missing` for `timers-v1` (Overlord W1a, the timers piece).
 #   * The only caller-supplied text that ever reaches a URL is an id or a query
 #     value the row itself declares, each validated against `SAFE_RE` BEFORE the
 #     request is built — refused, never escaped and sent.
@@ -92,7 +93,7 @@ SAFE_RE='^[A-Za-z0-9_-]+$'
 # (`/api/questions/<ask|approval>-{id}/<rule|release>`): from Q3j it was their
 # fifth field, sent only while the server advertised `questions-v1` (D-7325), and
 # since the old doors were retired it is their path (D-7324). Every row has four.
-# Seventy-eight rows, and that word is SCANNED: `server/test/ccrc-api.test.ts`
+# Eighty-one rows, and that word is SCANNED: `server/test/ccrc-api.test.ts`
 # derives the count from the table below and reds if this line or the bullet at
 # the top of this file states a different one. The original rows were chosen on
 # 2026-08-26 by measuring the skill corpora; the standing executable-corpus
@@ -288,6 +289,12 @@ declare -A ROUTES=(
   [plan.ticket-move]='POST|/api/programmes/{id}/plan/tickets/move|yes|-'
   [plan.epic-drop]='POST|/api/programmes/{id}/plan/epics/drop|yes|-'
   [plan.close]='POST|/api/programmes/{id}/plan/close|yes|-'
+  # The timers (Overlord W1a, the timers piece; spec §3.3.12 C61, C64): a session sets, lists and cancels its OWN timers. All
+  # three are parsed whole by `parse_timer`, which derives the pane's pair and refuses a typed one; `{id}` is the timer's id. All
+  # are refused locally `capability-missing` when a CURRENT cap file omits `timers-v1`.
+  [timer.set]='POST|/api/timers|no|-'
+  [timer.list]='GET|/api/timers|no|-'
+  [timer.cancel]='POST|/api/timers/{id}/cancel|yes|-'
 )
 
 # A Linear issue identifier, the `<REF>` of the five issue rows (D-7669): a team key that starts with a letter, a hyphen,
@@ -384,7 +391,9 @@ usage() {
     printf '  %-18s %s\n' '' 'coordinators intent takes set|clear --session <this session'"'"'s id> and nothing else'
     printf '  %-18s %s\n' 'whoami' 'this session'"'"'s {id,uuid}, from tmux + the registry'
     printf '  %-18s %s\n' 'card' 'this session'"'"'s card, one page per call (--page N --hash H), as plain text'
-    printf '  %-18s %s\n' 'card --anchor' 'its short part for the session hook (--form start|prompt|fork), the answer as it came'
+    printf '  %-18s %s\n' 'card --anchor' 'its short part for the session hook (--form start|prompt|fork): an anchor answer as it came, else exit 3'
+    printf '  %-18s %s\n' '' 'timer set takes <90m|2h|3d> <note> [--run <id> | --programme <slug>]; timer cancel takes <id>;'
+    printf '  %-18s %s\n' '' 'every timer verb fills this pane'"'"'s identity and takes no --json'
     printf '  %-18s %s\n' '' 'mail inbox takes nothing: it prints this pane'"'"'s unacked mail as plain text, not JSON,'
     printf '  %-18s %s\n' '' 'and acks each entry it printed. Run it bare: no pipe, no redirect, no head or tail.'
     printf '  %-18s %s\n' '' '(ledger allocate fills "byId" from this pane; --by <id> for a caller with none)'
@@ -550,6 +559,66 @@ parse_intent() {
     || refuse 'session-mismatch' '--session must name this pane-derived session'
   INTENT_ID="$DERIVED_ID"
   INTENT_BODY="{\"action\":\"$action\",\"byId\":\"$DERIVED_ID\",\"byUuid\":\"$DERIVED_UUID\"}"
+}
+
+# `timer set <duration> <note> [--run <id> | --programme <slug>]`, `timer list` and `timer cancel <id>` (Overlord W1a, the timers
+# piece, plan `w1a-timers.md` Task 11): a grammar of their own, parsed whole before the generic parser, as `parse_intent` is.
+# THE IDENTITY IS THE PANE'S on all three (slug timer-verbs-derive-identity): `derive_identity` fills the pair and the caller
+# types none, so `--json`, `--by` and every flag but `set`'s two are refused, and a session cannot send another session's pair.
+# Flags are read with `if`/`elif`, never `case` labels: `ccrc-api-closed.test.ts` reads every `--flag)` label as an identity flag.
+# `set` builds its body whole with `jq --arg`, which escapes every control character where `json_escape` escapes five (slug
+# timer-body-built-by-jq), and refuses `no-jq` without jq, as `cmd_card` does. The duration is `<n>m`, `<n>h` or `<n>d`, turned
+# into `durationMs` here; its bounds, and the cancel id's integer check, are the server's. `cancel`'s body is the pane's pair
+# alone, built whole (never through `splice_body_field`). Sets TIMER_ID and TIMER_BODY, or refuses. NEVER call it inside $( ).
+TIMER_ID=''
+TIMER_BODY=''
+parse_timer() {   # verb, then the verb's arguments
+  local verb="$1" duration note run='' programme='' ms flag
+  shift
+  if [[ "${1:-}" == --* ]]; then
+    refuse 'bad-args' "timer $verb takes no $1 here: the identity is this pane's, and the client fills it"
+  fi
+  if [[ "$verb" == 'list' ]]; then
+    (( $# == 0 )) || refuse 'bad-args' "timer list takes no argument: $1"
+  elif [[ "$verb" == 'cancel' ]]; then
+    (( $# >= 1 )) || refuse 'no-id' 'timer cancel needs an id'
+    (( $# == 1 )) || refuse 'bad-args' "timer cancel takes one id and nothing else: $2"
+    TIMER_ID="$1"
+  else
+    (( $# >= 2 )) || refuse 'bad-args' 'timer set needs a duration (90m, 2h or 3d) and a note'
+    duration="$1"; note="$2"; shift 2
+    [[ "$duration" =~ ^([123456789][0123456789]{0,8})([mhd])$ ]] \
+      || refuse 'bad-duration' "timer set takes a duration of minutes, hours or days (90m, 2h, 3d): $duration"
+    if [[ "${BASH_REMATCH[2]}" == 'm' ]]; then ms=60000; elif [[ "${BASH_REMATCH[2]}" == 'h' ]]; then ms=3600000; else ms=86400000; fi
+    ms=$(( 10#${BASH_REMATCH[1]} * ms ))
+    while (( $# > 0 )); do
+      flag="$1"
+      (( $# >= 2 )) || refuse 'bad-args' "timer set: $flag needs a value"
+      if [[ "$flag" == '--run' ]]; then
+        [[ -z "$run" ]] || refuse 'bad-args' 'timer set: --run was given twice'
+        [[ "$2" =~ ^[123456789][0123456789]{0,14}$ ]] || refuse 'bad-args' "timer set: --run is a run id: $2"
+        run="$2"
+      elif [[ "$flag" == '--programme' ]]; then
+        [[ -z "$programme" ]] || refuse 'bad-args' 'timer set: --programme was given twice'
+        [[ "$2" =~ $SAFE_RE ]] || refuse 'bad-args' "timer set: --programme is a programme slug: $2"
+        programme="$2"
+      else
+        refuse 'bad-args' "timer set takes --run or --programme only: $flag (the identity is this pane's, and the client fills it)"
+      fi
+      shift 2
+    done
+    [[ -z "$run" || -z "$programme" ]] || refuse 'bad-args' 'timer set: a timer binds a run or a programme, not both'
+    command -v jq >/dev/null 2>&1 || refuse 'no-jq' 'timer set builds its body with jq, and jq is not on PATH; no timer was set'
+  fi
+  derive_identity
+  if [[ "$verb" == 'cancel' ]]; then
+    TIMER_BODY="{\"fromId\":\"$DERIVED_ID\",\"fromUuid\":\"$DERIVED_UUID\"}"
+  elif [[ "$verb" == 'set' ]]; then
+    TIMER_BODY=$(jq -cn --arg fromId "$DERIVED_ID" --arg fromUuid "$DERIVED_UUID" --argjson durationMs "$ms" --arg note "$note" \
+      --arg run "$run" --arg programme "$programme" '{fromId: $fromId, fromUuid: $fromUuid, durationMs: $durationMs, note: $note}
+        + (if $run == "" then {} else {runId: ($run | tonumber)} end) + (if $programme == "" then {} else {programme: $programme} end)') \
+      || refuse 'bad-args' 'timer set: jq could not build the body; no timer was set'
+  fi
 }
 
 # ONE RUN, MANY REQUESTS (D-6780). Every request this client sends goes through `send_request`: the one-request rows
@@ -841,6 +910,10 @@ main() {
     parse_intent "$@"
     id="$INTENT_ID"; intent_body="$INTENT_BODY"
     set --
+  elif [[ "$key" == timer.* ]]; then
+    parse_timer "$verb" "$@"
+    id="$TIMER_ID"; intent_body="$TIMER_BODY"
+    set --
   elif [[ "$key" == 'mail.inbox' ]]; then
     # `mail inbox` takes NOTHING (D-6780): no id, no flag, no `--to`. A session reads its own inbox, the pane's.
     (( $# == 0 )) || refuse 'bad-args' "mail inbox takes no argument: $1"
@@ -904,7 +977,8 @@ main() {
     fi
   fi
 
-  # The intent row's body is the body `parse_intent` synthesized: never read from a file or stdin.
+  # The intent row's body is the body `parse_intent` synthesized, and a timer row's the one `parse_timer` built: never read
+  # from a file or stdin.
   [[ -z "$intent_body" ]] || body="$intent_body"
 
   # THE FIRST BODY THIS CLIENT REWRITES. It now rewrites three more: the intent
@@ -1073,6 +1147,8 @@ main() {
     derive_identity
     query+="${query:+&}byId=$DERIVED_ID&byUuid=$DERIVED_UUID"
   fi
+  # `timer list` reads with the pair `parse_timer` derived, the `approvals show` shape: the query holds nothing else.
+  [[ "$key" != 'timer.list' ]] || query="byId=$DERIVED_ID&byUuid=$DERIVED_UUID"
 
   if [[ "$key" == 'asks.list' ]]; then
     derive_identity
@@ -1187,6 +1263,14 @@ main() {
   # sends. The empty word is the "is the file current and well-formed" probe, as above.
   if [[ "$key" == plan.* ]] && ! _api_server_cap plan-v1 && _api_server_cap ''; then
     refuse 'no-plan-door' 'the server this box talks to does not answer the plan verbs; update it before using them'
+  fi
+
+  # THE TIMERS' GATE (Overlord W1a, the timers piece, plan Task 11), the plan door's fail direction: a CURRENT, well-formed cap file
+  # that omits `timers-v1` says the server keeps no timers yet, so `capability-missing` is answered, naming the word, and nothing
+  # is sent. An absent, stale, torn or future file sends, as every gate here does (slug timer-gate-fails-open-like-every-gate):
+  # a server without the doors then answers its own 404, which accepts no timer either.
+  if [[ "$key" == timer.* ]] && ! _api_server_cap timers-v1 && _api_server_cap ''; then
+    refuse 'capability-missing' 'the server this box talks to does not keep timers yet (it does not advertise timers-v1); no timer was set'
   fi
 
   local path url

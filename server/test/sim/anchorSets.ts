@@ -21,7 +21,7 @@ const HASH = 'abcdef0123456789'.repeat(4);
 const facts = (over: Partial<CardFacts> = {}): CardFacts => ({
   sessionId: 'lane-a-project-a', role: 'coordinator', roleWhy: 'fixture', at: AT,
   runs: read([]), ledger: read([]), claims: read([]), intent: read(false), itemsRaised: read([]),
-  mailOutstanding: read([]), mailMore: false, notes: read([]), checkpoint: read(null),
+  mailOutstanding: read([]), mailMore: false, notes: read([]), timers: read([]), checkpoint: read(null),
   history: read({ verb: 'ccrc history describe', node: null }), ...over,
 });
 const run = (id: number, programme: string): CardRun => ({ id, programme, wave: 1, waveOf: 2, state: 'working', planPath: null, kind: 'work' });
