@@ -84,6 +84,9 @@ import { registerLinearRoutes, registerLinearWorkspaceRoutes } from './linear/ro
 import { registerLinearProxyRoutes } from './linear/proxyRoutes.js';
 import { registerLinkingRoutes } from './linking/routes.js';
 import { registerContinuityRoutes } from './continuity/routes.js';
+import { CARD_REGISTRY_UNREAD } from './continuity/card.js';
+import { intentOfCheckpoint } from './continuity/declaredIntent.js';
+import { childReclaimGenerationRead } from './coord/childReclaim.js';
 import { registerPlanRoutes } from './coord/planRoutes.js';
 import { registerHierarchyRoutes } from './coord/hierarchyRoutes.js';
 import { registerFaceRoutes } from './face/routes.js';
@@ -2188,6 +2191,18 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   registerContinuityRoutes(app, {
     coord: deps.coord, mailToken: () => deps.mailToken ?? null, wall: () => deps.time.clock.wall(),
     attribute: (id, uuid) => attributionVerdict(deps.io, deps.cfg, id, uuid, 'fromUuid'),
+    attributeReader: (id, uuid) => attributionVerdict(deps.io, deps.cfg, id, uuid, 'byUuid'),
+    // The card's registry reads (the row's child mark, or that the registry could not say; its incarnation) and declared
+    // intent, read from the delegation checkpoint, the authority (`not-ready` until the lane has one).
+    cardRegistry: {
+      childMark: async (id) => {
+        const r = await readSessionRecord(deps.io, deps.cfg, id);
+        return r.kind === 'found' ? r.record.child : r.kind === 'absent' ? { kind: 'none' } : CARD_REGISTRY_UNREAD;
+      },
+      incarnation: (id) => childReclaimGenerationRead(deps.io, deps.cfg.registryDir, id),
+      declaredIntent: (id, incarnation) => intentOfCheckpoint(watcher?.delegationCheckpointIfReady() ?? null, id, incarnation),
+    },
+    masker: deps.masker,
   });
   // The lane routes, Check and the kill switch (accounts plan Task A14, D-7732), registered from their own file, which
   // `auth-gate.test.ts`'s `ROUTES` and `box-token-census.test.ts` read by name. Each takes the same account gate on the

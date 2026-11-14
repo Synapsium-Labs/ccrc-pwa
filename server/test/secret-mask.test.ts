@@ -1212,6 +1212,9 @@ describe('the rulings: every egress of session-derived text goes through the mas
     '/api/mail': /mail: \(deps\.masker \?\? SHAPE_ONLY_MASKER\)\.maskDeep\(mail\)/,
     '/api/mail/:id': /envelope: \(deps\.masker \?\? SHAPE_ONLY_MASKER\)\.maskDeep\(row\.envelope\)/,
     '/api/mail/inbox': /text: masker\.maskDeep\(renderInboxEntry\(/,   // D-6778: each rendered entry is masked before paging
+    // The card (Overlord W1a; review 2023 F2): the trimmed text is masked once, whole, before it is hashed and paged, so a
+    // secret crossing a page edge is masked as one string.
+    '/api/sessions/:id/card': /\.maskText\(trimCard\(renderCard\(renderer, facts\), CARD_BUDGET_TOKENS\)\.text\)/,
     '/api/runs/:id/items': /items: \(deps\.masker \?\? SHAPE_ONLY_MASKER\)\.maskDeep\(/,
     '/api/coord/shadow-journal': /rows: \(deps\.masker \?\? SHAPE_ONLY_MASKER\)\.maskDeep\(deps\.coord\.shadowVerdicts/,
     '/api/feed': /events: \(deps\.masker \?\? SHAPE_ONLY_MASKER\)\.maskDeep\(/,

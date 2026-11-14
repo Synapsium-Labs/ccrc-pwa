@@ -21,11 +21,11 @@ const unmeasured = (what: string): Fact<never> => ({ kind: 'unmeasured', what })
 const empty = (over: Partial<CardFacts> = {}): CardFacts => ({
   sessionId: 'lane-a-project-a', role: 'coordinator', roleWhy: 'fixture', at: AT,
   runs: read([]), ledger: read([]), claims: read([]), intent: read(false), itemsRaised: read([]),
-  mailOutstanding: read([]), notes: read([]), checkpoint: read(null),
+  mailOutstanding: read([]), mailMore: false, notes: read([]), checkpoint: read(null),
   history: read({ verb: 'ccrc history describe', node: null }), ...over,
 });
 const RUN = { id: 11, programme: 'prog-a', wave: 1, waveOf: 2, state: 'working', planPath: null, kind: 'work' };
-const MAIL = { deliveryId: 7, fromId: 'coordinator', at: AT, subject: 's' };
+const MAIL = { deliveryId: 7, fromId: 'coordinator', at: AT, subject: 's', parked: false };
 const sec = (key: string, rank: number, keep: boolean, size: number): CardSection => ({ key, rank, keep, text: `${key}:${'x'.repeat(size)}` });
 const join = (s: readonly CardSection[]): string => s.map((x) => x.text).join('\n');
 
@@ -139,7 +139,7 @@ export const CARD_BLOCK_SET: MutantSet<Card> = {
       'a note is fenced': () => { expect(forged(card(m, empty({ notes: read([{ id: 8, at: AT, text: H }]) })))).toBe(false); },
       'a checkpoint is fenced': () => { expect(forged(card(m, empty({ checkpoint: read({ at: AT, text: H }) })))).toBe(false); },
       'an item text is fenced': () => {
-        expect(forged(card(m, empty({ itemsRaised: read([{ id: 6, programme: 'prog-a', kind: 'decide', state: 'open', neededBy: 'soon', at: AT, text: H, everTicked: false }]) })))).toBe(false);
+        expect(forged(card(m, empty({ itemsRaised: read([{ id: 6, programme: 'prog-a', kind: 'decide', state: 'open', neededBy: 'soon', at: AT, text: H, everTicked: false, held: false }]) })))).toBe(false);
       },
       'a decision is fenced': () => { expect(forged(card(m, ledger({ decisions: [{ at: AT, text: H }] })))).toBe(false); },
       'a ratified goal is fenced': () => { expect(forged(card(m, ledger({ goals: [{ text: H, ratified: true }] })))).toBe(false); },
@@ -180,6 +180,54 @@ export const CARD_NEVER_EMPTY_SET: MutantSet<Card> = {
       'plain does not read the runs': () => { expect(has('plain', empty({ runs: unmeasured('the runs') }))).toBe(true); },
       'a coordinator with only a note has content': () => {
         expect(has('coordinator', empty({ notes: read([{ id: 1, at: AT, text: 'n' }]) }))).toBe(false);
+      },
+    };
+  },
+};
+
+// PR B (plan `w1a-card.md` Task 3): `cardRoleOf`, the card's role, its reason and the renderer that draws it. Its suite
+// writes each answer out rather than reading it off the code: the renderer per role, the wider card for an undecided
+// reading, and the reason naming the fact that could not be measured.
+export const CARD_ROLE_KEY = 'server/src/continuity/card.ts#cardRoleOf';
+type RoleFactsArg = Exclude<Parameters<Card['cardRoleOf']>[0], string>;
+const facts = (over: Partial<RoleFactsArg>): RoleFactsArg => ({
+  designation: 'none', auditBody: false, replayBody: false, child: { kind: 'none' }, childRunKind: 'unmeasured',
+  claimsOpenRun: 'no', declaredIntent: 'no', ...over,
+});
+export const CARD_ROLE_SET: MutantSet<Card> = {
+  modulePath: CARD_TS,
+  mutants: [
+    { id: 'R1 undecided coordinator-or-plain drawn plain', old: "could not be read: coordinator or plain`, renderer: 'coordinator' }", new: "could not be read: coordinator or plain`, renderer: 'plain' }" },
+    { id: 'R2 undecided worker-or-reviewer drawn as reviewer', old: "return { role: 'undecided', roleWhy: why, renderer: 'worker' };", new: "return { role: 'undecided', roleWhy: why, renderer: 'reviewer' };" },
+    { id: 'R3 every role drawn plain', old: 'renderer: FLEET_ROLES[role].cardRenderer }', new: "renderer: 'plain' }" },
+    { id: 'R4 the intent never named as unread', old: "f.declaredIntent === 'unmeasured' ? 'its declared coordinator intent' : null", new: 'null' },
+    { id: 'R5 the coordinator reason inverted', old: "f.claimsOpenRun === 'yes' ? 'it claims an open run'", new: "f.claimsOpenRun === 'no' ? 'it claims an open run'" },
+    { id: 'R6 the child mark read as the run kind', old: "const why = f.child.kind === 'child'", new: "const why = f.child.kind !== 'child'" },
+    { id: 'R7 the registry unread drawn by the worker card', old: "worker, reviewer, coordinator or plain', renderer: 'coordinator' }", new: "worker, reviewer, coordinator or plain', renderer: 'worker' }" },
+    { id: 'R8 the registry unread folded into an unreadable marker', old: 'if (f === CARD_REGISTRY_UNREAD) {', new: "if (f === CARD_REGISTRY_UNREAD) { return cardRoleOf({ designation: 'none', auditBody: false, replayBody: false, child: { kind: 'unreadable' }, childRunKind: 'unmeasured', claimsOpenRun: 'unmeasured', declaredIntent: 'unmeasured' });" },
+  ],
+  suite(m): Record<string, SuiteCase> {
+    return {
+      'each decided role is drawn by its FLEET_ROLES renderer': () => {
+        expect(m.cardRoleOf(facts({ claimsOpenRun: 'yes' }))).toEqual({ role: 'coordinator', roleWhy: 'it claims an open run', renderer: 'coordinator' });
+        expect(m.cardRoleOf(facts({ declaredIntent: 'yes' }))).toEqual({ role: 'coordinator', roleWhy: 'it declared coordinator intent', renderer: 'coordinator' });
+        expect(m.cardRoleOf(facts({}))).toMatchObject({ role: 'plain', renderer: 'plain' });
+        expect(m.cardRoleOf(facts({ child: { kind: 'child', runId: 3 }, childRunKind: 'work' }))).toEqual({ role: 'worker', roleWhy: 'a child of run 3, a work run', renderer: 'worker' });
+        expect(m.cardRoleOf(facts({ child: { kind: 'child', runId: 3 }, childRunKind: 'review' }))).toMatchObject({ role: 'reviewer', renderer: 'reviewer' });
+        expect(m.cardRoleOf(facts({ designation: 'live' }))).toMatchObject({ role: 'overlord', renderer: 'overlord' });
+        expect(m.cardRoleOf(facts({ auditBody: true }))).toMatchObject({ role: 'auditor', renderer: 'plain' });
+      },
+      'an undecided reading is drawn by the wider card and names what could not be read': () => {
+        expect(m.cardRoleOf(facts({ claimsOpenRun: 'unmeasured', declaredIntent: 'unmeasured' }))).toEqual({ role: 'undecided',
+          roleWhy: 'its runs and its declared coordinator intent could not be read: coordinator or plain', renderer: 'coordinator' });
+        expect(m.cardRoleOf(facts({ declaredIntent: 'unmeasured' })).roleWhy).toBe('its declared coordinator intent could not be read: coordinator or plain');
+        expect(m.cardRoleOf(facts({ child: { kind: 'unreadable' } }))).toEqual({ role: 'undecided',
+          roleWhy: 'its child marker could not be read: worker or reviewer', renderer: 'worker' });
+        expect(m.cardRoleOf(facts({ child: { kind: 'child', runId: 4 } })).roleWhy).toBe('a child of run 4, whose kind could not be read: worker or reviewer');
+      },
+      'the registry could not say whether it is a child: no role ruled out, the widest card (review 2023 F7)': () => {
+        expect(m.cardRoleOf(m.CARD_REGISTRY_UNREAD)).toEqual({ role: 'undecided',
+          roleWhy: 'the registry could not say whether it is a child: worker, reviewer, coordinator or plain', renderer: 'coordinator' });
       },
     };
   },

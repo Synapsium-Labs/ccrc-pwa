@@ -662,14 +662,19 @@ export const GEN_RULES: readonly Rule[] = [
   { why: 'probing "165": degraded', st: ['probing'], ev: (e) => e.kind === 'deadline', then: DEGRADE },
 ];
 
-export function expectedStep(g: GView, e: GEvent): { next: GView; actions: readonly GAction[] } {
+/** `changed` is written from its definition (review 2023 F5): the next view differs from the one stepped in some field. */
+const differs = (a: GView, b: GView): boolean =>
+  [...new Set([...Object.keys(a), ...Object.keys(b)])].some((k) => a[k as keyof GView] !== b[k as keyof GView]);
+
+export function expectedStep(g: GView, e: GEvent): { next: GView; actions: readonly GAction[]; changed: boolean } {
   for (const r of GEN_RULES) {
     if (r.st.includes(g.state) && r.ev(e) && (r.when === undefined || r.when(g))) {
       const w = r.then(e.kind === 'due' ? { ...g, cls: e.cls } : g);
-      return { next: { ...g, ...(w.over ?? {}), state: w.state }, actions: w.actions };
+      const next = { ...g, ...(w.over ?? {}), state: w.state };
+      return { next, actions: w.actions, changed: differs(g, next) };
     }
   }
-  return { next: g, actions: [] };
+  return { next: g, actions: [], changed: false };
 }
 
 /** Feeds events through `generationStep`; a `started` hands over to the generation it mints. */
@@ -786,8 +791,8 @@ export function generationStepCases(m: GenModule): Record<string, SuiteCase> {
     },
     'carded: one re-nudge at its nudge point, a second nudge is nothing, and its one deadline degrades': () => {
       const a = m.generationStep(m.GEN_MINTED, ev('nudge-due'));
-      expect(a).toEqual({ next: { ...m.GEN_MINTED, renudged: true }, actions: ['renudge-card'] });
-      expect(m.generationStep(a.next, ev('nudge-due'))).toEqual({ next: a.next, actions: [] });
+      expect(a).toEqual({ next: { ...m.GEN_MINTED, renudged: true }, actions: ['renudge-card'], changed: true });
+      expect(m.generationStep(a.next, ev('nudge-due'))).toEqual({ next: a.next, actions: [], changed: false });
       expect(m.generationStep(m.GEN_MINTED, ev('deadline')).next).toMatchObject({ state: 'degraded', proven: false });
     },
     'MODEL START_WHILE_DOWN=reported-at-boot: a start reported late still ends n and mints n+1 at carded': () => {
@@ -798,11 +803,11 @@ export function generationStepCases(m: GenModule): Record<string, SuiteCase> {
       expect(m.generationStep(m.GEN_ACTIVE, ev('started', { resumed: true })).actions).toEqual(['end-this', 'mint-next']);
     },
     'MODEL CARD_DOOR_SKIPS=table: the card is read at carded only, and a matching read starts the probes': () => {
-      expect(m.generationStep(m.GEN_MINTED, ev('card-read', { hashMatches: true }))).toEqual({ next: { ...m.GEN_MINTED, state: 'probing' }, actions: ['start-probes'] });
-      expect(m.generationStep(m.GEN_MINTED, ev('card-read', { hashMatches: false }))).toEqual({ next: m.GEN_MINTED, actions: [] });
+      expect(m.generationStep(m.GEN_MINTED, ev('card-read', { hashMatches: true }))).toEqual({ next: { ...m.GEN_MINTED, state: 'probing' }, actions: ['start-probes'], changed: true });
+      expect(m.generationStep(m.GEN_MINTED, ev('card-read', { hashMatches: false }))).toEqual({ next: m.GEN_MINTED, actions: [], changed: false });
       for (const st of ['active', 'draining', 'checkpointed', 'clearing', 'probing', 'degraded'] as const) {
         const g = { ...m.GEN_ACTIVE, state: st };
-        expect(m.generationStep(g, ev('card-read', { hashMatches: true })), st).toEqual({ next: g, actions: [] });
+        expect(m.generationStep(g, ev('card-read', { hashMatches: true })), st).toEqual({ next: g, actions: [], changed: false });
       }
     },
     'a full renewal: active, draining, checkpointed, clearing, ended; the next carded, probing, active': () => {
@@ -828,11 +833,13 @@ const GEN_SET: MutantSet<GenModule> = {
     { id: 'G8', old: "return g.probeRounds >= 1 ? degrade(g) :", new: 'return g.probeRounds >= 2 ? degrade(g) :' },
     { id: 'G9', old: "if (e.kind === 'deadline') return g.hostEnded ? degrade(g) : back(g);", new: "if (e.kind === 'deadline') return degrade(g);" },
     { id: 'G10', old: "  ended: (g) => same(g),", new: "  ended: (g, e) => (e.kind === 'started' ? startedHere(g) : same(g))," },
-    { id: 'G14', old: 'const back = (g: GenView): GenStep => (g.proven', new: 'const back = (g: GenView): GenStep => (true' },
+    { id: 'G14', old: 'const back = (g: GenView): Move => (g.proven', new: 'const back = (g: GenView): Move => (true' },
     { id: 'G15', old: "proven: g.proven && !g.hostEnded }, 'degraded'", new: "proven: true }, 'degraded'" },
     { id: 'G17', old: 'proven: g.proven && !g.hostEnded', new: 'proven: g.proven' },
     { id: 'G18', old: '  : degrade(g));', new: "  : to({ ...GEN_ACTIVE, proven: false }, 'degraded', ['release-deliveries']));" },
     { id: 'G12', old: "return to(g, 'clearing', ['renew'], { tries: g.tries + 1, hostEnded: true });", new: "return to(g, 'clearing', ['renew', 'renew'], { tries: g.tries + 1, hostEnded: true });" },
+    // review 2023 F5: `changed` compares the whole view, not the state alone (the lane's old skip).
+    { id: 'G19', old: 'changed: VIEW_KEYS.some((k) => m.next[k] !== g[k])', new: 'changed: m.next.state !== g.state' },
     { id: 'G13', old: "    if (e.kind === 'handover' || e.kind === 'deadline') return clear(g);", new: "    if (e.kind === 'handover') return clear(g);\n    if (e.kind === 'deadline') return back(g);" },
   ],
   suite: generationStepCases,

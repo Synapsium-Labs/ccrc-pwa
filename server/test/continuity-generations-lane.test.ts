@@ -13,8 +13,8 @@ import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
 import type { GenRow } from '../src/continuity/continuityStore.js';
 import {
-  GENERATIONS_LANE, gatherGenerationReadings, generationsPass, softTimesOf,
-  type CompactionsMemo, type GatherPorts, type GenReadings, type GenerationsDeps, type RegistryFacts,
+  GENERATIONS_LANE, applyFedEvents, gatherGenerationReadings, generationsPass, softTimesOf,
+  type CompactionsMemo, type FedEvent, type GatherPorts, type GenReadings, type GenerationsDeps, type RegistryFacts,
 } from '../src/continuity/generationsLane.js';
 import type { CompactionsRead } from '../src/continuity/compactions.js';
 import type { UsageRead } from '../src/usage.js';
@@ -656,6 +656,126 @@ describe('the pass records renewalDue on every generation at rest (Task 3)', () 
   });
 });
 
+describe('the card read (the card piece, PR B, Task 5)', () => {
+  const HASH_A = 'a'.repeat(64);
+  const HASH_B = 'b'.repeat(64);
+  /** The card door's two writes: a snapshot served with `hash`, and (unless `served` only) a full read of it by `uuid`. */
+  const serve = (f: Fixture, snap: string, hash: string): void => {
+    const r = f.s.insertSnapshot({ id: snap, sessionId: COORD, at: f.t.ports.clock.wall(), facts: '{}', hash });
+    if (!r.ok) throw new Error('snapshot not stored');
+  };
+  const readCard = (f: Fixture, snap: string, hash: string, uuid = U1): void => {
+    serve(f, snap, hash);
+    if (!f.s.insertCardRead({ sessionId: COORD, uuid, snapshotId: snap, hash, pages: 1, at: f.t.ports.clock.wall() }).ok) throw new Error('read not recorded');
+  };
+  const card = (s: CoordStore): Record<string, unknown>[] =>
+    s.db.prepare('SELECT n, state, shadowState, cardHash, snapshotId FROM continuity_generations ORDER BY id').all() as Record<string, unknown>[];
+
+  it('live: a matching read moves a carded generation to probing and records its card hash and snapshot', () => {
+    const f = fixture();
+    f.s.setLaneArm(CONTINUITY_LANE, 'live', 1);
+    f.start('startup', U1);
+    f.pass();
+    readCard(f, 'snap-1', HASH_A);
+    expect(f.pass()).toMatchObject({ cardRead: 1, unread: null });
+    expect(card(f.s)).toEqual([{ n: 1, state: 'probing', shadowState: null, cardHash: HASH_A, snapshotId: 'snap-1' }]);
+    expect(f.pass()).toMatchObject({ cardRead: 0 });
+  });
+
+  it('shadow: the effective state is the shadow column, so the read moves `shadowState` and `state` stays active (review 1902 F6)', () => {
+    const f = fixture();
+    f.start('startup', U1);
+    f.pass();
+    expect(card(f.s)).toEqual([{ n: 1, state: 'active', shadowState: 'carded', cardHash: null, snapshotId: null }]);
+    readCard(f, 'snap-1', HASH_A);
+    expect(f.pass()).toMatchObject({ live: false, cardRead: 1 });
+    expect(card(f.s)).toEqual([{ n: 1, state: 'active', shadowState: 'probing', cardHash: HASH_A, snapshotId: 'snap-1' }]);
+  });
+
+  it('a read made before the pass that minted the generation still counts: it is matched by the start\'s conversation', () => {
+    const f = fixture();
+    f.start('startup', U1);
+    readCard(f, 'snap-1', HASH_A);
+    expect(f.pass()).toMatchObject({ minted: 1, cardRead: 1 });
+    expect(card(f.s)[0]).toMatchObject({ shadowState: 'probing', cardHash: HASH_A });
+  });
+
+  it('a read of an older hash does not move it, and the read of the current one then does', () => {
+    const f = fixture();
+    f.start('startup', U1);
+    f.pass();
+    readCard(f, 'snap-1', HASH_A);
+    serve(f, 'snap-2', HASH_B);
+    expect(f.pass()).toMatchObject({ cardRead: 0 });
+    expect(card(f.s)).toEqual([{ n: 1, state: 'active', shadowState: 'carded', cardHash: null, snapshotId: null }]);
+    readCard(f, 'snap-2', HASH_B);
+    expect(f.pass()).toMatchObject({ cardRead: 1 });
+    expect(card(f.s)[0]).toMatchObject({ shadowState: 'probing', cardHash: HASH_B, snapshotId: 'snap-2' });
+  });
+
+  it("another conversation's read, or none, leaves a carded generation where it is", () => {
+    const f = fixture();
+    f.start('startup', U1);
+    f.pass();
+    expect(f.pass()).toMatchObject({ cardRead: 0 });
+    readCard(f, 'snap-1', HASH_A, U2);
+    expect(f.pass()).toMatchObject({ cardRead: 0 });
+    expect(card(f.s)[0]).toMatchObject({ shadowState: 'carded', cardHash: null });
+  });
+
+  it('a generation at rest is never fed a card read', () => {
+    const f = fixture();
+    f.s.setLaneArm(CONTINUITY_LANE, 'live', 1);
+    f.start('startup', U1);
+    f.pass();
+    f.s.db.prepare("UPDATE continuity_generations SET state = 'active', walk = NULL, deadlineAt = NULL").run();
+    readCard(f, 'snap-1', HASH_A);
+    expect(f.pass()).toMatchObject({ cardRead: 0 });
+    expect(card(f.s)[0]).toMatchObject({ state: 'active', cardHash: null });
+  });
+
+  it('a resumed conversation keeps its uuid, but a read from its previous generation never counts for the new one (review 2023 F3)', () => {
+    const f = fixture();
+    f.start('startup', U1);
+    f.pass();
+    readCard(f, 'snap-1', HASH_A);
+    expect(f.pass()).toMatchObject({ cardRead: 1 });
+    f.t.advance(60_000);
+    f.start('resume', U1);
+    expect(f.pass()).toMatchObject({ minted: 1, cardRead: 0 });
+    expect(f.pass()).toMatchObject({ cardRead: 0 });
+    expect(card(f.s).at(-1)).toMatchObject({ n: 2, shadowState: 'carded', cardHash: null });
+    // The resumed conversation reads its card now: that read counts.
+    readCard(f, 'snap-1', HASH_A);
+    expect(f.pass()).toMatchObject({ cardRead: 1 });
+    expect(card(f.s).at(-1)).toMatchObject({ n: 2, shadowState: 'probing', cardHash: HASH_A });
+  });
+
+  it('the apply loop writes a step that keeps the state and changes the view, and never one that changes nothing (review 2023 F5)', () => {
+    const f = fixture();
+    f.start('startup', U1);
+    f.pass();
+    const writes: string[] = [];
+    const coord = { stepGeneration: (...a: Parameters<CoordStore['stepGeneration']>) => { writes.push(a[2].state); return f.s.stepGeneration(...a); } };
+    const fed = (): FedEvent[] => [{ gen: live(f.s)[0]!, event: { kind: 'nudge-due' }, card: null }];
+    expect(applyFedEvents(coord, fed(), false, f.t.ports.clock.wall())).toBe(1);
+    expect(f.s.db.prepare('SELECT state, shadowState, renudged FROM continuity_generations').get()).toEqual({ state: 'active', shadowState: 'carded', renudged: 1 });
+    expect(applyFedEvents(coord, fed(), false, f.t.ports.clock.wall())).toBe(0);
+    expect(writes).toEqual(['carded']);
+  });
+
+  it('a card-read read that fails is named, and that generation waits; nothing is written', () => {
+    const f = fixture();
+    f.start('startup', U1);
+    f.pass();
+    readCard(f, 'snap-1', HASH_A);
+    f.s.cardReadOfStart = () => ({ ok: false, detail: 'continuity_card_reads read failed: disk' });
+    expect(f.pass()).toMatchObject({ cardRead: 0, unread: 'card-reads' });
+    expect(f.logs.some((l) => l.includes('card-reads could not be read') && l.includes('disk'))).toBe(true);
+    expect(card(f.s)[0]).toMatchObject({ shadowState: 'carded', cardHash: null });
+  });
+});
+
 describe('the gather', () => {
   const ports = (calls: string[], stamp: () => MeasuredStat): GatherPorts => ({
     usage: async () => { calls.push('usage'); return usage(1, 2); },
@@ -756,7 +876,8 @@ describe('shadow is structural: the lane imports nothing that sends', () => {
   it('its value imports are within the allowed list', () => {
     const allowed = ['../../../shared/lane-arm.js', '../../../shared/continuity.js', '../../../shared/models.js', '../coord/laneArm.js',
       '../coord/rollTarget.js', '../coord/bindingReads.js',
-      '../roleOf.js', '../time/observed.js', './compactions.js', './continuityStore.js', './generationStart.js', './renewalDue.js'];
+      '../roleOf.js', '../time/observed.js', './compactions.js', './continuityStore.js', './generationMachine.js', './generationStart.js',
+      './renewalDue.js'];
     const edges = parsedFile('server/src/continuity/generationsLane.ts').imports.filter((e) =>
       e.kind !== 'type-query' && !e.typeOnly && !(e.names.length > 0 && e.names.every((n) => (e.typeNames ?? []).includes(n))));
     expect(edges.map((e) => e.specifier).sort()).toEqual([...allowed].sort());

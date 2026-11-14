@@ -17,7 +17,7 @@ import { PROBE_MUTANT_SETS } from './probeSets.js';
 import { simulate } from './run.js';
 import {
   CARD_BLOCK_KEY, CARD_BLOCK_SET, CARD_NEVER_EMPTY_KEY, CARD_NEVER_EMPTY_SET, CARD_ONE_LINE_KEY, CARD_ONE_LINE_SET, CARD_TRIM_KEY,
-  CARD_TRIM_SET,
+  CARD_TRIM_SET, CARD_ROLE_KEY, CARD_ROLE_SET,
 } from './cardMutants.js';
 import { counterSuite, type Counter } from '../continuityCompactionsCases.js';
 
@@ -138,6 +138,7 @@ const MUTANT_SETS: Record<string, MutantSet<never>> = {
   [CARD_NEVER_EMPTY_KEY]: CARD_NEVER_EMPTY_SET as MutantSet<never>,
   [CARD_ONE_LINE_KEY]: CARD_ONE_LINE_SET as MutantSet<never>,
   [CARD_BLOCK_KEY]: CARD_BLOCK_SET as MutantSet<never>,
+  [CARD_ROLE_KEY]: CARD_ROLE_SET as MutantSet<never>,
   [COMPACTIONS_KEY]: COMPACTIONS_SET as MutantSet<never>,
   ...RENEWAL_MUTANT_SETS,
   ...GENERATION_START_MUTANT_SETS,

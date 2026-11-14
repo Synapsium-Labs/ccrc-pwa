@@ -23,10 +23,12 @@
  * L1, pure: no `fs`, no store, no clock.
  */
 import {
-  BYTES_PER_TOKEN, type CardFacts, type CardItem, type CardMail, type CardRenderer, type CardRun, type CardSection, type Fact,
+  BYTES_PER_TOKEN, CARD_MAIL_MAX, CARD_PAGE_CHARS, type CardFacts, type CardItem, type CardMail, type CardRenderer, type CardRun, type CardSection, type Fact,
 } from '../../../shared/continuity-card.js';
+import { FLEET_ROLES, type FleetRole } from '../../../shared/fleetRoles.js';
 import { utf8Bytes } from '../../../shared/utf8.js';
 import { CARD_TEXT_PREFACE, untrustedBlock } from '../coord/untrusted.js';
+import { roleOf, type RoleFacts } from '../roleOf.js';
 
 /** The line a card carries when the session holds nothing its role's card reads, and every read answered (C51). */
 export const CARD_NOTHING_LINE = 'No runs, claims or coordinator intent were measured for this session.';
@@ -82,7 +84,7 @@ const keepLine = (key: string, text: string): CardSection => ({ key, rank: RANK.
 /** The run line, in the roster card's order and words where they overlap (`#<id> <programme> w<wave>/<of> <state>`). */
 function runLine(r: CardRun): string {
   const wave = `w${r.wave}${r.waveOf === null ? '' : `/${r.waveOf}`}`;
-  return `#${r.id} ${oneLine(r.programme)} ${wave} ${oneLine(r.state)} kind=${oneLine(r.kind)} plan=${r.planPath === null ? 'none' : oneLine(r.planPath)}`;
+  return `#${r.id} ${oneLine(r.programme)} ${wave} ${oneLine(r.state)} kind=${oneLine(r.kind)} plan=${r.planPath === null ? '(not recorded)' : oneLine(r.planPath)}`;
 }
 
 /** One fact's sections: its own when read, or the kept line naming what could not be read. */
@@ -110,7 +112,8 @@ function intentSections(f: CardFacts): readonly CardSection[] {
 
 function itemText(it: CardItem): string {
   const about = [it.programme, it.kind, it.state, `needed ${it.neededBy}`].map((x) => oneLine(x)).join(', ');
-  return `item ${it.id} (${about}, raised ${iso(it.at)}):\n` + block(it.text, SHORT_CAP_BYTES, `on item ${it.id}'s row`);
+  const held = it.held ? ', held for you: the operator is not shown it yet' : '';
+  return `item ${it.id} (${about}, raised ${iso(it.at)}${held}):\n` + block(it.text, SHORT_CAP_BYTES, `on item ${it.id}'s row`);
 }
 
 /** The open items and asks: every open item of the session's programmes and every item it raised, once each, oldest
@@ -129,11 +132,14 @@ function itemsSections(f: CardFacts, withLedger: boolean): readonly CardSection[
 function mailSections(f: CardFacts): readonly CardSection[] {
   return factSections('mailOutstanding', f.mailOutstanding, (mail) => {
     const sorted = [...mail].sort((a, b) => a.at - b.at || a.deliveryId - b.deliveryId);
-    return sorted.map((m: CardMail, i) => ({
+    const more = f.mailMore ? [keepLine('mail-more', `More than ${CARD_MAIL_MAX} deliveries to you are outstanding; the `
+      + `${CARD_MAIL_MAX} newest are listed. \`ccrc-api mail inbox\` prints them all.`)] : [];
+    return [...more, ...sorted.map((m: CardMail, i) => ({
       key: `mail:${m.deliveryId}`, rank: banded(RANK.mail, i, sorted.length), keep: false,
-      text: `Mail delivery ${m.deliveryId} from ${oneLine(m.fromId)}, sent ${iso(m.at)}, not answered; its subject:\n` +
+      text: `Mail delivery ${m.deliveryId} from ${oneLine(m.fromId)}, sent ${iso(m.at)}, `
+        + `${m.parked ? 'parked: the delivery lane stopped trying to deliver it' : 'not answered'}; its subject:\n` +
         block(m.subject, SHORT_CAP_BYTES, `in \`ccrc-api mail fetch ${m.deliveryId}\``),
-    }));
+    }))];
   });
 }
 
@@ -216,7 +222,7 @@ function nothingSections(role: Exclude<CardRenderer, 'overlord'>, f: CardFacts):
 function bodyOf(role: Exclude<CardRenderer, 'overlord'>, f: CardFacts): readonly CardSection[] {
   switch (role) {
     case 'coordinator':
-      return [...programmeSections(f), ...runsSections(f, 'Runs you claim:'), ...intentSections(f), ...claimsSections(f),
+      return [...programmeSections(f), ...runsSections(f, 'Runs you claim or work:'), ...intentSections(f), ...claimsSections(f),
         ...itemsSections(f, true), ...mailSections(f), ...notesSections(f), ...checkpointSections(f)];
     case 'worker':
     case 'reviewer':
@@ -278,4 +284,61 @@ export function trimCard(s: readonly CardSection[], budgetTokens: number): { rea
   const counted = withLine(leftOutCount);
   if (cardTokens(counted) <= budgetTokens || utf8Bytes(counted) <= utf8Bytes(untrimmed)) return { text: counted, leftOut: dropped.size };
   return { text: untrimmed, leftOut: 0 };
+}
+
+/** The card's role, the reason it names, and the renderer that draws it (C49, C51; the card piece's PR B). The role is
+ *  `roleOf`'s reading of the facts the gatherer measured; an undecided reading is drawn by the wider of the two cards it
+ *  cannot tell apart (`coordinator` for coordinator-or-plain, `worker` for worker-or-reviewer, whose card is the
+ *  reviewer's), so a card the server cannot place still shows everything either role would (slug
+ *  undecided-renders-the-wider-card), and its reason names the fact that could not be measured. When the registry could
+ *  not say whether the session is a child at all (`CARD_REGISTRY_UNREAD`, never folded into an unreadable child marker,
+ *  the coordinator's ruling F7 on review 2023), no role is ruled out, and the widest card, the coordinator's, draws it. */
+export interface CardRole { readonly role: FleetRole | 'undecided'; readonly roleWhy: string; readonly renderer: CardRenderer }
+/** The registry could not say whether the session is a child (its row unmeasurable, the registry unlistable). */
+export const CARD_REGISTRY_UNREAD = 'registry-unread';
+export function cardRoleOf(f: RoleFacts | typeof CARD_REGISTRY_UNREAD): CardRole {
+  if (f === CARD_REGISTRY_UNREAD) {
+    return { role: 'undecided', roleWhy: 'the registry could not say whether it is a child: worker, reviewer, coordinator or plain', renderer: 'coordinator' };
+  }
+  const r = roleOf(f);
+  if (r.kind === 'undecided') {
+    if (r.between === 'worker-or-reviewer') {
+      const why = f.child.kind === 'child'
+        ? `a child of run ${f.child.runId}, whose kind could not be read: worker or reviewer`
+        : 'its child marker could not be read: worker or reviewer';
+      return { role: 'undecided', roleWhy: why, renderer: 'worker' };
+    }
+    const unread = [f.claimsOpenRun === 'unmeasured' ? 'its runs' : null, f.declaredIntent === 'unmeasured' ? 'its declared coordinator intent' : null]
+      .filter((x): x is string => x !== null);
+    return { role: 'undecided', roleWhy: `${unread.join(' and ')} could not be read: coordinator or plain`, renderer: 'coordinator' };
+  }
+  const role = r.role;
+  const why = ((): string => {
+    switch (role) {
+      case 'overlord': return 'the designation names this session';
+      case 'auditor': return 'the audit lane wrote this session';
+      case 'replay': return 'the replay lane wrote this session';
+      case 'worker': case 'reviewer':
+        return `a child of run ${f.child.kind === 'child' ? f.child.runId : '?'}, a ${role === 'worker' ? 'work' : 'review'} run`;
+      case 'coordinator':
+        return f.claimsOpenRun === 'yes' ? 'it claims an open run' : 'it declared coordinator intent';
+      case 'plain': return 'it claims no open run and declared no coordinator intent';
+    }
+  })();
+  return { role, roleWhy: why, renderer: FLEET_ROLES[role].cardRenderer };
+}
+
+/** The card's pages: `CARD_PAGE_CHARS` code points each (never a split surrogate pair), at least one. */
+export function cardPages(text: string): readonly string[] {
+  const chars = [...text];
+  const out: string[] = [];
+  for (let i = 0; i < chars.length; i += CARD_PAGE_CHARS) out.push(chars.slice(i, i + CARD_PAGE_CHARS).join(''));
+  return out.length === 0 ? [''] : out;
+}
+
+/** The snapshot's stored facts, and what its id hashes: every fact but the time of rendering (`at`), so unchanged rows keep
+ *  one snapshot across requests (slug card-absolute-stamps). */
+export function snapshotFactsJson(f: CardFacts): string {
+  const { at: _at, ...rest } = f;
+  return JSON.stringify(rest);
 }

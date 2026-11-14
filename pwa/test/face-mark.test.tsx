@@ -8,7 +8,7 @@ import { INSTRUMENT, REFINED } from '@ccrc/ui';
 import { FleetChromeProvider } from '../src/fleet/FleetChrome';
 import { createFleetStore, type FleetStore } from '../src/stores/fleet';
 import { FaceMark, MOOD_PLAY_MS } from '../src/face/FaceMark';
-import { HAPPY_WINDOW_MS, MOOD_RULES, OFFLINE_AGENT_CAUSE } from '../src/face/mood';
+import { HAPPY_WINDOW_MS, MOOD_COOLDOWN_MS, MOOD_RULES, OFFLINE_AGENT_CAUSE } from '../src/face/mood';
 import { api } from '../src/lib/api';
 import { setCharacter } from '../src/lib/character';
 import { fleetSession } from './fleetFixture';
@@ -100,19 +100,35 @@ describe('the face', () => {
     expect(still()).toBe(true);
   });
 
-  it('a return to a mood that had settled plays again, inside five seconds of leaving it', () => {
+  it('an escalation inside a running play opens a fresh five seconds, and the old timer does not cut it short', () => {
+    const store = heard();
+    mountFace(store);
+    advance(4000);
+    expect(still()).toBe(false);
+    act(() => store.setState({ sessions: [fleetSession({ id: 'lane-a-1', bucket: 'attention' })] }));
+    expect(face().getAttribute('aria-label')).toContain('a session has a question for you');
+    expect(still()).toBe(false);
+    advance(MOOD_PLAY_MS - 1);
+    expect(still()).toBe(false);
+    advance(1);
+    expect(still()).toBe(true);
+  });
+
+  it('a return to a mood that had settled plays again once the cool-down has let it back', () => {
     const store = heard();
     mountFace(store);
     advance(MOOD_PLAY_MS);
     expect(still()).toBe(true);
     act(() => store.setState({ sessions: [fleetSession({ id: 'lane-a-1', bucket: 'attention' })] }));
-    advance(MOOD_PLAY_MS - 1000);
+    advance(MOOD_PLAY_MS);
+    expect(still()).toBe(true);
+    // The calming change waits for the cool-down, which runs from the change to Alert; its end plays Sleeping again.
     act(() => store.setState({ sessions: [fleetSession({ id: 'lane-a-1', bucket: 'idle' })] }));
+    expect(face().getAttribute('aria-label')).toContain('a session has a question for you');
+    advance(MOOD_COOLDOWN_MS - MOOD_PLAY_MS);
     expect(face().getAttribute('aria-label')).toContain('nothing needs anyone');
     expect(still()).toBe(false);
-    advance(MOOD_PLAY_MS - 1);
-    expect(still()).toBe(false);
-    advance(1);
+    advance(MOOD_PLAY_MS);
     expect(still()).toBe(true);
   });
 
@@ -122,6 +138,109 @@ describe('the face', () => {
     advance(MOOD_PLAY_MS);
     act(() => store.setState({ sessions: [fleetSession({ id: 'lane-a-2', bucket: 'idle' })] }));
     expect(still()).toBe(true);
+  });
+
+  // The cool-down on mood change (item 218): every change the face shows still plays, but it does not calm until the
+  // cool-down has passed since its last change; a more urgent mood shows at once.
+  describe('the cool-down', () => {
+    const quest = (b: 'attention' | 'idle' | 'working') => [fleetSession({ id: 'lane-a-1', bucket: b })];
+    const label = () => face().getAttribute('aria-label') ?? '';
+
+    it('an escalation inside the cool-down shows at once and plays', () => {
+      const store = heard();
+      mountFace(store);
+      advance(MOOD_PLAY_MS);
+      act(() => store.setState({ sessions: quest('attention') }));
+      expect(label()).toContain('a session has a question for you');
+      expect(still()).toBe(false);
+    });
+
+    it('a calming change inside the cool-down waits, then shows at its end and plays', () => {
+      const store = heard({ sessions: quest('attention') });
+      mountFace(store);
+      advance(MOOD_PLAY_MS);
+      act(() => store.setState({ sessions: quest('idle') }));
+      expect(label()).toContain('a session has a question for you');
+      advance(MOOD_COOLDOWN_MS - MOOD_PLAY_MS - 1);
+      expect(label()).toContain('a session has a question for you');
+      expect(still()).toBe(true);
+      advance(1);
+      expect(label()).toContain('nothing needs anyone');
+      expect(still()).toBe(false);
+    });
+
+    it('a flip-flop inside the cool-down shows the first mood throughout and never plays again', () => {
+      const store = heard({ sessions: quest('working') });
+      mountFace(store);
+      advance(MOOD_PLAY_MS);
+      act(() => store.setState({ sessions: quest('idle') }));
+      advance(10_000);
+      act(() => store.setState({ sessions: quest('working') }));
+      advance(10_000);
+      act(() => store.setState({ sessions: quest('idle') }));
+      advance(10_000);
+      act(() => store.setState({ sessions: quest('working') }));
+      expect(label()).toContain('a session is working');
+      expect(still()).toBe(true);
+      advance(MOOD_COOLDOWN_MS);
+      expect(label()).toContain('a session is working');
+      expect(still()).toBe(true);
+    });
+
+    it('at the cool-down\'s end the face shows what is decided then, not the changes it missed', () => {
+      const store = heard({ sessions: quest('attention') });
+      mountFace(store);
+      advance(MOOD_PLAY_MS);
+      act(() => store.setState({ sessions: quest('idle') }));
+      advance(10_000);
+      act(() => store.setState({ sessions: quest('working') }));
+      advance(MOOD_COOLDOWN_MS);
+      expect(label()).toContain('a session is working');
+    });
+
+    it('Offline shows at once, and leaving it for a calmer mood waits', () => {
+      const store = heard();
+      mountFace(store);
+      advance(MOOD_PLAY_MS);
+      act(() => store.setState({ conn: 'down', linkLost: true }));
+      expect(label()).toContain('the console has lost its link to the server');
+      act(() => store.setState({ conn: 'open', linkLost: false }));
+      advance(MOOD_COOLDOWN_MS - 1);
+      expect(label()).toContain('the console has lost its link to the server');
+      advance(1);
+      expect(label()).toContain('nothing needs anyone');
+    });
+
+    it('the name follows the mood shown, with its cause, never a mood being held back', () => {
+      const store = heard({ sessions: quest('attention') });
+      mountFace(store);
+      advance(MOOD_PLAY_MS);
+      act(() => store.setState({ sessions: quest('working') }));
+      expect(label().endsWith(': a session has a question for you')).toBe(true);
+      expect(label()).toMatch(/^The Orb alert:/);
+      expect(label()).not.toContain('a session is working');
+    });
+
+    it('the cool-down\'s own timer is cleared on unmount', () => {
+      const store = heard({ sessions: quest('attention') });
+      const tree = (on: boolean) => <FleetChromeProvider store={store}>{on ? <FaceMark /> : null}</FleetChromeProvider>;
+      const { rerender } = render(tree(false));
+      const bare = vi.getTimerCount();
+      rerender(tree(true));
+      act(() => store.setState({ sessions: quest('idle') }));
+      rerender(tree(false));
+      expect(vi.getTimerCount()).toBe(bare);
+    });
+  });
+
+  // Review of the merge queue: the browser fixtures send session rows with no `limitWait` key (an older server's frame), and
+  // the Crying arm read `limitWait.waitingBy` off `undefined`: the whole shell fell to the error boundary. A face over such
+  // rows must mount and name a mood.
+  it('rows with no limitWait key at all mount a face and name a mood', () => {
+    const row: Record<string, unknown> = { ...fleetSession({ id: 'lane-a-1', bucket: 'idle' }) };
+    delete row.limitWait;
+    mountFace(heard({ sessions: [row as unknown as ReturnType<typeof fleetSession>] }));
+    expect(face().getAttribute('aria-label')).toContain('nothing needs anyone');
   });
 
   it('reduced motion is still from the start', () => {

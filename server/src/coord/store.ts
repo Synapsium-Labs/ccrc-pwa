@@ -32,8 +32,9 @@ import type { LinkingWriteBody, ProjectLinkingWire } from '../../../shared/linki
 import { openPracticeCase, practiceCaseNewest, type PracticeCaseNewestRead, type PracticeCaseOpen } from './practiceCasesStore.js';
 import type { CaseDue } from './practiceCases.js';
 import {
-  advanceCursor, advanceObserved, clearShadowWalk, generationsCursor, insertStart, liveGenerations, mintGeneration, setGenerationDue,
-  setHoldOff, startsOf, startsSince, stepGeneration, type CursorAdvance, type CursorRead, type DueWrite,
+  advanceCursor, advanceObserved, cardReadOfStart, clearShadowWalk, generationsCursor, insertCardRead,
+  insertSnapshot, insertStart, liveGenerations, mintGeneration, setGenerationDue, setHoldOff, startsOf, startsSince, stepGeneration,
+  type CardReadInsert, type CardReadRead, type CursorAdvance, type CursorRead, type DueWrite, type SnapshotInsert,
   type GenExpect, type GenerationsRead, type MintInput, type MintResult, type StartInsert, type StartInsertResult, type StartsRead,
 } from '../continuity/continuityStore.js';
 import type { GenView } from '../continuity/generationMachine.js';
@@ -5381,13 +5382,18 @@ export class CoordStore {
   /** Overlord §3.3.11, H12: the generations, written only by the generations lane through `continuityStore.ts`. */
   liveGenerations(): GenerationsRead { return liveGenerations(this.db); }
   mintGeneration(i: MintInput, e: GenExpect | null, live: boolean, c: CursorAdvance | null = null): MintResult { return mintGeneration(this.db, i, e, live, c); }
-  stepGeneration(id: number, e: GenExpect, next: GenView, live: boolean, now: number): { changed: boolean } { return stepGeneration(this.db, id, e, next, live, now); }
+  stepGeneration(id: number, e: GenExpect, next: GenView, live: boolean, now: number, card: { hash: string; snapshotId: string } | null = null): { changed: boolean } { return stepGeneration(this.db, id, e, next, live, now, card); }
   clearShadowWalk(id: number, e: GenExpect, now: number): { changed: boolean } { return clearShadowWalk(this.db, id, e, now); }
   setGenerationDue(id: number, e: GenExpect, due: DueWrite, blind: readonly RenewalTrigger[]): { changed: boolean } { return setGenerationDue(this.db, id, e, due, blind); }
   advanceObserved(id: number, e: GenExpect, o: Observed): { changed: boolean } { return advanceObserved(this.db, id, e, o); }
   setHoldOff(id: number, e: GenExpect): { changed: boolean } { return setHoldOff(this.db, id, e); }
   generationsCursor(lane: string): CursorRead { return generationsCursor(this.db, lane); }
   advanceCursor(c: CursorAdvance): { changed: boolean } { return advanceCursor(this.db, c); }
+  /** Overlord §3.3.3 (the card piece, `continuityStore.ts`): the card door's two writers, the generations lane's read of a
+   *  generation's card read, and the card's read of declared coordinator intent. */
+  insertSnapshot(s: SnapshotInsert): { ok: true; fresh: boolean } | { ok: false } { return insertSnapshot(this.db, s); }
+  insertCardRead(r: CardReadInsert): { ok: true; id: number } | { ok: false } { return insertCardRead(this.db, r); }
+  cardReadOfStart(startId: number): CardReadRead { return cardReadOfStart(this.db, startId); }
 
   /** D-6909: the review-cap state of a batch of runs (`reviewCapStore.ts`). */
   reviewCapStates(ids: readonly number[]): Map<number, ReviewCapState> {

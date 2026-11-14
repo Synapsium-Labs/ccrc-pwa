@@ -723,9 +723,10 @@ describe('coord.db: migration 4 — runs.dispatchStartedAt', () => {
     // and MIGRATIONS[65] (continuity_starts, the start report, Overlord W1a)
     // and MIGRATIONS[66] (face_settings, the operator's character choice, the Overlord face plan Task 6)
     // and MIGRATIONS[67] (continuity_generations, continuity_cursor and the continuity lane-arm row, Overlord W1a)
-    // and MIGRATIONS[68] (plain_memory_settings and the launch-profile lane-arm row, Overlord W1a launch profiles PR B).
-    expect(COORD_SCHEMA_VERSION).toBe(69);
-    expect(MIGRATIONS.length).toBe(69);
+    // and MIGRATIONS[68] (continuity_snapshots and continuity_card_reads, the card door, Overlord W1a)
+    // and MIGRATIONS[69] (plain_memory_settings and the launch-profile lane-arm row, Overlord W1a launch profiles PR B).
+    expect(COORD_SCHEMA_VERSION).toBe(70);
+    expect(MIGRATIONS.length).toBe(70);
   });
 
   it('is ADDITIVE: every column migration 1 wrote is still on the table, unchanged', () => {
@@ -819,8 +820,9 @@ describe('coord.db: migration 11 — runs.kind and runs.reviews (design 2026-09-
     // and MIGRATIONS[65] (continuity_starts, the start report, Overlord W1a)
     // and MIGRATIONS[66] (face_settings)
     // and MIGRATIONS[67] (continuity_generations, Overlord W1a)
-    // and MIGRATIONS[68] (plain_memory_settings, launch profiles PR B); the migration above is still entry 11.
-    expect(COORD_SCHEMA_VERSION).toBe(69);
+    // and MIGRATIONS[68] (continuity_snapshots and continuity_card_reads, Overlord W1a)
+    // and MIGRATIONS[69] (plain_memory_settings, launch profiles PR B); the migration above is still entry 11.
+    expect(COORD_SCHEMA_VERSION).toBe(70);
     const row = db.prepare('SELECT kind, reviews FROM runs').get() as { kind: string; reviews: number | null };
     expect(row).toEqual({ kind: 'work', reviews: null });
     db.close();
@@ -2584,6 +2586,13 @@ describe('coord.db: plain_memory_settings and the launch-profile lane-arm row (O
     expect(MIGRATIONS[SLOT - 1]!.replace(/--[^\n]*/g, '').trim()).toMatch(ENTRY);
   });
 
+  it('lands after card PR B\'s entry 69 (the card door\'s tables), the slot that merged first: 70 (review 2024 F8, review 2031 F2)', () => {
+    // A box already at user_version 69 has card B's tables; this entry must come after them, or it would be skipped there.
+    const card = MIGRATIONS.findIndex((m) => m.includes('CREATE TABLE continuity_snapshots')) + 1;
+    expect(card).toBe(69);
+    expect(SLOT).toBe(card + 1);
+  });
+
   it('reaches a database ALREADY at the version before it: auto memory for plain reads off, the lane shadow, every row as it was', () => {
     const p = dbPathIn(mkTmp('ccrc-coord-'));
     mkdirSync(path.dirname(p), { recursive: true });
@@ -2600,6 +2609,34 @@ describe('coord.db: plain_memory_settings and the launch-profile lane-arm row (O
     expect(db.prepare("SELECT choice, updatedAt FROM lane_arm_settings WHERE lane = 'launch-profile'").get()).toEqual({ choice: 'shadow', updatedAt: 0 });
     expect(db.prepare("SELECT choice, updatedAt FROM lane_arm_settings WHERE lane = 'roster-card'").get()).toEqual({ choice: 'live', updatedAt: 7 });
     expect(() => db.prepare('INSERT INTO plain_memory_settings (id, choice, updatedAt) VALUES (2, \'on\', 1)').run()).toThrow();
+    db.close();
+  });
+});
+
+describe('coord.db: continuity_snapshots and continuity_card_reads, the card door (Overlord §3.3.3, C38)', () => {
+  /** Found by its DDL, never hard-coded. */
+  const SLOT = MIGRATIONS.findIndex((m) => m.includes('CREATE TABLE continuity_snapshots')) + 1;
+  const ENTRY = /^CREATE TABLE continuity_snapshots \([^;]*\);\s*CREATE INDEX continuity_snapshots_by_session ON continuity_snapshots\(sessionId, served\);\s*CREATE TABLE continuity_card_reads \([^;]*\);\s*CREATE INDEX continuity_card_reads_by_conversation ON continuity_card_reads\(sessionId, uuid, id\);\s*CREATE INDEX continuity_card_reads_by_snapshot ON continuity_card_reads\(snapshotId\);$/;
+  it('NEW TABLES and their indexes, nothing on an existing table, after the generations\' tables', () => {
+    expect(SLOT).toBeGreaterThan(MIGRATIONS.findIndex((m) => m.includes('CREATE TABLE continuity_generations')) + 1);
+    expect(MIGRATIONS[SLOT - 1]!.replace(/--[^\n]*/g, '').trim()).toMatch(ENTRY);
+  });
+
+  it('reaches a database ALREADY at the version before it: both tables land empty and every existing row is as it was', () => {
+    const p = dbPathIn(mkTmp('ccrc-coord-'));
+    mkdirSync(path.dirname(p), { recursive: true });
+    const raw = new DatabaseSync(p);
+    tx(raw, () => {
+      for (let v = 0; v < SLOT - 1; v++) raw.exec(MIGRATIONS[v]!);
+      raw.exec(`PRAGMA user_version = ${SLOT - 1}`);
+      raw.exec("UPDATE lane_arm_settings SET choice = 'live', updatedAt = 7 WHERE lane = 'roster-card'");
+    });
+    raw.close();
+    const db = openCoordDb(p);
+    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(COORD_SCHEMA_VERSION);
+    expect(db.prepare('SELECT count(*) AS n FROM continuity_snapshots').get()).toEqual({ n: 0 });
+    expect(db.prepare('SELECT count(*) AS n FROM continuity_card_reads').get()).toEqual({ n: 0 });
+    expect(db.prepare("SELECT choice, updatedAt FROM lane_arm_settings WHERE lane = 'roster-card'").get()).toEqual({ choice: 'live', updatedAt: 7 });
     db.close();
   });
 });
