@@ -183,16 +183,20 @@ Work started 2026-11-13 on a branch stacked on Tasks 1 and 2:
     written to the stats file, a log or the status file.
 - [ ] The stats idle flush (D-8624): the stats file is written once the bridge has been idle for `FLUSH_S` after a
   response, so a reader taking deltas between runs never sees one run's figures land in the next.
-- [ ] `bridge-effort-catalogue` (D-8631), added 2026-11-14 for the operator's effort trial: `reasoning.effort` at
-  the row's `defaultReasoningLevel`, whatever effort the client sent.
-  - Measured first: every upstream body on both lanes carried `xhigh`. It is the client's own effort, sent on every
-    request for every model, and it outranks the lane's per-class effort file, so `ccrc models <id> set-effort` alone
-    changes nothing on the wire.
-  - The marker is the lane-wide switch. It is read at each POST, so it needs no relaunch. It outranks a session's own
-    route effort too, which is what a lane-wide trial at Codex's defaults needs.
-  - It is sent only for a row whose `defaultReasoningLevel` is a bounded effort word. With no row, or no valid
-    default, the body keeps the client's effort.
-  - It is one more marker addition under D-8622's fallback, so a 400 retries with the client's effort.
+- [ ] Effort parity with the Claude lanes (D-8631), the operator's ruling of 2026-11-14: a GPT class model resolves
+  the effort its Claude class model resolves, level for level.
+  - Measured first: every upstream body on both lanes carried `xhigh`. It is the client's effort, from the top-level
+    `effortLevel` every home carries, sent on every request for every model. The Claude homes also hold per-model
+    pins, the operator's own `/effort` choices (the opus-class model at `high` in several), and the GPT homes hold
+    none for their opus-class model. So that class runs `xhigh` on a GPT lane where it runs `high` on a Claude lane.
+  - The levels map 1:1. The lanes' catalogue lists `low` through `max` as accepted by every class model, so no level
+    is translated. A level a model does not accept maps to the nearest one below it that it does. No level is
+    invented.
+  - ccrc renders the GPT lane home's per-model pins from shipped config, never by hand: each class model gets the
+    effort its Claude class model resolves to in the reference Claude home. A session's own `--effort` or route effort
+    still wins, as it does on a Claude lane. The reference home and the rendering are designed in its pull request.
+  - Measured before and after: the `parity` section's `effort` counts per class model on each lane.
+  - It replaces a catalogue-default marker designed earlier that day, which the operator ruled out before it shipped.
 - [ ] `bridge-service-tier-fast` (D-8632), added 2026-11-14 for the operator's priority, the stalls: the body carries
   `service_tier: "priority"`, which is what native Codex's Fast mode sends.
   - It sits after `stream`, as in Codex's request struct, on every message request the lane sends while the marker is
@@ -205,9 +209,8 @@ Work started 2026-11-13 on a branch stacked on Tasks 1 and 2:
 - [ ] The reasoning-time split (D-8633): each response's time to its last reasoning item before the first released
   block, as a parity histogram beside `firstOutputMs` and `totalMs`, and as an exact value in the per-request row.
   It shows how much of a step each marker saves in reasoning, and how much in output.
-- [ ] Deferred until the eval reads them: who rules on effort for good (the operator's, after the trial),
-  tool-output truncation, the 272k window (the operator's), the Lite tool shape, and folding text beside tool results
-  into the developer item.
+- [ ] Deferred until the eval reads them: tool-output truncation, the 272k window (the operator's), the Lite tool
+  shape, and folding text beside tool results into the developer item.
 
 ## Task 6: the eval
 
@@ -241,9 +244,8 @@ Design and dry run first, with no live run. A live run spends subscription quota
 
 ## Waiting on the operator
 
-- Whose effort rules on GPT lanes: the client's (`xhigh` on every request today, measured 2026-11-14) or the
-  catalogue's default (low or medium)? The operator agreed on 2026-11-14 to trial the catalogue's default on lane-b
-  (D-8631). The standing rule waits for the trial.
+- ~~Whose effort rules on GPT lanes?~~ Ruled 2026-11-14: the same effort as on the Claude lanes, mapped 1:1 level for
+  level (D-8631), not the catalogue's default.
 - Whether lane windows follow Codex's 272k. Decide after the eval.
 - Whether the target is task-success parity or wire parity. The prompt and tools differ on purpose, so wire parity
   cannot be complete.
@@ -302,16 +304,19 @@ Design and dry run first, with no live run. A live run spends subscription quota
   `FLUSH_S` after a response, not only at the next request, by at most one timer that each response re-arms and the
   drain stops. A reader taking deltas between runs, as the eval spec's serial join does, never sees one run's figures
   land in the next.
-- **D-8631 (2026-11-14)** — `bridge-effort-catalogue-default`: behind a fourth request marker,
-  `bridge-effort-catalogue`, the bridge sends the catalogue row's `defaultReasoningLevel` as `reasoning.effort`, in
-  place of the client's effort.
-  - Why: every upstream body carried the client's `xhigh`, which outranks the lane's per-class effort file. A
-    settings edit could not reach a session's own route effort and would need every session relaunched. The marker
-    is read at each POST.
-  - It is sent only for a row with a bounded effort word as its default; otherwise the body is unchanged.
-  - It is a marker addition under D-8622: counted in `markers`, dropped by the 400 fallback, reaped with the lane, and
-    with no writer in the tree. The `parity` section's `effort` counts the level each body carried, as before.
-- **D-8632 (2026-11-14)** — `bridge-service-tier-fast`: behind a fifth request marker, `bridge-service-tier-fast`,
+- **D-8631 (2026-11-14)** — `gpt-lane-effort-parity`: a GPT lane's class model resolves the effort its Claude class
+  model resolves, level for level (the operator's ruling of 2026-11-14: "default effort should stay with effort level
+  on claude, we should have 1:1 mapping of effort levels").
+  - Why: every upstream body carried `xhigh`, the top-level `effortLevel` of every home. The Claude homes' per-model
+    pins (the operator's own `/effort` choices) set the opus-class model to `high` in several homes, and the GPT homes
+    carry no pin for their opus-class model, so it ran a level higher than on a Claude lane.
+  - ccrc renders the lane home's per-model pins from shipped config: each class model takes the level its Claude class
+    model resolves to in the reference Claude home. Levels map 1:1 (the lanes' catalogue accepts `low` through `max`
+    on every class model); a level a model does not accept maps to the nearest one below it that it does.
+  - A session's own `--effort` or route effort still wins, as on a Claude lane.
+  - It replaces a marker designed earlier the same day that sent the catalogue's default level; the operator ruled
+    that out before it shipped.
+- **D-8632 (2026-11-14)** — `bridge-service-tier-fast`: behind a fourth request marker, `bridge-service-tier-fast`,
   every message request carries `service_tier: "priority"`, after `stream`, as Codex's `ServiceTier::Fast` sends it.
   - Why: the operator's priority of 2026-11-14 is that GPT lanes stall far more than Claude lanes. The measured cause
     is step time: three to four times the Claude lanes', with nothing reaching Claude Code until a reply is done.
@@ -347,7 +352,8 @@ stall far more than Claude lanes, so that is repaired first.
   array from an empty one, so this says the backend reported no removals, not whether it sends the field.
   `bridge-reasoning-all-turns`' done condition above (the `turn_boundary` removals near zero) is therefore met before
   it starts. Its effect is read from the replay counts, the cached share and the times instead.
-- Every upstream body carried `xhigh`. That is what D-8631 is for.
+- Every upstream body carried `xhigh`, a level higher than the opus-class model runs on the Claude lanes. That is
+  what D-8631 is for.
 - Every response was served by the model asked for. The cached share of input was 91% to 99% by model.
 - The median time to first output was 8-16 s on three of the four model routes, and under 8 s on the fourth.
 
@@ -361,12 +367,12 @@ stall far more than Claude lanes, so that is repaired first.
 - Not causes: replies that end early, and 5xx (about 0.1%). Compaction near the 167k window was a cause until the
   400k window landed on 2026-11-13.
 
-**Trials (the operator's):** `bridge-reasoning-all-turns` on lane-b from 2026-11-14 22:47Z. The effort trial on lane-b
-follows it, behind D-8631's marker.
+**Trials (the operator's):** `bridge-reasoning-all-turns` on lane-b from 2026-11-14 22:47Z. Fast mode
+(`bridge-service-tier-fast`, D-8632) is approved to be turned on first on lane-b once it is deployed.
 
 **In flight:**
-- D-8631's marker is building.
-- D-8632's marker and D-8633's split follow in one pull request after it.
+- D-8632's marker and D-8633's split are building, in one pull request, first.
+- D-8631's effort parity is being designed, second.
 - Task 6's design is draft #2778.
 
 **Later:**
