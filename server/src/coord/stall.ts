@@ -1,6 +1,7 @@
 import { ACTIVE_RUN_STATES, MAIL_REPLAY_MS, REVIEW_DONE_SUBJECT, WAVE_DONE_SUBJECT, isRunState, isSessionLifecycle, lifecycleIsDead } from '../../../shared/api.js';
 import { STALL_ARMS, isStallArm } from '../../../shared/stall-watch.js';
 import { STALL_WATCH_DISABLED_MARKER } from '../../../shared/switches.js';
+import { TIMER_HOLD_CAP_MS, TIMER_MAIL_SENDER } from '../../../shared/continuity-timers.js';
 import type { StallArm } from '../../../shared/stall-watch.js';
 import { isHookEvent, type HookEvent } from '../../../shared/hook-events.js';
 import { sessionRoleOf } from '../roleOf.js';
@@ -84,6 +85,7 @@ const STALL_HOLD_MAP = {
   'mail-disabled': 'a rung would send mail while the operator has mail switched off: held, never rerouted',
   'failed-account': 'the turn ended on an account-class StopFailure: the limit, swap and authdead machinery owns it',
   'failed-unknown': 'the turn ended on a StopFailure token this build cannot classify: never guessed into a self-wake',
+  timer: 'a timer the worker set itself is pending, or fired less than one quiet period ago, below TIMER_HOLD_CAP_MS from the ladder\'s start (the quiet arm\'s r1 only; never a backoff, C65)',
 } as const;
 export type StallHold = keyof typeof STALL_HOLD_MAP;
 export const STALL_HOLDS = Object.keys(STALL_HOLD_MAP) as StallHold[];
@@ -575,7 +577,25 @@ export interface StallInput {
   readonly coordinator: CoordinatorState | null; // null = not measured this pass
   readonly w2?: StallW2Facts;                   // wave 2's facts; absent = the lane read none, and wave 1's verdict stands
   readonly quietMs?: number;                    // the resolved quiet time (stall-watch settings §7); absent = STALL_QUIET_MS
+  readonly timers?: StallTimers;                // the worker's own timers (C65); absent = none, as `w2?` and `quietMs?`
 }
+/** The worker's timers as the hold reads them (Overlord §3.3.12, C65): its earliest pending timer, and its newest one fired
+ *  at or after `now - TIMER_HOLD_CAP_MS` (`timerHoldFacts`), or `unmeasured` when that read failed. A hold never rests on
+ *  a read that failed. */
+export type StallTimers = { readonly earliestPending: { readonly id: number; readonly dueAt: number } | null;
+  readonly newestFired: { readonly id: number; readonly dueAt: number; readonly firedAt: number } | null } | 'unmeasured';
+/** The store's hold read as `StallTimers`: a failed read, or a fired row with no fire time, is `unmeasured`. */
+export function stallTimersOf(r: { readonly ok: false } | { readonly ok: true; readonly earliestPending: { readonly id: number; readonly dueAt: number } | null;
+  readonly newestFired: { readonly id: number; readonly dueAt: number; readonly firedAt: number | null } | null }): StallTimers {
+  if (!r.ok) return 'unmeasured';
+  const p = r.earliestPending === null ? null : { id: r.earliestPending.id, dueAt: r.earliestPending.dueAt };
+  if (r.newestFired === null) return { earliestPending: p, newestFired: null };
+  const { id, dueAt, firedAt } = r.newestFired;
+  return firedAt === null ? 'unmeasured' : { earliestPending: p, newestFired: { id, dueAt, firedAt } };
+}
+/** The firedSince the watch reads the hold with: a fired timer that can still hold fired after the ladder's start, which is
+ *  less than TIMER_HOLD_CAP_MS ago. */
+export const stallTimerFiredSince = (now: number): number => now - TIMER_HOLD_CAP_MS;
 /** The quiet time this input is judged on: the one reader of `StallInput.quietMs` (stall-watch settings §7), at its
  *  three uses (wave 1's r1, the dialog cap, the working-reply back-off's base). Absent reads the built-in, so every
  *  literal that leaves it out keeps its meaning (the `w2-arming-optional` precedent). */
@@ -726,7 +746,9 @@ export function stallFacts(input: StallInput): StallFacts {
   const workerId = primary.sessionId;
   const coordinatorIds = stallCoordinatorIds(runs);
   const toWorker = (m: StallMailRow): boolean => stallToWorker(m, workerId, runs);
-  const relevant = input.mail.filter((m) => !isWatchNotice(m) && (m.fromId === workerId || toWorker(m)));
+  // A timer mail is no exchange (slug timer-mail-is-no-exchange): a self-reminder moves no ball, no lastExchangeAt and no
+  // quietSince. The timer hold (`timerHoldUntil`) is what covers a worker waiting on its own timer.
+  const relevant = input.mail.filter((m) => !isWatchNotice(m) && m.fromId !== TIMER_MAIL_SENDER && (m.fromId === workerId || toWorker(m)));
   const workerLast = newestMail(relevant, (m) => m.fromId === workerId);
   const inboundLast = newestMail(relevant, toWorker);
   const waitLast = newestMail(relevant, (m) => m.fromId !== workerId && coordinatorIds.has(m.fromId) && m.subject.startsWith(STALL_WAIT_PREFIX));
@@ -987,6 +1009,48 @@ function stallDeafMail(input: StallInput, deliveries: readonly StallDeliveryRow[
   return { mail: passed, deafSince: d.replayCount === 0 ? d.deliveredAt : Math.max(passed.at, d.deliveredAt - d.replayCount * MAIL_REPLAY_MS) };
 }
 
+/** The timer that holds the quiet arm, and until when (Overlord §3.3.12, C65; plan w1a-timers Task 9), or null when none
+ *  holds. `start` is the ladder's own r1 start (`stallR1QuietFrom`), `quietMs` the ladder's quiet period. The timer is the
+ *  earliest pending one; else the newest fired at or after `start`. A pending timer holds until its `dueAt` plus one quiet
+ *  period, and one whose `dueAt` has passed holds until it fires (the lane is held by mail-disabled, or a pass behind). A
+ *  fired one holds until its `firedAt` plus one quiet period, however late it fired (slug a-fire-starts-a-full-quiet-period).
+ *  Never past `start + TIMER_HOLD_CAP_MS`. `unmeasured` and absent hold nothing. It is a hold, never a backoff: it sends
+ *  nothing, records no rung and moves no key. */
+export function timerHoldUntil(start: number, held: StallTimers | undefined, quietMs: number, now: number):
+  { readonly id: number; readonly dueAt: number; readonly until: number } | null {
+  if (held === undefined || held === 'unmeasured') return null;
+  const cap = start + TIMER_HOLD_CAP_MS;
+  const p = held.earliestPending;
+  if (p !== null) return { id: p.id, dueAt: p.dueAt, until: Math.min(p.dueAt > now ? p.dueAt + quietMs : cap, cap) };
+  const f = held.newestFired;
+  if (f === null || f.firedAt < start) return null;
+  return { id: f.id, dueAt: f.dueAt, until: Math.min(f.firedAt + quietMs, cap) };
+}
+
+/** The hold timed against the ladder that decides r1: its start (`stallR1QuietFrom`) and its quiet period (the marker
+ *  ladder's back-off when the marker clock decides, else the resolved quiet time). The verdict and the three notices ask it. */
+function stallTimerHold(input: StallInput, f: StallFacts, now: number):
+  { readonly hold: ReturnType<typeof timerHoldUntil>; readonly start: number; readonly quietMs: number } {
+  const start = stallR1QuietFrom(input, f);
+  const quietMs = stallR1MarkQuiet(input, f) !== null ? stallBackoff(input).quietMs : stallQuietMs(input);
+  return { hold: timerHoldUntil(start, input.timers, quietMs, now), start, quietMs };
+}
+
+/** Step 10's quiet rung, in both ladders, once r1 is due: held by the worker's own timer while its hold stands. */
+function stallR1OrTimerHold(input: StallInput, f: StallFacts, key: number, now: number): StallVerdict {
+  const { hold } = stallTimerHold(input, f, now);
+  return hold !== null && now < hold.until ? holdVerdict('timer') : { act: 'notify', arm: 'quiet', rung: 1, key, to: 'worker' };
+}
+
+/** The line a quiet-arm notice adds when a timer held this episode (slug notice-names-the-timer-that-held): the same pick,
+ *  ended at or before `now` and later than the ladder's start plus one quiet period. The id and the times only, never the
+ *  note: stall notices go out as `operator` and carry measured facts only (slug stall-notice-names-no-note). */
+function stallTimerHeldLine(input: StallInput, f: StallFacts, now: number, whose: string): readonly string[] {
+  const { hold, start, quietMs } = stallTimerHold(input, f, now);
+  if (hold === null || hold.until > now || hold.until <= start + quietMs) return [];
+  return [`Held by ${whose} timer ${stallInt(hold.id)} (due ${stallUtc(hold.dueAt)}) until ${stallUtc(hold.until)}.`];
+}
+
 /** r2 is due: the shipped decision on the coordinator's state (§4.2), which both ladders share. */
 function stallR2Due(input: StallInput, key: number): StallVerdict {
   const p = input.subject.primary;
@@ -1006,7 +1070,7 @@ function stallWaveOneLadder(input: StallInput, f: StallFacts, word: string, live
   if (!isIdleWord(word) || f.quietSince === null) return holdVerdict('unmeasured');
   const since = f.quietSince;
   const r1At = rungDoneAt(input, 'quiet', 1, key);
-  if (r1At === null) return now - since >= stallQuietMs(input) ? { act: 'notify', arm: 'quiet', rung: 1, key, to: 'worker' } : VERDICT_NONE;
+  if (r1At === null) return now - since >= stallQuietMs(input) ? stallR1OrTimerHold(input, f, key, now) : VERDICT_NONE;
   if (rungDoneAt(input, 'quiet', 3, key) !== null) return VERDICT_NONE;
   const r2At = rungDoneAt(input, 'quiet', 2, key);
   if (r2At !== null) return now >= rungDueAt(r2At, liveSince, STALL_OPERATOR_MS) ? r3Verdict(key, 'still-silent') : VERDICT_NONE;
@@ -1173,7 +1237,7 @@ function stallVerdictInner(input: StallInput, now: number): StallVerdict {
   if (stallWatchSays(live.word) === 'doubt') return holdVerdict('unmeasured');
   if (quietStart === null) return stallWaveOneLadder(input, f, live.word, live.since, key, now);
   const r1At = rungDoneAt(input, 'quiet', 1, key);
-  if (r1At === null) return now - quietStart >= stallBackoff(input).quietMs ? { act: 'notify', arm: 'quiet', rung: 1, key, to: 'worker' } : VERDICT_NONE;
+  if (r1At === null) return now - quietStart >= stallBackoff(input).quietMs ? stallR1OrTimerHold(input, f, key, now) : VERDICT_NONE;
   if (rungDoneAt(input, 'quiet', 3, key) !== null) return VERDICT_NONE;
   const r2At = rungDoneAt(input, 'quiet', 2, key);
   if (r2At !== null) return now >= r2At + STALL_OPERATOR_MS ? r3Verdict(key, 'still-silent') : VERDICT_NONE;
@@ -1359,6 +1423,7 @@ export function stallCheckMail(input: StallInput, facts: StallFacts, now: number
     body: [
       `stall-check from the ccrc stall watch (server), ${stallRunLabel(run)}.`,
       `Your main loop has been idle since ${stallUtcSec(since)} (${quiet}). Your last mail on this run: ${stallMailRef(facts.workerLast)}. Newest mail to you on this run: ${stallMailRef(facts.inboundLast)}.`,
+      ...stallTimerHeldLine(input, facts, now, 'your'),
       STALL_WAKE_LINE,
       `Before anything else, send ONE mail on run ${id} to toId 'coordinator', kind status:`,
       `still working — subject beginning "${STALL_REPLY_WORKING_PREFIX}", what you are doing and when you report next;`,
@@ -1393,6 +1458,7 @@ export function stallReportMail(input: StallInput, facts: StallFacts, r1: StallN
     body: [
       `stall from the ccrc stall watch (server), ${stallRunLabel(run)}, state ${stallSafe(run.state)}.`,
       `Worker ${stallSafe(run.sessionId)} (workspace ${workspace}): no mail from the worker ${stallSilence(run, facts, now, stallUtcSec)}. Its last mail on this run: ${stallMailRef(facts.workerLast)}. Newest mail to it on this run: ${stallMailRef(facts.inboundLast)}.`,
+      ...stallTimerHeldLine(input, facts, now, 'the worker\'s'),
       stallR1Line(r1, check, r1Delivery),
       `Ack this, re-measure the run and the worker's last mail, and act once: mail the worker a resume, mail it a subject beginning "${STALL_WAIT_PREFIX}" naming what it waits for, or re-dispatch a dead worker. A stall mail never licenses re-dispatching a live worker.`,
     ].join('\n'),
@@ -1474,7 +1540,8 @@ export function stallPushText(input: StallInput, facts: StallFacts, n: StallNoti
       // D-3582 r2-r3-span-from-the-episode: the silence since the worker's last mail, not the live stamp's.
       return {
         title: `⚠ stalled › ${ws}`,
-        body: `${label}: no mail from worker ${worker} ${stallSilence(run, facts, now, stallUtc)}. ${stallR3Cause(n.because, input, coordinator)}`,
+        body: stallSentences(`${label}: no mail from worker ${worker} ${stallSilence(run, facts, now, stallUtc)}. ${stallR3Cause(n.because, input, coordinator)}`,
+          ...stallTimerHeldLine(input, facts, now, 'the worker\'s')),
       };
     case 'dialog-cap': {
       // `dialog-cap-keyed-on-the-dialog` (D-3799): the dialog's own stretch, read from the live stamp its key comes from.
