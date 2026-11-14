@@ -1,8 +1,9 @@
 # GPT-lane parity eval
 
-**Spec** · 2026-11-13 · Status: Draft, revised after review · Owner: the Codex bridge programme · Linear: none · Related:
+**Spec** · 2026-11-13 · Status: Draft, revised after review; the operator's rulings of 2026-11-14 (G1-G4) folded
+in · Owner: the Codex bridge programme · Linear: none · Related:
 `docs/superpowers/plans/2026-11-13-codex-bridge-gpt-lane-parity.md` (Task 6 is this eval; Task 1 adds the stats
-file's `parity` section; Task 4, the per-request record, is deferred), `docs/superpowers/specs/2026-10-15-codex-bridge-design.md`,
+file's `parity` section; Task 4, the per-request record, landed in #2788), `docs/superpowers/specs/2026-10-15-codex-bridge-design.md`,
 `deploy/history-replay.mjs` (the headless-eval precedent this borrows from, and where this design departs from it, §3.4)
 
 ## In short
@@ -10,6 +11,14 @@ file's `parity` section; Task 4, the per-request record, is deferred), `docs/sup
 - This is the design of a harness that answers one question: does a GPT lane (Claude Code through ccrc's Codex bridge)
   solve coding tasks as well as the native Codex CLI does on the same model, at a similar cost? A later plan builds it.
   Nothing here runs a model.
+- **The operator's rulings of 2026-11-14** (§9, G1-G4):
+  - **Wire first, then a pilot only.** The fixes go on one live lane at a time, and each is kept only if its numbers
+    improve. Then only the small pilot runs, to measure the gap between the arms, and the full eval is decided from it
+    (§5.2).
+  - **The target is equal results:** pass rate, cost and speed. The quality is the model's, and the requests differ by
+    design (D-6420).
+  - **Tool errors are reported, not gated** (D11).
+  - **A lane's effort maps 1:1 to the Claude lanes' levels** (D-8631), so arm B runs at Claude's level.
 - The eval is **paired**: each task is run by every arm in one time slot, three slots per task, one run at a time on
   the eval account. The pass-rate difference is bounded by a class-stratified, task-clustered interval whose method is
   chosen in advance by a simulation check (§1.3, R8). Parity needs that bound to be at least −5 points, plus bounds on
@@ -301,14 +310,15 @@ This section defines the arms, how they are scheduled and how each run is isolat
 ### 3.1 Arms
 
 Every comparison uses one model id on both sides. The proposed primary model is `gpt-6.1-sol` (O5). Its catalogue
-default effort is low, and the lane's class effort is max, which is the largest effort gap in today's lane classes. It
+default effort is low. The lane runs it at the Claude lanes' level for its class (G2, D-8631: `high` for the opus class
+today), which is the largest effort gap in today's lane classes. It
 has `default_service_tier` null, so native Codex does not default it to the Fast tier as it does for `gpt-6-sol` and
 `gpt-6-luna`.
 
 | Arm | Client | Effort | Bridge markers | Status |
 |---|---|---|---|---|
 | A | Native Codex CLI, a pinned release no older than the model's `minimal_client_version`, catalogue defaults, `codex exec --json` | Not set, so the catalogue default (low for gpt-6.1-sol) | n/a | Proposed |
-| B | Claude Code through the eval lane, as a lane session runs today. Primary in Stage 1 | The lane's class effort for the model (max for gpt-6.1-sol), passed explicitly | none | Proposed |
+| B | Claude Code through the eval lane, as a lane session runs. Primary in the pilot and Stage 1 | The Claude lanes' level for the class, mapped 1:1 (G2), passed explicitly | the markers the wire trials kept (G1) | Proposed |
 | B′ | As B. Secondary | The catalogue's `default_reasoning_level`, from Task 2's catalogue field | none | Proposed |
 | C1 | As B′ | As B′ | `bridge-reasoning-all-turns` | Proposed |
 | C2 | As B′ | As B′ | C1 plus `bridge-verbosity` | Proposed |
@@ -531,25 +541,29 @@ heavier ones.
 
 | Stage | Arms and tasks | Runs | Requests | Input tokens | Status |
 |---|---|---|---|---|---|
-| Pilot | A, B and B′ three times each, and C3 once, on the 5 dev tasks. Never counted | 50 | about 2,820 | about 395M | Proposed |
-| 1: parity today | A, B (primary) and B′ on the verdict set | 225 | about 12,700 | about 1.78B | Proposed |
-| 2: markers (exploratory) | C1, C2 and C3 on the dev set's bug-fix and question tasks, three times each | 27 | about 650 | about 32M | Proposed |
-| 3: parity after fixes | C-final (primary) and a fresh A on the verdict set | 150 | about 8,460 | about 1.19B | Proposed |
+| 0: wire trials (G1) | No eval runs. Each marker goes on one live lane at a time, and is kept only if its numbers improve | none | none | none | Ruled 2026-11-14 |
+| Pilot | A and B three times each on the 5 dev tasks, B carrying the markers stage 0 kept. Never counted | 30 | about 1,690 | about 237M | Ruled 2026-11-14 |
+| 1: parity today | A, B (primary) and B′ on the verdict set | 225 | about 12,700 | about 1.78B | Decided from the pilot (G1) |
+| 2: markers (exploratory) | C1, C2 and C3 on the dev set's bug-fix and question tasks, three times each | 27 | about 650 | about 32M | Decided from the pilot (G1) |
+| 3: parity after fixes | C-final (primary) and a fresh A on the verdict set | 150 | about 8,460 | about 1.19B | Decided from the pilot (G1) |
 
 Here is the arithmetic. One pass of the dev set is 60 + 60 + 150 + 12 = 282 requests and 3 + 6 + 30 + 0.5 = 39.5M
-input. The pilot is ten passes. Stage 2 is nine passes over 2 bug fixes and 1 question, 72 requests and 3.5M input
+input. The pilot is six passes. Stage 2 is nine passes over 2 bug fixes and 1 question, 72 requests and 3.5M input
 each.
 
-- **The pilot estimates ψ and ρ.** With three replicates of A, B and B′ on the dev tasks, it reports the estimated
+- **Stage 0 judges each marker on a live lane** (G1), one at a time: its own counts (fallbacks, served tier, replay,
+  cached share, first-output, reasoning and total times, effort per class) before and after, on the same lane. A
+  marker whose numbers do not improve is turned off. Stage 0 spends no eval quota.
+- **The pilot estimates ψ and ρ.** With three replicates of A and B on the dev tasks, it reports the estimated
   discordance rate and intra-task correlation with their uncertainty. Five tasks give a wide range, and the report says
   so. The Stage 1 sign-off then shows the predicted probability of each verdict at the chosen n and margin, simulated
   from those estimates across their range, so the operator chooses O6 with that footing.
 - **The pilot also measures** each run's 5-hour and weekly percent, its wall time, the stats-delta background
   allowance, native's resolved window, whether a long task compacts in print mode, and that lane-c's bridge still
   answers after the native sign-in (O2).
-- **C-final is fixed before Stage 2,** never from verdict tasks: it is C3 (all three markers), less any marker whose
-  400 fallback fired on the dev set in the pilot. Stage 2 is exploratory, on the dev set only, for the wire metrics
-  (removals, verbosity, output tokens). It is reported and changes nothing about C-final.
+- **C-final is the set of markers stage 0 kept** (G1), fixed before any verdict task runs. Stage 2 is exploratory,
+  on the dev set only, for the wire metrics (removals, verbosity, output tokens). It is reported and changes nothing
+  about C-final.
 - **The window** of each stage is computed from the pilot: the measured run time per class times the stage's runs, plus
   serial grading, plus 10% for void re-runs, plus the 5-hour pauses the pilot's measured percent per run predicts. At
   one run at a time, Stage 1's run time alone is about 81 hours (three arms of 27), so the window is days, not hours.
@@ -707,18 +721,21 @@ rules otherwise.
 | O1 | Install the Codex CLI on the fleet box | Install it, or run the native arm elsewhere | A pinned release, verified by checksum, in the eval user's own bin directory, not on the fleet sessions' PATH. Installing software is the operator's act | Open |
 | O2 | The ChatGPT sign-in for native Codex | The eval account, or another account | The eval account, so both arms share one plan and one routing. The operator signs in as the eval user, never a session. The pilot checks that lane-c's bridge still answers after it | Open |
 | O3 | Budget per stage | A weekly-percent ceiling, or a token cap | Both: a ceiling in weekly percent, and a cap of 1.25 × the pilot estimate, with an absolute cap on the pilot itself (§5.3) | Open |
-| O4 | Sign-off | The whole eval at once, or each stage | Each stage, after the previous stage's report | Open |
+| O4 | Sign-off | The whole eval at once, or each stage | Each stage, after the previous stage's report. G1 makes the pilot the only stage signed so far | Ruled 2026-11-14 (G1) |
 | O5 | Models | gpt-6.1-sol alone, or a second model such as gpt-6.1-terra or gpt-6-astra | gpt-6.1-sol first. It has the largest effort gap and no Fast-tier default. A second model doubles the cost | Open |
 | O6 | The P1 margin | −5 points with "inconclusive" likely, −10 points, or more tasks | Decide at the Stage 1 sign-off, from the pilot's ψ and ρ and the predicted verdict odds. A certified −5 needs about 250 to 790 pairs (§1.4) | Open |
-| O7 | A dedicated UNIX user for the eval | A dedicated user, or the live user with conventions | A dedicated user that owns only lane-c, its ccrc install, the Codex home and the run root. Creating it, installing ccrc for it and rostering lane-c are the operator's acts. No live stage starts before R12 passes | Open |
-| D3 | Where lane runs go | A dedicated lane-c on its own ChatGPT account and plan, or a drained existing lane | lane-c on its own account, so markers, stats deltas and quota are the eval's alone, and a leaked eval credential costs only the eval. Adding it is a roster act and a paid plan, both the operator's. The plan tier and its cost go in the operator's open record, not in this public doc. The drained-lane fallback is withdrawn (§3.4) | Open |
+| O7 | A dedicated UNIX user for the eval | A dedicated user, or the live user with conventions | A dedicated user that owns only lane-c, its ccrc install, the Codex home and the run root. Creating it, installing ccrc for it and rostering lane-c are the operator's acts. No live stage starts before R12 passes | Ruled 2026-11-14 for the pilot (G1); creating the user is the operator's act |
+| D3 | Where lane runs go | A dedicated lane-c on its own ChatGPT account and plan, or a drained existing lane | lane-c on its own account, so markers, stats deltas and quota are the eval's alone, and a leaked eval credential costs only the eval. Adding it is a roster act and a paid plan, both the operator's. The plan tier and its cost go in the operator's open record, not in this public doc. The drained-lane fallback is withdrawn (§3.4) | Ruled 2026-11-14 for the pilot (G1); adding the lane is the operator's act |
 | D5 | Bug-fix and feature prompt | A visible failing test, or a hand-written symptom | The visible test, by a generated template, with the leak scan over the prompt. The dry run's paraphrased prompts do not meet it and are regenerated | Proposed |
-| D6 | The base for C arms | B (lane effort) or B′ (native effort) | B′, so a marker's effect is measured at native's effort | Proposed |
-| D7 | Task 4 before Stages 2 and 3 | Wait for it, or use serial stats deltas | Wait. Effort, served model and removals per run are what the C arms test | Proposed |
+| D6 | The base for C arms | B (lane effort) or B′ (native effort) | Superseded: markers are judged on a live lane in stage 0 (G1), at the Claude lanes' effort (G2) | Superseded |
+| D7 | Task 4 before Stages 2 and 3 | Wait for it, or use serial stats deltas | Met: Task 4 landed (#2788, v0.0.1190) | Met |
 | D8 | Who starts a stage | The operator, or the bridge's coordinator after sign-off | The operator, as a detached unit of the eval user, outside any pane. The live modes refuse inside a session | Proposed |
-| D9 | The pilot and Stage 1 before Task 4 | Run them on serial stats deltas, or wait for Task 4 as the plan's order says | Run them on serial stats deltas at one run at a time, with the idle flush (D10) and the two-sided check. This departs from the plan's order (Task 6 after Task 4), so it is the operator's | Open |
+| D9 | The pilot and Stage 1 before Task 4 | Run them on serial stats deltas, or wait for Task 4 as the plan's order says | Run them on serial stats deltas at one run at a time, with the idle flush (D10) and the two-sided check. Moot: Task 4 landed (#2788), so the per-request record is there | Moot |
 | D10 | The stats file's idle flush | A timer in Task 1, or a harness that waits for the next request | Task 1 writes the stats file once the bridge is idle for `FLUSH_S` after a response, so a run's figures never land in the next run's delta | Proposed |
-| D11 | Tool errors in the bar | Gate "no higher", as the study asked, or report only | Report only. The tool sets differ by design (D-6420), so the rate measures the tool design. This amends the study's bar | Open |
+| D11 | Tool errors in the bar | Gate "no higher", as the study asked, or report only | Report only. The tool sets differ by design (D-6420), so the rate measures the tool design. This amends the study's bar | Ruled 2026-11-14 (G4) |
+| G1 | The order of the eval | The full staged eval, or the wire first and then a pilot only | The wire first: each fix on one live lane at a time, kept only if its numbers improve. Then the pilot, on the eval user and lane-c. The full eval is decided from the pilot | Ruled 2026-11-14 |
+| G2 | The lane's effort | Claude Code's level, or the catalogue's default | Claude Code's level, mapped 1:1 to the Claude lanes' levels (D-8631) | Ruled 2026-11-14 |
+| G3 | The parity target | Equal results, or equal requests | Equal results: pass rate, cost and speed. The quality is the model's, and the requests differ by design (D-6420) | Ruled 2026-11-14 |
 
 ## 10. Out of scope
 
@@ -737,19 +754,21 @@ rules otherwise.
 - The plan's order: Task 6 waits for Tasks 4 and 5, and its live run waits for the operator's sign-off. D9 asks to
   depart from it for the pilot and Stage 1.
 - Prompt and tool parity stays out of scope (D-6420).
+- The operator's rulings of 2026-11-14: wire first, then the pilot only (G1); the lane's effort mapped 1:1 to the
+  Claude lanes' (G2); equal results as the target (G3); tool errors reported, not gated (G4, D11). The pilot runs on
+  the eval user and lane-c (O7, D3).
 
 ### Waiting on you
 
-- O7 and D3: the dedicated eval user, and lane-c on its own account and plan. No live stage can start without them.
-- D9: whether the pilot and Stage 1 may run before Task 4, on serial stats deltas.
-- D11: whether tool errors leave the gated bar.
-- O1 to O6: the Codex install, the sign-in account, the budget, sign-off per stage, the models, and the P1 margin,
-  which is best decided at the Stage 1 sign-off from the pilot's figures.
+- The acts for the pilot: creating the eval user and lane-c (O7, D3), installing the Codex CLI (O1) and the sign-in
+  (O2). No live stage can start without them.
+- O3, O5 and O6: the budget, the models, and the P1 margin, best decided from the pilot's figures.
 
 ### Later
 
 - The plan that builds the harness, re-mining the task pools under §2.2, and then the dry run that completes §8.
-- Task 1's idle flush (D10), and Task 4's per-request record, which Stages 2 and 3 wait for (D7).
+- Stage 0, the wire trials on a live lane (G1): `bridge-reasoning-all-turns` first (on lane-b since 2026-11-14), then
+  Fast mode (D-8632), then effort parity (D-8631).
 - Arms for the deferred fixes (§10), each once its marker exists.
 
 ---
