@@ -7,14 +7,22 @@ is Tasks 5 to 8, plus the carries the brief named (review 1945 F2, review 1970 N
 **Why a new file.** The brief names `departures.md`, PR A's note. `ledger-guard` fails a pull request that modifies an
 existing file under `docs/superpowers/plans/`, so PR B's departures are this new file beside it.
 
-**Growth** (the growth check, armed, against the merge base, after fix round 1): `ccd/ccd` +6,
-`server/src/coord/routes.ts` +25, `server/src/watch.ts` +23, `server/src/coord/store.ts` +22, `ccd/ccrc-doctor-checks` +40
-(limit 40 each). No waiver.
+**Growth** (the growth check, armed, against the merge base, after fix round 2 and its merge of `main` at 44f68ea36):
+`ccd/ccd` +6, `server/src/coord/routes.ts` +25, `server/src/watch.ts` +23, `server/src/coord/store.ts` +22,
+`ccd/ccrc-doctor-checks` +40 (limit 40 each). No waiver. The doctor file is at its limit: a further line there needs one
+removed.
 
 **Fix round 1 (review 2024, the coordinator's rulings).** Each finding's change is named in the slug it touched below; the
 slugs this round added or replaced are `compact-owned-while-continuity-live` (F3), `undecided-role-is-skipped` (F2 a, b,
 replacing `intent-unmeasured-reads-plain`), `compaction-cleared-on-a-role-without-it` (F2 c), `failed-writes-do-not-count`
 (F12), `doctor-second-memory-walker` (F5, F6) and `no-overlord-profile-before-w1` (F13 c).
+
+**Fix round 2 (review 2031, the coordinator's rulings).** F1 tightens the steer-marker grant
+(`steered-sessions-skipped-whole`); F2 is the migration move (`migration-slot-70`, which replaces `migration-slot-69`);
+F3 widens what the doctor reads as unmeasured (`doctor-second-memory-walker`); F4 corrects the band's comment
+(`compact-window-carries-the-buffer`). Nits taken: `cmd_route`'s header says an empty compaction value clears it, the
+scratch census names `_dr_mem_is_scratch`, and the band is stated as the 10-point profile's. Nits recorded, not changed:
+under `slight-nits-recorded`.
 
 ## Measured for the brief
 
@@ -32,8 +40,12 @@ replacing `intent-unmeasured-reads-plain`), `compaction-cleared-on-a-role-withou
   - **The band (review 2024 F4).** The variable is clamped to the range it takes (100,000 to 1,000,000), so on a window
     under 85,000 tokens Claude Code would fire before the compact point (at 64,000 it fires at about 30,500, under the
     32,000 cap), and over 6,900,000 the upper clamp fires it early too. `compactThresholdFor` now answers `null` wherever
-    the firing point, the variable capped at the window less 34,000, falls before the compact point: exactly outside 85,000
-    to 6,900,000 tokens. Real windows (200k and 1M today) are well inside it.
+    the firing point, the variable capped at the window less 34,000, falls before the compact point: for the shipped
+    10-point profile (`LONG_LIVED_COMPACTION`), exactly outside 85,000 to 6,900,000 tokens; a profile with another step has
+    its own band. Real windows (200k and 1M today) are well inside it. For a role with a compaction column, `null` means
+    the lane writes no compaction field and leaves the route's earlier ones (review 2031 F4; a lane case covers 50,000 and
+    10,000,000): the earlier pair came from the same function in band, so it still honours C39, where a clamped write
+    would fire early.
   - **The oracle** compares where Claude Code fires (the variable, capped at the window, minus 33,500), not the variable:
     for every window from 1,000 to 12,000,000 tokens, the answer is `null` exactly outside the band, and inside it the
     firing point is above the hard cap and at or after the compact point. Mutants: the buffer dropped (T9), the buffer at
@@ -77,6 +89,13 @@ replacing `intent-unmeasured-reads-plain`), `compaction-cleared-on-a-role-withou
     the server across the link, and it answers one marker's existence, size and time; `read`, `readdir` and `lstat` admit
     none of it and the directory stays unlistable. A live link at a marker is refused (the server reads it unreadable and
     skips the session); a dangling one answers absent, as the hook's test does.
+  - **Tightened (review 2031 F1).** `~/.ccrc` may be a link, followed as the sibling grants follow it; under it,
+    `history` and `steer-on` must each be a real directory or absent (`lstat`): a link or a file at either level is
+    refused, so the grant cannot be pointed at another directory. The expected directory is built from the canonical
+    `~/.ccrc` and the literal level names, so a linked level also fails the parent check; the `lstat` is what refuses a
+    file there (each case has a test, and each line's mutant is killed). A hard link at a marker's name cannot be
+    detected (same user, who could read its target anyway); the docstring says so. `agent/CLAUDE.md` names the grant
+    beside D-8382's.
   - **Measured end to end.** `continuity-profile-watcher.test.ts` drives the watcher's real `sweepLaunchProfile`: the path
     asked of the fleet io, a marker on disk (skipped), an unreadable answer and a throw (skipped as unread), and absence
     (counted). Replacing the watcher's read with `async () => 'absent'` turns all three cases red (measured). The agent's
@@ -164,23 +183,40 @@ replacing `intent-unmeasured-reads-plain`), `compaction-cleared-on-a-role-withou
   directory or memory directory it cannot list, or a walk past the transcript walk's 20 s deadline, is WARN unmeasured,
   never PASS (an unreadable directory once read as "none"). Removing the memory directory's listable test turns its new
   case red (measured).
+  - **Review 2031 F3.** A config directory it cannot search is unmeasured (it once read as "no `projects/`"), and so is a
+    `memory` LINK it cannot follow (normally a link into `~/.ccrc/memory/<slug>`; a target behind an unsearchable
+    directory once read as "no directory"). A link to nothing or to a file is skipped, told apart by `cd`'s own reason
+    under `LC_ALL=C`. A test covers the link shapes and the unsearchable config dir; it is red on the round-1 check.
+    `transcript_work` keeps the config-directory blind spot; that is its own check's, not this PR's.
 - **review-1970-N1-N3, done.** N1: `_profile_spawn_compose` journals `_route_unread_note`'s line for a `.profile` present
   but unreadable (a link, mode 000) and `_route_reject_note`'s for a word that is not a row or bytes of no word's shape;
   `_route_get` and its E0c closure are untouched; two `contexts-edges.tsv` rows. N2: `routeParseWhy` in `shared/api.ts` is
   the one spelling of the refusal suffix, used by `routeParseDetail` and `parseRouteRequest`. N3: the docstring names the
   lane-only refusal.
-- **migration-slot-69.** Measured on `origin/main` at 68 before this PR; re-measure before merge. Card PR B (#2793) takes
-  slot 69 too (review 2024 F8). Whichever lands second merges `main` once, moves its entry to 70, adds a test that its
-  entry comes after the other's DDL, and moves every site: `coord-db.test.ts`'s three 69s, `run-close-switch.test.ts`'s
-  `DROP TABLE` list (both PRs' tables) and its count word, `schema.ts`'s `MIGRATIONS[68]` notes, and the route counts
-  (`auth-gate.test.ts`, `server/src/auth/gate.ts`'s docstring).
+- **migration-slot-70 (review 2031 F2; replaces `migration-slot-69`).** Card PR B (#2793) merged first with migration 69 (the
+  card door's tables), so this PR merged `main` once (at 44f68ea36) and its entry is 70, after card B's. Moved, every site:
+  `server/src/coord/schema.ts`'s banner `── 70: user_version 69 -> 70` (the banner `coord-db.test.ts` holds as
+  `[i+1, i, i+1]`, so a stale one is red), its notes (`user_version 70`, "must print 69"); `coord-db.test.ts`'s version
+  pins (two `COORD_SCHEMA_VERSION` and `MIGRATIONS.length`, now 70) and its two `MIGRATIONS[69]` comment lines;
+  `run-close-switch.test.ts`'s rewind (its comment names 70, 69 and 68, the `DROP TABLE` list carries both PRs' tables,
+  and the count reads seventeen); the route counts (`server/src/auth/gate.ts`'s docstring 226, `auth-gate.test.ts`'s
+  `ROUTES` 229, its HTTP-route comments 226, exempt 85). A new test holds the order: card B's entry is 69 and this one
+  70 (swapping them turns it and the banner test red, measured). `declaredIntent.ts` merged as one file, byte-identical.
+- **slight-nits-recorded (review 2031).** Not changed: `--set compact= --apply` from a hand shell writes `compact=` into
+  `routeapplied` (reads back empty, harmless); once `continuity` is live, clearing `compact` on a session whose only
+  routing field it was makes `_route_any` false, so that session's next operator spawn seeds the default routing row, as
+  for any never-routed session; README's route section does not yet say an empty value clears (`cmd_route`'s header
+  does); the incarnation fold is written twice, here and in the card's gatherer (a merge candidate now both are on
+  `main`); the Settings card reads the lane's state once, at mount.
 
 ## Shared files (peer consent, second to land merges `main` once and keeps both)
 
 Card PR B (run 2018) holds the shared registries this PR adds rows to: `server/src/coord/schema.ts`, `store.ts`,
 `server.ts`, `auth/gate.ts`, `CLAUDE.md`, the census suites, `rings/fastify-l4.data.ts` and `mutation-floors.json`. Asked
 by mail; each edit is a separate line. Card PR B adds its own rows to `mutation-floors.test.ts` and
-`coord/ports.ts`, held here, with this PR's consent.
+`coord/ports.ts`, held here, with this PR's consent. Card PR B has since merged (#2793). In fix round 2 the notes piece (run 2032) holds `schema.ts`, `auth/gate.ts`,
+`auth-gate.test.ts`, `coord-db.test.ts`, `run-close-switch.test.ts` and `README.md`; the migration move's lines there were
+named to it by mail (19426) before the push, and it adds its own rows to `mutation-floors.test.ts` with this PR's leave.
 
 `server/test/sim/mutation-floors.json` carried the `compactThresholdFor` key twice (a merge's union; JSON keeps the last,
 which was equal); fix round 1 removes one, with card B's leave (review 2024 F13 d).
