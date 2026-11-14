@@ -484,3 +484,99 @@ describe('the landed reader on a clock that advances with every call', () => {
     expect([...r.memory.values()].map((m) => m.lastReadAt)).toEqual([t0]);
   });
 });
+
+// Landing order wave 5i (Task 1): the seven decisions of the pass, pinned against the lane before they move to L1
+// (`landed.ts#landedProjectsStep` and its siblings). Each row's expectation is today's behaviour, unchanged by the move.
+describe('the landed reader: the decisions the pass makes between its calls', () => {
+  const Q = 'project-b';
+  const entryId = (c: CoordStore, pr: number): number => (c.db.prepare('SELECT id FROM landing_entries WHERE pr = ?').get(pr) as { id: number }).id;
+  const memOf = (pinnedAt: number): LandedMemory => ({ pinnedAt, lastReadAt: 1, nextAt: 2 * PR_SWEEP_MS, step: 2 * PR_SWEEP_MS, missingStreak: 0 });
+
+  it('a refused project list stops the pass with one warning, reads nothing and keeps the memory', async () => {
+    const r = await rig();
+    const id = pinned(r.coord, 3001);
+    r.memory.set(id, memOf(1));
+    vi.spyOn(r.coord, 'landingReadProjects').mockReturnValue({ ok: false, error: 'landing-db-unavailable', recovery: 'restart' });
+    expect(await r.pass()).toMatchObject({ read: 0, stopped: 'store' });
+    expect(r.calls).toEqual([]);
+    expect(r.warns).toEqual(['ccrc-server: landed reader: stopped (landing-db-unavailable); no entry is read until it clears']);
+    expect(r.memory.has(id)).toBe(true);
+  });
+
+  it('an unreadable projection skips its project and the pass retains all memory; a complete pass prunes what is gone', async () => {
+    const r = await rig();
+    const idP = pinned(r.coord, 3101, P);
+    const idQ = pinned(r.coord, 3102, Q);
+    const pinnedAtP = (r.coord.db.prepare('SELECT pinnedAt FROM landing_entries WHERE pr = 3101').get() as { pinnedAt: number }).pinnedAt;
+    const stale = 987654;
+    r.memory.set(idP, memOf(pinnedAtP));
+    r.memory.set(stale, memOf(1));
+    const realRead = r.coord.readLanding.bind(r.coord);
+    const spy = vi.spyOn(r.coord, 'readLanding').mockImplementation((project: string) =>
+      project === P ? { ok: false, error: 'landing-projection-unreadable', recovery: 'restart' } : realRead(project));
+    expect(await r.pass()).toMatchObject({ read: 1, stopped: null });
+    expect(r.calls).toEqual([3102]);
+    expect(r.memory.has(idP), 'an incomplete inventory retains memory').toBe(true);
+    expect(r.memory.has(stale), 'an incomplete inventory retains memory').toBe(true);
+    expect(r.memory.has(idQ)).toBe(true);
+    spy.mockRestore();
+    r.clock.t += PR_SWEEP_MS;
+    await r.pass();
+    expect(r.memory.has(stale), 'a complete pass prunes memory of an entry no longer in the line').toBe(false);
+    expect(r.memory.has(idP)).toBe(true);
+  });
+
+  it('a refused mark with another word stops the pass with a stopped warning', async () => {
+    const r = await rig();
+    [3201, 3202].forEach((pr) => pinned(r.coord, pr));
+    r.answer.fn = (pr) => ran(mergedLine(pr));
+    vi.spyOn(r.coord, 'advanceLanding').mockImplementation((() => ({ ok: false, error: 'landing-journal-append', recovery: 'restart' })) as never);
+    expect(await r.pass()).toMatchObject({ read: 1, landed: 0, stopped: 'store' });
+    expect(r.calls).toEqual([3201]);
+    expect(r.warns).toEqual(['ccrc-server: landed reader: stopped (landing-journal-append); no entry is read until it clears']);
+  });
+
+  it('a mark that answers landing-db-commit warns as a fence and stops the pass', async () => {
+    const r = await rig();
+    pinned(r.coord, 3301);
+    r.answer.fn = (pr) => ran(mergedLine(pr));
+    vi.spyOn(r.coord, 'advanceLanding').mockImplementation((() => ({ ok: false, error: 'landing-db-commit', recovery: 'restart' })) as never);
+    expect(await r.pass()).toMatchObject({ stopped: 'store' });
+    expect(r.warns).toEqual(['ccrc-server: landed reader: the mark of project-a #3301 answered landing-db-commit; the landing line is fenced until the server restarts']);
+  });
+
+  it('a call that did not run counts no read, and leaves the entry backed off at the pass start', async () => {
+    const r = await rig();
+    const id = pinned(r.coord, 3401);
+    const t0 = r.clock.t;
+    r.answer.fn = () => ({ ran: false, ok: false, reason: 'transport', detail: 'agent down', stdout: '', ...ZERO });
+    const result = await r.pass();
+    expect(result).toMatchObject({ read: 0, stopped: 'link' });
+    expect(r.memory.get(id)).toEqual({ pinnedAt: expect.any(Number), lastReadAt: t0, nextAt: t0 + 2 * PR_SWEEP_MS, step: 2 * PR_SWEEP_MS, missingStreak: 0 });
+  });
+
+  it('a call that ran and failed counts a read, backs the entry off and goes on to the next entry', async () => {
+    const r = await rig();
+    const ids = [3501, 3502, 3503].map((pr) => entryId(r.coord, (pinned(r.coord, pr), pr)));
+    const t0 = r.clock.t;
+    r.answer.fn = () => ran('boom', false);
+    expect(await r.pass()).toMatchObject({ read: 3, landed: 0, closed: 0, stopped: null });
+    expect(r.calls).toEqual([3501, 3502, 3503]);
+    for (const id of ids) expect(r.memory.get(id)).toMatchObject({ lastReadAt: t0, nextAt: t0 + 2 * PR_SWEEP_MS, step: 2 * PR_SWEEP_MS, missingStreak: 0 });
+    expect(r.warns).toEqual([]);
+  });
+
+  it('a failed merged record warns, and the pass goes on after the committed mark', async () => {
+    const r = await rig();
+    [3601, 3602].forEach((pr) => pinned(r.coord, pr));
+    r.answer.fn = (pr) => ran(mergedLine(pr));
+    r.deps.notice = () => { throw new Error('feed down'); };
+    expect(await r.pass()).toMatchObject({ read: 2, landed: 2, stopped: null });
+    expect(stateOf(r.coord, 3601)).toBe('landed');
+    expect(stateOf(r.coord, 3602)).toBe('landed');
+    expect(r.warns).toEqual([
+      'ccrc-server: landed reader: the merged record of project-a #3601 failed (feed down)',
+      'ccrc-server: landed reader: the merged record of project-a #3602 failed (feed down)',
+    ]);
+  });
+});
