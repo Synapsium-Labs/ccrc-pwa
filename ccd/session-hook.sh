@@ -6449,8 +6449,22 @@ _hook_history_steer_read() {
   fi
   return 0
 }
+# THE ROLE'S COMPACTION TEXT, A SECTION OF THE ONE PRINT (Overlord W1a compaction, spec §3.3.9 C51, §3.3.10 C53): the
+# launch-profile projection's `compactText` for the route's `profile`, checked by ccd's COMPACT_TEXT_JQ (parity-pinned by
+# session-hook-steer.test.ts), only when the route carries a valid `compactwindow` too (ruling R8). -> HR_TEXT, or "", and
+# the print is then today's, byte for byte. It prints BEFORE the steer text, so the steer's "At the very END" stays the
+# print's last instruction. Legitimately a second reader of the projection: another process, which cannot call ccd's.
+COMPACT_TEXT_JQ='.[$r].compactText | if type == "string" and test("\\A[ -~]{1,600}\\z") and (test("[\\x22\\x27\\x24\\x5c\\x60]") | not) then . else error("not one typeable line") end'
+_hook_role_compact_text() {   # -> HR_TEXT
+  local p="" w="" f="${BASH_SOURCE[0]%/*}/lib/launch-profiles.json"
+  HR_TEXT=""; [[ -f "$f" ]] || f="$HOME/.cc-sessions/lib/launch-profiles.json"
+  [[ -f "$REG/$id.profile" && ! -L "$REG/$id.profile" && -f "$REG/$id.compactwindow" && ! -L "$REG/$id.compactwindow" ]] || return 0
+  { read -r -n 17 p < "$REG/$id.profile"; read -r -n 8 w < "$REG/$id.compactwindow"; } 2>/dev/null
+  [[ "$p" =~ ^[a-z]{1,16}$ && "$w" =~ ^[1-9][0-9]{5,6}$ ]] && (( w >= 100000 && w <= 1000000 )) || return 0
+  HR_TEXT=$(jq -r --arg r "$p" "$COMPACT_TEXT_JQ" "$f" 2>/dev/null) || HR_TEXT=""
+}
 _hook_history_pre() {   # PreCompact: the steer print, then its receipt; silent on every refusal; 0 on every path
-  local uuid_re='^[0123456789abcdef]{8}-[0123456789abcdef]{4}-[0123456789abcdef]{4}-[0123456789abcdef]{4}-[0123456789abcdef]{12}$' rc=0 json="" g="" c="" cs="" cf="" ts=""
+  local uuid_re='^[0123456789abcdef]{8}-[0123456789abcdef]{4}-[0123456789abcdef]{4}-[0123456789abcdef]{4}-[0123456789abcdef]{12}$' rc=0 json="" g="" c="" cs="" cf="" ts="" nl=$'\n'
   [[ "$event" == PreCompact && -z "$paid" ]] || return 0
   [[ -e "$HOME/.ccrc/history-off" || -e "$HOME/.ccrc/history-steer-off" ]] && return 0
   _hook_history_steer_recall_off && return 0
@@ -6460,8 +6474,9 @@ _hook_history_pre() {   # PreCompact: the steer print, then its receipt; silent 
   [[ -n "${CS_SCOPE+x}" ]] || _hook_history_scope_verdict || true
   [[ "${CS_SCOPE-}" == main ]] || return 0
   _hook_history_steer_read || return 0
+  _hook_role_compact_text
   trap '' PIPE
-  { printf '\n%s\n' "$HS_TEXT"; } 2>/dev/null; rc=$?
+  { printf '%s\n%s\n' "${HR_TEXT:+${nl}ccrc-role-compaction: ${HR_TEXT}${nl}}" "$HS_TEXT"; } 2>/dev/null; rc=$?
   trap - PIPE
   (( rc == 0 )) || return 0
   json='{"v":1,"ev":"steer"'
