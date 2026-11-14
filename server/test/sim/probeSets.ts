@@ -25,7 +25,7 @@ const read = <T>(value: T): Fact<T> => ({ kind: 'read', value });
 const unmeasured = (what: string): Fact<never> => ({ kind: 'unmeasured', what });
 const item = (id: number, over: Partial<CardItem> = {}): CardItem => ({
   id, programme: 'prog-a', kind: 'decide', state: 'open', neededBy: 'soon', at: AT - 30 * MIN, text: `item ${id}`,
-  everTicked: false, ...over,
+  everTicked: false, held: false, ...over,
 });
 
 /** A coordinator that holds nothing, every read answered. */
@@ -33,14 +33,14 @@ function empty(over: Partial<CardFacts> = {}): CardFacts {
   return {
     sessionId: 'lane-a-project-a', role: 'coordinator', roleWhy: 'it claims a run', at: AT,
     runs: read([]), ledger: read([]), claims: read([]), intent: read(true), itemsRaised: read([]),
-    mailOutstanding: read([]), notes: read([]), checkpoint: read(null),
+    mailOutstanding: read([]), mailMore: false, notes: read([]), checkpoint: read(null),
     history: read({ verb: 'ccrc history describe', node: null }), ...over,
   };
 }
 
 const run = (id: number, programme: string, state: string, planPath: string | null = null) =>
   ({ id, programme, wave: 1, waveOf: 3, state, planPath, kind: 'work' });
-const mail = (deliveryId: number, at: number) => ({ deliveryId, fromId: 'lane-a-project-a', at, subject: `m${deliveryId}` });
+const mail = (deliveryId: number, at: number) => ({ deliveryId, fromId: 'lane-a-project-a', at, subject: `m${deliveryId}`, parked: false });
 
 const NOTES: readonly CardNote[] = [
   { id: 61, at: AT - 40 * MIN, text: 'merge wave 2, then open wave 3' },

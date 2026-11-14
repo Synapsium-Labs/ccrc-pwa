@@ -5,11 +5,12 @@ import { afterEach, describe, expect, it } from 'vitest';
 import path from 'node:path';
 import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
-import { CARD_HISTORY, gatherCardFacts, type CardFactsDeps } from '../src/continuity/cardFacts.js';
-import { cardRoleOf } from '../src/continuity/card.js';
+import { CARD_HISTORY, gatherCardFacts, intentOfCheckpoint, type CardFactsDeps } from '../src/continuity/cardFacts.js';
+import { CARD_REGISTRY_UNREAD, cardRoleOf } from '../src/continuity/card.js';
+import { delegationIntentKey } from '../src/coord/delegation-model.js';
 import { roleFactsOf } from '../src/roleOf.js';
 import type { ChildMark, ChildReclaimGeneration } from '../../shared/api.js';
-import type { CardFacts, Fact } from '../../shared/continuity-card.js';
+import { CARD_MAIL_MAX, type CardFacts, type Fact } from '../../shared/continuity-card.js';
 import { mkTmp, removeTmpFixtures } from './tmpHelpers.js';
 
 afterEach(removeTmpFixtures);
@@ -21,19 +22,14 @@ const INC = '0b1c2d3e-4f50-4617-8899-aabbccddeeff';
 
 const store = (): CoordStore => new CoordStore(openCoordDb(path.join(mkTmp('ccrc-card-facts-'), '.ccrc', 'coord.db')));
 const deps = (coord: CoordStore, over: Partial<CardFactsDeps> = {}): CardFactsDeps => ({
-  coord, childMark: async (): Promise<ChildMark | null> => ({ kind: 'none' }),
-  incarnation: async (): Promise<ChildReclaimGeneration> => ({ kind: 'value', v: INC }), ...over,
+  coord, childMark: async (): Promise<ChildMark | typeof CARD_REGISTRY_UNREAD> => ({ kind: 'none' }),
+  incarnation: async (): Promise<ChildReclaimGeneration> => ({ kind: 'value', v: INC }), declaredIntent: () => false, ...over,
 });
 const value = <T>(f: Fact<T>): T => { if (f.kind !== 'read') throw new Error(`unmeasured: ${f.what}`); return f.value; };
 const openRun = (c: CoordStore, program: string, claimedBy: string, wave = 1): number =>
   (c.openRun({ program, title: program.toUpperCase(), project: 'project-a', wave, waveOf: 3, claimedBy }) as { id: number }).id;
 const raise = (c: CoordStore, program: string, raisedBy: string, title: string, at = NOW - 5_000): number =>
   c.raiseItem({ program, runId: null, raisedBy, kind: 'do', title, why: 'w', how: [], options: null, neededBy: 'soon', soonLabel: null, secretSlot: null }, at);
-const declareIntent = (c: CoordStore, sessionId: string, incarnation: string, at: number | null): void => {
-  c.db.prepare('INSERT INTO delegation_sessions (sessionId, parentIncarnation, explicitIntentAt, effective, effectiveBasisJson, '
-    + 'claudeSessionIdsJson, firstObservedAt, lastObservedAt) VALUES (?, ?, ?, 0, ?, ?, ?, ?)')
-    .run(sessionId, incarnation, at, '[]', '[]', NOW - 10, NOW - 10);
-};
 const gather = (c: CoordStore, over: Partial<CardFactsDeps> = {}): Promise<{ facts: CardFacts; renderer: string }> =>
   gatherCardFacts(deps(c, over), ME, NOW);
 
@@ -64,7 +60,8 @@ describe('gatherCardFacts: each fact is read from its rows', () => {
     expect(ledger[0]!.openItems.map((i) => i.id)).toEqual([mine, theirs]);
     expect(value(f.claims)).toEqual([{ id: (claim as { claims: { id: number }[] }).claims[0]!.id, paths: ['server/src/a.ts'], runId: r1 }]);
     expect(value(f.itemsRaised).map((i) => [i.id, i.text, i.at, i.everTicked])).toEqual([[mine, 'pick a name', NOW - 5_000, false]]);
-    expect(value(f.mailOutstanding)).toEqual([{ deliveryId: d, fromId: 'coordinator', at: expect.any(Number), subject: 'wave-brief' }]);
+    expect(value(f.mailOutstanding)).toEqual([{ deliveryId: d, fromId: 'coordinator', at: expect.any(Number), subject: 'wave-brief', parked: false }]);
+    expect(f.mailMore).toBe(false);
     expect(value(f.intent)).toBe(false);
     expect(value(f.notes)).toEqual([]);
     expect(value(f.checkpoint)).toBeNull();
@@ -91,8 +88,7 @@ describe('gatherCardFacts: each fact is read from its rows', () => {
     const old = openRun(c, 'prog-old', ME);
     const run = openRun(c, 'prog-a', ME);
     c.db.prepare("UPDATE runs SET state = 'done' WHERE id IN (?, ?)").run(old, run);
-    declareIntent(c, ME, INC, NOW - 100);
-    const { facts: f, renderer } = await gather(c);
+    const { facts: f, renderer } = await gather(c, { declaredIntent: () => true });
     expect(value(f.runs)).toEqual([]);
     expect(value(f.intent)).toBe(true);
     expect(f.role).toBe('coordinator');
@@ -101,13 +97,26 @@ describe('gatherCardFacts: each fact is read from its rows', () => {
     expect(value(f.ledger).map((p) => p.slug)).toEqual(['prog-a']);
   });
 
-  it('intent is read on the current incarnation only; a row with no explicitIntentAt is not intent', async () => {
+  it('intent is the delegation checkpoint\'s, on the current incarnation only (review 2023 F4)', async () => {
     const c = store();
-    declareIntent(c, ME, 'another-incarnation', NOW - 100);
-    expect(value((await gather(c)).facts.intent)).toBe(false);
-    declareIntent(c, ME, INC, null);
-    expect(value((await gather(c)).facts.intent)).toBe(false);
-    expect(value((await gather(c, { incarnation: async () => ({ kind: 'absent' }) })).facts.intent)).toBe(false);
+    const cp = (...pairs: [string, string][]) => ({ coordinatorIntentByParent: Object.fromEntries(pairs.map(([id, inc]) => [delegationIntentKey(id, inc), '2026-11-14T00:00:00.000Z'])) });
+    const asked: [string, string][] = [];
+    const on = (checkpoint: ReturnType<typeof cp> | null) => ({
+      declaredIntent: (id: string, inc: string) => { asked.push([id, inc]); return intentOfCheckpoint(checkpoint, id, inc); } });
+    expect(value((await gather(c, on(cp([ME, 'another-incarnation'], [OTHER, INC])))).facts.intent)).toBe(false);
+    expect(value((await gather(c, on(cp([ME, INC])))).facts.intent)).toBe(true);
+    expect(asked).toEqual([[ME, INC], [ME, INC]]);
+    // No `.generation` file: the intent door refuses to declare without one, so it reads as no intent, and nothing is asked.
+    expect(value((await gather(c, { ...on(cp([ME, INC])), incarnation: async () => ({ kind: 'absent' }) })).facts.intent)).toBe(false);
+    expect(asked).toHaveLength(2);
+  });
+
+  it('a checkpoint that is not ready is unmeasured, never "no intent", and a throw is unmeasured too (review 2023 F4)', async () => {
+    const notReady = (await gather(store(), { declaredIntent: (id, inc) => intentOfCheckpoint(null, id, inc) })).facts;
+    expect(notReady.intent).toEqual({ kind: 'unmeasured', what: 'declared coordinator intent (the delegation checkpoint is not ready)' });
+    expect(notReady.role).toBe('undecided');
+    const threw = (await gather(store(), { declaredIntent: () => { throw new Error('x'); } })).facts;
+    expect(threw.intent).toEqual({ kind: 'unmeasured', what: 'declared coordinator intent' });
   });
 
   it('a plain session with nothing reads every fact, each empty, and its role is plain', async () => {
@@ -129,6 +138,53 @@ describe('gatherCardFacts: each fact is read from its rows', () => {
   });
 });
 
+describe('gatherCardFacts: held items and the mail list (review 2023 F14, F15)', () => {
+  it('a held item shows, marked held, on the card of the coordinator whose hold it is, and on no other card', async () => {
+    const c = store();
+    const mine = openRun(c, 'prog-a', ME);
+    const theirs = openRun(c, 'prog-b', OTHER);
+    const held = (program: string, runId: number, raisedBy: string, title: string): number => c.raiseItem({ program, runId, raisedBy,
+      kind: 'do', title, why: 'w', how: [], options: null, neededBy: 'soon', soonLabel: null, secretSlot: null, heldUntil: NOW + 60_000 }, NOW - 1_000);
+    const forMe = held('prog-a', mine, 'lane-c-project-a', 'end my run');
+    const forThem = held('prog-b', theirs, ME, 'end their run');
+    const shown = raise(c, 'prog-a', 'lane-c-project-a', 'shown to all');
+    const items = (f: CardFacts) => value(f.ledger).flatMap((p) => p.openItems).map((i) => [i.id, i.held]);
+    expect(items((await gather(c)).facts)).toEqual([[shown, false], [forMe, true]]);
+    // The session that raised a held item does not see it among the items it raised, and the other coordinator sees its own.
+    expect(value((await gather(c)).facts.itemsRaised)).toEqual([]);
+    const other = (await gatherCardFacts(deps(c), OTHER, NOW)).facts;
+    expect(items(other)).toEqual([[forThem, true]]);
+    // Once the hold passes, the operator is shown it, so it is an ordinary item on every card of the programme.
+    const later = (await gatherCardFacts(deps(c), ME, NOW + 60_000)).facts;
+    expect(items(later)).toEqual([[shown, false], [forMe, false], [forThem, false]]);
+  });
+
+  it('more than CARD_MAIL_MAX outstanding deliveries: the newest listed, and mailMore says more exist', async () => {
+    const c = store();
+    let sent = 0;
+    const send = (n: number) => { for (let i = 0; i < n; i += 1) {
+      const m = c.insertMail({ fromId: 'lane-c-project-a', fromUuid: 'u', toId: ME, runId: null, kind: 'status', subject: `s${sent++}`, body: 'b', artifacts: [] });
+      c.queueDelivery(m.id, ME, '<mail/>');
+    } };
+    send(CARD_MAIL_MAX);
+    const exactly = (await gather(c)).facts;
+    expect([value(exactly.mailOutstanding).length, exactly.mailMore]).toEqual([CARD_MAIL_MAX, false]);
+    send(1);
+    const over = (await gather(c)).facts;
+    expect([value(over.mailOutstanding).length, over.mailMore]).toEqual([CARD_MAIL_MAX, true]);
+    expect(value(over.mailOutstanding).map((m) => m.subject)).not.toContain('s0');
+  });
+
+  it('a parked delivery the mailbox still shows is labelled parked, never "not answered"', async () => {
+    const c = store();
+    const m = c.insertMail({ fromId: 'lane-c-project-a', fromUuid: 'u', toId: ME, runId: null, kind: 'status', subject: 's', body: 'b', artifacts: [] });
+    c.queueDelivery(m.id, ME, '<mail/>');
+    const real = c.outstandingMailFor.bind(c);
+    c.outstandingMailFor = (id, n) => real(id, n).map((r) => ({ ...r, state: 'rejected' as const }));
+    expect(value((await gather(c)).facts.mailOutstanding).map((r) => r.parked)).toEqual([true]);
+  });
+});
+
 describe('gatherCardFacts: a read that fails is a fact naming what failed, never an empty list', () => {
   const throws = (): never => { throw new Error('disk I/O error'); };
   const cases: [string, (c: CoordStore) => void, keyof CardFacts, string][] = [
@@ -136,8 +192,6 @@ describe('gatherCardFacts: a read that fails is a fact naming what failed, never
     ['runs (a refusal)', (c) => { c.openRunsForSession = () => ({ ok: false, kind: 'run-unreadable', detail: 'x' }); }, 'runs', 'the runs'],
     ['runs (a run row that does not read)', (c) => { c.run = () => ({ ok: false, kind: 'run-unreadable', detail: 'x' }) as never; }, 'runs', 'the runs'],
     ['claims', (c) => { c.activeClaims = throws; }, 'claims', 'the claims'],
-    ['intent', (c) => { c.coordinatorIntentDeclared = throws; }, 'intent', 'declared coordinator intent'],
-    ['intent (a refusal)', (c) => { c.coordinatorIntentDeclared = () => ({ ok: false, detail: 'x' }); }, 'intent', 'declared coordinator intent'],
     ['items', (c) => { c.itemsFor = throws; }, 'itemsRaised', 'the items you raised'],
     ['goals', (c) => { c.goalsFor = throws; }, 'ledger', 'the programme ledger'],
     ['mail', (c) => { c.outstandingMailFor = throws; }, 'mailOutstanding', 'the outstanding mail'],
@@ -151,6 +205,17 @@ describe('gatherCardFacts: a read that fails is a fact naming what failed, never
       expect(f[key]).toEqual({ kind: 'unmeasured', what });
     });
   }
+
+  it('between runs, a series read or a newest run read that throws is an unmeasured ledger, never a throw (review 2023 F10)', async () => {
+    for (const breakIt of [(c: CoordStore) => { c.bindingRunsOf = throws; }, (c: CoordStore) => { c.run = throws; }]) {
+      const c = store();
+      const done = openRun(c, 'prog-a', ME);
+      c.db.prepare("UPDATE runs SET state = 'done' WHERE id = ?").run(done);
+      breakIt(c);
+      const f = (await gather(c)).facts;
+      expect(f.ledger).toEqual({ kind: 'unmeasured', what: 'the programme ledger' });
+    }
+  });
 
   it('an unreadable incarnation leaves intent unmeasured, naming the incarnation', async () => {
     const f = (await gather(store(), { incarnation: async () => ({ kind: 'unreadable' }) })).facts;
@@ -174,12 +239,19 @@ describe('gatherCardFacts: a read that fails is a fact naming what failed, never
     expect(f.roleWhy).toBe('its declared coordinator intent could not be read: coordinator or plain');
   });
 
-  it('the child mark unread (the registry could not say, or the read threw): undecided between worker and reviewer', async () => {
-    for (const childMark of [async () => null, async (): Promise<never> => { throw new Error('io'); }]) {
+  it('the child marker exists but is unreadable: undecided between worker and reviewer, the worker card', async () => {
+    const { facts: f, renderer } = await gather(store(), { childMark: async () => ({ kind: 'unreadable' }) });
+    expect(f.role).toBe('undecided');
+    expect(f.roleWhy).toBe('its child marker could not be read: worker or reviewer');
+    expect(renderer).toBe('worker');
+  });
+
+  it('the registry could not say whether it is a child (or the read threw): undecided across all four, the widest card (review 2023 F7)', async () => {
+    for (const childMark of [async (): Promise<typeof CARD_REGISTRY_UNREAD> => CARD_REGISTRY_UNREAD, async (): Promise<never> => { throw new Error('io'); }]) {
       const { facts: f, renderer } = await gather(store(), { childMark });
       expect(f.role).toBe('undecided');
-      expect(f.roleWhy).toBe('its child marker could not be read: worker or reviewer');
-      expect(renderer).toBe('worker');
+      expect(f.roleWhy).toBe('the registry could not say whether it is a child: worker, reviewer, coordinator or plain');
+      expect(renderer).toBe('coordinator');
     }
   });
 

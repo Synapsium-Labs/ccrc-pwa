@@ -2928,7 +2928,10 @@ export const MIGRATIONS: readonly string[] = [
   // is the sha256 of its facts with the time of rendering left out, so unchanged facts keep one row; `hash` is the card
   // hash it rendered to when last served and `served` a sequence that orders the serves, so the session's current card is
   // its snapshot with the highest `served` (slug card-current-hash-is-the-last-served). A read carries the conversation's
-  // uuid, so the generations lane matches it to the start that minted a generation (slug card-read-by-the-start).
+  // uuid, so the generations lane matches it to the start that minted a generation (slug card-read-by-the-start). A read
+  // names its snapshot (a foreign key, no ON DELETE, `foreign_keys` on), so a retention sweep deletes a snapshot's reads
+  // before the snapshot, and `continuity_card_reads_by_snapshot` makes each such delete a keyed one (slug
+  // card-snapshots-kept; review 2023 F11).
   //
   // NEW TABLES AND INDEXES, nothing on an existing table: an older build opening a file at `user_version 69` takes rule 3
   // (it warns, reads as-is and migrates nothing), never names either table, and boots. Every earlier entry is frozen.
@@ -2955,6 +2958,7 @@ export const MIGRATIONS: readonly string[] = [
     at         INTEGER NOT NULL         -- wall ms the last page was served
   );
   CREATE INDEX continuity_card_reads_by_conversation ON continuity_card_reads(sessionId, uuid, id);
+  CREATE INDEX continuity_card_reads_by_snapshot ON continuity_card_reads(snapshotId);
   `,
 ];
 

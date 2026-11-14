@@ -1,7 +1,8 @@
-// Overlord W1a, the card piece, PR B (plan `w1a-card.md` Task 5): `ccrc-api card` reads this pane's card whole, every page
-// of one card hash in order through the `sessions.card` row, prints the text and one line naming the hash, and starts
-// again at page 1 on `card-changed`, at most three times. A stub server answers per page; FIXTURE HOMEs only, the client
-// runs with the contained PATH `ccrcApiClient.ts` builds.
+// Overlord W1a, the card piece, PR B (plan `w1a-card.md` Task 5; review 2023 F1, F8, F13): `ccrc-api card` reads this pane's
+// card ONE PAGE PER CALL through the `sessions.card` row: page 1 by default, a later page with `--page N --hash H`. It prints
+// the page's text and one last line naming the page, the page count, the hash and the command for the next page, or whether
+// the server recorded the read; a `card-changed` names the command that starts again. The raw row fills the pane's own pair.
+// A stub server answers per page; FIXTURE HOMEs only, the client runs with the contained PATH `ccrcApiClient.ts` builds.
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
@@ -15,7 +16,6 @@ const TOKEN = 'k'.repeat(64);
 const PANE_ID = 'lane-a-project-a';
 const PANE_UUID = 'u-card-1';
 const H1 = '1'.repeat(64);
-const H2 = '2'.repeat(64);
 
 let home: string;
 let tmp: string;
@@ -49,72 +49,93 @@ afterEach(async () => {
 });
 
 const run = (args: string[] = ['card']): Promise<Run> => runClient(home, args, undefined, { TMPDIR: tmp, TMUX_PANE: '%7', CCRC_API_STATUS: undefined });
-/** A card of `pages` pages under `hash`, each page's text given. */
-const pageOf = (hash: string, texts: readonly string[]) => (u: URL) => {
+/** A card of `texts.length` pages under `hash`; `recordedOn` is the page whose answer records the read. */
+const pageOf = (hash: string, texts: readonly string[], recordedOn: number | null = texts.length) => (u: URL) => {
   const page = Number(u.searchParams.get('page'));
-  return { code: 200, body: { ok: true, hash, snapshotId: 's'.repeat(64), page, pages: texts.length, text: texts[page - 1] } };
+  return { code: 200, body: { ok: true, hash, snapshotId: 's'.repeat(64), page, pages: texts.length, text: texts[page - 1], recorded: page === recordedOn } };
 };
+const asked = () => seen.map((u) => [u.pathname, u.searchParams.get('byId'), u.searchParams.get('byUuid'), u.searchParams.get('page'), u.searchParams.get('hash')]);
 
-describe('ccrc-api card', () => {
-  it('prints a three-page card whole, in order, each page asked with the pane\'s pair and, after the first, the hash', async () => {
-    answer = pageOf(H1, ['Card for lane-a-project-a\nfirst ', 'second\n', 'third']);
+describe('ccrc-api card: one page per call', () => {
+  it('page 1 by default: its text, and a last line naming the next page\'s exact command', async () => {
+    answer = pageOf(H1, ['Card for lane-a-project-a\nfirst\n', 'second', 'third']);
     const r = await run();
     expect(r.status, r.stderr).toBe(0);
-    expect(r.stdout).toBe(`Card for lane-a-project-a\nfirst second\nthird\ncard: read whole, hash ${H1}, 3 page(s)\n`);
-    expect(seen.map((u) => [u.pathname, u.searchParams.get('byId'), u.searchParams.get('byUuid'), u.searchParams.get('page'), u.searchParams.get('hash')]))
-      .toEqual([
-        [`/api/sessions/${PANE_ID}/card`, PANE_ID, PANE_UUID, '1', null],
-        [`/api/sessions/${PANE_ID}/card`, PANE_ID, PANE_UUID, '2', H1],
-        [`/api/sessions/${PANE_ID}/card`, PANE_ID, PANE_UUID, '3', H1],
-      ]);
+    expect(r.stdout).toBe(`Card for lane-a-project-a\nfirst\n\ncard: page 1 of 3, hash ${H1}; next: ccrc-api card --page 2 --hash ${H1}\n`);
+    expect(asked()).toEqual([[`/api/sessions/${PANE_ID}/card`, PANE_ID, PANE_UUID, '1', null]]);
     expect(fs.readdirSync(tmp)).toEqual([]);
   });
 
-  it('starts again at page 1 on card-changed, and prints only the card it read whole', async () => {
-    let changed = false;
-    answer = (u) => {
-      if (u.searchParams.get('page') === '2' && !changed) { changed = true; return { code: 409, body: { ok: false, error: 'card-changed', hash: H2 } }; }
-      return pageOf(changed ? H2 : H1, changed ? ['new one ', 'new two'] : ['old one ', 'old two'])(u);
-    };
-    const r = await run();
-    expect(r.status, r.stderr).toBe(0);
-    expect(r.stdout).toBe(`new one new two\ncard: read whole, hash ${H2}, 2 page(s)\n`);
-    expect(seen.map((u) => [u.searchParams.get('page'), u.searchParams.get('hash')])).toEqual([['1', null], ['2', H1], ['1', null], ['2', H2]]);
+  it('a later page carries the hash; the last page says the read is recorded', async () => {
+    answer = pageOf(H1, ['one', 'two', 'three']);
+    const mid = await run(['card', '--page', '2', '--hash', H1]);
+    expect(mid.stdout).toBe(`two\ncard: page 2 of 3, hash ${H1}; next: ccrc-api card --page 3 --hash ${H1}\n`);
+    const last = await run(['card', '--hash', H1, '--page', '3']);
+    expect(last.stdout).toBe(`three\ncard: page 3 of 3, hash ${H1}; every page of this card is read, and the read is recorded\n`);
+    expect(asked().map((a) => [a[3], a[4]])).toEqual([['2', H1], ['3', H1]]);
   });
 
-  it('gives up after three restarts, saying so, and prints no card text', async () => {
-    let n = 0;
-    answer = (u) => {
-      if (u.searchParams.get('page') === '2') return { code: 409, body: { ok: false, error: 'card-changed', hash: H2 } };
-      n += 1;
-      return pageOf(n % 2 === 0 ? H2 : H1, ['one ', 'two'])(u);
-    };
+  it('a one-page card is read and recorded in one call', async () => {
+    answer = pageOf(H1, ['only']);
     const r = await run();
+    expect(r.stdout).toBe(`only\ncard: page 1 of 1, hash ${H1}; every page of this card is read, and the read is recorded\n`);
+  });
+
+  it('a last page whose answer recorded nothing says so, with the command that reads the card again (review 2023 F8)', async () => {
+    answer = pageOf(H1, ['one', 'two'], null);
+    const r = await run(['card', '--page', '2', '--hash', H1]);
     expect(r.status).toBe(0);
-    expect(r.stdout).toBe('card: the card changed 4 times while it was being read; run ccrc-api card again\n');
-    expect(seen.filter((u) => u.searchParams.get('page') === '1')).toHaveLength(4);
+    expect(r.stdout).toContain(`two\ncard: page 2 of 2, hash ${H1}; the read is NOT recorded`);
+    expect(r.stdout).toContain('read it again from page 1: ccrc-api card\n');
+    expect(r.stdout).not.toContain('every page of this card is read');
+    // The longest last line stays under the 400 bytes `continuity-card-render.test.ts` leaves for it beside a full page.
+    expect(Buffer.byteLength(r.stdout.split('\n').at(-2)!)).toBeLessThan(400);
   });
 
-  it('any other answer is printed as it came, with its status on stderr', async () => {
+  it('card-changed prints the command that starts again, and no page text', async () => {
+    answer = () => ({ code: 409, body: { ok: false, error: 'card-changed', hash: '2'.repeat(64) } });
+    const r = await run(['card', '--page', '2', '--hash', H1]);
+    expect(r.status).toBe(0);
+    expect(r.stdout).toBe('card: the card changed since page 1 was read; read it again from page 1: ccrc-api card\n');
+  });
+
+  it('any other answer is printed as it came, with its status on stderr; a page answer of the wrong shape too', async () => {
     answer = () => ({ code: 403, body: { ok: false, error: 'stale-uuid' } });
     const r = await run();
-    expect(r.status).toBe(0);
-    expect(r.stdout).toBe('{"ok":false,"error":"stale-uuid"}\n');
+    expect([r.status, r.stdout]).toEqual([0, '{"ok":false,"error":"stale-uuid"}\n']);
     expect(r.stderr).toContain('http 403');
+    answer = (u) => { const a = pageOf(H1, ['x'])(u); const { recorded: _r, ...rest } = a.body; return { code: 200, body: rest }; };
+    const shapeless = await run();
+    expect(shapeless.stderr).toContain('http 200');
+    expect(shapeless.stdout).not.toContain('card: page');
   });
 
-  it('takes no argument, and sends nothing when given one', async () => {
+  it('refuses bad arguments and sends nothing: a positional, a later page with no hash, a malformed page or hash', async () => {
     answer = pageOf(H1, ['x']);
-    const r = await run(['card', 'lane-b-project-a']);
-    expect(r.status).toBe(2);
-    expect(JSON.parse(r.stdout)).toMatchObject({ ok: false, error: 'bad-args' });
+    for (const args of [['card', 'lane-b-project-a'], ['card', '--page', '2'], ['card', '--page', '0'], ['card', '--hash', 'nope'], ['card', '--page']]) {
+      const r = await run(args);
+      expect(r.status, args.join(' ')).toBe(2);
+      expect(JSON.parse(r.stdout), args.join(' ')).toMatchObject({ ok: false, error: 'bad-args' });
+    }
     expect(seen).toEqual([]);
   });
+});
 
-  it('the raw row reads one page: sessions card <id> with the pair and the page as query keys', async () => {
+describe('the raw row, sessions card <id> (review 2023 F13)', () => {
+  it('fills the pane\'s own pair after the declared keys, page and hash', async () => {
     answer = pageOf(H1, ['only']);
-    const r = await run(['sessions', 'card', PANE_ID, '--byId', PANE_ID, '--byUuid', PANE_UUID, '--page', '1']);
+    const r = await run(['sessions', 'card', PANE_ID, '--page', '1']);
     expect(r.status, r.stderr).toBe(0);
     expect(JSON.parse(r.stdout)).toMatchObject({ ok: true, hash: H1, pages: 1, text: 'only' });
+    expect(asked()).toEqual([[`/api/sessions/${PANE_ID}/card`, PANE_ID, PANE_UUID, '1', null]]);
+  });
+
+  it('a typed pair is refused unknown-query, and nothing is sent', async () => {
+    answer = pageOf(H1, ['only']);
+    for (const k of ['--byId', '--byUuid']) {
+      const r = await run(['sessions', 'card', PANE_ID, k, 'lane-b-project-a']);
+      expect(JSON.parse(r.stdout), k).toMatchObject({ ok: false, error: 'unknown-query' });
+    }
+    expect(seen).toEqual([]);
   });
 });

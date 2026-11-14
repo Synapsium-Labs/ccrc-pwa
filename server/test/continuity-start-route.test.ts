@@ -168,7 +168,7 @@ describe('POST /api/sessions/:id/start', () => {
   it('answers unavailable (503) on a server with no coordination store', async () => {
     app = Fastify({ logger: false });
     registerContinuityRoutes(app, { coord: undefined, mailToken: () => ID_GATE_TOKEN, attribute: async () => ({ ok: true }), wall: () => FAKE_T0,
-      attributeReader: async () => ({ ok: true }), cardRegistry: { childMark: async () => ({ kind: 'none' }), incarnation: async () => ({ kind: 'absent' }) } });
+      attributeReader: async () => ({ ok: true }), cardRegistry: { childMark: async () => ({ kind: 'none' }), incarnation: async () => ({ kind: 'absent' }), declaredIntent: () => false } });
     await app.ready();
     const res = await post(app, body());
     expect([res.statusCode, res.json().error]).toEqual([503, 'unavailable']);

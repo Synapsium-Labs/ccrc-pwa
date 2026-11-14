@@ -450,11 +450,13 @@ export function insertSnapshot(db: DatabaseSync, s: SnapshotInsert): { ok: true;
   try {
     return tx(db, () => {
       const held = stmt(db, 'SELECT 1 FROM continuity_snapshots WHERE id = ?').get(s.id) !== undefined;
-      const next = 'COALESCE((SELECT MAX(served) FROM continuity_snapshots), 0) + 1';
-      if (held) stmt(db, `UPDATE continuity_snapshots SET hash = ?, served = ${next} WHERE id = ?`).run(s.hash, s.id);
+      // The sequence is the session's own: only the order within one session is ever read, and keyed by session it is one
+      // lookup on `continuity_snapshots_by_session` (review 2023 F11).
+      const next = 'COALESCE((SELECT MAX(served) FROM continuity_snapshots WHERE sessionId = ?), 0) + 1';
+      if (held) stmt(db, `UPDATE continuity_snapshots SET hash = ?, served = ${next} WHERE id = ?`).run(s.hash, s.sessionId, s.id);
       else {
         stmt(db, `INSERT INTO continuity_snapshots (id, sessionId, at, facts, hash, served) VALUES (?, ?, ?, ?, ?, ${next})`)
-          .run(s.id, s.sessionId, s.at, s.facts, s.hash);
+          .run(s.id, s.sessionId, s.at, s.facts, s.hash, s.sessionId);
       }
       return { ok: true as const, fresh: !held };
     });
@@ -484,22 +486,25 @@ export function insertCardRead(db: DatabaseSync, r: CardReadInsert): { ok: true;
   }
 }
 
-/** A generation's card read: the newest full read by the conversation its start reported, with whether its hash is the
- *  session's current card (the hash of the snapshot served last). `read: null` when that conversation has read none. */
+/** A generation's card read: the newest full read by the conversation its start reported, made at or after the start was
+ *  received, with whether its hash is the session's current card (the hash of the snapshot served last). `read: null`
+ *  when that conversation has read none since. */
 export interface CardReadOfStart {
   readonly id: number; readonly hash: string; readonly snapshotId: string; readonly at: number; readonly current: boolean;
 }
 export type CardReadRead = { ok: true; read: CardReadOfStart | null } | { ok: false; detail: string };
 
 /** The generations lane's read (`card-read` for a generation in `carded`): matched by the start's session and conversation
- *  uuid, so a read made before the lane minted the generation still counts and no cursor can pass over it. */
+ *  uuid, so a read made before the lane minted the generation still counts and no cursor can pass over it, and bounded to
+ *  reads made at or after the start's `receivedAt` (both the server's wall clock), so a resumed conversation, which keeps
+ *  its uuid, never counts a read of its previous generation (review 2023 F3). */
 export function cardReadOfStart(db: DatabaseSync, startId: number): CardReadRead {
   try {
     const row = stmt(db,
       'SELECT r.id AS id, r.hash AS hash, r.snapshotId AS snapshotId, r.at AS at, '
       + '(r.hash = (SELECT c.hash FROM continuity_snapshots c WHERE c.sessionId = r.sessionId ORDER BY c.served DESC LIMIT 1)) AS current '
       + 'FROM continuity_starts s JOIN continuity_card_reads r ON r.sessionId = s.sessionId AND r.uuid = s.uuid '
-      + 'WHERE s.id = ? ORDER BY r.id DESC LIMIT 1',
+      + 'WHERE s.id = ? AND r.at >= s.receivedAt ORDER BY r.id DESC LIMIT 1',
     ).get(startId) as Record<string, unknown> | undefined;
     if (row === undefined) return { ok: true, read: null };
     const id = intOrNull(row.id); const at = intOrNull(row.at);
@@ -509,19 +514,5 @@ export function cardReadOfStart(db: DatabaseSync, startId: number): CardReadRead
     return { ok: true, read: { id, hash: row.hash, snapshotId: row.snapshotId, at, current: intOrNull(row.current) === 1 } };
   } catch (e) {
     return { ok: false, detail: `continuity_card_reads read failed: ${e instanceof Error ? e.message : String(e)}` };
-  }
-}
-
-/** Declared coordinator intent on one incarnation of a session (the delegation lane's `delegation_sessions` projection,
- *  which the intent door writes through its checkpoint): true when that row carries an `explicitIntentAt`. The card's read
- *  (slug card-intent-reads-the-projection). */
-export function coordinatorIntentDeclared(db: DatabaseSync, sessionId: string, incarnation: string):
-  { ok: true; declared: boolean } | { ok: false; detail: string } {
-  try {
-    const row = stmt(db, 'SELECT explicitIntentAt FROM delegation_sessions WHERE sessionId = ? AND parentIncarnation = ?')
-      .get(sessionId, incarnation) as { explicitIntentAt: unknown } | undefined;
-    return { ok: true, declared: row !== undefined && intOrNull(row.explicitIntentAt) !== null };
-  } catch (e) {
-    return { ok: false, detail: `delegation_sessions read failed: ${e instanceof Error ? e.message : String(e)}` };
   }
 }

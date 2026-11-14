@@ -32,7 +32,7 @@ import type { LinkingWriteBody, ProjectLinkingWire } from '../../../shared/linki
 import { openPracticeCase, practiceCaseNewest, type PracticeCaseNewestRead, type PracticeCaseOpen } from './practiceCasesStore.js';
 import type { CaseDue } from './practiceCases.js';
 import {
-  advanceCursor, advanceObserved, cardReadOfStart, clearShadowWalk, coordinatorIntentDeclared, generationsCursor, insertCardRead,
+  advanceCursor, advanceObserved, cardReadOfStart, clearShadowWalk, generationsCursor, insertCardRead,
   insertSnapshot, insertStart, liveGenerations, mintGeneration, setGenerationDue, setHoldOff, startsOf, startsSince, stepGeneration,
   type CardReadInsert, type CardReadRead, type CursorAdvance, type CursorRead, type DueWrite, type SnapshotInsert,
   type GenExpect, type GenerationsRead, type MintInput, type MintResult, type StartInsert, type StartInsertResult, type StartsRead,
@@ -5392,7 +5392,6 @@ export class CoordStore {
   insertSnapshot(s: SnapshotInsert): { ok: true; fresh: boolean } | { ok: false } { return insertSnapshot(this.db, s); }
   insertCardRead(r: CardReadInsert): { ok: true; id: number } | { ok: false } { return insertCardRead(this.db, r); }
   cardReadOfStart(startId: number): CardReadRead { return cardReadOfStart(this.db, startId); }
-  coordinatorIntentDeclared(sessionId: string, incarnation: string): { ok: true; declared: boolean } | { ok: false; detail: string } { return coordinatorIntentDeclared(this.db, sessionId, incarnation); }
 
   /** D-6909: the review-cap state of a batch of runs (`reviewCapStore.ts`). */
   reviewCapStates(ids: readonly number[]): Map<number, ReviewCapState> {

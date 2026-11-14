@@ -22,10 +22,12 @@
 // THE CARD READ (the card piece, PR B, plan `w1a-card.md` Task 5). A generation whose effective state is `carded` (read only
 // through `effectiveGeneration`, review 1902 F6: in shadow a mint leaves `state` at `active` and `shadowState` at `carded`)
 // is fed `card-read` from the card door's rows (`cardReadOfStart`: the newest full read by the conversation its start
-// reported, and whether it was the session's current card), and the machine's next view is written with the card hash and
-// snapshot it read. In shadow this is a record on the shadow column, and the probes piece takes it on from `probing`. The
-// feed (`cardReadFeed`) is one source of stamped events and the apply loop is separate, so the renewal act's ordered feed
-// replaces the feed and keeps the loop (review 1902 F6).
+// reported, made since the start was received, and whether it was the session's current card). The feed (`cardReadFeed`)
+// is one source of stamped events and the apply loop is separate: the loop writes every step the machine reports
+// `changed` (a whole-view comparison, decided in L1), state or not, with the card the event carried, and skips the rest.
+// So only a matching read moves `carded` to `probing` and writes its card hash and snapshot, and the renewal act's ordered
+// feed (nudges, the receipt, probe rounds) replaces the feed and keeps the loop (review 1902 F6, review 2023 F5). In
+// shadow this is a record on the shadow column, and the probes piece takes it on from `probing`.
 //
 // TWO HALVES. `gatherGenerationReadings` (async) makes the fleet reads for the generations a pass will judge; then
 // `generationsPass` (synchronous, one transaction per write, nothing awaited) reads `coord.db`, decides and writes. So a
@@ -282,11 +284,7 @@ export function generationsPass(deps: GenerationsDeps, input: GenerationsInput):
   else {
     const feed = cardReadFeed(coord, carded.rows, live);
     for (const f of feed.failed) fail('card-reads', f, 'that generation\'s card read waits for the next pass');
-    for (const { gen, event, card } of feed.events) {
-      const step = generationStep(genViewOf(gen, live), event);
-      if (step.next.state === effectiveGeneration(gen, live).state) continue;
-      if (coord.stepGeneration(gen.id, genExpectOf(gen), step.next, live, now, card).changed) cardRead += 1;
-    }
+    cardRead += applyFedEvents(coord, feed.events, live, now);
   }
 
   // ---- THREE: the `renewalDue` answer is recorded for every generation whose `state` is at rest (`active` or `degraded`),
@@ -313,6 +311,19 @@ export interface FedEvent {
   readonly gen: GenRow;
   readonly event: GenEvent;
   readonly card: { readonly hash: string; readonly snapshotId: string } | null;
+}
+
+/** THE APPLY LOOP, apart from any feed: each event is stepped through the machine on the generation's effective view, and
+ *  every step the machine reports `changed` is written (compare-and-set, with the card the event carried); a step that
+ *  changes nothing is not written. Answers how many rows it wrote. The renewal act's ordered feed hands its events here. */
+export function applyFedEvents(coord: Pick<GenerationsCoord, 'stepGeneration'>, events: readonly FedEvent[], live: boolean, now: number): number {
+  let wrote = 0;
+  for (const { gen, event, card } of events) {
+    const step = generationStep(genViewOf(gen, live), event);
+    if (!step.changed) continue;
+    if (coord.stepGeneration(gen.id, genExpectOf(gen), step.next, live, now, card).changed) wrote += 1;
+  }
+  return wrote;
 }
 
 /** The card reads, as events: for each generation whose effective state is `carded` (`effectiveGeneration`, never `state` or

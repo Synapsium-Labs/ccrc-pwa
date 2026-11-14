@@ -263,9 +263,10 @@ declare -A ROUTES=(
   # one JSON report, as the hook builds it or keeps it on one line of its spool.
   [sessions.start]='POST|/api/sessions/{id}/start|yes|-'
   # The card (Overlord W1a, the card piece; spec §3.3.3 C38): a session reads its OWN card, one page per request. `{id}` is the
-  # session's id and the query carries the pane's pair (`byId`, `byUuid`), the page and, after the first, the card's hash.
-  # `ccrc-api card` (`cmd_card`) reads every page of one hash through this row and prints the text; this row is the raw read.
-  [sessions.card]='GET|/api/sessions/{id}/card|yes|byId,byUuid,page,hash'
+  # session's id; the declared query keys are the page and, after the first, the card's hash, and the pane's pair (`byId`,
+  # `byUuid`) is filled from `derive_identity` after them, never typed (review 2023 F13, the `runs review-rounds` rule of
+  # D-8125). `ccrc-api card` (`cmd_card`) reads one page through this row and prints its text; this row is the raw read.
+  [sessions.card]='GET|/api/sessions/{id}/card|yes|page,hash'
   # The plan verbs (Linear hierarchy design, D-8181): `{id}` is the programme's slug. Every one but `plan.show` carries the pane's
   # identity in the QUERY (the `linear.*` block's rule, never the body); `plan.show` is a session-or-token read and sends none. All
   # are refused locally `no-plan-door` when a CURRENT cap file omits `plan-v1`. The second operand of a verb (a checkpoint, a
@@ -372,7 +373,7 @@ usage() {
     done
     printf '  %-18s %s\n' '' 'coordinators intent takes set|clear --session <this session'"'"'s id> and nothing else'
     printf '  %-18s %s\n' 'whoami' 'this session'"'"'s {id,uuid}, from tmux + the registry'
-    printf '  %-18s %s\n' 'card' 'this session'"'"'s card, every page of one hash, printed as plain text'
+    printf '  %-18s %s\n' 'card' 'this session'"'"'s card, one page per call (--page N --hash H), as plain text'
     printf '  %-18s %s\n' '' 'mail inbox takes nothing: it prints this pane'"'"'s unacked mail as plain text, not JSON,'
     printf '  %-18s %s\n' '' 'and acks each entry it printed. Run it bare: no pipe, no redirect, no head or tail.'
     printf '  %-18s %s\n' '' '(ledger allocate fills "byId" from this pane; --by <id> for a caller with none)'
@@ -698,64 +699,72 @@ cmd_inbox() {   # url of the read
 # platform block, so the template is spelled locally, unconditionally, the
 # same shape install.sh uses. GNU mktemp honours the template identically.
 # ONE file and ONE trap for the whole run, armed before the first request (D-6780): curl's `-o` rewrites it on
-# each request, and `send_request` never arms one of its own. `main` arms it for a row, and `cmd_card` for its pages.
+# each request, and `send_request` never arms one of its own. `main` arms it for a row, and `cmd_card` for its page.
 arm_req_out() {
   REQ_OUT=$(mktemp "${TMPDIR:-/tmp}/ccrc-api.XXXXXXXXXX") || refuse 'no-tmp' 'cannot create a temp file'
   # shellcheck disable=SC2064
   trap "rm -f '$REQ_OUT'" EXIT
 }
 
-# `card` (Overlord W1a, the card piece, plan `w1a-card.md` Task 5): this pane's own card, read whole. Every page of ONE
-# card hash is read in order through the `sessions.card` row (page 1 names the hash, each later page carries it), and the
-# text is printed only once the last page arrived, then one line naming the hash and the page count. A `card-changed` (409)
-# means the card was rendered anew between two pages: the read starts again at page 1, at most CARD_RESTARTS times. Any
-# other answer is printed as it came, with its status on stderr. Exit 0 for an answer, 3 for none. It takes no argument:
-# a session reads its own card, the pane's. NEVER call it inside $( ): it prints, refuses and exits.
-CARD_RESTARTS=3
+# `card` (Overlord W1a, the card piece, plan `w1a-card.md` Task 5; review 2023 F1): this pane's own card, ONE PAGE PER
+# CALL, through the `sessions.card` row. A whole card can pass the size at which Claude Code stops showing a tool result
+# (`TOOL_RESULT_CUT_BYTES`, `shared/continuity-card.ts`), so each call prints one page (`CARD_PAGE_CHARS`, under it) and a
+# last line naming the page, the page count, the hash and the exact command for the next page. `--page N --hash H` reads a
+# later page of the card page 1 named; page 1 takes no hash. The server records the read once every page of one hash was
+# served to this conversation, and the last line says whether it did: a page whose answer did not record it (a server
+# restart forgets a half-read card) says so, with the command that reads the card again. A `card-changed` (409) means the
+# card was rendered anew since page 1: nothing is printed but that line and the command to start again. Any other answer is
+# printed as it came, with its status on stderr. Exit 0 for an answer, 3 for none. A session reads its own card, the pane's.
+# NEVER call it inside $( ): it prints, refuses and exits.
 cmd_card() {
-  (( $# == 0 )) || refuse 'bad-args' "card takes no argument: $1"
-  command -v jq >/dev/null 2>&1 || refuse 'no-jq' 'card reads each page with jq, and jq is not on PATH; nothing was read'
+  local page=1 hash='' flag
+  while (( $# > 0 )); do
+    flag="$1"
+    (( $# >= 2 )) || refuse 'bad-args' "card: $flag needs a value"
+    case "$flag" in
+      --page) [[ "$2" =~ ^[1-9][0-9]{0,5}$ ]] || refuse 'bad-args' "card: --page is a positive integer: $2"; page="$2" ;;
+      --hash) [[ "$2" =~ ^[0-9a-f]{64}$ ]] || refuse 'bad-args' "card: --hash is a card hash (64 hex characters): $2"; hash="$2" ;;
+      *) refuse 'bad-args' "card takes --page N and --hash H only: $flag" ;;
+    esac
+    shift 2
+  done
+  (( page == 1 )) || [[ -n "$hash" ]] || refuse 'bad-args' 'card: a page after the first names its card hash (--hash), from page 1'"'"'s last line'
+  command -v jq >/dev/null 2>&1 || refuse 'no-jq' 'card reads the page with jq, and jq is not on PATH; nothing was read'
   derive_identity
   local method tmpl _needs _qkeys
   IFS='|' read -r method tmpl _needs _qkeys <<< "${ROUTES[sessions.card]}"
   server_url
   read_token
   arm_req_out
-  local base="$SERVER_URL${tmpl/\{id\}/$DERIVED_ID}?byId=$DERIVED_ID&byUuid=$DERIVED_UUID"
-  local restarts=0 page hash pages text shape got
-  while :; do
-    page=1; hash=''; pages=1; text=''
-    while (( page <= pages )); do
-      if ! send_request "$method" "$base&page=$page${hash:+&hash=$hash}" ''; then TOKEN=""; transport_exit; fi
-      if [[ "$REQ_CODE" == '409' ]] && [[ "$(jq -r '.error // empty' "$REQ_OUT" 2>/dev/null)" == 'card-changed' ]]; then
-        break
-      fi
-      shape=$(jq -r 'if (.ok == true and (.hash | type) == "string" and (.hash | test("^[0-9a-f]{64}$"))
-            and (.pages | type) == "number" and .pages >= 1 and .pages == (.pages | floor) and (.text | type) == "string")
-          then "\(.hash) \(.pages)" else "bad" end' "$REQ_OUT" 2>/dev/null) || shape='bad'
-      if [[ "$REQ_CODE" != '200' || ! "$shape" =~ ^([0-9a-f]{64})\ ([0-9]+)$ ]]; then
-        TOKEN=""
-        print_body
-        printf 'http %s\n' "$REQ_CODE" >&2
-        exit 0
-      fi
-      [[ -z "$hash" ]] && { hash="${BASH_REMATCH[1]}"; pages="${BASH_REMATCH[2]}"; }
-      # A page's text may end in a newline, which `$( )` would strip: a sentinel byte keeps it, and is cut after.
-      got=$(jq -j '.text, "."' "$REQ_OUT" 2>/dev/null) || got='.'
-      text+="${got%.}"
-      page=$(( page + 1 ))
-    done
-    (( page > pages )) && break
-    restarts=$(( restarts + 1 ))
-    if (( restarts > CARD_RESTARTS )); then
-      TOKEN=""
-      printf 'card: the card changed %s times while it was being read; run ccrc-api card again\n' "$restarts"
-      exit 0
-    fi
-  done
+  local url="$SERVER_URL${tmpl/\{id\}/$DERIVED_ID}?byId=$DERIVED_ID&byUuid=$DERIVED_UUID&page=$page${hash:+&hash=$hash}"
+  if ! send_request "$method" "$url" ''; then TOKEN=""; transport_exit; fi
   TOKEN=""
-  printf '%s\n' "$text"
-  printf 'card: read whole, hash %s, %s page(s)\n' "$hash" "$pages"
+  if [[ "$REQ_CODE" == '409' ]] && [[ "$(jq -r '.error // empty' "$REQ_OUT" 2>/dev/null)" == 'card-changed' ]]; then
+    printf 'card: the card changed since page 1 was read; read it again from page 1: ccrc-api card\n'
+    exit 0
+  fi
+  local shape got
+  shape=$(jq -r 'if (.ok == true and (.hash | type) == "string" and (.hash | test("^[0-9a-f]{64}$"))
+        and (.pages | type) == "number" and .pages >= 1 and .pages == (.pages | floor)
+        and (.page | type) == "number" and .page >= 1 and .page <= .pages and .page == (.page | floor)
+        and (.text | type) == "string" and (.recorded | type) == "boolean")
+      then "\(.hash) \(.page) \(.pages) \(.recorded)" else "bad" end' "$REQ_OUT" 2>/dev/null) || shape='bad'
+  if [[ "$REQ_CODE" != '200' || ! "$shape" =~ ^([0-9a-f]{64})\ ([0-9]+)\ ([0-9]+)\ (true|false)$ ]]; then
+    print_body
+    printf 'http %s\n' "$REQ_CODE" >&2
+    exit 0
+  fi
+  local h="${BASH_REMATCH[1]}" p="${BASH_REMATCH[2]}" n="${BASH_REMATCH[3]}" recorded="${BASH_REMATCH[4]}"
+  # A page's text may end in a newline, which `$( )` would strip: a sentinel byte keeps it, and is cut after.
+  got=$(jq -j '.text, "."' "$REQ_OUT" 2>/dev/null) || got='.'
+  printf '%s\n' "${got%.}"
+  if [[ "$recorded" == 'true' ]]; then
+    printf 'card: page %s of %s, hash %s; every page of this card is read, and the read is recorded\n' "$p" "$n" "$h"
+  elif (( p < n )); then
+    printf 'card: page %s of %s, hash %s; next: ccrc-api card --page %s --hash %s\n' "$p" "$n" "$h" "$(( p + 1 ))" "$h"
+  else
+    printf 'card: page %s of %s, hash %s; the read is NOT recorded: the server did not see every page of this card served to this conversation (a restart forgets a half-read card); read it again from page 1: ccrc-api card\n' "$p" "$n" "$h"
+  fi
   exit 0
 }
 
@@ -982,6 +991,14 @@ main() {
   # The plan verbs' identity (D-8181), the Linear block's rule for the same reason: the query, after the declared keys, and never
   # the body, which goes on the wire byte for byte. `plan show` is the one row that sends none (a session-or-token read).
   if [[ "$key" == plan.* && "$key" != 'plan.show' ]]; then
+    derive_identity
+    query+="${query:+&}byId=$DERIVED_ID&byUuid=$DERIVED_UUID"
+  fi
+
+  # The card's identity (review 2023 F13), the Linear block's rule: the pane's pair rides the query after the declared keys,
+  # so this client reads the pane's own card and no other's (`--byId` is `unknown-query`; the server refuses a path id that is
+  # not `byId`, `not-owner`).
+  if [[ "$key" == 'sessions.card' ]]; then
     derive_identity
     query+="${query:+&}byId=$DERIVED_ID&byUuid=$DERIVED_UUID"
   fi

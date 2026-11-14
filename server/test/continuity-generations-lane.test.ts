@@ -13,8 +13,8 @@ import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
 import type { GenRow } from '../src/continuity/continuityStore.js';
 import {
-  GENERATIONS_LANE, gatherGenerationReadings, generationsPass, softTimesOf,
-  type CompactionsMemo, type GatherPorts, type GenReadings, type GenerationsDeps, type RegistryFacts,
+  GENERATIONS_LANE, applyFedEvents, gatherGenerationReadings, generationsPass, softTimesOf,
+  type CompactionsMemo, type FedEvent, type GatherPorts, type GenReadings, type GenerationsDeps, type RegistryFacts,
 } from '../src/continuity/generationsLane.js';
 import type { CompactionsRead } from '../src/continuity/compactions.js';
 import type { UsageRead } from '../src/usage.js';
@@ -732,6 +732,36 @@ describe('the card read (the card piece, PR B, Task 5)', () => {
     readCard(f, 'snap-1', HASH_A);
     expect(f.pass()).toMatchObject({ cardRead: 0 });
     expect(card(f.s)[0]).toMatchObject({ state: 'active', cardHash: null });
+  });
+
+  it('a resumed conversation keeps its uuid, but a read from its previous generation never counts for the new one (review 2023 F3)', () => {
+    const f = fixture();
+    f.start('startup', U1);
+    f.pass();
+    readCard(f, 'snap-1', HASH_A);
+    expect(f.pass()).toMatchObject({ cardRead: 1 });
+    f.t.advance(60_000);
+    f.start('resume', U1);
+    expect(f.pass()).toMatchObject({ minted: 1, cardRead: 0 });
+    expect(f.pass()).toMatchObject({ cardRead: 0 });
+    expect(card(f.s).at(-1)).toMatchObject({ n: 2, shadowState: 'carded', cardHash: null });
+    // The resumed conversation reads its card now: that read counts.
+    readCard(f, 'snap-1', HASH_A);
+    expect(f.pass()).toMatchObject({ cardRead: 1 });
+    expect(card(f.s).at(-1)).toMatchObject({ n: 2, shadowState: 'probing', cardHash: HASH_A });
+  });
+
+  it('the apply loop writes a step that keeps the state and changes the view, and never one that changes nothing (review 2023 F5)', () => {
+    const f = fixture();
+    f.start('startup', U1);
+    f.pass();
+    const writes: string[] = [];
+    const coord = { stepGeneration: (...a: Parameters<CoordStore['stepGeneration']>) => { writes.push(a[2].state); return f.s.stepGeneration(...a); } };
+    const fed = (): FedEvent[] => [{ gen: live(f.s)[0]!, event: { kind: 'nudge-due' }, card: null }];
+    expect(applyFedEvents(coord, fed(), false, f.t.ports.clock.wall())).toBe(1);
+    expect(f.s.db.prepare('SELECT state, shadowState, renudged FROM continuity_generations').get()).toEqual({ state: 'active', shadowState: 'carded', renudged: 1 });
+    expect(applyFedEvents(coord, fed(), false, f.t.ports.clock.wall())).toBe(0);
+    expect(writes).toEqual(['carded']);
   });
 
   it('a card-read read that fails is named, and that generation waits; nothing is written', () => {

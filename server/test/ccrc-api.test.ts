@@ -259,7 +259,7 @@ describe('the closed route table', () => {
   it.each(ROWS)('%s -> %s %s', async (args, method, url, family) => {
     const paned = (args[0] === 'asks' && args[1] === 'list') || args[0] === 'coordinators'
       || (args[0] === 'approvals' && args[1] === 'show') || args[0] === 'linear' || args[0] === 'linking' || (args[0] === 'plan' && args[1] !== 'show') || (args[0] === 'runs' && args[1] === 'review-rounds')
-      || args[0] === 'calls' || (args[0] === 'mail' && args[1] === 'inbox');
+      || args[0] === 'calls' || (args[0] === 'mail' && args[1] === 'inbox') || (args[0] === 'sessions' && args[1] === 'card');
     if (paned) plantPane('demo-ws');
     await run(args as string[], args.includes('--json') ? '{"class":"routine","text":"q"}' : undefined, paned ? { TMUX_PANE: '%7' } : undefined);
     expect(seen).toHaveLength(1);

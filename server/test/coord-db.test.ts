@@ -2577,7 +2577,7 @@ describe('coord.db: continuity_generations and continuity_cursor, the generation
 describe('coord.db: continuity_snapshots and continuity_card_reads, the card door (Overlord §3.3.3, C38)', () => {
   /** Found by its DDL, never hard-coded. */
   const SLOT = MIGRATIONS.findIndex((m) => m.includes('CREATE TABLE continuity_snapshots')) + 1;
-  const ENTRY = /^CREATE TABLE continuity_snapshots \([^;]*\);\s*CREATE INDEX continuity_snapshots_by_session ON continuity_snapshots\(sessionId, served\);\s*CREATE TABLE continuity_card_reads \([^;]*\);\s*CREATE INDEX continuity_card_reads_by_conversation ON continuity_card_reads\(sessionId, uuid, id\);$/;
+  const ENTRY = /^CREATE TABLE continuity_snapshots \([^;]*\);\s*CREATE INDEX continuity_snapshots_by_session ON continuity_snapshots\(sessionId, served\);\s*CREATE TABLE continuity_card_reads \([^;]*\);\s*CREATE INDEX continuity_card_reads_by_conversation ON continuity_card_reads\(sessionId, uuid, id\);\s*CREATE INDEX continuity_card_reads_by_snapshot ON continuity_card_reads\(snapshotId\);$/;
   it('NEW TABLES and their indexes, nothing on an existing table, after the generations\' tables', () => {
     expect(SLOT).toBeGreaterThan(MIGRATIONS.findIndex((m) => m.includes('CREATE TABLE continuity_generations')) + 1);
     expect(MIGRATIONS[SLOT - 1]!.replace(/--[^\n]*/g, '').trim()).toMatch(ENTRY);

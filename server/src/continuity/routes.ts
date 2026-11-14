@@ -6,6 +6,7 @@
 // "The hook's reports").
 import { createHash } from 'node:crypto';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
+import { SHAPE_ONLY_MASKER, type SecretMasker } from '../accounts/mask.js';
 import type { AttributionRead } from '../coord/openRun.js';
 import type { CoordStore } from '../coord/store.js';
 import { MAIL_TOKEN_HEADER, checkMailToken, type BoxTokenHolder } from '../coord/token.js';
@@ -29,6 +30,10 @@ export interface ContinuityRouteDeps {
   attributeReader: (id: string, uuid: string) => Promise<AttributionRead>;
   /** The card's registry reads (`gatherCardFacts`' ports other than the store). */
   cardRegistry: Omit<CardFactsDeps, 'coord'>;
+  /** The egress masker (`deps.masker`): the card is masked once, whole, before it is hashed and paged. Absent, the shapes. */
+  masker?: SecretMasker;
+  /** How many conversations' partly served cards the door remembers (`CARD_MEMO_MAX` when absent; a test sets a small one). */
+  cardMemoMax?: number;
 }
 
 /** The identity pair's grammar, the linking read's and the Linear proxy's. */
@@ -100,9 +105,16 @@ export function registerContinuityRoutes(app: FastifyInstance, deps: ContinuityR
 
   // THE MEMO OF SERVED PAGES (slug card-read-is-the-last-page): which pages of one card hash this door served to one
   // conversation. A full read is recorded only when every page of that hash was served to it; a different hash starts
-  // over. Bookkeeping, never a decision's durable state: a restart forgets a card half read, and the caller reads it
-  // again. Bounded, the oldest conversation dropped first.
-  const served = new Map<string, { hash: string; pages: Set<number> }>();
+  // over. Bookkeeping, never a decision's durable state: a restart forgets a card half read, so every answer says whether
+  // it `recorded` the read, and `ccrc-api card` tells a caller whose last page recorded nothing to read the card again.
+  // A write that failed puts the memo back, so a retry of that page records it. Bounded, the oldest conversation dropped
+  // first.
+  type Memo = { hash: string; pages: Set<number> };
+  const served = new Map<string, Memo>();
+  const remember = (key: string, memo: Memo): void => {
+    served.set(key, memo);
+    if (served.size > (deps.cardMemoMax ?? CARD_MEMO_MAX)) served.delete(served.keys().next().value!);
+  };
 
   /**
    * `GET /api/sessions/:id/card?byId&byUuid&page&hash`: the caller's own card (spec §3.3.3 C38, §11.2). A box-token lane,
@@ -112,8 +124,10 @@ export function registerContinuityRoutes(app: FastifyInstance, deps: ContinuityR
    * is the sha256 of the trimmed text; the snapshot (its facts, the time of rendering left out) is stored once per id.
    * `page` (default 1) is one `CARD_PAGE_CHARS` slice; a later page names its card's `hash`, and a hash that is no longer
    * the current render answers 409 `card-changed` with the current one (the caller starts again at page 1). When every page
-   * of one hash has been served to the conversation, the read is recorded. In `MASKED_GET_ROUTES`: the card carries text
-   * sessions wrote. `200 { ok, hash, snapshotId, page, pages, text }`.
+   * of one hash has been served to the conversation, the read is recorded. The card carries text sessions wrote, so the
+   * trimmed text is masked here, once and whole, before it is hashed and paged: a secret that crosses a page edge is masked
+   * as one string (review 2023 F2; `secret-mask.test.ts` lists the route under INLINE, as `/api/mail/inbox`). `200 { ok,
+   * hash, snapshotId, page, pages, text, recorded }`, `recorded` true when this answer recorded the full read.
    */
   app.get('/api/sessions/:id/card', {
     onRequest: async (req: FastifyRequest, reply: FastifyReply) => {
@@ -140,7 +154,7 @@ export function registerContinuityRoutes(app: FastifyInstance, deps: ContinuityR
     if (coord === undefined) return refuseRoute(reply, 'unavailable');
     const at = deps.wall();
     const { facts, renderer } = await gatherCardFacts({ coord, ...deps.cardRegistry }, id, at);
-    const text = trimCard(renderCard(renderer, facts), CARD_BUDGET_TOKENS).text;
+    const text = (deps.masker ?? SHAPE_ONLY_MASKER).maskText(trimCard(renderCard(renderer, facts), CARD_BUDGET_TOKENS).text);
     const hash = sha256(text);
     const factsJson = snapshotFactsJson(facts);
     const snapshotId = sha256(factsJson);
@@ -151,17 +165,19 @@ export function registerContinuityRoutes(app: FastifyInstance, deps: ContinuityR
     if (page > slices.length) return refuseRoute(reply, 'bad-request', { detail: `the card has ${slices.length} page(s)` });
 
     const key = `${id}\n${uuid}`;
-    let memo = served.get(key);
-    if (memo === undefined || memo.hash !== hash) memo = { hash, pages: new Set() };
+    const prior = served.get(key);
+    const memo: Memo = prior !== undefined && prior.hash === hash ? prior : { hash, pages: new Set() };
     served.delete(key);
     memo.pages.add(page);
+    let recorded = false;
     if (memo.pages.size === slices.length) {
       const r = coord.insertCardRead({ sessionId: id, uuid, snapshotId, hash, pages: slices.length, at });
-      if (!r.ok) return refuseRoute(reply, 'write-failed', { detail: 'continuity_card_reads could not be written' });
-    } else {
-      served.set(key, memo);
-      if (served.size > CARD_MEMO_MAX) served.delete(served.keys().next().value!);
-    }
-    return reply.code(200).send({ ok: true, hash, snapshotId, page, pages: slices.length, text: slices[page - 1] });
+      if (!r.ok) {
+        remember(key, memo);
+        return refuseRoute(reply, 'write-failed', { detail: 'continuity_card_reads could not be written' });
+      }
+      recorded = true;
+    } else remember(key, memo);
+    return reply.code(200).send({ ok: true, hash, snapshotId, page, pages: slices.length, text: slices[page - 1], recorded });
   });
 }
