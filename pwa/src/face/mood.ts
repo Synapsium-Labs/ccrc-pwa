@@ -161,11 +161,13 @@ const NOT_LIVE: ReadonlySet<SessionBucket> = new Set<SessionBucket>(['dead', 'ar
 const limitNotChosen = (s: FleetSession): boolean => s.limitWait !== null && s.limitWait.waitingBy !== 'operator';
 
 /** The lanes a live session is on now: each session's `wrapper`, which is the lane's id on `GET /api/accounts` (the same
- *  key `LanesRead` carries). A session in a `NOT_LIVE` bucket holds no lane. Nothing on the wire names a lane a session is
+ *  key `LanesRead` carries). A session in a `NOT_LIVE` bucket holds no lane, and neither does one in a wait the operator
+ *  chose (`waitingBy: 'operator'`, item 219 ruling: such a wait is calm, so it is no reason for Dizzy either; an `'auto'`
+ *  wait or a limit with no choice yet still counts, though Crying outranks Dizzy while it stands). Nothing on the wire names a lane a session is
  *  ABOUT to use (no pending-swap field, and `limitWait.account` is the lane the session is on), so "using now" is the
  *  whole of Dizzy's lane arm (departure `dizzy-about-to-use-has-no-wire-field`). */
 const lanesInUse = (sessions: readonly FleetSession[]): ReadonlySet<string> =>
-  new Set(sessions.filter((s) => !NOT_LIVE.has(s.bucket)).map((s) => s.wrapper));
+  new Set(sessions.filter((s) => !NOT_LIVE.has(s.bucket) && s.limitWait?.waitingBy !== 'operator').map((s) => s.wrapper));
 
 type Rule = (f: MoodFacts, sessions: readonly FleetSession[]) => boolean;
 

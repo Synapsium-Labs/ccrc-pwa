@@ -130,12 +130,20 @@ into its ledger. Each entry is a plain slug. None carries a number: the programm
   start-up reading) shows at once, as an escalation does. Held to the cool-down, a console opened on a calm fleet would
   say "not heard yet" for a minute after every reader had answered, a false cause in the name. Neutral is no emotion to
   cool down from. Arriving at Neutral still follows the ranks (from a calmer mood it is an escalation; from Offline it
-  waits). Removing the exception is one clause in `shownMood` (mutants K3 and K5 pin it both ways).
+  waits). Removing the exception is one clause in `shownMood` (mutant K5 pins leaving Neutral at once; K3, the general escalation mutant, also pins arriving at Neutral from a calmer mood).
 - **face-play-rate-later, closed in part** — the follow-up above (a cap on how often the face plays) is now met by this
   cool-down for calming changes; an escalation still plays at once.
 - **return-to-settled-test-rewritten, a test** — `face-mark.test.tsx`'s "a return to a mood that had settled plays again,
   inside five seconds of leaving it" cannot hold: a calming change now waits for the cool-down. The row waits the
-  cool-down out and asserts the return plays again at its end.
+  cool-down out and asserts the return plays again at its end. The old row's mid-play guard (a change 4 s into a running
+  play, still false at 4999 ms and true at 5000 ms) moved to a new row on an escalation, which the cool-down never holds
+  (review 2010 F1): it kills a `FaceMark` whose old play timer survives a mood change.
+- **held-mood-resets-on-a-remount, a known residual (review 2010 F4)** — the held mood and its time live in each `FaceMark`'s
+  own state (`useMood`), so a remount starts from `shownMood(null, …)`: a calmer decided mood then shows at once, skips the
+  rest of the cool-down and plays again. Two rare triggers only: crossing the 900 px desk and phone line (the bar's face is
+  swapped for the column head's) and switching skin; navigation never remounts the face. It fails toward showing the truth
+  and never hides a more urgent mood. Moving the held mood into one owner outside the component (the chrome store) is the
+  fix, left for the operator's tuning pass because it adds a field to a shared store.
 
 ## Narrowing Crying and Dizzy (programme item 219, wave 26)
 
@@ -153,11 +161,17 @@ about to use, is limited."
   session (a bucket that is not `dead`, `archived` or `cleanup`, the set Angry already uses) is on it now: the lane's id on
   `GET /api/accounts` is the session's `wrapper`. A spare account at its cap that no session is on gives no Dizzy. The swap
   arm of Dizzy is unchanged, and `MOOD_RULES.dizzy.cause` now reads "an account a session is on is rate-limited, or a
-  session just swapped".
+  session just swapped". A session in a wait the operator chose does not count as using its lane either (review 2010 F2,
+  the coordinator's ruling): such a wait is calm, so it is no reason for Dizzy. Without that rule the session, live and on
+  the lane named by `limitWait.account`, made the face Dizzy once the lane's telemetry read `rate-limited`. An `'auto'` wait
+  or a limit with no choice yet still counts as using the lane, though Crying outranks Dizzy while it stands. Another live
+  session on the same lane still uses it.
 - **dizzy-about-to-use-has-no-wire-field, a follow-up (for the coordinator)** — measured: nothing the PWA receives names a
   lane a session is ABOUT to use. A session carries `wrapper` (the lane it is on) and `limitWait.account` (the lane it is at
   the limit on, so "in use", not next); `swapBlocked` and `stranded` are refusals with a reason and no lane. There is no
-  pending-swap field. `ProjectedHome` and `ProjectPlacement` forecast where a NEW workspace would land, a project's, not any
+  pending-swap field. `FleetSession.home` is the session's home-account affinity, the lane ccd's auto-swap returns it to when
+  that lane has room (gated by cooldown, quiet turn and manual pin; `ccd swap` never changes it): a standing affinity, not
+  a pending move, so it does not count as "about to use" either. `ProjectedHome` and `ProjectPlacement` forecast where a NEW workspace would land, a project's, not any
   session's next lane, and the face does not read them. So only the "using now" half is built. The "about to use" half would
   need a new wire field (the next account a pending swap or a pool placement has chosen for a session), which this change adds
   none of.

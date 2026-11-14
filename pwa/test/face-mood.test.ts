@@ -127,9 +127,18 @@ describe('moodOf', () => {
     expect(mood(base({ lanes, sessions: [...base().sessions!, fleetSession({ id: 'lane-b-x', wrapper: 'lane-b', bucket: 'archived' })] }))).not.toBe('dizzy');
     expect(mood(base({ lanes, sessions: [...base().sessions!, fleetSession({ id: 'lane-b-x', wrapper: 'lane-b', bucket: 'cleanup' })] }))).not.toBe('dizzy');
   });
-  it('a limited lane any live session is on is Dizzy, whichever bucket it is in', () => {
+  it('a session in a wait the operator chose does not count as using its limited lane (item 219)', () => {
     const lanes: LanesRead = { kind: 'served', lanes: { 'lane-b': rateLimited } };
-    for (const bucket of ['working', 'idle'] as const)
+    const waiting = fleetSession({ id: 'lane-b-x', wrapper: 'lane-b', bucket: 'idle', limitWait: limitWait('operator', { account: 'lane-b' }) });
+    expect(mood(base({ lanes, sessions: [...base().sessions!, waiting] }))).not.toBe('dizzy');
+    expect(mood(base({ lanes, sessions: [...base().sessions!, waiting] }))).not.toBe('crying');
+    // another live session on the same lane still uses it
+    const other = fleetSession({ id: 'lane-b-y', wrapper: 'lane-b', bucket: 'working' });
+    expect(mood(base({ lanes, sessions: [...base().sessions!, waiting, other] }))).toBe('dizzy');
+  });
+  it('a limited lane any live session is on is Dizzy, whichever live bucket it is in', () => {
+    const lanes: LanesRead = { kind: 'served', lanes: { 'lane-b': rateLimited } };
+    for (const bucket of ['working', 'done', 'idle'] as const)
       expect(mood(base({ lanes, sessions: [...base().sessions!, fleetSession({ id: 'lane-b-x', wrapper: 'lane-b', bucket })] }))).toBe('dizzy');
   });
   it('a recent swap is Dizzy', () =>

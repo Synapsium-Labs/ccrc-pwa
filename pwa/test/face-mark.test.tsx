@@ -100,6 +100,20 @@ describe('the face', () => {
     expect(still()).toBe(true);
   });
 
+  it('an escalation inside a running play opens a fresh five seconds, and the old timer does not cut it short', () => {
+    const store = heard();
+    mountFace(store);
+    advance(4000);
+    expect(still()).toBe(false);
+    act(() => store.setState({ sessions: [fleetSession({ id: 'lane-a-1', bucket: 'attention' })] }));
+    expect(face().getAttribute('aria-label')).toContain('a session has a question for you');
+    expect(still()).toBe(false);
+    advance(MOOD_PLAY_MS - 1);
+    expect(still()).toBe(false);
+    advance(1);
+    expect(still()).toBe(true);
+  });
+
   it('a return to a mood that had settled plays again once the cool-down has let it back', () => {
     const store = heard();
     mountFace(store);

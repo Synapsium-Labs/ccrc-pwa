@@ -156,9 +156,15 @@ export function moodCases(m: MoodModule): Record<string, SuiteCase> {
       expect(mood(base({ lanes, sessions: [...base().sessions!, fleetSession({ id: 'lane-b-x', wrapper: 'lane-b', bucket: 'archived' })] }))).not.toBe('dizzy');
       expect(mood(base({ lanes, sessions: [...base().sessions!, fleetSession({ id: 'lane-b-x', wrapper: 'lane-b', bucket: 'cleanup' })] }))).not.toBe('dizzy');
     },
+    'a session in a wait the operator chose does not count as using its limited lane': () => {
+      const lanes = serving({ 'lane-b': rateLimited });
+      const waiting = fleetSession({ id: 'lane-b-x', wrapper: 'lane-b', bucket: 'idle', limitWait: limitWait('operator', { account: 'lane-b' }) });
+      expect(mood(base({ lanes, sessions: [...base().sessions!, waiting] }))).not.toBe('dizzy');
+      expect(mood(base({ lanes, sessions: [...base().sessions!, waiting, fleetSession({ id: 'lane-b-y', wrapper: 'lane-b', bucket: 'working' })] }))).toBe('dizzy');
+    },
     'a limited lane any live session is on is Dizzy': () => {
       const lanes = serving({ 'lane-b': rateLimited });
-      for (const bucket of ['working', 'idle'])
+      for (const bucket of ['working', 'done', 'idle'])
         expect(mood(base({ lanes, sessions: [...base().sessions!, fleetSession({ id: 'lane-b-x', wrapper: 'lane-b', bucket })] }))).toBe('dizzy');
     },
     'a recent swap is Dizzy, an older one is not': () => {
@@ -252,10 +258,13 @@ const MOOD_SET: MutantSet<MoodModule> = {
     { id: 'S1', old: 'f.waitingItems > 0', new: 'f.waitingItems >= 0' },
     { id: 'D1', old: "f.lanes.kind === 'served' && Object.entries(f.lanes.lanes).some(([id, l]) => l.state.word === 'rate-limited' && lanesInUse(ss).has(id))", new: 'false' },
     { id: 'D2', old: " && lanesInUse(ss).has(id)", new: '' },
-    { id: 'D3', old: 'sessions.filter((s) => !NOT_LIVE.has(s.bucket)).map', new: 'sessions.map' },
+    { id: 'D3', old: '!NOT_LIVE.has(s.bucket) && s.limitWait?.waitingBy', new: 's.limitWait?.waitingBy' },
     { id: 'D4', old: '.map((s) => s.wrapper)', new: '.map((s) => s.project)' },
     { id: 'D5', old: "&& lanesInUse(ss).has(id)", new: "&& !lanesInUse(ss).has(id)" },
-    { id: 'D6', old: "new Set(sessions.filter((s) => !NOT_LIVE.has(s.bucket))", new: "new Set(sessions.filter((s) => s.bucket !== 'dead')" },
+    { id: 'D7', old: " && s.limitWait?.waitingBy !== 'operator')", new: ')' },
+    { id: 'D8', old: "s.limitWait?.waitingBy !== 'operator').map", new: "s.limitWait?.waitingBy === 'operator').map" },
+    { id: 'D9', old: "new Set(sessions.filter((s) => !NOT_LIVE.has(s.bucket) &&", new: "new Set(sessions.filter((s) => (s.bucket === 'working' || s.bucket === 'idle') &&" },
+    { id: 'D6', old: "new Set(sessions.filter((s) => !NOT_LIVE.has(s.bucket) &&", new: "new Set(sessions.filter((s) => s.bucket !== 'dead' &&" },
     { id: 'G1', old: "f.lanes.kind !== 'unread'\n    && ss.some((s) => within(s.pr", new: "f.lanes.kind === 'served'\n    && ss.some((s) => within(s.pr" },
     { id: 'G2', old: "f.lanes.kind !== 'unread'\n    && !ss.some", new: "f.lanes.kind === 'served'\n    && !ss.some" },
     { id: 'H1', old: "['happy', (f, ss) => f.runs !== null && f.waitingItems", new: "['happy', (f, ss) => f.waitingItems" },
