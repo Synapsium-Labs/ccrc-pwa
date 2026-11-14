@@ -9,7 +9,9 @@
 
 ## What this is
 
-This is the design only. No code changes, and no task is dispatched until the operator answers the spec's §5.
+This is the design only. It makes no code changes. The operator answered the spec's §5 on 2026-11-14 and approved it
+with every answer as recommended. Step 0 (the caps, `file-split.mjs` and its pin) and the pilot (`delegation-checkpoint.ts`)
+each get their own plan next. The `ccd/ccd` split starts beside them, its slices giving way to open PRs.
 
 - The `ccd/ccd` split keeps its own plan, `docs/superpowers/plans/2026-11-06-ccd-file-split.md` (D-8048), and runs first
   once its Task 0 passes.

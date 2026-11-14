@@ -196,6 +196,12 @@ with their own control; the coordinator writes the cap or exemption file after t
 
 ## 5. Questions for the operator, recommendation first
 
+**Answered 2026-11-14: approved, every question as recommended.** Q1 2,500 code lines; Q2 the one cap rule; Q3 yes;
+Q4 drain, then move the 18 routes; Q5 keep whole and cap now; Q6 cap only; Q7 §4's order with the pilot; Q8 10 lines per
+PR, no waivers, the named exemption only; Q9 assembled at install, decided with Q7; Q10 ledger items with a console
+control. The operator's last answer: "start step 0 and the pilot". The ccd split starts now too, each slice giving way to
+open PRs.
+
 1. **Ceiling:** 2,500 code lines (three files already pass and are refactored for rings and contexts only); or 1,500,
    which binds those too and adds seven files.
 2. **Caps:** §4's one rule (measured plus 40, may only fall); or budgets only.
