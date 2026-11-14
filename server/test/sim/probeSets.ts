@@ -116,6 +116,7 @@ export function probeRoundCases(m: ProbesModule): Record<string, SuiteCase> {
       const caseOnly = empty({ claims: read([{ id: 1, paths: ['a/x.ts', 'b/X.ts', 'c/y.ts'], runId: null }]) });
       const folded = ['a/x.ts', 'b/x.ts', 'c/y.ts'];
       let asked = 0;
+      let lookAlike = 0;
       for (const seed of SEEDS) {
         for (const q of round(RICH, seed).questions.filter((x) => x.text.includes('hold a claim'))) {
           asked++;
@@ -124,6 +125,8 @@ export function probeRoundCases(m: ProbesModule): Record<string, SuiteCase> {
         }
         for (const q of round(caseOnly, seed).questions.filter((x) => x.text.includes('hold a claim'))) {
           asked++;
+          expect(new Set(q.choices!.map((c) => c.trim().toLowerCase())).size, q.choices!.join(' ')).toBe(q.choices!.length);
+          if (q.choices!.some((c) => c.toLowerCase() === 'c/x.ts')) lookAlike++;
           for (const c of q.choices!.filter((x) => x !== q.expected)) {
             expect(folded.some((h) => c.toLowerCase() === h || c.toLowerCase().startsWith(`${h}/`)), c).toBe(false);
             expect(m.gradeProbe(q, c), c).toBe('fail');
@@ -131,6 +134,8 @@ export function probeRoundCases(m: ProbesModule): Record<string, SuiteCase> {
         }
       }
       expect(asked).toBeGreaterThan(SEEDS.length);
+      // `c/x.ts` and `c/X.ts` are both decoys that pass the held-path filter; only the fold dedupe keeps them apart.
+      expect(lookAlike).toBeGreaterThan(SEEDS.length / 4);
     },
     'a snapshot that supports only fact and abstention is topped up from fact to three': () => {
       for (const seed of SEEDS) {
@@ -146,6 +151,10 @@ export function probeRoundCases(m: ProbesModule): Record<string, SuiteCase> {
       expect(noneOpen.questions.filter((q) => q.cls === 'abstention')).toEqual([]);
       expect(noneOpen.skipped.find((s) => s.cls === 'abstention'))
         .toEqual({ cls: 'abstention', why: 'no open item on your record that was never ticked', unmeasured: false });
+      // review 2001, F-D: the ledger still shows item 9 open, the items raised show it ticked; the items raised win, as on the card.
+      const race = empty({ ledger: read([{ slug: 'prog-a', goals: [], openItems: [item(9)], decisions: [] }]),
+        itemsRaised: read([item(9, { state: 'checking', everTicked: true })]) });
+      for (const seed of SEEDS) expect(round(race, seed).questions.filter((q) => q.cls === 'abstention')).toEqual([]);
     },
     'a snapshot with no runs yields the abstention question and says the round is short': () => {
       const r = round(empty({ itemsRaised: read([item(7)]) }), 3);
@@ -169,9 +178,19 @@ export function probeRoundCases(m: ProbesModule): Record<string, SuiteCase> {
       expect([ledgerOnly.questions, ledgerOnly.unmeasured]).toEqual([[], true]);
       expect(round(empty({ ledger: unmeasured('the ledger'), itemsRaised: read([item(7)]) }), 5).questions.map((q) => q.cls))
         .toEqual(['abstention']);
+      // review 2001, F-A: a failed read that only cost the round its top-up still makes the short round unmeasured.
+      const lessened = round(empty({ runs: read([run(41, 'prog-a', 'working')]), claims: unmeasured('the claims') }), 5);
+      expect([lessened.questions.map((q) => q.cls), lessened.short, lessened.unmeasured]).toEqual([['fact'], true, true]);
       const measured = round(empty(), 5);
       expect([measured.questions, measured.short, measured.unmeasured]).toEqual([[], true, false]);
       expect(measured.skipped.every((s) => !s.unmeasured)).toBe(true);
+    },
+    'a full round is never unmeasured, though a class it skipped had a failed read (review 2001, F-B)': () => {
+      for (const seed of SEEDS) {
+        const r = round({ ...RICH, notes: unmeasured('the notes') }, seed);
+        expect([r.short, r.unmeasured]).toEqual([false, false]);
+        expect(r.skipped.find((x) => x.cls === 'continuation')).toEqual({ cls: 'continuation', why: 'not read: the notes', unmeasured: true });
+      }
     },
     'continuation reads the snapshot\'s notes and is skipped with fewer than three of distinct text': () => {
       const twoTexts = [NOTES[0]!, NOTES[1]!, { ...NOTES[2]!, text: ` ${NOTES[0]!.text.toUpperCase()} ` }];
@@ -361,17 +380,21 @@ const PROBE_ROUND_SET: MutantSet<ProbesModule> = {
     { id: 'R2 expected outside choices', old: 'expected: String(r.id),', new: 'expected: String(r.id + 1000),' },
     { id: 'R3 a class the role lacks', old: 'shuffle(FLEET_ROLES[role].probeSet, entropy)', new: 'shuffle(FLEET_ROLES.overlord.probeSet, entropy)' },
     { id: 'R4 ignore the seed', old: 'const j = entropy.below(i + 1);', new: 'const j = i;' },
-    { id: 'R5 abstention on a closed item', old: "items.filter((i) => i.state === 'open' && !i.everTicked)", new: 'items.filter((i) => !i.everTicked)' },
-    { id: 'R6 abstention on a ticked item', old: "items.filter((i) => i.state === 'open' && !i.everTicked)", new: "items.filter((i) => i.state === 'open')" },
+    { id: 'R5 abstention on a closed item', old: "[...byId.values()].filter((i) => i.state === 'open' && !i.everTicked)", new: '[...byId.values()].filter((i) => !i.everTicked)' },
+    { id: 'R6 abstention on a ticked item', old: "[...byId.values()].filter((i) => i.state === 'open' && !i.everTicked)", new: "[...byId.values()].filter((i) => i.state === 'open')" },
     { id: 'R7 a spot round of three', old: "kind === 'spot' ? [1, 1]", new: "kind === 'spot' ? [3, 5]" },
     { id: 'R8 a held decoy', old: '.filter((p) => !heldFolded.some((h) => under(fold(p), h)))', new: '' },
     { id: 'R9 a decoy unfolded', old: '.filter((p) => !heldFolded.some((h) => under(fold(p), h)))', new: '.filter((p) => !held.some((h) => under(p, h)))' },
     { id: 'R10 continuation with two texts', old: 'if (distinct.length < 2) continue;', new: 'if (distinct.length < 1) continue;' },
     { id: 'R11 temporal with a tied newest', old: 'if (top.length !== 1) continue;', new: '' },
     { id: 'R12 temporal with two rows', old: 'f.rows.length < 3 ||', new: 'f.rows.length < 2 ||' },
-    { id: 'R13 a failed read taken for empty', old: 'drafts.length > 0 ? [] : unreadOf(s.runs, s.claims)', new: '[]' },
+    { id: 'R13 a failed read taken for empty', old: 'unreadOf(s.runs, s.claims))', new: '[])' },
+    { id: 'R17 a failed read hidden once the class drafted', old: 'unreadOf(s.runs, s.claims))', new: 'drafts.length > 0 ? [] : unreadOf(s.runs, s.claims))' },
     { id: 'R14 the skip unmarked', old: 'unmeasured: p.unread.length > 0 }', new: 'unmeasured: false }' },
-    { id: 'R15 every short round unmeasured', old: 'unmeasured: short && skipped.some((x) => x.unmeasured)', new: 'unmeasured: short' },
+    { id: 'R15 every short round unmeasured', old: 'unmeasured: short && unread.size > 0', new: 'unmeasured: short' },
+    { id: 'R18 a full round unmeasured', old: 'unmeasured: short && unread.size > 0', new: 'unmeasured: unread.size > 0' },
+    { id: 'R19 look-alike decoys kept', old: '.filter((p, i, all) => all.findIndex((x) => fold(x) === fold(p)) === i)', new: '' },
+    { id: 'R20 the ledger row wins', old: 'for (const p of valueOf(s.ledger) ?? []) for (const i of p.openItems) byId.set(i.id, i);\n  for (const i of valueOf(s.itemsRaised) ?? []) byId.set(i.id, i);', new: 'for (const i of valueOf(s.itemsRaised) ?? []) byId.set(i.id, i);\n  for (const p of valueOf(s.ledger) ?? []) for (const i of p.openItems) byId.set(i.id, i);' },
     { id: 'R16 the mail word', old: "'Which of these deliveries was sent last?'", new: "'Which of these deliveries reached you last?'" },
   ],
   suite: probeRoundCases,

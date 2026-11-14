@@ -3,7 +3,8 @@
 A note for the programme's coordinator to fold into `w1a-probes.md`'s "Deviations found" and the index plan. Each
 departure is named by its plain-words slug; the plan file itself is left unedited, and no number is taken here. PR A is
 Tasks 1 to 3, all pure L1: no table, no door, no I/O. It grows neither `server/src/coord/store.ts` nor
-`server/src/watch.ts`. Fix round 1 (review 1999) changed the entries marked "fix round 1" below.
+`server/src/watch.ts`. Fix round 1 (review 1999) changed the entries marked "fix round 1" below, and fix round 2 (review 2001) those marked
+"fix round 2".
 
 ## Shapes the plan's interfaces did not fix
 
@@ -26,7 +27,8 @@ Tasks 1 to 3, all pure L1: no table, no door, no I/O. It grows neither `server/s
   `decision`, `contradiction`, `application`, `thread`): it skips each, giving a reason.
 - **card-item-ever-ticked (fix round 1, F2a).** `CardItem` gains `everTicked: boolean`, true when the item's `tickedAt`
   is set. An item ticked and then returned to `open` keeps its answer, so `open` alone does not mean "no ruling". The
-  field is required, so card PR B's gather does not compile until it fills it.
+  field is required, so card PR B's gather does not compile until it fills it. It is also written into the card's
+  facts contract in `w1a-card.md` (fix round 2, N3), so the gather's builder sees it there.
 
 ## Readings of the plan, where the card's rows differ from what it assumed
 
@@ -46,15 +48,21 @@ Tasks 1 to 3, all pure L1: no table, no door, no I/O. It grows neither `server/s
   runs' plan paths. A decoy that is a held path, or lies under one, is never offered. With fewer than two decoys the
   question is not asked.
 - **decoys-fold-like-grading (fix round 1, F5).** Decoys are filtered and deduplicated by the same trim-and-case-fold
-  that grading uses, so no decoy grades as the answer (held `a/x.ts` and `b/X.ts` never offer `a/X.ts`).
+  that grading uses, so no decoy grades as the answer (held `a/x.ts` and `b/X.ts` never offer `a/X.ts`), and no two
+  choices fold equal (`c/x.ts` and `c/X.ts` are never offered together; fix round 2, F-C, pins the dedupe).
 - **abstention-asks-only-real-unruled-items (fix round 1, F2b; replaces abstention-needs-both-item-reads).** The
   abstention question names a real item of the session's own record (the ledger's open items or the items it raised)
   that is `open` and was never ticked. It never names an id the snapshot does not hold: ids are global, so a
   fabricated one is likely a real, ruled item of another programme. With no such item the class is skipped, with its
-  reason.
-- **unmeasured-is-never-empty (fix round 1, F4a).** A fact that was not read is never taken for an empty list. A class
-  that could not ask because a read failed is skipped with `unmeasured: true` and a reason naming each failed read by
-  its own `what`. A round that is short with such a skip is `unmeasured`.
+  reason. The both-reads rule is dropped because it existed for the fabricated id, which is gone: `none` now rests on
+  the named row's own `state` and `everTicked`, so an unmeasured other read only narrows the pool (fix round 2, F-E).
+  The two lists merge by id as the card merges them (`card.ts#itemsSections`, the items raised winning), so the probe
+  asks about the row the card showed (fix round 2, F-D).
+- **unmeasured-is-never-empty (fix round 1, F4a; fix round 2, F-A).** A fact that was not read is never taken for an
+  empty list. Each class reports every read it needed that failed, whether or not it still asked something. A class
+  that could not ask is skipped with `unmeasured: true` and a reason naming each failed read by its own `what`. A short
+  round is `unmeasured` when any class it consulted had a failed read, so a read that only cost the round its top-up
+  counts too. A full round is never `unmeasured`, even when a class it skipped had a failed read (fix round 2, F-B).
 - **grade-folds-every-answer.** `gradeProbe` trims and case-folds the answer, the expected value and the choices alike,
   so a path choice is folded too, not only ids. An answer outside the choices fails even when it equals `expected`.
   That makes a malformed question unpassable rather than silently passable. The decoys fold the same way (above).
@@ -71,7 +79,8 @@ Tasks 1 to 3, all pure L1: no table, no door, no I/O. It grows neither `server/s
   `{ kind: 'ceiling', tokens, fitted }` or `{ kind: 'no-depth-holds' }`. A bad first bucket answers the second, and no
   number stands for it. How a consumer maps it is the piece that wires the ceiling.
 - **bad-depth-caps-the-ceiling (fix round 1, F7; replaces short-step-leaves-the-hard-cap).** The ceiling never sits
-  above a depth measured bad. Walking up the buckets, the first bad one caps the tokens at the depth below it. A
+  above a depth measured bad at or past the first step; depths below the first step are never a bucket (fix round 2,
+  F-E). Walking up the buckets, the first bad one caps the tokens at the depth below it. A
   bucket short of `FIT_WINDOW` probes does not stop the walk; it only makes the answer `fitted: false`. This reads the
   plan's second clause ("with any bucket short ... it is the hard cap, not fitted") narrowly: shortness unfits, and
   only a measured bad depth moves the tokens. Review 1999's case (20 good at 50k, 19 at 100k, 20 of 20 failing at
@@ -87,11 +96,12 @@ Tasks 1 to 3, all pure L1: no table, no door, no I/O. It grows neither `server/s
 ## Guards
 
 - `probeRound`, `gradeProbe` and `fittedCeiling` joined `MUTANT_SETS` (`server/test/sim/probeSets.ts`) with floor 1:
-  16, 7 and 11 mutants after fix round 1, each killed by the cases `continuity-probes.test.ts` runs. The added mutants
+  20, 7 and 11 mutants after fix round 2, each killed by the cases `continuity-probes.test.ts` runs. The added mutants
   cover each finding of review 1999: the mail word, a ticked or closed item asked, a decoy left unfolded, a failed read
   taken for empty, a skip left unmarked, every short round called unmeasured, unmeasured ignored or hiding a fail, no
   depth holds turned into zero, the caller's order trusted, the bucket at the cap required, fitted with nothing
-  examined, and a short bucket below a bad one left fitted.
+  examined, and a short bucket below a bad one left fitted. Fix round 2 adds: a failed read hidden once its class
+  drafted, a full round called unmeasured, look-alike decoys kept, and the ledger's row winning over the items raised.
 - The six new values (`PROBE_ROUND_MIN`, `PROBE_ROUND_MAX`, `SPOT_PROBE_EVERY_TOKENS`, `FIT_PASS_RATE`, `FIT_WINDOW`,
   `PROBE_NONE`) joined `single-definition/continuity-values.test.ts`'s names. `probes.ts` joined its deciders, and
   50,000 its figures. A second declaration and a spelled `50_000` in `probes.ts` were each measured red, then restored

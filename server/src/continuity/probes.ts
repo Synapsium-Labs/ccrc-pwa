@@ -6,11 +6,12 @@
 // - `probeRound` composes a round from the session's own rows: one question per class its role's `probeSet` carries and
 //   the snapshot can support, topped up from `fact` to `PROBE_ROUND_MIN`; a snapshot too thin for that answers fewer
 //   and says so (`short`, and a `skipped` line per class it could not ask). A read that failed is never taken for an
-//   empty one: it is named, and a round it made short is `unmeasured` (review 1999, F4).
+//   empty one: it is named, and a short round is `unmeasured` when any class had a failed read, whether that read
+//   emptied the class or only cost it questions (reviews 1999 F4, 2001 F-A).
 // - `gradeProbe` grades one answer closed-form, and `roundVerdict` a round, all or nothing, with `unmeasured` kept apart.
 // - `fittedCeiling` fits the depth a model class holds its memory to, from closed-book spot probes, derived on read
 //   (no table of its own, §3.3.6's one rule for derived values).
-import type { CardFacts, CardNote, Fact } from '../../../shared/continuity-card.js';
+import type { CardFacts, CardItem, CardNote, Fact } from '../../../shared/continuity-card.js';
 import {
   FIT_PASS_RATE, FIT_WINDOW, PROBE_NONE, PROBE_ROUND_MAX, PROBE_ROUND_MIN, SPOT_PROBE_EVERY_TOKENS, type ProbeClass,
 } from '../../../shared/continuity.js';
@@ -35,7 +36,8 @@ export interface ProbeSkip { readonly cls: ProbeClass; readonly why: string; rea
 export type ProbeKind = 'start' | 'compaction' | 'spot';
 
 /** A composed round. `short` is true when it asks fewer than its kind's least count (three, or one for a spot probe);
- *  `unmeasured` is true when it is short and a read some class needed failed, so the shortfall may be the server's. */
+ *  `unmeasured` is true when it is short and any class it consulted had a failed read, whether or not that class still
+ *  asked something, so the shortfall may be the server's. A full round is never `unmeasured`. */
 export interface ProbeRound {
   readonly kind: ProbeKind;
   readonly questions: readonly ProbeQuestion[];
@@ -45,7 +47,7 @@ export interface ProbeRound {
 }
 
 type Draft = Omit<ProbeQuestion, 'id'>;
-/** A class's candidate questions; `unread` names each read the class needed that failed. */
+/** A class's candidate questions; `unread` names each read the class needed that failed, whether or not it drafted. */
 interface Pool { readonly drafts: readonly Draft[]; readonly why: string; readonly unread: readonly string[] }
 
 /** The one fold grading uses: decoys are filtered by it too, so no decoy grades as the answer (review 1999, F5). */
@@ -121,7 +123,7 @@ function factPool(s: CardFacts, entropy: Entropy): Pool {
     });
   }
   return pool(drafts, 'no programme with one open run of yours, and no claim with two paths to set beside it',
-    drafts.length > 0 ? [] : unreadOf(s.runs, s.claims));
+    unreadOf(s.runs, s.claims));
 }
 
 /** temporal: which of a family of timed rows came last (mail sent to it, items it raised, notes it wrote). A family
@@ -146,21 +148,24 @@ function temporalPool(s: CardFacts, entropy: Entropy): Pool {
       expected: String(top[0]!.id) });
   }
   return pool(drafts, 'no family of three or more timed rows with one newest',
-    drafts.length > 0 ? [] : unreadOf(s.mailOutstanding, s.itemsRaised, s.notes));
+    unreadOf(s.mailOutstanding, s.itemsRaised, s.notes));
 }
 
 /** abstention: what the operator ruled on an item of the session's own record that carries no ruling: open and never
  *  ticked (a ticked item that was returned to `open` keeps its answer, review 1999, F2a). Never an id the snapshot does
- *  not hold (F2b): with no such item the class is skipped. */
+ *  not hold (F2b): with no such item the class is skipped. The two item lists merge by id as the card merges them
+ *  (`card.ts#itemsSections`: the items raised win), so the probe asks about the row the card showed (review 2001, F-D). */
 function abstentionPool(s: CardFacts, entropy: Entropy): Pool {
-  const items = [...(valueOf(s.ledger) ?? []).flatMap((p) => p.openItems), ...(valueOf(s.itemsRaised) ?? [])];
-  const unruled = [...new Set(items.filter((i) => i.state === 'open' && !i.everTicked).map((i) => i.id))];
+  const byId = new Map<number, CardItem>();
+  for (const p of valueOf(s.ledger) ?? []) for (const i of p.openItems) byId.set(i.id, i);
+  for (const i of valueOf(s.itemsRaised) ?? []) byId.set(i.id, i);
+  const unruled = [...byId.values()].filter((i) => i.state === 'open' && !i.everTicked).map((i) => i.id);
   const drafts: Draft[] = unruled.length === 0 ? [] : [{
     cls: 'abstention', text: `What did the operator rule on item ${unruled[entropy.below(unruled.length)]!}?`,
     choices: null, expected: PROBE_NONE,
   }];
   return pool(drafts, 'no open item on your record that was never ticked',
-    drafts.length > 0 ? [] : unreadOf(s.ledger, s.itemsRaised));
+    unreadOf(s.ledger, s.itemsRaised));
 }
 
 /** continuation: what a note says comes next, beside two other notes' text. Until the notes piece gives a note its own
@@ -178,7 +183,7 @@ function continuationPool(s: CardFacts, entropy: Entropy): Pool {
       choices: shuffle([n.text, ...sample(distinct, 2, entropy).map((o) => o.text)], entropy), expected: n.text,
     });
   }
-  return pool(drafts, 'fewer than three notes of distinct text', drafts.length > 0 ? [] : unreadOf(s.notes));
+  return pool(drafts, 'fewer than three notes of distinct text', unreadOf(s.notes));
 }
 
 /** The classes whose rows a card snapshot does not carry in W1a. */
@@ -203,8 +208,10 @@ export function probeRound(role: FleetRole, snapshot: CardFacts, entropy: Entrop
   const drafts: Draft[] = [];
   const skipped: ProbeSkip[] = [];
   let factRest: Draft[] = [];
+  const unread = new Set<string>();
   for (const cls of shuffle(FLEET_ROLES[role].probeSet, entropy)) {
     const p = poolFor(cls, snapshot, entropy);
+    for (const w of p.unread) unread.add(w);
     const [first, ...rest] = shuffle(p.drafts, entropy);
     if (first === undefined) skipped.push({ cls, why: p.why, unmeasured: p.unread.length > 0 });
     else if (drafts.length >= most) skipped.push({ cls, why: 'the round was full', unmeasured: false });
@@ -216,7 +223,7 @@ export function probeRound(role: FleetRole, snapshot: CardFacts, entropy: Entrop
   while (drafts.length < least && factRest.length > 0) drafts.push(factRest.shift()!);
   const questions = drafts.map((d, i) => ({ id: `p${i + 1}`, ...d }));
   const short = questions.length < least;
-  return { kind, questions, skipped, short, unmeasured: short && skipped.some((x) => x.unmeasured) };
+  return { kind, questions, skipped, short, unmeasured: short && unread.size > 0 };
 }
 
 export type ProbeGrade = 'pass' | 'fail';
@@ -262,7 +269,8 @@ export type FittedCeiling =
  *  that start below the hard cap, a bucket with `FIT_WINDOW` probes is good when its last `FIT_WINDOW` pass at
  *  `FIT_PASS_RATE` or better, and bad otherwise. The first bad bucket caps the ceiling at the depth below it, and a bad
  *  first bucket answers `no-depth-holds`; with none bad the ceiling is the hard cap. The ceiling never sits above a
- *  depth measured bad (slug bad-depth-caps-the-ceiling, review 1999 F7). It is `fitted` only when every bucket below
+ *  depth measured bad at or past the first step (slug bad-depth-caps-the-ceiling, review 1999 F7); depths below the
+ *  first step are never a bucket (review 2001, F-E). It is `fitted` only when every bucket below
  *  it held `FIT_WINDOW` probes and at least one bucket was examined (F6). Never above `hardCap`. */
 export function fittedCeiling(spots: readonly SpotProbe[], modelClass: string, hardCap: number): FittedCeiling {
   const buckets = new Map<number, ProbeGrade[]>();
