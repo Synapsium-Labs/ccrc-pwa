@@ -7,8 +7,14 @@ is Tasks 5 to 8, plus the carries the brief named (review 1945 F2, review 1970 N
 **Why a new file.** The brief names `departures.md`, PR A's note. `ledger-guard` fails a pull request that modifies an
 existing file under `docs/superpowers/plans/`, so PR B's departures are this new file beside it.
 
-**Growth** (the growth check, armed, against the merge base): `ccd/ccd` +4, `server/src/coord/routes.ts` +25,
-`server/src/watch.ts` +23, `server/src/coord/store.ts` +22, `ccd/ccrc-doctor-checks` +36 (limit 40 each). No waiver.
+**Growth** (the growth check, armed, against the merge base, after fix round 1): `ccd/ccd` +6,
+`server/src/coord/routes.ts` +25, `server/src/watch.ts` +23, `server/src/coord/store.ts` +22, `ccd/ccrc-doctor-checks` +40
+(limit 40 each). No waiver.
+
+**Fix round 1 (review 2024, the coordinator's rulings).** Each finding's change is named in the slug it touched below; the
+slugs this round added or replaced are `compact-owned-while-continuity-live` (F3), `undecided-role-is-skipped` (F2 a, b,
+replacing `intent-unmeasured-reads-plain`), `compaction-cleared-on-a-role-without-it` (F2 c), `failed-writes-do-not-count`
+(F12), `doctor-second-memory-walker` (F5, F6) and `no-overlord-profile-before-w1` (F13 c).
 
 ## Measured for the brief
 
@@ -23,13 +29,21 @@ existing file under `docs/superpowers/plans/`, so PR B's departures are this new
   - **The fix:** `compactThresholdFor` adds `AUTO_COMPACT_BUFFER_TOKENS` = 34,000 (the measured bound, rounded up) to the
     compact point. A 200k window now gets 154,000 (it fires at about 120,000, its 60% point), and a 1M window 384,000 (it
     fires at about 350,000). ccd's own `compact` percent is unchanged.
-  - **The oracle** now compares where Claude Code fires (the variable, capped at the window, minus 33,500), not the
-    variable: it must be above the hard cap and at or after the compact point, for every window from 100k to 3M. Two new
-    mutants: the buffer dropped (T9) and the buffer at 33,000 (T10). Both are killed.
+  - **The band (review 2024 F4).** The variable is clamped to the range it takes (100,000 to 1,000,000), so on a window
+    under 85,000 tokens Claude Code would fire before the compact point (at 64,000 it fires at about 30,500, under the
+    32,000 cap), and over 6,900,000 the upper clamp fires it early too. `compactThresholdFor` now answers `null` wherever
+    the firing point, the variable capped at the window less 34,000, falls before the compact point: exactly outside 85,000
+    to 6,900,000 tokens. Real windows (200k and 1M today) are well inside it.
+  - **The oracle** compares where Claude Code fires (the variable, capped at the window, minus 33,500), not the variable:
+    for every window from 1,000 to 12,000,000 tokens, the answer is `null` exactly outside the band, and inside it the
+    firing point is above the hard cap and at or after the compact point. Mutants: the buffer dropped (T9), the buffer at
+    33,000 (T10), the band's guard dropped (T11), and the guard ignoring the window (T12). All are killed.
   - **C39's amendment, for the spec (the spec is claimed by the spec-timers piece, so the text is here):** in place of
     "set to the same figure", read: *"Claude Code's own auto-compact window (`CLAUDE_CODE_AUTO_COMPACT_WINDOW`) is the
     compact point plus the buffer Claude Code keeps below that variable, measured at 33,000 to 33,500 tokens on 2.1.325
-    and taken as 34,000, so Claude Code fires at the compact point, above renewal's hard cap."*
+    and taken as 34,000, so Claude Code fires at the compact point, above renewal's hard cap. This holds for windows from
+    85,000 to 6,900,000 tokens, where the variable's range (100,000 to 1,000,000) still reaches the compact point; outside
+    them no compact point is written."*
   - **Re-measure** on a new Claude Code build before the `continuity` row goes live; the scenarios are two small rig
     files (one turn per usage step, PreCompact refusing auto), not committed.
 - **compact-text-typed-whole (review 2004's note).** The longest role text, the overlord's (568 characters), typed as
@@ -41,18 +55,33 @@ existing file under `docs/superpowers/plans/`, so PR B's departures are this new
   PreCompact print adds the role section before the steer text. The two copies are the same words; the cost is about 400 to
   570 characters in one summarising request, and the keep-list reads the same either way. It is not reached from this PR:
   the lane writes `compactwindow` only while `continuity` is live (gated until the renewal act), and it skips every session
-  carrying a steer marker. If it is ever reached, the fix is one condition: the hook's role section stays silent on a
-  `manual` trigger, where ccd already typed it.
+  carrying a steer marker. One gap stays open (review 2024 F13 b): a session given `compactwindow` BEFORE its steer marker
+  appeared keeps it, because the lane skips a steered session whole, clearing included. That too needs `continuity` live,
+  which the renewal act brings, after the cohort's bound. If it is ever reached, the fix is one condition: the hook's role
+  section stays silent on a `manual` trigger, where ccd already typed it.
 
 ## New departures
 
 - **steered-sessions-skipped-whole.** The brief asks the lane to keep `compactwindow` off the W3 cohort's routes. The lane
-  skips any session carrying `~/.ccrc/history/steer-on/<id>` WHOLE (no field at all), and one whose marker could not be
-  read too, so arming the lane changes nothing for a session in a steering experiment. It reads the file the session
-  hook's W3 gate reads, by its physical name only: a link counts as present here (the hook ignores a link), the safe
-  direction. The directory is spelled once more in `server/src/continuity/profileLane.ts` (`HISTORY_STEER_ON_DIR`), held
-  equal to `ccd/history/lib.mjs`'s `SWITCHES.steerOnDir` by the lane's suite, since server code does not import that file.
-  The marker is read only for a session the lane would write.
+  skips any session carrying `~/.ccrc/history/steer-on/<id>` WHOLE (no field at all), and one whose marker read answered
+  anything but a proven absence (review 2024 F11: `steer !== 'absent'`, so a later read-failure word skips too), so arming
+  the lane changes nothing for a session in a steering experiment. The marker is read only for a session the lane would
+  write, through `steerMarkerOf` (`profileLane.ts`). The directory is spelled once more, in `shared/agent-protocol.ts`
+  (`HISTORY_STEER_ON_DIR`, which the agent and the server both read), held equal to `ccd/history/lib.mjs`'s
+  `SWITCHES.steerOnDir` by the lane's suite, since neither package imports that file.
+  - **The agent admits that one path for `stat` (review 2024 F1).** In remote fleet mode the read crosses the agent link,
+    and the agent's `stat` admitted only its read roots and three `~/.ccrc` switch files, so every marker read answered
+    `forbidden`, read as unreadable, and the shadow count read every session that needed a write as skipped.
+    `checkSteerOnStat` (`agent/src/whitelist.ts`) now admits `<canonical ~/.ccrc>/history/steer-on/<registry id>` for `stat`
+    alone. **Legitimately different** from `checkPath`'s roots, and kept out of them: it is another host's file, read by
+    the server across the link, and it answers one marker's existence, size and time; `read`, `readdir` and `lstat` admit
+    none of it and the directory stays unlistable. A live link at a marker is refused (the server reads it unreadable and
+    skips the session); a dangling one answers absent, as the hook's test does.
+  - **Measured end to end.** `continuity-profile-watcher.test.ts` drives the watcher's real `sweepLaunchProfile`: the path
+    asked of the fleet io, a marker on disk (skipped), an unreadable answer and a throw (skipped as unread), and absence
+    (counted). Replacing the watcher's read with `async () => 'absent'` turns all three cases red (measured). The agent's
+    suites hold the grant (`whitelist.test.ts`, `fileops.test.ts` over the socket); dropping it from the `stat` op, or the
+    registry-id check, turns them red (measured).
 - **profile-lane-in-the-watcher.** The plan says to wire the pass in `server/src/index.ts`. It is wired in
   `server/src/watch.ts` (`sweepLaunchProfile`, beside `sweepGenerations`), as every lane is, on its `LANE_SCHEDULE` row
   `launchProfile` (the usage lane's cadence by reference, one pass at a time). It takes `Deps.time` there: the usage read's
@@ -60,14 +89,44 @@ existing file under `docs/superpowers/plans/`, so PR B's departures are this new
 - **no-cap-word-the-lane-call-is-its-own (PR A's open question, ruled here).** No `ccd caps` word is added. An older fleet
   ccd refuses the three fields by name, the whole call, before any write; the lane's call carries only its own fields, so
   that refusal loses nothing else. It counts as a failed write and is logged naming the session, retried next pass. Rollout
-  moves the fleet box first, so the window is short.
-- **intent-unmeasured-reads-plain.** The lane asks `roleOf` with the declared-intent fact unmeasured, as the generations
-  lane does. A session with no open run therefore reads `coordinator-or-plain` and takes `plain` (C49, the member that
-  does less): its memory follows the Settings row until it opens a run. A coordinator between runs is plain to this lane.
+  moves the fleet box first, so the window is short. The same holds for a clear (an empty compaction value), which an
+  older ccd refuses as a bad value.
+- **undecided-role-is-skipped (review 2024 F2 a, b; replaces `intent-unmeasured-reads-plain`).** An unmeasured fact is never
+  written as a definite value. The lane reads declared coordinator intent from the delegation checkpoint
+  (`coordinatorIntentByParent` on the registry incarnation), as card PR B's fix round does, through ONE reader:
+  `server/src/continuity/declaredIntent.ts` (`intentOfCheckpoint`), a file both PRs carry byte for byte (agreed with
+  card B, mail 19361), so whichever lands second merges it as the same file. Each keeps its own fold of the incarnation
+  (`declaredIntentOf` in `profileFor.ts` here: absent reads declared none, unreadable is unmeasured). So: a non-child that
+  claims an open run is a coordinator (its intent is not read); one that claims none is a coordinator if it declared
+  intent, and plain if the checkpoint measurably holds none; one whose intent is unmeasured (incarnation unreadable,
+  checkpoint not ready), and EVERY non-child while the open-coordinator set cannot be read, is skipped and counted
+  (`roleUnread`, "whose role could not be decided"), never written. A coordinator between runs that declared its intent
+  keeps memory off; one that did not is plain and follows the Settings row (the item says so in option 1).
+  `PROFILE_OF_UNDECIDED` still answers for `worker-or-reviewer` (an unreadable child mark reads `worker`, C49);
+  `coordinator-or-plain` no longer reaches `profileFor` from the lane.
+- **compaction-cleared-on-a-role-without-it (review 2024 F2 c).** When a session's role has no compaction column, the lane
+  clears `compactwindow` (its field alone) and, while `continuity` is live, `compact` too, rather than leaving them for a
+  role that has none (ccd would still send the window variable while dropping the coordinator's idle-compaction setting).
+  ccd had no way to remove a route field, so `ccd route --set compact=` and `--set compactwindow=` now delete the field
+  (`cmd_route`, journalled `<old> -> ∅`); every other field still refuses an empty value. A field already absent is left
+  alone, so a settled route sends nothing. An older fleet ccd refuses the empty value, which counts as a failed write.
+- **compact-owned-while-continuity-live (review 2024 F3, carried).** `compact` is not lane-only: the operator's route and the
+  coordinator's `POST /api/runs/:id/route` still write it, and while `continuity` is live the lane rewrites it to the
+  profile's percent on its next pass, undoing a hand-set value. That is the plan's rule (the lane owns the compaction
+  columns while `continuity` is live). The doors' refusal of `compact` while `continuity` is live is built with the renewal
+  act, which lifts the `continuity` gate; until then `continuity` cannot be live, so no hand-set value is undone.
 - **automem-left-when-the-row-is-unread.** If the Settings row cannot be read, or holds a word this build does not know,
   the lane writes a plain session's `profile` but leaves its `automem` as it is (counted and logged), rather than guess.
 - **shadow-log-on-change.** The plan says the pass logs its counts once a pass. It logs its one line only when the line
   differs from the last one it logged, so a settled fleet logs once, not every minute; a failed write is logged every pass.
+- **failed-writes-do-not-count (review 2024 F12).** The cap is five SUCCESSFUL writes a pass: a failed write no longer
+  counts, so rows failing at the head of a stable order cannot starve the rest (a one-line change, so made). The cost: on
+  an older fleet ccd, which refuses every row alike, each pass tries every row that needs a write and logs a failure line
+  for each, until the fleet box is updated (rollout moves the fleet box first).
+- **no-overlord-profile-before-w1 (review 2024 F13 c).** `roleFactsOf` fixes `designation` at `none` until W1 brings its
+  reader, so the lane never writes the `overlord` profile, and the Overlord's own switches (forks and agent view off) are
+  not applied by this PR. Intended: W1 creates the designation, and the item says those switches apply once W1's Overlord
+  exists.
 - **not-ran-is-unmeasured.** A route write whose ccd call never ran (the agent link dropped) is logged as unmeasured, never
   as ccd's refusal (the consolidation census's `ran` rule).
 - **plain-memory-l0-file.** The Settings row's choices, default, wire view and words live in `shared/plainAutoMemory.ts`
@@ -84,21 +143,37 @@ existing file under `docs/superpowers/plans/`, so PR B's departures are this new
   absence changes no answer: there is nothing that could read it as on or as a silent off. Pinned by
   `plain-auto-memory-route.test.ts` ("nothing reads a switchboard row for this setting"), which goes red when a reader
   of the setting names `SWITCHES` in code, measured. **Owed:** the row, in one small follow-up PR from this workspace
-  after #2794 merges, with no `pwa/` path (`shared/switches.ts` and `server/test/switches.test.ts`'s pins only).
+  after #2794 merges, with no `pwa/` path: `shared/switches.ts`, `server/test/switches.test.ts`'s pins, and
+  `server/test/plain-auto-memory-route.test.ts` (review 2024 F7: the row names the setting, `plain_memory_settings.choice`
+  and `SWITCHES` itself, so that test exempts `shared/switches.ts` from its no-`SWITCHES` assertion and adds it to the
+  `plain_memory_settings` allow-list; a generic reader that walks every row without naming this one would pass it unseen).
 - **door-census-sites.** Task 6 names `box-token-census.test.ts`'s `SESSION_ONLY`; that set lives in
   `coord-pause-route.test.ts`, and the census checks `CLAUDE.md`'s sentence against it (now "seventeen"). The door also took
   rows in `auth-gate.test.ts`'s counts (and the count in `server/src/auth/gate.ts`'s docstring), `secret-mask.test.ts`'s GET
   list, `coordinator-skill.test.ts`'s unnamed operator doors, and the Settings page's two card pins in the PWA.
 - **doctor-paths-by-account.** The check names each directory as `<account>/projects/<slug>/memory` (the roster account and
   the project slug), not as a path under the home, so a line names no absolute path. Its table entry rides the
-  `credentials` line, so no later line of the check table moves.
+  `credentials` line, so no later line of the check table moves. The slug is Claude Code's working-directory slug, so in
+  local doctor output it can carry an encoded home path (review 2024 F13 f); nothing shipped carries it. README's checks
+  table and its server-role skip list name the check (F10).
+- **doctor-second-memory-walker (review 2024 F5, F6).** `auto-memory` is a second walker of `projects/*/memory` beside
+  `memory`. **Legitimately different:** `memory` asks whether each project's memory is linked to its one store (forked or
+  not); `auto-memory` asks which directories hold files the lane would stop loading. They share the scratch-slug skip
+  (`_dr_mem_is_scratch`, the doctor file's one spelling of that pattern, so the three-site census still holds), so the two
+  never disagree about which directories count. `auto-memory` is now measured or says it is not: a `projects/`, project
+  directory or memory directory it cannot list, or a walk past the transcript walk's 20 s deadline, is WARN unmeasured,
+  never PASS (an unreadable directory once read as "none"). Removing the memory directory's listable test turns its new
+  case red (measured).
 - **review-1970-N1-N3, done.** N1: `_profile_spawn_compose` journals `_route_unread_note`'s line for a `.profile` present
   but unreadable (a link, mode 000) and `_route_reject_note`'s for a word that is not a row or bytes of no word's shape;
   `_route_get` and its E0c closure are untouched; two `contexts-edges.tsv` rows. N2: `routeParseWhy` in `shared/api.ts` is
   the one spelling of the refusal suffix, used by `routeParseDetail` and `parseRouteRequest`. N3: the docstring names the
   lane-only refusal.
-- **migration-slot-69.** Measured on `origin/main` at 68 before this PR; re-measure before merge (card PR B may take a
-  slot too, and the second to land merges `main` once).
+- **migration-slot-69.** Measured on `origin/main` at 68 before this PR; re-measure before merge. Card PR B (#2793) takes
+  slot 69 too (review 2024 F8). Whichever lands second merges `main` once, moves its entry to 70, adds a test that its
+  entry comes after the other's DDL, and moves every site: `coord-db.test.ts`'s three 69s, `run-close-switch.test.ts`'s
+  `DROP TABLE` list (both PRs' tables) and its count word, `schema.ts`'s `MIGRATIONS[68]` notes, and the route counts
+  (`auth-gate.test.ts`, `server/src/auth/gate.ts`'s docstring).
 
 ## Shared files (peer consent, second to land merges `main` once and keeps both)
 
@@ -107,5 +182,5 @@ Card PR B (run 2018) holds the shared registries this PR adds rows to: `server/s
 by mail; each edit is a separate line. Card PR B adds its own rows to `mutation-floors.test.ts` and
 `coord/ports.ts`, held here, with this PR's consent.
 
-Seen, not fixed: `server/test/sim/mutation-floors.json` carries the `compactThresholdFor` key twice (a merge's union; JSON
-keeps the last, which is equal). Left for the ledger PR.
+`server/test/sim/mutation-floors.json` carried the `compactThresholdFor` key twice (a merge's union; JSON keeps the last,
+which was equal); fix round 1 removes one, with card B's leave (review 2024 F13 d).

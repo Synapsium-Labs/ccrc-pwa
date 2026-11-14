@@ -5,7 +5,8 @@
 //
 // AN UNDECIDED READING TAKES THE MEMBER THAT DOES LESS (C49): `worker-or-reviewer` reads `worker`, `coordinator-or-plain`
 // reads `plain`. Written out here, never `ROLE_AMBIGUITIES[x][0]`, whose order is the view's (its first member of
-// `coordinator-or-plain` is `coordinator`, the member that does more).
+// `coordinator-or-plain` is `coordinator`, the member that does more). The lane never passes `coordinator-or-plain`: it skips
+// a session whose role it cannot decide (review 2024 F2), so only `worker-or-reviewer` reaches this rule from it.
 //
 // COMPACTION FOLLOWS CONTINUITY (the plan's `compaction-follows-continuity`): `compact` and `compactwindow` are numbers
 // only while the `continuity` row is live and the role's profile has a compaction column; otherwise both are null, which
