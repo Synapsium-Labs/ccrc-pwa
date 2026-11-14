@@ -4,8 +4,8 @@
 // link leaves its rows heard (the last the console heard), so the three states are not heard yet (null), heard and link
 // lost (both the rows). This is the one rule: the Waiting on you routes, the programme's Goals page, the face's mood
 // (`face/useMood.ts`), the navigation's counts (`useNavBadges`), Instrument's status bar, Refined's phone header and the
-// PR sheet take their rows and runs from here. A census (`test/use-heard.test.tsx`) refuses a new hand-written
-// `fleetFrameSeen ?`/`runsFrameSeen ?` ternary anywhere else, and lists the screens that still carry one; each only shrinks.
+// PR sheet take their rows and runs from here. A census (`test/use-heard.test.tsx`) refuses a new hand-written ternary
+// over either frame flag anywhere else, and lists the screens that still carry one; that list only shrinks.
 import type { FleetSession, RunSummary } from '../../../shared/api';
 import type { FleetStore } from '../stores/fleet';
 
