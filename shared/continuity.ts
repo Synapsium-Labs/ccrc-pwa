@@ -294,4 +294,9 @@ export function isBookState(v: unknown): v is BookState {
   return typeof v === 'string' && (BOOK_STATES as readonly string[]).includes(v);
 }
 /** The doors whose reads the probe door counts towards `open` (`continuity_reads.door`). */
-export type ContinuityReadDoor = 'card' | 'notes';
+const CONTINUITY_READ_DOOR_MAP = { card: 'GET /api/sessions/:id/card', notes: 'GET /api/sessions/:id/notes' } as const;
+export type ContinuityReadDoor = keyof typeof CONTINUITY_READ_DOOR_MAP;
+export const CONTINUITY_READ_DOORS = Object.keys(CONTINUITY_READ_DOOR_MAP) as ContinuityReadDoor[];
+export function isContinuityReadDoor(v: unknown): v is ContinuityReadDoor {
+  return typeof v === 'string' && (CONTINUITY_READ_DOORS as readonly string[]).includes(v);
+}

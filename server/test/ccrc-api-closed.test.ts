@@ -415,7 +415,9 @@ describe('the client stays closed', () => {
     // The seven `plan` rows (D-8181) took it to seventy-two; `sessions.start` (Overlord W1a, the start report, no body fill) to seventy-three.
     // `sessions.card` (Overlord W1a, the card piece, no body fill) took it to seventy-four, and the note door's four (the notes
     // piece) to seventy-eight: the three POSTs take the `calls.record` fill's rule, pinned below.
-    expect(routeKeys().size).toBe(78);
+    // The probe door's two (Overlord, the probes piece: `sessions.probe`, a read, and `probe.answer`, which takes the note door's
+    // rule) to eighty.
+    expect(routeKeys().size).toBe(80);
     // The call record's fill is the one that REFUSES a caller's identity (D-8126): it tests the stripped copy for both keys and
     // refuses, then derives the pair from the pane, and fills nowhere else.
     const callFill = code.slice(code.indexOf("if [[ \"$key\" == 'calls.record' ]]; then"));
@@ -430,6 +432,12 @@ describe('the client stays closed', () => {
     expect(noteFill).toMatch(/\*'"byId":'\*\|\*'"byUuid":'\*\)\s+refuse 'bad-body'/);
     expect(noteFill).toMatch(/splice_body_field 'byUuid' "\$DERIVED_UUID"/);
     expect(noteFill).toMatch(/splice_body_field 'byId' "\$DERIVED_ID"/);
+    // The probe answer's fill is the note door's rule on one row: refuse a body naming either key, then append the pane's pair.
+    const probeFill = code.slice(code.indexOf("if [[ \"$key\" == 'probe.answer' ]]; then\n    [[ -n"));
+    expect(code.match(/if \[\[ "\$key" == 'probe\.answer' \]\]; then\n    \[\[ -n/g) ?? []).toHaveLength(1);
+    expect(probeFill).toMatch(/\*'"byId":'\*\|\*'"byUuid":'\*\)\s+refuse 'bad-body'/);
+    expect(probeFill).toMatch(/append_body_field 'byId' "\$DERIVED_ID"/);
+    expect(probeFill).toMatch(/append_body_field 'byUuid' "\$DERIVED_UUID"/);
     // The claimant's identity is the PANE's, derived, never a value the caller
     // passes as a flag: the runs.open fill splices `$DERIVED_UUID` and nothing else.
     expect(code).toMatch(/splice_body_field 'claimedByUuid' "\$DERIVED_UUID"/);
