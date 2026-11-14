@@ -3746,9 +3746,7 @@ _check_credentials() {
 _check_auto-memory() {
   local _srv_role="" sh="$HOME/.ccrc/accounts.sh" am_pairs="" a dir out n first
   [ -f "${BOX_ENV_FILE:-}" ] && [ -r "${BOX_ENV_FILE:-}" ] && _srv_role="$(_box_env_value "$BOX_ENV_FILE" CCRC_ROLE)"
-  if [ "$_srv_role" = server ]; then
-    _dr_skip auto-memory "this box records CCRC_ROLE=server, so it hosts no sessions and keeps no auto memory"; return 3
-  fi
+  [ "$_srv_role" = server ] && { _dr_skip auto-memory "this box records CCRC_ROLE=server, so it hosts no sessions and keeps no auto memory"; return 3; }
   if [ -e "$sh" ]; then
     # shellcheck disable=SC1090
     if [ ! -r "$sh" ] || ! am_pairs="$( { . "$sh" && declare -F _ccrc_cfg_dir; } >/dev/null 2>&1 || exit 1
@@ -3768,21 +3766,16 @@ _check_auto-memory() {
         [ -d "$m" ] || continue
         real="$(cd -P -- "$m" 2>/dev/null && pwd)" || real="$m"
         case "$seen" in *$'\n'"$real"$'\n'*) continue ;; esac
-        has=""; for f in "$m"/*; do [ -f "$f" ] && { has=1; break; }; done
-        [ -n "$has" ] || continue
+        has=""; for f in "$m"/*; do [ -f "$f" ] && { has=1; break; }; done; [ -n "$has" ] || continue
         seen+="$real"$'\n'
         s="${m%/memory}"; printf '%s/projects/%s/memory\n' "$a" "${s##*/}"
       done
     done <<< "$am_pairs"
   )"
-  if [ -z "$out" ]; then
-    _dr_pass auto-memory "no rostered config dir holds an auto-memory directory with a file in it"; return 0
-  fi
+  [ -n "$out" ] || { _dr_pass auto-memory "no rostered config dir holds an auto-memory directory with a file in it"; return 0; }
   local -a am_dirs; mapfile -t am_dirs <<< "$out"   # builtins only: a check is handed no tools it did not stub
   n=${#am_dirs[@]}; first="${am_dirs[0]}"
-  [ "$n" -gt 1 ] && first+=", ${am_dirs[1]}"
-  [ "$n" -gt 2 ] && first+=", ${am_dirs[2]}"
-  [ "$n" -gt 3 ] && first+=", …"
+  [ "$n" -gt 1 ] && first+=", ${am_dirs[1]}"; [ "$n" -gt 2 ] && first+=", ${am_dirs[2]}"; [ "$n" -gt 3 ] && first+=", …"
   if [ "$n" -eq 1 ]; then n="1 auto-memory directory holds"; else n="$n auto-memory directories hold"; fi
   _dr_warn auto-memory "$n files: $first" \
     "nothing is deleted here: once the launch-profile lane is live (Settings › Automation › Shadow lanes), each session's next launch loads none of this, except plain sessions whose Settings row keeps it on; review these directories and remove what you do not want kept"
