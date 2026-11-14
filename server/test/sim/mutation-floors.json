@@ -41,5 +41,8 @@
   "server/src/continuity/timers.ts#timerCancelVerdict": 1,
   "server/src/continuity/timers.ts#timerCleanupVerdict": 1,
   "server/src/continuity/timers.ts#timerPreview": 1,
-  "server/src/continuity/timers.ts#packTimerMail": 1
+  "server/src/continuity/timers.ts#packTimerMail": 1,
+  "server/src/continuity/anchor.ts#renderAnchor": 1,
+  "server/src/continuity/anchor.ts#anchorGeneration": 1,
+  "server/src/continuity/anchor.ts#anchorAnswer": 1
 }
