@@ -42,10 +42,12 @@ const run = (id: number, programme: string, state: string, planPath: string | nu
   ({ id, programme, wave: 1, waveOf: 3, state, planPath, kind: 'work' });
 const mail = (deliveryId: number, at: number) => ({ deliveryId, fromId: 'lane-a-project-a', at, subject: `m${deliveryId}`, parked: false });
 
+const note = (id: number, at: number, next: string): CardNote =>
+  ({ id, at, kind: 'thread', key: 'run 41', keyFact: 'live', waitsOn: 'the review of wave 2', next });
 const NOTES: readonly CardNote[] = [
-  { id: 61, at: AT - 40 * MIN, text: 'merge wave 2, then open wave 3' },
-  { id: 62, at: AT - 20 * MIN, text: 'ask the operator about the floor' },
-  { id: 63, at: AT - 9 * MIN, text: 'dispatch the review run' },
+  note(61, AT - 40 * MIN, 'merge wave 2, then open wave 3'),
+  note(62, AT - 20 * MIN, 'ask the operator about the floor'),
+  note(63, AT - 9 * MIN, 'dispatch the review run'),
 ];
 /** Two open runs of two programmes and a closed one, two claimed paths, three deliveries, three notes. Items: 7 and 9
  *  open and never ticked; 10 open but ticked and returned (it carries a ruling); 8 done; 12 withdrawn, never ticked. */
@@ -107,7 +109,7 @@ export function probeRoundCases(m: ProbesModule): Record<string, SuiteCase> {
           if (q.text.startsWith('Which of these notes')) expect(q.expected).toBe('63');
           if (q.cls === 'continuation') {
             const n = NOTES.find((x) => q.text === `What does your note ${x.id} say comes next?`)!;
-            expect(q.expected).toBe(n.text);
+            expect(q.expected).toBe(n.next);
           }
         }
       }
@@ -193,10 +195,31 @@ export function probeRoundCases(m: ProbesModule): Record<string, SuiteCase> {
       }
     },
     'continuation reads the snapshot\'s notes and is skipped with fewer than three of distinct text': () => {
-      const twoTexts = [NOTES[0]!, NOTES[1]!, { ...NOTES[2]!, text: ` ${NOTES[0]!.text.toUpperCase()} ` }];
+      const twoTexts = [NOTES[0]!, NOTES[1]!, { ...NOTES[2]!, next: ` ${NOTES[0]!.next.toUpperCase()} ` }];
       for (const seed of SEEDS) {
         expect(round({ ...RICH, notes: read(twoTexts) }, seed).questions.filter((q) => q.cls === 'continuation')).toEqual([]);
       }
+    },
+    'continuation takes only threads with a next act, as subjects and as decoys: a blank answer never passes (review 2039, F1)': () => {
+      const caution = { ...note(64, AT - 5 * MIN, ''), kind: 'caution' as const };
+      const cautionWithNext = { ...note(65, AT - 4 * MIN, 'escalate to the operator'), kind: 'caution' as const };
+      const blank = note(66, AT - 3 * MIN, ' \t ');
+      // Only invisible characters: blank too (review 2046, F3).
+      const invisible = note(68, AT - 2 * MIN, '\u200b\u2800\u3164');
+      const mixed = [...NOTES, caution, cautionWithNext, blank, invisible];
+      let asked = 0;
+      for (const seed of SEEDS) {
+        for (const q of round({ ...RICH, notes: read(mixed) }, seed).questions.filter((x) => x.cls === 'continuation')) {
+          asked++;
+          expect(NOTES.map((n) => n.next)).toContain(q.expected);
+          expect([...q.choices!].sort()).toEqual(NOTES.map((n) => n.next).sort());
+          for (const blankAnswer of ['', '   ']) expect(m.gradeProbe(q, blankAnswer)).toBe('fail');
+        }
+      }
+      expect(asked).toBe(SEEDS.length);
+      // Two threads with a next act and the rest cautions or blank: no question.
+      const thin = [NOTES[0]!, NOTES[1]!, caution, cautionWithNext, blank, { ...blank, id: 67, next: '' }];
+      for (const seed of SEEDS) expect(round({ ...RICH, notes: read(thin) }, seed).questions.filter((q) => q.cls === 'continuation')).toEqual([]);
     },
     'temporal is skipped for a family of two rows, which would offer a coin flip': () => {
       const two = empty({ mailOutstanding: read([mail(501, AT - MIN), mail(502, AT)]), itemsRaised: read([item(7), item(8, { at: AT })]) });
@@ -386,6 +409,9 @@ const PROBE_ROUND_SET: MutantSet<ProbesModule> = {
     { id: 'R8 a held decoy', old: '.filter((p) => !heldFolded.some((h) => under(fold(p), h)))', new: '' },
     { id: 'R9 a decoy unfolded', old: '.filter((p) => !heldFolded.some((h) => under(fold(p), h)))', new: '.filter((p) => !held.some((h) => under(p, h)))' },
     { id: 'R10 continuation with two texts', old: 'if (distinct.length < 2) continue;', new: 'if (distinct.length < 1) continue;' },
+    { id: 'R21 continuation over cautions', old: ".filter((n) => n.kind === 'thread' && !isBlankText(n.next))", new: '.filter((n) => !isBlankText(n.next))' },
+    { id: 'R22 continuation over a blank next', old: ".filter((n) => n.kind === 'thread' && !isBlankText(n.next))", new: ".filter((n) => n.kind === 'thread')" },
+    { id: 'R23 continuation over an invisible next', old: ".filter((n) => n.kind === 'thread' && !isBlankText(n.next))", new: ".filter((n) => n.kind === 'thread' && fold(n.next) !== '')" },
     { id: 'R11 temporal with a tied newest', old: 'if (top.length !== 1) continue;', new: '' },
     { id: 'R12 temporal with two rows', old: 'f.rows.length < 3 ||', new: 'f.rows.length < 2 ||' },
     { id: 'R13 a failed read taken for empty', old: 'unreadOf(s.runs, s.claims))', new: '[])' },

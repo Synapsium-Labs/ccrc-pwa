@@ -99,7 +99,8 @@ const CALLS_SRC = read('server/src/coord/coordCallsRoute.ts');
 const PLAN_SRC = read('server/src/coord/planRoutes.ts');
 /** The THIRTEENTH file that registers routes and the tenth lane source (Overlord W1a, the start report): the continuity routes. Its five
  *  box-token lanes are the hook's start report, `POST /api/sessions/:id/start`, the card door, `GET /api/sessions/:id/card`
- *  (the card piece), and the timer doors' three, `POST` and `GET /api/timers` and `POST /api/timers/:id/cancel` (the timers
+ *  (the card piece), the note door's three, `POST` and `GET /api/sessions/:id/notes` and `POST /api/sessions/:id/handover`
+ *  (the notes piece), and the timer doors' three, `POST` and `GET /api/timers` and `POST /api/timers/:id/cancel` (the timers
  *  piece), each gated in its own onRequest as the linking read is. Its session-gated doors are `CONTINUITY_SESSION_DOORS`. */
 const CONTINUITY_SRC = read('server/src/continuity/routes.ts');
 const GATE_SRC = read('server/src/auth/gate.ts');
@@ -343,8 +344,10 @@ const WORDS = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'e
   'seventy-five',
   // Overlord W1a, the card piece: GET /api/sessions/:id/card, a session's own card, a box-token lane in the continuity file: seventy-six machine lanes in all.
   'seventy-six',
-  // Overlord W1a, the timers piece: the session's three timer doors, box-token lanes in the continuity file: seventy-nine machine lanes in all.
-  'seventy-seven', 'seventy-eight', 'seventy-nine'];
+  // Overlord W1a, the notes piece: the note door's three lanes in the continuity file: seventy-nine machine lanes in all.
+  'seventy-seven', 'seventy-eight', 'seventy-nine',
+  // Overlord W1a, the timers piece: the session's three timer doors, box-token lanes in the continuity file: eighty-two machine lanes in all.
+  'eighty', 'eighty-one', 'eighty-two'];
 // D-2168: LONGEST FIRST, not numeric order. A JS alternation is leftmost-first,
 // so with `twenty` ahead of `twenty-one` the shorter branch wins and `\b` ends
 // the match at the hyphen — `twenty-one` scanned as `twenty`, and `twenty-two`
@@ -496,6 +499,7 @@ describe('the box-token surface is derived, and no prose site under-claims it', 
     expect(LINKING_LANES, 'linking/routes.ts lost its box-token lane, or a write gained a token check').toEqual(['GET /api/linking']);
     // …and the continuity routes' one (Overlord W1a): the hook's start report, by name.
     expect(CONTINUITY_LANES, 'continuity/routes.ts lost a box-token lane').toEqual(['POST /api/sessions/:id/start', 'GET /api/sessions/:id/card',
+      'POST /api/sessions/:id/notes', 'GET /api/sessions/:id/notes', 'POST /api/sessions/:id/handover',
       'POST /api/timers', 'GET /api/timers', 'POST /api/timers/:id/cancel']);
     expect(ALL_LANES.length).toBe(COORD_LANES.length + 3 + LINEAR_PROXY_LANES.length + LEDGER_LANES.length + LINKING_LANES.length + CALLS_LANES.length + PLAN_LANES.length + CONTINUITY_LANES.length);
     expect(UNGATED_DOORS.length, 'the door list collapsed').toBeGreaterThan(3);

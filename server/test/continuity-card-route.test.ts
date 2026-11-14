@@ -15,7 +15,8 @@ import { MASKED_GET_ROUTES } from '../src/server.js';
 import { registerContinuityRoutes, type ContinuityRouteDeps } from '../src/continuity/routes.js';
 import { SECRET_MASK } from '../../shared/api.js';
 import { CARD_NOTHING_LINE } from '../src/continuity/card.js';
-import { CARD_PAGE_CHARS } from '../../shared/continuity-card.js';
+import { CARD_PAGE_CHARS, TOOL_RESULT_CUT_BYTES } from '../../shared/continuity-card.js';
+import { NOTES_CAP } from '../../shared/continuity.js';
 import { fakeTime, type FakeTime } from './fakeTime.js';
 import { ID_GATE_TOKEN, appFor, recorder, seedRow } from './idGateFixture.js';
 import { mkTmp, removeTmpFixtures } from './tmpHelpers.js';
@@ -347,5 +348,28 @@ describe('GET /api/sessions/:id/card: masking, the memo and the serve order (rev
     coord!.queueDelivery(m.id, ID, '<mail/>');
     await card(app);
     expect(coord!.db.prepare('SELECT served FROM continuity_snapshots WHERE sessionId = ?').get(ID)).toEqual({ served: 1 });
+  });
+});
+
+describe('the card with 200 notes of 500 characters (the notes piece; Table 11.5b): every page stays under the cut', () => {
+  it.each([['ASCII', 'n'], ['four-byte characters', '\u{1F642}']])('%s: every page is at most CARD_PAGE_CHARS and under TOOL_RESULT_CUT_BYTES, and the read records', async (_name, ch) => {
+    app = await open();
+    const run = (coord!.openRun({ program: 'prog-a', title: 'PROG-A', project: 'project-a', wave: 1, waveOf: 2, claimedBy: ID }) as { id: number }).id;
+    for (let i = 0; i < NOTES_CAP.count; i += 1) {
+      const r = coord!.appendNote({ identity: ID, sessionId: ID, generationId: null, key: { kind: 'run', id: run }, kind: 'thread',
+        waitsOn: ch.repeat(NOTES_CAP.chars), next: `${i} ${ch.repeat(NOTES_CAP.chars - String(i).length - 1)}`, revises: null, closes: false, at: 1_000 + i });
+      expect(r.ok).toBe(true);
+    }
+    const p1 = (await card(app)).json() as { hash: string; pages: number; text: string; recorded: boolean };
+    const texts = [p1.text];
+    for (let p = 2; p <= p1.pages; p += 1) texts.push(((await card(app, { page: p, hash: p1.hash })).json() as { text: string }).text);
+    for (const t of texts) {
+      expect([...t].length).toBeLessThanOrEqual(CARD_PAGE_CHARS);
+      expect(Buffer.byteLength(t, 'utf8')).toBeLessThan(TOOL_RESULT_CUT_BYTES - 1_000);
+    }
+    const whole = texts.join('');
+    expect(whole).toContain('Note 200 (thread, on run');
+    expect(whole).toMatch(/Left out \d+ part\(s\) of this card to fit its budget/);
+    expect(reads()).toEqual([expect.objectContaining({ hash: p1.hash, pages: p1.pages })]);
   });
 });
