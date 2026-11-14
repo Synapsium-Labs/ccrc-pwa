@@ -125,3 +125,39 @@ export const OBSERVED_STEP_PERIODS = 2;
  *  first pass at or after the nudge point always comes before the pass that sees the deadline, so the re-nudge can be
  *  answered (review 1912, F4). 15 s with today's values. */
 export const CARDED_NUDGE_AT_MS = STATE_DEADLINE_S.carded * 1_000 - RENEWAL_LANE_PERIOD_MS;
+
+/** The start report (Overlord W1a, spec §3.3.11; reviews 1911 F10 and 1949 G8): the SessionStart sources a
+ *  `continuity_starts` row may carry, beside the generation vocabulary its reader decides with. A word outside them is
+ *  read as `other` by `startSourceOf`, the one rule the table's writer and its read both go through: the payload is
+ *  Claude Code's, and a new source word there must not lose the start. */
+const START_SOURCE_MAP = {
+  startup: 'a new conversation in a new process',
+  resume: 'a stored conversation taken up again',
+  clear: 'a /clear: a fresh conversation in the same process',
+  compact: 'a compaction: the same conversation, summarised',
+  fork: 'a fork: a new conversation sharing the pane (never reported)',
+  other: 'any word outside these, so a new one never loses the start',
+} as const;
+export type StartSource = keyof typeof START_SOURCE_MAP;
+export const START_SOURCES = Object.keys(START_SOURCE_MAP) as StartSource[];
+export function isStartSource(v: unknown): v is StartSource {
+  return typeof v === 'string' && (START_SOURCES as readonly string[]).includes(v);
+}
+export function startSourceOf(w: string): StartSource {
+  return isStartSource(w) ? w : 'other';
+}
+/** A recorded start, as `continuity_starts` holds it and `startsSince` answers it. `uuid` is the reported conversation's
+ *  (the body's `startedUuid`, else its `fromUuid`); `rowIncarnation` is the registry row's generation, or null.
+ *  ORDER: id order is receipt order; a session's start order is `reportedAt`. A start kept and resent lands after a
+ *  newer one, so a reader orders one session's starts by `reportedAt`, never by `id` or `receivedAt` (review 1949, G3). */
+export interface StartRow {
+  id: number;
+  sessionId: string;
+  reportId: string;
+  uuid: string;
+  source: StartSource;
+  model: string | null;
+  rowIncarnation: string | null;
+  reportedAt: number;
+  receivedAt: number;
+}

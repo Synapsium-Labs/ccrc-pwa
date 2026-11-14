@@ -21,7 +21,7 @@
 #     this process's caller does not supply. Absent, it REFUSES; it never guesses
 #     a host. (A worker guessed one on 2026-08-25 and reported success against
 #     nothing.)
-#   * The route comes from ROUTES below, seventy-two rows, and nothing else; the
+#   * The route comes from ROUTES below, seventy-three rows, and nothing else; the
 #     four claimant rows name the question door family's template, their only
 #     door since the old ones were retired (D-7324), refused here, unsent, when a
 #     current cap file says the server lacks `questions-v1` (D-7328); `runs
@@ -92,7 +92,7 @@ SAFE_RE='^[A-Za-z0-9_-]+$'
 # (`/api/questions/<ask|approval>-{id}/<rule|release>`): from Q3j it was their
 # fifth field, sent only while the server advertised `questions-v1` (D-7325), and
 # since the old doors were retired it is their path (D-7324). Every row has four.
-# Seventy-two rows, and that word is SCANNED: `server/test/ccrc-api.test.ts`
+# Seventy-three rows, and that word is SCANNED: `server/test/ccrc-api.test.ts`
 # derives the count from the table below and reds if this line or the bullet at
 # the top of this file states a different one. The original rows were chosen on
 # 2026-08-26 by measuring the skill corpora; the standing executable-corpus
@@ -258,6 +258,10 @@ declare -A ROUTES=(
   # visibility, and the mode they give. One read, no id and no query key: the project is the caller's registry record's, and the
   # identity rides the query like every Linear row's (the block in `main` that appends it).
   [linking.show]='GET|/api/linking|no|-'
+  # The start report (Overlord W1a, spec §3.3.11): the session hook reports one SessionStart of its own session. `{id}` is the
+  # session's id; the body (`fromId`, `fromUuid`, `startedUuid`, `reportId`, `source`, `model`, `rowIncarnation`, `reportedAt`) is
+  # one JSON report, as the hook builds it or keeps it on one line of its spool.
+  [sessions.start]='POST|/api/sessions/{id}/start|yes|-'
   # The plan verbs (Linear hierarchy design, D-8181): `{id}` is the programme's slug. Every one but `plan.show` carries the pane's
   # identity in the QUERY (the `linear.*` block's rule, never the body); `plan.show` is a session-or-token read and sends none. All
   # are refused locally `no-plan-door` when a CURRENT cap file omits `plan-v1`. The second operand of a verb (a checkpoint, a

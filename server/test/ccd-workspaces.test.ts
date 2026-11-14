@@ -1585,6 +1585,8 @@ describe('every _ws_slug_residue and ws-add-refusal assertion is on the disposit
       what: 'the temp-root witness\'s walker census (child-reclamation wave 6): a case title and one assertion that `_ws_slug_residue` names nothing for a slug whose only trace is its dotless `$REG/tmproots/<id>` witness, the proof that the witness is invisible to the slug walkers' },
     { file: 'ccd-collect-record.test.ts', grammar: 'residue', count: 2,
       what: 'the collector\'s quarantine record census (child-reclamation wave 7): a case title and one assertion that `_ws_slug_residue` names nothing for a slug whose only trace is its dotless `$REG/tmpquarantine/<id>.<ns>.<pid>` record, the proof that the record is invisible to the slug walkers' },
+    { file: 'session-hook-start-report.test.ts', grammar: 'residue', count: 3,
+      what: 'the start report\'s spool census (Overlord W1a, plan review 1890 I2): the header comment, a case title and one assertion that `_ws_slug_residue` names the dot-free `<id>.startpending` field while it stands, the proof that the slug walkers see it' },
     { file: 'ccd-workspaces.test.ts', grammar: 'brace-template', count: 2,
       what: 'RETRACTED HISTORY ONLY — two comments naming the template Task 9 deleted, beside the assertions that replaced it; pinned to comments by the clause below' },
   ];

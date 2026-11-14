@@ -83,6 +83,7 @@ import { readLaneModels } from './laneModels.js';
 import { registerLinearRoutes, registerLinearWorkspaceRoutes } from './linear/routes.js';
 import { registerLinearProxyRoutes } from './linear/proxyRoutes.js';
 import { registerLinkingRoutes } from './linking/routes.js';
+import { registerContinuityRoutes } from './continuity/routes.js';
 import { registerPlanRoutes } from './coord/planRoutes.js';
 import { registerHierarchyRoutes } from './coord/hierarchyRoutes.js';
 import { readLinearStore } from './linear/store.js';
@@ -2181,6 +2182,11 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     attribute: (id, uuid) => attributionVerdict(deps.io, deps.cfg, id, uuid, 'byUuid'),
     readRecord: (id) => readSessionRecord(deps.io, deps.cfg, id),
     runCcd: deps.runCcd, fleetState: () => deps.fleetState,
+  });
+  // The continuity routes (Overlord §3.3.11, W1a): the hook's start report, a box-token lane in a file of its own.
+  registerContinuityRoutes(app, {
+    coord: deps.coord, mailToken: () => deps.mailToken ?? null, wall: () => deps.time.clock.wall(),
+    attribute: (id, uuid) => attributionVerdict(deps.io, deps.cfg, id, uuid, 'fromUuid'),
   });
   // The lane routes, Check and the kill switch (accounts plan Task A14, D-7732), registered from their own file, which
   // `auth-gate.test.ts`'s `ROUTES` and `box-token-census.test.ts` read by name. Each takes the same account gate on the

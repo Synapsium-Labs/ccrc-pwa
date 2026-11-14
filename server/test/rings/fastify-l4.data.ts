@@ -31,6 +31,7 @@ export const FASTIFY_L4_ALLOWLIST: EntrySet = {
   'server/src/linear/routes.ts': { reason: "the Linear connection's HTTP routes (the ticket-title preview read)", since: '2026-10-20' },
   'server/src/linear/proxyRoutes.ts': { reason: "the Linear proxy's box-token HTTP routes", since: '2026-11-02' },
   'server/src/linking/routes.ts': { reason: "the linking standard's HTTP routes: the operator's team key and override per project (D-8147)", since: '2026-11-09' },
+  'server/src/continuity/routes.ts': { reason: "the continuity routes: the hook's start report (Overlord W1a, spec §3.3.11)", since: '2026-11-13' },
   'server/src/testboxAdmin.ts': { reason: "the test box connect routes (D-8166): the status read and the act behind the account gate, with the TestboxAdminOps port they run", since: '2026-11-10' },
   'server/src/update/routes.ts': { reason: "the update control plane's HTTP routes", since: '2026-10-20' },
   'server/src/readerLab/routes.ts': { reason: "the reader lab door's counter hook and HTTP routes (the reader lab plan, Task 3)", since: '2026-11-04' },
