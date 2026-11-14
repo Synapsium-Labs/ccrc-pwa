@@ -826,9 +826,11 @@ describe.skipIf(!PY)('the live probe: the first live step, bounded (codex-bridge
     }
   });
 
-  for (const [what, edit] of [
-    ['names no recordings directory', (m: Json) => { delete m.bridgeFiles.recordings; }],
-    ['names a recordings directory outside the lane', (m: Json) => { m.bridgeFiles.recordings = '../x'; }],
+  for (const [what, edit, field] of [
+    ['names no recordings directory', (m: Json) => { delete m.bridgeFiles.recordings; }, 'recordings'],
+    ['names a recordings directory outside the lane', (m: Json) => { m.bridgeFiles.recordings = '../x'; }, 'recordings'],
+    // D-8619: the request record's name is optional, but a present one is checked like the others
+    ['names a request record outside the lane', (m: Json) => { m.bridgeFiles.requests = '../x'; }, 'requests'],
   ] as const) {
     it(`the live probe refuses a lane.json that ${what}`, async () => {
       const home = mkTmp('cb-live-probe-manifest-');
@@ -840,7 +842,7 @@ describe.skipIf(!PY)('the live probe: the first live step, bounded (codex-bridge
         const r = await probe(home, 1, { CCGPT_BRIDGE_UPSTREAM_BASE: up.base });
         expect(r.status).toBe(1);
         expect(r.stderr).toBe("liveprobe: refused lane-malformed: the lane's lane.json is out of shape at "
-          + "bridgeFiles.recordings; run 'ccrc update'\n");
+          + `bridgeFiles.${field}; run 'ccrc update'\n`);
         expect(up.requests).toHaveLength(0);
         expect(existsSync(path.join(lane.laneDir, 'liveprobe.count')), 'a refused probe counts nothing').toBe(false);
         expect(existsSync(path.join(lane.laneDir, '..', 'x')), 'nothing is made outside the lane').toBe(false);
@@ -849,6 +851,24 @@ describe.skipIf(!PY)('the live probe: the first live step, bounded (codex-bridge
       }
     });
   }
+
+  // D-8619: a lane.json an older laneManifest wrote names no request record; the probe reads it through the bridge's
+  // own reader, so it is no refusal.
+  it('the live probe takes a lane.json that names no request record', async () => {
+    const home = mkTmp('cb-live-probe-no-requests-');
+    const lane = plantBridgeLane(home, LANE);
+    touch(path.join(lane.laneDir, 'liveprobe-allowed'));
+    editLaneJson(lane, (m) => { delete m.bridgeFiles.requests; });
+    const up = await fakeResponses([{ status: 200, sse: textReply('ok') }]);
+    try {
+      const r = await probe(home, 1, { CCGPT_BRIDGE_UPSTREAM_BASE: up.base });
+      expect(r.status, r.stderr).toBe(0);
+      expect(r.stdout).toContain('liveprobe: status 200\n');
+      expect(up.requests).toHaveLength(1);
+    } finally {
+      await up.close();
+    }
+  });
 
   it('a request that is never answered still counts', async () => {
     const home = mkTmp('cb-live-probe-unanswered-');
@@ -1058,10 +1078,12 @@ describe('the consent markers have no writer in the tree (codex-bridge Task 18, 
   const REPO_ROOT = path.dirname(CCD_DIR);
   const ROOTS = ['ccd', 'shared', 'deploy', path.join('server', 'src'), path.join('agent', 'src')];
   // D-8622: the bridge's three request markers, and backend.py's constants that spell them, are the operator's too
+  // D-8619: so are the per-request record's marker and reqrecord.py's constant that spells it
   const NAMES = new RegExp(String.raw`liveprobe-allowed|record-streams|\bALLOW_MARKER\b|\bRECORD_MARKER\b|`
-    + String.raw`bridge-reasoning-all-turns|bridge-verbosity|bridge-turn-state|\b(?:ALL_TURNS|VERBOSITY|TURN_STATE)_MARKER\b`);
+    + String.raw`bridge-reasoning-all-turns|bridge-verbosity|bridge-turn-state|\b(?:ALL_TURNS|VERBOSITY|TURN_STATE)_MARKER\b|`
+    + String.raw`record-requests|\bREQUESTS_MARKER\b`);
   const MARK = '(?:liveprobe-allowed|record-streams|ALLOW_MARKER|RECORD_MARKER|bridge-reasoning-all-turns|bridge-verbosity'
-    + '|bridge-turn-state|ALL_TURNS_MARKER|VERBOSITY_MARKER|TURN_STATE_MARKER)';
+    + '|bridge-turn-state|ALL_TURNS_MARKER|VERBOSITY_MARKER|TURN_STATE_MARKER|record-requests|REQUESTS_MARKER)';
   const WRITE = new RegExp([
     String.raw`(?:^|[^\w.-])(?:touch|tee|cp|mv|ln|install|truncate)(?:\s|["'],)`,   // a command, or an argv's head
     String.raw`(?<![=\-<>])>>?\|?\s*[^\s<>|;&()]*` + MARK,                              // a redirect onto it
@@ -1086,7 +1108,7 @@ describe('the consent markers have no writer in the tree (codex-bridge Task 18, 
   it('CONTROL: the scan walks the shipped roots, and its write shapes catch a writer and pass a reader', () => {
     const named = shipped().filter((f) => codeLines(f).some(([, l]) => NAMES.test(l))).map(rel);
     expect(named).toEqual(expect.arrayContaining(['ccd/ccrc', 'ccd/codexbridge/liveprobe.py', 'ccd/codexbridge/record.py',
-      'ccd/codexbridge/backend.py']));
+      'ccd/codexbridge/backend.py', 'ccd/codexbridge/reqrecord.py']));
     for (const w of [
       'touch "$dir/record-streams"', ': > "$d/liveprobe-allowed"', 'printf x >>"$d"/record-streams',
       'cp /dev/null "$d/record-streams"', 'open(os.path.join(lane_dir, ALLOW_MARKER), "w").close()',
@@ -1097,6 +1119,8 @@ describe('the consent markers have no writer in the tree (codex-bridge Task 18, 
       'touch "$dir/bridge-reasoning-all-turns"', ': > "$d/bridge-verbosity"', "writeFileSync(join(dir, 'bridge-turn-state'), '')",
       'pathlib.Path(lane_dir, TURN_STATE_MARKER).touch()', 'open(os.path.join(d, VERBOSITY_MARKER), "w").close()',
       'fd = os.open(os.path.join(d, ALL_TURNS_MARKER), os.O_CREAT | os.O_WRONLY)',
+      'touch "$dir/record-requests"', 'pathlib.Path(lane_dir, REQUESTS_MARKER).touch()',
+      'fd = os.open(os.path.join(d, REQUESTS_MARKER), os.O_WRONLY | os.O_APPEND | os.O_CREAT)',
     ]) expect(!COMMENT.test(w) && NAMES.test(w) && WRITE.test(w), w).toBe(true);
     for (const r of [
       'if not os.path.exists(os.path.join(lane_dir, ALLOW_MARKER)):', 'ALLOW_MARKER = "liveprobe-allowed"',
@@ -1107,10 +1131,11 @@ describe('the consent markers have no writer in the tree (codex-bridge Task 18, 
       'ALL_TURNS_MARKER = "bridge-reasoning-all-turns"', 'VERBOSITY_MARKER = "bridge-verbosity"',
       'TURN_STATE_MARKER = "bridge-turn-state"', 'MARKERS = (ALL_TURNS_MARKER, VERBOSITY_MARKER, TURN_STATE_MARKER)',
       'rm -f -- "$dir/bridge-turn-state" 2>/dev/null',
+      'REQUESTS_MARKER = "record-requests"', 'return os.path.exists(os.path.join(self._lane_dir, REQUESTS_MARKER))',
     ]) expect(NAMES.test(r) && !WRITE.test(r), r).toBe(true);
   });
 
-  it('no code line of shipped code writes liveprobe-allowed, record-streams or a request marker', () => {
+  it('no code line of shipped code writes liveprobe-allowed, record-streams, record-requests or a request marker', () => {
     const found = shipped().flatMap((f) => codeLines(f)
       .filter(([, l]) => NAMES.test(l) && WRITE.test(l)).map(([n, l]) => `${rel(f)}:${n}: ${l.trim()}`));
     expect(found).toEqual([]);

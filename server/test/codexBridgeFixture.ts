@@ -253,8 +253,10 @@ export const BRIDGE_AUTH_LIB = path.join(CCD_DIR, 'ccgpt-auth.py');
 /** The models a planted lane's catalogue lists, neutral ids (the plan's Global Constraints). */
 export const BRIDGE_MODELS = ['model-6.1-alpha', 'model-6-beta'] as const;
 /** The bridge's file names a planted `lane.json` carries in `bridgeFiles` (Task 10 spells them in `laneManifest`;
- *  the fixture plants what that manifest will hold). */
-export const BRIDGE_FILES = { stats: 'bridge.stats.json', store: 'reasoning.sqlite', recordings: 'recordings' } as const;
+ *  the fixture plants what that manifest will hold; `requests`, the per-request record, is D-8619's). */
+export const BRIDGE_FILES = {
+  stats: 'bridge.stats.json', store: 'reasoning.sqlite', recordings: 'recordings', requests: 'bridge.requests.jsonl',
+} as const;
 
 /** One planted lane: every path absolute; `key` the lane's gateway key; `cred` the planted credential's tokens (null
  *  when none was planted). */
@@ -269,11 +271,15 @@ export type BridgeLane = {
  *  listing `models` (default BRIDGE_MODELS); `<configDir>/settings.json` whose env carries
  *  `CLAUDE_CODE_MAX_CONTEXT_TOKENS` = `window` (default 400000; `null` writes no settings file); and, unless
  *  `credential` is false, a backend credential in `authDir` through Stage 1's `plantBackendCredential` with those
- *  options. */
+ *  options. `bridgeFiles`, when given, is written in BRIDGE_FILES' place (a lane.json an older `laneManifest` wrote,
+ *  say). */
 export function plantBridgeLane(
   home: string,
   lane: string,
-  o: { models?: readonly string[]; window?: number | null; credential?: Parameters<typeof plantBackendCredential>[1] | false } = {},
+  o: {
+    models?: readonly string[]; window?: number | null; credential?: Parameters<typeof plantBackendCredential>[1] | false;
+    bridgeFiles?: Record<string, unknown>;
+  } = {},
 ): BridgeLane {
   const laneDir = path.join(home, '.ccrc', 'codex', lane);
   mkdirSync(laneDir, { recursive: true });
@@ -283,7 +289,7 @@ export function plantBridgeLane(
   writeFileSync(path.join(laneDir, 'lane.json'), JSON.stringify({
     id: lane, configDir: configRel, authDir: authRel, proxyPort: 1, litellmPort: 1,
     units: { litellm: `ccgpt-${lane}-litellm.service`, shim: `ccgpt-${lane}-shim.service` },
-    bridgeFiles: BRIDGE_FILES,
+    bridgeFiles: o.bridgeFiles ?? BRIDGE_FILES,
   }));
   const key = `sk-${randomBytes(24).toString('hex')}`;
   const envFile = path.join(laneDir, 'runtime.env');

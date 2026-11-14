@@ -197,6 +197,37 @@ def _is_int(value: object) -> bool:
     return isinstance(value, int) and not isinstance(value, bool) and value >= 0
 
 
+# D-8619: the per-request record (`reqrecord.row`) reads one answer's figures through these, the parity section's own
+# rules, so the row and the parity row never compute the same figure two ways.
+bounded = _bounded
+is_count = _is_int
+
+
+def served_word(served: object, model: object) -> Optional[str]:
+    """The parity row's `served` word for a response that named `served` (None: it named none) when `model` was
+    asked for: `absent`, `same` or `other`; None (counted nowhere) when `served` is neither None nor a string."""
+    if served is not None and not isinstance(served, str):
+        return None
+    return "absent" if served is None else "same" if served == model else "other"
+
+
+def effort_word(effort: object) -> Optional[str]:
+    """The parity row's `effort` key for a body's `reasoning.effort`: NO_EFFORT for None, else the level bounded by
+    NAME_RE; None (counted nowhere) when it is neither None nor a string."""
+    if effort is not None and not isinstance(effort, str):
+        return None
+    return NO_EFFORT if effort is None else _bounded(effort)
+
+
+def count_transformations(held: Dict[str, int], transformations: list) -> None:
+    """Count one response's `input_transformations` keys into `held`, at most PARITY_TRANSFORMS_MAX keys, then
+    OVERFLOW; a key outside `reducer.transformation_key`'s shape is not counted."""
+    for key in transformations:
+        if _is_transform_key(key) and key != OVERFLOW:
+            key = _capped(held, key, PARITY_TRANSFORMS_MAX)
+            held[key] = held.get(key, 0) + 1
+
+
 def _is_ratio(value: object) -> bool:
     return (isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
             and count.RATIO_MIN <= value <= count.RATIO_MAX)
@@ -508,11 +539,12 @@ class Stats:
     def parity_effort(self, route: str, model: str, effort: Optional[str]) -> None:
         """One upstream POST's `reasoning.effort` as the body carried it, NO_EFFORT when it carried none (None). A
         level outside NAME_RE is UNRECOGNISED; one that is not a string counts nothing."""
-        if effort is not None and not isinstance(effort, str):
+        word = effort_word(effort)
+        if word is None:
             return
         with self._lock:
             held = self._parity(route, model)["effort"]
-            level = _capped(held, NO_EFFORT if effort is None else _bounded(effort), PARITY_KEYS_MAX)
+            level = _capped(held, word, PARITY_KEYS_MAX)
             held[level] = held.get(level, 0) + 1
             self._dirty = True
 
@@ -540,8 +572,8 @@ class Stats:
                 for name, field in PARITY_TOKENS:
                     if _is_int(usage.get(name)):
                         row[field] += usage[name]
-            if served is None or isinstance(served, str):
-                word = "absent" if served is None else "same" if served == model else "other"
+            word = served_word(served, model)
+            if word is not None:
                 row["served"][word] += 1
                 if word == "other":
                     others = row["servedOther"]
@@ -550,11 +582,7 @@ class Stats:
             if isinstance(transformations, list):
                 if transformations:
                     row["responsesWithTransformations"] += 1
-                held = row["inputTransformations"]
-                for key in transformations:
-                    if _is_transform_key(key) and key != OVERFLOW:
-                        key = _capped(held, key, PARITY_TRANSFORMS_MAX)
-                        held[key] = held.get(key, 0) + 1
+                count_transformations(row["inputTransformations"], transformations)
             for field, ms in (("firstOutputMs", first_output_ms), ("totalMs", total_ms)):
                 at = _bucket(ms)
                 if at is not None:

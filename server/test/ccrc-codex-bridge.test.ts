@@ -422,6 +422,7 @@ describe.skipIf(!PY)('ccrc codex: the bridge tier (codex bridge Stage 2, Task 11
       'liveprobe.count', 'bridge.stats.json', 'reasoning.sqlite', 'reasoning.sqlite-wal', 'reasoning.sqlite-shm'];
     files.push('liveprobe.count.tmp', 'bridge.stats.json.tmp');   // a killed write_count's or stats flush's tmp (Z11)
     files.push('bridge-reasoning-all-turns', 'bridge-verbosity', 'bridge-turn-state');   // the request markers (D-8622)
+    files.push('record-requests', 'bridge.requests.jsonl', 'bridge.requests.jsonl.1');   // the request record (D-8619)
     for (const f of files) fs.writeFileSync(join(d, f), 'fixture\n');
     fs.mkdirSync(join(d, 'recordings', 'nested'), { recursive: true, mode: 0o700 });
     fs.writeFileSync(join(d, 'recordings', 'nested', 'r1.sse'), 'event: fixture\n\n');
@@ -440,6 +441,23 @@ describe.skipIf(!PY)('ccrc codex: the bridge tier (codex bridge Stage 2, Task 11
     expect(fs.lstatSync(join(d, 'recordings')).isSymbolicLink()).toBe(true);
     expect(fs.readFileSync(join(elsewhere, 'keep.sse'), 'utf8')).toBe('event: fixture\n\n');
     expect(fs.existsSync(join(d, 'lane.json'))).toBe(false);
+  }, 60_000);
+
+  // D-8619: a lane.json an older laneManifest wrote names no request record. The reap still takes everything else, and
+  // the marker; a record file it was never told about is left, as any file the reap does not own is.
+  it('removal of a lane whose lane.json names no request record reaps the rest', async () => {
+    const { home } = await bridgeBox({ userManager: false });
+    const d = laneDir(home, 'codex-a');
+    const lj = JSON.parse(fs.readFileSync(join(d, 'lane.json'), 'utf8')) as { bridgeFiles: Record<string, string> };
+    expect(lj.bridgeFiles['requests'], 'CONTROL: the rendered lane.json names it').toBe('bridge.requests.jsonl');
+    delete lj.bridgeFiles['requests'];
+    fs.writeFileSync(join(d, 'lane.json'), JSON.stringify(lj));
+    const files = ['bridge.stats.json', 'reasoning.sqlite', 'record-requests', 'record-streams', 'bridge-turn-state'];
+    for (const f of files) fs.writeFileSync(join(d, f), 'fixture\n');
+    fs.writeFileSync(join(d, 'bridge.requests.jsonl'), 'fixture\n');
+    const r = lib(home, '_codex_reap_files codex-a; echo "rc=$?"');
+    expect(r.stdout, r.stderr).toBe('rc=0\n');
+    expect(fs.readdirSync(d)).toEqual(['bridge.requests.jsonl']);
   }, 60_000);
 
   // Fix round 3, F1: the store's set-aside copy (D-7676) holds the lane's encrypted reasoning as the store does, so

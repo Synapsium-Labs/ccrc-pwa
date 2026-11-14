@@ -35,7 +35,7 @@ describeCodex('ccrc doctor: codex, a direct lane\'s rows (codex bridge Stage 2, 
   const RETIRED_FIX = (id: string): string =>
     `  remedy: stop every tier of the lane, in either mode: ccrc codex stop ${id}, then ccrc codex start ${id} (a direct lane starts its bridge alone); to run the lane through LiteLLM again instead: ccrc codex switch ${id} litellm`;
   /** `lane.json`'s `bridgeFiles`, read back: the names are `laneManifest`'s, never spelled here. */
-  const bridgeFile = (home: string, id: string, k: 'stats' | 'store'): string =>
+  const bridgeFile = (home: string, id: string, k: 'stats' | 'store' | 'requests'): string =>
     join(laneDir(home, id), (JSON.parse(readFileSync(join(laneDir(home, id), 'lane.json'), 'utf8')) as
       { bridgeFiles: Record<string, string> }).bridgeFiles[k]);
   const liveSession = (home: string, sid: string, id: string): void => {
@@ -286,6 +286,48 @@ describeCodex('ccrc doctor: codex, a direct lane\'s rows (codex bridge Stage 2, 
     expect(remedyAfter(r.stdout, linkRe)).toBe(`  remedy: stop the lane (ccrc codex stop codex-b), move ${bStore} aside by hand, then start it again: the bridge creates a new one, mode 0600 — ccrc never removes it for you`);
     expect(r.stdout).not.toMatch(/codex-b's bridge stats file/);
     noRunnerBugLine(r.stdout, 'codex');
+  });
+
+  // D-8619: the per-request record and its one older generation are created 0600 by the bridge, as the stats file is,
+  // and hold the lane's Claude Code session ids and each request's timings. Named by lane.json's `bridgeFiles.requests`;
+  // a lane.json an older laneManifest wrote names none: no record file is looked for, and the lane.json itself reads
+  // stale against its roster row (the update's codex-lanes step and `doctor --fix` re-render it).
+  it('the request record and its older generation are checked like the stats file; a lane.json naming none is stale, never a record FAIL', async () => {
+    const home = await healthyCodexBox('ccrc-doctor-codex-direct-requests-', ['codex-a', 'codex-b']);
+    plantDirectLane(home, 'codex-b');
+    const rec = bridgeFile(home, 'codex-a', 'requests');
+    expect(path.basename(rec), 'CONTROL: the rendered lane.json names it').toBe('bridge.requests.jsonl');
+    writeFileSync(rec, '{}\n', { mode: 0o644 });
+    chmodSync(rec, 0o644);
+    writeFileSync(join(home, 'elsewhere.jsonl'), '{}\n', { mode: 0o600 });
+    symlinkSync(join(home, 'elsewhere.jsonl'), `${rec}.1`);
+    const bRec = bridgeFile(home, 'codex-b', 'requests');
+    writeFileSync(bRec, '{}\n', { mode: 0o600 });
+    writeFileSync(`${bRec}.1`, '{}\n', { mode: 0o640 });
+    chmodSync(`${bRec}.1`, 0o640);
+    const r = runDoctor(home);
+    const why = "it names the lane's Claude Code session ids and the time and size of each of its requests";
+    const modeRe = new RegExp(`^FAIL codex: codex-a's bridge request record ${reEsc(rec)} has mode 644, and the bridge keeps it owner-only \\(0600\\): ${reEsc(why)}$`, 'm');
+    expect(r.stdout, r.stdout).toMatch(modeRe);
+    expect(remedyAfter(r.stdout, modeRe)).toBe(`  remedy: chmod 600 ${rec}`);
+    expect(r.stdout).toMatch(new RegExp(`^FAIL codex: codex-a's bridge request record ${reEsc(`${rec}.1`)} is not a regular file \\(a symlink, a directory or another kind of file\\), `, 'm'));
+    expect(r.stdout).toMatch(new RegExp(`^FAIL codex: codex-b's bridge request record ${reEsc(`${bRec}.1`)} has mode 640, `, 'm'));
+    expect(r.stdout).not.toMatch(new RegExp(`${reEsc(bRec)} has mode`));
+    noRunnerBugLine(r.stdout, 'codex');
+    // a lane.json with no request record named: its files are not looked for, and nothing else changes
+    for (const id of ['codex-a', 'codex-b']) {
+      const lj = join(laneDir(home, id), 'lane.json');
+      const doc = JSON.parse(readFileSync(lj, 'utf8')) as { bridgeFiles: Record<string, string> };
+      delete doc.bridgeFiles['requests'];
+      writeFileSync(lj, JSON.stringify(doc), { mode: 0o600 });
+    }
+    const r2 = runDoctor(home);
+    expect(r2.stdout).not.toMatch(/bridge request record/);
+    for (const id of ['codex-a', 'codex-b']) {
+      expect(r2.stdout, r2.stdout).toMatch(new RegExp(`^FAIL codex: ${id}'s lane\\.json disagrees with its roster row \\(`, 'm'));
+    }
+    expect(r2.stdout).not.toMatch(/lane\.json disagrees with what its roster row and class registry render/);
+    noRunnerBugLine(r2.stdout, 'codex');
   });
 
   // A mode `_plat_mode` cannot measure (here `stat` fails on the bridge files alone) is the FAIL's `unreadable`, never a

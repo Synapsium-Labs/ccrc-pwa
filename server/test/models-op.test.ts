@@ -1354,7 +1354,8 @@ describe('lane.json (spec §5.4) — the codex lane manifest', () => {
         upstream: 'backend',
         probeModel: classesOf('codex-a')['haiku'],
         units: { litellm: 'ccgpt-codex-a-litellm.service', shim: 'ccgpt-codex-a-shim.service' },
-        bridgeFiles: { stats: 'bridge.stats.json', store: 'reasoning.sqlite', recordings: 'recordings' },
+        // D-8619: `requests`, the per-request record, written only behind the lane's record-requests marker
+        bridgeFiles: { stats: 'bridge.stats.json', store: 'reasoning.sqlite', recordings: 'recordings', requests: 'bridge.requests.jsonl' },
       });
       expect(classesOf('codex-a')['haiku']).toBe('gpt-x-mini');
       expect(fs.statSync(lanePath()).mode & 0o777).toBe(0o600);

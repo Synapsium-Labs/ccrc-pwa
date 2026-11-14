@@ -5851,9 +5851,10 @@ describe('ccrc account remove', () => {
     const dir = join(home, '.ccrc', 'codex', lane.id);
     const lj = JSON.parse(readFileSync(join(dir, 'lane.json'), 'utf8')) as Record<string, unknown>;
     writeFileSync(join(dir, 'lane.json'), `${JSON.stringify({ ...lj, bridge: 'direct', upstream: 'backend',
-      bridgeFiles: { stats: 'bridge.stats.json', store: 'reasoning.sqlite', recordings: 'recordings' } }, null, 2)}\n`);
+      bridgeFiles: { stats: 'bridge.stats.json', store: 'reasoning.sqlite', recordings: 'recordings', requests: 'bridge.requests.jsonl' } }, null, 2)}\n`);
     const bridgeFiles = ['bridge.stats.json', 'reasoning.sqlite', 'reasoning.sqlite-wal', 'reasoning.sqlite-shm',
       'record-streams', 'bridge-instructions', 'bridge-reasoning-all-turns', 'bridge-verbosity', 'bridge-turn-state',
+      'record-requests', 'bridge.requests.jsonl', 'bridge.requests.jsonl.1', // the request record and its marker (D-8619)
     ].map((f) => join(dir, f));
     for (const f of bridgeFiles) writeFileSync(f, 'fixture\n', { mode: 0o600 });
     mkdirSync(join(dir, 'recordings'), { mode: 0o700 });

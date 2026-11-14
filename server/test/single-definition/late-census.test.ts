@@ -565,14 +565,14 @@ describe('ARCH-77: child reclaim’s off switch has no writer in the tree, and o
   });
 });
 
-// CODEX BRIDGE STAGE 2, TASK 10 (spec D20): the bridge's three file names are spelled once, in `laneManifest`
+// CODEX BRIDGE STAGE 2, TASK 10 (spec D20): the bridge's four file names are spelled once, in `laneManifest`
 // (`deploy/models-op.mjs`), copied into `lane.json` as `bridgeFiles` and read from there by bash and Python; and the
 // roster's two new exec fields reach bash only through that rendered file, never through a second `jq` over the
 // roster. APPENDED, for the reason the block above states (session-hook.test.ts's citation audit cites this file by
 // line). The file-name scan reads QUOTED literals only, over shipped code: a docstring that names a file in backticks
 // is prose, and the test tree's fixtures plant the names on purpose.
 describe('codex bridge Stage 2 Task 10: the bridge file names and the lane mode have one source each', () => {
-  const BRIDGE_FILE_NAMES = ['bridge.stats.json', 'reasoning.sqlite', 'recordings'] as const;
+  const BRIDGE_FILE_NAMES = ['bridge.stats.json', 'reasoning.sqlite', 'recordings', 'bridge.requests.jsonl'] as const;
   const shipped = (): string[] => {
     const r = spawnSync('git', ['-C', ccrcRoot, 'ls-files', '--', 'ccd', 'shared', 'deploy', 'server/src',
       'agent/src', 'pwa/src'], { encoding: 'utf8' });
