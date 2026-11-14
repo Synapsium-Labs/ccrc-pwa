@@ -101,7 +101,7 @@ afterEach(() => { vi.useRealTimers(); });
 describe('the role timer is a role (C63)', () => {
   it('is the shared vocabulary word, and a role id', () => {
     expect(TIMER_MAIL_SENDER).toBe(TIMER);
-    expect(MAIL_ROLE_IDS.has(TIMER)).toBe(false);
+    expect(MAIL_ROLE_IDS.has(TIMER)).toBe(true);
     expect(REVIVE_SKIPPED_SENDERS).not.toContain(TIMER);
   });
 });
@@ -116,7 +116,8 @@ describe('FleetWatcher.mailSender: a timer mail resolves to no sender', () => {
     queueFrom(coord, TIMER, null);
 
     await w.sweepMail();
-    expect(sent.map((p) => p.sessionId)).toEqual([TIMER]);
+    expect(sent.map((p) => p.sessionId)).not.toContain(TIMER);
+    expect(sent).toEqual([]);
   });
 
   it('a parked timer mail mails no park notice to the role, and its one push names the recipient', async () => {
@@ -131,8 +132,8 @@ describe('FleetWatcher.mailSender: a timer mail resolves to no sender', () => {
     await w.sweepMail();
     expect((coord.db.prepare('SELECT state, lastError FROM mail_deliveries WHERE id = ?').get(id) as
       { state: string }).state).toBe('queued');
-    expect(parkNoticesTo(coord, TIMER)).toBe(1);
-    expect(sent.map((p) => p.sessionId)).toEqual([TIMER]);
+    expect(parkNoticesTo(coord, TIMER)).toBe(0);
+    expect(sent.map((p) => p.sessionId)).toEqual([ID]);
   });
 
   it('a session sender is still told and pushed (the control)', async () => {
