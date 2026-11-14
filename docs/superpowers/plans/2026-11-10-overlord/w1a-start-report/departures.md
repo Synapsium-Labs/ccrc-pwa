@@ -29,10 +29,16 @@ a slug and its reason. The one number this piece was issued, D-8557, has one def
   is back"). `startedUuid` is data the server cannot check against the sender.
 - **startup-keeps-its-own-sender** (review 1949, G2) — a `startup` report is resent with its own `fromUuid`, never
   rewritten. Another Claude process that inherits this pane (a nested `claude -p` from the session's own shell) runs
-  this hook under the row's id; its start meets `stale-uuid`, is kept, and is then refused on every resend and dropped,
-  so it is never recorded as the row's own start. Only a source that changes the row's own conversation (`clear`,
-  `resume`, `compact`) is rewritten. The generations piece also checks `startedUuid` against the registry's history
-  (the coordinator's carry).
+  this hook under the row's id; its `startup` meets `stale-uuid`, is kept, and is then refused on every resend and
+  dropped, so a nested `startup` is never recorded as the row's own start. Only a source that changes the row's own
+  conversation (`clear`, `resume`, `compact`) is rewritten, so a nested process's `clear`, `resume` or `compact` (a
+  `claude -p --resume`, say) is rewritten like the row's own and can still land as the row's, with its own uuid as
+  `startedUuid` (review 1975, H2; a case pins a nested `resume`). The generations piece must check `startedUuid`
+  against the registry's history (the coordinator's carry).
+  The cost, accepted as part of G2 (review 1975, H1): the row's own `startup` kept through an outage and then a
+  `/clear` is lost. Its `fromUuid` is the uuid the registry named at startup; once `/clear` moves the registry on, the
+  door no longer names that sender, so the report meets `stale-uuid` on every pass and is dropped after
+  `START_RESEND_TRIES`, counted. The generations piece knows a session's first generation can lack its `startup` row.
 - **startsSince-answer-shape** — the read answers `{ok: true, rows}` or `{ok: false, detail}`, never a null that
   means two things.
 - **id-order-is-receipt-order** (review 1949, G3) — id order is receipt order; a session's start order is
@@ -71,12 +77,17 @@ a slug and its reason. The one number this piece was issued, D-8557, has one def
   SessionStart the roster card's own bound comes before it.
 - **budget-floor-skips-not-stretches** (review 1911, F2) — the ruling's "1 s floor" is read as the least time a send
   may start with: no send starts with under a second left, and a send that starts gets exactly what is left, never
-  more. So the event never runs past the budget; a report not sent for want of time is kept untried.
+  more. So the report never runs past its budget (the budget is the report's, as `one-budget-fresh-first` says); a
+  report not sent for want of time is kept untried.
 - **every-answered-send-counts-a-try** — a send the server answered without taking the report counts a try, the
   fresh send included, so "refused START_RESEND_TRIES times" holds for every report. Before this round only resends
   counted. No answer, and no time left, count none.
-- **stale-uuid-ends-the-pass** (review 1949, G5) — a `stale-uuid` ends the pass with the short back-off, so one stale
-  answer spends one try, not one per kept report sent after it.
+- **stale-uuid-ends-the-pass** (review 1949, G5; narrowed by review 1975, H1) — a `stale-uuid` on a send that
+  carried this event's `session_id` (the fresh report, or a rewritten `clear`, `resume` or `compact` report) ends the
+  pass with the short back-off, so one stale answer spends one try, not one per kept report sent after it. A kept
+  `startup`, which keeps its own sender, counts its try on `stale-uuid` and the pass goes on, so a stale `startup` at
+  the head of the spool never holds back the reports behind it. A case pins each half: one stale answer on the fresh
+  send, and a nested `startup` ahead of a `clear` that lands on the same pass.
 - **older-server-answers-count-a-try** (review 1911, F3, option (a)) — a 404 or a 401 from the door (an older server
   during a rollout that moved the fleet box first, or a token being rotated) is "no answer": the report is kept, a try
   is counted, and the pass ends. No new cap word.
@@ -87,7 +98,8 @@ a slug and its reason. The one number this piece was issued, D-8557, has one def
   as a 5xx does.
 - **backoff-by-how-the-pass-ended** (review 1911, F7, F12, F15) — the pass stamps `START_RESEND_BACKOFF_MS` (30 s) when
   a send ended it (no answer, a 404, a 401, a 5xx or a local refusal), a report spooled in this same pass included, and
-  `START_STALE_BACKOFF_MS` (5 s, one supervisor tick) after a `stale-uuid` or a spent budget, so a `/clear` start lands
+  `START_STALE_BACKOFF_MS` (5 s, one supervisor tick) after a `stale-uuid` that ended the pass (review 1975, H1: a kept
+  `startup`'s stamps nothing) or a spent budget, so a `/clear` start lands
   on the first prompt after `_sync_uuid` has followed. Each stamp counts from the end of the pass, not its start
   (review 1949, G7). A fresh report taken clears a standing stamp, so the kept reports go on the next event (G7). A
   stamp further out than the long back-off (a wall clock that stepped back) is read as the long back-off. A pass that
@@ -105,8 +117,8 @@ a slug and its reason. The one number this piece was issued, D-8557, has one def
   and a UserPromptSubmit of one session ever overlap, the later writer can lose the earlier one's freshly kept report
   or count. A duplicate is harmless (the server dedups on `reportId`). A lock was kept out deliberately (the coordinator's
   ruling on F11): a lock there could hold one event behind another's whole 4 s pass.
-- **growth-waiver-d-8557** (review 1911, F13) — the fixes put `ccd/session-hook.sh` at +51 net code lines against the
-  merge-base, over the limit of 40. D-8557 waives it to 56 (`server/test/growth-waivers/D-8557-session-hook.json`),
+- **growth-waiver-d-8557** (reviews 1911 F13, 1949, 1975) — the fixes put `ccd/session-hook.sh` at +55 net code lines
+  against the merge-base (2865 to 2920, against `ef91420ff`), over the limit of 40. D-8557 waives it to 56 (`server/test/growth-waivers/D-8557-session-hook.json`),
   and the back-off decision has lines of its own again. This retires `back-off-test-joined-for-growth`, the join that
   held the earlier build at +40.
 - **d-8557-defined-once** (reviews 1911, 1949 G10) — D-8557 has one definition, the index plan's two-line entry

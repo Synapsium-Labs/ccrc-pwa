@@ -209,10 +209,11 @@ answered through `refuseRoute` (`stale-uuid` 403, `registry-unmeasurable` 502), 
 
 ## Deviations found
 
-- **D-8557, start-report-hook-growth, scope** (2026-11-13) — review 1911's fixes to the start report (one millisecond budget
-  for the whole event, the fresh report first, the back-off stamped by how the pass ended and clamped, the sender's
-  uuid rewritten on resend, and the answers that keep a report and count a try) put `ccd/session-hook.sh` at +51 net
-  code lines against the merge-base, over the growth limit of 40. Waived to 56 by
+- **D-8557, start-report-hook-growth, scope** (2026-11-13) — the fixes of reviews 1911, 1949 and 1975 to the start report
+  (one millisecond budget for the report, the fresh report first, the back-off stamped from the pass's end by how the
+  pass ended and clamped, the sender's uuid rewritten on the resend of a `clear`, `resume` or `compact` report, and the
+  answers that keep a report and count a try) put `ccd/session-hook.sh` at +55 net code lines against the merge-base
+  (2865 to 2920), over the growth limit of 40. Waived to 56 by
   `server/test/growth-waivers/D-8557-session-hook.json`: the report must run on the SessionStart path itself, and the
   hook loads no library.
 
