@@ -466,8 +466,68 @@ const PACK_SET: MutantSet<TimersModule> = {
   suite: packTimerMailCases,
 };
 
+// ---------- timerHoldUntil (Task 9: the stall hold, in coord/stall.ts) ----------
+
+const STALL_MODULE = path.join(ROOT, 'server/src/coord/stall.ts');
+export type StallModule = typeof import('../../src/coord/stall.js');
+const HOUR = 3_600_000;
+const HOLD_CAP = 86_400_000;       // TIMER_HOLD_CAP_MS, 24 hours
+
+export function timerHoldCases(m: StallModule): Record<string, SuiteCase> {
+  const S = 1_800_000_000_000;      // the ladder's start
+  const Q = 2 * HOUR;               // the ladder's quiet period
+  const now = S + 3 * HOUR;
+  const pending = (id: number, dueAt: number) => ({ earliestPending: { id, dueAt }, newestFired: null });
+  const fired = (id: number, dueAt: number, firedAt: number) => ({ earliestPending: null, newestFired: { id, dueAt, firedAt } });
+  return {
+    'no timers, an unmeasured read, or an empty read hold nothing': () => {
+      expect(m.timerHoldUntil(S, undefined, Q, now)).toBeNull();
+      expect(m.timerHoldUntil(S, 'unmeasured', Q, now)).toBeNull();
+      expect(m.timerHoldUntil(S, { earliestPending: null, newestFired: null }, Q, now)).toBeNull();
+    },
+    'a pending timer not yet due holds until its due time plus the quiet period': () => {
+      expect(m.timerHoldUntil(S, pending(7, now + HOUR), Q, now)).toStrictEqual({ id: 7, dueAt: now + HOUR, until: now + 3 * HOUR });
+    },
+    'a pending timer past its due time holds until it fires, so to the cap': () => {
+      expect(m.timerHoldUntil(S, pending(7, now - HOUR), Q, now)).toStrictEqual({ id: 7, dueAt: now - HOUR, until: S + HOLD_CAP });
+      expect(m.timerHoldUntil(S, pending(7, now), Q, now)?.until).toBe(S + HOLD_CAP);
+    },
+    'never past the start plus 24 hours': () => {
+      expect(m.timerHoldUntil(S, pending(7, now + 40 * HOUR), Q, now)?.until).toBe(S + HOLD_CAP);
+      expect(m.timerHoldUntil(S, fired(8, S + 23 * HOUR, S + 23 * HOUR), Q, now)?.until).toBe(S + HOLD_CAP);
+    },
+    'a fired timer holds one full quiet period from its fire, however late it fired': () => {
+      expect(m.timerHoldUntil(S, fired(8, S - 2 * HOUR, S + HOUR), Q, now)).toStrictEqual({ id: 8, dueAt: S - 2 * HOUR, until: S + 3 * HOUR });
+    },
+    'a fired timer holds only when it fired at or after the start': () => {
+      expect(m.timerHoldUntil(S, fired(8, S, S), Q, now)?.until).toBe(S + Q);
+      expect(m.timerHoldUntil(S, fired(8, S - 1, S - 1), Q, now)).toBeNull();
+    },
+    'the earliest pending timer is the one that holds, over a fired one': () => {
+      const both = { earliestPending: { id: 7, dueAt: now + HOUR }, newestFired: { id: 8, dueAt: S, firedAt: S + HOUR } };
+      expect(m.timerHoldUntil(S, both, Q, now)?.id).toBe(7);
+    },
+  };
+}
+
+const HOLD_SET: MutantSet<StallModule> = {
+  modulePath: STALL_MODULE,
+  mutants: [
+    // The plan's named mutants (Task 9 Step 5) that live in this function.
+    { id: 'H1 no cap', old: '  const cap = start + TIMER_HOLD_CAP_MS;', new: '  const cap = Infinity;' },
+    { id: 'H2 hold on unmeasured', old: "  if (held === undefined || held === 'unmeasured') return null;", new: "  if (held === undefined) return null;\n  if (held === 'unmeasured') return { id: 0, dueAt: 0, until: start + TIMER_HOLD_CAP_MS };" },
+    { id: 'H3 fired timed from dueAt', old: 'until: Math.min(f.firedAt + quietMs, cap) };', new: 'until: Math.min(f.dueAt + quietMs, cap) };' },
+    { id: 'H4 pending only', old: '  const f = held.newestFired;\n', new: '  const f = null as typeof held.newestFired;\n' },
+    { id: 'H5 fired before the start holds', old: 'if (f === null || f.firedAt < start) return null;', new: 'if (f === null) return null;' },
+    { id: 'H6 overdue pending stops at due plus quiet', old: 'p.dueAt > now ? p.dueAt + quietMs : cap', new: 'p.dueAt + quietMs' },
+    { id: 'H7 fired wins over pending', old: '  if (p !== null) return', new: '  if (p !== null && held.newestFired === null) return' },
+  ],
+  suite: timerHoldCases,
+};
+
 /** This piece's sets, keyed as `mutation-floors.json` keys them (`<file>#<decider>`). */
 export const TIMER_MUTANT_SETS: Record<string, MutantSet<never>> = {
+  'server/src/coord/stall.ts#timerHoldUntil': HOLD_SET as MutantSet<never>,
   'server/src/continuity/timers.ts#timerBodyVerdict': BODY_SET as MutantSet<never>,
   'server/src/continuity/timers.ts#timerSetVerdict': SET_SET as MutantSet<never>,
   'server/src/continuity/timers.ts#timerCancelVerdict': CANCEL_SET as MutantSet<never>,
