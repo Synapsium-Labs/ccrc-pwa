@@ -37,6 +37,8 @@ import {
   type CardReadInsert, type CardReadRead, type CursorAdvance, type CursorRead, type DueWrite, type SnapshotInsert,
   type GenExpect, type GenerationsRead, type MintInput, type MintResult, type StartInsert, type StartInsertResult, type StartsRead,
 } from '../continuity/continuityStore.js';
+import * as timers from '../continuity/continuityStore.js';
+import type { TimerActor, TimerCancelReason } from '../../../shared/continuity-timers.js';
 import type { GenView } from '../continuity/generationMachine.js';
 import type { Observed } from '../time/observed.js';
 import type { RenewalTrigger } from '../../../shared/continuity.js';
@@ -5394,6 +5396,15 @@ export class CoordStore {
   insertSnapshot(s: SnapshotInsert): { ok: true; fresh: boolean } | { ok: false } { return insertSnapshot(this.db, s); }
   insertCardRead(r: CardReadInsert): { ok: true; id: number } | { ok: false } { return insertCardRead(this.db, r); }
   cardReadOfStart(startId: number): CardReadRead { return cardReadOfStart(this.db, startId); }
+  /** Overlord §3.3.12 (the timers piece, `continuityStore.ts`): one writer per move of `TIMER_TRANSITIONS`, and the reads. */
+  insertTimer(row: timers.TimerInsert): { ok: true; id: number } | { ok: false; kind: 'write-failed' } { return timers.insertTimer(this.db, row); }
+  cancelTimer(id: number, actor: TimerActor, reason: TimerCancelReason, at: number): { changed: boolean } { return timers.cancelTimer(this.db, id, actor, reason, at); }
+  markTimersFired(ids: readonly number[], mailId: number, at: number): { changed: boolean } { return timers.markTimersFired(this.db, ids, mailId, at); }
+  pendingTimersOf(setter: string): timers.TimersRead { return timers.pendingTimersOf(this.db, setter); }
+  pendingTimers(): timers.TimersRead { return timers.pendingTimers(this.db); }
+  timerHoldFacts(setter: string, firedSince: number): timers.TimerHoldRead { return timers.timerHoldFacts(this.db, setter, firedSince); }
+  setsSince(setter: string, since: number): number { return timers.setsSince(this.db, setter, since); }
+  purgeTimers(before: number): { removed: number } { return timers.purgeTimers(this.db, before); }
 
   /** D-6909: the review-cap state of a batch of runs (`reviewCapStore.ts`). */
   reviewCapStates(ids: readonly number[]): Map<number, ReviewCapState> {

@@ -22,6 +22,9 @@ import type { ProbeClass } from './continuity.js';
  *  600 characters, with no quote character, backslash, `$` or `;` (tmux drops a trailing one), so it is typed as one
  *  literal send (instructions-one-line).
  *
+ *  `timerCap` (the timers piece of W1a, spec Table 11.1b, C65): how many pending timers one session of the role may hold;
+ *  the Overlord's 50 is used from W1.
+ *
  *  Mail pace and the renewal triggers are not columns: they are L1 records keyed by role (spec
  *  §3.3.9, §11.1), built by their own pieces.
  *
@@ -74,6 +77,9 @@ export interface FleetRoleRow {
   readonly compactInstructions: string;
   /** The classes a probe round draws from (`server/src/continuity/probes.ts#probeRound`). */
   readonly probeSet: readonly ProbeClass[];
+  /** How many pending timers one session of the role may hold (the timers piece of W1a, spec Table 11.1b; slug
+   *  timer-cap-is-a-role-column). A role that reads `undecided` is held to the least cap, 5. */
+  readonly timerCap: number;
 }
 
 /** Keys in Table 3.3.9a's order. */
@@ -87,6 +93,7 @@ export const FLEET_ROLES: Readonly<Record<FleetRole, FleetRoleRow>> = {
     // Every class, spelled out rather than `PROBE_CLASSES`: this file takes only type imports of its siblings (the header).
     // `fleet-roles.test.ts` holds it equal to `PROBE_CLASSES`, and the `ProbeClass` type refuses a stray word (review 1999, F10).
     probeSet: ['fact', 'update', 'temporal', 'abstention', 'continuation', 'decision', 'contradiction', 'application', 'thread'],
+    timerCap: 50,
   },
   auditor: {
     longLived: false,
@@ -95,6 +102,7 @@ export const FLEET_ROLES: Readonly<Record<FleetRole, FleetRoleRow>> = {
     cardRenderer: 'plain',
     compactInstructions: PLAIN_COMPACT,
     probeSet: [],
+    timerCap: 5,
   },
   replay: {
     longLived: false,
@@ -103,6 +111,7 @@ export const FLEET_ROLES: Readonly<Record<FleetRole, FleetRoleRow>> = {
     cardRenderer: 'plain',
     compactInstructions: PLAIN_COMPACT,
     probeSet: [],
+    timerCap: 5,
   },
   worker: {
     longLived: false,
@@ -111,6 +120,7 @@ export const FLEET_ROLES: Readonly<Record<FleetRole, FleetRoleRow>> = {
     cardRenderer: 'worker',
     compactInstructions: compactText('worker', WORKER_KEEPS),
     probeSet: [],
+    timerCap: 5,
   },
   reviewer: {
     longLived: false,
@@ -119,6 +129,7 @@ export const FLEET_ROLES: Readonly<Record<FleetRole, FleetRoleRow>> = {
     cardRenderer: 'reviewer',
     compactInstructions: compactText('reviewer', WORKER_KEEPS),
     probeSet: [],
+    timerCap: 5,
   },
   coordinator: {
     longLived: true,
@@ -127,6 +138,7 @@ export const FLEET_ROLES: Readonly<Record<FleetRole, FleetRoleRow>> = {
     cardRenderer: 'coordinator',
     compactInstructions: compactText('coordinator', `${COORDINATOR_KEEPS}, and every mail you have not answered`),
     probeSet: ['fact', 'temporal', 'abstention', 'continuation'],
+    timerCap: 20,
   },
   plain: {
     longLived: false,
@@ -135,6 +147,7 @@ export const FLEET_ROLES: Readonly<Record<FleetRole, FleetRoleRow>> = {
     cardRenderer: 'plain',
     compactInstructions: PLAIN_COMPACT,
     probeSet: [],
+    timerCap: 5,
   },
 };
 
