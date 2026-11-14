@@ -33,7 +33,7 @@ function empty(over: Partial<CardFacts> = {}): CardFacts {
   return {
     sessionId: 'lane-a-project-a', role: 'coordinator', roleWhy: 'it claims a run', at: AT,
     runs: read([]), ledger: read([]), claims: read([]), intent: read(true), itemsRaised: read([]),
-    mailOutstanding: read([]), mailMore: false, notes: read([]), checkpoint: read(null),
+    mailOutstanding: read([]), mailMore: false, notes: read([]), checkpoint: read(null), timers: read([]),
     history: read({ verb: 'ccrc history describe', node: null }), ...over,
   };
 }

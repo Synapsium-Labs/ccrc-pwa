@@ -7,7 +7,8 @@ import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
 import { CARD_HISTORY, gatherCardFacts, type CardFactsDeps } from '../src/continuity/cardFacts.js';
 import { intentOfCheckpoint } from '../src/continuity/declaredIntent.js';
-import { CARD_REGISTRY_UNREAD, cardRoleOf } from '../src/continuity/card.js';
+import { CARD_REGISTRY_UNREAD, cardRoleOf, snapshotFactsJson } from '../src/continuity/card.js';
+import { timerPreview } from '../src/continuity/timers.js';
 import { delegationIntentKey } from '../src/coord/delegation-model.js';
 import { roleFactsOf } from '../src/roleOf.js';
 import type { ChildMark, ChildReclaimGeneration } from '../../shared/api.js';
@@ -348,5 +349,58 @@ describe('gatherCardFacts: the notes and the checkpoint (the notes piece, Task 3
       breakIt(c);
       expect((await gather(c)).facts.checkpoint).toEqual({ kind: 'unmeasured', what: 'the checkpoint (the handover note)' });
     }
+  });
+});
+
+describe('gatherCardFacts: the pending timers (the timers piece, plan w1a-timers.md Task 10)', () => {
+  const set = (c: CoordStore, setter: string, dueAt: number, note: string, over: { runId?: number | null; programme?: string | null } = {}): number => {
+    const r = c.insertTimer({ setter, setterIncarnation: INC, setById: setter, setByUuid: 'u', role: 'worker', note,
+      runId: over.runId ?? null, programme: over.programme ?? null, setAt: NOW - 60_000, dueAt });
+    if (!r.ok) throw new Error(r.kind);
+    return r.id;
+  };
+  const LONG = `${'word '.repeat(30)}and the end of a long note`;
+
+  it('the session\'s own pending timers, oldest due first, each with timerPreview\'s preview; others\' and moved ones are not read', async () => {
+    const c = store();
+    const late = set(c, ME, NOW + 7_200_000, LONG, { programme: 'prog-a' });
+    const soon = set(c, ME, NOW + 600_000, 'check the checks', { runId: 7 });
+    set(c, OTHER, NOW + 300_000, 'not mine');
+    const fired = set(c, ME, NOW + 400_000, 'fired');
+    expect(c.markTimersFired([fired], 1, NOW).changed).toBe(true);
+    const cancelled = set(c, ME, NOW + 500_000, 'cancelled');
+    expect(c.cancelTimer(cancelled, 'setter-cancel', 'setter', NOW).changed).toBe(true);
+    const f = (await gather(c)).facts;
+    expect(value(f.timers)).toEqual([
+      { id: soon, dueAt: NOW + 600_000, preview: 'check the checks', runId: 7, programme: null },
+      { id: late, dueAt: NOW + 7_200_000, preview: timerPreview(LONG), runId: null, programme: 'prog-a' },
+    ]);
+    expect(timerPreview(LONG)).not.toBe(LONG);
+    // The note itself never rides the facts (nor the snapshot): only its preview.
+    expect(snapshotFactsJson(f)).not.toContain('the end of a long note');
+  });
+
+  it('no pending timer is a read empty list', async () => {
+    expect((await gather(store())).facts.timers).toEqual({ kind: 'read', value: [] });
+  });
+
+  it('a read that fails, or throws, is unmeasured, never an empty list', async () => {
+    for (const breakIt of [(c: CoordStore) => { c.pendingTimersOf = () => ({ ok: false, detail: 'x' }); },
+      (c: CoordStore) => { c.pendingTimersOf = () => { throw new Error('disk'); }; }]) {
+      const c = store();
+      set(c, ME, NOW + 600_000, 'n');
+      breakIt(c);
+      expect((await gather(c)).facts.timers).toEqual({ kind: 'unmeasured', what: 'your pending timers' });
+    }
+  });
+
+  it('two gathers over unchanged timers keep one snapshot (absolute stamps only), and a new timer changes it', async () => {
+    const c = store();
+    set(c, ME, NOW + 600_000, 'check the checks', { runId: 7 });
+    const a = snapshotFactsJson((await gatherCardFacts(deps(c), ME, NOW)).facts);
+    const b = snapshotFactsJson((await gatherCardFacts(deps(c), ME, NOW + 3_600_000)).facts);
+    expect(b).toBe(a);
+    set(c, ME, NOW + 900_000, 'another');
+    expect(snapshotFactsJson((await gatherCardFacts(deps(c), ME, NOW)).facts)).not.toBe(a);
   });
 });
