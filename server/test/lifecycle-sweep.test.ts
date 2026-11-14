@@ -145,6 +145,9 @@ describe('the tick itself', () => {
     // where that distinction is already drawn. No new I/O, no new timer, no
     // call into the sweep next door.
     //
+    // D-8610: the rung now reads the recipient through `readSession`, which takes the lifecycle as its `lifecycle`
+    // fact and asks `lifecycleIsDead` itself, so the third permitted read is that fact's key, matched whole.
+    //
     // So the allow-list below is EXPLICIT and short. A new lifecycle reference
     // that is not one of these three reds this test, which is a stricter
     // statement of the same rule than the blanket substring ever was — that one
@@ -175,7 +178,8 @@ describe('the tick itself', () => {
     // stayed green. Stripping `//`-to-end-of-line first takes the stray `/*`
     // with it, so no block match can open.
     const code = body.replace(/\/\/[^\n]*/g, ' ').replace(/\/\*[\s\S]*?\*\//g, ' ');
-    const ALLOWED = ['sessionLifecycle(', 'lifecycleIsDead(', 'lifecycleInputFor('];
+    const ALLOWED = ['sessionLifecycle(', 'lifecycleInputFor('];
+    const FACT = 'lifecycle';
     const mentions = [...code.matchAll(/[A-Za-z_$]*[Ll]ifecycle[A-Za-z_$]*\s*\(?/g)].map((m) => m[0].trim());
 
     // THE CANARY, and it is the mechanism rather than the ordering above. Any
@@ -187,9 +191,9 @@ describe('the tick itself', () => {
     expect.soft(mentions.length,
       'the lifecycle census found none of the three reads it knows are there — the comment strip has ' +
       'blinded it, and `unexpected: []` below would be vacuous rather than clean')
-      .toBeGreaterThanOrEqual(ALLOWED.length);
+      .toBeGreaterThanOrEqual(ALLOWED.length + 1);
 
-    const unexpected = mentions.filter((m) => !ALLOWED.some((a) => m.startsWith(a.slice(0, -1))));
+    const unexpected = mentions.filter((m) => m !== FACT && !ALLOWED.some((a) => m.startsWith(a.slice(0, -1))));
     expect.soft(unexpected,
       'a lifecycle reference in sweepMail that is not one of the three permitted pure reads')
       .toEqual([]);

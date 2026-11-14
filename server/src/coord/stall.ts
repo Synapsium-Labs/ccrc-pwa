@@ -6,11 +6,11 @@ import { isHookEvent, type HookEvent } from '../../../shared/hook-events.js';
 import { sessionRoleOf } from '../roleOf.js';
 import type { ChildMark, MailGate, RunState } from '../../../shared/api.js';
 import type { MailTurnMode } from '../turnidle.js';
-import { stallWatchSays } from '../sessionReading.js';
+import { stallWatchSays, turnWordOf } from '../sessionReading.js';
 /**
  * The worker stall watch's pure half (design 2026-09-29 §4.2, wave 1). L1: clock-free, fs-free, fastify-free and
  * store-free. `stall-vocabulary.test.ts` pins that, and the coord-ring scan in `single-definition.test.ts` forbids
- * this file `./db.js` and `node:sqlite`. Its permitted value imports are L0, `shared/api.ts`, `shared/stall-watch.ts` (the arms), `stallWatchSays` from `../sessionReading.js` and `sessionRoleOf` from `../roleOf.js` (both L1, which import only L0).
+ * this file `./db.js` and `node:sqlite`. Its permitted value imports are L0, `shared/api.ts`, `shared/stall-watch.ts` (the arms), `stallWatchSays` and `turnWordOf` from `../sessionReading.js` and `sessionRoleOf` from `../roleOf.js` (both L1, which import only L0).
  *
  * Spelled ONCE here: the subject prefixes, and the observation-detail heads that `stallDetail` writes and
  * `parseStallDetail` reads back. `single-definition.test.ts` reds on a second quoted copy anywhere in the four
@@ -1002,7 +1002,7 @@ function stallR2Due(input: StallInput, key: number): StallVerdict {
  *  (the live stamp, and any mail) gates r1 only. A later rung falls due an hour after the previous one on the RAW
  *  live stamp (`rungDueAt`), so it re-times only when a busy read pushed the word's turn to idle past that hour. */
 function stallWaveOneLadder(input: StallInput, f: StallFacts, word: string, liveSince: number, key: number, now: number): StallVerdict {
-  if (word === 'busy') return holdVerdict('busy');
+  if (turnWordOf(word) === 'busy') return holdVerdict('busy');
   if (!isIdleWord(word) || f.quietSince === null) return holdVerdict('unmeasured');
   const since = f.quietSince;
   const r1At = rungDoneAt(input, 'quiet', 1, key);
@@ -1144,7 +1144,7 @@ function stallVerdictInner(input: StallInput, now: number): StallVerdict {
   if (w2Live && okMark !== null && okMark.graceUntil !== null && now < okMark.graceUntil) return holdVerdict('restart-grace');
   const view = okMark === null ? null : stallMarkView(okMark, live);
   // (7) frozen: a turn in flight under a busy word with no main hook event for FROZEN_NO_EVENT_MS, once per turn
-  if (w2 !== undefined && okMark !== null && view !== null && view.state === 'working' && live.word === 'busy') {
+  if (w2 !== undefined && okMark !== null && view !== null && view.state === 'working' && turnWordOf(live.word) === 'busy') {
     const turnKey = okMark.turnAt ?? okMark.at;
     const frozenSince = stallFrozenSince(okMark, w2.hook);
     if (frozenSince !== null && now - frozenSince >= FROZEN_NO_EVENT_MS && rungDoneAt(input, 'frozen', 1, turnKey) === null) {
@@ -1806,7 +1806,7 @@ function stallOrphanEInner(input: StallSessionInput, now: number): StallVerdict 
   if ((m.restartAt ?? Number.NEGATIVE_INFINITY) >= m.stopAt || m.at !== m.stopAt) return VERDICT_NONE;
   if (!m.bgKinds.some((k) => STALL_WAKE_KINDS.includes(k))) return VERDICT_NONE;
   const live = stallSessionLive(input);
-  if (live === null || live.word !== 'idle' || live.since < m.stopAt || now - live.since < ORPHAN_E_IDLE_MS) return VERDICT_NONE;
+  if (live === null || turnWordOf(live.word) !== 'idle' || live.since < m.stopAt || now - live.since < ORPHAN_E_IDLE_MS) return VERDICT_NONE;
   const key = m.stopAt;
   return stallSelfRungDone(input, 'orphan-e', key, stallSelfSubjectOf('orphan-e', m))
     ? VERDICT_NONE
@@ -1892,7 +1892,7 @@ function stallIdleStart(input: StallSessionInput): number | null {
   if (live !== null && isIdleWord(live.word)) return live.since;
   const m = stallCurrentMark(input);
   if (m === null || (m.state !== 'done' && m.state !== 'failed') || m.stopAt === null) return null;
-  if (live !== null && live.word === 'busy') {
+  if (live !== null && turnWordOf(live.word) === 'busy') {
     if ((input.arming.mailMode ?? 'shell') !== 'busy') return m.stopAt + DELEGATE_CAP_MS;
     if (input.arming.busySince !== undefined) return Math.max(m.stopAt, input.arming.busySince);
   }
@@ -2009,7 +2009,7 @@ export function stallCoordGate(input: StallSessionInput): StallCoordGate | null 
   if (live === null) return null;
   if (live.word === 'waiting' || (input.worker.present === true && input.worker.dialogPending)) return 'waiting';
   if (isIdleWord(live.word)) return 'idle';
-  if (live.word !== 'busy') return null;
+  if (turnWordOf(live.word) !== 'busy') return null;
   const m = stallCurrentMark(input);
   if (m === null) return 'busy-unread';
   return m.state === 'working' ? 'busy' : 'background';
@@ -2020,7 +2020,7 @@ export function stallCoordGate(input: StallSessionInput): StallCoordGate | null 
  *  otherwise the live stamp is the start. */
 export function stallCoordBusySince(input: StallSessionInput): number | null {
   const live = stallSessionLive(input);
-  if (live === null || (live.word !== 'busy' && live.word !== 'waiting')) return null;
+  if (live === null || (turnWordOf(live.word) !== 'busy' && live.word !== 'waiting')) return null;
   const m = stallCurrentMark(input);
   return m !== null && m.state === 'working' && m.turnAt !== null && m.turnAt < live.since ? m.turnAt : live.since;
 }
