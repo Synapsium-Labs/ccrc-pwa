@@ -3,6 +3,7 @@
 // flight and caught. The rows here pin the table's own rules and the runner's four flight modes on an injected clock;
 // `lane-beats-characterization.test.ts` pins the same four beats through `tick`.
 import { RENEWAL_LANE_PERIOD_MS } from '../../shared/continuity.js';
+import { TIMER_LANE_PERIOD_MS } from '../../shared/continuity-timers.js';
 import { describe, it, expect, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
@@ -519,9 +520,9 @@ describe('the four reclaim lanes (D-5862, PR 3)', () => {
 });
 
 describe('every throttle is on the monotonic clock (OA-C4, ruled (a) on #803)', () => {
-  it('no row of LANE_SCHEDULE is on the wall clock: 43 of 43 are monotonic (the disk alarm, the tmp census and the stale-archive arm are rows, D-7895; the stuck verdict pass, D-8071; the run-close lane, D-8077; the case lane, Overlord §10.5; the generations lane, Overlord §3.3.11; the launch-profile lane, Overlord §3.6)', () => {
+  it('no row of LANE_SCHEDULE is on the wall clock: 44 of 44 are monotonic (the disk alarm, the tmp census and the stale-archive arm are rows, D-7895; the stuck verdict pass, D-8071; the run-close lane, D-8077; the case lane, Overlord §10.5; the generations lane, Overlord §3.3.11; the launch-profile lane, Overlord §3.6; the timers lane, Overlord §3.3.12)', () => {
     expect(LANE_SCHEDULE.filter((r) => r.clock === 'wall').map((r) => r.name), 'a throttle on Date.now()').toEqual([]);
-    expect(LANE_SCHEDULE.filter((r) => r.clock === 'mono')).toHaveLength(43);
+    expect(LANE_SCHEDULE.filter((r) => r.clock === 'mono')).toHaveLength(44);
   });
 
   it('the runner throttles a monotonic row on the monotonic reading: a wall step back runs it at its cadence, a step forward never early', () => {
@@ -598,6 +599,16 @@ describe('the launch-profile lane row (Overlord spec §3.6 H1, W1a launch profil
       cadenceMs: USAGE_SWEEP_MS, clock: 'mono', flight: 'skip',
       warnKey: 'ccrc-server: the launch-profile lane failed', derivedFrom: { name: 'USAGE_SWEEP_MS' },
     });
+  });
+});
+
+describe('the timers lane row (Overlord spec §3.3.12, Table 11.1c)', () => {
+  it('runs once a minute on its own period, one pass at a time, and names its warning', () => {
+    expect(laneRow('timers')).toEqual({
+      name: 'timers', cadenceMs: TIMER_LANE_PERIOD_MS, clock: 'mono', flight: 'skip',
+      warnKey: 'ccrc-server: the timers lane failed', derivedFrom: null,
+    });
+    expect(TIMER_LANE_PERIOD_MS).toBe(60_000);
   });
 });
 
