@@ -72,6 +72,12 @@ existing file under `docs/superpowers/plans/`, so PR B's departures are this new
   as ccd's refusal (the consolidation census's `ran` rule).
 - **plain-memory-l0-file.** The Settings row's choices, default, wire view and words live in `shared/plainAutoMemory.ts`
   (L0, no imports), the `lane-arm.ts` shape; `plainAutoMemoryOf` (L1) sits beside `profileFor` and joins `MUTANT_SETS`.
+- **switchboard-row-follows (the coordinator's ruling on this PR).** Task 6's `SWITCHES` row `plain-auto-memory`
+  (`shared/switches.ts`, storage `plain_memory_settings.choice`, default `off`, owner C3, writer
+  `POST /api/coord/plain-auto-memory`) is NOT in this PR: `consolidation-path-guard` (D-5855) refuses a diff that touches
+  `shared/switches.ts` and `pwa/` together, and this PR needs `pwa/` (the Shadow lanes entry ships with its lane-arm row, or
+  the PWA does not compile). It follows in a small PR of its own after this one merges, as the dispatch-abandon switch's
+  row did (#1965). Nothing requires a setting-backed switch to have a row, so this PR is complete without it.
 - **door-census-sites.** Task 6 names `box-token-census.test.ts`'s `SESSION_ONLY`; that set lives in
   `coord-pause-route.test.ts`, and the census checks `CLAUDE.md`'s sentence against it (now "seventeen"). The door also took
   rows in `auth-gate.test.ts`'s counts (and the count in `server/src/auth/gate.ts`'s docstring), `secret-mask.test.ts`'s GET

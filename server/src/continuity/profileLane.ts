@@ -18,7 +18,7 @@
 // write (`unknown routing field`). The lane's call carries only its own fields, so such a refusal loses nothing else; it
 // is counted as failed and logged, and no capability word is added (the departure `no-cap-word-the-lane-call-is-its-own`).
 import { CONTINUITY_LANE, LAUNCH_PROFILE_LANE, laneArmGate, type LaneArmLane } from '../../../shared/lane-arm.js';
-import { ROUTE_LANE_ONLY_FIELDS, type ChildMark, type RouteField, type RouteFields, type RunKind } from '../../../shared/api.js';
+import { ROUTE_LANE_ONLY_FIELDS, isRegistryId, type ChildMark, type RouteField, type RouteFields, type RunKind } from '../../../shared/api.js';
 import type { ReadFailure } from '../../../shared/agent-protocol.js';
 import { FLEET_ROLES } from '../../../shared/fleetRoles.js';
 import { CCD_ARGV, ccdCan, sweepDec } from '../ccdargv.js';
@@ -123,6 +123,7 @@ export async function profilePass(deps: ProfileLaneDeps, rows: readonly ProfileR
   const failures: string[] = [];
 
   for (const r of rows) {
+    if (!isRegistryId(r.id)) { routeUnread += 1; continue; }   // a listing never builds a refused id; refused here too, before any argv
     if (r.route !== null && r.route.unreadable.some((f) => (PROFILE_ROUTE_FIELDS as readonly string[]).includes(f))) { routeUnread += 1; continue; }
     const reading = roleOf(roleFactsOf(r.id, { child: r.child, childRunKind: runKind(r.child), openCoordinators, intentDeclared: 'unmeasured' }));
     let want = profileFor(reading, memory ?? 'off', null, continuityLive);

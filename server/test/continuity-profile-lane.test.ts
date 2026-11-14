@@ -117,6 +117,13 @@ describe('the launch-profile lane, one pass (Task 5)', () => {
     expect(h.sent.map((a) => a[2])).toEqual(['lane-a-project-b']);   // an unread field the lane does not write is no reason to skip
   });
 
+  it('a row whose id is not a registry id is refused before any argv is composed; the next row is still written', async () => {
+    const h = harness({ lanes: LIVE });
+    const r = await profilePass(h.deps, [row('../lane-a', null), row('-lane-a', null), row('lane-a-project-a', null)]);
+    expect(h.sent.map((a) => a[2])).toEqual(['lane-a-project-a']);
+    expect(r.routeUnread).toBe(2);
+  });
+
   it(`at most ${PROFILE_WRITES_PER_PASS} writes a pass; the rest wait for a later pass`, async () => {
     const h = harness({ lanes: LIVE });
     const rows = Array.from({ length: 8 }, (_, i) => row(`lane-a-project-${i}`, null));
