@@ -38,7 +38,7 @@ merges, workers never do, and an unattended landing is the goal when every safeg
 | 5f | 5, attributed writes | the `landing.log` journal and its replay (D-7610), `POST /api/landing/entries` and `POST /api/landing/order`, `setBy` and their feed events, and the coord.db invariant's journal sentence | server, skills | 5e | #2246 | planned 2026-10-31 (`docs/superpowers/plans/2026-10-31-landing-order-wave5f-authority-recovery-attributed-writes.md`, D-7652 to D-7663; Decisions, 2026-10-31 20:00); the operator approved its CLAUDE.md amendments (Decisions, 2026-11-03 06:27); run 1312 dispatched 2026-11-03 before the plan reached `main`, on the operator's ruling (Decisions, 2026-11-03 16:14); wave-done verified at `89579e774`, review run 1413 (Decisions, 2026-11-04 03:12); fix round 1 on its report (Decisions, 2026-11-04 03:53); its wave-done verified at `65e81913d`, accepted by review 1425, departures D-7941 to D-7949 (Decisions, 2026-11-04 08:09); land-synced at `211fdff14` after #2248, MERGED 2026-11-04 10:17 UTC (`6da86bb8`), run 1312 closed (Decisions, 2026-11-04 10:36) |
 | 5g | 5, intents | dispatch's `intents[]` and `intent-held`, in a table of their own | server, skills | 5e | — | planned 2026-11-06 (`docs/superpowers/plans/2026-11-06-landing-order-wave5g-landing-intents.md`, D-8080 to D-8089; Decisions, 2026-11-06 22:15); item 60 answered as proposed (Decisions, 2026-11-07 14:33); approved as written (item 74), the plan merged (#2408 `67db632c`) and run 1427 dispatched 2026-11-07 (Decisions, 2026-11-07 23:08); wave-done verified at `e8c92d065`, review 1654, fix round 1; its wave-done verified at `f9b65a028`, accepted by review 1660, departures D-8117 to D-8119; MERGED 2026-11-08 02:23 UTC (#2453 `12ce1ba7`), run 1427 closed (Decisions, 2026-11-08 02:25) |
 | 5h | 5, the landed reader | the lane that walks the entries with 5c's form, apart from `sweepMerged` | server | 5c on the fleet box, and 5e | #2688 (plan #2671) | merged; run 1661 (the run's wave 20) opened 2026-11-08, planned, before run 1427 closed (Decisions, 2026-11-08 02:25); planned 2026-11-11 (`docs/superpowers/plans/2026-11-11-landing-order-wave5h-landed-reader.md`, D-8294 to D-8314; Decisions, 2026-11-11 16:15); approved as written (item 173), the plan merged (#2671 `f517128c`) and run 1661 dispatched 2026-11-12 (Decisions, 2026-11-12 00:14); accepted by review 1848 after three rounds, departures D-8355 to D-8360; MERGED 2026-11-12 06:37 UTC (#2688 `58bd5591`), run 1850 opened for 5i, then run 1661 closed (Decisions, 2026-11-12 06:41) |
-| 5i | 5, the line's head | `mainRedHold` from the radar's `main-health`, the next-to-land mail, and the reader of 5d's marker | server, skills | 5d on the fleet box, 5e and 5h | — | to plan |
+| 5i | 5, the line's head | `mainRedHold` from the radar's `main-health`, the next-to-land mail, and the reader of 5d's marker | server, skills | 5d on the fleet box, 5e and 5h | — | plan proposed 2026-11-14 (`docs/superpowers/plans/2026-11-14-landing-order-wave5i-line-head.md`, D-8625 to D-8629), seven tasks; awaiting approval of P1–P6 and amendments A/B; run 1850 remains planned, not dispatched (Decisions, 2026-11-14 19:19) |
 | 5j | 5, the doors (server) | the two session-only routes, pause the line and withdraw an entry, and `landing-subtractive.test.ts` | server, skills | 5e and 5i | — | to plan |
 | 5k | 5, the doors (PWA) | the line on the project card, the pause control and the withdraw sheet | pwa | 5j | — | to plan |
 
@@ -2245,6 +2245,32 @@ carries it (spec §5.1, amended 2026-09-24).
     backlog of merged entries with no hand edit, apart from any entry a recovery hold keeps, and this coordinator reads
     the line to confirm it. Then 5i's plan: the line's
     head, `mainRedHold`, the next-to-land mail and the reader of 5d's marker, with D-8357's L4 choices moved to L1.
+- **2026-11-14 19:19 — 5i's seven-task plan is proposed, not approved; run 1850 remains planned.**
+  - **Prerequisite already measured.** On 2026-11-12 at 07:25 UTC the installed CLI read v0.0.1144, carrying #2688,
+    and the line had no open entries. The prior entries for #2688, #2687, #2602, #2453 and #2246 each read landed.
+    This is a historical backlog reading, not a claim that today's line is empty. Continuity 6c's shadow week does
+    not gate this programme.
+  - **The proposal.** `docs/superpowers/plans/2026-11-14-landing-order-wave5i-line-head.md` extends the existing order,
+    radar/parser, measured FleetIO, store and mail-transaction owners. It adds no timer, merge verb, automatic
+    landing, exec grant or PWA door. The coordinator issued and defines D-8625 to D-8629 in that plan.
+  - **Approval must cover P1–P6, not only the task list.** Amendment A admits only the already-selected,
+    dependency-eligible fixesMain head through main-red; pause, recovery, fresh evidence and canonical checks remain
+    gates. Amendment B permits narrowly bounded terminal-evidence retirement without fabricating pin metadata or a
+    witness, and keeps a closed row with unreadable projection from re-pinning. The proposal also names truthful
+    `recovery:'repair'`, exact run/no-run recipient and episode identity, and the bounded cue-snapshot residual.
+    None is an operator ruling yet; the approved spec's effective rules are not changed by this proposal.
+  - **Static plan review.** One independent Opus reader checked all seven tasks against source baseline
+    `6f408451d4a9a5e03bc747db8e6b0a2e647f3ef3`. Its four findings were verified against source and corrected:
+    closed-row re-pin follow-through, fence-before-retry recovery, BLOB repair-token encoding and nullable wave
+    totals. A narrow follow-up by the same reviewer found no remaining findings in those corrections. This was not
+    a fresh full re-review or a held-out multi-lens/refuter panel; no implementation tests or mutations ran.
+  - **Publication base.** The branch starts at `2d503a4de09c88c54d8f1610700a9a176578a526`. The reviewed landing
+    owners and approved documents are unchanged; the store's intervening change adds unrelated delegation methods
+    and imports. The coordinator also corrected commit sequencing, isolated typecheck-tests and kept central
+    spec/plan/programme edits on its own ledger PR, not the future worker's feature PR.
+  - **Next.** Seek explicit approval. Once approved, the coordinator records the approved spec amendments on its
+    ledger PR, lands the plan through the normal gates, then dispatches run 1850 with the seven tasks. No
+    implementation, live arming or dispatch is authorised by this proposal. Waves 5j and 5k keep their doors/UI.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` token appears in
   this file until a plan on the same ref defines it (`deviation-refs.test.ts`).
 
@@ -2879,6 +2905,8 @@ Deploy: ccrc's updater carries the server, the PWA and the skill text.
   The plan is `docs/superpowers/plans/2026-11-11-landing-order-wave5h-landed-reader.md` (D-8294 to D-8314). It ships in
   the prerelease v0.0.1144. Once the fleet box runs it, the reader marks the line's backlog of merged entries with no
   hand edit, and this coordinator reads the line to confirm it. Run 1850 is open at `planned` for 5i.
-- **5i to 5k follow in order**, each planned against `main` as it then stands. The fleet box runs 5d, whose marker 5i
-  reads (v0.0.926, measured 2026-11-03; Decisions, 2026-11-03 06:27); 5h reaches it with the next release the
-  operator rolls out.
+- **5i is proposed, awaiting approval:** `docs/superpowers/plans/2026-11-14-landing-order-wave5i-line-head.md`,
+  D-8625 to D-8629, seven tasks. Run 1850 remains planned. The fleet box runs 5d (v0.0.926, measured 2026-11-03;
+  Decisions, 2026-11-03 06:27), and 5h's historical backlog reading is recorded above (Decisions, 2026-11-14 19:19).
+  Approve P1–P6 and amendments A/B before the coordinator records their spec changes, lands the plan and dispatches.
+  **5j and 5k follow in order**, each planned against `main` as it then stands; neither is authorised by the proposal.
