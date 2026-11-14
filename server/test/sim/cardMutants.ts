@@ -142,6 +142,7 @@ export const CARD_BLOCK_SET: MutantSet<Card> = {
     { id: 'M5', old: "block(ratified.join('\\n'), SHORT_CAP_BYTES, where)", new: "ratified.join('\\n')" },
     { id: 'M6', old: "block(unratified.join('\\n'), SHORT_CAP_BYTES, where)", new: "unratified.join('\\n')" },
     { id: 'M8', old: "block(lines.join('\\n'), TIMERS_CAP_BYTES, 'in `ccrc-api timer list`')", new: "lines.join('\\n')" },
+    { id: 'M9', old: 'untrustedBlock(blockText(text), capBytes, fullAt, CARD_TEXT_PREFACE)', new: 'untrustedBlock(text, capBytes, fullAt, CARD_TEXT_PREFACE)' },
   ],
   suite(m): Record<string, SuiteCase> {
     const ledger = (over: Partial<CardFacts['ledger'] extends Fact<infer T> ? T extends readonly (infer P)[] ? P : never : never>) =>
@@ -170,6 +171,10 @@ export const CARD_BLOCK_SET: MutantSet<Card> = {
         expect([forged(t), exposed(t)]).toEqual([false, false]);
       },
       'a mail subject is fenced': () => { expect(forged(card(m, empty({ mailOutstanding: read([{ ...MAIL, subject: H }]) })))).toBe(false); },
+      'a block escapes its controls but the newline and the tab (review 2027 N1)': () => {
+        const t = card(m, empty({ mailOutstanding: read([{ ...MAIL, subject: 'a\u001b[2Jb\u0001c\td' }]) }));
+        expect(t).toContain('a\\u{1b}[2Jb\\u{1}c\td');
+      },
     };
   },
 };

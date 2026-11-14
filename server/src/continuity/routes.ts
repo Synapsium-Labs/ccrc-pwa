@@ -150,6 +150,21 @@ function bindingOf(coord: CoordStore, id: string, bound: { runId: number | null;
 }
 
 export function registerContinuityRoutes(app: FastifyInstance, deps: ContinuityRouteDeps): void {
+  // THE MEMO OF SERVED PAGES (slug card-read-is-the-last-page): which pages of one card hash this door served to one
+  // conversation. A full read is recorded only when every page of that hash was served to it; a different hash starts
+  // over. Bookkeeping, never a decision's durable state: a restart forgets a card half read, so every answer says whether
+  // it `recorded` the read, and `ccrc-api card` tells a caller whose last page recorded nothing to read the card again.
+  // A write that failed puts the memo back, so a retry of that page records it. Bounded, the oldest conversation dropped
+  // first. A new start of a conversation forgets its partly served card (the start door, below; review 2027 N4): a resumed
+  // conversation keeps its uuid, and pages served to its previous generation are no read of the new one's card.
+  type Memo = { hash: string; pages: Set<number> };
+  const memoKey = (sessionId: string, uuid: string): string => `${sessionId}\n${uuid}`;
+  const served = new Map<string, Memo>();
+  const remember = (key: string, memo: Memo): void => {
+    served.set(key, memo);
+    if (served.size > (deps.cardMemoMax ?? CARD_MEMO_MAX)) served.delete(served.keys().next().value!);
+  };
+
   /**
    * `POST /api/sessions/:id/start`: the hook reports one SessionStart of a session that is not a child (its source, the
    * conversation's uuid, the model, the row's incarnation). A box-token machine lane, an `auth/gate.ts` EXEMPT entry:
@@ -192,21 +207,9 @@ export function registerContinuityRoutes(app: FastifyInstance, deps: ContinuityR
     if (coord === undefined) return refuseRoute(reply, 'unavailable');
     const r = coord.insertStart({ sessionId: id, reportId, uuid: startedUuid, source, model, rowIncarnation, reportedAt, receivedAt: deps.wall() });
     if (!r.ok) return refuseRoute(reply, 'write-failed', { detail: 'continuity_starts could not be written' });
+    if (r.fresh) served.delete(memoKey(id, startedUuid));
     return reply.code(202).send({ ok: true, id: r.id, fresh: r.fresh });
   });
-
-  // THE MEMO OF SERVED PAGES (slug card-read-is-the-last-page): which pages of one card hash this door served to one
-  // conversation. A full read is recorded only when every page of that hash was served to it; a different hash starts
-  // over. Bookkeeping, never a decision's durable state: a restart forgets a card half read, so every answer says whether
-  // it `recorded` the read, and `ccrc-api card` tells a caller whose last page recorded nothing to read the card again.
-  // A write that failed puts the memo back, so a retry of that page records it. Bounded, the oldest conversation dropped
-  // first.
-  type Memo = { hash: string; pages: Set<number> };
-  const served = new Map<string, Memo>();
-  const remember = (key: string, memo: Memo): void => {
-    served.set(key, memo);
-    if (served.size > (deps.cardMemoMax ?? CARD_MEMO_MAX)) served.delete(served.keys().next().value!);
-  };
 
   /**
    * `GET /api/sessions/:id/card?byId&byUuid&page&hash`: the caller's own card (spec §3.3.3 C38, §11.2). A box-token lane,
@@ -256,7 +259,7 @@ export function registerContinuityRoutes(app: FastifyInstance, deps: ContinuityR
     const slices = cardPages(text);
     if (page > slices.length) return refuseRoute(reply, 'bad-request', { detail: `the card has ${slices.length} page(s)` });
 
-    const key = `${id}\n${uuid}`;
+    const key = memoKey(id, uuid);
     const prior = served.get(key);
     const memo: Memo = prior !== undefined && prior.hash === hash ? prior : { hash, pages: new Set() };
     served.delete(key);

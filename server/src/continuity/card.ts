@@ -33,7 +33,10 @@ import { utf8Bytes } from '../../../shared/utf8.js';
 import { CARD_TEXT_PREFACE, untrustedBlock } from '../coord/untrusted.js';
 import { roleOf, type RoleFacts } from '../roleOf.js';
 
-/** The line a card carries when the session holds nothing its role's card reads, and every read answered (C51). */
+/** The line a card carries when the session holds none of its role's body facts (`BODY_FACTS`: runs, claims, coordinator
+ *  intent and the rest, never pending timers), and every one of those reads answered (C51). A card that holds only pending
+ *  timers carries this line and its timers section both, and the line stays true: it names runs, claims and coordinator
+ *  intent, which the timers are not (slug timers-are-not-body-facts; review 2064, F3). */
 export const CARD_NOTHING_LINE = 'No runs, claims or coordinator intent were measured for this session.';
 /** The line before the first untrusted block (§3.3.2: notes are data; authority comes only from rows). */
 export const CARD_AUTHORITY_LINE =
@@ -83,8 +86,18 @@ export function iso(ms: number): string {
   return Number.isNaN(d.getTime()) ? CARD_UNREADABLE_TIME : d.toISOString().replace(/\.\d{3}Z$/, 'Z');
 }
 
+/** An untrusted block's text with every control character but the newline and the tab (C0 and C1, CR and ESC among them)
+ *  escaped as `\u{<hex>}`, as `oneLine` escapes them (review 2027, N1). A raw ESC or CR would act on the reader's pane through
+ *  `ccrc-api card`, and JSON writes each such control as six bytes (`\u0001`), so a page of them, printed as JSON by the raw
+ *  row `ccrc-api sessions card`, ran past the tool-result cut. Escaped, no character of a page is more than four bytes as
+ *  JSON (a four-byte character's), so `CARD_PAGE_CHARS` holds for both paths. Applied before the cap, so the cap bounds what
+ *  is shown. Lone surrogates are not escaped: no stored string holds one (SQLite and a UTF-8 file read hand back U+FFFD). */
+function blockText(text: string): string {
+  return text.replace(/[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/gu, (c) => `\\u{${c.codePointAt(0)!.toString(16)}}`);
+}
+
 const block = (text: string, capBytes: number, fullAt: string): string =>
-  untrustedBlock(text, capBytes, fullAt, CARD_TEXT_PREFACE);
+  untrustedBlock(blockText(text), capBytes, fullAt, CARD_TEXT_PREFACE);
 
 /** Ranks: a `keep` section's rank is never read; a droppable one is dropped lowest first. Within the mail and notes
  *  bands the newer entries rank higher; programmes rank by slug, the first slug highest (a programme carries no time).

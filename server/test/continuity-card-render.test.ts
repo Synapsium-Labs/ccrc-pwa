@@ -105,7 +105,7 @@ describe('the coordinator renderer (Task 1)', () => {
   it('each unmeasured fact renders "Could not read <what>." and is kept', () => {
     const s = renderCard('coordinator', allUnmeasured());
     for (const what of ['the runs', 'the programme ledger', 'the claims', 'the coordinator intent', 'the items raised',
-      'the outstanding mail', 'the notes', 'the checkpoint', 'the history node']) {
+      'the outstanding mail', 'the notes', 'the checkpoint', 'your pending timers', 'the history node']) {
       const line = s.find((x) => x.text === `Could not read ${what}.`);
       expect(line, what).toBeDefined();
       expect(line!.keep).toBe(true);
@@ -713,10 +713,72 @@ describe('pending timers on the card (the timers piece, plan w1a-timers.md Task 
     }
   });
 
+  it('the largest timer cap full of previews at the widest escape (60 x U+E0001, escaped as `\\u{e0001}`): the block is not cut (review 2064 F1)', () => {
+    // `TIMER_LINE_CAP_BYTES`' factor is the widest a character can render (`'\\u{10ffff}'.length`, 10 bytes): a factor of 4
+    // (a four-byte character's) fits the two cases above and cuts this one.
+    const cap = Math.max(...FLEET_ROLE_NAMES.map((r) => FLEET_ROLES[r].timerCap));
+    const many = Array.from({ length: cap }, (_, i) => timerOf(100 + i, AT + i * MIN, '\u{E0001}'.repeat(60), { runId: null, programme: 'p'.repeat(64) }));
+    const t = textOf(renderCard('coordinator', empty({ timers: read(many) })));
+    expect(t).toContain(`: ${'\\u{e0001}'.repeat(60)}\n`);
+    expect(t).not.toContain('(Cut at');
+    expect((t.match(/^timer \d+, due /gm) ?? []).length).toBe(cap);
+  });
+
   it('twenty timers of sixty four-byte characters each fit their block uncut', () => {
     const many = Array.from({ length: 20 }, (_, i) => timerOf(30 + i, AT + i * MIN, '\u{1F642}'.repeat(60), { runId: null, programme: 'p'.repeat(64) }));
     const t = textOf(renderCard('coordinator', empty({ timers: read(many) })));
     expect(t).not.toContain('(Cut at');
     expect((t.match(/^timer \d+, due /gm) ?? []).length).toBe(20);
+  });
+});
+
+describe('every page the raw row prints stays under the cut, its controls escaped (review 2027 N1)', () => {
+  /** What the generic row `ccrc-api sessions card` prints for one page: the door's answer as JSON (its shape, `routes.ts`'s
+   *  card door; `continuity-card-memo.test.ts` measures the real body), the newline `print_body` adds, and `http 200`,
+   *  which the shell tool shows with it. The hashes are at their length and the page numbers past any real count. */
+  const rawRowBytes = (text: string): number => utf8Bytes(JSON.stringify({
+    ok: true, hash: 'f'.repeat(64), snapshotId: 'f'.repeat(64), page: 99_999, pages: 99_999, text, recorded: false,
+  })) + 1 + 'http 200\n'.length;
+  /** Every C0 and C1 control but the newline and the tab: what the pane would act on, and what JSON writes as six bytes. */
+  const RAW_CONTROL = /[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/u;
+  /** One character of each width class a stored string can hold. Lone surrogates are not among them: SQLite and a UTF-8 file
+   *  read hand back U+FFFD for one (measured with `node:sqlite`). */
+  const ALPHABET = ['\u0001', '\u001b', '\u009b', '\r', '\u007f', '"', '\\', '\n', '\t', '\u{1F642}', ' ', '\u{E0001}', '�'];
+
+  /** The crafted card of review 2027 N1, at every cap the card has: forty programmes, each with a goal of each kind and a
+   *  decision of `ch`, items, mail, notes and timers of `ch`, and a checkpoint. */
+  function crafted(ch: string): CardFacts {
+    const long = ch.repeat(1_024);
+    const programmes = Array.from({ length: 40 }, (_, i) => ({
+      slug: `prog-${String(i).padStart(2, '0')}`, goals: [{ text: long, ratified: true }, { text: long, ratified: false }],
+      openItems: [item(500 + i, long, { programme: `prog-${String(i).padStart(2, '0')}` })], decisions: [{ at: AT, text: long }],
+    }));
+    const mail = Array.from({ length: CARD_MAIL_MAX }, (_, i) => ({ deliveryId: 5_000 + i, fromId: 'coordinator', at: AT - i, subject: long, parked: false }));
+    const notes = Array.from({ length: NOTES_CAP.count }, (_, i) => ({ ...noteOf(1_000 + i, AT - i, ch.repeat(NOTES_CAP.chars)), waitsOn: ch.repeat(NOTES_CAP.chars) }));
+    const timers = Array.from({ length: 50 }, (_, i) => timerOf(100 + i, AT + i * MIN, ch.repeat(60), { runId: null, programme: 'p'.repeat(64) }));
+    return empty({
+      ledger: read(programmes), itemsRaised: read(Array.from({ length: 50 }, (_, i) => item(600 + i, long))),
+      mailOutstanding: read(mail), notes: read(notes), timers: read(timers), checkpoint: read(cpOf(AT, ch.repeat(4_096))),
+    });
+  }
+
+  it.each(ALPHABET.map((ch) => [`U+${ch.codePointAt(0)!.toString(16).toUpperCase().padStart(4, '0')}`, ch]))('a card of %s: every page, as the raw row prints it, is under the cut', (_, ch) => {
+    for (const keep of [CARD_BUDGET_TOKENS, 1_000_000]) {
+      const { text } = trimCard(renderCard('coordinator', crafted(ch)), keep);
+      for (const [i, page] of cardPages(text).entries()) {
+        expect(rawRowBytes(page), `page ${i + 1} at budget ${keep}`).toBeLessThanOrEqual(TOOL_RESULT_CUT_BYTES);
+        expect(RAW_CONTROL.test(page), `page ${i + 1} at budget ${keep}`).toBe(false);
+      }
+    }
+  });
+
+  it('a block keeps its newlines and tabs, and escapes every other control as the bare fields do', () => {
+    const t = textOf(renderCard('coordinator', empty({ itemsRaised: read([item(7, 'a\tb\nc\u0001d\u001be\rf\u009bg\u007fh')]) })));
+    expect(t).toContain('a\tb\nc\\u{1}d\\u{1b}e\\u{d}f\\u{9b}g\\u{7f}h');
+  });
+
+  it('CONTROL: the same page with its controls raw passes the cut, so the escape is what holds it', () => {
+    const raw = '\u0001'.repeat(CARD_PAGE_CHARS);
+    expect(rawRowBytes(raw)).toBeGreaterThan(TOOL_RESULT_CUT_BYTES);
   });
 });
