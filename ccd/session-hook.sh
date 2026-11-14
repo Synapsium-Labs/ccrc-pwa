@@ -3261,13 +3261,15 @@ _hook_roster_eligible() {   # -> 0 iff this event may carry a roster card: main 
 # switch, the Shadow lanes row `anchor-slot`: `dark` while it is shadow, the text (or, for a fork, `live`) only once it is
 # live, so a merge arms nothing. A `dark` answer and a failed read look alike to a start (the slot stays empty and today's
 # role card prints); only the owed prompt below tells them apart. Eligibility is the roster card's one rule
-# (`_hook_roster_eligible`: main thread, not a child, no card kill switch); a child makes no read.
+# (`_hook_roster_eligible`: main thread, not a child, no card kill switch); a child makes no read. A read that ran out
+# its bound (`timeout`'s 124) sets ANCHOR_HUNG, and the roster card's read in the same event stands down: a server that
+# did not answer in 4 s costs a start one bound, not one per read (slug a-hung-server-costs-one-bound).
 ANCHOR_CARD_MAX_CHARS=1500
 ANCHOR_PROMPT_MAX_CHARS=600
 _hook_anchor_fetch() {   # <form: start|prompt|fork> -> ANCHOR_WORD (text, dark, live, or "" for no answer) and ANCHOR_TEXT; 0 on every path
   local out=""; ANCHOR_WORD="" ANCHOR_TEXT=""
   _hook_roster_eligible || return 0
-  out=$(_hook_timeout 4 "$HOME/.local/bin/ccrc-api" card --anchor --form "$1" 2>/dev/null) || return 0
+  out=$(_hook_timeout 4 "$HOME/.local/bin/ccrc-api" card --anchor --form "$1" 2>/dev/null) || { (( $? == 124 )) && ANCHOR_HUNG=1; return 0; }
   { IFS= read -r ANCHOR_WORD; IFS= read -r -d '' ANCHOR_TEXT; } < <(jq -j 'if .ok != true then empty elif .dark == true then "dark\n" elif .live == true then "live\n"
     elif (.text | type) == "string" and .text != "" then "text\n", .text else empty end' <<<"$out" 2>/dev/null) 2>/dev/null
   return 0
@@ -3275,7 +3277,7 @@ _hook_anchor_fetch() {   # <form: start|prompt|fork> -> ANCHOR_WORD (text, dark,
 _hook_roster_card() {   # <event word> -> sets CARD_ROSTER (armed) or appends the shadow log (unarmed); 0 on every path
   local body="" card="" log="$HOME/.ccrc/roster-card-shadow.log"
   CARD_ROSTER=""
-  _hook_roster_eligible || return 0
+  _hook_roster_eligible && [[ -z "${ANCHOR_HUNG-}" ]] || return 0
   body=$(_hook_timeout 4 "$HOME/.local/bin/ccrc-api" runs list 2>/dev/null) || return 0
   card=$(jq -L "$ROSTER_CARD_LIB" -r --arg me "$id" --argjson now "$(_hook_epoch_ms)" \
     --argjson max $(( ROSTER_CARD_MAX_CHARS - 64 )) 'include "roster-card"; roster_card($me; $now; $max)' <<<"$body" 2>/dev/null) || return 0

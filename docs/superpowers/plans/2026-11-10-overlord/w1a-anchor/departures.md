@@ -40,6 +40,11 @@ no deviation number was taken. The coordinator folds these into the ledger.
   prints the role card as before: the plan serves the anchor on `startup`, `resume`, `clear` and `compact` only.
 - **one-envelope-per-prompt.** A prompt whose roster card wake arm printed its envelope keeps the `anchor-owed` mark
   untouched (no read, no try counted), so an event never prints two envelopes; the next prompt carries the anchor.
+- **a-hung-server-costs-one-bound.** The plan adds a third bounded read to a start (the anchor's, beside the roster card's
+  and the start report's), so a server that hangs would cost a compact start about 12 s instead of 8, which
+  `session-hook-roster-card.test.ts`'s "a server that hangs" case (under 10 s) caught. When the anchor's read runs out its
+  bound (`timeout`'s 124), the roster card's read in the same event stands down: the server has just failed to answer in
+  4 s. A refusal or a fast failure is no hang, and the roster read runs as before.
 - **owed-tries-in-mark.** The mark holds the tries already spent (0 to 2); a third prompt with no answer removes it.
 - **a-child-spends-its-mark.** `_hook_compact_pre_line` marks on a main-scope `auto` line whoever the session is; a
   child's prompt makes no read (the eligibility rule) and spends the mark within three prompts.

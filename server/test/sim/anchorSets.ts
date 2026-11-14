@@ -62,7 +62,7 @@ export const ANCHOR_RENDER_SET: MutantSet<Anchor> = {
       'four-byte text stays under the ceiling, cut on a code point': () => {
         const t = m.renderAnchor(facts({ runs: read([run(1, '\u{1F600}'.repeat(900))]) }), LIVE, 'start');
         expect(utf8Bytes(t)).toBeLessThanOrEqual(1500);
-        expect(t.isWellFormed()).toBe(true);
+        expect(Buffer.from(t, 'utf8').toString('utf8')).toBe(t);
       },
       'the prompt form stays under 600, whatever the role line': () => {
         const many = Array.from({ length: 8 }, (_, i) => run(i + 1, `prog-${i}-${'a'.repeat(150)}`));

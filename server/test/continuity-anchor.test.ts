@@ -94,7 +94,7 @@ describe('renderAnchor: the start form (C38)', () => {
     const t = renderAnchor(facts({ runs: read([run(1, wide)]) }), input(), 'start');
     expect(utf8Bytes(t)).toBeLessThanOrEqual(ANCHOR_CARD_MAX_CHARS);
     expect(t.length).toBeLessThanOrEqual(ANCHOR_CARD_MAX_CHARS);
-    expect(t.isWellFormed(), 'no split surrogate pair').toBe(true);
+    expect(Buffer.from(t, 'utf8').toString('utf8'), 'no split surrogate pair (a lone one re-encodes as U+FFFD)').toBe(t);
     expect(lines(t).slice(1)).toEqual([
       `term 2 · generation 5 · card ${HASH.slice(0, ANCHOR_HASH_CHARS)}`,
       'counts: 1 runs · 0 open items and asks · 0 outstanding mail · 0 notes',

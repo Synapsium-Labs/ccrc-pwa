@@ -194,6 +194,26 @@ describe('the anchor\'s slot at a start (Task 2)', () => {
   });
 });
 
+describe('a server that hangs costs a start one bound (slug a-hung-server-costs-one-bound)', () => {
+  it('the anchor\'s read runs out its 4 s, and the roster card\'s read in the same start stands down', () => {
+    fs.writeFileSync(path.join(home, '.local', 'bin', 'ccrc-api'),
+      '#!/bin/sh\nprintf "%s\\n" "$*" >> "$HOME/anchor-calls"\nexec sleep 30\n', { mode: 0o755 });
+    const t0 = Date.now();
+    expect(run(start('compact'))).toBe(envelope('SessionStart', REVIVED));
+    expect(Date.now() - t0).toBeLessThan(10_000);
+    expect(calls()).toContain('card --anchor --form start');
+    expect(calls()).not.toContain('runs list');
+  }, 20_000);
+
+  it('a read the door refuses, or that fails fast, is no hang: the roster card\'s read still runs', () => {
+    answer('start', '{"ok":false,"error":"unavailable"}');
+    fs.writeFileSync(path.join(home, '.local', 'bin', 'ccrc-api'),
+      '#!/bin/sh\nprintf "%s\\n" "$*" >> "$HOME/anchor-calls"\n[ "$1" = card ] || exit 3\ncat "$HOME/stub-$4"\n', { mode: 0o755 });
+    run(start('compact'));
+    expect(calls().filter((c) => !c.startsWith('sessions start ')), 'the start report\'s own send aside').toEqual(['card --anchor --form start', 'runs list']);
+  });
+});
+
 describe('the anchor owed after an automatic compaction (Task 3)', () => {
   it('PreCompact auto (main), then a prompt: the prompt carries the anchor once, and the mark is gone', () => {
     run(preCompact('auto', transcript()));
