@@ -14,6 +14,7 @@
 import type { CardFacts, CardItem, CardNote, Fact } from '../../../shared/continuity-card.js';
 import {
   FIT_PASS_RATE, FIT_WINDOW, PROBE_NONE, PROBE_ROUND_MAX, PROBE_ROUND_MIN, SPOT_PROBE_EVERY_TOKENS, isBlankText, type ProbeClass,
+  type ProbeGrade, type ProbeRoundKind,
 } from '../../../shared/continuity.js';
 import { FLEET_ROLES, type FleetRole } from '../../../shared/fleetRoles.js';
 import { TERMINAL_RUN_STATES } from '../../../shared/api.js';
@@ -33,7 +34,8 @@ export interface ProbeQuestion {
  *  rows, and `why` names the reads by their own `what`. */
 export interface ProbeSkip { readonly cls: ProbeClass; readonly why: string; readonly unmeasured: boolean }
 
-export type ProbeKind = 'start' | 'compaction' | 'spot';
+/** A round's occasion: `ProbeRoundKind`, the vocabulary `continuity_probes.kind` is read through. */
+export type ProbeKind = ProbeRoundKind;
 
 /** A composed round. `short` is true when it asks fewer than its kind's least count (three, or one for a spot probe);
  *  `unmeasured` is true when it is short and any class it consulted had a failed read, whether or not that class still
@@ -227,9 +229,8 @@ export function probeRound(role: FleetRole, snapshot: CardFacts, entropy: Entrop
   return { kind, questions, skipped, short, unmeasured: short && unread.size > 0 };
 }
 
-export type ProbeGrade = 'pass' | 'fail';
-/** Whether the session read anything between ask and answer (the probe door records it, PR B). */
-export type BookState = 'closed' | 'open' | 'unmeasured';
+/** One answer's grade and the book state the probe door records: the vocabulary lives in `shared/continuity.ts`. */
+export type { BookState, ProbeGrade } from '../../../shared/continuity.js';
 export type RoundVerdict = 'passed' | 'failed' | 'unmeasured';
 
 /** Closed-form: the answer, trimmed and case-folded, must be the expected one, and one of the choices when there is a

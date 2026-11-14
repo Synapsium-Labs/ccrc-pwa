@@ -261,3 +261,37 @@ export const FIT_PASS_RATE = 0.95;
 export const FIT_WINDOW = 20;
 /** The one answer an abstention question expects (C41: "an answer is an id, a choice from a list, or `none`"). */
 export const PROBE_NONE = 'none';
+/** A round's occasion (§3.3.5, C41): after a start that minted a generation, after a compaction, or a spot probe at depth
+ *  while idle. A `continuity_probes` row's `kind`. */
+const PROBE_ROUND_KIND_MAP = {
+  start: 'after a start: drawn from the snapshot the generation was carded with',
+  compaction: 'after a compaction: drawn from the same snapshot',
+  spot: 'at depth while idle: one question about the rows of this generation',
+} as const;
+export type ProbeRoundKind = keyof typeof PROBE_ROUND_KIND_MAP;
+export const PROBE_ROUND_KINDS = Object.keys(PROBE_ROUND_KIND_MAP) as ProbeRoundKind[];
+export function isProbeRoundKind(v: unknown): v is ProbeRoundKind {
+  return typeof v === 'string' && (PROBE_ROUND_KINDS as readonly string[]).includes(v);
+}
+/** One answer's grade, closed-form (C41). */
+const PROBE_GRADE_MAP = { pass: 'the expected id, choice or `none`', fail: 'anything else' } as const;
+export type ProbeGrade = keyof typeof PROBE_GRADE_MAP;
+export const PROBE_GRADES = Object.keys(PROBE_GRADE_MAP) as ProbeGrade[];
+export function isProbeGrade(v: unknown): v is ProbeGrade {
+  return typeof v === 'string' && (PROBE_GRADES as readonly string[]).includes(v);
+}
+/** Whether the session read anything between ask and answer (C41, closed-book). In W1a the server can attribute only its
+ *  own continuity reads (the card, the notes), so an answer is `open` after one of them and `unmeasured` otherwise; `closed`
+ *  needs W1's witness (slug closed-book-is-unmeasured-in-w1a). */
+const BOOK_STATE_MAP = {
+  closed: 'nothing was read between ask and answer (W1, the witness)',
+  open: 'the session read its card or its notes between ask and answer',
+  unmeasured: 'no read the server can attribute; reads through other doors carry no attribution in W1a',
+} as const;
+export type BookState = keyof typeof BOOK_STATE_MAP;
+export const BOOK_STATES = Object.keys(BOOK_STATE_MAP) as BookState[];
+export function isBookState(v: unknown): v is BookState {
+  return typeof v === 'string' && (BOOK_STATES as readonly string[]).includes(v);
+}
+/** The doors whose reads the probe door counts towards `open` (`continuity_reads.door`). */
+export type ContinuityReadDoor = 'card' | 'notes';
