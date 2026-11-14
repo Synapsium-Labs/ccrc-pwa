@@ -1800,6 +1800,23 @@ describe.skipIf(!PY)('the request markers, their 400 fallback and the turn-state
     });
   });
 
+  it('a 400 once the message has reached the client is answered as today: the fallback never runs after the commit', async () => {
+    const first: ResponsesAnswer = { status: 200, sse: created(1) + done(0, msgItem('msg_fx1', 'part 1')) + completed({}, { end_turn: false }) };
+    await withBridge([first, unsupported, { status: 200, sse: textReply('never sent') }], async ({ bridge, up, lane }) => {
+      touch(lane, [ALL_TURNS]);
+      lite(lane);
+      const a = await call(bridge, '/v1/messages', { body: highBody(), headers: session });
+      expect(a.status).toBe(200); // committed with the first response
+      expect(events(a)).toContain('error');
+      expect(up.requests).toHaveLength(2);
+      expect(up.requests.map((r) => r.body!.reasoning)).toEqual([
+        { effort: 'high', context: 'all_turns' }, { effort: 'high', context: 'all_turns' },
+      ]);
+      expect(await bridge.stop()).toEqual({ code: 0, signal: null });
+      expect(readStats(lane).parity[KEY].fallbacks).toEqual(zeros());
+    });
+  });
+
   // ── the turn-state echo (D-8623) ──
   const token = (tag: string): string => `ts-fx-${tag}-${randomBytes(12).toString('hex')}`;
   const withState = (value: string | null, text = 'ok'): ResponsesAnswer => ({
