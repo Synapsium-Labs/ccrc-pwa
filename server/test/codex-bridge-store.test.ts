@@ -460,6 +460,81 @@ describe.skipIf(!PY)('the reasoning store (codex-bridge spec §2.5, D23)', () =>
   });
 });
 
+// D-8618: the message path wraps the store's lookup (`server.counted_lookup`) and counts what each one found, for the
+// stats file's parity section: a text with stored reasoning, a text row with none (that reply had no reasoning before
+// it), no text row, a call with stored reasoning, and no call row. Each distinct key is counted once per request, as
+// the translation asks the store once per key (its memo).
+describe.skipIf(!PY)('the replay counter (D-8618)', () => {
+  it('a history counts text-hit, text-empty, text-absent, call-hit and call-absent, each key once', async () => {
+    const { home, db } = lane('cb-store-replay-count-');
+    const session = { 'x-claude-code-session-id': 's-1' };
+    const history = [
+      { role: 'user', content: 'start' },
+      { role: 'assistant', content: [
+        { type: 'text', text: 'Thought first.' }, { type: 'text', text: 'No reasoning here.' },
+        { type: 'tool_use', id: 'call_fx5', name: 'probe_tool', input: { q: 'one' } },
+        { type: 'tool_use', id: 'call_fx6', name: 'probe_tool', input: { q: 'two' } },
+      ] },
+      { role: 'user', content: [
+        { type: 'tool_result', tool_use_id: 'call_fx5', content: 'ok' },
+        { type: 'tool_result', tool_use_id: 'call_fx6', content: 'ok' },
+      ] },
+      { role: 'assistant', content: [{ type: 'text', text: 'Thought first.' }, { type: 'text', text: 'Never stored.' }] },
+      { role: 'user', content: 'next' },
+    ];
+    const [, , , counted, plain, other] = await run(home, [
+      { op: 'store-open', path: db },
+      stream([rs(1), msg(2, 'Thought first.'), msg(3, 'No reasoning here.'), rs(4), fc(5, '{"q":"one"}'), fc(6, '{"q":"two"}')]),
+      { op: 'store-remember', session: 's-1' },
+      { op: 'from-anthropic', lookup: 'store', counted: true, headers: session, body: { model: 'model-6.1-alpha', messages: history } },
+      { op: 'from-anthropic', lookup: 'store', headers: session, body: { model: 'model-6.1-alpha', messages: history } },
+      // another session: its texts are keyed apart, so none is found; a call id is not scoped to a session
+      { op: 'from-anthropic', lookup: 'store', counted: true, headers: { 'x-claude-code-session-id': 's-2' },
+        body: { model: 'model-6.1-alpha', messages: history } },
+    ]);
+    expect(counted.replay).toEqual({ 'text-hit': 1, 'text-empty': 1, 'text-absent': 1, 'call-hit': 1, 'call-absent': 1 });
+    expect(counted.lookups).toHaveLength(5);
+    // the counter changes nothing the translation builds
+    expect(counted.request).toEqual(plain.request);
+    expect(plain.replay).toBeUndefined();
+    expect(other.replay).toEqual({ 'text-absent': 3, 'call-hit': 1, 'call-absent': 1 });
+  });
+
+  it('a lookup the store answers as empty (a disabled store) is absent', async () => {
+    const { home } = lane('cb-store-replay-none-');
+    const [line] = await run(home, [{
+      op: 'from-anthropic', counted: true, stored: [{ call: 'call_fx1', turn: { items: [], phase: null } },
+        { session: 's-1', text: 'Odd row.', turn: 'not a turn' }],
+      headers: { 'x-claude-code-session-id': 's-1' },
+      body: { model: 'model-6.1-alpha', messages: [
+        { role: 'user', content: 'start' },
+        { role: 'assistant', content: [{ type: 'text', text: 'Odd row.' },
+          { type: 'tool_use', id: 'call_fx1', name: 'probe_tool', input: {} }] },
+        { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'call_fx1', content: 'ok' }] },
+      ] },
+    }]);
+    // a call row with nothing to replay is no stored reasoning; a row that is not a turn is no row
+    expect(line.replay).toEqual({ 'text-absent': 1, 'call-absent': 1 });
+  });
+
+  it('a row whose items hold no object replays nothing: a call row is absent, a text row empty', async () => {
+    const { home } = lane('cb-store-replay-junk-');
+    const [line] = await run(home, [{
+      op: 'from-anthropic', counted: true, stored: [{ call: 'call_fx1', turn: { items: ['x', 7], phase: null } },
+        { session: 's-1', text: 'Odd row.', turn: { items: ['x', 7], phase: null } }],
+      headers: { 'x-claude-code-session-id': 's-1' },
+      body: { model: 'model-6.1-alpha', messages: [
+        { role: 'user', content: 'start' },
+        { role: 'assistant', content: [{ type: 'text', text: 'Odd row.' },
+          { type: 'tool_use', id: 'call_fx1', name: 'probe_tool', input: {} }] },
+        { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'call_fx1', content: 'ok' }] },
+      ] },
+    }]);
+    // a non-empty list is not reasoning to replay: only an object item is (D-8618)
+    expect(line.replay).toEqual({ 'text-empty': 1, 'call-absent': 1 });
+  });
+});
+
 describe.skipIf(!PY)('the start check: a damaged store is set aside and started fresh (D-7676, D-7677)', () => {
   const statsPath = (dir: string): string => path.join(dir, 'bridge.stats.json');
   const turn = { items: [rs(1)], phase: null };

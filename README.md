@@ -2567,6 +2567,16 @@ route; no half-up row and no `litellm.yaml` row. On a lane in either mode, a sta
 file of mode 0600 is a FAIL. Removing the lane reaps both files, the store's set-aside copy, the recordings directory and the
 marker files with the rest of its state.
 
+**The stats file's `parity` section** measures what parity with native Codex hinges on, per route and model, from what
+the bridge already receives and sends, so nothing new goes on the wire (D-8618). Each row counts the upstream responses
+that reached `response.completed` or `response.incomplete` and their input, cached, output and reasoning tokens; the
+`reasoning.effort` each request carried (`none` when it carried none); whether the model that answered is the one asked
+for; the backend's `input_transformations` by type, action and reason, so `reasoning:removed:turn_boundary` counts the
+earlier reasoning the backend dropped; each reasoning-store lookup by what it found (per lookup, so a long conversation
+counts its old turns again); and the milliseconds to the first output and to the end, in fixed buckets. Every name in
+it is bounded like the others. It is not drift: nothing in it reaches doctor's WARN or the watch's drift check, and
+`ccrc codex status` does not show it.
+
 **A restart cuts long streams.** The bridge runs under the shim's unit, so a restart (a rollout's install restarts a
 running bridge whose bytes are stale; a switch stops it) is a stop, then a start. On the stop the bridge closes its
 listener, a stream that finishes within 5 seconds (`DRAIN_S`) ends normally, and every stream still open then gets one
