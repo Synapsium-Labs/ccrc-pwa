@@ -22,10 +22,20 @@
  * it is passed through `mask`, the caller's one card masker, before it is measured, so a masker that lengthens a line can
  * never push the anchor past its ceiling. The other lines are numbers, fixed words and the hash's hex.
  *
- * L1, pure: no `fs`, no store, no clock; `mask` is the caller's pure text function.
+ * THE START FORM IS READ BEFORE ITS START IS REPORTED (slug anchor-before-start-report): the hook asks for it before it
+ * sends the start report, so the generation it can name is the one before this start. It says so in plain words
+ * (`ANCHOR_START_NOT_REPORTED`) and carries no card hash: the card read once the lane mints this start can carry another
+ * hash (its checkpoint follows the live generation). The prompt form, read later, carries both canaries.
+ *
+ * THE ANSWER PROVES ITSELF. Every answer of the door's `part=anchor` carries `part: 'anchor'` and the form it served, so the
+ * hook and the client take nothing else for an anchor: an older server ignores `part` and answers a card page, which
+ * carries neither (fix round 1, F1).
+ *
+ * L1, pure, context C3 (Session Conversation: the card and its anchor): no `fs`, no store, no clock; `mask` is the caller's
+ * pure text function.
  */
 import {
-  ANCHOR_CARD_MAX_CHARS, ANCHOR_PROMPT_MAX_CHARS, type AnchorGeneration, type CardFacts, type CardItem, type Fact,
+  ANCHOR_CARD_MAX_CHARS, ANCHOR_PROMPT_MAX_CHARS, type AnchorForm, type AnchorGeneration, type CardFacts, type CardItem, type Fact,
 } from '../../../shared/continuity-card.js';
 import { utf8Bytes } from '../../../shared/utf8.js';
 import { oneLine } from './card.js';
@@ -49,16 +59,22 @@ export function anchorGeneration(live: Fact<AnchorGenRow | null>, newest: Fact<A
   return { kind: 'live', term: g.term, n: g.n, starting: s !== null && s.id !== g.startId && s.reportedAt >= g.startReportedAt };
 }
 
+/** What the door served for one form: a fork's form alone (it has no text), or a text form's anchor and the card hash. */
+export type AnchorServed =
+  | { readonly form: 'fork' }
+  | { readonly form: AnchorTextForm; readonly hash: string; readonly text: string };
 /** The card door's answer to `part=anchor` (the anchor piece's switch, the Shadow lanes row `anchor-slot`): `dark`, with no
- *  text, unless the row is live (so a merge serves nothing); live, the anchor and the card hash it names, or, for a fork,
- *  which carries no text, `live` alone (the hook then prints its one line). */
+ *  text, unless the row is live (so a merge serves nothing); live, the anchor and the card hash it was rendered with, or,
+ *  for a fork, which carries no text, `live` alone (the hook then prints its one line). Every answer carries `part` and
+ *  the form it served: the proof the hook and the client ask for before they take an answer as the anchor. */
 export type AnchorAnswer =
-  | { readonly ok: true; readonly dark: true }
-  | { readonly ok: true; readonly live: true }
-  | { readonly ok: true; readonly hash: string; readonly text: string };
-export function anchorAnswer(live: boolean, served: { readonly hash: string; readonly text: string } | null): AnchorAnswer {
-  if (!live) return { ok: true, dark: true };
-  return served === null ? { ok: true, live: true } : { ok: true, hash: served.hash, text: served.text };
+  | { readonly ok: true; readonly part: 'anchor'; readonly form: AnchorForm; readonly dark: true }
+  | { readonly ok: true; readonly part: 'anchor'; readonly form: 'fork'; readonly live: true }
+  | { readonly ok: true; readonly part: 'anchor'; readonly form: AnchorTextForm; readonly hash: string; readonly text: string };
+export function anchorAnswer(live: boolean, served: AnchorServed): AnchorAnswer {
+  if (!live) return { ok: true, part: 'anchor', form: served.form, dark: true };
+  return served.form === 'fork' ? { ok: true, part: 'anchor', form: 'fork', live: true }
+    : { ok: true, part: 'anchor', form: served.form, hash: served.hash, text: served.text };
 }
 
 /** The forms `renderAnchor` draws (the `fork` form has no text: the hook prints its own line). */
@@ -68,6 +84,8 @@ export type AnchorTextForm = 'start' | 'prompt';
 export const ANCHOR_PREFIX = 'ccrc-anchor:';
 /** The one instruction (C38), the anchor's last line. */
 export const ANCHOR_INSTRUCTION = "Your card is the server's record of what stands. Read it now with `ccrc-api card`, before anything else.";
+/** What the start form's generation canary ends with, in place of the card hash (slug anchor-before-start-report). */
+export const ANCHOR_START_NOT_REPORTED = '(this start not yet reported)';
 /** The canary's card hash is this many hex characters of the card's sha256. */
 export const ANCHOR_HASH_CHARS = 12;
 /** What an unread fact reads as on the anchor. */
@@ -96,12 +114,13 @@ function roleLine(f: CardFacts): string {
   return programmes.length === 0 ? `role: ${oneLine(f.role)}` : `role: ${oneLine(f.role)} of ${programmes.join(', ')}`;
 }
 
-/** The canaries: term, generation (`n`, or `n+1 starting` while the session's newest start is not yet minted) and the
- *  card hash. */
-function canaryLine(a: AnchorInput): string {
+/** The canaries: term, generation (`n`, or `n+1 starting` while the session's newest start is not yet minted) and, on the
+ *  prompt form, the card hash; the start form names its generation as the one before this start, and no hash. */
+function canaryLine(a: AnchorInput, form: AnchorTextForm): string {
   const g = a.generation;
   const term = g.kind === 'live' ? String(g.term) : g.kind === 'none' ? 'none' : ANCHOR_UNMEASURED;
   const gen = g.kind === 'live' ? (g.starting ? `${g.n + 1} starting` : String(g.n)) : g.kind === 'none' ? 'none' : ANCHOR_UNMEASURED;
+  if (form === 'start') return `term ${term} · generation ${gen} ${ANCHOR_START_NOT_REPORTED}`;
   return `term ${term} · generation ${gen} · card ${a.cardHash.slice(0, ANCHOR_HASH_CHARS)}`;
 }
 
@@ -144,7 +163,7 @@ function fitBytes(text: string, maxBytes: number): string {
 /** The anchor's text for one form, at most its ceiling in UTF-8 bytes (`ANCHOR_CEILING`). The fixed lines are never cut
  *  (about 260 bytes at their longest, so the role line always has room); the role line, masked first, takes what is left. */
 export function renderAnchor(f: CardFacts, a: AnchorInput, form: AnchorTextForm, mask: (text: string) => string = (t) => t): string {
-  const tail = form === 'start' ? [canaryLine(a), countsLine(f), ANCHOR_INSTRUCTION] : [canaryLine(a), ANCHOR_INSTRUCTION];
+  const tail = form === 'start' ? [canaryLine(a, form), countsLine(f), ANCHOR_INSTRUCTION] : [canaryLine(a, form), ANCHOR_INSTRUCTION];
   const fixed = tail.join('\n');
   // The prompt form is bounded by construction (two safe integers, twelve hex characters, fixed words), never cut: its
   // worst case is pinned under `ANCHOR_PROMPT_MAX_CHARS` by a test, and it carries no row's text, so nothing reaches `mask`.

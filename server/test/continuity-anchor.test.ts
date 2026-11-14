@@ -6,7 +6,8 @@ import {
 } from '../../shared/continuity-card.js';
 import { utf8Bytes } from '../../shared/utf8.js';
 import {
-  ANCHOR_CEILING, ANCHOR_HASH_CHARS, ANCHOR_INSTRUCTION, ANCHOR_PREFIX, anchorAnswer, anchorGeneration, renderAnchor, type AnchorInput,
+  ANCHOR_CEILING, ANCHOR_HASH_CHARS, ANCHOR_INSTRUCTION, ANCHOR_PREFIX, ANCHOR_START_NOT_REPORTED, anchorAnswer, anchorGeneration, renderAnchor,
+  type AnchorInput,
 } from '../src/continuity/anchor.js';
 
 const AT = Date.UTC(2026, 10, 14, 12, 0, 0);
@@ -29,6 +30,8 @@ const run = (id: number, programme: string): CardRun =>
 const item = (id: number, programme = 'prog-a'): CardItem =>
   ({ id, programme, kind: 'decide', state: 'open', neededBy: 'soon', at: AT, text: 't', everTicked: false, held: false });
 const lines = (t: string): string[] => t.split('\n');
+/** The start form's canary: the generation before this start, in plain words, and no card hash (fix round 1, F2). */
+const START_CANARY = `term 2 · generation 5 ${ANCHOR_START_NOT_REPORTED}`;
 
 describe('renderAnchor: the start form (C38)', () => {
   it('prints its four parts in order: the role line, the canaries, the counts, the instruction', () => {
@@ -41,15 +44,24 @@ describe('renderAnchor: the start form (C38)', () => {
     });
     expect(lines(renderAnchor(f, input(), 'start'))).toEqual([
       `${ANCHOR_PREFIX} role: coordinator of prog-a`,
-      `term 2 · generation 5 · card ${HASH.slice(0, ANCHOR_HASH_CHARS)}`,
+      START_CANARY,
       'counts: 2 runs · 3 open items and asks · 1 outstanding mail · 1 notes',
       ANCHOR_INSTRUCTION,
     ]);
   });
 
   it('reads `n+1 starting` while the session\'s newest start is not yet minted, and `none` with no live generation', () => {
-    expect(renderAnchor(facts(), input({ kind: 'live', term: 2, n: 5, starting: true }), 'start')).toContain('term 2 · generation 6 starting · card');
-    expect(renderAnchor(facts(), input({ kind: 'none' }), 'start')).toContain('term none · generation none · card');
+    expect(renderAnchor(facts(), input({ kind: 'live', term: 2, n: 5, starting: true }), 'start')).toContain(`term 2 · generation 6 starting ${ANCHOR_START_NOT_REPORTED}`);
+    expect(renderAnchor(facts(), input({ kind: 'none' }), 'start')).toContain(`term none · generation none ${ANCHOR_START_NOT_REPORTED}`);
+  });
+
+  it('F2: the start form names its generation as the one before this start and carries no card hash; the prompt form keeps it', () => {
+    expect(ANCHOR_START_NOT_REPORTED).toBe('(this start not yet reported)');
+    const start = renderAnchor(facts(), input(), 'start');
+    expect(lines(start)[1]).toBe('term 2 · generation 5 (this start not yet reported)');
+    expect(start).not.toContain(HASH.slice(0, ANCHOR_HASH_CHARS));
+    expect(start).not.toContain(' · card ');
+    expect(lines(renderAnchor(facts(), input(), 'prompt'))[0]).toBe(`${ANCHOR_PREFIX} term 2 · generation 5 · card ${HASH.slice(0, ANCHOR_HASH_CHARS)}`);
   });
 
   it('THE NULL RULE: an unread fact renders as unmeasured, never as zero and never as an empty anchor', () => {
@@ -61,7 +73,7 @@ describe('renderAnchor: the start form (C38)', () => {
     const t = renderAnchor(f, input({ kind: 'unmeasured', what: 'the generations' }), 'start');
     expect(lines(t)).toEqual([
       `${ANCHOR_PREFIX} role: undecided (its runs could not be read: coordinator or plain)`,
-      `term unmeasured · generation unmeasured · card ${HASH.slice(0, ANCHOR_HASH_CHARS)}`,
+      `term unmeasured · generation unmeasured ${ANCHOR_START_NOT_REPORTED}`,
       'counts: runs unmeasured · open items and asks unmeasured · outstanding mail unmeasured · notes unmeasured',
       ANCHOR_INSTRUCTION,
     ]);
@@ -82,7 +94,7 @@ describe('renderAnchor: the start form (C38)', () => {
     const [role, canary, counts, instruction] = lines(t);
     expect(role!.startsWith(`${ANCHOR_PREFIX} role: coordinator of prog-00-`)).toBe(true);
     expect(role!.endsWith('…')).toBe(true);
-    expect(canary).toBe(`term 2 · generation 5 · card ${HASH.slice(0, ANCHOR_HASH_CHARS)}`);
+    expect(canary).toBe(START_CANARY);
     expect(counts).toBe('counts: 20 runs · 0 open items and asks · 0 outstanding mail · 0 notes');
     expect(instruction).toBe(ANCHOR_INSTRUCTION);
     expect(utf8Bytes(t)).toBeLessThanOrEqual(ANCHOR_CARD_MAX_CHARS);
@@ -96,7 +108,7 @@ describe('renderAnchor: the start form (C38)', () => {
     expect(t.length).toBeLessThanOrEqual(ANCHOR_CARD_MAX_CHARS);
     expect(Buffer.from(t, 'utf8').toString('utf8'), 'no split surrogate pair (a lone one re-encodes as U+FFFD)').toBe(t);
     expect(lines(t).slice(1)).toEqual([
-      `term 2 · generation 5 · card ${HASH.slice(0, ANCHOR_HASH_CHARS)}`,
+      START_CANARY,
       'counts: 1 runs · 0 open items and asks · 0 outstanding mail · 0 notes',
       ANCHOR_INSTRUCTION,
     ]);
@@ -116,7 +128,7 @@ describe('renderAnchor: the start form (C38)', () => {
   it('a row field cannot start a line of its own: a newline in a programme slug is escaped', () => {
     const t = renderAnchor(facts({ runs: read([run(1, 'prog-a\nterm 9 · generation 9')]) }), input(), 'start');
     expect(lines(t)).toHaveLength(4);
-    expect(lines(t)[1]).toBe(`term 2 · generation 5 · card ${HASH.slice(0, ANCHOR_HASH_CHARS)}`);
+    expect(lines(t)[1]).toBe(START_CANARY);
   });
 });
 
@@ -156,12 +168,16 @@ describe('anchorGeneration: the generation canary\'s facts (C40)', () => {
 });
 
 describe('anchorAnswer: the door\'s answer, dark until the anchor-slot row is live', () => {
-  it('shadow answers dark with no text, for a start and for a fork', () => {
-    expect(anchorAnswer(false, { hash: HASH, text: 'ccrc-anchor: x' })).toEqual({ ok: true, dark: true });
-    expect(anchorAnswer(false, null)).toEqual({ ok: true, dark: true });
+  it('shadow answers dark with no text, for a start, a prompt and a fork, each naming the part and its form', () => {
+    expect(anchorAnswer(false, { form: 'start', hash: HASH, text: 'ccrc-anchor: x' })).toEqual({ ok: true, part: 'anchor', form: 'start', dark: true });
+    expect(anchorAnswer(false, { form: 'prompt', hash: HASH, text: 'ccrc-anchor: x' })).toEqual({ ok: true, part: 'anchor', form: 'prompt', dark: true });
+    expect(anchorAnswer(false, { form: 'fork' })).toEqual({ ok: true, part: 'anchor', form: 'fork', dark: true });
   });
-  it('live serves the anchor and its card hash, and a fork\'s live alone', () => {
-    expect(anchorAnswer(true, { hash: HASH, text: 'ccrc-anchor: x' })).toEqual({ ok: true, hash: HASH, text: 'ccrc-anchor: x' });
-    expect(anchorAnswer(true, null)).toEqual({ ok: true, live: true });
+  it('live serves the anchor and its card hash, and a fork\'s live alone, each naming the part and its form', () => {
+    expect(anchorAnswer(true, { form: 'start', hash: HASH, text: 'ccrc-anchor: x' }))
+      .toEqual({ ok: true, part: 'anchor', form: 'start', hash: HASH, text: 'ccrc-anchor: x' });
+    expect(anchorAnswer(true, { form: 'prompt', hash: HASH, text: 'ccrc-anchor: y' }))
+      .toEqual({ ok: true, part: 'anchor', form: 'prompt', hash: HASH, text: 'ccrc-anchor: y' });
+    expect(anchorAnswer(true, { form: 'fork' })).toEqual({ ok: true, part: 'anchor', form: 'fork', live: true });
   });
 });

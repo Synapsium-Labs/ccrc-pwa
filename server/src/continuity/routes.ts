@@ -78,6 +78,9 @@ const isSafeNat = (v: unknown): v is number => typeof v === 'number' && Number.i
 /** A card page's number in the query, and a card hash (a sha256 in hex). */
 const PAGE_RE = /^[1-9][0-9]{0,5}$/;
 const HASH_RE = /^[0-9a-f]{64}$/;
+/** The page `part=anchor` asks for: one no older server serves (its pages start at 1), so it refuses the anchor's read
+ *  before it reads, stores or records anything (fix round 1, F1). */
+const ANCHOR_PAGE = '0';
 /** At most this many conversations' partly served cards are remembered (the door's memo, below). */
 const CARD_MEMO_MAX = 512;
 const sha256 = (text: string): string => createHash('sha256').update(text, 'utf8').digest('hex');
@@ -247,10 +250,12 @@ export function registerContinuityRoutes(app: FastifyInstance, deps: ContinuityR
    *
    * `part=anchor&form=start|prompt|fork` (the anchor piece, C38): the card's short part, for the session hook. The same
    * checks, gather, render, trim and mask, so the anchor names the hash of the card the same facts render, then
-   * `renderAnchor` (L1) with the same masker; it takes no page or hash, stores no snapshot and records no read. Its answer
-   * is `anchorAnswer`'s: `{ ok, dark }` with no text while the Shadow lanes row `anchor-slot` is shadow (the door still
-   * renders, and logs the size once per card), and once it is live `{ ok, hash, text }`, or, for a fork, `{ ok, live }`
-   * alone, read before any gather.
+   * `renderAnchor` (L1) with the same masker; it stores no snapshot and records no read. It asks for `page=0` and names no
+   * hash: an older server, which ignores `part`, refuses page 0 before it reads anything, so the hook's read never stores a
+   * snapshot or records a card read there (fix round 1, F1). Its answer is `anchorAnswer`'s, every one carrying `part` and
+   * the form it served: `{ dark }` with no text while the Shadow lanes row `anchor-slot` is shadow (the door still renders,
+   * and logs the size to the server journal once per card), and once it is live `{ hash, text }`, or, for a fork,
+   * `{ live }` alone, read before any gather.
    */
   app.get('/api/sessions/:id/card', {
     onRequest: async (req: FastifyRequest, reply: FastifyReply) => {
@@ -264,17 +269,17 @@ export function registerContinuityRoutes(app: FastifyInstance, deps: ContinuityR
     if (q['byId'] !== id) return refuseRoute(reply, 'not-owner', { detail: 'byId must be the session the path names: a session reads its own card' });
     const uuid = q['byUuid'];
     if (!IDENTITY_RE.test(id) || typeof uuid !== 'string' || !IDENTITY_RE.test(uuid)) return refuseRoute(reply, 'bad-request', { detail: 'byId and byUuid' });
+    const part = q['part'];
     const pageRaw = q['page'] ?? '1';
-    if (typeof pageRaw !== 'string' || !PAGE_RE.test(pageRaw)) return refuseRoute(reply, 'bad-request', { detail: 'page is a positive integer' });
+    if (part === 'anchor' && (pageRaw !== ANCHOR_PAGE || q['hash'] !== undefined)) return refuseRoute(reply, 'bad-request', { detail: 'part=anchor asks for page 0 and names no hash' });
+    if (part !== 'anchor' && (typeof pageRaw !== 'string' || !PAGE_RE.test(pageRaw))) return refuseRoute(reply, 'bad-request', { detail: 'page is a positive integer' });
     const page = Number(pageRaw);
     const asked = q['hash'];
     if (asked !== undefined && (typeof asked !== 'string' || !HASH_RE.test(asked))) return refuseRoute(reply, 'bad-request', { detail: 'hash is a card hash' });
     if (page > 1 && asked === undefined) return refuseRoute(reply, 'bad-request', { detail: 'a page after the first names its card hash' });
-    const part = q['part'];
     const form = q['form'] ?? 'start';
     if (part !== undefined && part !== 'anchor') return refuseRoute(reply, 'bad-request', { detail: 'part is anchor, or absent for the card' });
     if (part === undefined && q['form'] !== undefined) return refuseRoute(reply, 'bad-request', { detail: 'form is part=anchor\'s' });
-    if (part === 'anchor' && (q['page'] !== undefined || asked !== undefined)) return refuseRoute(reply, 'bad-request', { detail: 'part=anchor takes no page or hash' });
     if (!isAnchorForm(form)) return refuseRoute(reply, 'bad-request', { detail: 'form is start, prompt or fork' });
     const attributed = await deps.attributeReader(id, uuid);
     if (!attributed.ok) return refuseRoute(reply, attributed.error, { detail: attributed.detail });
@@ -282,7 +287,7 @@ export function registerContinuityRoutes(app: FastifyInstance, deps: ContinuityR
     const coord = deps.coord;
     if (coord === undefined) return refuseRoute(reply, 'unavailable');
     const anchorLive = part === 'anchor' && laneArmRowViewOf(ANCHOR_SLOT_LANE, coord.laneArmSetting(ANCHOR_SLOT_LANE), laneArmGate(ANCHOR_SLOT_LANE)).live;
-    if (part === 'anchor' && form === 'fork') return reply.code(200).send(anchorAnswer(anchorLive, null));
+    if (part === 'anchor' && form === 'fork') return reply.code(200).send(anchorAnswer(anchorLive, { form }));
     const at = deps.wall();
     const masker = deps.masker ?? SHAPE_ONLY_MASKER;
     const { facts, renderer } = await gatherCardFacts({ coord, ...deps.cardRegistry }, id, at);
@@ -292,7 +297,7 @@ export function registerContinuityRoutes(app: FastifyInstance, deps: ContinuityR
       const { live, newest } = anchorReads(coord, id);
       const anchor = renderAnchor(facts, { cardHash: hash, generation: anchorGeneration(live, newest) }, form === 'prompt' ? 'prompt' : 'start', (t) => masker.maskText(t));
       if (!anchorLive) logShadowAnchor(id, form, hash, anchor);
-      return reply.code(200).send(anchorAnswer(anchorLive, { hash, text: anchor }));
+      return reply.code(200).send(anchorAnswer(anchorLive, { form: form === 'prompt' ? 'prompt' : 'start', hash, text: anchor }));
     }
     const factsJson = snapshotFactsJson(facts);
     const snapshotId = sha256(factsJson);

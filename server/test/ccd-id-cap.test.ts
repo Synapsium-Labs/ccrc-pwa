@@ -69,7 +69,8 @@ const ID_NAME_TEMPLATES: readonly IdNameTemplate[] = [
   { file: 'ccd/ccd', template: '<id>.hookstate.json', overhead: 15 },
   { file: 'ccd/ccd', template: '<id>.turn.json', overhead: 10 },
   { file: 'ccd/ccd', template: '<id>.supervise.log', overhead: 14 },
-  // Three `$REG/<id>.<name>` files whose names carry a dash, which the `<field>` family's a-z spelling does not take.
+  // Three of ccd's `$REG/<id>.<name>` files whose names carry a dash, which the `<field>` family's a-z spelling does not
+  // take; the session hook's `<id>.anchor-owed`, below, is a fourth.
   { file: 'ccd/ccd', template: '<id>.deny-settings', overhead: 14 },
   { file: 'ccd/ccd', template: '<id>.no-hibernate', overhead: 13 },
   { file: 'ccd/ccd', template: '<id>.no-roll', overhead: 8 },   // D-7458: `cmd_hibernate --roll`'s opt-out

@@ -27,7 +27,7 @@ const facts = (over: Partial<CardFacts> = {}): CardFacts => ({
 const run = (id: number, programme: string): CardRun => ({ id, programme, wave: 1, waveOf: 2, state: 'working', planPath: null, kind: 'work' });
 const gen = (g: AnchorGeneration) => ({ cardHash: HASH, generation: g });
 const LIVE = gen({ kind: 'live', term: 2, n: 5, starting: false });
-const CANARY = `term 2 · generation 5 · card ${HASH.slice(0, 12)}`;
+const CANARY = 'term 2 · generation 5 (this start not yet reported)';
 
 export const ANCHOR_RENDER_SET: MutantSet<Anchor> = {
   modulePath: ANCHOR_TS,
@@ -35,7 +35,7 @@ export const ANCHOR_RENDER_SET: MutantSet<Anchor> = {
     // A1, the plan's: the canaries clipped before the role line (the role line takes the canaries' room).
     { id: 'A1', old: 'const room = ANCHOR_CEILING.start - utf8Bytes(head) - utf8Bytes(fixed) - 1;', new: 'const room = ANCHOR_CEILING.start - utf8Bytes(head) - 1;' },
     // A2, the plan's: the instruction dropped.
-    { id: 'A2', old: "form === 'start' ? [canaryLine(a), countsLine(f), ANCHOR_INSTRUCTION] :", new: "form === 'start' ? [canaryLine(a), countsLine(f)] :" },
+    { id: 'A2', old: "form === 'start' ? [canaryLine(a, form), countsLine(f), ANCHOR_INSTRUCTION] :", new: "form === 'start' ? [canaryLine(a, form), countsLine(f)] :" },
     // A3, the plan's: the prompt form past 600.
     { id: 'A3', old: "if (form === 'prompt') return `${ANCHOR_PREFIX} ${fixed}`;", new: '' },
     // A4, the plan's: `n` read for a start not yet minted.
@@ -46,6 +46,8 @@ export const ANCHOR_RENDER_SET: MutantSet<Anchor> = {
     { id: 'A8', old: 'const role = fitBytes(mask(roleLine(f)), room);', new: 'const role = fitBytes(roleLine(f), room);' },
     { id: 'A9', old: 'if (used + b > room) break;', new: 'if (used > room) break;' },
     { id: 'A10', old: "if (f.role === 'undecided') return `role: undecided (${oneLine(f.roleWhy)})`;", new: "if (f.role === 'undecided') return 'role: undecided';" },
+    // Fix round 1, F2: the start form read as if its start were reported, with the card hash it cannot vouch for.
+    { id: 'A11', old: "  if (form === 'start') return `term ${term} · generation ${gen} ${ANCHOR_START_NOT_REPORTED}`;\n", new: '' },
   ],
   suite(m): Record<string, SuiteCase> {
     return {
@@ -70,6 +72,12 @@ export const ANCHOR_RENDER_SET: MutantSet<Anchor> = {
         expect(utf8Bytes(t)).toBeLessThanOrEqual(600);
         expect(t).not.toContain('role:');
       },
+      'the start form names the generation before it, and no card hash; the prompt form keeps the hash': () => {
+        const t = m.renderAnchor(facts(), LIVE, 'start');
+        expect(t.split('\n')[1]).toBe(CANARY);
+        expect(t).not.toContain(HASH.slice(0, 12));
+        expect(m.renderAnchor(facts(), LIVE, 'prompt')).toContain(`term 2 · generation 5 · card ${HASH.slice(0, 12)}`);
+      },
       'an unminted start reads n+1 starting': () => {
         expect(m.renderAnchor(facts(), gen({ kind: 'live', term: 2, n: 5, starting: true }), 'prompt')).toContain('generation 6 starting');
       },
@@ -77,7 +85,7 @@ export const ANCHOR_RENDER_SET: MutantSet<Anchor> = {
         const f = facts({ role: 'undecided', roleWhy: 'its runs could not be read', runs: unmeasured('r'), itemsRaised: unmeasured('i'), notes: unmeasured('n') });
         const t = m.renderAnchor(f, gen({ kind: 'unmeasured', what: 'g' }), 'start');
         expect(t).toContain('role: undecided (its runs could not be read)');
-        expect(t).toContain('term unmeasured · generation unmeasured');
+        expect(t).toContain('term unmeasured · generation unmeasured (this start not yet reported)');
         expect(t).toContain('counts: runs unmeasured · open items and asks unmeasured · 0 outstanding mail · notes unmeasured');
       },
       'the role line is masked before it is fitted': () => {
@@ -120,14 +128,21 @@ export const ANCHOR_ANSWER_SET: MutantSet<Anchor> = {
   modulePath: ANCHOR_TS,
   mutants: [
     // The plan's Task 2 mutation: the text served in shadow.
-    { id: 'S1', old: '  if (!live) return { ok: true, dark: true };\n', new: '' },
-    { id: 'S2', old: 'return served === null ? { ok: true, live: true } :', new: 'return served === null ? { ok: true, dark: true } :' },
+    { id: 'S1', old: "  if (!live) return { ok: true, part: 'anchor', form: served.form, dark: true };\n", new: '' },
+    { id: 'S2', old: "return served.form === 'fork' ? { ok: true, part: 'anchor', form: 'fork', live: true }", new: "return served.form === 'fork' ? { ok: true, part: 'anchor', form: 'fork', dark: true }" },
+    // Fix round 1, F1: an answer without its proof (the part), and one naming another form than it served.
+    { id: 'S3', old: "  if (!live) return { ok: true, part: 'anchor', form: served.form, dark: true };", new: "  if (!live) return { ok: true, form: served.form, dark: true } as never;" },
+    { id: 'S4', old: "    : { ok: true, part: 'anchor', form: served.form, hash: served.hash, text: served.text };", new: "    : { ok: true, part: 'anchor', form: 'start', hash: served.hash, text: served.text };" },
   ],
   suite(m): Record<string, SuiteCase> {
     return {
-      'shadow is dark with no text': () => { expect(m.anchorAnswer(false, { hash: HASH, text: 't' })).toEqual({ ok: true, dark: true }); },
-      'a live fork is live': () => { expect(m.anchorAnswer(true, null)).toEqual({ ok: true, live: true }); },
-      'live serves the text': () => { expect(m.anchorAnswer(true, { hash: HASH, text: 't' })).toEqual({ ok: true, hash: HASH, text: 't' }); },
+      'shadow is dark with no text, naming its part and form': () => {
+        expect(m.anchorAnswer(false, { form: 'start', hash: HASH, text: 't' })).toEqual({ ok: true, part: 'anchor', form: 'start', dark: true });
+      },
+      'a live fork is live': () => { expect(m.anchorAnswer(true, { form: 'fork' })).toEqual({ ok: true, part: 'anchor', form: 'fork', live: true }); },
+      'live serves the text, naming its part and form': () => {
+        expect(m.anchorAnswer(true, { form: 'prompt', hash: HASH, text: 't' })).toEqual({ ok: true, part: 'anchor', form: 'prompt', hash: HASH, text: 't' });
+      },
     };
   },
 };

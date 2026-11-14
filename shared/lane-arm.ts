@@ -160,8 +160,9 @@ export const LANE_ARM_TEXT = {
     },
     [ANCHOR_SLOT_LANE]: {
       legend: 'Anchor at every start',
-      shadowNote: 'The server renders the anchor each start would get and logs its size; every session still starts with '
-        + 'today\'s role card, a fork included, and nothing is added after a compaction.',
+      shadowNote: 'The server renders the anchor each start would get and logs its size to the server journal, as lines '
+        + 'beginning "ccrc-server: anchor-slot shadow:"; every session still starts with today\'s role card, a fork '
+        + 'included, and nothing is added after a compaction.',
       liveNote: 'Each start of a session that is not a child begins with its anchor (its role, its canaries and counts, '
         + 'and to read its card) in place of the role card; a fork gets one line saying it has no card, and the first '
         + 'prompt after an automatic compaction carries the anchor once.',

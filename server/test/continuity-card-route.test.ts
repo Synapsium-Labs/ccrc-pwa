@@ -17,6 +17,7 @@ import { SECRET_MASK } from '../../shared/api.js';
 import { CARD_NOTHING_LINE } from '../src/continuity/card.js';
 import { ANCHOR_CARD_MAX_CHARS, ANCHOR_PROMPT_MAX_CHARS, CARD_PAGE_CHARS, TOOL_RESULT_CUT_BYTES } from '../../shared/continuity-card.js';
 import { ANCHOR_INSTRUCTION } from '../src/continuity/anchor.js';
+import { LANE_ARM_TEXT } from '../../shared/lane-arm.js';
 import { NOTES_CAP } from '../../shared/continuity.js';
 import { fakeTime, type FakeTime } from './fakeTime.js';
 import { ID_GATE_TOKEN, appFor, recorder, seedRow } from './idGateFixture.js';
@@ -379,16 +380,16 @@ describe('the card with 200 notes of 500 characters (the notes piece; Table 11.5
 // row `anchor-slot` is live.
 describe('GET /api/sessions/:id/card?part=anchor: the card\'s short part, for the session hook', () => {
   const anchor = (a: FastifyInstance, form?: string, q: Record<string, string | number> = {}) =>
-    card(a, { part: 'anchor', ...(form === undefined ? {} : { form }), ...q });
+    card(a, { part: 'anchor', page: 0, ...(form === undefined ? {} : { form }), ...q });
   const arm = (): void => { expect(coord!.setLaneArm('anchor-slot', 'live', 1)).toMatchObject({ kind: 'row', choice: 'live' }); };
   const openRunAs = (program: string): number =>
     (coord!.openRun({ program, title: 'PROG', project: 'project-a', wave: 1, waveOf: 2, claimedBy: ID }) as { id?: number }).id ?? 0;
 
-  it('SHADOW (the seed): every form answers dark with no text, stores no snapshot and records no read', async () => {
+  it('SHADOW (the seed): every form answers dark with no text, naming the part and its form, and writes nothing', async () => {
     app = await open();
     for (const form of [undefined, 'start', 'prompt', 'fork']) {
       const res = await anchor(app, form);
-      expect([res.statusCode, res.json()], String(form)).toEqual([200, { ok: true, dark: true }]);
+      expect([res.statusCode, res.json()], String(form)).toEqual([200, { ok: true, part: 'anchor', form: form ?? 'start', dark: true }]);
     }
     expect([snapshots(), reads()]).toEqual([[], []]);
   });
@@ -402,6 +403,8 @@ describe('GET /api/sessions/:id/card?part=anchor: the card\'s short part, for th
       const lines = warn.mock.calls.flat().map(String).filter((l) => l.startsWith('ccrc-server: anchor-slot shadow:'));
       expect(lines).toHaveLength(1);
       expect(lines[0]).toMatch(/^ccrc-server: anchor-slot shadow: the start anchor for lane-a-project-a is \d+ characters, \d+ bytes \(card [0-9a-f]{12}\); not served$/);
+      // F10: the Shadow lanes row tells the operator where these lines are, by the prefix they begin with.
+      expect(LANE_ARM_TEXT.rows['anchor-slot'].shadowNote).toContain('server journal, as lines beginning "ccrc-server: anchor-slot shadow:"');
     } finally { warn.mockRestore(); }
   });
 
@@ -411,18 +414,20 @@ describe('GET /api/sessions/:id/card?part=anchor: the card\'s short part, for th
     openRunAs('prog-a');
     const res = await anchor(app);
     expect(res.statusCode).toBe(200);
-    const a = res.json() as { ok: boolean; hash: string; text: string };
-    expect(Object.keys(a).sort()).toEqual(['hash', 'ok', 'text']);
+    const a = res.json() as { ok: boolean; part: string; form: string; hash: string; text: string };
+    expect(Object.keys(a).sort()).toEqual(['form', 'hash', 'ok', 'part', 'text']);
+    expect([a.part, a.form], 'the proof the hook and the client ask for (fix round 1, F1)').toEqual(['anchor', 'start']);
     expect([snapshots(), reads()], 'the anchor stores no snapshot and records no read').toEqual([[], []]);
     const c = (await card(app)).json() as { hash: string };
     expect(a.hash).toBe(c.hash);
     expect(a.text.split('\n')).toEqual([
       'ccrc-anchor: role: coordinator of prog-a',
-      `term none · generation none · card ${c.hash.slice(0, 12)}`,
+      'term none · generation none (this start not yet reported)',
       'counts: 1 runs · 0 open items and asks · 0 outstanding mail · 0 notes',
       ANCHOR_INSTRUCTION,
     ]);
-    const p = (await anchor(app, 'prompt')).json() as { text: string };
+    const p = (await anchor(app, 'prompt')).json() as { form: string; text: string };
+    expect(p.form).toBe('prompt');
     expect(p.text.split('\n')).toEqual([`ccrc-anchor: term none · generation none · card ${c.hash.slice(0, 12)}`, ANCHOR_INSTRUCTION]);
     expect(Buffer.byteLength(p.text, 'utf8')).toBeLessThanOrEqual(ANCHOR_PROMPT_MAX_CHARS);
   });
@@ -431,7 +436,7 @@ describe('GET /api/sessions/:id/card?part=anchor: the card\'s short part, for th
     app = await open();
     arm();
     const res = await anchor(app, 'fork');
-    expect([res.statusCode, res.json()]).toEqual([200, { ok: true, live: true }]);
+    expect([res.statusCode, res.json()]).toEqual([200, { ok: true, part: 'anchor', form: 'fork', live: true }]);
     expect(snapshots()).toEqual([]);
   });
 
@@ -445,7 +450,7 @@ describe('GET /api/sessions/:id/card?part=anchor: the card\'s short part, for th
     expect(Buffer.byteLength(a.text, 'utf8')).toBeLessThan(TOOL_RESULT_CUT_BYTES);
     const lines = a.text.split('\n');
     expect(lines[0]!.endsWith('…')).toBe(true);
-    expect(lines.slice(1)).toEqual([expect.stringMatching(/^term none · generation none · card [0-9a-f]{12}$/),
+    expect(lines.slice(1)).toEqual(['term none · generation none (this start not yet reported)',
       'counts: 20 runs · 0 open items and asks · 0 outstanding mail · 0 notes', ANCHOR_INSTRUCTION]);
   });
 
@@ -470,21 +475,32 @@ describe('GET /api/sessions/:id/card?part=anchor: the card\'s short part, for th
     for (const piece of [SECRET, SECRET.slice(0, 20), SECRET.slice(-40)]) expect(a.text).not.toContain(piece);
   });
 
-  it('refuses a malformed anchor query 400: another part, a form without the part, a page or hash with it, an unknown form', async () => {
+  it('refuses a malformed anchor query 400: another part, a form without the part, the part without page 0 or with a hash, an unknown form', async () => {
     app = await open();
-    const bad: Record<string, string | number>[] = [{ part: 'card' }, { form: 'start' }, { part: 'anchor', page: 1 },
-      { part: 'anchor', hash: 'a'.repeat(64) }, { part: 'anchor', form: 'other' }];
+    const bad: Record<string, string | number>[] = [{ part: 'card' }, { form: 'start' }, { part: 'anchor' }, { part: 'anchor', page: 1 },
+      { part: 'anchor', page: 0, hash: 'a'.repeat(64) }, { part: 'anchor', page: 0, form: 'other' }, { form: 'start', page: 0 }];
     for (const q of bad) {
       const res = await card(app, q);
       expect([res.statusCode, res.json().error], JSON.stringify(q)).toEqual([400, 'bad-request']);
     }
+    expect([snapshots(), reads()]).toEqual([[], []]);
+  });
+
+  // Fix round 1, F1: the anchor asks for page 0 because the card's own page check (unchanged from before the anchor) refuses
+  // it before the attribution, the gather and every write. An older server, which ignores `part`, answers that way.
+  it('page 0 without the part is refused before anything is read or written, as an older server refuses the anchor\'s read', async () => {
+    app = await open();
+    openRunAs('prog-a');
+    const res = await card(app, { page: 0 });
+    expect([res.statusCode, res.json()]).toEqual([400, { ok: false, error: 'bad-request', detail: 'page is a positive integer' }]);
+    expect([snapshots(), reads()], 'no snapshot stored, no read recorded').toEqual([[], []]);
   });
 
   it('takes the card\'s checks: no token is 401, another session\'s anchor is not-owner', async () => {
     app = await open();
-    const none = await card(app, { part: 'anchor' }, ID, null);
+    const none = await card(app, { part: 'anchor', page: 0 }, ID, null);
     expect([none.statusCode, none.json().error]).toEqual([401, 'unauthenticated']);
-    const other = await card(app, { part: 'anchor' }, OTHER);
+    const other = await card(app, { part: 'anchor', page: 0 }, OTHER);
     expect([other.statusCode, other.json().error]).toEqual([403, 'not-owner']);
   });
 });

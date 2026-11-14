@@ -13,7 +13,9 @@
 # read (`ccrc-api runs list`) on compact, resume and clear of a non-child session, and on its wake arm (R-5a, D-8201: a server wake prompt after an idle compaction), fail-open
 # (no roster line on any failure), made even when unarmed (shadow). The FOURTH (Overlord W1a): the start report, a send on a non-child SessionStart and a resend pass on it and on UserPromptSubmit, all inside one 4 s budget (`_hook_start_report`), fail-open. The FIFTH (Overlord W1a, the anchor piece): the anchor, one `_hook_timeout 4` read
 # (`ccrc-api card --anchor`) on a non-child SessionStart, and on the first UserPromptSubmit after an automatic compaction
-# that brought no start (`_hook_anchor_owed`, after the hookstate write), fail-open (today's role card, no prompt context). Every OTHER event — every
+# that brought no start (`_hook_anchor_owed`, after the hookstate write), fail-open (today's role card, no prompt context).
+# The THIRD, FOURTH and FIFTH share ONE network budget per invocation (`_hook_net_bound`, HOOK_NET_BUDGET_MS, 8 s, the
+# worst case before the anchor), and a read that runs out its bound stops every later one in the invocation. Every OTHER event — every
 # PreToolUse, PostToolUse and Stop, which is where the hot path actually is —
 # still takes no lock and waits on nothing. A hook that can slow or break a
 # session is worse than no hook. Consumed read-only by the ccrc server via the agent
@@ -89,6 +91,18 @@ _hook_timeout() {
   done
   return 127
 }
+# THE NETWORK BUDGET (Overlord W1a, the anchor piece; fix round 1, F5): every server read this file makes in one invocation
+# (the anchor, the roster card, the start report's send and resends, the owed anchor) asks here first, in the caller's own
+# shell (never inside `$( )`, so what it sets stands). ONE deadline, HOOK_NET_BUDGET_MS after the first read asked, which
+# is the worst case before the anchor (two 4 s reads); each read is bounded by the smaller of its own bound and what is
+# left. A read with under a second left is not started (rc 1), and neither is any read once one has run out its bound
+# (`timeout`'s 124 sets HOOK_NET_HUNG): a server that did not answer in time is not asked again in this invocation.
+HOOK_NET_BUDGET_MS=8000 HOOK_NET_DL="" HOOK_NET_HUNG=""
+_hook_net_bound() {   # <max ms> -> NET_LEFT_MS, and NET_B (seconds, for `_hook_timeout`); rc 1 when the read is not to start
+  local now; now=$(_hook_epoch_ms); HOOK_NET_DL="${HOOK_NET_DL:-$(( now + HOOK_NET_BUDGET_MS ))}"
+  NET_LEFT_MS=$(( HOOK_NET_DL - now < $1 ? HOOK_NET_DL - now : $1 )); NET_B="$(( NET_LEFT_MS / 1000 )).$(( NET_LEFT_MS % 1000 / 100 ))"
+  [[ -z "$HOOK_NET_HUNG" ]] && (( NET_LEFT_MS >= 1000 ))
+}
 
 # ── THE THREE ENVELOPES: R1's card, R5's deny, R6's nudge ─────────────────
 # Claude Code reads a hook's stdout as a PER-EVENT CONTRACT — on SessionStart it
@@ -129,8 +143,9 @@ _hook_emit_context() {   # <standing> [<compact>] [<roster>, D4 #757, after both
     text="${text:0:$CARD_TOTAL_MAX_CHARS}"
   fi; [ -z "${3:-}" ] || text="${text:+$text }${3:0:$ROSTER_CARD_MAX_CHARS}"
   # THE ANCHOR'S SLOT (Overlord C38, the anchor piece): FIRST, before the standing clip's text, under its own ceiling, so
-  # every other slot keeps its clip and the sum `session-hook.test.ts` pins is 1500 + 1 + 2400 + 1 + 4000 + 1 + 2048.
-  [ -z "${4:-}" ] || text="${4:0:$ANCHOR_CARD_MAX_CHARS}${text:+ $text}"
+  # every other slot keeps its clip and the sum `session-hook.test.ts` pins is 1500 + 1 + 2400 + 1 + 4000 + 1 + 2048. The
+  # one character between the anchor and the next slot is a newline, so the anchor's own lines stay lines (fix round 1, F9).
+  [ -z "${4:-}" ] || text="${4:0:$ANCHOR_CARD_MAX_CHARS}${text:+$'\n'$text}"
   # RETURNS 1 when the envelope could not be built — nothing was printed, and
   # the SessionStart arm must not stamp `served` for a card that never went
   # out. Every existing caller ignores the code, so nothing else changes.
@@ -3261,25 +3276,27 @@ _hook_roster_eligible() {   # -> 0 iff this event may carry a roster card: main 
 # switch, the Shadow lanes row `anchor-slot`: `dark` while it is shadow, the text (or, for a fork, `live`) only once it is
 # live, so a merge arms nothing. A `dark` answer and a failed read look alike to a start (the slot stays empty and today's
 # role card prints); only the owed prompt below tells them apart. Eligibility is the roster card's one rule
-# (`_hook_roster_eligible`: main thread, not a child, no card kill switch); a child makes no read. A read that ran out
-# its bound (`timeout`'s 124) sets ANCHOR_HUNG, and the roster card's read in the same event stands down: a server that
-# did not answer in 4 s costs a start one bound, not one per read (slug a-hung-server-costs-one-bound).
-ANCHOR_CARD_MAX_CHARS=1500
-ANCHOR_PROMPT_MAX_CHARS=600
-_hook_anchor_fetch() {   # <form: start|prompt|fork> -> ANCHOR_WORD (text, dark, live, or "" for no answer) and ANCHOR_TEXT; 0 on every path
+# (`_hook_roster_eligible`: main thread, not a child, no card kill switch); a child makes no read. The read takes its
+# bound from the invocation's one network budget (`_hook_net_bound`); a read the budget does not start answers rc 1.
+# THE PROOF (fix round 1, F1): only an answer that names `part: "anchor"` and the form asked is read, and its text only when
+# it begins with ANCHOR_PREFIX. Anything else, an older server's card page above all (it ignores `part`), is no answer:
+# the slot stays empty, the role card stands and the owed mark stays (the client checks the same proof first).
+ANCHOR_CARD_MAX_CHARS=1500 ANCHOR_PROMPT_MAX_CHARS=600 ANCHOR_OWED_TRIES=3   # the owed prompt's tries: below
+_hook_anchor_fetch() {   # <form: start|prompt|fork> -> ANCHOR_WORD (text, dark, live, or "" for no answer) and ANCHOR_TEXT; rc 1 when not asked for want of budget
   local out=""; ANCHOR_WORD="" ANCHOR_TEXT=""
   _hook_roster_eligible || return 0
-  out=$(_hook_timeout 4 "$HOME/.local/bin/ccrc-api" card --anchor --form "$1" 2>/dev/null) || { (( $? == 124 )) && ANCHOR_HUNG=1; return 0; }
-  { IFS= read -r ANCHOR_WORD; IFS= read -r -d '' ANCHOR_TEXT; } < <(jq -j 'if .ok != true then empty elif .dark == true then "dark\n" elif .live == true then "live\n"
-    elif (.text | type) == "string" and .text != "" then "text\n", .text else empty end' <<<"$out" 2>/dev/null) 2>/dev/null
+  _hook_net_bound 4000 || return 1
+  out=$(_hook_timeout "$NET_B" "$HOME/.local/bin/ccrc-api" card --anchor --form "$1" 2>/dev/null) || { (( $? == 124 )) && HOOK_NET_HUNG=1; return 0; }
+  { IFS= read -r ANCHOR_WORD; IFS= read -r -d '' ANCHOR_TEXT; } < <(jq -j --arg f "$1" 'if .ok != true or .part != "anchor" or .form != $f then empty elif .dark == true then "dark\n"
+    elif .live == true then "live\n" elif (.text | type) == "string" and (.text | startswith("ccrc-anchor: ")) then "text\n", .text else empty end' <<<"$out" 2>/dev/null) 2>/dev/null
   return 0
 }
 _hook_roster_card() {   # <event word> -> sets CARD_ROSTER (armed) or appends the shadow log (unarmed); 0 on every path
   local body="" card="" log="$HOME/.ccrc/roster-card-shadow.log"
   CARD_ROSTER=""
   _hook_roster_eligible || return 0
-  [[ -z "${ANCHOR_HUNG-}" ]] || return 0   # the anchor's read just timed out: so would this one (a-hung-server-costs-one-bound)
-  body=$(_hook_timeout 4 "$HOME/.local/bin/ccrc-api" runs list 2>/dev/null) || return 0
+  _hook_net_bound 4000 || return 0   # the invocation's one network budget (fix round 1, F5)
+  body=$(_hook_timeout "$NET_B" "$HOME/.local/bin/ccrc-api" runs list 2>/dev/null) || { (( $? == 124 )) && HOOK_NET_HUNG=1; return 0; }
   card=$(jq -L "$ROSTER_CARD_LIB" -r --arg me "$id" --argjson now "$(_hook_epoch_ms)" \
     --argjson max $(( ROSTER_CARD_MAX_CHARS - 64 )) 'include "roster-card"; roster_card($me; $now; $max)' <<<"$body" 2>/dev/null) || return 0
   [ -n "$card" ] || return 0
@@ -3462,8 +3479,9 @@ case "$event" in
     if [ -n "$CARD$CARD_COMPACT$CARD_ROSTER$CARD_ANCHOR" ]; then
       if _hook_emit_context "$CARD" "$CARD_COMPACT" "$CARD_ROSTER" "$CARD_ANCHOR" && [ -n "$CARD_COMPACT" ]; then _hook_compact_mark_served || true; fi  # @anchor compact-arm-emit-call
     fi
-    # A compact start the door answered owes no prompt anchor (Task 3): its own start carried it, or the slot is dark.
-    [[ "$src" == compact && -n "$ANCHOR_WORD" ]] && rm -f -- "$REG/$id.anchor-owed" 2>/dev/null
+    # A start the door answered owes no prompt anchor (Task 3), whatever its source (fix round 1, F4): its own start carried
+    # it, or the slot is dark, or it is a fork, whose prompt must never carry the original's anchor.
+    [[ -n "$ANCHOR_WORD" ]] && rm -f -- "$REG/$id.anchor-owed" 2>/dev/null
     # THE RETAINED SERVE LOCK ENDS HERE, on every path through this arm — the
     # marker, when one was published, was the last act inside it.
     _hook_compact_serve_end || true
@@ -4005,7 +4023,7 @@ _hook_start_send() {   # <report JSON> <deadline ms> -> 0 taken; 1 stale-uuid; 2
   local out left=$(( $2 - $(_hook_epoch_ms) ))
   (( left >= 1000 )) || return 5
   out=$(printf '%s\n' "$1" | CCRC_API_STATUS=line _hook_timeout "$(( left / 1000 )).$(( left % 1000 / 100 ))" "$HOME/.local/bin/ccrc-api" sessions start "$id" --json - 2>&1)
-  case "$?" in 0) ;; 2) return 4 ;; *) return 2 ;; esac
+  case "$?" in 0) ;; 2) return 4 ;; 124) HOOK_NET_HUNG=1; return 2 ;; *) return 2 ;; esac
   case "$out" in *'http 202'*) return 0 ;; *'"stale-uuid"'*) return 1 ;; *'http 40'[14]*|*'http 5'[0-9][0-9]*) return 4 ;; *'http 4'[0-9][0-9]*) return 3 ;; *) return 2 ;; esac
 }
 _hook_start_keep() {   # <tries> <report JSON> <send rc, 6 unsent, 7 stale under another sender> -> the caller's stay, drop, pass and why
@@ -4019,7 +4037,7 @@ _hook_start_report() {
   case "$event" in UserPromptSubmit|SessionStart) ;; *) return 0 ;; esac
   [[ -z "$paid" && "$id" =~ ^[A-Za-z0-9_-]+$ && -f "$REG/$id.generation" && ! -L "$f" ]] || return 0
   { [ -e "$REG/$id.child" ] || [ -L "$REG/$id.child" ]; } && return 0
-  now=$(_hook_epoch_ms); dl=$(( now + START_BUDGET_MS ))
+  _hook_net_bound "$START_BUDGET_MS" || NET_LEFT_MS=0; now=$(_hook_epoch_ms); dl=$(( now + NET_LEFT_MS ))   # the one network budget (F5)
   [[ -f "$f" ]] && { IFS=$'\t' read -r after drop; while IFS=$'\t' read -r t j; do kept+=("$t"$'\t'"$j"); done; } < "$f" 2>/dev/null
   [[ "$after" =~ ^[0-9]+$ ]] || after=0; [[ "$drop" =~ ^[0-9]+$ ]] || drop=0
   (( after > now + START_RESEND_BACKOFF_MS )) && after=$(( now + START_RESEND_BACKOFF_MS ))
@@ -4246,7 +4264,7 @@ _hook_compact_refuse() {   # PreCompact -> the block decision on stdout and CS_R
   trap '' PIPE; { printf '%s\n' '{"decision":"block","reason":"ccrc: this automatic compaction is refused once this turn, and a renewal is due (Overlord C39)"}'; } 2>/dev/null && CS_REFUSED=1; trap - PIPE
 }
 _hook_compact_pre_line() {   # [phase] -> one line on $REG/<id>.compactevents; rc 0 iff it was written; silent on any failure
-  local f="$REG/$id.compactevents" prev="$REG/$id.compacteventsprev" line="" lockfd="" lines=() rot=0 rc=1
+  local f="$REG/$id.compactevents" prev="$REG/$id.compacteventsprev" owe="$REG/$id.anchor-owed" line="" lockfd="" lines=() rot=0 rc=1
   # THE SCOPE VERDICT ON EVERY LINE: every PreCompact payload names the parent's
   # transcript, so `_hook_compact_scope`'s word is all that tells a subagent's
   # compaction apart. Asked here when the card did not run (its off switch).
@@ -4283,9 +4301,11 @@ _hook_compact_pre_line() {   # [phase] -> one line on $REG/<id>.compactevents; r
     # THE ANCHOR OWED (the anchor piece, Task 3; slug anchor-owed-mark, ruling R7a): an automatic compaction may bring no
     # SessionStart (W0-05), so a main-scope `pre` line of an `auto` PreCompact, once written, marks the next prompt to carry
     # the anchor. A `refused` line, and a subagent's, an ambiguous or an unread scope, mark nothing. One writer, this lock;
-    # the mark holds the prompt's tries (`_hook_anchor_owed`), and it is dot-free, so `_reg_purge`'s glob takes it.
-    (( rc == 0 )) && [[ "${1-pre}" == pre && "$line" == *'"trigger":"auto","scope":"main",'* && ! -L "$REG/$id.anchor-owed" ]] \
-      && { printf '0\n' > "$REG/$id.anchor-owed"; } 2>/dev/null
+    # the mark holds the prompt's tries (`_hook_anchor_owed`), and it is dot-free, so `_reg_purge`'s glob takes it. The
+    # trigger must READ `auto` (the line records a missing one as `auto`; fix round 1, F8), and a FIFO, a symlink or a
+    # directory at the mark is never opened, as above: an open of a FIFO would block inside the held lock (F3).
+    (( rc == 0 )) && [[ "${1-pre}" == pre && "$line" == *'"trigger":"auto","scope":"main",'* && ! -L "$owe" ]] && { [[ ! -e "$owe" ]] || [[ -f "$owe" ]]; } \
+      && jq -e '.trigger == "auto"' <<<"$payload" >/dev/null 2>&1 && { printf '0\n' > "$owe"; } 2>/dev/null
   fi
   _hook_lock_release "$lockfd"
   return "$rc"
@@ -6166,17 +6186,18 @@ fi
 # prompt asks the door for the prompt anchor HERE, after the hookstate write, so the read never delays the `working` edge
 # (m-B10, slug prompt-fetch-after-hookstate), and prints it as this prompt's one envelope. A `dark` answer clears the mark
 # with nothing printed; no answer keeps it for the next prompt, at most ANCHOR_OWED_TRIES prompts (the count in the
-# mark). A prompt whose roster wake printed keeps the mark untouched: one envelope per event.
-ANCHOR_OWED_TRIES=3
+# mark). A prompt whose roster wake printed keeps the mark untouched: one envelope per event. So does a read the network
+# budget did not start (fix round 1, F5): no try was spent. A purge during the read takes the row's `generation` first,
+# so a mark written after it is removed again (F6), as the start report's spool is.
 _hook_anchor_owed() {   # UserPromptSubmit: prints at most one envelope carrying the prompt anchor; 0 on every path
   local m="$REG/$id.anchor-owed" t="" j=""
   { IFS= read -r t < "$m"; } 2>/dev/null; [[ "$t" =~ ^[0-9]$ ]] || t=0
-  _hook_anchor_fetch prompt
+  _hook_anchor_fetch prompt || return 0
   case "$ANCHOR_WORD" in
     text) j=$(jq -cn --arg c "${ANCHOR_TEXT:0:$ANCHOR_PROMPT_MAX_CHARS}" '{hookSpecificOutput:{hookEventName:"UserPromptSubmit", additionalContext:$c}}' 2>/dev/null) \
       && printf '%s\n' "$j" && rm -f -- "$m" ;;
     dark) rm -f -- "$m" ;;
-    *) if (( t + 1 >= ANCHOR_OWED_TRIES )); then rm -f -- "$m"; else printf '%s\n' "$(( t + 1 ))" > "$m"; fi ;;
+    *) if (( t + 1 >= ANCHOR_OWED_TRIES )); then rm -f -- "$m"; else printf '%s\n' "$(( t + 1 ))" > "$m"; [[ -e "$REG/$id.generation" ]] || rm -f -- "$m"; fi ;;
   esac 2>/dev/null
   return 0
 }
