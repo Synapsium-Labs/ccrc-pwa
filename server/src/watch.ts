@@ -172,6 +172,7 @@ import { runStuckPass } from './coord/runStuckPass.js';
 import { isUntoldNotice, untoldPass } from './coord/untold.js';
 import { casesPass } from './coord/casesLane.js';
 import { gatherGenerationReadings, generationsPass, type CompactionsMemo } from './continuity/generationsLane.js';
+import { runTimersLane } from './continuity/timerLane.js';
 import { compactionsPaths, readCompactionsMeasured } from './continuity/compactions.js';
 import { createRunCloseMemory, isRunCloseWarning, runClosePass } from './coord/runCloseLane.js';
 import { readBranchFacts, readBranchOpenPr } from './coord/runCloseFacts.js';
@@ -2787,6 +2788,8 @@ export class FleetWatcher {
       void this.sweepCases().catch(() => { /* one bad sweep must not kill the poll */ });
       // NEVER awaited, the same reasons: the GENERATIONS lane (Overlord §3.3.11, W1a), in shadow: it mints and records, and acts on no session.
       void this.sweepGenerations(records, listedAt).catch(() => { /* one bad sweep must not kill the poll */ });
+      // NEVER awaited, the same reasons: the TIMERS lane (Overlord §3.3.12, W1a): cleanup, then each due timer fired with its one mail.
+      void this.sweepTimers(records, registryRead.listedIds, listedAt, registryRead.names).catch(() => { /* one bad sweep must not kill the poll */ });
       // NEVER awaited, the same reasons: the RUN-CLOSE lane (D-8077), rows E1 and E1r, in shadow until its group is armed.
       void this.sweepRunClose(registryRead).catch(() => { /* one bad sweep must not kill the poll */ });
       // NEVER awaited, same reasoning as sweepNames immediately above: this one
@@ -6097,6 +6100,18 @@ export class FleetWatcher {
         readings,
       });
     });
+  }
+
+  /** The timers lane (Overlord §3.3.12, W1a; `continuity/timerLane.ts`), on this tick's own listing, passed rather than read
+   *  from `this.listedIds` mid-pass. `mail-disabled` holds its firing only; its cleanup and purge run. */
+  async sweepTimers(records: readonly SessionRecord[], listedIds: ReadonlySet<string> | null, listedAt: number,
+                    names: readonly string[]): Promise<void> {
+    const coord = this.deps.coord;
+    if (!coord) return;
+    await this.runLane('timers', () => runTimersLane({ coord, clock: this.deps.time.clock, io: this.deps.io,
+      registryDir: this.deps.cfg.registryDir, log: (line) => console.warn(line) }, { listedAt, listedIds,
+      archivedIds: new Set(records.filter((r) => r.archivedAt !== null).map((r) => r.id)),
+      mailDisabled: names.includes(MAIL_DISABLED_MARKER) }));
   }
 
   /** One pass of the dead-coordinator lane — `sweepDeadCoordinators`'s body, run only while no other pass runs. */
