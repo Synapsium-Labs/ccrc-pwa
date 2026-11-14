@@ -11,7 +11,8 @@
 // fires about 33,000 tokens below the variable, whatever it is set to, so the variable set to the compact point itself
 // would fire under the hard cap on a 200k window (120,000 fires near 87,000) and invert C39. On a 1M window that is
 // 25 + 10 = 35%, 350,000 + 34,000 = 384,000 tokens; on 200k, 50 + 10 = 60%, 120,000 + 34,000 = 154,000 tokens.
-// A role with no compaction column, or an unmeasured window, answers `null`: leave the route as it is.
+// A role with no compaction column, an unmeasured window, or a window outside 85,000 to 6,900,000 tokens (where the clamp
+// to the variable's range would fire Claude Code before the compact point) answers `null`: no compaction fields.
 import type { LaunchProfile } from '../../../shared/fleetRoles.js';
 import { hardCapTokens } from './renewalDue.js';
 
@@ -37,6 +38,10 @@ export function compactThresholdFor(profile: LaunchProfile, windowTokens: number
   if (profile.compaction === null || windowTokens === null || !Number.isFinite(windowTokens) || windowTokens <= 0) return null;
   const pct = Math.min(COMPACT_PCT_MAX,
     Math.ceil((100 * hardCapTokens(windowTokens)) / windowTokens) + profile.compaction.aboveHardCapPts);
-  const tokens = Math.ceil((pct * windowTokens) / 100) + AUTO_COMPACT_BUFFER_TOKENS;
-  return { pct, windowTokens: Math.min(COMPACT_WINDOW_MAX_TOKENS, Math.max(COMPACT_WINDOW_MIN_TOKENS, tokens)) };
+  const point = Math.ceil((pct * windowTokens) / 100);
+  const tokens = Math.min(COMPACT_WINDOW_MAX_TOKENS, Math.max(COMPACT_WINDOW_MIN_TOKENS, point + AUTO_COMPACT_BUFFER_TOKENS));
+  // Claude Code fires the buffer below the variable, or below the window when the variable passes it. Where the clamp makes
+  // that earlier than the compact point (windows under 85,000 or over 6,900,000 tokens), no point is written (review 2024 F4).
+  if (Math.min(tokens, windowTokens) - AUTO_COMPACT_BUFFER_TOKENS < point) return null;
+  return { pct, windowTokens: tokens };
 }

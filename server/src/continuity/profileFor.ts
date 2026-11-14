@@ -12,6 +12,8 @@
 // the lane reads as "leave the route alone".
 import { FLEET_ROLES, type FleetRole } from '../../../shared/fleetRoles.js';
 import { PLAIN_AUTO_MEMORY_DEFAULT, isPlainAutoMemoryChoice, type PlainAutoMemoryChoice } from '../../../shared/plainAutoMemory.js';
+import type { ChildReclaimGeneration } from '../../../shared/api.js';
+import { delegationIntentKey } from '../coord/delegation-model.js';
 import type { RoleAmbiguity, RoleReading } from '../roleOf.js';
 import { compactThresholdFor } from './launchProfile.js';
 
@@ -56,4 +58,23 @@ export function plainAutoMemoryOf(r: PlainAutoMemoryRead): PlainAutoMemoryChoice
   if (r.kind === 'absent') return PLAIN_AUTO_MEMORY_DEFAULT;
   if (r.kind === 'unreadable') return null;
   return isPlainAutoMemoryChoice(r.choice) ? r.choice : null;
+}
+
+/** Declared coordinator intent on one incarnation, read from a delegation checkpoint (`FleetWatcher.
+ *  delegationCheckpointIfReady`; null while the lane has none ready). THE ONE READER of that fact, agreed with card PR B
+ *  (#2793, `server/src/continuity/cardFacts.ts` carries the same function): whichever of the two lands second deletes its
+ *  copy and imports the other's (review 2024 F2). */
+export function intentOfCheckpoint(cp: { readonly coordinatorIntentByParent: Readonly<Record<string, string>> } | null,
+  id: string, incarnation: string): boolean | 'not-ready' {
+  return cp === null ? 'not-ready' : Object.hasOwn(cp.coordinatorIntentByParent, delegationIntentKey(id, incarnation));
+}
+
+/** The lane's declared intent for one session: a registry row with no incarnation declared none (the card's fold); an
+ *  incarnation that could not be read, or a checkpoint not ready, is unmeasured, and the lane then skips the row. */
+export function declaredIntentOf(incarnation: ChildReclaimGeneration, readCheckpoint: (id: string, incarnation: string) =>
+  boolean | 'not-ready', id: string): boolean | 'unmeasured' {
+  if (incarnation.kind === 'absent') return false;
+  if (incarnation.kind === 'unreadable') return 'unmeasured';
+  const r = readCheckpoint(id, incarnation.v);
+  return r === 'not-ready' ? 'unmeasured' : r;
 }

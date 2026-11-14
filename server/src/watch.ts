@@ -172,7 +172,8 @@ import { runStuckPass } from './coord/runStuckPass.js';
 import { isUntoldNotice, untoldPass } from './coord/untold.js';
 import { casesPass } from './coord/casesLane.js';
 import { gatherGenerationReadings, generationsPass, type CompactionsMemo } from './continuity/generationsLane.js';
-import { HISTORY_STEER_ON_DIR, LAUNCH_PROFILE_LANE_ROW, profilePass, type ProfileLaneMemory } from './continuity/profileLane.js';
+import { LAUNCH_PROFILE_LANE_ROW, profilePass, steerMarkerOf, type ProfileLaneMemory } from './continuity/profileLane.js';
+import { declaredIntentOf, intentOfCheckpoint } from './continuity/profileFor.js';
 import { compactionsPaths, readCompactionsMeasured } from './continuity/compactions.js';
 import { createRunCloseMemory, isRunCloseWarning, runClosePass } from './coord/runCloseLane.js';
 import { readBranchFacts, readBranchOpenPr } from './coord/runCloseFacts.js';
@@ -6106,7 +6107,7 @@ export class FleetWatcher {
 
   /** The launch-profile lane (Overlord §3.6 H1, W1a launch profiles PR B): each row's route diffed against its role's launch
    *  profile, written through `routeSet` only once the `launch-profile` row is live. The usage read takes the time ports'
-   *  wall clock; the W3 steer marker is read on the fleet node under `ccrcDir`, as the session hook reads it. */
+   *  wall clock; the W3 steer marker is read on the fleet node under `ccrcDir`, as the session hook reads it (`steerMarkerOf`). */
   async sweepLaunchProfile(records: readonly SessionRecord[]): Promise<void> {
     const coord = this.deps.coord;
     if (!coord) return;
@@ -6117,12 +6118,12 @@ export class FleetWatcher {
         act: { runCcd: this.deps.runCcd, fleetState: this.deps.fleetState },
         reads: {
           usage: (id) => readUsageMeasured(io, cfg.registryDir, id, Math.floor(this.deps.time.clock.wall() / 1000)),
-          steerMarker: async (id) => {
-            try {
-              const st = await io.statMeasured(`${cfg.ccrcDir}/${HISTORY_STEER_ON_DIR}/${id}`);
-              return st.ok ? 'present' : st.reason;
-            } catch { return 'unreadable'; }
-          },
+          steerMarker: (id) => steerMarkerOf(io, cfg.ccrcDir, id),
+          // Declared intent on the registry incarnation, from the delegation checkpoint (the authority; `not-ready` until
+          // the lane has one): an incarnation read that throws is unmeasured, never "declared none".
+          declaredIntent: async (id) => declaredIntentOf(
+            await childReclaimGenerationRead(io, cfg.registryDir, id).catch((): ChildReclaimGeneration => ({ kind: 'unreadable' })),
+            (sid, inc) => intentOfCheckpoint(this.delegationCheckpointIfReady(), sid, inc), id),
         },
       }, records.map((r) => ({ id: r.id, child: r.child, route: r.route })));
     });

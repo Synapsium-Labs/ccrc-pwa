@@ -3,14 +3,15 @@
 // The launch-profile lane (Overlord W1a launch profiles PR B, Task 5; spec §3.6 H1, §3.3.7 H14, §3.3.4 C39): `profileFor`'s
 // oracle (from `sim/launchProfileSets.ts`, which the mutation floor runs against each mutant), then the pass over a fake
 // store and fake fleet reads: shadow writes nothing; live writes only differing fields, one argv a session, at most five a
-// pass; a route it could not read is skipped; compaction moves only with `continuity` live; a session carrying the history
-// W3 steer marker is left alone.
+// pass; a route it could not read is skipped; a role it cannot decide is skipped; compaction moves only with `continuity`
+// live, and a role with no compaction column has it cleared; a session carrying the history W3 steer marker is left alone.
 import { describe, expect, it } from 'vitest';
 import { SWITCHES } from '../../ccd/history/lib.mjs';
 import type { ChildMark, RouteFields } from '../../shared/api.js';
 import * as profileForModule from '../src/continuity/profileFor.js';
+import { HISTORY_STEER_ON_DIR } from '../../shared/agent-protocol.js';
 import {
-  HISTORY_STEER_ON_DIR, PROFILE_WRITES_PER_PASS, profilePass, type ProfileCoord, type ProfileLaneDeps, type ProfileRow,
+  PROFILE_WRITES_PER_PASS, profilePass, type ProfileCoord, type ProfileLaneDeps, type ProfileRow,
 } from '../src/continuity/profileLane.js';
 import { ACTOR_FLAGS_CAP, ROUTE_CAP } from '../src/ccdargv.js';
 import type { CcdArgv } from '../src/ccdargv.js';
@@ -36,7 +37,12 @@ interface World {
   coordinators?: string[];
   runKinds?: Record<number, 'work' | 'review'>;
   windows?: Record<string, number>;
-  steer?: Record<string, 'present' | 'unreadable'>;
+  /** Windows whose usage sample is stale. */
+  stale?: Set<string>;
+  /** A word outside today's vocabulary stands in for a future `ReadFailure` member (review 2024 F11). */
+  steer?: Record<string, 'present' | 'unreadable' | 'forbidden'>;
+  /** Declared intent per session; a session not named declared none (measured). */
+  intent?: Record<string, boolean | 'unmeasured'>;
   verbs?: string[] | null;
   fail?: Set<string>;
   notRan?: Set<string>;
@@ -47,6 +53,7 @@ function harness(w: World = {}) {
   const sent: string[][] = [];
   const logs: string[] = [];
   const usageAsked: string[] = [];
+  const intentAsked: string[] = [];
   const coord: ProfileCoord = {
     laneArmSetting: (lane) => w.lanes?.[lane] ?? armed('shadow'),
     openCoordinatorIds: () => w.coordinators ?? [],
@@ -60,9 +67,10 @@ function harness(w: World = {}) {
         usageAsked.push(id);
         const win = w.windows?.[id];
         return win === undefined ? { kind: 'absent' }
-          : { kind: 'reading', usage: { stale: false, ctxWindow: win } as unknown as Extract<UsageRead, { kind: 'reading' }>['usage'] };
+          : { kind: 'reading', usage: { stale: w.stale?.has(id) === true, ctxWindow: win } as unknown as Extract<UsageRead, { kind: 'reading' }>['usage'] };
       },
-      steerMarker: async (id) => w.steer?.[id] ?? 'absent',
+      steerMarker: async (id) => (w.steer?.[id] ?? 'absent') as 'present' | 'absent' | 'unreadable',
+      declaredIntent: async (id) => { intentAsked.push(id); return w.intent?.[id] ?? false; },
     },
     act: {
       runCcd: async (argv: CcdArgv): Promise<CcdResult> => {
@@ -78,7 +86,7 @@ function harness(w: World = {}) {
     memory: { lastLine: null },
     ...(w.openGate ? { gate: () => null } : {}),
   };
-  return { deps, sent, logs, usageAsked };
+  return { deps, sent, logs, usageAsked, intentAsked };
 }
 const LIVE = { 'launch-profile': armed('live') };
 const sets = (argv: readonly string[]): string[] => argv.flatMap((a, i) => (argv[i - 1] === '--set' ? [a] : []));
@@ -132,11 +140,19 @@ describe('the launch-profile lane, one pass (Task 5)', () => {
     expect(r).toMatchObject({ written: 5, deferred: 3, would: 8 });
   });
 
-  it('a failed write counts toward the five, is logged naming the session, and the rest go on', async () => {
+  it('a failed write is logged naming the session, and the rest go on', async () => {
     const h = harness({ lanes: LIVE, fail: new Set(['lane-a-project-0']) });
     const r = await profilePass(h.deps, [row('lane-a-project-0', null), row('lane-a-project-1', null)]);
     expect(r).toMatchObject({ written: 1, failed: 1 });
     expect(h.logs).toContain('ccrc-server: launch-profile: a route write failed, retried next pass: lane-a-project-0: ccd: unknown routing field profile');
+  });
+
+  it(`failed writes do not count toward the ${PROFILE_WRITES_PER_PASS}: rows failing at the head never starve the rest (review 2024 F12)`, async () => {
+    const failing = Array.from({ length: PROFILE_WRITES_PER_PASS + 1 }, (_, i) => `lane-a-project-f${i}`);
+    const h = harness({ lanes: LIVE, fail: new Set(failing) });
+    const r = await profilePass(h.deps, [...failing.map((id) => row(id, null)), row('lane-a-project-ok', null)]);
+    expect(r).toMatchObject({ failed: PROFILE_WRITES_PER_PASS + 1, written: 1, deferred: 0 });
+    expect(h.sent.at(-1)![2]).toBe('lane-a-project-ok');
   });
 
   it('a write that never ran (the agent link dropped) is logged as unmeasured, never as ccd\'s refusal', async () => {
@@ -181,6 +197,13 @@ describe('the launch-profile lane, one pass (Task 5)', () => {
     expect(h.logs[0]).toContain('skipped 1 carrying the history W3 steer marker, 1 whose steer marker could not be read');
   });
 
+  it('a steer read that answers anything but a proven absence skips the session: a later read-failure word too (review 2024 F11)', async () => {
+    const h = harness({ lanes: LIVE, steer: { 'lane-a-project-a': 'forbidden' } });
+    const r = await profilePass(h.deps, [row('lane-a-project-a', null)]);
+    expect(h.sent).toEqual([]);
+    expect(r).toMatchObject({ steerUnread: 1, would: 0 });
+  });
+
   it('the steer marker\'s directory is the history library\'s one spelling, under ~/.ccrc', () => {
     expect(`.ccrc/${HISTORY_STEER_ON_DIR}`).toBe(SWITCHES.steerOnDir);
   });
@@ -192,11 +215,53 @@ describe('the launch-profile lane, one pass (Task 5)', () => {
     expect(r.memoryUnread).toBe(1);
   });
 
-  it('an undecided reading takes the member that does less: an unreadable child mark reads worker, an unread run list reads plain', async () => {
-    const h = harness({ lanes: LIVE });
+  it('an unreadable child mark reads worker (C49); while the open runs cannot be read every non-child is skipped, never plain (review 2024 F2 b)', async () => {
+    const h = harness({ lanes: LIVE, intent: { 'lane-a-project-b': true } });
     h.deps.coord.openCoordinatorIds = () => { throw new Error('locked'); };
-    await profilePass(h.deps, [row('lane-a-project-a', null, { child: { kind: 'unreadable' } }), row('lane-a-project-b', null)]);
-    expect(h.sent.map(sets)).toEqual([['profile=worker', 'automem=off'], ['profile=plain', 'automem=off']]);
+    const r = await profilePass(h.deps, [row('lane-a-project-a', null, { child: { kind: 'unreadable' } }), row('lane-a-project-b', null),
+      row('lane-a-project-c', null)]);
+    expect(h.sent.map(sets)).toEqual([['profile=worker', 'automem=off']]);
+    expect(r.roleUnread).toBe(2);
+    expect(h.intentAsked).toEqual([]);
+    expect(h.logs[0]).toContain('2 whose role could not be decided (coordinator or plain)');
+  });
+
+  it('declared intent decides a non-child with no open run: declared reads coordinator, measured none reads plain, unmeasured is skipped (review 2024 F2 a)', async () => {
+    const h = harness({ lanes: LIVE, memory: { kind: 'row', choice: 'on' }, coordinators: ['lane-a-project-a'],
+      intent: { 'lane-a-project-b': true, 'lane-a-project-d': 'unmeasured' } });
+    const r = await profilePass(h.deps, ['a', 'b', 'c', 'd'].map((x) => row(`lane-a-project-${x}`, null)));
+    expect(h.sent.map((a) => [a[2], ...sets(a)])).toEqual([
+      ['lane-a-project-a', 'profile=coordinator', 'automem=off'],   // claims an open run: its intent is not read
+      ['lane-a-project-b', 'profile=coordinator', 'automem=off'],   // between runs, declared: still a coordinator, memory off
+      ['lane-a-project-c', 'profile=plain', 'automem=on'],          // measured none: plain, the Settings row's choice
+    ]);
+    expect(h.intentAsked).toEqual(['lane-a-project-b', 'lane-a-project-c', 'lane-a-project-d']);
+    expect(r.roleUnread).toBe(1);
+  });
+
+  it('a child\'s intent is never read', async () => {
+    const h = harness({ lanes: LIVE, runKinds: { 7: 'work' } });
+    await profilePass(h.deps, [row('lane-a-project-a', null, { child: { kind: 'child', runId: 7 } })]);
+    expect(h.intentAsked).toEqual([]);
+  });
+
+  it('a role with no compaction column has compactwindow cleared, and compact too while continuity is live (review 2024 F2 c)', async () => {
+    const stale = { profile: 'coordinator', automem: 'off', compact: '60', compactwindow: '154000' };
+    const live = harness({ lanes: { ...LIVE, continuity: armed('live') }, openGate: true });
+    await profilePass(live.deps, [row('lane-a-project-a', stale), row('lane-a-project-b', { profile: 'plain', automem: 'off' })]);
+    expect(live.sent.map(sets)).toEqual([['compact=', 'profile=plain', 'compactwindow=']]);   // nothing to clear on the second
+    expect(live.usageAsked).toEqual([]);
+    const shadow = harness({ lanes: LIVE });
+    await profilePass(shadow.deps, [row('lane-a-project-a', stale)]);
+    expect(shadow.sent.map(sets)).toEqual([['profile=plain', 'compactwindow=']]);   // `compact` is not the lane's while continuity is shadow
+  });
+
+  it('a stale usage sample is no window: a coordinator\'s compaction fields are left alone (review 2024 F13 a)', async () => {
+    const h = harness({ lanes: { ...LIVE, continuity: armed('live') }, openGate: true, coordinators: ['lane-a-project-a'],
+      windows: { 'lane-a-project-a': 200_000 }, stale: new Set(['lane-a-project-a']) });
+    await profilePass(h.deps, [row('lane-a-project-a', { profile: 'coordinator', automem: 'off', compact: '60' })]);
+    expect(h.sent).toEqual([]);
+    expect(h.usageAsked).toEqual(['lane-a-project-a']);
   });
 
   it('live but ccd here has no route verb: nothing is sent, and the line says why', async () => {

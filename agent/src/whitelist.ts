@@ -1,6 +1,7 @@
 import { realpath } from 'node:fs/promises';
 import path from 'node:path';
-import { CCRC_DIR_NAME, LANE_STATE_DIR_NAME, NODE_FILE_BASENAMES } from '../../shared/agent-protocol.js';
+import { CCRC_DIR_NAME, HISTORY_STEER_ON_DIR, LANE_STATE_DIR_NAME, NODE_FILE_BASENAMES } from '../../shared/agent-protocol.js';
+import { isRegistryId } from '../../shared/api.js';
 import { CCRC_SWITCH_FILES } from '../../shared/switches.js';
 import { MODELS_DIR_NAME, isLaneModelsReadName } from '../../shared/models.mjs';
 
@@ -200,6 +201,31 @@ export async function checkCcrcSwitchStat(targetPath: string, cfg: WhitelistConf
   ]);
   const admitted = path.join(canonicalCcrc, base);
   return canonicalParent === canonicalCcrc && canonicalTarget === admitted ? admitted : null;
+}
+
+/**
+ * The `stat` op's second grant beyond `checkPath` (Overlord W1a launch profiles PR B, review 2024 F1): one history W3 steer
+ * marker, `<canonical ~/.ccrc>/history/steer-on/<registry id>`, so the server's launch-profile lane can tell a steered session
+ * from one it may write on a remote fleet. LEGITIMATELY DIFFERENT from `checkPath`'s roots, and kept out of them: another
+ * host's file read by the server across the link, and only `stat` of one marker path (existence, size, time); `read`,
+ * `readdir` and `lstat` admit none of it, and the directory stays unlistable.
+ *
+ * The name must be a registry id (`isRegistryId`), the directory's canonical form must be the canonical
+ * `~/.ccrc/history/steer-on`, and the marker's canonical form that same path: a live symlink at the marker is refused (the
+ * server then reads the marker unreadable and skips the session, the safe direction), and a dangling one answers absent.
+ */
+export async function checkSteerOnStat(targetPath: string, cfg: WhitelistConfig): Promise<string | null> {
+  if (typeof targetPath !== 'string' || targetPath.length === 0) return null;
+  const literal = path.resolve(targetPath);
+  const base = path.basename(literal);
+  if (!isRegistryId(base)) return null;
+  const [canonicalDir, canonicalParent, canonicalTarget] = await Promise.all([
+    canonicalize(path.join(cfg.home, CCRC_DIR_NAME, HISTORY_STEER_ON_DIR)),
+    canonicalize(path.dirname(literal)),
+    canonicalize(literal),
+  ]);
+  const admitted = path.join(canonicalDir, base);
+  return canonicalParent === canonicalDir && canonicalTarget === admitted ? admitted : null;
 }
 
 /** What a read op opens: a path and whether its last component may be a symlink, or `forbidden` (outside every read

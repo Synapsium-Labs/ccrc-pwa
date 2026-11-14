@@ -4,12 +4,16 @@
 // and `laneArmRowViewOf` whether a lane is live. This file reads, diffs and writes.
 //
 // ONE WRITER PER ROUTE FIELD. The lane is the one writer of `profile`, `automem` and `compactwindow` (lane-only: every door
-// refuses them, `ROUTE_LANE_ONLY_FIELDS`), and it writes `compact` only while the `continuity` row is live. It writes through
+// refuses them, `ROUTE_LANE_ONLY_FIELDS`), and it writes `compact` only while the `continuity` row is live (the doors' refusal
+// of `compact` then is built with the renewal act, which lifts that gate: the departure `compact-owned-while-continuity-live`).
+// A role with no compaction column has `compactwindow` cleared, and `compact` too while `continuity` is live. It writes through
 // `CCD_ARGV.routeSet`, ONE argv per session with every changed field (ccd validates every pair before it writes any), behind
 // the `route` verb's cap, and never a field whose value already stands, so an armed lane on a settled fleet sends nothing.
 //
 // SHADOW IS THE SEED. While the `launch-profile` row is shadow the pass counts the writes it would make and logs them; it
-// sends nothing. A route it could not read is skipped and counted, never written blind. A session carrying the history
+// sends nothing. A route it could not read is skipped and counted, never written blind, and so is a session whose role it
+// cannot decide: a non-child while the open-coordinator set is unmeasured, or one that claims no open run and whose declared
+// intent is unmeasured (an unmeasured fact is never written as a definite value: review 2024 F2). A session carrying the history
 // programme's W3 steer marker (`~/.ccrc/history/steer-on/<id>`, the file the session hook's W3 gate reads) is skipped
 // whole while the marker stands, and so is one whose marker could not be read, so the lane never moves a session in the
 // steering cohort (the history coordinator's request of 2026-11-14).
@@ -18,14 +22,15 @@
 // write (`unknown routing field`). The lane's call carries only its own fields, so such a refusal loses nothing else; it
 // is counted as failed and logged, and no capability word is added (the departure `no-cap-word-the-lane-call-is-its-own`).
 import { CONTINUITY_LANE, LAUNCH_PROFILE_LANE, laneArmGate, type LaneArmLane } from '../../../shared/lane-arm.js';
-import { ROUTE_LANE_ONLY_FIELDS, isRegistryId, type ChildMark, type RouteField, type RouteFields, type RunKind } from '../../../shared/api.js';
-import type { ReadFailure } from '../../../shared/agent-protocol.js';
+import { ROUTE_WRITABLE_FIELDS, isRegistryId, type ChildMark, type RouteField, type RouteFields, type RunKind } from '../../../shared/api.js';
+import { HISTORY_STEER_ON_DIR, type ReadFailure } from '../../../shared/agent-protocol.js';
 import { FLEET_ROLES } from '../../../shared/fleetRoles.js';
 import { CCD_ARGV, ccdCan, sweepDec } from '../ccdargv.js';
 import type { CoordStore } from '../coord/store.js';
 import type { RunCcd } from '../coord/ports.js';
 import { laneArmRowViewOf } from '../coord/laneArm.js';
 import type { FleetState } from '../fleetstate.js';
+import type { FleetIO } from '../io.js';
 import type { SessionRecord } from '../registry.js';
 import { roleFactsOf, roleOf } from '../roleOf.js';
 import type { UsageRead } from '../usage.js';
@@ -33,17 +38,17 @@ import { plainAutoMemoryOf, profileFor } from './profileFor.js';
 
 /** The lane's `LANE_SCHEDULE` row. */
 export const LAUNCH_PROFILE_LANE_ROW = 'launchProfile';
-/** At most this many route writes a pass (the plan's five): a fleet armed at once converges over a few passes. */
+/** At most this many route writes succeed a pass (the plan's five): a fleet armed at once converges over a few passes. A failed
+ *  write does not count, so a row that fails every pass never starves the rest (review 2024 F12). */
 export const PROFILE_WRITES_PER_PASS = 5;
 type ProfileField = Extract<RouteField, 'compact' | 'profile' | 'automem' | 'compactwindow'>;
-/** The route fields the lane writes, in the order it diffs and counts them: `compact`, and the lane-only fields less the
- *  generations lane's `precompact`. Derived, so the route vocabulary stays spelled once (`ROUTE_WRITABLE_FIELDS`). */
-const LANE_ONLY_BUT_PRECOMPACT = ROUTE_LANE_ONLY_FIELDS.filter((f) => f !== 'precompact');
-export const PROFILE_ROUTE_FIELDS = ['compact', ...LANE_ONLY_BUT_PRECOMPACT] as readonly ProfileField[];
-/** The history W3 steer marker's directory under the fleet node's `~/.ccrc` (`cfg.ccrcDir`): the session hook reads
- *  `$HOME/.ccrc/history/steer-on/<id>`. A second spelling of `ccd/history/lib.mjs`'s `SWITCHES.steerOnDir` (another
- *  package, which server code does not import), held equal to it by `continuity-profile-lane.test.ts`. */
-export const HISTORY_STEER_ON_DIR = 'history/steer-on';
+const PROFILE_FIELD: Readonly<Record<ProfileField, true>> = { compact: true, profile: true, automem: true, compactwindow: true };
+const isProfileField = (f: RouteField): f is ProfileField => Object.hasOwn(PROFILE_FIELD, f);
+/** The route fields the lane writes, in the route vocabulary's order (`ROUTE_WRITABLE_FIELDS`), narrowed by a type guard, so
+ *  no later route field enters the diff unseen by the compiler (review 2024 F11). */
+export const PROFILE_ROUTE_FIELDS: readonly ProfileField[] = ROUTE_WRITABLE_FIELDS.filter(isProfileField);
+/** A field's target that removes it from the route: `ccd route --set <field>=` deletes the field (compaction fields only). */
+const CLEARED = '';
 /** The actor the route writes are journalled under on the box. */
 export const PROFILE_LANE_ACTOR = 'launch-profile lane';
 
@@ -64,6 +69,19 @@ export interface ProfileReads {
   usage(id: string): Promise<UsageRead>;
   /** The history W3 steer marker for this session: `present`, or why there is none (read only for a would-be write). */
   steerMarker(id: string): Promise<'present' | ReadFailure>;
+  /** Declared coordinator intent on the session's registry incarnation (`declaredIntentOf`), read only for a non-child that
+   *  claims no open run. */
+  declaredIntent(id: string): Promise<boolean | 'unmeasured'>;
+}
+
+/** The W3 steer marker of one session on the fleet node, as the session hook reads it (`<ccrcDir>/history/steer-on/<id>`):
+ *  `present` when a stat finds it, `absent` only on a proven absence, `unreadable` for any other answer or a throw. The
+ *  agent admits a `stat` of this one path (`checkSteerOnStat`), so in remote mode it is measured, never `forbidden`. */
+export async function steerMarkerOf(io: Pick<FleetIO, 'statMeasured'>, ccrcDir: string, id: string): Promise<'present' | ReadFailure> {
+  try {
+    const st = await io.statMeasured(`${ccrcDir}/${HISTORY_STEER_ON_DIR}/${id}`);
+    return st.ok ? 'present' : st.reason;
+  } catch { return 'unreadable'; }
 }
 
 /** The lane's memory across passes: the last line it logged, so an unchanged pass logs nothing. Never a decision's state. */
@@ -94,6 +112,8 @@ export interface ProfileLaneResult {
   readonly unsupported: number;
   /** Rows skipped because a route field the lane writes could not be read. */
   readonly routeUnread: number;
+  /** Rows skipped because their role could not be decided (coordinator or plain: a fact unmeasured). */
+  readonly roleUnread: number;
   /** Rows skipped because the W3 steer marker stands, or could not be read. */
   readonly steered: number;
   readonly steerUnread: number;
@@ -119,13 +139,19 @@ export async function profilePass(deps: ProfileLaneDeps, rows: readonly ProfileR
   };
   const byField = zeroFields();
   let would = 0; let written = 0; let failed = 0; let deferred = 0; let unsupported = 0;
-  let routeUnread = 0; let steered = 0; let steerUnread = 0; let memoryUnread = 0;
+  let routeUnread = 0; let roleUnread = 0; let steered = 0; let steerUnread = 0; let memoryUnread = 0;
   const failures: string[] = [];
 
   for (const r of rows) {
     if (!isRegistryId(r.id)) { routeUnread += 1; continue; }   // a listing never builds a refused id; refused here too, before any argv
     if (r.route !== null && r.route.unreadable.some((f) => (PROFILE_ROUTE_FIELDS as readonly string[]).includes(f))) { routeUnread += 1; continue; }
-    const reading = roleOf(roleFactsOf(r.id, { child: r.child, childRunKind: runKind(r.child), openCoordinators, intentDeclared: 'unmeasured' }));
+    // A non-child is a coordinator or plain: never decided from an unmeasured fact (review 2024 F2). Its declared intent is
+    // read only when it claims no open run.
+    if (r.child.kind === 'none' && openCoordinators === 'unmeasured') { roleUnread += 1; continue; }
+    const intent = r.child.kind === 'none' && openCoordinators !== 'unmeasured' && !openCoordinators.has(r.id)
+      ? await deps.reads.declaredIntent(r.id) : 'unmeasured';
+    const reading = roleOf(roleFactsOf(r.id, { child: r.child, childRunKind: runKind(r.child), openCoordinators, intentDeclared: intent }));
+    if (reading.kind === 'undecided' && reading.between === 'coordinator-or-plain') { roleUnread += 1; continue; }
     let want = profileFor(reading, memory ?? 'off', null, continuityLive);
     const row = FLEET_ROLES[want.profile].launchProfile;
     if (continuityLive && row.compaction !== null) want = profileFor(reading, memory ?? 'off', windowOf(await deps.reads.usage(r.id)), true);
@@ -134,21 +160,26 @@ export async function profilePass(deps: ProfileLaneDeps, rows: readonly ProfileR
     const target: Readonly<Record<ProfileField, string | null>> = {
       profile: want.profile,
       automem: memoryKnown ? want.automem : null,
-      compact: want.compact === null ? null : String(want.compact),
-      compactwindow: want.compactwindow === null ? null : String(want.compactwindow),
+      // A role with no compaction column leaves none behind (review 2024 F2 c): `compactwindow` is the lane's alone, and
+      // `compact` is the lane's while `continuity` is live.
+      compact: row.compaction === null ? (continuityLive ? CLEARED : null) : want.compact === null ? null : String(want.compact),
+      compactwindow: row.compaction === null ? CLEARED : want.compactwindow === null ? null : String(want.compactwindow),
     };
     const have = r.route?.fields ?? {};
     const diff: RouteFields = {};
-    for (const f of PROFILE_ROUTE_FIELDS) { const v = target[f]; if (v !== null && have[f] !== v) diff[f] = v; }
+    for (const f of PROFILE_ROUTE_FIELDS) {
+      const v = target[f];
+      if (v !== null && (v === CLEARED ? have[f] !== undefined : have[f] !== v)) diff[f] = v;
+    }
     if (Object.keys(diff).length === 0) continue;
     const steer = await deps.reads.steerMarker(r.id);
     if (steer === 'present') { steered += 1; continue; }
-    if (steer === 'unreadable') { steerUnread += 1; continue; }
+    if (steer !== 'absent') { steerUnread += 1; continue; }   // only a proven absence writes (review 2024 F11)
     would += 1;
     for (const f of PROFILE_ROUTE_FIELDS) if (diff[f] !== undefined) byField[f] += 1;
     if (!live) continue;
     if (deps.act === null || !ccdCan(deps.act.fleetState, 'routeSet')) { unsupported += 1; continue; }
-    if (written + failed >= PROFILE_WRITES_PER_PASS) { deferred += 1; continue; }
+    if (written >= PROFILE_WRITES_PER_PASS) { deferred += 1; continue; }   // a failing row never starves the rest (review 2024 F12)
     const res = await deps.act.runCcd(CCD_ARGV.routeSet(r.id, diff, sweepDec(deps.act.fleetState, PROFILE_LANE_ACTOR)));
     // A call that never ran (the agent link dropped) is unmeasured, never ccd's refusal: it is retried next pass all the same.
     if (res.ran === false) { failed += 1; failures.push(`${r.id}: ccd did not run, so the write is unmeasured`); }
@@ -156,7 +187,8 @@ export async function profilePass(deps: ProfileLaneDeps, rows: readonly ProfileR
     else { failed += 1; failures.push(`${r.id}: ${res.stderr.split('\n')[0]?.trim() || 'no stderr'}`); }
   }
   const result: ProfileLaneResult = {
-    live, continuityLive, would, byField, written, failed, deferred, unsupported, routeUnread, steered, steerUnread, memoryUnread,
+    live, continuityLive, would, byField, written, failed, deferred, unsupported, routeUnread, roleUnread, steered, steerUnread,
+    memoryUnread,
   };
   logPass(deps, result, failures);
   return result;
@@ -179,6 +211,7 @@ function logPass(deps: ProfileLaneDeps, r: ProfileLaneResult, failures: readonly
   if (r.unsupported > 0) parts.push(`${r.unsupported} not written: ccd here has no route verb`);
   const skips = [
     r.routeUnread > 0 ? `${r.routeUnread} with a route field that could not be read` : '',
+    r.roleUnread > 0 ? `${r.roleUnread} whose role could not be decided (coordinator or plain)` : '',
     r.steered > 0 ? `${r.steered} carrying the history W3 steer marker` : '',
     r.steerUnread > 0 ? `${r.steerUnread} whose steer marker could not be read` : '',
     r.memoryUnread > 0 ? `${r.memoryUnread} plain, automem left alone: the Settings row could not be read` : '',
