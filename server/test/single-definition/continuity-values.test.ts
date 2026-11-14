@@ -10,9 +10,11 @@ const HOME = 'shared/continuity.ts';
 const NAMES = ['STATE_DEADLINE_S', 'RENEWAL_BUDGET_S', 'HOLD_OFF_MS', 'LEAST_AGE_MS', 'SOFT_BUDGET', 'BREAK_NO_MESSAGE_MS',
   'BREAK_PLACE_HIDDEN_MS', 'HARD_CAP_TOKENS', 'SOFT_CEILING_FRACTION', 'TURNS_SOFT', 'IDLE_SOFT_MS', 'ACCOUNT_LOAD_HARD',
   'EARLY_WHILE_AWAY_FRACTION', 'CHECKPOINT_THREAD', 'NOTES_CAP', 'IDLE_FLOOR_FRACTION', 'WAVE_BOUNDARY_FLOOR_FRACTION',
-  'RESUMED_LONG_FRACTION', 'ON_SCHEDULE_WAIT_MS', 'RENEWAL_LANE_PERIOD_MS', 'OBSERVED_STEP_PERIODS', 'CARDED_NUDGE_AT_MS'];
+  'RESUMED_LONG_FRACTION', 'ON_SCHEDULE_WAIT_MS', 'RENEWAL_LANE_PERIOD_MS', 'OBSERVED_STEP_PERIODS', 'CARDED_NUDGE_AT_MS',
+  // The probes (the probes plan, Task 1; spec §3.3.5, C41).
+  'PROBE_ROUND_MIN', 'PROBE_ROUND_MAX', 'SPOT_PROBE_EVERY_TOKENS', 'FIT_PASS_RATE', 'FIT_WINDOW', 'PROBE_NONE'];
 /** The figures no continuity decider may spell again: it imports the constant instead. */
-const FIGURES = [250_000, 300_000, 600_000, 1_200_000, 1_800_000, 2_700_000, 21_600_000];
+const FIGURES = [250_000, 300_000, 600_000, 1_200_000, 1_800_000, 2_700_000, 21_600_000, 50_000];
 
 /** A declaration of `name`: `const`/`let`/`var` (exported or not, first or later in a comma list), `function`, `class`
  *  or `enum`. An object property or an import is not one (review 1901, R2-4: a property that holds a figure is caught by
@@ -28,7 +30,7 @@ const spells = (text: string, n: number): boolean => {
  *  `server/src/continuity/`, whose other files (a store, a route, a card) keep figures of their own, such as the
  *  compaction pairing window, which is ten minutes too (review 1894, F2). */
 const DECIDERS = ['server/src/continuity/renewalDue.ts', 'server/src/continuity/softRenewal.ts', 'server/src/time/observed.ts',
-  'server/src/continuity/launchProfile.ts'];
+  'server/src/continuity/launchProfile.ts', 'server/src/continuity/probes.ts'];
 
 describe('the generation machine\'s starting values are defined once, in shared/continuity.ts', () => {
   const all = ROOTS.filter((r) => existsSync(r)).flatMap(sources);
