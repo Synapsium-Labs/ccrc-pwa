@@ -3,7 +3,7 @@
 // those two and renders the section alone. Every word is `TIMERS_WORDS` (or one of the words module's functions), read by
 // name. An absent field is absent, never a crash: the section mounts on `{}` and on a partial answer.
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { ApiError, api } from '../src/lib/api';
 import { TimersSection } from '../src/session/TimersSection';
 import {
@@ -46,13 +46,15 @@ describe('the words', () => {
   });
 
   it('reads a partial row field by field', () => {
-    const r = readTimers(answer([{ id: 4 }, 'not a row', { dueAt: NOW, note: 5, runId: '9', programme: 'prog-a' }]));
+    const r = readTimers(answer([{ id: 4 }, 'not a row', null, { dueAt: NOW, note: 5, runId: '9', programme: 'prog-a' }]));
+    const unread = { id: null, dueAt: null, note: null, runId: null, programme: null };
     expect(r).toEqual({
       kind: 'listed',
       timers: [
         { id: null, dueAt: NOW, note: null, runId: null, programme: 'prog-a' },
         { id: 4, dueAt: null, note: null, runId: null, programme: null },
-        { id: null, dueAt: null, note: null, runId: null, programme: null },
+        unread,
+        unread,
       ],
     });
   });
@@ -215,8 +217,11 @@ describe('the section', () => {
     await waitFor(() => expect(spy).toHaveBeenCalledTimes(1));
     rerender(<TimersSection sessionId="lane-b-project-a" />);
     expect(await within(section()).findByText(W.empty)).toBeTruthy();
-    resolveOld(answer([view()]));
-    await Promise.resolve();
+    await act(async () => {
+      resolveOld(answer([view()]));
+      await new Promise((r) => setTimeout(r, 20));
+    });
     expect(within(section()).queryAllByRole('listitem')).toHaveLength(0);
+    expect(within(section()).getByText(W.empty)).toBeTruthy();
   });
 });
