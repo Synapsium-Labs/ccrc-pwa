@@ -132,8 +132,9 @@ describe('gatherCardFacts: each fact is read from its rows', () => {
 describe('gatherCardFacts: a read that fails is a fact naming what failed, never an empty list', () => {
   const throws = (): never => { throw new Error('disk I/O error'); };
   const cases: [string, (c: CoordStore) => void, keyof CardFacts, string][] = [
-    ['runs', (c) => { c.runs = throws; }, 'runs', 'the runs'],
-    ['runs (a refusal)', (c) => { c.runs = () => ({ ok: false, kind: 'run-unreadable', detail: 'x' }); }, 'runs', 'the runs'],
+    ['runs', (c) => { c.openRunsForSession = throws; }, 'runs', 'the runs'],
+    ['runs (a refusal)', (c) => { c.openRunsForSession = () => ({ ok: false, kind: 'run-unreadable', detail: 'x' }); }, 'runs', 'the runs'],
+    ['runs (a run row that does not read)', (c) => { c.run = () => ({ ok: false, kind: 'run-unreadable', detail: 'x' }) as never; }, 'runs', 'the runs'],
     ['claims', (c) => { c.activeClaims = throws; }, 'claims', 'the claims'],
     ['intent', (c) => { c.coordinatorIntentDeclared = throws; }, 'intent', 'declared coordinator intent'],
     ['intent (a refusal)', (c) => { c.coordinatorIntentDeclared = () => ({ ok: false, detail: 'x' }); }, 'intent', 'declared coordinator intent'],
@@ -158,7 +159,8 @@ describe('gatherCardFacts: a read that fails is a fact naming what failed, never
 
   it('the runs unread: the ledger is unmeasured too, naming why, and the role is undecided between coordinator and plain', async () => {
     const c = store();
-    c.runs = throws;
+    c.openRunsForSession = throws;
+    c.openCoordinatorIds = throws;
     const { facts: f, renderer } = await gather(c);
     expect(f.ledger).toEqual({ kind: 'unmeasured', what: 'the programme ledger (its programmes are read from the runs)' });
     expect(f.role).toBe('undecided');

@@ -7,7 +7,7 @@ deviation number was taken. The coordinator folds these into the ledger.
 
 | Fact | Read | New SQL? |
 |---|---|---|
-| Runs by claimant (and a worker's bound run) | `CoordStore.runs({ includeClosed: true })`, filtered by `claimedBy` or `sessionId` | no |
+| Runs by claimant (and a worker's bound run) | the binding's own readers (ARCH-62): `openRunsClaimedBy` and `openRunsForSession`, each run hydrated by `run(id)`; `bindingRunsOf` for the newest run of a session between runs; `openCoordinatorIds` for the role | no |
 | A child's run kind | `CoordStore.run(id)` | no |
 | Claims by holder | `CoordStore.activeClaims()`, filtered by `heldBy` | no |
 | Declared coordinator intent | `CoordStore.coordinatorIntentDeclared(sessionId, incarnation)` over `delegation_sessions`, keyed on `$REG/<id>.generation` (`childReclaimGenerationRead`) | **yes, the one new read** |
@@ -40,8 +40,9 @@ deviation number was taken. The coordinator folds these into the ledger.
   untrusted block. A programme's goals are its In short line and its `doneWhen` entries; its decisions are its
   modifications, each with its ruling when one is recorded.
 - **card-programmes.** A session's programmes are those of its open runs (claimed or bound) and of the open items it
-  raised, and, for a session that claims no open run, the programme of the newest run it claimed (C51: a coordinator
-  between runs gets its programme's card).
+  raised, and, for a session that claims no open run, the programme of the newest run in its binding series, claimed or
+  worked (C51: a coordinator between runs gets its programme's card). The series is read by `bindingRunsOf`; telling a
+  claimed run from a worked one there would be a run/session decision by hand, which ARCH-62's census forbids.
 - **card-items-are-the-visible-ones.** Items come from `itemsFor`, so an item still inside its hold is not on the card
   (the console does not show it either). An item's text on the card is its title.
 - **undecided-renders-the-wider-card.** An undecided role is drawn by the wider of the two cards it cannot tell apart:
