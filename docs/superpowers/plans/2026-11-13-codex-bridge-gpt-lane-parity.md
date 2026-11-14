@@ -238,7 +238,8 @@ Design and dry run first, with no live run. A live run spends subscription quota
   - one run at a time;
   - a class-stratified, task-clustered bound, its method fixed in advance by a simulation check;
   - three verdicts on one -5 point margin, with "inconclusive" the likely result at 75 pairs;
-  - every arm and grader as a dedicated UNIX user, on its own eval lane and account.
+  - every arm and grader as a dedicated UNIX user, on its own eval lane and account. The operator ruled on 2026-11-14
+    that the pilot instead runs on lane-a as the live user, with per-request rows (D-8640).
   The first dry run examined 22 fix commits and accepted 10. It predates the revised task rules, so it feeds no verdict.
   The spec's open decisions (O1-O7, D3, D9, D11) are the operator's.
 
@@ -330,6 +331,14 @@ Design and dry run first, with no live run. A live run spends subscription quota
   the first released block, per response, as a fixed-bucket histogram in the parity row (`reasoningMs`) and as an
   exact value in the per-request row. A response with no reasoning item before its first block counts none, and its
   row reads null.
+- **D-8640 (2026-11-14)** — `eval-pilot-on-lane-a`: the operator ruled that the eval's pilot runs on lane-a, an
+  existing lane, with no eval user and no lane-c (the eval spec's D3 and O7, #2778).
+  - `record-requests` on lane-a gives the per-request rows, so the eval's requests are joined to their runs by session
+    id and live traffic is separated out. It is turned on when the pilot starts, not before.
+  - The eval runs as the live user under the spec's allowed-roots rule (tasks in `server/src` or `agent/src` only).
+  - Native Codex signs in to lane-a's account in its own `CODEX_HOME`, by the operator's hand. The pilot checks that
+    lane-a's bridge still answers afterwards; if it stops, the fix is a re-auth of lane-a.
+  - Stage 0, the wire trials one marker at a time, still comes first.
 
 ## Where things stand
 
