@@ -485,5 +485,28 @@ the stage.
 **Ruled 2026-11-12 (7 above):** the plugin's LLM reviews go off on the Codex lanes, through their settings, so a
 lane's drift counters can read clean once a lane's next materialise and a relaunch of its sessions have landed it.
 
+**R1 taken again, 2026-11-14 at 22:27Z, against the drift baselines.** The baselines are the R1 steps' readings of
+2026-11-13 (lane-b at 22:20Z, lane-a at 22:21Z), taken after the plugin switch had reached both lanes. The fleet box
+ran v0.0.1201. This record stands in for the Stage 2 plan's step 7 entry, which a ledger PR may carry.
+
+| Criterion | lane-a | lane-b |
+|---|---|---|
+| Empty tool calls | pass: none | pass: none |
+| 5xx rate | pass: 28 of 30,425 (0.00092) against the baseline's 0.00162, p 0.999 | pass: 18 of 21,361 (0.00084) against the baseline's 0.00091, p 0.659 |
+| Compaction rate | unmeasured: the comparable baseline window holds no GPT-model session | unmeasured: the same |
+| Credential | pass | pass |
+| Drift | pass: 118 requests answered since the baseline; all four names held | pass: 362 requests answered since the baseline; both names held |
+| The instrument's verdict | unmeasured (compaction only) | unmeasured (compaction only) |
+
+- **Drift names.** lane-a: `modelSubstitution` `claude-opus-5-5` 501 and `claude-sonnet-4-6` 496, and
+  `foreignSubstitution` 3 and 3, each held. lane-b: `modelSubstitution` 116 and 97, each held. No name is new and none
+  grew, so the plugin's LLM review stayed off through a day of use (ruling 7).
+- **Beside them.** `ccrc doctor`'s `codex` row WARNs on each lane, listing the same cumulative names and nothing else.
+  `ccrc codex status` reads `direct` on the backend route for both lanes, with the bridge running, the LiteLLM and
+  shim tiers stopped, the credential `ok` and the reasoning store `ok`.
+- **What is left.** Drift passes on both lanes. Compaction cannot be read by this instrument: its comparable window,
+  from the class model's advance to each lane's switch, holds no GPT-model session. Ruling 2 (the verdict) and R3
+  are the operator's.
+
 **Open questions for the operator:** the rulings above still open, most important first: 2 (the verdict), 1 (the order of
 the stages), 3 (new lanes), 4 (when the runtime leaves).
