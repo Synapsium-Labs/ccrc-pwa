@@ -37,7 +37,9 @@ const U3 = '33333333-3333-4333-8333-333333333333';
 
 interface Fixture {
   s: CoordStore; t: FakeTime; logs: string[]; registry: RegistryFacts[];
-  pass(readings?: ReadonlyMap<number, GenReadings>, proc?: string): ReturnType<typeof generationsPass>;
+  /** One pass. Its registry is listed just after the clock's now (so after every start the fixture has received) unless
+   *  `listedAt` says when; each `proc` keeps its own memo of held starts, as a server process does. */
+  pass(readings?: ReadonlyMap<number, GenReadings>, proc?: string, listedAt?: number): ReturnType<typeof generationsPass>;
   start(source: string, uuid: string, at?: number, sessionId?: string, rowIncarnation?: string): number;
 }
 
@@ -50,10 +52,16 @@ function fixture(): Fixture {
   const logs: string[] = [];
   const registry: RegistryFacts[] = [{ id: COORD, uuid: U1, lane: 'lane-a', child: { kind: 'none' } }];
   let n = 0;
-  const deps = (proc: string): GenerationsDeps => ({ coord: s, clock: t.ports.clock, proc, log: (l) => logs.push(l) });
+  const memos = new Map<string, Set<number>>();
+  const deps = (proc: string): GenerationsDeps => {
+    if (!memos.has(proc)) memos.set(proc, new Set());
+    // The continuity row is gated until the renewal act ships; these cases drive its live walk, so they open the gate
+    // (review 2006 N1). The case below holds that the real gate keeps a stored Live shadow.
+    return { coord: s, clock: t.ports.clock, proc, log: (l) => logs.push(l), retried: memos.get(proc)!, gate: () => null };
+  };
   return {
     s, t, logs, registry,
-    pass: (readings = new Map(), proc = 'p1') => generationsPass(deps(proc), { registry, readings }),
+    pass: (readings = new Map(), proc = 'p1', listedAt = t.ports.clock.wall() + 1) => generationsPass(deps(proc), { registry, readings, listedAt }),
     start: (source, uuid, at = t.ports.clock.wall(), sessionId = COORD, rowIncarnation = 'inc-1') => {
       n += 1;
       const r = s.insertStart({ sessionId, reportId: `r-${n}`, uuid, source, model: 'claude-opus-5-5', rowIncarnation,
@@ -71,7 +79,7 @@ const live = (s: CoordStore): GenRow[] => { const r = s.liveGenerations(); if (!
 const setRegistry = (f: Fixture, uuid: string): void => { f.registry[0] = { ...f.registry[0]!, uuid }; };
 
 describe('the pass mints and ends generations from the starts (Task 2)', () => {
-  it('a coordinator\'s startup mints n=1 at carded (in shadow: `shadowState`), and its clear on the same incarnation mints n=2 and ends n=1 crashed', () => {
+  it('a coordinator\'s startup mints n=1 at carded (in shadow: `shadowState`); its clear on the same incarnation mints n=2 and ends n=1 cleared, and an unplanned resume ends n=2 crashed', () => {
     const f = fixture();
     f.start('startup', U1);
     expect(f.pass()).toMatchObject({ read: 1, minted: 1, live: false });
@@ -80,11 +88,16 @@ describe('the pass mints and ends generations from the starts (Task 2)', () => {
     setRegistry(f, U2);
     f.start('clear', U2);
     expect(f.pass()).toMatchObject({ read: 1, minted: 1 });
+    f.t.advance(30_000);
+    f.start('resume', U2);
+    expect(f.pass()).toMatchObject({ read: 1, minted: 1 });
     expect(all(f.s)).toEqual([
-      // In shadow the `state` column stood `active`, so the outcome reads what the session lived (review 2003 F1): an
-      // unplanned start on the same incarnation.
-      { identity: COORD, n: 1, state: 'ended', shadowState: 'carded', outcome: 'crashed', startId: 1 },
-      { identity: COORD, n: 2, state: 'active', shadowState: 'carded', outcome: null, startId: 2 },
+      // In shadow the `state` column stood `active`, so the outcome reads what the session lived (review 2003 F1): a
+      // `/clear` on the same incarnation and account is not a crash (review 2006, slug clear-is-not-a-crash) ...
+      { identity: COORD, n: 1, state: 'ended', shadowState: 'carded', outcome: 'cleared', startId: 1 },
+      // ... and a start with no planned cause on the same incarnation is.
+      { identity: COORD, n: 2, state: 'ended', shadowState: 'carded', outcome: 'crashed', startId: 2 },
+      { identity: COORD, n: 3, state: 'active', shadowState: 'carded', outcome: null, startId: 3 },
     ]);
   });
 
@@ -94,6 +107,16 @@ describe('the pass mints and ends generations from the starts (Task 2)', () => {
     f.start('startup', U1);
     f.pass();
     expect(all(f.s)).toEqual([{ identity: COORD, n: 1, state: 'carded', shadowState: null, outcome: null, startId: 1 }]);
+  });
+
+  it('a Live stored on the gated continuity row is shadow: the real gate keeps the mint\'s `state` active (review 2006 N1)', () => {
+    const f = fixture();
+    f.s.setLaneArm(CONTINUITY_LANE, 'live', 1);
+    f.start('startup', U1);
+    const r = generationsPass({ coord: f.s, clock: f.t.ports.clock, proc: 'p1', log: () => {}, retried: new Set() },
+      { registry: f.registry, listedAt: f.t.ports.clock.wall() + 1, readings: new Map() });
+    expect(r).toMatchObject({ live: false, minted: 1 });
+    expect(all(f.s)).toEqual([{ identity: COORD, n: 1, state: 'active', shadowState: 'carded', outcome: null, startId: 1 }]);
   });
 
   it('a compact start mints nothing; a fork start mints nothing and leaves the live generation', () => {
@@ -161,6 +184,25 @@ describe('the pass mints and ends generations from the starts (Task 2)', () => {
     expect(live(f.s).map((g) => [g.n, g.startId, g.lane])).toEqual([[1, 2, 'lane-a']]);
   });
 
+  it('the first mint stops at a held start rather than falling through to an older conversation, and mints from it once it reads (review 2006 R2)', () => {
+    const f = fixture();
+    closeRuns(f.s);
+    f.start('startup', U1);
+    f.t.advance(1_000);
+    setRegistry(f, U2);
+    f.start('clear', U2);
+    f.pass();
+    // The run opens on a pass whose registry uuid could not be read: the clear is held, and the older startup does not mint.
+    f.s.db.prepare("INSERT INTO runs (program, wave, waveOf, project, state, claimedBy, openedAt) VALUES ('prog-a', 2, 2, 'project-a', 'working', ?, 2)").run(COORD);
+    f.registry[0] = { ...f.registry[0]!, uuid: null };
+    expect(f.pass()).toMatchObject({ minted: 0, firstMinted: 0, held: 1 });
+    expect(all(f.s)).toEqual([]);
+    f.t.advance(30_000);
+    setRegistry(f, U2);
+    expect(f.pass()).toMatchObject({ firstMinted: 1 });
+    expect(live(f.s).map((g) => [g.n, g.startId])).toEqual([[1, 2]]);
+  });
+
   it('a start whose registry uuid could not be read is held, the cursor stays at it, and a later pass mints it (review 2003 F2)', () => {
     const f = fixture();
     f.start('startup', U1);
@@ -212,6 +254,61 @@ describe('the pass mints and ends generations from the starts (Task 2)', () => {
     expect(f.s.generationsCursor(GENERATIONS_LANE)).toEqual({ ok: true, lastStartId: 3 });
   });
 
+  it('a start another start\'s hold keeps waiting is judged once it has itself waited out the bound (review 2006 R8)', () => {
+    const f = fixture();
+    const t0 = f.t.ports.clock.wall();
+    // Two rows the registry does not list (each a read's hold), and the coordinator's own startup between them.
+    f.start('startup', U3, t0, 'lane-x-gone-1');
+    f.t.advance(10_000);
+    f.start('startup', U1, t0 + 10_000);
+    expect(f.pass()).toMatchObject({ minted: 0, held: 2 });
+    f.t.advance(130_000);
+    // A late resend of the second gone row, reported before the coordinator's start.
+    f.start('startup', U3, t0 + 5_000, 'lane-x-gone-2');
+    f.t.advance(10_000);
+    // The first hold is past its bound and skipped; the second now heads the batch, and the coordinator's start waits.
+    expect(f.pass()).toMatchObject({ minted: 0, held: 2, skipped: { unregistered: 1 } });
+    f.t.advance(10_000);
+    // Its own receipt is now START_RETRY_MS old: it is judged past the standing hold.
+    expect(f.pass()).toMatchObject({ minted: 1, held: 1 });
+    expect(live(f.s).map((g) => [g.identity, g.startId])).toEqual([[COORD, 2]]);
+    expect(f.s.generationsCursor(GENERATIONS_LANE)).toEqual({ ok: true, lastStartId: 2 });
+  });
+
+  it('a clock that steps back behind a held start\'s receipt keeps it held (review 2006 R3)', () => {
+    const f = fixture();
+    f.start('startup', U1);
+    f.pass();
+    f.t.advance(30_000);
+    f.registry[0] = { ...f.registry[0]!, uuid: null };
+    f.start('clear', U2);
+    const receivedAt = f.t.ports.clock.wall();
+    f.pass();
+    // The tick listed the registry before the step, so only the clamp can keep the start held.
+    f.t.stepWall(-60_000);
+    expect(f.pass(undefined, 'p1', receivedAt + 1)).toMatchObject({ held: 1, skipped: { 'uuid-unmeasured': 0 } });
+  });
+
+  it('a start past the bound is retried once by a new process before it is skipped (review 2006 R3: a restart or a slow tick)', () => {
+    const f = fixture();
+    f.start('startup', U1);
+    f.pass();
+    f.registry[0] = { ...f.registry[0]!, uuid: null };
+    f.start('clear', U2);
+    f.pass(undefined, 'p1');
+    f.t.restart(START_RETRY_MS + 60_000);
+    // A new process: the start is past its bound, but this process has not held it yet.
+    expect(f.pass(undefined, 'p2')).toMatchObject({ held: 1, skipped: { 'uuid-unmeasured': 0 } });
+    f.t.advance(30_000);
+    expect(f.pass(undefined, 'p2')).toMatchObject({ held: 0, skipped: { 'uuid-unmeasured': 1 } });
+    // A slow tick in one process: the first pass to see a start already past its bound holds it once too.
+    f.start('clear', U3);
+    f.t.advance(START_RETRY_MS + 1_000);
+    expect(f.pass(undefined, 'p2')).toMatchObject({ held: 1 });
+    f.t.advance(30_000);
+    expect(f.pass(undefined, 'p2')).toMatchObject({ held: 0, skipped: { 'uuid-unmeasured': 1 } });
+  });
+
   it('a swap between two starts in one batch: only the newest start\'s outcome and account are trusted (review 2003 F4)', () => {
     const f = fixture();
     f.start('startup', U1);
@@ -244,7 +341,37 @@ describe('the pass mints and ends generations from the starts (Task 2)', () => {
     f.s.db.exec("UPDATE continuity_generations SET walkClass = 'newer-class'");
     f.start('clear', U1);
     expect(f.pass()).toMatchObject({ unread: 'generations', minted: 0 });
-    expect(f.logs.some((l) => l.includes('the generations could not be read, so no start mints and no due is recorded'))).toBe(true);
+    expect(f.logs.some((l) => l.includes('the generations could not be read, so no observed time advances'))).toBe(true);
+    expect(f.logs.some((l) => l.includes('the generations could not be read, so no due is recorded'))).toBe(true);
+  });
+
+  it('a read that fails after the batch ran says so: the batch\'s mint stands (review 2006 N3)', () => {
+    const f = fixture();
+    f.start('startup', U1);
+    const real = f.s.generationsCursor.bind(f.s);
+    let reads = 0;
+    // The cursor reads once for the batch, then fails for the first mint's read.
+    f.s.generationsCursor = (lane) => { reads += 1; return reads === 1 ? real(lane) : { ok: false, detail: 'injected' }; };
+    expect(f.pass()).toMatchObject({ minted: 1, unread: 'cursor' });
+    expect(f.logs).toContain('ccrc-server: generations: the cursor could not be read, so the batch ran, and no coordinator\'s first generation is minted this pass: injected');
+    expect(f.logs.some((l) => l.includes('no start is judged'))).toBe(false);
+  });
+
+  it('a clear accepted after the registry was listed is held a pass, not skipped as foreign, and mints on the next (review 2006 R1)', () => {
+    const f = fixture();
+    f.start('startup', U1);
+    f.pass();
+    f.t.advance(30_000);
+    // The tick lists the registry (still the old conversation), then a clear lands before the pass runs.
+    const listedAt = f.t.ports.clock.wall();
+    f.t.advance(2_000);
+    f.start('clear', U2);
+    expect(f.pass(undefined, 'p1', listedAt)).toMatchObject({ minted: 0, held: 1, skipped: { 'foreign-uuid': 0 } });
+    expect(f.s.generationsCursor(GENERATIONS_LANE)).toEqual({ ok: true, lastStartId: 1 });
+    f.t.advance(28_000);
+    setRegistry(f, U2);
+    expect(f.pass()).toMatchObject({ minted: 1, held: 0 });
+    expect(all(f.s).map((r) => [r.n, r.state, r.outcome, r.startId])).toEqual([[1, 'ended', 'cleared', 1], [2, 'active', null, 2]]);
   });
 
   it('a nested process\'s resume (a conversation the registry does not name) mints nothing', () => {
@@ -307,7 +434,8 @@ describe('the pass mints and ends generations from the starts (Task 2)', () => {
   it('a registry that could not be listed judges no start and leaves the cursor', () => {
     const f = fixture();
     f.start('startup', U1);
-    const r = generationsPass({ coord: f.s, clock: f.t.ports.clock, proc: 'p1', log: () => {} }, { registry: null, readings: new Map() });
+    const r = generationsPass({ coord: f.s, clock: f.t.ports.clock, proc: 'p1', log: () => {}, retried: new Set() },
+      { registry: null, listedAt: f.t.ports.clock.wall() + 1, readings: new Map() });
     expect(r).toMatchObject({ unread: 'registry', minted: 0 });
     expect(f.s.generationsCursor(GENERATIONS_LANE)).toEqual({ ok: true, lastStartId: 0 });
   });
@@ -421,6 +549,16 @@ describe('the pass records renewalDue on every generation at rest (Task 3)', () 
     f.s.db.prepare("INSERT INTO runs (program, wave, waveOf, project, state, claimedBy, openedAt) VALUES ('prog-a', 2, 2, 'project-a', 'working', ?, 2)").run(COORD);
     f.pass(new Map([[id, readings(usage(70_000, 1_000_000))]]));
     expect(live(f.s)[0]).toMatchObject({ dueWhy: 'wave-boundary', dueClass: 'soft' });
+  });
+
+  it('a claimed run that cannot be read marks the wave reading unmeasured, and the pass and its log go on (review 2006 R4)', () => {
+    const { f, id } = atRest();
+    f.s.db.prepare("UPDATE runs SET prLineage = '{not json' WHERE claimedBy = ?").run(COORD);
+    f.start('compact', U1);
+    // Past the wave row's context floor, so only the wave reading decides it.
+    expect(() => f.pass(new Map([[id, readings(usage(70_000, 1_000_000))]]))).not.toThrow();
+    expect(live(f.s)[0]!.blind).toContain('wave-boundary');
+    expect(f.logs.some((l) => l.includes('1 compact'))).toBe(true);
   });
 
   it('the wave boundary reads only the work runs the coordinator claims: a newer run it works for another, and its review run, are not waves (review 2003 F11)', () => {
@@ -561,9 +699,10 @@ describe('the watcher', () => {
     const w = new FleetWatcher(deps as never, new Bus(), 10_000);
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     try {
-      coord.insertStart({ sessionId: COORD, reportId: 'r-1', uuid: U1, source: 'clear', model: null, rowIncarnation: null, reportedAt: 1, receivedAt: 1 });
-      await w.sweepGenerations([]);
-      // The registry lists no row, so the start mints nothing; the pass ran to its end and moved the cursor.
+      coord.insertStart({ sessionId: COORD, reportId: 'r-1', uuid: U1, source: 'compact', model: null, rowIncarnation: null, reportedAt: 1, receivedAt: 1 });
+      await w.sweepGenerations([], Date.now());
+      // A compaction mints nothing and is held by no read (a start whose row the registry did not list would be held once
+      // by a new process: review 2006 R3); the pass ran to its end and moved the cursor.
       expect(warn.mock.calls.flat().filter((l) => String(l).includes('generations lane failed'))).toEqual([]);
       expect(coord.generationsCursor(GENERATIONS_LANE)).toEqual({ ok: true, lastStartId: 1 });
       const spy = vi.spyOn(w, 'sweepGenerations').mockResolvedValue(undefined);

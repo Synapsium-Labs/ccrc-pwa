@@ -1990,6 +1990,8 @@ export class FleetWatcher {
   /** The generations lane's compactions read cache, and this process's id for its observed stamps. */
   private readonly generationsCompactions: CompactionsMemo = new Map();
   private generationsProc: string | undefined;
+  /** The starts this process held for a failed read (`GenerationsDeps.retried`). */
+  private readonly generationsRetried = new Set<number>();
   private delegationLane(): DelegationLane {
     this.delegationLaneMemo ??= new DelegationLane(this.deps, () => this.delegationCensus, this.lanes, () => this.listedIds);
     return this.delegationLaneMemo;
@@ -2784,7 +2786,7 @@ export class FleetWatcher {
       // NEVER awaited, the same reasons: the CASE lane (Overlord §10.5, Table 11.1c's `cases` row), in shadow: it records cases and sends nothing.
       void this.sweepCases().catch(() => { /* one bad sweep must not kill the poll */ });
       // NEVER awaited, the same reasons: the GENERATIONS lane (Overlord §3.3.11, W1a), in shadow: it mints and records, and acts on no session.
-      void this.sweepGenerations(records).catch(() => { /* one bad sweep must not kill the poll */ });
+      void this.sweepGenerations(records, listedAt).catch(() => { /* one bad sweep must not kill the poll */ });
       // NEVER awaited, the same reasons: the RUN-CLOSE lane (D-8077), rows E1 and E1r, in shadow until its group is armed.
       void this.sweepRunClose(registryRead).catch(() => { /* one bad sweep must not kill the poll */ });
       // NEVER awaited, same reasoning as sweepNames immediately above: this one
@@ -6070,7 +6072,7 @@ export class FleetWatcher {
   /** The generations lane (Overlord §3.3.11, W1a), in shadow: the fleet reads first, then one synchronous pass that mints,
    *  ends and records through the store. It acts on no session; the pass logs what it skipped, held and could not read
    *  (review 2003 F5). */
-  async sweepGenerations(records: readonly SessionRecord[]): Promise<void> {
+  async sweepGenerations(records: readonly SessionRecord[], listedAt: number): Promise<void> {
     const coord = this.deps.coord;
     if (!coord) return;
     await this.runLane('generations', async () => {
@@ -6086,9 +6088,12 @@ export class FleetWatcher {
         release: () => this.nodeRelease(),
       }, this.generationsCompactions);
       this.generationsProc ??= this.deps.time.entropy.uuid();
-      generationsPass({ coord, clock: this.deps.time.clock, proc: this.generationsProc, log: (line) => console.warn(line) }, {
+      generationsPass({ coord, clock: this.deps.time.clock, proc: this.generationsProc, log: (line) => console.warn(line),
+        retried: this.generationsRetried }, {
         registry: records.map((r) => ({ id: r.id, uuid: r.unmeasured.includes('uuid') ? null : r.uuid,
           lane: r.unmeasured.includes('wrapper') ? null : r.wrapper, child: r.child })),
+        // When this tick's registry read began: a start received since is held a pass (review 2006 R1).
+        listedAt,
         readings,
       });
     });

@@ -1,6 +1,7 @@
 // L4 delivery, context C3 (Session Conversation): the generations lane (Overlord spec §3.3.11, H12, Table 11.1c "The renewal
 // lane"; W1a, the generations piece), in shadow. It decides nothing: `startVerdict` (generationStart.ts) decides what a start
-// does, `roleOf` the role, `renewalDue` whether a generation is due and `observeTime` the observed clock. It reads the
+// does, `planStartBatch` which starts a pass judges and where the cursor moves, `firstMintOf` a coordinator's first
+// generation, `roleOf` the role, `renewalDue` whether a generation is due and `observeTime` the observed clock. It reads the
 // starts after its cursor, mints and ends generations, advances each live generation's accumulator and records the
 // `renewalDue` answer, all through the store's compare-and-set writes, and it is the only writer of
 // `continuity_generations` and `continuity_cursor`.
@@ -19,7 +20,7 @@
 // `generationsPass` (synchronous, one transaction per write, nothing awaited) reads `coord.db`, decides and writes. So a
 // pass after a restart resumes from the cursor and the stored columns, never from memory, and the simulator drives the
 // pass itself on its fake clock.
-import { CONTINUITY_LANE } from '../../../shared/lane-arm.js';
+import { CONTINUITY_LANE, laneArmGate } from '../../../shared/lane-arm.js';
 import { RENEWAL_LANE_PERIOD_MS } from '../../../shared/continuity.js';
 import { familyClassOf } from '../../../shared/models.js';
 import type { ChildMark, RunKind } from '../../../shared/api.js';
@@ -38,7 +39,8 @@ import { compactionsSince, type CompactionsRead } from './compactions.js';
 import { effectiveGeneration, genExpectOf, type GenRow, type MintInput } from './continuityStore.js';
 import type { StartRow } from '../../../shared/continuity.js';
 import {
-  START_SKIPS, judgedForDue, startHeld, startReadSkip, startVerdict, waveBoundaryOf, type StartFacts, type StartSkip, type StartVerdict,
+  START_SKIPS, firstMintOf, judgedForDue, planStartBatch, startVerdict, waveBoundaryOf, type HoldClock, type StartFacts, type StartSkip,
+  type StartVerdict,
 } from './generationStart.js';
 import { renewalDue, type Reading, type RenewalInputs } from './renewalDue.js';
 
@@ -77,11 +79,20 @@ export interface GenerationsDeps {
   readonly log: (line: string) => void;
   /** The observed-time decider; `observeTime` unless a simulator hands a mutant of it to the same pass. */
   readonly observe?: typeof observeTime;
+  /** The continuity row's gate (`laneArmGate`), unless a test or the simulator opens it to drive the live walk the renewal
+   *  act will arm (review 2006 N1). Nothing in the server passes one, so a gated row is never live here. */
+  readonly gate?: (lane: typeof CONTINUITY_LANE) => string | null;
+  /** The starts this process held for a failed read on an earlier pass (`HoldClock.retried`), kept by the caller across
+   *  passes and rewritten by each pass that judges a batch: a memo, never a decision's durable state (review 2006 R3). */
+  readonly retried: Set<number>;
 }
 
 export interface GenerationsInput {
   /** The registry at this pass, or null when it could not be listed: then no start is judged and the cursor stays. */
   readonly registry: readonly RegistryFacts[] | null;
+  /** When that registry was listed (the server's wall clock): a start received at or after it is held a pass, since the
+   *  listing may not know of it (review 2006 R1). */
+  readonly listedAt: number;
   /** The fleet reads, by generation id; a generation without one reads every fleet input as unmeasured. */
   readonly readings: ReadonlyMap<number, GenReadings>;
 }
@@ -93,7 +104,8 @@ export interface GenerationsResult {
   /** Of `minted`, the coordinators' first generations minted from their newest start (review 2003 F2). */
   readonly firstMinted: number;
   readonly skipped: Readonly<Record<StartSkip, number>>;
-  /** Starts a failed read holds for a later pass, with every start after them (review 2003 F2). */
+  /** Starts that wait for a later pass (review 2003 F2, review 2006 R1 and R8), and coordinators whose first mint waits
+   *  on a held start (review 2006 R2). */
   readonly held: number;
   readonly superseded: number;
   /** The observed-time gaps the pass measured, one per identity that had one. */
@@ -114,26 +126,26 @@ const zeroSkips = (): Record<StartSkip, number> => Object.fromEntries(START_SKIP
 export function generationsPass(deps: GenerationsDeps, input: GenerationsInput): GenerationsResult {
   const { coord, clock } = deps;
   const now = clock.wall();
-  const live = laneArmRowViewOf(CONTINUITY_LANE, coord.laneArmSetting(CONTINUITY_LANE)).live;
+  const live = laneArmRowViewOf(CONTINUITY_LANE, coord.laneArmSetting(CONTINUITY_LANE), (deps.gate ?? laneArmGate)(CONTINUITY_LANE)).live;
   const skipped = zeroSkips();
   const gaps: (ObservedGap & { identity: string })[] = [];
   let read = 0; let minted = 0; let firstMinted = 0; let held = 0; let superseded = 0; let due = 0; let blind = 0; let cleared = 0;
   let stopped = false;
-  let unread: GenerationsResult['unread'] = null;
-  let unreadDetail: string | null = null;
-  const fail = (what: NonNullable<GenerationsResult['unread']>, detail: string): void => {
-    if (unread === null) { unread = what; unreadDetail = detail; }
+  // Every read that failed, each with what it stopped at the point it failed (review 2006 N3); `unread` is the first.
+  const failures: Failure[] = [];
+  const fail = (what: NonNullable<GenerationsResult['unread']>, detail: string, stops: string): void => {
+    failures.push({ what, detail, stops });
   };
   const result = (): GenerationsResult => {
-    logPass(deps.log, { skipped, held, superseded, stopped, unread, unreadDetail, gaps });
-    return { live, read, minted, firstMinted, skipped, held, superseded, gaps, due, blind, cleared, unread, stopped };
+    logPass(deps.log, { skipped, held, superseded, stopped, failures, gaps });
+    return { live, read, minted, firstMinted, skipped, held, superseded, gaps, due, blind, cleared, unread: failures[0]?.what ?? null, stopped };
   };
 
   // ---- ONE: every live generation's accumulator advances by the lane's step cap (review 1896 R4.1), before any mint, so a
   // mint carries the identity's accumulator to this pass; a walk begun in shadow is cleared once the row is live.
   const cap = observedStepCapMs(RENEWAL_LANE_PERIOD_MS);
   const before = coord.liveGenerations();
-  if (!before.ok) fail('generations', before.detail);
+  if (!before.ok) fail('generations', before.detail, 'no observed time advances');
   else {
     for (const g0 of before.rows) {
       let g = g0;
@@ -149,16 +161,19 @@ export function generationsPass(deps: GenerationsDeps, input: GenerationsInput):
   }
 
   // ---- TWO: the starts after the cursor mint and end generations; then a coordinator with no generation mints its first.
-  if (input.registry === null) fail('registry', 'the registry could not be listed');
+  const notJudged = 'no start is judged and the cursor stays';
+  if (input.registry === null) fail('registry', 'the registry could not be listed', notJudged);
   else {
     const cursor = coord.generationsCursor(GENERATIONS_LANE);
     const starts = cursor.ok ? coord.startsSince(cursor.lastStartId, GENERATIONS_START_BATCH) : null;
     let gens = coord.liveGenerations();
-    if (!cursor.ok) fail('cursor', cursor.detail);
-    else if (starts === null || !starts.ok) fail('starts', starts === null ? 'no read' : starts.detail);
-    else if (!gens.ok) fail('generations', gens.detail);
+    if (!cursor.ok) fail('cursor', cursor.detail, notJudged);
+    else if (starts === null || !starts.ok) fail('starts', starts === null ? 'no read' : starts.detail, notJudged);
+    else if (!gens.ok) fail('generations', gens.detail, notJudged);
     else {
       const registry = new Map(input.registry.map((r) => [r.id, r]));
+      const hold: HoldClock = { now, listedAt: input.listedAt, retried: new Set(deps.retried) };
+      const heldNow = new Set<number>();
       let openCoordinators: ReadonlySet<string> | 'unmeasured';
       try { openCoordinators = new Set(coord.openCoordinatorIds()); } catch { openCoordinators = 'unmeasured'; }
       const runKind = (child: ChildMark): RunKind | 'unmeasured' => {
@@ -184,38 +199,26 @@ export function generationsPass(deps: GenerationsDeps, input: GenerationsInput):
 
       if (starts.rows.length > 0) {
         read = starts.rows.length;
-        const from = cursor.lastStartId;
-        // A session's starts in their own order (`reportedAt`), never in receipt order (review 1949 G3).
-        const ordered = [...starts.rows].sort((a, b) => a.reportedAt - b.reportedAt || a.id - b.id);
-        // Each identity's newest start in the batch: only its outcome and account are trusted (review 2003 F4).
-        const newestOf = new Map(ordered.map((s) => [s.sessionId, s.id]));
-        // The first start a failed read holds stops the batch there (review 2003 F2): it and every start after it wait for
-        // a later pass, at most `START_RETRY_MS`, and the cursor stays below the lowest id among them.
-        const holdAt = ordered.findIndex((s) => {
-          const k = startReadSkip({ source: s.source, uuid: s.uuid, registry: registryOf(s.sessionId) });
-          return k !== null && startHeld(k, s.receivedAt, now);
-        });
-        const judged = holdAt < 0 ? ordered : ordered.slice(0, holdAt);
-        const waiting = holdAt < 0 ? [] : ordered.slice(holdAt);
-        held = waiting.length;
-        const to = waiting.length === 0 ? Math.max(...ordered.map((s) => s.id)) : Math.min(...waiting.map((s) => s.id)) - 1;
-        const advance = to > from ? { lane: GENERATIONS_LANE, from, to } : null;
+        const plan = planStartBatch(starts.rows, cursor.lastStartId, registryOf, hold);
+        held = plan.waiting.length;
+        for (const id of plan.heldForRead) heldNow.add(id);
+        const advance = plan.advanceTo === null ? null : { lane: GENERATIONS_LANE, from: cursor.lastStartId, to: plan.advanceTo };
         let cursorDone = false;
-        for (const [i, s] of judged.entries()) {
-          const last = i === judged.length - 1;
+        for (const [i, { start: s, newest }] of plan.judged.entries()) {
+          const last = i === plan.judged.length - 1;
           const liveGen = gens.rows.find((g) => g.identity === s.sessionId) ?? null;
           const verdict = startVerdict({
             source: s.source, uuid: s.uuid, reportedAt: s.reportedAt, rowIncarnation: s.rowIncarnation,
-            registry: registryOf(s.sessionId), role: roleFor(s.sessionId), newest: newestOf.get(s.sessionId) === s.id,
-            live: liveOf(liveGen),
+            registry: registryOf(s.sessionId), role: roleFor(s.sessionId), newest, live: liveOf(liveGen),
           });
           if (!verdict.mint) { skipped[verdict.skip] += 1; continue; }
+          // The cursor rides the last judged start's mint, so a crash between two mints re-judges the batch.
           const w = coord.mintGeneration(mintInput(s, verdict), liveGen === null ? null : genExpectOf(liveGen), live,
             last ? advance : null);
           if (w.ok) { minted += 1; cursorDone = last && advance !== null; } else if (w.kind === 'superseded') superseded += 1;
           else { stopped = true; break; }
           const again = coord.liveGenerations();
-          if (!again.ok) { fail('generations', again.detail); stopped = true; break; }
+          if (!again.ok) { fail('generations', again.detail, 'the batch stopped after a mint and the cursor stays'); stopped = true; break; }
           gens = again;
         }
         // The cursor moves past what was judged only when every start in it was judged; a mint that could not be written
@@ -225,41 +228,34 @@ export function generationsPass(deps: GenerationsDeps, input: GenerationsInput):
 
       // A coordinator's own `startup` lands before it opens its first run, when its role still reads undecided (slug
       // intent-unread), so it would never mint (review 2003 F2): an identity that reads as a coordinator and has no
-      // generation mints n=1 from its newest start that mints (slug first-start-mints), among the starts the cursor has
-      // passed: one above it is the batch's to judge, and one held waits with the rest. No cursor rides it.
+      // generation mints n=1 (`firstMintOf`) from the starts the cursor has passed. No cursor rides it.
       const passed = coord.generationsCursor(GENERATIONS_LANE);
-      if (!passed.ok) fail('cursor', passed.detail);
+      if (!passed.ok) fail('cursor', passed.detail, 'the batch ran, and no coordinator\'s first generation is minted');
       else if (!stopped && gens.ok && openCoordinators !== 'unmeasured') {
         for (const id of openCoordinators) {
           if (gens.rows.some((g) => g.identity === id)) continue;
           const role = roleFor(id);
           if (role.kind !== 'role' || role.role !== 'coordinator') continue;
-          const read = coord.startsOf(id, FIRST_MINT_LOOKBACK);
-          if (!read.ok) { fail('starts', read.detail); continue; }
-          const mine = read.rows.filter((s) => s.id <= passed.lastStartId);
-          for (const s of mine) {
-            const verdict = startVerdict({
-              source: s.source, uuid: s.uuid, reportedAt: s.reportedAt, rowIncarnation: s.rowIncarnation,
-              registry: registryOf(id), role, live: null,
-              newest: read.rows.filter((n) => n.reportedAt > s.reportedAt || (n.reportedAt === s.reportedAt && n.id > s.id))
-                .every((n) => n.source === 'compact' || n.source === 'fork'),
-            });
-            if (!verdict.mint) continue;
-            const w = coord.mintGeneration(mintInput(s, verdict), null, live, null);
-            if (w.ok) { minted += 1; firstMinted += 1; } else if (w.kind === 'superseded') superseded += 1;
-            else stopped = true;
-            break;
-          }
-          if (stopped) break;
+          const mine = coord.startsOf(id, FIRST_MINT_LOOKBACK);
+          if (!mine.ok) { fail('starts', mine.detail, `the batch ran, and ${id}'s first generation is not minted`); continue; }
+          const first = firstMintOf(mine.rows, passed.lastStartId, registryOf(id), role, hold);
+          if (first.kind === 'held') { held += 1; if (first.why === 'read') heldNow.add(first.start.id); continue; }
+          if (first.kind === 'none') continue;
+          const w = coord.mintGeneration(mintInput(first.start, first.verdict), null, live, null);
+          if (w.ok) { minted += 1; firstMinted += 1; } else if (w.kind === 'superseded') superseded += 1;
+          else { stopped = true; break; }
         }
       }
+      // This process has now held these once; one it no longer holds is forgotten (review 2006 R3).
+      deps.retried.clear();
+      for (const id of heldNow) deps.retried.add(id);
     }
   }
 
   // ---- THREE: the `renewalDue` answer is recorded for every generation whose `state` is at rest (`active` or `degraded`),
   // whatever a shadow walk holds (review 2003 F1).
   const gens = coord.liveGenerations();
-  if (!gens.ok) { fail('generations', gens.detail); return result(); }
+  if (!gens.ok) { fail('generations', gens.detail, 'no due is recorded'); return result(); }
   for (const g of gens.rows) {
     if (!judgedForDue(g)) continue;
     const wave: Reading<boolean> = g.role !== 'coordinator' ? { kind: 'unmeasured', why: 'not a coordinator' } : (() => {
@@ -275,21 +271,22 @@ export function generationsPass(deps: GenerationsDeps, input: GenerationsInput):
   return result();
 }
 
+/** A read that failed, and what it stopped where it failed. */
+interface Failure { readonly what: NonNullable<GenerationsResult['unread']>; readonly detail: string; readonly stops: string }
+
 /** The pass's one log line set (review 2003 F5): every non-zero skip count, the held and superseded starts and a stop,
- *  in one line; a read that failed in a line of its own, naming what it stopped; the observed-time gaps in another. */
+ *  in one line; each read that failed in a line of its own, naming what it stopped (review 2006 N3); the observed-time
+ *  gaps in another. */
 function logPass(log: (line: string) => void, p: {
   skipped: Readonly<Record<StartSkip, number>>; held: number; superseded: number; stopped: boolean;
-  unread: GenerationsResult['unread']; unreadDetail: string | null; gaps: readonly ObservedGap[];
+  failures: readonly Failure[]; gaps: readonly ObservedGap[];
 }): void {
   const parts = START_SKIPS.filter((k) => p.skipped[k] > 0).map((k) => `${p.skipped[k]} ${k}`);
   if (p.held > 0) parts.push(`${p.held} held for a later pass`);
   if (p.superseded > 0) parts.push(`${p.superseded} superseded`);
   if (p.stopped) parts.push('a mint could not be written, so the batch stopped and the cursor stays');
   if (parts.length > 0) log(`ccrc-server: generations: starts this pass: ${parts.join(', ')}`);
-  if (p.unread !== null) {
-    const stops = p.unread === 'generations' ? 'no start mints and no due is recorded' : 'no start is judged and the cursor stays';
-    log(`ccrc-server: generations: the ${p.unread} could not be read, so ${stops} this pass: ${p.unreadDetail ?? 'no detail'}`);
-  }
+  for (const f of p.failures) log(`ccrc-server: generations: the ${f.what} could not be read, so ${f.stops} this pass: ${f.detail}`);
   if (p.gaps.length > 0) {
     const of = (k: ObservedGap['kind']): number => p.gaps.filter((x) => x.kind === k).length;
     log(`ccrc-server: generations: observed time gaps this pass: ${of('process')} process, ${of('backwards')} backwards, ${of('step')} step`);

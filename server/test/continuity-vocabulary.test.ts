@@ -13,8 +13,8 @@ describe('the lists, each derived from one map, in order', () => {
   it('GENERATION_STATES: Table 3.3.11a', () => {
     expect(GENERATION_STATES).toEqual(['active', 'draining', 'checkpointed', 'clearing', 'carded', 'probing', 'degraded', 'ended']);
   });
-  it('GENERATION_OUTCOMES: H12 (renewed, crashed, swapped, woken elsewhere), woken on the same host, and unmeasured (review 2003 F4)', () => {
-    expect(GENERATION_OUTCOMES).toEqual(['renewed', 'crashed', 'swapped', 'woken', 'woken-elsewhere', 'unmeasured']);
+  it('GENERATION_OUTCOMES: H12 (renewed, crashed, swapped, woken elsewhere), woken on the same host, unmeasured (review 2003 F4) and cleared (review 2006)', () => {
+    expect(GENERATION_OUTCOMES).toEqual(['renewed', 'crashed', 'swapped', 'woken', 'woken-elsewhere', 'unmeasured', 'cleared']);
   });
   it('TRIGGER_CLASSES: Table 3.3.11b', () => { expect(TRIGGER_CLASSES).toEqual(['hard', 'soft']); });
   it('RENEWAL_TRIGGERS: Table 3.3.11b, and the operator\'s Renew now', () => {

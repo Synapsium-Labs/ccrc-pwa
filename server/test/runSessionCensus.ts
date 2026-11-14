@@ -241,6 +241,8 @@ export const NOT_BINDING_SITES: readonly NotBindingSite[] = [
     why: 'the live generation of the identity a reported start names: a coordinator\'s identity is its session id (Overlord §3.3.9), and no run is read' },
   { file: 'server/src/continuity/generationsLane.ts', text: 'g.sessionId === id',
     why: 'the compactions read cache pruned to the generations the gather still reads: a cache key, no run is read' },
+  { file: 'server/src/continuity/generationStart.ts', text: 'n.sessionId !== s.sessionId',
+    why: 'two reported starts of the same identity, for which is its newest (review 2006 R6): no run is read' },
 ];
 
 /** The sites that still decide a binding by hand: every site but the `NOT_BINDING_SITES` ones. */
