@@ -30,5 +30,8 @@
   "server/src/continuity/generationStart.ts#startHold": 1,
   "server/src/continuity/generationStart.ts#planStartBatch": 1,
   "server/src/continuity/generationStart.ts#firstMintOf": 1,
-  "server/src/continuity/generationStart.ts#judgedForDue": 1
+  "server/src/continuity/generationStart.ts#judgedForDue": 1,
+  "server/src/continuity/notes.ts#noteVerdict": 1,
+  "server/src/continuity/notes.ts#handoverVerdict": 1,
+  "server/src/continuity/notes.ts#noteKeyFact": 1
 }

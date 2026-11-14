@@ -107,6 +107,57 @@ export const EARLY_WHILE_AWAY_FRACTION = 0.5;
 export const CHECKPOINT_THREAD = { messages: 60, tokens: 6_000 } as const;
 /** Table 11.5b: the caps on `continuity_notes` for one identity. */
 export const NOTES_CAP = { count: 200, chars: 500 } as const;
+/** The continuity notes (Overlord spec §3.3.2, C37; the notes piece of W1a). What a note keys to: a programme (by slug), an
+ *  item or a run (by id), each a row the server can look up. `request` joins in W2 and `message` (a `miss`) in W1, as their
+ *  rows appear (slug note-keys-in-w1a). */
+export type NoteKey =
+  | { readonly kind: 'programme'; readonly slug: string }
+  | { readonly kind: 'item'; readonly id: number }
+  | { readonly kind: 'run'; readonly id: number };
+const NOTE_KEY_KIND_MAP = { programme: 'a programme, by slug', item: 'an item, by id', run: 'a run, by id' } as const;
+export type NoteKeyKind = keyof typeof NOTE_KEY_KIND_MAP;
+export const NOTE_KEY_KINDS = Object.keys(NOTE_KEY_KIND_MAP) as NoteKeyKind[];
+export function isNoteKeyKind(v: unknown): v is NoteKeyKind {
+  return typeof v === 'string' && (NOTE_KEY_KINDS as readonly string[]).includes(v);
+}
+const NOTE_KIND_MAP = {
+  thread: 'an open thread: what it waits on and what comes next',
+  caution: 'something the next generation should watch for',
+} as const;
+export type NoteKind = keyof typeof NOTE_KIND_MAP;
+export const NOTE_KINDS = Object.keys(NOTE_KIND_MAP) as NoteKind[];
+export function isNoteKind(v: unknown): v is NoteKind {
+  return typeof v === 'string' && (NOTE_KINDS as readonly string[]).includes(v);
+}
+/** What the door measured of a key: a row of the caller's that is live, a row that is gone (absent, closed, or no longer
+ *  open), a row that is not the caller's, or a read that failed. `unmeasured` is never folded into `gone`. */
+const KEY_FACT_MAP = {
+  live: "a live row of the caller's",
+  gone: 'no such row, or it is closed',
+  'not-yours': "a row that is not the caller's",
+  unmeasured: 'the row could not be read',
+} as const;
+export type KeyFact = keyof typeof KEY_FACT_MAP;
+export const KEY_FACTS = Object.keys(KEY_FACT_MAP) as KeyFact[];
+export function isKeyFact(v: unknown): v is KeyFact {
+  return typeof v === 'string' && (KEY_FACTS as readonly string[]).includes(v);
+}
+/** C37: the handover note's tone line, at most this many characters. */
+export const HANDOVER_TONE_MAX_CHARS = 300;
+/** One thread of a handover note: a reference that must exist, what it waits on and what comes next. */
+export interface HandoverThread { readonly ref: NoteKey; readonly waitsOn: string; readonly next: string }
+/** C37: the handover note the ending generation writes in `checkpointed`. Its claims of done, its ids, its promises, its
+ *  authority and its preferences are never read as rows. */
+export interface HandoverNote {
+  readonly threads: readonly HandoverThread[];
+  readonly cautions: readonly string[];
+  readonly tone: string;
+}
+/** A note's key as one short phrase (`run 12`, `programme prog-a`), for the card and the door's details. */
+export function noteKeyText(k: NoteKey): string {
+  return k.kind === 'programme' ? `programme ${k.slug}` : `${k.kind} ${k.id}`;
+}
+
 /** Table 11.5b and Table 3.3.11b: the context floor of the idle trigger and of the wave boundary, as a fraction of the
  *  hard cap ("a quarter of the hard cap"). */
 export const IDLE_FLOOR_FRACTION = 0.25;
