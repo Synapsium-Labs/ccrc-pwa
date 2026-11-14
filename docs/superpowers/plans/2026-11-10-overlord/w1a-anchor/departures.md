@@ -58,5 +58,10 @@ no deviation number was taken. The coordinator folds these into the ledger.
   client, and with the door answering `dark`.
 - Mutations of the hook, each restored from a saved copy: the anchor after the standing card, the fork line set without
   asking the door, the mark on any scope, the prompt read before the hookstate write, the compact start keeping the mark,
-  a `dark` answer keeping it, and the role card printing beside the anchor. Each reddened its case.
-- `renderAnchor`'s mutant set (`server/test/sim/anchorSets.ts`, ten mutants, the plan's four first): every mutant killed.
+  a `dark` answer keeping it, the role card printing beside the anchor, and the roster read not standing down after a
+  hang. Each reddened its case. Of the door: the text served in shadow, and the role line served unmasked; each reddened
+  its case in `continuity-card-route.test.ts`.
+- The anchor's mutant sets (`server/test/sim/anchorSets.ts`, at floor 1 in `mutation-floors.json`): `renderAnchor` (ten
+  mutants, the plan's four first), `anchorGeneration` (five) and `anchorAnswer` (two, the first the plan's "serve the text
+  in shadow"). Every mutant killed.
+- The migration slot: `main` held 72 entries when this branch absorbed it (after timers PR B, #2798), so this entry is 73.
