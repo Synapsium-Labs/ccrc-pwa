@@ -6050,6 +6050,14 @@ _check_fleet() {
   _dr_pass fleet "the two boxes agree — same build, and the same generated ~/.ccrc/accounts.sh (measured by the server at $addr, in remote mode, connected)"
 }
 
+# A scratch project slug (a temp directory's), skipped by both memory checks. THE PATTERN LIST IS SPELLED HERE, and that is
+# D-92's trade rather than an oversight — the same one this file already records for `ccd`'s `POOL_NAME_RE`: this table is
+# sourced under `set -u` by things that are NOT `ccrc` (`ccrc-doctor.test.ts`'s `tableNames()`), so it cannot reach
+# `_mem_is_scratch`, and a `declare -F` guard would be the second spelling with a branch in front of it.
+# `single-definition.test.ts` compares all three literals and reds on a drift. `_mem_is_scratch` in `ccrc` carries the
+# rule and the measurement (D-2375; A4 adds the child root).
+_dr_mem_is_scratch() { case "$1" in -tmp*|-private-tmp*|-var-folders*|-private-var-folders*|*--cc-tmp-*) return 0 ;; esac; return 1; }
+
 # ── memory convergence ────────────────────────────────────────────────────
 # THE WHOLE DEFECT EXISTED BECAUSE A FORK IS SILENT. Nothing on this box
 # reported that two homes disagreed about a project's memory, so a session read
@@ -6226,14 +6234,6 @@ _check_fleet() {
 # `.claude*` directory is the right answer — a silent blind spot for a name
 # this tool has no business knowing is worse than one more row in the census.
 # shellcheck disable=SC2128,SC2178  # unmeasured is a local string here; the arrays named unmeasured are other functions' locals (shellcheck does not scope names by function)
-# A scratch project slug (a temp directory's), skipped by both memory checks. THE PATTERN LIST IS SPELLED HERE, and that is
-# D-92's trade rather than an oversight — the same one this file already records for `ccd`'s `POOL_NAME_RE`: this table is
-# sourced under `set -u` by things that are NOT `ccrc` (`ccrc-doctor.test.ts`'s `tableNames()`), so it cannot reach
-# `_mem_is_scratch`, and a `declare -F` guard would be the second spelling with a branch in front of it.
-# `single-definition.test.ts` compares all three literals and reds on a drift. `_mem_is_scratch` in `ccrc` carries the
-# rule and the measurement (D-2375; A4 adds the child root).
-_dr_mem_is_scratch() { case "$1" in -tmp*|-private-tmp*|-var-folders*|-private-var-folders*|*--cc-tmp-*) return 0 ;; esac; return 1; }
-
 _check_memory() {
   # A server-role box hosts no sessions (D-3111): the installer converges
   # nothing per account there, so this check measures nothing there either —
