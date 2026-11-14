@@ -79,7 +79,7 @@ into its ledger. Each entry is a plain slug. None carries a number: the programm
 
 ## The badge (Task 10)
 
-- **same-count-leaves-wording, review carry N1** — the row is named for what it pins: a count equal to the last one
+- **same-count-leaves-wording, review carry N1 (review 1898)** — the row is named for what it pins: a count equal to the last one
   written leaves the badge as it is, for 0 and for 3. A separate row pins that the first 0 heard clears the badge, so
   "not heard yet" (null) and "nothing waits" (0) stay two different answers.
 - **last-set-to-zero-on-clear, value** — a clear records 0 as the last count written, so a following 0 leaves the badge.
