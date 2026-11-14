@@ -976,10 +976,11 @@ export interface SessionUsage {
   /** Overlord W0-18: the context's size in tokens, Claude Code's statusline field
    *  `context_window.total_input_tokens` (input plus cache read plus cache creation), the figure the renewal triggers
    *  read. Null when the sidecar has none or it is not a number above zero: never 0 for "no reading". Optional
-   *  because an older sidecar omits it; `parseUsageSidecar` is its one reader. */
+   *  because an older sidecar omits it. Two readers, one rule (`tokenCountOf`): `parseUsageSidecar` reads the sidecar,
+   *  and `reviveUsage` reads the persisted shape (a state-cache or offline snapshot) back. */
   readonly ctxTokens?: number | null;
   /** Overlord W0-18: the context window's size in tokens, `context_window.context_window_size`. Null as for
-   *  `ctxTokens`. Optional because an older sidecar omits it; `parseUsageSidecar` is its one reader. */
+   *  `ctxTokens`, and read by the same two readers through `tokenCountOf`. Optional because an older sidecar omits it. */
   readonly ctxWindow?: number | null;
   readonly cost: number | null;
   /** D-8267: when the main conversation's cached prompt prefix leaves its TTL, in epoch SECONDS (the sidecar's unit):
@@ -989,6 +990,11 @@ export interface SessionUsage {
   readonly cacheExpiresAt?: number | null;
   readonly stale: boolean;
 }
+
+/** A token count's one rule (`SessionUsage.ctxTokens`, `.ctxWindow`; review 1927 I2, review 1937 F4): a finite number
+ *  above zero, else null. A negative is no reading, never a small context; nor is a zero, which Claude Code sends before
+ *  a conversation's first API response, and which as a window would make a ratio NaN or Infinity. */
+export const tokenCountOf = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) && v > 0 ? v : null);
 
 /** Where a workspace's pull request is, as ccrc last managed to find out.
  *
@@ -3366,7 +3372,9 @@ function reviveUsage(o: Record<string, unknown>, key: string): SessionUsage | nu
     ts: reqNum(u, 'ts'), model: optStr(u, 'model'), class: optStr(u, 'class'),
     effort: optStr(u, 'effort'), ctxPct: optNum(u, 'ctxPct'), cost: optNum(u, 'cost'),
     cacheExpiresAt: optNum(u, 'cacheExpiresAt'), stale: optBool(u, 'stale', false),
-    ctxTokens: optNum(u, 'ctxTokens'), ctxWindow: optNum(u, 'ctxWindow'),   // Overlord W1a (review 1927 M2)
+    // Overlord W1a (review 1927 M2): a present non-number refuses the session like any number field; a number takes the
+    // sidecar parser's above-zero rule, so a revived 0 or negative is no reading, as a parsed one is (review 1937 F4).
+    ctxTokens: tokenCountOf(optNum(u, 'ctxTokens')), ctxWindow: tokenCountOf(optNum(u, 'ctxWindow')),
   };
 }
 

@@ -4202,14 +4202,10 @@ _hook_compact_refuse() {   # PreCompact -> the block decision on stdout and CS_R
       [[ "$l" == *'"phase":"refused"'* && "$l" =~ ^\{\"at\":([0-9]{1,15}), ]] && (( BASH_REMATCH[1] >= ta )) && return 0
     done 2>/dev/null < "$f"
   done
-  trap '' PIPE
-  { printf '%s\n' '{"decision":"block","reason":"ccrc: this automatic compaction is refused once this turn, and a renewal is due (Overlord C39)"}'; } 2>/dev/null && CS_REFUSED=1
-  trap - PIPE
-  return 0
+  trap '' PIPE; { printf '%s\n' '{"decision":"block","reason":"ccrc: this automatic compaction is refused once this turn, and a renewal is due (Overlord C39)"}'; } 2>/dev/null && CS_REFUSED=1; trap - PIPE
 }
 _hook_compact_pre_line() {   # PreCompact -> one line on $REG/<id>.compactevents; silent and total on any failure
-  local f="$REG/$id.compactevents" prev="$REG/$id.compacteventsprev" line="" lockfd="" lines=() ph=pre rot=0
-  [[ -n "${CS_REFUSED-}" ]] && ph=refused
+  local f="$REG/$id.compactevents" prev="$REG/$id.compacteventsprev" line="" lockfd="" lines=() rot=0
   # THE SCOPE VERDICT ON EVERY LINE: every PreCompact payload names the parent's
   # transcript, so `_hook_compact_scope`'s word is all that tells a subagent's
   # compaction apart. Asked here when the card did not run (its off switch).
@@ -4219,9 +4215,9 @@ _hook_compact_pre_line() {   # PreCompact -> one line on $REG/<id>.compactevents
   # (W0-05) leaves one for twenty minutes, and a main compaction inside them
   # must still count (review 1927 I1).
   [[ -n "${CS_SCOPE+x}" ]] || _hook_history_scope_verdict || true
-  line=$(jq -c --argjson at "$(_hook_epoch_ms)" --arg s "${CS_RULE_SCOPE-${CS_SCOPE-}}" --arg t "${CS_RULE_TRANSCRIPT-${CS_TRANSCRIPT-}}" --arg ph "$ph" \
+  line=$(jq -c --argjson at "$(_hook_epoch_ms)" --arg s "${CS_RULE_SCOPE-${CS_SCOPE-}}" --arg t "${CS_RULE_TRANSCRIPT-${CS_TRANSCRIPT-}}" --arg ph "${CS_REFUSED:+refused}" \
     '{at:$at, trigger:(.trigger // "auto" | if . == "auto" or . == "manual" then . else "other" end),
-      scope:(if $s=="" then null else $s end), transcript:(if $t=="" then null else $t end), phase:$ph}' \
+      scope:(if $s=="" then null else $s end), transcript:(if $t=="" then null else $t end), phase:(if $ph=="" then "pre" else $ph end)}' \
     <<<"$payload" 2>/dev/null) || return 0
   _hook_lock_acquire "$COMPACT_LOCK_WAIT" || return 0
   lockfd="$HOOK_LOCK_FD"
@@ -4231,9 +4227,8 @@ _hook_compact_pre_line() {   # PreCompact -> one line on $REG/<id>.compactevents
   # `.compacteventsprev` writes no line and moves nothing, so the rotation can
   # never fail over and over while the current file grows (review 1927 M5).
   _hook_generation_ok || { _hook_lock_release "$lockfd"; return 0; }
-  if [[ -L "$prev" ]] && _hook_lock_still_canonical "$lockfd"; then
-    rm -f "$prev" 2>/dev/null
-  fi
+  [[ -L "$prev" ]] && _hook_lock_still_canonical "$lockfd" \
+    && rm -f "$prev" 2>/dev/null
   if [[ ! -L "$f" && ! -L "$prev" ]] && { [[ ! -e "$f" ]] || [[ -f "$f" ]]; } \
     && { [[ ! -e "$prev" ]] || [[ -f "$prev" ]]; }; then
     [[ -f "$f" ]] && { mapfile -t lines < "$f"; } 2>/dev/null

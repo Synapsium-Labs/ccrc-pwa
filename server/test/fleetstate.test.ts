@@ -835,6 +835,8 @@ describe('reviveFleetSession carries usage (routing slice 0)', () => {
       expect(reviveFleetSession({ ...base, usage: { ...usage, [k]: 150_000 } })?.usage?.[k], k).toBe(150_000);
       expect(reviveFleetSession({ ...base, usage: { ...usage, [k]: null } })?.usage?.[k], k).toBeNull();
       expect(reviveFleetSession({ ...base, usage: { ...usage, [k]: 'x' } }), k).toBeNull();
+      // Review 1937 F4: the reviver takes the sidecar parser's above-zero rule, so a 0 or a negative revives as no reading.
+      for (const v of [0, -1, -150_000]) expect(reviveFleetSession({ ...base, usage: { ...usage, [k]: v } })?.usage?.[k], `${k} ${v}`).toBeNull();
     }
     expect(reviveFleetSession({ ...base, usage: { ...usage, ts: 'x' } })).toBeNull();      // MalformedSnapshot: no clock
     expect(reviveFleetSession({ ...base, usage: { ...usage, class: 7 } })).toBeNull();     // MalformedSnapshot: not a string

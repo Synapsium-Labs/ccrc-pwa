@@ -776,8 +776,8 @@ This subsection says how compaction becomes a counted fallback inside one genera
     fires first.
   - **Idle compaction is off,** so the idle trigger at 45 minutes renews before Claude Code's compaction at about 55.
   - **A proactive compaction becomes a renewal.** The PreCompact arm refuses a proactive automatic compaction and marks
-    a renewal due (soft, Table 3.3.11b). It is a decision inside history W3's one print, never a second print (C53).
-    It ships dark until W0 proves that a refusal leaves the turn intact.
+    a renewal due (soft, Table 3.3.11b). It is a verdict of its own, ahead of history W3's one print, which adds no
+    print (C53; plan-driven consistency, ruling R7b). It ships dark until W0 proves that a refusal leaves the turn intact.
   - **When the soft budget is spent** (§3.3.11), a proactive compaction is allowed through, and counted.
 - **When a compaction does happen,** three things protect what it keeps. The role's compaction instructions (C51) keep
   ids, open commitments and recent corrections, and end the summary with the history node. The anchor on the `compact`
@@ -1084,9 +1084,9 @@ prints nothing today (pinned by tests), and history's W3 is the planned owner of
     reader. A renewal discards the context, never the record.
   - **One PreCompact print, owned by history.** W3 steering makes PreCompact print one text: the instructions for the
     session's own DAG leaf, the `<ccrc-leaf>` block. The role instructions of C51 ride inside that print, as a section
-    the role table supplies. So does the PreCompact arm's refusal (§3.3.4), as a decision. Neither programme adds a
-    second writer. While W3 is not armed for a session's backend (arming is the operator's, after its compliance bars),
-    only the typed `/compact` instructions carry them.
+    the role table supplies, before the steer text. The PreCompact arm's refusal (§3.3.4) is a verdict of its own, ahead
+    of that print, which adds no print (R7b). Neither programme adds a second writer. While W3 is not armed for a
+    session's backend (arming is the operator's, after its compliance bars), only the typed `/compact` carries them.
   - **Leaves first, transcripts on demand.** The daily distillation (§9.2) and the weekly drift reading (C52) read the
     DAG's leaves, the session-written summaries, before any raw transcript. They expand only where a leaf is not
     enough. That makes reading every project (R10) affordable. The history of the `overlord` project, of the auditor
