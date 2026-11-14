@@ -51,6 +51,9 @@ into its ledger. Each entry is a plain slug. None carries a number: the programm
   (`instrument-shell.test.tsx`). In Refined's two bars the face sits straight after the wordmark, as planned. Moving it
   against the wordmark in Instrument would mean taking the wordmark out of the home door, or relaxing the nav's
   doors-only guard. **For the coordinator.**
+- **fleet-head-wears-the-face, placement** — Instrument has no phone head of its own (its skin set's `Head` is null), so
+  on a phone it shows the shared `pwa/src/fleet/FleetHead.tsx`, which writes its own wordmark. That is a fourth top bar the
+  plan did not list. The face sits straight after that wordmark too, so every top bar wears it.
 - **face-mark-class-and-css, layout** — a `face-mark` class with layout-only rules (`flex: none`, margins) keeps the face
   in place in each bar. There is no animation, filter or shadow, and the still frame is lane A's `.chr[data-still]` rules.
 - **every-change-plays, accessibility** — each change of mood plays for 5 s, including a return to a mood that had
@@ -86,6 +89,14 @@ into its ledger. Each entry is a plain slug. None carries a number: the programm
 - **badge-feature-detect-pinned, a guard** — rows with no badge API, and with only one of its two functions, are pinned.
   Deleting the feature detect fails three of them. A synchronous throw counts as a refusal: one warning, then the hook
   stops trying.
+
+## File names
+
+- **files-named-apart-by-more-than-case, a rule the suite found** — `pwa/test/drawer-keybar.test.tsx` refuses two files
+  whose paths differ only by case, since they collide on a case-insensitive disk. The plan's `face/appBadge.ts` (L1)
+  beside `face/AppBadge.tsx` (L4) is therefore `face/badgeAct.ts`, named for its one function. The plan's
+  `face/splash.ts` (L1) beside `face/Splash.tsx` (L4) is therefore `face/SplashScreen.tsx`, whose component is still
+  `Splash`. The mutation floors' key follows the decider's file: `pwa/src/face/badgeAct.ts#badgeAct`.
 
 ## The gates (Tasks 5, 9, 10 and 11)
 
