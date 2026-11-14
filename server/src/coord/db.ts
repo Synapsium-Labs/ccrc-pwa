@@ -107,7 +107,7 @@ export function defaultCoordDbPath(home: string = homedir()): string {
  *  - This is the first artefact in ccrc whose loss is NOT free. Collapsing an
  *    unreadable database to "empty" would answer "that program never happened"
  *    — the exact shape of `ccd`'s SIXTEENTH FORGERY, a manifest that lies
- *    pristine (`ccd/ccd:4442-4444`).
+ *    pristine (`ccd/ccd`'s `_ws_clip_manifest`).
  *  - And the reason those files could not do better is absent here: they had
  *    NOWHERE to put a version key. This file has `PRAGMA user_version`, which
  *    IS the key, so the negotiation is a real one and does not have to be

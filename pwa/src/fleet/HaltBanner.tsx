@@ -28,6 +28,7 @@ import type { NodeWire, ReleaseWire, UpdatesView } from '../../../shared/api';
 import { Button } from '@ccrc/ui';
 import { AckConfirm, canAck, sendAck } from './updateAck';
 import type { AckOutcome } from './updateAck';
+import { focusShownLandmark } from '../skins/frame';
 import { ResultLine, useResultLine } from './settingsText';
 import { haltLine, haltingNodes } from './updateHalt';
 import { UPDATES_STALE_TEXT } from './useUpdatesView';
@@ -65,9 +66,17 @@ function HaltRow({ node: n, releases, seq, onAcked, listRef }: {
   const rowRef = useRef<HTMLLIElement>(null);
   // Wave 19, R26(a): a clean ack returns this row to idle, so the next poll drops it. If it holds focus as it
   // leaves, the banner's list takes it; this cleanup runs before React removes the <li>, so the test can still see it.
+  // Residue R28 (D-8340): when the last halting row leaves, the whole banner goes with it, and React has detached the
+  // list's ref by the time this runs (a deleted subtree detaches each host's ref before its children's cleanups). The
+  // focus then goes to the landmark that is shown, as the update line's dismiss sends it, never to <body>.
   useLayoutEffect(() => {
     const row = rowRef.current;
-    return () => { if (row !== null && row.contains(document.activeElement)) listRef.current?.focus(); };
+    return () => {
+      if (row === null || !row.contains(document.activeElement)) return;
+      const list = listRef.current;
+      if (list !== null) list.focus();
+      else focusShownLandmark();
+    };
   }, [listRef]);
   const held = hold !== null
     && (hold.kind === 'acked' || hold.after === null ? hold.lease === leaseKey(n) : seq < hold.after);

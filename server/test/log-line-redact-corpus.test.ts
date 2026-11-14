@@ -62,6 +62,14 @@
 // then a letter (`tok@host:8443.x retrying`, `tok@host:8443!x retrying`, `tok@host:8443}x retrying`), and a host of
 // digits only before its port (`tok@2130706433:80 x`), which reads as a time's `build@10:30`.
 //
+// D-8342 moved eight rows: a scheme URL's query and fragment are withheld in every column (what follows the first '?' or
+// '#' reads `[withheld]`, the mark kept), so the `authority` rows' `https://host?a@b`, `https://h#a@b` and
+// `https://u:p@host?a@b#c@d`, the `plain` row's query email and `https://h/r?email=a@example.com/y` now read
+// `…?[withheld]` or `…#[withheld]`, and the known limit `https://h/x?proxy=user:secret@host` is a `query` row: sixteen
+// known limits are left. New `query` rows hold the release base's own shapes (`?x=1`, `#f`), a JSON-escaped scheme, a
+// quote, '<' or backtick ending the token, a `KEY=` prefix and a second pass; a `prose` row holds the '?' and '#' that
+// stay (no scheme URL around them).
+//
 // Every call goes through ONE fixed driver: the definitions are written to a temporary file and the input to
 // another, and bash runs `bash --noprofile --norc -s -- <defs> <input>` with a fixed stdin script whose last line is
 // one of the literal calls in `SCRIPTS`. No path and no environment value ever reaches a script's text. The input
@@ -185,8 +193,8 @@ describe('the log-line redaction corpus (D-7078)', () => {
   });
 
   // D-7564: the eight shapes once recorded as `known-limit` are R8 rows now, and in every column their output no longer
-  // carries the secret. The known limits left are exactly the seventeen lines below, each with a note, each printed whole.
-  it('CONTROL: the eight former known-limit shapes are R8 rows whose every column drops the secret, and only the seventeen recorded known limits are left', () => {
+  // carries the secret. The known limits left are exactly the sixteen lines below, each with a note, each printed whole.
+  it('CONTROL: the eight former known-limit shapes are R8 rows whose every column drops the secret, and only the sixteen recorded known limits are left', () => {
     const former = [
       'server user:secret@host:8443 refused', 'user:secret@host: refused', "user:secret@host' failed",
       'user:secret@host" failed', 'user:secret@host\tfailed', 'user:secret@host\rfailed', 'user:secret@@host/x',
@@ -198,7 +206,7 @@ describe('the log-line redaction corpus (D-7078)', () => {
       for (const c of COLUMNS) expect(want(r!, c).toString('utf8'), `${input} (${c})`).not.toContain('secret');
     }
     const limits = [
-      'https://h/x?proxy=user:secret@host', 'GET /p?u=user:secret@host:8443', 'dir/user:secret@host',
+      'GET /p?u=user:secret@host:8443', 'dir/user:secret@host',
       'user:pa#ss@host refused', 'user:pa?ss@host refused', 'user:pa/ss@host refused',
       '--proxy=tok@host refused', '--proxy tok@host refused', 'tok@host:8443-x retrying', 'tok@host:8443- x',
       'tok@host:8443a x', 'tok@host:8443_x y', 'tok@host:8443~ x', 'tok@host:8443.x retrying',
@@ -349,7 +357,8 @@ describe('the bare-host mode\'s scope (D-7289)', () => {
   // The call counts are pinned exactly, as measured on this tree: a call the reader stops seeing (a new spelling, a moved
   // line it misreads) reds here, not only a call that passes a second word. A commit that adds or removes a call moves
   // its file's count in the same diff.
-  const CALLS = { 'ccd/ccrc': 20, 'ccd/ccrc-doctor-checks': 3 } as const;
+  // D-8389: ccd/ccrc's 21st is `_upd_fetch`'s, over the verifier's stderr.
+  const CALLS = { 'ccd/ccrc': 21, 'ccd/ccrc-doctor-checks': 3 } as const;
   it('every _upd_redact call in ccd/ccrc and ccd/ccrc-doctor-checks passes exactly one argument, and their counts are pinned', () => {
     for (const [f, count] of Object.entries(CALLS)) {
       const calls = updRedactCalls(read(f));

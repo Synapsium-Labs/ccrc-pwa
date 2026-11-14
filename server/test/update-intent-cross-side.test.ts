@@ -22,7 +22,7 @@
 // — now runs the real reader there, through updateIntentFixtures.ts.
 //
 // Fixture HOMEs only (mkTmp), one per box. Nothing reads the live $HOME; the
-// service managers are poisons (ghContainedEnv) and `curl` is a stub.
+// service managers, ssh and scp are poisons (ccrcContainedEnv, D-8394) and `curl` is a stub.
 import { describe, it, expect, afterEach } from 'vitest';
 import { spawnSync } from 'node:child_process';
 import { mkdirSync, readFileSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
@@ -47,7 +47,7 @@ import {
 import { seedRoster } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
 import { describeLinux } from './platformFixtures.js';
-import { ghContainedEnv } from './ccdWsHelpers.js';
+import { ccrcContainedEnv } from './ccrcContainment.js';
 import { CCRC, nodeEnv, plantNode, readIntent } from './updateIntentFixtures.js';
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
@@ -207,7 +207,7 @@ function envWithoutJq(home: string): NodeJS.ProcessEnv {
   }
   const tmp = path.join(home, 'tmp');
   mkdirSync(tmp, { recursive: true });
-  return ghContainedEnv(home, { HOME: home, TMPDIR: tmp, PATH: bin }, { systemd: true });
+  return ccrcContainedEnv(home, { HOME: home, TMPDIR: tmp, PATH: bin }, { managers: true, curl: 'poison' });
 }
 
 /** A real `local://` release layout under `root`/`dir`: SHA256SUMS (its REAL
@@ -410,7 +410,9 @@ describe('the other direction: a real _upd_phase report through W2\'s real repor
     const b = reportFrom({ ok: true, content: `${second}\n` });
     expect(a).toMatchObject({ phase: 'installing', target: 'v0.0.11', detail: 'fixture detail' });
     expect(b).toMatchObject({ phase: 'done', target: 'v0.0.11', detail: null });
-    expect(Object.keys(a!).sort()).toEqual(['detail', 'phase', 'startedAt', 'target', 'updatedAt']);
+    // D-8386 (R37): the sixth field, `sweep`, is null here: no sweep ran, so `_upd_phase` wrote no `sweep` key.
+    expect(Object.keys(a!).sort()).toEqual(['detail', 'phase', 'startedAt', 'sweep', 'target', 'updatedAt']);
+    expect(a!.sweep, 'a report with no sweep key read as measured').toBeNull();
     // THE `pid` KEY IS IGNORED (rulings R2, R15): the same report without it
     // reads identically — W2 Task 11's "an extra key is ignored", from this side.
     const { pid: _pid, ...withoutPid } = rawA;
@@ -439,6 +441,26 @@ describe('the other direction: a real _upd_phase report through W2\'s real repor
     }
     expect(b!.startedAt, 'one process, one start').toBe(a!.startedAt);
     expect(b!.updatedAt!).toBeGreaterThanOrEqual(a!.updatedAt!);
+  });
+
+  // D-8386 (R37): the sweep's record, from the real writer through the real reader. `_upd_phase` writes the `sweep` key
+  // only while UPD_SWEEP_WORD is set, redacted and cut, as the eighth key; `reportFrom` reads it as the word.
+  it('a real _upd_phase write with the sweep word set reaches reportFrom\'s `sweep`; with it unset, null', () => {
+    const home = mkTmp('ccrc-cross-sweep-');
+    const r = spawnSync('bash', ['-c', [
+      'source "$1" >/dev/null || exit 90',
+      'UPD_REPORT_TARGET=v0.0.11; UPD_FROM=cli',
+      '_upd_phase installing',
+      'cat "$HOME/.ccrc/update.json"',
+      "UPD_SWEEP_WORD='down: 2: alpha-one beta-two'",
+      '_upd_phase done',
+      'cat "$HOME/.ccrc/update.json"',
+    ].join('\n'), '_', CCRC], { env: nodeEnv(home), encoding: 'utf8' });
+    expect(r.status, r.stderr).toBe(0);
+    const [before, after] = r.stdout.split('\n').filter((l) => l !== '');
+    expect(Object.keys(JSON.parse(after!) as Record<string, unknown>)).toContain('sweep');
+    expect(reportFrom({ ok: true, content: `${before}\n` })!.sweep).toBeNull();
+    expect(reportFrom({ ok: true, content: `${after}\n` })).toMatchObject({ phase: 'done', sweep: 'down: 2: alpha-one beta-two' });
   });
 
   // FIX ROUND 1, F1a (controller-mandated pin, committed — a throwaway

@@ -16,7 +16,7 @@ import {
 } from '../../../shared/switches.js';
 import { runBelongsTo, type ChildMarkRead } from '../../../shared/runBelongs.js';
 import { RUN_CLOSE_REFUSALS, runCloseGroupArmed, type RunCloseChoice, type RunCloseGroup } from '../../../shared/run-close.js';
-import { ITEM_DOORS, type ItemDoor, type ItemDoors } from '../../../shared/ledgers.js';
+import { ABANDONING_DOORS, ITEM_DOORS, type ItemDoor, type ItemDoors } from '../../../shared/ledgers.js';
 import { DEAD_COORDINATOR_BREAKER_WINDOW_MS, DEAD_COORDINATOR_GAP_MS } from '../deadCoordinator.js';
 import { RUN_QUIET_MS } from './drift.js';
 
@@ -389,6 +389,36 @@ export function refusalDoors(reason: RefusalReason): ItemDoors | null {
   return d.length === 0 ? null : (d as unknown as ItemDoors);
 }
 
+/** What the lane measured about who could take a refused close (D-8558): whether the registry still holds the claimant's session
+ *  (false for a forgotten one, and for a run nobody claims), whether the programme can still take a run (its plan not
+ *  closed), and whether this run is the programme's last one not closed. */
+export interface DoorFacts {
+  readonly claimantHeld: boolean;
+  readonly programmeLive: boolean;
+  readonly lastLiveRun: boolean;
+}
+/** The facts under which a reason's doors are today's: the claimant's session is there. */
+export const CLAIMANT_HELD: DoorFacts = { claimantHeld: true, programmeLive: true, lastLiveRun: false };
+
+/** THE ONE DECIDER of a refused close's doors from the lane's facts (D-8558). A claimant the registry holds keeps the reason's
+ *  doors. One it does not hold is never a door: `open-coordinator` becomes `close-run` (the operator's abandon, with a reason) and,
+ *  while the programme can still take a run, `hand-to-coordinator` (the reclaim, naming the heir); a programme that cannot drops
+ *  `hand-to-coordinator` wherever it stood. On the programme's last live run an item that can end the run also offers
+ *  `end-programme`. Pure: the order is the reason's, then the added doors, each once. */
+export function refusedCloseDoors(doors: ItemDoors, f: DoorFacts): ItemDoors {
+  if (f.claimantHeld) return doors;
+  const out: ItemDoor[] = [];
+  const add = (d: ItemDoor): void => { if (!out.includes(d)) out.push(d); };
+  for (const d of doors) {
+    if (d === 'open-coordinator') { add('close-run'); if (f.programmeLive) add('hand-to-coordinator'); continue; }
+    if (d === 'hand-to-coordinator' && !f.programmeLive) continue;
+    add(d);
+  }
+  if (f.lastLiveRun && out.some((d) => ABANDONING_DOORS.includes(d))) add('end-programme');
+  // Never empty: every reason's doors hold one that survives (`open-coordinator` always leaves `close-run`).
+  return (out.length === 0 ? doors : out) as unknown as ItemDoors;
+}
+
 export type RefusalRoute =
   | { readonly kind: 'tell' }
   | { readonly kind: 'tell-and-hold'; readonly doors: ItemDoors }
@@ -396,14 +426,17 @@ export type RefusalRoute =
   | { readonly kind: 'inform' };
 
 /** One row per line of §12.2's table. `coordinator` is `lives` for an alive or asleep claimant and `gone` for one that reads
- *  dead; `abandonable` is `abandonRefusal(coord, runId) === null`, read inside the lane's hold. A run the arm cannot move from
+ *  dead; `facts` decide a gone claimant's doors (`refusedCloseDoors`, D-8558); `abandonable` is `abandonRefusal(coord, runId) === null`, read inside the lane's hold. A run the arm cannot move from
  *  its row raises no item whoever owns it, and an `unknown` run is information whoever owns it. A live coordinator is told first
  *  and the item is the last step, so it shows only when the cell is one the coordinator may handle itself (the unreadable
  *  marker, held for the ask window). This decider is clock-free: the lane takes the hold's end from `askNotifyAt(now)`.
  *  The cells §12.2 says do not arise under a living coordinator (busy worker, absent claimant, an undelivered warning) answer
  *  `tell`: nothing is raised for them. */
-export function refusalRoute(reason: RefusalReason, coordinator: 'lives' | 'gone', abandonable: boolean): RefusalRoute {
-  const doors = refusalDoors(reason);
+export function refusalRoute(
+  reason: RefusalReason, coordinator: 'lives' | 'gone', abandonable: boolean, facts: DoorFacts = CLAIMANT_HELD,
+): RefusalRoute {
+  const base = refusalDoors(reason);
+  const doors = base === null || coordinator === 'lives' ? base : refusedCloseDoors(base, facts);
   if (reason === 'unknown-run' || doors === null || !abandonable) return { kind: 'inform' };
   if (coordinator === 'lives') {
     return reason === 'child-marker-unreadable' ? { kind: 'tell-and-hold', doors } : { kind: 'tell' };

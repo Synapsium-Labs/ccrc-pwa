@@ -395,8 +395,11 @@ describe('the killed-flip state: C27 admits the one rollback a killed update nee
     const { home, v1, v2 } = killedFlipBox('ccrc-fx-b-detached-');
     rmSync(join(v1, '.ccrc-installed'));
     publishV1(home);
+    // D-8390 (R50 b): a `--detach` parent reads ccrc.env alone, as its child does, so the fixture's base is planted there.
+    appendFileSync(join(home, '.ccrc', 'ccrc.env'), `CCRC_RELEASE_BASE_URL=local://${home}/releases\n`);
     const parent = rollbackRun(home, ['--to', 'v1.0.0', '--detach', '--from', 'pwa']);
     expect(parent.code, `stderr: ${parent.stderr}\nstdout: ${parent.stdout}`).toBe(0);
+    expect(localUrls(home), 'the parent asked the fixture\'s release whether v1.0.0 exists').toEqual([`local://${home}/releases/download/v1.0.0/SHA256SUMS`]);
     const argv = fileText(join(home, 'systemd-run-argv')).split('\n').filter((l) => l !== '');
     expect(argv).toEqual([expect.stringMatching(/ ccrc-detach rollback --to v1\.0\.0 --from pwa$/)]);
     expect(lastReport(home)).toMatchObject({ phase: 'queued', from: 'pwa' });
@@ -2899,6 +2902,23 @@ describe('ccrc backup and update: the coordination snapshot callers (delegation 
       expect(knob(home, `export CCRC_BACKUP_KEEP=7; _ccrc_knob CCRC_BACKUP_KEEP "" file; ${ECHO}`)).toBe('rc 0 val  from default why \n');
     });
 
+    it('D-8390 (R50 b): KNOB_FILE_ONLY=1, a --detach parent\'s switch, makes every reading file mode; no environment can set it', () => {
+      const home = boxWith('ccrc-fx-r50b-', 'CCRC_BACKUP_KEEP=5\n');
+      expect(knob(home, `export CCRC_BACKUP_KEEP=7; KNOB_FILE_ONLY=1; _ccrc_knob CCRC_BACKUP_KEEP 10; ${ECHO}`)).toBe('rc 0 val 5 from file why \n');
+      // Sourced with KNOB_FILE_ONLY=1 exported: the file-scope assignment clears it, so the environment still wins.
+      const r = bareSourced(home, `export CCRC_BACKUP_KEEP=7; _ccrc_knob CCRC_BACKUP_KEEP 10; ${ECHO}`, ['KNOB_FILE_ONLY=1']);
+      expect(r.stdout, r.stderr).toBe('rc 0 val 7 from environment why \n');
+      // Both verbs set it when, and only when, --detach is parsed, before anything is read.
+      const src = readFileSync(join(REPO, 'ccd', 'ccrc'), 'utf8');
+      for (const fn of ['cmd_update', 'cmd_rollback']) {
+        const body = new RegExp(`^${fn}\\(\\) \\{[\\s\\S]*?\\n\\}$`, 'm').exec(src)?.[0].split('\n') ?? [];
+        const set = body.findIndex((l) => /^ {2}\[ "\$detach" -eq 0 \] \|\| KNOB_FILE_ONLY=1$/.test(l));
+        expect(set, `${fn} sets it`).toBeGreaterThan(0);
+        expect(body.slice(0, set).some((l) => /^ {2}done$/.test(l)), `${fn}: after its argument loop`).toBe(true);
+        expect(body.slice(0, set).some((l) => /_ccrc_knob|_upd_release_base|_upd_asset_listed|_upd_deadline_ms/.test(l)), `${fn}: before any read`).toBe(false);
+      }
+    });
+
     it('W24-R3: a name outside CCRC_SETTINGS is never read, from the file or the environment', () => {
       const home = boxWith('ccrc-fx-w24-r3-', 'CCRC_ACCOUNTS=/x\n');
       expect(knob(home, `export CCRC_ACCOUNTS=/y; _ccrc_knob CCRC_ACCOUNTS ""; ${ECHO}`))
@@ -3219,6 +3239,28 @@ describe('ccrc backup and update: the coordination snapshot callers (delegation 
       expect(deadline(home, 'max')).toBe('1200000 rc 1\n');
     });
 
+    it('D-8390 (R50 a): an undecided reading says which, in the knob readers\' words; a decided one leaves UPD_DEADLINE_WHY empty', () => {
+      const says = 'a positive whole number of milliseconds in canonical digits (at most 15, no lead zero)';
+      const why = (home: string, mode: '' | 'min' | 'max', extra: string[] = []): string => {
+        const r = bareSourced(home, `_upd_deadline_ms ${mode} >/dev/null; echo "rc $? [$UPD_DEADLINE_WHY]"`, extra);
+        expect(r.code, r.stderr).toBe(0);
+        expect(r.stderr, 'the reading printed on stderr').toBe('');
+        return r.stdout;
+      };
+      const home = boxWith('ccrc-fx-r50a-why-', 'CCRC_UPDATE_DEADLINE_MS=1200000\n');
+      expect(why(home, 'max')).toBe('rc 0 []\n');
+      writeFileSync(exposureFile(home), 'CCRC_UPDATE_DEADLINE_MS=2e6\n');
+      expect(why(home, 'max'), 'the exposure file').toBe(`rc 1 [CCRC_UPDATE_DEADLINE_MS='2e6' is not ${says}, as set in the exposure file]\n`);
+      expect(why(home, '', ['CCRC_UPDATE_DEADLINE_MS=+600000']), 'the environment')
+        .toBe(`rc 1 [CCRC_UPDATE_DEADLINE_MS='+600000' is not ${says}, as set in the environment]\n`);
+      writeFileSync(envFile(home), `CCRC_UPDATE_DEADLINE_MS=${'9'.repeat(40)}\n`);
+      expect(why(home, 'min'), 'ccrc.env first, its value capped at 32 characters')
+        .toBe(`rc 1 [CCRC_UPDATE_DEADLINE_MS='${'9'.repeat(32)}...' is not ${says}, as set in the box's ccrc.env]\n`);
+      writeFileSync(envFile(home), 'export CCRC_UPDATE_DEADLINE_MS=600000\n');
+      expect(why(home, ''), 'a line the reader cannot take is its own sentence')
+        .toMatch(/^rc 1 \[CCRC_UPDATE_DEADLINE_MS cannot be measured: ~\/\.ccrc\/ccrc\.env names it on a line this reader does not take/);
+    });
+
     it('W24-K1: past its bound the keep-set makes its first full verification and no other, and answers 3', () => {
       const home = kBox('ccrc-fx-w24-k1-');
       const r = sourcedWith(home, `${FLOOR}; _bak_list; _bak_keepset "$(( $(date +%s) - 1 ))"; echo "rc $? [$BAK_KEEP_SNAP] [$BAK_KEEP_DATA] [$BAK_KEEP_TREE]"`,
@@ -3298,7 +3340,14 @@ describe('ccrc backup and update: the coordination snapshot callers (delegation 
       const until = fn('_bak_gc').split('\n').filter((l) => /^\s+until=\$\(\(/.test(l));
       expect(until, 'one until line in _bak_gc').toHaveLength(1);
       // The control plane's factor by import, never by its source text (ARCH-06's ratchet counts a text pin on server/src).
-      const term = Number(new RegExp(`hc=\\$\\(\\( ${UPDATE_DEADLINE_HARD_CAP_FACTOR} \\* dl \\/ 1000 - ([0-9]+) - margin \\)\\)`).exec(until[0])?.[1] ?? 'NaN');
+      expect(until[0], 'the hard cap subtracts the chain').toMatch(new RegExp(`hc=\\$\\(\\( ${UPDATE_DEADLINE_HARD_CAP_FACTOR} \\* dl \\/ 1000 - chain - margin \\)\\)`));
+      // D-8390 (R50 c): one line names both chains, an update's (a re-install rollback leads `update`) and a flip's.
+      const chains = fn('_bak_gc').split('\n').flatMap((l) => {
+        const m = /^\s+local chain=([0-9]+); \[ "\$lead" = update \] \|\| chain=([0-9]+)$/.exec(l);
+        return m ? [[Number(m[1]), Number(m[2])] as const] : [];
+      });
+      expect(chains, 'one chain line in _bak_gc').toHaveLength(1);
+      const [term, flipTerm] = chains[0]!;
       const proto = readFileSync(join(REPO, 'shared', 'agent-protocol.ts'), 'utf8');
       const ms = (name: string): number => Number((new RegExp(`^export const ${name} = ([0-9_]+);$`, 'm').exec(proto)?.[1] ?? 'NaN').replace(/_/g, ''));
       // The four sources: the spawn's bound; the release-host probe's validated ceiling, by its name, counted twice (a re-install
@@ -3313,6 +3362,30 @@ describe('ccrc backup and update: the coordination snapshot callers (delegation 
         expect(v, what).toBeGreaterThan(0);
       }
       expect(term, `the until line: ${until[0]}`).toBe(spawn + 2 * ceiling + health);
+      // A flip never reaches `cmd_update`, the one caller of `_upd_fleet_warn`, so its chain drops the health call alone.
+      const callers = src.split('\n').filter((l) => /^\s+_upd_fleet_warn$/.test(l));
+      expect(callers, 'one call of _upd_fleet_warn').toHaveLength(1);
+      expect(fn('cmd_update'), 'it is cmd_update\'s').toMatch(/^\s+_upd_fleet_warn$/m);
+      expect(fn('cmd_rollback'), 'a rollback reaches it only through cmd_update').not.toMatch(/_upd_fleet_warn/);
+      expect(flipTerm, 'a flip\'s chain').toBe(spawn + 2 * ceiling);
+    });
+
+    it('D-8390 (R50 c): a rollback by flip bounds its keep-set by its own start chain, which has no fleet-health call; an update keeps 63 s', () => {
+      // The keep-set's bound, read by a `_bak_keepset` that answers 3 at once: the hard cap's term wins over the re-stamp's here
+      // (a report started 3.5 deadlines back). A flip runs no `_upd_fleet_warn` (only `cmd_update` does), so its chain is the
+      // spawn and the two probes alone (W24-K6 derives both terms).
+      const bound = (lead: string): number => {
+        const home = kBox(`ccrc-fx-r50c-${lead}-`);
+        const now = ago(0);
+        const started = now - 3150;
+        const r = sourcedWith(home, `${FLOOR}; UPD_THIN_AT=${now}; UPD_REPORT_STARTED=${started}; `
+          + `_bak_keepset() { echo "until $1"; return 3; }; _bak_gc ${lead}; echo "rc $?"`, withShim(home));
+        const m = /^until ([0-9]+)$/m.exec(r.stdout);
+        expect(m, `stdout: ${r.stdout}\nstderr: ${r.stderr}`).not.toBeNull();
+        return Number(m![1]) - started;
+      };
+      expect(bound('rollback'), 'a flip: the spawn and the two probes').toBe(4 * 900 - 58 - 235);
+      expect(bound('update'), 'an update: the whole chain').toBe(4 * 900 - 63 - 235);
     });
 
     it('W24-H1: the gate window is read from ccrc.env, the environment wins, and an unreadable line waits 90', () => {

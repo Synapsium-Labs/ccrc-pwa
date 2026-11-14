@@ -88,14 +88,14 @@ describe('GET /api/fleet/health', () => {
   it('remote mode + connected fleetState reports connected', async () => {
     const app = await buildServer(remoteDeps({}, { connected: true, downSince: null, ccdVerbs: null, rosterFp: null, build: null }));
     const res = await app.inject({ method: 'GET', url: '/api/fleet/health' });
-    expect(res.json()).toEqual({ mode: 'remote', connected: true, downSince: null, roster: 'unknown', build: 'unknown', projectPools: 'unknown' });
+    expect(res.json()).toEqual({ mode: 'remote', connected: true, downSince: null, roster: 'unknown', build: 'unknown', projectPools: 'unknown', rebootConfigured: false });
     await app.close();
   });
 
   it('remote mode + disconnected fleetState surfaces connected:false and downSince', async () => {
     const app = await buildServer(remoteDeps({}, { connected: false, downSince: 1700000000000, ccdVerbs: null, rosterFp: null, build: null }));
     const res = await app.inject({ method: 'GET', url: '/api/fleet/health' });
-    expect(res.json()).toEqual({ mode: 'remote', connected: false, downSince: 1700000000000, roster: 'unknown', build: 'unknown', projectPools: 'unknown' });
+    expect(res.json()).toEqual({ mode: 'remote', connected: false, downSince: 1700000000000, roster: 'unknown', build: 'unknown', projectPools: 'unknown', rebootConfigured: false });
     await app.close();
   });
 
@@ -323,6 +323,45 @@ describe('GET /api/fleet — degraded mode', () => {
       sessions: [], pools: { listed: true, byProject: {}, enforcement: 'unknown', observedEpoch: null, accountPools: 'unknown' },
     });
     await app.close();
+  });
+});
+
+// D-8382: the reboot button says it cannot work BEFORE the tap. The health answer carries one boolean, whether both keys
+// the reboot needs are set, and never the token or the id; the route and the answer ask the one function.
+describe('GET /api/fleet/health: rebootConfigured (D-8382)', () => {
+  const down = { connected: false, downSince: 1, ccdVerbs: null, rosterFp: null, build: null } as const;
+  it('remote mode with neither key, or with one of the two, reads false; with both, true', async () => {
+    const cases: ReadonlyArray<readonly [Record<string, string>, boolean]> = [
+      [{}, false],
+      [{ CCRC_HETZNER_TOKEN: 'hetzner-secret' }, false],
+      [{ CCRC_FLEET_SERVER_ID: '12345' }, false],
+      [{ CCRC_HETZNER_TOKEN: 'hetzner-secret', CCRC_FLEET_SERVER_ID: '12345' }, true],
+    ];
+    for (const [env, want] of cases) {
+      const app = await buildServer(remoteDeps({ ...env }, { ...down }));
+      const res = await app.inject({ method: 'GET', url: '/api/fleet/health' });
+      expect(res.json().rebootConfigured, JSON.stringify(env)).toBe(want);
+      // A boolean only: neither value reaches the wire.
+      expect(res.body).not.toContain('hetzner-secret');
+      expect(res.body).not.toContain('12345');
+      await app.close();
+    }
+  });
+
+  it('local mode has no reboot, so the field is absent', async () => {
+    const app = await buildServer(testDeps());
+    expect('rebootConfigured' in (await app.inject({ method: 'GET', url: '/api/fleet/health' })).json()).toBe(false);
+    await app.close();
+  });
+
+  it('the route refuses exactly when the health answer says false', async () => {
+    const envs: ReadonlyArray<Record<string, string>> = [{}, { CCRC_HETZNER_TOKEN: 't' }, { CCRC_FLEET_SERVER_ID: '1' }];
+    for (const env of envs) {
+      const app = await buildServer(remoteDeps({ ...env }, { ...down }));
+      expect((await app.inject({ method: 'GET', url: '/api/fleet/health' })).json().rebootConfigured).toBe(false);
+      expect((await app.inject({ method: 'POST', url: '/api/fleet/reboot' })).statusCode, JSON.stringify(env)).toBe(501);
+      await app.close();
+    }
   });
 });
 

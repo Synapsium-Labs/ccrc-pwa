@@ -1156,9 +1156,9 @@ const EXPECTED: Record<string, Outcome> = {
   "POST /api/approvals | pair 9+10 | no deny digest, on an unverified version":
     {"status": 409, "body": "{\"ok\":false,\"error\":\"deny-not-engaged\"}", "effects": {"minted": 0, "row": null, "doorIns": [], "mailToParent": 0, "journal": null}},
   "POST /api/approvals | 10 version-unverified | 2.1.299":
-    {"status": 409, "body": "{\"ok\":false,\"error\":\"version-unverified\",\"detail\":\"this child's live Claude Code version (2.1.299) is not one the rig verified\"}", "effects": {"minted": 0, "row": null, "doorIns": [], "mailToParent": 0, "journal": null}},
+    {"status": 409, "body": "{\"ok\":false,\"error\":\"version-unverified\",\"detail\":\"this child's live Claude Code build is not trusted: build 2.1.299 has no capture yet\",\"trust\":\"not-captured\"}", "effects": {"minted": 0, "row": null, "doorIns": [], "mailToParent": 0, "journal": null}},
   "POST /api/approvals | pair 10+11 | an unverified version and a digest that does not match":
-    {"status": 409, "body": "{\"ok\":false,\"error\":\"version-unverified\",\"detail\":\"this child's live Claude Code version (2.1.299) is not one the rig verified\"}", "effects": {"minted": 0, "row": null, "doorIns": [], "mailToParent": 0, "journal": null}},
+    {"status": 409, "body": "{\"ok\":false,\"error\":\"version-unverified\",\"detail\":\"this child's live Claude Code build is not trusted: build 2.1.299 has no capture yet\",\"trust\":\"not-captured\"}", "effects": {"minted": 0, "row": null, "doorIns": [], "mailToParent": 0, "journal": null}},
   "POST /api/approvals | 11 digest-mismatch | the digest does not match, and the journal line":
     {"status": 409, "body": "{\"ok\":false,\"error\":\"digest-mismatch\"}", "effects": {"minted": 0, "row": null, "doorIns": [], "mailToParent": 0, "journal": "<now> digest-mismatch project-a-quiet-basin\n"}},
   "POST /api/approvals | pair 11+12 | a digest mismatch while the runs are unreadable":

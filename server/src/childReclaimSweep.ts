@@ -312,6 +312,9 @@ export type ChildReclaimMintingRunRead =
 export type ChildReclaimReviewedRunRead =
   | { readonly kind: 'not-a-review' }
   | { readonly kind: 'run'; readonly state: RunState; readonly superseded?: ChildReclaimSuperseded;
+      /** D-8293: the operator released this review's report on its Waiting on you item (`CoordStore.reviewChildReleased`),
+       *  so the run it reviewed no longer keeps the workspace. Absent reads as not released. */
+      readonly released?: boolean;
       /** The reviewed run's id and `openedAt`, for the kept reason (D-6923). Display only. */
       readonly id?: number; readonly openedAt?: number }
   | { readonly kind: 'absent' }
@@ -477,7 +480,8 @@ export interface ChildReclaimSweepInput {
 
 /** How long a REVIEW child's own run may stay closed while the run it reviewed is open before the sweep
  *  says so on the banner (D-5942; spec §2.6): seven days, the expiry horizon. Past it the verdict answers the
- *  kept word `review-report-stale` in place of `review-report-live`; it never makes the child eligible. */
+ *  kept word `review-report-stale` in place of `review-report-live`; it never makes the child eligible. D-8293: past it
+ *  the sweep also raises the child's Waiting on you item, whose Release ends the keep (`coord/reviewRelease.ts`). */
 export const REVIEW_CHILD_CEILING_MS = 7 * 24 * 3_600_000;
 
 /** Every reason the sweep leaves a marked child alone this pass. Twenty-one words: the six KEPT ones are
@@ -544,7 +548,8 @@ export type ChildReclaimSkipRow =
  *    `not-a-workspace`'s and `review-report-stale`'s ends with the same phrase, and the two minting-run
  *    words say, directly before it, that a rebuilt database may have left workers running.
  *    `review-report-stale` (D-5942) ends instead with its release: closing or abandoning the run the
- *    review reviewed, which no person's removal is needed for.
+ *    review reviewed, or the operator's Release on the item the ceiling raised (D-8293), which no person's removal is
+ *    needed for.
  *  - `doubt`: a read that failed, or one that placed no birth for the child
  *    (`child-birth-unplaced`: the mirror holds no dated creation of the workspace, or a removal
  *    journaled after its creation that no newer creation has replaced yet), so the sweep
@@ -583,7 +588,7 @@ export const CHILD_RECLAIM_SKIP = {
   // common phrase. It names the reviewed run by its relation, the way every table sentence speaks (D-6024).
   'review-report-stale': { class: 'kept', sentence:
     'This review’s workspace holds a report the coordinator may still cite: the run it reviewed is still open, though this review’s own run closed more than seven days ago. '
-    + 'ccrc does not reclaim it while the run it reviewed stays open, unless nothing has touched the workspace for seven days and stale reclaim is switched on; closing or abandoning that run releases this workspace, and the sweep can reclaim it then.' },
+    + 'ccrc does not reclaim it while the run it reviewed stays open, unless nothing has touched the workspace for seven days and stale reclaim is switched on; closing or abandoning that run releases this workspace, as does Release on its item in Waiting on you, and the sweep can reclaim it then.' },
   // The one kept sentence that does not end with the common phrase: that phrase would tell a person
   // to remove a main checkout, so this one tells them to remove the marker, never the checkout.
   'not-a-workspace': { class: 'kept', sentence:
@@ -703,7 +708,8 @@ export function childReclaimSweepVerdict(i: ChildReclaimSweepInput): ChildReclai
   // word for the same condition. An unreadable reviewed run is doubt, and
   // doubt waits. An absent one is kept: nothing proves that a run the
   // database does not hold has closed. One exception: a LATER review of the same run has itself closed, so the
-  // coordinator cites that report, not this one (`superseded`, armed by its own marker).
+  // coordinator cites that report, not this one (`superseded`, armed by its own marker). Another: the operator released
+  // this report on the Waiting on you item the ceiling raised (`released`, D-8293).
   switch (i.reviewedRun.kind) {
     case 'not-a-review': break;
     case 'absent': return { eligible: false, why: 'reviewed-run-absent', runId: i.child.runId };
@@ -711,6 +717,7 @@ export function childReclaimSweepVerdict(i: ChildReclaimSweepInput): ChildReclai
     case 'run':
       if (!isTerminalRunState(i.reviewedRun.state)) {
         if (i.reviewedRun.superseded?.live === true) break;   // a later review closed: this report is replaced
+        if (i.reviewedRun.released === true) break;   // D-8293: the operator released this report on its item
         // D-5942: past the ceiling the same keep is said on the banner. A run with no close is never stale.
         if (run.closedAt !== null && i.nowMs - run.closedAt > REVIEW_CHILD_CEILING_MS) {
           return { eligible: false, why: 'review-report-stale', runId: i.child.runId };

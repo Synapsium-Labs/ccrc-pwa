@@ -2,7 +2,7 @@
 // for the card's view and the 409 confirm, the radio a row checks, and each row's lines. The words themselves are L0's
 // (`LANE_ARM_TEXT`, `shared/lane-arm.ts`); nothing here retypes one.
 import {
-  LANE_ARM_TEXT, isLaneArmChoice, isLaneArmImport, isLaneArmLane,
+  LANE_ARM_TEXT, isLaneArmChoice, isLaneArmImport, isLaneArmLane, laneArmGate, laneArmLive,
   type LaneArmChoice, type LaneArmConfirmRequired, type LaneArmRowView, type LaneArmView,
 } from '../../../shared/lane-arm';
 import { isOneOf, isRecord } from '../lib/wire';
@@ -53,16 +53,19 @@ export function asLaneArmConfirm(raw: unknown): LaneArmConfirmRequired | null {
   };
 }
 
-/** The radio a row checks: its stored choice, or neither for a token it does not know, a lost row or an unreadable one
- *  (so either tap can replace it). */
+/** The radio a row checks: its stored choice, or neither for a token it does not know, a lost row, an unreadable one, or
+ *  a Live its gate holds (so either tap can replace it; review 2006 N1: one rule with the server's view, `laneArmLive`). */
 export function laneArmChecked(row: LaneArmRowView): LaneArmChoice | null {
+  if (row.stored === 'live') return laneArmLive(row.stored, laneArmGate(row.lane)) ? 'live' : null;
   return isLaneArmChoice(row.stored) ? row.stored : null;
 }
 
-/** A row's lines under its choice: what stands when the server holds no usable choice, the import's note, then the shadow
- *  record's hint. */
+/** A row's lines under its choice: why it cannot go live yet (its gate, review 2003 F3), what stands when the server holds
+ *  no usable choice, the import's note, then the shadow record's hint. */
 export function laneArmLines(row: LaneArmRowView, shadowLog: string | null): { text: string; tone: 'note' | 'warn' }[] {
   const out: { text: string; tone: 'note' | 'warn' }[] = [];
+  const gate = laneArmGate(row.lane);
+  if (gate !== null) out.push({ text: gate, tone: 'note' });
   if (row.stored === 'unknown') out.push({ text: LANE_ARM_TEXT.unknown, tone: 'warn' });
   if (row.stored === 'absent') out.push({ text: LANE_ARM_TEXT.absent, tone: 'warn' });
   if (row.stored === 'unreadable') {

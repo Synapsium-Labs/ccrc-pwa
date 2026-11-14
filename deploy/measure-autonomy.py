@@ -70,6 +70,8 @@ import argparse, csv, datetime, glob, json, os, random, re, sqlite3, sys, time, 
 IDLE_NUDGE = "Continue with your open tasks. If you were waiting for the operator's answer, say so in one line and stop."
 RESUME_PREFIX = 'Continue from where you left off.'
 MAIL_FENCE = 'ccrc-mail'
+# `shared/plan.ts`'s LINEAR_SYNC_PROGRAMME: ccrc's reserved item home, never a coordinator's programme (bound the same way).
+RESERVED_PROGRAMME = 'linear-sync'
 # The head of `server/src/coord/envelope.ts`'s renderMailNudge, the plain-text prompt the mail lane TYPES into a
 # session (the fenced envelope reaches a session only as a fetched tool result). Bound by measure-autonomy.test.ts.
 MAIL_NUDGE_HEAD = 'ccrc-mail: you have new mail.'
@@ -461,7 +463,7 @@ def cmd_items(a):
     lo = int(parse_day(a.since, '--since') * 1000) if a.since else 0
     hi = int(parse_day(a.until, '--until') * 1000) if a.until else int((time.time() // 86400 + 1) * DAY_MS)
     try:
-        slugs = [r[0] for r in con.execute('SELECT slug FROM programs ORDER BY slug')]
+        slugs = [r[0] for r in con.execute('SELECT slug FROM programs WHERE slug <> ? ORDER BY slug', (RESERVED_PROGRAMME,))]
         runs = con.execute('SELECT id, program, openedAt, closedAt FROM runs').fetchall()
         terminal = dict(con.execute(
             'SELECT runId, MAX(at) FROM run_events WHERE toState IN (%s) GROUP BY runId' % ','.join('?' * len(RUN_TERMINAL)),

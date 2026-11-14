@@ -1,0 +1,162 @@
+{
+ "BASE_RULES": {
+  "field": {
+   "final": false,
+   "json": [
+    "\"([A-Za-z_][A-Za-z0-9_.-]{0,255})\"(\\s*:\\s*)\"((?:[^\"\\\\]|\\\\.)+)\"",
+    "g"
+   ],
+   "namedHead": [
+    "\\b([A-Za-z_][A-Za-z0-9_.-]{0,255})(=|:[ \\t]+)",
+    "g"
+   ],
+   "namedTail": [
+    "\\b([A-Za-z_][A-Za-z0-9_.-]{0,255})(=|:)$",
+    ""
+   ],
+   "namedValue": [
+    "([\"']?)([^\\s\"'`,;&]+)",
+    "y"
+   ],
+   "bearer": [
+    "(Authorization:[ \\t]*Bearer[ \\t]+)([^\\s\"']+)",
+    "gi"
+   ],
+   "mailToken": [
+    "(x-ccrc-mail-token:[ \\t]*)([^\\s\"']+)",
+    "gi"
+   ],
+   "bearerSticky": [
+    "(Authorization:[ \\t]*Bearer[ \\t]+)([^\\s\"']+)",
+    "iy"
+   ],
+   "mailTokenSticky": [
+    "(x-ccrc-mail-token:[ \\t]*)([^\\s\"']+)",
+    "iy"
+   ],
+   "query": [
+    "([?&]token=)([^&\\s\"'#]+)",
+    "gi"
+   ]
+  },
+  "final": {
+   "final": true,
+   "json": [
+    "\"([A-Za-z_][A-Za-z0-9_.-]{0,255})\"(\\s*:\\s*)\"([^\"\\\\\\n\\r<>&]+)\"",
+    "g"
+   ],
+   "namedHead": [
+    "\\b([A-Za-z_][A-Za-z0-9_.-]{0,255})(=|:[ \\t]+)",
+    "g"
+   ],
+   "namedTail": [
+    "\\b([A-Za-z_][A-Za-z0-9_.-]{0,255})(=|:)$",
+    ""
+   ],
+   "namedValue": [
+    "([\"']?)([^\\s\"'`,;&\\\\<>]+)",
+    "y"
+   ],
+   "bearer": [
+    "(Authorization:[ \\t]*Bearer[ \\t]+)([^\\s\"'\\\\<>&]+)",
+    "gi"
+   ],
+   "mailToken": [
+    "(x-ccrc-mail-token:[ \\t]*)([^\\s\"'\\\\<>&]+)",
+    "gi"
+   ],
+   "bearerSticky": [
+    "(Authorization:[ \\t]*Bearer[ \\t]+)([^\\s\"'\\\\<>&]+)",
+    "iy"
+   ],
+   "mailTokenSticky": [
+    "(x-ccrc-mail-token:[ \\t]*)([^\\s\"'\\\\<>&]+)",
+    "iy"
+   ],
+   "query": [
+    "([?&]token=)([^&\\s\"'#\\\\<>]+)",
+    "gi"
+   ]
+  }
+ },
+ "CONTEXT_RULES": {
+  "field": {
+   "final": false,
+   "json": [
+    "\"([A-Za-z_][A-Za-z0-9_.-]{0,255})\"(\\s*:\\s*)\"((?:[^\"\\\\]|\\\\.)+)\"",
+    "g"
+   ],
+   "namedHead": [
+    "\\b([A-Za-z_][A-Za-z0-9_.-]{0,255})(=|:[ \\t]+)",
+    "g"
+   ],
+   "namedTail": [
+    "\\b([A-Za-z_][A-Za-z0-9_.-]{0,255})(=|:)$",
+    ""
+   ],
+   "namedValue": [
+    "([\"']?)((?<=\")[^\"\\r\\n\\u2028\\u2029]*|(?<=')[^'\\r\\n\\u2028\\u2029]*|(?:[^\\s\"'`,;&]|[,;\"'](?![\\s,;)}\\]]|$)|&(?![A-Za-z_][A-Za-z0-9_.-]{0,255}=))+)\\1",
+    "y"
+   ],
+   "bearer": [
+    "(Authorization:[ \\t]*Bearer[ \\t]+)([^\\s\"']+)",
+    "gi"
+   ],
+   "mailToken": [
+    "(x-ccrc-mail-token:[ \\t]*)([^\\s\"']+)",
+    "gi"
+   ],
+   "bearerSticky": [
+    "(Authorization:[ \\t]*Bearer[ \\t]+)([^\\s\"']+)",
+    "iy"
+   ],
+   "mailTokenSticky": [
+    "(x-ccrc-mail-token:[ \\t]*)([^\\s\"']+)",
+    "iy"
+   ],
+   "query": [
+    "([?&]token=)([^&\\s\"'#]+)",
+    "gi"
+   ]
+  },
+  "final": {
+   "final": true,
+   "json": [
+    "\"([A-Za-z_][A-Za-z0-9_.-]{0,255})\"(\\s*:\\s*)\"([^\"\\\\\\n\\r<>&]+)\"",
+    "g"
+   ],
+   "namedHead": [
+    "\\b([A-Za-z_][A-Za-z0-9_.-]{0,255})(=|:[ \\t]+)",
+    "g"
+   ],
+   "namedTail": [
+    "\\b([A-Za-z_][A-Za-z0-9_.-]{0,255})(=|:)$",
+    ""
+   ],
+   "namedValue": [
+    "([\"']?)([^\\s\"'`,;&\\\\<>]+)",
+    "y"
+   ],
+   "bearer": [
+    "(Authorization:[ \\t]*Bearer[ \\t]+)([^\\s\"'\\\\<>&]+)",
+    "gi"
+   ],
+   "mailToken": [
+    "(x-ccrc-mail-token:[ \\t]*)([^\\s\"'\\\\<>&]+)",
+    "gi"
+   ],
+   "bearerSticky": [
+    "(Authorization:[ \\t]*Bearer[ \\t]+)([^\\s\"'\\\\<>&]+)",
+    "iy"
+   ],
+   "mailTokenSticky": [
+    "(x-ccrc-mail-token:[ \\t]*)([^\\s\"'\\\\<>&]+)",
+    "iy"
+   ],
+   "query": [
+    "([?&]token=)([^&\\s\"'#\\\\<>]+)",
+    "gi"
+   ]
+  }
+ }
+}

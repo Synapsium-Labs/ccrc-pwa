@@ -308,9 +308,16 @@ _tbs_push() {
     refs+=("${TBS_OVR_SHAS[$i]}:refs/ccrc-test/$TBS_RUNID/${TBS_OVR_REFS[$i]}")
   done
   if [[ -n $TBS_SSH_KEY ]]; then
-    local q
+    local q pin pq
     printf -v q '%q' "$TBS_SSH_KEY"
     export GIT_SSH_COMMAND="ssh -i $q -o IdentitiesOnly=yes -o BatchMode=yes"
+    # A box connected from the console has its host key pinned in ~/.ccrc/testbox-known-hosts (D-8166); a box
+    # installed by hand has no such file, and its push keeps trusting ~/.ssh/known_hosts as before.
+    pin=${HOME:-}/.ccrc/testbox-known-hosts
+    if [[ -n ${HOME:-} && -f $pin ]]; then
+      printf -v pq '%q' "$pin"
+      GIT_SSH_COMMAND+=" -o UserKnownHostsFile=$pq -o StrictHostKeyChecking=yes"
+    fi
   fi
   _tbs_git -c push.gpgSign=false -c push.followTags=false -c push.recurseSubmodules=no \
     push --no-verify --atomic --porcelain "$url" "${refs[@]}" > /dev/null 2> "$TBS_TMP/err" \

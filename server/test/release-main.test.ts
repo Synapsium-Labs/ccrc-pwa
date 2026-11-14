@@ -9,7 +9,7 @@
 // serves release assets the test built with that same builder. Never touches
 // the network: curl is poisoned, gh is the stub.
 import { describe, it, expect } from 'vitest';
-import { spawnSync } from 'node:child_process';
+import { spawnSync, type SpawnSyncReturns } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { chmodSync, copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
 import path, { join } from 'node:path';
@@ -34,10 +34,30 @@ const GIT_ENV = {
   GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_SYSTEM: '/dev/null',
 };
 
+/** Everything a finished child said about how it ended: its status, the signal
+ *  that ended it, a spawn error, its pid (to match against a log of who
+ *  signalled what), and the tails of stdout and stderr. A fixture
+ *  step that fails with only its stderr reads as `failed: ` when the child was
+ *  killed, or wrote its refusal to stdout (D-8391). */
+const TOLD_TAIL = 2000;
+function told(r: SpawnSyncReturns<string>): string {
+  const tail = (s: string | null | undefined): string => {
+    const t = s ?? '';
+    return t.length > TOLD_TAIL ? `…${t.slice(-TOLD_TAIL)}` : t;
+  };
+  const err = r.error === undefined ? '' : `, error ${r.error.message}`;
+  return `pid ${r.pid ?? 'none'}, status ${r.status ?? 'none'}, signal ${r.signal ?? 'none'}${err}\n--- stdout\n${tail(r.stdout)}\n--- stderr\n${tail(r.stderr)}`;
+}
+/** A fixture step that must succeed: its failure carries everything `told` reads.
+ *  Untimed, and its options are a literal, so the timed-spawn census reads it as one. */
+function spawnStep(what: string, cmd: string, args: string[], opts: { env?: NodeJS.ProcessEnv; cwd?: string } = {}): SpawnSyncReturns<string> {
+  const r = spawnSync(cmd, args, { env: opts.env, cwd: opts.cwd, encoding: 'utf8' });
+  if (r.status !== 0) throw new Error(`fixture ${what} failed: ${told(r)}`);
+  return r;
+}
+
 function git(root: string, ...args: string[]): string {
-  const r = spawnSync('git', ['-C', root, ...args], { env: { ...process.env, ...GIT_ENV }, encoding: 'utf8' });
-  if (r.status !== 0) throw new Error(`fixture git ${args.join(' ')} failed: ${r.stderr}`);
-  return r.stdout.trim();
+  return spawnStep(`git ${args.join(' ')}`, 'git', ['-C', root, ...args], { env: { ...process.env, ...GIT_ENV } }).stdout.trim();
 }
 
 /** The smallest tree build-release.sh's `git archive` pathspec accepts.
@@ -68,16 +88,14 @@ function buildAsset(home: string, root: string, tag: string, branch = 'main'): v
   const work = join(home, 'asset-build', tag);
   mkdirSync(path.dirname(work), { recursive: true });
   const env = { ...process.env, ...GIT_ENV };
-  const clone = spawnSync('git', ['clone', '-q', root, work], { env, encoding: 'utf8' });
-  if (clone.status !== 0) throw new Error(`fixture clone failed: ${clone.stderr}`);
+  spawnStep('clone', 'git', ['clone', '-q', root, work], { env });
   git(work, 'checkout', '-q', '-B', branch, tag);
   const assetHome = join(home, 'asset-home');
   mkdirSync(assetHome, { recursive: true });
   const bin = plantBin(assetHome);
   const out = join(home, 'assets', tag);
-  const r = spawnSync('bash', [join(work, 'deploy', 'build-release.sh'), '--out', out],
-    { env: { ...env, HOME: assetHome, PATH: `${bin}:${process.env.PATH ?? ''}` }, cwd: work, encoding: 'utf8' });
-  if (r.status !== 0) throw new Error(`fixture asset build for ${tag} failed: ${r.stderr}`);
+  spawnStep(`asset build for ${tag}`, 'bash', [join(work, 'deploy', 'build-release.sh'), '--out', out],
+    { env: { ...env, HOME: assetHome, PATH: `${bin}:${process.env.PATH ?? ''}` }, cwd: work });
 }
 
 /** `<home>/repo` with one commit, `<home>/origin.git` bare and added as
@@ -128,7 +146,7 @@ function fixture(home: string, opts: {
   }
   if (opts.tagHead !== undefined) git(root, 'tag', opts.tagHead);
   const origin = join(home, 'origin.git');
-  spawnSync('git', ['init', '-q', '--bare', origin], { env: { ...process.env, ...GIT_ENV } });
+  spawnStep('init --bare', 'git', ['init', '-q', '--bare', origin], { env: { ...process.env, ...GIT_ENV } });
   // An `update` hook records every ref pushed to origin — including a
   // transient push that a later refusal unwinds — so "no push happened at
   // all" is OBSERVABLE from outside the process (R4: `git tag`/`push`
@@ -196,7 +214,8 @@ function plantBin(home: string, ghExit = 0, ghView: GhView = {}): string {
   return bin;
 }
 
-interface Result { code: number; stdout: string; stderr: string }
+/** `told`: how the run ended, for an assertion's message (D-8391). */
+interface Result { code: number; stdout: string; stderr: string; told: string }
 function run(root: string, home: string, args: string[] = [], ghExit = 0,
   extraEnv: NodeJS.ProcessEnv = {}, ghView: GhView = {}): Result {
   const bin = plantBin(home, ghExit, ghView);
@@ -204,7 +223,11 @@ function run(root: string, home: string, args: string[] = [], ghExit = 0,
   // job would otherwise append fixture lines to its own (D-6395).
   const r = spawnSync('bash', [join(root, 'deploy', 'release-main.sh'), ...args],
     { env: { ...process.env, ...GIT_ENV, HOME: home, PATH: `${bin}:${process.env.PATH ?? ''}`, GITHUB_STEP_SUMMARY: '', GITHUB_OUTPUT: '', ...extraEnv }, cwd: root, encoding: 'utf8' });
-  return { code: r.status ?? -1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
+  return { code: r.status ?? -1, stdout: r.stdout ?? '', stderr: r.stderr ?? '', told: told(r) };
+}
+/** A run that must end with `code`; its failure says how it did end. */
+function exitsWith(r: Result, code: number): void {
+  expect(r.code, r.told).toBe(code);
 }
 /** prepare, then compare, then publish into one out directory — the workflow's
  *  order. publish gets a planted bundle, as the attest step would leave one. */
@@ -219,8 +242,7 @@ function pipeline(root: string, home: string, out: string, gh: GhView = {}, env:
  *  tag. `name` tells a second publish job's clone apart from the first. */
 function publishClone(home: string, name = 'publish'): string {
   const clone = join(home, name);
-  const r = spawnSync('git', ['clone', '-q', '-b', 'main', join(home, 'origin.git'), clone], { env: { ...process.env, ...GIT_ENV }, encoding: 'utf8' });
-  if (r.status !== 0) throw new Error(`fixture publish clone failed: ${r.stderr}`);
+  spawnStep('publish clone', 'git', ['clone', '-q', '-b', 'main', join(home, 'origin.git'), clone], { env: { ...process.env, ...GIT_ENV } });
   return clone;
 }
 /** The upload and the download: the tarball and SHA256SUMS from `out`, copied
@@ -235,7 +257,7 @@ function handOver(out: string, dir: string, tag: string): string {
 function artifact(root: string, home: string, args: string[], extraEnv: NodeJS.ProcessEnv = {}): Result {
   const r = spawnSync('bash', [join(root, 'deploy', 'release-artifact.sh'), ...args],
     { env: { ...process.env, ...GIT_ENV, HOME: home, GITHUB_STEP_SUMMARY: '', GITHUB_OUTPUT: '', ...extraEnv }, cwd: root, encoding: 'utf8' });
-  return { code: r.status ?? -1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
+  return { code: r.status ?? -1, stdout: r.stdout ?? '', stderr: r.stderr ?? '', told: told(r) };
 }
 /** What the attest step leaves behind: any file — the script copies it, never reads it. */
 function plantBundle(home: string): string {
@@ -244,7 +266,7 @@ function plantBundle(home: string): string {
   return p;
 }
 const originTags = (home: string): string[] =>
-  spawnSync('git', ['-C', join(home, 'origin.git'), 'tag'], { encoding: 'utf8' }).stdout.split('\n').filter((l) => l !== '');
+  spawnStep('origin tag list', 'git', ['-C', join(home, 'origin.git'), 'tag']).stdout.split('\n').filter((l) => l !== '');
 const ghCalls = (home: string): string[] =>
   existsSync(join(home, 'gh-argv')) ? readFileSync(join(home, 'gh-argv'), 'utf8').split('\n').filter((l) => l !== '') : [];
 const releaseCreates = (home: string): string[] => ghCalls(home).filter((l) => l.startsWith('release create '));
@@ -254,14 +276,13 @@ const stateOf = (out: string): string => readFileSync(join(out, 'release-main.st
 const tarballsIn = (dir: string): string[] => readdirSync(dir).filter((f) => /^ccrc-.*\.tar\.gz$/.test(f));
 /** The entries a fingerprint of this tarball has: everything below the root. */
 const entriesIn = (tarball: string): number =>
-  spawnSync('tar', ['-tzf', tarball], { encoding: 'utf8' }).stdout.split('\n').filter((l) => l !== '' && l !== './').length;
+  spawnStep('tar list', 'tar', ['-tzf', tarball]).stdout.split('\n').filter((l) => l !== '' && l !== './').length;
 const sha256 = (file: string): string => createHash('sha256').update(readFileSync(file)).digest('hex');
 
 /** A tarball whose root holds nothing: it extracts to an empty tree. */
 function emptyTarball(dest: string): void {
   const dir = mkTmp('ccrc-relmain-emptytree-');
-  const r = spawnSync('tar', ['-czf', dest, '-C', dir, '.'], { encoding: 'utf8' });
-  if (r.status !== 0) throw new Error(`fixture tar failed: ${r.stderr}`);
+  spawnStep('tar', 'tar', ['-czf', dest, '-C', dir, '.']);
 }
 /** Serves `tarball` as tag's release asset, with a SHA256SUMS that matches it. */
 function plantAsset(home: string, tag: string, tarball: string): void {
@@ -277,7 +298,7 @@ describe('release-main.sh: refusals before anything is written', () => {
     const root = fixture(home, { tags: ['v0.0.1'] });
     writeFileSync(join(root, 'straggler.txt'), 'untracked\n');
     const r = run(root, home, ['prepare']);
-    expect(r.code).toBe(1);
+    expect(r.code, r.told).toBe(1);
     expect(r.stderr).toMatch(/refusing a dirty tree/);
     expect(originTags(home)).toEqual(['v0.0.1']);
     expect(existsSync(join(home, 'npm-argv'))).toBe(false);
@@ -291,7 +312,7 @@ describe('release-main.sh: refusals before anything is written', () => {
     const home = mkTmp('ccrc-relmain-usage-');
     const root = fixture(home);
     const r = run(root, home, ['prepare', '--bogus']);
-    expect(r.code).toBe(2);
+    expect(r.code, r.told).toBe(2);
     expect(r.stderr).toMatch(/unknown argument: --bogus/);
     expect(existsSync(join(home, 'gh-argv'))).toBe(false);
   });
@@ -300,7 +321,7 @@ describe('release-main.sh: refusals before anything is written', () => {
     const home = mkTmp('ccrc-relmain-tagged-');
     const root = fixture(home, { tags: ['v0.0.1'], tagHead: 'v1.0.0' });
     const r = run(root, home, ['prepare']);
-    expect(r.code).toBe(0);
+    expect(r.code, r.told).toBe(0);
     expect(r.stdout).toMatch(/already tagged v1\.0\.0; release\.yml owns it/);
     expect(originTags(home).sort()).toEqual(['v0.0.1', 'v1.0.0']);
     expect(existsSync(join(home, 'gh-argv'))).toBe(false);
@@ -314,9 +335,9 @@ describe('release-main.sh: refusals before anything is written', () => {
     // the working tree, so the local checkout's tags stay behind origin's,
     // exactly the "tag-stale checkout" this guard exists for.
     const originSha = git(root, 'rev-parse', 'HEAD');
-    spawnSync('git', ['-C', join(home, 'origin.git'), 'tag', 'v0.0.2', originSha], { env: { ...process.env, ...GIT_ENV } });
+    spawnStep('origin tag', 'git', ['-C', join(home, 'origin.git'), 'tag', 'v0.0.2', originSha], { env: { ...process.env, ...GIT_ENV } });
     const r = run(root, home, ['prepare', '--out', join(home, 'out')]);
-    expect(r.code).toBe(1);
+    expect(r.code, r.told).toBe(1);
     expect(r.stderr).toMatch(/origin already holds v0\.0\.2/);
     expect(existsSync(join(home, 'gh-argv'))).toBe(false);
     expect(existsSync(join(home, 'origin-pushes'))).toBe(false);
@@ -336,7 +357,7 @@ describe('release-main.sh: prepare (tag locally, build), compare, then publish (
     const prev = tags.filter((t) => /^v\d+\.\d+\.\d+$/.test(t)).sort((a, b) => a.localeCompare(b, 'en', { numeric: true })).pop();
     const sha = git(root, 'rev-parse', 'HEAD');
     const p = run(root, home, ['prepare', '--out', out]);
-    expect(p.code, `stderr: ${p.stderr}\nstdout: ${p.stdout}`).toBe(0);
+    expect(p.code, p.told).toBe(0);
     // Prepared: the tag is local, origin has NOT seen it, nothing was published.
     expect(git(root, 'tag', '--points-at', 'HEAD')).toBe(next);
     expect(originTags(home)).not.toContain(next);
@@ -347,14 +368,14 @@ describe('release-main.sh: prepare (tag locally, build), compare, then publish (
     expect(tarballsIn(out)).toEqual([]);
     // Compared: this fixture serves no asset, so the merge cannot be compared and releases.
     const c = run(root, home, ['compare', '--out', out]);
-    expect(c.code, `stderr: ${c.stderr}\nstdout: ${c.stdout}`).toBe(0);
+    expect(c.code, c.told).toBe(0);
     expect(c.stdout).toMatch(new RegExp(`^could not compare \\(.+\\); releasing ${next}\\n$`));
     expect(stateOf(out)).toBe(`built true\ntag ${next}\nhead ${sha}\n`);
     expect(existsSync(join(out, `ccrc-${next}.tar.gz`))).toBe(true);
     expect(existsSync(join(out, 'SHA256SUMS'))).toBe(true);
     const bundle = plantBundle(home);
     const q = run(root, home, ['publish', '--out', out], 0, { CCRC_BUNDLE_PATH: bundle });
-    expect(q.code, `stderr: ${q.stderr}\nstdout: ${q.stdout}`).toBe(0);
+    expect(q.code, q.told).toBe(0);
     expect(originTags(home)).toContain(next);
     expect(readFileSync(join(home, 'origin-pushes'), 'utf8')).toBe(`refs/tags/${next}\n`);
     // All three artifacts NAMED, the flag trailing (the stub records `$*` as one line).
@@ -378,10 +399,10 @@ describe('release-main.sh: prepare (tag locally, build), compare, then publish (
     const home = mkTmp('ccrc-relmain-nonotes-');
     const root = fixture(home, { tags: ['v0.0.1'], notes: false });
     const out = join(home, 'out');
-    expect(run(root, home, ['prepare', '--out', out]).code).toBe(0);
-    expect(run(root, home, ['compare', '--out', out]).code).toBe(0);
+    exitsWith(run(root, home, ['prepare', '--out', out]), 0);
+    exitsWith(run(root, home, ['compare', '--out', out]), 0);
     const q = run(root, home, ['publish', '--out', out], 0, { CCRC_BUNDLE_PATH: plantBundle(home) });
-    expect(q.code, q.stderr).toBe(0);
+    expect(q.code, q.told).toBe(0);
     expect(q.stderr).toMatch(/could not write the release notes for v0\.0\.2 — publishing with an empty body/);
     expect(readFileSync(join(out, 'release-notes.txt'), 'utf8')).toBe('');
     expect(releaseCreates(home)[0]).toMatch(/--prerelease --notes-file \S+\/release-notes\.txt$/);
@@ -392,12 +413,12 @@ describe('release-main.sh: prepare (tag locally, build), compare, then publish (
     const home = mkTmp('ccrc-relmain-order-');
     const root = fixture(home, { tags: ['v0.0.1'] });
     const out = join(home, 'out');
-    expect(run(root, home, ['prepare', '--out', out]).code).toBe(0);
-    expect(run(root, home, ['compare', '--out', out]).code).toBe(0);
+    exitsWith(run(root, home, ['prepare', '--out', out]), 0);
+    exitsWith(run(root, home, ['compare', '--out', out]), 0);
     // compare's own gh calls ran before any push; the record is rewritten by each call.
     expect(originTags(home)).toEqual(['v0.0.1']);
     const q = run(root, home, ['publish', '--out', out], 0, { CCRC_BUNDLE_PATH: plantBundle(home) });
-    expect(q.code, q.stderr).toBe(0);
+    expect(q.code, q.told).toBe(0);
     expect(readFileSync(join(home, 'origin-tags-at-gh'), 'utf8').split('\n')).toContain('v0.0.2');
   });
 
@@ -405,17 +426,17 @@ describe('release-main.sh: prepare (tag locally, build), compare, then publish (
     const home = mkTmp('ccrc-relmain-nobundle-');
     const root = fixture(home, { tags: ['v0.0.1'] });
     const out = join(home, 'out');
-    expect(run(root, home, ['prepare', '--out', out]).code).toBe(0);
-    expect(run(root, home, ['compare', '--out', out]).code).toBe(0);
+    exitsWith(run(root, home, ['prepare', '--out', out]), 0);
+    exitsWith(run(root, home, ['compare', '--out', out]), 0);
     const q = run(root, home, ['publish', '--out', out]);
-    expect(q.code).toBe(1);
+    expect(q.code, q.told).toBe(1);
     expect(q.stderr).toMatch(/no provenance bundle .* refusing to publish an unattested release; nothing was pushed/);
     expect(existsSync(join(home, 'origin-pushes'))).toBe(false);
     expect(releaseCreates(home)).toEqual([]);
     expect(git(root, 'tag', '--points-at', 'HEAD')).toBe('v0.0.2');
     // CCRC_BUNDLE_PATH naming a file that does not exist is the same refusal.
     const q2 = run(root, home, ['publish', '--out', out], 0, { CCRC_BUNDLE_PATH: join(home, 'missing.json') });
-    expect(q2.code).toBe(1);
+    expect(q2.code, q2.told).toBe(1);
     expect(q2.stderr).toMatch(/CCRC_BUNDLE_PATH names no file/);
     expect(existsSync(join(home, 'origin-pushes'))).toBe(false);
   });
@@ -424,7 +445,7 @@ describe('release-main.sh: prepare (tag locally, build), compare, then publish (
     const home = mkTmp('ccrc-relmain-nostate-');
     const root = fixture(home, { tags: ['v0.0.1'] });
     const q = run(root, home, ['publish', '--out', join(home, 'out')]);
-    expect(q.code).toBe(2);
+    expect(q.code, q.told).toBe(2);
     expect(q.stderr).toMatch(/run 'release-main.sh prepare' first/);
     expect(existsSync(join(home, 'origin-pushes'))).toBe(false);
     expect(existsSync(join(home, 'gh-argv'))).toBe(false);
@@ -434,10 +455,10 @@ describe('release-main.sh: prepare (tag locally, build), compare, then publish (
     const home = mkTmp('ccrc-relmain-cleanup-');
     const root = fixture(home, { tags: ['v0.0.1'] });
     const out = join(home, 'out');
-    expect(run(root, home, ['prepare', '--out', out]).code).toBe(0);
-    expect(run(root, home, ['compare', '--out', out]).code).toBe(0);
+    exitsWith(run(root, home, ['prepare', '--out', out]), 0);
+    exitsWith(run(root, home, ['compare', '--out', out]), 0);
     const q = run(root, home, ['publish', '--out', out], 1, { CCRC_BUNDLE_PATH: plantBundle(home) });
-    expect(q.code).toBe(1);
+    expect(q.code, q.told).toBe(1);
     expect(q.stderr).toMatch(/deleting tag v0\.0\.2 from origin/);
     expect(originTags(home)).toEqual(['v0.0.1']);
     expect(git(root, 'tag', '--points-at', 'HEAD')).toBe('');
@@ -449,16 +470,16 @@ describe('release-main.sh: prepare (tag locally, build), compare, then publish (
     const out = join(home, 'out');
     const output = join(home, 'output');
     const p = run(root, home, ['prepare', '--out', out]);
-    expect(p.code).toBe(0);
+    expect(p.code, p.told).toBe(0);
     expect(p.stdout).toMatch(/already tagged v1\.0\.0; release\.yml owns it/);
     expect(stateOf(out)).toBe('built false\ntag v1.0.0\n');
     expect(existsSync(join(home, 'npm-argv'))).toBe(false);
     const c = run(root, home, ['compare', '--out', out], 0, { GITHUB_OUTPUT: output });
-    expect(c.code, c.stderr).toBe(0);
+    expect(c.code, c.told).toBe(0);
     expect(c.stdout).toMatch(/nothing to compare — HEAD was already tagged; release\.yml owns it/);
     expect(readFileSync(output, 'utf8')).toBe('release=false\n');
     const q = run(root, home, ['publish', '--out', out]);
-    expect(q.code).toBe(0);
+    expect(q.code, q.told).toBe(0);
     expect(q.stdout).toMatch(/nothing to publish — v1\.0\.0 was already tagged at checkout; release\.yml owns it/);
     expect(existsSync(join(home, 'gh-argv'))).toBe(false);
     expect(existsSync(join(home, 'origin-pushes'))).toBe(false);
@@ -468,9 +489,9 @@ describe('release-main.sh: prepare (tag locally, build), compare, then publish (
     const home = mkTmp('ccrc-relmain-leftover-');
     const root = fixture(home, { tags: ['v0.0.1'] });
     const out = join(home, 'out');
-    expect(run(root, home, ['prepare', '--out', out]).code).toBe(0);
+    exitsWith(run(root, home, ['prepare', '--out', out]), 0);
     const p = run(root, home, ['prepare', '--out', out]);
-    expect(p.code).toBe(1);
+    expect(p.code, p.told).toBe(1);
     expect(p.stderr).toMatch(/HEAD carries v0\.0\.2 which origin does not hold — a previous prepare's local tag/);
     expect(existsSync(join(home, 'origin-pushes'))).toBe(false);
   });
@@ -478,9 +499,9 @@ describe('release-main.sh: prepare (tag locally, build), compare, then publish (
   it('an arm is required, and only one', () => {
     const home = mkTmp('ccrc-relmain-arm-');
     const root = fixture(home);
-    expect(run(root, home, []).code).toBe(2);
-    expect(run(root, home, ['prepare', 'publish']).code).toBe(2);
-    expect(run(root, home, ['compare', 'publish']).code).toBe(2);
+    exitsWith(run(root, home, []), 2);
+    exitsWith(run(root, home, ['prepare', 'publish']), 2);
+    exitsWith(run(root, home, ['compare', 'publish']), 2);
   });
 });
 
@@ -513,22 +534,22 @@ describe('release-main.sh: compare — a build identical to the newest release H
     const n = entriesIn(join(home, 'assets', 'v0.0.1', 'ccrc-v0.0.1.tar.gz'));
     expect(n).toBeGreaterThan(10);
     const { p, c, q } = pipeline(root, home, out, {}, { GITHUB_STEP_SUMMARY: join(home, 'summary.md'), GITHUB_OUTPUT: join(home, 'output') });
-    expect(p.code, p.stderr).toBe(0);
-    expect(c.code, c.stderr).toBe(0);
+    expect(p.code, p.told).toBe(0);
+    expect(c.code, c.told).toBe(0);
     expect(c.stdout).toBe(`${L.skip(n, 'v0.0.1')}\n`);
     expect(readFileSync(join(home, 'summary.md'), 'utf8')).toBe(`${L.skip(n, 'v0.0.1')}\n`);
     expect(readFileSync(join(home, 'output'), 'utf8')).toBe('release=false\n');
     expect(stateOf(out)).toBe(`built unchanged\nsame-as v0.0.1\nhead ${sha}\n`);
     expect(git(root, 'tag', '--list', 'v0.0.2')).toBe('');
     expect(tarballsIn(out)).toEqual([]);
-    expect(q.code, q.stderr).toBe(0);
+    expect(q.code, q.told).toBe(0);
     expect(q.stdout).toContain('release-main.sh: no release for this merge — built unchanged, the same as v0.0.1; nothing to push, attest or publish');
     expect(existsSync(join(home, 'origin-pushes'))).toBe(false);
     expect(originTags(home)).toEqual(['v0.0.1']);
     expect(releaseCreates(home)).toEqual([]);
     // publish, as the workflow runs it after a skipped attest: CCRC_BUNDLE_PATH empty
     const q2 = run(root, home, ['publish', '--out', out], 0, { CCRC_BUNDLE_PATH: '' });
-    expect(q2.code, q2.stderr).toBe(0);
+    expect(q2.code, q2.told).toBe(0);
     expect(ghCalls(home).map((l) => l.split(' ').slice(0, 2).join(' '))).toEqual(['release view', 'release download']);
   });
 
@@ -551,13 +572,13 @@ describe('release-main.sh: compare — a build identical to the newest release H
     const out = join(home, 'out');
     const sha = git(root, 'rev-parse', 'HEAD');
     const { p, c, q } = pipeline(root, home, out, {}, { GITHUB_OUTPUT: join(home, 'output') });
-    expect(p.code, p.stderr).toBe(0);
-    expect(c.code, c.stderr).toBe(0);
+    expect(p.code, p.told).toBe(0);
+    expect(c.code, c.told).toBe(0);
     expect(c.stdout).toBe(`${L.differs('v0.0.1', k, first, 'v0.0.2')}\n`);
     expect(readFileSync(join(home, 'output'), 'utf8')).toBe('release=true\ntag=v0.0.2\n');
     expect(stateOf(out)).toBe(`built true\ntag v0.0.2\nhead ${sha}\n`);
     expect(tarballsIn(out)).toEqual(['ccrc-v0.0.2.tar.gz']);
-    expect(q.code, q.stderr).toBe(0);
+    expect(q.code, q.told).toBe(0);
     expect(releaseCreates(home)).toHaveLength(1);
     expect(originTags(home)).toContain('v0.0.2');
   });
@@ -568,8 +589,8 @@ describe('release-main.sh: compare — a build identical to the newest release H
     const root = fixture(home, { tags: ['v0.0.1'], merge: docsOnly, assets: ['v0.0.1'], assetBranch: 'other' });
     const out = join(home, 'out');
     const { p, c } = pipeline(root, home, out);
-    expect(p.code, p.stderr).toBe(0);
-    expect(c.code, c.stderr).toBe(0);
+    expect(p.code, p.told).toBe(0);
+    expect(c.code, c.told).toBe(0);
     expect(c.stdout).toBe(`${L.differs('v0.0.1', 1, 'build.json', 'v0.0.2')}\n`);
     expect(stateOf(out)).toMatch(/^built true\n/);
   });
@@ -586,10 +607,10 @@ describe('release-main.sh: compare — a build identical to the newest release H
       emptyTarball(empty);
       plantAsset(home, 'v0.0.1', empty);
     }
-    expect(run(root, home, ['prepare', '--out', out]).code).toBe(0);
+    exitsWith(run(root, home, ['prepare', '--out', out]), 0);
     emptyTarball(join(out, 'candidate', 'ccrc-v0.0.2.tar.gz'));
     const c = run(root, home, ['compare', '--out', out], 0, { GITHUB_OUTPUT: join(home, 'output') });
-    expect(c.code, c.stderr).toBe(0);
+    expect(c.code, c.told).toBe(0);
     expect(c.stdout).toBe(`${L.cant(why, 'v0.0.2')}\n`);
     expect(readFileSync(join(home, 'output'), 'utf8')).toBe('release=true\ntag=v0.0.2\n');
     expect(tarballsIn(out)).toEqual(['ccrc-v0.0.2.tar.gz']);
@@ -600,8 +621,8 @@ describe('release-main.sh: compare — a build identical to the newest release H
     const root = fixture(home, { tags: [], merge: docsOnly });
     const out = join(home, 'out');
     const { p, c } = pipeline(root, home, out);
-    expect(p.code, p.stderr).toBe(0);
-    expect(c.code, c.stderr).toBe(0);
+    expect(p.code, p.told).toBe(0);
+    expect(c.code, c.told).toBe(0);
     expect(c.stdout).toBe(`${L.cant('HEAD contains no earlier release tag', 'v0.0.1')}\n`);
     expect(stateOf(out)).toMatch(/^built true\ntag v0.0.1\n/);
     expect(ghReads(home)).toEqual([]);
@@ -615,8 +636,8 @@ describe('release-main.sh: compare — a build identical to the newest release H
     const root = fixture(home, { tags: ['v0.0.1'], merge: docsOnly, assets: ['v0.0.1'] });
     const out = join(home, 'out');
     const { p, c } = pipeline(root, home, out, gh);
-    expect(p.code, p.stderr).toBe(0);
-    expect(c.code, c.stderr).toBe(0);
+    expect(p.code, p.told).toBe(0);
+    expect(c.code, c.told).toBe(0);
     expect(c.stdout).toBe(`${L.cant(why, 'v0.0.2')}\n`);
     expect(stateOf(out)).toMatch(/^built true\n/);
     // The view is where it stopped: the asset was never downloaded.
@@ -635,8 +656,8 @@ describe('release-main.sh: compare — a build identical to the newest release H
     buildAsset(home, root, 'v0.0.1');
     const out = join(home, 'out');
     const { p, c } = pipeline(root, home, out);
-    expect(p.code, p.stderr).toBe(0);
-    expect(c.code, c.stderr).toBe(0);
+    expect(p.code, p.told).toBe(0);
+    expect(c.code, c.told).toBe(0);
     expect(c.stdout).toBe(`${L.cant('HEAD contains no earlier release tag', 'v0.0.2')}\n`);
     expect(ghReads(home)).toEqual([]);
   });
@@ -658,8 +679,8 @@ describe('release-main.sh: compare — a build identical to the newest release H
     spoil(home);
     const out = join(home, 'out');
     const { p, c } = pipeline(root, home, out);
-    expect(p.code, p.stderr).toBe(0);
-    expect(c.code, c.stderr).toBe(0);
+    expect(p.code, p.told).toBe(0);
+    expect(c.code, c.told).toBe(0);
     expect(c.stdout).toBe(`${L.cant(why, 'v0.0.2')}\n`);
     expect(stateOf(out)).toMatch(/^built true\n/);
   });
@@ -676,8 +697,8 @@ describe('release-main.sh: compare — a build identical to the newest release H
     buildAsset(home, root, 'v0.0.2');
     const out = join(home, 'out');
     const { p, c } = pipeline(root, home, out);
-    expect(p.code, p.stderr).toBe(0);
-    expect(c.code, c.stderr).toBe(0);
+    expect(p.code, p.told).toBe(0);
+    expect(c.code, c.told).toBe(0);
     expect(c.stdout).toBe(`${L.differs('v0.0.2', 2, 'ccd/ccrc', 'v0.0.3')}\n`);
     expect(stateOf(out)).toMatch(/^built true\ntag v0.0.3\n/);
   });
@@ -687,8 +708,8 @@ describe('release-main.sh: compare — a build identical to the newest release H
     const root = fixture(home, { tags: ['v0.0.1'], merge: put('.github/workflows/release-main.yml', '# a changed workflow\n'), assets: ['v0.0.1'] });
     const out = join(home, 'out');
     const { p, c } = pipeline(root, home, out);
-    expect(p.code, p.stderr).toBe(0);
-    expect(c.code, c.stderr).toBe(0);
+    expect(p.code, p.told).toBe(0);
+    expect(c.code, c.told).toBe(0);
     expect(c.stdout).toBe(`${L.cant('v0.0.1..HEAD changes ".github/workflows/release-main.yml", which judges this comparison', 'v0.0.2')}\n`);
     expect(stateOf(out)).toMatch(/^built true\n/);
     expect(ghReads(home)).toEqual([]);
@@ -705,8 +726,8 @@ describe('release-main.sh: compare — a build identical to the newest release H
     git(root, 'commit', '-q', '-m', 'edit the compare script');
     const out = join(home, 'out');
     const { p, c } = pipeline(root, home, out);
-    expect(p.code, p.stderr).toBe(0);
-    expect(c.code, c.stderr).toBe(0);
+    expect(p.code, p.told).toBe(0);
+    expect(c.code, c.told).toBe(0);
     expect(c.stdout).toBe(`${L.cant('v0.0.1..HEAD changes "deploy/release-main.sh", which judges this comparison', 'v0.0.2')}\n`);
     expect(ghReads(home)).toEqual([]);
   });
@@ -716,11 +737,11 @@ describe('release-main.sh: compare — a build identical to the newest release H
     const root = fixture(home, { tags: ['v0.0.1'], merge: docsOnly, assets: ['v0.0.1'] });
     const out = join(home, 'out');
     const env = { GH_TOKEN: 'fixture-token' };
-    expect(run(root, home, ['prepare', '--out', out], 0, env).code).toBe(0);
+    exitsWith(run(root, home, ['prepare', '--out', out], 0, env), 0);
     expect(existsSync(join(home, 'gh-env'))).toBe(false);
     expect(existsSync(join(home, 'gh-argv'))).toBe(false);
     const c = run(root, home, ['compare', '--out', out], 0, env);
-    expect(c.code, c.stderr).toBe(0);
+    expect(c.code, c.told).toBe(0);
     expect(readFileSync(join(home, 'gh-env'), 'utf8')).toBe('GH_TOKEN=fixture-token\nGH_TOKEN=fixture-token\n');
     expect(ghCalls(home)).toHaveLength(2);
   });
@@ -730,12 +751,12 @@ describe('release-main.sh: compare — a build identical to the newest release H
     const root = fixture(home, { tags: ['v0.0.1'], merge: docsOnly, assets: ['v0.0.1'] });
     const out = join(home, 'out');
     // a commit after prepare: compare dies, and asks gh nothing
-    expect(run(root, home, ['prepare', '--out', out]).code).toBe(0);
+    exitsWith(run(root, home, ['prepare', '--out', out]), 0);
     writeFileSync(join(root, 'docs', 'b.md'), 'later\n');
     git(root, 'add', '-A');
     git(root, 'commit', '-q', '-m', 'a later commit');
     const c = run(root, home, ['compare', '--out', out]);
-    expect(c.code).toBe(1);
+    expect(c.code, c.told).toBe(1);
     expect(c.stderr).toMatch(/release-main\.state was measured for [0-9a-f]{40}, not HEAD [0-9a-f]{40} — re-run prepare/);
     expect(existsSync(join(home, 'gh-argv'))).toBe(false);
     expect(existsSync(join(home, 'origin-pushes'))).toBe(false);
@@ -743,14 +764,14 @@ describe('release-main.sh: compare — a build identical to the newest release H
     const home2 = mkTmp('ccrc-relmain-w25c16b-');
     const root2 = fixture(home2, { tags: ['v0.0.1'], merge: docsOnly, assets: ['v0.0.1'] });
     const out2 = join(home2, 'out');
-    expect(run(root2, home2, ['prepare', '--out', out2]).code).toBe(0);
-    expect(run(root2, home2, ['compare', '--out', out2]).code).toBe(0);
+    exitsWith(run(root2, home2, ['prepare', '--out', out2]), 0);
+    exitsWith(run(root2, home2, ['compare', '--out', out2]), 0);
     expect(stateOf(out2)).toMatch(/^built unchanged\n/);
     writeFileSync(join(root2, 'docs', 'b.md'), 'later\n');
     git(root2, 'add', '-A');
     git(root2, 'commit', '-q', '-m', 'a later commit');
     const q = run(root2, home2, ['publish', '--out', out2]);
-    expect(q.code).toBe(1);
+    expect(q.code, q.told).toBe(1);
     expect(q.stderr).toMatch(/was measured for [0-9a-f]{40}, not HEAD [0-9a-f]{40}/);
     expect(existsSync(join(home2, 'origin-pushes'))).toBe(false);
     expect(releaseCreates(home2)).toEqual([]);
@@ -764,7 +785,7 @@ describe('release-main.sh: compare — a build identical to the newest release H
     const sha = git(root, 'rev-parse', 'HEAD');
     writeFileSync(join(out, 'release-main.state'), `built unchanged\nsame-as junk\nhead ${sha}\n`);
     const q = run(root, home, ['publish', '--out', out]);
-    expect(q.code).toBe(1);
+    expect(q.code, q.told).toBe(1);
     expect(q.stderr).toMatch(/malformed .*release-main\.state/);
     git(root, 'checkout', '-q', '--detach', 'HEAD~1');
     git(root, 'commit', '-q', '--allow-empty', '-m', 'off main');
@@ -772,7 +793,7 @@ describe('release-main.sh: compare — a build identical to the newest release H
     git(root, 'checkout', '-q', 'main');
     writeFileSync(join(out, 'release-main.state'), `built unchanged\nsame-as v0.0.9\nhead ${sha}\n`);
     const q2 = run(root, home, ['publish', '--out', out]);
-    expect(q2.code).toBe(1);
+    expect(q2.code, q2.told).toBe(1);
     expect(q2.stderr).toMatch(/names v0\.0\.9 as the unchanged base, and HEAD does not contain it/);
     expect(existsSync(join(home, 'origin-pushes'))).toBe(false);
   });
@@ -781,9 +802,9 @@ describe('release-main.sh: compare — a build identical to the newest release H
     const home = mkTmp('ccrc-relmain-w25c17-');
     const root = fixture(home, { tags: ['v0.0.1'] });
     const out = join(home, 'out');
-    expect(run(root, home, ['prepare', '--out', out]).code).toBe(0);
+    exitsWith(run(root, home, ['prepare', '--out', out]), 0);
     const q = run(root, home, ['publish', '--out', out], 0, { CCRC_BUNDLE_PATH: plantBundle(home) });
-    expect(q.code).toBe(1);
+    expect(q.code, q.told).toBe(1);
     expect(q.stderr).toContain('release-main.sh: compare never decided on v0.0.2 — refusing to publish an undecided build; nothing was pushed');
     expect(existsSync(join(home, 'origin-pushes'))).toBe(false);
     expect(existsSync(join(home, 'gh-argv'))).toBe(false);
@@ -796,7 +817,7 @@ describe('release-main.sh: compare — a build identical to the newest release H
     mkdirSync(out, { recursive: true });
     writeFileSync(join(out, 'ccrc-v0.0.1.tar.gz'), 'planted\n');
     const p = run(root, home, ['prepare', '--out', out]);
-    expect(p.code).toBe(1);
+    expect(p.code, p.told).toBe(1);
     expect(p.stderr).toMatch(/a tarball is already in .* — the attest step would sign an artifact no release publishes/);
     expect(git(root, 'tag', '--points-at', 'HEAD')).toBe('');
     expect(existsSync(join(home, 'npm-argv'))).toBe(false);
@@ -807,10 +828,10 @@ describe('release-main.sh: compare — a build identical to the newest release H
     const home = mkTmp('ccrc-relmain-w25c19-');
     const root = fixture(home, { tags: ['v0.0.1'], merge: docsOnly, assets: ['v0.0.1'] });
     const out = join(home, 'out');
-    expect(run(root, home, ['prepare', '--out', out]).code).toBe(0);
+    exitsWith(run(root, home, ['prepare', '--out', out]), 0);
     // A directory cannot be appended to: the summary and the step's output file are both unwritable.
     const c = run(root, home, ['compare', '--out', out], 0, { GITHUB_STEP_SUMMARY: home, GITHUB_OUTPUT: home });
-    expect(c.code).toBe(0);
+    expect(c.code, c.told).toBe(0);
     expect(c.stdout).toMatch(/^built unchanged: \d+ entries identical to v0\.0\.1\n$/);
     expect(c.stderr).toBe('');
     expect(stateOf(out)).toMatch(/^built unchanged\nsame-as v0\.0\.1\n/);
@@ -826,16 +847,16 @@ describe('release-main.sh: compare — a build identical to the newest release H
     const home = mkTmp('ccrc-relmain-w25c20-');
     const root = fixture(home, { tags: ['v0.0.1'], merge: docsOnly, assets: ['v0.0.1'] });
     const out = join(home, 'out');
-    expect(run(root, home, ['prepare', '--out', out]).code).toBe(0);
+    exitsWith(run(root, home, ['prepare', '--out', out]), 0);
     // Re-pack the candidate with the damaged build.json.
     const cand = join(out, 'candidate', 'ccrc-v0.0.2.tar.gz');
     const tree = join(home, 'candidate-tree');
     mkdirSync(tree, { recursive: true });
-    expect(spawnSync('tar', ['-xzf', cand, '-C', tree]).status).toBe(0);
+    spawnStep('tar', 'tar', ['-xzf', cand, '-C', tree]);
     writeFileSync(join(tree, 'build.json'), `${body}\n`);
-    expect(spawnSync('tar', ['-czf', cand, '-C', tree, '.']).status).toBe(0);
+    spawnStep('tar', 'tar', ['-czf', cand, '-C', tree, '.']);
     const c = run(root, home, ['compare', '--out', out]);
-    expect(c.code, c.stderr).toBe(0);
+    expect(c.code, c.told).toBe(0);
     expect(c.stdout).toBe(`${L.cant('the fingerprint of the candidate failed', 'v0.0.2')}\n`);
     expect(stateOf(out)).toMatch(/^built true\n/);
   });
@@ -845,7 +866,7 @@ describe('release-main.sh: compare — a build identical to the newest release H
       const home = mkTmp('ccrc-relmain-w25c21-');
       const root = fixture(home, { tags: ['v0.0.1'] });
       const r = run(root, home, [...args]);
-      expect(r.code).toBe(2);
+      expect(r.code, r.told).toBe(2);
       expect(r.stderr).toMatch(/unknown argument/);
       expect(existsSync(join(home, 'gh-argv'))).toBe(false);
     });
@@ -857,9 +878,9 @@ describe('release-main.sh: compare — a build identical to the newest release H
     const home = mkTmp('ccrc-relmain-w25c22-');
     const root = fixture(home, { tags: ['v0.0.1'], assets: ['v0.0.1'], ...(merge === undefined ? {} : { merge }) });
     const { p, c, q } = pipeline(root, home, 'release-out');
-    expect(p.code, p.stderr).toBe(0);
-    expect(c.code, c.stderr).toBe(0);
-    expect(q.code, q.stderr).toBe(0);
+    expect(p.code, p.told).toBe(0);
+    expect(c.code, c.told).toBe(0);
+    expect(q.code, q.told).toBe(0);
     expect(readFileSync(join(root, 'release-out', 'release-main.state'), 'utf8')).toMatch(new RegExp(`^${state}\\n`));
   });
 
@@ -868,15 +889,15 @@ describe('release-main.sh: compare — a build identical to the newest release H
     const root = fixture(home, { tags: ['v0.0.1'], merge: docsOnly, assets: ['v0.0.1'] });
     const first = pipeline(root, home, join(home, 'out1'));
     expect(stateOf(join(home, 'out1'))).toMatch(/^built unchanged\n/);
-    expect(first.q.code, first.q.stderr).toBe(0);
+    expect(first.q.code, first.q.told).toBe(0);
     writeFileSync(join(root, 'ccd', 'ccrc'), '#!/usr/bin/env bash\necho the code\n', { mode: 0o755 });
     git(root, 'add', '-A');
     git(root, 'commit', '-q', '-m', 'the code merge after');
     const out2 = join(home, 'out2');
     const second = pipeline(root, home, out2);
-    expect(second.c.code, second.c.stderr).toBe(0);
+    expect(second.c.code, second.c.told).toBe(0);
     expect(second.c.stdout).toBe(`${L.differs('v0.0.1', 2, 'ccd/ccrc', 'v0.0.2')}\n`);
-    expect(second.q.code, second.q.stderr).toBe(0);
+    expect(second.q.code, second.q.told).toBe(0);
     expect(git(root, 'tag', '--points-at', 'HEAD')).toBe('v0.0.2');
     const notes = readFileSync(join(out2, 'release-notes.txt'), 'utf8');
     expect(notes).toContain('- The code merge after');
@@ -891,8 +912,8 @@ describe('release-main.sh: compare — a build identical to the newest release H
     writeFileSync(join(home, 'dist-mode'), '750\n');
     const out = join(home, 'out');
     const { p, c } = pipeline(root, home, out);
-    expect(p.code, p.stderr).toBe(0);
-    expect(c.code, c.stderr).toBe(0);
+    expect(p.code, p.told).toBe(0);
+    expect(c.code, c.told).toBe(0);
     expect(c.stdout).toBe(`${L.differs('v0.0.1', 1, 'server/dist/server', 'v0.0.2')}\n`);
     expect(stateOf(out)).toMatch(/^built true\n/);
   });
@@ -903,8 +924,8 @@ describe('release-main.sh: compare — a build identical to the newest release H
     const root = fixture(home, { tags: ['v0.0.1'], seed: nested('a'), merge: nested('b'), assets: ['v0.0.1'] });
     const out = join(home, 'out');
     const { p, c } = pipeline(root, home, out);
-    expect(p.code, p.stderr).toBe(0);
-    expect(c.code, c.stderr).toBe(0);
+    expect(p.code, p.told).toBe(0);
+    expect(c.code, c.told).toBe(0);
     // MANIFEST's digest line for the nested file moves too: two entries, and the line names the file.
     expect(c.stdout).toBe(`${L.differs('v0.0.1', 2, 'ccd/sub/build.json', 'v0.0.2')}\n`);
     expect(stateOf(out)).toMatch(/^built true\n/);
@@ -916,7 +937,7 @@ describe('release-main.sh: compare — a build identical to the newest release H
     mkdirSync(join(tree, 'ccd'), { recursive: true });
     writeFileSync(join(tree, 'ccd', 'x'), 'x\n');
     const bare = join(home, 'bare.tar.gz');
-    expect(spawnSync('tar', ['-czf', bare, '-C', tree, '.']).status).toBe(0);
+    spawnStep('tar', 'tar', ['-czf', bare, '-C', tree, '.']);
     plantAsset(home, 'v0.0.1', bare);
     copyFileSync(bare, join(out, 'candidate', 'ccrc-v0.0.2.tar.gz'));
   }
@@ -924,10 +945,10 @@ describe('release-main.sh: compare — a build identical to the newest release H
     const home = mkTmp('ccrc-relmain-w25c26-');
     const root = fixture(home, { tags: ['v0.0.1'], merge: docsOnly });
     const out = join(home, 'out');
-    expect(run(root, home, ['prepare', '--out', out]).code).toBe(0);
+    exitsWith(run(root, home, ['prepare', '--out', out]), 0);
     plantBareTrees(home, out);
     const c = run(root, home, ['compare', '--out', out], 0, { GITHUB_OUTPUT: join(home, 'output') });
-    expect(c.code, c.stderr).toBe(0);
+    expect(c.code, c.told).toBe(0);
     expect(c.stdout).toBe(`${L.cant('the fingerprint of v0.0.1 failed', 'v0.0.2')}\n`);
     expect(readFileSync(join(home, 'output'), 'utf8')).toBe('release=true\ntag=v0.0.2\n');
   });
@@ -942,17 +963,17 @@ describe('release-main.sh: compare — a build identical to the newest release H
     const tree = join(home, 'base-tree');
     mkdirSync(tree, { recursive: true });
     const asset = join(home, 'assets', 'v0.0.1', 'ccrc-v0.0.1.tar.gz');
-    expect(spawnSync('tar', ['-xpzf', asset, '-C', tree]).status).toBe(0);
+    spawnStep('tar', 'tar', ['-xpzf', asset, '-C', tree]);
     const lines = readFileSync(join(tree, 'MANIFEST'), 'utf8').split('\n');
     expect(lines.filter((l) => l.endsWith('  build.json'))).toHaveLength(1);
     writeFileSync(join(tree, 'MANIFEST'), edit(lines).join('\n'));
     const repacked = join(home, 'repacked.tar.gz');
-    expect(spawnSync('tar', ['-czf', repacked, '-C', tree, '.']).status).toBe(0);
+    spawnStep('tar', 'tar', ['-czf', repacked, '-C', tree, '.']);
     plantAsset(home, 'v0.0.1', repacked);
     const out = join(home, 'out');
     const { p, c } = pipeline(root, home, out);
-    expect(p.code, p.stderr).toBe(0);
-    expect(c.code, c.stderr).toBe(0);
+    expect(p.code, p.told).toBe(0);
+    expect(c.code, c.told).toBe(0);
     expect(c.stdout).toBe(`${L.cant('the fingerprint of v0.0.1 failed', 'v0.0.2')}\n`);
     expect(stateOf(out)).toMatch(/^built true\n/);
   });
@@ -969,16 +990,16 @@ describe('release-main.sh: compare — a build identical to the newest release H
     const out = join(home, 'out');
     const outFile = join(home, 'output');
     const { p, c, q } = pipeline(root, home, out, {}, { GITHUB_OUTPUT: outFile });
-    expect(p.code, p.stderr).toBe(0);
+    expect(p.code, p.told).toBe(0);
     expect(p.stdout).toContain('release-main.sh: HEAD is already contained in v0.0.5 — a re-run of an older merge; nothing to build');
     expect(stateOf(out)).toBe(`built contained\ncontained-by v0.0.5\nhead ${sha}\n`);
     expect(git(root, 'tag', '--list').split('\n')).toEqual(['v0.0.1', 'v0.0.5']);
     expect(existsSync(join(home, 'npm-argv'))).toBe(false);
     expect(existsSync(join(out, 'candidate'))).toBe(false);
-    expect(c.code, c.stderr).toBe(0);
+    expect(c.code, c.told).toBe(0);
     expect(c.stdout).toBe('release-main.sh: nothing to compare — HEAD is already contained in v0.0.5\n');
     expect(readFileSync(outFile, 'utf8')).toBe('release=false\n');
-    expect(q.code, q.stderr).toBe(0);
+    expect(q.code, q.told).toBe(0);
     expect(q.stdout).toBe('release-main.sh: nothing to publish — HEAD is already contained in v0.0.5\n');
     expect(existsSync(join(home, 'gh-argv'))).toBe(false);
     expect(existsSync(join(home, 'origin-pushes'))).toBe(false);
@@ -987,7 +1008,7 @@ describe('release-main.sh: compare — a build identical to the newest release H
     git(root, 'checkout', '-q', '-B', 'rerun');
     git(root, 'commit', '-q', '--allow-empty', '-m', 'after the state');
     const late = run(root, home, ['publish', '--out', out]);
-    expect(late.code).toBe(1);
+    expect(late.code, late.told).toBe(1);
     expect(late.stderr).toMatch(/was measured for [0-9a-f]{40}, not HEAD [0-9a-f]{40}/);
   });
 
@@ -1015,8 +1036,8 @@ describe('release-main.sh: compare — a build identical to the newest release H
     const root = fixture(home, { tags: ['v0.0.1'], seed: twins, merge: retarget, assets: ['v0.0.1'] });
     const out = join(home, 'out');
     const { p, c } = pipeline(root, home, out);
-    expect(p.code, p.stderr).toBe(0);
-    expect(c.code, c.stderr).toBe(0);
+    expect(p.code, p.told).toBe(0);
+    expect(c.code, c.told).toBe(0);
     expect(c.stdout).toBe(`${L.differs('v0.0.1', 1, 'ccd/twin-link', 'v0.0.2')}\n`);
     expect(stateOf(out)).toMatch(/^built true\n/);
   });
@@ -1030,8 +1051,8 @@ describe('release-main.sh: compare — a build identical to the newest release H
     writeFileSync(join(home, file), `${mode}\n`);
     const out = join(home, 'out');
     const { p, c } = pipeline(root, home, out);
-    expect(p.code, p.stderr).toBe(0);
-    expect(c.code, c.stderr).toBe(0);
+    expect(p.code, p.told).toBe(0);
+    expect(c.code, c.told).toBe(0);
     expect(c.stdout).toBe(`${L.differs('v0.0.1', 1, first, 'v0.0.2')}\n`);
     expect(stateOf(out)).toMatch(/^built true\n/);
   };
@@ -1054,8 +1075,8 @@ describe('release-main.sh: compare — a build identical to the newest release H
     writeFileSync(join(home, 'dot-mode'), '700\n');
     const out = join(home, 'out');
     const { p, c } = pipeline(root, home, out);
-    expect(p.code, p.stderr).toBe(0);
-    expect(c.code, c.stderr).toBe(0);
+    expect(p.code, p.told).toBe(0);
+    expect(c.code, c.told).toBe(0);
     expect(c.stdout).toBe(`${L.differs('v0.0.1', 1, 'server/dist-pwa/.vite', 'v0.0.2')}\n`);
     expect(stateOf(out)).toMatch(/^built true\n/);
   });
@@ -1063,14 +1084,14 @@ describe('release-main.sh: compare — a build identical to the newest release H
   it('W25-C32: a git diff against the base that fails releases — a failed guard is not an empty one', () => {
     const home = mkTmp('ccrc-relmain-w25c32-');
     const root = fixture(home, { tags: ['v0.0.1'], merge: docsOnly, assets: ['v0.0.1'] });
-    const realGit = spawnSync('sh', ['-c', 'command -v git'], { encoding: 'utf8' }).stdout.trim();
+    const realGit = spawnStep('command -v git', 'sh', ['-c', 'command -v git']).stdout.trim();
     expect(realGit).toMatch(/^\//);
     // Fails only the guard's `diff --name-only`; every other git call runs for real.
     const env = stubbed(home, { git: `case " $* " in *" diff "*) case " $* " in *" --name-only "*) exit 128 ;; esac ;; esac\nexec "${realGit}" "$@"` });
     const out = join(home, 'out');
-    expect(run(root, home, ['prepare', '--out', out]).code).toBe(0);
+    exitsWith(run(root, home, ['prepare', '--out', out]), 0);
     const c = run(root, home, ['compare', '--out', out], 0, env);
-    expect(c.code, c.stderr).toBe(0);
+    expect(c.code, c.told).toBe(0);
     expect(c.stdout).toBe(`${L.cant('git diff against v0.0.1 failed', 'v0.0.2')}\n`);
     expect(stateOf(out)).toMatch(/^built true\n/);
     expect(ghReads(home)).toEqual([]);
@@ -1084,8 +1105,8 @@ describe('release-main.sh: compare — a build identical to the newest release H
     });
     const out = join(home, 'out');
     const { p, c } = pipeline(root, home, out);
-    expect(p.code, p.stderr).toBe(0);
-    expect(c.code, c.stderr).toBe(0);
+    expect(p.code, p.told).toBe(0);
+    expect(c.code, c.told).toBe(0);
     expect(c.stdout).toBe(`${L.cant('v0.0.1..HEAD changes ".github/workflows/release-main.yml", which judges this comparison', 'v0.0.2')}\n`);
     expect(stateOf(out)).toMatch(/^built true\n/);
     expect(ghReads(home)).toEqual([]);
@@ -1107,9 +1128,9 @@ describe('release-main.sh: compare — a build identical to the newest release H
     const n = entriesIn(join(home, 'assets', 'v0.0.1', 'ccrc-v0.0.1.tar.gz'));
     const out = join(home, 'out');
     const { p, c } = pipeline(root, home, out, {}, { GITHUB_OUTPUT: join(home, 'output') });
-    expect(p.code, p.stderr).toBe(0);
+    expect(p.code, p.told).toBe(0);
     expect(p.stdout).not.toContain('already contained');
-    expect(c.code, c.stderr).toBe(0);
+    expect(c.code, c.told).toBe(0);
     expect(c.stdout).toBe(`${L.skip(n, 'v0.0.1')}\n`);
     expect(stateOf(out)).toBe(`built unchanged\nsame-as v0.0.1\nhead ${sha}\n`);
     expect(readFileSync(join(home, 'output'), 'utf8')).toBe('release=false\n');
@@ -1128,9 +1149,9 @@ describe('release-main.sh: compare — a build identical to the newest release H
     const root = fixture(home, { tags: ['v0.0.1'], assets: ['v0.0.1'] });
     const env = stubbed(home, { comm: body });
     const out = join(home, 'out');
-    expect(run(root, home, ['prepare', '--out', out]).code).toBe(0);
+    exitsWith(run(root, home, ['prepare', '--out', out]), 0);
     const c = run(root, home, ['compare', '--out', out], 0, env);
-    expect(c.code, c.stderr).toBe(0);
+    expect(c.code, c.told).toBe(0);
     expect(c.stdout).toBe(`${L.cant('the fingerprints differ, and listing how failed', 'v0.0.2')}\n`);
     expect(stateOf(out)).toMatch(/^built true\n/);
   });
@@ -1144,15 +1165,15 @@ describe('release-main.sh: compare — a build identical to the newest release H
   ])('W25-C37: a partial extraction of %s that exits non-zero releases with that reason — a short tree is never compared', (_name, side, reason) => {
     const home = mkTmp('ccrc-relmain-w25c37-');
     const root = fixture(home, { tags: ['v0.0.1'], assets: ['v0.0.1'], merge: (r) => chmodSync(join(r, 'ccd', 'ccrc'), 0o644) });
-    const realTar = spawnSync('sh', ['-c', 'command -v tar'], { encoding: 'utf8' }).stdout.trim();
+    const realTar = spawnStep('command -v tar', 'sh', ['-c', 'command -v tar']).stdout.trim();
     expect(realTar).toMatch(/^\//);
     const env = stubbed(home, {
       tar: `case " $* " in *" -xpzf "*"${side}"*) "${realTar}" "$@" --exclude=./ccd/ccrc --exclude=ccd/ccrc; exit 2 ;; esac\nexec "${realTar}" "$@"`,
     });
     const out = join(home, 'out');
-    expect(run(root, home, ['prepare', '--out', out]).code).toBe(0);
+    exitsWith(run(root, home, ['prepare', '--out', out]), 0);
     const c = run(root, home, ['compare', '--out', out], 0, env);
-    expect(c.code, c.stderr).toBe(0);
+    expect(c.code, c.told).toBe(0);
     expect(c.stdout).toBe(`${L.cant(reason, 'v0.0.2')}\n`);
     expect(stateOf(out)).toMatch(/^built true\n/);
   });
@@ -1164,8 +1185,8 @@ describe('release-main.sh: compare — a build identical to the newest release H
       const root = fixture(home, { tags: ['v0.0.1'], merge: docsOnly, assets: ['v0.0.1'] });
       const out = join(home, 'out');
       const { p, c } = pipeline(root, home, out, { view: answer });
-      expect(p.code, p.stderr).toBe(0);
-      expect(c.code, c.stderr).toBe(0);
+      expect(p.code, p.told).toBe(0);
+      expect(c.code, c.told).toBe(0);
       expect(c.stdout).toBe(`${L.cant(`v0.0.1 is not a published release (gh answered '${answer}')`, 'v0.0.2')}\n`);
       expect(stateOf(out)).toMatch(/^built true\n/);
       expect(ghCalls(home).filter((l) => l.startsWith('release download'))).toEqual([]);
@@ -1191,9 +1212,9 @@ describe('release-main.sh: compare — a build identical to the newest release H
     }
     const out = join(home, 'out');
     const output = join(home, 'output');
-    expect(run(root, home, ['prepare', '--out', out]).code).toBe(0);
+    exitsWith(run(root, home, ['prepare', '--out', out]), 0);
     const c = run(root, home, ['compare', '--out', out], 0, { GITHUB_OUTPUT: output });
-    expect(c.code, c.stderr).toBe(0);
+    expect(c.code, c.told).toBe(0);
     expect(readFileSync(output, 'utf8')).toBe(want);
   });
 });
@@ -1214,13 +1235,13 @@ describe('release-main.sh: receive — the publish job re-derives the tag and ve
   function buildHalf(home: string): Built {
     const root = fixture(home, { tags: ['v0.0.1'] });
     const out = join(home, 'out');
-    expect(run(root, home, ['prepare', '--out', out]).code).toBe(0);
+    exitsWith(run(root, home, ['prepare', '--out', out]), 0);
     const c = run(root, home, ['compare', '--out', out]);
-    expect(c.code, c.stderr).toBe(0);
+    expect(c.code, c.told).toBe(0);
     expect(stateOf(out)).toMatch(/^built true\ntag v0\.0\.2\n/);
     const output = join(home, 'record-output');
     const rec = artifact(root, home, ['record', '--tag', 'v0.0.2', '--dir', out], { GITHUB_OUTPUT: output });
-    expect(rec.code, rec.stderr).toBe(0);
+    expect(rec.code, rec.told).toBe(0);
     const handed = join(home, 'handed');
     const digest = handOver(out, handed, 'v0.0.2');
     expect(readFileSync(output, 'utf8')).toBe(`digest=${digest}\n`);
@@ -1240,7 +1261,7 @@ describe('release-main.sh: receive — the publish job re-derives the tag and ve
     expect(git(clone, 'rev-parse', 'HEAD')).toBe(sha);
     expect(git(clone, 'tag', '--points-at', 'HEAD')).toBe('');
     const r = receive(clone, home, handed, 'v0.0.2', digest);
-    expect(r.code, r.stderr).toBe(0);
+    expect(r.code, r.told).toBe(0);
     expect(r.stdout).toContain(RECEIVED('v0.0.2', digest));
     expect(git(clone, 'tag', '--points-at', 'HEAD')).toBe('v0.0.2');
     expect(stateOf(join(clone, 'release-out'))).toBe(`built true\ntag v0.0.2\nhead ${sha}\n`);
@@ -1248,7 +1269,7 @@ describe('release-main.sh: receive — the publish job re-derives the tag and ve
     expect(existsSync(join(home, 'gh-argv'))).toBe(false);
     expect(existsSync(join(home, 'origin-pushes'))).toBe(false);
     const q = run(clone, home, ['publish', '--out', 'release-out'], 0, { CCRC_BUNDLE_PATH: plantBundle(home) });
-    expect(q.code, `stderr: ${q.stderr}\nstdout: ${q.stdout}`).toBe(0);
+    expect(q.code, q.told).toBe(0);
     expect(originTags(home)).toContain('v0.0.2');
     expect(readFileSync(join(home, 'origin-pushes'), 'utf8')).toBe('refs/tags/v0.0.2\n');
     expect(releaseCreates(home)).toEqual([
@@ -1263,11 +1284,11 @@ describe('release-main.sh: receive — the publish job re-derives the tag and ve
     const home = mkTmp('ccrc-relmain-w26r2-');
     const { root, handed, digest } = buildHalf(home);
     // Another run's v0.0.2 lands on origin, on an earlier commit, after the build job derived its own.
-    spawnSync('git', ['-C', join(home, 'origin.git'), 'tag', 'v0.0.2', git(root, 'rev-parse', 'HEAD~1')], { env: { ...process.env, ...GIT_ENV } });
+    spawnStep('origin tag', 'git', ['-C', join(home, 'origin.git'), 'tag', 'v0.0.2', git(root, 'rev-parse', 'HEAD~1')], { env: { ...process.env, ...GIT_ENV } });
     rmSync(join(home, 'origin-pushes'), { force: true });
     const clone = publishClone(home);
     const r = receive(clone, home, handed, 'v0.0.2', digest);
-    expect(r.code).toBe(1);
+    expect(r.code, r.told).toBe(1);
     expect(r.stderr).toContain('release-main.sh: the build job derived v0.0.2; this checkout derives v0.0.3 — a release tag reached origin between the two jobs; re-run all jobs; nothing was tagged or pushed');
     expect(git(clone, 'tag', '--points-at', 'HEAD')).toBe('');
     expect(existsSync(join(home, 'origin-pushes'))).toBe(false);
@@ -1282,7 +1303,7 @@ describe('release-main.sh: receive — the publish job re-derives the tag and ve
     expect(other).not.toBe(digest);
     const clone = publishClone(home);
     const r = receive(clone, home, handed, 'v0.0.2', other);
-    expect(r.code).toBe(1);
+    expect(r.code, r.told).toBe(1);
     expect(r.stderr).toContain(`release-artifact.sh: ccrc-v0.0.2.tar.gz hashes to ${digest}, not the ${other} the build job recorded`);
     expect(r.stderr).toContain('release-main.sh: the build\'s artifact did not verify; nothing was tagged or pushed');
     expect(git(clone, 'tag', '--points-at', 'HEAD')).toBe('');
@@ -1295,7 +1316,7 @@ describe('release-main.sh: receive — the publish job re-derives the tag and ve
     fixture(home, { tags: ['v0.0.1'], tagHead: 'v1.0.0' });
     const clone = publishClone(home);
     const r = receive(clone, home, join(home, 'handed'), 'v1.0.1', 'a'.repeat(64));
-    expect(r.code).toBe(1);
+    expect(r.code, r.told).toBe(1);
     expect(r.stderr).toContain('release-main.sh: HEAD already carries v1.0.0 — it was published already, or release.yml owns it; nothing was tagged or pushed');
     expect(git(clone, 'tag', '--points-at', 'HEAD')).toBe('v1.0.0');
     expect(existsSync(join(clone, 'release-out'))).toBe(false);
@@ -1313,7 +1334,7 @@ describe('release-main.sh: receive — the publish job re-derives the tag and ve
     const clone = publishClone(home);
     expect(git(clone, 'rev-parse', 'HEAD')).toBe(git(root, 'rev-parse', 'HEAD~1'));
     const r = receive(clone, home, join(home, 'handed'), 'v0.0.6', 'a'.repeat(64));
-    expect(r.code).toBe(1);
+    expect(r.code, r.told).toBe(1);
     expect(r.stderr).toContain('release-main.sh: HEAD is already contained in v0.0.5 — a re-run of an older merge; nothing was tagged or pushed');
     expect(git(clone, 'tag', '--points-at', 'HEAD')).toBe('');
     expect(existsSync(join(home, 'origin-pushes'))).toBe(false);
@@ -1340,7 +1361,7 @@ describe('release-main.sh: receive — the publish job re-derives the tag and ve
     }
     if (dirty) writeFileSync(join(clone, 'straggler.txt'), 'untracked\n');
     const r = receive(clone, home, join(home, 'handed'), 'v0.0.2', 'a'.repeat(64), out);
-    expect(r.code).toBe(1);
+    expect(r.code, r.told).toBe(1);
     expect(r.stderr).toContain(why === 'dirty' ? DIRTY : FILLED(out));
     expect(git(clone, 'tag', '--points-at', 'HEAD')).toBe('');
     if (plant !== null) expect(readFileSync(join(out, plant), 'utf8')).toBe('planted\n');
@@ -1359,7 +1380,7 @@ describe('release-main.sh: receive — the publish job re-derives the tag and ve
     const home = mkTmp('ccrc-relmain-w26r7-');
     const root = fixture(home, { tags: ['v0.0.1'] });
     const r = run(root, home, [...args]);
-    expect(r.code, r.stderr).toBe(2);
+    expect(r.code, r.told).toBe(2);
     expect(r.stderr).toContain(why);
     expect(git(root, 'tag', '--points-at', 'HEAD')).toBe('');
     expect(existsSync(join(home, 'gh-argv'))).toBe(false);
@@ -1369,17 +1390,17 @@ describe('release-main.sh: receive — the publish job re-derives the tag and ve
     const home = mkTmp('ccrc-relmain-w26r9-');
     const { handed, digest } = buildHalf(home);
     const first = publishClone(home);
-    expect(receive(first, home, handed, 'v0.0.2', digest).code).toBe(0);
+    exitsWith(receive(first, home, handed, 'v0.0.2', digest), 0);
     const q1 = run(first, home, ['publish', '--out', 'release-out'], 1, { CCRC_BUNDLE_PATH: plantBundle(home) });
-    expect(q1.code).toBe(1);
+    expect(q1.code, q1.told).toBe(1);
     expect(q1.stderr).toMatch(/deleting tag v0\.0\.2 from origin/);
     expect(originTags(home)).toEqual(['v0.0.1']);
     const second = publishClone(home, 'publish-rerun');
     const r = receive(second, home, handed, 'v0.0.2', digest);
-    expect(r.code, r.stderr).toBe(0);
+    expect(r.code, r.told).toBe(0);
     expect(r.stdout).toContain(RECEIVED('v0.0.2', digest));
     const q2 = run(second, home, ['publish', '--out', 'release-out'], 0, { CCRC_BUNDLE_PATH: plantBundle(home) });
-    expect(q2.code, q2.stderr).toBe(0);
+    expect(q2.code, q2.told).toBe(0);
     expect(originTags(home).filter((t) => t === 'v0.0.2')).toEqual(['v0.0.2']);
     expect(releaseCreates(home)).toHaveLength(2);
     expect(git(second, 'tag', '--points-at', 'HEAD')).toBe('v0.0.2');

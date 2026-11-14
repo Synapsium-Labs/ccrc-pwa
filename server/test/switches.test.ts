@@ -22,9 +22,11 @@ import { MAIL_GATE_BUSY_MARKER, MAIL_GATE_BUSY_SHADOW_MARKER, MAIL_GATE_STRICT_M
 import { isMarkerState } from '../../shared/api.js';
 import { sqlStatementsIn, sqlStatementsInFile, symbolOf } from './scan/symbols.js';
 import {
-  ASKS_DISABLED_MARKER, CHILD_RECLAIM_DISABLED_MARKER, CHILD_STALE_RECLAIM_LIVE_MARKER, CHILD_SUPERSEDED_RECLAIM_LIVE_MARKER, COLLECT_LOOSE_LIVE_MARKER, DEPS_SHED_LIVE_MARKER, DRIFT_PUSH_LIVE_MARKER,
-  DELEGATION_ADOPT_MARKER, NESTED_RESCUE_LIVE_MARKER, ORPHAN_TREE_LIVE_MARKER, RUNS_EXPIRE_NEVER_STARTED_MARKER, RUNS_EXPIRE_COORDINATOR_GONE_MARKER, ORPHAN_TREE_RESCUE_LIVE_MARKER, PANE_SCOPE_STOP_LIVE_MARKER, SWITCHES, TESTBOX_REMOTE_LIVE_MARKER, markerSwitchNames, readSwitches,
+  ASKS_DISABLED_MARKER, AUTOCOMPACT_DISABLED_MARKER, CHILD_RECLAIM_DISABLED_MARKER, CHILD_STALE_RECLAIM_LIVE_MARKER, CHILD_SUPERSEDED_RECLAIM_LIVE_MARKER, COLLECT_LOOSE_LIVE_MARKER, DEPS_SHED_LIVE_MARKER, DRIFT_PUSH_LIVE_MARKER,
+  DELEGATION_ADOPT_MARKER, NESTED_RESCUE_LIVE_MARKER, ORPHAN_TREE_LIVE_MARKER, RUNS_EXPIRE_NEVER_STARTED_MARKER, RUNS_EXPIRE_COORDINATOR_GONE_MARKER, ORPHAN_TREE_RESCUE_LIVE_MARKER, PANE_SCOPE_STOP_LIVE_MARKER, STALL_WATCH_DISABLED_MARKER, SWITCHES, TESTBOX_REMOTE_LIVE_MARKER, ccrcFileSwitchNames, markerSwitchNames, overrideSwitchNames, readSwitches,
 } from '../../shared/switches.js';
+import { PLAIN_AUTO_MEMORY_DEFAULT } from '../../shared/plainAutoMemory.js';
+import { STALL_MARKERS, stallArmingOf } from '../src/coord/stall.js';
 
 /** Today's marker values, typed once here as the table the switchboard must equal. `asks-disabled` is `watch.ts`'s
  *  private constant on the base, so it has no export to read; the switchboard rows below hold it. */
@@ -85,9 +87,13 @@ describe('the switchboard: SWITCHES rows and readSwitches (D-5855)', () => {
     expect(TESTBOX_REMOTE_LIVE_MARKER).toBe('testbox-remote-live');
     // D-7902: the deliberate stop's pane-scope stop switch, written by a ccd verb behind a route, read by ccd's own act.
     expect(PANE_SCOPE_STOP_LIVE_MARKER).toBe('pane-scope-stop-live');
+    // D-8339: the stall watch's kill switch, a hand-touched row with no writer in the tree; the Stall watch card names it.
+    expect(STALL_WATCH_DISABLED_MARKER).toBe('stall-watch-disabled');
     // Delegation PR7 (W5-X1): the adoption marker; since PR8b (D-8112) written by a ccd verb behind a route, read by the lane.
     expect(DELEGATION_ADOPT_MARKER).toBe('delegation-adopt');
-    expect(markers.sort()).toEqual([...Object.values(TODAY), 'asks-disabled', 'landing-disabled', 'landing-checks-live', 'collect-loose-live', 'drift-push-live', 'child-reclaim-disabled', 'coordinator-roster-card-live', 'deps-shed-live', TESTBOX_REMOTE_LIVE_MARKER, PANE_SCOPE_STOP_LIVE_MARKER, 'scope-sweep-live', 'scope-sweep-busy-live', DELEGATION_ADOPT_MARKER, RUNS_EXPIRE_NEVER_STARTED_MARKER, RUNS_EXPIRE_COORDINATOR_GONE_MARKER].sort());
+    // D-8382: ccd's proactive compaction kill switch, a hand-touched row with no writer in the tree.
+    expect(AUTOCOMPACT_DISABLED_MARKER).toBe('autocompact-disabled');
+    expect(markers.sort()).toEqual([...Object.values(TODAY), 'asks-disabled', 'landing-disabled', 'landing-checks-live', 'collect-loose-live', 'drift-push-live', 'child-reclaim-disabled', 'coordinator-roster-card-live', 'deps-shed-live', TESTBOX_REMOTE_LIVE_MARKER, PANE_SCOPE_STOP_LIVE_MARKER, 'scope-sweep-live', 'scope-sweep-busy-live', DELEGATION_ADOPT_MARKER, RUNS_EXPIRE_NEVER_STARTED_MARKER, RUNS_EXPIRE_COORDINATOR_GONE_MARKER, STALL_WATCH_DISABLED_MARKER, AUTOCOMPACT_DISABLED_MARKER].sort());
     expect([...markerSwitchNames].sort()).toEqual(markers.sort());
   });
 
@@ -118,6 +124,7 @@ describe('the switchboard: SWITCHES rows and readSwitches (D-5855)', () => {
       'run-close-never-started-choice': 'run_close_settings.neverStarted',
       'run-close-claimant-crashed-choice': 'run_close_settings.claimantCrashed',
       'run-close-claimant-gone-choice': 'run_close_settings.claimantGone',
+      'plain-auto-memory': 'plain_memory_settings.choice',
     });
   });
 
@@ -130,7 +137,7 @@ describe('the switchboard: SWITCHES rows and readSwitches (D-5855)', () => {
     }
   });
 
-  it('the writers are the ones the tree has or a named task adds: six route-backed ccd verbs, four settings routes, the rest by hand (the sixth, delegation-adopt, D-8112)', () => {
+  it('the writers are the ones the tree has or a named task adds: six route-backed ccd verbs, six settings routes, the rest by hand (the sixth, delegation-adopt, D-8112; the sixth settings route, plain-auto-memory, Overlord W1a)', () => {
     const writers = Object.fromEntries(rows.filter(([, r]) => r.writer !== 'hand-only').map(([k, r]) => [k, r.writer]));
     expect(writers).toEqual({
       'coordinator-paused': 'ccd coord-pause, through POST /api/coord/pause',
@@ -146,6 +153,7 @@ describe('the switchboard: SWITCHES rows and readSwitches (D-5855)', () => {
       'run-close-never-started-choice': 'POST /api/coord/run-close',
       'run-close-claimant-crashed-choice': 'POST /api/coord/run-close',
       'run-close-claimant-gone-choice': 'POST /api/coord/run-close',
+      'plain-auto-memory': 'POST /api/coord/plain-auto-memory',
     });
   });
 
@@ -198,8 +206,25 @@ describe('the switchboard: SWITCHES rows and readSwitches (D-5855)', () => {
     expect(readSwitches(null)[TESTBOX_REMOTE_LIVE_MARKER]).toBe('unmeasurable');
   });
 
-  it('the table has 42 rows: 35 markers and 7 settings (30 at the test box contract\'s base; roll-idle-targets the third setting, dispatch-abandon-choice the fourth; pane-scope-stop-live, D-7902; the sweep\'s two switches, D-7994; delegation-adopt, delegation PR7; runs-expire-never-started, D-8077; the two run-close choices, D-8077; runs-expire-coordinator-gone and its choice, D-8078)', () => {
-    expect([rows.length, markerRows.length, settingRows.length]).toEqual([42, 35, 7]);
+  it('the table has 48 rows: 37 markers, 8 settings and 3 ~/.ccrc files (30 at the test box contract\'s base; roll-idle-targets the third setting, dispatch-abandon-choice the fourth; pane-scope-stop-live, D-7902; the sweep\'s two switches, D-7994; delegation-adopt, delegation PR7; runs-expire-never-started, D-8077; the two run-close choices, D-8077; runs-expire-coordinator-gone and its choice, D-8078; stall-watch-disabled, D-8339; autocompact-disabled and the three ~/.ccrc off switches, D-8382; plain-auto-memory the eighth setting, Overlord W1a)', () => {
+    const fileRows = rows.filter(([, r]) => 'ccrcFile' in r.storage);
+    expect([rows.length, markerRows.length, settingRows.length, fileRows.length]).toEqual([48, 37, 8, 3]);
+  });
+
+  it('D-8339: stall-watch-disabled is C5\'s, hand-only, absent means the watch runs, and the stall lane reads the same constant', () => {
+    const row = SWITCHES[STALL_WATCH_DISABLED_MARKER];
+    expect(row.storage).toEqual({ marker: 'stall-watch-disabled' });
+    expect(row.owner).toBe('C5');
+    expect(row.writer).toBe('hand-only');
+    expect(row.default).toMatch(/^absent: /);
+    expect(row.meaning).toMatch(/stall watch/);
+    // The lane's own marker list holds the row's name, and its arming reads the row's constant.
+    expect(STALL_MARKERS).toContain(STALL_WATCH_DISABLED_MARKER);
+    expect(stallArmingOf([STALL_WATCH_DISABLED_MARKER]).disabled).toBe(true);
+    expect(stallArmingOf([]).disabled).toBe(false);
+    expect(readSwitches([STALL_WATCH_DISABLED_MARKER])[STALL_WATCH_DISABLED_MARKER]).toBe('set');
+    expect(readSwitches([])[STALL_WATCH_DISABLED_MARKER]).toBe('clear');
+    expect(readSwitches(null)[STALL_WATCH_DISABLED_MARKER]).toBe('unmeasurable');
   });
 
   it('D-8077: runs-expire-never-started is C5\'s, absent means shadow, and nothing in the tree writes it', () => {
@@ -249,6 +274,35 @@ describe('the switchboard: SWITCHES rows and readSwitches (D-5855)', () => {
     // The test box row stays the last: this row sits with the other settings rows, ahead of it.
     const keys = Object.keys(SWITCHES);
     expect(keys.indexOf('dispatch-abandon-choice')).toBe(keys.indexOf('roll-idle-targets') + 1);
+    expect(keys.at(-1)).toBe(TESTBOX_REMOTE_LIVE_MARKER);
+  });
+
+  it('Overlord W1a: auto memory for plain sessions is Session Conversation\'s settings row, seeded off, written by its route and read by the store alone', () => {
+    expect(SWITCHES['plain-auto-memory']).toEqual({
+      storage: { setting: 'plain_memory_settings.choice' }, default: PLAIN_AUTO_MEMORY_DEFAULT, owner: 'C3',
+      meaning: expect.stringMatching(/auto memory/), writer: 'POST /api/coord/plain-auto-memory',
+    });
+    expect(PLAIN_AUTO_MEMORY_DEFAULT).toBe('off');
+    // The row describes what the tree has: the table its migration creates and seeds off, the store's one reader of it and
+    // the store's one writer (an insert for a lost row, an update otherwise), which only the route calls.
+    const store = 'server/src/coord/store.ts';
+    expect(sqlStatementsIn(symbolOf(store, 'CoordStore.plainAutoMemorySettings')).map((q) => [q.verb, q.table]))
+      .toEqual([['SELECT', 'plain_memory_settings']]);
+    expect(sqlStatementsIn(symbolOf(store, 'CoordStore.setPlainAutoMemory')).map((q) => [q.verb, q.table]))
+      .toEqual([['INSERT', 'plain_memory_settings'], ['UPDATE', 'plain_memory_settings']]);
+    const ddl = sqlStatementsInFile('server/src/coord/schema.ts').filter((q) => /\bplain_memory_settings\b/.test(q.text));
+    expect(ddl.map((q) => q.verb)).toEqual(['CREATE', 'INSERT']);
+    expect(ddl[1]!.text).toContain("VALUES (1, 'off', 0)");
+    const routesSrc = readFileSync(new URL('../src/coord/routes.ts', import.meta.url), 'utf8');
+    expect(routesSrc.includes("app.post('/api/coord/plain-auto-memory'"), 'its writer is the route').toBe(true);
+    // A settings row is in no list a generic reader walks: no registry marker, no ~/.ccrc file, no override.
+    const name: string = 'plain-auto-memory';
+    expect([markerSwitchNames, ccrcFileSwitchNames, overrideSwitchNames].map((l) => (l as readonly string[]).includes(name)))
+      .toEqual([false, false, false]);
+    expect(Object.keys(readSwitches([name]))).not.toContain(name);
+    // It sits with the settings rows, after the last run-close choice; the test box row stays the last.
+    const keys = Object.keys(SWITCHES);
+    expect(keys.indexOf('plain-auto-memory')).toBe(keys.indexOf('run-close-claimant-gone-choice') + 1);
     expect(keys.at(-1)).toBe(TESTBOX_REMOTE_LIVE_MARKER);
   });
 

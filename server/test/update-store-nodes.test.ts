@@ -69,14 +69,14 @@ describe('upsertNodeMeasurement — the measurement and report groups only', () 
       caps: ['verify', 'node-id', 'floor'], agentOps: [], highestVersion: 'v0.0.9', previousVersion: null,
       floorRead: 'measured', previousRead: 'absent', os: 'linux',
       measuredAt: T0, reachable: true, unreachableSince: null,
-      reportedPhase: null, reportedTarget: null, reportedStartedAt: null, reportedUpdatedAt: null, reportedDetail: null,
+      reportedPhase: null, reportedTarget: null, reportedStartedAt: null, reportedUpdatedAt: null, reportedDetail: null, reportedSweep: null,
       updateState: 'idle', updateTarget: null, updateStartedAt: null, updateDetail: null,
       channel: null, desiredTag: null, resolveDetail: null,
       requestedTag: null, requestedKind: null, requestedAt: null, supersededBy: null,
     };
     expect(store.node('fleet')).toEqual(expected);
     const report = { phase: 'installing', target: 'v0.0.10', startedAt: T0 + 1000, updatedAt: T0 + 2000,
-      detail: 'placing the tree' } as const;
+      detail: 'placing the tree', sweep: null } as const;
     expect(store.upsertNodeMeasurement(meas({ currentDirty: true, previousVersion: 'v0.0.8',
       measuredAt: T0 + 60_000, report }))).toEqual({ ok: true, created: false });
     expect(store.node('fleet')).toEqual({ ...expected, currentDirty: true, previousVersion: 'v0.0.8',
@@ -86,6 +86,21 @@ describe('upsertNodeMeasurement — the measurement and report groups only', () 
     store.upsertNodeMeasurement(meas({ measuredAt: T0 + 120_000 }));
     expect(store.node('fleet')).toMatchObject({ reportedPhase: null, reportedTarget: null, reportedStartedAt: null,
       reportedUpdatedAt: null, reportedDetail: null });
+  });
+
+  it('R37 (D-8386): the report\'s sweep word round-trips; none is NULL, and a stored word this build cannot read reads null', () => {
+    const store = fresh();
+    const report = { phase: 'done', target: 'v0.0.10', startedAt: T0, updatedAt: T0 + 1000, detail: null } as const;
+    store.upsertNodeMeasurement(meas({ report: { ...report, sweep: 'unverified: relist' } }));
+    expect(store.node('fleet')).toMatchObject({ reportedPhase: 'done', reportedSweep: 'unverified: relist' });
+    store.upsertNodeMeasurement(meas({ report: { ...report, sweep: null } }));
+    expect(raw(store, 'fleet', 'reportedSweep')).toBeNull();
+    expect(store.node('fleet')?.reportedSweep).toBeNull();
+    store.upsertNodeMeasurement(meas({ report: { ...report, sweep: 'ok' } }));
+    store.upsertNodeMeasurement(meas());
+    expect(raw(store, 'fleet', 'reportedSweep'), 'no report file left the last sweep word standing').toBeNull();
+    store.db.prepare("UPDATE nodes SET reportedPhase = 'done', reportedSweep = 'maybe' WHERE nodeId = 'fleet'").run();
+    expect(store.node('fleet')?.reportedSweep).toBeNull();
   });
 
   it('an unreadable stamp keeps its read word beside NULL current* columns (§18 "stampRead keeps EACCES from unversioned")', () => {
@@ -119,7 +134,7 @@ describe('upsertNodeMeasurement — the measurement and report groups only', () 
     plantResolved(store, 'fleet');
     const before = store.node('fleet')!;
     store.upsertNodeMeasurement(meas({ measuredAt: T0 + 60_000,
-      report: { phase: 'done', target: 'v0.0.10', startedAt: T0, updatedAt: T0 + 1, detail: null } }));
+      report: { phase: 'done', target: 'v0.0.10', startedAt: T0, updatedAt: T0 + 1, detail: null, sweep: null } }));
     const after = store.node('fleet')!;
     for (const k of ['updateState', 'updateTarget', 'updateStartedAt', 'updateDetail', 'channel', 'desiredTag',
       'resolveDetail', 'requestedTag', 'requestedKind', 'requestedAt', 'supersededBy'] as const) {
@@ -413,28 +428,28 @@ describe('rekeyNode — the lease follows the label (D-3412)', () => {
     expect(gate.leaseHeldBy, 'no dispatch may move beside that run').toBe(UUID_A);
   });
 
-  it('the heir guard IS `isHalting`: over every settled state and a spread of details, a revived row is handed the lease exactly when it does not halt (I1)', () => {
-    const details: (string | null)[] = [null, '', 'the installer died', 'provenance:', 'provenance: unsigned bundle', 'Provenance: x',
-      'PROVENANCE: x', ' provenance: x', 'x provenance: y'];
-    for (const state of ['idle', 'failed', 'reverted'] as const) {
-      for (const detail of details) {
-        const s = boxes();
-        plantLease(s, UUID_A, state, T1);
-        s.db.prepare('UPDATE nodes SET updateDetail = ? WHERE nodeId = ?').run(detail, UUID_A);
-        flipToB(s);
-        expect(s.dispatchNode(UUID_B, 'v0.0.10', 'update', T2, 'the run')).toEqual({ ok: true });
-        const verdict = s.node(UUID_A)!;
-        const halts = isHalting(verdict);
-        expect(s.rekeyNode('fleet', UUID_A)).toEqual({ ok: true, how: 'no-label-row', retired: 1, revived: true });
-        const label = `${state} / ${JSON.stringify(detail)}`;
-        if (halts) {
-          expect(s.node(UUID_A), label).toMatchObject({ updateState: state, updateDetail: detail, updateStartedAt: T1 });
-          expect(fleetGate(s.nodes()).haltedBy, label).toEqual([UUID_A]);
-        } else {
-          expect(s.node(UUID_A), label).toMatchObject({ updateState: 'pending', updateStartedAt: T2, updateDetail: 'the run' });
-          expect(busy(s), label).toEqual([UUID_A]);
-        }
-      }
+  // R29 (D-8387): one case per state and detail, not one case over all 27. Each row builds a whole migrated store, so
+  // the single case was 27 schema migrations against one testTimeout: CPU and fsync, no event to wait on, which reds by
+  // load alone (20375 ms on main against 20000 ms, and 38.5 s at load 30, in the plans' measurements). Split, each row
+  // carries one store's work under its own timeout, as every other case in this file does, and a red names its row.
+  const HEIR_DETAILS: (string | null)[] = [null, '', 'the installer died', 'provenance:', 'provenance: unsigned bundle', 'Provenance: x',
+    'PROVENANCE: x', ' provenance: x', 'x provenance: y'];
+  const HEIR_ROWS = (['idle', 'failed', 'reverted'] as const).flatMap((state) => HEIR_DETAILS.map((detail) => [state, detail] as const));
+  it.each(HEIR_ROWS)('the heir guard IS `isHalting` (I1): a revived %s row with detail %j is handed the lease exactly when it does not halt', (state, detail) => {
+    const s = boxes();
+    plantLease(s, UUID_A, state, T1);
+    s.db.prepare('UPDATE nodes SET updateDetail = ? WHERE nodeId = ?').run(detail, UUID_A);
+    flipToB(s);
+    expect(s.dispatchNode(UUID_B, 'v0.0.10', 'update', T2, 'the run')).toEqual({ ok: true });
+    const verdict = s.node(UUID_A)!;
+    const halts = isHalting(verdict);
+    expect(s.rekeyNode('fleet', UUID_A)).toEqual({ ok: true, how: 'no-label-row', retired: 1, revived: true });
+    if (halts) {
+      expect(s.node(UUID_A)).toMatchObject({ updateState: state, updateDetail: detail, updateStartedAt: T1 });
+      expect(fleetGate(s.nodes()).haltedBy).toEqual([UUID_A]);
+    } else {
+      expect(s.node(UUID_A)).toMatchObject({ updateState: 'pending', updateStartedAt: T2, updateDetail: 'the run' });
+      expect(busy(s)).toEqual([UUID_A]);
     }
   });
 

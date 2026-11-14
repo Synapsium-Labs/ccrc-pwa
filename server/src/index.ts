@@ -40,10 +40,14 @@ import { UPDATE_OP_TIMEOUT_MS } from '../../shared/agent-protocol.js';
 import { apiBaseProblem, createCataloguePoller } from './update/catalogue.js';
 import { AccountAudit, actorOf, knownFleetIdentity } from './accounts/audit.js';
 import { LinearJournal } from './linear/journal.js';
+import { planStorePort } from './coord/planStore.js';
 import { allowAll } from './linear/policyPoint.js';
 import { LinearRateService } from './linear/rate.js';
 import { LinearRefresher } from './linear/refresher.js';
 import { accountOpsFor } from './accounts/ops.js';
+import { TestboxAudit } from './testboxAudit.js';
+import { testboxCaptureTransport } from './buildCaptureLane.js';
+import { testboxAdminOpsFor } from './testboxAdmin.js';
 import { SecretMasker, SHAPE_ONLY_MASKER, fingerprintAnswerOf, fingerprintGeneration, fingerprintRow } from './accounts/mask.js';
 import { mkdirSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
@@ -318,10 +322,19 @@ deps.linearRefresher = linearRefresher;
 // routes (A14 onward).
 const accountAudit = new AccountAudit(coord.db);
 deps.accountAudit = accountAudit;
+// The test box ledger (D-8166) over the same coord.db, and the ONE `TestboxAdminOps` arm, chosen by `cfg.fleetMode` ONLY as the
+// account arm is: a remote fleet gets the agent's `testbox-admin` op, and the local spawner is never constructed there.
+const testboxAudit = new TestboxAudit(coord.db);
+deps.testboxAudit = testboxAudit;
+deps.testboxAdmin = testboxAdminOpsFor(cfg, deps.io);
+// D-8289: the capture queue's transport, over the test box lane's connection (`watcher.testboxLane`).
+deps.buildCapture = testboxCaptureTransport(() => watcher.testboxLane.block());
 // The Linear write journal (D-7671) over the same coord.db, its one instance, and the policy point's default (D-7672):
 // both handed to the proxy and Settings routes that journal and ask (LK9, LK11; #1444).
 const linearJournal = new LinearJournal(coord.db);
 deps.linearJournal = linearJournal;
+// The plan tables through their port (D-8181), built once beside the journal: the plan routes' only door to them.
+deps.plan = planStorePort(coord.db);
 deps.linearPolicy = allowAll;
 // Wrapped once for reconcile and the roster reload (D-5518, accounts plan Task A12): every answer that carries a
 // roster feeds `reloadRoster`, which ingests its fingerprints into the masker's table; an op whose outcome is unknown
@@ -374,11 +387,13 @@ const masker = new SecretMasker({
 });
 deps.masker = masker;
 push?.setMasker(masker);
-// The audit's 365-day retention, at boot and then daily on its own unref'd timer. Not a lane in `watch.ts`'s
-// coordination sweeps, which another branch holds (D-5620). The Linear journal's 365 days ride the same beat (D-7671).
+// The audit's 365-day retention, at boot and then daily on its own unref'd timer (D-5620). The Linear journal's 365 days
+// ride the same beat (D-7671). Not a row of `LANE_SCHEDULE`: this root holds the three stores, none of them is a watcher
+// lane, and the sweep runs before the server listens and whether or not the tick does. A recorded exception (D-8614).
 accountAudit.sweep(Date.now());
+testboxAudit.sweep(Date.now());
 linearJournal.sweep(Date.now());
-setInterval(() => { accountAudit.sweep(Date.now()); linearJournal.sweep(Date.now()); }, 86_400_000).unref();
+setInterval(() => { accountAudit.sweep(Date.now()); testboxAudit.sweep(Date.now()); linearJournal.sweep(Date.now()); }, 86_400_000).unref();
 
 const app = await buildServer(deps, bus, watcher);
 watcher.start();

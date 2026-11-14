@@ -70,7 +70,9 @@ const EXEMPT_BUT_AUTHENTICATED = new Set(
    // D-7554: the test box's read and its tools sync, `ccrc-api testbox status|tools-sync` cookieless, the PWA with a session.
    'GET /api/testbox', 'POST /api/testbox/tools-sync',
    // D-8126: the goals read, `ccrc-api goals show` cookieless from the fleet host, the console with a session.
-   'GET /api/programmes/:slug/goals']);
+   'GET /api/programmes/:slug/goals',
+   // D-8181: the plan read, `ccrc-api plan show` cookieless from the fleet host, the console with a session.
+   'GET /api/programmes/:slug/plan']);
 
 /** DERIVED from `EXEMPT`'s own reason strings, and asserted equal to the
  *  hand-written set above (review round 1, I3+I4): a NINTH entry — `GET
@@ -99,7 +101,7 @@ function scanRoutes(file: string): ScannedRoute[] {
     .map((m) => ({ method: m[1]!.toUpperCase(), routePath: m[2]!, file }));
 }
 
-/** TWELVE files register routes since the coordinator call record's door (`server/src/coord/coordCallsRoute.ts`, D-8126: its one box-token route, registered from
+/** THIRTEEN files register routes since the test box connect routes (`server/src/testboxAdmin.ts`, plan TC12, D-8166: its two session-only routes); TWELVE since the coordinator call record's door (`server/src/coord/coordCallsRoute.ts`, D-8126: its one box-token route, registered from
  *  `registerCoordRoutes` and written in a file of its own); ELEVEN since the review-rounds door (`server/src/coord/reviewRoundsRoute.ts`, D-8125); TEN since the reader lab's door (`server/src/readerLab/routes.ts`, the reader lab plan Task 3: its three run routes and the probe pair); NINE since the programme ledgers' PL3 (`server/src/coord/ledgersRoutes.ts`, the coordinator's nine, registered from
  *  `registerCoordRoutes` but written in a file of their own); EIGHT since the Linear proxy (`server/src/linear/proxyRoutes.ts`, #1444 plan task LK9: its
  *  thirteen box-token routes since `link`, D-8141); SEVEN since the accounts lane routes (`server/src/accounts/routes.ts`, accounts plan Task A14:
@@ -123,7 +125,12 @@ const ROUTES: ScannedRoute[] = [
   ...scanRoutes('accounts/routes.ts'),
   ...scanRoutes('linear/proxyRoutes.ts'),
   ...scanRoutes('readerLab/routes.ts'),
+  ...scanRoutes('face/routes.ts'),
   ...scanRoutes('linking/routes.ts'),
+  ...scanRoutes('testboxAdmin.ts'),
+  ...scanRoutes('coord/planRoutes.ts'),
+  ...scanRoutes('coord/hierarchyRoutes.ts'),
+  ...scanRoutes('continuity/routes.ts'),
 ];
 
 /** The three websocket upgrades — the same registrations, told apart by their
@@ -236,7 +243,7 @@ describe('the scanner is looking at something', () => {
   // A scanner that matched zero registrations would make every `it.each` in this
   // file iterate an empty array and report green — the exact failure mode that
   // makes a source-scanning suite worse than no suite. This one fails first.
-  it('found all ten files, and EXACTLY the route count the surface has', () => {
+  it('found all thirteen files, and EXACTLY the route count the surface has', () => {
     // EXACT, not a floor (review fold-in). A `toBeGreaterThanOrEqual` catches a
     // scanner that broke outright but not one that quietly stops matching SOME
     // registrations — a changed quote style in one file, a verb the regex does
@@ -265,7 +272,11 @@ describe('the scanner is looking at something', () => {
     // EXEMPT, no box token.
     // 58 since `POST /api/sessions/:id/limit-wait` (D-8123, the operator's "Wait until reset" on a limit the watchdog found no room
     // for): session-gated like the swap route, NOT EXEMPT, no box token.
-    expect(scanRoutes('server.ts').length).toBe(58);
+    // 59 since `GET /api/fleet/overrides` (D-8382, Overrides in force and the approvals line): session-gated, NOT EXEMPT,
+    // no box token.
+    // 60 since `GET /api/models/:lane` (D-8406, the session model picker's lane registry read): session-gated, NOT
+    // EXEMPT, no box token.
+    expect(scanRoutes('server.ts').length).toBe(60);
     // 22 since `GET /api/runs/:id/items` — the READ half of the settle route,
     // which keys on item ids that nothing else published.
     // 23 since `POST /api/runs/:id/reclaim` — the fourth ungated operator door,
@@ -335,7 +346,11 @@ describe('the scanner is looking at something', () => {
     // 68 since D-8076's `POST /api/runs/:id/end-request`: a box-token machine lane IN EXEMPT (box token and attribution, no cookie).
     // 70 since `GET`/`POST /api/coord/run-close` (D-8077, the run-close lanes' three-state control): session-gated, NOT EXEMPT, no box token.
     // 72 since `GET`/`POST /api/coord/lane-arm` (D-8274, Settings › Automation › Shadow lanes): session-gated, NOT EXEMPT, no box token.
-    expect(scanRoutes('coord/routes.ts').length).toBe(72);
+    // 74 since `GET /api/testbox/builds` and `POST /api/testbox/builds/capture` (D-8289, the trusted Claude Code builds): session-gated,
+    // NOT EXEMPT, no box token.
+    // 76 since `GET`/`POST /api/coord/plain-auto-memory` (Overlord W1a launch profiles PR B, Settings › Automation › Auto memory for
+    // plain sessions): session-gated, NOT EXEMPT, no box token.
+    expect(scanRoutes('coord/routes.ts').length).toBe(76);
     // 5 in `update/routes.ts` (update-management W2, design 2026-09-20 §12):
     // `GET /api/updates`, `POST /api/updates/intent`, `POST /api/updates/refresh`
     // and `POST /api/updates/ack`, session-only and NOT EXEMPT, plus the
@@ -399,6 +414,8 @@ describe('the scanner is looking at something', () => {
     // `POST …/runs/:nonce/close`, session-gated and NOT EXEMPT; `GET` and `POST /api/reader-lab/probe/:nonce/:name`, IN
     // EXEMPT under reason 8. None consults the box token.
     expect(scanRoutes('readerLab/routes.ts').length).toBe(5);
+    // 2 in `face/routes.ts` (the Overlord face plan, Task 6): `GET` and `POST /api/face`, session-gated and NOT EXEMPT, no box token.
+    expect(scanRoutes('face/routes.ts').length).toBe(2);
     // The `server.ts` half moved too, and NOT on that ladder: 47 since
     // `POST /api/projects/:project/pool` (account pools wave 3, task 9) — the
     // project-pool tag write, registered in `server.ts` rather than in
@@ -598,7 +615,36 @@ describe('the scanner is looking at something', () => {
     // 201 -> 202, the gated count 124 -> 125, the exempt-HTTP count stays 76.
     // 207 since `GET`/`POST /api/coord/lane-arm` (D-8274, Settings › Automation › Shadow lanes), session-gated and NOT EXEMPT, no box
     // token: the HTTP half 202 -> 204, the gated count 125 -> 127, the exempt-HTTP count stays 76.
-    expect(ROUTES.length).toBe(207);
+    // 209 since `GET /api/testbox/admin` and `POST /api/testbox/admin/:sub` (D-8166, plan TC12), in `testboxAdmin.ts`: session-only and
+    // NOT EXEMPT, no box token; each takes the account gate on the `testbox-admin-v1` cap, the POST with a step-up on four subs: the HTTP
+    // half 204 -> 206, the gated count 127 -> 129, the exempt-HTTP count stays 76.
+    // 216 since the plan verbs' seven (D-8181), in `coord/planRoutes.ts`: `GET /api/programmes/:slug/plan` is EXEMPT-BUT-AUTHENTICATED
+    // and the six POSTs are box-token machine lanes IN EXEMPT: the HTTP half 206 -> 213, the gated count stays 129, the exempt-HTTP
+    // count 76 -> 83.
+    // 219 since the hierarchy settings' three (D-8181), in `coord/hierarchyRoutes.ts`: `GET /api/hierarchy` and the two POSTs are
+    // session-gated and NOT EXEMPT, no box token: the HTTP half 213 -> 216, the gated count 129 -> 132, the exempt-HTTP count stays 83.
+    // 221 since `GET /api/testbox/builds` and `POST /api/testbox/builds/capture` (D-8289), session-gated and NOT EXEMPT, no box token:
+    // the HTTP half 216 -> 218, the gated count 132 -> 134, the exempt-HTTP count stays 83.
+    // 222 since `GET /api/fleet/overrides` (D-8382), session-gated and NOT EXEMPT, no box token: the HTTP half 218 -> 219, the
+    // gated count 134 -> 135, the exempt-HTTP count stays 83.
+    // 223 since `GET /api/models/:lane` (D-8406), session-gated and NOT EXEMPT, no box token: the HTTP half 219 -> 220, the
+    // gated count 135 -> 136, the exempt-HTTP count stays 83.
+    // 224 since `POST /api/sessions/:id/start` (Overlord W1a, the start report), in `continuity/routes.ts`: a box-token machine
+    // lane IN EXEMPT: the HTTP half 220 -> 221, the gated count stays 136, the exempt-HTTP count 83 -> 84.
+    // 226 since `GET /api/face` and `POST /api/face` (the Overlord face plan, Task 6), session-gated and NOT EXEMPT, no box token:
+    // the HTTP half 221 -> 223, the gated count 136 -> 138, the exempt-HTTP count stays 84.
+    // 227 since `GET /api/sessions/:id/card` (Overlord W1a, the card piece), in `continuity/routes.ts`: a box-token machine
+    // lane IN EXEMPT: the HTTP half 223 -> 224, the gated count stays 138, the exempt-HTTP count 84 -> 85.
+    // 229 since `GET`/`POST /api/coord/plain-auto-memory` (Overlord W1a launch profiles PR B), session-gated and NOT EXEMPT, no box
+    // token: the HTTP half 224 -> 226, the gated count 138 -> 140, the exempt-HTTP count stays 85.
+    // 232 since the note door (Overlord W1a, the notes piece), in `continuity/routes.ts`: `POST` and `GET
+    // /api/sessions/:id/notes` and `POST /api/sessions/:id/handover`, three box-token machine lanes IN EXEMPT: the HTTP half
+    // 226 -> 229, the gated count stays 140, the exempt-HTTP count 85 -> 88.
+    // 237 since the timer doors (Overlord W1a, the timers piece), in `continuity/routes.ts`: the session's three box-token
+    // lanes IN EXEMPT and the operator's two, session-gated and NOT EXEMPT: the HTTP half 229 -> 234, the gated count
+    // 140 -> 142, the exempt-HTTP count 88 -> 91.
+    expect(ROUTES.length).toBe(237);
+    expect(scanRoutes('testboxAdmin.ts').length).toBe(2);
     // …and the three partitions add up: the websockets plus the HTTP half.
     expect(ROUTES.filter(isWs).length + ROUTES.filter((r) => !isWs(r)).length).toBe(ROUTES.length);
     // DERIVED, not the literal 68 (D-1242's family, extended — F7). `WS_ROUTES`
@@ -673,6 +719,8 @@ describe('the scanner is looking at something', () => {
       // The tenth file's five (the reader lab's door): a scanner that stopped reading `readerLab/routes.ts` would lose them all.
       'POST /api/reader-lab/runs', 'GET /api/reader-lab/runs/:nonce', 'POST /api/reader-lab/runs/:nonce/close',
       'GET /api/reader-lab/probe/:nonce/:name', 'POST /api/reader-lab/probe/:nonce/:name',
+      // The face door's two (the Overlord face plan, Task 6): a scanner that stopped reading `face/routes.ts` would lose both.
+      'GET /api/face', 'POST /api/face',
     ]) expect(keys, `${k} was not found by the scanner`).toContain(k);
     // Both a GET and a POST on the same path, which is the case a path-only
     // exempt table would get wrong (the POST is a box-token machine lane, the
@@ -770,7 +818,7 @@ describe('the scanner is COMPLETE — measured against Fastify\'s own route tabl
     const w = await openApp(); app = w.app;
     const real = realRouteTable(app);
     expect([...real].filter((r) => r.startsWith('UNPARSED'))).toEqual([]);
-    // 207 scanned + the static wildcard when the bundle is built.
+    // 237 scanned + the static wildcard when the bundle is built.
     // (59 stood here across several waves; the account-pools merge is where
     // it was finally re-measured, not where it went stale.)
     expect(real.size).toBe(ROUTES.length + (HAS_PWA ? 1 : 0));
@@ -886,13 +934,17 @@ describe('EXEMPT is complete in both directions', () => {
       'GET /api/pools/epoch',
       'GET /api/programmes/:slug/goals',
       'GET /api/programmes/:slug/items',
+      'GET /api/programmes/:slug/plan',
       'GET /api/reader-lab/probe/:nonce/:name',
       'GET /api/runs',
       'GET /api/runs/:id',
       'GET /api/runs/:id/items',
       'GET /api/runs/:id/record',
       'GET /api/runs/:id/signals',
+      'GET /api/sessions/:id/card',
+      'GET /api/sessions/:id/notes',
       'GET /api/testbox',
+      'GET /api/timers',
       'GET /api/updates/intent/:nodeId',
       'GET /health',
       'POST /api/approvals',
@@ -922,6 +974,12 @@ describe('EXEMPT is complete in both directions', () => {
       'POST /api/programmes/:slug/items',
       'POST /api/programmes/:slug/modifications',
       'POST /api/programmes/:slug/modifications/merged',
+      'POST /api/programmes/:slug/plan',
+      'POST /api/programmes/:slug/plan/close',
+      'POST /api/programmes/:slug/plan/epics/drop',
+      'POST /api/programmes/:slug/plan/met',
+      'POST /api/programmes/:slug/plan/tickets',
+      'POST /api/programmes/:slug/plan/tickets/move',
       'POST /api/programmes/:slug/spec',
       'POST /api/questions/:id/release',
       'POST /api/questions/:id/rule',
@@ -934,7 +992,12 @@ describe('EXEMPT is complete in both directions', () => {
       'POST /api/runs/:id/items',
       'POST /api/runs/:id/review-rounds',
       'POST /api/runs/:id/route',
+      'POST /api/sessions/:id/handover',
+      'POST /api/sessions/:id/notes',
+      'POST /api/sessions/:id/start',
       'POST /api/testbox/tools-sync',
+      'POST /api/timers',
+      'POST /api/timers/:id/cancel',
       'POST /api/token/claim',
     ]);
     // `/api/auth/logout` is the auth route that is NOT here — logging out is
@@ -963,7 +1026,7 @@ describe('EXEMPT is complete in both directions', () => {
     expect([...EXEMPT_BUT_AUTHENTICATED].sort()).toEqual([...EXEMPT_BUT_AUTHENTICATED_DERIVED].sort());
   });
 
-  it('the thirty-nine box-token lanes in EXEMPT are those coord routes, and sixty-seven with notify, pools/epoch, updates/intent, the Linear proxy and the ledgers lanes', () => {
+  it('the thirty-nine box-token lanes in EXEMPT are those coord routes, and eighty-two with notify, pools/epoch, updates/intent, the Linear proxy, the ledgers, the call record, the plan lanes, the start report, the card door, the note door and the timer doors', () => {
     // ORDER-PINNED TITLE. `box-token-census.test.ts` reads the number words in the
     // line above IN SEQUENCE — lanes first, total second — so rewording the title
     // the other way round is a red suite until that expectation moves with it
@@ -1468,7 +1531,7 @@ describe('with CCRC_AUTH off — the shipped default', () => {
   });
 
   it('the gate changes the status of EXACTLY the gated routes, and of nothing else', async () => {
-    // THE PROPERTY, in one loop over all 204 HTTP routes, with THREE probes each:
+    // THE PROPERTY, in one loop over all 234 HTTP routes, with THREE probes each:
     // dark, armed-anonymous, and armed-with-a-live-session. Comparing dark
     // against AUTHENTICATED is what makes this a real status assertion for the
     // gated routes too (review R1) — the earlier version asserted only
@@ -1532,7 +1595,7 @@ describe('with CCRC_AUTH off — the shipped default', () => {
           }
 
           // 3. Armed WITH a live session: identical to dark, for every route that
-          //    is not itself flag-aware — the assertion that covers all 204 HTTP routes, not the 76 exempt.
+          //    is not itself flag-aware — the assertion that covers all 234 HTTP routes, not the 91 exempt.
           //    (Both counts are derived and checked against this very sentence at the
           //    bottom of this file. They read fifty-five and fifteen for several builds
           //    after the tree had grown past both — D-1223.)

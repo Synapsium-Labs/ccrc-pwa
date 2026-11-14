@@ -9,6 +9,12 @@
 // A cadence is how often a lane LOOKS; a safety interval is how long a lane WAITS before it acts on what it saw
 // (`CHILD_RECLAIM_STALL_MS`, `COLLECT_AUDIT_STALL_MS`, the mail and PR backoffs, `DELEGATION_RECOVERY_RETRY_MS`). The
 // two are different facts that happen to share a unit, so a safety interval is never a row and never a row's cadence.
+// A clock kept outside this table on purpose (a safety interval, a UTC hour or day spent once, a timer of the composition
+// root) is named with its reason in the schedule census's `LANE_SCHEDULE_EXCEPTIONS` (`server/test/consolidationCensus.ts`,
+// D-8614), which finds such a clock in the watcher and in the composition root by its shape.
+
+import { RENEWAL_LANE_PERIOD_MS } from '../../shared/continuity.js';
+import { TIMER_LANE_PERIOD_MS } from '../../shared/continuity-timers.js';
 
 /** The catalogue lane's cadence (design 2026-09-20 §7), the SCHEDULED poll's own: `catalogue.ts` re-exports it, so
  *  `routes.ts`'s refresh-door interval derives `SCHEDULED_POLLS_PER_HOUR` from the SAME constant the watcher polls on
@@ -178,11 +184,12 @@ export type LaneClock = 'mono' | 'wall';
 export type LaneFlight = 'skip' | 'join' | 'join-rerun' | 'none';
 
 export type LaneName =
-  | 'caps' | 'catalogue' | 'inventory' | 'landingChecks' | 'landingRadar' | 'serverCaps'
+  | 'caps' | 'catalogue' | 'inventory' | 'landingChecks' | 'landingRadar' | 'landed' | 'serverCaps'
   | 'tasks' | 'usage' | 'pr' | 'names' | 'divergences' | 'lifecycle' | 'readiness' | 'ledgerReconcile' | 'ledgerFloor' | 'drift'
   | 'claimRenew' | 'claimLapse' | 'stalls' | 'idleNudge' | 'mail' | 'asks' | 'approvalPrune' | 'digestBeat'
   | 'childReclaim' | 'collect' | 'archivedExpiry' | 'deadCoordinator' | 'orphanTrees' | 'delegation'
-  | 'sleepRunDone' | 'sleepIdleHours' | 'rollIdle' | 'diskAlarm' | 'tmpCensus' | 'staleArchive' | 'runStuck' | 'runUntold' | 'runClose';
+  | 'sleepRunDone' | 'sleepIdleHours' | 'rollIdle' | 'diskAlarm' | 'tmpCensus' | 'staleArchive' | 'runStuck' | 'runUntold' | 'runClose' | 'cases' | 'generations'
+  | 'launchProfile' | 'timers';
 
 export interface LaneRow {
   readonly name: LaneName | (string & {});
@@ -228,6 +235,13 @@ export const LANE_SCHEDULE: readonly LaneRow[] = [
   {
     name: 'landingRadar', cadenceMs: LANDING_RADAR_SWEEP_MS, derivedFrom: null, clock: 'mono', flight: 'skip',
     staleAfterMs: 5 * 60_000, warnKey: 'ccrc-server: the landing radar lane failed',
+  },
+  // Landing order wave 5h: the landed reader. It reads what the PR lane reads, at the PR lane's beat, ten entries a sweep;
+  // each entry's own due time is the lane's memory. A sweep still running after the PR lane's stuck age is abandoned.
+  {
+    name: 'landed', cadenceMs: PR_SWEEP_MS, clock: 'mono', flight: 'skip', staleAfterMs: PR_SWEEP_STUCK_MS,
+    warnKey: 'ccrc-server: the landed reader lane failed',
+    derivedFrom: { name: 'PR_SWEEP_MS', reason: 'the reader reads what the PR lane reads, at its beat' },
   },
   { name: 'serverCaps', cadenceMs: SERVER_CAPS_WRITE_MS, derivedFrom: null, clock: 'mono', flight: 'join', warnKey: null },
   { name: 'tasks', cadenceMs: TASK_SWEEP_MS, derivedFrom: null, clock: 'mono', flight: 'none', warnKey: null },
@@ -318,6 +332,10 @@ export const LANE_SCHEDULE: readonly LaneRow[] = [
   { name: 'runStuck', cadenceMs: RUN_STUCK_SWEEP_MS, derivedFrom: null, clock: 'mono', flight: 'skip', warnKey: null },
   // The runs-closed notice (D-8073, spec §11.7): one pass at a time; its pass catches its own failure, so no warnKey.
   { name: 'runUntold', cadenceMs: RUN_UNTOLD_SWEEP_MS, derivedFrom: null, clock: 'mono', flight: 'skip', warnKey: null },
+  {
+    name: 'cases', cadenceMs: DRIFT_SWEEP_MS, clock: 'mono', flight: 'skip', warnKey: 'ccrc-server: the case lane failed',
+    derivedFrom: { name: 'DRIFT_SWEEP_MS', reason: 'a read-and-record pass over durable rows, as the drift reconciler is; a case needs days of evidence, so the beat only bounds how late it is recorded' },
+  },
   // The run-close lane (D-8077, spec 2026-11-04 §12; the ruled plan's W1): one pass at a time, on the dead-coordinator lane's
   // own cadence by reference. It starts in shadow, writes the `closes` map the screen counts down on, and closes only once the
   // operator arms its group. Its pass catches its own failure, so no warnKey.
@@ -325,6 +343,22 @@ export const LANE_SCHEDULE: readonly LaneRow[] = [
     name: 'runClose', cadenceMs: RUN_CLOSE_SWEEP_MS, clock: 'mono', flight: 'skip', warnKey: null,
     derivedFrom: { name: 'childReclaim', reason: 'its R7 budget is per pass, and a pass is the destructive lanes\' shared one-minute throttle' },
   },
+  // The generations lane (Overlord spec §3.3.11, Table 11.1c "The renewal lane"; W1a): one read-and-record pass at a time, at
+  // the renewal lane's period by reference, because its observed-time step cap is two of these periods. In shadow it mints
+  // and records and acts on no session. Its pass catches nothing of its own, so a thrown pass is caught here.
+  {
+    name: 'generations', cadenceMs: RENEWAL_LANE_PERIOD_MS, clock: 'mono', flight: 'skip', warnKey: 'ccrc-server: the generations lane failed',
+    derivedFrom: { name: 'RENEWAL_LANE_PERIOD_MS', reason: 'observed time advances by at most two of the lane\'s periods a step (observedStepCapMs), so the row runs at the period the cap is computed from' },
+  },
+  // The launch-profile lane (Overlord spec §3.6 H1, W1a launch profiles PR B): one pass at a time, at the usage lane's
+  // cadence by reference, the plan's choice. It writes routes only once its Shadow lanes row is live, at most five a pass.
+  {
+    name: 'launchProfile', cadenceMs: USAGE_SWEEP_MS, clock: 'mono', flight: 'skip', warnKey: 'ccrc-server: the launch-profile lane failed',
+    derivedFrom: { name: 'USAGE_SWEEP_MS', reason: 'the lane reads the usage sidecar\'s window, which changes no faster than that lane reads it, and a route it writes is applied only at the session\'s next launch' },
+  },
+  // The timers lane (Overlord spec §3.3.12, Table 11.1c; W1a): one pass at a time, once a minute. It cleans up, fires each due
+  // timer with its one mail in one transaction and purges; a thrown pass is caught here.
+  { name: 'timers', cadenceMs: TIMER_LANE_PERIOD_MS, clock: 'mono', flight: 'skip', warnKey: 'ccrc-server: the timers lane failed', derivedFrom: null },
 ];
 
 export function laneRow(name: string): LaneRow {

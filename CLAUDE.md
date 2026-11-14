@@ -11,9 +11,10 @@ spec → plan → subagent execution with per-PR review lenses + whole-branch pa
 — read the README for anything below in depth.** Deep design lives in `docs/superpowers/specs/` (esp.
 `2026-08-10-architecture-ddd-clean-solid.md`, `2026-08-07-build7-fleet-coordination-design.md`).
 
-## Architecture aim: DDD, Clean Architecture, SOLID
-ccrc aims to follow **Domain-Driven Design, Clean Architecture and SOLID** (operator directive 2026-08-10). Every
-change should leave the code closer to that aim, never further from it:
+## Architecture: DDD, Clean Architecture, SOLID — all work follows them
+ccrc follows **Domain-Driven Design, Clean Architecture and SOLID** (operator directives 2026-08-10 and 2026-11-13).
+This binds ALL work, not only refactors: features, fixes, plans, specs and reviews. New code is written to these
+rules, and code a change touches is left closer to them, never further:
 - **DDD:** each concept lives in one bounded context, with one model and one vocabulary: Fleet Registry & Accounts,
   Fleet Mutation, Session Conversation, Workspace & PR Lifecycle, Coordination, Attention & Notification (the
   consolidation wave adds the update control plane, auth & box token, docs, and context-free shared kernels: clock
@@ -36,11 +37,21 @@ change should leave the code closer to that aim, never further from it:
 - **Characterization tests first when moving code:** pin today's inputs → outputs, green on `main` against the old
   code; a move commit changes only the test's imports, and an intended behaviour change is a commit of its own.
 
-Adoption is incremental: fix what you touch, never a big-bang rewrite. The assessment, target design and a Rejected
-list no PR relitigates are in `docs/superpowers/specs/2026-08-10-architecture-ddd-clean-solid.md`; its follow-up is
+Apply them with common sense:
+- **In proportion.** A one-line fix stays one line: fix the defect where it is, add no new violation, and do not grow
+  the change into a refactor. A larger change moves what it touches toward the rules, never a big-bang rewrite.
+- **No ceremony for its own sake.** No interface with one implementation unless it is a port at an edge, no layer
+  that only forwards, no repository over `CoordStore`. Everything on the spec's Rejected list stays rejected.
+- **`ccd` (bash) keeps the intent** — one owner per fact, decide before acting, the anti-corruption boundary —
+  within what bash can express; `ccd/contexts.tsv` and `ccd/contexts-edges.tsv` are its context map.
+- **An emergency may bend a rule** to restore service: say so in the PR and file the follow-up that straightens it.
+- **When a rule and the task genuinely conflict, say so** in the plan or PR (which rule, why, and the follow-up),
+  never bend it silently. Reviewers treat a silent bend as a defect: a second writer of a fact, a decision in
+  delivery code, an import that points outward, or a parallel mechanism beside an existing owner.
+
+The assessment, target design and a Rejected list no PR relitigates are in `docs/superpowers/specs/2026-08-10-architecture-ddd-clean-solid.md`; its follow-up is
 `docs/superpowers/specs/2026-10-19-ccrc-consolidation-wave-design.md` (the "legitimately different" catalogue). The
 binding ring rules are the **Rings / bounded contexts** bullet under *Conventions that shape every change* below.
-When a change and the aim conflict, or a change bends the rings, say so in the PR.
 
 ## This repository is public — nothing private goes in it
 Everything here is public: code, test fixtures, docs, commit messages, branch names, issues, PRs and comments.
@@ -209,10 +220,11 @@ generated value is never hand-edited, and the contrast gate rules on the result 
   `workflow_dispatch` full run (`gh workflow run ci.yml --ref <branch> -f mode=full`). **Dispatch it ONCE per accepted
   tip** — after review, never per push or fix round (D-8266: about 51 such runs in four days cost ~23k
   runner-minutes). First cancel a superseded one on the same branch (`gh run list --workflow ci.yml --branch <branch>
-  --event workflow_dispatch --status in_progress`, then `gh run cancel <id>`). Read ONLY its Linux legs as the
-  arbiter: a dispatched full run calls the macOS legs, which are advisory and off the merge path (operator rulings
-  2026-10-28 and 2026-11-02), so its `full-suite` can be red on macOS alone. A flake that CI ran and passed
-  is a flake. `ccd-session-state`'s window is `the supervisor heartbeat > a swap
+  --event workflow_dispatch --status in_progress`, then `gh run cancel <id>`). A dispatched full run skips the macOS
+  legs unless dispatched with `-f macos=true` (D-8396): its `full-suite` reads that skip as deliberate and is named
+  `full-suite (macOS skipped)`, which is no green-full-suite evidence for the daily run or the stable gate. With
+  `macos=true`, read ONLY its Linux legs as the arbiter: the macOS legs are advisory and off the merge path (operator
+  rulings 2026-10-28 and 2026-11-02). A flake that CI ran and passed is a flake. `ccd-session-state`'s window is `the supervisor heartbeat > a swap
   re-stamps while it carries` (`expected ['mid-carry:orphan'] to include 'mid-carry:restarting'`) — measured
   2026-08-16 at 2/4 full runs and 1/3 under concurrent load, but **0/6 on an idle box**, so isolation alone can
   clear it and a single green isolated run is not proof it was the load. `ccd-bounded-reads`' D4 family bounds
@@ -311,11 +323,21 @@ generated value is never hand-edited, and the contrast gate rules on the result 
   of them infrastructure: `reach.mjs` `docsOnly`; a root `.md` is not one; D-7868, the operator's direction of
   2026-11-03) runs only what can see it: in the queue, the server tests a pull request runs for it (the fast plan, from
   the queue's base), no node floor or agent tests, and the pwa suite whole; on a pull request without `full-ci`, no
-  agent tests, pwa typecheck, pwa build or Storybook. Every skip is by step, so the required checks still report. The queue is the
+  agent tests, pwa typecheck, pwa build or Storybook. Every skip is by step, so the required checks still report. **A docs-only
+  follow-up push** (D-8396, the operator's approval of 2026-11-12) runs none of the heavy pull-request jobs: when every
+  file changed since the PR's newest head with a passing `ci.yml` run (an ancestor of this head) is `docs/**` or a root
+  `*.md` (`.github/ci/docs-followup.mjs` `FOLLOWUP_DOCS_PATTERNS`, the one list; wider than `docsOnly` because the head
+  before already passed and the queue runs everything), `select` answers `docs_followup` from one REST call with the
+  job's own token, and the server jobs, the perf legs, the pwa shards and static checks, the node floor and
+  `storybook-a11y` skip, while `test (server)`, `test (agent)`, `test (pwa)` and `build-pwa` still report success
+  (`test (agent)` and `build-pwa` carry no `needs:`, so they keep their own per-path skip). A first push, any other
+  change, a force-push past every passing head, a pipeline change, the `full-ci` label or a `train/` head, and any
+  failed lookup run everything; the merge queue never asks. The queue is the
   safety net for everything the fast run leaves out, so nobody bypasses it: an admin merge that skips the queue
   (`gh pr merge --admin`; the ruleset's admin bypass allows it) lands on the fast run only, so never use it; ccrc's admin-merge door (D-8124) refuses any repository with a merge queue, so it never lands here. **The macOS legs** (`test-macos`, `probe-macos`)
-  live in `.github/workflows/macos.yml`, off the merge path and off the push to `main` (2026-11-02): the daily run calls them (their nightly run), a dispatched
-  or called full run (release-stable's gate) runs the tests, and `gh workflow run macos.yml` runs both on demand; a red
+  live in `.github/workflows/macos.yml`, off the merge path and off the push to `main` (2026-11-02): the daily run calls them (their nightly run), a called full run
+  (release-stable's gate) runs the tests, a dispatched full run only with `-f macos=true` (D-8396), and `gh workflow
+  run macos.yml` runs both on demand; a red
   one is a failing run on `main`, never a PR's or a queue entry's. **CodeQL** is an advanced setup (`.github/workflows/codeql.yml`, D-7744), not GitHub's default setup: it scans every pull request to `main` and `main` once a day, never a push to `main` and never the merge queue, and it feeds no required check. **A merge
   to `main`** starts no `ci.yml` run: a `refresh` run **every three hours** (cron plus `workflow_dispatch -f mode=refresh`, one concurrency
   group so runs coalesce; the scheduled one traces nothing when `main` has not moved since the newest map, D-7747) re-traces the tests every merge since the last refresh affected and updates the map, running
@@ -418,6 +440,11 @@ generated value is never hand-edited, and the contrast gate rules on the result 
 - **Mutation-table discipline:** a new guard ships WITH a test that goes RED when the guard is deleted/mutated
   (measured before/after, not a comment). Doctrine: "A comment is a request; a red suite is a mechanism." TDD
   red-first.
+- **Push once per round** (operator ruling 2026-11-12, D-8397): commit as often as useful, and push once when a
+  build or a review fix round is complete, with its code, tests and notes (plan, ledger, deviation lines) in the same
+  push; a push before that only hands work to another session or comes before a stop that could lose the work. Every
+  push re-runs the PR's checks, so a push per commit buys CI runs and nothing else (expected: about 2.8 runs per
+  merged PR down to about 2.1). Worker clause 20 and the coordinator's brief sentence carry it to the fleet.
 - **Deviation ledger (D-N):** plans carry a `## Deviations found` section of numbered `D-N` entries (global,
   monotonic across project history — not reset per plan; ONE namespace, the old build-scoped `D-B<k>-<m>` ids
   were reconciled into it and survive only as `was D-B4-9` aliases — zero bare legacy refs remain in tracked
@@ -556,17 +583,19 @@ generated value is never hand-edited, and the contrast gate rules on the result 
   operator's switch on abandoning a dispatch that never came back), `POST /api/coord/run-close` (D-8077, the operator's
   three-state control over the run-close lanes, which also refuses `on` while coordination is paused), `POST /api/coord/scope-sweep` (D-7994, the
   operator's switch on the sweep stopping a dead session's busy processes), `POST /api/coord/roll-idle` (D-7453, the
-  operator's Settings row for the automatic roll; every idle session by default since D-8276), `POST /api/coord/pane-scope-stop` (D-7902, the operator's
+  operator's Settings row for the automatic roll; every idle session by default since D-8276), `POST /api/coord/plain-auto-memory` (Overlord W1a,
+  the operator's Settings row for auto memory in plain sessions, off by default), `POST /api/coord/pane-scope-stop` (D-7902, the operator's
   switch that arms a deliberate stop's pane-scope stop), `POST /api/coord/delegation-adopt` (D-8112, the operator's switch
   on the delegation lane keeping a finished delegated worktree, which also refuses `on` while sign-in is dark), `POST /api/coord/lane-arm` (D-8274,
   the operator's Shadow lanes card, one switch per shadow lane, which also refuses `live` while sign-in is dark), `POST /api/testbox/switch` (test box plan TB9, D-7411,
-  the operator's remote switch for test runs; the test box's read and sync take a session or the box token, D-7554),
+  the operator's remote switch for test runs; the test box's read and sync take a session or the box token, D-7554), `POST /api/testbox/builds/capture` (D-8289,
+  the operator's Capture again on a Claude Code build whose capture failed, which puts it back in the capture queue),
   `POST /api/questions/:id/answer` (W3 Q3f, D-7030, the operator's answer door of the question family) and
   `POST /api/leases/:lease/operator-retain` and `POST /api/leases/:lease/resolve` (delegation wave 5 PR8, the operator's
   keep, attach and "not delegated" for a delegated worktree) are session-gated only — armed, they sit behind the auth gate like every other PWA-surface write. The first
   needs prose because no scanner can see it: `coord-pause-route.test.ts` reads
   `server/src/coord/routes.ts` alone, and that route is registered in `server.ts`, so a door opened outside
-  that one file is invisible to the set that pins the doors. The other fifteen are in that file's `SESSION_ONLY`
+  that one file is invisible to the set that pins the doors. The other seventeen are in that file's `SESSION_ONLY`
   set, and `box-token-census.test.ts` checks this sentence against it in both directions (D-1231). The update
   control plane's routes are session-only by design (the box token never writes intent — design 2026-09-20,
   decision 15): `GET /api/updates`, `POST /api/updates/intent`, `POST /api/updates/refresh`, `POST
@@ -592,7 +621,10 @@ generated value is never hand-edited, and the contrast gate rules on the result 
   behind a step-up, and every one is session-gated when armed. They are
   registered by `registerLedgerOperatorRoutes` in `server/src/coord/ledgersRoutes.ts`, called from `server.ts`; the census reads
   that file as a lane source of its own and keeps their names in a hand-kept `LEDGER_OPERATOR_DOORS`, checked against it in both
-  directions. The box-token lifecycle's `POST /api/token/claim` (EXEMPT: it authenticates by a single-use code
+  directions. The operator's read and cancel of a session's timers (Overlord W1a, the timers piece), `GET /api/sessions/:id/timers`
+  and `POST /api/sessions/:id/timers/:timerId/cancel`, consult no box token either and are session-gated when armed; they register
+  from `server/src/continuity/routes.ts` beside the session's own box-token timer doors, and the census keeps every session-gated
+  door of that file in a hand-kept `CONTINUITY_SESSION_DOORS`, checked against it in both directions. The box-token lifecycle's `POST /api/token/claim` (EXEMPT: it authenticates by a single-use code
   the server sent over the agent link, never by the token it hands out) and `POST /api/token/rotate` (session-only,
   the console's "Rotate now") consult no box token either; they register from `server/src/token/routes.ts`, which
   the census reads as a lane source of its own and checks against `CODE_DOORS` and `TOKEN_DOORS` in both directions.
@@ -641,7 +673,7 @@ generated value is never hand-edited, and the contrast gate rules on the result 
   hand only. `coordinator-paused` does: Build 4's whitelisted `ccd coord-pause --state on|off`, driven by
   `POST /api/coord/pause`, both raises and lowers it, so it is reachable from a phone — `routes.ts` calls the
   boundary what it now is, "convention with a speed bump".
-- **The worker has a skill too** (`ccd/worker-skill/SKILL.md`, `ccrc-worker`, nineteen clauses pinned by
+- **The worker has a skill too** (`ccd/worker-skill/SKILL.md`, `ccrc-worker`, twenty clauses pinned by
   `server/test/worker-skill.test.ts`; it ships no `references/` and points at the coordinator's).
   `WORKER_KICKOFF_PREFIX` (`server/src/coord/dispatch.ts`) prefixes EVERY brief mail with the sentence that
   invokes it, so a wave brief carries WAVE SPECIFICS — plan path, task range, interfaces, deviations — never the

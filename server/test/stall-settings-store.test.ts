@@ -242,7 +242,7 @@ describe('stallObservationsSince: the window, the plan and the failure (§11; M1
     event(s, SINCE, 'stall:quiet:1:b');
     event(s, SINCE + 5, null);
     expect(byAt(s.stallObservationsSince(SINCE))).toEqual([
-      { at: SINCE, detail: 'stall:quiet:1:b' }, { at: SINCE + 5, detail: null },
+      { eventId: 2, runId: 1, at: SINCE, detail: 'stall:quiet:1:b' }, { eventId: 3, runId: 1, at: SINCE + 5, detail: null },
     ]);
   });
 
@@ -270,5 +270,15 @@ describe('stallObservationsSince: the window, the plan and the failure (§11; M1
     event(s, SINCE, 'stall:quiet:1:b');
     event(s, 'abc', 'stall:quiet:1:c');
     expect(s.stallObservationsSince(SINCE)).toEqual({ ok: false, detail: 'run_events at is not a positive safe integer' });
+  });
+
+  it('a runId that is not a positive safe integer refuses the whole read, naming the column and no value', () => {
+    const s = store();
+    withRun(s);
+    s.db.exec('PRAGMA foreign_keys = OFF');
+    event(s, SINCE, 'stall:quiet:1:b');
+    s.db.prepare("INSERT INTO run_events (runId, at, fromState, toState, causedBy, detail) VALUES ('abc', ?, 'working', 'working', 'operator', 'stall:quiet:1:c')")
+      .run(SINCE);
+    expect(s.stallObservationsSince(SINCE)).toEqual({ ok: false, detail: 'run_events runId is not a positive safe integer' });
   });
 });

@@ -88,7 +88,7 @@ _tb_shape_class() {   # <KEY> -> its class; nothing for a key this file does not
   case "$1" in
     CCRC_TESTBOX_URL|CCRC_TESTBOX_GIT_URL_BASE|CCRC_TESTBOX_OS_MIRROR|CCRC_TESTBOX_REGISTRY_UPSTREAM) echo url ;;
     CCRC_TESTBOX_TOKEN_FILE|CCRC_TESTBOX_GIT_KEY|CCRC_TESTBOX_TIMES|CCRC_TESTBOX_RUN_TMPDIR|CCRC_TESTBOX_ROOT) echo path ;;
-    CCRC_TESTBOX_REPOS|CCRC_TESTBOX_TOOLS_DIR|CCRC_TESTBOX_SERVICE_TOKEN_FILE) echo path ;;
+    CCRC_TESTBOX_REPOS|CCRC_TESTBOX_TOOLS_DIR|CCRC_TESTBOX_SERVICE_TOKEN_FILE|CCRC_TESTBOX_PROBE_CONFIG_DIR) echo path ;;
     CCRC_TESTBOX_UNTRACKED_FILE_MAX|CCRC_TESTBOX_SNAPSHOT_MAX|CCRC_TESTBOX_RUN_MEMORY_MAX|CCRC_TESTBOX_RUN_SWAP_MAX) echo size ;;
     CCRC_TESTBOX_REPORT_MAX) echo size ;;
     CCRC_TESTBOX_STATUS_DEADLINE|CCRC_TESTBOX_RECONNECT_DEADLINE|CCRC_TESTBOX_QUEUE_WAIT|CCRC_TESTBOX_BUDGET) echo duration ;;
@@ -99,11 +99,13 @@ _tb_shape_class() {   # <KEY> -> its class; nothing for a key this file does not
     CCRC_TESTBOX_TMPFS) echo onoff ;;
     CCRC_TESTBOX_RUN_CPU_QUOTA) echo percent ;;
     CCRC_TESTBOX_QUEUE_LIMIT|CCRC_TESTBOX_RUNS|CCRC_TESTBOX_WORKERS|CCRC_TESTBOX_LOG_TAIL|CCRC_TESTBOX_SESSION_RUNS) echo count ;;
+    CCRC_TESTBOX_PROBES_PER_DAY) echo count ;;
     CCRC_TESTBOX_REGISTRY_PROXY|CCRC_TESTBOX_LISTEN) echo hostport ;;
     CCRC_TESTBOX_DENY_GLOBS) echo globs ;;
     CCRC_TESTBOX_EGRESS_ALLOW) echo hosts ;;
     CCRC_TESTBOX_ENV_FORWARD) echo envnames ;;
     CCRC_TESTBOX_PUSH_USER|CCRC_TESTBOX_SERVICE_USER|CCRC_TESTBOX_RUN_USER_PREFIX) echo user ;;
+    CCRC_TESTBOX_PROBE_SOCKET) echo socket ;;
   esac
 }
 # Patterns, not literals: a duration and a size are a whole number, 1 or more, with no leading zero (bash's arithmetic
@@ -132,6 +134,7 @@ _tb_shape() {   # <KEY> <value> -> 0 when the value is the key's shape
     envnames) [ -n "${v//[[:space:]]/}" ] || return 1
       for w in $v; do [[ "$w" =~ ^[A-Z_][A-Z0-9_]*$ ]] || return 1; done ;;
     user) [[ "$v" =~ ^[a-z_][a-z0-9_-]*$ ]] ;;
+    socket) [[ "$v" =~ ^[a-z_][a-z0-9_-]*$ ]] ;;
     *) return 1 ;;
   esac
 }
@@ -152,11 +155,79 @@ _tb_shape_says() {   # <KEY> -> the shape, in words, for the warning
     hosts) echo "a list of host names" ;;
     envnames) echo "a list of environment variable names" ;;
     user) echo "a user name (lower-case letters, digits, _ and -)" ;;
+    socket) echo "a tmux socket name (lower-case letters, digits, _ and -)" ;;
     *) echo "a test box setting" ;;
   esac
 }
 
-# ── the defaults table (spec §4, plus D-7420, D-7421, D-7426, D-7501) ────
+# ── the box's path and user policy (D-8166) ──────────────────────────────
+# The box's paths and user names are applied as root (`install -d -o root`, `chown`, `rm`), and the card can change them with
+# no step-up, so a shape is not enough: a path the installer makes root's must not be a system directory, and the token
+# path the installer removes on unpair must not be a file that is not the token. `_tb_path_ok` and `_tb_key_policy` are the
+# one rule, read by the installer (the box is the authority), by the connect verb on the fleet host (so a refusal comes
+# before anything is sent) and by the tests. Both take the box's root as their last argument, empty on a box and a fixture
+# root under a test.
+TB_PATH_BASES=(/srv:1 /mnt:1 /media:1 /opt:1 /data:1 /etc/ccrc-testbox:1 /var/lib/ccrc-testbox:0)   # <base>:<least depth below it>
+# `_tb_path_ok <path> [root]` -> 0 iff the path is absolute, has no `.` or `..` part and lies at least the base's depth below
+# one of TB_PATH_BASES (so never `/`, `/root`, `/etc`, `/var/lib` or a base itself, but `/var/lib/ccrc-testbox` and below).
+_tb_path_ok() {
+  local p="${1-}" r="${2-}" b min rest
+  if [ -n "$r" ] && [[ "$p" == "$r"/* ]]; then p="${p#"$r"}"; fi   # a fixture's paths lie under its root; a box's root is empty
+  [[ "$p" == /* ]] || return 1
+  while [[ "$p" == *//* ]]; do p="${p//\/\//\/}"; done
+  p="${p%/}"
+  [[ "$p/" != */./* && "$p/" != */../* ]] || return 1
+  for b in "${TB_PATH_BASES[@]}"; do
+    min="${b#*:}"; b="${b%:*}"
+    if [ "$p" = "$b" ]; then [ "$min" = 0 ] && return 0; continue; fi
+    case "$p" in "$b"/*) rest="${p#"$b"/}"; [ -n "$rest" ] && return 0 ;; esac
+  done
+  return 1
+}
+# `_tb_key_policy <KEY> <value> [root]` -> 0, or 1 with TB_POLICY_WHY: the paths the installer makes root's are below a base, and
+# no service or push user is root.
+# shellcheck disable=SC2034  # TB_POLICY_WHY is read by the installer and the connect verb
+_tb_key_policy() {
+  local k="${1-}" v="${2-}" r="${3-}"
+  TB_POLICY_WHY=""
+  case "$k" in
+    CCRC_TESTBOX_ROOT|CCRC_TESTBOX_REPOS|CCRC_TESTBOX_TOOLS_DIR)
+      _tb_path_ok "$v" "$r" && return 0
+      TB_POLICY_WHY="$k=$v is not a directory below /srv, /mnt, /media, /opt, /data, /etc/ccrc-testbox or /var/lib/ccrc-testbox, and the installer makes it root's"
+      return 1 ;;
+    CCRC_TESTBOX_SERVICE_USER|CCRC_TESTBOX_PUSH_USER)
+      [ "$v" != root ] && return 0
+      TB_POLICY_WHY="$k names root; the service and the push user are accounts of their own"
+      return 1 ;;
+  esac
+  return 0
+}
+# `_tb_box_policy [root]` — after `_tb_load box`: every key above, the two users differ, and the service token is the service
+# user's home (`~/...`) or a file below /var/lib/<service user>/. -> 0, or 1 with TB_POLICY_WHY.
+# shellcheck disable=SC2034  # TB_POLICY_WHY is read by the installer and the connect verb
+_tb_box_policy() {
+  local r="${1-}" k tok svc push pre
+  for k in CCRC_TESTBOX_ROOT CCRC_TESTBOX_REPOS CCRC_TESTBOX_TOOLS_DIR CCRC_TESTBOX_SERVICE_USER CCRC_TESTBOX_PUSH_USER; do
+    _tb_key_policy "$k" "${TBK[$k]-}" "$r" || return 1
+  done
+  svc="${TBK[CCRC_TESTBOX_SERVICE_USER]-}"; push="${TBK[CCRC_TESTBOX_PUSH_USER]-}"; pre="${TBK[CCRC_TESTBOX_RUN_USER_PREFIX]-}"
+  if [ "$svc" = "$push" ]; then TB_POLICY_WHY="the service user and the push user are the same account ($svc)"; return 1; fi
+  for k in "$svc" "$push"; do   # a run user (`<prefix>install` or `<prefix><n>`) runs a pull request's code: it is neither of the two
+    if [ "$k" = "${pre}install" ] || { [[ "$k" == "$pre"* ]] && [[ "${k#"$pre"}" =~ ^[0-9]+$ ]]; }; then
+      TB_POLICY_WHY="the service user and the push user are not run users: $k is one of the names CCRC_TESTBOX_RUN_USER_PREFIX makes"; return 1
+    fi
+  done
+  tok="${TBK[CCRC_TESTBOX_SERVICE_TOKEN_FILE]-}"
+  # shellcheck disable=SC2088  # the setting's literal `~/` prefix (the service user's home), not a shell tilde
+  case "$tok" in
+    '~/'*) ;;
+    "$r/var/lib/$svc/"?*) [[ "$tok/" != */./* && "$tok/" != */../* ]] || { TB_POLICY_WHY="CCRC_TESTBOX_SERVICE_TOKEN_FILE has a . or .. part"; return 1; } ;;
+    *) TB_POLICY_WHY="CCRC_TESTBOX_SERVICE_TOKEN_FILE=$tok is not in the service user's home (~/ or /var/lib/$svc/), and the installer removes it on unpair"; return 1 ;;
+  esac
+  return 0
+}
+
+# ── the defaults table (spec §4, plus D-7420, D-7421, D-7426, D-7501, D-8290) ────
 # Each line reads one key through ccrc's one reader in `file` mode and hands the answer to `_tb_got`. The defaults are
 # spelled once, here. `~/` is the reading user's home (the fleet user's on the fleet host, the service user's on the
 # box), resolved by the reader of the value; ccrc.env expands nothing. Empty (`''`) is "unset": no test box URL, no
@@ -212,6 +283,10 @@ _tb_box_table() {
   _ccrc_knob CCRC_TESTBOX_LISTEN '' file; _tb_got CCRC_TESTBOX_LISTEN '' $?
   _ccrc_knob CCRC_TESTBOX_SERVICE_TOKEN_FILE '~/.ccrc/testbox-service.token' file; _tb_got CCRC_TESTBOX_SERVICE_TOKEN_FILE '~/.ccrc/testbox-service.token' $?
   _ccrc_knob CCRC_TESTBOX_UNIT_MAX 1h file; _tb_got CCRC_TESTBOX_UNIT_MAX 1h $?
+  # D-8290: the live probes. No config directory by default: the box runs no probe until the scratch account's is named.
+  _ccrc_knob CCRC_TESTBOX_PROBE_CONFIG_DIR '' file; _tb_got CCRC_TESTBOX_PROBE_CONFIG_DIR '' $?
+  _ccrc_knob CCRC_TESTBOX_PROBE_SOCKET ccrc-probe file; _tb_got CCRC_TESTBOX_PROBE_SOCKET ccrc-probe $?
+  _ccrc_knob CCRC_TESTBOX_PROBES_PER_DAY 10 file; _tb_got CCRC_TESTBOX_PROBES_PER_DAY 10 $?
 }
 
 # ── the validated load ───────────────────────────────────────────────────

@@ -8,20 +8,28 @@
 // 1560 s budget under `strace -f`, so it is split the way the UTF-8 rows are. The blocks are the runner's and keep their
 // titles, so a full test name is the one it was before the split.
 //
+// `-route` too ran past that budget (about 600 s on a CI runner), and E9's one batch cannot be split by `describe`, so
+// its chain records are split instead: `-route` keeps E9 (E9x, E9a and E9b, titles and bodies unchanged) over the
+// first of `ROUTE_CHAIN_SHARES` shares, and `-route-2`, `-route-3` and `-route-4` run the blocks `E9-2` to `E9-4`, each
+// E9x and E9a over its own share (the runner's `routeChainShare`).
+//
 // The same rows under the UTF-8 locale, once `ccd-tick-diet-equivalence-utf8.test.ts` at 10.5 minutes, split the same
-// way into `-utf8-limits` (E5, E7), `-utf8-registry` (E3, E6, E8, E10) and `-utf8-route` (E9), one file per entry of
-// `TICK_DIET_UTF8_PARTS`.
+// way into `-utf8-limits` (E5, E7), `-utf8-registry` (E3, E6, E8, E10), `-utf8-route` (E9) and `-utf8-route-2` to
+// `-utf8-route-4` (E9-2 to E9-4), one file per entry of `TICK_DIET_UTF8_PARTS`.
 //
 // `TICK_DIET_C_PARTS` and `TICK_DIET_UTF8_PARTS` are each the whole of their locale's rows, once:
 // `ccd-tick-diet-partsPin.test.ts` pins that each locale's files together register each block exactly once, so a block
 // added to the runner and left out of every part reds.
 import { LOCALES, registerLocaleRows } from './ccdTickDietRunner.js';
 
-/** The per-locale blocks (E3, E5 to E10) of the runner, by the file part that runs them under `C`. */
+/** The per-locale blocks (E3, E5 to E10, E9-2 to E9-4) of the runner, by the file part that runs them under `C`. */
 export const TICK_DIET_C_PARTS = {
   limits: ['E5', 'E7'],
   registry: ['E3', 'E6', 'E8', 'E10'],
   route: ['E9'],
+  'route-2': ['E9-2'],
+  'route-3': ['E9-3'],
+  'route-4': ['E9-4'],
 } as const;
 
 /** Registers one part's blocks under `C`. A file calls this and nothing else. */
@@ -29,11 +37,14 @@ export function registerCParts(part: keyof typeof TICK_DIET_C_PARTS): void {
   registerLocaleRows(LOCALES[0], TICK_DIET_C_PARTS[part]);
 }
 
-/** The per-locale blocks (E3, E5 to E10) of the runner, by the file part that runs them under the UTF-8 locale. */
+/** The per-locale blocks (E3, E5 to E10, E9-2 to E9-4) of the runner, by the file part that runs them under the UTF-8 locale. */
 export const TICK_DIET_UTF8_PARTS = {
   limits: ['E5', 'E7'],
   registry: ['E3', 'E6', 'E8', 'E10'],
   route: ['E9'],
+  'route-2': ['E9-2'],
+  'route-3': ['E9-3'],
+  'route-4': ['E9-4'],
 } as const;
 
 /** Registers one part's blocks under the UTF-8 locale. A file calls this and nothing else. */

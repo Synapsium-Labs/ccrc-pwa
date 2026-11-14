@@ -18,6 +18,7 @@ import { LANDING_REFUSAL_STATUS } from '../../shared/refusal.js';
 import { NotifyLog } from '../src/notifylog.js';
 import { testDeps } from './helpers.js';
 import { mkTmp, removeTmpFixtures } from './tmpHelpers.js';
+import { seedLegacyProgramme } from './helpers/plan.js';
 
 const TOKEN = 'f'.repeat(64);
 const tok = { 'x-ccrc-mail-token': TOKEN };
@@ -468,6 +469,7 @@ describe('serialisation', () => {
     }
     await create(w, 11);
     const runId = openRun(w, 'coord-a');
+    seedLegacyProgramme(w.store.db, 'holder', 'demo');
     const opening = w.app.inject({ method: 'POST', url: '/api/runs', headers: tok,
       payload: { program: 'holder', title: 'H', project: 'demo', wave: 1, waveOf: 8, claimedBy: 'lane-a', claimedByUuid: WHO['lane-a'],
         sessionId: 'holder-worker', homeProject: 'demo' } });

@@ -4532,7 +4532,7 @@ describe('the compaction card — option A, the staging-only helper (spec §3.1 
     // NON-VACUITY, both halves: a scan over an empty set proves nothing, and a
     // scan whose anchors had all vanished would report success just as loudly.
     expect(guards.length, 'the re-check is called at all').toBeGreaterThan(0);
-    expect(acquires.length, 'and the sections exist to be guarded').toBe(5);
+    expect(acquires.length, 'and the sections exist to be guarded (the sixth, the precompact line\'s)').toBe(6);
 
     // Each entry is the FIRST line of a statement that mutates a canonical
     // pathname while the row's mutex is held. Order matters: the scan walks
@@ -4594,6 +4594,10 @@ describe('the compaction card — option A, the staging-only helper (spec §3.1 
         needle: '{ link "$claim" "$f"; } 2>/dev/null || true', pick: [0, 2] },
       { what: 'SessionStart(compact): the body-less card restore',
         needle: '{ link "$claim" "$f"; } 2>/dev/null || true', pick: [1, 2] },
+      // The Overlord's PreCompact events line (W1a, review 1927 I3): its rotation and its append.
+      { what: 'PreCompact events line: a symlink at .compacteventsprev removed (review 1937 F1)', needle: 'rm -f "$prev" 2>/dev/null' },
+      { what: 'PreCompact events line: the rotation', needle: 'mv -f "$f" "$prev" 2>/dev/null && rot=0' },
+      { what: 'PreCompact events line: the append', needle: `{ printf '%s\\n' "$line" >> "$f"; } 2>/dev/null` },
     ];
     /** The k-th line carrying `needle`, with the total pinned: an anchor that
      *  gained or lost an occurrence is a moved anchor, not a re-indexed one. */
@@ -6031,7 +6035,7 @@ describe('the compaction card — jq programs and shell words in the compaction 
    *  builds a jq program. `_hook_emit_context` is here because the row's own
    *  non-vacuity clause names its `jq -cn --arg c "$text"` as a site the scan
    *  must FIND. */
-  const ARMS = ['_hook_compact_scope', '_hook_compact_pre', '_hook_compact_card',
+  const ARMS = ['_hook_compact_scope', '_hook_compact_pre_line', '_hook_compact_pre', '_hook_compact_card',
     '_hook_compact_card_locked', '_hook_compact_mark_served', '_hook_compact_serve_end',
     '_hook_compact_post', '_hook_compact_post_abandon', '_hook_compact_post_fail',
     '_hook_lock_init', '_hook_lock_acquire', '_hook_lock_release', '_hook_lock_same',
@@ -6185,8 +6189,8 @@ describe('the compaction card — jq programs and shell words in the compaction 
     // NON-VACUITY, MANDATORY and BY IDENTITY — §5 names these two sites by
     // pre-Task-9 line anchors that this task moved, so they are required by
     // what they ARE rather than by where they sit.
-    expect(a.programs.length, 'the scan found every jq program in the arms — 3 in PreCompact, 9 in PostCompact, 1 in the emitter')
-      .toBe(13);
+    expect(a.programs.length, 'the scan found every jq program in the arms — 3 in PreCompact, 1 in its precompact line (Overlord W0-05), 9 in PostCompact, 1 in the emitter')
+      .toBe(14);
     const emit = audit(hookSrc()).programs.filter((h) => h.fn === '_hook_emit_context');
     expect(emit.length, 'the emitter\'s program is in the found set').toBeGreaterThan(0);
     const pre = a.programs.filter((h) => h.fn === '_hook_compact_pre');
@@ -7071,8 +7075,10 @@ describe('the compaction card — mechanism absence, the serve and settle arms (
     // NOTHING PUBLISHED, NOTHING CONSUMED, NOTHING STAGED. The name list is
     // compared whole rather than by a handful of `existsSync` calls, so a
     // stage, a claim or a marker the arms should never have created shows up
-    // as a diff instead of slipping past an enumeration nobody updated.
-    expect(reg(), 'no stage, claim, marker or journal appears').toEqual(before);
+    // as a diff instead of slipping past an enumeration nobody updated. The start report's spool (Overlord W1a) is set
+    // aside: a compact start is reported whatever the card's mechanism, and no server answers in this fixture.
+    const spool = (n: string): boolean => !n.endsWith('.startpending');
+    expect(reg().filter(spool), 'no stage, claim, marker or journal appears').toEqual(before.filter(spool));
     expect(fs.existsSync(journalFile()), 'and no journal line is committed').toBe(false);
     expect(fs.readFileSync(setFile()), 'the canonical set is byte-identical').toEqual(setBytes);
     expect(fs.readFileSync(cardFile()), 'and so is the card it could not claim').toEqual(cardBytes);
@@ -7158,8 +7164,10 @@ const forkCensus = (raw: string, whole = false): { forks: string[]; unparsed: st
   // THE WINDOW. The acquire's LAST child is its `flock`, so the section opens
   // straight after the first one; it closes at the helper fork (the first
   // child after the release) or, on an arm that releases and returns, at the
-  // end of the trace. `_hook_compact_pre` is the last statement in the file,
-  // so "end of trace" really is "end of the arm".
+  // next `flock`. `_hook_compact_pre` is no longer the last arm: the Overlord's
+  // precompact line (`_hook_compact_pre_line`) runs after it with an acquire of
+  // its own, so such a window closes at THAT acquire's `flock` and carries the
+  // three children it takes first: its line's `jq`, its alias `link` and `rm`.
   const flockAt = whole ? 0 : events.findIndex((e) => e.kind === 'exec' && e.name === 'flock');   // `whole`: every child of the run, no window
   expect(flockAt, 'the arm took the row mutex').toBeGreaterThan(-1);
   // THE END IS THE CLONE, NOT ITS EXEC. `timeout`'s `execve` happens in the
@@ -7311,7 +7319,9 @@ describe.skipIf(process.platform === 'darwin')('the compaction card — the firs
     // runs to the end of the trace here, where the publishing run's ends at the
     // helper fork. A SINGLE expected list carrying this member would be red on
     // the ordinary run, which is why the multiset is stated per scenario.
-    expect(tally(forks)).toEqual({ '(subshell)': 1, find: 2, jq: 1, link: 1, mv: 1, rm: 2 });
+    // Plus the precompact line's three children before its own `flock` (the
+    // window's note above): jq, link and rm each one higher than the card's.
+    expect(tally(forks)).toEqual({ '(subshell)': 1, find: 2, jq: 2, link: 2, mv: 1, rm: 3 });
   }, 60_000);
 
   // THE RESIDUE SCENARIO (closing gate I1). The sweep loop's per-iteration
@@ -10721,9 +10731,10 @@ describe('history scope marker: PreCompact records whose context is compacting (
     expect(src.indexOf('# >>> history-scope', open + 1), 'two history-scope blocks').toBe(-1);
     expect(open, 'the marker must follow the card, whose verdict it reuses').toBeGreaterThan(preCall);
     expect(close).toBeLessThan(src.indexOf('if [[ "$event" == PostCompact ]]; then _hook_compact_post || true; fi'));
-    expect(src.split('\n').filter((l) => l === 'unset CS_SCOPE'), 'CS_SCOPE is unset once').toHaveLength(1);
+    const UNSET = 'unset CS_SCOPE CS_RULE_SCOPE CS_RULE_TRANSCRIPT CS_REFUSED';   // review 1937 F3, and the refusal arm's flag
+    expect(src.split('\n').filter((l) => l.startsWith('unset CS_SCOPE')), 'CS_SCOPE is unset once').toEqual([UNSET]);
     expect(src, 'unset directly above the card\'s call').toContain(
-      'unset CS_SCOPE\nif [[ "$event" == PreCompact  ]]; then _hook_compact_pre  || true; fi');
+      `${UNSET}\nif [[ "$event" == PreCompact ]]; then _hook_compact_refuse || true; fi\nif [[ "$event" == PreCompact  ]]; then _hook_compact_pre  || true; fi`);
     const gate = src.slice(open, close).split('\n').find((l) => l.startsWith('if [[ "$event" == PreCompact && -z "$paid" ]]'));
     expect(gate, 'the gate line').toBeDefined();
     expect(gate!.slice(0, gate!.indexOf('; then')), 'the gate forks').not.toMatch(/\$\(|`/);
@@ -11676,7 +11687,7 @@ describe('history card reserve: the compact card renders HISTORY_CARD_MAX + 1 ch
     const set = src.indexOf('\n[[ "$event" == PreCompact ]] && [[ -d "$HISTORY_CARD_DIR" ]] && [[ ! -e "$HOME/.ccrc/history-off" ]] && HISTORY_CARD_RESERVE=$(( HISTORY_CARD_MAX + 1 ))\n');
     expect(reset, 'no unconditional reset').toBeGreaterThan(-1);
     expect(set, 'no PreCompact-gated set').toBeGreaterThan(reset);
-    expect(set, 'the reserve must be set before the card renders').toBeLessThan(src.indexOf('\nunset CS_SCOPE\n'));
+    expect(set, 'the reserve must be set before the card renders').toBeLessThan(src.indexOf('\nunset CS_SCOPE CS_RULE_SCOPE CS_RULE_TRANSCRIPT CS_REFUSED\n'));
   });
 });
 

@@ -86,6 +86,14 @@ describe('the history skill: its text (spec §8.5; the text half of C23)', () =>
   // W4 addendum P7 (Task 3): the one sentence that says when to pass --agents, in "5. Scope". It names no writing form
   // (the test below holds that for the whole file).
   const AGENTS_SKILL_LINE = "Pass `--agents` when what you need may sit in a subagent's or a workflow agent's own work, such as a delegated search or review whose result the main thread only summarised; without it every verb reads the main thread only.";
+  // W4 addendum P8 (Task 4B): the ladder's line for `touched`, with the literal path like every other command, naming no writing form.
+  const TOUCHED_SKILL_LINE = '`"$HOME/.local/bin/ccrc" history touched <path|symbol>` lists the nodes whose stored refs name a file, newest first; it sees only the refs kept, so an empty answer does not mean the file was never touched.';
+  it('the ladder says what touched lists and what an empty answer means', () => {
+    expect(flat).toContain(TOUCHED_SKILL_LINE);
+    expect(flat.indexOf(TOUCHED_SKILL_LINE), 'inside section 3, before section 4').toBeGreaterThan(flat.indexOf('## 3. The ladder'));
+    expect(flat.indexOf(TOUCHED_SKILL_LINE)).toBeLessThan(flat.indexOf('## 4. Writing a query'));
+  });
+
   it('the skill says when to pass --agents, in the Scope section', () => {
     expect(flat).toContain(AGENTS_SKILL_LINE);
     const at = skill.indexOf('## 5. Scope');
@@ -114,7 +122,7 @@ describe('the history skill: its text (spec §8.5; the text half of C23)', () =>
     // that fails exactly where the skill is read.
     expect(skill.split('"$HOME/.local/bin/ccrc" history ').length - 1, 'the skill spells too few commands')
       .toBeGreaterThanOrEqual(6);
-    expect(skill.match(/(?<![\w/"])ccrc history (?:grep|describe|expand|tree|status)\b/g)).toBeNull();
+    expect(skill.match(/(?<![\w/"])ccrc history (?:grep|describe|expand|tree|touched|status)\b/g)).toBeNull();
   });
 
   it("names the parser's Expand-for-details label exactly, among the triggers above section 1 (V8)", () => {

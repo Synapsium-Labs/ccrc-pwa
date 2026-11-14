@@ -40,7 +40,7 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import path from 'node:path';
-import ts from 'typescript';
+import { ts } from '../../server/test/scan/parse';
 import { isSpecifier, parseTs } from './literalWalker';
 import { STATUS_GROUPS } from '../src/fleet/statusGroups';
 

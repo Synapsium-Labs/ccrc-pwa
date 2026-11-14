@@ -31,9 +31,10 @@ explained here or fixed. The sources:
 
 NOT HERE, ON PURPOSE: `clear_tool_uses_20250919` (D-6417: the doctor names that edit the first day it arrives); a
 reasoning item with no encrypted content (`reducer.UNREADABLE_REASONING`: a reply whose reasoning cannot be replayed
-is drift); every model substitution (each is a Claude Code fallback worth seeing); the system-entry block names the
-bridge does not handle, `unrecognised` and inbound.UNKNOWN_REFERENCE among them (D-7143: the honoured ones are
-explained in `requestField` below).
+is drift); every model substitution: the modelSubstitution family holds every substitution from a request carrying
+the claude-code beta (each is a Claude Code fallback worth seeing), and foreignSubstitution every other (below); the
+system-entry block names the bridge does not handle, `unrecognised` and inbound.UNKNOWN_REFERENCE among them
+(D-7143: the honoured ones are explained in `requestField` below).
 
 MEASURED SINCE: the response headers of the backend's front end. The runbook's first live step (step 2, 2026-10-27)
 printed every answer's header names, and each name every answer carried is now in `responseHeader` below, with what
@@ -43,7 +44,7 @@ content type. A name the front end adds later still WARNs once, as any new name 
 
 from typing import Dict, FrozenSet, Tuple
 
-from . import errors, reducer
+from . import errors, inbound, reducer
 
 # The `x-codex-` response headers: the usage poller's family (`ccd/ccgpt-usage.py`), and Codex's rate-limit, credit
 # and safety-buffering headers. Read by this prefix only, so the poller's five names stay spelled once (the plan's
@@ -143,8 +144,9 @@ KNOWN = {
         # after the flip (runbook step 4, 2026-10-27; D-7093). The bridge forwards no beta upstream
         # (backend.build_headers), so each is a name only; each line says what it gates on the Messages API and why
         # the bridge need not act.
-        # Claude Code's own identity beta: it gates no request field, block or response shape of its own.
-        "claude-code-20250219",
+        # Claude Code's own identity beta: it gates no request field, block or response shape of its own. A request
+        # carrying it is Claude Code's (inbound.from_claude_code), which picks a substitution's family.
+        inbound.CLAUDE_CODE_BETA,
         # Thinking blocks between tool calls: the effort hook pops `thinking`, the reducer emits no thinking block,
         # and an assistant thinking block sent back is dropped and counted `requestField:thinking-block`.
         "interleaved-thinking-2025-05-14",
@@ -183,6 +185,14 @@ KNOWN = {
         "redact-thinking-2026-02-12",
     }),
     "contextEdit": frozenset({"clear_thinking_20251015"}),
+    # A model substitution from a request that does not carry inbound.CLAUDE_CODE_BETA (server.py's catalogue check):
+    # every such id measured on the fleet so far (two `claude-*` ids) came from a plugin's raw-HTTP review, which sends
+    # the `structured-outputs-2025-11-13` beta (and `oauth-2025-04-20` on its token path), never the claude-code beta,
+    # under urllib's default User-Agent. One of those ids is exactly what Claude Code sends when a lane's alias is not
+    # overridden, so the family is apart from modelSubstitution: a name explained here can never hide a Claude Code
+    # fallback. EMPTY ON PURPOSE (the operator's ruling of 2026-11-12): such a caller still WARNs and fails the
+    # watch's drift, under its own name, so a caller that was switched off and comes back stays visible.
+    "foreignSubstitution": frozenset(),
 }  # type: Dict[str, FrozenSet[str]]
 
 # Families whose names are also explained by a prefix (the x-codex- family above).

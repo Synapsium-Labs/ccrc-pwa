@@ -46,6 +46,7 @@ import {
   RUN_SUN_PATH_MAX, RUN_TMP, condemn, openRun, probeRun, reapRuns, removeOwnedDir,
 } from './run-tmp.globalsetup.mjs';
 import { mkTmp } from './tmpHelpers.js';
+import { platformDeadline } from './timeScale.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const MOD_URL = pathToFileURL(path.join(here, 'run-tmp.globalsetup.mjs')).href;
@@ -694,6 +695,17 @@ describe('this run is wired (T1)', () => {
 describe('end to end: a nested real vitest under the real globalSetup (T5)', () => {
   // `agent/test/contain-path.test.ts`'s idiom: the child runs whatever `vitest.config.ts` ACTUALLY names, read
   // from its text, so unwiring the entry reds every case here instead of quietly narrowing what they cover.
+  //
+  // THE NESTED RUN'S DEADLINES (D-8398), Linux's numbers, read through `platformDeadline` so macOS gets its own:
+  // the case (120 s), the watchdog that kills a nested run (90 s), the wait for its first record (60 s), a state
+  // wait (30 s), the fixture's own test clock (60 s) and its `sleep` mode (30 s), which must outlast the record
+  // and the signal that follows it (T5d). Every one scales by the same factor, so their order holds on both.
+  const CASE_MS = platformDeadline(120_000);
+  const WATCHDOG_MS = platformDeadline(90_000);
+  const RECORD_WAIT_MS = platformDeadline(60_000);
+  const UNTIL_MS = platformDeadline(30_000);
+  const FX_TEST_MS = platformDeadline(60_000);
+  const FX_SLEEP_MS = platformDeadline(30_000);
   const serverRoot = path.resolve(here, '..');
   const VITEST = path.resolve(path.dirname(createRequire(import.meta.url).resolve('vitest/package.json')), 'vitest.mjs');
 
@@ -720,7 +732,7 @@ describe('end to end: a nested real vitest under the real globalSetup (T5)', () 
     `    runDir: env[${JSON.stringify(RUN_DIR_ENV)}], refused: env[${JSON.stringify(RUN_REFUSED_ENV)}],`,
     '    baseListing: readdirSync(env.FX_BASE) }) + "\\n");',
     '  const sleep = (ms) => new Promise((r) => setTimeout(r, Math.max(0, ms)));',
-    "  if (env.FX_MODE === 'sleep') await sleep(30000);",
+    `  if (env.FX_MODE === 'sleep') await sleep(${FX_SLEEP_MS});`,
     `  if (env.FX_MODE === 'untilquiet') await sleep(lstatSync(path.join(env.FX_DEAD, ${JSON.stringify(RUN_TMP)})).ctimeMs`,
     '    + Number(env.FX_Q) * 1000 + 500 - Date.now());',
     "  if (env.FX_MODE === 'die') process.kill(process.pid, 'SIGKILL');",
@@ -748,7 +760,7 @@ describe('end to end: a nested real vitest under the real globalSetup (T5)', () 
       '}',
       '',
     ].join('\n'));
-    const config = { test: { globals: true, include: ['*.fx.test.mjs'], testTimeout: 60_000,
+    const config = { test: { globals: true, include: ['*.fx.test.mjs'], testTimeout: FX_TEST_MS,
       globalSetup: [path.join(fx, 'plant.mjs'), ...globalSetupEntries()] } };
     writeFileSync(path.join(fx, 'vitest.config.mjs'), `export default ${JSON.stringify(config)};\n`);
     writeFileSync(path.join(fx, 'run.fx.test.mjs'), FX_TEST);
@@ -768,7 +780,7 @@ describe('end to end: a nested real vitest under the real globalSetup (T5)', () 
     let out = '';
     c.stdout!.setEncoding('utf8').on('data', (d: string) => { out += d; });
     c.stderr!.setEncoding('utf8').on('data', (d: string) => { out += d; });
-    const watchdog = setTimeout(() => killGroup(c, 'SIGKILL'), 90_000);
+    const watchdog = setTimeout(() => killGroup(c, 'SIGKILL'), WATCHDOG_MS);
     const exit = new Promise<Exit>((r) => c.once('close', (code, signal) => { clearTimeout(watchdog); r({ code, signal }); }));
     return { child: c, pid: c.pid!, fx, exit, output: () => out };
   }
@@ -783,7 +795,7 @@ describe('end to end: a nested real vitest under the real globalSetup (T5)', () 
     let done = false;
     void n.exit.then(() => { done = true; });
     const t0 = Date.now();
-    while (Date.now() - t0 < 60_000) {
+    while (Date.now() - t0 < RECORD_WAIT_MS) {
       const r = records(n);
       if (r.length > 0) return r[0]!;
       if (done) break;
@@ -808,7 +820,7 @@ describe('end to end: a nested real vitest under the real globalSetup (T5)', () 
   async function until(ok: () => boolean, failure: string): Promise<void> {
     const t0 = Date.now();
     while (!ok()) {
-      if (Date.now() - t0 > 30_000) throw new Error(failure);
+      if (Date.now() - t0 > UNTIL_MS) throw new Error(failure);
       await new Promise((r) => setTimeout(r, 20));
     }
   }
@@ -837,7 +849,7 @@ describe('end to end: a nested real vitest under the real globalSetup (T5)', () 
     expect(runsIn(base)).toEqual([]);
     expect(existsSync(planted), 'vitest\'s tmpDir survived the signal').toBe(false);
     expect(readdirSync(base), 'the base is not empty after the signal').toEqual([]);
-  }, 120_000);
+  }, CASE_MS);
 
   it('T5b: a worker that dies outright — teardown still collects the fixture it left', async () => {
     const base = socketBase();
@@ -847,7 +859,7 @@ describe('end to end: a nested real vitest under the real globalSetup (T5)', () 
     expect(e.code).not.toBeNull();
     expect(records(n)[0]?.runDir, 'the fixture never ran inside a run directory').toBeTruthy();
     expect(runsIn(base)).toEqual([]);
-  }, 120_000);
+  }, CASE_MS);
 
   it('T5c: a run SIGKILLed outright is dead, left by the next run while fresh, and removed once quiet', async () => {
     const base = socketBase();
@@ -864,7 +876,7 @@ describe('end to end: a nested real vitest under the real globalSetup (T5)', () 
     expect((await reaping.exit).code, reaping.output()).toBe(0);
     expect(records(reaping)[0]?.baseListing, 'setup did not reap the quiet dead run').not.toContain(path.basename(run));
     expect(runsIn(base)).toEqual([]);
-  }, 120_000);
+  }, CASE_MS);
 
   it('T5d: SIGHUP to the group — a closed terminal or tmux pane — exits 129 and leaves nothing', async () => {
     const base = socketBase();
@@ -877,7 +889,7 @@ describe('end to end: a nested real vitest under the real globalSetup (T5)', () 
     expect(runsIn(base)).toEqual([]);
     expect(existsSync(planted), 'vitest\'s tmpDir survived the signal').toBe(false);
     expect(readdirSync(base), 'the base is not empty after the signal').toEqual([]);
-  }, 120_000);
+  }, CASE_MS);
 
   it.each([['SIGHUP', 129], ['SIGTERM', 143]] as const)('T5d2: %s to the group while main is busy still exits %i and leaves nothing, whichever of it and the worker\'s death main reads first', async (signal, code) => {
     // What a loaded box does to T5d by chance, done on purpose: main is stopped, so the signal waits while the worker
@@ -900,7 +912,7 @@ describe('end to end: a nested real vitest under the real globalSetup (T5)', () 
     expect(runsIn(base)).toEqual([]);
     expect(existsSync(planted), 'vitest\'s tmpDir survived the signal').toBe(false);
     expect(readdirSync(base), 'the base is not empty after the signal').toEqual([]);
-  }, 120_000);
+  }, CASE_MS);
 
   it('T5e: a dead run that is not quiet at setup is reaped at TEARDOWN once it is', async () => {
     // Margin-based, not timing-based: the only requirement is a nested startup under the 8 s window.
@@ -914,7 +926,7 @@ describe('end to end: a nested real vitest under the real globalSetup (T5)', () 
     expect((await n.exit).code, n.output()).toBe(0);
     expect(existsSync(dead), 'teardown did not reap the run once it was quiet').toBe(false);
     expect(runsIn(base)).toEqual([]);
-  }, 120_000);
+  }, CASE_MS);
 
   it('T5f: a TMPDIR too long for a socket refuses loudly and keeps today\'s behaviour', async () => {
     const longBase = path.join(socketBase(), 'x'.repeat(90));
@@ -928,7 +940,7 @@ describe('end to end: a nested real vitest under the real globalSetup (T5)', () 
     expect(rec!.refused).toBe('EINVAL');
     expect(n.output()).toContain('ccrc-test: per-run temp dir refused (EINVAL)');
     expect(runsIn(longBase)).toEqual([]);
-  }, 120_000);
+  }, CASE_MS);
 });
 
 describe('setup() and its teardown, in a bare node child (T6)', () => {

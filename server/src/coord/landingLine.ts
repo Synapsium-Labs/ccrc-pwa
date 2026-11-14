@@ -1,5 +1,5 @@
 // L1, context C4 (landing order wave 5e). PURE: no clock, no fs, no store, no I/O; its one value import is the L0
-// vocabulary in `shared/landingLine.ts` (D-7613). Two deciders, both folds over values:
+// vocabulary in `shared/landingLine.ts` (D-7613). Three deciders, all folds over values:
 //
 // - `landingOrder` decides the landing line's order and its head from a project's entries and the project's two flags
 //   (D-7621). The L4 read route reads the project row (`CoordStore.readLanding`) and hands the values in; this file
@@ -10,8 +10,10 @@
 // - `landingEjectionAsk` decides the second-ejection notice (D-7624). The entry's `ejections` count only ever rises and
 //   `CoordStore.advanceLanding` is its one writer, so exactly one write per entry produces 2: that write is the
 //   once-only raise. A third ejection raises nothing, and the advance is never refused.
+// - `landingViewOf` decides which entries the read lists (landing order wave 5h): the ones still in the line, or one
+//   PR's entry in any state. The order is always computed over every entry, so the answer's `order` does not move.
 import {
-  LANDING_PAUSE_BY, LANDING_PAUSE_BYS,
+  LANDING_ENTRY_TERMINAL, LANDING_PAUSE_BY, LANDING_PAUSE_BYS,
   type LandingEntry, type LandingLineFlags, type LandingOrder, type LandingRecovery,
 } from '../../../shared/landingLine.js';
 
@@ -44,6 +46,16 @@ export function landingOrder(entries: readonly LandingEntry[], flags: LandingLin
   if (by.length > 0) return held ? { paused: true, by, order, held } : { paused: true, by, order };
   if (held) return { paused: false, order, head: null, held };
   return { paused: false, order, head };
+}
+
+/** The landing read's view of one project's entries: `order` over every entry (as before), `entries` the ones not
+ *  terminal when `pr` is null, else that PR's entry in any state, or none. `entriesScope` says which. */
+export function landingViewOf(entries: readonly LandingEntry[], flags: LandingLineFlags, recovery: LandingRecovery, pr: number | null):
+  { entries: LandingEntry[]; order: LandingOrder; entriesScope: 'open' | 'pr' } {
+  const order = landingOrder(entries, flags, recovery);
+  return pr === null
+    ? { entries: entries.filter((e) => !LANDING_ENTRY_TERMINAL[e.state]), order, entriesScope: 'open' }
+    : { entries: entries.filter((e) => e.pr === pr), order, entriesScope: 'pr' };
 }
 
 /** The ejection count at which the operator is told, once (D-7624). */

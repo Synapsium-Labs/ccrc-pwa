@@ -4,8 +4,9 @@
 // Spec: docs/superpowers/specs/2026-10-05-ccrc-history-lossless-dag-design.md
 // (§6.4 rings by imports, §13 cross-cutting invariants). L1 is a property of
 // this file's IMPORTS, not its path, and history-lib.test.ts reads it off the
-// import block: `node:crypto` and the L0 run-id file `shared/workflow-ids.mjs`
-// (which imports nothing) are the only imports. No `fs`, no `sqlite`, no
+// import block: `node:crypto`, the L0 run-id file `shared/workflow-ids.mjs` and
+// the L0 redaction rule table `shared/redact.mjs` (each imports nothing) are
+// the only imports (D-5867 adds the last). No `fs`, no `sqlite`, no
 // `child_process`, no environment read, and nothing that imports them —
 // `compact-card.mjs` imports `node:fs`, so a function of its reaches a
 // decision here as an injected parameter, never by import. A decision that
@@ -25,6 +26,10 @@ import { createHash } from 'node:crypto';
 // The workflow run id's one definition (W4 addendum P10, the shared arm): an L0 file that imports nothing, shared with the
 // server's workflow reader, so no loader of this file can reach I/O through it. Re-exported below beside the subagent grammars.
 import { RUN_ID_RE } from '../../shared/workflow-ids.mjs';
+// The redaction rule table's one home (D-5867, C1l PR 2): an L0, browser-safe file that imports nothing and names no host
+// global. Layer 2's two rule sets, BASE_RULES and CONTEXT_RULES, are its history profiles. `_inst_tree` places `shared/`
+// whole beside `ccd/`, so the relative specifier resolves in the installed tree as in the repository.
+import { historyRules } from '../../shared/redact.mjs';
 
 // ── exit codes and the reason words (§8.3) ────────────────────────────────
 // D-4169: 4 (writer busy) and 9 (no store on this box)
@@ -2449,64 +2454,21 @@ export const LEAD_READINGS_MAX = 16;
  *  right before a word is not plain: it reads as a bare `ESC` and a final byte, a single shift or a DCS header. */
 const PLAIN_SEQ_RE = /^(?:\x1b\[|\x9b)[0-?]*[@-~]$|^\x1b[!-/][ -/]*[0-~]$/;
 
-/** The line ends a quoted value never crosses: CR, LF, U+2028 and U+2029, the last two built from their code points. */
-const QUOTED_LINE_ENDS = String.raw`\r\n` + String.fromCharCode(0x2028, 0x2029);
-/** D-5745 (history-redact-value-class-widened; closes D-5021's residual): the named rule's value in the FIELD form, read
- *  whole. v1's class `[^\s"'`,;&]` ended a value at `&`, `;`, `,` and either quote, so `password=abc&def`,
- *  `password="abc&def"` and `PASSWORD='a b c'` printed their tails. Three alternatives, group 1 the opening quote:
- *  - after `"` or `'` (the lookbehind reads group 1), the value runs to the same closing quote on the same line, which
- *    the backreference `\1` consumes; an empty quoted value matches and every caller reads it as no value;
- *  - unquoted, a value still ends at whitespace and the backtick. `&` ends it only before `NAME=` (a 256-character NAME,
- *    the head's own bound), and `,` `;` `"` `'` end it only before whitespace, a closer (`,` `;` `)` `}` `]`) or the end
- *    of the text, so `url?a=1&password=x&b=2`, `password=x; path=/` and `{"cmd":"password=x"}` keep their structure.
- *  An unclosed quote fails the quoted reading, and group 1 then backs off to empty, so the quote is read as the
- *  value's first character. Linear: each alternative's classes are disjoint, the lookaheads are bounded or one
- *  character, and a failed quoted reading costs its own line once. The final form keeps v1's class (D-4613's structure
- *  safety is unchanged). This is the prototype scope b2-redaction measured (R1). Every door reads it only over its rev
- *  3.6 door's output (R11, composeDoor), so it never prints a value that door masks. */
-const NAMED_VALUE_FIELD_SRC = String.raw`(["']?)((?<=")[^"${QUOTED_LINE_ENDS}]*|(?<=')[^'${QUOTED_LINE_ENDS}]*|(?:[^\s"'` + '`'
-  + String.raw`,;&]|[,;"'](?![\s,;)}\]]|$)|&(?![A-Za-z_][A-Za-z0-9_.-]{0,255}=))+)\1`;
-
-/** Layer 2's rules (the context layer), one definition each, built twice: `field` is the field pass, `final` the second
- *  belt's structure-safe form, D-4613 (history-final-belt-layer2-structure-safe) (§8.3, whole-branch review: the final
- *  pass runs over a serialised `--json` envelope and over the human page's frame). In the final form no value class
- *  consumes a backslash (a JSON escape is never split, so an escaped quote ends a value instead of being left bare),
- *  a line break (`\n`, `\r`: a value never crosses a line), `<` or `>` (nor a frame tag) or `&`; the JSON-form rule's value
- *  has no escape alternative, so an escaped quote ends it. The final form is the PER-SEGMENT primitive of the
- *  structure-aware belt (redactFinalText, redactFinalJson): it is never run over serialised structure, so it needs no
- *  rule about a closing quote or a closer (round 2's `]` and `}` exclusion was that, and it made the form
- *  non-idempotent on the field pass's own marks: `TOKEN=[redacted]` read as `[redacted` and was masked again). The
- *  field form is today's, byte for byte, except the named rule's value (D-5745). `base` builds the rev 3.6 rules, byte for
- *  byte, from the same template (BASE_RULES, R11); `final` is kept on the rules, which redactLayers reads. */
-function contextRules(final, base = false) {
-  const stop = final ? String.raw`\\<>&` : '';
-  return Object.freeze({
-    final,
-    json: new RegExp(String.raw`"([A-Za-z_][A-Za-z0-9_.-]{0,255})"(\s*:\s*)"(${final ? String.raw`[^"\\\n\r<>&]+` : String.raw`(?:[^"\\]|\\.)+`})"`, 'g'),
-    // D-4614 (history-context-rule-rescans-after-a-plain-name): the named rule is TWO patterns scanned by hand
-    // (namedSpans). `namedHead` finds `NAME=` or `NAME: ` and the optional quote; `namedValue` (sticky) takes the value
-    // from there. The value is read only for a secret NAME, so a plain name never consumes its value and the scan
-    // resumes right after the separator: a context key inside it is seen, and a run of `a=a=a=` stays linear.
-    namedHead: new RegExp(String.raw`\b([A-Za-z_][A-Za-z0-9_.-]{0,255})(=|:[ \t]+)`, 'g'),
-    // The NAME a value ends in (`namedSpans`' tail head): `NAME=` or `NAME:` at the end of a slice of at most 258 characters.
-    namedTail: new RegExp(String.raw`\b([A-Za-z_][A-Za-z0-9_.-]{0,255})(=|:)$`),
-    // D-5745 (history-redact-value-class-widened): the value of the named rule. Group 1 is the opening quote or empty, group 2
-    // the value; a caller's span is group 2's own, never the whole match (the field form consumes a closing quote). The final
-    // form, and the rev 3.6 rules (`base`), keep v1's class from the base's own template; the field form reads a value whole.
-    namedValue: new RegExp(final || base ? String.raw`(["']?)([^\s"'` + '`' + String.raw`,;&${final ? String.raw`\\<>` : ''}]+)` : NAMED_VALUE_FIELD_SRC, 'y'),
-    bearer: new RegExp(String.raw`(Authorization:[ \t]*Bearer[ \t]+)([^\s"'${stop}]+)`, 'gi'),
-    mailToken: new RegExp(String.raw`(x-ccrc-mail-token:[ \t]*)([^\s"'${stop}]+)`, 'gi'),
-    bearerSticky: new RegExp(String.raw`(Authorization:[ \t]*Bearer[ \t]+)([^\s"'${stop}]+)`, 'iy'),
-    mailTokenSticky: new RegExp(String.raw`(x-ccrc-mail-token:[ \t]*)([^\s"'${stop}]+)`, 'iy'),
-    query: new RegExp(String.raw`([?&]token=)([^&\s"'#${final ? String.raw`\\<>` : ''}]+)`, 'gi'),
-  });
-}
-const CONTEXT_RULES = Object.freeze({ field: contextRules(false), final: contextRules(true) });
+/** Layer 2's rules (the context layer): two rule sets, each a frozen `{ field, final }` (`field` the field pass, `final` the
+ *  second belt's structure-safe form, D-4613), whose one home is `shared/redact.mjs` (D-5867, C1l PR 2; the history
+ *  coordinator's ack, which names R11): its history rows are the template this file held as `contextRules` before the
+ *  move, and its two history profiles list the rules each set reads. `final` is kept on the rules, which redactLayers
+ *  reads. A rule's bytes are part of every stored index text: changing one is a BELT_VERSION bump and a reindex.
+ *
+ *  CONTEXT_RULES, the `history-v2` profile: the widened rules. The field form is the rev 3.6 field form, byte for byte,
+ *  except the named rule's value (D-5745, `history-named-value`). Every door reads them over its base reading (R11). */
+const CONTEXT_RULES = historyRules('history-v2');
 
 /** R11 (W5h-2; the coordinator's composition ruling of 2026-10-19, which amends R1 and R3): the rev 3.6 (BELT_VERSION 1)
- *  rules, frozen, built from contextRules' one template (`base`): v1's named value class in both forms. Every redaction
- *  door reads them first and CONTEXT_RULES over their output (composeDoor). Nothing else reads them. */
-const BASE_RULES = Object.freeze({ field: contextRules(false, true), final: contextRules(true, true) });
+ *  rules, frozen, the `history-base` profile, built from the same template: v1's named value class in both forms
+ *  (`history-named-value-v1`). Every redaction door reads them first and CONTEXT_RULES over their output (composeDoor).
+ *  Nothing else reads them. */
+const BASE_RULES = historyRules('history-base');
 
 /** What a secret value that ends where it could hide a further head of its own rule hands on (D-4614, whole-branch fix
  *  round 7). A rule scanned left to right and not overlapping resumes AFTER a value, so a head that STARTS inside the
@@ -8847,6 +8809,8 @@ const COMMON_READ_OPTIONS = Object.freeze({
  *  frame near 700 chars, inside the frame reserve each paging verb holds back. `families_total` counts them all. */
 export const SCOPE_FAMILIES_JSON_MAX = 3;
 const ANY_COUNT = Number.POSITIVE_INFINITY;
+/** The default row cut of `touched`; `--limit` goes up to GREP_LIMIT_MAX. Declared above READ_OPTIONS, which reads it. */
+export const TOUCHED_LIMIT_DEFAULT = 20;
 export const READ_OPTIONS = Object.freeze({
   grep: Object.freeze({
     options: Object.freeze({
@@ -8897,9 +8861,156 @@ export const READ_OPTIONS = Object.freeze({
     defaults: Object.freeze({ depth: TREE_DEPTH_DEFAULT }),
     positional: Object.freeze({ min: 0, max: 0 }),
   }),
+  // W4 addendum P8: `touched <path|symbol>` takes one argument and `--limit`, the shape grep's entry has.
+  touched: Object.freeze({
+    options: Object.freeze({
+      ...COMMON_READ_OPTIONS,
+      '--limit': readOpt('int', 'limit', { min: 1, max: GREP_LIMIT_MAX }),
+    }),
+    defaults: Object.freeze({ limit: TOUCHED_LIMIT_DEFAULT }),
+    positional: Object.freeze({ min: 1, max: 1 }),
+  }),
 });
-/** The read verbs (§8.2): derived from the whitelist, never listed twice. `touched` joins in W4. */
+/** The read verbs (§8.2): derived from the whitelist, never listed twice. */
 export const READ_VERBS = Object.freeze(Object.keys(READ_OPTIONS));
+
+// ── touched (W4 addendum P8; D-8188, D-8189) ──
+// Pure deciders for `touched <path|symbol>` (spec addendum 3.5). The verb's reads and rendering are recall.mjs's.
+/** One query's candidate rows, from every select it reads together (*chosen*). */
+export const TOUCHED_CANDIDATE_MAX = 10000;
+/** Whether `touched`'s candidate selects are ordered (`ORDER BY n.latest_ms DESC, ...`, P13). True since Task 4C's measurement
+ *  (the ordered p95 is under 2 s on every shape): a capped answer prints TOUCHED_ORDERED_CAPPED_NOTE. False: unordered, and it
+ *  prints TOUCHED_CAPPED_NOTE (the seam the bench still reaches). */
+export const TOUCHED_ORDERED_CAP = true;
+/** Printed last on every answer (and carried as `note` by --json). */
+export const TOUCHED_DISCLOSURE = 'refs keep one origin each (the first seen) and at most 40 per node; a node may have touched this file without listing it.';
+/** Printed when the ordered candidate cap was hit (spec addendum 3.5 P13): the shown rows are the newest matches. */
+export const TOUCHED_ORDERED_CAPPED_NOTE = '(candidates capped at 10000: the newest are shown, and older matches may be missing)';
+/** Printed after the refs of the one node the ordered cut falls inside (spec addendum 3.5 P13). */
+export const TOUCHED_REFS_CUT_NOTE = '(refs cut at the cap)';
+/** Printed when the unordered candidate cap was hit. */
+export const TOUCHED_CAPPED_NOTE = '(candidates capped at 10000: the ranking covers those only, and newer matches may be missing)';
+
+const TOUCHED_IDENT_RE = /^[A-Za-z_$][\w$]*$/;
+const TOUCHED_LINE_SUFFIX_RE = /^(.*?):([0-9]+(?:-[0-9]+)?)$/;
+const TOUCHED_STRENGTH = Object.freeze({ exact: 3, suffix: 2, outside: 1 });
+
+function stripDotSlash(p) {
+  let out = p;
+  while (out.startsWith('./')) out = out.slice(2);
+  return out;
+}
+
+/** The argument's shape (spec addendum 3.5): `path` and `test` are a path (its `:N`/`:N-M` suffix and a leading `./` dropped),
+ *  `path:symbol` splits at its LAST `:`, a bare identifier is a symbol (even when classifyRef calls it `sha`),
+ *  anything else is null (bad-args). */
+export function touchedQuery(arg) {
+  const s = String(arg).trim();
+  const kind = classifyRef(s);
+  if (kind === 'path' || kind === 'test') {
+    const m = TOUCHED_LINE_SUFFIX_RE.exec(s);
+    return { kind: 'path', file: stripDotSlash(m === null ? s : m[1]) };
+  }
+  if (kind === 'path:symbol') {
+    const i = s.lastIndexOf(':');
+    return { kind: 'path-symbol', file: stripDotSlash(s.slice(0, i)), symbol: s.slice(i + 1) };
+  }
+  if (TOUCHED_IDENT_RE.test(s)) return { kind: 'symbol', symbol: s };
+  return null;
+}
+
+/** Escapes `\`, `%` and `_` for a LIKE ... ESCAPE '\' pattern. The file pattern is `%<basename>%`, the symbol pattern `%:<symbol>`. */
+export function likeEscape(s) {
+  return String(s).replace(/[\\%_]/g, (c) => `\\${c}`);
+}
+
+/** A stored ref's value split by its kind: a `path` drops a trailing `:N`/`:N-M` into `line`, a `test` is whole,
+ *  a `path:symbol` splits at its last `:`. */
+export function splitStoredRef(kind, value) {
+  if (kind === 'path:symbol') {
+    const i = value.lastIndexOf(':');
+    if (i < 0) return { path: value, line: null, symbol: null };
+    return { path: value.slice(0, i), line: null, symbol: value.slice(i + 1) };
+  }
+  if (kind === 'path') {
+    const m = TOUCHED_LINE_SUFFIX_RE.exec(value);
+    if (m !== null) return { path: m[1], line: m[2], symbol: null };
+  }
+  return { path: value, line: null, symbol: null };
+}
+
+/** A stored (or queried) path made root-relative: absolute under the node's epoch root, else under the first of
+ *  `roots` that holds it, gives the remainder; absolute elsewhere is kept and `outside`; relative loses its leading `./`. */
+export function normaliseRefPath(path, nodeRoot, roots) {
+  if (!path.startsWith('/')) return { path: stripDotSlash(path), outside: false };
+  const under = (root) => typeof root === 'string' && root !== '' && path.startsWith(root.endsWith('/') ? root : `${root}/`);
+  for (const root of [nodeRoot, ...roots]) {
+    if (under(root)) return { path: path.slice((root.endsWith('/') ? root : `${root}/`).length), outside: false };
+  }
+  return { path, outside: true };
+}
+
+/** A path-symbol ref's symbol against the queried one: equality, case-sensitive. SQLite's LIKE is case-insensitive
+ *  for ASCII, so the `%:<symbol>` select is only a prefilter. */
+export function symbolMatches(ref, symbol) {
+  return ref.symbol === symbol;
+}
+
+function baseOf(p) {
+  return p.slice(p.lastIndexOf('/') + 1);
+}
+
+/** resolveToken's suffix-uniqueness rule (compact-card.mjs), against a graph index `{ files, byBase }`: the unique
+ *  file the relative path names, else null. lib is pure L1 and cannot import it. */
+function resolveInIndex(t, index) {
+  if (index.files.has(t)) return t;
+  const hits = (index.byBase.get(baseOf(t)) ?? []).filter((f) => f.endsWith(`/${t}`));
+  return hits.length === 1 ? hits[0] : null;
+}
+
+/** A normalised ref against one query file. `exact` on equality; `outside` refs match only the same absolute path;
+ *  `suffix` for a relative ref with no `..` segment whose `/<ref>` ends `file`, when the graph resolves it to
+ *  exactly `file` (resolveToken's unique answer), or, with no graph, when the ref has two segments or more (D-8189: a bare basename
+ *  never matches without a graph). Otherwise null. */
+export function matchRef(ref, file, graph) {
+  if (ref.outside) return ref.path === file ? 'outside' : null;
+  if (ref.path === file) return 'exact';
+  // An absolute (outside) query is matched only by an outside ref of that exact path, never by suffix.
+  if (file.startsWith('/')) return null;
+  const p = ref.path;
+  if (p === '' || p.startsWith('/') || p.split('/').includes('..')) return null;
+  if (!file.endsWith(`/${p}`)) return null;
+  if (graph) return resolveInIndex(p, graph.index) === file ? 'suffix' : null;
+  return p.includes('/') ? 'suffix' : null;
+}
+
+/** Newest first (`latestMs` descending, null or undefined last), then `nodeId`. Origin is not ranked. Returns a new array. */
+export function rankTouched(rows) {
+  const ms = (r) => (typeof r.latestMs === 'number' ? r.latestMs : -Infinity);
+  return [...rows].sort((a, b) => {
+    const x = ms(a);
+    const y = ms(b);
+    if (x !== y) return x < y ? 1 : -1;
+    return a.nodeId < b.nodeId ? -1 : a.nodeId > b.nodeId ? 1 : 0;
+  });
+}
+
+/** One row per (nodeId, file) from the matches `{ nodeId, file, match, ref, ...nodeFields }`, in first-seen order:
+ *  `{ ...nodeFields of the first match, nodeId, file, match, refs }`, `refs` listing each matching ref in input order,
+ *  `match` the strongest of them (exact, then suffix, then outside). */
+export function touchedRows(matches) {
+  const rows = new Map();
+  for (const { ref, match, nodeId, file, ...rest } of matches) {
+    const key = `${nodeId}\0${file}`;
+    const row = rows.get(key);
+    if (row === undefined) rows.set(key, { ...rest, nodeId, file, match, refs: [ref] });
+    else {
+      row.refs.push(ref);
+      if (TOUCHED_STRENGTH[match] > TOUCHED_STRENGTH[row.match]) row.match = match;
+    }
+  }
+  return [...rows.values()];
+}
 
 const BAD_READ_ARGS = Object.freeze({ ok: false, reason: 'bad-args' });
 
@@ -9195,7 +9306,7 @@ function spanHoldsWord(span) {
 
 /** A break between token spans: whitespace, or one of `"`, `'`, `` ` ``, `,`, `;` and `&`, the characters that end
  *  a value in layer 2's `NAME=` form (coordinator ruling on final-check W2). Since D-5745 the field form reads a value
- *  past `&`, `,`, `;` and either quote where they do not end it (NAMED_VALUE_FIELD_SRC), so such a value is more than
+ *  past `&`, `,`, `;` and either quote where they do not end it (shared/redact.mjs's history-named-value), so such a value is more than
  *  one token span: when its NAME sits more than ENTRY_REDACT_MARGIN before a window, it is spec §8.3's display
  *  residual (a match that is not one token span), as a quoted value already was; within the margin the display doors'
  *  widened reading sees the NAME (composedTokens, D-6071). The spans are unchanged. */
@@ -9961,13 +10072,15 @@ const READ_CONTEXT_TABLES = Object.freeze(['meta', 'redact_hashes', 'sessions', 
 /** Every table each read verb's path reads (recall.mjs, the store.mjs functions it calls, and grep --regex's
  *  child, regex-worker.mjs): the shared context above plus the verb's own statements. All are v1 tables today;
  *  a version that adds a table a verb needs adds it here, in the same PR (an as-of cut reads memberships and boundaries
- *  through asOfHiddenNodesSql's CTEs, so grep, expand and tree list both). blobs_fts is a virtual table the sweep
+ *  through asOfHiddenNodesSql's CTEs, so grep, expand, tree and touched list both; touched also reads node_children there and node_sources through
+ *  cutHidesASource's lineage, as describe does). blobs_fts is a virtual table the sweep
  *  creates, not a SCHEMA_ADDED one: grep's index gate answers its absence as fts-pending. */
 export const VERB_TABLES = Object.freeze({
   grep: Object.freeze([...READ_CONTEXT_TABLES, 'blobs', 'entry_variants', 'sidecars', 'nodes', 'node_sources', 'node_children', 'memberships', 'boundaries']),
   describe: Object.freeze([...READ_CONTEXT_TABLES, 'nodes', 'node_refs', 'node_sources', 'node_children', 'blobs', 'boundaries', 'memberships']),
   expand: Object.freeze([...READ_CONTEXT_TABLES, 'nodes', 'node_children', 'node_sources', 'blobs', 'entry_variants', 'sidecars', 'memberships', 'boundaries']),
   tree: Object.freeze([...READ_CONTEXT_TABLES, 'nodes', 'node_children', 'memberships', 'boundaries']),
+  touched: Object.freeze([...READ_CONTEXT_TABLES, 'nodes', 'node_refs', 'node_sources', 'node_children', 'memberships', 'boundaries']),
 });
 
 /** The tables a store at `version` has: every SCHEMA_ADDED entry at or below it. A newer store has all this

@@ -33,6 +33,8 @@ export {
 } from './primitives/radio';
 export { BackButton, BACK_BUTTON, type BackButtonProps } from './primitives/back-button';
 export { Door, DOOR, DOOR_GLYPH, type DoorProps } from './primitives/door';
+export { Character, type CharacterProps } from './characters/character';
+export { ART, type Tone } from './characters/art';
 export { Icon, type IconName, type IconProps, type IconSize } from './primitives/icon';
 export { Well, WELL, type WellProps } from './primitives/well';
 // The page scaffold (D-5102; the C3 slots D-5666).
@@ -151,6 +153,6 @@ export { FOCUS_RING } from './lib/focus';
 // `single-definition.test.ts` exists to stop.
 export { useNow } from './lib/use-now';
 export { elapsedWords, elapsedShort } from './lib/elapsed';
-export { prefersReducedMotion } from './lib/use-reduced-motion';
+export { prefersReducedMotion, usePrefersReducedMotion } from './lib/use-reduced-motion';
 // The desk width, written once (D-5933): the Sheet's desktop arm and the app's shell read the same reading.
 export { DESK_QUERY, useDesk, useMediaQuery } from './lib/use-media-query';

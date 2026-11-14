@@ -22,6 +22,8 @@
 # Two exceptions, both as `ignore` entries:
 # - typescript-api (server) is the test scanners' parser, an exact pin
 #   (D-5853): a new version is a reviewed PR that edits it, never a grouped bump.
+#   It is the whole repository's one parser: the pwa census and scan suites read
+#   it through server/test/scan/parse.ts too (D-8288), so such a PR runs both.
 # - @types/node never goes above the runtime major. Every package declares
 #   engines `node >=22.16.0`, so @types/node stays on 22.x; typing against a
 #   newer Node would let code use APIs the supported runtime lacks. Raise the

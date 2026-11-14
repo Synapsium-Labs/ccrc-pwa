@@ -111,7 +111,7 @@ describe('the switch’s table is one new entry with an exact seed (path-identit
       const db = openCoordDb(p);
       expect(warn.mock.calls.map((c) => String(c[0])).join('\n')).toMatch(/reading it as-is and migrating nothing/);
       expect(db.prepare('PRAGMA user_version').get()).toMatchObject({ user_version: COORD_SCHEMA_VERSION + 1 });
-      expect(db.prepare('SELECT slug, state FROM programs').all()).toEqual([{ slug: 'p', state: 'active' }]);
+      expect(db.prepare('SELECT slug, state FROM programs WHERE slug <> \'linear-sync\'').all()).toEqual([{ slug: 'p', state: 'active' }]);
       expect(new CoordStore(db).collectLaneRow()).toEqual({ kind: 'row', row: {
         choice: 'off', fleetNodeId: null, markerRetiredAt: null, generation: 0n, updatedAt: 0n } });
       db.close();

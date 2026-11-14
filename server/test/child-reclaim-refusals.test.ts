@@ -23,6 +23,7 @@ import { unreadableField, degradedReadIO } from './ioDoubles.js';
 import { okRuns, okRun } from './coordReadHelpers.js';
 import { holdReason } from '../src/coord/rundefs.js';
 import { ACTOR_FLAGS_CAP, CCD_ARGV, sweepDec } from '../src/ccdargv.js';
+import { seedLegacyProgramme } from './helpers/plan.js';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const PROJECT = 'demo';
@@ -88,6 +89,7 @@ const openApp = async (home: string, run: Runner, over: Partial<Deps> = {}) => {
   // run's project (`seed`'s `u-<id>` uuid; the body sends it, `postOpen`).
   seed(home, OPEN_BODY.claimedBy);
   const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
+  seedLegacyProgramme(coord.db, OPEN_BODY.program, OPEN_BODY.homeProject);
   const app = await buildServer({ ...testDeps(home, run), mailToken: TOKEN, coord, ...over });
   return { app, coord };
 };

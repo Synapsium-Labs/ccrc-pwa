@@ -5,10 +5,11 @@
 import type { AccountAuthCancelBody, AccountAuthCodeBody, AccountAuthStartAnswer, AccountAuthStartBody, AccountAuthStatusAnswer, AccountSetBody, AccountSignOutAnswer } from '../../../shared/api';
 import type { AccountAddAnswer, AccountAddBody, AccountCheckAnswer, AccountCredentialAnswer, AccountCredentialBody, AccountRemoveAnswer, AccountRemoveBody, AccountRemoveCheckAnswer, AccountRevokeAckBody, AccountsResponse, AccountSwitchAnswer, AckAnswer, ApplyUpdateBody, CatalogueState, CatchUp, ClaimSummary, CollectLaneRequest, CollectLaneView, CoordCaps, CoordCapsView, FleetHealth, FleetSession, IntentWriteAnswer, LifecycleQueryResult, LoginRequest, MoveRequestAnswer, NotifyEvent, PaneHistoryReply, PasskeyAssertFinish, PasskeyAssertStart, PasskeyListResponse, PasskeyRegisterFinish, PasskeyRegisterStart, ProjectPoolWire, ProjectRow, PrView, ProgrammesAnswer, ReapResult, ReviewCapLiftAnswer, ReviewCapView, RollbackUpdateBody, RouteField, RunFindAnswer, RunFindQuery, RunRecordAnswer, RunSignals, RunSpend, RunSummary, SlashCommand, StagedClip, StallWatchRequest, StallWatchView, StepUpAnswer, StepUpStart, UpdatesView, WorkItemState, WsAudit } from '../../../shared/api';
 import type { ArchiveAnswer, StopAnswer, StopBody, DialogAnswered, DialogTabRequest, DigestAnswer, DigestCorrectAnswer, DigestCorrectBody, InterruptRouteSource, QuestionAnswerBody } from '../../../shared/api';
-import type { GoalsView, ItemView, WaitingView } from '../../../shared/ledgers';
+import type { GoalsView, ItemActBody, ItemView, WaitingView } from '../../../shared/ledgers';
 import type { LinearConnectionView } from '../../../shared/linear';
 import type { DispatchAbandonRequest, DispatchAbandonView } from '../../../shared/dispatch-abandon';
 import type { LaneArmRequest, LaneArmView } from '../../../shared/lane-arm';
+import type { OverridesView } from '../../../shared/overrides';
 import type { RunCloseRequest, RunCloseView } from '../../../shared/run-close';
 import type { ScopeSweepBusyRequest, ScopeSweepView } from '../../../shared/scope-sweep';
 import type { DelegationAdoptRequest, DelegationAdoptView } from '../../../shared/delegation-adopt';
@@ -17,6 +18,7 @@ import type { ResolveRead } from '../fleet/workspaceNameWords';
 import type { PaneScopeStopState } from '../fleet/paneScopeStopWords';
 import { raiseAuthLostFrom } from './auth';
 import { ApiError } from './apiError';
+import type { Character as CharacterName } from '../../../shared/face';
 import { LONG_READ_MS, limitedFetch, type ReadOpts } from './readLimit';
 import { questionAnswerRequest } from '../session/answerLifecycle';
 import { ANSWERED, readDoorAnswer, readDoorRefusal, type DoorAnswer, answered, linearViewOf, linearWorkspacesOf, linearWorkspacesNotConnectedOf, rotateRefusalOf, readRotateStarted, linearNotConnectedOf, readResolve, readProjectAdd, readWorkspaceAdd, readWorkspaceTitle, archiveBody, workspaceAddBody, type ArchiveOptions, type UpdateIntentRequest, type WorkspaceAddAnswer, type WorkspaceAddOptions, type WorkspaceTitleAnswer, type WorkspaceTitleChange, type LinearWorkspacesRead } from './wireReaders';
@@ -30,9 +32,14 @@ import {
   declaredRaster, docsAnswerFromError, readDocsEnvelope, readDocsRaster, type DocsAnswer, type DocsLoaders,
 } from '../docs/failures';
 import type { ClaudeRollTargets } from '../../../shared/claudeVersion';
+import type { PlainAutoMemoryChoice, PlainAutoMemoryView } from '../../../shared/plainAutoMemory';
+import type { TestboxAdminFields, TestboxAdminSub } from '../../../shared/testbox-admin';
 import type { ProjectAddAnswer, ProjectAddBody } from '../../../shared/projectAdd';
 import type { LinkingWriteBody, ProjectLinkingWire } from '../../../shared/linking';
 import type { SecretRemoveAnswer, SecretSaveAnswer, StoredSecretsAnswer } from '../../../shared/ledgers';
+
+/** `GET`/`POST /api/face`'s answer. */
+export interface FaceAnswer { readonly character: CharacterName; readonly updatedAt: number }
 
 /** `GET`/`POST /api/coord/roll-idle`'s answer (D-7453). */
 export interface RollIdleView {
@@ -801,12 +808,18 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
     abandonRun: async (id: number, opts?: ReadOpts): Promise<CloseAnswer> => {
       return closeAnswerOf(await request(`/api/runs/${id}/abandon`, { method: 'POST' }, opts));
     },
-    /** `POST /api/items/:id/act` (D-8076; spec 2026-11-04 §10): the operator's Abandon run on an end-request item. Body-less and
-     *  session only like `abandonRun`, and it answers as `abandonRun` does, so the one sheet reads the same refusals and
-     *  `released` and `childReclaim` fields. The server closes the item itself. */
-    actItem: async (itemId: number, opts?: ReadOpts): Promise<CloseAnswer> => closeAnswerOf(await request(`/api/items/${itemId}/act`, { method: 'POST' }, opts)),
+    /** `POST /api/items/:id/act` (D-8076; spec 2026-11-04 §10): the operator's Abandon run on an end-request item. Session only
+     *  like `abandonRun`, and it answers as `abandonRun` does, so the one sheet reads the same refusals and `released` and
+     *  `childReclaim` fields. The server closes the item itself. `body` (D-8558) is a refused close's reason and the programme's
+     *  end; absent, the request is body-less as before. */
+    actItem: async (itemId: number, opts?: ReadOpts, body?: ItemActBody): Promise<CloseAnswer> =>
+      closeAnswerOf(await request(`/api/items/${itemId}/act`, body === undefined ? { method: 'POST' } : jsonInit(body), opts)),
     /** `POST /api/items/:id/decline` (D-8076): Keep the run. The item closes as declined and its asker is told. Body-less. */
     declineItem: (itemId: number) => postJson<{ readonly ok: true; readonly item: ItemView }>(`/api/items/${itemId}/decline`),
+    /** `POST /api/items/:id/act` on a release-review item (D-8293): Release a review child kept past its ceiling. Body-less and
+     *  session only. It abandons nothing: the item closes done and the child reclaim sweep takes the workspace on its next passes. */
+    releaseReviewItem: (itemId: number) =>
+      postJson<{ readonly ok: true; readonly released: true; readonly item: ItemView }>(`/api/items/${itemId}/act`),
     /** `POST /api/runs/:id/reclaim` — point a program's runs at a LIVING
      *  coordinator after the one they name has died. The wedge it opens is the
      *  one two readers create between them by answering the lowest-id
@@ -923,6 +936,10 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
      *  read" may well have stored the value, and is not "the request never happened". */
     setStallWatch: (body: StallWatchRequest) =>
       postJsonOr<StallWatchView | 'unreadable'>('/api/coord/stall-watch', 'unreadable', body),
+    /** `GET /api/face`: the operator's character, one server row (`{ character, updatedAt }`). */
+    getFace: () => getJson<FaceAnswer>('/api/face'),
+    /** `POST /api/face` `{ character }`: answers the row; a refusal (400 `bad-request`) rejects with `ApiError`. */
+    setFace: (character: CharacterName) => postJson<FaceAnswer>('/api/face', { character }),
     /** `GET /api/coord/collect-lane` (path-identity spec 2026-10-12 §5.6, §5.7): the Settings page's Temp root
      *  collector section reads it through `useCollectLaneView`, whose `asCollectLaneView` (`fleet/collectLaneRead.ts`) is the wire guard, so the
      *  type here is what the server promises, not what arrived. `getJson`, as `stallWatch` is: a read changes
@@ -970,6 +987,13 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
      *  The card reads it through `useLaneArmView`, whose `asLaneArmView` is the wire guard. 501 `not-configured` and an older
      *  server's 404 read as not available. Session-gated when armed, open dark; no box token. */
     laneArm: (opts?: ReadOpts) => getJson<LaneArmView>('/api/coord/lane-arm', opts),
+    /** `GET /api/fleet/overrides` (D-8382): every override the switchboard declares with its state, and the approvals
+     *  topology. Read only; Overrides in force and Security's approvals line read it through `useOverridesView`. */
+    fleetOverrides: (opts?: ReadOpts) => getJson<OverridesView>('/api/fleet/overrides', opts),
+    /** `GET /api/models/:lane` (D-8406): the lane's classes as its own model files say them, each class's model and its
+     *  catalogue label. Unknown on purpose: `asLaneModelsRead` (`lib/models.ts`) is the one reader of the answer, and an
+     *  older server's 404 rejects like every non-2xx. Read through `useLaneModels`. */
+    laneModels: (lane: string, opts?: ReadOpts) => getJson<unknown>(`/api/models/${encodeURIComponent(lane)}`, opts),
     /** `POST /api/coord/lane-arm`: `{lane, choice}`, plus `confirm` only as the key a 409 `confirm-required` answered with. The
      *  server decides the confirm, so a 409 rejects with `ApiError` like every non-2xx, and the card reads its body through
      *  `laneArmWriteRefusal`. `postJsonOr`, for `setCoordCaps`' reason: an answer that could not be read may still have stored
@@ -986,6 +1010,12 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
      *  could not be read" may well have stored the choice. */
     setRollIdle: (targets: ClaudeRollTargets) =>
       postJsonOr<RollIdleView | 'unreadable'>('/api/coord/roll-idle', 'unreadable', { targets }),
+    /** `GET /api/coord/plain-auto-memory` (Overlord W1a launch profiles PR B): Settings › Automation › Auto memory for plain
+     *  sessions, `off` or `on` (`choice` null when the server could not read its row). Session-gated when armed; no box token. */
+    plainAutoMemory: () => getJson<PlainAutoMemoryView & { readonly ok: true }>('/api/coord/plain-auto-memory'),
+    /** `POST /api/coord/plain-auto-memory`: `{choice}`. `postJsonOr`, for `setCoordCaps`' reason. */
+    setPlainAutoMemory: (choice: PlainAutoMemoryChoice) =>
+      postJsonOr<(PlainAutoMemoryView & { readonly ok: true }) | 'unreadable'>('/api/coord/plain-auto-memory', 'unreadable', { choice }),
     /** `GET /api/testbox` (test box plan TB9, D-7411; spec 2026-10-28 §2.7): `{ok, testbox}`, the block the server's
      *  poll last decided, `null` before its first pass. Settings › Automation › Test box reads it through
      *  `useTestboxView`, whose `asTestboxBlock` is the wire guard, so the type here is the envelope only. */
@@ -998,6 +1028,20 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
     testboxToolsSync: () =>
       postJsonOr<{ readonly ok: boolean; readonly outcome?: unknown; readonly detail?: unknown } | 'unreadable'>(
         '/api/testbox/tools-sync', 'unreadable'),
+    /** D-8289: `GET /api/testbox/builds`, `{ok, claudeBuilds}`, the trusted Claude Code builds (`readClaudeBuildRecords` is the guard), and
+     *  `POST /api/testbox/builds/capture`, `{build}`, the operator's Capture again on a failed build, answered with the re-read list. */
+    testboxBuilds: (opts?: ReadOpts) => getJson<{ readonly ok: true; readonly claudeBuilds: unknown }>('/api/testbox/builds', opts),
+    testboxBuildCapture: (build: string) =>
+      postJsonOr<{ readonly ok: true; readonly claudeBuilds: unknown } | 'unreadable'>('/api/testbox/builds/capture', 'unreadable', { build }),
+    /** `GET /api/testbox/admin` (test box connect plan TC12, D-8166): `{ok, status, events}`, session-gated. `useTestboxAdmin`
+     *  reads it through the shared status reader; the type here is the envelope only. */
+    testboxAdmin: (opts?: ReadOpts) => getJson<{ readonly ok: true; readonly status: unknown; readonly events: unknown }>('/api/testbox/admin', opts),
+    /** `POST /api/testbox/admin/:sub` (TC12): `{fields}` and nothing else; the answer is the re-read status, the ledger and what the act
+     *  may say. A 2xx the card cannot read is `unreadable` (it may have landed, so the card re-reads). `opts.signal` only: a write has no
+     *  time limit, because its outcome is never guessed. */
+    testboxAdminAct: async (sub: TestboxAdminSub, fields: TestboxAdminFields, opts?: ReadOpts) =>
+      (await (await request(`/api/testbox/admin/${sub}`, jsonInit({ fields }), opts)).json().catch(() => 'unreadable')) as
+        { readonly ok: true; readonly status: unknown; readonly events: unknown; readonly result?: unknown } | 'unreadable',
     /** `GET /api/digest?day=` (coordinator-first routing spec §10, D-5300): the digest of what coordinators decided
      *  in the operator's name for one UTC day, or, with no day, the newest whose window has closed. The digest screen
      *  reads it through `asDigestAnswer`, the wire guard. Session-gated when armed; no box token. */
@@ -1051,6 +1095,11 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
       })).json() as Promise<SecretRemoveAnswer>,
     /** `POST /api/items/:id/dismiss` (PL4): refused `programme-live` while the programme has an open run. */
     dismissItem: (id: number) => postJson<{ readonly ok: true; readonly item: ItemView }>(`/api/items/${id}/dismiss`),
+    /** `GET /api/sessions/:id/timers` (Overlord W1a, timers Task 13): the session's pending timers, notes masked and marked
+     *  untrusted. `unknown`: `timersWords.ts`' `readTimers` is the one reader. Session-gated when armed. */
+    sessionTimers: (id: string) => getJson<unknown>(`${sid(id)}/timers`),
+    /** `POST /api/sessions/:id/timers/:timerId/cancel`: the operator cancels one; a refusal rejects with its `ApiError`. */
+    cancelSessionTimer: (id: string, timerId: number) => postJson<unknown>(`${sid(id)}/timers/${timerId}/cancel`),
     commands: (id: string) =>
       getJson<{ builtins: SlashCommand[]; skills: SlashCommand[] }>(`${sid(id)}/commands`),
     upload: async (id: string, file: File): Promise<StagedClip> => {

@@ -8,9 +8,14 @@ export interface AgentLink {
   readonly word: string;
 }
 
+/** The fact that a remote fleet's agent is not connected; false while no answer has come, and in local mode. */
+export function agentDown(health: FleetHealth | null): boolean {
+  return health !== null && health.mode !== 'local' && !health.connected;
+}
+
 /** No answer yet is "checking", never an all-clear; local mode has no second box to link to. */
 export function agentLink(health: FleetHealth | null): AgentLink {
   if (health === null) return { dot: 'idle', word: 'agent: checking' };
   if (health.mode === 'local') return { dot: 'done', word: 'local' };
-  return health.connected ? { dot: 'done', word: 'agent connected' } : { dot: 'dead', word: 'agent down' };
+  return agentDown(health) ? { dot: 'dead', word: 'agent down' } : { dot: 'done', word: 'agent connected' };
 }

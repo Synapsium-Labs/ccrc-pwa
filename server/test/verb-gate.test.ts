@@ -152,6 +152,8 @@ const PROBE_ARGS: Partial<Record<string, readonly unknown[]>> = {
   prStatePr: ['x', 1],
   // D-8147: `prTemplate` checks the team key against Linear's upper-case grammar, so the default probe `'x'` would throw at load.
   prTemplate: ['x', 'KEY'],
+  // Overlord W1a (fresh start): `hibernate`'s fourth argument is a mode word (`sleep`, `roll` or `fresh`), not a flag, so the default probe `'x'` names no mode.
+  hibernate: ['x', null, null, 'sleep'],
 };
 
 /** `CCD_ARGV` key -> the verb it emits, taken from the table itself rather

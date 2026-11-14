@@ -15,7 +15,7 @@ import { describeLinux, IS_DARWIN, itLinux } from './platformFixtures.js';
 import {
   alive, codexAuthDir, codexRoster, eventually, failUnitStop, fakeUnit, freePorts, killLaneProcesses, laneAnswer,
   litellmEvidence, litellmTeardownEvents, plantCodexBins, plantFakeRuntime, plantLaneConfig, plantSystemd, portAccepts, psArgs,
-  refuseLitellmStart, registerLaneCleanup, resistLitellmTerm, slowLitellmListen, spawnFakeLitellm, spawnListener, systemctlCalls, systemdRunArgv,
+  reapFakeUnits, refuseLitellmStart, registerLaneCleanup, resistLitellmTerm, slowLitellmListen, spawnFakeLitellm, spawnListener, systemctlCalls, systemdRunArgv,
   systemdRunCalls, trackChild, unitPid,
 } from './codexLaneFixture.js';
 import type { FakeRuntime } from './codexLaneFixture.js';
@@ -559,6 +559,28 @@ describe.skipIf(!PY)('ccrc codex start|stop|status: the lane runs, in fixtures (
     expect(fs.readFileSync(join(unitDir, 'stop-complete'), 'utf8')).toBe('complete\n');
     expect(fs.readFileSync(join(unitDir, 'events'), 'utf8').split('\n').filter(Boolean)).toEqual(['TERM', 'WAIT:-15']);
   }, 60_000);
+
+  // R42 (D-8387): a spine suite's teardown ends the lane through the product's own stop, and a unit that stop left
+  // running, or a supervisor still in its linger, outlived the file and its HOME, and the leak check named it.
+  it.skipIf(!PY)('L0a reapFakeUnits ends every unit this HOME\'s manager started and returns only once each supervisor it spawned has exited; a seeded unit is not its to end', async () => {
+    const home = box('ccrc-codex-manager-reap-', { userManager: true });
+    const running = await startSelfExpiringUnit(home, 'reap-running.service');
+    const stopped = await startSelfExpiringUnit(home, 'reap-stopped.service');
+    // One unit already stopped through the manager: its supervisor is in its linger, and the reap waits that out too.
+    expect(spawnSync(BASH, ['-c', 'systemctl --user stop reap-stopped.service'], { env: env(home), stdio: 'ignore' }).status).toBe(0);
+    const supervisors = [running, stopped].map((u) => Number(fs.readFileSync(join(u.unitDir, 'supervisor-pid'), 'utf8').trim()));
+    for (const pid of supervisors) expect(psArgs(pid), 'the recorded pid is this unit\'s supervisor').toContain('supervisor.py');
+    const stranger = spawn('sleep', ['600'], { stdio: 'ignore' });
+    trackChild(home, stranger);
+    fakeUnit(home, 'reap-seeded.service', { state: 'active', pid: stranger.pid! });
+    await reapFakeUnits(home);
+    for (const pid of supervisors) expect(psArgs(pid), 'a supervisor outlived the reap').not.toContain('supervisor.py');
+    expect(tierRow(running.pid, running.marker), 'the running unit\'s tier outlived the reap').toBe(false);
+    expect(fs.readFileSync(join(running.unitDir, 'state'), 'utf8')).toBe('inactive\n');
+    expect(fs.readFileSync(join(running.unitDir, 'events'), 'utf8').split('\n').filter(Boolean)).toEqual(['TERM', 'WAIT:-15']);
+    expect(psArgs(stranger.pid!)).toMatch(/^sleep 600/);
+    expect(fs.readFileSync(join(home, 'fake-systemd', 'units', 'reap-seeded.service', 'state'), 'utf8')).toBe('active\n');
+  }, 45_000);
 
   it('L0a safety pins: fake systemctl has no signal vocabulary at all, and the safety report says what the fixture does', () => {
     const fixture = fs.readFileSync(join(here, 'codexLaneFixture.ts'), 'utf8');

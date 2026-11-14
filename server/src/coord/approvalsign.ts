@@ -19,6 +19,7 @@ import {
   APPROVAL_SIGNING_KEY_FILE, approvalRulingBytes, isApprovalRefusal, isApprovalReleaseReason, type ApprovalRulingRecord,
 } from '../../../shared/api.js';
 import type { NodeRole } from '../../../shared/node-role.js';
+import type { ApprovalsTopologyWire } from '../../../shared/overrides.js';
 import type { FleetMode } from '../config.js';
 
 /** The operator's opt-in file on a single box (spec §6.1): without it a `both` server mints no rulings. */
@@ -88,6 +89,15 @@ export function loadOrCreateApprovalSigner(ccrcDir: string): ApprovalSigner {
 export function rulingsAllowedHere(role: NodeRole, fleetMode: FleetMode, ccrcDir: string): boolean {
   if (role !== 'both' && fleetMode === 'remote') return true;
   return existsSync(path.join(ccrcDir, APPROVALS_SINGLE_BOX_FILE));
+}
+
+/** D-8382: the topology `rulingsAllowedHere` decides from, for Settings › Security's one line: two boxes or one, and
+ *  whether the opt-in file stands. Its `rulings` is `rulingsAllowedHere`'s answer for the same three inputs (the line
+ *  says what the gate does, never a second rule); the file's name rides the wire so the console spells it nowhere. */
+export function approvalsTopologyOf(role: NodeRole, fleetMode: FleetMode, ccrcDir: string): ApprovalsTopologyWire & { readonly rulings: boolean } {
+  const twoBoxes = role !== 'both' && fleetMode === 'remote';
+  const present = existsSync(path.join(ccrcDir, APPROVALS_SINGLE_BOX_FILE));
+  return { boxes: twoBoxes ? 'two' : 'one', marker: present ? 'present' : 'absent', file: APPROVALS_SINGLE_BOX_FILE, rulings: twoBoxes || present };
 }
 
 /** The server box's kill switch, read at each mint and each signing (spec §6.8). */

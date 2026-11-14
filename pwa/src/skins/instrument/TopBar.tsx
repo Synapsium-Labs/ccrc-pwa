@@ -38,6 +38,7 @@ import { commandDoor } from '../../command/door';
 import { COMMAND_FIELD_WORDS } from '../../command/registry';
 import { AccountsStrip } from '../../fleet/AccountsStrip';
 import { badgePrint, placeBadge, useNavBadges, type NavBadges } from '../../fleet/navBadges';
+import { FaceMark } from '../../face/FaceMark';
 import { NotificationBell } from '../../fleet/NotificationBell';
 import { DESK_PLACES } from '../../lib/places';
 import { useLocation } from '../../lib/router';
@@ -122,6 +123,10 @@ export function TopBar(): ReactNode {
             ? null
             : <DeskDoorEntry key={d.id} id={d.id} icon={d.icon} current={current} badges={badges} words={words} />))}
         </nav>
+        {/* Beside the doors, not in the home door (a button's children are presentational: the face's name, the mood and
+            its cause, would never reach assistive tech, and a click on it would go home) and not in the nav, which holds
+            doors only (`nav-holds-doors-only`). */}
+        <FaceMark />
         <BareRow className="ins-command" aria-label={COMMAND_FIELD_WORDS} {...commandDoor('open-palette')}>
           <Icon name="search" />
           <span className="ins-command-words">{COMMAND_FIELD_WORDS}</span>

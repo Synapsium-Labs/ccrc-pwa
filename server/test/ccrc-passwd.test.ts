@@ -21,7 +21,7 @@
 //     resolves a module's imports from its real path (see `plantAuthHelper`).
 //  3. The compiled reader under `<home>/ccrc/server/dist/…` is built from this
 //     checkout's own `server/src/auth/secret.ts` (`authFixtures.ts`).
-//  4. `ghContainedEnv` plants the poisoned `gh`, as every other ccrc suite
+//  4. `ccrcContainedEnv` plants the poisons and the fixture bus (D-8394), as every other ccrc suite
 //     does — not because this verb shells out to it, but because containment
 //     that each file has to remember is containment that goes missing.
 import { describe, it, expect } from 'vitest';
@@ -33,7 +33,7 @@ import path, { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import * as pty from 'node-pty';
 import { mkTmp } from './tmpHelpers.js';
-import { ghContainedEnv } from './ccdWsHelpers.js';
+import { ccrcContainedEnv } from './ccrcContainment.js';
 import { plantAuthHelper, plantAuthModule, type FixtureParams } from './authFixtures.js';
 import { readAuthSecret, verifyPassphrase, DEFAULT_PARAMS, INITIAL_GENERATION } from '../src/auth/secret.js';
 
@@ -67,9 +67,10 @@ function box(prefix: string, params?: FixtureParams): string {
 }
 
 function env(home: string): NodeJS.ProcessEnv {
-  // The real PATH is kept (node, bash and stty all have to resolve), with the
-  // poisoned `gh` in front of it — `ccrc-cli.test.ts`'s runner, same reason.
-  const e = ghContainedEnv(home, { ...process.env, HOME: home });
+  // The real PATH is kept (node, bash and stty all have to resolve), with
+  // `ccrcContainedEnv`'s poisons in front of it (the second ring, residue
+  // R35(a), D-8394) — `ccrc-cli.test.ts`'s runner, same reason.
+  const e = ccrcContainedEnv(home, process.env, { managers: true, curl: 'poison' });
   // Every CCRC_* input this CLI reads is removed by name, so whoever ran the
   // suite cannot change what a verb measures (ccrc-cli.test.ts:88-94).
   for (const k of ['CCRC_ADDR', 'CCRC_HEALTH_TIMEOUT', 'CCRC_DOCTOR_GH_TIMEOUT']) delete e[k];

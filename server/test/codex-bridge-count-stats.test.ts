@@ -140,9 +140,10 @@ describe.skipIf(!PY)('the stats file (codex-bridge spec §2.7, §2.9 D3; D-6418)
     expect(readdirSync(dir)).toEqual([STATS]);
     const doc = readDoc(file);
     expect(Object.keys(doc).sort()).toEqual([
-      'lane', 'lastUpstreamRequestId', 'names', 'outcomes', 'refusals', 'routes', 'since', 'startedAt', 'store',
-      'unexplained', 'updatedAt', 'usageHeaders', 'version',
+      'lane', 'lastUpstreamRequestId', 'names', 'outcomes', 'parity', 'refusals', 'routes', 'since', 'startedAt',
+      'store', 'unexplained', 'updatedAt', 'usageHeaders', 'version',
     ]);
+    expect(doc.parity).toEqual({}); // D-8618: the parity section, empty until a response is measured
     expect(doc.store).toEqual({ state: 'ok', reason: null, at: null, setAside: null });
     expect(doc.version).toBe(1);
     expect(doc.lane).toBe('lane-a');
@@ -380,10 +381,14 @@ describe.skipIf(!PY)('the stats file (codex-bridge spec §2.7, §2.9 D3; D-6418)
     const [k, sets] = await run(home, [{ op: 'known' }, { op: 'sets' }]);
     expect(k.families).toEqual([
       'requestField', 'eventType', 'itemType', 'errorCode', 'incompleteReason', 'responseHeader', 'unsupportedField',
-      'modelSubstitution', 'betaValue', 'contextEdit',
+      'modelSubstitution', 'betaValue', 'contextEdit', 'foreignSubstitution',
     ]);
     expect(Object.keys(k.known).sort()).toEqual([...k.families].sort());
     expect(k.known.errorCode).toEqual(sets.ALL_CODES);
+    // Both substitution families are empty on purpose (known.py): a Claude Code fallback and a substitution from any
+    // other caller each warn under their own name, and neither is ever explained away.
+    expect(k.known.modelSubstitution).toEqual([]);
+    expect(k.known.foreignSubstitution).toEqual([]);
     expect(k.known.contextEdit).toEqual(['clear_thinking_20251015']);
     expect(k.known.eventType).toContain('response.metadata');
     expect(k.known.eventType).toContain('keepalive');
@@ -508,6 +513,30 @@ describe.skipIf(!PY)('the stats file (codex-bridge spec §2.7, §2.9 D3; D-6418)
     const doc = readDoc(file);
     expect(doc.unexplained).toEqual({ eventType: ['response.fx_new_event'] });
     expect(doc.since).toBe('2026-01-01T00:00:00.000Z');
+  });
+
+  // A version-1 file a bridge from before foreignSubstitution wrote has no such key: it loads as it is, no reset, and a
+  // carried modelSubstitution name stays unexplained (it leaves only when a reviewed change explains it). Additive:
+  // stats.VERSION stays 1.
+  it('a version-1 file with no foreignSubstitution key loads with no reset, and keeps a carried modelSubstitution name', async () => {
+    const { home, file } = lane('cb-stats-nofsub-');
+    const planted = {
+      version: 1, lane: 'lane-a', since: '2026-01-01T00:00:00.000Z', startedAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:00:00.000Z', routes: {}, refusals: {}, outcomes: { '4xx': 2 },
+      names: { modelSubstitution: { 'claude-opus-5-5': 2 } },
+      unexplained: { modelSubstitution: ['claude-opus-5-5'] },
+      usageHeaders: null, lastUpstreamRequestId: null,
+    };
+    writeFileSync(file, JSON.stringify(planted), { mode: 0o600 });
+    const [o, , snap] = await run(home, [open(file), call('name', ['foreignSubstitution', 'claude-sonnet-4-6']), { op: 'stats-snapshot' }]);
+    expect(o.doc.outcomes).toEqual({ '4xx': 2 });
+    expect(o.doc.since).toBe('2026-01-01T00:00:00.000Z');
+    expect(o.doc.names).toEqual(planted.names);
+    expect(o.doc.unexplained).toEqual({ modelSubstitution: ['claude-opus-5-5'] });
+    // Nothing the load changed, so the file is the old process's until a flush.
+    expect(readDoc(file)).toEqual(planted);
+    expect(snap.doc.names.foreignSubstitution).toEqual({ 'claude-sonnet-4-6': 1 });
+    expect(snap.doc.unexplained).toEqual({ foreignSubstitution: ['claude-sonnet-4-6'], modelSubstitution: ['claude-opus-5-5'] });
   });
 
   // The whole-wave fix round, Z1: `unrecognised` and `overflow` are markers, which no change to known.py can explain,
@@ -932,5 +961,325 @@ describe.skipIf(!PY)('the store entry: the reasoning store\'s state for this pro
     // The write in flight serialised the document before the event; its success must not spend the event's one-shot.
     expect(next.result).toBe(true);
     expect(readDoc(file).store).toMatchObject({ state: 'disabled', reason: 'store:DatabaseError' });
+  });
+});
+
+// D-8618: the parity section, the measurements GPT-lane parity with native Codex hinges on, keyed `<route>/<model>` as
+// `routes` is but never in a `routes` row (D24's calibration has other readers), and never a D3 family (a removal or a
+// miss is a measurement, not drift, so nothing here reaches `unexplained`).
+const BUCKETS = ['250', '500', '1000', '2000', '4000', '8000', '16000', '32000', '64000', 'inf'];
+const zeros = (keys: string[]): Record<string, number> => Object.fromEntries(keys.map((k) => [k, 0]));
+const REPLAY = ['text-hit', 'text-empty', 'text-absent', 'call-hit', 'call-absent'];
+/** D-8622: the request markers, in backend.MARKERS' order. */
+const MARKERS = ['bridge-reasoning-all-turns', 'bridge-verbosity', 'bridge-turn-state'];
+/** A parity row as the writers leave it when they have counted nothing, with `over` laid on top. */
+function parityRow(over: Record<string, unknown> = {}): Line {
+  return {
+    responses: 0, inputTokens: 0, cachedTokens: 0, outputTokens: 0, reasoningTokens: 0, effort: {},
+    served: { same: 0, other: 0, absent: 0 }, servedOther: {}, inputTransformations: {}, responsesWithTransformations: 0,
+    replay: zeros(REPLAY), firstOutputMs: zeros(BUCKETS), totalMs: zeros(BUCKETS),
+    markers: zeros(MARKERS), fallbacks: zeros(MARKERS), turnState: { captured: 0, echoed: 0 }, ...over,
+  };
+}
+const hist = (counts: Record<string, number>): Record<string, number> => ({ ...zeros(BUCKETS), ...counts });
+const response = (kwargs: Record<string, unknown>, model = MODEL): object => call('parity_response', ['backend', model], kwargs);
+
+describe.skipIf(!PY)('the parity section (D-8618)', () => {
+  it('effort is counted once per call, the level the body carried, none when it carried none', async () => {
+    const { home, file } = lane('cb-parity-effort-');
+    const [, , , , , , snap] = await run(home, [
+      open(file),
+      call('parity_effort', ['backend', MODEL, 'high']),
+      call('parity_effort', ['backend', MODEL, 'high']),
+      call('parity_effort', ['backend', MODEL, 'low']),
+      call('parity_effort', ['backend', MODEL, null]),
+      call('parity_effort', ['backend', MODEL, 'two words']),
+      { op: 'stats-snapshot' },
+    ]);
+    expect(snap.doc.parity).toEqual({ [ROUTE_KEY]: parityRow({ effort: { high: 2, low: 1, none: 1, unrecognised: 1 } }) });
+    // a measurement, never drift: nothing reaches `names`, `unexplained` or `routes`
+    expect(snap.doc.names).toEqual({});
+    expect(snap.doc.unexplained).toEqual({});
+    expect(snap.doc.routes).toEqual({});
+  });
+
+  it('a response sums its valid tokens, compares the served model and buckets its two times', async () => {
+    const { home, file } = lane('cb-parity-response-');
+    const [, , , , , snap] = await run(home, [
+      open(file),
+      response({
+        served: MODEL, usage: { input: 120, cached: 20, output: 7, reasoning: 3 },
+        transformations: ['reasoning:removed:turn_boundary', 'reasoning:removed:turn_boundary', 'message:changed:none'],
+        first_output_ms: 250, total_ms: 250.5,
+      }),
+      response({ served: 'model-6.1-beta', usage: { input: 30, output: 2 }, transformations: [], total_ms: 64_000 }),
+      response({ served: null, usage: { input: 1, cached: 1, output: 1, reasoning: 1 }, first_output_ms: 0, total_ms: 64_001 }),
+      response({ served: 'model-6.1-beta', total_ms: 999.9 }),
+      { op: 'stats-snapshot' },
+    ]);
+    expect(snap.doc.parity[ROUTE_KEY]).toEqual(parityRow({
+      responses: 4, inputTokens: 151, cachedTokens: 21, outputTokens: 10, reasoningTokens: 4,
+      served: { same: 1, other: 2, absent: 1 }, servedOther: { 'model-6.1-beta': 2 },
+      inputTransformations: { 'reasoning:removed:turn_boundary': 2, 'message:changed:none': 1 },
+      responsesWithTransformations: 1,
+      // an upper bound is inclusive; a response with no output counts only in totalMs
+      firstOutputMs: hist({ 250: 2 }), totalMs: hist({ 500: 1, 1000: 1, 64000: 1, inf: 1 }),
+    }));
+  });
+
+  it('a replay lookup is counted by its outcome, n at a time', async () => {
+    const { home, file } = lane('cb-parity-replay-');
+    const [, , , , , , snap] = await run(home, [
+      open(file),
+      call('parity_replay', ['backend', MODEL, 'text-hit']),
+      call('parity_replay', ['backend', MODEL, 'text-hit', 2]),
+      call('parity_replay', ['backend', MODEL, 'text-empty']),
+      call('parity_replay', ['backend', MODEL, 'call-hit', 4]),
+      call('parity_replay', ['backend', MODEL, 'call-absent']),
+      { op: 'stats-snapshot' },
+    ]);
+    expect(snap.doc.parity[ROUTE_KEY].replay).toEqual({
+      'text-hit': 3, 'text-empty': 1, 'text-absent': 0, 'call-hit': 4, 'call-absent': 1,
+    });
+  });
+
+  it('malformed arguments count nothing', async () => {
+    const { home, file } = lane('cb-parity-malformed-');
+    const [, ...rest] = await run(home, [
+      open(file),
+      call('parity_effort', ['backend', MODEL, 5]),
+      call('parity_effort', ['backend', MODEL, { level: 'high' }]),
+      call('parity_replay', ['backend', MODEL, 'text-miss']),
+      call('parity_replay', ['backend', MODEL, 7]),
+      call('parity_replay', ['backend', MODEL, 'text-hit', 0]),
+      call('parity_replay', ['backend', MODEL, 'text-hit', true]),
+      call('parity_replay', ['backend', MODEL, 'text-hit', 'two']),
+      { op: 'stats-snapshot' },
+    ]);
+    // no row is even made: every call above was refused before it touched the section
+    expect(rest.at(-1)!.doc.parity).toEqual({});
+    const [, , , snap] = await run(home, [
+      open(path.join(path.dirname(file), 'other.json')),
+      response({
+        served: 5, usage: { input: -1, cached: true, output: '7', reasoning: 1.5 },
+        // `overflow` is the cap's own key: a caller can never count it directly
+        transformations: ['reasoning:removed', 'a b:removed:none', 'reasoning:removed:' + 'x'.repeat(33), 7, null, 'overflow'],
+        first_output_ms: { float: 'nan' }, total_ms: -1,
+      }),
+      // a bool is not a time, though Python's bool is an int
+      response({ first_output_ms: true, total_ms: false }),
+      { op: 'stats-snapshot' },
+    ]);
+    // each response is counted, and nothing malformed in either is: no token, no served word, no key, no bucket
+    expect(snap.doc.parity[ROUTE_KEY]).toEqual(parityRow({
+      responses: 2, responsesWithTransformations: 1, served: { same: 0, other: 0, absent: 1 },
+    }));
+    const [, , notMapping] = await run(home, [
+      open(path.join(path.dirname(file), 'third.json')),
+      response({ usage: 'lots', transformations: { type: 'reasoning' }, first_output_ms: 'soon', total_ms: { float: 'inf' } }),
+      { op: 'stats-snapshot' },
+    ]);
+    expect(notMapping.doc.parity[ROUTE_KEY]).toEqual(parityRow({ responses: 1, served: { same: 0, other: 0, absent: 1 } }));
+  });
+
+  it('each open map reaches OVERFLOW at its cap: 16 effort levels, 16 served models, 32 transformations', async () => {
+    const { home, file } = lane('cb-parity-caps-');
+    const levels = Array.from({ length: 18 }, (_, i) => `level-${i}`);
+    const served = Array.from({ length: 18 }, (_, i) => `model-x-${i}`);
+    const keys = Array.from({ length: 34 }, (_, i) => `reasoning:removed:reason_${i}`);
+    const ops = [
+      open(file),
+      ...levels.map((l) => call('parity_effort', ['backend', MODEL, l])),
+      call('parity_effort', ['backend', MODEL, 'level-0']),
+      ...served.map((m) => response({ served: m })),
+      response({ transformations: keys }),
+      response({ transformations: [keys[0], keys[33]] }),
+      { op: 'stats-snapshot' },
+    ];
+    const lines = await run(home, ops);
+    const row = lines.at(-1)!.doc.parity[ROUTE_KEY];
+    expect(Object.keys(row.effort)).toHaveLength(17);
+    expect(row.effort.overflow).toBe(2);
+    expect(row.effort['level-0']).toBe(2); // a key already held is still counted under its own name
+    expect(row.effort['level-16']).toBeUndefined();
+    expect(Object.keys(row.servedOther)).toHaveLength(17);
+    expect(row.servedOther.overflow).toBe(2);
+    expect(row.served).toEqual({ same: 0, other: 18, absent: 2 });
+    expect(Object.keys(row.inputTransformations)).toHaveLength(33);
+    expect(row.inputTransformations.overflow).toBe(3);
+    expect(row.inputTransformations[keys[0]]).toBe(2);
+    expect(row.responsesWithTransformations).toBe(2);
+  });
+
+  it('past NAMES_MAX route keys the next one is the overflow row, as in routes', async () => {
+    const { home, file } = lane('cb-parity-rows-');
+    const [, , , , snap] = await run(home, [
+      open(file),
+      call('parity_effort', ['backend', 'model-a', 'low']),
+      call('parity_effort', ['backend', 'model-b', 'low']),
+      call('parity_effort', ['backend', 'model-c', 'low']),
+      { op: 'stats-snapshot' },
+    ], { consts: { 'stats.NAMES_MAX': 2 } });
+    expect(Object.keys(snap.doc.parity).sort()).toEqual(['backend/model-a', 'backend/model-b', 'overflow']);
+    expect(snap.doc.parity.overflow.effort).toEqual({ low: 1 });
+  });
+
+  it('a restart carries every valid parity row and drops what is malformed, with no reset', async () => {
+    const { home, file } = lane('cb-parity-load-');
+    const good = parityRow({
+      responses: 3, inputTokens: 300, cachedTokens: 100, outputTokens: 30, reasoningTokens: 9,
+      effort: { high: 2, none: 1 }, served: { same: 2, other: 1, absent: 0 }, servedOther: { 'model-6.1-beta': 1 },
+      inputTransformations: { 'reasoning:removed:turn_boundary': 4, overflow: 1 }, responsesWithTransformations: 2,
+      replay: { 'text-hit': 1, 'text-empty': 0, 'text-absent': 2, 'call-hit': 3, 'call-absent': 0 },
+      firstOutputMs: hist({ 250: 2 }), totalMs: hist({ 1000: 2, inf: 1 }),
+    });
+    const planted = {
+      version: 1, lane: 'lane-a', since: '2026-01-01T00:00:00.000Z', startedAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:00:00.000Z', routes: {}, refusals: {}, outcomes: { '2xx': 3 }, names: {},
+      unexplained: {}, usageHeaders: null, lastUpstreamRequestId: null,
+      parity: {
+        [ROUTE_KEY]: good,
+        'backend/model-6.1-beta': {
+          responses: -1, inputTokens: '5', cachedTokens: true, outputTokens: 4, reasoningTokens: null,
+          effort: { high: 1, 'two words': 3, low: -2, max: 1.5 }, served: { same: 1, elsewhere: 4, other: 'x' },
+          servedOther: { 'a model with spaces': 1, 'model-z': 2 },
+          inputTransformations: { 'reasoning:removed:prefix_mismatch': 1, 'reasoning:removed': 9, 'a:b:c:d': 1 },
+          responsesWithTransformations: 1, replay: { 'text-hit': 2, 'text-miss': 9 },
+          firstOutputMs: { 250: 1, 300: 5, inf: -1 }, totalMs: 'many', extra: 1,
+        },
+        'not a route key': good,
+        'backend/model-6.1-gamma': 'not a row',
+      },
+    };
+    writeFileSync(file, JSON.stringify(planted), { mode: 0o600 });
+    const [o] = await run(home, [open(file)]);
+    expect(o.doc.outcomes).toEqual({ '2xx': 3 });
+    expect(o.doc.since).toBe('2026-01-01T00:00:00.000Z');
+    expect(o.doc.parity).toEqual({
+      [ROUTE_KEY]: good,
+      'backend/model-6.1-beta': parityRow({
+        outputTokens: 4, effort: { high: 1 }, served: { same: 1, other: 0, absent: 0 }, servedOther: { 'model-z': 2 },
+        inputTransformations: { 'reasoning:removed:prefix_mismatch': 1 }, responsesWithTransformations: 1,
+        replay: { ...zeros(REPLAY), 'text-hit': 2 }, firstOutputMs: hist({ 250: 1 }),
+      }),
+    });
+  });
+
+  it('a restart re-checks the caps: a carried map past its cap keeps its first keys and OVERFLOW', async () => {
+    const { home, file } = lane('cb-parity-load-caps-');
+    const effort = Object.fromEntries(Array.from({ length: 20 }, (_, i) => [`level-${String(i).padStart(2, '0')}`, 1]));
+    const planted = {
+      version: 1, lane: 'lane-a', since: '2026-01-01T00:00:00.000Z', startedAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:00:00.000Z', routes: {}, refusals: {}, outcomes: {}, names: {}, unexplained: {},
+      usageHeaders: null, lastUpstreamRequestId: null,
+      parity: { [ROUTE_KEY]: { effort: { ...effort, overflow: 4 } }, 'backend/model-b': {}, 'backend/model-c': {} },
+    };
+    writeFileSync(file, JSON.stringify(planted), { mode: 0o600 });
+    const [o] = await run(home, [open(file)], { consts: { 'stats.NAMES_MAX': 2 } });
+    expect(Object.keys(o.doc.parity).sort()).toEqual([ROUTE_KEY, 'backend/model-b']);
+    const kept = o.doc.parity[ROUTE_KEY].effort;
+    expect(Object.keys(kept)).toHaveLength(17);
+    expect(kept.overflow).toBe(4);
+    expect(kept['level-15']).toBe(1);
+    expect(kept['level-16']).toBeUndefined();
+  });
+
+  it('a version-1 file with no parity key loads with no reset, and counts from empty', async () => {
+    const { home, file } = lane('cb-parity-nokey-');
+    const planted = {
+      version: 1, lane: 'lane-a', since: '2026-01-01T00:00:00.000Z', startedAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:00:00.000Z', routes: { [ROUTE_KEY]: { requests: 4, bytesPerToken: 3.6, promptTokensMax: 900, promptTokensLast: 9 } },
+      refusals: {}, outcomes: { '2xx': 4 }, names: {}, unexplained: {}, usageHeaders: null, lastUpstreamRequestId: null,
+    };
+    writeFileSync(file, JSON.stringify(planted), { mode: 0o600 });
+    const [o, , snap] = await run(home, [open(file), call('parity_effort', ['backend', MODEL, 'medium']), { op: 'stats-snapshot' }]);
+    expect(o.doc.outcomes).toEqual({ '2xx': 4 });
+    expect(o.doc.since).toBe('2026-01-01T00:00:00.000Z');
+    expect(o.doc.routes[ROUTE_KEY].requests).toBe(4);
+    expect(o.doc.parity).toEqual({});
+    // nothing the load changed, so the file is the old process's until a flush
+    expect(readDoc(file)).toEqual(planted);
+    expect(snap.doc.parity).toEqual({ [ROUTE_KEY]: parityRow({ effort: { medium: 1 } }) });
+  });
+});
+
+// D-8622, D-8623: the request markers' counts in the same rows. `markers` counts the POSTs that carried each marker's
+// addition, `fallbacks` each one a 400's fallback dropped, and `turnState` the sticky-routing tokens captured and echoed:
+// fixed vocabularies, zero-filled like `served` and `replay`, so no cap can be reached and no name is ever free text.
+describe.skipIf(!PY)('the parity section: the request markers (D-8622, D-8623)', () => {
+  it('each marker, fallback and turn-state event is counted once per call, under its own name', async () => {
+    const { home, file } = lane('cb-parity-markers-');
+    const [, ...rest] = await run(home, [
+      open(file),
+      call('parity_marker', ['backend', MODEL, 'bridge-reasoning-all-turns']),
+      call('parity_marker', ['backend', MODEL, 'bridge-reasoning-all-turns']),
+      call('parity_marker', ['backend', MODEL, 'bridge-verbosity']),
+      call('parity_marker', ['backend', MODEL, 'bridge-turn-state']),
+      call('parity_fallback', ['backend', MODEL, 'bridge-reasoning-all-turns']),
+      call('parity_turn_state', ['backend', MODEL, 'captured']),
+      call('parity_turn_state', ['backend', MODEL, 'echoed']),
+      call('parity_turn_state', ['backend', MODEL, 'echoed']),
+      { op: 'stats-snapshot' },
+    ]);
+    expect(rest.at(-1)!.doc.parity).toEqual({ [ROUTE_KEY]: parityRow({
+      markers: { 'bridge-reasoning-all-turns': 2, 'bridge-verbosity': 1, 'bridge-turn-state': 1 },
+      fallbacks: { ...zeros(MARKERS), 'bridge-reasoning-all-turns': 1 },
+      turnState: { captured: 1, echoed: 2 },
+    }) });
+    // a measurement, never drift
+    expect(rest.at(-1)!.doc.names).toEqual({});
+    expect(rest.at(-1)!.doc.unexplained).toEqual({});
+  });
+
+  it('a name outside the vocabularies counts nothing, and makes no row', async () => {
+    const { home, file } = lane('cb-parity-markers-bad-');
+    const [, ...rest] = await run(home, [
+      open(file),
+      call('parity_marker', ['backend', MODEL, 'bridge-instructions']),
+      call('parity_marker', ['backend', MODEL, 'overflow']),
+      call('parity_marker', ['backend', MODEL, ['bridge-verbosity']]),
+      call('parity_marker', ['backend', MODEL, null]),
+      call('parity_fallback', ['backend', MODEL, 'record-streams']),
+      call('parity_fallback', ['backend', MODEL, 7]),
+      call('parity_turn_state', ['backend', MODEL, 'replaced']),
+      call('parity_turn_state', ['backend', MODEL, 'ts-fixture-token']),
+      { op: 'stats-snapshot' },
+    ]);
+    expect(rest.at(-1)!.doc.parity).toEqual({});
+  });
+
+  it('a restart carries the counts and re-checks them; a row from before them loads zero-filled', async () => {
+    const { home, file } = lane('cb-parity-markers-load-');
+    const good = parityRow({
+      responses: 1, markers: { 'bridge-reasoning-all-turns': 4, 'bridge-verbosity': 0, 'bridge-turn-state': 2 },
+      fallbacks: { 'bridge-reasoning-all-turns': 1, 'bridge-verbosity': 0, 'bridge-turn-state': 0 },
+      turnState: { captured: 3, echoed: 7 },
+    });
+    const before = parityRow({ responses: 2 }) as Record<string, unknown>;
+    delete before.markers;
+    delete before.fallbacks;
+    delete before.turnState;
+    const planted = {
+      version: 1, lane: 'lane-a', since: '2026-01-01T00:00:00.000Z', startedAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:00:00.000Z', routes: {}, refusals: {}, outcomes: {}, names: {}, unexplained: {},
+      usageHeaders: null, lastUpstreamRequestId: null,
+      parity: {
+        [ROUTE_KEY]: good,
+        'backend/model-b': before,
+        'backend/model-c': {
+          markers: { 'bridge-reasoning-all-turns': -1, 'bridge-verbosity': '2', 'bridge-turn-state': 5, 'other-marker': 9 },
+          fallbacks: 'many', turnState: { captured: 1.5, echoed: 2, value: 3 },
+        },
+      },
+    };
+    writeFileSync(file, JSON.stringify(planted), { mode: 0o600 });
+    const [o] = await run(home, [open(file)]);
+    expect(o.doc.parity).toEqual({
+      [ROUTE_KEY]: good,
+      'backend/model-b': parityRow({ responses: 2 }),
+      'backend/model-c': parityRow({
+        markers: { ...zeros(MARKERS), 'bridge-turn-state': 5 }, turnState: { captured: 0, echoed: 2 },
+      }),
+    });
   });
 });

@@ -1,0 +1,71 @@
+{
+  "name": "mutation-project-create",
+  "documentSource": "code",
+  "document": "mutation ProjectCreate($input: ProjectCreateInput!) { projectCreate(input: $input) { success project { id } } }",
+  "variables": {
+    "input": {
+      "id": "00000000-0004-4000-8000-000000000020",
+      "name": "Capture project temp",
+      "description": "Capture.",
+      "teamIds": [
+        "00000000-0001-4000-8000-000000000001"
+      ]
+    }
+  },
+  "requestBody": "{\"query\":\"mutation ProjectCreate($input: ProjectCreateInput!) { projectCreate(input: $input) { success project { id } } }\",\"variables\":{\"input\":{\"id\":\"00000000-0004-4000-8000-000000000020\",\"name\":\"Capture project temp\",\"description\":\"Capture.\",\"teamIds\":[\"00000000-0001-4000-8000-000000000001\"]}}}",
+  "requestHeaders": [
+    "authorization: <the key, bare, no Bearer>",
+    "content-type: application/json"
+  ],
+  "sentAtMs": null,
+  "receivedAtMs": null,
+  "sentAt": null,
+  "status": 200,
+  "statusLine": null,
+  "headers": [
+    [
+      "content-type",
+      "application/json; charset=utf-8"
+    ],
+    [
+      "x-complexity",
+      "2"
+    ],
+    [
+      "x-ratelimit-complexity-limit",
+      "3000000"
+    ],
+    [
+      "x-ratelimit-complexity-remaining",
+      "2999840"
+    ],
+    [
+      "x-ratelimit-complexity-reset",
+      "1794589999696"
+    ],
+    [
+      "x-ratelimit-requests-limit",
+      "2500"
+    ],
+    [
+      "x-ratelimit-requests-remaining",
+      "2474"
+    ],
+    [
+      "x-ratelimit-requests-reset",
+      "1794589999696"
+    ]
+  ],
+  "body": {
+    "data": {
+      "projectCreate": {
+        "success": true,
+        "project": {
+          "id": "00000000-0004-4000-8000-000000000020"
+        }
+      }
+    }
+  },
+  "bodyRaw": "{\"data\":{\"projectCreate\":{\"success\":true,\"project\":{\"id\":\"00000000-0004-4000-8000-000000000020\"}}}}\n",
+  "note": "Recorded by the hierarchy capture (FX2, D-8407). The input carries a caller-chosen id."
+}

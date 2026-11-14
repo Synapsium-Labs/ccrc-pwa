@@ -35,11 +35,12 @@
 // import of `currentFor` stays inward and `rings/outward-edges.data.ts` gains no pair.
 import { createHash } from 'node:crypto';
 import {
-  APPROVAL_CWD_TRUSTED, APPROVAL_HOOK_VERSIONS, ASK_OPERATOR_PRINCIPAL, approvalDigestBytes, canonicalJson, isAskState,
+  ASK_OPERATOR_PRINCIPAL, approvalDigestBytes, canonicalJson, isAskState,
   type ApprovalMintReleaseReason, type ApprovalRulingRecord, type ApprovalState, type AskMintReleaseReason, type AskState,
   type Dialog, type HookAsk, type HookAskQuestion,
 } from '../../../shared/api.js';
 import { REFUSAL_STATUS, type RouteRefusal } from '../../../shared/refusal.js';
+import { buildTrustOf, buildUntrustedSentence, type BuildUntrustedReason, type ClaudeBuildRecord } from '../../../shared/claudeBuildTrust.js';
 import { answeredByBody, approvalRuledBody, askPushBody } from '../askbody.js';
 import { askActions, askKey } from '../askkey.js';
 import { approvalWindowMs, askNotifyAt } from '../askwindow.js';
@@ -354,7 +355,7 @@ export type ApprovalRaiseVerdict =
   | { readonly kind: 'internal'; readonly detail: string }
   | { readonly kind: 'not-a-child' }
   | { readonly kind: 'deny-not-engaged' }
-  | { readonly kind: 'version-unverified'; readonly detail: string }
+  | { readonly kind: 'version-unverified'; readonly detail: string; readonly trust: BuildUntrustedReason }
   | { readonly kind: 'digest-mismatch' }
   | { readonly kind: 'run-unreadable'; readonly detail: string }
   | { readonly kind: 'approval-released'; readonly id: number; readonly releaseReason: ApprovalMintReleaseReason }
@@ -548,9 +549,14 @@ export function createQuestions(deps: QuestionsDeps, rules?: QuestionRules): Que
     const rec = recs.find((r) => r.id === sessionId) ?? null;
     if (rec === null || rec.child.kind !== 'child') return { kind: 'not-a-child' };
     if (!(await d.denyEngaged(rec))) return { kind: 'deny-not-engaged' };
+    // D-8289: the build is trusted only when the record says its capture passed (`buildTrustOf`, the one decider); a record
+    // that cannot be read trusts nothing. The verdict carries the typed reason, and the detail says it in words.
     const version = await d.liveVersionOf(rec);
-    if (version === null || !APPROVAL_HOOK_VERSIONS.includes(version)) {
-      return { kind: 'version-unverified', detail: `this child's live Claude Code version (${version ?? 'unread'}) is not one the rig verified` };
+    let records: readonly ClaudeBuildRecord[] | null;
+    try { records = coord.claudeBuilds(); } catch { records = null; }
+    const trust = buildTrustOf(records, version);
+    if (trust.kind === 'untrusted') {
+      return { kind: 'version-unverified', trust: trust.reason, detail: `this child's live Claude Code build is not trusted: ${buildUntrustedSentence(trust.reason, version)}` };
     }
 
     // The digest, then the re-canonicalisation: the server's own sha256 over the string sent, and that string parsed and
@@ -587,7 +593,7 @@ export function createQuestions(deps: QuestionsDeps, rules?: QuestionRules): Que
     const tool = shaped ? parsedRequest!.tool as string : '';
     const input = shaped ? parsedRequest!.input as Record<string, unknown> : {};
     const cwd = shaped ? parsedRequest!.cwd as string | null : null;
-    const cwdTrusted = APPROVAL_CWD_TRUSTED.includes(version);
+    const cwdTrusted = trust.cwd;
     const roots = rootsForChild(rec, d.cfg.home) ?? { worktree: null, tmpRoot: null, scratch: null, home: d.cfg.home };
     const cls = shaped ? approvalClass(tool, input, { ...roots, cwd: cwdTrusted ? cwd : null }) : 'escalate';
     const shown = shaped ? (typeof input['command'] === 'string' ? input['command'] : (canonicalJson(input) ?? '')) : '';

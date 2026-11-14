@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { makeCcdHarness, ghContainedEnv, stubContainedTool } from './ccdWsHelpers.js';
-import { assertNoRealTool } from './containedTools.js';
+import { assertNoRealTool, takePoisonRecord } from './containedTools.js';
 import { readFileSync, writeFileSync, mkdirSync, existsSync, readdirSync, rmSync } from 'node:fs';
 import { execFileSync, spawnSync } from 'node:child_process';
 import path from 'node:path';
@@ -588,7 +588,8 @@ describe('ccd-pool-sync', () => {
     const bin = path.join(h.home, 'no-stub-bin');
     mkdirSync(bin, { recursive: true });
     expect(run(bin).rc).not.toBe(0);
-    expect(existsSync(path.join(h.home, 'curl-poison')), 'the poison answered the curl').toBe(true);
-    rmSync(path.join(h.home, 'curl-poison')); // meant to run here: the afterEach guard reads this record
+    expect(takePoisonRecord(h.home, 'curl').length, 'the poison answered the curl').toBeGreaterThan(0);
+    // Taken (D-8394) for the suite's poison teardown, and removed for this file's own guard below, which reads it.
+    rmSync(path.join(h.home, 'curl-poison'));
   });
 });

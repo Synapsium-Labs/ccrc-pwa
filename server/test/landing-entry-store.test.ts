@@ -182,6 +182,17 @@ describe('the entry is written by advanceLanding, in the run\'s own transaction 
     expect(lineEntries()[0]).toMatchObject({ pinnedSha: HEAD2, state });
   });
 
+  it('a verified pin re-pins a closed row: pinned, the new head, a new pinnedAt, and no detail', () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(1_784_600_000_000);
+    const id = atReview();
+    insertRaw(7, 'closed', null, HEAD2, 1);
+    coord.db.prepare("UPDATE landing_entries SET detail = '{\"v\":1,\"by\":\"reader\",\"at\":1,\"word\":\"closed\"}' WHERE pr = 7").run();
+    expect(coord.advanceLanding({ runId: id, to: 'merging', causedBy: 'coordinator', landing: pin() }))
+      .toMatchObject({ ok: true, landing: { kind: 'pinned', created: false, entry: { state: 'pinned', pinnedSha: HEAD, pinnedAt: 1_784_600_000_000, runId: id } } });
+    expect((coord.db.prepare('SELECT detail FROM landing_entries WHERE pr = 7').get() as { detail: string | null }).detail).toBeNull();
+  });
+
   it('a pin onto a row this build cannot read keeps it untouched, and the run still advances (the rollback case)', () => {
     const id = atReview();
     insertRaw(7, 'later', null);

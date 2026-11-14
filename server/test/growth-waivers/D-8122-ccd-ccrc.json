@@ -3,5 +3,6 @@
   "maxDelta": 117,
   "d": "D-8122",
   "reason": "the memory gate's four box settings (their CCRC_SETTINGS names, class-table rows, value words, `_mg_ok`/`_mg_says` checks and `ccrc settings` reads) and the update sweep restarting supervisors in batches that wait on memory pressure (`_upd_sweep_knobs`, `_upd_sweep_over`, `_upd_sweep_pace`, `_upd_sweep_of_batch`, the batched verify loop in `_upd_sweep`, the one PSI parser `_psi_avg10`); measured +117 net code lines against the merge-base; kept inline because the batches are `_upd_sweep`'s own restart-and-verify loop and its rollback and DEGRADED paths, and the checks ride the generated settings library, which copies only from ccd/ccrc",
-  "added": "2026-11-08"
+  "added": "2026-11-08",
+  "createdAt": "2026-11-08"
 }

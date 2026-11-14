@@ -21,6 +21,8 @@ export const FASTIFY_L4_ALLOWLIST: EntrySet = {
   'server/src/coord/routes.ts': { reason: "the coordination context's HTTP routes", since: '2026-10-20' },
   'server/src/coord/ledgersRoutes.ts': { reason: "the programme ledgers' coordinator HTTP routes (PL3)", since: '2026-11-01' },
   'server/src/coord/reviewRoundsRoute.ts': { reason: "the coordinator's review-cap lift door (D-8125)", since: '2026-11-09' },
+  'server/src/coord/planRoutes.ts': { reason: "the plan verbs' HTTP routes (Linear hierarchy, D-8181): put, show, met, ticket-add, ticket-move, epic-drop and close", since: '2026-11-10' },
+  'server/src/coord/hierarchyRoutes.ts': { reason: "the per-project hierarchy settings' HTTP routes (Linear hierarchy, D-8181): a project's settings, the owner for all, and the read", since: '2026-11-10' },
   'server/src/coord/endRequest.ts': { reason: "the end-request route's handler (D-8076), a session's ask to the operator", since: '2026-11-08' },
   'server/src/coord/coordCallsRoute.ts': { reason: "the coordinator call record's HTTP route (D-8126)", since: '2026-11-09' },
   'server/src/docs/routes.ts': { reason: "the docs context's HTTP routes", since: '2026-10-20' },
@@ -29,6 +31,9 @@ export const FASTIFY_L4_ALLOWLIST: EntrySet = {
   'server/src/linear/routes.ts': { reason: "the Linear connection's HTTP routes (the ticket-title preview read)", since: '2026-10-20' },
   'server/src/linear/proxyRoutes.ts': { reason: "the Linear proxy's box-token HTTP routes", since: '2026-11-02' },
   'server/src/linking/routes.ts': { reason: "the linking standard's HTTP routes: the operator's team key and override per project (D-8147)", since: '2026-11-09' },
+  'server/src/continuity/routes.ts': { reason: "the continuity routes: the hook's start report, the card door, the note door and the timer doors (Overlord W1a, spec §3.3.11, §3.3.3, §3.3.2, §3.3.12)", since: '2026-11-13' },
+  'server/src/testboxAdmin.ts': { reason: "the test box connect routes (D-8166): the status read and the act behind the account gate, with the TestboxAdminOps port they run", since: '2026-11-10' },
   'server/src/update/routes.ts': { reason: "the update control plane's HTTP routes", since: '2026-10-20' },
   'server/src/readerLab/routes.ts': { reason: "the reader lab door's counter hook and HTTP routes (the reader lab plan, Task 3)", since: '2026-11-04' },
+  'server/src/face/routes.ts': { reason: "the character choice's two HTTP routes (the face plan, Task 6)", since: '2026-11-13' },
 };

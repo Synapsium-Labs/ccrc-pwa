@@ -606,7 +606,8 @@ describe('the ruled W2 pins the review of D-8078 found missing', () => {
     const id = r.open('programme-a', 1);
     await passesFor(r, 3 * H);
     expect(r.stateOf(id)).toBe('working');
-    expect(items(r)).toEqual([expect.objectContaining({ verb: 'close-refused', runId: id, doors: ['abandon'] })]);
+    // D-8558: the programme's last live run, under a claimant the registry no longer holds, may end the programme too.
+    expect(items(r)).toEqual([expect.objectContaining({ verb: 'close-refused', runId: id, doors: ['abandon', 'end-programme'] })]);
   });
 
   it('an absent claimant is not listed while the group is in shadow', async () => {

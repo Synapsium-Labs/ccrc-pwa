@@ -66,6 +66,15 @@ describe('runCcrcOp (D-8180)', () => {
     expect(seen[0]).toMatchObject({ actor: { kind: 'ccrc', pass: 'plan-sync' }, resource: { op: 'project-create', object: { kind: 'project', id: null } } });
   });
 
+  it('the policy ask names the issue for an issue update, and none for a create or a project write', async () => {
+    const seen: LinearWriteAsk[] = [];
+    const r = await rig(() => created, { policy: async (a) => { seen.push(a); return { allow: false, why: 'denied', decisionId: 'd-1' }; } });
+    await runCcrcOp(r.deps, { ...WRITE, op: 'issueUpdate', teamKey: 'KEY', target: 'KEY-12', fields: ['title'] });
+    await runCcrcOp(r.deps, { ...WRITE, op: 'issueCreate', teamKey: 'KEY', target: null, fields: ['title'] });
+    await runCcrcOp(r.deps, WRITE);
+    expect(seen.map((a) => a.resource.issue)).toEqual(['KEY-12', null, null]);
+  });
+
   it('a refused journal row sends nothing', async () => {
     const r = await rig(() => created);
     // A target outside the journal's grammar makes its pending row refuse.

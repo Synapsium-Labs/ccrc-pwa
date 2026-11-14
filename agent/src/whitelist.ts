@@ -1,6 +1,9 @@
-import { realpath } from 'node:fs/promises';
+import { lstat, realpath } from 'node:fs/promises';
 import path from 'node:path';
-import { CCRC_DIR_NAME, LANE_STATE_DIR_NAME, NODE_FILE_BASENAMES } from '../../shared/agent-protocol.js';
+import { CCRC_DIR_NAME, HISTORY_STEER_ON_DIR, LANE_STATE_DIR_NAME, NODE_FILE_BASENAMES } from '../../shared/agent-protocol.js';
+import { isRegistryId } from '../../shared/api.js';
+import { CCRC_SWITCH_FILES } from '../../shared/switches.js';
+import { MODELS_DIR_NAME, isLaneModelsReadName } from '../../shared/models.mjs';
 
 /**
  * Everything a connection needs to evaluate the path/exec whitelists — the
@@ -113,9 +116,32 @@ function isCcrcNodeFile(canonicalCcrc: string, targetPath: string, canonicalTarg
 }
 
 /**
+ * D-8406: a lane's class registry and catalogue in `~/.ccrc/models` (`registryFileName`, `catalogueFileName`), the two
+ * files the session's model picker names a class's model from (`server/src/laneModels.ts`). READ mode only, and exact
+ * names only: `isLaneModelsReadName` (`shared/models.mjs`) admits those two shapes for a lane id and nothing else, so
+ * the directory stays unlistable and its other files (effort, windows, advance, the classes TSV) unread. Neither file
+ * holds a secret: model ids, labels, efforts and prices, the class map and the lane's endpoint, which the endpoint gate
+ * keeps free of a user name or password (`BASE_URL_OK`).
+ *
+ * `isCcrcNodeFile`'s two conditions, one directory down: the canonical target must be `<canonical ~/.ccrc>/models/<the
+ * literal basename>`, so a live symlink at either name (onto `agent.env`, say) or a `models` directory that is a
+ * symlink is refused, never answered with its target's bytes. A dangling symlink canonicalises onto its own literal
+ * path and is admitted, and the read then fails on it, as it does for a node file.
+ *
+ * This is the approved models design's first read path (auto-advance spec §2.7, before D14 moved its panel onto the
+ * planned `models` op): the op is unbuilt, and the picker needs only these two reads. When the op lands, its `show`
+ * carries the same facts and this grant is retired with the reader that uses it.
+ */
+function isLaneModelsFile(canonicalCcrc: string, targetPath: string, canonicalTarget: string): boolean {
+  const base = path.basename(path.resolve(targetPath));
+  return isLaneModelsReadName(base) && canonicalTarget === path.join(canonicalCcrc, MODELS_DIR_NAME, base);
+}
+
+/**
  * Whitelist check for ALL file ops. Reads: `.cc-sessions/`, `.cc-limits/`,
  * `.cc-clips/`, `.claude*` (glob) under $HOME, plus the fleet projects root,
- * plus exactly the `~/.ccrc` node files `NODE_FILES` names by name (`isCcrcNodeFile`).
+ * plus exactly the `~/.ccrc` node files `NODE_FILES` names by name (`isCcrcNodeFile`), and a lane's two model files
+ * (`isLaneModelsFile`, D-8406).
  * Writes: `.cc-clips/` under $HOME only. Returns the canonical path to operate on when
  * allowed, `null` otherwise — canonicalizing here means every downstream fs
  * call in fileops.ts/tail.ts already has symlink-escapes resolved.
@@ -146,9 +172,73 @@ export async function checkPath(
     isUnder(canonicalTarget, path.join(canonicalHome, '.cc-clips')) ||
     isUnder(canonicalTarget, canonicalRoot) ||
     underClaudeGlob(canonicalHome, canonicalTarget) ||
-    isCcrcNodeFile(canonicalCcrc, targetPath, canonicalTarget);
+    isCcrcNodeFile(canonicalCcrc, targetPath, canonicalTarget) ||
+    isLaneModelsFile(canonicalCcrc, targetPath, canonicalTarget);
 
   return readAllowed ? canonicalTarget : null;
+}
+
+/**
+ * D-8382: the `stat` op's one grant beyond `checkPath`: the operator's `~/.ccrc` switch files (`CCRC_SWITCH_FILES`,
+ * derived from the switchboard's `~/.ccrc` rows), so the server can say which of them stands on this box (Settings ›
+ * Overrides in force). Empty touch files the session hook tests with `[ -e ]`; `stat` discloses only that one exists, its
+ * size and its time. It is NOT part of `checkPath`, so `read`, `readFrom`, `readB64`, `readdir` and `lstat` admit none
+ * of them, and `~/.ccrc` stays unlistable.
+ *
+ * The grant is the literal path `<canonical ~/.ccrc>/<one of the names>`, and its canonical form must be that same
+ * path: a live symlink at a switch name (onto `agent.env`, say) is refused, never answered with its target's size and
+ * time; a dangling one canonicalises onto itself and answers absent, as the hook's `[ -e ]` does.
+ */
+export async function checkCcrcSwitchStat(targetPath: string, cfg: WhitelistConfig): Promise<string | null> {
+  if (typeof targetPath !== 'string' || targetPath.length === 0) return null;
+  const literal = path.resolve(targetPath);
+  const base = path.basename(literal);
+  if (!CCRC_SWITCH_FILES.includes(base)) return null;
+  const [canonicalCcrc, canonicalParent, canonicalTarget] = await Promise.all([
+    canonicalize(path.join(cfg.home, CCRC_DIR_NAME)),
+    canonicalize(path.dirname(literal)),
+    canonicalize(literal),
+  ]);
+  const admitted = path.join(canonicalCcrc, base);
+  return canonicalParent === canonicalCcrc && canonicalTarget === admitted ? admitted : null;
+}
+
+/**
+ * The `stat` op's second grant beyond `checkPath` (Overlord W1a launch profiles PR B, review 2024 F1): one history W3 steer
+ * marker, `<canonical ~/.ccrc>/history/steer-on/<registry id>`, so the server's launch-profile lane can tell a steered session
+ * from one it may write on a remote fleet. LEGITIMATELY DIFFERENT from `checkPath`'s roots, and kept out of them: another
+ * host's file read by the server across the link, and only `stat` of one marker path (existence, size, time); `read`,
+ * `readdir` and `lstat` admit none of it, and the directory stays unlistable.
+ *
+ * The name must be a registry id (`isRegistryId`). `~/.ccrc` itself may be a link, followed as the sibling grants follow it;
+ * under it, `history` and `steer-on` must each be a real directory or absent, never a symlink (`lstat`, review 2031 F1), so
+ * the grant cannot be pointed at another directory; the requested path's directory must be that one, and the marker's
+ * canonical form must be the marker's own path: a live symlink at the marker is refused (the server then reads the marker
+ * unreadable and skips the session, the safe direction), and a dangling one answers absent. A HARD link at a marker's name
+ * cannot be told from a file: the same user who could make one can read its target anyway, and `stat` answers only its
+ * existence, size and time.
+ */
+export async function checkSteerOnStat(targetPath: string, cfg: WhitelistConfig): Promise<string | null> {
+  if (typeof targetPath !== 'string' || targetPath.length === 0) return null;
+  const literal = path.resolve(targetPath);
+  const base = path.basename(literal);
+  if (!isRegistryId(base)) return null;
+  const [canonicalCcrc, canonicalParent, canonicalTarget] = await Promise.all([
+    canonicalize(path.join(cfg.home, CCRC_DIR_NAME)),
+    canonicalize(path.dirname(literal)),
+    canonicalize(literal),
+  ]);
+  let canonicalDir = canonicalCcrc;
+  for (const level of HISTORY_STEER_ON_DIR.split('/')) {
+    canonicalDir = path.join(canonicalDir, level);
+    try {
+      if (!(await lstat(canonicalDir)).isDirectory()) return null;   // a symlink, or not a directory: refused
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') return null;   // absent is fine: the stat answers absent
+    }
+  }
+  const admitted = path.join(canonicalDir, base);
+  return canonicalParent === canonicalDir && canonicalTarget === admitted ? admitted : null;
 }
 
 /** What a read op opens: a path and whether its last component may be a symlink, or `forbidden` (outside every read

@@ -137,6 +137,19 @@ describe('fillSentence, failureSentence, kib and shortCommit', () => {
       .toBe("There is no project by that name under the fleet box's projects folder (demo-root).");
   });
 
+  it('helper-unavailable is worded by its detail (D-7077): node and the redactor are named, never python3', () => {
+    expect(failureSentence(bodyOf('helper-unavailable', { detail: 'node-missing' })))
+      .toBe('The fleet box has no node its ccd can run, and Docs redacts through node; run ccrc doctor there.');
+    expect(failureSentence(bodyOf('helper-unavailable', { detail: 'redactor-missing' })))
+      .toBe("The fleet box's Docs redactor is not where its ccd looks for it; run ccrc doctor there.");
+    expect(failureSentence(bodyOf('helper-unavailable', { detail: 'redactor-mismatch' })))
+      .toBe("The fleet box's installed Docs redactor is not the one its ccd pins; run ccrc doctor there.");
+    // A python detail, an unknown one and none at all keep the spec's own sentence.
+    for (const ctx of [{ detail: 'python-missing' }, { detail: 'python-too-old' }, { detail: 'no-such-detail' }, {}]) {
+      expect(failureSentence(bodyOf('helper-unavailable', ctx)), JSON.stringify(ctx)).toBe(DOCS_FAILURE_SENTENCE['helper-unavailable']);
+    }
+  });
+
   it('kib rounds up so a non-empty file never reads as 0; shortCommit is the first 8 hex characters', () => {
     expect([kib(0), kib(1), kib(1024), kib(1025), kib(2097152)]).toEqual(['0 KiB', '1 KiB', '1 KiB', '2 KiB', '2048 KiB']);
     expect(shortCommit('0123456789abcdef'.repeat(4).slice(0, 40))).toBe('01234567');

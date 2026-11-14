@@ -239,6 +239,66 @@ describe('SettingsScreen asks the shared reads (wave 19, R24(d))', () => {
   });
 });
 
+// Centralised-update residue R30 (D-8340): a background poll that brings a halt disables a focused Install or Update,
+// and a browser drops the focus of a disabled control to <body>. A layout effect keyed on the halt moves it to the one
+// halt line first, the control's own `aria-describedby` target, which says why it waits and where the Ack is. jsdom
+// runs no focus fix-up for a disabled control, so without the move document.activeElement stays the disabled button.
+describe('a poll that brings a halt keeps the focus off <body> (R30, D-8340)', () => {
+  const rerenderable = (nodes: NodeWire[], releases: ReleaseWire[]) => {
+    const onMove = vi.fn();
+    const onAcked = vi.fn();
+    const r = render(<Page nodes={nodes} releases={releases} onMove={onMove} onAcked={onAcked} />);
+    return { poll: (next: NodeWire[]) => r.rerender(<Page nodes={next} releases={releases} onMove={onMove} onAcked={onAcked} />) };
+  };
+  const haltLine = (): HTMLElement => screen.getByText(ONE_HALT);
+
+  it('a focused release Install that the poll disables hands focus to the halt line', () => {
+    const { poll } = rerenderable([node(), server()], [release('v0.0.10')]);
+    const install = within(screen.getByRole('region', { name: 'Releases' })).getByRole('button', { name: 'Install' });
+    install.focus();
+    poll([node(failed()), server()]);
+    expect(install).toBeDisabled();
+    expect(document.activeElement, 'not <body>').not.toBe(document.body);
+    expect(document.activeElement, 'not the disabled Install').not.toBe(install);
+    expect(document.activeElement, 'the halt line it names').toBe(haltLine());
+    expect(haltLine()).toHaveAttribute('tabindex', '-1');
+  });
+
+  it('a focused node Update that the poll disables hands focus to the halt line', () => {
+    const { poll } = rerenderable([node(), server()], [release('v0.0.10')]);
+    const update = within(rowOf(screen.getByRole('list', { name: 'Nodes' }), SERVER_ID)).getByRole('button', { name: 'Update' });
+    update.focus();
+    poll([node(failed()), server()]);
+    expect(update).toBeDisabled();
+    expect(document.activeElement, 'not <body>').not.toBe(document.body);
+    expect(document.activeElement, 'the halt line it names').toBe(haltLine());
+  });
+
+  it('CONTROL: focus elsewhere stays where it was when the halt arrives', () => {
+    const { poll } = rerenderable([node(), server()], [release('v0.0.10')]);
+    const other = document.body.appendChild(document.createElement('button'));
+    try {
+      other.focus();
+      poll([node(failed()), server()]);
+      expect(within(screen.getByRole('region', { name: 'Releases' })).getByRole('button', { name: 'Install' })).toBeDisabled();
+      expect(document.activeElement).toBe(other);
+    } finally {
+      other.remove();
+    }
+  });
+
+  it('CONTROL: a focused Roll back, which a halt does not gate, keeps its focus', () => {
+    const rolled = (over: Partial<NodeWire> = {}): NodeWire => node({ previousVersion: 'v0.0.8', ...over });
+    const { poll } = rerenderable([rolled(), server()], [release('v0.0.10'), release('v0.0.8')]);
+    const back = within(rowOf(screen.getByRole('list', { name: 'Nodes' }), FLEET_ID)).getByRole('button', { name: 'Roll back' });
+    expect(back).not.toBeDisabled();
+    back.focus();
+    poll([rolled(failed()), server()]);
+    expect(back).not.toBeDisabled();
+    expect(document.activeElement).toBe(back);
+  });
+});
+
 describe('Settings\' Ack keeps focus in its row when it disables (wave 19, R26(a))', () => {
   it('a focused Ack that disables hands focus to its node row', async () => {
     vi.spyOn(api, 'ackUpdateNode').mockResolvedValue({ ok: true, node: node() });

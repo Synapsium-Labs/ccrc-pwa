@@ -40,6 +40,7 @@ import { LINEAR_READ_ONLY_NOTE, ResultLine, SETTINGS_CARDS, useResultLine } from
 import { ApiError, api, apiErrorText, linearWorkspaceExistsOf, type LinearWorkspacesRead } from '../lib/api';
 import { writeOutcomeUnknown } from '../lib/apiError';
 import { onPageHidden } from '../lib/pageClock';
+import { SECRET_INPUT } from '../lib/secretInput';
 
 /** The hook is told the session's step-up is fresh until an act proves otherwise: see the file's third rule. */
 const ASSUME_FRESH = Infinity;
@@ -421,9 +422,7 @@ export function LinearSection({ poll, stepUpDeps }: { poll: LinearWorkspacesPoll
             id={fieldId}
             ref={field}
             type="password"
-            autoComplete="off"
-            autoCapitalize="off"
-            spellCheck={false}
+            {...SECRET_INPUT}
             aria-describedby={noteId}
             value={key}
             onChange={(e) => setKey(e.target.value)}

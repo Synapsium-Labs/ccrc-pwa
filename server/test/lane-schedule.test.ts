@@ -2,6 +2,8 @@
 // cadences, and `LaneRunner` (behind `FleetWatcher.runLane`) is the one place a lane is throttled, kept to a single
 // flight and caught. The rows here pin the table's own rules and the runner's four flight modes on an injected clock;
 // `lane-beats-characterization.test.ts` pins the same four beats through `tick`.
+import { RENEWAL_LANE_PERIOD_MS } from '../../shared/continuity.js';
+import { TIMER_LANE_PERIOD_MS } from '../../shared/continuity-timers.js';
 import { describe, it, expect, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
@@ -9,7 +11,8 @@ import { LANE_SCHEDULE, laneRow, type LaneRow } from '../src/laneSchedule.js';
 import { LaneRunner } from '../src/laneRunner.js';
 import { callsIn, symbolOf } from './scan/symbols.js';
 import { CATALOGUE_POLL_INTERVAL_MS, SERVER_CAPS_WRITE_MS, CHILD_RECLAIM_SWEEP_MS } from '../src/laneSchedule.js';
-import { HIBERNATE_SWEEP_MS, STOP_DONE_SWEEP_MS } from '../src/laneSchedule.js';
+import { HIBERNATE_SWEEP_MS, STOP_DONE_SWEEP_MS, DRIFT_SWEEP_MS, USAGE_SWEEP_MS } from '../src/laneSchedule.js';
+import { LAUNCH_PROFILE_LANE_ROW } from '../src/continuity/profileLane.js';
 import { parsedFile, sourceOfSymbol } from './scan/symbols.js';
 
 const SRC = path.join(import.meta.dirname, '..', 'src');
@@ -64,7 +67,10 @@ describe('LANE_SCHEDULE — the table', () => {
     for (const r of LANE_SCHEDULE) {
       if (r.derivedFrom === null) continue;
       const named = LANE_SCHEDULE.find((o) => o.name === r.derivedFrom!.name);
-      const declared = new RegExp(`export const ${r.derivedFrom.name}\\b`).test(text('laneSchedule.ts'));
+      // Declared here, or imported here by name from the one module that declares it (the generations row's
+      // RENEWAL_LANE_PERIOD_MS, whose home is shared/continuity.ts beside the observed step cap it bounds).
+      const declared = new RegExp(`export const ${r.derivedFrom.name}\\b`).test(text('laneSchedule.ts'))
+        || new RegExp(`^import \\{[^}]*\\b${r.derivedFrom.name}\\b[^}]*\\} from `, 'm').test(text('laneSchedule.ts'));
       expect(named !== undefined || declared, `${r.name} is derived from ${r.derivedFrom.name}, which exists nowhere`).toBe(true);
       expect(r.derivedFrom.reason.length, `${r.name}'s derivation carries no reason`).toBeGreaterThan(0);
     }
@@ -514,9 +520,9 @@ describe('the four reclaim lanes (D-5862, PR 3)', () => {
 });
 
 describe('every throttle is on the monotonic clock (OA-C4, ruled (a) on #803)', () => {
-  it('no row of LANE_SCHEDULE is on the wall clock: 39 of 39 are monotonic (the disk alarm, the tmp census and the stale-archive arm are rows, D-7895; the stuck verdict pass, D-8071; the run-close lane, D-8077)', () => {
+  it('no row of LANE_SCHEDULE is on the wall clock: 44 of 44 are monotonic (the disk alarm, the tmp census and the stale-archive arm are rows, D-7895; the stuck verdict pass, D-8071; the run-close lane, D-8077; the case lane, Overlord §10.5; the generations lane, Overlord §3.3.11; the launch-profile lane, Overlord §3.6; the timers lane, Overlord §3.3.12)', () => {
     expect(LANE_SCHEDULE.filter((r) => r.clock === 'wall').map((r) => r.name), 'a throttle on Date.now()').toEqual([]);
-    expect(LANE_SCHEDULE.filter((r) => r.clock === 'mono')).toHaveLength(39);
+    expect(LANE_SCHEDULE.filter((r) => r.clock === 'mono')).toHaveLength(44);
   });
 
   it('the runner throttles a monotonic row on the monotonic reading: a wall step back runs it at its cadence, a step forward never early', () => {
@@ -574,5 +580,43 @@ describe('the two sleep lanes (ARCH-43)', () => {
     expect(await other).toBe('ran');
     held.resolve();
     await first;
+  });
+});
+
+describe('the generations lane row (Overlord spec §3.3.11, Table 11.1c "The renewal lane")', () => {
+  it('rides the renewal lane\'s period by reference, the period the observed step cap is computed from, and skips an overlap', () => {
+    expect(laneRow('generations')).toMatchObject({
+      cadenceMs: RENEWAL_LANE_PERIOD_MS, clock: 'mono', flight: 'skip',
+      warnKey: 'ccrc-server: the generations lane failed', derivedFrom: { name: 'RENEWAL_LANE_PERIOD_MS' },
+    });
+  });
+});
+
+describe('the launch-profile lane row (Overlord spec §3.6 H1, W1a launch profiles PR B)', () => {
+  it('rides the usage lane\'s cadence by reference, skips an overlap and names its warning; the lane names its own row', () => {
+    expect(LAUNCH_PROFILE_LANE_ROW).toBe('launchProfile');
+    expect(laneRow(LAUNCH_PROFILE_LANE_ROW)).toMatchObject({
+      cadenceMs: USAGE_SWEEP_MS, clock: 'mono', flight: 'skip',
+      warnKey: 'ccrc-server: the launch-profile lane failed', derivedFrom: { name: 'USAGE_SWEEP_MS' },
+    });
+  });
+});
+
+describe('the timers lane row (Overlord spec §3.3.12, Table 11.1c)', () => {
+  it('runs once a minute on its own period, one pass at a time, and names its warning', () => {
+    expect(laneRow('timers')).toEqual({
+      name: 'timers', cadenceMs: TIMER_LANE_PERIOD_MS, clock: 'mono', flight: 'skip',
+      warnKey: 'ccrc-server: the timers lane failed', derivedFrom: null,
+    });
+    expect(TIMER_LANE_PERIOD_MS).toBe(60_000);
+  });
+});
+
+describe('the case lane row (Overlord spec §10.5, Table 11.1c)', () => {
+  it('rides the drift reconciler\'s cadence by reference, skips an overlap and names its warning', () => {
+    expect(laneRow('cases')).toMatchObject({
+      cadenceMs: DRIFT_SWEEP_MS, clock: 'mono', flight: 'skip',
+      warnKey: 'ccrc-server: the case lane failed', derivedFrom: { name: 'DRIFT_SWEEP_MS' },
+    });
   });
 });

@@ -44,6 +44,7 @@ import { mkTmp } from './tmpHelpers.js';
 import { scaled } from './timeScale.js';
 import type { ExecKind } from '../../shared/roster.js';
 import { ghContainedEnv, ghPoisonAt, seedAccountsSh } from './ccdWsHelpers.js';
+import { DOCTOR_GH_PROBE, takeExpectedPoison } from './containedTools.js';
 import { plantAuthHelper, plantAuthModule, fixtureSecretLine, compiledSecretJs } from './authFixtures.js';
 import { IS_DARWIN } from './platformFixtures.js';
 import { plantShippedTimers } from './shippedTimers.js';
@@ -163,6 +164,22 @@ export function installCcrc(home: string): void {
   // never the installed copy, and both deploy lanes place `deploy/` whole. COPIES, so a row may replace one
   // (`writeShippedTimer`).
   plantShippedTimers(join(home, 'ccrc'));
+  // D-8388: `_check_sigstore-root` reads `deploy/sigstore-trusted-root.jsonl` beside the tree's verifier. A real tree
+  // ships both (`deploy/` is placed whole); the fixture's root is dated from the moment it is planted, never the vendored
+  // one, whose age is a fact about the day a suite runs. `ccrc-doctor-sigstore-root.test.ts` drives every other answer.
+  plantSigstoreRoot(join(home, 'ccrc'));
+}
+
+/** `<tree>/deploy/verify-provenance.mjs` (a link to the shipped verifier) and a trusted root whose one key became valid
+ *  a day before `now`, in the shape `gh attestation trusted-root` prints (D-8388). */
+export function plantSigstoreRoot(tree: string, now = Date.now()): void {
+  mkdirSync(join(tree, 'deploy'), { recursive: true });
+  symlinkSync(join(REPO, 'deploy', 'verify-provenance.mjs'), join(tree, 'deploy', 'verify-provenance.mjs'));
+  const start = new Date(now - 86_400_000).toISOString().replace(/\.\d+Z$/, 'Z');
+  writeFileSync(join(tree, 'deploy', 'sigstore-trusted-root.jsonl'), `${JSON.stringify({
+    mediaType: 'application/vnd.dev.sigstore.trustedroot+json;version=0.1',
+    certificateAuthorities: [{ uri: 'https://ca.example', validFor: { start } }],
+  })}\n`);
 }
 
 /** `~/.ccrc/auth.scrypt`, as `ccrc passwd` really writes it: 0600, one line,
@@ -497,11 +514,11 @@ export function hostSection(lines: string[], host: string): string[] {
  *  (`hostSection`, above) — the same content for every fixture in this file
  *  that names `github.com` first and nothing else, so no existing fixture had
  *  to change. Any other argv is a loud failure (exit 90), and EVERY argv —
- *  matched or not — is appended to `$HOME/gh-poison`, the same log
- *  `ghContainedEnv`'s poison writes to and `ghPoisonAt` reads: once this stub
- *  overwrites the poison there is no other reader left for that file, and
- *  reusing it (rather than inventing a second log) is what lets a test assert
- *  on the argv the check really sent without a new helper. */
+ *  matched or not — is appended to `$HOME/gh-calls`, and an UNMATCHED one to
+ *  `$HOME/gh-poison` too, the record `ghContainedEnv`'s poison writes and
+ *  `ghPoisonAt` takes. Until D-8394 every argv went to `gh-poison`, so every
+ *  healthy box left a poison record behind; the poison teardown (residue
+ *  R35(e)) reads that file as a contained tool reached. */
 export function ghStub(home: string, lines: string[], code: number): void {
   const bin = join(home, '.local', 'bin');
   mkdirSync(bin, { recursive: true });
@@ -509,7 +526,7 @@ export function ghStub(home: string, lines: string[], code: number): void {
   const emit = (ls: string[]): string => ls.length ? `  printf '%s\\n' ${ls.map(shq).join(' ')} >&2\n` : '';
   writeFileSync(join(bin, 'gh'),
     '#!/bin/sh\n'
-    + 'printf \'%s\\n\' "$*" >> "$HOME/gh-poison"\n'
+    + 'printf \'%s\\n\' "$*" >> "$HOME/gh-calls"\n'
     + 'if [ "$#" = 4 ] && [ "$1" = "auth" ] && [ "$2" = "status" ] && [ "$3" = "--hostname" ] && [ "$4" = "github.com" ]; then\n'
     + emit(scoped)
     + `  exit ${code}\n`
@@ -518,6 +535,7 @@ export function ghStub(home: string, lines: string[], code: number): void {
     + emit(lines)
     + `  exit ${code}\n`
     + 'fi\n'
+    + 'printf \'%s\\n\' "$*" >> "$HOME/gh-poison"\n'
     + 'echo "fixture gh: unexpected argv: $*" >&2\nexit 90\n', { mode: 0o755 });
 }
 
@@ -1140,12 +1158,14 @@ export function runDoctorBounded(home: string, ms = 10000, extraEnv: NodeJS.Proc
       `runDoctorBounded did not return within ${ms}ms — either a catalogue guard regressed `
       + 'or this box is loaded; re-run in isolation before concluding');
   }
+  takeExpectedPoison(home, 'gh', DOCTOR_GH_PROBE);
   return { code: r.status ?? -1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
 }
 
 export function runDoctor(home: string, args: string[] = ['doctor'], extraEnv: NodeJS.ProcessEnv = {}): Result {
   const r = spawnSync(BASH, [ccrcIn(home), ...args],
     { env: { ...doctorEnv(home), ...extraEnv }, encoding: 'utf8' });
+  takeExpectedPoison(home, 'gh', DOCTOR_GH_PROBE);
   return { code: r.status ?? -1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
 }
 

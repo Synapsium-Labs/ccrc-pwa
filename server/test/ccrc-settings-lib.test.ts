@@ -5,7 +5,8 @@
 // block, the BOX_ENV_FILE and CCRC_SETTINGS lines, the eight functions of the reader's closure and the checks two sweeps
 // share with `ccrc settings` (L8) whole out of ccd/ccrc, and these rows hold the committed file equal to what it writes
 // (L1), the slice closed over what it calls (L2), the file inert when sourced (L3), the platform named as ccd/ccrc names it (L7), and the two readers' answers
-// equal over the fixture files wave 24's reader is argued against (L4).
+// equal over the fixture files wave 24's reader is argued against (L4) and over a reader path full of shell punctuation
+// (L6); the generator's --check names the first line that differs (L5).
 import { describe, it, expect, afterAll } from 'vitest';
 import { spawnSync } from 'node:child_process';
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';

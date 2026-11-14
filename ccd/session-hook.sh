@@ -3,7 +3,7 @@
 #
 # Runs on the HOT PATH of every tool call in every fleet session, so the
 # contract is absolute: exit 0 on every path, write atomically or not at
-# all, no network — and on the HOT PATH, no locks and no waiting. THREE declared exceptions, all OFF the hot path:
+# all, no network — and on the HOT PATH, no locks and no waiting. FOUR declared exceptions, all OFF the hot path:
 # the first two in the compaction arms alone, the helper's one hookstate-first, COMPACT_HELPER_TIMEOUT-bounded,
 # locally resolved `timeout`/`gtimeout` deadline; and, since D-2605, the row's
 # permanent stable lock, taken with a bounded `flock -w` of COMPACT_LOCK_WAIT
@@ -11,12 +11,41 @@
 # is waiting on) and never held across a fork the arm does not reap. A miss
 # publishes nothing; there is no unlocked fallback. The THIRD (D4, #757): the roster card, one `_hook_timeout 4` server
 # read (`ccrc-api runs list`) on compact, resume and clear of a non-child session, and on its wake arm (R-5a, D-8201: a server wake prompt after an idle compaction), fail-open
-# (no roster line on any failure), made even when unarmed (shadow). Every OTHER event — every
+# (no roster line on any failure), made even when unarmed (shadow). The FOURTH (Overlord W1a): the start report, a send on a non-child SessionStart and a resend pass on it and on UserPromptSubmit, all inside one 4 s budget (`_hook_start_report`), fail-open. Every OTHER event — every
 # PreToolUse, PostToolUse and Stop, which is where the hot path actually is —
 # still takes no lock and waits on nothing. A hook that can slow or break a
 # session is worse than no hook. Consumed read-only by the ccrc server via the agent
 # (whitelist: .cc-sessions is readable; nothing here needs a grant). Non-fleet sessions (no tmux, foreign session name) exit silently.
 set -uo pipefail
+
+# >>> D-8270 tmux socket lookup (copied byte for byte into each script that cannot source ccd: tmux-socket-census.test.ts)
+# THE ONE tmux SOCKET LOOKUP (D-8270, ruling Q8). One shared tmux server, and every tmux call starts with the argv
+# `_TMX_ARGV` holds, so moving the fleet to another server is a change of setting. The setting is the first line of
+# ~/.ccrc/tmux-socket: absent or empty is tmux's default server and adds no flag; a socket name puts `-L <name>` first;
+# anything else asks no tmux at all and answers why with rc 1, never the "can't find session" that reads as gone. A
+# file, not a variable: every process on the box reads one answer, and no caller redirects a door with its environment.
+# Twin: shared/tmux-target.ts.
+# READ ONCE PER PROCESS, AT LOAD, WITH BUILTINS ONLY: the supervise tick's fork budget (tick-diet spec §9) is exactly
+# main's. A statement calls `_tmx …`. A capture `$( … )`, a pipeline stage, or a wrapper that execs its argv
+# (`_plat_timeout`, `timeout`, `exec`) spreads `"${_TMX_ARGV[@]}" …` itself: bash runs a lone command there without a
+# second fork, and a function in its place costs that fork on every call.
+_tmx_sock() {   # [home, default $HOME] -> TMX_SOCK (empty: the default server); rc 1 = the setting cannot be used, TMX_WHY says why
+  local f="${1-${HOME-}}/.ccrc/tmux-socket" s=""
+  TMX_SOCK=""; TMX_WHY=""
+  [ -e "$f" ] || [ -L "$f" ] || return 0
+  if [ -f "$f" ] && [ -r "$f" ]; then IFS= read -r s < "$f" || :; else TMX_WHY="$f cannot be read"; return 1; fi
+  [[ -z "$s" || "$s" =~ ^[A-Za-z0-9_][A-Za-z0-9_-]{0,63}$ ]] \
+    || { TMX_WHY=".ccrc/tmux-socket does not hold a socket name (1 to 64 letters, digits, _ and -, not led by -)"; return 1; }
+  TMX_SOCK="$s"
+}
+# shellcheck disable=SC2120  # the home is optional: every caller today asks for the running user's own (D-8270)
+_tmx_argv() {   # [home] -> _TMX_ARGV, the argv every fleet tmux call starts with; run once below, again only when asked
+  if _tmx_sock "$@"; then _TMX_ARGV=(tmux ${TMX_SOCK:+-L "$TMX_SOCK"})
+  else _TMX_ARGV=(sh -c 'printf "%s\n" "$0" >&2; exit 1' "ccrc: tmux was not asked: $TMX_WHY"); fi
+}
+_tmx_argv
+_tmx() { "${_TMX_ARGV[@]}" "$@"; }   # tmux args… -> that call, on the fleet's server (a statement; see above for a capture)
+# <<< D-8270 tmux socket lookup
 
 # ── epoch milliseconds, on two userlands ────────────────────────────────
 # `date +%s%3N` is GNU. BSD's date has no `%N`: it prints the literal letter,
@@ -63,7 +92,7 @@ _hook_timeout() {
 # Claude Code reads a hook's stdout as a PER-EVENT CONTRACT — on SessionStart it
 # is context to inject, on PreToolUse it is a permission decision OR context
 # (`additionalContext`) for the call that proceeds — and those two events are
-# the only ones this file prints on, save the roster card's wake arm (R-5a, D-8201: one UserPromptSubmit envelope, `additionalContext`, from its own site in the tail) and PreCompact's steer print. Until D-1613 there was one printf and the
+# the only ones this file prints on, save the roster card's wake arm (R-5a, D-8201: one UserPromptSubmit envelope, `additionalContext`, from its own site in the tail) and PreCompact's one print: history's steer print, or the refusal arm's block decision (Overlord C39), never both. Until D-1613 there was one printf and the
 # rule was "the card, and nothing else, ever"; now there are three builders,
 # each naming its own `hookEventName`, which is what stops a card being
 # delivered as a decision or the other way round. A card that leaked onto
@@ -1346,20 +1375,23 @@ _hook_lock_init() {   # <canonical> -> 0 canonical exists and validates; 1 other
 _hook_lock_acquire() {   # <wait-seconds> -> 0 acquired (HOOK_LOCK_FD set); 1 refused; 2 mechanism absent
   local lock="$REG/.$id.compactions.lock" al="" fd="" tries=0
   HOOK_LOCK_FD=""
-  # WHY, NOT A SECOND STATUS. Every one of this file's five acquire sites reads
-  # the acquire as a boolean (`|| return 0`) and ccd's eight read the VALUE, with
-  # two FUNCTIONS across three of those sites — `cmd_start`, and `_spawn_start`,
-  # which holds two of them — falling through an unknown code into a silent
-  # continue, so a third numeric status would be a distinct refusal nobody
-  # distinguishes. (SIX and “two of ccd's five” is what stood here for several
-  # rounds, and both were wrong by census: §3.1 gives PreCompact two acquires,
-  # §3.3 SessionStart one and §3.4 PostCompact two, which is five, and the two
-  # fall-through FUNCTIONS own three SITES between them. A scan in
-  # `session-hook.test.ts` now counts both files and reads the numerals out of
-  # this sentence and the spec's, so neither can drift from the code again.) The condition is carried in a named
-  # out-parameter instead, the way `GC_DIRTY_WHY` and `_WS_NESTED_WHY` already
-  # carry theirs, and cleared on entry so a stale one is never read as this
-  # call's.
+  # WHY, NOT A SECOND STATUS. Every one of this file's six acquire sites reads
+  # the acquire as a boolean (`|| return 0`) and ccd's nine read the VALUE, all
+  # but `_inflight_write`'s, which reads only whether it holds the lock, with two
+  # FUNCTIONS across three of those sites — `cmd_start`, and `_spawn_start`, which
+  # holds two of them — falling through an unknown code into a silent continue,
+  # and `_inflight_write` continuing silently on any refusal, so a third numeric
+  # status would be a distinct refusal nobody distinguishes. (SIX and “two of
+  # ccd's five” is what stood here for several rounds, and both were wrong by
+  # census: §3.1 gives PreCompact two acquires, §3.3 SessionStart one and §3.4
+  # PostCompact two, which is five, and the two fall-through FUNCTIONS own three
+  # SITES between them. A scan in `session-hook.test.ts` now counts both files and
+  # reads the numerals out of this sentence and the spec's, so neither can drift
+  # from the code again. Five was right until the Overlord's W1a added a sixth:
+  # the PreCompact events line, `_hook_compact_pre_line`.) The condition is
+  # carried in a named out-parameter instead, the way `GC_DIRTY_WHY` and
+  # `_WS_NESTED_WHY` already carry theirs, and cleared on entry so a stale one is
+  # never read as this call's.
   HOOK_LOCK_WHY=""
   command -v flock  >/dev/null 2>&1 || return 2
   command -v mktemp >/dev/null 2>&1 || return 2
@@ -1525,6 +1557,7 @@ _hook_lock_still_canonical() {   # <fd> -> 0 iff this descriptor is STILL the ca
 # stage 1. Every failure is silent and total for what comes after it.
 _hook_compact_pre() {
   [ -e "$COMPACT_CARD_OFF" ] && return 0
+  [[ -z "${CS_REFUSED-}" ]] || return 0   # a refused event is no compaction: no set, no card (refusal-ahead-of-the-card)
   local tp="" trig="" set="$REG/$id.compactset" cardf="$REG/$id.compactcard" doc="" at="" nonce="" rc=0 helper_rc=0 lockfd=""
   local aged="" cand="" suffix="" setstage="" cardstage="" ownhead="" ovl="false"
   local mins=$(( COMPACT_CARD_MAX_AGE / 60 ))
@@ -1559,6 +1592,7 @@ _hook_compact_pre() {
   # a young PostCompact claim, which is the same evidence one settlement step
   # later — a compaction whose set has already been claimed is still in flight.
   if [ -n "$(find "$REG" -maxdepth 1 \( -name "$id.compactset" -o -name ".$id.compactpost.*.claim" \) -mmin "-$mins" 2>/dev/null)" ]; then  # @anchor compact-pre-overlap-find
+    CS_RULE_SCOPE="$CS_SCOPE"; CS_RULE_TRANSCRIPT="$CS_TRANSCRIPT"   # the rule's own answer: the PreCompact line's (Overlord W1a)
     CS_SCOPE="ambiguous"; CS_TRANSCRIPT=""; CS_AGENT=""; ovl="true"
   fi
   # ITEM 3 (r3 R1), and the first of this section's three: `find` ran between
@@ -2697,7 +2731,8 @@ COMPACT_WORKSET_MAX=12
 # its own body would make the other unreachable.
 #
 # COMPACT_LOCK_WAIT is every acquisition EXCEPT compact SessionStart's:
-# PreCompact's two sections, PostCompact's settlement and its final journal
+# PreCompact's three sections (the card's two and the events line's one),
+# PostCompact's settlement and its final journal
 # transaction (round 7 retired the separate final constant — both are off the
 # hot path and both lose a durable artifact on a miss, so they share one
 # bound), and `ccd`'s own row-creation, `_spawn_start` and `_reg_purge`
@@ -2980,7 +3015,7 @@ if [[ -n "${TMUX_PANE:-}" ]]; then
     if command -v "$hooktmo_bin" >/dev/null 2>&1; then hooktmo="$hooktmo_bin"; break; fi
   done
   tname=""
-  [[ -n "$hooktmo" ]] && tname=$("$hooktmo" 2 tmux display-message -p -t "$TMUX_PANE" '#S' 2>/dev/null)
+  [[ -n "$hooktmo" ]] && tname=$("$hooktmo" 2 "${_TMX_ARGV[@]}" display-message -p -t "$TMUX_PANE" '#S' 2>/dev/null)
   [[ "$tname" == cc-?* ]] && id="${tname#cc-}"
 # THE FALLBACK, AND ONLY FOR A FORK (D-4953). The `elif` is the no-pane half of
 # the gate: a process with a pane is answered by the pane or by nobody, and the
@@ -3063,8 +3098,8 @@ fi
 [[ "$id" =~ ^[A-Za-z0-9._-]+$ ]] || exit 0
 [[ -d "$REG" ]] || exit 0
 command -v jq >/dev/null 2>&1 || exit 0
-DSP_DEFS='def maxline: dspcap; def maxlabel: 128; def maxpath: 512; def isid: type == "string" and length >= 1 and length <= idmax and (explode | all(idch)); def nbytes: explode | map(if . < 128 then 1 elif . < 2048 then 2 elif . < 65536 then 3 else 4 end) | add // 0; def fits($m): type == "string" and length <= $m and nbytes <= $m; def chk($m): if type != "string" then [null, false] elif fits($m) then [., false] else [null, true] end; def req($m): if type == "string" and . != "" and fits($m) then . else null end; def over($m): type == "string" and (fits($m) | not); def obj: if type == "object" then . else {} end; def outcome: if . == "async_launched" then "async-launched" elif . == "completed" then "completed" elif . == "failed" or . == "error" then "failed" else "unknown" end; def word: type == "string" and length >= 1 and length <= 32 and (explode | all((. >= 97 and . <= 122) or . == 95 or . == 45)); def tagv($o; $c): if type == "string" and startswith($o) and endswith($c) then .[($o | length):(length - ($c | length))] else null end; def note: if type == "string" and startswith("<task-notification>\n") and contains("</task-notification>") then (ltrimstr("<task-notification>\n") | split("\n")) as $l | ($l[0] | tagv("<task-id>"; "</task-id>")) as $a | ($l[1] | tagv("<tool-use-id>"; "</tool-use-id>")) as $b | ($l[if ($l[2] | type) == "string" and ($l[2] | startswith("<output-file>")) then 3 else 2 end] | tagv("<status>"; "</status>")) as $d | if ($a | isid) and ($b | isid) and ($d | word) then {taskId: $a, toolUseId: $b, status: (if $d == "completed" then "completed" elif $d == "failed" then "failed" elif $d == "killed" or $d == "cancelled" or $d == "canceled" or $d == "stopped" then "cancelled" else "unknown" end)} else null end else null end; def spool: . as $p | ($p.hook_event_name // "" | tostring | keep(alpha)) as $ev | ($p.tool_name | if type == "string" then . else "" end) as $tn | ($p.tool_use_id | if isid then . else null end) as $tu | ($p.session_id | if isid then . else null end) as $cs | (($p.agent_id // "") | tostring | length > 0) as $hasa | ($p.agent_id | if isid then . else "" end) as $aid | ($p.agent_type | chk(maxlabel)) as [$at, $ato] | ($p.cwd | chk(maxpath)) as [$cwd, $cwdo] | ($p.transcript_path | chk(maxpath)) as [$tp, $tpo] | ($p.tool_input | obj) as $ti | ($p.tool_response) as $r | ($r | obj) as $o | ($o.status | outcome) as $oc | ($ti.command | type == "string" and contains("worktree")) as $wt | (if $ev == "SessionStart" then ($p.source | if req(maxlabel) != null then {b: {source: .}} else null end) elif $ev == "SessionEnd" then ($p.reason | if req(maxlabel) != null then {b: {reason: .}} else null end) elif $ev == "SubagentStart" then (if $aid != "" then {b: {}} else null end) elif $ev == "SubagentStop" then (if $aid != "" then ($p.agent_transcript_path | chk(maxpath)) as [$ap, $apo] | {b: {agentTranscriptPath: $ap}, o: $apo} else null end) elif $ev == "UserPromptSubmit" then ($p.prompt | note | if . != null then {b: {notification: .}} else null end) elif $ev == "PreToolUse" and $tu != null then (if $tn == "Agent" or $tn == "Task" or $tn == "Workflow" then ($ti.isolation | chk(maxlabel)) as [$iso, $isoo] | {b: {toolName: $tn, toolUseId: $tu, isolation: $iso}, o: $isoo} elif $tn == "Bash" then {b: {toolName: "Bash", toolUseId: $tu}, w: $wt} else null end) elif $ev == "PostToolUse" and $tu != null then (if $tn == "Agent" or $tn == "Task" then {b: {toolName: $tn, toolUseId: $tu, outcome: $oc, launch: (if ($oc == "async-launched" or $oc == "completed") and ($o.agentId | isid) then {status: $oc, agentId: $o.agentId, isAsync: (if ($o.isAsync | type) == "boolean" then $o.isAsync else $oc == "async-launched" end)} else null end)}} elif $tn == "Workflow" then ($o.taskType | req(maxlabel)) as $tt | ($o.workflowName | req(maxlabel)) as $wn | ($o.transcriptDir | req(maxpath)) as $td | ($o.scriptPath | req(maxpath)) as $sp | {b: {toolName: "Workflow", toolUseId: $tu, outcome: $oc, launch: (if ($oc == "async-launched" or $oc == "completed") and ($o.taskId | isid) and ($o.runId | isid) and $tt != null and $wn != null and $td != null and $sp != null then {status: $oc, taskId: $o.taskId, taskType: $tt, workflowName: $wn, runId: $o.runId, transcriptDir: $td, scriptPath: $sp} else null end)}, o: (($o.taskType | over(maxlabel)) or ($o.workflowName | over(maxlabel)) or ($o.transcriptDir | over(maxpath)) or ($o.scriptPath | over(maxpath)))} elif $tn == "Bash" then {b: {toolName: "Bash", toolUseId: $tu, outcome: (if ($r | type) == "object" and $r.interrupted == true then "failed" elif ($r | type) == "object" and ($r.stdout | type) == "string" then "completed" else "unknown" end)}, w: $wt} else null end) else null end) as $v | if $cs != null and ($hasa | not or $aid != "") and $v != null then (($cwdo or $tpo or $ato or ($v.o // false))) as $ov | (($v.w // false) and $cwd != null and ($cwd | startswith("/")) and ($cwd | explode | all(. >= 32 and . != 127))) as $trig | (if $trig then 17 else 0 end) as $rs | (now * 1000 | floor) as $ms | ($ms / 1000 | floor) as $s | (($s | strftime("%Y-%m-%dT%H:%M:%S")) + "." + (($ms % 1000) | tostring | ("00" + .) | .[-3:]) + "Z") as $t | def L($n): {v: 1, eventKind: $ev, observedAt: $t, sessionId: $sid, parentIncarnation: $gen, claudeSessionId: $cs} + (if $ver != "" and $n < 1 then {claudeVersion: $ver} else {} end) + (if $cwd != null and $n < 2 then {cwd: $cwd} else {} end) + (if $aid != "" then {agentId: $aid} else {} end) + (if $ev == "SubagentStart" or $ev == "SubagentStop" then {agentType: (if $n < 3 then $at else null end)} elif $aid != "" and $at != null and $n < 3 then {agentType: $at} else {} end) + (if $tp != null and $n < 4 then {transcriptPath: $tp} else {} end) + $v.b + (if $n > 0 or $ov then {truncated: true} else {} end); (first(range(0; 5) | L(.) | select(((tojson | nbytes) + 1 + $rs) < maxline)) // null) as $line | if $line == null then ["", "", "", ""] else [($s | strftime("%Y%m%d%H")), (($s - 86400) | strftime("%Y%m%d%H")), (if $trig then $cwd else "" end), ($line | tojson)] end else ["", "", "", ""] end;'; dsp_dir="$REG/delegation/spool/$id" dsp_gen="" dsp_ver="" dsp_defs="" dsp_out=', "", "", "", ""'; DSP_LINE_BELOW=4096 DSP_LINE_SMALL=1008; [[ "${OSTYPE:-}" == linux-gnu* && "${BASH_VERSINFO[5]-}" == *-linux-gnu* ]] || DSP_LINE_BELOW=$DSP_LINE_SMALL; [[ "$id" != .* && ${#id} -le CCRC_ID_MAX && -d "$dsp_dir" && ! -L "$dsp_dir" && ! -L "${dsp_dir%/*}" && ! -L "${dsp_dir%/*/*}" && -f "$REG/$id.generation" && ! -L "$REG/$id.generation" ]] && { IFS= read -r -N 37 dsp_gen < "$REG/$id.generation"; } 2>/dev/null; if [[ "$dsp_gen" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ && ( -z "${CCRC_SESSION_GENERATION:-}" || "${CCRC_SESSION_GENERATION:-}" == "$dsp_gen" ) ]]; then case "$payload" in *'"Bash"'*|*'"Agent"'*|*'"Task"'*|*'"Workflow"'*|*'"SessionStart"'*|*'"SessionEnd"'*|*'"SubagentStart"'*|*'"SubagentStop"'*|*'task-notification>'*) dsp_ver="${CLAUDE_CODE_EXECPATH:-}"; dsp_ver="${dsp_ver##*/}"; [[ "$dsp_ver" =~ ^[0-9][0-9A-Za-z.+-]{0,31}$ ]] || dsp_ver=""; dsp_defs="def dspcap: $DSP_LINE_BELOW; $DSP_DEFS"; dsp_out=', ((try spool catch ["", "", "", ""]) | .[])' ;; esac; else dsp_gen=""; fi   # THE DELEGATION SPOOL's gate, builtins only (see the block after the history spool): the owner's directory and a sound, unchanged-so-far incarnation must exist, else the parse below builds no line; the spool's jq text is added only for a payload that carries the QUOTED name of a delegation tool or event or the notification tag, so every other event compiles the parse alone
-{ read -r event; read -r psid; read -r paid; read -r aid; read -r dsp_bucket; read -r dsp_cut; read -r dsp_cwd; read -r dsp_line; } < <(jq -r --arg sid "$id" --arg gen "$dsp_gen" --arg ver "$dsp_ver" 'def keep(f): explode | map(select(f)) | implode; def alpha: (. >= 65 and . <= 90) or (. >= 97 and . <= 122); def idch: alpha or (. >= 48 and . <= 57) or . == 95 or . == 45; def idmax: 64; '"$dsp_defs"'(.hook_event_name // "" | tostring | keep(alpha)), (.session_id // "" | tostring | keep(idch)), (if ((.agent_id // "") | tostring | length) > 0 then "1" else "" end), (.agent_id | if type == "string" and length >= 1 and length <= idmax and (explode | all(idch)) then . else "" end)'"$dsp_out" <<<"$payload" 2>/dev/null) || exit 0   # no regex builtin: every event runs it, and a jq built without Oniguruma (an optional build dependency) must not skip the write. The first four lines are the cleaned event, session id, any-agent-id flag and raw agent id; the last four are the delegation spool's bucket, prune cutoff, listing cwd and line, all empty when no line is due
+DSP_DEFS='def maxline: dspcap; def maxlabel: 128; def maxpath: 512; def isid: type == "string" and length >= 1 and length <= idmax and (explode | all(idch)); def nbytes: explode | map(if . < 128 then 1 elif . < 2048 then 2 elif . < 65536 then 3 else 4 end) | add // 0; def fits($m): type == "string" and length <= $m and nbytes <= $m; def chk($m): if type != "string" then [null, false] elif fits($m) then [., false] else [null, true] end; def req($m): if type == "string" and . != "" and fits($m) then . else null end; def over($m): type == "string" and (fits($m) | not); def obj: if type == "object" then . else {} end; def outcome: if . == "async_launched" then "async-launched" elif . == "completed" then "completed" elif . == "failed" or . == "error" then "failed" else "unknown" end; def word: type == "string" and length >= 1 and length <= 32 and (explode | all((. >= 97 and . <= 122) or . == 95 or . == 45)); def tagv($o; $c): if type == "string" and startswith($o) and endswith($c) then .[($o | length):(length - ($c | length))] else null end; def note: if type == "string" and startswith("<task-notification>\n") and contains("</task-notification>") then (ltrimstr("<task-notification>\n") | split("\n")) as $l | ($l[0] | tagv("<task-id>"; "</task-id>")) as $a | ($l[1] | tagv("<tool-use-id>"; "</tool-use-id>")) as $b | ($l[if ($l[2] | type) == "string" and ($l[2] | startswith("<output-file>")) then 3 else 2 end] | tagv("<status>"; "</status>")) as $d | if ($a | isid) and ($b | isid) and ($d | word) then {taskId: $a, toolUseId: $b, status: (if $d == "completed" then "completed" elif $d == "failed" then "failed" elif $d == "killed" or $d == "cancelled" or $d == "canceled" or $d == "stopped" then "cancelled" else "unknown" end)} else null end else null end; def lrwc: (. >= 48 and . <= 57) or (. >= 65 and . <= 90) or (. >= 97 and . <= 122) or . == 46 or . == 45 or . == 95; def lrbyte: lrwc or . == 47 or . == 64 or . == 43; def lrdrop($t; $y): {v: 1, t: $t, k: "drop", why: $y} | tojson; def lrpath($tp; $cs): if type == "string" and ($tp | type) == "string" and ($tp | startswith("/")) and ($tp | endswith("/" + $cs + ".jsonl")) then (($tp | .[:-6]) + "/workflows/scripts/") as $pre | if fits(maxpath) and startswith($pre) and endswith(".js") and (explode | all(lrbyte)) and (split("/") | .[1:] | all(. != "" and . != "." and . != "..")) and (.[($pre | length):-3] | explode | (length >= 1 and length <= 128 and (.[0] | idch) and (.[1:] | all(lrwc)))) then . else null end else null end; def lrec: . as $p | ($p.hook_event_name // "" | tostring | keep(alpha)) as $ev | ($p.tool_name | if type == "string" then . else "" end) as $tn | ($p.tool_input | obj) as $ti | ($p.tool_response | obj) as $o | ($o.status | outcome) as $oc | ($p.session_id | if isid then . else null end) as $cs | (now * 1000 | floor) as $t | (if $wr != "" and ($wr | length) <= 64 and ($wr | explode | all(lrwc)) then $wr else null end) as $w | ($ti.resumeFromRunId) as $rr | (if $ev != "PostToolUse" then null elif $tn == "Workflow" then (if $rr != null and $oc != "async-launched" then {shape: true} elif $oc != "async-launched" then null elif $rr != null then {k: "resume", ids: [$rr, $o.taskId], b: {run: $rr, task: $o.taskId}, ws: true} else {k: "workflow", ids: [$o.runId, $o.taskId], b: {run: $o.runId, task: $o.taskId}, ws: true} end) elif $tn == "Agent" or $tn == "Task" then (if $oc == "async-launched" and ($o.isAsync | if type == "boolean" then . else true end) then {k: "agent", ids: [$o.agentId], b: {agent: $o.agentId}} else null end) elif $tn == "SendMessage" then ($ti.to | if isid then {k: "send", ids: [.], b: {agent: .}} else null end) else null end) as $d | if $d == null then "" elif $d.shape == true then lrdrop($t; "shape") elif $cs == null or ($d.ids | all(isid) | not) then lrdrop($t; "id") else ($o.scriptPath | lrpath($p.transcript_path; $cs)) as $sc | ({v: 1, t: $t, k: $d.k, w: $w, uuid: $cs} + $d.b + (if $d.ws == true then {script: $sc} else {} end) | tojson) as $row | if $d.ws == true and $sc == null then lrdrop($t; "path") + "\t" + $row else $row end end; def spool: . as $p | ($p.hook_event_name // "" | tostring | keep(alpha)) as $ev | ($p.tool_name | if type == "string" then . else "" end) as $tn | ($p.tool_use_id | if isid then . else null end) as $tu | ($p.session_id | if isid then . else null end) as $cs | (($p.agent_id // "") | tostring | length > 0) as $hasa | ($p.agent_id | if isid then . else "" end) as $aid | ($p.agent_type | chk(maxlabel)) as [$at, $ato] | ($p.cwd | chk(maxpath)) as [$cwd, $cwdo] | ($p.transcript_path | chk(maxpath)) as [$tp, $tpo] | ($p.tool_input | obj) as $ti | ($p.tool_response) as $r | ($r | obj) as $o | ($o.status | outcome) as $oc | ($ti.command | type == "string" and contains("worktree")) as $wt | (if $ev == "SessionStart" then ($p.source | if req(maxlabel) != null then {b: {source: .}} else null end) elif $ev == "SessionEnd" then ($p.reason | if req(maxlabel) != null then {b: {reason: .}} else null end) elif $ev == "SubagentStart" then (if $aid != "" then {b: {}} else null end) elif $ev == "SubagentStop" then (if $aid != "" then ($p.agent_transcript_path | chk(maxpath)) as [$ap, $apo] | {b: {agentTranscriptPath: $ap}, o: $apo} else null end) elif $ev == "UserPromptSubmit" then ($p.prompt | note | if . != null then {b: {notification: .}} else null end) elif $ev == "PreToolUse" and $tu != null then (if $tn == "Agent" or $tn == "Task" or $tn == "Workflow" then ($ti.isolation | chk(maxlabel)) as [$iso, $isoo] | {b: {toolName: $tn, toolUseId: $tu, isolation: $iso}, o: $isoo} elif $tn == "Bash" then {b: {toolName: "Bash", toolUseId: $tu}, w: $wt} else null end) elif $ev == "PostToolUse" and $tu != null then (if $tn == "Agent" or $tn == "Task" then {b: {toolName: $tn, toolUseId: $tu, outcome: $oc, launch: (if ($oc == "async-launched" or $oc == "completed") and ($o.agentId | isid) then {status: $oc, agentId: $o.agentId, isAsync: (if ($o.isAsync | type) == "boolean" then $o.isAsync else $oc == "async-launched" end)} else null end)}} elif $tn == "Workflow" then ($o.taskType | req(maxlabel)) as $tt | ($o.workflowName | req(maxlabel)) as $wn | ($o.transcriptDir | req(maxpath)) as $td | ($o.scriptPath | req(maxpath)) as $sp | {b: {toolName: "Workflow", toolUseId: $tu, outcome: $oc, launch: (if ($oc == "async-launched" or $oc == "completed") and ($o.taskId | isid) and ($o.runId | isid) and $tt != null and $wn != null and $td != null and $sp != null then {status: $oc, taskId: $o.taskId, taskType: $tt, workflowName: $wn, runId: $o.runId, transcriptDir: $td, scriptPath: $sp} else null end)}, o: (($o.taskType | over(maxlabel)) or ($o.workflowName | over(maxlabel)) or ($o.transcriptDir | over(maxpath)) or ($o.scriptPath | over(maxpath)))} elif $tn == "Bash" then {b: {toolName: "Bash", toolUseId: $tu, outcome: (if ($r | type) == "object" and $r.interrupted == true then "failed" elif ($r | type) == "object" and ($r.stdout | type) == "string" then "completed" else "unknown" end)}, w: $wt} else null end) else null end) as $v | if $cs != null and ($hasa | not or $aid != "") and $v != null then (($cwdo or $tpo or $ato or ($v.o // false))) as $ov | (($v.w // false) and $cwd != null and ($cwd | startswith("/")) and ($cwd | explode | all(. >= 32 and . != 127))) as $trig | (if $trig then 17 else 0 end) as $rs | (now * 1000 | floor) as $ms | ($ms / 1000 | floor) as $s | (($s | strftime("%Y-%m-%dT%H:%M:%S")) + "." + (($ms % 1000) | tostring | ("00" + .) | .[-3:]) + "Z") as $t | def L($n): {v: 1, eventKind: $ev, observedAt: $t, sessionId: $sid, parentIncarnation: $gen, claudeSessionId: $cs} + (if $ver != "" and $n < 1 then {claudeVersion: $ver} else {} end) + (if $cwd != null and $n < 2 then {cwd: $cwd} else {} end) + (if $aid != "" then {agentId: $aid} else {} end) + (if $ev == "SubagentStart" or $ev == "SubagentStop" then {agentType: (if $n < 3 then $at else null end)} elif $aid != "" and $at != null and $n < 3 then {agentType: $at} else {} end) + (if $tp != null and $n < 4 then {transcriptPath: $tp} else {} end) + $v.b + (if $n > 0 or $ov then {truncated: true} else {} end); (first(range(0; 5) | L(.) | select(((tojson | nbytes) + 1 + $rs) < maxline)) // null) as $line | if $line == null then ["", "", "", ""] else [($s | strftime("%Y%m%d%H")), (($s - 86400) | strftime("%Y%m%d%H")), (if $trig then $cwd else "" end), ($line | tojson)] end else ["", "", "", ""] end;'; dsp_dir="$REG/delegation/spool/$id" dsp_gen="" dsp_ver="" dsp_defs="" dsp_out=', "", "", "", ""' lrc_out=', ""' lrc_w="" lrc_ok="" dsp_sp=""; DSP_LINE_BELOW=4096 DSP_LINE_SMALL=1008; [[ "${OSTYPE:-}" == linux-gnu* && "${BASH_VERSINFO[5]-}" == *-linux-gnu* ]] || DSP_LINE_BELOW=$DSP_LINE_SMALL; [[ "$id" != .* && ${#id} -le CCRC_ID_MAX && -f "$REG/$id.generation" && ! -L "$REG/$id.generation" ]] && { IFS= read -r -N 37 dsp_gen < "$REG/$id.generation"; } 2>/dev/null; [[ -d "$dsp_dir" && ! -L "$dsp_dir" && ! -L "${dsp_dir%/*}" && ! -L "${dsp_dir%/*/*}" ]] && dsp_sp=1; [[ ! -e "$REG/$id.deleg" || ( ! -L "$REG/$id.deleg" && -f "$REG/$id.deleg" ) ]] && lrc_ok=1; if [[ "$dsp_gen" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ && ( -z "${CCRC_SESSION_GENERATION:-}" || "${CCRC_SESSION_GENERATION:-}" == "$dsp_gen" ) ]]; then case "$payload" in *'"Bash"'*|*'"Agent"'*|*'"Task"'*|*'"Workflow"'*|*'"SessionStart"'*|*'"SessionEnd"'*|*'"SubagentStart"'*|*'"SubagentStop"'*|*'task-notification>'*|*'"SendMessage"'*) dsp_ver="${CLAUDE_CODE_EXECPATH:-}"; dsp_ver="${dsp_ver##*/}"; [[ "$dsp_ver" =~ ^[0-9][0-9A-Za-z.+-]{0,31}$ ]] || dsp_ver=""; lrc_c=""; if [[ -n "$dsp_sp" ]]; then lrc_c=1; elif [[ -n "$lrc_ok" ]]; then case "$payload" in *'"PostToolUse"'*) case "$payload" in *'"Agent"'*|*'"Task"'*|*'"Workflow"'*|*'"SendMessage"'*) lrc_c=1 ;; esac ;; esac; fi; if [[ -n "$lrc_c" ]]; then dsp_defs="def dspcap: $DSP_LINE_BELOW; $DSP_DEFS"; [[ -z "$dsp_sp" ]] || dsp_out=', ((try spool catch ["", "", "", ""]) | .[])'; if [[ -n "$lrc_ok" ]]; then lrc_out=', ([try lrec catch ""] | if length == 1 and (.[0] | type) == "string" then .[0] else "" end)'; [[ ! -L "$REG/$id.wrapper" && -f "$REG/$id.wrapper" ]] && { IFS= read -r -N 65 lrc_w < "$REG/$id.wrapper"; } 2>/dev/null; lrc_w="${lrc_w%$'\n'}"; fi; fi ;; esac; else dsp_gen=""; fi   # THE DELEGATION SPOOL's gate, builtins only (see the block after the history spool): a sound, unchanged-so-far incarnation must exist (read without the spool directory since session-continuity 6b, D-8363: `dsp_sp` keeps the directory as the spool's own condition, `lrc_ok` says `.deleg` may be appended), else the parse below builds no line; the spool's jq text is added only for a payload that carries the QUOTED name of a delegation tool or event or the notification tag, so every other event compiles the parse alone
+{ read -r event; read -r psid; read -r paid; read -r aid; read -r dsp_bucket; read -r dsp_cut; read -r dsp_cwd; read -r dsp_line; read -r lrc_line; } < <(jq -r --arg sid "$id" --arg gen "$dsp_gen" --arg ver "$dsp_ver" --arg wr "$lrc_w" 'def keep(f): explode | map(select(f)) | implode; def alpha: (. >= 65 and . <= 90) or (. >= 97 and . <= 122); def idch: alpha or (. >= 48 and . <= 57) or . == 95 or . == 45; def idmax: 64; '"$dsp_defs"'(.hook_event_name // "" | tostring | keep(alpha)), (.session_id // "" | tostring | keep(idch)), (if ((.agent_id // "") | tostring | length) > 0 then "1" else "" end), (.agent_id | if type == "string" and length >= 1 and length <= idmax and (explode | all(idch)) then . else "" end)'"$dsp_out$lrc_out" <<<"$payload" 2>/dev/null) || exit 0   # no regex builtin: every event runs it, and a jq built without Oniguruma (an optional build dependency) must not skip the write. The first four lines are the cleaned event, session id, any-agent-id flag and raw agent id; lines 5 to 8 of 9 are the delegation spool's (bucket, prune cutoff, listing cwd and line, all empty when no line is due); the ninth is the launch record's row (a string, always exactly one line: the parse ends `|| exit 0`, so a missing line would drop the whole event), empty when no row is due
 [[ -n "$event" ]] || exit 0
 
 # ── THE HISTORY CARD LINE (ccrc history spec 2026-10-05 §8.6, W1-B3) ─────
@@ -3504,7 +3539,7 @@ fi
 # `fitk` keeps WHOLE aliases inside 200 bytes: a byte cut after the join can leave
 # half an alias or a trailing comma, which the reader refuses
 # (alias-list-fits-whole-aliases (D-3658)). `fiti` keeps at most 8 ids.
-# restart: a same-session done moves bg* into lost* (a union, lost-kinds-accumulate (D-3660)); clear: a fresh line.
+# restart: a same-session done or failed moves bg* into lost* (a union, lost-kinds-accumulate (D-3660)); clear: a fresh line.
 # `crons` (D-5242): set on done, carried on every other kind for the same session, -1 on clear and for a foreign line.
 TURN_MARK_PROGRAM='
 def csv: split(",") | map(select(length > 0));
@@ -3529,7 +3564,7 @@ def fiti: .[0:8] | join(",");
   elif $kind == "done" then $b + {stopAt: $at, bg: $bg, bgKinds: ($bgk | csv | unique | fitk), bgIds: ($bgi | csv | fiti), crons: $crons}
   elif $kind == "failed" then $b + {state: "failed", stopAt: $at, err: $err}
   elif $kind == "restart" then $b
-    + (if $same and $p.state == "done" then {lostBg: (($p.lostBg // 0) + ([($p.bg // -1), 0] | max)), lostKinds: ((($p.lostKinds // "") + "," + ($p.bgKinds // "")) | csv | unique | fitk), lostIds: ((($p.lostIds // "") + "," + ($p.bgIds // "")) | csv | fiti)} else {} end)
+    + (if $same and ($p.state == "done" or $p.state == "failed") then {lostBg: (($p.lostBg // 0) + ([($p.bg // -1), 0] | max)), lostKinds: ((($p.lostKinds // "") + "," + ($p.bgKinds // "")) | csv | unique | fitk), lostIds: ((($p.lostIds // "") + "," + ($p.bgIds // "")) | csv | fiti)} else {} end)
     + {restartAt: $at, bg: 0, bgKinds: "", bgIds: ""}
   elif $kind == "clear" then {v: 1, sessionId: $sid, state: "done", event: $ev, at: $at, turnAt: null, stopAt: null, bg: -1, bgKinds: "", bgIds: "", err: null, restartAt: null, lostBg: 0, lostKinds: "", lostIds: "", crons: -1}
   else empty end'
@@ -3873,6 +3908,122 @@ _hook_spool_append() {   # $dsp_line, with $dsp_bucket $dsp_cut $dsp_cwd from th
 }
 [[ -n "$dsp_line" ]] && { _hook_spool_append || true; }
 # <<< delegation-spool
+# >>> launch-record (session-continuity wave 6b, D-8363..D-8367)
+# THE LAUNCH RECORD: one JSON row per background launch (Workflow, resume, Agent/Task, SendMessage to an agent id), appended to
+# `$REG/<id>.deleg`. Evidence for the restart manifest (6b-2), read by nothing else. The row is the payload parse's ninth output (`lrec`,
+# inside `DSP_DEFS`, which shares the spool's id and outcome defs but decides from the raw fields, so a bad id is a counted `drop`), one
+# line on every event. It needs no spool directory. A subagent's own event writes nothing: `tmsub` (the join test above) is the
+# only evidence of one, never the presence of an `agent_id` (D-8364). Every append is one write per line (a pair is two); the file is capped at LRC_MAX_BYTES
+# and only `drop` rows use the reserve past it (D-8366). The spelling here is the only one until 6b-2 adds ccd's and its equality pin.
+# Always rc 0 and under `set -u`: every variable the append expands is set before it. After the write the generation is tested once
+# more and the file removed if the row is gone, the other half of `_reg_purge`'s post-generation unlink (D-8367).
+# RESIDUAL WINDOW (named, not closed): the type test below and the opens (`wc -c < "$f"`, `>> "$f"`) are not atomic, and no shell has an
+# open-if-regular. An object swapped in at `.deleg` during the generation re-read or the `wc` fork is opened anyway, and a FIFO there blocks
+# until Claude Code's hook timeout. It needs a second writer on a single-user box.
+LRC_MAX_BYTES=1048576 LRC_DROP_RESERVE=4096
+_hook_launch_record_append() {   # $lrc_line (a row, or a drop row, one TAB, then a row) -> 0 always (the caller says `|| true`)
+  local LC_ALL=C f="$REG/$id.deleg" g="$REG/$id.generation" g2="" l1="$lrc_line" l2="" sz=0 add=0 drop=""
+  [[ "$lrc_line" != *$'\t'* ]] || { l1="${lrc_line%%$'\t'*}"; l2="${lrc_line#*$'\t'}"; }
+  [[ ! -L "$f" && ( ! -e "$f" || -f "$f" ) ]] || return 0   # ABSENCE FIRST (D-7448), as the spool's bucket
+  [[ -n "$dsp_gen" && -f "$g" && ! -L "$g" ]] || return 0
+  { IFS= read -r -N 37 g2 < "$g"; } 2>/dev/null
+  [[ "$g2" == "$dsp_gen" ]] || return 0
+  add=$(( ${#l1} + 1 )); [[ -z "$l2" ]] || add=$(( add + ${#l2} + 1 ))
+  (( DSP_LINE_BELOW > ${#l1} + 1 && DSP_LINE_BELOW > ${#l2} + 1 )) || return 0   # unreachable with the current field bounds: the largest row is about 856 bytes, under DSP_LINE_SMALL (1008), and a TAB pair always carries script null
+  if [[ -e "$f" ]]; then sz=$( { wc -c < "$f"; } 2>/dev/null ); sz="${sz//[[:space:]]/}"; [[ "$sz" =~ ^[0-9]+$ ]] || return 0; fi
+  if (( sz + add > LRC_MAX_BYTES )); then
+    drop="{\"v\":1,\"t\":$(_hook_epoch_ms),\"k\":\"drop\",\"why\":\"budget\"}"
+    (( sz + ${#drop} + 1 <= LRC_MAX_BYTES + LRC_DROP_RESERVE )) || return 0
+    { printf '%s\n' "$drop" >> "$f"; } 2>/dev/null
+  elif [[ -n "$l2" ]]; then { printf '%s\n%s\n' "$l1" "$l2" >> "$f"; } 2>/dev/null
+  else { printf '%s\n' "$l1" >> "$f"; } 2>/dev/null
+  fi
+  [[ -e "$g" ]] || rm -f -- "$f" 2>/dev/null
+  return 0
+}
+[[ -n "$lrc_line" && -z "$tmsub" ]] && { _hook_launch_record_append || true; }
+# <<< launch-record
+# THE START REPORT (Overlord W1a, spec §3.3.11, H12; the header's FOURTH exception): every SessionStart of a main-thread
+# session that is not a child, compact included (so it runs before the exit below) and `fork` excluded (a fork shares this
+# pane's id under a new uuid, so its report could never be attributed), is reported to `POST /api/sessions/:id/start`
+# through the closed client. The report spends at most START_BUDGET_MS (the roster card's own bound comes before it on a
+# clear, compact or resume start): one deadline set at entry, the fresh report sent first, each send given what is left,
+# and none started with under a second left. The body carries the conversation's uuid as `startedUuid`, data; `fromUuid`,
+# the sender the server attributes, is rewritten to this event's `session_id` on a resend of a `clear`, `resume` or
+# `compact` report, so one spooled before a `/clear` lands once the registry follows. A `startup` report keeps its own
+# `fromUuid`, so another process's `startup` in this pane meets `stale-uuid` and is dropped; another process's `clear`,
+# `resume` or `compact` is rewritten like the row's own and can still land as the row's, its `startedUuid` its own. A report the
+# server did not take is kept in ONE dot-free field, `$REG/<id>.startpending`, so `_reg_purge` and `_ws_slug_residue` take
+# it with the row: line 1 is `<not-before ms>\t<dropped count>`, each later line `<tries>\t<report JSON>`, oldest first.
+# No answer keeps it untried and ends the pass; `stale-uuid` keeps it, counts a try and ends the pass when the send carried
+# this event's `session_id` (the fresh report, or a rewritten one), and lets the pass go on when it did not (a kept
+# `startup`), so a stale `startup` never holds back the reports behind it; a 404 or 401 (an older server,
+# mid-rollout), a 5xx or a local client refusal keeps it, counts a try and ends the pass; any other 4xx drops it. A report
+# tried START_RESEND_TRIES times is dropped, at most START_PENDING_MAX are kept (the oldest dropped first), and every drop
+# is counted. Only SessionStart and UserPromptSubmit resend, never a tool event or Stop, and only after the back-off the
+# last pass stamped by how it ended: START_RESEND_BACKOFF_MS after a send that ended the pass, START_STALE_BACKOFF_MS (one
+# supervisor tick, for `_sync_uuid` to follow) after a `stale-uuid` or a spent budget, each counted from the pass's end; a
+# fresh report taken clears a standing stamp; a stamp past the long back-off (a clock stepped back) reads as the long
+# one. Written only for a row ccd created (its `generation` stands), under the join
+# record's two-sided rule: looked at again after the write here, and taken once more after `generation` by `_reg_purge`,
+# so no purge orphans it. It holds no authority, is never read as truth, prints nothing, and no path through it changes
+# this hook's exit code or stdout.
+START_PENDING_MAX=20 START_RESEND_TRIES=5 START_RESEND_BACKOFF_MS=30000 START_STALE_BACKOFF_MS=5000 START_BUDGET_MS=4000
+_hook_start_send() {   # <report JSON> <deadline ms> -> 0 taken; 1 stale-uuid; 2 no answer; 3 refused for good; 4 kept and tried; 5 no time
+  local out left=$(( $2 - $(_hook_epoch_ms) ))
+  (( left >= 1000 )) || return 5
+  out=$(printf '%s\n' "$1" | CCRC_API_STATUS=line _hook_timeout "$(( left / 1000 )).$(( left % 1000 / 100 ))" "$HOME/.local/bin/ccrc-api" sessions start "$id" --json - 2>&1)
+  case "$?" in 0) ;; 2) return 4 ;; *) return 2 ;; esac
+  case "$out" in *'http 202'*) return 0 ;; *'"stale-uuid"'*) return 1 ;; *'http 40'[14]*|*'http 5'[0-9][0-9]*) return 4 ;; *'http 4'[0-9][0-9]*) return 3 ;; *) return 2 ;; esac
+}
+_hook_start_keep() {   # <tries> <report JSON> <send rc, 6 unsent, 7 stale under another sender> -> the caller's stay, drop, pass and why
+  local t=$1
+  case "$3" in 0) return 0 ;; 3) drop=$(( drop + 1 )); return 0 ;; 1) pass=0 why=$(( why > 1 ? why : 1 )) ;; 5) why=$(( why > 1 ? why : 1 )) ;; 2|4) pass=0 why=2 ;; esac
+  [[ "$3" == [147] ]] && t=$(( t + 1 ))
+  (( t >= START_RESEND_TRIES )) && drop=$(( drop + 1 )) || stay+=("$t"$'\t'"$2")
+}
+_hook_start_report() {
+  local f="$REG/$id.startpending" now dl after=0 drop=0 t j r rc=6 pass=1 why=0 body="" inc="" e kept=() stay=()
+  case "$event" in UserPromptSubmit|SessionStart) ;; *) return 0 ;; esac
+  [[ -z "$paid" && "$id" =~ ^[A-Za-z0-9_-]+$ && -f "$REG/$id.generation" && ! -L "$f" ]] || return 0
+  { [ -e "$REG/$id.child" ] || [ -L "$REG/$id.child" ]; } && return 0
+  now=$(_hook_epoch_ms); dl=$(( now + START_BUDGET_MS ))
+  [[ -f "$f" ]] && { IFS=$'\t' read -r after drop; while IFS=$'\t' read -r t j; do kept+=("$t"$'\t'"$j"); done; } < "$f" 2>/dev/null
+  [[ "$after" =~ ^[0-9]+$ ]] || after=0; [[ "$drop" =~ ^[0-9]+$ ]] || drop=0
+  (( after > now + START_RESEND_BACKOFF_MS )) && after=$(( now + START_RESEND_BACKOFF_MS ))
+  (( now < after )) && pass=0
+  if [[ "$event" == SessionStart && "$src" != fork ]]; then
+    # `_reg_generation_valid`'s grammar (ccd/ccd), which `REG_GENERATION_SHAPE` (shared/api.ts) holds for the server.
+    [[ "${CCRC_SESSION_GENERATION:-}" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]] && inc="$CCRC_SESSION_GENERATION"
+    body=$(jq -c --arg id "$id" --arg rid "$now-$$-$RANDOM" --arg inc "$inc" --argjson at "$now" \
+      '(.session_id // "" | tostring) as $u | {fromId: $id, fromUuid: $u, startedUuid: $u, reportId: $rid,
+        source: (.source // "" | tostring | if . == "" then "other" else .[0:32] end),
+        model: (.model | if type == "string" then .[0:128] elif type == "object" and (.id | type) == "string" then .id[0:128] else null end),
+        rowIncarnation: (if $inc == "" then null else $inc end), reportedAt: $at}' <<<"$payload" 2>/dev/null) || body=""
+    [[ -n "$body" ]] && { _hook_start_send "$body" "$dl"; rc=$?; }
+    [[ "$rc" == [1245] ]] && pass=0
+  fi
+  [[ -n "$psid" ]] || pass=0
+  for e in ${kept[@]+"${kept[@]}"}; do
+    t="${e%%$'\t'*}" j="${e#*$'\t'}"; [[ "$t" =~ ^[0-9]+$ ]] || t=0; r=6
+    (( pass )) && { j=$(jq -c --arg u "$psid" '.startedUuid //= .fromUuid | if .source == "clear" or .source == "resume" or .source == "compact" then .fromUuid = $u else . end' <<<"$j" 2>/dev/null) && { _hook_start_send "$j" "$dl"; r=$?; } || r=3; }
+    [[ "$r" == 5 ]] && pass=0
+    [[ "$r" == 1 && "$j" != *"\"fromUuid\":\"$psid\""* ]] && r=7   # stale under a sender not this event's (a kept startup): a try, and the pass goes on
+    _hook_start_keep "$t" "$j" "$r"
+  done
+  [[ -z "$body" ]] || _hook_start_keep 0 "$body" "$rc"
+  (( rc == 0 )) && after=0
+  now=$(_hook_epoch_ms)
+  (( why == 2 )) && after=$(( now + START_RESEND_BACKOFF_MS ))
+  (( why == 1 )) && after=$(( now + START_STALE_BACKOFF_MS ))
+  while (( ${#stay[@]} > START_PENDING_MAX )); do stay=("${stay[@]:1}"); drop=$(( drop + 1 )); done
+  if (( ${#stay[@]} == 0 && drop == 0 )); then rm -f -- "$f" 2>/dev/null; return 0; fi
+  { { printf '%s\t%s\n' "$after" "$drop"; if (( ${#stay[@]} )); then printf '%s\n' "${stay[@]}"; fi; } > "$f$$" && mv -f -- "$f$$" "$f"; } 2>/dev/null \
+    || rm -f -- "$f$$" 2>/dev/null
+  [[ -e "$REG/$id.generation" ]] || rm -f -- "$f" 2>/dev/null   # a purge during the send: side (a); `_reg_purge` is side (b)
+  return 0
+}
+_hook_start_report || true
 # StopFailure (§5.1) leaves hookstate.json alone and prints nothing: its arm raised
 # the flag and read `err` for the marker above (stopfailure-sets-a-flag (D-3611)), and nothing
 # below may run for it. SessionEnd is a termination hint, captured above in a -hookcap session and otherwise inert; so is a
@@ -3995,6 +4146,112 @@ fi
 # prescribes next, and it is the one with a durable server-side arbiter.
 if [[ -n "$gcmd" && "$gcmd" =~ $CCRC_PEERS_RE  ]]; then cp=$((cp + 1)); fi
 if [[ -n "$gcmd" && "$gcmd" =~ $CCRC_CLAIMS_RE ]]; then cc=$((cc + 1)); fi
+
+# ── THE PRECOMPACT LINE (Overlord W1a, W0-05) ────────────────────────────
+# An automatic compaction can fire PreCompact with no PostCompact after it, so
+# the server counts a compaction from this line, joined to its journal record
+# by trigger, transcript and time. NAMED `compactevents`, never `precompact`,
+# which is a route field (`$REG/<id>.<field>`) that `cmd_route --set` writes.
+# ITS OWN FILE, NOT `.compactions`, and that is
+# legitimately different: every PostCompact commit re-checks the WHOLE journal
+# against JOURNAL_RECORD_PRED, a safety boundary, so a second line shape there
+# would refuse every later commit, an older hook's after a rollback included.
+# AN ARM OF ITS OWN, run after `_hook_compact_pre` and `_hook_history_pre`, so
+# none of the card's early returns (its off switch, a scope that does not
+# resolve, its lock miss) can drop the line. It runs LAST, except for the one
+# line the refusal arm, `_hook_compact_refuse` (below), asks of it first with
+# the phase `refused`: the arm prints its block only once that line is written,
+# and a delivered block (`CS_REFUSED`) then skips the last call, so a refused
+# event keeps one line. It answers 0 only for a line written. One writer (this function),
+# under the row's `.compactions.lock`, so a line and a commit never interleave.
+# Dot-free, so `_reg_purge` and the slug passes take it with the row. BOUNDED
+# BY ROTATION, with no temp file: at PRECOMPACT_KEEP lines it is renamed to
+# `.compacteventsprev` and a fresh file starts, so a reader of both always holds
+# the last PRECOMPACT_KEEP lines. Its own lock miss still drops the line; the
+# server then reads one compaction fewer, never a file it cannot tell apart. A
+# rotation that is due and fails appends nothing, so the file never outgrows
+# its bound (review 1937 F2). A symlink at `.compacteventsprev`, dangling or
+# not, is removed under the lock (`rm -f` takes the link, never its target),
+# so a planted link cannot silence every later line (review 1937 F1).
+PRECOMPACT_KEEP=32
+# THE PRECOMPACT REFUSAL ARM, DARK (Overlord W1a compaction, spec §3.3.4 C39; W0-13; rulings R7a, R7b, R11). A verdict
+# of its own, dispatched FIRST of the PreCompact arms: ahead of `_hook_history_pre`, so no history switch turns it off,
+# and ahead of the card, `_hook_compact_pre`, which returns at once on CS_REFUSED, because a refused event is no
+# compaction and an unconsumed card set would read the next real one as an overlap for twenty minutes (the
+# coordinator's ruling, departure refusal-ahead-of-the-card). It refuses, once a turn, a main-thread PreCompact whose
+# trigger is `auto`, whose scope RULE answers `main` (asked here, since the card has not run; `subagent`, `ambiguous`
+# and no verdict never, R7a), and whose route field `precompact` reads `refuse` (absent is dark; the generations lane
+# is its one writer). Once a turn (R11): no
+# `refused` line in either events file at or after this turn's start, the turn marker's existing `turnAt` (rewritten
+# by every UserPromptSubmit, and by a main tool event only when the marker is not already `working`). A marker that
+# cannot be read, is another session's or holds no `turnAt` answers "refused already": the compaction goes through.
+# Refusing, it RECORDS FIRST (review 2004 F1): `_hook_compact_pre_line refused` writes the `refused` line under the
+# lock, and only once that write succeeded does the arm print PreCompact's JSON block decision. Every path that writes
+# no line (a lock miss, another generation, a bad events file or `.compacteventsprev`, a failed rotation or append)
+# prints no block, so the compaction goes through: a refusal is never printed that the next PreCompact cannot see.
+# W0-13 measured the exit-code-2 form, which this file's exit-0 contract cannot use; the hooks page gives the JSON
+# form as its equal, unmeasured (the renewal hand-offs plan measures it before arming). Only when the print succeeded
+# is CS_REFUSED set: `_hook_history_pre` then prints nothing, so the event keeps one stdout payload, and the last
+# events-line call is skipped. A print that fails leaves the `refused` line, and the event's own `pre` line follows
+# it: the compaction goes through, and the turn asks no second refusal. Twin:
+# `server/src/continuity/precompact.ts#precompactDecision`.
+_hook_compact_refuse() {   # PreCompact -> the block decision on stdout and CS_REFUSED=1, or nothing; 0 on every path
+  local v="" ta="" l="" f="" tp="" trig=""
+  [[ -z "$paid" && -f "$REG/$id.precompact" && ! -L "$REG/$id.precompact" ]] || return 0
+  { read -r -n 7 v < "$REG/$id.precompact"; } 2>/dev/null
+  { { read -r tp; read -r trig; } < <(jq -r '(.transcript_path // "" | tostring), (.trigger // "" | tostring)' <<<"$payload" 2>/dev/null); } 2>/dev/null
+  [[ "$v" == refuse && "$trig" == auto ]] && _hook_compact_scope "$tp" "$trig" || return 0
+  [[ "${CS_SCOPE-}" == main && -f "$REG/$id.turn.json" && ! -L "$REG/$id.turn.json" ]] || return 0
+  { IFS= read -r l < "$REG/$id.turn.json"; } 2>/dev/null
+  [[ "$l" == *"\"sessionId\":\"$msid\""* && "$l" =~ \"turnAt\":([0-9]{1,15})[,}] ]] && ta="${BASH_REMATCH[1]}" || return 0
+  for f in "$REG/$id.compactevents" "$REG/$id.compacteventsprev"; do
+    [[ -f "$f" && ! -L "$f" ]] || continue
+    while IFS= read -r l; do
+      [[ "$l" == *'"phase":"refused"'* && "$l" =~ ^\{\"at\":([0-9]{1,15}), ]] && (( BASH_REMATCH[1] >= ta )) && return 0
+    done 2>/dev/null < "$f"
+  done
+  _hook_compact_pre_line refused || return 0   # recorded first, under the lock: no line, no block (review 2004 F1)
+  trap '' PIPE; { printf '%s\n' '{"decision":"block","reason":"ccrc: this automatic compaction is refused once this turn, and a renewal is due (Overlord C39)"}'; } 2>/dev/null && CS_REFUSED=1; trap - PIPE
+}
+_hook_compact_pre_line() {   # [phase] -> one line on $REG/<id>.compactevents; rc 0 iff it was written; silent on any failure
+  local f="$REG/$id.compactevents" prev="$REG/$id.compacteventsprev" line="" lockfd="" lines=() rot=0 rc=1
+  # THE SCOPE VERDICT ON EVERY LINE: every PreCompact payload names the parent's
+  # transcript, so `_hook_compact_scope`'s word is all that tells a subagent's
+  # compaction apart. Asked here when the card did not run (its off switch).
+  # The RULE's answer (main, subagent, or ambiguous when the rule cannot
+  # decide), never the card's overlap degrade, which `_hook_compact_pre` writes
+  # over CS_SCOPE for an unconsumed set: a PreCompact with no PostCompact
+  # (W0-05) leaves one for twenty minutes, and a main compaction inside them
+  # must still count (review 1927 I1).
+  [[ -n "${CS_SCOPE+x}" ]] || _hook_history_scope_verdict || true
+  line=$(jq -c --argjson at "$(_hook_epoch_ms)" --arg s "${CS_RULE_SCOPE-${CS_SCOPE-}}" --arg t "${CS_RULE_TRANSCRIPT-${CS_TRANSCRIPT-}}" --arg ph "${1-pre}" \
+    '{at:$at, trigger:(.trigger // "auto" | if . == "auto" or . == "manual" then . else "other" end),
+      scope:(if $s=="" then null else $s end), transcript:(if $t=="" then null else $t end), phase:$ph}' \
+    <<<"$payload" 2>/dev/null) || return 1
+  _hook_lock_acquire "$COMPACT_LOCK_WAIT" || return 1
+  lockfd="$HOOK_LOCK_FD"
+  # A FIFO, a symlink or a directory at either pathname is not this file and is
+  # never opened: an open of a FIFO would block inside the held lock. A symlink
+  # at `.compacteventsprev` is removed first (F1); any other bad
+  # `.compacteventsprev` writes no line and moves nothing, so the rotation can
+  # never fail over and over while the current file grows (review 1927 M5).
+  _hook_generation_ok || { _hook_lock_release "$lockfd"; return 1; }
+  [[ -L "$prev" ]] && _hook_lock_still_canonical "$lockfd" \
+    && rm -f "$prev" 2>/dev/null
+  if [[ ! -L "$f" && ! -L "$prev" ]] && { [[ ! -e "$f" ]] || [[ -f "$f" ]]; } \
+    && { [[ ! -e "$prev" ]] || [[ -f "$prev" ]]; }; then
+    [[ -f "$f" ]] && { mapfile -t lines < "$f"; } 2>/dev/null
+    rot=$(( ${#lines[@]} >= PRECOMPACT_KEEP ))
+    if (( rot )) && _hook_lock_still_canonical "$lockfd"; then
+      mv -f "$f" "$prev" 2>/dev/null && rot=0
+    fi
+    if (( rot == 0 )) && _hook_lock_still_canonical "$lockfd"; then
+      { printf '%s\n' "$line" >> "$f"; } 2>/dev/null && rc=0
+    fi
+  fi
+  _hook_lock_release "$lockfd"
+  return "$rc"
+}
 
 # ── R5: THE SEARCH GATE (D-1613) ────────────────────────────────────────
 # The spec DECLINED this gate and the operator reversed it on R4's own reading:
@@ -6065,8 +6322,8 @@ _hook_approval_wait() {
 if [[ "$event" == PermissionRequest && -n "$apr" ]]; then _hook_approval_wait || true; fi
 # The two compaction arms run LAST, after the `working`/`done` stamp is on
 # disk: each calls the helper under one locally resolved deadline, and the
-# state write must never wait on either. Nothing below prints except `_hook_history_pre`'s steer print
-# on an ARMED, main-scope PreCompact (W3-1 Task 1C, spec §7.2; its gates are stated at the function) —
+# state write must never wait on either. Nothing below prints except one PreCompact payload: the refusal arm's block decision (`_hook_compact_refuse`, dark until the route says refuse; Overlord C39),
+# or else `_hook_history_pre`'s steer print on an ARMED, main-scope PreCompact (W3-1 Task 1C, spec §7.2; its gates are stated at the function) —
 # PostCompact's whole output is a journal line on disk, and this file's contract is silence.
 # THE HISTORY CARD'S ROOM (ccrc history spec 2026-10-05 §8.6, W1-B3). The compact
 # card renders HISTORY_CARD_MAX + 1 chars short (`_hook_compact_pre`'s
@@ -6083,8 +6340,11 @@ HISTORY_CARD_RESERVE=0
 # `CS_SCOPE` is the compaction card's scope verdict, a plain global with no
 # initialiser. It is unset here, every run, so the history scope marker below
 # reads only a verdict THIS run reached, never one exported into the pane
-# (the `hcat` reset's reasoning).
-unset CS_SCOPE
+# (the `hcat` reset's reasoning). So are the rule's own answer
+# (`CS_RULE_SCOPE`, `CS_RULE_TRANSCRIPT`, which the events line and the refusal
+# arm read; review 1937 F3) and the refusal arm's `CS_REFUSED`.
+unset CS_SCOPE CS_RULE_SCOPE CS_RULE_TRANSCRIPT CS_REFUSED
+if [[ "$event" == PreCompact ]]; then _hook_compact_refuse || true; fi
 if [[ "$event" == PreCompact  ]]; then _hook_compact_pre  || true; fi
 # >>> history-scope (spec 2026-10-05 §5.1)
 # THE PRECOMPACT SCOPE MARKER (ccrc history spec 2026-10-05 §5.1, W1-B3):
@@ -6242,9 +6502,23 @@ _hook_history_steer_read() {
   fi
   return 0
 }
+# THE ROLE'S COMPACTION TEXT, A SECTION OF THE ONE PRINT (Overlord W1a compaction, spec §3.3.9 C51, §3.3.10 C53): the
+# launch-profile projection's `compactText` for the route's `profile`, checked by ccd's COMPACT_TEXT_JQ (parity-pinned by
+# session-hook-steer.test.ts), only when the route carries a valid `compactwindow` too (ruling R8). -> HR_TEXT, or "", and
+# the print is then today's, byte for byte. It prints BEFORE the steer text, so the steer's "At the very END" stays the
+# print's last instruction. Legitimately a second reader of the projection: another process, which cannot call ccd's.
+COMPACT_TEXT_JQ='.[$r].compactText | if type == "string" and test("\\A[ -~]{1,600}\\z") and (test("[\\x22\\x27\\x24\\x3b\\x5c\\x60]") | not) then . else error("not one typeable line") end'
+_hook_role_compact_text() {   # -> HR_TEXT
+  local p="" w="" f="${BASH_SOURCE[0]%/*}/lib/launch-profiles.json"
+  HR_TEXT=""; [[ -f "$f" ]] || f="$HOME/.cc-sessions/lib/launch-profiles.json"
+  [[ -f "$REG/$id.profile" && ! -L "$REG/$id.profile" && -f "$REG/$id.compactwindow" && ! -L "$REG/$id.compactwindow" ]] || return 0
+  { read -r -n 17 p < "$REG/$id.profile"; read -r -n 8 w < "$REG/$id.compactwindow"; } 2>/dev/null
+  [[ "$p" =~ ^[a-z]{1,16}$ && "$w" =~ ^[1-9][0-9]{5,6}$ ]] && (( w >= 100000 && w <= 1000000 )) || return 0
+  HR_TEXT=$(jq -r --arg r "$p" "$COMPACT_TEXT_JQ" "$f" 2>/dev/null) || HR_TEXT=""
+}
 _hook_history_pre() {   # PreCompact: the steer print, then its receipt; silent on every refusal; 0 on every path
-  local uuid_re='^[0123456789abcdef]{8}-[0123456789abcdef]{4}-[0123456789abcdef]{4}-[0123456789abcdef]{4}-[0123456789abcdef]{12}$' rc=0 json="" g="" c="" cs="" cf="" ts=""
-  [[ "$event" == PreCompact && -z "$paid" ]] || return 0
+  local uuid_re='^[0123456789abcdef]{8}-[0123456789abcdef]{4}-[0123456789abcdef]{4}-[0123456789abcdef]{4}-[0123456789abcdef]{12}$' rc=0 json="" g="" c="" cs="" cf="" ts="" nl=$'\n'
+  [[ "$event" == PreCompact && -z "$paid" && -z "${CS_REFUSED-}" ]] || return 0   # a refused event prints only its block
   [[ -e "$HOME/.ccrc/history-off" || -e "$HOME/.ccrc/history-steer-off" ]] && return 0
   _hook_history_steer_recall_off && return 0
   (( ${#id} <= 224 )) || return 0
@@ -6253,8 +6527,9 @@ _hook_history_pre() {   # PreCompact: the steer print, then its receipt; silent 
   [[ -n "${CS_SCOPE+x}" ]] || _hook_history_scope_verdict || true
   [[ "${CS_SCOPE-}" == main ]] || return 0
   _hook_history_steer_read || return 0
+  _hook_role_compact_text
   trap '' PIPE
-  { printf '\n%s\n' "$HS_TEXT"; } 2>/dev/null; rc=$?
+  { printf '%s\n%s\n' "${HR_TEXT:+${nl}ccrc-role-compaction: ${HR_TEXT}${nl}}" "$HS_TEXT"; } 2>/dev/null; rc=$?
   trap - PIPE
   (( rc == 0 )) || return 0
   json='{"v":1,"ev":"steer"'
@@ -6274,5 +6549,9 @@ _hook_history_pre() {   # PreCompact: the steer print, then its receipt; silent 
   return 0
 }
 if [[ "$event" == PreCompact ]]; then _hook_history_pre || true; fi
+# LAST of the PreCompact arms (Overlord W1a, plan review 1890 I1). A refused
+# event has written its `refused` line already, inside `_hook_compact_refuse`,
+# before its block was printed (review 2004 F1), so `CS_REFUSED` skips it here.
+if [[ "$event" == PreCompact && -z "${CS_REFUSED-}" ]]; then _hook_compact_pre_line || true; fi
 if [[ "$event" == PostCompact ]]; then _hook_compact_post || true; fi
 exit 0

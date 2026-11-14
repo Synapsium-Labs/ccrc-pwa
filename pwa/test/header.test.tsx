@@ -17,6 +17,7 @@ import { CommandLayer } from '../src/command/CommandLayer';
 import { createFleetStore } from '../src/stores/fleet';
 import { createSessionStore } from '../src/stores/session';
 import { TEST_ROSTER } from './rosterFixture';
+import { labelInName, namesWithoutTheirLabel, shownText } from './labelInName';
 
 afterEach(() => {
   cleanup();
@@ -89,10 +90,20 @@ const renderHeader = (over: Partial<HeaderHostProps> = {}): HeaderHostProps => {
 describe('SessionHeader', () => {
   it('keeps the stop keycap disabled while idle', () => {
     const props = renderHeader();
-    const stop = screen.getByRole('button', { name: 'Stop' });
+    const stop = screen.getByRole('button', { name: 'Esc (Stop)' });
     expect(stop).toBeDisabled();
     fireEvent.click(stop);
     expect(props.onInterrupt).not.toHaveBeenCalled();
+  });
+
+  // LABEL IN NAME (WCAG 2.5.3, D-8383): no story renders the session header, so
+  // the stop cap is measured here. It shows `esc`, so its name leads with it.
+  it('the stop keycap\'s name leads with the "esc" it shows (label in name, D-8383)', () => {
+    renderHeader({ status: 'busy', session: fleetSession({ status: 'busy', bucket: 'working' }) });
+    const stop = screen.getByRole('button', { name: 'Esc (Stop)' });
+    expect(shownText(stop)).toBe('esc');
+    expect(labelInName(shownText(stop), stop.getAttribute('aria-label')!)).toBe(true);
+    expect(namesWithoutTheirLabel(document.querySelector('.chat-head')!)).toEqual([]);
   });
 
   it('enables the stop keycap while busy and fires onInterrupt', () => {
@@ -100,7 +111,7 @@ describe('SessionHeader', () => {
       status: 'busy',
       session: fleetSession({ status: 'busy', bucket: 'working' }),
     });
-    const stop = screen.getByRole('button', { name: 'Stop' });
+    const stop = screen.getByRole('button', { name: 'Esc (Stop)' });
     expect(stop).toBeEnabled();
     fireEvent.click(stop);
     expect(props.onInterrupt).toHaveBeenCalledOnce();
@@ -257,13 +268,13 @@ describe('interrupt control', () => {
   it('renders the esc keycap on touch, where there is no Escape key', () => {
     stubPointer(false);
     render(<SessionHeaderHost {...props({ status: 'busy' })} />);
-    expect(screen.getByRole('button', { name: 'Stop' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Esc (Stop)' })).toBeInTheDocument();
   });
 
   it('hides the keycap where a real keyboard exists', () => {
     stubPointer(true);
     render(<SessionHeaderHost {...props({ status: 'busy' })} />);
-    expect(screen.queryByRole('button', { name: 'Stop' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Esc (Stop)' })).not.toBeInTheDocument();
   });
 
   it('binds the physical Escape key in its place', () => {
@@ -320,7 +331,7 @@ describe('SessionScreen interrupt wiring', () => {
       store.setState({ uuid: 'u1', status: 'busy' });
     });
     // The header's keycap, by its place: since W2 Task S7b the composer's send slot is a Stop too (D-5471).
-    fireEvent.click(within(document.querySelector<HTMLElement>('.chat-head')!).getByRole('button', { name: 'Stop' }));
+    fireEvent.click(within(document.querySelector<HTMLElement>('.chat-head')!).getByRole('button', { name: 'Esc (Stop)' }));
     expect(spy).toHaveBeenCalledWith('claude:ProjectC', 'keycap');
   });
 
@@ -360,7 +371,7 @@ describe('SessionScreen interrupt wiring', () => {
       store.setState({ uuid: 'u1', status: 'busy' });
     });
     // The header's keycap, by its place: since W2 Task S7b the composer's send slot is a Stop too (D-5471).
-    fireEvent.click(within(document.querySelector<HTMLElement>('.chat-head')!).getByRole('button', { name: 'Stop' }));
+    fireEvent.click(within(document.querySelector<HTMLElement>('.chat-head')!).getByRole('button', { name: 'Esc (Stop)' }));
     expect(await screen.findByText(/nothing to stop/)).toBeInTheDocument();
   });
 });

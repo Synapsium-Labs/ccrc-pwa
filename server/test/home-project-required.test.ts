@@ -23,6 +23,7 @@ import type { Runner } from '../src/exec.js';
 import { testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
 import { okRuns } from './coordReadHelpers.js';
+import { planStorePort } from '../src/coord/planStore.js';
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const ROUTES = readFileSync(path.join(REPO, 'server/src/coord/routes.ts'), 'utf8');
@@ -49,7 +50,7 @@ const openApp = async () => {
     writeFileSync(path.join(home, '.cc-sessions', `${id}.${k}`), v);
   }
   const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
-  const app = await buildServer({ ...testDeps(home, runner), mailToken: TOKEN, coord });
+  const app = await buildServer({ ...testDeps(home, runner), mailToken: TOKEN, coord, plan: planStorePort(coord.db) });
   return { app, coord };
 };
 
@@ -89,6 +90,15 @@ describe('homeProject is required at open (the legacy generation is over)', () =
 
   it('still opens when homeProject is given, and records no legacy event', async () => {
     const w = await openApp(); app = w.app;
+    // A NEW programme's first open: since D-8181 it declares its plan first (`plan put` inserts the programme's row, with
+    // its home), so the open still reaches the "home given" arm this test is about.
+    const declared = await app.inject({
+      method: 'POST', url: `/api/programmes/${OPEN_BODY.program}/plan?byId=${OPEN_BODY.claimedBy}&byUuid=u-${OPEN_BODY.claimedBy}`,
+      headers: { 'x-ccrc-mail-token': TOKEN },
+      payload: { home: 'demo', epics: [{ key: 'e1', title: 'E1', summary: 's', waves: [1],
+        checkpoints: [{ key: 'c1', title: 'c', kind: 'acceptance' }] }] },
+    });
+    expect(declared.statusCode, declared.body).toBe(200);
     const res = await postOpen(app, { ...OPEN_BODY, homeProject: 'demo' });
     expect(res.statusCode, 'a well-formed open was refused').toBe(200);
     const body = JSON.parse(res.body) as { ok: boolean; id: number; ledgerRepo: string | null };

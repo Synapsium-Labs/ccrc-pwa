@@ -24,6 +24,7 @@ import type { CcdResult } from '../src/lifecycle.js';
 import { CAP_MAX, CAP_MIN } from '../src/coord/caps.js';
 import { testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
+import { seedLegacyProgramme } from './helpers/plan.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const srcRoot = path.resolve(here, '..', 'src');
@@ -367,6 +368,7 @@ describe('POST /api/coord/caps', () => {
       throw new Error(`timed out waiting for ${what}`);
     };
 
+    seedLegacyProgramme(coord.db, 'p', 'demo');
     const opening = app.inject({ method: 'POST', url: '/api/runs',
       headers: { 'x-ccrc-mail-token': TOKEN },
       payload: { program: 'p', title: 'P', project: 'demo', wave: 1, waveOf: 8,

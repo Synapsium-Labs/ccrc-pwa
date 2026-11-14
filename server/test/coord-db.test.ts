@@ -57,7 +57,7 @@ describe('openCoordDb', () => {
     // warning is the ONLY observable difference — pin it, not just the data.
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const b = openCoordDb(p);
-    expect((b.prepare('SELECT count(*) AS c FROM programs').get() as { c: number }).c).toBe(1);
+    expect((b.prepare('SELECT count(*) AS c FROM programs WHERE slug <> \'linear-sync\'').get() as { c: number }).c).toBe(1);
     expect(warnSpy).not.toHaveBeenCalled();
     warnSpy.mockRestore();
     b.close();
@@ -161,7 +161,7 @@ describe('openCoordDb', () => {
     // here would catch it.
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const b = openCoordDb(p);                       // no throw
-    expect((b.prepare('SELECT count(*) AS c FROM programs').get() as { c: number }).c).toBe(1);
+    expect((b.prepare('SELECT count(*) AS c FROM programs WHERE slug <> \'linear-sync\'').get() as { c: number }).c).toBe(1);
     expect((b.prepare('PRAGMA user_version').get() as { user_version: number }).user_version)
       .toBe(COORD_SCHEMA_VERSION + 7);              // never written DOWN
     expect(warnSpy).toHaveBeenCalledTimes(1);
@@ -267,9 +267,9 @@ describe('openCoordDb', () => {
       db.prepare("INSERT INTO programs (slug,title,createdAt,state) VALUES ('b','B',1,'active')").run();
       throw new Error('nope');
     })).toThrow('nope');
-    const slugs = (db.prepare('SELECT slug FROM programs ORDER BY slug').all() as { slug: string }[])
+    const slugs = (db.prepare("SELECT slug FROM programs WHERE slug <> 'linear-sync' ORDER BY slug").all() as { slug: string }[])
       .map((r) => r.slug);
-    expect(slugs).toEqual(['a']);
+    expect(slugs).toEqual(['a']);   // D-8181: the reserved `linear-sync` row (migration 59) is left out of every count here
     db.close();
   });
 });
@@ -710,9 +710,25 @@ describe('coord.db: migration 4 — runs.dispatchStartedAt', () => {
     // and MIGRATIONS[52] (programs.doneWhen, D-8126)
     // and MIGRATIONS[53] (run_close_settings.claimantGone, D-8078)
     // and MIGRATIONS[54] (coordinator_calls, D-8126)
-    // and MIGRATIONS[55] (lane_arm_settings, D-8274).
-    expect(COORD_SCHEMA_VERSION).toBe(56);
-    expect(MIGRATIONS.length).toBe(56);
+    // and MIGRATIONS[55] (lane_arm_settings, D-8274)
+    // and MIGRATIONS[56] (testbox_events, the test box ledger, D-8166)
+    // and MIGRATIONS[57] (practice_cases, Overlord W1a)
+    // and MIGRATIONS[58] (the plan tables, bindings, runs.ticketId and the hierarchy settings, D-8181)
+    // and MIGRATIONS[59] (claude_builds, the trusted set of Claude Code builds, D-8289)
+    // and MIGRATIONS[60] (nodes.reportedSweep, the update sweep's record, D-8386)
+    // and MIGRATIONS[61] (claims.chainedFrom, a running holder's re-chained claim, D-8395) and MIGRATIONS[62]
+    // (testbox_events.changes and testbox_staged_changes, the ledger's old and new values, D-8399)
+    // and MIGRATIONS[63] (project_linking's team source, evidence and candidates, the automatic team link, D-8405)
+    // and MIGRATIONS[64] (mail.answersMail and mail_answers_once, the invited reply, #2726)
+    // and MIGRATIONS[65] (continuity_starts, the start report, Overlord W1a)
+    // and MIGRATIONS[66] (face_settings, the operator's character choice, the Overlord face plan Task 6)
+    // and MIGRATIONS[67] (continuity_generations, continuity_cursor and the continuity lane-arm row, Overlord W1a)
+    // and MIGRATIONS[68] (continuity_snapshots and continuity_card_reads, the card door, Overlord W1a)
+    // and MIGRATIONS[69] (continuity_timers, the timers, Overlord W1a)
+    // and MIGRATIONS[70] (plain_memory_settings and the launch-profile lane-arm row, Overlord W1a launch profiles PR B)
+    // and MIGRATIONS[71] (continuity_notes and continuity_handovers, the note door, Overlord W1a).
+    expect(COORD_SCHEMA_VERSION).toBe(72);
+    expect(MIGRATIONS.length).toBe(72);
   });
 
   it('is ADDITIVE: every column migration 1 wrote is still on the table, unchanged', () => {
@@ -794,8 +810,23 @@ describe('coord.db: migration 11 — runs.kind and runs.reviews (design 2026-09-
     // and MIGRATIONS[52] (programs.doneWhen, D-8126)
     // and MIGRATIONS[53] (run_close_settings.claimantGone, D-8078)
     // and MIGRATIONS[54] (coordinator_calls, D-8126)
-    // and MIGRATIONS[55] (lane_arm_settings, D-8274); the migration above is still entry 11.
-    expect(COORD_SCHEMA_VERSION).toBe(56);
+    // and MIGRATIONS[55] (lane_arm_settings, D-8274)
+    // and MIGRATIONS[56] (testbox_events, D-8166)
+    // and MIGRATIONS[57] (practice_cases, Overlord W1a)
+    // and MIGRATIONS[58] (the plan model, D-8181)
+    // and MIGRATIONS[59] (claude_builds, D-8289)
+    // and MIGRATIONS[60] (nodes.reportedSweep, D-8386)
+    // and MIGRATIONS[61] (claims.chainedFrom, D-8395) and MIGRATIONS[62] (testbox_events.changes and testbox_staged_changes, D-8399)
+    // and MIGRATIONS[63] (project_linking's team link columns, D-8405)
+    // and MIGRATIONS[64] (mail.answersMail, #2726)
+    // and MIGRATIONS[65] (continuity_starts, the start report, Overlord W1a)
+    // and MIGRATIONS[66] (face_settings)
+    // and MIGRATIONS[67] (continuity_generations, Overlord W1a)
+    // and MIGRATIONS[68] (continuity_snapshots and continuity_card_reads, Overlord W1a)
+    // and MIGRATIONS[69] (continuity_timers, Overlord W1a)
+    // and MIGRATIONS[70] (plain_memory_settings, launch profiles PR B)
+    // and MIGRATIONS[71] (continuity_notes and continuity_handovers, Overlord W1a); the migration above is still entry 11.
+    expect(COORD_SCHEMA_VERSION).toBe(72);
     const row = db.prepare('SELECT kind, reviews FROM runs').get() as { kind: string; reviews: number | null };
     expect(row).toEqual({ kind: 'work', reviews: null });
     db.close();
@@ -833,6 +864,82 @@ describe('coord.db: dead_claimants, the dead-coordinator lane’s durable anchor
     const db = openCoordDb(p);
     expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(COORD_SCHEMA_VERSION);
     expect(db.prepare('SELECT count(*) AS n FROM dead_claimants').get()).toEqual({ n: 0 });
+    expect(db.prepare('SELECT claimedBy, state FROM runs').get()).toEqual({ claimedBy: 'c', state: 'working' });
+    db.close();
+  });
+});
+
+describe('coord.db: practice_cases, the case lane\'s table (Overlord §10.5)', () => {
+  /** Found by its DDL, never hard-coded (the dead_claimants case's rule). */
+  const SLOT = MIGRATIONS.findIndex((m) => m.includes('CREATE TABLE practice_cases')) + 1;
+  interface ColumnInfo { name: string; type: string; notnull: number; pk: number }
+  const ENTRY = /^CREATE TABLE practice_cases \([^;]*\);\s*CREATE INDEX practice_cases_by_signature ON practice_cases\(signature, openedAt\);$/;
+  it('a NEW TABLE and an INDEX, nothing on an existing table: ten columns, the id its key', () => {
+    expect(SLOT, 'no MIGRATIONS entry creates practice_cases').toBeGreaterThanOrEqual(58);
+    const db = openCoordDb(dbPathIn(mkTmp('ccrc-coord-')));
+    const cols = (db.prepare("SELECT name, type, \"notnull\", pk FROM pragma_table_info('practice_cases')").all() as unknown as ColumnInfo[])
+      .map((c) => [c.name, c.type, c.notnull, c.pk]);
+    expect(cols).toEqual([['id', 'INTEGER', 0, 1], ['signature', 'TEXT', 1, 0], ['state', 'TEXT', 1, 0], ['mode', 'TEXT', 1, 0],
+      ['cause', 'TEXT', 1, 0], ['occurrences', 'INTEGER', 1, 0], ['programmes', 'TEXT', 1, 0], ['evidence', 'TEXT', 1, 0],
+      ['windowFrom', 'INTEGER', 1, 0], ['openedAt', 'INTEGER', 1, 0]]);
+    expect(MIGRATIONS[SLOT - 1]!.replace(/--[^\n]*/g, '').trim(), 'the migration CREATEs one table and one index and alters nothing')
+      .toMatch(ENTRY);
+    db.close();
+  });
+
+  it('reaches a database ALREADY at the version before it and leaves every existing row as it was', () => {
+    expect(SLOT, 'no MIGRATIONS entry creates practice_cases').toBeGreaterThanOrEqual(58);
+    const p = dbPathIn(mkTmp('ccrc-coord-'));
+    mkdirSync(path.dirname(p), { recursive: true });
+    const raw = new DatabaseSync(p);
+    tx(raw, () => {
+      for (let v = 0; v < SLOT - 1; v++) raw.exec(MIGRATIONS[v]!);
+      raw.exec(`PRAGMA user_version = ${SLOT - 1}`);
+      raw.exec("INSERT INTO programs (slug, title, createdAt, state) VALUES ('p', 'P', 1, 'active')");
+      raw.exec("INSERT INTO runs (program, wave, waveOf, project, state, claimedBy, openedAt) VALUES ('p', 1, 1, 'demo', 'working', 'c', 1)");
+    });
+    raw.close();
+    const db = openCoordDb(p);
+    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(COORD_SCHEMA_VERSION);
+    expect(db.prepare('SELECT count(*) AS n FROM practice_cases').get()).toEqual({ n: 0 });
+    expect(db.prepare('SELECT claimedBy, state FROM runs').get()).toEqual({ claimedBy: 'c', state: 'working' });
+    db.close();
+  });
+});
+
+describe('coord.db: continuity_starts, the start report\'s record (Overlord §3.3.11)', () => {
+  /** Found by its DDL, never hard-coded (the dead_claimants case's rule). */
+  const SLOT = MIGRATIONS.findIndex((m) => m.includes('CREATE TABLE continuity_starts')) + 1;
+  interface ColumnInfo { name: string; type: string; notnull: number; pk: number }
+  const ENTRY = /^CREATE TABLE continuity_starts \([^;]*\);\s*CREATE INDEX continuity_starts_by_session ON continuity_starts\(sessionId, receivedAt\);$/;
+  it('a NEW TABLE and an INDEX, nothing on an existing table: nine columns, the id its key, one row per report id', () => {
+    expect(SLOT, 'no MIGRATIONS entry creates continuity_starts').toBeGreaterThanOrEqual(64);
+    const db = openCoordDb(dbPathIn(mkTmp('ccrc-coord-')));
+    const cols = (db.prepare("SELECT name, type, \"notnull\", pk FROM pragma_table_info('continuity_starts')").all() as unknown as ColumnInfo[])
+      .map((c) => [c.name, c.type, c.notnull, c.pk]);
+    expect(cols).toEqual([['id', 'INTEGER', 0, 1], ['sessionId', 'TEXT', 1, 0], ['reportId', 'TEXT', 1, 0], ['uuid', 'TEXT', 1, 0],
+      ['source', 'TEXT', 1, 0], ['model', 'TEXT', 0, 0], ['rowIncarnation', 'TEXT', 0, 0], ['reportedAt', 'INTEGER', 1, 0],
+      ['receivedAt', 'INTEGER', 1, 0]]);
+    expect(MIGRATIONS[SLOT - 1]!.replace(/--[^\n]*/g, '').trim(), 'the migration CREATEs one table and one index and alters nothing')
+      .toMatch(ENTRY);
+    db.close();
+  });
+
+  it('reaches a database ALREADY at the version before it and leaves every existing row as it was', () => {
+    expect(SLOT, 'no MIGRATIONS entry creates continuity_starts').toBeGreaterThanOrEqual(64);
+    const p = dbPathIn(mkTmp('ccrc-coord-'));
+    mkdirSync(path.dirname(p), { recursive: true });
+    const raw = new DatabaseSync(p);
+    tx(raw, () => {
+      for (let v = 0; v < SLOT - 1; v++) raw.exec(MIGRATIONS[v]!);
+      raw.exec(`PRAGMA user_version = ${SLOT - 1}`);
+      raw.exec("INSERT INTO programs (slug, title, createdAt, state) VALUES ('p', 'P', 1, 'active')");
+      raw.exec("INSERT INTO runs (program, wave, waveOf, project, state, claimedBy, openedAt) VALUES ('p', 1, 1, 'demo', 'working', 'c', 1)");
+    });
+    raw.close();
+    const db = openCoordDb(p);
+    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(COORD_SCHEMA_VERSION);
+    expect(db.prepare('SELECT count(*) AS n FROM continuity_starts').get()).toEqual({ n: 0 });
     expect(db.prepare('SELECT claimedBy, state FROM runs').get()).toEqual({ claimedBy: 'c', state: 'working' });
     db.close();
   });
@@ -1750,6 +1857,8 @@ describe('coord.db: migration 14 — the update control plane (design 2026-09-20
       ['requestedAt', 'INTEGER', 0, null, 0],
       // identity group
       ['supersededBy', 'TEXT', 0, null, 0],
+      // report group, added by migration 61 (D-8386, residue R37): the update sweep's record
+      ['reportedSweep', 'TEXT', 0, null, 0],
     ]);
     expect(cols(db, 'update_intent')).toEqual([
       ['scope', 'TEXT', 1, null, 1], ['channel', 'TEXT', 1, null, 0], ['pinnedTag', 'TEXT', 0, null, 0],
@@ -2439,6 +2548,159 @@ describe('coord.db: review_cap.granted, askHandledAt and review_cap_lifts (D-812
     expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(COORD_SCHEMA_VERSION);
     expect(db.prepare('SELECT workRunId, askedAt, liftedAt, granted, askHandledAt FROM review_cap').get())
       .toEqual({ workRunId: 1, askedAt: 7, liftedAt: 9, granted: null, askHandledAt: null });
+    db.close();
+  });
+});
+
+describe('coord.db: continuity_generations and continuity_cursor, the generations (Overlord §3.3.11, H12)', () => {
+  /** Found by its DDL, never hard-coded. */
+  const SLOT = MIGRATIONS.findIndex((m) => m.includes('CREATE TABLE continuity_generations')) + 1;
+  const ENTRY = /^CREATE TABLE continuity_generations \([^;]*\);\s*CREATE UNIQUE INDEX continuity_generations_live ON continuity_generations\(identity\) WHERE state <> 'ended';\s*CREATE TABLE continuity_cursor \([^;]*\);\s*INSERT INTO lane_arm_settings \(lane, choice, updatedAt\) VALUES \('continuity', 'shadow', 0\);$/;
+  it('NEW TABLES, an index and one seed row, nothing on an existing table, after the start report\'s table', () => {
+    expect(SLOT).toBeGreaterThan(MIGRATIONS.findIndex((m) => m.includes('CREATE TABLE continuity_starts')) + 1);
+    expect(MIGRATIONS[SLOT - 1]!.replace(/--[^\n]*/g, '').trim()).toMatch(ENTRY);
+  });
+
+  it('reaches a database ALREADY at the version before it: the seed row lands and every existing row is as it was', () => {
+    const p = dbPathIn(mkTmp('ccrc-coord-'));
+    mkdirSync(path.dirname(p), { recursive: true });
+    const raw = new DatabaseSync(p);
+    tx(raw, () => {
+      for (let v = 0; v < SLOT - 1; v++) raw.exec(MIGRATIONS[v]!);
+      raw.exec(`PRAGMA user_version = ${SLOT - 1}`);
+      raw.exec("UPDATE lane_arm_settings SET choice = 'live', updatedAt = 7 WHERE lane = 'roster-card'");
+    });
+    raw.close();
+    const db = openCoordDb(p);
+    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(COORD_SCHEMA_VERSION);
+    expect(db.prepare('SELECT count(*) AS n FROM continuity_generations').get()).toEqual({ n: 0 });
+    expect(db.prepare('SELECT lane, choice, updatedAt FROM lane_arm_settings ORDER BY lane').all())
+      .toEqual([{ lane: 'continuity', choice: 'shadow', updatedAt: 0 }, { lane: 'launch-profile', choice: 'shadow', updatedAt: 0 },
+        { lane: 'roster-card', choice: 'live', updatedAt: 7 }]);
+    db.close();
+  });
+});
+
+describe('coord.db: plain_memory_settings and the launch-profile lane-arm row (Overlord W1a, launch profiles PR B)', () => {
+  /** Found by its DDL, never hard-coded. */
+  const SLOT = MIGRATIONS.findIndex((m) => m.includes('CREATE TABLE plain_memory_settings')) + 1;
+  const ENTRY = /^CREATE TABLE plain_memory_settings \([^;]*\);\s*INSERT INTO plain_memory_settings \(id, choice, updatedAt\) VALUES \(1, 'off', 0\);\s*INSERT INTO lane_arm_settings \(lane, choice, updatedAt\) VALUES \('launch-profile', 'shadow', 0\);$/;
+  it('A NEW TABLE and one seed row each, nothing on an existing table, after the generations\' entry', () => {
+    expect(SLOT).toBeGreaterThan(MIGRATIONS.findIndex((m) => m.includes('CREATE TABLE continuity_generations')) + 1);
+    expect(MIGRATIONS[SLOT - 1]!.replace(/--[^\n]*/g, '').trim()).toMatch(ENTRY);
+  });
+
+  it('lands after card PR B\'s entry 69 and timers PR A\'s entry 70, the slots that merged first: 71 (review 2024 F8, review 2031 F2)', () => {
+    // A box already at user_version 70 has card B's and the timers' tables; this entry must come after them, or it would be
+    // skipped there.
+    const card = MIGRATIONS.findIndex((m) => m.includes('CREATE TABLE continuity_snapshots')) + 1;
+    const timers = MIGRATIONS.findIndex((m) => m.includes('CREATE TABLE continuity_timers')) + 1;
+    expect([card, timers]).toEqual([69, 70]);
+    expect(SLOT).toBe(timers + 1);
+  });
+
+  it('reaches a database ALREADY at the version before it: auto memory for plain reads off, the lane shadow, every row as it was', () => {
+    const p = dbPathIn(mkTmp('ccrc-coord-'));
+    mkdirSync(path.dirname(p), { recursive: true });
+    const raw = new DatabaseSync(p);
+    tx(raw, () => {
+      for (let v = 0; v < SLOT - 1; v++) raw.exec(MIGRATIONS[v]!);
+      raw.exec(`PRAGMA user_version = ${SLOT - 1}`);
+      raw.exec("UPDATE lane_arm_settings SET choice = 'live', updatedAt = 7 WHERE lane = 'roster-card'");
+    });
+    raw.close();
+    const db = openCoordDb(p);
+    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(COORD_SCHEMA_VERSION);
+    expect(db.prepare('SELECT id, choice, updatedAt FROM plain_memory_settings').all()).toEqual([{ id: 1, choice: 'off', updatedAt: 0 }]);
+    expect(db.prepare("SELECT choice, updatedAt FROM lane_arm_settings WHERE lane = 'launch-profile'").get()).toEqual({ choice: 'shadow', updatedAt: 0 });
+    expect(db.prepare("SELECT choice, updatedAt FROM lane_arm_settings WHERE lane = 'roster-card'").get()).toEqual({ choice: 'live', updatedAt: 7 });
+    expect(() => db.prepare('INSERT INTO plain_memory_settings (id, choice, updatedAt) VALUES (2, \'on\', 1)').run()).toThrow();
+    db.close();
+  });
+});
+
+describe('coord.db: continuity_snapshots and continuity_card_reads, the card door (Overlord §3.3.3, C38)', () => {
+  /** Found by its DDL, never hard-coded. */
+  const SLOT = MIGRATIONS.findIndex((m) => m.includes('CREATE TABLE continuity_snapshots')) + 1;
+  const ENTRY = /^CREATE TABLE continuity_snapshots \([^;]*\);\s*CREATE INDEX continuity_snapshots_by_session ON continuity_snapshots\(sessionId, served\);\s*CREATE TABLE continuity_card_reads \([^;]*\);\s*CREATE INDEX continuity_card_reads_by_conversation ON continuity_card_reads\(sessionId, uuid, id\);\s*CREATE INDEX continuity_card_reads_by_snapshot ON continuity_card_reads\(snapshotId\);$/;
+  it('NEW TABLES and their indexes, nothing on an existing table, after the generations\' tables', () => {
+    expect(SLOT).toBeGreaterThan(MIGRATIONS.findIndex((m) => m.includes('CREATE TABLE continuity_generations')) + 1);
+    expect(MIGRATIONS[SLOT - 1]!.replace(/--[^\n]*/g, '').trim()).toMatch(ENTRY);
+  });
+
+  it('reaches a database ALREADY at the version before it: both tables land empty and every existing row is as it was', () => {
+    const p = dbPathIn(mkTmp('ccrc-coord-'));
+    mkdirSync(path.dirname(p), { recursive: true });
+    const raw = new DatabaseSync(p);
+    tx(raw, () => {
+      for (let v = 0; v < SLOT - 1; v++) raw.exec(MIGRATIONS[v]!);
+      raw.exec(`PRAGMA user_version = ${SLOT - 1}`);
+      raw.exec("UPDATE lane_arm_settings SET choice = 'live', updatedAt = 7 WHERE lane = 'roster-card'");
+    });
+    raw.close();
+    const db = openCoordDb(p);
+    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(COORD_SCHEMA_VERSION);
+    expect(db.prepare('SELECT count(*) AS n FROM continuity_snapshots').get()).toEqual({ n: 0 });
+    expect(db.prepare('SELECT count(*) AS n FROM continuity_card_reads').get()).toEqual({ n: 0 });
+    expect(db.prepare("SELECT choice, updatedAt FROM lane_arm_settings WHERE lane = 'roster-card'").get()).toEqual({ choice: 'live', updatedAt: 7 });
+    db.close();
+  });
+});
+
+describe('coord.db: continuity_timers, the timers (Overlord §3.3.12, C61)', () => {
+  /** Found by its DDL, never hard-coded. */
+  const SLOT = MIGRATIONS.findIndex((m) => m.includes('CREATE TABLE continuity_timers')) + 1;
+  const ENTRY = /^CREATE TABLE continuity_timers \([^;]*CHECK \(runId IS NULL OR programme IS NULL\)\s*\);\s*CREATE INDEX continuity_timers_pending ON continuity_timers\(state, dueAt\);\s*CREATE INDEX continuity_timers_by_setter ON continuity_timers\(setter, setAt\);$/;
+  it('a NEW TABLE and its indexes, nothing on an existing table, after the card\'s tables', () => {
+    expect(SLOT).toBeGreaterThan(MIGRATIONS.findIndex((m) => m.includes('CREATE TABLE continuity_card_reads')) + 1);
+    expect(MIGRATIONS[SLOT - 1]!.replace(/--[^\n]*/g, '').trim()).toMatch(ENTRY);
+  });
+
+  it('reaches a database ALREADY at the version before it: the table lands empty and every existing row is as it was', () => {
+    const p = dbPathIn(mkTmp('ccrc-coord-'));
+    mkdirSync(path.dirname(p), { recursive: true });
+    const raw = new DatabaseSync(p);
+    tx(raw, () => {
+      for (let v = 0; v < SLOT - 1; v++) raw.exec(MIGRATIONS[v]!);
+      raw.exec(`PRAGMA user_version = ${SLOT - 1}`);
+      raw.exec("UPDATE lane_arm_settings SET choice = 'live', updatedAt = 7 WHERE lane = 'roster-card'");
+    });
+    raw.close();
+    const db = openCoordDb(p);
+    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(COORD_SCHEMA_VERSION);
+    expect(db.prepare('SELECT count(*) AS n FROM continuity_timers').get()).toEqual({ n: 0 });
+    expect(db.prepare("SELECT choice, updatedAt FROM lane_arm_settings WHERE lane = 'roster-card'").get()).toEqual({ choice: 'live', updatedAt: 7 });
+    db.close();
+  });
+});
+
+describe('coord.db: continuity_notes and continuity_handovers, the note door (Overlord §3.3.2, C37)', () => {
+  /** Found by its DDL, never hard-coded. */
+  const SLOT = MIGRATIONS.findIndex((m) => m.includes('CREATE TABLE continuity_notes')) + 1;
+  const ENTRY = /^CREATE TABLE continuity_notes \([^;]*\);\s*CREATE UNIQUE INDEX continuity_notes_one_revision ON continuity_notes\(revises\) WHERE revises IS NOT NULL;\s*CREATE INDEX continuity_notes_by_identity ON continuity_notes\(identity, id\);\s*CREATE TABLE continuity_handovers \([^;]*\);$/;
+  it('NEW TABLES and their indexes, nothing on an existing table, the entry after launch profiles\' (review 2039 F10, review 2046 F8)', () => {
+    // Pinned against the entry that landed just before it (#2794, launch profiles PR B's plain_memory_settings at 71, after
+    // the timers' 70), not only "after the card's".
+    expect(SLOT).toBe(MIGRATIONS.findIndex((m) => m.includes('CREATE TABLE plain_memory_settings')) + 2);
+    expect(SLOT).toBe(72);
+    expect(MIGRATIONS[SLOT - 1]!.replace(/--[^\n]*/g, '').trim()).toMatch(ENTRY);
+  });
+
+  it('reaches a database ALREADY at the version before it: both tables land empty and every existing row is as it was', () => {
+    const p = dbPathIn(mkTmp('ccrc-coord-'));
+    mkdirSync(path.dirname(p), { recursive: true });
+    const raw = new DatabaseSync(p);
+    tx(raw, () => {
+      for (let v = 0; v < SLOT - 1; v++) raw.exec(MIGRATIONS[v]!);
+      raw.exec(`PRAGMA user_version = ${SLOT - 1}`);
+      raw.exec("UPDATE lane_arm_settings SET choice = 'live', updatedAt = 7 WHERE lane = 'roster-card'");
+    });
+    raw.close();
+    const db = openCoordDb(p);
+    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(COORD_SCHEMA_VERSION);
+    expect(db.prepare('SELECT count(*) AS n FROM continuity_notes').get()).toEqual({ n: 0 });
+    expect(db.prepare('SELECT count(*) AS n FROM continuity_handovers').get()).toEqual({ n: 0 });
+    expect(db.prepare("SELECT choice, updatedAt FROM lane_arm_settings WHERE lane = 'roster-card'").get()).toEqual({ choice: 'live', updatedAt: 7 });
     db.close();
   });
 });

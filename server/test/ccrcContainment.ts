@@ -11,7 +11,7 @@ import { plantPoison, loopbackCurlFront } from './containedTools.js';
 /** The env every ccrc test builder, and every raw spawn of the real ccd/ccrc, starts from (wave 9 R10d): `base` with
  *  HOME the fixture, the user bus pointed at two paths under HOME that do not exist — SET, never deleted: ccrc's
  *  `: "${XDG_RUNTIME_DIR:=/run/user/$UID}"` (seven pairs in ccd/ccrc, the first in `_box_units`) would otherwise default to the REAL
- *  bus — then gh and tmux poisons from `ghContainedEnv`, and ssh, scp and launchctl poisons and the curl rule beside
+ *  bus — then gh and tmux poisons from `ghContainedEnv`, and ssh, scp, launchctl and loginctl poisons and the curl rule beside
  *  them, all create-if-absent in `harnessBin(home)`, first on PATH.
  *  `managers: true` also asks `ghContainedEnv` for its systemctl/systemd-run/launchctl poisons. A SPINE builder passes
  *  false: it fronts its own pair after `adoptPlantedSystemd`, which would rename an unmarked poison to a `.codex-*`
@@ -25,7 +25,8 @@ export function ccrcContainedEnv(home: string, base: NodeJS.ProcessEnv,
     DBUS_SESSION_BUS_ADDRESS: `unix:path=${path.join(home, 'no-bus')}`,
   }, opts.managers ? { systemd: true, tmux: true } : { tmux: true });
   const bin = harnessBin(home);
-  for (const n of ['ssh', 'scp', 'launchctl']) plantPoison(bin, n);
+  // `loginctl` since D-8394 (residue R35(f)): `_inst_linger`'s `loginctl enable-linger` writes the user manager.
+  for (const n of ['ssh', 'scp', 'launchctl', 'loginctl']) plantPoison(bin, n);
   if (opts.curl === 'poison') {
     plantPoison(bin, 'curl');
   } else if (!fs.existsSync(path.join(bin, 'curl'))) {

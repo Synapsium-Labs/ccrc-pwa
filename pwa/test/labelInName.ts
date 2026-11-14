@@ -40,3 +40,17 @@ export function shownText(el: Element): string {
   for (const sr of copy.querySelectorAll('.sr-only')) sr.remove();
   return copy.textContent ?? '';
 }
+
+/** Every control under `root` named by `aria-label` whose shown words are not
+ *  in that name, as `"shown" in "name"` lines: the measurement above run over a
+ *  whole region, for the controls no Storybook story renders (D-8383). Empty
+ *  when every name holds its label. */
+export function namesWithoutTheirLabel(root: Element): string[] {
+  const out: string[] = [];
+  for (const el of root.querySelectorAll('button[aria-label], [role="button"][aria-label]')) {
+    const name = el.getAttribute('aria-label') ?? '';
+    const shown = shownText(el);
+    if (!labelInName(shown, name)) out.push(`${JSON.stringify(shown)} in ${JSON.stringify(name)}`);
+  }
+  return out;
+}

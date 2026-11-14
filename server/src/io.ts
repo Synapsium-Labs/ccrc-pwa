@@ -2,7 +2,8 @@ import { constants as fsConstants, createReadStream, watch, type FSWatcher } fro
 import { lstat, mkdir, open, readdir, readFile, realpath, stat, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import type { ReadFailure, TestboxOpReply, TestboxToolsSyncReply } from '../../shared/agent-protocol.js';
+import type { ReadFailure, TestboxAdminAsked, TestboxOpReply, TestboxToolsSyncReply } from '../../shared/agent-protocol.js';
+import type { TestboxAdminFields, TestboxAdminSub } from '../../shared/testbox-admin.js';
 import type { DiskMeasured } from '../../shared/disk.js';
 import { measureDisk } from '../../agent/src/disk.js';
 import { measureHeadroom, measurePressure } from '../../agent/src/pressure.js';
@@ -278,6 +279,13 @@ export interface FleetIO {
   /** The `testbox-tools-sync` op, the `testbox` op's one write: the box is sent the fleet host's own release and
    *  versions. Takes nothing. Failure contract: as `testboxMeasured`. */
   testboxToolsSync(): Promise<TestboxSyncAsked>;
+  /** The `testbox-admin` op (test box connect spec §2.1, plan TC12, D-8166): runs `ccrc testbox-admin <sub>` on ITS box with
+   *  the builder's argv and the agent's own `--from agent`. Failure contract: never rejects. The builder's refusal is
+   *  `refused` (nothing sent), an agent that does not list the op is `unsupported` (never sent it), a frame that never left
+   *  is `not-started`, and a fault after the send, a deadline or a reply off `readTestboxAdminOpAnswer`'s grammar is `lost`
+   *  (the outcome is UNKNOWN: the caller says so and never retries). A local fleet's adapter answers `unsupported`: the
+   *  server's local arm (`testboxAdmin.ts`) spawns the verb itself there and never asks this member. */
+  testboxAdmin(sub: TestboxAdminSub, fields: TestboxAdminFields): Promise<TestboxAdminAsked>;
 }
 
 /** The `testbox` op as a seam answers it, or why there is none (D-7411). */
@@ -536,6 +544,8 @@ export const localIO: FleetIO = {
   // The agent's own op bodies on this box (D-7411), as `statfsMeasured` calls `measureDisk`; neither ever rejects.
   testboxMeasured: () => localTestbox(os.homedir()),
   testboxToolsSync: () => localTestboxSync(os.homedir()),
+  // The server's local arm spawns the verb itself (`testboxAdmin.ts#localTestboxAdminOps`); this seam is the agent arm's.
+  testboxAdmin: async () => ({ kind: 'unsupported' }),
 };
 
 /** The `testbox` op's body on `home` (D-7411): the one implementation, so the two adapters cannot disagree. */

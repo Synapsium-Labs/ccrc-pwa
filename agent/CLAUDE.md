@@ -58,10 +58,22 @@ get wrong when editing `src/whitelist.ts`.
   value), by canonical-path EQUALITY, a live symlink inside `~/.ccrc`
   carrying one of those names is refused, or admitted through another prefix's own arm with `lstat` reporting `symlink`, which the server's update inventory refuses to read as that file (design 2026-09-20 §8). Never `isUnder(~/.ccrc)`: that directory holds `agent.env`,
   `auth.scrypt`, `coord.db` and `deploy.env`, and `test/whitelist.test.ts` reds the moment one becomes readable.
+  One more grant, for the `stat` op ALONE (D-8382): the operator's `~/.ccrc` switch files (`CCRC_SWITCH_FILES`, derived
+  from the switchboard's `~/.ccrc` rows in `shared/switches.ts`), by literal path and canonical-path equality
+  (`checkCcrcSwitchStat`), so the server can say which stands. It is not part of `checkPath`: `read`, `readdir` and
+  `lstat` admit none of them.
+  And a second `stat`-alone grant (Overlord W1a launch profiles PR B, reviews 2024 F1 and 2031 F1): one history W3 steer
+  marker, `~/.ccrc/history/steer-on/<registry id>` (`checkSteerOnStat`), so the server's launch-profile lane can tell a
+  steered session on a remote fleet. The name must pass `isRegistryId`; `~/.ccrc` may be a link, but `history` and
+  `steer-on` must each be a real directory or absent (`lstat`), and a live link at the marker is refused. A hard link at a
+  marker's name cannot be detected (same user). `read`, `readdir` and `lstat` admit none of it.
+  And one more READ grant (D-8406): a lane's class registry and catalogue, `~/.ccrc/models/<lane>.classes.json` and
+  `<lane>.json`, by exact name (`isLaneModelsReadName`, `shared/models.mjs`) and canonical-path equality
+  (`isLaneModelsFile`), for the session's model picker. `~/.ccrc/models` stays unlistable, and its other files unread.
 - `ptyOpen` only ever spawns `tmux attach -t =cc-<sessionId>:` (exact — `tmuxTarget`, D-3525) with `sessionId` sanitized to `[A-Za-z0-9_-]+` —
   never an arbitrary command.
-- The **`update` op** (design 2026-09-20 §10) is one of the FOUR wire-triggered spawn classes outside the exec whitelist
-  (the others are `token-sync`, `account` and `testbox`, below). It spawns
+- The **`update` op** (design 2026-09-20 §10) is one of the FIVE wire-triggered spawn classes outside the exec whitelist
+  (the others are `token-sync`, `account`, `testbox` and `testbox-admin`, below). It spawns
   exactly one of two argv templates — `$HOME/.local/bin/ccrc update|rollback --to <tag> --detach --from pwa`, built by
   `updateLauncherPath` + `updateSpawnArgv` (`shared/agent-protocol.ts`), `tag` the only variable token — validated by
   `isReleaseTag` in `validateReq` BEFORE any case body runs (`bad-tag`/`bad-kind`, never `bad-request`, which from this
@@ -102,6 +114,18 @@ get wrong when editing `src/whitelist.ts`.
   calls the box over one WebSocket within `CCRC_TESTBOX_STATUS_DEADLINE`. The sync's `tools.sync` frame carries the
   release in `build.json` and the versions just measured, never a field of the request. `server/test/whitelist-subset.test.ts`'s
   layer 4c reds the day either case reaches an exec path.
+- The **`testbox-admin` op** (test box connect spec §2.1, §2.11, plan TC11, D-8166) is the fifth. It spawns the absolute
+  launcher (`updateLauncherPath`) with `testbox-admin <sub> [--name=value…] --from agent`, the words built ONLY by
+  `buildTestboxAdminArgv` (`shared/testbox-admin.ts`, the one builder the server's local arm calls too) from typed
+  fields: no free argv, and no caller field can name `--from`. It takes **no stdin**: the browser holds no secret
+  (spec §2.3), so none crosses the wire, and the child's stdin is empty, then EOF. Its port (`src/testboxAdminOp.ts`)
+  is `accountop.ts`'s shape through `boundedStdinSpawn`: an explicit `{HOME, PATH, LANG}`, a 1 MiB stdout cap
+  (`too-large`), 60 s for a short sub and 30 s for a long sub's detach (the unit it starts outlives the call), then
+  SIGTERM to the group and SIGKILL 5 s later, never cancelled. Every answer, a refusal included, is `ok: true` with a
+  `kind` and `fleetIdentity`; the agent never parses the verb's JSON line (the server reads it through
+  `readTestboxAdminStatus`). The log line names the op and the sub only. `bad-request` from it means the agent predates
+  it. `test/testbox-admin-op.test.ts`'s source scan and `server/test/whitelist-subset.test.ts`'s layer 4d red the day
+  the op reaches an exec path.
 - The agent has **no HTTP routes** (its `createServer` carries only a WS upgrade), so the deploy's
   `verify-service.sh` (MainPID stability across a window > `RestartSec`) is its only post-restart check — it
   catches the `refuseToBoot` crash-loop that a `systemctl restart` exit-0 would otherwise hide.

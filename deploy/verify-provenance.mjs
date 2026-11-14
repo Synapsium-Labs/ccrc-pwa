@@ -78,10 +78,14 @@ function usage(code) {
 // quotes the bad bundle line), so every byte of its UTF-8 outside printable
 // ASCII, newlines included, is written as `?`: one line, no escape sequence.
 // The verifier's own sentences are spelled in ASCII, so the rule costs them
-// nothing (D-6843).
+// nothing (D-6843). D-8389: `shown` is that rule, and the dependency-load
+// line (exit 3) writes through it too, so no verifier line prints a byte
+// outside printable ASCII.
+function shown(why) {
+  return Buffer.from(String(why), 'utf8').toString('latin1').replace(/[^\x20-\x7e]/g, '?');
+}
 function refuse(why) {
-  why = Buffer.from(String(why), 'utf8').toString('latin1').replace(/[^\x20-\x7e]/g, '?');
-  process.stderr.write(`verify-provenance: ${why}\n`);
+  process.stderr.write(`verify-provenance: ${shown(why)}\n`);
   process.exit(1);
 }
 
@@ -198,9 +202,11 @@ if (backend === 'sigstore') {
   } catch (e) {
     // ONE line (a MODULE_NOT_FOUND's own message embeds a "Require stack:"
     // trailer with its own newlines — collapsed here so this stays one
-    // stderr line, per contract, instead of reading as several).
+    // stderr line, per contract, instead of reading as several). D-8389: then
+    // `shown`, refuse's own filter, so a dependency's own load error writes
+    // no escape sequence either; the dash is ASCII, as D-6843 spells it.
     const why = (e && e.message ? e.message : String(e)).replace(/\s*\n\s*/g, '; ');
-    process.stderr.write(`verify-provenance: could not load the sigstore verifier's dependencies (${why}) — a local dependency problem, not a verdict on the bundle\n`);
+    process.stderr.write(`verify-provenance: ${shown(`could not load the sigstore verifier's dependencies (${why}) - a local dependency problem, not a verdict on the bundle`)}\n`);
     process.exit(3);
   }
 }

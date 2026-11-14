@@ -10,6 +10,7 @@ import { useAuthLost } from '../lib/auth';
 import { navigate, useLocation } from '../lib/router';
 import { setSkin } from '../lib/skin';
 import { setTheme } from '../lib/theme';
+import { setCharacter } from '../lib/character';
 import { focusShownLandmark } from '../skins/frame';
 import { useFleetStore } from '../stores/fleet';
 import { useSessionCommandTarget } from '../session/SessionFlows';
@@ -130,6 +131,7 @@ export function CommandLayer({ openNewSession }: CommandLayerProps): ReactNode {
     navigate: (href) => navigate(href),
     setSkin,
     setTheme: (choice) => setTheme(choice),
+    setCharacter,
     openShortcuts: () => setSheet(true),
     openNewSession,
     openPalette,

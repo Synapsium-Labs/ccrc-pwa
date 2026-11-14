@@ -103,10 +103,10 @@ describe('GET /api/landing', () => {
     const res = await read(app!, '?project=project-a');
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual({ ok: true, project: 'project-a', operatorPaused: false, mainRedHold: false,
-      entries: [], order: { paused: false, order: [], head: null }, recovery: { subjects: [], hold: null } });
+      entries: [], order: { paused: false, order: [], head: null }, recovery: { subjects: [], hold: null }, entriesScope: 'open' });
   });
 
-  it('answers every entry of the project as the wire LandingEntry, shas byte for byte through the masking hook', async () => {
+  it('answers every entry still in the line as the wire LandingEntry, shas byte for byte through the masking hook', async () => {
     seedEntry(db, B); seedEntry(db, A);
     const res = await read(app!, '?project=project-a');
     expect(res.statusCode).toBe(200);
@@ -184,6 +184,45 @@ describe('GET /api/landing', () => {
       expect(res.statusCode).toBe(503);
       expect(res.json()).toEqual({ ok: false, error: 'landing-journal-unavailable', recovery: 'restart' });
     } finally { await w.app.close(); }
+  });
+
+  it('the default read answers only the entries still in the line, and says so', async () => {
+    const ent = (id: number, state: LandingEntry['state']): LandingEntry => ({ ...A, id, pr: 100 + id, state, pinnedAt: 1_000 + id });
+    for (const [id, state] of [[1, 'pinned'], [2, 'ejected'], [3, 'unknown'], [4, 'landed'], [5, 'withdrawn'], [6, 'closed']] as const) {
+      seedEntry(db, ent(id, state));
+    }
+    const body = (await read(app!, '?project=project-a')).json() as LandingLineView & { ok: true };
+    expect(body.entriesScope).toBe('open');
+    expect(body.entries.map((e) => e.state).sort()).toEqual(['ejected', 'pinned', 'unknown']);
+    expect(body.order).toEqual(landingOrder(['pinned', 'ejected', 'unknown', 'landed', 'withdrawn', 'closed']
+      .map((st, i) => ent(i + 1, st as LandingEntry['state'])), { operatorPaused: false, mainRedHold: false }));
+  });
+
+  it("?pr= answers that PR's entry in any state, beside the same flags and order", async () => {
+    const landed: LandingEntry = { ...B, state: 'landed' };
+    seedEntry(db, A); seedEntry(db, landed);
+    const body = (await read(app!, '?project=project-a&pr=12')).json() as LandingLineView & { ok: true };
+    expect(body.entriesScope).toBe('pr');
+    expect(body.entries).toEqual([landed]);
+    expect(body.order).toEqual(landingOrder([A, landed], { operatorPaused: false, mainRedHold: false }));
+    expect(body.order).toMatchObject({ head: { id: 1, pr: 11 } });
+  });
+
+  it('?pr= naming no entry answers no entries and the lines order', async () => {
+    seedEntry(db, A);
+    const body = (await read(app!, '?project=project-a&pr=999')).json() as LandingLineView & { ok: true };
+    expect(body.entries).toEqual([]);
+    expect(body.entriesScope).toBe('pr');
+    expect(body.order).toEqual(landingOrder([A], { operatorPaused: false, mainRedHold: false }));
+  });
+
+  it('?pr=0, ?pr=07, ?pr=x, ?pr=-1 and a pr past the safe range answer 400 bad-request with the pr detail', async () => {
+    for (const pr of ['0', '07', 'x', '-1', '', '9007199254740993', '1.5']) {
+      const res = await read(app!, `?project=project-a&pr=${pr}`);
+      expect(res.statusCode, pr).toBe(400);
+      expect(res.json(), pr).toEqual({ ok: false, error: 'bad-request',
+        detail: 'the landing read takes ?pr= as a PR number: a positive integer with no leading zero' });
+    }
   });
 
   it('trims the project as the ledger read does', async () => {

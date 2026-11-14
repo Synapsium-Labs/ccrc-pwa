@@ -12,6 +12,7 @@ import path from 'node:path';
 import { parseFile, storeReach, type StoreReach } from '../scan/parse.js';
 import { REPO } from './walkSrc.js';
 import { WATCHER_WHOLE_HANDOFFS, WATCHER_WHOLE_REACH } from './watcher-store-port.data.js';
+import { scaled } from '../timeScale.js';
 
 const DATA = 'server/test/rings/watcher-store-port.data.ts';
 const PORTS_FILE = 'server/src/coord/ports.ts';
@@ -301,7 +302,9 @@ describe('the store census on the real tree (D-7578)', () => {
       store: { file: 'coord/store.ts', name: 'CoordStore' },
       port: { file: 'coord/ports.ts', name: 'WatcherCoordPort' },
     });
-  });
+    // A whole TypeScript program over server/tsconfig.json: seconds on a quiet machine, past the 20 s hook default on a
+    // loaded 2-worker CI shard (merge groups for D-8285). The bound is the census's own, scaled like the other heavy hooks.
+  }, scaled(60_000));
 
   it('the program type-checks under the scanner\'s parser', () => {
     expect(census.diagnostics, 'the census reads types from a program TypeScript 6 cannot check').toEqual([]);

@@ -122,11 +122,12 @@ const RESOLVED_FIELDS = 'id identifier team { id key }';
 
 // ── the hierarchy documents (D-8180; design 2026-11-10 §5, §8.1) ──
 
-/** What each hierarchy answer selects; `hierarchyOps.ts`'s shapers read exactly these fields. */
+/** What each hierarchy answer selects; `hierarchyOps.ts`'s shapers read exactly these fields. A milestone selects no
+ *  `creator`: Linear's ProjectMilestone has none (FX2, D-8407), so a milestone binds by name inside its project. */
 const INITIATIVE_FIELDS = 'id name description status updatedAt projects(first: 50) { nodes { id } }';
 const PROJECT_FIELDS = 'id name description updatedAt status { id type } teams(first: 20) { nodes { key } } '
-  + 'initiatives(first: 10) { nodes { id } } projectMilestones(first: 50) { nodes { id name description targetDate sortOrder updatedAt creator { id } } }';
-const MILESTONE_FIELDS = 'id name description targetDate sortOrder updatedAt project { id } creator { id }';
+  + 'initiatives(first: 10) { nodes { id } } projectMilestones(first: 50) { nodes { id name description targetDate sortOrder updatedAt } }';
+const MILESTONE_FIELDS = 'id name description targetDate sortOrder updatedAt project { id }';
 const NAMED_FIELDS = 'id name createdAt creator { id }';
 const HIERARCHY_ISSUE_FIELDS = 'id identifier title description updatedAt team { key } state { type } project { id } '
   + `projectMilestone { id } parent { id } labels(first: ${LINEAR_ISSUE_LABELS_MAX}) { nodes { id } }`;
@@ -727,6 +728,9 @@ export function withLinearProvenance(text: string): string {
   if (endsWithProvenance(text)) return text;
   return text === '' ? LINEAR_PROVENANCE_LINE : `${text}\n\n${LINEAR_PROVENANCE_LINE}`;
 }
+
+/** One text through the `linear-egress` profile, for a writer that stores text a later sync sends to Linear (the plan routes, D-8181). */
+export const linearEgressText = (text: string): string => redactShapedCount('linear-egress', text).text;
 
 /**
  * The text a call sends to Linear, made ready to leave the fleet (§5.3, §5.4): every outbound field (`search.text`,

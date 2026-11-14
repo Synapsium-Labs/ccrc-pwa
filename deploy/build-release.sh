@@ -127,7 +127,16 @@ PATHSPEC=(install.sh shared ccd deploy
 for pkg in server agent pwa; do
   if [ -n "$(git -C "$ROOT" ls-tree -d HEAD -- "$pkg/scripts")" ]; then PATHSPEC+=("$pkg/scripts"); fi
 done
-git -C "$ROOT" archive --format=tar HEAD -- "${PATHSPEC[@]}" | tar -x -C "$TOP"
+# THROUGH A FILE, NEVER A PIPE (D-8391). macOS's tar (bsdtar) may stop reading
+# once it has read the archive's end marker, before `git archive` has written
+# the rest of its last record: git then dies of SIGPIPE, `pipefail` fails the
+# stage with 141, and `set -e` ends the build with nothing on stderr, since
+# bash reports no SIGPIPE. Measured intermittently on hosted macOS runners;
+# GNU tar reads to the end of its input, so Linux never showed it. A file has
+# no reader to outlive. It sits in $STAGE, beside the tree, never inside it.
+git -C "$ROOT" archive --format=tar -o "$STAGE/tracked.tar" HEAD -- "${PATHSPEC[@]}"
+tar -x -f "$STAGE/tracked.tar" -C "$TOP"
+rm -f "$STAGE/tracked.tar"
 
 cp -a "$ROOT/server/dist"     "$TOP/server/dist"
 cp -a "$ROOT/server/dist-pwa" "$TOP/server/dist-pwa"

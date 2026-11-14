@@ -173,6 +173,8 @@ Expected: nothing listed. An open PR holds the start, as #2374 did at the ruling
 
 - [ ] **Step 2: Confirm the refactor has closed, and issue #2006's own conditions.** The 2026-10-30 ruling on #2006 starts this work after the refactor closes, and 8 architecture epics were still open at the 2026-11-06 ruling. The W5 ccd series and the K5/K16 ccd tasks have merged, and no other ccd programme is open. Not measured here. A programme still open stops everything Task 0 gates, and goes to the operator.
 
+  *Measured 2026-11-13 (D-8565):* the refactor has **closed**. All six architecture epics are done, and the closure is recorded in `docs/superpowers/programs/architecture-refactor.md`. The other condition still **holds** the split: three open session-continuity PRs edit `ccd/ccd` (#2735, #2739, #2742), so another ccd programme is open. Step 1 answers the same. Tick this step when that programme's ccd work has landed.
+
 ---
 
 ## Phase A: The Ground (no function moves)

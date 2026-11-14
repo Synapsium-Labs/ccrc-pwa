@@ -20,6 +20,7 @@ import { spawnSyncGroup } from './spawnGroup.js';
 import { fileURLToPath } from 'node:url';
 import { makeCcdHarness, type CcdHarness, WIDE_PANE, WS_ADD, CCD, BOUNDED, ghContainedEnv, ccdSource } from './ccdWsHelpers.js';
 import { inheritedEnv } from './gitEnvStrip.js';
+import { platformDeadline, platformDeadlineSeconds } from './timeScale.js';
 import { familyClassOf, FAMILY_TOKENS } from '../../shared/models.mjs';
 
 let h: CcdHarness;
@@ -90,6 +91,12 @@ const writeTranscript = (lines: string[], id = ID): string => {
 };
 const keep = (id = ID): string => h.sh(`_operator_choice_keep ${id}; echo "rc=$?"`);
 /** The one line a keep says when the newest /model or /effort has no acknowledgement this ccd recognises. */
+// THE FIFO CASES' DEADLINES (D-8398). Each FIFO case below bounds a function that must return without opening its
+// FIFO: a 10 s poll (100 ticks of 0.1 s), or `BOUNDED` at 5 s inside a 15 s spawn. They are Linux's numbers; on macOS
+// they read the Darwin factor through `platformDeadline`, so a slow runner's source of ccd is not read as a hang.
+const FIFO_POLLS = Math.ceil(platformDeadline(10_000) / 100);
+const FIFO_BOUND_S = platformDeadlineSeconds(5);
+const FIFO_OUTER_MS = platformDeadline(15_000);
 const driftLines = (id = ID): string[] => swapLog().split('\n').filter((l) => l.includes(`operator-choice ${id}: unmeasured (a /model or /effort command with no acknowledgement`));
 /** `--stage 7` over this fixture HOME's swap.log (TZ=UTC, as the instrument's own test runs it). */
 const stage7 = (): Record<string, number | string | Record<string, number>> => JSON.parse(execFileSync('python3',
@@ -127,8 +134,10 @@ describe('ccd journals its own keystrokes in $REG/<id>.typed', () => {
 
   it('route --apply journals the class it types and the effort, and nothing for auto', () => {
     seed(); record({ class: 'sonnet', effort: 'high' });
-    const TYPERS = `_route_type_model() { echo "type-model $2" >> "$HOME/ccd-calls"; return 0; };
-      _route_type_effort() { echo "type-effort $2" >> "$HOME/ccd-calls"; return 0; };`;
+    // The typers journal their own keystroke once the typing check passed (D-8271), so a stand-in journals as the
+    // real one does; `ccd-typing-check.test.ts` holds the real typers to it and to journalling nothing on a refusal.
+    const TYPERS = `_route_type_model() { _typed_note "$1" model "$2"; echo "type-model $2" >> "$HOME/ccd-calls"; return 0; };
+      _route_type_effort() { _typed_note "$1" effort "$2"; echo "type-effort $2" >> "$HOME/ccd-calls"; return 0; };`;
     h.sh(`${TYPERS} _route_apply_now ${ID}`);
     expect(typedRows().map((r) => r.replace(/^\d{10} /, ''))).toEqual(['model sonnet', 'effort high']);
     h.sh(`rm -f "$REG/${ID}.typed" "$REG/${ID}.routeapplied"; _reg_set ${ID} effort auto; ${TYPERS} _route_apply_now ${ID}`);
@@ -320,7 +329,7 @@ describe('_operator_choice_keep writes the operator\'s own /model and /effort to
 
   it('the newest command NO JOURNAL ROW EXPLAINS wins: a later route --apply does not hide the operator\'s own', () => {
     seed(); record({ class: 'fable', degraded: 'opus' }); const t = now() - 600;
-    h.sh(`_route_type_model() { return 0; }; _route_apply_now ${ID}`);   // journals `model opus` now: the degraded class
+    h.sh(`_route_type_model() { _typed_note "$1" model "$2"; return 0; }; _route_apply_now ${ID}`);   // journals `model opus` now: the degraded class (the typer journals, D-8271)
     writeTranscript([cmd(t, 'model', 'sonnet'), ack(t, MODEL_ACK('Sonnet 5')), cmd(now() + 5, 'model'), ack(now() + 5, MODEL_ACK('Opus 5.5'))]);
     keep();
     expect(h.reg(ID, 'class')).toBe('sonnet');
@@ -505,7 +514,7 @@ describe('_operator_choice_keep writes the operator\'s own /model and /effort to
     fs.mkdirSync(path.dirname(p), { recursive: true });
     h.sh(`mkfifo ${JSON.stringify(p)}`);
     const out = h.sh(`_operator_choice_keep ${ID} & pid=$!
-      for _ in $(seq 1 100); do kill -0 "$pid" 2>/dev/null || break; sleep 0.1; done
+      for _ in $(seq 1 ${FIFO_POLLS}); do kill -0 "$pid" 2>/dev/null || break; sleep 0.1; done
       if kill -0 "$pid" 2>/dev/null; then kill "$pid"; : > ${JSON.stringify(p)}; echo held; else wait "$pid"; echo "rc=$?"; fi`);
     expect(out, 'a grep on a FIFO blocks the stop until somebody writes to it').toBe('rc=0');
     expect(h.reg(ID, 'class')).toBe('fable');
@@ -546,7 +555,7 @@ describe('_operator_choice_keep writes the operator\'s own /model and /effort to
 
   it('a route --apply /model is not promoted — not even a degraded class typed over the operator\'s fable, in either acknowledgement shape', () => {
     seed(); record({ class: 'fable', degraded: 'opus' });
-    h.sh(`_route_type_model() { return 0; }; _route_apply_now ${ID}`);
+    h.sh(`_route_type_model() { _typed_note "$1" model "$2"; return 0; }; _route_apply_now ${ID}`);   // the typer journals (D-8271)
     const t = now() + 5;
     writeTranscript([cmd(t, 'model'), ack(t, MODEL_ACK('Opus 5.5'))]);
     keep();
@@ -808,8 +817,9 @@ describe('every stop that a spawn follows keeps the operator\'s choice first', (
       for (let j = i; j >= 0; j--) { const m = /^([A-Za-z_][A-Za-z0-9_]*)\(\) \{/.exec(src[j]!); if (m) return m[1]!; }
       return '';
     };
-    // `tmux -L "$sock" -f /dev/null kill-session` is the account pane's own server (accounts plan Task A20).
-    const STOP = /tmux (-L "\$sock" -f \/dev\/null )?kill-session|_svc_stop "claude-session@|bootout .*claude-session@|_ws_unsupervise "/;
+    // `tmux -L "$sock" -f /dev/null kill-session` is the account pane's own server (accounts plan Task A20). Every
+    // fleet call is `_tmx …`, or `"${_TMX_ARGV[@]}" …` in a capture or behind a wrapper that execs it (the socket lookup, D-8270).
+    const STOP = /(?:_tmx|"\$\{_TMX_ARGV\[@\]\}"|tmux -L "\$sock" -f \/dev\/null) kill-session|_svc_stop "claude-session@|bootout .*claude-session@|_ws_unsupervise "/;
     const live = (l: string): boolean => !/^\s*#/.test(l);
     const stoppers = new Set(src.flatMap((l, i) => (live(l) && STOP.test(l) ? [owner(i)] : [])));
     expect([...stoppers].sort(), 'a function that stops a session is in neither list').toEqual([...KEEPS, ...Object.keys(ENDS)].sort());
@@ -820,11 +830,12 @@ describe('every stop that a spawn follows keeps the operator\'s choice first', (
       // Each stop's keep is GUARDED on the marker (a session already stopped and read is not read again), and
       // its kill — the statement after the stop's own — unmarks on failure, so a live session is never marked.
       const GUARD = /^ {2}\[\[ -e "\$REG\/\$id\.choicekept" \]\] \|\| _operator_choice_keep "\$id"/;
-      const UNMARK = /tmux kill-session -t "\$\(_tmux_t "\$id"\)" 2>\/dev\/null \|\| _operator_choice_unmark "\$id"/;
+      const UNMARK = /_tmx kill-session -t "\$\(_tmux_t "\$id"\)" 2>\/dev\/null \|\| _operator_choice_unmark "\$id"/;
       if (fn === 'cmd_swap' || fn === '_watchdog_resume_run') {
         expect(src[i]).toMatch(GUARD);
         expect(src[i + 1]).toMatch(/^ {2}_svc_stop "claude-session@\$id"/);
-        expect(src[i + 2]).toMatch(UNMARK);
+        expect(src[i + 2]).toMatch(/^ {2}_graceful_stop_before "\$id" /);   // session-continuity 6a: the graceful stop, between the unit's stop and the kill
+        expect(src[i + 3]).toMatch(UNMARK);
       }
       if (fn === 'cmd_stop') {
         expect(src[i]).toMatch(GUARD);
@@ -839,11 +850,12 @@ describe('every stop that a spawn follows keeps the operator\'s choice first', (
       }
       if (fn === 'cmd_hibernate') {   // the keep, then (past the comment) the marker, the unsupervise, the pane's scope (D-7902) and the kill
         expect(src[i]).toMatch(GUARD);
-        const next = src.slice(i + 1).filter(live).slice(0, 4);
+        const next = src.slice(i + 1).filter(live).slice(0, 5);
         expect(next[0]).toMatch(/^ {2}_reg_set "\$id" hibernated /);
         expect(next[1]).toMatch(/^ {2}_ws_unsupervise "\$id" ccd$/);
         expect(next[2]).toMatch(/^ {2}_pane_scope_of "\$id" /);
-        expect(next[3]).toMatch(UNMARK);
+        expect(next[3]).toBe('  _graceful_stop_before "$id" hibernate read');   // reuses D-7902's read
+        expect(next[4]).toMatch(UNMARK);
       }
       if (fn === 'cmd_ws_archive') {
         expect(src[i]).toMatch(/^ {2}\[\[ -e "\$REG\/\$id\.choicekept" \]\] \|\| _operator_choice_keep "\$id"; _ws_unsupervise "\$id" /);
@@ -868,7 +880,7 @@ describe('every stop that a spawn follows keeps the operator\'s choice first', (
       for (let j = i; j >= 0; j--) { const m = /^([A-Za-z_][A-Za-z0-9_]*)\(\) \{/.exec(src[j]!); if (m) return m[1]!; }
       return '';
     };
-    const SPAWN = /tmux (-L "\$sock" -f \/dev\/null )?new-session|_tmux_new_session |new-window|respawn-pane/;
+    const SPAWN = /(?:_tmx|"\$\{_TMX_ARGV\[@\]\}"|tmux -L "\$sock" -f \/dev\/null) new-session|_tmux_new_session |new-window|respawn-pane/;
     const owners = new Set(src.flatMap((l, i) => (!/^\s*#/.test(l) && SPAWN.test(l) ? [owner(i)] : [])));
     expect([...owners].sort(), 'a function creates a pane outside _spawn_start').toEqual([...SPAWNS, ...Object.keys(EXCEPTIONS)].sort());
   });
@@ -1211,8 +1223,8 @@ describe('live UUID rotation keeps the outgoing operator choice', () => {
       fs.mkdirSync(path.dirname(file), { recursive: true });
       h.sh(`mkfifo ${JSON.stringify(file)}`);
       const snippet = `source ${JSON.stringify(CCD)}; ${fn} ${ID}; printf 'rc=%s' "$?"`;
-      const r = spawnSyncGroup('bash', ['-c', `${BOUNDED} 5 bash -c "$1"`, '_', snippet], {
-        encoding: 'utf8', timeout: 15_000, killSignal: 'SIGKILL',
+      const r = spawnSyncGroup('bash', ['-c', `${BOUNDED} ${FIFO_BOUND_S} bash -c "$1"`, '_', snippet], {
+        encoding: 'utf8', timeout: FIFO_OUTER_MS, killSignal: 'SIGKILL',
         env: ghContainedEnv(h.home, { ...inheritedEnv(), HOME: h.home }, { systemd: true, tmux: true }),
       });
       expect(r.error, 'outer bound exceeded').toBeUndefined();
@@ -1440,7 +1452,7 @@ describe('live UUID rotation keeps the outgoing operator choice', () => {
     fs.writeFileSync(path.join(dir, '424242.json'), JSON.stringify({ sessionId: NEXT }));
     const out = h.sh(`tmux() { [[ "$1" == list-panes ]] && printf '%s\\n' 424242; return 0; };
       _sync_uuid ${ID} & pid=$!
-      for _ in $(seq 1 100); do kill -0 "$pid" 2>/dev/null || break; sleep 0.1; done
+      for _ in $(seq 1 ${FIFO_POLLS}); do kill -0 "$pid" 2>/dev/null || break; sleep 0.1; done
       if kill -0 "$pid" 2>/dev/null; then kill "$pid"; : > ${JSON.stringify(fifo)}; echo held; else wait "$pid"; echo "rc=$?"; fi`);
     expect(out, 'a grep on a FIFO blocks the rotation until somebody writes to it').toBe('rc=0');
     expect(h.reg(ID, 'uuid')).toBe(NEXT);

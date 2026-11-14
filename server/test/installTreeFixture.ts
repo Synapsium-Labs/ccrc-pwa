@@ -244,12 +244,16 @@ export const TREE_FILES = [
   // `_inst_atomic` dies naming the missing source and every describe here goes
   // red for a fixture reason.
   'ccd/compact-card.mjs',
+  // The launch profiles ccd renders at a profile-naming spawn (Overlord W1a); `_inst_files` places it under `.cc-sessions/lib`.
+  'ccd/lib/launch-profiles.json',
   // The transcript reader ccd and the doctor load with `jq -L` (ARCH-65); `_inst_files` places it under `.cc-sessions/lib`.
   'ccd/lib/transcript.jq',
   // The roster card's one builder (D4, R-5a, D-8201); `_inst_files` places it beside the reader above.
   'ccd/lib/roster-card.jq',
   // `ccd carry-dedupe`'s program (#317); `_inst_files` places it beside the reader above.
   'ccd/lib/carry-dedupe.py',
+  // the in-flight manifest's program (session-continuity 6b); placed beside it.
+  'ccd/lib/inflight-manifest.py',
   // The settings reader the ccd-* sweeps source (wave 29): `_inst_bins` places it under ~/.local/libexec/ccrc on every
   // OS and role, so a tree without it dies in `_inst_atomic` naming the missing source.
   'ccd/lib/ccrc-settings.sh',

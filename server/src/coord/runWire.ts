@@ -2,6 +2,7 @@ import type { ChildMark, RunSummary } from '../../../shared/api.js';
 import type { BindingReadPort } from './bindingReads.js';
 import { childBirthOf } from './childSpent.js';
 import type { RunVerdicts } from './runVerdicts.js';
+import type { WorkerSeenReader } from './workerSeen.js';
 import { childrenOf, incarnationOf, unbornIncarnation, type Incarnation } from './runBinding.js';
 
 /**
@@ -99,7 +100,16 @@ export function withLastMoves<R extends { readonly id: number }>(
   return runs.map((run) => ({ ...run, lastMoveAt: read.moves.get(run.id) ?? null }));
 }
 
-/** The reader `withVerdicts` takes: `RunVerdicts`' two reads, and nothing it could write (D-8071; spec §7, A45). */
+/** D-8285: `RunSummary.workerLastSeen` and `.workerLastTurn` on every answer `withVerdicts` stamps, from the stall sweep's one
+ *  reader (`workerSeen.ts`). A run with no entry stamps nothing: absence reads "not measured", as for an older server. */
+export function withWorkerSeen<R extends { readonly id: number }>(reader: WorkerSeenReader, runs: readonly R[]): R[] {
+  return runs.map((run) => {
+    const s = reader.of(run.id);
+    return s === null ? run : { ...run, workerLastSeen: s.lastSeen, workerLastTurn: s.turn };
+  });
+}
+
+/** The reader `withVerdicts` takes:`RunVerdicts`' two reads, and nothing it could write (D-8071; spec §7, A45). */
 export type VerdictReader = Pick<RunVerdicts, 'of' | 'ofProgramme'>;
 
 /** The stuck verdict's fields on every answer that carries a `RunSummary`, beside `withLastMoves`: the runs frame, its cold

@@ -181,7 +181,7 @@ describe('runDispatch — one node at a time, fleet first (spec §10 Pins)', () 
     // The sweep sees `done` with the stamp at the target and settles the fleet row — W2's writer, not ours.
     const swept = sweepOnce(h.store, fleetMeas({
       currentVersion: 'v0.0.10', highestVersion: 'v0.0.10', measuredAt: T0 + 60_000,
-      report: { phase: 'done', target: 'v0.0.10', startedAt: T0 + 6000, updatedAt: T0 + 50_000, detail: null },
+      report: { phase: 'done', target: 'v0.0.10', startedAt: T0 + 6000, updatedAt: T0 + 50_000, detail: null, sweep: null },
     }));
     expect(swept.lease.kind).toBe('settle');
     expect(h.store.node(FLEET_ID)).toMatchObject({ updateState: 'idle', requestedTag: null });
@@ -226,7 +226,7 @@ describe('runDispatch — one node at a time, fleet first (spec §10 Pins)', () 
     ran(await runDispatch(h.deps, T0 + 1000));
     const swept = sweepOnce(h.store, fleetMeas({
       measuredAt: T0 + DEADLINE,
-      report: { phase: 'installing', target: 'v0.0.10', startedAt: T0 + 6000, updatedAt: T0 + DEADLINE - 4000, detail: 'placing the tree' },
+      report: { phase: 'installing', target: 'v0.0.10', startedAt: T0 + 6000, updatedAt: T0 + DEADLINE - 4000, detail: 'placing the tree', sweep: null },
     }));
     expect(swept.lease.kind).toBe('none');
     const r = ran(await runDispatch(h.deps, T0 + 1000 + DEADLINE + 1));
@@ -258,7 +258,7 @@ describe('runDispatch — one node at a time, fleet first (spec §10 Pins)', () 
     // The run's own report settles the handed lease, and the server moves after it.
     const swept = sweepOnce(h.store, fleetMeas({
       currentVersion: 'v0.0.10', highestVersion: 'v0.0.10', measuredAt: T0 + 60_000,
-      report: { phase: 'done', target: 'v0.0.10', startedAt: T0 + 6000, updatedAt: T0 + 50_000, detail: null },
+      report: { phase: 'done', target: 'v0.0.10', startedAt: T0 + 6000, updatedAt: T0 + 50_000, detail: null, sweep: null },
     }));
     expect(swept.lease.kind).toBe('settle');
     const r3 = ran(await runDispatch(h.deps, T0 + 61_000));
@@ -423,7 +423,7 @@ describe('runDispatch — the answer decides only what happens to the lease (§1
     // The detached run the op started finished anyway; the sweep measures the new stamp with the node's own report.
     expect(sweepOnce(h.store, fleetMeas({
       currentVersion: 'v0.0.10', highestVersion: 'v0.0.10', measuredAt: T0 + 60_000,
-      report: { phase: 'done', target: 'v0.0.10', startedAt: T0 + 6000, updatedAt: T0 + 50_000, detail: null },
+      report: { phase: 'done', target: 'v0.0.10', startedAt: T0 + 6000, updatedAt: T0 + 50_000, detail: null, sweep: null },
     })).lease.kind).toBe('settle');
     expect(h.store.node(FLEET_ID)).toMatchObject({
       updateState: 'idle', updateDetail: 'done: v0.0.10', requestedTag: null,
@@ -756,7 +756,7 @@ describe('runDispatch — refusal notes (Review Focus 5)', () => {
     const verdict = 'provenance: the bundle signature did not verify';
     const swept = sweepOnce(h.store, serverMeas({
       measuredAt: T0 + 9000,
-      report: { phase: 'failed', target: 'v0.0.10', startedAt: T0 + 6000, updatedAt: T0 + 9000, detail: verdict },
+      report: { phase: 'failed', target: 'v0.0.10', startedAt: T0 + 6000, updatedAt: T0 + 9000, detail: verdict, sweep: null },
     }));
     expect(swept.lease).toMatchObject({ kind: 'release', to: 'failed' });
     expect(swept.refuse).toMatchObject({ tag: 'v0.0.10' });
@@ -781,7 +781,7 @@ describe('runDispatch — a FLEET node that refused its request on provenance ho
     const verdict = 'provenance: the bundle signature did not verify';
     const swept = sweepOnce(h.store, fleetMeas({
       measuredAt: T0 + 9000,
-      report: { phase: 'failed', target: 'v0.0.10', startedAt: T0 + 6000, updatedAt: T0 + 9000, detail: verdict },
+      report: { phase: 'failed', target: 'v0.0.10', startedAt: T0 + 6000, updatedAt: T0 + 9000, detail: verdict, sweep: null },
     }));
     expect(swept.lease).toMatchObject({ kind: 'release', to: 'failed' });
     expect(swept.refuse).toMatchObject({ tag: 'v0.0.10' });
@@ -1143,7 +1143,7 @@ describe('runDispatch — a fleet-link failure after the op was handed holds the
     ran(await runDispatch(h.deps, T0 + 1000));
     const plan = sweepOnce(h.store, fleetMeas({
       measuredAt: T0 + 2000,
-      report: { phase: 'installing', target: 'v0.0.9', startedAt: T0 + 2000, updatedAt: T0 + 3000, detail: null },
+      report: { phase: 'installing', target: 'v0.0.9', startedAt: T0 + 2000, updatedAt: T0 + 3000, detail: null, sweep: null },
     }));
     expect(plan.lease).toEqual({ kind: 'none', why: 'stale-report' });
     expect(h.store.node(FLEET_ID)?.updateState).toBe('pending');
@@ -1177,7 +1177,7 @@ describe('runDispatch — a fleet-link failure after the op was handed holds the
     ran(await runDispatch(h.deps, T0 + 1000));
     expect(sweepOnce(h.store, fleetMeas({
       measuredAt: T0 + 2000,
-      report: { phase: 'installing', target: 'v0.0.9', startedAt: T0 + 2000, updatedAt: T0 + 3000, detail: null },
+      report: { phase: 'installing', target: 'v0.0.9', startedAt: T0 + 2000, updatedAt: T0 + 3000, detail: null, sweep: null },
     })).lease).toEqual({ kind: 'none', why: 'stale-report' });
     const before = ran(await runDispatch(h.deps, T0 + 3000 + DEADLINE - 1));
     expect(before.expired).toEqual([]);
@@ -1196,7 +1196,7 @@ describe('runDispatch — a fleet-link failure after the op was handed holds the
     ran(await runDispatch(h.deps, T0 + 1000));
     expect(sweepOnce(h.store, fleetMeas({
       measuredAt: T0 + 2000,
-      report: { phase: 'installing', target: 'v0.0.10', startedAt: T0 + 2000, updatedAt: T0 + 3000, detail: null },
+      report: { phase: 'installing', target: 'v0.0.10', startedAt: T0 + 2000, updatedAt: T0 + 3000, detail: null, sweep: null },
     })).lease).toEqual({ kind: 'none', why: 'in-flight' });
     expect(h.store.node(FLEET_ID)?.updateState).toBe('pending');
     const after = ran(await runDispatch(h.deps, T0 + 3000 + DEADLINE + 1));
@@ -1216,14 +1216,14 @@ describe('runDispatch — a fleet-link failure after the op was handed holds the
     // This lease's OWN run reports in: `installing v0.0.10`, the lease's own target — a genuine report of it.
     expect(sweepOnce(h.store, fleetMeas({
       measuredAt: T0 + 2000,
-      report: { phase: 'installing', target: 'v0.0.10', startedAt: T0 + 2000, updatedAt: T0 + 3000, detail: null },
+      report: { phase: 'installing', target: 'v0.0.10', startedAt: T0 + 2000, updatedAt: T0 + 3000, detail: null, sweep: null },
     })).lease).toEqual({ kind: 'none', why: 'in-flight' });
     expect(h.store.node(FLEET_ID)).toMatchObject({ reportedPhase: 'installing', reportedTarget: 'v0.0.10' });
     // A LATER writer's report of the PREVIOUS release replaces it on the row — the genuine report of this lease's
     // own run is gone, overwritten by a stale report of a run this lease never made.
     expect(sweepOnce(h.store, fleetMeas({
       measuredAt: T0 + 4000,
-      report: { phase: 'done', target: 'v0.0.9', startedAt: T0 + 3500, updatedAt: T0 + 3900, detail: null },
+      report: { phase: 'done', target: 'v0.0.9', startedAt: T0 + 3500, updatedAt: T0 + 3900, detail: null, sweep: null },
     })).lease).toEqual({ kind: 'none', why: 'stale-report' });
     expect(h.store.node(FLEET_ID)).toMatchObject({ reportedPhase: 'done', reportedTarget: 'v0.0.9' });
     const after = ran(await runDispatch(h.deps, T0 + 3900 + DEADLINE + 1));
@@ -1239,7 +1239,7 @@ describe('runDispatch — a fleet-link failure after the op was handed holds the
     const h = harness({ send: async () => { throw new Error('timeout'); }, localIo: NOTHING_IO });
     // A REAL previous release is already recorded on this row before the lease for v0.0.10 is even acquired.
     seedFleet(h, 'v0.0.10', {
-      report: { phase: 'done', target: 'v0.0.9', startedAt: T0 - 100_000, updatedAt: T0 - 90_000, detail: null },
+      report: { phase: 'done', target: 'v0.0.9', startedAt: T0 - 100_000, updatedAt: T0 - 90_000, detail: null, sweep: null },
     });
     ran(await runDispatch(h.deps, T0 + 1000));
     expect(h.store.node(FLEET_ID)).toMatchObject({
@@ -1379,7 +1379,7 @@ describe('runDispatch — a revive during the op hands the lease to the heir, an
       // U2's own report settles its lease before the answer arrives — no rekey at all.
       sweepOnce(box.h!.store, fleetMeas({
         nodeId: FLEET_ID2, currentVersion: 'v0.0.10', highestVersion: 'v0.0.10', measuredAt: T0 + 1500,
-        report: { phase: 'done', target: 'v0.0.10', startedAt: T0 + 1000, updatedAt: T0 + 1400, detail: null },
+        report: { phase: 'done', target: 'v0.0.10', startedAt: T0 + 1000, updatedAt: T0 + 1400, detail: null, sweep: null },
       }));
       throw new AgentOpError('busy', IN_FLIGHT);
     };

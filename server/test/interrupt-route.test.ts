@@ -200,6 +200,21 @@ describe('POST /api/sessions/:id/interrupt over background-only work (D-5236)', 
   });
 });
 
+// D-8610, characterization: the route's own read of the word (it skips the row's read on `idle`) per word, the words of
+// `turn-words-characterization.test.ts`, over a main Stop newer than the word with delegated work running.
+describe('POST /api/sessions/:id/interrupt, per word (D-8610)', () => {
+  const answers: Array<[string, number, string | null]> = [
+    ['idle', 409, 'not-busy'], ['busy', 409, 'background-only'], ['shell', 409, 'background-only'], ['waiting', 200, null],
+    ['compacting', 200, null], ['', 200, null], ['Idle', 200, null],
+  ];
+  it.each(answers)('live %j: %i %s', async (status, code, error) => {
+    const { res, keys } = await box({ live: { status, at: T0 }, hook: STOP_BG });
+    expect(res.statusCode).toBe(code);
+    expect(error === null ? res.json() : res.json().error).toEqual(error === null ? { ok: true } : error);
+    expect(keys).toEqual(error === null ? ESCAPE : []);
+  });
+});
+
 // The rule itself, on reads the route cannot assemble: `fleet.ts` ships `background` only on a `done`, so a `working`
 // row that still carries it is reachable only here — the hook-state check must hold on its own, not lean on that
 // (D-5343: this case, not the route's `working` one, is what the plan's "ignores the hook state" mutant turns red).

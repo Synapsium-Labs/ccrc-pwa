@@ -26,10 +26,12 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
+  CATALOGUE_TRUNCATION_LIMIT_MAX, CATALOGUE_TRUNCATION_MODES, CATALOGUE_VERBOSITIES,
   CLASSES, CatalogueInvalid, PROBE_KINDS, RegistryInvalid, UNAVAILABLE_PREFIX, WINDOW_MAX, WINDOW_MIN,
   availableFor, classOfModel, deriveModels, familyClassOf, parseCatalogue,
   parseRegistry, parseWindows, resolveDiscovery,
 } from '../../shared/models.js';
+import type { CatalogueVerbosity, TruncationMode } from '../../shared/models.js';
 import { CODEX, SEEDED, UNSEEDED, modelCases } from './fixtures/modelCases.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -607,6 +609,82 @@ describe('parseCatalogue', () => {
     expect(parseCatalogue(bare).models[0]).toEqual({
       id: 'x', label: 'x', context: null, maxContext: null,
       efforts: [], hidden: false, priceIn: null, priceOut: null,
+    });
+  });
+
+  // D-8620: the Codex catalogue's request-shape fields, each optional.
+  describe('the request-shape fields (D-8620)', () => {
+    const SHAPE = {
+      useResponsesLite: true, supportVerbosity: true, defaultVerbosity: 'low', defaultReasoningLevel: 'low',
+      truncationPolicy: { mode: 'tokens', limit: 10000 },
+    } as const;
+    const rowOf = (probe: string, row: Record<string, unknown>): Record<string, unknown> =>
+      parseCatalogue({ probe, fetchedAt: 1, stale: false, models: [{ id: 'x', ...row }] }).models[0] as
+        unknown as Record<string, unknown>;
+    const BARE = { id: 'x', label: 'x', context: null, maxContext: null, efforts: [], hidden: false, priceIn: null, priceOut: null };
+
+    it('passes every valid key through on a Codex catalogue', () => {
+      expect(rowOf('codex', { ...SHAPE })).toStrictEqual({ ...BARE, ...SHAPE });
+    });
+
+    it('keeps a genuine false, and the other verbosities and mode', () => {
+      const row = rowOf('codex', {
+        useResponsesLite: false, supportVerbosity: false, defaultVerbosity: 'high',
+        truncationPolicy: { mode: 'bytes', limit: 10_000_000 },
+      });
+      expect(row['useResponsesLite']).toBe(false);
+      expect(row['supportVerbosity']).toBe(false);
+      expect(row['defaultVerbosity']).toBe('high');
+      expect(row['truncationPolicy']).toStrictEqual({ mode: 'bytes', limit: 10_000_000 });
+      expect(rowOf('codex', { defaultVerbosity: 'medium' })['defaultVerbosity']).toBe('medium');
+      expect(rowOf('codex', { truncationPolicy: { mode: 'tokens', limit: 1 } })['truncationPolicy'])
+        .toStrictEqual({ mode: 'tokens', limit: 1 });
+    });
+
+    it('keeps a reasoning level its own effort list does not offer', () => {
+      expect(rowOf('codex', { efforts: ['low'], defaultReasoningLevel: 'max' })['defaultReasoningLevel']).toBe('max');
+    });
+
+    it('keeps only mode and limit of a truncation policy', () => {
+      expect(rowOf('codex', { truncationPolicy: { mode: 'tokens', limit: 5, extra: 'x' } })['truncationPolicy'])
+        .toStrictEqual({ mode: 'tokens', limit: 5 });
+    });
+
+    it.each([
+      ['useResponsesLite', 'true'], ['useResponsesLite', 1], ['useResponsesLite', null],
+      ['supportVerbosity', 'false'], ['supportVerbosity', 0],
+      ['defaultVerbosity', 'terse'], ['defaultVerbosity', 'LOW'], ['defaultVerbosity', ''], ['defaultVerbosity', 1],
+      ['defaultReasoningLevel', ''], ['defaultReasoningLevel', 7], ['defaultReasoningLevel', ['low']],
+      ['truncationPolicy', { mode: 'tokens', limit: 0 }], ['truncationPolicy', { mode: 'tokens', limit: -1 }],
+      ['truncationPolicy', { mode: 'tokens', limit: 10_000_001 }], ['truncationPolicy', { mode: 'tokens', limit: 1.5 }],
+      ['truncationPolicy', { mode: 'tokens', limit: '10000' }], ['truncationPolicy', { mode: 'tokens' }],
+      ['truncationPolicy', { mode: 'lines', limit: 10000 }], ['truncationPolicy', { limit: 10000 }],
+      ['truncationPolicy', 'tokens'], ['truncationPolicy', null], ['truncationPolicy', []],
+    ] as const)('drops %s = %j and keeps the others', (key, bad) => {
+      const row = rowOf('codex', { ...SHAPE, [key]: bad });
+      expect(row).not.toHaveProperty(key);
+      const { [key]: _gone, ...rest } = SHAPE;
+      expect(row).toStrictEqual({ ...BARE, ...rest });
+    });
+
+    it.each(['openrouter', 'compatible'])('a %s catalogue never carries them, even when its file has them', (probe) => {
+      expect(rowOf(probe, { ...SHAPE })).toStrictEqual(BARE);
+    });
+
+    it('a row without them is deep-equal to today\'s', () => {
+      expect(rowOf('codex', {})).toStrictEqual(BARE);
+      expect(parseCatalogue(clone(CODEX))).toStrictEqual(CODEX);
+    });
+
+    it('the bounds are the runtime lists the type names', () => {
+      // `CatalogueVerbosity` and `TruncationMode` are the TYPES (shared/models.ts); these are the runtime lists that
+      // validate. A Record over the type is a compile error until it names every member, and nothing more.
+      const verbosities: Record<CatalogueVerbosity, true> = { low: true, medium: true, high: true };
+      const modes: Record<TruncationMode, true> = { tokens: true, bytes: true };
+      expect([...CATALOGUE_VERBOSITIES].sort()).toEqual(Object.keys(verbosities).sort());
+      expect([...CATALOGUE_TRUNCATION_MODES].sort()).toEqual(Object.keys(modes).sort());
+      expect(CATALOGUE_TRUNCATION_LIMIT_MAX).toBe(10_000_000);
+      expect(Object.isFrozen(CATALOGUE_VERBOSITIES) && Object.isFrozen(CATALOGUE_TRUNCATION_MODES)).toBe(true);
     });
   });
 });

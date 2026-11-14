@@ -78,20 +78,20 @@ const RECORDED_DOCUMENT = {
   comment: 'mutation-comment-create', link: 'mutation-attachment-link-url-constructed', resolveIssue: 'resolve-issue', resolveIssueAndParent: 'resolve-issue-and-parent',
   resolveParent: 'resolve-parent', directoryStates: 'directory-states-page-1', directoryLabels: 'directory-labels-page-1',
   directoryProjects: 'directory-projects-page-1', directoryUsers: 'directory-users-page-1',
-  // The hierarchy documents (D-8180): constructed files until FX2 records them.
-  initiativeById: 'read-initiative-by-id-constructed', projectById: 'read-project-by-id-constructed',
-  projectStatuses: 'read-project-statuses-constructed', initiativesProbe: 'read-initiatives-probe-constructed',
-  initiativesByName: 'read-initiatives-by-name-constructed', projectsByName: 'read-projects-by-name-constructed',
-  changedInitiatives: 'read-changed-initiatives-constructed', changedProjects: 'read-changed-projects-constructed',
+  // The hierarchy documents (D-8180): FX2's recordings (D-8407), and constructed files for the six it did not record.
+  initiativeById: 'read-initiative-by-id', projectById: 'read-project-by-id',
+  projectStatuses: 'read-project-statuses', initiativesProbe: 'read-initiatives-probe',
+  initiativesByName: 'read-initiatives-by-name', projectsByName: 'read-projects-by-name',
+  changedInitiatives: 'read-changed-initiatives', changedProjects: 'read-changed-projects-constructed',
   changedMilestones: 'read-changed-milestones-constructed', changedIssues: 'read-changed-issues-constructed',
-  teamOpenIssues: 'read-team-open-issues-constructed', issueOwned: 'read-issue-owned-constructed',
-  initiativeCreate: 'mutation-initiative-create-constructed', initiativeUpdate: 'mutation-initiative-update-constructed',
-  initiativeToProjectCreate: 'mutation-initiative-to-project-create-constructed',
+  teamOpenIssues: 'read-team-open-issues-constructed', issueOwned: 'read-issue-owned',
+  initiativeCreate: 'mutation-initiative-create', initiativeUpdate: 'mutation-initiative-update-status-canceled',
+  initiativeToProjectCreate: 'mutation-initiative-to-project-create',
   initiativeToProjectDelete: 'mutation-initiative-to-project-delete-constructed',
-  projectCreate: 'mutation-project-create-constructed', projectUpdate: 'mutation-project-update-constructed',
-  projectMilestoneCreate: 'mutation-project-milestone-create-constructed',
-  projectMilestoneUpdate: 'mutation-project-milestone-update-constructed',
-  issueRelationCreate: 'mutation-issue-relation-create-constructed',
+  projectCreate: 'mutation-project-create', projectUpdate: 'mutation-project-update-constructed',
+  projectMilestoneCreate: 'mutation-project-milestone-create',
+  projectMilestoneUpdate: 'mutation-project-milestone-update',
+  issueRelationCreate: 'mutation-issue-relation-create',
 } as const satisfies Record<keyof typeof LINEAR_DOCUMENTS, string>;
 
 /** An issue URL as Linear writes it, joined here so no line of this file holds the web origin and a path together. */
@@ -270,8 +270,9 @@ describe('LINEAR_OPS: one row per verb, the allow-list of what the key can run (
   });
 
   it('every document\'s recorded X-Complexity is under LINEAR_QUOTA.maxQueryComplexity, the directory pages included (slug linear-fx-ops-complexity)', () => {
-    // The hierarchy documents' constructed files carry no complexity (D-8180): FX2 records it, and joins them here.
-    const measured = Object.entries(RECORDED_DOCUMENT).filter(([name]) => !(name in LINEAR_HIERARCHY_DOCUMENTS));
+    // The hierarchy documents' constructed files carry no complexity (D-8180); FX2's recordings do (D-8407).
+    const measured = Object.entries(RECORDED_DOCUMENT)
+      .filter(([name, file]) => !(name in LINEAR_HIERARCHY_DOCUMENTS) || !file.endsWith('-constructed'));
     for (const [name, file] of measured) {
       const cost = recordedComplexity(file);
       expect(cost, name).not.toBeNull();
@@ -283,6 +284,9 @@ describe('LINEAR_OPS: one row per verb, the allow-list of what the key can run (
       issue: 10, search: 12, comments: 6, statuses: 601, projects: 60, labels: 575, users: 65, create: 11, update: 11, comment: 3, link: 3,
       resolveIssue: 3, resolveIssueAndParent: 5, resolveParent: 3,
       directoryStates: 901, directoryLabels: 875, directoryProjects: 600, directoryUsers: 651,
+      initiativeById: 13, projectById: 153, projectStatuses: 111, initiativesProbe: 1, initiativesByName: 15, projectsByName: 235,
+      changedInitiatives: 1360, issueOwned: 6, initiativeCreate: 2, initiativeUpdate: 2, initiativeToProjectCreate: 2,
+      projectCreate: 2, projectMilestoneCreate: 2, projectMilestoneUpdate: 2, issueRelationCreate: 2,
     });
   });
 

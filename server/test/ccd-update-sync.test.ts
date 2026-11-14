@@ -6,7 +6,7 @@
 //
 // STANDING NOTE: this file matches `ccd-workspaces.test.ts`'s
 // `/^ccd.*\.ts$/` containment scan, so EVERY bash spawn below builds its env
-// through `ghContainedEnv(…, { systemd: true, tmux: true })` AT THE CALL SITE,
+// through `ghContainedEnv(…, { systemd: true, tmux: true, net: true })` AT THE CALL SITE,
 // inside the scan's twelve-line window (`SCAN_LOOKBACK_LINES`). A helper at
 // the top of the file would be invisible to it — `ccd-pool-sync.test.ts`'s
 // `run` measured that.
@@ -27,7 +27,7 @@ import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, st
 import path, { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mkTmp } from './tmpHelpers.js';
-import { ghContainedEnv } from './ccdWsHelpers.js';
+import { ghContainedEnv, stubContainedTool } from './ccdWsHelpers.js';
 import { itLinux } from './platformFixtures.js';
 import { SERVER_CAPS, SERVER_CAPS_FILE, isServerCapWord, parseServerCaps } from '../../shared/api.js';
 import { REGIONS, ccdFunctionDefinition, checkRegion, extractRegion } from '../../shared/hook-helpers.mjs';
@@ -88,7 +88,9 @@ const box = (prefix: string, o: { url?: string; nodeId?: string | null } = {}): 
   if (o.nodeId !== null) writeFileSync(join(home, '.ccrc', 'node-id'), `${o.nodeId ?? NODE_ID}\n`);
   const bin = join(home, 'bin');
   mkdirSync(bin, { recursive: true });
-  writeFileSync(join(bin, 'curl'), [
+  // The stub goes through `stubContainedTool` into `harnessBin` (residue R35(a), D-8394): every spawn below asks
+  // `net`, whose curl poison is first on PATH, ahead of `~/bin`, and keeps a stub it finds there.
+  stubContainedTool(home, 'curl', [
     '#!/usr/bin/env bash',
     // D-5232's mechanism (Task 9b): the second, independent pull asks `<url>/health`. It answers from its OWN
     // fixtures (`fixture-health-*`, default a 200 whose `caps` is empty) and records to its OWN files, so every
@@ -123,7 +125,7 @@ const box = (prefix: string, o: { url?: string; nodeId?: string | null } = {}): 
     'status=200; [ -f "$HOME/fixture-status" ] && IFS= read -r status < "$HOME/fixture-status"',
     'printf \'%s\' "$status"',
     '',
-  ].join('\n'), { mode: 0o755 });
+  ].join('\n'));
   return home;
 };
 
@@ -138,7 +140,7 @@ const sync = (home: string, extra: NodeJS.ProcessEnv = {}): Run => {
   const env = ghContainedEnv(home, {
     ...process.env, CCRC_UPDATE_SYNC_TIMEOUT: undefined, ...extra,
     HOME: home, PATH: `${join(home, 'bin')}:${process.env['PATH'] ?? ''}`,
-  }, { systemd: true, tmux: true });
+  }, { systemd: true, tmux: true, net: true });
   const r = spawnSync('bash', ['-c', 'umask 022; exec bash "$0"', SYNC], { encoding: 'utf8', env });
   return { code: r.status ?? -1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
 };
@@ -177,7 +179,7 @@ const readBack = (home: string): Run => {
   const units = join(home, '.config', 'systemd', 'user');
   mkdirSync(units, { recursive: true });
   writeFileSync(join(units, 'ccd-update-sync.timer'), '');
-  const env = ghContainedEnv(home, { ...process.env, HOME: home }, { systemd: true, tmux: true });
+  const env = ghContainedEnv(home, { ...process.env, HOME: home }, { systemd: true, tmux: true, net: true });
   const r = spawnSync('bash', [CCRC, 'channel'], { encoding: 'utf8', env });
   return { code: r.status ?? -1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
 };
@@ -365,7 +367,7 @@ describe('ccd-update-sync: no credential or absolute home path in a printed line
     const call = (text: string, h: string): string => {
       const input = join(home, `input-${n++}`);
       writeFileSync(input, text);
-      const env = ghContainedEnv(home, { HOME: h, PATH: process.env['PATH'] ?? '' }, { systemd: true, tmux: true });
+      const env = ghContainedEnv(home, { HOME: h, PATH: process.env['PATH'] ?? '' }, { systemd: true, tmux: true, net: true });
       const p = spawnSync('bash', ['--noprofile', '--norc', '-s', '--', defs, input],
         { env, input: '. "$1"\ninput="$(cat -- "$2")"\n_upd_redact "$input" bare-host\n', encoding: 'utf8' });
       expect(p.status, p.stderr).toBe(0);
@@ -381,11 +383,12 @@ describe('ccd-update-sync: no credential or absolute home path in a printed line
     // _upd_redact strips every @-ended run in a scheme authority, even if curl refuses that base.
     expect(call('https://u:p@x@host', '/fixture-home')).toBe('https://host');
     expect(call('u:p@x@host/path', '/fixture-home')).toBe('host/path');
-    // A slash, query or fragment ends the authority; later @ text stays whole.
-    for (const url of ['https://host/path@x', 'https://host?a@b', 'https://host#a@b']) {
-      expect(call(url, '/fixture-home')).toBe(url);
-    }
-    expect(call('https://u:p@host?a@b#c@d', '/fixture-home')).toBe('https://host?a@b#c@d');
+    // A slash, query or fragment ends the authority; later @ text is no userinfo. A path's stays whole; a query or a fragment
+    // is withheld after its '?' or '#' (D-8342), the host kept.
+    expect(call('https://host/path@x', '/fixture-home')).toBe('https://host/path@x');
+    expect(call('https://host?a@b', '/fixture-home')).toBe('https://host?[withheld]');
+    expect(call('https://host#a@b', '/fixture-home')).toBe('https://host#[withheld]');
+    expect(call('https://u:p@host?a@b#c@d', '/fixture-home')).toBe('https://host?[withheld]');
     const ccrcSrc = readFileSync(CCRC, 'utf8');
     const LL = REGIONS.find((r) => r.name === 'log-line')!;
     expect(checkRegion(LL, src, ccrcSrc)).toBe('current');
@@ -409,10 +412,10 @@ describe('ccd-update-sync: no credential or absolute home path in a printed line
     // Unreadable: agent.env absent entirely.
     const missing = mkTmp('upd-sync-redact-home-missing-');
     mkdirSync(join(missing, 'bin'), { recursive: true });
-    writeFileSync(join(missing, 'bin', 'curl'), '#!/bin/sh\nexit 99\n', { mode: 0o755 });
+    stubContainedTool(missing, 'curl', '#!/bin/sh\nexit 99\n');
     const envMissing = ghContainedEnv(missing,
       { ...process.env, HOME: missing, PATH: `${join(missing, 'bin')}:${process.env['PATH'] ?? ''}` },
-      { systemd: true, tmux: true });
+      { systemd: true, tmux: true, net: true });
     const rMissing = spawnSync('bash', [SYNC], { encoding: 'utf8', env: envMissing });
     expect(rMissing.status).toBe(1);
     expect(rMissing.stderr).not.toContain(missing);
@@ -423,10 +426,10 @@ describe('ccd-update-sync: no credential or absolute home path in a printed line
     mkdirSync(join(noUrl, '.ccrc'), { recursive: true });
     writeFileSync(join(noUrl, '.ccrc', 'agent.env'), 'CCRC_AGENT_TOKEN=agent-bearer-fixture\n');
     mkdirSync(join(noUrl, 'bin'), { recursive: true });
-    writeFileSync(join(noUrl, 'bin', 'curl'), '#!/bin/sh\nexit 99\n', { mode: 0o755 });
+    stubContainedTool(noUrl, 'curl', '#!/bin/sh\nexit 99\n');
     const envNoUrl = ghContainedEnv(noUrl,
       { ...process.env, HOME: noUrl, PATH: `${join(noUrl, 'bin')}:${process.env['PATH'] ?? ''}` },
-      { systemd: true, tmux: true });
+      { systemd: true, tmux: true, net: true });
     const rNoUrl = spawnSync('bash', [SYNC], { encoding: 'utf8', env: envNoUrl });
     expect(rNoUrl.status).toBe(1);
     expect(rNoUrl.stderr).not.toContain(noUrl);
@@ -535,9 +538,18 @@ describe('W29: the sync never prints a URL\'s userinfo', () => {
     expect(r.stderr).toContain('could not resolve host in 127.0.0.1:9)');
   });
 
-  it('W29-Y6: under a UTF-8 locale, invalid UTF-8 inside userinfo is still masked (D-6984)', ({ skip }) => {
-    const locales = spawnSync('locale', ['-a'], { encoding: 'utf8' }).stdout ?? '';
-    const locale = locales.split('\n').find((l) => /^en_US\.utf-?8$/i.test(l));
+  // R51 (D-8387): one row per arm of the userinfo mask, the scheme's and the scheme-less one, so a locale pin later
+  // narrowed to one arm alone reds the other; and a box without en_US.UTF-8 runs the rows under C.UTF-8 instead of
+  // skipping them (the review measured the same defect under both).
+  const utf8Locale = (): string | undefined => {
+    const locales = (spawnSync('locale', ['-a'], { encoding: 'utf8' }).stdout ?? '').split('\n');
+    return locales.find((l) => /^en_US\.utf-?8$/i.test(l)) ?? locales.find((l) => /^C\.utf-?8$/i.test(l));
+  };
+  it.for([
+    ['the scheme-less arm', ''],
+    ['the scheme arm', 'https://'],
+  ] as const)('W29-Y6: under a UTF-8 locale, invalid UTF-8 inside userinfo is still masked: %s (D-6984)', ([, scheme], { skip }) => {
+    const locale = utf8Locale();
     if (!locale) { skip(); return; }
     const src = readFileSync(SYNC, 'utf8');
     const block = ccdFunctionDefinition(src, '_upd_redact');
@@ -545,19 +557,19 @@ describe('W29: the sync never prints a URL\'s userinfo', () => {
     const home = mkTmp('upd-sync-w29-invalid-userinfo-');
     const fixture = join(home, 'url \' " $(printf expanded) [*]');
     writeFileSync(fixture, Buffer.from([
-      ...Buffer.from('u:hun', 'ascii'), 0xff,
+      ...Buffer.from(`${scheme}u:hun`, 'ascii'), 0xff,
       ...Buffer.from('ter2@127.0.0.1:9', 'ascii'),
     ]));
     const redactor = join(home, 'redactor \' " $(printf expanded) [*].sh');
     writeFileSync(redactor, block!);
     const env = ghContainedEnv(home, {
       HOME: home, LC_ALL: locale, PATH: process.env['PATH'] ?? '',
-    }, { systemd: true, tmux: true });
+    }, { systemd: true, tmux: true, net: true });
     const p = spawnSync('bash', ['--noprofile', '--norc', '-s', '--', redactor, fixture], {
       env, input: '. "$1"\ninput="$(cat -- "$2")"\n_upd_redact "$input" bare-host\n',
     });
     expect(p.status, p.stderr.toString()).toBe(0);
-    expect(p.stdout).toEqual(Buffer.from('127.0.0.1:9', 'ascii'));
+    expect(p.stdout).toEqual(Buffer.from(`${scheme}127.0.0.1:9`, 'ascii'));
   });
 
   it('W29-Y3: the comment above say() names the rules it applies, not "the same two rules"', () => {

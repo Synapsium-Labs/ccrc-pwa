@@ -1,0 +1,69 @@
+{
+  "name": "mutation-project-milestone-create",
+  "documentSource": "code",
+  "document": "mutation ProjectMilestoneCreate($input: ProjectMilestoneCreateInput!) { projectMilestoneCreate(input: $input) { success projectMilestone { id } } }",
+  "variables": {
+    "input": {
+      "id": "00000000-0008-4000-8000-000000000021",
+      "projectId": "00000000-0004-4000-8000-000000000020",
+      "name": "Capture milestone temp",
+      "description": "Capture."
+    }
+  },
+  "requestBody": "{\"query\":\"mutation ProjectMilestoneCreate($input: ProjectMilestoneCreateInput!) { projectMilestoneCreate(input: $input) { success projectMilestone { id } } }\",\"variables\":{\"input\":{\"id\":\"00000000-0008-4000-8000-000000000021\",\"projectId\":\"00000000-0004-4000-8000-000000000020\",\"name\":\"Capture milestone temp\",\"description\":\"Capture.\"}}}",
+  "requestHeaders": [
+    "authorization: <the key, bare, no Bearer>",
+    "content-type: application/json"
+  ],
+  "sentAtMs": null,
+  "receivedAtMs": null,
+  "sentAt": null,
+  "status": 200,
+  "statusLine": null,
+  "headers": [
+    [
+      "content-type",
+      "application/json; charset=utf-8"
+    ],
+    [
+      "x-complexity",
+      "2"
+    ],
+    [
+      "x-ratelimit-complexity-limit",
+      "3000000"
+    ],
+    [
+      "x-ratelimit-complexity-remaining",
+      "2999998"
+    ],
+    [
+      "x-ratelimit-complexity-reset",
+      "1794590000083"
+    ],
+    [
+      "x-ratelimit-requests-limit",
+      "2500"
+    ],
+    [
+      "x-ratelimit-requests-remaining",
+      "2472"
+    ],
+    [
+      "x-ratelimit-requests-reset",
+      "1794590000083"
+    ]
+  ],
+  "body": {
+    "data": {
+      "projectMilestoneCreate": {
+        "success": true,
+        "projectMilestone": {
+          "id": "00000000-0008-4000-8000-000000000021"
+        }
+      }
+    }
+  },
+  "bodyRaw": "{\"data\":{\"projectMilestoneCreate\":{\"success\":true,\"projectMilestone\":{\"id\":\"00000000-0008-4000-8000-000000000021\"}}}}\n",
+  "note": "Recorded by the hierarchy capture (FX2, D-8407). The input carries a caller-chosen id."
+}

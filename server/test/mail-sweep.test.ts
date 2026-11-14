@@ -2638,11 +2638,26 @@ describe('sweepMail: the coordinator quiet window', () => {
   // (the mirrors are for the window cases, which may move with the values; an
   // edge is the value).
   describe("today's pace at each edge (MAIL_PACE characterization)", () => {
-    const SUBJECTS = [
+    /** ID is a dispatched child: the worker of someone else's run, its `.child` mark naming that run. */
+    const seedChildWorker = (coord: CoordStore, home: string): void => {
+      const r = coord.openRun({ program: 'program-leverage', title: 'Program leverage', project: 'demo',
+        wave: 6, waveOf: 8, claimedBy: 'some-other-coordinator' }) as { id: number };
+      coord.markDispatched(r.id, ID, 'demo', 'ws/demo', false, NOW);
+      writeFileSync(path.join(home, '.cc-sessions', `${ID}.child`), `${r.id}\n`);
+    };
+    /** ID carries a `.child` mark that does not parse, and claims nothing. */
+    const seedUnreadableChild = (_coord: CoordStore, home: string): void => {
+      writeFileSync(path.join(home, '.cc-sessions', `${ID}.child`), 'not-a-run-id\n');
+    };
+    // The two child shapes pin the axis the move to `roleOf` starts reading (Overlord W1a, w1a-mail-pace-roles.md):
+    // neither claims a run, so each reads the worker pair before the move and after it.
+    const SUBJECTS: readonly { who: string; seed: (c: CoordStore, home: string) => void; quietMs: number; cooldownMs: number }[] = [
       { who: 'a claimant of an open run', seed: seedCoordinatorRun, quietMs: 15_000, cooldownMs: 30_000 },
       { who: 'a worker on another run', seed: seedWorkerRun, quietMs: 60_000, cooldownMs: 120_000 },
       { who: 'a plain session with no run', seed: (_c: CoordStore): void => {}, quietMs: 60_000, cooldownMs: 120_000 },
-    ] as const;
+      { who: 'a dispatched child on a work run', seed: seedChildWorker, quietMs: 60_000, cooldownMs: 120_000 },
+      { who: 'a session whose child mark is unreadable', seed: seedUnreadableChild, quietMs: 60_000, cooldownMs: 120_000 },
+    ];
 
     it.each(SUBJECTS)('$who: held as not-quiet 1 ms short of its quiet time', async ({ seed, quietMs }) => {
       const h = harness({ panes: HAPPY_PANES });
@@ -2651,7 +2666,7 @@ describe('sweepMail: the coordinator quiet window', () => {
       seedRegistry(h.home, ID);
       seedHookState(h.home, ID);
       seedLiveState(h.home, { statusUpdatedAt: NOW - (quietMs - 1) });
-      seed(coord);
+      seed(coord, h.home);
       const d = queueTestDelivery(coord, ID, ENVELOPE);
       await w.sweepMail();
       expect(literalSends(h.calls)).toEqual([]);
@@ -2665,7 +2680,7 @@ describe('sweepMail: the coordinator quiet window', () => {
       seedRegistry(h.home, ID);
       seedHookState(h.home, ID);
       seedLiveState(h.home, { statusUpdatedAt: NOW - quietMs });
-      seed(coord);
+      seed(coord, h.home);
       queueTestDelivery(coord, ID, ENVELOPE);
       await w.sweepMail();
       expect(literalSends(h.calls)).toEqual([NUDGE]);
@@ -2683,7 +2698,7 @@ describe('sweepMail: the coordinator quiet window', () => {
       seedRegistry(h.home, ID);
       seedHookState(h.home, ID);
       seedLiveState(h.home);
-      seed(coord);
+      seed(coord, h.home);
       queueTestDelivery(coord, ID, ENVELOPE);
       await w.sweepMail();
       expect(literalSends(h.calls)).toEqual([NUDGE]);
@@ -2703,7 +2718,7 @@ describe('sweepMail: the coordinator quiet window', () => {
       seedRegistry(h.home, ID);
       seedHookState(h.home, ID);
       seedLiveState(h.home);
-      seed(coord);
+      seed(coord, h.home);
       queueTestDelivery(coord, ID, ENVELOPE);
       await w.sweepMail();
       expect(literalSends(h.calls)).toEqual([NUDGE]);
@@ -2713,6 +2728,60 @@ describe('sweepMail: the coordinator quiet window', () => {
       queueTestDelivery(coord, ID, ENVELOPE);
       await w.sweepMail();
       expect(literalSends(h.calls)).toEqual([NUDGE, NUDGE]);
+    });
+  });
+
+  // The one answer the move to `roleOf` changes: Table 3.3.9a tests the child mark before the claim, so a child that
+  // claims an open run is a worker or a reviewer, and reads the worker pair (Overlord W1a, w1a-mail-pace-roles.md).
+  // Measured 2026-11-13: no claimant of an open run carries a `.child` mark, so no session that exists today is this
+  // subject.
+  // Review 1895 F1: the lane's fallback for a recipient the registry does not list. Its child mark was not measured,
+  // which spec §3.3.9 reads as undecided, so even a claimant of an open run takes the worker pair, and the cooldown
+  // gate (which runs before the registry ladder) holds a second nudge for 120 s, never the coordinator's 30 s.
+  describe('a recipient missing from the registry reads the worker pair (an unmeasured child mark)', () => {
+    it('a claimant that drops out of the registry is held as cooldown past the coordinator cooldown', async () => {
+      const h = harness({ panes: [...HAPPY_PANES, ...HAPPY_PANES] });
+      const coord = store(h.home);
+      const { w } = await primedWatcher(h, coord);
+      seedRegistry(h.home, ID);
+      seedHookState(h.home, ID);
+      seedLiveState(h.home);
+      coord.openRun({ program: 'program-leverage', title: 'Program leverage', project: 'demo',
+        wave: 6, waveOf: 8, claimedBy: ID });
+      queueTestDelivery(coord, ID, ENVELOPE);
+      await w.sweepMail();
+      expect(literalSends(h.calls)).toEqual([NUDGE]);
+
+      // The registry no longer lists ID: every identity field of its row is gone.
+      for (const k of ['wrapper', 'project', 'workdir', 'uuid', 'started']) {
+        rmSync(path.join(h.home, '.cc-sessions', `${ID}.${k}`), { force: true });
+      }
+      advance(30_000 + 1_000); // past the coordinator cooldown and the lane's own re-sweep gate
+      const d = queueTestDelivery(coord, ID, ENVELOPE);
+      await w.sweepMail();
+      expect(literalSends(h.calls)).toEqual([NUDGE]);
+      expect(deliveryRow(coord, d.id).lastGate).toBe('cooldown');
+    });
+  });
+
+  describe('a child that claims an open run reads the worker pair (roleOf, Table 3.3.9a)', () => {
+    it.each([
+      ['a dispatched child', (runId: number): string => `${runId}\n`],
+      ['a session with an unreadable child mark', (_runId: number): string => 'not-a-run-id\n'],
+    ])('%s that claims an open run is held as not-quiet at the coordinator quiet time', async (_who, mark) => {
+      const h = harness({ panes: HAPPY_PANES });
+      const coord = store(h.home);
+      const { w } = await primedWatcher(h, coord);
+      seedRegistry(h.home, ID);
+      seedHookState(h.home, ID);
+      seedLiveState(h.home, { statusUpdatedAt: NOW - 15_000 });
+      const r = coord.openRun({ program: 'program-leverage', title: 'Program leverage', project: 'demo',
+        wave: 6, waveOf: 8, claimedBy: ID }) as { id: number };
+      writeFileSync(path.join(h.home, '.cc-sessions', `${ID}.child`), mark(r.id));
+      const d = queueTestDelivery(coord, ID, ENVELOPE);
+      await w.sweepMail();
+      expect(literalSends(h.calls)).toEqual([]);
+      expect(deliveryRow(coord, d.id).lastGate).toBe('not-quiet');
     });
   });
 });

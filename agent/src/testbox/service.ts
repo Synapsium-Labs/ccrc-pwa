@@ -15,13 +15,18 @@
 // a `run.submit` is queued and then streamed as `run.log` frames and one `run.summary`; a submission the box will not
 // run is refused, and the connection closes with the reason. A run keeps going when its connection drops; positions
 // are decided (`queue.ts#positions`) and reach a client when a later task adds the frame that carries them.
+//
+// D-8290 (plan docs/superpowers/plans/2026-11-11-live-probe-budget.md): a `probe.submit` goes to the probe desk
+// (`probeDesk.ts`, the optional `probes` dependency), which answers it with `probe.state` frames; the status answer
+// carries the desk's block when the box names a probe config directory. A service without a desk refuses the frame.
 import { existsSync, mkdirSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import type {
-  RunCancel, RunLog, RunSubmit, RunSummary, StatusAnswer, TestboxFrame, TestboxFrameType, TestboxRepoRow, TestboxSync,
-  TestboxToolVersions,
+  ProbeAnswer, ProbeSubmit, RunCancel, RunLog, RunSubmit, RunSummary, StatusAnswer, TestboxFrame, TestboxFrameType, TestboxRepoRow,
+  TestboxSync, TestboxToolVersions,
 } from '../../../shared/testbox.js';
 import type { MirrorOps } from './mirror.js';
+import type { ProbeDesk } from './probeDesk.js';
 import { admit, cancel as queueCancel, enqueue, EMPTY_QUEUE, finish, positions, queueCounts, type QueueState } from './queue.js';
 import { lastLine, logTail, OUTPUT_DRAIN_MS, OutputTail, PREPARE_STDERR, readReport, RUN_LOG, SLOT_OUTPUT_FILES } from './results.js';
 import {
@@ -67,6 +72,8 @@ export interface ServiceDeps {
   /** A run's spec is built, in the same turn and before its prepare awaits anything (TB6, spec §2.10: the tool sync
    *  pins the set the spec's `PATH` names, so no sync prunes it before the spec is written); absent, nothing. */
   readonly specBuilt?: (spec: RunSpec) => void;
+  /** The live probe desk (D-8290); absent, a `probe.submit` is refused and the status answer has no probe block. */
+  readonly probes?: ProbeDesk;
 }
 
 /** What the pristine store needs from outside (D-7543). */
@@ -87,8 +94,9 @@ export interface RunSink {
   send(frame: RunLog | RunSummary): void;
 }
 
-/** A connection, as the dispatch table sees it. */
-export interface Conn extends RunSink {
+/** A connection, as the dispatch table sees it: a run's frames, or a probe's (D-8290). */
+export interface Conn {
+  send(frame: RunLog | RunSummary | ProbeAnswer): void;
   /** Close the connection: the box will not take what it sent. */
   refuse(reason: string): void;
 }
@@ -171,7 +179,14 @@ export class TestboxService {
       release: this.d.release, serviceVersion: this.d.serviceVersion, tools: this.d.tools?.() ?? null, fleetTools: this.fleetTools,
       sync: this.sync, inProgress: counts.inProgress, limit: this.s.runs, queueDepth: counts.queueDepth,
       ...this.pristineFacts(), heldRunUsers: heldUsers(this.pool, this.s.runUserPrefix),
+      probes: this.d.probes?.configured() === true ? this.d.probes.view() : null,
     });
+  }
+
+  /** A probe submission (D-8290): the desk's, or refused when this service has none. */
+  probe(f: ProbeSubmit, conn: Conn): void {
+    if (this.d.probes === undefined) { conn.refuse('probe.submit is not a frame this service takes'); return; }
+    this.d.probes.submit(f, conn);
   }
 
   private pristineFacts(): Pick<StatusFacts, 'pristine' | 'failedKeys'> {
@@ -480,4 +495,5 @@ export const FRAME_HANDLERS: Readonly<Partial<Record<TestboxFrameType, FrameHand
   'run.submit': (svc, f, conn) => svc.submit(f as RunSubmit, conn),
   'run.cancel': (svc, f) => svc.cancel((f as RunCancel).runId),
   'tools.sync': async (svc, f, conn) => (await import('./toolsync.js')).onToolsSync(svc, f, conn),
+  'probe.submit': (svc, f, conn) => svc.probe(f as ProbeSubmit, conn),
 };

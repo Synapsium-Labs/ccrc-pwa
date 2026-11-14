@@ -30,7 +30,7 @@
 import path from 'node:path';
 import {
   BUSY_UPDATE_STATES, IN_FLIGHT_UPDATE_PHASES, PROVENANCE_DETAIL_PREFIX, UNIX_SECONDS_MAX, dispatchRank, isReleaseTag, isUpdatePhase,
-  settledDoneDetail, validCapWords,
+  isUpdateSweepWord, settledDoneDetail, validCapWords,
   type InstallState, type NodeOs, type NodeRole, type ProvenanceState, type SettledUpdateState, type StampRead,
   type TagFileRead,
 } from '../../../shared/api.js';
@@ -38,7 +38,7 @@ import { NODE_FILES, NODE_ID_RE, type NodeFileKey } from '../../../shared/agent-
 import { parseBuildInfo, type BuildInfo } from '../../../shared/buildinfo.js';
 // NODE_ID_RE is declared once, in `shared/agent-protocol.ts` (D-5622), and the
 // store's `rekeyNode` refuses a key outside the same one, so this reader and that
-// writer cannot disagree about what `_inst_node_id` (`ccd/ccrc:9494-9513`) mints — a
+// writer cannot disagree about what `_inst_node_id` (in `ccd/ccrc`) mints — a
 // lowercase uuid. An uppercase one was not written by the installer and keys nothing.
 // It is imported from there, not through the store (D-5896), so this import is types only.
 import {
@@ -281,10 +281,22 @@ function secondsToMs(v: unknown): number | null {
  *  NULL for a report that exists" while still differing from a real `done`
  *  report on the next sweep, keeping the changed-report gate open for
  *  re-evaluation. */
-const UNKNOWN_REPORT: NodeReport = { phase: 'unknown', target: null, startedAt: null, updatedAt: null, detail: null };
+const UNKNOWN_REPORT: NodeReport = { phase: 'unknown', target: null, startedAt: null, updatedAt: null, detail: null, sweep: null };
+
+/** R37 (D-8386): THE ONE READER of `update.json`'s `sweep` key, the record `ccrc update`'s supervisor sweep leaves
+ *  (wave 17, D-5314, D-5315; `_upd_phase` writes it only once the sweep has run). Printable ASCII, cut to
+ *  REPORT_DETAIL_MAX as the detail is, then `isUpdateSweepWord` (shared/api.ts). Absent, or anything that is not a
+ *  sweep word (a number, a boolean, an empty or unknown word), is null: NOT MEASURED, never `ok` and never a count of
+ *  none, which is how `ccrc doctor`'s update-sweep check reads it too. */
+export function sweepFrom(raw: unknown): string | null {
+  if (typeof raw !== 'string') return null;
+  const word = printableDetail(raw);
+  return isUpdateSweepWord(word) ? word : null;
+}
 
 /** update.json `{target, phase, startedAt, updatedAt, detail, from}` → the
- *  five report columns (§8, §10). NULL = no report file. Any other failure is
+ *  five report columns (§8, §10), and its `sweep` key → `reportedSweep`
+ *  (`sweepFrom`, R37). NULL = no report file. Any other failure is
  *  a report whose phase is `unknown` — a node that wrote SOMETHING, which the
  *  phase table treats as "leave the lease alone" rather than as silence.
  *  Fields are read BY NAME and every other key is ignored: the file is
@@ -303,6 +315,7 @@ export function reportFrom(read: NodeFileRead): NodeReport | null {
     startedAt: secondsToMs(o.startedAt),
     updatedAt: secondsToMs(o.updatedAt),
     detail: detail === '' ? null : detail,
+    sweep: sweepFrom(o.sweep),
   };
 }
 
@@ -552,7 +565,7 @@ function previousReportOf(row: NodeRow | null): NodeReport | null {
   if (row === null || row.reportedPhase === null) return null;
   return {
     phase: row.reportedPhase, target: row.reportedTarget, startedAt: row.reportedStartedAt,
-    updatedAt: row.reportedUpdatedAt, detail: row.reportedDetail,
+    updatedAt: row.reportedUpdatedAt, detail: row.reportedDetail, sweep: row.reportedSweep,
   };
 }
 

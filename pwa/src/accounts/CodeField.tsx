@@ -1,13 +1,15 @@
 import { useId, useRef, useState, type ClipboardEvent, type ReactNode } from 'react';
 import { Button, TextInput } from '@ccrc/ui';
 import { CODE_FIELD_LABEL, SEND_CODE } from '../fleet/accountWords';
+import { SECRET_INPUT } from '../lib/secretInput';
 
 /**
  * THE CODE FIELD (spec §6.2 step 6, §3.7, §12.4; accounts plan Task A22, D-7849): where the operator pastes the code
  * claude.ai shows after the sign-in, and **Send code**.
  *
- * - Mono, `autocomplete="one-time-code"`, `autocapitalize="off"`, `spellcheck=false`, `inputmode="text"`, and no `name`
- *   a password manager would key on. PASTE-FIRST: a paste replaces the field with the pasted text, trimmed of the
+ * - Mono, {@link SECRET_INPUT} (autocomplete off, not `one-time-code`: the code is claude.ai's, never an SMS or
+ *   authenticator code a phone or manager could offer, D-8404), `inputmode="text"`, and no `name` a password manager
+ *   would key on. PASTE-FIRST: a paste replaces the field with the pasted text, trimmed of the
  *   whitespace a copy from a page carries; what is sent is trimmed again.
  * - THE CODE LIVES IN THIS FIELD'S OWN DOM NODE (the secret field's rule, D-7740): the input is uncontrolled, so the
  *   value is never a React state, a store, `localStorage`, `sessionStorage` or IndexedDB, and never the markup's
@@ -55,10 +57,7 @@ export function CodeField({ onSend, disabled = false, describedBy }: {
           ref={input}
           id={fieldId}
           className="font-mono"
-          autoComplete="one-time-code"
-          autoCapitalize="off"
-          autoCorrect="off"
-          spellCheck={false}
+          {...SECRET_INPUT}
           inputMode="text"
           disabled={held}
           aria-describedby={describedBy}

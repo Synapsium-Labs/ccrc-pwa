@@ -8,7 +8,7 @@
 // no state has to be read out of colour (StatusDot.tsx's own discipline).
 import { WARN_GLYPH } from '@ccrc/ui';
 import { KICKOFF_UNACKED_MS, MAIL_REPLAY_WARN_COUNT, SPAWN_STALL_MS, isChildReclaimWord, isRunState, sessionRunOf,
-  type ChildMark, type ChildReclaimStatus, type ChildReclaimWord, type RunHealth, type RunItemTally, type ProgrammePendingClose, type RunKind, type RunState, type RunSummary, type SessionRun } from '../../../shared/api';
+  type ChildMark, type ChildReclaimStatus, type ChildReclaimWord, type FleetSession, type RunHealth, type RunItemTally, type ProgrammePendingClose, type RunKind, type RunState, type RunSummary, type SessionRun } from '../../../shared/api';
 import { formatAge, formatElapsed } from './formatReset';
 import { closeWords } from './closeWords';
 import { STUCK_HEADING, closeWhen } from './stuckWords';
@@ -81,7 +81,34 @@ export const runItems = (run: { items?: RunItemTally }): RunItemTally =>
  *  ledger nothing has settled yet, which is a real and useful fact, and only
  *  a ledger that does not exist gets the dash. */
 export const itemTallyLabel = (items: RunItemTally): string =>
-  items.total === 0 ? '—' : `${items.done}/${items.total}`;
+  items.total === 0 ? '—' : `${items.done}/${items.total} settled`;
+
+/** D-8292 (#119): what the tally counts, for its `title`; null beside the dash, which counts nothing. "settled" rides
+ *  the label because `done` is the coordinator's ack count (D-5914, `RunSummary.items`): a wave in progress reads `0/5`
+ *  however far its branch has moved, and a bare `0/5` beside a busy branch was read as a run with no work. */
+export const itemTallyTitle = (items: RunItemTally): string | null =>
+  items.total === 0 ? null
+    : `${items.done} of the ${items.total} items this wave declared that the coordinator has settled. ` +
+      'An item is settled after a verified advance, so this is not commits and not branch progress.';
+
+/** The worker branch's commit count beside the tally (D-8292). */
+export interface BranchCommitsNote { readonly word: string; readonly title: string }
+
+/** The ONE reader of the worker's `pr.ahead` on a run row. It draws only a positive count from the worker session's own
+ *  PR read, on an open run whose session names the run's branch: `ahead` coerces an unmeasured branch to 0 (`phaseFor`),
+ *  so 0 says nothing, and another branch's count, or a live count on a closed run's record, would be a claim about
+ *  something else. A derived fact, and the title says where it came from; it never moves the tally. */
+export function branchCommitsNote(run: RunSummary, session: FleetSession | null): BranchCommitsNote | null {
+  if (session === null || session.pr === null || runClosedAt(run) !== null) return null;
+  if (run.branch !== null && session.branch !== run.branch) return null;
+  const n = session.pr.ahead;
+  if (!Number.isSafeInteger(n) || n <= 0) return null;
+  return {
+    word: `${n} ${n === 1 ? 'commit' : 'commits'}`,
+    title: `${n} ${n === 1 ? 'commit' : 'commits'} on the worker's branch past its base, from the latest pull request read. ` +
+      'These are commits, not settled items: the count beside them is what the coordinator has settled.',
+  };
+}
 
 /** Tolerant read of `RunSummary.closedAt`. `undefined` degrades to `null`
  *  (never-finished, i.e. active) rather than surviving as a value that is
@@ -98,6 +125,46 @@ export const runClosedAt = (run: { closedAt?: number | null }): number | null =>
  *  dispatch time, then its open time. A number is the move. */
 export const runLastMove = (run: RunSummary): number | null =>
   run.lastMoveAt === undefined ? null : run.lastMoveAt ?? run.dispatchedAt ?? run.openedAt;
+
+/** D-8285 (#119): the worker heartbeat as a row and its page header draw it. */
+export interface WorkerSeenNote {
+  readonly word: string;
+  /** Past the stall watch's quiet time with no turn open: the word says "quiet", and the row's ink says it a second time. */
+  readonly quiet: boolean;
+  readonly title: string;
+}
+
+const WORKER_TURN_WORD: Record<'working' | 'failed', string> = { working: 'in a turn', failed: 'turn failed' };
+
+/** The first instant (epoch ms) at which `workerSeenNote` reads the run quiet, or null when it never will: no finite
+ *  heartbeat, a turn still open, or no `quietMs`. The ONE place "quiet" is defined: quiet iff `nowMs - at > quietMs`,
+ *  that is, from `at + quietMs + 1` (whole milliseconds). */
+export function workerQuietAt(run: RunSummary, quietMs: number | null): number | null {
+  const at = run.workerLastSeen;
+  if (typeof at !== 'number' || !Number.isFinite(at)) return null;
+  if (run.workerLastTurn?.state === 'working' || quietMs === null) return null;
+  return at + quietMs + 1;
+}
+
+/** The ONE reader of `RunSummary.workerLastSeen` and `.workerLastTurn` (D-8285). Absent or not a finite number (an older
+ *  server, a marker the sweep could not read, no sweep yet) draws nothing: "not measured" is never "dead". `quietMs` is the
+ *  runs frame's `stallQuietMs`, the threshold `lastMoveAt`'s stalled word uses; null (no frame yet, an older server) is never
+ *  quiet. A turn still open is never quiet either: the marker does not move inside a turn, so its age is the turn's. */
+export function workerSeenNote(run: RunSummary, nowMs: number, quietMs: number | null): WorkerSeenNote | null {
+  const at = run.workerLastSeen;
+  if (typeof at !== 'number' || !Number.isFinite(at)) return null;
+  const state = run.workerLastTurn?.state;
+  const open = state === 'working';
+  const quietAt = workerQuietAt(run, quietMs);
+  const quiet = quietAt !== null && nowMs >= quietAt;
+  const ago = formatAge(Math.floor((nowMs - at) / 1000));
+  const tail = state === 'working' || state === 'failed' ? ` · ${WORKER_TURN_WORD[state]}` : quiet ? ' · quiet' : '';
+  const when = new Date(at).toISOString().replace('T', ' ').slice(0, 16);
+  const title = `The worker's turn marker last moved at ${when} UTC.`
+    + (open ? ' A turn is open, and the marker does not move inside one.' : '')
+    + (quiet ? ' That is longer ago than the stall watch\'s quiet time.' : '');
+  return { word: `last seen ${ago}${tail}`, quiet, title };
+}
 
 /** The active/finished SPLIT (fix, review findings 3/22): `state`, never
  *  `closedAt` — `CoordStore.runs()` itself (the live `{type:'runs'}` frame's

@@ -41,18 +41,26 @@ THE OPS, run in order; each prints ONE JSON line `{"op": <name>, ...}` and the r
                    name kept as repeated lines); `output_config` is passed only when the op names it, and
                    `stored` is the lookup stub: a list of {"call": <id>, "turn"} or {"session", "text", "turn"}, each
                    keyed by `inbound.call_key` / `inbound.text_key`, so a test never spells a key itself; "lookups"
-                   lists the keys asked for, in order
+                   lists the keys asked for, in order; with `counted: true` the lookup is wrapped in
+                   `server.counted_lookup`, as the server's message path wraps the store's, and "replay" is its tally
+                   (D-8618)
+  inbound-betas    {headers? | headerLines?} -> {"betas": inbound.betas, "fromClaudeCode": inbound.from_claude_code,
+                   "CLAUDE_CODE_BETA"}: the headers read as from-anthropic reads them (a plain dict, or [name, value]
+                   pairs put in an http.client.HTTPMessage, a repeated name kept as repeated lines)
   inbound-keys     {cut?: [names], text?: [[session, text]], call?: [ids], cache?: [[session, agent]]} -> each list
                    mapped through cut_name / text_key / call_key / cache_key, and "consts": BILLING_PREFIX,
                    COMPACTION_MARKER, IMAGE_TOKENS
+  turn-key         {cases: [[messages, cacheKey], ...]} -> {"keys": inbound.turn_key of each (D-8623)}
   reduce           {stream (a path) | bytes_b64, chunk: <int> | "whole", name_map?, tools_required?, live_text?,
                    trace?} -> {"events": [[name, data], ...] (every block event released, in order), "terminal":
                    {kind, reason, endTurn, usage, anthropicUsage, stop, continue, error}, "reasoning": [{"id", "key"}]
                    (item ids and keys only, never an item), "counted": {"names", "counts"}, "committable",
                    "emittedToolUse", "refusal", "phases", "emittedText", "warnings", "terminalBeforeEof",
-                   "outputItems" (a count), "responseId", "trace"? (per parsed event: its type, the events released,
-                   and whether terminal and committable were then set)}: one SseParser and one Reducer, the
-                   reducer's release() drained after every event, finish() after the parser is closed
+                   "outputItems" (a count), "responseId", "diagnostics" (the reducer's, D-8618: the terminal's
+                   served model, valid usage counts and input_transformations keys, or None), "trace"? (per parsed
+                   event: its type, the events released, and whether terminal and committable were then set)}: one
+                   SseParser and one Reducer, the reducer's release() drained after every event, finish() after the
+                   parser is closed
   stop-reasons     -> {"rows": [{"in": [kind, reason, end_turn, emitted_tool_use, refusal], "stop", "cont"}],
                    "failedRaises": the class stop_reason raises for a failed terminal,
                    "twoArgContinuationRaises": the class the two-argument needs_continuation call raises (None if it
@@ -125,15 +133,19 @@ THE COUNT ESTIMATOR, THE KNOWN NAMES AND THE STATS FILE (Task 5): one Stats per 
 THE BACKEND ADAPTER (Task 7). A request is built from an Anthropic body through inbound.from_anthropic (a ListSink,
   no store), never spelled as a neutral request here.
   backend-consts   -> {"DEFAULT_BASE", "RESPONSES_PATH", "ORIGINATOR", "IDLE_TIMEOUT_S", "CONNECT_TIMEOUT_S",
-                   "INSTRUCTIONS_MARKER"}
+                   "INSTRUCTIONS_MARKER", "ALL_TURNS_MARKER", "VERBOSITY_MARKER", "TURN_STATE_MARKER", "MARKERS",
+                   "ALL_TURNS", "VERBOSITIES", "TURN_STATE_HEADER"}
   backend-base     {environ?} -> {"base"}: backend.upstream_base over `environ` (a plain dict), else over os.environ
-  backend-body     {body, headers?, output_config?, laneDir?} -> {"body", "keys": the body's keys in order, "wire":
-                   encode_body's bytes as text}: build_body with instructions_form read from `laneDir`'s marker
-                   (backend.instructions_form), False with no laneDir
+  backend-body     {body, headers?, output_config?, laneDir?, row?} -> {"body", "keys": the body's keys in order,
+                   "wire": encode_body's bytes as text, "carried": the request markers the body carries}: build_body
+                   with instructions_form read from `laneDir`'s marker (backend.instructions_form), and the D-8622
+                   additions backend.additions decides from `row` (a catalogue row, or none) and `laneDir`'s request
+                   markers (backend.markers); False and no marker with no laneDir
   backend-ua       {version} -> {"ua", "platform": [system, release, machine]}
-  backend-post     {body, headers?, output_config?, laneDir?, version?, idle_s?, now?, closeAfter?, and either authDir + lib (Stage
-                   1's library loaded by path; the headers from backend.headers_for over its ensure_fresh reading) or
-                   token + accountId? (backend.build_headers)} -> {"status", "headers" (the upstream's, lower-cased),
+  backend-post     {body, headers?, output_config?, laneDir?, row?, turnState?, version?, idle_s?, now?, closeAfter?,
+                   and either authDir + lib (Stage 1's library loaded by path; the headers from backend.headers_for
+                   over its ensure_fresh reading) or token + accountId? (backend.build_headers); `turnState` is passed
+                   as either one's turn_state (D-8623)} -> {"status", "headers" (the upstream's, lower-cased),
                    "bytes" (the stream's length), "types" (each parsed SSE event's type), "headAt" and "elapsed"
                    (seconds from the call), "timeout" (UpstreamTimeout's phase, or None), "error" (a non-2xx answer
                    through backend.error_of, as a BridgeError prints, or None)}: one backend.post to
@@ -333,7 +345,7 @@ def _reduce(op, cb):
         "committable": r.committable, "emittedToolUse": r.emitted_tool_use, "refusal": r.refusal,
         "phases": r.phases, "emittedText": {str(k): v for k, v in r.emitted_text.items()},
         "warnings": list(r.warnings), "terminalBeforeEof": before_eof, "outputItems": len(r.output_items),
-        "responseId": r.response_id,
+        "responseId": r.response_id, "diagnostics": r.diagnostics,
     }
     if op.get("trace"):
         out["trace"] = trace
@@ -717,8 +729,9 @@ def _run(op, pkg, cb):
                 return _STATE["store"].get(key)
             return stored.get(key)
 
+        tally = {}
         sink = cb.ListSink()
-        kwargs = {"names": sink, "lookup": lookup}
+        kwargs = {"names": sink, "lookup": cb.server.counted_lookup(lookup, tally) if op.get("counted") else lookup}
         if "output_config" in op:
             kwargs["output_config"] = op["output_config"]
         headers = op.get("headers") or {}
@@ -734,7 +747,19 @@ def _run(op, pkg, cb):
             return out
         request = req._asdict()
         request["tools_required"] = sorted(request["tools_required"])
-        return {"request": request, "names": [list(n) for n in sink.names], "lookups": lookups}
+        out = {"request": request, "names": [list(n) for n in sink.names], "lookups": lookups}
+        if op.get("counted"):
+            out["replay"] = tally
+        return out
+    if name == "inbound-betas":
+        inbound = cb.inbound
+        headers = op.get("headers") or {}
+        if "headerLines" in op:
+            headers = http.client.HTTPMessage()
+            for k, v in op["headerLines"]:
+                headers[k] = v  # Message.__setitem__ appends: a repeated name stays two lines
+        return {"betas": inbound.betas(headers), "fromClaudeCode": inbound.from_claude_code(headers),
+                "CLAUDE_CODE_BETA": inbound.CLAUDE_CODE_BETA}
     if name == "inbound-keys":
         inbound = cb.inbound
         return {
@@ -745,6 +770,8 @@ def _run(op, pkg, cb):
             "consts": {"BILLING_PREFIX": inbound.BILLING_PREFIX, "COMPACTION_MARKER": inbound.COMPACTION_MARKER,
                        "IMAGE_TOKENS": inbound.IMAGE_TOKENS},
         }
+    if name == "turn-key":
+        return {"keys": [cb.inbound.turn_key(m, k) for m, k in op["cases"]]}
     if name == "endpoints":
         keys = ("CCGPT_BRIDGE_UPSTREAM_BASE", "CCRC_CODEX_AUTH_BASE", "HOME")
         return {k: os.environ.get(k) for k in keys}
@@ -812,7 +839,9 @@ def _backend_op(name, op, cb):
     backend = cb.backend
     if name == "backend-consts":
         return {k: getattr(backend, k) for k in ("DEFAULT_BASE", "RESPONSES_PATH", "ORIGINATOR", "IDLE_TIMEOUT_S",
-                                                  "CONNECT_TIMEOUT_S", "INSTRUCTIONS_MARKER")}
+                                                  "CONNECT_TIMEOUT_S", "INSTRUCTIONS_MARKER", "ALL_TURNS_MARKER",
+                                                  "VERBOSITY_MARKER", "TURN_STATE_MARKER", "MARKERS", "ALL_TURNS",
+                                                  "VERBOSITIES", "TURN_STATE_HEADER")}
     if name == "backend-base":
         return {"base": backend.upstream_base(op["environ"] if "environ" in op else os.environ)}
     if name == "backend-ua":
@@ -822,18 +851,21 @@ def _backend_op(name, op, cb):
         return _backend_tls(op, backend)
     req = _neutral(op, cb)
     form = backend.instructions_form(op["laneDir"]) if op.get("laneDir") else False
-    body = backend.build_body(req, instructions_form=form)
+    add = backend.additions(op.get("row"), backend.markers(op["laneDir"]) if op.get("laneDir") else frozenset())
+    body = backend.build_body(req, instructions_form=form, reasoning_context=add.reasoning_context,
+                              verbosity=add.verbosity)
     wire = backend.encode_body(body)
     if name == "backend-body":
-        return {"body": body, "keys": list(body), "wire": wire.decode("utf-8")}
+        return {"body": body, "keys": list(body), "wire": wire.decode("utf-8"), "carried": list(add.carried)}
     if name != "backend-post":
         _usage("unknown op " + json.dumps(name))
     ua = backend.user_agent(op.get("version", "dev"))
     if "authDir" in op:
         reading = _load_auth_lib(op["lib"]).ensure_fresh(op["authDir"])
-        headers = backend.headers_for(reading, req.session_id, ua)
+        headers = backend.headers_for(reading, req.session_id, ua, turn_state=op.get("turnState"))
     else:
-        headers = backend.build_headers(op["token"], op.get("accountId"), req.session_id, ua)
+        headers = backend.build_headers(op["token"], op.get("accountId"), req.session_id, ua,
+                                        turn_state=op.get("turnState"))
     out = {"status": None, "headers": None, "bytes": 0, "types": [], "headAt": None, "elapsed": None,
            "timeout": None, "error": None}
     t0 = time.monotonic()

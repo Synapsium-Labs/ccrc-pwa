@@ -373,6 +373,20 @@ describe('POST /api/linear/workspaces: add verifies before it stores (spec §10.
   });
 });
 
+describe('D-8405: a key act that learned the teams tells the automatic team link', () => {
+  it('an add, and an ok check, each tell it once; a refused add tells it nothing', async () => {
+    let told = 0;
+    const r = await rig({ onTeamsLearned: () => { told += 1; } });
+    await r.stamp();
+    expect(errorOf(await add(r, 'short'))).toEqual([400, 'bad-key']);
+    expect(told).toBe(0);
+    expect((await add(r, WS.a.key)).statusCode).toBe(200);
+    expect(told).toBe(1);
+    expect((await check(r)).statusCode).toBe(200);
+    expect(told).toBe(2);
+  });
+});
+
 describe('POST /api/linear/workspaces/:id/check (spec §10.1, §4.1)', () => {
   it('an id that is not a workspace id is 400 bad-request, before the disk is read: no Linear call, no journal row', async () => {
     const r = await rig();

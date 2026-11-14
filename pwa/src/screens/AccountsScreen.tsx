@@ -48,7 +48,7 @@
 // wears the same kind and is offered neither: the verb would refuse to install what the attempt signed in (D-8051 (9)).
 import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
-import { ACCOUNT_AUTH_CAP, ACCOUNT_CODEX_CAP, isArchivedRow, type AccountUsage, type ProjectedHome, type RosterWire } from '../../../shared/api';
+import { ACCOUNT_AUTH_CAP, ACCOUNT_CODEX_CAP, isArchivedRow, type AccountPoolsUnavailableReason, type AccountUsage, type ProjectedHome, type RosterWire } from '../../../shared/api';
 import type { AccountStateAnswer } from '../../../shared/accounts';
 import type { AccountPoolWire } from '../../../shared/poolrule';
 import { Button, PageScaffold, Skeleton, toast, useDesk, useNow } from '@ccrc/ui';
@@ -114,6 +114,25 @@ import { poolCleared, poolWriteFailed } from '../fleet/poolWords';
  *
  *  Exported so the suite pins the sentence rather than a paraphrase of it. */
 export const ACCOUNT_POOL_UNAVAILABLE_TEXT = 'fleet ccd predates account pools';
+/** D-8283: the single-box install's chip text (`accountPoolsReason: 'no-pool-sync'`). Its ccd is current, so blaming
+ *  ccd's age would be false: the box has no pool-sync timer, so a central tag never reaches ccd, which places by the
+ *  roster's declared pool. */
+export const ACCOUNT_POOL_NO_SYNC_TEXT = 'not applied on this install — no pool-sync timer';
+/** D-8283: `unavailable` with no reason, from a server older than the field. It names no cause it cannot know. */
+export const ACCOUNT_POOL_UNAPPLIED_TEXT = 'account pools not applied on this fleet';
+
+/** D-8283: the one reader from the measured reason to the chip's text. Exhaustive, so a new reason is a compile error. */
+export function accountPoolUnavailableText(reason: AccountPoolsUnavailableReason | undefined): string {
+  switch (reason) {
+    case undefined: return ACCOUNT_POOL_UNAPPLIED_TEXT;
+    case 'ccd-predates': return ACCOUNT_POOL_UNAVAILABLE_TEXT;
+    case 'no-pool-sync': return ACCOUNT_POOL_NO_SYNC_TEXT;
+    default: {
+      const unreachable: never = reason;
+      return unreachable;
+    }
+  }
+}
 
 function acctPoolChip(state: AccountPoolWire): {
   word: string; ariaLabel: string; dataPool: string; origin?: 'central' | 'declared';
@@ -216,6 +235,9 @@ export function AccountsScreen(): ReactNode {
   // sends the field) both mean "no evidence", the same as `ProjectCard`'s own
   // `pools?.enforcement` read — only a MEASURED `'unavailable'` dims the chip.
   const accountPools = useFleetStore((s) => s.pools?.accountPools);
+  // D-8283: why it is `unavailable`, so the chip and the sheet name the right cause.
+  const accountPoolsReason = useFleetStore((s) => s.pools?.accountPoolsReason);
+  const acctPoolDimText = accountPoolUnavailableText(accountPoolsReason);
   const now = useNow(30_000);
   const nowSec = Math.floor(now / 1000);
   // `GET /api/accounts`'s `lanes`: each lane's word and what the screen may show about its credential, sent only to a
@@ -555,8 +577,8 @@ export function AccountsScreen(): ReactNode {
                     data-pool={chip.dataPool}
                     data-origin={chip.origin}
                     data-dim={acctPoolDim || undefined}
-                    aria-label={acctPoolDim ? `${chip.ariaLabel} — ${ACCOUNT_POOL_UNAVAILABLE_TEXT}` : chip.ariaLabel}
-                    title={acctPoolDim ? ACCOUNT_POOL_UNAVAILABLE_TEXT : undefined}
+                    aria-label={acctPoolDim ? `${chip.ariaLabel} — ${acctPoolDimText}` : chip.ariaLabel}
+                    title={acctPoolDim ? acctPoolDimText : undefined}
                     onClick={() => { setPoolSheetAccount(wrapper); setPoolSheetOpen(true); }}
                   >
                     {chip.word}
@@ -814,6 +836,7 @@ export function AccountsScreen(): ReactNode {
         roster={roster}
         current={poolSheetAccount === null ? undefined : accountPoolState(roster, poolSheetAccount)}
         unenforced={accountPools === 'unavailable'}
+        unenforcedReason={accountPoolsReason}
         open={poolSheetOpen}
         onClose={() => setPoolSheetOpen(false)}
         onSet={setAccountPool}

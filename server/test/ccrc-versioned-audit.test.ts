@@ -17,7 +17,8 @@
 // `ccd/ccrc`; a shared box would end every later `source` of that file at its
 // second line.
 //
-// Containment: `ghContainedEnv`'s poisoned `gh` at the head of PATH, every
+// Containment: `ccrcContainedEnv`'s poisons at the head of PATH and the fixture user bus (the second ring,
+// residue R35(a), D-8394), every
 // `CCRC_*` input deleted by name, HOME a `mkTmp` fixture. Nothing here runs a
 // verb that installs, updates or touches a unit.
 import { describe, it, expect } from 'vitest';
@@ -28,7 +29,8 @@ import {
 import path, { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mkTmp } from './tmpHelpers.js';
-import { ghContainedEnv, ccdSource } from './ccdWsHelpers.js';
+import { ccdSource } from './ccdWsHelpers.js';
+import { ccrcContainedEnv } from './ccrcContainment.js';
 import { installVersionedTree } from './installTreeFixture.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -53,7 +55,7 @@ function auditBox(prefix: string): { home: string; v1: string; v0: string } {
 }
 
 function auditEnv(home: string): NodeJS.ProcessEnv {
-  const env = ghContainedEnv(home, { ...process.env, HOME: home });
+  const env = ccrcContainedEnv(home, process.env, { managers: true, curl: 'poison' });
   for (const k of Object.keys(env)) if (k.startsWith('CCRC_')) delete env[k];
   // Each of these changes what Node reports as a module's own path — the
   // subject of row 6 — so none may leak in from the runner.

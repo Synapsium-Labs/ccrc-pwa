@@ -32,7 +32,7 @@ import { KeyedQueue } from '../src/inject/queue.js';
 import { Bus } from '../src/bus.js';
 import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
-import { SessionStream } from '../src/sessionws.js';
+import { NO_TICK, SessionStream } from '../src/sessionws.js';
 import { createSpawnPty } from '../src/remote/pty.js';
 import type { FleetClient } from '../src/remote/client.js';
 import type { PtyLike } from '../src/pty.js';
@@ -202,7 +202,7 @@ describe('the session socket carries only the mask (D-5513)', () => {
     const cfg = loadConfig({ CCRC_HOME: home });
     const run: Runner = async () => ({ ran: true, code: 0, stdout: '', stderr: '' });
     const deps: Deps = { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue(), time: fakeTime().ports };
-    const stream = new SessionStream(deps, new Bus(), ID, (m) => frames.push(m));
+    const stream = new SessionStream(deps, new Bus(), ID, (m) => frames.push(m), undefined, NO_TICK);
     const send = (stream as unknown as { send(m: SessionStreamMsg): void }).send;
     const ask = { type: 'ask', ask: { questions: [{ question: `use ${OAT}?`, header: 'Key', multiSelect: false, options: [{ label: ORKEY }] }] } };
     send(ask as unknown as SessionStreamMsg);
@@ -1212,6 +1212,9 @@ describe('the rulings: every egress of session-derived text goes through the mas
     '/api/mail': /mail: \(deps\.masker \?\? SHAPE_ONLY_MASKER\)\.maskDeep\(mail\)/,
     '/api/mail/:id': /envelope: \(deps\.masker \?\? SHAPE_ONLY_MASKER\)\.maskDeep\(row\.envelope\)/,
     '/api/mail/inbox': /text: masker\.maskDeep\(renderInboxEntry\(/,   // D-6778: each rendered entry is masked before paging
+    // The card (Overlord W1a; review 2023 F2): the trimmed text is masked once, whole, before it is hashed and paged, so a
+    // secret crossing a page edge is masked as one string.
+    '/api/sessions/:id/card': /\.maskText\(trimCard\(renderCard\(renderer, facts\), CARD_BUDGET_TOKENS\)\.text\)/,
     '/api/runs/:id/items': /items: \(deps\.masker \?\? SHAPE_ONLY_MASKER\)\.maskDeep\(/,
     '/api/coord/shadow-journal': /rows: \(deps\.masker \?\? SHAPE_ONLY_MASKER\)\.maskDeep\(deps\.coord\.shadowVerdicts/,
     '/api/feed': /events: \(deps\.masker \?\? SHAPE_ONLY_MASKER\)\.maskDeep\(/,
@@ -1224,7 +1227,9 @@ describe('the rulings: every egress of session-derived text goes through the mas
     '/api/auth/passkeys': 'passkey ids and labels the operator set',
     '/api/auth/status': 'the auth state',
     '/api/fleet/health': "the mirror's counters, and the delegation lane's would-keep list (each tree's project, worktree name and parent session, D-8114): no session text",
+    '/api/fleet/overrides': "the switchboard's override names with a marker state word each, and the approvals topology's two words and file name: no session text (D-8382)",
     '/api/push/key': 'the VAPID public key',
+    '/api/models/:lane': "a lane's classes, each with its model id and catalogue label, read from the lane's own model files: no session text (D-8406)",
     '/api/accounts': 'the account roster (lane names and states the operator set; no secret)',
     '/api/sessions/:id/commands': "the session's command files' names",
     '/api/projects': 'project names and paths',
@@ -1235,10 +1240,14 @@ describe('the rulings: every egress of session-derived text goes through the mas
     '/api/coord/dispatch-abandon': "the dead-dispatch switch's choice and bound (D-7319)",
     '/api/coord/lane-arm': "each shadow lane's choice word, write and import times, and its retired marker's name: no session text (D-8274)",
     '/api/coord/run-close': "the run-close groups' states, run ids with their programme slugs and reasons, and 7-day counts: no session text (D-8077)",
+    '/api/face': 'the face character, one word from a closed set, and its change time: no session-derived text',
     '/api/coord/roll-idle': 'one setting word and its two choices (D-7453)',
+    '/api/coord/plain-auto-memory': 'one setting word, its default and its two choices (Overlord W1a launch profiles PR B)',
     '/api/coord/scope-sweep': "the sweep's two switches, each a marker state word (D-7994)",
     '/api/coord/delegation-adopt': "the adoption switch's marker state, two capability words, refusal words, and the lane's counts and kept worktrees' projects, names and parent sessions: no session text (D-8112, D-8114)",
     '/api/testbox': "the test box's state and reasons, the two hosts' tool versions and the run counts: no session text (D-7411)",
+    '/api/testbox/admin': "the test box's connection state, pin fingerprint and act ledger: no address, no secret, no session text (D-8166)",
+    '/api/testbox/builds': "each Claude Code build's capture verdict, its times and counts and the test box's replay output: no session text (D-8289)",
     '/api/approvals/:id/ruling': 'a signed ruling read by the fleet box (a mask would break the signature); its input is shape-redacted at write',
     '/api/approvals/key': 'a public key',
     '/api/updates': 'release metadata',

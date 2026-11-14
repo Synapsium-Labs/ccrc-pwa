@@ -295,6 +295,27 @@ describe('every dec-appending CCD_ARGV builder names a verb real ccd parses a de
   }
 });
 
+describe('the hibernate builder takes a mode, sleep, roll or fresh (overlord W1a, fresh start)', () => {
+  it('each mode composes its flags before the id, and nothing else changes', () => {
+    expect(CCD_ARGV.hibernate('lane-a-project-a', null)).toEqual(['hibernate', 'lane-a-project-a']);
+    expect(CCD_ARGV.hibernate('lane-a-project-a', null, null, 'sleep')).toEqual(['hibernate', 'lane-a-project-a']);
+    expect(CCD_ARGV.hibernate('lane-a-project-a', null, null, 'roll')).toEqual(['hibernate', '--roll', 'lane-a-project-a']);
+    expect(CCD_ARGV.hibernate('lane-a-project-a', null, null, 'fresh'))
+      .toEqual(['hibernate', '--roll', '--fresh', 'lane-a-project-a']);
+    expect(CCD_ARGV.hibernate('lane-a-project-a', PROBE_DEC, 'program:p wave:1/2', 'fresh'))
+      .toEqual(['hibernate', '--roll', '--fresh', '--hold-ok', 'program:p wave:1/2', 'lane-a-project-a',
+        '--surface', 'agent', '--actor', 'probe:dec parity']);
+  });
+
+  it.each(['roll', 'fresh'] as const)('%s: real ccd answers identically with and without the dec', (mode) => {
+    const control = runCcd(CCD_ARGV.hibernate(ABSENT, null, null, mode));
+    refusedForTheAbsentSession(control);
+    const declared = runCcd(CCD_ARGV.hibernate(ABSENT, PROBE_DEC, null, mode));
+    expect(declared.code).toBe(control.code);
+    expect(declared.out).toBe(control.out);
+  });
+});
+
 describe('ws-add was this file\'s negative control, and D-410\'s remedy turned it into a positive one', () => {
   it('the argv wsAddWorker COMPOSES lands a declared actor in the create row, and the workspace it names', () => {
     // THE WHOLE CROSSING IN ONE TEST, and the reason it is not enough to know

@@ -367,15 +367,16 @@ describe('ccrc history: the headless marker and the arm words are defined once, 
 // ARCH-66 (#801); spec §5.1 rule 3). The redactor ratchet, appended after the capability ratchet so no cited line above
 // it moves. The JS/TS modules that spell redaction rule patterns of their own (`consolidationCensus.ts`'s
 // `redactRuleTables`, `shared/redact.mjs` counted) were three: `coord/redact.ts`, `shared/docs.ts` and
-// `ccd/history/lib.mjs`. PR 1 moved the first two into `shared/redact.mjs`; PR 2 moves the third, and then the bound
-// is one. The set may only shrink. The census is loaded inside the row, so this block adds no import line.
+// `ccd/history/lib.mjs`. PR 1 moved the first two into `shared/redact.mjs`; PR 2 moved the third (lib's BASE_RULES and
+// CONTEXT_RULES are its history profiles), and the bound is one. The set may only shrink. The census is loaded inside the
+// row, so this block adds no import line.
 describe('one redaction rule table (ARCH-66): shared/redact.mjs (D-5867)', () => {
-  it('at most two modules spell redaction rule patterns, and no TypeScript module is one', async () => {
+  it('exactly one module spells redaction rule patterns, shared/redact.mjs, and no TypeScript module is one', async () => {
     const { redactRuleTables } = await import('../consolidationCensus.js');
     const tables = redactRuleTables();
-    expect(tables.length, `a new redaction rule table: ${tables.join(', ')}; add the rules to shared/redact.mjs`).toBeLessThanOrEqual(2);
+    expect(tables.length, `a new redaction rule table: ${tables.join(', ')}; add the rules to shared/redact.mjs`).toBe(1);
     expect(tables.filter((f) => /\.tsx?$/.test(f)), 'a TypeScript redaction table').toEqual([]);
-    expect(tables).toContain('shared/redact.mjs');
+    expect(tables).toEqual(['shared/redact.mjs']);
   });
 });
 
@@ -564,14 +565,14 @@ describe('ARCH-77: child reclaim’s off switch has no writer in the tree, and o
   });
 });
 
-// CODEX BRIDGE STAGE 2, TASK 10 (spec D20): the bridge's three file names are spelled once, in `laneManifest`
+// CODEX BRIDGE STAGE 2, TASK 10 (spec D20): the bridge's four file names are spelled once, in `laneManifest`
 // (`deploy/models-op.mjs`), copied into `lane.json` as `bridgeFiles` and read from there by bash and Python; and the
 // roster's two new exec fields reach bash only through that rendered file, never through a second `jq` over the
 // roster. APPENDED, for the reason the block above states (session-hook.test.ts's citation audit cites this file by
 // line). The file-name scan reads QUOTED literals only, over shipped code: a docstring that names a file in backticks
 // is prose, and the test tree's fixtures plant the names on purpose.
 describe('codex bridge Stage 2 Task 10: the bridge file names and the lane mode have one source each', () => {
-  const BRIDGE_FILE_NAMES = ['bridge.stats.json', 'reasoning.sqlite', 'recordings'] as const;
+  const BRIDGE_FILE_NAMES = ['bridge.stats.json', 'reasoning.sqlite', 'recordings', 'bridge.requests.jsonl'] as const;
   const shipped = (): string[] => {
     const r = spawnSync('git', ['-C', ccrcRoot, 'ls-files', '--', 'ccd', 'shared', 'deploy', 'server/src',
       'agent/src', 'pwa/src'], { encoding: 'utf8' });
@@ -944,5 +945,20 @@ describe('delegation PR7, PR8b: DELEGATION_ADOPT_MARKER is one switchboard row, 
     expect(row!.writer).toBe('ccd delegation-adopt, through POST /api/coord/delegation-adopt');
     expect(row!.owner).toBe('C5');
     expect(row!.default).toMatch(/^absent: shadow/);
+  });
+});
+
+// Claude Code's identity beta is spelled once, as inbound.CLAUDE_CODE_BETA in ccd/codexbridge/inbound.py: the bridge
+// tells a Claude Code request from any other by it (inbound.from_claude_code, which picks a substitution's family in
+// server.py), and known.py explains the beta value by that constant, so the two can never drift apart. APPENDED, for
+// the reason the blocks above state.
+describe('codex bridge: Claude Code\'s identity beta is spelled once', () => {
+  it('claude-code-20250219 is spelled in ccd/codexbridge/inbound.py alone', () => {
+    const r = spawnSync('git', ['-C', ccrcRoot, 'grep', '-l', '-w', '-e', 'claude-code-20250219', '--',
+      'ccd', 'shared', 'deploy', 'server/src'], { encoding: 'utf8' });
+    // git grep answers 1 for "no match" and above 1 for a failure: neither is the answer this row expects, and a
+    // failure must never read as an empty list.
+    if (r.status !== 0 && r.status !== 1) throw new Error(`git grep exited ${String(r.status)}: ${(r.stderr || '').trim()}`);
+    expect(r.stdout.split('\n').filter(Boolean).sort()).toEqual(['ccd/codexbridge/inbound.py']);
   });
 });

@@ -174,6 +174,9 @@ describe('the closed route table', () => {
     [['mail', 'send'], 'POST', '/api/mail'],
     [['mail', 'fetch', '7'], 'GET', '/api/mail/7'],
     [['mail', 'ack', '7'], 'POST', '/api/mail/7/ack'],
+    // The inbox read (D-6780): the pane's pair in the query, so it runs in a pane. The fixture's `{"ok":true}` is not an
+    // inbox answer, so the run reads once and acks nothing (`ccrc-api-inbox.test.ts` drives the acks).
+    [['mail', 'inbox'], 'GET', '/api/mail/inbox'],
     [['peers', 'list'], 'GET', '/api/peers'],
     [['lifecycle', 'list'], 'GET', '/api/lifecycle'],
     [['claims', 'list'], 'GET', '/api/claims'],
@@ -240,12 +243,32 @@ describe('the closed route table', () => {
     // The linking standard's read (D-8147): the pane's own project's team key, override and measured visibility. The identity
     // rides the query, as the Linear rows' does, so it runs in a pane.
     [['linking', 'show'], 'GET', '/api/linking'],
+    // The start report (Overlord W1a): the session hook's report of its own SessionStart.
+    [['sessions', 'start', 'lane-a-project-a'], 'POST', '/api/sessions/lane-a-project-a/start'],
+    [['sessions', 'card', 'lane-a-project-a'], 'GET', '/api/sessions/lane-a-project-a/card'],
+    // The note door (Overlord W1a, the notes piece): a session's own notes; every row fills the pane's pair, so each runs in a pane.
+    [['note', 'add', 'lane-a-project-a', '--json', '-'], 'POST', '/api/sessions/lane-a-project-a/notes'],
+    [['note', 'close', 'lane-a-project-a', '--json', '-'], 'POST', '/api/sessions/lane-a-project-a/notes'],
+    [['note', 'list', 'lane-a-project-a'], 'GET', '/api/sessions/lane-a-project-a/notes'],
+    [['note', 'handover', 'lane-a-project-a', '--json', '-'], 'POST', '/api/sessions/lane-a-project-a/handover'],
+    // The plan verbs (D-8181): by programme slug; every one but `show` carries the pane's identity in the query, so runs in a pane.
+    [['plan', 'put', 'prog-a'], 'POST', '/api/programmes/prog-a/plan'],
+    [['plan', 'show', 'prog-a'], 'GET', '/api/programmes/prog-a/plan'],
+    [['plan', 'met', 'prog-a'], 'POST', '/api/programmes/prog-a/plan/met'],
+    [['plan', 'ticket-add', 'prog-a'], 'POST', '/api/programmes/prog-a/plan/tickets'],
+    [['plan', 'ticket-move', 'prog-a'], 'POST', '/api/programmes/prog-a/plan/tickets/move'],
+    [['plan', 'epic-drop', 'prog-a'], 'POST', '/api/programmes/prog-a/plan/epics/drop'],
+    [['plan', 'close', 'prog-a'], 'POST', '/api/programmes/prog-a/plan/close'],
+    // The timers (Overlord W1a, the timers piece): parsed whole by `parse_timer`, every one fills the pane's pair, so each runs in a pane.
+    [['timer', 'set', '2h', 'check the checks'], 'POST', '/api/timers'],
+    [['timer', 'list'], 'GET', '/api/timers'],
+    [['timer', 'cancel', '12'], 'POST', '/api/timers/12/cancel'],
   ];
 
   it.each(ROWS)('%s -> %s %s', async (args, method, url, family) => {
     const paned = (args[0] === 'asks' && args[1] === 'list') || args[0] === 'coordinators'
-      || (args[0] === 'approvals' && args[1] === 'show') || args[0] === 'linear' || args[0] === 'linking' || (args[0] === 'runs' && args[1] === 'review-rounds')
-      || args[0] === 'calls';
+      || (args[0] === 'approvals' && args[1] === 'show') || args[0] === 'linear' || args[0] === 'linking' || (args[0] === 'plan' && args[1] !== 'show') || (args[0] === 'runs' && args[1] === 'review-rounds')
+      || args[0] === 'calls' || (args[0] === 'mail' && args[1] === 'inbox') || (args[0] === 'sessions' && args[1] === 'card') || args[0] === 'note' || args[0] === 'timer';
     if (paned) plantPane('demo-ws');
     await run(args as string[], args.includes('--json') ? '{"class":"routine","text":"q"}' : undefined, paned ? { TMUX_PANE: '%7' } : undefined);
     expect(seen).toHaveLength(1);
@@ -289,7 +312,13 @@ describe('the closed route table', () => {
     // Sixty-two since `linking.show` (D-8147).
     // Sixty-three since `goals.show` (autonomy-default wave A2, D-8126).
     // Sixty-four since `calls.record` (autonomy-default wave A3, D-8126).
-    expect(keys).toHaveLength(64);
+    // Sixty-five since `mail.inbox` (mail inbox, D-6780).
+    // Seventy-two since the seven `plan` rows (D-8181).
+    // Seventy-three since `sessions.start` (Overlord W1a, the start report).
+    // Seventy-four since `sessions.card` (Overlord W1a, the card piece).
+    // Seventy-eight since the note door's four (Overlord W1a, the notes piece).
+    // Eighty-one since the three `timer` rows (Overlord W1a, the timers piece).
+    expect(keys).toHaveLength(81);
   });
 
   it('states the row count in prose as the number the table actually holds', () => {
@@ -303,7 +332,8 @@ describe('the closed route table', () => {
       37: 'thirty-seven', 38: 'thirty-eight', 39: 'thirty-nine', 40: 'forty', 41: 'forty-one', 42: 'forty-two',
       43: 'forty-three', 44: 'forty-four', 45: 'forty-five', 46: 'forty-six', 47: 'forty-seven', 48: 'forty-eight',
       49: 'forty-nine', 50: 'fifty', 51: 'fifty-one', 52: 'fifty-two', 53: 'fifty-three', 54: 'fifty-four', 55: 'fifty-five',
-      56: 'fifty-six', 57: 'fifty-seven', 58: 'fifty-eight', 59: 'fifty-nine', 60: 'sixty', 61: 'sixty-one', 62: 'sixty-two', 63: 'sixty-three', 64: 'sixty-four',
+      56: 'fifty-six', 57: 'fifty-seven', 58: 'fifty-eight', 59: 'fifty-nine', 60: 'sixty', 61: 'sixty-one', 62: 'sixty-two', 63: 'sixty-three', 64: 'sixty-four', 65: 'sixty-five', 66: 'sixty-six', 67: 'sixty-seven', 68: 'sixty-eight', 69: 'sixty-nine', 70: 'seventy', 71: 'seventy-one', 72: 'seventy-two', 73: 'seventy-three', 74: 'seventy-four', 75: 'seventy-five', 76: 'seventy-six', 77: 'seventy-seven', 78: 'seventy-eight',
+      79: 'seventy-nine', 80: 'eighty', 81: 'eighty-one',
     };
     const want = WORDS[n];
     expect(want, `the ROUTES table outgrew this test's word list at ${n}`).toBeDefined();
@@ -458,7 +488,7 @@ describe('the four claimant rows send the question door family, and refuse local
       ['runs', 'list', '--closed', '1'], ['runs', 'open', '--json', '-'], ['runs', 'dispatch', '12'], ['runs', 'advance', '12'],
       ['runs', 'close', '12'], ['runs', 'items', '12'], ['runs', 'items-list', '12'], ['runs', 'end-request', '12'], ['runs', 'signals', '12'],
       ['runs', 'route', '12'], ['runs', 'review-rounds', '12', '--json', '-'], ['mail', 'list', '--to', 'x'], ['mail', 'send', '--json', '-'], ['mail', 'fetch', '7'],
-      ['mail', 'ack', '7'], ['peers', 'list'], ['lifecycle', 'list'], ['claims', 'list'], ['claims', 'take', '--json', '-'],
+      ['mail', 'ack', '7'], ['mail', 'inbox'], ['peers', 'list'], ['lifecycle', 'list'], ['claims', 'list'], ['claims', 'take', '--json', '-'],
       ['claims', 'release', '3'], ['ledger', 'list'], ['ledger', 'allocate', '--json', '-'], ['landing', 'show', '--project', 'project-a'],
       ['landing', 'entries', '--json', '-'], ['landing', 'order', '--json', '-'], ['asks', 'list'], ['feed', 'list'],
       ['coordinators', 'intent', 'set', '--session', 'demo-ws'], ['approvals', 'request', '--json', '-'],
@@ -474,6 +504,13 @@ describe('the four claimant rows send the question door family, and refuse local
       ['linear', 'projects'], ['linear', 'labels'], ['linear', 'users'], ['linear', 'create', '--json', '-'],
       ['linear', 'update', 'AAA-12', '--json', '-'], ['linear', 'comment', 'AAA-12', '--json', '-'],
       ['linear', 'link', 'AAA-12', '--json', '-'], ['linking', 'show'],
+      ['plan', 'put', 'prog-a', '--json', '-'], ['plan', 'show', 'prog-a'], ['plan', 'met', 'prog-a', '--json', '-'],
+      ['plan', 'ticket-add', 'prog-a', '--json', '-'], ['plan', 'ticket-move', 'prog-a', '--json', '-'],
+      ['plan', 'epic-drop', 'prog-a', '--json', '-'], ['plan', 'close', 'prog-a', '--json', '-'],
+      ['sessions', 'start', 'lane-a-project-a', '--json', '-'], ['sessions', 'card', 'lane-a-project-a'],
+      ['note', 'add', 'lane-a-project-a', '--json', '-'], ['note', 'close', 'lane-a-project-a', '--json', '-'],
+      ['note', 'list', 'lane-a-project-a'], ['note', 'handover', 'lane-a-project-a', '--json', '-'],
+      ['timer', 'set', '2h', 'check the checks'], ['timer', 'list'], ['timer', 'cancel', '12'],
     ];
     expect(rows.map((a) => `${a[0]}.${a[1]}`).sort(), 'every non-claimant row, once').toEqual(routeKeys().filter((k) => !keys.has(k)).sort());
     plantPane('demo-ws');
@@ -1121,6 +1158,11 @@ describe('a query key rides only if its row declared it', () => {
   it('the landing read carries its project', async () => {
     await run(['landing', 'show', '--project', 'project-a']);
     expect(seen[0]!.url).toBe('/api/landing?project=project-a');
+  });
+
+  it('the landing read carries its pr', async () => {
+    await run(['landing', 'show', '--project', 'project-a', '--pr', '41']);
+    expect(seen[0]!.url).toBe('/api/landing?project=project-a&pr=41');
   });
 
   // Landing order wave 5f: the two attributed writes send the caller's own body, identity included, and never fill one.
@@ -1797,5 +1839,49 @@ describe('runs review-rounds: the coordinator\'s cap extension refuses locally o
     writeCaps(['questions-v1'], nowS() - 181);
     await run(['runs', 'review-rounds', '7', '--json', '-'], BODY, PANE);
     expect(seen).toEqual([sent]);
+  });
+});
+
+describe('the plan rows: identity in the query, the body as the caller gave it, gated on plan-v1 (D-8181)', () => {
+  const capFile = (): string => path.join(home, '.ccrc', SERVER_CAPS_FILE);
+  const nowS = (): number => Math.floor(Date.now() / 1000);
+  const writeCaps = (words: readonly string[] = SERVER_CAPS, at = nowS()): void => {
+    fs.writeFileSync(capFile(), renderServerCaps(words, at));
+  };
+  const ID = 'byId=demo-ws&byUuid=u-1234';
+
+  it('the server advertises plan-v1', () => {
+    expect(SERVER_CAPS).toContain('plan-v1');
+  });
+
+  it('plan put sends byId and byUuid in the query and the body unchanged', async () => {
+    plantPane('demo-ws');
+    const b = '{"home":"project-a","epics":[]}';
+    const r = await run(['plan', 'put', 'prog-a', '--json', '-'], b, { TMUX_PANE: '%7' });
+    expect(r.status, r.stdout + r.stderr).toBe(0);
+    expect(seen.map((s) => [s.method, s.url, s.body])).toEqual([['POST', `/api/programmes/prog-a/plan?${ID}`, b]]);
+  });
+
+  it('plan show sends no identity', async () => {
+    const r = await run(['plan', 'show', 'prog-a']);
+    expect(r.status, r.stdout + r.stderr).toBe(0);
+    expect(seen.map((s) => [s.method, s.url])).toEqual([['GET', '/api/programmes/prog-a/plan']]);
+  });
+
+  it('a current cap file without plan-v1 refuses no-plan-door and sends nothing', async () => {
+    writeCaps(SERVER_CAPS.filter((w) => w !== 'plan-v1'));
+    plantPane('demo-ws');
+    for (const args of [['plan', 'show', 'prog-a'], ['plan', 'put', 'prog-a', '--json', '-'], ['plan', 'close', 'prog-a', '--json', '-']]) {
+      const r = await run(args, '{}', { TMUX_PANE: '%7' });
+      expect([r.status, (JSON.parse(r.stdout) as { error: string }).error], args.join(' ')).toEqual([2, 'no-plan-door']);
+    }
+    expect(seen).toEqual([]);
+  });
+
+  it('an absent or stale cap file sends', async () => {
+    await run(['plan', 'show', 'prog-a']);
+    writeCaps(SERVER_CAPS.filter((w) => w !== 'plan-v1'), nowS() - 181);
+    await run(['plan', 'show', 'prog-a']);
+    expect(seen.map((s) => s.url)).toEqual(['/api/programmes/prog-a/plan', '/api/programmes/prog-a/plan']);
   });
 });

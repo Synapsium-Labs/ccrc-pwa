@@ -1,5 +1,6 @@
 import { spawn, type IPty } from 'node-pty';
-import { tmuxTarget } from '../../shared/tmux-target.js';
+import { tmuxCommand, tmuxTarget } from '../../shared/tmux-target.js';
+import { hostTmuxSocket } from './exec.js';
 
 /**
  * Subset of node-pty's IPty the WS drawer bridge uses. Typing the injected
@@ -22,7 +23,8 @@ export type SpawnPty = (id: string, cols: number, rows: number) => PtyLike;
  *  EXACTLY that session (D-3525): a bare `cc-<id>` is a tmux prefix search, and
  *  with `cc-<id>` gone it attached the drawer to a live `cc-<id>-…` sibling. */
 export function attachPty(id: string, cols: number, rows: number): IPty {
-  return spawn('tmux', ['attach', '-t', tmuxTarget(id)], {
+  const t = tmuxCommand(hostTmuxSocket(), ['attach', '-t', tmuxTarget(id)]);   // D-8270: on the fleet's socket
+  return spawn(t.file, [...t.args], {
     name: 'xterm-256color',
     cols,
     rows,

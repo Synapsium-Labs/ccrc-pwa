@@ -394,7 +394,7 @@ describe('W24: every ccrc setting is read through _ccrc_knob, and every environm
     expect(hits).toEqual([]);
   });
 
-  it('C4: _ccrc_knob and _keep_knob take a setting by its literal name, every setting is taken somewhere, and only two calls pass a name in a variable', () => {
+  it('C4: _ccrc_knob and _keep_knob take a setting by its literal name, every setting is taken somewhere, and only three calls pass a name in a variable', () => {
     const literal = new Set<string>();
     const variable: string[] = [];
     for (const code of KNOB_CODE()) for (const m of code.matchAll(/\b(?:_ccrc_knob|_keep_knob) (CCRC_[A-Z0-9_]+)/g)) literal.add(m[1]);
@@ -404,7 +404,9 @@ describe('W24: every ccrc setting is read through _ccrc_knob, and every environm
         variable.push(`${m[0].replace(/"/g, '')} in ${ownerOf(CODE[f], m.index!)}`);
     }
     expect({ notASetting: diff(literal, SETTINGS), neverTaken: diff(SETTINGS, literal) }).toEqual({ notASetting: [], neverTaken: [] });
-    expect(variable.sort()).toEqual(['_ccrc_knob $1 in _keep_knob', '_ccrc_knob $k in _check_box-settings']);
+    // The third is the reader's own read of the test box overlay (D-8166): `_ccrc_knob` calls itself with the overlay as the file,
+    // for a key it was already handed by its literal name and that is one of the sixteen in TB_OVERLAY_KEYS.
+    expect(variable.sort()).toEqual(['_ccrc_knob $1 in _keep_knob', '_ccrc_knob $k in _check_box-settings', '_ccrc_knob $key in _ccrc_knob']);
   });
 
   it('C5: every name read from the environment outside the reader is a reasoned exception, and every exception is still read', () => {

@@ -140,7 +140,7 @@ Commits on this workspace's branch, in order: the plan copy; Task 2 (W33-b); Tas
 
 | Row | Pinned by (`server/test/`) |
 |---|---|
-| 1. A tarball name with `/`, `..`, a control or non-printable byte, or over 128 bytes: refused before any `curl -o`, never printed | `install-sh.test.ts`: the name-rule rows (path separator, traversal, `..`, ESC, non-ASCII, UTF-8 caller locale, 129 bytes refused and 128 bytes installed, not a ccrc tarball, the `*` marker); each asserts exit 1, that the second fetch never ran, and that the raw name is on neither stream |
+| 1. A tarball name with `/`, `..`, a control or non-printable byte, or over 128 bytes: refused before any `curl -o`, never printed | `install-sh.test.ts`: the name-rule rows (path separator, traversal, `..`, ESC, non-ASCII, UTF-8 caller locale, 129 bytes refused and 128 bytes installed, not a ccrc tarball, the `*` marker); the seven refused-name rows each assert exit 1, that the second fetch never ran, and that the raw name is on neither stream; the UTF-8 caller locale row asserts exit 1, the rule and one fetch; the 128-byte and `*` marker rows assert that the release installs (D-8393) |
 | 2. SHA256SUMS over 4096 bytes, or trickled forever: refused within the bounds, URL redacted | `install-sh.test.ts`: the 4097-byte row, the below-the-floor rows (SHA256SUMS and tarball), the above-the-floor trickle row ended by `--max-time`, the flag-set row, the five-defaults pin, the knob-validation rows (`0`, `abc` and the ceiling plus one, per knob) and the ceilings pin |
 | 3. A base URL with userinfo: every printed line redacted exactly as `_upd_redact` would | `install-sh.test.ts`: the userinfo rows (a good run, a failed SHA256SUMS fetch, a failed tarball fetch) and the four redactor equality pins |
 | 4. A base URL with `[`, `]`, `{` or `}`: fetched literally on both fetches | `install-sh.test.ts`: the `[1]` base path row (real curl) and the flag-set row (`-g` on both fetches) |
@@ -154,11 +154,11 @@ Each mutant was applied to a saved, sha-checked copy, run against its covering t
 |---|---|---|
 | 0 | no `-g` on the SHA256SUMS fetch | `[1]` base path row; flag-set row |
 | 1 | no `-g` on the tarball fetch | `[1]` base path row; flag-set row |
-| 2 | no `--max-filesize` | 4097-byte row; flag-set; defaults |
-| 3 | no `--max-time` | above-the-floor trickle row; flag-set; defaults |
-| 4 | no speed floor on SHA256SUMS | below-the-floor SHA256SUMS row; flag-set; defaults |
-| 5 | no speed floor on the tarball | below-the-floor tarball row; flag-set; defaults |
-| 6 | no connect bound on the tarball | flag-set; defaults |
+| 2 | no `--max-filesize` | 4097-byte row; flag-set; knobs row |
+| 3 | no `--max-time` | above-the-floor trickle row; flag-set; knobs row |
+| 4 | no speed floor on SHA256SUMS | below-the-floor SHA256SUMS row; flag-set; knobs row |
+| 5 | no speed floor on the tarball | below-the-floor tarball row; flag-set; knobs row |
+| 6 | no connect bound on the tarball | flag-set; knobs row |
 | 7 | SHA256SUMS "fetching" line unredacted | userinfo good-run row |
 | 8 | tarball "fetching" line unredacted | userinfo good-run row |
 | 9 | SHA256SUMS "download failed" line unredacted | userinfo SHA256SUMS-failed row |
@@ -170,8 +170,8 @@ Each mutant was applied to a saved, sha-checked copy, run against its covering t
 | 15 | length bound 127 | 128-byte-installs row |
 | 16 | `ccrc-*.tar.gz` shape removed | not-a-ccrc-tarball row |
 | 17 | `LC_ALL=C` dropped from the name rule | UTF-8 caller locale row |
-| 18 | the whole name refusal skipped | every name row |
-| 19 | the raw name printed again | every name row with a name to print |
+| 18 | the whole name refusal skipped | the seven refused-name rows; the UTF-8 caller locale row |
+| 19 | the raw name printed again | the seven refused-name rows |
 | 20 | the `*` marker strip removed | marker row |
 | 21 | `CCRC_RELEASE_SPEED_LIMIT` default 1024 to 2048 | defaults pin; flag-set |
 | 22 | `CCRC_RELEASE_SUMS_MAX_FILESIZE` default to 1048576 | defaults pin; 4097-byte row; flag-set |
@@ -187,6 +187,8 @@ Each mutant was applied to a saved, sha-checked copy, run against its covering t
 | 32 | a refused value is warned about but not replaced by its default | every knob-validation row |
 
 Two first choices were weak and were replaced: row 17 first survived because the fixture's sums file was written in latin1, so its byte was invalid UTF-8 under either locale; it now writes UTF-8. Row 25's first form (`4001` to `4002`) was an equivalent mutant.
+
+**Amended 2026-11-12 (D-8393), wording only.** Rows 2 to 6 first named "defaults" as a red row. The five-defaults pin reads only the `: "${CCRC_RELEASE_…:=…}"` lines, so no mutant of a curl's flags can red it; the row meant is the knobs row (the five knobs are read from their environment names and reach the curls). Re-measured on `main` at `9bd351975` against `install-sh.test.ts`: each of the five mutants reds the flag-set row and the knobs row (rows 2 to 4 also red their knobs' validation rows), and the defaults pin stays green under all five. Rows 18 and 19 said "every name row", but the 128-byte and `*` marker rows install and assert no refusal, so neither mutant can red them; the rows they red are the refused-name rows, and for row 18 the UTF-8 caller locale row too. Review Focus row 1's "each asserts exit 1" is scoped the same way.
 
 ### Deviations
 

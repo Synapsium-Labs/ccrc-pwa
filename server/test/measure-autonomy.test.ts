@@ -13,6 +13,7 @@ import {
   IDLE_COMPACT_NUDGE_PROMPT, RESUME_PROMPT_PREFIX, MAIL_ENVELOPE_FENCE, ASK_OPERATOR_PRINCIPAL, RUN_TRANSITIONS,
 } from '../../shared/api.js';
 import { openCoordDb } from '../src/coord/db.js';
+import { LINEAR_SYNC_PROGRAMME } from '../../shared/plan.js';
 import { mkTmp } from './tmpHelpers.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
@@ -68,6 +69,9 @@ describe('measure-autonomy transcripts', () => {
     expect(src).toContain(`MAIL_NUDGE_HEAD = '${renderMailNudge('x').slice(0, 29)}'`);
     expect(src).toContain(`MAIL_FENCE = '${MAIL_ENVELOPE_FENCE}'`);
     expect(src).toContain(`OPERATOR_PRINCIPAL = '${ASK_OPERATOR_PRINCIPAL}'`);
+    // shared/plan.ts's LINEAR_SYNC_PROGRAMME, spelled once here and read by name everywhere else in the script
+    expect(src).toContain(`RESERVED_PROGRAMME = '${LINEAR_SYNC_PROGRAMME}'`);
+    expect(src.split(`'${LINEAR_SYNC_PROGRAMME}'`)).toHaveLength(2);
     // the shadow detail head `stallDetail` writes, up to the rung
     const detailHead = stallDetail('shadow', 'coord-blocked', 1, 0).split(':').slice(0, 2).join(':') + ':';
     expect(src).toContain(`'${detailHead}%'`);

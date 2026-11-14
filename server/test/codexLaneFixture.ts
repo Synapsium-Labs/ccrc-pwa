@@ -38,6 +38,7 @@ import { harnessBin, seedAccountsSh } from './ccdWsHelpers.js';
 import { pythonOrSkip } from './ccgptHarness.js';
 import { plantBackendCredential } from './codexAuthFixture.js';
 import { psArgs } from './laneReaper.js';
+import { scaled } from './timeScale.js';
 import { rosterFromJson } from '../../shared/roster-json.mjs';
 import { renderLitellmConfig } from '../../shared/litellm.mjs';
 
@@ -1277,6 +1278,40 @@ export function alive(pid: number): boolean {
 // `psArgs` is an observation helper only. Fixture teardown owns direct
 // ChildProcess handles and current-run product cleanup callbacks, never PIDs.
 export { psArgs };
+
+/** How long {@link reapFakeUnits} waits for the supervisors: a tier's TERM, its 6-second KILL fallback, then the
+ *  supervisor's 3-second linger (FAKE_SYSTEMD_RUN's `supervisor.py`), with room for a loaded box. */
+const FAKE_UNIT_REAP_MS = 20_000;
+
+/** R42 (D-8387): ends every unit this HOME's fake manager started, and returns once every supervisor it spawned has
+ *  exited, so none outlives its fixture HOME and the run's leak check (proc-leak.globalsetup.mjs) has nothing to name.
+ *  For a spine suite's afterEach, after {@link killLaneProcesses}: the product's own stop runs first, and this ends
+ *  what that stop left running (a unit it judged not this lane's, or a lane it never asked) and waits out the linger
+ *  of what it stopped. It sends no signal: each unit gets the manager's own stop request, the `stop-request` file its
+ *  supervisor polls, which that supervisor honours even under a `stop-fail` the fake `systemctl` refuses with. A
+ *  supervisor is waited for by its pid in `fake-systemd/spawned`, and only while `ps` still shows that pid running
+ *  this HOME's `supervisor.py`, so a reused pid is never waited on. A unit seeded by {@link fakeUnit} has no
+ *  supervisor and is left as it is. Throws, naming them, if any supervisor is still running after the bound. */
+export async function reapFakeUnits(home: string): Promise<void> {
+  const units = path.join(home, 'fake-systemd', 'units');
+  if (fs.existsSync(units)) {
+    for (const name of fs.readdirSync(units)) {
+      const dir = path.join(units, name);
+      if (!fs.existsSync(path.join(dir, 'spawned'))) continue;
+      try { fs.writeFileSync(path.join(dir, 'stop-request'), ''); } catch { /* the directory went, itself a stop request */ }
+    }
+  }
+  const pids = lines(path.join(home, 'fake-systemd', 'spawned')).map(Number).filter((n) => Number.isInteger(n) && n > 1);
+  const running = (): number[] => pids.filter((pid) => {
+    const args = psArgs(pid);
+    return args.includes(`${units}${path.sep}`) && args.includes('supervisor.py');
+  });
+  try {
+    await eventually(() => running().length === 0, 'every fake-manager supervisor to exit', scaled(FAKE_UNIT_REAP_MS));
+  } catch {
+    throw new Error(`reapFakeUnits: supervisor(s) ${running().join(', ')} of ${home} still running after the stop request`);
+  }
+}
 
 /** True when something on 127.0.0.1:`port` completes a TCP connect inside
  *  2 s. */

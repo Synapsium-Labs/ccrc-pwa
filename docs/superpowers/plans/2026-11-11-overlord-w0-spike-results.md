@@ -2,14 +2,16 @@
 
 > The measured answers of the Overlord's W0 spike (plan `docs/superpowers/plans/2026-11-10-overlord/w0-spike.md`,
 > spec `docs/superpowers/specs/2026-11-09-overlord-design.md`). W0a (run 1774) measured rows W0-00 to W0-19 and
-> W0-27, and answered W0-25 from the tree. Rows W0-20 to W0-24, W0-26 and W0-28 wait for W0b and the operator's setup
-> item; where W0a read a half of one, the read half is here and the rest is marked as waiting.
+> W0-27, and answered W0-25 from the tree. W0b (run 1820) measured rows W0-20 to W0-22 and W0-26, the fleet halves of
+> W0-06, W0-09, W0-12 and W0-19, and W0-24's sweep reading. It recorded W0-23 as deferred to the pool design and
+> W0-24's `/usage` comparison as deferred to W1, both under R18, and W0-28 as ruled.
 >
 > Every row says which kind of result it is: **doc** (read in Claude Code's documentation), **tree** (read in this
 > repository), **binary** (read from an installed build's strings), **rig** (what Claude Code sent to the mock API,
-> on a named build; never whether a real model heeded it), **box** (a box-token read of the live server), **model**
-> (the research model), or **emulated** (the mock sent a shape the documentation names). A rig result holds for the
-> build it ran on.
+> on a named build; never whether a real model heeded it), **box** (a box-token read of the live server, or, in
+> W0b, a read of the fleet box under the setup item's consent), **model** (the research model, or, for W0-20 to
+> W0-22, a real session: the subject), or **emulated** (the mock sent a shape the documentation names). A rig result
+> holds for the build it ran on.
 
 ## In short
 
@@ -31,8 +33,21 @@
 - **Inconclusive, so the conservative branch:** the idle-compaction switch (the 45-minute trigger is load-bearing),
   Claude Code's own switch on a flagged request (the statusline journals model changes too), and the typed `/clear`'s
   reliability (unmeasured: no run in the store's window took that path, so fresh start only).
-- **Waiting for W0b:** W0-20 to W0-24, W0-26's restart figures, W0-28, and the fleet halves of W0-06, W0-09, W0-12 and
-  W0-19.
+- **Measured (W0b), on the fleet and on one real session:**
+  - A roll plus a fresh start takes about 7.4 s, a sum of three p95s, so the deadlines stand.
+  - Restarts are p99 2 per session-hour, so `restarting`'s two in an hour stands, and the restart time is p95 6.1 s.
+  - Auto memory is on, with non-empty project memory on every account, so an operator item at W1a. Every account
+    has plugin entries and an `enabledPlugins` key, so doctor's no-mods check is required.
+  - This project's history holds only quotes of the fallback notice, so the conservative branch stands.
+  - Mail and typed text are done alike (ten of ten, every pair rated 5). The gate dominates, so the Overlord's
+    `MAIL_PACE` row. At the peer-mail bounds, t08's reply was refused `429 peer-quota` twice (in its own turn and in
+    t10's); t10's reply was held unsent; on day 2 the subject dropped both as out of date, so neither was delivered.
+  - Both swaps, at idle and mid-turn, pass their probes after `/clear`. A background shell is lost across a swap.
+  - Four checks pass on each of two own-provider lanes on 2.1.322, so the operator may set those records.
+  - W0-23 is deferred to the pool design (R18).
+  - W0-24's sweep reading finds no priced Fable use on any account in its 7-day window. Its `/usage` comparison is
+    unmeasured and deferred to W1 (R18).
+  - W0-28 is ruled B.
 
 ## The builds
 
@@ -505,7 +520,8 @@ oversight** (each `check.py --matrix` and `--mutations`): identical to their com
 outputs were written to scratch and the committed `out/` left as it was). **Fourteen anchors stop**: each check reads
 the spec by quoting a sentence, and the later editions reworded these. For each, the merged edition's sentence keeps
 the rule, refined: the grants door (§7.2, "and `DELETE` to revoke" dropped); Pause (§7.5, extended: it "stays `off`
-where it was"); the five-hour figure (§3.4, now "while anything is left of the reserve in the seven-day window");
+where it was"); the five-hour figure (§3.4, which then read "while anything is left of the reserve in the seven-day window"; R18 has
+since removed the reserve, and the five-hour figure with it);
 `glanced` (§6.6, now "any other answer, a tap from a push and a bulk Seen included"); the unreadable child mark
 (§3.3.9, widened to "a child mark that could not be measured"); Figure 2's timeout edge (now split, "from active:
 back, with a hold-off" and "from degraded: back to degraded", which settles the committed `GEN-back` counterexample);
@@ -532,14 +548,280 @@ long text.
 **Outcome (W0-27): no violation; the machines compose as specified** on the merged edition, within what the model
 covers. The deciders' anchors are a maintenance debt, not a contradiction.
 
-## Rows waiting for W0b
+## Fleet reads, under consent (Task 8: W0-06, W0-09, W0-12, W0-19, W0-26), measured 2026-11-11
 
-W0-20 (nudge-and-read against typed text), W0-21 (a swap with a stand-in renewal), W0-22 (a continuity record per
-lane: its client side is W0-01, W0-02, W0-15 and W0-16 above, for 2.1.312 and 2.1.322), W0-23 (billing per account),
-W0-24 (the Fable proxy's error), W0-26 (restarts per session-hour and the restart time; its read half is above) and
-W0-28 (the replay baseline) wait for the operator's setup item (programme item 155) and W0b. So do the fleet halves of
-W0-06 (the roll's overhead), W0-09 and W0-19 (the account config census) and W0-12 (real fallback notices in the
-history).
+W0b (run 1820) read the fleet box under setup line 4's consent, as narrowed by the operator's ruling that the subject
+runs on the fleet's own accounts (D-8243, defined in the programme's index plan). Every read is **box**: counts,
+percentiles and key names only. No session id, account name, project name or value left the box, and neither
+`.credentials.json` nor a whole `.claude.json` was opened. The accounts are named here by stand-ins, `acct-01` to
+`acct-15` for the 15 Anthropic-lane config directories in roster order and `acct-g1` and `acct-g2` for the two lanes of
+another provider; the mapping stayed in the conductor's scratch directory.
+
+**How far back the box remembers.** The plan asked for 30 days. The systemd user journal reaches back to 2026-10-27
+(its retention), so its reads cover **14 days** (the first `claude-session@` start in the window is 2026-10-28). ccd's
+lifecycle journal (`$REG/.lifecycle/journal-*.ndjson`) reaches back to 2026-11-02, so the roll read covers **9 days**.
+Each figure below names its window. The shorter windows are a departure (D-8248).
+
+**W0-26, restarts per session per hour (box, 14 days).** A scratch reader outside the tree, run under `python3 -I`,
+imported `deploy/measure-working-state.py`'s `journal` and `journal_facts` and counted `claude-session@<id>` starts
+(the `Started` job records, one per start: no start is counted twice). 2,979 starts over 681 sessions, in 2,751
+session-hours that had at least one start: **1 start in 2,528 of them, 2 in 218, 3 in 5; p50 1, p95 2, p99 2, max
+3.** Counted over every clock hour from each session's first start to its last (19,225 session-hours, the hours with
+no start counted as 0): p50 0, p95 1, p99 2. **Outcome: p99 ≤ 2, so readiness's `restarting` threshold of two in an
+hour stands.** Five session-hours in 14 days (about 0.2% of the hours with a start) reached three.
+
+**W0-26, the restart time (box).** `measure-working-state.py --section spawn --since 2026-10-12`: 48 restarts measured
+(the instrument reads each live session's newest turn marker, so one restart per session, and keeps only a restart with
+a preceding start in the user journal, so the window is at most that journal's 14 days, whatever `--since` says), unit
+start to the turn marker's `restartAt`, which the session hook stamps on its restart event, **p50 0.9 s, p95 6.1 s, max
+6.2 s**. **Outcome: `restarting`'s bound is taken from p95 6.1 s.**
+`--section deaths` over the same window (at most 14 days) counted 3 session ends (1.5 a day on the two days with one), none OOM-associated
+and no redrive. **The sweep after boot:** no lane computes the Overlord's readiness today (Task 1's read of
+`LANE_SCHEDULE`), so W1 names the lane whose cadence "one sweep" is.
+
+**W0-06, the roll's overhead today (box, 9 days).** The same reader took each `hibernate` act in ccd's lifecycle
+journal whose `dec.reason` is `roll` (114, all `done`, all from the `sweep:roll` actor) to the same session's next
+`claude-session@` start in the user journal: **all 114 matched, p50 0.4 s, p95 1.0 s, p99 1.3 s, max 1.9 s.** Add the
+unit start to the hook's restart stamp (p95 6.1 s, above) and W0a's fresh start under the rig (p95 0.26 s at every
+transcript size): **the roll plus a fresh start takes about 7.4 s**, far under 60 s. That figure is a sum of three p95s
+from three populations (1.0 + 6.1 + 0.26 s), not the p95 of one, and the rig's start may overlap the restart stamp's
+span. **Outcome: the deadlines stand**
+(`clearing` 90 s, `carded` 45 s, the 360 s budget). Caveat: the roll's start-to-marker time is from the newest restart
+of each live session, not from each roll, and a real fresh start adds the tool servers and the account's network
+round trips the rig leaves out; both are seconds, not tens of seconds.
+
+**Step 1b, the lanes' builds (box).** `version_to` from each account config directory's `.last-update-result.json`:
+
+| Build | Anthropic-lane accounts |
+|---|---|
+| 2.1.322 (W0a's newest) | 8: `acct-01`, `acct-04`, `acct-05`, `acct-07`, `acct-09`, `acct-10`, `acct-11`, `acct-12` |
+| 2.1.321 | 1: `acct-14` |
+| 2.1.319 | 3: `acct-03`, `acct-13`, `acct-15` |
+| 2.1.318 | 2: `acct-06`, `acct-08` |
+| 2.1.316 | 1: `acct-02` |
+
+The other provider's two lanes have no update result (they run no Anthropic auto-update). **Seven Anthropic-lane
+accounts run a build between W0a's pair** (2.1.312 and 2.1.322) and not on it, so every rig row (W0-01 to W0-19) is
+unmeasured on their build; the rig's two builds behaved identically on every row, which bounds but does not prove the
+builds between. The subject's account is on 2.1.322, which the rig measured.
+
+**W0-09 and W0-19, the account config census (box).** Per account config directory, setup line 4's listing:
+
+| Kind | What the 17 directories hold |
+|---|---|
+| Project memory (`projects/*/memory/`, non-empty) | **every account: 8 to 14 non-empty project memory directories**; most are symbolic links shared across accounts (8 to 15 links per account, counting a link to a directory with nothing in it: a later read found such a link on seven accounts, two of them, `acct-04`'s and `acct-10`'s, made by the subject's own swaps onto `lane-b` and `lane-c`), so one project's memory is the same directory under several accounts |
+| `skills/` | 6 to 9 entries on every account |
+| `plugins/` | 8 or 9 entries on every account, and the key `enabledPlugins` present in every account's settings (its value was not read) |
+| User memory file (`CLAUDE.md`) | present on 7 accounts, as 3 distinct files (5 share one hash); absent on 10 |
+| Tool servers (`.claude.json` `mcpServers`) | one on 4 accounts, none on 13 |
+| `settings.json` key names | on all 17: `cleanupPeriodDays`, `effortLevel`, `enabledPlugins`, `env`, `hooks`, `model`, `permissions`, `skipDangerousModePermissionPrompt`, `statusLine`; on some: `modelSettings` (10), `tui` (6), `agentPushNotifEnabled` (6), `extraKnownMarketplaces` (5), `theme`, `spinnerTipsEnabled`, `alwaysThinkingEnabled` (2 each), and `switchModelsOnFlag`, `remoteControlAtStartup`, `inputNeededNotifEnabled`, `autoUpdatesChannel` (1 each) |
+
+**Outcomes.** W0-09: **the count is above zero on every account**, and no account's settings carry
+`autoMemoryEnabled`, so auto memory is on everywhere and a swap loads the target account's project memory, which is
+largely the same shared directory. That selects **an operator item at W1a** (the plan's branch), and H14's per-session
+switch (W0a measured `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1` holds) is what keeps it out of the Overlord. W0-19: **every
+kind W0a's rig measured is present on the fleet** (a user memory file, skills, tool servers, settings with hooks), and
+plugin entries with an `enabledPlugins` key on every account, which the rig could not build (so a pinned launch over
+a plugin is unmeasured). So the pinned sources are load-bearing
+on every account, and **mods are present on the fleet, so doctor's no-mods check is required before designation**
+(as the plan's branch says). Two key names bear on other rows: `model` and `effortLevel` are set in every account's
+settings (a typed `/model` or `/effort` writes them, W0a's W0-12 and D-8149), and `switchModelsOnFlag` is set on one
+account only, so Claude Code's own switch on a flagged request is at its default on the rest.
+
+**W0-12, real fallback notices in the history (box, counts only).** `ccrc history grep` is scoped to a session, a
+project or a workspace; there is no fleet-wide read verb, so this counts **this project's** history (936 session
+families), a departure from the plan's fleet read (D-8248). Claude Code's own notice texts were read from the 2.1.322 binary's strings: "…'s safeguards flagged this
+message" (the refusal notice) and "…'s safeguards stopped the response above" (the continue-once notice W0a saw). Hits
+by ISO week, role and provenance:
+
+| Text | Hits | By provenance |
+|---|---|---|
+| "safeguards flagged this message" | 88, weeks 39 to 46 (34 in week 44) | 83 tool output, 4 the model's own prose, 1 operator, 0 a Claude Code notice row |
+| "safeguards stopped the response above" | 71, weeks 39 to 46 | 68 tool output, 3 the model's own prose, 0 a Claude Code notice row |
+
+Every hit is the text quoted (in tool output, by a model, or by the operator); none is a row the history attributes to
+Claude Code itself, and the history keeps no provenance that would tell a real notice from a quote of one. **Outcome:
+the real notices are unmeasured from the history, so W0-12's conservative branch stands** (the statusline writer
+journals a model change too). A count of quotes is not a count of events, so no weekly rate of real notices is
+recorded.
+
+## The replay quiz's baseline (Task 11: W0-28), ruled 2026-11-11
+
+**Asked first (Step 1).** W0b mailed the history programme's coordinator, as §3.3.9 says (each fix extends its owner),
+naming the unresolved decision (what M13 compares against) and the minimum relevant evidence its ledger's carried
+constraints require: one quiz over live coordinator families, recall on, no A/B window. Its answer, from that ledger,
+the W2 live runbook and `deploy/history-replay.mjs` on `main`:
+- **(A), a reduced run now, conflicts** with that programme's current rulings in three ways: the runbook's quiz sits
+  inside a release-frozen window (acts 6 to 28), while fleet deploys continue under the history cohort's ruling; the
+  driver's code check does not yet cover the shared redaction module, a history pull request before any record; and a
+  reduced run would manufacture W2's signed records, which the 2026-11-02 skip ruling forbids unless the operator
+  expressly resumes the study. A reduced run also cannot skip the pilot or part 2 without a code change: the quiz arms
+  always run both recall arms side by side.
+- **(B) conflicts with nothing it can read**, under four conditions (below).
+
+**The ruling (Step 2): B** (the operator, programme item 168; D-8207 applies as written). **M13's baseline is the first
+run of W1a's weekly quiz lane, taken before any W1a arm is armed.** W0b runs no quiz, so there is no score or spend to
+record here.
+
+**Conditions on the W1a piece that takes the baseline** (the history coordinator's, carried by the ruling):
+1. it reads the history store read-only, and no session runs a writing form of `ccrc history`;
+2. it writes no history marker (recall-off, steer, agents-on, headless-on or any other); markers are the operator's;
+3. it mails the history programme's coordinator before any reuse of that programme's quiz files
+   (`deploy/history-replay.mjs`, `deploy/history-gate.mjs` or the quiz builder), and runs the driver by the operator's
+   hand, as the driver requires;
+4. the baseline is never written up as a W2 result, a PASS or a measured benefit of recall.
+
+**What that first run must write down** (the minimum the history coordinator named, so "above baseline" compares like
+with like): one quiz over live coordinator families, with recall on and no A/B window, using the same questions, judge,
+judge model and scoring as the lane M13 later reads; the frozen question list's sha; the number of questions and of
+families; the score with its interval; the ccrc release and Claude Code builds; and whether the history programme's W3
+steering and W4 agents-on were armed on the families and node measured at the time (the safest baseline is taken after
+W4 is armed on that node, or with both states named, so a later rise is not credited to the Overlord).
+
+## The subject (Task 9: W0-20, W0-21, W0-22), measured 2026-11-11 and 2026-11-12
+
+The subject is a scratch session in `project-w0`, at home on `lane-a` (`acct-12`), on Claude Code 2.1.322; `ccd caps`
+advertised `swap`, `swap-busy-v1` and `hibernate-roll` (Step 1). Every text it was given is synthetic. Every result
+here is **model** (what a real model did, read from its transcript, its mail and its files), on 2.1.322 alone: the
+three lanes below all ran that build.
+
+### W0-20: nudge-and-read against typed text
+
+Ten small closed tasks (write a file, compute a number with a shell command, reply with the result), each given to the
+subject twice: typed by the operator at the console's prompt, and mailed by the conductor, read by the subject through
+`ccrc-api`. Even-numbered texts went by mail first (2026-11-11, 13:50 to 14:00 UTC), the operator typed all ten
+(16:18 to 16:25), and the odd-numbered ones went by mail last (2026-11-12, 11:48 to 11:57). Times are from the
+subject's transcript: the send, the mail nudge's row, the first tool call, the reply (for a typed text, the turn's
+end, in the pane; for a mailed one, the moment the reply mail was accepted), and the turn's end.
+
+| Measure | Typed (10) | Mailed (10) |
+|---|---|---|
+| Send to the nudge (the mail gate's wait) | none | p50 90.3 s, min 10.2 s, max 113.7 s |
+| Nudge (or typed send) to the first tool call | p50 1.8 s, max 2.2 s | p50 2.0 s, max 3.4 s |
+| Nudge (or typed send) to the reply | p50 2.9 s, max 4.1 s (in the pane) | p50 6.3 s, max 20.1 s (the 8 replies delivered) |
+| Send to the reply | p50 2.9 s | p50 94.5 s, max 115.9 s (the 8 replies delivered) |
+| Nudge to the turn's end | as above | t08 14.0 s and t10 13.4 s: turns that ended in a refused reply (below) |
+| Done as asked | 10 of 10 | 10 of 10 tasks; 8 of 10 replies delivered |
+| The operator's rating of the pair | all ten 5 | |
+
+- **The gate is the worker row of `MAIL_PACE`.** It waits for 60 s of measured idle (`quietMs`) and allows no second
+  nudge into one session within 120 s of the last (`cooldownMs`), on the lane's 10 s sweep. Mailed one after another,
+  the nudges landed about two minutes apart (13:50:39, 13:52:41, 13:54:42, 13:56:46, 13:58:49). Only the first
+  mail of a round (t02, 10.2 s) found the subject idle long enough and no recent nudge. t01, the first mail of the
+  second day, also woke the subject from hibernation, and still took only 68.7 s. So the spacing of about two
+  minutes is the cooldown between nudges, and the 90 s p50 is each mail's own wait from send to nudge.
+- **Net of the gate, mail costs about 3.4 s more than typing** (6.3 s against 2.9 s at p50), spent writing and
+  sending the reply mail. One delivered reply is above 10 s: t02, 20.1 s, the first mail the subject ever answered,
+  when it read the coordinator skill's references to learn how to reply. A cleared subject paid that cost again on
+  its first mail after each `/clear` (W0-21).
+- **A busy reader blocked the subject's replies.** Mail between two sessions outside a run is bounded at three unacked
+  mails per sender and recipient (`PEER_MAIL_MAX_OUTSTANDING`) and twelve per sender per hour (`PEER_MAIL_HOURLY`).
+  The conductor sent the even texts from one long foreground wait. The subject's first three replies sat
+  delivered-but-unacked, because mail reaches a session only when it is idle. t08's reply was refused `429 peer-quota`
+  twice (in its own turn and in t10's); t10's reply was held unsent; on day 2 the subject dropped both as out of date,
+  so neither was delivered. The subject said so in its pane. The work itself was done as asked: the transcript shows
+  t08's file parsing and t10's file at one
+  line. On the second day the conductor acked each reply before the next send, and no refusal recurred. This is a
+  method lesson for the conductor and a proposal (11, below): no task was lost, but two replies were.
+
+**Outcome:** fidelity is equal (10 of 10 both ways), and the operator rated every pair 5. Net of the gate, latency to
+the first tool call is at most 3.4 s, and to a delivered reply mail it is 6.3 s at p50 (one of eight above 10 s,
+t02, for the reason above). **The gate dominates** (p50 90 s against at most 3.4 s), so the outcome is the plan's last branch:
+the Overlord's own `MAIL_PACE` row (C24). No change is needed to the wording of the `messages` result or to the
+skill clause.
+
+### W0-21: a swap at idle and one mid-turn, each followed by a stand-in renewal
+
+Three facts were mailed (a canary word, a count and a time) and written by the subject to `w0-card.md`, 3 lines.
+
+| Run | Swap | What was lost | After the operator's `/clear`: card re-read, three closed-form questions |
+|---|---|---|---|
+| At idle | `ccd swap <subject> <lane-b>`, rc 0 in 1.3 s; the resumed session kept its uuid | nothing | 3 of 3 (`lantern-58`, `12`, `07:40`) |
+| Mid-turn | `ccd swap --interrupt <subject> <lane-b>`, rc 0 in 1.5 s, 36 s into a 150 s foreground command (the hook's turn marker read `working`) | the in-flight command, killed with exit 137, and nothing more | 3 of 3 |
+
+- **Mid-turn, the turn itself survived.** ccd's restart typed its own continuation prompt: "Continue from where you
+  left off. Note: ccd restarted this session (an account swap asked for by hand) after its previous process was
+  stopped mid-turn…". The subject checked its state, found the file unwritten, re-ran the command in the foreground
+  and replied 162 s after the restart. Its reply named the killed attempt.
+- **A first mid-turn attempt measured something else.** The subject's harness refuses a foreground `sleep` longer than
+  its limit ("Blocked: sleep 120 followed by …"), so the subject ran that command as a background shell and ended its
+  turn. The `--interrupt` swap, 22 s later, therefore met a session with a turn already ended and a background task
+  running (lane-b to lane-a, 1.5 s). The restart's turn marker recorded `lostBg 1` (`shell`). The resumed session
+  got Claude Code's task notification ("Background shell command didn't finish before the previous session ended")
+  and took no turn of its own, so the task's file was never written. A background task does not survive a swap,
+  and nothing re-runs it unless a nudge asks. The run above was then made with a foreground command the harness
+  allows.
+
+**Outcome: both pass, as designed.** This outcome is the foreground arm's; the background arm's loss goes to
+proposal 12. No more than the in-flight command was lost, so the resumed-long trigger gains
+nothing, and the probes passed, so no restart bound is taken from this run. Every `/clear` was the operator's, at a
+structured ask. After the first, the conductor waited for the subject's uuid to change before mailing: the ask's answer
+can come before the act. In one run the re-read mail was sent 11 s before the `/clear` landed, and was delivered
+after it only because of the gate.
+
+### W0-22: a continuity record for each lane
+
+The conductor chose two lanes of the fleet's own provider, other than the subject's home, as the coordinator directed
+(the operator's answer to setup item 163 named none): `lane-b` (`acct-04`) and `lane-c` (`acct-10`). Each had 21% of
+its seven-day window used and no Fable in its sweep reading. Those are the sweep's `sevenPct` and `fableShare`, usage
+shares and no value, read to prefer lanes with headroom as the coordinator directed (D-8250). Another provider's lane is allowed by the spec's agreed ruling 6. It was not tested
+here, by the coordinator's call, so that no other provider saw the subject's text. For each lane the subject was
+swapped there from `lane-a` at idle, given the four checks, and swapped back. Its project carries no pool tag.
+
+| Check | How | `lane-b` | `lane-c` |
+|---|---|---|---|
+| The anchor canary | The anchor slot does not exist until W1a. The canary is therefore a token that only ccrc's own SessionStart hook context carries: its graph line's commit and node count, answered from context before any command or read (D-8249) | right (the transcript's hook text agrees) | right |
+| A deny rule | A synthetic project rule, `Bash(echo w0-deny-probe:*)`, in the subject's own scratch project settings. The subject ran the command once | "Permission to use Bash with command echo w0-deny-probe 1 has been denied." | the same, for `… 2` |
+| A reader | One `Explore` subagent (it ran on Haiku), asked only to read the card and return fact 2 | fact 2, verbatim | fact 2, verbatim |
+| A closed-form probe after `/clear` | The operator's `/clear`, then a mail: re-read the card and answer one value | `12` | `07:40` |
+
+The client side is W0-01, W0-02, W0-15 and W0-16 above, read on 2.1.312 and 2.1.322. **Outcome: four passes on each
+lane, so the operator may set the record for `lane-b` and `lane-c` on 2.1.322 (W1).** The subject ended on its home
+lane. A lane on another build has no record from this run.
+
+## Account facts (Task 10: W0-23, W0-24), 2026-11-12
+
+**W0-23, deferred to the pool design.** The operator changed the design before this row could be read: no account
+is reserved for the Overlord, and the operator names the account pools it may draw accounts from (R18, merged in
+#2705; C46). So "each account that may be reserved" has no members, and no pool is named yet. The row is
+**unmeasured**. No plan or credit fact was read from a credential or a config value to fill it. The conservative
+branch stands: an account whose billing fact is unread is treated as if usage credits were on, so Fable is not
+served to the Overlord there until the operator's reading. What W0-23 measures under R18 is C46's open question for
+W1, which asks for each account in a pool the operator may name:
+- its billing fact, as before;
+- how much of its Fable share other sessions already spend, which W0-24's sweep reading below starts to answer.
+
+**W0-24, the sweep's reading (box).** The sweep's `latest.json`, finished 2026-11-12 11:53 UTC, over its `windowDays`
+of 7, read for shares, `sevenPct` and times (no value), for every account it lists (fifteen of the fleet's own provider
+and two of the other):
+- `perAccount.<id>.fableShare.estimate` is **0.0 on every account**, with `sevenPct` between 0 and 100, so
+  `sevenPct × estimate` is 0 everywhere.
+- The zero is a measurement, not a gap. The sweep prices `fable` as a class of its own: `shared/models.mjs`'s
+  `FAMILY_TOKENS` match `-fable-`, and the rate card has a `fable` row.
+- The only unpriced class is `other`: records whose model id matches no family token. At 11:53 it held 4,802 such
+  records on 9 accounts: 4,661 on the other provider's two lanes, and 141 on the fleet's own accounts, 128 of them on
+  one account (`acct-09`).
+- The sweep names and attributes them in `perModel` and `perSession` (schema 1). At its 16:07 UTC reading (the same
+  7-day window, moved on), the `other` records are three model ids of another provider and `<synthetic>`, 4,242 in
+  all. `acct-09`'s 128 are 127 records of one other-provider model id, in a session that also holds Opus and Sonnet
+  records, and 1 `<synthetic>`. No `fable` id appears in any account's or session's models.
+- So in this window the sweep finds no Fable use on any account. That is C46's second fact for this week: other
+  sessions spend none of any account's Fable share.
+
+**The `/usage` comparison is deferred to W1 under R18, unmeasured** (the coordinator's ruling, 2026-11-12). The
+operator's `/usage` readings were the only independent check, and none was taken. The first was asked and the
+operator chose to read it later. Readings 2 and 3 were not raised. Three reasons:
+- the row has no consumer, because R18 removed the reservation's Fable arm and C46 leaves W0-24's use to W1;
+- with no Fable use on any account, a reading could only compare a zero with a zero;
+- the readings would cost the operator's time across three days.
+
+**Outcome: no truth.** W0-24's own comparison (`sevenPct × estimate` against `/usage`) is unmeasured. Whether W0-24
+still informs the shared Fable test is W1's call (C46).
+
+## Rows still out
+
+None. Every W0 row is answered above. W0-23 is deferred to the pool design and W0-24's `/usage` comparison to W1,
+both by the coordinator's rulings under R18, and neither is waiting on a reading.
 
 ## Departures from the plan (for the coordinator to number)
 
@@ -572,6 +854,33 @@ Each is named by a plain-words slug; the coordinator issues its number and defin
   `project,local` (its grants in a `--settings` file) to measure the model at all. The refusal is a row of its own,
   measured from a committed scenario: `ov-subagent-model-force-hook`, the same arm with the default sources and so with
   ccrc's hook loaded (W0-11; proposal 1).
+- **w0b-synthetic-deny-rule-in-the-subjects-project, method (D-8246).** W0-22's deny check needs a rule that fires and is
+  harmless if it does not. The fleet's own deny rules all guard account and secret paths: trying one could read a
+  value if it failed, and the conductor's own session hook refuses even naming such a path in a mail. So the conductor
+  wrote one synthetic rule, `Bash(echo w0-deny-probe:*)`, into the subject's scratch project settings (setup item 163
+  made the subject available "however required"), and swapped the subject afresh onto each lane so the rule loaded at
+  the start. The rule was removed once both lanes' checks were done.
+- **w0b-a-background-shell-arm, method (D-8247).** W0-21's first mid-turn swap met a background shell rather than a running
+  turn, because the subject's harness refuses a long foreground `sleep`. It is recorded as its own arm, and the
+  mid-turn case was re-run with a foreground command the harness allows.
+- **w0-23-deferred-to-the-pool-design, scope (D-8244).** The coordinator's ruling on setup item 163: under R18 no account is
+  reserved, so W0-23 has no subject. It is recorded unmeasured with the conservative branch and C46's open question,
+  and nothing was read to fill it.
+- **w0-24-deferred-under-r18, scope (D-8245).** The coordinator's ruling: under R18, W0-24 has no consumer. The
+  sweep's readings are recorded (shares, `sevenPct` and times; no value). The `/usage` comparison is unmeasured and
+  deferred to W1, whose call it is whether W0-24 still informs the shared Fable test (C46). Readings 2 and 3 were not
+  raised.
+- **w0b-fleet-read-scope, scope (D-8248).** The plan asked for 30 days of fleet reads and a fleet-wide count of
+  fallback notices. The user journal reaches back 14 days and ccd's lifecycle journal 9, so the restart, restart-time
+  and death reads cover at most 14 days and the roll read 9. `ccrc history` has no fleet-wide read verb, so W0-12
+  counts this project's history only (936 session families), as quotes, not as a weekly rate of real notices.
+- **w0-22-canary-from-the-session-start-hook, shape (D-8249).** The anchor slot does not exist until W1a. So W0-22's
+  anchor canary is a token only ccrc's own SessionStart hook context carries (its graph line's commit and node count),
+  answered from context before any read.
+- **w0-22-lanes-chosen-by-headroom, shape (D-8250).** The coordinator directed the conductor to choose W0-22's two
+  lanes and to prefer lanes with headroom and no Fable. So the conductor read each account's `sevenPct` and
+  `fableShare` from the sweep. These are usage shares, not credentials or values, and the coordinator ruled the read
+  within consent.
 
 ## Proposals the outcomes select (for the coordinator; the design is not edited)
 
@@ -603,3 +912,19 @@ Each is named by a plain-words slug; the coordinator issues its number and defin
 10. **The uuid comments (W0-05).** The attribution comment in `server/src/coord/routes.ts` and the socket header in
     `server/src/sessionws.ts` say a compaction rotates the uuid; a manual compaction does not, and a real automatic one
     is unmeasured (W0-05). A follow-up issue, not W0.
+11. **Peer mail: an invited reply is never refused (W0-20).** Outside a run, mail between two sessions is bounded at
+    three unacked mails per pair and twelve per sender per hour, and mail reaches only an idle session. A busy reader
+    therefore blocks the replies it asked for, while the conductor sat in one long wait: t08's reply was refused
+    `429 peer-quota` twice (in its own turn and in t10's); t10's reply was held unsent; on day 2 the subject dropped
+    both as out of date, so neither was delivered. Three changes, smallest first:
+    - a reply (`kind: answer`) to a mail the recipient itself sent does not count against the pair's bound (this needs
+      the reply to name the mail it answers);
+    - mail over the bound is held queued until a slot frees, rather than refused;
+    - a refusal says when the mail will go ("when the recipient reads its mail").
+    The Overlord's own mail runs inside its run, where these bounds do not apply, so this is a follow-up issue for
+    today's sessions, raised through the coordinator, and not W0's or W1's.
+12. **A swap does not carry a background task (W0-21).** Claude Code's notice about a lost background shell reaches
+    the resumed session as a queued row, and the session takes no turn on it. The worker stall watch's `restarted`
+    arm mails such a worker, but it stays shadow until `stall-watch-w2-live`. W1's renewal lane, which
+    swaps the Overlord, nudges the resumed session whenever the restart's turn marker records `lostBg` above 0, or
+    W1 names the D5 arm as that nudge and arms it for the Overlord's role.

@@ -50,6 +50,19 @@ describe("the operator's act and decline are not in ccrc-api's table", () => {
   });
 });
 
+// D-8166 (test box connect spec §2.1, C14; plan TC12): the test box card's two routes are the console's alone. They put and pin
+// credentials on the fleet host, so a session on the fleet gets no verb that reaches them.
+describe("the test box connect routes are console-only: not in ccrc-api's table", () => {
+  it('no client row reaches /api/testbox/admin, and the client text never spells it', () => {
+    const paths = clientRoutes().map((r) => r.path);
+    for (const door of ['/api/testbox/admin', '/api/testbox/admin/:sub']) {
+      expect(paths, `${door} is a row of the client: a session could connect a test box`).not.toContain(door);
+    }
+    expect(paths.filter((p) => p.startsWith('/api/testbox/admin')), 'a client row reaches the test box admin routes').toEqual([]);
+    expect(fs.readFileSync(CCRC_API, 'utf8')).not.toMatch(/\/api\/testbox\/admin/);
+  });
+});
+
 /** The client with its comments stripped. The negative flag scans below MUST
  *  read this and not the raw file: `ccrc-api`'s own header names every flag it
  *  deliberately does not have ("no `--url`, no `--host`, no `--path`, no
@@ -171,8 +184,16 @@ describe('the corpora no longer invoke curl', () => {
       'linear.statuses',
       'linear.update',
       'linking.show',
+      'mail.inbox',
       'mail.send',
       'peers.list',
+      'plan.close',
+      'plan.epic-drop',
+      'plan.met',
+      'plan.put',
+      'plan.show',
+      'plan.ticket-add',
+      'plan.ticket-move',
       'runs.end-request',
       'runs.list',
       'runs.open',
@@ -379,6 +400,7 @@ describe('the client stays closed', () => {
     // `runs.end-request` (D-8076) took it to sixty-one; it takes the caller's own body, `byId` and `byUuid` included, and fills none.
     // `linking.show` (D-8147) took it to sixty-two.
     // `goals.show` (autonomy-default wave A2, D-8126) took it to sixty-three; a GET by id, it fills nothing.
+    // The seven `plan` rows (D-8181) took it to seventy; each takes the caller's own body and fills none (the identity rides the query).
     // The third fill is the question door family's `kind` (K5 Q3j): on the four claimant rows only, the client splices a
     // `kind` read from the row's family template, never from the caller, so it is counted by its own scan below rather
     // than by the two keyed fills' spelling. Since Q3l (D-7324) the template is the row's path and is always sent, so
@@ -389,7 +411,12 @@ describe('the client stays closed', () => {
     expect(filled).toEqual(['ledger.allocate', 'runs.open']);
     // `calls.record` (autonomy-default wave A3, D-8126) took it to sixty-four; it is the one body fill that REFUSES a caller's byId
     // and byUuid, so it is counted by its own scan (`calls.record` below), not by the keyed fills' spelling.
-    expect(routeKeys().size).toBe(64);
+    // `mail.inbox` (D-6780) took it to sixty-five; its read takes no body, and the ack body it synthesizes is pinned below.
+    // The seven `plan` rows (D-8181) took it to seventy-two; `sessions.start` (Overlord W1a, the start report, no body fill) to seventy-three.
+    // `sessions.card` (Overlord W1a, the card piece, no body fill) took it to seventy-four, and the note door's four (the notes
+    // piece) to seventy-eight: the three POSTs take the `calls.record` fill's rule, pinned below. The three `timer` rows (the
+    // timers piece) took it to eighty-one: `parse_timer` builds each body whole from the pane's pair, no splice and no fill.
+    expect(routeKeys().size).toBe(81);
     // The call record's fill is the one that REFUSES a caller's identity (D-8126): it tests the stripped copy for both keys and
     // refuses, then derives the pair from the pane, and fills nowhere else.
     const callFill = code.slice(code.indexOf("if [[ \"$key\" == 'calls.record' ]]; then"));
@@ -397,6 +424,13 @@ describe('the client stays closed', () => {
     expect(callFill).toMatch(/\*'"byId":'\*\|\*'"byUuid":'\*\)\s+refuse 'bad-body'/);
     expect(callFill).toMatch(/splice_body_field 'byUuid' "\$DERIVED_UUID"/);
     expect(callFill).toMatch(/splice_body_field 'byId' "\$DERIVED_ID"/);
+    // The note door's fill (Overlord W1a, the notes piece) is the call record's rule on its three POST rows: it refuses a body
+    // naming either key, then splices the pane's pair; `note list` fills the query.
+    const noteFill = code.slice(code.indexOf("if [[ \"$key\" == 'note.add' || \"$key\" == 'note.close' || \"$key\" == 'note.handover' ]]; then"));
+    expect(code.match(/if \[\[ "\$key" == 'note\.add' \|\| "\$key" == 'note\.close' \|\| "\$key" == 'note\.handover' \]\]; then/g) ?? []).toHaveLength(1);
+    expect(noteFill).toMatch(/\*'"byId":'\*\|\*'"byUuid":'\*\)\s+refuse 'bad-body'/);
+    expect(noteFill).toMatch(/splice_body_field 'byUuid' "\$DERIVED_UUID"/);
+    expect(noteFill).toMatch(/splice_body_field 'byId' "\$DERIVED_ID"/);
     // The claimant's identity is the PANE's, derived, never a value the caller
     // passes as a flag: the runs.open fill splices `$DERIVED_UUID` and nothing else.
     expect(code).toMatch(/splice_body_field 'claimedByUuid' "\$DERIVED_UUID"/);
@@ -409,6 +443,35 @@ describe('the client stays closed', () => {
       /^\s*claimant="\$\{tmpl#\/api\/questions\/\}"\n\s*claimant="\$\{claimant%%-\*\}"$/m);
     expect(clientRoutes().filter((r) => r.path.startsWith('/api/questions/')).map((r) => r.key))
       .toEqual(['asks.answer', 'asks.release', 'approvals.rule', 'approvals.release']);
+  });
+});
+
+// D-6780 (mail inbox, plan MI-6): the fifth body this client writes is the inbox's ack body, synthesized whole from the
+// pane's pair, as `parse_intent`'s is. It reaches the `mail.ack` row's own template, and every request of a run goes
+// through the one request function, which never exits, never clears the token and never arms a trap.
+describe('the inbox\'s ack body and the one request function (D-6780)', () => {
+  const fnBody = (code: string, name: string): string => {
+    const start = code.indexOf(`${name}() {`);
+    expect(start, `${name} is gone from the client`).toBeGreaterThan(-1);
+    return code.slice(start, code.indexOf('\n}', start));
+  };
+
+  it('the ack body is the pane-derived pair and nothing else, sent to the mail.ack row\'s template', () => {
+    const fn = fnBody(clientCode(), 'inbox_ack');
+    const sends = [...fn.matchAll(/send_request POST "([^"]*)" "((?:[^"\\]|\\.)*)"/g)];
+    expect(sends.map((m) => [m[1], m[2]])).toEqual([
+      ['$SERVER_URL${tmpl/\\{id\\}/$id}', '{\\"fromId\\":\\"$DERIVED_ID\\",\\"fromUuid\\":\\"$DERIVED_UUID\\"}'],
+    ]);
+    expect(fn).toMatch(/IFS='\|' read -r _ tmpl _ _ <<< "\$\{ROUTES\[mail\.ack\]\}"/);
+  });
+
+  it('send_request is the one place curl runs, and it never exits, clears the token or arms a trap', () => {
+    const code = clientCode();
+    const fn = fnBody(code, 'send_request');
+    expect(fn).toContain('| curl "${args[@]}" "$url" 2>/dev/null)');
+    expect(fn).not.toMatch(/\bexit\b|\btrap\b|TOKEN=/);
+    expect(code.match(/\| curl /g) ?? [], 'a second curl site').toHaveLength(1);
+    expect(code.match(/^\s*trap /gm) ?? [], 'a second trap').toHaveLength(1);
   });
 });
 

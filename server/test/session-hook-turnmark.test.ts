@@ -13,6 +13,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { mkTmp } from './tmpHelpers.js';
 import { readTurnMarkMeasured } from '../src/turnmark.js';
+import { stallOrphanDCandidate } from '../src/coord/stall.js';
 import { localIO } from '../src/io.js';
 
 const HOOK = path.resolve(__dirname, '../../ccd/session-hook.sh');
@@ -484,7 +485,7 @@ describe('the turn marker (§5.1)', () => {
 
 // ── The turn marker across a restart (worker stall watch §5.1, wave 2 Task 4) ──
 // A SessionStart other than compact is a new process: the old one's background
-// tasks died with it, so a same-session `done` moves bg/bgKinds/bgIds into lost*.
+// tasks died with it, so a same-session `done` or `failed` moves bg/bgKinds/bgIds into lost*.
 // compact fires mid-turn and is inert (D-306); clear starts a fresh line.
 describe('the turn marker across a restart (§5.1, SessionStart)', () => {
   const stopWith = (tasks: Array<{ id?: string; type?: string }>): void => {
@@ -605,19 +606,34 @@ describe('the turn marker across a restart (§5.1, SessionStart)', () => {
     expect(turnMark().lostBg).toBe(5);
   });
 
-  it('a resume after a failed line flips it to done, keeps err, turnAt and stopAt, and moves no tasks into lost*', () => {
+  it.each(['rate_limit', 'server_error'])('a resume after a failed line (%s) moves its tasks into lost*, keeping err, turnAt and stopAt (lost-bg-across-failed)', (error) => {
     stopWith(THREE);
     run({ hook_event_name: 'UserPromptSubmit' });   // working: bg 3 and its kinds and ids carried, lost* cleared
-    run({ hook_event_name: 'StopFailure', error: 'server_error' });
+    run({ hook_event_name: 'StopFailure', error });
     const failed = turnMark();
-    expect(failed).toMatchObject({ state: 'failed', err: 'server_error', bg: 3, bgKinds: 'shell,subagent', bgIds: 'b1,b2,b3' });
+    expect(failed).toMatchObject({ state: 'failed', err: error, bg: 3, bgKinds: 'shell,subagent', bgIds: 'b1,b2,b3' });
     run({ hook_event_name: 'SessionStart', source: 'resume' });
     const m = turnMark();
-    // Only a same-session DONE line's tasks are moved. A failed line's are dropped: bg, bgKinds and bgIds reset,
-    // lostBg stays 0 and the lost lists stay empty.
     expect(m).toEqual({ ...failed, state: 'done', event: 'SessionStart', at: m.at, restartAt: m.at, bg: 0, bgKinds: '',
-      bgIds: '', lostBg: 0, lostKinds: '', lostIds: '' });
-    expect(m.err).toBe('server_error');
+      bgIds: '', lostBg: 3, lostKinds: 'shell,subagent', lostIds: 'b1,b2,b3' });
+  });
+
+  it('a SECOND resume after a failed line keeps lost* and adds nothing', () => {
+    stopWith(THREE);
+    run({ hook_event_name: 'UserPromptSubmit' });
+    run({ hook_event_name: 'StopFailure', error: 'rate_limit' });
+    run({ hook_event_name: 'SessionStart', source: 'resume' });
+    run({ hook_event_name: 'SessionStart', source: 'resume' });
+    expect(turnMark()).toMatchObject({ state: 'done', bg: 0, bgKinds: '', bgIds: '', lostBg: 3,
+      lostKinds: 'shell,subagent', lostIds: 'b1,b2,b3' });
+  });
+
+  it('a failed line whose bg is -1 (unmeasured) adds 0 to lostBg, never subtracts', () => {
+    plantTurn(JSON.stringify({ v: 1, sessionId: 'uuid-1', state: 'failed', event: 'StopFailure', at: 2000, turnAt: 1000,
+      stopAt: 1500, bg: -1, bgKinds: '', bgIds: '', err: 'rate_limit', restartAt: null, lostBg: 2,
+      lostKinds: 'shell', lostIds: 'b1' }) + '\n');
+    run({ hook_event_name: 'SessionStart', source: 'resume' });
+    expect(turnMark()).toMatchObject({ state: 'done', bg: 0, lostBg: 2, lostKinds: 'shell', lostIds: 'b1' });
   });
 });
 
@@ -726,24 +742,26 @@ describe('the payload parse needs no regex engine', () => {
       const from = src.indexOf(open) + open.length;
       return src.slice(from, src.indexOf(close, from));
     };
-    // THREE PIECES, one jq program (delegation broker wave 3, Task 5): the parse proper, which every event compiles and which
+    // FOUR PIECES, one jq program (delegation broker wave 3, Task 5; the fourth is session-continuity 6b's): the parse proper, which every event compiles and which
     // is spelled on one physical line because nothing may be added above the `_hook_emit_context "$CARD" "$CARD_COMPACT"` line README cites; the delegation spool's definitions (`DSP_DEFS`), spliced in
-    // by the shell only for a payload that names a delegation tool or event; and the spool's extra output expression. All
-    // three are scanned, because a regex builtin in any of them fails the whole program on a jq without Oniguruma.
-    const parse = between('{ read -r event; read -r psid; read -r paid; read -r aid; read -r dsp_bucket; read -r dsp_cut; read -r dsp_cwd; read -r dsp_line; } < <(jq -r --arg sid "$id" --arg gen "$dsp_gen" --arg ver "$dsp_ver" \'', '" <<<"$payload"');
+    // by the shell only for a payload that names a delegation tool or event; the spool's extra output expression (`dsp_out`); and the launch record's
+    // output expression (`lrc_out`). All four are scanned, because a regex builtin in any of them fails the whole program on a jq without Oniguruma.
+    const parse = between('{ read -r event; read -r psid; read -r paid; read -r aid; read -r dsp_bucket; read -r dsp_cut; read -r dsp_cwd; read -r dsp_line; read -r lrc_line; } < <(jq -r --arg sid "$id" --arg gen "$dsp_gen" --arg ver "$dsp_ver" --arg wr "$lrc_w" \'', '" <<<"$payload"');
     const spoolDefs = between("DSP_DEFS='", "'; dsp_dir=");
     const spoolOut = between("dsp_out=', ((", ") | .[])'");
+    const lrcOut = between("lrc_out=', (", ")'");
     const mark = between('TURN_MARK_PROGRAM=\'\n', '\'\n');
     // Landmarks, so a renamed variable or a moved quote cannot leave this scanning nothing: each extraction must open
     // and close on the program's own text.
     expect(parse.startsWith('def keep(f):'), 'the payload parse program opens on its first definition').toBe(true);
     expect(parse).toContain('.agent_id');
-    expect(parse.endsWith('else "" end)\'"$dsp_out'), 'and closes on its last term, the raw id or nothing, then the spool\'s output').toBe(true);
+    expect(parse.endsWith('else "" end)\'"$dsp_out$lrc_out'), 'and closes on its last term, the raw id or nothing, then the spool\'s output and the launch record\'s').toBe(true);
     expect(parse, 'the id alphabet and its length bound are spelled once, by name').toContain('def idch:');
     expect(parse).toContain('def idmax: 64;');
     expect(spoolDefs.startsWith('def maxline:'), 'the spool\'s definitions open on their first').toBe(true);
     expect(spoolDefs.endsWith('else ["", "", "", ""] end;'), 'and close on the end of `spool`').toBe(true);
     expect(spoolOut).toContain('try spool catch');
+    expect(lrcOut).toContain('try lrec catch');
     expect(mark.startsWith('def csv:'), 'the marker program opens on its first definition').toBe(true);
     for (const kind of ['working', 'done', 'failed', 'restart', 'clear']) expect(mark, kind).toContain(`$kind == "${kind}"`);
     expect(mark.endsWith('else empty end'), 'and closes on its last branch').toBe(true);
@@ -752,6 +770,7 @@ describe('the payload parse needs no regex engine', () => {
     expect(regexCalls(parse), 'the payload parse runs on every event').toEqual([]);
     expect(regexCalls(spoolDefs), 'the spool\'s program runs on every delegation event, and a regex failure there would cost the hookstate too').toEqual([]);
     expect(regexCalls(spoolOut)).toEqual([]);
+    expect(regexCalls(lrcOut), 'the launch record\'s wrapper').toEqual([]);
     expect(regexCalls(mark), 'a marker branch that no row runs is still bound').toEqual([]);
   });
 
@@ -800,6 +819,31 @@ describe('the turn marker round trip: a hook-written line reads back ok (§5.1)'
     if (!r.ok) return;
     expect(r.bgKinds).toEqual([...sent].sort().slice(0, 25));
     expect(r.bgKinds.join(',')).toHaveLength(199);
+  });
+
+  it('a hook-written restart after a rate_limit StopFailure is orphan D\'s candidate; with no tasks it is not', async () => {
+    run({ hook_event_name: 'UserPromptSubmit' });
+    run({ hook_event_name: 'Stop', background_tasks: [{ id: 'b1', type: 'shell' }, { id: 'b2', type: 'shell' }] });
+    run({ hook_event_name: 'UserPromptSubmit' });
+    run({ hook_event_name: 'StopFailure', error: 'rate_limit' });
+    run({ hook_event_name: 'SessionStart', source: 'resume' });
+    const r = await readBack();
+    expect(r.ok, JSON.stringify(r)).toBe(true);
+    if (!r.ok) return;
+    expect(r.lostBg).toBe(2);
+    expect(stallOrphanDCandidate(r)).toBe(true);
+    // CONTROL, on a fresh marker: no tasks at the Stop, so nothing was lost.
+    fs.rmSync(turnFile(), { force: true });
+    run({ hook_event_name: 'UserPromptSubmit' });
+    run({ hook_event_name: 'Stop', background_tasks: [] });
+    run({ hook_event_name: 'UserPromptSubmit' });
+    run({ hook_event_name: 'StopFailure', error: 'rate_limit' });
+    run({ hook_event_name: 'SessionStart', source: 'resume' });
+    const c = await readBack();
+    expect(c.ok, JSON.stringify(c)).toBe(true);
+    if (!c.ok) return;
+    expect(c.lostBg).toBe(0);
+    expect(stallOrphanDCandidate(c)).toBe(false);
   });
 });
 

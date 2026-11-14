@@ -1,5 +1,6 @@
 """Explicit-state model of the Overlord's hold, readiness, generation and push machines.
 
+The maintained copy is server/test/model/overlord/model.py; this file is the record as W0 measured it.
 Source: an earlier draft of docs/superpowers/specs/2026-11-09-overlord-design.md. Section numbers in
 comments refer to that draft, so a few differ from the merged edition.
 Every rule the model encodes cites the section it comes from. Where the text is silent or

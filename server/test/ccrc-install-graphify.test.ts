@@ -32,6 +32,7 @@ import { assertNoRealTool } from './containedTools.js';
 import { PKG_DESCRIPTION, installedSkillMd, skillMd } from './graphifySkillFixture.js';
 import { installFixtureTree, rsyncRecorder } from './installTreeFixture.js';
 import { itLinux } from './platformFixtures.js';
+import { scaled } from './timeScale.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(here, '..', '..');
@@ -2244,7 +2245,11 @@ describe('N14: the sweep\'s timer and service are rendered from the graph settin
     expect(r2.code, r2.stderr).toBe(0);
     expect(readFileSync(unit('ccd-graph-sweep.timer'), 'utf8')).toBe(withValue(GRAPH_TIMER_T, 'OnUnitInactiveSec', '30min'));
     expect(readFileSync(unit('ccd-graph-sweep.service'), 'utf8')).toBe(withValue(GRAPH_SERVICE_T, 'TimeoutStartSec', '3000'));
-  });
+    // AN EXPLICIT BOUND, as ccrc-install-role.test.ts's two-spine cases carry: two whole install spines.
+    // 7.0 s to 10.7 s in green PR and queue shards; 20.1 s in a 2-worker PR shard whose change touched no part of
+    // the install, the single-spine cases beside it at their usual 5.2 s — past the 20 s Linux default though
+    // nothing here was wrong.
+  }, scaled(60_000));
 });
 
 /** deploy.sh's AGENT_BUILD_CMD, split the way slice-limits-config.test.ts splits it. */

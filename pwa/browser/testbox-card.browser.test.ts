@@ -6,7 +6,8 @@
 //   * laptop: the switch and the state on one line, the button at the state line's end, three cells in one row, the
 //     versions table open under them;
 //   * wide: the versions and pristine-installs tables open side by side.
-// At every width nothing in the card or on the page overflows sideways, and the switch posts `{on}` only.
+// At every width nothing in the card or on the page overflows sideways, the live probes line (D-8290) sits under the
+// cells inside the card, and the switch posts `{on}` only.
 //
 // The app answers from a fixture (`browser/app.ts`): no server, no ccd, no test box. Run: `( cd pwa &&
 // CCRC_CHROME=<a Chrome or Chromium binary> ./node_modules/.bin/vitest run --config vitest.browser.config.ts
@@ -17,6 +18,7 @@ import { chromium, type Browser } from 'playwright-core';
 import { INSTRUMENT, PHOSPHOR, REFINED } from '@ccrc/ui';
 import { TESTBOX_PROTO, type StatusAnswer } from '../../shared/testbox';
 import { TESTBOX_TEXT } from '../src/fleet/TestBoxSection';
+import { TESTBOX_CONNECT_TEXT } from '../src/fleet/testboxAdminWords';
 import { SETTINGS_CARDS } from '../src/fleet/settingsText';
 import { resolveChrome } from './harness';
 import { openApp, serveDist, sharedDist, type AppFixture, type AppView, type DistServer } from './app';
@@ -42,6 +44,12 @@ const STATUS: StatusAnswer = {
   ],
   failedKeys: [{ repository: 'project-a', package: 'agent', key: 'dddddddddddddddddddd', exit: 1, attempts: 3, nextAttempt: '2026-10-30T13:00:00Z' }],
   heldRunUsers: [], repositories: [{ name: 'project-a', mirrorPath: '/srv/mirrors/project-a.git' }],
+  // D-8290: long probe names, so the line has to wrap at phone width. The running one is 64 characters with no hyphen
+  // (the longest name the status reader accepts), so it offers the browser no break point and has to wrap anywhere.
+  probes: {
+    enabled: true, refusal: null, running: 'harness_session_continuity_resume_after_swap_with_a_long_tail_xx',
+    waiting: ['harness-permission-prompt-routing-child', 'harness-rate-limit-menu-never-typed-into'], day: '2026-10-30', used: 4, perDay: 10,
+  },
 };
 const BLOCK = {
   state: 'degraded', reasons: ['tools differ (node 22.11.0 vs 22.12.0)'], summary: 'degraded (tools differ (node 22.11.0 vs 22.12.0))',
@@ -91,6 +99,7 @@ interface Measured {
   state: Box;
   button: Box | null;
   cells: Box[];
+  probes: Box | null;
   tables: Record<string, Box | null>;
   overflowing: string[];
 }
@@ -121,6 +130,7 @@ const measure = (el: Element): Measured => {
     state: box(one('[data-testbox="state"]')),
     button: shown(el.querySelector('[data-testbox="sync"]')),
     cells: [...el.querySelectorAll('[data-testbox="cells"] [data-cell]')].map(box),
+    probes: shown(el.querySelector('[data-testbox="probes"]')),
     tables: Object.fromEntries(['versions', 'counts', 'pristine', 'failed']
       .map((n) => [n, shown(el.querySelector(`[data-table="${n}"]`))])),
     overflowing: [...el.querySelectorAll('*')]
@@ -158,6 +168,12 @@ describe('Settings › Automation › Test box at phone, laptop and wide (D-7412
         expect(m.card.box.right).toBeLessThanOrEqual(m.viewport);
         expect(m.button, 'a differing tool shows Bring tools up to date').not.toBeNull();
         const button = m.button!;
+        // D-8290: the live probes line under the cells, inside the card, at every width.
+        expect(m.probes, 'the live probes line shows').not.toBeNull();
+        expect(m.probes!.top).toBeGreaterThanOrEqual(m.cells[m.cells.length - 1]!.bottom - 0.5);
+        expect(m.probes!.left).toBeGreaterThanOrEqual(m.card.box.left - 0.5);
+        expect(m.probes!.right, 'the live probes line runs past the card').toBeLessThanOrEqual(m.card.box.right + 0.5);
+        await expect.poll(() => section.locator('[data-testbox="probes"]').textContent()).toBe(T.probes(STATUS.probes!));
 
         if (view.band === 'phone') {
           // One column: the state line under the switch, the summary under the state, the button as wide as its line.
@@ -237,6 +253,57 @@ describe('Settings › Automation › Test box with no box set up, at phone, lap
         expect(Math.abs(note.left - m.state.left)).toBeLessThanOrEqual(1);
         expect(note.right).toBeLessThanOrEqual(m.stateLine.right + 0.5);
         expect(m.button).toBeNull();
+        expect(errors).toEqual([]);
+      } finally {
+        await ctx.close();
+      }
+    }, 90_000);
+  }
+});
+
+/** A connected box whose parity has not passed (D-8166, TC15): the block's admin says so, and the flow's own read agrees. */
+const WAITING_BLOCK = { ...BLOCK, admin: { connected: true, hostKey: 'pinned', act: null, parity: 'none' } };
+const CONNECTED_STATUS = {
+  v: 1, connected: true, addressSet: true, login: 'root', fingerprint: `SHA256:${'A'.repeat(43)}`, hostKey: 'pinned', boxFileSha256: 'f'.repeat(64),
+  act: null, boxSettings: null, boxSettingsAt: null, installedTag: null, parity: null,
+};
+
+describe('Settings › Automation › Test box: the switch waits for parity, at phone, laptop and wide (D-8166)', () => {
+  for (const view of VIEWS) {
+    it(named(view), async () => {
+      const { ctx, page, errors } = await openApp(browser!, view, FIXTURE);
+      const posts: unknown[] = [];
+      await ctx.route('**/api/testbox', (r) => r.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true, testbox: WAITING_BLOCK }) }));
+      await ctx.route('**/api/testbox/admin', (r) => r.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true, status: CONNECTED_STATUS, events: [] }) }));
+      await ctx.route('**/api/testbox/switch', async (r) => {
+        posts.push(r.request().postDataJSON());
+        return r.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true, requested: true }) });
+      });
+      try {
+        await page.goto(server!.origin + '/settings/automation');
+        const section = page.getByRole('region', { name: TITLE });
+        await expect.poll(() => section.locator('[data-testbox="switch-waits"]').count(), { timeout: 20_000 }).toBe(1);
+        const m = await section.evaluate(measure);
+        const waits = await section.evaluate((el) => {
+          const n = el.querySelector('[data-testbox="switch-waits"]')!;
+          const r = n.getBoundingClientRect();
+          const sw = el.querySelector('[data-testbox="switch"]')!.getBoundingClientRect();
+          return { text: n.textContent, left: r.left, right: r.right, switchLeft: sw.left, switchRight: sw.right, visible: n.checkVisibility() };
+        });
+        expect(m.band).toBe(view.band);
+        expect(waits.text).toBe(TESTBOX_CONNECT_TEXT.switchWaits);
+        expect(waits.visible).toBe(true);
+        expect(waits.left).toBeGreaterThanOrEqual(waits.switchLeft - 0.5);
+        expect(waits.right).toBeLessThanOrEqual(waits.switchRight + 0.5);
+        expect(m.card.scrollWidth, 'the card overflows sideways').toBeLessThanOrEqual(m.card.clientWidth);
+        expect(m.overflowing, 'an element inside the card scrolls sideways').toEqual([]);
+        expect(m.pageScrollWidth, 'the page scrolls sideways').toBeLessThanOrEqual(m.pageClientWidth);
+        // On is drawn disabled and a tap on it sends nothing; Off is never gated.
+        expect(await section.getByRole('radio', { name: T.on }).isDisabled()).toBe(true);
+        expect(await section.getByRole('radio', { name: T.off }).isEnabled()).toBe(true);
+        await section.getByRole('radio', { name: T.on }).click({ force: true, timeout: 1500 }).catch(() => undefined);
+        await page.waitForTimeout(200);
+        expect(posts).toEqual([]);
         expect(errors).toEqual([]);
       } finally {
         await ctx.close();

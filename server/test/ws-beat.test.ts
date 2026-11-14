@@ -13,7 +13,7 @@ import path from 'node:path';
 import WebSocket from 'ws';
 import type { FastifyInstance } from 'fastify';
 import { buildServer, type Deps } from '../src/server.js';
-import { BEAT_MS, SessionStream } from '../src/sessionws.js';
+import { BEAT_MS, NO_TICK, SessionStream } from '../src/sessionws.js';
 import { Bus } from '../src/bus.js';
 import { loadConfig } from '../src/config.js';
 import { ccdRunner } from '../src/lifecycle.js';
@@ -148,7 +148,7 @@ describe('console speed S2: the beat of both sockets', () => {
     for (let i = 1; i <= 2; i += 1) {
       vi.advanceTimersByTime(BEAT_MS);
       await settle();
-      // the 2 s poll fakes along too and may emit other frames; only the beat count is in question
+      // the backstop fakes along too and may emit other frames; only the beat count is in question
       expect(beatsOf(frames)).toBe(i);
     }
     ws.close();
@@ -165,7 +165,7 @@ describe('console speed S2: the beat of both sockets', () => {
     });
     vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
     const frames: Array<{ type: string }> = [];
-    const stream = new SessionStream(mkDeps(home, held), new Bus(), ID, (m) => frames.push(m));
+    const stream = new SessionStream(mkDeps(home, held), new Bus(), ID, (m) => frames.push(m), undefined, NO_TICK);
     void stream.start();
     await settle(50);
     expect(beatsOf(frames)).toBe(0);

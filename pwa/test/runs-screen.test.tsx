@@ -206,7 +206,7 @@ describe('the run board', () => {
     act(() => { store.setState({ runs: [r()], runsFrameSeen: true }); });
     render(<RowsBoard store={store} loadRuns={async () => ({ runs: [] })} loadCaps={NO_CAPS} />);
     expect(screen.getByText('wave 3/4')).toBeInTheDocument();
-    expect(screen.getByText('3/7')).toBeInTheDocument();
+    expect(screen.getByText('3/7 settled')).toBeInTheDocument();
     // No blocked/failed cell: RunItemTally shipped as {done,total} only —
     // no failed/blocked columns exist anywhere (reconciliation item 1).
   });
@@ -226,14 +226,14 @@ describe('the run board', () => {
     const store = makeStore();
     act(() => { store.setState({ runs: [r()], runsFrameSeen: true }); });
     render(<RowsBoard store={store} loadRuns={async () => ({ runs: [] })} loadCaps={NO_CAPS} />);
-    expect(document.querySelector('.run-tally')?.textContent).toBe('3/7');
+    expect(document.querySelector('.run-tally')?.textContent).toBe('3/7 settled');
   });
 
   it('renders 0/7 for a declared ledger nothing has settled yet — only total 0 is the dash', () => {
     const store = makeStore();
     act(() => { store.setState({ runs: [r({ items: { done: 0, total: 7 } })], runsFrameSeen: true }); });
     render(<RowsBoard store={store} loadRuns={async () => ({ runs: [] })} loadCaps={NO_CAPS} />);
-    expect(document.querySelector('.run-tally')?.textContent).toBe('0/7');
+    expect(document.querySelector('.run-tally')?.textContent).toBe('0/7 settled');
   });
 
   it('gives the tally no glyph — it is a count, not a state', () => {
@@ -249,8 +249,9 @@ describe('the run board', () => {
 
   it('itemTallyLabel is the one place the rule lives, and it is total-based', () => {
     expect(itemTallyLabel({ done: 0, total: 0 })).toBe('—');
-    expect(itemTallyLabel({ done: 0, total: 1 })).toBe('0/1');
-    expect(itemTallyLabel({ done: 3, total: 7 })).toBe('3/7');
+    // D-8292: the count says what it counts (settled items, not commits).
+    expect(itemTallyLabel({ done: 0, total: 1 })).toBe('0/1 settled');
+    expect(itemTallyLabel({ done: 3, total: 7 })).toBe('3/7 settled');
     // A row that reached a renderer without `items` at all reads as no
     // declared ledger, not as a crash — `runItems`' own tolerance, composed.
     expect(itemTallyLabel(runItems({}))).toBe('—');

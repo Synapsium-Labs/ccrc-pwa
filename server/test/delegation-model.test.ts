@@ -60,6 +60,7 @@ import {
   type DelegationSessionRow,
 } from '../src/coord/delegation-model.js';
 import { leaseRow as lease } from './delegationLeaseFixture.js';
+import { mulberry32 } from './fakeTime.js';
 
 // ── fixed inputs (Python hashlib/json, not this module) ───────────────────────────────────────────────────────────
 const J = '842563601695ebb48c8fbb35e752df0c7c36923d6c8dea27f0602367d17add3b';   // sha256(b'fixture-journal-record-1')
@@ -1094,16 +1095,6 @@ describe('RB25: delegationListingsEqual is the ONE listing equality (D-6267)', (
     expect(typeof fn, 'delegationListingsEqual is exported by the model').toBe('function');
     return fn as Equal;
   };
-  function mulberry32(seed: number): () => number {
-    let a = seed >>> 0;
-    return () => {
-      a = (a + 0x6D2B79F5) >>> 0;
-      let t = a;
-      t = Math.imul(t ^ (t >>> 15), t | 1);
-      t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
-      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-    };
-  }
 
   // MB9 (order-sensitive) reds the first two; MB10 (ignores removals) reds the fifth.
   it.each([

@@ -175,8 +175,10 @@ export function KeyBar(props: KeyBarProps): ReactNode {
             Claude Code will exit
           </span>
           <div className="term-confirm-choices">
+            {/* `send ^C` is in `Send ^C (Control C)`: the shown words lead the
+                name, and the key is spelled out after them (D-8383). */}
             <Keycap
-              aria-label={`Send ${KEY_CAP[k].label}`}
+              aria-label={`Send ${KEY_CAP[k].legend} (${KEY_CAP[k].label})`}
               onPointerDown={keepFocus}
               onClick={guard.confirm}
             >
@@ -281,7 +283,9 @@ export function KeyBar(props: KeyBarProps): ReactNode {
                 <Keycap
                   key="ctrl"
                   className="keycap--act"
-                  aria-label="Control"
+                  /* The name leads with the legend it shows (label in name,
+                     D-8383), the way `Esc (Escape)` does in KEY_CAP. */
+                  aria-label="Ctrl (Control)"
                   aria-pressed={latch.latched}
                   onPointerDown={keepFocus}
                   onClick={() => latch.setLatched(!latch.latched)}

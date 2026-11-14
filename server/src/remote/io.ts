@@ -1,12 +1,14 @@
 import {
-  BACKUP_OP, DISK_OP, PRESSURE_OP, READDIR_MTIMES_OP, TESTBOX_OP, TESTBOX_OP_REQUEST_MS, TESTBOX_TOOLS_SYNC_OP, isReadFromRange, readTestboxOpReply,
-  readTestboxToolsSyncReply, type TailData, type TailReset,
+  BACKUP_OP, DISK_OP, PRESSURE_OP, READDIR_MTIMES_OP, TESTBOX_ADMIN_OP, TESTBOX_OP, TESTBOX_OP_REQUEST_MS, TESTBOX_TOOLS_SYNC_OP, isReadFromRange,
+  readTestboxAdminOpAnswer, readTestboxOpReply, readTestboxToolsSyncReply, testboxAdminRequestTimeoutMs, type TailData, type TailReset,
 } from '../../../shared/agent-protocol.js';
+import { buildTestboxAdminArgv, testboxAdminIsLong } from '../../../shared/testbox-admin.js';
 import { readDiskMeasured } from '../../../shared/disk.js';
 import { readHeadroomBytes, readHostPsi } from '../../../shared/pressure.js';
 import { readBackupRead } from '../../../shared/backup.js';
 import type { FleetIO, MeasuredDirectoryRead, ReadFailure } from '../io.js';
 import type { FleetClient } from './client.js';
+import { AgentOpError, LinkNotSentError } from './errors.js';
 
 /**
  * `FleetIO` over the agent's read/readFrom/readB64/readdir/stat/writeB64/tailOpen ops.
@@ -327,6 +329,29 @@ export function createIo(client: FleetClient): FleetIO {
         return reply === null ? { ok: false, reason: 'unanswered' } : { ok: true, reply };
       } catch {
         return { ok: false, reason: 'unanswered' };
+      }
+    },
+
+    /** The agent's `testbox-admin` op (connect spec §2.1, D-8166): the builder runs here first (so a refusal never reaches
+     *  the wire), and the frame is sent only to an agent whose ready frame names the op. An older agent that answers
+     *  `bad-request` is `unsupported` too; a frame that never left is `not-started`; anything after the send is `lost`. */
+    async testboxAdmin(sub, fields) {
+      const built = buildTestboxAdminArgv(sub, fields);
+      if (!built.ok) return { kind: 'refused', why: built.why };
+      if (!(client.state.agentOps ?? []).includes(TESTBOX_ADMIN_OP)) return { kind: 'unsupported' };
+      try {
+        const res = await client.request(
+          { t: 'req', op: TESTBOX_ADMIN_OP, sub, fields }, testboxAdminRequestTimeoutMs(testboxAdminIsLong(sub, fields)),
+        );
+        const answer = readTestboxAdminOpAnswer(res);
+        if (answer === null) return { kind: 'lost' };
+        // The node's identity rides the answer for the account ops' sake; the verb's route reads it from the fleet cell.
+        const { fleetIdentity: _identity, ...outcome } = answer;
+        return outcome;
+      } catch (e) {
+        if (e instanceof AgentOpError && e.code === 'bad-request') return { kind: 'unsupported' };
+        if (e instanceof LinkNotSentError) return { kind: 'not-started' };
+        return { kind: 'lost' };
       }
     },
   };

@@ -1,5 +1,7 @@
-import { CLAIM_LEASE_MS, type ClaimConflict, type PeerDeliverable } from '../../../shared/api.js';
-import type { RowStanding } from '../sessionReading.js';
+import {
+  CLAIM_LEASE_MS, type ClaimConflict, type ClaimLapse, type ClaimSummary, type PeerDeliverable,
+} from '../../../shared/api.js';
+import { rowStanding, type RowStanding, type RowStandingFacts } from '../sessionReading.js';
 
 /**
  * L1: pure, clock-free, fs-free, fastify-free — `journalparse.ts`'s exact
@@ -164,6 +166,59 @@ const CLAIM_VERDICT: Readonly<Record<RowStanding, LivenessVerdict>> = {
 
 export const claimVerdictOf = (standing: RowStanding): LivenessVerdict => CLAIM_VERDICT[standing];
 
+/** One frame row as the claim probe reads it: its id and the facts `rowStanding` reads. */
+export type ClaimProbeRow = { readonly id: string } & RowStandingFacts;
+
+/**
+ * THE reading of a holder's liveness (D12, D-6908), over rows a caller has ALREADY assembled, so the watcher's renew
+ * and lapse lanes and `POST /api/claims`' re-chain (D-8395) ask one question one way. `refused` is the listing's
+ * refused ids: a holder among them was never read, so it is `unmeasurable` (doubt), checked BEFORE the absent test,
+ * which answers `gone`. A listed row reads through `rowStanding`.
+ */
+export function claimLivenessProbe(
+  sessions: readonly ClaimProbeRow[], refused: ReadonlySet<string>,
+): LivenessProbe {
+  const byId = new Map(sessions.map((s) => [s.id, s]));
+  return {
+    liveness: (id: string) => {
+      if (refused.has(id)) return 'unmeasurable';        // listed but refused: never read, so never gone
+      const s = byId.get(id);
+      if (s === undefined) return 'gone';                 // the fleet no longer lists it
+      return claimVerdictOf(rowStanding(s));              // doubt reads as HELD (D12)
+    },
+  };
+}
+
+/**
+ * D-8395 (operator ruling 2026-11-12, amending D12's "no renewal moves the horizon" for this one case): a re-take by
+ * the holder of a live claim starts a NEW 8 h window, as a new row chained to the old one, when the holder measures
+ * `running` and the claim is inside its last `CLAIM_LEASE_MS` before the hard cap — the point from which a plain
+ * renewal is clipped by the cap. Earlier, a renewal already gives a full lease, so the re-take renews in place and the
+ * audit trail is not one row per ten-minute intent. `unmeasurable` does not re-chain: doubt holds a claim to its cap
+ * (the watcher's renewal), it never moves the cap; a holder that is not running lapses there as before.
+ */
+export function rechainDue(
+  row: { readonly hardExpiresAt: number }, now: number, verdict: LivenessVerdict,
+): boolean {
+  return verdict === 'running' && now < row.hardExpiresAt && now + CLAIM_LEASE_MS > row.hardExpiresAt;
+}
+
+/** D-8395: the caller's own live claims a take re-chains — those `rechainDue` admits whose paths overlap a requested
+ *  one (`pathsOverlap`, the conflict rule's containment, so a re-take of the same or a covered path counts). Rows are
+ *  the caller's own; `paths` is the normalized request. Sorted by id. */
+export function rechainTargets<R extends { readonly id: number; readonly paths: readonly string[]; readonly hardExpiresAt: number }>(
+  own: readonly R[], paths: readonly string[], now: number, verdict: LivenessVerdict,
+): R[] {
+  return own
+    .filter((c) => rechainDue(c, now, verdict) && c.paths.some((q) => paths.some((p) => pathsOverlap(p, q))))
+    .sort((a, b) => a.id - b.id);
+}
+
+/** D-8395: whether a requested path is held by a re-chained row — the row's path itself or one inside it. Such a path
+ *  rides the new chained row and is not taken again as a fresh one. */
+export const heldWithin = (path: string, held: readonly string[]): boolean =>
+  held.some((q) => path === q || path.startsWith(q + '/'));
+
 export type ClaimExpiryDecision =
   | { readonly act: 'renew'; readonly expiresAt: number }
   | { readonly act: 'lapse'; readonly endedBy: 'session-gone' | 'hard-cap' }
@@ -202,4 +257,47 @@ export function claimExpiry(
     case 'unmeasurable':
       return { act: 'hold' };
   }
+}
+
+/** A lapsed claim as the recent-lapse readers report it: its end is always known. */
+export type LapsedClaim = ClaimSummary & { readonly state: 'lapsed'; readonly endedAt: number; readonly endedBy: string };
+
+/** The earliest end a lapse may have and still be recent (D-8392): one `CLAIM_LEASE_MS` back, the same constant the
+ *  lease is, so no second knob decides how long a gap stays visible. A store query may bound its read by it; the
+ *  deciders below apply it themselves. */
+export const lapseWindowStart = (now: number): number => now - CLAIM_LEASE_MS;
+
+/**
+ * The rows that lapsed within the last `CLAIM_LEASE_MS` (D-8392, public issue #145), sorted by id. A `lapsed` row
+ * counts by its `endedAt`. A `live` row whose lease has run out is a lapse no sweep has written yet (the watcher's
+ * lane and the next claim attempt both write it); it is reported as the sweep would word it, `hard-cap` when the
+ * hard cap is what ran out (the sweep's order) and `expired` otherwise, ended at its `expiresAt`. Released and broken
+ * rows are ends a holder or the operator chose, never a lapse.
+ */
+export function recentlyLapsedClaims(rows: readonly ClaimSummary[], now: number): LapsedClaim[] {
+  const since = lapseWindowStart(now);
+  const out: LapsedClaim[] = [];
+  for (const r of rows) {
+    if (r.state === 'lapsed') {
+      if (r.endedAt !== null && r.endedAt > since) out.push({ ...r, state: 'lapsed', endedAt: r.endedAt, endedBy: r.endedBy ?? '' });
+    } else if (r.state === 'live' && r.expiresAt <= now && r.expiresAt > since) {
+      out.push({ ...r, state: 'lapsed', endedAt: r.expiresAt,
+        endedBy: r.expiresAt >= r.hardExpiresAt ? 'hard-cap' : 'expired' });
+    }
+  }
+  return out.sort((a, b) => a.id - b.id);
+}
+
+/** `POST /api/claims`' `lapsedSince` (D-8392): the caller's OWN recent lapses whose paths overlap the ones it is
+ *  taking (`pathsOverlap`, the conflict rule's containment). Someone else's lapse is not the caller's gap. Each
+ *  names when the GAP BEGAN: the row's `expiresAt`, since every lapse fires at or after it (`claimExpiry` and the
+ *  store's expiry both require `now >= expiresAt`, and the lease never outruns the hard cap). The stored `endedAt`
+ *  is when a sweep wrote the lapse, which for a row this very attempt swept is now, so it would hide the gap the
+ *  caller has to re-check; `min` keeps a row ended before its lease (none today) at its own end. */
+export function ownLapsesUnder(
+  rows: readonly ClaimSummary[], sessionId: string, paths: readonly string[], now: number,
+): ClaimLapse[] {
+  return recentlyLapsedClaims(rows, now)
+    .filter((r) => r.heldBy === sessionId && r.paths.some((p) => paths.some((q) => pathsOverlap(p, q))))
+    .map((r) => ({ id: r.id, endedAt: Math.min(r.endedAt, r.expiresAt), endedBy: r.endedBy }));
 }

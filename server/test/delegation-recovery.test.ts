@@ -87,6 +87,7 @@ import type { DelegationApplyOutcome } from '../src/coord/delegation-checkpoint.
 import * as modelNs from '../src/coord/delegation-model.js';
 import { oldRuleCheckpoint } from './delegationOldRuleFixture.js';
 import { callsIn, parsedFile, symbolOf } from './scan/symbols.js';
+import { mulberry32 } from './fakeTime.js';
 
 // A pass-through of the journal's append planner that a test can switch to "skip everything". `createLease` calls the planner after its
 // own checks, so no real input makes the planner skip the entry it was handed; this is the only way to reach that branch (fix round 1, M6).
@@ -5187,16 +5188,6 @@ describe('run 762: the zero-delta Bash retirement door, its lease guard and its 
   // ── RB-PAR: recovery parity, twin appliers over a seeded generator ─────────────────────────────────────────────────
 
   describe('RB-PAR: an applier re-opened through recover() after every step equals the live one (N = 6 seeds, 16 steps each)', () => {
-    /** mulberry32: a small seeded generator written here, so no row reads `Math.random`. */
-    function mulberry32(seed: number): () => number {
-      let a = seed >>> 0;
-      return () => {
-        a = (a + 0x6d2b79f5) >>> 0;
-        let t = Math.imul(a ^ (a >>> 15), 1 | a);
-        t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
-        return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-      };
-    }
     const STEPS = 16;
     const POOL = 6;
     const KINDS = ['equal', 'differing', 'truncated', 'unmeasured', 'post-first', 'late-post', 'gap', 'interval', 'door'] as const;

@@ -5,16 +5,19 @@
 // change to either alone reds.
 //
 // The Codex rows are the catalogue measured 2026-09-08 (spec §1): nine models,
-// of which `gpt-reserve` and `codex-auto-review` are hidden.
+// of which `gpt-reserve` and `codex-auto-review` are hidden. Their `maxContext`
+// is the 872000 the catalogue advertises today: since D-8564 it bounds a
+// measured window (`windowCeiling`), so a 272000 here would refuse every
+// measured window above the default.
 import type { Catalogue, DerivedModels, Registry } from '../../../shared/models.js';
 
 const m = (id: string, hidden = false, efforts: string[] = ['low', 'medium', 'high', 'xhigh', 'max']) =>
-  ({ id, label: id, context: 272000, maxContext: 272000, efforts, hidden, priceIn: null, priceOut: null });
+  ({ id, label: id, context: 272000, maxContext: 872000, efforts, hidden, priceIn: null, priceOut: null });
 
 export const CODEX: Catalogue = {
   probe: 'codex', fetchedAt: 1789000000, stale: false,
   models: [
-    { ...m('gpt-6-astra'), maxContext: 872000, efforts: ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'] },
+    { ...m('gpt-6-astra'), efforts: ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'] },
     m('gpt-5.6-sol'), m('gpt-5.6-terra'), m('gpt-5.6-luna'),
     m('gpt-5.5'), m('gpt-5.4-mini'),
     { ...m('gpt-5.3-codex-spark'), context: 128000, maxContext: 128000 },

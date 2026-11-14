@@ -68,17 +68,18 @@ import { readFileSync, writeFileSync, renameSync, mkdirSync, unlinkSync } from '
 import path from 'node:path';
 import { rosterFromJson, RosterInvalid } from '../shared/roster-json.mjs';
 import {
-  CLASSES, CatalogueInvalid, MODEL_ID_RE, MODELS_LANE_ID_RE, PROBE_KINDS, RegistryInvalid, SUBAGENT_CLASSES,
-  WINDOW_MAX, WINDOW_MIN, availableFor, deriveModels, parseCatalogue, parseRegistry, parseWindows,
+  CLASSES, CatalogueInvalid, MODEL_ID_RE, MODELS_DIR_NAME, MODELS_LANE_ID_RE, PROBE_KINDS, RegistryInvalid, SUBAGENT_CLASSES,
+  WINDOW_MAX, WINDOW_MIN, availableFor, catalogueFileName, deriveModels, parseCatalogue, parseRegistry, parseWindows,
+  registryFileName,
 } from '../shared/models.mjs';
 import {
-  CLIENT_DEFAULT_CONTEXT_TOKENS, MODEL_ENV_KEYS, ModelEnvInvalid, classesTsv, clearSettingsEnv, contextWindowFor,
-  effortFile, mergeSettingsEnv, modelEnvBlock, readRegular,
+  CLIENT_DEFAULT_CONTEXT_TOKENS, LANE_ENV_KEYS, ModelEnvInvalid, classesTsv, clearSettingsEnv, contextWindowFor,
+  effortFile, mergeSettingsEnv, modelEnvBlock, readRegular, windowCeiling,
 } from '../shared/modelenv.mjs';
 import { SUGGESTED_SUBAGENT_CLASS, suggestedClasses, suggestedModelMap } from '../shared/model-suggest.mjs';
 import {
   AdvanceInvalid, REASON_MAX, backfillAdvance, canaryEffort, chooseCandidate, familyOf, parseAdvance,
-  reconcilePending, recordFailure, recordMove, resolveEffort,
+  reconcilePending, recordFailure, recordMove, resolveEffort, unmeasuredMoveNotice, unmeasuredMoves,
 } from '../shared/model-advance.mjs';
 import { LitellmTemplateInvalid, renderLitellmConfig } from '../shared/litellm.mjs';
 
@@ -146,9 +147,10 @@ const SEED_FAMILIES = Object.freeze({
 const now = () => process.env['CCRC_MODELS_NOW'] ?? new Date().toISOString().replace(/\.\d{3}Z$/, 'Z');
 
 const HOME = process.env['HOME'] ?? '';
-const modelsDir = () => path.join(HOME, '.ccrc', 'models');
-const cataloguePath = (id) => path.join(modelsDir(), `${id}.json`);
-const registryPath = (id) => path.join(modelsDir(), `${id}.classes.json`);
+// D-8406: the directory and the two names the console also reads, spelled once in `shared/models.mjs`.
+const modelsDir = () => path.join(HOME, '.ccrc', MODELS_DIR_NAME);
+const cataloguePath = (id) => path.join(modelsDir(), catalogueFileName(id));
+const registryPath = (id) => path.join(modelsDir(), registryFileName(id));
 // `rm` and `materialise` both name these two by id (`materialFiles`): an ORPHAN
 // id has no `account` to build a path off, so neither builds one off it.
 const classesTsvPath = (id) => path.join(modelsDir(), `${id}.classes.tsv`);
@@ -269,6 +271,13 @@ const isAnthropicLane = (account) => account.telemetry === 'anthropic';
  *  Claude Code binary and ccrc never writes its launcher) and not Anthropic. */
 const canCarryRegistry = (account) =>
   isObj(account.exec) && account.exec.kind !== 'upstream' && !isAnthropicLane(account);
+
+/** A Codex-kind lane (`exec.kind: 'codex'`): the one kind whose settings also
+ *  carry `CODEX_LANE_ENV` (operator ruling 2026-11-12, option b — the
+ *  security-guidance plugin's LLM reviews off, because the bridge 404s them).
+ *  `canCarryRegistry` admits external, openrouter and compatible lanes too, and
+ *  those keep the reviews, so this gate is what keeps the key off them. */
+const isCodexKind = (account) => isObj(account.exec) && account.exec.kind === 'codex';
 
 /** The lane's catalogue, or null when it has never been probed. A file that
  *  EXISTS and is not a catalogue is a refusal, never "never probed": the two
@@ -928,13 +937,16 @@ function laneManifest(account, registry) {
     upstream: parsed.upstream,
     ...(probeModel === null ? {} : { probeModel }),
     units: { litellm: `ccgpt-${id}-litellm.service`, shim: `ccgpt-${id}-shim.service` },
-    // The bridge's three file names, spelled HERE and nowhere else in shipped
+    // The bridge's four file names, spelled HERE and nowhere else in shipped
     // code (`single-definition.test.ts` pins that): `bash` and the bridge read
     // them from `lane.json`. `stats` is the bridge's one non-secret output,
     // `store` the reasoning store (sqlite adds its `-wal`/`-shm` beside it),
     // `recordings` a directory written only while the lane's `record-streams`
-    // marker exists.
-    bridgeFiles: { stats: 'bridge.stats.json', store: 'reasoning.sqlite', recordings: 'recordings' },
+    // marker exists, and `requests` the per-request record (D-8619), written
+    // only while its `record-requests` marker exists, with one older
+    // generation, `<name>.1`, beside it. Every reader takes `requests` as
+    // optional: a lane.json rendered before it existed names none.
+    bridgeFiles: { stats: 'bridge.stats.json', store: 'reasoning.sqlite', recordings: 'recordings', requests: 'bridge.requests.jsonl' },
   };
 }
 
@@ -974,7 +986,7 @@ function materialise(account, registry, catalogue, windows) {
     // to compute `derived`/`settingsDrift` (spec §6.1 amendment) — never a
     // second read of `<id>.json` or of the windows file, so a materialise never
     // disagrees with the `show` answer it is bundled with.
-    block = modelEnvBlock(registry, catalogue, windows);
+    block = modelEnvBlock(registry, catalogue, windows, { codexLane: isCodexKind(account) });
   } catch (e) {
     if (!(e instanceof ModelEnvInvalid)) throw e;
     // Fix round 2A (N1): a registry reached here WITHOUT going through the
@@ -1049,7 +1061,7 @@ function materialise(account, registry, catalogue, windows) {
   return { wrote: { settings: block === null ? null : settings, classes, effort, lane } };
 }
 
-/** §11's last bullet: which of the materialiser's (up to) eight keys the
+/** §11's last bullet: which of the materialiser's keys (`LANE_ENV_KEYS`) the
  *  lane's own settings.json no longer agrees with. A MISSING key counts as
  *  drifted — for the first seven, an unset alias falls through to Anthropic's
  *  own id and the backend 404s opaquely, which is the exact failure the
@@ -1059,10 +1071,13 @@ function materialise(account, registry, catalogue, windows) {
  *  carry the key then, and a settings file that also lacks it drifts on
  *  nothing. A settings file that STILL CARRIES it drifts on it (D-5785): the
  *  next materialise deletes it (`mergeSettingsEnv` deletes every member of
- *  `MODEL_ENV_KEYS` its block omits), so the second filter below asks the same
- *  question of the same keys. Before measured windows that copy held at most
- *  `min(catalogue context, 200000)`; a measured one can hold up to 1000000.
- *  With a stale or absent catalogue the rule yields nothing, the hourly refresh
+ *  `LANE_ENV_KEYS` its block omits), so the second filter below asks the same
+ *  question of the same keys. A Codex lane's `ENABLE_CODE_SECURITY_REVIEW`
+ *  drifts the same way: on a lane that is not Codex-kind `want` omits it, so a
+ *  copy still on disk counts as drift; on a Codex lane a missing or edited one
+ *  does. That copy holds the provider's promise or a measured window, up to
+ *  1000000 (D-8564). With a stale or absent catalogue and nothing measured the
+ *  rule yields nothing, the hourly refresh
  *  materialises only after a successful probe, and a windows file deleted or
  *  broken outside the two window verbs (or a rollback past them) would leave
  *  that number in force with `show` reporting no drift at all.
@@ -1080,7 +1095,7 @@ function settingsDrift(account, registry, catalogue, windows) {
   if (registry === null) return [];
   let want;
   try {
-    want = modelEnvBlock(registry, catalogue, windows);
+    want = modelEnvBlock(registry, catalogue, windows, { codexLane: isCodexKind(account) });
   } catch {
     // An unseeded (or unroutable) lane has no expected block to compare against.
     return [];
@@ -1096,7 +1111,7 @@ function settingsDrift(account, registry, catalogue, windows) {
   }
   return [
     ...Object.keys(want).filter((k) => env[k] !== want[k]),
-    ...MODEL_ENV_KEYS.filter((k) => !(k in want) && Object.prototype.hasOwnProperty.call(env, k)),
+    ...LANE_ENV_KEYS.filter((k) => !(k in want) && Object.prototype.hasOwnProperty.call(env, k)),
   ];
 }
 
@@ -1156,7 +1171,22 @@ function describe(account, registry, catalogue, reading) {
     windows: windowsReport(reading),
     contextWindow: registry === null ? null : contextWindowFor(registry, catalogue, windows),
     advance: advanceReport(account.id),
+    windowNotices: windowNotices(account.id, registry, catalogue, windows),
   };
+}
+
+/** `show`'s and `lanes`' `windowNotices` (D-8384, public issue #2607): one sentence per class whose last move
+ *  lowered the lane's context window below the old model's measured one (`unmeasuredMoves`; D-8564: a move to a
+ *  model whose provider promise is at least that lowered nothing and is quiet), each in `unmeasuredMoveNotice`'s one
+ *  spelling, which `ccrc doctor`'s `models` row prints as a WARN (it asks `lanes`). Empty with no registry, and
+ *  with an advance file that is absent or cannot be read: `advance` already names that one. */
+function windowNotices(id, registry, catalogue, windows) {
+  if (registry === null) return [];
+  const rd = readAdvance(id);
+  if (rd.err !== undefined || rd.advance === null) return [];
+  const room = contextWindowFor(registry, catalogue, windows);
+  return unmeasuredMoves({ registry, advance: rd.advance, windows, rule: room.rule, tokens: room.tokens })
+    .map((m) => unmeasuredMoveNotice(id, m, room.tokens));
 }
 
 /** §11's ORPHAN: a registry file whose id is in no roster row — typically
@@ -1182,6 +1212,7 @@ function orphanDescribe(id, registry, catalogue, reading) {
     windows: windowsReport(reading),
     contextWindow: contextWindowFor(registry, catalogue, windowsOf(reading)),
     advance: advanceReport(id),
+    windowNotices: windowNotices(id, registry, catalogue, windowsOf(reading)),
   };
 }
 
@@ -1349,9 +1380,13 @@ function materialiseCheck(account, registry, catalogue) {
  *  says in its refusal that the windows file was already updated.
  *
  *  `set-window` refuses a `tokens` that is not digits only or lies outside
- *  `WINDOW_MIN`..`WINDOW_MAX`, and — the typo guard — a model that is neither in
+ *  `WINDOW_MIN`..`WINDOW_MAX`; — the typo guard — a model that is neither in
  *  the lane's catalogue nor one of its class models: a window for such a model
- *  changes nothing, so writing it would hide the typo. `clear-window` has no
+ *  changes nothing, so writing it would hide the typo; and (D-8564,
+ *  `above-max-context`) a window above `windowCeiling`, the catalogue's
+ *  `maxContext` for the model: the provider serves no larger window, and the
+ *  rule would count the window only up to that ceiling anyway, so writing it
+ *  would record a number nothing honours. `clear-window` has no
  *  typo guard: removing a stale entry for a model the lane no longer names is
  *  the point. Clearing an absent entry is ok with `removed: false` and writes
  *  nothing; clearing the LAST entry deletes the file, so "absent" keeps meaning
@@ -1375,7 +1410,7 @@ function windowOp(opName, a, account, registry, catalogue, reading) {
   if (reading.state === 'unreadable') {
     return refuse(1, 'windows-unreadable',
       `${reading.reason} — ${opName} rewrites that file and will not overwrite one it cannot read. Fix it by hand, `
-      + `or delete it to drop every measured window on account "${a.id}" (its lane then uses the default rule), `
+      + `or delete it to drop every measured window on account "${a.id}" (its lane then follows the provider's promise for every model), `
       + 'then re-run. Nothing was written.');
   }
   if (opName === 'set-window') {
@@ -1392,6 +1427,13 @@ function windowOp(opName, a, account, registry, catalogue, reading) {
         + 'would change nothing. set-window takes a MODEL id, not a class. Run '
         + `'ccrc models ${a.id} show' to see the lane's class models, or 'ccrc models refresh ${a.id}' if the `
         + 'model is new. Nothing was written.', 'model');
+    }
+    const ceiling = windowCeiling(catalogue, a.model);
+    if (Number(a.tokens) > ceiling) {
+      return refuse(1, 'above-max-context',
+        `${a.tokens} tokens is above the largest window the provider serves: ${a.model}'s maxContext is ${ceiling} `
+        + `in account "${a.id}"'s catalogue, so a measured window for it is at most ${ceiling}. Run `
+        + `'ccrc models refresh ${a.id}' if the provider has raised it. Nothing was written.`, 'tokens');
     }
   }
   // RULE 2's render, before any write: the mutation tail's own check, with
@@ -1504,7 +1546,10 @@ const timeOf = (v) => (typeof v === 'string' && Number.isFinite(Date.parse(v)) ?
  *   1. `to` = tokens × 9/10, rounded down to 1k; below `WINDOW_MIN`, skipped `below-minimum`.
  *   2. The floor of real usage (D-6428): `to` is raised to the route and model's `promptTokensMax`, rounded up to
  *      1k, the largest prompt the model accepted, because the refused size is the bridge's estimate (D24).
- *   3. A model no class names and the catalogue does not list: skipped `not-a-lane-model`.
+ *   3. A model no class names and the catalogue does not list: skipped `not-a-lane-model`. Then (D-8564) `to` is
+ *      capped at `windowCeiling`, the catalogue's `maxContext` for the model, the bound `set-window` refuses to
+ *      cross, so the floor of step 2 never writes a window the rule would not honour; below `WINDOW_MIN`,
+ *      `below-minimum`.
  *   4. With an entry: only a refusal later than the entry's `setAt` (`older-than-entry` otherwise, and for an entry
  *      with no readable `setAt`, which a hand wrote), and only a smaller `to` (`not-lower` otherwise), so a
  *      deliberate `set-window` after a refusal is never undone.
@@ -1580,6 +1625,10 @@ function lowerWindowsOp(a, account, registry, catalogue, reading) {
       to = Math.max(to, Math.ceil(accepted / WINDOW_ROUND) * WINDOW_ROUND);
     }
     if (!laneModel(model)) { skipped.push({ model, why: 'not-a-lane-model' }); continue; }
+    // D-8564: never above the model's ceiling, which `set-window` refuses to cross, so the file holds only windows
+    // the rule honours.
+    to = Math.min(to, windowCeiling(catalogue, model));
+    if (to < WINDOW_MIN) { skipped.push({ model, why: 'below-minimum' }); continue; }
     const hasEntry = reading.state === 'ok' && own(reading.windows, model);
     const from = hasEntry ? reading.windows[model] : null;
     if (hasEntry) {
@@ -1863,7 +1912,9 @@ function advanceCommitOp(a, account, registry, catalogue, win) {
 
   // 6. The intent, BEFORE the rename (D-5188).
   const at = now();
-  const intent = { class: cls, from, to: a.to, effortFrom, effortTo, at };
+  // `cause` (D-8384): why the family rule chose `--to`, carried onto the entry the intent becomes, a recovered
+  // one included, so a retirement to an older model reads differently from an advance.
+  const intent = { class: cls, from, to: a.to, effortFrom, effortTo, at, cause: choice.reason };
   let w = writeAdvance(a.id, { ...adv, pending: intent });
   if (w !== null) return refuse(1, w[0], w[1]);
   settled = true;
@@ -1896,7 +1947,7 @@ function advanceCommitOp(a, account, registry, catalogue, win) {
   adv = recordMove({ ...adv, pending: null,
     classes: { ...adv.classes, [cls]: { ...adv.classes[cls], previous: { model: from, effort: effortFrom } } } },
   cls, { at, how: 'advance', from, to: a.to, ok: true, canary: 'passed',
-    ...(effortFrom === effortTo ? {} : { effort: { from: effortFrom, to: effortTo } }) });
+    ...(effortFrom === effortTo ? {} : { effort: { from: effortFrom, to: effortTo } }), cause: choice.reason });
   w = writeAdvance(a.id, adv);
   // A history that could not be written leaves the intent on disk: the next
   // locked writer records the move as landed. The class DID move. So this
@@ -1998,6 +2049,10 @@ function main(argv) {
         catalogueInvalid: cat.err !== undefined ? cat.err[1] : null,
         probe: registry === null ? null : registry.probe,
         baseUrl: registry === null || registry.baseUrl === undefined ? null : registry.baseUrl,
+        // D-8384: `show`'s `windowNotices`, for every lane in ONE call, which is how `ccrc doctor`'s `models`
+        // row asks: a lane's windows and advance file are read here, never by name in bash.
+        windowNotices: windowNotices(acc.id, registry, cat.err !== undefined ? null : cat.catalogue,
+          windowsOf(readWindowsFile(acc.id))),
       });
     }
     out({ ok: true, op: 'lanes', lanes });
@@ -2008,8 +2063,11 @@ function main(argv) {
 
   if (opName === 'rm') {
     // REAP, not a mutation (spec §4.1 Lifecycle, §10, §11): deletes the six
-    // model-registry files this design owns and clears exactly the eight settings
-    // keys `modelEnvBlock` can write — nothing else in that file. NOT
+    // model-registry files this design owns and clears exactly `LANE_ENV_KEYS`
+    // from the lane's settings: every key a lane block can carry (the eight model
+    // keys and, on a Codex lane, `ENABLE_CODE_SECURITY_REVIEW`) — nothing else in
+    // that file. Because it runs before the anthropic-lane gate, this is the one
+    // verb that writes an Anthropic lane's settings, and only to clear them. NOT
     // `lane.json`, which `materialise` also writes: it is the account's, and the
     // file header names its owner and why that owner must reap it. It runs BEFORE
     // the no-such-account and anthropic-lane gates below, and never routes the
@@ -2035,7 +2093,7 @@ function main(argv) {
     if (account !== null) {
       const settingsPath = path.join(HOME, account.configDirSuffix, 'settings.json');
       try {
-        settings = clearSettingsEnv(settingsPath, MODEL_ENV_KEYS).changed ? 'cleared' : 'unchanged';
+        settings = clearSettingsEnv(settingsPath, LANE_ENV_KEYS).changed ? 'cleared' : 'unchanged';
       } catch (e) {
         if (e instanceof ModelEnvInvalid) return refuse(1, 'settings-unwritable', e.message);
         throw e;

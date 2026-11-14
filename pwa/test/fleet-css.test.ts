@@ -4,7 +4,7 @@
 import { describe, it, expect } from 'vitest';
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
-import ts from 'typescript';
+import { ts } from '../../server/test/scan/parse';
 import { BARE_ROW, CONTROL_ROW, PAGE_BODY, SELECT, TEXT_INPUT, buttonVariants } from '@ccrc/ui';
 import { cn } from '../../ui/src/lib/cn';
 

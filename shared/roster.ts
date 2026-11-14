@@ -471,7 +471,7 @@ export const POOL_NAME_RE = /^[a-z][a-z0-9-]{0,31}$/;
  *
  * Two independent hand-kept spellings already exist and must agree with this
  * one: `ccd/ccd-pool-sync:154`'s python `ID = re.compile(...)` (the writer)
- * and `ccd/ccd:2300`'s bash `[[ "$v" =~ ^[A-Za-z0-9._-]{1,64}$ ]]` (the
+ * and `_acct_pool_state`'s bash `[[ "$v" =~ ^[A-Za-z0-9._-]{1,64}$ ]]` (the
  * reader) — `pool-accounts-route.test.ts`'s parity scan holds this constant's
  * `.source` equal to both by text extraction, `POOL_NAME_RE`'s own D-2480
  * pattern. `POST /api/pools/accounts/:id` (`server/src/server.ts`) is the

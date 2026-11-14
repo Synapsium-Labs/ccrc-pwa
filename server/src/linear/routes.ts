@@ -250,6 +250,9 @@ export interface LinearWorkspaceRouteOpts {
   /** The ONE write journal (D-7671, spec §7), REQUIRED as the journal or `null`: every key act writes its row first, so
    *  null refuses all three acts. The list never needs it. */
   journal: LinearJournal | null;
+  /** D-8405: told when a key act has just learned a workspace's teams (an add, a replace, an `ok` check), so the
+   *  automatic team link runs then rather than at the next sweep. Never awaited; absent: nothing is told. */
+  onTeamsLearned?: () => void;
   /** Test seams: the network, the deadline and the clock. Absent in production. */
   fetch?: FetchLike;
   timeoutMs?: number;
@@ -420,6 +423,7 @@ export function registerLinearWorkspaceRoutes(app: FastifyInstance, opts: Linear
     const ref: LinearSlotRef = { source: 'file', id: ws.id };
     refresher.checked(ref);
     refresher.queueDirectory(ref);
+    opts.onTeamsLearned?.();
     const answer = await listAnswer();
     return act.ok(put === 'added' ? { ...answer, added: ws.id } : { ...answer, replaced: ws.id });
   });
@@ -468,6 +472,7 @@ export function registerLinearWorkspaceRoutes(app: FastifyInstance, opts: Linear
     }
     if (v.ok) {
       refresher.queueDirectory(ref);
+      opts.onTeamsLearned?.();
       return act.ok(await listAnswer());
     }
     // A check is answered with the list whatever Linear said, as the Check again is: the row says what it found.

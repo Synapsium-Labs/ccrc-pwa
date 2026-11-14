@@ -81,3 +81,9 @@ export const Default: Story = {
     }
   },
 };
+
+/** CHECK the `overlord_` mark: the word types in over 1.2s in eight steps, and the underscore, in the accent, starts to
+ *  blink once a second when it ends. Turn on reduced motion: the whole word shows at once and the underscore holds. */
+export const Overlord: Story = {
+  args: { mark: 'overlord', typed: true },
+};

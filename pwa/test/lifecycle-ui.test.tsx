@@ -747,7 +747,7 @@ describe('SessionScreen overflow menu', () => {
     fireEvent.click(screen.getByRole('button', { name: 'More' }));
     fireEvent.click(screen.getByRole('button', { name: /Change model/ }));
     // The chooser is open now — tap a model row.
-    fireEvent.click(screen.getByRole('button', { name: /Opus 5/ }));
+    fireEvent.click(screen.getByRole('button', { name: /Opus class/ }));
     expect(route).toHaveBeenCalledWith('claude:ProjectC', 'class', 'opus');
     expect(prompt).not.toHaveBeenCalled();
   });

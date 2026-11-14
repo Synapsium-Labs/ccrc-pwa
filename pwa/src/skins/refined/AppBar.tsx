@@ -12,6 +12,7 @@
 import type { ReactNode } from 'react';
 import { Button, CountBadge, Door, Icon, Wordmark } from '@ccrc/ui';
 import { commandDoor } from '../../command/door';
+import { FaceMark } from '../../face/FaceMark';
 import { AccountsStrip } from '../../fleet/AccountsStrip';
 import { badgePrint, placeBadge, useNavBadges } from '../../fleet/navBadges';
 import { NotificationBell } from '../../fleet/NotificationBell';
@@ -44,6 +45,7 @@ export function AppBar(): ReactNode {
     <>
       <div className="ref-bar">
         <Wordmark className="ref-bar-mark" />
+        <FaceMark />
         <nav aria-label="Primary" className="ref-tabs">
           {DESK_PLACES.map(({ id }) => (
             <Tab key={id} id={id} here={here === id} {...placeBadge(id, badges)} />

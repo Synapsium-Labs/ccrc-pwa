@@ -40,6 +40,7 @@ import http.server
 import json
 import re
 import secrets
+import socketserver
 import sys
 import time
 import urllib.parse
@@ -237,10 +238,19 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self._send(400, {"error": "unsupported_grant_type"})
 
 
+class Server(http.server.ThreadingHTTPServer):
+    """`ThreadingHTTPServer` without `HTTPServer.server_bind`'s `socket.getfqdn` of the bind address, which nothing
+    reads and which has taken about 35 s on macOS, past the test's 15 s wait for `port <n>` (D-8343)."""
+
+    def server_bind(self):
+        socketserver.TCPServer.server_bind(self)
+        self.server_name, self.server_port = self.server_address[:2]
+
+
 def main(argv):
     args = dict(zip(argv[0::2], argv[1::2]))
     Handler.state = State(args["--log"], args["--config"])
-    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    server = Server(("127.0.0.1", 0), Handler)
     sys.stdout.write("port %d\n" % server.server_address[1])
     sys.stdout.flush()
     server.serve_forever()

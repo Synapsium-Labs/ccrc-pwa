@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
-  boundRow, checksFor, draftPr, isFullLine, isMergedRow, parsePrLines, phaseFor,
+  boundRow, checksFor, draftPr, isFullLine, isMergedRow, mergedFactsOf, parsePrLines, phaseFor,
   prView, sweepFailureReason, unknownView,
   type CcdPrLine, type CcdPrRow,
 } from '../src/prstate.js';
@@ -556,5 +556,31 @@ describe('sweepFailureReason (landing-order wave 3c)', () => {
   ];
   it.each(rows)('%s', (_what, res, want) => {
     expect(sweepFailureReason(res)).toBe(want);
+  });
+});
+
+describe('mergedFactsOf (landing order wave 5h)', () => {
+  const HEAD40 = 'a'.repeat(40);
+  const MERGE40 = 'b'.repeat(40);
+  const merged = (over: Partial<CcdPrRow> = {}): CcdPrRow =>
+    row({ headRefOid: HEAD40, mergeCommit: { oid: MERGE40 }, ...over });
+
+  it('answers a merged bound row\'s facts', () => {
+    expect(mergedFactsOf(line({ rows: [merged()] }))).toEqual({
+      pr: 42, head: HEAD40, base: 'main', mergedAt: '2026-07-20T10:00:00Z', mergeCommit: MERGE40,
+    });
+  });
+  it('is null for a train-landed row: a --session line carries no train number', () => {
+    const landed = merged({ state: 'CLOSED', mergedAt: null, mergeCommit: null, closedAt: '2026-07-21T09:00:00Z', landedInTrain: true });
+    expect(mergedFactsOf(line({ rows: [landed] }))).toBeNull();
+  });
+  it('is null for an open row, a merge-unproven row and a line with no bound row', () => {
+    expect(mergedFactsOf(line({ rows: [merged({ state: 'OPEN', mergedAt: null, mergeCommit: null })] }))).toBeNull();
+    expect(mergedFactsOf(line({ rows: [merged({ mergeCommit: null })] }))).toBeNull();
+    expect(mergedFactsOf(line({ rows: [merged({ ours: false })] }))).toBeNull();
+    expect(mergedFactsOf(line({ rows: [] }))).toBeNull();
+  });
+  it('is null when the row names no head the landing line could record', () => {
+    expect(mergedFactsOf(line({ rows: [row({ mergeCommit: { oid: MERGE40 } })] }))).toBeNull();
   });
 });

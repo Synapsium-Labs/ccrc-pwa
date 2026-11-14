@@ -16,7 +16,7 @@
 // checks; the held-out review reads for them, and the browser case checks what the frames do.
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
-import ts from 'typescript';
+import { ts } from '../../server/test/scan/parse';
 import { describe, expect, it } from 'vitest';
 
 const PWA = path.join(import.meta.dirname, '..');

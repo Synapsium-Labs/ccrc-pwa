@@ -87,13 +87,16 @@
   gap: calc(var(--pad-card) / 2);
   min-width: 0;
 }
+.settings-characters,
 .settings-palettes {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: calc(var(--pad-card) / 2);
   min-width: 0;
 }
-.settings-palette {
+.settings-characters { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.settings-palette,
+.settings-character {
   display: block;
   position: relative;
   min-width: 0;
@@ -102,19 +105,22 @@
   background: var(--bg-surface);
   color: var(--ink-primary);
 }
-.settings-palette[data-active='true'] {
+.settings-palette[data-active='true'],
+.settings-character[data-active='true'] {
   background: var(--accent-tint);
   box-shadow: inset 3px 0 0 var(--accent);
   color: var(--ink-primary);
 }
 /* The keyboard's ring, inside the card so it is drawn in the card's own primary ink on the card's own ground: the
    input is hidden, so its own ring has nothing to draw on. */
-.settings-palette:has(input:focus-visible) {
+.settings-palette:has(input:focus-visible),
+.settings-character:has(input:focus-visible) {
   outline: 2px solid var(--ink-primary);
   outline-offset: -4px;
 }
 /* The label is the target: at least 64px tall on a phone, which is over the 44px floor at every pointer. */
-.settings-palette-hit {
+.settings-palette-hit,
+.settings-character-hit {
   display: grid;
   align-content: space-between;
   gap: calc(var(--pad-card) / 4);
@@ -122,7 +128,8 @@
   min-height: 64px;
   padding: calc(var(--pad-card) / 2);
 }
-.settings-palette-hit input {
+.settings-palette-hit input,
+.settings-character-hit input {
   position: absolute;
   inset: 0;
   width: 100%;
@@ -137,11 +144,14 @@
 .settings-palette-chip-dead { background: var(--status-dead); }
 .settings-palette-text { display: grid; gap: 2px; min-width: 0; }
 /* A name is never cut: on a phone a long one ("Catppuccin Mocha") takes a second line and its row grows with it. */
-.settings-palette-name {
+.settings-palette-name,
+.settings-character-name {
   overflow-wrap: anywhere;
   font-size: var(--fs-meta);
   font-weight: var(--weight-medium);
 }
+/* The character card's face and its name, apart (layout only; its own rule, the palette card keeps its gap). */
+.settings-character-hit { gap: var(--sp-2); }
 .settings-palette[data-active='true'] .settings-palette-name { font-weight: var(--weight-semibold); }
 /* The note and the check name the card in their selectors, so the gate measures each on the card's two grounds. */
 .settings-palette-note { display: none; font-size: var(--fs-meta); line-height: var(--lh-normal); }
@@ -179,6 +189,8 @@
 .testbox-cells { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: calc(var(--pad-card) / 2); min-width: 0; margin: 0; }
 .testbox-cells > div { display: grid; min-width: 0; }
 .testbox-cell-value { margin: 0; overflow-wrap: anywhere; font-family: var(--family-mono); font-size: var(--fs-meta); }
+/* The live probes line (D-8290): a probe name may be 64 characters with no hyphen, so it wraps anywhere. */
+.testbox-probes { min-width: 0; overflow-wrap: anywhere; }
 .testbox-tables { display: grid; gap: var(--pad-card); min-width: 0; }
 .testbox-table { width: 100%; border-collapse: collapse; table-layout: fixed; font-size: var(--fs-meta); }
 .testbox-table caption { text-align: start; padding-bottom: calc(var(--pad-card) / 4); }
@@ -198,6 +210,108 @@
 .testbox-card:not([data-band='phone']) .testbox-state-line { grid-template-columns: minmax(0, 1fr) auto; align-items: start; }
 .testbox-card:not([data-band='phone']) .testbox-cells { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .testbox-tables--side { grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; }
+
+/* Automation's Test box connect flow (test box connect plan TC15, D-8166; spec 2026-11-07 §2.2's width table). Layout only: every
+   word wears `.settings-note`, `.settings-catalogue--amber` or inherits the card's ink. The band is the flow's `data-band` (the
+   card's one read). Phone: one column, the steps a numbered list with only the current step open inside its item, every button
+   full width, the key line wrapping inside its block with Copy under it. Laptop: the step list on the left and the current step
+   on the right, the act's button at the end of its state line, settings a two-column form. Wide: a third area beside them, the
+   ledger's recent acts. A key line or a fingerprint is one long token, so it wraps anywhere rather than push the card sideways. */
+/* D-8289: the card's Claude Code builds. One layout at every width: each build one wrapping row (the build and its verdict, where
+   it came from, and for a failure the replay output and Capture again). The output wraps inside its block, so a long line
+   never pushes the card sideways. No colour is set here: the words wear `.settings-note`, `.settings-catalogue--amber` or the
+   card's ink. */
+.testbox-builds { display: grid; gap: calc(var(--pad-card) / 2); min-width: 0; padding-top: var(--pad-card); border-top: 1px solid var(--edge-subtle); }
+.testbox-builds-title { margin: 0; font-weight: var(--weight-semibold); }
+.testbox-build-list { display: grid; gap: calc(var(--pad-card) / 2); min-width: 0; margin: 0; padding: 0; list-style: none; }
+.testbox-build { display: grid; gap: calc(var(--pad-card) / 4); min-width: 0; }
+.testbox-build-head { margin: 0; overflow-wrap: anywhere; }
+.testbox-build-name { font-family: var(--family-mono); font-weight: var(--weight-medium); }
+.testbox-build-output, .testbox-builds-older { min-width: 0; }
+.testbox-builds-older > .testbox-build-list { margin-top: calc(var(--pad-card) / 2); }
+.testbox-card:not([data-band='phone']) .testbox-build-again { justify-self: start; }
+.testbox-build-log {
+  margin: calc(var(--pad-card) / 4) 0 0; max-height: 16em; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere;
+  font-family: var(--family-mono); font-size: var(--fs-meta);
+}
+.testbox-connect { display: grid; gap: var(--pad-card); min-width: 0; padding-bottom: var(--pad-card); border-bottom: 1px solid var(--edge-subtle); }
+.testbox-connect-grid { display: grid; gap: var(--pad-card); min-width: 0; }
+.testbox-steps { display: grid; gap: calc(var(--pad-card) / 2); min-width: 0; margin: 0; padding-inline-start: 1.5em; list-style: decimal; }
+.testbox-steps > li { min-width: 0; }
+.testbox-steps > li[data-state='current'] > .testbox-step-name { font-weight: var(--weight-semibold); }
+.testbox-step-open, .testbox-step-panel { display: grid; gap: calc(var(--pad-card) / 2); min-width: 0; }
+.testbox-step-open { margin-top: calc(var(--pad-card) / 2); }
+.testbox-connect-body { display: grid; gap: calc(var(--pad-card) / 2); min-width: 0; }
+.testbox-connect-stateline { display: grid; gap: calc(var(--pad-card) / 2); min-width: 0; }
+.testbox-connect-text { margin: 0; overflow-wrap: anywhere; }
+.testbox-connect-recovery { display: grid; gap: calc(var(--pad-card) / 2); min-width: 0; padding-top: calc(var(--pad-card) / 2); border-top: 1px solid var(--edge-subtle); }
+.testbox-connect-row, .testbox-manage-row { display: grid; gap: calc(var(--pad-card) / 2); min-width: 0; }
+.testbox-key-line {
+  display: block; min-width: 0; padding: calc(var(--pad-card) / 2); overflow-wrap: anywhere; word-break: break-all; white-space: pre-wrap;
+  font-family: var(--family-mono); font-size: var(--fs-meta); background: var(--bg-raised); border: 1px solid var(--edge-subtle); border-radius: var(--r-md);
+}
+.testbox-checks, .testbox-phases { display: grid; gap: calc(var(--pad-card) / 4); min-width: 0; margin: 0; padding: 0; list-style: none; }
+.testbox-checks > li, .testbox-phases > li { overflow-wrap: anywhere; }
+/* D-8399: a ledger row's changed settings, one per line under the row's line; a long name or value wraps inside its line. */
+.testbox-changes { display: grid; gap: 0; min-width: 0; margin: 0; padding: 0 0 0 var(--pad-card); list-style: none; }
+.testbox-changes > li { min-width: 0; overflow-wrap: anywhere; }
+.testbox-phases { counter-reset: phase; }
+.testbox-form { display: grid; gap: calc(var(--pad-card) / 2); min-width: 0; }
+.testbox-field { display: grid; gap: calc(var(--pad-card) / 4); min-width: 0; }
+.testbox-field > label { overflow-wrap: anywhere; }
+.testbox-family, .testbox-repo { min-width: 0; margin: 0; padding: 0; border: 0; }
+.testbox-repo { display: grid; gap: calc(var(--pad-card) / 2); padding-top: calc(var(--pad-card) / 2); border-top: 1px solid var(--edge-subtle); }
+.testbox-offers { display: flex; flex-wrap: wrap; gap: calc(var(--pad-card) / 4); min-width: 0; }
+.testbox-connected { margin: 0; font-weight: var(--weight-semibold); }
+.testbox-connect:not([data-band='phone']) .testbox-connect-grid { grid-template-columns: minmax(11rem, 1fr) minmax(0, 2fr); align-items: start; column-gap: var(--pad-card); }
+.testbox-connect[data-band='wide'] .testbox-connect-grid { grid-template-columns: minmax(8.5rem, 0.7fr) minmax(0, 2.2fr) minmax(8.5rem, 0.9fr); }
+.testbox-connect:not([data-band='phone']) .testbox-connect-stateline { grid-template-columns: minmax(0, 1fr) auto; align-items: start; }
+.testbox-connect:not([data-band='phone']) .testbox-connect-row, .testbox-manage:not([data-band='phone']) .testbox-manage-row { grid-template-columns: repeat(2, auto); justify-content: start; }
+/* The form is two columns at the laptop band, where the step's panel has room for two; at the wide band the panel shares the
+   settings card with the step list and the ledger (a settings card is narrower than the window), so it keeps one. */
+.testbox-connect[data-band='laptop'] .testbox-form { grid-template-columns: repeat(2, minmax(0, 1fr)); column-gap: var(--pad-card); }
+
+/* Settings › Automation › Test box, the CONNECTED card (D-8166, test box connect plan TC16; spec 2026-11-07 §2.2's second table). The
+   band is the card's `data-band`. Phone: one column, the state lines then the controls full width one per row, the last act one line,
+   the settings families folded, nothing cut short. Laptop: the controls at the end of the state line (an auto column), the settings
+   a two-column form, the box's families and the fleet host's in turn. Wide: the ledger's last ten acts beside the state, and the
+   settings' two groups, the box and the fleet host, side by side. A fingerprint and a setting's value are one long token, so they
+   wrap anywhere rather than push the card sideways. Colours are the skin's tokens only. */
+.testbox-manage { display: grid; gap: var(--pad-card); min-width: 0; padding-bottom: var(--pad-card); border-bottom: 1px solid var(--edge-subtle); }
+.testbox-manage-grid { display: grid; gap: var(--pad-card); min-width: 0; }
+.testbox-manage-main { display: grid; gap: calc(var(--pad-card) / 2); min-width: 0; }
+.testbox-manage-state { display: grid; gap: calc(var(--pad-card) / 4); min-width: 0; margin: 0; }
+.testbox-manage-state > div { display: grid; min-width: 0; }
+.testbox-manage-state dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+.testbox-fingerprint { overflow-wrap: anywhere; word-break: break-all; font-family: var(--family-mono); font-size: var(--fs-meta); }
+.testbox-manage-controls { display: grid; gap: calc(var(--pad-card) / 2); min-width: 0; }
+.testbox-manage-main > .testbox-connect-body { min-width: 0; }
+.testbox-settings { display: grid; gap: calc(var(--pad-card) / 2); min-width: 0; }
+.testbox-settings-groups { display: grid; gap: var(--pad-card); min-width: 0; }
+.testbox-settings-group { display: grid; gap: calc(var(--pad-card) / 2); min-width: 0; align-content: start; }
+.testbox-settings-head { margin: 0; font-weight: var(--weight-semibold); }
+.testbox-setting-now { overflow-wrap: anywhere; font-family: var(--family-mono); }
+.testbox-pairing { display: grid; gap: calc(var(--pad-card) / 4); min-width: 0; margin: 0; }
+.testbox-pairing > div { display: grid; min-width: 0; }
+.testbox-pairing dd { margin: 0; }
+.testbox-sheet-list { display: grid; margin: 0; padding: 0; list-style: none; }
+/* An access key act's notice (D-8337), above the card: its sentence, the public key words to remove by hand (wrapping anywhere, as
+   every key line does), and its buttons, full width one per row on a phone and side by side from the laptop band. */
+.testbox-key-notice { display: grid; gap: calc(var(--pad-card) / 2); min-width: 0; padding-bottom: var(--pad-card); border-bottom: 1px solid var(--edge-subtle); }
+.testbox-key-notice-row { display: grid; gap: calc(var(--pad-card) / 2); min-width: 0; }
+.testbox-key-notice:not([data-band='phone']) .testbox-key-notice-row { grid-template-columns: repeat(2, auto); justify-content: start; }
+/* D-8399: the state column has a floor. With `minmax(0, 1fr)` the controls' 28rem took all of a narrow card (the wide band's card
+   beside the ledger), and the state, the last act and its changes, were drawn one character per line in a 0px column. */
+.testbox-manage:not([data-band='phone']) .testbox-manage-main { grid-template-columns: minmax(min(16rem, 100%), 1fr) minmax(0, 28rem); align-items: start; column-gap: var(--pad-card); }
+.testbox-manage:not([data-band='phone']) .testbox-manage-main > * { grid-column: 1 / -1; }
+.testbox-manage:not([data-band='phone']) .testbox-manage-main > .testbox-manage-state { grid-column: 1; grid-row: 1; }
+.testbox-manage:not([data-band='phone']) .testbox-manage-main > .testbox-manage-controls { grid-column: 2; grid-row: 1; display: flex; flex-wrap: wrap; justify-content: flex-end; }
+.testbox-manage[data-band='wide'] .testbox-manage-grid { grid-template-columns: minmax(0, 2.4fr) minmax(12rem, 1fr); align-items: start; column-gap: var(--pad-card); }
+.testbox-settings[data-band='laptop'] .testbox-form { grid-template-columns: repeat(2, minmax(0, 1fr)); column-gap: var(--pad-card); }
+.testbox-settings[data-band='wide'] .testbox-settings-groups { grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; column-gap: var(--pad-card); }
+/* A row's Reset to default (D-8336): full width under its input on a phone (the Button's own `full`), its own width at the start of
+   the field from the laptop band. */
+.testbox-settings:not([data-band='phone']) .testbox-reset { justify-self: start; }
 
 /* Security › Linear (#1444, spec §10.3's table). Layout only, but for the team chip, which sets its ink and its ground
    together. The band is the card's `data-band` (`LinearSection`'s one read of the desk and wide queries), so each band's
@@ -252,6 +366,10 @@
 .linking-key-line input { width: calc(8ch + 1.5rem + 2px); max-width: 100%; margin: 0; }
 .linking-key-line button { width: auto; flex: 0 0 auto; }
 .linking-cell select { width: 100%; max-width: 100%; }
+/* D-8405: the automatic link's line and the candidates' one-tap buttons, under the key field; long evidence wraps. */
+.linking-candidates { display: grid; gap: calc(var(--pad-card) / 4); min-width: 0; }
+.linking-candidate { display: grid; gap: calc(var(--pad-card) / 8); min-width: 0; }
+.linking-candidate button { width: auto; max-width: 100%; justify-self: start; }
 .linking-result { min-width: 0; }
 .linking-result p { margin: 0; overflow-wrap: anywhere; }
 @container (min-width: 480px) {

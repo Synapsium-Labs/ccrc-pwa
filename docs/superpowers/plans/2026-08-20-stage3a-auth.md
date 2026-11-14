@@ -123,8 +123,7 @@
 
 ## Deviations found
 
-(Next free number at plan time: **D-121**. Next free now: **D-154**. D-136 is
-claimed by `server/src/auth/credentials.ts` from Task 8 and has no ledger entry here.)
+(Next free number at plan time: **D-121**. Next free now: **D-154**.)
 
 - **D-128 — the Origin check stopped at the socket, leaving CSRF open.** Task 8 added a
   `/ws/*` Origin check because `ts.net` is a public suffix, so every tailnet node is
@@ -176,6 +175,15 @@ claimed by `server/src/auth/credentials.ts` from Task 8 and has no ledger entry 
   into `passkeyLoginSupported` (L1 is enough to assert) and `passkeyEnrollSupported` (L2),
   because a browser that cannot enrol can still sign in with a key enrolled on a phone.
   `pwa/src/lib/passkey.ts`.
+
+- **D-8609 (2026-08-20; was D-136) — a failed enrolment write rolls the row back, so the answer is
+  true.** Task 8 claimed D-136 in `server/src/auth/credentials.ts` with no entry here, and
+  `2026-08-20-regset-atomic-write.md` defines D-136 (`mv -fT` is GNU-only), so D-8562 moved this
+  claim. When `PasskeyStore.add()`'s write does not reach the disk, the new row is taken back out
+  of memory before `{ ok: false, reason: 'write-failed' }` is returned: without that the key
+  signed in until the next restart while the response said the enrolment had failed. `recordUse`
+  deliberately does not roll back (its in-memory update is the replay defence). Pinned in
+  `server/test/auth-passkey.test.ts`.
 
 - **D-137 — the "parseable by `hashLine`, rejected by the parser" pair fails EARLIER than
   predicted.** Task 9's brief named `{n: 65536, r: 1, p: 1}` (D-126's bound) as the pair

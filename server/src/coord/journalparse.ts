@@ -217,6 +217,8 @@ export function reviveMeas(v: unknown): LifecycleMeas | null {
     witness: s(o, 'witness'),
     // Cleanup un-wedge R2 (D-8000) — the rows that hold a child, on the reclaim audit's `probe-unmeasured` line (`LifecycleMeas.heldBy`).
     heldBy: s(o, 'heldBy'),
+    // D-5945 — the stale index locks rung 6 passed, on a reclaim or expiry intent (`LifecycleMeas.staleLock`).
+    staleLock: s(o, 'staleLock'),
   };
 }
 
@@ -262,7 +264,7 @@ export function parseJournalLine(line: string): JournalRow {
     // UNIX user — identity there is attribution, not authentication
     // (`CLAUDE.md`) — so any session can append a line, and this parser is
     // the boundary that has to re-establish the invariant the writer
-    // enforces (`ccd/ccd:1535-1540`'s `_lc_emit`, which only ever sets
+    // enforces (`ccd/ccd`'s `_lc_emit`, which only ever sets
     // `badact`/`badoutcome` for a token that FAILED its vocabulary match,
     // never alongside a matched one) rather than trust it off the wire.
     // ONE condition now: `badact` only exists to answer "what did `act`
@@ -273,7 +275,7 @@ export function parseJournalLine(line: string): JournalRow {
     outcome,
     // `badoutcome` — F1: previously dropped entirely (no field on
     // `JournalRow`, `o['badoutcome']` never read), even though ccd writes it
-    // today (`ccd/ccd:1469`, `:1417-1422`) and `LifecycleEvent.badoutcome`
+    // today (`_lc_emit`'s degrade arm, through `_lc_json`) and `LifecycleEvent.badoutcome`
     // (`shared/api.ts:4873-4876`) already declares it with the identical
     // invariant `badact` has: "null whenever `outcome` is not
     // `LC_OUTCOME_UNKNOWN`... neither sends a reader to `raw` for it."

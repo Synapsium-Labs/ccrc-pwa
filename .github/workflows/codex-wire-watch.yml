@@ -1,6 +1,6 @@
 # D1, the Codex source watch (codex bridge spec §2.9; Stage 2 plan, Task 19).
 # Daily, it walks every stable openai/codex release since the last walk,
-# pair by pair, oldest first, diffs the nine wire-contract files at each pair
+# pair by pair, oldest first, diffs the ten wire-contract files (nine Rust files and the model catalogue) at each pair
 # and opens one issue per pair with findings (`codex wire: <old>..<new>`).
 # The last walked tag is the body of one issue, `codex wire: state`, which
 # the first run creates. A pair that cannot be compared ends the walk with

@@ -111,3 +111,20 @@ export const briefNotTakenBody = (worker: string, runId: number, reason: string,
 
 /** The operator push's collapse key: one per run. */
 export const briefNotTakenTag = (runId: number): string => `brief-not-taken-${runId}`;
+
+/**
+ * D-8292 (#119): A TAKEN BRIEF STARTS THE RUN. A run at `dispatched` whose worker has taken the run's wave brief (the
+ * same "taken" as above: a delivery to the run's own session reached `ingestedAt`, the worker's `UserPromptSubmit` edge
+ * after the nudge, or was acked) moves to `working`. `CoordStore.startRunsOnTakenBrief` is the one writer, through the
+ * one state writer (`advanceInner`), from the mail sweep. Before this only the coordinator's `{"to":"working"}` advance
+ * made the move, and a run whose coordinator never sent it sat at `dispatched` however long its worker worked.
+ *
+ * It is a DERIVED move and says so: `causedBy` is `'sweep'` (the trail's "ccrc") and the detail names the delivery and
+ * how it was taken. It claims only that the worker started a turn on its brief, never progress: `items` still counts
+ * only what the coordinator settled (D-5914). Only `dispatched` is ever moved, so a run that went on to review, or a
+ * closed one, is never sent back.
+ */
+export const BRIEF_TAKEN_START_PREFIX = 'work-started:';
+export type BriefTakenHow = 'ingested' | 'acked';
+export const briefTakenStartDetail = (deliveryId: number, how: BriefTakenHow): string =>
+  `${BRIEF_TAKEN_START_PREFIX} the worker took its wave brief (delivery ${deliveryId}, ${how})`;

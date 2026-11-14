@@ -23,6 +23,7 @@ import type { ChildReclaimOutcome, ChildReclaimRequest } from './coord/childRecl
 import type { BoxTokenHolder } from './coord/token.js';
 import type { TokenRouteDriver } from './token/routes.js';
 import type { CoordStore } from './coord/store.js';
+import type { PlanStorePort } from './coord/planStore.js';
 import type { WatcherCoordPort } from './coord/ports.js';
 import type { PoolEdgeLog } from './coord/pooledgelog.js';
 import type { CataloguePoller } from './update/catalogue.js';
@@ -30,6 +31,9 @@ import type { UpdateIntentLog } from './coord/updateintentlog.js';
 import type { CollectLaneJournal } from './collectLane.js';
 import type { LocalUpdateSpawn, SendUpdateOp } from './update/converge.js';
 import type { AccountAudit } from './accounts/audit.js';
+import type { TestboxAudit } from './testboxAudit.js';
+import type { TestboxAdminOps } from './testboxAdmin.js';
+import type { BuildCaptureTransport } from './buildCaptureLane.js';
 import type { AccountOps } from './accounts/ops.js';
 import type { AuthAttempts } from './accounts/attempts.js';
 import type { FetchLike } from './linear/client.js';
@@ -188,12 +192,23 @@ export interface Deps {
    *  consumers are the proxy's write routes and the Settings key routes (LK9, LK11). Absent (a test, a script): a
    *  route that needs it answers `linear-unavailable` before any other work, and nothing calls Linear (D-7684). */
   linearJournal?: LinearJournal;
+  /** D-8181: the plan tables through their port (`planStorePort(coord.db)`), built once in `index.ts`; the plan routes' store. Absent (a test, a script): they answer `unavailable`. */
+  plan?: PlanStorePort;
   /** D-7672 (#1444, spec §8): the policy decision point on Linear writes; `index.ts` wires `allowAll`. Absent: as
    *  `linearJournal`. Never a grant by actor. */
   linearPolicy?: LinearWritePolicy;
   /** Spec §13.2, G13 (accounts plan Task A7): the ONE `AccountOps` arm, chosen in `index.ts` by `cfg.fleetMode` only
    *  (`accountOpsFor`). The account routes (A14 onward) are its consumers. */
   accountOps?: AccountOps;
+  /** D-8166 (test box connect plan TC12): the test box ledger over this process's one coord.db, built in `index.ts`. Absent
+   *  (a test, a script): no row is written. */
+  testboxAudit?: TestboxAudit;
+  /** D-8166 (plan TC12): the ONE `TestboxAdminOps` arm, chosen in `index.ts` by `cfg.fleetMode` only (`testboxAdminOpsFor`).
+   *  The test box admin routes are its consumer; absent, they answer `fleetFailed` once the gate passes. */
+  testboxAdmin?: TestboxAdminOps;
+  /** D-8289: the capture queue's transport to the test box, built in `index.ts`. Absent (a test, a script): builds are
+   *  recorded and no job is sent. */
+  buildCapture?: BuildCaptureTransport;
   /** The Linear lookup's test seams (named workspaces S4/S5): the network call and its deadline, read by the preview
    *  route and the workspace create alike so a test reaches neither the network nor an 8 s wait. Absent in
    *  production, where the client's own `fetch` and `LINEAR_TIMEOUT_MS` apply. */

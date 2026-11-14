@@ -154,7 +154,7 @@ describe('session pickers write the routing record', () => {
   it('a tap on Opus 5 calls api.route(id, "class", "opus"), and clears on model:"Opus 5"', async () => {
     const { fleet } = renderScreen();
     openModelSheet();
-    fireEvent.click(screen.getByRole('button', { name: /Opus 5/ }));
+    fireEvent.click(screen.getByRole('button', { name: /Opus class/ }));
 
     expect(route).toHaveBeenCalledWith(ID, 'class', 'opus');
     expect(prompt).not.toHaveBeenCalled();
@@ -363,7 +363,7 @@ describe('the routing record on the wire drives the pickers directly (routing sl
     expect(screen.queryByText('queued')).not.toBeInTheDocument();
 
     openModelSheet();
-    for (const name of ['Opus 5.5', 'Sonnet 5', 'Fable 5', 'Haiku 4.5', 'Default']) {
+    for (const name of ['Opus class', 'Sonnet class', 'Fable class', 'Haiku class', 'Default']) {
       expect(screen.getByRole('button', { name })).not.toHaveClass('opt--selected');
     }
   });
@@ -396,7 +396,7 @@ describe('the routing record on the wire drives the pickers directly (routing sl
     expect(screen.queryByText('queued')).not.toBeInTheDocument();
 
     openModelSheet();
-    for (const name of ['Opus 5.5', 'Sonnet 5', 'Fable 5', 'Haiku 4.5', 'Default']) {
+    for (const name of ['Opus class', 'Sonnet class', 'Fable class', 'Haiku class', 'Default']) {
       expect(screen.getByRole('button', { name })).not.toHaveClass('opt--selected');
     }
   });
@@ -414,12 +414,12 @@ describe('the routing record on the wire drives the pickers directly (routing sl
     });
     openModelSheet();
 
-    const opus = screen.getByRole('button', { name: /Opus 5/ });
+    const opus = screen.getByRole('button', { name: /Opus class/ });
     expect(opus.className).toContain('opt--selected');
-    expect(opus.textContent).toContain('serving Haiku 4.5 (share ceiling)');
+    expect(opus.textContent).toContain('serving Haiku class (share ceiling)');
     // On the INTENDED row and nowhere else — the Haiku row is not active and
     // says nothing about itself.
-    expect(screen.getByRole('button', { name: /Haiku 4\.5$/ }).textContent).not.toContain('share ceiling');
+    expect(screen.getByRole('button', { name: /Haiku class$/ }).textContent).not.toContain('share ceiling');
   });
 
   it('a degraded stamp naming the intended class itself says nothing — "serving Opus 5" beside active Opus 5 is no claim', () => {
@@ -429,7 +429,7 @@ describe('the routing record on the wire drives the pickers directly (routing sl
     });
     openModelSheet();
 
-    expect(screen.getByRole('button', { name: /Opus 5/ }).className).toContain('opt--selected');
+    expect(screen.getByRole('button', { name: /Opus class/ }).className).toContain('opt--selected');
     expect(screen.queryByText(/share ceiling/)).not.toBeInTheDocument();
   });
 
@@ -440,7 +440,7 @@ describe('the routing record on the wire drives the pickers directly (routing sl
     });
     openModelSheet();
 
-    expect(screen.getByRole('button', { name: /Opus 5/ }).className).toContain('opt--selected');
+    expect(screen.getByRole('button', { name: /Opus class/ }).className).toContain('opt--selected');
     expect(screen.queryByText(/share ceiling/)).not.toBeInTheDocument();
   });
 
@@ -462,8 +462,8 @@ describe('the routing record on the wire drives the pickers directly (routing sl
     });
     openModelSheet();
 
-    const opus = screen.getByRole('button', { name: /Opus 5/ });
-    expect(opus.textContent).toContain('serving Haiku 4.5 (share ceiling)');
+    const opus = screen.getByRole('button', { name: /Opus class/ });
+    expect(opus.textContent).toContain('serving Haiku class (share ceiling)');
     expect(opus.textContent).toContain('inert on this lane');
   });
 
@@ -622,7 +622,7 @@ describe('routing slice 6 whole-branch review fix wave', () => {
     const rawRoute = { fields: { class: 'opus' }, degraded: null, inert: [] } as unknown as FleetSession['route'];
     expect(() => renderScreen({ model: 'Opus 5', route: rawRoute })).not.toThrow();
     openModelSheet();
-    expect(screen.getByRole('button', { name: /Opus 5/ }).className).toContain('opt--selected');
+    expect(screen.getByRole('button', { name: /Opus class/ }).className).toContain('opt--selected');
   });
 });
 
@@ -649,5 +649,71 @@ describe("the header's model chip asks only what the lane can read back (desktop
     const { fleet } = renderScreen(askedOpus);
     act(() => { fleet.setState({ roster: withLaneProvider('anthropic') }); });
     expect(screen.getByText('queued')).toBeInTheDocument();
+  });
+});
+
+// D-8406: the model sheet names each class's model from the session's lane registry (`GET /api/models/:lane`), never
+// from a name the tree spells. The operator's report of 2026-11-13: a gpt-lane session listed four model names its
+// lane no longer ran. Here the lane's files answer, and the rows follow them; with no answer, the rows are class names.
+describe('the model sheet names its rows from the lane registry (D-8406)', () => {
+  const lane = (opus: [string, string]) => ({
+    ok: true, lane: 'gpt',
+    models: { kind: 'read', classes: {
+      fable: { model: 'gpt-6-astra', label: 'GPT-6-Astra' }, opus: { model: opus[0], label: opus[1] },
+      sonnet: { model: 'gpt-6.1-terra', label: 'GPT-6.1 Terra' }, haiku: { model: 'gpt-6-luna', label: 'GPT-6 Luna' },
+    } },
+  });
+  const answering = (body: unknown | null): string[] => {
+    const asked: string[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (url: RequestInfo | URL) => {
+      const u = String(url);
+      if (u.includes('/api/models/')) {
+        asked.push(u);
+        return body === null ? new Response('{}', { status: 404 }) : new Response(JSON.stringify(body), { status: 200 });
+      }
+      return new Response('{}', { status: 200 });
+    }));
+    return asked;
+  };
+  const rowNames = (): string[] =>
+    Array.from(document.querySelectorAll<HTMLElement>('[role="dialog"] button.opt')).map((b) => b.textContent ?? '');
+
+  it('a gpt session lists the catalogue label of each class\'s registry model, and lights the live one', async () => {
+    const asked = answering(lane(['gpt-6.1-sol', 'GPT-6.1-Sol']));
+    renderScreen({ wrapper: 'gpt', model: 'gpt-6.1-sol[1m]' });
+    openModelSheet();
+    await waitFor(() => expect(screen.getByRole('button', { name: /GPT-6\.1-Sol/ })).toBeInTheDocument());
+    expect(asked.some((u) => u.endsWith('/api/models/gpt'))).toBe(true);
+    for (const name of [/GPT-6-Astra/, /GPT-6\.1-Sol/, /GPT-6\.1 Terra/, /GPT-6 Luna/]) {
+      expect(screen.getByRole('button', { name })).toBeInTheDocument();
+    }
+    expect(screen.getByRole('button', { name: /GPT-6\.1-Sol/ }).className).toContain('opt--selected');
+    expect(screen.getByRole('button', { name: /GPT-6\.1-Sol/ }).textContent).toContain('Opus class');
+    expect(screen.getByRole('button', { name: /GPT-6-Astra/ }).className).not.toContain('opt--selected');
+    // A tap still sends the class alias, whatever the label says.
+    fireEvent.click(screen.getByRole('button', { name: /GPT-6 Luna/ }));
+    expect(route).toHaveBeenCalledWith(ID, 'class', 'haiku');
+  });
+
+  it('a model advance on the lane changes the label with no code change', async () => {
+    answering(lane(['gpt-6.2-sol', 'GPT-6.2-Sol']));
+    renderScreen({ wrapper: 'gpt', model: 'gpt-6.2-sol' });
+    openModelSheet();
+    await waitFor(() => expect(screen.getByRole('button', { name: /GPT-6\.2-Sol/ })).toBeInTheDocument());
+    expect(screen.queryByRole('button', { name: /GPT-6\.1-Sol/ })).toBeNull();
+    expect(screen.getByRole('button', { name: /GPT-6\.2-Sol/ }).className).toContain('opt--selected');
+  });
+
+  it('a lane whose registry cannot be read lists class names, never a model name', async () => {
+    const asked = answering(null);
+    renderScreen({ wrapper: 'gpt', model: 'gpt-6.1-sol' });
+    openModelSheet();
+    await waitFor(() => expect(asked.length).toBeGreaterThan(0));
+    await act(async () => { await Promise.resolve(); });
+    const names = rowNames();
+    expect(names.length, 'CONTROL: the sheet has its rows').toBe(4);
+    expect(names.map((n) => n.replace(/\s+/g, ' ').trim()))
+      .toEqual(['Fable class', 'Opus class', 'Sonnet class', 'Haiku class']);
+    expect(names.join(' ')).not.toMatch(/\b(GPT-\d|Opus \d|Sonnet \d|Haiku \d|Fable \d)/);
   });
 });

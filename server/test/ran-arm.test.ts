@@ -146,16 +146,19 @@ describe('ccd() carries the arm, and nothing else moves', () => {
     expect(res).toEqual({ ok: false, stdout: '', stderr: 'disconnected', killed: UNMEASURED, signal: UNMEASURED,
       ran: false, reason: 'transport', detail: 'disconnected' });
     expect(cutShort(res)).toBe(UNMEASURED);
+    expect('exitCode' in res).toBe(false);
   });
 
   it('ok:false is the arm\'s own claim: a not-ran answer with code 0 still reaches CcdResult as ok:false', async () => {
     const res = await via({ code: 0, stdout: '', stderr: '', ran: false, reason: 'transport', detail: 'disconnected' });
     expect(res).toMatchObject({ ok: false, ran: false, reason: 'transport' });
+    expect('exitCode' in res).toBe(false);
   });
 
   it('a local spawn error keeps its measured halves: cutShort false, as before', async () => {
     const res = await via({ code: 1, stdout: '', stderr: 'x', killed: false, signal: null, ran: false, reason: 'spawn', detail: 'x' });
     expect(res).toMatchObject({ ok: false, killed: false, signal: null, ran: false, reason: 'spawn' });
+    expect('exitCode' in res).toBe(false);
     expect(cutShort(res)).toBe(false);
   });
 
@@ -165,8 +168,9 @@ describe('ccd() carries the arm, and nothing else moves', () => {
     ['a bare literal', { ran: true, code: 1, stdout: '', stderr: 'ccd: refused' }],
   ])('a ran answer (%s) reaches CcdResult as ran:true and nothing else new', async (_what, r) => {
     const res = await via(r);
-    expect(Object.keys(res).sort()).toEqual(['killed', 'ok', 'ran', 'signal', 'stderr', 'stdout']);
+    expect(Object.keys(res).sort()).toEqual(['exitCode', 'killed', 'ok', 'ran', 'signal', 'stderr', 'stdout']);
     expect(res.ran).toBe(true);
+    expect((res as { exitCode?: number }).exitCode).toBe(r.code);
   });
 });
 

@@ -216,6 +216,8 @@ describe('workspace refusal census (ARCH-41, #776): today’s client-read refusa
     'spawn-failed': 'journal', 'purge-refused': 'journal', 'purge-incomplete': 'journal', 'purge-mechanism-absent': 'journal',
     'pin-failed': 'journal', 'unit-still-active': 'journal', 'branch-unmeasured': 'journal', 'probe-unmeasured': 'journal',
     'token-malformed': 'journal', 'run-id-malformed': 'journal', 'containment-refuted': 'journal',
+    // a fresh start the roll could not prove (overlord W1a): a session's conversation, not a workspace's state.
+    'roll-fresh-unproven': 'journal',
   };
   it('every client-read word is a census code or on the named exclusion list (a new ccd refusal turns this red)', () => {
     const codes = new Set(WORKSPACE_REFUSAL_CENSUS.map((x) => x.code));

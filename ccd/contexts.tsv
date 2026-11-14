@@ -9,6 +9,9 @@
 # Rows are in definition order, ccd/ccd first and then its libraries in load order, ccd/lib/disk-retention.sh (D-6913)
 # ccd/lib/train-proof.sh (D-7463) and ccd/lib/delegation-lease.sh (wave 5), which ccd loads at its foot:
 # <function name><TAB><context>.
+_tmx_sock	C10
+_tmx_argv	C10
+_tmx	C10
 _plat_mv_notdir	K
 _plat_ln_swap	K
 _plat_ctime	K
@@ -187,6 +190,7 @@ _project_origin_seed	C4
 _project_origin_make	C4
 cmd_project_add	C4
 cmd_ws_archive	C4
+_ws_archive_unrecorded_empty	C4
 _ws_archive_manifest	C4
 cmd_ws_restore	C4
 _attic_project	C4
@@ -316,6 +320,7 @@ _avail	C1
 _swap_target	C1
 _pane_measurable	C3
 _pane_narrow_note	C1
+_pane_type_ready	C3
 _pane_auto_continue_armed	C3
 _pane_born	C3
 _session_hard_blocked	C1
@@ -431,6 +436,11 @@ _pane_scope_note	C2
 _pane_scope_detach	C2
 _pane_scope_stop	C2
 _pane_scope_reap	C2
+_graceful_stop_note	C2
+_graceful_stop_same	C2
+_graceful_stop_before	C2
+_graceful_stop_after	C2
+_graceful_stop_observe	C2
 _end_cause	C2
 _end_record	C2
 _end_note_gone	C2
@@ -446,7 +456,10 @@ _child_spawn_compose	C5
 _account_spawn_compose	C2
 _browser_mcp_box	C2
 _browser_spawn_compose	C2
+_spawn_settings_last	C2
 _fleet_spawn_compose	C2
+_profile_spawn_compose	C2
+_compact_text_to	C3
 _ws_tmproot_witness_file	C4
 _ws_tmproot_aside_path	C4
 _reg_id_ok	C1
@@ -456,6 +469,7 @@ _ws_tmproot_witness_parse	C4
 _ws_tmproot_witness_read	C4
 _ws_tmproot_witness_write	C4
 _child_runid_valid	C5
+_spawn_mode	C2
 _spawn_start	C2
 _spawn_settle	C2
 _spawn	C2
@@ -499,6 +513,9 @@ _transcript_matches	C1
 _sidecar_matches	C1
 _swap_carry_jsonl	C1
 _carry_slot_take	C1
+_inflight_slot_take	C1
+_inflight_note	C1
+_inflight_write	C1
 _swap_carry_merge_walk	C1
 _carry_link_route	C1
 _carry_py	C1
@@ -573,6 +590,7 @@ cmd_hibernate	C4
 cmd_forget	C4
 cmd_ls	C1
 cmd_reclaim_pause	C4
+_testbox_parity_armable	C2
 cmd_testbox_remote	C2
 cmd_pane_scope_stop	C2
 cmd_scope_sweep_busy	C4
@@ -615,6 +633,9 @@ _ws_reclaim_main_line_refuse	C4
 _ws_reclaim_branch_state	C4
 _ws_reclaim_tip_read	C4
 _ws_reclaim_head_unborn	C4
+_ws_index_lock_state	C4
+_ws_stale_lock_doc	C4
+_ws_stale_lock_meas	C4
 _ws_reclaim_gitdir_own	C4
 _ws_reclaim_foreign_clean	C4
 _ws_reclaim_logs_readable	C4

@@ -3,5 +3,6 @@
   "maxDelta": 117,
   "d": "D-7902",
   "reason": "a deliberate stop takes its pane scope down: the one live pane read (_pane_scope_of, which _panescope_record now calls) and its bounded tmux call (_pane_scope_tmux), the stop and its detached reap with each of the five checks, and the switch's one writer (cmd_pane_scope_stop); measured +117 net code lines against the merge-base; kept inline because the read must stay beside the marker's one writer for the K16 census, the verbs that call it are here, and a library split would need a digest-checked install of its own",
-  "added": "2026-11-04"
+  "added": "2026-11-04",
+  "createdAt": "2026-11-05"
 }

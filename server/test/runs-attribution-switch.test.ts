@@ -33,6 +33,7 @@ import type { BuildInfo } from '../../shared/buildinfo.js';
 import { testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
 import { okRuns, parentOfSession } from './coordReadHelpers.js';
+import { legacyOpens } from './helpers/plan.js';
 
 const TOKEN = 'f'.repeat(64);
 const headers = { 'x-ccrc-mail-token': TOKEN };
@@ -80,7 +81,7 @@ const openApp = async (home: string, opts: { role?: 'server' | 'both'; over?: Pa
   const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
   const base = testDeps(home, runner);
   const cfg = opts.role !== undefined ? { ...base.cfg, role: opts.role } : base.cfg;
-  const app = await buildServer({ ...base, cfg, mailToken: TOKEN, coord, ...opts.over });
+  const app = legacyOpens(await buildServer({ ...base, cfg, mailToken: TOKEN, coord, ...opts.over }), coord.db);
   return { app, coord };
 };
 /** The fleet NOT upgraded: a server box whose fleet stamp is an older sha with

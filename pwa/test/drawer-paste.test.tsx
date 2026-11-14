@@ -413,13 +413,13 @@ function mount(view: 'wrapped' | 'grid') {
  *  named by its `aria-label`, so the attribute IS its accessible name. */
 const barButton = (name: string): HTMLButtonElement | null =>
   document.querySelector<HTMLButtonElement>(`.term-keys button[aria-label="${name}"]`);
-/** Tap ⋯ (when its row is closed), then `ctrl`. */
+/** Tap ⋯ (when its row is closed), then `ctrl` (named `Ctrl (Control)`, its legend leading, D-8383). */
 const latch = (): void => {
-  if (barButton('Control') === null) fireEvent.click(barButton('More keys')!);
-  fireEvent.click(barButton('Control')!);
-  expect(barButton('Control')).toHaveAttribute('aria-pressed', 'true');
+  if (barButton('Ctrl (Control)') === null) fireEvent.click(barButton('More keys')!);
+  fireEvent.click(barButton('Ctrl (Control)')!);
+  expect(barButton('Ctrl (Control)')).toHaveAttribute('aria-pressed', 'true');
 };
-const ctrlPressed = (): string | null => barButton('Control')?.getAttribute('aria-pressed') ?? null;
+const ctrlPressed = (): string | null => barButton('Ctrl (Control)')?.getAttribute('aria-pressed') ?? null;
 
 /** A `beforeinput` as a browser dispatches it. A composition's is not
  *  cancelable (Input Events Level 2), and a browser will not let it be. */

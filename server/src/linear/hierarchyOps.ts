@@ -117,7 +117,6 @@ const initiativeRecord = record({
 const milestoneRecord = record({
   id: f('id', uuid), name: f('name', name), description: f('description', markdownOrNull),
   targetDate: f('targetDate', dateOrNull), sortOrder: f('sortOrder', sortOrder), updatedAt: f('updatedAt', time),
-  creatorId: f('creator', relationId),
 });
 const projectRecord = record({
   id: f('id', uuid), name: f('name', name), description: f('description', markdownOrNull), updatedAt: f('updatedAt', time),
@@ -130,7 +129,7 @@ const projectRecord = record({
 const changedMilestoneRecord = record({
   id: f('id', uuid), name: f('name', name), description: f('description', markdownOrNull),
   targetDate: f('targetDate', dateOrNull), sortOrder: f('sortOrder', sortOrder), updatedAt: f('updatedAt', time),
-  projectId: f('project', relationId), creatorId: f('creator', relationId),
+  projectId: f('project', relationId),
 });
 const namedRecord = record({
   id: f('id', uuid), name: f('name', name), createdAt: f('createdAt', time), creatorId: f('creator', relationId),

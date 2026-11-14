@@ -298,3 +298,11 @@ describe('each regex is bound to the line the real ccd writes', () => {
     expect(ccdSource()).toContain(`echo "$(date '+%F %T') swap $id: $cur -> $target (uuid $uuid)" >> "$REG/swap.log"`);
   });
 });
+
+describe('an unreadable swap.log (a directory at its path) is unmeasured, never a traceback (D-8353)', () => {
+  it('stage 4', () => {
+    const dir = path.join(h.home, 'a-directory');
+    fs.mkdirSync(dir);
+    expect(run(h.home, ['--swap-log', dir])).toEqual({ swap_log: 'unmeasured', error: 'IsADirectoryError' });
+  });
+});

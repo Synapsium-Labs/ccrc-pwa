@@ -2999,7 +2999,8 @@ button.proj-card-pool::before {
 }
 .run-row .run-crossing-glyph { color: var(--ink-tertiary); }
 .run-row .run-kind-glyph { color: var(--ink-tertiary); }
-.run-row .run-tally, .run-row .run-when {
+/* D-8292: the worker branch's commit count sits beside the tally in the tally's own ink: a fact, never an alarm. */
+.run-row .run-tally, .run-row .run-commits, .run-row .run-when {
   font-size: var(--fs-2xs); font-variant-numeric: tabular-nums; color: var(--ink-tertiary);
 }
 /* Task 3 (spawn visibility): the dispatch window and the wedge. Scoped under
@@ -3070,6 +3071,14 @@ button.proj-card-pool::before {
 .run-row .run-resumed {
   font-size: var(--fs-2xs); color: var(--ink-tertiary);
 }
+/* D-8285 (#119): the worker heartbeat, `workerSeenNote`'s words ("last seen 5m ago"). `.run-when`'s ink and numerals: a
+   fact about the run, not an alarm. Quiet past the stall watch's quiet time, it takes `.run-warn`'s amber
+   (`--status-attention-text`, already priced on this ground) and the word "quiet" says it a second time, so it is never
+   read out of colour alone. Wraps whole at every width; no --glow, no animation (runs are not living panes). */
+.run-row .run-seen {
+  font-size: var(--fs-2xs); font-variant-numeric: tabular-nums; color: var(--ink-tertiary);
+}
+.run-row .run-seen[data-quiet="true"] { color: var(--status-attention-text); }
 /* Child-reclamation wave 5 (spec §5.9): what became of a finished run's CHILD
    workspace. Scoped under `.run-row`, which is self-grounded (background and
    colour both set), so these inherit the recovered ground `.run-row .run-kind`
@@ -3530,6 +3539,17 @@ button.proj-card-pool::before {
    class chooser. No row gap: every control on the group is already a 44px
    box. */
 .fleet-head > .fleet-head-right { flex-wrap: wrap; justify-content: flex-end; row-gap: 0; }
+/* The face beside the wordmark (Overlord face plan, Task 8; review fixes F1 and R2-1). The head spreads its children apart
+   and sits them on the text baseline, so a face set loose in it shrinks (30px at 390, not 32), lies on the baseline and, at
+   390, squeezes the wordmark onto two lines (head 48px -> 83px). So the wordmark and the face are ONE group, `.fleet-id`:
+   the face is centred on the wordmark inside the group, so it is level with the wordmark on the head's first row whether the
+   right group wraps or not, and the group takes the head's baseline from the wordmark, as the bare wordmark did. The wordmark
+   keeps its one line and the face its one whole 32px cell. Where the right group cannot fit beside them (390 and below,
+   with a session count) it takes a second row, as it already did at 360, and the head grows by one 32px cell: 76px against
+   48px at 390, the wordmark never wrapping. Layout only: no animation, filter or shadow. */
+.fleet-head > .fleet-id { flex: none; display: flex; align-items: center; gap: var(--sp-2); }
+.fleet-head .fleet-id > .wordmark { flex: none; white-space: nowrap; }
+.fleet-head .fleet-id > .face-mark { flex: none; }
 
 /* — centralised update management W3, Task 7: SettingsScreen's Updates section —
    The section is a hairline-topped block on the screen's own ground, not a

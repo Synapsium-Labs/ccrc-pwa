@@ -27,6 +27,7 @@ import type { CcdArgv } from '../src/ccdargv.js';
 import { configDirFor, type CcrcConfig } from '../src/config.js';
 import { localIO } from '../src/io.js';
 import { testDeps } from './helpers.js';
+import { seedLegacyProgramme } from './helpers/plan.js';
 
 const STORE = 'server/src/coord/store.ts';
 const OLD = 1_700_000_000_000;
@@ -190,6 +191,7 @@ describe('every bind site records an incarnation, or is named (ARCH-60 follow-up
     seedRow(home, CLAIMANT);
     const { app, coord } = await appFor(home, recorder().run);
     try {
+      seedLegacyProgramme(coord.db, 'prog-wave', 'demo');
       birthOnRecord(coord, WORKER, kind);
       const res = await app.inject({ method: 'POST', url: '/api/runs', headers: { 'x-ccrc-mail-token': ID_GATE_TOKEN },
         payload: { program: 'prog-wave', title: 'wave', project: 'demo', wave: 2, waveOf: 3, claimedBy: CLAIMANT,

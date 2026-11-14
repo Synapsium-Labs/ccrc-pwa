@@ -510,7 +510,9 @@ export function stallSettingsChange(before: StallSettingsRead, after: StallSetti
 
 /** One `run_events` row as the count reads it (§11): the store returns the window's rows and spells no detail head;
  *  the classification happens here, in L1. */
-export interface StallObservationRow { readonly at: number; readonly detail: string | null }
+export interface StallObservationRow {
+  readonly eventId: number; readonly runId: number; readonly at: number; readonly detail: string | null;
+}
 type StallNoticeRow = StallNoticeCount['row'];
 /** The four rows, in L0 key order, derived. */
 const STALL_NOTICE_ROWS = Object.keys(STALL_NOTICE_TEXT) as StallNoticeRow[];
@@ -522,7 +524,7 @@ const STALL_ROLE_ROW: Readonly<Record<StallRecipient, StallNoticeRow>> = { worke
 /** The notice counts by role, live (`sent`) and shadow apart, over rows the store already windowed. A row that is not
  *  exactly a stall detail of this build is skipped, and so is a rung its arm does not have (`stallArmHasRung` asks
  *  before `rungRecipient` would throw). Always the four rows, zeros included, in L0 key order. */
-export function stallNoticeCounts(rows: readonly StallObservationRow[]): StallNoticeCount[] {
+export function stallNoticeCounts(rows: readonly Pick<StallObservationRow, 'at' | 'detail'>[]): StallNoticeCount[] {
   const sent = new Map<StallNoticeRow, number>();
   const shadow = new Map<StallNoticeRow, number>();
   for (const r of rows) {

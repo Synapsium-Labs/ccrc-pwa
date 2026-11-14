@@ -1,5 +1,12 @@
+import fs from 'node:fs';
+import { homedir } from 'node:os';
 import { spawn } from 'node-pty';
-import { tmuxTarget } from '../../shared/tmux-target.js';
+import { readTmuxSocketSetting, tmuxCommand, tmuxTarget, type TmuxSocketSetting } from '../../shared/tmux-target.js';
+
+/** D-8270: the fleet's tmux socket setting, `<home>/.ccrc/tmux-socket`, read at every call, the file `ccd`'s own
+ *  lookup (`_tmx_sock`) reads, so the drawer and every whitelisted tmux exec go where ccd's own calls go. `home`
+ *  defaults to this process's HOME, the one the ccd it spawns inherits. */
+export const fleetTmuxSocket = (home: string = homedir()): TmuxSocketSetting => readTmuxSocketSetting(home, fs);
 
 /**
  * ptyOpen backing implementation — spawns a real node-pty attached to the
@@ -36,7 +43,8 @@ export function isSessionIdAllowed(sessionId: string): boolean {
 }
 
 export const spawnFleetPty: PtySpawn = (sessionId, cols, rows) => {
-  const p = spawn('tmux', ['attach', '-t', tmuxTarget(sessionId)], {
+  const t = tmuxCommand(fleetTmuxSocket(), ['attach', '-t', tmuxTarget(sessionId)]);   // D-8270: on the fleet's socket
+  const p = spawn(t.file, [...t.args], {
     name: 'xterm-256color',
     cols,
     rows,

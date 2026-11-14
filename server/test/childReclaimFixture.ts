@@ -333,3 +333,24 @@ export function childIndex(h: PrHarness, c: Child): { file: string; mtimeMs: num
   const file = h.git(c.wt, 'rev-parse', '--path-format=absolute', '--git-path', 'index');
   return { file, mtimeMs: fs.statSync(file).mtimeMs, bytes: fs.readFileSync(file).toString('base64') };
 }
+
+/** D-5945: rung 6's process probe answering `rc` for an `index.lock` alone (recorded in `ccd-calls` as `path-users
+ *  <path>`): 0 nobody, 1 a process holds it (pid 4242), 2 the walk could not run. Every other path asks the real probe,
+ *  so a lock case reads the same on a Darwin box, where the real probe answers unmeasured, as on Linux. */
+export const lockProbe = (rc: 0 | 1 | 2): string => '_ws_path_users() { case "$1" in *index.lock)'
+  + ' echo "path-users $1" >> "$HOME/ccd-calls";'
+  + ` _WS_PATH_USERS_PIDS=${rc === 1 ? '4242' : "''"};`
+  + ` _WS_PATH_USERS_WHY=${rc === 1 ? "'process 4242 holds it open'" : rc === 2 ? "'the walk of /proc did not finish'" : "''"};`
+  + ` return ${rc} ;; esac;`
+  + ' _ws_path_users_many "$1"; _WS_PATH_USERS_PIDS="${_WS_PATH_USERS_PIDS_OF[0]}"; _WS_PATH_USERS_WHY="${_WS_PATH_USERS_WHY_OF[0]}";'
+  + ' return "${_WS_PATH_USERS_RCS[0]}"; };';
+
+/** Plants the `index.lock` of the checkout at `dir` (located by git) holding `body`, its mtime `ageS` seconds in the
+ *  past (negative: in the future). Answers the lock's path. */
+export function plantIndexLock(h: PrHarness, dir: string, ageS: number, body = ''): string {
+  const lock = `${h.git(dir, 'rev-parse', '--path-format=absolute', '--git-path', 'index')}.lock`;
+  fs.writeFileSync(lock, body);
+  const t = Math.floor(Date.now() / 1000) - ageS;
+  fs.utimesSync(lock, t, t);
+  return lock;
+}

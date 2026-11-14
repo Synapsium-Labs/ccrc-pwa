@@ -15,6 +15,7 @@ import {
   isDocsProject, isDocsBareRef, isDocsQualifiedRef, isDocsCommit, isDocsRelPath, isDocsFingerprint, isDocsMaxBytes,
   parseDocsRef, docsRefText, type DocsRefSpec,
 } from '../../shared/docs.js';
+import { mulberry32 } from './fakeTime.js';
 
 /** The matcher shape `shared/docs.ts` builds, rebuilt here only to run a body this file has edited. */
 const full = (body: string): RegExp => new RegExp('^(?:' + body + ')$', 'u');
@@ -251,18 +252,6 @@ describe('every predicate refuses a non-string at runtime', () => {
     expect(parseDocsRef(['main'] as unknown as string)).toBeNull();
   });
 });
-
-/** mulberry32: a seeded PRNG, so the fuzz corpus is the same on every run and every box. */
-function mulberry32(seed: number): () => number {
-  let a = seed >>> 0;
-  return () => {
-    a = (a + 0x6d2b79f5) >>> 0;
-    let t = a;
-    t = Math.imul(t ^ (t >>> 15), t | 1);
-    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-}
 
 const FUZZ_ALPHABET = 'ab.-_/09@{}~^:';
 /** The draw: the eight characters the grammar can accept, weighted four to one over the six it never can, so that

@@ -93,6 +93,35 @@ case "${OSTYPE:-}" in
   *) case "$(uname -s 2>/dev/null)" in Darwin) CCD_OS=darwin ;; esac ;;
 esac
 
+# >>> D-8270 tmux socket lookup (copied byte for byte into each script that cannot source ccd: tmux-socket-census.test.ts)
+# THE ONE tmux SOCKET LOOKUP (D-8270, ruling Q8). One shared tmux server, and every tmux call starts with the argv
+# `_TMX_ARGV` holds, so moving the fleet to another server is a change of setting. The setting is the first line of
+# ~/.ccrc/tmux-socket: absent or empty is tmux's default server and adds no flag; a socket name puts `-L <name>` first;
+# anything else asks no tmux at all and answers why with rc 1, never the "can't find session" that reads as gone. A
+# file, not a variable: every process on the box reads one answer, and no caller redirects a door with its environment.
+# Twin: shared/tmux-target.ts.
+# READ ONCE PER PROCESS, AT LOAD, WITH BUILTINS ONLY: the supervise tick's fork budget (tick-diet spec §9) is exactly
+# main's. A statement calls `_tmx …`. A capture `$( … )`, a pipeline stage, or a wrapper that execs its argv
+# (`_plat_timeout`, `timeout`, `exec`) spreads `"${_TMX_ARGV[@]}" …` itself: bash runs a lone command there without a
+# second fork, and a function in its place costs that fork on every call.
+_tmx_sock() {   # [home, default $HOME] -> TMX_SOCK (empty: the default server); rc 1 = the setting cannot be used, TMX_WHY says why
+  local f="${1-${HOME-}}/.ccrc/tmux-socket" s=""
+  TMX_SOCK=""; TMX_WHY=""
+  [ -e "$f" ] || [ -L "$f" ] || return 0
+  if [ -f "$f" ] && [ -r "$f" ]; then IFS= read -r s < "$f" || :; else TMX_WHY="$f cannot be read"; return 1; fi
+  [[ -z "$s" || "$s" =~ ^[A-Za-z0-9_][A-Za-z0-9_-]{0,63}$ ]] \
+    || { TMX_WHY=".ccrc/tmux-socket does not hold a socket name (1 to 64 letters, digits, _ and -, not led by -)"; return 1; }
+  TMX_SOCK="$s"
+}
+# shellcheck disable=SC2120  # the home is optional: every caller today asks for the running user's own (D-8270)
+_tmx_argv() {   # [home] -> _TMX_ARGV, the argv every fleet tmux call starts with; run once below, again only when asked
+  if _tmx_sock "$@"; then _TMX_ARGV=(tmux ${TMX_SOCK:+-L "$TMX_SOCK"})
+  else _TMX_ARGV=(sh -c 'printf "%s\n" "$0" >&2; exit 1' "ccrc: tmux was not asked: $TMX_WHY"); fi
+}
+_tmx_argv
+_tmx() { "${_TMX_ARGV[@]}" "$@"; }   # tmux args… -> that call, on the fleet's server (a statement; see above for a capture)
+# <<< D-8270 tmux socket lookup
+
 # GNU `mv -fT`: rename, and REFUSE when the destination is a directory.
 #
 # THE REFUSAL IS LOAD-BEARING, not incidental — see the note in `cmd_ws_hold`
@@ -1399,11 +1428,13 @@ POOL_NAME_RE='^[a-z][a-z0-9-]{0,31}$'
 # SUPERSEDED 2026-09-11. A Codex lane IS home-able now — `gpt` and `gpt7` carry
 # `telemetry: "codex"` and sit in CCRC_HOME_ABLE — so "such a lane is never a
 # HOME (no project STARTS there by accident)", which stood in this paragraph
-# until that date, is simply false about the live roster. The 272k window did
-# not survive contact either: the catalogue advertises 272k, the backend has
-# never accepted a prompt over ~196k, and the ceiling therefore stays at Claude
-# Code's 200k default — a reason to distrust the catalogue, never a reason to
-# keep the lane out of placement.
+# until that date, is simply false about the live roster. The catalogue's
+# advertised window was doubted on that date too (one July sample never saw a
+# prompt over ~196k, so the lane was held at Claude Code's 200k default); the
+# 2026-10-15 fleet scan withdrew that sample, and since D-8564 (2026-11-13) a
+# Codex lane's window follows the catalogue's promise unless a window is
+# measured (shared/modelenv.mjs contextWindowFor). Either way, a window is
+# never a reason to keep the lane out of placement.
 #
 # What DOES stand is the telemetry difference, and it is now carried by a field
 # of its own. A Codex lane has no Anthropic-style 5h/7d pair: ccgpt-usage
@@ -1675,7 +1706,8 @@ COMPACT_NOTE_FLOOR=1800         # D-2013 — min seconds between swap.log lines 
                                 # swap.log's floored line, nothing more. If it is ever promoted to a
                                 # wire field it needs a reader and the additive-only contract first.
 # ── The routing record (routing spec 2026-09-14 §5.1) ───────────────────────
-# Eight ordinary registry fields per session (`browser` joined the seven, D-8121), written by `cmd_route` and by ccd
+# Eleven ordinary registry fields per session (`browser` joined the seven, D-8121; `profile`, `automem` and `compactwindow`,
+# the launch profile's three, Overlord W1a), written by `cmd_route` and by ccd
 # itself (`degraded`, `inert`), read ONLY through `_route_get` below. The fields
 # are a byte channel into an argv and a pane — any session on the box can write
 # them (one UNIX user; attribution, not authentication) — so every value is
@@ -1691,7 +1723,7 @@ COMPACT_NOTE_FLOOR=1800         # D-2013 — min seconds between swap.log lines 
 # ROUTE_FIELD it names a class and is checked against `CCRC_SUBAGENT_CLASSES`;
 # inside an `inert` list it is the FIELD's name, stamped by a lane that composed
 # no `CLAUDE_CODE_SUBAGENT_MODEL` whatever class the field held.
-ROUTE_FIELDS=(class effort subagent workflow compact browser degraded inert)
+ROUTE_FIELDS=(class effort subagent workflow compact browser degraded inert profile automem compactwindow precompact)
 ROUTE_CLASSES="fable opus sonnet haiku default"
 ROUTE_EFFORTS="auto low medium high xhigh max ultracode"
 # THE SLIDER'S STOPS, IN THE ORDER THE SLIDER PUTS THEM (D-2808, measured on a
@@ -3098,9 +3130,9 @@ _session_probe() {   # id -> PROBE_VERDICT=live|gone|unknown, PROBE_DETAIL (unkn
   # stubbed substrate needs no deadline, it cannot wedge.
   local out rc
   if declare -F tmux >/dev/null; then
-    out=$(tmux has-session -t "$(_tmux_t "$1")" 2>&1); rc=$?
+    out=$("${_TMX_ARGV[@]}" has-session -t "$(_tmux_t "$1")" 2>&1); rc=$?
   else
-    out=$(_plat_timeout "$SUBSTRATE_PROBE_DEADLINE_S" tmux has-session -t "$(_tmux_t "$1")" 2>&1); rc=$?
+    out=$(_plat_timeout "$SUBSTRATE_PROBE_DEADLINE_S" "${_TMX_ARGV[@]}" has-session -t "$(_tmux_t "$1")" 2>&1); rc=$?
   fi
   if (( rc == 0 )); then PROBE_VERDICT=live; PROBE_DETAIL=""; PROBE_SUBSTRATE=present; return 0; fi
   # rc 124 is timeout's own kill: tmux printed nothing, so the reason is SYNTHESIZED —
@@ -3312,9 +3344,9 @@ _reg_get() { [[ -f "$REG/$1.$2" && ! -L "$REG/$1.$2" ]] || return 1; local __rg_
 # for a field that is ABSENT, one that is UNREADABLE and one that is EMPTY — the
 # overloaded null the ring rules forbid at a seam. It stays exactly as it is,
 # and the reason is a count rather than a preference: this file makes 209
-# invocations across 178 non-comment lines.
+# invocations across 177 non-comment lines.
 #
-# THE LAST MOVE WAS `cmd_forget`'s workspace read, now `_reg_read_to` (D-8140), the −1 call on its own line; before it `_default_pool`'s project read for a pay-per-use lane (D-8098), the +1 call on its own line; before it `cmd_pr_train_prove`'s project read (D-7378), the +1 call on its own line; before it `cmd_pr_landing`'s two reads (a session's `workspace` and `project`), the +2 calls on two lines; before it ws-expire's `--child-of` marker read (`_ws_expire_not_child`, D-6640), the +1 call on its own line; before it the named-workspace title verb's workspace gate (`cmd_ws_title`'s `workspace` read), the +1 call on its own line; before it the children's spawn record (plan Task 15, D-5299), the +1 (`_spawn_start`'s `.child` test); before it the tick diet's `_reg_get_to` conversions (D-4963), the −9 (`_session_hard_blocked` 2, `_auto_stale_check` 1, `_auto_swap_check` 2, `_auto_compact_check` 3, `_route_applied_get_to` 1: each hot read now fills its variable with builtins, no subshell); before it the forked-session transcript's review round 2 — the held-conversation wait (`_ci_held_wait` +3, `_supervised_start` +2, `_ci_bgwait_open`/`_ci_bgwait_close` +1 each — D-4944), the +7; before it its review round 1 (`_ci_bg_follow`, `_ci_chain_end`, `_ci_resume_follow` — D-4944/D-4945), the +3; before it the forked-session transcript's continued-in walk (`_sync_uuid`, `_follow_continued_in`), the +2; before it the read-back's lane gate (`_route_readback_transcript`), the +1; before it the read-back's transcript memo (`_route_readback_transcript`), the +1; before it the return gate's unarchive (workspace lifecycle wave 3b), the +2; before it the route read-back's uuid read (`_route_readback`), the +1; before it the EXPIRE region's reads (workspace lifecycle wave 3), the +10; before that the operator-choice reads (session-continuity wave 3), the +3; before that the rescue wait's reads (session-continuity wave 2), the +3;
+# THE LAST MOVE WAS `_spawn_mode` (overlord W1a, fresh start), the −1 call on two fewer lines: four copies of the spawn-mode line's `started` read became one reader making three calls on two lines; before it `_pane_type_ready`'s refusal-memo read (D-8271), the +1 call on its own line; before it `cmd_forget`'s workspace read, now `_reg_read_to` (D-8140), the −1 call on its own line; before it `_default_pool`'s project read for a pay-per-use lane (D-8098), the +1 call on its own line; before it `cmd_pr_train_prove`'s project read (D-7378), the +1 call on its own line; before it `cmd_pr_landing`'s two reads (a session's `workspace` and `project`), the +2 calls on two lines; before it ws-expire's `--child-of` marker read (`_ws_expire_not_child`, D-6640), the +1 call on its own line; before it the named-workspace title verb's workspace gate (`cmd_ws_title`'s `workspace` read), the +1 call on its own line; before it the children's spawn record (plan Task 15, D-5299), the +1 (`_spawn_start`'s `.child` test); before it the tick diet's `_reg_get_to` conversions (D-4963), the −9 (`_session_hard_blocked` 2, `_auto_stale_check` 1, `_auto_swap_check` 2, `_auto_compact_check` 3, `_route_applied_get_to` 1: each hot read now fills its variable with builtins, no subshell); before it the forked-session transcript's review round 2 — the held-conversation wait (`_ci_held_wait` +3, `_supervised_start` +2, `_ci_bgwait_open`/`_ci_bgwait_close` +1 each — D-4944), the +7; before it its review round 1 (`_ci_bg_follow`, `_ci_chain_end`, `_ci_resume_follow` — D-4944/D-4945), the +3; before it the forked-session transcript's continued-in walk (`_sync_uuid`, `_follow_continued_in`), the +2; before it the read-back's lane gate (`_route_readback_transcript`), the +1; before it the read-back's transcript memo (`_route_readback_transcript`), the +1; before it the return gate's unarchive (workspace lifecycle wave 3b), the +2; before it the route read-back's uuid read (`_route_readback`), the +1; before it the EXPIRE region's reads (workspace lifecycle wave 3), the +10; before that the operator-choice reads (session-continuity wave 3), the +3; before that the rescue wait's reads (session-continuity wave 2), the +3;
 # then D-3526's carried-in verdict, the +6 (`_limit_dated`, `_limit_read`, `_never_came_up`, three in `_carried_in_note`); then the RECLAIM region's reads (#166 wave 3, Task 5), `_child_tmpdir`'s and #127's.
 # BEFORE THAT IT WAS ROUTING SLICE 4's, and naming it is what stops the next
 # reader hunting for a merge that did not happen: the applier and its registry
@@ -4066,18 +4098,18 @@ _reg_purge() {   # id -> rm -f every "$REG/$id.<field>" registry file for id
   # to neither. 34 + 2 = 36, re-measured on the merged file rather than added
   # up — the same discipline this paragraph is about. The drawer wave then added
   # `stalenarrownote` and `swapnarrownote` (`_pane_narrow_note`'s per-site log
-  # floors): 38; #166's `child` made 39, D-3526's `carriednote` and `tdate` 41, the stall watch's `turn` 42, continuity's `rescuewait` 43, `typed` 44, `choicekept` 45, the route read-back's `readbackseen` 46, the background-job wait's `bgwait` 47 (#189), D-6180's stand-down lines `standdown`, `standdownaff` and `standdownprobe` 50, and D-5941's `prbranch` 51 — by addition, NOT a fresh census of
+  # floors): 38; #166's `child` made 39, D-3526's `carriednote` and `tdate` 41, the stall watch's `turn` 42, continuity's `rescuewait` 43, `typed` 44, `choicekept` 45, the route read-back's `readbackseen` 46, the background-job wait's `bgwait` 47 (#189), D-6180's stand-down lines `standdown`, `standdownaff` and `standdownprobe` 50, D-5941's `prbranch` 51, and D-8271's typing-check log floor `typerefuse` 52, the launch record's `deleg` 53 (D-8367), the fresh start's `fresh` 54 (overlord W1a), the manifest's `inflight` 55 (D-8374), the Overlord's compaction events `compactevents` and `compacteventsprev` 57, and the start report's spool `startpending` 58 (overlord W1a) — by addition, NOT a fresh census of
   # every per-session field, which this list still is not. `ROUTE_FIELDS` (`class`,
   # `effort`, `subagent`, `workflow`, `compact`, `degraded`, `inert`) and
   # `$REG/<id>.stalepress`/`.tscan` are all real per-session fields this list
   # omits; the gap is pre-existing, not new, and this paragraph's count tracks
   # only the additions named above against the last stated total.
-  # The 51: `archived`, `archivedreason`, `archivemanifest`, `base`, `bgwait`, `branch`,
-  # `carriednote`, `child`, `choicekept`, `compactnote`, `compactskip`, `crosspool`, `hold`, `home`, `hookstate`, `lastcompact`, `lastswap`,
+  # The 58: `archived`, `archivedreason`, `archivemanifest`, `base`, `bgwait`, `branch`,
+  # `carriednote`, `child`, `choicekept`, `compactevents`, `compacteventsprev`, `compactnote`, `compactskip`, `crosspool`, `deleg`, `fresh`, `hold`, `home`, `hookstate`, `inflight`, `lastcompact`, `lastswap`,
   # `pool`, `prbranch`, `prcheckedat`, `prhistory`, `prnumber`, `prphase`, `project`, `rc`,
-  # `readbackseen`, `reaping`, `rescuewait`, `setup`, `spawn`, `stalenarrownote`, `standdown`, `standdownaff`, `standdownprobe`, `started`, `stopped`, `stranded`,
+  # `readbackseen`, `reaping`, `rescuewait`, `setup`, `spawn`, `stalenarrownote`, `standdown`, `standdownaff`, `standdownprobe`, `started`, `startpending`, `stopped`, `stranded`,
   # `strandnotify`, `substrate`, `supervised`, `svcfailed`, `swapblocked`,
-  # `swapnarrownote`, `tdate`, `tickstuck`, `turn`, `typed`, `uuid`, `workdir`, `workspace`, `wrapper`. Note that `pool` here is the per-session
+  # `swapnarrownote`, `tdate`, `tickstuck`, `turn`, `typed`, `typerefuse`, `uuid`, `workdir`, `workspace`, `wrapper`. Note that `pool` here is the per-session
   # CANDIDATE LIST `_pool_for` reads, NOT an account pool name — two meanings
   # of one word in one file, disclosed rather than renamed. That is a WIDER
   # set than `_reg_set`/`_reg_get`: the inventory
@@ -4265,10 +4297,10 @@ _reg_purge() {   # id -> rm -f every "$REG/$id.<field>" registry file for id
     rm -f "$pf" || _reg_purge_unremoved "$pf"
   done
   # GENERATION LAST, after the archived/reaping tail and every private family, and OUTSIDE the loop above, which skips it: the row's authorization, so while it stands a hook holding it can still take the lock.
-  # `joined` and `joinedprev` ONCE MORE, AFTER IT, in ONE `rm` call on the same line, and the order is the point: session-hook.sh appends `$REG/$id.joined` on a SubagentStart WITHOUT this lock (and renames it whole to `joinedprev` past 128 lines), only while `generation` stands (it checks before the append and again after it, and removes both names if the row is gone), and the glob loop above passed the names tens of milliseconds before this line.
+  # `joined`, `joinedprev` and `deleg` (the launch record, D-8367: the hook appends it without a lock under the same two-sided rule), and `startpending` (the start report's spool, Overlord W1a: the hook rewrites it without a lock under the same rule), ONCE MORE, AFTER IT, in ONE `rm` call on the same line, and the order is the point: session-hook.sh appends `$REG/$id.joined` on a SubagentStart WITHOUT this lock (and renames it whole to `joinedprev` past 128 lines), only while `generation` stands (it checks before the append and again after it, and removes both names if the row is gone), and the glob loop above passed the names tens of milliseconds before this line.
   # An append that lands before this line is taken by it; one that lands after `generation` has gone sees no row on its re-check and removes itself. Placed earlier, it would leave a hook that still sees the row free to write behind it, and an orphaned dot-free field holds the slug for ever (`_ws_slug_free`'s any-field check; `ws-gc`, keyed on `.uuid`/`.workspace`, never clears it).
   # Its own literal paths and never the loop's `f` (the note beside the `hf` loop: a second unlink through that variable is a second canonical write on the compaction card's allow-list; neither name is on it). ONE call, so the purge's unlink count stays what `ccd-workspaces.test.ts` pins; a refusal names each path still standing. Line-neutral by construction, so no cited anchor below moves.
-  rm -f "$REG/$id.generation" || _reg_purge_unremoved "$REG/$id.generation"; rm -f "$REG/$id.joined" "$REG/$id.joinedprev" || { [[ -e "$REG/$id.joined" ]] && _reg_purge_unremoved "$REG/$id.joined"; [[ -e "$REG/$id.joinedprev" ]] && _reg_purge_unremoved "$REG/$id.joinedprev"; }
+  rm -f "$REG/$id.generation" || _reg_purge_unremoved "$REG/$id.generation"; rm -f "$REG/$id.joined" "$REG/$id.joinedprev" "$REG/$id.deleg" "$REG/$id.startpending" || { [[ -e "$REG/$id.joined" ]] && _reg_purge_unremoved "$REG/$id.joined"; [[ -e "$REG/$id.joinedprev" ]] && _reg_purge_unremoved "$REG/$id.joinedprev"; [[ -e "$REG/$id.deleg" ]] && _reg_purge_unremoved "$REG/$id.deleg"; [[ -e "$REG/$id.startpending" ]] && _reg_purge_unremoved "$REG/$id.startpending"; }
   _compact_lock_release "$_pg_fd"
   return "$_pg_urc"
 }
@@ -4284,12 +4316,12 @@ _substrate_mark() {   # id — record "this supervisor could not reach tmux" ($R
   local id="$1" why="${PROBE_DETAIL:-tmux gave no reason}" f="$REG/$1.substrate"
   [[ -e "$f" ]] && return 0
   local client server
-  client=$(tmux -V 2>&1 || true)
+  client=$("${_TMX_ARGV[@]}" -V 2>&1 || true)
   # Same function-vs-binary split as _session_probe, same reason: `timeout` execs.
   if [[ $(type -t tmux) == function ]]; then
-    server=$(tmux display-message -p '#{version}' 2>/dev/null) || server="unreachable"
+    server=$("${_TMX_ARGV[@]}" display-message -p '#{version}' 2>/dev/null) || server="unreachable"
   else
-    server=$(_plat_timeout "$SUBSTRATE_PROBE_DEADLINE_S" tmux display-message -p '#{version}' 2>/dev/null) || server="unreachable"
+    server=$(_plat_timeout "$SUBSTRATE_PROBE_DEADLINE_S" "${_TMX_ARGV[@]}" display-message -p '#{version}' 2>/dev/null) || server="unreachable"
   fi
   # Through `_reg_set` (wave 2), so the marker cannot be read half-written like
   # any other field. FIRST-WRITE-WINS is untouched: the `[[ -e "$f" ]]` guard
@@ -4703,8 +4735,10 @@ _lc_obs() {   # populate _LC_OBS once per process. Prints NOTHING. Always 0.
     # stub left `_lc_obs` unreturned past an outer `timeout -s KILL 3`, i.e.
     # SIGKILLed rather than answering — which breaks "never gate the act it
     # observes" the moment wave 3/4 wires this into the hot path.
+    # The lookup's argv rides into the child as quoted words, built by `printf -v`: no subshell (D-8270).
+    local tmxq; printf -v tmxq '%q ' "${_TMX_ARGV[@]}"
     panes=$(_plat_timeout "$_LC_OBS_TMUX_DEADLINE_S" bash -c "$(declare -f tmux 2>/dev/null)
-tmux list-panes -a -F '#{session_name} #{pane_pid}'" 2>/dev/null)
+${tmxq}list-panes -a -F '#{session_name} #{pane_pid}'" 2>/dev/null)
     rc=$?
     # rc 124 is `timeout`'s own SIGTERM; 137 is what a caller sees if an OUTER
     # kill reached this whole invocation before `timeout` itself could report
@@ -5366,7 +5400,7 @@ _ws_status() {   # id -> busy|idle on stdout; NON-ZERO when it cannot be read.
     gone)    echo idle; return 0 ;;   # no pane at all: nothing is running
     unknown) return 1 ;;              # could not ask — say so, do not guess
   esac
-  pid=$(tmux list-panes -t "$(_tmux_t "$id")" -F '#{pane_pid}' 2>/dev/null | head -1)
+  pid=$("${_TMX_ARGV[@]}" list-panes -t "$(_tmux_t "$id")" -F '#{pane_pid}' 2>/dev/null | head -1)
   [[ "$pid" =~ ^[0-9]+$ ]] || return 1
   # D-2379: the one unguarded reader of this path family — `_sync_uuid`
   # (`-f`), `_auto_swap_check` (`-f`) and `_auto_compact_check` (a three-rung
@@ -5712,7 +5746,7 @@ _gh_fail_reason() {   # gh's stderr text -> ONE word on stdout: unauthenticated 
     # GITHUB'S OWN 5xx. Measured 2026-08-26 against a live fleet repo with
     # several thousand PRs of history — the slug is operator residue and
     # stays out of this tree. The 100-PR `statusCheckRollup` window
-    # `_gh_pr_list` sends answers
+    # `_gh_pr_list` USED to send answered
     # `HTTP 504: We couldn't respond to your request in time. …
     # (https://api.github.com/graphql)` after 11.2 s, on 3/3 attempts — a
     # standing property of that repo's PR history, not a blip. It went out as
@@ -6502,7 +6536,7 @@ if mode == 'state':
     # appending needs write on the FILE, not the directory — the unwritable
     # `$REG` never touches it; and `clear`'s `os.remove` and `put`'s tmp-create
     # both raise `PermissionError`, because both need write on the DIRECTORY
-    # (D-132). So for a session that has never run `pr-state` under an
+    # (D-8590). So for a session that has never run `pr-state` under an
     # unwritable `$REG`: the lock cannot be created, the compare-and-set below
     # proceeds UNLOCKED, and two concurrent runs can each reach the prhistory
     # append — the duplicate-append harm this lock exists to prevent — before
@@ -6510,7 +6544,7 @@ if mode == 'state':
     # which `_ws_archive_manifest` later folds into the archive manifest
     # verbatim.
     #
-    # DISCLOSED, NOT CLOSED (ruling, D-139). It takes a read-only `$REG` AND
+    # DISCLOSED, NOT CLOSED (ruling, D-8596). It takes a read-only `$REG` AND
     # concurrent `pr-state` runs AND a session with no lock file yet — all
     # three at once — and the natural closes each trade this rare duplicate
     # for a worse ordinary-case cost: locking `.prhistory` itself adds a new
@@ -6906,14 +6940,15 @@ _ws_slug_valid() { [[ "$1" =~ ^[a-z0-9][a-z0-9-]{1,30}$ ]]; }
 # marker `$REG/<id>.shedding`, which no alias glob reaches, and the gate fails closed on it
 # (DEPSSHED region).
 #
-# NOT reachable this way, and this set IS the boundary — TWENTY-TWO dot-prefixed
-# artifacts live under `$REG`; the eight above are reachable, these fourteen are
+# NOT reachable this way, and this set IS the boundary — TWENTY-THREE dot-prefixed
+# artifacts live under `$REG`; the eight above are reachable, these fifteen are
 # not. THE CARDINAL IS MEASURED NOW, and it had to be: this paragraph said
 # EIGHT about a tree that already held nine, because `.account-placement.lock`
 # landed with `ccrc account` and nothing here reds when prose drifts.
 # `ccd-account-auth.test.ts`'s "the dot-prefixed registry inventory is a
 # census, not a memory" derives the number from the shipped bash and refuses
-# a paragraph that disagrees with it. The fourteen: `$REG/.carry.lock` (no id is the dash-free `.carry`);
+# a paragraph that disagrees with it. The fifteen: `$REG/.carry.lock` (no id is the dash-free `.carry`);
+# `$REG/.inflight.lock` (the manifest's own slot, D-8362; no id is the dash-free `.inflight`);
 # `$REG/.train-proofs` and `$REG/.train-tried` (D-7362, D-7381: the PR lane's kept train proofs and its tried
 # records, `PR_TRAIN_PROOFS_FILE` and `PR_TRAIN_TRIED_FILE`; neither name has a dot after its leading one, so no
 # `<id>.<field>` split leaves an id at all, and `.train-tried`'s `.tmp.XXXXXX` staging files, counted WITH it,
@@ -8591,7 +8626,7 @@ cmd_ws_rm() {   # id — tear a workspace down. Refuses anything it might destro
     meas.atticsrc "$atticsrc"
 
   _ws_unsupervise "$id"
-  tmux kill-session -t "$(_tmux_t "$id")" 2>/dev/null || true
+  _tmx kill-session -t "$(_tmux_t "$id")" 2>/dev/null || true
 
   if (( registered == 0 )); then
     # Not gated on the directory existing: `git worktree remove` clears the
@@ -9253,6 +9288,7 @@ EOF
   echo stop-surface
   echo hibernate-hold-ok   # D-6091: `cmd_hibernate --hold-ok <text>`; the server passes it only on this token (`capSupported`)
   echo hibernate-roll      # D-7458: `cmd_hibernate --roll`, the automatic roll's one act; the server sends it only on this token (`capSupported`)
+  echo hibernate-fresh     # spec 2026-11-09 §3.3.11 H13: `cmd_hibernate --roll --fresh`, the roll whose wake starts a new conversation; sent only on this token
   # `lifecycle-v1` says THIS copy of ccd writes `$REG/.lifecycle/`. It gates a
   # SERVER DECISION — sweep at all — not a file: absent means the mirror never
   # sweeps and every surface says "this box's ccd does not write the lifecycle
@@ -9288,6 +9324,10 @@ EOF
   # `account-openrouter-v2` (N4; accounts plan Task A26): `ccrc account add --provider openrouter` and `credential` on
   # such a lane validate the key first, and `add` takes `--placement` and suggests the models.
   echo account-openrouter-v2
+  # `testbox-admin-v1` (D-8166; test box connect plan TC12): THIS copy of ccd carries the `ccrc testbox-admin` verb the console's
+  # test box card runs (`GET /api/testbox/admin` and `POST /api/testbox/admin/:sub`). It gates a SERVER DECISION, whether to
+  # offer the card's acts at all, so those routes answer `501 unsupported` against a box that has not taken this deploy.
+  echo testbox-admin-v1
   # `pools-v1` says THIS copy of ccd honours project pool tags. What that
   # means AS OF THIS COMMIT, stated so later waves cannot read it as more:
   # it reads `$POOLS_DIR/<project>` (Task 1), and `_pool_ok` (Task 2) is now
@@ -9894,16 +9934,16 @@ cmd_win_size() {   # ccd win-size --session <id> --mode smallest|canonical — p
     *) die "bad mode: $mode (want smallest|canonical)" ;;
   esac
   t=$(_tmux "$id")
-  tmux has-session -t "$(_tmux_at "$t")" 2>/dev/null || die "no such session: $t"
+  _tmx has-session -t "$(_tmux_at "$t")" 2>/dev/null || die "no such session: $t"
   # `set -uo pipefail` with NO `-e`: an unguarded failure would fall straight
   # through to the echo and report a size change that did not happen. Wave 3's
   # `sizer.unpin` keys on this exit code to tell 'ok' from 'failed'.
   if [[ "$mode" == smallest ]]; then
-    tmux set-option -t "$(_tmux_at "$t")" window-size smallest \
+    _tmx set-option -t "$(_tmux_at "$t")" window-size smallest \
       || die "could not un-pin $t — the window is STILL at its pinned size"
     echo "smallest"
   else
-    tmux resize-window -t "$(_tmux_at "$t")" -x 220 -y 50 \
+    _tmx resize-window -t "$(_tmux_at "$t")" -x 220 -y 50 \
       || die "could not pin $t — the window is NOT at the canonical grid"
     echo "canonical"
   fi
@@ -10007,6 +10047,7 @@ cmd_account_pane() {   # ccd account-pane --id <id> [--method setup-token|openai
 }
 
 cmd_route() {   # ccd route --session <id> --set <field>=<value> [--set ...] [--actor <text>] [--reason <text>]
+  # An empty value (`--set compact=`, `--set compactwindow=`) removes that compaction field; every other field refuses it.
   # Routing spec 2026-09-14 §5.3. WRITES THE RECORD; TYPES ONLY UNDER `--apply`.
   # Without that flag — the COORDINATOR's form, and the default — a session
   # running this against a worker types nothing into that worker's pane and ccd
@@ -10049,10 +10090,13 @@ cmd_route() {   # ccd route --session <id> --set <field>=<value> [--set ...] [--
     f="${kv%%=*}"; v="${kv#*=}"
     _route_word_in "$f" "${ROUTE_FIELDS[*]}" || die "unknown routing field '$f' (want one of: ${ROUTE_FIELDS[*]})"
     [[ "$f" == degraded || "$f" == inert ]] && die "'$f' is written by ccd only"
+    # AN EMPTY VALUE CLEARS a compaction field (the launch-profile lane, review 2024 F2 c): the field is removed, which every
+    # reader takes as absent (ccd's own threshold, no auto-compact window). No other field has an empty form.
+    [[ -z "$v" && ( "$f" == compact || "$f" == compactwindow ) ]] && continue
     # THREE ANSWERS, THREE SENTENCES (fix round 2, Finding 1). `_route_valid`
-    # answers 2 when the field's vocabulary itself could not be read — today
-    # only `subagent`, whose list is PROJECTED into `$HOME/.ccrc/accounts.sh`
-    # by `ccrc install` — and that is not the caller's value being wrong, it is
+    # answers 2 when the field's vocabulary itself could not be read — `subagent`,
+    # whose list is PROJECTED into `$HOME/.ccrc/accounts.sh` by `ccrc install`, and
+    # `profile`, whose rows are `LAUNCH_PROFILES_JSON` — and that is not the caller's value being wrong, it is
     # this box not being able to say. Both refuse (fail closed); they name
     # different remedies, and folding them into "bad value" told an operator
     # with a perfectly good `haiku` to go and fix `haiku`. The `*)` arm takes
@@ -10061,7 +10105,7 @@ cmd_route() {   # ccd route --session <id> --set <field>=<value> [--set ...] [--
     _route_valid "$f" "$v"; rc=$?
     case "$rc" in
       0) ;;
-      2) die "route: this box's roster projection carries no subagent class list — re-run ccrc install" ;;
+      2) [[ "$f" == profile ]] && die "route: this box's launch profiles ($LAUNCH_PROFILES_JSON) cannot be read — re-run ccrc install"; die "route: this box's roster projection carries no subagent class list — re-run ccrc install" ;;
       *) die "bad value for $f ($(_route_bytes "$v") bytes) — not in its vocabulary" ;;
     esac
     _route_fable_shell "$f" "$v" && die "fable-operator-only: a Claude Code session may not select class fable"
@@ -10098,9 +10142,10 @@ cmd_route() {   # ccd route --session <id> --set <field>=<value> [--set ...] [--
     raw=$(_reg_get "$id" "$f" 2>/dev/null)
     old=$(_route_get "$id" "$f")
     if [[ -n "$raw" && -z "$old" ]]; then old="<$(_route_bytes "$raw") bytes, unrecognised>"; fi
-    _reg_set "$id" "$f" "$v" || die "could not write $f for $id — the record is unchanged from this field on"
-    _lc_done route "$id" "" dec.actor "$actor" dec.reason "$reason" detail "$f: ${old:-∅} -> $v"
-    echo "$(date '+%F %T') route $id: $f ${old:-∅} -> $v${actor:+ [actor=$actor]}${reason:+ ($reason)}" >> "$REG/swap.log"
+    if [[ -z "$v" ]]; then rm -f -- "$REG/$id.$f" || die "could not clear $f for $id — the record is unchanged from this field on"
+    else _reg_set "$id" "$f" "$v" || die "could not write $f for $id — the record is unchanged from this field on"; fi
+    _lc_done route "$id" "" dec.actor "$actor" dec.reason "$reason" detail "$f: ${old:-∅} -> ${v:-∅}"
+    echo "$(date '+%F %T') route $id: $f ${old:-∅} -> ${v:-∅}${actor:+ [actor=$actor]}${reason:+ ($reason)}" >> "$REG/swap.log"
     echo "set $id $f=$v"
     # A `degraded` STAMP IS ABOUT THE CLASS IT REPLACED, so a new class may void
     # it — one reader for that decision, `_route_stale_degrade_clear`.
@@ -10836,7 +10881,7 @@ cmd_ws_archive() {   # ccd ws-archive --session <id> — fold a merged workspace
   _reg_set "$id" archivemanifest "$manifest"$'\n'
 
   [[ -e "$REG/$id.choicekept" ]] || _operator_choice_keep "$id"; _ws_unsupervise "$id"      # clears Restart=always; ws-restore respawns from the record (§5.7)
-  tmux kill-session -t "$(_tmux_t "$id")" 2>/dev/null || _operator_choice_unmark "$id"
+  _tmx kill-session -t "$(_tmux_t "$id")" 2>/dev/null || _operator_choice_unmark "$id"
 
   # Truthful in three values, not always "merged": a workspace can be archived
   # with a PR the gh-verified prphase machinery has confirmed merged, PR
@@ -10868,7 +10913,9 @@ cmd_ws_archive() {   # ccd ws-archive --session <id> — fold a merged workspace
   # HEAD moved after this workspace was created.
   base=$(_reg_get "$id" base); [[ -n "$base" ]] || base="origin/HEAD"
   ahead=""
-  [[ -n "$base" ]] && ahead=$(git -C "$workdir" rev-list --count "$base..HEAD" 2>/dev/null) || ahead=""
+  # D-8335: a folder proven to hold nothing is not asked: git would answer from whatever repository encloses it.
+  if [[ "$manifest" == *',"unrecordedEmpty":true}' ]]; then ahead=0
+  elif [[ -n "$base" ]]; then ahead=$(git -C "$workdir" rev-list --count "$base..HEAD" 2>/dev/null) || ahead=""; fi
   # Reason and its git reads are both settled BEFORE the `archived` marker
   # goes down: a mid-window kill between the two used to leave the marker
   # written with no reason ever recorded, and the `already archived` early
@@ -10896,6 +10943,62 @@ cmd_ws_archive() {   # ccd ws-archive --session <id> — fold a merged workspace
     empty)    note=" (no commits beyond base)" ;;
   esac
   echo "archived $id$note — worktree kept at $workdir, nothing deleted"
+}
+
+_WS_UNREC_WHY=''
+_ws_archive_unrecorded_empty() {   # main workdir branch -> rc 0 when the workspace is PROVEN to hold nothing (D-8335,
+  #                                   #2360); rc 1 (_WS_UNREC_WHY) when any condition fails or could not be read
+  # A STOPPED WORKSPACE WHOSE FOLDER STANDS EMPTY, which git keeps no record of
+  # and whose branch resolves nowhere, used to refuse "cannot describe … truthfully"
+  # with no way out from the console. All of these, each read fail-closed, because
+  # a false "nothing here" is the one answer that could lose work:
+  #   the folder is a plain directory, not a link and not a mount point (an
+  #     unmounted disk reads empty), and lists no entry at all;
+  #   git keeps no worktree record of it: `_ws_reclaim_record` answers "none"
+  #     from a list it READ, and `_ws_reclaim_no_record` finds no admin entry
+  #     naming `<workdir>/.git` that the list omitted;
+  #   the registry's branch is not in $main, no remote-tracking ref names it,
+  #     and every remote, asked live, answers "no such head" (`ls-remote` rc 2).
+  local main="$1" w="$2" branch="$3" n wd pd common rc r refs remotes RECLAIM_REC_BRANCH='' RECLAIM_REC_HEAD='' RECLAIM_REC_MAIN=0 RECLAIM_REC_PRUNABLE=0 _WS_REC_WHY='' _WS_NOREC_WHY=''
+  _WS_UNREC_WHY=''
+  [[ "$w" == /* && -d "$w" && ! -L "$w" ]] || { _WS_UNREC_WHY="$w is not a plain directory"; return 1; }
+  wd=$(_plat_devino "$w" 2>/dev/null) && pd=$(_plat_devino "${w%/*}/" 2>/dev/null) \
+    || { _WS_UNREC_WHY="the device of $w could not be read"; return 1; }
+  [[ "${wd%%:*}" == "${pd%%:*}" ]] || { _WS_UNREC_WHY="$w is a mount point"; return 1; }
+  n=$(find "$w" -mindepth 1 -maxdepth 1 2>/dev/null | wc -l) || { _WS_UNREC_WHY="the entries of $w could not be listed"; return 1; }
+  n=${n//[[:space:]]/}
+  [[ "$n" == 0 ]] || { _WS_UNREC_WHY="$w is not empty (${n} entries)"; return 1; }
+  _ws_reclaim_record "$main" "$w"; rc=$?
+  case "$rc" in
+    1) : ;;
+    0) _WS_UNREC_WHY="$main records a worktree at $w"; return 1 ;;
+    *) _WS_UNREC_WHY=$_WS_REC_WHY; return 1 ;;
+  esac
+  common=$(_ws_common_dir "$main") || { _WS_UNREC_WHY="could not resolve the repository of $main"; return 1; }
+  _ws_reclaim_no_record "$common" "$w" || { _WS_UNREC_WHY=$_WS_NOREC_WHY; return 1; }
+  git -C "$main" rev-parse --verify --quiet "refs/heads/$branch" >/dev/null 2>&1; rc=$?
+  case "$rc" in
+    1) : ;;
+    0) _WS_UNREC_WHY="refs/heads/$branch still stands in $main"; return 1 ;;
+    *) _WS_UNREC_WHY="could not ask $main for refs/heads/$branch"; return 1 ;;
+  esac
+  refs=$(git -C "$main" for-each-ref --format='%(refname)' refs/remotes/ 2>/dev/null) \
+    || { _WS_UNREC_WHY="could not list the remote-tracking refs of $main"; return 1; }
+  while IFS= read -r r; do
+    [[ -n "$r" && "$r" == refs/remotes/*/"$branch" ]] || continue
+    _WS_UNREC_WHY="$r still stands in $main"; return 1
+  done <<< "$refs"
+  remotes=$(git -C "$main" remote 2>/dev/null) || { _WS_UNREC_WHY="could not list the remotes of $main"; return 1; }
+  while IFS= read -r r; do
+    [[ -n "$r" ]] || continue
+    rc=0; _plat_timeout 60 git -C "$main" ls-remote --exit-code --heads "$r" "refs/heads/$branch" >/dev/null 2>&1 || rc=$?
+    case "$rc" in
+      2) : ;;
+      0) _WS_UNREC_WHY="refs/heads/$branch stands on the remote $r"; return 1 ;;
+      *) _WS_UNREC_WHY="could not ask the remote $r for refs/heads/$branch (git exited $rc)"; return 1 ;;
+    esac
+  done <<< "$remotes"
+  return 0
 }
 
 _ws_archive_manifest() {   # id -> one JSON object on stdout
@@ -10943,10 +11046,17 @@ _ws_archive_manifest() {   # id -> one JSON object on stdout
   # record AND the directory itself have both said $main, which is the pair
   # cmd_ws_rm requires before it touches anything (ccd:458-461). `registered` is
   # read from $? on its own line: `local x=$(...)` returns local's status.
-  local wthead registered wd_common main_common rc
+  local wthead registered wd_common main_common rc unrec=0
   wthead=$(_ws_wt_branch "$main" "$workdir"); registered=$?
-  (( registered == 0 )) \
-    || { echo "manifest: $main has no worktree record for $workdir" >&2; return 1; }
+  # D-8335: one shape without a record is describable: a folder PROVEN empty whose branch resolves nowhere
+  # (`_ws_archive_unrecorded_empty`). It is recorded as such (`unrecordedEmpty`), and no read below asks git inside
+  # it, since git would answer there from whatever repository encloses the folder.
+  if (( registered != 0 )); then
+    _ws_archive_unrecorded_empty "$main" "$workdir" "$branch" \
+      || { echo "manifest: $main has no worktree record for $workdir, and it is not proven to hold nothing: $_WS_UNREC_WHY" >&2; return 1; }
+    unrec=1; wthead=''
+  fi
+  if (( ! unrec )); then
   # DRIFT IS A FIELD, NOT A REFUSAL. `_ws_wt_branch` follows a rename whether ccd
   # or the user did it (ccd:403-409), so `$wthead` is git's own answer for this
   # path and `$branch` is the registry's claim: recorded side by side as `branch`
@@ -11023,6 +11133,9 @@ _ws_archive_manifest() {   # id -> one JSON object on stdout
   # inside that function, where its own callers inherit it.
   ignored=$(_ws_ignored_digest "$workdir") \
     || { echo "manifest: could not read the ignored set at $workdir" >&2; return 1; }
+  else
+    tip=''; dirty=0; ignored=''   # D-8335: proven above: no ref, no entry, so nothing ignored or uncommitted
+  fi
   # $main answered rev-parse a moment ago — rc 0 or a clean "no such ref", both
   # of which are answers — so its stash list is readable; the count is the only
   # field whose repository has already been proven healthy.
@@ -11191,12 +11304,12 @@ sys.stdout.write(out)
   uuid=$(_reg_read "$id" uuid) && [[ -n "$uuid" ]] \
     || { echo "manifest: could not read the uuid of '$id'" >&2; return 1; }
   ! _ws_reclaim_resolve "$workdir" || [[ "$_WS_RESOLVE_BASIS" != complete || "$_WS_RESOLVED" == //* ]] || { wr=$_WS_RESOLVED; wdreal=$(_json_str "$wr"); }
-  gd=$(git -C "$workdir" rev-parse --path-format=absolute --git-dir 2>/dev/null) && [[ "${gd%/*}" == "$main_common/worktrees" ]] && bl=$(cat -- "$gd/gitdir" 2>/dev/null) && [[ "$bl" == */.git ]] && { [[ "$bl" == /* ]] || bl="$gd/$bl"; } && _ws_reclaim_resolve "${bl%/.git}" && [[ -n "$wr" && "$_WS_RESOLVE_BASIS" == complete && "$_WS_RESOLVED" == "$wr" ]] && adm=$(_json_str "${gd##*/}")
-  printf '{"id":%s,"branch":%s,"worktreeHead":%s,"base":%s,"tip":%s,"dirty":%s,"ignoredDigest":%s,"stashes":%s,"worktreeBytes":%s,"pr":%s,"prHistory":%s,"transcript":%s,"workdir":%s,"workdirReal":%s,"uuid":%s,"worktreeAdmin":%s}\n' \
-    "$(_json_str "$id")" "$(_json_str "$branch")" "$(_json_str "$wthead")" "$(_json_str "$base")" \
+  (( ! unrec )) && gd=$(git -C "$workdir" rev-parse --path-format=absolute --git-dir 2>/dev/null) && [[ "${gd%/*}" == "$main_common/worktrees" ]] && bl=$(cat -- "$gd/gitdir" 2>/dev/null) && [[ "$bl" == */.git ]] && { [[ "$bl" == /* ]] || bl="$gd/$bl"; } && _ws_reclaim_resolve "${bl%/.git}" && [[ -n "$wr" && "$_WS_RESOLVE_BASIS" == complete && "$_WS_RESOLVED" == "$wr" ]] && adm=$(_json_str "${gd##*/}")
+  printf '{"id":%s,"branch":%s,"worktreeHead":%s,"base":%s,"tip":%s,"dirty":%s,"ignoredDigest":%s,"stashes":%s,"worktreeBytes":%s,"pr":%s,"prHistory":%s,"transcript":%s,"workdir":%s,"workdirReal":%s,"uuid":%s,"worktreeAdmin":%s%s}\n' \
+    "$(_json_str "$id")" "$(_json_str "$branch")" "$( (( unrec )) && echo null || _json_str "$wthead")" "$(_json_str "$base")" \
     "$( [[ -n "$tip" ]] && _json_str "$tip" || echo null)" \
-    "$dirty" "$(_json_str "$ignored")" "$stashes" "$bytes" "$pr" "$prhistory" "$(_json_str "$transcript")" \
-    "$(_json_str "$workdir")" "$wdreal" "$(_json_str "$uuid")" "$adm"
+    "$dirty" "$( (( unrec )) && echo null || _json_str "$ignored")" "$stashes" "$bytes" "$pr" "$prhistory" "$(_json_str "$transcript")" \
+    "$(_json_str "$workdir")" "$wdreal" "$(_json_str "$uuid")" "$adm" "$( (( unrec )) && echo ',"unrecordedEmpty":true')"
 }
 
 cmd_ws_restore() {   # ccd ws-restore --session <id> — undo an archive entirely
@@ -11899,11 +12012,11 @@ cmd_pr_state() {   # ccd pr-state --session <id> | ccd pr-state --project <proje
   # (`_pr_state_by_pr`'s `gh pr view`, under PR_GH_VIEW_TIMEOUT), plus, only when
   # that PR is CLOSED with the train label and has no kept proof, the train
   # record's reads inside PR_STATE_TRAIN_TIMEOUT — and no number moves when a
-  # project grows a ninth workspace. The budget argument (8 projects x 1 call / 120 s
-  # ~ 5 % of the GraphQL allowance) survives tripling and would not survive
-  # going per session, and `pr-timeout-budget.test.ts` sums each form's calls'
-  # timeouts against the server's outer bound on this verb. Read-only apart
-  # from the three registry fields `--session`/`--project` persist, so a ccrc restart degrades to
+  # project grows a ninth workspace, except the `--pr` form: the server's landed reader (`server/src/coord/landed.ts`) asks it
+  # once per open landing entry it reads in a sweep, at most LANDED_READS_PER_SWEEP a sweep across every project (about 300 an
+  # hour at the cap, 6 % of the GraphQL allowance beside the PR lane's 5 %). The budget argument (8 projects x 1 call / 120 s)
+  # survives that, and `pr-timeout-budget.test.ts` sums each form's calls' timeouts against the server's outer bound on this
+  # verb. Read-only apart from the three registry fields `--session`/`--project` persist, so a ccrc restart degrades to
   # honest stale, and the kept train proofs and tried lines a train claim's record writes (`--session` and `--pr`).
   [[ $# -eq 4 && $1 == --project && $3 == --pr ]] && { _pr_state_by_pr "$2" "$4"; return; }
   [[ $# -eq 2 ]] || die "usage: ccd pr-state --session <id> | ccd pr-state --project <project> [--pr <n>]"
@@ -12723,14 +12836,16 @@ _am_setting() {   # -> rc 0 = auto; rc 1 = off (AM_WHY); rc 2 = unread, which re
   esac
 }
 _am_who() {   # -> sets AM_WHO (the session id the pane names, or ?) and AM_WHY (why none, else empty); rc 1 = unnamed
-  local out pid tname id
+  local out pid tname id TMX_SOCK TMX_WHY
   AM_WHO='?'; AM_WHY=""
   [[ -n "$AM_REG" && -n "$AM_UID" ]] || { AM_WHY="the account's home cannot be read"; return 1; }
   [[ -n "${TMUX_PANE:-}" ]] || { AM_WHY="no tmux pane"; return 1; }
   [[ "$TMUX_PANE" =~ ^%[0-9]+$ ]] || { AM_WHY="the tmux pane id is not a pane id"; return 1; }
-  # The exact pane, bounded, as the session hook asks it, but on the fleet's one default socket by path (`-S` beats $TMUX
-  # and $TMUX_TMPDIR) and with the pane's own process pid beside its session name.
-  out=$(_am_sys _plat_timeout 2 tmux -S "/tmp/tmux-$AM_UID/default" display-message -p -t "$TMUX_PANE" '#{pane_pid} #S' 2>/dev/null) || out=""
+  # The exact pane, bounded, as the session hook asks it, but on the fleet's socket by path (`-S` beats $TMUX and
+  # $TMUX_TMPDIR), its name the lookup's under the password database's home (D-8270), and with the pane's own process
+  # pid beside its session name.
+  _tmx_sock "$AM_HOME" || { AM_WHY="the tmux socket setting cannot be used: $TMX_WHY"; return 1; }
+  out=$(_am_sys _plat_timeout 2 tmux -S "/tmp/tmux-$AM_UID/${TMX_SOCK:-default}" display-message -p -t "$TMUX_PANE" '#{pane_pid} #S' 2>/dev/null) || out=""
   pid=${out%% *}; tname=${out#* }
   [[ "$pid" =~ ^[0-9]+$ && "$tname" == cc-?* ]] || { AM_WHY="tmux names no ccrc session for this pane"; return 1; }
   _am_ancestor "$pid" || { AM_WHY="the named pane is not the one this command is running in"; return 1; }
@@ -13478,6 +13593,7 @@ _ws_child_manifest() {   # main workdir -> JSON array on stdout; non-zero and NO
 }
 
 REAP_SCAN_SECONDS=30      # the whole-workspace bound on the inside-of-ignored scan
+WS_INDEX_LOCK_STALE_S=21600   # D-5945: an empty, unheld index.lock is stale only once older than this (6 h)
 REAP_IGNLOCK_WAIT=5       # D-5884: the most a retry waits on `.ignored-scan.lock` before it retries unlocked
 
 _ws_sensitive_inside() {   # absdir relpath deadline -> 0 with hits in _WS_INSIDE_HITS, 1 = the scan did not complete
@@ -15326,7 +15442,7 @@ cmd_ws_audit() {   # ccd ws-audit --session <id> — read-only about the WORKSPA
   if [[ $mode == reclaim ]]; then
     printf '"mode":"reclaim","childOf":%s,"generation":%s,"legacyRows":%s,"pendingRows":%s,' \
       "$( _child_runid_valid "$RECLAIM_CHILDOF" && echo "$RECLAIM_CHILDOF" || echo null)" "$( _reg_generation_valid "$RECLAIM_GENERATION" && printf '"%s"' "$RECLAIM_GENERATION" || echo null)" "${_WS_LEGACY_ROWS:-null}" "${_WS_PENDING_ROWS:-null}"
-    _ws_rescue_doc; _ws_held_by_doc
+    _ws_rescue_doc; _ws_held_by_doc; _ws_stale_lock_doc
     [[ -n "$RECLAIM_RESUME_PHASE" ]] && printf '"resume":%s,' "$(_json_str "$RECLAIM_RESUME_PHASE")"
     if [[ "$REAP_VERDICT" == reclaimable ]]; then
       # never the literal `"verdict":"…"` shape — see "RECLAIMABLE, SPELLED THROUGH _JSON_STR" in the RECLAIM region
@@ -16945,7 +17061,7 @@ _ws_reap_tail() {   # id resumed-phase — the journalled destructive sequence
   # not only the parent's.
   if [[ -z "$resumed" ]]; then
     _ws_unsupervise "$id"                                                  # (d)
-    tmux kill-session -t "$(_tmux_t "$id")" 2>/dev/null || true              # (e)
+    _tmx kill-session -t "$(_tmux_t "$id")" 2>/dev/null || true              # (e)
   fi
 
   # THE STEP-(f) DISJUNCTION, RULE: this step runs whenever the run has
@@ -19039,7 +19155,7 @@ _ci_proc_start() {   # pid -> rc 0, _CI_PSTART = that process's start time, in c
   # 2) is in parentheses and may itself hold spaces or parentheses, so the
   # fields are counted from after its LAST ") ": field 3 on, starttime is the
   # 20th of them.
-  local s rest
+  local s="" rest
   local -a w
   _CI_PSTART=""
   [[ -f "$_CI_PROC/$1/stat" ]] || return 1
@@ -19267,7 +19383,7 @@ _sync_uuid() {   # id — mirror the live process's CURRENT sessionId into the r
   # following of any worker: the window holds the conversation again.
   local id="$1" cfg pid sid
   cfg=$(_cfg_dir "$(_reg_get "$id" wrapper)"); [[ -n "$cfg" ]] || return 0
-  pid=$(tmux list-panes -t "$(_tmux_t "$id")" -F '#{pane_pid}' 2>/dev/null | head -1)
+  pid=$("${_TMX_ARGV[@]}" list-panes -t "$(_tmux_t "$id")" -F '#{pane_pid}' 2>/dev/null | head -1)
   if [[ -n "$pid" && -f "$cfg/sessions/$pid.json" ]]; then
     sid=$(grep -oE '"sessionId":"[0-9a-f-]{36}"' "$cfg/sessions/$pid.json" | head -1 | cut -d'"' -f4)
     if [[ -n "$sid" && "$sid" != "$(_reg_get "$id" uuid)" ]] \
@@ -20434,7 +20550,7 @@ _pane_measurable() {   # id -> rc 0 when cc-<id>'s ACTIVE pane is at least READE
   # review — naming the function instead of a distance is what keeps this claim
   # from rotting the same way again.)
   local rows w
-  rows=$(tmux list-panes -t "$(_tmux_t "$1")" -F '#{pane_active} #{pane_width}' 2>/dev/null) || return 1
+  rows=$("${_TMX_ARGV[@]}" list-panes -t "$(_tmux_t "$1")" -F '#{pane_active} #{pane_width}' 2>/dev/null) || return 1
   w=$(awk '$1 == 1 { print $2; exit }' <<<"$rows")
   # Regex before the arithmetic test: `$w` is bytes off tmux's stdout.
   [[ "$w" =~ ^[0-9]+$ ]] || return 1
@@ -20488,6 +20604,60 @@ _pane_narrow_note() {   # id site [evidence] — say ONCE per COMPACT_NOTE_FLOOR
   return 0
 }
 
+_pane_type_ready() {   # id site [append] -> 0 ccd may type into the pane now | 1 refused (2 when narrow), and said so in swap.log (D-8271)
+  # THE ONE CHECK BEFORE ccd TYPES (operator ruling SH-9, D-8271). Every function
+  # that presses a key into a session's pane calls this before its first key, or
+  # is a continuation of a sequence whose every caller did (`_route_escape`
+  # closing the picker ccd itself opened, `_route_model_ack_wait` confirming the
+  # dialog ccd's own keystroke raised, `_answer_two_option_dialog` answering a
+  # startup gate the spawn loop checked for). `ccd-typing-check.test.ts` holds
+  # that census against this file. Three refusals, read in this order:
+  #   narrow    — the active pane is under READER_MIN_COLS, or tmux would not
+  #               measure it: `_pane_measurable`, the same floor every screen
+  #               reader in this file stands down on, so a site never types on
+  #               the strength of a reading taken on a pane it cannot read;
+  #   copy-mode — the pane is in a tmux mode (`#{pane_in_mode}`, copy-mode when a
+  #               person scrolls it): the keys go to the mode, not to Claude
+  #               Code, and a literal write can hang there (measured, server
+  #               `GET /api/sessions/:id/pane/history`'s note). A tmux that will
+  #               not answer the question refuses too;
+  #   draft     — the input box holds text (`_pane_box_read`'s `draft`), a person
+  #               half way through a sentence that a key of ours would submit or
+  #               corrupt.
+  # NO BOX IS NOT A REFUSAL HERE. `absent` is a dialog standing where the box
+  # was, and the spawn gates and the picker's own dialogs are answered exactly
+  # there; the sites that must see an EMPTY box (the stale Enter, the redrive)
+  # keep their own stricter read ahead of this one.
+  # `append` is `ccd clip`, the operator's own verb, which adds a path to the box
+  # and presses no Enter: a draft is what it adds to, and it reads nothing off
+  # the screen, so only the copy-mode rung applies.
+  # FLOORED PER REASON. A refused tick retries every 5 s; one line per episode
+  # (the first refusal, a change of reason, or the same reason again after
+  # COMPACT_NOTE_FLOOR, D-2013's budget) keeps swap.log readable. A pass ends the
+  # episode, so the next refusal speaks at once.
+  local id="$1" site="$2" kind="${3:-}" t why="" detail="" mode said said_why saidts now rc=1
+  t=$(_tmux_t "$id")
+  if [[ "$kind" != append ]] && ! _pane_measurable "$id"; then
+    why=narrow; rc=2; detail="the pane is under ${READER_MIN_COLS} columns or tmux would not measure it"
+  elif ! mode=$("${_TMX_ARGV[@]}" display-message -p -t "$t" '#{pane_in_mode}' 2>/dev/null); then
+    why=copy-mode; detail="tmux would not say whether the pane is in a mode"
+  elif [[ "$mode" == 1 ]]; then
+    why=copy-mode; detail="the pane is in a tmux mode (copy-mode: a person is scrolling it)"
+  elif [[ "$kind" != append && "$(_pane_box_read "$("${_TMX_ARGV[@]}" capture-pane -t "$t" -p -e 2>/dev/null)")" == draft ]]; then
+    why=draft; detail="the input box holds a half-typed draft"
+  fi
+  if [[ -z "$why" ]]; then
+    [[ -e "$REG/$id.typerefuse" ]] && rm -f -- "$REG/$id.typerefuse"
+    return 0
+  fi
+  now=$(date +%s)
+  said=$(_reg_get "$id" typerefuse); said_why="${said%% *}"; saidts="${said##* }"
+  [[ "$said_why" == "$why" && "$saidts" =~ ^[0-9]+$ && $((now - saidts)) -lt "$COMPACT_NOTE_FLOOR" ]] && return "$rc"
+  _reg_set "$id" typerefuse "$why $now"
+  echo "$(date '+%F %T') type-refused $id: $why at $site, $detail" >> "$REG/swap.log"
+  return "$rc"
+}
+
 # FOLLOW-UP (D-8173): the spawn settings now pin `autoContinueAtUsageLimit` off, so this screen-read hold goes once that pin is watched working live; it is kept until then.
 _pane_auto_continue_armed() {   # pane text [id] -> success iff Claude Code is waiting out a limit on its own (D-2229).
   # "Usage limit reached · continuing automatically at HH:MM · esc or type to cancel" (and its
@@ -20504,7 +20674,7 @@ _pane_born() {   # id -> the epoch the session's tmux session was created, i.e. 
   # `_tmux_new_session`, swap and revival alike), so this bounds the process
   # that owns the pane. `session_created`, never `session_activity`, which moves
   # on every redraw and would discard every row as "earlier".
-  tmux display-message -p -t "$(_tmux_t "$1")" '#{session_created}' 2>/dev/null
+  _tmx display-message -p -t "$(_tmux_t "$1")" '#{session_created}' 2>/dev/null
 }
 
 _session_hard_blocked() {   # id pane-text -> success iff the pane says stuck, OR the transcript's newest real row is a rate-limit banner or this process's 401, and nobody is typing — never a banner a swap carried in from before this process (D-2363, D-3522, D-3526)
@@ -20629,7 +20799,7 @@ _session_hard_blocked() {   # id pane-text -> success iff the pane says stuck, O
   # the transcript, and the dialog holds nothing a person typed. A draft inside a
   # bordered box still stands down. Left over: text typed before the dialog
   # opened may sit hidden under it, and the swap does not carry it.
-  box=$(_pane_box_read "$(tmux capture-pane -t "$(_tmux_t "$id")" -p -e 2>/dev/null)")
+  box=$(_pane_box_read "$("${_TMX_ARGV[@]}" capture-pane -t "$(_tmux_t "$id")" -p -e 2>/dev/null)")
   [[ "$box" == draft ]] && { HARD_BLOCK_NO=draft; HARD_BLOCK_EV=transcript; return 1; }
   HARD_BLOCK_VIA=transcript; _hard_block_dated "$id"
   return 0
@@ -20663,7 +20833,7 @@ _pane_limit_capture_to() {   # var id tail -> var = the whole visible pane iff t
   # (`_pane_limit_banner`); the broad `_pane_hard_blocked` stays on the tail.
   local _id="$2" _tail="$3" _full
   if [[ "$_tail" == *"Enter to confirm · Esc to cancel"* || "$_tail" == *"What do you want to do?"* ]]; then
-    _full=$(tmux capture-pane -t "$(_tmux_t "$_id")" -p 2>/dev/null)
+    _full=$("${_TMX_ARGV[@]}" capture-pane -t "$(_tmux_t "$_id")" -p 2>/dev/null)
     if _pane_limit_menu "$_full"; then printf -v "$1" '%s' "$_full"; return 0; fi
   fi
   printf -v "$1" '%s' "$_tail"
@@ -20692,7 +20862,7 @@ _auto_stale_check() {   # id — D-2360: press Enter for Claude Code when its ow
   local id="$1" t pane now last box why
   t=$(_tmux_t "$id")
   _pane_measurable "$id" || { _pane_narrow_note "$id" stale; return 0; }   # unmeasurable -> no Enter (§6.3): a wrapped "esc to interrupt" reads as idle
-  pane=$(tmux capture-pane -t "$t" -p 2>/dev/null | tail -8)
+  pane=$("${_TMX_ARGV[@]}" capture-pane -t "$t" -p 2>/dev/null | tail -8)
   [[ -n "$pane" ]] || return 0
   _pane_limit_stale "$pane" || return 0
   echo "$pane" | grep -q "esc to interrupt" && return 0
@@ -20701,14 +20871,15 @@ _auto_stale_check() {   # id — D-2360: press Enter for Claude Code when its ow
   [[ "$last" =~ ^[0-9]+$ && $((now - last)) -lt "$STALE_PRESS_COOLDOWN" ]] && return 0
   _reg_set "$id" stalepress "$now"
   # An Enter on an open dialog picks its highlighted row (D-8116): no box refuses too.
-  box=$(_pane_box_read "$(tmux capture-pane -t "$t" -p -e 2>/dev/null)")
+  box=$(_pane_box_read "$("${_TMX_ARGV[@]}" capture-pane -t "$t" -p -e 2>/dev/null)")
   if [[ "$box" != empty ]]; then
     why="the input box is not empty"; [[ "$box" == absent ]] && why="no input box is on screen (a dialog is open)"
     echo "$(date '+%F %T') stale-skip $id: usage limit has reset but $why [wrapper=$(_reg_get "$id" wrapper)]" >> "$REG/swap.log"
     return 0
   fi
+  _pane_type_ready "$id" stale || return 0   # D-8271: the one typing check (copy-mode, width, draft)
   echo "$(date '+%F %T') stale-resume $id: usage limit has reset; pressing Enter for Claude Code's own continuation [wrapper=$(_reg_get "$id" wrapper)]" >> "$REG/swap.log"
-  tmux send-keys -t "$t" Enter
+  _tmx send-keys -t "$t" Enter
   return 0
 }
 
@@ -21381,7 +21552,7 @@ _auto_swap_check() {   # id — called each supervise tick. HOME-account affinit
     [[ "$STANDDOWN_EV" == transcript ]] && _standdown_note "$id" swapblocked transcript ""
     return 0
   fi
-  pane=$(tmux capture-pane -t "$(_tmux_t "$id")" -p 2>/dev/null | tail -8)
+  pane=$("${_TMX_ARGV[@]}" capture-pane -t "$(_tmux_t "$id")" -p 2>/dev/null | tail -8)
   # THE VERDICT BEFORE THE BLANK-PANE RETURN (D-2363): a blank capture used to
   # return here, ahead of any classifier, and a limited session with a blank
   # pane was never rescued. `_session_hard_blocked` reads the transcript for
@@ -21692,7 +21863,7 @@ _auto_swap_check() {   # id — called each supervise tick. HOME-account affinit
   # slots order the arrivals. A slot that cannot be written fails OPEN.
   if ! _swap_stagger_off && _affinity_cur_serves "$id" "$wrapper" "$aff_verb" "$hard_blocked"; then
     # No box on screen (a dialog is open) stands the move down too (D-8116).
-    case "$(_pane_box_read "$(tmux capture-pane -t "$(_tmux_t "$id")" -p -e 2>/dev/null)")" in
+    case "$(_pane_box_read "$("${_TMX_ARGV[@]}" capture-pane -t "$(_tmux_t "$id")" -p -e 2>/dev/null)")" in
       draft) _standdown_note "$id" draft; return 0 ;;
       absent) _standdown_note "$id" no-box; return 0 ;;
     esac
@@ -21722,14 +21893,14 @@ _swap_idle_gate() {   # id [pane [wrapper [now]]] -> rc 0 iff the session is at 
   # top already ran before it captured the pane it passes in; the act's capture
   # here gets its own, so an unmeasurable pane re-queues rather than reads idle.
   if [[ $# -ge 2 ]]; then pane="$2"
-  else _pane_measurable "$id" || return 1; pane=$(tmux capture-pane -t "$(_tmux_t "$id")" -p 2>/dev/null | tail -8); fi
+  else _pane_measurable "$id" || return 1; pane=$("${_TMX_ARGV[@]}" capture-pane -t "$(_tmux_t "$id")" -p 2>/dev/null | tail -8); fi
   if [[ $# -ge 3 ]]; then wrapper="$3"; else _reg_read_to wrapper "$id" wrapper || return 1; fi
   [[ -n "$wrapper" ]] || return 1
   if [[ $# -ge 4 ]]; then now="$4"; else _now_s_to now; fi
   echo "$pane" | grep -q "esc to interrupt" && return 1    # mid-turn: wait for the gap
   echo "$pane" | grep -q "❯" || return 1                    # not at a prompt yet
   local spid sf st sua
-  spid=$(tmux list-panes -t "$(_tmux_t "$id")" -F '#{pane_pid}' 2>/dev/null | head -1)
+  spid=$("${_TMX_ARGV[@]}" list-panes -t "$(_tmux_t "$id")" -F '#{pane_pid}' 2>/dev/null | head -1)
   _cfg_dir_to sf "$wrapper"; sf="$sf/sessions/$spid.json"   # tick-diet spec §6.2: memoised per wrapper — an exact memo, no D-number (Task 5)
   # `-f` BEFORE THE GREP, for `_authdead`'s reason (#69 review round 3, R2):
   # `grep FILE` opens by name and blocks for ever on a FIFO with no writer or on
@@ -21936,8 +22107,15 @@ _route_any() {   # id — 0 iff ANY routing field file exists (spec §5.1: a ses
   # `browser` IS NOT A ROUTING FIELD FOR THIS QUESTION (D-8121): it decides which MCP servers a spawn starts, never the
   # model, effort or placement, and `_browser_spawn_compose` reads it on its own. A row that names only `browser` is a
   # row with no routing record, so the coordinator row is still seeded beside it and the spawn composes no route flags.
+  # THE LAUNCH PROFILE'S THREE (`profile`, `automem`, `compactwindow`; Overlord W1a, plan slug
+  # profile-fields-outside-route-any) are not routing fields for this question either, for the same reason: they decide
+  # the spawn's settings and environment, read on their own by `_profile_spawn_compose`. A profile-only row keeps today's
+  # seed, and on the tick and spawn paths it is not read per tick by `_route_apply_pending` (m-B9) and writes no
+  # `routeapplied`. A `ccd route --set` of one on a never-routed row can leave an empty stamp, as `browser` does; the
+  # next spawn removes it. `precompact` (Overlord W1a compaction, plan slug route-fields-outside-route-any) is skipped
+  # for the same reason: the session hook's PreCompact refusal arm reads it, and nothing here.
   local f
-  for f in "${ROUTE_FIELDS[@]}"; do [[ "$f" != browser && -e "$REG/$1.$f" ]] && return 0; done
+  for f in "${ROUTE_FIELDS[@]}"; do case "$f" in browser|profile|automem|compactwindow|precompact) ;; *) [[ -e "$REG/$1.$f" ]] && return 0 ;; esac; done
   return 1
 }
 _route_valid() {   # field value — THREE answers, because two of them are two different
@@ -21946,8 +22124,8 @@ _route_valid() {   # field value — THREE answers, because two of them are two 
   #   1  the value is NOT in it — bad input, the caller's to refuse
   #   2  THE VOCABULARY ITSELF WAS UNAVAILABLE, so this call measured nothing
   #      about the value at all
-  # Only `subagent` can answer 2, and only because its vocabulary is the one
-  # that is not spelled in this file: it is `shared/models.mjs`'s
+  # Two fields can answer 2, because their vocabularies are not spelled in this file: `profile` (the rows of
+  # `LAUNCH_PROFILES_JSON`, below) and `subagent`, which is `shared/models.mjs`'s
   # `SUBAGENT_CLASSES` PROJECTED into `$HOME/.ccrc/accounts.sh` as
   # `CCRC_SUBAGENT_CLASSES` (routing slice 1, Task 1), and a projection written
   # before that line carries no such array — a hand-installed ccd, an adopt, or
@@ -21968,6 +22146,17 @@ _route_valid() {   # field value — THREE answers, because two of them are two 
     workflow) _route_word_in "$v" "$ROUTE_WORKFLOWS" ;;
     browser)  _route_word_in "$v" "$ROUTE_BROWSERS" ;;
     compact)  [[ "$v" =~ ^[0-9]{2,3}$ ]] && (( 10#$v >= 10 && 10#$v <= 100 )) ;;
+    # THE LAUNCH PROFILE'S THREE (Overlord W1a, spec §3.6 H1). `profile` names a row of `LAUNCH_PROFILES_JSON` (the role
+    # table's projection, so this file holds no second list of role words): rc 2 when that file cannot be read, ccd's
+    # "vocabulary unavailable", never "bad value". `automem` is the Settings row's choice for `plain`; `compactwindow` is
+    # Claude Code's own auto-compact window in tokens, the range `CLAUDE_CODE_AUTO_COMPACT_WINDOW` takes (W0-14).
+    profile)  [[ "$v" =~ ^[a-z]{1,16}$ ]] || return 1
+              jq -e --arg r "$v" 'has($r)' "$LAUNCH_PROFILES_JSON" >/dev/null 2>&1; x=$?; (( x <= 1 )) || return 2; return "$x" ;;
+    automem)  _route_word_in "$v" "on off" ;;
+    compactwindow) [[ "$v" =~ ^[1-9][0-9]{5,6}$ ]] && (( v >= 100000 && v <= 1000000 )) ;;
+    # `precompact` (Overlord W1a compaction, spec §3.3.4 C39): `refuse` arms the hook's PreCompact refusal arm
+    # (`_hook_compact_refuse`), `allow` and absent leave it dark. Its one writer is the generations lane.
+    precompact) _route_word_in "$v" "refuse allow" ;;
     # `degraded` is the four CLASS names WITHOUT `default` — a session cannot
     # degrade TO "no override" — and they are DERIVED from `ROUTE_CLASSES`
     # rather than typed a second time three lines below the first (controller
@@ -22097,7 +22286,7 @@ _route_argv_check() {   # k=v... -> 0 all valid | dies naming the field and the 
     _route_valid "$f" "$v"; rc=$?
     case "$rc" in
       0) ;;
-      2) die "route: this box's roster projection carries no subagent class list — re-run ccrc install" ;;
+      2) [[ "$f" == profile ]] && die "route: this box's launch profiles ($LAUNCH_PROFILES_JSON) cannot be read — re-run ccrc install"; die "route: this box's roster projection carries no subagent class list — re-run ccrc install" ;;
       *) die "bad value for $f ($(_route_bytes "$v") bytes) — not in its vocabulary; nothing was touched" ;;
     esac
     _route_fable_shell "$f" "$v" && die "fable-operator-only: a Claude Code session may not select class fable"
@@ -22425,7 +22614,7 @@ _pane_for_keystroke() {   # id — 0 with the last 8 pane rows in `KS_PANE`; 1 w
   # `ccd-auto-compact.test.ts` pins the 8-ROW window against exactly that regression.
   local id="$1" prc pane
   KS_PANE=""; KS_WHY=""; KS_DETAIL=""
-  pane=$(tmux capture-pane -t "$(_tmux_t "$id")" -p 2>/dev/null | tail -8); prc=$?
+  pane=$("${_TMX_ARGV[@]}" capture-pane -t "$(_tmux_t "$id")" -p 2>/dev/null | tail -8); prc=$?
   # shellcheck disable=SC2100  # a hyphenated word assigned as a string, not arithmetic (D-8198)
   [[ "$prc" == 0 ]] || { KS_WHY=pane-unreadable; KS_DETAIL="tmux capture-pane rc=$prc"; return 1; }
   # shellcheck disable=SC2100  # a hyphenated word assigned as a string, not arithmetic (D-8198)
@@ -22465,7 +22654,7 @@ _idle_for_keystroke() {   # id pane ctxnote — 0 iff this session is at a clean
   echo "$pane" | grep -q "esc to interrupt" && { KS_WHY=mid-turn; KS_DETAIL="$ctxnote"; return 1; }
   echo "$pane" | grep -q "❯" || { KS_WHY=no-prompt; KS_DETAIL="$ctxnote"; return 1; }
   wrapper=$(_reg_get "$id" wrapper)
-  spid=$(tmux list-panes -t "$(_tmux_t "$id")" -F '#{pane_pid}' 2>/dev/null | head -1)
+  spid=$("${_TMX_ARGV[@]}" list-panes -t "$(_tmux_t "$id")" -F '#{pane_pid}' 2>/dev/null | head -1)
   # D-2013 AT THE NARROWEST SEAM: "MEASURED BUSY" IS NOT "COULD NOT MEASURE". An earlier cut of
   # this function put `${st:-unreadable}` in the DETAIL and left one `not-idle` slug for both,
   # which is the same collapse one seam over — the detail is floored out of swap.log after the
@@ -22530,7 +22719,7 @@ _idle_for_keystroke() {   # id pane ctxnote — 0 iff this session is at a clean
   # when it was handed a plain capture.
   # No box on screen means a dialog took its place: a keystroke would answer it (D-8116).
   t=$(_tmux_t "$id")
-  case "$(_pane_box_read "$(tmux capture-pane -t "$t" -p -e 2>/dev/null)")" in
+  case "$(_pane_box_read "$("${_TMX_ARGV[@]}" capture-pane -t "$t" -p -e 2>/dev/null)")" in
     draft) KS_WHY=drafting; KS_DETAIL="$ctxnote"; return 1 ;;
     absent) KS_WHY=no-box; KS_DETAIL="no input box on screen, a dialog is open${ctxnote:+, $ctxnote}"; return 1 ;;
   esac
@@ -22554,7 +22743,7 @@ _auto_compact_check() {   # id — at a clean idle turn boundary, /compact a ses
   # "we cannot see this session at all", the first of the two shapes above, reached one rung
   # earlier than the read that used to be the first place it could be said.
   [[ -f "$AUTOCOMPACT_DISABLE_FILE" ]] && return 0
-  local id="$1" now last lastswap fromswap=0 pane pct thr wrapper t
+  local id="$1" now last lastswap fromswap=0 pane pct thr wrapper t ctext
   _now_s_to now   # D-4961: the clock seam — fork-free under bash 5 ($EPOCHSECONDS)
   _reg_get_to last "$id" lastcompact   # D-4963: a builtin read, no subshell (tick-diet spec §6.4)
   [[ "$last" =~ ^[0-9]+$ && $((now - last)) -lt "$COMPACT_COOLDOWN" ]] && return 0
@@ -22647,6 +22836,8 @@ _auto_compact_check() {   # id — at a clean idle turn boundary, /compact a ses
   # a wider contract than "is this pane typeable" for one string.
   _reg_get_to wrapper "$id" wrapper   # D-4963: a builtin read, no subshell
   t=$(_tmux_t "$id")
+  # D-8271: the one typing check (copy-mode, width, draft). A refusal stamps nothing, so the next tick asks again.
+  _pane_type_ready "$id" compact || return 0
   # Nothing is being declined any more, so the field must go — the `auto-compact` line below is
   # this tick's record, and a surviving `compactskip` beside it would claim a refusal that did
   # not happen. Cleared BEFORE the send-keys for the same reason `_reg_set lastcompact` is: what
@@ -22654,7 +22845,8 @@ _auto_compact_check() {   # id — at a clean idle turn boundary, /compact a ses
   _compact_note_clear "$id"
   _reg_set "$id" lastcompact "$now"
   echo "$(date '+%F %T') auto-compact $id: ctx ${pct}% >= ${thr}% [wrapper=$wrapper]" >> "$REG/swap.log"
-  tmux send-keys -t "$t" -l "/compact"; sleep 1; tmux send-keys -t "$t" Enter
+  _compact_text_to ctext "$id"   # the role's text, or empty: a bare /compact (Overlord W1a compaction, C51)
+  _tmx send-keys -t "$t" -l "/compact${ctext:+ $ctext}"; sleep 1; _tmx send-keys -t "$t" Enter
 }
 
 # ── APPLYING THE RECORD TO A LIVE SESSION (routing spec §5.3; slice 4, Task 4) ─
@@ -23093,7 +23285,7 @@ _route_effort_ack_wait() {   # tmuxname level -> 0 iff the pane acknowledges THI
   local t="$1" level="$2" shown i pane
   shown=$(_route_effort_shown "$level")
   for ((i = 0; i < ROUTE_ACK_WAIT; i++)); do
-    pane=$(tmux capture-pane -t "$t" -p 2>/dev/null)
+    pane=$("${_TMX_ARGV[@]}" capture-pane -t "$t" -p 2>/dev/null)
     if _pane_prompt_box_showing "$pane" \
       && [[ "$(_pane_effort_ack "$pane")" == "Set effort level to $level (this session only)"* ]] \
       && [[ "$(_pane_statusline_seg "$pane" "🤖")" == *" · $shown" ]]; then
@@ -23129,11 +23321,11 @@ _route_escape() {   # id — leave the pane as we found it after an unacknowledg
   # unmeasured claim, and pressing Escape at a bare prompt is a no-op anyway.
   local t; t=$(_tmux_t "$1")
   echo "$(date '+%F %T') route-escape $1" >> "$REG/swap.log"   # D-5237: every Escape ccd sends is on record
-  tmux send-keys -t "$t" Escape; sleep 1
+  _tmx send-keys -t "$t" Escape; sleep 1
   return 0
 }
 
-_route_type_effort() {   # id level -> 0 acknowledged | 1 unconfirmed | 2 no slider stop
+_route_type_effort() {   # id level -> 0 acknowledged | 1 unconfirmed | 2 no slider stop | 3 the typing check refused, nothing typed (D-8271)
   # `ultracode` HAS NO SLIDER DELTA and needs none: it is the one level whose
   # PLAIN form is session-only by construction (D-2810, measured — the ack reads
   # `(this session only)` and settings.json is byte-identical), because there is
@@ -23154,14 +23346,16 @@ _route_type_effort() {   # id level -> 0 acknowledged | 1 unconfirmed | 2 no sli
   # auth-pane scan in `ccd-account-pane.test.ts` can see it derive.
   local id="$1" level="$2" t n i
   t=$(_tmux_t "$id")
+  _pane_type_ready "$id" route || return 3   # D-8271: the one typing check; rc 3 is "nothing typed", never an attempt
+  _typed_note "$id" effort "$level"   # ccd's own keystroke, never the operator's choice (session-continuity §5.7); after the check, so a refusal journals nothing
   local -a stops=()
   if [[ "$level" == ultracode ]]; then
-    tmux send-keys -t "$t" -l "/effort ultracode"; sleep 1; tmux send-keys -t "$t" Enter; sleep 1
+    _tmx send-keys -t "$t" -l "/effort ultracode"; sleep 1; _tmx send-keys -t "$t" Enter; sleep 1
     # Opus 5 raises the same `Change effort level?` confirmation here as on the
     # slider below (`1. Yes, switch to xhigh`, measured 2026-09-23); unanswered,
     # no ack ever came and every retry ended in Escape.
-    if _pane_effort_switch_dialog "$(tmux capture-pane -t "$t" -p 2>/dev/null)"; then
-      tmux send-keys -t "$t" Enter; sleep 1
+    if _pane_effort_switch_dialog "$("${_TMX_ARGV[@]}" capture-pane -t "$t" -p 2>/dev/null)"; then
+      _tmx send-keys -t "$t" Enter; sleep 1
     fi
     _route_effort_ack_wait "$t" ultracode && return 0
     _route_escape "$id"; return 1
@@ -23176,16 +23370,16 @@ _route_type_effort() {   # id level -> 0 acknowledged | 1 unconfirmed | 2 no sli
     KS_DETAIL="effort=$level is not one of the measured slider stops ($ROUTE_EFFORT_STOPS)"
     return 2
   fi
-  tmux send-keys -t "$t" -l "/effort"; sleep 1; tmux send-keys -t "$t" Enter; sleep 1
-  for ((i = 0; i < 7; i++)); do tmux send-keys -t "$t" Left; sleep 1; done
-  for ((i = 0; i < n; i++)); do tmux send-keys -t "$t" Right; sleep 1; done
-  tmux send-keys -t "$t" -l "s"; sleep 1
+  _tmx send-keys -t "$t" -l "/effort"; sleep 1; _tmx send-keys -t "$t" Enter; sleep 1
+  for ((i = 0; i < 7; i++)); do _tmx send-keys -t "$t" Left; sleep 1; done
+  for ((i = 0; i < n; i++)); do _tmx send-keys -t "$t" Right; sleep 1; done
+  _tmx send-keys -t "$t" -l "s"; sleep 1
   # BOTH SHAPES ARE TOLERATED. On Opus 5 a conversation that already has turns
   # gets a second dialog — `Change effort level? … 1. Yes, switch to <level>` —
   # because the cached prefix has to be re-read; on Fable 5.1 the same two-turn
   # history showed none (measured, D-2808). Confirm it if it is there.
-  if _pane_effort_switch_dialog "$(tmux capture-pane -t "$t" -p 2>/dev/null)"; then
-    tmux send-keys -t "$t" Enter; sleep 1
+  if _pane_effort_switch_dialog "$("${_TMX_ARGV[@]}" capture-pane -t "$t" -p 2>/dev/null)"; then
+    _tmx send-keys -t "$t" Enter; sleep 1
   fi
   _route_effort_ack_wait "$t" "$level" && return 0
   _route_escape "$id"; return 1
@@ -23418,13 +23612,13 @@ _route_model_ack_wait() {   # id subject-ERE -> 0 iff the pane's LATEST model ou
   local id="$1" subj="$2" t i st answered=0
   t=$(_tmux_t "$id")
   for ((i = 0; i < ROUTE_ACK_WAIT; i++)); do
-    st=$(_pane_model_state "$(tmux capture-pane -t "$t" -p 2>/dev/null)")
+    st=$(_pane_model_state "$("${_TMX_ARGV[@]}" capture-pane -t "$t" -p 2>/dev/null)")
     case "$st" in
       "ack "*)
         printf '%s\n' "${st#ack }" | grep -qE "^Set model to ($subj) for this session only\$" && return 0 ;;
       "dialog "*)
         if [[ "$answered" == 0 && "$subj" != '.*' ]] && printf '%s\n' "${st#dialog }" | grep -qE "^❯[[:space:]]*1\.[[:space:]]+Yes, switch to ($subj)\$"; then
-          tmux send-keys -t "$t" Enter; answered=1
+          _tmx send-keys -t "$t" Enter; answered=1
         fi ;;
     esac
     sleep 1
@@ -23445,12 +23639,12 @@ _route_model_close() {   # id — `_route_escape`, and ONE more only while the p
   local t st
   _route_escape "$1"
   t=$(_tmux_t "$1")
-  st=$(_pane_model_state "$(tmux capture-pane -t "$t" -p 2>/dev/null)")
+  st=$(_pane_model_state "$("${_TMX_ARGV[@]}" capture-pane -t "$t" -p 2>/dev/null)")
   [[ "$st" == picker || "$st" == dialog* ]] && _route_escape "$1"
   return 0
 }
 
-_route_type_model() {   # id class wrapper -> 0 acknowledged | 1 unconfirmed | 2 no picker row
+_route_type_model() {   # id class wrapper -> 0 acknowledged | 1 unconfirmed | 2 no picker row | 3 the typing check refused, nothing typed (D-8271)
   # THE CURSOR IS READ, NEVER ASSUMED. The picker opens on the CURRENT model's
   # row, not on row 1, and `Up` on row 1 WRAPS to the last row on both lanes
   # (measured) — so "press Up×N to pin at the top" walks somewhere unpredictable
@@ -23489,10 +23683,12 @@ _route_type_model() {   # id class wrapper -> 0 acknowledged | 1 unconfirmed | 2
   # that stays the only picker answers `no-picker-row`.
   local id="$1" cls="$2" w="$3" t pane="" picker="" base rows n cur label desc want target=0 curs=0 exact=0 i tlabel="" tdesc=""
   t=$(_tmux_t "$id")
-  base=$(_pane_model_picker "$(tmux capture-pane -t "$t" -p 2>/dev/null)")
-  tmux send-keys -t "$t" -l "/model"; sleep 1; tmux send-keys -t "$t" Enter; sleep 1
+  _pane_type_ready "$id" route || return 3   # D-8271: the one typing check; rc 3 is "nothing typed", never an attempt
+  _typed_note "$id" model "$cls"   # ccd's own keystroke, never the operator's choice (session-continuity §5.7); after the check, so a refusal journals nothing
+  base=$(_pane_model_picker "$("${_TMX_ARGV[@]}" capture-pane -t "$t" -p 2>/dev/null)")
+  _tmx send-keys -t "$t" -l "/model"; sleep 1; _tmx send-keys -t "$t" Enter; sleep 1
   for ((i = 0; i < ROUTE_ACK_WAIT; i++)); do
-    pane=$(tmux capture-pane -t "$t" -p 2>/dev/null)
+    pane=$("${_TMX_ARGV[@]}" capture-pane -t "$t" -p 2>/dev/null)
     picker=$(_pane_model_picker "$pane")
     [[ -n "$picker" && "$picker" != "$base" ]] && break
     picker=""
@@ -23544,11 +23740,11 @@ _route_type_model() {   # id class wrapper -> 0 acknowledged | 1 unconfirmed | 2
     return 2
   fi
   if (( target > curs )); then
-    for ((i = curs; i < target; i++)); do tmux send-keys -t "$t" Down; sleep 1; done
+    for ((i = curs; i < target; i++)); do _tmx send-keys -t "$t" Down; sleep 1; done
   elif (( curs > target )); then
-    for ((i = target; i < curs; i++)); do tmux send-keys -t "$t" Up; sleep 1; done
+    for ((i = target; i < curs; i++)); do _tmx send-keys -t "$t" Up; sleep 1; done
   fi
-  tmux send-keys -t "$t" -l "s"; sleep 1
+  _tmx send-keys -t "$t" -l "s"; sleep 1
   # THE SUBJECT IS THE ROW'S, AND THE OUTCOME IS THE PANE'S LATEST WORD ON ITS
   # MODEL (`_route_model_ack_wait`, which also answers the cache dialog `s`
   # raises on every live session) — together what stop a stale `Set model to …`
@@ -23569,8 +23765,8 @@ _route_type_model() {   # id class wrapper -> 0 acknowledged | 1 unconfirmed | 2
 # writer, `actor=operator-session`; that writer's swap.log `route` line
 # records it.
 #
-# CCD'S OWN KEYSTROKES ARE NOT THE OPERATOR'S. `_route_apply_now` (`route --apply`, a degraded class
-# among them) journals each `/model` and `/effort` it is about to type in
+# CCD'S OWN KEYSTROKES ARE NOT THE OPERATOR'S. `_route_apply_now`'s typers (`route --apply`, a degraded class
+# among them) journal each `/model` and `/effort` they are about to type, once the typing check passed (D-8271), in
 # `$REG/<id>.typed`, one row `<epoch> <model|effort> <value>`, and a command of
 # the same kind and value within TYPED_MATCH_WINDOW of a row is ccd's. The
 # `routeapplied` stamp cannot serve: the spawn writes it from the composed argv
@@ -23964,10 +24160,10 @@ _route_apply_now() {   # id -> 0 everything wanted is applied | 1 something is s
   want=$(_route_wanted "$id"); cls="${want%% *}"; eff="${want#* }"
   have=$(_route_applied_get "$id" class)
   if [[ -n "$cls" && "$cls" != "$have" ]]; then
-    _typed_note "$id" model "$cls"   # ccd's own keystroke, never the operator's choice (session-continuity §5.7)
-    _route_type_model "$id" "$cls" "$w"; rc=$?
+    _route_type_model "$id" "$cls" "$w"; rc=$?   # journals its own keystroke (`_typed_note`) once the typing check passed
     case "$rc" in
       0) _route_applied_set "$id" class "$cls"; _route_note_clear "$id" ;;
+      3) return 1 ;;   # D-8271: refused before a key and logged by the check; transient, so not an attempt
       2) _route_note "$id" "$KS_WHY" "$KS_DETAIL"; _route_try_bump "$id"; return 1 ;;
       *) _route_note "$id" apply-unconfirmed "class=$cls"; _route_try_bump "$id"; return 1 ;;
     esac
@@ -23978,10 +24174,10 @@ _route_apply_now() {   # id -> 0 everything wanted is applied | 1 something is s
       _route_applied_set "$id" effort auto
       _route_note_clear "$id"
     else
-      _typed_note "$id" effort "$eff"   # ccd's own keystroke, never the operator's choice (session-continuity §5.7)
-      _route_type_effort "$id" "$eff"; rc=$?
+      _route_type_effort "$id" "$eff"; rc=$?   # journals its own keystroke (`_typed_note`) once the typing check passed
       case "$rc" in
         0) _route_applied_set "$id" effort "$eff"; _route_note_clear "$id" ;;
+        3) return 1 ;;   # D-8271: refused before a key and logged by the check; transient, so not an attempt
         # rc 2 is `no-slider-stop` — a level with no stop on the measured slider
         # (S4-R9). Its own refusal word rather than `apply-unconfirmed`, because
         # the remedy is different: nothing was typed at all and no acknowledgement
@@ -24599,13 +24795,13 @@ _answer_two_option_dialog() {   # pane tmuxname affirmative-substring
   cursor_line=$(printf '%s\n' "$pane" | LC_ALL=C grep -F $'\xe2\x9d\xaf' | tail -1)
   [[ -z "$cursor_line" ]] && cursor_line=$(printf '%s\n' "$pane" | grep -E '^[[:space:]]*>' | tail -1)
   if [[ -n "$cursor_line" && "$cursor_line" == *"$affirmative"* ]]; then
-    tmux send-keys -t "$t" Enter
+    _tmx send-keys -t "$t" Enter
   else
-    tmux send-keys -t "$t" Down; sleep 1; tmux send-keys -t "$t" Enter
+    _tmx send-keys -t "$t" Down; sleep 1; _tmx send-keys -t "$t" Enter
   fi
 }
 
-_accept_first_run_prompts() {   # tmuxname [fromswap] — clear startup gates, then CONFIRM the main TUI is up.
+_accept_first_run_prompts() {   # tmuxname [fromswap] [id] — clear startup gates, then CONFIRM the main TUI is up.
   # Returns as soon as "/rc active" (or another live marker) appears. Gates, order-agnostic,
   # each needing a DIFFERENT keystroke:
   #   • trust-folder prompt — layout order is NOT stable across Claude Code
@@ -24626,9 +24822,13 @@ _accept_first_run_prompts() {   # tmuxname [fromswap] — clear startup gates, t
   # return the moment the live marker shows, so the common path stays fast.
   # rc 0 = a live marker appeared (the TUI is up); 2 = an auth screen (below); 3 = the tmux session
   # vanished mid-poll; 4 = the window expired with no marker; 5 = a hard block (limit/spend banner,
-  # or lost auth): waiting longer cannot fix it; 6 = a live pane under READER_MIN_COLS, or of unreadable width, so every gate stood down. 3 and 4 both used to be "0 after ~15
+  # or lost auth): waiting longer cannot fix it; 6 = a live pane under READER_MIN_COLS, or of unreadable width, so every gate stood down
+  # (on the first pass, or when the typing check refuses `narrow` on a later one). 3 and 4 both used to be "0 after ~15
   # minutes" (M6): the caller printed `started`/`ensured` over a session that was never there.
-  local t fromswap="${2:-0}" bound i pane t0; t=$(_tmux_at "$1")
+  # `id` is the SESSION id (`_spawn_settle` passes it): the tmux name is sanitised ('.' and ':' -> '_'),
+  # so `${1#cc-}` is only the fallback, and a dotted id's refusals belong on swap.log and in the registry
+  # under the id itself, never under a name no session has (D-8271).
+  local t fromswap="${2:-0}" bound i pane t0 id="${3:-${1#cc-}}"; t=$(_tmux_at "$1")
   # A WALL-CLOCK bound as well as the iteration cap. The cap alone is not a
   # bound anyone can reason about: gate branches sleep 2 EXTRA seconds each, so
   # the same 450 iterations are ~900s plain and ~1350s when gates fire. The
@@ -24669,9 +24869,9 @@ _accept_first_run_prompts() {   # tmuxname [fromswap] — clear startup gates, t
     # loudly-reported failure (this task made rc 3/4 loud specifically so it WOULD be reported — a
     # false positive is now as visible as a real one). A short debounce, not a retry loop: one
     # re-check, not a second pass at the whole window.
-    if ! tmux has-session -t "$t" 2>/dev/null; then
+    if ! _tmx has-session -t "$t" 2>/dev/null; then
       sleep 1
-      tmux has-session -t "$t" 2>/dev/null || return 3
+      _tmx has-session -t "$t" 2>/dev/null || return 3
     fi
     # §6.3 — THE WIDTH STAND-DOWN, AND IT SITS BELOW THE LIVENESS PROBE ON
     # PURPOSE. `tmux list-panes -t cc-nope` exits 1, so the width query cannot
@@ -24698,7 +24898,7 @@ _accept_first_run_prompts() {   # tmuxname [fromswap] — clear startup gates, t
     # dotted id the strip gives the sanitised id, which `_tmux` maps to the same
     # name, so the target `_pane_measurable` builds is the same session (wave 9 M8).
     [[ "$i" == 1 ]] && ! _pane_measurable "${1#cc-}" && return 6
-    pane=$(tmux capture-pane -t "$t" -p 2>/dev/null)
+    pane=$("${_TMX_ARGV[@]}" capture-pane -t "$t" -p 2>/dev/null)
     # THE EXTERNAL-IMPORT GATE, AND IT IS ASKED ABOVE THE READY MARKERS (D-3107).
     # Every other gate below is a full-screen startup dialog that hides the
     # footer, so the marker check cannot reach them; this one is raised while
@@ -24724,6 +24924,7 @@ _accept_first_run_prompts() {   # tmuxname [fromswap] — clear startup gates, t
     # bare Enter is `No, disable external imports` — the operator's own imports
     # silently switched off for that project, on that lane, permanently.
     if _pane_external_import_gate "$pane"; then
+      _pane_type_ready "$id" spawn || { [[ $? == 2 ]] && return 6; sleep 1; continue; }   # D-8271: the one typing check, before each gate is answered; narrow is rc 6
       _answer_two_option_dialog "$pane" "$t" "allow external imports"; sleep 2; continue
     fi
     # ready markers: any of these means the TUI is up. NB the RC indicator sometimes renders
@@ -24731,23 +24932,27 @@ _accept_first_run_prompts() {   # tmuxname [fromswap] — clear startup gates, t
     # without it supervise sits here for the full window and never reaches its watch loop.
     echo "$pane" | grep -Eq "/rc active|\? for shortcuts|esc to interrupt|shift\+tab to cycle|← for agents" && return 0
     if echo "$pane" | grep -q "Enter to confirm" && echo "$pane" | grep -q "Resume from summary"; then
+      _pane_type_ready "$id" spawn || { [[ $? == 2 ]] && return 6; sleep 1; continue; }
       if [[ "$fromswap" == "1" ]]; then
         # Swap landing: auto-compact — the target account pays one summary, not a full
         # 700k-token history re-read (user decision 2026-07-03). Option 1 is the default.
-        tmux send-keys -t "$t" Enter
+        _tmx send-keys -t "$t" Enter
       else
         # Same-account resurrect: keep full fidelity — "Resume full session as-is".
-        tmux send-keys -t "$t" Down; sleep 1; tmux send-keys -t "$t" Enter
+        _tmx send-keys -t "$t" Down; sleep 1; _tmx send-keys -t "$t" Enter
       fi
       sleep 2; continue
     fi
     if echo "$pane" | grep -q "Enter to confirm" && echo "$pane" | grep -q "Try the new fullscreen renderer"; then
-      tmux send-keys -t "$t" Down; sleep 1; tmux send-keys -t "$t" Enter; sleep 2; continue
+      _pane_type_ready "$id" spawn || { [[ $? == 2 ]] && return 6; sleep 1; continue; }
+      _tmx send-keys -t "$t" Down; sleep 1; _tmx send-keys -t "$t" Enter; sleep 2; continue
     fi
     if echo "$pane" | grep -q "Bypass Permissions mode"; then
+      _pane_type_ready "$id" spawn || { [[ $? == 2 ]] && return 6; sleep 1; continue; }
       _answer_two_option_dialog "$pane" "$t" "Yes, I accept"; sleep 2; continue
     fi
     if echo "$pane" | grep -q "trust this folder"; then
+      _pane_type_ready "$id" spawn || { [[ $? == 2 ]] && return 6; sleep 1; continue; }
       _answer_two_option_dialog "$pane" "$t" "trust this folder"; sleep 2; continue
     fi
     # An auth screen (expired key, logged out, or the login-method menu) means this spawn is
@@ -25022,7 +25227,7 @@ _tmux_new_session() {   # argv for `tmux new-session` -> runs it, PLACING the se
   # creates it. No lock, no scope, byte-for-byte the old behaviour. Every spawn
   # after the first takes this path, which is why the lock below costs nothing
   # on the hot path.
-  tmux list-sessions >/dev/null 2>&1 && { tmux new-session "$@"; return $?; }
+  _tmx list-sessions >/dev/null 2>&1 && { _tmx new-session "$@"; return $?; }
 
   # SLOW PATH — this call MAY create the server, and that is a race. Measured
   # on the fleet host 2026-08-18, second attempt: 17 supervisors start within
@@ -25062,7 +25267,7 @@ _tmux_new_session() {   # argv for `tmux new-session` -> runs it, PLACING the se
   local -a scope=()
   # `command -v` and not `_have_systemctl`: this asks about systemd-run
   # specifically, and the single-box OSS story is a box with neither.
-  if ! tmux list-sessions >/dev/null 2>&1 && command -v systemd-run >/dev/null 2>&1; then
+  if ! _tmx list-sessions >/dev/null 2>&1 && command -v systemd-run >/dev/null 2>&1; then
     # --slice IS NOT OPTIONAL, and it is the correction to this mechanism's
     # own first version (D-307 (was D-B8-11)). A user scope with no `--slice` defaults to
     # `app.slice`; the fleet's aggregate memory ceiling
@@ -25097,13 +25302,13 @@ _tmux_new_session() {   # argv for `tmux new-session` -> runs it, PLACING the se
     # this name that has not collected yet). A session that does not exist is a
     # worse outcome than one in the wrong cgroup, so fall through and create it
     # bare — the same trade the old `||` made.
-    "${scope[@]}" tmux new-session "$@" || tmux new-session "$@"
+    "${scope[@]}" "${_TMX_ARGV[@]}" new-session "$@" || _tmx new-session "$@"
     rc=$?
   else
     # No scope wanted (server appeared under the lock) or none available. ONE
     # attempt: retrying a `new-session` that failed on its own merits would hit
     # a duplicate-name error and turn one failure into a confusing two.
-    tmux new-session "$@"
+    _tmx new-session "$@"
     rc=$?
   fi
   # SINGLE EXIT for the fd, deliberately — D-300 (was D-B8-4) recorded the cost of an early
@@ -25171,8 +25376,8 @@ _pane_cgroup_of() {   # pid -> that process's unified cgroup path (the `0::` lin
 PANE_SCOPE_PID="" PANE_SCOPE_CG="" PANE_SCOPE_UNIT="" PANE_SCOPE_WEDGED=""
 _pane_scope_tmux() {   # tmux args… — one tmux call, bounded the `_end_cause` way (SUBSTRATE_PROBE_DEADLINE_S), because a wedged server must not hold a stop. rc of the call, 124 past the deadline.
   # `_plat_timeout` runs a program, so a tmux that is a shell function (a test's) is called as one.
-  if declare -F tmux >/dev/null; then tmux "$@"
-  else _plat_timeout "$SUBSTRATE_PROBE_DEADLINE_S" tmux "$@"
+  if declare -F tmux >/dev/null; then _tmx "$@"
+  else _plat_timeout "$SUBSTRATE_PROBE_DEADLINE_S" "${_TMX_ARGV[@]}" "$@"
   fi
 }
 _pane_scope_of() {   # id — the session's live pane: PANE_SCOPE_PID, its cgroup PANE_SCOPE_CG and its unit PANE_SCOPE_UNIT (all empty when none), and PANE_SCOPE_WEDGED (1 when tmux did not answer in time). Always rc 0.
@@ -25314,6 +25519,95 @@ _pane_scope_reap() {   # id pid cg — in its own unit: wait for the main proces
   fi
   return 0
 }
+# ── THE GRACEFUL STOP (session-continuity 6a; spec D-8316 to D-8332) ─────────
+# The three stops a resume follows (`cmd_swap`, `_watchdog_resume_run`, `cmd_hibernate`) read the pane's process before
+# the kill and, after it, time that process's exit from a detached observer (SHADOW): the kill already hangs up Claude
+# Code's terminal, and its SIGHUP and SIGTERM handlers are one `shutdown()`, so the shadow sends no signal. With
+# `$REG/graceful-stop-live` standing (its one reader is `_graceful_stop_before`; NOTHING in the tree writes it, the
+# operator arms it) the stop sends SIGTERM first and waits up to GRACEFUL_STOP_TERM_WAIT_S, then goes on to today's kill.
+# Every outcome is one `graceful-stop <id>: site=<site> mode=<mode> <outcome>` line in swap.log:
+#   (exited|alive)=<ms> | no-pid | gone-before-signal | unmeasured=(wedged|no-start-time|stat-unreadable|detach-failed)
+GRACEFUL_STOP_TERM_WAIT_S=10   # live only: how long the stop waits for Claude Code to exit after SIGTERM, before the kill (chosen, provisional)
+GRACEFUL_STOP_OBSERVE_S=30     # shadow only: how long the detached observer watches the process after the kill
+GRACEFUL_STOP_POLL_S=0.1
+GRACEFUL_STOP_PID="" GRACEFUL_STOP_PSTART="" GRACEFUL_STOP_SITE="" GRACEFUL_STOP_MODE=""   # initialised at file scope, as PANE_SCOPE_* are, for `set -u`
+_graceful_stop_note() {   # id site mode outcome — the one writer of `graceful-stop` lines in swap.log. Always rc 0.
+  echo "$(date '+%F %T') graceful-stop $1: site=$2 mode=$3 $4" >> "$REG/swap.log" 2>/dev/null || true
+  return 0
+}
+_graceful_stop_same() {   # pid pstart — the one identity check: rc 0 the same process, rc 1 gone (or recycled), rc 2 alive, but its start time cannot be read
+  kill -0 "$1" 2>/dev/null || return 1
+  _ci_proc_start "$1" || { kill -0 "$1" 2>/dev/null && return 2; return 1; }
+  [[ "$_CI_PSTART" == "$2" ]] || return 1
+  return 0
+}
+_graceful_stop_before() {   # id site [read] — before the pane kill. `read`: the caller just ran `_pane_scope_of`, so its PANE_SCOPE_* are used as they stand. Always rc 0.
+  local id="$1" pid ps rc=0 t0 now tick_ms n poll="$GRACEFUL_STOP_POLL_S"
+  GRACEFUL_STOP_PID="" GRACEFUL_STOP_PSTART="" GRACEFUL_STOP_SITE="$2" GRACEFUL_STOP_MODE=shadow
+  [[ -f "$REG/graceful-stop-live" ]] && GRACEFUL_STOP_MODE=live
+  [[ "${3:-}" == read ]] || _pane_scope_of "$id"
+  if [[ -n "$PANE_SCOPE_WEDGED" ]]; then _graceful_stop_note "$id" "$2" "$GRACEFUL_STOP_MODE" unmeasured=wedged; return 0; fi
+  pid="$PANE_SCOPE_PID"
+  if [[ -z "$pid" ]]; then _graceful_stop_note "$id" "$2" "$GRACEFUL_STOP_MODE" no-pid; return 0; fi
+  if ! _ci_proc_start "$pid"; then _graceful_stop_note "$id" "$2" "$GRACEFUL_STOP_MODE" unmeasured=no-start-time; return 0; fi
+  ps="$_CI_PSTART"; GRACEFUL_STOP_PID="$pid" GRACEFUL_STOP_PSTART="$ps"
+  [[ "$GRACEFUL_STOP_MODE" == live ]] || return 0
+  _graceful_stop_same "$pid" "$ps" || rc=$?
+  GRACEFUL_STOP_PID=""
+  case "$rc" in
+    0) ;;
+    2) _graceful_stop_note "$id" "$2" live unmeasured=stat-unreadable; return 0 ;;
+    *) _graceful_stop_note "$id" "$2" live gone-before-signal; return 0 ;;
+  esac
+  kill -TERM "$pid" 2>/dev/null
+  t0=$(_plat_epoch_ms)
+  tick_ms="${GRACEFUL_STOP_POLL_S#*.}000"; tick_ms=$(( 10#${tick_ms:0:3} ))   # the poll is "0.<fraction>" seconds: its milliseconds, by string slicing (no fork)
+  (( tick_ms > 0 )) || { tick_ms=100; poll=0.1; }   # a poll that slices to 0 ms (0, 0.0005, empty): the default, tick and sleep together
+  # the clock is the bound; the count (twice the nominal passes) only backs up a clock that stops or steps back
+  for (( n = 0; n < 2 * GRACEFUL_STOP_TERM_WAIT_S * 1000 / tick_ms; n++ )); do
+    rc=0; _graceful_stop_same "$pid" "$ps" || rc=$?
+    now=$(_plat_epoch_ms)
+    case "$rc" in
+      0) ;;
+      2) _graceful_stop_note "$id" "$2" live unmeasured=stat-unreadable; return 0 ;;
+      *) _graceful_stop_note "$id" "$2" live "exited=$(( now - t0 ))"; return 0 ;;
+    esac
+    if (( now - t0 >= GRACEFUL_STOP_TERM_WAIT_S * 1000 )); then break; fi
+    sleep "$poll"
+  done
+  rc=0; _graceful_stop_same "$pid" "$ps" || rc=$?   # one last poll, so a process that left in the final interval is exited=, not alive=
+  now=$(_plat_epoch_ms)
+  case "$rc" in
+    0) _graceful_stop_note "$id" "$2" live "alive=$(( GRACEFUL_STOP_TERM_WAIT_S * 1000 ))" ;;
+    2) _graceful_stop_note "$id" "$2" live unmeasured=stat-unreadable ;;
+    *) _graceful_stop_note "$id" "$2" live "exited=$(( now - t0 ))" ;;
+  esac
+  return 0
+}
+_graceful_stop_after() {   # id — after the pane kill: in shadow, hand the watch of the kept pid to a detached observer. Never waits. Always rc 0.
+  local id="$1" t0 rc=0
+  if [[ "$GRACEFUL_STOP_MODE" == shadow && -n "$GRACEFUL_STOP_PID" ]]; then
+    t0=$(_plat_epoch_ms)
+    _pane_scope_detach _graceful_stop_observe "$id" "$GRACEFUL_STOP_SITE" "$GRACEFUL_STOP_PID" "$GRACEFUL_STOP_PSTART" "$t0" || rc=$?
+    (( rc == 0 )) || _graceful_stop_note "$id" "$GRACEFUL_STOP_SITE" shadow unmeasured=detach-failed
+  fi
+  GRACEFUL_STOP_PID="" GRACEFUL_STOP_PSTART="" GRACEFUL_STOP_SITE="" GRACEFUL_STOP_MODE=""
+  return 0
+}
+_graceful_stop_observe() {   # id site pid pstart t0 — in its own unit: watch the process after the kill. Always rc 0.
+  local id="$1" site="$2" pid="$3" pstart="$4" t0="$5" rc now
+  while :; do
+    rc=0; _graceful_stop_same "$pid" "$pstart" || rc=$?
+    now=$(_plat_epoch_ms)
+    case "$rc" in
+      0) ;;
+      2) _graceful_stop_note "$id" "$site" shadow unmeasured=stat-unreadable; return 0 ;;
+      *) _graceful_stop_note "$id" "$site" shadow "exited=$(( now - t0 ))"; return 0 ;;
+    esac
+    if (( now - t0 >= GRACEFUL_STOP_OBSERVE_S * 1000 )); then _graceful_stop_note "$id" "$site" shadow "alive=$(( GRACEFUL_STOP_OBSERVE_S * 1000 ))"; return 0; fi
+    sleep "$GRACEFUL_STOP_POLL_S"
+  done
+}
 # shellcheck disable=SC2128,SC2178  # scope is a local string here; the arrays named scope are other functions' locals (shellcheck does not scope names by function)
 _end_cause() {   # id -> the cause word of the end just seen: oom | tmux-server | exited | unknown. Always rc 0.
   # `oom` FIRST (D-5345): the pane scope's own journal naming an OOM kill in the 120 s
@@ -25340,9 +25634,9 @@ _end_cause() {   # id -> the cause word of the end just seen: oom | tmux-server 
     fi
   fi
   if declare -F tmux >/dev/null; then
-    tmux list-sessions >/dev/null 2>&1 || lsrc=$?
+    _tmx list-sessions >/dev/null 2>&1 || lsrc=$?
   else
-    _plat_timeout "$SUBSTRATE_PROBE_DEADLINE_S" tmux list-sessions >/dev/null 2>&1 || lsrc=$?
+    _plat_timeout "$SUBSTRATE_PROBE_DEADLINE_S" "${_TMX_ARGV[@]}" list-sessions >/dev/null 2>&1 || lsrc=$?
   fi
   if (( lsrc == 124 )); then printf 'unknown'; return 0; fi
   if (( lsrc != 0 )); then printf 'tmux-server'; return 0; fi
@@ -25377,6 +25671,7 @@ _end_note_gone() {   # id — the supervise loop's `gone` exit: classify and rec
   _now_s_to now
   if [[ "$le" =~ ^([0-9]+)\ swap- ]] && (( now - BASH_REMATCH[1] >= 0 && now - BASH_REMATCH[1] <= 60 )); then return 0; fi
   _end_record "$id" "$(_end_cause "$id")"
+  _inflight_write "$id" revival
 }
 _swap_end_cause() {   # -> this swap's cause word: swap-manual | swap-auto-home | swap-auto-rescue | swap-auto
   # CCD_SWAP_AUTO=1 is `_dispatch_swap`'s mark; CCD_SWAP_ARM names its arm
@@ -25801,25 +26096,100 @@ _browser_spawn_compose() {   # id launchflags -> sets BROWSER_SPAWN_FLAGS; write
 # native wait could be armed are deleted (`_pane_auto_continue_armed` D-2229, the mail sweep's hold D-2369, the rescue
 # near-wait `_rescue_armed`, the stale-Enter check `_auto_stale_check`).
 FLEET_SPAWN_PINS='{"autoContinueAtUsageLimit":false,"crossSessionInbound":"refuse","idleCompaction":true}'
-_fleet_spawn_compose() {   # id launchflags -> sets FLEET_SPAWN_FLAGS; never fails
-  local id="$1" flags="$2" v base="" merged re="--settings '([^']*)'"
-  FLEET_SPAWN_FLAGS="$flags"
-  [[ -n "$FLEET_SPAWN_PINS" ]] || return 0   # EMPTY composes nothing: the older argv suites' harness clears it after sourcing (as it pins the browser default); no setting reads it
+_spawn_settings_last() {   # id launchflags json what -> SPAWN_SETTINGS_FLAGS = the flags with json merged LAST into their one --settings; rc 1 (warned, flags as they were) when it cannot be
+  # The one merge of a JSON value into a spawn's one `--settings` (D-5391), shared by the fleet pins and the launch
+  # profile: a base that is inline JSON or a regular, quote-free file is merged under `SETTINGS_UNION_JQ` with the value
+  # last; no base takes the value inline; a result carrying a quote is refused, since it would break the argv's quoting.
+  local id="$1" flags="$2" p="$3" v base="" merged="" had=0 re="--settings '([^']*)'"
+  SPAWN_SETTINGS_FLAGS="$flags"
   if [[ "$flags" =~ $re ]]; then
-    v="${BASH_REMATCH[1]}"
+    had=1; v="${BASH_REMATCH[1]}"
     if [[ "$v" == "{"* ]]; then base="$v"
     elif [[ -f "$v" && ! -L "$v" ]] && ! grep -q "'" -- "$v" 2>/dev/null; then base=$(jq -c . "$v" 2>/dev/null) || base=""
     fi
-    if [[ -n "$base" ]] && merged=$(jq -c -n --argjson b "$base" --argjson p "$FLEET_SPAWN_PINS" "[\$b, \$p] | $SETTINGS_UNION_JQ" 2>/dev/null) \
-       && [[ -n "$merged" && "$merged" != *"'"* ]]; then
-      FLEET_SPAWN_FLAGS="${flags%%"--settings '$v'"*}--settings '$merged'${flags#*"--settings '$v'"}"
-    else
-      echo "ccd: warn: $id: could not merge the fleet pins into this spawn's one --settings — spawning without them" >&2
-    fi
+    [[ -z "$base" ]] || merged=$(jq -c -n --argjson b "$base" --argjson p "$p" "[\$b, \$p] | $SETTINGS_UNION_JQ" 2>/dev/null) || merged=""
   else
-    FLEET_SPAWN_FLAGS="${flags:+$flags }--settings '$FLEET_SPAWN_PINS'"
+    merged="$p"
   fi
+  if [[ -z "$merged" || "$merged" == *"'"* ]]; then
+    echo "ccd: warn: $id: could not merge $4 into this spawn's one --settings — spawning without them" >&2
+    return 1
+  fi
+  if (( had )); then SPAWN_SETTINGS_FLAGS="${flags%%"--settings '$v'"*}--settings '$merged'${flags#*"--settings '$v'"}"
+  else SPAWN_SETTINGS_FLAGS="${flags:+$flags }--settings '$merged'"
+  fi
+}
+_fleet_spawn_compose() {   # id launchflags -> sets FLEET_SPAWN_FLAGS; never fails
+  FLEET_SPAWN_FLAGS="$2"
+  [[ -n "$FLEET_SPAWN_PINS" ]] || return 0   # EMPTY composes nothing: the older argv suites' harness clears it after sourcing (as it pins the browser default); no setting reads it
+  _spawn_settings_last "$1" "$2" "$FLEET_SPAWN_PINS" "the fleet pins" && FLEET_SPAWN_FLAGS="$SPAWN_SETTINGS_FLAGS"
   return 0
+}
+
+# ── THE LAUNCH PROFILE THE ROUTE NAMES (Overlord W1a; spec §3.6 H1, §3.3.7 H14, §3.3.4 C39) ─────────────────────
+# The server picks a row by writing the route field `profile` (and `automem`, `compactwindow`); this renders it at every
+# spawn, after the fleet pins, so a profile pin wins (`idleCompaction: false` over the fleet's `true`). The rows are
+# `LAUNCH_PROFILES_JSON`, a projection of `shared/fleetRoles.ts#FLEET_ROLES` held equal by
+# `server/test/launch-profiles-file.test.ts`: beside this script in a tree, else where the installers put it.
+#   no `profile` field: compose nothing (a row with no profile spawns byte for byte as before; Review Focus 1);
+#   a word that is not a row, a file absent or malformed, a row of the wrong shape, a settings merge that fails: compose
+#     NOTHING, settings and environment alike, and warn (never half-applied; Review Focus 2);
+#   otherwise: `settings` merged into the one `--settings`; `env` as KEY=value words; auto memory off
+#     (CLAUDE_CODE_DISABLE_AUTO_MEMORY=1) for an `off` row, and for a `switch` row only when the route's `automem` is
+#     `off`; and ONLY when the route carries `compactwindow` (written only while `continuity` is live, plan slug
+#     compaction-follows-continuity), the row's `compactionSettings` after `settings` and
+#     CLAUDE_CODE_AUTO_COMPACT_WINDOW=<compactwindow>.
+# One jq program reads the row and checks every key and value by shape: a value is a literal word, never quoted, and the
+# anchors are `\A`/`\z`, since jq's `$` also matches before a final newline (a value `"1\n"` would cut the env line).
+# The word is read raw, not through `_route_get`, whose unmeasured note names the roster projection: a profiles file
+# that cannot be read journals its own `route-unmeasured` line here, floored by the same `routeunmeasprofile` marker.
+# The raw read keeps `_route_get`'s other two lines itself (review 1970 N1): a `.profile` present but unreadable journals
+# `_route_unread_note`'s line, and a word that is not a row (or bytes of no word's shape) `_route_reject_note`'s.
+LAUNCH_PROFILES_JSON="${BASH_SOURCE[0]%/*}/lib/launch-profiles.json"
+[[ -f "$LAUNCH_PROFILES_JSON" ]] || LAUNCH_PROFILES_JSON="$HOME/.cc-sessions/lib/launch-profiles.json"
+PROFILE_ROW_JQ='.[$r] as $x
+  | if ($x | type) == "object" and ($x.env | type) == "object" and ($x.settings | type) == "object"
+       and ($x.compactionSettings | type) == "object" and ($x.autoMemory == "off" or $x.autoMemory == "switch")
+       and ($x.env | to_entries | all((.key | test("\\ACLAUDE_CODE_[A-Z_]+\\z")) and (.value | type == "string") and (.value | test("\\A[A-Za-z0-9._-]+\\z"))))
+    then . else error("malformed row") end
+  | ($x.settings * (if $cw == "" then {} else $x.compactionSettings end) | tojson) + "\t"
+    + ([$x.env | to_entries[] | "\(.key)=\(.value)"]
+       + (if $x.autoMemory == "off" or $am == "off" then ["CLAUDE_CODE_DISABLE_AUTO_MEMORY=1"] else [] end)
+       + (if $cw == "" then [] else ["CLAUDE_CODE_AUTO_COMPACT_WINDOW=" + $cw] end) | join(" "))'
+_profile_spawn_compose() {   # id launchflags -> sets PROFILE_SPAWN_FLAGS, PROFILE_SPAWN_ENV; never fails, never half-applies
+  local id="$1" p="" am cw out="" pset="" penv="" unread=""
+  PROFILE_SPAWN_FLAGS="$2"; PROFILE_SPAWN_ENV=""
+  [[ -e "$REG/$id.profile" || -L "$REG/$id.profile" ]] || return 0
+  _reg_get_to p "$id" profile 2>/dev/null || { _route_unread_note "$id" profile; unread=1; }
+  am=$(_route_get "$id" automem); cw=$(_route_get "$id" compactwindow)
+  [[ "$p" =~ ^[a-z]{1,16}$ ]] && out=$(jq -r --arg r "$p" --arg am "$am" --arg cw "$cw" "$PROFILE_ROW_JQ" "$LAUNCH_PROFILES_JSON" 2>/dev/null) || out=""
+  IFS=$'\t' read -r pset penv <<< "$out"
+  if [[ -z "$pset" ]]; then
+    if ! jq -e 'type == "object"' "$LAUNCH_PROFILES_JSON" >/dev/null 2>&1; then _route_note_floored "$id" routeunmeasprofile \
+      || echo "$(date '+%F %T') route-unmeasured $id: field profile could not be checked — this box's launch profiles ($LAUNCH_PROFILES_JSON) cannot be read; treated as absent — re-run ccrc install" >> "$REG/swap.log"
+    elif [[ -z "$unread" ]] && ! { [[ "$p" =~ ^[a-z]{1,16}$ ]] && jq -e --arg r "$p" 'has($r)' "$LAUNCH_PROFILES_JSON" >/dev/null 2>&1; }; then
+      _route_reject_note "$id" profile "$(_route_bytes "$p")"   # a word that is not a row, or bytes of no word's shape (review 1970 N1)
+    fi
+    [[ "$p" =~ ^[a-z]{1,16}$ ]] || p="<$(_route_bytes "$p") bytes>"
+    echo "ccd: warn: $id: launch profile $p unreadable — spawning without it" >&2; return 0
+  fi
+  [[ "$pset" == '{}' ]] || { _spawn_settings_last "$id" "$2" "$pset" "launch profile $p" || return 0; PROFILE_SPAWN_FLAGS="$SPAWN_SETTINGS_FLAGS"; }
+  PROFILE_SPAWN_ENV="$penv"
+}
+# THE ROLE'S COMPACTION TEXT (Overlord W1a compaction, spec §3.3.9 C51): the row's `compactText`, which
+# `_auto_compact_check` types after `/compact`. Only when the route carries `compactwindow` too, which the lane writes
+# only while `continuity` is live (decision compaction-text-follows-continuity, ruling R8): arming `launch-profile`
+# alone still types a bare `/compact`. The text is checked here as well: one line of printable ASCII, at most 600
+# characters, with no quote, backslash, `$` or `;` (instructions-one-line; tmux drops a trailing `;`, review 2004 F6); anything else answers empty, and a bare
+# `/compact` is typed. The hook's PreCompact print reads the same field (`_hook_role_compact_text`).
+COMPACT_TEXT_JQ='.[$r].compactText | if type == "string" and test("\\A[ -~]{1,600}\\z") and (test("[\\x22\\x27\\x24\\x3b\\x5c\\x60]") | not) then . else error("not one typeable line") end'
+_compact_text_to() {   # var id -> var = the role's compaction text, or empty (a bare /compact); never fails
+  local _ctt_p="" _ctt_out=""
+  printf -v "$1" '%s' ''
+  [[ -n "$(_route_get "$2" compactwindow)" ]] && _reg_get_to _ctt_p "$2" profile 2>/dev/null && [[ "$_ctt_p" =~ ^[a-z]{1,16}$ ]] || return 0
+  _ctt_out=$(jq -r --arg r "$_ctt_p" "$COMPACT_TEXT_JQ" "$LAUNCH_PROFILES_JSON" 2>/dev/null) \
+    || { echo "ccd: warn: $2: compaction text for launch profile $_ctt_p unreadable — typing a bare /compact" >&2; return 0; }
+  printf -v "$1" '%s' "$_ctt_out"
 }
 
 # ── THE TEMP ROOT'S POSITIVE WITNESS (child-workspace reclamation, spec §5.2) ─
@@ -26031,6 +26401,17 @@ _ws_tmproot_witness_write() {   # id leaf run -> 0 written or already current | 
 # bare pattern ACCEPTS `²`, `½`, `٣` and `१` — none a run id any server composed.
 _child_runid_valid() { local LC_ALL=C; [[ "${1-}" =~ ^[1-9][0-9]{0,9}$ ]]; }   # value -> 0 iff it is a legal --child run id
 
+_spawn_mode() {   # id -> `new` or `resume`: what a spawn of the row passes Claude Code (`--session-id` or `--resume`). A reader.
+  # `new` until the row is claimed (`started`), then `resume`, except a FRESH START (`cmd_hibernate --roll --fresh`, spec
+  # 2026-11-09 §3.3.11 H13): `$REG/<id>.fresh`, one-shot, names the uuid the roll minted, and while it is the row's uuid
+  # the spawn is `new`. It crosses into the unit's own process, where no argv or local can (plan review 1890 C2).
+  # `_spawn_start` consumes it, leaving the receipt `used <uuid>` once its create answered 0, which `cmd_hibernate` reads as
+  # its proof (no receipt: exit 7, `roll-fresh-unproven`); it removes a stale one (any other uuid), which this ignores.
+  local f u
+  [[ "$(_reg_get "$1" started)" == 1 ]] || { echo new; return 0; }
+  f=$(_reg_get "$1" fresh); u=$(_reg_get "$1" uuid)
+  if [[ -n "$f" && "$f" == "$u" ]]; then echo new; else echo resume; fi
+}
 _spawn_start() {   # id mode(new|resume) -> creates the tmux session, sets SPAWN_FROMSWAP. NEVER WAITS ON THE TUI.
                    # (One bounded exception, `resume` only: SPAWN_RESUME_SETTLE_S before
                    #  the --session-id retry below. The 15-minute wait stays in _spawn_settle.)
@@ -26103,6 +26484,20 @@ _spawn_start() {   # id mode(new|resume) -> creates the tmux session, sets SPAWN
   lastswap=$(_reg_get "$id" lastswap)
   [[ "$lastswap" =~ ^[0-9]+$ && $(( $(date +%s) - lastswap )) -lt 300 ]] && fromswap=1
   if [[ "$mode" == "resume" ]]; then sidflag="--resume '$uuid'"; else sidflag="--session-id '$uuid'"; fi
+  # A fresh start's marker is consumed by the `new` spawn it chose (`_spawn_mode`), which leaves `used <uuid>` for the roll
+  # to read, once its create has answered 0 (below). Any other is STALE (another uuid, unreadable, a spent receipt, or a
+  # spawn that is not `new`), and goes, said on stderr (plan review 1896 m-B7). One naming the row's uuid is never stale.
+  local freshtake=0
+  if [[ -e "$REG/$id.fresh" || -L "$REG/$id.fresh" ]]; then
+    local sf=''; _reg_get_to sf "$id" fresh
+    if [[ "$mode" == new && "$sf" == "$uuid" ]]; then freshtake=1
+    else
+      local what="a stale fresh-start marker (it names ${sf:-nothing readable}"
+      [[ "$sf" == "used "* ]] && what="a spent fresh-start receipt (for ${sf#used }"
+      echo "ccd: $id: removing $what; this spawn is $mode of $uuid)" >&2
+      rm -f -- "$REG/$id.fresh"
+    fi
+  fi
   # WHETHER THIS BOX DRIVES ITS SESSIONS OVER THE RC SOCKET — read ONCE, here,
   # and used by BOTH spawn lines below (the primary and the --session-id retry).
   # Once, not per line, so the two can never disagree: a resume that died and
@@ -26407,6 +26802,7 @@ _spawn_start() {   # id mode(new|resume) -> creates the tmux session, sets SPAWN
   _account_spawn_compose "$id" "$launchflags"; launchflags="$ACCOUNT_SPAWN_FLAGS"
   # THE FLEET PINS (D-8173), for EVERY row, LAST: the auto-continue, inbox and idle-compaction rulings merge into the one `--settings`.
   _fleet_spawn_compose "$id" "$launchflags"; launchflags="$FLEET_SPAWN_FLAGS"
+  _profile_spawn_compose "$id" "$launchflags"; launchflags="$PROFILE_SPAWN_FLAGS"; resenv="$resenv${PROFILE_SPAWN_ENV:+ $PROFILE_SPAWN_ENV}"
   # COLORTERM=truecolor so Claude Code emits 24-bit colour (it otherwise quantises
   # to 256, collapsing its palette). tmux passes it through to the terminal-drawer
   # xterm once the server has the RGB terminal-feature (see hardening/tmux.conf).
@@ -26471,6 +26867,9 @@ _spawn_start() {   # id mode(new|resume) -> creates the tmux session, sets SPAWN
   _spawn_workdirid_pending "$id" "$workdir" || :
   _tmux_new_session -d -s "$tname" -x 220 -y 50 \
     "cd '$workdir' && $(_plat_workdirid_pane "$REG" "$id" "$workdir")true; cd '$workdir' && exec env ${genenv}COLORTERM=truecolor $resenv $SESSION_PANE_PATH '$WRAPPER_DIR/$wrapper' $launchflags $sidflag --dangerously-skip-permissions"
+  # THE RECEIPT IS A PROOF, so only a create that answered 0 writes it (review 1919 R1): one that lost a duplicate-name
+  # race to a concurrent spawn leaves the marker unspent, and the roll exits 7 (`roll-fresh-unproven`).
+  (( $? == 0 && freshtake )) && { _reg_set "$id" fresh "used $uuid" || rm -f -- "$REG/$id.fresh"; }
   # THE PRICE OF A MONOTONE `started`, PAID AUTOMATICALLY INSTEAD OF BY HAND.
   # Nothing in ccd ever clears the field: there is no registry delete/unset
   # helper at all — `ccd-reg-claim.test.ts` greps this file for one and pins
@@ -26506,7 +26905,7 @@ _spawn_start() {   # id mode(new|resume) -> creates the tmux session, sets SPAWN
     # No held id reaches this retry: a held conversation returned
     # `_CI_HELD_RC` before anything was spawned (above), and the registry
     # never names an id with no transcript that a job holds (RR-1).
-    if ! tmux has-session -t "$(_tmux_at "$tname")" 2>/dev/null; then
+    if ! _tmx has-session -t "$(_tmux_at "$tname")" 2>/dev/null; then
       echo "ccd: $id: --resume '$uuid' left no session; retrying once with --session-id" >&2
       # `$launchflags`, the SAME value the primary line above used — computed
       # once, before either spawn (it carries `$rcflag` plus the routing
@@ -26538,11 +26937,11 @@ _spawn_start() {   # id mode(new|resume) -> creates the tmux session, sets SPAWN
   _panescope_record "$id"   # D-5237: the pane's scope, once per spawn, never per tick
   # Make this window's terminal title = the tmux session name ("cc-<id>"), so a frontmost-window-
   # aware hotkey (ccclip) can target exactly the session you're looking at, even with many open.
-  tmux set-option -t "$(_tmux_at "$tname")" set-titles on 2>/dev/null
-  tmux set-option -t "$(_tmux_at "$tname")" set-titles-string '#S' 2>/dev/null
+  _tmx set-option -t "$(_tmux_at "$tname")" set-titles on 2>/dev/null
+  _tmx set-option -t "$(_tmux_at "$tname")" set-titles-string '#S' 2>/dev/null
   # PIN, THEN FOLLOW: -x/-y lose to any narrow client on the server (tmux 3.4, measured: born 60x19 = spawn rc 6); pin FIRST, as `latest` then keeps it, so an attach still fits (ccd-spawn-split).
-  tmux resize-window -t "$(_tmux_at "$tname")" -x 220 -y 50 2>/dev/null
-  tmux set-option -t "$(_tmux_at "$tname")" window-size latest 2>/dev/null
+  _tmx resize-window -t "$(_tmux_at "$tname")" -x 220 -y 50 2>/dev/null
+  _tmx set-option -t "$(_tmux_at "$tname")" window-size latest 2>/dev/null
   # VALIDATED TO THE TWO LEGAL WORDS, and the FAILURE DIRECTION is why the check
   # survived the move off stdout: fromswap=1 picks the cheap auto-compact
   # landing, fromswap=0 keeps full fidelity, so anything unrecognised must
@@ -26560,7 +26959,7 @@ _spawn_settle() {   # id fromswap — the BLOCKING half: gate loop, fact, warnin
   local id="$1" fromswap="$2" wrapper tname prompt_rc
   wrapper=$(_reg_get "$id" wrapper)
   tname=$(_tmux "$id")
-  _accept_first_run_prompts "$tname" "$fromswap"; prompt_rc=$?
+  _accept_first_run_prompts "$tname" "$fromswap" "$id"; prompt_rc=$?
   # The verdict becomes a FACT before it becomes a return code (§3.1). This costs nothing — this
   # already runs inside the supervisor — and it is the ONLY channel from a spawn that happened
   # inside the unit to a `ccd start` running in another process, which is what _supervised_start
@@ -26926,7 +27325,7 @@ _redrive_after_spawn() {   # id tmuxname fromswap — D-2231: type the resume pr
   for ((i = 0; i < REDRIVE_WAIT_S; i++)); do
     _transcript_stalled_pair "$f"; rc=$?
     [[ "$rc" -eq 0 ]] || { _redrive_standdown_log "$id" "$fromswap" "$rc" "$f"; return 0; }
-    pane=$(tmux capture-pane -t "$t" -p 2>/dev/null | tail -8)
+    pane=$("${_TMX_ARGV[@]}" capture-pane -t "$t" -p 2>/dev/null | tail -8)
     echo "$pane" | grep -q "esc to interrupt" && return 0
     sleep 1
   done
@@ -26935,7 +27334,7 @@ _redrive_after_spawn() {   # id tmuxname fromswap — D-2231: type the resume pr
   # in that gap. Typing into a turn that started here would be exactly the
   # spurious keystroke the header comment promises never happens (D-2263).
   _transcript_stalled_pair "$f"; rc=$?; [[ "$rc" -eq 0 ]] || { _redrive_standdown_log "$id" "$fromswap" "$rc" "$f"; return 0; }
-  pane=$(tmux capture-pane -t "$t" -p 2>/dev/null | tail -8)
+  pane=$("${_TMX_ARGV[@]}" capture-pane -t "$t" -p 2>/dev/null | tail -8)
   echo "$pane" | grep -q "esc to interrupt" && return 0
   # A FRESH MEASURE, NOT A REDUNDANT ONE, and this is the site where that is true:
   # REDRIVE_WAIT_S seconds of real `sleep 1`s sit between the top-of-function guard and
@@ -26953,12 +27352,13 @@ _redrive_after_spawn() {   # id tmuxname fromswap — D-2231: type the resume pr
   _pane_measurable "$id" || { echo "$(date '+%F %T') redrive-skip $id: pane went under ${READER_MIN_COLS} columns during the redrive wait (§6.3)" >> "$REG/swap.log"; return 0; }
   _pane_auto_continue_armed "$pane" "$id" && { echo "$(date '+%F %T') redrive-skip $id: auto-continue armed" >> "$REG/swap.log"; return 0; }
   _pane_hard_blocked "$pane" && { echo "$(date '+%F %T') redrive-skip $id: hard-blocked pane" >> "$REG/swap.log"; return 0; }
-  case "$(_pane_box_read "$(tmux capture-pane -t "$t" -p -e 2>/dev/null)")" in   # D-8116: no box refuses too
+  case "$(_pane_box_read "$("${_TMX_ARGV[@]}" capture-pane -t "$t" -p -e 2>/dev/null)")" in   # D-8116: no box refuses too
     draft) echo "$(date '+%F %T') redrive-skip $id: input box not empty" >> "$REG/swap.log"; return 0 ;;
     absent) echo "$(date '+%F %T') redrive-skip $id: no input box on screen (a dialog is open)" >> "$REG/swap.log"; return 0 ;;
   esac
+  _pane_type_ready "$id" redrive || return 0   # D-8271: the one typing check (copy-mode, width, draft)
   echo "$(date '+%F %T') redrive $id: the transcript's newest turn is the unsubmitted resume pair after ${REDRIVE_WAIT_S}s; typing the prompt [wrapper=$(_reg_get "$id" wrapper)]" >> "$REG/swap.log"
-  tmux send-keys -t "$t" -l "$(_resume_prompt_for "$id")"; sleep 1; tmux send-keys -t "$t" Enter   # D-5237: the prompt the flag carried
+  _tmx send-keys -t "$t" -l "$(_resume_prompt_for "$id")"; sleep 1; _tmx send-keys -t "$t" Enter   # D-5237: the prompt the flag carried
   return 0
 }
 
@@ -27073,7 +27473,7 @@ _supervised_start() {   # id — ask the UNIT to spawn, then WAIT for an observa
     # construction — that is what "UNSUPERVISED" in the warning above means —
     # so the claim is the only write there is to get in front of the block.
     # No `$( )` around `_spawn_start`: its `die` must stay process-fatal.
-    local mode=new; [[ "$(_reg_get "$id" started)" == "1" ]] && mode=resume
+    local mode; mode=$(_spawn_mode "$id")
     _spawn_start "$id" "$mode" || return $?
     _reg_claim "$id"
     _spawn_settle "$id" "$SPAWN_FROMSWAP"; rc=$?
@@ -27088,7 +27488,7 @@ _supervised_start() {   # id — ask the UNIT to spawn, then WAIT for an observa
     # The same split, for the same reason as the no-systemctl fallback above:
     # this is the OTHER box that cannot recover on its own, so leaving a live
     # pane no row claims is worse here than anywhere else.
-    local mode=new; [[ "$(_reg_get "$id" started)" == "1" ]] && mode=resume
+    local mode; mode=$(_spawn_mode "$id")
     _spawn_start "$id" "$mode" || return $?
     _reg_claim "$id"
     _spawn_settle "$id" "$SPAWN_FROMSWAP"; rc=$?
@@ -27532,7 +27932,7 @@ cmd_start() {   # <id>  |  <wrapper> <project> [workdir]
   # already pinned home to this wrapper, so the marker's account clause is
   # satisfied by BOTH `wrapper` and `home` from the first tick onward.
   [[ "$prc" -eq 1 && -n "$cross" && -z "$regw" ]] && _crosspool_mark "$id" "${pps#named }" "$wrapper"
-  local mode=new; [[ "$(_reg_get "$id" started)" == "1" ]] && mode=resume
+  local mode; mode=$(_spawn_mode "$id")
   # A deliberate revival supersedes a refused swap's banner: `ccd start <id>`
   # is the human act §4.4 names as "what would bring this back" (whether typed
   # directly or reached via the two-argument form once the registry has
@@ -27749,7 +28149,7 @@ cmd_ensure() {   # id — idempotent; used by systemd. arg is the id directly.
   # wrapper for a uuid whose session-env directory already exists (measured on
   # the live orphan). With `started` written at session-creation time — which is
   # what the split below finally makes true on every path — it picks `resume`.
-  local mode=new; [[ "$(_reg_get "$id" started)" == "1" ]] && mode=resume
+  local mode; mode=$(_spawn_mode "$id")
   # SPLIT, and NO `_ws_supervise` on this branch: see cmd_start's matching
   # comment. The settle takes two positionals and no more — the bound rides
   # `CCD_SETTLE_BOUND`, because a third one here would be `cmd_ensure`'s second
@@ -28521,6 +28921,15 @@ _swap_carry_jsonl() {   # srccfg dstcfg uuid mdir sanitize(0|1)
 # copy — and this cost — remains only where no such mount exists, and the log
 # names it: `(copy: <cause> <bytes> bytes)` (D-4501).
 CARRY_MERGE_BUDGET=536870912    # bytes one sidecar's merge walk may read + copy per visit (512 MiB); what does not fit is deferred
+LAUNCH_RECORD_MAX_BYTES=1048576    # bytes the launch record may hold: the hook's LRC_MAX_BYTES spelled again, pinned equal (D-8366)
+LAUNCH_RECORD_DROP_RESERVE=4096    # bytes kept back for the record's drop rows: the hook's LRC_DROP_RESERVE; _inflight_write passes the sum as <record-max>
+INFLIGHT_SCAN_BUDGET=67108864      # bytes one manifest may read (64 MiB), priced first; over it is why=budget (D-8376, provisional)
+INFLIGHT_MAX_BYTES=65536           # the byte size of the item lines in a session's manifest file
+INFLIGHT_TAIL_BYTES=65536          # the tail of one agent transcript read (D-5561's TAIL_BYTES)
+INFLIGHT_RECENT_S=86400            # "sidecar files changed in the last day"
+INFLIGHT_ABANDON_S=691200          # eight days of no activity: an item is abandoned (D-8372, provisional)
+INFLIGHT_TIME_S=30                 # the program's time bound; over it is why=time (D-8376, provisional)
+INFLIGHT_WAIT_CLOSED_S=600         # how recently a limit-wait may have closed end=resume for the limit-resume to count it (D-8375)
 
 _carry_slot_take() {   # -> 0 and the CALLER's local CARRY_SLOT_FD set | 1 contended | 2 no mechanism (no flock, the lock file, any other flock failure)
   command -v flock >/dev/null 2>&1 || return 2
@@ -28530,6 +28939,105 @@ _carry_slot_take() {   # -> 0 and the CALLER's local CARRY_SLOT_FD set | 1 conte
   flock -n "$fd" 2>/dev/null || frc=$?
   if (( frc != 0 )); then { exec {fd}>&-; } 2>/dev/null; (( frc == 1 )) && return 1; return 2; fi
   CARRY_SLOT_FD=$fd
+}
+
+# THE RESTART MANIFEST (session-continuity 6b; D-8361, D-8362): what a session had running when it was stopped, written to
+# `$REG/<id>.inflight` at the swap, the limit-resume and a revival, in shadow (nothing reads it in 6b). THE SLOT IS ITS OWN,
+# `$REG/.inflight.lock`, never the carry's `.carry.lock` (D-8362): the carry slot is a box-wide budget for the carry's heavy
+# reads and writes, not a lock between sessions, and a shadow manifest must never make a carry log `(kept: busy)`. The helper
+# sits beside `_carry_slot_take` because it mirrors it line for line, on another file.
+_inflight_slot_take() {   # -> 0 and the CALLER's local INFLIGHT_SLOT_FD set | 1 contended | 2 no mechanism (no flock, the lock file, any other flock failure)
+  command -v flock >/dev/null 2>&1 || return 2
+  local fd frc=0
+  { exec {fd}>>"$REG/.inflight.lock"; } 2>/dev/null || return 2
+  flock -n "$fd" 2>/dev/null || frc=$?
+  if (( frc != 0 )); then { exec {fd}>&-; } 2>/dev/null; (( frc == 1 )) && return 1; return 2; fi
+  INFLIGHT_SLOT_FD=$fd
+}
+
+_inflight_note() {   # id site rest -> one `manifest` line in swap.log, the one writer of them. Always rc 0.
+  echo "$(date '+%F %T') manifest $1: site=$2 $3" >> "$REG/swap.log" 2>/dev/null || true
+  return 0
+}
+
+_inflight_write() {   # id site [cfg uuid [log-from]] -> the session's manifest file, the launch record compacted, one `manifest` line. Always rc 0; never dies, never waits.
+  # THE BODY IS ONE SUBSHELL, because its sites run between a session's stop and its restart, in a shell under `set -u`, where
+  # an unbound variable ends the shell and no `|| true` catches it (`_swap_carry_sidecars` names the same hazard): here an
+  # `exit`, a `die` or an abort ends the subshell alone, and every variable below is its own.
+  (
+    local id="$1" site="$2" cfg="${3-}" uuid="${4-}" lfrom="${5-}" now=0 gfd="" w="" gen="-" wait="-" reset="-" lw="" wrc=0
+    local verdict=unmeasured why=error listed="" items="" kept="" out="" prc=0 slrc=0 prog="" lpath="" tokens="" hdr="" ln="" pass dash re INFLIGHT_SLOT_FD=""
+    local f_acct f_since f_reset f_state f_end f_until
+    dash='items=- in-flight=- holed=- stopped-agent=- diverged=- deferred-until-reset=- abandoned=- unread=- unread-expired=- killed=- resumed=- drop-id=- drop-path=- drop-budget=- drop-shape=- drop-read=- drop-readpath=- drop-over=- retired=-'
+    re="^summary verdict=(listed|none|unread) (${dash//=-/=[0-9]+})\$"
+    local counts="$dash"
+    _now_s_to now
+    _reg_read_to w "$id" wrapper || w=""
+    if [[ -z "$cfg" && -n "$w" ]]; then _cfg_dir_to cfg "$w"; fi
+    [[ -n "$uuid" ]] || _reg_get_to uuid "$id" uuid || uuid=""
+    # The generation read is a canonical write (its alias link), so it runs under the row's compaction lock like every other caller's,
+    # with wait 0 (never waits in the restart window) and around the read alone, before the manifest's slot: it never nests.
+    # An absent file is read with builtins alone (the reader answers "absent" before any write too): no lock, no fork, gen=-.
+    if [[ -e "$REG/$id.generation" || -L "$REG/$id.generation" ]] && _compact_lock_acquire "$id" 0; then
+      gfd="$COMPACT_LOCK_FD"
+      if _reg_generation_read "$id"; then gen="$REG_GENERATION"; fi
+      _compact_lock_release "$gfd"
+    fi
+    # THE WAIT (D-8375): the span this restart stands in, from the registry record of the limit-wait.
+    _reg_read_to lw "$id" limitwait || wrc=$?
+    if (( wrc == 2 )); then wait='?'
+    elif (( wrc == 0 )); then
+      f_acct=$(_rw_field "$lw" account); f_since=$(_rw_field "$lw" since); f_reset=$(_rw_field "$lw" reset)
+      f_state=$(_rw_field "$lw" state); f_end=$(_rw_field "$lw" end); f_until=$(_rw_field "$lw" until)
+      if [[ -n "$w" && "$f_acct" == "$w" && "$f_since" =~ ^[0-9]{1,15}$ && "$f_reset" =~ ^([0-9]{1,15}|-)$ ]] \
+        && { [[ "$f_state" == open ]] || { [[ "$site" == limit-resume && "$f_state" == closed && "$f_end" == resume && "$f_until" =~ ^[0-9]{1,15}$ ]] \
+          && (( now - 10#$f_until >= 0 && now - 10#$f_until <= INFLIGHT_WAIT_CLOSED_S )); }; }; then
+        if [[ "$f_reset" == - ]]; then wait=undated
+        else reset=$f_reset; wait=$(( 10#$f_reset > 10#$f_since ? 10#$f_reset - 10#$f_since : 0 )); fi
+      fi
+    fi
+    if [[ -z "$cfg" || -z "$uuid" || ! -d "$cfg" || ! -x "$cfg" ]]; then :   # unmeasured, why=error (a config root that cannot be searched is not a measured absence)
+    elif [[ -e "$cfg/projects" || -L "$cfg/projects" ]] && ! [[ -d "$cfg/projects" && -r "$cfg/projects" && -x "$cfg/projects" ]]; then :   # not a measured absence
+    elif [[ -z "$(_transcript_matches "$cfg" "$uuid")" ]]; then
+      # no transcript: the program never runs, but only when every project directory could be searched (D-8376): a directory that
+      # cannot be searched hides its transcript, so it is unmeasured, never a measured absence. Builtins only: no external command.
+      if [[ -n "$( shopt -s nullglob; for pd in "$cfg"/projects/*/; do [[ -x "$pd" ]] || { printf x; break; }; done )" ]]; then :   # unmeasured, why=error
+      else verdict=not-applicable why=-; counts="$dash"; fi
+    else
+      prog="${BASH_SOURCE[0]%/*}/lib/inflight-manifest.py"
+      [[ -f "$prog" ]] || prog="$HOME/.cc-sessions/lib/inflight-manifest.py"
+      lpath=-; if [[ "$lfrom" =~ ^[0-9]{1,15}$ ]]; then lpath="$REG/swap.log"; else lfrom=-; fi
+      _inflight_slot_take || slrc=$?
+      if (( slrc == 1 )); then why=busy
+      elif (( slrc == 0 )); then
+        if [[ -f "$prog" ]] && command -v python3 >/dev/null 2>&1; then
+          out=$(_plat_timeout "$INFLIGHT_TIME_S" python3 -I "$prog" "$REG" "$id" "$cfg" "$uuid" "$site" "$now" "$INFLIGHT_SCAN_BUDGET" "$INFLIGHT_MAX_BYTES" "$INFLIGHT_TAIL_BYTES" "$INFLIGHT_RECENT_S" "$INFLIGHT_ABANDON_S" "$reset" "$TRANSCRIPT_JQ_LIB" "$lpath" "$lfrom" "$((LAUNCH_RECORD_MAX_BYTES + LAUNCH_RECORD_DROP_RESERVE))" 2>/dev/null) || prc=$?
+          if (( prc == 124 )); then why="time"
+          elif (( prc == 3 )); then why=budget
+          elif (( prc == 0 )) && [[ "${out%%$'\n'*}" =~ $re ]]; then
+            verdict="${BASH_REMATCH[1]}"; why=-; counts="${BASH_REMATCH[2]}"
+            while IFS= read -r ln; do
+              case "$ln" in 'item '*) items+="${ln#item }"$'\n' ;; 'row '*) kept+="${ln#row }"$'\n' ;; esac
+            done <<< "$out"
+            tokens="verdict=$verdict why=$why wait=$wait $counts"; hdr="v=1 at=$now gen=$gen site=$site uuid=$uuid $tokens"
+            _reg_set "$id" inflight "$hdr"$'\n'"$items" && listed=1
+            if [[ -n "$listed" && -e "$REG/$id.deleg" ]]; then _reg_set "$id" deleg "$kept" || listed=""; fi
+            [[ -n "$listed" ]] || { verdict=unmeasured why=error; counts="$dash"; }
+          fi
+        fi
+        exec {INFLIGHT_SLOT_FD}>&-
+      fi
+    fi
+    if [[ -z "$listed" ]]; then
+      for pass in 1 2; do
+        tokens="verdict=$verdict why=$why wait=$wait $counts"; hdr="v=1 at=$now gen=$gen site=$site uuid=${uuid:--} $tokens"
+        _reg_set "$id" inflight "$hdr" && break
+        rm -f -- "$REG/$id.inflight" 2>/dev/null; verdict=unmeasured why=error counts="$dash"
+      done
+    fi
+    _inflight_note "$id" "$site" "$tokens"
+  ) || true
+  return 0
 }
 
 _swap_carry_merge_walk() {   # src dst budget -> stdout rows; rc 0 merged (K deferred) | 3 the first action alone over budget (nothing touched) | other: failed
@@ -30641,7 +31149,7 @@ _tick_strand_undecidable() {   # id field [wrapper] — the LOUD half of standin
   # 12 survive — while un-stranding a hard-blocked row and stranding a healthy
   # one, with every case green.
   local pane blocked=""
-  pane=$(tmux capture-pane -t "$(_tmux_t "$1")" -p 2>/dev/null | tail -8)
+  pane=$("${_TMX_ARGV[@]}" capture-pane -t "$(_tmux_t "$1")" -p 2>/dev/null | tail -8)
   # AN UNMEASURABLE PANE WITH NO TRANSCRIPT VERDICT CLEARS NOTHING (#69 review,
   # S2, amended by D-2363). An empty capture is normally a pane nobody could
   # read; only `_session_hard_blocked`'s transcript fallback may make a positive
@@ -30814,7 +31322,7 @@ _standdown_probe() {
 # from a note that is about to be written, so at most once per episode.
 _standdown_outside_tail() {
   local id="$1" tail="$2" full rows
-  full=$(tmux capture-pane -t "$(_tmux_t "$id")" -p 2>/dev/null)
+  full=$("${_TMX_ARGV[@]}" capture-pane -t "$(_tmux_t "$id")" -p 2>/dev/null)
   if [[ -z "$tail" ]]; then
     mapfile -t rows <<<"$full"
     (( ${#rows[@]} > 8 )) && rows=("${rows[@]: -8}")
@@ -30948,7 +31456,7 @@ _swap_rescue_act_gate() {   # id wrapper -> rc 0 proceed as decided | 1 cancelle
   # unmeasurable pane proceeds, as it always did. Still blocked, it proceeds
   # unless the transcript shows output since the decision.
   local id="$1" w="$2" pane word=""
-  pane=$(tmux capture-pane -t "$(_tmux_t "$id")" -p 2>/dev/null | tail -8)
+  pane=$("${_TMX_ARGV[@]}" capture-pane -t "$(_tmux_t "$id")" -p 2>/dev/null | tail -8)
   if ! _session_hard_blocked "$id" "$pane"; then
     case "${HARD_BLOCK_NO:-}" in
       negative|carried-in)
@@ -31145,7 +31653,7 @@ cmd_swap() {   # [--force] [--cross-pool] [--interrupt] id target-wrapper — mo
   # reaches the operator through swapblocked + notify.sh, never through this return code,
   # which nothing is waiting for by then. --force rides along or the detached retry would
   # silently drop the operator's decision.
-  if [[ -n "${TMUX:-}" && "$(tmux display-message -p '#S' 2>/dev/null)" == "$(_tmux "$id")" && -z "${CCD_SWAP_DETACHED:-}" ]]; then
+  if [[ -n "${TMUX:-}" && "$("${_TMX_ARGV[@]}" display-message -p '#S' 2>/dev/null)" == "$(_tmux "$id")" && -z "${CCD_SWAP_DETACHED:-}" ]]; then
     # THE systemd-run's OWN EXIT STATUS IS THE ONLY EVIDENCE THIS ARM EVER GETS,
     # and it used to be discarded: measured, `systemd-run` returning 1 printed
     # the confident `detached: …` line below, returned 0, and recorded NOTHING —
@@ -31244,7 +31752,9 @@ cmd_swap() {   # [--force] [--cross-pool] [--interrupt] id target-wrapper — mo
   _end_record "$id" "$(_swap_end_cause)"
   [[ -e "$REG/$id.choicekept" ]] || _operator_choice_keep "$id"   # a stop the spawn below follows: the operator's own /model and /effort reach the record first; a session already stopped and read (a marker) is not read again (§5.7)
   _svc_stop "claude-session@$id" 2>/dev/null   # first, or Restart=always resurrects under the old wrapper
-  tmux kill-session -t "$(_tmux_t "$id")" 2>/dev/null || _operator_choice_unmark "$id"   # a kill that failed on a live session leaves no marker (§5.7)
+  _graceful_stop_before "$id" swap
+  _tmx kill-session -t "$(_tmux_t "$id")" 2>/dev/null || _operator_choice_unmark "$id"   # a kill that failed on a live session leaves no marker (§5.7)
+  _graceful_stop_after "$id"
   sleep 1                                                  # let claude flush its final transcript entries
   # A SWAP IS NOT AN ABANDONMENT. Between the stop and the start this row is
   # not alive and, after 120 seconds, would also stop looking watched — and
@@ -31330,6 +31840,7 @@ cmd_swap() {   # [--force] [--cross-pool] [--interrupt] id target-wrapper — mo
   fi
   # Unconditional, and separate: sidecars are globbed in their own right and
   # exist in project dirs that hold no .jsonl for this uuid at all.
+  local mlog=""; mlog=$(_plat_size "$REG/swap.log" 2>/dev/null) || mlog=""
   _swap_carry_sidecars "$srccfg" "$dstcfg" "$uuid"
   # The task list lives at <configdir>/tasks/<uuid>/ and is keyed by config dir,
   # so a swap orphans it under the OLD account: the resumed session forgets its
@@ -31342,6 +31853,7 @@ cmd_swap() {   # [--force] [--cross-pool] [--interrupt] id target-wrapper — mo
     cp -r "$srccfg/tasks/$uuid" "$dstcfg/tasks/" 2>/dev/null \
       || echo "ccd: warn: could not carry the task list across to $target" >&2
   fi
+  _inflight_write "$id" swap "$dstcfg" "$uuid" "$mlog"
   # THE CARRY IS OVER — every file that was going to move has moved — so the
   # heartbeat stops here, before the registry is flipped. What follows is
   # milliseconds of `_reg_set`, and the final stamp below covers the restart.
@@ -31434,7 +31946,7 @@ cmd_swap_self() {   # target — run from INSIDE a cc session (terminal, web, or
   # just tell Claude "run ~/.local/bin/ccd swap-self <wrapper>"). Swaps the calling session.
   local target="${1:?usage: ccd swap-self <target-wrapper>}"
   [[ -n "${TMUX:-}" ]] || die "swap-self only works from inside a cc tmux session"
-  local id; id=$(tmux display-message -p '#S' 2>/dev/null); id="${id#cc-}"
+  local id; id=$("${_TMX_ARGV[@]}" display-message -p '#S' 2>/dev/null); id="${id#cc-}"
   [[ -f "$REG/$id.uuid" ]] || die "current tmux session '$id' is not ccd-managed"
   cmd_swap --interrupt "$id" "$target"   # a session asking for its own move is busy by definition (D-5240)
 }
@@ -31634,7 +32146,7 @@ cmd_stop() {   # [--surface <word>] <id>  |  [--surface <word>] <wrapper> <proje
   [[ -e "$REG/$id.choicekept" ]] || _operator_choice_keep "$id"   # `ccd start`/`enable` respawn from the record: the operator's own /model and /effort reach it first; a session already stopped and read is not read again (§5.7)
   _ws_unsupervise "$id" "$surface" "$declared"
   _pane_scope_of "$id"   # D-7902: the pane's scope, read while the pane still stands, and after the stop's intent, which no tmux may hold
-  tmux kill-session -t "$(_tmux_t "$id")" 2>/dev/null || _operator_choice_unmark "$id"   # a kill that failed on a live session leaves no marker (§5.7)
+  _tmx kill-session -t "$(_tmux_t "$id")" 2>/dev/null || _operator_choice_unmark "$id"   # a kill that failed on a live session leaves no marker (§5.7)
   _pane_scope_stop "$id"   # D-7902: what the session left running in its pane scope goes too (shadow until armed)
   echo "stopped $id"
 }
@@ -31912,7 +32424,7 @@ _watchdog_sign_to() {   # var id -> var = pane|banner|menu|transcript|account, o
   HARD_BLOCK_RESET=""; HARD_BLOCK_TYPE=""; HARD_BLOCK_ROW=""
   _pane_measurable "$id" || narrow=1   # a narrow pane's text is never read, as `_session_hard_blocked` keeps it
   if [[ -z "$narrow" ]]; then
-    tail=$(tmux capture-pane -t "$(_tmux_t "$id")" -p 2>/dev/null | tail -8)
+    tail=$("${_TMX_ARGV[@]}" capture-pane -t "$(_tmux_t "$id")" -p 2>/dev/null | tail -8)
     if _pane_hard_blocked "$tail" && ! _pane_carried_in "$id" pane "$tail"; then s=pane
     else
       _pane_limit_capture_to cap "$id" "$tail"
@@ -32001,9 +32513,12 @@ _watchdog_resume_run() {   # id — the transient unit's body: the stop-and-ensu
   local id="$1"
   [[ -e "$REG/$id.choicekept" ]] || _operator_choice_keep "$id"   # the operator's own /model and /effort reach the record first (§5.7)
   _svc_stop "claude-session@$id" 2>/dev/null   # first, or Restart=always resurrects the old pane
-  tmux kill-session -t "$(_tmux_t "$id")" 2>/dev/null || _operator_choice_unmark "$id"
+  _graceful_stop_before "$id" limit-resume
+  _tmx kill-session -t "$(_tmux_t "$id")" 2>/dev/null || _operator_choice_unmark "$id"
+  _graceful_stop_after "$id"
   sleep 1   # let claude flush its final transcript entries
   _reg_set "$id" supervised "$(date +%s)"
+  _inflight_write "$id" limit-resume
   cmd_ensure "$id"
 }
 
@@ -32281,13 +32796,21 @@ cmd_hibernate() {   # [--roll] [--surface <word>] [--actor <text>] [--reason <te
   # nothing was rolled and no wake is tried. The deliberate act is ONE journal row, `hibernate`, its declared reason defaulted to `roll` (the wake's
   # `ensure` rows are the unit's own, as on every wake). It takes no value and, like `--hold-ok`, is not on the usage
   # line, which is pinned. `ccd caps` says `hibernate-roll`.
+  # `--fresh` (spec 2026-11-09 §3.3.11 H13, the renewal's adapter): a mode of `--roll`, refused without it, so it has every
+  # refusal and exit code the roll has. Before the wake it mints a uuid, writes it as the row's and names it in
+  # `$REG/<id>.fresh`, so the wake (in the unit's own process) starts a new conversation under the same session id
+  # (`_spawn_mode`). A failed wake that is put back to sleep (exit 4) removes the marker and puts the old uuid back. A wake
+  # that answered 0 without the consuming spawn's receipt exits 7, `ccd: roll-fresh-unproven — …`, the old uuid back.
+  # `ccd caps` says `hibernate-fresh`.
   local usage="usage: ccd hibernate [--surface <word>] [--actor <text>] [--reason <text>] <id>"
   local lc_gh=0 lc_holdok=''   # `--hold-ok <text>` (D-6091)
-  local lc_roll=0
+  local lc_roll=0 lc_fresh=0 lc_u1='' lc_u2='' lc_rcpt=''
   while (( $# )); do
     case "$1" in
       --roll)      lc_roll=1; shift ;;
       --roll=*)    die "$usage" ;;
+      --fresh)     lc_fresh=1; shift ;;
+      --fresh=*)   die "$usage" ;;
       --surface)   [[ $# -ge 2 && $2 != -* ]] || die "$usage"; lc_gs=1; lc_surface="$2"; shift 2 ;;
       --surface=*) [[ ${1#--surface=} != -* ]] || die "$usage"; lc_gs=1; lc_surface="${1#--surface=}"; shift ;;
       --actor)     [[ $# -ge 2 && $2 != -* ]] || die "$usage"; lc_ga=1; lc_actor="$2"; shift 2 ;;
@@ -32314,6 +32837,7 @@ cmd_hibernate() {   # [--roll] [--surface <word>] [--actor <text>] [--reason <te
     [[ -n "${lc_reason//[[:space:]]/}" ]] || die "--reason must be non-blank"
     _lc_dec_ok "$lc_reason" || die "--reason is longer than $_LC_DEC_MAX bytes"
   fi
+  (( lc_fresh && ! lc_roll )) && die "$usage"   # a fresh start is a mode of the roll
   (( lc_roll && ! lc_gr )) && lc_reason=roll   # the roll names itself on its one journal row
   [[ $# -eq 1 ]] || die "$usage"
   local id="$1"
@@ -32367,7 +32891,7 @@ cmd_hibernate() {   # [--roll] [--surface <word>] [--actor <text>] [--reason <te
   # NOBODY ATTACHED: a terminal attach, `cc`, or the PWA drawer's `tmux attach`
   # pty. The one hold the server cannot see; an unreadable answer refuses.
   local att=""
-  att=$(tmux display-message -p -t "$(_tmux_t "$id")" '#{session_attached}' 2>/dev/null) || att=""
+  att=$("${_TMX_ARGV[@]}" display-message -p -t "$(_tmux_t "$id")" '#{session_attached}' 2>/dev/null) || att=""
   [[ "$att" =~ ^[0-9]+$ ]] || _hib_refuse attached "tmux did not say whether a terminal is attached"
   [[ "$att" == 0 ]] || _hib_refuse attached "$att terminal(s) attached to the pane"
   # The idle age, for the marker and the log: the latest main event the marker records.
@@ -32389,7 +32913,9 @@ cmd_hibernate() {   # [--roll] [--surface <word>] [--actor <text>] [--reason <te
   _reg_set "$id" hibernated "$now $hours" || die "could not write $REG/$id.hibernated — nothing was stopped"
   _ws_unsupervise "$id" ccd
   _pane_scope_of "$id"   # D-7902: the pane's scope, read while the pane still stands, and after the stop's intent, which no tmux may hold
-  tmux kill-session -t "$(_tmux_t "$id")" 2>/dev/null || _operator_choice_unmark "$id"   # a kill that failed on a live session leaves no marker (§5.7)
+  _graceful_stop_before "$id" hibernate read
+  _tmx kill-session -t "$(_tmux_t "$id")" 2>/dev/null || _operator_choice_unmark "$id"   # a kill that failed on a live session leaves no marker (§5.7)
+  _graceful_stop_after "$id"
   # A roll whose pane is still live after the kill did not stop it, so nothing is rolled and no wake is tried: its own
   # exit (6) and phrase, never `rolled`. The marker and the stopped unit the act wrote stand, so the line says so.
   if (( lc_roll )) && _alive "$id"; then
@@ -32407,7 +32933,26 @@ cmd_hibernate() {   # [--roll] [--surface <word>] [--actor <text>] [--reason <te
   #    `.woke` is read first: the wake stamps it, and a wake that failed did not wake anything (below).
   local wrc=0 lc_woke='' lc_had_woke=0
   if [[ -e "$REG/$id.woke" || -L "$REG/$id.woke" ]]; then lc_had_woke=1; IFS= read -r lc_woke < "$REG/$id.woke" 2>/dev/null || true; fi
-  ( cmd_ensure "$id" ) || wrc=$?
+  if (( lc_fresh )); then   # the marker first: a uuid written without it would still resume (`_spawn_mode`), never the reverse
+    _reg_get_to lc_u1 "$id" uuid; lc_u2=$(_plat_uuid) && [[ -n "$lc_u2" ]] || wrc=1
+    echo "$(date '+%F %T') hibernate $id: fresh start, uuid $lc_u1 -> $lc_u2" >> "$REG/swap.log"   # before the writes, so a kill keeps u1 named
+    (( wrc )) || { _reg_set "$id" fresh "$lc_u2" && _reg_set "$id" uuid "$lc_u2"; } || wrc=$?
+    echo "$(date '+%F %T') hibernate $id: fresh start writes rc $wrc" >> "$REG/swap.log"
+  fi
+  (( wrc )) || ( cmd_ensure "$id" ) || wrc=$?
+  # A FRESH START IS PROVEN, NEVER ASSUMED (review 1904 F1): the wake's exit 0 also covers a concurrent wake that resumed
+  # the old conversation (its pane is up, so this one answers `alive:`) and a stale removal. Only the receipt the
+  # consuming `new` spawn writes (`_spawn_start`) proves it; without it, the old uuid is back and the answer is exit 7.
+  if (( lc_fresh && ! wrc )); then
+    _reg_get_to lc_rcpt "$id" fresh; rm -f -- "$REG/$id.fresh"
+    if [[ "$lc_rcpt" != "used $lc_u2" ]]; then
+      [[ -n "$lc_u1" ]] && { _reg_set "$id" uuid "$lc_u1" || true; }
+      echo "$(date '+%F %T') hibernate $id: fresh start unproven (marker read ${lc_rcpt:-absent}), uuid back to $lc_u1" >> "$REG/swap.log"
+      _lc_fail hibernate "$id" "" roll-fresh-unproven "the wake answered 0, but no spawn of $lc_u2 left its receipt"
+      echo "ccd: roll-fresh-unproven — $id: a fresh start into $lc_u2 could not be proven (a concurrent wake, a lost create or an account move came first); its uuid is back to ${lc_u1:-nothing}, and a fresh start can be asked for again" >&2
+      exit 7
+    fi
+  fi
   if (( wrc != 0 )); then
     # Back to sleep, in the act's own order: the marker first, then the unit, then a pane the unit may have raised late.
     # A unit that could not be stopped again is not the sanctioned hibernated row (a Restart=always unit retries it), so
@@ -32417,8 +32962,8 @@ cmd_hibernate() {   # [--roll] [--surface <word>] [--actor <text>] [--reason <te
       lc_unrestored="$REG/$id.hibernated could not be written again"
     elif _ws_unsupervise "$id" ccd; (( ! _WS_UNSUPERVISE_DISABLED )); then
       lc_unrestored="its unit claude-session@$id could not be stopped again"
-      tmux kill-session -t "$(_tmux_t "$id")" 2>/dev/null || true
-    elif tmux kill-session -t "$(_tmux_t "$id")" 2>/dev/null || true; _alive "$id"; then
+      _tmx kill-session -t "$(_tmux_t "$id")" 2>/dev/null || true
+    elif _tmx kill-session -t "$(_tmux_t "$id")" 2>/dev/null || true; _alive "$id"; then
       # A pane the failed wake raised (a spawn that timed out after tmux made the session) that outlives this kill is
       # not the sanctioned hibernated row either, as the act's own kill check (exit 6) says of a pane that survives it.
       lc_unrestored="a pane is still live after the put-back"
@@ -32426,6 +32971,9 @@ cmd_hibernate() {   # [--roll] [--surface <word>] [--actor <text>] [--reason <te
       # The `.woke` stamp `cmd_ensure` wrote goes back to what stood before it: nothing woke, so it must neither hold
       # the auto-swap's cooldown (`_standdown_note … woke`) nor read as fresh activity to the stale-archive lane.
       if (( lc_had_woke )); then _reg_set "$id" woke "$lc_woke" || true; else rm -f -- "$REG/$id.woke"; fi
+      # A fresh start that did not wake keeps the old conversation: its marker goes, the old uuid is back. Exit 4 only: on
+      # exit 5 a pane may still run the new conversation, and the registry must keep naming it (plan review 1896 m-B6).
+      (( lc_fresh )) && { rm -f -- "$REG/$id.fresh"; [[ -z "$lc_u1" ]] || _reg_set "$id" uuid "$lc_u1" || true; }
       echo "$(date '+%F %T') hibernate $id: roll wake failed (rc $wrc), back to sleep" >> "$REG/swap.log"
       echo "ccd: roll-wake-failed — $id was hibernated and its wake exited $wrc; it was put back to sleep (hibernated, unit stopped), and mail, an open screen or ccd ensure wakes it" >&2
       exit 4
@@ -32541,7 +33089,7 @@ cmd_forget() {   # <id> — remove a DEAD non-workspace session's registry entry
   _lc_intent forget "$id" "$lctx" verb forget dec.reason "$reason" meas.wrapper "$(_reg_get "$id" wrapper)" \
     meas.project "$(_reg_get "$id" project)" meas.uuid "$(_reg_get "$id" uuid)"
   _ws_unsupervise "$id"
-  tmux kill-session -t "$(_tmux_t "$id")" 2>/dev/null || true
+  _tmx kill-session -t "$(_tmux_t "$id")" 2>/dev/null || true
   # ── D-2605: THIS CALLER READS `_reg_purge`'s STATUS ─────────────────────
   # It reached here AFTER irreversible action, so a refusal is a FAILURE, not a
   # refusal — that is `_lc_fail`'s documented distinction from `_lc_refuse`: a
@@ -32708,6 +33256,28 @@ cmd_reclaim_pause() {   # ccd reclaim-pause --state on|off — raise or lower th
   fi
 }
 
+_testbox_parity_armable() {   # rc 0 only when the parity record passes and still matches the pin and the box file
+  # (D-8166; spec 2026-11-10 §2.8, T9). The record is `~/.ccrc/testbox-parity.json` (`ccrc testbox-admin parity` writes
+  # it); the pin's fingerprint, the box file's digest and the stale mark are the keys `fingerprint`, `box_sha256` and
+  # `parity_stale` of the verb's state file `~/.ccrc/testbox-admin.state` (its last such line wins, as the verb reads it).
+  # `parityArmable` (shared/testbox-admin.ts) is this rule for the server; testbox-remote-gate.test.ts holds them equal.
+  # Any missing or unreadable file, or a record that is not the expected shape, is "not armable".
+  local dir="$HOME/.ccrc" rec st line k v sfp="" ssha="" stale="" want
+  rec="$dir/testbox-parity.json"; st="$dir/testbox-admin.state"
+  [[ -f $rec && ! -L $rec && -f $st && ! -L $st ]] || return 1
+  command -v jq >/dev/null 2>&1 || return 1
+  want="$(jq -r 'select(type == "object" and .v == 1 and .result == "pass" and .parityStale != true
+      and (.fingerprint | type == "string") and (.boxFileSha256 | type == "string"))
+    | "\(.fingerprint) \(.boxFileSha256)"' "$rec" 2>/dev/null)" || return 1
+  [[ -n $want ]] || return 1
+  while IFS= read -r line || [[ -n $line ]]; do
+    k="${line%%=*}"; v="${line#*=}"
+    case "$k" in fingerprint) sfp="$v" ;; box_sha256) ssha="$v" ;; parity_stale) stale="$v" ;; esac
+  done < "$st"
+  [[ -z $stale && -n $sfp && -n $ssha ]] || return 1
+  [[ $want == "$sfp $ssha" ]]
+}
+
 cmd_testbox_remote() {   # ccd testbox-remote --state on|off — raise or lower the test box's remote switch
   # (test box plan TB9, D-7411; spec 2026-10-28 §2.7). While `$REG/testbox-remote-live` exists, a `ccrc test` run
   # goes to the test box when spec §2.4's checks pass; absent, every run is local, today's `ccrc test`. This verb is
@@ -32723,6 +33293,7 @@ cmd_testbox_remote() {   # ccd testbox-remote --state on|off — raise or lower 
   [[ -d "$REG" ]] || die "no registry at $REG"
   marker="$REG/testbox-remote-live"
   if [[ $state == on ]]; then
+    _testbox_parity_armable || die "parity-required: run parity on the Test box card first — remote runs are NOT on"   # D-8166: off is never gated
     tmp="$REG/.testbox-remote-live.$$.tmp"
     { : > "$tmp" && _plat_mv_notdir "$tmp" "$marker"; } \
       || { rm -f -- "$tmp"; die "could not raise the test box switch — remote runs are NOT on"; }
@@ -32850,7 +33421,7 @@ cmd_attach() {   # create-on-demand, then exec tmux attach
   local id; id=$(_id "$wrapper" "$project")
   [[ -f "$REG/$id.uuid" ]] || cmd_start "$wrapper" "$project" >/dev/null || die "start failed"
   _alive "$id" || cmd_ensure "$id" >/dev/null || die "ensure failed for $id"
-  exec tmux attach -t "$(_tmux_t "$id")"
+  exec "${_TMX_ARGV[@]}" attach -t "$(_tmux_t "$id")"
 }
 
 cmd_menu() {   # interactive picker → attach. The universal entry point for any SSH/terminal app:
@@ -32870,7 +33441,7 @@ cmd_menu() {   # interactive picker → attach. The universal entry point for an
   [[ "$choice" =~ ^[0-9]+$ ]] && (( choice >= 1 && choice <= ${#ids[@]} )) || { echo "invalid choice"; return 1; }
   id="${ids[$((choice - 1))]}"
   _alive "$id" || cmd_ensure "$id" >/dev/null || die "ensure failed for $id"
-  exec tmux attach -t "$(_tmux_t "$id")"
+  exec "${_TMX_ARGV[@]}" attach -t "$(_tmux_t "$id")"
 }
 
 # <dir> <src> — destination for a filed clip. Split out of cmd_clip so it can be
@@ -32892,15 +33463,17 @@ cmd_clip() {   # <png-path> [id] — file an image into a session and inject its
   local png="${1:?usage: ccd clip <png-path> [id]}" id="${2:-}"
   [[ -f "$png" ]] || die "no such image: $png"
   if [[ -z "$id" ]]; then
-    id=$(tmux list-clients -F '#{client_activity} #{client_session}' 2>/dev/null \
+    id=$("${_TMX_ARGV[@]}" list-clients -F '#{client_activity} #{client_session}' 2>/dev/null \
            | sort -rn | awk 'NR==1{print $2}' | sed 's/^cc-//')
     [[ -n "$id" ]] || die "no attached cc session (attach with 'cc <wrapper> <project>', or pass an id)"
   fi
   _alive "$id" || die "session not alive: $id"
+  # D-8271: the one typing check, its `append` rung only: a pane in copy-mode would swallow the path.
+  _pane_type_ready "$id" clip append || die "not typing into $id: the pane is in a tmux mode (copy-mode); leave it and clip again"
   local dir="$HOME/.cc-clips/$id"; mkdir -p "$dir"
   local dest; dest="$(_clip_dest "$dir" "$png")"
   mv -f "$png" "$dest"
-  tmux send-keys -t "$(_tmux_t "$id")" -l "$dest "
+  _tmx send-keys -t "$(_tmux_t "$id")" -l "$dest "
   echo "clip -> $dest (injected into $id)"
 }
 
@@ -32965,6 +33538,7 @@ _ws_reclaim_reset() {   # every REAP_* global `_ws_reap_reset` owns, plus the re
   RECLAIM_WIP_SHA=""        # `_ws_wip_commit`'s answer for the tree it was just handed
   RECLAIM_WIP_WHY=""; RECLAIM_PIN_WHY=""; _WS_RECLAIM_CLASSIFY_WHY=""
   RECLAIM_KEPT=()           # branches this reclaim KEEPS, never deletes, and records (`keptBranches`)
+  RECLAIM_STALE_LOCKS=""    # D-5945: the stale `index.lock` paths rung 6 passed, one per line (`staleLock`)
   _WS_LADDER_BIND=()        # the token's LEADING inputs — the caller's rungs 1-2 set them (`_ws_reclaim_ladder`)
   EXPIRE_ARCHIVED_AT=""     # ws-expire's archive epoch, as READ (the EXPIRE region); '' on every reclaim
   _WS_LEGACY_ROWS=""; _WS_PENDING_ROWS=""   # the rows rung's entry-field counts: '' = not counted, printed null
@@ -35084,27 +35658,103 @@ _ws_reclaim_tip_read() {   # main branch -> 0 with REAP_TIP (the tip; '' when th
 }
 
 _WS_HEAD_UNBORN_WHY=''
-_ws_reclaim_head_unborn() {   # workdir branch -> 0 when HEAD is still SYMBOLIC to that branch and the last
-  #                                `_ws_reclaim_tip_read` PROVED the branch absent; 1 when it is not so; 2 when
-  #                                HEAD could not be read. _WS_HEAD_UNBORN_WHY says why on 0 and on 2.
+_ws_reclaim_head_unborn() {   # workdir branch -> 0 when HEAD is SYMBOLIC to a branch that names no commit: that
+  #                                branch, which the last `_ws_reclaim_tip_read` PROVED absent, or ANOTHER branch
+  #                                proven absent (D-8286); 1 when it is not so; 2 when HEAD, or the other branch it
+  #                                names, could not be read. _WS_HEAD_UNBORN_WHY says why on 0 and on 2.
   # THE ONE PREDICATE OF THE LADDER AND THE PIN (D-5944), so the audit never
   # promises what the pin refuses. An `update-ref -d` under a checkout leaves
   # HEAD naming nothing, and no WIP commit can stand on it. A DETACHED HEAD on a
   # gone branch is not this shape: it names a commit, and the pin keeps it.
   # `symbolic-ref` answers 1 for a detached HEAD; any other failure is a read
   # that did not run, which is never "not so".
-  local ref rc
+  # A HEAD ON ANOTHER BRANCH (D-8286, #2293's stated residue) is the same shape
+  # when that branch names no commit: an orphan checkout never born, or a drifted
+  # HEAD whose branch was deleted under it. The pin keeps a drifted HEAD's branch
+  # and commits the WIP commit on HEAD, and here HEAD resolves to nothing, so it
+  # refused on every pass a token the ladder had minted with an empty `head=`.
+  # Its branch is read three ways (`_ws_reclaim_branch_state`): only a branch
+  # PROVEN absent is this shape, a standing one is the ordinary drift, and a
+  # read that did not run is 2, never "not so".
+  local ref rc other st
   _WS_HEAD_UNBORN_WHY=''
-  [[ "$RECLAIM_BRANCHSTATE" == absent ]] || return 1
   ref=$(git -C "$1" symbolic-ref -q HEAD 2>/dev/null); rc=$?
   if (( rc == 0 )); then
-    [[ "$ref" == "refs/heads/$2" ]] || return 1
-    _WS_HEAD_UNBORN_WHY="$1 still has $2 checked out, but $2 is gone from its repository — HEAD names no commit for the WIP commit to stand on, so nothing was pinned"
-    return 0
+    if [[ "$ref" == "refs/heads/$2" ]]; then
+      [[ "$RECLAIM_BRANCHSTATE" == absent ]] || return 1
+      _WS_HEAD_UNBORN_WHY="$1 still has $2 checked out, but $2 is gone from its repository — HEAD names no commit for the WIP commit to stand on, so nothing was pinned"
+      return 0
+    fi
+    [[ "$ref" == refs/heads/?* ]] || return 1
+    other="${ref#refs/heads/}"
+    st=$(_ws_reclaim_branch_state "$1" "$other")
+    case "$st" in
+      "present "*) return 1 ;;
+      absent)
+        _WS_HEAD_UNBORN_WHY="$1 has $other checked out, but $other names no commit (never born, or gone from its repository) — HEAD names no commit for the WIP commit to stand on, so nothing was pinned"
+        return 0 ;;
+    esac
+    _WS_HEAD_UNBORN_WHY="could not read whether $other, the branch $1 has checked out, exists"
+    return 2
   fi
   (( rc == 1 )) && return 1
   _WS_HEAD_UNBORN_WHY="could not read which branch $1 has checked out"
   return 2
+}
+
+_WS_LOCK_STATE=''; _WS_LOCK_WHY=''
+_ws_index_lock_state() {   # lockpath -> 0 always; _WS_LOCK_STATE = absent | held | stale | unmeasured, and
+  #                            _WS_LOCK_WHY says why for held, stale and unmeasured (D-5945, spec 2026-10-20 §2.4)
+  # RUNG 6's ONE CLASSIFIER, for the child's own tree and the nested checkout's
+  # twin alike. A lock a crashed git command left behind wedged an archived
+  # workspace for good: `tree-busy` is a retry word, and an expiry has no
+  # `--defer-expired`. STALE needs all three: a regular, EMPTY file (git writes
+  # the new index into its lock, so a writer that is still writing leaves
+  # bytes); an mtime older than `WS_INDEX_LOCK_STALE_S` (a future mtime is
+  # young, never a negative age read as old); and no holder the process probe
+  # `_ws_path_users` can find. Anything else that stands there — a link,
+  # dangling or not, a directory, a non-empty or young file, a holder — is
+  # `held`, and a read or a probe that could not run is `unmeasured`, never
+  # stale. ccd NEVER deletes the lock: the audit writes nothing, and the tail
+  # removes it with the tree after the pin, which copies the index through a
+  # scratch file and never takes the lock (`_ws_reclaim_index_src`).
+  local l="$1" size mt now age rc
+  _WS_LOCK_STATE=unmeasured; _WS_LOCK_WHY=''
+  if [[ ! -e "$l" && ! -L "$l" ]]; then _WS_LOCK_STATE=absent; return 0; fi
+  if [[ -L "$l" || ! -f "$l" ]]; then _WS_LOCK_STATE=held; _WS_LOCK_WHY="it is not a regular file"; return 0; fi
+  size=$(_plat_size "$l" 2>/dev/null) && [[ "$size" =~ ^[0-9]+$ ]] \
+    || { _WS_LOCK_WHY="its size could not be read"; return 0; }
+  (( size == 0 )) || { _WS_LOCK_STATE=held; _WS_LOCK_WHY="it holds $size bytes"; return 0; }
+  mt=$(_plat_mtime "$l" 2>/dev/null) && [[ "$mt" =~ ^[0-9]+$ ]] \
+    || { _WS_LOCK_WHY="its modification time could not be read"; return 0; }
+  now=$(_now_s); [[ "$now" =~ ^[0-9]+$ ]] || { _WS_LOCK_WHY="the clock could not be read"; return 0; }
+  age=$(( now - mt ))
+  (( age > WS_INDEX_LOCK_STALE_S )) \
+    || { _WS_LOCK_STATE=held; _WS_LOCK_WHY="it was written ${age}s ago, within the ${WS_INDEX_LOCK_STALE_S}s a git command may hold it"; return 0; }
+  _ws_path_users "$l"; rc=$?
+  case "$rc" in
+    0) _WS_LOCK_STATE=stale; _WS_LOCK_WHY="an empty file written ${age}s ago that no process holds" ;;
+    1) _WS_LOCK_STATE=held; _WS_LOCK_WHY="$_WS_PATH_USERS_WHY" ;;
+    *) _WS_LOCK_WHY="$_WS_PATH_USERS_WHY" ;;
+  esac
+  return 0
+}
+
+_ws_stale_lock_doc() {   # -> prints `"staleLock":[…],` for an audit document when rung 6 passed a stale lock, else nothing
+  # Absent, never `[]`, when none passed (D-5945): a document from a tree with no lock is byte-identical to before.
+  local l first=1
+  [[ -n "$RECLAIM_STALE_LOCKS" ]] || return 0
+  printf '"staleLock":['
+  while IFS= read -r l; do
+    [[ -n "$l" ]] || continue
+    (( first )) || printf ','; first=0
+    printf '%s' "$(_json_str "$l")"
+  done <<< "$RECLAIM_STALE_LOCKS"
+  printf '],'
+}
+_ws_stale_lock_meas() {   # -> the stale lock paths rung 6 passed, comma-joined, for `meas.staleLock` ('' when none)
+  local v="${RECLAIM_STALE_LOCKS%$'\n'}"
+  printf '%s' "${v//$'\n'/,}"
 }
 
 _WS_GITDIR_WHY=''; _WS_GITDIR_DIR=''
@@ -35308,7 +35958,7 @@ _ws_reclaim_ladder() {   # id defer -> rungs 3-10, SHARED by `_ws_reclaim_eval` 
   fi
   if [[ -n $_WS_STALE_WORD && "${_WS_LADDER_BIND[0]-}" == mode=reclaim ]]; then   # the stale arm's rung after rung 4 (DR-26)
     _session_probe "$id" anchored; pane_at=''
-    [[ $PROBE_VERDICT != live ]] || pane_at=$(tmux display-message -p -t "$(_tmux_t "$id")" '#{window_activity}' 2>/dev/null)
+    [[ $PROBE_VERDICT != live ]] || pane_at=$("${_TMX_ARGV[@]}" display-message -p -t "$(_tmux_t "$id")" '#{window_activity}' 2>/dev/null)
     _ws_reclaim_stale_idle "$id" "$(_transcript_path "$id")" "$PROBE_VERDICT" "$pane_at" || return 1
   fi
   project=$(_reg_get "$id" project); workdir=$(_reg_get "$id" workdir); regbranch=$(_reg_get "$id" branch)
@@ -35348,7 +35998,7 @@ _ws_reclaim_ladder() {   # id defer -> rungs 3-10, SHARED by `_ws_reclaim_eval` 
     case "$PROBE_VERDICT" in
       gone) : ;;
       live)
-        clients=$(tmux list-clients -t "$(_tmux_t "$id")" -F '#{client_tty}' 2>/dev/null) \
+        clients=$("${_TMX_ARGV[@]}" list-clients -t "$(_tmux_t "$id")" -F '#{client_tty}' 2>/dev/null) \
           || { _ws_refuse attached "$(_tmux "$id") exists and would not list its clients — presence unmeasured is not absence"; return 1; }
         [[ -z "$clients" ]] \
           || { _ws_refuse attached "a terminal is attached to $(_tmux "$id"): ${clients//$'\n'/, }"; return 1; } ;;
@@ -35478,8 +36128,13 @@ _ws_reclaim_ladder() {   # id defer -> rungs 3-10, SHARED by `_ws_reclaim_eval` 
     [[ -z "$op" ]] || { _ws_refuse tree-busy "$op in progress at $workdir"; return 1; }
     h=$(git -C "$workdir" rev-parse --path-format=absolute --git-path index 2>/dev/null) && [[ -n "$h" ]] \
       || { _ws_reclaim_unmeasured "could not locate the index of $workdir"; return 1; }
-    [[ ! -e "$h.lock" && ! -L "$h.lock" ]] \
-      || { _ws_refuse tree-busy "a git command holds the index lock of $workdir ($h.lock)"; return 1; }
+    _ws_index_lock_state "$h.lock"   # D-5945: a stale lock passes, named; a held one is busy
+    case "$_WS_LOCK_STATE" in
+      absent) : ;;
+      stale) RECLAIM_STALE_LOCKS+="$h.lock"$'\n' ;;
+      held) _ws_refuse tree-busy "a git command holds the index lock of $workdir ($h.lock) — $_WS_LOCK_WHY"; return 1 ;;
+      *) _ws_reclaim_unmeasured "whether a process holds the index lock of $workdir ($h.lock) could not be asked: $_WS_LOCK_WHY"; return 1 ;;
+    esac
   fi
   # THE BRANCH DELETED IS THE REGISTRY'S (spec §5.5: nothing that is not the
   # child's is deleted). A worktree whose HEAD has DRIFTED onto another branch
@@ -35577,8 +36232,13 @@ _ws_reclaim_ladder() {   # id defer -> rungs 3-10, SHARED by `_ws_reclaim_eval` 
       if (( ! defer )); then
         h=$(git -C "$p" rev-parse --path-format=absolute --git-path index 2>/dev/null) && [[ -n "$h" ]] \
           || { _ws_reclaim_unmeasured "could not locate the index of the nested checkout at $p"; return 1; }
-        [[ ! -e "$h.lock" && ! -L "$h.lock" ]] \
-          || { _ws_refuse tree-busy "a git command holds the index lock of the nested checkout at $p ($h.lock)"; return 1; }
+        _ws_index_lock_state "$h.lock"   # D-5945: the same rule as the child's own tree
+        case "$_WS_LOCK_STATE" in
+          absent) : ;;
+          stale) RECLAIM_STALE_LOCKS+="$h.lock"$'\n' ;;
+          held) _ws_refuse tree-busy "a git command holds the index lock of the nested checkout at $p ($h.lock) — $_WS_LOCK_WHY"; return 1 ;;
+          *) _ws_reclaim_unmeasured "whether a process holds the index lock of the nested checkout at $p ($h.lock) could not be asked: $_WS_LOCK_WHY"; return 1 ;;
+        esac
         op=$(_ws_child_op "$p") \
           || { _ws_reclaim_unmeasured "could not probe the nested checkout at $p for an in-progress git operation"; return 1; }
         [[ -z "$op" ]] || { _ws_refuse tree-busy "$op in progress at the nested checkout at $p"; return 1; }
@@ -35649,7 +36309,8 @@ _ws_reclaim_ladder() {   # id defer -> rungs 3-10, SHARED by `_ws_reclaim_eval` 
     "statusDigest=$RECLAIM_STATUSDIGEST" \
     "ignoredDigest=$REAP_IGNDIGEST" "secretsDigest=$REAP_SENSDIGEST" "hiddenDigest=$RECLAIM_HIDDENDIGEST" \
     "stashes=${RECLAIM_STASHES//$'\n'/,}" "opHeads=${RECLAIM_OPHEADS//$'\n'/,}" \
-    "nestedDigest=$REAP_CHILDDIGEST" "clipsDigest=$REAP_CLIPDIGEST")
+    "nestedDigest=$REAP_CHILDDIGEST" "clipsDigest=$REAP_CLIPDIGEST" \
+    ${RECLAIM_STALE_LOCKS:+"staleLock=${RECLAIM_STALE_LOCKS//$'\n'/,}"})   # D-5945: only when one passed, so no other token moves
   REAP_VERDICT=reclaimable
   return 0
 }
@@ -39265,9 +39926,9 @@ _ws_reclaim_tail() {   # id phase lctx childof surface declared resumed(phase|''
   # function-vs-binary split `_session_probe` makes, for its reason:
   # `timeout` execs its argv, and a function stub cannot wedge.
   if [[ $(type -t tmux) == function ]]; then
-    tmux kill-session -t "$(_tmux_t "$id")" 2>/dev/null; killrc=$?
+    _tmx kill-session -t "$(_tmux_t "$id")" 2>/dev/null; killrc=$?
   else
-    _plat_timeout "$SUBSTRATE_PROBE_DEADLINE_S" tmux kill-session -t "$(_tmux_t "$id")" 2>/dev/null; killrc=$?
+    _plat_timeout "$SUBSTRATE_PROBE_DEADLINE_S" "${_TMX_ARGV[@]}" kill-session -t "$(_tmux_t "$id")" 2>/dev/null; killrc=$?
   fi
   # RE-MEASURED, because `_ws_unsupervise` answers 0 whatever systemd did: a
   # failed `_svc_disable_now` is a stderr warning and nothing more. A unit that
@@ -40127,6 +40788,7 @@ _ws_reclaim_locked() {   # token childof id defer surface actor reason — every
   lctx=$(_lc_tx)
   _lc_intent reclaim "$id" "$lctx" verb ws-reclaim meas.childOf "$RECLAIM_CHILDOF" meas.project "$project" \
     meas.workdir "$workdir" meas.branch "$REAP_BRANCH" meas.resumed "$resumed" \
+    ${RECLAIM_STALE_LOCKS:+meas.staleLock "$(_ws_stale_lock_meas)"} \
     dec.surface "$surface" dec.actor "$actor" dec.reason "$reason"
   if [[ -z "$phase" ]]; then
     # THE PIN PHASE, before anything is destroyed (spec §5.5), then the
@@ -40730,6 +41392,7 @@ _ws_expire_locked() {   # token id surface actor reason — everything the share
   lctx=$(_lc_tx)
   _lc_intent expire "$id" "$lctx" verb ws-expire meas.archivedAt "$EXPIRE_ARCHIVED_AT" meas.project "$project" \
     meas.workdir "$workdir" meas.branch "$REAP_BRANCH" meas.resumed "$resumed" \
+    ${RECLAIM_STALE_LOCKS:+meas.staleLock "$(_ws_stale_lock_meas)"} \
     dec.surface "$surface" dec.actor "$actor" dec.reason "$reason"
   if [[ -z "$phase" ]]; then
     # THE PIN PHASE, before anything is destroyed, then the tombstone (its
@@ -40824,7 +41487,7 @@ _ws_expire_audit_contained() {   # `_ws_expire_audit`'s body, run under `_ws_rec
   printf '{"session":%s,"mode":"expire","archivedAt":%s,"expiresAt":%s,"alive":%s,"exists":%s,"reaping":%s,"sensitive":%s,"legacyRows":%s,"pendingRows":%s,' \
     "$(_json_str "$id")" "$stamp" "$expires" \
     "$aliveflag" "$exists" "$( [[ -n "$reaping" ]] && _json_str "$reaping" || echo null)" "$sens" "${_WS_LEGACY_ROWS:-null}" "${_WS_PENDING_ROWS:-null}"
-  _ws_rescue_doc; _ws_held_by_doc
+  _ws_rescue_doc; _ws_held_by_doc; _ws_stale_lock_doc
   [[ -n "$RECLAIM_RESUME_PHASE" ]] && printf '"resume":%s,' "$(_json_str "$RECLAIM_RESUME_PHASE")"
   # WHO IS IN IT (an `in-use` refusal only): pid, command and cwd, at most five.
   if [[ "$REAP_VERDICT" == in-use && ${#EXPIRE_IN_USE[@]} -gt 0 ]]; then

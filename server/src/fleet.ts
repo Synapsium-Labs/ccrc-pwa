@@ -10,6 +10,7 @@ import { liveSessionStatus, liveStatusCoversDelegation } from './liveVerdicts.js
 import type { LiveStateRead } from './livestate.js';
 import type { Statusline } from './pane/statusline.js';
 import type { HookState } from './hookstate.js';
+import { isHookEvent, type HookEvent } from '../../shared/hook-events.js';
 import type { FleetSession, HookAsk, LifecycleInput, PrState, SessionLanding, SessionStatus, SessionUsage, TaskProgress } from '../../shared/api.js';
 // The ladder lives in `shared/` because `reviveFleetSession` is its second
 // producer and the two must not be able to disagree — see its own docstring.
@@ -41,7 +42,7 @@ import { currentFor } from './coord/questions.js';
 export const ASK_SUMMARY_MAX_LEN = 80;
 /** D-5231, D-5272: the hook events whose `done` can hold the delegated pair —
  *  the main `Stop` that writes it, and the two subagent events that carry it. */
-const BACKGROUND_CARRIER_EVENTS: ReadonlySet<string> = new Set(['Stop', 'SubagentStart', 'SubagentStop']);
+const BACKGROUND_CARRIER_EVENTS: ReadonlySet<HookEvent> = new Set(['Stop', 'SubagentStart', 'SubagentStop']);
 
 /**
  * The fleet card's one-line summary of a `waiting` hook state.
@@ -879,7 +880,7 @@ export async function assembleFleetWithPanePids(
       // read `SubagentStart`/`SubagentStop`, the two events that carry it
       // (`BACKGROUND_CARRIER_EVENTS`, D-5272); no other event writes the pair.
       background: liveCoversWorkflows && hs !== null && hs.state === 'done'
-        && hs.event !== null && BACKGROUND_CARRIER_EVENTS.has(hs.event)
+        && isHookEvent(hs.event) && BACKGROUND_CARRIER_EVENTS.has(hs.event)
         && hs.background !== undefined && hs.background.count > 0
         ? hs.background : null,
       // D-5237: the registry's record of the last process end, carried as is;

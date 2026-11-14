@@ -36,7 +36,7 @@ const skill = readFileSync(path.join(skillDir, 'SKILL.md'), 'utf8');
  *  first. */
 const frontmatter = skill.slice(4, skill.indexOf('\n---', 4));
 
-// The nineteen clauses, verbatim. Every entry is DOUBLE-quoted on purpose: clause 3
+// The twenty clauses, verbatim. Every entry is DOUBLE-quoted on purpose: clause 3
 // quotes `toId:'coordinator'` — the one genuinely single-quoted literal left,
 // since clause 1 stopped quoting `'#S'` — and clause 9 carries the apostrophe in
 // `done-claim's` (its eight enum words are BACKTICKED, not single-quoted).
@@ -57,7 +57,7 @@ const CONTRACT = [
   "Commit on THIS workspace's own branch (`ws/<slug>`), never a separate feature branch. The done-fingerprint re-measures the workspace branch's tip, so work parked on a feature branch leaves that tip unmoved and wedges every close `stale-tip` forever (F5 — the server's own `stale-tip` detail names this as the almost-certain cause).",
   // D-105: this clause used to name the 6 for BOTH lanes. It is the
   // PRE-DELIVERY budget only; a delivered-but-unacked nudge has its own.
-  "Ack before you act, and key the ack on the row's DELIVERY id, never the mail row's own `id` — a brief that never landed retries `MAIL_MAX_ATTEMPTS` (6) times and then parks unread, while a delivered nudge you leave unacked replays `MAIL_REPLAY_MAX_ATTEMPTS` (20) times and then parks read-but-unanswered. Reply to the coordinator through mail (`toId:'coordinator'`), never by typing into your own pane.",
+  "Ack before you act: `mail inbox`, run bare (no pipe, no redirect, no `head` or `tail`), acks what it printed; by hand, key the ack on the DELIVERY id, never the mail row's own `id` — a brief that never landed retries `MAIL_MAX_ATTEMPTS` (6) times and then parks unread, while a delivered nudge you leave unacked replays `MAIL_REPLAY_MAX_ATTEMPTS` (20) times and then parks read-but-unanswered. Reply to the coordinator through mail (`toId:'coordinator'`), never by typing into your own pane.",
   "A draft in your input box never stops mail. The delivery lane stashes it with Claude Code's own prompt stash (ctrl+s), delivers, and Claude Code restores it after the delivery; if you see `Draft restored`, that is why. Keep using your box normally. The one draft case you can cause is a draft typed over a stash you already hold yourself, which makes the lane refuse (`stash-occupied`), so send or pop your own stash rather than leaving it held.",
   "Every question rides the AskUserQuestion tool — the structured ask the session hook captures — never free text in your pane. If this session has a parent, that parent may answer it before the operator is notified; ask as if a colleague who has read the plan will answer, because one may. In a shell script, never delete through a variable (`rm -rf \"$X\"`): use a literal path under your scratch directory, or leave temp directories to the reaper; such deletes stop your work on a permission prompt the operator must answer. Subagents never read this skill, and they raise almost all of these prompts: every subagent brief you write carries this rule, word for word. Ask one question per AskUserQuestion call, single-select, so your parent can rule it; split independent decisions into separate calls.",
   "Your requirements are the brief plus the plan file it names, including that plan's deviation ledger, and the plan's text governs over your recollection of the spec. Invoke the execution skill the brief names rather than improvising one.",
@@ -78,11 +78,13 @@ const CONTRACT = [
   // other answer licenses: nothing.
   "Absorb `origin/main` into this branch only on one of three triggers, each read after one `git fetch origin`: your own probe `git merge-tree --write-tree --name-only --no-messages HEAD origin/HEAD` exits 1 with a tree id on its first line (the branch conflicts; exit 0 is clean, and any other answer is unmeasured and licenses nothing); a required check on your PR is red while main passes the same tests, measured by re-running its failing test files on a clean checkout of `origin/HEAD` in scratch; or a `fix-round` mail from the coordinator names this PR ejected from the landing line with a base sha, or next to land in a strict-protection repository. The first two license at most one absorption per PR — a second occurrence before the first absorption lands is not a second license — and the third arrives on the `merging → working` edge, after which you absorb, re-gate and send a fresh `wave-done`. Absorb with `git merge` only: never a rebase, a force-push or `update-branch` by any route, including `gh api -X PUT`. Never write any repository's rulesets, branch protection, auto-merge setting or `allow_update_branch`. Never hand-resolve a generated stamp: on a conflict in a `# ccrc:generated` line such as the one in the session hook's generated region, take either side of that line only, resolve every other hunk of the file as the source it is, then run `~/.local/bin/ccrc restamp <file>`; `ccd/ccd` carries no committed stamp (its marker is written when it is installed), so it never conflicts on one and `restamp` refuses it. A red that main also shows is reported once as `main-red` and left alone. Keep no local `main`: read `origin/HEAD`, fetched once. The operator's keeper is the operator's own tool and may rebase or force-push a PR branch on its own authority; this clause binds your own absorbs only, so a fixer the keeper spawns is not caught between the two. If the keeper rewrote your branch, take its tip (`git fetch origin`, then `git reset --hard origin/<branch>`) before you commit; never rebase or force-push it yourself. You never merge your own PR.",
   // Worker stall watch, wave 3 (spec 2026-09-29 §6.2): ASCII only, no apostrophe.
-  "End a turn only on a wake you can name: a mail you sent that asks for an answer, a background agent you launched from your main thread yourself that has not yet reported, or a structured ask. A background shell or Monitor is never that wake: it has no deadline and may never report. A task a subagent started reports to that subagent, so an agent whose completion says it may resume on its own has reported, and is not that wake either. A restart kills every background task. When none of those holds, mail the coordinator what you did and what wakes you next before the turn ends.",
+  "End a turn only on a wake you can name: a mail you sent that asks for an answer, a background agent you launched from your main thread yourself that has not yet reported, a structured ask, or a timer the server accepted (`ccrc-api timer set`). A background shell or Monitor is never that wake: it has no deadline and may never report. A task a subagent started reports to that subagent, so an agent whose completion says it may resume on its own has reported, and is not that wake either. A restart kills every background task. When none of those holds, mail the coordinator what you did and what wakes you next before the turn ends.",
   // Fleet disk retention, DR-25 (spec 2026-10-23 §2.7.2, §10): ASCII only, no apostrophe, no double quote.
   "A workflow script, a subagent brief or a test step never sets `TMPDIR` to a path inside a work tree and never writes scratch inside one: it uses the temp root this session was started with (`TMPDIR`, or `CCRC_SESSION_TMPDIR` where `TMPDIR` has been overridden). Long command output goes to a file there, or through `tail`, never into the work tree. Work, scratch repositories, reports and build output never go under the `projects/` transcript folders of a Claude config dir (`~/.claude*/projects/`): they belong in the workspace or in that temp root. Every test and typecheck runs through `ccrc test -- <command>` (for example `ccrc test -- npx vitest run --maxWorkers=2 test/foo.test.ts` or `ccrc test -- npx tsc --noEmit -p test/tsconfig.tests.json`), which runs it in the fleet test slice and queues heavy runs fleet-wide; never run one bare, and never under a `systemd-run` of your own, which the session hook denies.",
   // Workflow rule, operator ruling 2026-10-25: no double quote, straight apostrophe.
   "Never launch a workflow. A worker is the fan-out unit: work that wants a wider fan-out is more workers, which the coordinator dispatches, and your wave's review is a separate review run, never a workflow of yours. A mechanical edit, such as a D-number substitution, a PR body edit or a re-pin, is done in your own main thread.",
+  // Push once per round, operator ruling 2026-11-12 (D-8397): ASCII only, no double quote.
+  "Commit as often as useful, but push once per round: when the wave's build or a review fix round is complete, push its code, tests and notes together (plan, ledger and deviation lines in the same push), then measure the wave-done fingerprint. Every push re-runs the PR's checks, so a push per commit buys CI runs and nothing else. Push before that only to hand work to another session, or before a stop that could lose the work (D-8397).",
 ];
 
 /** The absorb clause, by its own index — the one clause licensed to name
@@ -113,6 +115,31 @@ describe('the worker skill: clause 19, a worker never launches a workflow (opera
     const routing = skill.slice(skill.indexOf('## Routing your subagents'), skill.indexOf('## Mutation testing'));
     expect(routing).not.toMatch(/Workflow `agent\(\)`|Workflow script on this/);
     expect(routing).toContain('clause 19');
+  });
+});
+
+describe('the worker skill: clause 20, push once per round (operator ruling 2026-11-12, D-8397)', () => {
+  const c20 = CONTRACT[19]!;
+
+  it('is the twentieth clause, and SKILL.md numbers it so', () => {
+    expect(c20.startsWith('Commit as often as useful, but push once per round: ')).toBe(true);
+    expect(skill).toContain(`\n20. ${c20}\n`);
+  });
+
+  it('pushes once when a build or a review fix round is complete, code, tests and notes together', () => {
+    expect(c20).toContain("when the wave's build or a review fix round is complete");
+    expect(c20).toContain('push its code, tests and notes together');
+    expect(c20).toContain('then measure the wave-done fingerprint');
+  });
+
+  it('licenses an earlier push only for a hand-off or a stop that could lose the work', () => {
+    expect(c20).toContain('Push before that only to hand work to another session, or before a stop that could lose the work');
+    expect(c20).not.toMatch(/push (?:each|every) commit|commit and push/i);
+  });
+
+  it('the fix-round bullet points the round at clause 20', () => {
+    const bullet = skill.slice(skill.indexOf('- **A `fix-round` mail arrives**'), skill.indexOf('A `fix-round` mail whose first line reads'));
+    expect(bullet).toContain('clause 20');
   });
 });
 
@@ -177,7 +204,7 @@ describe('the worker skill: its contract', () => {
     }
   });
 
-  it('carries all nineteen clauses verbatim', () => {
+  it('carries all twenty clauses verbatim', () => {
     for (const clause of CONTRACT) {
       expect(skill, `missing contract clause: ${clause.slice(0, 48)}…`).toContain(clause);
     }
@@ -381,8 +408,8 @@ describe('the worker skill: its contract', () => {
     expect(from, 'the worker skill lost its fix-round bullet').toBeGreaterThanOrEqual(0);
     const whole = [
       '- **A `fix-round` mail arrives** (kind `status`, from the coordinator, naming this run): usually a review run read your wave and the coordinator ruled.',
-      'The report at the path in the mail\'s `artifacts` — plus the rulings in its body — is your brief for the fix round.',
-      'Ack it (clause 3), fix on this workspace\'s own branch (clause 2), and report a FRESH wave-done fingerprint (clause 9); never re-send the old numbers.',
+      'The report at the path in the mail\'s `artifacts`, plus the rulings in its body, is your brief for the round.',
+      'Ack it (clause 3), fix on this workspace\'s own branch (clause 2), push once (clause 20) and report a FRESH wave-done fingerprint (clause 9); never re-send the old numbers.',
       'A `fix-round` mail whose first line reads `ejected: dequeued:#<pr>` or `ejected: new-head:#<pr>` has no report and no `artifacts`: it is clause 16\'s ejection, and its three body lines are your whole brief.',
       'Absorb the `base:` sha with `git merge`, then fix only the `paths:` it names; on `ejected: new-head:#<pr>` the merge is the whole round, with nothing else in it.',
       'If the new-head merge does not apply cleanly, run `git merge --abort`, push nothing (clause 9) and ask, as clause 5 says: resolving a conflict is not that round\'s work.',
@@ -868,7 +895,7 @@ describe('the stop clause names only wakes that wake (stall watch spec §6.2)', 
     expect(line, 'no contract clause opens "End a turn only on a wake you can name:"').toBeDefined();
     // The wake list is the first sentence after the colon.
     const wakes = line!.slice(0, line!.indexOf('. ', line!.indexOf(': ')) + 1);
-    expect(wakes, 'the wake list lost its last member').toContain('or a structured ask.');
+    expect(wakes, 'the wake list lost its last member').toContain('or a timer the server accepted (`ccrc-api timer set`).');
     // Case-insensitive, on word boundaries: a lowercase `monitor` or `bash` is the same dead wait.
     const named = /\b(shell|bash|monitor)\b/i.exec(wakes)?.[1];
     expect(named, `the wake list names ${named}: the wait S3 never woke from`).toBeUndefined();
@@ -916,6 +943,19 @@ describe('the stop clause names only wakes that wake (stall watch spec §6.2)', 
   // member's kinds, such as "plus" or "as well as"; a `. ` inside a member, or
   // a new sentence after the list, because wakeMembers and the S3 row both stop
   // at the first `. `.
+  // A fourth member shape (`stop-clause-allowlist-admits-a-server-timer`, the
+  // timers piece of Overlord W1a, plan `w1a-timers.md` Task 12): a timer the
+  // server accepted, in those exact words and no others. The operator approved
+  // clause 17 naming it (spec C65, item 227) and the coordinator ruled the
+  // widening (review 2030 B1): it is a row the server keeps and the timers lane
+  // fires once as mail, so it wakes a session that sleeps or was renewed, which
+  // no background task does. "A timer", "a timer that fires" and "until a timer
+  // fires" are refused as members. "Or until a timer fires" after "asks" in the
+  // mail member stays the known evasion above: it names no timer anything
+  // accepted, and the shape below never reads it. The verdict is a predicate
+  // over one line, `stopClauseVerdict`, so the row applies it to the real clause
+  // and to fixtures (as the collector-switch row reads a scratch copy), and a
+  // widening reds on a fixture, not only when SKILL.md changes.
   const wakeMembers = (line: string): string[] => {
     const colon = line.indexOf(': ');
     const list = line.slice(colon + 2, line.indexOf('. ', colon));
@@ -925,26 +965,49 @@ describe('the stop clause names only wakes that wake (stall watch spec §6.2)', 
   /** The word the clause uses for each kind `stall.ts` says resumes the session on its own. */
   const RESUMING_WORD: Record<string, string> = { subagent: 'agent', workflow: 'workflow' };
 
-  it('admits only a mail that asks, a structured ask, or a kind stall.ts says resumes the session (S3, allowlist)', () => {
+  /** The allowlist's verdict on one stop clause line: each problem it finds, in words, or none when every member is a mail
+   *  that asks, a structured ask, a background kind `stall.ts` reads as resuming the session, or a timer the server accepted. */
+  const stopClauseVerdict = (line: string): string[] => {
+    const allowed = new Set(Object.values(RESUMING_WORD));
+    const members = wakeMembers(line);
+    if (members.length <= 1) return ['the wake list split into nothing'];
+    const out: string[] = [];
+    for (const m of members) {
+      const mail = /^an? mail\b.*\basks?\b/i.test(m);
+      const ask = /^an? structured ask$/i.test(m);
+      const bg = /^an? background ((?:[a-z]+(?: or | and ))*[a-z]+) (?:you|that|which)\b(?:(?!\b(?:or|and|background)\b).)*$/i.exec(m);
+      const timer = /^an? timer the server accepted \(`ccrc-api timer set`\)$/i.test(m);
+      if ([mail, ask, bg !== null, timer].filter(Boolean).length !== 1) {
+        out.push(`the wake list member "${m}" is not a mail that asks, a structured ask, a background kind, or a timer the server accepted`);
+      }
+      for (const k of bg ? bg[1]!.split(/ or | and /) : []) {
+        if (!allowed.has(k.toLowerCase())) {
+          out.push(`the wake list counts a background ${k}, which is not the clause's word for any kind stall.ts reads as resuming the session (see RESUMING_WORD)`);
+        }
+      }
+    }
+    return out;
+  };
+  const TIMER_MEMBER = ', or a timer the server accepted (`ccrc-api timer set`). ';
+
+  it('admits only a mail that asks, a structured ask, a kind stall.ts says resumes the session, or a timer the server accepted (S3, allowlist)', () => {
     const line = stopClause();
     expect(line, 'no contract clause opens "End a turn only on a wake you can name:"').toBeDefined();
     expect(Object.keys(RESUMING_WORD).sort(),
       'stall.ts changed the kinds that resume a session: name the word the clause uses for each, or drop it')
       .toEqual([...STALL_RESUMING_KINDS].sort());
-    const allowed = new Set(Object.values(RESUMING_WORD));
-    const members = wakeMembers(line!);
-    expect(members.length, 'the wake list split into nothing').toBeGreaterThan(1);
-    for (const m of members) {
-      const mail = /^an? mail\b.*\basks?\b/i.test(m);
-      const ask = /^an? structured ask$/i.test(m);
-      const bg = /^an? background ((?:[a-z]+(?: or | and ))*[a-z]+) (?:you|that|which)\b(?:(?!\b(?:or|and|background)\b).)*$/i.exec(m);
-      expect([mail, ask, bg !== null].filter(Boolean).length,
-        `the wake list member "${m}" is not a mail that asks, a structured ask, or a background kind`).toBe(1);
-      for (const k of bg ? bg[1]!.split(/ or | and /) : []) {
-        expect(allowed.has(k.toLowerCase()),
-          `the wake list counts a background ${k}, which is not the clause's word for any kind stall.ts reads as resuming the session (see RESUMING_WORD)`).toBe(true);
-      }
-    }
+    expect(stopClauseVerdict(line!)).toEqual([]);
+  });
+
+  it.each([
+    ['a background shell', 'a background shell you started'], ['a Monitor', 'a Monitor you armed'], ['"a timer"', 'a timer'],
+    ['"a timer that fires"', 'a timer that fires'], ['"or until a timer fires"', 'until a timer fires'],
+  ])('refuses a wake list that names %s in the timer\'s place (fixtures on the real clause)', (_name, member) => {
+    const line = stopClause()!;
+    expect(line, 'the real clause no longer names the timer as its last wake').toContain(TIMER_MEMBER);
+    const fixture = line.replace(TIMER_MEMBER, `, or ${member}. `);
+    expect(fixture).not.toBe(line);
+    expect(stopClauseVerdict(fixture), fixture.slice(0, fixture.indexOf('. ', fixture.indexOf(': ')) + 1)).not.toEqual([]);
   });
 
   it('names nothing that may resume on its own among its wakes (S4, scan)', () => {

@@ -106,7 +106,7 @@ describe('the coordination policy files have no runtime path to node:sqlite (D-5
   // The five the audit named, and `rundefs.ts` itself: its transaction half is `rundefsTx.ts`, and `tx` is
   // `coord/tx.ts`, which needs only the handle's `exec` and takes `node:sqlite` as a type. `db.ts` re-exports it.
   const POLICY = ['childReclaim.ts', 'close.ts', 'kickoff.ts', 'expireArchived.ts', 'collectTempRoot.ts', 'rundefs.ts',
-    'rundefsTx.ts', 'tx.ts', 'landingEntry.ts', 'landingLine.ts', 'landingWrites.ts', 'landingJournalPolicy.ts', 'landingJournalPort.ts',
+    'rundefsTx.ts', 'tx.ts', 'landingEntry.ts', 'landed.ts', 'landingLine.ts', 'landingWrites.ts', 'landingJournalPolicy.ts', 'landingJournalPort.ts',
     // L4 (context C4): the one action over the store's writer; it reaches the store only through its injected port.
     'landingWritesAct.ts'];
   for (const f of POLICY) {

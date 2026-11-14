@@ -52,11 +52,60 @@ export const TESTBOX_REPORT_MAP: Record<TestboxReport, true> = { ok: true, missi
 export type TestboxSyncState = 'idle' | 'syncing' | 'failed';
 export const TESTBOX_SYNC_STATE_MAP: Record<TestboxSyncState, true> = { idle: true, syncing: true, failed: true };
 
-/** The frame family's type words (spec §2.9). */
-export type TestboxFrameType = 'run.submit' | 'run.log' | 'run.summary' | 'run.cancel' | 'tools.sync' | 'status';
+/** The frame family's type words (spec §2.9; D-8290 adds the two probe frames). */
+export type TestboxFrameType = 'run.submit' | 'run.log' | 'run.summary' | 'run.cancel' | 'tools.sync' | 'status' | 'probe.submit' | 'probe.state';
 export const TESTBOX_FRAME_TYPE_MAP: Record<TestboxFrameType, true> = {
   'run.submit': true, 'run.log': true, 'run.summary': true, 'run.cancel': true, 'tools.sync': true, status: true,
+  'probe.submit': true, 'probe.state': true,
 };
+
+// ---------------------------------------------------------------------------------------------------------------
+// Live probes (D-8290, plan docs/superpowers/plans/2026-11-11-live-probe-budget.md): a live Claude Code test is a test
+// box job kind, taken only on the configured test box, one at a time, pinned to the scratch account, within a daily
+// budget. These are the words; `agent/src/testbox/probes.ts` decides.
+// ---------------------------------------------------------------------------------------------------------------
+
+/** Why the test service will not take a probe. */
+export type ProbeRefusal =
+  | 'not-test-box' | 'probes-off' | 'no-runner' | 'config-dir-unsafe' | 'config-dir-fleet' | 'socket-fleet'
+  | 'budget-spent' | 'probe-id-used';
+export const PROBE_REFUSAL_MAP: Record<ProbeRefusal, true> = {
+  'not-test-box': true, 'probes-off': true, 'no-runner': true, 'config-dir-unsafe': true, 'config-dir-fleet': true,
+  'socket-fleet': true, 'budget-spent': true, 'probe-id-used': true,
+};
+export const isProbeRefusal = (v: unknown): v is ProbeRefusal =>
+  typeof v === 'string' && Object.prototype.hasOwnProperty.call(PROBE_REFUSAL_MAP, v);
+/** Each refusal in words, the one sentence the box, the client and the card say. */
+export const PROBE_REFUSAL_SENTENCE: Readonly<Record<ProbeRefusal, string>> = Object.freeze({
+  'not-test-box': 'this node is not the configured test box: live probes run on the test box only, never on the fleet',
+  'probes-off': 'the test box names no probe config directory (CCRC_TESTBOX_PROBE_CONFIG_DIR), so it runs no probe',
+  'no-runner': 'no probe runner is installed on the test box',
+  'config-dir-unsafe': 'the probe config directory is not a plain absolute path',
+  'config-dir-fleet': "the probe config directory is, or is inside or around, a fleet account's config directory",
+  'socket-fleet': "the probe tmux socket is the fleet's own (default) tmux server",
+  'budget-spent': "today's probe budget (CCRC_TESTBOX_PROBES_PER_DAY) is spent",
+  'probe-id-used': 'that probe id is already used',
+});
+
+/** Where a probe is: refused (never queued), waiting, running, or ended with an exit status. */
+export type ProbeStateWord = 'refused' | 'queued' | 'running' | 'ended';
+export const PROBE_STATE_WORD_MAP: Record<ProbeStateWord, true> = { refused: true, queued: true, running: true, ended: true };
+
+/** The probe block of the status answer: whether the box takes probes (and why not), the queue by probe name, and
+ *  today's count against the budget. */
+export interface TestboxProbes {
+  readonly enabled: boolean;
+  /** Why not `enabled`; `null` when it is. */
+  readonly refusal: ProbeRefusal | null;
+  /** The running probe's name, or `null`. */
+  readonly running: string | null;
+  /** The waiting probes' names, in queue order. */
+  readonly waiting: readonly string[];
+  /** The UTC day the count is of, `YYYY-MM-DD`. */
+  readonly day: string;
+  readonly used: number;
+  readonly perDay: number;
+}
 
 // ---------------------------------------------------------------------------------------------------------------
 // The fallback reasons (spec §2.4), in the spec's order, plus the two waits (§2.4's drop, §2.8's queue wait).
@@ -284,9 +333,34 @@ export interface StatusAnswer {
   /** Run users held out of the pool by a failed cleanup (spec §2.2). */
   readonly heldRunUsers: readonly string[];
   readonly repositories: readonly TestboxRepoName[];
+  /** The live probe block (D-8290), sent only by a box that names a probe config directory; absent from an older box
+   *  and from one that takes no probes. */
+  readonly probes?: TestboxProbes;
 }
 
-export type TestboxFrame = RunSubmit | RunLog | RunSummary | RunCancel | ToolsSync | StatusAnswer;
+/** A probe request (D-8290): the harness's probe by name, under a fresh id. */
+export interface ProbeSubmit {
+  readonly t: 'probe.submit';
+  /** 32 lowercase hex characters, drawn at random by the sender. */
+  readonly probeId: string;
+  /** The probe the runner runs, a lowercase name. */
+  readonly name: string;
+  readonly session: string;
+}
+
+/** Where a probe is (D-8290). `refusal` and `detail` only on `refused`; `position` (1-based) only on `queued`; `exit`
+ *  only on `ended`. */
+export interface ProbeAnswer {
+  readonly t: 'probe.state';
+  readonly probeId: string;
+  readonly state: ProbeStateWord;
+  readonly refusal: ProbeRefusal | null;
+  readonly detail: string | null;
+  readonly position: number | null;
+  readonly exit: number | null;
+}
+
+export type TestboxFrame = RunSubmit | RunLog | RunSummary | RunCancel | ToolsSync | StatusAnswer | ProbeSubmit | ProbeAnswer;
 
 export type Read<T> = { readonly ok: true; readonly value: T } | { readonly ok: false; readonly reason: string };
 
@@ -444,8 +518,27 @@ function readToolsSync(o: Obj): ToolsSync {
   return { t: 'tools.sync', release: releaseTag(f.release, 'release'), versions: tools(f.versions, 'versions'), measuredAt: utc(f.measuredAt, 'measuredAt') };
 }
 
+const STATUS_KEYS = ['t', 'state', 'reason', 'serviceVersion', 'proto', 'release', 'tools', 'sync', 'runs', 'queueDepth', 'pristine', 'failedKeys', 'heldRunUsers', 'repositories'] as const;
+
+const UTC_DAY = /^\d{4}-\d{2}-\d{2}$/;
+/** The status answer's probe block (D-8290): every field checked, `refusal` present exactly when not `enabled`. */
+function readProbes(v: unknown): TestboxProbes {
+  const p = exact(v, 'probes', ['enabled', 'refusal', 'running', 'waiting', 'day', 'used', 'perDay']);
+  const enabled = bool(p.enabled, 'probes.enabled');
+  const refusal = p.refusal === null ? null : word(PROBE_REFUSAL_MAP, p.refusal, 'probes.refusal');
+  if (enabled !== (refusal === null)) refuse('probes.refusal', enabled ? 'present on an enabled block' : 'missing on a disabled block');
+  if (typeof p.day !== 'string' || !UTC_DAY.test(p.day)) refuse('probes.day', 'not a UTC day YYYY-MM-DD');
+  return {
+    enabled, refusal, running: p.running === null ? null : name(p.running, 'probes.running'),
+    waiting: list(p.waiting, 'probes.waiting', name), day: p.day as string,
+    used: int(p.used, 'probes.used', 0), perDay: int(p.perDay, 'probes.perDay', 1),
+  };
+}
+
 function readStatusAnswer(o: Obj): StatusAnswer {
-  const f = exact(o, 'status', ['t', 'state', 'reason', 'serviceVersion', 'proto', 'release', 'tools', 'sync', 'runs', 'queueDepth', 'pristine', 'failedKeys', 'heldRunUsers', 'repositories']);
+  // D-8290: `probes` is the one optional field: an older box, and a box that takes no probes, sends none.
+  const withProbes = Object.prototype.hasOwnProperty.call(o, 'probes');
+  const f = exact(o, 'status', withProbes ? [...STATUS_KEYS, 'probes'] : STATUS_KEYS);
   const state = word(TESTBOX_BOX_STATE_MAP, f.state, 'state');
   const reason = textOrNull(f.reason, 'reason');
   if ((state === 'ok') !== (reason === null)) refuse('reason', state === 'ok' ? 'present on an ok answer' : `missing on a ${state} answer`);
@@ -473,12 +566,31 @@ function readStatusAnswer(o: Obj): StatusAnswer {
     sync: { state: word(TESTBOX_SYNC_STATE_MAP, sync.state, 'sync.state'), detail: textOrNull(sync.detail, 'sync.detail'), at: sync.at === null ? null : utc(sync.at, 'sync.at') },
     runs: { inProgress: int(runs.inProgress, 'runs.inProgress', 0, limit), limit }, queueDepth: int(f.queueDepth, 'queueDepth', 0),
     pristine, failedKeys, heldRunUsers: list(f.heldRunUsers, 'heldRunUsers', name, { unique: true }), repositories,
+    ...(withProbes ? { probes: readProbes(f.probes) } : {}),
   };
+}
+
+function readProbeSubmit(o: Obj): ProbeSubmit {
+  const f = exact(o, 'probe.submit', ['t', 'probeId', 'name', 'session']);
+  return { t: 'probe.submit', probeId: runId(f.probeId, 'probeId'), name: name(f.name, 'name'), session: text(f.session, 'session', 256) };
+}
+
+function readProbeAnswer(o: Obj): ProbeAnswer {
+  const f = exact(o, 'probe.state', ['t', 'probeId', 'state', 'refusal', 'detail', 'position', 'exit']);
+  const state = word(PROBE_STATE_WORD_MAP, f.state, 'state');
+  const refusal = f.refusal === null ? null : word(PROBE_REFUSAL_MAP, f.refusal, 'refusal');
+  const position = f.position === null ? null : int(f.position, 'position', 1);
+  const exit = f.exit === null ? null : int(f.exit, 'exit', 0, 255);
+  if ((state === 'refused') !== (refusal !== null)) refuse('refusal', state === 'refused' ? 'missing on a refused probe' : `present on a ${state} probe`);
+  if (state !== 'refused' && f.detail !== null) refuse('detail', `present on a ${state} probe`);
+  if ((state === 'queued') !== (position !== null)) refuse('position', state === 'queued' ? 'missing on a queued probe' : `present on a ${state} probe`);
+  if ((state === 'ended') !== (exit !== null)) refuse('exit', state === 'ended' ? 'missing on an ended probe' : `present on a ${state} probe`);
+  return { t: 'probe.state', probeId: runId(f.probeId, 'probeId'), state, refusal, detail: textOrNull(f.detail, 'detail'), position, exit };
 }
 
 const FRAME_READERS: { readonly [K in TestboxFrameType]: (o: Obj) => TestboxFrame } = {
   'run.submit': readRunSubmit, 'run.log': readRunLog, 'run.summary': readRunSummary, 'run.cancel': readRunCancel,
-  'tools.sync': readToolsSync, status: readStatusAnswer,
+  'tools.sync': readToolsSync, status: readStatusAnswer, 'probe.submit': readProbeSubmit, 'probe.state': readProbeAnswer,
 };
 
 /** The frames' ONE reader: a frame's JSON text to its typed frame, or the reason it is refused. Every field is checked

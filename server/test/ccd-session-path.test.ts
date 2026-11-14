@@ -171,6 +171,19 @@ describe('a started session has $HOME/.local/bin on its PATH (D-8050)', () => {
     for (const line of lines) expect(runPane(line)).toEqual({});
   });
 
+  it('the graphify gate\'s own command, and a bare graphify, answer in a started session (D-8333)', () => {
+    const hook = fs.readFileSync(path.join(__dirname, '..', '..', 'ccd', 'session-hook.sh'), 'utf8');
+    const run = /^GRAPH_RUN='(.*)'$/m.exec(hook)?.[1];
+    expect(run, 'the hook defines the command it teaches').toBeTruthy();
+    put(path.join(bin(), 'graphify'), '#!/bin/sh\nprintf \'Traversal: %s\\n\' "$*"\n');
+    put(path.join(bin(), 'claude'), `#!/bin/sh\n{ ${run} query "gate"; graphify query "bare"; } > "$HOME/session-report" 2>&1\n`);
+    for (const line of spawnLines('claude')) {
+      fs.rmSync(path.join(h.home, 'session-report'), { force: true });
+      spawnSync('/bin/sh', ['-c', line], { env: { HOME: h.home, PATH: BOX_PATH }, stdio: 'ignore', cwd: h.home });
+      expect(fs.readFileSync(path.join(h.home, 'session-report'), 'utf8'), line).toBe('Traversal: query gate\nTraversal: query bare\n');
+    }
+  });
+
   it('the command names no machine: HOME and PATH stay literal for the pane to expand', () => {
     wrapperOf(KINDS[0]);
     const step = sessionPanePath(h);

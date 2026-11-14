@@ -26,10 +26,47 @@ itself (the idle bound, a timeout or transport failure of the post) is recorded 
 too, like every classified one. While the lane directory holds the operator's `record-streams` marker, each 2xx answer
 is also written raw into the lane's recordings directory (`record.start`, Task 18), at most `record.RECORD_MAX` files.
 
-THE CATALOGUE. A model outside it is the client's: 404 `not_found_error`, counted `modelSubstitution:<model>`. A
-catalogue that is absent, unreadable, nested too deep to decode or not in its shape (a row that is not an object with
-a non-empty string `id` among them) is the bridge's: 503 `api_error` (retryable) on `/v1/messages` and on `/v1/models`
-alike, counted `catalogue-unreadable`, never a substitution.
+THE PARITY SECTION (D-8618) is measured on that path from what the bridge already holds, so nothing new goes on the
+wire and the client's answer is unchanged: each reasoning-store lookup of the translation (`counted_lookup`), each
+POST's `reasoning.effort` as the body was built (`_post`), and each upstream response whose terminal
+`response.completed` or `response.incomplete` the reducer saw (`_reduce`, on every return, the error ones included):
+its `diagnostics`, and the milliseconds from the POST's start to the first output released and to the terminal.
+
+THE REQUEST MARKERS (D-8622, D-8623). Each POST reads the lane's request markers (`backend.markers`) and the request
+model's catalogue row (`catalogue_rows`, read with the catalogue check), and sends what `backend.additions` decides
+from them, and with `bridge-turn-state` the turn's captured `x-codex-turn-state`. THE FALLBACK: an upstream 400 to a
+POST that carried at least one marker's addition is retried once with none of them, and none is sent for the rest of
+that client message; only before any byte of the message reached the client, and never for a 400 that is not the plain
+refusal row (`kind` `refused`: an overflow or a policy refusal is not cured by removing a field). The retry is counted
+(the parity row's `fallbacks`), not hidden; the first 400 is not recorded in the status file and is no 4xx outcome,
+and `stats.request` does not count the retry again, while `parity_effort` counts each body sent. THE TURN (D-8623):
+`inbound.turn_key` names a request's Claude Code turn by a hash; the first 2xx response of a turn that carries the
+header sets its value (a non-2xx never reaches Codex's capture: its transport returns an error first), later ones do not
+replace it, and every later POST of the turn echoes it. `TurnStates` holds at most TURN_STATES_MAX turns in memory,
+least recent dropped first, and is cleared when the credential reading's account id changes (Codex resets it on an auth
+owner change). The value reaches no stats, status or log line (stats.TOKEN_HEADERS refuses it in the stats file; a
+recording made under the operator's `record-streams` marker keeps every response header, as it always has).
+
+THE REQUEST RECORD (D-8619). Each upstream POST is observed once, in a `reqrecord.Answer` the request's path fills
+(`_begin` at the POST, `_post` its effort and markers, `_one_response` its status, `_reduce` its terminal and times
+through `_observe`): the parity counts above are read from that object, and so is the row `settle` hands to the lane's
+`reqrecord.RequestRecord` once the bridge has decided what it did with the answer (its outcome word, the one the stats
+file counts for it). A row is written only while the lane directory holds the operator's `reqrecord.REQUESTS_MARKER`;
+every POST that got an HTTP answer has one (the 401 before its retry, the fallback's 400, an error answered to the
+client, a stream that broke), and so does one that got none (`status` null). The record never raises into a request
+and never changes the client's answer or the wire.
+
+THE IDLE FLUSH (D-8624). Each answer's handler flushes the stats file, which writes at most every `stats.FLUSH_S`; then
+it re-arms one timer (`_IdleFlush`) that flushes again once the bridge has been idle for FLUSH_S, so a run's figures
+reach the disk soon after its last response rather than at the next request. One timer at most; the drain stops it
+before its own forced flush.
+
+THE CATALOGUE. A model outside it is the client's: 404 `not_found_error`, counted `modelSubstitution:<model>` when the
+request carries Claude Code's claude-code beta (`inbound.from_claude_code`) and `foreignSubstitution:<model>` when it
+does not (known.py says why), the same answer either way and nothing sent upstream. A catalogue that is absent,
+unreadable, nested too deep to decode or not in its shape (a row that is not an object with a non-empty string `id`
+among them) is the bridge's: 503 `api_error` (retryable) on `/v1/messages` and on `/v1/models` alike, counted
+`catalogue-unreadable`, never a substitution.
 
 THE OVERFLOW. Task 1's table answers the overflow row with the bare `prompt is too long` (the backend's message holds
 no counts); here, where the D24 estimate and the lane's window are known, it becomes `overflow(N, M)` with
@@ -84,7 +121,7 @@ import time
 import uuid
 from typing import Callable, Dict, List, Mapping, NamedTuple, Optional, Tuple
 
-from . import backend, count, errors, inbound, record, reducer, sse, stats, store, stream
+from . import backend, count, errors, inbound, record, reducer, reqrecord, sse, stats, store, stream
 
 PING_S = 15.0
 HOLD_S = 15.0
@@ -107,6 +144,8 @@ MODELS_PATH = "/v1/models"
 LANE_PATH = "/ccgpt/lane"
 
 CATALOGUE_UNREADABLE = "catalogue-unreadable"  # the outcome of a request the catalogue could not decide
+DRAIN_CUT = "drain-cut"  # the outcome of a stream the drain cut, counted by the drain alone
+TURN_STATES_MAX = 256  # D-8623: the turns whose x-codex-turn-state is held in memory, the least recent dropped first
 
 # The launcher's grammar for the lane key (`ccd/ccrc-codex`): the whole of runtime.env, trailing newlines ignored.
 KEY_RE = re.compile(r"LITELLM_MASTER_KEY=(sk-[0-9a-f]{48})")
@@ -136,15 +175,21 @@ class BridgeConfig(NamedTuple):
     stats_path: str
     store_path: str
     recordings_path: str = ""  # the recordings directory (Task 18); empty records nothing
+    requests_path: str = ""  # D-8619: the per-request record; empty when lane.json names none
 
 
 class _BridgeFiles(NamedTuple):
     """The keys of `lane.json`'s `bridgeFiles` the bridge reads; each value is a file name `laneManifest` spells
     (`deploy/models-op.mjs`). The keys are field names, never quoted here, because the third key is also its own file
-    name, and the file names have one quoted spelling (single-definition's Task 10 row)."""
+    name, and the file names have one quoted spelling (single-definition's Task 10 row). The fourth, the per-request
+    record (D-8619), is OPTIONAL: a lane.json an older laneManifest wrote names none, and reads "" here."""
     stats: str
     store: str
     recordings: str
+    requests: str = ""
+
+
+_OPTIONAL_FILES = frozenset(_BridgeFiles._field_defaults)  # D-8619: the keys a lane.json may leave out
 
 
 class Hooks(NamedTuple):
@@ -193,9 +238,10 @@ def _home_relative(home: str, value: object, what: str) -> str:
 
 
 def read_manifest(home: str, lane_dir: str, lane: str) -> LaneManifest:
-    """The lane's `lane.json` in `lane_dir`, read once: its id must be `lane`, every `bridgeFiles` key a file name,
-    `authDir` and `configDir` HOME-relative. Raises ManifestError. The one reader of the file in this package: the
-    start (`config_from_env`) exits on the error, and the live probe (`liveprobe.lane_files`) refuses on it."""
+    """The lane's `lane.json` in `lane_dir`, read once: its id must be `lane`, every `bridgeFiles` key a file name (an
+    optional key, `_OPTIONAL_FILES`, may be absent, never present and malformed), `authDir` and `configDir`
+    HOME-relative. Raises ManifestError. The one reader of the file in this package: the start (`config_from_env`)
+    exits on the error, and the live probe (`liveprobe.lane_files`) refuses on it."""
     try:
         with open(os.path.join(lane_dir, LANE_FILE), "rb") as f:
             manifest = json.loads(f.read().decode("utf-8"))
@@ -209,6 +255,8 @@ def read_manifest(home: str, lane_dir: str, lane: str) -> LaneManifest:
                             "lane.json carries no bridgeFiles; run 'ccrc update', which re-renders it")
     names = {}
     for key in _BridgeFiles._fields:
+        if key in _OPTIONAL_FILES and key not in files:  # D-8619: an older laneManifest's lane.json
+            continue
         value = files.get(key)
         if not isinstance(value, str) or not FILE_NAME_RE.fullmatch(value):
             raise ManifestError("malformed", "bridgeFiles." + key, "lane.json's bridgeFiles." + key
@@ -255,7 +303,8 @@ def config_from_env(environ: Mapping[str, str]) -> BridgeConfig:
                         config_dir=manifest.config_dir, key=m.group(1), catalogue=catalogue, auth_lib=auth_lib,
                         ccrc_version=version, upstream_base=base, stats_path=os.path.join(lane_dir, names.stats),
                         store_path=os.path.join(lane_dir, names.store),
-                        recordings_path=os.path.join(lane_dir, names.recordings))
+                        recordings_path=os.path.join(lane_dir, names.recordings),
+                        requests_path=os.path.join(lane_dir, names.requests) if names.requests else "")
 
 
 # ── the credential library ───────────────────────────────────────────────────────────────────────────────────────
@@ -287,11 +336,12 @@ def load_auth_lib(path: str) -> object:
 
 
 # ── small readers ────────────────────────────────────────────────────────────────────────────────────────────────
-def catalogue_ids(path: str) -> Optional[List[str]]:
-    """The lane catalogue's model ids (`{"models": [{"id": ...}, ...]}`), read at each call. None when the file is
-    absent or unreadable, is not JSON (nesting past the decoder's recursion limit among it: RecursionError), has no
-    `models` list, or has a row that is not an object with a non-empty string `id`: an undecidable catalogue, never an
-    empty one. [] only for a literal empty list."""
+def catalogue_rows(path: str) -> Optional[Dict[str, dict]]:
+    """The lane catalogue's rows (`{"models": [{"id": ...}, ...]}`) by model id, in the file's order, each id's first
+    row, read at each call. None when the file is absent or unreadable, is not JSON (nesting past the decoder's
+    recursion limit among it: RecursionError), has no `models` list, or has a row that is not an object with a
+    non-empty string `id`: an undecidable catalogue, never an empty one. {} only for a literal empty list. A row is
+    handed back as the file holds it; its readers check every field they use (`backend.additions`, D-8622)."""
     try:
         with open(path, "rb") as f:
             doc = json.loads(f.read().decode("utf-8"))
@@ -300,14 +350,21 @@ def catalogue_ids(path: str) -> Optional[List[str]]:
     rows = doc.get("models") if isinstance(doc, dict) else None
     if not isinstance(rows, list):
         return None
-    out = []  # type: List[str]
+    out = {}  # type: Dict[str, dict]
     for row in rows:
         mid = row.get("id") if isinstance(row, dict) else None
         if not (isinstance(mid, str) and mid):
             return None
         if mid not in out:
-            out.append(mid)
+            out[mid] = row
     return out
+
+
+def catalogue_ids(path: str) -> Optional[List[str]]:
+    """The lane catalogue's model ids, read at each call through `catalogue_rows` (the one parse): None for an
+    undecidable catalogue, never an empty one; [] only for a literal empty list."""
+    rows = catalogue_rows(path)
+    return None if rows is None else list(rows)
 
 
 def lane_window(config_dir: str) -> int:
@@ -340,17 +397,20 @@ def overflow_answer(e: errors.BridgeError, req: inbound.NeutralRequest, st: stat
     return out
 
 
-def _count_failure(st: stats.Stats, out: stream.AnthropicStream, e: errors.BridgeError) -> None:
+def _count_failure(st: stats.Stats, out: stream.AnthropicStream, e: errors.BridgeError) -> str:
     """D-6835: a failed message's outcome, once its answer has been written. A stream the drain cut is counted
     `drain-cut` by the drain, so nothing more here; one whose client went away (`client_gone`, a write it could not
     take) is `stats.CLIENT_GONE`; any other is `4xx` or `5xx` by the answer's status. So `5xx` counts only what the
-    bridge or the upstream answered, never an interrupt or a restart."""
+    bridge or the upstream answered, never an interrupt or a restart. Returns the word, which the request record's row
+    carries (D-8619): one decision, two sinks."""
     if out.drain_cut:
-        return
+        return DRAIN_CUT
     if out.client_gone:
         st.outcome(stats.CLIENT_GONE)
-        return
-    st.outcome("4xx" if 400 <= e.status < 500 else "5xx")
+        return stats.CLIENT_GONE
+    word = "4xx" if 400 <= e.status < 500 else "5xx"
+    st.outcome(word)
+    return word
 
 
 def _bounded_class(e: BaseException) -> str:
@@ -375,6 +435,16 @@ def log_exception(e: BaseException) -> None:
         sys.stderr.write(LOG_PREFIX + _bounded_class(e) + " " + _code_of(e) + "\n")
         sys.stderr.flush()
     except Exception:  # a log that cannot be written is dropped
+        pass
+
+
+def log_line(text: str) -> None:
+    """One bounded line of the bridge's own (`reqrecord`'s, D-8619), never a value; a line that cannot be written is
+    dropped."""
+    try:
+        sys.stderr.write(LOG_PREFIX + text + "\n")
+        sys.stderr.flush()
+    except Exception:
         pass
 
 
@@ -554,6 +624,77 @@ class _Flight:
 
 
 # ── one request ──────────────────────────────────────────────────────────────────────────────────────────────────
+class TurnStates:
+    """D-8623: each Claude Code turn's captured `x-codex-turn-state`, in memory only, keyed by `inbound.turn_key`'s
+    hash: at most TURN_STATES_MAX turns, the least recently used dropped first, and cleared whenever the credential
+    reading's account id differs from the one the held values were captured under. Shared by the handler threads."""
+
+    _NONE = object()  # no account seen yet
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._held = {}  # type: Dict[str, str]  (insertion-ordered: the least recently used first)
+        self._account = TurnStates._NONE  # type: object
+
+    def _owner(self, account: object) -> None:
+        if account != self._account:
+            self._held.clear()
+            self._account = account
+
+    def get(self, key: str, account: object) -> Optional[str]:
+        """The turn's captured value, or None."""
+        with self._lock:
+            self._owner(account)
+            value = self._held.pop(key, None)
+            if value is not None:
+                self._held[key] = value  # now the most recently used
+            return value
+
+    def capture(self, key: str, value: str, account: object) -> bool:
+        """Keep `value` as the turn's unless it has one already (the first sets it, as Codex's OnceLock does); True
+        when it was kept."""
+        with self._lock:
+            self._owner(account)
+            if key in self._held:
+                self._held[key] = self._held.pop(key)  # now the most recently used
+                return False
+            self._held[key] = value
+            while len(self._held) > TURN_STATES_MAX:
+                del self._held[next(iter(self._held))]
+            return True
+
+
+class _IdleFlush:
+    """D-8624: one timer that flushes the stats file once the bridge has been idle for `stats.FLUSH_S` after an
+    answer. `arm` re-arms it (each answer), `stop` cancels it for good (the drain). An unforced flush, so it writes only
+    what is dirty; the flush never raises."""
+
+    def __init__(self, st: stats.Stats) -> None:
+        self._st = st
+        self._lock = threading.Lock()
+        self._timer = None  # type: Optional[threading.Timer]
+        self._stopped = False
+
+    def arm(self) -> None:
+        with self._lock:
+            if self._stopped:
+                return
+            if self._timer is not None:
+                self._timer.cancel()
+            timer = threading.Timer(stats.FLUSH_S, self._st.flush)
+            timer.name = "codexbridge-idle-flush"
+            timer.daemon = True
+            self._timer = timer
+            timer.start()
+
+    def stop(self) -> None:
+        with self._lock:
+            self._stopped = True
+            if self._timer is not None:
+                self._timer.cancel()
+                self._timer = None
+
+
 class _State(NamedTuple):
     cfg: BridgeConfig
     hooks: Hooks
@@ -562,6 +703,9 @@ class _State(NamedTuple):
     flight: _Flight
     auth: _Flight  # the credential calls in flight (no streams): the drain waits for them
     ua: str
+    turns: TurnStates  # D-8623
+    idle: _IdleFlush  # D-8624
+    record: reqrecord.RequestRecord  # D-8619
 
 
 def _json_answer(status: int, payload: object, headers: Optional[Dict[str, str]] = None) -> Tuple[int, Dict[str, str],
@@ -573,6 +717,31 @@ def _json_answer(status: int, payload: object, headers: Optional[Dict[str, str]]
 
 def _local_error(status: int, etype: str, message: str, retry: bool = True) -> errors.BridgeError:
     return errors.BridgeError(status, etype, message, None if retry else dict(errors.NO_RETRY), kind="refused")
+
+
+def _replay_outcome(key: object, turn: object) -> str:
+    """What one reasoning-store lookup found, as the parity section counts it (D-8618): `<kind>-hit` when the row
+    holds reasoning to replay, `text-empty` for a text row with none, else `<kind>-absent` (no row, or none the
+    translation could read); the kind is `call` for a call key (`inbound.call_key`), else `text`."""
+    kind = "call" if isinstance(key, str) and key.startswith(inbound.call_key("")) else "text"
+    items = turn.get("items") if isinstance(turn, dict) else None
+    if isinstance(items, list) and any(isinstance(item, dict) for item in items):
+        return kind + "-hit"
+    if kind == "text" and isinstance(turn, dict):
+        return "text-empty"
+    return kind + "-absent"
+
+
+def counted_lookup(get: Callable[[str], object], tally: Dict[str, int]) -> Callable[[str], object]:
+    """`get`, the reasoning store's lookup, with each answer counted into `tally` by `_replay_outcome` (D-8618). The
+    answer is handed back as it came, so the translation is unchanged; the translation asks once per distinct key per
+    request, so each key is counted once per request."""
+    def lookup(key: str) -> object:
+        turn = get(key)
+        outcome = _replay_outcome(key, turn)
+        tally[outcome] = tally.get(outcome, 0) + 1
+        return turn
+    return lookup
 
 
 def _catalogue_unreadable(st: stats.Stats) -> errors.BridgeError:
@@ -589,6 +758,24 @@ class _Request:
         self.h = handler
         self.lib = None  # type: Optional[object]
         self.retried_401 = False
+        # D-8622, D-8623: the request model's catalogue row, the turn (`turn_key`, computed when first asked for),
+        # whether the 400 fallback has dropped the markers for the rest of this message, and what the last POST
+        # read and carried
+        self.row = None  # type: Optional[dict]
+        self.history = None  # type: object
+        self.cache_key = ""
+        self._turn = None  # type: Optional[Tuple[Optional[str]]]
+        self.fell_back = False
+        self.marks = frozenset()  # type: frozenset
+        self.carried = ()  # type: Tuple[str, ...]
+        # D-8619: the POST whose row is not yet written, this message's number (taken at its first POST) and POST
+        # count, and what every row of the message carries: the bounded session, the subagent flag, the replay tally
+        self.pending = None  # type: Optional[reqrecord.Answer]
+        self.message = None  # type: Optional[int]
+        self.posts = 0
+        self.session = None  # type: Optional[str]
+        self.subagent = False
+        self.replay = {}  # type: Dict[str, int]
 
     # ── the request's opening ──
     def body(self) -> dict:
@@ -679,16 +866,28 @@ class _Request:
         data, output_config = st.hooks.apply_effort(data)
         model = data.get("model")
         if isinstance(model, str) and model:
-            ids = catalogue_ids(cfg.catalogue)
-            if ids is None:
+            rows = catalogue_rows(cfg.catalogue)
+            if rows is None:
                 raise _catalogue_unreadable(st.stats)
-            if model not in ids:
-                st.stats.name("modelSubstitution", model)
+            self.row = rows.get(model)  # D-8622: the row the request markers' eligibility reads
+            if model not in rows:
+                # A Claude Code fallback is a modelSubstitution; any other caller's is a foreignSubstitution
+                # (known.py), so a name from another caller never reads as, or hides, a Claude Code fallback.
+                family = "modelSubstitution" if inbound.from_claude_code(self.h.headers) else "foreignSubstitution"
+                st.stats.name(family, model)
                 raise _local_error(404, errors.NOT_FOUND, "model not served by this lane (see its catalogue): "
                                    + (model if errors.CODE_RE.fullmatch(model.lower()) else errors.UNRECOGNISED_CODE),
                                    retry=False)
+        replay = {}  # type: Dict[str, int]
         req = inbound.from_anthropic(data, self.h.headers, names=st.stats, output_config=output_config,
-                                     lookup=st.store.get)
+                                     lookup=counted_lookup(st.store.get, replay))
+        for outcome, n in sorted(replay.items()):  # D-8618: counted once the request is translated
+            st.stats.parity_replay(ROUTE, req.model, outcome, n)
+        self.replay = replay  # D-8619: the same tally, on the message's first row
+        self.session = req.session_id
+        self.subagent = inbound._header(self.h.headers, inbound.AGENT_HEADER) is not None
+        self.history = data.get("messages")
+        self.cache_key = req.cache_key
         out.model = req.model
         out.buffered = not req.stream
         if not req.stream:
@@ -711,7 +910,7 @@ class _Request:
                 if result.kind == "overflow":
                     result = overflow_answer(result, req, st.stats, cfg.config_dir)
                 out.error(result)
-                _count_failure(st.stats, out, result)
+                self.settle(_count_failure(st.stats, out, result))
                 return
             red, term, reading = result
             store.remember(st.store, red, req.session_id)
@@ -724,10 +923,12 @@ class _Request:
             if reducer.needs_continuation(term, red.emitted_tool_use, refusal=red.refusal):
                 if continued >= CONTINUE_MAX:
                     st.stats.outcome("continuation-cap")
+                    self.settle("continuation-cap")
                     stop = "end_turn"
                 else:
                     continued += 1
                     st.stats.outcome("continuations")
+                    self.settle("continuations")
                     items = items + red.output_items
                     out.continuation()
                     continue
@@ -736,6 +937,7 @@ class _Request:
         st.stats.usage(ROUTE, req.model, req.countable_bytes, last.input, image_count=req.image_count,
                        continued=continued > 0)
         st.stats.outcome("2xx")
+        self.settle("2xx")  # D-8619: the message's last answer (a no-op when the cap already settled it)
         if req.compaction:  # a success only, beside 2xx (the plan's request sequence)
             st.stats.outcome("compactionRequests")
         if out.buffered:
@@ -752,11 +954,57 @@ class _Request:
             except Exception as x:
                 log_exception(x)
 
-    def _post(self, turn: inbound.NeutralRequest, reading: object) -> backend.Upstream:
+    def _begin(self, turn: inbound.NeutralRequest) -> reqrecord.Answer:
+        """D-8619: one upstream POST starts now: its observation, the pending one until `settle` writes its row."""
+        if self.message is None:
+            self.message = self.state.record.next_message()
+        ans = reqrecord.Answer(self.message, self.posts, turn.model, time.monotonic(), reqrecord.now_ms())
+        self.posts += 1
+        self.pending = ans
+        return ans
+
+    def settle(self, outcome: str) -> None:
+        """D-8619: the pending POST's row, once the bridge has decided what it did with the answer (`outcome`, the word
+        the stats file counted for it); written only while the lane's marker exists. Never raises."""
+        ans, self.pending = self.pending, None
+        if ans is None:
+            return
+        ans.ended()
+        replay = self.replay if ans.post == 0 else None
+        self.state.record.write(lambda: reqrecord.row(ans, session=self.session, subagent=self.subagent, route=ROUTE,
+                                                      outcome=outcome, replay=replay))
+
+    def turn_key(self) -> Optional[str]:
+        """D-8623: this request's turn (`inbound.turn_key`), hashed once, when first asked for."""
+        if self._turn is None:
+            self._turn = (inbound.turn_key(self.history, self.cache_key),)
+        return self._turn[0]
+
+    def _post(self, turn: inbound.NeutralRequest, reading: object, ans: reqrecord.Answer, *,
+              counted: bool = True) -> backend.Upstream:
         st = self.state
-        body = backend.build_body(turn, instructions_form=backend.instructions_form(st.cfg.lane_dir))
-        st.stats.request(ROUTE, turn.model, turn.countable_bytes)
-        headers = backend.headers_for(reading, turn.session_id, st.ua)
+        # D-8622: the markers read now, none once the fallback dropped them for this message
+        marks = frozenset() if self.fell_back else backend.markers(st.cfg.lane_dir)
+        add = backend.additions(self.row, marks)
+        body = backend.build_body(turn, instructions_form=backend.instructions_form(st.cfg.lane_dir),
+                                  reasoning_context=add.reasoning_context, verbosity=add.verbosity)
+        echo = None  # D-8623: the turn's captured state, only with the marker
+        if backend.TURN_STATE_MARKER in marks and self.turn_key() is not None:
+            echo = st.turns.get(self.turn_key(), getattr(reading, "account_id", None))
+        self.marks = marks
+        self.carried = add.carried + ((backend.TURN_STATE_MARKER,) if echo is not None else ())
+        ans.markers = self.carried  # D-8619
+        if counted:  # D-8622: the fallback's retry is the same request, not a second one
+            st.stats.request(ROUTE, turn.model, turn.countable_bytes)
+        reasoning = body.get("reasoning")  # D-8618: the effort this body carries, as it was built
+        ans.effort = reasoning.get("effort") if isinstance(reasoning, dict) else None
+        st.stats.parity_effort(ROUTE, turn.model, ans.effort)
+        for marker in self.carried:
+            st.stats.parity_marker(ROUTE, turn.model, marker)
+        if echo is not None:
+            ans.turn_state = "echoed"
+            st.stats.parity_turn_state(ROUTE, turn.model, "echoed")
+        headers = backend.headers_for(reading, turn.session_id, st.ua, turn_state=echo)
         try:
             return backend.post(st.cfg.upstream_base, backend.encode_body(body), headers)
         except backend.UpstreamTimeout as e:
@@ -822,10 +1070,14 @@ class _Request:
         """One upstream response: (reducer, terminal, reading) for a reply, or the BridgeError to answer."""
         st = self.state
         lib = self.lib
+        counted = True
         while True:
             if out.closed:  # cut by the drain or the client gone (a refresh may have run since): never post for it
                 return errors.unavailable("the bridge stopped")
-            up = self._waiting(out, self._post, turn, reading)
+            ans = self._begin(turn)  # D-8618, D-8619: the POST's start, which the parity section times from
+            up = self._waiting(out, self._post, turn, reading, ans, counted=counted)
+            ans.status = up.status
+            counted = True
             st.stats.header_names(up.headers)
             media = _media_type(up.headers)
             st.stats.name("responseHeader", media)
@@ -834,20 +1086,51 @@ class _Request:
             st.stats.usage_headers(up.headers)
             rid = errors.request_id_of(up.headers)  # the table's bounded reader of x-request-id / request-id / x-oai-request-id
             if 200 <= up.status < 300:
-                return self._reduce(turn, self._recorded(up), out, rid, reading)
+                self._capture(turn, up.headers, reading, ans)
+                return self._reduce(turn, self._recorded(up), out, rid, reading, ans)
             e = backend.error_of(up, now=time.time())
+            ans.ended()  # D-8619: the error body is read
+            if self._falls_back(up.status, e, out):
+                self.fell_back = True  # D-8622: none of the markers for the rest of this message
+                for marker in self.carried:
+                    st.stats.parity_fallback(ROUTE, turn.model, marker)
+                ans.fallback = True
+                self.settle(reqrecord.FALLBACK)
+                counted = False
+                continue
             if up.status == 401 and not self.retried_401:
                 self.retried_401 = True
                 if _fresh(lib, getattr(reading, "access_token", None), time.time()):
                     st.stats.outcome("refresh-skipped-fresh-token")
                     self.record(e, rid)
                     return e
+                self.settle("refresh-after-401")  # D-8619: the answer this refresh is for
                 cfg = st.cfg
                 reading = self._waiting(out, self._auth_call, lib.refresh_rejected, cfg.auth_dir, reading.access_token,
                                         outcome="refresh-after-401", lane=cfg.lane)
                 continue
             self.record(e, rid)
             return e
+
+    def _falls_back(self, status: int, e: errors.BridgeError, out: stream.AnthropicStream) -> bool:
+        """D-8622: whether a non-2xx answer is the one the fallback retries: a 400 of the plain refusal row (never an
+        overflow or a policy refusal) to a POST that carried a marker's addition, the first of this message, and before
+        any byte of the message reached the client (a buffered stream writes nothing until its end)."""
+        return (status == 400 and e.kind == "refused" and bool(self.carried) and not self.fell_back
+                and (not out.committed or out.buffered))
+
+    def _capture(self, turn: inbound.NeutralRequest, headers: Mapping[str, str], reading: object,
+                 ans: reqrecord.Answer) -> None:
+        """D-8623: a 2xx answer's `x-codex-turn-state`, kept as its turn's when the POST was sent with the marker and
+        the turn has none yet; a value outside `backend.TURN_STATE_RE` is never kept."""
+        if backend.TURN_STATE_MARKER not in self.marks or self.turn_key() is None:
+            return
+        value = headers.get(backend.TURN_STATE_HEADER)
+        if not (isinstance(value, str) and backend.TURN_STATE_RE.fullmatch(value)):
+            return
+        if self.state.turns.capture(self.turn_key(), value, getattr(reading, "account_id", None)):
+            ans.turn_state = "captured"
+            self.state.stats.parity_turn_state(ROUTE, turn.model, "captured")
 
     def _recorded(self, up: backend.Upstream) -> backend.Upstream:
         """`up`, teed into a new recording while the lane's `record-streams` marker exists (Task 18). A recording
@@ -860,14 +1143,31 @@ class _Request:
             return up
         return up if rec is None else record.tee(up, rec)  # type: ignore[return-value]
 
+    def _observe(self, turn: inbound.NeutralRequest, red: reducer.Reducer, ans: reqrecord.Answer,
+                 first_at: Optional[float], end_at: Optional[float]) -> None:
+        """One upstream 2xx answer's end, observed once into `ans` (D-8619), and the parity counts read from it
+        (D-8618): counted when the reducer saw its terminal `response.completed` or `response.incomplete`
+        (`diagnostics`), whatever the bridge then answered."""
+        ans.ended()
+        ans.first_ms = ans.since_post(first_at)
+        ans.total_ms = ans.since_post(end_at)
+        d = red.diagnostics
+        if d is None:
+            return
+        ans.measure(d)
+        self.state.stats.parity_response(ROUTE, turn.model, served=ans.served, usage=ans.usage,
+                                         transformations=ans.transformations, first_output_ms=ans.first_ms,
+                                         total_ms=ans.total_ms)
+
     def _reduce(self, turn: inbound.NeutralRequest, up: backend.Upstream, out: stream.AnthropicStream,
-                rid: Optional[str], reading: object) -> object:
+                rid: Optional[str], reading: object, ans: reqrecord.Answer) -> object:
         st = self.state
         red = reducer.Reducer(name_map=turn.name_map, names=st.stats, tools_required=turn.tools_required)
         feed = _Feed(up)
         head_at = time.monotonic()
         last_event = head_at
         timed_out = False
+        first_at = end_at = None  # type: Optional[float]  (D-8618: the first output released, the terminal seen)
         try:
             while True:
                 now = time.monotonic()
@@ -883,7 +1183,11 @@ class _Request:
                     red.feed(ev)
                     if red.terminal is not None:
                         break
+                if red.terminal is not None and end_at is None:
+                    end_at = now
                 released = red.release()
+                if released and first_at is None:
+                    first_at = now
                 if not out.committed and (red.committable or now - head_at >= HOLD_S):
                     out.commit()
                 if released:
@@ -901,6 +1205,7 @@ class _Request:
                     out.ping()
         finally:
             feed.stop()
+            self._observe(turn, red, ans, first_at, end_at)  # every return, the error ones included (D-8618)
         term = red.finish()
         released = red.release()
         if released:
@@ -988,24 +1293,28 @@ def _make_handler(state: _State) -> type:
             finally:
                 state.store.close()
                 state.stats.flush()
+                state.idle.arm()  # D-8624
 
         def _messages(self) -> None:
             out = stream.AnthropicStream(self._write, model="", message_id="msg_" + uuid.uuid4().hex)
             state.flight.enter(out)
             try:
+                req = _Request(state, self)
                 try:
-                    _Request(state, self).messages(out)
+                    req.messages(out)
                 except errors.BridgeError as e:
                     out.error(e)
-                    _count_failure(state.stats, out, e)
+                    req.settle(_count_failure(state.stats, out, e))  # D-8619: a POST with no answer among them
                 except Exception as e:  # every exception is answered here, and logged by its class only
                     log_exception(e)
                     out.error(errors.unavailable("the bridge failed"))
                     state.stats.outcome("5xx")
+                    req.settle("5xx")
             finally:
                 state.flight.leave(out)
                 state.store.close()
                 state.stats.flush()
+                state.idle.arm()  # D-8624
 
         def _handle(self) -> None:
             try:
@@ -1058,7 +1367,10 @@ def serve(cfg: BridgeConfig, hooks: Hooks) -> int:
     st.flush(force=True)  # D-7677: the file describes this process (its start, its store) before the port is bound
     flight = _Flight()
     auth = _Flight()
-    state = _State(cfg, hooks, st, rs, flight, auth, backend.user_agent(cfg.ccrc_version))
+    idle = _IdleFlush(st)
+    requests = reqrecord.RequestRecord(cfg.lane_dir, cfg.requests_path, st.outcome, log_line)  # D-8619
+    state = _State(cfg, hooks, st, rs, flight, auth, backend.user_agent(cfg.ccrc_version), TurnStates(), idle,
+                   requests)
     try:
         httpd = _make_server_class(hooks.server_class)(("127.0.0.1", cfg.port), _make_handler(state))
     except OSError as e:
@@ -1085,11 +1397,12 @@ def serve(cfg: BridgeConfig, hooks: Hooks) -> int:
     for s in flight.open_streams():
         if s.cut(errors.unavailable("the bridge is restarting")):
             cut += 1
-            st.outcome("drain-cut")
+            st.outcome(DRAIN_CUT)
     auth.close()
     if cut:
         flight.wait_idle(DRAIN_WRITE_S)
     start = term_at[0] if term_at else time.monotonic()
     auth.wait_idle(max(0.0, start + DRAIN_S + STOP_MARGIN_S - EXIT_MARGIN_S - time.monotonic()))
+    idle.stop()  # D-8624: no idle flush after the drain's own
     st.flush(force=True)
     return 0

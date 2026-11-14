@@ -13,6 +13,7 @@ import { readLocalCcdCaps } from '../src/localcaps.js';
 import { KeyedQueue } from '../src/inject/queue.js';
 import type { BuildInfo } from '../../shared/buildinfo.js';
 import { LIFECYCLE } from '../../shared/lifecycle.js';
+import { WORKSPACE_TRANSITIONS } from '../../shared/workspaceTransitions.js';
 import { RUN_PREFIX, RUN_QUIET_S } from './run-tmp.globalsetup.mjs';
 import { mkTmp } from './tmpHelpers.js';
 import { seedRoster } from './helpers.js';
@@ -719,14 +720,14 @@ describe('ccdRunner — the one ccd capability Deps carries', () => {
       // (§1.4/§1.7), and this runner reported NEITHER — so both read as the
       // token, never as `false`/`null`, which would claim a measurement.
       .toEqual({ ran: true, ok: true, stdout: 'out\n', stderr: 'warn\n',
-                 killed: UNMEASURED, signal: UNMEASURED });
+                 killed: UNMEASURED, signal: UNMEASURED, exitCode: 0 });
   });
 
   it('a FAILURE still carries stdout and stderr — the 502 body quotes stderr', async () => {
     const { run } = spy({ ran: true as const, code: 1, stdout: 'partial\n', stderr: 'boom\n' });
     expect(await ccdRunner(run, cfg)(CCD_ARGV.wsArchive(ID, null)))
       .toEqual({ ran: true, ok: false, stdout: 'partial\n', stderr: 'boom\n',
-                 killed: UNMEASURED, signal: UNMEASURED });
+                 killed: UNMEASURED, signal: UNMEASURED, exitCode: 1 });
   });
 });
 
@@ -736,7 +737,7 @@ describe('§1.4/§1.7 — CcdResult stops dropping the kill one hop later', () =
   it('threads `killed` off the runner', async () => {
     const killedRun: Runner = async () => ({ ran: true as const, code: 1, stdout: '', stderr: '', killed: true, signal: 'SIGTERM' });
     expect(await ccd(killedRun, cfg, CCD_ARGV.wsAdd('demo'))).toEqual({
-      ran: true as const, ok: false, stdout: '', stderr: '', killed: true, signal: 'SIGTERM',
+      ran: true as const, ok: false, stdout: '', stderr: '', killed: true, signal: 'SIGTERM', exitCode: 1,
     });
   });
 
@@ -747,14 +748,25 @@ describe('§1.4/§1.7 — CcdResult stops dropping the kill one hop later', () =
     // adoption gate treats those two differently on purpose.
     const plainRun: Runner = async () => ({ ran: true as const, code: 1, stdout: '', stderr: 'refused' });
     expect(await ccd(plainRun, cfg, CCD_ARGV.wsAdd('demo'))).toEqual({
-      ran: true as const, ok: false, stdout: '', stderr: 'refused', killed: UNMEASURED, signal: UNMEASURED,
+      ran: true as const, ok: false, stdout: '', stderr: 'refused', killed: UNMEASURED, signal: UNMEASURED, exitCode: 1,
     });
+  });
+
+  it('ccd carries the exit code on the ran arm, 0 and 2 alike, and never on the not-ran arm', async () => {
+    for (const code of [0, 2]) {
+      const res = await ccd(async () => ({ ran: true as const, code, stdout: '', stderr: '' }), cfg, CCD_ARGV.wsAdd('demo'));
+      expect(res.ran).toBe(true);
+      expect((res as { exitCode?: number }).exitCode).toBe(code);
+    }
+    const nr = await ccd(async () => ({ ran: false as const, code: 2, stdout: '', stderr: 'x', reason: 'transport' as const, detail: 'x' }), cfg, CCD_ARGV.wsAdd('demo'));
+    expect(nr.ran).toBe(false);
+    expect('exitCode' in nr).toBe(false);
   });
 
   it('keeps a MEASURED false and a MEASURED null — only absence becomes the token', async () => {
     const measured: Runner = async () => ({ ran: true as const, code: 1, stdout: '', stderr: 'die', killed: false, signal: null });
     expect(await ccd(measured, cfg, CCD_ARGV.wsAdd('demo'))).toEqual({
-      ran: true as const, ok: false, stdout: '', stderr: 'die', killed: false, signal: null,
+      ran: true as const, ok: false, stdout: '', stderr: 'die', killed: false, signal: null, exitCode: 1,
     });
   });
 });
@@ -1130,6 +1142,20 @@ describe('shared/lifecycle.ts — the policy §4(a) manifest', () => {
     expect(c!.bound).toContain('never while it coordinated');
     expect(c!.ruling).toBeNull();
   });
+  // D-8612 (consolidation spec C4: "the manifest's workspace row points at the table"): the child-workspaces row names
+  // the table that holds its collectors' refusal edges. L0 imports nothing, so the row names it as text; this pins the
+  // text to the real export, and the export to edges of both verbs the row's collector runs.
+  it('the child-workspaces row names WORKSPACE_TRANSITIONS, the table of its collectors\' refusal edges (D-8612)', () => {
+    const c = LIFECYCLE.find((x) => x.name === 'child-workspaces');
+    expect(c!.collector).toContain('refusal edges: WORKSPACE_TRANSITIONS (shared/workspaceTransitions.ts)');
+    const verbs = new Set(WORKSPACE_TRANSITIONS.map((t) => t.verb));
+    for (const v of ['reclaim', 'expire'] as const) {
+      expect(c!.collector, v).toContain(`ws-${v}`);
+      expect(verbs.has(v), `WORKSPACE_TRANSITIONS has no ${v} edge`).toBe(true);
+    }
+    const src = readFileSync(path.join(REPO_ROOT, 'shared/lifecycle.ts'), 'utf8');
+    expect(src, 'the L0 manifest imports nothing').not.toMatch(/^\s*import\b|\bimport\s*\(|\brequire\s*\(/m);
+  });
   // CHARACTERIZATION (D-7278; green on `main` before the deps-shed arm): the manifest's classes, in order, and the
   // policy's containment row for `node_modules` — it has no class of its own and "dies with" its workspace.
   it('characterization: the manifest\'s classes, and no class of its own for a workspace\'s node_modules (D-7278)', () => {
@@ -1141,7 +1167,11 @@ describe('shared/lifecycle.ts — the policy §4(a) manifest', () => {
       'history-backups', 'history-export', 'history-scope-markers', 'history-card-files', 'history-steer-files', 'history-replay-out',
       'history-recall-off', 'server-test-run-dirs', 'archived-workspaces',
       // Test box TB11 (D-7413): the fleet host's four test box classes.
-      'testbox-token', 'testbox-push-key', 'testbox-times', 'testbox-runs-log',
+      'testbox-token', 'testbox-push-key',
+      // Test box connect (D-8166): the files `ccrc testbox-admin` owns.
+      'testbox-admin-key', 'testbox-known-hosts', 'testbox-overlay', 'testbox-admin-state', 'testbox-box-settings',
+      'testbox-rows', 'testbox-parity', 'testbox-admin-lock', 'testbox-admin-log',
+      'testbox-times', 'testbox-runs-log',
       // D-7857: the carry dedupe sweep's record.
       'carry-dedupe-record',
     ]);
@@ -1158,8 +1188,9 @@ describe('shared/lifecycle.ts — the policy §4(a) manifest', () => {
       const c = by(n);
       expect(c, `shared/lifecycle.ts declares no ${n} class`).toBeTruthy();
       expect(c!.root.startsWith(root), `${n}'s root`).toBe(true);
-      expect([c!.pattern, c!.collector]).toEqual(['O', null]);
-      expect(c!.ruling).toContain('removed by hand when the test box is retired');
+      // D-8166: the connect verb writes and collects both (testbox-lifecycle-rows.test.ts holds the words).
+      expect([c!.pattern, c!.ruling]).toEqual(['O', null]);
+      expect(c!.collector).toContain('ccrc testbox-admin disconnect');
     }
     const times = by('testbox-times');
     expect(times, 'shared/lifecycle.ts declares no testbox-times class').toBeTruthy();

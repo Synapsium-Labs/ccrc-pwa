@@ -46,21 +46,30 @@ not after.
    done-fingerprint (step 4) re-measures the workspace branch, a feature branch
    wedges every close with `stale-tip` forever (F5), and a skill reaches a home
    only once its installer has run there, so say it again even though the skill
-   says it (`references/wave-lifecycle.md` §2). This
+   says it (`references/wave-lifecycle.md` §2). Beside it goes its partner
+   sentence: commit as often as useful; push once, when the build or a review
+   fix round is complete, with its code, tests and notes in the same push
+   (D-8397, worker clause 20; `references/wave-lifecycle.md` §2). This
    is also where wave 1's hold actually lands, reason `program:<slug>
    wave:1/M run:<id>` — the run's own id is part of the reason, so size a slug
    against that full string, not against the prefix. For wave ≥ 2 the route itself resumes the workspace and injects
    `/clear` before queuing the brief — this session never sends `/clear`
    itself (clause 9). Then **end your turn** (clause 7).
 3. **Wake on mail.** What actually lands in your session is a tiny one-line
-   nudge ("you have new mail…"), never the message body — list it
+   nudge ("you have new mail…"), never the message body. Read it with
+   `~/.local/bin/ccrc-api mail inbox`, run bare (no pipe, no redirect, no
+   `head` or `tail`; a piped run acks nothing): it prints every unacked mail
+   addressed to you, oldest first, in the shape of `references/mail-envelope.md`,
+   and acks each entry it printed, so what it printed is acked and yours to act
+   on. Its footer lists the deliveries it acked, for `mail fetch <delivery>` if
+   their text did not reach you (`references/wave-lifecycle.md` §3). The
+   fallback, for a server without the inbox: list it
    (`GET /api/mail?to=<your id>`), then per row use its `deliveryId` for `:id`
    below, NEVER the row's own `id` (re-opened D-41 — the two are separate
-   sequences that only agree for a mail sent to one recipient;
-   `references/wave-lifecycle.md` §3): fetch each body (`GET /api/mail/:id`,
-   the envelope shape in `references/mail-envelope.md`), then act. Ack it
-   (`POST /api/mail/:id/ack`, body `{fromId, fromUuid}`) before acting on it,
-   or the delivery lane replays the nudge.
+   sequences that only agree for a mail sent to one recipient): fetch each body
+   (`GET /api/mail/:id`), then ack it (`POST /api/mail/:id/ack`, body
+   `{fromId, fromUuid}`) before acting on it, or the delivery lane replays the
+   nudge.
 4. **Re-measure a claimed `wave-done`**, then `POST /api/runs/:id/advance` with
    the fingerprint. A typed rejection means the claim was stale: mail the worker
    the rejection code **and its `detail`, verbatim** — the detail is the only
@@ -133,8 +142,9 @@ not after.
      `planned`'s door only, and a run at `working` has no edge back to
      `dispatched` (D-2824): `"$API" mail send --json -` with
      `{"fromId":"<your id>","fromUuid":"<your uuid>","toId":"<worker session id>","runId":<work run id>,"kind":"status","subject":"fix-round","body":"<the report's absolute path on the first line, then your rulings — which findings to fix, which you overruled and why>","artifacts":["<report path>"]}`.
-     The idle-gated delivery lane wakes the worker; its fix round ends in a new
-     wave-done and a NEW review run (step 5); review runs are never reused.
+     The idle-gated delivery lane wakes the worker; it pushes the round once,
+     its fixes, tests and notes together (worker clause 20), and its fix round
+     ends in a new wave-done and a NEW review run (step 5); review runs are never reused.
      **A fix round with no report behind it** comes from `merging`, and the
      cause you measured decides which of two forms it takes. **An ejection** is
      sent in two cases only: the new-head route for a red that is `main`'s own
@@ -148,11 +158,12 @@ not after.
      red>` for the new-head route or `paths: <the conflicted paths>` for the
      dequeue. Every ejection is clause 15's ejection, its base recorded on the
      landing line by the advance that sends the run back: first read the line,
-     `GET /api/landing?project=<project>` (`ccrc-api landing show --project
-     <project>`), and send an ejection only where this PR's entry for this run
-     reads `pinned`; with no such entry the round is no ejection, and it stays
-     a stop for the operator. **A red the PR owns** is sent when the queue
-     dequeued the PR for a required check and no conflict was measured, or when
+     `GET /api/landing?project=<project>&pr=<pr>` (`ccrc-api landing show
+     --project <project> --pr <pr>`), and send an ejection only where this PR's
+     entry for this run reads `pinned`; with no such entry the round is no
+     ejection, and it stays a stop for the operator. **A red the PR owns** is
+     sent when the queue dequeued the PR for a required check and no conflict
+     was measured, or when
      the verdict's `RED` line names a required check red on the head that is the
      PR's own. Its body holds two entries, one to a line, and nothing else:
      `red: #<pr>`, then `checks: <required names that are red>`. It has no

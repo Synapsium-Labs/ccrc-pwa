@@ -23,8 +23,10 @@ export const RUN_MAX_BYTES = 8192;
 const ESC_SEQ = /\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07\x1b]*(?:\x07|\x1b\\)|[PX^_][^\x1b]*\x1b\\|[ -/]*[0-~])/g;
 /** The most columns of indent a cursor move stands for in a view: a wider move is a screen's, never a wrap's. */
 const INDENT_COLUMNS_MAX = 512;
-/** `n` columns of indent: one NUL per column, so a row's view length is its width in columns (D-5995). */
-const indentOf = (n: number): string => '\0'.repeat(Math.min(Math.max(n, 0), INDENT_COLUMNS_MAX));
+/** `n` columns of indent: one NUL per column, so a row's view length is its width in columns (D-5995). The clamp is
+ *  written as comparisons, not `Math.min`/`Math.max`, so CodeQL reads the repeat count as bounded (js/resource-exhaustion:
+ *  the timer set door hands the masker text a session wrote). */
+const indentOf = (n: number): string => '\0'.repeat(n > INDENT_COLUMNS_MAX ? INDENT_COLUMNS_MAX : n > 0 ? n : 0);
 /** A row move's stand-in (D-5995): a newline, with a NUL per column of indent when it lands past the first column
  *  (a CUP or HVP's column is known; a move down keeps an unknown column, one NUL). */
 function rowMove(e: string): string | null {

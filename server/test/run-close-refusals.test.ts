@@ -10,7 +10,9 @@ import { CoordStore } from '../src/coord/store.js';
 import { abandonRefusal, closeRun, type CloseOutcome } from '../src/coord/close.js';
 import { createRunVerdicts } from '../src/coord/runVerdicts.js';
 import { createRunCloseMemory, runClosePass, type RunCloseLaneDeps, type RunCloseOutcome } from '../src/coord/runCloseLane.js';
-import { REFUSAL_DOORS, REFUSAL_REASONS, refusalDoors, refusalRoute, type BranchFacts, type RefusalReason } from '../src/coord/runClose.js';
+import {
+  REFUSAL_DOORS, REFUSAL_REASONS, refusalDoors, refusalRoute, refusedCloseDoors, type BranchFacts, type DoorFacts, type RefusalReason,
+} from '../src/coord/runClose.js';
 import { untoldPass } from '../src/coord/untold.js';
 import { ASK_GRACE_MS } from '../src/askwindow.js';
 import { RUNS_EXPIRE_NEVER_STARTED_MARKER } from '../../shared/switches.js';
@@ -31,6 +33,8 @@ const T0 = 1_800_000_000_000;
 const ARMED = [RUNS_EXPIRE_NEVER_STARTED_MARKER];
 const ALIVE: ClaimantVerdict = { state: 'alive', why: 'live' };
 const DEAD: ClaimantVerdict = { state: 'dead', cause: 'orphan', why: 'gone' };
+/** D-8558: a claimant the registry no longer holds (forgotten): the ladder reads its missing row as `absent`. */
+const FORGOTTEN: ClaimantVerdict = { state: 'dead', cause: 'absent', why: 'no registry row' };
 
 /** The seven cells of §12.2 that raise an item, as (reason, coordinator). */
 const RAISING: readonly [RefusalReason, 'lives' | 'gone'][] = [
@@ -87,6 +91,55 @@ describe('refusalRoute: one row per line of §12.2', () => {
       expect(refusalDoors(reason)?.length).toBeGreaterThan(0);
       expect(REFUSAL_DOORS[reason].length).toBeGreaterThan(0);
     }
+  });
+});
+
+// D-8558: a refused close's doors from what the lane measured. A claimant the registry no longer holds is never a door.
+describe('refusedCloseDoors: no door to a session the registry does not hold', () => {
+  const ALL_FACTS: DoorFacts[] = [];
+  for (const claimantHeld of [true, false]) for (const programmeLive of [true, false]) for (const lastLiveRun of [true, false]) {
+    ALL_FACTS.push({ claimantHeld, programmeLive, lastLiveRun });
+  }
+  const gone = (f: Partial<DoorFacts> = {}): DoorFacts => ({ claimantHeld: false, programmeLive: true, lastLiveRun: false, ...f });
+
+  it('a claimant the registry holds keeps today\'s doors, whatever else the lane measured', () => {
+    for (const reason of REFUSAL_REASONS) {
+      const doors = refusalDoors(reason);
+      if (doors === null) continue;
+      for (const f of ALL_FACTS.filter((x) => x.claimantHeld)) expect(refusedCloseDoors(doors, f), reason).toEqual(doors);
+    }
+  });
+
+  it('an undelivered warning to a forgotten claimant offers Close this run and, while the programme lives, Hand to a coordinator', () => {
+    const doors = refusalDoors('warning-undelivered')!;
+    expect(refusedCloseDoors(doors, gone())).toEqual(['close-run', 'hand-to-coordinator']);
+    expect(refusedCloseDoors(doors, gone({ programmeLive: false }))).toEqual(['close-run']);
+    expect(refusedCloseDoors(doors, gone({ lastLiveRun: true }))).toEqual(['close-run', 'hand-to-coordinator', 'end-programme']);
+    expect(refusedCloseDoors(doors, gone({ programmeLive: false, lastLiveRun: true }))).toEqual(['close-run', 'end-programme']);
+  });
+
+  it('a programme that cannot take a run drops Hand to a coordinator wherever it stood, and the last live run may end the programme', () => {
+    const doors = refusalDoors('unpushed-commits')!;
+    expect(refusedCloseDoors(doors, gone())).toEqual(['hand-to-coordinator', 'abandon-anyway']);
+    expect(refusedCloseDoors(doors, gone({ programmeLive: false }))).toEqual(['abandon-anyway']);
+    expect(refusedCloseDoors(refusalDoors('absent-claimant')!, gone({ lastLiveRun: true }))).toEqual(['abandon', 'end-programme']);
+    expect(refusedCloseDoors(refusalDoors('open-pr')!, gone({ lastLiveRun: true })), 'no abandoning door: nothing to end with').toEqual(['open-pr']);
+  });
+
+  it('THE PIN: no cell, under any facts, offers Open the coordinator once the registry does not hold it, and none is empty', () => {
+    let cells = 0;
+    for (const reason of REFUSAL_REASONS) for (const f of ALL_FACTS.filter((x) => !x.claimantHeld)) {
+      const route = refusalRoute(reason, 'gone', true, f);
+      if (route.kind !== 'item' && route.kind !== 'tell-and-hold') continue;
+      cells += 1;
+      expect(route.doors, `${reason} ${JSON.stringify(f)}`).not.toContain('open-coordinator');
+      expect(route.doors.length).toBeGreaterThan(0);
+    }
+    expect(cells, 'the pin ran over every raising cell under every gone fact').toBe(6 * 4);
+  });
+
+  it('a living coordinator\'s cell ignores the facts: it is held by definition', () => {
+    expect(refusalRoute('child-marker-unreadable', 'lives', true, gone({ lastLiveRun: true }))).toEqual({ kind: 'tell-and-hold', doors: ['abandon'] });
   });
 });
 
@@ -298,6 +351,68 @@ describe('the lane: a gone coordinator gets the item at once, raised by ccrc', (
     expect(r.stateOf(id)).toBe('planned');
   });
 
+  // D-8558: the reported case. The claimant was forgotten (no registry row), so Open the coordinator would open nothing.
+  const undelivered = async (verdict: ClaimantVerdict, extra?: (r: Awaited<ReturnType<typeof rig>>) => void) => {
+    const r = await rig();
+    const id = r.open('programme-a', 1);
+    extra?.(r);
+    r.coord.setRunCloseAnchor('never-started', 'programme-a', { firstAt: T0 - 49 * H, lastAt: T0 - 60_000 });
+    expect((await r.pass()).warned).toEqual(['programme-a']);
+    r.state.clock = T0 + 25 * H;
+    r.coord.setRunCloseAnchor('never-started', 'programme-a', { firstAt: T0 - 49 * H, lastAt: r.state.clock - 60_000 });
+    r.state.verdicts['coord-a'] = verdict;
+    await r.pass();
+    return { r, id };
+  };
+
+  it('a warning undelivered to a forgotten coordinator never raises Open the coordinator: Close this run, Hand to a coordinator, and the programme\'s end', async () => {
+    const { r, id } = await undelivered(FORGOTTEN);
+    const [item] = r.items();
+    expect(item?.runId).toBe(id);
+    expect(isCloseRefusedAction(item!.action) && item!.action.doors).toEqual(['close-run', 'hand-to-coordinator', 'end-programme']);
+    expect(item!.why).toMatch(/Its coordinator is gone, and its session no longer exists$/);
+  });
+
+  it('a programme with another open run is not offered its end, and one whose plan closed is not offered a hand-over', async () => {
+    const two = await undelivered(FORGOTTEN, (r) => { r.open('programme-a', 2); });
+    const doors = two.r.items().filter((i) => isCloseRefusedAction(i.action)).map((i) => (i.action as unknown as { doors: string[] }).doors);
+    for (const d of doors) expect(d).not.toContain('end-programme');
+    expect(doors.length).toBeGreaterThan(0);
+    const closed = await undelivered(FORGOTTEN, (r) => { r.coord.db.prepare("UPDATE programs SET planEnd = 'done' WHERE slug = 'programme-a'").run(); });
+    expect(closed.r.items().map((i) => (i.action as unknown as { doors: string[] }).doors)).toEqual([['close-run', 'end-programme']]);
+  });
+
+  it('a coordinator forgotten after its item was raised: the item is redrawn without the dead door, once', async () => {
+    const { r } = await undelivered(DEAD);
+    const [first] = r.items();
+    expect(isCloseRefusedAction(first!.action) && first!.action.doors).toEqual(['open-coordinator']);
+    r.state.verdicts['coord-a'] = FORGOTTEN;
+    r.state.clock += 60_000;
+    r.coord.setRunCloseAnchor('never-started', 'programme-a', { firstAt: T0 - 49 * H, lastAt: r.state.clock - 60_000 });
+    await r.pass();
+    expect(r.coord.itemById(first!.id)!.state, 'the old item settles').toBe('done');
+    const now = r.items();
+    expect(now.map((i) => (i.action as unknown as { doors: string[] }).doors)).toEqual([['close-run', 'hand-to-coordinator', 'end-programme']]);
+    for (let i = 0; i < 3; i += 1) {
+      r.state.clock += 60_000;
+      r.coord.setRunCloseAnchor('never-started', 'programme-a', { firstAt: T0 - 49 * H, lastAt: r.state.clock - 60_000 });
+      await r.pass();
+    }
+    expect(r.items().map((i) => i.id), 'a refusal that lasts raises nothing more').toEqual(now.map((i) => i.id));
+  });
+
+  it('a redrawn item the operator dismissed is not raised again', async () => {
+    const { r } = await undelivered(FORGOTTEN);
+    const [item] = r.items();
+    expect(r.coord.moveItem(item!.id, 'dismiss', 'operator', {}, r.state.clock, { programmeHasOpenRun: false }).ok).toBe(true);
+    for (let i = 0; i < 3; i += 1) {
+      r.state.clock += 60_000;
+      r.coord.setRunCloseAnchor('never-started', 'programme-a', { firstAt: T0 - 49 * H, lastAt: r.state.clock - 60_000 });
+      await r.pass();
+    }
+    expect(r.items()).toEqual([]);
+  });
+
   it('no item is raised for an undelivered warning before the 24 hours are up', async () => {
     const r = await rig();
     r.open('programme-a', 1);
@@ -446,7 +561,8 @@ describe('the lane: a case no act can resolve raises no item (A62, n2, n4)', () 
     const items = r.items();
     expect(items).toHaveLength(1);
     expect(items[0]!.runId).toBe(id);
-    expect(items[0]!.action).toMatchObject({ doors: ['abandon'] });
+    // D-8558: nobody to hand it to is held, and it is the programme's last live run, so the item may end the programme too.
+    expect(items[0]!.action).toMatchObject({ doors: ['abandon', 'end-programme'] });
     await r.pass();
     expect(r.items(), 'raised once').toHaveLength(1);
   });

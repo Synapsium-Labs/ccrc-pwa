@@ -19,6 +19,9 @@ import { reflinkProbe } from './fsprobe.js';
 import { AUTH_CLOSE_CODE, checkHello, DEFAULT_HELLO_TIMEOUT_MS } from './hello.js';
 import { gitEnv, mirrorOps, realGit, runTreeFiles } from './mirror.js';
 import { pristineSettings } from './pristine.js';
+import { ProbeDesk, type ProbeRunner } from './probeDesk.js';
+import { fileBudgetStore, fleetConfigDirs, realPathOf } from './probeFs.js';
+import { probeRole, probeSettings } from './probes.js';
 import { registrySettings, startRegistry } from './registry.js';
 import { liveRunIds } from './runs.js';
 import { FRAME_HANDLERS, TestboxService, type Conn, type PristineDeps } from './service.js';
@@ -155,9 +158,21 @@ export function readToken(file: string): string {
   return t;
 }
 
-/** What a test may put in place of the box's own (the service never passes any): the system manager, and the reader of
- *  a run's install inputs from its mirror. */
-export interface ServiceSeams { readonly sys?: SystemManager; readonly inputs?: PristineDeps['inputs'] }
+/** What a test may put in place of the box's own (the service never passes any): the system manager, the reader of
+ *  a run's install inputs from its mirror, and the probe runner (D-8290: the box installs none yet, so every probe is
+ *  refused `no-runner`). */
+export interface ServiceSeams { readonly sys?: SystemManager; readonly inputs?: PristineDeps['inputs']; readonly probeRunner?: ProbeRunner }
+
+/** The live probe desk (D-8290): the role and the settings from the box's own lines, the fleet config directories the
+ *  service user's home names, and the day's count under `<root>/probes`. */
+export function probeDeskFor(cfg: TestboxConfig, runner: ProbeRunner | null, home: string = os.homedir()): ProbeDesk {
+  const root = path.join(cfg.root, 'probes');
+  return new ProbeDesk({
+    role: probeRole(cfg.lines), settings: probeSettings(cfg.lines, root, home), runner,
+    fleetDirs: () => fleetConfigDirs([home]), realPath: realPathOf, store: fileBudgetStore(path.join(root, 'budget.json')),
+    now: () => Date.now(),
+  });
+}
 
 export function serviceFor(cfg: TestboxConfig, release: string, exit: (code: number) => void = (c) => process.exit(c), seams: ServiceSeams = {}): TestboxService {
   const facts = releaseFacts(release);
@@ -182,6 +197,7 @@ export function serviceFor(cfg: TestboxConfig, release: string, exit: (code: num
       settings: pristineSettings(cfg.lines, durationMs), inputs: seams.inputs ?? ((m, id, paths) => runTreeFiles(git, m, id, paths)),
       node: () => tools.node() ?? process.versions.node, platform: `${process.platform}-${process.arch}`,
     },
+    probes: probeDeskFor(cfg, seams.probeRunner ?? null),
   });
   tools.serve({
     status: () => svc.status(), idle: () => svc.idle(), tick: () => svc.tick(), liveRuns: () => liveRunIds(svc.poolNow()),

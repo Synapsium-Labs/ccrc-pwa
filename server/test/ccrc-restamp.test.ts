@@ -21,7 +21,9 @@ import { chmodSync, copyFileSync, mkdirSync, readFileSync, statSync, symlinkSync
 import path, { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mkTmp } from './tmpHelpers.js';
-import { CCD, ghContainedEnv } from './ccdWsHelpers.js';
+import { CCD } from './ccdWsHelpers.js';
+// The second ring (residue R35(a), D-8394): every spawn of the real ccd/ccrc here starts from ccrcContainedEnv.
+import { ccrcContainedEnv } from './ccrcContainment.js';
 import { markGenerated, verifyMarker } from '../../shared/mark.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -29,7 +31,7 @@ const CCRC = path.resolve(here, '..', '..', 'ccd', 'ccrc');
 
 const run = (args: string[], home = mkTmp('ccrc-restamp-home-')): { home: string; code: number; stdout: string; stderr: string } => {
   const r = spawnSync('bash', [CCRC, 'restamp', ...args],
-    { env: ghContainedEnv(home, { ...process.env, HOME: home }), encoding: 'utf8' });
+    { env: ccrcContainedEnv(home, process.env, { managers: true, curl: 'poison' }), encoding: 'utf8' });
   return { home, code: r.status ?? -1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
 };
 
@@ -162,7 +164,7 @@ describe('ccrc restamp <file>', () => {
     writeFileSync(join(decoyRoot, 'sub', 'f'), staleStamped());
     const r = spawnSync('bash', [CCRC, 'restamp', 'sub/f'], {
       cwd: join(home, '.ccrc'),
-      env: ghContainedEnv(home, { ...process.env, HOME: home, CDPATH: decoyRoot }),
+      env: ccrcContainedEnv(home, { ...process.env, CDPATH: decoyRoot }, { managers: true, curl: 'poison' }),
       encoding: 'utf8',
     });
     expect(r.status, r.stdout + r.stderr).toBe(1);

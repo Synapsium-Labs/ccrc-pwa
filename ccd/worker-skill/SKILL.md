@@ -13,12 +13,12 @@ before you report.
 
 ## The contract
 
-These nineteen clauses are the boundary between "a wave worker" and "an agent with
+These twenty clauses are the boundary between "a wave worker" and "an agent with
 a shell on the fleet host". They are not advice.
 
 1. Learn who you are on EVERY call: `fromId` and `fromUuid` come from `ccrc-api whoami`, which reads the pane you are in and REFUSES rather than naming another session. Re-read them each time. `/clear` rotates that uuid and dispatch `/clear`s you on every wave >= 2, so a uuid you cached is guaranteed stale.
 2. Commit on THIS workspace's own branch (`ws/<slug>`), never a separate feature branch. The done-fingerprint re-measures the workspace branch's tip, so work parked on a feature branch leaves that tip unmoved and wedges every close `stale-tip` forever (F5 — the server's own `stale-tip` detail names this as the almost-certain cause).
-3. Ack before you act, and key the ack on the row's DELIVERY id, never the mail row's own `id` — a brief that never landed retries `MAIL_MAX_ATTEMPTS` (6) times and then parks unread, while a delivered nudge you leave unacked replays `MAIL_REPLAY_MAX_ATTEMPTS` (20) times and then parks read-but-unanswered. Reply to the coordinator through mail (`toId:'coordinator'`), never by typing into your own pane.
+3. Ack before you act: `mail inbox`, run bare (no pipe, no redirect, no `head` or `tail`), acks what it printed; by hand, key the ack on the DELIVERY id, never the mail row's own `id` — a brief that never landed retries `MAIL_MAX_ATTEMPTS` (6) times and then parks unread, while a delivered nudge you leave unacked replays `MAIL_REPLAY_MAX_ATTEMPTS` (20) times and then parks read-but-unanswered. Reply to the coordinator through mail (`toId:'coordinator'`), never by typing into your own pane.
 4. A draft in your input box never stops mail. The delivery lane stashes it with Claude Code's own prompt stash (ctrl+s), delivers, and Claude Code restores it after the delivery; if you see `Draft restored`, that is why. Keep using your box normally. The one draft case you can cause is a draft typed over a stash you already hold yourself, which makes the lane refuse (`stash-occupied`), so send or pop your own stash rather than leaving it held.
 5. Every question rides the AskUserQuestion tool — the structured ask the session hook captures — never free text in your pane. If this session has a parent, that parent may answer it before the operator is notified; ask as if a colleague who has read the plan will answer, because one may. In a shell script, never delete through a variable (`rm -rf "$X"`): use a literal path under your scratch directory, or leave temp directories to the reaper; such deletes stop your work on a permission prompt the operator must answer. Subagents never read this skill, and they raise almost all of these prompts: every subagent brief you write carries this rule, word for word. Ask one question per AskUserQuestion call, single-select, so your parent can rule it; split independent decisions into separate calls.
 6. Your requirements are the brief plus the plan file it names, including that plan's deviation ledger, and the plan's text governs over your recollection of the spec. Invoke the execution skill the brief names rather than improvising one.
@@ -32,13 +32,14 @@ a shell on the fleet host". They are not advice.
 14. Route your own subagents by the shape of their task, from `../ccrc-coordinator/references/routing-matrix.md`, and never let one inherit your model: name the class on every Agent call (an Agent-tool subagent runs at your own effort) — implementation from a spec'd plan on Sonnet at high, the per-task reviewer of a spec'd task on Sonnet at high (the held-out panel is the gate), review with judgement and adversarial verification on Opus at high, scouts and transcription-grade edits on Haiku, and Fable never as a fan-out worker. A subagent effort the brief names governs over that default.
 15. Your wave-done body opens with two signal lines the server parses, before any prose and before the fingerprint: `suite: green|red|unrun` says whether the whole suite passed on its FIRST full run after this wave's implementation was complete (red stays red however many fix rounds followed; unrun when no full run happened), and, only when a check failed, `failure: shallow|ceiling|unclear` names the kind — shallow for tests missed or a plan half-followed, ceiling for an ambiguity you could not resolve, a design flaw or a debug that survived two attempts, unclear otherwise. The suite line is never omitted.
 16. Absorb `origin/main` into this branch only on one of three triggers, each read after one `git fetch origin`: your own probe `git merge-tree --write-tree --name-only --no-messages HEAD origin/HEAD` exits 1 with a tree id on its first line (the branch conflicts; exit 0 is clean, and any other answer is unmeasured and licenses nothing); a required check on your PR is red while main passes the same tests, measured by re-running its failing test files on a clean checkout of `origin/HEAD` in scratch; or a `fix-round` mail from the coordinator names this PR ejected from the landing line with a base sha, or next to land in a strict-protection repository. The first two license at most one absorption per PR — a second occurrence before the first absorption lands is not a second license — and the third arrives on the `merging → working` edge, after which you absorb, re-gate and send a fresh `wave-done`. Absorb with `git merge` only: never a rebase, a force-push or `update-branch` by any route, including `gh api -X PUT`. Never write any repository's rulesets, branch protection, auto-merge setting or `allow_update_branch`. Never hand-resolve a generated stamp: on a conflict in a `# ccrc:generated` line such as the one in the session hook's generated region, take either side of that line only, resolve every other hunk of the file as the source it is, then run `~/.local/bin/ccrc restamp <file>`; `ccd/ccd` carries no committed stamp (its marker is written when it is installed), so it never conflicts on one and `restamp` refuses it. A red that main also shows is reported once as `main-red` and left alone. Keep no local `main`: read `origin/HEAD`, fetched once. The operator's keeper is the operator's own tool and may rebase or force-push a PR branch on its own authority; this clause binds your own absorbs only, so a fixer the keeper spawns is not caught between the two. If the keeper rewrote your branch, take its tip (`git fetch origin`, then `git reset --hard origin/<branch>`) before you commit; never rebase or force-push it yourself. You never merge your own PR.
-17. End a turn only on a wake you can name: a mail you sent that asks for an answer, a background agent you launched from your main thread yourself that has not yet reported, or a structured ask. A background shell or Monitor is never that wake: it has no deadline and may never report. A task a subagent started reports to that subagent, so an agent whose completion says it may resume on its own has reported, and is not that wake either. A restart kills every background task. When none of those holds, mail the coordinator what you did and what wakes you next before the turn ends.
+17. End a turn only on a wake you can name: a mail you sent that asks for an answer, a background agent you launched from your main thread yourself that has not yet reported, a structured ask, or a timer the server accepted (`ccrc-api timer set`). A background shell or Monitor is never that wake: it has no deadline and may never report. A task a subagent started reports to that subagent, so an agent whose completion says it may resume on its own has reported, and is not that wake either. A restart kills every background task. When none of those holds, mail the coordinator what you did and what wakes you next before the turn ends.
 18. A workflow script, a subagent brief or a test step never sets `TMPDIR` to a path inside a work tree and never writes scratch inside one: it uses the temp root this session was started with (`TMPDIR`, or `CCRC_SESSION_TMPDIR` where `TMPDIR` has been overridden). Long command output goes to a file there, or through `tail`, never into the work tree. Work, scratch repositories, reports and build output never go under the `projects/` transcript folders of a Claude config dir (`~/.claude*/projects/`): they belong in the workspace or in that temp root. Every test and typecheck runs through `ccrc test -- <command>` (for example `ccrc test -- npx vitest run --maxWorkers=2 test/foo.test.ts` or `ccrc test -- npx tsc --noEmit -p test/tsconfig.tests.json`), which runs it in the fleet test slice and queues heavy runs fleet-wide; never run one bare, and never under a `systemd-run` of your own, which the session hook denies.
 19. Never launch a workflow. A worker is the fan-out unit: work that wants a wider fan-out is more workers, which the coordinator dispatches, and your wave's review is a separate review run, never a workflow of yours. A mechanical edit, such as a D-number substitution, a PR body edit or a re-pin, is done in your own main thread.
+20. Commit as often as useful, but push once per round: when the wave's build or a review fix round is complete, push its code, tests and notes together (plan, ledger and deviation lines in the same push), then measure the wave-done fingerprint. Every push re-runs the PR's checks, so a push per commit buys CI runs and nothing else. Push before that only to hand work to another session, or before a stop that could lose the work (D-8397).
 
 ## Notes on the contract
 
-**Editing note (D-104):** these nineteen lines are pinned verbatim by
+**Editing note (D-104):** these twenty lines are pinned verbatim by
 `server/test/worker-skill.test.ts`, whose clause literals are double-quoted.
 Keep every apostrophe STRAIGHT — a curly one is a different byte and reds the
 pin without looking like an edit — and keep double-quote characters out of a
@@ -49,9 +50,7 @@ clause, where they would have to be escaped on the other side, except the
 ordinary per-PR convention elsewhere in this codebase — "cut a fresh
 `feat/<name>` branch from main" — is wrong inside a program workspace. `ccd`
 created this workspace on `ws/<slug>` and every re-measurement reads THAT
-branch's tip. Real, reviewed, excellent work sitting on a branch of your own
-making is indistinguishable, from the server's side, from a worker who did
-nothing at all.
+branch's tip.
 
 **Clause 5 is not a style preference.** A question typed as prose into your
 pane renders as a session that has gone quiet; the same question asked with
@@ -184,8 +183,7 @@ hundreds of mutants or a slow suite, runs in a child workspace, not in a coordin
 
 ## How to call the API
 
-Your mail surface is `POST /api/mail` to send, and `GET /api/mail` /
-`GET /api/mail/:id` / `POST /api/mail/:id/ack` to read and acknowledge.
+Your mail surface is `POST /api/mail` to send, and the inbox (below) to read.
 Build 9 adds the peer surface clause 11 names — claims, peers, lifecycle —
 whose long form and worked calls live in
 `../ccrc-coordinator/references/peer-protocol.md`, installed beside the two
@@ -244,11 +242,11 @@ an explicit path and not by name.
   `wave-done` is a `status` mail whose subject is that same string, exactly
   (below).
 
-**Reading mail is three calls, not one.** What lands in your pane is a one-line
-nudge, never the message: list with `GET /api/mail?to=<your id>`, then per row
-use its `deliveryId` — NOT the row's own `id`, which is a different sequence —
-as `:id` for `GET /api/mail/:id` (the body) and `POST /api/mail/:id/ack`
-(body `{"fromId":…,"fromUuid":…}`). Ack before you act on it (clause 3).
+**Reading mail is one call:** `~/.local/bin/ccrc-api mail inbox`, run bare (no
+pipe, no redirect, no `head` or `tail`); piped, it acks nothing. Its footer lists
+what it acked, for `mail fetch <delivery>` if the text did not reach you. If the
+server lacks it: `mail list --to <your id>`, then `mail fetch` and `mail ack` on
+each row's `deliveryId`, NOT its `id`.
 
 ## Reporting a wave-done
 
@@ -390,10 +388,10 @@ from one workspace into another unless the operator asked for that copy.
   the next wave finds out.
 - **A `fix-round` mail arrives** (kind `status`, from the coordinator, naming
   this run): usually a review run read your wave and the coordinator ruled.
-  The report at the path in the mail's `artifacts` — plus the rulings in its
-  body — is your brief for the fix round. Ack it (clause 3), fix on this
-  workspace's own branch (clause 2), and report a FRESH wave-done fingerprint
-  (clause 9); never re-send the old numbers.
+  The report at the path in the mail's `artifacts`, plus the rulings in its
+  body, is your brief for the round. Ack it (clause 3), fix on this
+  workspace's own branch (clause 2), push once (clause 20) and
+  report a FRESH wave-done fingerprint (clause 9); never re-send the old numbers.
   A `fix-round` mail whose first line reads `ejected: dequeued:#<pr>` or
   `ejected: new-head:#<pr>` has no report and no `artifacts`: it is clause
   16's ejection, and its three body lines are your whole brief. Absorb the

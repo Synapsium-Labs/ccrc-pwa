@@ -427,6 +427,138 @@ describe('schema drift refuses the WHOLE response (§11)', () => {
   });
 });
 
+// D-8620: the Codex catalogue's request-shape fields. The fixture is SYNTHETIC
+// (the real reply's field names and value shapes, no prose): one model with all
+// five valid, one with each malformed in its own way, one with none.
+const PARITY_RAW = path.join(here, 'fixtures', 'catalogues', 'codex-parity-fields.json');
+const EIGHT_KEYS = ['context', 'efforts', 'hidden', 'id', 'label', 'maxContext', 'priceIn', 'priceOut'];
+const SHAPE_KEYS = ['useResponsesLite', 'supportVerbosity', 'defaultVerbosity', 'defaultReasoningLevel', 'truncationPolicy'];
+
+describe('the Codex arm keeps the request-shape fields, each optional (D-8620)', () => {
+  const rowsOf = (id: string): Record<string, unknown>[] =>
+    (catalogueAt(id) as { models: Record<string, unknown>[] }).models;
+  const rowOf = (rows: Record<string, unknown>[], id: string): Record<string, unknown> => {
+    const row = rows.find((r) => r['id'] === id);
+    if (row === undefined) throw new Error(`no row ${id}`);
+    return row;
+  };
+  const writeRaw = (name: string, body: unknown): string => {
+    const p = path.join(home, name);
+    fs.writeFileSync(p, JSON.stringify(body));
+    return p;
+  };
+
+  it('the valid model\'s row carries the five keys exactly, and nothing else of the reply', () => {
+    const r = run(['lane-a', 'codex'], { CCRC_MODELS_PROBE_FIXTURE: PARITY_RAW });
+    expect(r.stderr).toBe('');
+    expect(r.code).toBe(0);
+    expect(curlCalls()).toEqual([]);
+    expect(rowOf(rowsOf('lane-a'), 'gpt-6.1-sol')).toStrictEqual({
+      id: 'gpt-6.1-sol', label: 'gpt-6.1-sol', context: 272000, maxContext: 872000,
+      efforts: ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'], hidden: false, priceIn: null, priceOut: null,
+      useResponsesLite: true, supportVerbosity: true, defaultVerbosity: 'low', defaultReasoningLevel: 'low',
+      truncationPolicy: { mode: 'tokens', limit: 10000 },
+    });
+  });
+
+  it('the malformed model\'s row omits each bad key and keeps every good one', () => {
+    run(['lane-a', 'codex'], { CCRC_MODELS_PROBE_FIXTURE: PARITY_RAW });
+    const row = rowOf(rowsOf('lane-a'), 'gpt-5.5');
+    // "false" is a string (wrong type), "terse" no verbosity, `lines` no mode and 0 out of range.
+    expect(row).not.toHaveProperty('useResponsesLite');
+    expect(row).not.toHaveProperty('defaultVerbosity');
+    expect(row).not.toHaveProperty('truncationPolicy');
+    // A genuine false is a fact, kept, never folded into absence.
+    expect(row['supportVerbosity']).toBe(false);
+    // `max` is not in this model's own effort list, and is kept anyway: its validity does not depend on it.
+    expect(row['efforts']).not.toContain('max');
+    expect(row['defaultReasoningLevel']).toBe('max');
+    expect(Object.keys(row).sort()).toEqual([...EIGHT_KEYS, 'defaultReasoningLevel', 'supportVerbosity'].sort());
+  });
+
+  it('the bare model\'s row is today\'s eight-key row', () => {
+    run(['lane-a', 'codex'], { CCRC_MODELS_PROBE_FIXTURE: PARITY_RAW });
+    expect(rowOf(rowsOf('lane-a'), 'codex-auto-review')).toStrictEqual({
+      id: 'codex-auto-review', label: 'codex-auto-review', context: 272000, maxContext: 872000,
+      efforts: ['low', 'medium', 'high', 'xhigh', 'max'], hidden: true, priceIn: null, priceOut: null,
+    });
+  });
+
+  it('parseCatalogue reads the probe\'s rows back unchanged', () => {
+    run(['lane-a', 'codex'], { CCRC_MODELS_PROBE_FIXTURE: PARITY_RAW });
+    expect(parseCatalogue(catalogueAt('lane-a')).models).toStrictEqual(rowsOf('lane-a'));
+  });
+
+  it('keeps no text block: the reply\'s other fields never reach the catalogue', () => {
+    const raw = JSON.parse(fs.readFileSync(PARITY_RAW, 'utf8')) as { models: Record<string, unknown>[] };
+    raw.models[0]!['model_messages'] = { instructions_template: 'x' };
+    raw.models[0]!['base_instructions'] = 'x';
+    run(['lane-a', 'codex'], { CCRC_MODELS_PROBE_FIXTURE: writeRaw('texts.json', raw) });
+    const row = rowOf(rowsOf('lane-a'), 'gpt-6.1-sol');
+    expect(Object.keys(row).sort()).toEqual([...EIGHT_KEYS, ...SHAPE_KEYS].sort());
+  });
+
+  it.each([
+    ['openrouter', 'router', [], { data: [{ id: 'z-ai/glm-5.2' }] }],
+    ['compatible', 'lane-b', ['--base-url', 'https://api.example.com'], { data: [{ id: 'glm-5.2' }] }],
+  ] as const)('the %s arm never carries the keys, even when its raw reply has them', (_kind, id, extra, body) => {
+    const shaped = {
+      ...body.data[0],
+      use_responses_lite: true, support_verbosity: true, default_verbosity: 'low',
+      default_reasoning_level: 'low', truncation_policy: { mode: 'tokens', limit: 10000 },
+      useResponsesLite: true, supportVerbosity: true, defaultVerbosity: 'low',
+      defaultReasoningLevel: 'low', truncationPolicy: { mode: 'tokens', limit: 10000 },
+    };
+    const r = run([id, _kind, ...extra], { CCRC_MODELS_PROBE_FIXTURE: writeRaw(`${_kind}.json`, { data: [shaped] }) });
+    expect(r.code).toBe(0);
+    const [row] = rowsOf(id);
+    expect(Object.keys(row!).sort()).toEqual(EIGHT_KEYS);
+  });
+
+  // The probe is Python and parseCatalogue is JavaScript, so each spells the bounds in its own language. This
+  // case is what makes the two one rule: every candidate goes through both, and they must agree on each.
+  it('the probe and parseCatalogue agree on every candidate value, valid or not', () => {
+    const CANDIDATES: [string, string, unknown[]][] = [
+      ['use_responses_lite', 'useResponsesLite', [true, false, 'true', 1, 0, null, {}]],
+      ['support_verbosity', 'supportVerbosity', [true, false, 'false', 1, null]],
+      ['default_verbosity', 'defaultVerbosity', ['low', 'medium', 'high', 'LOW', 'terse', '', 1, true, null]],
+      ['default_reasoning_level', 'defaultReasoningLevel', ['low', 'max', 'ultra', 'none', '', 7, true, null, ['low']]],
+      ['truncation_policy', 'truncationPolicy', [
+        { mode: 'tokens', limit: 10000 }, { mode: 'bytes', limit: 10000 },
+        { mode: 'tokens', limit: 1 }, { mode: 'tokens', limit: 10_000_000 },
+        { mode: 'tokens', limit: 0 }, { mode: 'tokens', limit: -1 }, { mode: 'tokens', limit: 10_000_001 },
+        { mode: 'tokens', limit: 10000.5 }, { mode: 'tokens', limit: '10000' }, { mode: 'tokens', limit: true },
+        { mode: 'tokens' }, { limit: 10000 }, { mode: 'lines', limit: 10000 }, { mode: 'Tokens', limit: 10000 },
+        { mode: 'tokens', limit: 10000, extra: 'x' }, 'tokens', null, [],
+      ]],
+    ];
+    const models: Record<string, unknown>[] = [];
+    const expected: [string, string, unknown][] = [];
+    for (const [raw, key, values] of CANDIDATES) {
+      values.forEach((v, i) => {
+        const id = `gpt-${raw.replace(/_/g, '-')}-${i}`;
+        models.push({ slug: id, [raw]: v });
+        expected.push([id, key, v]);
+      });
+    }
+    const r = run(['lane-a', 'codex'], { CCRC_MODELS_PROBE_FIXTURE: writeRaw('candidates.json', { models }) });
+    expect(r.code).toBe(0);
+    const rows = rowsOf('lane-a');
+    let kept = 0;
+    for (const [id, key, v] of expected) {
+      const js = parseCatalogue({ probe: 'codex', fetchedAt: 1, models: [{ id, [key]: v }] }).models[0] as
+        unknown as Record<string, unknown>;
+      const py = rowOf(rows, id);
+      expect(py[key], `${key} = ${JSON.stringify(v)}`).toStrictEqual(js[key]);
+      expect(key in py, `${key} = ${JSON.stringify(v)} present`).toBe(key in js);
+      if (key in py) kept++;
+    }
+    // CONTROL: the table has both kinds: 2 + 2 + 3 + 4 + 5 kept, the rest refused.
+    expect(kept).toBe(16);
+    expect(expected.length - kept).toBeGreaterThan(30);
+  });
+});
+
 describe('the test seam is a seam and not a second code path', () => {
   it('CCRC_MODELS_PROBE_FIXTURE is read in exactly one place', () => {
     // A seam that appeared in two branches would be a second implementation of

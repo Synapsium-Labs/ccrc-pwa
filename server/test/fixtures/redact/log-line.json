@@ -1,5 +1,5 @@
 {
-  "note": "Each row is one line run through the bash log-line redactor (ccd/ccrc's _upd_redact, plain and bare-host, and ccd-update-sync's say); its columns hold what each printed. A row labelled known-limit holds a line whose secret is still printed, recorded on purpose with a note naming the gap (D-7564): a userinfo inside a query string or a path (https://h/x?proxy=user:secret@host, GET /p?u=user:secret@host:8443, dir/user:secret@host) a raw '#', '?' or '/' inside a password (user:pa#ss@host refused), a token-only userinfo before a host that no port (or an empty port, as in tok@h: refused) and no path follows, which neither mode masks while more text follows the host (--proxy=tok@host refused, --proxy tok@host refused), a port followed by a letter, '-', '_' or '~', characters a host name holds, while more text follows (tok@host:8443-x retrying, tok@host:8443a x), the same after a run of '.', '!' or '}' (tok@host:8443.x retrying, tok@host:8443!x retrying, tok@host:8443}x retrying), and a host of digits only before its port (tok@2130706433:80 x), which reads as a time's build@10:30. These are the known limits. Any other character after a port ends it, ASCII or not: an ellipsis, a curly quote, a no-break space, '(', '&', '\\', '=' or an invalid byte. A blast row holds a line with no credential that the redactor masks anyway, so its cost stays visible. A row with inputRuns holds its input as runs of text, each repeated times times.",
+  "note": "Each row is one line run through the bash log-line redactor (ccd/ccrc's _upd_redact, plain and bare-host, and ccd-update-sync's say); its columns hold what each printed. A row labelled known-limit holds a line whose secret is still printed, recorded on purpose with a note naming the gap (D-7564): a userinfo inside a query string with no scheme URL around it, or inside a path (GET /p?u=user:secret@host:8443, dir/user:secret@host) a raw '#', '?' or '/' inside a password (user:pa#ss@host refused), a token-only userinfo before a host that no port (or an empty port, as in tok@h: refused) and no path follows, which neither mode masks while more text follows the host (--proxy=tok@host refused, --proxy tok@host refused), a port followed by a letter, '-', '_' or '~', characters a host name holds, while more text follows (tok@host:8443-x retrying, tok@host:8443a x), the same after a run of '.', '!' or '}' (tok@host:8443.x retrying, tok@host:8443!x retrying, tok@host:8443}x retrying), and a host of digits only before its port (tok@2130706433:80 x), which reads as a time's build@10:30. These are the known limits. Any other character after a port ends it, ASCII or not: an ellipsis, a curly quote, a no-break space, '(', '&', '\\', '=' or an invalid byte. A row labelled query holds a scheme URL whose query and fragment are withheld (D-8342): what follows its first '?' or '#' reads [withheld], so https://h/x?proxy=user:secret@host is no known limit now; text that is no scheme URL keeps its '?' and '#'. A blast row holds a line with no credential that the redactor masks anyway, so its cost stays visible. A row with inputRuns holds its input as runs of text, each repeated times times.",
   "rows": [
     {
       "rule": "R5",
@@ -96,27 +96,27 @@
       "input": "https://host?a@b",
       "home": "/fixture-home",
       "locale": "C",
-      "ccrc": "https://host?a@b",
-      "bareHost": "https://host?a@b",
-      "updateSync": "https://host?a@b"
+      "ccrc": "https://host?[withheld]",
+      "bareHost": "https://host?[withheld]",
+      "updateSync": "https://host?[withheld]"
     },
     {
       "rule": "authority",
       "input": "https://host#a@b",
       "home": "/fixture-home",
       "locale": "C",
-      "ccrc": "https://host#a@b",
-      "bareHost": "https://host#a@b",
-      "updateSync": "https://host#a@b"
+      "ccrc": "https://host#[withheld]",
+      "bareHost": "https://host#[withheld]",
+      "updateSync": "https://host#[withheld]"
     },
     {
       "rule": "authority",
       "input": "https://u:p@host?a@b#c@d",
       "home": "/fixture-home",
       "locale": "C",
-      "ccrc": "https://host?a@b#c@d",
-      "bareHost": "https://host?a@b#c@d",
-      "updateSync": "https://host?a@b#c@d"
+      "ccrc": "https://host?[withheld]",
+      "bareHost": "https://host?[withheld]",
+      "updateSync": "https://host?[withheld]"
     },
     {
       "rule": "plain",
@@ -132,9 +132,9 @@
       "input": "https://example.com/path?email=a@example.com&x=1",
       "home": "/home/u",
       "locale": "C",
-      "ccrc": "https://example.com/path?email=a@example.com&x=1",
-      "bareHost": "https://example.com/path?email=a@example.com&x=1",
-      "updateSync": "https://example.com/path?email=a@example.com&x=1"
+      "ccrc": "https://example.com/path?[withheld]",
+      "bareHost": "https://example.com/path?[withheld]",
+      "updateSync": "https://example.com/path?[withheld]"
     },
     {
       "rule": "scheme",
@@ -204,9 +204,9 @@
       "input": "https://h/r?email=a@example.com/y",
       "home": "/home/u",
       "locale": "C",
-      "ccrc": "https://h/r?email=a@example.com/y",
-      "bareHost": "https://h/r?email=a@example.com/y",
-      "updateSync": "https://h/r?email=a@example.com/y"
+      "ccrc": "https://h/r?[withheld]",
+      "bareHost": "https://h/r?[withheld]",
+      "updateSync": "https://h/r?[withheld]"
     },
     {
       "rule": "prose",
@@ -285,18 +285,18 @@
       "input": "https://h?a@b",
       "home": "",
       "locale": "C",
-      "ccrc": "https://h?a@b",
-      "bareHost": "https://h?a@b",
-      "updateSync": "https://h?a@b"
+      "ccrc": "https://h?[withheld]",
+      "bareHost": "https://h?[withheld]",
+      "updateSync": "https://h?[withheld]"
     },
     {
       "rule": "authority",
       "input": "https://h#a@b",
       "home": "",
       "locale": "C",
-      "ccrc": "https://h#a@b",
-      "bareHost": "https://h#a@b",
-      "updateSync": "https://h#a@b"
+      "ccrc": "https://h#[withheld]",
+      "bareHost": "https://h#[withheld]",
+      "updateSync": "https://h#[withheld]"
     },
     {
       "rule": "R5",
@@ -1631,14 +1631,13 @@
       "updateSync": "\"url\":\"https:\\/\\/host\""
     },
     {
-      "rule": "known-limit",
-      "note": "known limit: a userinfo inside a query string or a path is not masked; a token starts only at the text's start or after whitespace, a quote, '<' or '('",
+      "rule": "query",
       "input": "https://h/x?proxy=user:secret@host",
       "home": "/home/u",
       "locale": "C",
-      "ccrc": "https://h/x?proxy=user:secret@host",
-      "bareHost": "https://h/x?proxy=user:secret@host",
-      "updateSync": "https://h/x?proxy=user:secret@host"
+      "ccrc": "https://h/x?[withheld]",
+      "bareHost": "https://h/x?[withheld]",
+      "updateSync": "https://h/x?[withheld]"
     },
     {
       "rule": "known-limit",
@@ -1857,6 +1856,69 @@
       "ccrc": "fetch failed: h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 [cut: 94018 more bytes withheld, over the redactor's 4096-byte cap]",
       "bareHost": "fetch failed: h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 [cut: 94018 more bytes withheld, over the redactor's 4096-byte cap]",
       "updateSync": "fetch failed: h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 [cut: 94018 more bytes withheld, over the redactor's 4096-byte cap]"
+    },
+    {
+      "rule": "query",
+      "input": "fetching http://127.0.0.1:1/rel?x=1/latest/download/SHA256SUMS …",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "fetching http://127.0.0.1:1/rel?[withheld] …",
+      "bareHost": "fetching http://127.0.0.1:1/rel?[withheld] …",
+      "updateSync": "fetching http://127.0.0.1:1/rel?[withheld] …"
+    },
+    {
+      "rule": "query",
+      "input": "fetching http://127.0.0.1:1/rel#f/latest/download/SHA256SUMS …",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "fetching http://127.0.0.1:1/rel#[withheld] …",
+      "bareHost": "fetching http://127.0.0.1:1/rel#[withheld] …",
+      "updateSync": "fetching http://127.0.0.1:1/rel#[withheld] …"
+    },
+    {
+      "rule": "query",
+      "input": "download failed: https://u:s3cret@mirror.example/r?token=s3cret#frag/download/v1.0.0/SHA256SUMS (is there a release?)",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "download failed: https://mirror.example/r?[withheld] (is there a release?)",
+      "bareHost": "download failed: https://mirror.example/r?[withheld] (is there a release?)",
+      "updateSync": "download failed: https://mirror.example/r?[withheld] (is there a release?)"
+    },
+    {
+      "rule": "query",
+      "input": "\"url\":\"https:\\/\\/mirror.example\\/r?token=s3cret\" and <https://h#s3cret> and `https://h/?s3cret`",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "\"url\":\"https:\\/\\/mirror.example\\/r?[withheld]\" and <https://h#[withheld]> and `https://h/?[withheld]`",
+      "bareHost": "\"url\":\"https:\\/\\/mirror.example\\/r?[withheld]\" and <https://h#[withheld]> and `https://h/?[withheld]`",
+      "updateSync": "\"url\":\"https:\\/\\/mirror.example\\/r?[withheld]\" and <https://h#[withheld]> and `https://h/?[withheld]`"
+    },
+    {
+      "rule": "query",
+      "input": "CCRC_RELEASE_BASE_URL=https://mirror.example/r?token=s3cret refused",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "CCRC_RELEASE_BASE_URL=https://mirror.example/r?[withheld] refused",
+      "bareHost": "CCRC_RELEASE_BASE_URL=https://mirror.example/r?[withheld] refused",
+      "updateSync": "CCRC_RELEASE_BASE_URL=https://mirror.example/r?[withheld] refused"
+    },
+    {
+      "rule": "query",
+      "input": "https://h/r?[withheld] and http://h#[withheld]",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "https://h/r?[withheld] and http://h#[withheld]",
+      "bareHost": "https://h/r?[withheld] and http://h#[withheld]",
+      "updateSync": "https://h/r?[withheld] and http://h#[withheld]"
+    },
+    {
+      "rule": "prose",
+      "input": "is there a release? #2 of 3, h/r?x=1 and urn:isbn:1?x=1",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "is there a release? #2 of 3, h/r?x=1 and urn:isbn:1?x=1",
+      "bareHost": "is there a release? #2 of 3, h/r?x=1 and urn:isbn:1?x=1",
+      "updateSync": "is there a release? #2 of 3, h/r?x=1 and urn:isbn:1?x=1"
     }
   ]
 }

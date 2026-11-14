@@ -28,7 +28,7 @@ const BRANCH_OK = /^[A-Za-z0-9][A-Za-z0-9._\-\/]*$/;
  * the loose ref" case is pinned.
  *
  * `null` means UNMEASURABLE and callers must treat it as a refusal, never as a
- * mismatch and never as a pass: not knowing is not `[]` (`ccd/ccd:2080-2086`).
+ * mismatch and never as a pass: not knowing is not `[]` (`ccd/ccd`'s `_reg_read`).
  *
  * A LOOSE REF, once its file is READABLE, is authoritative and SHADOWS
  * packed-refs entirely — never a fallback source, because that is what git

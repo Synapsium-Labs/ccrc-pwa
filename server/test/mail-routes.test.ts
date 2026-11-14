@@ -9,7 +9,8 @@ import { fileURLToPath } from 'node:url';
 import type { FastifyInstance } from 'fastify';
 import { isItemMoveRefusal } from '../../shared/ledgers.js';
 import { isReviewRoundsRefusal } from '../../shared/refusal.js';
-import { MAIL_REJECT_CODES, RUN_REFUSE_CODES, ASK_REFUSE_CODES, isRunRefuseCode, isLifecycleGapReason, isClaimRefuseCode, isSessionLifecycle, isReclaimRefuseCode, isAskRefuseCode, isRunRouteRefuseCode, isSetAccountPoolsRefuseCode, isUpdateStoreRefuseCode, isCollectLaneRefusal } from '../../shared/api.js';
+import { MAIL_REJECT_CODES, RUN_REFUSE_CODES, ASK_REFUSE_CODES, isRunRefuseCode, isLifecycleGapReason, isClaimRefuseCode, isSessionLifecycle, isReclaimRefuseCode, isAskRefuseCode, isRunRouteRefuseCode, isSetAccountPoolsRefuseCode, isUpdateStoreRefuseCode, isCollectLaneRefusal, isTestboxAdminRouteRefusal } from '../../shared/api.js';
+import { isPlanKebab } from '../../shared/plan.js';
 import { buildServer } from '../src/server.js';
 import type { Deps } from '../src/server.js';
 import { openCoordDb } from '../src/coord/db.js';
@@ -54,7 +55,7 @@ import { isNoticeMode } from '../src/notice.js';
 import { isArchiveGateKebab } from '../src/coord/archiveAdmission.js';
 import { isStaleArchiveKebab } from '../src/coord/staleArchive.js';
 import { isDriftLaneTag } from '../src/coord/driftLane.js';
-import { isLaneArmImport, isLaneArmLane } from '../../shared/lane-arm.js';
+import { isLaneArmImport, isLaneArmLane, isLaneArmRefusal } from '../../shared/lane-arm.js';
 
 const TOKEN = 'f'.repeat(64);
 const UUID = 'a'.repeat(36);
@@ -586,7 +587,10 @@ describe('the rejection table is total, in both directions', () => {
     // amendment, architecture increment 3) rather than living only as an
     // untyped string a route happened to send.
     const src = sources();
-    for (const code of RUN_REFUSE_CODES) expect(src, code).toContain(`'${code}'`);
+    // D-8181: the plan's five run refusals are declared by Task 2.1 and first sent by Task 2.5 (runs attach to tickets);
+    // Task 2.5 deletes this exemption in the commit that sends them.
+    const NOT_YET_SENT = new Set(['wave-epic-mismatch', 'plan-missing', 'reserved-programme', 'ticket-unavailable', 'plan-closed']);
+    for (const code of RUN_REFUSE_CODES) if (!NOT_YET_SENT.has(code)) expect(src, code).toContain(`'${code}'`);
   });
 
   it('every declared AskRefuseCode is emitted somewhere in server/src/coord or server/src/inject (F7)', () => {
@@ -618,6 +622,14 @@ describe('the rejection table is total, in both directions', () => {
       // does not take. Neither is a mail or run refusal; the route that carries `not-big` words it as its own 409 `not-big`.
       'big-call',
       'not-big',
+      // D-8289 — the trusted-builds record (`coord/claudeBuildsStore.ts`): `unknown-build` and `not-failed` are
+      // `requeueClaudeBuild`'s answers for a build with no row and one whose capture has not failed. Neither is a mail or
+      // run refusal; the requeue route words them as its own 404 `not-found` and 409 `conflict`.
+      'unknown-build',
+      'not-failed',
+      // D-8289 — the same record's `notSent` words (migration 60's CHECK): why a capture try sent nothing. A row fact, not a refusal.
+      'no-test-box',
+      'no-runner',
       'x-ccrc-mail-token',   // coord/token.ts's header name
       'not-configured',      // the generic "no store wired" answer, shared with push/notifyLog
       // D-2545 — the READ-FAILURE family, and the same family as
@@ -646,6 +658,8 @@ describe('the rejection table is total, in both directions', () => {
       'not-recorded',       // coord/landingEntry.ts: a recovery subject's creation kind (landing order wave 5f), a recovery-view discriminant, not a refusal code
       'not-set',            // coord/landingEntry.ts: a recovery subject's authority kind (landing order wave 5f), a recovery-view discriminant, not a refusal code
       'stale-episode-head', // coord/landingEntry.ts: the one quarantine kind, also a schema CHECK literal (landing order wave 5f), a recovery-view discriminant, not a refusal code
+      'call-failed',        // coord/landed.ts#landedAnswerOf and coord/landedLane.ts#landedPass: the input word for a ran-but-failed `pr-state` call (landing order wave 5h), a reader-internal discriminant, not a refusal code
+      'missing-field',      // coord/landed.ts#landedAnswerOf: compared against ccd's `pr-state` unmeasured reason, a word ccd writes (landing order wave 5h), a reader-internal discriminant, not a refusal code
       'packed-refs',         // coord/gitref.ts — a git filename
       'refused-project',     // coord/gitref.ts — a `WorktreeRead.reason` (§1.7).
                              // NOT a refusal a client ever sees: `readWorktreeRecords`
@@ -844,6 +858,8 @@ describe('the rejection table is total, in both directions', () => {
       if (NOT_CODES.has(tok)) continue;
       expect((MAIL_REJECT_CODES as readonly string[]).includes(tok)
         || isRunRefuseCode(tok)
+        // LINEAR HIERARCHY WAVE 2 (D-8181) — the plan's words, admitted through their exported guard (`shared/plan.ts`).
+        || isPlanKebab(tok)
         // BUILD 9a WAVE 4 — a FOURTH union, checked together and never merged, for
         // the reason the `enter-ignored` note above already states. `LifecycleGapReason`
         // reaches this scanner because `mirrorplan.ts` lives in `server/src/coord` and
@@ -1054,6 +1070,10 @@ describe('the rejection table is total, in both directions', () => {
         // precondition refused, never a `refused` or `reject.code` (the route answers the gate's word). Admitted through
         // the exported guard, derived from `ARCHIVE_GATES`, never NOT_CODES.
         || isArchiveGateKebab(tok)
+        // THE TEST BOX CONNECT (D-8166): the switch route in `coord/routes.ts` refuses `on` with `parity-required` until a
+        // passing, current parity record exists. It IS a route refusal, sent through `refuseRoute` at the status
+        // `shared/refusal.ts` gives it. Admitted through L0's own guard, derived from `TESTBOX_ADMIN_ROUTE_REFUSALS`, never NOT_CODES.
+        || isTestboxAdminRouteRefusal(tok)
         // THE RUN SPEND READ (D-6799): `coord/runSpend.ts` names why a run's spend could not be measured as literals. A
         // reason rides the `spend` block of `GET /api/runs/:id`, never a `refused` or `reject.code`. Admitted through
         // `shared/api.ts`'s exported guard, derived from `RUN_SPEND_UNMEASURED_REASON_MAP`, never NOT_CODES.
@@ -1114,9 +1134,10 @@ describe('the rejection table is total, in both directions', () => {
         || isClaimsMoveRefusal(tok)
         // THE SHADOW LANES CARD (D-8274; spec 2026-10-28 R-6): `coord/laneArm.ts` names how a marker import went
         // (`'stood-kept'`) and `coord/schema.ts` seeds a lane's row by its name (`'roster-card'`). A word is a stored column
-        // or a row key, never a `refused` or `reject.code`. Admitted through L0's guards, derived from `LANE_ARM_IMPORTS` and
-        // `LANE_ARM_LANES`, never NOT_CODES.
-        || isLaneArmImport(tok) || isLaneArmLane(tok),
+        // or a row key, never a `refused` or `reject.code`; its door's own refusal (`'lane-gated'`, review 2003 F3) is sent by
+        // `refuseRoute`. Admitted through L0's guards, derived from `LANE_ARM_IMPORTS`, `LANE_ARM_LANES` and
+        // `LANE_ARM_REFUSALS`, never NOT_CODES.
+        || isLaneArmImport(tok) || isLaneArmLane(tok) || isLaneArmRefusal(tok),
         `${tok} is not a declared MailRejectCode, RunRefuseCode, LifecycleGapReason, ClaimRefuseCode, SessionLifecycle, ReclaimRefuseCode, AskRefuseCode, RunRouteRefuseCode, SetAccountPoolsRefuseCode, UpdateStoreRefuseCode, child-reclaim word, stall-watch word, expiry word, stall-watch settings word, dead-coordinator word, temp-root collector word, delegation word, collector switch word, collector-switch route refusal, hibernation word, drift kind, notice mode, archive gate, stale-archive outcome, drift lane tag, stale-sibling claimant state, coord-blocked gate reason, question-sweep word, dead-dispatch word, automatic-roll word, item-move refusal, run stuck word, review-rounds refusal, run-close word, shadow-lane word, wake-gate word or claims-move word`).toBe(true);
     }
   });

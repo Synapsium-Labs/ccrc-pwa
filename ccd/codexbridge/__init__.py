@@ -25,8 +25,8 @@ from typing import List, Protocol, Tuple
 VERSION = "1"
 
 # Every module of the package, in import order: a module imports only modules before it.
-MODULES = ("sse", "errors", "inbound", "reducer", "store", "count", "known", "stats", "backend", "record", "stream",
-           "server", "liveprobe")
+MODULES = ("sse", "errors", "inbound", "reducer", "store", "count", "known", "stats", "backend", "record", "reqrecord",
+           "stream", "server", "liveprobe")
 
 
 class NameSink(Protocol):

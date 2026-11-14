@@ -64,6 +64,9 @@ type ObjectKind = 'initiative' | 'project' | 'milestone' | 'issue';
 const objectKindOf = (op: CcrcOpName): ObjectKind => (op.startsWith('initiative') ? 'initiative'
   : op.startsWith('projectMilestone') ? 'milestone' : op.startsWith('project') ? 'project' : 'issue');
 
+/** The issue an issue-kind op that is not a create acts on (its identifier is the ask's target); null otherwise. */
+const issueOf = (ask: CcrcOpAsk): string | null => (objectKindOf(ask.op) === 'issue' && ask.op !== 'issueCreate' ? ask.target : null);
+
 /** A failed call's word, and whether the change may have happened (a timeout, no answer, an answer out of grammar). */
 function callWord(r: Exclude<LinearCall, { ok: true }>): { word: 'linear-unauthorised' | 'linear-forbidden' | 'timeout' | 'unreachable' | 'malformed'; outcome: 'failed' | 'unknown' } {
   switch (r.reason) {
@@ -124,7 +127,7 @@ async function run(deps: CcrcCallDeps, ask: CcrcOpAsk): Promise<CcrcOpOutcome> {
         verb: 'operate',
         route: `ccrc ${ask.op}`,
         resource: {
-          workspaceId: ask.workspaceId, teamKey: ask.teamKey, issue: null, parentTeamKey: null, op: row.journalOp,
+          workspaceId: ask.workspaceId, teamKey: ask.teamKey, issue: issueOf(ask), parentTeamKey: null, op: row.journalOp,
           object: { kind: objectKindOf(ask.op), id: ask.target },
         },
       } satisfies LinearWriteAsk);

@@ -9,7 +9,7 @@
 // `any` or `eval` are not seen; review lens 1 reads for those.
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
-import ts from 'typescript';
+import { ts } from '../../server/test/scan/parse';
 import { describe, expect, it } from 'vitest';
 import { CCRC_ALIASES, HLJS } from '../src/lib/highlightGrammars';
 import {

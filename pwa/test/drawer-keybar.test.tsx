@@ -109,6 +109,7 @@ import { KEYCAP, Keycap } from '@ccrc/ui';
 import { readModel, rowText } from '../src/session/drawerModel';
 import { PINNED_WINDOW_COLS, PINNED_WINDOW_ROWS, TMUX_STATUS_ROWS } from '../../shared/api';
 import { SYNTHETIC_SCREENS } from './fixtures/drawer/synthetic';
+import { namesWithoutTheirLabel } from './labelInName';
 
 afterEach(() => {
   cleanup();
@@ -175,9 +176,10 @@ function Grid({
 }
 
 /** The drawer's history door, as the drawer builds it: a `Keycap`, so it wears
- *  the same floor as every key beside it. */
+ *  the same floor as every key beside it, and named as the drawer names it, its
+ *  legend leading (label in name, D-8383). */
 const door = (
-  <Keycap className="keycap--act" aria-label="Scroll back">
+  <Keycap className="keycap--act" aria-label="Hist (Scroll back)">
     hist
   </Keycap>
 );
@@ -432,8 +434,8 @@ describe('the wrapped view bar', () => {
     const send = vi.fn<(d: string) => void>();
     render(<Wrapped send={send} action={door} />);
     fireEvent.click(screen.getByRole('button', { name: 'More keys' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Control' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Control' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Ctrl (Control)' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Ctrl (Control)' }));
     fireEvent.click(screen.getByRole('button', { name: 'More keys' }));
     expect(send).not.toHaveBeenCalled();
   });
@@ -442,7 +444,7 @@ describe('the wrapped view bar', () => {
     const send = vi.fn<(d: string) => void>();
     render(<Wrapped send={send} action={door} />);
     fireEvent.click(screen.getByRole('button', { name: 'More keys' }));
-    const action = screen.getByRole('button', { name: 'Scroll back' });
+    const action = screen.getByRole('button', { name: 'Hist (Scroll back)' });
     expect(action.closest('.term-keys')).not.toBeNull();
     expect(action.closest('.term-keys-seq')).toBeNull();
     expect(action.closest('.term-keys-more')).toBeNull();
@@ -454,7 +456,7 @@ describe('the wrapped view bar', () => {
     fireEvent.click(screen.getByRole('button', { name: 'More keys' }));
     const buttons = screen.getByRole('toolbar', { name: 'Terminal keys' }).querySelectorAll('button');
     for (const button of buttons) {
-      if (button.getAttribute('aria-label') === 'Scroll back') continue;
+      if (button.getAttribute('aria-label') === 'Hist (Scroll back)') continue;
       expect(button.classList.contains('keycap')).toBe(true);
       expect(fireEvent.pointerDown(button)).toBe(false);
     }
@@ -466,7 +468,7 @@ describe('the ctrl latch', () => {
     const send = vi.fn<(d: string) => void>();
     render(<Wrapped send={send} action={door} />);
     fireEvent.click(screen.getByRole('button', { name: 'More keys' }));
-    const ctrl = screen.getByRole('button', { name: 'Control' });
+    const ctrl = screen.getByRole('button', { name: 'Ctrl (Control)' });
     fireEvent.click(ctrl);
     expect(ctrl).toHaveAttribute('aria-pressed', 'true');
     expect(send).not.toHaveBeenCalled();
@@ -479,11 +481,11 @@ describe('the ctrl latch', () => {
     const send = vi.fn<(d: string) => void>();
     render(<Wrapped send={send} action={door} />);
     fireEvent.click(screen.getByRole('button', { name: 'More keys' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Control' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Ctrl (Control)' }));
     fireEvent.click(screen.getByRole('button', { name: 'stand-in letter c' }));
     expect(send).toHaveBeenCalledTimes(1);
     expect(send).toHaveBeenLastCalledWith('\x03');
-    const ctrl = screen.getByRole('button', { name: 'Control' });
+    const ctrl = screen.getByRole('button', { name: 'Ctrl (Control)' });
     expect(ctrl).toHaveAttribute('aria-pressed', 'false');
     fireEvent.click(screen.getByRole('button', { name: 'stand-in letter c' }));
     expect(send).toHaveBeenCalledTimes(1);
@@ -493,10 +495,10 @@ describe('the ctrl latch', () => {
     const send = vi.fn<(d: string) => void>();
     render(<Wrapped send={send} action={door} />);
     fireEvent.click(screen.getByRole('button', { name: 'More keys' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Control' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Ctrl (Control)' }));
     fireEvent.click(screen.getByRole('button', { name: 'stand-in digit 1' }));
     expect(send).not.toHaveBeenCalled();
-    expect(screen.getByRole('button', { name: 'Control' })).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByRole('button', { name: 'Ctrl (Control)' })).toHaveAttribute('aria-pressed', 'true');
   });
 
   it('takes only the first of two characters before a re-render', () => {
@@ -528,10 +530,10 @@ describe('the ctrl latch', () => {
     const send = vi.fn<(d: string) => void>();
     render(<Wrapped send={send} action={door} />);
     fireEvent.click(screen.getByRole('button', { name: 'More keys' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Control' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Ctrl (Control)' }));
     fireEvent.click(screen.getByRole('button', { name: 'More keys' }));
     fireEvent.click(screen.getByRole('button', { name: 'More keys' }));
-    const ctrl = screen.getByRole('button', { name: 'Control' });
+    const ctrl = screen.getByRole('button', { name: 'Ctrl (Control)' });
     expect(ctrl).toHaveAttribute('aria-pressed', 'false');
     fireEvent.click(screen.getByRole('button', { name: 'stand-in letter c' }));
     expect(send).not.toHaveBeenCalled();
@@ -557,8 +559,8 @@ describe('the grid view strip', () => {
       '^C',
     ]);
     expect(screen.queryByRole('button', { name: 'More keys' })).toBeNull();
-    expect(screen.queryByRole('button', { name: 'Control' })).toBeNull();
-    const action = screen.getByRole('button', { name: 'Scroll back' });
+    expect(screen.queryByRole('button', { name: 'Ctrl (Control)' })).toBeNull();
+    const action = screen.getByRole('button', { name: 'Hist (Scroll back)' });
     expect(action.closest('.term-keys')).not.toBeNull();
     expect(action.closest('.term-keys-seq')).toBeNull();
   });
@@ -604,7 +606,7 @@ describe('the drawer renders the grid strip', () => {
       '⏎',
       '^C',
     ]);
-    const doorEl = screen.getByRole('button', { name: 'Scroll back' });
+    const doorEl = screen.getByRole('button', { name: 'Hist (Scroll back)' });
     expect(doorEl.closest('.term-keys')).not.toBeNull();
     expect(doorEl.closest('.term-keys-seq')).toBeNull();
   });
@@ -1184,7 +1186,7 @@ describe('the bar asks before ^C or ^D would exit Claude Code', () => {
     expect(send).not.toHaveBeenCalled();
     const group = screen.getByRole('group', { name: 'Confirm Control C' });
     expect(group).toHaveTextContent('Claude Code will exit');
-    expect(screen.getByRole('button', { name: 'Send Control C' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Send ^C (Control C)' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Cancel' })).toBeInTheDocument();
   });
 
@@ -1192,7 +1194,7 @@ describe('the bar asks before ^C or ^D would exit Claude Code', () => {
     const send = vi.fn<(d: string) => void>();
     render(<Wrapped send={send} action={door} screen={showing} />);
     fireEvent.click(screen.getByRole('button', { name: 'Control C' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Send Control C' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Send ^C (Control C)' }));
     expect(send).toHaveBeenCalledTimes(1);
     expect(send).toHaveBeenLastCalledWith(KEY_SEQ.ctrlC);
     expect(confirmGroup()).toBeNull();
@@ -1234,25 +1236,25 @@ describe('the bar asks before ^C or ^D would exit Claude Code', () => {
     const send = vi.fn<(d: string) => void>();
     render(<Wrapped send={send} action={door} screen={showing} />);
     fireEvent.click(screen.getByRole('button', { name: 'More keys' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Control' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Ctrl (Control)' }));
     fireEvent.click(screen.getByRole('button', { name: 'stand-in letter c' }));
     expect(send).not.toHaveBeenCalled();
     expect(screen.getByRole('group', { name: 'Confirm Control C' })).toHaveTextContent('Claude Code will exit');
-    fireEvent.click(screen.getByRole('button', { name: 'Send Control C' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Send ^C (Control C)' }));
     expect(send).toHaveBeenCalledTimes(1);
     expect(send).toHaveBeenLastCalledWith(KEY_SEQ.ctrlC);
     // The latch was used up by the letter it took: it does not wait for another.
-    expect(screen.getByRole('button', { name: 'Control' })).toHaveAttribute('aria-pressed', 'false');
+    expect(screen.getByRole('button', { name: 'Ctrl (Control)' })).toHaveAttribute('aria-pressed', 'false');
   });
 
   it('the latch then d, with the notice, holds ^D', () => {
     const send = vi.fn<(d: string) => void>();
     render(<Wrapped send={send} action={door} screen={showing} />);
     fireEvent.click(screen.getByRole('button', { name: 'More keys' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Control' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Ctrl (Control)' }));
     fireEvent.click(screen.getByRole('button', { name: 'stand-in letter d' }));
     expect(send).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByRole('button', { name: 'Send Control D' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Send ^D (Control D)' }));
     expect(send).toHaveBeenCalledTimes(1);
     expect(send).toHaveBeenLastCalledWith(KEY_SEQ.ctrlD);
   });
@@ -1261,7 +1263,7 @@ describe('the bar asks before ^C or ^D would exit Claude Code', () => {
     const send = vi.fn<(d: string) => void>();
     render(<Wrapped send={send} action={door} />);
     fireEvent.click(screen.getByRole('button', { name: 'More keys' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Control' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Ctrl (Control)' }));
     fireEvent.click(screen.getByRole('button', { name: 'stand-in letter c' }));
     expect(send).toHaveBeenCalledTimes(1);
     expect(send).toHaveBeenLastCalledWith(KEY_SEQ.ctrlC);
@@ -1274,7 +1276,7 @@ describe('the bar asks before ^C or ^D would exit Claude Code', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Control C' }));
     expect(send).not.toHaveBeenCalled();
     expect(screen.getByRole('group', { name: 'Confirm Control C' })).toHaveTextContent('Claude Code will exit');
-    fireEvent.click(screen.getByRole('button', { name: 'Send Control C' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Send ^C (Control C)' }));
     expect(send).toHaveBeenCalledTimes(1);
     expect(send).toHaveBeenLastCalledWith(KEY_SEQ.ctrlC);
   });
@@ -1296,14 +1298,14 @@ describe('the bar asks before ^C or ^D would exit Claude Code', () => {
     render(<Wrapped send={send} action={door} screen={showing} />);
     fireEvent.click(screen.getByRole('button', { name: 'Control C' }));
     const toolbar = screen.getByRole('toolbar', { name: 'Terminal keys' });
-    for (const name of ['Send Control C', 'Cancel']) {
+    for (const name of ['Send ^C (Control C)', 'Cancel']) {
       const b = screen.getByRole('button', { name });
       expect(b.closest('.term-keys')).toBe(toolbar);
       expect(b.classList.contains('keycap')).toBe(true);
       expect(fireEvent.pointerDown(b)).toBe(false);
     }
     // The history door stays beside it.
-    expect(screen.getByRole('button', { name: 'Scroll back' }).closest('.term-confirm')).toBeNull();
+    expect(screen.getByRole('button', { name: 'Hist (Scroll back)' }).closest('.term-confirm')).toBeNull();
   });
 
   it('the confirm keeps its two choices together, right after the sentence, and neither stretches', () => {
@@ -1319,7 +1321,7 @@ describe('the bar asks before ^C or ^D would exit Claude Code', () => {
     expect(rest).toEqual([]);
     expect(word!.classList.contains('term-confirm-word')).toBe(true);
     expect(choices!.classList.contains('term-confirm-choices')).toBe(true);
-    expect(Array.from(choices!.children).map((b) => b.getAttribute('aria-label'))).toEqual(['Send Control C', 'Cancel']);
+    expect(Array.from(choices!.children).map((b) => b.getAttribute('aria-label'))).toEqual(['Send ^C (Control C)', 'Cancel']);
 
     // The sentence takes its own width and no more, so the choices sit beside it.
     const wordFlex = declaredValues(chatCss, '.term-confirm-word', 'flex');
@@ -1433,7 +1435,7 @@ describe('the drawer guards its ^C against the live model', () => {
     expect(ws.sent).toHaveLength(1);
     expect(screen.getByRole('group', { name: 'Confirm Control C' })).toHaveTextContent('Claude Code will exit');
 
-    fireEvent.click(screen.getByRole('button', { name: 'Send Control C' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Send ^C (Control C)' }));
     expect(ws.sent).toHaveLength(2);
     expect(ws.lastFrame()).toEqual({ type: 'input', data: KEY_SEQ.ctrlC });
     t.dispose();
@@ -1483,3 +1485,30 @@ function hintStream(): string {
   if (stream === exitScreen!.stream) throw new Error('the exit-notice stream no longer spells its notice');
   return stream;
 }
+
+// LABEL IN NAME (WCAG 2.5.3, D-8383). No Storybook story renders the bar's
+// latch or its confirm, so storybook-a11y never measured them; these cases run
+// the same measurement (`labelInName`, axe-core 4.14's rule) over every
+// aria-labelled cap the bar draws, the latch and both confirms included.
+describe('every cap in the bar holds the words it shows (label in name, D-8383)', () => {
+  it('the wrapped bar with its row open: the ctrl latch leads its name with "ctrl"', () => {
+    render(<Wrapped send={vi.fn()} action={door} />);
+    fireEvent.click(screen.getByRole('button', { name: 'More keys' }));
+    const toolbar = screen.getByRole('toolbar', { name: 'Terminal keys' });
+    expect(namesWithoutTheirLabel(toolbar)).toEqual([]);
+    expect(screen.getByRole('button', { name: 'Ctrl (Control)' }).textContent).toBe('ctrl');
+  });
+
+  it('the ^C and ^D confirms: "send ^C" is in "Send ^C (Control C)"', () => {
+    for (const [letter, k] of [['c', 'ctrlC'], ['d', 'ctrlD']] as const) {
+      cleanup();
+      render(<Wrapped send={vi.fn()} action={door} screen={() => exitScreen.rows} />);
+      fireEvent.click(screen.getByRole('button', { name: 'More keys' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Ctrl (Control)' }));
+      fireEvent.click(screen.getByRole('button', { name: `stand-in letter ${letter}` }));
+      expect(namesWithoutTheirLabel(confirmGroup()!), k).toEqual([]);
+      const send = screen.getByRole('button', { name: `Send ${KEY_CAP[k].legend} (${KEY_CAP[k].label})` });
+      expect(send.textContent).toBe(`send ${KEY_CAP[k].legend}`);
+    }
+  });
+});

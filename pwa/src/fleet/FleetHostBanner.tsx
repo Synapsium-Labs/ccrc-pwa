@@ -4,7 +4,10 @@
 //
 //  - UNREACHABLE (red): the agent WS is down (server/src/remote/). Names how
 //    long, and offers a Hetzner reboot behind a QuickConfirm whose copy names
-//    the collateral. The dialog says what is true of ANY fleet host — a reboot
+//    the collateral. D-8382: when the server says the reboot is not configured
+//    (`rebootConfigured: false`), the button is disabled and the banner says so
+//    and names the remedy, before any tap; absent (an older server) changes
+//    nothing. The dialog says what is true of ANY fleet host — a reboot
 //    takes down every service on the box, not only the fleet — because it used
 //    to name the reference fleet's OWN co-tenant stack by product name, which
 //    on anybody else's box was simply a false statement about their machine.
@@ -42,7 +45,9 @@
 //    `'unknown'` remains silent.
 import { useState } from 'react';
 import type { ReactNode } from 'react';
-import type { FleetHealth, NodeWire, ReleaseWire, UpdateIntentWire } from '../../../shared/api';
+import {
+  FLEET_REBOOT_NOT_CONFIGURED_TEXT, FLEET_REBOOT_REMEDY_TEXT, type FleetHealth, type NodeWire, type ReleaseWire, type UpdateIntentWire,
+} from '../../../shared/api';
 import { api, failedTo } from '../lib/api';
 import { Banner, Button, elapsedWords, QuickConfirm, toast, useNow } from '@ccrc/ui';
 import { useFleetHealth } from './useFleetHealth';
@@ -191,6 +196,8 @@ export function FleetHostBanner(
 
   if (!health || health.mode !== 'remote' || health.connected) return null;
 
+  // D-8382: `false` only, never absent, disables the button: an older server omits the field and its 501 still answers.
+  const rebootOff = health.rebootConfigured === false;
   const reboot = (): void => {
     setRebooting(true);
     void api
@@ -231,7 +238,7 @@ export function FleetHostBanner(
             // needs and a full-width one did not.
             size="fit"
             className="flex-none"
-            disabled={rebooting}
+            disabled={rebooting || rebootOff}
             onClick={() => setConfirmOpen(true)}
           >
             Reboot
@@ -239,6 +246,13 @@ export function FleetHostBanner(
         )}
       >
         Fleet host unreachable{health.downSince !== null ? ` since ${elapsedSince(health.downSince, now)}` : ''}
+        {rebootOff && (
+          <>
+            {'. '}
+            <span data-reboot="not-configured">{FLEET_REBOOT_NOT_CONFIGURED_TEXT}</span>{' '}
+            <span data-reboot="remedy">{FLEET_REBOOT_REMEDY_TEXT}</span>
+          </>
+        )}
       </Banner>
       {/* A SIBLING of the banner, not a child. It was nested in the old div
           because that div was the whole return; the dialog portals out of its

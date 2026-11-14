@@ -165,13 +165,14 @@ function dirtySession(w: World): void {
   writeFileSync(path.join(w.sess, 'run.log'), 'ignored\n');
 }
 
-interface SnapOpts { base?: string; mirror?: string; fileMax?: number; snapMax?: number; deny?: string; outputs?: string[]; env?: NodeJS.ProcessEnv; cwd?: string }
+interface SnapOpts { base?: string; mirror?: string; fileMax?: number; snapMax?: number; deny?: string; outputs?: string[]; env?: NodeJS.ProcessEnv; cwd?: string; sshKey?: string }
 
 function snap(w: World, o: SnapOpts = {}): Ran {
   const args = [SNAP, '--git-url-base', o.base ?? '', '--mirror-path', o.mirror ?? w.mirror,
     '--untracked-file-max', String(o.fileMax ?? FILE_MAX), '--snapshot-max', String(o.snapMax ?? SNAP_MAX),
     '--deny-globs', o.deny ?? DENY];
   for (const out of o.outputs ?? ['server/dist', 'agent/dist']) args.push('--output', out);
+  if (o.sshKey !== undefined) args.push('--ssh-key', o.sshKey);
   return sh('bash', args, o.cwd ?? w.sess, { ...w.env, ...(o.env ?? {}) });
 }
 
@@ -658,6 +659,47 @@ describe.skipIf(!LINUX)('the pre-receive hook (spec §2.1 "the create-only rule"
     expect(w.gitRan(w.sess, 'push', '-q', '--no-verify', w.mirror, `${head}:refs/ccrc-test/${RUN_A}/head`).status).toBe(0);
     expect(w.gitRan(w.sess, 'push', '-q', '--no-verify', w.mirror, `${head}:refs/ccrc-test/${RUN_A}/snap`).status).not.toBe(0);
     expect(scratchRefs(w, w.mirror)).toBe(`refs/ccrc-test/${RUN_A}/head ${head}\n`);
+  }, T);
+});
+
+describe('the push reads the pin (D-8166, M17)', () => {
+  /** A stand-in `ssh` first on PATH: it records its argv, one word per line, and fails, so no network is touched. */
+  const probe = (w: World, pin: boolean): string[] => {
+    const bin = path.join(w.root, 'fake-bin');
+    const log = path.join(w.root, 'ssh-argv');
+    mkdirSync(bin, { recursive: true });
+    writeFileSync(path.join(bin, 'ssh'), `#!/bin/sh\nprintf '%s\\n' "$@" > '${log}'\nexit 255\n`);
+    chmodSync(path.join(bin, 'ssh'), 0o755);
+    if (pin) {
+      mkdirSync(path.join(w.home, '.ccrc'), { recursive: true });
+      writeFileSync(path.join(w.home, '.ccrc', 'testbox-known-hosts'), 'testbox.invalid ssh-ed25519 AAAA\n');
+    }
+    dirtySession(w);
+    const key = path.join(w.root, 'push key');
+    writeFileSync(key, 'not a key\n');
+    const r = snap(w, { base: 'ssh://git@testbox.invalid', mirror: '/srv/mirrors/r.git', sshKey: key,
+      env: { PATH: `${bin}:${w.env.PATH ?? ''}` } });
+    expect(r.stdout).toMatch(/^test box: unreachable \(/);
+    return existsSync(log) ? readFileSync(log, 'utf8').split('\n').filter(Boolean) : [];
+  };
+
+  it('with a pin file the push\'s ssh carries UserKnownHostsFile and StrictHostKeyChecking=yes', () => {
+    const w = world();
+    const argv = probe(w, true);
+    expect(argv).toContain('UserKnownHostsFile=' + path.join(w.home, '.ccrc', 'testbox-known-hosts'));
+    expect(argv).toContain('StrictHostKeyChecking=yes');
+    expect(argv).toContain('IdentitiesOnly=yes');
+    expect(argv).toContain('BatchMode=yes');
+  }, T);
+
+  it('with no pin file the push\'s ssh line is today\'s', () => {
+    const w = world();
+    const argv = probe(w, false);
+    expect(argv.length).toBeGreaterThan(0);
+    expect(argv.some((a) => a.startsWith('UserKnownHostsFile'))).toBe(false);
+    expect(argv.some((a) => a.startsWith('StrictHostKeyChecking'))).toBe(false);
+    expect(argv).toContain('IdentitiesOnly=yes');
+    expect(argv).toContain('BatchMode=yes');
   }, T);
 });
 

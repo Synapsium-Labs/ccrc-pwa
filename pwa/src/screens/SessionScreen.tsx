@@ -51,8 +51,10 @@ import { orphanGuidance } from '../fleet/orphanWords';
 import { placementOfRow, poolOfPlacement } from '../fleet/placementWords';
 import { isRunClosed, programmeTitle, sessionProgramme } from '../fleet/runWords';
 import { HistoryTab } from '../session/HistoryTab';
+import { TimersSection } from '../session/TimersSection';
 import { TerminalDrawer } from '../session/TerminalDrawer';
 import { modelOptions, effortOptions, type PickOption } from '../lib/models';
+import { useLaneModels } from '../lib/useLaneModels';
 import '../session/chat.css';
 import { answerControlLabel, askSource } from '../session/askLive';
 import { hibernatedSince, hibernatedWords } from '../fleet/hibernated';
@@ -367,7 +369,9 @@ export function SessionScreen({
   // wire's own queued verdict. Pure, and ~95 lines of branch-by-branch
   // reasoning that had nothing to do with rendering.
   const routeInfo = live?.route ?? null;
-  const route = routeView(live, wrapper, accountProvider(roster, wrapper));
+  // D-8406: the lane's model files, which name each class's model in the picker and give its readback.
+  const laneModels = useLaneModels(wrapper, undefined, picker === 'model');
+  const route = routeView(live, wrapper, accountProvider(roster, wrapper), laneModels);
   const { classIntended, effortIntended, classInert, effortInert,
           classUnreadable, effortUnreadable } = route;
   // Exclusively one source or the other, never both: with `route` present the
@@ -728,6 +732,10 @@ export function SessionScreen({
             opens their phases and agents. Read-only. */}
         <WorkflowStrip workflows={workflows} unreadable={workflowsUnreadable} />
 
+        {/* Overlord W1a, timers Task 13: the reminders this session set itself, with Cancel. Quiet: no line while it has
+            no pending timer, as the workflow strip; a failed read says so. */}
+        <TimersSection sessionId={id} quiet className="mx-4 mb-2 flex-none" />
+
         {/* Sits between the conversation and the composer — where the TUI puts it,
             directly above the prompt you're about to type into. */}
         {!inspectorHoldsStrips && <TaskStrip tasks={tasks} untouchedFor={staleFor(tasksTouchedAt, Date.now())} />}
@@ -758,7 +766,7 @@ export function SessionScreen({
         eyebrow="model"
         title="Choose a model"
         options={modelOptions(
-          wrapper, live?.model ?? null,
+          wrapper, laneModels, live?.model ?? null,
           routeInfo
             ? {
               intended: classIntended, inert: classInert, unreadable: classUnreadable,

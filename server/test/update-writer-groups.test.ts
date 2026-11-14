@@ -95,8 +95,9 @@ const WRITER_GROUPS: readonly { table: 'releases' | 'node_release_refusals' | 'n
       'currentBuiltAt', 'currentDirty', 'stampRead', 'installState', 'provenance', 'caps', 'agentOps', 'highestVersion',
       'previousVersion', 'floorRead', 'previousRead',
       'os', 'measuredAt', 'reachable', 'unreachableSince'], writers: ['upsertNodeMeasurement', 'markUnreachable'] },
+  // R37 (D-8386): `reportedSweep` (migration 61) joins the report group, written by the same one writer.
   { table: 'nodes', group: 'report', columns: ['reportedPhase', 'reportedTarget', 'reportedStartedAt', 'reportedUpdatedAt',
-      'reportedDetail'], writers: ['upsertNodeMeasurement'] },
+      'reportedDetail', 'reportedSweep'], writers: ['upsertNodeMeasurement'] },
   { table: 'nodes', group: 'lease', columns: ['updateState', 'updateTarget', 'updateStartedAt', 'updateDetail'],
       writers: ['dispatchNode', 'releaseLease', 'settleNode', 'ackNode', 'noteDispatchRefusal', 'noteLeaseDetail', 'handOffLease'] },
   { table: 'nodes', group: 'resolved', columns: ['channel', 'desiredTag', 'resolveDetail'], writers: ['resolveNode'] },

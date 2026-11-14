@@ -127,6 +127,7 @@ import os
 import queue
 import re
 import secrets
+import socketserver
 import ssl
 import threading
 import time
@@ -632,6 +633,17 @@ class _Handler(http.server.BaseHTTPRequestHandler):
 
 
 class _Server(http.server.HTTPServer):
+    def server_bind(self) -> None:
+        """`TCPServer`'s bind, then the two names `HTTPServer` sets, without its reverse lookup of the bind address.
+
+        `HTTPServer.server_bind` names the server `socket.getfqdn(host)`, which nothing here reads; on macOS that lookup
+        of 127.0.0.1 has taken about 35 s in a new process (as `ccd/ccgpt-proxy.py`'s `_Server` measured), so the
+        sign-in printed its URL and listened half a minute late (D-8343)."""
+        socketserver.TCPServer.server_bind(self)
+        host, port = self.server_address[:2]
+        self.server_name = host
+        self.server_port = port
+
     def handle_error(self, request: object, client_address: object) -> None:
         pass  # the default prints a traceback when a connection is dropped mid-answer
 

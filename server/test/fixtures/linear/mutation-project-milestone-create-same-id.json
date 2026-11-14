@@ -1,0 +1,83 @@
+{
+  "name": "mutation-project-milestone-create-same-id",
+  "documentSource": "code document; the same caller-chosen id and name sent again (a retry)",
+  "document": "mutation ProjectMilestoneCreate($input: ProjectMilestoneCreateInput!) { projectMilestoneCreate(input: $input) { success projectMilestone { id } } }",
+  "variables": {
+    "input": {
+      "id": "00000000-0008-4000-8000-000000000021",
+      "projectId": "00000000-0004-4000-8000-000000000020",
+      "name": "Capture milestone temp",
+      "description": "Capture."
+    }
+  },
+  "requestBody": "{\"query\":\"mutation ProjectMilestoneCreate($input: ProjectMilestoneCreateInput!) { projectMilestoneCreate(input: $input) { success projectMilestone { id } } }\",\"variables\":{\"input\":{\"id\":\"00000000-0008-4000-8000-000000000021\",\"projectId\":\"00000000-0004-4000-8000-000000000020\",\"name\":\"Capture milestone temp\",\"description\":\"Capture.\"}}}",
+  "requestHeaders": [
+    "authorization: <the key, bare, no Bearer>",
+    "content-type: application/json"
+  ],
+  "sentAtMs": null,
+  "receivedAtMs": null,
+  "sentAt": null,
+  "status": 200,
+  "statusLine": null,
+  "headers": [
+    [
+      "content-type",
+      "application/json; charset=utf-8"
+    ],
+    [
+      "x-complexity",
+      "2"
+    ],
+    [
+      "x-ratelimit-complexity-limit",
+      "3000000"
+    ],
+    [
+      "x-ratelimit-complexity-remaining",
+      "2999996"
+    ],
+    [
+      "x-ratelimit-complexity-reset",
+      "1794590000225"
+    ],
+    [
+      "x-ratelimit-requests-limit",
+      "2500"
+    ],
+    [
+      "x-ratelimit-requests-remaining",
+      "2471"
+    ],
+    [
+      "x-ratelimit-requests-reset",
+      "1794590000225"
+    ]
+  ],
+  "body": {
+    "errors": [
+      {
+        "message": "name not unique",
+        "path": [
+          "projectMilestoneCreate"
+        ],
+        "locations": [
+          {
+            "line": 1,
+            "column": 73
+          }
+        ],
+        "extensions": {
+          "type": "invalid input",
+          "code": "INPUT_ERROR",
+          "statusCode": 400,
+          "userError": true,
+          "userPresentableMessage": "A project milestone called 'Capture milestone temp' already exists on this project."
+        }
+      }
+    ],
+    "data": null
+  },
+  "bodyRaw": "{\"errors\":[{\"message\":\"name not unique\",\"path\":[\"projectMilestoneCreate\"],\"locations\":[{\"line\":1,\"column\":73}],\"extensions\":{\"type\":\"invalid input\",\"code\":\"INPUT_ERROR\",\"statusCode\":400,\"userError\":true,\"userPresentableMessage\":\"A project milestone called 'Capture milestone temp' already exists on this project.\"}}],\"data\":null}\n",
+  "note": "Recorded by the hierarchy capture (FX2, D-8407). Linear checks the name before the id: a repeat answers name not unique, not a conflict on insert."
+}

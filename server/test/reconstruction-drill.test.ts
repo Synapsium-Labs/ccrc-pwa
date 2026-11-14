@@ -350,6 +350,7 @@ describe('the reconstruction drill', () => {
       hadChild: true,
       runTitle: true, closedBy: true, closeDetail: true,
       stuck: true, waitsOn: true, blockedBy: true, coordinatorGone: true,
+      workerLastSeen: true, workerLastTurn: true,
     };
     // Bumped 22 -> 24: `kind`/`reviews` (design 2026-09-14 §5.1, task 3).
     // Bumped 24 -> 25: `childReclaim` (child-reclamation wave 5). It is NOT in
@@ -376,7 +377,9 @@ describe('the reconstruction drill', () => {
     // reason: nothing stores them on the run, the verdict's pass derives them from the runs and the fleet's readings
     // (`coord/runStuckPass.ts`). What a DB loss does cost them is `gone_since`'s anchors, so a gone owner's `since`
     // restarts at the first pass after the rebuild: the later, more patient direction.
-    expect(Object.keys(RUN_SUMMARY_KEYS).length).toBe(36);
+    // Bumped 36 -> 38 (D-8285): the worker heartbeat, `workerLastSeen` and `workerLastTurn`. NOT in UNRECOVERABLE, `childIds`'
+    // reason: nothing stores them, the stall sweep derives them from each worker's turn marker on its next pass.
+    expect(Object.keys(RUN_SUMMARY_KEYS).length).toBe(38);
 
     const r = reconstruct(fx);
     for (const field of UNRECOVERABLE) {

@@ -154,7 +154,7 @@ describe('the mail table carries the two peer-lane codes (landed with wave 0)', 
 });
 
 describe('L0 stays import-free: the PWA bundles this file', () => {
-  it('shared/api.ts has exactly sixteen import lines: fifteen types, and one value from an import-free L0 sibling (D-3021)', () => {
+  it('shared/api.ts has exactly eighteen import lines: sixteen types, and two values from import-free L0 siblings (D-3021)', () => {
     // Account-pool membership, release rollout, the box-token console card and
     // the node role each added an L0 sibling shape, and the session's workflow
     // rows (D-5560) a sixth, and the lane state's wire words (D-6058 (3)) a seventh, and the fleet health's disk block (D-6615) an eighth, and the landing checks mail token (a type-only import, `typeof import(...)` being forbidden) a tenth: no duplicate wire types.
@@ -168,6 +168,10 @@ describe('L0 stays import-free: the PWA bundles this file', () => {
     // words (D-6916) a fifteenth, the `ReadFailure` type from agent-protocol.ts, which does import values from api.ts at run
     // time: no cycle forms because this file's import is `import type`, erased at compile; and single-definition forbids
     // restating the absent/unreadable pair.
+    // The test box connect routes (D-8166) a sixteenth, the verb's act and status types from testbox-admin.ts, which imports
+    // values from api.ts: the same `import type`, erased at compile, so again no cycle forms.
+    // The hook event union (D-8613) an eighteenth, `HookEvent` and its compare `hookEventIs`, a value from the import-free
+    // hook-events.ts (`single-definition/hook-events.test.ts` pins that it imports nothing).
     const lines = readFileSync(apiPath, 'utf8').split('\n');
     const imports = lines.filter((l) => /^import\s/.test(l));
     expect(imports).toEqual([
@@ -181,6 +185,7 @@ describe('L0 stays import-free: the PWA bundles this file', () => {
       "import type { WaitingView } from './ledgers.js';",
       "import type { CHECKS_MAIL_TOKEN } from './landing.js';",
       "import type { LandingWrite } from './landingLine.js';",
+      "import { hookEventIs, type HookEvent } from './hook-events.js';",
       "import type { NodeRole } from './node-role.js';",
       // The sign-in's state words (accounts plan Task A21) join the same import-free `accounts.ts` line: no new import.
       "import type { AccountStateAnswer, AuthMethod, AuthStatusState, LaneState } from './accounts.js';",
@@ -188,6 +193,7 @@ describe('L0 stays import-free: the PWA bundles this file', () => {
       "import { parseReapCrumb, type ReapCrumb } from './reapcrumb.js';",
       "import type { HostPressureHealth } from './pressure.js';",
       "import type { BackupHealth } from './backup.js';",
+      "import type { TestboxAct, TestboxActOutcome, TestboxAdminCode, TestboxAdminStatus, TestboxSettingChange } from './testbox-admin.js';",
     ]);
   });
 });
@@ -212,7 +218,7 @@ describe('the wire shapes compile as declared (typecheck-tests carries the real 
       state: 'live', createdAt: 1_756_000_000_000, renewedAt: 1_756_000_000_000,
       expiresAt: 1_756_000_000_000 + CLAIM_LEASE_MS,
       hardExpiresAt: 1_756_000_000_000 + CLAIM_HARD_CAP_MS,
-      endedAt: null, endedBy: null,
+      endedAt: null, endedBy: null, chainedFrom: null,
     };
     const conflict: ClaimConflict = {
       path: 'server/src/coord/store.ts', claimedPath: 'server/src/coord',

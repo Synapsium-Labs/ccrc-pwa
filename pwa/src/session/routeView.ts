@@ -15,8 +15,9 @@
 // that local-write lane for the tap's own moment (up to 60 seconds, then its toast), while the inspector's line reads
 // only the record and says nothing is asked.
 import type { FleetSession, RouteField } from '../../../shared/api';
+import type { LaneModelsRead } from '../../../shared/models';
 import type { ProviderId } from '../../../shared/providers';
-import { classReadbackMeasurable, effortIsKnown, modelReadbackFor } from '../lib/models';
+import { classReadbackMeasurable, effortIsKnown, liveModelNames, modelReadbackFor } from '../lib/models';
 
 export interface RouteView {
   /** The value the registry says was ASKED FOR, or `null` for a field that was
@@ -48,8 +49,13 @@ export interface RouteView {
  * @param wrapper  whose option lists decide what a value can read back as.
  * @param provider the lane's provider from the roster (`accountProvider`), or `null` when it is not known: a class
  *                 is then not measurable, so none is ever pending (D-6334).
+ * @param lane     the lane's model files as `useLaneModels` read them (D-8406), or `null` before the first read: a
+ *                 class's readback is the model its registry names there, so a class this lane cannot name yet is
+ *                 not measurable, and never pending.
  */
-export function routeView(live: FleetSession | null, wrapper: string, provider: ProviderId | null): RouteView {
+export function routeView(
+  live: FleetSession | null, wrapper: string, provider: ProviderId | null, lane: LaneModelsRead | null,
+): RouteView {
   const routeInfo = live?.route ?? null;
   const classIntended = routeInfo?.fields.class ?? null;
   const effortIntended = routeInfo?.fields.effort ?? null;
@@ -128,8 +134,8 @@ export function routeView(live: FleetSession | null, wrapper: string, provider: 
   // would be a claim forever and nothing here could check it.
   const classPending = routeInfo !== null && classReadbackMeasurable(wrapper, provider) && (() => {
     if (classIntended !== null && !classInert && classIntended !== 'default') {
-      const readback = modelReadbackFor(wrapper, classIntended);
-      const liveModel = (live?.model ?? '').toLowerCase();
+      const readback = modelReadbackFor(wrapper, lane, classIntended);
+      const liveModel = live?.model ?? null;
       // Fix wave #3: a degraded session (`routeInfo.degraded` names the
       // class ccd is actually SERVING because no candidate lane could
       // serve the intended one, spec §5.4) can never read the intended
@@ -140,10 +146,10 @@ export function routeView(live: FleetSession | null, wrapper: string, provider: 
       // doing exactly what it can and the intended row already carries its
       // own `degradedTo` note (`PickSheet`, whole-branch review M1).
       const degradedClass = routeInfo?.degraded ?? null;
-      const degradedReadback = degradedClass !== null ? modelReadbackFor(wrapper, degradedClass) : null;
+      const degradedReadback = degradedClass !== null ? modelReadbackFor(wrapper, lane, degradedClass) : null;
       const agrees = readback !== null && (
-        liveModel.includes(readback)
-        || (degradedReadback !== null && liveModel.includes(degradedReadback))
+        liveModelNames(liveModel, readback)
+        || (degradedReadback !== null && liveModelNames(liveModel, degradedReadback))
       );
       if (readback !== null && !agrees) return true;
     }

@@ -14,7 +14,7 @@ const claim = (over: Partial<ClaimSummary> = {}): ClaimSummary => ({
   heldByUuid: null, intent: 'wave 2: the L0 vocabulary slice', runId: 3, state: 'live',
   createdAt: T0 - 5 * 60_000, renewedAt: T0 - 5 * 60_000,
   expiresAt: T0 + 40 * 60_000, hardExpiresAt: T0 + 8 * 3_600_000,
-  endedAt: null, endedBy: null, ...over,
+  endedAt: null, endedBy: null, chainedFrom: null, ...over,
 });
 
 const stub = (claims: ClaimSummary[]) =>

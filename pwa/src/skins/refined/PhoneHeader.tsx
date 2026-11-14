@@ -16,6 +16,7 @@
 import type { ReactNode } from 'react';
 import { Door, Icon, Wordmark } from '@ccrc/ui';
 import { commandDoor } from '../../command/door';
+import { FaceMark } from '../../face/FaceMark';
 import { AccountsStrip } from '../../fleet/AccountsStrip';
 import { useFleetChrome } from '../../fleet/FleetChrome';
 import { fleetSummary } from '../../fleet/fleetSummary';
@@ -35,6 +36,7 @@ export function PhoneHeader(): ReactNode {
     <header className="ref-phone-head">
       <div className="ref-phone-row">
         <Wordmark className="ref-phone-mark" />
+        <FaceMark />
         <div className="ref-phone-doors">
           <Door {...commandDoor('go-settings')} glyph={<Icon name="settings" />} aria-label="Settings" className="ref-phone-door min-w-tap justify-center">
             {null}

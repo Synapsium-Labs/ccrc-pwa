@@ -484,18 +484,22 @@ on its project's landing line, and the entry's `pinnedSha` is the recorded head
 (**The recorded head**, §5): the server pins it from the same re-measurement
 that answers `verifiedHead`. Before each enqueue, direct merge and re-enqueue,
 once the verdict, and on route Q the checks gate, have answered, read the line:
-`GET /api/landing?project=<project>` (`ccrc-api landing show --project
-<project>`). Land only when its `order` is not paused and this PR's entry for
-this run reads `pinned` with a `pinnedSha` equal to the head you bind. A paused
-line, an entry in another state, a `pinnedSha` that differs from that head or a
-read that fails in any other way than a 404 (a timeout, a 401, a 5xx, a
-transport error or an answer you cannot parse) lands nothing: report what it
-read to the operator and leave the landing stopped, and never bind another head
-to match it. A PR with no entry, which a run that entered `merging` before the
-line existed leaves, lands as the verdict says, and your turn's text names the
-missing entry. A read answered 404 comes from a server older than the line: read
-it as no entry, and land the same way. The order it answers is read and not yet
-acted on: which entry lands next is the line's head, a later stage's.
+`GET /api/landing?project=<project>&pr=<pr>` (`ccrc-api landing show --project
+<project> --pr <pr>`). The read answers this PR's entry in any state, beside the
+line's flags and order; the line's own read, without `--pr`, lists only the
+entries still in it; and a server older than wave 5h ignores `pr` and answers
+every entry, which this paragraph reads the same way. Land only when its `order`
+is not paused and this PR's entry for this run reads `pinned` with a `pinnedSha`
+equal to the head you bind. A paused line, an entry in another state, a
+`pinnedSha` that differs from that head or a read that fails in any other way
+than a 404 (a timeout, a 401, a 5xx, a transport error or an answer you cannot
+parse) lands nothing: report what it read to the operator and leave the landing
+stopped, and never bind another head to match it. A PR with no entry, which a
+run that entered `merging` before the line existed leaves, lands as the verdict
+says, and your turn's text names the missing entry. A read answered 404 comes
+from a server older than the line: read it as no entry, and land the same way.
+The order it answers is read and not yet acted on: which entry lands next is the
+line's head, a later stage's.
 
 **The admin-merge door (D-8124).** On `STOP approval-missing`, and on no other
 line, once the landing line (above) answers `pinned` at the head you bind, run

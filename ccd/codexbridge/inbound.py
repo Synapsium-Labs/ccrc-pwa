@@ -48,6 +48,10 @@ CUT_HASH = 8
 SESSION_HEADER = "x-claude-code-session-id"
 AGENT_HEADER = "x-claude-code-agent-id"
 BETA_HEADER = "anthropic-beta"
+# Claude Code's identity beta, on every request Claude Code sends (known.py explains it as a betaValue by this name). A
+# request whose anthropic-beta values hold it is Claude Code's (`from_claude_code`); server.py counts a model
+# substitution from any other request under its own family (known.KNOWN's foreignSubstitution).
+CLAUDE_CODE_BETA = "claude-code-20250219"
 
 DEFERRED_PLACEHOLDER = "DeferredToolPlaceholder"
 OUTPUT_SCHEMA_NAME = "ccrc_output_schema"
@@ -123,6 +127,35 @@ def call_key(call_id: str) -> str:
     return "call:" + call_id
 
 
+def turn_key(messages: object, prompt_cache_key: str) -> Optional[str]:
+    """D-8623: the Claude Code TURN a request belongs to, as a hash that holds no text. A turn is the stretch of
+    requests sharing the same latest user message that holds no `tool_result` block: a tool loop's follow-up ends in a
+    tool_result-bearing user message, and Claude Code's text beside tool results lives in such a message, so neither
+    starts a turn. The key is the sha256 of `prompt_cache_key` (so a subagent's turns are its own), that message's
+    index in `messages` and its content, a string read as one text block and every block's `cache_control` dropped
+    (Claude Code moves its cache breakpoint onto the newest message, so the turn's own message loses it mid-turn). The
+    index keeps two turns that open on the same words ("continue", "yes") apart: a tool loop only appends after the
+    turn's message, so its index holds through the turn and grows at the next one. None when no message is such a
+    one."""
+    if not isinstance(messages, list):
+        return None
+    for index in range(len(messages) - 1, -1, -1):
+        message = messages[index]
+        if not isinstance(message, dict) or message.get("role") != "user":
+            continue
+        content = message.get("content")
+        if isinstance(content, str):
+            content = [{"type": "text", "text": content}]
+        if not isinstance(content, list):
+            continue
+        if any(isinstance(b, dict) and b.get("type") == "tool_result" for b in content):
+            continue
+        blocks = [{k: v for k, v in b.items() if k != "cache_control"} if isinstance(b, dict) else b for b in content]
+        raw = json.dumps([prompt_cache_key, index, blocks], sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+        return hashlib.sha256(raw.encode("ascii")).hexdigest()
+    return None
+
+
 # ── the refusals ─────────────────────────────────────────────────────────────────────────────────────────────────
 def _shown(value: object) -> str:
     """A type as an error message may name it: lower-cased under errors.CODE_RE, else `unrecognised`."""
@@ -158,6 +191,23 @@ def _header_values(headers: Mapping[str, str], name: str) -> List[str]:
         if isinstance(k, str) and k.lower() == name and isinstance(v, str):
             out.append(v)
     return out
+
+
+def betas(headers: Mapping[str, str]) -> List[str]:
+    """The request's anthropic-beta values, in order: every BETA_HEADER line (the name read case-insensitively, a
+    repeated line read too, `_header_values`), each split on commas, each value trimmed, an empty one dropped. The one
+    parser of the header: `from_anthropic` counts these, and `from_claude_code` reads them."""
+    out = []
+    for value in _header_values(headers, BETA_HEADER):
+        for beta in value.split(","):
+            if beta.strip():
+                out.append(beta.strip())
+    return out
+
+
+def from_claude_code(headers: Mapping[str, str]) -> bool:
+    """True when the request carries Claude Code's identity beta, CLAUDE_CODE_BETA, as a whole anthropic-beta value."""
+    return CLAUDE_CODE_BETA in betas(headers)
 
 
 def _header(headers: Mapping[str, str], name: str) -> Optional[str]:
@@ -679,10 +729,8 @@ def from_anthropic(body: dict, headers: Mapping[str, str], *, names: NameSink, o
         for edit in context["edits"]:
             if isinstance(edit, dict) and isinstance(edit.get("type"), str):
                 names.name("contextEdit", edit["type"])
-    for value in _header_values(headers, BETA_HEADER):
-        for beta in value.split(","):
-            if beta.strip():
-                names.name("betaValue", beta.strip())
+    for beta in betas(headers):
+        names.name("betaValue", beta)
 
     session_id = _header(headers, SESSION_HEADER)
     agent_id = _header(headers, AGENT_HEADER)

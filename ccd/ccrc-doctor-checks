@@ -204,7 +204,7 @@ CCRC_DOCTOR_CHECKS=(
   wrappers
   skills
   accounts
-  credentials
+  credentials auto-memory   # one line, as `flock timeout`: _check_auto-memory follows _check_credentials (Overlord W1a launch profiles PR B)
   pools
   pool-sync
   transcripts transcript_work   # one line, as `flock timeout`: _check_transcript_work is at the END of this file
@@ -212,7 +212,7 @@ CCRC_DOCTOR_CHECKS=(
   graphify
   graphify-path playwright browser-mcp   # one line, as `flock timeout`: _check_playwright and then _check_browser-mcp are at the END of this file
   build
-  provenance
+  provenance sigstore-root   # one line, as `flock timeout`: _check_sigstore-root follows _check_provenance (D-8388)
   fleet
   memory test-slice testbox   # one line, as `flock timeout`: _check_test-slice follows _check_scopes, _check_testbox follows it (D-7413)
   routing model-default   # one line, as `flock timeout` above; _check_model-default is at the END of this file
@@ -457,7 +457,7 @@ _check_tmux_skew() {
   fi
 
   local vline client
-  vline="$(tmux -V 2>/dev/null)"
+  vline="$("${_TMX_ARGV[@]}" -V 2>/dev/null)"
   client="$(_dr_trim "${vline#tmux }")"
   if [ -z "$client" ]; then
     _dr_skip tmux_skew "'tmux -V' printed \"$vline\", which names no client version, so there is nothing to compare a server against"
@@ -465,7 +465,7 @@ _check_tmux_skew() {
   fi
 
   local server rc
-  server="$(_plat_timeout "$CCRC_DOCTOR_GH_TIMEOUT" tmux display-message -p '#{version}' 2>/dev/null)"; rc=$?
+  server="$(_plat_timeout "$CCRC_DOCTOR_GH_TIMEOUT" "${_TMX_ARGV[@]}" display-message -p '#{version}' 2>/dev/null)"; rc=$?
   if [ "$rc" -eq 124 ]; then
     # NOT the "no server" sentence below: a server that holds the socket
     # without answering and a socket nobody holds are two different facts
@@ -3736,6 +3736,57 @@ _check_credentials() {
   _dr_pass credentials "$n account(s) declaring an OAuth setup-token credential, each with a readable token file"
 }
 
+# AUTO MEMORY (Overlord W1a launch profiles PR B; spec §3.3.7 H14): the auto-memory directories that exist today, in every
+# rostered config dir (`~/.ccrc/accounts.sh`'s `_ccrc_cfg_dir`, as `_check_transcript_work` reads it): each
+# `projects/<slug>/memory/` that holds at least one file. LISTS, NEVER READS, NEVER DELETES: the walk is globs and `-d`/`-f`
+# tests, so no file is opened, and nothing here writes. A directory reached from two accounts by a link is counted once
+# (by its physical path). WARN names the count and the first three, as `<account>/projects/<slug>/memory`; PASS when there
+# are none. The launch-profile lane, once live, turns auto memory off at each session's next launch (every role but plain,
+# whose Settings row decides); what is already stored stays until the operator removes it.
+_check_auto-memory() {
+  local _srv_role="" sh="$HOME/.ccrc/accounts.sh" am_pairs="" a dir out n first
+  [ -f "${BOX_ENV_FILE:-}" ] && [ -r "${BOX_ENV_FILE:-}" ] && _srv_role="$(_box_env_value "$BOX_ENV_FILE" CCRC_ROLE)"
+  [ "$_srv_role" = server ] && { _dr_skip auto-memory "this box records CCRC_ROLE=server, so it hosts no sessions and keeps no auto memory"; return 3; }
+  if [ -e "$sh" ]; then
+    # shellcheck disable=SC1090
+    if [ ! -r "$sh" ] || ! am_pairs="$( { . "$sh" && declare -F _ccrc_cfg_dir; } >/dev/null 2>&1 || exit 1
+          for a in "${CCRC_ACCOUNTS[@]}"; do dir="$(_ccrc_cfg_dir "$a" 2>/dev/null)" && [ -n "$dir" ] && printf '%s\t%s\n' "$a" "$dir"; done
+          exit 0 )"; then
+      _dr_warn auto-memory "the roster projection at ~/.ccrc/accounts.sh could not be read, so the auto-memory directories are unmeasured" \
+        "re-run ccrc install to regenerate ~/.ccrc/accounts.sh — the wrappers check owns the roster's health"; return 2
+    fi
+  fi
+  # Bounded, and never a PASS unmeasured (review 2024 F5): a directory it cannot list, or a walk past the transcript walk's
+  # deadline, ends it with one `!failed <name>` or `!timeout` line. Scratch slugs are skipped as `_check_memory` skips them.
+  out="$(
+    shopt -s dotglob nullglob
+    seen=$'\n' start=$SECONDS
+    while IFS=$'\t' read -r a dir; do
+      p="$dir/projects"; [ -n "$dir" ] || continue; [ ! -e "$dir" ] || [ -x "$dir" ] || { printf '!failed %s\n' "$a"; exit 0; }
+      { [ -e "$p" ] || [ -L "$p" ]; } || continue; [ -d "$p" ] && [ -r "$p" ] && [ -x "$p" ] || { printf '!failed %s/projects\n' "$a"; exit 0; }
+      for s in "$p"/*; do
+        [ $((SECONDS - start)) -lt "$_DR_TW_DEADLINE_S" ] || { printf '!timeout\n'; exit 0; }
+        m="$s/memory"; slug="${s##*/}"; [ -d "$s" ] && ! _dr_mem_is_scratch "$slug" || continue
+        [ -x "$s" ] || { printf '!failed %s/projects/%s\n' "$a" "$slug"; exit 0; }
+        # Not a directory: absent, or a link to nothing or to a file, is skipped; a link it cannot follow is unmeasured.
+        [ -d "$m" ] || { [ -L "$m" ] || continue; case "$(export LC_ALL=C; cd -P -- "$m" 2>&1 || exit)" in *'No such file'*|*'Not a directory'*) continue ;; esac
+          printf '!failed %s/projects/%s/memory\n' "$a" "$slug"; exit 0; }
+        [ -r "$m" ] && [ -x "$m" ] || { printf '!failed %s/projects/%s/memory\n' "$a" "$slug"; exit 0; }
+        real="$(cd -P -- "$m" 2>/dev/null && pwd)" || real="$m"; case "$seen" in *$'\n'"$real"$'\n'*) continue ;; esac
+        for f in "$m"/*; do [ -f "$f" ] && { seen+="$real"$'\n'; printf '%s/projects/%s/memory\n' "$a" "$slug"; break; }; done
+      done
+    done <<< "$am_pairs"
+  )"
+  case "${out##*$'\n'}" in
+    '!timeout') _dr_warn auto-memory "the walk of the auto-memory directories did not finish within ${_DR_TW_DEADLINE_S}s, so they are unmeasured" "re-run ccrc doctor when the box is quieter"; return 2 ;;
+    '!failed '*) _dr_warn auto-memory "${out##*!failed } could not be listed, so the auto-memory directories are unmeasured" "give the fleet user read and search permission on it (or remove it), then re-run ccrc doctor"; return 2 ;;
+  esac
+  [ -n "$out" ] || { _dr_pass auto-memory "no rostered config dir holds an auto-memory directory with a file in it"; return 0; }
+  local -a am_dirs; mapfile -t am_dirs <<< "$out"; n=${#am_dirs[@]}; first="${am_dirs[0]}"   # builtins only: no tool is stubbed
+  [ "$n" -gt 1 ] && first+=", ${am_dirs[1]}"; [ "$n" -gt 2 ] && first+=", ${am_dirs[2]}"; [ "$n" -gt 3 ] && first+=", …"; if [ "$n" -eq 1 ]; then n="1 auto-memory directory holds"; else n="$n auto-memory directories hold"; fi
+  _dr_warn auto-memory "$n files: $first" "nothing is deleted here: once the launch-profile lane is live (Settings › Automation › Shadow lanes), each session's next launch loads none of this, except plain sessions whose Settings row keeps it on; review these directories and remove what you do not want kept"
+}
+
 # ── the project pool tags (account pools, spec §5.4.6) ────────────────────
 # `$HOME/.cc-sessions/pools/<project>` is one file per tagged project, holding
 # one token. This check REPORTS and RESOLVES NOTHING — `_check_wrappers`'s own
@@ -5702,6 +5753,75 @@ _check_provenance() {
   _dr_pass provenance "the completed-install record carries no unsigned mark"
 }
 
+# ── sigstore-root: how old is the trusted root this tree verifies against? ──
+# (D-8388.) `ccrc update` verifies a release's bundle with
+# `deploy/verify-provenance.mjs` against the Sigstore trusted root vendored
+# beside it, `deploy/sigstore-trusted-root.jsonl` (D-3119): a snapshot, one
+# TrustedRoot per line, of the keys Sigstore and GitHub published when it was
+# taken. Sigstore rotates those keys, and a root taken before a rotation
+# refuses every bundle signed with the new key — `--allow-unsigned` does not
+# apply to a FAILING bundle — so the box stops updating with nothing having
+# changed on it. This check reads the newest validity start of any key in the
+# file, the one date the file itself carries, and WARNs past the limit below.
+#
+# The limit: since GitHub's own authorities joined the vendored file (2023;
+# their keys rotate about twice a year) the newest start of any key in it has
+# moved every 38 to 232 days, so a limit above the longest gap does not warn
+# on a root refreshed after the newest rotation, and 270 days still names one
+# that has missed a rotation within about two months of it.
+DR_SIGSTORE_ROOT_MAX_DAYS=270
+#
+# FOUR ANSWERS, never folded: no verifier in this tree -> SKIP (nothing here
+# reads a root); jq or date missing -> SKIP, unmeasured (jq's own check FAILs
+# that box); a root that is missing, not a readable regular file, not JSON
+# lines, or holds no validity start it can read -> WARN `unreadable` (every
+# verified update would be refused); the newest start older than the limit
+# -> WARN `stale`; otherwise PASS, naming the date and the age. Never a FAIL:
+# the box runs, and refreshing the root is a release's act, as `provenance`'s
+# remedy is the operator's.
+_check_sigstore-root() {
+  local tree root verifier shown got ns day now age
+  tree="$(cd "$CCRC_HERE/.." 2>/dev/null && pwd)" || tree="$CCRC_HERE/.."
+  root="$tree/deploy/sigstore-trusted-root.jsonl"
+  verifier="$tree/deploy/verify-provenance.mjs"
+  # Named from `~`, as an operator types it: no home path in a line that may leave the box.
+  shown="$root"; [ -n "${HOME:-}" ] && [[ "$root" == "$HOME"/* ]] && shown="~${root#"$HOME"}"
+  local fix="refresh deploy/sigstore-trusted-root.jsonl from the Sigstore TUF root (gh attestation trusted-root > deploy/sigstore-trusted-root.jsonl) in a release PR, and ccrc update onto that release; to verify one update before it ships, point CCRC_SIGSTORE_TRUSTED_ROOT at a freshly fetched copy"
+  if [ ! -e "$verifier" ]; then
+    _dr_skip sigstore-root "this tree ships no provenance verifier (${shown%/*}/verify-provenance.mjs), so no Sigstore trusted root is read here"
+    return 3
+  fi
+  if ! command -v jq >/dev/null 2>&1 || ! now="$(date +%s 2>/dev/null)" || ! [[ "$now" =~ ^[0-9]+$ ]]; then
+    _dr_skip sigstore-root "jq or date is not usable here, so the Sigstore trusted root's age was not measured"
+    return 3
+  fi
+  # `-f` before `-r`, and both before any read (D-3025).
+  if [ ! -f "$root" ] || [ ! -r "$root" ]; then
+    _dr_warn sigstore-root "unreadable — the vendored Sigstore trusted root $shown is not a readable regular file, so its age was not measured and ccrc update cannot verify a release against it" "$fix"
+    return 2
+  fi
+  # Every `validFor.start` of every key, in every line; `.999Z`-style fractions
+  # dropped, since jq's ISO-8601 reader takes whole seconds only.
+  got="$(jq -rs '[.[] | .. | objects | .validFor? | objects | .start? | strings]
+    | if length == 0 then error("no validity start") else
+        (map(sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601) | max | floor | "\(.)\t\(todate[0:10])") end' "$root" 2>/dev/null)" || got=""
+  ns="${got%%$'\t'*}"; day="${got#*$'\t'}"
+  if ! [[ "$ns" =~ ^[0-9]{1,12}$ ]] || ! [[ "$day" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]]; then
+    _dr_warn sigstore-root "unreadable — the vendored Sigstore trusted root $shown does not parse as JSON lines holding a key's validity start, so its age was not measured and ccrc update cannot verify a release against it" "$fix"
+    return 2
+  fi
+  if [ "$ns" -gt "$now" ]; then
+    _dr_pass sigstore-root "the vendored Sigstore trusted root's newest key becomes valid on $day, after this box's clock (limit ${DR_SIGSTORE_ROOT_MAX_DAYS} days)"
+    return 0
+  fi
+  age=$(( (now - ns) / 86400 ))
+  if [ "$age" -gt "$DR_SIGSTORE_ROOT_MAX_DAYS" ]; then
+    _dr_warn sigstore-root "stale — the vendored Sigstore trusted root's newest key became valid on $day, $age days ago, over the ${DR_SIGSTORE_ROOT_MAX_DAYS}-day limit: a key Sigstore has rotated in since is likely missing from it, and ccrc update refuses a release signed with such a key" "$fix"
+    return 2
+  fi
+  _dr_pass sigstore-root "the vendored Sigstore trusted root's newest key became valid on $day, $age days ago (limit ${DR_SIGSTORE_ROOT_MAX_DAYS} days)"
+}
+
 # ── the two boxes' matched set ────────────────────────────────────────────
 # THE ONE CHECK THAT IS NOT ABOUT THIS BOX. Every check above measures the box
 # it runs on; this one asks whether this box and the OTHER one are a matched
@@ -5931,6 +6051,14 @@ _check_fleet() {
   _dr_pass fleet "the two boxes agree — same build, and the same generated ~/.ccrc/accounts.sh (measured by the server at $addr, in remote mode, connected)"
 }
 
+# A scratch project slug (a temp directory's), skipped by both memory checks. THE PATTERN LIST IS SPELLED HERE, and that is
+# D-92's trade rather than an oversight — the same one this file already records for `ccd`'s `POOL_NAME_RE`: this table is
+# sourced under `set -u` by things that are NOT `ccrc` (`ccrc-doctor.test.ts`'s `tableNames()`), so it cannot reach
+# `_mem_is_scratch`, and a `declare -F` guard would be the second spelling with a branch in front of it.
+# `single-definition.test.ts` compares all three literals and reds on a drift. `_mem_is_scratch` in `ccrc` carries the
+# rule and the measurement (D-2375; A4 adds the child root).
+_dr_mem_is_scratch() { case "$1" in -tmp*|-private-tmp*|-var-folders*|-private-var-folders*|*--cc-tmp-*) return 0 ;; esac; return 1; }
+
 # ── memory convergence ────────────────────────────────────────────────────
 # THE WHOLE DEFECT EXISTED BECAUSE A FORK IS SILENT. Nothing on this box
 # reported that two homes disagreed about a project's memory, so a session read
@@ -6141,15 +6269,8 @@ _check_memory() {
     for d in "${h}projects"/*/; do
       [ -d "$d" ] || continue
       slug="${d%/}"; slug="${slug##*/}"
-      # THE PATTERN LIST IS SPELLED HERE, and that is D-92's trade rather
-      # than an oversight — the same one this file already records for `ccd`'s
-      # `POOL_NAME_RE`: this table is sourced under `set -u` by things that are
-      # NOT `ccrc` (`ccrc-doctor.test.ts`'s `tableNames()`), so it cannot reach
-      # `_mem_is_scratch`, and a `declare -F` guard would be the second
-      # spelling with a branch in front of it. `single-definition.test.ts`
-      # compares all three literals and reds on a drift. `_mem_is_scratch` in
-      # `ccrc` carries the rule and the measurement (D-2375; A4 adds the child root).
-      case "$slug" in -tmp*|-private-tmp*|-var-folders*|-private-var-folders*|*--cc-tmp-*) continue ;; esac
+      # A scratch slug: the shared skip (`_dr_mem_is_scratch`, above).
+      _dr_mem_is_scratch "$slug" && continue
       link="${d}memory"
       [ -e "$link" ] || [ -L "$link" ] || continue
       store="$HOME/.ccrc/memory/$slug"
@@ -6776,11 +6897,42 @@ _check_models() {
     esac
   done <<<"$out"
 
-  if [ "${#warn[@]}" -gt 0 ] || [ "${#unmeasured[@]}" -gt 0 ]; then
+  # THE WINDOW A MOVE LOWERED (D-8384, public issue #2607). A class that moves —
+  # auto-advance above all — to a model the lane's windows file does not
+  # measure takes the WHOLE lane off the measured window rule
+  # (`contextWindowFor`, shared/modelenv.mjs): that model counts at its
+  # provider default (D-8564), so CLAUDE_CODE_MAX_CONTEXT_TOKENS moves for
+  # every session and nothing else says so. Asked in ONE node call
+  # for the whole roster, models-op's `lanes`, whose rows carry
+  # `windowNotices` spelled once (`unmeasuredMoveNotice`,
+  # shared/model-advance.mjs): no lane, account or model name and no lane
+  # file name is written here, and only the population above is reported. A
+  # `lanes` that refuses or prints nothing adds nothing: an unreadable
+  # registry, catalogue or windows file is already named above or by the
+  # codex check, each with its own remedy.
+  local -a lowered=()
+  local note
+  if command -v jq >/dev/null 2>&1; then
+    while IFS= read -r note; do
+      [ -n "$note" ] && lowered+=("$note")
+    done < <(_models_node lanes --file "$roster" 2>/dev/null \
+      | jq -r --arg ids "$(printf '%s\n' "${population[@]}")" '
+          ($ids | split("\n")) as $p
+          | if .ok == true and (.lanes | type) == "array" then .lanes[] else empty end
+          | select(type == "object" and (.id as $i | $p | index($i)) != null)
+          | (.windowNotices // []) | if type == "array" then .[] else empty end
+          | strings | gsub("[\n\t]"; " ")' 2>/dev/null)
+  fi
+
+  if [ "${#warn[@]}" -gt 0 ] || [ "${#unmeasured[@]}" -gt 0 ] || [ "${#lowered[@]}" -gt 0 ]; then
     local ret=2
     if [ "${#warn[@]}" -gt 0 ]; then
       _dr_warn models "$(_dr_join "${warn[@]}")" \
         "systemctl --user status ccrc-models.timer ; ccrc models refresh <id> for one named lane"
+    fi
+    if [ "${#lowered[@]}" -gt 0 ]; then
+      _dr_warn models "$(_dr_join "${lowered[@]}")" \
+        "measure the named model's window, then record it: ccrc models <id> set-window <modelId> <tokens> (ccrc models <id> show lists the lane's measured windows)"
     fi
     if [ "${#unmeasured[@]}" -gt 0 ] && [ "$bound_rc" -eq 3 ]; then
       _dr_cadence_unloaded models ccrc-models.timer "the staleness of $(_dr_join "${unmeasured[@]}")"; ret=1
@@ -7868,7 +8020,7 @@ _dr_cx_lane() {   # <id> <models: 1 = its model state is measurable> <roster> �
       _dr_cx_fail "$id has no lane.json ($(_codex_lane_dir "$id")/lane.json), which the launcher, the shim and the usage publisher all read" \
         "render it: ccrc codex start $id renders lane.json from the roster before it starts the lane (every session launch runs the same start)" ;;
     stale)
-      _dr_cx_fail "$id's lane.json disagrees with its roster row (its id, configDir, authDir, a port, its unit names, or no mode, upstream or bridge file names at all), so the shim and the usage publisher read the lane's old shape" \
+      _dr_cx_fail "$id's lane.json disagrees with its roster row (its id, configDir, authDir, a port, its unit names, or a mode, an upstream or a bridge file name it lacks, as one an older build wrote may), so the shim and the usage publisher read the lane's old shape" \
         "re-render it: ccrc codex start $id renders lane.json from the roster before it starts the lane" ;;
     *)
       _dr_cx_fail "whether $id's lane.json matches its roster row could not be measured" \
@@ -8163,11 +8315,15 @@ _dr_cx_tier_unmeasured() {   # <id> <tier>
     "run: ccrc codex status $1 — it asks the same question and says what it could see"
 }
 
-# A lane's two bridge files (codex-bridge Stage 2, Task 13), named by
+# A lane's bridge files (codex-bridge Stage 2, Task 13), named by
 # lane.json's `bridgeFiles` (whose one spelling is `laneManifest`'s, read here
 # as `_codex_reap_files` reads it, a bare file name only): the stats file,
-# which names the lane's upstream request ids and its usage, and the reasoning
-# store, which holds its encrypted reasoning. The bridge creates each 0600, so
+# which names the lane's upstream request ids and its usage, the reasoning
+# store, which holds its encrypted reasoning, and (D-8619) the request record
+# and its older generation `<name>.1`, which name the lane's Claude Code
+# session ids and each request's time and size; `bridgeFiles.requests` is
+# optional, and a lane.json that names none has no record to check. The
+# bridge creates each 0600, so
 # one that is not a regular file (a symlink included: `-L` first, the
 # exposure row's rule), or whose mode is not 600, is a FAIL. An absent one is
 # no finding (no bridge has served on this lane yet), and the rows are asked in
@@ -8179,16 +8335,20 @@ _dr_cx_bridge_files() {   # <id>
   dir="$(_codex_lane_dir "$id")"; lj="$dir/lane.json"
   [ -f "$lj" ] || return 0
   mapfile -t bf < <(jq -r 'if type == "object" and (.bridgeFiles | type) == "object"
-      then (.bridgeFiles.stats, .bridgeFiles.store) | if type == "string" then . else "" end
+      then (.bridgeFiles.stats, .bridgeFiles.store, .bridgeFiles.requests) | if type == "string" then . else "" end
       else empty end' "$lj" 2>/dev/null)
-  [ "${#bf[@]}" -eq 2 ] || return 0
-  for i in 0 1; do
+  [ "${#bf[@]}" -eq 3 ] || return 0
+  # the record's older generation, only beside a name that passed the bare-name check
+  if [[ "${bf[2]}" =~ ^[A-Za-z0-9._-]+$ ]] && [ "${bf[2]}" != . ] && [ "${bf[2]}" != .. ]; then bf+=("${bf[2]}.1"); else bf+=(''); fi
+  for i in 0 1 2 3; do
     [[ "${bf[$i]}" =~ ^[A-Za-z0-9._-]+$ ]] && [ "${bf[$i]}" != . ] && [ "${bf[$i]}" != .. ] || continue
     p="$dir/${bf[$i]}"
     if [ "$i" -eq 0 ]; then
       what='stats file'; why="it names the lane's upstream request ids and its usage"
-    else
+    elif [ "$i" -eq 1 ]; then
       what='reasoning store'; why="it holds the lane's encrypted reasoning"
+    else
+      what='request record'; why="it names the lane's Claude Code session ids and the time and size of each of its requests"
     fi
     { [ -e "$p" ] || [ -L "$p" ]; } || continue
     if [ -L "$p" ] || [ ! -f "$p" ]; then
@@ -8316,7 +8476,7 @@ _dr_cx_bound() {   # <variable name>...
 # `_load`, the Stage 2 wave 3 whole-wave fix round's Z1).
 _dr_cx_drift() {   # <id>
   local id="$1" dir p i fam name list fix why unrec='' over='' kind
-  local names_max=256 families=10 shown=32
+  local names_max=256 families=11 shown=32
   local -a got=() listed=()
   local -A seen=()
   _dr_cx_stats_read "$id" '$doc | if . != null and (.unexplained | type) == "object"
@@ -8379,11 +8539,11 @@ _dr_cx_drift() {   # <id>
 # (server.py counts `header_names` before its 2xx branch records). `r`: every
 # other family, the request side (inbound.py names requestField,
 # unsupportedField, betaValue and contextEdit, and server.py's catalogue
-# check modelSubstitution, all from Claude Code's request, which nothing the
-# bridge writes holds) and any family no bridge writes, so that clause never
-# sends the operator to `record-streams`. Each clause ends by saying that the
-# bridge's restart clears the marker (stats.py's `_load`, Z1) and that it
-# comes back when the bridge meets such a name again.
+# check modelSubstitution and foreignSubstitution, from the client's request,
+# which nothing the bridge writes holds) and any family no bridge writes, so
+# that clause never sends the operator to `record-streams`. Each clause ends
+# by saying that the bridge's restart clears the marker (stats.py's `_load`,
+# Z1) and that it comes back when the bridge meets such a name again.
 _dr_cx_drift_marker() {   # <unrecognised|overflow> <kinds> <lane dir>
   local m="$1" kinds="$2" dir="$3" what them out
   if [ "$m" = overflow ]; then
@@ -8395,7 +8555,7 @@ _dr_cx_drift_marker() {   # <unrecognised|overflow> <kinds> <lane dir>
   fi
   [[ "$kinds" != *s* ]] || out+="; for an event, item, error-code or incomplete-reason name, put the operator's record-streams marker in $dir (the bridge records the lane's stream only while it is there) and read $what in the recording when the bridge meets $them again"
   [[ "$kinds" != *h* ]] || out+="; for a responseHeader name, put the operator's record-streams marker in $dir and read $what in the recording when the bridge meets $them again on a 2xx answer: only a 2xx answer's head is recorded"
-  [[ "$kinds" != *r* ]] || out+="; for a requestField, unsupportedField, betaValue, contextEdit, modelSubstitution or other name, no recording holds $what: those families' names come from Claude Code's request, and the bridge records only the upstream's answers, so read $what from the client's request, for example from Claude Code's release notes or a reviewed diagnostic"
+  [[ "$kinds" != *r* ]] || out+="; for a requestField, unsupportedField, betaValue, contextEdit, modelSubstitution, foreignSubstitution or other name, no recording holds $what: those families' names come from the client's request (Claude Code's, or another caller's for foreignSubstitution), and the bridge records only the upstream's answers, so read $what from the client's request, for example from Claude Code's release notes or a reviewed diagnostic"
   if [ "$m" = overflow ]; then
     out+="; the bridge's restart clears overflow from the list but keeps that family's counted names, so the next name in it that the bridge has not counted is overflow again, which is new drift; never add overflow to known.py"
   else
@@ -11660,17 +11820,20 @@ _check_pane-scope-stop() {
 #     first. So the global environment is the wrong question, and sessions on one
 #     server differ: a supervised spawn carries the user manager's PATH, one started
 #     from a shell carries that shell's.
-#   - Neither the unit, nor ccd, nor a generated wrapper changes PATH, and Claude Code
-#     writes the process PATH as the last line of its shell snapshot, so ~/.bashrc
-#     edits never apply to a session's commands.
+#   - Neither the unit nor a generated wrapper changes PATH, and Claude Code writes the
+#     process PATH as the last line of its shell snapshot, so ~/.bashrc edits never
+#     apply to a session's commands. ccd's launch line is the one step that does
+#     (`SESSION_PANE_PATH`, D-8050): it adds $HOME/.local/bin last when it is absent.
 #   - A pane's pid is the session's process (every link is an `exec`), so its
 #     environ is the PATH that session started with.
-# So: read every live session's environ, and with none to read, the manager's PATH.
+# So: read every live session's environ, and with none to read, the manager's PATH as
+# that launch step leaves it (`_dr_spawn_path`, D-8333): a session started now gets the
+# folder whatever the manager holds, so the manager's own value would warn for ever.
 # rc 1 means nothing could be read, and each caller then measures `$PATH` as it
 # always did: a server box (no session runs there), Darwin with no readable proc
 # tree, or a box with neither. NOT READ: a lane's settings.json `env` block, which
 # Claude Code applies inside the process, so a lane that sets PATH there reads as lacking.
-DR_SESSION_NOT_THESE="\$HOME/.profile, \$HOME/.bashrc and 'ccrc install' cannot do this: a session's PATH comes from the service manager through tmux, and no login shell runs on the way"
+DR_SESSION_NOT_THESE="\$HOME/.profile, \$HOME/.bashrc and 'ccrc install' cannot do this: a session's PATH comes from the service manager through tmux, and no login shell runs on the way. A session's own restart also gives it \$HOME/.local/bin, which ccd's launch line adds (D-8050)"
 
 # The commands a session calls bare. A generated wrapper is not here: ccd launches
 # those by absolute path. Only what this box installed is asked about.
@@ -11683,6 +11846,16 @@ _dr_environ_path() {   # <environ file> -> its PATH; rc 1 when it cannot be read
     case "$kv" in PATH=*) printf '%s' "${kv#PATH=}"; return 0 ;; esac
   done < "$1"
   return 1
+}
+
+# THE PATH ccd'S LAUNCH STEP MAKES OF A PANE'S (D-8333): `SESSION_PANE_PATH` in ccd, spelled
+# again here because doctor never sources ccd's body. `ccrc-doctor-session-path.test.ts`
+# runs ccd's own word and this over the same PATHs and goes red on a drift.
+_dr_spawn_path() {   # <a pane's PATH> -> the PATH the session it launches starts with
+  case ":$1:" in
+    *":$HOME/.local/bin:"*) printf '%s' "$1" ;;
+    *) printf '%s' "$1:$HOME/.local/bin" ;;
+  esac
 }
 
 _dr_session_add() {   # <PATH> -> counted once per session, stored once per distinct value
@@ -11701,7 +11874,7 @@ _dr_session_paths() {   # -> DR_SESSION_PATHS, DR_SESSION_COUNTS, DR_SESSION_TOT
   local role="" out="" name pid p="" l
   [ -f "${BOX_ENV_FILE:-}" ] && [ -r "${BOX_ENV_FILE:-}" ] && role="$(_box_env_value "$BOX_ENV_FILE" CCRC_ROLE)"
   [ "$role" = server ] && return 1
-  out="$(_plat_timeout "$CCRC_DOCTOR_GH_TIMEOUT" tmux list-panes -a -F '#{session_name} #{pane_pid}' 2>/dev/null)" || out=""
+  out="$(_plat_timeout "$CCRC_DOCTOR_GH_TIMEOUT" "${_TMX_ARGV[@]}" list-panes -a -F '#{session_name} #{pane_pid}' 2>/dev/null)" || out=""
   while read -r name pid; do
     case "$name" in cc-*) ;; *) continue ;; esac   # `_tmux`'s prefix: an operator's own tmux session is not a fleet session
     case "$pid" in ''|*[!0-9]*) continue ;; esac
@@ -11724,8 +11897,8 @@ _dr_session_paths() {   # -> DR_SESSION_PATHS, DR_SESSION_COUNTS, DR_SESSION_TOT
     case "$l" in PATH=*) p="${l#PATH=}"; break ;; esac
   done <<< "$out"
   case "$p" in ''|\$*) return 1 ;; esac   # `$'…'` is systemd's quoting of a value this cannot read as a list
-  _dr_session_add "$p"
-  DR_SESSION_FROM="read from the user manager, whose PATH a supervised session inherits; no session is running to read"
+  _dr_session_add "$(_dr_spawn_path "$p")"
+  DR_SESSION_FROM="read from the user manager, whose PATH a supervised session inherits, with \$HOME/.local/bin added last as ccd's launch line adds it; no session is running to read"
   return 0
 }
 

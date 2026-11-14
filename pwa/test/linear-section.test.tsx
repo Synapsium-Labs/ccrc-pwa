@@ -12,6 +12,7 @@ import type { LinearConnectionView, LinearLegacyRow, LinearWorkspaceView } from 
 import { LinearSection, LINEAR_TEXT, LINEAR_TEAMS_SHOWN, workspaceControls, linearStateText } from '../src/screens/LinearSection';
 import { useLinearWorkspaces } from '../src/fleet/useLinearWorkspaces';
 import { renderSettings } from './settingsHost';
+import { expectSecretInput } from './secretInputAttrs';
 import { readLinearConnection, readLinearWorkspaces } from '../src/lib/api';
 
 const LEAK = 'BOX-TEXT-THAT-MUST-NOT-REACH-THE-SCREEN';
@@ -489,7 +490,8 @@ describe('Add a workspace (§10.1, §10.2): the one key field', () => {
       install({ list: answer });
       await mount();
       expect(field().type).toBe('password');
-      expect(field().getAttribute('autocomplete')).toBe('off');
+      // Browsers and password managers leave the key alone (D-8404): masked, but never a login slot.
+      expectSecretInput(field());
       expect(document.getElementById(field().getAttribute('aria-describedby') ?? '')?.textContent).toBe('A read-only key lets sessions read but not write.');
       expect(addButton().disabled).toBe(true);
       type('   ');

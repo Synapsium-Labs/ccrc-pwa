@@ -42,6 +42,15 @@ interface Expectation {
   committable: boolean;
   phases: Record<string, string>;
   warnings: string[];
+  parity?: Diagnostics | null;
+}
+
+/** The reducer's `diagnostics` (D-8618): what a terminal `response.completed` or `response.incomplete` said that the
+ *  parity section counts, or null when the reducer saw neither. */
+interface Diagnostics {
+  model: string | null;
+  usage: Record<string, number>;
+  transformations: string[] | null;
 }
 
 const EXPECT = JSON.parse(readFileSync(path.join(STREAMS_DIR, 'expect.json'), 'utf8')) as {
@@ -141,6 +150,7 @@ function result(line: Line): Expectation {
     committable: line.committable,
     phases: line.phases,
     warnings: line.warnings,
+    ...('parity' in EXPECT.streams[line.name] ? { parity: line.diagnostics } : {}),
   };
 }
 
@@ -168,10 +178,14 @@ describe.skipIf(!PY)('the reducer, against the replay corpus (codex-bridge spec 
     }
   });
 
-  it('the corpus holds the 32 ported streams, the 16 new ones and the 13 of review rounds 1 to 3', () => {
-    expect(STREAMS.filter((s) => !s.startsWith('synth2-') && !s.startsWith('synth3-'))).toHaveLength(32);
+  it('the corpus holds the 32 ported streams, the 16 new ones, the 13 of review rounds 1 to 3 and the parity one', () => {
+    const parity = ['synth-input-transformations'];
+    expect(STREAMS.filter((s) => !s.startsWith('synth2-') && !s.startsWith('synth3-') && !parity.includes(s))).toHaveLength(32);
     expect(STREAMS.filter((s) => s.startsWith('synth2-'))).toHaveLength(16);
     expect(STREAMS.filter((s) => s.startsWith('synth3-'))).toHaveLength(13);
+    expect(STREAMS.filter((s) => parity.includes(s))).toEqual(parity);
+    // only the parity stream's expectation checks the diagnostics
+    expect(STREAMS.filter((s) => 'parity' in EXPECT.streams[s])).toEqual(parity);
   });
 
   it('the usage sum equals the upstream input_tokens', async () => {
@@ -352,5 +366,125 @@ describe.skipIf(!PY)('the reducer, against the replay corpus (codex-bridge spec 
     expect(table.failedRaises).toBe('ValueError');
     // the refusal flag is required: the two-argument call raises rather than continuing a refused reply
     expect(table.twoArgContinuationRaises).toBe('TypeError');
+  });
+});
+
+// D-8618: what the reducer reads from a terminal response for the stats file's parity section. None of it reaches a
+// block, a stop reason or the usage the client is sent; a malformed diagnostic field is counted `unrecognised` or
+// skipped, and never makes a valid response fail (openai/codex's own rule for these fields).
+describe.skipIf(!PY)('the reducer\'s parity diagnostics (D-8618)', () => {
+  const say = (text: string): Record<string, unknown> => ({
+    type: 'message', id: 'msg_fx1', role: 'assistant', status: 'completed', content: [{ type: 'output_text', text }],
+  });
+  const createdEv = (response: Record<string, unknown> = {}): { type: string } & Record<string, unknown> => ({
+    type: 'response.created', response: { id: 'resp_fx1', status: 'in_progress', output: [], ...response },
+  });
+  const doneEv = { type: 'response.output_item.done', output_index: 0, item: say('ok') };
+  const end = (kind: 'completed' | 'incomplete', response: Record<string, unknown>): { type: string } & Record<string, unknown> => ({
+    type: `response.${kind}`,
+    response: {
+      id: 'resp_fx1', status: kind, output: [],
+      ...(kind === 'incomplete' ? { incomplete_details: { reason: 'max_output_tokens' } } : {}), ...response,
+    },
+  });
+  const removed = (reason: string): Record<string, string> => ({ type: 'reasoning', action: 'removed', reason });
+
+  it('the five reasons Codex names, and any other, are counted by type, action and reason', async () => {
+    const reasons = ['organization_mismatch', 'end_user_mismatch', 'model_mismatch', 'prefix_mismatch', 'turn_boundary'];
+    const [line] = await run([inline([createdEv(), doneEv, end('completed', {
+      input_transformations: [...reasons.map(removed), removed('fx_unknown'), { type: 'reasoning', action: 'removed' },
+        { type: 'message', action: 'removed', reason: 'turn_boundary' }],
+    })])]);
+    expect(line.diagnostics.transformations).toEqual([
+      ...reasons.map((r) => `reasoning:removed:${r}`), 'reasoning:removed:fx_unknown', 'reasoning:removed:none',
+      'message:removed:turn_boundary',
+    ]);
+    expect(line.terminal.stop).toBe('end_turn');
+  });
+
+  it('a value that is not a list, or an entry that is not an object, never fails the response', async () => {
+    const [notList, notObject, absent] = await run([
+      inline([createdEv(), doneEv, end('completed', { input_transformations: { type: 'reasoning', action: 'removed' } })]),
+      inline([createdEv(), doneEv, end('completed', { input_transformations: [7, null, ['reasoning'], { type: 3 }] })]),
+      inline([createdEv(), doneEv, end('completed', {})]),
+    ]);
+    for (const line of [notList, notObject, absent]) {
+      expect(line.terminal.error).toBeNull();
+      expect(line.terminal.stop).toBe('end_turn');
+      expect(fold(line.events as Ev[])).toEqual([{ type: 'text', text: 'ok' }]);
+    }
+    expect(notList.diagnostics.transformations).toBeNull();
+    expect(absent.diagnostics.transformations).toBeNull();
+    expect(notObject.diagnostics.transformations).toEqual([
+      'unrecognised:unrecognised:unrecognised', 'unrecognised:unrecognised:unrecognised',
+      'unrecognised:unrecognised:unrecognised', 'unrecognised:unrecognised:none',
+    ]);
+  });
+
+  it('reasoning tokens are read when they are a valid count, and absent otherwise', async () => {
+    const u = (details: unknown): Record<string, unknown> => ({
+      usage: { input_tokens: 10, output_tokens: 6, input_tokens_details: { cached_tokens: 4 }, output_tokens_details: details },
+    });
+    const lines = await run([
+      inline([createdEv(), doneEv, end('completed', u({ reasoning_tokens: 5 }))]),
+      inline([createdEv(), doneEv, end('completed', u({}))]),
+      inline([createdEv(), doneEv, end('completed', u({ reasoning_tokens: -1 }))]),
+      inline([createdEv(), doneEv, end('completed', u({ reasoning_tokens: true }))]),
+      inline([createdEv(), doneEv, end('completed', u('5'))]),
+      inline([createdEv(), doneEv, end('completed', { usage: { input_tokens: '10', output_tokens: 1.5 } })]),
+    ]);
+    expect(lines.map((l) => l.diagnostics.usage)).toEqual([
+      { input: 10, cached: 4, output: 6, reasoning: 5 },
+      { input: 10, cached: 4, output: 6 },
+      { input: 10, cached: 4, output: 6 },
+      { input: 10, cached: 4, output: 6 },
+      { input: 10, cached: 4, output: 6 },
+      {},
+    ]);
+    // the client's usage never carries them
+    expect(lines[0].terminal.anthropicUsage).toEqual({
+      input_tokens: 6, cache_read_input_tokens: 4, cache_creation_input_tokens: 0, output_tokens: 6,
+    });
+  });
+
+  it('the served model is the terminal event\'s, else response.created\'s, else absent', async () => {
+    const lines = await run([
+      inline([createdEv({ model: 'model-a' }), doneEv, end('completed', { model: 'model-b' })]),
+      inline([createdEv({ model: 'model-a' }), doneEv, end('completed', {})]),
+      inline([createdEv(), doneEv, end('completed', { model: 'model-b' })]),
+      inline([createdEv(), doneEv, end('completed', {})]),
+      inline([createdEv({ model: 7 }), doneEv, end('completed', { model: '' })]),
+    ]);
+    expect(lines.map((l) => l.diagnostics.model)).toEqual(['model-b', 'model-a', 'model-b', null, null]);
+  });
+
+  it('response.incomplete carries them too, answered as a stop or as an error', async () => {
+    const t = { input_transformations: [removed('turn_boundary')], model: 'model-b', usage: { input_tokens: 3, output_tokens: 1 } };
+    const [stopped, failed] = await run([
+      inline([createdEv(), end('incomplete', t)]),
+      inline([createdEv(), end('incomplete', { ...t, incomplete_details: { reason: 'fx_new_reason' } })]),
+    ]);
+    expect(stopped.terminal.stop).toBe('max_tokens');
+    expect(failed.terminal.error).toMatchObject({ type: 'api_error', status: 503 });
+    for (const line of [stopped, failed]) {
+      expect(line.diagnostics).toEqual({
+        model: 'model-b', usage: { input: 3, output: 1 }, transformations: ['reasoning:removed:turn_boundary'],
+      });
+    }
+  });
+
+  it('a failed or truncated response has no diagnostics: no terminal the parity section counts', async () => {
+    const [failed, errorEv, truncated] = await run([
+      inline([createdEv(), {
+        type: 'response.failed', response: { id: 'resp_fx1', status: 'failed', error: { code: 'server_is_overloaded' },
+          input_transformations: [removed('turn_boundary')] },
+      }]),
+      inline([createdEv(), { type: 'error', code: 'server_is_overloaded', message: 'busy' }]),
+      inline([createdEv(), doneEv]),
+    ]);
+    for (const line of [failed, errorEv, truncated]) {
+      expect(line.terminal.error).not.toBeNull();
+      expect(line.diagnostics).toBeNull();
+    }
   });
 });

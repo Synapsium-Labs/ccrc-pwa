@@ -54,7 +54,7 @@ const DECLARATIONS: readonly string[] = [
   '^export interface CollectLaneConfirmRequired\\b',
 ];
 
-/** `peers-claims-l0.test.ts`'s fifteen lines (the eleventh is the host-pressure block, #1170, the twelfth the landing line's entry, the thirteenth the programme ledgers' waiting frame, the fourteenth the backup block, D-7858, the fifteenth the box settings' `ReadFailure`, D-6916). The block adds none. */
+/** `peers-claims-l0.test.ts`'s fifteen lines (the eleventh is the host-pressure block, #1170, the twelfth the landing line's entry, the thirteenth the programme ledgers' waiting frame, the fourteenth the backup block, D-7858, the fifteenth the box settings' `ReadFailure`, D-6916, the eighteenth the hook event union, D-8613). The block adds none. */
 const IMPORTS = [
   "import type { Hue, RosterKindWire } from './roster.js';",
   "import type { AccountPoolWire } from './poolrule.js';",
@@ -66,6 +66,7 @@ const IMPORTS = [
   "import type { WaitingView } from './ledgers.js';",
   "import type { CHECKS_MAIL_TOKEN } from './landing.js';",
   "import type { LandingWrite } from './landingLine.js';",
+  "import { hookEventIs, type HookEvent } from './hook-events.js';",
   "import type { NodeRole } from './node-role.js';",
   // The sign-in's state words (accounts plan Task A21) join the same import-free `accounts.ts` line: no new import.
   "import type { AccountStateAnswer, AuthMethod, AuthStatusState, LaneState } from './accounts.js';",
@@ -73,6 +74,7 @@ const IMPORTS = [
   "import { parseReapCrumb, type ReapCrumb } from './reapcrumb.js';",
   "import type { HostPressureHealth } from './pressure.js';",
   "import type { BackupHealth } from './backup.js';",
+  "import type { TestboxAct, TestboxActOutcome, TestboxAdminCode, TestboxAdminStatus, TestboxSettingChange } from './testbox-admin.js';",
 ];
 
 describe("the collector switch's L0 vocabulary (path-identity spec §5.7)", () => {

@@ -118,6 +118,27 @@ export const MODELS_LANE_ID_RE = /^[a-z][a-z0-9-]{0,31}$/;
  *  same test, which pins it equal to the bash list. */
 export const MODELS_RESERVED_IDS = Object.freeze(['refresh', 'litellm']);
 
+/** D-8406: the directory under `~/.ccrc` that holds every lane's model files, and the names of the two a reader
+ *  outside the models verbs needs — the class registry and the catalogue — each spelled ONCE, here.
+ *  `deploy/models-op.mjs` builds its paths from them, the fleet's read grant admits exactly them
+ *  (`isLaneModelsReadName`, `agent/src/whitelist.ts`), and the server reads them by them
+ *  (`server/src/laneModels.ts`), so the three cannot come to name different files. */
+export const MODELS_DIR_NAME = 'models';
+/** `<id>.classes.json`: the lane's class registry (§4.1). */
+export const registryFileName = (id) => `${id}.classes.json`;
+/** `<id>.json`: the lane's catalogue (§4.2). */
+export const catalogueFileName = (id) => `${id}.json`;
+
+/** D-8406: whether `name` is one of the two lane files the console may read — `registryFileName` or
+ *  `catalogueFileName` of a lane id `MODELS_LANE_ID_RE` accepts and `MODELS_RESERVED_IDS` does not hold. A lane id
+ *  has no dot, so `<id>.effort.json`, `<id>.windows.json` and every other sibling are refused by shape. Pure. */
+export function isLaneModelsReadName(name) {
+  if (typeof name !== 'string') return false;
+  const id = [registryFileName(''), catalogueFileName('')]
+    .filter((suffix) => name.endsWith(suffix)).map((suffix) => name.slice(0, -suffix.length))[0];
+  return id !== undefined && MODELS_LANE_ID_RE.test(id) && !MODELS_RESERVED_IDS.includes(id);
+}
+
 /** The longest models notice `/api/notify` sends to the phone (auto-advance
  *  plan W2 Task 12). A CEILING, not a promise that every well-formed line
  *  fits: a `moved` line is at most a 32-character lane id, the longest class
@@ -257,6 +278,41 @@ export class CatalogueInvalid extends Error {
 const isObj = (v) => typeof v === 'object' && v !== null && !Array.isArray(v);
 const num = (v) => (typeof v === 'number' && Number.isFinite(v) ? v : null);
 
+/** A non-empty string: the bound `parseRegistry`'s `effort` map and `parseCatalogue`'s `defaultReasoningLevel`
+ *  apply (D-8620), and the same bound the probe's Codex arm applies to each `supported_reasoning_levels` name and to
+ *  `default_reasoning_level` (`effort_name`, ccd/ccrc-models-probe). `parseCatalogue`'s `efforts` filter is NOT
+ *  bound by it: that filter keeps any string, unchanged, so a row reads exactly as it did before D-8620. */
+const isEffortName = (v) => typeof v === 'string' && v.length > 0;
+
+/** D-8620: the bounds of the Codex catalogue's request-shape fields (`CatalogueModel`, shared/models.ts), defined
+ *  ONCE here for every JavaScript reader. `CatalogueVerbosity` and `TruncationMode` are their TYPES, pinned to these
+ *  lists by `server/test/models.test.ts`; the probe's Python spells the same bounds in its own language, and
+ *  `server/test/models-probe.test.ts` runs every candidate through both and reds on any disagreement. The words are
+ *  upstream Codex's own: `text.verbosity`'s three values and `truncation_policy.mode`'s two. */
+export const CATALOGUE_VERBOSITIES = Object.freeze(['low', 'medium', 'high']);
+export const CATALOGUE_TRUNCATION_MODES = Object.freeze(['tokens', 'bytes']);
+/** A truncation policy's `limit` is an integer in `1..CATALOGUE_TRUNCATION_LIMIT_MAX` (D-8620). */
+export const CATALOGUE_TRUNCATION_LIMIT_MAX = 10_000_000;
+
+/** D-8620: the request-shape keys of one Codex catalogue row, each kept only when valid and otherwise ABSENT, never
+ *  null or a default: a model without them must read exactly as before, and a genuine `false` is a fact a later
+ *  reader acts on, so it must stay distinct from "the catalogue did not say". Of a truncation policy, only `mode`
+ *  and `limit` are kept. */
+function requestShapeOf(raw) {
+  const out = {};
+  if (typeof raw['useResponsesLite'] === 'boolean') out.useResponsesLite = raw['useResponsesLite'];
+  if (typeof raw['supportVerbosity'] === 'boolean') out.supportVerbosity = raw['supportVerbosity'];
+  if (CATALOGUE_VERBOSITIES.includes(raw['defaultVerbosity'])) out.defaultVerbosity = raw['defaultVerbosity'];
+  if (isEffortName(raw['defaultReasoningLevel'])) out.defaultReasoningLevel = raw['defaultReasoningLevel'];
+  const policy = raw['truncationPolicy'];
+  if (isObj(policy) && CATALOGUE_TRUNCATION_MODES.includes(policy['mode'])
+    && Number.isInteger(policy['limit']) && policy['limit'] >= 1
+    && policy['limit'] <= CATALOGUE_TRUNCATION_LIMIT_MAX) {
+    out.truncationPolicy = { mode: policy['mode'], limit: policy['limit'] };
+  }
+  return out;
+}
+
 /** `(json: unknown) => Catalogue`. Validates a catalogue read off disk and
  *  fills its optional fields. Refuses the WHOLE file on a model with no `id`
  *  (§11): a partial catalogue would retire every model the probe happened to
@@ -291,6 +347,8 @@ export function parseCatalogue(json) {
       hidden: raw['hidden'] === true,
       priceIn: num(raw['priceIn']),
       priceOut: num(raw['priceOut']),
+      // D-8620: kept on a Codex catalogue only, the one probe whose reply carries them.
+      ...(probe === 'codex' ? requestShapeOf(raw) : {}),
     };
   });
   const out = { probe, fetchedAt, stale: json['stale'] === true, models };
@@ -470,7 +528,7 @@ export function parseRegistry(json, catalogue) {
         throw new RegistryInvalid(`effort.${key}`,
           `effort.${key} is an unknown key — the keys are ${CLASSES.join(', ')}.`);
       }
-      if (typeof value !== 'string' || value.length === 0) {
+      if (!isEffortName(value)) {
         throw new RegistryInvalid(`effort.${key}`,
           `effort.${key} is ${JSON.stringify(value)}. Set it to one of the classed model's own `
           + "effort levels — run 'ccrc models <id> show' to see them.");
@@ -668,6 +726,22 @@ export function classOfModel(reg, modelId) {
     if (reg.classes[c] === modelId) return c;
   }
   return null;
+}
+
+/** `(reg, catalogue) => LaneClassModels` (D-8406): each class's model on this lane and the catalogue's label for it —
+ *  the facts `ccrc models <id> show` prints, and the only source the session's model picker takes a model's name from.
+ *  `model` is the registry's slot as it stands (`null`: the class is unavailable on this lane by nature); `label` is
+ *  the catalogue row's `label` for that id (`parseCatalogue` fills it with the id when the probe gave none), or `null`
+ *  when there is no catalogue, no row for the id, or no model. Never a name this file spells: a model advance changes
+ *  the registry, and the label follows it with no code change. Pure. */
+export function laneClassModels(reg, catalogue) {
+  const out = {};
+  for (const c of CLASSES) {
+    const model = reg.classes[c];
+    const row = model === null || catalogue === null ? undefined : catalogue.models.find((m) => m.id === model);
+    out[c] = { model, label: row === undefined ? null : row.label };
+  }
+  return out;
 }
 
 /** What the materialiser writes into the env block for a `null` slot (§6.1).

@@ -121,7 +121,7 @@ export function toReleaseWire(row: ReleaseRow): ReleaseWire {
 /** One live `nodes` row on the wire. `current` is the five `current*` columns
  *  through `buildInfoOfRow` — null unless the stamp read `ok`, so an EACCES never
  *  presents an old stamp as this node's build. `request` needs all three request
- *  columns (the wire's `at` is a number); `report` exists iff a phase was read.
+ *  columns (the wire's `at` is a number); `report` exists iff a phase was read, and its `sweep` iff one was (R37).
  *  `floorRead`/`previousRead` (fix round 2, R4): ALWAYS sent, never omitted —
  *  `NodeWire`'s optionality is for an older build's fixture/consumer, not for
  *  this mapper, which always has the row's own `TagFileRead` to hand. */
@@ -140,6 +140,8 @@ export function toNodeWire(row: NodeRow): NodeWire {
     report: row.reportedPhase === null ? null : {
       phase: row.reportedPhase, target: row.reportedTarget, startedAt: row.reportedStartedAt,
       updatedAt: row.reportedUpdatedAt, detail: row.reportedDetail,
+      // R37 (D-8386): optional, sent only when measured; absence is "not measured".
+      ...(row.reportedSweep === null ? {} : { sweep: row.reportedSweep }),
     },
     update: { state: row.updateState, target: row.updateTarget, startedAt: row.updateStartedAt, detail: row.updateDetail },
   };

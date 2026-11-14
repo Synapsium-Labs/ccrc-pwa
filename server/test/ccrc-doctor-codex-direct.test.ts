@@ -35,7 +35,7 @@ describeCodex('ccrc doctor: codex, a direct lane\'s rows (codex bridge Stage 2, 
   const RETIRED_FIX = (id: string): string =>
     `  remedy: stop every tier of the lane, in either mode: ccrc codex stop ${id}, then ccrc codex start ${id} (a direct lane starts its bridge alone); to run the lane through LiteLLM again instead: ccrc codex switch ${id} litellm`;
   /** `lane.json`'s `bridgeFiles`, read back: the names are `laneManifest`'s, never spelled here. */
-  const bridgeFile = (home: string, id: string, k: 'stats' | 'store'): string =>
+  const bridgeFile = (home: string, id: string, k: 'stats' | 'store' | 'requests'): string =>
     join(laneDir(home, id), (JSON.parse(readFileSync(join(laneDir(home, id), 'lane.json'), 'utf8')) as
       { bridgeFiles: Record<string, string> }).bridgeFiles[k]);
   const liveSession = (home: string, sid: string, id: string): void => {
@@ -288,6 +288,48 @@ describeCodex('ccrc doctor: codex, a direct lane\'s rows (codex bridge Stage 2, 
     noRunnerBugLine(r.stdout, 'codex');
   });
 
+  // D-8619: the per-request record and its one older generation are created 0600 by the bridge, as the stats file is,
+  // and hold the lane's Claude Code session ids and each request's timings. Named by lane.json's `bridgeFiles.requests`;
+  // a lane.json an older laneManifest wrote names none: no record file is looked for, and the lane.json itself reads
+  // stale against its roster row (the update's codex-lanes step and `doctor --fix` re-render it).
+  it('the request record and its older generation are checked like the stats file; a lane.json naming none is stale, never a record FAIL', async () => {
+    const home = await healthyCodexBox('ccrc-doctor-codex-direct-requests-', ['codex-a', 'codex-b']);
+    plantDirectLane(home, 'codex-b');
+    const rec = bridgeFile(home, 'codex-a', 'requests');
+    expect(path.basename(rec), 'CONTROL: the rendered lane.json names it').toBe('bridge.requests.jsonl');
+    writeFileSync(rec, '{}\n', { mode: 0o644 });
+    chmodSync(rec, 0o644);
+    writeFileSync(join(home, 'elsewhere.jsonl'), '{}\n', { mode: 0o600 });
+    symlinkSync(join(home, 'elsewhere.jsonl'), `${rec}.1`);
+    const bRec = bridgeFile(home, 'codex-b', 'requests');
+    writeFileSync(bRec, '{}\n', { mode: 0o600 });
+    writeFileSync(`${bRec}.1`, '{}\n', { mode: 0o640 });
+    chmodSync(`${bRec}.1`, 0o640);
+    const r = runDoctor(home);
+    const why = "it names the lane's Claude Code session ids and the time and size of each of its requests";
+    const modeRe = new RegExp(`^FAIL codex: codex-a's bridge request record ${reEsc(rec)} has mode 644, and the bridge keeps it owner-only \\(0600\\): ${reEsc(why)}$`, 'm');
+    expect(r.stdout, r.stdout).toMatch(modeRe);
+    expect(remedyAfter(r.stdout, modeRe)).toBe(`  remedy: chmod 600 ${rec}`);
+    expect(r.stdout).toMatch(new RegExp(`^FAIL codex: codex-a's bridge request record ${reEsc(`${rec}.1`)} is not a regular file \\(a symlink, a directory or another kind of file\\), `, 'm'));
+    expect(r.stdout).toMatch(new RegExp(`^FAIL codex: codex-b's bridge request record ${reEsc(`${bRec}.1`)} has mode 640, `, 'm'));
+    expect(r.stdout).not.toMatch(new RegExp(`${reEsc(bRec)} has mode`));
+    noRunnerBugLine(r.stdout, 'codex');
+    // a lane.json with no request record named: its files are not looked for, and nothing else changes
+    for (const id of ['codex-a', 'codex-b']) {
+      const lj = join(laneDir(home, id), 'lane.json');
+      const doc = JSON.parse(readFileSync(lj, 'utf8')) as { bridgeFiles: Record<string, string> };
+      delete doc.bridgeFiles['requests'];
+      writeFileSync(lj, JSON.stringify(doc), { mode: 0o600 });
+    }
+    const r2 = runDoctor(home);
+    expect(r2.stdout).not.toMatch(/bridge request record/);
+    for (const id of ['codex-a', 'codex-b']) {
+      expect(r2.stdout, r2.stdout).toMatch(new RegExp(`^FAIL codex: ${id}'s lane\\.json disagrees with its roster row \\(`, 'm'));
+    }
+    expect(r2.stdout).not.toMatch(/lane\.json disagrees with what its roster row and class registry render/);
+    noRunnerBugLine(r2.stdout, 'codex');
+  });
+
   // A mode `_plat_mode` cannot measure (here `stat` fails on the bridge files alone) is the FAIL's `unreadable`, never a
   // pass, and its remedy is not `chmod`, which cannot cure a mode nobody could read.
   it('a bridge stats file whose mode cannot be measured FAILs "mode unreadable", in either mode, with a remedy that is not chmod', async () => {
@@ -472,7 +514,7 @@ describeCodex('ccrc doctor: codex, the drift row on a direct lane (codex bridge 
   const MARKER_WHERE = (dir: string, classes: string, what: string, them: string): string =>
     (classes.includes('s') ? `; for an event, item, error-code or incomplete-reason name, put the operator's record-streams marker in ${dir} (the bridge records the lane's stream only while it is there) and read ${what} in the recording when the bridge meets ${them} again` : '')
     + (classes.includes('h') ? `; for a responseHeader name, put the operator's record-streams marker in ${dir} and read ${what} in the recording when the bridge meets ${them} again on a 2xx answer: only a 2xx answer's head is recorded` : '')
-    + (classes.includes('r') ? `; for a requestField, unsupportedField, betaValue, contextEdit, modelSubstitution or other name, no recording holds ${what}: those families' names come from Claude Code's request, and the bridge records only the upstream's answers, so read ${what} from the client's request, for example from Claude Code's release notes or a reviewed diagnostic` : '');
+    + (classes.includes('r') ? `; for a requestField, unsupportedField, betaValue, contextEdit, modelSubstitution, foreignSubstitution or other name, no recording holds ${what}: those families' names come from the client's request (Claude Code's, or another caller's for foreignSubstitution), and the bridge records only the upstream's answers, so read ${what} from the client's request, for example from Claude Code's release notes or a reviewed diagnostic` : '');
   const UNREC_CLAUSE = (dir: string, classes: string): string => `; unrecognised is not a name: it stands for one outside the bound the bridge writes every name under (NAME_RE in ccd/codexbridge/stats.py)${MARKER_WHERE(dir, classes, 'that name', 'it')}; the bridge's restart clears unrecognised from the list, and it comes back when the bridge meets such a name again; never add unrecognised to known.py`;
   const OVER_CLAUSE = (dir: string, classes: string): string => `; overflow is not a name: it stands for more distinct names in that family than the bridge counts (NAMES_MAX in ccd/codexbridge/stats.py)${MARKER_WHERE(dir, classes, 'the names past it', 'them')}; the bridge's restart clears overflow from the list but keeps that family's counted names, so the next name in it that the bridge has not counted is overflow again, which is new drift; never add overflow to known.py`;
   // Fix round 2, M1: a stats file the row cannot read as the bridge's is the drift row's own unmeasured WARN, so it
@@ -518,6 +560,24 @@ describeCodex('ccrc doctor: codex, the drift row on a direct lane (codex bridge 
     expect(remedyAfter(r.stdout, re)).toBe(DRIFT_FIX);
     expect(r.stdout.split('\n').filter((l) => /the bridge met/.test(l))).toHaveLength(1);
     expect(r.stdout).not.toContain(KNOWN_EVENT);
+    noRunnerBugLine(r.stdout, 'codex');
+  });
+
+  // A substitution from a request without Claude Code's claude-code beta is counted under foreignSubstitution
+  // (ccd/codexbridge/known.py): the row prints it under that family, beside a Claude Code fallback's
+  // modelSubstitution name for the same model id, never folded into it.
+  it('a foreignSubstitution name warns under its own family, apart from a modelSubstitution of the same id', async () => {
+    const home = await healthyCodexBox('ccrc-doctor-codex-drift-foreign-', ['codex-a']);
+    plantDirectLane(home, 'codex-a');
+    const file = await writeStats(home, 'codex-a', [['foreignSubstitution', 'claude-opus-5-5'], ['modelSubstitution', 'claude-opus-5-5']]);
+    expect((JSON.parse(readFileSync(file, 'utf8')) as { unexplained: unknown }).unexplained)
+      .toEqual({ foreignSubstitution: ['claude-opus-5-5'], modelSubstitution: ['claude-opus-5-5'] });
+    const r = runDoctor(home);
+    const line = r.stdout.split('\n').filter((l) => /the bridge met/.test(l));
+    expect(line, r.stdout).toHaveLength(1);
+    expect(line[0]).toMatch(/^WARN codex: codex-a: the bridge met 2 name\(s\) it does not know: /);
+    expect(line[0]).toContain('foreignSubstitution:claude-opus-5-5');
+    expect(line[0]).toContain('modelSubstitution:claude-opus-5-5');
     noRunnerBugLine(r.stdout, 'codex');
   });
 
@@ -696,7 +756,9 @@ describeCodex('ccrc doctor: codex, the drift row on a direct lane (codex bridge 
   it('a stats file listing more names than any bridge writes is unmeasured, and no drift row', async () => {
     const home = await healthyCodexBox('ccrc-doctor-codex-drift-many-', ['codex-a']);
     plantDirectLane(home, 'codex-a');
-    const many = Array.from({ length: 10 * 257 + 1 }, (_, i) => `response.fx_m${i}`);
+    // One past the most a bridge writes, from the shipped sources: known.KNOWN's families times NAMES_MAX + 1, plus one.
+    const { namesMax, families } = bridgeBounds();
+    const many = Array.from({ length: families.length * (namesMax + 1) + 1 }, (_, i) => `response.fx_m${i}`);
     const file = statsFile(home, 'codex-a');
     plantStats(file, `${JSON.stringify({ version: 1, lane: 'codex-a', unexplained: { eventType: many } })}\n`);
     const r = runDoctor(home);
@@ -1662,7 +1724,7 @@ describe('ccrc doctor: box-settings reads the box\'s ccrc.env alone (wave 24, D-
     expect(verdict(r)).not.toContain('CCRC_TESTBOX_RUNS');
     expect(verdict(r)).not.toContain('zz-mark');
     expect(r.code).toBe(0);
-    expect(OMIT_KEYS).toHaveLength(28);
+    expect(OMIT_KEYS, 'D-8290 adds the live probes\' three box keys: 28 -> 31').toHaveLength(31);
     const none = runBs(fleetBox('ccrc-doctor-bs-d5-none-', ['CCRC_FLEET=local']));
     for (const k of OMIT_KEYS) expect(verdict(none), k).not.toContain(k);
   });

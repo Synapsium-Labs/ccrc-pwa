@@ -46,7 +46,14 @@ describe.skipIf(!LINUX)('step 2 — a real directory with the witness’s identi
 describe.skipIf(!LINUX)('step 2 — a leaf that VANISHED after the evaluation saw it is a retry, never witness-mismatch (ruling R-f)', () => {
   it('nothing stands at step 2’s lstat: refused state-changed before any record — and the next audit takes the witness-without-leaf arm', () => {
     const o = makeOrphan(h);
-    const r = collectVerb(h, collectToken(h), { pre: gapAt('consented', 'mv "$HOME/.cc-tmp/$2" "$HOME/real"') });
+    // The verb's evaluation is stubbed to say "present, consented" (`evalSays`), as for every case that pins the
+    // VERB's own guards past the evaluation: step 2's lstat is one, and the swap cases above already drive the real
+    // evaluation into this same gap. The real present-leaf evaluation ran twice here, in the audit and in the verb,
+    // and each ran the in-use probe's /proc walk, which re-lists the table until no new pid appears: beside a
+    // fork-heavy test in the same shard it ran this case past the test timeout (D-8280). The RETRY below stays
+    // wholly real: the audit's witness-without-leaf arm mints the token the verb consumes, and walks nothing.
+    const vanish = gapAt('consented', 'mv "$HOME/.cc-tmp/$2" "$HOME/real"');
+    const r = collectVerb(h, WRONG_TOKEN, { pre: `${evalSays(WRONG_TOKEN)} ${vanish}` });
     expect(r.code, r.stdout + r.stderr).toBe(0);
     expect(docOf(r.stdout)['refused']).toBe('state-changed');
     expect(gaps(h), 'refused before the record').toEqual(['locked', 'consented']);

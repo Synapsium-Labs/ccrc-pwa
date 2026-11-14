@@ -3,5 +3,6 @@
   "maxDelta": 395,
   "d": "D-8001",
   "reason": "cleanup un-wedge Task R3, final fix round (review 1493): retain the plain prune refusal unless a bounded text reader proves a complete modeled exception; substitution operands, negated dry-run abbreviations and escaped heredoc text. Measured +395 by the unchanged growth counter against the merge-base (2237 to 2632, including its lexical heredoc count of the jq delimiter placeholder). Kept inline because the hook loads no library and this extends its one forbidden program (spec 2026-11-04 section 5); the coordinator directed this in-flight waiver to use the measured figure.",
-  "added": "2026-11-05"
+  "added": "2026-11-05",
+  "createdAt": "2026-11-05"
 }

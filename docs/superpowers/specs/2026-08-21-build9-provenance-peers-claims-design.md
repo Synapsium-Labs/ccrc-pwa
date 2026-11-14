@@ -323,7 +323,10 @@ already read: holder measured running ⇒ renew; measured gone ⇒ lapse at the 
 `endedBy:'session-gone'`; **registry unmeasurable ⇒ doubt reads as HELD** (matching ccd's four `-e` hold
 readers and `registry.ts`'s `HOLD_UNREADABLE`) so a fleet-box hiccup cannot mass-expire every claim;
 `hardExpiresAt` (8 h) is **never renewed**, so doubt cannot hold forever and every claim must be
-periodically re-declared. Run close releases that run's claims in the close transaction. Expiry is also
+periodically re-declared. *(Amended by D-8395, operator ruling 2026-11-12: a holder measured running that
+re-declares inside the last lease before the cap starts a new 8 h window as a new row chained to the old
+one, `chainedFrom`, the old row ending `released` with `endedBy:'rechained'`; no renewal moves a row's own
+cap, and a holder that is not running still lapses at it.)* Run close releases that run's claims in the close transaction. Expiry is also
 applied in the same transaction as every claim attempt — the `feed_events` prune-on-write idiom — so a
 claim route never sees a stale row even if the watcher is wedged.
 

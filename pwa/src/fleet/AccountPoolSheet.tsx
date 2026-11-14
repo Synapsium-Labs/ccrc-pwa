@@ -21,7 +21,7 @@
 // server is still the gate (`POST /api/pools/accounts/:id`, Task 7).
 import { useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
-import type { RosterWire } from '../../../shared/api';
+import type { AccountPoolsUnavailableReason, RosterWire } from '../../../shared/api';
 import type { AccountPoolWire } from '../../../shared/poolrule';
 import { POOL_NAME_RE } from '../../../shared/roster';
 import { Button, Sheet, TextInput, TEXT_INPUT_INLINE } from '@ccrc/ui';
@@ -49,6 +49,10 @@ export interface AccountPoolSheetProps {
    *  this server always accepts — this prop only controls whether the
    *  operator is TOLD nothing enforces it yet. */
   unenforced?: boolean;
+  /** D-8283: the measured reason beside `unenforced` (`ProjectPoolsWire.accountPoolsReason`). `no-pool-sync` is the
+   *  single-box install, where ccd is current and places by the roster's declared pool; `ccd-predates` is an older
+   *  ccd; `undefined` (an older server) names no cause. */
+  unenforcedReason?: AccountPoolsUnavailableReason;
   open: boolean;
   onClose: () => void;
   /** The pools to WRITE for this account — `[]` clears. The caller performs
@@ -92,8 +96,37 @@ const currentCopy = (account: string, current: AccountPoolWire | undefined): str
   }
 };
 
+/** D-8283: the sheet's notice, by the measured reason. The single-box install (`no-pool-sync`) has a current ccd that
+ *  places by the roster's declared pool, while the server's forecast and swap check read the central tag, so the
+ *  notice says both halves. Exhaustive, so a new reason is a compile error. */
+const unenforcedNotice = (reason: AccountPoolsUnavailableReason | undefined): ReactNode => {
+  switch (reason) {
+    case 'no-pool-sync':
+      return (
+        <>
+          Not applied on this install: it has no pool-sync timer, so a tag set here never reaches <code>ccd</code>,
+          which places by the pool the roster declares. The tag is recorded, and the server's forecast and swap check
+          use it. Only a Linux <code>--role fleet</code> install runs the timer.
+        </>
+      );
+    case 'ccd-predates':
+      return (
+        <>
+          This fleet's <code>ccd</code> predates account pools — a tag set here is recorded, but
+          nothing on the fleet enforces it yet.
+        </>
+      );
+    case undefined:
+      return 'A tag set here is recorded, but nothing on the fleet enforces it yet.';
+    default: {
+      const unreachable: never = reason;
+      return unreachable;
+    }
+  }
+};
+
 export function AccountPoolSheet({
-  account, roster, current, unenforced, open, onClose, onSet,
+  account, roster, current, unenforced, unenforcedReason, open, onClose, onSet,
 }: AccountPoolSheetProps): ReactNode {
   const [name, setName] = useState('');
 
@@ -136,8 +169,7 @@ export function AccountPoolSheet({
       </p>
       {unenforced && (
         <p className="sheet-copy sheet-copy-notice" data-testid="account-pool-unenforced-notice">
-          This fleet's <code>ccd</code> predates account pools — a tag set here is recorded, but
-          nothing on the fleet enforces it yet.
+          {unenforcedNotice(unenforcedReason)}
         </p>
       )}
       <PoolList

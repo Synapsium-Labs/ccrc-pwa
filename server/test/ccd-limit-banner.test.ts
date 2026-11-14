@@ -214,12 +214,48 @@ BEGIN {
       }
     }
   });
+  // On the macOS runner a FIFO case read the harness's rc 125, with nothing on stderr, for its own 0; a tick-diet batch
+  // there ended in 0.4 s with no row begun, its rc unrecorded (D-8343). The inferred cause: one side's `setpgid` failed
+  // with an errno other than EACCES or ESRCH although the other side had already made the child's group. This preload
+  // fails one side's call with EPERM once the other side has made the group, the condition inferred for Darwin, so
+  // Linux shows the failure; the harness now asks the group, not the errno.
+  it.each(['parent', 'child'] as const)('the timed harness runs the child when the %s\'s setpgid fails after the group exists (D-8343)', (side) => {
+    seed();
+    fs.writeFileSync(path.join(h.home, 'DarwinSetpgid.pm'), `package DarwinSetpgid;
+use POSIX ();
+use Errno qw(EPERM);
+my $real = \\&POSIX::setpgid;
+no warnings 'redefine';
+*POSIX::setpgid = sub {
+  my ($pid, $pg) = @_;
+  return $real->(@_) unless ($pid == 0 ? 'child' : 'parent') eq $ENV{DARWIN_SETPGID_SIDE};
+  my $want = $pid == 0 ? $$ : $pid;
+  for (1 .. 2000) { last if getpgrp($pid) == $want; select(undef, undef, undef, 0.001) }
+  $! = EPERM;
+  return undef;
+};
+1;
+`);
+    const env = ghContainedEnv(h.home, { PATH: process.env['PATH'] ?? '', HOME: h.home, DARWIN_SETPGID_SIDE: side,
+      PERL5OPT: `-Mlib=${h.home} -MDarwinSetpgid` }, { systemd: true, tmux: true });
+    const ran = spawnSyncGroup('bash', ['-c', `${BOUNDED} 5 bash -c 'echo ran; exit 7'; echo "rc=$?"`],
+      { encoding: 'utf8', timeout: 15_000, killSignal: 'SIGKILL', env });
+    expect(ran.error, 'the harness exceeded its outer bound').toBeUndefined();
+    expect(ran.stderr).toBe('');
+    expect(ran.stdout).toBe('ran\nrc=7\n');
+    // The group the child leads is still the one the alarm kills.
+    const cut = spawnSyncGroup('bash', ['-c', `${BOUNDED} 1 sleep 30; echo "rc=$?"`],
+      { encoding: 'utf8', timeout: 15_000, killSignal: 'SIGKILL', env });
+    expect(cut.error, 'the harness exceeded its outer bound').toBeUndefined();
+    expect(cut.stdout).toBe('rc=142\n');
+  });
   it("the detector's error literal is shared's RATE_LIMIT_ERROR — one jq copy, one TS copy, pinned", () => {
-    // The reading is `limit_banner` in ccd/lib/transcript.jq (#2367); its first `$row.error ==` is the rate-limit one.
+    // The reading is `limit_banner` in ccd/lib/transcript.jq (#2367); the rate-limit row test is `lb_ratelimit`, the def it shares
+    // with `agent_end` (D-8368), and its `.error ==` is the rate-limit one.
     const src = fs.readFileSync(path.join(path.dirname(CCD), 'lib', 'transcript.jq'), 'utf8');
-    const line = src.split('\n').find((l) => l.includes('$row.error =='));
-    if (!line) throw new Error('limit_banner detector line not found in ccd/lib/transcript.jq');
-    const m = /\$row\.error == "([a-z_]+)"/.exec(line);
+    const line = src.split('\n').find((l) => l.startsWith('def lb_ratelimit:'));
+    if (!line) throw new Error('lb_ratelimit detector line not found in ccd/lib/transcript.jq');
+    const m = /\.error == "([a-z_]+)"/.exec(line);
     if (!m) throw new Error('no parsed error literal on the detector line');
     expect(m[1]).toBe(RATE_LIMIT_ERROR);
   });
@@ -487,7 +523,7 @@ describe('_session_hard_blocked wires the transcript into the rescue arm (D-2363
     // 401 as "earlier"; the harness's tmux stub answers any display-message, so
     // only the source can hold the format.
     const src = ccdSource();
-    expect(src).toContain(`tmux display-message -p -t "$(_tmux_t "$1")" '#{session_created}' 2>/dev/null`);
+    expect(src).toContain(`_tmx display-message -p -t "$(_tmux_t "$1")" '#{session_created}' 2>/dev/null`);   // `_tmx`: D-8270
     expect(src).toContain('born=$(_pane_born "$id")');
     // The rescue's marker write reads the bound ONCE (D-3524) and hands the same
     // value to the stuck scan and to the credential-change check, so the two can

@@ -42,7 +42,7 @@
  *     `refuseOversizedClaim`, not the table.
  */
 import type { ClaimRefusal } from './box-token.js';
-import type { AccountAuthRefusal, AccountGateRefusal, AccountRouteRefusal, AccountWriteRefusal, ApprovalRefusal, ArchiveRefusal, CollectLaneRefusal, DigestRefusal, DoneRejectCode, MailRejectCode, QuestionDoorRefusal, RunRefuseCode, RunRouteRefuseCode, StepUpRefusal, SwapRefusal, UpdateRouteError } from './api.js';
+import type { AccountAuthRefusal, AccountGateRefusal, AccountRouteRefusal, AccountWriteRefusal, ApprovalRefusal, TestboxAdminRouteRefusal, ArchiveRefusal, CollectLaneRefusal, DigestRefusal, DoneRejectCode, MailRejectCode, QuestionDoorRefusal, RunRefuseCode, RunRouteRefuseCode, StepUpRefusal, SwapRefusal, UpdateRouteError } from './api.js';
 import { ARCHIVE_REFUSALS, LEASE_DOOR_REFUSALS, SWAP_REFUSALS, type LeaseDoorRefusal } from './api.js';
 import type { LinkingRefusal } from './linking.js';
 import { DELEGATION_ADOPT_REFUSALS, type DelegationAdoptRefusal } from './delegation-adopt.js';
@@ -50,6 +50,8 @@ import type { DispatchAbandonRefusal } from './dispatch-abandon.js';
 import type { RunCloseRefusal } from './run-close.js';
 import type { LandingInfrastructureCode, LandingMutationCode } from './landingLine.js';
 import type { ItemMoveRefusal } from './ledgers.js';
+import type { PlanRefusal } from './plan.js';
+import type { LaneArmRefusal } from './lane-arm.js';
 
 /**
  * The named workspace create's own words (named workspaces S5): decided by `planCreate` (`server/src/workspaceCreate.ts`,
@@ -193,6 +195,32 @@ export const isReviewRoundsRefusal = (word: string): word is ReviewRoundsRefusal
  *  `run-closed`. Box-facing, so the console has no sentence for them. */
 export const END_REQUEST_REFUSALS = { notYours: 'not-yours', alreadyAsked: 'already-asked', recentlyAsked: 'recently-asked' } as const;
 export type EndRequestRefusal = (typeof END_REQUEST_REFUSALS)[keyof typeof END_REQUEST_REFUSALS];
+/** The card door's own word (Overlord W1a, the card piece; spec Table 13.2 `card-changed`): a later page names a card hash that
+ *  no longer matches the current render, and the caller starts again at page 1. Box-facing, so the console has no sentence
+ *  for it. */
+export const CARD_REFUSALS = { cardChanged: 'card-changed' } as const;
+export type CardRefusal = (typeof CARD_REFUSALS)[keyof typeof CARD_REFUSALS];
+/** The note door's own words (Overlord W1a, the notes piece; spec Table 13.2): a key that names no live row of the caller's,
+ *  a cap of live notes reached, a field over its length cap, a handover thread whose reference names no live row of the
+ *  caller's, and a handover sent while no handover was asked. A key the door could not read is the generic `unmeasured`
+ *  (slug unmeasured-key-is-unmeasured), never one of these. Box-facing, so the console has no sentence for them. */
+export const NOTE_REFUSALS = {
+  keyUnknown: 'note-key-unknown', cap: 'note-cap', tooLong: 'note-too-long', referenceUnknown: 'reference-unknown',
+  notAsked: 'note-not-asked',
+} as const;
+export type NoteRefusal = (typeof NOTE_REFUSALS)[keyof typeof NOTE_REFUSALS];
+/** The timer doors' own words (Overlord W1a, the timers piece; spec §11.6, the `timer-*` words), each with its one status,
+ *  declared once here and spread into `REFUSAL_STATUS` (`LEASE_DOOR_REFUSALS`' idiom). CHOSEN, not measured: 409 for the
+ *  caller's cap and for a timer no longer pending, 429 for the hourly rate, 400 for a body the caller can fix, 503 for a
+ *  stamp or binding the box could not read (a box fault never reads as "not yours"), 403 for a key or a timer that is not
+ *  the caller's, 404 for an id no row has, to the operator only. Decided by `server/src/continuity/timers.ts`. */
+export const TIMER_REFUSALS = {
+  'timer-cap': 409, 'timer-rate': 429, 'timer-too-soon': 400, 'timer-too-late': 400, 'timer-too-long': 400,
+  'timer-masked': 400, 'timer-unmeasured': 503, 'timer-key-unknown': 403, 'timer-not-yours': 403, 'timer-not-pending': 409,
+  // The operator's cancel of an id that names no row (timers PR B, review 2052 F5): the session's own cancel never answers it.
+  'timer-not-found': 404,
+} as const;
+export type TimerRefusal = keyof typeof TIMER_REFUSALS;
 
 /** The approval routes' own words (plan Task 16, D-5298): typed from the start, as D-5381 set out to make them. */
 export type RouteRefusal = ClaimRefusal | MailRouteRefusal | UpdateRouteError | CollectLaneRouteRefusal | SwapRefusal | GenericRefusal
@@ -212,8 +240,16 @@ export type RouteRefusal = ClaimRefusal | MailRouteRefusal | UpdateRouteError | 
   | ReviewRoundsRefusal
   // The end-request route (D-8076): its three words of its own.
   | EndRequestRefusal
+  // The card door (Overlord W1a): its one word of its own.
+  | CardRefusal
+  // The note door (Overlord W1a): its five words of its own.
+  | NoteRefusal
+  // The timer doors (Overlord W1a, the timers piece): their ten words, each with its status in `TIMER_REFUSALS`.
+  | TimerRefusal
   // The lane routes, Check and the kill switch (accounts plan Task A14, D-7732): their four words of their own.
   | AccountRouteRefusal
+  // The test box connect routes (D-8166): their one word of their own.
+  | TestboxAdminRouteRefusal
   // The Linear proxy's routes (#1444, spec §6.8): their fourteen words of their own.
   | LinearProxyRefusal
   // The write routes (accounts plan Task A17, D-7739): their words of their own.
@@ -227,7 +263,11 @@ export type RouteRefusal = ClaimRefusal | MailRouteRefusal | UpdateRouteError | 
   // The adoption switch's door (delegation broker wave 5 PR8b, D-8113): declared once, `delegation-adopt.ts#DELEGATION_ADOPT_REFUSALS`.
   | DelegationAdoptRefusal
   // The linking standard's words (D-8147): declared once, `linking.ts#LINKING_REFUSALS`, each with its status below.
-  | LinkingRefusal;
+  | LinkingRefusal
+  // The plan verbs' and the hierarchy routes' words (Linear hierarchy design, D-8181): declared once, `plan.ts#PLAN_REFUSALS`.
+  | PlanRefusal
+  // The Shadow lanes card's own word (review 2003 F3): Live refused while a row's gate stands, `lane-arm.ts#LANE_ARM_REFUSALS`.
+  | Extract<LaneArmRefusal, 'lane-gated'>;
 
 /** The landing family's statuses, declared once (wave 5f, shared contract §5): every infrastructure word is 503, a
  *  missing thing 404, a refused graph or identity 409, an unreadable dependency 503. Spread into `REFUSAL_STATUS` and
@@ -280,7 +320,7 @@ export const REFUSAL_STATUS: Readonly<Record<RouteRefusal, number>> = {
   'claim-conflict': 409, 'claim-terminal': 409, 'claimant-changed': 409, 'no-record': 409, 'no-session': 409,
   'not-held': 409, 'not-waiting': 409, 'not-remote': 409, 'not-seeded': 409, 'pool-mismatch': 409, 'run-closed': 409,
   'sweep-stopped': 409, 'floor': 409, 'no-effort-rungs': 409, 'unrouteable-record': 409, 'marker-still-controls': 409, 'conflict': 409,
-  'incarnation-changed': 409, 'fable-operator-only': 409,
+  'incarnation-changed': 409, 'fable-operator-only': 409, 'lane-gated': 409,
   [SWAP_REFUSALS.sessionBusy]: 409, [SWAP_REFUSALS.statusUnknown]: 409, [SWAP_REFUSALS.hibernated]: 409,
   // 413, 415, 429
   'oversize': 413, 'too-large': 413,
@@ -316,7 +356,7 @@ export const REFUSAL_STATUS: Readonly<Record<RouteRefusal, number>> = {
   // refuses to act on now (the lock held, the last placeable lane, a verb's own refusal: the request was well formed),
   // and 502 for an outcome the server could not learn, the status `fleetFailed` answers for a fleet that did not
   // answer, because the box may have acted and the cure is the re-read, never the caller's retry.
-  'lane-busy': 409, 'last-enabled-home': 409, 'lane-act-refused': 409, 'outcome-unknown': 502, 'check-unrecorded': 502,
+  'lane-busy': 409, 'last-enabled-home': 409, 'lane-act-refused': 409, 'testbox-admin-refused': 409, 'parity-required': 409, 'outcome-unknown': 502, 'check-unrecorded': 502,
   // The write routes (accounts plan Task A17, D-7739): CHOSEN, not measured — new words, on the lane routes' rule. 400
   // for what the operator can retype (a secret's bytes, the typed confirm, the stated account), 409 for a lane the box's
   // state refuses to act on now, and 503 for a provider that did not answer the probe (`unreachable`'s status: a retry
@@ -408,6 +448,15 @@ export const REFUSAL_STATUS: Readonly<Record<RouteRefusal, number>> = {
   // The end-request route (D-8076): CHOSEN, not measured. 403 for a session that is no party to the run (the family of
   // `not-owner`); 409 for a request already open and for one repeated inside the 24 hours (the family of `duplicate`).
   [END_REQUEST_REFUSALS.notYours]: 403, [END_REQUEST_REFUSALS.alreadyAsked]: 409, [END_REQUEST_REFUSALS.recentlyAsked]: 409,
+  // The card door (Overlord W1a): CHOSEN, not measured. 409: the card the caller pages through was superseded by a newer render.
+  [CARD_REFUSALS.cardChanged]: 409,
+  // The note door (Overlord W1a): CHOSEN, not measured. 403 for a key that is not a live row of the caller's (as `not-owner`);
+  // 409 for a cap held and for a handover nobody asked (a state of the world, not a fault in the body); 400 for a field over
+  // its cap and for a handover thread naming no live row (the caller's text to fix).
+  [NOTE_REFUSALS.keyUnknown]: 403, [NOTE_REFUSALS.cap]: 409, [NOTE_REFUSALS.tooLong]: 400,
+  [NOTE_REFUSALS.referenceUnknown]: 400, [NOTE_REFUSALS.notAsked]: 409,
+  // The timer doors (Overlord W1a): CHOSEN, not measured, each status declared once in `TIMER_REFUSALS`.
+  ...TIMER_REFUSALS,
   // D-8126: CHOSEN, not measured. 400 for both: the coordinator sent a list of the wrong shape, or a change with nothing
   // to stand on; either is theirs to fix, as `bad-in-short`.
   [LEDGER_ROUTE_REFUSALS.badDoneWhen]: 400, [LEDGER_ROUTE_REFUSALS.doneWhenNeedsRuling]: 400,
@@ -429,6 +478,13 @@ export const REFUSAL_STATUS: Readonly<Record<RouteRefusal, number>> = {
   // what the coordinator sent. (The lift is always on, D-8165: there is no refusal for a box that turned it off.)
   [REVIEW_ROUNDS_REFUSALS.capNotReached]: 409,
   ...LANDING_REFUSAL_STATUS,
+  // The plan's words (D-8181): CHOSEN, not measured. Who may not 403, an absent plan object 404, a body that cannot be a plan
+  // 400, every refusal of a state that exists 409.
+  'not-plan-owner': 403, 'not-linear-owner': 403, 'unknown-epic': 404, 'unknown-checkpoint': 404, 'unknown-ticket': 404,
+  'plan-too-large': 400, 'plan-bad-body': 400, 'waves-not-contiguous': 400, 'dropped-needs-reason': 400,
+  'wave-overlap': 409, 'ticket-workspace-mismatch': 409, 'linear-text-public': 409, 'plan-owned': 409, 'map-rewrites-plan': 409,
+  'map-incomplete': 409, 'migration-in-flight': 409, 'not-managed': 409, 'issue-not-inbound': 409, 'item-act-mismatch': 409,
+  'plan-closed': 409, 'plan-runs-open': 409,
 };
 
 /** The runtime list, derived from the table (`PR_REASONS`'s idiom). */
@@ -439,7 +495,8 @@ export const ROUTE_REFUSALS = Object.keys(REFUSAL_STATUS) as RouteRefusal[];
  *  so they are not `RouteRefusal`s (D-5384, audit ticket ARCH-21). */
 export type OpenRunConflict = Extract<RunRefuseCode,
   'project-mismatch' | 'home-mismatch' | 'claimant-is-a-worker' | 'workspace-spent' | 'spent-unmeasured'
-  | 'claimed-by-another' | 'review-in-flight' | 'attribution-required' | 'not-a-child' | 'cap-review-rounds'>;
+  | 'claimed-by-another' | 'review-in-flight' | 'attribution-required' | 'not-a-child' | 'cap-review-rounds'
+  | 'wave-epic-mismatch' | 'plan-missing' | 'reserved-programme' | 'ticket-unavailable' | 'plan-closed'>;
 
 /** Each one's status (D-5384). Measured from the open route's inline sends on
  *  landing day — every one answered 409 — never chosen. */
@@ -451,6 +508,8 @@ export const RUN_REFUSAL_STATUS: Readonly<Record<OpenRunConflict, number>> = {
   'attribution-required': 409, 'not-a-child': 409,
   // D-6795: chosen, not measured — a new word, 409 like its family.
   'cap-review-rounds': 409,
+  // D-8181: chosen, not measured — the plan's five words, 409 like the family.
+  'wave-epic-mismatch': 409, 'plan-missing': 409, 'reserved-programme': 409, 'ticket-unavailable': 409, 'plan-closed': 409,
 };
 
 /** The `reject.code` words `POST /api/runs/:id/advance` answers (D-6733, audit ticket ARCH-33,

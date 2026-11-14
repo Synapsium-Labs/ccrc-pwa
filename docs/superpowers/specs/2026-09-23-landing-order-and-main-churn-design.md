@@ -5,7 +5,8 @@ adversarial review (61 findings survived, all applied) and a rev-3 verification 
 written spec's two open decisions recorded 2026-09-23 (R9, R10); reconciled with its first wave plans 2026-09-24,
 and with `main` `b501698a` the same day (step 6 is #166's; stage 2's wave is re-planned, §9); stage 2 amended
 2026-09-29, when its wave was re-planned on `main` `6da36f0b` and three reviews of that plan were applied (§4, §5.2,
-§6, §9, §11, §12; the operator's four rulings of that day are §11's) ·
+§6, §9, §11, §12; the operator's four rulings of that day are §11's); wave 5i's P1–P6 and invariant
+amendments A/B approved as written on 2026-11-14 (item 312; §5.5, §7, §11), not yet implemented ·
 **Date:** 2026-09-23 · **Branch:** `ws/enhance-ccrc-for-parallel-agents` (based on `origin/main` `bbb5e714`) ·
 **Companion:** `2026-09-23-session-continuity-design.md`. Two dependencies run between the specs (§9): the
 continuity spec's stage 1 must land before this spec's stage 5, and the continuity spec's stage 5 appends its
@@ -234,8 +235,9 @@ and the class of act that opened the livelock window.
   before the merge's second and said an add could not be the final queue act of a landed PR; one of 22 queue
   merges measured on 2026-10-21 recorded it one second after (D-6216). The clause earlier in this bullet said a
   removal alone cannot tell a merged PR the queue landed after a re-enqueue from one merged by hand after a
-  dequeue; it is restated, since once the removal is recorded its reason, not the act's kind, tells them apart. In
-  the second before it is recorded the PR reads MERGED with the add still its last act, and the MERGED-plus-add arm
+  dequeue; it is restated, since once the removal is recorded its reason, not the act's kind, tells them apart. When
+  the removal is recorded after the merge, in the second before it is recorded the PR reads MERGED with the add still
+  its last act (amended 2026-11-11, wave 5h, D-8312: true for a removal recorded after the merge only), and the MERGED-plus-add arm
   answers `landed`, so for that second the act's kind decides.)
 - A dequeue (GitHub does not re-enqueue after a failed group) becomes a feed event of a new `NotifyEvent` kind,
   `queue` (added in place in `shared/api.ts`, line-neutral; the PWA's total `KIND_WORD` and `KIND_GLYPH` records
@@ -367,8 +369,13 @@ absorption, and the re-send round per land-sync in strict repositories.
 
 - `landing_entries(project, repo, pr, pinnedSha, handoffCommit, runId?, afterIds, fixesMain, state, baseSha,
   setBy, detail)`;
-- `landing_projects(operatorPaused, mainRedHold)`: two booleans, because they have different remedies; the line
-  is paused while either is set;
+- `landing_projects(operatorPaused, mainRedHold)`: two booleans, because they have different remedies.
+  **Amendment A (2026-11-14, item 312; D-8625):** “`operatorPaused` always suppresses the head.
+  `mainRedHold` suppresses an ordinary head; it does not suppress the dependency-eligible head already selected
+  by `landingOrder` when that head has `fixesMain`. Neither exception bypasses recovery, unreadable open
+  projections, fresh composition evidence or any canonical required-checks gate.” This permits a persisted
+  `mainRedHold:true` with an effectively unpaused order for that selected fixesMain head; it never searches for
+  a later clean or fixing PR behind a blocked selected head;
 - `landing_intents(runId, project, key)`, keyed to runs, taken at dispatch, independent of entries. A key is the
   repository's issue or PR number, `#<n>`, or a deviation number, `D-<n>` (ruling 16).
 
@@ -382,7 +389,12 @@ nothing to judge it by. A lost database loses both together, and a snapshot rest
 
 **Entries and pins.** An entry is created on `advance → merging`, pinned to the verdict's `measured.branchTip` —
 the actual PR head, which after stage 4 may be a base-only merge — with `handoffCommit` kept as its own column.
-`--match-head-commit` and the landed check both read `pinnedSha`. `POST /api/landing/entries` covers a PR with
+`--match-head-commit` reads `pinnedSha`. The landed check reads the PR by number: a PR GitHub reads MERGED, or
+CLOSED with its train's proof, is `landed` whatever its head, and a head other than `pinnedSha` is kept in the entry's
+`detail`; a PR GitHub reads CLOSED with no train claim, or answers that no pull request has the number, is `closed`, a
+terminal state that leaves the line and that a verified pin re-pins only with a readable, unquarantined
+projection (amended 2026-11-14, item 312; earlier terminal rules: wave 5h, D-8296, D-8297, D-8299).
+`POST /api/landing/entries` covers a PR with
 no run. Order defaults to first-green; `POST /api/landing/order` sets `after` edges. Dispatch gains optional
 `intents[]` answering 409 `intent-held` (28 PRs in 120 days were closed unmerged because a sibling landed the
 same change first).
@@ -397,18 +409,77 @@ the spec does not claim it.
 `gh pr view <n> --json state,mergedAt,mergeCommit,headRefOid` under its own timeout, answering
 `open | merged | closed | unmeasured`, with no workspace binding. It rides the existing `['pr-state','--project']`
 prefix grant, gets its own `CcdArgv` brand, and the pr-state header's gh-call budget counts one call per open
-landing entry per sweep. A reader walks entries with it, separate from `sweepMerged`'s per-workspace loop, so
-no-run entries and hand merges are seen. The coordinator's own merge step also reports the result.
+landing entry per sweep, at most `LANDED_READS_PER_SWEEP` (ten) a sweep across every project, oldest first. A reader
+walks entries with it, separate from `sweepMerged`'s per-workspace loop, so no-run entries and hand merges are seen.
+The work run's `done` close, which re-measures the PR through `ccd pr-state --session`, marks the entry `landed` when
+GitHub reads the PR MERGED; a merge train's landing is left to the landed reader, which carries the train facts; no
+route reports a merge. `GET /api/landing` answers the entries still in the line, and `?pr=<n>` one PR's entry in any
+state. (Amended 2026-11-11, wave 5h: the cap D-8295, the close D-8294 and D-8306, the read D-8300.)
 (Amended 2026-10-30, wave 5c: five words, `absent` for GitHub's definite answer only (D-7593); the line echoes
 `baseRefName`, `isCrossRepository` and the train flags, `mergeCommit` flattened to its oid (D-7594); the gh fields
-also include `labels`, so the form is one `gh pr view` unless a CLOSED PR carries the train label; a train claim adds the
+also include `labels`, so the form makes at most one `gh pr view` of its own, and more only when a CLOSED PR carries the train label
+(amended 2026-11-11, wave 5h, D-8312: an upper bound, not a count); a train claim adds the
 train record's own `gh` reads (measured: a second `gh pr view` of the PR, for its comments, and one of the train PR;
 also a search when no named train proves the claim), and the form keeps the proofs it makes, as `pr-state --session` does (D-7595); a train claim
 the proof refused or could not read is `unmeasured` (D-7596); gated by the `pr-state-pr-v1` capability.)
 
-**Next to land.** The radar names the head whose composition against the current base is clean; the server mails
-the coordinator once. Mail is idle-gated: its latency to the coordinator's first nudge-started turn is a plan
-prerequisite (§10), not a figure this spec asserts.
+**Bounded terminal repair (amendment B, 2026-11-14, item 312; D-8626).** “A fresh PR-keyed
+merged/closed/absent observation may retire an exact existing row whose pin-only metadata is unreadable,
+provided identity, retained ordering data, counters, pin time and current association are measurable and no
+quarantine or own recovery conflict stands. This changes only state/detail. It restores no metadata, head,
+pin, association or witness. A quarantined row remains unknown until a verified pin with readable retained fields.”
+Missing projections, invalid identity, unreadable dependencies/counters/pin time and historical-binding conflicts
+remain holds. The existing PR-keyed landed reader supplies the evidence; the run close's `expect:null` gets no
+repair exception. Every closed row, not only a repaired one, needs a readable, unquarantined projection before
+re-pin; otherwise it remains kept/closed with no projection or witness write. Ordinary readable closed rows
+still re-pin. The existing mark transaction rechecks an exact raw-row/authority/subject/witness token before
+changing state/detail. Its tagged grammar preserves strings, numbers, bigints, null, absence and full BLOB bytes
+as distinct values; an unsupported raw kind blocks repair and one-byte drift invalidates the old token.
+Projection damage answers `recovery:'repair'` (D-8627), not a promise that restart repairs retained data.
+
+**Measured head and health (P1, P2 and P6; 2026-11-14, item 312).** Extend the existing probe parser,
+measured radar read pass and scheduler, with no second parser, poller or timer. Retain the parsed full probe
+base SHA and add the sole main-health and lander parsers beside it. All three documents use the existing
+1200-second freshness window independently; marker, probe and health timestamps need not be equal. Probe and
+health are each bounded at 524288 bytes, lander at 4096, through existing byte ranges of at most 262144 bytes.
+Oversize is rejected before byte reads; incomplete ranges, changed metadata, invalid UTF-8 and unsupported
+path measurements do not become parsed readiness. Preserve absent/unreadable/oversize/malformed/stale/
+unmeasured/late/refused distinctions. A marker reached through a symlinked landing ancestor is absent under
+D-7647; inability to measure those ancestors is not absence. Metadata rechecks are not an atomic no-follow
+handle and do not prove inode identity across remote ranges (D-8629).
+
+The selected head follows the existing fixesMain/pin-time/PR and after-dependency order. Binding is derived
+from current DB facts and a fresh control snapshot, never persisted as a head/readiness flag. Positive marker
+absence is inert; unknown opt-in holds. Recovery and unreadable open projections hold; clean later entries do
+not bypass the selected head. Health SHA must equal probe base SHA, and the selected probe PR's full head must
+equal the pinned SHA with a clean composition. Only positive fresh coherent green clears persisted main-red;
+red sets it, while pending, unknown, stale or mismatched evidence preserves its prior value. Readiness holds
+independently even when that persisted flag was false. Failed reads replace cached readiness, freshness is
+rechecked at use, and disconnection cannot authorise from a prior snapshot. Rendered check names may collide
+through producer truncation; the consumer does not invent a second verdict from those names.
+
+**Next to land (P3 and P4; 2026-11-14, item 312; D-8628).** For the selected ready head, the server mails
+the current recipient once per exact identity:
+`["landing-next",1,project,entryId,pr,pinnedSha,handoffCommit,pinnedAt,episode.kind,runIdOrNull,episodeIdOrCreationSeq,baseSha,toId]`.
+Run-bound recipients come only from the current same-project merging run's `claimedBy`, with matching episode
+PR/head; a null wave total remains valid metadata. No-run recipients come only from the journalled creation
+claimant and creation sequence, never a later order setter or guessed successor. The full SHA-256 tuple digest
+forms `next-to-land:#<pr>:<digest>` below the existing 200-byte subject cap; retain the full tuple in the body.
+A recipient A→B→A in the same episode/base receives no second cue to A; a temporary head departure/return
+without a new pin/base does not mint an episode. Delivery, acknowledgement, rejection, parking and restart do
+not re-arm an identity. The landing-specific store transaction applies health, revalidates current DB
+eligibility/run/episode, deduplicates and enqueues through the existing system-mail transaction bodies, with
+no nested transaction, public landing read that could close the handle, new outbox or feed-retention dependency.
+An applying/committing failure preserves the established landing fence even after clean rollback; scheduled
+passes cannot retry until successful established durable replay or required restart recovery clears it.
+No automatic replay/fence-clearing timer is added.
+
+The additive landing read reports inert/held/ready binding. On positive opt-in, the coordinator lands only its
+own pinned ready head at the full bound SHA, after fresh line, unchanged canonical verdict and required-check
+reads; missing binding or unavailable evidence holds. Inert keeps the pre-5i checks, and 404 keeps the
+older-server fallback. A cue is not merge permission or proof about later GitHub main, and never chooses a
+successor or renews a spent landing wait. Mail is idle-gated: its latency to the coordinator's first
+nudge-started turn is a plan prerequisite (§10), not a figure this spec asserts.
 
 **The coordinator lands**, from its own shell, never from a timer or the PWA:
 
@@ -432,10 +503,11 @@ prerequisite (§10), not a figure this spec asserts.
    `ejected` and is re-pinned on the next `advance → merging`. A fix round that changes content needs a new
    review run, as today; a clean base-only absorption does not, and stage 4 re-pins the entry to the new tip. A
    second ejection of the same entry becomes an operator ask.
-6. When required contexts are red on main the line sets `mainRedHold`; only a green `main-health` reading clears
-   it, and nothing automatic clears `operatorPaused`. Mutation rows: an operator pause survives a red-to-green
-   transition; an operator pause set BEFORE main goes red survives the red and the later green. Entries with
-   `fixesMain` jump the queue.
+6. Fresh coherent red main-health sets `mainRedHold`; only positive fresh coherent green clears it, and
+   nothing automatic clears `operatorPaused`. Pending or unavailable evidence keeps the prior red flag and
+   independently holds readiness. Mutation rows: an operator pause survives a red-to-green transition; an
+   operator pause set BEFORE main goes red survives the red and the later green. Amendment A permits only the
+   already-selected dependency-eligible `fixesMain` head through main-red, never through any other gate.
 
 **PWA doors.** Two routes, both in the `SESSION_ONLY` class (session-gated, no box token, NOT the ungated
 wedge-release class), registered in `server/src/coord/routes.ts` so the two scanners that read that file alone
@@ -760,7 +832,7 @@ required/advisory split waits. None of it is needed for 5.7.1–5.7.6.
 | `ccd/ccd-land-probe`, `deploy/systemd/ccd-land-probe.{service,timer}` | the radar and the `$REG/landing/<p>/enabled` marker; install spine, uninstall, doctor |
 | `ccd/ccrc` | `ccrc restamp` |
 | `server/src/coord/fingerprint.ts`, `shared/api.ts` | opted-in lineage path, `lineage-unmeasured`, `measured.via` |
-| `server/src/coord/{schema,store,routes,landing}.ts`, `server/src/watch.ts` | landing tables, routes (doors in `routes.ts`), mail, inversion event, PR-keyed landed reader |
+| `server/src/coord/{schema,store,routes,landing}.ts`, `server/src/watch.ts` | landing tables, routes (doors in `routes.ts`), mail, inversion event; wave 5h builds the PR-keyed landed reader in `server/src/coord/landed.ts` (L1) and `landedLane.ts` (L4), its land arm in `store.ts`, the close's mark in `close.ts`, the train facts in `prstate.ts`, the sweep's ending in `lifecycle.ts`, and the read's `pr` key in `ccd/ccrc-api` (amended 2026-11-11) |
 | `server/test/coord-pause-route.test.ts`, `box-token-census.test.ts`, `landing-subtractive.test.ts` (new) | the new doors in both directions |
 | `agent/src/whitelist.ts`, `server/src/ccdargv.ts` | no grant for `land-candidate`; the `pr-state --project --pr` form rides the existing prefix grant with its own `CcdArgv` brand |
 | `pwa/src` | predicted-conflict chip; the line on the project card; pause and withdraw |
@@ -770,7 +842,7 @@ required/advisory split waits. None of it is needed for 5.7.1–5.7.6.
 
 (Stage 2's rows amended 2026-09-29, when its wave was re-planned on `main` `6da36f0b`.)
 
-## 7. Invariants kept, and two amended
+## 7. Invariants kept, and recorded amendments
 
 - `gh` has no whitelist entry; no ccd verb merges; `EXEC_COMMANDS` stays `['tmux','ccd']`; the PWA cannot reach a
   merge or choose a successor.
@@ -781,6 +853,11 @@ required/advisory split waits. None of it is needed for 5.7.1–5.7.6.
 - **Amended — coord.db.** Landing order, pauses and withdrawals are central authoritative state with a journal, the
   second named exception after `pool_edges`. Intents are central state kept in `coord.db` with their runs, with no
   journal (ruling 17, 2026-11-07).
+- **Amended — red order and terminal marking (2026-11-14, item 312).** §5.5's exact amendments A/B are the
+  approved exceptions: only the already-selected dependency-eligible fixesMain head passes main-red, and only
+  bounded fresh terminal evidence retires eligible unreadable pin metadata. Operator pause, recovery,
+  quarantine, readable re-pin data, journal authority and canonical required checks remain gates. Projection
+  repair is distinct from replay/restart fence recovery; neither cue nor repair invents landing authority.
 - **Amended — ccd verbs.** "Zero new ccd verbs for coordination mutation" is read as written (runs and mail).
   `land-candidate` is a fleet git act in the `pr-open` class: it pushes and deletes only its own
   `refs/heads/ccrc/land/*` family, non-force. `ccd-land-probe` is read-only by code. The operator reshapes the
@@ -938,6 +1015,15 @@ Decided on the operator's ruling, 2026-11-09 (D-8124):
     The coordinator skill sends it the `approval-missing` stop and no other. The caller is derived from the process (the default
     tmux socket by path, the pane's process an ancestor of the door's own, the account's home from the password database), not from
     environment variables the command line sets.
+
+Decided on wave 5i's plan, 2026-11-14 (item 312, approved as written):
+
+22. **P1–P6 and amendments A/B are approved**, including the selected fixesMain red exception, bounded
+    terminal-evidence repair and closed-row re-pin restriction, truthful repair recovery vocabulary, exact
+    run/no-run recipient/episode identity, atomic health/cue application and the bounded cue-snapshot limit
+    (§5.5, §7; D-8625 to D-8629). The coordinator records these amendments on its ledger PR #2801, lands the
+    plan through the normal gates, and only then dispatches run 1850 for its seven tasks. This approval changes
+    no runtime state, waives no landing safeguard and authorises neither live arming nor waves 5j/5k.
 
 ## 12. Failure modes named
 

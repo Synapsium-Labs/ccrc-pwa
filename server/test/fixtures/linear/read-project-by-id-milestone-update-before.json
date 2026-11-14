@@ -1,0 +1,57 @@
+{
+  "name": "read-project-by-id-milestone-update-before",
+  "documentSource": "code",
+  "document": "query ProjectById($id: String!) { project(id: $id) { id name description updatedAt status { id type } teams(first: 20) { nodes { key } } initiatives(first: 10) { nodes { id } } projectMilestones(first: 50) { nodes { id name description targetDate sortOrder updatedAt } } } }",
+  "variables": {
+    "id": "00000000-0004-4000-8000-000000000021"
+  },
+  "requestBody": "{\"query\":\"query ProjectById($id: String!) { project(id: $id) { id name description updatedAt status { id type } teams(first: 20) { nodes { key } } initiatives(first: 10) { nodes { id } } projectMilestones(first: 50) { nodes { id name description targetDate sortOrder updatedAt } } } }\",\"variables\":{\"id\":\"00000000-0004-4000-8000-000000000021\"}}",
+  "requestHeaders": [
+    "authorization: <the key, bare, no Bearer>",
+    "content-type: application/json"
+  ],
+  "sentAtMs": null,
+  "receivedAtMs": null,
+  "sentAt": null,
+  "status": 200,
+  "statusLine": null,
+  "headers": [],
+  "body": {
+    "data": {
+      "project": {
+        "id": "00000000-0004-4000-8000-000000000021",
+        "name": "Capture item-4 project temp",
+        "description": "",
+        "updatedAt": "2026-11-13T16:13:56.363Z",
+        "status": {
+          "id": "00000000-0008-4000-8000-000000000025",
+          "type": "backlog"
+        },
+        "teams": {
+          "nodes": [
+            {
+              "key": "AAA"
+            }
+          ]
+        },
+        "initiatives": {
+          "nodes": []
+        },
+        "projectMilestones": {
+          "nodes": [
+            {
+              "id": "00000000-0008-4000-8000-000000000029",
+              "name": "Capture item-4 milestone temp",
+              "description": null,
+              "targetDate": null,
+              "sortOrder": 22,
+              "updatedAt": "2026-11-13T16:13:56.509Z"
+            }
+          ]
+        }
+      }
+    }
+  },
+  "bodyRaw": "{\"data\":{\"project\":{\"id\":\"00000000-0004-4000-8000-000000000021\",\"name\":\"Capture item-4 project temp\",\"description\":\"\",\"updatedAt\":\"2026-11-13T16:13:56.363Z\",\"status\":{\"id\":\"00000000-0008-4000-8000-000000000025\",\"type\":\"backlog\"},\"teams\":{\"nodes\":[{\"key\":\"AAA\"}]},\"initiatives\":{\"nodes\":[]},\"projectMilestones\":{\"nodes\":[{\"id\":\"00000000-0008-4000-8000-000000000029\",\"name\":\"Capture item-4 milestone temp\",\"description\":null,\"targetDate\":null,\"sortOrder\":22,\"updatedAt\":\"2026-11-13T16:13:56.509Z\"}]}}}}\n",
+  "note": "Recorded by the hierarchy capture's item-4 run (FX2, D-8407), which kept no response header. The project read before its milestone's description was updated."
+}

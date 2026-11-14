@@ -20,7 +20,7 @@
 // .curlrc.
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { spawnSync } from 'node:child_process';
-import { appendFileSync, chmodSync, cpSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
+import { appendFileSync, chmodSync, cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { units, UNIT_NAME } from '../../agent/src/testbox/systemd.js';
 import { encodeSpec, type RunSpec } from '../../agent/src/testbox/spec.js';
@@ -390,9 +390,11 @@ const RUNNING_SETS = [
 ];
 const indexOf = (l: string[], re: RegExp): number => l.findIndex((x) => re.test(x));
 const lastIndexOf = (l: string[], re: RegExp): number => { for (let i = l.length - 1; i >= 0; i--) if (re.test(l[i]!)) return i; return -1; };
-/** The TB_SYS lines phase 1 makes (its two queries) and nothing else. */
+/** The TB_SYS lines phase 1 makes (a user query for each account the box file names, then its two filesystem queries) and
+ *  nothing else (D-8166: a user that exists must be one the installer made). */
+const USER_QUERIES = ['getent passwd ccrc-tb-svc', 'getent passwd ccrc-tb-push', 'getent passwd ccrc-tb-install', 'getent passwd ccrc-tb-1', 'getent passwd ccrc-tb-2'];
 const QUERIES = (b: Box, made = false): string[] => [
-  `findmnt -n -o FSTYPE,TARGET -T ${made ? b.tbRoot : path.join(b.root, 'srv')}`, 'xfs_info /srv',
+  ...USER_QUERIES, `findmnt -n -o FSTYPE,TARGET -T ${made ? b.tbRoot : path.join(b.root, 'srv')}`, 'xfs_info /srv',
 ];
 
 describe('the installer: a first install into a fixture root (D-7409, D-7424)', () => {
@@ -484,11 +486,11 @@ describe('the installer: a first install into a fixture root (D-7409, D-7424)', 
     const l = lines(b);
     expect(l.filter((x) => /^(useradd|groupadd|usermod) /.test(x)).map((x) => x.replace(b.root, '<root>'))).toEqual([
       'groupadd --system ccrc-tb-git',
-      'useradd --system --user-group --home-dir <root>/var/lib/ccrc-tb-svc --shell /usr/sbin/nologin --create-home ccrc-tb-svc',
-      'useradd --system --user-group --home-dir <root>/var/lib/ccrc-tb-push --shell /usr/bin/git-shell ccrc-tb-push',
-      'useradd --system --user-group --home-dir /nonexistent --shell /usr/sbin/nologin ccrc-tb-1',
-      'useradd --system --user-group --home-dir /nonexistent --shell /usr/sbin/nologin ccrc-tb-2',
-      'useradd --system --user-group --home-dir /nonexistent --shell /usr/sbin/nologin ccrc-tb-install',
+      'useradd --system --user-group --comment ccrc test box --home-dir <root>/var/lib/ccrc-tb-svc --shell /usr/sbin/nologin --create-home ccrc-tb-svc',
+      'useradd --system --user-group --comment ccrc test box --home-dir <root>/var/lib/ccrc-tb-push --shell /usr/bin/git-shell ccrc-tb-push',
+      'useradd --system --user-group --comment ccrc test box --home-dir /nonexistent --shell /usr/sbin/nologin ccrc-tb-1',
+      'useradd --system --user-group --comment ccrc test box --home-dir /nonexistent --shell /usr/sbin/nologin ccrc-tb-2',
+      'useradd --system --user-group --comment ccrc test box --home-dir /nonexistent --shell /usr/sbin/nologin ccrc-tb-install',
       'usermod -a -G ccrc-tb-git ccrc-tb-svc', 'usermod -a -G ccrc-tb-git ccrc-tb-push',
     ]);
     expect(l).toContain(`chown root:ccrc-tb-svc ${b.boxFile}`);
@@ -603,7 +605,7 @@ describe('the installer: a first install into a fixture root (D-7409, D-7424)', 
     }
   });
 
-  it('a second run with the same tag and an unchanged box file changes nothing: the same tree, owners and modes, and only phase 1\'s two queries', async () => {
+  it('a second run with the same tag and an unchanged box file changes nothing: the same tree, owners and modes, and only phase 1\'s queries', async () => {
     const before = treeOf(b.root);
     const n = sysLog(b).length;
     const again = await install(b, { staging: W.staging });
@@ -672,7 +674,7 @@ describe('the installer\'s refusals, each before anything is written (D-7423, D-
     const r = await install(b, { staging: W.staging });
     expect([r.code, r.stderr.trim()]).toEqual([1, `ccrc-testbox-install: refused: CCRC_TESTBOX_ROOT=${b.tbRoot} is on ext4, not XFS; nothing was written`]);
     expect(treeOf(b.root)).toEqual(before);
-    expect(lines(b)).toEqual([QUERIES(b)[0]]);
+    expect(lines(b)).toEqual([...USER_QUERIES, QUERIES(b)[USER_QUERIES.length]]);
     const c = makeBox(W, { xfs: 'meta-data=/dev/fixture isize=512\n         =   reflink=0    bigtime=1\n' });
     await refused(c, {}, `CCRC_TESTBOX_ROOT=${c.tbRoot} is on XFS without reflink=1`, true);
   });
@@ -692,6 +694,58 @@ describe('the installer\'s refusals, each before anything is written (D-7423, D-
 
   it('a box path that is not absolute: the root installer has no reader\'s home to resolve ~/ against (D-7568)', async () => {
     await refused(makeBox(W, { boxLines: ['CCRC_TESTBOX_ROOT="~/.ccrc/testbox"'] }), {}, 'CCRC_TESTBOX_ROOT=~/.ccrc/testbox is not an absolute path (the installer has no reader\'s home)', false);
+  });
+});
+
+describe('the installer refuses a path or a user that would hand a system directory or account to the test box (D-8166)', () => {
+  const refusedAt = async (b: Box, why: string, sysLines: string[] = []): Promise<void> => {
+    const before = treeOf(b.root);
+    const r = await install(b, { staging: W.staging });
+    expect([r.code, r.stderr.trim()]).toEqual([1, `ccrc-testbox-install: refused: ${why}; nothing was written`]);
+    expect(treeOf(b.root)).toEqual(before);
+    expect(lines(b)).toEqual(sysLines);
+  };
+  const BELOW = 'is not a directory below /srv, /mnt, /media, /opt, /data, /etc/ccrc-testbox or /var/lib/ccrc-testbox, and the installer makes it root\'s';
+
+  it('a service token that is not the service user\'s: /etc/passwd would be removed by --unpair, and a root-owned path replaced by the pairing', async () => {
+    await refusedAt(makeBox(W, { boxLines: ['CCRC_TESTBOX_SERVICE_TOKEN_FILE=/etc/passwd'] }),
+      'CCRC_TESTBOX_SERVICE_TOKEN_FILE=/etc/passwd is not in the service user\'s home (~/ or /var/lib/ccrc-tb-svc/), and the installer removes it on unpair');
+    await refusedAt(makeBox(W, { boxLines: ['CCRC_TESTBOX_SERVICE_TOKEN_FILE=/var/lib/ccrc-tb-push/token'] }),
+      'CCRC_TESTBOX_SERVICE_TOKEN_FILE=/var/lib/ccrc-tb-push/token is not in the service user\'s home (~/ or /var/lib/ccrc-tb-svc/), and the installer removes it on unpair');
+  });
+
+  it('a run root, a rows directory or a tools directory that is a system directory is refused, so no run user can read /root', async () => {
+    await refusedAt(makeBox(W, { boxLines: ['CCRC_TESTBOX_ROOT=/root'] }), `CCRC_TESTBOX_ROOT=/root ${BELOW}`);
+    await refusedAt(makeBox(W, { boxLines: ['CCRC_TESTBOX_REPOS=/etc'] }), `CCRC_TESTBOX_REPOS=/etc ${BELOW}`);
+    await refusedAt(makeBox(W, { boxLines: ['CCRC_TESTBOX_TOOLS_DIR=/usr/local'] }), `CCRC_TESTBOX_TOOLS_DIR=/usr/local ${BELOW}`);
+    await refusedAt(makeBox(W, { boxLines: ['CCRC_TESTBOX_ROOT=/srv'] }), `CCRC_TESTBOX_ROOT=/srv ${BELOW}`);
+  });
+
+  it('a repository row whose mirror lies under /root, or directly under a base, is refused: its parent directory is made root\'s', async () => {
+    for (const mirror of ['/root/x.git', '/srv/x.git']) {
+      const b = makeBox(W);
+      const row = JSON.parse(readFileSync(b.rowFile, 'utf8')) as Record<string, unknown>;
+      writeFileSync(b.rowFile, `${JSON.stringify({ ...row, mirrorPath: mirror })}\n`);
+      await refusedAt(b, 'repository row project-a has a mirrorPath that is not below /srv, /mnt, /media, /opt, /data, /etc/ccrc-testbox or /var/lib/ccrc-testbox (its parent directory is made root\'s)');
+    }
+  });
+
+  it('a service or push user that is root, or the same account twice, is refused', async () => {
+    await refusedAt(makeBox(W, { boxLines: ['CCRC_TESTBOX_SERVICE_USER=root'] }), 'CCRC_TESTBOX_SERVICE_USER names root; the service and the push user are accounts of their own');
+    await refusedAt(makeBox(W, { boxLines: ['CCRC_TESTBOX_PUSH_USER=root'] }), 'CCRC_TESTBOX_PUSH_USER names root; the service and the push user are accounts of their own');
+    await refusedAt(makeBox(W, { boxLines: ['CCRC_TESTBOX_PUSH_USER=ccrc-tb-svc'] }), 'the service user and the push user are the same account (ccrc-tb-svc)');
+    await refusedAt(makeBox(W, { boxLines: ['CCRC_TESTBOX_SERVICE_USER=ccrc-tb-1'] }), 'the service user and the push user are not run users: ccrc-tb-1 is one of the names CCRC_TESTBOX_RUN_USER_PREFIX makes');
+    await refusedAt(makeBox(W, { boxLines: ['CCRC_TESTBOX_PUSH_USER=ccrc-tb-install'] }), 'the service user and the push user are not run users: ccrc-tb-install is one of the names CCRC_TESTBOX_RUN_USER_PREFIX makes');
+  });
+
+  it('a user that already exists and that this installer did not make (no account comment) is refused by name, whichever role names it', async () => {
+    const svc = makeBox(W);
+    appendFileSync(path.join(svc.fx, 'sys.db'), 'passwd ccrc-tb-svc\n');
+    await refusedAt(svc, 'the user ccrc-tb-svc already exists and this installer did not make it; name an account of the test box\'s own in the box file', ['getent passwd ccrc-tb-svc']);
+    const run = makeBox(W, { boxLines: ['CCRC_TESTBOX_RUN_USER_PREFIX=alice-'] });
+    appendFileSync(path.join(run.fx, 'sys.db'), 'passwd alice-2\n');
+    await refusedAt(run, 'the user alice-2 already exists and this installer did not make it; name an account of the test box\'s own in the box file',
+      ['getent passwd ccrc-tb-svc', 'getent passwd ccrc-tb-push', 'getent passwd alice-install', 'getent passwd alice-1', 'getent passwd alice-2']);
   });
 });
 
@@ -919,5 +973,239 @@ describe('the counted exits (D-7409)', () => {
     const m = readFileSync(path.join(t, 'MANIFEST'), 'utf8');
     writeManifest(t);
     expect(readFileSync(path.join(t, 'MANIFEST'), 'utf8')).toBe(m);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------------
+// The installer's same-tag re-apply and unpair (D-8166; plan docs/superpowers/plans/2026-11-10-test-box-connect.md,
+// Task TC6; spec §2.7, §2.9, C5, C6, M3). Both run from the installed tree, `<tools>/release/installed`.
+// ---------------------------------------------------------------------------------------------------------------
+
+const installedScript = (b: Box): string => path.join(b.tools, 'release', 'installed', 'deploy', 'testbox', 'install.sh');
+const markerOf = (b: Box): string => path.join(b.root, 'etc', 'ccrc-testbox', 'installed');
+const sha256Of = (p: string): string => run('shasum', ['-a', '256', p]).split(' ')[0]!;
+const reapply = (b: Box, args: string[] = [], script?: string) => exec('bash', [script ?? installedScript(b), '--reapply', ...args], b.env);
+const unpair = (b: Box, script?: string) => exec('bash', [script ?? installedScript(b), '--unpair'], b.env);
+
+describe('the installer: --reapply from the installed tree applies a changed box file at the same tag (D-8166, M3)', () => {
+  let b: Box;
+  beforeAll(async () => {
+    b = makeBox(W);
+    const first = await install(b, { staging: W.staging });
+    expect(first.code, first.stderr).toBe(0);
+  }, 240_000);
+
+  it('--reapply with an unchanged box file and rows changes nothing', async () => {
+    const before = treeOf(b.root);
+    const n = sysLog(b).length;
+    const r = await reapply(b);
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stderr).toContain('nothing to do');
+    expect(treeOf(b.root)).toEqual(before);
+    expect(lines(b).slice(n)).toEqual(QUERIES(b, true));
+  });
+
+  it('--reapply refuses outside the installed tree: the staging tree, and a copy of the installed tree', async () => {
+    const before = treeOf(b.root);
+    const n = sysLog(b).length;
+    const why = `--reapply runs only from the installed tree ${path.join(b.tools, 'release', 'installed')}`;
+    for (const script of [path.join(W.staging, 'deploy', 'testbox', 'install.sh'), path.join(mkTmp('ccrc-tb-copy-'), 'tree')]) {
+      let s = script;
+      if (!s.endsWith('install.sh')) { cpSync(W.staging, s, { recursive: true }); s = path.join(s, 'deploy', 'testbox', 'install.sh'); }
+      const r = await reapply(b, [], s);
+      expect([r.code, r.stderr.trim()]).toEqual([1, `ccrc-testbox-install: refused: ${why}, not ${s.slice(0, -'/deploy/testbox/install.sh'.length)}; nothing was written`]);
+    }
+    expect(treeOf(b.root)).toEqual(before);
+    expect(sysLog(b).length).toBe(n);
+  });
+
+  it('--reapply applies at the tree\'s tag when the marker names an older one (apply-release), and records the tree\'s tag', async () => {
+    const marker = readFileSync(markerOf(b), 'utf8');
+    writeFileSync(markerOf(b), marker.replace(BOOT_TAG, 'v0.0.2'));
+    try {
+      const n = sysLog(b).length;
+      const r = await reapply(b);
+      expect(r.code, r.stderr).toBe(0);
+      expect(r.stderr.split('\n').filter((l) => / phase \d:/.test(l)).map((l) => /phase (\d)/.exec(l)![1])).toEqual(['5', '6']);
+      expect(readFileSync(markerOf(b), 'utf8')).toBe(marker);
+      expect(lines(b).slice(n)).toContain('systemctl restart ccrc-testbox.service');
+    } finally {
+      writeFileSync(markerOf(b), marker);
+    }
+  });
+
+  it('--reapply refuses a box with no installed marker', async () => {
+    const marker = readFileSync(markerOf(b), 'utf8');
+    rmSync(markerOf(b));
+    try {
+      const before = treeOf(b.root);
+      const r = await reapply(b);
+      expect([r.code, r.stderr.trim()]).toEqual([1, 'ccrc-testbox-install: refused: the box has no installed marker (run the first install, not --reapply); nothing was written']);
+      expect(treeOf(b.root)).toEqual(before);
+    } finally {
+      writeFileSync(markerOf(b), marker);
+    }
+  });
+
+  it('--reapply --force with nothing changed rewrites a damaged unit and the firewall file, and restarts (repair)', async () => {
+    const unit = path.join(b.root, 'etc', 'systemd', 'system', 'ccrc-testbox-run@.service.d', '50-ccrc-testbox.conf');
+    const good = readFileSync(unit, 'utf8');
+    writeFileSync(unit, '# damaged\n');
+    const n = sysLog(b).length;
+    const plain = await reapply(b);
+    expect([plain.code, plain.stderr]).toEqual([0, expect.stringContaining('nothing to do')]);
+    expect(readFileSync(unit, 'utf8')).toBe('# damaged\n');
+    const r = await reapply(b, ['--force']);
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stderr).not.toContain('nothing to do');
+    expect(readFileSync(unit, 'utf8')).toBe(good);
+    expect(lines(b).slice(n)).toContain('systemctl restart ccrc-testbox.service');
+    expect(readFileSync(markerOf(b), 'utf8')).toBe(`release\t${BOOT_TAG}\nbox-sha256\t${sha256Of(b.boxFile)}\n`);
+  });
+
+  it('--reapply refuses a box value off its shape before any write', async () => {
+    const file = readFileSync(b.boxFile, 'utf8');
+    writeFileSync(b.boxFile, `${file}CCRC_TESTBOX_RUNS=zero\n`);
+    try {
+      const before = treeOf(b.root);
+      const n = sysLog(b).length;
+      const r = await reapply(b);
+      expect(r.code).toBe(1);
+      expect(r.stderr.trim().split('\n').at(-1)).toBe('ccrc-testbox-install: refused: the box file holds a value that is not its setting\'s shape (above); nothing was written');
+      expect(treeOf(b.root)).toEqual(before);
+      expect(sysLog(b).length).toBe(n);
+    } finally {
+      writeFileSync(b.boxFile, file);
+    }
+  });
+
+  it('--reapply with a changed box file runs phase 5 and records the new sha256', async () => {
+    const n = sysLog(b).length;
+    const key = readFileSync(path.join(b.root, 'var', 'lib', 'ccrc-tb-push', '.ssh', 'authorized_keys'), 'utf8');
+    writeFileSync(b.boxFile, `${readFileSync(b.boxFile, 'utf8')}CCRC_TESTBOX_UNIT_MAX=2h\n`);
+    const r = await reapply(b);
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stderr.split('\n').filter((l) => / phase \d:/.test(l)).map((l) => /phase (\d)/.exec(l)![1])).toEqual(['5', '6']);
+    expect(readFileSync(markerOf(b), 'utf8')).toBe(`release\t${BOOT_TAG}\nbox-sha256\t${sha256Of(b.boxFile)}\n`);
+    // The drop-in follows the box file; the push user's installed key is kept; the service restarts; no node or npm ran again.
+    expect(readFileSync(path.join(b.root, 'etc', 'systemd', 'system', 'ccrc-testbox-run@.service.d', '50-ccrc-testbox.conf'), 'utf8')).toContain('RuntimeMaxSec=2h');
+    expect(readFileSync(path.join(b.root, 'var', 'lib', 'ccrc-tb-push', '.ssh', 'authorized_keys'), 'utf8')).toBe(key);
+    const l = lines(b).slice(n);
+    expect(l).toContain('systemctl daemon-reload');
+    expect(l).toContain('systemctl restart ccrc-testbox.service');
+    expect(l.filter((x) => /^systemctl enable --now ccrc-testbox\.service/.test(x))).toEqual([]);
+    expect(nftState(b)).toEqual(RUNNING_SETS);
+    const again = await reapply(b);
+    expect([again.code, again.stderr]).toEqual([0, expect.stringContaining('nothing to do')]);
+  });
+
+  it('--reapply with --repos installs the new rows', async () => {
+    const row = path.join(mkTmp('ccrc-tb-row-'), 'project-b.json');
+    const mirror = path.join(b.root, 'srv', 'mirrors', 'project-b.git');
+    writeFileSync(row, `${JSON.stringify({
+      name: 'project-b', fetchUrl: 'https://testbox.invalid/project-b.git', mirrorPath: mirror,
+      packages: [{ name: 'server', installInputs: ['server/package.json'], commands: ['./node_modules/.bin/vitest'] }], buildOutputs: [], systemTools: [],
+    })}\n`);
+    const r = await reapply(b, ['--repos', row]);
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stderr).not.toContain('nothing to do');
+    expect(readFileSync(path.join(b.repos, 'project-b.json'), 'utf8')).toBe(readFileSync(row, 'utf8'));
+    expect(existsSync(path.join(mirror, 'HEAD'))).toBe(true);
+    // The installed row of the first install is still there, untouched.
+    expect(readFileSync(path.join(b.repos, 'project-a.json'), 'utf8')).toBe(readFileSync(b.rowFile, 'utf8'));
+    const again = await reapply(b, ['--repos', row]);
+    expect(again.stderr).toContain('nothing to do');
+  });
+
+  it('takes no other argument: --release, --node, --distro and --push-key are the first install\'s', async () => {
+    const before = treeOf(b.root);
+    const r = await exec('bash', [installedScript(b), '--reapply', '--release', BOOT_TAG], b.env);
+    expect([r.code, r.stderr.startsWith('usage: install.sh')]).toEqual([2, true]);
+    expect(treeOf(b.root)).toEqual(before);
+  });
+});
+
+describe('the installer: --unpair removes the pairing and nothing else (D-8166, C6)', () => {
+  let b: Box;
+  let release: string;
+  beforeAll(async () => {
+    b = makeBox(W);
+    release = path.join(b.tools, 'release');
+    const first = await install(b, { staging: W.staging });
+    expect(first.code, first.stderr).toBe(0);
+  }, 240_000);
+
+  const TOKEN = (): string => path.join(b.root, 'var', 'lib', 'ccrc-tb-svc', '.ccrc', 'testbox-service.token');
+
+  it('--unpair refuses outside the installed tree, before any write', async () => {
+    mkdirSync(path.dirname(TOKEN()), { recursive: true });
+    writeFileSync(TOKEN(), 'a'.repeat(64));
+    const before = treeOf(b.root);
+    const n = sysLog(b).length;
+    const r = await unpair(b, path.join(W.staging, 'deploy', 'testbox', 'install.sh'));
+    expect([r.code, r.stderr.startsWith('ccrc-testbox-install: refused: --unpair runs only from the installed tree')]).toEqual([1, true]);
+    expect(treeOf(b.root)).toEqual(before);
+    expect(sysLog(b).length).toBe(n);
+  });
+
+  it('--unpair stops and disables the service and the egress timer', async () => {
+    const n = sysLog(b).length;
+    const r = await unpair(b);
+    expect(r.code, r.stderr).toBe(0);
+    expect(lines(b).slice(n).filter((x) => x.startsWith('systemctl '))).toEqual(['systemctl disable --now ccrc-testbox.service ccrc-testbox-egress.timer']);
+  });
+
+  it('--unpair empties the push key and removes the token', () => {
+    expect(readFileSync(path.join(b.root, 'var', 'lib', 'ccrc-tb-push', '.ssh', 'authorized_keys'), 'utf8')).toBe('');
+    expect(existsSync(TOKEN())).toBe(false);
+  });
+
+  it('--unpair leaves the run root, the mirrors and the release', async () => {
+    expect(statSync(b.tbRoot).isDirectory()).toBe(true);
+    expect(statSync(path.join(b.tbRoot, 'specs')).isDirectory()).toBe(true);
+    expect(existsSync(path.join(b.mirror, 'HEAD'))).toBe(true);
+    expect(existsSync(path.join(b.repos, 'project-a.json'))).toBe(true);
+    expect(existsSync(path.join(release, BOOT_TAG, 'build.json'))).toBe(true);
+    expect(existsSync(installedScript(b))).toBe(true);
+    // A second --unpair is a no-op that still succeeds (the disconnect may be retried).
+    const before = treeOf(b.root);
+    const r = await unpair(b);
+    expect(r.code, r.stderr).toBe(0);
+    expect(treeOf(b.root)).toEqual(before);
+    // An unpaired box has no push key to carry over: --reapply says so.
+    const again = await reapply(b);
+    expect([again.code, again.stderr.trim()]).toEqual([1, 'ccrc-testbox-install: refused: the push user holds no installed key (the box is unpaired); nothing was written']);
+  });
+
+  it('a re-pair at the same tag with a byte-identical box file installs the key it is given and enables the service again (Start over, then Connect)', async () => {
+    const AK = path.join(b.root, 'var', 'lib', 'ccrc-tb-push', '.ssh', 'authorized_keys');
+    expect(readFileSync(AK, 'utf8')).toBe('');
+    const key = (n: string): string => `ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI${n.repeat(43)} ccrc-testbox-push`;
+    // The unpaired box holds the marker (--unpair keeps it), the same tag and the same box file, and no key.
+    writeFileSync(b.pushKey, `${key('N')}\n`);
+    const n = sysLog(b).length;
+    const r = await install(b, { staging: W.staging });
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stderr).not.toContain('nothing to do');
+    expect(readFileSync(AK, 'utf8')).toContain(`${key('N').split(' ').slice(0, 2).join(' ')}\n`);
+    const l = lines(b).slice(n).filter((x) => x.startsWith('systemctl '));
+    expect(l).toContain('systemctl enable ccrc-testbox.service ccrc-testbox-egress.timer');
+    expect(l).toContain('systemctl restart ccrc-testbox.service');
+    expect(l).toContain('systemctl start ccrc-testbox-egress.timer');
+    expect(l.indexOf('systemctl enable ccrc-testbox.service ccrc-testbox-egress.timer')).toBeLessThan(l.indexOf('systemctl restart ccrc-testbox.service'));
+    // the same key again is current: nothing to do
+    const same = await install(b, { staging: W.staging });
+    expect([same.code, same.stderr]).toEqual([0, expect.stringContaining('nothing to do')]);
+    // another key (a new pairing) is not: the push user's one key is replaced
+    writeFileSync(b.pushKey, `${key('M')}\n`);
+    const other = await install(b, { staging: W.staging });
+    expect(other.code, other.stderr).toBe(0);
+    expect(other.stderr).not.toContain('nothing to do');
+    const ak = readFileSync(AK, 'utf8');
+    expect(ak).toContain(key('M').split(' ').slice(0, 2).join(' '));
+    expect(ak).not.toContain(key('N').split(' ')[1]!);
+    // and --reapply works again, so Repair is not stranded
+    const re = await reapply(b, ['--force']);
+    expect(re.code, re.stderr).toBe(0);
   });
 });

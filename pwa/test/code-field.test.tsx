@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { CodeField } from '../src/accounts/CodeField';
 import { CODE_FIELD_LABEL, SEND_CODE } from '../src/fleet/accountWords';
+import { expectSecretInput } from './secretInputAttrs';
 
 const CODE = 'A'.repeat(48) + '#' + 'b'.repeat(40) + '-_9';
 
@@ -19,14 +20,12 @@ const paste = (text: string): void => {
 };
 
 describe('the code field (spec §3.7, §12.4)', () => {
-  it('is a one-time-code field in mono, with no name a password manager keys on', () => {
+  it('is a secret field in mono that nothing autofills (D-8404), with no name a password manager keys on', () => {
     render(<CodeField onSend={() => {}} />);
     const f = field();
-    expect(f).toHaveAttribute('autocomplete', 'one-time-code');
-    expect(f).toHaveAttribute('autocapitalize', 'off');
-    expect(f).toHaveAttribute('spellcheck', 'false');
+    // Not `one-time-code`: the code is claude.ai's, never an SMS or authenticator code a phone or manager could offer.
+    expectSecretInput(f);
     expect(f).toHaveAttribute('inputmode', 'text');
-    expect(f).not.toHaveAttribute('name');
     expect(f.className).toMatch(/font-mono/);
     // Nothing to send yet.
     expect(send()).toBeDisabled();

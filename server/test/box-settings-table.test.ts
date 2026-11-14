@@ -111,7 +111,7 @@ describe('the class table: bash equals CCRC_SETTINGS and L0 (D16, spec 5.1)', ()
   const lines = tableLines(SRC);
 
   it('T1: the bash names are CCRC_SETTINGS, in order, every line well formed', () => {
-    expect(NAMES, 'D-8121 adds the two browser MCP settings, D-8122 the memory gate\'s four: 89 -> 95, D-8123 the limit rescue\'s two: 97, D-8125 the review cap\'s coordinator lift: 98, D-8124 the admin-merge switch: 99, D-8165 retires the coordinator lift (always on): 98').toHaveLength(98);
+    expect(NAMES, 'D-8121 adds the two browser MCP settings, D-8122 the memory gate\'s four: 89 -> 95, D-8123 the limit rescue\'s two: 97, D-8125 the review cap\'s coordinator lift: 98, D-8124 the admin-merge switch: 99, D-8165 retires the coordinator lift (always on): 98, D-8290 the live probes\' three box keys: 101').toHaveLength(101);
     expect(lines.filter((l) => !LINE.test(l)), 'lines that do not match').toEqual([]);
     expect(rowsOf(lines).map((r) => r.key)).toEqual(NAMES);
   });
@@ -129,7 +129,7 @@ describe('the class table: bash equals CCRC_SETTINGS and L0 (D16, spec 5.1)', ()
     ];
     for (const of of [l0, bash]) {
       expect({ value: of('value').length, origin: of('origin').length, 'is-set': of('is-set').length, omit: of('omit').length })
-        .toEqual({ value: 57, origin: 1, 'is-set': 12, omit: 28 });
+        .toEqual({ value: 57, origin: 1, 'is-set': 12, omit: 31 });
       expect(of('is-set').sort()).toEqual(IS_SET);
       expect(of('is-set'), 'D19: the test box URL is is-set (the spec\'s presence, D12; D-7921)').toContain('CCRC_TESTBOX_URL');
       expect(of('origin')).toEqual(['CCRC_RELEASE_BASE_URL']);
@@ -138,7 +138,7 @@ describe('the class table: bash equals CCRC_SETTINGS and L0 (D16, spec 5.1)', ()
     expect(rowsOf(lines).filter((r) => r.cls !== 'omit')).toHaveLength(70);
   });
   it('T4: omit is the test box\'s own table, with roles none and applies run', () => {
-    expect(TB_BOX_KEYS).toHaveLength(28);
+    expect(TB_BOX_KEYS, 'D-8290 adds the live probes\' three').toHaveLength(31);
     expect(keysWhere((k) => classOf(k) === 'omit').sort()).toEqual([...TB_BOX_KEYS].sort());
     const host = [...(/^_tb_host_table\(\) \{[\s\S]*?\n\}$/m.exec(TB_SRC)?.[0] ?? '').matchAll(/\b_ccrc_knob (CCRC_[A-Z0-9_]+)/g)].map((m) => m[1]!);
     expect(host).toHaveLength(16);

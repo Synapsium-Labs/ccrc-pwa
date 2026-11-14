@@ -451,7 +451,7 @@ export async function sleepAct<D extends SleepDepsBase, M, Row extends { readonl
   };
   const call = (v: Asleep<V>): Promise<CcdResult> => {
     called = true;
-    return port.runCcd(CCD_ARGV.hibernate(id, sweepDec(port.fleetState, lane.actor), holdOkOf(v), wake));
+    return port.runCcd(CCD_ARGV.hibernate(id, sweepDec(port.fleetState, lane.actor), holdOkOf(v), wake ? 'roll' : 'sleep'));
   };
   try {
     if (!wake) {

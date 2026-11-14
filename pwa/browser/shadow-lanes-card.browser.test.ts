@@ -1,7 +1,8 @@
 // Settings › Automation › Shadow lanes (D-8274; spec 2026-10-28 R-6), in a real Chrome over the production build, at 360, 390,
 // 1280 and 1920 in both skins. `test/shadow-lanes-section.test.tsx` holds the card's behaviour in jsdom; this file holds what
 // only an engine can say: the roster card's row draws its two choices from the door's answer, nothing in it or on the page
-// overflows sideways, and Live is one tap then a confirm whose sheet fits, settling on the server's answer.
+// overflows sideways, and Live is one tap then a confirm whose sheet fits, settling on the server's answer; and the continuity
+// row's gate line, the card's longest, wraps inside the card (review 2006 N7).
 //
 // The app answers from a fixture (`browser/app.ts`): no server, no ccd. `POST /api/coord/lane-arm` answers the 409
 // `confirm-required` to a Live with no key and the view to one with the key, as the route does. Run: `( cd pwa &&
@@ -9,9 +10,9 @@
 // browser/shadow-lanes-card.browser.test.ts )`. `CCRC_SHOTS=<a directory>` keeps one picture per view.
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import path from 'node:path';
-import { chromium, type Browser } from 'playwright-core';
+import { chromium, type Browser, type Locator } from 'playwright-core';
 import { INSTRUMENT, PHOSPHOR, REFINED } from '@ccrc/ui';
-import { LANE_ARM_TEXT as T, ROSTER_CARD_SHADOW_LOG } from '../../shared/lane-arm';
+import { LANE_ARM_TEXT as T, ROSTER_CARD_SHADOW_LOG, laneArmGate } from '../../shared/lane-arm';
 import { COORDINATOR_ROSTER_CARD_LIVE_MARKER } from '../../shared/switches';
 import { resolveChrome } from './harness';
 import { openApp, serveDist, sharedDist, type AppFixture, type AppView, type DistServer } from './app';
@@ -62,6 +63,31 @@ interface Measured {
   texts: { text: string; box: Box }[];
 }
 
+const measure = (section: Locator): Promise<Measured> => section.evaluate((el): Measured => {
+  const box = (e: Element): Box => {
+    const r = e.getBoundingClientRect();
+    return { left: r.left, right: r.right, top: r.top, bottom: r.bottom };
+  };
+  return {
+    viewport: window.innerWidth,
+    pageScrollWidth: document.documentElement.scrollWidth,
+    pageClientWidth: document.documentElement.clientWidth,
+    section: { scrollWidth: el.scrollWidth, clientWidth: el.clientWidth, box: box(el) },
+    texts: [...el.querySelectorAll('p, label, legend')].map((e) => ({ text: e.textContent ?? '', box: box(e) })),
+  };
+});
+const fits = (m: Measured): void => {
+  expect(m.section.scrollWidth, 'the card overflows sideways').toBeLessThanOrEqual(m.section.clientWidth);
+  expect(m.pageScrollWidth, 'the page scrolls sideways').toBeLessThanOrEqual(m.pageClientWidth);
+  expect(m.section.box.left, 'the card starts left of the viewport').toBeGreaterThanOrEqual(0);
+  expect(m.section.box.right, 'the card runs past the viewport').toBeLessThanOrEqual(m.viewport);
+  for (const t of m.texts) {
+    expect(t.box.left, `"${t.text}" starts left of its card`).toBeGreaterThanOrEqual(m.section.box.left - 0.5);
+    expect(t.box.right, `"${t.text}" runs past its card`).toBeLessThanOrEqual(m.section.box.right + 0.5);
+    expect(t.box.bottom - t.box.top, `"${t.text}" has no height`).toBeGreaterThan(0);
+  }
+};
+
 describe('Settings › Automation › Shadow lanes at every width, in both skins (D-8274)', () => {
   for (const view of VIEWS) {
     it(named(view), async () => {
@@ -93,31 +119,7 @@ describe('Settings › Automation › Shadow lanes at every width, in both skins
         expect(await section.getByRole('radio').count(), 'the card does not offer exactly two choices').toBe(2);
         expect(await section.getByText(T.shadowLog(ROSTER_CARD_SHADOW_LOG)).isVisible()).toBe(true);
 
-        const measure = (): Promise<Measured> => section.evaluate((el): Measured => {
-          const box = (e: Element): Box => {
-            const r = e.getBoundingClientRect();
-            return { left: r.left, right: r.right, top: r.top, bottom: r.bottom };
-          };
-          return {
-            viewport: window.innerWidth,
-            pageScrollWidth: document.documentElement.scrollWidth,
-            pageClientWidth: document.documentElement.clientWidth,
-            section: { scrollWidth: el.scrollWidth, clientWidth: el.clientWidth, box: box(el) },
-            texts: [...el.querySelectorAll('p, label, legend')].map((e) => ({ text: e.textContent ?? '', box: box(e) })),
-          };
-        });
-        const fits = (m: Measured): void => {
-          expect(m.section.scrollWidth, 'the card overflows sideways').toBeLessThanOrEqual(m.section.clientWidth);
-          expect(m.pageScrollWidth, 'the page scrolls sideways').toBeLessThanOrEqual(m.pageClientWidth);
-          expect(m.section.box.left, 'the card starts left of the viewport').toBeGreaterThanOrEqual(0);
-          expect(m.section.box.right, 'the card runs past the viewport').toBeLessThanOrEqual(m.viewport);
-          for (const t of m.texts) {
-            expect(t.box.left, `"${t.text}" starts left of its card`).toBeGreaterThanOrEqual(m.section.box.left - 0.5);
-            expect(t.box.right, `"${t.text}" runs past its card`).toBeLessThanOrEqual(m.section.box.right + 0.5);
-            expect(t.box.bottom - t.box.top, `"${t.text}" has no height`).toBeGreaterThan(0);
-          }
-        };
-        fits(await measure());
+        fits(await measure(section));
         const shots = process.env.CCRC_SHOTS;
         if (shots) await section.screenshot({ path: path.join(shots, `shadow-lanes-${view.skin}-${view.width}.png`) });
 
@@ -135,7 +137,7 @@ describe('Settings › Automation › Shadow lanes at every width, in both skins
         await sheet.getByRole('button', { name: T.confirmLabel }).click();
         await expect.poll(() => live.isChecked(), { timeout: 10_000 }).toBe(true);
         expect(posts).toEqual([{ lane: 'roster-card', choice: 'live' }, { lane: 'roster-card', choice: 'live', confirm: KEY }]);
-        fits(await measure());
+        fits(await measure(section));
 
         // And back to Shadow from the keyboard, with no sheet.
         await live.focus();
@@ -143,6 +145,33 @@ describe('Settings › Automation › Shadow lanes at every width, in both skins
         await expect.poll(() => shadow.isChecked(), { timeout: 10_000 }).toBe(true);
         expect(posts.at(-1)).toEqual({ lane: 'roster-card', choice: 'shadow' });
         expect(await page.getByRole('dialog').count()).toBe(0);
+        expect(errors).toEqual([]);
+      } finally {
+        await ctx.close();
+      }
+    }, 90_000);
+  }
+});
+
+describe('the continuity row\'s gate line at every width, in both skins (review 2006 N7)', () => {
+  const gate = laneArmGate('continuity')!;
+  for (const view of VIEWS) {
+    it(named(view), async () => {
+      const app = await openApp(browser!, view, FIXTURE);
+      const { ctx, page, errors } = app;
+      await ctx.route(`**${DOOR}`, (r) => r.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({
+        ok: true, lanes: [{ lane: 'continuity', stored: 'shadow', detail: null, live: false, updatedAt: 0, imported: null, marker: null }],
+      }) }));
+      try {
+        await page.goto(server!.origin + '/settings/automation');
+        const section = page.getByRole('region', { name: T.title });
+        await expect.poll(() => section.getByRole('radio', { name: T.shadow }).isChecked(), { timeout: 20_000 }).toBe(true);
+        const line = section.getByText(gate);
+        expect(await line.isVisible(), 'the gate line is not drawn').toBe(true);
+        const m = await measure(section);
+        fits(m);
+        expect(m.texts.some((t) => t.text === gate), 'the gate line is not one of the card\'s measured texts').toBe(true);
+        if (process.env.CCRC_SHOTS) await section.screenshot({ path: path.join(process.env.CCRC_SHOTS, `shadow-lanes-gate-${view.skin}-${view.width}.png`) });
         expect(errors).toEqual([]);
       } finally {
         await ctx.close();

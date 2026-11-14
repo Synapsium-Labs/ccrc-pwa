@@ -23,7 +23,7 @@ describe('ROUTE_WRITABLE_FIELDS — one list, one home (routing spec §5.3, slic
   const FIELDS = ROUTE_WRITABLE_FIELDS;
 
   it('the field list this scans is real, and is the routing record\'s own list', () => {
-    expect(FIELDS.length, 'D-8121 added `browser`: 5 -> 6').toBe(6);
+    expect(FIELDS.length, 'D-8121 added `browser`: 5 -> 6; the launch profile added `profile`, `automem`, `compactwindow`: 6 -> 9; the compaction piece `precompact`: 9 -> 10').toBe(10);
     expect(FIELDS).toContain('class');
   });
 
@@ -747,7 +747,7 @@ describe('worker stall watch: the four operator-switch markers have no writer in
   // (`'stall-watch-' + w`) is not seen; the bar is the ordinary copy.
   const MARKERS: [string, string][] = [
     ['mail-gate-strict', 'shared/switches.ts'], // its switchboard row since D-5855; turnidle.ts re-exports it
-    ['stall-watch-disabled', 'server/src/coord/stall.ts'],
+    ['stall-watch-disabled', 'shared/switches.ts'], // its switchboard row since D-8339; stall.ts keys its map by the constant
     ['stall-watch-live', 'server/src/coord/stall.ts'],
     ['stall-watch-escalate', 'server/src/coord/stall.ts'],
   ];

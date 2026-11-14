@@ -84,6 +84,16 @@ Each has a recommendation. None blocks wave 4a's first tasks.
    have to cover, so it is out of this plan unless the operator rules it in.
 6. **The leftovers on the fleet box** (the ownership spec's §23.8): another repository's LiteLLM environments, old
    logs and snapshots. This plan never touches them.
+7. **The drift criterion's cause, a plugin on the Codex lanes.** **Ruled 2026-11-12: option (b).** The official
+   `security-guidance` plugin's LLM reviews POST Claude model ids to the bridge, which answers each with a local 404,
+   and the two ids fail the watch's drift criterion. Operator ruling 2026-11-12: drift option (b), the plugin's LLM
+   reviews off on Codex lanes only, through the lanes' settings (#2720, `CODEX_LANE_ENV` in `shared/modelenv.mjs`);
+   R3 after drift passes is the operator's decision; R4 a week after R3. The switch is
+   `ENABLE_CODE_SECURITY_REVIEW=0`, written by `ccrc models` into a Codex lane's settings at its next materialise and
+   read by a session at its next launch. The ids already counted stay in the bridge's cumulative list, so the operator
+   also chose that drift reads growth since a baseline reading (#2721; the R1 steps below). A substitution from a
+   request without Claude Code's beta now counts under its own family, `foreignSubstitution`, whose explained set is
+   empty on purpose, so the plugin's ids arriving again would read as that switch regressing (#2721).
 
 ## Global Constraints
 
@@ -397,6 +407,33 @@ python3 -I ~/ccrc/deploy/measure-codex-watch.py --lane lane-a --flip 2026-10-27T
 Read `ccrc doctor`'s `codex` row and `ccrc codex status <id> --json` beside them. The readings and the verdict go in
 the Stage 2 plan's record, as its step 7 says.
 
+**Drift reads growth since a baseline reading.** A stats file's `unexplained` list is cumulative: the bridge carries a
+name until a reviewed change to `ccd/codexbridge/known.py` explains it. Both lanes carry `claude-opus-5-5` and
+`claude-sonnet-4-6` under `modelSubstitution`, from the security-guidance plugin's LLM review, and that list alone
+fails drift for good. Neither id is explained in `known.py` (that would hide a real Claude Code fallback, which sends
+exactly `claude-opus-5-5`), and the stats file is never edited by hand. Instead:
+
+1. Wait until the plugin switch has reached both lanes. First, the fleet box runs a build that carries the switch
+   (`ccrc version`, `ccrc update --check`): a build without it has no such key in its desired settings, so it lists no
+   settings drift either. Only then does the lane's `ccrc models <id> show` listing no settings drift mean the key is
+   on disk. Then every GPT-lane session has restarted since, and the plugin's own log on the lane says its LLM review
+   is disabled.
+2. Take one `--json` reading per lane and keep it, outside the repository:
+
+   ```
+   python3 -I ~/ccrc/deploy/measure-codex-watch.py --lane lane-b --flip 2026-10-27T06:26:03Z --baseline-since 2026-10-22T10:48:00Z --json > <kept>/lane-b.drift-baseline.json
+   python3 -I ~/ccrc/deploy/measure-codex-watch.py --lane lane-a --flip 2026-10-27T12:32:04Z --baseline-since 2026-10-22T10:48:00Z --json > <kept>/lane-a.drift-baseline.json
+   ```
+
+3. Leave time for real use of the lanes: the plugin's review ran on every Stop, so a day of ordinary sessions shows
+   whether it is really off.
+4. Take R1's readings again, each with `--drift-baseline <kept>/<lane>.drift-baseline.json`. Drift then passes only if
+   no unexplained name is new or still growing since the baseline, the `overflow` and `unrecognised` markers included
+   (a restart drops them from the list and keeps their counts, so they are compared listed or not). A counter that
+   went backwards, a lane that answered no request since, a baseline of another lane, or a stats file replaced since
+   (another `since`) reads `unmeasured`, never pass. The drift lines print the requests answered since, and each name
+   with its baseline and current counts and its state.
+
 **R2. Roll out the build that carries wave 4a**, fleet box first. Every running bridge restarts once, behind its
 5-second drain.
 
@@ -445,5 +482,31 @@ the stage.
 
 **The operator's:** R1 to R5. R1 needs nothing but a build at or after v0.0.1076 on the fleet box.
 
-**Open questions for the operator:** the six rulings above, most important first: 2 (the verdict), 1 (the order of
+**Ruled 2026-11-12 (7 above):** the plugin's LLM reviews go off on the Codex lanes, through their settings, so a
+lane's drift counters can read clean once a lane's next materialise and a relaunch of its sessions have landed it.
+
+**R1 taken again, 2026-11-14 at 22:27Z, against the drift baselines.** The baselines are the R1 steps' readings of
+2026-11-13 (lane-b at 22:20Z, lane-a at 22:21Z), taken after the plugin switch had reached both lanes. The fleet box
+ran v0.0.1201. This record stands in for the Stage 2 plan's step 7 entry, which a ledger PR may carry.
+
+| Criterion | lane-a | lane-b |
+|---|---|---|
+| Empty tool calls | pass: none | pass: none |
+| 5xx rate | pass: 28 of 30,425 (0.00092) against the baseline's 0.00162, p 0.999 | pass: 18 of 21,361 (0.00084) against the baseline's 0.00091, p 0.659 |
+| Compaction rate | unmeasured: the comparable baseline window holds no GPT-model session | unmeasured: the same |
+| Credential | pass | pass |
+| Drift | pass: 118 requests answered since the baseline; all four names held | pass: 362 requests answered since the baseline; both names held |
+| The instrument's verdict | unmeasured (compaction only) | unmeasured (compaction only) |
+
+- **Drift names.** lane-a: `modelSubstitution` `claude-opus-5-5` 501 and `claude-sonnet-4-6` 496, and
+  `foreignSubstitution` 3 and 3, each held. lane-b: `modelSubstitution` 116 and 97, each held. No name is new and none
+  grew, so the plugin's LLM review stayed off through a day of use (ruling 7).
+- **Beside them.** `ccrc doctor`'s `codex` row WARNs on each lane, listing the same cumulative names and nothing else.
+  `ccrc codex status` reads `direct` on the backend route for both lanes, with the bridge running, the LiteLLM and
+  shim tiers stopped, the credential `ok` and the reasoning store `ok`.
+- **What is left.** Drift passes on both lanes. Compaction cannot be read by this instrument: its comparable window,
+  from the class model's advance to each lane's switch, holds no GPT-model session. Ruling 2 (the verdict) and R3
+  are the operator's.
+
+**Open questions for the operator:** the rulings above still open, most important first: 2 (the verdict), 1 (the order of
 the stages), 3 (new lanes), 4 (when the runtime leaves).

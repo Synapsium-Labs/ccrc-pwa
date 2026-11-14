@@ -12,6 +12,7 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { REVIEW_DONE_SUBJECT, WAVE_DONE_SUBJECT } from '../../shared/api.js';
+import { STALL_ARMS as L0_ARMS, isStallArm } from '../../shared/stall-watch.js';
 import {
   STALL_ARMS, STALL_CHECK_PREFIX, STALL_HOLDS, STALL_MARKERS, STALL_READ_FAILURES, STALL_REPLY_PREFIX,
   STALL_REPLY_WAITING_PREFIX, STALL_REPORT_PREFIX, STALL_WAIT_PREFIX, STALL_WRITE_MISSES,
@@ -66,11 +67,12 @@ describe('the arms, holds and markers are derived from their Records', () => {
       'coord-blocked',
     ]);
   });
-  it('waves 1 and 2 have fifteen holds, wave 1 first', () => {
+  it('waves 1 and 2 have fifteen holds, wave 1 first, and the timer hold (Overlord §3.3.12, C65) is the sixteenth, once', () => {
     expect(STALL_HOLDS).toEqual([
       'run-unnamed', 'absent', 'unmeasured', 'lifecycle', 'ask', 'dialog', 'limit', 'busy', 'coordinator-unmeasurable',
-      'restart-grace', 'delegates', 'lifecycle-stopped', 'mail-disabled', 'failed-account', 'failed-unknown',
+      'restart-grace', 'delegates', 'lifecycle-stopped', 'mail-disabled', 'failed-account', 'failed-unknown', 'timer',
     ]);
+    expect(STALL_HOLDS.filter((h) => h === 'timer')).toHaveLength(1);
   });
   it('the lane reads four markers', () => {
     expect(STALL_MARKERS).toEqual(['stall-watch-disabled', 'stall-watch-live', 'stall-watch-escalate', 'stall-watch-w2-live']);
@@ -297,22 +299,47 @@ describe('stall.ts is the pure L1 module its docstring says it is', () => {
     expect(code(), 'stall.ts answers HTTP').not.toMatch(/\breply\s*\.|\bFastify|\bapp\s*\./);
     expect(code(), 'stall.ts reaches the store').not.toMatch(/CoordStore|\bcoord\s*\.|\bstore\s*\.|\bdb\s*\.|\.prepare\s*\(/);
   });
-  it('imports values only from shared/api.ts (L0), stallWatchSays from sessionReading and sessionRoleOf from roleOf (both L1, importing only L0); anything else is a type import', () => {
+  it('imports values only from shared/api.ts, shared/stall-watch.ts, shared/switches.ts, shared/hook-events.ts and shared/continuity-timers.ts (L0), stallWatchSays and turnWordOf from sessionReading and sessionRoleOf from roleOf (both L1, importing only L0); anything else is a type import', () => {
     const c = code();
     expect(c, 'a side-effect import').not.toMatch(SIDE_EFFECT_IMPORT);
     expect(c, 'a dynamic import').not.toMatch(/\bimport\s*\(/);
     expect(c, 'a re-export').not.toMatch(RE_EXPORT);
     for (const spec of valueImportSpecifiers(c)) {
-      expect(['../../../shared/api.js', '../sessionReading.js', '../roleOf.js'], `stall.ts takes a value import from ${spec}`).toContain(spec);
+      expect(['../../../shared/api.js', '../../../shared/stall-watch.js', '../../../shared/switches.js', '../../../shared/hook-events.js', '../../../shared/continuity-timers.js', '../sessionReading.js', '../roleOf.js'], `stall.ts takes a value import from ${spec}`).toContain(spec);
     }
-    // From sessionReading, `stallWatchSays` ALONE, and on exactly this one line: a second name, or a second import
-    // from the module, would let the lane reach the policy table or `turnSays` and spell a policy name of its own.
+    // From shared/continuity-timers.ts (L0; slug stall-import-pin-admits-the-timer-vocabulary, a widening like D-8236's), the
+    // timer mail's sender and the hold's cap ALONE: the lane leaves timer mail out of its facts and caps the hold, nothing else.
+    const fromTimers = [...c.matchAll(/^\s*import\s[^'"]*?\bfrom\s*(['"])\.\.\/\.\.\/\.\.\/shared\/continuity-timers\.js\1;?$/gm)].map((m) => m[0].trim());
+    expect(fromTimers, 'the one import from continuity-timers').toEqual([`import { TIMER_HOLD_CAP_MS, TIMER_MAIL_SENDER } from '../../../shared/continuity-timers.js';`]);
+    // From shared/switches.ts (L0, D-8339), the kill switch's constant ALONE: the lane reads no other row's name, and no
+    // reader of the switchboard.
+    const fromSwitches = [...c.matchAll(/^\s*import\s[^'"]*?\bfrom\s*(['"])\.\.\/\.\.\/\.\.\/shared\/switches\.js\1;?$/gm)].map((m) => m[0].trim());
+    expect(fromSwitches, 'the one import from switches').toEqual([`import { STALL_WATCH_DISABLED_MARKER } from '../../../shared/switches.js';`]);
+    // From sessionReading, `stallWatchSays` and `turnWordOf` ALONE, on exactly this one line: the lane's policy and the one
+    // reading of the raw word (D-8610). Any other name, or a second import from the module, would let the lane reach the
+    // policy table or `turnSays` and spell a policy name of its own.
     const fromReading = [...c.matchAll(/^\s*import\s[^'"]*?\bfrom\s*(['"])\.\.\/sessionReading\.js\1;?$/gm)].map((m) => m[0].trim());
-    expect(fromReading, 'the one import from sessionReading').toEqual([`import { stallWatchSays } from '../sessionReading.js';`]);
+    expect(fromReading, 'the one import from sessionReading').toEqual([`import { stallWatchSays, turnWordOf } from '../sessionReading.js';`]);
     // From roleOf, `sessionRoleOf` ALONE: a second name would let the lane read the role table or `roleOf` and decide a
     // role of its own. roleOf.ts is L1 and imports only L0.
     const fromRoleOf = [...c.matchAll(/^\s*import\s[^'"]*?\bfrom\s*(['"])\.\.\/roleOf\.js\1;?$/gm)].map((m) => m[0].trim());
     expect(fromRoleOf, 'the one import from roleOf').toEqual([`import { sessionRoleOf } from '../roleOf.js';`]);
+    // From shared/stall-watch.ts (L0), the arm list and its guard, by name and source, on one line; the type import
+    // (`StallArm`) is a separate `import type` line.
+    const fromStallWatch = [...c.matchAll(/^\s*import\s(?!type\b)[^'"]*?\bfrom\s*(['"])\.\.\/\.\.\/\.\.\/shared\/stall-watch\.js\1;?$/gm)].map((m) => m[0].trim());
+    expect(fromStallWatch, 'the one value import from stall-watch').toEqual([`import { STALL_ARMS, isStallArm } from '../../../shared/stall-watch.js';`]);
+    // From shared/hook-events.ts (L0, D-8613), the hook event guard ALONE, beside the union's type: the plumbing list is
+    // typed by the union, and an event is tested against it only once it is known to be one.
+    const fromHookEvents = [...c.matchAll(/^\s*import\s[^'"]*?\bfrom\s*(['"])\.\.\/\.\.\/\.\.\/shared\/hook-events\.js\1;?$/gm)].map((m) => m[0].trim());
+    expect(fromHookEvents, 'the one import from hook-events').toEqual([`import { isHookEvent, type HookEvent } from '../../../shared/hook-events.js';`]);
+  });
+});
+
+describe('the arm vocabulary lives in L0', () => {
+  it('the arms have one definition, in L0, and stall.ts re-exports the same list', () => {
+    expect(L0_ARMS).toBe(STALL_ARMS);
+    for (const a of STALL_ARMS) expect(isStallArm(a), a).toBe(true);
+    for (const w of ['', 'limit-capp', 'constructor', 'toString']) expect(isStallArm(w), w).toBe(false);
   });
 });
 

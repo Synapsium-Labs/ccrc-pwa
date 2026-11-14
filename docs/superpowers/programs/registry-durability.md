@@ -62,11 +62,12 @@ the pending proof the worker-skill slice named.
   pair). Worker fixed all three — taking R-3's authorized hardening: `_ws_project_valid` refuses a
   leading dot at the two creation sites only, mutation-measured — plus a five-item self-audit.
   Final fingerprint `fceee24a` re-verified, merged, closed `released:true`. Wave-2 deviations
-  D-121..D-138 in `docs/superpowers/plans/2026-08-20-regset-atomic-write.md`.
+  D-121 to D-127, D-136 and D-8586 to D-8595 (the last ten were D-128 to D-135, D-137 and D-138
+  until D-8562 renumbered them) in `docs/superpowers/plans/2026-08-20-regset-atomic-write.md`.
 - **Residuals recorded, deliberately not fixed:** `server/test/` stays outside
-  single-definition's scanned ROOTS (D-128); tree-wide `ccd:<N>` line-citation drift is systemic
+  single-definition's scanned ROOTS (D-8586); tree-wide `ccd:<N>` line-citation drift is systemic
   and pre-dates the program (~500 cited lines; CI anchor check is the roadmap candidate,
-  D-129/D-137); registry file modes carry no invariant (D-122/D-135's two disclosed edge flips).
+  D-8587/D-8594); registry file modes carry no invariant (D-122/D-8593's two disclosed edge flips).
 
 ## Program closed
 

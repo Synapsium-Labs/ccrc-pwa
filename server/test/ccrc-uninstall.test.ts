@@ -34,7 +34,8 @@ import path, { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { mkTmp } from './tmpHelpers.js';
-import { ghContainedEnv } from './ccdWsHelpers.js';
+// The second ring (residue R35(a), D-8394): every builder here starts from ccrcContainedEnv.
+import { ccrcContainedEnv } from './ccrcContainment.js';
 // W6 Task 2's one planter of a versioned box: `~/ccrc-versions/<name>/` built
 // from the same fixture tree the install suites place, with its kept stamp and
 // install record, and — for the first name — the `~/ccrc` link.
@@ -90,7 +91,8 @@ interface Result { code: number; stdout: string; stderr: string }
  *  (the `logs` passthrough pin); tmux is a poison — neither verb has any
  *  business near a pane. */
 function verbEnv(home: string): NodeJS.ProcessEnv {
-  const env = ghContainedEnv(home, { ...process.env, HOME: home });
+  // A SPINE builder: `managers: false`, because it fronts its own pair after `adoptPlantedSystemd` below.
+  const env = ccrcContainedEnv(home, process.env, { managers: false, curl: 'poison' });
   const plant = (name: string, body: string): void =>
     writeFileSync(join(home, '.local', 'bin', name), body, { mode: 0o755 });
   plant('tmux',

@@ -13,7 +13,9 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { makePrHarness, CFG_DIR, type PrHarness } from './ccdPrHelpers.js';
 import { eventsOf, measOf, refusalsOf } from './lifecycleHelpers.js';
-import { childIndex, gcNow, hasCommit, hookRuns, plantRepoPrograms, plantTmux, tmuxSessions } from './childReclaimFixture.js';
+import {
+  childIndex, gcNow, hasCommit, hookRuns, lockProbe, plantIndexLock, plantRepoPrograms, plantTmux, tmuxSessions,
+} from './childReclaimFixture.js';
 import {
   EXP_BRANCH, EXP_ID, EXP_STUBS, NOW, OLD, archiveAt, expireEvalOf, expireVerb, holdCwd, makeArchived, type Archived,
 } from './wsExpireFixture.js';
@@ -167,6 +169,24 @@ describe('a fresh expiry', () => {
     expect(r.code, r.stdout + r.stderr).toBe(0);
     expired(a);
     expect(tombOf()['worktree']).toBe('absent');
+  }, 120_000);
+
+  it('a STALE index.lock (D-5945): the audit and the verb agree, the work is pinned, the lock goes with the tree, and the intent names it', () => {
+    const a = makeArchived(h);
+    fs.appendFileSync(path.join(a.wt, 'f1.txt'), 'edited behind a crashed git command\n');
+    const lock = plantIndexLock(h, a.wt, 7 * 3600);
+    const nobody = lockProbe(0);   // the lock alone answers "nobody" (a Darwin box cannot be asked); every other path asks the real probe
+    const audit = expireEvalOf(h, { pre: nobody });
+    expect(audit.verdict, audit.detail).toBe('expirable');
+    const r = expireVerb(h, audit.token, { pre: nobody });
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    const out = JSON.parse(r.stdout) as { expired: string; wip: string };
+    expect(out.expired).toBe(EXP_ID);
+    expired(a);
+    expect(fs.existsSync(lock), 'the lock went with the worktree').toBe(false);
+    expect(h.git(a.main, 'show', `${out.wip}:f1.txt`), 'the edit is in the WIP commit').toContain('edited behind a crashed git command');
+    const intent = eventsOf(h.home, 'expire').find((e) => e['outcome'] === 'intent')!;
+    expect(measOf(intent)['staleLock']).toBe(lock);
   }, 120_000);
 });
 

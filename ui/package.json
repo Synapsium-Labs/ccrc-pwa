@@ -22,6 +22,8 @@
     "test": "tsc --noEmit",
     "themes": "node design/make-themes.mjs --write",
     "themes:check": "node design/make-themes.mjs --check",
+    "characters": "node design/make-characters.mjs --write",
+    "characters:check": "node design/make-characters.mjs --check",
     "test-storybook": "test-storybook"
   },
   "peerDependencies": {

@@ -2,8 +2,9 @@
 # The fixture system for deploy/testbox/install.sh, deploy/testbox/bin/egress and bin/firewall (D-7409; server/test/
 # testbox-box-package.test.ts, server/test/testbox-config-file.test.ts): the TB_SYS seam's other end. Every call is
 # logged as one tab-separated line to TBS_LOG, then answered without touching the system:
-#   useradd, groupadd           recorded in TBS_DB (`passwd <name>`, `group <name>`), never run;
-#   getent passwd|group <name>  answered from TBS_DB; getent ahostsv4|ahostsv6 <host> from TBS_HOSTS/<db>-<host>;
+#   useradd, groupadd           recorded in TBS_DB (`passwd <name>`, `group <name>`, and `gecos <name><TAB><comment>` for a
+#                               user made with --comment), never run;
+#   getent passwd|group <name>  answered from TBS_DB (a user's fifth field is its recorded comment); getent ahostsv4|ahostsv6 <host> from TBS_HOSTS/<db>-<host>;
 #   usermod, chown, chgrp       logged only (a test runs as a non-root user);
 #   systemctl                   a model system manager when TB_FIXTURE_ROOT is set, logged only otherwise: the units
 #                               active are `active <unit>` lines in TBS_DB; a start of a unit whose file or drop-in
@@ -85,12 +86,16 @@ printf '%s\n' "$line" >> "$TBS_LOG"
 cmd=${1:-}
 shift || true
 case $cmd in
-  useradd) n=''; ug=0; for a in "$@"; do n=$a; [ "$a" = --user-group ] && ug=1; done
-           printf 'passwd %s\n' "$n" >> "$TBS_DB"; [ "$ug" = 0 ] || printf 'group %s\n' "$n" >> "$TBS_DB"; exit 0 ;;
+  useradd) n=''; ug=0; gc=''; prev=''
+           for a in "$@"; do [ "$prev" = --comment ] && gc=$a; prev=$a; n=$a; [ "$a" = --user-group ] && ug=1; done
+           printf 'passwd %s\n' "$n" >> "$TBS_DB"; [ -z "$gc" ] || printf 'gecos %s\t%s\n' "$n" "$gc" >> "$TBS_DB"
+           [ "$ug" = 0 ] || printf 'group %s\n' "$n" >> "$TBS_DB"; exit 0 ;;
   groupadd) n=''; for a in "$@"; do n=$a; done; printf 'group %s\n' "$n" >> "$TBS_DB"; exit 0 ;;
   getent)
     case ${1:-} in
-      passwd|group) grep -qxF "$1 ${2:-}" "$TBS_DB" 2>/dev/null && { printf '%s:x:999:999::/nonexistent:/usr/sbin/nologin\n' "$2"; exit 0; }; exit 2 ;;
+      passwd|group) grep -qxF "$1 ${2:-}" "$TBS_DB" 2>/dev/null || exit 2
+                    gc=$(sed -n "s/^gecos ${2:-}"$'\t'"//p" "$TBS_DB" | head -n 1)
+                    printf '%s:x:999:999:%s:/nonexistent:/usr/sbin/nologin\n' "$2" "$gc"; exit 0 ;;
       ahostsv4|ahostsv6) f="$TBS_HOSTS/$1-${2:-}"; [ -f "$f" ] && { cat -- "$f"; exit 0; }; exit 2 ;;
     esac
     exit 2 ;;

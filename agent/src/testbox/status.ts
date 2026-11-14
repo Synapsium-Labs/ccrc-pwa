@@ -5,7 +5,8 @@
 // and release the box has not measured yet (TB6 fills them); `ok` otherwise. The reasons are joined in that order.
 import {
   TESTBOX_PROTO, TESTBOX_TOOLS, versionCellsDiffer,
-  type StatusAnswer, type TestboxFailedKey, type TestboxPristine, type TestboxRepoName, type TestboxSync, type TestboxToolVersions,
+  type StatusAnswer, type TestboxFailedKey, type TestboxPristine, type TestboxProbes, type TestboxRepoName, type TestboxSync,
+  type TestboxToolVersions,
 } from '../../../shared/testbox.js';
 
 export type ProbeResult = { readonly ok: true } | { readonly ok: false; readonly detail: string };
@@ -29,6 +30,8 @@ export interface StatusFacts {
   readonly pristine: readonly TestboxPristine[];
   readonly failedKeys: readonly TestboxFailedKey[];
   readonly heldRunUsers: readonly string[];
+  /** The live probe block (D-8290), or `null`/absent when the box takes no probes: the answer then carries none. */
+  readonly probes?: TestboxProbes | null;
 }
 
 /** The status answer's placeholder for an unknown release tag (never `ok`: the reason names it). */
@@ -67,5 +70,6 @@ export function statusAnswer(f: StatusFacts): StatusAnswer {
     runs: { inProgress: f.inProgress, limit: f.limit }, queueDepth: f.queueDepth,
     pristine: f.pristine, failedKeys: f.failedKeys, heldRunUsers: f.heldRunUsers,
     repositories: f.mirrors.map((m) => ({ name: m.name, mirrorPath: m.mirrorPath })),
+    ...(f.probes === undefined || f.probes === null ? {} : { probes: f.probes }),
   };
 }

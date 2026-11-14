@@ -443,8 +443,9 @@ describe('the hibernation lanes name themselves (D-5242, D-5427)', () => {
 
   it('the armed hibernation sweep declares `sweep:hibernate`', async () => {
     expect(actCalls('sweepDec')).toEqual([['port.fleetState', 'lane.actor']]);
-    // D-7458: a fourth argument, whether the lane wakes what it sleeps (`--roll`, the automatic roll's one act).
-    expect(actCalls('runCcd')).toEqual([['CCD_ARGV.hibernate(id, sweepDec(port.fleetState, lane.actor), holdOkOf(v), wake)']]);
+    // D-7458: a fourth argument, whether the lane wakes what it sleeps (`--roll`, the automatic roll's one act), as the
+    // builder's mode word: `roll` or `sleep` (the fresh-start piece made it a mode; this lane never sends `fresh`).
+    expect(actCalls('runCcd')).toEqual([["CCD_ARGV.hibernate(id, sweepDec(port.fleetState, lane.actor), holdOkOf(v), wake ? 'roll' : 'sleep')"]]);
     const { IDLE_HOURS_LANE } = await import('../src/sleepLane.js');
     const { HIBERNATE_SWEEP_ACTOR } = await import('../src/coord/hibernate.js');
     expect(IDLE_HOURS_LANE.actor).toBe(HIBERNATE_SWEEP_ACTOR);
@@ -484,7 +485,7 @@ describe('the hibernation lanes name themselves (D-5242, D-5427)', () => {
     expect(ROLL_LANE.then).toBe('wake');
     // The wake rides the one argv: no second ccd call, no `ensure`, anywhere in the roll's files.
     expect(parsedFile('server/src/rollLane.ts').calls.filter((c) => c.name === 'runCcd' || c.name === 'ensure')).toEqual([]);
-    expect(CCD_ARGV.hibernate('project-a-quiet-basin', sweepDec(NEW, ROLL_SWEEP_ACTOR), null, true))
+    expect(CCD_ARGV.hibernate('project-a-quiet-basin', sweepDec(NEW, ROLL_SWEEP_ACTOR), null, 'roll'))
       .toEqual(['hibernate', '--roll', 'project-a-quiet-basin', '--surface', 'agent', '--actor', 'sweep:roll']);
   });
 

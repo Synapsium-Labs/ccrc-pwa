@@ -11,8 +11,8 @@
 import type { DatabaseSync } from 'node:sqlite';
 import { TERMINAL_RUN_STATES, type MailDeliveryState, type StuckReason } from '../../../shared/api.js';
 import {
-  CLEARED_WINDOW_MS, ITEM_KINDS, NEEDED_BY_LEVELS, OPEN_ITEM_STATES, doneWhenOf, isCloseRefusedAction, isEndRunAction, nextItemState,
-  parseItemAction, recommendationOf,
+  CLEARED_WINDOW_MS, ITEM_KINDS, NEEDED_BY_LEVELS, OPEN_ITEM_STATES, doneWhenOf, isCloseRefusedAction, isEndRunAction, isReleaseReviewAction,
+  RELEASE_REVIEW_VERB, nextItemState, parseItemAction, recommendationOf,
   type GoalsView, type ItemAct, type ItemAction, type ItemActor, type ItemKind, type ItemMoveRefusal, type ItemState, type NeededBy,
 } from '../../../shared/ledgers.js';
 import { tx } from './tx.js';
@@ -241,6 +241,36 @@ export function openCloseRefusedItems(db: DatabaseSync): ItemRow[] {
   return (db.prepare(
     `SELECT ${ITEM_COLS} FROM operator_items WHERE action IS NOT NULL AND state IN (${states}) ORDER BY id`,
   ).all() as unknown as ItemRowRaw[]).map(itemRowOf).filter((i) => isCloseRefusedAction(i.action));
+}
+
+/** D-8293: the release-review items that still wait, held or not, oldest first: the sweep re-measures them each judging pass
+ *  (`settle`). */
+export function openReleaseReviewItems(db: DatabaseSync): ItemRow[] {
+  const states = OPEN_ITEM_STATES.map((st) => `'${st}'`).join(', ');
+  return (db.prepare(
+    `SELECT ${ITEM_COLS} FROM operator_items WHERE action IS NOT NULL AND state IN (${states}) ORDER BY id`,
+  ).all() as unknown as ItemRowRaw[]).map(itemRowOf).filter((i) => isReleaseReviewAction(i.action));
+}
+
+/** The release-review item rows of one review run, in any state, matched by the action's own `reviewRunId`. */
+const RELEASE_REVIEW_OF =
+  "FROM operator_items i WHERE i.action IS NOT NULL AND json_extract(i.action, '$.verb') = ? "
+  + "AND json_extract(i.action, '$.reviewRunId') = ?";
+
+/** D-8293: has a release-review item EVER been raised for this review run, in any state? The sweep raises one per review run
+ *  and never again: a coordinator that withdrew it still cites the report, and an item the operator acted on has released it. */
+export function releaseReviewItemRaised(db: DatabaseSync, reviewRunId: number): boolean {
+  return db.prepare(`SELECT 1 AS x ${RELEASE_REVIEW_OF} LIMIT 1`).get(RELEASE_REVIEW_VERB, reviewRunId) !== undefined;
+}
+
+/** D-8293: has the operator released this review run's report? True only for a release-review item of it that the operator's
+ *  `act` moved to `done` (`moveItemInTx`, the one writer, records the act's event); an item ccrc settled is no release. This is
+ *  the one read of the fact: the child reclaim sweep stops keeping the review's workspace for the run it reviewed. */
+export function reviewChildReleased(db: DatabaseSync, reviewRunId: number): boolean {
+  return db.prepare(
+    `SELECT 1 AS x ${RELEASE_REVIEW_OF} AND i.state = 'done' `
+    + "AND EXISTS (SELECT 1 FROM operator_item_events e WHERE e.itemId = i.id AND e.act = 'act' AND e.actor = 'operator') LIMIT 1",
+  ).get(RELEASE_REVIEW_VERB, reviewRunId) !== undefined;
 }
 
 /** The newest end request of a run raised BY THIS ASKER that ended in a decline or a withdraw: who asked, when it ended and

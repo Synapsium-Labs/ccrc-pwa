@@ -132,10 +132,12 @@ verify() {
   # The attest step signs every tarball in --out; one already there would be
   # signed beside this release's and published by none.
   [ -z "$(names_in "$out" 'ccrc-*.tar.gz')" ] || die "$out already holds a tarball — the attest step would sign an artifact no release publishes"
-  # Defence in depth, with no row of its own: whenever it fires, the tarball check above or the file-set check below refuses that call too.
+  # Defence in depth, with no row of its own: whenever it fires, the tarball check above or the file-set and regular-file checks below refuse that call too.
   if [ -e "$out" ] && [ "$out" -ef "$in" ]; then die "$out is the build's artifact directory — the copy needs a directory of its own"; fi
 
-  # Exactly the two names, each a regular file and not a symlink.
+  # Exactly the two names, each a regular file and not a symlink. The two checks together: the set is joined with
+  # spaces, so one name holding a space or a newline between the two passes it, and the regular-file check refuses it
+  # (W26-V14, R44).
   names="$(names_in "$in" '*')"
   [ "$names" = "SHA256SUMS $name" ] || die "the build's artifact holds ${names:-nothing} — expected exactly $name and SHA256SUMS"
   for f in "$name" SHA256SUMS; do

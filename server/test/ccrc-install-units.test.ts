@@ -10,6 +10,7 @@ import { mkTmp, removeTmpFixturesEachTest } from './tmpHelpers.js';
 import { scaled } from './timeScale.js';
 import { describeLinux, describeDarwin, itLinux } from './platformFixtures.js';
 import { installFixtureTree, installVersionedTree } from './installTreeFixture.js';
+import { takeExpectedPoison } from './containedTools.js';
 import { BOX_SETTINGS_TIMER_S } from '../../shared/api.js';
 import { here, REPO, realPath, BASH, treeRoot, ccrcIn, treeFile, placed, freshBox, ccrcEnv, runInstall, runLauncherVersion, pathWithout, read, dotCcrc, preexisting, gitInit, unitDir, SLICE_DIR, UNIT_FILES, systemctlCalls, FLEET_URL, FLEET_TOKEN, runInstallTty, type Result } from './ccrc-installFixture.js';
 
@@ -1112,6 +1113,10 @@ describeLinux('ccrc install: the units, and the one this box must not be given',
     expect(r.stderr).toMatch(
       /^ccrc: ccrc\.service was restarted and did not stay up, so this box has the unit and not the service/m);
     expect(r.stdout).not.toMatch(/^install: linger:/m);
+    // verify-service.sh's failure path prints the unit's journal tail, and journalctl is this fixture's poison: the
+    // case MEANS to reach it, so it takes exactly that read (D-8394); any other journalctl argv still reds.
+    expect(takeExpectedPoison(home, 'journalctl', /^--user -u ccrc\.service -n \d+ --no-pager$/),
+      'the failure path asked the journal for the server unit\'s tail').toBe(true);
   });
 
   it('refuses when the restart itself fails — the old server is still the one running', () => {

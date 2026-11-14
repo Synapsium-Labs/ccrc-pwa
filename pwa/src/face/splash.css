@@ -1,0 +1,30 @@
+/* The splash (Task 9): a still layer, there and then not. No animation, no transition, no opacity below 1. The
+   typing's keyframes are the wordmark's own (`wordmark.css`). */
+.splash {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-toast);
+  pointer-events: none;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  background: var(--bg-page);
+}
+.splash-tagline {
+  margin: 0;
+  font-family: var(--family-ui);
+  font-size: var(--fs-xl);
+  color: var(--ink-primary);
+  background: var(--bg-page);
+}
+.splash-motto {
+  margin: 0;
+  font-family: var(--family-mono);
+  font-size: var(--fs-xs);
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--ink-secondary);
+  background: var(--bg-page);
+}

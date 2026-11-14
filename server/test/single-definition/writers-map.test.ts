@@ -308,7 +308,8 @@ describe('section 2.2\'s facts each map to the writers pins that hold them (#236
 // new method, or from outside `CoordStore`, reds here. KNOWN WIDTH: a statement whose table name is built at run time
 // (the delegation tables' `delegationInsertSql`) or split from its verb across string pieces is not seen.
 const TABLES = ['run_events', 'mail_deliveries', 'feed_events', 'lifecycle_events', 'lifecycle_generations',
-  'lifecycle_gaps', 'asks', 'approvals'] as const;
+  'lifecycle_gaps', 'asks', 'approvals', 'practice_cases', 'continuity_starts', 'continuity_generations', 'continuity_cursor',
+  'continuity_snapshots', 'continuity_card_reads', 'continuity_timers', 'continuity_notes', 'continuity_handovers'] as const;
 
 /** Each table's writers, `file#Class.method`, sorted and unique. */
 export const tableWriters = (files: readonly string[]): Record<string, string[]> => {
@@ -364,6 +365,17 @@ describe(TABLES_PIN, () => {
         'staleAsk', 'takeAskForAnswer', 'untakeAsk'].map((m) => `${S}${m}`),
       approvals: ['correctWithMail', 'declineApproval', 'insertApproval', 'lapseApproval', 'markApprovalOperator',
         'markApprovalOperatorRows', 'pruneApprovalInputs', 'staleApproval', 'takeApprovalForRule'].map((m) => `${S}${m}`),
+      practice_cases: ['server/src/coord/practiceCasesStore.ts#openPracticeCase'],
+      continuity_starts: ['server/src/continuity/continuityStore.ts#insertStart'],
+      continuity_generations: ['advanceObserved', 'clearShadowWalk', 'mintGeneration', 'setGenerationDue', 'setHoldOff', 'stepGeneration']
+        .map((f) => `server/src/continuity/continuityStore.ts#${f}`),
+      continuity_cursor: ['server/src/continuity/continuityStore.ts#advanceCursorIn'],
+      continuity_snapshots: ['server/src/continuity/continuityStore.ts#insertSnapshot'],
+      continuity_card_reads: ['server/src/continuity/continuityStore.ts#insertCardRead'],
+      // The timers (Overlord W1a): one writer per move of `TIMER_TRANSITIONS`, and the purge of terminal rows.
+      continuity_timers: ['cancelTimer', 'insertTimer', 'markTimersFired', 'purgeTimers'].map((f) => `server/src/continuity/continuityStore.ts#${f}`),
+      continuity_notes: ['server/src/continuity/continuityStore.ts#appendNote'],
+      continuity_handovers: ['server/src/continuity/continuityStore.ts#putHandover'],
     });
   });
 });

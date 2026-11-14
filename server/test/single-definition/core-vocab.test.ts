@@ -504,23 +504,25 @@ describe('Build 7 nouns', () => {
   // `cancelOutstandingDeliveries` docstring), and a guard that fires on a comment
   // explaining the constant is a guard someone deletes.
   it('spells the deliberate-cancel SET once — the constant, never a hand-written SQL list', () => {
-    const MEMBERS = '(run closed|coordinator reclaimed|recipient rebound|child workspace reclaimed)';
-    const LIST = new RegExp(`\\(\\s*'${MEMBERS}'\\s*(?:,\\s*'${MEMBERS}'\\s*){1,3}\\)`);
+    const MEMBERS = '(run closed|coordinator reclaimed|recipient rebound|child workspace reclaimed|recipient came back, mail not re-sent)';
+    const LIST = new RegExp(`\\(\\s*'${MEMBERS}'\\s*(?:,\\s*'${MEMBERS}'\\s*){1,4}\\)`);
     expect(LIST.test("NOT IN ('run closed','coordinator reclaimed') ")).toBe(true);
     expect(LIST.test("NOT IN ( 'coordinator reclaimed', 'run closed' )")).toBe(true);
     expect(LIST.test("NOT IN ('run closed','coordinator reclaimed','recipient rebound','child workspace reclaimed')")).toBe(true);
+    // D-8282: the fifth member, the closing heir's sentence.
+    expect(LIST.test("NOT IN ('run closed','recipient came back, mail not re-sent')")).toBe(true);
     expect(LIST.test("NOT IN ('run closed','recipient not in registry')")).toBe(false);
 
     const holders = ALL.filter((f) => LIST.test(readFileSync(f, 'utf8'))).map(rel).sort();
     expect(holders, 'a hand-written SQL list of the deliberate-cancel set').toEqual([]);
 
-    // …and the one definition is still built from the four named constants, so
+    // …and the one definition is still built from the five named constants, so
     // "no literal anywhere" cannot be satisfied by deleting the exclusion.
     const store = readFileSync(path.join(ccrcRoot, 'server/src/coord/store.ts'), 'utf8');
     expect(store).toMatch(
-      /const DELIBERATE_CANCEL_ERRORS_SQL =\s*\n?\s*`\('\$\{MAIL_RUN_CLOSED_ERROR\}','\$\{MAIL_RECLAIM_CANCELLED_ERROR\}','\$\{MAIL_REBIND_SUPERSEDED_ERROR\}','\$\{MAIL_CHILD_RECLAIMED_ERROR\}'\)`/);
+      /const DELIBERATE_CANCEL_ERRORS_SQL =\s*\n?\s*`\('\$\{MAIL_RUN_CLOSED_ERROR\}','\$\{MAIL_RECLAIM_CANCELLED_ERROR\}','\$\{MAIL_REBIND_SUPERSEDED_ERROR\}','\$\{MAIL_CHILD_RECLAIMED_ERROR\}','\$\{MAIL_RECIPIENT_BACK_CLOSED_ERROR\}'\)`/);
     for (const name of ['MAIL_RUN_CLOSED_ERROR', 'MAIL_RECLAIM_CANCELLED_ERROR',
-                        'MAIL_REBIND_SUPERSEDED_ERROR', 'MAIL_CHILD_RECLAIMED_ERROR']) {
+                        'MAIL_REBIND_SUPERSEDED_ERROR', 'MAIL_CHILD_RECLAIMED_ERROR', 'MAIL_RECIPIENT_BACK_CLOSED_ERROR']) {
       const defs = ALL.filter((f) =>
         new RegExp(`^\\s*export const ${name}\\b`, 'm').test(readFileSync(f, 'utf8'))).map(rel);
       expect(defs, name).toEqual(['server/src/coord/store.ts']);
@@ -805,7 +807,11 @@ describe('Build 7 nouns', () => {
     // D-8125: `reviewCapStore.ts` is the review-cap SQL moved out of `store.ts` the same way (`ledgersStore.ts`' idiom).
     // D-8147: `linkingStore.ts` is the project-linking SQL, in `reviewCapStore.ts`'s idiom.
     // The coordinator call record (D-8126, wave A3): `coordCallsStore.ts` is `ledgersStore.ts`'s twin, the same way and for the same reason.
-    const HANDLE_HOLDERS = new Set(['store.ts', 'rundefsTx.ts', 'routes.ts', 'db.ts', 'schema.ts', 'tx.ts', 'ledgersStore.ts', 'reviewCapStore.ts', 'linkingStore.ts', 'coordCallsStore.ts']);
+    // The case lane's table (Overlord W1a, §10.5): `practiceCasesStore.ts` is the `practice_cases` SQL, in `reviewCapStore.ts`'s idiom.
+    // D-8181: `planStore.ts` is the plan tables' SQL, in the same idiom: every function takes the handle; the plan routes,
+    // the hierarchy routes and the sync take a `PlanStorePort` built once in `index.ts`.
+    // D-8289: `claudeBuildsStore.ts` is the trusted Claude Code builds' SQL, in `linkingStore.ts`'s idiom.
+    const HANDLE_HOLDERS = new Set(['store.ts', 'rundefsTx.ts', 'routes.ts', 'db.ts', 'schema.ts', 'tx.ts', 'ledgersStore.ts', 'reviewCapStore.ts', 'linkingStore.ts', 'coordCallsStore.ts', 'practiceCasesStore.ts', 'planStore.ts', 'claudeBuildsStore.ts']);
     const coordFiles = sources(coordDir);
 
     it('visits the whole directory — a moved directory must turn this red, not disarm it', () => {
@@ -846,9 +852,9 @@ describe('Build 7 nouns', () => {
 // ── one MAIL_PACE (Overlord spec §6.4) ────────────────────────────────────
 //
 // The mail gate's two pace pairs had four module constants in `watch.ts` and
-// two ternaries on one boolean. They are one table now, one row per role, and
-// this pin holds the move: the table has one home, the four constants stay
-// retired, and the lane chooses its row through the one decider.
+// two ternaries on one boolean. They are one table now, one row per role in
+// `FLEET_ROLES`, and this pin holds the move: the table has one home, the four
+// constants stay retired, and the lane chooses its row through `roleOf`.
 describe('one MAIL_PACE: the mail gate pace has one home (Overlord spec §6.4)', () => {
   const RETIRED = /^\s*(?:export\s+)?const\s+(?:MAIL_QUIET_MS|MAIL_COOLDOWN_MS|COORD_QUIET_MS|COORD_COOLDOWN_MS)\s*=/m;
   it('MAIL_PACE is defined in exactly one file, server/src/coord/mailPace.ts', () => {
@@ -858,11 +864,28 @@ describe('one MAIL_PACE: the mail gate pace has one home (Overlord spec §6.4)',
   it('no source defines one of the four retired pace constants', () => {
     expect(ALL.filter((f) => RETIRED.test(readFileSync(f, 'utf8'))).map(rel)).toEqual([]);
   });
-  it('the mail lane chooses a row once, through mailPaceRoleOf', () => {
+  it('the mail lane chooses a row once, through roleOf', () => {
     // Keyed on the symbol (scan/symbols.ts), never a literal read of watch.ts: the pin follows `mailPass` if it moves.
     const code = stallCodeText(sourceOfSymbol(path.join(ccrcRoot, 'server', 'src', 'watch.ts'), 'FleetWatcher.mailPass'));
-    expect(code.match(/\bMAIL_PACE\[mailPaceRoleOf\(/g)).toHaveLength(1);
-    expect(code.match(/\bmailPaceRoleOf\(/g)).toHaveLength(1);
+    // The facts come from the one assembly, `roleFactsOf`, with the run kind and declared intent unmeasured: intent
+    // stays unread until the commit that reads it (spec §6.4).
+    expect(code.match(/\bmailPaceOf\(roleOf\(roleFactsOf\(d\.toId,\s*\{\s*child:[^,]+,\s*childRunKind:\s*'unmeasured',\s*openCoordinators:\s*coordinators,\s*intentDeclared:\s*'unmeasured'\s*\}\)\)\)/g))
+      .toHaveLength(1);
+    expect(code.match(/\broleOf\(/g)).toHaveLength(1);
+  });
+  // Review 1895 F3: an index is any read of a row, by brackets, a dot, an optional chain or a destructuring.
+  const INDEX = /\bMAIL_PACE\s*(?:\[|\??\.\s*[A-Za-z_$])|\}\s*=\s*MAIL_PACE\b/;
+  it('the row is chosen in coord/mailPace.ts only: no other source indexes MAIL_PACE, and mailPaceRoleOf is gone', () => {
+    expect(ALL.filter((f) => INDEX.test(stallCodeText(readFileSync(f, 'utf8')))).map(rel)).toEqual(['server/src/coord/mailPace.ts']);
+    expect(ALL.filter((f) => /\bmailPaceRoleOf\b/.test(readFileSync(f, 'utf8'))).map(rel)).toEqual([]);
+  });
+  it('CONTROL: the MAIL_PACE index scan sees every way to read a row, and passes an import and a type use', () => {
+    for (const read of ["MAIL_PACE['worker']", 'MAIL_PACE.worker.quietMs', 'MAIL_PACE?.coordinator', 'const { worker } = MAIL_PACE;']) {
+      expect(INDEX.test(read), read).toBe(true);
+    }
+    for (const other of ["import { MAIL_PACE } from './coord/mailPace.js';", 'keyof typeof MAIL_PACE', 'MAIL_PACE_IS_TOTAL']) {
+      expect(INDEX.test(other), other).toBe(false);
+    }
   });
   it('CONTROL: the retired-definition scan catches a planted copy and passes an import', () => {
     expect(RETIRED.test('const COORD_QUIET_MS = 15_000;')).toBe(true);

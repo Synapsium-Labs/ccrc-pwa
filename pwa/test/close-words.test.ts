@@ -21,6 +21,9 @@ describe('closeWords', () => {
   it('operator at its request, with anything else, or with none', () => {
     expect(closeWords({ state: 'failed', closedBy: 'operator', closeDetail: 'abandon:requested:item-a' })).toBe('closed by you, at its request');
     expect(closeWords({ state: 'failed', closedBy: 'operator', closeDetail: 'abandon:refused:12' })).toBe('closed by you, after ccrc held it');
+    // D-8558: "Close this run" stores the operator's reason after the item; the word then says it.
+    expect(closeWords({ state: 'failed', closedBy: 'operator', closeDetail: 'abandon:refused:12 done elsewhere' })).toBe('closed by you: done elsewhere');
+    expect(closeWords({ state: 'failed', closedBy: 'operator', closeDetail: 'abandon:refused:12 ' })).toBe('closed by you, after ccrc held it');
     expect(closeWords({ state: 'failed', closedBy: 'operator', closeDetail: 'abandon:mystery' })).toBe('closed by you');
     expect(closeWords({ state: 'failed', closedBy: 'operator', closeDetail: 'free text' })).toBe('closed by you');
     expect(closeWords({ state: 'failed', closedBy: 'operator', closeDetail: null })).toBe('closed by you');

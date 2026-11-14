@@ -5,7 +5,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
-import { makePrHarness, type PrHarness } from './ccdPrHelpers.js';
+import { GH_STUB, makePrHarness, type PrHarness } from './ccdPrHelpers.js';
 import { eventsOf, refusalsOf } from './lifecycleHelpers.js';
 import { childIndex, hookRuns, plantRepoPrograms, plantTmux } from './childReclaimFixture.js';
 import {
@@ -130,7 +130,9 @@ describe('ws-audit --expire — the token the verb spends', () => {
 
   it('the plain audit never takes the hand-off — no mode, and never the expiry’s verdict', () => {
     makeArchived(h);
-    const plain = JSON.parse(h.sh(`${EXP_STUBS} cmd_ws_audit --session ${EXP_ID}`)) as Record<string, unknown>;
+    // GH_STUB: the plain audit asks gh for the session's PRs (ws-reap's question), which met the gh poison here until
+    // the poison teardown named it (D-8394, residue R35(e)); the stub answers no rows.
+    const plain = JSON.parse(h.sh(`${GH_STUB} ${EXP_STUBS} cmd_ws_audit --session ${EXP_ID}`)) as Record<string, unknown>;
     expect(plain['mode'], 'the plain audit carries no mode').toBeUndefined();
     expect(plain['verdict']).toBeTypeOf('string');
     expect(plain['verdict'], 'the plain audit answers ws-reap’s question, never the expiry’s').not.toBe('expirable');

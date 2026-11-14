@@ -72,6 +72,7 @@ import {
   type DelegationJournalEntryV1,
   type DelegationJournalRecordV1,
 } from '../src/coord/delegation-model.js';
+import { mulberry32 } from './fakeTime.js';
 
 // ── fixtures ─────────────────────────────────────────────────────────────────────────────────────────────────────────
 
@@ -2238,18 +2239,6 @@ describe('the natural key the ladder depends on is the model\'s, not a second sp
 // Run 762: a zero-delta Bash call is no window of rung 4 and no key a pruning plan reads (D-6268); workflow runs end on their task
 // notification (D-6269); start-less stop candidates age out on journal time (D-6270)
 // ═══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
-
-/** A small seeded generator (mulberry32): a fixed literal seed per use, never `Math.random`. */
-function mulberry32(seed: number): () => number {
-  let a = seed >>> 0;
-  return () => {
-    a = (a + 0x6D2B79F5) >>> 0;
-    let t = a;
-    t = Math.imul(t ^ (t >>> 15), t | 1);
-    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-}
 
 describe('RB16: a zero-delta window never links a tree (rung 4 reads only a sole ADDED name)', () => {
   const zeroRec = rawRecord({ adminRecord: 'wt-x', canonicalPath: WT('wt-x'), headBranch: 'x-branch' });

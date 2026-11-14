@@ -1,7 +1,7 @@
 // The tick diet's differential runner, shared by the files that run its per-locale rows (#387, tick-diet spec §9).
 //
 // `ccd-tick-diet-equivalence-static.test.ts` runs the locale-free parts (E0, E1, E2, E4 and the static censuses E8d,
-// E8g and E10d), `-rows` and `-route` the rows under `C` (D-6767), and `ccd-tick-diet-equivalence-utf8-<part>.test.ts` the
+// E8g and E10d), `-limits`, `-registry` and the `-route` parts the rows under `C` (D-6767), and `ccd-tick-diet-equivalence-utf8-<part>.test.ts` the
 // same rows under the UTF-8 locale. Those files call `registerLocaleRows`, at the end of this file, with their own
 // entry of `LOCALES`. Everything above it is the harness's body, moved here whole from the one file that held it: the
 // vendored-name tables the rows read, the function reader, the runner (`runBatch`, `PRELUDE`, `runScript`), the locale
@@ -61,6 +61,7 @@ export const PLANNED_FORMS: Readonly<Record<string, string>> = {
   _limit_rescue_knob_to: 'limit swap autofix Task 7 (D-8123)',
   _watchdog_sign_to: 'limit swap autofix Task 9 (D-8123)',
   _wd_operator_hold_to: 'limit swap autofix Task 9 (D-8123)',
+  _compact_text_to: 'Overlord W1a compaction, Task 2',
 };
 /** What has NOT landed in `ccd/ccd` yet: the planned forms, plus `_now_s`, the one printing form whose name is new.
  *  The task that lands a name deletes it here in the same commit (the header's "RED FIRST"). D-4961 (Task 4) landed
@@ -72,14 +73,15 @@ export const PLANNED_FORMS: Readonly<Record<string, string>> = {
  *  its own. D-6180 (auto-swap reliability W1) landed `_swap_lane_to`, planned and landed in one commit, and D-6181
  *  `_swap_pin_legacy_offset_to`, `_swap_pin_expiry_to` and `_limit_reset_to` the same way. D-7717
  *  (accounts connect A15) landed `_roster_fp_to` the same way, and delegation broker wave 5 PR1 `_dl_fingerprint_to`
- *  (ccd/lib/delegation-lease.sh, its fingerprint's unmeasured reason kept in the caller's shell). */
+ *  (ccd/lib/delegation-lease.sh, its fingerprint's unmeasured reason kept in the caller's shell). The Overlord's W1a
+ *  compaction piece landed `_compact_text_to` (the role's compaction text for `_auto_compact_check`) the same way. */
 const LANDED: ReadonlySet<string> = new Set([
   '_now_s_to', '_now_s', '_cfg_dir_to', '_limit_text_to', '_limit_num_in_to', '_limit_json_num_to',
   '_limit_pick_to', '_limit_field_to', '_share_pct_to', '_file_read_to', '_reg_get_to', '_reg_read_to',
   '_route_peek_to', '_route_effort_for_to', '_route_applied_get_to', '_route_wanted_to', '_route_pending_word_to',
   '_home_measured_to', '_swap_lane_to', '_swap_pin_legacy_offset_to', '_swap_pin_expiry_to', '_limit_reset_to',
   '_roster_fp_to', '_dl_fingerprint_to', '_pane_limit_capture_to', '_limit_rescue_knob_to', '_watchdog_sign_to',
-  '_wd_operator_hold_to',
+  '_wd_operator_hold_to', '_compact_text_to',
 ]);
 export const PENDING: ReadonlySet<string> = new Set(
   [...Object.keys(PLANNED_FORMS), '_now_s'].filter((n) => !LANDED.has(n)),
@@ -202,7 +204,9 @@ interface SideResult {
   /** Whatever the body wrote to `$PWD/note`: a probe row's own side channel. */
   note: string;
 }
-interface Batch { status: number | null; stderr: string; results: Map<string, SideResult[]>; hung: string | null }
+/** `signal` is how the batch's bash ended when a signal ended it: the macOS runner's one early batch ended in 0.4 s with an
+ *  empty stderr, so each "a row never finished" message prints the rc and the signal beside it (D-8343). */
+interface Batch { status: number | null; signal: NodeJS.Signals | null; stderr: string; results: Map<string, SideResult[]>; hung: string | null }
 
 /** Bash's own location prefix (`<file>: line N: `), which differs between the fixture and `ccd/ccd` for the same
  *  message; everything after it is compared exactly. */
@@ -405,7 +409,7 @@ export function runBatch(h: CcdHarness, rows: readonly Row[], locale: string, bo
   if (r.status === 90 || r.status === 91 || r.status === 92) {
     throw new Error(`the batch could not start (rc ${r.status}): ${r.stderr.slice(0, 2000)}`);
   }
-  return { status: r.status, stderr: r.stderr, results, hung };
+  return { status: r.status, signal: r.signal, stderr: r.stderr, results, hung };
 }
 
 /** Every aspect in which two sides differ, rendered for a failure message. Empty means equal. */
@@ -500,17 +504,17 @@ export function runScript(h: CcdHarness, script: string, env: NodeJS.ProcessEnv 
 // ── E3: the W1 rows ────────────────────────────────────────────────────────────────────────────────────────────────
 
 /** `_session_probe`'s direct-branch test, read from the LIVE `ccd/ccd`: the `if …; then` line whose next line runs
- *  `tmux has-session` with no deadline. At `main` it is `[[ $(type -t tmux) == function ]]`; D-4960 makes it
+ *  `tmux has-session` (through the socket lookup's `"${_TMX_ARGV[@]}"` since D-8270) with no deadline. At `main` it is `[[ $(type -t tmux) == function ]]`; D-4960 makes it
  *  `declare -F tmux >/dev/null`. Reading it, rather than restating either, is what makes E3a a row about the shipped
  *  text. */
 function probePredicate(): string {
   const block = fnBlock(ccdSource(), '_session_probe');
   if (block === null) throw new Error('ccd/ccd defines no _session_probe');
   const lines = block.split('\n');
-  const hits = lines.flatMap((l, i) => (/^\s*out=\$\(tmux has-session/.test(lines[i + 1] ?? '')
+  const hits = lines.flatMap((l, i) => (/^\s*out=\$\((?:tmux|"\$\{_TMX_ARGV\[@\]\}") has-session/.test(lines[i + 1] ?? '')
     ? [/^\s*if (.+); then\s*$/.exec(l)?.[1] ?? ''] : []));
   if (hits.length !== 1 || hits[0] === '') {
-    throw new Error(`_session_probe's direct branch is not one \`if …; then\` above \`out=$(tmux has-session\` (found ${hits.length})`);
+    throw new Error(`_session_probe's direct branch is not one \`if …; then\` above \`out=$(tmux has-session\` or its \`"\${_TMX_ARGV[@]}"\` spelling (D-8270) (found ${hits.length})`);
   }
   return hits[0]!;
 }
@@ -1151,6 +1155,28 @@ const RT_NAMED_IDS = [
   'class=haiku,effort=valid',
 ];
 
+/** How many blocks E9's chain records run in, `E9` (share 1) and `E9-2` on, each its own file per locale (D-6767). The
+ *  580 `ROUTE_ROWS` records through `rtChain` were nearly all of E9's one batch, about 600 s on a CI runner, so the
+ *  `-route` file passed the testmap trace job's 1560 s per-file deadline only below a 2.6x slowdown, and one block's
+ *  one `beforeAll` is as small as a split by `describe` gets. A record's share is a function of the record alone, so
+ *  every share's batch, the checks over it and the full names of the rows are what they were in the one batch. */
+export const ROUTE_CHAIN_SHARES = 4;
+/** The chain records E9a's non-vacuity pins read (`leg(…)`), kept in E9's own share, whose batch they read. */
+const RT_PINNED: ReadonlySet<string> = new Set([
+  'class=valid,degraded=absent,effort=valid,inert=absent,routeapplied=absent',
+  'class=valid,degraded=absent,effort=valid,inert=absent,routeapplied=both',
+  'class=valid,degraded=valid,effort=valid,inert=effort,routeapplied=class-only',
+  'class=haiku,effort=valid',
+  'class=absent,degraded=absent,effort=absent,inert=absent,routeapplied=absent',
+]);
+/** The share (1 to `ROUTE_CHAIN_SHARES`) the chain record `id`, at index `i` of `ROUTE_ROWS`, runs in: share 1 for a
+ *  pinned record, else by its index, so neighbouring records (one field's cases) spread over every share. */
+const routeChainShare = (id: string, i: number): number => (RT_PINNED.has(id) ? 1 : (i % ROUTE_CHAIN_SHARES) + 1);
+/** The ids of the chain records share `share` runs: `ccd-tick-diet-partsPin.test.ts` pins that the shares are every
+ *  `ROUTE_ROWS` record once. */
+export const routeChainIds = (share: number): string[] =>
+  ROUTE_ROWS.filter((r, i) => routeChainShare(r.id, i) === share).map((r) => r.id);
+
 /** Every W3 Task 15 row (plan Task 15 Step 1, tick-diet spec §6.4):
  *  - `chain`: each `ROUTE_ROWS` record (every combination of the five fields' cases, plus haiku with each effort)
  *    through `rtChain`, against the legacy;
@@ -1158,14 +1184,15 @@ const RT_NAMED_IDS = [
  *    `_route_wanted_to`'s `deg` and `ine`, `_route_effort_for_to`'s `e`, `_route_wanted_to`'s `eff`,
  *    `_route_pending_word_to`'s `want` and `ap`, `_route_apply_pending`'s `w`), one call per row, so the out-var and
  *    the caller frame are compared for exactly that call. Each starts from the frame's `__S`, so a form that does not
- *    empty its out-var first leaks it on every record whose answer is empty. */
-function w3RouteRows(): { chain: Row[]; named: Row[] } {
-  const chain = ROUTE_ROWS.map((r): Row => ({
+ *    empty its out-var first leaks it on every record whose answer is empty.
+ *  `share` picks the chain records (`routeChainShare`) of one E9 block; the named rows are E9b's, in share 1 only. */
+function w3RouteRows(share: number): { chain: Row[]; named: Row[] } {
+  const chain = ROUTE_ROWS.filter((r, i) => routeChainShare(r.id, i) === share).map((r): Row => ({
     id: `route chain: ${r.id}`, setup: plantRoute(r), needs: RT_NEEDS,
     sides: [{ label: 'legacy', body: RT_LEGACY }, { label: 'live', body: RT_LIVE }],
   }));
   const named: Row[] = [];
-  for (const id of RT_NAMED_IDS) {
+  for (const id of share === 1 ? RT_NAMED_IDS : []) {
     const setup = plantRoute(routeRow(id));
     const one = (to: string, legacy: string, args: readonly string[], ov: string): void => {
       const rest = args.slice(1).map((a) => ` ${a}`).join('');
@@ -1185,6 +1212,44 @@ function w3RouteRows(): { chain: Row[]; named: Row[] } {
   return { chain, named };
 }
 
+
+/** One of E9's chain shares past its own (`share` 2 on), inside its block: the share's records in one batch, E9x and
+ *  E9a over it, each as E9's (D-6767). */
+function routeChainShareRows(locale: string | null, share: number): void {
+  const rows = w3RouteRows(share);
+  let h: CcdHarness;
+  let batch: Batch | null = null;
+  beforeAll(() => {
+    h = makeCcdHarness(`ccrc-diet-e9-${share}-`);
+    if (locale !== null) batch = runBatch(h, rows.chain, locale, scaledSeconds(900));
+  }, scaled(1_000_000));
+  afterAll(() => h.cleanup());
+  const got = (ctx: { skip: (note?: string) => never }): Batch => {
+    if (locale === null) {
+      if (process.platform === 'darwin') ctx.skip(NO_UTF8);
+      throw new Error(`${NO_UTF8} — the supervisors run under one, so this half cannot be skipped here`);
+    }
+    return batch!;
+  };
+
+  it('E9x the batch ran every row to the end, inside its deadline', (ctx) => {
+    const b = got(ctx);
+    expect(b.hung, `a row never finished (batch rc ${b.status}, signal ${b.signal}): ${b.stderr.slice(0, 2000)}`).toBeNull();
+    expect(b.status).toBe(0);
+  });
+
+  it('E9a every route record: the chain\'s printing forms, their `_to` forms and `_route_apply_pending`\'s rc answer as the legacy did, and the quiet chain writes nothing (D-4963)', (ctx) => {
+    const b = got(ctx);
+    for (const row of rows.chain) {
+      const res = b.results.get(row.id)!;
+      expectEquivalent(row, res, locale!);
+      for (const [k, s] of res.entries()) {
+        expect(s.note, `${row.id} [${row.sides[k]!.label}]: the quiet chain moved the registry (swap.log, a floor marker or a field)`)
+          .toBe('unchanged');
+      }
+    }
+  });
+}
 
 // ── E10: W3 Task 16's rows — `_home_measured_to` and `_authdead`'s builtin read (D-4963) ───────────────────────────
 
@@ -1265,10 +1330,10 @@ export function rawHomeMeasuredCalls(src: string): string[] {
 
 // ── the per-locale rows ────────────────────────────────────────────────────────────────────────────────────────
 
-/** Registers the seven per-locale blocks (E3, E5 to E10) for ONE entry of `LOCALES`. Each keeps its
+/** Registers the ten per-locale blocks (E3, E5 to E10, and E9's chain shares E9-2 to E9-4) for ONE entry of `LOCALES`. Each keeps its
  *  `describe.each(…)` form, called on a one-element array, so a full test name is the one it was when a single file
  *  ran both locales (`… under 'C' (…)` and `… under 'the UTF-8 locale' (…)`).
- *  `ccd-tick-diet-equivalence-limits`, `-registry` and `-route.test.ts` call it with `LOCALES[0]` and the `ccd-tick-diet-equivalence-utf8-<part>.test.ts` files with `LOCALES[1]`. `parts`, when given, names
+ *  `ccd-tick-diet-equivalence-limits`, `-registry`, `-route` and `-route-2` to `-route-4.test.ts` call it with `LOCALES[0]` and the `ccd-tick-diet-equivalence-utf8-<part>.test.ts` files with `LOCALES[1]`. `parts`, when given, names
  *  the blocks to register (`'E3'`, `'E5'`, …); a file that runs a share of a locale's rows passes its share, so the blocks
  *  split across files by `describe` with every title unchanged (D-6767). Omitted, every block is registered. */
 export function registerLocaleRows(loc: (typeof LOCALES)[number], parts?: readonly string[]): void {
@@ -1295,7 +1360,7 @@ export function registerLocaleRows(loc: (typeof LOCALES)[number], parts?: readon
 
     it('E3x the batch ran every row to the end, inside its deadline', (ctx) => {
       const b = got(ctx);
-      expect(b.hung, `a row never finished: ${b.stderr.slice(0, 2000)}`).toBeNull();
+      expect(b.hung, `a row never finished (batch rc ${b.status}, signal ${b.signal}): ${b.stderr.slice(0, 2000)}`).toBeNull();
       expect(b.status).toBe(0);
       expect(fs.existsSync(path.join(h.home, 'PWNED')), 'the payload id ran as code').toBe(false);
     });
@@ -1361,7 +1426,7 @@ export function registerLocaleRows(loc: (typeof LOCALES)[number], parts?: readon
 
     it('E5x both batches ran every row to the end, inside their deadlines', (ctx) => {
       for (const b of Object.values(got(ctx))) {
-        expect(b.hung, `a row never finished: ${b.stderr.slice(0, 2000)}`).toBeNull();
+        expect(b.hung, `a row never finished (batch rc ${b.status}, signal ${b.signal}): ${b.stderr.slice(0, 2000)}`).toBeNull();
         expect(b.status).toBe(0);
       }
     });
@@ -1455,7 +1520,7 @@ export function registerLocaleRows(loc: (typeof LOCALES)[number], parts?: readon
 
     it('E6x the batch ran every row to the end, inside its deadline', (ctx) => {
       const b = got(ctx);
-      expect(b.hung, `a row never finished: ${b.stderr.slice(0, 2000)}`).toBeNull();
+      expect(b.hung, `a row never finished (batch rc ${b.status}, signal ${b.signal}): ${b.stderr.slice(0, 2000)}`).toBeNull();
       expect(b.status).toBe(0);
     });
 
@@ -1508,7 +1573,7 @@ export function registerLocaleRows(loc: (typeof LOCALES)[number], parts?: readon
 
     it('E7x both batches ran every row to the end, inside their deadlines', (ctx) => {
       for (const b of Object.values(got(ctx))) {
-        expect(b.hung, `a row never finished: ${b.stderr.slice(0, 2000)}`).toBeNull();
+        expect(b.hung, `a row never finished (batch rc ${b.status}, signal ${b.signal}): ${b.stderr.slice(0, 2000)}`).toBeNull();
         expect(b.status).toBe(0);
       }
     });
@@ -1584,7 +1649,7 @@ export function registerLocaleRows(loc: (typeof LOCALES)[number], parts?: readon
 
     it('E8x both batches ran every row to the end, inside their deadlines: no reader opened a FIFO or /dev/zero', (ctx) => {
       for (const b of Object.values(got(ctx))) {
-        expect(b.hung, `a row never finished: ${b.stderr.slice(0, 2000)}`).toBeNull();
+        expect(b.hung, `a row never finished (batch rc ${b.status}, signal ${b.signal}): ${b.stderr.slice(0, 2000)}`).toBeNull();
         expect(b.status).toBe(0);
       }
     });
@@ -1646,7 +1711,7 @@ export function registerLocaleRows(loc: (typeof LOCALES)[number], parts?: readon
   });
 
   rowsBlock('E9')('E9 W3 Task 15 under $name: the route chain\'s out-var forms (tick-diet spec §6.4, D-4963)', ({ locale }) => {
-    const rows = w3RouteRows();
+    const rows = w3RouteRows(1);
     let h: CcdHarness;
     let batch: Batch | null = null;
     beforeAll(() => {
@@ -1664,7 +1729,7 @@ export function registerLocaleRows(loc: (typeof LOCALES)[number], parts?: readon
 
     it('E9x the batch ran every row to the end, inside its deadline', (ctx) => {
       const b = got(ctx);
-      expect(b.hung, `a row never finished: ${b.stderr.slice(0, 2000)}`).toBeNull();
+      expect(b.hung, `a row never finished (batch rc ${b.status}, signal ${b.signal}): ${b.stderr.slice(0, 2000)}`).toBeNull();
       expect(b.status).toBe(0);
     });
 
@@ -1702,6 +1767,13 @@ export function registerLocaleRows(loc: (typeof LOCALES)[number], parts?: readon
     });
   });
 
+  // The rest of E9's chain records, one share a block (D-6767, `ROUTE_CHAIN_SHARES`): E9x and E9a over the share's own
+  // batch, the same checks under the same titles. The non-vacuity pins and E9b stay in E9, whose share holds every
+  // record they read.
+  rowsBlock('E9-2')('E9 W3 Task 15 under $name, chain share 2: the route chain\'s out-var forms (tick-diet spec §6.4, D-4963)', ({ locale }) => routeChainShareRows(locale, 2));
+  rowsBlock('E9-3')('E9 W3 Task 15 under $name, chain share 3: the route chain\'s out-var forms (tick-diet spec §6.4, D-4963)', ({ locale }) => routeChainShareRows(locale, 3));
+  rowsBlock('E9-4')('E9 W3 Task 15 under $name, chain share 4: the route chain\'s out-var forms (tick-diet spec §6.4, D-4963)', ({ locale }) => routeChainShareRows(locale, 4));
+
   rowsBlock('E10')('E10 W3 Task 16 under $name: `_home_measured_to` and `_authdead`\'s builtin read (tick-diet spec §6.4, D-4963)', ({ locale }) => {
     const rows = w3HomeRows();
     let h: CcdHarness;
@@ -1722,7 +1794,7 @@ export function registerLocaleRows(loc: (typeof LOCALES)[number], parts?: readon
 
     it('E10x the batch ran every row to the end, inside its deadline', (ctx) => {
       const b = got(ctx);
-      expect(b.hung, `a row never finished: ${b.stderr.slice(0, 2000)}`).toBeNull();
+      expect(b.hung, `a row never finished (batch rc ${b.status}, signal ${b.signal}): ${b.stderr.slice(0, 2000)}`).toBeNull();
       expect(b.status).toBe(0);
     });
 

@@ -4,9 +4,13 @@
 // at most `CCRC_TESTBOX_RUNS` running at once, a pristine build counting as one, and at most one pristine build at a
 // time (spec §2.2). Positions are 1-based places in the waiting list, recomputed as the queue moves. Step 1's fleet-wide
 // admission queue governs local runs only and is not this.
+//
+// D-8290 (plan docs/superpowers/plans/2026-11-11-live-probe-budget.md): the third kind, `probe`, a live Claude Code
+// test. Its rule is the pristine build's: at most one running at a time, so two probes requested at once run one after
+// the other. The probe desk (`probes.ts`) keeps its own queue of probes alone; this file decides it.
 
-export type QueueKind = 'run' | 'pristine';
-export const QUEUE_KIND_MAP: Record<QueueKind, true> = { run: true, pristine: true };
+export type QueueKind = 'run' | 'pristine' | 'probe';
+export const QUEUE_KIND_MAP: Record<QueueKind, true> = { run: true, pristine: true, probe: true };
 
 export interface QueueEntry {
   readonly id: string;
@@ -41,7 +45,7 @@ export function enqueue(s: QueueState, e: QueueEntry): QueueState | null {
 /** Whether `e` may start now beside `running`. */
 function mayStart(running: readonly QueueEntry[], e: QueueEntry, limits: QueueLimits): boolean {
   if (running.length >= limits.runs) return false;
-  if (e.kind === 'pristine') return !running.some((r) => r.kind === 'pristine');
+  if (e.kind === 'pristine' || e.kind === 'probe') return !running.some((r) => r.kind === e.kind);
   return running.filter((r) => r.kind === 'run' && r.session === e.session).length < limits.sessionRuns;
 }
 

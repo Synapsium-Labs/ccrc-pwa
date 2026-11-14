@@ -45,6 +45,7 @@ import {
   type DelegationJournalRecordV1,
 } from '../src/coord/delegation-model.js';
 import { delegationLostWindowsOf, delegationNotReadyWindowOf } from '../src/watch.js';
+import { mulberry32 } from './fakeTime.js';
 
 // The parse log: R1 counts how many times each instant string is parsed while the lane's calls run. The correlation module imports the
 // parser from this very module id, so wrapping it here is what the ladder calls. Off outside R1's measured stretch.
@@ -335,18 +336,6 @@ describe('D-5604 R1: rung 4 reads each listing window, and parses each of its in
 // ═══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
 // D-5604 R2: the equivalence digest
 // ═══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
-
-/** mulberry32: a 32-bit seeded generator, so the stream (and its digest) is the same on every run and every box. */
-function mulberry32(seed: number): () => number {
-  let a = seed >>> 0;
-  return () => {
-    a = (a + 0x6d2b79f5) >>> 0;
-    let t = a;
-    t = Math.imul(t ^ (t >>> 15), t | 1);
-    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-}
 
 const SEED = 0x5eed627;
 const RANDOM_PASSES = 560;

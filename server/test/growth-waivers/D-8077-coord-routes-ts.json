@@ -3,5 +3,6 @@
   "maxDelta": 54,
   "d": "D-8077",
   "reason": "GET and POST /api/coord/run-close, the operator's three-state control over the run-close lanes (Task 26), kept inline with the other switch doors beside it; measured +54 net code lines against the merge-base; the deciders are in new coord/ and shared/ files, only the wiring is here",
-  "added": "2026-11-09"
+  "added": "2026-11-09",
+  "createdAt": "2026-11-10"
 }

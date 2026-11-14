@@ -27,10 +27,11 @@ import { refuseRun } from '../src/refuse.js';
 import { RUN_REFUSAL_STATUS } from '../../shared/refusal.js';
 import { testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
+import { seedLegacyProgramme } from './helpers/plan.js';
 import { shapeProgramSlug } from '../../shared/api.js';
 import {
   OPEN_RUN_GATES, openRunPreconditions,
-  type OpenRunFacts, type OpenRunGate, type ReviewedRunFacts,
+  type OpenRunFacts, type OpenRunGate, type OpenRunPlanFacts, type ReviewedRunFacts,
 } from '../src/coord/openRun.js';
 
 const WORK = {
@@ -64,9 +65,15 @@ function facts(body: Record<string, unknown>, over: Partial<OpenRunFacts> = {}):
     claimantListed: async () => ({ ok: true }),
     claimantProject: async () => ({ kind: 'measured', project: 'demo' }),
     sessionMark: async () => ({ kind: 'absent' }),
+    plan: () => ({ required: false, ended: false, epics: [], ticket: () => null }),
     ...over,
   };
 }
+
+/** D-8181: a stored plan with one epic listing waves 1 to 3, and tickets by key. */
+const planOf = (over: Partial<OpenRunPlanFacts> = {}, tickets: Record<string, ReturnType<OpenRunPlanFacts['ticket']>> = {}): ((s: string) => OpenRunPlanFacts) =>
+  () => ({ required: true, ended: false, epics: [{ id: 5, waves: [1, 2, 3], state: 'planned' }], ticket: (k) => tickets[k] ?? null, ...over });
+const T = (over: Record<string, unknown> = {}) => ({ id: 9, epicId: 5, project: 'demo', state: 'open' as const, runId: null, ...over });
 
 const BAD_SLUG = 'a/b';
 const BAD_SLUG_DETAIL = ((): string => {
@@ -88,6 +95,10 @@ const SINGLE: Row[] = [
     refusal: { error: 'bad-request', detail: 'kind must be work or review' } },
   { name: 'an empty title', gate: 'shape', f: facts({ ...WORK, title: '' }),
     refusal: { error: 'bad-request' } },
+  { name: 'the reserved linear-sync programme', gate: 'reservedProgramme', f: facts({ ...WORK, program: 'linear-sync' }),
+    refusal: { refused: 'reserved-programme' } },
+  { name: 'a non-string ticket', gate: 'ticketShape', f: facts({ ...WORK, ticket: 5 }),
+    refusal: { error: 'bad-request', detail: 'ticket must be the key of a ticket of the programme' } },
   { name: 'a claimedBy ccd could read as a flag', gate: 'claimedById', f: facts({ ...WORK, claimedBy: '-coord' }),
     refusal: BAD_CLAIMANT },
   { name: 'a sessionId ccd could read as a flag', gate: 'sessionIdId', f: facts({ ...WORK, sessionId: '-ws' }),
@@ -144,6 +155,20 @@ const SINGLE: Row[] = [
     refusal: { refused: 'home-mismatch', by: 'other-home' } },
   { name: 'no home at all', gate: 'homeVerdict', f: facts({ ...WORK, homeProject: undefined }),
     refusal: { error: 'bad-request', detail: 'homeProject is required' } },
+  { name: 'a closed plan', gate: 'planGate', f: facts({ ...WORK }, { plan: planOf({ ended: true }) }),
+    refusal: { refused: 'plan-closed' } },
+  { name: 'no epic in a programme that requires a plan', gate: 'planGate', f: facts({ ...WORK }, { plan: planOf({ epics: [] }) }),
+    refusal: { refused: 'plan-missing' } },
+  { name: 'no live epic lists the wave', gate: 'planGate', f: facts({ ...WORK, wave: 9 }, { plan: planOf() }),
+    refusal: { refused: 'wave-epic-mismatch' } },
+  { name: "a ticket of another epic than the wave's", gate: 'planGate', f: facts({ ...WORK, ticket: 'k1' }, { plan: planOf({}, { k1: T({ epicId: 6 }) }) }),
+    refusal: { refused: 'wave-epic-mismatch' } },
+  { name: 'a ticket that does not exist (an Upkeep ticket is never found)', gate: 'planGate', f: facts({ ...WORK, ticket: 'nope' }, { plan: planOf() }),
+    refusal: { refused: 'ticket-unavailable' } },
+  { name: 'a ticket already started by another run', gate: 'planGate', f: facts({ ...WORK, ticket: 'k1' }, { plan: planOf({}, { k1: T({ state: 'started', runId: 3 }) }) }),
+    refusal: { refused: 'ticket-unavailable' } },
+  { name: 'a ticket already done', gate: 'planGate', f: facts({ ...WORK, ticket: 'k1' }, { plan: planOf({}, { k1: T({ state: 'done' }) }) }),
+    refusal: { refused: 'ticket-unavailable' } },
   { name: "a claimant that is somebody else's worker", gate: 'claimantWorker',
     f: facts({ ...WORK }, { openClaimantsOf: () => ['coord-1', 'coord-9', 'coord-8'] }),
     refusal: { refused: 'claimant-is-a-worker', by: 'coord-9' } },
@@ -173,8 +198,13 @@ const PAIRS: (Row & { pair: [OpenRunGate, OpenRunGate] })[] = [
     refusal: { error: 'bad-request', detail: 'kind must be work or review' } },
   { name: 'empty title + reviews on work', pair: ['shape', 'reviewsOnWork'], gate: 'shape',
     f: facts({ ...WORK, title: '', reviews: 7 }), refusal: { error: 'bad-request' } },
-  { name: 'empty title + a dash-led claimedBy', pair: ['shape', 'claimedById'], gate: 'shape',
-    f: facts({ ...WORK, title: '', claimedBy: '-coord' }), refusal: { error: 'bad-request' } },
+  { name: 'empty title + the reserved programme', pair: ['shape', 'reservedProgramme'], gate: 'shape',
+    f: facts({ ...WORK, title: '', program: 'linear-sync' }), refusal: { error: 'bad-request' } },
+  { name: 'the reserved programme + a non-string ticket', pair: ['reservedProgramme', 'ticketShape'], gate: 'reservedProgramme',
+    f: facts({ ...WORK, program: 'linear-sync', ticket: 5 }), refusal: { refused: 'reserved-programme' } },
+  { name: 'a non-string ticket + a dash-led claimedBy', pair: ['ticketShape', 'claimedById'], gate: 'ticketShape',
+    f: facts({ ...WORK, ticket: 5, claimedBy: '-coord' }),
+    refusal: { error: 'bad-request', detail: 'ticket must be the key of a ticket of the programme' } },
   { name: 'a dash-led claimedBy + a dash-led sessionId', pair: ['claimedById', 'sessionIdId'], gate: 'claimedById',
     f: facts({ ...WORK, claimedBy: '-coord', sessionId: '-ws' }), refusal: BAD_CLAIMANT },
   { name: 'a dash-led sessionId + a dash-led project', pair: ['sessionIdId', 'projectFlag'], gate: 'sessionIdId',
@@ -232,12 +262,15 @@ const PAIRS: (Row & { pair: [OpenRunGate, OpenRunGate] })[] = [
   { name: 'session bound elsewhere + differing home', pair: ['projectMismatch', 'homeVerdict'], gate: 'projectMismatch',
     f: facts({ ...WORK, sessionId: 'ws-1' }, { sessionProject: () => 'elsewhere', programKnown: () => true, programHome: () => 'other-home' }),
     refusal: { refused: 'project-mismatch', by: 'elsewhere' } },
-  { name: 'differing home + claimant a worker', pair: ['homeVerdict', 'claimantWorker'], gate: 'homeVerdict',
-    f: facts({ ...WORK }, { programKnown: () => true, programHome: () => 'other-home', openClaimantsOf: () => ['coord-9'] }),
+  { name: 'differing home + a closed plan', pair: ['homeVerdict', 'planGate'], gate: 'homeVerdict',
+    f: facts({ ...WORK }, { programKnown: () => true, programHome: () => 'other-home', plan: planOf({ ended: true }) }),
     refusal: { refused: 'home-mismatch', by: 'other-home' } },
-  { name: 'no home + claimant a worker', pair: ['homeVerdict', 'claimantWorker'], gate: 'homeVerdict',
-    f: facts({ ...WORK, homeProject: undefined }, { openClaimantsOf: () => ['coord-9'] }),
+  { name: 'no home + a closed plan', pair: ['homeVerdict', 'planGate'], gate: 'homeVerdict',
+    f: facts({ ...WORK, homeProject: undefined }, { plan: planOf({ ended: true }) }),
     refusal: { error: 'bad-request', detail: 'homeProject is required' } },
+  { name: 'a closed plan + claimant a worker', pair: ['planGate', 'claimantWorker'], gate: 'planGate',
+    f: facts({ ...WORK }, { plan: planOf({ ended: true }), openClaimantsOf: () => ['coord-9'] }),
+    refusal: { refused: 'plan-closed' } },
   // D-5523: a claimant of another project no longer trips `claimantProject`,
   // so its two order rows trip it with the one measured refusal it keeps — a
   // row that records no project.
@@ -436,7 +469,7 @@ describe('openRunPreconditions — the admitted opens (D-5384)', () => {
       open: {
         program: 'demo-program', title: 'Wave two', project: 'demo', wave: 2, waveOf: 3,
         claimedBy: 'coord-1', kind: 'work', reviews: null, homeProject: 'demo', sessionId: 'ws-1',
-        unattributed: false, coordProject: 'demo',
+        unattributed: false, coordProject: 'demo', ticket: null,
       },
     });
   });
@@ -450,7 +483,7 @@ describe('openRunPreconditions — the admitted opens (D-5384)', () => {
       open: {
         program: 'demo-program', title: 'Review wave two', project: 'demo-2', wave: 4, waveOf: null,
         claimedBy: 'coord-1', kind: 'review', reviews: 7, homeProject: 'demo',
-        unattributed: false, coordProject: 'demo-2',
+        unattributed: false, coordProject: 'demo-2', ticket: null,
       },
     });
   });
@@ -539,6 +572,7 @@ describe('the route answers the decider\'s refusals with the inline sends\' exac
   const TOKEN = 'f'.repeat(64);
   const runner: Runner = async () => ({ ran: true, code: 0, stdout: '', stderr: '' });
   let app: FastifyInstance | undefined;
+  let coord: CoordStore;
   afterEach(async () => { if (app) await app.close(); app = undefined; });
   const openApp = async (): Promise<FastifyInstance> => {
     const home = mkTmp('ccrc-open-run-');
@@ -548,7 +582,7 @@ describe('the route answers the decider\'s refusals with the inline sends\' exac
     const fields: Record<string, string> = { wrapper: 'claude', project: 'demo', workdir: '/w/coord-1',
       uuid: 'u-coord-1', started: '1', workspace: 'coord-1', branch: 'ws/coord-1', base: 'origin/main' };
     for (const [k, v] of Object.entries(fields)) writeFileSync(path.join(home, '.cc-sessions', `coord-1.${k}`), v);
-    const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
+    coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
     return buildServer({ ...testDeps(home, runner), mailToken: TOKEN, coord });
   };
   const post = (a: FastifyInstance, body: Record<string, unknown>) => a.inject({
@@ -565,6 +599,8 @@ describe('the route answers the decider\'s refusals with the inline sends\' exac
     const none = await post(app, { ...REVIEW });
     expect([none.statusCode, none.body])
       .toEqual([400, '{"ok":false,"error":"bad-request","detail":"reviews names no run"}']);
+    // The programme is declared as a pre-plan one: a fresh slug with no row is `plan-missing` since D-8181.
+    seedLegacyProgramme(coord.db, WORK.program, WORK.homeProject);
     const first = await post(app, { ...WORK });
     expect(first.statusCode).toBe(200);
     const mismatch = await post(app, { ...WORK, wave: 3, homeProject: 'other-home' });

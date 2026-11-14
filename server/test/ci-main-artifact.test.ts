@@ -172,6 +172,13 @@ describe('isTrustedFullSuiteRun / isGreenFullSuiteJob / greenFullSuiteOn: only t
     expect(isGreenFullSuiteJob(job('x / full-suite', 'failure'))).toBe(false);
   });
 
+  it('a dispatched full run that skipped the macOS legs on purpose is no evidence (D-8396): its job is renamed', () => {
+    // ci.yml names full-suite `full-suite (macOS skipped)` on such a run (ci-pipeline.test.ts pins the name), so a
+    // dispatch without macos=true can neither stand in for the daily macOS run nor promote to stable.
+    expect(isGreenFullSuiteJob(job('full-suite (macOS skipped)'))).toBe(false);
+    expect(evidence(wfRun(30, { event: 'workflow_dispatch' }), [job('full-suite (macOS skipped)')])).toBe(false);
+  });
+
   it('greenFullSuiteOn: any trusted run with a green full-suite answers true; jobs are read per run', () => {
     const runs = [wfRun(20, { event: 'pull_request' }), wfRun(21, { event: 'schedule' })];
     expect(greenFullSuiteOn({ runs, jobsByRun: { 20: [job('full-suite')], 21: [job('full-suite', 'failure')] }, repoId: REPO_ID, sha: SHA })).toBe(false);

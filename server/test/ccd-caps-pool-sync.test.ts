@@ -7,7 +7,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { parseCcdCaps } from '../../shared/agent-protocol.js';
 import { ACCOUNT_POOLS_CAP, POOL_SYNC_ABSENT_CAP, POOL_SYNC_INSTALLED_CAP } from '../src/ccdargv.js';
-import { accountPoolsEnforcement } from '../src/pools.js';
+import { accountPoolsEnforcement, accountPoolsUnavailableReason } from '../src/pools.js';
 import { CCD, ghContainedEnv, makeCcdHarness, plantPoolSyncTimer, type CcdHarness } from './ccdWsHelpers.js';
 import { itLinux } from './platformFixtures.js';
 
@@ -63,10 +63,21 @@ describe('the word as the agent reads it: `ccd caps` run as a program, through p
     expect(accountPoolsEnforcement(asAgent())).toBe('unavailable');
   });
 
+  // D-8283: the single-box install shape. Its ccd is current, so the reason is the missing timer, never ccd's age.
+  it('a box with no timer names the missing timer as the reason, not an older ccd', () => {
+    expect(accountPoolsUnavailableReason(asAgent())).toBe('no-pool-sync');
+  });
+
   // Linux only, as `ccd-crosspool.test.ts` says of its own rows: a program run on macOS answers macOS's arm, and a box
   // there cannot have this timer.
   itLinux('a box with the timer reads enforced', () => {
     plantPoolSyncTimer(h.home);
     expect(accountPoolsEnforcement(asAgent())).toBe('enforced');
+  });
+
+  // D-8283: the fleet install shape. Enforced carries no reason.
+  itLinux('a box with the timer gives no reason', () => {
+    plantPoolSyncTimer(h.home);
+    expect(accountPoolsUnavailableReason(asAgent())).toBeUndefined();
   });
 });

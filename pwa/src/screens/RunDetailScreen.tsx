@@ -30,8 +30,9 @@ import { runSpendLine } from '../fleet/runSpendWords';
 import { spawnVerdictChip } from '../fleet/spawnWords';
 import {
   DISPATCH_GLYPH, DISPATCH_STALLED_WORDS, RUN_GLYPH, childReclaimChip, childReclaimTitle, coordinatorOf, crossingNote, dispatchStalledTitle,
-  dispatchWindow, itemTallyLabel, anyDispatchPending, runWaitLine,
+  dispatchWindow, itemTallyLabel, itemTallyTitle, branchCommitsNote, anyDispatchPending, runWaitLine,
   isRunClosed, programsWithOpenRun, resumeNote, resumeShown, runHomeProject, runItems, runKindChip, runRowName, runState, runStateWord, runWarnings, workerOf,
+  workerSeenNote,
 } from '../fleet/runWords';
 import { programmeSpecHref } from '../ledgers/ledgerLinks';
 import { WayBack } from '../ledgers/WaitingRoutes';
@@ -41,6 +42,8 @@ import { ResumeSheet } from '../fleet/ResumeSheet';
 import { resumeHeirs } from '../fleet/resumeHeirs';
 import { capWaiting } from '../fleet/reviewCapWords';
 import { RunTrail } from './RunTrail';
+import { TimersSection } from '../session/TimersSection';
+import { runTimerSections } from '../session/timersWords';
 import { runQueryOf, programmeIsOpenable, programmePath, runPath, runsSearchPath, sessionPath } from '../lib/routes';
 import { useLocation } from '../lib/router';
 import { useFleetStore, type FleetStore } from '../stores/fleet';
@@ -124,7 +127,9 @@ function Strip({ q }: { q: string | null }): ReactNode {
   return <WayStrip to={q === null ? '/runs' : runsSearchPath(q)} label={q === null ? RUN_PAGE_WORDS.stripRuns : RUN_PAGE_WORDS.stripSearch} />;
 }
 
-function Header({ run, worker, nowMs }: { run: RunSummary; worker: FleetSession | null; nowMs: number }): ReactNode {
+function Header({ run, worker, nowMs, quietMs }: {
+  run: RunSummary; worker: FleetSession | null; nowMs: number; quietMs: number | null;
+}): ReactNode {
   const state = runState(run);
   const nowSec = Math.floor(nowMs / 1000);
   const crossing = crossingNote(run);
@@ -137,6 +142,8 @@ function Header({ run, worker, nowMs }: { run: RunSummary; worker: FleetSession 
   const degraded = worker === null ? [] : unmeasuredFields(worker);
   const graphReads = worker === null ? null : graphReadCount(worker);
   const waitLine = runWaitLine(run, nowMs);
+  const seen = workerSeenNote(run, nowMs, quietMs);
+  const commits = branchCommitsNote(run, worker);
   return (
     <header className="rd-head">
       <p className="rd-kind-word">{run.kind === 'review' ? 'review' : 'work'}</p>
@@ -155,8 +162,10 @@ function Header({ run, worker, nowMs }: { run: RunSummary; worker: FleetSession 
         {kind !== null && (
           <span className="rd-kind" title={kind.title}><span aria-hidden="true">{kind.glyph}</span>{kind.word}</span>
         )}
-        <span className="rd-tally">{itemTallyLabel(runItems(run))}</span>
+        <span className="rd-tally" title={itemTallyTitle(runItems(run)) ?? undefined}>{itemTallyLabel(runItems(run))}</span>
+        {commits !== null && <span className="rd-commits" title={commits.title}>{commits.word}</span>}
         <span className="rd-when">{run.dispatchedAt === null ? '—' : formatAge(nowSec - Math.floor(run.dispatchedAt / 1000))}</span>
+        {seen !== null && <span className="rd-seen" data-quiet={String(seen.quiet)} title={seen.title}>{seen.word}</span>}
       </p>
       {spawn.phase === 'in-flight' && (
         <p className="rd-dispatch">
@@ -268,6 +277,7 @@ export function RunDetailScreen({ id, store = useFleetStore, pane = false }: { i
   const frameSeen = store((s) => s.fleetFrameSeen);
   const liveRuns = store((s) => s.runs);
   const runsFrameSeen = store((s) => s.runsFrameSeen);
+  const stallQuietMs = store((s) => s.stallQuietMs);
   const recordRun = state.kind === 'ok' ? state.answer.run : null;
   // The live runs frame wins for an open run, so a page beside the board cannot disagree with its row (D-5545); a closed run
   // is not in the frame and keeps the record's.
@@ -311,7 +321,7 @@ export function RunDetailScreen({ id, store = useFleetStore, pane = false }: { i
         <Button variant="primary" onClick={retry}>{RUN_PAGE_WORDS.retry}</Button>
         {basic !== undefined && (
           <>
-            <Header run={liveRuns.find((r) => r.id === basic.id) ?? basic} worker={null} nowMs={now} />
+            <Header run={liveRuns.find((r) => r.id === basic.id) ?? basic} worker={null} nowMs={now} quietMs={stallQuietMs} />
             <Controls run={basic} coordinatorOpenable={false} onLift={() => undefined} />
           </>
         )}
@@ -341,11 +351,12 @@ export function RunDetailScreen({ id, store = useFleetStore, pane = false }: { i
   });
   return (
     <Frame pane={pane} title={title} q={q}>
-      <Header run={run} worker={worker} nowMs={now} />
+      <Header run={run} worker={worker} nowMs={now} quietMs={stallQuietMs} />
       {lead !== null && <p className="rd-close">{lead}</p>}
       <Controls run={run} coordinatorOpenable={coordSession !== null} onLift={() => setLiftOpen(true)} onAbandon={() => setAbandonOpen(true)}
         {...(resumable ? { onResume: () => setResumeOpen(true) } : {})} />
       <Facts groups={groups} />
+      {runTimerSections(run).map((t) => <TimersSection key={t.sessionId} sessionId={t.sessionId} title={t.title} />)}
       <RunTrail events={state.answer.events} olderEvents={state.answer.olderEvents} />
       <ResumeSheet run={resumeOpen ? run : null} heirs={resumeHeirs(sessions, runHomeProject(run) ?? run.project, run.claimedBy, frameSeen)}
         onClose={() => setResumeOpen(false)} onDone={retry} />

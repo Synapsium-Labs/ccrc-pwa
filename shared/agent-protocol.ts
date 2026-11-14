@@ -17,6 +17,7 @@ import {
   type RequestKind,
 } from './api.js';
 import { ACCOUNT_ARGV_REFUSALS, type AccountArgvRefusal } from './account-argv.js';
+import { TESTBOX_ADMIN_ARGV_REFUSAL_MAP, type TestboxAdminArgvRefusal, type TestboxAdminFields, type TestboxAdminSub } from './testbox-admin.js';
 
 export interface AgentHello { t: 'hello'; token: string }
 /** `ccdVerbs` is what `ccd caps` printed on the AGENT's box at start —
@@ -183,6 +184,11 @@ export const POOL_EPOCH_FILE_NAME = 'pool-epoch';
  * has its own reader and its own parse.
  */
 export const CCRC_DIR_NAME = '.ccrc';
+/** The history programme's W3 steer markers' directory under `~/.ccrc` (`<CCRC_DIR_NAME>/history/steer-on/<registry id>`, the file
+ *  the session hook's W3 gate reads). The agent admits a `stat` of one marker by it (`checkSteerOnStat`), and the server's
+ *  launch-profile lane names the path by it. A second spelling of `ccd/history/lib.mjs`'s `SWITCHES.steerOnDir` (bare Node,
+ *  another package), held equal to it by `continuity-profile-lane.test.ts`. */
+export const HISTORY_STEER_ON_DIR = 'history/steer-on';
 export const NODE_FILES = {
   stamp: 'build.json', installed: 'installed', caps: 'ccrc-caps', floor: 'floor', previous: 'previous',
   nodeId: 'node-id', report: 'update.json', projection: 'update-intent',
@@ -224,7 +230,7 @@ export const NODE_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9
 
 /**
  * The `$REG/pool-epoch` document's numeric sub-grammar — `_acct_pool_state`'s
- * own `numRe` (`ccd/ccd:2157`, shared by `epoch`/`issued`/`lease`) and
+ * own `numRe` (declared at its top, shared by `epoch`/`issued`/`lease`) and
  * `ccd-pool-sync`'s own `NUM` (`ccd/ccd-pool-sync:156`): zero, or a non-zero
  * digit followed by any digits — no leading zero, because the control
  * plane's `%d` can never produce one.
@@ -257,18 +263,17 @@ export const OBSERVED_EPOCH_NUM = '(?:0|[1-9][0-9]*)';
 
 /** Matches a well-formed `epoch <n>` line ANYWHERE in the document, not only
  *  the first line: `_acct_pool_state`'s own per-line parser is order-agnostic
- *  (`ccd/ccd:2271` onward — the `while` loop whose `case "$k" in` at `:2290`
- *  dispatches on each line's KEY, not a positional read; `:2270` — cited here
- *  in a previous round, review T8-R2 M2 — is the terminator check the line
- *  before, not the loop), so this reader must not be stricter than the
+ *  (its `while` loop, whose `case "$k" in` dispatches on each line's KEY,
+ *  not a positional read; the terminator check just before the loop is not
+ *  the loop, review T8-R2 M2), so this reader must not be stricter than the
  *  format actually is. */
 const EPOCH_LINE_RE = new RegExp(`^epoch (${OBSERVED_EPOCH_NUM})$`, 'm');
 
 /** Matches ANY line KEYED `epoch` — the same first-token test
- *  `_acct_pool_state` makes (`k=${line%% *}`, `ccd/ccd:2287`), regardless of
+ *  `_acct_pool_state` makes (`k=${line%% *}`), regardless of
  *  whether the rest of the line is a well-formed value. Used only to COUNT
  *  such lines (review T8-R2, I2, Ruling): bash refuses a document carrying
- *  two, and the reason (`ccd/ccd:2291-2297`, "nothing says which value is
+ *  two, and the reason (its `epoch` arm's comment, "nothing says which value is
  *  true") is a statement about the epoch ITSELF — the exact fact this field
  *  exists to report — not one of the placement-trust questions the rest of
  *  that grammar answers and this reader defers (a duplicate `issued`/
@@ -289,7 +294,7 @@ const EPOCH_KEYED_LINE_RE = /^epoch(?: .*)?$/gm;
  * 1. THE TERMINATOR (review T8-R1, F1). The document must end, after
  *    stripping AT MOST one trailing newline, in a line that is exactly `end`
  *    — the same structural check `_acct_pool_state` makes
- *    (`ccd/ccd:2248-2270`) before it parses a single field, because a
+ *    (its `end` check) before it parses a single field, because a
  *    line-oriented reader has no other way to tell a torn final row from a
  *    complete one. This is a PROVENANCE check, not a usability one: an
  *    unterminated document may be a FRAGMENT of a PREVIOUS one, and a number
@@ -320,7 +325,7 @@ const EPOCH_KEYED_LINE_RE = /^epoch(?: .*)?$/gm;
  */
 export function parseObservedEpochDoc(text: string): number | null {
   // The SAME strip-then-check algorithm `_acct_pool_state` uses
-  // (`ccd/ccd:2263-2270`): at most ONE trailing newline is stripped, so a
+  // (its `tail` strip and `end` check): at most ONE trailing newline is stripped, so a
   // SECOND one (content after the terminator, even a blank line) leaves the
   // true last line empty, not `end`, and is refused.
   const stripped = text.endsWith('\n') ? text.slice(0, -1) : text;
@@ -412,7 +417,13 @@ export interface AccountOpReq {
  *  A frame with any extra field is a malformed frame (`bad-request`), the same word an agent that predates the op
  *  answers. */
 export interface DiskReq { t: 'req'; id: number; op: 'disk' }
-export type AgentReq = ExecReq|ReadReq|ReadFromReq|ReadB64Req|ReaddirReq|StatReq|LstatReq|WriteB64Req|TailOpenReq|TailCloseReq|PtyOpenReq|CapsReq|UpdateReq|TokenSyncReq|AccountOpReq|DiskReq|PressureReq|TestboxReq|TestboxToolsSyncReq|BackupReq;
+/** Test box connect spec §2.1 (D-8166): ONE member of the `req` envelope, the typed `ccrc testbox-admin <sub>` op, the
+ *  FIFTH wire-triggered spawn. `fields` is the type the builder (`shared/testbox-admin.ts#buildTestboxAdminArgv`) takes,
+ *  carried as the JSON it is; the agent hands it to the builder unchanged. NO stdin: no secret crosses the wire (§2.3).
+ *  Every argument failure is answered `ok: true` with `kind: 'refused'` and the node's `fleetIdentity`, never
+ *  `bad-request`, which from this op means "the agent predates it". */
+export interface TestboxAdminReq { t: 'req'; id: number; op: 'testbox-admin'; sub: TestboxAdminSub; fields: TestboxAdminFields }
+export type AgentReq = ExecReq|ReadReq|ReadFromReq|ReadB64Req|ReaddirReq|StatReq|LstatReq|WriteB64Req|TailOpenReq|TailCloseReq|PtyOpenReq|CapsReq|UpdateReq|TokenSyncReq|AccountOpReq|DiskReq|PressureReq|TestboxReq|TestboxToolsSyncReq|TestboxAdminReq|BackupReq;
 export interface ResOk  { t: 'res'; id: number; ok: true;  [k: string]: unknown } // op-specific payload fields below
 /** `detail` is ADDITIVE (design 2026-09-20 §10, D-3373): what an
  *  agent can say beyond the word — the `--detach` parent's first stderr line,
@@ -897,6 +908,73 @@ export function readAccountOpAnswer(raw: unknown): AccountOpAnswer | null {
     case 'refused':
       if (typeof r.why !== 'string' || !(ACCOUNT_ARGV_REFUSALS as readonly string[]).includes(r.why)) return null;
       return { kind: 'refused', why: r.why as AccountArgvRefusal, fleetIdentity };
+    default:
+      return null;
+  }
+}
+
+// ── the `testbox-admin` op (test box connect spec §2.1, §2.11; plan TC11, D-8166) ──────────────────────────
+// The agent builds argv with `buildTestboxAdminArgv` and answers `TestboxAdminOpAnswer`; the server's agent arm
+// (TC12) sends `TestboxAdminReq` and reads the answer with `readTestboxAdminOpAnswer`, then the verb's own JSON line
+// with `readTestboxAdminStatus` or the act reader. The agent never parses the verb's output.
+
+/** The op's name, and the word an agent that answers it lists in `ready.ops`. */
+export const TESTBOX_ADMIN_OP = 'testbox-admin';
+
+/** A short sub's bound; a long sub's bound covers only its DETACH (the unit it starts outlives the call). */
+export const TESTBOX_ADMIN_SHORT_TIMEOUT_MS = 60_000;
+export const TESTBOX_ADMIN_LONG_TIMEOUT_MS = 30_000;
+/** After the SIGTERM to the child's group, how long before the SIGKILL. */
+export const TESTBOX_ADMIN_KILL_GRACE_MS = 5_000;
+/** The most stdout the agent keeps: one byte more kills the group and answers `too-large`. */
+export const TESTBOX_ADMIN_OUTPUT_MAX_BYTES = 1024 * 1024;
+/** After the SIGKILL, how long the agent waits for the child's pipes to close before it answers anyway. */
+export const TESTBOX_ADMIN_DRAIN_MS = 2_000;
+
+/** The server's `FleetClient.request` deadline for one call: the bound, the grace, the drain and a margin, so the
+ *  agent always answers first and a lost answer means the link, never the bound. */
+export function testboxAdminRequestTimeoutMs(long: boolean): number {
+  return (long ? TESTBOX_ADMIN_LONG_TIMEOUT_MS : TESTBOX_ADMIN_SHORT_TIMEOUT_MS) + TESTBOX_ADMIN_KILL_GRACE_MS
+    + TESTBOX_ADMIN_DRAIN_MS + 5_000;
+}
+
+/** How one `testbox-admin` op ended on the node (the `account` op's arms, kept apart the same way):
+ *  `exited` the verb ran and exited with `code`; `stdout` is its output, one JSON line, unread here.
+ *  `timeout` / `too-large` the child was killed; outcome UNKNOWN. `not-started` nothing ran. `refused` the builder
+ *  refused before any spawn. */
+export type TestboxAdminOpOutcome =
+  | { kind: 'exited'; code: number; stdout: string }
+  | { kind: 'timeout' }
+  | { kind: 'too-large' }
+  | { kind: 'not-started' }
+  | { kind: 'refused'; why: TestboxAdminArgvRefusal };
+
+/** The op's `ok: true` payload; `fleetIdentity` is the node's `~/.ccrc/node-id` through `NODE_ID_RE`, or `null`. */
+export type TestboxAdminOpAnswer = TestboxAdminOpOutcome & { fleetIdentity: string | null };
+
+/** How one `testbox-admin` call ended as the SERVER's seam answers it (`FleetIO.testboxAdmin`, plan TC12): the node's outcome
+ *  (`exited`, `timeout`, `too-large`, `not-started`, `refused`), plus the two the link adds. `unsupported`: an agent that
+ *  does not list the op in `ready.ops`, or answers `bad-request`; nothing ran. `lost`: the frame left and no answer came back
+ *  (the link's deadline, a disconnect, an answer off `readTestboxAdminOpAnswer`'s grammar); the outcome is UNKNOWN. */
+export type TestboxAdminAsked = TestboxAdminOpOutcome | { kind: 'unsupported' } | { kind: 'lost' };
+
+/** THE ONE READER of a `testbox-admin` op's answer. `null` is "no answer to trust", never an outcome. */
+export function readTestboxAdminOpAnswer(raw: unknown): TestboxAdminOpAnswer | null {
+  if (typeof raw !== 'object' || raw === null) return null;
+  const r = raw as Record<string, unknown>;
+  const fid = r.fleetIdentity;
+  if (fid !== null && (typeof fid !== 'string' || !NODE_ID_RE.test(fid))) return null;
+  const fleetIdentity = fid as string | null;
+  switch (r.kind) {
+    case 'exited':
+      if (typeof r.code !== 'number' || !Number.isInteger(r.code) || r.code < 0 || r.code > 255) return null;
+      if (typeof r.stdout !== 'string') return null;
+      return { kind: 'exited', code: r.code, stdout: r.stdout, fleetIdentity };
+    case 'timeout': case 'too-large': case 'not-started':
+      return { kind: r.kind, fleetIdentity };
+    case 'refused':
+      if (typeof r.why !== 'string' || !Object.hasOwn(TESTBOX_ADMIN_ARGV_REFUSAL_MAP, r.why)) return null;
+      return { kind: 'refused', why: r.why as TestboxAdminArgvRefusal, fleetIdentity };
     default:
       return null;
   }

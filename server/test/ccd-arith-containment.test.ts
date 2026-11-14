@@ -319,6 +319,9 @@ describe('structural: every swept site guards its arithmetic operand with =~ ^[0
     // (measured when `_pane_narrow_note` landed). Distinct operand, distinct
     // row, and the population stays exactly enumerated.
     { fn: '_pane_narrow_note (narrownote floor)',   anchors: ['$((now - said))', 'COMPACT_NOTE_FLOOR'], arith: '$((' },
+    // D-8271's typing-check log floor: `typerefuse` is `<reason> <epoch>`, one writer (`_pane_type_ready`, from
+    // `$(date +%s)`), and its epoch half is the operand. Distinct operand name again, so the row stays its own.
+    { fn: '_pane_type_ready (typerefuse floor)',     anchors: ['$((now - saidts))', 'COMPACT_NOTE_FLOOR'], arith: '$((' },
     // D-3103's no-turn guard, and the ONE row here whose line needs TWO digit
     // tests rather than one: `last` is a registry field (`lastcompact`, the
     // threat model every row above shares) and `ts` is this box's own python

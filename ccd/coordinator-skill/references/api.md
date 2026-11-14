@@ -76,6 +76,18 @@ response said. The refusals you will actually meet are
 `unknown-item`, `item-terminal`, `intent-held`. Their meanings are in
 `references/wave-lifecycle.md`.
 
+`runs open` also answers five refusals that come from the programme's plan
+(`references/plan.md` has the verbs that fix each):
+
+- `plan-missing`: the programme has no plan. Declare one with `plan put` (with
+  `home`), then open again. Start at `references/plan.md`.
+- `wave-epic-mismatch`: no live epic lists this wave, or the named `ticket` is in
+  another epic. Revise the plan so the wave and the ticket share an epic.
+- `ticket-unavailable`: the ticket is done, dropped, started by another run, or an
+  Upkeep ticket. Name another, or open with none.
+- `plan-closed`: the plan was ended with `plan close`. Nothing opens under it.
+- `reserved-programme`: `linear-sync` is ccrc's own. Use your programme's slug.
+
 **That list is the RUN routes only** (`/runs`, `/dispatch`, `/:id/close`,
 `/:id/advance`, `/:id/items`). `POST /api/mail` and `POST /api/mail/:id/ack` draw from a
 mostly disjoint vocabulary, all on `error`: `unauthenticated`, `bad-kind`,

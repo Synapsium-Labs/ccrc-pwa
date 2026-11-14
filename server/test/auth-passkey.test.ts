@@ -1189,7 +1189,7 @@ describe('PasskeyStore', () => {
       const added = await store.add(cred);
       expect(added).toEqual({ ok: false, reason: 'write-failed' });
       expect(warn.mock.calls.flat().join(' ')).toContain('could not write');
-      // …AND THE ANSWER IS TRUE (D-136): the row is rolled back out of memory,
+      // …AND THE ANSWER IS TRUE (D-8609): the row is rolled back out of memory,
       // not left live until the next restart. Otherwise "enrolment failed" and
       // "this key can sign in" were the same outcome — the worse polarity, since
       // an operator told it failed will try again while a credential they do not

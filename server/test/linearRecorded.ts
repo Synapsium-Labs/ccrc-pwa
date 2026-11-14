@@ -22,11 +22,12 @@ export interface LinearRecord {
   variables: Record<string, unknown>;
   requestBody: string;
   requestHeaders: string[];
-  sentAtMs: number;
-  receivedAtMs: number;
-  sentAt: string;
+  /** The capture's clock and status line: null for FX2's recordings, which kept neither (D-8407). */
+  sentAtMs: number | null;
+  receivedAtMs: number | null;
+  sentAt: string | null;
   status: number;
-  statusLine: string;
+  statusLine: string | null;
   headers: [string, string][];
   body: unknown;
   bodyRaw: string;
@@ -63,6 +64,14 @@ export function recordedAnswer(name: string): LinearAnswer {
     ok: r.status >= 200 && r.status < 300, status: r.status, headers,
     json: async () => JSON.parse(JSON.stringify(r.body)) as unknown,
   });
+}
+
+/** The time a record's answer arrived, for a test that answers "now" as Linear's own clock did. FX2's recordings kept
+ *  no clock (D-8407), so a test reaching one of them throws here rather than run on a made-up time. */
+export function recordedReceivedAtMs(name: string): number {
+  const at = linearRecord(name).receivedAtMs;
+  if (at === null) throw new Error(`${name} kept no clock (an FX2 recording)`);
+  return at;
 }
 
 /** The recorded `X-Complexity` of a record, as a number, or null when the answer carried none (a 401). */

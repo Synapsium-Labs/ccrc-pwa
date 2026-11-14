@@ -114,6 +114,11 @@
 .ins-home {
   padding-inline: var(--sp-1);
 }
+/* The face beside the doors (Overlord face plan, Task 8): one 32px cell that never shrinks, set off from the doors. */
+.ins-topbar > .face-mark {
+  flex: none;
+  margin-inline: var(--sp-1) var(--sp-2);
+}
 /* A door's count (T2e fix round 1, D-6335; since T2d, D-6330, the Inbox counts no unread mail): the pill is
    `<CountBadge>`'s (its colours are the primitive's); here it only sits on the icon's top-right corner, in both of a door's
    forms, and takes no clicks of its own. */

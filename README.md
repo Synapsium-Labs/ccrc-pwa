@@ -138,8 +138,9 @@ not the runtime: the staged `ccrc install` it hands off to refuses without `node
 `npm ci --omit=dev` for the server's runtime dependencies (and the agent's on a fleet box),
 and on every role but `server` builds the graph engine's venv from PyPI. So the box needs
 everything in "Requirements" below, network access to the npm registry and PyPI included.
-`install.sh` fetches `SHA256SUMS` first, then the tarball, and verifies it (`sha256sum -c`;
-`shasum -a 256 -c` on macOS) **before extracting a single file** — that checksum, from the
+`install.sh` fetches `SHA256SUMS` first, then the tarball, and verifies it against the digest on the
+tarball's own `SHA256SUMS` line (`sha256sum`; `shasum -a 256` on macOS; never `-c`, which would open
+every path the file names, D-8390) **before extracting a single file** — that checksum, from the
 same origin as the tarball, is the whole of the first install's verification; every
 `ccrc update` after it also verifies the provenance attestation ("Releases"):
 
@@ -603,7 +604,8 @@ under "Attention, notifications and answering" below.
 summary line; it exits 1 when anything FAILs (a WARN does not), which is the exit code `ccrc install`
 ends with. A `server`-role box SKIPs the checks that measure per-account or per-session state — `wrappers`,
 `skills`, `accounts`, `pools`, `memory`, `routing`, `codex`, `graphify`, `graphify-path` (D-3111), `playwright`,
-`timeout`, `model-default`, `history`, `transcripts`, `transcript_work`, and `jq_regex` (no session hook runs there).
+`timeout`, `model-default`, `history`, `transcripts`, `transcript_work`, `auto-memory`, and `jq_regex` (no session hook
+runs there).
 
 | checks | what they measure |
 |---|---|
@@ -622,6 +624,7 @@ ends with. A `server`-role box SKIPs the checks that measure per-account or per-
 | `pools`, `memory`, `routing`, `models` | project pool tags; one memory store per project; lane routing; model-catalogue freshness |
 | `transcripts` | every registry row's uuid against its transcript, read by the one `continued-in` rule `ccd` and the server share: a WARN names the sessions reading a transcript Claude Code has superseded (a supervised one clears on its next supervise tick; a stopped or archived one is followed when it is next resumed) and, apart, a session whose marker names a successor never written (it clears at that job's first line, or at the first prompt the session answers on its own transcript; the row's wrapper is named, because `<wrapper> agents` lists only that account's jobs); rows it could not measure (at neither direct spelling, unreadable, or a registry row it cannot read) are counted apart inside the PASS, never claimed clean; a FAIL when `~/.cc-sessions` is not a readable, searchable directory |
 | `transcript_work` | work kept inside Claude Code's transcript folders: every roster config dir's `projects/<slug>/` entries, and each session directory's, that are not the shapes Claude Code writes (a `<uuid>.jsonl` transcript, a `<uuid>/` session directory, `memory`; inside a session directory `subagents/`, `tool-results/`, `workflows/`), counted and sized as `du -sb` sizes them; a WARN over 1 GiB in all or 256 MiB in one entry names the five largest, and a walk past its 20 s bound, or one that cannot read a directory, is unmeasured, never a PASS. It deletes nothing. `GET /api/fleet/health`'s `disk.transcriptWork` carries the agent's count of the same tree, shown in Settings › Automation (D-7898) |
+| `auto-memory` | every roster config dir's auto-memory directories (`projects/<slug>/memory/`) that hold a file, named by account and slug and never opened or deleted (scratch slugs skipped, as `memory` skips them): a WARN gives the count and the first three, because once the launch-profile lane is live a session's next launch loads none of it, except a plain session whose Settings row keeps auto memory on. A directory it cannot list, or a walk past its 20 s bound, is unmeasured, never a PASS. SKIP on a server-role box |
 | `pool-sync`, `update-sync` | a fleet box's two pulled projections, present and in lease |
 | `graphify`, `graphify-path` | the pinned graph engine, its skill and the sweep's last census; `graphify` resolving to that engine on the `PATH` sessions get (read from each live session's environment, else the user manager's; `path` asks the same of `ccrc`, `ccd` and `ccrc-api`) |
 | `playwright` | every cached Playwright browser build, really launched offline with a throwaway profile: a build the loader refuses or one left incomplete is a WARN naming it, never a FAIL. SKIP with nothing cached or on a server box |
@@ -805,10 +808,10 @@ version floor (design §9), unless `--downgrade` is typed.
 
 **Install from a release.** `bash install.sh --release [vX.Y.Z]` (default: the newest stable release —
 `latest/download` never serves a prerelease, so a `dev` build needs its tag) downloads the
-tarball and `SHA256SUMS`, verifies it (`sha256sum -c`; `shasum -a 256 -c` on macOS) **before extracting a
-single file**, extracts to a staging dir and hands off to the STAGED `ccrc install` — no build of ccrc on the
-box, though its runtime dependencies are still fetched (`npm ci --omit=dev`, which compiles `node-pty` on
-Linux) and, on every role but `server`, the graph engine is installed from PyPI into `~/.ccrc/graphify-venv`
+tarball and `SHA256SUMS`, verifies it against the digest on the tarball's own `SHA256SUMS` line (`sha256sum`;
+`shasum -a 256` on macOS; the updater does the same, D-8390) **before extracting a single file**, extracts to a
+staging dir and hands off to the STAGED `ccrc install` — no build of ccrc on the box, though its runtime
+dependencies are still fetched (`npm ci --omit=dev`, which compiles `node-pty` on Linux) and, on every role but `server`, the graph engine is installed from PyPI into `~/.ccrc/graphify-venv`
 ("Requirements" and "What the box needs first", above, list the toolchain, `python3 -m venv` and the registry
 access this takes). The first install trusts the transport checksum only and says so; every update from
 then on verifies provenance. Everything after `--release [tag]` passes through to that verb; `--role` rides here. Checkout mode
@@ -1026,8 +1029,10 @@ floor and reading `current` on the older tag included — stops a rollout before
 
 **Two trust roots, both named.** Everything above verifies against two things nothing on the box verifies: the
 Sigstore trusted root vendored in the INSTALLED tree at `deploy/sigstore-trusted-root.jsonl` — a snapshot taken
-when it was vendored, whose age nothing on the box reports, so an upstream key rotation it outlives makes it
-refuse every newer bundle until refreshed (the override below, for one update) — and a box's first
+when it was vendored, so an upstream key rotation it outlives makes it
+refuse every newer bundle until refreshed (the override below, for one update; for good, `gh attestation trusted-root`
+written over that file in a release PR). Doctor's `sigstore-root` check reads the newest validity start of any key in it
+and WARNs `stale` past 270 days (`unreadable` when the file cannot be read; D-8388) — and a box's first
 `install.sh --release`, which trusts the transport checksum alone — trust on first use — and places the verifier
 every later update runs. Whoever controls the environment can substitute the vendored root through
 `CCRC_SIGSTORE_TRUSTED_ROOT` — including a value set in the user manager's environment, which reaches a
@@ -1043,7 +1048,8 @@ three files from the release page — `ccrc-vX.Y.Z.tar.gz`, its
 `gh attestation verify ccrc-vX.Y.Z.tar.gz --bundle ccrc-vX.Y.Z.tar.gz.sigstore.json --repo Synapsium-Labs/ccrc-pwa`
 (gh ≥ 2.49; the box's own verifier is stricter, also pinning the signing workflow —
 `release-main.yml@refs/heads/main`, or `release.yml@refs/tags/<tag>` for a hand-cut tag), check the tarball
-against `SHA256SUMS` (`sha256sum -c SHA256SUMS`, or `shasum -a 256 -c` on macOS), then install that tag —
+against its own line of `SHA256SUMS` (compare `sha256sum ccrc-vX.Y.Z.tar.gz`, or `shasum -a 256` on macOS, with
+that line's digest; `sha256sum -c` opens every path the file names), then install that tag —
 `install.sh --release vX.Y.Z` fetches and checks its own copy against the release's `SHA256SUMS` again, so
 this narrows the first-install gap rather than closing it.
 
@@ -1362,9 +1368,12 @@ in `ccrc.env` survives a reboot. A line that reader refuses, or a value a sweep 
 line naming the setting, where it came from and what was refused; a server-role box runs none of these sweeps.
 The test box's 44 settings (D-7403, D-7451; see **The test box**) are box-wide, so each is read in `file` mode only
 (an environment value is ignored, with a warning), checked against its shape, and kept at its default with a warning
-naming the file when it is not that shape. Sixteen are the fleet host's, read from `~/.ccrc/ccrc.env`: `CCRC_TESTBOX_URL`, `CCRC_TESTBOX_TOKEN_FILE`, `CCRC_TESTBOX_GIT_URL_BASE`, `CCRC_TESTBOX_GIT_KEY`, `CCRC_TESTBOX_UNTRACKED_FILE_MAX`, `CCRC_TESTBOX_SNAPSHOT_MAX`, `CCRC_TESTBOX_STATUS_DEADLINE`, `CCRC_TESTBOX_RECONNECT_DEADLINE`, `CCRC_TESTBOX_LOST_RUN`, `CCRC_TESTBOX_QUEUE_LIMIT`, `CCRC_TESTBOX_QUEUE_WAIT`, `CCRC_TESTBOX_BUDGET`, `CCRC_TESTBOX_DENY_GLOBS`, `CCRC_TESTBOX_POLL`, `CCRC_TESTBOX_FALLBACK_INSTALL` and `CCRC_TESTBOX_TIMES`. The other
-twenty-eight are the test box's own, read on the box from its root-owned `/etc/ccrc-testbox/ccrc.env` alone
-(`deploy/testbox/ccrc.env.example` documents them): `CCRC_TESTBOX_RUNS`, `CCRC_TESTBOX_WORKERS`, `CCRC_TESTBOX_RUN_TMPDIR`, `CCRC_TESTBOX_RUN_MEMORY_MAX`, `CCRC_TESTBOX_RUN_SWAP_MAX`, `CCRC_TESTBOX_RUN_CPU_QUOTA`, `CCRC_TESTBOX_ROOT`, `CCRC_TESTBOX_REPOS`, `CCRC_TESTBOX_FETCH_EVERY`, `CCRC_TESTBOX_RETENTION`, `CCRC_TESTBOX_PRISTINE_KEEP`, `CCRC_TESTBOX_PRISTINE_RETRY`, `CCRC_TESTBOX_REPORT_MAX`, `CCRC_TESTBOX_TOOLS_DIR`, `CCRC_TESTBOX_OS_MIRROR`, `CCRC_TESTBOX_EGRESS_ALLOW`, `CCRC_TESTBOX_PUSH_USER`, `CCRC_TESTBOX_ENV_FORWARD`, `CCRC_TESTBOX_RUN_USER_PREFIX`, `CCRC_TESTBOX_REGISTRY_PROXY`, `CCRC_TESTBOX_REGISTRY_UPSTREAM`, `CCRC_TESTBOX_TMPFS`, `CCRC_TESTBOX_LOG_TAIL`, `CCRC_TESTBOX_SESSION_RUNS`, `CCRC_TESTBOX_SERVICE_USER`, `CCRC_TESTBOX_LISTEN`, `CCRC_TESTBOX_SERVICE_TOKEN_FILE` and `CCRC_TESTBOX_UNIT_MAX`. `ccrc test --testbox-knobs host|box` prints either table, one
+naming the file when it is not that shape. Sixteen are the fleet host's, read from `~/.ccrc/ccrc.env`: `CCRC_TESTBOX_URL`, `CCRC_TESTBOX_TOKEN_FILE`, `CCRC_TESTBOX_GIT_URL_BASE`, `CCRC_TESTBOX_GIT_KEY`, `CCRC_TESTBOX_UNTRACKED_FILE_MAX`, `CCRC_TESTBOX_SNAPSHOT_MAX`, `CCRC_TESTBOX_STATUS_DEADLINE`, `CCRC_TESTBOX_RECONNECT_DEADLINE`, `CCRC_TESTBOX_LOST_RUN`, `CCRC_TESTBOX_QUEUE_LIMIT`, `CCRC_TESTBOX_QUEUE_WAIT`, `CCRC_TESTBOX_BUDGET`, `CCRC_TESTBOX_DENY_GLOBS`, `CCRC_TESTBOX_POLL`, `CCRC_TESTBOX_FALLBACK_INSTALL` and `CCRC_TESTBOX_TIMES`. The Test box card may also write these sixteen, and these
+alone, into `~/.ccrc/testbox.env` (D-8166), which ccrc's one reader reads after `ccrc.env` and only for a key `ccrc.env` does not name;
+its lines are read by the same rules as `ccrc.env`'s, so a line it cannot decide refuses that key alone, and a value from it
+reads as `file`. The other
+thirty-one are the test box's own, read on the box from its root-owned `/etc/ccrc-testbox/ccrc.env` alone
+(`deploy/testbox/ccrc.env.example` documents them): `CCRC_TESTBOX_RUNS`, `CCRC_TESTBOX_WORKERS`, `CCRC_TESTBOX_RUN_TMPDIR`, `CCRC_TESTBOX_RUN_MEMORY_MAX`, `CCRC_TESTBOX_RUN_SWAP_MAX`, `CCRC_TESTBOX_RUN_CPU_QUOTA`, `CCRC_TESTBOX_ROOT`, `CCRC_TESTBOX_REPOS`, `CCRC_TESTBOX_FETCH_EVERY`, `CCRC_TESTBOX_RETENTION`, `CCRC_TESTBOX_PRISTINE_KEEP`, `CCRC_TESTBOX_PRISTINE_RETRY`, `CCRC_TESTBOX_REPORT_MAX`, `CCRC_TESTBOX_TOOLS_DIR`, `CCRC_TESTBOX_OS_MIRROR`, `CCRC_TESTBOX_EGRESS_ALLOW`, `CCRC_TESTBOX_PUSH_USER`, `CCRC_TESTBOX_ENV_FORWARD`, `CCRC_TESTBOX_RUN_USER_PREFIX`, `CCRC_TESTBOX_REGISTRY_PROXY`, `CCRC_TESTBOX_REGISTRY_UPSTREAM`, `CCRC_TESTBOX_TMPFS`, `CCRC_TESTBOX_LOG_TAIL`, `CCRC_TESTBOX_SESSION_RUNS`, `CCRC_TESTBOX_SERVICE_USER`, `CCRC_TESTBOX_LISTEN`, `CCRC_TESTBOX_SERVICE_TOKEN_FILE`, `CCRC_TESTBOX_UNIT_MAX`, and the live probes' three (D-8290): `CCRC_TESTBOX_PROBE_CONFIG_DIR`, `CCRC_TESTBOX_PROBE_SOCKET` and `CCRC_TESTBOX_PROBES_PER_DAY`. `ccrc test --testbox-knobs host|box` prints either table, one
 line per key, and is how every other reader (the fleet agent's `testbox` op, the test service) gets them.
 One more is read by `ccrc doctor` alone, in `file` mode: `CCRC_CARRY_COPY_WARN_BYTES`, the `carry-copies` check's warn
 bound in bytes (default 10737418240, 10 GiB; see **Swap-carry copies and the dedupe sweep**).
@@ -1491,18 +1500,22 @@ step 10 of
      named here, derived from `gate.ts`'s own EXEMPT reasons (D-1233/D-1234). -->
 
 What is gated, and what is not: **everything except** `/health` (deploy's own
-liveness gate reads the shipped sha out of it), the sixty-seven machine lanes the
+liveness gate reads the shipped sha out of it), the eighty-two machine lanes the
 fleet host reaches (thirty-nine box-token-consulting coordination routes plus
 the Linear proxy's routes under `/api/linear/proxy/`, which a session's `ccrc-api linear`
 verbs call and which refuse any call without the token whatever `CCRC_AUTH` says,
 the programme ledgers' item and goal routes (`/api/programmes/:slug/{items,spec,modifications,modifications/merged}`
 and `/api/items/:id/{confirm,return,withdraw,blocking}`),
+the plan verbs' routes (`POST /api/programmes/:slug/plan` and `/api/programmes/:slug/plan/{met,tickets,tickets/move,epics/drop,close}`),
+the hook's start report (`POST /api/sessions/:id/start`), the card door (`GET /api/sessions/:id/card`), the note door
+(`POST /api/sessions/:id/notes`, `GET /api/sessions/:id/notes`, `POST /api/sessions/:id/handover`), the timer doors
+(`POST /api/timers`, `GET /api/timers`, `POST /api/timers/:id/cancel`),
 `/api/notify`, which refuses an absent token like every lane,
 `/api/pools/epoch` and `/api/updates/intent/:nodeId` — the callers are `curl` inside a
 Claude Code session, `ccd-pool-sync.timer` and, from update-management W4, `ccd-update-sync.timer`, none with a cookie jar, though the
 exempt-but-authenticated GETs among them (`/api/runs`, `/api/runs/:id/items`,
 `/api/runs/:id`, `/api/runs/:id/record`, `/api/runs/:id/signals`, `/api/feed`, `/api/lifecycle`, `/api/peers`, `/api/claims`,
-`/api/asks`, `/api/pools/epoch`, `/api/updates/intent/:nodeId`, `/api/testbox`, `/api/programmes/:slug/goals`, and the
+`/api/asks`, `/api/pools/epoch`, `/api/updates/intent/:nodeId`, `/api/testbox`, `/api/programmes/:slug/goals`, `/api/programmes/:slug/plan`, and the
 one POST of the kind, `/api/testbox/tools-sync`) take a live session
 cookie **or** the token, which is how a coordinator reads its own wave ledger from
 the fleet host), `POST /api/token/claim` (the box token's claim door, which
@@ -2130,6 +2143,18 @@ subagent model, and a context-window key (below; set from `<id>.windows.json`) �
 `<id>.classes.tsv`, `<id>.effort.json` and, on a Codex lane, `~/.ccrc/codex/<id>/lane.json`, so nothing reads
 a registry the lane's settings disagree with.
 
+A Codex lane's block carries one more key, `ENABLE_CODE_SECURITY_REVIEW=0` (operator ruling 2026-11-12). On that
+lane the official `security-guidance` plugin's LLM reviews would POST Claude model ids to the local bridge, which
+answers each with a 404, so every Stop, commit and push review would fail open. The key is the plugin's master
+switch (plugin 2.0.19): it turns every LLM review off and keeps the pattern warnings. No other kind of lane is
+given it (external, OpenRouter and compatible lanes keep the reviews, and `materialise` refuses an Anthropic lane).
+It reaches a lane at that lane's next materialise (any `ccrc models <id>` change, or the hourly `ccrc models
+refresh` after a probe that succeeds) and a session at its next launch, because Claude Code reads the file at
+launch. ccrc owns the key on every lane that carries a registry, as it owns the model keys: a hand-set value on a
+Codex lane is reverted to `0`, and a hand-set copy on any other kind of lane is removed, at the next materialise,
+and `show` lists either under settings drift until then. `rm` clears it from any rostered lane, an Anthropic lane
+included, since `rm` runs before that refusal.
+
 ```bash
 ccrc models <id> init <codex|openrouter|compatible> [--base-url <url> | --suggested]   # seed a registry; --suggested is openrouter's, from its catalogue
 ccrc models <id> show [--json]             # classes, subagent class, catalogue, context window, settings drift
@@ -2480,7 +2505,8 @@ It runs on the system `python3`, 3.9 or later (below that `ccrc codex start` ref
 needs no LiteLLM runtime. It sends `originator: ccrc` and a ccrc user agent, never presenting itself as Codex. Claude
 Code's top-level system prompt travels as the first developer message, with no `instructions` field and no prompt of the
 bridge's own; a lane directory holding the marker file `bridge-instructions` (no ccrc code writes it) sends it as
-`instructions` instead. A
+`instructions` instead. Three more marker files, `bridge-reasoning-all-turns`, `bridge-verbosity` and
+`bridge-turn-state`, each add one part of native Codex's request (below). A
 mid-conversation `role: "system"` entry becomes a developer message in its place, and effort follows the shim's own rule
 (above). Each reply's blocks are built from the upstream's finished items, except that a message's first text part
 streams live as it arrives (so a long compaction summary shows as it is written), and each reply streams zero usage in
@@ -2491,8 +2517,9 @@ every 15 seconds, and the upstream idle bound is 300 seconds, as in Codex. A con
 Code's own `prompt is too long: N tokens > M maximum`, so it compacts; N is the bridge's estimate, because the backend's
 overflow message carries no counts. A usage limit is a 429 `billing_error` and a policy refusal a 400 `policy_blocked`,
 each with `x-should-retry: false`. Retries are Claude Code's: the bridge never retries an upstream request, except once
-after it refreshed a token the upstream answered 401 (a reply the upstream marks unfinished is continued inside the same
-message, at most three times). `count_tokens` is answered locally, from an estimate seeded at 3.5 bytes per token and
+after it refreshed a token the upstream answered 401, and once without the request markers' additions after a 400
+(below; a reply the upstream marks unfinished is continued inside the same message, at most three times).
+`count_tokens` is answered locally, from an estimate seeded at 3.5 bytes per token and
 calibrated on the lane's own replies, for any model. A `/v1/messages` request for a model the lane's catalogue does not
 list is answered 404 locally and never sent upstream.
 The credential's refresher is the bridge: it checks every minute and refreshes at about half the token's lifetime,
@@ -2516,7 +2543,8 @@ it, set `exec.upstream` back to `backend` (or remove it) in `~/.ccrc/accounts.js
 does not change), then re-run.
 
 **What a `direct` lane writes.** Beside `lane.json`, whose `bridgeFiles` names them, the bridge keeps two files in the
-lane directory, each 0600: `bridge.stats.json`, its one non-secret output, and `reasoning.sqlite`, the reasoning store.
+lane directory, each 0600: `bridge.stats.json`, its one non-secret output, and `reasoning.sqlite`, the reasoning store
+(and, only behind its marker, the per-request record below).
 The stats file holds counts, sizes, names and request ids: requests and the largest prompt accepted per route and
 model, each context refusal with the size it estimated and when, outcome counters, the protocol names it met (bounded,
 else `unrecognised`) and those it does not know, the upstream request id of its last error, and the `x-codex-` usage
@@ -2543,9 +2571,67 @@ which restarts a running, proven, stale bridge, or by `ccrc codex stop` then `st
 only when the same run re-placed the shim, the runtime or the auth library for another finding, and neither starts a
 stopped one), foreign and unmeasured
 rows; a FAIL, `runs a retired refresher`, when the lane's LiteLLM tier or shim runs beside it; a FAIL for the `siwc`
-route; no half-up row and no `litellm.yaml` row. On a lane in either mode, a stats file or store that is not a regular
-file of mode 0600 is a FAIL. Removing the lane reaps both files, the store's set-aside copy, the recordings directory and the
-marker files with the rest of its state.
+route; no half-up row and no `litellm.yaml` row. On a lane in either mode, a stats file, store, request record or its
+older generation that is not a regular file of mode 0600 is a FAIL. Removing the lane reaps both files, the store's
+set-aside copy, the recordings directory, the request record with its older generation, and the marker files, the three
+request markers and `record-requests` below among them, with the rest of its state.
+
+**The stats file's `parity` section** measures what parity with native Codex hinges on, per route and model, from what
+the bridge already receives and sends, so nothing new goes on the wire (D-8618). Each row counts the upstream responses
+that reached `response.completed` or `response.incomplete` and their input, cached, output and reasoning tokens; the
+`reasoning.effort` each request carried (`none` when it carried none); whether the model that answered is the one asked
+for; the backend's `input_transformations` by type, action and reason, so `reasoning:removed:turn_boundary` counts the
+earlier reasoning the backend dropped; each reasoning-store lookup by what it found (per lookup, so a long conversation
+counts its old turns again); and the milliseconds to the first output and to the end, in fixed buckets. Every name in
+it is bounded like the others. It is not drift: nothing in it reaches doctor's WARN or the watch's drift check, and
+`ccrc codex status` does not show it. The stats file is written at most every 10 seconds while answers come, and again
+once the bridge has been idle for 10 seconds after its last answer, so a run's figures are on disk soon after the run
+ends rather than at the next request (D-8624).
+
+**The request markers** close three gaps between the bridge's request and native Codex's (D-8622, D-8623). Each is off
+until an operator touches its file in the lane directory (no ccrc code writes them), and each is read at every request:
+- `bridge-reasoning-all-turns` adds `reasoning.context: "all_turns"`, after the effort, for a model whose catalogue row
+  says `useResponsesLite: true`;
+- `bridge-verbosity` adds `text.verbosity`, the row's `defaultVerbosity`, for a row that says `supportVerbosity: true`,
+  in one `text` object with an output format;
+- `bridge-turn-state` sends back the `x-codex-turn-state` header the backend set at the start of a Claude Code turn, on
+  every later request of that turn. A turn is the requests that share their latest user message holding no tool
+  result: the same message at the same place in the conversation, so two turns that open on the same words are two.
+  The value is kept in memory only, for at most 256 turns, and is cleared when the credential's account changes.
+
+The bridge never sends Codex's internal Lite header. When the backend answers 400 to a request that carried any of
+these, the bridge sends it once more without them, and sends none of them for the rest of that message; it does not
+for a context overflow or a policy refusal, which no removed field cures. The client sees only the second answer, and
+the first is not written to the credential's status file. The `parity` row counts the requests that carried each
+marker (`markers`), each marker a fallback dropped (`fallbacks`), and the turn-state values captured and sent back
+(`turnState`), never a value.
+
+**The per-request record** (D-8619) is one JSON line per upstream answer, for the parity eval, which joins a run's rows by
+its Claude Code session id and a time window. It is off until an operator touches `record-requests` in the lane
+directory (no ccrc code writes it), and it is read at every answer; with no marker nothing is written, and the marker
+changes nothing on the wire or in the client's answer. The file is `lane.json`'s `bridgeFiles.requests`,
+`bridge.requests.jsonl`, mode 0600, appended one whole line at a time and never through a symlink; at 16 MiB it is
+renamed to `bridge.requests.jsonl.1`, replacing the older one, so at most two generations (32 MiB) are kept. A
+`lane.json` rendered before the record existed names no file: the bridge, the live probe and lane removal accept it,
+and the bridge then writes no record and says so once in its log. ccrc reads such a `lane.json` as stale, as one from
+before the bridge, so `ccrc update` re-renders it (its codex-lanes step), as do a lane start and `ccrc doctor --fix`;
+until then doctor FAILs it as a `lane.json` that disagrees with its roster row, never as a record file.
+Each row holds, in order: `v` (1), `at` and `postAt` (UTC milliseconds when the answer ended and when the request
+started), `session` (the session id when it has the shape of one, at most 128 characters, else null), `subagent` (true
+for a subagent's request, never its id), `message` and `post` (the client message's number in this process, and the
+request's index within it: continuations and retries count on), `route` and `model` (the `parity` row's), `status`
+(null when no answer came), `outcome` (the word the stats file counts for what the bridge did with the answer: `2xx`,
+`continuations`, `continuation-cap`, `refresh-after-401`, `4xx`, `5xx`, `client-gone`, `drain-cut`, or `fallback` for the
+400 that started a fallback), `served`, `effort`, the four token counts, `firstOutputMs` and `totalMs` (whole
+milliseconds, from the same instants the `parity` histograms bucket), `inputTransformations`, `replay` (the message's
+reasoning-store lookups, on its first request only), `markers`, `fallback` and, when set, `turnState`. A field the
+answer did not reach is null, and so are `served`, the token counts, `inputTransformations`, `firstOutputMs` and
+`totalMs` of every answer the `parity` row counted no response for (a non-2xx, a stream that broke, even one that
+released output first), so the `parity` histograms rebuilt from the rows are the stats file's own. It never holds conversation text, a tool name, the
+prompt cache key, a turn-state value, a header value other than the session id, an account id or a token. A row that
+cannot be written (a full disk, a directory in the file's place) never fails the request: the stats file counts it as
+the outcome `requests:write-failed` every time, and the log says so once per bridge process, whatever the cause,
+naming the first one's (`record-requests write-failed eisdir`, say).
 
 **A restart cuts long streams.** The bridge runs under the shim's unit, so a restart (a rollout's install restarts a
 running bridge whose bytes are stale; a switch stops it) is a stop, then a start. On the stop the bridge closes its
@@ -2697,8 +2783,9 @@ single-box default, or any macOS box — has none of this: with no projection on
 disk it reads the declared tag, as before, so there a central tag is the
 server's refusal and forecast while ccd's own placement still follows
 `accounts.json`. The PWA says so: `ccd caps` prints `pool-sync-absent` there,
-and the account pool chip dims and the editor warns that nothing enforces the
-tag. The server never nudges; convergence is the timer's pull
+and the account pool chip dims with "not applied on this install — no pool-sync
+timer", and the editor says ccd places by the roster's declared pool while the
+server's forecast and swap check use the tag (D-8283). The server never nudges; convergence is the timer's pull
 alone, so a central change reaches the fleet within about a minute. On a fleet
 box running the timer, the fleet header shows `epoch N / observed M` (or
 `observed never synced`) while the fleet's projection lags the server's epoch;
@@ -3177,6 +3264,39 @@ operator's switch was undone by the next swap (§1.4: Opus typed by hand, Fable 
     a later stop or revival skips its read, so a choice typed in between is lost (narrow; closing it needs the marker bound
     to a pane instance).
 
+### The stop's grace is measured before it is armed (session-continuity stage 3, wave 6a)
+
+A stop that kills a session's process at once can cut off a turn's last writes. Wave 6a measures how long the
+process takes to leave before anything waits for it. Three stop sites carry the measurement: the swap, the
+limit-resume and the hibernate. By default each runs in **shadow**: `ccd/ccd#_graceful_stop_note` appends one
+`graceful-stop <id>: site=<site> mode=<mode> <outcome>` line to `swap.log` per stop and sends no new signal. The
+outcome is `exited=<ms>`, `alive=<ms>` (the process outlived the wait: a censored reading), `no-pid`,
+`gone-before-signal` or `unmeasured=<why>`. `$REG/graceful-stop-live` arms the live mode (SIGTERM first, with a
+provisional 10 s wait); it is the operator's, made by hand, and has no writer in the tree.
+`python3 deploy/measure-continuity.py --stage 3` reads the lines by site and mode (`deploy/measure-continuity.py#stage3`),
+reporting exit times by nearest rank and setting no target, as the bound is the operator's. A restart after a failed
+turn now also records the background tasks it ended as lost.
+
+### What was in flight at a restart is recorded, and read by nothing yet (session-continuity stage 3, wave 6b)
+
+Before a restart can hand a session its unfinished background work, ccrc has to know what that work was. Wave 6b records
+it, in shadow. **The launch record** is `$REG/<id>.deleg`, written by the session hook beside its delegation spool: four
+row kinds (a launch, a resume, a send, and a counted `drop`), kept under a byte budget with a reserve for the drops, and
+compacted by the manifest. **The manifest** is `$REG/<id>.inflight`, written by `ccd/ccd#_inflight_write` at the three
+sites ccrc restarts a session itself: the swap, the limit-resume and a supervisor revival. The hibernate has none: it
+refuses unless the turn marker reads no background work, and its wake is a spawn. Each file holds a header (its verdict
+`listed`, `none`, `unread`, `not-applicable` or `unmeasured`, and the counts) and its items. Every restart a site reaches
+rewrites the file, except a directory standing at its path, which is kept (the log line still says `why=error`), so the
+file never shows an earlier site-reached restart's items. A restart no site reaches (a reboot or `_svc_stop`, a stop then
+`ensure`, a hibernate's wake, an archive restore) leaves the previous file standing, so a reader compares its header's
+`at=` and `gen=` with the session's latest spawn before trusting its items. The manifest takes a slot of its own,
+`$REG/.inflight.lock`, never the carry's `$REG/.carry.lock`, so it never holds up a carry (`ccd/ccd#_inflight_slot_take`).
+Each write ends in one `manifest <id>: site=<site> verdict=… wait=… items=…` line in `swap.log`. Nothing reads either file
+before wave 6c: no prompt, route or stall-watch arm. `python3 deploy/measure-continuity.py --stage 3` reads the lines, and
+its `manifest` section is the shadow week's reading: restarts by cause, verdicts by site, restarts with items by site and
+class, the restarts that never wrote one, and waits of a day or more. It reports and sets no target. An unreadable
+`swap.log` is `unmeasured` in every section that reads it.
+
 ### A return visit merges the session's sidecar (session-continuity stage 1)
 
 A swap carries more than the transcript: beside it sits the session's sidecar directory — every subagent
@@ -3277,7 +3397,8 @@ boundary has come for a while — the shape of a session wedged in Claude Code's
 records a send as `auto-compact <id>: ctx N% >= T%`, and every refusal past the cheap gates at most once per
 30 minutes per session as `compact-skip <id>: <reason>` — `pane-narrow`, `no-ctx-segment` (the status line carried
 no context reading), `post-swap` and `no-turns-since-compact` among them.
-`touch ~/.cc-sessions/autocompact-disabled` stops it fleet-wide.
+`touch ~/.cc-sessions/autocompact-disabled` stops it fleet-wide; while it stands, Settings › Automation › Overrides in
+force names it (D-8382).
 
 ### One memory store per project: `ccrc memory`
 
@@ -3773,7 +3894,7 @@ see "Fleet coordination" below.
 | `CCRC_ADMIN_MERGE` | fleet box, read by `ccd pr-admin-merge` at each call | `auto` (default) or `off`: whether a coordinator may land an approval-missing PR through the admin-merge door in a repository the fleet's GitHub identity administers and that has no merge queue (D-8124; "The admin-merge door", below). A refused or unreadable value reads as `off`. |
 | `CCRC_AGENT_URL` | server | `ws://`/`wss://` URL of `ccrc-agent` on the fleet host, including its path, e.g. `ws://<fleet address>:7789/agent`. |
 | `CCRC_AGENT_TOKEN` | server + agent | Bearer token; must match on both sides. Generate with `openssl rand -hex 32`. |
-| `CCRC_HETZNER_TOKEN` | server | Hetzner Cloud API token — only used by the degraded-mode reboot action. Unset leaves that route disabled (`501`). |
+| `CCRC_HETZNER_TOKEN` | server | Hetzner Cloud API token — only used by the degraded-mode reboot action. Unset leaves that route disabled (`501`), and the unreachable banner says so before the tap, with **Reboot** disabled (D-8382). |
 | `CCRC_FLEET_SERVER_ID` | server | Hetzner Cloud server ID of the fleet host — only used by the reboot action. |
 | `CCRC_AGENT_HOST` | agent | Bind interface, default `127.0.0.1`. Never `0.0.0.0` (the agent refuses it, and `::`, at boot) — name the private-network address the server reaches it on, explicitly. |
 | `CCRC_AGENT_PORT` | agent | Listen port, default `7789`. |
@@ -4009,7 +4130,18 @@ the last-known-good fleet snapshot instead of going blank:
   everything else running on that box, not just the fleet. Guards: `409` if
   `mode !== 'remote'`,
   `501` if `CCRC_HETZNER_TOKEN`/`CCRC_FLEET_SERVER_ID` aren't set, `502` on a
-  Hetzner API error, `202` on success.
+  Hetzner API error, `202` on success. The `501` is said before the tap (D-8382): in remote mode the health answer
+  carries `rebootConfigured` (a boolean, never the token or the id, from the one function the route asks), and while it
+  is `false` the unreachable banner disables **Reboot** and names the remedy: set both keys in the server's
+  `~/.ccrc/ccrc.env`, then restart the server. An older server omits the field and the button stays as it was.
+- `GET /api/fleet/overrides` (D-8382) is read only, session-gated when armed, no box token: every emergency override
+  the switchboard declares (`overrideSwitchNames`, `shared/switches.ts`: each registry marker or fleet-host `~/.ccrc` file
+  whose writer is `hand-only`) with `set`, `clear` or `unmeasurable`, each read where it lives (a registry marker off the
+  registry listing through `readSwitches`, a `~/.ccrc` file through the agent's `stat`, which admits exactly the
+  switchboard's `~/.ccrc` names and nothing else there), and the server box's approvals topology (`boxes` one or two,
+  whether `~/.ccrc/approvals-single-box` stands there). Settings › Automation › Overrides in force lists the overrides that
+  stand, each with what it does, what its absence means and the file to remove at a terminal; Settings › Security ›
+  Approvals is one line on the topology. Neither has a control: every override is placed and lifted at a terminal.
 
 ### Verifying a remote-mode deploy
 
@@ -4051,7 +4183,7 @@ Build 4 dogfood runbook, cross-repo programmes, and workspace holds.
 
 **All five skills ship to every rostered account's config dir.** The
 coordinator's protocol is now a trio: its worker counterpart is the
-`ccrc-worker` skill (`ccd/worker-skill/SKILL.md`, nineteen clauses pinned by
+`ccrc-worker` skill (`ccd/worker-skill/SKILL.md`, twenty clauses pinned by
 `server/test/worker-skill.test.ts`), and its reviewer counterpart is the
 `ccrc-reviewer` skill (`ccd/reviewer-skill/SKILL.md`, ten clauses pinned by
 `server/test/reviewer-skill.test.ts`), which reads a finished wave in its own
@@ -4105,13 +4237,24 @@ host or path: the address comes from `~/.ccrc/agent.env`'s `CCRC_SERVER_URL`
 token from `~/.cc-secrets/ccrc-mail.token` (absent, `no-token`), and the route
 from a fixed table (`ROUTES`, pinned closed by `ccrc-api-closed.test.ts`):
 `runs list|open|dispatch|advance|close|items|items-list|signals|route`,
-`mail list|send|fetch|ack`, `peers list`, `lifecycle list`,
+`mail list|send|fetch|ack|inbox`, `peers list`, `lifecycle list`,
 `claims list|take|release`, `ledger list|allocate`, `landing show|entries|order`,
 `asks list|answer|release`, `goals show` and `feed list` — plus `whoami`, which reads this session's `{id, uuid}` from its
 tmux pane and the registry and refuses rather than name another session. The
 four operator doors that carry no box token (`POST /api/coord/pause`,
 `POST /api/runs/:id/abandon`, `POST /api/claims/:id/break`,
 `POST /api/runs/:id/reclaim`) have no verb in it, by decision.
+
+**`ccrc-api mail inbox` reads a session's mail in one call** (D-6780). It takes no argument: the identity is the
+pane's, as `whoami` derives it. It reads `GET /api/mail/inbox` once, prints each unacked delivery addressed to this
+session (oldest first, rendered and masked by the server, with no `ack:` lines), and acks each entry through
+`POST /api/mail/:id/ack` only after its write succeeded, so a failed write leaves that entry and every later one
+unacked. Its stdout is plain text, not JSON, it writes no `http <code>` line, and it needs `jq`. Run it bare: no pipe,
+no redirect, no `head` or `tail`. When stdout is a pipe or `/dev/null` it prints everything, acks nothing and says to
+run it bare on its first and last lines; a redirect to a file still acks, because it looks like the Claude Code Bash
+tool's own capture, and the footer names every acked delivery for `mail fetch <delivery>`. A failed ack is that entry's
+`NOT acked` line and the next entry is still acked. It exits 0 when the read answered and 3 when it got no response;
+an older server's answer prints a hint to read with `mail list`, `fetch` and `ack`, which stay the fallback.
 
 **`goals show <slug>` reads a programme's goals** (`GET /api/programmes/:slug/goals`, behind the
 `goals-read-v1` server capability). The route takes either credential: a live console session or the box token, so a
@@ -4365,6 +4508,14 @@ checkout, that repo's PRs, that repo's git for every re-measurement. A wave whos
 Two codes rather than one because the caller does different things with them:
 the first says "you reused the wrong workspace", the second says "you are
 opening someone else's programme".
+
+**The plan adds its own refusals at the same door** (design 2026-11-10 §4.4): a
+work run attaches to one ticket of its programme's plan, in the epic that lists
+its wave. `wave-epic-mismatch` — **409**, no `by` — answers a wave no live epic
+lists, or a named `ticket` that sits in another epic; `plan-missing`,
+`plan-closed`, `ticket-unavailable` and `reserved-programme` are its siblings,
+each a bare **409**. Like the two above, all five are decided before the row is
+opened. A programme that existed before the plan model opens as it always did.
 
 **A third refusal guards the tree's depth.** `claimant-is-a-worker` — **409**,
 `{"ok":false,"refused":"claimant-is-a-worker","by":"<that worker's coordinator>"}`
@@ -4727,7 +4878,7 @@ replacement for them, and a lost `coord.db` reconstructs from them.
 the `ccrc-coordinator` skill (`ccd/coordinator-skill/SKILL.md`), and its twenty
 clauses are pinned verbatim by `server/test/coordinator-skill.test.ts` — a
 softened clause is a red suite, not a silent drift. **A worker is the same
-shape:** the `ccrc-worker` skill (`ccd/worker-skill/SKILL.md`), nineteen clauses,
+shape:** the `ccrc-worker` skill (`ccd/worker-skill/SKILL.md`), twenty clauses,
 pinned the same way by `server/test/worker-skill.test.ts`, and it is what a
 dispatched session is told to run by the kickoff sentence dispatch composes
 onto every brief mail. That is why a wave brief is short: the standing
@@ -5040,6 +5191,9 @@ and `/:id/close`, with `/:id/items` and `/:id/route` beside them — one run row
    earlier runs belong to another project is refused `project-mismatch`
    (**409**, `by:` that project). Both `-mismatch` refusals are decided
    *before the row is opened*, so neither leaves a `planned` orphan.
+   A planned programme's open also names its ticket (`ticket`, optional) and is
+   refused `wave-epic-mismatch` when no live epic lists the wave, before the row
+   is opened as well.
    The response names `ledgerRepo` and `ledgerAbsPath` beside the relative
    `ledgerPath`, both null while the stored home is. Wave 1 (no
    `sessionId` in the body) places **no hold yet** — dispatch is what claims
@@ -5593,17 +5747,27 @@ the rest) is listed in the hook's header, and a jq failure or a hook timeout fai
 the queue is the operator's act.
 
 **The landing line (landing-order stage 5).** `GET /api/landing?project=<p>` (box token; `ccrc-api landing show --project <p>`)
-is the coordinator's read of one project's line before it enqueues: every entry — the PR, its `pinnedSha` (the head the line
+is the coordinator's read of one project's line before it enqueues: the entries still in the line (`pinned`, `ejected`,
+`unknown`) — the PR, its `pinnedSha` (the head the line
 pinned when the run entered `merging`, which the coordinator requires to equal the head it binds and passes to
-`--match-head-commit`), its `handoffCommit`, its state and its ejections — the
+`--match-head-commit`), its `handoffCommit`, its state and its ejections — and, with `&pr=<n>` (`--pr <n>`), that PR's entry in any
+state, `entriesScope` saying which of the two the answer is; beside them the
 operator pause and the main-red hold, and the order the server's decider computes on that read; the line is paused
-while either flag is set. A project the line has never seen answers no entries and both flags off. The line's authority (no-run creation evidence,
+while either flag is set. An entry leaves the line `landed` when GitHub reads its PR merged (a merge train's proved landing included), with a head other than
+the pinned one kept in its `detail`, or `closed` when GitHub reads it closed unmerged or says no such PR exists. The landed reader
+(at most ten entries a sweep, oldest first) marks it, and a work run's `done` close marks it `landed` when GitHub reads the PR
+MERGED (a merge train's landing is left to the landed reader, which carries the train facts); a verified pin re-pins a `closed`
+entry. A project the line has never seen answers no entries and both flags off. The line's authority (no-run creation evidence,
 order edges, `fixesMain` and setter attribution) is journalled in `~/.ccrc/landing.log`, which a restored `coord.db` leaves in
 place (no backup copies it) and which the server replays before it serves anything. Replay never fabricates a measured pin or a
 current run association: a project whose projection is missing or whose binding evidence contradicts is reported as unmeasured
 and held, and invalid history refuses startup. An uncertain journal append or landing database commit fences every landing read
-and write, an advance's pin and its retreat from `merging` included: the failing call answers 503 with `mayApply: true` (the write
-may or may not have reached the line) and a `recovery` word, and every later one answers `landing-fenced` with that word. A `replay`
+and write, an advance's pin and its retreat from `merging` and a landing's mark included: the failing call answers 503 with
+`mayApply: true` (the write may or may not have reached the line) and a `recovery` word, and every later one answers
+`landing-fenced` with that word. An uncertain apply is named beside the append and the commit (`landing-db-apply`, as
+`landing-db-commit`, with `mayApply: true`), because the land arm answers the same words. After a `restart` fence the database
+handle is closed, so a later call that reads the database before the landing guard (the advance route reads the run first) fails
+on the closed handle instead of answering `landing-fenced`. A `replay`
 fence and a `restart` fence alike clear only when the server restarts: the replay is the only thing that reopens the line, and only
 the boot calls it, so there is no retry timer and nothing reopens the line while the server runs; a restart whose replay refuses
 does not start. A retreat refused `landing-projection-unreadable` (its pin names another head than the
@@ -5730,7 +5894,10 @@ that holder (`null` when the holder measures unable to take mail — escalate to
 conflict is the address, not an obstacle. Re-posting the same paths renews the claim and restates
 its `intent`, the line that stands in for a held workspace's frozen title. A claim writes nothing to
 the registry: no hold, no verb. Its lease is 45 minutes, renewed on the watcher's tick while the holder
-measures running (an unmeasurable registry reads as held), and no renewal moves its 8-hour hard cap.
+measures running (an unmeasurable registry reads as held), and no renewal moves its 8-hour hard cap. The one
+exception (D-8395): a holder measured running that re-posts its paths in the last 45 minutes before the cap gets a new
+claim with a fresh lease and cap, and the old row ends `rechained`. The new row's `chainedFrom` names the old one,
+and the answer says `rechained: [{from, to}]`; a holder that is not running still lapses at the cap.
 The holder ends it with `POST /api/claims/:id/release` (`403 not-owner` for anyone else); the
 operator breaks one with `POST /api/claims/:id/break`, an ungated door, and the row survives as
 `broken`. `GET /api/claims?project=<p>` reads the table — live rows by default, history with
@@ -5738,7 +5905,10 @@ operator breaks one with `POST /api/claims/:id/break`, an ungated door, and the 
 clause 10 reads it before splitting a wave across workers; worker clause 11 claims before editing.
 Peer mail (`runId: null`) is bounded at ingress: a repeat of an outstanding
 `(fromId, toId, subject)` is `409 duplicate`, and a send past 3 outstanding per pair, or past 12
-accepted sends per sender per hour, is `429 peer-quota`.
+accepted sends per sender per hour, is `429 peer-quota`, whose `retry` says when it can go (`ack`: when the
+recipient acks one; `time`: when the oldest leaves the hour). An invited reply is outside all three (#2726): a
+`kind: answer` whose `inReplyTo` names the delivery of an unasked mail the recipient sent to the sender (never an
+invited reply, never a mail to oneself), one per mail, recorded in `mail.answersMail` and holding no slot.
 
 **The deviation ledger's allocator.** Plans record their departures as numbered `D-N` entries in one
 global, monotonic namespace, and the numbers are ISSUED, never looked up. `POST /api/ledger/deviations`
@@ -6097,7 +6267,7 @@ is that the read side lives only where ccrc owns the file it is written in, and 
   `server/test/session-hook-sync-advisory.test.ts`, the merge deny by
   `server/test/session-hook-merge-deny.test.ts`, the role-skill deny by
   `server/test/session-hook-role-skill-deny.test.ts`.
-- **Worker clause 12 (R2).** `ccd/worker-skill/SKILL.md` now carries nineteen clauses (thirteen at R2; routing slice 2 added 14 and 15, landing-order wave 1 added 16, the stall watch added 17, the temp-root clause added 18, the workflow rule added 19), pinned verbatim: a
+- **Worker clause 12 (R2).** `ccd/worker-skill/SKILL.md` now carries twenty clauses (thirteen at R2; routing slice 2 added 14 and 15, landing-order wave 1 added 16, the stall watch added 17, the temp-root clause added 18, the workflow rule added 19, the push-once rule added 20), pinned verbatim: a
   workspace with a `graphify-out/graph.json` takes a codebase question to `graphify query` before
   `grep`, **weighted by the card's freshness word** — only `fresh` licenses taking an answer as read,
   and every other word makes a query answer a lead to verify by opening the file it names — and never
@@ -7106,7 +7276,7 @@ re-applies the box's own limits when it ends. The PWA control for the cap and th
 
 A second, separate box can run the fleet host's tests instead of `ccrctests.slice` (spec
 `docs/superpowers/specs/2026-10-28-test-box-design.md`; plan `docs/superpowers/plans/2026-10-29-test-box.md`). Everything
-below ships **off**: with no `CCRC_TESTBOX_URL` in `~/.ccrc/ccrc.env`, or with the switch off, `ccrc test` is exactly
+below ships **off**: with no `CCRC_TESTBOX_URL` in `~/.ccrc/ccrc.env` (or in `~/.ccrc/testbox.env`, the file the Test box card writes the fleet host's test box settings into), or with the switch off, `ccrc test` is exactly
 the wrapper **Test containment** describes, its output, exit status and the processes it starts unchanged.
 
 **What runs where** (spec §2.5). The box takes one test file or a set whose estimated time is under
@@ -7152,8 +7322,10 @@ D-7445); the wrapper is its one writer, and keeps today's and yesterday's file.
 **The switch** (TB2, TB9). One marker, `$REG/testbox-remote-live` (a row of `shared/switches.ts`), absent meaning off.
 The wrapper reads it itself, so the switch holds with the server down; the server's switch route writes or removes it
 through `ccd testbox-remote --state on|off`, the marker's one shell writer, and only from a signed-in session: arming
-remote runs is the operator's act, never a box token's. Removing the marker at a terminal turns remote runs off at
-once; runs already on the box finish.
+remote runs is the operator's act, never a box token's. Arming needs a passing parity record that still matches the
+box's pinned host key and its settings file (D-8166): the route refuses `{on: true}` with `parity-required` without it,
+and `ccd testbox-remote --state on` checks the same record, so arming at a terminal is gated too. Turning the switch off
+is never gated. Removing the marker at a terminal turns remote runs off at once; runs already on the box finish.
 
 **The status, the card and the doctor line** (TB9, TB10, TB11). The fleet agent's `testbox` op measures the fleet
 host's node, npm, Chrome, python3, git and tmux with the user manager's PATH and asks the box's status within
@@ -7183,11 +7355,158 @@ passed (never the automatic restore, never `--no-gate`), and only with `CCRC_TES
 freshly measured versions. A failed call prints `update: WARN: test box: tools sync not sent — …` and never fails the
 update; the card shows the drift until the next sync.
 
+**Trusted Claude Code builds** (D-8289, the operator's ruling of 2026-11-10). A Claude Code build counts as trusted only
+once the test box has captured its hook and status-file output and the replay tests passed over it. The trusted set is
+data, `claude_builds` in coord.db: one row per build, seeded with the four builds the 2026-10-18 rig record proved
+(2.1.296 and 2.1.300 to 2.1.302). Every build a session on the fleet runs gets a row, queued for its capture; this covers a
+new build and every build already live. Once a minute the server sends one capture job, newest build first, over the test
+box connection. A build whose job got no verdict is sent again after an hour. Only a job that actually went out counts as
+an attempt: while no test box answers, or the box has no capture runner, the queue still tries each build hourly but sends
+nothing, so the row counts no attempt and records why, and the card says that no build can be captured yet instead of
+"sent N times". A failed capture stays untrusted and pushes one notice. Child approvals read the record: a child on a build that is not trusted is refused `version-unverified`, with
+`trust` naming why (`not-captured`, `capture-queued`, `capture-failed`, `unread` or `record-unreadable`). The card lists
+every build with its verdict, under the rest at every width. A failed build carries its replay output behind a disclosure
+and **Capture again** (`POST /api/testbox/builds/capture`, the operator's). The box-side capture runner is not built yet
+(plan `docs/superpowers/plans/2026-11-11-new-build-capture.md`, Open), so every new build stays queued until it lands.
+
 **The settings.** The fleet host's keys are in `~/.ccrc/ccrc.env`, the box's in its own `/etc/ccrc-testbox/ccrc.env`;
 **ccrc's own settings** names every one, and `deploy/testbox/ccrc.env.example` documents the box's with their defaults.
 The fleet host also holds two operator-placed files, the token the agent op and the wrapper present
-(`CCRC_TESTBOX_TOKEN_FILE`, default `~/.ccrc/testbox.token`) and the push key (`CCRC_TESTBOX_GIT_KEY`), which nothing in
-the tree writes or removes (`shared/lifecycle.ts`).
+(`CCRC_TESTBOX_TOKEN_FILE`, default `~/.ccrc/testbox.token`) and the push key (`CCRC_TESTBOX_GIT_KEY`). Connect writes both,
+create-only, and Disconnect removes both (`shared/lifecycle.ts`); a box set up by hand keeps placing them itself.
+
+### Connecting a test box
+
+The Test box card connects a box with no shell on either host and no secret copied by hand (spec
+`docs/superpowers/specs/2026-11-07-test-box-connect-design.md`; plan `docs/superpowers/plans/2026-11-10-test-box-connect.md`;
+D-8166). Nothing in code names a host, an address, a user, a distribution or a repository: every value comes from the
+card or from a setting with a neutral default, and the examples here use `testbox.invalid`.
+
+**Five prerequisites** (spec §2.12). Connect checks them and changes nothing on a box that fails one; it never formats a
+disk and never joins a network.
+
+1. A fresh OS, from a clean image of the fleet host's distribution release.
+2. A private network the fleet host shares with the box (a tailnet, a VPN or a provider's private network): the fleet host
+   reaches the box's ssh port and its service port, and the box reaches nothing on that network.
+3. Root login by key, or a user with passwordless sudo, and the operator able to add one line to that user's
+   `authorized_keys`.
+4. An XFS file system with `reflink=1`, mounted where `CCRC_TESTBOX_ROOT` will live. The card starts the root at
+   `/var/lib/ccrc-testbox`, and **Check the box** measures that path until a Connect records the box's own root, so mount
+   the file system there (a bind mount does); the installer measures the root typed in step 4 again, as root, and refuses
+   a root that is not XFS with `reflink=1`.
+5. Open egress to the release host and the npm upstream for the first install; the box's firewall closes it afterwards.
+
+**The card's six steps.** With no box connected the card says what a test box is for and offers **Connect a test box**.
+Connect, Replace, Disconnect and the access-key acts need a recent step-up; a plain settings edit needs a signed-in
+session only, except `CCRC_TESTBOX_DENY_GLOBS`: the list of untracked files a remote run's snapshot never carries to the
+box guards secrets, so a change to it asks for the step-up too. With sign-in off the card says sign-in is required rather than offer a button that cannot work.
+
+1. **The address.** The box's address (an IP literal or a name such as `testbox.invalid`), its ssh port (default 22) and
+   its login user (default `root`). Nothing is sent to the box. The box sits on a **private network** with the fleet
+   host (a tailnet, a VPN or the provider's private network): the test service has no TLS and its firewall matches only
+   its listen address, so an address outside `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`, the shared address
+   space `100.64/10` (RFC 6598, which tailnets use) and `fc00::/7` is refused (the card says so at once for an IP literal; the preflight and Connect check the resolved
+   address and the listen address again). The address ccrc reaches the box on must be the listen address, because the
+   installed firewall accepts ssh and the service port only there.
+2. **Give ccrc access.** ccrc makes its own key pair on the fleet host and the card shows the one public line, restricted
+   with `from=` to the fleet host's address, with a copy button. Add it to the login user's `authorized_keys`, then press
+   **I have added it**. The private half never leaves the fleet host. A box behind a NAT, or on a second network, sees
+   ccrc arrive from another address than the fleet host's route says, and refuses a key whose `from=` is not the one it
+   sees; only the box can say which, so **Show the access line again** takes the address the box sees (its ssh log names
+   it) and puts it in the line. Once an address is recorded the card keeps **Show the access line again** and **Start
+   over** (a Disconnect: see below) beside the current step, so a
+   refused login, a mistyped address or a reloaded tab never needs a shell.
+3. **Check the box.** ccrc connects once and shows the box's host key fingerprint; confirm it against the provider's
+   console and the key is pinned, under the address as typed and, for a host name, the IP address it resolves to (the push
+   dials the listen address, an IP literal, and strict host checking needs an entry for it). The read-only preflight then lists each prerequisite with a pass or the reason it
+   failed (the release host must be reachable from the box; the npm upstream is the installer's own setting, typed at
+   the next step, so Connect tries it from the box before it writes a file there); **Check again** repeats it, and
+   nothing on the box has changed.
+4. **The box's settings.** The box's own settings in their families, filled with their defaults, the address the box was
+   reached on filling `CCRC_TESTBOX_LISTEN`, and one row per repository to run (name, fetch URL, package folder and test
+   runner, offered from the fleet's own repositories). The runner starts as `./node_modules/.bin/vitest`: parity appends
+   `run`, `--reporter=junit` and `--maxWorkers=N` to it, so a package manager's `npm test` would swallow the flags. Each
+   value is checked as it is typed, again on the fleet host and once more by the installer, as root. The installer makes
+   the root, the rows directory, the tools directory and each mirror's parent directory root's, and the settings change
+   with no step-up, so those paths must lie below `/srv`, `/mnt`, `/media`, `/opt`, `/data`, `/etc/ccrc-testbox` or
+   `/var/lib/ccrc-testbox` (never a system directory); the service token is the service user's (`~/...` or below
+   `/var/lib/<service user>/`); no user is `root`, named twice or one of the run users' names; and a user that already exists must be one the installer
+   made (its account comment is `ccrc test box`), so a person's or another service's account is never taken over.
+5. **Install and pair.** The fleet host verifies its own release tag as `ccrc update` does, copies it to the box, writes
+   the box's settings file, runs the installer and pairs the two sides: the service token and the push key are made on
+   the fleet host and the fleet-side settings land in the overlay `~/.ccrc/testbox.env`, never in `ccrc.env`. The card
+   shows each phase with its time and survives a reload; it ends in **Connected** or in the failing phase with its code
+   and **Try again**. A fleet host whose `ccrc.env` already sets a pairing key refuses, naming the keys to remove.
+6. **Parity.** **Run parity** runs, in the tests slice on the fleet host, each repository row's five most recent merged
+   pull requests and the test box spec's section 6 fixtures (git state, socket, workers); it needs `gh` signed in on the
+   fleet host. The switch shows beside it, disabled, until the record passes.
+
+**Connected.** The card shows the address as set (never its text), the pinned fingerprint and the last act, and offers
+four controls, plus **Settings** (fleet-side keys apply at once; a change to a box setting is refused while a run is in
+progress, and **Apply when idle** then waits with a 6-hour deadline and a **Cancel**). A change to a box setting is always
+a detached act, with its phases on the card and its failure as a line with **Try again**: the apply reads the box, writes
+its file, re-runs the installer and reads the box again, which outruns the bound of a short call. The four settings the
+pairing rests on, `CCRC_TESTBOX_LISTEN`, `CCRC_TESTBOX_SERVICE_TOKEN_FILE`, `CCRC_TESTBOX_SERVICE_USER` and
+`CCRC_TESTBOX_PUSH_USER`, are shown and not editable: Connect writes them with the overlay's pairing keys and the installer
+never moves the token or re-keys the push user, so only **Replace** changes them. A box setting edit sends only the keys
+changed: the box's current settings file is read as root and the keys are put into it, every other line kept, and the whole
+file is checked before a byte is written. "No run in progress" is the fleet's own status where the fleet host has an
+`agent.env` (a `--role fleet` install); a single box, which has none, asks the box for its active run, prepare and install
+units instead. An act whose unit is gone (a reboot, an OOM kill, a stopped unit) reads `running` only for the first 45
+seconds: after that, with its lock free, the status ends it as failed with the code `interrupted` and the card offers its
+controls again.
+
+- **Repair** re-pushes the release recorded on the box, verified again on the fleet host, and re-runs the installer from
+  it with the box's current settings file. It never changes the tag.
+- **Replace** is Disconnect of the old box followed by Connect of a new address, in one flow, with the new fingerprint
+  shown for confirmation at step 3. Runs on the old box finish or fall back locally.
+- **Disconnect** turns the switch off first. On the box it stops and disables the service and removes the push-key
+  line, the service token and ccrc's access line; on the fleet host it removes the token and the push key (only the paths
+  the overlay names, which Connect wrote, and a push key only when it carries ccrc's own comment), the overlay,
+  the host key pin and the parity record. A box paired by hand, whose pairing keys sit in `ccrc.env`, is not ccrc's to take
+  apart: Disconnect and **Start over** then leave the switch, the box's service, the token and the push key (wherever the hand
+  setup put them) as they are, and remove only ccrc's access line and the connection recorded here; Connect likewise refuses
+  a push key at the push key's path that ccrc did not make (`foreign-key`) rather than adopt it. It wipes no data: the box is then rebuilt, never reused. ccrc's own access
+  key stays on the fleet host. The access line comes out whatever the box's own unpair did, whenever the pin still
+  matches the box (it is root-capable, and a box that cannot unpair is the one that must not keep it). Three answers
+  follow a clean fleet side: done; `box-side-skipped` (ccrc did not touch the box: it did not answer, or its host key
+  was not trusted, so a line you added is yours to remove); and `unpair-failed` (the box was reached and its unpair, or
+  the removal of the line, did not finish: run the installer's `--unpair` there by hand and remove the line ending in
+  `ccrc-testbox-admin`). A Connect refused in the installer's first phase left nothing installed, so there is nothing to
+  unpair and Disconnect only removes the line. The same Disconnect, offered as **Start over**, undoes a connection that
+  was recorded and never Connected.
+- **Apply release to box** appears only when the installed tree's release differs from the one the box last installed
+  from, and re-runs the installer with it; tool sync stays automatic, and this root re-run is offered, never run on its
+  own.
+
+A changed host key blocks every act but **Confirm** (and Disconnect) until the new fingerprint is confirmed; a failed
+install and a lost access key each show one line with what happened and the one control that resolves it. Parity is
+required again after Connect, Replace and a change to a setting that shapes runs (workers, runs, memory, swap, CPU quota,
+the run temp directory and tmpfs), and it stays required when such a setting is changed back, since the mark the change set
+is cleared only by a passing parity (the status carries it, so the card shows it and offers **Run parity**); a release roll does not expire it, and neither does a change to any other box setting:
+the record follows the box file's new digest, so a passed parity stays armable.
+Every act writes one row to the ledger (the `testbox_events` table), and the card shows the last ten acts on a wide
+screen and one on a phone. The verb's state holds one act, and the server writes a long act's row from what it reads
+at its own pace, so the status also carries the six acts that ended before the current one: an act that began and ended
+between two reads, or while the server was down, still gets its row. A settings edit's row also records each setting it
+changed, its old and its new value, each read through that setting's own shape, so a row still holds no free text; a
+secret-bearing setting, a path, an address or a list records only whether it is set, and a refused edit records nothing
+new (D-8399). The card lists them under the act's line.
+
+**The routes.** `GET /api/testbox/admin` answers the card's connect state, the parity record and the newest ledger rows;
+`POST /api/testbox/admin/:sub` runs one act (`key`, `probe`, `pin`, `preflight`, `connect`, `settings-fleet`,
+`settings-box`, `cancel`, `parity`, `repair`, `apply-release`, `disconnect`) with typed fields only. Both are
+session-only behind the account gate: no box token and no coordinator reaches them, neither is exempt from the cookie
+check, and a refusal is a closed code, never the verb's sentence. The agent's exec whitelist is unchanged.
+
+**The hand steps remain, for the install and not for the switch.** The test box plan's hand install, pairing and parity
+(`docs/superpowers/plans/2026-10-29-test-box.md`, TB12 to TB14) still install and pair a box the card cannot reach, and a
+hand-installed box answers runs sent to it by `ccrc test` as before. They do not arm the switch: **On** (and
+`ccd testbox-remote --state on`) needs a passing parity record that matches the pin and the box file's digest, and only the
+card's **Confirm** and **Connect** record those, so a box set up by hand answers `parity-required` until it has been
+connected through the card. There is no hand way to write the record, on purpose: the gate exists so that no box runs
+remote work without the card's own parity measurement. Parity runs the command head of the rows the fleet host itself sent (`~/.ccrc/testbox-rows`), never the box's
+copy of its row files, so root on the box cannot make the fleet host run a command of its choosing.
 
 ### Session history: lossless recall (`ccrc history`)
 
@@ -7218,7 +7537,10 @@ swaps. Sessions call them by absolute path, because `ccrc` is not on a fleet ses
   line per child or source with its size; a pasted line goes in single quotes, each `'` in it
   written `'\''`;
 - `expand <node id or message uuid>` prints the real text in order, with a cursor past one page;
-- `tree` lists the family's epochs and nodes.
+- `tree` lists the family's epochs and nodes;
+- `touched <path|symbol>` lists, newest first, the nodes whose stored refs name a file (20 rows, or
+  `--limit N`). It sees only the refs the store kept, one origin each and at most 40 per node, so an
+  empty answer does not mean the file was never touched.
 
 Every answer opens with a header naming its scope, `coverage=this-box` and the index lag, prints at
 most 20,000 characters with `shown K of N` and a `next:` line (run only the `next:` line printed outside
@@ -7229,7 +7551,7 @@ redacted exactly prints under the line
 `[window redacted alone: every word of 8 or more characters masked]`; its long words are masked, not
 lost. `--workspace` widens the scope to every family of this project that ran in the session's
 workdir, and `--project` to the whole project; nothing crosses projects, and nothing reaches another
-box. Search has a reach of its own: grep reaches at most the first 1 MiB of each message's redacted
+box. `--agents` adds the scope's subagent transcripts and their nodes to any verb's reads. Search has a reach of its own: grep reaches at most the first 1 MiB of each message's redacted
 text and the first 512 KiB of each tool output Claude Code saved to its own file; text past that is
 stored but not searched. Exit 3 is "not found on this box" (for grep, not found within that reach),
 6 "not indexed yet", 8 "recall switched off for this session" and 9 "no store here" (macOS, a

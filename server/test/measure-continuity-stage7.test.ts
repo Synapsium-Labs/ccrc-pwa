@@ -88,3 +88,11 @@ describe('each regex is bound to the line the real _operator_choice_keep writes'
     expect(r.stops_that_could_not_read_the_transcript).toBe(1);
   });
 });
+
+describe('an unreadable swap.log (a directory at its path) is unmeasured, never a traceback (D-8353)', () => {
+  it('stage 7', () => {
+    const dir = path.join(h.home, 'a-directory');
+    fs.mkdirSync(dir);
+    expect(run(['--swap-log', dir])).toEqual({ swap_log: 'unmeasured', error: 'IsADirectoryError' });
+  });
+});

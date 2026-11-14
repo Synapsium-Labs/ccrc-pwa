@@ -1,9 +1,10 @@
 // The recorded Linear fixtures (#1444, D-7684's FX act, D-7743; spec 2026-10-31 §4.1, §6.7).
 //
 // `fixtures/linear/` holds one file per answer the FX capture recorded from Linear on 2026-11-02, scrubbed to the
-// fixture vocabulary (README.md there says what was replaced and what was kept), plus the constructed answers, whose
-// file names say so: the rate-limited one, the link mutation's (D-8141), and the hierarchy documents' 21 and the
-// project-status directory page (D-8180), each awaiting its recording. This file holds three things of them:
+// fixture vocabulary (README.md there says what was replaced and what was kept), the hierarchy capture's answers of
+// 2026-11-13 (FX2, D-8407), and the constructed answers, whose file names say so: the rate-limited one, the link
+// mutation's (D-8141), and the six hierarchy documents FX2 did not record (D-8180), each awaiting its recording. This
+// file holds four things of them:
 //
 //   1. EVERY FILE PARSES, and is one record of the capture's shape: the request it sent and the answer it got, the
 //      raw body equal to the parsed one, the request body equal to the document and variables it names.
@@ -11,7 +12,8 @@
 //      documents `client.ts` sends (the title lookup's and the key check's, read here off the fetch seam because
 //      they are not exported) has a fixture whose `document` equals it. A document changed without a re-capture
 //      turns this red, which is the rule the plan's FX item sets: a changed document is re-captured before it lands.
-//   3. THE LEAK GUARD. These files are public. No fixture names an email outside `example.invalid`, a key other than
+//   3. WHAT FX2 MEASURED: the answers README.md's "What FX2 measured" section states, read off the recordings.
+//   4. THE LEAK GUARD. These files are public. No fixture names an email outside `example.invalid`, a key other than
 //      the `lin_api_fixture` shape, or a UUID outside the fixture set; the guard's own liveness rows prove it fires.
 import { describe, expect, it } from 'vitest';
 import { readFileSync, readdirSync } from 'node:fs';
@@ -27,29 +29,29 @@ const FILES = LINEAR_RECORD_FILES;
 const TEXT = new Map(readdirSync(LINEAR_RECORD_DIR).sort().map((f) => [f, readFileSync(path.join(LINEAR_RECORD_DIR, f), 'utf8')]));
 const RECORDS = new Map<string, LinearRecord>(FILES.map((f) => [f, linearRecord(f)]));
 
-/** Each hierarchy document's constructed file (D-8180), awaiting FX2's recording. */
-const HIERARCHY_FILE: Readonly<Record<keyof typeof LINEAR_HIERARCHY_DOCUMENTS, string>> = {
-  initiativeById: 'read-initiative-by-id', projectById: 'read-project-by-id', projectStatuses: 'read-project-statuses',
-  initiativesProbe: 'read-initiatives-probe', initiativesByName: 'read-initiatives-by-name', projectsByName: 'read-projects-by-name',
-  changedInitiatives: 'read-changed-initiatives', changedProjects: 'read-changed-projects',
-  changedMilestones: 'read-changed-milestones', changedIssues: 'read-changed-issues', teamOpenIssues: 'read-team-open-issues',
-  issueOwned: 'read-issue-owned', initiativeCreate: 'mutation-initiative-create', initiativeUpdate: 'mutation-initiative-update',
-  initiativeToProjectCreate: 'mutation-initiative-to-project-create', initiativeToProjectDelete: 'mutation-initiative-to-project-delete',
-  projectCreate: 'mutation-project-create', projectUpdate: 'mutation-project-update',
-  projectMilestoneCreate: 'mutation-project-milestone-create', projectMilestoneUpdate: 'mutation-project-milestone-update',
-  issueRelationCreate: 'mutation-issue-relation-create',
+/** The hierarchy documents FX2 did not record (D-8180, D-8407), each with its constructed file. `changedProjects` and
+ *  `changedMilestones` answered HTTP 400 for the milestone `creator` D-8407 removed, so their corrected documents are
+ *  unsent; `changedIssues`, `teamOpenIssues` and `projectUpdate` were not in the run, and `initiativeToProjectDelete`
+ *  ran only as the capture's unrecorded cleanup. */
+const HIERARCHY_FILE: Readonly<Partial<Record<keyof typeof LINEAR_HIERARCHY_DOCUMENTS, string>>> = {
+  changedProjects: 'read-changed-projects', changedMilestones: 'read-changed-milestones', changedIssues: 'read-changed-issues',
+  teamOpenIssues: 'read-team-open-issues', initiativeToProjectDelete: 'mutation-initiative-to-project-delete',
+  projectUpdate: 'mutation-project-update',
 };
 /** The same files, in file-name order. */
 const HIERARCHY_CONSTRUCTED = Object.values(HIERARCHY_FILE).sort().map((n) => `${n}-constructed.json`);
+/** The FX2 recordings (D-8407): they kept no clock and no status line, so those fields are null. */
+const FX2 = (f: string): boolean => RECORDS.get(f)!.sentAtMs === null;
 
 describe('every fixture parses, one capture record each', () => {
   it('holds the recorded set and the constructed answers', () => {
-    // 31 recorded answers (the capture's cleanup and cleanup-verify calls are not kept), the constructed 429, the
-    // constructed link mutation (D-8141), the 21 constructed hierarchy answers and the constructed project-status page (D-8180).
-    expect(FILES).toHaveLength(55);
+    // 31 recorded answers of FX1 (the capture's cleanup and cleanup-verify calls are not kept), 38 of FX2 (D-8407; its
+    // cleanup is not kept either), the constructed 429, the constructed link mutation (D-8141) and the six constructed
+    // hierarchy answers FX2 did not record (D-8180).
+    expect(FILES).toHaveLength(77);
+    expect(FILES.filter((f) => FX2(f))).toHaveLength(38);
     expect(FILES.filter((f) => f.includes('constructed'))).toEqual(
-      ['directory-project-statuses-page-1-constructed.json', 'error-429-ratelimited-constructed.json',
-        'mutation-attachment-link-url-constructed.json', ...HIERARCHY_CONSTRUCTED]);
+      ['error-429-ratelimited-constructed.json', 'mutation-attachment-link-url-constructed.json', ...HIERARCHY_CONSTRUCTED].sort());
   });
 
   it.each(FILES)('%s is a whole record', (f) => {
@@ -57,6 +59,9 @@ describe('every fixture parses, one capture record each', () => {
     expect(`${r.name}.json`).toBe(f);
     expect(typeof r.document).toBe('string');
     expect(typeof r.status).toBe('number');
+    // FX1 kept the clock and the status line; FX2 kept neither, and says so with null, never a made-up value.
+    if (FX2(f)) expect([r.receivedAtMs, r.sentAt, r.statusLine]).toEqual([null, null, null]);
+    else expect([typeof r.sentAtMs, typeof r.receivedAtMs, typeof r.sentAt, typeof r.statusLine]).toEqual(['number', 'number', 'string', 'string']);
     expect(Array.isArray(r.headers)).toBe(true);
     // The raw body is the parsed one as Linear sends it (compact, one trailing newline), and the request body is the
     // document and variables the record names, so neither half can drift from the other.
@@ -78,12 +83,13 @@ describe('every merged document has a fixture, byte for byte', () => {
    *  recorded; the test below it fails the day both exist, so the exception cannot outlive the recording. */
   const AWAITING_RECAPTURE: Readonly<Record<string, readonly string[]>> = {
     link: ['mutation-attachment-link-url-constructed.json'],
-    // The hierarchy documents (D-8180): constructed until FX2 records them. Each row leaves when its recording lands.
+    // The hierarchy documents FX2 did not record (D-8180, D-8407). Each row leaves when its recording lands.
     ...Object.fromEntries(Object.entries(HIERARCHY_FILE).map(([k, n]) => [k, [`${n}-constructed.json`]])),
-    // The project statuses document has a second constructed answer, the directory's page (Task 1.4): it leaves with
-    // the row, so FX2's recording retires both files.
-    projectStatuses: [`${HIERARCHY_FILE.projectStatuses}-constructed.json`, 'directory-project-statuses-page-1-constructed.json'],
   };
+  /** AN ANSWER NO CAPTURE COULD RECORD, though its document is recorded: the initiatives probe on a workspace with
+   *  initiatives off (FX2 item 5; no workspace the operator has is off). Its file does not exist yet; the day it is
+   *  recorded under this name, the row goes and `readInitiativesProbe` may learn `off`. */
+  const AWAITING_ANSWER: Readonly<Record<string, string>> = { initiativesProbe: 'read-initiatives-probe-off.json' };
   const constructedFor = (doc: string): string[] =>
     [...RECORDS.entries()].filter(([f, r]) => r.document === doc && f.includes('constructed')).map(([f]) => f);
 
@@ -104,6 +110,13 @@ describe('every merged document has a fixture, byte for byte', () => {
   it('the recapture exception holds only while the document has no recording', () => {
     for (const name of Object.keys(AWAITING_RECAPTURE)) {
       expect(recorded(LINEAR_DOCUMENTS[name as keyof typeof LINEAR_DOCUMENTS]), name).toEqual([]);
+    }
+  });
+
+  it('an awaited answer has no file, and its document is recorded otherwise', () => {
+    for (const [name, file] of Object.entries(AWAITING_ANSWER)) {
+      expect(FILES, name).not.toContain(file);
+      expect(recorded(LINEAR_DOCUMENTS[name as keyof typeof LINEAR_DOCUMENTS]), name).not.toEqual([]);
     }
   });
 
@@ -146,8 +159,15 @@ describe('what the recorded headers say (spec §1.2a, §6.7)', () => {
   it.each(recordedFiles.filter((f) => header(RECORDS.get(f)!, 'x-ratelimit-requests-reset') !== null))(
     '%s: the reset headers are absolute epoch milliseconds, about an hour after the send', (f) => {
       const r = RECORDS.get(f)!;
+      // FX2 kept no clock of its own (sentAtMs null): its reset is checked against the two minutes of its run instead.
+      const sentAtMs = r.sentAtMs ?? Date.parse('2026-11-13T16:12:00Z');
       for (const name of ['x-ratelimit-requests-reset', 'x-ratelimit-complexity-reset']) {
-        const ahead = Number(header(r, name)) - r.sentAtMs;
+        const ahead = Number(header(r, name)) - sentAtMs;
+        if (r.sentAtMs === null) {
+          expect(ahead).toBeGreaterThan(3_600_000);
+          expect(ahead).toBeLessThan(3_720_000);
+          continue;
+        }
         expect(ahead).toBeGreaterThan(3_599_000);
         expect(ahead).toBeLessThan(3_602_000);
       }
@@ -162,6 +182,94 @@ describe('what the recorded headers say (spec §1.2a, §6.7)', () => {
       expect(r.status).toBe(401);
       expect(r.headers.filter(([k]) => /^x-(complexity|ratelimit-)/i.test(k))).toEqual([]);
     }
+  });
+});
+
+// ── what FX2 measured (README.md, D-8407) ──
+
+describe('what FX2 measured', () => {
+  type Field = { name: string };
+  const inputFields = (f: string): string[] =>
+    ((RECORDS.get(f)!.body as { data: { __type: { inputFields: Field[] } } }).data.__type.inputFields).map((x) => x.name);
+  const typeFields = (f: string): string[] =>
+    ((RECORDS.get(f)!.body as { data: { __type: { fields: Field[] } } }).data.__type.fields).map((x) => x.name);
+  const firstError = (f: string): { message: string; extensions: Record<string, unknown> } =>
+    (RECORDS.get(f)!.body as { errors: { message: string; extensions: Record<string, unknown> }[] }).errors[0]!;
+  const data = (f: string): Record<string, any> => (RECORDS.get(f)!.body as { data: Record<string, any> }).data;
+
+  it('1. initiative, project and milestone creates take a caller-chosen id; a repeat is refused, and a milestone\'s name is checked first', () => {
+    for (const t of ['initiative-create-input', 'project-create-input', 'project-milestone-create-input']) {
+      expect(inputFields(`introspection-${t}.json`), t).toContain('id');
+    }
+    for (const [f, key, object] of [['mutation-initiative-create.json', 'initiativeCreate', 'initiative'],
+      ['mutation-project-create.json', 'projectCreate', 'project'],
+      ['mutation-project-milestone-create.json', 'projectMilestoneCreate', 'projectMilestone']] as const) {
+      const sent = (RECORDS.get(f)!.variables['input'] as { id: string }).id;
+      expect(data(f)[key][object].id, f).toBe(sent);
+    }
+    expect(firstError('mutation-initiative-create-same-id.json').message).toBe('conflict on insert of Initiative');
+    expect(firstError('mutation-project-create-same-id.json').message).toBe('conflict on insert of Project');
+    expect(firstError('mutation-project-milestone-create-same-id.json').message).toBe('name not unique');
+    for (const f of ['mutation-initiative-create-same-id.json', 'mutation-project-create-same-id.json', 'mutation-project-milestone-create-same-id.json']) {
+      expect(RECORDS.get(f)!.status, f).toBe(200);
+      expect(firstError(f).extensions['code'], f).toBe('INPUT_ERROR');
+    }
+  });
+
+  it('2. InitiativeStatus has a canceled value, and the project statuses come with five types', () => {
+    const values = (RECORDS.get('introspection-initiative-status.json')!.body as { data: { __type: { enumValues: Field[] } } })
+      .data.__type.enumValues.map((v) => v.name);
+    expect(values).toEqual(['Proposed', 'Planned', 'Active', 'Completed', 'Canceled']);
+    const set = FILES.filter((f) => f.startsWith('mutation-initiative-update-status-'))
+      .map((f) => (RECORDS.get(f)!.variables['input'] as { status: string }).status);
+    expect(set.sort()).toEqual([...values].sort());
+    const types = (data('read-project-statuses.json')['projectStatuses'].nodes as { type: string }[]).map((n) => n.type);
+    expect(types.sort()).toEqual(['backlog', 'canceled', 'completed', 'planned', 'started']);
+  });
+
+  it('3. a comment takes an issue, a project, an initiative or their updates, never a milestone', () => {
+    const fields = inputFields('introspection-comment-create-input.json');
+    for (const f of ['issueId', 'projectId', 'initiativeId', 'projectUpdateId', 'initiativeUpdateId']) expect(fields).toContain(f);
+    expect(fields.filter((f) => /milestone/i.test(f))).toEqual([]);
+    expect(data('mutation-comment-create-on-initiative.json')['commentCreate'].success).toBe(true);
+    expect(data('mutation-comment-create-on-project.json')['commentCreate'].success).toBe(true);
+  });
+
+  it('4. a milestone update moves neither its project\'s updatedAt nor its own', () => {
+    const before = data('read-project-by-id-milestone-update-before.json')['project'];
+    const after = data('read-project-by-id-milestone-update-after.json')['project'];
+    expect(after.updatedAt).toBe(before.updatedAt);
+    expect(after.projectMilestones.nodes[0].description).not.toBe(before.projectMilestones.nodes[0].description);
+    expect(after.projectMilestones.nodes[0].updatedAt).toBe(before.projectMilestones.nodes[0].updatedAt);
+  });
+
+  it('5. the initiatives probe on a workspace with initiatives on and none made is an empty list', () => {
+    expect(data('read-initiatives-probe.json')).toEqual({ initiatives: { nodes: [] } });
+  });
+
+  it('7. exact-name reads hold and read the key\'s viewer as creator; ProjectMilestone has no creator', () => {
+    const viewer = data('extra-viewer.json')['viewer'].id;
+    const initiative = data('read-initiatives-by-name.json')['initiatives'].nodes;
+    const project = data('read-projects-by-name.json')['projects'].nodes;
+    expect(initiative).toHaveLength(1);
+    expect(project).toHaveLength(1);
+    expect(initiative[0].creator.id).toBe(viewer);
+    expect(project[0].creator.id).toBe(viewer);
+    expect(initiative[0].name).toBe(RECORDS.get('read-initiatives-by-name.json')!.variables['name']);
+    expect(data('read-initiatives-by-name-near-miss.json')['initiatives'].nodes).toEqual([]);
+    expect(typeFields('introspection-project-milestone.json')).not.toContain('creator');
+    const refused = RECORDS.get('error-graphql-validation-milestone-creator.json')!;
+    expect(refused.status).toBe(400);
+    expect((refused.body as { errors: { message: string; extensions: { code: string } }[] }).errors[0])
+      .toMatchObject({ message: 'Cannot query field "creator" on type "ProjectMilestone".', extensions: { code: 'GRAPHQL_VALIDATION_FAILED' } });
+  });
+
+  it('a project name over 80 characters is refused, INVALID_INPUT', () => {
+    const r = RECORDS.get('error-project-name-too-long.json')!;
+    expect([...(r.variables['input'] as { name: string }).name]).toHaveLength(85);
+    expect(firstError('error-project-name-too-long.json').extensions).toMatchObject({
+      code: 'INVALID_INPUT', userPresentableMessage: 'name must be shorter than or equal to 80 characters.',
+    });
   });
 });
 

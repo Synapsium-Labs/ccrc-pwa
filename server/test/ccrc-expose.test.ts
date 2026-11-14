@@ -31,6 +31,7 @@ import { fileURLToPath } from 'node:url';
 import * as pty from 'node-pty';
 import { mkTmp } from './tmpHelpers.js';
 import { ghContainedEnv } from './ccdWsHelpers.js';
+import { ledgerHitLine, takeExpectedPoison } from './containedTools.js';
 import { itLinux, itDarwin } from './platformFixtures.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -119,13 +120,15 @@ function box(prefix: string): string {
  *  a box with a session bus. The default stays the poison: exit 97 IS a test —
  *  the degraded arm — and containment besides. */
 function env(home: string, opts: { systemctlOk?: boolean; launchctlOk?: boolean } = {}): NodeJS.ProcessEnv {
-  const e = ghContainedEnv(home, { ...process.env, HOME: home });
+  // `net` (the second ring, residue R35(a), D-8394): ssh, scp and curl poisons and the fixture user bus; this file's
+  // own curl poison below replaces the curl one. Not `ccrcContainedEnv`: launchctl stays unplanted (see below).
+  const e = ghContainedEnv(home, { ...process.env, HOME: home }, { net: true });
   // curl and systemctl are poisoned the way ccrc-cli.test.ts poisons them —
   // Task 3's duckdns arm runs `systemctl --user`, and containment each test
   // has to remember is containment that goes missing.
   const poison = (name: string, says: string): void =>
     writeFileSync(join(home, '.local', 'bin', name),
-      `#!/bin/sh\nprintf '%s\\n' "$*" >> "$HOME/${name}-poison"\n`
+      `#!/bin/sh\nprintf '%s\\n' "$*" >> "$HOME/${name}-poison"\n${ledgerHitLine(`${name}-poison`)}\n`
       + `echo "${says}" >&2\nexit 97\n`, { mode: 0o755 });
   poison('curl', 'ccrc tests must never reach a real server');
   if (opts.systemctlOk) {
@@ -166,7 +169,16 @@ interface Result { code: number; stdout: string; stderr: string }
 function runPiped(home: string, args: string[], stdin = ''): Result {
   const r = spawnSync(BASH, [ccrcIn(home), ...args],
     { env: env(home), encoding: 'utf8', input: stdin });
+  takeDegradedSystemctl(home);
   return { code: r.status ?? -1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
+}
+
+/** The default systemctl poison is this suite's "no session bus" (see `env`): the duckdns arm's reload and enable
+ *  meet it by design, so both runners take a record holding only those (D-8394, residue R35(e)); a state read is the
+ *  teardown's own standing allowance. Any other argv in it still fails the teardown. */
+const DEGRADED_SYSTEMCTL = /^--user (?:daemon-reload|enable --now [A-Za-z0-9@._-]+|is-active [A-Za-z0-9@._-]+)$/;
+function takeDegradedSystemctl(home: string): void {
+  takeExpectedPoison(home, 'systemctl', DEGRADED_SYSTEMCTL);
 }
 
 /** The four prompt heads the verb can print; one entry is sent per prompt SEEN
@@ -192,6 +204,7 @@ function runExposeTty(
       if (done) return;
       done = true;
       clearTimeout(timer);
+      takeDegradedSystemctl(home);
       resolve({ code, stdout: out, stderr: '' });   // a pty merges the two streams
     };
     const timer = setTimeout(() => { p.kill(); finish(-1); }, 20_000);

@@ -1,5 +1,5 @@
-// The directory's status types, unsent until the capture (D-8180, plan task 1.4): the project-status page reader over a
-// constructed answer, `statusOfType` (by type, never by name), and the refresher's wave-1 refresh, which still sends
+// The directory's status types, unsent until wave 3 (D-8180, plan task 1.4): the project-status page reader over FX2's
+// recorded answer (D-8407), `statusOfType` (by type, never by name), and the refresher's wave-1 refresh, which still sends
 // exactly the four documents it sent before and leaves the new parts empty and `unknown`.
 import { describe, expect, it } from 'vitest';
 import { mkdirSync } from 'node:fs';
@@ -30,18 +30,20 @@ const entries = (over: Partial<LinearDirectoryEntries> = {}): LinearDirectoryEnt
   viewerId: null, states: [], labels: [], projects: [], users: [], projectStatuses: [], initiatives: 'unknown', ...over,
 });
 
-describe('the project-status page reader (constructed fixture)', () => {
+describe('the project-status page reader (recorded fixture)', () => {
   it('a directory page of project statuses reads id, name and type', () => {
-    const rec = linearRecord('directory-project-statuses-page-1-constructed');
+    // The directory's page is the same document the row reads: FX2's one recording answers both.
+    const rec = linearRecord('read-project-statuses');
     expect(rec.document).toBe(LINEAR_HIERARCHY_DOCUMENTS.projectStatuses);
     const page = readLinearProjectStatusesPage(rec.body);
     expect(page).toEqual({
       ok: true,
       statuses: [
-        { id: '00000000-0008-4000-8000-000000000001', name: 'Backlog', type: 'backlog' },
-        { id: '00000000-0008-4000-8000-000000000003', name: 'Started', type: 'started' },
-        { id: '00000000-0008-4000-8000-000000000004', name: 'Shipped', type: 'completed' },
-        { id: '00000000-0008-4000-8000-000000000005', name: 'Cancelled', type: 'canceled' },
+        { id: '00000000-0008-4000-8000-000000000024', name: 'Planned', type: 'planned' },
+        { id: '00000000-0008-4000-8000-000000000025', name: 'Backlog', type: 'backlog' },
+        { id: '00000000-0008-4000-8000-000000000026', name: 'Canceled', type: 'canceled' },
+        { id: '00000000-0008-4000-8000-000000000027', name: 'Completed', type: 'completed' },
+        { id: '00000000-0008-4000-8000-000000000028', name: 'In Progress', type: 'started' },
       ],
     });
   });
