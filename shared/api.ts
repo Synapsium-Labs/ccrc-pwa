@@ -12328,7 +12328,8 @@ export function backgroundOnlyRefusal(body: unknown): { count: number | null; ki
 // from Tasks 2 and 10, the file's name, the lease and the grammar in `ccd/session-hook.sh`.
 
 /** One capability word the server advertises. Spelled once, as the keys of `SERVER_CAP_MAP`. */
-export type ServerCap = 'dispatch-live-gate-v1' | 'hook-main-state-v1' | 'ask-pairing-v1' | 'questions-v1' | 'review-rounds-v1' | 'goals-read-v1' | 'calls-v1' | 'plan-v1';
+export type ServerCap = 'dispatch-live-gate-v1' | 'hook-main-state-v1' | 'ask-pairing-v1' | 'questions-v1' | 'review-rounds-v1' | 'goals-read-v1' | 'calls-v1' | 'plan-v1'
+  | 'timers-v1';
 
 /** Every word, with what it promises. The value is `true`; the promise is the comment, which a word's reader may
  *  rely on and nothing weaker. `PR_REASON_MAP`'s idiom: a word added to `ServerCap` and not here is TS2741. */
@@ -12385,6 +12386,9 @@ const SERVER_CAP_MAP: Readonly<Record<ServerCap, true>> = {
    *  `plan-missing`, `reserved-programme`, `ticket-unavailable`, `plan-closed`). `ccrc-api plan` refuses `no-plan-door`,
    *  unsent, when a current cap file omits this word. Added by the change that builds the plan routes, cut after them. */
   'plan-v1': true,
+  /** W1a: the timer doors, the timers lane and `ccrc-api timer` (Overlord timers piece). `ccrc-api timer` refuses
+   *  `capability-missing`, unsent, when a current cap file omits this word. Added by the change that builds the client. */
+  'timers-v1': true,
 };
 
 /** The words this server advertises, in `GET /health`'s `caps`, and in the file a `server` or `both` node writes. */

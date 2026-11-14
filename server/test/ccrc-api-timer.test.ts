@@ -201,6 +201,15 @@ describe('the gate: a current cap file without timers-v1 refuses locally; an abs
   });
 });
 
+describe('the word is advertised (Task 12, slug word-last): the default cap file sends every timer verb', () => {
+  it('SERVER_CAPS includes timers-v1, and a current file of the defaults sends', async () => {
+    expect(SERVER_CAPS as readonly string[]).toContain(WORD);
+    writeCaps(SERVER_CAPS);
+    for (const args of [['set', '2h', 'n'], ['list'], ['cancel', '12']]) expect((await run(args)).status, args.join(' ')).toBe(0);
+    expect(seen).toHaveLength(3);
+  });
+});
+
 describe('the token rides curl\'s stdin, never a stream', () => {
   it('the token appears on neither stream of a set, a list or a refusal', async () => {
     const outs = [await run(['set', '2h', 'n']), await run(['list'])];

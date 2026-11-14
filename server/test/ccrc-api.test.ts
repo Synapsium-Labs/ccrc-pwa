@@ -483,10 +483,7 @@ describe('the four claimant rows send the question door family, and refuse local
   });
 
   it('with that same current file, every non-claimant row sends a request byte-identical to its no-file request', async () => {
-    // The three `timer.*` rows are left out until `timers-v1` is advertised (the timers plan, Task 12, slug `word-last`): this
-    // case writes a current cap file of the default `SERVER_CAPS`, which lacks the word until then, so those rows refuse
-    // locally and their sends differ. The commit that adds the word puts them back.
-    const keys = new Set([...CLAIMANT.map(([g, v]) => `${g}.${v}`), 'timer.set', 'timer.list', 'timer.cancel']);
+    const keys = new Set(CLAIMANT.map(([g, v]) => `${g}.${v}`));
     const rows: string[][] = [
       ['runs', 'list', '--closed', '1'], ['runs', 'open', '--json', '-'], ['runs', 'dispatch', '12'], ['runs', 'advance', '12'],
       ['runs', 'close', '12'], ['runs', 'items', '12'], ['runs', 'items-list', '12'], ['runs', 'end-request', '12'], ['runs', 'signals', '12'],
@@ -513,6 +510,7 @@ describe('the four claimant rows send the question door family, and refuse local
       ['sessions', 'start', 'lane-a-project-a', '--json', '-'], ['sessions', 'card', 'lane-a-project-a'],
       ['note', 'add', 'lane-a-project-a', '--json', '-'], ['note', 'close', 'lane-a-project-a', '--json', '-'],
       ['note', 'list', 'lane-a-project-a'], ['note', 'handover', 'lane-a-project-a', '--json', '-'],
+      ['timer', 'set', '2h', 'check the checks'], ['timer', 'list'], ['timer', 'cancel', '12'],
     ];
     expect(rows.map((a) => `${a[0]}.${a[1]}`).sort(), 'every non-claimant row, once').toEqual(routeKeys().filter((k) => !keys.has(k)).sort());
     plantPane('demo-ws');
