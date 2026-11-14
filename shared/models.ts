@@ -22,7 +22,8 @@
 // hand-written `.d.mts`. This file now carries only what genuinely needs to
 // exist twice — `CLASSES` and `PROBE_KINDS`, whose `as const` literal is what
 // derives `ModelClass`/`ProbeKind` as TYPES, a job `shared/models.mjs` cannot
-// do for it — and the plain TypeScript interfaces (`Registry`, `Catalogue`,
+// do for it (since D-8620 also two unexported literals that only derive
+// `CatalogueVerbosity` and `TruncationMode`) — and the plain TypeScript interfaces (`Registry`, `Catalogue`,
 // `CatalogueModel`, `DerivedModels`), which are erased at compile time and so
 // were never really "duplicated" even before this fix. Every function,
 // `RegistryInvalid`, `CatalogueInvalid`, `MODEL_ID_RE` and the sentinel prefix
@@ -111,11 +112,16 @@ export interface Registry {
   baseUrl?: string;
 }
 
-/** A Codex model's default `text.verbosity` (D-8620). The runtime list that validates it is
- *  `CATALOGUE_VERBOSITIES` (`shared/models.mjs`), pinned to this type by `server/test/models.test.ts`. */
-export type CatalogueVerbosity = 'low' | 'medium' | 'high';
-/** The unit of a Codex truncation policy's `limit` (D-8620); `CATALOGUE_TRUNCATION_MODES` is its runtime list. */
-export type TruncationMode = 'tokens' | 'bytes';
+/** A Codex model's default `text.verbosity` (D-8620), derived as a TYPE from an `as const` literal the way
+ *  `ModelClass` is from `CLASSES`, so it is no hand-spelled literal union (wire totality, D-6048). The literal is NOT
+ *  exported: the runtime list every reader validates with is `CATALOGUE_VERBOSITIES` (`shared/models.mjs`, re-exported
+ *  below), and `server/test/models.test.ts` pins that list to this type through a `Record<CatalogueVerbosity, true>`. */
+const CATALOGUE_VERBOSITY_LITERAL = ['low', 'medium', 'high'] as const;
+export type CatalogueVerbosity = (typeof CATALOGUE_VERBOSITY_LITERAL)[number];
+/** The unit of a Codex truncation policy's `limit` (D-8620), derived the same way; `CATALOGUE_TRUNCATION_MODES`
+ *  (`shared/models.mjs`) is its runtime list, pinned to this type by the same test. */
+const TRUNCATION_MODE_LITERAL = ['tokens', 'bytes'] as const;
+export type TruncationMode = (typeof TRUNCATION_MODE_LITERAL)[number];
 /** Codex's cap on one tool output (D-8620): `limit` is an integer in `1..CATALOGUE_TRUNCATION_LIMIT_MAX`. */
 export interface TruncationPolicy {
   mode: TruncationMode;
