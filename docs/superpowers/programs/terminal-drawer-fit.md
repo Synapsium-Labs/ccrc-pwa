@@ -165,7 +165,9 @@ and reads 3008 after.
 
 #### Owed, and now authorised
 
-**The D-2661 darwin FIFO probe — PARKED FOR A macOS OWNER, and that is an operator ruling.** It is
+**The D-2661 darwin FIFO probe — PARKED FOR A macOS OWNER, and that is an operator ruling.**
+**CLOSED 2026-11-12 by #2689; the correction is the subsection below, and the hypothesis this entry
+ends on was refuted — read that before acting on anything here.** It is
 `server/test/platform-hazards.test.ts`'s `itDarwin('BSD: after the deadline fires, does the output
 FIFO reach EOF? — candidate (b)')`, a 15-second timing probe that has now reddened on unchanged trees
 on PR #116, on main's `probe-macos` and on PR #117. It is its own item against main, **never a wave-3
@@ -183,10 +185,33 @@ test's own message rules that the remedy is to end the descendants rather than t
 reds bought no diagnosis; the fourth will.
 
 **The owner condition is CONCRETE, because "someone, someday" is how a standing position rots.** The
-trigger is not a person becoming available — it is *the next macOS red carrying the new fields*. Read
-`HOLD`: a `1w` row naming a descendant outside `PGID` means the child escaped the process group, and
-the fix is in how `_auth_timeout` signals (`ccd/ccd-account-auth`, delegating to `timeout`/`gtimeout`
-with `-k <grace>`). A Linear ticket carries this; it is not tracked here.
+trigger is not a person becoming available — it is *the next macOS red carrying the new fields*. That
+trigger fired, and it is what closed the case; no ticket was ever needed, and none was filed.
+
+#### CLOSED 2026-11-12 — the trigger worked and the hypothesis above was WRONG (recorded 2026-11-14)
+
+The probe is fixed on `main`: **#2689 at `ab757c19a`** (deviation 8344, Polish C27) replaced the
+reader with a select-free one — `( while IFS= read -r -u 8 line; do :; done; echo eof > "$D/eof" ) &`
+polled through a flag file — and shipped a CONTROL beside it (`the select-free EOF reader still says
+never while a writer holds the FIFO`), so a reader that answered `eof` regardless cannot hollow the
+case. That control is the shape any instrument rewrite owes, and this ledger did not ask for it.
+
+**The sentence this section replaces was live guidance and it was false.** It read: *a `1w` row
+naming a descendant outside `PGID` means the child escaped the process group, and the fix is in how
+`_auth_timeout` signals*. Measured on `macos-26-arm64`/bash 5.3.20: in 17 of 185 reds the timeout's
+whole process group was **gone at +2 s** with no `sleep 60` surviving. Nothing escaped, and
+`_auth_timeout` was innocent. The real cause is the probe's own reader — `read -t`'s read consumed
+the EOF and still answered 142, and every `select()` after that waited on a flag already cleared. On
+two readers over one FIFO across 100 iterations, `read -t` alone saw EOF 66 times, a blocking reader
+alone 11, both 16, neither 7. **The probe measured its reader, not the FIFO, and reported a missing
+EOF that had arrived.**
+
+**What the diagnostics bought, and what naming a suspect cost.** #149 merged 2026-09-29 as
+`1ae3411b`; `PGID`, `SURV` and `HOLD` are still on main, and their evidence is what ruled the
+descendant theory out, which is what let the next reader look at the reader instead. So the
+instrument paid for itself and the trigger fired as written. The defect was attaching a named suspect
+to it: a diagnostic should say what to MEASURE and leave the conclusion open, because a hypothesis
+written beside the fields pre-commits the next reader to one file — here, the wrong one.
 
 ### The merge landed, and the guard followed the phrase — RATIFIED (2026-09-17)
 
