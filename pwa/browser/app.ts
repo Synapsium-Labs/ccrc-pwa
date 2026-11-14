@@ -63,8 +63,19 @@ export async function serveDist(dist: string): Promise<DistServer> {
   };
 }
 
+/** What a session's timers read (`GET /api/sessions/:id/timers`) answers when the fixture names none: the server's own
+ *  answer for a session with no pending timers. The section reads `{}` as an unread read and says so (Overlord W1a,
+ *  timers PR E), so `{}` would put a "could not read" card under every session page's transcript; this is the answer of
+ *  a real session with no timers, which takes no height (ask 417). A row that wants another answer names the path. */
+export const NO_TIMERS_ANSWER = { ok: true, timers: [] } as const;
+const SESSION_TIMERS_PATH = /^\/api\/sessions\/[^/]+\/timers$/;
+
+/** The answer for a path the fixture does not name: `NO_TIMERS_ANSWER` for a session's timers read, else `{}`. */
+const unroutedAnswer = (pathname: string): unknown => (SESSION_TIMERS_PATH.test(pathname) ? NO_TIMERS_ANSWER : {});
+
 /** What the app's `/api` and `/ws` answer. `api` is keyed by pathname; any other `/api` path answers `{}`, which every
- *  poller the shell mounts reads as "nothing to say". `/ws/fleet` sends each of `fleetFrames` once it opens; every
+ *  poller the shell mounts reads as "nothing to say", except a session's timers read (`NO_TIMERS_ANSWER`). `/ws/fleet`
+ *  sends each of `fleetFrames` once it opens; every
  *  other socket opens and stays silent, unless `socketFrames` names its pathname: each frame listed there is sent once the
  *  socket opens (a session's backlog, for `/ws/session/<id>`). */
 export interface AppFixture {
@@ -163,7 +174,7 @@ export async function openApp(browser: Browser, view: AppView, fixture: AppFixtu
     const pathname = new URL(route.request().url()).pathname;
     log({ kind: 'intercept', path: pathname });
     if (offline) { await route.abort('internetdisconnected'); return; }
-    const body = Object.hasOwn(fixture.api, pathname) ? fixture.api[pathname] : {};
+    const body = Object.hasOwn(fixture.api, pathname) ? fixture.api[pathname] : unroutedAnswer(pathname);
     let begun = (): void => undefined;
     if (parked !== null) {
       const started = new Promise<void>((done) => { begun = done; });
