@@ -277,6 +277,8 @@ export const GROWTH_FILES: readonly string[] = [
   'deploy/account-op.mjs',
   'server/src/coord/delegation-checkpoint.ts',
   'pwa/src/fleet/fleet.css',
+  // Past 3,000 lines with migration 70 (Overlord W1a, the notes piece): an append-only list of migrations, each entry frozen.
+  'server/src/coord/schema.ts',
 ];
 
 /** A file directly in `ccd/lib/` ending `.sh`. The `.jq` and `.py` programs beside them are not libraries. */

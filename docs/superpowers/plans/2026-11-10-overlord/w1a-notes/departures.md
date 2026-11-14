@@ -63,6 +63,8 @@ are built as written.
 
 - Migration slot: `origin/main` had 69 entries at `44f68ea36`, so this is entry 70. Launch profiles PR B (#2794) adds a
   migration too: whichever lands second merges `main` once, takes the next slot and re-counts.
+- `server/src/coord/schema.ts` passes 3,000 lines with migration 70 (2,968 to 3,006), so `growth-check`'s census asked for it in
+  `GROWTH_FILES` (`server/test/growthCheck.ts`), and it is listed there. Its growth here, 38 net lines, is under the 40 allowed.
 - `server/src/coord/store.ts` grows by 9 net lines (the five one-line delegates and their import), under the 40 allowed.
 - The partial unique index, measured: with it dropped, the store-level case of two revisions of one note goes red
   (`continuity-notes-route.test.ts`, "two revisions of one note").
