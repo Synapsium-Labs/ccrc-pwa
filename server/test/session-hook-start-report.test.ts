@@ -4,10 +4,11 @@
 // on a clear, compact or resume start), the fresh report first. A report not
 // taken is kept in one dot-free field, `$REG/<id>.startpending`, which `_reg_purge` and `_ws_slug_residue` take with the
 // row: no answer keeps it untried; `stale-uuid`, a 404, a 401, a 5xx or a local refusal keep it and count a try; any other
-// refusal drops it, counted. Only SessionStart and UserPromptSubmit resend, after the back-off the last pass stamped by
+// refusal drops it, counted. A `stale-uuid` ends the pass only on a send that carried this event's uuid; a kept startup's
+// lets the pass go on. Only SessionStart and UserPromptSubmit resend, after the back-off the last pass stamped by
 // how it ended, each kept report once, a clear, resume or compact one with the sender's current uuid; a report tried
 // START_RESEND_TRIES times is dropped. The start path's exit code and stdout never change for it (review 1911: F2, F3,
-// F4, F6, F7, F9; review 1949: G2, G4 to G7).
+// F4, F6, F7, F9; review 1949: G2, G4 to G7; review 1975: H1 to H3).
 //
 // Runs ccd/session-hook.sh for real inside a fixture HOME with a fake `ccrc-api`; no live box, no live server. The
 // harness is COPIED from session-hook-roster-card.test.ts (a test file cannot import another). The purge cases run ccd's
@@ -403,6 +404,41 @@ describe('the start report: the budget, the answers that count a try, and the ba
     expect(s.kept.map((k) => k.tries)).toEqual([1, 0, 0]);
     expect(s.after).toBeGreaterThanOrEqual(t0 + SHORT);
     expect(s.after).toBeLessThan(t0 + LONG);
+  });
+
+  it('a stale startup kept under another sender counts its try and the pass goes on: the clear behind it lands (review 1975, H1)', () => {
+    const N = '00000000-0000-4000-8000-0000000000ee';
+    const A = '00000000-0000-4000-8000-00000000000a';
+    const B = '00000000-0000-4000-8000-00000000000b';
+    const row = (uuid: string, source: string, i: number): string =>
+      `0\t${JSON.stringify({ fromId: ID, fromUuid: uuid, startedUuid: uuid, reportId: `seed-${i}`, source, model: null, rowIncarnation: null, reportedAt: 1 })}`;
+    fs.writeFileSync(spoolFile(), `0\t0\n${row(N, 'startup', 0)}\n${row(A, 'clear', 1)}\n`);
+    answer(`attr ${B}`);
+    hook({ ...prompt(), session_id: B }, { CLAUDE_CODE_SESSION_ID: B });
+    expect(calls(), 'the startup, then the clear').toBe(2);
+    expect(bodies()).toMatchObject([{ fromUuid: N, source: 'startup' }, { fromUuid: B, startedUuid: A, source: 'clear' }]);
+    expect(spool(), 'the clear taken on the first pass; the startup kept with its try').toMatchObject({ dropped: 0, kept: [{ tries: 1, body: { source: 'startup', fromUuid: N } }] });
+  });
+
+  it('a nested process\'s resume is rewritten like the row\'s own and lands as the row\'s, its startedUuid its own (H2)', () => {
+    const N = '00000000-0000-4000-8000-0000000000ee';
+    answer(`attr ${SID}`);
+    hook(start('resume', { session_id: N }), { CLAUDE_CODE_SESSION_ID: N });
+    expect(spool()).toMatchObject({ kept: [{ tries: 1, body: { fromUuid: N, source: 'resume' } }] });
+    expireBackoff();
+    const before = calls();
+    hook(prompt());
+    expect(calls() - before, 'the row\'s prompt makes one call').toBe(1);
+    expect(bodies().at(-1)).toMatchObject({ fromUuid: SID, startedUuid: N, source: 'resume' });
+    expect(spool()).toBeNull();
+  });
+
+  it('one stale-uuid on the fresh send ends the pass: the kept reports are not sent (G5, H3)', () => {
+    seed(2);
+    answer('403 stale-uuid');
+    hook(start('clear'));
+    expect(calls()).toBe(1);
+    expect(spool()!.kept.map((k) => k.tries), 'the kept reports untried, the fresh report last with one').toEqual([0, 0, 1]);
   });
 
   it('an empty session_id after the filter skips the resend pass and keeps every report (G6)', () => {

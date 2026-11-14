@@ -2814,7 +2814,7 @@ export const MIGRATIONS: readonly string[] = [
   // report, so a resend of a spooled report is the same row (`UNIQUE (sessionId, reportId)`); `source` is a word of
   // `START_SOURCES` (`other` for any word outside it); `rowIncarnation` is the registry row's incarnation as the session's
   // environment carries it (`CCRC_SESSION_GENERATION`, a lowercase UUID ccd writes); `model` and `rowIncarnation` are null when the
-  // payload or the environment carried none; `reportedAt` is the hook's clock (data only) and `receivedAt` the server's, which every reader ages from
+  // payload or the environment carried none; `reportedAt` is the hook's clock, by which a reader orders a session's starts, and `receivedAt` the server's, which every reader ages from
   // (§11.5). Its one writer is `insertStart` in `server/src/continuity/continuityStore.ts`.
   //
   // A NEW TABLE AND AN INDEX, nothing on an existing table: an older build opening a file at `user_version 66` takes rule 3
@@ -2833,7 +2833,7 @@ export const MIGRATIONS: readonly string[] = [
     source     TEXT NOT NULL,     -- startup | resume | clear | compact | fork | other
     model      TEXT,              -- as the payload carries it, or null
     rowIncarnation TEXT,          -- the row's incarnation, CCRC_SESSION_GENERATION (a lowercase UUID), or null
-    reportedAt INTEGER NOT NULL,  -- the hook's clock, ms (data only)
+    reportedAt INTEGER NOT NULL,  -- the hook's clock, ms: a session's start order
     receivedAt INTEGER NOT NULL,  -- the server's clock, ms: what every reader ages from
     UNIQUE (sessionId, reportId)
   );

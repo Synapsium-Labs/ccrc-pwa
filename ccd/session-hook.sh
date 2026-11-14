@@ -3950,10 +3950,13 @@ _hook_launch_record_append() {   # $lrc_line (a row, or a drop row, one TAB, the
 # and none started with under a second left. The body carries the conversation's uuid as `startedUuid`, data; `fromUuid`,
 # the sender the server attributes, is rewritten to this event's `session_id` on a resend of a `clear`, `resume` or
 # `compact` report, so one spooled before a `/clear` lands once the registry follows. A `startup` report keeps its own
-# `fromUuid`, so another process's start in this pane meets `stale-uuid` and is dropped. A report the
+# `fromUuid`, so another process's `startup` in this pane meets `stale-uuid` and is dropped; another process's `clear`,
+# `resume` or `compact` is rewritten like the row's own and can still land as the row's, its `startedUuid` its own. A report the
 # server did not take is kept in ONE dot-free field, `$REG/<id>.startpending`, so `_reg_purge` and `_ws_slug_residue` take
 # it with the row: line 1 is `<not-before ms>\t<dropped count>`, each later line `<tries>\t<report JSON>`, oldest first.
-# No answer keeps it untried and ends the pass; `stale-uuid` keeps it, counts a try and ends the pass; a 404 or 401 (an older server,
+# No answer keeps it untried and ends the pass; `stale-uuid` keeps it, counts a try and ends the pass when the send carried
+# this event's `session_id` (the fresh report, or a rewritten one), and lets the pass go on when it did not (a kept
+# `startup`), so a stale `startup` never holds back the reports behind it; a 404 or 401 (an older server,
 # mid-rollout), a 5xx or a local client refusal keeps it, counts a try and ends the pass; any other 4xx drops it. A report
 # tried START_RESEND_TRIES times is dropped, at most START_PENDING_MAX are kept (the oldest dropped first), and every drop
 # is counted. Only SessionStart and UserPromptSubmit resend, never a tool event or Stop, and only after the back-off the
@@ -3972,10 +3975,10 @@ _hook_start_send() {   # <report JSON> <deadline ms> -> 0 taken; 1 stale-uuid; 2
   case "$?" in 0) ;; 2) return 4 ;; *) return 2 ;; esac
   case "$out" in *'http 202'*) return 0 ;; *'"stale-uuid"'*) return 1 ;; *'http 40'[14]*|*'http 5'[0-9][0-9]*) return 4 ;; *'http 4'[0-9][0-9]*) return 3 ;; *) return 2 ;; esac
 }
-_hook_start_keep() {   # <tries> <report JSON> <send rc, 6 unsent> -> the caller's stay, drop, pass and why
+_hook_start_keep() {   # <tries> <report JSON> <send rc, 6 unsent, 7 stale under another sender> -> the caller's stay, drop, pass and why
   local t=$1
   case "$3" in 0) return 0 ;; 3) drop=$(( drop + 1 )); return 0 ;; 1) pass=0 why=$(( why > 1 ? why : 1 )) ;; 5) why=$(( why > 1 ? why : 1 )) ;; 2|4) pass=0 why=2 ;; esac
-  [[ "$3" == [14] ]] && t=$(( t + 1 ))
+  [[ "$3" == [147] ]] && t=$(( t + 1 ))
   (( t >= START_RESEND_TRIES )) && drop=$(( drop + 1 )) || stay+=("$t"$'\t'"$2")
 }
 _hook_start_report() {
@@ -4004,6 +4007,7 @@ _hook_start_report() {
     t="${e%%$'\t'*}" j="${e#*$'\t'}"; [[ "$t" =~ ^[0-9]+$ ]] || t=0; r=6
     (( pass )) && { j=$(jq -c --arg u "$psid" '.startedUuid //= .fromUuid | if .source == "clear" or .source == "resume" or .source == "compact" then .fromUuid = $u else . end' <<<"$j" 2>/dev/null) && { _hook_start_send "$j" "$dl"; r=$?; } || r=3; }
     [[ "$r" == 5 ]] && pass=0
+    [[ "$r" == 1 && "$j" != *"\"fromUuid\":\"$psid\""* ]] && r=7   # stale under a sender not this event's (a kept startup): a try, and the pass goes on
     _hook_start_keep "$t" "$j" "$r"
   done
   [[ -z "$body" ]] || _hook_start_keep 0 "$body" "$rc"
