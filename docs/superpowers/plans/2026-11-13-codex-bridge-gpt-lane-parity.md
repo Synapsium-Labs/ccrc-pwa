@@ -183,8 +183,19 @@ Work started 2026-11-13 on a branch stacked on Tasks 1 and 2:
     written to the stats file, a log or the status file.
 - [ ] The stats idle flush (D-8624): the stats file is written once the bridge has been idle for `FLUSH_S` after a
   response, so a reader taking deltas between runs never sees one run's figures land in the next.
-- [ ] Deferred until the eval reads them: the effort policy (the operator's), tool-output truncation, the 272k window
-  (the operator's), the Lite tool shape, and folding text beside tool results into the developer item.
+- [ ] `bridge-effort` (D-8631), added 2026-11-14 for the operator's effort trial: `reasoning.effort` at the row's
+  `defaultReasoningLevel`, whatever effort the client sent.
+  - Measured first: every upstream body on both lanes carried `xhigh`. It is the client's own effort, sent on every
+    request for every model, and it outranks the lane's per-class effort file, so `ccrc models <id> set-effort` alone
+    changes nothing on the wire.
+  - The marker is the lane-wide switch. It is read at each POST, so it needs no relaunch. It outranks a session's own
+    route effort too, which is what a lane-wide trial at Codex's defaults needs.
+  - It is sent only for a row whose `defaultReasoningLevel` is a bounded effort word. With no row, or no valid
+    default, the body keeps the client's effort.
+  - It is one more marker addition under D-8622's fallback, so a 400 retries with the client's effort.
+- [ ] Deferred until the eval reads them: who rules on effort for good (the operator's, after the trial),
+  tool-output truncation, the 272k window (the operator's), the Lite tool shape, and folding text beside tool results
+  into the developer item.
 
 ## Task 6: the eval
 
@@ -218,8 +229,9 @@ Design and dry run first, with no live run. A live run spends subscription quota
 
 ## Waiting on the operator
 
-- Whose effort rules on GPT lanes: Claude Code's class effort (high or max today) or the catalogue's default (low or
-  medium)?
+- Whose effort rules on GPT lanes: the client's (`xhigh` on every request today, measured 2026-11-14) or the
+  catalogue's default (low or medium)? The operator agreed on 2026-11-14 to trial the catalogue's default on lane-b
+  (D-8631). The standing rule waits for the trial.
 - Whether lane windows follow Codex's 272k. Decide after the eval.
 - Whether the target is task-success parity or wire parity. The prompt and tools differ on purpose, so wire parity
   cannot be complete.
@@ -278,10 +290,20 @@ Design and dry run first, with no live run. A live run spends subscription quota
   `FLUSH_S` after a response, not only at the next request, by at most one timer that each response re-arms and the
   drain stops. A reader taking deltas between runs, as the eval spec's serial join does, never sees one run's figures
   land in the next.
+- **D-8631 (2026-11-14)** — `bridge-effort-catalogue-default`: behind a fourth request marker, `bridge-effort`, the
+  bridge sends the catalogue row's `defaultReasoningLevel` as `reasoning.effort`, in place of the client's effort.
+  - Why: every upstream body carried the client's `xhigh`, which outranks the lane's per-class effort file. A
+    settings edit could not reach a session's own route effort and would need every session relaunched. The marker
+    is read at each POST.
+  - It is sent only for a row with a bounded effort word as its default; otherwise the body is unchanged.
+  - It is a marker addition under D-8622: counted in `markers`, dropped by the 400 fallback, reaped with the lane, and
+    with no writer in the tree. The `parity` section's `effort` counts the level each body carried, as before.
 
 ## Where things stand
 
 **Agreed:** the operator's directive (2026-11-13), the order of work above, and the Stage 4 rulings it sits beside.
+The operator added a bar on 2026-11-14: "codex lanes must NOT underperform compared to claude lanes, except for
+reasons related to the model itself." It applies beyond parity with native Codex.
 
 **Waiting on you:** the four operator questions above.
 
@@ -289,11 +311,23 @@ Design and dry run first, with no live run. A live run spends subscription quota
 - Task 1 (#2777) is in v0.0.1184. Tasks 2 (#2776) and 3 (#2775) are in v0.0.1185.
 - Task 3 also fixed the daily watch's releases listing, which had answered HTTP 504 at 100 a page on four of six runs.
 - Task 5 (#2782) is in v0.0.1187. Each marker stays off until the operator touches it on one lane.
+- Task 4 (#2788) is in v0.0.1190. It records nothing until the operator touches `record-requests` on a lane.
+
+**The first counts (2026-11-14, about 16 hours of Task 1's section on both lanes, no marker touched):**
+- No response carried a non-empty `input_transformations` array: 0 of about 373. The bridge does not tell an absent
+  array from an empty one, so this says the backend reported no removals, not whether it sends the field.
+  `bridge-reasoning-all-turns`' done condition above (the `turn_boundary` removals near zero) is therefore met before
+  it starts. Its effect is read from the replay counts, the cached share and the times instead.
+- Every upstream body carried `xhigh`. That is what D-8631 is for.
+- Every response was served by the model asked for. The cached share of input was 91% to 99% by model.
+- The median time to first output was 8-16 s on three of the four model routes, and under 8 s on the fourth.
+
+**Trials (the operator's):** `bridge-reasoning-all-turns` on lane-b from 2026-11-14 22:47Z. The effort trial on lane-b
+follows it, behind D-8631's marker.
 
 **In flight:**
-- Task 4 is building.
+- D-8631's marker is building.
 - Task 6's design is draft #2778.
 
 **Later:**
-- The first `input_transformations` counts, once the operator's update reaches v0.0.1184 or later.
 - Task 6's live run.
