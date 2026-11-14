@@ -569,11 +569,16 @@ function timerRowOf(raw: Record<string, unknown>): TimerRow | string {
     return `continuity_timers row ${id} has a text column that does not read`;
   }
   if (typeof state !== 'string' || !(TIMER_STATES as readonly string[]).includes(state)) return `continuity_timers row ${id} has state ${String(state)}`;
+  // A bound key that does not read fails the read rather than reading as unbound, which would skip the cleanup's run and
+  // programme rungs and send the mail run-less (review 2038 F5).
+  const runId = intOrNull(raw.runId);
+  if (raw.runId !== null && runId === null) return `continuity_timers row ${id} has run ${String(raw.runId)}`;
+  if (raw.programme !== null && typeof raw.programme !== 'string') return `continuity_timers row ${id} has programme ${String(raw.programme)}`;
   if (cancelReason !== null && (typeof cancelReason !== 'string' || !isTimerCancelReason(cancelReason))) {
     return `continuity_timers row ${id} has cancel reason ${String(cancelReason)}`;
   }
   return {
-    id, setter, setterIncarnation, setById, setByUuid, role, note, runId: intOrNull(raw.runId), programme: strOrNull(raw.programme),
+    id, setter, setterIncarnation, setById, setByUuid, role, note, runId, programme: strOrNull(raw.programme),
     setAt, dueAt, state: state as TimerState, firedAt: intOrNull(raw.firedAt), mailId: intOrNull(raw.mailId),
     cancelledAt: intOrNull(raw.cancelledAt), cancelReason: cancelReason as TimerCancelReason | null,
   };

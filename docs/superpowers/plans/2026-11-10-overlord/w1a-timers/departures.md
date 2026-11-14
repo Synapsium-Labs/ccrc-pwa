@@ -43,8 +43,9 @@ literal `'absent'` comparison is the lane's input builder's (PR C).
 - **archived-reads-alone** — `setter-archived` reads the listing's `archived` alone (the brief: `archivedAt !== null`),
   not `listed && archived`: the lane only finds an archive stamp on a row the listing built.
 - **preview-ellipsis-inside-the-sixty** — `timerPreview`'s "at most 60 code points" counts the ellipsis: a cut keeps at
-  most 59 code points and adds `…`. A head with no space in it (one long word) is hard-cut at 59; a head that ends inside
-  a word backs off to the last space before it, and trailing space is trimmed. A note of 60 or fewer is itself, uncut.
+  most 59 code points and adds `…`. A head that ends inside a word backs off to the last space before it that has words
+  before it; a head with no such space (one long word, or a leading space and then one long word: review 2038 F2) is
+  hard-cut at 59, and trailing space is trimmed, so a note with words never previews as the ellipsis alone. A note of 60 or fewer is itself, uncut.
   It does not fold line breaks: the card's one-line rule (`card.ts#oneLine`, PR D) applies where the line is drawn.
 - **timer-mail-lines** — the plan names what each timer's lines say; the words are: `Timer <id>: due <UTC>, fired <n>
   min late.` (whole minutes from `dueAt` to now, floored, never below 0), then `Credited to <setById> at <UTC>; run <n>.`
@@ -68,6 +69,23 @@ literal `'absent'` comparison is the lane's input builder's (PR C).
 - **migration-slot-measured** — migration 70, measured on `origin/main` at `9e55a891a` (69 entries). The notes piece
   (#2796) and launch profiles PR B (#2794) each add a migration too; whichever lands later merges `main` once, takes the
   next slot and re-counts (`coord-db.test.ts`'s pins and `run-close-switch.test.ts`'s rollback list).
+
+### Fix round 1 (review 2038, the coordinator's rulings)
+
+- **too-late-past-the-bound** (F3, ruled: the spec over the plan) — any number past `TIMER_DUE_MAX_MS`, an unsafe
+  positive integer and `+Infinity` included, answers `timer-too-late` (Table 11.6, C65). Everything else that is not a
+  safe integer of at least five minutes answers `timer-too-soon`: under five minutes, zero, a negative, `-Infinity`,
+  `NaN`, a fraction, or a value that is not a number. The plan's sentence ("`timer-too-soon` (not a safe integer, or
+  under five minutes)") read the first group as too soon. PR B's door tests pin both groups through the door.
+- **preview-backs-off-only-to-words** (F2) — the correction to preview-ellipsis-inside-the-sixty above, with its case
+  and mutant.
+- **bound-key-that-does-not-read-fails** (F5) — a stored `runId` that is neither null nor a number fails the whole read,
+  as every other bad column does, rather than reading as an unbound timer. The same rule holds for `programme` (neither
+  null nor text), which folded the same way; under the column's TEXT affinity only a blob reaches it.
+- **pack-order-pinned** (F1) — no behaviour change: two cases and two mutants pin that a timer that does not fit stops
+  its group (a smaller, later timer never rides ahead of it) and that timers due at the same instant go in id order.
+- **carried to PR B** (F4, F6) — the set door pins the bounds on the credited id and the programme, a throwing
+  `setsSince` answers `timer-unmeasured` (503), and `write-failed` answers 503. Nothing changes in PR A.
 
 ## Growth (PR A)
 

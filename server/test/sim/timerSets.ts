@@ -48,15 +48,18 @@ export function timerBodyCases(m: TimersModule): Record<string, SuiteCase> {
       expect(refusal(MIN, 'a secret-shaped note', true)).toBe('timer-masked');
       expect(refusal(MIN, 'a plain note', false)).toBeNull();
     },
-    'the duration: under five minutes or not a safe integer is timer-too-soon; over 30 days is timer-too-late': () => {
+    'the duration: past 30 days is timer-too-late, an unsafe positive integer and +Infinity included; anything else that is not a safe integer of at least five minutes is timer-too-soon (review 2038 F3)': () => {
       expect(refusal(MIN - 1, 'n')).toBe('timer-too-soon');
       expect(refusal(MIN, 'n')).toBeNull();
       expect(refusal(MIN + 1, 'n')).toBeNull();
       expect(refusal(MAX - 1, 'n')).toBeNull();
       expect(refusal(MAX, 'n')).toBeNull();
       expect(refusal(MAX + 1, 'n')).toBe('timer-too-late');
-      for (const d of [0, -MIN, 300_000.5, Number.NaN, Number.POSITIVE_INFINITY, 2 ** 53, '300000', null, undefined]) {
+      for (const d of [0, -MIN, 300_000.5, -1e20, Number.NaN, Number.NEGATIVE_INFINITY, '300000', '9e99', null, undefined, true]) {
         expect(refusal(d, 'n'), String(d)).toBe('timer-too-soon');
+      }
+      for (const d of [MAX + 0.5, 2 ** 53, 2 ** 53 + 2, 1e20, Number.MAX_VALUE, Number.POSITIVE_INFINITY]) {
+        expect(refusal(d, 'n'), String(d)).toBe('timer-too-late');
       }
     },
     'the order: too-long, then masked, then too-soon, then too-late': () => {
@@ -78,6 +81,8 @@ const BODY_SET: MutantSet<TimersModule> = {
     { id: 'B4 the minimum refused', old: 'durationMs < TIMER_DUE_MIN_MS', new: 'durationMs <= TIMER_DUE_MIN_MS' },
     { id: 'B5 the maximum refused', old: 'durationMs > TIMER_DUE_MAX_MS', new: 'durationMs >= TIMER_DUE_MAX_MS' },
     { id: 'B6 a fraction passes', old: '!Number.isSafeInteger(durationMs) || ', new: '' },
+    // Review 2038 F3: the plan's sentence, which read every unsafe number as too soon, a positive one past the bound included.
+    { id: 'B8 an unsafe positive is too soon', old: "typeof durationMs === 'number' && durationMs > TIMER_DUE_MAX_MS", new: 'Number.isSafeInteger(durationMs) && durationMs > TIMER_DUE_MAX_MS' },
     { id: 'B7 masked before too-long', old: "  if (typeof note !== 'string' || [...note].length > TIMER_NOTE_MAX_CHARS) return { ok: false, refusal: 'timer-too-long' };\n  if (b.masked) return { ok: false, refusal: 'timer-masked' };", new: "  if (b.masked) return { ok: false, refusal: 'timer-masked' };\n  if (typeof note !== 'string' || [...note].length > TIMER_NOTE_MAX_CHARS) return { ok: false, refusal: 'timer-too-long' };" },
   ],
   suite: timerBodyCases,
@@ -302,6 +307,13 @@ export function timerPreviewCases(m: TimersModule): Record<string, SuiteCase> {
       expect(m.timerPreview(`aaaa ${'b'.repeat(56)}`)).toBe('aaaa…');
       expect(m.timerPreview(`check the pull request's checks and then ${'z'.repeat(40)}`)).toBe("check the pull request's checks and then…");
     },
+    'a note that opens with a space or a line break and then one long word previews as text and the ellipsis, never the ellipsis alone (review 2038 F2)': () => {
+      expect(m.timerPreview(` ${'a'.repeat(80)}`)).toBe(` ${'a'.repeat(58)}…`);
+      expect(m.timerPreview(`  ${'a'.repeat(80)}`)).toBe(`  ${'a'.repeat(57)}…`);
+      expect(m.timerPreview(`\n${'a'.repeat(80)}`)).toBe(`\n${'a'.repeat(58)}…`);
+      // A note of nothing but spaces has no words to show.
+      expect(m.timerPreview(' '.repeat(80))).toBe('…');
+    },
     'four-byte characters are counted as code points, never split': () => {
       expect(m.timerPreview('😀'.repeat(61))).toBe(`${'😀'.repeat(59)}…`);
       expect(m.timerPreview(`${'😀'.repeat(30)} ${'😀'.repeat(40)}`)).toBe(`${'😀'.repeat(30)}…`);
@@ -320,8 +332,10 @@ const PREVIEW_SET: MutantSet<TimersModule> = {
     { id: 'V1 the cut at 61', old: 'if (cps.length <= TIMER_PREVIEW_CHARS) return note;', new: 'if (cps.length <= TIMER_PREVIEW_CHARS + 1) return note;' },
     { id: 'V2 the ellipsis past 60', old: 'let head = cps.slice(0, TIMER_PREVIEW_CHARS - 1);', new: 'let head = cps.slice(0, TIMER_PREVIEW_CHARS);' },
     { id: 'V3 UTF-16 units', old: 'const cps = [...note];', new: "const cps = note.split('');" },
-    { id: 'V4 no word boundary', old: 'if (i > 0) head = head.slice(0, i);', new: '' },
+    { id: 'V4 no word boundary', old: "if (i > 0 && head.slice(0, i).join('').trim() !== '') head = head.slice(0, i);", new: '' },
     { id: 'V5 no ellipsis', old: "return head.join('').trimEnd() + ELLIPSIS;", new: "return head.join('').trimEnd();" },
+    // Review 2038 F2: a back-off to the leading space, which trims to nothing.
+    { id: 'V7 a back-off to a leading space', old: "if (i > 0 && head.slice(0, i).join('').trim() !== '') head = head.slice(0, i);", new: 'if (i > 0) head = head.slice(0, i);' },
     { id: 'V6 the boundary ignored', old: 'if (!SPACE.test(cps[TIMER_PREVIEW_CHARS - 1]!)) {', new: 'if (true) {' },
   ],
   suite: timerPreviewCases,
@@ -383,6 +397,20 @@ export function packTimerMailCases(m: TimersModule): Record<string, SuiteCase> {
       expect(rest[0]!.ids[0]).toBe(twelve[k]!.id);
       expect(m.packTimerMail(twelve.slice(0, k + 1), NOW)[0]!.ids).toHaveLength(k);
     },
+    'a timer that does not fit stops its group: a smaller, later one never rides ahead of it (review 2038 F1)': () => {
+      const big = Array.from({ length: 4 }, (_, i) => timer(300 + i, { dueAt: NOW - 10_000 + i, note: '😀'.repeat(500) }));
+      const small = timer(399, { dueAt: NOW - 1_000, note: 'x' });
+      const mails = m.packTimerMail([...big, small], NOW);
+      expect(mails).toHaveLength(1);
+      expect(mails[0]!.ids).toStrictEqual([300, 301, 302]);
+      // CONTROL: the small one alone would have fitted beside the three.
+      expect(m.packTimerMail([...big.slice(0, 3), small], NOW)[0]!.ids).toStrictEqual([300, 301, 302, 399]);
+    },
+    'timers due at the same instant go in id order, whatever their order in (review 2038 F1)': () => {
+      const mails = m.packTimerMail([timer(9, { dueAt: NOW - 60_000 }), timer(3, { dueAt: NOW - 60_000 }), timer(5, { dueAt: NOW - 60_000 })], NOW);
+      expect(mails[0]!.ids).toStrictEqual([3, 5, 9]);
+      expect(mails[0]!.subject).toBe('timer: 3 due (3, 5, 9)');
+    },
     '9 timers of 500 four-byte characters: one mail holds three': () => {
       const nine = Array.from({ length: 9 }, (_, i) => timer(200 + i, { note: '😀'.repeat(500) }));
       const mails = m.packTimerMail(nine, NOW);
@@ -430,6 +458,9 @@ const PACK_SET: MutantSet<TimersModule> = {
     { id: 'P5 subject never cut', old: 'if (utf8Bytes(all) <= MAIL_SUBJECT_MAX_BYTES) return all;', new: 'return all;' },
     { id: 'P6 no lateness', old: 'Math.max(0, Math.floor((now - t.dueAt) / MINUTE_MS))', new: '0' },
     { id: 'P7 the note bare', old: 'untrustedBlock(t.note, UNTRUSTED_CAP_BYTES, NOTE_FULL_AT, CARD_TEXT_PREFACE),', new: 't.note,' },
+    // Review 2038 F1: two behaviours the first sets left unpinned.
+    { id: 'P9 skip what does not fit', old: 'if (utf8Bytes(timerBody([...taken, t], now)) > MAIL_BODY_MAX_BYTES) break;', new: 'if (utf8Bytes(timerBody([...taken, t], now)) > MAIL_BODY_MAX_BYTES) continue;' },
+    { id: 'P10 no id tie-break', old: 'a.dueAt - b.dueAt || a.id - b.id', new: 'a.dueAt - b.dueAt' },
     { id: 'P8 no programme line', old: "t.programme !== null ? `programme ${t.programme}` : 'no run or programme'", new: "'no run or programme'" },
   ],
   suite: packTimerMailCases,

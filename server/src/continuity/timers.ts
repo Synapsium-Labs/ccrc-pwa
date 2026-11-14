@@ -22,17 +22,19 @@ type Refused = { readonly ok: false; readonly refusal: TimerRefusal };
 
 /** The body alone, decided before any read (the start report's shape-first order). The first refusal wins:
  *  `timer-too-long` (not a string, or over `TIMER_NOTE_MAX_CHARS` code points), `timer-masked` (the egress masker changed
- *  the note: it holds a secret's shape), `timer-too-soon` (not a safe integer, or under `TIMER_DUE_MIN_MS`),
- *  `timer-too-late` (over `TIMER_DUE_MAX_MS`). */
+ *  the note: it holds a secret's shape), then the duration: `timer-too-late` for any number past `TIMER_DUE_MAX_MS`
+ *  (an unsafe positive integer and `+Infinity` included), and `timer-too-soon` for anything else that is not a safe
+ *  integer of at least `TIMER_DUE_MIN_MS` (zero, a negative, `-Infinity`, `NaN`, a fraction, a value that is not a
+ *  number). The spec's words over the plan's sentence (review 2038 F3, slug too-late-past-the-bound). */
 export function timerBodyVerdict(b: { durationMs: unknown; note: unknown; masked: boolean }):
   { readonly ok: true; readonly durationMs: number; readonly note: string } | Refused {
   const { durationMs, note } = b;
   if (typeof note !== 'string' || [...note].length > TIMER_NOTE_MAX_CHARS) return { ok: false, refusal: 'timer-too-long' };
   if (b.masked) return { ok: false, refusal: 'timer-masked' };
+  if (typeof durationMs === 'number' && durationMs > TIMER_DUE_MAX_MS) return { ok: false, refusal: 'timer-too-late' };
   if (typeof durationMs !== 'number' || !Number.isSafeInteger(durationMs) || durationMs < TIMER_DUE_MIN_MS) {
     return { ok: false, refusal: 'timer-too-soon' };
   }
-  if (durationMs > TIMER_DUE_MAX_MS) return { ok: false, refusal: 'timer-too-late' };
   return { ok: true, durationMs, note };
 }
 
@@ -116,7 +118,8 @@ const ELLIPSIS = '…';
 
 /** The note's first words, the one cut of a note (slug one-preview): the note itself when it is at most
  *  `TIMER_PREVIEW_CHARS` code points; otherwise at most that many code points, the ellipsis included, cut on a word
- *  boundary when the head holds one, and hard-cut when it is one long word. */
+ *  boundary that has words before it, and hard-cut when it has none (one long word, or a space and then one long word:
+ *  review 2038 F2), so a note with words never previews as the ellipsis alone. */
 export function timerPreview(note: string): string {
   const cps = [...note];
   if (cps.length <= TIMER_PREVIEW_CHARS) return note;
@@ -124,7 +127,7 @@ export function timerPreview(note: string): string {
   if (!SPACE.test(cps[TIMER_PREVIEW_CHARS - 1]!)) {
     let i = head.length;
     while (i > 0 && !SPACE.test(head[i - 1]!)) i--;
-    if (i > 0) head = head.slice(0, i);
+    if (i > 0 && head.slice(0, i).join('').trim() !== '') head = head.slice(0, i);
   }
   return head.join('').trimEnd() + ELLIPSIS;
 }

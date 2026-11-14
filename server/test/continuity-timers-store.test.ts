@@ -140,6 +140,24 @@ describe('continuity_timers: the table and its writers (Overlord §3.3.12, C61)'
     expect(s.timerHoldFacts(ID, 0).ok).toBe(false);
   });
 
+  it('a bound run or programme that does not read fails the read, never reads as unbound (review 2038 F5)', () => {
+    const s = store();
+    const id = set(s, { runId: 7 });
+    s.db.prepare("UPDATE continuity_timers SET runId = 'seven' WHERE id = ?").run(id);
+    const bad = s.pendingTimersOf(ID);
+    expect(bad.ok).toBe(false);
+    expect(!bad.ok && bad.detail).toContain(`row ${id} has run seven`);
+    expect(s.pendingTimers().ok).toBe(false);
+    // TEXT affinity stores a number as text, so only a blob reaches the programme rule.
+    s.db.prepare("UPDATE continuity_timers SET runId = NULL, programme = X'0102' WHERE id = ?").run(id);
+    const prog = s.pendingTimers();
+    expect(!prog.ok && prog.detail).toContain(`row ${id} has programme`);
+    // CONTROL: null and a number read as they are.
+    s.db.prepare('UPDATE continuity_timers SET runId = 7, programme = NULL WHERE id = ?').run(id);
+    const good = s.pendingTimers();
+    expect(good.ok && good.rows.map((r) => [r.runId, r.programme])).toEqual([[7, null]]);
+  });
+
   it('timerHoldFacts answers the earliest pending and the newest fired at or after firedSince', () => {
     const s = store();
     expect(s.timerHoldFacts(ID, 0)).toStrictEqual({ ok: true, earliestPending: null, newestFired: null });
