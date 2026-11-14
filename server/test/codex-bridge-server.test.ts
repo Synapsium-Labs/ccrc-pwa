@@ -1817,6 +1817,29 @@ describe.skipIf(!PY)('the request markers, their 400 fallback and the turn-state
     });
   });
 
+  it('a buffered (stream:false) message falls back on a continuation\'s 400: nothing of it has reached the client yet', async () => {
+    const part = (n: number, last: boolean): ResponsesAnswer => ({
+      status: 200, sse: created(n) + done(0, msgItem(`msg_fx${n}`, `part ${n}`)) + completed({}, last ? {} : { end_turn: false }),
+    });
+    await withBridge([part(1, false), unsupported, part(2, true)], async ({ bridge, up, lane }) => {
+      touch(lane, [ALL_TURNS]);
+      lite(lane);
+      const a = await call(bridge, '/v1/messages', { body: { ...messages({ stream: false }), output_config: { effort: 'high' } }, headers: session });
+      expect(a.status, a.text).toBe(200);
+      expect(a.json).toMatchObject({ type: 'message', stop_reason: 'end_turn' });
+      expect((a.json!.content as Json[]).map((b) => b.text).join('')).toBe('part 1part 2');
+      expect(up.requests).toHaveLength(3);
+      expect(up.requests.map((r) => r.body!.reasoning)).toEqual([
+        { effort: 'high', context: 'all_turns' }, { effort: 'high', context: 'all_turns' }, { effort: 'high' },
+      ]);
+      expect(await bridge.stop()).toEqual({ code: 0, signal: null });
+      const stats = readStats(lane);
+      expect(stats.outcomes['4xx']).toBeUndefined();
+      expect(stats.parity[KEY].markers).toEqual(counts({ [ALL_TURNS]: 2 }));
+      expect(stats.parity[KEY].fallbacks).toEqual(counts({ [ALL_TURNS]: 1 }));
+    });
+  });
+
   // ── the turn-state echo (D-8623) ──
   const token = (tag: string): string => `ts-fx-${tag}-${randomBytes(12).toString('hex')}`;
   const withState = (value: string | null, text = 'ok'): ResponsesAnswer => ({
@@ -1890,6 +1913,23 @@ describe.skipIf(!PY)('the request markers, their 400 fallback and the turn-state
       expect(sentState(up)).toEqual([null, a, null, b]);
       expect(await bridge.stop()).toEqual({ code: 0, signal: null });
       expect(readStats(lane).parity[KEY].turnState).toEqual({ captured: 2, echoed: 2 });
+    });
+  });
+
+  it('only a 2xx answer sets the turn\'s state: a refused answer\'s header is never captured', async () => {
+    const [bad, good] = [token('bad'), token('good')];
+    const refused: ResponsesAnswer = { ...unsupported, headers: { ...unsupported.headers, 'x-codex-turn-state': bad } };
+    await withBridge([refused, withState(good), withState(null)], async ({ bridge, up, lane }) => {
+      touch(lane, [TURN_STATE]);
+      const r0 = await call(bridge, '/v1/messages', { body: turnBody('task A', 0), headers: session });
+      expect(r0.status).toBe(400); // nothing was echoed, so nothing carried: answered as today
+      for (const body of [turnBody('task A', 1), turnBody('task A', 2)]) {
+        const r = await call(bridge, '/v1/messages', { body, headers: session });
+        expect(r.status, r.text).toBe(200);
+      }
+      expect(sentState(up)).toEqual([null, null, good]);
+      expect(await bridge.stop()).toEqual({ code: 0, signal: null });
+      expect(readStats(lane).parity[KEY].turnState).toEqual({ captured: 1, echoed: 1 });
     });
   });
 
