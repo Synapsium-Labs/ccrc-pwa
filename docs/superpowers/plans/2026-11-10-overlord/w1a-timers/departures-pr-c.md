@@ -115,3 +115,4 @@ departure this PR builds, **stall-notice-names-no-note**, is in `departures.md`'
 ## Growth (PR C)
 
 Measured against the merge base before the push: `server/src/watch.ts` +16, `server/src/coord/store.ts` 0.
+Re-measured at fix round 1, after merging `main` at `2d503a4de`: unchanged, `watch.ts` +16 net (+18, -2) and `store.ts` 0.
