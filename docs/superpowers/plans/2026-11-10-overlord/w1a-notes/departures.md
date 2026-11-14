@@ -51,7 +51,7 @@ are built as written.
   fill's rule: the pane's pair is spliced into the body, and a body naming either key is refused, unsent.
 - **notes-render-newest-first.** The card renders notes newest first and ranks them by recency, so trimming drops the
   oldest first and the left-out line counts them. The card piece had rendered them oldest first.
-- **status-words-list.** The status words the handover note drops are `STATUS_WORDS` in `continuity/notes.ts`: done,
+- **status-words-list.** The status words the handover note drops are `HANDOVER_STATUS_WORDS` in `continuity/notes.ts`: done,
   merged, fixed, approved, complete, completed, finished, landed, shipped, resolved, passed, green, closed, released,
   accepted and verified, matched as whole words in any case. The spec names the rule, not the list.
 - **no-claude-md-line.** The plan named `CLAUDE.md`'s box-token paragraph among the census files. The three doors are

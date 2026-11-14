@@ -128,7 +128,7 @@ export function notesCases(m: Notes): Record<string, Case> {
       });
       expect(m.dropStatusWords('undone, mergedness, re-merged, done_x')).toEqual({ text: 'undone, mergedness, re-merged, done_x', dropped: 0 });
       expect(m.dropStatusWords('  keep   my   spacing ')).toEqual({ text: '  keep   my   spacing ', dropped: 0 });
-      for (const w of m.STATUS_WORDS) expect(m.dropStatusWords(`a ${w} b`), w).toEqual({ text: 'a b', dropped: 1 });
+      for (const w of m.HANDOVER_STATUS_WORDS) expect(m.dropStatusWords(`a ${w} b`), w).toEqual({ text: 'a b', dropped: 1 });
     },
     'noteKeyFact: a programme, an item and a run, for the caller': () => {
       const f = m.noteKeyFact;

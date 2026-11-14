@@ -74,11 +74,11 @@ export function noteVerdict(n: NoteInput, key: KeyFact, liveCount: number | 'unm
 }
 
 /** The words a handover note may not use to claim a state (C37: "drops status words"). Whole words, any case. */
-export const STATUS_WORDS = [
+export const HANDOVER_STATUS_WORDS = [
   'done', 'merged', 'fixed', 'approved', 'complete', 'completed', 'finished', 'landed', 'shipped', 'resolved', 'passed',
   'green', 'closed', 'released', 'accepted', 'verified',
 ] as const;
-const STATUS_RE = new RegExp(`(?<![\\p{L}\\p{N}_-])(?:${STATUS_WORDS.join('|')})(?![\\p{L}\\p{N}_-])`, 'giu');
+const STATUS_RE = new RegExp(`(?<![\\p{L}\\p{N}_-])(?:${HANDOVER_STATUS_WORDS.join('|')})(?![\\p{L}\\p{N}_-])`, 'giu');
 
 /** `text` with every status word dropped, its spaces closed up, and how many it dropped. */
 export function dropStatusWords(text: string): { readonly text: string; readonly dropped: number } {
