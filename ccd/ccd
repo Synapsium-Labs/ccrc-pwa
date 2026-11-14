@@ -1723,7 +1723,7 @@ COMPACT_NOTE_FLOOR=1800         # D-2013 — min seconds between swap.log lines 
 # ROUTE_FIELD it names a class and is checked against `CCRC_SUBAGENT_CLASSES`;
 # inside an `inert` list it is the FIELD's name, stamped by a lane that composed
 # no `CLAUDE_CODE_SUBAGENT_MODEL` whatever class the field held.
-ROUTE_FIELDS=(class effort subagent workflow compact browser degraded inert profile automem compactwindow)
+ROUTE_FIELDS=(class effort subagent workflow compact browser degraded inert profile automem compactwindow precompact)
 ROUTE_CLASSES="fable opus sonnet haiku default"
 ROUTE_EFFORTS="auto low medium high xhigh max ultracode"
 # THE SLIDER'S STOPS, IN THE ORDER THE SLIDER PUTS THEM (D-2808, measured on a
@@ -22107,9 +22107,10 @@ _route_any() {   # id — 0 iff ANY routing field file exists (spec §5.1: a ses
   # the spawn's settings and environment, read on their own by `_profile_spawn_compose`. A profile-only row keeps today's
   # seed, and on the tick and spawn paths it is not read per tick by `_route_apply_pending` (m-B9) and writes no
   # `routeapplied`. A `ccd route --set` of one on a never-routed row can leave an empty stamp, as `browser` does; the
-  # next spawn removes it.
+  # next spawn removes it. `precompact` (Overlord W1a compaction, plan slug route-fields-outside-route-any) is skipped
+  # for the same reason: the session hook's PreCompact refusal arm reads it, and nothing here.
   local f
-  for f in "${ROUTE_FIELDS[@]}"; do case "$f" in browser|profile|automem|compactwindow) ;; *) [[ -e "$REG/$1.$f" ]] && return 0 ;; esac; done
+  for f in "${ROUTE_FIELDS[@]}"; do case "$f" in browser|profile|automem|compactwindow|precompact) ;; *) [[ -e "$REG/$1.$f" ]] && return 0 ;; esac; done
   return 1
 }
 _route_valid() {   # field value — THREE answers, because two of them are two different
@@ -22148,6 +22149,9 @@ _route_valid() {   # field value — THREE answers, because two of them are two 
               jq -e --arg r "$v" 'has($r)' "$LAUNCH_PROFILES_JSON" >/dev/null 2>&1; x=$?; (( x <= 1 )) || return 2; return "$x" ;;
     automem)  _route_word_in "$v" "on off" ;;
     compactwindow) [[ "$v" =~ ^[1-9][0-9]{5,6}$ ]] && (( v >= 100000 && v <= 1000000 )) ;;
+    # `precompact` (Overlord W1a compaction, spec §3.3.4 C39): `refuse` arms the hook's PreCompact refusal arm
+    # (`_hook_compact_refuse`), `allow` and absent leave it dark. Its one writer is the generations lane.
+    precompact) _route_word_in "$v" "refuse allow" ;;
     # `degraded` is the four CLASS names WITHOUT `default` — a session cannot
     # degrade TO "no override" — and they are DERIVED from `ROUTE_CLASSES`
     # rather than typed a second time three lines below the first (controller

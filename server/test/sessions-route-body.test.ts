@@ -19,7 +19,7 @@ import { mkTmp } from './tmpHelpers.js';
 import { POOLS_CAP, ROUTE_ARGV_CAP } from '../src/ccdargv.js';
 import { ROUTE_LANE_ONLY_FIELDS } from '../../shared/api.js';
 
-const LANE_ONLY_VALUE: Record<string, string> = { profile: 'coordinator', automem: 'off', compactwindow: '350000' };
+const LANE_ONLY_VALUE: Record<string, string> = { profile: 'coordinator', automem: 'off', compactwindow: '350000', precompact: 'refuse' };
 const WITH_TOKEN = ['ws-add', 'ensure', 'ws-hold', ROUTE_ARGV_CAP];
 const WITH_TOKEN_AND_POOLS = [...WITH_TOKEN, 'enable', 'start', POOLS_CAP];
 
@@ -69,7 +69,7 @@ describe('POST /api/sessions carries an operator route', () => {
 
   it('a launch-profile field: 400 naming it, and no ccd call reaches the fleet at all (Overlord W1a, F1)', async () => {
     const { app, calls } = await appWithCcdSpy(WITH_TOKEN);
-    expect(ROUTE_LANE_ONLY_FIELDS).toHaveLength(3);
+    expect(ROUTE_LANE_ONLY_FIELDS).toHaveLength(4);   // the launch profile's three and the compaction piece's precompact
     for (const field of ROUTE_LANE_ONLY_FIELDS) {
       const res = await app.inject({
         method: 'POST', url: '/api/sessions',
@@ -178,7 +178,7 @@ describe('POST /api/projects/:project/workspaces carries an operator route', () 
 
   it('a launch-profile field: 400 naming it, and no ccd call reaches the fleet at all (Overlord W1a, F1)', async () => {
     const { app, calls } = await appWithCcdSpy(WITH_TOKEN);
-    expect(ROUTE_LANE_ONLY_FIELDS).toHaveLength(3);
+    expect(ROUTE_LANE_ONLY_FIELDS).toHaveLength(4);   // the launch profile's three and the compaction piece's precompact
     for (const field of ROUTE_LANE_ONLY_FIELDS) {
       const res = await app.inject({
         method: 'POST', url: '/api/projects/demo/workspaces',

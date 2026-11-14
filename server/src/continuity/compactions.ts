@@ -9,8 +9,8 @@
 // line carries the hook's scope verdict, and only `main` lines count: every PreCompact payload names the parent's
 // transcript, so the verdict is all that tells a subagent's compaction apart (plan review 1896 B2).
 //
-// Two exported functions: `readCompactionsMeasured` (L3, reads the three files through `FleetIO` and keeps every
-// distinction it receives) and `compactionsSince` (L1, pure: it imports nothing that does I/O). No renewal decision is
+// Three exported functions: `readCompactionsMeasured` (L3, reads the three files through `FleetIO` and keeps every
+// distinction it receives), and `compactionsSince` and `refusedSince` (L1, pure: they import nothing that does I/O). No renewal decision is
 // made here; the renewal deciders read these answers.
 import path from 'node:path';
 import type { FleetIO } from '../io.js';
@@ -131,4 +131,12 @@ export function compactionsSince(lines: readonly CompactionLine[], sinceMs: numb
   let matched = 0;
   for (let j = 0; j < posts.length; j += 1) if (augment(j, new Array<boolean>(pres.length).fill(false))) matched += 1;
   return pres.length + posts.length - matched;
+}
+
+/** Pure. Did the PreCompact refusal arm refuse a compaction of the MAIN conversation at or after `sinceMs`? A `refused`
+ *  line is written in place of the refused event's `pre` line (`ccd/session-hook.sh#_hook_compact_refuse`), and only a
+ *  main-scope compaction is ever refused (ruling R7a), so a `refused` line of any other scope says nothing. This is
+ *  `renewalDue`'s `compactionRefused` input (spec Table 3.3.11b, "The PreCompact arm refused a proactive compaction"). */
+export function refusedSince(lines: readonly CompactionLine[], sinceMs: number): boolean {
+  return lines.some((l) => l.scope === 'main' && l.phase === 'refused' && l.at >= sinceMs);
 }

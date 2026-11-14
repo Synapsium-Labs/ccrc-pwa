@@ -7,7 +7,7 @@ import path from 'node:path';
 import { localIO, type FleetIO } from '../src/io.js';
 import { mkTmp } from './tmpHelpers.js';
 import {
-  COMPACTION_PAIR_MS, compactionsPaths, compactionsSince, readCompactionsMeasured, type CompactionLine,
+  COMPACTION_PAIR_MS, compactionsPaths, compactionsSince, readCompactionsMeasured, refusedSince, type CompactionLine,
 } from '../src/continuity/compactions.js';
 import { COUNT_CASES, checkMonotonic, smallSequences } from './continuityCompactionsCases.js';
 
@@ -53,6 +53,22 @@ const record = (at: number, trigger = 'auto', transcript: string | null = '/t/a.
 });
 const preLine = (at: number, trigger = 'auto', transcript: string | null = '/t/a.jsonl'): string =>
   JSON.stringify({ at, trigger, scope: 'main', transcript, phase: 'pre' });
+
+describe('refusedSince: renewalDue\'s compactionRefused input (the compaction piece, Task 4)', () => {
+  const T0 = 1_800_000_000_000;
+  const line = (phase: CompactionLine['phase'], at: number, scope: CompactionLine['scope'] = 'main'): CompactionLine =>
+    ({ phase, trigger: 'auto', at, transcript: null, scope });
+  it('sees a main-scope refused line at or after sinceMs', () => {
+    expect(refusedSince([line('refused', T0)], T0)).toBe(true);
+    expect(refusedSince([line('pre', T0), line('refused', T0 + 5)], T0)).toBe(true);
+  });
+  it('a refused line before sinceMs, a pre or a post, and a refused line of any other scope say nothing', () => {
+    expect(refusedSince([line('refused', T0 - 1)], T0)).toBe(false);
+    expect(refusedSince([line('pre', T0), line('post', T0 + 5)], T0)).toBe(false);
+    for (const scope of ['subagent', 'ambiguous', null] as const) expect(refusedSince([line('refused', T0, scope)], T0), String(scope)).toBe(false);
+    expect(refusedSince([], T0)).toBe(false);
+  });
+});
 
 describe('readCompactionsMeasured keeps absent, unreadable and malformed apart', () => {
   it('the three paths are the registry\'s journal, the pre file and its rotation', () => {

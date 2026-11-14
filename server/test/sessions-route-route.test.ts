@@ -36,7 +36,7 @@ const seededHome = (): string => {
   return home;
 };
 
-const LANE_ONLY_VALUE: Record<string, string> = { profile: 'coordinator', automem: 'off', compactwindow: '350000' };
+const LANE_ONLY_VALUE: Record<string, string> = { profile: 'coordinator', automem: 'off', compactwindow: '350000', precompact: 'refuse' };
 const BOTH_CAPS = { connected: true, downSince: null, ccdVerbs: [ROUTE_APPLY_CAP, ACTOR_FLAGS_CAP], rosterFp: null, build: null };
 const APPLY_ONLY = { connected: true, downSince: null, ccdVerbs: [ROUTE_APPLY_CAP], rosterFp: null, build: null };
 const NEITHER_CAP = { connected: true, downSince: null, ccdVerbs: ['start'], rosterFp: null, build: null };
@@ -92,7 +92,7 @@ describe('POST /api/sessions/:id/route (routing spec §5.3, live change from the
   it('400 naming the field for each launch-profile field: the lane writes those, never this door (Overlord W1a, F1)', async () => {
     const home = seededHome();
     const { app, calls } = await open(home, async () => ({ ran: true, code: 0, stdout: '', stderr: '' }), BOTH_CAPS);
-    expect(ROUTE_LANE_ONLY_FIELDS).toHaveLength(3);
+    expect(ROUTE_LANE_ONLY_FIELDS).toHaveLength(4);   // the launch profile's three and the compaction piece's precompact
     for (const field of ROUTE_LANE_ONLY_FIELDS) {
       const res = await post(app, ID, { field, value: LANE_ONLY_VALUE[field] });
       expect(res.statusCode, field).toBe(400);

@@ -10,6 +10,7 @@ import type { MutantSet, SuiteCase } from './mutate.js';
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
 
 export type CompactionModule = typeof import('../../src/continuity/compaction.js');
+export type PrecompactModule = typeof import('../../src/continuity/precompact.js');
 
 /** The history instruction every text ends with (C51), written out so this oracle does not read the table it judges. */
 export const HISTORY_INSTRUCTION = 'End the summary with the history node of this conversation and the line: check what you recall against ccrc history or the server before you act on it.';
@@ -67,7 +68,61 @@ const COMPACT_INSTRUCTIONS_SET: MutantSet<CompactionModule> = {
   suite: compactInstructionsCases,
 };
 
+/** One row of the refusal arm's table: the four inputs and the verdict. `scope` is the hook's scope verdict (null: none);
+ *  `field` the route field's word (null: absent); `refused` whether a refusal is on record for this turn. */
+export interface PrecompactRow { readonly trigger: string | null; readonly scope: string | null; readonly field: string | null; readonly refused: boolean; readonly verdict: 'refuse' | 'pass' }
+const row = (trigger: string | null, scope: string | null, field: string | null, refused: boolean, verdict: 'refuse' | 'pass'): PrecompactRow =>
+  ({ trigger, scope, field, refused, verdict });
+/** The parity table (Task 4, Step 1): every row runs through `precompactDecision` here and through the hook's bash arm in
+ *  `session-hook-precompact-refuse.test.ts`, which builds each input as a fixture. Written out, not computed, so the
+ *  oracle is not the code it judges. One `refuse` row; every other row changes one input from it, or two. */
+export const PRECOMPACT_PARITY: readonly PrecompactRow[] = [
+  row('auto', 'main', 'refuse', false, 'refuse'),
+  row('auto', 'main', 'refuse', true, 'pass'),         // once a turn (R11)
+  row('auto', 'main', null, false, 'pass'),            // dark: the field absent
+  row('auto', 'main', 'allow', false, 'pass'),
+  row('auto', 'main', 'bogus', false, 'pass'),         // a word the field does not take
+  row('manual', 'main', 'refuse', false, 'pass'),      // a manual /compact always passes
+  row('other', 'main', 'refuse', false, 'pass'),       // a trigger that is neither word
+  row(null, 'main', 'refuse', false, 'pass'),          // no trigger at all
+  row('auto', 'subagent', 'refuse', false, 'pass'),    // R7a
+  row('auto', 'ambiguous', 'refuse', false, 'pass'),   // R7a
+  row('auto', null, 'refuse', false, 'pass'),          // the scope rule could not decide
+  row('auto', 'subagent', 'refuse', true, 'pass'),
+  row('manual', 'main', null, false, 'pass'),
+  row('auto', 'ambiguous', null, true, 'pass'),
+];
+
+export function precompactDecisionCases(m: PrecompactModule): Record<string, SuiteCase> {
+  return {
+    'the parity table: one refusing row, and every change of one input from it passes': () => {
+      for (const r of PRECOMPACT_PARITY) expect(m.precompactDecision(r.trigger, r.scope, r.field, r.refused), JSON.stringify(r)).toBe(r.verdict);
+    },
+    'only auto, main, refuse and not yet refused this turn refuses, over the whole product of the inputs': () => {
+      for (const trigger of ['auto', 'manual', 'other', 'idle', '', null]) for (const scope of ['main', 'subagent', 'ambiguous', '', null])
+        for (const field of ['refuse', 'allow', 'Refuse', '', null]) for (const refused of [false, true]) {
+          const want = trigger === 'auto' && scope === 'main' && field === 'refuse' && !refused ? 'refuse' : 'pass';
+          expect(m.precompactDecision(trigger, scope, field, refused), JSON.stringify([trigger, scope, field, refused])).toBe(want);
+        }
+    },
+  };
+}
+
+const PRECOMPACT_SET: MutantSet<PrecompactModule> = {
+  modulePath: path.join(ROOT, 'server/src/continuity/precompact.ts'),
+  mutants: [
+    // R11's named mutants: manual is refused; refusedThisTurn is ignored; an absent field refuses; a subagent or
+    // ambiguous scope refuses.
+    { id: 'P1', old: "trigger === 'auto'", new: 'trigger !== null' },
+    { id: 'P2', old: " && !refusedThisTurn ? 'refuse'", new: " ? 'refuse'" },
+    { id: 'P3', old: "field === 'refuse'", new: "field !== 'allow'" },
+    { id: 'P4', old: "scope === 'main'", new: 'scope !== null' },
+  ],
+  suite: precompactDecisionCases,
+};
+
 /** This piece's sets, keyed as `mutation-floors.json` keys them (`<file>#<decider>`). */
 export const COMPACTION_MUTANT_SETS: Record<string, MutantSet<never>> = {
   'server/src/continuity/compaction.ts#compactInstructionsFor': COMPACT_INSTRUCTIONS_SET as MutantSet<never>,
+  'server/src/continuity/precompact.ts#precompactDecision': PRECOMPACT_SET as MutantSet<never>,
 };

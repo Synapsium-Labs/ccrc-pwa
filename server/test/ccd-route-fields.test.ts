@@ -154,7 +154,24 @@ describe('the routing record (routing spec 2026-09-14 §5.1)', () => {
     expect(swapLog()).toBe('');
   });
 
-  it('ROUTE_FIELDS is the eleven-field record, in the spec\'s order (`browser` after `compact`, D-8121; the launch profile\'s three last, Overlord W1a)', () => {
-    expect(h.sh('printf "%s " "${ROUTE_FIELDS[@]}"').trim()).toBe('class effort subagent workflow compact browser degraded inert profile automem compactwindow');
+  it('ROUTE_FIELDS is the twelve-field record, in the spec\'s order (`browser` after `compact`, D-8121; the launch profile\'s three, Overlord W1a; `precompact` last, the compaction piece)', () => {
+    expect(h.sh('printf "%s " "${ROUTE_FIELDS[@]}"').trim()).toBe('class effort subagent workflow compact browser degraded inert profile automem compactwindow precompact');
+  });
+
+  // Overlord W1a compaction, Task 4: the PreCompact refusal arm's switch. `refuse` or `allow`; the hook reads it, ccd's
+  // routing reads nothing of it (plan slug route-fields-outside-route-any, as `browser`).
+  it('precompact: refuse and allow are its vocabulary, anything else is not', () => {
+    for (const ok of ['refuse', 'allow']) expect(h.sh(`_route_valid precompact ${ok}; echo "rc=$?"`), ok).toBe('rc=0');
+    for (const bad of ['Refuse', 'refusex', 'on', 'block', "''"]) expect(h.sh(`_route_valid precompact ${bad}; echo "rc=$?"`), bad).toBe('rc=1');
+    seed();
+    h.sh(`_reg_set ${ID} precompact refuse`);
+    expect(get('precompact')).toBe('refuse|rc=0');
+  });
+  it('a row naming only precompact has no routing record: _route_any says no, and the coordinator row is still seeded', () => {
+    seed();
+    h.sh(`_reg_set ${ID} precompact refuse`);
+    expect(h.sh(`_route_any ${ID} && echo yes || echo no`)).toBe('no');
+    h.sh(`_route_seed_default ${ID} claude`);
+    expect(h.reg(ID, 'class')).toBe('opus');
   });
 });

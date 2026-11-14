@@ -1557,6 +1557,7 @@ _hook_lock_still_canonical() {   # <fd> -> 0 iff this descriptor is STILL the ca
 # stage 1. Every failure is silent and total for what comes after it.
 _hook_compact_pre() {
   [ -e "$COMPACT_CARD_OFF" ] && return 0
+  [[ -z "${CS_REFUSED-}" ]] || return 0   # a refused event is no compaction: no set, no card (refusal-ahead-of-the-card)
   local tp="" trig="" set="$REG/$id.compactset" cardf="$REG/$id.compactcard" doc="" at="" nonce="" rc=0 helper_rc=0 lockfd=""
   local aged="" cand="" suffix="" setstage="" cardstage="" ownhead="" ovl="false"
   local mins=$(( COMPACT_CARD_MAX_AGE / 60 ))
@@ -4157,19 +4158,58 @@ if [[ -n "$gcmd" && "$gcmd" =~ $CCRC_CLAIMS_RE ]]; then cc=$((cc + 1)); fi
 # would refuse every later commit, an older hook's after a rollback included.
 # AN ARM OF ITS OWN, run after `_hook_compact_pre` and `_hook_history_pre`, so
 # none of the card's early returns (its off switch, a scope that does not
-# resolve, its lock miss) can drop the line. It runs LAST so that the
-# compaction piece's coming refusal arm (_hook_compact_refuse in its plan, not
-# yet in this file), which sets `CS_REFUSED`, is decided before it and makes it
-# write `"phase":"refused"`. Nothing refuses a PreCompact today. One writer (this function),
+# resolve, its lock miss) can drop the line. It runs LAST so that the refusal
+# arm, `_hook_compact_refuse` (below), which sets `CS_REFUSED`, is decided
+# before it and makes it write `"phase":"refused"` in place of `"pre"`. One writer (this function),
 # under the row's `.compactions.lock`, so a line and a commit never interleave.
 # Dot-free, so `_reg_purge` and the slug passes take it with the row. BOUNDED
 # BY ROTATION, with no temp file: at PRECOMPACT_KEEP lines it is renamed to
 # `.compacteventsprev` and a fresh file starts, so a reader of both always holds
 # the last PRECOMPACT_KEEP lines. Its own lock miss still drops the line; the
-# server then reads one compaction fewer, never a file it cannot tell apart.
+# server then reads one compaction fewer, never a file it cannot tell apart. A
+# rotation that is due and fails appends nothing, so the file never outgrows
+# its bound (review 1937 F2). A symlink at `.compacteventsprev`, dangling or
+# not, is removed under the lock (`rm -f` takes the link, never its target),
+# so a planted link cannot silence every later line (review 1937 F1).
 PRECOMPACT_KEEP=32
+# THE PRECOMPACT REFUSAL ARM, DARK (Overlord W1a compaction, spec §3.3.4 C39; W0-13; rulings R7a, R7b, R11). A verdict
+# of its own, dispatched FIRST of the PreCompact arms: ahead of `_hook_history_pre`, so no history switch turns it off,
+# and ahead of the card, `_hook_compact_pre`, which returns at once on CS_REFUSED, because a refused event is no
+# compaction and an unconsumed card set would read the next real one as an overlap for twenty minutes (the
+# coordinator's ruling, departure refusal-ahead-of-the-card). It refuses, once a turn, a main-thread PreCompact whose
+# trigger is `auto`, whose scope RULE answers `main` (asked here, since the card has not run; `subagent`, `ambiguous`
+# and no verdict never, R7a), and whose route field `precompact` reads `refuse` (absent is dark; the generations lane
+# is its one writer). Once a turn (R11): no
+# `refused` line in either events file at or after this turn's start, the turn marker's existing `turnAt` (rewritten
+# by every UserPromptSubmit, and by a main tool event only when the marker is not already `working`). A marker that
+# cannot be read, is another session's or holds no `turnAt` answers "refused already": the compaction goes through.
+# Refusing, it prints PreCompact's JSON block decision (W0-13 measured the exit-code-2 form, which this file's exit-0
+# contract cannot use; the hooks page gives the JSON form as its equal) and, only when that print succeeded, sets
+# CS_REFUSED: `_hook_history_pre` then prints nothing, so the event keeps one stdout payload, and
+# `_hook_compact_pre_line` writes `"phase":"refused"`. Twin: `server/src/continuity/precompact.ts#precompactDecision`.
+_hook_compact_refuse() {   # PreCompact -> the block decision on stdout and CS_REFUSED=1, or nothing; 0 on every path
+  local v="" ta="" l="" f="" tp="" trig=""
+  [[ -z "$paid" && -f "$REG/$id.precompact" && ! -L "$REG/$id.precompact" ]] || return 0
+  { read -r -n 7 v < "$REG/$id.precompact"; } 2>/dev/null
+  { { read -r tp; read -r trig; } < <(jq -r '(.transcript_path // "" | tostring), (.trigger // "" | tostring)' <<<"$payload" 2>/dev/null); } 2>/dev/null
+  [[ "$v" == refuse && "$trig" == auto ]] && _hook_compact_scope "$tp" "$trig" || return 0
+  [[ "${CS_SCOPE-}" == main && -f "$REG/$id.turn.json" && ! -L "$REG/$id.turn.json" ]] || return 0
+  { IFS= read -r l < "$REG/$id.turn.json"; } 2>/dev/null
+  [[ "$l" == *"\"sessionId\":\"$msid\""* && "$l" =~ \"turnAt\":([0-9]{1,15})[,}] ]] && ta="${BASH_REMATCH[1]}" || return 0
+  for f in "$REG/$id.compactevents" "$REG/$id.compacteventsprev"; do
+    [[ -f "$f" && ! -L "$f" ]] || continue
+    while IFS= read -r l; do
+      [[ "$l" == *'"phase":"refused"'* && "$l" =~ ^\{\"at\":([0-9]{1,15}), ]] && (( BASH_REMATCH[1] >= ta )) && return 0
+    done 2>/dev/null < "$f"
+  done
+  trap '' PIPE
+  { printf '%s\n' '{"decision":"block","reason":"ccrc: this automatic compaction is refused once this turn, and a renewal is due (Overlord C39)"}'; } 2>/dev/null && CS_REFUSED=1
+  trap - PIPE
+  return 0
+}
 _hook_compact_pre_line() {   # PreCompact -> one line on $REG/<id>.compactevents; silent and total on any failure
-  local f="$REG/$id.compactevents" prev="$REG/$id.compacteventsprev" line="" lockfd="" lines=()
+  local f="$REG/$id.compactevents" prev="$REG/$id.compacteventsprev" line="" lockfd="" lines=() ph=pre rot=0
+  [[ -n "${CS_REFUSED-}" ]] && ph=refused
   # THE SCOPE VERDICT ON EVERY LINE: every PreCompact payload names the parent's
   # transcript, so `_hook_compact_scope`'s word is all that tells a subagent's
   # compaction apart. Asked here when the card did not run (its off switch).
@@ -4179,23 +4219,29 @@ _hook_compact_pre_line() {   # PreCompact -> one line on $REG/<id>.compactevents
   # (W0-05) leaves one for twenty minutes, and a main compaction inside them
   # must still count (review 1927 I1).
   [[ -n "${CS_SCOPE+x}" ]] || _hook_history_scope_verdict || true
-  line=$(jq -c --argjson at "$(_hook_epoch_ms)" --arg s "${CS_RULE_SCOPE-${CS_SCOPE-}}" --arg t "${CS_RULE_TRANSCRIPT-${CS_TRANSCRIPT-}}" \
+  line=$(jq -c --argjson at "$(_hook_epoch_ms)" --arg s "${CS_RULE_SCOPE-${CS_SCOPE-}}" --arg t "${CS_RULE_TRANSCRIPT-${CS_TRANSCRIPT-}}" --arg ph "$ph" \
     '{at:$at, trigger:(.trigger // "auto" | if . == "auto" or . == "manual" then . else "other" end),
-      scope:(if $s=="" then null else $s end), transcript:(if $t=="" then null else $t end), phase:"pre"}' \
+      scope:(if $s=="" then null else $s end), transcript:(if $t=="" then null else $t end), phase:$ph}' \
     <<<"$payload" 2>/dev/null) || return 0
   _hook_lock_acquire "$COMPACT_LOCK_WAIT" || return 0
   lockfd="$HOOK_LOCK_FD"
   # A FIFO, a symlink or a directory at either pathname is not this file and is
-  # never opened: an open of a FIFO would block inside the held lock. A bad
+  # never opened: an open of a FIFO would block inside the held lock. A symlink
+  # at `.compacteventsprev` is removed first (F1); any other bad
   # `.compacteventsprev` writes no line and moves nothing, so the rotation can
   # never fail over and over while the current file grows (review 1927 M5).
-  if _hook_generation_ok && [[ ! -L "$f" && ! -L "$prev" ]] && { [[ ! -e "$f" ]] || [[ -f "$f" ]]; } \
+  _hook_generation_ok || { _hook_lock_release "$lockfd"; return 0; }
+  if [[ -L "$prev" ]] && _hook_lock_still_canonical "$lockfd"; then
+    rm -f "$prev" 2>/dev/null
+  fi
+  if [[ ! -L "$f" && ! -L "$prev" ]] && { [[ ! -e "$f" ]] || [[ -f "$f" ]]; } \
     && { [[ ! -e "$prev" ]] || [[ -f "$prev" ]]; }; then
     [[ -f "$f" ]] && { mapfile -t lines < "$f"; } 2>/dev/null
-    if (( ${#lines[@]} >= PRECOMPACT_KEEP )) && _hook_lock_still_canonical "$lockfd"; then
-      mv -f "$f" "$prev" 2>/dev/null
+    rot=$(( ${#lines[@]} >= PRECOMPACT_KEEP ))
+    if (( rot )) && _hook_lock_still_canonical "$lockfd"; then
+      mv -f "$f" "$prev" 2>/dev/null && rot=0
     fi
-    if _hook_lock_still_canonical "$lockfd"; then
+    if (( rot == 0 )) && _hook_lock_still_canonical "$lockfd"; then
       { printf '%s\n' "$line" >> "$f"; } 2>/dev/null
     fi
   fi
@@ -6290,8 +6336,11 @@ HISTORY_CARD_RESERVE=0
 # `CS_SCOPE` is the compaction card's scope verdict, a plain global with no
 # initialiser. It is unset here, every run, so the history scope marker below
 # reads only a verdict THIS run reached, never one exported into the pane
-# (the `hcat` reset's reasoning).
-unset CS_SCOPE
+# (the `hcat` reset's reasoning). So are the rule's own answer
+# (`CS_RULE_SCOPE`, `CS_RULE_TRANSCRIPT`, which the events line and the refusal
+# arm read; review 1937 F3) and the refusal arm's `CS_REFUSED`.
+unset CS_SCOPE CS_RULE_SCOPE CS_RULE_TRANSCRIPT CS_REFUSED
+if [[ "$event" == PreCompact ]]; then _hook_compact_refuse || true; fi
 if [[ "$event" == PreCompact  ]]; then _hook_compact_pre  || true; fi
 # >>> history-scope (spec 2026-10-05 §5.1)
 # THE PRECOMPACT SCOPE MARKER (ccrc history spec 2026-10-05 §5.1, W1-B3):
@@ -6465,7 +6514,7 @@ _hook_role_compact_text() {   # -> HR_TEXT
 }
 _hook_history_pre() {   # PreCompact: the steer print, then its receipt; silent on every refusal; 0 on every path
   local uuid_re='^[0123456789abcdef]{8}-[0123456789abcdef]{4}-[0123456789abcdef]{4}-[0123456789abcdef]{4}-[0123456789abcdef]{12}$' rc=0 json="" g="" c="" cs="" cf="" ts="" nl=$'\n'
-  [[ "$event" == PreCompact && -z "$paid" ]] || return 0
+  [[ "$event" == PreCompact && -z "$paid" && -z "${CS_REFUSED-}" ]] || return 0   # a refused event prints only its block
   [[ -e "$HOME/.ccrc/history-off" || -e "$HOME/.ccrc/history-steer-off" ]] && return 0
   _hook_history_steer_recall_off && return 0
   (( ${#id} <= 224 )) || return 0
@@ -6496,10 +6545,9 @@ _hook_history_pre() {   # PreCompact: the steer print, then its receipt; silent 
   return 0
 }
 if [[ "$event" == PreCompact ]]; then _hook_history_pre || true; fi
-# LAST of the PreCompact arms (Overlord W1a, plan review 1890 I1): the
-# compaction piece's coming refusal arm (_hook_compact_refuse in its plan) sets
-# `CS_REFUSED` before it, so this line will then say `"phase":"refused"`.
-# Nothing refuses one today.
+# LAST of the PreCompact arms (Overlord W1a, plan review 1890 I1): the refusal
+# arm, `_hook_compact_refuse`, sets `CS_REFUSED` before it, so this line then
+# says `"phase":"refused"` in place of `"pre"`.
 if [[ "$event" == PreCompact ]]; then _hook_compact_pre_line || true; fi
 if [[ "$event" == PostCompact ]]; then _hook_compact_post || true; fi
 exit 0

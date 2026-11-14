@@ -17,7 +17,7 @@ import { unreadableField } from './ioDoubles.js';
 import { ACTOR_FLAGS_CAP, ROUTE_CAP } from '../src/ccdargv.js';
 import { legacyOpens } from './helpers/plan.js';
 import { ROUTE_LANE_ONLY_FIELDS } from '../../shared/api.js';
-const LANE_ONLY_VALUE: Record<string, string> = { profile: 'coordinator', automem: 'off', compactwindow: '350000' };
+const LANE_ONLY_VALUE: Record<string, string> = { profile: 'coordinator', automem: 'off', compactwindow: '350000', precompact: 'refuse' };
 
 const PROJECT = 'demo';
 const CLAIMED_BY = 'ccrc-pwa-coordinator';
@@ -837,7 +837,7 @@ describe('POST /api/runs/:id/route', () => {
     const w = await openApp(home, run, { fleetState: ROUTE_READY_FLEET }); app = w.app;
     const { id } = await dispatchedRun(w.app, 'demo-w13');
 
-    expect(ROUTE_LANE_ONLY_FIELDS).toHaveLength(3);
+    expect(ROUTE_LANE_ONLY_FIELDS).toHaveLength(4);   // the launch profile's three and the compaction piece's precompact
     for (const target of ['worker', 'coordinator']) {
       for (const field of ROUTE_LANE_ONLY_FIELDS) {
         const res = await postRoute(w.app, id, { target, why: 'operator judgement', field, value: LANE_ONLY_VALUE[field] });

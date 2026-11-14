@@ -6483,9 +6483,14 @@ export function parseWaveDoneSignals(body: string): WaveDoneSignals {
  * ccd renders them at every spawn (`_profile_spawn_compose`) from
  * `ccd/lib/launch-profiles.json`; like `browser`, none is applied live. They are
  * `ROUTE_LANE_ONLY_FIELDS`: no door's body may name them.
+ *
+ * `precompact` (Overlord W1a compaction, spec §3.3.4 C39) is `refuse`/`allow`: whether the session hook's PreCompact
+ * refusal arm (`_hook_compact_refuse`) refuses a proactive automatic compaction, once a turn. Absent is dark. Its one
+ * writer is the generations lane (the renewal hand-offs piece), so it is lane-only too.
  */
-export const ROUTE_WRITABLE_FIELDS = ['class', 'effort', 'subagent', 'workflow', 'compact', 'browser', 'profile', 'automem', 'compactwindow'] as const;
-/** The route fields only the launch-profile lane writes (Overlord W1a; "one writer per route field: the lane"):
+export const ROUTE_WRITABLE_FIELDS = ['class', 'effort', 'subagent', 'workflow', 'compact', 'browser', 'profile', 'automem', 'compactwindow', 'precompact'] as const;
+/** The route fields only a server lane writes (Overlord W1a; "one writer per route field: the lane"): the launch-profile
+ *  lane's three and the generations lane's `precompact`.
  *  `parseRouteFields`, the one door parse, refuses each as `lane-only` with a 400 naming it, at the operator's route
  *  door, the spawn and dispatch `route` bodies, and the coordinator's `POST /api/runs/:id/route`. The lane composes
  *  `CCD_ARGV.routeSet` itself and never passes a door. Derived: `ROUTE_WRITABLE_FIELDS` from `profile` on. */

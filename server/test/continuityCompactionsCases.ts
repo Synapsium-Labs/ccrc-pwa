@@ -44,6 +44,9 @@ export const COUNT_CASES: ReadonlyArray<readonly [string, readonly CompactionLin
   ['a refused line alone counts none', L([['refused', 'auto', 0]]), T, 0],
   ['a pre and a refused line count one: a refusal never cancels a pre', L([['pre', 'auto', 0], ['refused', 'auto', 0]]), T, 1],
   ['a refused line is never a post\'s pre', L([['refused', 'auto', 0], ['post', 'auto', MIN]]), T, 1],
+  // The compaction piece (Task 4): a pre then a refused line within ten minutes counts one; refused, pre, post counts one.
+  ['a pre, then a refused line within ten minutes, count one', L([['pre', 'auto', 0], ['refused', 'auto', 5 * MIN]]), T, 1],
+  ['a refused line, then a pre and its post, count one', L([['refused', 'auto', 0], ['pre', 'auto', MIN], ['post', 'auto', 2 * MIN]]), T, 1],
   // Plan review 1896 B2: only the main conversation's compactions count.
   ['a subagent\'s compaction counts none', L([['pre', 'auto', 0, '/t/agent.jsonl', 'subagent'],
     ['post', 'auto', MIN, '/t/agent.jsonl', 'subagent']]), T, 0],
