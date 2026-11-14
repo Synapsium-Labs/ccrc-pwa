@@ -38,7 +38,7 @@ function allUnmeasured(over: Partial<CardFacts> = {}): CardFacts {
 }
 
 const item = (id: number, text: string, over: Partial<CardItem> = {}): CardItem => ({
-  id, programme: 'prog-a', kind: 'decide', state: 'open', neededBy: 'soon', at: AT - 30 * MIN, text, ...over,
+  id, programme: 'prog-a', kind: 'decide', state: 'open', neededBy: 'soon', at: AT - 30 * MIN, text, everTicked: false, ...over,
 });
 
 const textOf = (s: readonly CardSection[]): string => s.map((x) => x.text).join('\n');
