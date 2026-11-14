@@ -5404,6 +5404,7 @@ export class CoordStore {
   markTimersFired(ids: readonly number[], mailId: number, at: number): { changed: boolean } { return timers.markTimersFired(this.db, ids, mailId, at); }
   pendingTimersOf(setter: string): timers.TimersRead { return timers.pendingTimersOf(this.db, setter); }
   pendingTimers(): timers.TimersRead { return timers.pendingTimers(this.db); }
+  timerById(id: number): timers.TimerByIdRead { return timers.timerById(this.db, id); }
   timerHoldFacts(setter: string, firedSince: number): timers.TimerHoldRead { return timers.timerHoldFacts(this.db, setter, firedSince); }
   setsSince(setter: string, since: number): number { return timers.setsSince(this.db, setter, since); }
   purgeTimers(before: number): { removed: number } { return timers.purgeTimers(this.db, before); }

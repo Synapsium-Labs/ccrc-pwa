@@ -261,6 +261,7 @@ describe('GET /api/sessions/:id/card: masking, the memo and the serve order (rev
       coord, mailToken: () => ID_GATE_TOKEN, attribute: async () => ({ ok: true }), wall: () => time.ports.clock.wall(),
       attributeReader: async () => ({ ok: true }),
       cardRegistry: { childMark: async () => ({ kind: 'none' }), incarnation: async () => ({ kind: 'absent' }), declaredIntent: () => false },
+      setterStamp: async () => ({ kind: 'unmeasured', reason: 'absent' }),
       ...over,
     });
     await a.ready();

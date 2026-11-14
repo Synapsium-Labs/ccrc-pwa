@@ -87,6 +87,7 @@ import { registerContinuityRoutes } from './continuity/routes.js';
 import { CARD_REGISTRY_UNREAD } from './continuity/card.js';
 import { intentOfCheckpoint } from './continuity/declaredIntent.js';
 import { childReclaimGenerationRead } from './coord/childReclaim.js';
+import { incarnationOf } from './coord/delegationLeaseDoor.js';
 import { registerPlanRoutes } from './coord/planRoutes.js';
 import { registerHierarchyRoutes } from './coord/hierarchyRoutes.js';
 import { registerFaceRoutes } from './face/routes.js';
@@ -255,6 +256,8 @@ export const MASKED_GET_ROUTES: ReadonlySet<string> = new Set([
   '/api/hierarchy',
   // A session's live notes (Overlord W1a, the notes piece): what each thread waits on and what comes next, written by it.
   '/api/sessions/:id/notes',
+  // A session's pending timers, its own read and the operator's (Overlord W1a, the timers piece): each note a session wrote.
+  '/api/timers', '/api/sessions/:id/timers',
 ]);
 /** Whether the one answer hook masks a route's answer (D-5995). */
 export const answerMasked = (method: string, url: string | undefined): boolean =>
@@ -2204,6 +2207,8 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       incarnation: (id) => childReclaimGenerationRead(deps.io, deps.cfg.registryDir, id),
       declaredIntent: (id, incarnation) => intentOfCheckpoint(watcher?.delegationCheckpointIfReady() ?? null, id, incarnation),
     },
+    // The timer set door's stamp: two agreeing reads of `.generation` (slug setter-stamp-is-a-double-read).
+    setterStamp: (id) => incarnationOf({ io: deps.io, registryDir: deps.cfg.registryDir }, id),
     masker: deps.masker,
   });
   // The lane routes, Check and the kill switch (accounts plan Task A14, D-7732), registered from their own file, which

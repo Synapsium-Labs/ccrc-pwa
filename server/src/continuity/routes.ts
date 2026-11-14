@@ -2,8 +2,9 @@
 // `continuityStore.ts`'s, the sender check is `coord/attribution.ts`'s `attributionVerdict`, the gate every box-token
 // lane shares. This file is a lane source of its own for `box-token-census.test.ts`, as `linking/routes.ts` is.
 //
-// W1a registers the start report, the card door and the note door (the notes piece: a note, the live notes, the handover
-// note). W1's loaded-file report and witness extend this file (Table 11.1e, "The hook's reports").
+// W1a registers the start report, the card door, the note door (the notes piece: a note, the live notes, the handover
+// note) and the timer doors (the session's three, box-token lanes, and the operator's two, session-gated). W1's loaded-file
+// report and witness extend this file (Table 11.1e, "The hook's reports").
 import { createHash } from 'node:crypto';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { SHAPE_ONLY_MASKER, type SecretMasker } from '../accounts/mask.js';
@@ -16,17 +17,20 @@ import { CARD_BUDGET_TOKENS } from '../../../shared/continuity-card.js';
 import {
   isNoteKeyKind, isNoteKind, noteKeyText, type HandoverNote, type HandoverThread, type KeyFact, type NoteKey,
 } from '../../../shared/continuity.js';
+import { timerNoteFits, type TimerView } from '../../../shared/continuity-timers.js';
+import { timerCapOf } from '../../../shared/fleetRoles.js';
 import { CONTINUITY_LANE, laneArmGate } from '../../../shared/lane-arm.js';
 import { CARD_REFUSALS, NOTE_REFUSALS } from '../../../shared/refusal.js';
 import { laneArmRowViewOf } from '../coord/laneArm.js';
 import { cardPages, renderCard, snapshotFactsJson, trimCard } from './card.js';
-import { gatherCardFacts, type CardFactsDeps } from './cardFacts.js';
-import { effectiveGeneration } from './continuityStore.js';
+import { gatherCardFacts, sessionRoleRead, type CardFactsDeps } from './cardFacts.js';
+import { effectiveGeneration, type TimerRow } from './continuityStore.js';
 import { noteKeyReader } from './noteKeys.js';
 import {
   NOTE_LIST_LIMIT, handoverAsked, handoverVerdict, noteKeyFact, noteListBytes, notesPage, noteVerdict, revisedNoteFact, type NoteInput,
   type NoteVerdictRefusal, type RevisedFact,
 } from './notes.js';
+import { timerBodyVerdict, timerCancelVerdict, timerSetVerdict, type SetFacts } from './timers.js';
 
 export interface ContinuityRouteDeps {
   /** The coordination store, or undefined on a server without one (a test, a script): the report answers `unavailable`. */
@@ -39,8 +43,13 @@ export interface ContinuityRouteDeps {
   wall: () => number;
   /** The card door's sender check: `attributionVerdict` over the registry, on the query's `byUuid`. */
   attributeReader: (id: string, uuid: string) => Promise<AttributionRead>;
-  /** The card's registry reads (`gatherCardFacts`' ports other than the store). */
+  /** The card's registry reads (`gatherCardFacts`' ports other than the store); the timer set door's role read reuses them. */
   cardRegistry: Omit<CardFactsDeps, 'coord'>;
+  /** The setter's stamp: `incarnationOf`'s two agreeing reads of `$REG/<id>.generation`. NOT `cardRegistry.incarnation`, its
+   *  single read (slug setter-stamp-is-a-double-read): the stamp keys a timer whose mismatch later cancels it, irreversibly,
+   *  so a file that changes between the reads answers `unmeasured` and the set refuses `timer-unmeasured`, where the card's
+   *  read only keys a declared-intent lookup that degrades to an unmeasured line. Legitimately different by safety direction. */
+  setterStamp: (id: string) => Promise<{ kind: 'measured'; incarnation: string } | { kind: 'unmeasured'; reason: string }>;
   /** The egress masker (`deps.masker`): the card is masked once, whole, before it is hashed and paged. Absent, the shapes. */
   masker?: SecretMasker;
   /** How many conversations' partly served cards the door remembers (`CARD_MEMO_MAX` when absent; a test sets a small one). */
@@ -49,7 +58,8 @@ export interface ContinuityRouteDeps {
   continuityGate?: (lane: typeof CONTINUITY_LANE) => string | null;
 }
 
-/** The identity pair's grammar, the linking read's and the Linear proxy's. */
+/** The identity pair's grammar, the linking read's and the Linear proxy's: `SESSION_ID_RE`'s, so an id the timer doors
+ *  store always fits a timer mail (review 2038 F4). */
 const IDENTITY_RE = /^[A-Za-z0-9_-]{1,128}$/;
 /** The hook's own id for one report: a resend carries the same one, so it is recorded once. */
 const REPORT_ID_RE = /^[A-Za-z0-9_-]{8,64}$/;
@@ -99,6 +109,45 @@ const QUERY_NAT_RE = /^[1-9][0-9]{0,15}$/;
  *  refuses it `note-too-long` (`HANDOVER_MAX_BYTES`) rather than the parser answering 413 (review 2039, F3). The box
  *  token is checked before the body is read. */
 const HANDOVER_BODY_LIMIT_BYTES = 4 * 1024 * 1024;
+/** A timer's id in a path: a positive decimal integer with no leading zero. */
+const TIMER_ID_RE = /^[1-9][0-9]{0,15}$/;
+/** The hourly rate's window (`TIMER_SETS_PER_HOUR`). */
+const RATE_WINDOW_MS = 3_600_000;
+const timerIdOf = (raw: unknown): number | null =>
+  typeof raw === 'string' && TIMER_ID_RE.test(raw) && Number.isSafeInteger(Number(raw)) ? Number(raw) : null;
+/** One pending timer as the doors answer it; the one answer hook masks it on the way out (`MASKED_GET_ROUTES`). */
+const timerView = (t: TimerRow): TimerView =>
+  ({ id: t.id, setAt: t.setAt, dueAt: t.dueAt, note: t.note, runId: t.runId, programme: t.programme, untrusted: true });
+
+/** The cancel's one write, by `actor` with `reason`, in the timer doors' failure contract (review 2052 F1): a row the lane
+ *  moved between the read and the write is `timer-not-pending`, and a statement that throws is `write-failed` (503), never
+ *  a 500 out of the handler. */
+function cancelOf(coord: CoordStore, id: number, actor: 'setter-cancel' | 'operator-cancel', reason: 'setter' | 'operator', at: number):
+  'ok' | 'timer-not-pending' | 'write-failed' {
+  try {
+    return coord.cancelTimer(id, actor, reason, at).changed ? 'ok' : 'timer-not-pending';
+  } catch {
+    return 'write-failed';
+  }
+}
+
+/** The set door's bound key, measured once (slug bound-key-must-be-live): a run is the caller's own when it is among its
+ *  open bindings, claimed or worked (`bindingsOf`), and a programme when it coordinates it and the plan has not ended. A
+ *  binding read that fails or throws is `unmeasured`, never `not-own`: a box fault never reads as "not yours". */
+function bindingOf(coord: CoordStore, id: string, bound: { runId: number | null; programme: string | null }): SetFacts['binding'] {
+  try {
+    if (bound.runId !== null) {
+      const b = coord.bindingsOf(id);
+      const claimed = b.claimant(); const worked = b.worker();
+      if (!claimed.ok || !worked.ok) return 'unmeasured';
+      return [...claimed.siblings, ...worked.siblings].some((r) => r.id === bound.runId) ? 'own' : 'not-own';
+    }
+    if (bound.programme !== null) return coord.claimsProgramme(id, bound.programme) && coord.programmeLive(bound.programme) ? 'own' : 'not-own';
+    return 'none';
+  } catch {
+    return 'unmeasured';
+  }
+}
 
 export function registerContinuityRoutes(app: FastifyInstance, deps: ContinuityRouteDeps): void {
   /**
@@ -406,5 +455,170 @@ export function registerContinuityRoutes(app: FastifyInstance, deps: ContinuityR
     const r = coord.putHandover({ generationId: gen.row.id, note: verdict.cleaned, dropped: verdict.dropped, at: deps.wall() });
     if (!r.ok) return refuseRoute(reply, 'write-failed', { detail: 'continuity_handovers could not be written' });
     return reply.code(202).send({ ok: true, generationId: gen.row.id, dropped: r.dropped, fresh: r.fresh });
+  });
+
+  /**
+   * `POST /api/timers`: a session sets itself a timer (spec §3.3.12 C61, C64; Table 11.1e). A box-token lane, an
+   * `auth/gate.ts` EXEMPT entry, the caller's own identity only: it takes no target. The token first; then the body's
+   * shape (`bad-request`) and the note and duration (`timerBodyVerdict`, the egress masker deciding `timer-masked`), before
+   * any read; then the registry's attribution of `fromUuid`; then the facts, each read once: the setter's stamp (the double
+   * read), the bound run or programme (`bindingOf`), the role (`sessionRoleRead`, the card's) and its cap, and, in ONE
+   * synchronous segment with the verdict and the write, the pending count and the hourly rate, so two concurrent sets
+   * cannot both pass the cap or the rate. `201 { ok, id, dueAt }`, `dueAt` the server's clock plus the duration.
+   */
+  app.post('/api/timers', {
+    onRequest: async (req: FastifyRequest, reply: FastifyReply) => {
+      const verdict = checkMailToken(deps.mailToken(), req.headers[MAIL_TOKEN_HEADER], 'POST /api/timers');
+      if (verdict !== 'ok') return refuseRoute(reply, 'unauthenticated', { detail: TOKEN_DETAIL[verdict] });
+      return undefined;
+    },
+  }, async (req, reply) => {
+    const b = (typeof req.body === 'object' && req.body !== null ? req.body : {}) as Record<string, unknown>;
+    const { fromId, fromUuid } = b;
+    if (typeof fromId !== 'string' || !IDENTITY_RE.test(fromId) || typeof fromUuid !== 'string' || !IDENTITY_RE.test(fromUuid)) {
+      return refuseRoute(reply, 'bad-request', { detail: 'fromId and fromUuid' });
+    }
+    const runId = b['runId'] ?? null;
+    if (runId !== null && !(typeof runId === 'number' && Number.isSafeInteger(runId) && runId > 0)) return refuseRoute(reply, 'bad-request', { detail: 'runId is a run id' });
+    const programme = b['programme'] ?? null;
+    if (programme !== null) {
+      const shaped = typeof programme === 'string' ? shapeProgramSlug(programme) : null;
+      if (shaped === null || !shaped.ok || shaped.slug !== programme) return refuseRoute(reply, 'bad-request', { detail: 'programme is a programme slug' });
+    }
+    if (runId !== null && programme !== null) return refuseRoute(reply, 'bad-request', { detail: 'a timer binds a run or a programme, not both' });
+    // The masker reads a note only within its bound (`timerNoteFits`): one that is not is refused too long by the verdict.
+    const note = b['note'];
+    const body = timerBodyVerdict({
+      durationMs: b['durationMs'], note, masked: timerNoteFits(note) && (deps.masker ?? SHAPE_ONLY_MASKER).maskText(note) !== note,
+    });
+    if (!body.ok) return refuseRoute(reply, body.refusal);
+    const attributed = await deps.attribute(fromId, fromUuid);
+    if (!attributed.ok) return refuseRoute(reply, attributed.error, { detail: attributed.detail });
+
+    const coord = deps.coord;
+    if (coord === undefined) return refuseRoute(reply, 'unavailable');
+    let stamp: Awaited<ReturnType<ContinuityRouteDeps['setterStamp']>>;
+    try { stamp = await deps.setterStamp(fromId); } catch { stamp = { kind: 'unmeasured', reason: 'unreadable' }; }
+    const { role } = await sessionRoleRead({ coord, ...deps.cardRegistry }, fromId);
+    // From here to the write, nothing awaits: the binding, the pending count and the rate are read with the verdict and the
+    // write, so a run that closes while the role is read is refused, never stored bound (review 2052 F3).
+    const binding = bindingOf(coord, fromId, { runId: runId as number | null, programme: programme as string | null });
+    const now = deps.wall();
+    const pending = coord.pendingTimersOf(fromId);
+    let setsLastHour: number;
+    try { setsLastHour = coord.setsSince(fromId, now - RATE_WINDOW_MS); } catch { return refuseRoute(reply, 'timer-unmeasured', { detail: 'the sets of the last hour could not be read' }); }
+    if (!pending.ok) return refuseRoute(reply, 'timer-unmeasured', { detail: pending.detail });
+    const verdict = timerSetVerdict({
+      incarnation: stamp.kind === 'measured' ? { kind: 'measured', v: stamp.incarnation } : { kind: 'unmeasured' },
+      binding, pending: pending.rows.length, cap: timerCapOf(role), setsLastHour,
+    });
+    if (!verdict.ok) return refuseRoute(reply, verdict.refusal);
+    if (stamp.kind !== 'measured') return refuseRoute(reply, 'timer-unmeasured');
+    const dueAt = now + body.durationMs;
+    const r = coord.insertTimer({
+      setter: fromId, setterIncarnation: stamp.incarnation, setById: fromId, setByUuid: fromUuid, role, note: body.note,
+      runId: runId as number | null, programme: programme as string | null, setAt: now, dueAt,
+    });
+    if (!r.ok) return refuseRoute(reply, 'write-failed', { detail: 'continuity_timers could not be written' });
+    return reply.code(201).send({ ok: true, id: r.id, dueAt });
+  });
+
+  /**
+   * `GET /api/timers?byId&byUuid`: a session reads its own pending timers. A box-token lane, an `auth/gate.ts` EXEMPT entry:
+   * the token, the query's shape, the registry's attribution of `byUuid`, then the caller's pending timers, each note
+   * marked untrusted, masked by the one answer hook. `200 { ok, timers }`; a read that failed is `timer-unmeasured`.
+   */
+  app.get('/api/timers', {
+    onRequest: async (req: FastifyRequest, reply: FastifyReply) => {
+      const verdict = checkMailToken(deps.mailToken(), req.headers[MAIL_TOKEN_HEADER], 'GET /api/timers');
+      if (verdict !== 'ok') return refuseRoute(reply, 'unauthenticated', { detail: TOKEN_DETAIL[verdict] });
+      return undefined;
+    },
+  }, async (req, reply) => {
+    const q = (typeof req.query === 'object' && req.query !== null ? req.query : {}) as Record<string, unknown>;
+    const { byId, byUuid } = q;
+    if (typeof byId !== 'string' || !IDENTITY_RE.test(byId) || typeof byUuid !== 'string' || !IDENTITY_RE.test(byUuid)) {
+      return refuseRoute(reply, 'bad-request', { detail: 'byId and byUuid' });
+    }
+    const attributed = await deps.attributeReader(byId, byUuid);
+    if (!attributed.ok) return refuseRoute(reply, attributed.error, { detail: attributed.detail });
+    const coord = deps.coord;
+    if (coord === undefined) return refuseRoute(reply, 'unavailable');
+    const r = coord.pendingTimersOf(byId);
+    if (!r.ok) return refuseRoute(reply, 'timer-unmeasured', { detail: r.detail });
+    return reply.code(200).send({ ok: true, timers: r.rows.map(timerView) });
+  });
+
+  /**
+   * `POST /api/timers/:id/cancel`: a session cancels one of its own pending timers. A box-token lane, an `auth/gate.ts`
+   * EXEMPT entry: the token, the path's and the body's shape, the registry's attribution, then the row by its id and
+   * `timerCancelVerdict` (an id that names no row answers `timer-not-yours`, as another identity's does: no oracle), then
+   * the one writer, `cancelTimer` by `setter-cancel` with reason `setter`. A row the lane moved between the read and the
+   * write answers `timer-not-pending`. `200 { ok, id }`.
+   */
+  app.post('/api/timers/:id/cancel', {
+    onRequest: async (req: FastifyRequest, reply: FastifyReply) => {
+      const verdict = checkMailToken(deps.mailToken(), req.headers[MAIL_TOKEN_HEADER], 'POST /api/timers/:id/cancel');
+      if (verdict !== 'ok') return refuseRoute(reply, 'unauthenticated', { detail: TOKEN_DETAIL[verdict] });
+      return undefined;
+    },
+  }, async (req, reply) => {
+    const id = timerIdOf((req.params as { id: string }).id);
+    if (id === null) return refuseRoute(reply, 'bad-request', { detail: 'the path names a timer id' });
+    const b = (typeof req.body === 'object' && req.body !== null ? req.body : {}) as Record<string, unknown>;
+    const { fromId, fromUuid } = b;
+    if (typeof fromId !== 'string' || !IDENTITY_RE.test(fromId) || typeof fromUuid !== 'string' || !IDENTITY_RE.test(fromUuid)) {
+      return refuseRoute(reply, 'bad-request', { detail: 'fromId and fromUuid' });
+    }
+    const attributed = await deps.attribute(fromId, fromUuid);
+    if (!attributed.ok) return refuseRoute(reply, attributed.error, { detail: attributed.detail });
+    const coord = deps.coord;
+    if (coord === undefined) return refuseRoute(reply, 'unavailable');
+    const t = coord.timerById(id);
+    if (!t.ok) return refuseRoute(reply, 'timer-unmeasured', { detail: t.detail });
+    const verdict = timerCancelVerdict(t.row, fromId);
+    if (verdict !== 'ok') return refuseRoute(reply, verdict);
+    const cut = cancelOf(coord, id, 'setter-cancel', 'setter', deps.wall());
+    if (cut !== 'ok') return refuseRoute(reply, cut, cut === 'write-failed' ? { detail: 'continuity_timers could not be written' } : {});
+    return reply.code(200).send({ ok: true, id });
+  });
+
+  // THE OPERATOR'S DOORS (Task 6): session-gated, no box token, and not in EXEMPT, so armed they sit behind the auth gate
+  // like every PWA-surface write. `box-token-census.test.ts`'s `CONTINUITY_SESSION_DOORS` names each, both directions.
+
+  /**
+   * `GET /api/sessions/:id/timers`: the operator reads one session's pending timers, each note marked untrusted for the
+   * console to render as data, masked by the one answer hook. In W1 it adds the Overlord's timers for the session the
+   * designation binds; in W1a there are none. `200 { ok, timers }`.
+   */
+  app.get('/api/sessions/:id/timers', async (req, reply) => {
+    const { id } = req.params as { id: string };
+    if (!IDENTITY_RE.test(id)) return refuseRoute(reply, 'bad-request', { detail: 'the path names a session id' });
+    const coord = deps.coord;
+    if (coord === undefined) return refuseRoute(reply, 'unavailable');
+    const r = coord.pendingTimersOf(id);
+    if (!r.ok) return refuseRoute(reply, 'timer-unmeasured', { detail: r.detail });
+    return reply.code(200).send({ ok: true, timers: r.rows.map(timerView) });
+  });
+
+  /**
+   * `POST /api/sessions/:id/timers/:timerId/cancel`: the operator cancels one of a session's pending timers. The timer must
+   * be that session's (`timer-not-yours`) and pending (`timer-not-pending`); an id that names no row is `timer-not-found`,
+   * because the signed-in operator may know which ids exist (review 2052 F5). Then `cancelTimer` by `operator-cancel` with
+   * reason `operator`. `200 { ok, id }`.
+   */
+  app.post('/api/sessions/:id/timers/:timerId/cancel', async (req, reply) => {
+    const p = req.params as { id: string; timerId: string };
+    const timerId = timerIdOf(p.timerId);
+    if (!IDENTITY_RE.test(p.id) || timerId === null) return refuseRoute(reply, 'bad-request', { detail: 'the path names a session and a timer id' });
+    const coord = deps.coord;
+    if (coord === undefined) return refuseRoute(reply, 'unavailable');
+    const t = coord.timerById(timerId);
+    if (!t.ok) return refuseRoute(reply, 'timer-unmeasured', { detail: t.detail });
+    const verdict = timerCancelVerdict(t.row, p.id, 'operator');
+    if (verdict !== 'ok') return refuseRoute(reply, verdict);
+    const cut = cancelOf(coord, timerId, 'operator-cancel', 'operator', deps.wall());
+    if (cut !== 'ok') return refuseRoute(reply, cut, cut === 'write-failed' ? { detail: 'continuity_timers could not be written' } : {});
+    return reply.code(200).send({ ok: true, id: timerId });
   });
 }

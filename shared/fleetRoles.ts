@@ -155,3 +155,9 @@ export const FLEET_ROLE_NAMES: readonly FleetRole[] = Object.keys(FLEET_ROLES) a
 
 /** The only way to narrow an untrusted value to a `FleetRole`, for a future reader of a persisted or wire value (Overlord W1a plan, open question 5). Derived from the table, so a new row is accepted with no edit here. */
 export function isFleetRole(v: unknown): v is FleetRole { return typeof v === 'string' && (FLEET_ROLE_NAMES as readonly string[]).includes(v); }
+
+/** The least `timerCap` of any role: the cap a session whose role reads `undecided` is held to (the timers piece of W1a,
+ *  slug undecided-role-gets-the-least-cap). Derived from the table, so it follows a row's change. */
+export const LEAST_TIMER_CAP: number = Math.min(...FLEET_ROLE_NAMES.map((r) => FLEET_ROLES[r].timerCap));
+/** How many pending timers a session of `role` may hold: its row's `timerCap`, or `LEAST_TIMER_CAP` for `undecided`. */
+export const timerCapOf = (role: FleetRole | 'undecided'): number => (role === 'undecided' ? LEAST_TIMER_CAP : FLEET_ROLES[role].timerCap);

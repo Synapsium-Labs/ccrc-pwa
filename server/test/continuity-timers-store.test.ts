@@ -126,6 +126,19 @@ describe('continuity_timers: the table and its writers (Overlord §3.3.12, C61)'
     expect(all.ok && all.rows.map((x) => x.setter).sort()).toEqual([ID, ID, 'lane-b-project-a']);
   });
 
+  it('timerById answers one row whatever its state, null for an id no row has, and fails on a row that does not read (PR B)', () => {
+    const s = store();
+    const pending = set(s); const fired = set(s, { setter: 'lane-b-project-a' });
+    s.markTimersFired([fired], 1, NOW + 1);
+    expect(s.timerById(pending)).toMatchObject({ ok: true, row: { id: pending, setter: ID, state: 'pending' } });
+    expect(s.timerById(fired)).toMatchObject({ ok: true, row: { id: fired, setter: 'lane-b-project-a', state: 'fired', mailId: 1 } });
+    expect(s.timerById(99_999)).toEqual({ ok: true, row: null });
+    s.db.prepare("UPDATE continuity_timers SET state = 'snoozed' WHERE id = ?").run(pending);
+    const bad = s.timerById(pending);
+    expect(bad.ok).toBe(false);
+    expect(!bad.ok && bad.detail).toContain('state snoozed');
+  });
+
   it('a read of a row this build cannot read answers ok: false, never an empty list', () => {
     const s = store();
     set(s);
