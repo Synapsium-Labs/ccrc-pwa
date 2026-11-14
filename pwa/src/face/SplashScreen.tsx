@@ -34,7 +34,9 @@ export function Splash(): ReactNode {
   useEffect(() => {
     if (!open) return;
     const ids = [SPLASH_TYPE_MS, SPLASH_MAX_MS].map((ms) =>
-      setTimeout(() => { setSinceMs(Date.now() - mountedAt.current); }, Math.max(0, ms - (Date.now() - mountedAt.current))));
+      // A timer that fires is the fact that `ms` have passed: the clock may read a millisecond short (rounding, a step),
+      // and nothing would re-arm the cap, so `ms` is the floor of what is recorded.
+      setTimeout(() => { setSinceMs(Math.max(ms, Date.now() - mountedAt.current)); }, Math.max(0, ms - (Date.now() - mountedAt.current))));
     return () => { ids.forEach(clearTimeout); };
   }, [open, frameSeen]);
 

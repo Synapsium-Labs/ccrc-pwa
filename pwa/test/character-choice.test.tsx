@@ -3,7 +3,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, renderHook, screen, waitFor, within } from '@testing-library/react';
 import { AppearanceSection } from '../src/screens/settings/AppearanceSection';
-import { CHARACTER_STORAGE_KEY, initCharacter, setCharacter, useCharacter } from '../src/lib/character';
+import { CHARACTER_STORAGE_KEY, initCharacter, resetCharacterForTests, setCharacter, useCharacter } from '../src/lib/character';
+import { clearAuthLost, isAuthLost } from '../src/lib/auth';
 import { SETTINGS_INDEX_TEXT } from '../src/fleet/settingsText';
 import { baseCommands } from '../src/command/commands';
 import type { Character as CharacterName } from '../../shared/face';
@@ -23,8 +24,9 @@ function stubFetch(auto: (method: string) => Reply | undefined): void {
 const face = (character: CharacterName): Reply => ({ status: 200, body: { character, updatedAt: 1 } });
 const posts = () => calls.filter((c) => c.method === 'POST');
 
-beforeEach(() => { localStorage.clear(); calls.length = 0; held = []; });
-afterEach(() => { cleanup(); vi.unstubAllGlobals(); localStorage.clear(); });
+// The store is module state: every case starts from its first state, so none relies on what an earlier one left.
+beforeEach(() => { resetCharacterForTests(); localStorage.clear(); calls.length = 0; held = []; });
+afterEach(() => { cleanup(); vi.unstubAllGlobals(); clearAuthLost(); localStorage.clear(); });
 
 describe('the character store', () => {
   it("boot draws the device copy, then the server's answer", async () => {
@@ -45,6 +47,34 @@ describe('the character store', () => {
     const { result } = renderHook(() => useCharacter());
     act(() => { initCharacter(); });
     await act(async () => { await Promise.resolve(); });
+    expect(result.current).toBe('dark-lord');
+  });
+
+  it('a read refused at boot (sign-in needed) is made again when sign-in is regained, and the answer shows', async () => {
+    localStorage.setItem(CHARACTER_STORAGE_KEY, 'dark-lord');
+    stubFetch((m) => (m === 'GET' && calls.filter((c) => c.method === 'GET').length === 1
+      ? { status: 401, body: { ok: false, error: 'unauthenticated', verdict: 'expired' } }
+      : undefined));
+    const { result } = renderHook(() => useCharacter());
+    act(() => { initCharacter(); });
+    await waitFor(() => expect(isAuthLost()).toBe(true));
+    await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
+    expect(result.current).toBe('dark-lord'); // the copy stands
+    expect(calls.filter((c) => c.method === 'GET')).toHaveLength(1);
+    act(() => { clearAuthLost(); });
+    expect(calls.filter((c) => c.method === 'GET')).toHaveLength(2);
+    await act(async () => { held.shift()!(face('orb')); });
+    await waitFor(() => expect(result.current).toBe('orb'));
+    expect(localStorage.getItem(CHARACTER_STORAGE_KEY)).toBe('orb');
+  });
+
+  it('a read that answers while a write is in flight does not overwrite the choice just made', async () => {
+    stubFetch(() => undefined);
+    const { result } = renderHook(() => useCharacter());
+    act(() => { initCharacter(); });
+    act(() => { setCharacter('dark-lord'); });
+    const [boot] = held.splice(0, 1); // the boot read, still out
+    await act(async () => { boot!({ status: 200, body: { character: 'orb', updatedAt: 1 } }); });
     expect(result.current).toBe('dark-lord');
   });
 
@@ -87,14 +117,42 @@ describe('answers settle in request order', () => {
     expect(result.current).toBe('dark-lord');
   });
 
-  it('a newer write refused while an older one is in flight: the older write\'s success still shows', async () => {
+  it("a newer write refused after an older one succeeded: the older write's success shows", async () => {
     stubFetch(() => undefined);
     const { result } = renderHook(() => useCharacter());
     act(() => { setCharacter('dark-lord'); setCharacter('orb'); });
-    const [first, second] = held.splice(0);
-    await act(async () => { second!({ status: 400, body: { ok: false, error: 'bad-request' } }); });
-    await act(async () => { first!(face('dark-lord')); });
+    expect(posts()).toHaveLength(1); // one write in flight, the second press waits
+    await act(async () => { held.shift()!(face('dark-lord')); });
+    expect(posts()).toHaveLength(2);
+    await act(async () => { held.shift()!({ status: 400, body: { ok: false, error: 'bad-request' } }); });
     expect(result.current).toBe('dark-lord');
+  });
+
+  it('two quick presses: one write in flight, the second queued, the newest choice wins with exactly two writes', async () => {
+    stubFetch(() => undefined);
+    const { result } = renderHook(() => useCharacter());
+    act(() => { setCharacter('dark-lord'); });
+    act(() => { setCharacter('orb'); });
+    expect(result.current).toBe('orb'); // shown at once
+    expect(posts().map((c) => c.body)).toEqual([{ character: 'dark-lord' }]);
+    await act(async () => { held.shift()!(face('dark-lord')); });
+    // the first write settled: the queued, newer choice goes out, and the screen keeps it meanwhile
+    expect(posts().map((c) => c.body)).toEqual([{ character: 'dark-lord' }, { character: 'orb' }]);
+    expect(result.current).toBe('orb');
+    await act(async () => { held.shift()!(face('orb')); });
+    expect(result.current).toBe('orb');
+    expect(posts()).toHaveLength(2);
+  });
+
+  it('presses made while a write is out coalesce to the newest, and a choice the server already holds is not sent again', async () => {
+    stubFetch(() => undefined);
+    const { result } = renderHook(() => useCharacter());
+    act(() => { setCharacter('dark-lord'); setCharacter('orb'); setCharacter('dark-lord'); });
+    expect(posts()).toHaveLength(1);
+    await act(async () => { held.shift()!(face('dark-lord')); });
+    expect(posts()).toHaveLength(1); // the newest choice is what the server answered
+    expect(result.current).toBe('dark-lord');
+    expect(held).toHaveLength(0);
   });
 
   it('a write that fails on the network reverts', async () => {
@@ -130,7 +188,7 @@ describe('the card', () => {
     );
   });
 
-  it('arrows move the choice, one write per press', async () => {
+  it('arrows move the choice, one write per press (each after the last settled)', async () => {
     stubFetch(() => undefined);
     act(() => { setCharacter('orb'); });
     await act(async () => { held.shift()!(face('orb')); });
@@ -141,6 +199,7 @@ describe('the card', () => {
     expect(posts()).toHaveLength(1);
     expect(posts()[0]!.body).toEqual({ character: 'dark-lord' });
     expect(radios()[1]!.checked).toBe(true);
+    await act(async () => { held.shift()!(face('dark-lord')); }); // one write at a time: the next press goes out once this one settles
     fireEvent.keyDown(group(), { key: 'ArrowRight' });
     expect(posts()).toHaveLength(2);
     expect(posts()[1]!.body).toEqual({ character: 'orb' });

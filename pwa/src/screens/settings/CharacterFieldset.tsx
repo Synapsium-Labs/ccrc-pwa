@@ -8,7 +8,8 @@ import type { ReactNode } from 'react';
 import { Character, Radio, Section } from '@ccrc/ui';
 import { AppearanceFieldset, radioArrows } from '../AppearanceRow';
 import { SETTINGS_CARDS } from '../../fleet/settingsText';
-import { CHARACTER_CHOICES, setCharacter, useCharacter } from '../../lib/character';
+import { setCharacter, useCharacter } from '../../lib/character';
+import { CHARACTER_CHOICES } from '../../fleet/characterWords';
 
 export function CharacterFieldset(): ReactNode {
   const card = SETTINGS_CARDS.appearance.character;

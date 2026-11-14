@@ -53,7 +53,7 @@ into its ledger. Each entry is a plain slug. None carries a number: the programm
 - **face-migration-67, slot** — the coordinator reserved migration 66 for the start report (#2740), so the face's table
   is migration 67 (`user_version 66 -> 67`), taken once #2740 is on this branch. The schema version's pins move with it.
 - **coord-db-version-pins-edited, the schema version's pins** — `coord-db.test.ts` hard-codes the schema version, and
-  those pins moved from 65 to 66 with the migration.
+  those pins moved from 66 to 67 with the migration.
 - **character-choice-request-order, ordering** — the device copy numbers every request it sends: the boot read and each
   write. An answer updates the value the server last confirmed only when it is newer than the answer that last set it, and
   the display follows the newest write still pending. So a late boot read cannot overwrite a newer choice, and a refused
@@ -78,15 +78,20 @@ into its ledger. Each entry is a plain slug. None carries a number: the programm
   on a phone it shows the shared `pwa/src/fleet/FleetHead.tsx`, which writes its own wordmark. That is a fourth top bar the
   plan did not list. The face sits straight after that wordmark too, so every top bar wears it.
 - **face-mark-class-and-css, layout** — a `face-mark` class with layout-only rules (`flex: none`, margins) keeps the face
-  in place in each bar. There is no animation, filter or shadow, and the still frame is lane A's `.chr[data-still]` rules.
+  in place in each bar: Instrument's top bar, Refined's two bars and the shared phone head (`.fleet-head`, which Instrument's
+  phone mounts; first missed, found in review 1992 F1). In that head the wordmark keeps one line (`flex: none`, no wrap) and
+  the face is a centred 32 px cell beside it; at 390 the row has about 12 px to spare, so the right group wraps to a second
+  row, as it does at 360. A browser row in `refined-phone.browser.test.ts` measures the head at 390 and 360 in both palettes.
+  There is no animation, filter or shadow, and the still frame is lane A's `.chr[data-still]` rules.
 - **every-change-plays, accessibility** — each change of mood plays for 5 s, including a return to a mood that had
   settled. The first mood plays on mount.
 - **browser-test-svg-child, a test** — `update-indicator.browser.test.ts` read `className.split` on every child of the
   Refined bar. The face is an SVG, so the test now reads the `class` attribute. Its assertions on the HTML children are
   unchanged.
 - **bar-one-line-check-reads-centres, a test** — `instrument-bar.browser.test.ts`'s one-line check compared the tops of
-  the bar's children. The 32 px face is centred in the 44 px line, so its top sits lower. The check compares centres
-  instead, and a wrapped bar still fails it by a whole row.
+  the bar's children. The 32 px face is centred in the 44 px line, so its top sits lower. The check still compares the tops
+  of every child but the face, and compares every child's centre, face included; the face's height is bounded by the line.
+  A wrapped bar still fails it by a whole row, and a door that grows taller around the same centre fails the tops.
 - **face-play-rate-later, a follow-up** — each change of mood plays 5 s, as the plan says. A fleet whose mood flips every
   few seconds would therefore move almost all the time. The coordinator kept the plan as written: a cap on how often the
   face plays (for example, one play a minute) is a possible follow-up for the operator, not built here.

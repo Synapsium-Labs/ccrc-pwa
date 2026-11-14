@@ -84,6 +84,15 @@ describe('<Splash />', () => {
     expect(screen.queryByTestId('splash')).toBeNull();
   });
 
+  it('leaves when the 4 s timer fires even if the clock reads a millisecond short', () => {
+    render(inShell(<Splash />));
+    const read = Date.now.bind(Date);
+    vi.spyOn(Date, 'now').mockImplementation(() => read() - 1);
+    act(() => { vi.advanceTimersByTime(SPLASH_MAX_MS); });
+    expect(screen.queryByTestId('splash')).toBeNull();
+    vi.restoreAllMocks();
+  });
+
   it('never comes back once gone: a later lost link does not raise it again', () => {
     render(inShell(<Splash />));
     act(() => { useFleetStore.setState({ fleetFrameSeen: true }); });

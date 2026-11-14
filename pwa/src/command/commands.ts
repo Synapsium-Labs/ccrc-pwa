@@ -10,7 +10,7 @@ import { isRunClosed } from '../fleet/runWords';
 import { matchRoute, ROUTES, sessionPath } from '../lib/routes';
 import type { Command, CommandContext } from './registry';
 import { sessionEntries } from './sessionEntries';
-import { CHARACTER_CHOICES } from '../lib/character';
+import { CHARACTER_CHOICES } from '../fleet/characterWords';
 
 /** The `g` chord's second key per route. Archive and Docs have none: `a` is
  *  Accounts and `d` is unclaimed, and both are doors off the fleet rather

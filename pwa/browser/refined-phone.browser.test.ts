@@ -272,6 +272,61 @@ describe("Refined's phone header is one row of finger-sized doors, and `+ New` c
   }, 60_000);
 });
 
+// THE FACE ON INSTRUMENT'S PHONE HEAD (Overlord face plan, review fix F1). The shared `.fleet-head` spreads its children apart
+// on the text baseline; the face is a third child, and with no rule of its own it shrank, lay on the baseline and at 390
+// pushed the wordmark onto two lines (head 48 -> 83 px). Held at `flex: none`, centred and beside the wordmark, the face is one
+// whole 32 px cell and the wordmark stays one line at 390 and 360 in each palette. The face needs room the row has not got at
+// 390 (the readouts and doors leave about 12 px), so the right group wraps to a second row there, as it already does at 360
+// and below ~460 px with a session count (fleet.css); the head grows by at most the face's own cell. The "without" column
+// hides the face in the page, so the same CSS and fixture give the base height.
+describe("the face on Instrument's phone head keeps its place", () => {
+  for (const theme of THEMES) {
+    for (const width of [360, 390]) {
+      it(`${theme}, ${width}px: the wordmark stays on one line and the face costs at most its own cell`, async () => {
+        const { ctx, page, errors } = await openApp(browser!, { skin: INSTRUMENT, theme, width }, FIXTURE);
+        try {
+          await page.goto(server!.origin + '/');
+          await page.waitForFunction(() => document.querySelector('.fleet-head .face-mark') !== null
+            && document.body.innerText.includes('9 sessions'), undefined, { timeout: 20_000 });
+          await page.waitForTimeout(300);
+          const m = await page.evaluate(() => {
+            const head = document.querySelector<HTMLElement>('.fleet-head')!;
+            const word = head.querySelector<HTMLElement>('.wordmark')!;
+            const face = head.querySelector<SVGElement>('.face-mark')!;
+            const read = () => {
+              const w = word.getBoundingClientRect();
+              return { head: head.getBoundingClientRect().height, wordH: w.height, line: parseFloat(getComputedStyle(word).fontSize) };
+            };
+            const withFace = read();
+            const f = face.getBoundingClientRect();
+            const w = word.getBoundingClientRect();
+            const h = head.getBoundingClientRect();
+            const place = { faceW: f.width, faceH: f.height, gap: f.left - w.right, centre: (f.top + f.bottom) / 2 - (w.top + w.bottom) / 2, inHead: f.top >= h.top - 0.5 && f.bottom <= h.bottom + 0.5 };
+            face.style.display = 'none';
+            const without = read();
+            face.style.display = '';
+            return { withFace, without, place, sideways: document.documentElement.scrollWidth - window.innerWidth };
+          });
+          console.log(`FACE-HEAD-FIGURE ${theme}, ${width}px: head ${m.withFace.head} px with the face, ${m.without.head} px without; wordmark ${m.withFace.wordH} px high; face ${m.place.faceW} x ${m.place.faceH}, ${Math.round(m.place.gap)} px from the wordmark`);
+          // One line: the wordmark's box is one line-height (1) of its font, with the face and without.
+          expect(m.withFace.wordH, 'the wordmark is one line with the face').toBeLessThanOrEqual(m.withFace.line * 1.5);
+          expect(m.without.wordH, 'the wordmark is one line without the face').toBeLessThanOrEqual(m.without.line * 1.5);
+          expect(m.withFace.head, "the face costs the head at most its own 32 px cell").toBeLessThanOrEqual(m.without.head + 32 + 0.5);
+          expect(m.place.faceW, 'the face keeps its 32 px cell').toBeGreaterThanOrEqual(31.5);
+          expect(m.place.faceH, 'the face keeps its 32 px cell').toBeGreaterThanOrEqual(31.5);
+          expect(m.place.gap, 'the face sits beside the wordmark').toBeGreaterThanOrEqual(0);
+          expect(m.place.gap, 'the face sits beside the wordmark').toBeLessThanOrEqual(16);
+          expect(m.place.inHead, 'the face is inside the head').toBe(true);
+          expect(m.sideways, 'the page does not scroll sideways').toBeLessThanOrEqual(0);
+          expect(errors).toEqual([]);
+        } finally {
+          await ctx.close();
+        }
+      }, 60_000);
+    }
+  }
+});
+
 /** The 17-lane fixture (`test/seventeenLanes.ts`, the one every strip suite shares) as this file's app fixture. */
 function seventeen(): { fixture: AppFixture; cases: LaneCase[] } {
   const { cases, accounts, roster } = seventeenLanes(nowSec);
