@@ -6,8 +6,10 @@
 // arm calls, so the lane re-states neither.
 import { PR_BACKOFF_MAX_MS, PR_SWEEP_MS } from '../laneSchedule.js';
 import { isLandable, landingHoldGate } from './landingEntry.js';
-import type { LandingHoldGate, LandingLand, LandingOutcome } from './landingEntry.js';
-import type { LandingMutationFacts } from './landingWrites.js';
+import type { LandingHoldGate, LandingLand, LandingLandWrite, LandingOutcome } from './landingEntry.js';
+import type { LandingMutationFacts, LandingReadResult } from './landingWrites.js';
+import type { CcdResult, WatcherCoordPort } from './ports.js';
+import type { LandingLandResult } from './store.js';
 import type { NoticeMode, NoticeRecord } from '../notice.js';
 import type { PrMergedFacts, PrStatePrRead } from '../prstate.js';
 
@@ -156,4 +158,66 @@ export function closeLandingOf(f: { state: 'done' | 'failed'; facts: PrMergedFac
   const { pr, head, base, mergedAt, mergeCommit } = f.facts;
   return { kind: 'land', project: f.project, pr, by: 'close', at: f.at, expect: null,
     outcome: { word: 'merged', head, base, mergedAt, mergeCommit, train: null } };
+}
+
+/** What `landingReadProjects` answers, named from the port so the lane's call and this decision cannot drift. */
+export type LandingProjectsRead = ReturnType<WatcherCoordPort['landingReadProjects']>;
+
+/** The stopped warning, said once per process by the lane: the key is the latch, the line is the text. */
+export function landedStopped(error: string): { key: string; line: string } {
+  return { key: `stopped:${error}`, line: `ccrc-server: landed reader: stopped (${error}); no entry is read until it clears` };
+}
+
+/** The pass's first read: the projects to walk, or the store's refusal, which ends the pass. */
+export function landedProjectsStep(read: LandingProjectsRead): { act: 'projects'; projects: string[] } | { act: 'stop'; error: string } {
+  return read.ok ? { act: 'projects', projects: read.projects } : { act: 'stop', error: read.error };
+}
+
+/** One project's read: its candidates; an unreadable projection skips the project (the inventory is then incomplete);
+ *  any other refusal stops the pass. */
+export function landedProjectStep(read: LandingReadResult):
+  { act: 'candidates'; candidates: LandedCandidate[] } | { act: 'skip' } | { act: 'stop'; error: string } {
+  if (read.ok) return { act: 'candidates', candidates: landedCandidatesOf(read.facts) };
+  if (read.error === 'landing-projection-unreadable') return { act: 'skip' };
+  return { act: 'stop', error: read.error };
+}
+
+/** The memory ids to drop: on a COMPLETE inventory, those no candidate holds; on an incomplete one, none (an unvisited
+ *  project's entries keep their `nextAt`). */
+export function landedPruneIds(complete: boolean, candidates: readonly LandedCandidate[], memory: ReadonlyMap<number, LandedMemory>): number[] {
+  if (!complete) return [];
+  const live = new Set(candidates.map((c) => c.id));
+  return [...memory.keys()].filter((id) => !live.has(id));
+}
+
+/** What a mark's answer means: recorded; held (the hold appeared between the read and the write, so it is read again
+ *  next pass); or a stop with the warning to say once (the two fence words say the line is fenced until restart). */
+export function landedMarkStep(mark: LandingLandResult, candidate: LandedCandidate):
+  { act: 'marked'; write: LandingLandWrite } | { act: 'held' } | { act: 'stop'; key: string; line: string } {
+  if (mark.ok) return { act: 'marked', write: mark.landing };
+  if (isHeldRefusal(mark.error)) return { act: 'held' };
+  if (mark.error === 'landing-db-apply' || mark.error === 'landing-db-commit') {
+    return { act: 'stop', key: `fence:${mark.error}`,
+      line: `ccrc-server: landed reader: the mark of ${candidate.project} #${candidate.pr} answered ${mark.error}; the landing line is fenced until the server restarts` };
+  }
+  return { act: 'stop', ...landedStopped(mark.error) };
+}
+
+/** What the `ccd pr-state --pr` call means: a call that did not run is a stop (never an answer about the PR); a failed
+ *  one backs the entry off; an exit 0 is parsed by the lane with the PR parser. */
+export function landedCallStep(call: CcdResult): { act: 'parse'; stdout: string } | { act: 'failed' } | { act: 'not-ran' } {
+  if (call.ran === false) return { act: 'not-ran' };
+  return call.ok ? { act: 'parse', stdout: call.stdout } : { act: 'failed' };
+}
+
+/** The second `missing-field` in a row says so once (hourly reading follows); any other streak says nothing. */
+export function landedMissingWarning(candidate: LandedCandidate, next: LandedMemory): { key: string; line: string } | null {
+  if (next.missingStreak !== 2) return null;
+  return { key: `missing-field:${candidate.id}`,
+    line: `ccrc-server: landed reader: ${candidate.project} #${candidate.pr} reads missing-field twice; reading it hourly` };
+}
+
+/** A failed `merged` feed record after a committed mark warns and the pass goes on: the mark is the fact, the record is news. */
+export function landedNoticeFailure(candidate: LandedCandidate, error: string): { line: string; continue: true } {
+  return { line: `ccrc-server: landed reader: the merged record of ${candidate.project} #${candidate.pr} failed (${error})`, continue: true };
 }

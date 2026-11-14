@@ -19,7 +19,8 @@ import type { RunCcd, WatcherCoordPort } from './ports.js';
 import type { LandingEntry } from '../../../shared/landingLine.js';
 import type { LandingLand } from './landingEntry.js';
 import {
-  isHeldRefusal, landedAnswerOf, landedCandidatesOf, landedNext, landedNoticeModeOf, mergedBody, mergedKey, mergedNoticeOf,
+  landedAnswerOf, landedCallStep, landedMarkStep, landedMissingWarning, landedNext, landedNoticeFailure, landedNoticeModeOf,
+  landedProjectsStep, landedProjectStep, landedPruneIds, landedStopped, mergedBody, mergedKey, mergedNoticeOf,
   pickLandedReads, type LandedCandidate, type LandedMemory,
 } from './landed.js';
 
@@ -48,7 +49,8 @@ function sayOnce(deps: LandedLaneDeps, key: string, line: string): void {
 
 /** The line is fenced by the reader's own mark, or the store stopped the pass: each said once. */
 function sayStopped(deps: LandedLaneDeps, error: string): void {
-  sayOnce(deps, `stopped:${error}`, `ccrc-server: landed reader: stopped (${error}); no entry is read until it clears`);
+  const w = landedStopped(error);
+  sayOnce(deps, w.key, w.line);
 }
 
 /** The merged record of a landed entry: once per (session, PR), through the notice funnel. `no-session` when the entry
@@ -73,67 +75,56 @@ export async function landedPass(deps: LandedLaneDeps): Promise<LandedPassResult
   const result: LandedPassResult = { read: 0, landed: 0, closed: 0, stopped: null };
   const at = deps.now(); // the pass's start, taken once: every MEMORY below is stamped with it, so a late read is due next sweep; the mark takes its own time at the write
   if (!ccdCan(deps.fleetState, 'prStatePr')) return { ...result, stopped: 'unsupported' };
-  const projects = deps.coord.landingReadProjects();
-  if (!projects.ok) { sayStopped(deps, projects.error); return { ...result, stopped: 'store' }; }
+  const projects = landedProjectsStep(deps.coord.landingReadProjects());
+  if (projects.act === 'stop') { sayStopped(deps, projects.error); return { ...result, stopped: 'store' }; }
   const cands: LandedCandidate[] = [];
   let complete = true;
   for (const project of projects.projects) {
-    const read = deps.coord.readLanding(project);
-    if (read.ok) { cands.push(...landedCandidatesOf(read.facts)); continue; }
-    if (read.error === 'landing-projection-unreadable') { complete = false; continue; }
-    sayStopped(deps, read.error);
+    const step = landedProjectStep(deps.coord.readLanding(project));
+    if (step.act === 'candidates') { cands.push(...step.candidates); continue; }
+    if (step.act === 'skip') { complete = false; continue; }
+    sayStopped(deps, step.error);
     return { ...result, stopped: 'store' };
   }
-  if (complete) {
-    const live = new Set(cands.map((c) => c.id));
-    for (const id of [...deps.memory.keys()]) if (!live.has(id)) deps.memory.delete(id);
-  }
+  for (const id of landedPruneIds(complete, cands, deps.memory)) deps.memory.delete(id);
   for (const cand of pickLandedReads(cands, deps.memory, at)) {
     const res = await deps.runCcd(CCD_ARGV.prStatePr(cand.project, cand.pr));
-    if (res.ran === false) {
+    const call = landedCallStep(res);
+    if (call.act === 'not-ran') {
       deps.memory.set(cand.id, landedNext(deps.memory.get(cand.id), cand, { act: 'retry', missingField: false }, at));
       return { ...result, stopped: 'link' };
     }
     result.read++;
-    const read = res.ok ? readPrStatePrLine(res.stdout, cand.pr) : { state: 'call-failed' as const };
+    const read = call.act === 'parse' ? readPrStatePrLine(call.stdout, cand.pr) : { state: 'call-failed' as const };
     const answer = landedAnswerOf(read);
     if (answer.act === 'wait' || answer.act === 'retry') {
       const next = landedNext(deps.memory.get(cand.id), cand, answer, at);
       deps.memory.set(cand.id, next);
-      if (next.missingStreak === 2) {
-        sayOnce(deps, `missing-field:${cand.id}`,
-          `ccrc-server: landed reader: ${cand.project} #${cand.pr} reads missing-field twice; reading it hourly`);
-      }
+      const warning = landedMissingWarning(cand, next);
+      if (warning !== null) sayOnce(deps, warning.key, warning.line);
       continue;
     }
-    const mark = deps.coord.advanceLanding({
+    const mark = landedMarkStep(deps.coord.advanceLanding({
       kind: 'land', project: cand.project, pr: cand.pr, by: 'reader', at: deps.now(), outcome: answer.outcome,
       expect: { id: cand.id, pinnedAt: cand.pinnedAt },
-    } satisfies LandingLand);
-    if (!mark.ok) {
-      if (isHeldRefusal(mark.error)) {
-        // The hold appeared between the read and the write; L1 decides when the entry is read again (`landedNext`'s `held`).
-        deps.memory.set(cand.id, landedNext(deps.memory.get(cand.id), cand, { act: 'held' }, at));
-        continue;
-      }
-      if (mark.error === 'landing-db-apply' || mark.error === 'landing-db-commit') {
-        sayOnce(deps, `fence:${mark.error}`, `ccrc-server: landed reader: the mark of ${cand.project} #${cand.pr} answered ${mark.error}; the landing line is fenced until the server restarts`);
-      } else {
-        sayStopped(deps, mark.error);
-      }
-      return { ...result, stopped: 'store' };
+    } satisfies LandingLand), cand);
+    if (mark.act === 'held') {
+      // The hold appeared between the read and the write; L1 decides when the entry is read again (`landedNext`'s `held`).
+      deps.memory.set(cand.id, landedNext(deps.memory.get(cand.id), cand, { act: 'held' }, at));
+      continue;
     }
+    if (mark.act === 'stop') { sayOnce(deps, mark.key, mark.line); return { ...result, stopped: 'store' }; }
     deps.memory.delete(cand.id);
-    if (mark.landing.kind === 'closed') result.closed++;
-    if (mark.landing.kind !== 'landed') continue;
+    if (mark.write.kind === 'closed') result.closed++;
+    if (mark.write.kind !== 'landed') continue;
     result.landed++;
     try {
       raiseLandedNotice({
-        coord: deps.coord, notice: deps.notice, entry: mark.landing.entry,
+        coord: deps.coord, notice: deps.notice, entry: mark.write.entry,
         mergedAt: answer.outcome.word === 'merged' ? answer.outcome.mergedAt : null, now: deps.now(),
       });
     } catch (err) {
-      deps.warn(`ccrc-server: landed reader: the merged record of ${cand.project} #${cand.pr} failed (${err instanceof Error ? err.message : String(err)})`);
+      deps.warn(landedNoticeFailure(cand, err instanceof Error ? err.message : String(err)).line);
     }
   }
   return result;
