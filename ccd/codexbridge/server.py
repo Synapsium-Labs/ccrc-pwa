@@ -96,7 +96,6 @@ is flushed. The return is 0. The credential wait is a step the plan's drain text
 Every constant is read when it is used, so the test driver's `consts` reach it.
 """
 
-import collections
 import errno
 import hmac
 import http.client
@@ -601,7 +600,7 @@ class TurnStates:
 
     def __init__(self) -> None:
         self._lock = threading.Lock()
-        self._held = collections.OrderedDict()  # type: collections.OrderedDict
+        self._held = {}  # type: Dict[str, str]  (insertion-ordered: the least recently used first)
         self._account = TurnStates._NONE  # type: object
 
     def _owner(self, account: object) -> None:
@@ -613,9 +612,9 @@ class TurnStates:
         """The turn's captured value, or None."""
         with self._lock:
             self._owner(account)
-            value = self._held.get(key)
+            value = self._held.pop(key, None)
             if value is not None:
-                self._held.move_to_end(key)
+                self._held[key] = value  # now the most recently used
             return value
 
     def capture(self, key: str, value: str, account: object) -> bool:
@@ -624,11 +623,11 @@ class TurnStates:
         with self._lock:
             self._owner(account)
             if key in self._held:
-                self._held.move_to_end(key)
+                self._held[key] = self._held.pop(key)  # now the most recently used
                 return False
             self._held[key] = value
             while len(self._held) > TURN_STATES_MAX:
-                self._held.popitem(last=False)
+                del self._held[next(iter(self._held))]
             return True
 
 

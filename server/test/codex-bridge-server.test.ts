@@ -1869,16 +1869,22 @@ describe.skipIf(!PY)('the request markers, their 400 fallback and the turn-state
     });
   });
 
-  it('the map holds TURN_STATES_MAX turns, the least recent dropped first', async () => {
-    const [a, b] = [token('a'), token('b')];
-    await withBridge([withState(a), withState(b), withState(null), withState(null)], async ({ bridge, up, lane }) => {
+  it('the map holds TURN_STATES_MAX turns, the least recently used dropped first', async () => {
+    const [a, b, c] = [token('a'), token('b'), token('c')];
+    const answers = [withState(a), withState(b), withState(null), withState(c), withState(null), withState(null)];
+    await withBridge(answers, async ({ bridge, up, lane }) => {
       touch(lane, [TURN_STATE]);
-      for (const body of [turnBody('task A', 0), turnBody('task B', 0), turnBody('task A', 1), turnBody('task B', 1)]) {
+      for (const body of [
+        turnBody('task A', 0), turnBody('task B', 0), // both held
+        turnBody('task A', 1), // A echoed, so B is now the least recently used
+        turnBody('task C', 0), // C held, B dropped
+        turnBody('task A', 2), turnBody('task B', 1),
+      ]) {
         const r = await call(bridge, '/v1/messages', { body, headers: session });
         expect(r.status, r.text).toBe(200);
       }
-      expect(sentState(up)).toEqual([null, null, null, b]);
-    }, { consts: { 'server.TURN_STATES_MAX': 1 } });
+      expect(sentState(up)).toEqual([null, null, a, null, a, null]);
+    }, { consts: { 'server.TURN_STATES_MAX': 2 } });
   });
 
   it('a 400 to a POST that echoed the state is retried without it, and the turn keeps it for its next message', async () => {
