@@ -14,9 +14,13 @@ import type { ProbeClass } from './continuity.js';
  *  role's sessions launch with. ccd reads it from `ccd/lib/launch-profiles.json`, a projection of this column held
  *  equal by `server/test/launch-profiles-file.test.ts`; a route field `profile` names the row a spawn applies.
  *
- *  Columns typed `null` until their owning piece lands. Each such piece widens its column's type, and
- *  the compiler then refuses every row until it is filled. Nothing reads a `null` column.
- *   - `compactInstructions`: waits on history W3-1 (spec §14, C51); today there is a bare `/compact`.
+ *  `compactInstructions` (the compaction piece of W1a, spec §3.3.9 C51, §3.3.10 C53): the role's compaction text, read
+ *  through `server/src/continuity/compaction.ts#compactInstructionsFor`. `auditor` and `replay` take `plain`'s. It
+ *  reaches ccd and the hook as `compactText` in `ccd/lib/launch-profiles.json` (the same projection), so ccd types
+ *  `/compact <text>` and history's PreCompact print carries it as a section, both only when the route carries
+ *  `compactwindow` (decision compaction-text-follows-continuity). Each text is one line of printable ASCII, at most
+ *  600 characters, with no quote character, backslash, `$` or `;` (tmux drops a trailing one), so it is typed as one
+ *  literal send (instructions-one-line).
  *
  *  Mail pace and the renewal triggers are not columns: they are L1 records keyed by role (spec
  *  §3.3.9, §11.1), built by their own pieces.
@@ -44,6 +48,17 @@ export interface LaunchProfile {
 
 /** The long-lived roles' compaction columns (C39): idle compaction off, the auto-compact point 10 points above the cap. */
 const LONG_LIVED_COMPACTION = { settings: { idleCompaction: false }, aboveHardCapPts: 10 } as const;
+/** Every compaction text ends with this sentence (C51: the summary ends with the history node). */
+const COMPACT_TEXT_END = 'End the summary with the history node of this conversation and the line: check what you recall against ccrc history or the server before you act on it.';
+/** What every role drops and follows (C51: tool output dropped, the operator's standing instructions followed). */
+const COMPACT_DROP = 'Drop tool output, and follow any standing compaction instructions the operator gave.';
+/** What a coordinator's summary keeps (C51); the overlord keeps the same and more. */
+const COORDINATOR_KEEPS = 'every run id and its wave, each plan path and the step it is at, every claim id and path, every operator or Overlord ruling with its date, every open ask and item id';
+/** What a worker's or a reviewer's summary keeps (C51). */
+const WORKER_KEEPS = 'the plan path, the task and step, the failing test or command and its last output line, every deviation slug or number, and the branch tip sha';
+const compactText = (label: string, keeps: string): string => `Compaction instructions (${label}): keep, verbatim, ${keeps}. ${COMPACT_DROP} ${COMPACT_TEXT_END}`;
+/** `plain`'s text, which `auditor` and `replay` reuse. */
+const PLAIN_COMPACT = compactText('plain', 'every id, path and sha you were given, and every instruction the operator gave, in its words');
 /** Every short-lived role's profile: auto memory off and nothing else (H14). */
 const MEMORY_OFF: LaunchProfile = { env: {}, settings: {}, autoMemory: 'off', compaction: null };
 
@@ -55,8 +70,8 @@ export interface FleetRoleRow {
   readonly launchProfile: LaunchProfile;
   /** The card's renderer (`server/src/continuity/card.ts#renderCard`). */
   readonly cardRenderer: CardRenderer;
-  /** `compactInstructions` is typed and absent until its piece lands. */
-  readonly compactInstructions: null;
+  /** The role's compaction text (C51), read through `compactInstructionsFor`. */
+  readonly compactInstructions: string;
   /** The classes a probe round draws from (`server/src/continuity/probes.ts#probeRound`). */
   readonly probeSet: readonly ProbeClass[];
 }
@@ -68,7 +83,7 @@ export const FLEET_ROLES: Readonly<Record<FleetRole, FleetRoleRow>> = {
     sessionRole: 'coordinator',
     launchProfile: { env: { CLAUDE_CODE_FORK_SUBAGENT: '0', CLAUDE_CODE_DISABLE_AGENT_VIEW: '1' }, settings: {}, autoMemory: 'off', compaction: LONG_LIVED_COMPACTION },
     cardRenderer: 'overlord',
-    compactInstructions: null,
+    compactInstructions: compactText('overlord', `${COORDINATOR_KEEPS}, every mail you have not answered, every request id, and every operator message id you answered or owe an answer`),
     // Every class, spelled out rather than `PROBE_CLASSES`: this file takes only type imports of its siblings (the header).
     // `fleet-roles.test.ts` holds it equal to `PROBE_CLASSES`, and the `ProbeClass` type refuses a stray word (review 1999, F10).
     probeSet: ['fact', 'update', 'temporal', 'abstention', 'continuation', 'decision', 'contradiction', 'application', 'thread'],
@@ -78,7 +93,7 @@ export const FLEET_ROLES: Readonly<Record<FleetRole, FleetRoleRow>> = {
     sessionRole: 'child',
     launchProfile: MEMORY_OFF,
     cardRenderer: 'plain',
-    compactInstructions: null,
+    compactInstructions: PLAIN_COMPACT,
     probeSet: [],
   },
   replay: {
@@ -86,7 +101,7 @@ export const FLEET_ROLES: Readonly<Record<FleetRole, FleetRoleRow>> = {
     sessionRole: 'child',
     launchProfile: MEMORY_OFF,
     cardRenderer: 'plain',
-    compactInstructions: null,
+    compactInstructions: PLAIN_COMPACT,
     probeSet: [],
   },
   worker: {
@@ -94,7 +109,7 @@ export const FLEET_ROLES: Readonly<Record<FleetRole, FleetRoleRow>> = {
     sessionRole: 'child',
     launchProfile: MEMORY_OFF,
     cardRenderer: 'worker',
-    compactInstructions: null,
+    compactInstructions: compactText('worker', WORKER_KEEPS),
     probeSet: [],
   },
   reviewer: {
@@ -102,7 +117,7 @@ export const FLEET_ROLES: Readonly<Record<FleetRole, FleetRoleRow>> = {
     sessionRole: 'child',
     launchProfile: MEMORY_OFF,
     cardRenderer: 'reviewer',
-    compactInstructions: null,
+    compactInstructions: compactText('reviewer', WORKER_KEEPS),
     probeSet: [],
   },
   coordinator: {
@@ -110,7 +125,7 @@ export const FLEET_ROLES: Readonly<Record<FleetRole, FleetRoleRow>> = {
     sessionRole: 'coordinator',
     launchProfile: { env: {}, settings: {}, autoMemory: 'off', compaction: LONG_LIVED_COMPACTION },
     cardRenderer: 'coordinator',
-    compactInstructions: null,
+    compactInstructions: compactText('coordinator', `${COORDINATOR_KEEPS}, and every mail you have not answered`),
     probeSet: ['fact', 'temporal', 'abstention', 'continuation'],
   },
   plain: {
@@ -118,7 +133,7 @@ export const FLEET_ROLES: Readonly<Record<FleetRole, FleetRoleRow>> = {
     sessionRole: 'coordinator',
     launchProfile: { env: {}, settings: {}, autoMemory: 'switch', compaction: null },
     cardRenderer: 'plain',
-    compactInstructions: null,
+    compactInstructions: PLAIN_COMPACT,
     probeSet: [],
   },
 };

@@ -11,6 +11,7 @@ import { mkTmp } from './tmpHelpers.js';
 import { tl } from './compactCardFixtures.js';
 import { spawnSyncGroup } from './spawnGroup.js';
 import { itLinux, IS_DARWIN } from './platformFixtures.js';
+import { CCD } from './ccdWsHelpers.js';
 import {
   STEER_FIRST_LINE, STEER_GENERIC_TEXT, STEER_FILE_MAX, BACKENDS, steerFileOf, composeSteerFile, makePairIndex, parseSpoolLine, cardLine,
 } from '../../ccd/history/lib.mjs';
@@ -740,7 +741,7 @@ describe('the unarmed session forks nothing the steering added (Linux, strace -f
     fs.rmSync(path.join(home, '.ccrc', 'history-steer-off'));
     // CONTROL, on hooks without the compaction events arm (Overlord W1a): that arm asks the same scope verdict when the
     // card did not run, so with it in place the armed print's verdict only moves a fork the unarmed run takes too.
-    const EVENTS_LINE = 'if [[ "$event" == PreCompact ]]; then _hook_compact_pre_line || true; fi';
+    const EVENTS_LINE = 'if [[ "$event" == PreCompact && -z "${CS_REFUSED-}" ]]; then _hook_compact_pre_line || true; fi';
     const without = (lines: string[], name: string): string => {
       const kept2 = lines.filter((l) => l !== EVENTS_LINE);
       expect(lines.length - kept2.length, `${name} lost exactly the events arm's call line`).toBe(1);
@@ -1038,4 +1039,85 @@ describe('the recall-off gate: the print and the card line withhold on the same 
       }
     }
   }, 60_000);
+});
+
+// ── Overlord W1a compaction, Task 3: the role's text rides inside this one print (spec §3.3.9 C51, §3.3.10 C53) ──────────────
+// One source, two carriers: the section's text is the launch-profile projection's `compactText`, which ccd's auto-compact types
+// after `/compact` (ccd-auto-compact.test.ts), and both carriers use it only when the route carries `profile` AND `compactwindow`
+// (ruling R8). The section goes BEFORE the steer text, so the steer's "At the very END" stays the print's last instruction (the
+// history coordinator's request, ruled by the overlord's coordinator).
+describe('Overlord W1a compaction: the role section inside the one PreCompact print (C51, C53, R8)', () => {
+  const PROJECTION = path.resolve(__dirname, '../../ccd/lib/launch-profiles.json');
+  const textOf = (role: string): string => (JSON.parse(fs.readFileSync(PROJECTION, 'utf8')) as Record<string, { compactText: string }>)[role]!.compactText;
+  const route = (fields: Record<string, string>): void => { for (const [f, v] of Object.entries(fields)) fs.writeFileSync(reg(`${ID}.${f}`), v); };
+  const withRole = (role: string): string => `\nccrc-role-compaction: ${textOf(role)}\n\n${STEER_GENERIC_TEXT}\n`;
+
+  it('armed, profile=coordinator and compactwindow: the section, then the steer text; its text is what ccd types and the role table holds', async () => {
+    const { compactInstructionsFor } = await import('../src/continuity/compaction.js');
+    expect(textOf('coordinator')).toBe(compactInstructionsFor('coordinator'));
+    const payload = armed();
+    route({ profile: 'coordinator', compactwindow: '350000' });
+    expect(printed(run(payload))).toBe(withRole('coordinator'));
+    route({ profile: 'worker' });
+    expect(printed(run(payload))).toBe(withRole('worker'));
+  });
+  it('profile=coordinator with no compactwindow, compactwindow with no profile, and neither: the print is byte-identical to today\'s', () => {
+    const payload = armed();
+    expect(printed(run(payload))).toBe(printOf(STEER_GENERIC_TEXT));
+    route({ profile: 'coordinator' });
+    expect(printed(run(payload))).toBe(printOf(STEER_GENERIC_TEXT));
+    fs.rmSync(reg(`${ID}.profile`));
+    route({ compactwindow: '350000' });
+    expect(printed(run(payload))).toBe(printOf(STEER_GENERIC_TEXT));
+  });
+  it('a compactwindow or profile outside its vocabulary, a linked route file, or a profile with no row: today\'s print', () => {
+    const payload = armed();
+    for (const [p, w] of [['coordinator', '99999'], ['coordinator', '1000001'], ['coordinator', 'x'], ['Coordinator', '350000'], ['nosuchrole', '350000']] as const) {
+      route({ profile: p, compactwindow: w });
+      expect(printed(run(payload)), `${p} ${w}`).toBe(printOf(STEER_GENERIC_TEXT));
+    }
+    route({ profile: 'coordinator' });
+    fs.rmSync(reg(`${ID}.compactwindow`));
+    fs.writeFileSync(path.join(home, 'cw'), '350000');
+    fs.symlinkSync(path.join(home, 'cw'), reg(`${ID}.compactwindow`));
+    expect(printed(run(payload)), 'a linked compactwindow').toBe(printOf(STEER_GENERIC_TEXT));
+  });
+  it('steer-on absent: nothing prints, the route notwithstanding', () => {
+    plantSpool();
+    route({ profile: 'coordinator', compactwindow: '350000' });
+    expect(printed(run(pre(mainTranscript())))).toBe('');
+  });
+  it('a hook with no projection beside it, and none installed, prints today\'s text', () => {
+    const dir = path.join(home, 'hookcopy');
+    mk(dir);
+    fs.copyFileSync(HOOK, path.join(dir, 'session-hook.sh'));
+    const payload = armed();
+    route({ profile: 'coordinator', compactwindow: '350000' });
+    const r = spawnSyncGroup('bash', [path.join(dir, 'session-hook.sh')], { input: JSON.stringify(payload), encoding: 'utf8', env: hookEnv(), timeout: 60_000, killSignal: 'SIGKILL' });
+    expect(r.error).toBeUndefined();
+    expect([r.status, r.stderr]).toEqual([0, '']);
+    expect(r.stdout).toBe(printOf(STEER_GENERIC_TEXT));
+  });
+  it('a projection text with a semicolon is not one typeable line: today\'s text (review 2004 F6)', () => {
+    const dir = path.join(home, 'hookcopy');
+    mk(path.join(dir, 'lib'));
+    fs.copyFileSync(HOOK, path.join(dir, 'session-hook.sh'));
+    const payload = armed();
+    route({ profile: 'coordinator', compactwindow: '350000' });
+    const runCopy = (text: string): string => {
+      fs.writeFileSync(path.join(dir, 'lib', 'launch-profiles.json'), JSON.stringify({ coordinator: { compactText: text } }));
+      for (const f of ['compactset', 'compactcard']) fs.rmSync(reg(`${ID}.${f}`), { force: true });   // each run alone, as run() does
+      const r = spawnSyncGroup('bash', [path.join(dir, 'session-hook.sh')], { input: JSON.stringify(payload), encoding: 'utf8', env: hookEnv(), timeout: 60_000, killSignal: 'SIGKILL' });
+      expect(r.error).toBeUndefined();
+      expect([r.status, r.stderr]).toEqual([0, '']);
+      return r.stdout;
+    };
+    expect(runCopy('keep the run ids.'), 'CONTROL: a typeable text prints its section').toBe(`\nccrc-role-compaction: keep the run ids.\n\n${STEER_GENERIC_TEXT}\n`);
+    for (const t of ['keep the run ids;', 'keep; the run ids.']) expect(runCopy(t), t).toBe(printOf(STEER_GENERIC_TEXT));
+  });
+  it('parity: the hook\'s COMPACT_TEXT_JQ is ccd\'s, byte for byte (one check of the projection\'s text, two readers)', () => {
+    const lineOf = (file: string): string => fs.readFileSync(file, 'utf8').split('\n').find((l) => l.startsWith('COMPACT_TEXT_JQ='))!;
+    expect(lineOf(HOOK)).toBeDefined();
+    expect(lineOf(HOOK)).toBe(lineOf(CCD));
+  });
 });

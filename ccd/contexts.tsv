@@ -459,6 +459,7 @@ _browser_spawn_compose	C2
 _spawn_settings_last	C2
 _fleet_spawn_compose	C2
 _profile_spawn_compose	C2
+_compact_text_to	C3
 _ws_tmproot_witness_file	C4
 _ws_tmproot_aside_path	C4
 _reg_id_ok	C1

@@ -1,12 +1,14 @@
 {
   "auditor": {
     "autoMemory": "off",
+    "compactText": "Compaction instructions (plain): keep, verbatim, every id, path and sha you were given, and every instruction the operator gave, in its words. Drop tool output, and follow any standing compaction instructions the operator gave. End the summary with the history node of this conversation and the line: check what you recall against ccrc history or the server before you act on it.",
     "compactionSettings": {},
     "env": {},
     "settings": {}
   },
   "coordinator": {
     "autoMemory": "off",
+    "compactText": "Compaction instructions (coordinator): keep, verbatim, every run id and its wave, each plan path and the step it is at, every claim id and path, every operator or Overlord ruling with its date, every open ask and item id, and every mail you have not answered. Drop tool output, and follow any standing compaction instructions the operator gave. End the summary with the history node of this conversation and the line: check what you recall against ccrc history or the server before you act on it.",
     "compactionSettings": {
       "idleCompaction": false
     },
@@ -15,6 +17,7 @@
   },
   "overlord": {
     "autoMemory": "off",
+    "compactText": "Compaction instructions (overlord): keep, verbatim, every run id and its wave, each plan path and the step it is at, every claim id and path, every operator or Overlord ruling with its date, every open ask and item id, every mail you have not answered, every request id, and every operator message id you answered or owe an answer. Drop tool output, and follow any standing compaction instructions the operator gave. End the summary with the history node of this conversation and the line: check what you recall against ccrc history or the server before you act on it.",
     "compactionSettings": {
       "idleCompaction": false
     },
@@ -26,24 +29,28 @@
   },
   "plain": {
     "autoMemory": "switch",
+    "compactText": "Compaction instructions (plain): keep, verbatim, every id, path and sha you were given, and every instruction the operator gave, in its words. Drop tool output, and follow any standing compaction instructions the operator gave. End the summary with the history node of this conversation and the line: check what you recall against ccrc history or the server before you act on it.",
     "compactionSettings": {},
     "env": {},
     "settings": {}
   },
   "replay": {
     "autoMemory": "off",
+    "compactText": "Compaction instructions (plain): keep, verbatim, every id, path and sha you were given, and every instruction the operator gave, in its words. Drop tool output, and follow any standing compaction instructions the operator gave. End the summary with the history node of this conversation and the line: check what you recall against ccrc history or the server before you act on it.",
     "compactionSettings": {},
     "env": {},
     "settings": {}
   },
   "reviewer": {
     "autoMemory": "off",
+    "compactText": "Compaction instructions (reviewer): keep, verbatim, the plan path, the task and step, the failing test or command and its last output line, every deviation slug or number, and the branch tip sha. Drop tool output, and follow any standing compaction instructions the operator gave. End the summary with the history node of this conversation and the line: check what you recall against ccrc history or the server before you act on it.",
     "compactionSettings": {},
     "env": {},
     "settings": {}
   },
   "worker": {
     "autoMemory": "off",
+    "compactText": "Compaction instructions (worker): keep, verbatim, the plan path, the task and step, the failing test or command and its last output line, every deviation slug or number, and the branch tip sha. Drop tool output, and follow any standing compaction instructions the operator gave. End the summary with the history node of this conversation and the line: check what you recall against ccrc history or the server before you act on it.",
     "compactionSettings": {},
     "env": {},
     "settings": {}

@@ -23,7 +23,7 @@ describe('ROUTE_WRITABLE_FIELDS — one list, one home (routing spec §5.3, slic
   const FIELDS = ROUTE_WRITABLE_FIELDS;
 
   it('the field list this scans is real, and is the routing record\'s own list', () => {
-    expect(FIELDS.length, 'D-8121 added `browser`: 5 -> 6; the launch profile added `profile`, `automem`, `compactwindow`: 6 -> 9').toBe(9);
+    expect(FIELDS.length, 'D-8121 added `browser`: 5 -> 6; the launch profile added `profile`, `automem`, `compactwindow`: 6 -> 9; the compaction piece `precompact`: 9 -> 10').toBe(10);
     expect(FIELDS).toContain('class');
   });
 

@@ -4595,7 +4595,8 @@ describe('the compaction card — option A, the staging-only helper (spec §3.1 
       { what: 'SessionStart(compact): the body-less card restore',
         needle: '{ link "$claim" "$f"; } 2>/dev/null || true', pick: [1, 2] },
       // The Overlord's PreCompact events line (W1a, review 1927 I3): its rotation and its append.
-      { what: 'PreCompact events line: the rotation', needle: 'mv -f "$f" "$prev" 2>/dev/null' },
+      { what: 'PreCompact events line: a symlink at .compacteventsprev removed (review 1937 F1)', needle: 'rm -f "$prev" 2>/dev/null' },
+      { what: 'PreCompact events line: the rotation', needle: 'mv -f "$f" "$prev" 2>/dev/null && rot=0' },
       { what: 'PreCompact events line: the append', needle: `{ printf '%s\\n' "$line" >> "$f"; } 2>/dev/null` },
     ];
     /** The k-th line carrying `needle`, with the total pinned: an anchor that
@@ -10730,9 +10731,10 @@ describe('history scope marker: PreCompact records whose context is compacting (
     expect(src.indexOf('# >>> history-scope', open + 1), 'two history-scope blocks').toBe(-1);
     expect(open, 'the marker must follow the card, whose verdict it reuses').toBeGreaterThan(preCall);
     expect(close).toBeLessThan(src.indexOf('if [[ "$event" == PostCompact ]]; then _hook_compact_post || true; fi'));
-    expect(src.split('\n').filter((l) => l === 'unset CS_SCOPE'), 'CS_SCOPE is unset once').toHaveLength(1);
+    const UNSET = 'unset CS_SCOPE CS_RULE_SCOPE CS_RULE_TRANSCRIPT CS_REFUSED';   // review 1937 F3, and the refusal arm's flag
+    expect(src.split('\n').filter((l) => l.startsWith('unset CS_SCOPE')), 'CS_SCOPE is unset once').toEqual([UNSET]);
     expect(src, 'unset directly above the card\'s call').toContain(
-      'unset CS_SCOPE\nif [[ "$event" == PreCompact  ]]; then _hook_compact_pre  || true; fi');
+      `${UNSET}\nif [[ "$event" == PreCompact ]]; then _hook_compact_refuse || true; fi\nif [[ "$event" == PreCompact  ]]; then _hook_compact_pre  || true; fi`);
     const gate = src.slice(open, close).split('\n').find((l) => l.startsWith('if [[ "$event" == PreCompact && -z "$paid" ]]'));
     expect(gate, 'the gate line').toBeDefined();
     expect(gate!.slice(0, gate!.indexOf('; then')), 'the gate forks').not.toMatch(/\$\(|`/);
@@ -11685,7 +11687,7 @@ describe('history card reserve: the compact card renders HISTORY_CARD_MAX + 1 ch
     const set = src.indexOf('\n[[ "$event" == PreCompact ]] && [[ -d "$HISTORY_CARD_DIR" ]] && [[ ! -e "$HOME/.ccrc/history-off" ]] && HISTORY_CARD_RESERVE=$(( HISTORY_CARD_MAX + 1 ))\n');
     expect(reset, 'no unconditional reset').toBeGreaterThan(-1);
     expect(set, 'no PreCompact-gated set').toBeGreaterThan(reset);
-    expect(set, 'the reserve must be set before the card renders').toBeLessThan(src.indexOf('\nunset CS_SCOPE\n'));
+    expect(set, 'the reserve must be set before the card renders').toBeLessThan(src.indexOf('\nunset CS_SCOPE CS_RULE_SCOPE CS_RULE_TRANSCRIPT CS_REFUSED\n'));
   });
 });
 

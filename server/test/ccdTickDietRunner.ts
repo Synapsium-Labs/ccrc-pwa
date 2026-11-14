@@ -61,6 +61,7 @@ export const PLANNED_FORMS: Readonly<Record<string, string>> = {
   _limit_rescue_knob_to: 'limit swap autofix Task 7 (D-8123)',
   _watchdog_sign_to: 'limit swap autofix Task 9 (D-8123)',
   _wd_operator_hold_to: 'limit swap autofix Task 9 (D-8123)',
+  _compact_text_to: 'Overlord W1a compaction, Task 2',
 };
 /** What has NOT landed in `ccd/ccd` yet: the planned forms, plus `_now_s`, the one printing form whose name is new.
  *  The task that lands a name deletes it here in the same commit (the header's "RED FIRST"). D-4961 (Task 4) landed
@@ -72,14 +73,15 @@ export const PLANNED_FORMS: Readonly<Record<string, string>> = {
  *  its own. D-6180 (auto-swap reliability W1) landed `_swap_lane_to`, planned and landed in one commit, and D-6181
  *  `_swap_pin_legacy_offset_to`, `_swap_pin_expiry_to` and `_limit_reset_to` the same way. D-7717
  *  (accounts connect A15) landed `_roster_fp_to` the same way, and delegation broker wave 5 PR1 `_dl_fingerprint_to`
- *  (ccd/lib/delegation-lease.sh, its fingerprint's unmeasured reason kept in the caller's shell). */
+ *  (ccd/lib/delegation-lease.sh, its fingerprint's unmeasured reason kept in the caller's shell). The Overlord's W1a
+ *  compaction piece landed `_compact_text_to` (the role's compaction text for `_auto_compact_check`) the same way. */
 const LANDED: ReadonlySet<string> = new Set([
   '_now_s_to', '_now_s', '_cfg_dir_to', '_limit_text_to', '_limit_num_in_to', '_limit_json_num_to',
   '_limit_pick_to', '_limit_field_to', '_share_pct_to', '_file_read_to', '_reg_get_to', '_reg_read_to',
   '_route_peek_to', '_route_effort_for_to', '_route_applied_get_to', '_route_wanted_to', '_route_pending_word_to',
   '_home_measured_to', '_swap_lane_to', '_swap_pin_legacy_offset_to', '_swap_pin_expiry_to', '_limit_reset_to',
   '_roster_fp_to', '_dl_fingerprint_to', '_pane_limit_capture_to', '_limit_rescue_knob_to', '_watchdog_sign_to',
-  '_wd_operator_hold_to',
+  '_wd_operator_hold_to', '_compact_text_to',
 ]);
 export const PENDING: ReadonlySet<string> = new Set(
   [...Object.keys(PLANNED_FORMS), '_now_s'].filter((n) => !LANDED.has(n)),

@@ -54,6 +54,7 @@ const run = (payload: object, over: NodeJS.ProcessEnv = {}): void => {
   // Bounded (review 1927 M6): a synchronous spawn blocks the event loop, so vitest's own timeout could never fire on a
   // hung hook. A timed shell spawn goes through spawnSyncGroup (#896), which also ends the hook's process group.
   const r = spawnSyncGroup('bash', [HOOK], { input: JSON.stringify(payload), encoding: 'utf8', env: env(over), timeout: 15_000 });
+  expect(r.error, 'the spawn itself did not fail (a timeout or ENOENT reads as status null; review 1937 F5)').toBeUndefined();
   expect(r.status, 'the hook contract: exit 0 on every path').toBe(0);
 };
 /** A transcript that exists, so `_hook_compact_scope` resolves `main` for a manual compaction. */
@@ -112,6 +113,16 @@ describe('PreCompact writes one line to its own file (W0-05)', () => {
     const t = transcript();
     run(preCompact('auto', t));
     expect(fs.existsSync(path.join(reg(), `${ID}.compactset`)), 'the card did not run').toBe(false);
+    expect(linesOf(preFile())).toEqual([{ at: expect.any(Number), trigger: 'auto', scope: 'main', transcript: t, phase: 'pre' }]);
+  });
+
+  // Review 1937 F3: the rule's own answer is unset with CS_SCOPE, so a value inherited from the pane never stands in for
+  // a verdict this run did not reach (the card off: its scope step, which sets them, does not run).
+  it('CS_RULE_SCOPE and CS_RULE_TRANSCRIPT inherited from the environment are not read: the line says main', () => {
+    fs.mkdirSync(path.join(home, '.ccrc'), { recursive: true });
+    fs.writeFileSync(path.join(home, '.ccrc', 'compact-card-off'), '');
+    const t = transcript();
+    run(preCompact('auto', t), { CS_RULE_SCOPE: 'subagent', CS_RULE_TRANSCRIPT: '/elsewhere/agent.jsonl', CS_REFUSED: '1' });
     expect(linesOf(preFile())).toEqual([{ at: expect.any(Number), trigger: 'auto', scope: 'main', transcript: t, phase: 'pre' }]);
   });
 
@@ -180,12 +191,14 @@ describe('PreCompact writes one line to its own file (W0-05)', () => {
 });
 
 describe('the line is the last PreCompact arm (plan review 1890 I1)', () => {
-  // Nothing refuses a PreCompact today. The compaction piece's coming `_hook_compact_refuse` sets `CS_REFUSED`, and this
-  // arm runs last so that it will then write `"phase":"refused"` (review 1927 M3).
-  it('the dispatch calls _hook_compact_pre_line last: after _hook_compact_pre and _hook_history_pre', () => {
+  // The refusal arm, `_hook_compact_refuse`, writes its own `refused` line through this arm's function before it prints
+  // its block (review 2004 F1), and a delivered block (`CS_REFUSED`) skips this last call; its cases are
+  // session-hook-precompact-refuse.test.ts's.
+  it('the dispatch calls _hook_compact_refuse first and _hook_compact_pre_line last: refuse, card, history, line', () => {
     const src = fs.readFileSync(HOOK, 'utf8');
     const at = (call: string): number => {
-      const line = `if [[ "$event" == PreCompact ]]; then ${call} || true; fi`;
+      const cond = call === '_hook_compact_pre_line' ? ' && -z "${CS_REFUSED-}"' : '';
+      const line = `if [[ "$event" == PreCompact${cond} ]]; then ${call} || true; fi`;
       expect(src.split(line).length - 1, `${call} is dispatched once`).toBe(1);
       return src.indexOf(line);
     };
@@ -193,6 +206,7 @@ describe('the line is the last PreCompact arm (plan review 1890 I1)', () => {
     expect(card, 'the card arm\'s dispatch').toBeGreaterThan(-1);
     expect(at('_hook_compact_pre_line')).toBeGreaterThan(at('_hook_history_pre'));
     expect(at('_hook_history_pre')).toBeGreaterThan(card);
+    expect(card, 'the refusal is decided before the card (refusal-ahead-of-the-card)').toBeGreaterThan(at('_hook_compact_refuse'));
   });
 });
 
@@ -230,25 +244,51 @@ describe('the file is bounded by rotation, with no temp file', () => {
 
   // Review 1927 M5: GNU mv moves a file INTO a directory destination, so an unchecked rotation would take the lines out
   // of the path the server reads, and a rotation that kept failing would let the current file grow without bound.
-  it.each(['directory', 'symlink to a directory'] as const)('a .compacteventsprev that is a %s: no line, both left alone', (kind) => {
+  it('a .compacteventsprev that is a directory: no line, both left alone', () => {
     const text = seedLines(KEEP);
-    const dir = path.join(home, 'elsewhere-dir');
-    if (kind === 'directory') fs.mkdirSync(prevFile());
-    else { fs.mkdirSync(dir); fs.symlinkSync(dir, prevFile()); }
+    fs.mkdirSync(prevFile());
     run(preCompact('manual', transcript()));
     expect(fs.readFileSync(preFile(), 'utf8'), 'the current file is untouched').toBe(text);
-    expect(fs.readdirSync(kind === 'directory' ? prevFile() : dir), 'nothing moved into it').toEqual([]);
+    expect(fs.readdirSync(prevFile()), 'nothing moved into it').toEqual([]);
   });
 
-  it('a .compacteventsprev that is a symlink to a file: no line, and the link and its target are left alone', () => {
+  // Review 1937 F1: a link at .compacteventsprev used to silence every later line while the reader followed it. Under the
+  // lock it is removed (`rm -f` takes the link, never its target), and the line is written: at the bound by rotating into
+  // the freed name, below it in place.
+  it.each(['dangling', 'to a file', 'to a directory'] as const)('a .compacteventsprev that is a symlink %s: the link goes, its target stays, the rotation happens', (kind) => {
     const text = seedLines(KEEP);
-    const target = path.join(home, 'elsewhere-file');
-    fs.writeFileSync(target, 'kept\n');
+    const target = path.join(home, 'elsewhere');
+    if (kind === 'to a file') fs.writeFileSync(target, 'kept\n');
+    if (kind === 'to a directory') fs.mkdirSync(target);
     fs.symlinkSync(target, prevFile());
     run(preCompact('manual', transcript()));
-    expect(fs.readFileSync(preFile(), 'utf8'), 'the current file is untouched').toBe(text);
-    expect(fs.lstatSync(prevFile()).isSymbolicLink(), 'the link is not replaced').toBe(true);
-    expect(fs.readFileSync(target, 'utf8')).toBe('kept\n');
+    expect(fs.lstatSync(prevFile()).isSymbolicLink(), 'the link is gone').toBe(false);
+    expect(fs.readFileSync(prevFile(), 'utf8'), 'the full file rotated into the freed name').toBe(text);
+    expect(linesOf(preFile()).map((l) => l['trigger'])).toEqual(['manual']);
+    if (kind === 'to a file') expect(fs.readFileSync(target, 'utf8')).toBe('kept\n');
+    if (kind === 'to a directory') expect(fs.readdirSync(target)).toEqual([]);
+    if (kind === 'dangling') expect(fs.existsSync(target)).toBe(false);
+  });
+
+  it('below the bound, a dangling link at .compacteventsprev is removed and the line is appended in place', () => {
+    seedLines(3);
+    fs.symlinkSync(path.join(home, 'nowhere'), prevFile());
+    run(preCompact('auto', transcript()));
+    expect(linesOf(preFile())).toHaveLength(4);
+    expect(fs.lstatSync(prevFile(), { throwIfNoEntry: false }), 'the link is gone').toBeUndefined();
+  });
+
+  // Review 1937 F2: a rotation that is due and fails appends nothing, so the file never passes its bound.
+  it('a rotation whose mv fails appends nothing: the file keeps its lines and does not grow past the bound', () => {
+    const text = seedLines(KEEP);
+    // Only the rotation's mv fails: the lock's own renames go through, so the run reaches the append and decides it.
+    fs.writeFileSync(path.join(home, 'bin', 'mv'), '#!/bin/sh\ncase "$*" in *compacteventsprev*) exit 1 ;; esac\nexec /bin/mv "$@"\n', { mode: 0o755 });
+    run(preCompact('manual', transcript()));
+    expect(fs.readFileSync(preFile(), 'utf8'), 'no line appended after a failed rotation').toBe(text);
+    expect(fs.existsSync(prevFile())).toBe(false);
+    fs.rmSync(path.join(home, 'bin', 'mv'));
+    run(preCompact('manual', transcript()));
+    expect(fs.readFileSync(prevFile(), 'utf8'), 'CONTROL: with mv working the same run rotates').toBe(text);
   });
 
   it(`below ${KEEP} lines it appends in place and leaves no .compacteventsprev`, () => {
