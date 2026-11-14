@@ -18,8 +18,12 @@ export const ROSTER_CARD_LANE = 'roster-card';
 /** The renewal lane's row (Overlord W1a, the generations piece): long-lived sessions renewed through their generations.
  *  In shadow the lane records each generation's would-be states in `shadowState`; live, it moves `state`. */
 export const CONTINUITY_LANE = 'continuity';
+/** The launch-profile lane's row (Overlord W1a, launch profiles PR B; spec §3.6 H1, §3.3.7 H14): each session's route names
+ *  its role's launch profile. In shadow the lane counts the route writes it would make; live, it writes them, and from each
+ *  session's next launch auto memory is off for every role but `plain` (whose Settings row decides). */
+export const LAUNCH_PROFILE_LANE = 'launch-profile';
 /** The lanes the Shadow lanes card has a row for, in the card's order. */
-export const LANE_ARM_LANES = [ROSTER_CARD_LANE, CONTINUITY_LANE] as const;
+export const LANE_ARM_LANES = [ROSTER_CARD_LANE, CONTINUITY_LANE, LAUNCH_PROFILE_LANE] as const;
 export type LaneArmLane = (typeof LANE_ARM_LANES)[number];
 export function isLaneArmLane(v: unknown): v is LaneArmLane {
   return typeof v === 'string' && (LANE_ARM_LANES as readonly string[]).includes(v);
@@ -139,6 +143,15 @@ export const LANE_ARM_TEXT = {
         + 'nothing a session sees.',
       gate: 'Live waits for the renewal act: until it ships, nothing moves a generation on from its start, so a live walk '
         + 'would stand still and fire every deadline at once when it arrives. Live is refused until then.',
+    },
+    [LAUNCH_PROFILE_LANE]: {
+      legend: 'Launch profiles',
+      shadowNote: 'Each pass counts the route writes that would give each session its role\'s launch profile, and the server '
+        + 'logs them; no route is written and no launch changes.',
+      liveNote: 'Each session\'s route names its role\'s launch profile: from its next launch, auto memory is off for every '
+        + 'role but plain sessions, which follow their Settings row. Nothing is deleted, and no compaction setting moves '
+        + 'until the renewal lane is live too.',
+      gate: null,
     },
   },
   shadowLog: (path: string): string => `Shadow record: ${path} on the fleet box. Read it before going live.`,

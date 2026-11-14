@@ -6602,7 +6602,14 @@ export function parseRouteFields(v: unknown): RouteFieldsParse {
  * rather than the word `undefined`.
  */
 export function routeParseDetail(p: Extract<RouteFieldsParse, { ok: false }>): string {
-  return `route: ${p.why}` + (p.field === undefined ? '' : ` ${p.field}`);
+  return `route: ${routeParseWhy(p)}`;
+}
+
+/** The refusal's words after its prefix: the `why`, then the field when there is one. The ONE spelling of that suffix, which
+ *  `routeParseDetail` prefixes with `route:` and the coordinator's `POST /api/runs/:id/route` with `field/value invalid:`
+ *  (`parseRouteRequest`; review 1970 N2), so neither door re-spells the field rule. */
+export function routeParseWhy(p: Extract<RouteFieldsParse, { ok: false }>): string {
+  return p.why + (p.field === undefined ? '' : ` ${p.field}`);
 }
 
 /**

@@ -1,7 +1,7 @@
 import { describe, it, expect, afterEach } from 'vitest';
-import { mkdirSync, symlinkSync, writeFileSync } from 'node:fs';
+import { mkdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
-import { canonicalize, checkCcrcSwitchStat, checkPath, FORBIDDEN_COMMANDS, isExecAllowed } from '../src/whitelist.js';
+import { canonicalize, checkCcrcSwitchStat, checkPath, checkSteerOnStat, FORBIDDEN_COMMANDS, isExecAllowed } from '../src/whitelist.js';
 import { CCRC_SWITCH_FILES } from '../../shared/switches.js';
 import { LC_DIR_NAME, LC_ERRORS_NAME, LC_GEN_PREFIX, LC_GEN_SUFFIX } from '../../shared/api.js';
 import { NODE_FILE_BASENAMES } from '../../shared/agent-protocol.js';
@@ -372,6 +372,77 @@ describe('whitelist.checkCcrcSwitchStat', () => {
     symlinkSync(path.join(ccrc, 'agent.env'), path.join(ccrc, 'ccrc-card-off'));
     expect(await checkCcrcSwitchStat(path.join(ccrc, 'ccrc-card-off'), cfg)).toBeNull();
     expect(await checkCcrcSwitchStat('', cfg)).toBeNull();
+  });
+});
+
+// Review 2024 F1: one history W3 steer marker, admitted for `stat` alone, so the launch-profile lane measures it on a remote
+// fleet. `checkPath` admits none of it.
+describe('whitelist.checkSteerOnStat', () => {
+  afterEach(removeTmpFixtures);
+  const seed = (): { home: string; dir: string; cfg: { home: string; projectsRoot: string }; outside: string } => {
+    const home = mkTmp('ccrc-wl-steer-home-');
+    const dir = path.join(home, '.ccrc', 'history', 'steer-on');
+    mkdirSync(dir, { recursive: true });
+    return { home, dir, cfg: { home, projectsRoot: mkTmp('ccrc-wl-steer-proj-') }, outside: mkTmp('ccrc-wl-steer-out-') };
+  };
+
+  it('admits a registry id under ~/.ccrc/history/steer-on, absent or present; checkPath still refuses it', async () => {
+    const { dir, cfg } = seed();
+    const canonicalDir = await canonicalize(dir);
+    const p = path.join(dir, 'lane-a-project-a');
+    expect(await checkSteerOnStat(p, cfg)).toBe(path.join(canonicalDir, 'lane-a-project-a'));
+    writeFileSync(p, '');
+    expect(await checkSteerOnStat(p, cfg)).toBe(path.join(canonicalDir, 'lane-a-project-a'));
+    expect(await checkPath(p, cfg, 'read')).toBeNull();
+  });
+
+  it('refuses a symlink at the history or steer-on level (review 2031 F1); ~/.ccrc itself may be a link, as the sibling grants allow', async () => {
+    for (const level of ['history', 'steer-on'] as const) {
+      const { home, cfg, outside } = seed();
+      const real = path.join(outside, 'elsewhere');
+      mkdirSync(path.join(real, 'steer-on'), { recursive: true });
+      writeFileSync(path.join(real, 'steer-on', 'lane-a-project-a'), '');
+      writeFileSync(path.join(real, 'lane-a-project-a'), '');
+      const at = level === 'history' ? path.join(home, '.ccrc', 'history') : path.join(home, '.ccrc', 'history', 'steer-on');
+      rmSync(at, { recursive: true, force: true });
+      symlinkSync(level === 'history' ? real : path.join(real, 'steer-on'), at);
+      expect(await checkSteerOnStat(path.join(home, '.ccrc', 'history', 'steer-on', 'lane-a-project-a'), cfg), level).toBeNull();
+    }
+    // Each level must be a real directory: a plain file standing at `steer-on` is refused too, by the `lstat`.
+    const { dir: fileAt, cfg: fileCfg } = seed();
+    rmSync(fileAt, { recursive: true, force: true });
+    writeFileSync(fileAt, '');
+    expect(await checkSteerOnStat(path.join(fileAt, 'lane-a-project-a'), fileCfg), 'a file at steer-on').toBeNull();
+    const home = mkTmp('ccrc-wl-steer-linked-home-');
+    const realCcrc = path.join(mkTmp('ccrc-wl-steer-real-ccrc-'), 'ccrc');
+    mkdirSync(path.join(realCcrc, 'history', 'steer-on'), { recursive: true });
+    symlinkSync(realCcrc, path.join(home, '.ccrc'));
+    const cfg = { home, projectsRoot: mkTmp('ccrc-wl-steer-proj-') };
+    expect(await checkSteerOnStat(path.join(home, '.ccrc', 'history', 'steer-on', 'lane-a-project-a'), cfg))
+      .toBe(path.join(await canonicalize(realCcrc), 'history', 'steer-on', 'lane-a-project-a'));
+  });
+
+  it('a home with no history directory yet answers through the grant (the stat then reads absent), never a refusal', async () => {
+    const home = mkTmp('ccrc-wl-steer-bare-');
+    mkdirSync(path.join(home, '.ccrc'), { recursive: true });
+    const cfg = { home, projectsRoot: mkTmp('ccrc-wl-steer-proj-') };
+    expect(await checkSteerOnStat(path.join(home, '.ccrc', 'history', 'steer-on', 'lane-a-project-a'), cfg)).not.toBeNull();
+  });
+
+  it('refuses a name that is no registry id, the directory, a look-alike elsewhere, a deeper path and a symlink out', async () => {
+    const { home, dir, cfg, outside } = seed();
+    for (const bad of ['..', '.hidden', '-lane-a', 'a b', 'a=b']) expect(await checkSteerOnStat(path.join(dir, bad), cfg), bad).toBeNull();
+    expect(await checkSteerOnStat(dir, cfg)).toBeNull();
+    expect(await checkSteerOnStat(path.join(home, '.ccrc', 'history', 'lane-a-project-a'), cfg)).toBeNull();
+    expect(await checkSteerOnStat(path.join(home, '.ccrc', 'lane-a-project-a'), cfg)).toBeNull();
+    expect(await checkSteerOnStat(path.join(outside, 'history', 'steer-on', 'lane-a-project-a'), cfg)).toBeNull();
+    mkdirSync(path.join(dir, 'sub'));
+    expect(await checkSteerOnStat(path.join(dir, 'sub', 'lane-a-project-a'), cfg)).toBeNull();
+    // A live link at a marker name onto a secret: stat would report the secret's size and time under the marker's name.
+    writeFileSync(path.join(home, '.ccrc', 'agent.env'), 'CCRC_AGENT_TOKEN=x\n');
+    symlinkSync(path.join(home, '.ccrc', 'agent.env'), path.join(dir, 'lane-a-project-b'));
+    expect(await checkSteerOnStat(path.join(dir, 'lane-a-project-b'), cfg)).toBeNull();
+    expect(await checkSteerOnStat('', cfg)).toBeNull();
   });
 });
 

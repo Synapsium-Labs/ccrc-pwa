@@ -173,6 +173,9 @@ import { isUntoldNotice, untoldPass } from './coord/untold.js';
 import { casesPass } from './coord/casesLane.js';
 import { gatherGenerationReadings, generationsPass, type CompactionsMemo } from './continuity/generationsLane.js';
 import { runTimersLane } from './continuity/timerLane.js';
+import { LAUNCH_PROFILE_LANE_ROW, profilePass, steerMarkerOf, type ProfileLaneMemory } from './continuity/profileLane.js';
+import { declaredIntentOf } from './continuity/profileFor.js';
+import { intentOfCheckpoint } from './continuity/declaredIntent.js';
 import { compactionsPaths, readCompactionsMeasured } from './continuity/compactions.js';
 import { createRunCloseMemory, isRunCloseWarning, runClosePass } from './coord/runCloseLane.js';
 import { readBranchFacts, readBranchOpenPr } from './coord/runCloseFacts.js';
@@ -1993,6 +1996,8 @@ export class FleetWatcher {
   private generationsProc: string | undefined;
   /** The starts this process held for a failed read (`GenerationsDeps.retried`). */
   private readonly generationsRetried = new Set<number>();
+  /** The launch-profile lane's last logged line (`ProfileLaneMemory`): a log throttle, never a decision's memory. */
+  private readonly launchProfileMemory: ProfileLaneMemory = { lastLine: null };
   private delegationLane(): DelegationLane {
     this.delegationLaneMemo ??= new DelegationLane(this.deps, () => this.delegationCensus, this.lanes, () => this.listedIds);
     return this.delegationLaneMemo;
@@ -2788,6 +2793,8 @@ export class FleetWatcher {
       void this.sweepCases().catch(() => { /* one bad sweep must not kill the poll */ });
       // NEVER awaited, the same reasons: the GENERATIONS lane (Overlord §3.3.11, W1a), in shadow: it mints and records, and acts on no session.
       void this.sweepGenerations(records, listedAt).catch(() => { /* one bad sweep must not kill the poll */ });
+      // NEVER awaited, the same reasons: the LAUNCH-PROFILE lane (Overlord §3.6 H1, W1a), in shadow until its row is live.
+      void this.sweepLaunchProfile(records).catch(() => { /* one bad sweep must not kill the poll */ });
       // NEVER awaited, the same reasons: the TIMERS lane (Overlord §3.3.12, W1a): cleanup, then each due timer fired with its one mail.
       void this.sweepTimers(records, registryRead.listedIds, listedAt, registryRead.names).catch(() => { /* one bad sweep must not kill the poll */ });
       // NEVER awaited, the same reasons: the RUN-CLOSE lane (D-8077), rows E1 and E1r, in shadow until its group is armed.
@@ -6099,6 +6106,30 @@ export class FleetWatcher {
         listedAt,
         readings,
       });
+    });
+  }
+
+  /** The launch-profile lane (Overlord §3.6 H1, W1a launch profiles PR B): each row's route diffed against its role's launch
+   *  profile, written through `routeSet` only once the `launch-profile` row is live. The usage read takes the time ports'
+   *  wall clock; the W3 steer marker is read on the fleet node under `ccrcDir`, as the session hook reads it (`steerMarkerOf`). */
+  async sweepLaunchProfile(records: readonly SessionRecord[]): Promise<void> {
+    const coord = this.deps.coord;
+    if (!coord) return;
+    await this.runLane(LAUNCH_PROFILE_LANE_ROW, async () => {
+      const { io, cfg } = this.deps;
+      await profilePass({
+        coord, log: (line) => console.warn(line), memory: this.launchProfileMemory,
+        act: { runCcd: this.deps.runCcd, fleetState: this.deps.fleetState },
+        reads: {
+          usage: (id) => readUsageMeasured(io, cfg.registryDir, id, Math.floor(this.deps.time.clock.wall() / 1000)),
+          steerMarker: (id) => steerMarkerOf(io, cfg.ccrcDir, id),
+          // Declared intent on the registry incarnation, from the delegation checkpoint (the authority; `not-ready` until
+          // the lane has one): an incarnation read that throws is unmeasured, never "declared none".
+          declaredIntent: async (id) => declaredIntentOf(
+            await childReclaimGenerationRead(io, cfg.registryDir, id).catch((): ChildReclaimGeneration => ({ kind: 'unreadable' })),
+            (sid, inc) => intentOfCheckpoint(this.delegationCheckpointIfReady(), sid, inc), id),
+        },
+      }, records.map((r) => ({ id: r.id, child: r.child, route: r.route })));
     });
   }
 

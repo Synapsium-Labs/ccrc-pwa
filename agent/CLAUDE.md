@@ -62,6 +62,11 @@ get wrong when editing `src/whitelist.ts`.
   from the switchboard's `~/.ccrc` rows in `shared/switches.ts`), by literal path and canonical-path equality
   (`checkCcrcSwitchStat`), so the server can say which stands. It is not part of `checkPath`: `read`, `readdir` and
   `lstat` admit none of them.
+  And a second `stat`-alone grant (Overlord W1a launch profiles PR B, reviews 2024 F1 and 2031 F1): one history W3 steer
+  marker, `~/.ccrc/history/steer-on/<registry id>` (`checkSteerOnStat`), so the server's launch-profile lane can tell a
+  steered session on a remote fleet. The name must pass `isRegistryId`; `~/.ccrc` may be a link, but `history` and
+  `steer-on` must each be a real directory or absent (`lstat`), and a live link at the marker is refused. A hard link at a
+  marker's name cannot be detected (same user). `read`, `readdir` and `lstat` admit none of it.
   And one more READ grant (D-8406): a lane's class registry and catalogue, `~/.ccrc/models/<lane>.classes.json` and
   `<lane>.json`, by exact name (`isLaneModelsReadName`, `shared/models.mjs`) and canonical-path equality
   (`isLaneModelsFile`), for the session's model picker. `~/.ccrc/models` stays unlistable, and its other files unread.
