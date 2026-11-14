@@ -69,6 +69,8 @@ export const FLEET_ROLES: Readonly<Record<FleetRole, FleetRoleRow>> = {
     launchProfile: { env: { CLAUDE_CODE_FORK_SUBAGENT: '0', CLAUDE_CODE_DISABLE_AGENT_VIEW: '1' }, settings: {}, autoMemory: 'off', compaction: LONG_LIVED_COMPACTION },
     cardRenderer: 'overlord',
     compactInstructions: null,
+    // Every class, spelled out rather than `PROBE_CLASSES`: this file takes only type imports of its siblings (the header).
+    // `fleet-roles.test.ts` holds it equal to `PROBE_CLASSES`, and the `ProbeClass` type refuses a stray word (review 1999, F10).
     probeSet: ['fact', 'update', 'temporal', 'abstention', 'continuation', 'decision', 'contradiction', 'application', 'thread'],
   },
   auditor: {

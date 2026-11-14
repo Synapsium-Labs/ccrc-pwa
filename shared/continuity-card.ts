@@ -57,6 +57,9 @@ export interface CardItem {
   readonly neededBy: NeededBy;
   readonly at: number;
   readonly text: string;
+  /** True when the operator ever ticked it (its `tickedAt` is set), even if it was returned to `open` since: a ticked
+   *  item carries a ruling, so an abstention probe never asks about one (review 1999, F2a). */
+  readonly everTicked: boolean;
 }
 
 /** One programme's ledger, by slug. */
