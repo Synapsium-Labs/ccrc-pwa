@@ -113,6 +113,30 @@ into its ledger. Each entry is a plain slug. None carries a number: the programm
   few seconds would therefore move almost all the time. The coordinator kept the plan as written: a cap on how often the
   face plays (for example, one play a minute) is a possible follow-up for the operator, not built here.
 
+## The mood cool-down (programme item 218, wave 26)
+
+- **mood-cooldown, a rule the operator asked for (item 218: "Keep animations always, but put cool down on emotion change.
+  Also, we can tune this later.")** — every mood change the face shows still plays its 5 s (`every-change-plays` stands),
+  but the face does not calm until `MOOD_COOLDOWN_MS` has passed since its last change. The constant is one named value
+  in `pwa/src/face/mood.ts`, 60 000 ms to start, **to be tuned later by the operator**; nothing else holds the number.
+  `shownMood(previous, decided, nowMs)` (L1, pure, time an argument) chooses what the face shows: a change to a more
+  urgent mood (a lower rank, Offline included) shows at once; a change to an equal or less urgent mood shows only once the
+  cool-down has passed, and until then the face keeps its mood and its cause. At the end it shows what `moodOf` decides
+  then, never a queue of missed changes; a flip-flop (A, B, A) inside the cool-down shows A throughout. Leaving Offline for
+  a calmer mood waits like any calming change. The name always carries the shown mood and its cause. `useMood` keeps what
+  was shown last and arms one timeout to the cool-down's end (cleaned up on unmount, no polling). `shownMood` joins the
+  server's mutation floors (`pwa/src/face/mood.ts#shownMood`, floor 1) beside `moodOf`.
+- **neutral-leaves-at-once, a reading the ruling did not name (for the coordinator)** — leaving Neutral ("not heard yet", the
+  start-up reading) shows at once, as an escalation does. Held to the cool-down, a console opened on a calm fleet would
+  say "not heard yet" for a minute after every reader had answered, a false cause in the name. Neutral is no emotion to
+  cool down from. Arriving at Neutral still follows the ranks (from a calmer mood it is an escalation; from Offline it
+  waits). Removing the exception is one clause in `shownMood` (mutants K3 and K5 pin it both ways).
+- **face-play-rate-later, closed in part** — the follow-up above (a cap on how often the face plays) is now met by this
+  cool-down for calming changes; an escalation still plays at once.
+- **return-to-settled-test-rewritten, a test** — `face-mark.test.tsx`'s "a return to a mood that had settled plays again,
+  inside five seconds of leaving it" cannot hold: a calming change now waits for the cool-down. The row waits the
+  cool-down out and asserts the return plays again at its end.
+
 ## The splash (Task 9)
 
 - **ui-exports-reduced-motion-hook, export** — `@ccrc/ui` now exports `usePrefersReducedMotion`, which the splash reads.

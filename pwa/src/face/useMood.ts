@@ -15,6 +15,10 @@
 //   | stallQuietMs    | the store's `stallQuietMs`                                                              |
 //   | nowMs           | `Date.now()` at render; one timeout to `next` renders again                             |
 //
+// What the face SHOWS is not always what `moodOf` decides: `shownMood` (`face/mood.ts`) holds a mood through a cool-down
+// before the face calms (item 218), and this hook only keeps what was shown last and arms one timeout to the cool-down's
+// end, as it does for `next`. The name's cause is always the shown mood's.
+//
 // The store is the shell's own (`useFleetChrome().store`), the one `useNavBadges` reads, so both agree on a frame.
 // Both hooks throw outside `FleetChromeProvider`: every bar renders inside it.
 import { useEffect, useState } from 'react';
@@ -23,7 +27,7 @@ import { useHeard } from '../fleet/useHeard';
 import { agentDown } from '../fleet/agentLink';
 import { useFleetChrome } from '../fleet/FleetChrome';
 import { useNavBadges } from '../fleet/navBadges';
-import { lanesRead, moodOf } from './mood';
+import { lanesRead, moodOf, shownMood, type ShownMood } from './mood';
 
 export function useMood(): { mood: Mood; cause: string } {
   const chrome = useFleetChrome();
@@ -42,13 +46,28 @@ export function useMood(): { mood: Mood; cause: string } {
     sessions, runs, waitingItems, lanes: lanesRead(accountsHeard, lanes), stallQuietMs, nowMs,
   });
   const { next } = decided;
+  // What the face showed last: the decider (`shownMood`) reads it with the clock and answers what to show now. A change is
+  // kept in state during the render that shows it, as `FaceMark` does for its play window, so no frame shows the old mood.
+  const [shown, setShown] = useState<ShownMood | null>(null);
+  const now = shownMood(shown, decided, nowMs);
+  if (shown === null || shown.mood !== now.mood || shown.cause !== now.cause || shown.since !== now.since) {
+    setShown({ mood: now.mood, cause: now.cause, since: now.since });
+  }
+  const { holdUntil } = now;
   // A window's edge changes the mood with no store change: one timeout to the next edge, then render again, which
   // reads a fresh `nowMs` and so a fresh `next`.
-  const [, setTick] = useState(0);
+  const [tick, setTick] = useState(0);
   useEffect(() => {
     if (next === null) return undefined;
     const t = setTimeout(() => { setTick((n) => n + 1); }, Math.max(0, next - Date.now()));
     return () => { clearTimeout(t); };
   }, [next]);
-  return { mood: decided.mood, cause: decided.cause };
+  // The cool-down's end is the other edge: one timeout to it, then render again. `tick` is in the dependencies so a timeout
+  // that fires a hair early (the clock still short of the end) arms the next one, never leaving the face held.
+  useEffect(() => {
+    if (holdUntil === null) return undefined;
+    const t = setTimeout(() => { setTick((n) => n + 1); }, Math.max(0, holdUntil - Date.now()));
+    return () => { clearTimeout(t); };
+  }, [holdUntil, tick]);
+  return { mood: now.mood, cause: now.cause };
 }

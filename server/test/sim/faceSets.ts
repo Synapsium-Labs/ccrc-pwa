@@ -21,9 +21,12 @@ interface MoodFacts {
   sessions: readonly FleetSession[] | null; runs: readonly RunSummary[] | null; waitingItems: number | null;
   lanes: LanesRead; stallQuietMs: number | null; nowMs: number;
 }
+interface ShownMood { mood: string; cause: string; since: number }
 interface MoodModule {
   moodOf(f: MoodFacts): { mood: string; cause: string; next: number | null };
   fallbackCause(f: Pick<MoodFacts, 'sessions' | 'runs' | 'waitingItems' | 'lanes'>): string;
+  shownMood(previous: ShownMood | null, decided: { mood: string; cause: string }, nowMs: number): ShownMood & { holdUntil: number | null };
+  moodRank(m: string): number; MOOD_COOLDOWN_MS: number;
   OFFLINE_AGENT_CAUSE: string; FUTURE_SKEW_MS: number;
   CRY_WINDOW_MS: number; HAPPY_WINDOW_MS: number; DIZZY_SWAP_MS: number; SUSPICIOUS_WINDOW_MS: number; MOOD_FALLBACK: string;
 }
@@ -232,6 +235,87 @@ const MOOD_SET: MutantSet<MoodModule> = {
   suite: moodCases,
 };
 
+/** The cool-down on mood change (item 218): `shownMood`'s cases, over a loaded module. */
+export function shownMoodCases(m: MoodModule): Record<string, SuiteCase> {
+  const T0 = NOW;
+  const on = (mood: string, since = T0): ShownMood => ({ mood, cause: `cause of ${mood}`, since });
+  const decide = (mood: string) => ({ mood, cause: `decided ${mood}` });
+  const END = T0 + m.MOOD_COOLDOWN_MS;
+  return {
+    'the cool-down is a minute to start': () => { expect(m.MOOD_COOLDOWN_MS).toBe(60_000); },
+    'the first mood shows at once, from now': () => {
+      expect(m.shownMood(null, decide('sleeping'), T0 + 5)).toEqual({ mood: 'sleeping', cause: 'decided sleeping', since: T0 + 5, holdUntil: null });
+    },
+    'an escalation inside the cool-down shows at once': () => {
+      expect(m.shownMood(on('sleeping'), decide('alert'), T0 + 1000)).toEqual({ mood: 'alert', cause: 'decided alert', since: T0 + 1000, holdUntil: null });
+      expect(m.shownMood(on('sad'), decide('crying'), T0 + 1).mood).toBe('crying');
+    },
+    'a calming change inside the cool-down waits, keeping the mood and its cause, and says when it ends': () => {
+      expect(m.shownMood(on('alert'), decide('sleeping'), T0 + 1000)).toEqual({ mood: 'alert', cause: 'cause of alert', since: T0, holdUntil: END });
+    },
+    'an equal-rank change waits': () => {
+      expect(m.shownMood(on('afraid'), decide('laughing'), T0 + 1)).toMatchObject({ mood: 'afraid', holdUntil: END });
+      expect(m.shownMood(on('sleeping'), decide('afraid'), T0 + 1)).toMatchObject({ mood: 'sleeping', holdUntil: END });
+      expect(m.shownMood(on('afraid'), decide('sleeping'), T0 + 1).mood).toBe('sleeping');
+    },
+    'a calming change shows at the end of the cool-down, to what is decided then': () => {
+      expect(m.shownMood(on('alert'), decide('sleeping'), END - 1)).toMatchObject({ mood: 'alert', holdUntil: END });
+      expect(m.shownMood(on('alert'), decide('sleeping'), END)).toEqual({ mood: 'sleeping', cause: 'decided sleeping', since: END, holdUntil: null });
+      expect(m.shownMood(on('alert'), decide('thinking'), END + 7).mood).toBe('thinking');
+    },
+    'a flip-flop inside the cool-down shows the first mood throughout': () => {
+      let shown: ShownMood = on('thinking');
+      for (const [mood, at] of [['sleeping', T0 + 1000], ['thinking', T0 + 2000], ['sleeping', T0 + 3000], ['thinking', T0 + 4000]] as const) {
+        const r = m.shownMood(shown, decide(mood), at);
+        expect(r.mood).toBe('thinking');
+        expect(r.since).toBe(T0);
+        shown = r;
+      }
+    },
+    'Offline shows at once, and leaving it waits': () => {
+      expect(m.shownMood(on('sleeping'), { mood: 'offline', cause: 'lost' }, T0 + 1)).toEqual({ mood: 'offline', cause: 'lost', since: T0 + 1, holdUntil: null });
+      expect(m.shownMood(on('offline'), decide('sleeping'), T0 + 1000)).toMatchObject({ mood: 'offline', cause: 'cause of offline', holdUntil: END });
+      expect(m.shownMood(on('offline'), decide('sleeping'), END).mood).toBe('sleeping');
+    },
+    'leaving Neutral shows at once, arriving at it from a calmer mood too, and from Offline it waits': () => {
+      expect(m.shownMood(on('neutral'), decide('sleeping'), T0 + 1)).toEqual({ mood: 'sleeping', cause: 'decided sleeping', since: T0 + 1, holdUntil: null });
+      expect(m.shownMood(on('sleeping'), decide('neutral'), T0 + 1).mood).toBe('neutral');
+      expect(m.shownMood(on('offline'), decide('neutral'), T0 + 1)).toMatchObject({ mood: 'offline', holdUntil: END });
+    },
+    'the same mood shows its new cause and keeps its time': () => {
+      expect(m.shownMood(on('offline'), { mood: 'offline', cause: 'other link' }, T0 + 9)).toEqual({ mood: 'offline', cause: 'other link', since: T0, holdUntil: null });
+      expect(m.shownMood(on('offline'), { mood: 'offline', cause: 'other link' }, END + 9).since).toBe(T0);
+    },
+    'the measured moods rank 1 to 12 and the rest are the least urgent': () => {
+      expect(m.moodRank('offline')).toBe(1);
+      expect(m.moodRank('sleeping')).toBe(12);
+      expect(m.moodRank('afraid')).toBeGreaterThan(12);
+    },
+  };
+}
+
+const SHOWN_SET: MutantSet<MoodModule> = {
+  modulePath: path.join(ROOT, 'pwa/src/face/mood.ts'),
+  mutants: [
+    { id: 'K1', old: 'moodRank(decided.mood) < moodRank(previous.mood)', new: 'moodRank(decided.mood) <= moodRank(previous.mood)' },
+    { id: 'K2', old: 'moodRank(decided.mood) < moodRank(previous.mood)', new: 'moodRank(decided.mood) > moodRank(previous.mood)' },
+    { id: 'K3', old: 'if (escalates || previous.mood', new: 'if (previous.mood' },
+    { id: 'K4', old: 'nowMs >= endsAt', new: 'nowMs > endsAt' },
+    { id: 'K5', old: 'previous.mood === MOOD_FALLBACK || ', new: '' },
+    { id: 'K6', old: 'const endsAt = previous.since + MOOD_COOLDOWN_MS;', new: 'const endsAt = nowMs + MOOD_COOLDOWN_MS;' },
+    { id: 'K7', old: 'return { ...previous, holdUntil: endsAt };', new: 'return { ...decided, since: previous.since, holdUntil: endsAt };' },
+    { id: 'K8', old: 'cause: decided.cause, since: previous.since, holdUntil: null };', new: 'cause: decided.cause, since: nowMs, holdUntil: null };' },
+    { id: 'K9', old: 'cause: decided.cause, since: previous.since, holdUntil: null };', new: 'cause: previous.cause, since: previous.since, holdUntil: null };' },
+    { id: 'K10', old: 'if (previous === null) return { ...decided, since: nowMs, holdUntil: null };', new: 'if (previous === null) return { ...decided, since: 0, holdUntil: null };' },
+    { id: 'K11', old: 'nowMs >= endsAt) return { ...decided, since: nowMs, holdUntil: null };', new: 'nowMs >= endsAt) return { ...decided, since: previous.since, holdUntil: null };' },
+    { id: 'K12', old: "r.kind === 'measured' ? r.rank : Number.POSITIVE_INFINITY", new: "r.kind === 'measured' ? r.rank : 0" },
+    { id: 'K13', old: 'return { ...previous, holdUntil: endsAt };', new: 'return { ...previous, holdUntil: null };' },
+    { id: 'K14', old: 'MOOD_COOLDOWN_MS = 60_000;', new: 'MOOD_COOLDOWN_MS = 0;' },
+    { id: 'K15', old: 'if (decided.mood === previous.mood) return', new: 'if (false) return' },
+  ],
+  suite: shownMoodCases,
+};
+
 export function splashCases(m: SplashModule): Record<string, SuiteCase> {
   const facts = (over: Partial<SplashFacts> = {}) =>
     ({ standalone: true, sinceMs: 0, frameSeen: false, reducedMotion: false, ...over });
@@ -309,6 +393,7 @@ const BADGE_SET: MutantSet<BadgeModule> = {
 /** This piece's sets, keyed as `mutation-floors.json` keys them (`<file>#<decider>`). */
 export const FACE_MUTANT_SETS: Record<string, MutantSet<never>> = {
   'pwa/src/face/mood.ts#moodOf': MOOD_SET as MutantSet<never>,
+  'pwa/src/face/mood.ts#shownMood': SHOWN_SET as MutantSet<never>,
   'pwa/src/face/splash.ts#splashShows': SPLASH_SET as MutantSet<never>,
   'pwa/src/face/badgeAct.ts#badgeAct': BADGE_SET as MutantSet<never>,
 };

@@ -77,6 +77,10 @@ export const CRY_WINDOW_MS = 3_600_000;
 export const HAPPY_WINDOW_MS = 600_000;
 export const DIZZY_SWAP_MS = 60_000;
 export const SUSPICIOUS_WINDOW_MS = 1_800_000;
+/** How long the face keeps its mood before it may change to an equal or calmer one (`shownMood`). The operator asked for
+ *  this cool-down on emotion change (programme item 218: "put cool down on emotion change. Also, we can tune this later"),
+ *  so the number is a starting point to tune, not a measured value: change it here and nowhere else. */
+export const MOOD_COOLDOWN_MS = 60_000;
 /** A stamp this far ahead of the clock is skew and counts as now; one further ahead is not trusted (no window at all),
  *  as `recentLastEnd` does for a `lastEnd` (`shared/api.ts`). */
 export const FUTURE_SKEW_MS = 60_000;
@@ -189,4 +193,42 @@ export function moodOf(f: MoodFacts): { readonly mood: Mood; readonly cause: str
     if (matches(f, sessions)) return { mood, cause: causeOf(mood, f), next: nextEdge };
   }
   return { mood: MOOD_FALLBACK, cause: fallbackCause(f), next: nextEdge };
+}
+
+/** How urgent a mood is: its rank (1 most urgent). A mood with no measured rule (`afraid`, `laughing`) is the least urgent,
+ *  so a change to it waits like any calming change; `moodOf` never answers one today. */
+export const moodRank = (m: Mood): number => {
+  const r = MOOD_RULES[m];
+  return r.kind === 'measured' ? r.rank : Number.POSITIVE_INFINITY;
+};
+
+/** The mood the face shows, with the instant it last changed. */
+export interface ShownMood {
+  readonly mood: Mood;
+  readonly cause: string;
+  /** When the face last changed its mood (the first mood: when it was first shown). */
+  readonly since: number;
+}
+
+/** What the face shows now, given what it showed and what `moodOf` decided: a cool-down on mood change (item 218).
+ *  A change to a MORE urgent mood (a lower rank, Offline included) shows at once, so the face never hides something urgent
+ *  to keep its cool. A change to an equal or less urgent mood shows only once `MOOD_COOLDOWN_MS` has passed since the last
+ *  change; until then the face keeps its mood and its cause, and `holdUntil` says when to look again (null: nothing is
+ *  held). When the cool-down ends the face shows what `moodOf` decides then, never a queue of the changes it missed, and a
+ *  decision back to the mood on show (A, B, A) changes nothing. The same mood with a new cause shows the new cause.
+ *  One exception to the hold, which the ruling did not name: leaving Neutral (`MOOD_FALLBACK`, "not heard yet") shows at once.
+ *  Neutral is no emotion to cool down from but the start-up reading, and holding it would make the face say "not heard
+ *  yet" for a minute after every reader had answered (recorded in the face plan's departures as `neutral-leaves-at-once`).
+ *  `nowMs` is an argument: no clock is read. */
+export function shownMood(
+  previous: ShownMood | null,
+  decided: { readonly mood: Mood; readonly cause: string },
+  nowMs: number,
+): ShownMood & { readonly holdUntil: number | null } {
+  if (previous === null) return { ...decided, since: nowMs, holdUntil: null };
+  if (decided.mood === previous.mood) return { mood: previous.mood, cause: decided.cause, since: previous.since, holdUntil: null };
+  const escalates = moodRank(decided.mood) < moodRank(previous.mood);
+  const endsAt = previous.since + MOOD_COOLDOWN_MS;
+  if (escalates || previous.mood === MOOD_FALLBACK || nowMs >= endsAt) return { ...decided, since: nowMs, holdUntil: null };
+  return { ...previous, holdUntil: endsAt };
 }

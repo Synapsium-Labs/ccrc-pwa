@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { MOODS, type Mood } from '../../shared/face';
 import { sessionBucket, type LaneWire, type LastEnd } from '../../shared/api';
 import { workerQuietAt } from '../src/fleet/runWords';
-import { MEASURED, CRY_WINDOW_MS, DIZZY_SWAP_MS, FUTURE_SKEW_MS, HAPPY_WINDOW_MS, MOOD_FALLBACK, MOOD_RULES, OFFLINE_AGENT_CAUSE, SUSPICIOUS_WINDOW_MS, fallbackCause, lanesRead, moodOf, type LanesRead, type MoodFacts } from '../src/face/mood';
+import { MEASURED, MOOD_COOLDOWN_MS, moodRank, shownMood, type ShownMood, CRY_WINDOW_MS, DIZZY_SWAP_MS, FUTURE_SKEW_MS, HAPPY_WINDOW_MS, MOOD_FALLBACK, MOOD_RULES, OFFLINE_AGENT_CAUSE, SUSPICIOUS_WINDOW_MS, fallbackCause, lanesRead, moodOf, type LanesRead, type MoodFacts } from '../src/face/mood';
 import { fleetSession } from './fleetFixture';
 import { runRow } from './ledgersFixture';
 
@@ -185,5 +185,91 @@ describe('moodOf', () => {
   });
   it('every answer carries a cause', () => {
     for (const f of [base(), base({ sessions: null }), withSession({ bucket: 'working' })]) expect(moodOf(f).cause).not.toBe('');
+  });
+});
+
+// The cool-down on mood change (item 218): `shownMood` chooses what the face shows from what it showed and what `moodOf`
+// decided. Time is an argument.
+describe('shownMood', () => {
+  const T0 = NOW;
+  const on = (m: Mood, since = T0): ShownMood => ({ mood: m, cause: `cause of ${m}`, since });
+  const decide = (m: Mood) => ({ mood: m, cause: `decided ${m}` });
+  const afterEnd = T0 + MOOD_COOLDOWN_MS;
+
+  it('the cool-down is a minute to start', () => expect(MOOD_COOLDOWN_MS).toBe(60_000));
+  it('the first mood shows at once, from now', () => {
+    expect(shownMood(null, decide('sleeping'), T0 + 5)).toEqual({ mood: 'sleeping', cause: 'decided sleeping', since: T0 + 5, holdUntil: null });
+  });
+  it('an escalation inside the cool-down shows at once', () => {
+    const r = shownMood(on('sleeping'), decide('alert'), T0 + 1000);
+    expect(r).toEqual({ mood: 'alert', cause: 'decided alert', since: T0 + 1000, holdUntil: null });
+  });
+  it('an escalation shows at once whatever the gap between the ranks', () => {
+    expect(shownMood(on('sleeping'), decide('neutral'), T0 + 1).mood).toBe('neutral');
+    expect(shownMood(on('sad'), decide('crying'), T0 + 1).mood).toBe('crying');
+  });
+  it('a calming change inside the cool-down waits, keeping the mood and its cause, and says when it ends', () => {
+    const r = shownMood(on('alert'), decide('sleeping'), T0 + 1000);
+    expect(r).toEqual({ mood: 'alert', cause: 'cause of alert', since: T0, holdUntil: afterEnd });
+  });
+  it('an equal-rank change is not an escalation: it waits (a mood with no measured rule counts as the calmest)', () => {
+    expect(shownMood(on('afraid'), decide('laughing'), T0 + 1)).toMatchObject({ mood: 'afraid', holdUntil: afterEnd });
+    expect(shownMood(on('sleeping'), decide('afraid'), T0 + 1)).toMatchObject({ mood: 'sleeping', holdUntil: afterEnd });
+    expect(shownMood(on('alert'), decide('afraid'), T0 + 1)).toMatchObject({ mood: 'alert', holdUntil: afterEnd });
+    expect(shownMood(on('afraid'), decide('sleeping'), T0 + 1).mood).toBe('sleeping');
+  });
+  it('a calming change shows at the cool-down\'s end, to what is decided then', () => {
+    expect(shownMood(on('alert'), decide('sleeping'), afterEnd - 1)).toMatchObject({ mood: 'alert', holdUntil: afterEnd });
+    expect(shownMood(on('alert'), decide('sleeping'), afterEnd)).toEqual({ mood: 'sleeping', cause: 'decided sleeping', since: afterEnd, holdUntil: null });
+    expect(shownMood(on('alert'), decide('thinking'), afterEnd + 7).mood).toBe('thinking');
+  });
+  it('a flip-flop (A, B, A) inside the cool-down shows A throughout', () => {
+    let shown: ShownMood | null = on('thinking');
+    for (const [m, at] of [['sleeping', T0 + 1000], ['thinking', T0 + 2000], ['sleeping', T0 + 3000], ['thinking', T0 + 4000]] as const) {
+      const r = shownMood(shown, decide(m), at);
+      expect(r.mood).toBe('thinking');
+      expect(r.since).toBe(T0);
+      shown = r;
+    }
+  });
+  it('a held face shows the first mood that differs once the cool-down ends, not a queue of the missed changes', () => {
+    const held = shownMood(on('alert'), decide('sleeping'), T0 + 1000);
+    expect(held.mood).toBe('alert');
+    expect(shownMood(held, decide('thinking'), afterEnd).mood).toBe('thinking');
+  });
+  it('Offline shows at once, from any mood, inside the cool-down', () => {
+    for (const m of MOODS.filter((x) => x !== 'offline')) {
+      expect(shownMood(on(m), { mood: 'offline', cause: 'lost' }, T0 + 1)).toEqual({ mood: 'offline', cause: 'lost', since: T0 + 1, holdUntil: null });
+    }
+  });
+  it('leaving Offline for a calmer mood waits like any other calming change', () => {
+    const r = shownMood(on('offline'), decide('sleeping'), T0 + 1000);
+    expect(r).toMatchObject({ mood: 'offline', cause: 'cause of offline', holdUntil: afterEnd });
+    expect(shownMood(on('offline'), decide('sleeping'), afterEnd).mood).toBe('sleeping');
+  });
+  it('leaving Neutral, the not-heard-yet reading, shows at once for any mood', () => {
+    for (const m of MOODS.filter((x) => x !== 'neutral')) {
+      expect(shownMood(on('neutral'), decide(m), T0 + 1)).toEqual({ mood: m, cause: `decided ${m}`, since: T0 + 1, holdUntil: null });
+    }
+  });
+  it('arriving at Neutral from a calmer mood is an escalation and shows at once; from Offline it waits', () => {
+    expect(shownMood(on('sleeping'), decide('neutral'), T0 + 1).mood).toBe('neutral');
+    expect(shownMood(on('offline'), decide('neutral'), T0 + 1)).toMatchObject({ mood: 'offline', holdUntil: afterEnd });
+  });
+  it('the same mood shows its new cause and keeps its time, held or not', () => {
+    expect(shownMood(on('offline'), { mood: 'offline', cause: 'other link' }, T0 + 9)).toEqual({ mood: 'offline', cause: 'other link', since: T0, holdUntil: null });
+    expect(shownMood(on('offline'), { mood: 'offline', cause: 'other link' }, afterEnd + 9).since).toBe(T0);
+  });
+  it('it ranks the measured moods 1 to 12 and the rest as the least urgent', () => {
+    expect(moodRank('offline')).toBe(1);
+    expect(moodRank('sleeping')).toBe(12);
+    expect(moodRank('afraid')).toBeGreaterThan(12);
+    expect(moodRank('laughing')).toBeGreaterThan(12);
+  });
+  it('the accessible name stays with the held mood: moodOf decides, the shown mood and its cause are the name', () => {
+    const decided = moodOf(withSession({ bucket: 'attention' }));
+    const shown = shownMood(on('thinking'), decided, T0 + 1);
+    expect(shown.mood).toBe('alert');
+    expect(shown.cause).toBe(MOOD_RULES.alert.kind === 'measured' ? MOOD_RULES.alert.cause : '');
   });
 });
