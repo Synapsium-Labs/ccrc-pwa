@@ -79,4 +79,6 @@ case); the timer regex with `/i` again (worker-skill red, the upper-case fixture
 - **additive-lines-in-held-files.** `server/src/continuity/card.ts`, `server/src/continuity/routes.ts` and `ccd/ccrc-api`
   are under probes PR B's claim 4205. Its holder agreed by mail to these lines (the block escape and the nothing line's
   docstring; the memo and the start door; `parse_timer`), none of which are its rows, and the second to land merges `main`
-  once and takes the union, as ruled.
+  once and takes the union, as ruled. Probes PR B (#2802) landed first: this branch's conflict probe then answered a
+  conflict in `routes.ts`, so it merged `main` once (worker clause 16) and kept both sides: the memo block where this pull
+  request moved it, and `main`'s `stampRead` helper after the start door, where it stood.
