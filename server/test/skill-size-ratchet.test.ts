@@ -1,5 +1,5 @@
 // The skill-size ratchet: every shipped SKILL.md (ccd/*-skill/SKILL.md) is capped in bytes, and its
-// contract must end inside the part of the file a compaction keeps.
+// contract must end inside the restore budget, CONTRACT_BUDGET_BYTES from the file's start.
 //
 // Why. After a compaction Claude Code re-attaches only the start of a loaded skill (its documentation
 // gives the first 5,000 tokens of each). The skill then still looks loaded, so a compacted session
@@ -54,7 +54,7 @@ const SKILL_FILE = /^ccd\/[^/]+-skill\/SKILL\.md$/;
 // their further net growth must fit in the 226 bytes left; a rewrite that needs more goes back to the
 // operator. At 3.2 bytes a token, 16,750 bytes is about 5,234 tokens: 234 past the 5,000 Claude
 // Code re-attaches. The cut notice before the contract covers that tail: a session that cannot see the
-// section after the contract loads the skill again. These files measure about 4.0 bytes a token on a
+// section the notice names loads the skill again. These files measure about 4.0 bytes a token on a
 // public tokenizer; Claude's own is not measured here and counts more tokens for the same text.
 const CONTRACT_BUDGET_BYTES = 16_750;
 const CONTRACT_HEADING = '## The contract';
@@ -173,7 +173,7 @@ function contractPlace(file: string, text: string): string[] {
   const next = text.indexOf('\n## ', at + CONTRACT_HEADING.length);
   const end = Buffer.byteLength(next === -1 ? text : text.slice(0, next + 1));
   if (end > CONTRACT_BUDGET_BYTES) {
-    out.push(`${file}: the contract ends ${end} bytes in, past the ${CONTRACT_BUDGET_BYTES} a compaction keeps. `
+    out.push(`${file}: the contract ends ${end} bytes in, past the ${CONTRACT_BUDGET_BYTES}-byte restore budget. `
       + 'Shorten the clauses, or the text before the contract');
   }
   return out;
@@ -314,7 +314,7 @@ describe('the ratchet rules', () => {
   });
 });
 
-describe('R6: the contract sits where a compaction keeps it', () => {
+describe('R6: the contract sits first, behind the notice, inside the restore budget', () => {
   const NOTICE = 'If you cannot see a later section, load this skill again.\n\n';
   const skill = (before: string, clauses: string, after = '## Steps\n\nrest\n'): string =>
     `---\nname: x\n---\n\n# Title\n\n${before}## The contract\n\n${clauses}\n${after}`;
