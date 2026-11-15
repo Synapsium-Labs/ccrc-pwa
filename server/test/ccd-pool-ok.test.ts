@@ -25,7 +25,9 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { makeCcdHarness, plantPoolEpoch, plantPoolSyncTimer, seedAccountsSh, WS_ADD, ccdSource, type CcdHarness }
   from './ccdWsHelpers.js';
-import { POOL_RULE_CASES, POOLED_TEST_ROSTER, POOL_BY_ID } from './fixtures/poolRule.js';
+import {
+  POOL_RULE_CASES, POOL_RULE_PROJECT_CASES, POOL_RULE_SET_CASES, POOLED_TEST_ROSTER, POOL_BY_ID,
+} from './fixtures/poolRule.js';
 import type { PoolRuleCase } from './fixtures/poolRule.js';
 import type { ProjectPoolWire } from '../../shared/api.js';
 import fs from 'node:fs';
@@ -66,7 +68,7 @@ describe('_pool_ok over POOL_RULE_CASES — the rule, three exit codes', () => {
     }
     // Both undecidable STATES are exercised, not just one of them.
     for (const st of ['unreadable', 'malformed']) {
-      expect(POOL_RULE_CASES.some((c) => c.project.state === st), st).toBe(true);
+      expect(POOL_RULE_PROJECT_CASES.some((c) => c.project.state === st), st).toBe(true);
     }
   });
 
@@ -79,7 +81,16 @@ describe('_pool_ok over POOL_RULE_CASES — the rule, three exit codes', () => {
   const acctWord = (c: PoolRuleCase): string =>
     c.accountState ?? (c.accountPool === null ? 'untagged' : `named ${c.accountPool}`);
 
-  it.each(POOL_RULE_CASES.map((c) => [c.name, c] as const))('%s', (_name, c) => {
+  // The SET rows are not driven here: bash `_pool_ok` has no set case until a LATER pull request of the pool-set plan
+  // (Task 3, which gives it the session's side as a set). Until then the skip is bounded by the next test, and the
+  // rows are pinned by `pool-rule-core.test.ts`. Those pull requests add the set rows to this driver.
+  it('skips only the set rows, and the project rows it drives are the whole rest of the table', () => {
+    expect(POOL_RULE_SET_CASES.length, 'no set rows: this skip is a comment about nothing').toBeGreaterThan(0);
+    expect(POOL_RULE_PROJECT_CASES.length + POOL_RULE_SET_CASES.length).toBe(POOL_RULE_CASES.length);
+    expect(POOL_RULE_PROJECT_CASES.length, 'the skip swallowed the table').toBeGreaterThanOrEqual(20);
+  });
+
+  it.each(POOL_RULE_PROJECT_CASES.map((c) => [c.name, c] as const))('%s', (_name, c) => {
     // `_acct_pool_state` overridden to this row's account state: it always
     // answers rc 0 with one of the five words, never bare stdout the way the
     // old `_ccrc_pool` generator did.
