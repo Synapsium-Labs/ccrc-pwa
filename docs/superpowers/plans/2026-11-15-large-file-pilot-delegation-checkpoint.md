@@ -28,12 +28,19 @@ answer as recommended: §2 (the method), §3 "the pilot", §4 (slots and caps), 
 `docs/superpowers/plans/2026-11-14-large-file-step0-caps.md` (D-8635) and
 `docs/superpowers/plans/2026-11-14-large-file-step0-split-tool.md` (D-8636).
 
-## The file today (measured on `origin/main` `2126f46db`, 2026-11-15)
+## The file today (measured on `origin/main` `2126f46db`, 2026-11-15; unchanged at `cc3cdad92`)
 
 3,273 lines and 2,335 code lines (`codeLines`, `server/test/growthCheck.ts`). It has 6 import statements and 104
 top-level declarations, 58 of them exported. It has had no commit since #2330 (2026-11-05), and no open PR touches it
 (one `gh pr list` on 2026-11-15). Its ring by `rings/ring.ts` is L1 ("no outer-ring fact": its I/O is all injected),
-and its context is C5 (`coord/**`). Line numbers below are snapshots of that sha.
+and its context is C5 (`coord/**`). Line numbers below are snapshots of that sha. Between `2126f46db` and `cc3cdad92`
+(#2811 and #2819 merged in that range) git shows no change to the file, to any test or source a task below names, or to
+`ringContextMap.ts` and `rings/ring.ts`.
+
+**The file is free.** Spec §4 says in-flight programmes keep their files and lists "the delegation broker
+(`delegation-checkpoint.ts`)". That programme closed on 2026-11-10 (#2561, `1eba4b916`: wave 5b dropped, the programme
+closes), so it holds no slot and no hunk in the file. Step 0 is on `main` too: #2811 (D-8635, `6c9a4ff22`) and #2819
+(D-8636, `7588a0ebf`).
 
 | Target module | Ring | Declarations | Lines on `main` | Code lines after (measured on a scratch copy) |
 |---|---|---|---|---|
@@ -68,8 +75,10 @@ slice redded exactly the six tests #2819's body reports (named in Task 1). The c
   references in both directions (`cycle`). Recovery or the projection moved while the applier is still in the file
   would be one, because the applier calls both and both call the source's fold.
 - **Preflight before every move** (§4): one open move PR per file, the C5 slot free, and no open PR with a hunk in a
-  declaration the slice moves. Build the heads file from one `gh pr list --json number,headRefOid` plus
-  `git fetch origin pull/<n>/head`. Never poll; if `gh` reports a rate limit, stop and report.
+  declaration the slice moves. `preflightVerdict` checks the first two only through a head's `move: {source, dests}`
+  field, and the tool makes no `gh` call, so the heads file must mark every open move PR, or both checks pass vacuously.
+  Build it with "The heads file" below: one `gh pr list`, one `git fetch`, and the move marker read from each head's
+  diff. Never poll; if `gh` reports a rate limit, stop and report.
 - **Review:** a pure-move lens, at most two rounds (§2 item 5).
 - **Commits** cite D-8641. A commit that adds or edits a file under `docs/superpowers/plans/` carries
   `Ledger-Edit: D-8641` directly above `Co-Authored-By`. This is a public repository: no tracker ids, hosts or
@@ -92,10 +101,44 @@ slice redded exactly the six tests #2819's body reports (named in Task 1). The c
    import of either one reds `rings/outward-edges.test.ts`. Each slice runs it.
 4. **A rebase across a feature PR that edited a moved declaration.** If a feature landed during the freeze, the rebased
    move can keep an old copy or lose the edit. Re-run `move` on the new base instead of resolving conflicts by hand, and
-   then run `verdict` (`defined-twice`, `text:<name>`).
+   then commit and run `verdict` on the commit (`defined-twice`, `text:<name>`).
 5. **Module identity under mocks and spies.** `delegation-recovery.test.ts` mocks `delegation-journal.js`, and
    `delegation-pass-timing.test.ts` spies on `delegation-model.js`'s namespace. The moved code must still reach those
    modules through the same ids. Both suites run in every slice and passed on the scratch copy.
+
+### The heads file (every slice's Step 1)
+
+`preflightVerdict` reads `file-has-open-move` and `slot-held` only from a head's `move: {source, dests}`, and
+`file-split.mjs` makes no `gh` call, so the caller marks each move PR. A head is a move PR when its diff adds a line
+starting with the tool's marker (`destHeader`: ``/** Moved out of `<source>` by `.github/ci/file-split.mjs` ``), the
+rule `addsMoveMarker` uses. `source` is the path inside that marker, and `dests` are the files whose diff adds it.
+
+1. One `gh` call: `gh pr list --state open --limit 500 --json number,headRefOid > prs.json`.
+2. One fetch for every head: `git fetch -q origin pull/<n>/head …` (all refspecs in one call).
+3. For each head, `git diff -U0 --no-color --no-ext-diff --no-renames "$(git merge-base origin/main <sha>)" <sha> --
+   '*.ts' '*.tsx' '*.mts' '*.mjs'`, read by this function (kept in the slice's scratch directory, never committed):
+
+```js
+const MARK = /^\+[ \t]*\/\*\* Moved out of `([^`\n]+)` by `\.github\/ci\/file-split\.mjs`/;
+export function movesOf(diff) {
+  let file = null; const moves = new Map();
+  for (const line of diff.split('\n')) {
+    if (line.startsWith('+++ ')) { file = line.startsWith('+++ b/') ? line.slice(6) : null; continue; }
+    const m = MARK.exec(line);
+    if (m && file) moves.set(m[1], [...new Set([...(moves.get(m[1]) ?? []), file])].sort());
+  }
+  return [...moves].map(([source, dests]) => ({ source, dests }));
+}
+```
+
+4. Write `{pr, head}` for a head with no move, and `{pr, head, move}` for a head with one. A head that moves out of two
+   or more sources stops the slice: report it, because `OpenHead` holds one move.
+5. Print the heads that carry a `move` beside the preflight result, so the reviewer sees what the slot check read.
+
+Checked on 2026-11-15: on a synthetic diff that creates `delegation-durability.ts` with the L3 header above the
+marker, `movesOf` returns `[{source: 'server/src/coord/delegation-checkpoint.ts', dests:
+['server/src/coord/delegation-durability.ts']}]`. On #2819's merged diff (`7588a0ebf`), whose tool and test spell the
+marker inside template literals, and on #2811's (`6c9a4ff22`), it returns `[]`.
 
 ---
 
@@ -173,10 +216,19 @@ slice redded exactly the six tests #2819's body reports (named in Task 1). The c
     goes;
   - `delegation-pass-timing.test.ts`: `(checkpointMod as …)['DELEGATION_REPAIR_FULL_MS']` becomes a named import.
     `checkpointMod` stays, for `encodeDelegationCheckpoint`, which does not move.
-- [ ] **Step 7: Lower the ARCH-06 ratchet.** Every literal source pin over the file now reads through the view, so the
-  scan measures 0. Delete the `'server/src/coord/delegation-checkpoint.ts': 33` row of
-  `advance-switches.test.ts` (an absent row means 0). The three new modules have no rows, so a later literal pin over
-  any program member is red.
+- [ ] **Step 7: Lower the ARCH-06 ratchet, and bound the view in its place.** Every literal source pin over the file
+  now reads through the view, so the scan measures 0. Delete the `'server/src/coord/delegation-checkpoint.ts': 33` row
+  of `advance-switches.test.ts` (an absent row means 0). What this gives up: ARCH-06's `literalSourcePins` counts a
+  pin only on a `readFileSync` read in the test file (directly, one hop away, or through a function in that file); a
+  read through `programSource` or `programTexts` is its KNOWN WIDTH ("a pin on a value passed to a helper"). From this
+  PR on, the 33 pins are uncounted, and a new literal pin read through the view, over any of the four modules, does not
+  red ARCH-06. Only a pin that reads a member with `readFileSync` itself is counted, and is red, because none of the
+  four has a row. In its place, `program-view.test.ts` gets one more row: the number of `programSource(` and
+  `programTexts(` call sites in `server/test` (outside `scan/programView.ts` and `program-view.test.ts`) may only
+  shrink from what this PR measures. A new region to pin goes onto `scan/symbols.ts` instead (ARCH-06's rule). KNOWN
+  WIDTH: the row counts reads, not the pins on them, so a new literal pin on an existing read is not counted; the
+  pure-move review lens checks for it. No slice changes the count, because a slice changes test files on import lines
+  only.
 - [ ] **Step 8: Gates.** Run `npx vitest run test/program-view.test.ts test/delegation-recovery.test.ts
   test/delegation-wave3.integration.test.ts test/delegation-ingest.test.ts test/delegation-pass-timing.test.ts
   test/coord-store.test.ts test/single-definition/advance-switches.test.ts`, then the Global Constraints gates.
@@ -186,9 +238,9 @@ slice redded exactly the six tests #2819's body reports (named in Task 1). The c
 
 ### Task 2: The frozen stage (Q8), in the pin PR
 
-**Gate:** #2811 (D-8635) on `main`, which brings the `growth-frozen` directory and its parser. If it has not merged,
-Task 1's PR lands alone, and this task follows as its own PR as soon as it does. No slice starts before the freeze is
-on `main`.
+This task lands in Task 1's PR: #2811 (D-8635) is on `main` (`6c9a4ff22`), with the freeze parser
+(`GROWTH_FROZEN_DIR`, `parseFrozenFiles`). The directory has no file on `main` yet, so this is its first. No slice
+starts before the freeze is on `main`.
 
 **Files:** Create `server/test/growth-frozen/server-src-coord-delegation-checkpoint-ts.json`.
 
@@ -200,25 +252,30 @@ on `main`.
 
 ### Tasks 3 to 5: the slices, one PR each
 
-**Gate for each slice:** #2819 (D-8636) on `main`, Tasks 1 and 2 on `main`, the previous slice merged, and preflight
-passing. Every slice runs these steps:
+**Gate for each slice:** Tasks 1 and 2 on `main`, the previous slice merged, and preflight passing (#2819's tool is on
+`main`). Every slice runs these steps:
 
-- [ ] **Step 1: Preflight.** Write `heads.json` as Global Constraints says, then run
-  `node .github/ci/file-split.mjs preflight --source server/src/coord/delegation-checkpoint.ts --dest <dest> --names <names> --heads heads.json --self <n>`.
-  Expected: `ok`.
+- [ ] **Step 1: Preflight.** Write `heads.json` as "The heads file" below says, then run
+  `node .github/ci/file-split.mjs preflight --source server/src/coord/delegation-checkpoint.ts --dest <dest> --names <names> --heads heads.json`
+  (with `--self <n>` once the slice's own PR is open). Expected: exit 0, `"ok": true`, `"slots": ["C5"]`,
+  `"refusals": []`.
 - [ ] **Step 2: Plan.** Run `node .github/ci/file-split.mjs plan …` with the same arguments. Expected: exit 0,
   `destContexts` `["C5"]`, `sourceUsesDest` `[]`, and `problems` `[]`.
 - [ ] **Step 3: Move.** Run `node .github/ci/file-split.mjs move …`. Then add the ring header, where the task names
   one.
-- [ ] **Step 4: Verdict.** Run `node .github/ci/file-split.mjs verdict --base "$(git merge-base origin/main HEAD)"`.
-  Expected: `pure: true`, `differing: []`, and the moved count the task states. In `git diff --stat`, a changed test
-  file shows its import lines alone.
-- [ ] **Step 5: Gates.** Run every `server/test/delegation-*.test.ts`, plus `mail-routes`, `coord-store`,
+- [ ] **Step 4: Gates.** Run every `server/test/delegation-*.test.ts`, plus `mail-routes`, `coord-store`,
   `coordination-snapshot`, `lease-routes`, `coordinator-intent-route`, `orphan-tree-beat-ready`,
   `program-view`, `file-split-pin`, `growth-check` and `growth-caps`, then the Global Constraints gates. Expected: all
   green. A red pin stops the slice (Review Focus 2).
-- [ ] **Step 6: Commit** the files `move` wrote, by name (never `git add -A`):
-  `refactor(coord): <dest> moves out of delegation-checkpoint.ts, a pure move (D-8641)`.
+- [ ] **Step 5: Commit** the files `move` wrote (its `files` list) and the header, by name (never `git add -A`):
+  `refactor(coord): <dest> moves out of delegation-checkpoint.ts, a pure move (D-8641)`. Do not push yet.
+- [ ] **Step 6: Verdict, on the commit.** `branchVerdict` reads committed trees only (`git diff <base> HEAD`,
+  `git show <sha>:<file>`), so on an uncommitted move it prints `null` and exits 0 without judging anything. Run it
+  after Step 5: `node .github/ci/file-split.mjs verdict --base "$(git merge-base origin/main HEAD)"`. Expected: exit 0,
+  `pure: true`, `differing: []`, and the moved count the task states. `null` is a failure here, never a pass: it means
+  the commit holds no marker line. Then `git diff --stat "$(git merge-base origin/main HEAD)" HEAD` shows each changed
+  test file on its import lines alone. If the verdict is impure, undo the commit (`git reset --soft HEAD~1`), restore
+  the files, re-run `move` from Step 3, and repeat Steps 4 to 6. Push only after a pure verdict.
 
 **How each slice updates the pins in its own PR.** It edits none of them. Task 1 already reads every pin through the
 program, so a slice's test changes are the import lines `move` repoints, and the verdict holds them to that. The pins
@@ -290,6 +347,12 @@ each slice exercises are listed per task.
 
 No move marker, so the verdict answers null.
 
+**Gate: the operator's "Close a file" tap.** D-8635's Q10 table makes closing an operator action, the same as starting
+one: the coordinator writes the cap files only after the tap. The dedicated ledger control is not built (D-8635's open
+follow-up names "Start a file" and "Grant an exemption", not "Close a file"), so the coordinator asks it as a "Waiting
+on you" item that carries its own answer control, with the four measured caps from Step 1 in the question. The PR is
+opened after the answer and cites it.
+
 **What stays in `delegation-checkpoint.ts`** (59 declarations):
 - constants and errors: `DELEGATION_CHECKPOINT_FILE`, `COORDINATION_RESTORE_MARKER_FILE`,
   `DELEGATION_RESTORE_IN_PROGRESS`, `DelegationCheckpointErrorCode`, `DelegationCheckpointError`, `refuse`;
@@ -350,14 +413,22 @@ No move marker, so the verdict answers null.
 - **The words block moves with the applier.** §3's risk line asks for this, and the cycle rule forces it. One guard
   keeps admitting the program's words; splitting it per module would be new code, not a move.
 - **Caps on the three new modules** in the closing PR, by §4's new-module sentence. The brief named the file's cap only.
-- **The start had no console control.** D-8635 leaves "Start a file" as an open follow-up (Q10). The operator's
-  2026-11-14 answer "start step 0 and the pilot" stands in for the tap, and the pilot adds no operator action of its
-  own.
+- **Neither of the file's two taps has its console control.** D-8635's Q10 table has an operator tap at each end of a
+  file: "Start a file" (the freeze, Task 2) and "Close a file" (the caps, Task 6). The control for Start is D-8635's
+  open follow-up, and that follow-up does not list Close at all. For Start, the operator's 2026-11-14 answer "start
+  step 0 and the pilot" stands in for the tap. Close is not covered by that answer: Task 6 waits for the operator's
+  answer to a "Waiting on you" item. The pilot builds neither control; the follow-up should add Close beside Start.
+- **The delegation broker no longer holds the file.** Spec §4 still lists it as an in-flight programme that keeps
+  `delegation-checkpoint.ts`; it closed on 2026-11-10 (#2561), before this plan.
 
 ## Known limits
 
 - The code-line figures for the four modules come from a scratch copy; Task 6 measures them again.
 - A non-literal scanner that reads a member without the view, such as a line scanner on `readFileSync`, is refused by
-  no guard. ARCH-06's ratchet covers only literal pins. The pure-move review lens checks for it.
+  no guard. ARCH-06's ratchet covers only literal pins, and only on a `readFileSync` read: from Task 1 on it counts no
+  pin read through `programSource` or `programTexts`, over any of the four modules (Task 1 Step 7). Task 1's call-site
+  row bounds the reads, not the pins on them. The pure-move review lens checks for both.
+- The heads file marks a move PR by the marker line its diff adds, the same rule as the tool's `addsMoveMarker`. A hand
+  move without the marker is not seen, and it is not judged by the REAL row either (D-8636's KNOWN WIDTH).
 - Open #2658 also edits `advance-switches.test.ts` (Task 1 Step 7). Whichever PR lands second rebases. Preflight does
   not see test-file overlap.
