@@ -287,8 +287,10 @@ describe('applyLandingControl: the facts are revalidated inside the transaction 
     const id = atMerging();
     const control = controlAt();
     coord.db.exec('PRAGMA foreign_keys = OFF');
-    coord.db.prepare('DELETE FROM runs WHERE id = ?').run(id);
-    expect(apply(control)).toEqual({ kind: 'no-send', reason: 'run-unreadable', holdChanged: false });
+    try {
+      coord.db.prepare('DELETE FROM runs WHERE id = ?').run(id);
+      expect(apply(control)).toEqual({ kind: 'no-send', reason: 'run-unreadable', holdChanged: false });
+    } finally { coord.db.exec('PRAGMA foreign_keys = ON'); }
     expect(rows('SELECT * FROM mail')).toHaveLength(0);
     expect(rows('SELECT * FROM mail_deliveries')).toHaveLength(0);
     expect(cueObservations()).toHaveLength(0);

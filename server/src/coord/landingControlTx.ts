@@ -4,7 +4,8 @@
 // (`landingNext.ts`) for the next-to-land cue against the EFFECTIVE flags, and queues that cue through the existing notice
 // bodies (`queueLandingNoticeTx` for a run episode, `queueRunlessNoticeTx` for a creation) in the same transaction. It opens
 // no transaction, writes no journal record, reads no file and decides nothing the L1 deciders own. The store keeps what
-// needs its private fields (the guard, the owned transaction, the fence); this file keeps the body, so the store keeps only that (the store still grew against its merge-bases; the growth check passes through its new-file rule).
+// needs its private fields (the guard, the owned transaction, the fence); this file keeps the body.
+// The store still grew against its merge-bases; the growth check passes through its new-file rule.
 // The SHA-256 digest of the cue's identity is taken here (L3), never in the pure file.
 import { createHash } from 'node:crypto';
 import { mainRedNext } from './landingLine.js';
@@ -53,9 +54,11 @@ export function applyLandingControlTx(coord: WatcherCoordPort, readFacts: () => 
   const subject = `next-to-land:#${out.pr}:${digest}`;
   let queued: ReturnType<typeof queueRunlessNoticeTx>;
   if (out.episode.kind === 'run') {
-    // A `send` for a run episode means the decider saw a run object, so `row` is non-null here (a missing run is a no-send above).
+    // Invariant: a `send` for a run episode means the decider saw a run object (a missing run is a no-send above). Unreachable by that
+    // contract; if it ever fires the body throws and the store rolls back and classifies it, never an `episode-changed` no-send.
+    if (row === null) throw new Error('landing-next: a run episode without a run row (landingNext.ts#nextLandingNoticeOf returns no-send for a missing run)');
     phase.at = 'apply';
-    queued = queueLandingNoticeTx(coord, row!, { detail: `landing:next:v1:${digest}`, at: nowMs, episode: out.episode.episode, toId: out.toId, subject, body: out.body });
+    queued = queueLandingNoticeTx(coord, row, { detail: `landing:next:v1:${digest}`, at: nowMs, episode: out.episode.episode, toId: out.toId, subject, body: out.body });
   } else {
     phase.at = 'apply';
     queued = queueRunlessNoticeTx(coord, { toId: out.toId, kind: 'status', subject, body: out.body });
