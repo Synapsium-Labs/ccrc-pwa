@@ -54,5 +54,8 @@
   "server/src/continuity/timers.ts#timerCleanupVerdict": 1,
   "server/src/continuity/timers.ts#timerPreview": 1,
   "server/src/continuity/timers.ts#packTimerMail": 1,
-  "server/src/coord/stall.ts#timerHoldUntil": 1
+  "server/src/coord/stall.ts#timerHoldUntil": 1,
+  "shared/poolrule.ts#poolRule": 1,
+  "shared/poolset.ts#poolSetSpelling": 1,
+  "shared/poolset.ts#parsePoolSet": 1
 }

@@ -3,8 +3,9 @@
 //   An account `a` may serve a project `p` iff pool(a) is null, or pool(p) is
 //   null, or pool(a) === pool(p). If pool(p) cannot be read, NOBODY DECIDES.
 //
-// L0, like every other module in `shared/`: it imports nothing but TYPES,
-// not even `node:*`, because the PWA bundles this file. That is not a formality here —
+// L0, like every other module in `shared/`: it imports TYPES plus one VALUE from its
+// sibling `./poolset.js` (`poolSetSpelling`, the set's one spelling, which a set
+// mismatch names), and not even `node:*`, because the PWA bundles this file. That is not a formality here —
 // it is the whole reason the rule lives in `shared/` rather than under
 // `server/src/`. The server's wave-3 pre-check now consumes it; the phone's
 // wave-4 "show other pools" disclosure remains a future consumer. Two copies
@@ -30,6 +31,8 @@
 //     BOTH NAMES so a 409 body, a die message and a chip can each say which two
 //     pools disagreed without looking either of them up again.
 import type { ProjectPoolWire } from './api.js';
+import { poolSetSpelling } from './poolset.js';
+import type { PoolSet } from './poolset.js';
 
 /** Where an account's pool tag came from — `central` is the authoritative
  *  `pool_edges` rows in `~/.ccrc/coord.db` (design §5.1's "the only writer of
@@ -60,6 +63,21 @@ export type AccountPoolWire =
   | { state: 'unreadable' }
   | { state: 'stale' };
 
+/** The session's side of the rule: a project's tag as today, or a set read from the session's route record (C46).
+ *  A set is never "untagged": an untagged account serves a set only by its explicit `untagged` yes. */
+export type SessionPoolSide =
+  | ProjectPoolWire
+  | { readonly state: 'set'; readonly set: PoolSet }
+  | { readonly state: 'set-unreadable' }
+  | { readonly state: 'set-malformed' };
+
+/** The arms a PROJECT side can produce — what every pre-set caller narrows on (`v.accountPool`). */
+export type ProjectPoolVerdict =
+  | { ok: true; why: 'untagged-project' | 'untagged-account' | 'same-pool' }
+  | { ok: false; reason: 'pool-mismatch'; side: 'project'; accountPool: string; projectPool: string }
+  | { ok: false; reason: 'pool-undecidable'; side: 'project' | 'account';
+      state: 'unreadable' | 'malformed' | 'unrecognised' | 'stale' };
+
 /**
  * Why an account may or may not serve a project.
  *
@@ -73,11 +91,16 @@ export type AccountPoolWire =
  * undecidable says nobody has an answer, and its honest surfaces are a 503 and a
  * warning chip carrying the path — never a 409 offering a crossing over a
  * constraint that was never read.
+ *
+ * `side` names which side failed, on both failing arms (additive: the ok arm has none). The set mismatch arm names
+ * the account's side as untagged rather than inventing a pool name; `set` is the spelling, or `-` for a set that
+ * has none (the empty set).
  */
 export type PoolVerdict =
-  | { ok: true; why: 'untagged-project' | 'untagged-account' | 'same-pool' }
-  | { ok: false; reason: 'pool-mismatch'; accountPool: string; projectPool: string }
-  | { ok: false; reason: 'pool-undecidable';
+  | { ok: true; why: 'untagged-project' | 'untagged-account' | 'same-pool' | 'in-set' | 'untagged-in-set' }
+  | { ok: false; reason: 'pool-mismatch'; side: 'project'; accountPool: string; projectPool: string }
+  | { ok: false; reason: 'pool-mismatch'; side: 'set'; account: { pool: string } | { untagged: true }; set: string }
+  | { ok: false; reason: 'pool-undecidable'; side: 'project' | 'account' | 'set';
       state: 'unreadable' | 'malformed' | 'unrecognised' | 'stale' };
 
 /**
@@ -103,14 +126,23 @@ export type PoolVerdict =
  * not be READ is a different condition with a different answer. Collapsing
  * those two would re-create the fail-open this design exists to prevent.
  */
-export function poolRule(account: AccountPoolWire, projectPool: ProjectPoolWire): PoolVerdict {
+export function poolRule(account: AccountPoolWire, side: ProjectPoolWire): ProjectPoolVerdict;
+export function poolRule(account: AccountPoolWire, side: SessionPoolSide): PoolVerdict;
+export function poolRule(account: AccountPoolWire, projectPool: SessionPoolSide): PoolVerdict {
   if (projectPool.state === 'unreadable' || projectPool.state === 'malformed') {
-    return { ok: false, reason: 'pool-undecidable', state: projectPool.state };
+    return { ok: false, reason: 'pool-undecidable', side: 'project', state: projectPool.state };
+  }
+  // A bad set is undecidable on the SET side whatever the account is, and never falls back to the project (C46).
+  if (projectPool.state === 'set-unreadable' || projectPool.state === 'set-malformed') {
+    return {
+      ok: false, reason: 'pool-undecidable', side: 'set',
+      state: projectPool.state === 'set-unreadable' ? 'unreadable' : 'malformed',
+    };
   }
   if (projectPool.state === 'untagged') return { ok: true, why: 'untagged-project' };
   if (projectPool.state === 'tagged') {
     if (account.state === 'unreadable' || account.state === 'malformed' || account.state === 'stale') {
-      return { ok: false, reason: 'pool-undecidable', state: account.state };
+      return { ok: false, reason: 'pool-undecidable', side: 'account', state: account.state };
     }
     if (account.state === 'untagged') return { ok: true, why: 'untagged-account' };
     // Set membership, not equality — `pools` is length 1 today (never 0: the
@@ -118,15 +150,31 @@ export function poolRule(account: AccountPoolWire, projectPool: ProjectPoolWire)
     // the multi-pool wave drops an index without touching this line or the wire.
     if (account.pools.includes(projectPool.name)) return { ok: true, why: 'same-pool' };
     return {
-      ok: false, reason: 'pool-mismatch',
+      ok: false, reason: 'pool-mismatch', side: 'project',
       // `pools` is a non-empty tuple (`[string, ...string[]]`), so `[0]` is
       // TOTAL — no `?? ''` fabricating a pool name into an operator-facing 409.
       accountPool: account.pools[0], projectPool: projectPool.name,
     };
   }
+  if (projectPool.state === 'set') {
+    if (account.state === 'unreadable' || account.state === 'malformed' || account.state === 'stale') {
+      return { ok: false, reason: 'pool-undecidable', side: 'account', state: account.state };
+    }
+    const set = projectPool.set;
+    // The one spelling, never a second: null (the empty set, or a name the grammar cannot spell) reads `-`.
+    const spelled = poolSetSpelling(set) ?? '-';
+    if (account.state === 'untagged') {
+      return set.untagged
+        ? { ok: true, why: 'untagged-in-set' }
+        : { ok: false, reason: 'pool-mismatch', side: 'set', account: { untagged: true }, set: spelled };
+    }
+    // Exact string equality per name (`includes` on the ARRAY), never a prefix or substring test on strings.
+    if (account.pools.some((p) => set.pools.includes(p))) return { ok: true, why: 'in-set' };
+    return { ok: false, reason: 'pool-mismatch', side: 'set', account: { pool: account.pools[0] }, set: spelled };
+  }
   const unhandled: never = projectPool;
   void unhandled;
-  return { ok: false, reason: 'pool-undecidable', state: 'unrecognised' };
+  return { ok: false, reason: 'pool-undecidable', side: 'project', state: 'unrecognised' };
 }
 
 /** Adapt a DECLARED-only pool name to the wire.

@@ -16,7 +16,7 @@
 // this repository at all (spec §8, "Single definition"); `topology-clean.test.ts`
 // is what keeps that true.
 import type { ProjectPoolWire } from '../../../shared/api.js';
-import type { AccountPoolWire } from '../../../shared/poolrule.js';
+import type { AccountPoolWire, SessionPoolSide } from '../../../shared/poolrule.js';
 import { DEFAULT_TEST_ROSTER } from '../helpers.js';
 
 /** Which fixture accounts carry a tag. Two accounts share `pool-a` on purpose —
@@ -117,12 +117,11 @@ export const POOLED_TEST_ROSTER = {
  *   mismatch    -> bash rc 1   /  `{ ok: false, reason: 'pool-mismatch' }`
  *   undecidable -> bash rc 2   /  `{ ok: false, reason: 'pool-undecidable' }`
  */
-export interface PoolRuleCase {
+interface PoolRuleCaseBase {
   name: string;
   /** `null` = an untagged account, or one this side cannot see — see
    *  `poolRule`'s docstring for why those two are deliberately one value. */
   accountPool: string | null;
-  project: ProjectPoolWire;
   expect: 'serve' | 'mismatch' | 'undecidable';
   /** Why this row is in the table, in one sentence — what breaks if it goes. */
   why: string;
@@ -144,6 +143,30 @@ export interface PoolRuleCase {
    *  than construct a malformed wire at runtime. */
   accountState?: Exclude<AccountPoolWire['state'], 'tagged' | 'untagged'>;
 }
+
+/** A row whose session side is a PROJECT's tag — every row the table had before the set arm. `set` is declared
+ *  `undefined` so a driver reading `c.project` on a row it has not narrowed fails to COMPILE rather than driving a set
+ *  row as if it had a project. */
+export interface ProjectRuleCase extends PoolRuleCaseBase {
+  project: ProjectPoolWire;
+  set?: undefined;
+}
+
+/** A row whose session side is a SET (or an unreadable or malformed one): the driver uses `set` as the side.
+ *  `_pool_ok` (bash) has no set case until a later pull request of the pool-set plan, so `ccd-pool-ok.test.ts` and the
+ *  server mirror's driver skip these rows, bounded. */
+export interface SetRuleCase extends PoolRuleCaseBase {
+  set: Exclude<SessionPoolSide, ProjectPoolWire>;
+  project?: undefined;
+}
+
+export type PoolRuleCase = ProjectRuleCase | SetRuleCase;
+
+export const isSetCase = (c: PoolRuleCase): c is SetRuleCase => c.set !== undefined;
+
+/** A set side, for the rows below. */
+const SET = (pools: readonly string[], untagged: boolean): SetRuleCase['set'] =>
+  ({ state: 'set', set: { pools, untagged } });
 
 export const POOL_RULE_CASES: readonly PoolRuleCase[] = [
   {
@@ -265,4 +288,129 @@ export const POOL_RULE_CASES: readonly PoolRuleCase[] = [
     // stronger verdict.
     why: 'an unreadable PROJECT side answers undecidable and returns before the account side is read at all — two unmeasurable sides are one verdict, never a mismatch, and never a stronger one',
   },
+  // ---- The set arm (the pool-set plan, Task 1). The session's side is a SET read from its route record. ----
+  // Bash `_pool_ok` has no set case until a later pull request, so the bash and server-mirror drivers skip these rows.
+  {
+    name: 'set-in-set', accountPool: 'pool-a', set: SET(['pool-a'], false), expect: 'serve',
+    why: 'an account in a pool the set names serves',
+  },
+  {
+    name: 'set-other-pool', accountPool: 'pool-a', set: SET(['pool-b'], false), expect: 'mismatch',
+    why: 'an account in a pool the set does not name is refused',
+  },
+  {
+    name: 'set-multi-first', accountPool: 'pool-a', set: SET(['pool-a', 'pool-b'], false), expect: 'serve',
+    why: 'membership of a two-name set, the first name — an implementation that read only the last name fails here',
+  },
+  {
+    name: 'set-multi-second', accountPool: 'pool-b', set: SET(['pool-a', 'pool-b'], false), expect: 'serve',
+    why: 'membership of a two-name set, the second name — an implementation that read only the first name fails here',
+  },
+  {
+    name: 'set-multi-outside', accountPool: 'pool-ab', set: SET(['pool-a', 'pool-b'], false), expect: 'mismatch',
+    why: 'a pool in neither name of a two-name set is refused; "pool-ab" also sits inside the joined spelling "pool-a,pool-b"',
+  },
+  {
+    name: 'set-untagged-account-not-admitted', accountPool: null, set: SET(['pool-a'], false), expect: 'mismatch',
+    why: 'C46: an untagged account serves a set only by its explicit yes — a set is never "untagged"; this is the fail-open row',
+  },
+  {
+    name: 'set-untagged-account-admitted', accountPool: null, set: SET(['pool-a'], true), expect: 'serve',
+    why: 'the explicit yes: the set says it admits untagged accounts',
+  },
+  {
+    name: 'set-untagged-only-untagged-account', accountPool: null, set: SET([], true), expect: 'serve',
+    why: 'the set "+untagged" alone serves an untagged account',
+  },
+  {
+    name: 'set-untagged-only-tagged-account', accountPool: 'pool-a', set: SET([], true), expect: 'mismatch',
+    why: 'the set "+untagged" alone names no pool, so a tagged account is refused',
+  },
+  {
+    name: 'set-empty-tagged-account', accountPool: 'pool-a', set: SET([], false), expect: 'mismatch',
+    why: 'an empty set serves nothing (C46): not a tagged account',
+  },
+  {
+    name: 'set-empty-untagged-account', accountPool: null, set: SET([], false), expect: 'mismatch',
+    why: 'an empty set serves nothing (C46): not an untagged account either',
+  },
+  {
+    name: 'set-acct-unreadable', accountPool: null, accountState: 'unreadable', set: SET(['pool-a'], false), expect: 'undecidable',
+    why: 'an account side that could not be read is undecidable under a set, as under a project tag',
+  },
+  {
+    name: 'set-acct-stale', accountPool: null, accountState: 'stale', set: SET(['pool-a'], true), expect: 'undecidable',
+    why: 'stale is undecidable even when the set admits untagged accounts: the account is unknown, not untagged',
+  },
+  {
+    name: 'set-acct-malformed', accountPool: null, accountState: 'malformed', set: SET([], false), expect: 'undecidable',
+    why: 'malformed is undecidable even under the empty set: the account side is read before the set can refuse',
+  },
+  {
+    name: 'set-prefix-account-short', accountPool: 'pool-a', set: SET(['pool-ab'], false), expect: 'mismatch',
+    why: 'membership is exact equality: the account name is a prefix of the set name',
+  },
+  {
+    name: 'set-prefix-account-long', accountPool: 'pool-ab', set: SET(['pool-a'], false), expect: 'mismatch',
+    why: 'membership is exact equality: the set name is a prefix of the account name',
+  },
+  {
+    name: 'set-prefix-in-multi', accountPool: 'pool-a', set: SET(['pool-ab', 'pool-b'], false), expect: 'mismatch',
+    why: 'a substring test over the joined spelling "pool-ab,pool-b" would serve "pool-a"',
+  },
+  {
+    name: 'set-unreadable-tagged-account', accountPool: 'pool-a', set: { state: 'set-unreadable' }, expect: 'undecidable',
+    why: 'an unreadable set is undecidable, never "no set" and never the project side',
+  },
+  {
+    name: 'set-unreadable-untagged-account', accountPool: null, set: { state: 'set-unreadable' }, expect: 'undecidable',
+    why: 'THE ROW THAT MATTERS for the set: an untagged account must not short-circuit past an unreadable set',
+  },
+  {
+    name: 'set-unreadable-acct-unreadable', accountPool: null, accountState: 'unreadable', set: { state: 'set-unreadable' }, expect: 'undecidable',
+    why: 'the set side decides first: two unmeasurable sides are one undecidable verdict',
+  },
+  {
+    name: 'set-unreadable-acct-stale', accountPool: null, accountState: 'stale', set: { state: 'set-unreadable' }, expect: 'undecidable',
+    why: 'the set side decides first, over a stale account',
+  },
+  {
+    name: 'set-unreadable-acct-malformed', accountPool: null, accountState: 'malformed', set: { state: 'set-unreadable' }, expect: 'undecidable',
+    why: 'the set side decides first, over a malformed account',
+  },
+  {
+    name: 'set-malformed-tagged-account', accountPool: 'pool-a', set: { state: 'set-malformed' }, expect: 'undecidable',
+    why: 'a malformed set is undecidable, never "no set"',
+  },
+  {
+    name: 'set-malformed-untagged-account', accountPool: null, set: { state: 'set-malformed' }, expect: 'undecidable',
+    why: 'an untagged account must not short-circuit past a malformed set',
+  },
+  {
+    name: 'set-malformed-acct-unreadable', accountPool: null, accountState: 'unreadable', set: { state: 'set-malformed' }, expect: 'undecidable',
+    why: 'the set side decides first, over an unreadable account',
+  },
+  {
+    name: 'set-malformed-acct-stale', accountPool: null, accountState: 'stale', set: { state: 'set-malformed' }, expect: 'undecidable',
+    why: 'the set side decides first, over a stale account',
+  },
+  {
+    name: 'set-malformed-acct-malformed', accountPool: null, accountState: 'malformed', set: { state: 'set-malformed' }, expect: 'undecidable',
+    why: 'the set side decides first, over a malformed account',
+  },
 ];
+
+/** The rows whose session side is a project's tag: what the bash `_pool_ok` and the server mirror drive today. */
+export const POOL_RULE_PROJECT_CASES: readonly ProjectRuleCase[] = POOL_RULE_CASES.filter(
+  (c): c is ProjectRuleCase => !isSetCase(c));
+/** The rows whose session side is a set. */
+export const POOL_RULE_SET_CASES: readonly SetRuleCase[] = POOL_RULE_CASES.filter(isSetCase);
+
+/** One row's account side, as the wire `poolRule` takes. A row with `accountState` is built from that bare state; any
+ *  other row from `accountPool` (`null` = untagged). Written once, for every driver of the table in TypeScript. */
+export const wireFor = (c: PoolRuleCase): AccountPoolWire =>
+  c.accountState === undefined
+    ? (c.accountPool === null
+        ? { state: 'untagged', origin: 'central' }
+        : { state: 'tagged', pools: [c.accountPool], origin: 'central' })
+    : { state: c.accountState };
