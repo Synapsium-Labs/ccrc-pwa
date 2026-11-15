@@ -3549,36 +3549,26 @@ export class CoordStore {
    */
   private terminalRepairTokens(entries: Record<string, unknown>[], subjects: Record<string, unknown>[], authorities: Record<string, unknown>[],
     witnesses: Record<string, unknown>[]): { id: number; token: string }[] {
-    const tag = (v: unknown): unknown[] | null => {
-      if (v === undefined) return ['absent'];
-      if (v === null) return ['null'];
-      if (typeof v === 'string') return ['string', v];
-      if (typeof v === 'bigint') return ['bigint', v.toString()];
-      if (typeof v === 'number') return ['number', Object.is(v, -0) ? '-0' : String(v)];
-      if (v instanceof Uint8Array) return ['bytes', Buffer.from(v.buffer, v.byteOffset, v.byteLength).toString('hex')];
-      return null;
-    };
-    const part = (r: Record<string, unknown> | undefined, names: readonly string[]): unknown[] | null => {
+    const tag = (v: unknown): unknown[] | null => v === undefined ? ['absent'] : v === null ? ['null'] : typeof v === 'string' ? ['string', v]
+      : typeof v === 'bigint' ? ['bigint', v.toString()] : typeof v === 'number' ? ['number', Object.is(v, -0) ? '-0' : String(v)]
+      : v instanceof Uint8Array ? ['bytes', Buffer.from(v.buffer, v.byteOffset, v.byteLength).toString('hex')] : null;
+    const part = (r: Record<string, unknown> | undefined, names: string): unknown[] | null => {
       if (r === undefined) return ['absent'];
-      const out: unknown[] = [];
-      for (const n of names) { const t = tag(r[n]); if (t === null) return null; out.push(t); }
-      return out;
+      const tags = names.split(' ').map((n) => tag(r[n]));
+      return tags.includes(null) ? null : tags;
     };
-    const ROW = ['id', 'project', 'pr', 'pinnedSha', 'handoffCommit', 'runId', 'state', 'baseSha', 'ejectionKind', 'ejections', 'afterIds',
-      'fixesMain', 'setBy', 'pinnedAt', 'quarantineKind'] as const;
-    const SUBJECT = ['id', 'project', 'pr', 'bindingKind', 'observedRunId', 'observedSeq', 'creationSeq', 'creationClaim'] as const;
-    const AUTHORITY = ['subjectId', 'afterIds', 'fixesMain', 'setBy', 'seq'] as const;
-    const WITNESS = ['entryId', 'project', 'pr', 'observedSeq', 'runId', 'pinnedSha', 'handoffCommit'] as const;
     const out: { id: number; token: string }[] = [];
     for (const row of entries) {
       const id = typeof row.id === 'bigint' ? Number(row.id) : NaN;
-      if (!Number.isSafeInteger(id)) continue;
       const subject = subjects.find((s) => s.id === row.id && s.project === row.project && s.pr === row.pr);
       const authority = subject === undefined ? undefined : authorities.find((a) => a.subjectId === subject.id);
       const witness = witnesses.find((w) => w.entryId === row.id && w.project === row.project && w.pr === row.pr);
-      const parts = [part(row, ROW), part(subject, SUBJECT), part(authority, AUTHORITY), part(witness, WITNESS)];
-      if (parts.some((p) => p === null)) continue;
-      out.push({ id, token: createHash('sha256').update(JSON.stringify(['ccrc-landing-terminal-repair-v1', ...parts])).digest('hex') });
+      const parts = [part(row, 'id project pr pinnedSha handoffCommit runId state baseSha ejectionKind ejections afterIds fixesMain setBy pinnedAt quarantineKind'),
+        part(subject, 'id project pr bindingKind observedRunId observedSeq creationSeq creationClaim'), part(authority, 'subjectId afterIds fixesMain setBy seq'),
+        part(witness, 'entryId project pr observedSeq runId pinnedSha handoffCommit')];
+      if (Number.isSafeInteger(id) && !parts.includes(null)) {
+        out.push({ id, token: createHash('sha256').update(JSON.stringify(['ccrc-landing-terminal-repair-v1', ...parts])).digest('hex') });
+      }
     }
     return out;
   }
