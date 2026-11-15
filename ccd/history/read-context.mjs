@@ -11,9 +11,9 @@
 import { lstatSync, promises as fsp } from 'node:fs';
 import {
   UUID_RE, CLI_STAT_DEADLINE_MS, CONTROL_FILE_MAX, historyPaths, makePairIndex, redactFinalLines,
-  decideStatusReadFailure,
+  decideStatusReadFailure, decideCliStore, decideStatusRead,
 } from './lib.mjs';
-import { StoreError, measureStoreFacts, readBounded } from './store.mjs';
+import { StoreError, measureStoreFacts, readBounded, openReader, userVersion } from './store.mjs';
 
 /** The inputs §8.3's table does not reach on its first rows (Darwin, a server role, an unsettled stat):
  *  passed as unmeasured, so the table, not this file, decides every answer. */
@@ -127,4 +127,50 @@ export function readFailure(e, storeId, id, gen, idx = NO_PAIRS) {
 export function recordedPairsOf(db) {
   return db.prepare('SELECT len, sha256 FROM redact_hashes').all()
     .map((r) => ({ len: Number(r.len), sha256: Buffer.from(r.sha256).toString('hex') }));
+}
+
+/** The admitted store, opened: the one sequence every read of the store takes (review 2126 F7: the CLI's two read paths
+ *  and the Overlord's read call this, so a gate added here is every reader's). It measures the reach with the caller's
+ *  role, asks lib's decideCliStore, opens the read-only handle (openReader), then reads the meta store_id, the journal
+ *  mode and user_version for lib's decideStatusRead.
+ *  - `storeIdOf(reach)` is the caller's store-id fallback, for a refusal and for a store with no meta row: the CLI passes
+ *    refusalStoreId, the Overlord's read `() => null`.
+ *  - `busyTimeoutMs`, when not null, is set on the handle before its first read (the Overlord's read, below its deadline).
+ *  Answers `{ok: true, db, storeId, metaStoreId, version}`, the handle the caller's to close, or `{ok: false, exit,
+ *  reason?, storeId}` (refusal's shape: `reason` only where §8.3 gives the exit one) with the handle closed. A throw
+ *  readFailure does not map is rethrown, the handle closed: the caller's defect arm decides it. */
+export async function openAdmitted(home, role, storeIdOf, busyTimeoutMs = null) {
+  const P = historyPaths(home);
+  const reach = await measureReach(home, role);
+  const d = decideCliStore(cliFactsOf(reach));
+  if (!d.read) return { ok: false, ...refusal(d.exit, d.reason, storeIdOf(reach), null, null) };
+  let db;
+  try {
+    db = openReader(P.dbFile);
+  } catch (e) {
+    const f = readFailure(e, storeIdOf(reach), null, null);
+    if (f === null) throw e;
+    return { ok: false, ...f };
+  }
+  let storeId = storeIdOf(reach);
+  try {
+    if (busyTimeoutMs !== null) db.exec(`PRAGMA busy_timeout = ${Number(busyTimeoutMs)}`);
+    const meta = db.prepare("SELECT v FROM meta WHERE k = 'store_id'").get();
+    if (meta !== undefined) storeId = meta.v;
+    // lib's decideStatusRead decides the journal mode, as it does for status: this file only measures.
+    const mode = db.prepare('PRAGMA journal_mode').get().journal_mode;
+    const version = userVersion(db);
+    const rd = decideStatusRead({ userVersion: version, journalMode: mode, recordedMigration: undefined });
+    if (rd.reason !== undefined) {
+      db.close();
+      return { ok: false, ...refusal(rd.exit, rd.reason, storeId, null, null) };
+    }
+    return { ok: true, db, storeId, metaStoreId: meta === undefined ? null : meta.v, version };
+  } catch (e) {
+    // A read of this admitted store failed (the meta read, a PRAGMA): ONE exit-5 answer, as status gives (review 316 F11).
+    db.close();
+    const f = readFailure(e, storeId, null, null);
+    if (f === null) throw e;
+    return { ok: false, ...f };
+  }
 }

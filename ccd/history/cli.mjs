@@ -69,6 +69,7 @@ import { isatty as isattyOp } from 'node:tty';
 import { recoverStepAt as opRecoverStepAt, storedVersionAt as opStoredVersionAt } from './store.mjs';
 import {
   readTrimmed, settleWithin, measureReach, cliFactsOf, NO_PAIRS, errLine, refusal, refusalStoreId, readFailure, recordedPairsOf,
+  openAdmitted,
 } from './read-context.mjs';
 
 process.umask(0o077);
@@ -653,27 +654,12 @@ async function readContextIn(home, verb, parsed, nowMs, seen) {
   if (offNow && decideRecallOff({ file: offFile, generation: generation.value ?? '' }) === 'off') {
     return refusal(EXIT.RECALL_OFF, undefined, null, id, gen);
   }
-  const reach = await measureReach(home, readRole(P));
-  const d = decideCliStore(cliFactsOf(reach));
-  if (!d.read) return refusal(d.exit, d.reason, refusalStoreId(reach, P), id, gen);
-  let db;
-  try {
-    db = openReader(P.dbFile);
-  } catch (e) {
-    const f = readFailure(e, refusalStoreId(reach, P), id, gen);
-    if (f === null) throw e;
-    return f;
-  }
+  // The admitted store, opened (read-context.mjs#openAdmitted, the one sequence the Overlord's read takes too).
+  const admitted = await openAdmitted(home, readRole(P), (reach) => refusalStoreId(reach, P));
+  if (!admitted.ok) return refusal(admitted.exit, admitted.reason, admitted.storeId, id, gen);
+  const { db, storeId, version } = admitted;
   let handed = false;
-  let storeId = refusalStoreId(reach, P);
   try {
-    const meta = db.prepare("SELECT v FROM meta WHERE k = 'store_id'").get();
-    if (meta !== undefined) storeId = meta.v;
-    // lib's decideStatusRead decides the journal mode, as it does for status: this file only measures.
-    const mode = db.prepare('PRAGMA journal_mode').get().journal_mode;
-    const version = userVersion(db);
-    const rd = decideStatusRead({ userVersion: version, journalMode: mode, recordedMigration: undefined });
-    if (rd.reason !== undefined) return refusal(rd.exit, rd.reason, storeId, id, gen);
     if (generation.value === null) {
       // 'newest' is a store fact. Use its actual family generation for recall-off and counter accounting.
       const own = familiesOf(db, { kind: 'family', id, generation: null, project: null, workdir: null, workdirReal: null });
@@ -723,8 +709,9 @@ async function readContextIn(home, verb, parsed, nowMs, seen) {
     handed = true;
     return rc;
   } catch (e) {
-    // A read of this admitted store failed (the meta read, the PRAGMA, the scope's families and transcripts, the
-    // pair index): ONE exit-5 answer, as status gives (review 316 F11). Anything else is a defect: exit 1.
+    // A read of this admitted store failed (the scope's families and transcripts, the pair index; the meta read and the
+    // PRAGMAs fail inside openAdmitted, to the same answer): ONE exit-5 answer, as status gives (review 316 F11). Anything
+    // else is a defect: exit 1.
     const f = readFailure(e, storeId, id, gen);
     if (f === null) throw e;
     return f;
@@ -762,29 +749,14 @@ async function readContextEnv(home, P, parsed, nowMs, seen, recall, pane) {
   const harness = decideHarness(regPresence(P, id, 'harness'));
   if (!harness.ok) return refusal(harness.rc, harness.reason, null, null, null);
   // Step 3: §8.3's table after the 2 s stat, the read-only open and decideStatusRead.
-  const reach = await measureReach(home, readRole(P));
-  const d = decideCliStore(cliFactsOf(reach));
-  if (!d.read) return refusal(d.exit, d.reason, refusalStoreId(reach, P), null, null);
-  let db;
-  try {
-    db = openReader(P.dbFile);
-  } catch (e) {
-    const f = readFailure(e, refusalStoreId(reach, P), null, null);
-    if (f === null) throw e;
-    return f;
-  }
+  const admitted = await openAdmitted(home, readRole(P), (reach) => refusalStoreId(reach, P));
+  if (!admitted.ok) return refusal(admitted.exit, admitted.reason, admitted.storeId, null, null);
+  const { db, storeId, version } = admitted;
   let handed = false;
-  let storeId = refusalStoreId(reach, P);
   try {
-    const meta = db.prepare("SELECT v FROM meta WHERE k = 'store_id'").get();
-    if (meta !== undefined) storeId = meta.v;
-    const mode = db.prepare('PRAGMA journal_mode').get().journal_mode;
-    const version = userVersion(db);
-    const rd = decideStatusRead({ userVersion: version, journalMode: mode, recordedMigration: undefined });
-    if (rd.reason !== undefined) return refusal(rd.exit, rd.reason, storeId, null, null);
     // Step 4: the marker's store line first, against the meta row alone (W2-D44), before any ASOF row is read (R3); then
     // the family from ASOF and its pair. ADMITTED here (W2-D46): from now on the call is counted.
-    const ownStore = meta === undefined ? null : meta.v;
+    const ownStore = admitted.metaStoreId;
     const storeLine = decideHeadlessStore({ list: head.list, storeId: ownStore });
     if (!storeLine.ok) return refusal(storeLine.rc, storeLine.reason, storeId, null, null);
     const fam = decideAsOfFamily({
