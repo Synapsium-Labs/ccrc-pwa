@@ -31,11 +31,11 @@ import { readWorktreeCensus, type DelegationCensusPass, type ParentIncarnation, 
 import {
   COORDINATION_RESTORE_MARKER_FILE,
   DELEGATION_CHECKPOINT_FILE,
-  DelegationDurability,
   decodeDelegationCheckpoint,
   encodeDelegationCheckpoint,
   mergeDelegationObservationInterval,
 } from '../src/coord/delegation-checkpoint.js';
+import { DelegationDurability } from '../src/coord/delegation-durability.js';
 import {
   DELEGATION_JOURNAL_FILE, DELEGATION_TORN_DIR, DelegationJournalWriter, buildDelegationJournalRecord, encodeDelegationJournalRecord,
   type DelegationFilePort,
