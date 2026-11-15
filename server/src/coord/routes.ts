@@ -4307,7 +4307,8 @@ export function registerCoordRoutes(
     if (!read.ok) { const { ok: _ok, error, ...extra } = read; return refuseRoute(reply, error, extra); }
     const { entries, recovery } = read.facts;
     // One view of the hold: the order and the binding are decided from the same value (`landingReadView`), the route's own now.
-    const { flags: held, binding } = landingReadView(read.facts, watcher?.currentLandingControl(project), Date.now());
+    const now = Date.now();
+    const { flags: held, binding } = landingReadView(read.facts, watcher?.currentLandingControl(project, now), now);
     const view: LandingLineView = { project, ...held, ...landingViewOf(entries, held, recovery, pr), binding, recovery };
     return reply.code(200).send({ ok: true, ...view });
   });

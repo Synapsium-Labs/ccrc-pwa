@@ -5771,8 +5771,8 @@ on the closed handle instead of answering `landing-fenced`. That closed handle i
 read answers a `binding` (`inert`, `held` with a reason, or `ready` for the selected head), decided on that read, never stored. A `replay`
 fence and a `restart` fence alike clear only when the server restarts: the replay is the only thing that reopens the line, and only
 the boot calls it, so there is no retry timer and nothing reopens the line while the server runs; a restart whose replay refuses
-does not start. A retreat refused `landing-projection-unreadable` (its pin names another head than the
-episode's, or the projection is unreadable at the episode's own head, or a retained field no longer reads) answers `recovery: 'repair'` (D-8627) and is not cured by a restart, because replay never writes a projection: the run
+does not start. A retreat refused `landing-projection-unreadable` (its projection does not read, whether its pin names the
+episode's head or another) answers `recovery: 'repair'` (D-8627) and is not cured by a restart, because replay never writes a projection: the run
 stays at `merging` and goes to the operator, and this build has no repair route for it. `POST /api/landing/entries` and `POST /api/landing/order` (box token and measured
 `byId`/`byUuid` attribution, `ccrc-api landing entries|order --json -`) record an entry and its order edges; the attributed `byId` is
 the setter, and an omitted `afterIds` or `fixesMain` keeps its value while an explicit `[]` or `false` clears it.

@@ -512,7 +512,7 @@ PR that is not this run's, an answer you cannot read, or no entry for this PR
 means stop and report what you read to the operator; never choose a successor.
 A `held` binding, `opt-in-unknown` included, stops. A missing `binding` (a server older than wave 5i) is the only fallback to the checks
 above, and on a project whose `lander` exists it still stops; `ccrc rollout --server-first` avoids the window in which a
-server older than wave 5i answers without one. An `inert` binding (the opt-in marker
+server older than wave 5i answers without one. An `inert` binding on a project whose `lander` exists stops too. An `inert` binding where `lander` does not exist (the opt-in marker
 proven absent) leaves the checks above in force exactly as before: nothing here
 removes a project's earlier line and pause checks. A 404 stays the older-server
 fallback. A next-to-land mail restarts this read and check from the top; it
