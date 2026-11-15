@@ -3042,6 +3042,7 @@ _pool_ok() {   # account-id pool-state -> 0 serve | 1 mismatch | 2 undecidable
   case "$2" in
     untagged)  POOL_OK_SIDE=project; POOL_OK_STATE=untagged; return 0 ;;
     "named "*) pp=${2#named } ;;
+    set|"set "*|set-*) _pool_ok_set "$1" "$2"; return $? ;;   # a session's set (ccd/lib/pool-set.sh): its words, never the project's
     *)         POOL_OK_SIDE=project; POOL_OK_STATE="$2"; return 2 ;;   # unreadable | malformed: nobody decides
   esac
   ap=$(_acct_pool_state "$1")
@@ -3062,7 +3063,7 @@ _pool_ok() {   # account-id pool-state -> 0 serve | 1 mismatch | 2 undecidable
 # a caller that runs something else in between must pass its SNAPSHOT, and a
 # renderer that silently read whatever the globals hold now would be the same
 # stale-fact defect one level up.
-_pool_undecidable_why() {   # side state project account-id -> the rc-2 sentence
+_pool_undecidable_why() {   # side state project account-id [session-id] -> the rc-2 sentence (the id names a set side's route record)
   # FIVE CONDITIONS, FIVE REMEDIES, and saying which is the whole obligation:
   # "both mean nobody decides, but one's remedy is file permissions and the
   # other's is the control-plane link, and the die message and the chip each
@@ -3070,6 +3071,7 @@ _pool_undecidable_why() {   # side state project account-id -> the rc-2 sentence
   # the project tag is fine, because the sentence they replace said the
   # opposite and an operator acted on it.
   local side="$1" state="$2" project="$3" acct="$4"
+  [[ "$side" == set ]] && { _pool_set_undecidable_why "$state" "${5-}"; return 0; }
   if [[ "$side" == project ]]; then
     echo "pool tag for $project is $state: $POOLS_DIR/$project — fix or clear it"
     return 0
@@ -3086,6 +3088,7 @@ _pool_mismatch_why() {   # account-id account-state project project-pool-state -
   # projection outranks it, so the two disagree exactly when this sentence
   # matters most, and the old text then named two identical pools and called
   # them a mismatch.
+  [[ "$4" == "set "* ]] && { _pool_set_mismatch_why "$1" "$2" "${4#set }"; return 0; }   # a set side names its spelling
   echo "$1 is in pool '${2#named }' (measured from the projection, $REG/pool-epoch — not the declared roster) and project '$3' is in pool '${4#named }'"
 }
 _id()    { echo "$1-$2"; }                                  # wrapper project -> id
@@ -10090,6 +10093,10 @@ cmd_route() {   # ccd route --session <id> --set <field>=<value> [--set ...] [--
     f="${kv%%=*}"; v="${kv#*=}"
     _route_word_in "$f" "${ROUTE_FIELDS[*]}" || die "unknown routing field '$f' (want one of: ${ROUTE_FIELDS[*]})"
     [[ "$f" == degraded || "$f" == inert ]] && die "'$f' is written by ccd only"
+    # A SESSION'S SHELL NEVER WRITES OR CLEARS A SET (CLAUDECODE set, as `_route_fable_shell` reads it; plan slug
+    # a-session-shell-cannot-write-its-own-set): from pool set PR A2 a standing set binds placement. The designate door,
+    # composed by the server, is not a session's shell. Before the empty-value clear, so a clear is refused too.
+    [[ ( "$f" == poolset || "$f" == acctorder ) && -n "${CLAUDECODE:-}" ]] && die "pool-set-operator-only: a Claude Code session may not write $f"
     # AN EMPTY VALUE CLEARS a compaction field (the launch-profile lane, review 2024 F2 c): the field is removed, which every
     # reader takes as absent (ccd's own threshold, no auto-compact window). The pool set's two clear the same way (the
     # designation's retire and rebind, plan slug poolset-empty-value-clears). No other field has an empty form.

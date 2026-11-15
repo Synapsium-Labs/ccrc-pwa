@@ -79,7 +79,7 @@ _pool_ok_set() {   # account-id side-word -> 0 serve | 1 mismatch | 2 undecidabl
   # tag file (A1 review N5). Then the account side as `_pool_ok` reads it: undecidable there, an untagged account serves
   # iff the set says `+untagged`, and `named p` serves iff p is one of the set's names.
   local LC_ALL=C IFS=' ' ap parsed names
-  POOL_OK_SIDE=set; POOL_OK_STATE=unrecognised
+  POOL_OK_SIDE='set'; POOL_OK_STATE=unrecognised
   [[ "$2" == set-unreadable || "$2" == set-malformed ]] && { POOL_OK_STATE=${2#set-}; return 2; }
   [[ "$2" == "set "* ]] || return 2
   POOL_OK_STATE=malformed; parsed=$(_poolset_parse "${2#set }") || return 2
