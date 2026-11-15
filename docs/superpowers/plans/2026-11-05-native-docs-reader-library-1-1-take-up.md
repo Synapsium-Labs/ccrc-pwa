@@ -1732,7 +1732,7 @@ The CI run's caveats (8144):
 | Figure | BASE | End |
 |---|---|---|
 | refined 412 x 915, title from the screen top (limit 61) | 125 (compact head) | **56** (one bar); the console's part 48 (limit 48); `frameBar` false; `aaOverTitle` false |
-| refined 412 x 915, a 99-character title (fix round 1, F3) | — | 56; `frameBar` false; **`aaOverTitle` false**, as for the short title; the title button 264 px wide (the plan estimated about 280), its name cut at 256 px of a 666 px line, inside the button |
+| refined 412 x 915, a 99-character title (fix rounds 1 and 2, F3, A12) | — | 56; `frameBar` false; **`aaOverTitle` false** for this one sampled title, with the frame's Aa drawn (x 348.9 to 384, y 8 to 42) and the h1's first line ending at x 288.8; the title button 264 px wide (the plan estimated about 280), its name cut at 256 px of a 666 px line, inside the button. Another title can break its first line under Aa: this reading is one wrap point, not a general clearance |
 | instrument 412 x 915 | 125 | 56 |
 | refined 599 x 915 | 125 | 56 |
 | refined 412 x 915, details panel open | 402.5 | 286.5 |
@@ -1773,9 +1773,12 @@ The ready time moves with load on this shared box. The srcdoc grew by 7927 chara
 
 ### Mutation table, as measured at the end state
 
-Each row's `red` field names the cases that failed, taken from the last run of that ID. Two rows differ from an earlier record:
-- `L11-T7-M1` now reds 2 cases: the 61 px case and the Quick jump and Contents case. At `cc8516673` it redded 1.
-- `L11-T7-M3` and `L11-T7-M4` exited 1 with no summary on their first end-state run, so they count as unmeasured. Each was run again and redded its one case.
+Each row's `red` field names the cases that failed, taken from the last run of that ID. The 22 rows that mutate `DocsHead.tsx`, or whose cases include `docs-one-bar` or `docs-compact-head`, were run again at fix round 2's code tip `6da2abda9` (A13), and their fields are that run's. The other 32 rows are the run at `626fe04ea`, whose files fix round 2 did not touch. Differences from earlier records:
+- `L11-T6-M3` reds 5 and `L11-T6-M5` 4: each adds the one bar's plain-view focus case.
+- `L11-T7-M1` reds 2: the 61 px case and the long-title case. At `cc8516673` it redded 1. At `626fe04ea` it redded the 61 px case and the Quick jump and Contents case, which is the case that later timed out once on CI (see "Named, without a number").
+- `L11-T10-M1` reds 4, adding the long-title case.
+- `L11-T10-M2` is redefined for fix round 2's mechanism and reds 3, one case per Export path. `L11-T10-M3` (the guard, A14), `L11-T10-M4` (the choice gate) and `L11-T10-M5` (a diagnostic row drawing a skeleton, A8) are new, and each reds.
+- `L11-T7-M3` and `L11-T7-M4` exited 1 with no summary on their first run at `626fe04ea`, so they count as unmeasured. Each was run again and redded its one case.
 
 **T2** (2 rows)
 
@@ -1840,9 +1843,9 @@ Each row's `red` field names the cases that failed, taken from the last run of t
 [
   {"id": "L11-T6-M1", "spec": "(f)", "pkg": "pwa", "file": "src/docs/docsHeadWords.ts", "old": "if (leaf && takesCommands) return 'one-bar';", "new": "if (compactWidth && leaf && takesCommands) return 'one-bar';", "tests": ["test/docs-compact-head.test.tsx"], "red": "1 failed: compact width false, /docs/demo/plans/p.md, takes commands true: one-bar"},
   {"id": "L11-T6-M2", "spec": "(j)", "pkg": "pwa", "file": "src/docs/DocsHead.tsx", "old": "onClick={() => bar.command(t)}", "new": "onClick={() => { queueMicrotask(() => bar.command(t)); }}", "tests": ["test/docs-one-bar.test.tsx"], "red": "1 failed: each tool runs its command in the tap itself"},
-  {"id": "L11-T6-M3", "spec": "(k)", "pkg": "pwa", "file": "src/docs/DocsHead.tsx", "old": "hidden={!open}\n      >\n        <Crumbs key={p.crumbs.at(-1)?.href} crumbs={p.crumbs} unfold />\n        <TruthLine page={page} visit={visit} tree={tree} receivedAt={p.receivedAt} now={p.now} />\n        <Actions", "new": "hidden\n      >\n        <Crumbs key={p.crumbs.at(-1)?.href} crumbs={p.crumbs} unfold />\n        <TruthLine page={page} visit={visit} tree={tree} receivedAt={p.receivedAt} now={p.now} />\n        <Actions", "tests": ["test/docs-one-bar.test.tsx"], "red": "4 failed: Escape from inside the panel, or on the title, closes it with focus on the title; Escape inside Share's sheet closes the sheet only: the details panel it was opened from stays open; choosing the plain view withdraws the one bar: option 1's row comes back, with the plain-view note under it; the title opens the details panel: the crumbs, the truth line and the full header's actions, in §4.5's order"},
+  {"id": "L11-T6-M3", "spec": "(k)", "pkg": "pwa", "file": "src/docs/DocsHead.tsx", "old": "hidden={!open}\n      >\n        <Crumbs key={p.crumbs.at(-1)?.href} crumbs={p.crumbs} unfold />\n        <TruthLine page={page} visit={visit} tree={tree} receivedAt={p.receivedAt} now={p.now} />\n        <Actions", "new": "hidden\n      >\n        <Crumbs key={p.crumbs.at(-1)?.href} crumbs={p.crumbs} unfold />\n        <TruthLine page={page} visit={visit} tree={tree} receivedAt={p.receivedAt} now={p.now} />\n        <Actions", "tests": ["test/docs-one-bar.test.tsx"], "red": "5 failed: Escape from inside the panel, or on the title, closes it with focus on the title; Escape inside Share's sheet closes the sheet only: the details panel it was opened from stays open; choosing the plain view from the one bar's panel puts focus on the row's Page details, not on the body (fix rounds 1 and 2, F1); choosing the plain view withdraws the one bar: option 1's row comes back, with the plain-view note under it; the title opens the details panel: the crumbs, the truth line and the full header's actions, in §4.5's order"},
   {"id": "L11-T6-M4", "spec": "(k)", "pkg": "pwa", "file": "src/docs/DocsHead.tsx", "old": "title.current?.focus();", "new": "", "tests": ["test/docs-one-bar.test.tsx"], "red": "1 failed: Escape from inside the panel, or on the title, closes it with focus on the title"},
-  {"id": "L11-T6-M5", "spec": "(k)", "pkg": "pwa", "file": "src/docs/DocsHead.tsx", "old": "<Actions\n          page={page} tree={tree} file={file} leafImage={p.leafImage} exportBody={p.exportBody} pageStore={p.pageStore}\n          exportAssets={p.exportAssets} onPlainView={p.onPlainView} form=\"stacked\"\n        />", "new": "", "tests": ["test/docs-one-bar.test.tsx"], "red": "3 failed: Escape inside Share's sheet closes the sheet only: the details panel it was opened from stays open; choosing the plain view withdraws the one bar: option 1's row comes back, with the plain-view note under it; the title opens the details panel: the crumbs, the truth line and the full header's actions, in §4.5's order"},
+  {"id": "L11-T6-M5", "spec": "(k)", "pkg": "pwa", "file": "src/docs/DocsHead.tsx", "old": "<Actions\n          page={page} tree={tree} file={file} leafImage={p.leafImage} exportBody={p.exportBody} pageStore={p.pageStore}\n          exportAssets={p.exportAssets} onPlainView={p.onPlainView} form=\"stacked\"\n        />", "new": "", "tests": ["test/docs-one-bar.test.tsx"], "red": "4 failed: Escape inside Share's sheet closes the sheet only: the details panel it was opened from stays open; choosing the plain view from the one bar's panel puts focus on the row's Page details, not on the body (fix rounds 1 and 2, F1); choosing the plain view withdraws the one bar: option 1's row comes back, with the plain-view note under it; the title opens the details panel: the crumbs, the truth line and the full header's actions, in §4.5's order"},
   {"id": "L11-T6-M6", "spec": "(k)", "pkg": "pwa", "file": "src/docs/DocsHead.tsx", "old": "<span className=\"sr-only\">{moreName(dot)}</span>", "new": "", "tests": ["test/docs-one-bar.test.tsx"], "red": "2 failed: the title names a failed fetch: its name ends with the freshness problem words, and the dot is the failed one; the title's name carries the freshness words"},
   {"id": "L11-T6-M7", "spec": "(l)", "pkg": "pwa", "file": "src/docs/DocsHead.tsx", "old": "style={{ inlineSize: `${Math.round(share * 1000) / 10}%` }}", "new": "style={{ inlineSize: '0%' }}", "tests": ["test/docs-one-bar.test.tsx"], "red": "1 failed: the reading line shows the share the frame reports"},
   {"id": "L11-T6-M8", "spec": "(j)", "pkg": "pwa", "file": "src/docs/docs.css", "old": "min-height: var(--tap-min); min-width: var(--tap-min);\n  border: 0; border-radius: var(--r-md);\n  background: none; color: var(--ink-secondary);\n  cursor: pointer;\n}\n.docs-read", "new": "min-height: var(--sp-8); min-width: var(--sp-8);\n  border: 0; border-radius: var(--r-md);\n  background: none; color: var(--ink-secondary);\n  cursor: pointer;\n}\n.docs-read", "tests": ["test/tap-targets.test.tsx", "test/control-census.test.ts"], "red": "3 failed: verifies every TOKEN claim against the stylesheets; are at least one tap tall, the tools one tap wide, off the shared token; keeps every floored rule on the token, never a bare 44px literal"},
@@ -1862,7 +1865,7 @@ Each row's `red` field names the cases that failed, taken from the last run of t
 
 ```json
 [
-  {"id": "L11-T7-M1", "spec": "(g)", "pkg": "pwa", "file": "src/docs/reader/bridge.ts", "old": "features: { chrome: { bar: false, topSpace: false } }", "new": "features: { chrome: { bar: false, topSpace: true } }", "tests": ["browser/docs-compact-head.browser.test.ts"], "red": "2 failed: 412 x 915, Refined: the title is at most 61 px down, 48 of them the console's; 412 x 915: Quick jump and Contents toggle the frame's tools from ccrc's buttons"},
+  {"id": "L11-T7-M1", "spec": "(g)", "pkg": "pwa", "file": "src/docs/reader/bridge.ts", "old": "features: { chrome: { bar: false, topSpace: false } }", "new": "features: { chrome: { bar: false, topSpace: true } }", "tests": ["browser/docs-compact-head.browser.test.ts"], "red": "2 failed: 412 x 915, Refined, a 99-character title: the bar cuts it inside the title, the frame's h1 is where the short one is, and aaOverTitle is recorded (fix round 1, F3); 412 x 915, Refined: the title is at most 61 px down, 48 of them the console's"},
   {"id": "L11-T7-M2", "spec": "(j)", "pkg": "pwa", "file": "src/docs/DocsHead.tsx", "old": "onClick={() => bar.command(t)}", "new": "onClick={() => undefined}", "tests": ["browser/docs-compact-head.browser.test.ts"], "red": "1 failed: 412 x 915: Quick jump and Contents toggle the frame's tools from ccrc's buttons"},
   {"id": "L11-T7-M3", "spec": "(l)", "pkg": "pwa", "file": "src/docs/docs.css", "old": ".docs-one-bar .docs-compact-bar :focus-visible { position: relative; z-index: 1; }\n", "new": ".docs-one-bar .docs-compact-bar :focus-visible { position: relative; }\n", "tests": ["browser/docs-compact-head.browser.test.ts"], "red": "1 failed: 412 x 915: back, the title, Quick jump and Contents, each at least one tap; the bar one tap tall with its divider; the reading line inside it"},
   {"id": "L11-T7-M4", "spec": "(l)", "pkg": "pwa", "file": "src/docs/docs.css", "old": "  background: var(--accent); pointer-events: none;\n}\n", "new": "  background: var(--accent); pointer-events: none; z-index: -1;\n}\n", "tests": ["browser/docs-compact-head.browser.test.ts"], "red": "1 failed: 412 x 915: back, the title, Quick jump and Contents, each at least one tap; the bar one tap tall with its divider; the reading line inside it"}
@@ -1879,11 +1882,15 @@ Each row's `red` field names the cases that failed, taken from the last run of t
 ]
 ```
 
-**T10** (1 rows)
+**T10** (5 rows)
 
 ```json
 [
-  {"id": "L11-T10-M1", "spec": "(f) the frame does not move", "pkg": "pwa", "file": "src/docs/docs.css", "old": ".docs-one-bar .docs-compact-bar { position: relative; }", "new": ".docs-one-bar .docs-compact-bar { position: relative; margin-block-end: 6px; }", "tests": ["browser/docs-compact-head.browser.test.ts"], "red": "3 failed: 412 x 915, Instrument: the one bar, and at most 48 px of the console above the frame; 412 x 915, Refined: the title is at most 61 px down, 48 of them the console's; 412 x 915: the frame does not move when the row becomes the one bar at ready (refinement (f))"}
+  {"id": "L11-T10-M1", "spec": "(f) the frame does not move", "pkg": "pwa", "file": "src/docs/docs.css", "old": ".docs-one-bar .docs-compact-bar { position: relative; }", "new": ".docs-one-bar .docs-compact-bar { position: relative; margin-block-end: 6px; }", "tests": ["browser/docs-compact-head.browser.test.ts"], "red": "4 failed: 412 x 915, Instrument: the one bar, and at most 48 px of the console above the frame; 412 x 915, Refined, a 99-character title: the bar cuts it inside the title, the frame's h1 is where the short one is, and aaOverTitle is recorded (fix round 1, F3); 412 x 915, Refined: the title is at most 61 px down, 48 of them the console's; 412 x 915: the frame does not move when the row becomes the one bar at ready (refinement (f))"},
+  {"id": "L11-T10-M2", "spec": "fix rounds 1 and 2, F1/F1'/F2'", "pkg": "pwa", "file": "src/docs/DocsHead.tsx", "old": "    (head?.querySelector<HTMLElement>('.docs-more') ?? head?.querySelector<HTMLElement>('.docs-back'))?.focus();\n", "new": "", "tests": ["test/docs-one-bar.test.tsx"], "red": "3 failed: choosing the plain view from option 1's row, before ready, puts focus on its Page details, not on the body (fix round 2, F2'); choosing the plain view from the full head at 1280 puts focus on its back, not on the body (fix round 2, F2'); choosing the plain view from the one bar's panel puts focus on the row's Page details, not on the body (fix rounds 1 and 2, F1)"},
+  {"id": "L11-T10-M3", "spec": "fix round 2, A14", "pkg": "pwa", "file": "src/docs/DocsHead.tsx", "old": "    if (held !== null && held !== document.body && !held.classList.contains('docs-export')) return;\n", "new": "", "tests": ["test/docs-one-bar.test.tsx"], "red": "1 failed: a plain-view choice made while focus is elsewhere leaves it there: only a lost focus, or the pressed Export's, moves (fix round 2, A14)"},
+  {"id": "L11-T10-M4", "spec": "fix round 2, F1'", "pkg": "pwa", "file": "src/docs/DocsHead.tsx", "old": "    const at = choseAt.current;\n", "new": "    const at: string | null = here;\n", "tests": ["test/docs-one-bar.test.tsx"], "red": "2 failed: a tree that recovers at 412 with the plain view already chosen moves no focus (fix round 2, F1'); turned from 1280 to 412 with the plain view already chosen, the head moves no focus (fix round 2, F1')"},
+  {"id": "L11-T10-M5", "spec": "fix round 2, A8", "pkg": "pwa", "file": "src/screens/settings/SettingsIndex.tsx", "old": "        <span className=\"settings-index-purpose text-meta text-ink-secondary\">{p.purpose}</span>\n", "new": "        <span className=\"settings-index-purpose text-meta text-ink-secondary\">{p.purpose}</span>\n        {p.kind === 'diagnostic' && <Skeleton lines={1} />}\n", "tests": ["browser/settings-diagnostics.browser.test.ts"], "red": "4 failed: instrument, light, 1280px; instrument, light, 390px; refined, phosphor, 1280px; refined, phosphor, 390px"}
 ]
 ```
 
@@ -1904,7 +1911,8 @@ The review ran three `opus`/`high` lenses at `ba4bc1443`, plus `sonnet`/`high` r
 
 - **`L11-T3-M1` reds 1 case, not the predicted 2.** Case 3 derives its expectation from `docsDrawFor`, so it follows the mutation.
 - **`L11-T4-M8` used the word `'holds'`.** The plan's placeholder word does not typecheck.
-- **Row counts differ from the predictions in four places, as the fences above measure:** T4-M1 reds 4 and T4-M2 3 (each also reds the real-mount seed case), T5-M1 reds 8, T6-M3 reds 4 and T6-M5 reds 3.
+- **Row counts differ from the predictions in four places, as the fences above measure:** T4-M1 reds 4 and T4-M2 3 (each also reds the real-mount seed case), T5-M1 reds 8, T6-M3 reds 5 and T6-M5 reds 4 (at the tip each also reds the one bar's plain-view focus case).
+- **The Quick jump and Contents case timed out once in five observations.** This was in CI attempt 1 of run 43676134505 at `2c7fe9270`, job 132696585233: `frame.waitForFunction` exceeded 5000 ms at the wait for focus in the frame's jump box, and the case took 6326 ms. The one rerun the coordinator allowed (attempt 2, job 132701762839) passed it in 899 ms. Its bound stays at 5000 ms. Since fix round 2, a timeout in that case first prints what holds focus in the host and in the frame (`L11-FOCUS-TIMEOUT`).
 - **Task 2's `npm install` re-synced the lock's linked `../ui` metadata.** Those 5 lines were restored, so the lock diff is the library's 4 lines.
 - **GitHub reports the v1.1.0 tag's signature as `unknown_key`.** This is an observation; the plan does not check it.
 - **The browser runs use Chrome for Testing 156.0.8078.4 (revision 1248).** The installed `playwright-core` names it. Revision 1243, used on 2026-11-11, is no longer in the cache. Every figure above matched the 2026-11-11 figures to the pixel.
@@ -1927,9 +1935,9 @@ The review ran three `opus`/`high` lenses at `ba4bc1443`, plus `sonnet`/`high` r
 ### Fix round 1 (review run 2104 at `d56b10667`)
 
 The panel was 3 Opus lenses and 29 Sonnet refuters, none dead. It confirmed 3 important findings, kept 7 advisory notes and refuted 8. The fixes:
-- **F1, `39325a421`.** Choosing Export's plain view in the one bar's panel unmounts the reader, which withdraws the bar, so option 1's row replaces it and the focused control is gone. Focus now goes to that row's Page details: it is the row's control for the panel the tap came from, Export is inside it again, and the plain-view note still announces itself as a status. A tap on the row's own Export keeps its focus. `docs-one-bar` pins it with a `document.activeElement` assertion.
+- **F1, `39325a421`.** Choosing Export's plain view in the one bar's panel unmounts the reader, which withdraws the bar, so option 1's row replaces it and the focused control is gone. Focus now goes to that row's Page details, and the plain-view note still announces itself as a status. `docs-one-bar` pins it with a `document.activeElement` assertion. Round 1 also said a tap on the row's own Export keeps its focus. Review run 2116 measured that false: Export goes disabled and remounts as its state moves. The effect also fired on any mount with the plain view already chosen. Fix round 2 replaced the mechanism (below).
 - **F2.** The two supply-chain rows are under Suites above.
-- **F3, `f1f59aa0c`.** A 99-character title at 412 x 915, recorded beside the short title in the figures table: its first line does not meet the frame's Aa (`aaOverTitle` false), so no layout change is asked.
+- **F3, `f1f59aa0c`.** A 99-character title at 412 x 915, recorded beside the short title in the figures table: for this one sampled title, its first line does not meet the frame's Aa (`aaOverTitle` false). Fix round 2 adds the Aa's presence and both edges (A12).
 - **A7, `f1f59aa0c`.** A Mermaid fence on the host-bar mount, on-request arm, at 412 x 915.
   - The Render control is 64.6 x 26.7 at y 325.4, below ccrc's bar (bottom 44) and inside the frame (x 8 to 404, y 48 to 854).
   - A hit test at its middle lands on the frame.
@@ -1937,9 +1945,9 @@ The panel was 3 Opus lenses and 29 Sonnet refuters, none dead. It confirmed 3 im
 - **A6, `336b6c44f`.** A new browser file checks the two diagnostic doors in both skins at 390 and 1280. Each door follows the five sections; draws its icon, name, purpose line and chevron; has no status line and no current mark; is 64 to 75.5 px tall; and lies inside the index.
 - **A1, A3, A5 and the rulings.**
   - Text fixes: "Named, without a number" now matches the fences (A1); the Status, "Not yet done" and "Waiting on you" lines are current (A3); 8144 and 8145 are bare outside `## Deviations found` (A5).
-  - D-8145's entry carries the ruling.
-  - D-8143 and the lab design's Revisions line name Figure 4's caption (A2).
-  - D-8146 records the settings redesign spec's §3.2 paragraph (A4).
+  - 8145's entry carries the ruling.
+  - 8143 and the lab design's Revisions line name Figure 4's caption (A2).
+  - 8146 records the settings redesign spec's §3.2 paragraph (A4).
 
 ```
 L11-FIGURE refined 412x915 long-title {"chars":99,"head":"one-bar","screenTop":0,"frameTop":48,"titleInFrame":8,"frameScroll":0,"above":56,"frameBar":false,"aaOverTitle":false,"titleW":264,"nameW":256,"nameScroll":666,"nameRight":312,"titleRight":316}
@@ -1950,7 +1958,7 @@ T9-FIGURES settings-diagnostics refined, phosphor, 1280px [{"id":"reader-lab","h
 T9-FIGURES settings-diagnostics instrument, light, 1280px [{"id":"reader-lab","h":64,"icons":2},{"id":"measure-highlighting","h":64,"icons":2}]
 ```
 
-**Fix round 1 row**
+**Fix round 1 row** (superseded: fix round 2 redefines `L11-T10-M2`; its measured form is in the T10 fence above)
 
 ```json
 [
@@ -1970,9 +1978,46 @@ The fix round's runs, each through `ccrc test` in the foreground, one at a time:
 | Library provenance; `npm audit signatures` | both rc 0, under Suites |
 | The PR's ci run 43672976449 at `6ab3472ff` | `pwa 1/3` red: `browser-dist.test.ts` (1 of 12), because the new A6 file served `sharedDist()` inline rather than as the census reads it. Fixed in the A6 file, after which `browser-dist` and `browser-leg` passed (30) and the A6 file alone passed 4; `TSC-OK`. Every server shard, CodeQL and the other jobs were green at `6ab3472ff`. |
 
+### Fix round 2 (review run 2116 at `2c7fe9270`)
+
+The panel was 4 Opus lenses and 27 Sonnet refuters. It confirmed 2 important findings and kept 7 advisory notes.
+- **F1' and F2', `9b8028e53`.** Round 1's effect sat in option 1's row and ran whenever that row mounted with the plain view already chosen: a rotation from 1280 to 412, or a tree recovering. And the pressed Export could not keep focus, because it goes disabled while the plain view formats and remounts as its state moves (`exportKeyOf` keeps its key, which closes an open sheet on a re-list or a back gesture). The mechanism now lives in DocsHead, which stays mounted across every head swap:
+  - each head's plain-view call is wrapped and marks the choice for its page;
+  - once the head that follows has drawn (never while the one bar is still up), focus goes to the compact row's Page details, or else the full head's back;
+  - focus moves only when it was lost (the body, or nothing) or is still on the pressed Export;
+  - a mount, a rotation or a tree recovery marks nothing, so nothing moves.
+
+  The cases in `docs-one-bar`:
+  - one per Export path: the one bar's panel, option 1's row before ready, and the full head at 1280;
+  - a choice made while focus is on back leaves it there;
+  - a rotation from 1280 to 412 with the plain view already chosen moves nothing;
+  - a tree recovering at 412 with the plain view already chosen moves nothing.
+
+  The rows: `L11-T10-M2` (delete the move) reds 3, `L11-T10-M3` (delete the guard) reds 1, and `L11-T10-M4` (drop the choice gate) reds 2.
+- **A8, `6da2abda9`.** The diagnostic doors' skeleton check reads `.skel, [role=status]`, which is what `Skeleton` draws. `L11-T10-M5`, a diagnostic row drawing a skeleton, reds all 4 views.
+- **A12, `6da2abda9`.** The long-title case asserts the frame's Aa is drawn, and records its box and the h1's first line (the figures table, and the line below).
+- **A13.** Every row that touches `DocsHead.tsx`, `docs-one-bar` or `docs-compact-head` was run again at the tip: 22 rows, all red with named cases, all restored by sha, and the tree clean. The fences and "Named, without a number" are updated to match.
+- **Item 6, `6da2abda9`.** The Quick jump and Contents case prints `L11-FOCUS-TIMEOUT` with the host's and the frame's focused element when one of its waits expires. Its 5 s bound is unchanged.
+- **A9, A10 and A11.** 8143's entry says that Task 8 amended three places and the Task 10 review fix the fourth. The fix-round bullets write 8143, 8145 and 8146 bare. #2806's Departures section matches the plan.
+
+```
+L11-FIGURE refined 412x915 long-title {"chars":99,"head":"one-bar","screenTop":0,"frameTop":48,"titleInFrame":8,"frameScroll":0,"above":56,"frameBar":false,"aaOverTitle":false,"titleW":264,"nameW":256,"nameScroll":666,"nameRight":312,"titleRight":316,"aaBox":{"left":348.890625,"right":384,"top":8,"bottom":42},"firstLine":{"left":16,"right":288.84375,"top":3,"bottom":48}}
+```
+
+The fix round's runs, each through `ccrc test` in the foreground, one at a time:
+
+| Run | Result |
+|---|---|
+| `pwa` unit, whole (14 pieces), at `6da2abda9` | 530 files passed; 15719 tests passed, 2 skipped; no type errors |
+| `pwa` typecheck | `TSC-OK` |
+| `docs-one-bar` | 24 passed |
+| `browser/docs-compact-head.browser.test.ts` alone, `--maxWorkers=1` | 109 passed |
+| `browser/settings-diagnostics.browser.test.ts` alone, `--maxWorkers=1` | 4 passed |
+| Mutation rows (A13 and the four new rows) | 22 of 22 red, restored by sha, `git status --porcelain` unchanged |
+
 ## Deviations found
 
-- **D-8143: retain the lab-draw auto mode and ready gap window. This departs from reader-lab design RL14, §8, Later and Figure 4's caption automatic-flip commitments; Task 8 amends all four. Auto/1.0.0 does not measure after-ready/1.1.0; production remains on request.** Issued for existing run 1532; this is the same definition already published in the programme ledger, not another allocation. Task 10 verified this entry; it used the whole reserve, below.
+- **D-8143: retain the lab-draw auto mode and ready gap window. This departs from reader-lab design RL14, §8, Later and Figure 4's caption automatic-flip commitments; Task 8 amended RL14, §8 and Later, and Figure 4's caption was amended in `63b383b34`, the Task 10 review fix. Auto/1.0.0 does not measure after-ready/1.1.0; production remains on request.** Issued for existing run 1532; this is the same definition already published in the programme ledger, not another allocation. Task 10 verified this entry; it used the whole reserve, below.
 - **D-8144 (2026-11-15)** — server-suite-by-ci. Task 10 Step 2 says the whole `server` suite runs locally in pieces. Locally at `63b383b34`, 18 of the 1472 files stayed red or unfinished, none of them in this diff, and the local manifest is kept. The coordinator's ruling of 2026-11-14 (goals modification 24, under the operator's grant) made CI run 43648206715 at `cc8516673` stand in for that run: 12 Linux shards, 1502 of 1502 files passed, all 18 among them. The PR's exact-tip CI is the server verification after the later merge, and no local server run follows it. Task 10 Step 2; the caveats are under Results › Suites.
 - **D-8145 (2026-11-15)** — execution-off-ruling. This departs from Global Constraints' foreground rule, from claim-before-edit, and from operator item 161's bound of one install and two rechecks with Step 2 held. On 2026-11-10 and 2026-11-11, the first full server run and the end-state browser suite ran in the background. One test edit, the ready-swap case, was made after claims 3895 and 3896 lapsed. After the item 161 install, an extra recheck ran and the swap case was committed (`d5a6bb20a`). The worst case and the mutation table, twice, were run, `main` was merged (`cc8516673`), and the suites were re-gated, including one browser run without a file filter that its own bound ended. All of this is kept by the coordinator's ruling of 2026-11-15 on review run 2104; the process departure sets no precedent. Task 10 Steps 2 and 3.
 - **D-8146 (2026-11-15)** — settings-redesign-index. Task 8 names three specs as the take-up's text, and Task 9 adds two diagnostic doors to Settings' index, but the settings redesign spec's §3.2 still described an index of five section rows, each with a status line. By the coordinator's ruling of 2026-11-15 on review run 2104 (A4), one paragraph after §3.2's status-line table says the index carries the two doors after the five sections, each with a purpose line and neither with a status line, because no read measures a health for a diagnostic page; the per-section status rule is unchanged. Fix round 1, `docs/superpowers/specs/2026-10-18-settings-redesign-design.md`.
