@@ -92,7 +92,7 @@ import { softRenewalMay, type SoftInputs, type SoftReading } from './softRenewal
 import { overlordFirst, type OverlordGenerationReading } from './renewalOrder.js';
 import type { DrainRead } from './renewalDrain.js';
 import {
-  actsOfStep, beforeDeadline, renewalFeed, renewalPermit, renewOwed, type PermitWait, type RenewalAct,
+  actsOfStep, beforeDeadline, handoverSince, renewalFeed, renewalPermit, renewOwed, type PermitWait, type RenewalAct,
 } from './renewalFeed.js';
 
 /** The lane's key in `continuity_cursor`, and its `LANE_SCHEDULE` row's name. */
@@ -108,7 +108,7 @@ export const FIRST_MINT_LOOKBACK = 20;
 export type GenerationsCoord = Pick<CoordStore, 'startsSince' | 'startsOf' | 'liveGenerations' | 'mintGeneration' | 'advanceObserved'
   | 'setGenerationDue' | 'clearShadowWalk' | 'generationsCursor' | 'advanceCursor' | 'laneArmSetting' | 'openCoordinatorIds'
   | 'run' | 'bindingRunsOf' | 'cardReadOfStart' | 'stepGeneration' | 'probeRows' | 'openRound' | 'snapshotFacts' | 'liveNotes'
-  | 'mailForRecipient' | 'handoverOf' | 'softRenewalsOf' | 'setSoftRenewal' | 'renewCallsOf'>;
+  | 'mailForRecipient' | 'handoverOf' | 'softRenewalsOf' | 'recordSoftRenewal' | 'renewCallsOf'>;
 
 /** What the registry says of one row at the pass: its current conversation (null: unreadable), its account and its child
  *  mark. */
@@ -178,6 +178,8 @@ export interface GenerationsInput {
 export interface ActTarget {
   readonly genId: number; readonly identity: string; readonly sessionId: string; readonly role: FleetRole;
   readonly n: number; readonly startId: number; readonly cls: GenRow['walkClass'];
+  /** The renewal a `renew` belongs to: the wall time the generation entered its state (`clearing` for a renew). */
+  readonly episode: number;
 }
 /** One act the pass planned: the caller takes it while `continuity` is live (`runRenewalActs`). */
 export interface PlannedAct { readonly target: ActTarget; readonly act: RenewalAct }
@@ -333,7 +335,7 @@ export function generationsPass(deps: GenerationsDeps, input: GenerationsInput):
             // (slug first-prompt-by-deliver). A start nobody renewed gets the nudge at `carded`'s nudge point instead.
             if (live && verdict.outcome === 'renewed') {
               planned.push({ target: { genId: w.id, identity: s.sessionId, sessionId: s.sessionId, role: verdict.role, n: w.n,
-                startId: s.id, cls: null }, act: { kind: 'first-prompt' } });
+                startId: s.id, cls: null, episode: now }, act: { kind: 'first-prompt' } });
             }
           } else if (w.kind === 'superseded') superseded += 1;
           else { stopped = true; break; }
@@ -472,7 +474,7 @@ export function generationsPass(deps: GenerationsDeps, input: GenerationsInput):
     if (handover !== null && !handover.ok) fail('generations', handover.detail, `generation ${g.id}'s handover waits for the next pass, and`);
     const events = D.renewalFeed({
       state: eff.state, deadlineAt: eff.deadlineAt, now, due, drained: r?.drain?.held === false,
-      handoverAt: handover !== null && handover.ok ? (handover.handover?.at ?? null) : null, renudged: g.renudged,
+      handoverAt: handover !== null && handover.ok ? handoverSince(handover.handover?.at ?? null, g.enteredAt) : null, renudged: g.renudged,
     });
     // The events were ordered for the state the pass read; once one moves the state, the rest (`deadline` above all) belong
     // to a state the generation has left, so the walk stops and the next pass reads the new state's facts.
@@ -484,14 +486,15 @@ export function generationsPass(deps: GenerationsDeps, input: GenerationsInput):
       const again = coord.liveGenerations();
       const next = again.ok ? again.rows.find((x) => x.id === g.id) : undefined;
       // Feeding a soft due spends one of the soft budget's renewals, stamped on the accumulator (ruling R4).
-      if (e.kind === 'due' && e.cls === 'soft' && next !== undefined) coord.setSoftRenewal(next.id, genExpectOf(next), next.observed.ms);
+      if (e.kind === 'due' && e.cls === 'soft' && next !== undefined) coord.recordSoftRenewal(next, next.observed.ms);
       onStep(g, from, step, e);
       if (next === undefined) break;
       g = next;
       if (step.next.state !== from) break;
     }
     if (!live) continue;
-    const calls = effectiveGeneration(g, live).state === 'clearing' ? coord.renewCallsOf(g.id) : null;
+    // A renewal's calls are its episode's: the time this generation entered `clearing` (slug renew-calls-keyed-by-episode).
+    const calls = effectiveGeneration(g, live).state === 'clearing' ? coord.renewCallsOf(g.id, g.enteredAt) : null;
     if (calls !== null && !calls.ok) { fail('generations', calls.detail, `generation ${g.id}'s renew waits for the next pass, and`); continue; }
     const owed = calls === null ? null : renewOwed('clearing', g.attempts, calls.calls.map((c) => c.try));
     if (owed !== null) planned.push({ target: targetOf(g), act: { kind: 'renew', try: owed } });
@@ -505,6 +508,7 @@ type GenerationStateOf = GenRow['state'];
 /** The act target of a generation row. */
 const targetOf = (g: GenRow): ActTarget => ({
   genId: g.id, identity: g.identity, sessionId: g.sessionId, role: g.role, n: g.n, startId: g.startId, cls: g.walkClass,
+  episode: g.enteredAt,
 });
 
 /** One shadow record: the step and the machine's actions it would have taken. */

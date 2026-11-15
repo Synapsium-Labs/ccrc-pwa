@@ -25,7 +25,7 @@ import { genExpectOf, genViewOf, type GenRow } from './continuityStore.js';
 import { generationStep } from './generationMachine.js';
 import type { ActTarget, PlannedAct } from './generationsLane.js';
 import {
-  RENEWAL_FIRST_PROMPT, RENEWAL_HANDOVER_BODY, RENEWAL_HANDOVER_SUBJECT, SPOT_PROBE_BODY, SPOT_PROBE_SUBJECT, actsOfStep, renewAnswerEvent,
+  RENEWAL_FIRST_PROMPT, RENEWAL_HANDOVER_BODY, RENEWAL_HANDOVER_SUBJECT, SPOT_PROBE_BODY, SPOT_PROBE_SUBJECT, actsOfStep, handoverInRenewal, renewAnswerEvent,
   type RenewalAct,
 } from './renewalFeed.js';
 import type { SessionHost } from './sessionHost.js';
@@ -106,15 +106,16 @@ async function renew(deps: RenewalActsDeps, t: ActTarget, tryN: number, r: Count
     if (receipt.kind === 'started') { r.skipped += 1; say(`try ${tryN} not made: start ${receipt.startId} is recorded`); return; }
     if (receipt.kind === 'unreadable') { r.skipped += 1; say(`try ${tryN} waits: the receipt could not be read (${receipt.detail})`); return; }
   }
-  const claim = deps.coord.claimRenewCall(t.genId, tryN, deps.now());
+  const key = { generationId: t.genId, episode: t.episode, try: tryN };
+  const claim = deps.coord.claimRenewCall(key, deps.now());
   if (!claim.ok) { r.failed += 1; say(`try ${tryN} not made: its claim could not be written`); return; }
   if (!claim.claimed) { r.skipped += 1; return; }
   if (!seal(deps, t)) say('the checkpoint could not be stored before the renewal');
   const answer = await deps.host.renew(t.sessionId, t.n);
-  deps.coord.answerRenewCall(t.genId, tryN, answer.kind);
+  deps.coord.answerRenewCall(key, answer.kind);
   if (answer.kind === 'started') r.renewed += 1; else say(`try ${tryN}: ${answer.kind}${'reason' in answer ? ` (${answer.reason})` : 'detail' in answer ? ` (${answer.detail})` : ''}`);
   const g = reread(deps, t.genId);
-  if (g === null || g.state !== 'clearing' || g.attempts !== tryN) { say(`try ${tryN}'s answer was not fed: the generation moved on`); return; }
+  if (g === null || g.state !== 'clearing' || g.enteredAt !== t.episode || g.attempts !== tryN) { say(`try ${tryN}'s answer was not fed: the generation moved on`); return; }
   const event = renewAnswerEvent(answer);
   const step = generationStep(genViewOf(g, true), event);
   if (!step.changed) return;
@@ -130,7 +131,7 @@ function seal(deps: RenewalActsDeps, t: ActTarget): boolean {
   const handover = deps.coord.handoverOf(t.genId);
   const rulings = t.role === 'coordinator' ? deps.coord.rulingRowsOf(t.sessionId, CHECKPOINT_RULINGS_MAX) : { ok: true as const, rulings: [] };
   if (!notes.ok || !handover.ok || !rulings.ok) return false;
-  const h = handover.handover;
+  const h = handover.handover !== null && handoverInRenewal(handover.handover.at, t.episode) ? handover.handover : null;
   const cp = assembleCheckpoint({
     role: t.role, trigger: t.cls ?? 'hard',
     notes: notes.notes.map((n) => ({ id: n.id, at: n.at, kind: n.kind, key: n.key, waitsOn: n.waitsOn, next: n.next })),

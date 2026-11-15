@@ -185,33 +185,51 @@ describe('continuity_checkpoints and continuity_renew_calls', () => {
     });
   });
 
-  it('claimRenewCall: claimed once, not claimed the second time for the same (generation, try); another try or generation is its own', () => {
+  it('claimRenewCall: claimed once, not claimed the second time for the same (generation, episode, try); another try, renewal or generation is its own', () => {
     const c = store();
-    expect(c.claimRenewCall(1, 1, NOW)).toEqual({ ok: true, claimed: true });
-    expect(c.claimRenewCall(1, 1, NOW + 5)).toEqual({ ok: true, claimed: false });
-    expect(c.claimRenewCall(1, 2, NOW + 6)).toEqual({ ok: true, claimed: true });
-    expect(c.claimRenewCall(2, 1, NOW + 7)).toEqual({ ok: true, claimed: true });
-    // The first claim's time stands, and an unanswered call reads answer null.
-    expect(c.renewCallsOf(1)).toEqual({ ok: true, calls: [{ generationId: 1, try: 1, at: NOW, answer: null }, { generationId: 1, try: 2, at: NOW + 6, answer: null }] });
+    const k = (generationId: number, episode: number, t: number) => ({ generationId, episode, try: t });
+    expect(c.claimRenewCall(k(1, 100, 1), NOW)).toEqual({ ok: true, claimed: true });
+    expect(c.claimRenewCall(k(1, 100, 1), NOW + 5)).toEqual({ ok: true, claimed: false });
+    expect(c.claimRenewCall(k(1, 100, 2), NOW + 6)).toEqual({ ok: true, claimed: true });
+    expect(c.claimRenewCall(k(2, 100, 1), NOW + 7)).toEqual({ ok: true, claimed: true });
+    // A generation that went back to active and renews again starts at try 1 again, in its own episode (slug
+    // renew-calls-keyed-by-episode).
+    expect(c.claimRenewCall(k(1, 900, 1), NOW + 8)).toEqual({ ok: true, claimed: true });
+    // The first claim's time stands, and an unanswered call reads answer null; each episode reads its own calls.
+    expect(c.renewCallsOf(1, 100)).toEqual({ ok: true, calls: [{ generationId: 1, episode: 100, try: 1, at: NOW, answer: null },
+      { generationId: 1, episode: 100, try: 2, at: NOW + 6, answer: null }] });
+    expect(c.answerRenewCall(k(1, 900, 1), 'started')).toEqual({ ok: true, recorded: true });
+    expect(c.renewCallsOf(1, 900)).toEqual({ ok: true, calls: [{ generationId: 1, episode: 900, try: 1, at: NOW + 8, answer: 'started' }] });
+  });
+
+  it('recordSoftRenewal: one row per soft due fed, counted across the identity\'s generations in one term', () => {
+    const c = store();
+    expect(c.recordSoftRenewal({ id: 1, identity: 'lane-a-project-a', term: 1 }, 10)).toEqual({ ok: true });
+    expect(c.recordSoftRenewal({ id: 1, identity: 'lane-a-project-a', term: 1 }, 20)).toEqual({ ok: true });
+    expect(c.recordSoftRenewal({ id: 2, identity: 'lane-a-project-a', term: 1 }, 30)).toEqual({ ok: true });
+    expect(c.recordSoftRenewal({ id: 3, identity: 'lane-a-project-a', term: 2 }, 40)).toEqual({ ok: true });
+    expect(c.softRenewalsOf('lane-a-project-a', 1)).toEqual({ ok: true, observedMs: [10, 20, 30] });
   });
 
   it('a write that fails is ok: false, kept apart from "already claimed"', () => {
     const c = store();
     c.db.exec('DROP TABLE continuity_renew_calls');
-    expect(c.claimRenewCall(1, 1, NOW)).toEqual({ ok: false });
-    expect(c.answerRenewCall(1, 1, 'started')).toEqual({ ok: false });
-    const r = c.renewCallsOf(1);
+    expect(c.claimRenewCall({ generationId: 1, episode: 100, try: 1 }, NOW)).toEqual({ ok: false });
+    expect(c.answerRenewCall({ generationId: 1, episode: 100, try: 1 }, 'started')).toEqual({ ok: false });
+    const r = c.renewCallsOf(1, 100);
     expect(r.ok).toBe(false);
   });
 
   it('answerRenewCall records the word once; a try never claimed has no row to answer', () => {
     const c = store();
-    c.claimRenewCall(3, 1, NOW);
-    expect(c.answerRenewCall(3, 1, 'started')).toEqual({ ok: true, recorded: true });
-    expect(c.answerRenewCall(3, 1, 'unreachable')).toEqual({ ok: true, recorded: false });
-    expect(c.answerRenewCall(3, 2, 'started')).toEqual({ ok: true, recorded: false });
-    expect(c.renewCallsOf(3)).toEqual({ ok: true, calls: [{ generationId: 3, try: 1, at: NOW, answer: 'started' }] });
-    expect(c.renewCallsOf(99)).toEqual({ ok: true, calls: [] });
+    const k = (t: number, episode = 100) => ({ generationId: 3, episode, try: t });
+    c.claimRenewCall(k(1), NOW);
+    expect(c.answerRenewCall(k(1), 'started')).toEqual({ ok: true, recorded: true });
+    expect(c.answerRenewCall(k(1), 'unreachable')).toEqual({ ok: true, recorded: false });
+    expect(c.answerRenewCall(k(2), 'started')).toEqual({ ok: true, recorded: false });
+    expect(c.answerRenewCall(k(1, 900), 'started')).toEqual({ ok: true, recorded: false });
+    expect(c.renewCallsOf(3, 100)).toEqual({ ok: true, calls: [{ generationId: 3, episode: 100, try: 1, at: NOW, answer: 'started' }] });
+    expect(c.renewCallsOf(99, 100)).toEqual({ ok: true, calls: [] });
   });
 });
 

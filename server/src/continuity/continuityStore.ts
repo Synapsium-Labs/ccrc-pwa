@@ -846,26 +846,28 @@ export function handoverOf(db: DatabaseSync, generationId: number): HandoverRead
   }
 }
 
-/** The soft renewals an identity's line spent in one term, as accumulator stamps (`softRenewalObservedMs` of every row,
- *  ended ones included: the soft budget's window spans generations, ruling R4). */
+/** The soft renewals an identity's line spent in one term, as accumulator stamps: one row of `continuity_soft_renewals` per
+ *  soft due the lane fed, so a generation that renews softly twice (after one went back) counts twice, and the budget's
+ *  window spans generations (ruling R4; slug soft-renewals-are-rows). */
 export function softRenewalsOf(db: DatabaseSync, identity: string, term: number): { ok: true; observedMs: number[] } | { ok: false; detail: string } {
   try {
-    const rows = stmt(db, 'SELECT softRenewalObservedMs AS at FROM continuity_generations WHERE identity = ? AND term = ? '
-      + 'AND softRenewalObservedMs IS NOT NULL').all(identity, term) as { at: unknown }[];
+    const rows = stmt(db, 'SELECT observedMs AS at FROM continuity_soft_renewals WHERE identity = ? AND term = ? ORDER BY id')
+      .all(identity, term) as { at: unknown }[];
     const out: number[] = [];
-    for (const r of rows) { const at = intOrNull(r.at); if (at === null) return { ok: false, detail: 'continuity_generations softRenewalObservedMs does not read' }; out.push(at); }
+    for (const r of rows) { const at = intOrNull(r.at); if (at === null) return { ok: false, detail: 'continuity_soft_renewals observedMs does not read' }; out.push(at); }
     return { ok: true, observedMs: out };
   } catch (e) {
-    return { ok: false, detail: `continuity_generations read failed: ${e instanceof Error ? e.message : String(e)}` };
+    return { ok: false, detail: `continuity_soft_renewals read failed: ${e instanceof Error ? e.message : String(e)}` };
   }
 }
 
-/** Feeding a soft `due` spends one of the soft budget's renewals: stamped on the row at the accumulator's reading. */
-export function setSoftRenewal(db: DatabaseSync, id: number, expect: GenExpect, observedMs: number): { changed: boolean } {
+/** Feeding a soft `due` spends one of the soft budget's renewals: one row, stamped at the accumulator's reading. */
+export function recordSoftRenewal(db: DatabaseSync, g: { readonly id: number; readonly identity: string; readonly term: number }, observedMs: number): { ok: boolean } {
   try {
-    return changedOf(stmt(db, `UPDATE continuity_generations SET softRenewalObservedMs = ? WHERE ${CAS}`).run(observedMs, ...casArgs(id, expect)));
+    stmt(db, 'INSERT INTO continuity_soft_renewals (identity, term, generationId, observedMs) VALUES (?, ?, ?, ?)').run(g.identity, g.term, g.id, observedMs);
+    return { ok: true };
   } catch {
-    return { changed: false };
+    return { ok: false };
   }
 }
 
@@ -987,17 +989,25 @@ export function checkpointBefore(db: DatabaseSync, identity: string, liveGenerat
   }
 }
 
-/** One `SessionHost.renew` call the lane made for a generation's try. `answer` is null while the call is in flight, or when its
- *  answer was lost to a crash (the try is then never repeated: the lane reads the receipt first). */
-export interface RenewCallRow { readonly generationId: number; readonly try: number; readonly at: number; readonly answer: string | null }
+/** One `SessionHost.renew` call the lane made for one try of one renewal of a generation. A renewal is an EPISODE, named by
+ *  the wall time its generation entered `clearing` (set once on entry and kept while it retries there), because a
+ *  generation that went back to `active` may renew again and its tries start at 1 again (slug renew-calls-keyed-by-episode).
+ *  `answer` is null while the call is in flight, or when its answer was lost to a crash (the try is then never repeated: the
+ *  lane reads the receipt first). */
+export interface RenewCallRow {
+  readonly generationId: number; readonly episode: number; readonly try: number; readonly at: number; readonly answer: string | null;
+}
 export type RenewCallsRead = { ok: true; calls: RenewCallRow[] } | { ok: false; detail: string };
+/** Which call: the generation, its renewal's episode and the try within it. */
+export interface RenewCallKey { readonly generationId: number; readonly episode: number; readonly try: number }
 
-/** Claims a generation's try BEFORE the call is made, so a crash between the claim and the call never repeats the try:
- *  `claimed: true` for the one caller that inserted the row, `claimed: false` when it was already there. A statement that
- *  fails is `ok: false`, kept apart from "already claimed". */
-export function claimRenewCall(db: DatabaseSync, generationId: number, tryN: number, at: number): { ok: true; claimed: boolean } | { ok: false } {
+/** Claims a try BEFORE the call is made, so a crash between the claim and the call never repeats the try: `claimed: true`
+ *  for the one caller that inserted the row, `claimed: false` when it was already there. A statement that fails is
+ *  `ok: false`, kept apart from "already claimed". */
+export function claimRenewCall(db: DatabaseSync, k: RenewCallKey, at: number): { ok: true; claimed: boolean } | { ok: false } {
   try {
-    const res = stmt(db, 'INSERT OR IGNORE INTO continuity_renew_calls (generationId, try, at, answer) VALUES (?, ?, ?, NULL)').run(generationId, tryN, at);
+    const res = stmt(db, 'INSERT OR IGNORE INTO continuity_renew_calls (generationId, episode, try, at, answer) VALUES (?, ?, ?, ?, NULL)')
+      .run(k.generationId, k.episode, k.try, at);
     return { ok: true, claimed: Number(res.changes) === 1 };
   } catch {
     return { ok: false };
@@ -1006,26 +1016,28 @@ export function claimRenewCall(db: DatabaseSync, generationId: number, tryN: num
 
 /** Records a claimed try's answer word, once: the first answer stands, and a try never claimed has no row to answer
  *  (`recorded: false` for both). */
-export function answerRenewCall(db: DatabaseSync, generationId: number, tryN: number, answer: string): { ok: true; recorded: boolean } | { ok: false } {
+export function answerRenewCall(db: DatabaseSync, k: RenewCallKey, answer: string): { ok: true; recorded: boolean } | { ok: false } {
   try {
-    const res = stmt(db, 'UPDATE continuity_renew_calls SET answer = ? WHERE generationId = ? AND try = ? AND answer IS NULL').run(answer, generationId, tryN);
+    const res = stmt(db, 'UPDATE continuity_renew_calls SET answer = ? WHERE generationId = ? AND episode = ? AND try = ? AND answer IS NULL')
+      .run(answer, k.generationId, k.episode, k.try);
     return { ok: true, recorded: Number(res.changes) === 1 };
   } catch {
     return { ok: false };
   }
 }
 
-/** One generation's renew calls, in try order. */
-export function renewCallsOf(db: DatabaseSync, generationId: number): RenewCallsRead {
+/** One renewal's calls (a generation's episode), in try order. */
+export function renewCallsOf(db: DatabaseSync, generationId: number, episode: number): RenewCallsRead {
   try {
-    const rows = stmt(db, 'SELECT generationId, try, at, answer FROM continuity_renew_calls WHERE generationId = ? ORDER BY try').all(generationId) as Record<string, unknown>[];
+    const rows = stmt(db, 'SELECT generationId, episode, try, at, answer FROM continuity_renew_calls WHERE generationId = ? AND episode = ? ORDER BY try')
+      .all(generationId, episode) as Record<string, unknown>[];
     const calls: RenewCallRow[] = [];
     for (const r of rows) {
-      const g = intOrNull(r.generationId); const t = intOrNull(r.try); const at = intOrNull(r.at);
-      if (g === null || t === null || at === null || (r.answer !== null && typeof r.answer !== 'string')) {
-        return { ok: false, detail: `continuity_renew_calls row (${String(r.generationId)}, ${String(r.try)}) does not read` };
+      const g = intOrNull(r.generationId); const ep = intOrNull(r.episode); const t = intOrNull(r.try); const at = intOrNull(r.at);
+      if (g === null || ep === null || t === null || at === null || (r.answer !== null && typeof r.answer !== 'string')) {
+        return { ok: false, detail: `continuity_renew_calls row (${String(r.generationId)}, ${String(r.episode)}, ${String(r.try)}) does not read` };
       }
-      calls.push({ generationId: g, try: t, at, answer: r.answer as string | null });
+      calls.push({ generationId: g, episode: ep, try: t, at, answer: r.answer as string | null });
     }
     return { ok: true, calls };
   } catch (e) {

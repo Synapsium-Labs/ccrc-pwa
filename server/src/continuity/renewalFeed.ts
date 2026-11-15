@@ -17,7 +17,7 @@
 //   releasing deliveries need no act (the mail gate reads `state`); the probe schedule opens rounds itself; a mint ends and
 //   mints; and `renew` is owed by `renewOwed`, never run straight off a step, so a retry waits for the next pass and its
 //   receipt read.
-import { RENEWAL_LANE_PERIOD_MS, type GenerationState, type TriggerClass } from '../../../shared/continuity.js';
+import { RENEWAL_LANE_PERIOD_MS, STATE_DEADLINE_S, type GenerationState, type TriggerClass } from '../../../shared/continuity.js';
 import type { GenAction, GenEvent } from './generationMachine.js';
 import { overlordFirst, type OverlordGenerationReading } from './renewalOrder.js';
 import type { SoftAnswer, SoftWait } from './softRenewal.js';
@@ -164,4 +164,18 @@ export const RENEWING_STATES: ReadonlySet<GenerationState> = new Set<GenerationS
 export function renewalHoldsMail(state: GenerationState | undefined, origin: { readonly fromId: string; readonly subject: string } | null): boolean {
   if (state === undefined || !RENEWING_STATES.has(state)) return false;
   return !(origin !== null && origin.fromId === 'operator' && origin.subject === RENEWAL_HANDOVER_SUBJECT);
+}
+
+/** A handover note belongs to the renewal it was written in (slug handover-belongs-to-its-renewal): the notes door keeps one
+ *  note per generation, so a generation that went back to `active` and renews again still holds its first renewal's note.
+ *  The walk's `handover` event takes it only when it was written since the generation entered `checkpointed`. */
+export function handoverSince(handoverAt: number | null, checkpointedSince: number): number | null {
+  return handoverAt !== null && handoverAt >= checkpointedSince ? handoverAt : null;
+}
+
+/** The checkpoint an act seals takes the note only when it was written in this renewal: no earlier than `checkpointed`'s
+ *  longest stay (its deadline and one lane period) before the act's episode began. A renewal that follows one that went
+ *  back waits out a hold-off first, so an earlier renewal's note is always older than that. */
+export function handoverInRenewal(handoverAt: number, episode: number): boolean {
+  return handoverAt >= episode - (STATE_DEADLINE_S.checkpointed * 1_000 + RENEWAL_LANE_PERIOD_MS);
 }

@@ -53,8 +53,8 @@ describe('the generation day\'s invariants go red on a hand-made sequence', () =
     expect(byName('G2').check(seqOf([at(0), at(H), at(2 * H), at(6 * H)]))).toBeNull();
     const arm = (state: string): Row => ['arm', 'continuity', state, 'sim'];
     expect(byName('G2').check(seqOf([arm('live'), at(0), at(H), at(2 * H), at(6 * H - 1)]))?.invariant).toBe('G2');
-    // In shadow the lane's one stamp per row undercounts a would-be renewal that went back to active (the report's finding).
-    expect(byName('G2').check(seqOf([arm('shadow'), at(0), at(H), at(2 * H), at(6 * H - 1)]))).toBeNull();
+    // Shadow counts too: every soft due fed is a row of continuity_soft_renewals (slug soft-renewals-are-rows).
+    expect(byName('G2').check(seqOf([arm('shadow'), at(0), at(H), at(2 * H), at(6 * H - 1)]))?.invariant).toBe('G2');
   });
   it('CONTROL: G3 is red on a soft renewal at 29 observed minutes', () => {
     expect(byName('G3').check(seqOf([['soft-renewal', 'o', `obs=1;age=${29 * 60_000}`, 'lane']]))?.invariant).toBe('G3');

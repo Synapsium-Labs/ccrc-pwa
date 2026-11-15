@@ -105,7 +105,7 @@ const arm = (left: number): void => { fault.left = left; fault.fired = false; };
  *  past the test slice's cap over 5,000 seeds. */
 let simDb: DatabaseSync | null = null;
 /** The tables the day writes, children first (the foreign keys are on). */
-const DAY_TABLES = ['continuity_probes', 'continuity_reads', 'continuity_handovers', 'continuity_checkpoints', 'continuity_renew_calls',
+const DAY_TABLES = ['continuity_probes', 'continuity_reads', 'continuity_handovers', 'continuity_checkpoints', 'continuity_renew_calls', 'continuity_soft_renewals',
   'continuity_notes', 'continuity_timers', 'continuity_card_reads', 'continuity_snapshots', 'continuity_generations', 'continuity_cursor',
   'continuity_starts', 'operator_item_events', 'operator_items', 'run_events', 'runs', 'programs'] as const;
 function dayDb(): DatabaseSync {
@@ -736,13 +736,11 @@ export const GEN_DAY_INVARIANTS: readonly Invariant[] = [
       }
       return null;
     } },
-  { name: 'G2', says: 'at most three soft renewals in any six hours of observed time, per identity (a live arm\'s rule: a shadow walk that goes back to active spends no hold-off and the lane keeps one budget stamp per generation row, so it counts a repeated would-be renewal once; the Task 5 report names it)',
+  { name: 'G2', says: 'at most three soft renewals in any six hours of observed time, per identity, live or shadow (each soft due the lane feeds is a row of continuity_soft_renewals, so a repeated one is counted again)',
     check(lines) {
       const by = new Map<string, Array<[number, SequenceLine]>>();
-      let shadow = false;
       for (const l of lines) {
-        if (l.kind === 'arm') shadow = l.state !== 'live';
-        if (l.kind === 'soft-renewal' && !shadow) {
+        if (l.kind === 'soft-renewal') {
           const xs = by.get(l.id) ?? []; xs.push([num(l.state, 'obs'), l]); by.set(l.id, xs);
           const within = xs.filter(([t]) => xs.at(-1)![0] - t < SOFT_BUDGET.windowMs);
           if (within.length > SOFT_BUDGET.count) return violation('G2', l, `${l.id}: ${within.length} soft renewals in six observed hours`);
@@ -995,7 +993,8 @@ export const GEN_DAY_INVARIANTS: readonly Invariant[] = [
         if (l.kind !== 'gen' || !live) continue;
         const who = l.id.slice(0, l.id.lastIndexOf('#'));
         const o = open.get(who);
-        if (l.state === 'clearing') { if (o === undefined) open.set(who, { id: l.id, called: false, died: false }); continue; }
+        // A renewal that reaches clearing in the day's last minutes, when no acts start (`ACTS_END`), is not judged.
+        if (l.state === 'clearing') { if (o === undefined && l.at < ACTS_END) open.set(who, { id: l.id, called: false, died: false }); continue; }
         if (o !== undefined) {
           open.delete(who);
           if (!o.called && !o.died) return violation('G12', l, `${o.id}: left clearing (${l.state}) without a renew call ever reaching the host`);

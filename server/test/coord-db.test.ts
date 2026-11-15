@@ -2778,13 +2778,14 @@ describe('coord.db: the checkpoint and renew-call tables (Overlord W1a, the rene
     (db.prepare(`PRAGMA table_info(${table})`).all() as { name: string; notnull: number; pk: number }[])
       .map((c) => `${c.name}${c.notnull === 1 ? '!' : ''}${c.pk > 0 ? `#${c.pk}` : ''}`);
 
-  it('TWO NEW TABLES in one entry, the one after the anchor row\'s, and nothing on an existing table', () => {
+  it('THREE NEW TABLES and an index in one entry, the one after the anchor row\'s, and nothing on an existing table', () => {
     expect(SLOT).toBe(MIGRATIONS.findIndex((m) => m.includes("VALUES ('anchor-slot', 'shadow', 0)")) + 2);
     expect(SLOT).toBe(75);
     expect(MIGRATIONS[SLOT - 1]).toContain('CREATE TABLE continuity_renew_calls');
     const sql = MIGRATIONS[SLOT - 1]!.replace(/--[^\n]*/g, '');
     expect(sql.match(/\b(?:CREATE|ALTER|DROP|INSERT|UPDATE|DELETE)\b[^;(]*/g)!.map((x) => x.trim())).toEqual([
-      'CREATE TABLE continuity_checkpoints', 'CREATE TABLE continuity_renew_calls']);
+      'CREATE TABLE continuity_checkpoints', 'CREATE TABLE continuity_renew_calls', 'CREATE TABLE continuity_soft_renewals',
+      'CREATE INDEX continuity_soft_renewals_identity ON continuity_soft_renewals']);
   });
 
   it('reaches a database ALREADY at the version before it (74): both tables land, empty, and an existing row is as it was', () => {
@@ -2800,7 +2801,8 @@ describe('coord.db: the checkpoint and renew-call tables (Overlord W1a, the rene
     const db = openCoordDb(p);
     expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(COORD_SCHEMA_VERSION);
     expect(columns(db, 'continuity_checkpoints')).toEqual(['generationId#1', 'notes!', 'rulings!', 'handover', 'at!']);
-    expect(columns(db, 'continuity_renew_calls')).toEqual(['generationId!#1', 'try!#2', 'at!', 'answer']);
+    expect(columns(db, 'continuity_renew_calls')).toEqual(['generationId!#1', 'episode!#2', 'try!#3', 'at!', 'answer']);
+    expect(columns(db, 'continuity_soft_renewals')).toEqual(['id#1', 'identity!', 'term!', 'generationId!', 'observedMs!']);
     expect(db.prepare('SELECT count(*) AS n FROM continuity_checkpoints').get()).toEqual({ n: 0 });
     expect(db.prepare('SELECT count(*) AS n FROM continuity_renew_calls').get()).toEqual({ n: 0 });
     expect(db.prepare('SELECT sessionId, door, at FROM continuity_reads').all()).toEqual([{ sessionId: 'lane-a-project-a', door: 'card', at: 5 }]);

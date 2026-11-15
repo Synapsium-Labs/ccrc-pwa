@@ -224,6 +224,26 @@ describe('the renewal act, live (Task 4)', () => {
     expect(f.host.renews).toHaveLength(1);
   });
 
+  it('a generation that went back to active renews again: its second renewal makes its own call (slug renew-calls-keyed-by-episode)', async () => {
+    const f = await atRest();
+    f.host.answers = [{ kind: 'refused', reason: 'turn' }];
+    await f.cycle(() => hardCap());
+    f.t.advance(PERIOD);
+    await f.cycle(() => hardCap());
+    expect(f.gen()).toMatchObject({ n: 1, state: 'active' });
+    expect(f.host.renews).toHaveLength(1);
+    // The hard trigger still stands: a second renewal of the same generation drains, clears and calls again, try 1 of its
+    // own episode, and its start mints n=2.
+    f.t.advance(PERIOD);
+    await f.cycle(() => hardCap());
+    f.t.advance(PERIOD);
+    await f.cycle(() => hardCap());
+    expect(f.host.renews).toEqual([`${COORD} n=1`, `${COORD} n=1`]);
+    f.t.advance(PERIOD);
+    await f.cycle();
+    expect(f.gen()).toMatchObject({ n: 2, state: 'carded' });
+  });
+
   it('renew unreachable, then the start is reported: the receipt ends the retry, so no second renew', async () => {
     const f = await atRest();
     f.host.answers = [{ kind: 'unreachable', detail: 'link down' }];

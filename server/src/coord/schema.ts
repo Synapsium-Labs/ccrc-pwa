@@ -3132,8 +3132,10 @@ export const MIGRATIONS: readonly string[] = [
   // generations lane, which is their only writer. `continuity_checkpoints` holds the checkpoint the lane assembles for a
   // generation before it renews it: the identity's live notes and, for a coordinator, its last ten rulings (each a JSON
   // array), and the handover note's JSON or NULL (a hard trigger carries none). The card reads the row of the generation
-  // that ended last. `continuity_renew_calls` holds one row per `SessionHost.renew` call the lane makes for a generation's
-  // try, inserted BEFORE the call (a crash then never repeats a try) and given its answer word after.
+  // that ended last. `continuity_renew_calls` holds one row per `SessionHost.renew` call the lane makes for a try of one
+  // renewal (an episode: a generation that went back to active may renew again), inserted BEFORE the call (a crash then
+  // never repeats a try) and given its answer word after. `continuity_soft_renewals` holds one row per soft due the lane fed,
+  // the soft budget's count across generations.
   //
   // NEW TABLES, nothing on an existing table: an older build opening a file at `user_version 74` takes rule 3 (it warns,
   // reads as-is and migrates nothing), never names either table, and boots. Every earlier entry is frozen.
@@ -3151,11 +3153,20 @@ export const MIGRATIONS: readonly string[] = [
   );
   CREATE TABLE continuity_renew_calls (
     generationId INTEGER NOT NULL,
-    try          INTEGER NOT NULL,      -- the try within the generation (1-based)
+    episode      INTEGER NOT NULL,      -- the renewal: wall ms its generation entered clearing (set once on entry)
+    try          INTEGER NOT NULL,      -- the try within the renewal (1-based)
     at           INTEGER NOT NULL,      -- wall ms the call was claimed, before it was made
     answer       TEXT,                  -- the RenewResult word, or NULL while the call is in flight or its answer was lost
-    PRIMARY KEY (generationId, try)
+    PRIMARY KEY (generationId, episode, try)
   );
+  CREATE TABLE continuity_soft_renewals (
+    id           INTEGER PRIMARY KEY,
+    identity     TEXT NOT NULL,
+    term         INTEGER NOT NULL,
+    generationId INTEGER NOT NULL,      -- the generation whose soft due was fed
+    observedMs   INTEGER NOT NULL       -- the identity's accumulator when it was fed
+  );
+  CREATE INDEX continuity_soft_renewals_identity ON continuity_soft_renewals(identity, term);
   `,
 ];
 

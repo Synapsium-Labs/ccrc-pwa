@@ -6,7 +6,7 @@
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { expect } from 'vitest';
-import { GENERATION_STATES, RENEWAL_LANE_PERIOD_MS, type GenerationState } from '../../../shared/continuity.js';
+import { GENERATION_STATES, RENEWAL_LANE_PERIOD_MS, STATE_DEADLINE_S, type GenerationState } from '../../../shared/continuity.js';
 import type { HibernateLive, HibernateMark, HibernateRow } from '../../src/coord/hibernate.js';
 import type { RenewKind, RenewResult } from '../../src/continuity/sessionHost.js';
 import type { MutantSet, SuiteCase } from './mutate.js';
@@ -110,6 +110,14 @@ export function feedCases(m: FeedModule): Record<string, SuiteCase> {
         expect(feed(m, { state: s, deadlineAt: T0 }).at(-1), s).toEqual({ kind: 'deadline' });
         expect(feed(m, { state: s, deadlineAt: T0 + 1 }).some((e) => e.kind === 'deadline'), s).toBe(false);
       }
+    },
+    'a handover counts for the walk only when written since checkpointed began, and for a seal only inside its renewal': () => {
+      expect(m.handoverSince(T0, T0)).toBe(T0);
+      expect(m.handoverSince(T0 - 1, T0)).toBeNull();
+      expect(m.handoverSince(null, T0)).toBeNull();
+      const longest = STATE_DEADLINE_S.checkpointed * 1_000 + RENEWAL_LANE_PERIOD_MS;
+      expect(m.handoverInRenewal(T0 - longest, T0)).toBe(true);
+      expect(m.handoverInRenewal(T0 - longest - 1, T0)).toBe(false);
     },
     'beforeDeadline: strictly before, and a state with no deadline takes every fact': () => {
       expect(m.beforeDeadline(T0 - 1, T0)).toBe(true);
@@ -260,6 +268,9 @@ const FEED_SET: MutantSet<FeedModule> = {
     { id: 'F6 the nudge point at the deadline', old: 'return deadlineAt - RENEWAL_LANE_PERIOD_MS;', new: 'return deadlineAt;' },
     { id: 'F7 the deadline one tick late', old: 'if (f.deadlineAt !== null && f.now >= f.deadlineAt) events.push', new: 'if (f.deadlineAt !== null && f.now > f.deadlineAt) events.push' },
     { id: 'F8 drained outside draining', old: "if (f.state === 'draining' && f.drained)", new: 'if (f.drained)' },
+    { id: 'F9 an earlier renewal\'s handover counts', old: 'return handoverAt !== null && handoverAt >= checkpointedSince ? handoverAt : null;', new: 'return handoverAt;' },
+    { id: 'F10 the seal takes any note', old: 'return handoverAt >= episode - (STATE_DEADLINE_S.checkpointed * 1_000 + RENEWAL_LANE_PERIOD_MS);', new: 'return true;' },
+    { id: 'F11 the seal window a lane period short', old: 'return handoverAt >= episode - (STATE_DEADLINE_S.checkpointed * 1_000 + RENEWAL_LANE_PERIOD_MS);', new: 'return handoverAt >= episode - STATE_DEADLINE_S.checkpointed * 1_000;' },
   ],
   suite: allFeed,
 };
