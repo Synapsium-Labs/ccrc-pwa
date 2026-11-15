@@ -1163,6 +1163,30 @@ describe('the probes (the probes piece, PR B, Tasks 5 and 6)', () => {
     ...(post === undefined ? [] : [{ at: post, trigger: 'auto' as const, phase: 'post' as const, transcript: null, scope: 'main' as const }]),
   ] });
 
+  it('a spot round opened while live plans its mail; a start round plans none, and in shadow a spot round plans none (review 2149 F16)', () => {
+    // The start round, opened live: no notice (only a spot round is announced).
+    const s0 = fixture();
+    s0.s.setLaneArm(CONTINUITY_LANE, 'live', 1);
+    s0.start('startup', U1);
+    s0.pass();
+    readCardOf(s0);
+    const opened = s0.pass();
+    expect(opened).toMatchObject({ roundsOpened: 1 });
+    expect(opened.planned.map((p) => p.act.kind)).not.toContain('spot-probe');
+    // A spot round opened live: one notice, for that generation.
+    const f = active();
+    threeNotes(f);
+    const live = f.pass(at(f, usage(60_000, 1_000_000), turn('idle')));
+    expect(live).toMatchObject({ live: true, roundsOpened: 1 });
+    expect(live.planned.filter((p) => p.act.kind === 'spot-probe').map((p) => p.target.genId)).toEqual([gen(f).id]);
+    // The same in shadow: the round opens and nothing is planned.
+    const g = active();
+    g.s.setLaneArm(CONTINUITY_LANE, 'shadow', 2);
+    threeNotes(g);
+    const shadow = g.pass(at(g, usage(60_000, 1_000_000), turn('idle')));
+    expect(shadow).toMatchObject({ live: false, roundsOpened: 1, planned: [] });
+  });
+
   it('after a compaction the baseline is the context newer than it, or 0: a spot round opens about 50k into the new context, not at 221k (review 2068 F1)', () => {
     const f = active();
     threeNotes(f);

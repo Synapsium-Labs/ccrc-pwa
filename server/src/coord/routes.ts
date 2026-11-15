@@ -72,7 +72,7 @@ import {
 import { dispatchAbandonViewOf } from './deadDispatch.js';
 import { isDispatchAbandonChoice } from '../../../shared/dispatch-abandon.js';
 import { decideLaneArmBody, decideLaneArmPost, laneArmChangeLine, laneArmRowViewOf, laneArmViewOf, rosterCardFieldOf } from './laneArm.js';
-import { CONTINUITY_LANE, LANE_ARM_FEED_TITLE, ROSTER_CARD_LANE, RUNS_ROSTER_CARD_FIELD } from '../../../shared/lane-arm.js';
+import { LANE_ARM_FEED_TITLE, ROSTER_CARD_LANE, RUNS_ROSTER_CARD_FIELD } from '../../../shared/lane-arm.js';
 import { isRunCloseChoice, isRunCloseGroup, type RunCloseView } from '../../../shared/run-close.js';
 import { RUN_CLOSE_TALLY_MS, closedByGroup, runCloseHeldOf, runCloseViewOf } from './runCloseSwitch.js';
 import { childBindGate } from './childBind.js';
@@ -2045,10 +2045,10 @@ export function registerCoordRoutes(
     if (!requireMailToken(req, reply, 'POST /api/runs/:id/route')) return;
     const coord = deps.coord;
     const parsed = parseRouteRequest(parseCanonicalPositiveSafeInteger((req.params as { id: string }).id), req.body);
-    // The launch-profile lane owns `compact` while `continuity` is live (`compactRefusal`, review 2024 F3): its refusal is
-    // one more 400 `bad-request` with its detail, so it rides the parse's own refusal.
+    // The launch-profile lane owns `compact` while it and `continuity` are live (`compactRefusal`, review 2024 F3, 2149 F11):
+    // its refusal is one more 400 `bad-request` with its detail, so it rides the parse's own refusal.
     const owned = parsed.ok && parsed.ask.how.by === 'manual'
-      ? compactRefusal(parsed.ask.how.field, laneArmRowViewOf(CONTINUITY_LANE, coord.laneArmSetting(CONTINUITY_LANE)).live) : null;
+      ? compactRefusal(parsed.ask.how.field, (lane) => laneArmRowViewOf(lane, coord.laneArmSetting(lane)).live) : null;
     const request = owned === null ? parsed : { ok: false as const, detail: owned };
     if (!request.ok) return refuseRoute(reply, 'bad-request', { detail: request.detail });
     const { id, ask } = request;

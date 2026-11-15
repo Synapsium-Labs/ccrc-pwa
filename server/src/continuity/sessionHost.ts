@@ -4,13 +4,17 @@
 //
 // THE FAILURE CONTRACT. No method throws: every failure is an answer, and every answer keeps the distinction its
 // adapter received. `renew`'s answers sit on one side or the other of the receipt's first half (§3.3.11, "The receipt has
-// two halves"): `refused`, `kill-failed` and `capability-missing` touched nothing and are BEFORE it (the old conversation
-// still runs); `wake-failed` and `wake-unrestored` are AFTER it (the old conversation ended and no fresh one is proven);
+// two halves"): `refused` and `capability-missing` touched nothing and are BEFORE it (the old conversation still runs);
+// `kill-failed` (ccd's exit 6) is BEFORE it too, since the old conversation did not end, but it did touch the session: ccd
+// stopped its unit and wrote `$REG/<id>.hibernated` before the kill failed, so the pane may run unsupervised with a stale
+// marker, and the lane tells the operator (review 2149 F4); `wake-failed` and `wake-unrestored` are AFTER it (the old
+// conversation ended and no fresh one is proven; on `wake-failed` ccd put the row back to sleep on the old uuid);
 // `unproven` (ccd's exit 7, `roll-fresh-unproven`) means the fresh start could not be proven and the old uuid is back, so
 // a fresh start can be asked for again: try again later, never a failure (review 1919); `unreachable` is no answer at all,
 // so the half is UNKNOWN, and the lane treats it as after the first half for a retry (it reads the receipt before trying
 // again), never as before. `started` is the act answered: both halves are proven only when the start report lands, which
-// `receipt` reads.
+// `receipt` reads: a fresh conversation's own start (`startup`, under a uuid other than the one the renewal ended), never a
+// resume of the old one, which exit 7's put-back or a concurrent wake reports (review 2149 F2).
 //
 // `compact` (C39's act) is not declared: no consumer asks for it in W1a, so it stays ccd's auto-compact until one does
 // (slug port-declares-what-w1a-consumes).
@@ -31,7 +35,8 @@ export interface SessionHost {
   deliver(sessionId: string, prompt: RenewalPrompt): Promise<DeliverResult>;
   /** The session's context, from a fresh usage sidecar; a stale or missing one is unmeasured. */
   contextUsage(sessionId: string): Promise<Reading<{ readonly tokens: number; readonly window: number }>>;
-  /** The second half of the receipt: the newest reported start since a start id, if any. */
+  /** The second half of the receipt: the newest fresh conversation's start (`startup`) reported since a start id, under a
+   *  uuid other than that start's, if any. */
   receipt(sessionId: string, sinceStartId: number): Promise<ReceiptRead>;
 }
 
@@ -39,7 +44,7 @@ export interface SessionHost {
 export type RenewResult =
   | { readonly kind: 'started' }                                   // both halves pending the start report
   | { readonly kind: 'refused'; readonly reason: string }          // nothing touched: before the first half
-  | { readonly kind: 'kill-failed' }                               // before the first half
+  | { readonly kind: 'kill-failed' }                               // before the first half; the unit was stopped
   | { readonly kind: 'wake-failed' } | { readonly kind: 'wake-unrestored' }   // after the first half
   | { readonly kind: 'unproven' }                                  // exit 7: the old uuid is back; try again later
   | { readonly kind: 'unreachable'; readonly detail: string }      // no answer: the half is unknown

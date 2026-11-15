@@ -60,7 +60,8 @@ own row and no state column.
   union lacks: `unproven`, ccd's exit 7 (`roll-fresh-unproven`: the fresh start could not be proven and the old uuid is
   back). It is never a failure: the machine reads it as after the receipt's first half (`host-failed` with `afterEnd`), so
   the lane retries within `clearing`'s deadline, on the next pass, after a receipt read. `unreachable` and `DeliverResult`'s
-  `unreachable` carry a `detail`.
+  `unreachable` carry a `detail`. Since fix round 1 (review 2149 F2) the put-back's own start cannot read as the renewal's:
+  see `fresh-start-only-is-renewed`.
 - **renew-checks-the-verb-too.** The adapter asks `capSupported(…, 'hibernate-fresh')` and `ccdCan(…, 'hibernate')`, as
   every other `hibernate` act asks the verb (`verb-gate.test.ts`). A box without either answers `capability-missing`.
 - **renew-runs-on-the-serialisers.** The adapter's ccd call runs inside the stop-and-done serialiser around the session's
@@ -78,12 +79,15 @@ own row and no state column.
   entered `clearing`, and a retry (after `host-failed` with `afterEnd`) waits for the next pass and its receipt read.
 - **capability-before-due.** Without `hibernate-fresh` the permit refuses before any due is fed (`capability-missing`),
   live or shadow, so no drain begins and no mail is held for a renewal that cannot run. The adapter's own
-  `capability-missing`, if it ever answers, reads as before the first half.
+  `capability-missing`, if it ever answers, reads as before the first half. Each pass logs the due renewals that waited,
+  by why, on one line (`due renewals that waited this pass: 1 capability-missing`; review 2149 F7), so a box without the
+  capability leaves its evidence in the shadow week's records.
 - **drain-asks-the-hold-table.** `drained` (and `softRenewalMay`'s `hibernateHold`) is `hibernateVerdict`'s answer with
   the facts that do not bear on a renewal set aside (`drainVerdict`): outstanding mail (the gate holds it), open runs and
   claims, a programme hold, the bucket, presence and the quiet window. Kept: the pane, the live word, a menu, background
   work, subagents, the turn marker and its background and scheduled work, a stranded, swap-blocked, substrate-marked or
-  archived row. Every read it could not make holds.
+  archived row. Every read it could not make holds. Two facts ccd refuses on are set aside too: see
+  `held-and-opted-out-not-read-at-the-drain`.
 - **walk-stops-at-a-state-change.** The feed orders events for the state the pass read; once one moves the state, the rest
   (the deadline above all) belong to a state the generation has left, so the walk stops and the next pass reads the new
   state's facts.
@@ -99,15 +103,29 @@ own row and no state column.
 - **spot-probe-mail-wired** (ask 415). A spot round opened while live plans one system mail, subject `probe`, telling the
   session to run `ccrc-api probe`; in shadow a spot round is still recorded only.
 - **degraded-item-deduplicated.** The item's title names the session and the generation; an open item with that prefix on
-  the programme is not raised again. A degraded generation that is not a coordinator raises none (no programme) and logs.
+  the programme is not raised again. Since fix round 1 (review 2149 F3) the lane re-plans the item on every pass while the
+  generation stays `degraded`, it claims a programme, and no open item for it stands there (`standingActs`, over the lane's
+  read of the programme's open items), so an item a crash or a throwing raise lost is raised on a later pass. The acts check
+  again before they raise, and raise none for a stay they already raised one for in this process: an item the operator
+  dismissed is raised once more after a restart, and not again until the generation degrades anew. A generation with no
+  claimed programme to raise it on (or one that is not a coordinator) has nothing re-planned; the step's own item act logs
+  that once per generation in this process, not every pass.
 - **soft-mode-defaults-when-away.** No Setting for R19's mode exists yet; the lane reads `when-away` until one does.
 - **shadow-records-every-step.** In shadow each written step is one log line naming the machine's actions. A shadow walk
   sets no hold-off (that is an act), so a due coordinator's shadow walk can repeat every few minutes; the records show it.
+  A soft due fed in shadow records no soft renewal row (review 2149 F14, the "skip" of the ruling's "tag or skip": tagging
+  would change the migration's table, whose file another piece holds for its landing merge): the live budget counts every
+  row, so a shadow week would otherwise spend the first live hours' budget. So the soft budget does not bound a shadow walk,
+  and the shadow records can show more soft renewals than live would; the generation day's G2 now counts live walks only. A
+  failed write of that row is reported on the pass's line.
 - **gate-lifted-safely.** The `continuity` row and its gate shipped together in #2786, and no door ever accepted Live for
-  it, so no stored `live` can stand on a box except by a hand write to coord.db; lifting the gate arms nothing.
+  it, so no stored `live` can stand on a box except by a hand write to coord.db; lifting the gate arms nothing. The
+  coordinator's ruling on review 2149: the replay quiz (#2839) lands before this piece, so its baseline refusal attaches to
+  the lifted gate before `continuity` can be armed.
 - **compact-refused-at-the-route-doors** (launch profiles B review 2024 F3). The operator's `POST /api/sessions/:id/route`
-  and the coordinator's `POST /api/runs/:id/route` refuse `compact` while `continuity` is live, 400 `bad-request` with the
-  reason (`compactRefusal`). The spawn and dispatch `route` bodies are left as they are: the launch-profile lane rewrites the
+  and the coordinator's `POST /api/runs/:id/route` refuse `compact` while `continuity` and `launch-profile` are both live,
+  400 `bad-request` with the reason (`compactRefusal`, which reads both rows; review 2149 F11: the lane writes `compact` only
+  while both are live, so with `launch-profile` in shadow the doors still write it). The spawn and dispatch `route` bodies are left as they are: the launch-profile lane rewrites the
   field on its next pass, and a first write at creation undoes no value the lane set.
 - **renewing-gate-word.** The mail gate's word is `renewing` (a `MailGate`); the hold reads `state` only, so shadow holds
   nothing (`renewalHoldsMail`). It is checked first in the per-session loop, before the cooldown, so a gated replay spends no
@@ -146,8 +164,10 @@ own row and no state column.
   holds live and shadow. The day's server side is the real lane and acts over a fake `SessionHost`; the scenario steps no
   row itself. Two test seams were added to the pass: `GenerationsDeps.decide` (mutant deciders, as `observe` already was)
   and `GenReadings.soft` (the soft preconditions' fleet reads the hand-offs piece and W1 will fill; absent, unmeasured).
-- **hold-off-and-item-not-rederived.** A crash between a pass and its acts loses that pass's hold-off and degraded item:
-  they are acts of the step, not derived from stored state on the next pass.
+- **hold-off-not-rederived** (was `hold-off-and-item-not-rederived`; split by the coordinator's ruling on review 2149 F3). A
+  crash between a pass and its acts loses that pass's hold-off: it is an act of the step, not derived from stored state on
+  the next pass. That is harmless, since the soft budget's rows still cap soft starts. The degraded item is no longer lost
+  that way: see `degraded-item-deduplicated`.
 - **port-delivers-list-rows** (the W1 vocabulary piece, #2840, landed during this piece). Every string ccrc types into a pane is a
   row of `INJECTED_PROMPTS`, and every `sendPrompt` types a row by reference. The first prompt is the new row
   `renewal-first-prompt` (exact, typed by the server), and the port's `deliver` takes a row's key (`RenewalPrompt`, today
@@ -159,3 +179,63 @@ own row and no state column.
 - **compact-refusal-rides-the-parse.** On the coordinator's route door the `compact` refusal is folded into the parse's own
   400 `bad-request` with its detail, so the handler keeps ARCH-20's five `if`s; the operator's door sends it through
   `refuseRoute`. Same words, same status.
+
+## Fix round 1 (review 2149)
+
+The coordinator's rulings on review 2149, each with its test (measured red without the change).
+
+- **hold-off-bounds-a-failed-hard-renewal** (F1). The permit holds a hard trigger while a hold-off stands
+  (`renewalPermit`'s `holdOff`, read by `holdOffStands` on the generation's own observed age), after the host and the role
+  and before the Overlord. Every step into `degraded` sets the hold-off too (`actsOfStep`), and a proven generation's
+  failure before the first half already did. So a renewal ccd refused (attached, a draft, `.no-roll`, `.hold`, busy), one
+  whose wake failed, or one that never drained waits out `HOLD_OFF_MS` before its still-standing hard trigger drains it again,
+  rather than holding its mail about half of every minute. The spec has `degraded` block soft triggers only; a hard trigger
+  still renews a degraded generation, after the hold-off. A step's acts run one by one, so a throwing item never drops the
+  hold-off after it. The permit is now one of the pass's named deciders (`GenerationsDeps.decide.renewalPermit`), so the
+  generation day's hold-off mutation reaches it: a soft renewal that ignores the hold-off both in `softRenewalMay` and at the
+  permit goes red on G7.
+- **fresh-start-only-is-renewed** (F2). The receipt's second half (`ccdSessionHost.receipt`) and the mint's outcome
+  (`startOutcome`) take only a fresh conversation's own start: a `startup`, and in the receipt one under a uuid other than
+  the start the renewal ended. A resume of the old uuid (exit 7's put-back, a concurrent wake or an account move) is never
+  `renewed`, gets no first prompt, and does not block the retry. It still mints, as every start does, with its own outcome.
+  ccd spawns the fresh conversation with `--session-id`, which Claude Code reports as `startup`; the generation day reported
+  a renewal's start as `clear` and now reports it as `startup`, as the host does.
+- **kill-failed-raises-its-own-item** (F4). The port's comment for exit 6 now says what ccd did: it stopped the unit and
+  wrote `$REG/<id>.hibernated` before the kill failed. The answer stays before the first half (the old conversation did not
+  end), so a proven generation goes back to `active`, and the operator gets an item of its own (`answerActs`, titled
+  `stopped its unit`), whatever the generation steps to.
+- **wake-failed-is-terminal** (F5). ccd puts the row back to sleep on the old uuid, so a retry would find no pane. `renew`'s
+  `wake-failed` is the machine's new event `host-gave-up`, which degrades `clearing` at once, after the first half (the
+  machine's table and the spec model's rules each gain one row). The item's sentence follows the renewal's last answer
+  (`itemStandsWords`): asleep until mail or an open screen wakes it (4), no conversation proven running (5), the old
+  conversation back (7), ccd's answer not read, the unit stopped (6), and otherwise the current conversation.
+- **unanswered-try-counts-after-the-first-half** (F6). At the clearing deadline a try that was claimed and never answered
+  (a crash between the call and its answer) is fed as `host-failed` after the end, stamped when it was claimed, so the
+  deadline degrades rather than going back: an unknown half counts as after it, as the port's contract says.
+- **held-and-opted-out-not-read-at-the-drain** (F8). `drainVerdict` sets aside the programme hold and `.no-roll`, and the
+  adapter passes no `--hold-ok`, so ccd refuses a held or opted-out session at the act (exit 3), and since F1 that renewal
+  goes back and waits out the hold-off. Until a later piece reads those facts at the drain, such a session still holds its
+  mail through each `draining` and is asked for a handover note. For the Overlord nothing changes here: the ccd arms plan's
+  ruled question 1 lets `--roll --fresh` pass keep-awake's stamped `.no-roll`.
+- **exit-1-carries-ccds-line** (F9). Exit 1, and any code without a word of its own, stays `unreachable` (the plan's mapping),
+  and its `detail` and log line now carry ccd's first stderr line, so a "no such session" before the kill reads as what it is.
+- **handover-ask-passes-while-asked** (F10). The renewing gate lets the handover ask through only in `draining` and
+  `checkpointed`, so an undelivered ask never reaches the fresh conversation.
+- **role-re-read-at-the-permit** (F12). A coordinator generation's role is read again at the permit, by the same reading the
+  mints use (`roleOf`, this pass's open coordinators and registry); one that no longer reads as a coordinator (its programme
+  closed, or a read that failed) waits `role-changed`.
+- **disarm-ends-a-live-walk** (F13). A live walk whose row was switched off is fed the machine's new event `disarmed`, alone:
+  before the first half it goes back as a failure before it does, and after it (or in a fresh, unproven conversation) it
+  degrades. Its deliveries are released at once, since the gate reads `state`. No act is planned (the row is shadow), so the
+  step is a shadow record.
+- **no-nudge-at-the-deadline** (F15). `carded` is fed no `nudge-due` at or after its deadline, so the card is not asked of
+  a generation that degrades on that pass.
+- **g11-covers-the-gate-not-the-sweep** (F16). G11 runs over the generation day's own mailbox, which asks the same gate
+  decider over the same column, not over `sweepMail`: the sweep's wiring of the gate and A3's replay of a delivered, unacked
+  row are not driven there, and "at most once" cannot catch a replay. `mail-sweep.test.ts` covers the real wiring, and the
+  day's G11 and its mailbox say so. The spot-probe mail's guard (`spot && live`) now has a test that goes red without either
+  half of it.
+- **arming-note-shadow-reads-back** (F17). A correction to the plan's open question 1, which this note carries since a worker
+  does not edit the plan: in shadow no `renew` is made, so a shadow walk leaves `clearing` only at its deadline and goes back
+  to `active`. It never reaches `carded` or `probing`, so the shadow counts read "back", not "degraded", and a coordinator
+  whose hard trigger stands walks again about every two and a half minutes. The arming item should say so.

@@ -47,14 +47,13 @@ describe('the generation day\'s invariants go red on a hand-made sequence', () =
       ['probes', 'o#2', 'passed', 'lane'], ['gen', 'o#2', 'active', 'lane']]);
     expect(byName('G1').check(ok)).toBeNull();
   });
-  it('CONTROL: G2 is red on a fourth soft renewal inside six observed hours, green on one just outside', () => {
-    const at = (ms: number): Row => ['soft-renewal', 'o', `obs=${ms};age=${H}`, 'lane'];
+  it('CONTROL: G2 is red on a fourth live soft renewal inside six observed hours, green on one just outside, and counts no shadow walk', () => {
+    const at = (ms: number, live = 1): Row => ['soft-renewal', 'o', `obs=${ms};age=${H};live=${live}`, 'lane'];
     expect(byName('G2').check(seqOf([at(0), at(H), at(2 * H), at(6 * H - 1)]))?.invariant).toBe('G2');
     expect(byName('G2').check(seqOf([at(0), at(H), at(2 * H), at(6 * H)]))).toBeNull();
-    const arm = (state: string): Row => ['arm', 'continuity', state, 'sim'];
-    expect(byName('G2').check(seqOf([arm('live'), at(0), at(H), at(2 * H), at(6 * H - 1)]))?.invariant).toBe('G2');
-    // Shadow counts too: every soft due fed is a row of continuity_soft_renewals (slug soft-renewals-are-rows).
-    expect(byName('G2').check(seqOf([arm('shadow'), at(0), at(H), at(2 * H), at(6 * H - 1)]))?.invariant).toBe('G2');
+    // A shadow walk records no soft renewal row (review 2149 F14), so the budget does not bound it and G2 does not count it.
+    expect(byName('G2').check(seqOf([at(0, 0), at(H, 0), at(2 * H, 0), at(6 * H - 1, 0)]))).toBeNull();
+    expect(byName('G2').check(seqOf([at(0), at(H, 0), at(2 * H), at(6 * H - 1)]))).toBeNull();
   });
   it('CONTROL: G3 is red on a soft renewal at 29 observed minutes', () => {
     expect(byName('G3').check(seqOf([['soft-renewal', 'o', `obs=1;age=${29 * 60_000}`, 'lane']]))?.invariant).toBe('G3');
@@ -305,8 +304,9 @@ describe('the generation day over seeded runs', () => {
     expect(await redSeed({ ...REAL, soft: { softRenewalMay: (i) => soft.softRenewalMay({ ...i, softRenewalsInWindow: 0 }) } }, 'G2')).not.toBeNull();
   }, BOUND_MS);
 
-  it('MUTATION: a softRenewalMay that ignores the hold-off goes red on G7 within the CI seeds (review 1912, F9)', async () => {
-    expect(await redSeed({ ...REAL, soft: { softRenewalMay: (i) => soft.softRenewalMay({ ...i, holdOffUntilObservedMs: null }) } }, 'G7')).not.toBeNull();
+  it('MUTATION: a soft renewal that ignores the hold-off, in softRenewalMay and at the permit, goes red on G7 within the CI seeds (review 1912, F9; review 2149 F1)', async () => {
+    expect(await redSeed({ ...REAL, soft: { softRenewalMay: (i) => soft.softRenewalMay({ ...i, holdOffUntilObservedMs: null }) },
+      permit: { renewalPermit: (i) => feed.renewalPermit({ ...i, holdOff: false }) } }, 'G7')).not.toBeNull();
   }, BOUND_MS);
 
   it('MUTATION: a renewalFeed that offers every due as a hard one lets a soft due drain a degraded generation, and goes red on G7 within the CI seeds (review 1912, F9)', async () => {

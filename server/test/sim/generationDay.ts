@@ -67,6 +67,8 @@ export interface GenDayModules {
   readonly coord?: (store: CoordStore) => GenerationsCoord;
   /** The feed's decider; the real one unless a mutation row hands a mutant of it. */
   readonly feed?: Pick<typeof import('../../src/continuity/renewalFeed.js'), 'renewalFeed'>;
+  /** The permit's decider; the real one unless a mutation row hands a mutant of it. */
+  readonly permit?: Pick<typeof import('../../src/continuity/renewalFeed.js'), 'renewalPermit'>;
   /** The runner of the planned acts; `runRenewalActs` unless a mutation row hands a mutated copy of it. */
   readonly acts?: typeof runRenewalActs;
 }
@@ -235,7 +237,7 @@ export function generationDay(mods: GenDayModules): Scenario<GenDayEdge> {
           if (before.dueClass === 'soft') {
             const times = softTimesOf(before);
             cover('soft-renewal');
-            line('soft-renewal', who, `obs=${before.observed.ms};age=${times.generationAgeObservedMs};n=${before.n};from=${from}`, 'lane');
+            line('soft-renewal', who, `obs=${before.observed.ms};age=${times.generationAgeObservedMs};n=${before.n};from=${from};live=${live ? 1 : 0}`, 'lane');
           } else cover('hard-renewal');
         }
         line('gen', id, next.state, 'lane');
@@ -323,8 +325,10 @@ export function generationDay(mods: GenDayModules): Scenario<GenDayEdge> {
       const mailbox: Array<{ who: string; k: number }> = [];
       let mails = 0;
 
+      // A renewal's fresh start is a `startup` (ccd spawns it with `--session-id`, a new conversation); any other start
+      // that is not a resume is a `/clear` (review 2149 F2: only a fresh conversation's `startup` is the renewal's).
       const reportStart = (who: string, e: Extract<GenEvent, { kind: 'started' }>): void => {
-        report(who, e.resumed ? 'resume' : 'clear', !e.resumed);
+        report(who, e.resumed ? 'resume' : (e as { renewal?: true }).renewal === true ? 'startup' : 'clear', !e.resumed);
       };
       /** A host's start reaches the server: reported (and kept by the hook while the server is down, the start-while-down
        *  rule), or waiting in a frozen server's socket. */
@@ -384,7 +388,7 @@ export function generationDay(mods: GenDayModules): Scenario<GenDayEdge> {
             // A new conversation starts a new wave line: the older runs are no longer a boundary.
             db.prepare('DELETE FROM runs WHERE claimedBy = ? AND id < (SELECT MAX(id) FROM runs WHERE claimedBy = ?)').run(COORD, COORD);
           }
-          deliverStart(who, { kind: 'started', resumed: false });
+          deliverStart(who, { kind: 'started', resumed: false, renewal: true } as Extract<GenEvent, { kind: 'started' }>);
         });
       };
       let slowBudget = 0;      // a pass's acts hang at most once
@@ -451,7 +455,9 @@ export function generationDay(mods: GenDayModules): Scenario<GenDayEdge> {
           if (drop) { cover('link-drop'); return { kind: 'unreadable', detail: 'the agent link dropped' }; }
           const r = store.startsOf(who, 50);
           if (!r.ok) return { kind: 'unreadable', detail: r.detail };
-          const hit = r.rows.find((s) => s.id > since && s.source !== 'compact');
+          // As the ccd adapter reads it: a fresh conversation's own start only (review 2149 F2).
+          const ended = r.rows.find((s) => s.id === since)?.uuid ?? null;
+          const hit = r.rows.find((s) => s.id > since && s.source === 'startup' && s.uuid !== ended);
           return hit === undefined ? { kind: 'none' } : { kind: 'started', startId: hit.id, uuid: hit.uuid };
         },
       };
@@ -618,7 +624,12 @@ export function generationDay(mods: GenDayModules): Scenario<GenDayEdge> {
         if (advanced) line('obs', who, `ms=${was.ms};mono=${server.clock.mono()}`, 'lane');
       };
 
-      /** The mail the world queued, delivered when the gate (`renewalHoldsMail`, over the generation's `state` column) lets it. */
+      /** The mail the world queued, delivered when the gate (`renewalHoldsMail`, over the generation's `state` column) lets it.
+       *  WHAT G11 DOES NOT COVER (review 2149 F16): this toy mailbox stands in for the server's delivery sweep. It asks the same
+       *  gate decider over the same column, but it is not `sweepMail`: the sweep's own wiring of the gate (the word checked
+       *  before the cooldown, no attempt spent on a held delivery) and A3's replay of a delivered, unacked row after `probing`
+       *  are not driven here, and since this mailbox delivers each mail once by construction, "at most once" cannot catch a
+       *  replay. `mail-sweep.test.ts` covers the real wiring. */
       const deliverMail = (): void => {
         for (const m of [...mailbox]) {
           const state = row(m.who).state;
@@ -654,7 +665,8 @@ export function generationDay(mods: GenDayModules): Scenario<GenDayEdge> {
         // listing postdates every start received yet.
         // The day drives the live walk too (its arm drawn per seed), so it opens the continuity row's gate.
         const decide = { renewalDue: mods.renewal.renewalDue, softRenewalMay: mods.soft.softRenewalMay, generationStep: mods.machine.generationStep,
-          ...(mods.feed === undefined ? {} : { renewalFeed: mods.feed.renewalFeed }) };
+          ...(mods.feed === undefined ? {} : { renewalFeed: mods.feed.renewalFeed }),
+          ...(mods.permit === undefined ? {} : { renewalPermit: mods.permit.renewalPermit }) };
         const passed = wrote(generationsPass({ coord: lane, clock: server.clock, entropy, proc, log: () => {}, observe: mods.observed.observeTime, retried, emptyTries, gate: () => null, decide },
           { registry: WHO.map(([who]) => ({ id: who, uuid: uuids.get(who)!, lane: 'lane-a', child: { kind: 'none' as const } })),
             listedAt: wall() + 1, readings, canRenew: true }));
@@ -747,11 +759,11 @@ export const GEN_DAY_INVARIANTS: readonly Invariant[] = [
       }
       return null;
     } },
-  { name: 'G2', says: 'at most three soft renewals in any six hours of observed time, per identity, live or shadow (each soft due the lane feeds is a row of continuity_soft_renewals, so a repeated one is counted again)',
+  { name: 'G2', says: 'at most three soft renewals in any six hours of observed time, per identity, live (each soft due a live walk feeds is a row of continuity_soft_renewals, so a repeated one is counted again; a shadow walk records none, review 2149 F14, so the budget does not bound it)',
     check(lines) {
       const by = new Map<string, Array<[number, SequenceLine]>>();
       for (const l of lines) {
-        if (l.kind === 'soft-renewal') {
+        if (l.kind === 'soft-renewal' && num(l.state, 'live') === 1) {
           const xs = by.get(l.id) ?? []; xs.push([num(l.state, 'obs'), l]); by.set(l.id, xs);
           const within = xs.filter(([t]) => xs.at(-1)![0] - t < SOFT_BUDGET.windowMs);
           if (within.length > SOFT_BUDGET.count) return violation('G2', l, `${l.id}: ${within.length} soft renewals in six observed hours`);
@@ -975,7 +987,7 @@ export const GEN_DAY_INVARIANTS: readonly Invariant[] = [
       }
       return null;
     } },
-  { name: 'G11', says: 'a delivery to a renewing session is held and none is lost: no mail is delivered while its recipient\'s generation is in draining to probing, each is delivered at most once, and each queued an hour before the day\'s end was delivered',
+  { name: 'G11', says: 'a delivery to a renewing session is held and none is lost: no mail is delivered while its recipient\'s generation is in draining to probing, each is delivered at most once, and each queued an hour before the day\'s end was delivered (over the day\'s own mailbox, which asks the gate decider; the server\'s sweep and its replay are not driven here)',
     check(lines) {
       const queued = new Map<string, number>(); const delivered = new Map<string, number>();
       for (const l of lines) {

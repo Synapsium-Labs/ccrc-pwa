@@ -1999,7 +1999,7 @@ export class FleetWatcher {
   private readonly generationsCompactions: CompactionsMemo = new Map();
   private generationsProc: string | undefined;
   /** The starts this process held for a failed read, and each generation's empty probe try (`GenerationsDeps.retried`, `.emptyTries`). */
-  private readonly generationsRetried = new Set<number>(); private readonly generationsEmptyTries: EmptyTries = new Map();
+  private readonly generationsRetried = new Set<number>(); private readonly generationsEmptyTries: EmptyTries = new Map(); private readonly renewalMemo = new Set<string>();
   /** The launch-profile lane's last logged line (`ProfileLaneMemory`): a log throttle, never a decision's memory. */
   private readonly launchProfileMemory: ProfileLaneMemory = { lastLine: null };
   private delegationLane(): DelegationLane {
@@ -6094,7 +6094,7 @@ export class FleetWatcher {
       const { io, cfg } = this.deps;
       const reads = turnReadDeps(this.deps, this);
       const rec = (id: string): SessionRecord | undefined => records.find((r) => r.id === id);
-      const acts = renewalActsOf(this.deps, coord, records, reads, (r) => this.rowAtAct(r), this.stopDoneSerial);
+      const acts = renewalActsOf(this.deps, coord, records, reads, (r) => this.rowAtAct(r), this.stopDoneSerial, this.renewalMemo);
       const readings = await gatherGenerationReadings(coord, {
         usage: (id) => readUsageMeasured(io, cfg.registryDir, id, Math.floor(this.deps.time.clock.wall() / 1000)),
         eventsStamp: (id) => io.statMeasured(compactionsPaths(cfg.registryDir, id).pre),

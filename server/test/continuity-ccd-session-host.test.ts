@@ -53,6 +53,11 @@ describe('renew', () => {
     expect(r.kind).toBe('unreachable');
     expect(logs).toEqual([`ccrc-server: renewal: ccd hibernate --roll --fresh exited 9 for ${ID}`]);
   });
+  it('exit 1 carries ccd\'s first line in its detail and its log (review 2149 F9)', async () => {
+    const { host, logs } = harness({ result: ran(1, '\nccd: no such session: acct-a-demo\nmore\n') });
+    expect(await host.renew(ID, 2)).toEqual({ kind: 'unreachable', detail: 'ccd exited 1: ccd: no such session: acct-a-demo' });
+    expect(logs).toEqual([`ccrc-server: renewal: ccd hibernate --roll --fresh exited 1 for ${ID}: ccd: no such session: acct-a-demo`]);
+  });
   it('an absent exit code is never read as 0', async () => {
     const r = await harness({ result: ran(undefined) }).host.renew(ID, 2);
     expect(r).toEqual({ kind: 'unreachable', detail: expect.stringContaining('not measured') });
@@ -132,6 +137,13 @@ describe('receipt', () => {
   const of = (rows: StartRow[], since: number) => harness({ startsOf: () => ({ ok: true, rows }) }).host.receipt(ID, since);
   it('skips a compaction and anything at or before the id, newest first', async () => {
     expect(await of([row(9, 'compact'), row(8, 'startup'), row(7, 'clear'), row(5, 'startup')], 5)).toEqual({ kind: 'started', startId: 8, uuid: 'u8' });
+  });
+  it('only a fresh conversation\'s startup counts: a resume of the old uuid (exit 7\'s put-back) or of another, and a clear, do not (review 2149 F2)', async () => {
+    expect(await of([row(9, 'resume', 'u5'), row(5, 'startup')], 5)).toEqual({ kind: 'none' });
+    expect(await of([row(9, 'resume', 'u9'), row(5, 'startup')], 5)).toEqual({ kind: 'none' });
+    expect(await of([row(9, 'clear'), row(5, 'startup')], 5)).toEqual({ kind: 'none' });
+    expect(await of([row(9, 'startup', 'u5'), row(5, 'startup')], 5)).toEqual({ kind: 'none' });
+    expect(await of([row(9, 'resume', 'u5'), row(8, 'startup'), row(5, 'startup')], 5)).toEqual({ kind: 'started', startId: 8, uuid: 'u8' });
   });
   it('none when nothing qualifies', async () => {
     expect(await of([row(9, 'compact'), row(5, 'startup')], 5)).toEqual({ kind: 'none' });

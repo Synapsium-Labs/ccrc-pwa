@@ -19,7 +19,7 @@ import { EXEMPT } from '../src/auth/gate.js';
 import { seedRoster, testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
 import { ROUTE_LANE_ONLY_FIELDS } from '../../shared/api.js';
-import { CONTINUITY_LANE } from '../../shared/lane-arm.js';
+import { CONTINUITY_LANE, LAUNCH_PROFILE_LANE } from '../../shared/lane-arm.js';
 import { COMPACT_OWNED_DETAIL } from '../src/continuity/compactOwner.js';
 import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
@@ -172,9 +172,10 @@ describe('POST /api/sessions/:id/route (routing spec §5.3, live change from the
     expect(EXEMPT.has('POST /api/sessions/:id/prompt')).toBe(false);
   });
 
-  // Overlord W1a renewal act (review 2024 F3, slug compact-refused-at-the-route-doors): while `continuity` is live the
-  // launch-profile lane owns `compact`, so this door refuses it with the reason and never reaches ccd; in shadow it writes.
-  it('400 naming why for compact while continuity is live, and a write while it is shadow', async () => {
+  // Overlord W1a renewal act (review 2024 F3, slug compact-refused-at-the-route-doors): while `continuity` and
+  // `launch-profile` are both live the launch-profile lane owns `compact`, so this door refuses it with the reason and never
+  // reaches ccd; with either row in shadow it writes (review 2149 F11).
+  it('400 naming why for compact while continuity and launch-profile are live, and a write while either is shadow', async () => {
     const home = seededHome();
     const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
     const calls: string[][] = [];
@@ -182,8 +183,10 @@ describe('POST /api/sessions/:id/route (routing spec §5.3, live change from the
       fleetState: BOTH_CAPS, coord });
     await app.ready();
     expect((await post(app, ID, { field: 'compact', value: '60' })).statusCode).toBe(200);
-    const before = calls.length;
     coord.setLaneArm(CONTINUITY_LANE, 'live', 1);
+    expect((await post(app, ID, { field: 'compact', value: '55' })).statusCode).toBe(200);
+    const before = calls.length;
+    coord.setLaneArm(LAUNCH_PROFILE_LANE, 'live', 2);
     const res = await post(app, ID, { field: 'compact', value: '50' });
     expect(res.statusCode).toBe(400);
     expect(res.json()).toEqual({ ok: false, error: 'bad-request', detail: COMPACT_OWNED_DETAIL });

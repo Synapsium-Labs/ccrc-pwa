@@ -97,7 +97,8 @@ import { softRenewalMay, type SoftInputs, type SoftReading } from './softRenewal
 import { overlordFirst, type OverlordGenerationReading } from './renewalOrder.js';
 import type { DrainRead } from './renewalDrain.js';
 import {
-  actsOfStep, beforeDeadline, handoverSince, renewalFeed, renewalPermit, renewOwed, type PermitWait, type RenewalAct,
+  actsOfStep, beforeDeadline, handoverSince, holdOffStands, itemAboutOf, renewalFeed, renewalItemPrefix, renewalPermit, renewOwed,
+  standingActs, type ItemAbout, type ItemStanding, type PermitWait, type RenewalAct,
 } from './renewalFeed.js';
 
 /** The lane's key in `continuity_cursor`, and its `LANE_SCHEDULE` row's name. */
@@ -113,7 +114,7 @@ export const FIRST_MINT_LOOKBACK = 20;
 export type GenerationsCoord = Pick<CoordStore, 'startsSince' | 'startsOf' | 'liveGenerations' | 'mintGeneration' | 'advanceObserved'
   | 'setGenerationDue' | 'clearShadowWalk' | 'generationsCursor' | 'advanceCursor' | 'laneArmSetting' | 'openCoordinatorIds'
   | 'run' | 'bindingRunsOf' | 'cardReadOfStart' | 'stepGeneration' | 'probeRows' | 'openRound' | 'snapshotFacts' | 'liveNotes'
-  | 'mailForRecipient' | 'handoverOf' | 'softRenewalsOf' | 'recordSoftRenewal' | 'renewCallsOf'>;
+  | 'mailForRecipient' | 'handoverOf' | 'softRenewalsOf' | 'recordSoftRenewal' | 'renewCallsOf' | 'itemsFor'>;
 
 /** What the registry says of one row at the pass: its current conversation (null: unreadable), its account and its child
  *  mark. */
@@ -140,6 +141,7 @@ export interface GenerationsDeciders {
   readonly softRenewalMay: typeof softRenewalMay;
   readonly generationStep: typeof generationStep;
   readonly renewalFeed: typeof renewalFeed;
+  readonly renewalPermit: typeof renewalPermit;
 }
 
 export interface GenerationsDeps {
@@ -152,7 +154,8 @@ export interface GenerationsDeps {
   readonly log: (line: string) => void;
   /** The observed-time decider; `observeTime` unless a simulator hands a mutant of it to the same pass. */
   readonly observe?: typeof observeTime;
-  /** The deciders `renewalDue`, `softRenewalMay`, `generationStep` and `renewalFeed`, unless a simulator hands a mutant of one. */
+  /** The deciders `renewalDue`, `softRenewalMay`, `generationStep`, `renewalFeed` and `renewalPermit`, unless a simulator hands a
+   *  mutant of one. */
   readonly decide?: Partial<GenerationsDeciders>;
   /** The continuity row's gate (`laneArmGate`), unless a test or the simulator opens it to drive the live walk the renewal
    *  act will arm (review 2006 N1). Nothing in the server passes one, so a gated row is never live here. */
@@ -231,7 +234,7 @@ const zeroSkips = (): Record<StartSkip, number> => Object.fromEntries(START_SKIP
 /** One pass. Synchronous: it awaits nothing, so its writes are never interleaved with another caller's. */
 export function generationsPass(deps: GenerationsDeps, input: GenerationsInput): GenerationsResult {
   const { coord, clock } = deps;
-  const D: GenerationsDeciders = { renewalDue, softRenewalMay, generationStep, renewalFeed, ...deps.decide };
+  const D: GenerationsDeciders = { renewalDue, softRenewalMay, generationStep, renewalFeed, renewalPermit, ...deps.decide };
   const now = clock.wall();
   const live = laneArmRowViewOf(CONTINUITY_LANE, coord.laneArmSetting(CONTINUITY_LANE), (deps.gate ?? laneArmGate)(CONTINUITY_LANE)).live;
   const skipped = zeroSkips();
@@ -243,8 +246,8 @@ export function generationsPass(deps: GenerationsDeps, input: GenerationsInput):
   const recorded: string[] = [];
   const waits: Partial<Record<PermitWait, number>> = {};
   // A written step's acts: planned while live, recorded (and logged) in shadow, naming every machine action.
-  const onStep = (gen: GenRow, from: GenerationStateOf, step: GenStep, event: GenEvent): void => {
-    if (live) { for (const act of actsOfStep(step.actions, from, event)) planned.push({ target: targetOf(gen), act }); return; }
+  const onStep = (gen: GenRow, from: GenerationStateOf, step: GenStep, event: GenEvent, about?: ItemAbout): void => {
+    if (live) { for (const act of actsOfStep(step.actions, from, event, about)) planned.push({ target: targetOf(gen), act }); return; }
     const line = shadowLine(gen, from, step, event);
     recorded.push(line);
     deps.log(line);
@@ -255,7 +258,7 @@ export function generationsPass(deps: GenerationsDeps, input: GenerationsInput):
     failures.push({ what, detail, stops });
   };
   const result = (): GenerationsResult => {
-    logPass(deps.log, { skipped, held, superseded, stopped, failures, gaps, emptyRounds });
+    logPass(deps.log, { skipped, held, superseded, stopped, failures, gaps, emptyRounds, waits });
     return { live, read, minted, firstMinted, skipped, held, superseded, gaps, due, cardRead, probesFed, roundsOpened, planned,
       recorded, waits, blind, cleared, unread: failures[0]?.what ?? null, stopped };
   };
@@ -279,6 +282,25 @@ export function generationsPass(deps: GenerationsDeps, input: GenerationsInput):
     }
   }
 
+  // The role as this pass reads it, for the mints below and for the renewal permit (review 2149 F12: a generation's role is
+  // fixed at its mint, so a coordinator whose programme closed is re-read before its renewal starts).
+  const registry = new Map((input.registry ?? []).map((r) => [r.id, r]));
+  let openCoordinators: ReadonlySet<string> | 'unmeasured';
+  try { openCoordinators = new Set(coord.openCoordinatorIds()); } catch { openCoordinators = 'unmeasured'; }
+  // A child's run kind; a run row that cannot be read, or whose read throws (a malformed row), is unmeasured for this one
+  // reading (review 2014 F1, as R4 for the wave read), so it never stalls the cursor or step THREE.
+  const runKind = (child: ChildMark): RunKind | 'unmeasured' => {
+    if (child.kind !== 'child') return 'unmeasured';
+    try {
+      const r = coord.run(child.runId);
+      return r.ok && r.run !== null ? r.run.kind : 'unmeasured';
+    } catch { return 'unmeasured'; }
+  };
+  const roleFor = (sessionId: string): RoleReading => {
+    const child: ChildMark = registry.get(sessionId)?.child ?? { kind: 'unreadable' };
+    return roleOf(roleFactsOf(sessionId, { child, childRunKind: runKind(child), openCoordinators, intentDeclared: 'unmeasured' }));
+  };
+
   // ---- TWO: the starts after the cursor mint and end generations; then a coordinator with no generation mints its first.
   const notJudged = 'no start is judged and the cursor stays';
   if (input.registry === null) fail('registry', 'the registry could not be listed', notJudged);
@@ -290,24 +312,8 @@ export function generationsPass(deps: GenerationsDeps, input: GenerationsInput):
     else if (starts === null || !starts.ok) fail('starts', starts === null ? 'no read' : starts.detail, notJudged);
     else if (!gens.ok) fail('generations', gens.detail, notJudged);
     else {
-      const registry = new Map(input.registry.map((r) => [r.id, r]));
       const hold: HoldClock = { now, listedAt: input.listedAt, retried: new Set(deps.retried) };
       const heldNow = new Set<number>();
-      let openCoordinators: ReadonlySet<string> | 'unmeasured';
-      try { openCoordinators = new Set(coord.openCoordinatorIds()); } catch { openCoordinators = 'unmeasured'; }
-      // A child's run kind; a run row that cannot be read, or whose read throws (a malformed row), is unmeasured for this one
-      // reading (review 2014 F1, as R4 for the wave read), so it never stalls the cursor or step THREE.
-      const runKind = (child: ChildMark): RunKind | 'unmeasured' => {
-        if (child.kind !== 'child') return 'unmeasured';
-        try {
-          const r = coord.run(child.runId);
-          return r.ok && r.run !== null ? r.run.kind : 'unmeasured';
-        } catch { return 'unmeasured'; }
-      };
-      const roleFor = (sessionId: string): RoleReading => {
-        const child: ChildMark = registry.get(sessionId)?.child ?? { kind: 'unreadable' };
-        return roleOf(roleFactsOf(sessionId, { child, childRunKind: runKind(child), openCoordinators, intentDeclared: 'unmeasured' }));
-      };
       const registryOf = (sessionId: string): StartFacts['registry'] => {
         const reg = registry.get(sessionId);
         return reg === undefined ? { kind: 'absent' } : { kind: 'row', uuid: reg.uuid, lane: reg.lane };
@@ -481,17 +487,28 @@ export function generationsPass(deps: GenerationsDeps, input: GenerationsInput):
     const r = input.readings.get(g.id);
     let due: { cls: NonNullable<GenRow['dueClass']> } | null = null;
     if ((eff.state === 'active' || eff.state === 'degraded') && g.dueClass !== null && g.dueSince !== null) {
-      const permit = renewalPermit({
+      const roleNow = roleFor(g.sessionId);
+      const permit = D.renewalPermit({
         isCoordinator: g.role === 'coordinator', cls: g.dueClass, canRenew: input.canRenew === true, overlord,
+        roleChanged: g.role === 'coordinator' && !(roleNow.kind === 'role' && roleNow.role === 'coordinator'),
+        holdOff: holdOffStands(softTimesOf(g)),
         soft: g.dueClass === 'soft' ? D.softRenewalMay(softInputsOf(coord, g, r, overlord, input.softMode ?? 'when-away')) : { start: true },
       });
       if (permit.feed) due = { cls: permit.cls }; else waits[permit.waitFor] = (waits[permit.waitFor] ?? 0) + 1;
     }
     const handover = eff.state === 'checkpointed' ? coord.handoverOf(g.id) : null;
     if (handover !== null && !handover.ok) fail('generations', handover.detail, `generation ${g.id}'s handover waits for the next pass, and`);
+    // A live `clearing` renewal's calls: the current try claimed and never answered (review 2149 F6), and the newest answer,
+    // which the item's words follow (F5).
+    const clearingCalls = live && eff.state === 'clearing' ? coord.renewCallsOf(g.id, g.enteredAt) : null;
+    if (clearingCalls !== null && !clearingCalls.ok) { fail('generations', clearingCalls.detail, `generation ${g.id}'s renewal step waits for the next pass, and`); continue; }
+    const tries = clearingCalls === null ? [] : clearingCalls.calls;
+    const unanswered = tries.find((c) => c.try === g.attempts && c.answer === null);
+    const about = itemAboutOf([...tries].reverse().find((c) => c.answer !== null)?.answer ?? null);
     const events = D.renewalFeed({
       state: eff.state, deadlineAt: eff.deadlineAt, now, due, drained: r?.drain?.held === false,
       handoverAt: handover !== null && handover.ok ? handoverSince(handover.handover?.at ?? null, g.enteredAt) : null, renudged: g.renudged,
+      unansweredClaimAt: unanswered?.at ?? null, disarmed: !live && g.walk === 'live',
     });
     // The events were ordered for the state the pass read; once one moves the state, the rest (`deadline` above all) belong
     // to a state the generation has left, so the walk stops and the next pass reads the new state's facts.
@@ -502,14 +519,22 @@ export function generationsPass(deps: GenerationsDeps, input: GenerationsInput):
       if (!coord.stepGeneration(g.id, genExpectOf(g), step.next, live, now).changed) break;
       const again = coord.liveGenerations();
       const next = again.ok ? again.rows.find((x) => x.id === g.id) : undefined;
-      // Feeding a soft due spends one of the soft budget's renewals, stamped on the accumulator (ruling R4).
-      if (e.kind === 'due' && e.cls === 'soft' && next !== undefined) coord.recordSoftRenewal(next, next.observed.ms);
-      onStep(g, from, step, e);
+      // Feeding a soft due spends one of the soft budget's renewals, stamped on the accumulator (ruling R4): live only, since
+      // the live budget counts every row and a shadow walk renews nothing (review 2149 F14).
+      if (live && e.kind === 'due' && e.cls === 'soft' && next !== undefined && !coord.recordSoftRenewal(next, next.observed.ms).ok) {
+        fail('generations', 'continuity_soft_renewals could not be written', `generation ${g.id}'s soft renewal is not counted, and nothing else is lost`);
+      }
+      onStep(g, from, step, e, about);
       if (next === undefined) break;
       g = next;
       if (step.next.state !== from) break;
     }
     if (!live) continue;
+    // A degraded generation's item is re-planned on every pass while it stays degraded and none stands open on its programme
+    // (review 2149 F3), so a raise that failed or threw is tried again; the acts check again before they raise.
+    if (effectiveGeneration(g, live).state === 'degraded') {
+      for (const act of standingActs('degraded', itemStandingOf(coord, g, now))) planned.push({ target: targetOf(g), act });
+    }
     // A renewal's calls are its episode's: the time this generation entered `clearing` (slug renew-calls-keyed-by-episode).
     const calls = effectiveGeneration(g, live).state === 'clearing' ? coord.renewCallsOf(g.id, g.enteredAt) : null;
     if (calls !== null && !calls.ok) { fail('generations', calls.detail, `generation ${g.id}'s renew waits for the next pass, and`); continue; }
@@ -517,6 +542,15 @@ export function generationsPass(deps: GenerationsDeps, input: GenerationsInput):
     if (owed !== null) planned.push({ target: targetOf(g), act: { kind: 'renew', try: owed } });
   }
   return result();
+}
+
+/** Where a degraded generation's item stands (`ItemStanding`): only a coordinator has a programme to raise it on. */
+function itemStandingOf(coord: Pick<GenerationsCoord, 'itemsFor' | 'bindingRunsOf' | 'run'>, g: GenRow, now: number): ItemStanding {
+  if (g.role !== 'coordinator') return 'no-programme';
+  const runs = newestClaimedWorkRuns(coord, g.identity);
+  const program = runs.ok ? runs.runs[0]?.program : undefined;
+  if (program === undefined) return 'no-programme';
+  return coord.itemsFor(program, now).open.some((i) => i.title.startsWith(renewalItemPrefix(g.sessionId, g.n))) ? 'open' : 'none';
 }
 
 /** A generation's state, as `onStep` names the state a step left. */
@@ -612,7 +646,7 @@ interface Failure { readonly what: NonNullable<GenerationsResult['unread']>; rea
  *  gaps in another. */
 function logPass(log: (line: string) => void, p: {
   skipped: Readonly<Record<StartSkip, number>>; held: number; superseded: number; stopped: boolean;
-  failures: readonly Failure[]; gaps: readonly ObservedGap[]; emptyRounds: number;
+  failures: readonly Failure[]; gaps: readonly ObservedGap[]; emptyRounds: number; waits: Readonly<Partial<Record<PermitWait, number>>>;
 }): void {
   const parts = START_SKIPS.filter((k) => p.skipped[k] > 0).map((k) => `${p.skipped[k]} ${k}`);
   if (p.held > 0) parts.push(`${p.held} held for a later pass`);
@@ -620,6 +654,9 @@ function logPass(log: (line: string) => void, p: {
   if (p.stopped) parts.push('a mint could not be written, so the batch stopped and the cursor stays');
   if (parts.length > 0) log(`ccrc-server: generations: starts this pass: ${parts.join(', ')}`);
   for (const f of p.failures) log(`ccrc-server: generations: the ${f.what} could not be read, so ${f.stops} this pass: ${f.detail}`);
+  // The due renewals that waited, by why (review 2149 F7): the shadow week's evidence, `capability-missing` above all.
+  const waited = Object.entries(p.waits).filter(([, n]) => n !== undefined && n > 0).map(([why, n]) => `${n} ${why}`);
+  if (waited.length > 0) log(`ccrc-server: generations: due renewals that waited this pass: ${waited.join(', ')}`);
   if (p.emptyRounds > 0) log(`ccrc-server: generations: ${p.emptyRounds} probe round(s) had no question to ask, so none was opened (slug an-empty-round-is-not-opened)`);
   if (p.gaps.length > 0) {
     const of = (k: ObservedGap['kind']): number => p.gaps.filter((x) => x.kind === k).length;

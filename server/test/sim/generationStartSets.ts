@@ -66,7 +66,8 @@ export function expectedStart(f: StartFacts): StartVerdict {
   const old = f.live;
   const lane = f.registry.lane;
   if (!f.newest) outcome = 'unmeasured';
-  else if (old !== null && old.state === 'clearing') outcome = 'renewed';
+  // Only a fresh conversation's own start is the renewal's: a resume of the old one is not (review 2149 F2).
+  else if (old !== null && old.state === 'clearing' && f.source === 'startup') outcome = 'renewed';
   else if (old !== null && (lane === null || old.lane === null)) outcome = 'unmeasured';
   else if (old !== null && lane !== old.lane) outcome = 'swapped';
   // A `/clear` is not a crash (review 2006): on the same row and account it reads `cleared`, whatever the state.
@@ -127,7 +128,7 @@ const START_SET: MutantSet<GenerationStartModule> = {
     { id: 'S8 late inclusive', old: 'f.reportedAt < f.live.reportedAt', new: 'f.reportedAt <= f.live.reportedAt' },
     { id: 'S9 undecided mints as its first role', old: "  if (f.role.kind === 'undecided') return skip('undecided');\n", new: "  if (f.role.kind === 'undecided') return { mint: true, role: 'coordinator', outcome: startOutcome(f), resumed: false, lane: null };\n" },
     { id: 'S10 every role long-lived', old: 'return RENEWAL_ROWS[role].length > 0;', new: 'return RENEWAL_ROWS[role] !== undefined;' },
-    { id: 'S11 never renewed', old: "if (old.state === 'clearing') return 'renewed';", new: '' },
+    { id: 'S11 never renewed', old: "if (old.state === 'clearing' && f.source === 'startup') return 'renewed';", new: '' },
     { id: 'S12 swap ignored', old: "  if (lane !== old.lane) return 'swapped';\n", new: '' },
     { id: 'S13 crash on any state', old: "if (sameRow && old.state === 'active') return 'crashed';", new: "if (sameRow) return 'crashed';" },
     { id: 'S14 crash across incarnations', old: 'const sameRow = f.rowIncarnation !== null && f.rowIncarnation === old.rowIncarnation;', new: 'const sameRow = f.rowIncarnation !== null;' },
@@ -139,6 +140,7 @@ const START_SET: MutantSet<GenerationStartModule> = {
     { id: 'S20 a clear reads crashed', old: "  if (sameRow && f.source === 'clear') return 'cleared';\n", new: '' },
     { id: 'S21 every planned-looking source reads cleared', old: "if (sameRow && f.source === 'clear')", new: "if (sameRow && f.source !== 'startup')" },
     { id: 'S22 a clear on another incarnation reads cleared', old: "if (sameRow && f.source === 'clear')", new: "if (f.source === 'clear')" },
+    { id: 'S23 a resume of the old conversation reads renewed', old: "old.state === 'clearing' && f.source === 'startup'", new: "old.state === 'clearing'" },
   ],
   suite: startVerdictCases,
 };

@@ -25,12 +25,13 @@ export interface RenewalWiring {
 }
 
 /** The pass's renewal pieces. `serial` is the stop-and-done serialiser (null before the sleep lanes start), which the
- *  renewal's ccd call runs inside, around the per-session queue, as the automatic roll's act does. */
+ *  renewal's ccd call runs inside, around the per-session queue, as the automatic roll's act does; `memo` is the acts' memo
+ *  (`RenewalActsDeps.memo`), kept by the watcher across passes. */
 export function renewalActsOf(
   deps: Pick<WatcherDeps, 'io' | 'cfg' | 'runCcd' | 'fleetState' | 'tmux' | 'queue' | 'time'>,
   coord: WatcherCoordPort, records: readonly SessionRecord[], reads: TurnReadDeps,
   rowAtAct: (rec: SessionRecord) => Promise<{ ok: true; row: FleetSession } | { ok: false }>,
-  serial: (<T>(fn: () => Promise<T>) => Promise<T>) | null,
+  serial: (<T>(fn: () => Promise<T>) => Promise<T>) | null, memo?: Set<string>,
 ): RenewalWiring {
   const now = (): number => deps.time.clock.wall();
   const unmeasured: DrainRead = { held: true, reason: 'unmeasured' };
@@ -56,7 +57,7 @@ export function renewalActsOf(
       return drainVerdict(row.row, { kind: 'read', word: w.ok ? { ok: true, word: w.word } : { ok: false, reason: w.reason }, mark }, now());
     },
     run: (planned) => runRenewalActs({
-      coord, host, now, log: (line) => console.warn(line),
+      coord, host, now, log: (line) => console.warn(line), memo,
       mail: (toId, subject, body) => queueSystemMail(coord, null, { fromId: 'operator', toId, runId: null, kind: 'status', subject, body }).queued,
     }, planned),
   };

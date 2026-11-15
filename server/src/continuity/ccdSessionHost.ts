@@ -60,9 +60,12 @@ export function ccdSessionHost(deps: CcdSessionHostDeps): SessionHost {
       case 5: return { kind: 'wake-unrestored' };
       case 6: return { kind: 'kill-failed' };
       case 7: return { kind: 'unproven' };
-      default:
-        deps.log?.(`ccrc-server: renewal: ccd hibernate --roll --fresh exited ${res.exitCode} for ${sessionId}`);
-        return { kind: 'unreachable', detail: `ccd exited ${res.exitCode}` };
+      default: {
+        // ccd's own first line names why (review 2149 F9: an exit 1 before the kill, such as no such session, says so).
+        const why = firstLine(res.stderr);
+        deps.log?.(`ccrc-server: renewal: ccd hibernate --roll --fresh exited ${res.exitCode} for ${sessionId}${why === '' ? '' : `: ${why}`}`);
+        return { kind: 'unreachable', detail: `ccd exited ${res.exitCode}${why === '' ? '' : `: ${why}`}` };
+      }
     }
   }
 
@@ -90,8 +93,11 @@ export function ccdSessionHost(deps: CcdSessionHostDeps): SessionHost {
     try { r = deps.startsOf(sessionId, RECEIPT_STARTS_LIMIT); }
     catch (e) { return { kind: 'unreadable', detail: messageOf(e) }; }
     if (!r.ok) return { kind: 'unreadable', detail: r.detail };
-    // The rows come newest first by `reportedAt`; a compaction is not a new conversation.
-    const hit = r.rows.find((s) => s.id > sinceStartId && s.source !== 'compact');
+    // The rows come newest first by `reportedAt`. Only a fresh conversation's own start counts (review 2149 F2): a compaction,
+    // a `/clear` and a resume are not the renewal's, and a resume of the conversation the renewal ended (exit 7's put-back, a
+    // concurrent wake) above all; a `startup` under that same uuid is not fresh either.
+    const ended = r.rows.find((s) => s.id === sinceStartId)?.uuid ?? null;
+    const hit = r.rows.find((s) => s.id > sinceStartId && s.source === 'startup' && s.uuid !== ended);
     return hit === undefined ? { kind: 'none' } : { kind: 'started', startId: hit.id, uuid: hit.uuid };
   }
 

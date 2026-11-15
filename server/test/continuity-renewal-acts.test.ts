@@ -70,7 +70,9 @@ class FakeHost implements SessionHost {
   async receipt(id: string, since: number): Promise<ReceiptRead> {
     const r = this.f.s.startsOf(id, 50);
     if (!r.ok) return { kind: 'unreadable', detail: r.detail };
-    const hit = r.rows.find((s) => s.id > since && s.source !== 'compact');
+    // As the adapter reads it: a fresh conversation's own start, under a uuid other than the one the renewal ended (F2).
+    const ended = r.rows.find((s) => s.id === since)?.uuid ?? null;
+    const hit = r.rows.find((s) => s.id > since && s.source === 'startup' && s.uuid !== ended);
     return hit === undefined ? { kind: 'none' } : { kind: 'started', startId: hit.id, uuid: hit.uuid };
   }
 }
@@ -85,7 +87,7 @@ interface Fx {
   gen(): GenRow;
 }
 
-function fx(live = true): Fx {
+function fx(live = true, decide?: GenerationsDeps['decide']): Fx {
   const s = new CoordStore(openCoordDb(path.join(mkTmp('ccrc-renew-'), '.ccrc', 'coord.db')));
   s.db.exec("INSERT INTO programs (slug, title, createdAt, state) VALUES ('prog-a', 'P', 1, 'active')");
   s.db.prepare("INSERT INTO runs (program, wave, waveOf, project, state, claimedBy, openedAt, kind) VALUES ('prog-a', 1, 2, 'project-a', 'working', ?, 1, 'work')").run(COORD);
@@ -105,7 +107,9 @@ function fx(live = true): Fx {
   };
   const host = new FakeHost({ s, start, nextUuid: () => uuids.shift()! });
   const memo = new Set<number>(); const empties: EmptyTries = new Map();
-  const deps: GenerationsDeps = { coord: s, clock: t.ports.clock, entropy: t.ports.entropy, proc: 'p1', log: (l) => logs.push(l), retried: memo, emptyTries: empties };
+  const deps: GenerationsDeps = { coord: s, clock: t.ports.clock, entropy: t.ports.entropy, proc: 'p1', log: (l) => logs.push(l), retried: memo, emptyTries: empties,
+    ...(decide === undefined ? {} : { decide }) };
+  const actsMemo = new Set<string>();
   const liveRows = (): GenRow[] => { const r = s.liveGenerations(); if (!r.ok) throw new Error(r.detail); return r.rows; };
   const pass = (readings: (g: GenRow) => GenReadings | undefined = () => undefined, canRenew = true) => {
     const m = new Map<number, GenReadings>();
@@ -113,7 +117,7 @@ function fx(live = true): Fx {
     return generationsPass(deps, { registry, readings: m, listedAt: t.ports.clock.wall() + 1, canRenew });
   };
   const act = (planned: readonly PlannedAct[]) => runRenewalActs({
-    coord: s, host, now: () => t.ports.clock.wall(), log: (l) => logs.push(l),
+    coord: s, host, now: () => t.ports.clock.wall(), log: (l) => logs.push(l), memo: actsMemo,
     mail: (toId, subject, body) => { mails.push(`${toId} ${subject}: ${body}`); return true; },
   }, planned);
   return {
@@ -123,8 +127,8 @@ function fx(live = true): Fx {
 }
 
 /** A live coordinator at rest and proven: its first start minted, then stepped to `active` as a proven generation. */
-async function atRest(live = true): Promise<Fx> {
-  const f = fx(live);
+async function atRest(live = true, decide?: GenerationsDeps['decide']): Promise<Fx> {
+  const f = fx(live, decide);
   f.start('startup', U1);
   f.pass();
   const g = f.gen();
@@ -224,6 +228,40 @@ describe('the renewal act, live (Task 4)', () => {
     expect(f.host.renews).toHaveLength(1);
   });
 
+  it('a hard trigger waits out the hold-off after ccd refused: no drain loop holds its mail (review 2149 F1)', async () => {
+    const f = await atRest();
+    f.host.answers = [{ kind: 'refused', reason: 'attached' }];
+    await f.cycle(() => hardCap());
+    f.t.advance(PERIOD);
+    await f.cycle(() => hardCap());
+    expect(f.gen()).toMatchObject({ state: 'active', dueClass: 'hard' });
+    // The hard trigger still stands, the session drains at once, and the hold-off holds it: no pass drains it again.
+    for (let i = 0; i < 6; i += 1) {
+      f.t.advance(PERIOD);
+      const r = await f.cycle(() => hardCap());
+      expect(r.waits, `pass ${i}`).toMatchObject({ 'hold-off': 1 });
+      expect(state(f), `pass ${i}`).toEqual({ state: 'active', shadowState: null });
+    }
+    expect(f.host.renews).toHaveLength(1);
+    expect(f.logs.some((l) => /due renewals that waited this pass: 1 hold-off/.test(l))).toBe(true);
+  });
+
+  it('an unproven generation ccd refused degrades with one item and the hold-off, so its hard trigger waits too (review 2149 F1)', async () => {
+    const f = await atRest();
+    const g = f.gen();
+    f.s.db.prepare('UPDATE continuity_generations SET proven = 0 WHERE id = ?').run(g.id);
+    f.host.answers = [{ kind: 'refused', reason: 'attached' }];
+    await f.cycle(() => hardCap());
+    f.t.advance(PERIOD);
+    await f.cycle(() => hardCap());
+    expect(f.gen()).toMatchObject({ state: 'degraded', proven: false });
+    expect(f.gen().holdOffUntilObservedMs).toBe(f.gen().observed.ms + HOLD_OFF_MS);
+    for (let i = 0; i < 4; i += 1) { f.t.advance(PERIOD); await f.cycle(() => hardCap()); }
+    expect(f.gen().state).toBe('degraded');
+    expect(f.host.renews).toHaveLength(1);
+    expect(f.s.itemsFor('prog-a', f.t.ports.clock.wall()).open).toHaveLength(1);
+  });
+
   it('a generation that went back to active renews again: its second renewal makes its own call (slug renew-calls-keyed-by-episode)', async () => {
     const f = await atRest();
     f.host.answers = [{ kind: 'refused', reason: 'turn' }];
@@ -232,8 +270,9 @@ describe('the renewal act, live (Task 4)', () => {
     await f.cycle(() => hardCap());
     expect(f.gen()).toMatchObject({ n: 1, state: 'active' });
     expect(f.host.renews).toHaveLength(1);
-    // The hard trigger still stands: a second renewal of the same generation drains, clears and calls again, try 1 of its
-    // own episode, and its start mints n=2.
+    // The hard trigger still stands: once its hold-off has run out (review 2149 F1), a second renewal of the same generation
+    // drains, clears and calls again, try 1 of its own episode, and its start mints n=2.
+    f.s.db.prepare("UPDATE continuity_generations SET holdOffUntilObservedMs = CAST(json_extract(observed, '$.ms') AS INTEGER) WHERE id = ?").run(f.gen().id);
     f.t.advance(PERIOD);
     await f.cycle(() => hardCap());
     f.t.advance(PERIOD);
@@ -265,9 +304,9 @@ describe('the renewal act, live (Task 4)', () => {
     expect(f.gen()).toMatchObject({ n: 2, state: 'carded' });
   });
 
-  it('wake-failed until the clearing deadline: retried within it, then degraded with one item', async () => {
+  it('wake-unrestored until the clearing deadline: retried within it, then degraded with one item', async () => {
     const f = await atRest();
-    f.host.answers = Array.from({ length: 10 }, () => ({ kind: 'wake-failed' }) as RenewResult);
+    f.host.answers = Array.from({ length: 10 }, () => ({ kind: 'wake-unrestored' }) as RenewResult);
     await f.cycle(() => hardCap());
     // Until the first step into `degraded` (a hard trigger that still stands would start a new walk from there).
     for (let i = 0; i < 8 && f.gen().state !== 'degraded'; i += 1) { f.t.advance(PERIOD); await f.cycle(() => hardCap()); }
@@ -276,6 +315,104 @@ describe('the renewal act, live (Task 4)', () => {
     expect(f.host.renews.length).toBeLessThanOrEqual(Math.ceil(STATE_DEADLINE_S.clearing * 1000 / PERIOD) + 1);
     const items = f.s.itemsFor('prog-a', f.t.ports.clock.wall()).open;
     expect(items.map((i) => i.title)).toEqual([expect.stringMatching(/^Renewal of lane-a-project-a \(generation 1\) degraded: /)]);
+    expect(items[0]!.why).toMatch(/no conversation running/);
+  });
+
+  it('wake-failed is terminal: degraded at once with no retry, and the item says the session sleeps (review 2149 F5)', async () => {
+    const f = await atRest();
+    f.host.answers = [{ kind: 'wake-failed' }];
+    await f.cycle(() => hardCap());
+    f.t.advance(PERIOD);
+    await f.cycle(() => hardCap());
+    expect(f.gen()).toMatchObject({ state: 'degraded', proven: false });
+    for (let i = 0; i < 4; i += 1) { f.t.advance(PERIOD); await f.cycle(() => hardCap(HELD)); }
+    expect(f.host.renews).toHaveLength(1);
+    const items = f.s.itemsFor('prog-a', f.t.ports.clock.wall()).open;
+    expect(items).toHaveLength(1);
+    expect(items[0]!.title).toMatch(/could not wake/);
+    expect(items[0]!.why).toMatch(/back to sleep/);
+  });
+
+  it('exit 6 goes back to active and raises its own item: the unit was stopped and the marker written (review 2149 F4)', async () => {
+    const f = await atRest();
+    f.host.answers = [{ kind: 'kill-failed' }];
+    await f.cycle(() => hardCap());
+    f.t.advance(PERIOD);
+    await f.cycle(() => hardCap());
+    expect(f.gen()).toMatchObject({ state: 'active', proven: true });
+    const items = f.s.itemsFor('prog-a', f.t.ports.clock.wall()).open;
+    expect(items.map((i) => i.title)).toEqual([expect.stringMatching(/^Renewal of lane-a-project-a \(generation 1\) stopped its unit: /)]);
+    expect(items[0]!.why).toMatch(/hibernated marker/);
+  });
+
+  it('exit 7 then a resume of the old conversation: never renewed and no first prompt; the retry is not blocked (review 2149 F2)', async () => {
+    const f = await atRest();
+    f.host.answers = [{ kind: 'unproven' }, { kind: 'unproven' }];
+    await f.cycle(() => hardCap());
+    f.t.advance(PERIOD);
+    await f.cycle(() => hardCap());
+    expect(f.gen()).toMatchObject({ n: 1, state: 'clearing', hostEnded: true, attempts: 2 });
+    // ccd put the old uuid back; the receipt does not read the put-back as the renewal's start.
+    f.t.advance(PERIOD);
+    const owed = f.pass();
+    expect(owed.planned.map((p) => p.act)).toEqual([{ kind: 'renew', try: 2 }]);
+    f.start('resume', U1);
+    await f.act(owed.planned);
+    expect(f.host.renews).toHaveLength(2);
+    // The resume still mints, as every start does, but it is not the renewal's: no `renewed`, no first prompt.
+    f.t.advance(PERIOD);
+    await f.cycle();
+    expect(f.gen()).toMatchObject({ n: 2, state: 'carded' });
+    expect(f.s.db.prepare('SELECT outcome FROM continuity_generations WHERE n = 1').get()).not.toEqual({ outcome: 'renewed' });
+    expect(f.host.delivered).toEqual([]);
+  });
+
+  it('a try claimed and never answered reads as after the first half at the clearing deadline: degraded, not back (review 2149 F6)', async () => {
+    const f = await atRest();
+    await f.cycle(() => hardCap());
+    f.t.advance(PERIOD);
+    // The pass plans the renew; the process dies after claiming it and before the answer is written.
+    const r = f.pass(() => hardCap());
+    expect(r.planned.map((p) => p.act)).toEqual([{ kind: 'renew', try: 1 }]);
+    const g = f.gen();
+    expect(f.s.claimRenewCall({ generationId: g.id, episode: g.enteredAt, try: 1 }, f.t.ports.clock.wall())).toEqual({ ok: true, claimed: true });
+    f.t.advance(g.deadlineAt! - f.t.ports.clock.wall());
+    await f.cycle(() => hardCap(HELD));
+    expect(f.gen()).toMatchObject({ state: 'degraded', proven: false });
+  });
+
+  it('a live walk whose row is switched off goes back at once and its mail is released (review 2149 F13)', async () => {
+    const f = await atRest();
+    await f.cycle(() => hardCap(HELD));
+    expect(f.gen()).toMatchObject({ state: 'draining', walk: 'live' });
+    f.s.setLaneArm(CONTINUITY_LANE, 'shadow', 2);
+    f.t.advance(PERIOD);
+    await f.cycle(() => hardCap(HELD));
+    expect(f.gen()).toMatchObject({ state: 'active', walk: null, proven: true });
+    expect(f.logs.some((l) => /draining -> active on disarmed/.test(l))).toBe(true);
+  });
+
+  it('a coordinator whose programme closed is re-read at the permit and never renewed (review 2149 F12)', async () => {
+    const f = await atRest();
+    f.s.db.prepare("UPDATE runs SET state = 'done'").run();
+    const r = await f.cycle(() => hardCap());
+    expect(r.waits).toMatchObject({ 'role-changed': 1 });
+    expect(state(f)).toEqual({ state: 'active', shadowState: null });
+  });
+
+  it('a degraded generation whose item raise threw raises it on a later pass, and only once (review 2149 F3)', async () => {
+    const f = await atRest();
+    const raise = f.s.raiseItem.bind(f.s);
+    let throws = 1;
+    f.s.raiseItem = ((...a: Parameters<typeof raise>) => { if (throws > 0) { throws -= 1; throw new Error('ledger busy'); } return raise(...a); }) as typeof raise;
+    f.host.answers = [{ kind: 'wake-failed' }];
+    await f.cycle(() => hardCap());
+    f.t.advance(PERIOD);
+    await f.cycle(() => hardCap());
+    expect(f.gen().state).toBe('degraded');
+    expect(f.s.itemsFor('prog-a', f.t.ports.clock.wall()).open).toEqual([]);
+    for (let i = 0; i < 3; i += 1) { f.t.advance(PERIOD); await f.cycle(() => hardCap(HELD)); }
+    expect(f.s.itemsFor('prog-a', f.t.ports.clock.wall()).open).toHaveLength(1);
   });
 
   it('no hibernate-fresh: nothing is sent and the wait is recorded capability-missing', async () => {
@@ -359,6 +496,17 @@ describe('the renewal act, live (Task 4)', () => {
 });
 
 describe('the renewal act, shadow (Task 4; Review Focus 3)', () => {
+  it('a soft due fed in shadow spends nothing of the live soft budget (review 2149 F14)', async () => {
+    const f = await atRest(false, { softRenewalMay: () => ({ start: true }) });
+    const g = f.gen();
+    f.s.db.prepare('UPDATE continuity_generations SET mintedObservedMs = ? WHERE id = ?').run(-LEAST_AGE_MS, g.id);
+    const soft: GenReadings = { usage: usage(10_000, 1_000_000), compactions: { kind: 'absent' }, turn: { ok: false, reason: 'absent' } as never,
+      behind: { kind: 'measured', value: true }, drain: FREE };
+    await f.cycle(() => soft);
+    expect(state(f)).toEqual({ state: 'active', shadowState: 'draining' });
+    expect(f.s.db.prepare('SELECT COUNT(*) AS n FROM continuity_soft_renewals').get()).toEqual({ n: 0 });
+  });
+
   it('the same hard trigger in shadow: no port call, no mail, no item; state stays active, shadowState walks, the records name each act', async () => {
     const f = await atRest(false);
     const r1 = await f.cycle(() => hardCap());
