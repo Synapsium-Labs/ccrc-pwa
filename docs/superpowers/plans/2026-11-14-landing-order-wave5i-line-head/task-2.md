@@ -38,4 +38,4 @@
 
 ## Residual (Step 7)
 Metadata rechecks (size, mtime, and the chain proof before and after) cannot prove inode identity across remote range calls. The bundle is a
-cue snapshot, not merge permission. `landing` is listed once per project bundle for the directory proof; a pass of many projects repeats that listing.
+cue snapshot, not merge permission. `readLander` lists `landing` and `landing/<project>` before the read and again after it, so four listings per project per pass; a pass of many projects repeats the `landing` listing for each.

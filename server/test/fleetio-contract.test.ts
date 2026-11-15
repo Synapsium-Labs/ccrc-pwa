@@ -9,6 +9,7 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { localIO } from '../src/io.js';
+import { parsedFile } from './scan/symbols.js';
 
 const SRC = path.join(import.meta.dirname, '..', 'src');
 
@@ -90,10 +91,11 @@ describe('localIO lists names only', () => {
 });
 
 describe('the landing control readers (wave 5i) use only measured seams', () => {
-  it('lineageRead.ts reads no collapsing sibling, and the byte-range member states its failure contract', () => {
-    const text = readFileSync(path.join(SRC, 'coord', 'lineageRead.ts'), 'utf8');
-    expect(text).not.toMatch(/\bio\.(readFile|readFileFrom|readdir|stat)\(/);
-    expect(text).not.toMatch(/\b(?:b|l)?io\.readFileMeasured\(file, undefined, signal, /);
+  it('lineageRead.ts calls no collapsing sibling, and the byte-range member states its failure contract', () => {
+    // A call census over the parsed file (scan/parse.ts), not a literal pin over its text.
+    const collapsing = new Set(['readFile', 'readFileFrom', 'readdir', 'stat']);
+    const hits = parsedFile('server/src/coord/lineageRead.ts').calls.filter((c) => c.name !== null && collapsing.has(c.name)).map((c) => c.callee);
+    expect(hits).toEqual([]);
     expect(docs(fleetIoBody()).get('readFileFromBytesMeasured') ?? '').toMatch(/Failure contract:/);
   });
 });

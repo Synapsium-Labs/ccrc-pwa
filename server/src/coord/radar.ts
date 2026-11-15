@@ -23,6 +23,7 @@ import {
   RADAR_PROBE_FRESH_S, freshWithin, isRadarStamp, isRegistryId,
   type LandingConflict, type LandingMergeState, type SessionLanding,
 } from '../../../shared/api.js';
+import type { ReadFailure } from '../../../shared/agent-protocol.js';   // L0 vocabulary: absent | unreadable, declared once
 import type { ProjectEvidence } from '../registry.js';   // type-only: no ring edge
 
 /** The radar writes no cap of its own (D-7482): the reader refuses a `probe` over 512 KiB, measured before the read
@@ -70,7 +71,7 @@ export type ProbeRead =
  *  malformed doc; the new parsers say `malformed`. */
 export type ControlFailure = {
   ok: false;
-  reason: 'absent' | 'unreadable' | 'oversize' | 'malformed' | 'stale' | 'unmeasured' | 'late' | 'refused';
+  reason: ReadFailure | 'oversize' | 'malformed' | 'stale' | 'unmeasured' | 'late' | 'refused';
   size?: number;
 };
 
