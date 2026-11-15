@@ -29,6 +29,9 @@ export async function bootAgent(fixture: RemoteFixture, extra: Partial<AgentOpts
     home: fixture.home,
     projectsRoot: fixture.projectsRoot,
     helloTimeoutMs: 300,
+    // Overlord W1 (R10): the ready frame's `overlord-history` check reads the platform; Linux here, so every runner's real-agent
+    // `ops` pins see one list.
+    historySeams: { platform: 'linux' },
     ...extra,
   });
 }

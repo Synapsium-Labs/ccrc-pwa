@@ -153,8 +153,8 @@ export interface ProjectRuleCase extends PoolRuleCaseBase {
 }
 
 /** A row whose session side is a SET (or an unreadable or malformed one): the driver uses `set` as the side.
- *  `_pool_ok` (bash) has no set case until a later pull request of the pool-set plan, so `ccd-pool-ok.test.ts` and the
- *  server mirror's driver skip these rows, bounded. */
+ *  `ccd-pool-ok.test.ts` drives them through bash `_pool_ok`'s set case (pool-set plan Task 3), all but the empty-set rows,
+ *  which have no spelling and so no bash word (bounded there); the server mirror's driver skips them, bounded. */
 export interface SetRuleCase extends PoolRuleCaseBase {
   set: Exclude<SessionPoolSide, ProjectPoolWire>;
   project?: undefined;

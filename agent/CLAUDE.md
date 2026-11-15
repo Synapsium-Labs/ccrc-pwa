@@ -126,6 +126,15 @@ get wrong when editing `src/whitelist.ts`.
   `readTestboxAdminStatus`). The log line names the op and the sub only. `bad-request` from it means the agent predates
   it. `test/testbox-admin-op.test.ts`'s source scan and `server/test/whitelist-subset.test.ts`'s layer 4d red the day
   the op reaches an exec path.
+- The **`overlord-history` op** (Overlord W1, `docs/superpowers/plans/2026-11-14-overlord-w1/w1-board-history.md`) spawns
+  NO process. It runs `ccd/history/overlord-worker.mjs` in a `node:worker_threads` worker (`src/historyOp.ts`) with
+  `env: {}` and both streams drained, one slot per agent process freed only on the worker's `exit`, and a 20 s deadline.
+  The read opens `~/.ccrc/history/` only, read-only (`openReader`), OUTSIDE the read whitelist; it opens no other file
+  under `~/.ccrc` (no `ccrc.env`, no token) and no secret file anywhere, and its belt is the store's recorded pairs
+  alone. `validateReq` reads the frame's body (the frame less `t`, `id` and `op`, so the byte bound is the body's)
+  through `readOverlordHistoryRequest` (`shared/overlordHistory.ts`), which refuses `--regex` and a bare `--`; every
+  answer, a refusal or a failure included, is `ok: true`, and a thrown message never reaches the wire or the log. A
+  closed link terminates its read's worker. `test/overlord-history-op.test.ts` pins the slot, the close and the masking.
 - The agent has **no HTTP routes** (its `createServer` carries only a WS upgrade), so the deploy's
   `verify-service.sh` (MainPID stability across a window > `RestartSec`) is its only post-restart check — it
   catches the `refuseToBoot` crash-loop that a `systemctl restart` exit-0 would otherwise hide.

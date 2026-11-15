@@ -28,7 +28,8 @@ import { makeCcdHarness, plantPoolEpoch, plantPoolSyncTimer, seedAccountsSh, WS_
 import {
   POOL_RULE_CASES, POOL_RULE_PROJECT_CASES, POOL_RULE_SET_CASES, POOLED_TEST_ROSTER, POOL_BY_ID,
 } from './fixtures/poolRule.js';
-import type { PoolRuleCase } from './fixtures/poolRule.js';
+import type { PoolRuleCase, SetRuleCase } from './fixtures/poolRule.js';
+import { poolSetSpelling } from '../../shared/poolset.js';
 import type { ProjectPoolWire } from '../../shared/api.js';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -81,13 +82,83 @@ describe('_pool_ok over POOL_RULE_CASES — the rule, three exit codes', () => {
   const acctWord = (c: PoolRuleCase): string =>
     c.accountState ?? (c.accountPool === null ? 'untagged' : `named ${c.accountPool}`);
 
-  // The SET rows are not driven here: bash `_pool_ok` has no set case until a LATER pull request of the pool-set plan
-  // (Task 3, which gives it the session's side as a set). Until then the skip is bounded by the next test, and the
-  // rows are pinned by `pool-rule-core.test.ts`. Those pull requests add the set rows to this driver.
-  it('skips only the set rows, and the project rows it drives are the whole rest of the table', () => {
-    expect(POOL_RULE_SET_CASES.length, 'no set rows: this skip is a comment about nothing').toBeGreaterThan(0);
+  // THE SET ROWS (pool-set plan Task 3, PR A2): `_pool_ok`'s set case, driven with the side word `_session_pool_side`
+  // would print for the row, and asserting the globals a caller renders from as well as the rc. The empty set has no
+  // spelling (open question 3), so `_session_pool_side` can never print a word for it: those rows are skipped here,
+  // bounded by the next test, and the word a caller could still build (`set ` with nothing after it) is pinned below to
+  // fail closed on the set side.
+  const setWord = (c: SetRuleCase): string | null => {
+    if (c.set.state !== 'set') return c.set.state;
+    const sp = poolSetSpelling(c.set.set);
+    return sp.kind === 'spelled' ? `set ${sp.spelling}` : null;
+  };
+  const DRIVEN_SET_CASES = POOL_RULE_SET_CASES.filter((c) => setWord(c) !== null);
+  /** `rc|POOL_OK_SIDE|POOL_OK_STATE` after one bare `_pool_ok` call with the account side stubbed to `acct`. */
+  const poolOk = (acct: string, word: string): string => h.sh(
+    `_acct_pool_state() { echo ${JSON.stringify(acct)}; }; { _pool_ok anyaccount ${JSON.stringify(word)}; } 2>&1; `
+    + 'printf \'rc=%s|%s|%s\' "$?" "$POOL_OK_SIDE" "$POOL_OK_STATE"');
+
+  it('skips only the empty-set rows, and every other set row is driven', () => {
+    const skipped = POOL_RULE_SET_CASES.filter((c) => setWord(c) === null);
+    expect(skipped.length, 'no empty-set rows: this skip is a comment about nothing').toBeGreaterThan(0);
+    for (const c of skipped) {
+      expect(c.set.state === 'set' && c.set.set.pools.length === 0 && !c.set.set.untagged, c.name).toBe(true);
+    }
+    expect(DRIVEN_SET_CASES.length + skipped.length).toBe(POOL_RULE_SET_CASES.length);
+    expect(DRIVEN_SET_CASES.length, 'the skip swallowed the set rows').toBeGreaterThanOrEqual(20);
     expect(POOL_RULE_PROJECT_CASES.length + POOL_RULE_SET_CASES.length).toBe(POOL_RULE_CASES.length);
-    expect(POOL_RULE_PROJECT_CASES.length, 'the skip swallowed the table').toBeGreaterThanOrEqual(20);
+  });
+
+  it.each(DRIVEN_SET_CASES.map((c) => [c.name, c] as const))('set row %s', (_name, c) => {
+    const bad = c.set.state === 'set-unreadable' || c.set.state === 'set-malformed';
+    const side = bad ? `set|${c.set.state.slice('set-'.length)}` : `account|${acctWord(c)}`;
+    expect(poolOk(acctWord(c), setWord(c)!)).toBe(`rc=${WANT_RC[c.expect]}|${side}`);
+  });
+
+  // C46: today's one-name tag n is the set n+untagged. Derived from every tagged project row, never typed, and compared on
+  // the whole answer: the rc and both globals.
+  const TAGGED_ROWS = POOL_RULE_PROJECT_CASES.filter((c) => c.project.state === 'tagged');
+  it('the equivalence rows exist: at least the serve and mismatch verdicts are among the tagged project rows', () => {
+    expect(new Set(TAGGED_ROWS.map((c) => c.expect))).toEqual(new Set(['serve', 'mismatch', 'undecidable']));
+  });
+  it.each(TAGGED_ROWS.map((c) => [c.name, c] as const))('equivalence: %s under the set n+untagged', (_name, c) => {
+    const n = (c.project as { name: string }).name;
+    const asProject = poolOk(acctWord(c), stateWord(c.project));
+    expect(asProject.startsWith(`rc=${WANT_RC[c.expect]}|`), asProject).toBe(true);
+    expect(poolOk(acctWord(c), `set ${n}+untagged`)).toBe(asProject);
+  });
+
+  it('a set word that does not parse fails closed on the set side, the empty set\'s non-word among them', () => {
+    for (const word of ['set ', 'set pool-b,pool-a', 'set Pool-A', 'set pool-a ', 'set pool-a\n']) {
+      expect(poolOk('untagged', word), JSON.stringify(word)).toBe('rc=2|set|malformed');
+    }
+  });
+  it('a set word this build does not know names the SET side, never the project (A1 review N5)', () => {
+    for (const word of ['set-unknown', 'set-stale', 'set']) {
+      expect(poolOk('untagged', word), word).toBe('rc=2|set|unrecognised');
+    }
+    // The control: a word that is not a set word at all stays the project side's, as today.
+    expect(poolOk('untagged', 'settled')).toBe('rc=2|project|settled');
+  });
+
+  it('a bad set is decided before the account side is ever asked, so an untagged account cannot serve past it', () => {
+    const marker = path.join(h.home, 'acct-pool-state-calls');
+    for (const word of ['set-unreadable', 'set-malformed', 'set ']) {
+      const out = h.sh(
+        `_acct_pool_state() { echo called >> ${JSON.stringify(marker)}; echo untagged; }; `
+        + `_pool_ok anyaccount ${JSON.stringify(word)}; echo "rc=$?"`);
+      expect(out, word).toBe('rc=2');
+    }
+    expect(fs.existsSync(marker), '_acct_pool_state must not be called for a bad set').toBe(false);
+  });
+
+  it('membership is a literal match on whole names: a glob-shaped account pool never matches a set', () => {
+    for (const ap of ['named *', 'named pool-?', 'named pool-[ab]', 'named pool']) {
+      expect(poolOk(ap, 'set pool-a,pool-b').startsWith('rc=1|'), ap).toBe(true);
+    }
+    // Review 2134 F4: a "name" spanning two adjacent set names is no pool name at all, so it never matches the run.
+    expect(poolOk('named pool-a pool-b', 'set pool-a,pool-b').startsWith('rc=1|')).toBe(true);
+    expect(poolOk('named pool-a,pool-b', 'set pool-a,pool-b').startsWith('rc=1|')).toBe(true);
   });
 
   it.each(POOL_RULE_PROJECT_CASES.map((c) => [c.name, c] as const))('%s', (_name, c) => {
