@@ -145,16 +145,18 @@ export function insertBoundRowInTx(db: DatabaseSync, row: BoundRowWrite, actor: 
   return Number(res.lastInsertRowid);
 }
 
-/** What a bound move writes beside itself: its prepared push (`senderFor(deps).prepare`) and `pushDue`'s answer for it,
- *  asked once, before the move's transaction (slug presence-read-once). */
-export interface BoundWrite { readonly prepared: PreparedPush; readonly due: PushDue }
+/** What a bound move writes beside itself: its prepared push (`senderFor(deps).prepare`), `pushDue`'s answer for it, and
+ *  the presence answer `pushDue` was asked with, all read once, before the move's transaction (slug presence-read-once).
+ *  `viewing` is its own fact, never read back from `due`: with no push service `due` says `no-service` first, and the
+ *  funnel's record gate still needs presence (review 2150 F1). */
+export interface BoundWrite { readonly prepared: PreparedPush; readonly due: PushDue; readonly viewing: boolean }
 /** An item's bound write, built from its id (the tag `item-<id>` needs it; slug bound-row-callback). */
 export type BoundOf = (id: number) => BoundWrite;
 /** An item raiser's bound write for one item, from its copy and its level (`pushSender.ts#itemBoundOf` builds it): what
  *  the three `ccrc` raisers' deps carry, so they import no sender code. */
 export type ItemReachOf = (item: { readonly title: string; readonly neededBy: NeededBy }) => BoundOf;
-/** The bound row a move wrote, by id, with the answer it was written under. */
-export interface BoundRowRef { readonly id: number; readonly due: PushDue }
+/** The bound row a move wrote, by id, with the answer it was written under and the presence read beside it. */
+export interface BoundRowRef { readonly id: number; readonly due: PushDue; readonly viewing: boolean }
 
 /** A move's reach (I2), INSIDE the move's transaction once its compare-and-set has won: the reach stamp and the one
  *  bound row, `pending` on `now` (which `pushDue` answers only with a payload) or `silent` with its why. A payload
@@ -168,9 +170,9 @@ export function reachInTx(db: DatabaseSync, source: OutboxSource, sourceId: numb
   const base = { source, sourceId, pushId: b.prepared.pushId, at };
   if (b.due.due === 'now') {
     if (payload === null) throw new Error(`reachInTx: the ${source} ${sourceId} push is due with no payload`);
-    return { id: insertBoundRowInTx(db, { ...base, state: 'pending', payload }), due: b.due };
+    return { id: insertBoundRowInTx(db, { ...base, state: 'pending', payload }), due: b.due, viewing: b.viewing };
   }
-  return { id: insertBoundRowInTx(db, { ...base, state: 'silent', silentWhy: b.due.why, payload }), due: b.due };
+  return { id: insertBoundRowInTx(db, { ...base, state: 'silent', silentWhy: b.due.why, payload }), due: b.due, viewing: b.viewing };
 }
 
 /** The toggle to blocking's reach (slug rearm-is-an-upsert), INSIDE `setBlocking`'s transaction once the level moved:
@@ -188,7 +190,7 @@ export function armInTx(db: DatabaseSync, source: OutboxSource, sourceId: number
   } else if (idOf() === undefined) {
     insertBoundRowInTx(db, { source, sourceId, pushId: b.prepared.pushId, state: 'silent', silentWhy: b.due.why, payload, at });
   }
-  return { id: Number(idOf()), due: b.due };
+  return { id: Number(idOf()), due: b.due, viewing: b.viewing };
 }
 
 /** THE ONE WRITER of `reachedOperatorAt` (C31): a row is stamped at most once (`WHERE reachedOperatorAt IS NULL`). It
@@ -226,18 +228,20 @@ export function armBoundRowInTx(db: DatabaseSync, source: OutboxSource, sourceId
   return { inserted: false };
 }
 
-/** An unbound push, in its own transaction (or the caller's, when one is open: `tx` does not nest), written straight to
- *  `sending`: claimed at its insert, so a crash right after it is `unknown` at boot, as today's lost push (slug
+/** An unbound push, written straight to `sending`: claimed at its insert, so a crash right after it is `unknown` at boot, as today's lost push (slug
  *  unbound-push-claimed-at-insert). A failed write answers `ok: false` with its detail, never a throw, so the caller can
- *  still send (C67). */
+ *  still send (C67). It always commits in its own transaction and never joins a caller's open one: a row a caller's
+ *  rollback took back would hand its id, and its attempt's late verdict, to the next insert (review 2150 F7, slug
+ *  unbound-insert-commits-alone), so inside a transaction it writes nothing and the push is sent with no row. */
 export function insertUnboundRow(db: DatabaseSync, row: { readonly pushId: string; readonly payload: OutboxPayload; readonly at: number }):
   { readonly ok: true; readonly id: number; readonly claimSeq: number } | { readonly ok: false; readonly detail: string } {
+  if (db.isTransaction) return { ok: false, detail: 'push_outbox insert refused inside an open transaction' };
   try {
     mustMove(null, 'sending', 'sender', 'insertUnboundRow');
     const insert = stmt(db, 'INSERT INTO push_outbox (pushId, payload, tag, state, createdAt, armedAt, claimSeq, attempts, claimedAt) '
       + "VALUES (?, ?, ?, 'sending', ?, ?, 1, 1, ?)");
     const write = (): number => Number(insert.run(row.pushId, JSON.stringify(row.payload), row.payload.tag, row.at, row.at, row.at).lastInsertRowid);
-    const id = db.isTransaction ? write() : tx(db, write);
+    const id = tx(db, write);
     return { ok: true, id, claimSeq: 1 };
   } catch (e) {
     return { ok: false, detail: `push_outbox insert failed: ${message(e)}` };
@@ -294,6 +298,13 @@ export function markOutboxVerdict(db: DatabaseSync, id: number, claimSeq: number
     + 'payload = CASE WHEN ? = 1 THEN NULL ELSE payload END, settledAt = CASE WHEN ? = 1 THEN ? ELSE settledAt END '
     + "WHERE id = ? AND state = 'sending' AND claimSeq = ?")
     .run(to, verdict === null ? null : JSON.stringify(verdict), nextAttemptAt, to, at, terminal, terminal, at, id, claimSeq));
+}
+
+/** Whether an unbound row's push was replaced: a newer row under the same tag that a device took (`sent`), so the older
+ *  row's retry would bring older text back over it (review 2150 F4). Answers false for a bound row. */
+export function supersededUnbound(db: DatabaseSync, id: number): boolean {
+  return stmt(db, "SELECT 1 FROM push_outbox o JOIN push_outbox n ON n.tag = o.tag AND n.id > o.id AND n.state = 'sent' "
+    + 'WHERE o.id = ? AND o.sourceKind IS NULL LIMIT 1').get(id) !== undefined;
 }
 
 /** The rows due now: every `pending` row, and every `retrying` row whose `nextAttemptAt` has passed, oldest first. */

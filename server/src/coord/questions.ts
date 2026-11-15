@@ -1424,6 +1424,17 @@ export function createQuestions(deps: QuestionsDeps, rules?: QuestionRules): Que
 
   // ── the door-ins: each answers what to push; the caller pushes ─────────────────────────────────────────────────
 
+  /** The lapse's release failure, logged once per cause (Overlord W1; a `changeLatch`, where it once warned every sweep). */
+  const releaseWarn = changeLatch<string>();
+
+  /** Whether the ask a bound row belongs to is settled for the push outbox: answered, or no longer released or declined
+   *  (`pushSender.ts#outboxSettledOf` reads it before each claim). A failed read answers null. */
+  const askSettled = (askId: number): boolean | null => {
+    const read = deps.coord?.askById(askId);
+    if (read === undefined || !read.ok) return null;
+    return read.ask === null || (read.ask.state !== 'released' && read.ask.state !== 'declined');
+  };
+
   /**
    * `POST /api/questions/ask-<n>/release` (Task 10, the decline route): a parent has DECLINED to rule on its child's question,
    * so the grace window ends NOW rather than at `held.until` — the verb that makes the window a CEILING rather than a
@@ -1434,15 +1445,6 @@ export function createQuestions(deps: QuestionsDeps, rules?: QuestionRules): Que
    * forgot the hold, or this ask was never held by THIS instance) answers null: the store row is released either way,
    * and there is no snapshotted `ev` left to push.
    */
-  /** The lapse's release failure, logged once per cause (Overlord W1; a `changeLatch`, where it once warned every sweep). */
-  const releaseWarn = changeLatch<string>();
-
-  const askSettled = (askId: number): boolean | null => {
-    const read = deps.coord?.askById(askId);
-    if (read === undefined || !read.ok) return null;
-    return read.ask === null || (read.ask.state !== 'released' && read.ask.state !== 'declined');
-  };
-
   const released = (childId: string): QuestionPush | null => {
     const held = askEntry(childId, 'held');
     if (held === undefined) return null;

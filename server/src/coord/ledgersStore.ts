@@ -123,7 +123,7 @@ function raiseItemInTx(db: DatabaseSync, input: RaiseItemInput, now: number, act
     input.action === undefined || input.action === null ? null : JSON.stringify(input.action), input.heldUntil ?? null);
   const id = Number(res.lastInsertRowid);
   writeItemEvent(db, id, now, 'raise', actor, null);
-  if (reach !== undefined && operatorWasShown({ heldUntil: input.heldUntil ?? null, closedAt: null }, now)) reach(id);
+  if (reach !== undefined && operatorWasShown({ heldUntil: input.heldUntil ?? null, closedAt: null, raisedAt: now }, now)) reach(id);
   return id;
 }
 

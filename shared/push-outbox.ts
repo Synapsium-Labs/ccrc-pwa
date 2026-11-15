@@ -80,11 +80,11 @@ export type PushSendVerdict =
     }[];
   };
 
-/** Why a row made no push: no push service, no payload, the source settled, the level, the operator looking, or an
- *  older build that pushed it already. */
-export type PushSilentWhy = 'level' | 'viewing' | 'settled' | 'no-payload' | 'no-service' | 'older-build';
+/** Why a row made no push: no push service, no payload, the source settled, the level, the operator looking, an older
+ *  build that pushed it already, or a newer push under the same tag that a device took (review 2150 F4). */
+export type PushSilentWhy = 'level' | 'viewing' | 'settled' | 'no-payload' | 'no-service' | 'older-build' | 'superseded';
 const PUSH_SILENT_WHY_MAP: Readonly<Record<PushSilentWhy, true>> = {
-  level: true, viewing: true, settled: true, 'no-payload': true, 'no-service': true, 'older-build': true,
+  level: true, viewing: true, settled: true, 'no-payload': true, 'no-service': true, 'older-build': true, superseded: true,
 };
 export const PUSH_SILENT_WHYS = Object.keys(PUSH_SILENT_WHY_MAP) as PushSilentWhy[];
 

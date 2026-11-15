@@ -12385,10 +12385,12 @@ const SERVER_CAP_MAP: Readonly<Record<ServerCap, true>> = {
   /** W1a: the timer doors, the timers lane and `ccrc-api timer` (Overlord timers piece). `ccrc-api timer` refuses
    *  `capability-missing`, unsent, when a current cap file omits this word. Added by the change that builds the client. */
   'timers-v1': true,
-  /** Overlord W1, the push outbox (H18; Table 11.1d): every push this server sends has a `push_outbox` row, or is logged as
-   *  unwritable; an ask or an item that reached the operator after this build carries `reachedOperatorAt` and one outbox
-   *  row written in the same transaction, with or without a push service; a claimed attempt is never retried. W3's hold
-   *  arming reads it. Added by the change that moves every push behind the one sender, cut after every site writes rows. */
+  /** Overlord W1, the push outbox (H18; Table 11.1d): every push sent through deps that carry the store and the time ports
+   *  has a `push_outbox` row, or is logged as unwritable; an ask released by one of its three moves (the mint, the lapse,
+   *  the decline), or an item shown at its raise, its toggle to blocking or the held drain, carries `reachedOperatorAt` and
+   *  one row written in that move's transaction, with or without a push service. The lapse's `push-and-drop` and the
+   *  hold-failure fallback send an unbound push, with no stamp. A claimed attempt is never retried. W3's hold arming reads
+   *  it. Added by the change that moves every push behind the one sender, cut after every site writes rows. */
   'push-outbox-v1': true,
 };
 

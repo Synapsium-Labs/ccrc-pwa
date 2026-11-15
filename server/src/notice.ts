@@ -55,10 +55,11 @@ export interface NoticeOpts {
    *  the archive and nothing else: the funnel never suppresses the ring or the push on it, and the archive refuses
    *  nothing; whether to raise the notice at all is the caller's read, made before the write. */
   readonly dedupeKey?: string;
-  /** The push outbox (Overlord W1, Task 4): a bound row its move already wrote, with the `pushDue` answer asked before
-   *  the move and the read `sendRow` re-asks before the claim. With it the funnel reads no presence and asks no
-   *  `pushDue`: `due` is the record gate (`viewing` is the operator looking) and, on `now`, the row is sent. */
-  readonly bound?: { readonly row: BoundRowTarget; readonly due: PushDue; readonly settledOf: SettledOf };
+  /** The push outbox (Overlord W1, Task 4): a bound row its move already wrote, with the `pushDue` answer and the presence
+   *  answer read once before the move, and the read `sendRow` re-asks before the claim. With it the funnel reads no
+   *  presence and asks no `pushDue`: `viewing` is the record gate, as presence is for an unbound notice whatever the
+   *  push service (review 2150 F1), and on `now` the row is sent. */
+  readonly bound?: { readonly row: BoundRowTarget; readonly due: PushDue; readonly viewing: boolean; readonly settledOf: SettledOf };
 }
 
 /** What happened: whether the ring recorded it, and the archive's fate (`'none'`: no `notifyLog` or no `coord`, or
@@ -126,8 +127,8 @@ function raise(deps: NoticeDeps, event: NoticeRecord, mode: NoticeMode, opts: No
   // `'record-only'` never pushes, so presence decides nothing for it and is not consulted. A bound row's presence was
   // asked once, before its move (slug presence-read-once), and its answer is the gate.
   const bound = opts.bound;
-  const visible = mode !== 'record-only' && (bound === undefined ? deps.viewers?.isVisible(event.sessionId) === true
-    : bound.due.due === 'silent' && bound.due.why === 'viewing');
+  const visible = mode !== 'record-only'
+    && (bound === undefined ? deps.viewers?.isVisible(event.sessionId) === true : bound.viewing);
   if (visible && mode === 'push') return { recorded: false, archived: 'none' };
   const log = deps.notifyLog;
   let recorded = false;
@@ -155,7 +156,7 @@ function raise(deps: NoticeDeps, event: NoticeRecord, mode: NoticeMode, opts: No
   }
   // The payload's one builder (the push outbox, Task 2): the default tag or the caller's, and `actions` and `url` when given.
   const due = pushDue({ event: 'reach', service: deps.push !== undefined, source: 'none', blocking: true, viewing: visible,
-    settled: false, payload: true });
+    settled: false, superseded: false, payload: true });
   if (due.due === 'now') senderFor(deps).send(noticePayload(event, opts));
   return { recorded, archived };
 }
@@ -202,11 +203,12 @@ export function questionOutboxOf(
       const payload = ev === null ? null : noticePayload({ ...ev, title: noticeTitle(ev.title, ev.project, projects()) },
         ev.actions === undefined ? {} : { actions: ev.actions });
       const prepared = senderFor(deps).prepare(payload);
-      return { prepared, due: pushDue({ event: 'reach', service: prepared.service, source: 'ask', blocking: true,
-        viewing: ev !== null && deps.viewers?.isVisible(ev.sessionId) === true, settled: false, payload: payload !== null }) };
+      const viewing = ev !== null && deps.viewers?.isVisible(ev.sessionId) === true;
+      return { prepared, viewing, due: pushDue({ event: 'reach', service: prepared.service, source: 'ask', blocking: true, viewing,
+        settled: false, superseded: false, payload: payload !== null }) };
     },
     sent: (ev, askId, row) => {
-      const bound = { row: { id: row.id, source: 'ask' as const, sourceId: askId }, due: row.due, settledOf };
+      const bound = { row: { id: row.id, source: 'ask' as const, sourceId: askId }, due: row.due, viewing: row.viewing, settledOf };
       if (raise !== undefined) { raise(ev, bound); return; }
       notify(deps, { kind: ev.kind, sessionId: ev.sessionId, runId: null, title: noticeTitle(ev.title, ev.project, projects()),
         body: ev.body }, 'push', { ...(ev.actions === undefined ? {} : { actions: ev.actions }), bound });

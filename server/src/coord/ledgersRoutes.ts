@@ -80,8 +80,6 @@ export interface LedgerCoordinatorDeps {
   outbox?: OutboxView | undefined;
 }
 
-/** The PWA route a blocking item's push opens on tap: the Waiting on you list (`pwa/src/lib/routes.ts`'s `waiting` row). */
-
 /** A reason for `ruling` on a modification: the programme ledger's entry id or a short pointer, never prose. */
 const RULING_MAX = 600;
 /** The coordinator's note when it sends an item back (spec §3.3). */
@@ -280,15 +278,19 @@ export function registerLedgerCoordinatorRoutes(app: FastifyInstance, deps: Ledg
 
   /** A blocking item must reach the operator. It is a `coord` notice with no session: a `run` notice naming the
    *  coordinator's session is held back while the operator views that session, and a `run` notice with an empty
-   *  session is the review-cap notice's shape alone (D-6911). */
-  const pushBlocking = (item: ItemRow, row: BoundRowRef | null): void => {
+   *  session is the review-cap notice's shape alone (D-6911). `push` names its two rowless arms apart (review 2150 F9):
+   *  an item held at its raise gets nothing now (the held drain stamps it at `heldUntil`), and a composition with no push
+   *  outbox sends today's unbound push. */
+  const pushBlocking = (item: ItemRow, push: { readonly row: BoundRowRef } | 'held-at-raise' | 'no-outbox'): void => {
+    if (push === 'held-at-raise') return;
     // `url` is the list a tap opens (review 1331 F1; review 1332 F6 measured that `opts.url` reaches `sendPush`). The feed
     // row gets no target: `NotifyEvent` carries no url and widening it is not this programme's. With the push outbox the
     // item's row, written by its move, carries the copy (`itemPushPayload`), and the funnel sends that row (I2).
     const outbox = deps.outbox;
     deps.notice({ kind: 'coord', sessionId: '', runId: item.runId, title: 'Waiting on you', body: item.title }, 'push',
-      row === null || outbox === undefined ? { tag: `item-${item.id}`, url: WAITING_URL }
-        : { bound: { row: { id: row.id, source: 'item', sourceId: item.id }, due: row.due, settledOf: outbox.settledOf } });
+      push === 'no-outbox' || outbox === undefined ? { tag: `item-${item.id}`, url: WAITING_URL } : { bound: {
+        row: { id: push.row.id, source: 'item', sourceId: item.id }, due: push.row.due, viewing: push.row.viewing, settledOf: outbox.settledOf,
+      } });
   };
 
   /** The refusal of a text that links a document outside the console (`outsideDocLink`, spec D28): the raise route's and the
@@ -327,7 +329,9 @@ export function registerLedgerCoordinatorRoutes(app: FastifyInstance, deps: Ledg
     const input = { program: slug, raisedBy: who.byId, ...v };
     const { id, row } = deps.outbox === undefined ? { id: coord.raiseItem(input, now), row: null }
       : coord.raiseItemReached(input, now, 'coordinator', itemBoundOf(deps.outbox.deps, v, 'reach'));
-    if (v.neededBy === 'blocking') pushBlocking(coord.itemById(id) as ItemRow, row);
+    if (v.neededBy === 'blocking') {
+      pushBlocking(coord.itemById(id) as ItemRow, deps.outbox === undefined ? 'no-outbox' : row === null ? 'held-at-raise' : { row });
+    }
     changed();
     return reply.code(200).send({ ok: true, id });
   });
@@ -448,7 +452,8 @@ export function registerLedgerCoordinatorRoutes(app: FastifyInstance, deps: Ledg
     if (!res.ok) return refuseRoute(reply, res.why, { detail: `item ${item.id} is closed` });
     // The store decides, inside its transaction, whether the level moved; the push and the emit follow its answer.
     if (res.changed) {
-      if (blocking) pushBlocking(item, 'row' in res ? res.row : null);
+      // A move to blocking always arms the row, so with the outbox `row` is never null here; were it, a push is the safe side.
+      if (blocking) pushBlocking(item, 'row' in res && res.row !== null ? { row: res.row } : 'no-outbox');
       changed();
     }
     return reply.code(200).send({ ok: true });

@@ -3,7 +3,7 @@
 // blocking) or, for a held item, in the drain's per-item transaction at `heldUntil`. The raise and blocking routes run over a
 // real server and store (the harness of `ledgers-coordinator-routes.test.ts`, with a recording push double and fake time); the
 // store, the three `ccrc` raisers and the held drain are driven directly. Neutral names (prog-a, lane-a).
-import { describe, it, expect, afterEach, vi } from 'vitest';
+import { describe, it, expect, afterEach, vi, type Mock } from 'vitest';
 import path from 'node:path';
 import type { FastifyInstance } from 'fastify';
 import { buildServer } from '../src/server.js';
@@ -17,7 +17,7 @@ import { routeRefusals, type RefusedClose } from '../src/coord/runCloseRefusals.
 import { insertBoundRowInTx } from '../src/coord/pushOutboxStore.js';
 import { tx } from '../src/coord/tx.js';
 import { ASK_GRACE_MS } from '../src/askwindow.js';
-import { itemBoundOf, senderFor, type SenderDeps } from '../src/pushSender.js';
+import { itemBoundOf, outboxSettledOf, senderFor, type SenderDeps } from '../src/pushSender.js';
 import type { PushPayload } from '../src/push.js';
 import type { ChildReclaimSweepVerdict } from '../src/childReclaimSweep.js';
 import { ID_GATE_TOKEN, recorder, seedRow } from './idGateFixture.js';
@@ -81,7 +81,7 @@ const reached = (c: CoordStore, id: number): number | null =>
   (c.db.prepare('SELECT reachedOperatorAt AS r FROM operator_items WHERE id = ?').get(id) as { r: number | null }).r;
 const drain = async (r: Rig, now: number): Promise<void> => {
   const sender = senderFor(r.sdeps);
-  await sender.drain(now, (source, id) => (source === 'ask' ? null : r.coord.itemById(id)?.state !== 'open'));
+  await sender.drain(now, outboxSettledOf({ askSettled: () => null }, r.coord));
   await sender.idle();
 };
 const idle = (r: Rig): Promise<void> => senderFor(r.sdeps).idle();
@@ -112,6 +112,19 @@ describe('the raise route', () => {
     expect(r.seam.sent).toEqual([]);
   });
 
+  it('a blocking raise held at its raise sends nothing now; the held drain stamps it at heldUntil (review 2150 F9)', async () => {
+    const r = await rig();
+    const real = r.coord.raiseItemReached.bind(r.coord);
+    // The route never parses `heldUntil` today, so the store is handed a held item the way a W3 hold arm would.
+    vi.spyOn(r.coord, 'raiseItemReached').mockImplementation((input, now, actor, bound) =>
+      real({ ...input, heldUntil: now + 60_000 }, now, actor, bound));
+    const id = await raise(r, { neededBy: 'blocking' });
+    await idle(r);
+    expect(r.seam.sent).toEqual([]);
+    expect(rowsOfItem(r.coord, id)).toEqual([]);
+    expect(reached(r.coord, id)).toBeNull();
+  });
+
   it('a soon raise writes a silent row, why level, and pushes nothing', async () => {
     const r = await rig();
     const id = await raise(r);
@@ -119,6 +132,45 @@ describe('the raise route', () => {
     expect(reached(r.coord, id)).not.toBeNull();
     await idle(r);
     expect(r.seam.sent).toEqual([]);
+  });
+});
+
+describe('a bound item\'s retry re-reads the item (review 2150 F2)', () => {
+  const REFUSED = { kind: 'sent', subs: [{ endpointHash: 'ab', verdict: 'refused', status: 429 }] };
+  /** A blocking raise whose push every subscription refused: its row is `retrying`. Answers the item and the retry's time. */
+  const refusedRaise = async (): Promise<{ r: Rig; id: number; due: number; notify: Mock }> => {
+    const notify = vi.fn(async (): Promise<unknown> => REFUSED);
+    const r = await rig({ push: { notify } });
+    const id = await raise(r, { neededBy: 'blocking' });
+    await idle(r);
+    const row = r.coord.db.prepare('SELECT state, armedAt FROM push_outbox WHERE sourceId = ?').get(id) as { state: string; armedAt: number };
+    expect(row.state).toBe('retrying');
+    // The route stamps by its own `now`, and the sender's fake clock stands still: the retry is made due at the sender's.
+    r.coord.db.prepare('UPDATE push_outbox SET nextAttemptAt = ? WHERE sourceId = ?').run(r.sdeps.time!.clock.wall(), id);
+    return { r, id, due: row.armedAt, notify };
+  };
+
+  it('an item lowered from blocking before its retry is silenced, why level, and never pushed again', async () => {
+    const { r, id, due, notify } = await refusedRaise();
+    await toggle(r, id, false);
+    await drain(r, due);
+    expect(rowsOfItem(r.coord, id)).toMatchObject([{ state: 'silent', silentWhy: 'level', payload: null }]);
+    expect(notify).toHaveBeenCalledTimes(1);
+  });
+
+  it('an item the operator ticked (checking) before its retry is silenced, why settled, and never pushed again', async () => {
+    const { r, id, due, notify } = await refusedRaise();
+    expect(r.coord.moveItem(id, 'tick', 'operator', { answer: 'done' }, T, { programmeHasOpenRun: true })).toMatchObject({ ok: true });
+    await drain(r, due);
+    expect(rowsOfItem(r.coord, id)).toMatchObject([{ state: 'silent', silentWhy: 'settled', payload: null }]);
+    expect(notify).toHaveBeenCalledTimes(1);
+  });
+
+  it('an item still open and blocking is retried', async () => {
+    const { r, id, due, notify } = await refusedRaise();
+    await drain(r, due);
+    expect(notify).toHaveBeenCalledTimes(2);
+    expect(rowsOfItem(r.coord, id)).toMatchObject([{ state: 'retrying', attempts: 2 }]);
   });
 });
 
@@ -248,7 +300,7 @@ describe('the held drain (an end-request item reaches the operator at heldUntil)
     r.coord.db.prepare("UPDATE operator_items SET neededBy = 'blocking' WHERE id = ?").run(id);
     r.coord.markFirstBoot(T - 1_000);
     await drain(r, T + ASK_GRACE_MS + 1);
-    expect(reached(r.coord, id)).toBe(T + ASK_GRACE_MS + 1);
+    expect(reached(r.coord, id), 'the stamp is heldUntil, not the drain\'s time (review 2150 F3)').toBe(T + ASK_GRACE_MS);
     expect(rowsOfItem(r.coord, id)).toMatchObject([{ state: 'silent', silentWhy: 'older-build', payload: null }]);
     expect(r.seam.sent).toEqual([]);
   });
@@ -340,7 +392,7 @@ describe('with no push service', () => {
 describe('a bound insert that throws rolls the move back', () => {
   /** A tag-less payload: `reachInTx` and `armInTx` refuse it, inside the move's transaction. */
   const tagless = () => ({ prepared: { payload: { title: 'Waiting on you', body: 'Do it' }, pushId: 'd'.repeat(32), service: true },
-    due: { due: 'now' as const } });
+    due: { due: 'now' as const }, viewing: false });
   const input = { program: 'prog-a', runId: null, raisedBy: 'lane-a', kind: 'do' as const, title: 'Do it', why: 'because', how: ['step'],
     options: null, neededBy: 'blocking' as const, soonLabel: null, secretSlot: null, heldUntil: null };
 

@@ -5446,6 +5446,7 @@ export class CoordStore {
   insertUnboundRow(row: { pushId: string; payload: outbox.OutboxPayload; at: number }): ReturnType<typeof outbox.insertUnboundRow> { return outbox.insertUnboundRow(this.db, row); }
   claimOutboxRow(id: number, at: number): ReturnType<typeof outbox.claimOutboxRow> { return outbox.claimOutboxRow(this.db, id, at); }
   silenceOutboxRow(id: number, why: PushSilentWhy, at: number): { changed: boolean } { return outbox.silenceOutboxRow(this.db, id, why, at); }
+  supersededUnbound(id: number): boolean { return outbox.supersededUnbound(this.db, id); }
   markOutboxVerdict(id: number, claimSeq: number, move: outbox.OutboxVerdictMove, at: number): { changed: boolean } { return outbox.markOutboxVerdict(this.db, id, claimSeq, move, at); }
   dueOutboxRows(now: number): outbox.OutboxRead { return outbox.dueOutboxRows(this.db, now); }
   openOutboxRows(): outbox.OutboxRead { return outbox.openOutboxRows(this.db); }

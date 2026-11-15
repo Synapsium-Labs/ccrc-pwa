@@ -39,7 +39,7 @@ export function noticePayload(
   };
 }
 
-/** The PWA route an item's push opens on tap: the Waiting on you list (`pwa/src/lib/routes.ts`'s `waiting` row). */
+/** The PWA route a blocking item's push opens on tap: the Waiting on you list (`pwa/src/lib/routes.ts`'s `waiting` row). */
 export const WAITING_URL = '/waiting';
 
 /** An item's push copy, the one place it is built (the blocking item's, `ledgersRoutes.ts#pushBlocking` before the
@@ -87,6 +87,8 @@ export interface PushDueFacts {
   readonly viewing: boolean;
   /** The source row was answered, withdrawn or closed. */
   readonly settled: boolean;
+  /** A newer push under the same tag was accepted (an unbound row's retry only; review 2150 F4). */
+  readonly superseded: boolean;
   /** A payload exists (a handover with no in-memory hold has none). */
   readonly payload: boolean;
 }
@@ -105,8 +107,8 @@ const EVENT_RULES: Readonly<Record<PushDueFacts['event'], { readonly heldDrain: 
 };
 
 /** Whether a row pushes now, by the first rule that matches:
- *  1. no push service is `no-service`; 2. no payload is `no-payload`; 3. a settled source is `settled`;
- *  4. an item that is not blocking is `level`; 5. the held drain never pushes (`older-build`: only an older build's
+ *  1. no push service is `no-service`; 2. no payload is `no-payload`; 3. a settled source is `settled`, and a row a
+ *  newer accepted push with its tag replaced is `superseded`; 4. an item that is not blocking is `level`; 5. the held drain never pushes (`older-build`: only an older build's
  *  toggle inside the hold makes a held item blocking with no row, and that build pushed it then; slug
  *  held-drain-is-silent); 6. a notice being viewed is `viewing`, except on a `claim`, because presence was decided once,
  *  at the reach or the arm (slug presence-read-once); 7. everything else is `now`. */
@@ -114,6 +116,7 @@ export function pushDue(f: PushDueFacts): PushDue {
   if (!f.service) return silent('no-service');
   if (!f.payload) return silent('no-payload');
   if (f.settled) return silent('settled');
+  if (f.superseded) return silent('superseded');
   if (f.source === 'item' && !f.blocking) return silent('level');
   const ev = EVENT_RULES[f.event];
   if (ev.heldDrain) return silent('older-build');

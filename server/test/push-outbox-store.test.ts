@@ -199,10 +199,12 @@ describe('claims and verdicts (never twice)', () => {
     expect(rows(s)).toMatchObject([{ sourceKind: null, sourceId: null, state: 'sending', claimSeq: 1, attempts: 1 }]);
   });
 
-  it('inside an open transaction the unbound insert joins it rather than failing', () => {
+  it('inside an open transaction the unbound insert writes nothing and says so, never joining it (review 2150 F7)', () => {
     const s = store();
-    expect(tx(s.db, () => s.insertUnboundRow({ pushId: pushId(), payload: PAYLOAD, at: NOW }))).toMatchObject({ ok: true, claimSeq: 1 });
-    expect(rows(s)).toMatchObject([{ state: 'sending', claimSeq: 1 }]);
+    expect(tx(s.db, () => s.insertUnboundRow({ pushId: pushId(), payload: PAYLOAD, at: NOW })))
+      .toEqual({ ok: false, detail: 'push_outbox insert refused inside an open transaction' });
+    expect(rows(s)).toEqual([]);
+    expect(s.insertUnboundRow({ pushId: pushId(), payload: PAYLOAD, at: NOW })).toMatchObject({ ok: true, claimSeq: 1 });
   });
 
   it('claimOutboxRow on a pending row claims it once; on a sending or terminal row changes nothing', () => {

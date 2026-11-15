@@ -19,7 +19,7 @@
 import { changeLatch, type ChangeLatch } from './changeLatch.js';
 import type { CoordStore } from './coord/store.js';
 import type { BoundOf, BoundWrite, OutboxPayload, OutboxRow } from './coord/pushOutboxStore.js';
-import { OPEN_ITEM_STATES, type NeededBy } from '../../shared/ledgers.js';
+import type { NeededBy } from '../../shared/ledgers.js';
 import {
   OUTBOX_KEEP_MS, OUTBOX_SEND_DEADLINE_MS, PUSH_ID_BYTES, type OutboxSource, type PushSendVerdict,
 } from '../../shared/push-outbox.js';
@@ -32,7 +32,7 @@ import type { Clock, TimePorts } from './time/ports.js';
 /** The outbox members the sender reaches, declared by this consumer (a `Pick` of `CoordStore`, as `WatcherCoordPort` is). */
 export type OutboxStorePort = Pick<CoordStore,
   | 'claimOutboxRow' | 'dueOutboxRows' | 'firstBootAt' | 'heldItemsReached' | 'insertUnboundRow' | 'markFirstBoot'
-  | 'markOutboxVerdict' | 'openOutboxRows' | 'purgeOutbox' | 'reachHeldItem' | 'sealAtBoot' | 'silenceOutboxRow'>;
+  | 'markOutboxVerdict' | 'openOutboxRows' | 'purgeOutbox' | 'reachHeldItem' | 'sealAtBoot' | 'silenceOutboxRow' | 'supersededUnbound'>;
 
 /** The deps every funnel site already passes, read at each call. */
 export interface SenderDeps {
@@ -47,9 +47,11 @@ export interface SenderDeps {
   readonly masker?: PayloadMasker | undefined;
 }
 
-/** Whether a bound row's source is settled (answered, withdrawn, closed), read through its owner, or null when the read
- *  failed (the row is left for the next drain). */
-export type SettledOf = (source: OutboxSource, sourceId: number) => boolean | null;
+/** A bound row's source as it stands at the claim: settled (answered, withdrawn, closed, or an item the operator ticked),
+ *  and its level now, so a lowered item's retry is silenced (review 2150 F2, slug claim-rereads-the-level). */
+export interface SourceNow { readonly settled: boolean; readonly blocking: boolean }
+/** A bound row's source re-read through its owner, or null when the read failed (the row is left for the next drain). */
+export type SettledOf = (source: OutboxSource, sourceId: number) => SourceNow | null;
 /** A bound row by id, with its source, which `sendRow` re-reads before each attempt (slug re-read-before-claim). */
 export interface BoundRowTarget { readonly id: number; readonly source: OutboxSource; readonly sourceId: number }
 
@@ -70,7 +72,8 @@ export interface PushSender {
   idle(): Promise<void>;
 }
 
-/** Per push service: the latch that logs a standing write failure once per cause, and the attempts in flight. */
+/** Per push service (or, on a box with none, per store, so a standing read failure there is latched too; review 2150
+ *  F10): the latch that logs a standing failure once per cause, and the attempts in flight. */
 interface ServiceState { readonly latch: ChangeLatch<string>; readonly inflight: Set<Promise<void>> }
 const SERVICES = new WeakMap<object, ServiceState>();
 function serviceState(push: object): ServiceState {
@@ -80,10 +83,13 @@ function serviceState(push: object): ServiceState {
 }
 
 const message = (e: unknown): string => (e instanceof Error ? e.message : String(e));
-const OUTBOX_MEMBERS: readonly (keyof OutboxStorePort)[] = [
-  'claimOutboxRow', 'dueOutboxRows', 'firstBootAt', 'heldItemsReached', 'insertUnboundRow', 'markFirstBoot',
-  'markOutboxVerdict', 'openOutboxRows', 'purgeOutbox', 'reachHeldItem', 'sealAtBoot', 'silenceOutboxRow',
-];
+/** Every member of `OutboxStorePort`, spelled once as a record's keys, so a member added to the port and not here is TS2741. */
+const OUTBOX_MEMBER_MAP: Readonly<Record<keyof OutboxStorePort, true>> = {
+  claimOutboxRow: true, dueOutboxRows: true, firstBootAt: true, heldItemsReached: true, insertUnboundRow: true, markFirstBoot: true,
+  markOutboxVerdict: true, openOutboxRows: true, purgeOutbox: true, reachHeldItem: true, sealAtBoot: true, silenceOutboxRow: true,
+  supersededUnbound: true,
+};
+const OUTBOX_MEMBERS = Object.keys(OUTBOX_MEMBER_MAP) as (keyof OutboxStorePort)[];
 /** The store as the outbox port, or null when the deps' `coord` lacks a member (a narrow double, or none at all). */
 function portOf(coord: object | undefined): OutboxStorePort | null {
   if (coord === undefined) return null;
@@ -94,7 +100,8 @@ function portOf(coord: object | undefined): OutboxStorePort | null {
 /** The sender for one call's deps. A thin view: nothing here outlives the call but the per-service state. */
 export function senderFor(deps: SenderDeps): PushSender {
   const push = deps.push;
-  const st = push === undefined ? null : serviceState(push);
+  const keyed: object | undefined = push ?? deps.coord;
+  const st = keyed === undefined ? null : serviceState(keyed);
   const port = portOf(deps.coord);
   const time = deps.time;
   const masker: PayloadMasker = deps.masker ?? push?.payloadMasker ?? { maskDeep: (v) => v };
@@ -127,7 +134,8 @@ export function senderFor(deps: SenderDeps): PushSender {
             : next.to === 'sent' ? { to: next.to, verdict: v! } : { to: next.to, verdict: v };
           port.markOutboxVerdict(row.id, row.claimSeq, move, at);
         } catch (e) {
-          warnByCause(`verdict:${message(e)}`, `the verdict of row ${row.id} was not written (${message(e)})`);
+          warnByCause(`verdict:${message(e)}`,
+            `the verdict of row ${row.id} was not written (${message(e)}); the row stays sending and the next boot seals it unknown`);
         }
       }
       settle();
@@ -142,28 +150,33 @@ export function senderFor(deps: SenderDeps): PushSender {
     return done;
   };
 
-  /** A bound row: the source re-read, `pushDue` at the claim, then the claim and the attempt. A lost claim is normal. */
+  /** A row: its source re-read (an unbound row's: whether a newer push replaced it), `pushDue` at the claim, then the
+   *  claim and the attempt. A lost claim is normal. */
   const sendBound = (row: BoundRowTarget | { id: number; source: null; sourceId: null }, settledOf: SettledOf): Promise<void> => {
     if (port === null || time === undefined) return Promise.resolve();
-    const settled = row.source === null ? false : settledOf(row.source, row.sourceId);
-    if (settled === null) return Promise.resolve();          // the read failed: the next drain reads again
+    const src = row.source === null ? { settled: false, blocking: true } : settledOf(row.source, row.sourceId);
+    if (src === null) return Promise.resolve();              // the read failed: the next drain reads again
     const at = time.clock.wall();
-    const due = pushDue({ event: 'claim', service: push !== undefined, source: row.source ?? 'none', blocking: true,
-      viewing: false, settled, payload: true });
+    let claim: ReturnType<OutboxStorePort['claimOutboxRow']>;
     try {
+      const due = pushDue({ event: 'claim', service: push !== undefined, source: row.source ?? 'none', blocking: src.blocking,
+        viewing: false, settled: src.settled, superseded: row.source === null && port.supersededUnbound(row.id), payload: true });
       if (due.due === 'silent') { port.silenceOutboxRow(row.id, due.why, at); return Promise.resolve(); }
-      const claim = port.claimOutboxRow(row.id, at);
-      if (!claim.changed) return Promise.resolve();          // a drain or a boot won it
-      if (claim.payload === null) {
-        port.markOutboxVerdict(row.id, claim.claimSeq, { to: 'failed', verdict: null }, at);
-        warnByCause(`payload:${row.id}`, `row ${row.id} was claimed with no readable payload and is sealed failed`);
-        return Promise.resolve();
-      }
-      return attempt(claim.payload, { id: row.id, ...claim });
+      claim = port.claimOutboxRow(row.id, at);
     } catch (e) {
-      warnByCause(`claim:${message(e)}`, `row ${row.id} was not claimed (${message(e)}); the next drain retries`);
+      warnByCause(`claim:${message(e)}`, `row ${row.id} was neither claimed nor silenced (${message(e)}); the next drain reads it again`);
       return Promise.resolve();
     }
+    if (!claim.changed) return Promise.resolve();            // a drain or a boot won it
+    if (claim.payload !== null) return attempt(claim.payload, { id: row.id, ...claim });
+    try {
+      port.markOutboxVerdict(row.id, claim.claimSeq, { to: 'failed', verdict: null }, at);
+      warnByCause(`payload:${row.id}`, `row ${row.id} was claimed with no readable payload and is sealed failed`);
+    } catch (e) {
+      warnByCause(`verdict:${message(e)}`, `row ${row.id} was claimed with no readable payload and its seal was not written `
+        + `(${message(e)}); the next boot seals it unknown`);
+    }
+    return Promise.resolve();
   };
 
   const sender: PushSender = {
@@ -196,7 +209,15 @@ export function senderFor(deps: SenderDeps): PushSender {
       reachHeldItems(port, now, push !== undefined, () => time.entropy.hex(PUSH_ID_BYTES), warnByCause);
       const due = port.dueOutboxRows(now);
       if (!due.ok) { warnByCause(`due:${due.detail}`, `${due.detail}; the next drain reads again`); return; }
-      await Promise.all(due.rows.map((r) => sendBound(targetOf(r), settledOf)));
+      // The boot's horizon, applied again here, so a row the boot pass could not seal is never sent stale (review 2150 F6):
+      // such a row is failed by the boot pass's own seal (slug drain-applies-the-boot-horizon).
+      const failStale = (id: number): Promise<void> => {
+        try { port.sealAtBoot(id, 'failed', now); } catch (e) {
+          warnByCause(`stale:${message(e)}`, `the stale row ${id} was not failed (${message(e)}); the next drain tries again`);
+        }
+        return Promise.resolve();
+      };
+      await Promise.all(due.rows.map((r) => (pastHorizon(r, now) ? failStale(r.id) : sendBound(targetOf(r), settledOf))));
       port.purgeOutbox(now - OUTBOX_KEEP_MS);
     },
     idle() {
@@ -206,13 +227,18 @@ export function senderFor(deps: SenderDeps): PushSender {
   return sender;
 }
 
+/** Whether the boot's verdict fails a due row now (`outboxBootVerdict`, the horizon's one rule). */
+const pastHorizon = (r: OutboxRow, now: number): boolean => (r.state === 'pending' || r.state === 'retrying')
+  && outboxBootVerdict({ state: r.state, armedAt: r.armedAt }, now) === 'fail-stale';
+
 const targetOf = (r: OutboxRow): BoundRowTarget | { id: number; source: null; sourceId: null } =>
   (r.sourceKind === null || r.sourceId === null ? { id: r.id, source: null, sourceId: null }
     : { id: r.id, source: r.sourceKind, sourceId: r.sourceId });
 
 /** The held drain (slug item-held-until-is-a-hold): every held item whose hold has passed, shown to the operator and
- *  not stamped, gets its stamp and one `silent` row in one transaction each. `pushDue` on `held` never answers `now`
- *  (slug held-drain-is-silent), so this sends nothing. */
+ *  not stamped, gets its stamp, at its `heldUntil` (review 2150 F3), and one `silent` row in one transaction each.
+ *  `pushDue` on `held` never answers `now` (slug held-drain-is-silent), so this sends nothing; an answer it does not
+ *  expect leaves the item unstamped and is logged once (review 2150 F10). */
 function reachHeldItems(port: OutboxStorePort, now: number, service: boolean, mint: () => string,
   warnByCause: (cause: string, line: string) => void): void {
   const first = port.firstBootAt();
@@ -221,10 +247,17 @@ function reachHeldItems(port: OutboxStorePort, now: number, service: boolean, mi
   if (!held.ok) { warnByCause(`held:${held.detail}`, `${held.detail}; the next drain reads again`); return; }
   for (const item of held.rows) {
     const due = pushDue({ event: 'held', service, source: 'item', blocking: item.neededBy === 'blocking', viewing: false,
-      settled: false, payload: true });
-    if (due.due !== 'silent') continue;                     // unreachable: the held drain is always silent
-    try { port.reachHeldItem(item.id, mint(), due.why, now); } catch (e) {
-      warnByCause(`reach:${message(e)}`, `the held item ${item.id} was not stamped (${message(e)}); the next drain retries`);
+      settled: false, superseded: false, payload: true });
+    switch (due.due) {
+      case 'silent':
+        try { port.reachHeldItem(item.id, mint(), due.why, item.heldUntil); } catch (e) {
+          warnByCause(`reach:${message(e)}`, `the held item ${item.id} was not stamped (${message(e)}); the next drain retries`);
+        }
+        break;
+      case 'now':
+        warnByCause('held:now', `pushDue answered now for the held item ${item.id}, which the held drain never sends; it is left unstamped`);
+        break;
+      default: { const unknown: never = due; void unknown; }
     }
   }
 }
@@ -233,23 +266,25 @@ function reachHeldItems(port: OutboxStorePort, now: number, service: boolean, mi
  *  the landing replay passes, before anything can push: so every `sending` row it finds belongs to a process that died.
  *  It writes `firstBootAt` if absent, then seals each open row by `outboxBootVerdict`: a claimed attempt `unknown`, a
  *  stale row `failed`, and the rest are left for the first drain. A row it cannot read is still sealed by state and id.
- *  A failed read logs and seals nothing; the next drain reads again. */
+ *  A failed read logs and seals nothing; the drain applies the same horizon to every due row. */
 export function bootPushOutbox(coord: OutboxStorePort, clock: Clock): void {
   const now = clock.wall();
-  try {
-    coord.markFirstBoot(now);
-    const open = coord.openOutboxRows();
-    if (!open.ok) { console.warn(`ccrc-server: push outbox: the boot pass read nothing (${open.detail})`); return; }
-    for (const row of open.rows) {
-      if (row.state !== 'pending' && row.state !== 'sending' && row.state !== 'retrying') continue;
-      const v = outboxBootVerdict({ state: row.state, armedAt: row.armedAt }, now);
-      if (v === 'seal-unknown') coord.sealAtBoot(row.id, 'unknown', now);
-      else if (v === 'fail-stale') coord.sealAtBoot(row.id, 'failed', now);
+  let open: ReturnType<OutboxStorePort['openOutboxRows']>;
+  try { coord.markFirstBoot(now); open = coord.openOutboxRows(); } catch (e) { open = { ok: false, detail: message(e) }; }
+  if (!open.ok) { console.warn(`ccrc-server: push outbox: the boot pass read nothing (${open.detail})`); return; }
+  // One row's failed seal never stops the rest (review 2150 F6); the drain fails a stale row the boot left.
+  const seal = (id: number, to: 'unknown' | 'failed'): void => {
+    try { coord.sealAtBoot(id, to, now); } catch (e) {
+      console.warn(`ccrc-server: push outbox: the boot pass did not seal row ${id} ${to} (${message(e)})`);
     }
-    for (const bad of open.unreadable) coord.sealAtBoot(bad.id, 'unknown', now);
-  } catch (e) {
-    console.warn(`ccrc-server: push outbox: the boot pass failed (${message(e)}); the first drain sends what is due`);
+  };
+  for (const row of open.rows) {
+    if (row.state !== 'pending' && row.state !== 'sending' && row.state !== 'retrying') continue;
+    const v = outboxBootVerdict({ state: row.state, armedAt: row.armedAt }, now);
+    if (v === 'seal-unknown') seal(row.id, 'unknown');
+    else if (v === 'fail-stale') seal(row.id, 'failed');
   }
+  for (const bad of open.unreadable) seal(bad.id, 'unknown');
 }
 
 /** An item's bound write (Overlord W1 Task 5): its push copy (`itemPushPayload`, the one item copy), prepared through
@@ -258,21 +293,26 @@ export function itemBoundOf(deps: SenderDeps, item: { readonly title: string; re
   event: Extract<PushDueFacts['event'], 'reach' | 'arm'>): BoundOf {
   return (id): BoundWrite => {
     const prepared = senderFor(deps).prepare(itemPushPayload(id, item.title));
-    return { prepared, due: pushDue({ event, service: prepared.service, source: 'item', blocking: item.neededBy === 'blocking',
-      viewing: false, settled: false, payload: true }) };
+    return { prepared, viewing: false, due: pushDue({ event, service: prepared.service, source: 'item',
+      blocking: item.neededBy === 'blocking', viewing: false, settled: false, superseded: false, payload: true }) };
   };
 }
 
 /** The `settledOf` read every bound send uses: an ask is unsettled while released or declined and not answered, read
- *  through the questions owner; an item while it waits (`OPEN_ITEM_STATES`). A failed read answers null. */
+ *  through the questions owner, and always pushes; an item only while the operator waits on it, `open`, as
+ *  `shared/ledgers.ts#waitingCount` counts it (a ticked item, `checking`, is the coordinator's), at its level now
+ *  (review 2150 F2). A failed read answers null. */
 export function outboxSettledOf(questions: { askSettled(askId: number): boolean | null },
   coord: Pick<CoordStore, 'itemById'> | undefined): SettledOf {
   return (source, sourceId) => {
-    if (source === 'ask') return questions.askSettled(sourceId);
+    if (source === 'ask') {
+      const settled = questions.askSettled(sourceId);
+      return settled === null ? null : { settled, blocking: true };
+    }
     if (coord === undefined) return null;
     try {
       const item = coord.itemById(sourceId);
-      return item === null || !OPEN_ITEM_STATES.includes(item.state);
+      return item === null ? { settled: true, blocking: false } : { settled: item.state !== 'open', blocking: item.neededBy === 'blocking' };
     } catch { return null; }
   };
 }

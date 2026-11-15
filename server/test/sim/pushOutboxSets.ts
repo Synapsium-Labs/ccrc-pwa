@@ -97,11 +97,12 @@ export function asSendVerdictCases(m: PushOutboxModule): Record<string, SuiteCas
   };
 }
 
-/** The oracle: the plan's seven rules, first match, written as a list of [when, answer]. */
+/** The oracle: the plan's seven rules and review 2150 F4's `superseded`, first match, written as a list of [when, answer]. */
 const RULES: readonly [(f: Facts) => boolean, string][] = [
   [(f) => !f.service, 'silent:no-service'],
   [(f) => !f.payload, 'silent:no-payload'],
   [(f) => f.settled, 'silent:settled'],
+  [(f) => f.superseded, 'silent:superseded'],
   [(f) => f.source === 'item' && !f.blocking, 'silent:level'],
   [(f) => f.event === 'held', 'silent:older-build'],
   [(f) => f.viewing && f.event !== 'claim', 'silent:viewing'],
@@ -113,16 +114,17 @@ const B = [false, true] as const;
 function* everyFact(): Generator<Facts> {
   for (const event of ['reach', 'arm', 'claim', 'held'] as const) for (const source of ['ask', 'item', 'none'] as const)
     for (const service of B) for (const blocking of B) for (const viewing of B) for (const settled of B) for (const payload of B)
-      yield { event, source, service, blocking, viewing, settled, payload };
+      for (const superseded of B) yield { event, source, service, blocking, viewing, settled, superseded, payload };
 }
-const DUE: Facts = { event: 'reach', service: true, source: 'item', blocking: true, viewing: false, settled: false, payload: true };
+const DUE: Facts = { event: 'reach', service: true, source: 'item', blocking: true, viewing: false, settled: false, superseded: false,
+  payload: true };
 
 export function pushDueCases(m: PushOutboxModule): Record<string, SuiteCase> {
   return {
-    'total: every one of the 384 fact combinations answers its rule': () => {
+    'total: every one of the 768 fact combinations answers its rule': () => {
       let n = 0;
       for (const f of everyFact()) { n++; expect(word(m.pushDue(f)), JSON.stringify(f)).toBe(expected(f)); }
-      expect(n).toBe(384);
+      expect(n).toBe(768);
     },
     'a blocking item reaching the operator pushes now': () => { expect(m.pushDue(DUE)).toEqual({ due: 'now' }); },
     'no push service is silent no-service, even for a due item': () => {
@@ -147,6 +149,11 @@ export function pushDueCases(m: PushOutboxModule): Record<string, SuiteCase> {
     },
     'no payload is silent no-payload, before settled': () => {
       expect(m.pushDue({ ...DUE, payload: false, settled: true })).toEqual({ due: 'silent', why: 'no-payload' });
+    },
+    'an unbound retry a newer accepted push replaced is silent superseded, after settled and before the level (F4)': () => {
+      expect(m.pushDue({ ...DUE, event: 'claim', source: 'none', superseded: true })).toEqual({ due: 'silent', why: 'superseded' });
+      expect(m.pushDue({ ...DUE, superseded: true, settled: true })).toEqual({ due: 'silent', why: 'settled' });
+      expect(m.pushDue({ ...DUE, superseded: true, blocking: false })).toEqual({ due: 'silent', why: 'superseded' });
     },
   };
 }

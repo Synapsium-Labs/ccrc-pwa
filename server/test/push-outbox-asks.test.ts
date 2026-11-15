@@ -3,7 +3,7 @@
 // make an ask reach the operator: the mint at `released` (`insertAsk`), the lapse (`releaseAsk`) and the parent's
 // release (`declineAsk`). Driven on a real `CoordStore` over a temp coord.db and the real questions owner
 // (`createQuestions` with `questionOutboxOf`), with a recording push double and fake time. Neutral names (lane-a-project-a).
-import { describe, it, expect, afterEach, vi } from 'vitest';
+import { describe, it, expect, afterEach, vi, type Mock } from 'vitest';
 import path from 'node:path';
 import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
@@ -31,20 +31,24 @@ const EV: QuestionPush = {
 interface Rig {
   coord: CoordStore; questions: Questions; seam: PushSeam; ft: FakeTime; outbox: QuestionOutbox;
   deps: { coord: CoordStore; push?: PushSeam['push']; time: FakeTime['ports']; viewers: { isVisible: (id: string) => boolean } };
+  /** The ring's `record`, when the rig was built with a ring (`log`). */
+  record: Mock<(e: unknown) => unknown>;
 }
 
 /** A real store, the questions owner with its outbox (`questionOutboxOf`), and the double every push lands in. */
-function rig(o: { service?: boolean; viewing?: readonly string[]; projects?: readonly string[] } = {}): Rig {
+function rig(o: { service?: boolean; viewing?: readonly string[]; projects?: readonly string[]; log?: boolean } = {}): Rig {
   const coord = new CoordStore(openCoordDb(path.join(mkTmp('ccrc-outbox-asks-'), '.ccrc', 'coord.db')));
   const seam = pushSeam();
   const ft = fakeTime({ wallMs: NOW });
+  const record = vi.fn((e: unknown) => ({ ...(e as object), seq: 1 }));
   const deps = { coord, ...(o.service === false ? {} : { push: seam.push }), time: ft.ports,
-    viewers: { isVisible: (id: string): boolean => (o.viewing ?? []).includes(id) } };
+    viewers: { isVisible: (id: string): boolean => (o.viewing ?? []).includes(id) },
+    ...(o.log === true ? { notifyLog: { epoch: 'epoch-a', record, flush: async (): Promise<void> => undefined } as never } : {}) };
   const projects = new Set(o.projects ?? ['project-a']);
   let questions!: Questions;
   const outbox = questionOutboxOf(deps, () => questions, () => projects);
   questions = createQuestions({ coord }, { heldFor, outbox });
-  return { coord, questions, seam, ft, deps, outbox };
+  return { coord, questions, seam, ft, deps, outbox, record };
 }
 
 /** The lapse sweep with the watcher's push channel: a won lapse's bound row is sent through the outbox
@@ -87,6 +91,7 @@ const boundOf = (o: { tag?: boolean; due?: 'now' | 'silent'; pushId?: string } =
   prepared: { payload: { title: 'Needs an answer', body: 'Proceed?', sessionId: CHILD, ...(o.tag === false ? {} : { tag: `ask-${CHILD}` }) },
     pushId: o.pushId ?? 'a'.repeat(32), service: true },
   due: o.due === 'silent' ? { due: 'silent' as const, why: 'viewing' as const } : { due: 'now' as const },
+  viewing: o.due === 'silent',
 });
 const doorDeps = (r: Rig): ClaimantDoorDeps => ({ coord: r.coord }) as unknown as ClaimantDoorDeps;
 const release = (r: Rig, id: number) => r.questions.release({ kind: 'ask', id, fromId: PARENT }, doorDeps(r));
@@ -258,6 +263,21 @@ describe('the release door', () => {
 });
 
 describe('with no push service', () => {
+  it('a viewed session\'s ask writes no ring record and no feed row, as before the outbox; an unviewed one is recorded '
+    + '(review 2150 F1)', () => {
+    const viewed = rig({ service: false, viewing: [CHILD], log: true });
+    const a = mint(viewed);
+    plant(viewed, a);
+    lapse(viewed, NOW + 5_000);
+    expect(outboxRows(viewed.coord)).toMatchObject([{ sourceId: a, state: 'silent', silentWhy: 'no-service' }]);
+    expect(viewed.record).not.toHaveBeenCalled();
+    const unviewed = rig({ service: false, log: true });
+    const b = mint(unviewed);
+    plant(unviewed, b);
+    lapse(unviewed, NOW + 5_000);
+    expect(unviewed.record).toHaveBeenCalledTimes(1);
+  });
+
   it('a lapse writes the stamp and one silent no-service row with a null payload, and sends nothing', () => {
     const r = rig({ service: false });
     const id = mint(r);

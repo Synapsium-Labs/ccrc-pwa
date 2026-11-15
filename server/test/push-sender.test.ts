@@ -27,7 +27,7 @@ const PAYLOAD: OutboxPayload = { title: 'Waiting on you', body: 'Pick one', sess
 const ACCEPTED: PushSendVerdict = { kind: 'sent', subs: [{ endpointHash: 'h', verdict: 'accepted', status: 201 }] };
 const REFUSED: PushSendVerdict = { kind: 'sent', subs: [{ endpointHash: 'h', verdict: 'refused', status: 429 }] };
 const NO_SUB: PushSendVerdict = { kind: 'no-subscription' };
-const OPEN: SettledOf = () => false;
+const OPEN: SettledOf = () => ({ settled: false, blocking: true });
 
 const store = (): CoordStore => new CoordStore(openCoordDb(path.join(mkTmp('ccrc-sender-'), '.ccrc', 'coord.db')));
 const raw = (s: CoordStore): Record<string, unknown>[] =>
@@ -220,6 +220,28 @@ describe('the sender: a bound row', () => {
     expect(stateOf(r.coord)).toBe('sent');
   });
 
+  it('an older attempt\'s verdict that lands before its deadline, after a re-arm and a new claim, is dropped by claimSeq '
+    + '(review 2150 F13)', async () => {
+    const r = rig();
+    const first = deferred();
+    const second = deferred();
+    const { push } = double(() => first.promise, () => second.promise);
+    const sender = senderFor(deps(r, push));
+    const id = bound(r);
+    const target = { id, source: 'item' as const, sourceId: 1 };
+    sender.sendRow(target, OPEN);
+    tx(r.coord.db, () => armBoundRowInTx(r.coord.db, 'item', 1, { pushId: 'unused', payload: PAYLOAD, at: r.now() }));
+    sender.sendRow(target, OPEN);
+    expect(raw(r.coord)[0]).toMatchObject({ state: 'sending', claimSeq: 2 });
+    first.resolve(REFUSED);                                  // the first attempt's deadline has not passed: it lands
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(raw(r.coord)[0]).toMatchObject({ state: 'sending', claimSeq: 2, verdict: null });
+    second.resolve(ACCEPTED);
+    await sender.idle();
+    expect(raw(r.coord)[0]).toMatchObject({ state: 'sent', verdict: JSON.stringify(ACCEPTED) });
+  });
+
   it('a lost sendRow claim sends nothing', () => {
     const r = rig();
     const { push } = double(ACCEPTED);
@@ -228,6 +250,79 @@ describe('the sender: a bound row', () => {
     expect(r.coord.claimOutboxRow(id, r.now())).toMatchObject({ changed: true });
     sender.sendRow({ id, source: 'item', sourceId: 1 }, OPEN);
     expect(push.notify).not.toHaveBeenCalled();
+  });
+});
+
+describe('the sender: an unbound retry, a stale row and an open transaction (review 2150 F4, F6, F7)', () => {
+  it('a newer accepted push under the same tag supersedes an older retrying one: sealed silent, never sent again', async () => {
+    const r = rig();
+    const { push } = double(REFUSED, ACCEPTED, ACCEPTED);
+    const sender = senderFor(deps(r, push));
+    sender.send({ title: 'Old', body: 'B', tag: 'x' });
+    await sender.idle();
+    sender.send({ title: 'New', body: 'B', tag: 'x' });
+    await sender.idle();
+    expect(raw(r.coord).map((row) => row.state)).toEqual(['retrying', 'sent']);
+    r.ft.advance(30_000);
+    await sender.drain(r.now(), OPEN);
+    expect(raw(r.coord)[0]).toMatchObject({ state: 'silent', silentWhy: 'superseded', payload: null });
+    expect(push.notify).toHaveBeenCalledTimes(2);
+  });
+
+  it('an older retrying push under another tag, or one whose newer row was not taken, is still retried', async () => {
+    const r = rig();
+    const { push } = double(REFUSED, ACCEPTED, NO_SUB, ACCEPTED);
+    const sender = senderFor(deps(r, push));
+    sender.send({ title: 'Old', body: 'B', tag: 'x' });
+    await sender.idle();
+    sender.send({ title: 'Other', body: 'B', tag: 'y' });
+    await sender.idle();
+    sender.send({ title: 'New', body: 'B', tag: 'x' });
+    await sender.idle();
+    expect(raw(r.coord).map((row) => row.state)).toEqual(['retrying', 'sent', 'unsent']);
+    r.ft.advance(30_000);
+    await sender.drain(r.now(), OPEN);
+    expect(raw(r.coord)[0]).toMatchObject({ state: 'sent' });
+    expect(push.notify).toHaveBeenCalledTimes(4);
+  });
+
+  it('a due row past the horizon that the boot pass did not seal is failed by the drain, never sent', async () => {
+    const r = rig();
+    const { push } = double(ACCEPTED);
+    const sender = senderFor(deps(r, push));
+    const stale = bound(r, 1, r.now() - OUTBOX_RETRY_HORIZON_MS - 1);
+    await sender.drain(r.now(), OPEN);
+    expect(stateOf(r.coord, stale)).toBe('failed');
+    expect(push.notify).not.toHaveBeenCalled();
+  });
+
+  it('the boot pass seals each row on its own: one seal that throws leaves the next row sealed', () => {
+    const r = rig();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const a = r.coord.insertUnboundRow({ pushId: 'a'.repeat(32), payload: PAYLOAD, at: r.now() });
+    const b = r.coord.insertUnboundRow({ pushId: 'b'.repeat(32), payload: PAYLOAD, at: r.now() });
+    if (!a.ok || !b.ok) throw new Error('insert');
+    const port = Object.assign(Object.create(r.coord) as CoordStore, {
+      sealAtBoot: (id: number, to: 'unknown' | 'failed', at: number) => {
+        if (id === a.id) throw new Error('disk full');
+        return r.coord.sealAtBoot(id, to, at);
+      },
+    });
+    bootPushOutbox(port, r.ft.ports.clock);
+    expect(stateOf(r.coord, a.id)).toBe('sending');
+    expect(stateOf(r.coord, b.id)).toBe('unknown');
+    expect(warn.mock.calls.flat().join('\n')).toMatch(new RegExp(`did not seal row ${a.id} unknown \\(disk full\\)`));
+  });
+
+  it('an unbound push inside a caller\'s open transaction writes no row (so no rolled-back id is reused) and is still sent', async () => {
+    const r = rig();
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const { push } = double(ACCEPTED);
+    const sender = senderFor(deps(r, push));
+    tx(r.coord.db, () => { sender.send({ title: 'T', body: 'B', tag: 'x' }); });
+    await sender.idle();
+    expect(raw(r.coord)).toHaveLength(0);
+    expect(push.notify).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -276,7 +371,7 @@ describe('the sender: what a caller may lack', () => {
     const fn = (): never => { throw new Error('unused'); };
     const coord = {
       claimOutboxRow: fn, dueOutboxRows: fn, firstBootAt: fn, heldItemsReached: fn, markFirstBoot: fn, markOutboxVerdict: fn,
-      openOutboxRows: fn, purgeOutbox: fn, reachHeldItem: fn, sealAtBoot: fn, silenceOutboxRow: fn,
+      openOutboxRows: fn, purgeOutbox: fn, reachHeldItem: fn, sealAtBoot: fn, silenceOutboxRow: fn, supersededUnbound: fn,
       insertUnboundRow: () => { throw new Error('disk gone'); },
     };
     const { push } = double(ACCEPTED);
@@ -302,6 +397,19 @@ describe('the sender: what a caller may lack', () => {
     await senderFor({ push }).idle();
     expect(raw(r.coord)).toHaveLength(2);
     expect(push.notify).toHaveBeenCalledTimes(5);
+  });
+
+  it('with no push service, a standing held read failure is logged once, not on every drain (review 2150 F10)', async () => {
+    const r = rig();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    bootPushOutbox(r.coord, r.ft.ports.clock);
+    const coord = Object.assign(Object.create(r.coord) as CoordStore, {
+      heldItemsReached: () => ({ ok: false as const, detail: 'operator_items read failed: disk' }),
+    });
+    const sender = senderFor({ push: undefined, coord, time: r.ft.ports });
+    await sender.drain(r.now(), OPEN);
+    await sender.drain(r.now(), OPEN);
+    expect(warn.mock.calls.flat().filter((l) => String(l).includes('operator_items read failed'))).toHaveLength(1);
   });
 
   it('prepare before a masker is set masks with the push service\'s own masker (the shape-only one it is built with)', () => {
@@ -354,11 +462,12 @@ describe('bootPushOutbox and the held drain', () => {
     const { push } = double(ACCEPTED);
     const sender = senderFor(deps(r, push));
     bootPushOutbox(r.coord, r.ft.ports.clock);
-    const id = item(r, { heldUntil: r.now() + 100 });
+    const heldUntil = r.now() + 100;
+    const id = item(r, { heldUntil });
     r.ft.advance(200);
     await sender.drain(r.now(), OPEN);
     const stamp = r.coord.db.prepare('SELECT reachedOperatorAt AS at FROM operator_items WHERE id = ?').get(id) as { at: unknown };
-    expect(stamp.at).toBe(r.now());
+    expect(stamp.at, 'stamped at heldUntil, not at the later drain (review 2150 F3)').toBe(heldUntil);
     expect(raw(r.coord)).toHaveLength(1);
     expect(raw(r.coord)[0]).toMatchObject({ sourceKind: 'item', sourceId: id, state: 'silent' });
     expect(push.notify).not.toHaveBeenCalled();
