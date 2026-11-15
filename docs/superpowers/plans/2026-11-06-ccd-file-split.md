@@ -385,7 +385,7 @@ Exit count: group pin = measured value; total ratchet files unchanged plus 1; `c
 
 **Files:** Modify: `ccd/ccd` (comments only), `server/test/ccd-split-pin.test.ts`, `server/test/citations.test.ts`
 
-- [ ] **Step 1: First commit: the pin.** Add this row, and commit it alone. It passes on the old code, where the diff changes nothing.
+- [x] **Step 1: First commit: the pin.** Add this row, and commit it alone. It passes on the old code, where the diff changes nothing.
 
 ```ts
 it('REAL: a diff that changes only comments in ccd/ccd leaves programDump alone', () => { /* moveBase against HEAD, computed now */ });
@@ -393,14 +393,24 @@ it('REAL: a diff that changes only comments in ccd/ccd leaves programDump alone'
 
 `bash` drops comments from the dump, so a comment edit cannot move it.
 
-- [ ] **Step 2: Second commit: the rewrite.** Rewrite each `ccd:NNNN` and `<file>.<ext>:NN` in `ccd/ccd` to a symbol (`ccd#_ws_least_loaded`), following the header of `citations.test.ts`.
+- [x] **Step 2: Second commit: the rewrite.** Rewrite each `ccd:NNNN` and `<file>.<ext>:NN` in `ccd/ccd` to a symbol (`ccd#_ws_least_loaded`), following the header of `citations.test.ts`.
 
-- [ ] **Step 3: Verify.**
+- [x] **Step 3: Verify.**
 
 Run: `grep -cE 'ccd:[0-9]{3,5}\b|\.(ts|tsx|mjs|sh):[0-9]+\b' ccd/ccd`
 Expected: `0` (150 today). `BASELINE` in `citations.test.ts` drops by the same count in this PR.
 
 Exit count: 0 citation lines in `ccd/ccd`; `programDump` byte-identical.
+
+*Measured 2026-11-15 (D-8048):* 149 of the 150 citation lines in `ccd/ccd` now cite a symbol, 159 of its 161 citations, and `BASELINE` drops by those 159, from 1,242 to 1,083. Every line the rewrite changes is a `#` line, the file's text with those lines left out is unchanged, `bash -n` passes, and `programDump` is byte-identical before and after. Every symbol a new citation names exists. Of the 156 server suites that read ccd's source through `ccdSource()`, two go red on a development Mac with the old `ccd/ccd` too (`ccd-account-auth`, `ccd-inflight`), and four that went red under load pass alone; nothing else is red.
+
+*Deviations found:*
+- One line keeps its two citations: the `prnumber` sentence in `_pr_py`'s embedded python. It is a `#` line inside a heredoc, so it is data in the function's body, not a bash comment, and rewriting it moves `programDump`. It waits for a change that edits `_pr_py` anyway. Step 3's grep therefore answers `1`, not `0`.
+- The S1 yield check: the one open PR on `ccd/ccd` changes two comment lines in `_reg_purge`'s field-count paragraph. Neither holds a citation, so no citation was deferred for it, and `ccd/ccd` merges with that PR's head without a conflict (`git merge-tree`; the head's other conflicts are with `main` itself, the same with or without this change). The three citations lower in `_reg_purge` are rewritten.
+- The line numbers predate the first commit that holds them, so `git log -S` cannot say what they pointed at. Each target was read from the sentence around it: the function it names, or the code it describes.
+- A citation of a line in the same function became plain words ("above", "below", "further down"): a function citing itself by name says nothing.
+- The pin has a second row, a fixture: a bash comment edit leaves the dump alone, and a `#` line of heredoc data moves it. That second case is the `_pr_py` line above.
+- The pin needs `programDump` and `moveBase`, which Task 1 adds, so this work sits on Task 1's branch.
 
 ### Task 4: One library table, and every scanner on it
 
