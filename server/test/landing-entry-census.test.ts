@@ -396,10 +396,34 @@ describe('wave 5i ownership: one writer of mainRedHold, terminal repair inside a
     return e.names.length === 0 || !e.names.every((n) => (e.typeNames ?? []).includes(n));
   });
   const CLOCK_AND_FS = new Set(['Date', 'performance', 'fs', 'require', 'readFileSync', 'writeFileSync', 'readFile', 'writeFile', 'setTimeout', 'setInterval']);
-  /** `Date.parse(text)` is a pure parse of a given string, not a clock read (`landed.ts#landedNoticeModeOf` parses a PR's mergedAt). */
-  const clockAndFs = (p: ParsedFile): string[] => identifierReferences(p.text, p.path, CLOCK_AND_FS)
-    .filter((x) => !(x.name === 'Date' && /\bDate\.parse\(/.test(p.text.split('\n')[x.line - 1] ?? '')))
-    .map((x) => `${x.line} ${x.name}`);
+  /** `Date.parse(text)` is a pure parse of a given string, not a clock read (`landed.ts#landedNoticeModeOf` parses a PR's mergedAt).
+   *  Only the `Date` that is the receiver of `.parse(` is exempt: any other `Date` on the same line (`Date.now`, `new Date`) still counts. */
+  const dateParseReceiverLines = (p: ParsedFile): Map<number, number> => {
+    const sf = ts.createSourceFile(p.path, p.text, ts.ScriptTarget.Latest, true);
+    const out = new Map<number, number>();
+    const visit = (n: ts.Node): void => {
+      if (ts.isIdentifier(n) && n.text === 'Date' && ts.isPropertyAccessExpression(n.parent) && n.parent.expression === n
+        && n.parent.name.text === 'parse' && ts.isCallExpression(n.parent.parent) && n.parent.parent.expression === n.parent) {
+        const line = sf.getLineAndCharacterOfPosition(n.getStart(sf)).line + 1;
+        out.set(line, (out.get(line) ?? 0) + 1);
+      }
+      ts.forEachChild(n, visit);
+    };
+    visit(sf);
+    return out;
+  };
+  const clockAndFs = (p: ParsedFile): string[] => {
+    const exempt = dateParseReceiverLines(p);
+    return identifierReferences(p.text, p.path, CLOCK_AND_FS)
+      .filter((x) => {
+        if (x.name !== 'Date') return true;
+        const left = exempt.get(x.line) ?? 0;
+        if (left === 0) return true;
+        exempt.set(x.line, left - 1);
+        return false;
+      })
+      .map((x) => `${x.line} ${x.name}`);
+  };
   const STORE_NAMES = new Set(['CoordStore', 'db']);
   const storeReaches = (p: ParsedFile): string[] => [
     ...identifierReferences(p.text, p.path, STORE_NAMES).map((x) => `${x.line} ${x.name}`),
@@ -476,6 +500,11 @@ describe('wave 5i ownership: one writer of mainRedHold, terminal repair inside a
     const probe = (t: string): ParsedFile => parseSource(t, 'probe.ts');
     expect(clockAndFs(probe('const t = Date.now();'))).toEqual(['1 Date']);
     expect(clockAndFs(probe('const t = Date.parse(x);'))).toEqual([]);
+    // the Date.parse exemption is the receiver of `.parse(` only: any other clock read on the same line still counts
+    expect(clockAndFs(probe('const age = Date.now() - Date.parse(at);'))).toEqual(['1 Date']);
+    expect(clockAndFs(probe('const s = new Date(x).getTime() + Date.parse(y);'))).toEqual(['1 Date']);
+    expect(clockAndFs(probe('const age = Date.parse(at);'))).toEqual([]);
+    expect(clockAndFs(probe('const age = Date.now();'))).toEqual(['1 Date']);
     expect(clockAndFs(probe('const t = new Date(1);'))).toEqual(['1 Date']);
     expect(probe("import { x } from 'node:crypto';").imports.map((x) => x.specifier).filter(isNodeBuiltin)).toEqual(['node:crypto']);
     expect(storeReaches(probe("import { CoordStore } from './store.js';")).length).toBeGreaterThan(0);
