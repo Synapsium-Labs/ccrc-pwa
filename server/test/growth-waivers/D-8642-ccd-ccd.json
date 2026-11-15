@@ -1,8 +1,8 @@
 {
   "file": "ccd/ccd",
-  "maxDelta": 159,
+  "maxDelta": 167,
   "d": "D-8642",
-  "reason": "native Docs reader W5b: docs-log, one doc's history (rich-docs spec G4): the bash front with its fixed-index argument reader, the helper's log section (parse_log, log_entries, guard_log, verb_log and the entry arm in the verb table), the runner's fixed log row and its shape check, the four log caps' parity literals, and two caps lines (docs-sections-v2 for G1's six sections, docs-log and docs-log-v1 for G4); measured +159 net code lines against the merge-base (21829 to 21988), the close fix wave's +5 being parse_log's record-without-names arm and the docstring sentences; kept in ccd/ccd because the Docs helper is embedded for _pr_py's reason (a sibling file would be a second deployment step)",
+  "reason": "native Docs reader W5b: docs-log, one doc's history (rich-docs spec G4): the bash front with its fixed-index argument reader, the helper's log section (parse_log, log_entries, guard_log, verb_log and the entry arm in the verb table), the runner's fixed log row and its shape check, the four log caps' parity literals, and two caps lines (docs-sections-v2 for G1's six sections, docs-log and docs-log-v1 for G4); measured +167 net code lines against the merge-base (21833 to 22000 after fix round 1's merge of main; +159 at the first close, the close fix wave's +5 being parse_log's record-without-names arm and the docstring sentences, and fix round 1's +8 being parse_log's count of skipped parentless records and verb_log's use of it); kept in ccd/ccd because the Docs helper is embedded for _pr_py's reason (a sibling file would be a second deployment step)",
   "added": "2026-11-15",
   "createdAt": "2026-11-15"
 }
