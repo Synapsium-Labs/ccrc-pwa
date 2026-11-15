@@ -2087,7 +2087,7 @@ There were three lenses on Opus at high effort; each self-reported `claude-opus-
   - Effect: a cut leaving `?token=*` failed `redactDocsText(v) === v`, so the doc's history answered 502 `malformed-answer` permanently.
   - Lenses 1 and 3 found it independently. The refuters confirmed it 3 of 3, rating it Minor 2 of 3 and Important 1 of 3; it was fixed before merge by ruling.
   - Fix: the server check re-applies the transform ccd applies, redact and then cut to the cap (`server/src/docs/policy.ts#redactedText`).
-  - Re-review fuzz: across 400k strings, the only texts that newly pass end in `token=*` or `token=**` at the cap, and no text ccd emits is refused.
+  - Strength: rows W5B-T9-M2 (drop the redact comparison) and W5B-T9-M6 (the old fixed-point form) both go red, so the check is pinned from both sides.
   - Cases: in `docs-policy` and end to end in `ccd-docs-log` (`'a token mask cut at the cap still passes the server's shape check'`). Row W5B-T9-M6.
 
 **Minor findings fixed in the same wave:**
@@ -2108,7 +2108,7 @@ There were three lenses on Opus at high effort; each self-reported `claude-opus-
 - **Shallow repositories.** In a shallow repository, `docs-log` lists no commit without a parent: git prints the shallow boundary as a root, so it would look like a change to every doc, with `parent: null`.
   - This only ADDS the shallow case. The rich-docs spec's G4 and refinement (e) say nothing about a shallow boundary's parent.
   - It keeps L0's rule that `parent: null` means only a root commit, and (e)'s rule that a short shallow walk is `truncated`.
-  - G4's amended row now says so in one sentence.
+  - G4's amended row says so, beside Task 12's dictated sentence and fix round 1's skip rule (below).
   - Case: `'a shallow repository never lists its boundary commit, and every listed parent is a full sha'`, plus case (13)'s expectation `[c3]`. Row W5B-T6-M15.
   - Cost: a shallow clone deep enough to reach a doc's creation omits that commit and says `truncated`.
 - **The server's redaction check.** It is `cut(redact(v)) === v`, not refinement (f)'s `redactDocsText(v) === v`.
@@ -2139,6 +2139,8 @@ There were three lenses on Opus at high effort; each self-reported `claude-opus-
 | Deviations defined from the issued block | 2 (8642, 8643) | 2 (8642, 8643); reserve 8644, 8645, 8646 unused |
 | `GROWTH_CHECK=1 growth-check` | green (95) | green (95), with the waiver |
 
+How each figure was taken: the code lines by `GROWTH_CHECK=1 growth-check`, which CI runs armed; `ROUTES.length` by `auth-gate`. The `ccd caps | wc -l` figure is one local run of ccd on a fixture HOME seeded with the test roster, and no committed test repeats it; the review reproduced its +3 by counting `cmd_caps`' `echo` lines (68 to 71). Fix round 1's end figures are in its section below.
+
 ### Suites (end state)
 
 | Package | Run | Result |
@@ -2148,6 +2150,8 @@ There were three lenses on Opus at high effort; each self-reported `claude-opus-
 | server | `typecheck-tests` alone; `GROWTH_CHECK=1 growth-check` alone; server tsc | green (12); green (95) with the waiver; rc 0 |
 | pwa | whole suite in pieces; pwa tsc | 525 files, 15621 tests passed, 1 failed; tsc rc 0. The one red is `ledger-links.test.ts`, this branch's: its example of a path outside the sections was `docs/vision/a.md`. Fixed in `39289ee19` (26/26) |
 | pwa browser | `docs-headers`, `docs-compact-head`, `docs-export`, `reader-frame`, each alone | 13, 109, 18, 24 passed |
+
+How these were taken: local runs on the fleet box through `ccrc test`, the agent and pwa suites whole and the server suite in directory slices of `vitest run --maxWorkers=2`. The committed tests reproduce each file's count, not these totals; the pull request's CI is the arbiter.
 
 **Reds that passed when re-run alone** (load flakes, at load 9-12):
 - `approvals-routes`
@@ -2267,6 +2271,51 @@ These were measured against the plan's predictions. A row added since its predic
   - `ccrc-install-landing` (1), `ccrc-install-codex` (2) and `ccrc-containment` (1): a host browser-MCP process WARN, and one curl exit code.
 
   The PR's CI is the arbiter.
+
+### Fix round 1 (review run 2153, at `b4a08dcf8`)
+
+The coordinator returned the run for one round: 2 Important findings confirmed, 3 rulings, 5 advisory notes. One commit per item:
+
+| Item | Commit | What changed |
+|---|---|---|
+| Step 0, the measured conflict | `6010877ad` | Merged `origin/main` `866b2bd91` once, on the coordinator's word, after #2842 landed. The conflicts were only the shared count lines in `server/src/auth/gate.ts` and `server/test/auth-gate.test.ts`; both sides' routes are kept. `auth-gate` measures `ROUTES.length` 242, of which 239 are HTTP routes and 93 of those exempt, and gate.ts's docstring says 239. |
+| F1, the plan | `b043fd36b` | The Results commit had pasted a second copy of the W5b-1 half (lines 1386-2675 repeated 86-1375) and cut Task 13's Step 5 off mid-sentence. The copy is gone: against base, the plan differs only by Results and the one reworded reserve line, and each heading occurs once. Results and the PR body cite no plan line by number. |
+| F2, CodeQL alert 296 | `52b3d7de9` | `docs-budget.test.ts`'s extra-key case spells its whole input instead of a first-occurrence `.replace`. The alert was not dismissed by hand. |
+| F3, a skip behind a full list | `49ce3c6df`; its review's fixes `4a559f61f` (the shallow arm, row W5B-T6-M24), `1d0a38e37`, `1261a2a00`, `0aea9918b` | Ruling: `truncated` is also true whenever a shallow walk read past a parentless record that touched the doc. `parse_log` counts those skips, and `verb_log` ORs the count into `truncated`. L0's `DocsLogOk` comment says so. L1 checks `truncated` only as a boolean, and no pre-existing spec sentence ties it to a short list (base G4 and M9.7 name cases that make it true), so no number is used. Case `'a shallow walk that reads past a parentless record touching the doc is truncated, even with a full list'`, row W5B-T6-M23. |
+| F4, G4's shallow text | `911b05dbb` | G4 again carries Task 12 Step 3's sentence, "A shallow repository's walk that ends short is `truncated` too.", beside the boundary rule and F3's rule. |
+| F6, nameless commits at both ends | `10637a494` | End-to-end cases for a nameless commit at the newest position and a nameless root as the last record. Row W5B-T6-M17 restated below. |
+| F7, the waiver's delta | `d07117d56` | Refinement (a)'s entry under Deviations found and the waiver file say the measured delta, +167 (below), not "about 140". |
+| F8, how figures were taken | this commit | The BASE and end figures and the suites now say how each was taken. The 400k fuzz is dropped: it was a reviewer's unsaved script, so nothing committed reproduces it. |
+
+Accepted with no change: F5 (the redaction check `cut(redact(v)) === v` is a correction toward L0, named without a number and pinned by W5B-T9-M6), F9 and F10 (recorded in the ledger), and the brief's three named departures and six files outside the plan's list.
+
+**End figures after the round** (at this commit; merge base `866b2bd91`):
+
+| Figure | Value | How taken |
+|---|---|---|
+| `ccd/ccd` code lines | 21833 to 22000, +167 (waiver `maxDelta` 167; +159 at the first close, the round's +8 being the skip count) | `GROWTH_CHECK=1 growth-check`, 95 passed |
+| `ccd/ccrc-doctor-checks` code lines | +11 | the same run |
+| `ROUTES.length`; HTTP routes; exempt-HTTP | 242; 239; 93 | `auth-gate` |
+
+**Suites in the round**, each in the foreground through `ccrc test` at this round's tip:
+- `ccd-docs-log` 37, `ccd-docs-helper-redactor` 61, `ccd-docs-show` 86, `ccd-docs-tree` 191 and `ccd-docs-index` 259, all passed. `ccd-docs-fetch`: 27 passed, 4 failed, the same four `ref-locked` cases under this box's git 2.53 that CI passed at `b4a08dcf8`.
+- `auth-gate`, `box-token-census`, `id-argv-census`, `docs-budget`, `docs-shared`, `docs-policy`, `docs-source-w5b`, `docs-routes` and `docs-parity`: 1574 passed. `single-definition`: 33 files, 1423 passed.
+- `tsc`: server, agent and pwa, rc 0.
+- `typecheck-tests` alone: 12 passed on the second try. The first try was red in its two coverage cases, because the test slice's 6G memory cap killed the tests-inclusive `tsc` it runs (exit 137). That `tsc`, run alone, is rc 0.
+- After `git fetch origin main`: `deviation-refs`, `dtbd`, `citations`, `anchors` and `topology-clean`, 106 passed.
+
+**Mutation rows re-run**: 29 rows, sequentially at `d07117d56`, each restored from a sha256-checked copy with the tree clean after it. They are every row on `ccd/ccd` (the merge changed that file), the T10 rows, W5B-T2-M1 (the round touched `shared/docs.ts`) and the new W5B-T6-M23 and M24. All 29 went red.
+
+Restated against the first close:
+- **W5B-T6-M3** 4 (was 3), **M4** 31 (was 27) and **M8** 4 (was 2): the round's new cases add to each.
+- **W5B-T6-M9** 5 (was 6). With the skip term in place, `truncated = False or skipped > 0` still marks the two shallow cases whose boundary holds the doc, and the new shallow-arm case goes red.
+- **W5B-T6-M15** 3 (was 2): the skip case's `orphan` is then listed.
+- **W5B-T6-M17** 2 (was 1): the newest-position nameless case. The nameless-root case cannot go red under it, because the parser returns at the buffer's end before the newline check.
+
+```json
+{"id": "W5B-T6-M23", "spec": "G4 (fix round 1, F3)", "pkg": "server", "file": "../ccd/ccd", "old": " or skipped > 0", "new": "", "tests": ["test/ccd-docs-log.test.ts"], "red": "1 failed: a shallow walk that reads past a parentless record touching the doc is truncated, even with a full list"}
+{"id": "W5B-T6-M24", "spec": "G4 (fix round 1, F3 review)", "pkg": "server", "file": "../ccd/ccd", "old": "(cut or repo.shallow)", "new": "(cut)", "tests": ["test/ccd-docs-log.test.ts"], "red": "1 failed: a shallow walk that ends short is truncated when its boundary does not hold the doc"}
+```
 
 ## Deviations found
 
