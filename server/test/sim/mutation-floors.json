@@ -64,5 +64,8 @@
   "server/src/continuity/anchor.ts#anchorAnswer": 1,
   "server/src/coord/portfolio.ts#portfolioOrder": 1,
   "server/src/coord/portfolio.ts#itemWaitMs": 1,
-  "server/src/coord/portfolio.ts#portfolioFor": 1
+  "server/src/coord/portfolio.ts#portfolioFor": 1,
+  "shared/poolrule.ts#poolRule": 1,
+  "shared/poolset.ts#poolSetSpelling": 1,
+  "shared/poolset.ts#parsePoolSet": 1
 }
