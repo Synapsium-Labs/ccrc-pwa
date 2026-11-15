@@ -683,12 +683,12 @@ export function registerContinuityRoutes(app: FastifyInstance, deps: ContinuityR
 
   /**
    * `POST /api/sessions/:id/probe { byId, byUuid, roundId, answers: [{ id, answer }] }`: answer every question of one open
-   * round of the caller's, in one call. Each answer is graded closed-form against the masked question (`gradeAnswers`; a
-   * question left out fails), the book state is `open` after a card or notes read since the round was asked and `unmeasured`
+   * round of the caller's live generation, in one call. Each answer is graded closed-form (`gradeAnswers`: against the
+   * masked question when it carries a placeholder, the stored one otherwise; a question left out fails), the book state is `open` after a card or notes read since the round was asked and `unmeasured`
    * otherwise (`bookOf`), and the round's verdict is `roundVerdict`'s. `200 { ok, roundId, verdict, grades: [{ id, grade }],
-   * book }`; what a question expected is never answered. `probe-none-open` 409 when no round of the caller's carries the id
-   * (another session's round is invisible), `probe-closed` 409 when it was answered already, `bad-request` 400 for an answer
-   * id the round does not ask, a repeated id, or an answer over `PROBE_ANSWER_MAX_CHARS`. The answer is graded and stored masked.
+   * book }`; what a question expected is never answered. `probe-none-open` 409 when no round of the caller's live generation
+   * carries the id (another session's round, and one left open by an earlier generation, are invisible, as on the GET), `probe-closed` 409 when it was answered already, `bad-request` 400 for an answer
+   * id the round does not ask, a repeated id, or an answer over `PROBE_ANSWER_MAX_CHARS`. The answer is stored masked.
    */
   app.post('/api/sessions/:id/probe', {
     onRequest: async (req: FastifyRequest, reply: FastifyReply) => {
@@ -724,8 +724,8 @@ export function registerContinuityRoutes(app: FastifyInstance, deps: ContinuityR
     const asked = new Set(round.rows.map((r) => r.qid));
     const stray = [...answers.keys()].filter((q) => !asked.has(q));
     if (stray.length > 0) return refuseRoute(reply, 'bad-request', { detail: `round ${roundId} asks no ${stray.join(', ')}` });
-    // The answer is masked as the question is, so one copied from a masked choice and one given whole from memory both match.
-    const graded = gradeAnswers(round.rows.map((r) => maskedQuestion(r, mask)), new Map([...answers].map(([q, a]) => [q, mask(a)])));
+    // An answer copied from a masked choice is graded masked, one given whole from memory against the stored question.
+    const graded = gradeAnswers(round.rows, answers, mask);
     const last = coord.lastContinuityRead(id);
     const lastRead: LastRead = last.ok ? { kind: 'read', at: last.at } : { kind: 'unmeasured' };
     const book = bookOf(lastRead, first.askedAt);

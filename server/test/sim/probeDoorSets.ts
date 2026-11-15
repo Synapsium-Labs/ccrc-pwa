@@ -43,9 +43,9 @@ export function maskedQuestionCases(m: ProbeDoorModule): Record<string, SuiteCas
       });
     },
     'an answer copied from a masked choice grades against the masked expected answer': () => {
-      const q = m.maskedQuestion(stored(), mask);
+      const q = m.maskedQuestion(stored(), SEAL);
       const a = q.choices![0]!;
-      const graded = m.gradeAnswers([q], new Map([['p1', a]]));
+      const graded = m.gradeAnswers([stored()], new Map([['p1', a]]), SEAL);
       expect(graded).toEqual([{ qid: 'p1', answer: a, grade: 'pass' }]);
       expect(q.choices).toContain(q.expected);
     },
@@ -58,53 +58,78 @@ export function maskedQuestionCases(m: ProbeDoorModule): Record<string, SuiteCas
 
 const q = (id: string, choices: readonly string[] | null, expected: string): Question => ({ id, cls: 'fact', text: `question ${id}`, choices, expected });
 
+/** A stored question (what the door grades from), and the two maskers the cases use: none, and one that masks a `SECRET…`
+ *  word with the real placeholder. */
+const sq = (qid: string, choices: readonly string[] | null, expected: string, cls: Question['cls'] = 'fact') =>
+  ({ qid, cls, question: `question ${qid}`, choices, expected });
+const SAME = (t: string): string => t;
+const SEAL = (t: string): string => t.replace(/SECRET\w*/g, SECRET_MASK);
+
 export function gradeAnswersCases(m: ProbeDoorModule): Record<string, SuiteCase> {
-  const qs = [q('p1', ['41', '42', '43'], '41'), q('p2', ['x', 'y', 'z'], 'y'), q('p3', null, 'none')];
+  const qs = [sq('p1', ['41', '42', '43'], '41'), sq('p2', ['x', 'y', 'z'], 'y'), sq('p3', null, 'none')];
   return {
     'a missing answer fails; the answer is null, never an empty string': () => {
-      expect(m.gradeAnswers(qs, new Map())).toEqual([
+      expect(m.gradeAnswers(qs, new Map(), SAME)).toEqual([
         { qid: 'p1', answer: null, grade: 'fail' }, { qid: 'p2', answer: null, grade: 'fail' }, { qid: 'p3', answer: null, grade: 'fail' },
       ]);
     },
     'each answer is graded by its own question id, in the question order': () => {
-      const got = m.gradeAnswers(qs, new Map([['p3', 'NONE'], ['p2', 'x'], ['p1', ' 41 ']]));
+      const got = m.gradeAnswers(qs, new Map([['p3', 'NONE'], ['p2', 'x'], ['p1', ' 41 ']]), SAME);
       expect(got).toEqual([
         { qid: 'p1', answer: ' 41 ', grade: 'pass' }, { qid: 'p2', answer: 'x', grade: 'fail' }, { qid: 'p3', answer: 'NONE', grade: 'pass' },
       ]);
     },
     'a wrong answer fails, and an answer for an unknown id is not graded': () => {
-      const got = m.gradeAnswers([qs[0]!], new Map([['p1', '42'], ['p9', '41']]));
+      const got = m.gradeAnswers([qs[0]!], new Map([['p1', '42'], ['p9', '41']]), SAME);
       expect(got).toEqual([{ qid: 'p1', answer: '42', grade: 'fail' }]);
     },
     'choices that collide once masked, or fold equal, grade unmeasured whatever the answer, a missing one too (review 2063 F1)': () => {
-      const twins = q('p5', [`rotate ${SECRET_MASK}`, `rotate ${SECRET_MASK}`, 'run'], `rotate ${SECRET_MASK}`);
-      for (const a of [`rotate ${SECRET_MASK}`, 'run', 'other']) expect(m.gradeAnswers([twins], new Map([['p5', a]]))[0]!.grade).toBe('unmeasured');
-      expect(m.gradeAnswers([twins], new Map())[0]).toEqual({ qid: 'p5', answer: null, grade: 'unmeasured' });
-      const folded = q('p6', ['Run', 'run ', 'stop'], 'stop');
-      expect(m.gradeAnswers([folded], new Map([['p6', 'stop']]))[0]!.grade).toBe('unmeasured');
+      const twins = sq('p5', ['rotate SECRET_A', 'rotate SECRET_B', 'run'], 'rotate SECRET_A');
+      for (const a of [`rotate ${SECRET_MASK}`, 'rotate SECRET_A', 'run', 'other']) {
+        expect(m.gradeAnswers([twins], new Map([['p5', a]]), SEAL)[0]!.grade, a).toBe('unmeasured');
+      }
+      expect(m.gradeAnswers([twins], new Map(), SEAL)[0]).toEqual({ qid: 'p5', answer: null, grade: 'unmeasured' });
+      const folded = sq('p6', ['Run', 'run ', 'stop'], 'stop');
+      expect(m.gradeAnswers([folded], new Map([['p6', 'stop']]), SAME)[0]!.grade).toBe('unmeasured');
     },
     'a masked expected answer that is none of the masked choices grades unmeasured (review 2063 F1)': () => {
-      const lost = q('p7', ['a', 'b', 'c'], 'd');
-      expect(m.gradeAnswers([lost], new Map([['p7', 'd']]))[0]!.grade).toBe('unmeasured');
-      expect(m.gradableAsServed(lost)).toBe(false);
+      const lost = sq('p7', ['a', 'b', 'c'], 'd');
+      expect(m.gradeAnswers([lost], new Map([['p7', 'd']]), SAME)[0]!.grade).toBe('unmeasured');
+      expect(m.gradableAsServed(q('p7', ['a', 'b', 'c'], 'd'))).toBe(false);
       expect(m.gradableAsServed(q('p8', ['a', 'b'], 'B '))).toBe(true);
       expect(m.gradableAsServed(q('p9', null, 'none'))).toBe(true);
     },
     'an answer with a mask placeholder that matches no choice grades unmeasured; one that matches a choice is graded (review 2063 F6)': () => {
-      const qq = q('p1', ['rotate key-1', 'b', 'c'], 'rotate key-1');
-      expect(m.gradeAnswers([qq], new Map([['p1', `rotate ${SECRET_MASK}`]]))[0]!.grade).toBe('unmeasured');
-      expect(m.gradeAnswers([qq], new Map([['p1', `rotate ${SECRET_MASK_TOO_LARGE}`]]))[0]!.grade).toBe('unmeasured');
-      const served = q('p2', [`rotate ${SECRET_MASK}`, 'b', 'c'], `rotate ${SECRET_MASK}`);
-      expect(m.gradeAnswers([served], new Map([['p2', ` ROTATE ${SECRET_MASK} `]]))[0]!.grade).toBe('pass');
-      expect(m.gradeAnswers([served], new Map([['p2', 'b']]))[0]!.grade).toBe('fail');
-      const byId = q('p3', null, `x ${SECRET_MASK}`);
-      expect(m.gradeAnswers([byId], new Map([['p3', `x ${SECRET_MASK}`]]))[0]!.grade).toBe('pass');
-      expect(m.gradeAnswers([byId], new Map([['p3', `y ${SECRET_MASK}`]]))[0]!.grade).toBe('unmeasured');
+      const qq = sq('p1', ['rotate key-1', 'b', 'c'], 'rotate key-1');
+      expect(m.gradeAnswers([qq], new Map([['p1', `rotate ${SECRET_MASK}`]]), SAME)[0]!.grade).toBe('unmeasured');
+      expect(m.gradeAnswers([qq], new Map([['p1', `rotate ${SECRET_MASK_TOO_LARGE}`]]), SAME)[0]!.grade).toBe('unmeasured');
+      const served = sq('p2', ['rotate SECRET_A', 'b', 'c'], 'rotate SECRET_A');
+      expect(m.gradeAnswers([served], new Map([['p2', ` ROTATE ${SECRET_MASK} `]]), SEAL)[0]!.grade).toBe('pass');
+      expect(m.gradeAnswers([served], new Map([['p2', 'b']]), SEAL)[0]!.grade).toBe('fail');
+    },
+    'a question with no choices masks nothing away: an answer with a placeholder is graded, and fails unless it is the expected one (review 2068 F2)': () => {
+      const byId = sq('p3', null, 'x SECRET_A');
+      expect(m.gradeAnswers([byId], new Map([['p3', `x ${SECRET_MASK}`]]), SEAL)[0]!.grade).toBe('pass');
+      expect(m.gradeAnswers([byId], new Map([['p3', `y ${SECRET_MASK}`]]), SEAL)[0]!.grade).toBe('fail');
+      const abstain = sq('p4', null, 'none', 'abstention');
+      for (const a of [`${SECRET_MASK}`, 'SECRET_Z', `rule ${SECRET_MASK_TOO_LARGE}`]) {
+        expect(m.gradeAnswers([abstain], new Map([['p4', a]]), SEAL)[0], a).toEqual({ qid: 'p4', answer: SEAL(a), grade: 'fail' });
+      }
+    },
+    'an answer with no placeholder is graded as stored: a wrong secret inside a masked span fails, the right one passes (review 2068 F6)': () => {
+      const qq = sq('p1', ['rotate SECRET_A then deploy', 'run', 'stop'], 'rotate SECRET_A then deploy');
+      expect(m.gradeAnswers([qq], new Map([['p1', 'rotate SECRET_B then deploy']]), SEAL)[0])
+        .toEqual({ qid: 'p1', answer: `rotate ${SECRET_MASK} then deploy`, grade: 'fail' });
+      expect(m.gradeAnswers([qq], new Map([['p1', ' Rotate SECRET_A then deploy ']]), SEAL)[0]!.grade).toBe('pass');
+      // The copy of the served choice carries the placeholder: graded masked, it passes.
+      expect(m.gradeAnswers([qq], new Map([['p1', `rotate ${SECRET_MASK} then deploy`]]), SEAL)[0]!.grade).toBe('pass');
+      // Graded as stored, a wrong answer is still a choice-or-fail: a decoy fails, and the answer is recorded masked.
+      expect(m.gradeAnswers([qq], new Map([['p1', 'run']]), SEAL)[0]).toEqual({ qid: 'p1', answer: 'run', grade: 'fail' });
     },
     'an empty answer is an answer: it is given, and it fails': () => {
-      expect(m.gradeAnswers([qs[0]!], new Map([['p1', '']]))).toEqual([{ qid: 'p1', answer: '', grade: 'fail' }]);
-      const blank = q('p4', ['', 'x', 'y'], '');
-      expect(m.gradeAnswers([blank], new Map([['p4', '']]))).toEqual([{ qid: 'p4', answer: '', grade: 'pass' }]);
+      expect(m.gradeAnswers([qs[0]!], new Map([['p1', '']]), SAME)).toEqual([{ qid: 'p1', answer: '', grade: 'fail' }]);
+      const blank = sq('p4', ['', 'x', 'y'], '');
+      expect(m.gradeAnswers([blank], new Map([['p4', '']]), SAME)).toEqual([{ qid: 'p4', answer: '', grade: 'pass' }]);
     },
   };
 }
@@ -665,19 +690,23 @@ const GRADE_ANSWERS_SET: MutantSet<ProbeDoorModule> = {
   modulePath: DOOR,
   mutants: [
     { id: 'A1 a missing answer passes', old: "a === undefined ? 'fail'", new: "a === undefined ? 'pass'" },
-    { id: 'A2 every given answer passes', old: "'unmeasured' : gradeProbe(q, a)", new: "'unmeasured' : 'pass'" },
-    { id: 'A3 a missing answer as an empty string', old: 'answer: a ?? null', new: "answer: a ?? ''" },
+    { id: 'A2 every given answer passes', old: "'unmeasured' : gradeProbe(q, mask(a))", new: "'unmeasured' : 'pass'" },
+    { id: 'A3 a missing answer as an empty string', old: 'answer: a === undefined ? null : mask(a)', new: "answer: a === undefined ? '' : mask(a)" },
     { id: 'A4 an empty answer taken for missing', old: 'a === undefined ?', new: "a === undefined || a === '' ?" },
-    { id: 'A5 the answer read by the wrong id', old: 'answers.get(q.id)', new: 'answers.get(q.cls)' },
+    { id: 'A5 the answer read by the wrong id', old: 'answers.get(row.qid)', new: 'answers.get(row.cls)' },
     { id: 'A6 a question that cannot be graded is graded', old: "!gradableAsServed(q) ? 'unmeasured' : ", new: '' },
-    { id: 'A7 an answer masked away is graded', old: "maskedAway(q, a) ? 'unmeasured' : ", new: '' },
+    { id: 'A7 an answer masked away is graded', old: "maskedAway(q, mask(a)) ? 'unmeasured' : ", new: '' },
     { id: 'A8 colliding choices accepted', old: 'new Set(folded).size === folded.length && ', new: '' },
     { id: 'A9 an expected answer outside the choices accepted', old: ' && folded.filter((c) => c === fold(q.expected)).length === 1', new: '' },
     { id: 'A10 choices compared unfolded', old: 'q.choices.map(fold)', new: 'q.choices' },
     { id: 'A11 the too-large placeholder not read', old: ' || answer.includes(SECRET_MASK_TOO_LARGE)', new: '' },
-    { id: 'A12 a placeholder answer that matches a choice masked away', old: '\n  && !(q.choices ?? [q.expected]).some((c) => fold(c) === fold(answer))', new: '' },
-    { id: 'A13 an id answer with a placeholder always masked away', old: '(q.choices ?? [q.expected])', new: '(q.choices ?? [])' },
+    { id: 'A12 a placeholder answer that matches a choice masked away', old: ' && !q.choices.some((c) => fold(c) === fold(answer))', new: '' },
+    { id: 'A13 an answer to a question with no choices masked away (review 2068 F2)', old: 'q.choices !== null && hasPlaceholder(answer)', new: 'hasPlaceholder(answer)' },
     { id: 'A14 a placeholder answer matched unfolded', old: '.some((c) => fold(c) === fold(answer))', new: '.some((c) => c === answer)' },
+    { id: 'A15 an answer with no placeholder graded masked (review 2068 F6)', old: '!hasPlaceholder(a) ? gradeProbe(rawQuestion(row), a)', new: '!hasPlaceholder(a) ? gradeProbe(q, mask(a))' },
+    { id: 'A16 a placeholder answer graded as stored', old: ": maskedAway(q, mask(a)) ? 'unmeasured' : gradeProbe(q, mask(a))", new: ": maskedAway(q, mask(a)) ? 'unmeasured' : gradeProbe(rawQuestion(row), a)" },
+    { id: 'A17 the answer recorded unmasked', old: 'answer: a === undefined ? null : mask(a)', new: 'answer: a ?? null' },
+    { id: 'A18 the stored question read without its choices', old: 'text: q.question, choices: q.choices,', new: 'text: q.question, choices: null,' },
   ],
   suite: gradeAnswersCases,
 };

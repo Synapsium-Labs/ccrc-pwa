@@ -25,7 +25,7 @@ import { HOLD_OFF_MS } from '../../shared/continuity.js';
 import { START_RETRY_MS } from '../src/continuity/generationStart.js';
 import { parsedFile } from './scan/symbols.js';
 import { snapshotFactsJson } from '../src/continuity/card.js';
-import { gradeAnswers, maskedQuestion } from '../src/continuity/probeDoor.js';
+import { gradeAnswers } from '../src/continuity/probeDoor.js';
 import type { CardFacts } from '../../shared/continuity-card.js';
 import type { TurnMarkRead } from '../src/coord/stall.js';
 import { fakeTime, FAKE_T0, type FakeTime } from './fakeTime.js';
@@ -1074,7 +1074,7 @@ describe('the probes (the probes piece, PR B, Tasks 5 and 6)', () => {
     if (!open.ok) throw new Error(open.detail);
     const run = open.rows.find((r) => r.question.includes('Which run'));
     expect(run).toBeDefined();
-    const graded = gradeAnswers([maskedQuestion(run!, (t) => t)], new Map([[run!.qid, '6']]));
+    const graded = gradeAnswers([run!], new Map([[run!.qid, '6']]), (t) => t);
     expect(graded[0]!.grade).toBe('pass');
   });
 

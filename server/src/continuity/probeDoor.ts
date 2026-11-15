@@ -8,6 +8,11 @@
 // masker, before it serves or grades: the session sees the masked choice, and an answer copied from it grades against the
 // masked expected answer, so it matches, and no secret goes out.
 //
+// RAW WHEN NOTHING WAS COPIED (review 2068, F6). An answer that carries no mask placeholder was not copied from a masked
+// text, so it is graded against the question as stored, unmasked: a wrong answer that differs from a choice only inside a
+// masked secret then fails, where masked it would read as that choice. An answer that carries a placeholder is graded
+// masked, as served, so a copied masked choice still passes.
+//
 // GRADABLE AS SERVED (review 2063, F1 and F6). Masking runs per text, so two choices that differ only inside a secret
 // collapse to one served text, and the masker can change between the GET that served a round and the POST that answers it (a
 // restart forgets a box token until its re-key). Neither is the session's: a question whose masked choices are not
@@ -54,20 +59,31 @@ export function gradableAsServed(q: ProbeQuestion): boolean {
   return new Set(folded).size === folded.length && folded.filter((c) => c === fold(q.expected)).length === 1;
 }
 
-/** The answer carries a mask placeholder and is none of the served choices (nor the expected id): it was copied from a text
- *  the masker has since changed, so it proves nothing either way. */
-const maskedAway = (q: ProbeQuestion, answer: string): boolean =>
-  (answer.includes(SECRET_MASK) || answer.includes(SECRET_MASK_TOO_LARGE))
-  && !(q.choices ?? [q.expected]).some((c) => fold(c) === fold(answer));
+/** The answer carries a mask placeholder: it was copied from a masked text. */
+const hasPlaceholder = (answer: string): boolean => answer.includes(SECRET_MASK) || answer.includes(SECRET_MASK_TOO_LARGE);
 
-/** Every question of a round graded against the answers by question id. A question the door cannot grade as served, or an
- *  answer masked away, is `unmeasured`; otherwise a question with no answer fails: closed-form, an answer that is not given
- *  is not the expected one. */
-export function gradeAnswers(questions: readonly ProbeQuestion[], answers: ReadonlyMap<string, string>): readonly GradedAnswer[] {
-  return questions.map((q) => {
-    const a = answers.get(q.id);
-    const grade: ProbeGrade = !gradableAsServed(q) ? 'unmeasured' : a === undefined ? 'fail' : maskedAway(q, a) ? 'unmeasured' : gradeProbe(q, a);
-    return { qid: q.id, answer: a ?? null, grade };
+/** The answer carries a mask placeholder and is none of the served choices: it was copied from a text the masker has since
+ *  changed, so it proves nothing either way. Only a question with choices can be masked away (review 2068 F2): an answer to an
+ *  id or `none` question copies no choice, so one that carries a secret's shape is graded, and fails unless it is the
+ *  expected one. */
+const maskedAway = (q: ProbeQuestion, answer: string): boolean =>
+  q.choices !== null && hasPlaceholder(answer) && !q.choices.some((c) => fold(c) === fold(answer));
+
+/** The question as stored, unmasked: what an answer with no placeholder is graded against (review 2068 F6). */
+const rawQuestion = (q: StoredQuestion): ProbeQuestion => ({ id: q.qid, cls: q.cls, text: q.question, choices: q.choices, expected: q.expected });
+
+/** Every question of a round graded against the session's answers by question id, each answer as it was given. A question
+ *  the door cannot grade as served (`gradableAsServed`, over the masked question), or an answer masked away, is
+ *  `unmeasured`; otherwise a question with no answer fails: closed-form, an answer that is not given is not the expected one.
+ *  An answer with no placeholder is graded against the stored question, one with a placeholder against the masked one
+ *  (review 2068 F6). The answer is recorded masked. */
+export function gradeAnswers(rows: readonly StoredQuestion[], answers: ReadonlyMap<string, string>, mask: (text: string) => string): readonly GradedAnswer[] {
+  return rows.map((row) => {
+    const q = maskedQuestion(row, mask);
+    const a = answers.get(row.qid);
+    const grade: ProbeGrade = !gradableAsServed(q) ? 'unmeasured' : a === undefined ? 'fail'
+      : !hasPlaceholder(a) ? gradeProbe(rawQuestion(row), a) : maskedAway(q, mask(a)) ? 'unmeasured' : gradeProbe(q, mask(a));
+    return { qid: row.qid, answer: a === undefined ? null : mask(a), grade };
   });
 }
 
