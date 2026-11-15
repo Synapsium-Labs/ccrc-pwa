@@ -2930,7 +2930,7 @@ _acct_pool_state() {   # account-id -> "named <n>" | untagged | unreadable | mal
 # (`server/test/fixtures/poolRule.ts`) in both languages.
 #
 # THE THIRD CODE IS CONSUMED TODAY, not merely kept for a later wave.
-# Measured: `grep -c '_pool_ok ' ccd/ccd` finds 16 matching LINES now, 12 of
+# Measured: `grep -c '_pool_ok ' ccd/ccd` finds 17 matching LINES now, 13 of
 # them call sites — the other four are prose, this sentence's own quoting of
 # the pattern among them — not the two this comment used to name as the whole
 # of them. (18/12 before fix round 1, which deleted two prose mentions along
@@ -3016,7 +3016,7 @@ _acct_pool_state() {   # account-id -> "named <n>" | untagged | unreadable | mal
 #
 # GLOBALS, NOT STDOUT, and the precedent is `_session_probe` below: `$( )`
 # would fork a subshell and eat them. MEASURED rather than assumed, because
-# this only works if no call site captures the call — all 12 invoke it
+# this only works if no call site captures the call — all 13 invoke it
 # rc-style (`; prc=$?`, `|| continue`, `if ! …`), so the writes land in the
 # caller's own scope. Two consequences a future caller must respect: a caller
 # that runs OTHER functions between the call and the render must SNAPSHOT them
@@ -3036,6 +3036,8 @@ _acct_pool_state() {   # account-id -> "named <n>" | untagged | unreadable | mal
 # call (`_place_for_class`'s `PLACE_DEGRADED_TO`, printed on a second line to
 # survive the subshell) — the day one of these four is called bare instead of
 # captured, the next `_pool_ok` render silently reads the wrong call's answer.
+# `_default_pool` calls it too since the pool set's PR A3, and is reached only through `_pool_for`,
+# whose two call sites are `$( )`-substituted as well.
 _pool_ok() {   # account-id pool-state -> 0 serve | 1 mismatch | 2 undecidable
   local ap pp
   POOL_OK_SIDE=''; POOL_OK_STATE=''
@@ -19489,8 +19491,8 @@ _default_pool() {   # id -> wrappers this session may auto-swap between.
     _is_home_able "$w" && continue
     _account_ok "$w" || continue
     if _is_pay_per_use "$w"; then
-      [[ -n "$pps" ]] || pps=$(_project_pool_state "$(_reg_get "$1" project)")
-      [[ "$pps" == "named "* && "$(_acct_pool_state "$w")" == "$pps" ]] || continue
+      [[ -n "$pps" ]] || pps=$(_session_pool_side "$1")
+      _pool_ok "$w" "$pps" && [[ "$POOL_OK_SIDE" == account && "$POOL_OK_STATE" == "named "* ]] || continue
     fi
     pool="$pool $w"
   done
@@ -20082,7 +20084,7 @@ _avail() {   # wrapper -> success if it has included-usage headroom (rate score 
   return 0                                                # no KNOWN half at the ceiling = assume free
 }
 
-_swap_target() {   # id cur home [force] [hrc] -> destination on stdout; rc 0 = a name, or nothing = stay put; 1 = must leave and nothing can take it; 2/3/4 = NOBODY CAN SAY, and WHICH: 2 the crossing record, 3 the row's own `.project`, 4 the pool rule; 5 = NOBODY CAN SAY, the class window; 6 = a name, chosen one rung DOWN
+_swap_target() {   # id cur home [force] [hrc] -> destination on stdout; rc 0 = a name, or nothing = stay put; 1 = must leave and nothing can take it; 2/3/4 = NOBODY CAN SAY, and WHICH: 2 the crossing record, 3 the row's own `.project`, 4 the pool rule on the project side, 7 on the account side (the projection), 8 on the set side; 5 = NOBODY CAN SAY, the class window; 6 = a name, chosen one rung DOWN
   # THREE ANSWERS, NOT TWO (#67 review, S4/S5). `return 0` with empty stdout
   # used to mean BOTH "stay put, everything is fine" and "the crossing record
   # could not be read, so I decline to decide" — and the caller handles those
@@ -20140,7 +20142,7 @@ _swap_target() {   # id cur home [force] [hrc] -> destination on stdout; rc 0 = 
   # answer, so refusing there would break the limit rescue to close nothing.
   project=$(_reg_read "$id" project); prjrc=$?
   [[ "$prjrc" -eq 2 ]] && ! _pool_untaggable && return 3
-  pps=$(_project_pool_state "$project")
+  pps=$(_session_pool_side "$id" "$project")
   # UNDECIDABLE IS NOT A DECISION — FOR THE MARKER TOO, NOT ONLY FOR THE TAG
   # (C1, D-1991). rc 2 says the marker's own record could not be read, so this
   # function cannot say whether a deliberate crossing stands. Taking that as
@@ -20189,7 +20191,7 @@ _swap_target() {   # id cur home [force] [hrc] -> destination on stdout; rc 0 = 
   # constraint, which is the overloaded-null defect this tree names. What
   # changes is that the caller now knows WHICH condition stopped it and says so.
   _pool_ok "$cur" "$pps"; prc=$?
-  [[ "$prc" -eq 2 ]] && return 4
+  [[ "$prc" -eq 2 ]] && { _pool_undecided_rc "$POOL_OK_SIDE"; return $?; }
   # A WRONG-POOL CURRENT ACCOUNT IS A MUST-LEAVE (ruling 5): `force=pool` skips
   # both "stay" shortcuts exactly as a hard block does, so a retag relocates the
   # session at its next idle boundary instead of waiting for telemetry to turn
@@ -21035,6 +21037,7 @@ _undecidable_cause() {   # word id project -> the operator-facing sentence for t
     crosspool) printf '%s' "the crossing record could not be read, so no destination could be computed" ;;
     project)   printf '%s' "the project's own registry field could not be read ($REG/$2.project), so no destination could be computed" ;;
     pool)      printf '%s' "the project's pool tag could not be read ($POOLS_DIR/$3), so no destination could be computed" ;;
+    set)       _pool_undecidable_cause "$1" "$2" ;;
     classwindow) printf '%s' "the per-class window for the session's class could not be measured on the lanes that could take it ($REG/usage/sweep/latest.json for fable, $LIMITS_DIR/<lane>.json otherwise), so no destination could be computed" ;;
     *)         printf '%s' "the tick declined to decide on a condition this build does not name ($1), so no destination could be computed" ;;
   esac
@@ -21398,7 +21401,7 @@ _auto_swap_check() {   # id — called each supervise tick. HOME-account affinit
     _tick_strand_undecidable "$id" project "$wrapper"
     return 0
   fi
-  pps=$(_project_pool_state "$project")
+  pps=$(_session_pool_side "$id" "$project")
   # THREE OUTCOMES, NOT TWO (C1, D-1988). `_crosspool_tick` answers rc 2 —
   # "nobody can say" — when an input it would have ended the crossing on could
   # not be measured. `&& crossed=1` reads that as "no crossing stands", which
@@ -21465,7 +21468,7 @@ _auto_swap_check() {   # id — called each supervise tick. HOME-account affinit
   # stands". On rc 2 both are false, so the row is left exactly as it is until
   # the input becomes readable again — the same standing-still the undecidable
   # project tag already produces one level down.
-  if [[ "$ctrc" -eq 1 ]]; then
+  if [[ "$ctrc" -eq 1 && "$pps" != "set "* ]]; then
     _pool_ok "$home" "$pps"; prc=$?
     if [[ "$prc" -eq 1 ]]; then
       new=$(_ws_least_loaded "$project")
@@ -21512,7 +21515,7 @@ _auto_swap_check() {   # id — called each supervise tick. HOME-account affinit
   # naming `crosspool` there would send them to the wrong file.
   [[ "$hrc"  -eq 2 ]] && stuck=home
   [[ -z "$stuck" && "$ctrc" -eq 2 ]] && stuck=crosspool
-  [[ -z "$stuck" && "$prc"  -eq 2 ]] && stuck=pool
+  [[ -z "$stuck" && "$prc"  -eq 2 ]] && stuck=$(_pool_undecided_word "$POOL_OK_SIDE")
   [[ -n "$stuck" ]] && _tick_undecidable "$id" "$stuck"
   # ── THE COOLDOWN GATES CLEAR, AND THE PANE GATE DOES NOT (#69 round 4, B2) ──
   # Round 2 stormed because the clear ran BEFORE the setter. Round 3 moved the
@@ -21715,7 +21718,7 @@ _auto_swap_check() {   # id — called each supervise tick. HOME-account affinit
       case "$strc" in
         2) uword=crosspool ;;   # the crossing record, asked about cur and about home
         3) uword=project ;;     # the row's own registry field, re-read at the inner seam
-        4) uword=pool ;;        # the pool rule against cur — the tag under `$POOLS_DIR`
+        4|7|8) uword=$(_pool_undecided_word "$strc") ;;        # the pool rule against cur — the tag under `$POOLS_DIR`
         5) uword=classwindow ;;   # the class window — the sweep's share for fable, the seven-day figure otherwise — on the lanes that could take the session
         *) uword="rc$strc" ;;   # deliberately unreachable: the next code added upstream
       esac
@@ -27809,7 +27812,7 @@ cmd_start() {   # <id>  |  <wrapper> <project> [workdir]
   # refuse a REVIVAL of a session a retag put in the wrong pool — which
   # ruling 5 moves at the next idle boundary instead. At most a warning.
   local pps prc pside pstate
-  pps=$(_project_pool_state "$project")
+  pps=$(_session_pool_side "$id" "$project")
   _pool_ok "$wrapper" "$pps"; prc=$?
   # SNAPSHOT THE TWO FACTS IMMEDIATELY (fix round 1, I1/I2) — see the header at
   # the rule itself. Nothing runs between here and the two `die`s below today,
@@ -27819,9 +27822,11 @@ cmd_start() {   # <id>  |  <wrapper> <project> [workdir]
   local pside="$POOL_OK_SIDE" pstate="$POOL_OK_STATE"
   if [[ -z "$regw" ]]; then
     [[ "$prc" -eq 2 ]] \
-      && die "$(_pool_undecidable_why "$pside" "$pstate" "$project" "$wrapper"); nothing was touched"
+      && die "$(_pool_undecidable_why "$pside" "$pstate" "$project" "$wrapper" "$(_pool_set_sid "$pps" "$id")"); nothing was touched"
     [[ "$prc" -eq 1 && -z "$cross" ]] \
       && die "pool-mismatch: $(_pool_mismatch_why "$wrapper" "$pstate" "$project" "$pps") — to cross on purpose: ccd start --cross-pool $wrapper $project"
+  elif _pool_side_is_set "$pps"; then
+    (( prc == 0 )) || _pool_set_start_warn "$id" "$wrapper" "$prc" "$pside" "$pstate" "$project" "$pps" >&2
   elif [[ "$prjrc" -eq 2 ]] && ! _pool_untaggable; then
     # SAID, NOT DECIDED. `$pps` is `untagged` here because the field could not be
     # read, not because the project carries no tag, so the mismatch arm below
@@ -27969,7 +27974,7 @@ cmd_start() {   # <id>  |  <wrapper> <project> [workdir]
   # The crossing marker for a creating `--cross-pool`. `_ws_seed_home` above
   # already pinned home to this wrapper, so the marker's account clause is
   # satisfied by BOTH `wrapper` and `home` from the first tick onward.
-  [[ "$prc" -eq 1 && -n "$cross" && -z "$regw" ]] && _crosspool_mark "$id" "${pps#named }" "$wrapper"
+  [[ "$prc" -eq 1 && -n "$cross" && -z "$regw" ]] && _crosspool_mark "$id" "$(_pool_side_token "$pps")" "$wrapper"
   local mode; mode=$(_spawn_mode "$id")
   # A deliberate revival supersedes a refused swap's banner: `ccd start <id>`
   # is the human act §4.4 names as "what would bring this back" (whether typed
@@ -30546,7 +30551,7 @@ _rescue_target() {   # id cur home hard-blocked hrc -> `_swap_target`'s stdout a
   # session just left blocked).
   local out rc recent
   out=$(_swap_target "$@"); rc=$?
-  if [[ -z "$4" || -z "$out" ]] || (( rc >= 2 && rc <= 5 )) || ! _rescue_history "$1" \
+  if [[ -z "$4" || -z "$out" ]] || (( rc >= 2 && rc != 6 )) || ! _rescue_history "$1" \
      || [[ -z "$RESCUE_SKIP_LEFT$RESCUE_SKIP_RECENT" ]]; then
     [[ -n "$out" ]] && printf '%s\n' "$out"
     return "$rc"
@@ -30647,12 +30652,12 @@ _strand_why() {   # id project -> one line naming why no candidate could take th
   # are stated in two places because they are two different questions: which
   # accounts a walk considers, and in which order it rejects them.
   local id="$1" p="$2" pps cand ap cur out="" prc
-  pps=$(_project_pool_state "$p")
+  pps=$(_session_pool_side "$id" "$p")
   # Undecidable is NOT a per-candidate fact: nobody decides, so annotating five
   # accounts would invent five reasons for one condition. One token, with the
   # path, because the remedy is a permission or a rewrite and not an account.
-  [[ "$pps" == untagged || "$pps" == "named "* ]] \
-    || { echo "tag:$pps $POOLS_DIR/$p"; return 0; }
+  [[ "$pps" == untagged || "$pps" == "named "* || "$pps" == "set "* ]] \
+    || { _pool_side_is_set "$pps" && echo "set:${pps#set-} $REG/$id.poolset" || echo "tag:$pps $POOLS_DIR/$p"; return 0; }
   cur=$(_reg_get "$id" wrapper)
   for cand in $(_pool_for "$id"); do
     [[ "$cand" == "$cur" ]] && continue
@@ -30740,9 +30745,9 @@ _strand_mark() {   # id wrapper project [cause] — a hard-blocked session with 
   # rewording it is a test change in the same commit, not a comment.
   local id="$1" w="$2" p="$3" cause="${4:-}" now pps pool pdesc why nts banner=1 msg prev prc pat
   now=$(date +%s)
-  pps=$(_project_pool_state "$p")
+  pps=$(_session_pool_side "$id" "$p")
   pool='-'; pdesc='(untagged)'
-  [[ "$pps" == "named "* ]] && { pool="${pps#named }"; pdesc="$pool"; }
+  { [[ "$pps" == "named "* ]] || _pool_side_is_set "$pps"; } && { pool=$(_pool_side_token "$pps"); pdesc="$pool"; }
   if [[ -n "$cause" ]]; then
     why="$cause"
     msg="cc swap STRANDED: $id is blocked on $w — $cause"
@@ -30896,7 +30901,7 @@ _crosspool_valid() {   # id pool-state account... -> 0 valid / 1 none / 2 the re
   # rc 1 — it went away between the `-e` above and this line. Nothing stands.
   [[ "$rrc" -eq 1 ]] && return 1
   read -r ts pool acct <<<"$raw" || :
-  [[ -n "${pool:-}" && "$pps" == "named $pool" ]] || return 1
+  [[ -n "${pool:-}" ]] && _pool_cross_match "$pps" "$pool" || return 1
   for a in "$@"; do [[ -n "$a" && "$a" == "${acct:-}" ]] && return 0; done
   return 1
 }
@@ -31000,7 +31005,7 @@ _crosspool_tick() {   # id wrapper home pool-state -> 0 a crossing stands / 1 no
   # UNDECIDABLE, decided by the one reader of the record (C1). The marker
   # survives untouched and this function says so, rather than picking an arm.
   [[ "$cvrc" -eq 2 ]] && return 2
-  [[ "$pps" == named* || "$pps" == untagged ]] || return 1
+  [[ "$pps" == "named "* || "$pps" == "set "* || "$pps" == untagged ]] || return 1
   raw=$(_reg_read "$id" crosspool); rrc=$?
   # A SECOND READ, FOR THE REASON ONLY — the verdict above was
   # `_crosspool_valid`'s. It is measured too, because the record can turn
@@ -31026,8 +31031,8 @@ _crosspool_tick() {   # id wrapper home pool-state -> 0 a crossing stands / 1 no
     reason="marker record is empty"
   elif [[ -z "${pool:-}" ]]; then
     reason="marker record is malformed"
-  elif [[ "$pps" != "named $pool" ]]; then
-    reason="project pool is now $pps"
+  elif ! _pool_cross_match "$pps" "$pool"; then
+    reason=$(_pool_cross_lapse_why "$pps")
   else
     reason="moved off ${acct:-<unrecorded>}"
   fi
@@ -31554,7 +31559,7 @@ cmd_swap() {   # [--force] [--cross-pool] [--interrupt] id target-wrapper — mo
                          # not an unbound-variable error under `set -u`.
   local id="${1:?usage: ccd swap [--force] [--cross-pool] [--interrupt] <id> <target-wrapper>}" target="${2:?usage: ccd swap [--force] [--cross-pool] [--interrupt] <id> <target-wrapper>}"
   _is_valid_wrapper "$target" || die "unknown wrapper '$target' (valid: ${CCRC_ACCOUNTS[*]})"
-  [[ -f "$REG/$id.uuid" ]] || die "no registry for '$id'"
+  _reg_id_ok "$id" && [[ -f "$REG/$id.uuid" ]] || die "no registry for '$id'"
   _ws_expire_refuse_return "$id" swap   # a return during an expiry refuses, before anything is journaled (EXPIRE region)
   # A HIBERNATED ROW IS NOT SWAPPED (D-5242): it has no pane to move, and a swap
   # would respawn it on another account behind the wake paths' budget.
@@ -31606,7 +31611,7 @@ cmd_swap() {   # [--force] [--cross-pool] [--interrupt] id target-wrapper — mo
   project=$(_reg_read "$id" project); prjrc=$?
   [[ "$prjrc" -eq 2 ]] && ! _pool_untaggable \
     && die "the project field for $id could not be read: $REG/$id.project — fix or clear it; nothing was touched"
-  pps=$(_project_pool_state "$project")
+  pps=$(_session_pool_side "$id" "$project")
   _pool_ok "$target" "$pps"; prc=$?
   # THE SNAPSHOT IS LOAD-BEARING HERE, not a convention (fix round 1, I1/I2).
   # `_crosspool_valid` and `_strand_mark` both run between this call and the
@@ -31618,7 +31623,7 @@ cmd_swap() {   # [--force] [--cross-pool] [--interrupt] id target-wrapper — mo
   # pool X to pool Y on purpose"; when the tag cannot be read there is no X to
   # name, so there is no decision to override.
   [[ "$prc" -eq 2 ]] \
-    && die "$(_pool_undecidable_why "$pside" "$pstate" "$project" "$target"); nothing was touched"
+    && die "$(_pool_undecidable_why "$pside" "$pstate" "$project" "$target" "$(_pool_set_sid "$pps" "$id")"); nothing was touched"
   if [[ "$prc" -eq 1 ]]; then
     # `if` TAKES rc 2 AS FALSE, AND THAT IS THE RIGHT ANSWER HERE (C1) — but it
     # is right for a reason, not by luck, so it is said out loud. This is the
@@ -31957,7 +31962,7 @@ cmd_swap() {   # [--force] [--cross-pool] [--interrupt] id target-wrapper — mo
   # re-execs itself detached, so a line written there would tell the operator
   # they crossed twice.
   if [[ -n "$crossing" ]]; then
-    _crosspool_mark "$id" "${pps#named }" "$target"
+    _crosspool_mark "$id" "$(_pool_side_token "$pps")" "$target"
     # `target-pool` IS THE SNAPSHOT, NOT A FRESH DECLARED READ (fix round 1 —
     # the same carrier correction as the refusals above, applied to the one
     # renderer of this fact the review did not enumerate). Two reasons the
@@ -31966,7 +31971,7 @@ cmd_swap() {   # [--force] [--cross-pool] [--interrupt] id target-wrapper — mo
     # a crossing at all, and it re-read minutes later — the carry can take
     # them — so the line recorded a pool that need not be the one the
     # decision was made against. `$pstate` is that decision's own word.
-    echo "$(date '+%F %T') cross-pool $id: $cur -> $target [project=$project pool=${pps#named } target-pool=${pstate#named }]" >> "$REG/swap.log"
+    echo "$(date '+%F %T') cross-pool $id: $cur -> $target [project=$project pool=$(_pool_side_token "$pps") target-pool=${pstate#named }]" >> "$REG/swap.log"
   fi
   echo "$(date '+%F %T') swap $id: $cur -> $target (uuid $uuid)" >> "$REG/swap.log"
   local _oc_from=0 _oc_to=0; _is_anthropic_backend "$cur" && _oc_from=1; _is_anthropic_backend "$target" && _oc_to=1
@@ -32003,7 +32008,7 @@ cmd_prefer() {   # [--cross-pool] id wrapper — set a session's HOME account (a
   set -- "${args[@]}"
   local id="${1:?usage: ccd prefer <id> <wrapper>}" w="${2:?usage: ccd prefer <id> <wrapper>}"
   _is_valid_wrapper "$w" || die "unknown wrapper '$w' (valid: ${CCRC_ACCOUNTS[*]})"
-  [[ -f "$REG/$id.uuid" ]] || die "no registry for '$id'"
+  _reg_id_ok "$id" && [[ -f "$REG/$id.uuid" ]] || die "no registry for '$id'"
   _account_still_rostered "$w" "The home for '$id' is unchanged."
   # Shell-only: no whitelist entry and no CCD_ARGV builder, so no route can
   # reach this. The pool rule still applies — the auto-swapper would otherwise
@@ -32034,12 +32039,12 @@ cmd_prefer() {   # [--cross-pool] id wrapper — set a session's HOME account (a
   project=$(_reg_read "$id" project); prjrc=$?
   [[ "$prjrc" -eq 2 ]] && ! _pool_untaggable \
     && die "the project field for $id could not be read: $REG/$id.project — fix or clear it; nothing was touched"
-  pps=$(_project_pool_state "$project")
+  pps=$(_session_pool_side "$id" "$project")
   _pool_ok "$w" "$pps"; prc=$?
   # SNAPSHOT, for the reason `cmd_start`'s own snapshot states.
   local pside="$POOL_OK_SIDE" pstate="$POOL_OK_STATE"
   [[ "$prc" -eq 2 ]] \
-    && die "$(_pool_undecidable_why "$pside" "$pstate" "$project" "$w"); nothing was touched"
+    && die "$(_pool_undecidable_why "$pside" "$pstate" "$project" "$w" "$(_pool_set_sid "$pps" "$id")"); nothing was touched"
   [[ "$prc" -eq 1 && -z "$cross" ]] \
     && die "pool-mismatch: $(_pool_mismatch_why "$w" "$pstate" "$project" "$pps") — to cross on purpose: ccd prefer --cross-pool $id $w"
   old=$(_home_for "$id")
@@ -32052,7 +32057,7 @@ cmd_prefer() {   # [--cross-pool] id wrapper — set a session's HOME account (a
   [[ -e "$REG/$id.swappin" || -e "$REG/$id.swappinexp" ]] && rm -f -- "$REG/$id.swappin" "$REG/$id.swappinnote" "$REG/$id.swappinexp"   # D-6181: with its expiry
   local lc_cross=()
   [[ "$prc" -eq 1 && -n "$cross" ]] \
-    && { lc_cross=(dec.crosspool 1); _crosspool_mark "$id" "${pps#named }" "$w"; }
+    && { lc_cross=(dec.crosspool 1); _crosspool_mark "$id" "$(_pool_side_token "$pps")" "$w"; }
   # THE ONE UNCONDITIONAL `.home` WRITER IN THIS FILE, and until now the only
   # account decision that left no record at all — so the one move an operator
   # makes by hand was the one the journal could not show.

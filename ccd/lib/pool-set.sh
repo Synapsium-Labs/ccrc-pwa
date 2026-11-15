@@ -101,3 +101,37 @@ _pool_set_mismatch_why() {   # account-id account-state spelling -> the rc-1 cla
   [[ "$2" == untagged ]] && { echo "$1 is in no pool and the session's pool set '$3' does not admit untagged accounts"; return 0; }
   echo "$1 is in pool '${2#named }' (measured from the projection, $REG/pool-epoch) and that pool is not in the session's pool set '$3'"
 }
+# ── THE USERS KEYED BY A SESSION (PR A3: Table 3.4d, the plan's Tasks 4 and 5) ───────────────────────────────────────
+# Every ccd user of the pool decision keyed by a session reads `_session_pool_side`, and these helpers give a side word
+# its token, its crossing field, its undecided word and its sentences. None decides membership: that is `_pool_ok`'s.
+_pool_side_is_set() { [[ "$1" == "set "* || "$1" == set-unreadable || "$1" == set-malformed ]]; }   # side word -> 0 iff a set side
+_pool_set_sid() { _pool_side_is_set "$1" && printf '%s' "$2"; return 0; }   # side id -> the id iff a set side (`_pool_undecidable_why`'s fifth)
+_pool_side_token() {   # side word -> one log token, which is also the crossing marker's pool field: `<n>`, `set:<spelling>`, else the word
+  # A set side never prints as a pool name ("set pool-b"), and a named side prints exactly what it printed before A3.
+  case "$1" in "named "*) printf '%s\n' "${1#named }" ;; "set "*) printf 'set:%s\n' "${1#set }" ;; *) printf '%s\n' "$1" ;; esac
+}
+_pool_cross_match() {   # side-word marker-field -> 0 iff a crossing marker's pool field names this decided side
+  # A `set:` field holds only while the side reads that same spelling, so a crossing lapses when the set changes and not
+  # when the operator only reorders it (the spelling is sorted). A named field holds only while the project reads it.
+  # The field is the marker file's bytes, so the comparison runs in the C locale, as every reader of a set does.
+  local LC_ALL=C IFS=' '
+  [[ "$1" == "named "* && "$2" == "${1#named }" ]] || [[ "$1" == "set "* && "$2" == "set:${1#set }" ]]
+}
+_pool_cross_lapse_why() {   # decided side word -> `crosspool-ended`'s reason when the side no longer matches the marker
+  if [[ "$1" == "set "* ]]; then echo "account set is now ${1#set }"; else echo "project pool is now $1"; fi
+}
+_pool_undecided_rc() {   # POOL_OK_SIDE -> `_swap_target`'s undecided rc: 4 the project, 8 the set
+  case "$1" in set) return 8 ;; *) return 4 ;; esac
+}
+_pool_undecided_word() {   # `_swap_target`'s rc, or POOL_OK_SIDE -> the `_undecidable_cause` word for that side
+  case "$1" in 8|set) echo set ;; *) echo pool ;; esac
+}
+_pool_undecidable_cause() {   # word id -> `_undecidable_cause`'s sentence for `set`
+  printf '%s' "the account set on the route record could not be read ($REG/$2.poolset), so no destination could be computed; the server writes it again at its next sweep, or the operator saves the set again"
+}
+_pool_set_start_warn() {   # id wrapper prc side state project pps -> `cmd_start`'s warning for an existing row its set does not serve
+  # An existing row is never refused (slug `existing-row-warns-the-tick-relocates`): a mismatch warns, and the tick moves it
+  # back at its next idle boundary; an undecidable set warns too, naming the file, where a project-side rc 2 is silent.
+  if (( $3 == 1 )); then echo "ccd: warn: $1 lives on $2: $(_pool_mismatch_why "$2" "$5" "$6" "$7") — the auto-swapper relocates it at the next idle boundary"
+  else echo "ccd: warn: $1 lives on $2 and its pool could not be decided: $(_pool_undecidable_why "$4" "$5" "$6" "$2" "$1") — nothing moves until it can"; fi
+}
