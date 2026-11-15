@@ -63,6 +63,7 @@ clock as `<ts>`.
 | `pool-set-spelling`, `pool-rule-core`, `ccd-split-pin`, `ccd-lib-load`, `ccd-contexts` | 72, 98, 17, 69, 15 |
 | `growth-check` armed, `deviation-refs` (after `git fetch origin main`) | 95, 31 |
 | `anchors`, `citations`, `ccd-line-citations`, `topology-clean` | 9, 4, 2, 61 |
+| `ccd-reg-get-census` | 3 (red on the PR's first fast run: `_default_pool`'s own project read went into `_session_pool_side`, so the `_reg_get` header now says 208 calls on 176 lines and names that move) |
 | server tsc | clean |
 | tests tsc | the whole project was killed by the test slice's 6 GB cap three times; the three changed test files, checked under the same options, are clean. CI decides |
 | `shellcheck-ratchet` | killed by the same cap (as in A2). The library alone and the twelve changed `ccd/ccd` functions alone give the same findings as on `main`. CI decides |
