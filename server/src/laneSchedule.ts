@@ -23,6 +23,10 @@ import { TIMER_LANE_PERIOD_MS } from '../../shared/continuity-timers.js';
  *  `POST /api/updates/refresh`. */
 export const CATALOGUE_POLL_INTERVAL_MS = 30 * 60_000;
 
+/** The weekly replay quiz lane's look (Overlord W1a, the replay quiz piece): once a day. The item it raises is weekly by its own
+ *  key (the ISO week), so a day only bounds how late in a week the item appears. */
+export const QUIZ_LANE_PERIOD_MS = 86_400_000;
+
 /** The server's own server-caps beat: once a minute, a third of `SERVER_CAPS_LEASE_S`, so one missed write never turns
  *  an arm off. The fleet node's writer (`ccd-update-sync.timer`, `OnUnitActiveSec=60s`) keeps the same period.
  *  `serverCaps.ts` re-exports it. */
@@ -189,7 +193,7 @@ export type LaneName =
   | 'claimRenew' | 'claimLapse' | 'stalls' | 'idleNudge' | 'mail' | 'asks' | 'approvalPrune' | 'digestBeat'
   | 'childReclaim' | 'collect' | 'archivedExpiry' | 'deadCoordinator' | 'orphanTrees' | 'delegation'
   | 'sleepRunDone' | 'sleepIdleHours' | 'rollIdle' | 'diskAlarm' | 'tmpCensus' | 'staleArchive' | 'runStuck' | 'runUntold' | 'runClose' | 'cases' | 'generations'
-  | 'launchProfile' | 'timers';
+  | 'launchProfile' | 'timers' | 'quiz';
 
 export interface LaneRow {
   readonly name: LaneName | (string & {});
@@ -359,6 +363,10 @@ export const LANE_SCHEDULE: readonly LaneRow[] = [
   // The timers lane (Overlord spec §3.3.12, Table 11.1c; W1a): one pass at a time, once a minute. It cleans up, fires each due
   // timer with its one mail in one transaction and purges; a thrown pass is caught here.
   { name: 'timers', cadenceMs: TIMER_LANE_PERIOD_MS, clock: 'mono', flight: 'skip', warnKey: 'ccrc-server: the timers lane failed', derivedFrom: null },
+  // The weekly replay quiz lane (Overlord spec §3.3.9 C52, Table 11.1c; W1a, plan `w1a-replay-quiz.md` Task 4): it looks once a
+  // day and raises at most one operator item an ISO week, keyed by the week (`quiz.ts#quizLaneVerdict`); a thrown pass is
+  // caught here. It raises nothing while the record path is absent (`QUIZ_RECORD_READY`).
+  { name: 'quiz', cadenceMs: QUIZ_LANE_PERIOD_MS, clock: 'mono', flight: 'skip', warnKey: 'ccrc-server: the quiz lane failed', derivedFrom: null },
 ];
 
 export function laneRow(name: string): LaneRow {

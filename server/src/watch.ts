@@ -173,6 +173,7 @@ import { isUntoldNotice, untoldPass } from './coord/untold.js';
 import { casesPass } from './coord/casesLane.js';
 import { gatherGenerationReadings, generationsPass, type CompactionsMemo, type EmptyTries } from './continuity/generationsLane.js';
 import { runTimersLane, timerListingOf } from './continuity/timerLane.js';
+import { runQuizLane } from './continuity/quizLane.js';
 import { TIMER_MAIL_SENDER } from '../../shared/continuity-timers.js';
 import { LAUNCH_PROFILE_LANE_ROW, profilePass, steerMarkerOf, type ProfileLaneMemory } from './continuity/profileLane.js';
 import { declaredIntentOf } from './continuity/profileFor.js';
@@ -2805,6 +2806,8 @@ export class FleetWatcher {
       void this.sweepLaunchProfile(records).catch(() => { /* one bad sweep must not kill the poll */ });
       // NEVER awaited, the same reasons: the TIMERS lane (Overlord §3.3.12, W1a): cleanup, then each due timer fired with its one mail.
       void this.sweepTimers(records, registryRead.listedIds, listedAt, registryRead.names).catch(() => { /* one bad sweep must not kill the poll */ });
+      // NEVER awaited, the same reasons: the weekly replay QUIZ lane (Overlord §3.3.9 C52, W1a): at most one operator item a week.
+      void this.sweepQuiz().catch(() => { /* one bad sweep must not kill the poll */ });
       // NEVER awaited, the same reasons: the RUN-CLOSE lane (D-8077), rows E1 and E1r, in shadow until its group is armed.
       void this.sweepRunClose(registryRead).catch(() => { /* one bad sweep must not kill the poll */ });
       // NEVER awaited, same reasoning as sweepNames immediately above: this one
@@ -6151,6 +6154,13 @@ export class FleetWatcher {
     if (!coord) return;
     await this.runLane('timers', () => runTimersLane({ coord, clock: this.deps.time.clock, io: this.deps.io,
       registryDir: this.deps.cfg.registryDir, log: (line) => console.warn(line) }, timerListingOf(records, listedIds, listedAt, names)));
+  }
+
+  /** The weekly replay quiz lane (Overlord §3.3.9 C52, W1a; `continuity/quizLane.ts`): one read-and-raise pass on the wall clock. */
+  async sweepQuiz(): Promise<void> {
+    const port = this.deps.quiz;
+    if (!port) return;
+    await this.runLane('quiz', () => { runQuizLane(port, this.deps.time.clock.wall(), (line) => console.warn(line)); });
   }
 
   /** One pass of the dead-coordinator lane — `sweepDeadCoordinators`'s body, run only while no other pass runs. */

@@ -73,7 +73,8 @@ import {
 import { dispatchAbandonViewOf } from './deadDispatch.js';
 import { isDispatchAbandonChoice } from '../../../shared/dispatch-abandon.js';
 import { decideLaneArmBody, decideLaneArmPost, laneArmChangeLine, laneArmRowViewOf, laneArmViewOf, rosterCardFieldOf } from './laneArm.js';
-import { LANE_ARM_FEED_TITLE, ROSTER_CARD_LANE, RUNS_ROSTER_CARD_FIELD } from '../../../shared/lane-arm.js';
+import { LANE_ARM_FEED_TITLE, LANE_ARM_TEXT, ROSTER_CARD_LANE, RUNS_ROSTER_CARD_FIELD } from '../../../shared/lane-arm.js';
+import { quizBaselineRead } from '../continuity/quizStore.js';
 import { isRunCloseChoice, isRunCloseGroup, type RunCloseView } from '../../../shared/run-close.js';
 import { RUN_CLOSE_TALLY_MS, closedByGroup, runCloseHeldOf, runCloseViewOf } from './runCloseSwitch.js';
 import { childBindGate } from './childBind.js';
@@ -2908,7 +2909,8 @@ export function registerCoordRoutes(
    *  (`laneArm.ts`): a lane is live on an exact `live` only. The POST takes `{lane, choice, confirm?}` and nothing else, and
    *  answers in the collector door's order: a bad body first; Live on a row whose gate stands is 409 `lane-gated`, its reason
    *  in `detail` (review 2003 F3); Live with no signed-in operator is 403 `sign-in-unarmed`
-   *  (dark included), before any read; an unreadable row is 503 `state-unreadable`; Live whose key is missing or stale is
+   *  (dark included), before any read; an unreadable row is 503 `state-unreadable`; Live on a W1a row before the replay quiz's
+   *  baseline row exists is 409 `baseline-missing` (W0-28; 503 `state-unreadable` when that cannot be read); Live whose key is missing or stale is
    *  409 `confirm-required` with the facts the server read and the key that binds them; then the one write, a record-only
    *  feed row naming the actor on a change, and the rows read after it. */
   app.get('/api/coord/lane-arm', async (_req, reply) => {
@@ -2925,8 +2927,9 @@ export function registerCoordRoutes(
     const { lane } = parsed.request;
     const before = laneArmRowViewOf(lane, coord.laneArmSetting(lane));
     const signedIn = deps.cfg.authEnabled && sessionAuth(req).reason === 'session';
-    const decided = decideLaneArmPost({ request: parsed.request, row: before, signedIn });
+    const decided = decideLaneArmPost({ request: parsed.request, row: before, signedIn, baseline: quizBaselineRead(coord.db) });
     if (decided.kind === 'gated') return refuseRoute(reply, 'lane-gated', { detail: decided.reason });
+    if (decided.kind === 'baseline-missing') return refuseRoute(reply, 'baseline-missing', { detail: LANE_ARM_TEXT.baselineMissing });
     if (decided.kind === 'sign-in-unarmed') return refuseRoute(reply, 'sign-in-unarmed');
     if (decided.kind === 'unreadable') return refuseRoute(reply, 'state-unreadable', { detail: decided.detail });
     if (decided.kind === 'confirm') return reply.code(409).send(decided.body);
