@@ -518,7 +518,7 @@ Net code lines, as `server/test/growthCheck.ts` counts them (comments and blank 
 
 | PR | Tasks | What it ships | Needs first | Growth-checked files, estimate |
 |---|---|---|---|---|
-| A | 1 to 5 | The row, its writers and reader, and the authority records; the deciders and the widened placement; `roleOf`'s reader at four callers, `identityOf` at every live-generation lookup, `goLive`'s re-stamp, and the roll and sleep holds; the body adapter with keep-awake; designate (with its first prompt), retire and the read, on the serialiser; the owed-stop drain | pool set B (B1 and B2), ccd arms A, B and C (C2 if C splits), authority journal A (and A0), sandbox A2 (ruled, X1, X6) | `server/src/coord/schema.ts` about +28 (one migration); `server/src/coord/store.ts` about +14 (delegates); `server/src/server.ts` about +24 (registration, `stopCreated`, the body adapter's and the routes file's deps: the serialiser, `SessionHost`); `server/src/watch.ts` about +6 (the mail pace's designation read); `server/src/coord/routes.ts` 0; `shared/api.ts` 0 |
+| A | 1 to 5 | The row, its writers and reader, and the authority records; the deciders and the widened placement; `roleOf`'s reader at four callers, `identityOf` at every live-generation lookup, `goLive`'s re-stamp, and the roll and sleep holds; the body adapter with keep-awake; designate (with its first prompt), retire and the read, on the serialiser; the owed-stop drain; the swap route's early refusal by the session's side | pool set B (B1 and B2), ccd arms A, B and C (C2 if C splits), authority journal A (and A0), sandbox A2 (ruled, X1, X6) | `server/src/coord/schema.ts` about +28 (one migration); `server/src/coord/store.ts` about +14 (delegates); `server/src/server.ts` about +28 (registration, `stopCreated`, the body adapter's and the routes file's deps: the serialiser, `SessionHost`; the swap route's side read); `server/src/watch.ts` about +6 (the mail pace's designation read); `server/src/coord/routes.ts` 0; `shared/api.ts` 0 |
 | B | 6 and 7 | Rebind (with its first prompt), its go-live arm, the old body's clear, stop and markers off from the settle door, and the mail repoint; Restart (with its first prompt); the pending deadline and the settle retry, through the renewal act's acting side | PR A, sandbox B, W1a's renewal act and renewal hand-offs | `server/src/coord/store.ts` about +6; `server/src/server.ts` about +5 (the ensure port, the settle door's designation deps); `server/src/coord/schema.ts` 0 |
 | C | 8 and 9 | The model class and account set Settings doors | PR A | `server/src/coord/store.ts` about +4; `server/src/server.ts` 0 |
 
@@ -573,6 +573,8 @@ The coordinator makes these in its own index edit (X10). Its row and lane lists 
   from the settle door's file (`server/src/continuity/routes.ts`), after `goLive`'s rebind arm.
 - **The deadline sweep** (review F9): designation B needs W1a's renewal act's acting side (`renewalActs.ts`), not
   the shadow lane alone. It acts only when the `continuity` row is live.
+- **The swap route's early refusal** reads the session's side in designation A, the first piece that writes a set
+  (pool set A3's review F13, ruled).
 - **The operator's first Start** waits for the `launch-profile` lane live as well as the `continuity` lane (review
   M7).
 - **Lane C's files** gain `shared/overlord-designation.ts`, `server/src/coord/overlordDesignation.ts`,
@@ -1045,7 +1047,10 @@ M5).
 - Modify: `server/test/rings/fastify-l4.data.ts#FASTIFY_L4_ALLOWLIST` (the file, with its reason)
 - Modify: `server/test/secret-mask.test.ts` (`EXEMPT` gains `GET /api/overlord/designation`, reason: the answer holds
   server-minted ids, the operator's class and pool names, and no session-written text)
-- Create: `server/test/overlord-designate-route.test.ts`
+- Modify: `server/src/poolrule.ts` (`sessionPoolSideOf`; `poolVerdict` takes `SessionPoolSide`) and
+  `server/src/server.ts` (the swap route's early pool refusal reads the session's side; `refusePool`'s set answer)
+- Create: `server/test/overlord-designate-route.test.ts`; extend `server/test/swap-route-pool.test.ts` and
+  `server/test/pools.test.ts`
 
 **The doors.** Each one asks the gate first (`{ cap: null, stepUp: true }`), then runs its body on `deps.serial`
 (the coordination serialiser): it reads its facts, asks its decider, and acts. A refused authority append answers as
@@ -1094,8 +1099,26 @@ writes `overlord`. ccd's tick has no reason to move a session that has not finis
 every later start (Table 3.4d's `_ws_wrapper_why` row). The window between the create and `writeSet` is stated in the
 pull request.
 
+**The swap route reads the session's side** (the coordinator's ruling, from pool set A3's review F13). `POST
+/api/sessions/:id/swap` refuses early, before it queues, when the target breaks the pool rule, and today it reads the
+project's tag only. Once this piece writes a set, a session in a project tagged differently would be refused a target
+its set allows (ccd refuses outside the set itself, so the reverse is already safe). So the early refusal reads the
+session's side:
+- `sessionPoolSideOf(route, projectPool)` (L1, in `server/src/poolrule.ts`) answers the set when the session's route
+  record carries `poolset` (`parsePoolSet` of `route.fields.poolset`), `set-unreadable` when `route.unreadable` names
+  `poolset`, `set-malformed` when it does not parse, and the project's side when no set stands, exactly as today;
+- `poolVerdict` takes `SessionPoolSide` through `poolRule`'s overloads, so a project side answers byte for byte as
+  before;
+- `refusePool` answers a set mismatch 409 `pool-mismatch` with `accountPool` and `set` (the spelling) in place of
+  `projectPool`, an additive field the route's readers tolerate absent, and an undecidable set 503 `pool-unreadable`
+  with its state, as an undecidable project does. `cmd_swap` stays the authoritative gate at execution.
+
 - [ ] **Step 1: Failing tests** (a fake gate, a fake body, a fake `SessionHost`, an in-memory `coord.db`, the fake
   clock and entropy):
+  - The swap route (`swap-route-pool.test.ts`): a session with a set `pool-b` in a project tagged `pool-a` swaps to a
+    `pool-b` account (no early refusal) and is refused a `pool-a` one `pool-mismatch` with `set`; an unreadable
+    `poolset` refuses `pool-unreadable`; a session with no set answers every existing row as before.
+    `sessionPoolSideOf`'s four arms in `pools.test.ts`.
   - The gate refuses (`auth-off`, `step-up-required`) before anything is read.
   - Every refusal of Task 2 reaches the wire with its status from `REFUSAL_STATUS` and its detail, and writes nothing
     (Review Focus 1).
@@ -1119,7 +1142,7 @@ pull request.
   and both `tsc` runs.
 - [ ] **Step 5: Mutation, by hand.** Move `designatePending` before the verdict: Review Focus 1's tests go red. Drop
   the drain after a failed `writeSet`: red. Run the designate body off the serialiser: the in-flight retire case's
-  serialised half goes red. Restore.
+  serialised half goes red. Have the swap route read the project's side again: the set swap case goes red. Restore.
 - [ ] **Step 6: Commit.** `feat(overlord): Start the Overlord and retire, behind the account gate (C2, R7)`
 
 **PR A ends here.** Its body states:
@@ -1424,7 +1447,8 @@ and no D-number is minted for them (X9).
   - the serialiser, the owed stops and their drain (F5); the new word `overlord-attempt-pending` (F6); the forced
     stop after every verdict refusal (F7); undecidability from the verdict's reason (F8); the deadline sweep through
     the renewal act's acting side (F9); no pay-per-use lane in the list (F10); "unbound" as neither live nor pending
-    (F11); `project-add` in the capability list (M10).
+    (F11); `project-add` in the capability list (M10);
+  - the swap route's early refusal reads the session's side, in PR A (pool set A3's review F13).
 - From the index: Q5, Q6, Q17, Q33 and Q36 as restated above.
 
 **Waiting on the coordinator:** the index edit (X10), from "Index changes" above.
