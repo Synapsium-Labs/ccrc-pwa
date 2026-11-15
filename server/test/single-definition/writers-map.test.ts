@@ -403,11 +403,11 @@ describe(TABLES_PIN, () => {
   const ROUTE_VERB = /^(get|post|put|delete|patch)$/;
   // The answer marks' one writer is pinned the same way (Overlord W1, plan w1-delegation-marks.md Task 2), so `callSitesOf`
   // takes the callee's name.
-  const callSitesOf = (callee: string) => (files: readonly string[]): string[] => {
+  const callSitesOf = (target: string) => (files: readonly string[]): string[] => {
     const out: string[] = [];
     for (const f of files) {
       const text = readFileSync(f, 'utf8');
-      if (!text.includes(`${callee}(`)) continue;
+      if (!text.includes(`${target}(`)) continue;
       const sf = ts.createSourceFile(f, text, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
       const syms = parseFile(f).symbols;
       const visit = (node: ts.Node, route: string | null): void => {
@@ -420,7 +420,7 @@ describe(TABLES_PIN, () => {
             here = `${callee.name.text.toUpperCase()} ${first.text}`;
           }
           const name = ts.isPropertyAccessExpression(callee) ? callee.name.text : ts.isIdentifier(callee) ? callee.text : null;
-          if (name === callee) {
+          if (name === target) {
             const at = node.getStart(sf);
             const inner = syms.filter((x) => x.start <= at && at < x.end).sort((a, b) => (a.end - a.start) - (b.end - b.start))[0];
             out.push(`${rel(f)}#${inner?.name ?? '(module)'}${here === null ? '' : ` @ ${here}`}`);
