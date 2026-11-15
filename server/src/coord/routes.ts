@@ -72,7 +72,7 @@ import {
 import { dispatchAbandonViewOf } from './deadDispatch.js';
 import { isDispatchAbandonChoice } from '../../../shared/dispatch-abandon.js';
 import { decideLaneArmBody, decideLaneArmPost, laneArmChangeLine, laneArmRowViewOf, laneArmViewOf, rosterCardFieldOf } from './laneArm.js';
-import { LANE_ARM_FEED_TITLE, ROSTER_CARD_LANE, RUNS_ROSTER_CARD_FIELD } from '../../../shared/lane-arm.js';
+import { CONTINUITY_LANE, LANE_ARM_FEED_TITLE, ROSTER_CARD_LANE, RUNS_ROSTER_CARD_FIELD } from '../../../shared/lane-arm.js';
 import { isRunCloseChoice, isRunCloseGroup, type RunCloseView } from '../../../shared/run-close.js';
 import { RUN_CLOSE_TALLY_MS, closedByGroup, runCloseHeldOf, runCloseViewOf } from './runCloseSwitch.js';
 import { childBindGate } from './childBind.js';
@@ -145,6 +145,7 @@ import {
 import { CLAUDE_ROLL_TARGETS, CLAUDE_ROLL_TARGETS_DEFAULT, isClaudeRollTargets, isClaudeVersion, type ClaudeRollTargets } from '../../../shared/claudeVersion.js';
 import { rollTargetsOf } from './rollTarget.js';
 import { plainAutoMemoryOf } from '../continuity/profileFor.js';
+import { compactRefusal } from '../continuity/compactOwner.js';
 import {
   PLAIN_AUTO_MEMORY_CHOICES, PLAIN_AUTO_MEMORY_DEFAULT, isPlainAutoMemoryChoice, type PlainAutoMemoryView,
 } from '../../../shared/plainAutoMemory.js';
@@ -2046,6 +2047,9 @@ export function registerCoordRoutes(
     const request = parseRouteRequest(parseCanonicalPositiveSafeInteger((req.params as { id: string }).id), req.body);
     if (!request.ok) return refuseRoute(reply, 'bad-request', { detail: request.detail });
     const { id, ask } = request;
+    // The launch-profile lane owns `compact` while `continuity` is live (`compactRefusal`, review 2024 F3).
+    const owned = ask.how.by === 'manual' ? compactRefusal(ask.how.field, laneArmRowViewOf(CONTINUITY_LANE, coord.laneArmSetting(CONTINUITY_LANE)).live) : null;
+    if (owned !== null) return refuseRoute(reply, 'bad-request', { detail: owned });
 
     return coordMutex.run(async () => {
       const decision = await decideRoute({

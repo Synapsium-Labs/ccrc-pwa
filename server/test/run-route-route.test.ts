@@ -16,6 +16,8 @@ import { mkTmp } from './tmpHelpers.js';
 import { unreadableField } from './ioDoubles.js';
 import { ACTOR_FLAGS_CAP, ROUTE_CAP } from '../src/ccdargv.js';
 import { legacyOpens } from './helpers/plan.js';
+import { CONTINUITY_LANE } from '../../shared/lane-arm.js';
+import { COMPACT_OWNED_DETAIL } from '../src/continuity/compactOwner.js';
 import { ROUTE_LANE_ONLY_FIELDS } from '../../shared/api.js';
 const LANE_ONLY_VALUE: Record<string, string> = { profile: 'coordinator', automem: 'off', compactwindow: '350000', precompact: 'refuse' };
 
@@ -848,5 +850,27 @@ describe('POST /api/runs/:id/route', () => {
       expect(demote.statusCode, `${target} demote`).toBe(400);
     }
     expect(calls.filter((c) => c[0] === 'route')).toEqual([]);
+  });
+
+  // Overlord W1a renewal act (review 2024 F3, slug compact-refused-at-the-route-doors): while `continuity` is live the
+  // launch-profile lane owns `compact`, so the manual arm refuses it with the reason and never reaches ccd; in shadow it
+  // writes it as before.
+  it('400s a manual compact while continuity is live, naming why, and writes it while continuity is shadow', async () => {
+    const home = mkTmp('ccrc-route-');
+    const { run, calls } = makeRunner(home, { wsAddCreates: ['demo-w14'] });
+    const w = await openApp(home, run, { fleetState: ROUTE_READY_FLEET }); app = w.app;
+    const { id, sid } = await dispatchedRun(w.app, 'demo-w14');
+    seed(home, sid, { compact: '70' });
+
+    const shadow = await postRoute(w.app, id, { target: 'worker', why: 'operator judgement', field: 'compact', value: '60' });
+    expect(shadow.statusCode).toBe(200);
+    const before = calls.filter((c) => c[0] === 'route').length;
+    expect(before).toBe(1);
+
+    w.coord.setLaneArm(CONTINUITY_LANE, 'live', 1);
+    const live = await postRoute(w.app, id, { target: 'worker', why: 'operator judgement', field: 'compact', value: '50' });
+    expect(live.statusCode).toBe(400);
+    expect(live.json()).toMatchObject({ ok: false, error: 'bad-request', detail: COMPACT_OWNED_DETAIL });
+    expect(calls.filter((c) => c[0] === 'route')).toHaveLength(before);
   });
 });

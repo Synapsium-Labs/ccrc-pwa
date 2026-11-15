@@ -33,8 +33,8 @@ import { openPracticeCase, practiceCaseNewest, type PracticeCaseNewestRead, type
 import type { CaseDue } from './practiceCases.js';
 import {
   advanceCursor, advanceObserved, answerRenewCall, appendNote, cardReadOfStart, checkpointBefore, claimRenewCall, clearShadowWalk,
-  generationsCursor, handoverBefore, insertCardRead, insertSnapshot, insertStart, liveGenerations, liveNotes, mintGeneration, noteById,
-  putCheckpoint, putHandover, renewCallsOf, rulingRowsOf, setGenerationDue, setHoldOff, startsOf, startsSince, stepGeneration,
+  generationsCursor, handoverBefore, handoverOf, insertCardRead, insertSnapshot, insertStart, liveGenerations, liveNotes, mintGeneration, noteById,
+  putCheckpoint, putHandover, renewCallsOf, rulingRowsOf, setGenerationDue, setHoldOff, setSoftRenewal, softRenewalsOf, startsOf, startsSince, stepGeneration,
   type CardReadInsert, type CardReadRead, type CursorAdvance, type CursorRead, type DueWrite, type SnapshotInsert,
   type GenExpect, type GenerationsRead, type MintInput, type MintResult, type StartInsert, type StartInsertResult, type StartsRead,
   type HandoverRead, type NoteByIdRead, type NoteInsert, type NotesRead,
@@ -5417,6 +5417,9 @@ export class CoordStore {
   noteById(id: number): NoteByIdRead { return noteById(this.db, id); }
   putHandover(h: { generationId: number; note: HandoverNote; dropped: number; at: number }): { ok: true; fresh: boolean; dropped: number } | { ok: false } { return putHandover(this.db, h); }
   handoverBefore(identity: string, liveGenerationId: number): HandoverRead { return handoverBefore(this.db, identity, liveGenerationId); }
+  handoverOf(generationId: number): HandoverRead { return handoverOf(this.db, generationId); }
+  softRenewalsOf(identity: string, term: number): ReturnType<typeof softRenewalsOf> { return softRenewalsOf(this.db, identity, term); }
+  setSoftRenewal(id: number, e: GenExpect, observedMs: number): { changed: boolean } { return setSoftRenewal(this.db, id, e, observedMs); }
   /** Overlord §3.3.2 C37, §3.3.11 H12 (the renewal act, `continuityStore.ts`): the generations lane's checkpoint and renew-call writers, and the reads. */
   putCheckpoint(c: CheckpointInsert): ReturnType<typeof putCheckpoint> { return putCheckpoint(this.db, c); }
   checkpointBefore(identity: string, liveGenerationId: number): CheckpointRead { return checkpointBefore(this.db, identity, liveGenerationId); }

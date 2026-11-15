@@ -19,6 +19,10 @@ import { EXEMPT } from '../src/auth/gate.js';
 import { seedRoster, testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
 import { ROUTE_LANE_ONLY_FIELDS } from '../../shared/api.js';
+import { CONTINUITY_LANE } from '../../shared/lane-arm.js';
+import { COMPACT_OWNED_DETAIL } from '../src/continuity/compactOwner.js';
+import { openCoordDb } from '../src/coord/db.js';
+import { CoordStore } from '../src/coord/store.js';
 
 const ID = 'claude-a-project-f';
 
@@ -166,5 +170,25 @@ describe('POST /api/sessions/:id/route (routing spec §5.3, live change from the
     // The sibling it sits beside, for the contrast — also gated, so this
     // route is not an outlier among the session's own writes.
     expect(EXEMPT.has('POST /api/sessions/:id/prompt')).toBe(false);
+  });
+
+  // Overlord W1a renewal act (review 2024 F3, slug compact-refused-at-the-route-doors): while `continuity` is live the
+  // launch-profile lane owns `compact`, so this door refuses it with the reason and never reaches ccd; in shadow it writes.
+  it('400 naming why for compact while continuity is live, and a write while it is shadow', async () => {
+    const home = seededHome();
+    const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
+    const calls: string[][] = [];
+    const app = await buildServer({ ...testDeps(home, async (_c, args) => { calls.push(args); return { ran: true, code: 0, stdout: '', stderr: '' }; }),
+      fleetState: BOTH_CAPS, coord });
+    await app.ready();
+    expect((await post(app, ID, { field: 'compact', value: '60' })).statusCode).toBe(200);
+    const before = calls.length;
+    coord.setLaneArm(CONTINUITY_LANE, 'live', 1);
+    const res = await post(app, ID, { field: 'compact', value: '50' });
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toEqual({ ok: false, error: 'bad-request', detail: COMPACT_OWNED_DETAIL });
+    expect(calls.length).toBe(before);
+    expect((await post(app, ID, { field: 'effort', value: 'high' })).statusCode).toBe(200);
+    await app.close();
   });
 });

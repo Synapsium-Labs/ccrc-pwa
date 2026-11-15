@@ -10,9 +10,10 @@
 // `continuity_generations` and `continuity_cursor`.
 //
 // SHADOW IS STRUCTURAL. The lane imports nothing that sends: no `ccdargv`, no mail store method, no push (an import pin in
-// `continuity-generations-lane.test.ts` holds that, as the case lane's does). It takes no act on any session; `continuity`
-// live changes only which column a new walk moves, and in this piece no walk moves past a mint. Nothing waits on it, and
-// Live is refused at the card's door until the renewal act ships (review 2003 F3, `LANE_ARM_GATE`).
+// `continuity-generations-lane.test.ts` holds that, as the case lane's does). It takes no act on any session itself: it
+// PLANS the acts of a live walk and its caller takes them (`renewalActs.ts`), and in shadow it plans none. `continuity` live
+// changes which column a walk moves and whether its acts are planned; the renewal act lifted the card's gate (review 2003
+// F3), so the row can be set Live.
 //
 // THE DUE RECORD DOES NOT DEPEND ON THE WALK (review 2003 F1). A generation is judged, and gathered for, when its `state`
 // column is `active` or `degraded`, whatever a shadow walk holds in `shadowState`: a shadow mint leaves `state` `active`,
@@ -41,12 +42,24 @@
 // opens nothing, and is remembered by its key (`emptyTryKey`, in `emptyTries`) so it is neither drawn nor logged again until
 // the key changes (review 2063 F4).
 //
+// THE RENEWAL WALK (the renewal act, plan `w1a-renewal-act.md` Task 4). After the due record, each live generation is fed
+// the events `renewalFeed` (L1) orders for it: a due the permit lets start (`renewalPermit`: the host can renew, the Overlord
+// first for a coordinator, `softRenewalMay` for a soft trigger), `drained` from the hold table (`drainVerdict`), `handover`
+// when this generation's note arrived, `nudge-due` at `carded`'s nudge point, and `deadline` last; a fact stamped at or after
+// the deadline is not fed (m6), and the card read and the probe rounds above are held to the same rule. Each step the machine
+// reports `changed` is written, and its acts (`actsOfStep`) are PLANNED, never taken here: while `continuity` is live the
+// caller hands them to `runRenewalActs` (`renewalActs.ts`), and in shadow each step is recorded in the log instead, its
+// actions named, so shadow sends nothing and holds nothing (`state` stays `active`; the walk moves `shadowState`). A
+// `clearing` generation's `renew` is owed by `renewOwed` from the calls the acts claimed, so a retry waits for the next pass
+// and its receipt read. After a renewal's start mints the next generation, its first prompt is planned; a spot round opened
+// while live plans its mail.
+//
 // TWO HALVES. `gatherGenerationReadings` (async) makes the fleet reads for the generations a pass will judge; then
 // `generationsPass` (synchronous, one transaction per write, nothing awaited) reads `coord.db`, decides and writes. So a
 // pass after a restart resumes from the cursor and the stored columns, never from memory, and the simulator drives the
 // pass itself on its fake clock.
 import { CONTINUITY_LANE, laneArmGate } from '../../../shared/lane-arm.js';
-import { RENEWAL_LANE_PERIOD_MS, noteKeyText, type ProbeRoundKind } from '../../../shared/continuity.js';
+import { RENEWAL_LANE_PERIOD_MS, SOFT_BUDGET, noteKeyText, type ProbeRoundKind } from '../../../shared/continuity.js';
 import { CARD_MAIL_MAX, type CardFacts, type CardMail, type CardNote } from '../../../shared/continuity-card.js';
 import { familyClassOf } from '../../../shared/models.js';
 import type { ChildMark, RunKind } from '../../../shared/api.js';
@@ -73,6 +86,14 @@ import {
   type StartVerdict,
 } from './generationStart.js';
 import { renewalDue, type Reading, type RenewalInputs } from './renewalDue.js';
+import type { FleetRole } from '../../../shared/fleetRoles.js';
+import type { GenAction, GenStep } from './generationMachine.js';
+import { softRenewalMay, type SoftInputs, type SoftReading } from './softRenewal.js';
+import { overlordFirst, type OverlordGenerationReading } from './renewalOrder.js';
+import type { DrainRead } from './renewalDrain.js';
+import {
+  actsOfStep, beforeDeadline, renewalFeed, renewalPermit, renewOwed, type PermitWait, type RenewalAct,
+} from './renewalFeed.js';
 
 /** The lane's key in `continuity_cursor`, and its `LANE_SCHEDULE` row's name. */
 export const GENERATIONS_LANE = 'generations';
@@ -87,7 +108,7 @@ export const FIRST_MINT_LOOKBACK = 20;
 export type GenerationsCoord = Pick<CoordStore, 'startsSince' | 'startsOf' | 'liveGenerations' | 'mintGeneration' | 'advanceObserved'
   | 'setGenerationDue' | 'clearShadowWalk' | 'generationsCursor' | 'advanceCursor' | 'laneArmSetting' | 'openCoordinatorIds'
   | 'run' | 'bindingRunsOf' | 'cardReadOfStart' | 'stepGeneration' | 'probeRows' | 'openRound' | 'snapshotFacts' | 'liveNotes'
-  | 'mailForRecipient'>;
+  | 'mailForRecipient' | 'handoverOf' | 'softRenewalsOf' | 'setSoftRenewal' | 'renewCallsOf'>;
 
 /** What the registry says of one row at the pass: its current conversation (null: unreadable), its account and its child
  *  mark. */
@@ -100,6 +121,9 @@ export interface GenReadings {
   readonly turn: TurnMarkRead;
   /** The roll's "behind" test: the session's process started before the node's current ccrc install completed. */
   readonly behind: Reading<boolean>;
+  /** The hold table's drain (`drainVerdict`), read for a generation that drains or waits on a soft due; absent when not
+   *  read, which holds as unmeasured. */
+  readonly drain?: DrainRead;
 }
 
 export interface GenerationsDeps {
@@ -131,7 +155,19 @@ export interface GenerationsInput {
   readonly listedAt: number;
   /** The fleet reads, by generation id; a generation without one reads every fleet input as unmeasured. */
   readonly readings: ReadonlyMap<number, GenReadings>;
+  /** The box's `hibernate-fresh` (`capSupported`): without it no renewal starts, live or shadow (Table 11.1d). Absent: false. */
+  readonly canRenew?: boolean;
+  /** The soft renewal Setting (R19); renew when the operator is away unless set on schedule. Absent: `when-away`. */
+  readonly softMode?: SoftInputs['mode'];
 }
+
+/** The generation an act is for, as the pass read it. */
+export interface ActTarget {
+  readonly genId: number; readonly identity: string; readonly sessionId: string; readonly role: FleetRole;
+  readonly n: number; readonly startId: number; readonly cls: GenRow['walkClass'];
+}
+/** One act the pass planned: the caller takes it while `continuity` is live (`runRenewalActs`). */
+export interface PlannedAct { readonly target: ActTarget; readonly act: RenewalAct }
 
 export interface GenerationsResult {
   readonly live: boolean;
@@ -152,6 +188,11 @@ export interface GenerationsResult {
   /** Graded probe rounds fed to the machine as a written step, and rounds opened (the probes piece). */
   readonly probesFed: number;
   readonly roundsOpened: number;
+  /** The acts this pass planned (live only; the caller takes them), the steps it recorded in shadow (log lines, each naming
+   *  the would-be acts), and the due generations whose renewal waited, by why. */
+  readonly planned: readonly PlannedAct[];
+  readonly recorded: readonly string[];
+  readonly waits: Readonly<Partial<Record<PermitWait, number>>>;
   /** Generations whose due write named at least one trigger it could not read. */
   readonly blind: number;
   readonly cleared: number;
@@ -173,6 +214,16 @@ export function generationsPass(deps: GenerationsDeps, input: GenerationsInput):
   let read = 0; let minted = 0; let firstMinted = 0; let held = 0; let superseded = 0; let due = 0; let blind = 0; let cleared = 0;
   let cardRead = 0; let probesFed = 0; let roundsOpened = 0; let emptyRounds = 0;
   let stopped = false;
+  const planned: PlannedAct[] = [];
+  const recorded: string[] = [];
+  const waits: Partial<Record<PermitWait, number>> = {};
+  // A written step's acts: planned while live, recorded (and logged) in shadow, naming every machine action.
+  const onStep = (gen: GenRow, from: GenerationStateOf, step: GenStep, event: GenEvent): void => {
+    if (live) { for (const act of actsOfStep(step.actions, from, event)) planned.push({ target: targetOf(gen), act }); return; }
+    const line = shadowLine(gen, from, step, event);
+    recorded.push(line);
+    deps.log(line);
+  };
   // Every read that failed, each with what it stopped at the point it failed (review 2006 N3); `unread` is the first.
   const failures: Failure[] = [];
   const fail = (what: NonNullable<GenerationsResult['unread']>, detail: string, stops: string): void => {
@@ -180,8 +231,8 @@ export function generationsPass(deps: GenerationsDeps, input: GenerationsInput):
   };
   const result = (): GenerationsResult => {
     logPass(deps.log, { skipped, held, superseded, stopped, failures, gaps, emptyRounds });
-    return { live, read, minted, firstMinted, skipped, held, superseded, gaps, due, cardRead, probesFed, roundsOpened, blind, cleared,
-      unread: failures[0]?.what ?? null, stopped };
+    return { live, read, minted, firstMinted, skipped, held, superseded, gaps, due, cardRead, probesFed, roundsOpened, planned,
+      recorded, waits, blind, cleared, unread: failures[0]?.what ?? null, stopped };
   };
 
   // ---- ONE: every live generation's accumulator advances by the lane's step cap (review 1896 R4.1), before any mint, so a
@@ -262,7 +313,15 @@ export function generationsPass(deps: GenerationsDeps, input: GenerationsInput):
           // The cursor rides the last judged start's mint, so a crash between two mints re-judges the batch.
           const w = coord.mintGeneration(mintInput(s, verdict), liveGen === null ? null : genExpectOf(liveGen), live,
             last ? advance : null);
-          if (w.ok) { minted += 1; cursorDone = last && advance !== null; } else if (w.kind === 'superseded') superseded += 1;
+          if (w.ok) {
+            minted += 1; cursorDone = last && advance !== null;
+            // A renewal's start minted the next generation: its first turn is the one line that sends it to its card
+            // (slug first-prompt-by-deliver). A start nobody renewed gets the nudge at `carded`'s nudge point instead.
+            if (live && verdict.outcome === 'renewed') {
+              planned.push({ target: { genId: w.id, identity: s.sessionId, sessionId: s.sessionId, role: verdict.role, n: w.n,
+                startId: s.id, cls: null }, act: { kind: 'first-prompt' } });
+            }
+          } else if (w.kind === 'superseded') superseded += 1;
           else { stopped = true; break; }
           const again = coord.liveGenerations();
           if (!again.ok) { fail('generations', again.detail, 'the batch stopped after a mint and the cursor stays'); stopped = true; break; }
@@ -310,7 +369,7 @@ export function generationsPass(deps: GenerationsDeps, input: GenerationsInput):
   else {
     const feed = cardReadFeed(coord, carded.rows, live);
     for (const f of feed.failed) fail('card-reads', f, 'that generation\'s card read waits for the next pass');
-    cardRead += applyFedEvents(coord, feed.events, live, now);
+    cardRead += applyFedEvents(coord, feed.events, live, now, onStep);
   }
 
   // ---- THE PROBES: each generation's graded round fed, its next round opened, its `probe-failed` input kept for THREE.
@@ -330,7 +389,11 @@ export function generationsPass(deps: GenerationsDeps, input: GenerationsInput):
         ...probeReadings(input.readings.get(g.id), compactionWindowStart(g.enteredAt, rounds)),
       });
       probeFailed.set(g.id, s.probeFailedUnfixed);
-      if (s.feed !== null) events.push({ gen: g, event: { kind: 'probes', passed: s.feed.passed }, card: null });
+      // A graded round answered at or after the state's deadline is not fed: the deadline wins (m6).
+      const fedAt = rounds.filter((r) => r.kind === 'start')[g.probeRounds]?.answeredAt ?? now;
+      if (s.feed !== null && beforeDeadline(fedAt, effectiveGeneration(g, live).deadlineAt)) {
+        events.push({ gen: g, event: { kind: 'probes', passed: s.feed.passed }, card: null });
+      }
       if (s.open === null) continue;
       const waits = `generation ${g.id}'s ${s.open.kind} round waits for the next pass, and`;
       const snap = roundSnapshotOf(s.open.kind, g.snapshotId, card.ok ? { kind: 'measured', value: card.read?.snapshotId ?? null } : later(card.detail));
@@ -347,11 +410,15 @@ export function generationsPass(deps: GenerationsDeps, input: GenerationsInput):
         snapshotId: snap.value, depthTokens: s.open.depthTokens, modelClass: spot && g.model !== null ? familyClassOf(g.model) : null,
         roundUnmeasured: composed.unmeasured, askedAt: now, supersedes: s.open.supersedes,
       });
-      if (w.ok) { roundsOpened += 1; deps.emptyTries.delete(g.id); }
+      if (w.ok) {
+        roundsOpened += 1; deps.emptyTries.delete(g.id);
+        // A spot round opened while live is announced by system mail (subject `probe`); in shadow it is recorded only.
+        if (spot && live) planned.push({ target: targetOf(g), act: { kind: 'spot-probe' } });
+      }
       else if (w.kind === 'empty') { emptyRounds += 1; deps.emptyTries.set(g.id, key); }
       else if (w.kind === 'write-failed') fail('probes', 'continuity_probes could not be written', `generation ${g.id}'s round waits for the next pass, and`);
     }
-    probesFed += applyFedEvents(coord, events, live, now);
+    probesFed += applyFedEvents(coord, events, live, now, onStep);
   }
 
   // ---- THREE: the `renewalDue` answer is recorded for every generation whose `state` is at rest (`active` or `degraded`),
@@ -370,7 +437,92 @@ export function generationsPass(deps: GenerationsDeps, input: GenerationsInput):
     coord.setGenerationDue(g.id, genExpectOf(g), d.due
       ? { due: true, why: d.why, cls: d.cls, at: now, observedMs: g.observed.ms } : { due: false }, d.blind);
   }
+
+  // ---- FOUR: the renewal walk (the header): each live generation's ordered events, then a `clearing` one's owed `renew`.
+  const walk = coord.liveGenerations();
+  if (!walk.ok) { fail('generations', walk.detail, 'no renewal step is fed'); return result(); }
+  const overlord = overlordReadingOf(walk.rows, live);
+  for (const g0 of walk.rows) {
+    let g = g0;
+    const eff = effectiveGeneration(g, live);
+    const r = input.readings.get(g.id);
+    let due: { cls: NonNullable<GenRow['dueClass']> } | null = null;
+    if ((eff.state === 'active' || eff.state === 'degraded') && g.dueClass !== null && g.dueSince !== null) {
+      const permit = renewalPermit({
+        isCoordinator: g.role === 'coordinator', cls: g.dueClass, canRenew: input.canRenew === true, overlord,
+        soft: g.dueClass === 'soft' ? softRenewalMay(softInputsOf(coord, g, r, overlord, input.softMode ?? 'when-away')) : { start: true },
+      });
+      if (permit.feed) due = { cls: permit.cls }; else waits[permit.waitFor] = (waits[permit.waitFor] ?? 0) + 1;
+    }
+    const handover = eff.state === 'checkpointed' ? coord.handoverOf(g.id) : null;
+    if (handover !== null && !handover.ok) fail('generations', handover.detail, `generation ${g.id}'s handover waits for the next pass, and`);
+    const events = renewalFeed({
+      state: eff.state, deadlineAt: eff.deadlineAt, now, due, drained: r?.drain?.held === false,
+      handoverAt: handover !== null && handover.ok ? (handover.handover?.at ?? null) : null, renudged: g.renudged,
+    });
+    // The events were ordered for the state the pass read; once one moves the state, the rest (`deadline` above all) belong
+    // to a state the generation has left, so the walk stops and the next pass reads the new state's facts.
+    for (const e of events) {
+      const from = effectiveGeneration(g, live).state;
+      const step = generationStep(genViewOf(g, live), e);
+      if (!step.changed) continue;
+      if (!coord.stepGeneration(g.id, genExpectOf(g), step.next, live, now).changed) break;
+      const again = coord.liveGenerations();
+      const next = again.ok ? again.rows.find((x) => x.id === g.id) : undefined;
+      // Feeding a soft due spends one of the soft budget's renewals, stamped on the accumulator (ruling R4).
+      if (e.kind === 'due' && e.cls === 'soft' && next !== undefined) coord.setSoftRenewal(next.id, genExpectOf(next), next.observed.ms);
+      onStep(g, from, step, e);
+      if (next === undefined) break;
+      g = next;
+      if (step.next.state !== from) break;
+    }
+    if (!live) continue;
+    const calls = effectiveGeneration(g, live).state === 'clearing' ? coord.renewCallsOf(g.id) : null;
+    if (calls !== null && !calls.ok) { fail('generations', calls.detail, `generation ${g.id}'s renew waits for the next pass, and`); continue; }
+    const owed = calls === null ? null : renewOwed('clearing', g.attempts, calls.calls.map((c) => c.try));
+    if (owed !== null) planned.push({ target: targetOf(g), act: { kind: 'renew', try: owed } });
+  }
   return result();
+}
+
+/** A generation's state, as `onStep` names the state a step left. */
+type GenerationStateOf = GenRow['state'];
+
+/** The act target of a generation row. */
+const targetOf = (g: GenRow): ActTarget => ({
+  genId: g.id, identity: g.identity, sessionId: g.sessionId, role: g.role, n: g.n, startId: g.startId, cls: g.walkClass,
+});
+
+/** One shadow record: the step and the machine's actions it would have taken. */
+function shadowLine(g: GenRow, from: GenerationStateOf, step: GenStep, event: GenEvent): string {
+  const acts: readonly GenAction[] = step.actions;
+  return `ccrc-server: generations: shadow: ${g.sessionId} n=${g.n} ${from} -> ${step.next.state} on ${event.kind}`
+    + (acts.length > 0 ? `, would ${acts.join(', ')}` : '');
+}
+
+/** The Overlord's live generation, for `overlordFirst`: none until W1 mints one. */
+function overlordReadingOf(rows: readonly GenRow[], live: boolean): OverlordGenerationReading {
+  const o = rows.find((x) => x.role === 'overlord');
+  return o === undefined ? 'none' : effectiveGeneration(o, live).state;
+}
+
+/** `softRenewalMay`'s inputs from stored columns and measured readings (ruling R4, slug gather-in-the-act-lane): the observed
+ *  times (`softTimesOf`), the soft renewals of the identity's line within the budget's window of observed time (the
+ *  accumulator carries across mints), the hold table's drain, and the operator mark `unmeasured` until the renewal hand-offs
+ *  piece brings it. A count that could not be read is not a count, so the decider waits `unmeasured`. */
+function softInputsOf(coord: Pick<GenerationsCoord, 'softRenewalsOf'>, g: GenRow, r: GenReadings | undefined,
+  overlord: OverlordGenerationReading, mode: SoftInputs['mode']): SoftInputs {
+  const stamps = coord.softRenewalsOf(g.identity, g.term);
+  const inWindow = stamps.ok ? stamps.observedMs.filter((at) => g.observed.ms - at < SOFT_BUDGET.windowMs).length : Number.NaN;
+  const na: SoftReading<number> = { kind: 'not-applicable' };
+  return {
+    role: g.role,
+    hibernateHold: r?.drain ?? { held: true, reason: 'unmeasured' },
+    readersRunning: g.role === 'coordinator' ? na : later('W1'),
+    operatorQuietObservedMs: g.role === 'coordinator' ? later('operator-mark') : g.role === 'overlord' ? later('W1') : na,
+    placeHiddenObservedMs: g.role === 'overlord' ? later('W1') : na,
+    mode, ...softTimesOf(g), softRenewalsInWindow: inWindow, overlordOutsideActive: !overlordFirst(overlord),
+  };
 }
 
 /** One event for one generation, and the card it read when the event is a card read. */
@@ -383,12 +535,15 @@ export interface FedEvent {
 /** THE APPLY LOOP, apart from any feed: each event is stepped through the machine on the generation's effective view, and
  *  every step the machine reports `changed` is written (compare-and-set, with the card the event carried); a step that
  *  changes nothing is not written. Answers how many rows it wrote. The renewal act's ordered feed hands its events here. */
-export function applyFedEvents(coord: Pick<GenerationsCoord, 'stepGeneration'>, events: readonly FedEvent[], live: boolean, now: number): number {
+export function applyFedEvents(coord: Pick<GenerationsCoord, 'stepGeneration'>, events: readonly FedEvent[], live: boolean, now: number,
+  onStep?: (gen: GenRow, from: GenRow['state'], step: GenStep, event: GenEvent) => void): number {
   let wrote = 0;
   for (const { gen, event, card } of events) {
     const step = generationStep(genViewOf(gen, live), event);
     if (!step.changed) continue;
-    if (coord.stepGeneration(gen.id, genExpectOf(gen), step.next, live, now, card).changed) wrote += 1;
+    if (!coord.stepGeneration(gen.id, genExpectOf(gen), step.next, live, now, card).changed) continue;
+    wrote += 1;
+    onStep?.(gen, effectiveGeneration(gen, live).state, step, event);
   }
   return wrote;
 }
@@ -406,6 +561,8 @@ export function cardReadFeed(coord: Pick<GenerationsCoord, 'cardReadOfStart'>, g
     const r = coord.cardReadOfStart(gen.startId);
     if (!r.ok) { failed.push(r.detail); continue; }
     if (r.read === null) continue;
+    // A read made at or after `carded`'s deadline is not fed: the deadline wins (m6).
+    if (!beforeDeadline(r.read.at, effectiveGeneration(gen, live).deadlineAt)) continue;
     events.push({ gen, event: { kind: 'card-read', hashMatches: r.read.current }, card: { hash: r.read.hash, snapshotId: r.read.snapshotId } });
   }
   return { events, failed };
@@ -536,12 +693,20 @@ export interface GatherPorts {
   turnMark(id: string): Promise<TurnMarkRead>;
   processStartedAt(id: string): Promise<number | null>;
   release(): Promise<ReleaseRead>;
+  /** The hold table's drain for a session (`drainVerdict` over its row and live reads). Absent: no drain is read, which
+   *  holds as unmeasured. */
+  drainOf?(id: string): Promise<DrainRead>;
 }
 
 /** The compactions last read per session and the stamp they were read at: a read cache, never a decision's memory. */
 export type CompactionsMemo = Map<string, { stamp: string; read: CompactionsRead }>;
 
-/** The fleet reads for every live generation the pass will judge (`judgedForDue`). The
+/** A generation the gather reads: one judged for due, or one whose walk drains (either column). */
+const gathered = (g: GenRow): boolean => judgedForDue(g) || g.state === 'draining' || g.shadowState === 'draining';
+/** A generation whose drain is read: one draining, or one at rest whose soft trigger waits on the hold table. */
+const drainRead = (g: GenRow): boolean => g.state === 'draining' || g.shadowState === 'draining' || (judgedForDue(g) && g.dueClass === 'soft');
+
+/** The fleet reads for every live generation the pass will judge (`judgedForDue`) or drain. The
  *  compactions are re-read only when the PreCompact events file changed (every compaction writes it, the pre line or the
  *  rotation; review 1927 N2), and every time when it is absent (an older hook) or its stamp could not be read. */
 export async function gatherGenerationReadings(coord: Pick<GenerationsCoord, 'liveGenerations'>,
@@ -549,7 +714,7 @@ export async function gatherGenerationReadings(coord: Pick<GenerationsCoord, 'li
   const out = new Map<number, GenReadings>();
   const gens = coord.liveGenerations();
   if (!gens.ok) return out;
-  const targets = gens.rows.filter(judgedForDue);
+  const targets = gens.rows.filter(gathered);
   if (targets.length === 0) return out;
   const release = await ports.release();
   for (const g of targets) {
@@ -570,7 +735,8 @@ export async function gatherGenerationReadings(coord: Pick<GenerationsCoord, 'li
     const behind: Reading<boolean> = release.kind === 'none' ? { kind: 'measured', value: false }
       : release.kind === 'unreadable' ? later('install record unreadable')
       : started === null ? later('process start unmeasured') : { kind: 'measured', value: startedBeforeRelease(started, release.at) };
-    out.set(g.id, { usage, compactions, turn, behind });
+    const drain = ports.drainOf !== undefined && drainRead(g) ? await ports.drainOf(id) : undefined;
+    out.set(g.id, drain === undefined ? { usage, compactions, turn, behind } : { usage, compactions, turn, behind, drain });
   }
   for (const id of [...memo.keys()]) if (!targets.some((g) => g.sessionId === id)) memo.delete(id);
   return out;

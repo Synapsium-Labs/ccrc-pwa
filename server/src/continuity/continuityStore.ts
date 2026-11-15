@@ -830,6 +830,45 @@ function handoverNoteOf(text: string): HandoverNote | null {
   }
 }
 
+/** This generation's own handover note (written while it was `checkpointed`), or null when it wrote none: the renewal
+ *  walk's `handover` event and the checkpoint the acts seal read it (W1a renewal act). */
+export function handoverOf(db: DatabaseSync, generationId: number): HandoverRead {
+  try {
+    const row = stmt(db, 'SELECT g.n AS n, h.note AS note, h.dropped AS dropped, h.at AS at FROM continuity_handovers h '
+      + 'JOIN continuity_generations g ON g.id = h.generationId WHERE h.generationId = ?').get(generationId) as Record<string, unknown> | undefined;
+    if (row === undefined) return { ok: true, handover: null };
+    const note = typeof row.note === 'string' ? handoverNoteOf(row.note) : null;
+    const n = intOrNull(row.n); const dropped = intOrNull(row.dropped); const at = intOrNull(row.at);
+    if (note === null || n === null || dropped === null || at === null) return { ok: false, detail: `continuity_handovers row ${generationId} does not read` };
+    return { ok: true, handover: { generationId, n, note, dropped, at } };
+  } catch (e) {
+    return { ok: false, detail: `continuity_handovers read failed: ${e instanceof Error ? e.message : String(e)}` };
+  }
+}
+
+/** The soft renewals an identity's line spent in one term, as accumulator stamps (`softRenewalObservedMs` of every row,
+ *  ended ones included: the soft budget's window spans generations, ruling R4). */
+export function softRenewalsOf(db: DatabaseSync, identity: string, term: number): { ok: true; observedMs: number[] } | { ok: false; detail: string } {
+  try {
+    const rows = stmt(db, 'SELECT softRenewalObservedMs AS at FROM continuity_generations WHERE identity = ? AND term = ? '
+      + 'AND softRenewalObservedMs IS NOT NULL').all(identity, term) as { at: unknown }[];
+    const out: number[] = [];
+    for (const r of rows) { const at = intOrNull(r.at); if (at === null) return { ok: false, detail: 'continuity_generations softRenewalObservedMs does not read' }; out.push(at); }
+    return { ok: true, observedMs: out };
+  } catch (e) {
+    return { ok: false, detail: `continuity_generations read failed: ${e instanceof Error ? e.message : String(e)}` };
+  }
+}
+
+/** Feeding a soft `due` spends one of the soft budget's renewals: stamped on the row at the accumulator's reading. */
+export function setSoftRenewal(db: DatabaseSync, id: number, expect: GenExpect, observedMs: number): { changed: boolean } {
+  try {
+    return changedOf(stmt(db, `UPDATE continuity_generations SET softRenewalObservedMs = ? WHERE ${CAS}`).run(observedMs, ...casArgs(id, expect)));
+  } catch {
+    return { changed: false };
+  }
+}
+
 /** The handover note of the generation just before `liveGenerationId` in its identity's line (the one the live generation
  *  replaced), or null when that generation wrote none or there is none. It finds that generation by its place in the line
  *  (the identity's newest row older than the live one), never by reading a state column. */

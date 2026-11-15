@@ -172,6 +172,8 @@ import { runStuckPass } from './coord/runStuckPass.js';
 import { isUntoldNotice, untoldPass } from './coord/untold.js';
 import { casesPass } from './coord/casesLane.js';
 import { gatherGenerationReadings, generationsPass, type CompactionsMemo } from './continuity/generationsLane.js';
+import { renewalHoldsMail } from './continuity/renewalFeed.js';
+import { renewalActsOf } from './continuity/renewalWiring.js';
 import { runTimersLane, timerListingOf } from './continuity/timerLane.js';
 import { TIMER_MAIL_SENDER } from '../../shared/continuity-timers.js';
 import { LAUNCH_PROFILE_LANE_ROW, profilePass, steerMarkerOf, type ProfileLaneMemory } from './continuity/profileLane.js';
@@ -6081,9 +6083,9 @@ export class FleetWatcher {
     } catch { return { kind: 'unreadable' }; }
   }
 
-  /** The generations lane (Overlord §3.3.11, W1a), in shadow: the fleet reads first, then one synchronous pass that mints,
-   *  ends and records through the store. It acts on no session; the pass logs what it skipped, held and could not read
-   *  (review 2003 F5). */
+  /** The generations lane (Overlord §3.3.11, W1a): the fleet reads first, then one synchronous pass that mints, ends, walks
+   *  and records through the store, then, only while `continuity` is live, the acts it planned (`renewalActsOf`); in shadow
+   *  it acts on no session. The pass logs what it skipped, held and could not read (review 2003 F5). */
   async sweepGenerations(records: readonly SessionRecord[], listedAt: number): Promise<void> {
     const coord = this.deps.coord;
     if (!coord) return;
@@ -6091,6 +6093,7 @@ export class FleetWatcher {
       const { io, cfg } = this.deps;
       const reads = turnReadDeps(this.deps, this);
       const rec = (id: string): SessionRecord | undefined => records.find((r) => r.id === id);
+      const acts = renewalActsOf(this.deps, coord, records, reads, (r) => this.rowAtAct(r), this.stopDoneSerial);
       const readings = await gatherGenerationReadings(coord, {
         usage: (id) => readUsageMeasured(io, cfg.registryDir, id, Math.floor(this.deps.time.clock.wall() / 1000)),
         eventsStamp: (id) => io.statMeasured(compactionsPaths(cfg.registryDir, id).pre),
@@ -6098,16 +6101,19 @@ export class FleetWatcher {
         turnMark: async (id) => { const r = rec(id); return r === undefined ? { ok: false, reason: 'unmeasured' } : turnMarkFor(reads, r); },
         processStartedAt: async (id) => { const r = rec(id); return r === undefined ? null : processStartedAtFor(reads, r); },
         release: () => this.nodeRelease(),
+        drainOf: acts.drainOf,
       }, this.generationsCompactions);
       this.generationsProc ??= this.deps.time.entropy.uuid();
-      generationsPass({ coord, clock: this.deps.time.clock, entropy: this.deps.time.entropy, proc: this.generationsProc,
+      const pass = generationsPass({ coord, clock: this.deps.time.clock, entropy: this.deps.time.entropy, proc: this.generationsProc,
         log: (line) => console.warn(line), retried: this.generationsRetried, emptyTries: this.generationsEmptyTries }, {
         registry: records.map((r) => ({ id: r.id, uuid: r.unmeasured.includes('uuid') ? null : r.uuid,
           lane: r.unmeasured.includes('wrapper') ? null : r.wrapper, child: r.child })),
         // When this tick's registry read began: a start received since is held a pass (review 2006 R1).
         listedAt,
         readings,
+        canRenew: acts.canRenew,
       });
+      if (pass.live && pass.planned.length > 0) await acts.run(pass.planned);
     });
   }
 
@@ -8124,6 +8130,10 @@ export class FleetWatcher {
     // matching how `uuidByToId` and `sessionProjects` are built from `records`
     // — the store returns rows, the sweep shapes them into what it will ask.
     const coordinators = new Set(store.openCoordinatorIds());
+    // The renewal act's hold (Overlord W1a): each session's live generation by its `state` column, read once a sweep (a
+    // failed read holds nothing, as before the act existed); `renewalHoldsMail` decides, before any attempt is counted.
+    const gens = store.liveGenerations();
+    const genState = new Map(gens.ok ? gens.rows.map((g) => [g.sessionId, g.state]) : []);
     // D-792's ONE WRITER. Every ordinary gate below calls this and then
     // `continue`s; nothing reads it back. It records WHAT refused the row and
     // for how long, and changes nothing about whether, when or how often the
@@ -8150,6 +8160,7 @@ export class FleetWatcher {
       // and never leaves a session claimed across sweeps.
       this.mailInFlight.add(d.toId);
       try {
+        if (genState.has(d.toId) && renewalHoldsMail(genState.get(d.toId), store.mailOrigin(d.mailId))) { gated(d, 'renewing'); continue; }
         // The recipient's registry record, looked up once and gated on below
         // (the registry ladder); found here, before the cooldown, only because
         // the pace reads its `.child` mark. A lookup, not a gate.

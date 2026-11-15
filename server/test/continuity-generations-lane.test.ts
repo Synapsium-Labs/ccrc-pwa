@@ -61,8 +61,8 @@ function fixture(): Fixture {
   const deps = (proc: string): GenerationsDeps => {
     if (!memos.has(proc)) memos.set(proc, new Set());
     if (!empties.has(proc)) empties.set(proc, new Map());
-    // The continuity row is gated until the renewal act ships; these cases drive its live walk, so they open the gate
-    // (review 2006 N1). The case below holds that the real gate keeps a stored Live shadow.
+    // The renewal act lifted the continuity row's gate; these cases still pass an open one, so they never depend on the
+    // card's words (review 2006 N1). The case below holds that the real gate is open too.
     return { coord: s, clock: t.ports.clock, entropy: t.ports.entropy, proc, log: (l) => logs.push(l), retried: memos.get(proc)!, emptyTries: empties.get(proc)!, gate: () => null };
   };
   return {
@@ -115,14 +115,14 @@ describe('the pass mints and ends generations from the starts (Task 2)', () => {
     expect(all(f.s)).toEqual([{ identity: COORD, n: 1, state: 'carded', shadowState: null, outcome: null, startId: 1 }]);
   });
 
-  it('a Live stored on the gated continuity row is shadow: the real gate keeps the mint\'s `state` active (review 2006 N1)', () => {
+  it('the renewal act lifted the continuity row\'s gate: with the real gate, a stored Live walks the mint\'s `state` (review 2003 F3)', () => {
     const f = fixture();
     f.s.setLaneArm(CONTINUITY_LANE, 'live', 1);
     f.start('startup', U1);
     const r = generationsPass({ coord: f.s, clock: f.t.ports.clock, entropy: f.t.ports.entropy, proc: 'p1', log: () => {}, retried: new Set(), emptyTries: new Map() },
       { registry: f.registry, listedAt: f.t.ports.clock.wall() + 1, readings: new Map() });
-    expect(r).toMatchObject({ live: false, minted: 1 });
-    expect(all(f.s)).toEqual([{ identity: COORD, n: 1, state: 'active', shadowState: 'carded', outcome: null, startId: 1 }]);
+    expect(r).toMatchObject({ live: true, minted: 1 });
+    expect(all(f.s)).toEqual([{ identity: COORD, n: 1, state: 'carded', shadowState: null, outcome: null, startId: 1 }]);
   });
 
   it('a compact start mints nothing; a fork start mints nothing and leaves the live generation', () => {
@@ -1167,7 +1167,9 @@ describe('shadow is structural: the lane imports nothing that sends', () => {
       '../roleOf.js', '../time/observed.js', './compactions.js', './continuityStore.js', './generationMachine.js', './generationStart.js',
       './renewalDue.js',
       // The probes piece: the round's composition and schedule (L1) and the snapshot's reader (L1); none of them sends.
-      '../../../shared/continuity-card.js', './card.js', './probes.js', './probeSchedule.js'];
+      '../../../shared/continuity-card.js', './card.js', './probes.js', './probeSchedule.js',
+      // The renewal act: the walk's deciders (L1). The acts are planned here and taken by `renewalActs.ts`, never imported.
+      './softRenewal.js', './renewalOrder.js', './renewalFeed.js'];
     const edges = parsedFile('server/src/continuity/generationsLane.ts').imports.filter((e) =>
       e.kind !== 'type-query' && !e.typeOnly && !(e.names.length > 0 && e.names.every((n) => (e.typeNames ?? []).includes(n))));
     expect(edges.map((e) => e.specifier).sort()).toEqual([...allowed].sort());
