@@ -1056,6 +1056,23 @@ const SITES: Site[] = [
     sentVisible: () => [{ title: 'Model classes', body: MOVED, tag: 'models-advance:lane-a:opus', url: '/accounts' }] },
 ];
 
+/** The source rows a site leaves, by their columns that carry no clock: asks and items. */
+const sourceRows = (c: CoordStore): { asks: unknown[]; items: unknown[] } => ({
+  asks: c.db.prepare('SELECT id, childId, parentId, state, releaseReason FROM asks ORDER BY id').all(),
+  items: c.db.prepare('SELECT id, kind, title, neededBy, state FROM operator_items ORDER BY id').all(),
+});
+/** One run of a site, not visible: what it asked the notify log to record, and the source rows it left. */
+async function recorded(site: Site, seam: PushSeam | null): Promise<{ log: unknown[]; rows: ReturnType<typeof sourceRows> | null }> {
+  const record = vi.spyOn(NotifyLog.prototype, 'record');
+  try {
+    const e = envOf(seam, false);
+    await site.drive(e);
+    return { log: record.mock.calls.map((c) => c[0]), rows: e.coord === undefined ? null : sourceRows(e.coord) };
+  } finally {
+    record.mockRestore();
+  }
+}
+
 describe.each(SITES)('#$n $name', (site) => {
   it('sends exactly these payloads, in this order', async () => {
     const seam = pushSeam();
@@ -1069,10 +1086,9 @@ describe.each(SITES)('#$n $name', (site) => {
     strict(seenBy(site, seam), (site.sentVisible ?? (() => []))(ids));
   });
 
-  it('with no push service nothing throws and nothing is sent', async () => {
-    const ghost = pushSeam();
-    await expect(site.drive(envOf(null, false))).resolves.toBeDefined();
-    expect(ghost.sent).toEqual([]);
+  it('with no push service nothing throws, and the notify log and the source rows are what a run with one leaves', async () => {
+    const withService = await recorded(site, pushSeam());
+    expect(await recorded(site, null)).toStrictEqual(withService);
   });
 });
 

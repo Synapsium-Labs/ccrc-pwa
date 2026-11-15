@@ -3139,7 +3139,7 @@ export const MIGRATIONS: readonly string[] = [
   CREATE TABLE push_outbox (
     id INTEGER PRIMARY KEY, pushId TEXT NOT NULL UNIQUE,
     sourceKind TEXT, sourceId INTEGER,  -- 'ask' | 'item', or both NULL for an unbound push
-    payload TEXT, tag TEXT,             -- the masked PushPayload as JSON, NULL once terminal; tag NULL with no payload
+    payload TEXT, tag TEXT,             -- the masked PushPayload as JSON, NULL once terminal; tag NULL only when written with no payload
     state TEXT NOT NULL, createdAt INTEGER NOT NULL, armedAt INTEGER NOT NULL,
     claimSeq INTEGER NOT NULL DEFAULT 0, attempts INTEGER NOT NULL DEFAULT 0,
     claimedAt INTEGER, nextAttemptAt INTEGER, pushedAt INTEGER,

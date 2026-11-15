@@ -13,7 +13,7 @@
 const OUTBOX_STATE_MAP = {
   pending: 'written and due; no attempt holds it',
   sending: 'claimed for one attempt; the verdict is not in',
-  retrying: 'every subscription refused for a reason that can pass; due again at nextAttemptAt',
+  retrying: 'some subscription refused for a reason that can pass, and none accepted or went unanswered; due again at nextAttemptAt',
   sent: 'the push service accepted it for at least one subscription (pushedAt)',
   silent: 'no push by decision: the level, the operator looking, the source settled, or no payload',
   unsent: 'no subscription left to deliver to',

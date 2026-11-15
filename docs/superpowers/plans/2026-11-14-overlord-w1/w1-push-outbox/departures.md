@@ -10,6 +10,8 @@ deviation ledger.
 - **tag-null-without-payload** — the plan's schema has `tag TEXT NOT NULL`, but the same plan writes a bound row with a
   null payload when there is no push service or no payload (F4). Such a row has no tag to store. `tag` is nullable, and
   NULL means exactly one thing: the row was written with no payload. Every row written with a payload stores its tag.
+  It holds by construction (review 2119 F2): the store takes an `OutboxPayload` (`PushPayload & { tag: string }`), so a
+  payload with no tag cannot be written, and a stored payload with no tag reads as unreadable.
 - **held-items-read-in-the-outbox-store** — Task 3 lists `heldItemsReached` among `pushOutboxStore.ts`'s functions and
   tests it, while Task 5's file list puts it in `ledgersStore.ts`. It is built in `pushOutboxStore.ts` with Task 3, and
   it asks the hold's one rule, `ledgersStore.ts#operatorWasShown`, rather than restating it in SQL. Its rows carry the
@@ -34,7 +36,18 @@ deviation ledger.
   and `nextAttemptAt`, so a re-armed row reads as a fresh `pending` row. It keeps `pushId`, `claimSeq`, `pushedAt` and
   the last `verdict`.
 - **outbox-reads-are-strict** — a stored row whose state, source, verdict or silence word this build does not know, or
-  whose payload does not parse, makes the read answer `ok: false` rather than fold into a known row.
+  whose payload does not parse or has no tag, is never folded into a known row: it is set aside by
+  `one-unreadable-row-never-blinds-the-drain`. `heldItemsReached` reads `neededBy` as strictly (review 2119 F9).
+- **one-unreadable-row-never-blinds-the-drain** — the coordinator's ruling on review 2119 F1. A read answers the rows
+  that parse and, beside them, `unreadable: [{ id, detail }]`, logging each such id once per read through
+  `console.warn('ccrc-server: …')`; the detail names the column and the word, never the stored JSON. A failed query is
+  still `ok: false`, never an empty list. The boot seal and the purge act by state and id in SQL, so an unreadable
+  `sending` row is still sealed `unknown` and an unreadable terminal unbound row is still purged past `OUTBOX_KEEP_MS`.
+- **claim-waits-for-the-retry-time** — review 2119 F4. `claimOutboxRow` claims `pending` whatever the clock and
+  `retrying` only once `nextAttemptAt <= at`, so a direct send cannot claim a retry before its time.
+- **verdict-moves-are-a-union** — review 2119 F5. `insertBoundRowInTx` takes `pending` with a payload or `silent` with
+  its why, and `markOutboxVerdict` takes one move (`sent` and `retrying` with their verdict, `retrying` with its time),
+  so the shapes the plan's flat signatures allowed but never meant cannot be written.
 - **red-first-by-mutation** — Task 2's and Task 3's modules were written beside their tests rather than strictly after a
   red run. Every case was then shown to bite by mutation: the seven decider sets kill every mutant (registered in
   `mutation-floors.json` at 1), and Task 3's four named mutations each turned their case red (recorded in the PR body).

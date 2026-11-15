@@ -42,8 +42,7 @@ import {
 import * as timers from '../continuity/continuityStore.js';
 import * as probes from '../continuity/continuityStore.js';
 import * as outbox from './pushOutboxStore.js';
-import type { PushPayload } from '../push.js';
-import type { PushSendVerdict, PushSilentWhy } from '../../../shared/push-outbox.js';
+import type { PushSilentWhy } from '../../../shared/push-outbox.js';
 import type { TimerActor, TimerCancelReason } from '../../../shared/continuity-timers.js';
 import type { GenView } from '../continuity/generationMachine.js';
 import type { Observed } from '../time/observed.js';
@@ -5431,10 +5430,10 @@ export class CoordStore {
   snapshotFacts(id: string): ReturnType<typeof probes.snapshotFacts> { return probes.snapshotFacts(this.db, id); }
   /** Overlord W1 (the push outbox, `pushOutboxStore.ts`): the sender's moves and the reads. The bound-row writers and the
    *  reach stamp run inside a caller's transaction, so they take the handle and have no delegate. */
-  insertUnboundRow(row: { pushId: string; payload: PushPayload; at: number }): ReturnType<typeof outbox.insertUnboundRow> { return outbox.insertUnboundRow(this.db, row); }
+  insertUnboundRow(row: { pushId: string; payload: outbox.OutboxPayload; at: number }): ReturnType<typeof outbox.insertUnboundRow> { return outbox.insertUnboundRow(this.db, row); }
   claimOutboxRow(id: number, at: number): ReturnType<typeof outbox.claimOutboxRow> { return outbox.claimOutboxRow(this.db, id, at); }
   silenceOutboxRow(id: number, why: PushSilentWhy, at: number): { changed: boolean } { return outbox.silenceOutboxRow(this.db, id, why, at); }
-  markOutboxVerdict(id: number, claimSeq: number, to: 'sent' | 'retrying' | 'unsent' | 'failed' | 'unknown', verdict: PushSendVerdict | null, at: number, nextAttemptAt: number | null): { changed: boolean } { return outbox.markOutboxVerdict(this.db, id, claimSeq, to, verdict, at, nextAttemptAt); }
+  markOutboxVerdict(id: number, claimSeq: number, move: outbox.OutboxVerdictMove, at: number): { changed: boolean } { return outbox.markOutboxVerdict(this.db, id, claimSeq, move, at); }
   dueOutboxRows(now: number): outbox.OutboxRead { return outbox.dueOutboxRows(this.db, now); }
   openOutboxRows(): outbox.OutboxRead { return outbox.openOutboxRows(this.db); }
   sealAtBoot(id: number, to: 'unknown' | 'failed', at: number): { changed: boolean } { return outbox.sealAtBoot(this.db, id, to, at); }
