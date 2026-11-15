@@ -8,7 +8,7 @@ import { readFileSync, mkdtempSync, mkdirSync, realpathSync, rmSync, writeFileSy
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { spawnSyncGroup } from './spawnGroup.js';
-import { seedAccountsSh, spliceCcd } from './ccdWsHelpers.js';
+import { seedAccountsSh, spliceCcd, ghContainedEnv } from './ccdWsHelpers.js';
 import { addedFiles, fileAt, gitRead } from './growthCheck.js';
 
 /** ccd's program files by repo-relative path. */
@@ -138,7 +138,7 @@ export function programDump(tree: Tree): string {
       + 'for __dump_v in $(compgen -v); do [[ $__dump_v =~ $__dump_re ]] || declare -p "$__dump_v"; done';
     const r = spawnSyncGroup('bash', ['--norc', '--noprofile', '-c', script, 'program-dump', path.join(root, 'ccd/ccd'), NOT_THE_PROGRAM.source],
       { encoding: 'utf8', timeout: 120_000, cwd: dir, maxBuffer: 256 * 1024 * 1024,
-        env: { HOME: home, PATH: process.env['PATH'] ?? '/usr/bin:/bin', LC_ALL: 'C' } });
+        env: ghContainedEnv(home, { HOME: home, PATH: process.env['PATH'] ?? '/usr/bin:/bin', LC_ALL: 'C' }, { systemd: true, tmux: true }) });
     if (r.status !== 0) throw new Error(`programDump: bash exited ${r.status}: ${r.stderr}`);
     return r.stdout.split(root).join('<TREE>').split(home).join('<HOME>');
   } finally {
