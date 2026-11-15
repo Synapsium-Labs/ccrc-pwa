@@ -129,8 +129,7 @@ not the import-graph selection, so it was not a replacement. It is now recorded 
 
 ## R5
 
-**Reconciliation.** The slug `control-tx-module` is in no file of the tree (`grep -rn control-tx-module` over `docs/` and `.superpowers/`
-found it nowhere before this round); the controller reports it in the wave-done mail and the PR body, which I cannot read from here. So the
+**Reconciliation.** The slug `control-tx-module` was in the wave-done mail and in the body of PR #2837 (one occurrence, as the controller measured with `gh pr view 2837 --json body`), but in no file of the tree (`grep -rn control-tx-module` over `docs/` and `.superpowers/` found it nowhere before this round). So the
 reviewer's "no departure slug of its own" is right about the notes: `task-5.md` `## Departures` named `control-tx-takes-port` (the
 `WatcherCoordPort` parameter) but not the split itself, and `task-7.md`'s slug list likewise. Both now carry `control-tx-module`, pointing here.
 The split was a coordinator ruling recorded in `.superpowers/sdd/.../progress.md` ("Ruling (T5 ...)"), made because `store.ts` stood at +35 of 40.
@@ -146,7 +145,7 @@ HEAD as already fetched (`a6b87cf79`, no fetch run), in a throwaway test file th
 | `server/src/coord/landingControlTx.ts` (new, 66 physical lines) | absent | 47 | +48 |
 
 The delta +49 equals the +49 recorded in `task-5.md`, over the limit of 40; the absolute figures there (5332 and 5381) are 9 lower on both
-sides most likely because the recorded measurement used an older merge-base (not re-derived here); the delta is unchanged. Task 4's +35 became +49 with
+sides because the recorded measurement was taken against the dispatch base 391b5c65b. The clause-16 absorb merge 9210e7a37 (origin/main into this branch) moved the merge-base to a6b87cf79 (`git merge-base HEAD origin/main`), and origin/main grew `store.ts` between those two commits. The delta stays +49 (as the controller measured; not re-run). Task 4's +35 became +49 with
 Task 5's `applyLandingControl` method (+14 net: guard, owned transaction, catch, fence). `GROWTH_OVER: (none)` stands only because the new L3 C5 file
 takes the new-file rule (D-8563): a passing growth rule is not design approval.
 
@@ -172,7 +171,7 @@ L3, C5) is only the body that runs INSIDE that transaction, and it has one call 
 `rundefsTx.ts#queueRunlessNoticeTx` take `coord: WatcherCoordPort` and run inside a caller's transaction, which is the closest match (and
 the bodies this file reuses); `linkingStore.ts#setLinking`, `reviewCapStore.ts#liftReviewCapByCoordinator` and
 `continuity/continuityStore.ts#mintGeneration` take the `db` and open their own `tx(db, ...)` inside the companion; `practiceCasesStore.ts#openPracticeCase`
-takes the `db` too (I did not verify a transaction in it). So the form is not new, but `applyLandingControlTx` differs from the db-taking
+takes the `db` and opens no transaction of its own (`grep -n "BEGIN\|tx(\|transaction" server/src/coord/practiceCasesStore.ts` finds nothing); the store's `openPracticeCase` is a one-line delegate and its caller `casesLane.ts` calls it directly, so it does not run inside a store transaction. It is a precedent for a same-ring companion taking the `db`, not for a body run inside the store's `tx`. So the form is not new, but `applyLandingControlTx` differs from the db-taking
 companions in that the store, not the companion, owns the transaction.
 
 **Request.** The growth rule passing is not design approval. No further decomposition or exemption is requested, no port is widened and no
