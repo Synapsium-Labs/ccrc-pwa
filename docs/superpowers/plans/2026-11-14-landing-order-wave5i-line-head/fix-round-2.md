@@ -194,3 +194,73 @@ Commits: `6ae3f2daa` (A1), `7177edd4c` (A2), `af7410dbc` (A5 and the control bod
   set and the read keeps showing it while the `binding` reads `inert`.
 - **Gates.** The brief's 7-file vitest selection: 7 files, 277 tests passed; `tsc --noEmit -p .` rc 0.
 - **Review follow-ups.** `row!` in `landingControlTx.ts` is replaced by an explicit invariant: `if (row === null) throw new Error('landing-next: a run episode without a run row …')` before `phase.at = 'apply'`. The branch is unreachable by the decider's contract (`nextLandingNoticeOf` returns no-send for a missing run), so no test drives it; if it ever fires the body throws and the store rolls back and classifies it, never an `episode-changed` no-send. The real-store run-row-gone test now sets `foreign_keys` back to ON in a `finally`. The header's growth clause is split into its own sentence. Re-run: the 7-file selection 277 passed, `tsc --noEmit -p .` rc 0.
+
+## R5 records
+
+**Statement.** The control-tx-module placement (departure `control-tx-module`, `fix-round-1.md#r5`) is permitted by the coordinator only
+within the measured boundary: one call from `CoordStore.applyLandingControl` inside its owned synchronous transaction; the guard, the
+catch, the rollback/boundary and the fence stay with the store; no async, no wrapper transaction, no extra state or writer, no widened
+port. Passing the new-file growth waiver is a measured rule result, not an architecture license. No further decomposition and no
+exemption is requested.
+
+**Correction of a stale explanation (A4).** `task-5.md`'s `control-tx-takes-port` bullet and `fix-round-1.md`'s closing note said
+the body reads `const { db } = coord` because core-vocab's REACH forbids `coord.db`. The code (`server/src/coord/landingControlTx.ts`)
+uses `coord.db`, legal only because that file is in `HANDLE_HOLDERS` (`server/test/single-definition/core-vocab.test.ts`, the set with
+the wave 5i comment). Each of those two places now carries one added sentence pointing here; the old text is kept.
+
+**Departure `control-tx-handle-holder`.** `landingControlTx.ts` is a member of core-vocab's `HANDLE_HOLDERS` ONLY because the
+`mainRedHold` UPSERT in `applyLandingControlTx` runs inside `CoordStore.applyLandingControl`'s owned synchronous transaction. The
+rationale: one store owner (one call site, inside the store's `tx`); no transaction of its own; no async; no state; one `coord.db`
+statement. No other port consumer gains handle access: the set gained this one file and no other. The core-vocab file is NOT edited in
+this round (it conflicts with main; an absorb needs an operator decision). The next independent review is asked to assess the
+membership. The slug is added to `task-5.md`'s `## Departures` and to `task-7.md`'s list.
+
+**The red-able guards that hold it** (`server/test/landing-entry-census.test.ts`, the "wave 5i ownership" block):
+- "mainRedHold is written by ONE statement, the UPSERT in landingControlTx.ts, and operatorPaused is not in its SET": one write to
+  `landing_projects`, the UPSERT, whose SET is `mainRedHold` only. No mutant of it is recorded in this round's code section.
+- "the transaction body is called only by CoordStore.applyLandingControl, inside its tx": one caller, `tx(this.db` precedes the call in
+  source order, one INSERT in the body. No mutant of it is recorded in this round's code section.
+- "the transaction body holds the database handle once, in applyLandingControlTx, opens no transaction of its own, and only store.ts
+  imports it" (added in this round, `fd4ec4090`). Mutants: a second `coord.db.prepare('SELECT 1').get()` in the body, rc 1,
+  `the handle is named exactly once: expected [ 'coord.db', 'coord.db' ] to have a length of 1 but got 2`; a value import of
+  `landingControlTx.js` in `landingNext.ts`, rc 1, `expected [ …(2) ] to deeply equal [ 'server/src/coord/store.ts' ]`. Each restored
+  with `cmp` equal (see "R5 and R6 (code)").
+- core-vocab itself: with the file removed from `HANDLE_HOLDERS` the suite is red (`fix-round-1.md`, task-7 F6).
+
+**Growth figures (A6, A7).** Counted with the growth check's own rule: `server/test/growthCheck.ts`'s `netGrowth` (`codeLines` of
+`git show <sha>:<file>`, an absent base counting as 0), run through `tsx` from `server/` (a throwaway script outside the tree). The
+merge-base of `origin/main` and HEAD as already fetched (no fetch) is `2b082b91f`; `a6b87cf79` is the earlier one.
+
+| File | Base | Reviewed tip `59d3223fa` | Delta | HEAD `03e99c879` | Delta |
+|---|---|---|---|---|---|
+| `landingControlTx.ts` (new) | absent (0), both bases | 47 | +47 | 47 | +47 |
+| `store.ts` vs `2b082b91f` | 5352 | 5401 | +49 | 5402 | +50 |
+| `store.ts` vs `a6b87cf79` | 5341 | 5401 | +60 | 5402 | +61 |
+
+`landingControlTx.ts` is +47, not +48. The review's `store.ts` pairing "5341 to 5390 against a6b87cf79" is the figure at `9210e7a37` and
+`194f39ed4` (both measured: 5390, +49 vs `a6b87cf79`, +38 vs `2b082b91f`); at the reviewed tip the file stands at 5401, which is +49
+against the current merge-base `2b082b91f` (the review's second pair). R1's one added line in `CoordStore.advanceLanding` (`c93a33136`)
+makes HEAD 5402, +50 against `2b082b91f`. `store.ts` therefore grows (the header sentence "so the store does not grow" was wrong, A7,
+and is corrected in `af7410dbc`); the rule passes only through the new-file waiver.
+`GROWTH_CHECK=1 timeout 600s ccrc test -- ./node_modules/.bin/vitest run test/growth-check.test.ts --maxWorkers=2` at HEAD: rc 0, 1 file,
+95 passed. The test prints neither a merge-base nor a per-file figure, so the figures above are mine, not read from its output.
+`fix-round-1.md` R5's table cell for `landingControlTx.ts` is corrected to +47.
+
+## R6 records
+
+**`LandingMutationFacts.stateWords` (A3, departure `facts-state-words`).** Exact shape, `server/src/coord/landingWrites.ts`:
+`stateWords: { id: number; value: LandingEntryState | 'unrecognised' }[]`, one record per entry of the project. It is the stored
+`state` column as the row holds it, read before the display fold; it never says a row reads.
+- **One producer:** the facts fold in `landingEntry.ts` (`mine.map`), from the raw stored `row.state`: the word itself when
+  `isLandingEntryState` accepts it, `'unrecognised'` for a word the vocabulary lacks.
+- **Consumers at HEAD** (grep of `server/src`): `landingBindingOf` (`landingLine.ts`, openness from the stored word, and its
+  `landingOrder(facts.entries, CLEAR, undefined, facts.stateWords)` call); `landingOrder` (optional fourth argument, R4); `landingViewOf`
+  (optional fifth argument, passed `read.facts.stateWords` by the landing read route in `routes.ts`); and the landing write path in
+  `store.ts` (`CoordStore.advanceLanding`), which finds the stored word of the current entry and passes it to `decideLandingWrite` as
+  `storedState` (R1). `landingNext.ts` reaches it only through `landingBindingOf`. No other reader.
+- **Publication** in the central plan and spec interface blocks is the coordinator's, not this PR's. The slug is in `task-7.md`'s list
+  with `order-reads-stored-words`, `retreat-reads-stored-word` and `control-tx-handle-holder`.
+
+**A5, the task-7 record.** Departure `run-absent-word` (`task-5.md`) is withdrawn: fix round 2 aligned a missing run to the approved
+`run-unreadable` (`fix-round-2.md#r5-and-r6-code`). It is marked so in both `task-5.md` and `task-7.md`'s list, and the F4 text in
+`task-7.md` that recorded the unreachable `episode-changed` branch as behaviour has a correcting sentence after it.

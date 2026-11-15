@@ -142,7 +142,7 @@ HEAD as already fetched (`a6b87cf79`, no fetch run), in a throwaway test file th
 | File | Base | Head | Delta |
 |---|---|---|---|
 | `server/src/coord/store.ts` | 5341 | 5390 | +49 |
-| `server/src/coord/landingControlTx.ts` (new, 66 physical lines) | absent | 47 | +48 |
+| `server/src/coord/landingControlTx.ts` (new, 66 physical lines) | absent | 47 | +47 (corrected in fix round 2) |
 
 The delta +49 equals the +49 recorded in `task-5.md`, over the limit of 40; the absolute figures there (5332 and 5381) are 9 lower on both
 sides because the recorded measurement was taken against the dispatch base 391b5c65b. The clause-16 absorb merge 9210e7a37 (origin/main into this branch) moved the merge-base to a6b87cf79 (`git merge-base HEAD origin/main`), and origin/main grew `store.ts` between those two commits. The delta stays +49 (as the controller measured; not re-run). Task 4's +35 became +49 with
@@ -177,7 +177,7 @@ companions in that the store, not the companion, owns the transaction.
 **Request.** The growth rule passing is not design approval. No further decomposition or exemption is requested, no port is widened and no
 growth guard is edited. The next independent architecture review is asked to assess the existing split before coordinator acceptance.
 Departure `control-tx-module` is added to `task-5.md` and `task-7.md`. Note (not changed here): `task-5.md`'s `control-tx-takes-port` bullet
-still says the body reads `const { db } = coord`; fix round 1 of the final review wave changed that to plain `coord.db` (task-7 F6).
+still says the body reads `const { db } = coord`; fix round 1 of the final review wave changed that to plain `coord.db` (task-7 F6). Correction (fix round 2): the old text was wrong about why; `coord.db` is legal only because `landingControlTx.ts` is in `HANDLE_HOLDERS`, see `fix-round-2.md#r5-records`.
 
 ## R6
 

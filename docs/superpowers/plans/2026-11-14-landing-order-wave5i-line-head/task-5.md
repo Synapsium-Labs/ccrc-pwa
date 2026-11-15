@@ -60,6 +60,8 @@ above are a different mutant); those rows are measured in `fix-round-1.md#r2`.
   `WatcherCoordPort`, so `applyLandingControlTx` takes it too; it receives no other private store field than the one
   `landingFactsInner` closure. There is no separate `db` parameter: the body reads the handle as `const { db } = coord`, because
   `single-definition/core-vocab.test.ts` (REACH) forbids the dotted `coord.db` spelling in any coord file but the store.
+  Correction (fix round 2): the code uses `coord.db`, legal only because `landingControlTx.ts` is a member of `HANDLE_HOLDERS` in that test; see `fix-round-2.md#r5-records`.
+- departure: control-tx-handle-holder. `landingControlTx.ts` is a member of core-vocab's `HANDLE_HOLDERS` (rationale and guards: `fix-round-2.md#r5-records`).
 - departure: related-selection-substituted. The plan's `vitest related src/coord/rundefsTx.ts` selection was replaced by three
   grep-found caller files (see `fix-round-1.md#r4`; the selection itself was later attempted and was OOM-killed twice).
 - departure: control-tx-module. `CoordStore.applyLandingControl` keeps the guard, the owned transaction, the phase-classified catch
@@ -68,6 +70,7 @@ above are a different mutant); those rows are measured in `fix-round-1.md#r2`.
   run row that is not there answers `run-absent` and one that does not read (or names another run or project) answers
   `run-unreadable`. The literal is `'missing'` because `single-definition/vocabularies.test.ts` reserves the quoted
   `'absent' | 'unreadable'` pair for `shared/agent-protocol.ts`.
+  Withdrawn in fix round 2: the missing run was aligned to the approved `run-unreadable` (`fix-round-2.md#r5-and-r6-code`), so `run-absent` no longer exists.
 - departure: facts-literals. Adding the required `creations` fact meant adding `creations: []` to the facts literals of
   `landed-decide`, `landing-writes`, `landing-control` and the two pinned literals of `landing-facts-scope`.
 
