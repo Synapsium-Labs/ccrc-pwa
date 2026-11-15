@@ -97,6 +97,13 @@ export interface LandingHold { reason: 'landing-recovery-unresolved'; subjectIds
 export type LandingBindingReason =
   | 'opt-in-unknown' | 'paused' | 'recovery' | 'projection-unreadable' | 'empty-or-blocked' | 'probe-unmeasured'
   | 'health-unmeasured' | 'base-mismatch' | 'head-mismatch' | 'composition-not-clean' | 'main-red';
+/** The runtime list of `LandingBindingReason`, derived from its `Record` (a new member is a compile error here). */
+export const LANDING_BINDING_REASON_MAP: Record<LandingBindingReason, true> = {
+  'opt-in-unknown': true, paused: true, recovery: true, 'projection-unreadable': true, 'empty-or-blocked': true,
+  'probe-unmeasured': true, 'health-unmeasured': true, 'base-mismatch': true, 'head-mismatch': true,
+  'composition-not-clean': true, 'main-red': true,
+};
+export const LANDING_BINDING_REASONS = Object.keys(LANDING_BINDING_REASON_MAP) as LandingBindingReason[];
 /** The binding head of an opted-in project (wave 5i), decided from current database facts and one measured control
  *  bundle, never stored. `inert`: the producer's marker is proven absent. `held`: a gate failed; `entryId` is the selected
  *  head's entry when one exists. `ready`: the selected head's exact PR and pinned sha were measured against `baseSha`. */

@@ -57,3 +57,4 @@ list, an unreadable/stale/foreign probe hold `probe-unmeasured`; a health `unmea
   comment says exactly that. An unrecognised state word such as `'mystery'` holds `projection-unreadable`.
 - Red first (old code): `ORDER-unknown (fix round 2)`: expected { mode: 'ready', entryId: 107, ... } to match object { mode: 'held', ... }.
 - Green: 2 files, 95 passed. Production `tsc --noEmit; echo rc=$?`: rc=0, no `error TS`.
+- Fix round 3: `LandingBindingReason` gets its sibling `LANDING_BINDING_REASON_MAP` (`Record<LandingBindingReason, true>`) and derived `LANDING_BINDING_REASONS` in `shared/landingLine.ts`, so `rings/wire-totality` is green; no exemption, guard untouched.
