@@ -124,6 +124,17 @@ export interface GenReadings {
   /** The hold table's drain (`drainVerdict`), read for a generation that drains or waits on a soft due; absent when not
    *  read, which holds as unmeasured. */
   readonly drain?: DrainRead;
+  /** The soft preconditions' fleet reads, which the hand-offs piece's gather and W1 will fill (the operator mark, the
+   *  readers and the Overlord's place); absent, each reads unmeasured as before. The simulator's world hands them. */
+  readonly soft?: Partial<Pick<SoftInputs, 'readersRunning' | 'operatorQuietObservedMs' | 'placeHiddenObservedMs'>>;
+}
+
+/** The deciders the pass asks, named so that a simulator can hand a mutant of one to the same pass (as `observe` is). */
+export interface GenerationsDeciders {
+  readonly renewalDue: typeof renewalDue;
+  readonly softRenewalMay: typeof softRenewalMay;
+  readonly generationStep: typeof generationStep;
+  readonly renewalFeed: typeof renewalFeed;
 }
 
 export interface GenerationsDeps {
@@ -136,6 +147,8 @@ export interface GenerationsDeps {
   readonly log: (line: string) => void;
   /** The observed-time decider; `observeTime` unless a simulator hands a mutant of it to the same pass. */
   readonly observe?: typeof observeTime;
+  /** The deciders `renewalDue`, `softRenewalMay`, `generationStep` and `renewalFeed`, unless a simulator hands a mutant of one. */
+  readonly decide?: Partial<GenerationsDeciders>;
   /** The continuity row's gate (`laneArmGate`), unless a test or the simulator opens it to drive the live walk the renewal
    *  act will arm (review 2006 N1). Nothing in the server passes one, so a gated row is never live here. */
   readonly gate?: (lane: typeof CONTINUITY_LANE) => string | null;
@@ -207,6 +220,7 @@ const zeroSkips = (): Record<StartSkip, number> => Object.fromEntries(START_SKIP
 /** One pass. Synchronous: it awaits nothing, so its writes are never interleaved with another caller's. */
 export function generationsPass(deps: GenerationsDeps, input: GenerationsInput): GenerationsResult {
   const { coord, clock } = deps;
+  const D: GenerationsDeciders = { renewalDue, softRenewalMay, generationStep, renewalFeed, ...deps.decide };
   const now = clock.wall();
   const live = laneArmRowViewOf(CONTINUITY_LANE, coord.laneArmSetting(CONTINUITY_LANE), (deps.gate ?? laneArmGate)(CONTINUITY_LANE)).live;
   const skipped = zeroSkips();
@@ -369,7 +383,7 @@ export function generationsPass(deps: GenerationsDeps, input: GenerationsInput):
   else {
     const feed = cardReadFeed(coord, carded.rows, live);
     for (const f of feed.failed) fail('card-reads', f, 'that generation\'s card read waits for the next pass');
-    cardRead += applyFedEvents(coord, feed.events, live, now, onStep);
+    cardRead += applyFedEvents(coord, feed.events, live, now, onStep, D.generationStep);
   }
 
   // ---- THE PROBES: each generation's graded round fed, its next round opened, its `probe-failed` input kept for THREE.
@@ -418,7 +432,7 @@ export function generationsPass(deps: GenerationsDeps, input: GenerationsInput):
       else if (w.kind === 'empty') { emptyRounds += 1; deps.emptyTries.set(g.id, key); }
       else if (w.kind === 'write-failed') fail('probes', 'continuity_probes could not be written', `generation ${g.id}'s round waits for the next pass, and`);
     }
-    probesFed += applyFedEvents(coord, events, live, now, onStep);
+    probesFed += applyFedEvents(coord, events, live, now, onStep, D.generationStep);
   }
 
   // ---- THREE: the `renewalDue` answer is recorded for every generation whose `state` is at rest (`active` or `degraded`),
@@ -431,7 +445,7 @@ export function generationsPass(deps: GenerationsDeps, input: GenerationsInput):
       const runs = newestClaimedWorkRuns(coord, g.identity);
       return runs.ok ? { kind: 'measured', value: waveBoundaryOf(runs.runs) } : { kind: 'unmeasured', why: runs.detail };
     })();
-    const d = renewalDue(renewalInputsOf(g, input.readings.get(g.id), wave, now, probeFailed.get(g.id) ?? later('probes unread this pass')));
+    const d = D.renewalDue(renewalInputsOf(g, input.readings.get(g.id), wave, now, probeFailed.get(g.id) ?? later('probes unread this pass')));
     if (d.due) due += 1;
     if (d.blind.length > 0) blind += 1;
     coord.setGenerationDue(g.id, genExpectOf(g), d.due
@@ -450,13 +464,13 @@ export function generationsPass(deps: GenerationsDeps, input: GenerationsInput):
     if ((eff.state === 'active' || eff.state === 'degraded') && g.dueClass !== null && g.dueSince !== null) {
       const permit = renewalPermit({
         isCoordinator: g.role === 'coordinator', cls: g.dueClass, canRenew: input.canRenew === true, overlord,
-        soft: g.dueClass === 'soft' ? softRenewalMay(softInputsOf(coord, g, r, overlord, input.softMode ?? 'when-away')) : { start: true },
+        soft: g.dueClass === 'soft' ? D.softRenewalMay(softInputsOf(coord, g, r, overlord, input.softMode ?? 'when-away')) : { start: true },
       });
       if (permit.feed) due = { cls: permit.cls }; else waits[permit.waitFor] = (waits[permit.waitFor] ?? 0) + 1;
     }
     const handover = eff.state === 'checkpointed' ? coord.handoverOf(g.id) : null;
     if (handover !== null && !handover.ok) fail('generations', handover.detail, `generation ${g.id}'s handover waits for the next pass, and`);
-    const events = renewalFeed({
+    const events = D.renewalFeed({
       state: eff.state, deadlineAt: eff.deadlineAt, now, due, drained: r?.drain?.held === false,
       handoverAt: handover !== null && handover.ok ? (handover.handover?.at ?? null) : null, renudged: g.renudged,
     });
@@ -464,7 +478,7 @@ export function generationsPass(deps: GenerationsDeps, input: GenerationsInput):
     // to a state the generation has left, so the walk stops and the next pass reads the new state's facts.
     for (const e of events) {
       const from = effectiveGeneration(g, live).state;
-      const step = generationStep(genViewOf(g, live), e);
+      const step = D.generationStep(genViewOf(g, live), e);
       if (!step.changed) continue;
       if (!coord.stepGeneration(g.id, genExpectOf(g), step.next, live, now).changed) break;
       const again = coord.liveGenerations();
@@ -521,6 +535,7 @@ function softInputsOf(coord: Pick<GenerationsCoord, 'softRenewalsOf'>, g: GenRow
     readersRunning: g.role === 'coordinator' ? na : later('W1'),
     operatorQuietObservedMs: g.role === 'coordinator' ? later('operator-mark') : g.role === 'overlord' ? later('W1') : na,
     placeHiddenObservedMs: g.role === 'overlord' ? later('W1') : na,
+    ...r?.soft,
     mode, ...softTimesOf(g), softRenewalsInWindow: inWindow, overlordOutsideActive: !overlordFirst(overlord),
   };
 }
@@ -536,10 +551,10 @@ export interface FedEvent {
  *  every step the machine reports `changed` is written (compare-and-set, with the card the event carried); a step that
  *  changes nothing is not written. Answers how many rows it wrote. The renewal act's ordered feed hands its events here. */
 export function applyFedEvents(coord: Pick<GenerationsCoord, 'stepGeneration'>, events: readonly FedEvent[], live: boolean, now: number,
-  onStep?: (gen: GenRow, from: GenRow['state'], step: GenStep, event: GenEvent) => void): number {
+  onStep?: (gen: GenRow, from: GenRow['state'], step: GenStep, event: GenEvent) => void, stepOf: typeof generationStep = generationStep): number {
   let wrote = 0;
   for (const { gen, event, card } of events) {
-    const step = generationStep(genViewOf(gen, live), event);
+    const step = stepOf(genViewOf(gen, live), event);
     if (!step.changed) continue;
     if (!coord.stepGeneration(gen.id, genExpectOf(gen), step.next, live, now, card).changed) continue;
     wrote += 1;
