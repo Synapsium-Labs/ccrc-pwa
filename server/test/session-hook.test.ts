@@ -2892,6 +2892,21 @@ describe('the compaction card — which context is compacting (spec §3.0)', () 
     expect(2400 + 1 + 4000 + 1 + Number(src.match(/^ *ROSTER_CARD_MAX_CHARS=(\d+)$/m)?.[1])).toBeLessThan(10000);  // the emitter's REAL maximum (standing + compact + D4 roster) under the harness's spill (2.1.266 `Pdr=1e4`)
     expect(src.match(/^COMPACT_SHAPE_PRED=/gm)).toHaveLength(1);
   });
+
+  it('the anchor\'s slot joins the sum: 1500 + 1 + 2400 + 1 + 4000 + 1 + 2048 = 9951, under 10000, with 49 characters left (C38)', () => {
+    const src = fs.readFileSync(HOOK, 'utf8');
+    // A declaration line may carry several (`ANCHOR_CARD_MAX_CHARS=1500 ANCHOR_PROMPT_MAX_CHARS=600 ...`, as the start report's).
+    const num = (name: string): number => Number(new RegExp(`^(?:[A-Z_]+=\\S+ )*${name}=(\\d+)(?: |$)`, 'm').exec(src)?.[1]);
+    const [anchor, card, compact, roster] = ['ANCHOR_CARD_MAX_CHARS', 'CARD_MAX_CHARS', 'COMPACT_CARD_MAX_CHARS', 'ROSTER_CARD_MAX_CHARS'].map(num);
+    expect([anchor, card, compact, roster], 'all four read from the hook\'s own source').toEqual([1500, 2400, 4000, 2048]);
+    // The emitter joins each slot to the next with one character: the anchor first and a newline (fix round 1, F9), then
+    // the standing clip, the compact card and the roster card, each after a space.
+    const sum = anchor! + 1 + card! + 1 + compact! + 1 + roster!;
+    expect(sum).toBe(9951);
+    expect(10_000 - sum, 'the characters left under Claude Code\'s cap on hook context').toBe(49);
+    // The server fits the anchor under the same number (`shared/continuity-card.ts`), so its answer never meets this clip.
+    expect(src).toContain('[ -z "${4:-}" ] || text="${4:0:$ANCHOR_CARD_MAX_CHARS}${text:+$\'\\n\'$text}"');
+  });
 });
 
 
@@ -3427,8 +3442,9 @@ describe('the compaction card — SessionStart(compact) (spec §3.3)', () => {
     const src = fs.readFileSync(HOOK, 'utf8');
     const cardMax = Number(/^CARD_MAX_CHARS=(\d+)$/m.exec(src)?.[1]);
     const compactMax = Number(/^COMPACT_CARD_MAX_CHARS=(\d+)$/m.exec(src)?.[1]);
-    expect(Number.isFinite(cardMax) && Number.isFinite(compactMax), 'both constants found in source').toBe(true);
-    expect(cardMax + compactMax).toBeLessThan(HARNESS_CONTEXT_SPILL_CHARS);
+    const anchorMax = Number(/^ANCHOR_CARD_MAX_CHARS=(\d+)(?: |$)/m.exec(src)?.[1]);
+    expect(Number.isFinite(cardMax) && Number.isFinite(compactMax) && Number.isFinite(anchorMax), 'the constants found in source').toBe(true);
+    expect(anchorMax + cardMax + compactMax).toBeLessThan(HARNESS_CONTEXT_SPILL_CHARS);
   });
 
   it.runIf(process.env['CCRC_PERF'] === '1')('costs no more than 4x the cheap PostToolUse arm with a card present, on a 200-row registry — its OWN ratio (perf job only, D-6929)', () => {
@@ -6189,8 +6205,8 @@ describe('the compaction card — jq programs and shell words in the compaction 
     // NON-VACUITY, MANDATORY and BY IDENTITY — §5 names these two sites by
     // pre-Task-9 line anchors that this task moved, so they are required by
     // what they ARE rather than by where they sit.
-    expect(a.programs.length, 'the scan found every jq program in the arms — 3 in PreCompact, 1 in its precompact line (Overlord W0-05), 9 in PostCompact, 1 in the emitter')
-      .toBe(14);
+    expect(a.programs.length, 'the scan found every jq program in the arms — 3 in PreCompact, 2 in its precompact line (Overlord W0-05, and the anchor mark\'s trigger check), 9 in PostCompact, 1 in the emitter')
+      .toBe(15);
     const emit = audit(hookSrc()).programs.filter((h) => h.fn === '_hook_emit_context');
     expect(emit.length, 'the emitter\'s program is in the found set').toBeGreaterThan(0);
     const pre = a.programs.filter((h) => h.fn === '_hook_compact_pre');

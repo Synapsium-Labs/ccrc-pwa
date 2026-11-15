@@ -139,3 +139,60 @@ describe('the raw row, sessions card <id> (review 2023 F13)', () => {
     expect(seen).toEqual([]);
   });
 });
+
+// The anchor piece (plan `w1a-anchor.md` Task 2): `card --anchor [--form F]` asks the card door's `part=anchor` (page 0)
+// for the session hook, and prints an answer that proves itself (`part: "anchor"` and the form asked) as it came, its status
+// on stderr, for the hook's one jq read; any other answer prints nothing and exits 3 (fix round 1, F1).
+describe('ccrc-api card --anchor: the card\'s short part, for the session hook', () => {
+  const anchorAsked = () => seen.map((u) => [u.pathname, u.searchParams.get('byId'), u.searchParams.get('byUuid'),
+    u.searchParams.get('part'), u.searchParams.get('form'), u.searchParams.get('page'), u.searchParams.get('hash')]);
+
+  it('asks part=anchor and page 0 with the pane\'s pair, form start by default, and no hash; prints a proved answer as it came', async () => {
+    answer = () => ({ code: 200, body: { ok: true, part: 'anchor', form: 'start', dark: true } });
+    const r = await run(['card', '--anchor']);
+    expect([r.status, r.stdout]).toEqual([0, '{"ok":true,"part":"anchor","form":"start","dark":true}\n']);
+    expect(r.stderr).toContain('http 200');
+    answer = () => ({ code: 200, body: { ok: true, part: 'anchor', form: 'prompt', hash: H1, text: 'ccrc-anchor: x' } });
+    expect(JSON.parse((await run(['card', '--anchor', '--form', 'prompt'])).stdout))
+      .toEqual({ ok: true, part: 'anchor', form: 'prompt', hash: H1, text: 'ccrc-anchor: x' });
+    answer = () => ({ code: 200, body: { ok: true, part: 'anchor', form: 'fork', live: true } });
+    expect(JSON.parse((await run(['card', '--form', 'fork', '--anchor'])).stdout)).toEqual({ ok: true, part: 'anchor', form: 'fork', live: true });
+    expect(anchorAsked()).toEqual([
+      [`/api/sessions/${PANE_ID}/card`, PANE_ID, PANE_UUID, 'anchor', 'start', '0', null],
+      [`/api/sessions/${PANE_ID}/card`, PANE_ID, PANE_UUID, 'anchor', 'prompt', '0', null],
+      [`/api/sessions/${PANE_ID}/card`, PANE_ID, PANE_UUID, 'anchor', 'fork', '0', null],
+    ]);
+    expect(fs.readdirSync(tmp)).toEqual([]);
+  });
+
+  it('F1: an answer without the proof prints nothing and exits 3, its status on stderr: an older server\'s card page, a refusal, another form', async () => {
+    const OLD_PAGE = { ok: true, hash: H1, snapshotId: H1, page: 1, pages: 1, text: 'ccrc-role: coordinator\n...', recorded: true };
+    const cases: [number, Record<string, unknown>, string[]][] = [
+      [200, OLD_PAGE, ['card', '--anchor']],
+      [200, OLD_PAGE, ['card', '--anchor', '--form', 'prompt']],
+      [200, { ok: true, hash: H1, text: 'ccrc-anchor: x' }, ['card', '--anchor']],
+      [200, { ok: true, dark: true }, ['card', '--anchor', '--form', 'fork']],
+      [200, { ok: true, part: 'anchor', form: 'start', hash: H1, text: 'ccrc-anchor: x' }, ['card', '--anchor', '--form', 'prompt']],
+      [400, { ok: false, error: 'bad-request', detail: 'page is a positive integer' }, ['card', '--anchor']],
+      [403, { ok: false, error: 'stale-uuid' }, ['card', '--anchor']],
+    ];
+    for (const [code, body, args] of cases) {
+      answer = () => ({ code, body });
+      const r = await run(args);
+      expect([r.status, r.stdout], JSON.stringify(body)).toEqual([3, '']);
+      expect(r.stderr).toContain(`http ${code}`);
+    }
+  });
+
+  it('refuses bad arguments and sends nothing: an unknown form, a form without --anchor, a page or hash with it', async () => {
+    answer = () => ({ code: 200, body: { ok: true, dark: true } });
+    for (const args of [['card', '--anchor', '--form', 'other'], ['card', '--form', 'start'], ['card', '--anchor', '--page', '2', '--hash', H1],
+      ['card', '--anchor', '--hash', H1], ['card', '--anchor', '--form']]) {
+      const r = await run(args);
+      expect(r.status, args.join(' ')).toBe(2);
+      expect(JSON.parse(r.stdout), args.join(' ')).toMatchObject({ ok: false, error: 'bad-args' });
+    }
+    expect(seen).toEqual([]);
+  });
+});
+

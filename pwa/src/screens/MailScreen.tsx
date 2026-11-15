@@ -23,6 +23,7 @@ import { formatAge } from '../fleet/formatReset';
 import { LiftCapSheet } from '../fleet/LiftCapSheet';
 import { capDoorRun } from '../fleet/reviewCapWords';
 import { useFleetStore, type FleetStore } from '../stores/fleet';
+import { useHeardRuns } from '../fleet/useHeard';
 import { loadColdRuns, useColdRuns } from './useColdRuns';
 import '../fleet/fleet.css';
 
@@ -92,9 +93,7 @@ export function MailScreen({
   // D-6911: the cap's record carries its Lift cap door from the fleet store's live runs frame, never from the
   // once-per-mount read above, so a lift (here or anywhere) takes the door away on the watcher's next frame. No frame
   // yet is no door. The screen's one lift sheet opens from it.
-  const liveRuns = store((s) => s.runs);
-  const runsFrameSeen = store((s) => s.runsFrameSeen);
-  const doorRuns = runsFrameSeen ? liveRuns : NO_RUNS;
+  const doorRuns = useHeardRuns(store) ?? NO_RUNS;
   const [liftTarget, setLiftTarget] = useState<RunSummary | null>(null);
 
   // Opening the screen is the ack. Floored to the newest record's own instant

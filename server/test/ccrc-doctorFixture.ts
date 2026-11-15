@@ -99,7 +99,7 @@ export function installCcrc(home: string): void {
   // compares every home's installed copy against THESE, the tree the stamp
   // names — not against the `.cc-sessions` placed copy, which was stale too
   // on 2026-09-17.
-  for (const n of ['coordinator-skill', 'worker-skill', 'reviewer-skill', 'history-skill', 'linear-skill']) {
+  for (const n of ['coordinator-skill', 'worker-skill', 'reviewer-skill', 'history-skill', 'linear-skill', STAGED_SKILL[0]]) {
     symlinkSync(join(REPO, 'ccd', n), join(ccd, n));
   }
   // …and the five INSTALLERS that ship beside them (R12). `_check_skills`'
@@ -108,7 +108,7 @@ export function installCcrc(home: string): void {
   // planted only the skill trees could not run the remedy it prints. A real
   // box has them: `_inst_tree` rsyncs `ccd/` whole.
   for (const n of ['install-coordinator-skill.sh', 'install-worker-skill.sh', 'install-reviewer-skill.sh', 'install-history-skill.sh',
-    'install-linear-skill.sh']) {
+    'install-linear-skill.sh', 'install-overlord-skill.sh']) {
     symlinkSync(join(REPO, 'ccd', n), join(ccd, n));
   }
   // …and the HOOK installer (delegation broker wave 3, Task 14): `_check_delegation-hooks` reads the approved event
@@ -1172,6 +1172,11 @@ export function runDoctor(home: string, args: string[] = ['doctor'], extraEnv: N
 /** The five shipped skill trees and the name each installs under in a home —
  *  `_check_skills`' subject. One list for `healthy()` and `healthyCodexBox()`. */
 export const SHIPPED_SKILLS = [['coordinator-skill', 'ccrc-coordinator'], ['worker-skill', 'ccrc-worker'], ['reviewer-skill', 'ccrc-reviewer'], ['history-skill', 'ccrc-history'], ['linear-skill', 'ccrc-linear']] as const;
+
+/** The one skill staged once per box rather than per home (Overlord W1): its shipped tree, and where `_check_skills`
+ *  measures the staged copy, relative to `$HOME`. It is owed where the spine staged the other skill trees
+ *  (`~/.cc-sessions/coordinator-skill`), which `healthy()` does not plant, so a case that wants it plants both. */
+export const STAGED_SKILL = ['overlord-skill', '.cc-sessions/overlord-skill'] as const;
 
 /** The hook installer a fixture tree carries beside the doctor file, and the approved event set as an INDEPENDENT
  *  reader of it sees it: `EVENTS_JSON` (the events that get a matcher-less managed entry) plus `PreToolUse`, the one
