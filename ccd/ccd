@@ -48015,12 +48015,13 @@ LOG_SHA_RE = re.compile(rb'[0-9a-f]{40}|[0-9a-f]{64}')
 
 
 def parse_log(buf, sec_b, want, limit, shallow=False):
-    """`(rows, skipped)`: the records of LOG_ROW's output whose names hold `want`
-    exactly, as (sha, parents, date, author, subject) byte strings, newest
-    first, at most `limit`, and the count of parentless records a shallow walk
-    read past that touched `want` (each may be a change to the doc). A record is five NUL-ended fields, the newline git writes before
-    the names, then NUL-ended names, each under `sec_b` + '/' or `sec_b`
-    itself (the pathspec limits them; the bare name is a commit that touched a
+    """`(rows, skipped)`: the records of LOG_ROW's output whose names hold
+    `want` exactly, as (sha, parents, date, author, subject) byte strings,
+    newest first, at most `limit`, and the count of parentless records a
+    shallow walk read past that touched `want` (each may be a change to the
+    doc). A record is five NUL-ended fields, the newline git writes before the
+    names, then NUL-ended names, each under `sec_b` + '/' or `sec_b` itself
+    (the pathspec limits them; the bare name is a commit that touched a
     FILE at the section path, which is never the doc but must be read past);
     the next record starts after the last name's NUL. A record git prints
     without names (a gitlink under diff.ignoreSubmodules=all) has no newline
