@@ -344,6 +344,21 @@ describe('the codex-lane-workflows switch (D-8631)', () => {
 
   // The marker is the operator's, by hand. The ONE line in the shipped tree that may name it is ccd's read in
   // `_spawn_start`; any other code line naming it, in any shipped root and any language, is a writer in waiting.
+  // A comment line is the FILE'S LANGUAGE's: a leading `*` is a JSDoc continuation in TS/JS only, and in a shell file
+  // it is a `*)` default case arm, which is code — so a writer planted there must stay visible to the scan.
+  const JS_FILE = /\.(ts|tsx|js|mjs|cjs)$/;
+  const codeLines = (file: string, text: string): string[] => text.split('\n')
+    .filter((l) => !(JS_FILE.test(file) ? /^\s*(\/\/|\*|\/\*)/ : /^\s*#/).test(l));
+
+  it('CONTROL: the scan keeps a shell case arm and drops only real comment lines', () => {
+    const named = (file: string, text: string): string[] => codeLines(file, text).filter((l) => l.includes('codex-lane-workflows'));
+    expect(named('ccd/x', '  *) touch "$REG/codex-lane-workflows" ;;\n')).toHaveLength(1);
+    expect(named('deploy/x.sh', '    * ) : > "$REG/codex-lane-workflows" ;;\n')).toHaveLength(1);
+    expect(named('ccd/x', '  # touch "$REG/codex-lane-workflows"\n')).toEqual([]);
+    expect(named('server/src/x.ts', ' * `codex-lane-workflows` in a doc block\n// codex-lane-workflows\n/* codex-lane-workflows */\n')).toEqual([]);
+    expect(named('server/src/x.ts', "fs.writeFileSync('codex-lane-workflows', '');\n")).toHaveLength(1);
+  });
+
   it('has no writer in the shipped tree: its one code line is the spawn\'s read', () => {
     const root = path.resolve(__dirname, '..', '..');
     const SKIP = new Set(['node_modules', 'dist', '.git', 'coverage']);
@@ -355,8 +370,7 @@ describe('the codex-lane-workflows switch (D-8631)', () => {
     const files = [...['ccd', 'deploy', 'shared', 'server/src', 'agent/src', 'pwa/src'].flatMap((r) => walk(path.join(root, r))),
       ...['install.sh'].map((f) => path.join(root, f)).filter((f) => fs.existsSync(f))];
     expect(files.length, 'the walk reached the shipped tree').toBeGreaterThan(200);
-    const code = (f: string): string[] => fs.readFileSync(f, 'utf8').split('\n').filter((l) => !/^\s*(#|\/\/|\*|\/\*)/.test(l));
-    const hits = files.flatMap((f) => code(f).filter((l) => l.includes('codex-lane-workflows')).map((l) => `${path.relative(root, f)}: ${l.trim()}`));
+    const hits = files.flatMap((f) => codeLines(f, fs.readFileSync(f, 'utf8')).filter((l) => l.includes('codex-lane-workflows')).map((l) => `${path.relative(root, f)}: ${l.trim()}`));
     expect(hits).toHaveLength(1);
     expect(hits[0]).toMatch(/^ccd\/ccd: .*\[\[ -e "\$REG\/codex-lane-workflows" \]\]/);
   });
