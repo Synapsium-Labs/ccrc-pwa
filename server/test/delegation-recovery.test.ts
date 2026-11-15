@@ -3575,7 +3575,7 @@ describe('the pure/impure split is explicit, and nothing pure mints an ID or rea
       expect(pure).not.toMatch(/node:fs|fsp\.|fsConstants|node:sqlite|\.\/db\.js|\.\/store\.js|CoordStore|process\.|readFileSync|writeFileSync|openSync/);
       const imports = [...pure.matchAll(/^import\s[^;]*?from\s+'([^']+)';/gms)].map((m) => m[1]);
       expect(imports.sort()).toEqual(file === 'delegation-journal.ts'
-        ? ['../../../shared/api.js', './delegation-lease-state.js', './delegation-model.js']
+        ? ['../../../shared/api.js', '../chainedJournal.js', './delegation-lease-state.js', './delegation-model.js']
         : ['../../../shared/api.js', './delegation-compaction.js', './delegation-journal.js', './delegation-lease-state.js', './delegation-model.js', 'node:path']);
     });
     it(`${file}: no randomness and no clock anywhere in the module (they are injected)`, () => {

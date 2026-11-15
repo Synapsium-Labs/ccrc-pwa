@@ -1,10 +1,10 @@
 // Delegation broker wave 3, Task 8A: the canonical, hash-chained journal (`~/.ccrc/delegation-events.log`).
 //
 // The journal and the checkpoint are the AUTHORITY; `coord.db` is repairable output. This module owns the journal half:
-//   - the closed record grammar and its codec (canonical UTF-8 JSON plus LF, strict on the way in);
-//   - the two exact, nonrecursive hash preimages (`journalId`, `digest`), built ONLY through `canonicalDelegationJson`
-//     from `delegation-model.ts`: there is no second canonical-JSON writer;
-//   - the incremental hash-chain verifier and the anchor triple;
+//   - the closed entry grammar (`DELEGATION_JOURNAL_FORMAT`), bound to the shared chained-journal kernel
+//     (`../chainedJournal.ts`), which holds the record codec (canonical UTF-8 JSON plus LF, strict on the way in), the two
+//     exact, nonrecursive hash preimages, the incremental hash-chain verifier and the anchor triple; this module keeps
+//     every exported name of them, as bindings over the kernel with this format;
 //   - deduplication planning (a duplicate evidence `eventId` and a duplicate or path-held lease identity are not appended);
 //   - retention PLANNING (`DelegationPruningHold`): computed and tested, and the only thing a caller may do with it is read it.
 //     NO production caller rewrites, truncates, renames or deletes `delegation-events.log`, WITH TWO NAMED EXCEPTIONS: the server's
@@ -27,6 +27,33 @@ import {
   DELEGATION_LEASE_SOURCE_KINDS,
   type DelegationEventEnvelopeV1,
 } from '../../../shared/api.js';
+import {
+  CHAINED_JOURNAL_ERROR_CODES,
+  ChainVerifier,
+  ChainedLineSplitter,
+  buildChainedRecord,
+  chainedAssertInstant,
+  chainedExactKeys,
+  chainedHex64,
+  chainedRecordDigest,
+  chainedRecordId,
+  chainedTailHealPlan,
+  chainedTornTailError,
+  decodeChainedLine,
+  encodeChainedRecord,
+  findJsonDefect,
+  isRecord,
+  parseChainedBytes,
+  verifyChainedBytes,
+  type ChainOptions,
+  type ChainedCoverage,
+  type ChainedJournalErrorCode,
+  type ChainedJournalFormat,
+  type ChainedPosition,
+  type ChainedRecordFields,
+  type ChainedTail,
+  type ChainedTailHealPlan,
+} from '../chainedJournal.js';
 import { DELEGATION_LEASE_TRANSITION_REASONS, DELEGATION_LINEAGE_CLOSE_REASONS } from './delegation-lease-state.js';
 import {
   DelegationJsonError,
@@ -34,7 +61,6 @@ import {
   DELEGATION_JOURNAL_ENTRY_KINDS,
   DELEGATION_MODEL_REFUSALS,
   canonicalDelegationJson,
-  delegationSha256Hex,
   isLowerHex64,
   parseDelegationInstant,
   type DelegationAttemptMark,
@@ -53,33 +79,10 @@ export const DELEGATION_CARRIED_FILE = 'delegation-carried.log';
 
 // ── Refusals ─────────────────────────────────────────────────────────────────────────────────────────────────────────
 
-/** Why the journal codec or verifier refused. Closed, so a caller and a test tell one refusal from another without reading
- *  prose, and a recovery failure names the exact rule that failed. */
+/** Why the journal codec or verifier refused: the kernel's codes (`ChainedJournalErrorCode`) and this journal's own seven. Closed,
+ *  so a caller and a test tell one refusal from another without reading prose, and a recovery failure names the exact rule that failed. */
 export type DelegationJournalErrorCode =
-  | 'bom'                    // a UTF-8 byte-order mark
-  | 'crlf'                   // a line ending in CR before its LF
-  | 'blank-line'             // an empty line between records
-  | 'torn-tail'              // bytes after the last LF that are not one complete record
-  | 'missing-final-lf'       // a complete, valid record with no LF after it
-  | 'invalid-utf8'
-  | 'malformed-json'
-  | 'duplicate-key'          // the same key twice in one object, at any depth
-  | 'unknown-key'            // a key the closed grammar does not name
-  | 'bad-field'              // a missing key, or a value of the wrong type, word or shape
-  | 'invalid-domain'         // outside the canonical JSON domain (a lone surrogate, an unsafe integer)
-  | 'noncanonical'           // valid JSON that is not exactly the canonical encoding of its own value
-  | 'sequence-domain'        // not a positive safe integer
-  | 'sequence-start'         // a complete journal that does not begin at sequence 1
-  | 'sequence-duplicate'
-  | 'sequence-descent'
-  | 'sequence-gap'
-  | 'previous-digest'        // previousDigest is not the prior complete record's digest
-  | 'journal-id-mismatch'    // journalId is not SHA-256 of its exact preimage
-  | 'digest-mismatch'        // digest is not SHA-256 of its exact preimage
-  | 'anchor-sequence'        // the anchor's journalId sits at another sequence
-  | 'anchor-journal-id'      // the record at the anchor's sequence has another journalId
-  | 'anchor-digest'          // the record at the anchor's sequence has another digest
-  | 'anchor-missing'         // no retained record at the anchor's sequence
+  | ChainedJournalErrorCode
   | 'held-evidence-missing'  // a record a pruning hold names is not retained
   | 'short-write'            // a write that wrote fewer bytes than it was given
   | 'writer-unusable'        // an earlier write or fsync failed; the tail of the file is unknown
@@ -104,11 +107,8 @@ function refuse(code: DelegationJournalErrorCode, detail: string, where?: { line
 /** Every refusal the codec, the verifier and the writer throw, as a TOTAL table over `DelegationJournalErrorCode`. The checkpoint,
  *  which throws a few of them itself, reads this table and does not spell them again. */
 export const DELEGATION_JOURNAL_ERROR_CODES: Readonly<Record<DelegationJournalErrorCode, true>> = {
-  bom: true, crlf: true, 'blank-line': true, 'torn-tail': true, 'missing-final-lf': true, 'invalid-utf8': true, 'malformed-json': true,
-  'duplicate-key': true, 'unknown-key': true, 'bad-field': true, 'invalid-domain': true, noncanonical: true, 'sequence-domain': true,
-  'sequence-start': true, 'sequence-duplicate': true, 'sequence-descent': true, 'sequence-gap': true, 'previous-digest': true,
-  'journal-id-mismatch': true, 'digest-mismatch': true, 'anchor-sequence': true, 'anchor-journal-id': true, 'anchor-digest': true,
-  'anchor-missing': true, 'held-evidence-missing': true, 'short-write': true, 'writer-unusable': true, 'short-copy': true,
+  ...CHAINED_JOURNAL_ERROR_CODES,
+  'held-evidence-missing': true, 'short-write': true, 'writer-unusable': true, 'short-copy': true,
   'carried-order': true, 'carried-past-journal': true, 'carried-past-applied': true,
 };
 
@@ -126,80 +126,57 @@ export function isDelegationJournalKebab(v: string): boolean {
     || own(DELEGATION_MODEL_REFUSALS);
 }
 
-// ── The two exact, nonrecursive preimages ─────────────────────────────────────────────────────────────────────────────
+// ── The format: this journal's grammar, handed to the kernel ─────────────────────────────────────────────────────────
+
+/** The delegation journal as a chained-journal format: its entry kinds, its entry grammar and its two error classes. Exported for
+ *  the kinds census (`chained-journal-formats.test.ts`). */
+export const DELEGATION_JOURNAL_FORMAT: ChainedJournalFormat<DelegationJournalEntryV1, DelegationJournalError> = {
+  kinds: Object.keys(DELEGATION_JOURNAL_ENTRY_KINDS),
+  entry: (raw) => validateEntry(raw),
+  fail: (code, detail, where) => new DelegationJournalError(code, detail, where),
+  jsonError: (detail) => new DelegationJsonError(detail),
+};
+
+// ── The two exact, nonrecursive preimages, and a record: the kernel's, under this journal's names ────────────────────────
 
 /** What a record is hashed from, before its `journalId` and `digest` exist. */
-export interface DelegationJournalRecordFields {
-  sequence: number;
-  acceptedAt: string;
-  previousDigest: string | null;
-  entry: DelegationJournalEntryV1;
-}
+export type DelegationJournalRecordFields = ChainedRecordFields<DelegationJournalEntryV1>;
 
-/**
- * `journalId = SHA256(canonicalDelegationJson({v, sequence, acceptedAt, previousDigest, entry}))`. NONRECURSIVE: neither
- * `journalId` nor `digest` is in its own preimage, so changing `journalId` cannot change `journalId`.
- */
+/** `journalId = SHA256(canonicalDelegationJson({v, sequence, acceptedAt, previousDigest, entry}))` (`chainedRecordId`). */
 export function delegationJournalId(f: DelegationJournalRecordFields): string {
-  return delegationSha256Hex(canonicalDelegationJson({
-    v: 1, sequence: f.sequence, acceptedAt: f.acceptedAt, previousDigest: f.previousDigest, entry: f.entry,
-  }));
+  return chainedRecordId(DELEGATION_JOURNAL_FORMAT, f);
 }
 
-/**
- * `digest = SHA256(canonicalDelegationJson({v, sequence, journalId, acceptedAt, previousDigest, entry}))`. It includes
- * `previousDigest`, which is what chains one record to the one before it; it never includes itself.
- */
+/** `digest = SHA256(canonicalDelegationJson({v, sequence, journalId, acceptedAt, previousDigest, entry}))` (`chainedRecordDigest`). */
 export function delegationJournalDigest(f: DelegationJournalRecordFields & { journalId: string }): string {
-  return delegationSha256Hex(canonicalDelegationJson({
-    v: 1, sequence: f.sequence, journalId: f.journalId, acceptedAt: f.acceptedAt, previousDigest: f.previousDigest, entry: f.entry,
-  }));
+  return chainedRecordDigest(DELEGATION_JOURNAL_FORMAT, f);
 }
 
-/** A record with its two hashes computed. Throws `DelegationJsonError` for an entry outside the canonical JSON domain, and
- *  refuses anything the decoder would refuse, so a record that exists is a record that decodes. */
+/** A record with its two hashes computed (`buildChainedRecord`). Throws `DelegationJsonError` for an entry outside the canonical JSON
+ *  domain, and refuses anything the decoder would refuse, so a record that exists is a record that decodes. */
 export function buildDelegationJournalRecord(f: DelegationJournalRecordFields): DelegationJournalRecordV1 {
-  assertSequence(f.sequence);
-  assertInstant(f.acceptedAt, 'acceptedAt');
-  if (f.previousDigest !== null && !isLowerHex64(f.previousDigest)) {
-    refuse('bad-field', 'previousDigest is neither null nor a lowercase 64-hex SHA-256');
-  }
-  const entry = validateEntry(f.entry);
-  const journalId = delegationJournalId({ ...f, entry });
-  const digest = delegationJournalDigest({ ...f, entry, journalId });
-  return { v: 1, sequence: f.sequence, journalId, acceptedAt: f.acceptedAt, previousDigest: f.previousDigest, entry, digest };
+  return buildChainedRecord(DELEGATION_JOURNAL_FORMAT, f);
 }
 
 // ── The closed grammar: entry and record validation ────────────────────────────────────────────────────────────────
 
-const isRecord = (v: unknown): v is Record<string, unknown> =>
-  typeof v === 'object' && v !== null && !Array.isArray(v);
-
 const isMember = <T extends string>(list: readonly T[], v: unknown): v is T => typeof v === 'string' && (list as readonly string[]).includes(v);
 
-/** Exactly these keys, no more and no fewer. An extra key is `unknown-key`, a missing one `bad-field`. */
+/** Exactly these keys, no more and no fewer. An extra key is `unknown-key`, a missing one `bad-field` (`chainedExactKeys`). */
 function exactKeys(o: Record<string, unknown>, keys: readonly string[], what: string): void {
-  for (const k of Object.keys(o)) if (!keys.includes(k)) refuse('unknown-key', `${what} has the unknown key ${JSON.stringify(k)}`);
-  for (const k of keys) if (!Object.hasOwn(o, k)) refuse('bad-field', `${what} is missing ${JSON.stringify(k)}`);
+  chainedExactKeys(DELEGATION_JOURNAL_FORMAT, o, keys, what);
 }
 
 function nonEmptyString(v: unknown, what: string): string {
   return typeof v === 'string' && v !== '' ? v : refuse('bad-field', `${what} is not a non-empty string`);
 }
 
-function assertSequence(v: unknown): asserts v is number {
-  if (typeof v !== 'number' || !Number.isSafeInteger(v) || v < 1) refuse('sequence-domain', `${String(v)} is not a positive safe integer`);
-}
-
 function assertInstant(v: unknown, what: string): asserts v is string {
-  try { parseDelegationInstant(v as string); } catch (err) {
-    if (err instanceof DelegationModelError) refuse('bad-field', `${what} is not a canonical UTC millisecond instant`);
-    throw err;
-  }
+  chainedAssertInstant(DELEGATION_JOURNAL_FORMAT, v, what);
 }
 
 function hex64(v: unknown, what: string): string {
-  return isLowerHex64(v) ? v : refuse('bad-field', `${what} is not a lowercase 64-hex SHA-256`);
+  return chainedHex64(DELEGATION_JOURNAL_FORMAT, v, what);
 }
 
 const LEASE_ENTRY_KEYS = [
@@ -330,292 +307,54 @@ function validateEntry(entry: unknown): DelegationJournalEntryV1 {
   return validateLeaseKind(entry) ?? refuse('bad-field', `entry kind ${JSON.stringify(entry['kind'])} is not in the closed grammar`);
 }
 
-const RECORD_KEYS = ['v', 'sequence', 'journalId', 'acceptedAt', 'previousDigest', 'entry', 'digest'] as const;
+// ── The codec, the splitter and the torn tail: the kernel's, under this journal's names ──────────────────────────────────
 
-// ── A JSON text scanner that finds what JSON.parse hides ───────────────────────────────────────────────────────────────
+/** Whether a JSON text repeats a key in any one object, at any depth (`findJsonDefect`). */
+export const findDelegationJsonDefect = findJsonDefect;
 
-/** Whether a JSON text repeats a key in any one object, at any depth. `JSON.parse` silently keeps the last of two equal keys, so
- *  a second parse cannot see it; this scanner can. A syntax error is a distinct answer, not a pass. */
-export function findDelegationJsonDefect(text: string): 'duplicate-key' | 'malformed-json' | null {
-  let i = 0;
-  let defect: 'duplicate-key' | 'malformed-json' | null = null;
-  const MAX_DEPTH = 64;
-  const ws = (): void => { while (i < text.length && (text[i] === ' ' || text[i] === '\t' || text[i] === '\n' || text[i] === '\r')) i++; };
-  const bad = (): never => { defect ??= 'malformed-json'; throw new Error('stop'); };
-  const string = (): string => {
-    const start = i;
-    if (text[i] !== '"') bad();
-    i++;
-    while (i < text.length && text[i] !== '"') {
-      if (text[i] === '\\') i += text[i + 1] === 'u' ? 6 : 2; else i++;
-    }
-    if (i >= text.length) bad();
-    i++;
-    try { return JSON.parse(text.slice(start, i)) as string; } catch { return bad(); }
-  };
-  const value = (depth: number): void => {
-    if (depth > MAX_DEPTH) bad();
-    ws();
-    const c = text[i];
-    if (c === '{') {
-      i++;
-      const keys = new Set<string>();
-      ws();
-      if (text[i] === '}') { i++; return; }
-      for (;;) {
-        ws();
-        const k = string();
-        if (keys.has(k)) { defect ??= 'duplicate-key'; throw new Error('stop'); }
-        keys.add(k);
-        ws();
-        if (text[i] !== ':') bad();
-        i++;
-        value(depth + 1);
-        ws();
-        if (text[i] === ',') { i++; continue; }
-        if (text[i] === '}') { i++; return; }
-        bad();
-      }
-    } else if (c === '[') {
-      i++;
-      ws();
-      if (text[i] === ']') { i++; return; }
-      for (;;) {
-        value(depth + 1);
-        ws();
-        if (text[i] === ',') { i++; continue; }
-        if (text[i] === ']') { i++; return; }
-        bad();
-      }
-    } else if (c === '"') {
-      string();
-    } else {
-      const m = /^(?:-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?|true|false|null)/.exec(text.slice(i, i + 64));
-      if (m === null) bad(); else i += m[0].length;
-    }
-  };
-  try {
-    value(0);
-    ws();
-    if (i !== text.length) bad();
-  } catch {
-    return defect ?? 'malformed-json';
-  }
-  return defect;
-}
-
-// ── The record codec ──────────────────────────────────────────────────────────────────────────────────────────────────
-
-const UTF8 = new TextEncoder();
-
-/** One record as it is written: its canonical JSON, then LF. */
+/** One record as it is written: its canonical JSON, then LF (`encodeChainedRecord`). */
 export function encodeDelegationJournalRecord(record: DelegationJournalRecordV1): Uint8Array {
-  return UTF8.encode(`${canonicalDelegationJson(record)}\n`);
+  return encodeChainedRecord(DELEGATION_JOURNAL_FORMAT, record);
 }
 
-/**
- * One journal LINE (without its LF) back into a record, strictly. Refused, each with its own code: a BOM, a trailing CR, an
- * empty line, invalid UTF-8, a JSON syntax error, a duplicate key, an unknown or missing key, a field of the wrong shape,
- * a value outside the canonical domain, text that is not byte-for-byte the canonical encoding of its own value, and a
- * `journalId` or `digest` that is not the SHA-256 of its exact preimage. Chain rules (sequence, previousDigest, anchor) belong to
- * `DelegationJournalChain`, which sees more than one record.
- */
+/** One journal LINE (without its LF) back into a record, strictly (`decodeChainedLine`). Chain rules (sequence, previousDigest,
+ *  anchor) belong to `DelegationJournalChain`, which sees more than one record. */
 export function decodeDelegationJournalLine(line: Uint8Array, where?: { line?: number; offset?: number }): DelegationJournalRecordV1 {
-  const w = where;
-  if (line.length >= 3 && line[0] === 0xef && line[1] === 0xbb && line[2] === 0xbf) refuse('bom', 'a byte-order mark', w);
-  if (line.length === 0) refuse('blank-line', 'an empty line', w);
-  if (line[line.length - 1] === 0x0d) refuse('crlf', 'a line ends in CR before its LF', w);
-  let text: string;
-  try { text = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(line); } catch { return refuse('invalid-utf8', 'the line is not valid UTF-8', w); }
-  let parsed: unknown;
-  try { parsed = JSON.parse(text); } catch { return refuse('malformed-json', 'the line is not JSON', w); }
-  if (!isRecord(parsed)) return refuse('bad-field', 'the line is not a JSON object', w);
-  exactKeys(parsed, RECORD_KEYS, 'a record');
-  if (parsed['v'] !== 1) refuse('bad-field', 'v is not 1', w);
-  const sequence = parsed['sequence'];
-  assertSequence(sequence);
-  const acceptedAt = parsed['acceptedAt'];
-  assertInstant(acceptedAt, 'acceptedAt');
-  const previousDigest = parsed['previousDigest'];
-  if (previousDigest !== null && !isLowerHex64(previousDigest)) refuse('bad-field', 'previousDigest is neither null nor a lowercase 64-hex SHA-256', w);
-  const journalId = hex64(parsed['journalId'], 'journalId');
-  const digest = hex64(parsed['digest'], 'digest');
-  const entry = validateEntry(parsed['entry']);
-  const record: DelegationJournalRecordV1 = { v: 1, sequence, journalId, acceptedAt, previousDigest, entry, digest };
-  let canonical: string;
-  try { canonical = canonicalDelegationJson(record); } catch (err) {
-    if (err instanceof DelegationJsonError) return refuse('invalid-domain', err.message, w);
-    throw err;
-  }
-  if (canonical !== text) {
-    // `JSON.parse` keeps the last of two equal keys, so a repeated key reaches here as a text that is not its own canonical
-    // encoding. Only now is the (slower) scanner run, to say WHICH defect it is; a canonical line never needs it.
-    if (findDelegationJsonDefect(text) === 'duplicate-key') refuse('duplicate-key', 'an object repeats a key', w);
-    refuse('noncanonical', 'the line is not the canonical encoding of its own value', w);
-  }
-  if (delegationJournalId(record) !== journalId) refuse('journal-id-mismatch', 'journalId is not SHA-256 of its preimage', w);
-  if (delegationJournalDigest(record) !== digest) refuse('digest-mismatch', 'digest is not SHA-256 of its preimage', w);
-  return record;
+  return decodeChainedLine(DELEGATION_JOURNAL_FORMAT, line, where);
 }
 
-/** Splits a stream of bytes into LF-terminated lines without ever holding more than one partial line: `push` returns the
- *  complete lines (LF removed) of what has arrived so far, and `leftover` is whatever follows the last LF. */
-export class DelegationJournalLineSplitter {
-  private pending: Uint8Array = new Uint8Array(0);
-  push(chunk: Uint8Array): Uint8Array[] {
-    const buf = new Uint8Array(this.pending.length + chunk.length);
-    buf.set(this.pending, 0);
-    buf.set(chunk, this.pending.length);
-    const lines: Uint8Array[] = [];
-    let start = 0;
-    for (let i = 0; i < buf.length; i++) {
-      if (buf[i] === 0x0a) { lines.push(buf.subarray(start, i)); start = i + 1; }
-    }
-    this.pending = buf.subarray(start);
-    return lines;
-  }
-  leftover(): Uint8Array { return this.pending; }
-}
+/** Splits a stream of bytes into LF-terminated lines without ever holding more than one partial line (`ChainedLineSplitter`). */
+export const DelegationJournalLineSplitter = ChainedLineSplitter;
+export type DelegationJournalLineSplitter = ChainedLineSplitter;
 
 /** The error for bytes after the last LF: `missing-final-lf` when they are one complete valid record, `torn-tail` otherwise. */
 export function delegationTornTailError(leftover: Uint8Array, where?: { line?: number; offset?: number }): DelegationJournalError {
-  try {
-    decodeDelegationJournalLine(leftover);
-    return new DelegationJournalError('missing-final-lf', 'the last record has no LF after it', where);
-  } catch {
-    return new DelegationJournalError('torn-tail', `${leftover.length} bytes follow the last LF and are not a complete record`, where);
-  }
+  return chainedTornTailError(DELEGATION_JOURNAL_FORMAT, leftover, where);
 }
-
-// ── The torn tail: what a crash can leave, and the one thing the server may cut (D-4655) ─────────────────────────────────
 
 /** Where the tail heal keeps the bytes it cuts, under the coordination directory (`~/.ccrc` in production): one file per tail,
  *  named by `delegationTailHealPlan`, never overwritten and never deleted by anything here. */
 export const DELEGATION_TORN_DIR = 'delegation-events.torn';
 
-/** The bytes after a journal's last LF, as the strict reader found them. */
-export interface DelegationJournalTail {
-  /** The byte offset of the first byte after the last LF: where the last complete record ends. */
-  offset: number;
-  bytes: Uint8Array;
-  /** SHA-256 of `bytes`, lowercase hex. */
-  sha256: string;
-  /** `missing-final-lf` when the bytes are one complete valid record with no LF after it, `torn-tail` otherwise. */
-  code: 'torn-tail' | 'missing-final-lf';
-}
+/** The bytes after a journal's last LF, as the strict reader found them (`ChainedTail`). */
+export type DelegationJournalTail = ChainedTail;
+/** What the heal will do about one tail (`ChainedTailHealPlan`). */
+export type DelegationTailHealPlan = ChainedTailHealPlan;
+/** THE HEAL RULE (D-4655), the kernel's one copy (`chainedTailHealPlan`): `DelegationDurability` carries it out. */
+export const delegationTailHealPlan = chainedTailHealPlan;
 
-/** What the heal will do about one tail: cut the journal back to `offset`, after keeping `bytes` bytes under `name`. */
-export interface DelegationTailHealPlan {
-  offset: number;
-  bytes: number;
-  sha256: string;
-  code: DelegationJournalTail['code'];
-  /** `<offset>-<sha256>.tail`: content-addressed, so a heal that died and runs again finds the identical file and makes no second one. */
-  name: string;
-}
-
-/**
- * THE HEAL RULE (D-4655), the server's ONE copy. A tail may be cut off only when ALL of these hold:
- *   1. the journal ends in bytes after its last LF (`tail`);
- *   2. every complete record validates and the hash chain is intact;
- *   3. the checkpoint's applied position names a complete record, or none (and every record it holds is retained).
- * `prefixSound` is 2 and 3 together: recovery over the COMPLETE records, anchor and holds included, found no defect. Anything else is
- * corruption, not a crash artefact, and stays a recovery failure exactly as before. Why a tail that passes is safe to drop: under O5 a
- * record is applied only after the journal fsync, and the checkpoint is replaced only after that, so a crash or a failed write in the
- * middle of an append leaves at most one partial line after the last LF and nothing (no checkpoint row, cursor, ID or interval) refers
- * to it; the bucket cursor still points before its spool line, so the next pass reads that line again and mints the same eventId. A
- * complete record with no LF is still bytes after the last LF, so it is healable too, unless the checkpoint names it: then the append
- * was durable and applied, and a missing LF is corruption (the `anchor-missing` of `prefixSound`).
- */
-export function delegationTailHealPlan(tail: DelegationJournalTail | null, prefixSound: boolean): DelegationTailHealPlan | null {
-  if (tail === null || !prefixSound) return null;
-  return { offset: tail.offset, bytes: tail.bytes.length, sha256: tail.sha256, code: tail.code, name: `${tail.offset}-${tail.sha256}.tail` };
-}
-
-// ── The hash chain ────────────────────────────────────────────────────────────────────────────────────────────────────
+// ── The hash chain: the kernel's verifier with this journal's format ─────────────────────────────────────────────────────
 
 /** A point in the journal: what the checkpoint's anchor and a snapshot's end-of-file both name. */
-export interface DelegationJournalPosition {
-  sequence: number;
-  journalId: string;
-  digest: string;
-}
-
+export type DelegationJournalPosition = ChainedPosition;
 /** What a validated journal covers, in the shape the snapshot manifest carries it. */
-export interface DelegationJournalCoverage {
-  firstSequence: number | null;
-  lastSequence: number | null;
-  recordCount: number;
-  firstPreviousDigest: string | null;
-  copiedEof: DelegationJournalPosition | null;
-}
+export type DelegationJournalCoverage = ChainedCoverage;
+export type DelegationJournalChainOptions = ChainOptions;
 
-export interface DelegationJournalChainOptions {
-  /** True: the journal must begin at sequence 1 with a null `previousDigest` (wave 3 compacts nothing, so a complete journal is
-   *  the only journal there is). False: it may begin later, and its first `previousDigest` is reported, not verified. */
-  completeFromStart?: boolean;
-  /** The checkpoint anchor (or a snapshot's) the record at that sequence must equal in all three parts. */
-  anchor?: DelegationJournalPosition | null;
-}
-
-/**
- * The incremental chain verifier: positive contiguous safe-integer sequences, each `previousDigest` equal to the prior complete
- * record's `digest`, and the anchor triple. (`journalId` uniqueness needs no set: a `journalId` is SHA-256 of a preimage that
- * includes the strictly increasing `sequence`, and `decodeDelegationJournalLine` has already proved each record's own
- * `journalId`, so two records cannot share one without a SHA-256 collision.) Feed records in file order.
- */
-export class DelegationJournalChain {
-  private count = 0;
-  private first: { sequence: number; previousDigest: string | null } | null = null;
-  private last: DelegationJournalPosition | null = null;
-  private anchorSeen = false;
-  constructor(private readonly opts: DelegationJournalChainOptions = {}) {}
-
-  accept(record: DelegationJournalRecordV1): void {
-    assertSequence(record.sequence);
-    const anchor = this.opts.anchor ?? null;
-    if (this.last === null) {
-      if (this.opts.completeFromStart === true) {
-        if (record.sequence !== 1) refuse('sequence-start', `a complete journal begins at sequence 1, not ${record.sequence}`);
-        if (record.previousDigest !== null) refuse('previous-digest', 'the first record of a complete journal has previousDigest null');
-      }
-      this.first = { sequence: record.sequence, previousDigest: record.previousDigest };
-    } else {
-      if (record.sequence === this.last.sequence) refuse('sequence-duplicate', `sequence ${record.sequence} appears twice`);
-      if (record.sequence < this.last.sequence) refuse('sequence-descent', `sequence ${record.sequence} follows ${this.last.sequence}`);
-      if (record.sequence !== this.last.sequence + 1) refuse('sequence-gap', `sequence ${record.sequence} follows ${this.last.sequence}`);
-      if (record.previousDigest !== this.last.digest) refuse('previous-digest', `record ${record.sequence}'s previousDigest is not record ${this.last.sequence}'s digest`);
-    }
-    if (anchor !== null) {
-      if (record.sequence === anchor.sequence) {
-        if (record.journalId !== anchor.journalId) refuse('anchor-journal-id', `the record at sequence ${anchor.sequence} has another journalId`);
-        if (record.digest !== anchor.digest) refuse('anchor-digest', `the record at sequence ${anchor.sequence} has another digest`);
-        this.anchorSeen = true;
-      } else if (record.journalId === anchor.journalId) {
-        refuse('anchor-sequence', `the anchor's journalId is at sequence ${record.sequence}, not ${anchor.sequence}`);
-      }
-    }
-    this.count++;
-    this.last = { sequence: record.sequence, journalId: record.journalId, digest: record.digest };
-  }
-
-  /** The head so far: the last accepted record, or null before the first. */
-  head(): DelegationJournalPosition | null { return this.last; }
-  recordCount(): number { return this.count; }
-  firstRecord(): { sequence: number; previousDigest: string | null } | null { return this.first; }
-  anchorWasSeen(): boolean { return this.anchorSeen; }
-
-  /** The coverage, once every record is in. An anchor no record satisfied is `anchor-missing`. */
-  finish(): DelegationJournalCoverage {
-    const anchor = this.opts.anchor ?? null;
-    if (anchor !== null && !this.anchorSeen) refuse('anchor-missing', `no retained record at the anchor's sequence ${anchor.sequence}`);
-    return {
-      firstSequence: this.first?.sequence ?? null,
-      lastSequence: this.last?.sequence ?? null,
-      recordCount: this.count,
-      firstPreviousDigest: this.first?.previousDigest ?? null,
-      copiedEof: this.last,
-    };
+/** The incremental chain verifier (`ChainVerifier`) over this journal's format. Feed records in file order. */
+export class DelegationJournalChain extends ChainVerifier<DelegationJournalEntryV1, DelegationJournalError> {
+  constructor(opts: DelegationJournalChainOptions = {}) {
+    super(DELEGATION_JOURNAL_FORMAT, opts);
   }
 }
 
@@ -625,44 +364,21 @@ export interface DelegationJournalExpectation extends DelegationJournalChainOpti
 }
 
 /**
- * Validates a whole journal as bytes (a copy, a snapshot, a file read at once) and returns its coverage. Every rule of the
- * grammar and the chain applies, and so does the anchor: the checkpoint's `(sequence, journalId, digest)` must be the record
- * at that sequence, and every held journal ID must be retained. Bytes after the last LF are a torn tail, whatever they hold.
+ * Validates a whole journal as bytes (a copy, a snapshot, a file read at once) and returns its coverage, keeping no records
+ * (`verifyChainedBytes`). Every rule of the grammar and the chain applies, and so does the anchor: the checkpoint's
+ * `(sequence, journalId, digest)` must be the record at that sequence, and every held journal ID must be retained. Bytes after
+ * the last LF are a torn tail, whatever they hold.
  */
 export function validateDelegationJournalBytes(bytes: Uint8Array, expect: DelegationJournalExpectation = {}): DelegationJournalCoverage {
-  const chain = new DelegationJournalChain(expect);
   const held = new Set(expect.heldJournalIds ?? []);
-  const splitter = new DelegationJournalLineSplitter();
-  let lineNo = 0;
-  for (const line of splitter.push(bytes)) {
-    lineNo++;
-    const record = decodeDelegationJournalLine(line, { line: lineNo });
-    chain.accept(record);
-    held.delete(record.journalId);
-  }
-  const tail = splitter.leftover();
-  if (tail.length > 0) throw delegationTornTailError(tail, { line: lineNo + 1 });
-  const coverage = chain.finish();
+  const coverage = verifyChainedBytes(DELEGATION_JOURNAL_FORMAT, bytes, expect, (record) => { held.delete(record.journalId); });
   if (held.size > 0) refuse('held-evidence-missing', `${held.size} held journal ID(s) are not retained, first ${[...held][0]}`);
   return coverage;
 }
 
-/** A whole journal as records. Same strictness as `validateDelegationJournalBytes`. */
+/** A whole journal as records (`parseChainedBytes`). Same strictness as `validateDelegationJournalBytes`. */
 export function parseDelegationJournal(bytes: Uint8Array, opts: DelegationJournalChainOptions = {}): DelegationJournalRecordV1[] {
-  const chain = new DelegationJournalChain(opts);
-  const splitter = new DelegationJournalLineSplitter();
-  const records: DelegationJournalRecordV1[] = [];
-  let lineNo = 0;
-  for (const line of splitter.push(bytes)) {
-    lineNo++;
-    const record = decodeDelegationJournalLine(line, { line: lineNo });
-    chain.accept(record);
-    records.push(record);
-  }
-  const tail = splitter.leftover();
-  if (tail.length > 0) throw delegationTornTailError(tail, { line: lineNo + 1 });
-  chain.finish();
-  return records;
+  return parseChainedBytes(DELEGATION_JOURNAL_FORMAT, bytes, opts);
 }
 
 // ── Evidence as an SQLite row ─────────────────────────────────────────────────────────────────────────────────────────
