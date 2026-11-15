@@ -240,7 +240,16 @@ export function generationDay(mods: GenDayModules): Scenario<GenDayEdge> {
         }
         line('gen', id, next.state, 'lane');
       };
+      // `run(id)` hydrates a run with its health (mail and review reads), which the lane never reads: each pass asks the
+      // coordinator's two newest runs for their kind, state and programme only. Only the day writes `runs` (a wave's end,
+      // below, clears this), so a read is kept until then, and a seed costs about what it did before the acts.
+      const runMemo = new Map<number, ReturnType<CoordStore['run']>>();
       const traced = Object.assign(Object.create(base) as object, {
+        run: (id: number) => {
+          let r = runMemo.get(id);
+          if (r === undefined) { r = base.run(id); runMemo.set(id, r); }
+          return r;
+        },
         stepGeneration: (...a: Parameters<CoordStore['stepGeneration']>) => {
           const before = rowById(a[0]);
           const w = base.stepGeneration(...a);
@@ -530,6 +539,7 @@ export function generationDay(mods: GenDayModules): Scenario<GenDayEdge> {
           if (role === 'coordinator' && waveEnds && !world.isDown()) {
             // The wave ends and the next opens: the coordinator's newest run is open and the one before it closed.
             waveNo += 1;
+            runMemo.clear();
             db.prepare("UPDATE runs SET state = 'done' WHERE claimedBy = ? AND state = 'working'").run(COORD);
             db.prepare("INSERT INTO runs (program, wave, waveOf, project, state, claimedBy, openedAt) VALUES ('prog-a', ?, 99, 'project-a', 'working', ?, 0)").run(waveNo, COORD);
           }
