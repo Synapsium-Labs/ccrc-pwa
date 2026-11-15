@@ -607,6 +607,15 @@ describe('mutation-sweep closures', () => {
     expect(screen.getByText(PLAIN_NOTE)).toBeTruthy();
   });
 
+  // The Overlord face follow-up's third state: the runs frame landed, then the link went down. The flag is sticky, so the
+  // run heard before the loss still names the claim, as it does while the link is open (`useHeard`, the one rule).
+  it('after the link is lost, the run heard before it still names the claim', () => {
+    const fleet = storeWith({ runsFrameSeen: true, runs: [runFor('demo-quiet-basin', 17, 'build4', 2, 3)] });
+    fleet.setState({ conn: 'down', linkLost: true });
+    open(mergedUnarchived(), () => {}, { fleet });
+    expect(screen.getByText(/does not archive on merge/).textContent ?? '').toMatch(/Run 17/);
+  });
+
   it('a CLOSED run is not a claim', () => {
     open(mergedUnarchived(), () => {}, { fleet: storeWith({ runsFrameSeen: true,
       runs: [{ ...runFor('demo-quiet-basin', 17, 'build4', 2, 3), state: 'done' }] }) });

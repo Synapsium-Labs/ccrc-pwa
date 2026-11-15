@@ -22,15 +22,16 @@ import { useFleetChrome } from '../../fleet/FleetChrome';
 import { fleetSummary } from '../../fleet/fleetSummary';
 import { PoolLag, poolLagText } from '../../fleet/poolLag';
 import { UpdateIndicator } from '../../fleet/UpdateIndicator';
+import { useHeard } from '../../fleet/useHeard';
 
 export function PhoneHeader(): ReactNode {
   const useStore = useFleetChrome().store;
   const sessions = useStore((s) => s.sessions);
-  const runs = useStore((s) => s.runs);
-  const runsFrameSeen = useStore((s) => s.runsFrameSeen);
+  const { runs } = useHeard(useStore);
   const pools = useStore((s) => s.pools);
-  // Runs before their first frame are unknown, not none: the readout leaves the part out (`fleetSummary`'s contract).
-  const summary = fleetSummary(sessions, runsFrameSeen ? runs : null);
+  // Runs before their first frame are unknown, not none (`useHeard` answers null): the readout leaves the part out
+  // (`fleetSummary`'s contract).
+  const summary = fleetSummary(sessions, runs);
   const lag = poolLagText(pools?.epoch, pools?.observedEpoch);
   return (
     <header className="ref-phone-head">
