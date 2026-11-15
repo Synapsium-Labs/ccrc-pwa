@@ -865,9 +865,13 @@ describe('CLAUDE.md: the account-pools bullet is GROUNDED where it can be, QUOTE
     // sentence itself was FALSE — it claimed a fleet-wide fact that item 5
     // corrected to a FLEET-box-only one — and the correction genuinely needs
     // three more lines to say honestly. Re-measured, not padded.
+    // RAISED 25 → 27 (Overlord W1 pool set, PR A2): the bullet names the
+    // second reader, `_session_pool_side`, the one reader of a session's side
+    // once a set can stand, which a later reader of this file must not miss.
+    // Re-measured at the new size: two lines, the sentence at its shortest.
     const raw = passage('CLAUDE.md, the account-pools bullet (raw)', read('CLAUDE.md'), ...RAW_BULLET);
     expect(raw.split('\n').filter((l) => l.trim() !== '').length,
-      'CLAUDE.md says README is canonical — this bullet is over 25 lines').toBeLessThanOrEqual(25);
+      'CLAUDE.md says README is canonical — this bullet is over 27 lines').toBeLessThanOrEqual(27);
   });
 
   it('CLAUDE.md states no README size for this bullet to be measured against (D-5892, #558)', () => {

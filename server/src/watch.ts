@@ -18,7 +18,7 @@ import {
   accountPoolsEnforcement, accountPoolsUnavailableReason, poolsEnforcement, poolsWire, readObservedEpochFromRegistry, readPoolEpoch,
   readProjectPools, type ProjectPoolsRead,
 } from './pools.js';
-import type { CcdResult, WatcherCoordPort } from './coord/ports.js';
+import type { CcdResult, LiveAskAnswer, WatcherCoordPort } from './coord/ports.js';
 import { parseDialog } from './pane/dialog.js';
 import { parseStatusline, type Statusline } from './pane/statusline.js';
 import { defaultCachePath, persistFleetSnapshot, SnapshotWriter, snapshotNotice } from './fleetstate.js';
@@ -41,7 +41,7 @@ import {
   decideIdleCompactNudge, idleNudgeDisabled, idleNudgeFeedBody, idleNudgeRefusedBody, idleNudgeRowHold, readCompactionTail,
   type CompactionTail, type IdleNudgeRowFacts,
 } from './idlenudge.js';
-import { askActions } from './askkey.js';
+import { askActions, askKey } from './askkey.js';
 // The ask lane's two WINDOWS moved out of this file (whole-branch review
 // F2(b)): `fleet.ts`'s chip is their second reader and cannot import this
 // module — `watch.ts` imports `assembleFleetWithPanePids` from it — so they now live
@@ -101,7 +101,7 @@ import { TestboxLane } from './testboxLane.js';
 import { BuildCaptureLane } from './buildCaptureLane.js';
 import type { HostPressureHealth } from '../../shared/pressure.js';
 import type { DiskHealth } from '../../shared/disk.js';
-import { DelegationDurability, type DelegationDurableBatch } from './coord/delegation-checkpoint.js';
+import { DelegationDurability, type DelegationDurableBatch } from './coord/delegation-durability.js';
 import { planNativeRemoved } from './coord/delegation-lease-state.js';
 import { delegationCarrierHealthShown } from './coord/delegation-carrier.js';
 import { applyCarrierJournalStep, emptyCarrierLaneMemory, markLeaseCarrier, noteCarrierMark, planCarrierPass } from './coord/delegationCarrierMark.js';
@@ -2178,6 +2178,12 @@ export class FleetWatcher {
    *  immediately. Same reasoning as currentPending(). */
   currentHookStates(): Map<string, HookState> {
     return new Map(this.hookStates);
+  }
+  /** `LiveAskRead`'s adapter (Overlord W1, portfolio): the `askKey` of the ask this child's newest hookstate is `waiting` on,
+   *  `null` when it shows none, `unmeasured` when no hookstate was read for it in this process. A pure read; stores nothing. */
+  liveAskKey(childId: string): LiveAskAnswer {
+    const hs = this.hookStates.get(childId);
+    return hs === undefined ? { kind: 'unmeasured' } : { kind: 'read', key: hs.state === 'waiting' ? askKey(hs.ask) : null };
   }
 
   /** The last measured marker state, for `/ws/fleet`'s cold start. `null` means

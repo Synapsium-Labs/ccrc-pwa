@@ -47,6 +47,10 @@ import { callViewOf } from './coordCalls.js';
 import { insertSystemMailTx } from './rundefsTx.js';
 import type { PlanStorePort } from './planStore.js';
 import type { PlanEndOutcome } from '../../../shared/plan.js';
+import { parseRankWrite, type PortfolioView } from '../../../shared/portfolio.js';
+import { portfolioFor } from './portfolio.js';
+import type { LiveAskRead } from './ports.js';
+import { deviceActor } from '../ccdargv.js';
 import { credentialBodyRoute, noStoreRoute, type AccountGate } from '../accounts/gate.js';
 import {
   OperatorSecretNameCollides, OperatorSecretStoredUnrecorded, operatorSecretLaneId, operatorSlotNamesValid, readOperatorSecretMeta, readStoredSecrets,
@@ -583,6 +587,9 @@ export interface LedgerOperatorDeps {
   slotWaitMs?: number;
   /** D-8558: the plan tables' port (`Deps.plan`), whose `closePlan` the operator's programme end calls. Absent, no plan is closed. */
   plan?: PlanStorePort;
+  /** The live signal for an open ask (Overlord W1, portfolio): the watcher's `liveAskKey`, or a reader answering `unmeasured`
+   *  when no watcher runs, so a released ask then counts as unmeasured, never as live. */
+  liveAsk: LiveAskRead;
 }
 
 /** The tick's words to the operator, and the reasons behind the two programme refusals. */
@@ -711,6 +718,36 @@ export function registerLedgerOperatorRoutes(app: FastifyInstance, deps: LedgerO
     const item = coord.itemById(id);
     if (item === null || !operatorWasShown(item, now)) return refuseRoute(reply, 'unknown-item', { detail: `no item ${id}` });
     return reply.code(200).send({ ok: true, item: viewOfItem(coord, item, now, deps.presenceOf, secretOf) });
+  });
+
+  // The portfolio (Overlord W1, spec §5.6 H38, plan w1-portfolio.md Task 3): the operator's read and the rank door, both
+  // session-gated only, no box token (`LEDGER_OPERATOR_DOORS`). The read composes `portfolioFor` (L1) over the facts read; a
+  // throw from the read is `runs-unreadable`, never an empty portfolio. The rank door confers no authority, so it calls no
+  // account gate and works while sign-in is dark, recording `flag-off` then (slug rank-works-dark), as the `lane-arm` and
+  // `run-close` switches do; armed, it records the session's device actor. It awaits nothing between its read and its
+  // write, so `setPortfolioRank`'s revision check inside one transaction is the whole guard against a stale tab.
+  const portfolioView = (coord: CoordStore, now: number): PortfolioView => portfolioFor(coord.portfolioFacts(now, deps.liveAsk), now);
+  app.get('/api/portfolio', (_req, reply) => {
+    const coord = deps.coord;
+    if (!coord) return refuseRoute(reply, 'not-configured');
+    let portfolio: PortfolioView;
+    try { portfolio = portfolioView(coord, deps.now()); } catch (err) {
+      return refuseRoute(reply, 'runs-unreadable', { detail: err instanceof Error ? err.message : String(err) });
+    }
+    return reply.code(200).send({ ok: true, portfolio });
+  });
+
+  app.post('/api/portfolio/rank', (req, reply) => {
+    const coord = deps.coord;
+    if (!coord) return refuseRoute(reply, 'not-configured');
+    const actor = deps.authEnabled ? deviceActor(deps.sessionAuth(req).device) : 'flag-off';
+    const parsed = parseRankWrite(req.body);
+    if (!parsed.ok) return bad(reply, parsed.detail);
+    const now = deps.now();
+    const res = coord.setPortfolioRank(parsed.write, actor, now);
+    if (!res.ok && 'unknownSlug' in res) return refuseRoute(reply, 'not-found', { detail: `no programme ${res.unknownSlug}` });
+    if (!res.ok) return refuseRoute(reply, LEDGER_ROUTE_REFUSALS.rankChanged, { revision: res.revision, detail: `the rank is at revision ${res.revision}: read it again` });
+    return reply.code(200).send({ ok: true, revision: res.revision, portfolio: portfolioView(coord, now) });
   });
 
   // EXEMPT-BUT-AUTHENTICATED (D-149's pattern, D-8126): a live session OR the box token, 401 only when both fail, and before

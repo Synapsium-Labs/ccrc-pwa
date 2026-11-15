@@ -37,7 +37,7 @@ import {
   type DelegationSpoolLineV1,
 } from '../../../shared/api.js';
 import type { FleetIO, MeasuredDirectoryRead } from '../io.js';
-import type { DelegationDurableBatch } from './delegation-checkpoint.js';
+import type { DelegationDurableBatch } from './delegation-durability.js';
 import { findDelegationJsonDefect } from './delegation-journal.js';
 import {
   DELEGATION_HOUR_NO_CAPABILITY,

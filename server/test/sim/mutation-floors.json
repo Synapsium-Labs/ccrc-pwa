@@ -62,6 +62,14 @@
   "server/src/continuity/anchor.ts#renderAnchor": 1,
   "server/src/continuity/anchor.ts#anchorGeneration": 1,
   "server/src/continuity/anchor.ts#anchorAnswer": 1,
+  "server/src/coord/portfolio.ts#portfolioOrder": 1,
+  "server/src/coord/portfolio.ts#itemWaitMs": 1,
+  "server/src/coord/portfolio.ts#portfolioFor": 1,
+  "shared/overlordHistory.ts#readOverlordHistoryRequest": 1,
+  "shared/overlordHistory.ts#readOverlordHistoryAnswer": 1,
+  "ccd/history/lib.mjs#decideScope": 1,
+  "ccd/history/read-context.mjs#measureReach": 1,
+  "agent/src/historyOp.ts#createHistoryOp": 1,
   "server/src/pushOutbox.ts#noticeTitle": 1,
   "server/src/pushOutbox.ts#noticePayload": 1,
   "server/src/pushOutbox.ts#asSendVerdict": 1,
@@ -73,5 +81,8 @@
   "shared/practice-triggers.ts#parseSignature": 1,
   "shared/poolrule.ts#poolRule": 1,
   "shared/poolset.ts#poolSetSpelling": 1,
-  "shared/poolset.ts#parsePoolSet": 1
+  "shared/poolset.ts#parsePoolSet": 1,
+  "server/src/chainedJournal.ts#decodeChainedLine": 1,
+  "server/src/chainedJournal.ts#ChainVerifier": 1,
+  "server/src/chainedJournal.ts#chainedTailHealPlan": 1
 }

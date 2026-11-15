@@ -325,9 +325,9 @@ export function sealAtBoot(db: DatabaseSync, id: number, to: 'unknown' | 'failed
  *  item-held-until-is-a-hold). An item held from before the first boot of this build is left out (no backfill). A row
  *  whose `neededBy` this build does not know is set aside as unreadable, as the outbox reads do. */
 export function heldItemsReached(db: DatabaseSync, now: number, firstBootAt: number): ItemsRead {
-  let raw: { id: number; heldUntil: number; closedAt: number | null; neededBy: string }[];
+  let raw: { id: number; raisedAt: number; heldUntil: number; closedAt: number | null; neededBy: string }[];
   try {
-    raw = stmt(db, 'SELECT id, heldUntil, closedAt, neededBy FROM operator_items WHERE heldUntil IS NOT NULL '
+    raw = stmt(db, 'SELECT id, raisedAt, heldUntil, closedAt, neededBy FROM operator_items WHERE heldUntil IS NOT NULL '
       + 'AND heldUntil >= ? AND heldUntil <= ? AND reachedOperatorAt IS NULL ORDER BY id').all(firstBootAt, now) as typeof raw;
   } catch (e) {
     return { ok: false, detail: `operator_items read failed: ${message(e)}` };
