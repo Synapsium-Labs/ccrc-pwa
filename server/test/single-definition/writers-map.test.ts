@@ -310,7 +310,8 @@ describe('section 2.2\'s facts each map to the writers pins that hold them (#236
 const TABLES = ['run_events', 'mail_deliveries', 'feed_events', 'lifecycle_events', 'lifecycle_generations',
   'lifecycle_gaps', 'asks', 'approvals', 'practice_cases', 'continuity_starts', 'continuity_generations', 'continuity_cursor',
   'continuity_snapshots', 'continuity_card_reads', 'continuity_timers', 'continuity_notes', 'continuity_handovers',
-  'continuity_probes', 'continuity_reads', 'push_outbox', 'operator_items', 'portfolio_rank', 'portfolio_rank_revision'] as const;
+  'continuity_probes', 'continuity_reads', 'push_outbox', 'operator_items', 'portfolio_rank', 'portfolio_rank_revision',
+  'answer_marks'] as const;
 
 /** Each table's writers, `file#Class.method`, sorted and unique. */
 export const tableWriters = (files: readonly string[]): Record<string, string[]> => {
@@ -390,6 +391,8 @@ describe(TABLES_PIN, () => {
       // The portfolio (Overlord W1): the operator's order and its revision, one writer for both, reached from the rank door.
       portfolio_rank: ['server/src/coord/portfolioStore.ts#setPortfolioRank'],
       portfolio_rank_revision: ['server/src/coord/portfolioStore.ts#setPortfolioRank'],
+      // The answer marks (Overlord W1): append-only, one writer, reached only from the operator's answer-mark door.
+      answer_marks: ['server/src/coord/answerMarkStore.ts#recordAnswerMark'],
     });
   });
 
@@ -398,11 +401,13 @@ describe(TABLES_PIN, () => {
   // registration call, by that route. Fastify handlers are anonymous arrows, so the route is what tells a second call in
   // another handler of the same registration function (the box-token goals read among them) from the rank door's own.
   const ROUTE_VERB = /^(get|post|put|delete|patch)$/;
-  const rankCallSites = (files: readonly string[]): string[] => {
+  // The answer marks' one writer is pinned the same way (Overlord W1, plan w1-delegation-marks.md Task 2), so `callSitesOf`
+  // takes the callee's name.
+  const callSitesOf = (callee: string) => (files: readonly string[]): string[] => {
     const out: string[] = [];
     for (const f of files) {
       const text = readFileSync(f, 'utf8');
-      if (!text.includes('setPortfolioRank(')) continue;
+      if (!text.includes(`${callee}(`)) continue;
       const sf = ts.createSourceFile(f, text, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
       const syms = parseFile(f).symbols;
       const visit = (node: ts.Node, route: string | null): void => {
@@ -415,7 +420,7 @@ describe(TABLES_PIN, () => {
             here = `${callee.name.text.toUpperCase()} ${first.text}`;
           }
           const name = ts.isPropertyAccessExpression(callee) ? callee.name.text : ts.isIdentifier(callee) ? callee.text : null;
-          if (name === 'setPortfolioRank') {
+          if (name === callee) {
             const at = node.getStart(sf);
             const inner = syms.filter((x) => x.start <= at && at < x.end).sort((a, b) => (a.end - a.start) - (b.end - b.start))[0];
             out.push(`${rel(f)}#${inner?.name ?? '(module)'}${here === null ? '' : ` @ ${here}`}`);
@@ -427,6 +432,8 @@ describe(TABLES_PIN, () => {
     }
     return out.sort();
   };
+  const rankCallSites = callSitesOf('setPortfolioRank');
+  const markCallSites = callSitesOf('recordAnswerMark');
   const RANK_CALLS = [
     'server/src/coord/ledgersRoutes.ts#registerLedgerOperatorRoutes @ POST /api/portfolio/rank', `${S}setPortfolioRank`,
   ];
@@ -459,6 +466,23 @@ describe(TABLES_PIN, () => {
   });
   it('setPortfolioRank is called exactly once outside the store, inside the POST /api/portfolio/rank handler', () => {
     expect(rankCallSites(ALL.filter((f) => rel(f).startsWith('server/src/')))).toEqual(RANK_CALLS);
+  });
+  const MARK_CALLS = [
+    'server/src/coord/ledgersRoutes.ts#registerLedgerOperatorRoutes @ POST /api/answer-marks', `${S}recordAnswerMark`,
+  ];
+  it('CONTROL: a second recordAnswerMark call in the tick door\'s handler is a second entry', async () => {
+    const routes = readFileSync(path.join(ccrcRoot, 'server/src/coord/ledgersRoutes.ts'), 'utf8');
+    const anchor = "  app.post('/api/items/:id/tick', (req, reply) => {\n";
+    expect(routes.split(anchor)).toHaveLength(2);
+    const planted = routes.replace(anchor, `${anchor}    deps.coord?.recordAnswerMark({ kind: 'item', id: 1, mark: 'unsure', value: true }, 'x', 0);\n`);
+    await plant('ledgersRoutes.ts', planted, (f) => {
+      const sites = markCallSites([f]).map((s) => s.replace(/^.*#/, ''));
+      expect(sites).toEqual(['registerLedgerOperatorRoutes @ POST /api/answer-marks', 'registerLedgerOperatorRoutes @ POST /api/items/:id/tick']);
+      expect(sites).not.toEqual([MARK_CALLS[0]!.replace(/^.*#/, '')]);
+    });
+  });
+  it('recordAnswerMark is called exactly once outside the store, inside the POST /api/answer-marks handler', () => {
+    expect(markCallSites(ALL.filter((f) => rel(f).startsWith('server/src/')))).toEqual(MARK_CALLS);
   });
 });
 

@@ -731,9 +731,10 @@ describe('coord.db: migration 4 — runs.dispatchStartedAt', () => {
     // and MIGRATIONS[73] (the anchor-slot lane-arm row, the anchor, Overlord W1a)
     // and MIGRATIONS[74] (push_outbox, push_outbox_meta and the reach stamps on asks and items, the push outbox, Overlord W1)
     // and MIGRATIONS[75] (portfolio_rank and portfolio_rank_revision, the portfolio, Overlord W1)
-    // and MIGRATIONS[76] (continuity_quiz_runs, the replay quiz, Overlord W1a).
-    expect(COORD_SCHEMA_VERSION).toBe(77);
-    expect(MIGRATIONS.length).toBe(77);
+    // and MIGRATIONS[76] (continuity_quiz_runs, the replay quiz, Overlord W1a)
+    // and MIGRATIONS[77] (answer_marks, the operator's answer marks, Overlord W1).
+    expect(COORD_SCHEMA_VERSION).toBe(78);
+    expect(MIGRATIONS.length).toBe(78);
   });
 
   it('is ADDITIVE: every column migration 1 wrote is still on the table, unchanged', () => {
@@ -835,8 +836,9 @@ describe('coord.db: migration 11 — runs.kind and runs.reviews (design 2026-09-
     // and MIGRATIONS[73] (the anchor-slot lane-arm row, Overlord W1a)
     // and MIGRATIONS[74] (push_outbox and the reach stamps, Overlord W1)
     // and MIGRATIONS[75] (portfolio_rank and portfolio_rank_revision, Overlord W1)
-    // and MIGRATIONS[76] (continuity_quiz_runs, the replay quiz, Overlord W1a); the migration above is still entry 11.
-    expect(COORD_SCHEMA_VERSION).toBe(77);
+    // and MIGRATIONS[76] (continuity_quiz_runs, the replay quiz, Overlord W1a)
+    // and MIGRATIONS[77] (answer_marks, Overlord W1); the migration above is still entry 11.
+    expect(COORD_SCHEMA_VERSION).toBe(78);
     const row = db.prepare('SELECT kind, reviews FROM runs').get() as { kind: string; reviews: number | null };
     expect(row).toEqual({ kind: 'work', reviews: null });
     db.close();
@@ -2870,6 +2872,40 @@ describe('coord.db: continuity_quiz_runs, the replay quiz (Overlord W1a; C52, M1
     expect(db.prepare('SELECT count(*) AS n FROM continuity_quiz_runs').get()).toEqual({ n: 0 });
     expect(db.prepare('SELECT sessionId, door, at FROM continuity_reads').all()).toEqual([{ sessionId: 'lane-a-project-a', door: 'card', at: 5 }]);
     expect(db.prepare("SELECT choice FROM lane_arm_settings WHERE lane = 'anchor-slot'").get()).toEqual({ choice: 'shadow' });
+    db.close();
+  });
+});
+
+describe('coord.db: answer_marks, the operator\'s answer marks (Overlord W1; §9.2.1, C70)', () => {
+  /** Found by its DDL, never hard-coded. */
+  const SLOT = MIGRATIONS.findIndex((m) => m.includes('CREATE TABLE answer_marks (')) + 1;
+  const ENTRY = /^CREATE TABLE answer_marks \([^;]*\);\s*CREATE INDEX answer_marks_row ON answer_marks \(kind, rowId, mark, id\);$/;
+  it('ONE NEW TABLE and its index, nothing on an existing table, the entry after the replay quiz\'s (renumbered at landing)', () => {
+    expect(SLOT).toBe(MIGRATIONS.findIndex((m) => m.includes('CREATE TABLE continuity_quiz_runs (')) + 2);
+    expect(SLOT).toBe(78);
+    expect(MIGRATIONS[SLOT - 1]!.replace(/--[^\n]*/g, '').trim()).toMatch(ENTRY);
+  });
+
+  it('reaches a database ALREADY at the version before it: the table lands empty and every existing row is as it was', () => {
+    const p = dbPathIn(mkTmp('ccrc-coord-'));
+    mkdirSync(path.dirname(p), { recursive: true });
+    const raw = new DatabaseSync(p);
+    tx(raw, () => {
+      for (let v = 0; v < SLOT - 1; v++) raw.exec(MIGRATIONS[v]!);
+      raw.exec(`PRAGMA user_version = ${SLOT - 1}`);
+      raw.exec("INSERT INTO continuity_reads (sessionId, door, at) VALUES ('lane-a-project-a', 'card', 5)");
+    });
+    raw.close();
+    const db = openCoordDb(p);
+    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(COORD_SCHEMA_VERSION);
+    expect(db.prepare('SELECT count(*) AS n FROM answer_marks').get()).toEqual({ n: 0 });
+    expect(db.prepare('SELECT sessionId, door, at FROM continuity_reads').all()).toEqual([{ sessionId: 'lane-a-project-a', door: 'card', at: 5 }]);
+    db.close();
+  });
+
+  it('refuses a value other than 0 or 1', () => {
+    const db = openCoordDb(dbPathIn(mkTmp('ccrc-coord-')));
+    expect(() => db.prepare("INSERT INTO answer_marks (kind, rowId, mark, value, at, actor) VALUES ('item', 1, 'unsure', 2, 1, 'op-a')").run()).toThrow(/CHECK/);
     db.close();
   });
 });

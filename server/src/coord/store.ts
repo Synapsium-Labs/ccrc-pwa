@@ -55,6 +55,7 @@ import { runsPage as runsPageQuery, type RunsPage } from './runsPage.js';
 import { runFind as runFindQuery, runsReviewing, type RunFindParsed } from './runFind.js';
 import { readProgrammes as readProgrammesQuery } from './programmesRead.js';
 import * as portfolio from './portfolioStore.js';
+import * as answerMarks from './answerMarkStore.js';
 import type { RunVerdicts } from './runVerdicts.js';
 import { decideAllocation } from './ledger.js';
 // D-2921: `CoordPlacementStamp` is declared by its CONSUMER, the L1 placement
@@ -4187,6 +4188,8 @@ export class CoordStore {
 
   setPortfolioRank(w: portfolio.RankWrite, actor: string, now: number): portfolio.RankWriteResult { return portfolio.setPortfolioRank(this.db, w, actor, now); }
   portfolioFacts(now: number, liveAsk: portfolio.LiveAskRead): portfolio.PortfolioFacts { return portfolio.portfolioFacts(this.db, now, TERMINAL_RUN_STATES_SQL, liveAsk); }
+  recordAnswerMark(w: answerMarks.AnswerMarkWrite, actor: string, now: number): answerMarks.AnswerMarkWriteResult { return answerMarks.recordAnswerMark(this.db, w, actor, now); }
+  answerMarksOf(kind: answerMarks.AnswerMarkKind, ids: readonly number[]): answerMarks.AnswerMarksRead { return answerMarks.answerMarksOf(this.db, kind, ids); }
   /** `runs({includeClosed:true})` as one page (console speed S2): the query is `runsPage.ts`'s. */
   runsPage(opts: { limit: number; before?: number; pinned: readonly number[] }): RunsPage {
     return runsPageQuery(this.db, opts, { columns: RUN_ROW_COLUMNS, terminalStatesSql: TERMINAL_RUN_STATES_SQL },
