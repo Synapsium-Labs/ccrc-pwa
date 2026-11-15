@@ -1968,6 +1968,7 @@ The fix round's runs, each through `ccrc test` in the foreground, one at a time:
 | `browser/settings-diagnostics.browser.test.ts` alone, `--maxWorkers=1` | 4 passed |
 | `L11-T10-M2` | red 1 (the F1 case), restored by sha, `git status --porcelain` unchanged |
 | Library provenance; `npm audit signatures` | both rc 0, under Suites |
+| The PR's ci run 43672976449 at `6ab3472ff` | `pwa 1/3` red: `browser-dist.test.ts` (1 of 12), because the new A6 file served `sharedDist()` inline rather than as the census reads it. Fixed in the A6 file, after which `browser-dist` and `browser-leg` passed (30) and the A6 file alone passed 4; `TSC-OK`. Every server shard, CodeQL and the other jobs were green at `6ab3472ff`. |
 
 ## Deviations found
 
