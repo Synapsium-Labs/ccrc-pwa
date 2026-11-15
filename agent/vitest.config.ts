@@ -26,7 +26,9 @@ export default defineConfig({
     include: ['test/**/*.test.ts'],
     // The server package's scrub of git's repository-redirecting variables, shared rather than copied: no agent test
     // spawns git today, so this keeps a future one from writing into the runner's checkout.
-    setupFiles: ['../server/test/git-env.setup.mjs', 'test/contain-path.setup.ts'],
+    // The one-text guard (the ccd file split, D-8048), shared rather than copied: a read or copy of ccd/ccd, or a listing of
+    // ccd/, throws in the test that made it unless the caller is listed; see the header of ../server/test/ccdReadGuard.ts.
+    setupFiles: ['../server/test/git-env.setup.mjs', 'test/contain-path.setup.ts', '../server/test/ccdReadGuard.ts'],
     globalSetup: ['../server/test/git-env.setup.mjs', '../server/test/run-tmp.globalsetup.mjs', 'test/contain-path.globalsetup.ts'],
   },
 });

@@ -18,7 +18,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import { parseFile } from '../scan/parse.js';
-import { ccdSourceLines, bashCodeOf } from '../consolidationCensus.js';
+import { CCD_LIB_FILES, ccdSourceLines, bashCodeOf } from '../consolidationCensus.js';
 import { ALL, ALL_MJS, BASH, ccrcRoot, codeLines, rel, stallCode } from './helpers.js';
 
 const SPEC = path.join(ccrcRoot, 'docs/superpowers/specs/2026-10-19-ccrc-consolidation-wave-design.md');
@@ -432,7 +432,7 @@ describe(TOMB_PIN, () => {
   });
 
   it('no other shell, TS, .mjs or Python code names the tombstone path', () => {
-    const ccd = new Set(['ccd/ccd', 'ccd/lib/disk-retention.sh', 'ccd/lib/train-proof.sh', 'ccd/lib/delegation-lease.sh']);
+    const ccd = new Set(['ccd/ccd', ...CCD_LIB_FILES]);   // ccd's program: the body and every library of its table (D-8048)
     const named = (code: string): boolean => /\.reaped\//.test(code);
     const hits = [
       ...BASH.filter((f) => !ccd.has(rel(f)) && codeLines(f).some(named)),

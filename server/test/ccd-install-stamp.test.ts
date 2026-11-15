@@ -14,7 +14,7 @@ import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { mkTmp } from './tmpHelpers.js';
-import { CCD, CCD_LIB, CCD_LIB_PIN_PLACEHOLDER, CCD_TRAIN_LIB, CCD_TRAIN_LIB_PIN_PLACEHOLDER, CCD_LEASE_LIB, CCD_LEASE_LIB_PIN_PLACEHOLDER, CCD_POOLSET_LIB, CCD_POOLSET_LIB_PIN_PLACEHOLDER, CCD_REDACT, CCD_REDACT_CLI, canonicalPython3, installedCcdBody, seedAccountsSh } from './ccdWsHelpers.js';
+import { CCD, CCD_LIB, CCD_LIB_PIN_PLACEHOLDER, CCD_TRAIN_LIB, CCD_TRAIN_LIB_PIN_PLACEHOLDER, CCD_LEASE_LIB, CCD_LEASE_LIB_PIN_PLACEHOLDER, CCD_POOLSET_LIB, CCD_POOLSET_LIB_PIN_PLACEHOLDER, CCD_REDACT, CCD_REDACT_CLI, canonicalPython3, CCD_LIBS, installedCcdBody, seedAccountsSh } from './ccdWsHelpers.js';
 import { verifyMarker, markGenerated } from '../../shared/mark.mjs';
 
 const REPO = path.resolve(__dirname, '..', '..');
@@ -39,10 +39,8 @@ function plantTree(ccdText: string = fs.readFileSync(CCD, 'utf8')): void {
   const dir = path.join(tree(), 'ccd');
   fs.mkdirSync(path.join(dir, 'lib'), { recursive: true });
   fs.writeFileSync(path.join(dir, 'ccd'), ccdText, { mode: 0o755 });
-  fs.copyFileSync(CCD_LIB, path.join(dir, 'lib', 'disk-retention.sh'));
-  fs.copyFileSync(CCD_TRAIN_LIB, path.join(dir, 'lib', 'train-proof.sh'));   // the second library (D-7463)
-  fs.copyFileSync(CCD_LEASE_LIB, path.join(dir, 'lib', 'delegation-lease.sh'));   // the third library (wave 5)
-  fs.copyFileSync(CCD_POOLSET_LIB, path.join(dir, 'lib', 'pool-set.sh'));   // the fourth library (the Overlord W1)
+  // Every library of ccd's `__CCD_LIBS` table, in its place (D-6913, D-7463; the file split, D-8048).
+  for (const lib of CCD_LIBS) fs.copyFileSync(lib, path.join(dir, 'lib', path.basename(lib)));
   // The docs redactor's two files (D-7077), which the installer publishes beside the library and pins in the body.
   fs.mkdirSync(path.join(tree(), 'shared'), { recursive: true });
   fs.copyFileSync(CCD_REDACT, path.join(tree(), 'shared', 'redact.mjs'));

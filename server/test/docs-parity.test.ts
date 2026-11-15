@@ -86,7 +86,7 @@ import {
   DOCS_CCD_FAILURES as ccdFailuresT6, redactDocsText as redactTextT6,
 } from '../../shared/docs.js';
 import { pythonRedactorTables as pythonRedactorTablesT6 } from './census-w5/redactors.js';
-import { CCD as ccdScriptT6, makeCcdHarness as harnessT6 } from './ccdWsHelpers.js';
+import { CCD as ccdScriptT6, ccdSource as ccdSourceT6, makeCcdHarness as harnessT6 } from './ccdWsHelpers.js';
 import { REAL_PYTHON3 as realPythonT6 } from './ccdDocsHelpers.js';
 import {
   DOCS_PY_CLOSE as pyCloseT6, DOCS_PY_OPEN as pyOpenT6, docsHelperSource as helperSourceT6, pyLiteral as pyLiteralT6,
@@ -275,7 +275,7 @@ describe('the helper source: one write, python 3.8, ASCII, and its section marke
   });
 
   it('the opener and the terminator are each one whole line of ccd/ccd; the extractor refuses anything else', () => {
-    const ccd = readFileSync(ccdScriptT6, 'utf8').split('\n');
+    const ccd = ccdSourceT6().split('\n');   // the program, its libraries spliced back (the file split, D-8048)
     expect(ccd.filter((l) => l === pyOpenT6)).toHaveLength(1);
     expect(ccd.filter((l) => l === pyCloseT6)).toHaveLength(1);
     // CONTROL: planted texts.

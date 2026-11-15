@@ -110,6 +110,13 @@ export function ccdLauncherIn(root: string = REPO): string {
  *  line in the heredoc check. A tree without one (a fixture) has no lines from it. */
 export const CCD_LIB_FILES: readonly string[] = ['ccd/lib/disk-retention.sh', 'ccd/lib/train-proof.sh', 'ccd/lib/delegation-lease.sh', 'ccd/lib/pool-set.sh'];
 
+/** The file a census names for a definition at `rel` (the file split's Task 4, D-8048): `ccd/ccd` for `ccd/ccd` and for each
+ *  library of `CCD_LIB_FILES`, since a function a slice moves is still ccd's, and `rel` itself otherwise. A census that says
+ *  where a definition sits names the program, so a move does not change its answer. */
+export function programFile(rel: string): string {
+  return rel === 'ccd/ccd' || CCD_LIB_FILES.includes(rel) ? 'ccd/ccd' : rel;
+}
+
 /** One line of ccd's shell source, with the repo-relative file it is in and its 1-based line there. */
 export interface CcdSourceLine { readonly file: string; readonly line: number; readonly text: string }
 

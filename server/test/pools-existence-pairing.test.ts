@@ -194,7 +194,7 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { CCD } from './ccdWsHelpers.js';
+import { CCD, ccdSource } from './ccdWsHelpers.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const ccrcRoot = path.resolve(here, '..', '..');
@@ -484,8 +484,11 @@ function scanSource(src: string, fileLabel: string): { hits: RawHit[]; violation
   return { hits, violations };
 }
 
+/** A file's text; ccd's is the program, its libraries spliced back (the file split, D-8048), so a moved function stays scanned. */
+const textOf = (filePath: string): string => (filePath === CCD ? ccdSource() : readFileSync(filePath, 'utf8'));
+
 function scanFile(filePath: string, fileLabel: string): { hits: RawHit[]; violations: Violation[] } {
-  return scanSource(readFileSync(filePath, 'utf8'), fileLabel);
+  return scanSource(textOf(filePath), fileLabel);
 }
 
 // ---------------------------------------------------------------------------
@@ -495,7 +498,7 @@ function scanFile(filePath: string, fileLabel: string): { hits: RawHit[]; violat
 /** Every top-level function this scan considers pools-relevant, in file
  *  order — the "where it looked" half of guarding the guard. */
 function poolsBlocks(filePath: string): string[] {
-  const lines = readFileSync(filePath, 'utf8').split('\n');
+  const lines = textOf(filePath).split('\n');
   return findFunctionBlocks(lines).filter(isPoolsRelevantBlock).map((b) => b.name);
 }
 

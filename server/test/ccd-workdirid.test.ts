@@ -13,7 +13,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { makePrHarness, type PrHarness } from './ccdPrHelpers.js';
 import { CCD, WS_ADD, ccdSource, ghContainedEnv } from './ccdWsHelpers.js';
-import { CCD_FUNCTION_DEF, bashCodeOf, ccdCallGraph, ccdFunctionDefinitions } from './consolidationCensus.js';
+import { CCD_FUNCTION_DEF, bashCodeOf, ccdCallGraph, ccdFunctionDefinitions, programFile } from './consolidationCensus.js';
 import { spawnSyncGroup } from './spawnGroup.js';
 import { writeField } from './worktreeIdentityFixture.js';
 
@@ -253,7 +253,7 @@ describe('the composer: one line in the platform block, a brace-free fragment or
   });
 
   it('is defined once, and calls no function: a call out of K would count', () => {
-    expect(ccdFunctionDefinitions().filter((s) => s.text.startsWith('_plat_workdirid_pane()')).map((s) => s.file))
+    expect(ccdFunctionDefinitions().filter((s) => s.text.startsWith('_plat_workdirid_pane()')).map((s) => programFile(s.file)))
       .toEqual(['ccd/ccd']);
     expect(ccdCallGraph().filter((e) => e.caller === '_plat_workdirid_pane').map((e) => e.callee), 'it names no ccd function')
       .toEqual([]);
@@ -261,7 +261,7 @@ describe('the composer: one line in the platform block, a brace-free fragment or
 
   it('it is ONE line, in place of the blank line after _plat_epoch_ms, in ccd and in ccrc alike', () => {
     for (const [name, file] of [['ccd/ccd', CCD], ['ccd/ccrc', CCRC]] as const) {
-      const lines = fs.readFileSync(file, 'utf8').split('\n');
+      const lines = (file === CCD ? ccdSource() : fs.readFileSync(file, 'utf8')).split('\n');   // ccd: the program, its libraries spliced back (the file split, D-8048)
       const at = lines.flatMap((l, i) => (l.startsWith('_plat_workdirid_pane') ? [i] : []));
       expect(at, `${name}: one line defines it`).toHaveLength(1);
       const i = at[0]!;

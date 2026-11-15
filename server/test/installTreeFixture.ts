@@ -28,6 +28,7 @@ import { CONTAINED_TOOLS, plantPoison } from './containedTools.js';
 // The second, and it imports nothing at all (Docs W4): the PWA bundle's one fixture worker, so the closing doctor's
 // `docs-sw` check reads the same text `ccrc-doctorFixture.ts`'s `healthy()` plants.
 import { swJs } from './swFixtures.js';
+import { CCD_LIB_FILES } from './consolidationCensus.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(here, '..', '..');
@@ -172,15 +173,10 @@ export const TREE_FILES = [
   // template through the real publisher.
   'ccd/ccd-entry.py',
   'ccd/ccd-entry-install.py',
-  // The library the body pins and loads (D-6913): the publisher reads it from the tree and refuses a tree
-  // without it, or with one the body does not pin, so it is COPIED beside the body it belongs to.
-  'ccd/lib/disk-retention.sh',
-  // Its second library (D-7463), the train proof: read, pinned and published exactly as the first.
-  'ccd/lib/train-proof.sh',
-  // Its third library (wave 5), the delegation lease: read, pinned and published exactly as the others.
-  'ccd/lib/delegation-lease.sh',
-  // Its fourth library (the Overlord's pool set): read, pinned and published exactly as the others.
-  'ccd/lib/pool-set.sh',
+  // The libraries the body pins and loads (D-6913, D-7463): the publisher reads each from the tree and refuses a tree
+  // without it, or with one the body does not pin, so each is COPIED beside the body it belongs to. Every word of ccd's
+  // library table, read from it (the file split, D-8048): the body is never copied without them.
+  ...CCD_LIB_FILES,
   'ccd/ccd-cap-scopes',
   // graphify Task 10: the sweep executable `_inst_bins` ships alongside the
   // other two, unconditionally (mirrors the `ccd-cap-scopes` line — only the

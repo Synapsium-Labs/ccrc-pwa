@@ -5,7 +5,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { CCD, ghContainedEnv, makeCcdHarness, type CcdHarness } from './ccdWsHelpers.js';
+import { CCD, ccdSource, ghContainedEnv, makeCcdHarness, type CcdHarness } from './ccdWsHelpers.js';
 
 let h: CcdHarness;
 beforeEach(() => { h = makeCcdHarness('ccrc-ccd-fable-default-'); });
@@ -127,7 +127,8 @@ describe('D-6793: a lane whose settings.json defaults to Fable spawns Opus', () 
   });
   it('the resolver is the doctor check\'s: the whole ladder, env check through the rk remap, line for line', () => {
     const body = (f: string): string[] => {
-      const all = fs.readFileSync(path.join(__dirname, '..', '..', 'ccd', f), 'utf8').split('\n').map((l) => l.trim());
+      // ccd itself is read as the program, its libraries spliced back (the file split, D-8048).
+      const all = (f === 'ccd' ? ccdSource() : fs.readFileSync(path.join(__dirname, '..', '..', 'ccd', f), 'utf8')).split('\n').map((l) => l.trim());
       const from = all.findIndex((l) => l.startsWith('const env = j.env'));
       const to = all.findIndex((l, i) => i > from && l.startsWith('const rk = "ANTHROPIC_DEFAULT_"'));
       expect(from, `${f} start`).toBeGreaterThanOrEqual(0);

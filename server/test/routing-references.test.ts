@@ -152,7 +152,7 @@ describe('routing-matrix.md — spec §3, pinned to the vocabularies the mechani
     // One row, two homes, like `shared/route-defaults.ts` above: the matrix is what the coordinator reads, and
     // `ROUTE_COORDINATOR_ROW` in `ccd/ccd` is what `_route_seed_default` writes onto an operator spawn. A matrix row
     // saying `high` over a spawn that still types `ultracode` is the gap this pins shut (coordinator clause 19).
-    const ccd = readFileSync(path.join(root, 'ccd/ccd'), 'utf8');
+    const ccd = ccdSource();   // the program, its libraries spliced back (the file split, D-8048)
     const m = /^ROUTE_COORDINATOR_ROW="([^"]+)"/m.exec(ccd);
     expect(m, 'ccd/ccd declares no ROUTE_COORDINATOR_ROW').not.toBeNull();
     const spawned = Object.fromEntries(m![1]!.split(' ').map((kv) => kv.split('=') as [string, string]));
@@ -171,7 +171,7 @@ describe('routing-matrix.md — spec §3, pinned to the vocabularies the mechani
   });
 
   it('a session with no routing record is typed the coordinator row\'s effort, never ultracode (SPAWN_EFFORT)', () => {
-    const ccd = readFileSync(path.join(root, 'ccd/ccd'), 'utf8');
+    const ccd = ccdSource();   // the program, its libraries spliced back (the file split, D-8048)
     const spawnEffort = /^SPAWN_EFFORT="([^"]*)"/m.exec(ccd)?.[1];
     const coordEffort = /^ROUTE_COORDINATOR_ROW="[^"]*\beffort=(\w+)/m.exec(ccd)?.[1];
     expect(spawnEffort, 'ccd/ccd declares no SPAWN_EFFORT').toBeDefined();

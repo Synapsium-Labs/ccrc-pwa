@@ -25,6 +25,8 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync, readdirSync, statSync, existsSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { ccdSource } from '../ccdWsHelpers.js';
+import { programFile } from '../consolidationCensus.js';
 
 
 export const here = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -154,10 +156,16 @@ export const isBashComment = (l: string): boolean => l.trim().startsWith('#');
 /** A bash line that is not a comment. Either path is discussed in prose all
  *  over these tools; only an actual line of shell is a reader or a writer. */
 export const codeLines = (f: string): string[] =>
-  readFileSync(f, 'utf8').split('\n').filter((l) => !isBashComment(l));
+  bashText(f).split('\n').filter((l) => !isBashComment(l));
 
+/** A shell file's text. ccd/ccd's is ccd's whole program, its libraries spliced back (`ccdSource()`; the file split,
+ *  D-8048), so a line a slice moved into a library is still ccd/ccd's. */
+export const bashText = (f: string): string => (f === path.join(ccrcRoot, 'ccd', 'ccd') ? ccdSource() : readFileSync(f, 'utf8'));
+
+/** The shell files whose code names `needle`, each named as `programFile` names it: a library of ccd's table is ccd/ccd, so
+ *  a slice that moves the line does not change the answer (D-8048). */
 export const holdersOf = (needle: string): string[] =>
-  BASH.filter((f) => codeLines(f).some((l) => l.includes(needle))).map(rel).sort();
+  [...new Set(BASH.filter((f) => codeLines(f).some((l) => l.includes(needle))).map((f) => programFile(rel(f))))].sort();
 
 
 // ── Worker stall watch, wave 1 (spec 2026-09-29 §9.14 and §4.2 "Spelled once").

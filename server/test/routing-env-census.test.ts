@@ -5,7 +5,8 @@ import { fileURLToPath } from 'node:url';
 import { ccdSource } from './ccdWsHelpers.js';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
-const read = (rel: string): string => readFileSync(path.join(root, rel), 'utf8');
+// ccd/ccd is read as the program, its libraries spliced back (the file split, D-8048).
+const read = (rel: string): string => (rel === 'ccd/ccd' ? ccdSource() : readFileSync(path.join(root, rel), 'utf8'));
 const count = (s: string, needle: string): number => s.split(needle).length - 1;
 const under = (dir: string, ext: string): string[] =>
   readdirSync(path.join(root, dir), { withFileTypes: true, recursive: true })

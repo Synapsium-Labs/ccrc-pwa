@@ -7,9 +7,11 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { mkTmp } from './tmpHelpers.js';
+import { ccdSource } from './ccdWsHelpers.js';
 
 const REPO = path.join(import.meta.dirname, '..', '..');
-const read = (rel: string): string => fs.readFileSync(path.join(REPO, rel), 'utf8');
+// ccd/ccd is read as the program, its libraries spliced back (the file split, D-8048).
+const read = (rel: string): string => (rel === 'ccd/ccd' ? ccdSource() : fs.readFileSync(path.join(REPO, rel), 'utf8'));
 const code = (src: string): string[] => src.split('\n').map((l) => l.trim()).filter((l) => l && !l.startsWith('#'));
 const DEST = '.cc-sessions/lib/transcript.jq';
 const A = 'a'.repeat(36), B = 'b'.repeat(36);

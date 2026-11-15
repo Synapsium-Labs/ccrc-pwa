@@ -28,6 +28,7 @@ import { FleetWatcher } from '../src/watch.js';
 import { Bus } from '../src/bus.js';
 import { testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
+import { ccdSource } from './ccdWsHelpers.js';
 
 type Stance = 'consults' | 'wakes-first' | 'journal' | 'held-awake' | 'other-meaning' | 'true-of-pane' | 'definition';
 interface Row {
@@ -259,7 +260,8 @@ function bashFn(src: string, name: string): string {
   const end = src.indexOf('\n}', at + 1);
   return src.slice(at, end < 0 ? undefined : end);
 }
-const read = (rel: string): string => readFileSync(path.join(REPO, rel), 'utf8');
+// ccd/ccd is read as the program, its libraries spliced back (the file split, D-8048), so a moved reader is still found.
+const read = (rel: string): string => (rel === 'ccd/ccd' ? ccdSource() : readFileSync(path.join(REPO, rel), 'utf8'));
 const key = (r: Pick<Row, 'source' | 'file'>): string => `${r.source} ${r.file}`;
 const tableMap = (): Map<string, number> => new Map(CENSUS.map((r) => [key(r), r.hits] as const));
 const sorted = (m: Map<string, number>): [string, number][] => [...m].sort(([a], [b]) => (a < b ? -1 : 1));

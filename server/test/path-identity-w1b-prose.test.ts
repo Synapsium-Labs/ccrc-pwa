@@ -10,7 +10,8 @@ import { fileURLToPath } from 'node:url';
 import { ccdSource } from './ccdWsHelpers.js';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
-const read = (f: string): string => readFileSync(path.join(root, f), 'utf8');
+// ccd/ccd is read as the program, its libraries spliced back (the file split, D-8048).
+const read = (f: string): string => (f === 'ccd/ccd' ? ccdSource() : readFileSync(path.join(root, f), 'utf8'));
 /** Flattened: the records wrap their sentences, so a phrase is matched across line breaks. */
 const flat = (s: string): string => s.replace(/\s+/g, ' ');
 const SPEC = 'docs/superpowers/specs/2026-10-12-path-identity-design.md';

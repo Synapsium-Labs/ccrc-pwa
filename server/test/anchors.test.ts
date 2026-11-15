@@ -21,6 +21,7 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { anchorProblems, anchorDefs, anchorCites } from './anchors.js';
+import { ccdSource } from './ccdWsHelpers.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 /** The two files whose text holds the grammar's own samples. */
@@ -103,7 +104,8 @@ describe('anchor census over the tree', () => {
       .filter((f) => f !== '' && !SELF.has(f) && (TEXT.test(f) || CCD_EXECUTABLE.test(f)));
     const files = new Map<string, string>();
     for (const f of listed) {
-      try { files.set(f, readFileSync(path.join(ROOT, f), 'utf8')); } catch { /* deleted, not yet staged */ }
+      // ccd/ccd is read as the program, its libraries spliced back (the file split, D-8048), so an anchor a slice moved still resolves there.
+      try { files.set(f, f === 'ccd/ccd' ? ccdSource() : readFileSync(path.join(ROOT, f), 'utf8')); } catch { /* deleted, not yet staged */ }
     }
     expect(files.has('README.md')).toBe(true);
     expect(anchorProblems(files)).toEqual([]);

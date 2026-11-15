@@ -13,7 +13,7 @@ import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
-import { CCD, ccdSource, ghContainedEnv, makeCcdHarness, WS_ADD_REAL_SPAWN, type CcdHarness } from './ccdWsHelpers.js';
+import { CCD, ccdSource, ccdTreeCopy, ghContainedEnv, makeCcdHarness, WS_ADD_REAL_SPAWN, type CcdHarness } from './ccdWsHelpers.js';
 import { readJournal } from './lifecycleHelpers.js';
 
 let h: CcdHarness;
@@ -429,10 +429,17 @@ describe('an older ccd binds a leading --base as the project and refuses (D-6164
   });
 
   it('W5-B8: a ccd copy with the --base arm removed refuses the leading flag, with nothing created', () => {
-    // The copy: ccd/ccd less its `--base` arm, written under the fixture HOME beside regular-file copies of its libraries
-    // (the loader refuses a symlinked library). What it lost is checked against the arm the PROGRAM scan finds
+    // The copy: ccd and its libraries under the fixture HOME (`ccdTreeCopy`, regular files: the loader refuses a symlinked
+    // library), less the `--base` arm, edited in whichever file of the copy holds `cmd_ws_add`: ccd/ccd, or the library a
+    // slice of the file split moved it to (D-8048). What it lost is checked against the arm the PROGRAM scan finds
     // (`ccdSource()`), not against the text this test just wrote.
-    const src = fs.readFileSync(CCD, 'utf8');
+    const dir = path.join(h.home, 'older-ccd');
+    const copy = ccdTreeCopy(dir);
+    const holding = (root: string): string[] => [path.join(root, 'ccd'), ...fs.readdirSync(path.join(root, 'lib')).map((n) => path.join(root, 'lib', n))]
+      .filter((f) => fs.readFileSync(f, 'utf8').split('\n').some((l) => BASE_ARM.test(l)));
+    const holder = holding(dir);
+    expect(holder, 'one file of the copy holds the --base arm').toHaveLength(1);
+    const src = fs.readFileSync(holder[0]!, 'utf8');
     const srcSha = createHash('sha256').update(src).digest('hex');
     const older = src.split('\n').filter((l) => !BASE_ARM.test(l)).join('\n');
     const kept = new Set(older.split('\n'));
@@ -440,11 +447,7 @@ describe('an older ccd binds a leading --base as the project and refuses (D-6164
     expect(lost, 'the copy lost exactly the --base arm the program scan finds').toEqual(
       ccdSource().split('\n').filter((l) => BASE_ARM.test(l)));
     expect(src.split('\n').length - older.split('\n').length, 'and nothing else').toBe(2);
-    const dir = path.join(h.home, 'older-ccd');
-    fs.mkdirSync(dir, { recursive: true });
-    fs.cpSync(path.join(path.dirname(CCD), 'lib'), path.join(dir, 'lib'), { recursive: true, dereference: true });
-    const copy = path.join(dir, 'ccd');
-    fs.writeFileSync(copy, older, { mode: 0o755 });
+    fs.writeFileSync(holder[0]!, older);
 
     const tip = tipOf();
     const r = wsAdd(`--no-rc --child 7 --base ${tip} demo`, copy);
@@ -452,7 +455,9 @@ describe('an older ccd binds a leading --base as the project and refuses (D-6164
     expect(r.out).toContain("invalid project '--base'");
     nothingCreated();
     expect(h.reg(`--base-quiet-mesa`, 'uuid')).toBeNull();
-    expect(createHash('sha256').update(fs.readFileSync(CCD, 'utf8')).digest('hex'), 'the source ccd is untouched').toBe(srcSha);
+    // The tree's own file, copied afresh, is the one the edit started from.
+    const fresh = holding(path.dirname(ccdTreeCopy(path.join(h.home, 'fresh-ccd'))));
+    expect(createHash('sha256').update(fs.readFileSync(fresh[0]!, 'utf8')).digest('hex'), 'the source ccd is untouched').toBe(srcSha);
   });
 });
 

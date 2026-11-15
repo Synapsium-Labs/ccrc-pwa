@@ -16,6 +16,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { bashCode, rawBashTmux, rawTsTmux, type Site } from './tmuxSocketCensus.js';
 import { makeCcdHarness, type CcdHarness } from './ccdWsHelpers.js';
+import { CCD_LIB_FILES, programFile } from './consolidationCensus.js';
 import { sourceOfSymbol } from './scan/symbols.js';
 import { TMUX_REFUSE_SH, TMUX_SOCKET_FILE, TMUX_SOCKET_NAME_RE } from '../../shared/tmux-target.js';
 
@@ -146,10 +147,7 @@ describe('D-8270 — no raw tmux call in bash: every one goes through the lookup
 describe('D-8270 — the lookup is one block, the same bytes in every script that cannot source ccd', () => {
   /** A file that only ever runs SOURCED by another (`ccd/lib/*.sh` by ccd/ccd, the doctor's checks by ccrc). */
   const SOURCED_BY: Readonly<Record<string, string>> = {
-    'ccd/lib/disk-retention.sh': 'ccd/ccd',
-    'ccd/lib/train-proof.sh': 'ccd/ccd',
-    'ccd/lib/delegation-lease.sh': 'ccd/ccd',
-    'ccd/lib/pool-set.sh': 'ccd/ccd',
+    ...Object.fromEntries(CCD_LIB_FILES.map((f) => [f, programFile(f)])),   // every library of ccd's table (D-8048)
     'ccd/ccrc-doctor-checks': 'ccd/ccrc',
   };
   const canonical = lookupBlock(read('ccd/ccd'));

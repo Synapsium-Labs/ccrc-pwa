@@ -97,6 +97,20 @@ export function ccdSource(): string {
   return (ccdSourceMemo = spliceCcd(fs.readFileSync(CCD, 'utf8'), CCD_LIBS.filter((lib) => fs.existsSync(lib)).map((lib) => fs.readFileSync(lib, 'utf8'))));
 }
 
+/** ccd's program copied together (the file split's Task 4, D-8048): the body at `<dir>/ccd` and every library `CCD_LIBS`
+ *  names at `<dir>/lib/<word>.sh`, the layout `_ccd_lib_load` finds beside the body. A test that runs or edits a copy of ccd
+ *  copies it through here, so a function a slice moved into a library is still in the copy; nothing copies the body alone
+ *  (`ccdReadGuard.ts`). Each file keeps its mode. Returns the body's path. */
+export function ccdTreeCopy(dir: string): string {
+  fs.mkdirSync(path.join(dir, 'lib'), { recursive: true });
+  const body = path.join(dir, 'ccd');
+  fs.copyFileSync(CCD, body);
+  for (const lib of CCD_LIBS) {
+    if (fs.existsSync(lib)) fs.copyFileSync(lib, path.join(dir, 'lib', path.basename(lib)));
+  }
+  return body;
+}
+
 /** `ccdSource()`'s splice as a pure function of the texts (the file split's Task 1, D-8634): `main` with each
  *  `# @ccd-lib:<id>` pointer line replaced by that region of the library texts `libs`, one level deep. A pointer with
  *  no region stays as it is; an id two libraries both name throws. */

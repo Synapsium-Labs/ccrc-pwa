@@ -7,11 +7,12 @@ import { readFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { ccdSource } from './ccdWsHelpers.js';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const read = (f: string): string => readFileSync(path.join(root, f), 'utf8');
 const hook = read('ccd/session-hook.sh');
-const ccd = read('ccd/ccd');
+const ccd = ccdSource();   // the program, its libraries spliced back (the file split, D-8048)
 const ccrc = read('ccd/ccrc');
 
 const fnBody = (src: string, name: string): string => {

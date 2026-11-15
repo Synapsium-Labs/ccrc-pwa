@@ -162,10 +162,8 @@ describe('the library and the pin', () => {
 
 describe('a test that scans ccd reads all of it', () => {
   // `ccdSource()` puts the moved regions back where they sat; a bare read of `CCD` as text sees ccd without them, and a scanner
-  // built on it passes over less than it did. These files read the FILE, not the program, on purpose.
-  const FILE_READERS = new Set(['ccd-lib-load.test.ts', 'ccd-entry-install.test.ts', 'ownership.test.ts', 'ccrc-restamp.test.ts', 'ccd-install-stamp.test.ts', 'ccdWsHelpers.ts',
-    // W5-B8 builds an older ccd from the FILE (its `--base` arm removed) and sources it beside copies of the libraries.
-    'ccd-ws-add-base.test.ts']);
+  // built on it passes over less than it did. The guard in `ccdReadGuard.ts`, a `setupFiles` entry, holds that by behaviour
+  // (the file split, D-8048): it replaced the spelling check that stood here.
 
   it('every region of every library is spliced back by a pointer line in ccd/ccd, and every marker is one region id', () => {
     // `ccdSource()` replaces each `# @ccd-lib:<id>` pointer in ccd/ccd with that library region and never reports a region
@@ -185,12 +183,6 @@ describe('a test that scans ccd reads all of it', () => {
     expect([...pointers].filter((p) => !regions.includes(p)), 'a pointer in ccd/ccd with no library region').toEqual([]);
   });
 
-  it('no test file reads CCD as text outside the ones about the file itself', () => {
-    const dir = path.join(REPO, 'server', 'test');
-    const bare = fs.readdirSync(dir).filter((f) => f.endsWith('.ts') && !FILE_READERS.has(f))
-      .filter((f) => /\breadFileSync\(\s*CCD\s*,\s*['"]utf-?8['"]\s*\)/.test(fs.readFileSync(path.join(dir, f), 'utf8')));
-    expect(bare, 'read ccd through ccdSource() (ccdWsHelpers.ts), which includes the library').toEqual([]);
-  });
 });
 
 describe('a faithful copy loads', () => {

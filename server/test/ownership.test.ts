@@ -10,7 +10,7 @@ import { markGenerated, verifyMarker } from '../../shared/mark.mjs';
 // script. Joining that path here scored a hit as a second copy; so, on the
 // next run, did this comment while trying to explain it, which is why it now
 // describes the shape instead of writing it.
-import { CCD, canonicalPython3 } from './ccdWsHelpers.js';
+import { CCD, CCD_LIBS, canonicalPython3 } from './ccdWsHelpers.js';
 
 const MARKER_RE = /^# ccrc:generated 1 sha256=([0-9a-f]{64})$/;
 
@@ -140,7 +140,7 @@ describe('the INSTALLED ccd carries a marker that matches its own bytes', () => 
   for (const f of ['ccd-entry.py', 'ccd-entry-install.py']) copyFileSync(path.join(REPO, 'ccd', f), path.join(tree, 'ccd', f));
   // The libraries the body pins (D-6913, D-7463): the installer renders their digests into the body, then stamps it.
   mkdirSync(path.join(tree, 'ccd', 'lib'), { recursive: true });
-  for (const f of ['disk-retention.sh', 'train-proof.sh', 'delegation-lease.sh', 'pool-set.sh']) copyFileSync(path.join(REPO, 'ccd', 'lib', f), path.join(tree, 'ccd', 'lib', f));
+  for (const lib of CCD_LIBS) copyFileSync(lib, path.join(tree, 'ccd', 'lib', path.basename(lib)));   // every library of ccd's table (D-8048)
   // The docs redactor's two files (D-7077), which the installer publishes beside the library and pins in the body.
   mkdirSync(path.join(tree, 'shared'), { recursive: true });
   for (const f of ['redact.mjs', 'redact-cli.mjs']) copyFileSync(path.join(REPO, 'shared', f), path.join(tree, 'shared', f));

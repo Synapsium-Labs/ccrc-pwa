@@ -26,7 +26,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
-import { makeCcdHarness, type CcdHarness, CCD, ccdSource } from './ccdWsHelpers.js';
+import { makeCcdHarness, type CcdHarness, ccdSource, ccdTreeCopy } from './ccdWsHelpers.js';
 import { bindFixture, plantFakeKernel } from './fixtures/fakeMountKernel.js';
 
 let h: CcdHarness;
@@ -483,9 +483,8 @@ describe('ccd carry-dedupe: the vocabulary, and the program ships', () => {
   });
 
   it('an installed ccd with no tree beside it finds the program under ~/.cc-sessions/lib', () => {
-    const body = path.join(h.home, 'libexec', 'ccd');
-    fs.mkdirSync(path.dirname(body), { recursive: true });
-    fs.copyFileSync(CCD, body);
+    // The body and its libraries together (the file split, D-8048): `cmd_carry_dedupe` may sit in either.
+    const body = ccdTreeCopy(path.join(h.home, 'libexec'));
     fs.mkdirSync(path.join(h.home, '.cc-sessions', 'lib'), { recursive: true });
     const p = path.join(h.home, '.cc-sessions', 'lib', 'carry-dedupe.py');
     expect(() => h.sh(`source "${body}"; cmd_carry_dedupe`)).toThrow(/its program is not installed/);
