@@ -56,7 +56,9 @@ describe('the readdir op answers modification times on request', () => {
     const { c } = await connect();
     const ops = (await c.hello() as AgentReady).ops!;
     expect(READDIR_MTIMES_OP).toBe('readdir-mtimes');
-    expect(ops[ops.length - 1]).toBe('readdir-mtimes');
+    // Overlord W1 Task 4: overlord-history goes last, so readdir-mtimes is the tenth word.
+    expect(ops[9]).toBe('readdir-mtimes');
+    expect(ops[ops.length - 1]).toBe('overlord-history');
     expect(ops.filter((w) => !CAP_WORD.test(w))).toEqual([]);
   });
 });

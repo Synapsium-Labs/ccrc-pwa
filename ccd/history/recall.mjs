@@ -56,7 +56,7 @@ import { loadGraph, GRAPH_MAX_BYTES } from '../compact-card.mjs';
  * @property {string} home
  * @property {string} id                               this session's ccrc id, from tmux
  * @property {string | null} gen                       the generation the counter line names: a UUID, or null
- * @property {{ kind: 'family' | 'project' | 'workspace', id: string, generation: string | null,
+ * @property {{ kind: import('./lib.mjs').ReadScopeKind, id: string, generation: string | null,
  *   project: string | null, workdir: string | null, sessionPks: number[], transcriptPks: number[],
  *   families: ScopeFamily[], agents?: boolean }} scope   `agents` (W4 addendum P7): the scope reads subagent transcripts and their nodes too; absent reads as false
  * @property {string[]} scopeArgs                      the argv that reproduces this scope on a next: line
@@ -199,6 +199,12 @@ function ownFamily(db, id, generation) {
 
 const PROJECT_FAMILIES_SQL = 'SELECT session_pk, ccrc_id, generation, first_seen_ms, merged_into FROM sessions '
   + 'WHERE project = ? AND merged_into IS NULL ORDER BY first_seen_ms, session_pk';
+/** The Overlord's two other targets (Overlord W1, w1-board-history.md question 6): every unmerged family, and one id's
+ *  unmerged families, every generation. */
+const ALL_FAMILIES_SQL = 'SELECT session_pk, ccrc_id, generation, first_seen_ms, merged_into FROM sessions '
+  + 'WHERE merged_into IS NULL ORDER BY first_seen_ms, session_pk';
+const ID_FAMILIES_SQL = 'SELECT session_pk, ccrc_id, generation, first_seen_ms, merged_into FROM sessions '
+  + 'WHERE ccrc_id = ? AND merged_into IS NULL ORDER BY first_seen_ms, session_pk';
 /** The workspace match (§8.2; slug history-epoch-cwd-real). An epoch matches when either:
  *   - its cwd_real equals realpath(workdir); or
  *   - its cwd_real is NULL (the path no longer resolved at ingest) and its verbatim cwd equals the workdir.
@@ -216,8 +222,16 @@ const WORKSPACE_FAMILIES_SQL = 'SELECT DISTINCT s.session_pk AS session_pk, s.cc
  *   - family: this id's row-life (ownFamily).
  *   - project: every unmerged family of the project.
  *   - workspace: every unmerged family of the project with a confirmed epoch launched in this workdir.
- *  It is strictly narrower than project, and never reached by default (ruled Q12). */
+ *  It is strictly narrower than project, and never reached by default (ruled Q12).
+ *   - overlord (Overlord W1): `sel.target` names `all` (every unmerged family), `project` (sel.project's, as the project
+ *     scope reads them) or `session` (sel.id's, every generation). decideScope never answers this kind; only
+ *     overlord-read.mjs builds it, and any other target reads nothing. */
 export function familiesOf(db, sel) {
+  if (sel.kind === 'overlord') {
+    if (sel.target === 'all') return db.prepare(ALL_FAMILIES_SQL).all().map(familyOf);
+    if (sel.target === 'project') return sel.project === null ? [] : db.prepare(PROJECT_FAMILIES_SQL).all(sel.project).map(familyOf);
+    return sel.target === 'session' ? db.prepare(ID_FAMILIES_SQL).all(sel.id).map(familyOf) : [];
+  }
   if (sel.kind === 'project') return sel.project === null ? [] : db.prepare(PROJECT_FAMILIES_SQL).all(sel.project).map(familyOf);
   if (sel.kind === 'workspace') {
     if (sel.project === null || sel.workdir === null) return [];

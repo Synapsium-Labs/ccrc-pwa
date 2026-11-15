@@ -41,6 +41,12 @@ const ITEM_ACT_MAP: Record<ItemAct, true> = {
   tick: true, confirm: true, return: true, withdraw: true, dismiss: true, act: true, decline: true, settle: true,
 };
 export const ITEM_ACTS = Object.keys(ITEM_ACT_MAP) as readonly ItemAct[];
+/** The acts an item event records besides an `ItemAct`: a raise and a blocking change, which do not move the item. An
+ *  event's act is an `ItemEventAct`; `isItemNonMove` reads this one map (Overlord W1, portfolio). */
+export type ItemNonMove = 'raise' | 'block' | 'unblock';
+export type ItemEventAct = ItemAct | ItemNonMove;
+const ITEM_NON_MOVE_MAP: Record<ItemNonMove, true> = { raise: true, block: true, unblock: true };
+export const isItemNonMove = (act: string): act is ItemNonMove => Object.prototype.hasOwnProperty.call(ITEM_NON_MOVE_MAP, act);
 const ITEM_ACTOR_MAP: Record<ItemActor, true> = { operator: true, coordinator: true, ccrc: true };
 export const ITEM_ACTORS = Object.keys(ITEM_ACTOR_MAP) as readonly ItemActor[];
 
@@ -492,6 +498,15 @@ export function doneWhenOf(raw: unknown): { ok: true; doneWhen: string[] } | { o
 /** "Recently cleared" keeps the last 48 hours (D-8194; was seven days, spec D13): the server's list and the console's trail both
  *  read this one window, so neither shows what the other has dropped. */
 export const CLEARED_WINDOW_MS = 48 * 3600 * 1000;
+
+/** The hold rule (A21, D-8194), once: when the operator was first shown an item. Its `heldUntil`, or its `raisedAt` when it
+ *  was never held; null when its coordinator settled it inside the hold (closed before `heldUntil`), so it was never shown.
+ *  `ledgersStore.ts#operatorWasShown(row, now)` is `shownAt !== null && shownAt <= now`, and the portfolio's operator wait
+ *  starts here (Overlord W1, portfolio: moved from `ledgersStore.ts`). */
+export function operatorShownAt(row: { raisedAt: number; heldUntil: number | null; closedAt: number | null }): number | null {
+  if (row.heldUntil === null) return row.raisedAt;
+  return row.closedAt !== null && row.closedAt < row.heldUntil ? null : row.heldUntil;
+}
 /** How long a tick's mail may stay not acknowledged before the item says "ticked; coordinator not responding" (plan PL4). A
  *  label only: no push and no stall arm hang off it (spec §3.3, D19). */
 export const TICK_UNANSWERED_MS = 30 * 60 * 1000;

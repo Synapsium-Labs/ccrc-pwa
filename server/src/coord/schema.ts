@@ -3127,6 +3127,57 @@ export const MIGRATIONS: readonly string[] = [
   `
   INSERT INTO lane_arm_settings (lane, choice, updatedAt) VALUES ('anchor-slot', 'shadow', 0);
   `,
+  // ── 75: user_version 74 -> 75 ─────────────────────────────────────────────
+  // The push outbox (Overlord spec §6.7, §6.1 C31, §4.3 C67; plan `docs/superpowers/plans/2026-11-14-overlord-w1/
+  // w1-push-outbox.md`, Task 3): one row per push, moved only through `pushOutboxStore.ts` by `OUTBOX_TRANSITIONS`;
+  // `push_outbox_one_per_source` holds a bound row to one per ask or item (I2), and `claimSeq` ties a verdict to its
+  // claim. `reachedOperatorAt` has ONE writer, `stampReach`. No backfill. The anchor (#2803) took 74, so this is 75. NEW
+  // TABLES AND TWO NULLABLE COLUMNS: an older build opening a file at `user_version 75` takes rule 3, never names them, and
+  // boots. RE-MEASURE the slot before the PR and before merge (it must print 74 before this entry is counted):
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE push_outbox (
+    id INTEGER PRIMARY KEY, pushId TEXT NOT NULL UNIQUE,
+    sourceKind TEXT, sourceId INTEGER,  -- 'ask' | 'item', or both NULL for an unbound push
+    payload TEXT, tag TEXT,             -- the masked PushPayload as JSON, NULL once terminal; tag NULL only when written with no payload
+    state TEXT NOT NULL, createdAt INTEGER NOT NULL, armedAt INTEGER NOT NULL,
+    claimSeq INTEGER NOT NULL DEFAULT 0, attempts INTEGER NOT NULL DEFAULT 0,
+    claimedAt INTEGER, nextAttemptAt INTEGER, pushedAt INTEGER,
+    verdict TEXT, silentWhy TEXT, settledAt INTEGER,
+    CHECK ((sourceKind IS NULL) = (sourceId IS NULL))
+  );
+  CREATE UNIQUE INDEX push_outbox_one_per_source ON push_outbox(sourceKind, sourceId) WHERE sourceKind IS NOT NULL;
+  CREATE INDEX push_outbox_due ON push_outbox(state, nextAttemptAt);
+  CREATE TABLE push_outbox_meta (k TEXT PRIMARY KEY, v INTEGER NOT NULL);
+  ALTER TABLE asks ADD COLUMN reachedOperatorAt INTEGER;
+  ALTER TABLE operator_items ADD COLUMN reachedOperatorAt INTEGER;
+  `,
+
+  // ── 76: user_version 75 -> 76 ─────────────────────────────────────────────
+  // The portfolio (Overlord spec §5.6 H38; W1, plan `w1-portfolio.md` Task 2): `portfolio_rank`, the operator's order, one row
+  // per ranked programme, and `portfolio_rank_revision`, one row whose counter only rises. ONE writer for both,
+  // `portfolioStore.ts#setPortfolioRank`, reached only from the rank door; no row exists until the operator writes one.
+  // NEW TABLES, nothing on an existing table: an older build opening a file at `user_version 76` takes rule 3 and boots.
+  // The anchor took 74 and the push outbox 75, so this entry is 76 (the coordinator's word at landing). RE-MEASURE the slot
+  // before the PR and before merge (it must print 75 before this entry is counted; renumber on the coordinator's word):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE portfolio_rank (
+    program   TEXT PRIMARY KEY,   -- a programs.slug; the writer checks it exists
+    position  INTEGER NOT NULL,   -- the place inside its class band, 1 first
+    cls       TEXT NOT NULL,      -- ServiceClass; read through isServiceClass, never a cast
+    fixedDate TEXT,               -- YYYY-MM-DD, only on fixed-date
+    setAt     INTEGER NOT NULL,   -- wall ms of the write that last placed this row
+    setBy     TEXT NOT NULL       -- that write's actor: the session's device actor, or flag-off
+  );
+  CREATE TABLE portfolio_rank_revision (
+    id       INTEGER PRIMARY KEY CHECK (id = 1),
+    revision INTEGER NOT NULL,    -- only rises; 0 is "never written", which no row stores
+    setAt    INTEGER NOT NULL,
+    setBy    TEXT NOT NULL
+  );
+  `,
 ];
 
 /** The version this build writes. `MIGRATIONS.length` and nothing else: a

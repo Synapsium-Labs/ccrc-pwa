@@ -1,10 +1,11 @@
 // Delegation broker wave 3, Task 7: the PURE model behind the report-only coordination projection.
 //
-// This file is L1: no fs, no fastify, no `node:sqlite`, no `CoordStore`. `node:crypto` is allowed because hashing is a
-// computation. It holds what Task 8's journal and checkpoint and Task 7's `CoordStore` methods share:
+// This file is L1: no fs, no fastify, no `node:sqlite`, no `CoordStore`. Its hashing and its canonical writer are the shared
+// kernel's (`canonical.ts`), bound here to this model's own errors. It holds what Task 8's journal and checkpoint and
+// Task 7's `CoordStore` methods share:
 //   - the non-shared journal, checkpoint and row types (the closed lists they use live in `shared/api.ts` and are only
 //     IMPORTED here; the types below name them and never re-spell them);
-//   - `canonicalDelegationJson`, the one JSON encoder every journal preimage goes through (RFC 8785 over a closed domain);
+//   - `canonicalDelegationJson`, the one JSON encoder every journal preimage goes through (`canonical.ts#rfc8785Json`, bound);
 //   - the activity natural key, the activity ID derived from it, and `allocateDelegationActivityIdInto` with its pure form
 //     `restoreOrAllocateActivityId` (O1, O4, D-5833);
 //   - `assertLease`, the one statement of what a lease row may hold (wave 3's guard, loosened for wave 5's transitions);
@@ -12,7 +13,14 @@
 //
 // THE PROJECTION IS REPAIRABLE OUTPUT. The journal and the checkpoint are authority; nothing here reads SQLite back as one.
 // `projectionViewOfDelegationCheckpoint` is how a drift check says what a checkpoint SHOULD look like once projected.
-import { createHash } from 'node:crypto';
+import {
+  CANONICAL_INSTANT,
+  LONE_SURROGATE,
+  isLowerHex64,
+  parseCanonicalInstant,
+  rfc8785Json,
+  sha256HexOfText,
+} from '../canonical.js';
 import {
   DELEGATION_ACTIVITY_SOURCE_KINDS,
   DELEGATION_ATTEMPT_VERDICTS,
@@ -491,97 +499,21 @@ export function isDelegationModelKebab(v: string): boolean {
 
 // ── Canonical JSON (RFC 8785 over the plan's closed domain) ──────────────────────────────────────────────────────────
 
-/** A high surrogate not followed by a low one, or a low one not preceded by a high one. UTF-8 cannot carry either, and
- *  `Buffer` would hash both as U+FFFD, so two different strings would share a hash. */
-const LONE_SURROGATE = /[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/;
-
-const wellFormed = (s: string, where: string): string => {
-  if (LONE_SURROGATE.test(s)) throw new DelegationJsonError(`${where} holds a lone surrogate`);
-  return s;
-};
-
-/** Own keys of an object, with an engine refusal (a Proxy whose `ownKeys` repeats a key throws a TypeError itself)
- *  surfaced as OUR refusal: a repeated input key is rejected before any encoding. */
-const ownKeysOf = (o: object, where: string): Array<string | symbol> => {
-  try { return Reflect.ownKeys(o); } catch (err) {
-    throw new DelegationJsonError(`${where} cannot enumerate its keys (${err instanceof Error ? err.message : String(err)})`);
-  }
-};
-
-/** UTF-16 code unit order, the order RFC 8785 sorts properties in (the default `<` on strings, not a locale compare). */
-const byCodeUnits = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
-
-function canon(value: unknown, where: string, ancestors: readonly object[]): string {
-  if (value === null) return 'null';
-  switch (typeof value) {
-    case 'boolean': return value ? 'true' : 'false';
-    case 'string': return JSON.stringify(wellFormed(value, where));
-    case 'number':
-      if (!Number.isFinite(value)) throw new DelegationJsonError(`${where} is not a finite number`);
-      if (Number.isInteger(value) && !Number.isSafeInteger(value)) {
-        throw new DelegationJsonError(`${where} is an integer outside the JavaScript safe range`);
-      }
-      return JSON.stringify(value);                       // ECMAScript Number-to-String; -0 is "0"
-    case 'object': break;
-    default: throw new DelegationJsonError(`${where} is ${typeof value}, which is outside the JSON domain`);
-  }
-  const obj: object = value;
-  if (ancestors.includes(obj)) throw new DelegationJsonError(`${where} is a cycle`);
-  const chain = [...ancestors, obj];
-  if (Array.isArray(obj)) {
-    if (Object.getPrototypeOf(obj) !== Array.prototype) throw new DelegationJsonError(`${where} is not a plain array`);
-    if (Object.getOwnPropertySymbols(obj).length > 0) throw new DelegationJsonError(`${where} has a symbol key`);
-    if (Object.keys(obj).length !== obj.length) throw new DelegationJsonError(`${where} is a sparse array or has extra properties`);
-    const items: string[] = [];
-    for (let i = 0; i < obj.length; i++) {
-      const d = Object.getOwnPropertyDescriptor(obj, i);
-      if (d === undefined || !('value' in d)) throw new DelegationJsonError(`${where}[${i}] is not a data element`);
-      items.push(canon(d.value, `${where}[${i}]`, chain));
-    }
-    return `[${items.join(',')}]`;
-  }
-  const proto = Object.getPrototypeOf(obj) as unknown;
-  if (proto !== Object.prototype && proto !== null) throw new DelegationJsonError(`${where} is not a plain object`);
-  const keys = ownKeysOf(obj, where);
-  const names: string[] = [];
-  for (const k of keys) {
-    if (typeof k === 'symbol') throw new DelegationJsonError(`${where} has a symbol key`);
-    names.push(k);
-  }
-  names.sort(byCodeUnits);
-  const members: string[] = [];
-  for (const k of names) {
-    const d = Object.getOwnPropertyDescriptor(obj, k);
-    if (d === undefined || !('value' in d) || d.enumerable !== true) {
-      throw new DelegationJsonError(`${where}.${k} is not an enumerable data property`);
-    }
-    members.push(`${JSON.stringify(wellFormed(k, `${where} key`))}:${canon(d.value, `${where}.${k}`, chain)}`);
-  }
-  return `{${members.join(',')}}`;
-}
-
 /**
- * RFC 8785 (JSON Canonicalization Scheme) over the plan's closed JSON domain: UTF-8 text without a BOM (the result is a
- * JS string; encode it as UTF-8 to hash or write it), properties sorted by UTF-16 code units at every depth, ECMAScript
- * string escaping and number serialisation, no optional whitespace, lowercase `true`/`false`/`null`.
- *
- * REJECTED before encoding, with a `DelegationJsonError`: an integer outside the safe range, NaN and the infinities,
- * a lone surrogate (in a value or a key), a sparse array or one with extra properties, `undefined`, a bigint, a symbol,
- * a function, any object that is not plain (a class instance, a Date, a Map, an accessor, a symbol key, a non-enumerable
- * property), a cycle, and a Proxy whose keys repeat. No generic JSON writer may stand in for this one: a journal
- * preimage hashed from anything else is a different record.
+ * RFC 8785 over the plan's closed JSON domain (`canonical.ts#rfc8785Json`), refusing with a `DelegationJsonError`. No generic JSON
+ * writer may stand in for this one: a journal preimage hashed from anything else is a different record.
  */
 export function canonicalDelegationJson(value: unknown): string {
-  return canon(value, '$', []);
+  return rfc8785Json(value, (detail) => new DelegationJsonError(detail));
 }
 
-/** Lowercase SHA-256 of the string's UTF-8 bytes. */
+/** Lowercase SHA-256 of the string's UTF-8 bytes (`canonical.ts#sha256HexOfText`), refusing with a `DelegationJsonError`. */
 export function delegationSha256Hex(text: string): string {
-  return createHash('sha256').update(wellFormed(text, 'the hashed text'), 'utf8').digest('hex');
+  return sha256HexOfText(text, (detail) => new DelegationJsonError(detail));
 }
 
-/** A lowercase 64-hex SHA-256. */
-export const isLowerHex64 = (v: unknown): v is string => typeof v === 'string' && /^[0-9a-f]{64}$/.test(v);
+/** A lowercase 64-hex SHA-256: the shared kernel's predicate, re-exported so this module's importers keep their import. */
+export { isLowerHex64 };
 
 // ── Activity natural key and activity ID (O1, O4) ────────────────────────────────────────────────────────────────────
 
@@ -758,19 +690,10 @@ export const WAVE3_LEASE_SOURCE_KINDS: readonly Exclude<DelegationLeaseSourceKin
 
 // ── Instants ──────────────────────────────────────────────────────────────────────────────────────────────────────────
 
-const CANONICAL_INSTANT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
-
-/** A canonical UTC millisecond string (`2026-10-14T00:15:00.000Z`) as epoch milliseconds, between 1970 and year 9999.
- *  Anything else — no milliseconds, an offset, a date that rolls over (Feb 30), hour 24 — is refused, not normalised. */
+/** A canonical UTC millisecond string (`2026-10-14T00:15:00.000Z`) as epoch milliseconds, between 1970 and year 9999
+ *  (`canonical.ts#parseCanonicalInstant`). Anything else is refused with `bad-instant`, not normalised. */
 export function parseDelegationInstant(iso: string): number {
-  if (typeof iso !== 'string' || !CANONICAL_INSTANT.test(iso)) {
-    throw new DelegationModelError('bad-instant', `${JSON.stringify(iso)} is not a canonical UTC millisecond instant`);
-  }
-  const ms = Date.parse(iso);
-  if (!Number.isFinite(ms) || ms < 0 || new Date(ms).toISOString() !== iso) {
-    throw new DelegationModelError('bad-instant', `${iso} is not an instant a table can hold`);
-  }
-  return ms;
+  return parseCanonicalInstant(iso, (detail) => new DelegationModelError('bad-instant', detail));
 }
 
 /** Epoch milliseconds as the canonical UTC millisecond string; the inverse of `parseDelegationInstant`. */
