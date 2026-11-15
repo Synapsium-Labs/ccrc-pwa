@@ -1583,7 +1583,7 @@ SPAWN_EFFORT="high"             # --effort on the spawn argv of a session whose 
                                 # the coordinator row's effort, never ultracode (coordinator clause 19,
                                 # pinned by routing-references.test.ts). It rides `--effort` (session only), never a settle
                                 # keystroke: the plain `/effort <level>` form is saved as the ACCOUNT's default. A session WITH an
-                                # effort field has that field on the argv instead (`_spawn_start`, routing spec §5.2).
+                                # effort field has that field on the argv instead (`_spawn_start`, routing spec §5.2). An Anthropic or a Codex lane (D-8631); a lane that is neither takes none.
                                 # ultracode DOES have `--settings` keys (measured Claude Code
                                 # 2.1.270, D-2809) — the old premise here (no settings.json key)
                                 # was wrong; `/effort ultracode` was measured NOT to persist a
@@ -2481,10 +2481,10 @@ _is_home_able() { local w="$1" v; for v in "${CCRC_HOME_ABLE[@]}"; do [[ "$w" ==
 # WHERE WORK MAY GO is not WHAT THE LANE SPEAKS. `_is_home_able` answers the
 # first; until a Codex lane became placeable, it accidentally answered the
 # second too, because every home-able account was an Anthropic one. Four callers
-# below want the SECOND question — Remote Control, the spawn-time effort
-# injection, the cross-backend transcript sanitiser, and the 429 exclusion
-# writer — and each states a BACKEND reason in its own comment while testing
-# placement. Give them the question they mean.
+# below want the SECOND question — Remote Control, the spawn-time effort default
+# (which since D-8631 asks `_is_codex_backend` too), the cross-backend transcript
+# sanitiser, and the 429 exclusion writer — and each states a BACKEND reason in its
+# own comment while testing placement. Give them the question they mean.
 #
 # FALLS BACK TO `_is_home_able` when the array is absent, which is exactly the
 # behaviour every one of those four had before this existed: a box whose
@@ -24219,7 +24219,7 @@ _route_effort_shown() {   # level -> the word the status line, and so the usage 
   # ONE SPELLING OF A MEASURED FACT (2.1.280): `ultracode` shows as `xhigh` —
   # it is xhigh plus dynamic workflow orchestration, and the status line's
   # `effort.level` names only the level. `_route_effort_ack_wait` reads the
-  # `🤖` segment through it.
+  # `🤖` segment through it; a Codex lane's spawn (without the `codex-lane-workflows` marker) and its live applier render through it too (D-8631).
   [[ "$1" == ultracode ]] && { printf 'xhigh'; return 0; }
   printf '%s' "$1"
 }
@@ -26644,10 +26644,10 @@ _spawn_start() {   # id mode(new|resume) -> creates the tmux session, sets SPAWN
     [[ -n "$rclass" && "$rclass" != default ]] && routeflags="--model $rclass"
     # BACKEND, not placement: the subagent env is Claude Code's own; on another
     # backend the lane's settings.json materialiser owns the subagent (spec
-    # §5.2 "Non-Anthropic lanes"), the `--effort` flag below is composed on the Anthropic
-    # arm only, and workflows have no switch — so on such a lane
-    # `effort` and `workflow` are stamped INERT by field name, and the record
-    # says what was not applied rather than pretending.
+    # §5.2 "Non-Anthropic lanes"). `--effort` is composed on the Anthropic arm and, since D-8631,
+    # on a Codex lane's (the else branch); a Codex lane's workflow only under the `codex-lane-workflows`
+    # marker. What a lane did not compose — `effort` and `workflow` on a lane that is neither, `subagent` on any
+    # other lane — is stamped INERT by field name, and the record says so rather than pretending.
     if _is_anthropic_backend "$wrapper"; then
       [[ -n "$rsub" ]] && routeenv="CLAUDE_CODE_SUBAGENT_MODEL=$rsub"
       # `--settings` BEFORE `--effort` in `routeflags` — deliberately, not
@@ -26744,11 +26744,11 @@ _spawn_start() {   # id mode(new|resume) -> creates the tmux session, sets SPAWN
     #
     # AND EVERY FIELD THE `inert` STAMP NAMES IS OMITTED TOO (controller ruling
     # S4-R9). Written unconditionally, this line put `effort=high` beside
-    # `inert=effort` on a non-Anthropic lane — two records of the same spawn
-    # contradicting each other, because `--effort`/`--settings` are composed only
-    # on the Anthropic arm above while the stamp claimed them on both. The
-    # sentence this comment opens with is true again: what is written is what was
-    # composed. `_route_wanted` skips the same fields, so an inert field is
+    # `inert=effort` on a lane that composed no `--effort` — two records of the same
+    # spawn contradicting each other. The sentence this comment opens with is true
+    # again, with one exception (D-8631): a Codex lane without the `codex-lane-workflows`
+    # marker writes the record's word, `effort=ultracode`, beside its rendered `--effort xhigh`,
+    # and the applier compares the record's word with it, so nothing is pending. `_route_wanted` skips the same fields, so an inert field is
     # neither claimed applied nor typed — and `subagent`, which joined the
     # vocabulary in slice 6 Task 3, is never typed by anything: its guard here
     # keeps this stamp from claiming an env key the else-branch above did not
