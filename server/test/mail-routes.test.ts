@@ -660,6 +660,23 @@ describe('the rejection table is total, in both directions', () => {
       'stale-episode-head', // coord/landingEntry.ts: the one quarantine kind, also a schema CHECK literal (landing order wave 5f), a recovery-view discriminant, not a refusal code
       'call-failed',        // coord/landed.ts#landedAnswerOf and coord/landedLane.ts#landedPass: the input word for a ran-but-failed `pr-state` call (landing order wave 5h), a reader-internal discriminant, not a refusal code
       'missing-field',      // coord/landed.ts#landedAnswerOf: compared against ccd's `pr-state` unmeasured reason, a word ccd writes (landing order wave 5h), a reader-internal discriminant, not a refusal code
+      'main-health',        // coord/lineageRead.ts: the main-health reading's tag (landing order wave 5i), a tag on a stored value, not a mail or run refusal code
+      'landing-next',       // coord/landingNext.ts: the control document kind / cue tuple tag (landing order wave 5i), a tag on a stored value, not a mail or run refusal code
+      'creation-unrecorded',// coord/landingNext.ts: a no-send reason (landing order wave 5i), a pure-decider discriminant, not a mail or run refusal code
+      'recipient-missing',  // coord/landingNext.ts: a no-send reason (landing order wave 5i), a pure-decider discriminant, not a mail or run refusal code
+      'episode-unreadable', // coord/landingNext.ts: a no-send reason (landing order wave 5i), a pure-decider discriminant, not a mail or run refusal code
+      'run-not-merging',    // coord/landingNext.ts: a no-send reason (landing order wave 5i), a pure-decider discriminant, not a mail or run refusal code
+      'composition-not-clean',// shared/landingLine.ts#LandingBindingReason, used in coord/landingLine.ts: a binding reason word (landing order wave 5i), not a mail or run refusal code
+      'head-mismatch',      // shared/landingLine.ts#LandingBindingReason, used in coord/landingLine.ts: a binding reason word (landing order wave 5i), not a mail or run refusal code
+      'base-mismatch',      // shared/landingLine.ts#LandingBindingReason, used in coord/landingLine.ts: a binding reason word (landing order wave 5i), not a mail or run refusal code
+      'health-unmeasured',  // shared/landingLine.ts#LandingBindingReason, used in coord/landingLine.ts: a binding reason word (landing order wave 5i), not a mail or run refusal code
+      'empty-or-blocked',   // shared/landingLine.ts#LandingBindingReason, used in coord/landingLine.ts: a binding reason word (landing order wave 5i), not a mail or run refusal code
+      'projection-unreadable',// shared/landingLine.ts#LandingBindingReason, used in coord/landingLine.ts: a binding reason word (landing order wave 5i), not a mail or run refusal code
+      'opt-in-unknown',     // shared/landingLine.ts#LandingBindingReason, used in coord/landingLine.ts: a binding reason word (landing order wave 5i), not a mail or run refusal code
+      'main-red',           // shared/landingLine.ts#LandingBindingReason, used in coord/landingLine.ts: a binding reason word (landing order wave 5i), not a mail or run refusal code
+      'retained-fields',    // coord/landingEntry.ts: the terminal repair's field-retention word (landing order wave 5i), not a mail or run refusal code
+      'episode-changed',    // coord/landingNext.ts and coord/landingControlTx.ts: a no-send reason (landing order wave 5i), a pure-decider discriminant, not a mail or run refusal code
+      'no-send',            // coord/landingNext.ts#nextLandingNoticeOf: the cue builder's refusal kind (landing order wave 5i), a pure-decider discriminant, not a mail or run refusal code
       'packed-refs',         // coord/gitref.ts — a git filename
       'refused-project',     // coord/gitref.ts — a `WorktreeRead.reason` (§1.7).
                              // NOT a refusal a client ever sees: `readWorktreeRecords`
