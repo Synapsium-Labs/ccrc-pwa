@@ -849,3 +849,22 @@ describe('the docs profile masks a Linear API key by its prefix, and the helper 
     expect(pythonRedactorTablesT6()).toEqual([]);
   });
 });
+
+// ---- Docs W5b-1 Task 11: the doctor's one cap literal (rich-docs spec A12) ----
+// `ccd/ccrc-doctor-checks` names the two `ccd caps` words the Docs screen's W5b features need in ONE assignment,
+// `CCRC_DOCTOR_DOCS_CAPS`, because a shell file cannot import the server's constants. This block holds that one line
+// equal to the two constants joined by a space, so a word renamed on one side reds here. Every import is aliased.
+import * as docsCapsVitest from 'vitest';
+import * as docsCapsFs from 'node:fs';
+import * as docsCapsPath from 'node:path';
+import { DOCS_LOG_CAP as docsLogCapForDoctor, DOCS_SECTIONS_CAP as docsSectionsCapForDoctor } from '../src/ccdargv.js';
+
+docsCapsVitest.describe("CCRC_DOCTOR_DOCS_CAPS is one literal, equal to ccdargv's two docs cap constants", () => {
+  const text = docsCapsFs.readFileSync(docsCapsPath.join(ccrcRoot, 'ccd', 'ccrc-doctor-checks'), 'utf8');
+  const lines = text.split('\n').filter((l) => /^\s*CCRC_DOCTOR_DOCS_CAPS=/.test(l));
+
+  docsCapsVitest.it('is assigned on exactly one line, its value the two constants joined by a space', () => {
+    docsCapsVitest.expect(lines).toHaveLength(1);
+    docsCapsVitest.expect(lines[0]).toBe(`CCRC_DOCTOR_DOCS_CAPS='${[docsLogCapForDoctor, docsSectionsCapForDoctor].join(' ')}'`);
+  });
+});
