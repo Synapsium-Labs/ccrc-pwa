@@ -5,7 +5,7 @@
 import { describe, expect, it } from 'vitest';
 import { DOC_SECTION_SLUGS, type DocsEntry } from '../../shared/docs';
 import {
-  SECTION_LABEL, SECTION_ORDER, docsPathKind, leafName, listDir, presentSectionCounts, sectionCountsText,
+  SECTION_LABEL, SECTION_ORDER, docsPathKind, leafName, listDir, presentSectionCounts, sectionCountsText, sectionFacts,
 } from '../src/docs/docsTree';
 import { draftOf, entry, holder, treeOk } from './docsFixtures';
 
@@ -133,5 +133,21 @@ describe('docsPathKind: the tree answer decides, never the URL (spec 3.1, 4.4)',
   it('leafName is the last segment', () => {
     expect(leafName('a/b/c.md')).toBe('c.md');
     expect(leafName('c.md')).toBe('c.md');
+  });
+});
+
+describe('sectionFacts: the one reader of the tree answer\'s sections', () => {
+  it('answers null for a slug the tree lacks (a fleet box without the sections token), the facts for one it holds', () => {
+    const t = treeOk();
+    t.sections = t.sections.filter((s) => s.slug !== 'vision' && s.slug !== 'promise');
+    expect(sectionFacts(t, 'vision')).toBeNull();
+    expect(sectionFacts(t, 'promise')).toBeNull();
+    expect(sectionFacts(t, 'specs')?.slug).toBe('specs');
+  });
+
+  it('an absent section is a fact of its own, never null', () => {
+    const t = treeOk();
+    t.sections[4] = { ...t.sections[4]!, state: 'absent', count: 0 };
+    expect(sectionFacts(t, 'vision')?.state).toBe('absent');
   });
 });

@@ -108,6 +108,13 @@ export function sectionCountsText(counts: Readonly<Partial<Record<DocSectionSlug
     .join(' · ');
 }
 
+/** One section's facts from a tree answer. `null` has one meaning: this ccd serves no such section (a fleet box without
+ *  the sections token). A section the repository lacks is a fact of its own (`state: 'absent'`), never `null`. THE ONE
+ *  READER of `DocsTreeOk.sections`. */
+export function sectionFacts(tree: DocsTreeOk, slug: DocSectionSlug): DocsTreeOk['sections'][number] | null {
+  return tree.sections.find((s) => s.slug === slug) ?? null;
+}
+
 /** What a `path` page is, from the tree answer, never from the URL's shape (spec 3.1, 4.4): `leaf` when an entry has
  *  exactly this section and path and `entryView` lists it in `mode`; else `dir` when a listed entry lies under
  *  `path + '/'`; else `missing` ("Not in this listing"). */

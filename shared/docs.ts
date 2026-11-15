@@ -752,7 +752,7 @@ export interface DocsRefreshResponse { ok: true; fetch: DocsRefreshFetch; tree: 
 
 export type DocRefResolution =
   | { kind: 'doc'; section: DocSectionSlug; path: string; fragment: string | null }
-  | { kind: 'repo'; repoPath: string }                              // inside the repo, outside the four sections
+  | { kind: 'repo'; repoPath: string }                              // inside the repo, outside the Docs sections
   | { kind: 'fragment'; fragment: string }
   | { kind: 'external'; url: string; scheme: 'http' | 'https' | 'mailto'; origin: string | null }
   | { kind: 'self-contained'; scheme: 'data' | 'blob' }
