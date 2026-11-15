@@ -75,16 +75,45 @@ function definitionsOf(text: string): Map<string, string> {
   return out;
 }
 
-/** Is `head` a pure move of `base`? Null when the diff adds no pointer line (a feature, not judged here). Otherwise the
- *  `__CCD_LIBS` line of `head` must hold the base's words plus exactly the libraries the diff adds, order kept, and the
+/** Each `# @ccd-lib:<id>` region's text across the library texts, by id: `spliceCcd`'s own split of a library. */
+function regionsOf(libs: Iterable<string>): Map<string, string> {
+  const out = new Map<string, string>();
+  for (const text of libs) {
+    const parts = text.split(/^# @ccd-lib:(\w+)\n/m);
+    for (let i = 1; i + 1 < parts.length; i += 2) out.set(parts[i]!, parts[i + 1]!);
+  }
+  return out;
+}
+
+/** What the verdict says of a new pointer it skips: the one sentence, spelled once. */
+export const NEW_CODE_NOT_JUDGED = 'new library code, not judged as a move';
+
+/** Is `head` a pure move of `base`? Null when the diff adds no pointer line (a feature, not judged here). A new pointer
+ *  whose library region defines only functions absent from the base's `ccd/ccd` and from every library on the base is
+ *  NEW CODE (a new library's region; the Overlord W1 pool set's `ccd/lib/pool-set.sh` the first, plan slug
+ *  new-code-library-is-not-a-move): when every new pointer is of that kind and the diff removes no function from
+ *  `ccd/ccd`, the verdict is pure and names those pointers in `newCode` with `NEW_CODE_NOT_JUDGED`. A region that mixes
+ *  moved and new functions, a pointer with no region anywhere, or a diff that also removes any function from `ccd/ccd`
+ *  is judged in full. Otherwise the `__CCD_LIBS` line of `head` must hold the base's words plus exactly the libraries the diff adds, order kept, and the
  *  two splices, with that line and any pointer line left unspliced removed, must be equal byte for byte. `differing`
  *  names `__CCD_LIBS` for the first, and the functions whose text differs for the second (`spliced text` when the
  *  difference is in no function). */
-export function pureMoveVerdict(base: Tree, head: Tree): { pure: boolean; differing: string[] } | null {
+export function pureMoveVerdict(base: Tree, head: Tree): { pure: boolean; differing: string[]; newCode?: { ids: string[]; note: string } } | null {
   const baseMain = base['ccd/ccd'] ?? '';
   const headMain = head['ccd/ccd'] ?? '';
   const before = pointerIds(baseMain);
-  if (![...pointerIds(headMain)].some((id) => !before.has(id))) return null;
+  const newPointers = [...pointerIds(headMain)].filter((id) => !before.has(id));
+  if (newPointers.length === 0) return null;
+  // Every function the base program defines, in ccd/ccd or any library: a region holding none of them is new code.
+  const baseDefs = new Set([baseMain, ...programLibs(base).values()].flatMap((t) => [...t.matchAll(DEF_RE)].map((m) => m[1]!)));
+  const headRegions = regionsOf(programLibs(head).values());
+  const isNewCode = (id: string): boolean => {
+    const region = headRegions.get(id);
+    return region !== undefined && ![...region.matchAll(DEF_RE)].some((m) => baseDefs.has(m[1]!));
+  };
+  const headMainDefs = new Set(definitionsOf(headMain).keys());
+  const removesFromMain = [...definitionsOf(baseMain).keys()].some((f) => !headMainDefs.has(f));
+  if (!removesFromMain && newPointers.every(isNewCode)) return { pure: true, differing: [], newCode: { ids: newPointers, note: NEW_CODE_NOT_JUDGED } };
   const differing: string[] = [];
   const b = takeLibsLine(baseMain);
   const h = takeLibsLine(headMain);

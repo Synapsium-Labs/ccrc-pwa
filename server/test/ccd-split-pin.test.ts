@@ -5,7 +5,11 @@
 // pointer line per run. What this suite holds:
 //   * PURITY (`pureMoveVerdict`): a diff that adds a pointer is judged. The one `__CCD_LIBS=(` line may gain exactly the
 //     libraries the diff adds, order kept, and `spliceCcd` of both sides, pointer lines left over removed, must be equal
-//     byte for byte. A diff that adds no pointer is a feature, and is not judged here.
+//     byte for byte. A diff that adds no pointer is a feature, and is not judged here. Nor is one whose new pointers all
+//     name NEW code, a region defining no function the base program defined anywhere (as a new library's does), when it
+//     removes no function from ccd/ccd: the verdict is pure and names them in `newCode` (the coordinator's ruling for the
+//     Overlord W1 pool set, slug new-code-library-is-not-a-move). A region that mixes moved and new code, a pointer with
+//     no region, and a diff that also removes a function from ccd/ccd are still judged in full.
 //   * ONE DEFINITION (`duplicateDefinitions`): a feature PR merged across a move that keeps its old copy of a function
 //     defines it twice, and goes red instead of running two definitions (Review Focus 1).
 //   * THE DUMP (`programDump`): `declare -f` and `declare -p` of the sourced program, which sees a swallowed global that
@@ -24,7 +28,7 @@ import { spawnSyncGroup } from './spawnGroup.js';
 import { spliceCcd } from './ccdWsHelpers.js';
 import { inheritedEnv } from './gitEnvStrip.js';
 import {
-  CCD_SPLIT_TOOL, duplicateDefinitions, moveBase, programDump, pureMoveVerdict, recordsAdded, regionProblems, treeAt,
+  CCD_SPLIT_TOOL, NEW_CODE_NOT_JUDGED, duplicateDefinitions, moveBase, programDump, pureMoveVerdict, recordsAdded, regionProblems, treeAt,
   type Tree,
 } from './ccdSplit.js';
 
@@ -76,6 +80,36 @@ const movedOverThePointer: Tree = {
   'ccd/lib/t.sh': lib('t', ['t_1', FA + '# @ccd-lib:one_1 — `fo` moved to ccd/lib/one.sh\n' + FB_LEAD + FB]),
 };
 const mainAndLibWithSameFn: Tree = { 'ccd/ccd': SHEBANG + FA + FB, 'ccd/lib/t.sh': lib('t', ['t_1', FA]) };
+// A library of NEW code (the Overlord W1 pool set's ccd/lib/pool-set.sh, the case #2810's pin did not foresee): a pointer
+// whose region defines no function ccd/ccd defined at the base, beside a feature edit in ccd/ccd. A feature, not a move.
+const FN = 'fn_new() { echo new; }\n';
+const newCodeLibrary: Tree = {
+  'ccd/ccd': base['ccd/ccd']!.replace('echo a', 'echo A').replace('X=1\n', 'X=1\n# @ccd-lib:n_1 — new code in ccd/lib/n.sh\n'),
+  'ccd/lib/n.sh': lib('n', ['n_1', 'N_MAX=1\n' + FN]),
+};
+// The same new-code pointer beside a real move that edits what it moves: the move is still judged, and still caught.
+const newCodeBesideAnEditedMove: Tree = {
+  ...newCodeLibrary,
+  'ccd/ccd': movedAndEdited['ccd/ccd']!.replace('X=1\n', 'X=1\n# @ccd-lib:n_1 — new code in ccd/lib/n.sh\n'),
+  'ccd/lib/t.sh': movedAndEdited['ccd/lib/t.sh']!,
+};
+// The new-code fixture with one function moved out of ccd/ccd into the SAME region: a region that mixes moved and new code.
+const newCodeMixedWithAMove: Tree = {
+  'ccd/ccd': newCodeLibrary['ccd/ccd']!.replace(FB_LEAD + FB, ''),
+  'ccd/lib/n.sh': lib('n', ['n_1', 'N_MAX=1\n' + FN + FB_LEAD + FB]),
+};
+// New code, but the diff also drops a function from ccd/ccd that went nowhere: judged in full.
+const newCodeWhileRemovingFromMain: Tree = { ...newCodeLibrary, 'ccd/ccd': newCodeLibrary['ccd/ccd']!.replace(FB_LEAD + FB, '') };
+// A region holding a function a base LIBRARY defined is not new code either.
+const baseWithOneLib: Tree = { ...base, 'ccd/lib/one.sh': ONE };
+const newPointerOverALibFunction: Tree = {
+  ...newCodeLibrary, 'ccd/lib/one.sh': ONE, 'ccd/lib/n.sh': lib('n', ['n_1', 'N_MAX=1\nfo() { :; }\n']),
+};
+// A "new" library whose region holds a function ccd/ccd defined at the base is a move, however its pointer reads.
+const moveCalledNewCode: Tree = {
+  'ccd/ccd': movedAndEdited['ccd/ccd']!.replace('# @ccd-lib:t_1 — `fb` moved to ccd/lib/t.sh', '# @ccd-lib:t_1 — new code in ccd/lib/t.sh'),
+  'ccd/lib/t.sh': movedAndEdited['ccd/lib/t.sh']!,
+};
 const oneLinerThenAssignment = 'fa() { :; }\nX=1\n';
 const regionHoldingTwoFunctions = 'fa() { :; }; fb() { :; }\n';
 
@@ -90,6 +124,23 @@ describe('the pure-move pin (fixtures)', () => {
 
   it('FIXTURE: a diff with no new pointer is not judged', () => {
     expect(pureMoveVerdict(base, featureEdit)).toBeNull();
+  });
+
+  it('FIXTURE: a new pointer to NEW code is not judged as a move, and the verdict says so; a move beside it, in it or under its name still is (new-code-library-is-not-a-move)', () => {
+    expect(pureMoveVerdict(base, newCodeLibrary)).toEqual({ pure: true, differing: [], newCode: { ids: ['n_1'], note: NEW_CODE_NOT_JUDGED } });
+    expect(NEW_CODE_NOT_JUDGED).toBe('new library code, not judged as a move');
+    const mixed = pureMoveVerdict(base, newCodeMixedWithAMove);
+    expect(mixed?.pure, 'one function moved into the new-code region').toBe(false);
+    expect(mixed?.newCode).toBeUndefined();
+    expect(pureMoveVerdict(base, newCodeWhileRemovingFromMain)?.pure, 'a function left ccd/ccd in the same diff').toBe(false);
+    expect(pureMoveVerdict(baseWithOneLib, newPointerOverALibFunction)?.pure, 'a base library\'s function is not new code').toBe(false);
+    const beside = pureMoveVerdict(base, newCodeBesideAnEditedMove);
+    expect(beside?.pure).toBe(false);
+    expect(beside?.differing).toContain('fb');
+    expect(pureMoveVerdict(base, moveCalledNewCode)).toEqual({ pure: false, differing: ['fb'] });
+    // A new pointer with no region anywhere stays judged: `fb` left ccd/ccd and went nowhere.
+    const vanished: Tree = { 'ccd/ccd': movedByteForByte['ccd/ccd']! };
+    expect(pureMoveVerdict(base, vanished)?.pure).toBe(false);
   });
 
   it('FIXTURE: the __CCD_LIBS line may gain the moved library and nothing else', () => {
@@ -277,7 +328,7 @@ describe('the pure-move pin (the real tree)', () => {
     const b = resolveBase();
     if (b === null) return ctx.skip();
     const verdict = pureMoveVerdict(treeAt(b, REPO), treeAt('HEAD', REPO));
-    if (verdict !== null) expect(verdict, 'a diff that adds a pointer moves bytes and changes none').toEqual({ pure: true, differing: [] });
+    if (verdict !== null) expect(verdict, 'a diff that adds a pointer moves bytes and changes none').toMatchObject({ pure: true, differing: [] });
   });
 
   it('REAL: a record added in this diff holds', (ctx) => {
