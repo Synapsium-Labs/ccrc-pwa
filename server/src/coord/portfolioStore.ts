@@ -21,19 +21,26 @@ import type { LiveAskRead } from './ports.js';
 import { tx } from './tx.js';
 export type { LiveAskRead, PortfolioFacts, RankWrite };
 
-/** `setPortfolioRank`'s answer: the new revision, or `rank-changed` with the current one, having written nothing. */
-export type RankWriteResult = { ok: true; revision: number } | { ok: false; why: 'rank-changed'; revision: number };
+/** `setPortfolioRank`'s answer: the new revision; or, having written nothing, `unknown-programme` with the first `order` slug
+ *  no `programs` row names, or `rank-changed` with the current revision. */
+export type RankWriteResult =
+  | { ok: true; revision: number }
+  | { ok: false; why: 'unknown-programme'; slug: string }
+  | { ok: false; why: 'rank-changed'; revision: number };
 
 interface RankRowRaw { program: string; position: number; cls: string; fixedDate: string | null; setAt: number; setBy: string }
 
 const revisionOf = (db: DatabaseSync): number =>
   (db.prepare('SELECT revision FROM portfolio_rank_revision WHERE id = 1').get() as { revision: number } | undefined)?.revision ?? 0;
 
-/** The operator's rank write, in one transaction: refuse a stale `basedOn`; else merge, renumber each class band from 1,
+/** The operator's rank write, in one transaction: refuse an `order` slug no programme has, then a stale `basedOn`; else merge, renumber each class band from 1,
  *  and raise the revision. The listed entries come first in each band, in the given order, then the kept rows in their old
  *  order. Kept rows keep their class, date, `setAt` and `setBy`; only their position moves. */
 export function setPortfolioRank(db: DatabaseSync, write: RankWrite, actor: string, now: number): RankWriteResult {
   return tx(db, () => {
+    const exists = db.prepare('SELECT 1 FROM programs WHERE slug = ?');
+    const unknown = write.order.find((e) => exists.get(e.slug) === undefined);
+    if (unknown !== undefined) return { ok: false, why: 'unknown-programme', slug: unknown.slug };
     const revision = revisionOf(db);
     if (write.basedOn !== revision) return { ok: false, why: 'rank-changed', revision };
     const ordered = new Set(write.order.map((e) => e.slug));

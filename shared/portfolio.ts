@@ -87,3 +87,40 @@ export interface PortfolioView { at: number; revision: number; programmes: reado
 export interface RankOrderEntry { slug: string; cls: ServiceClass; fixedDate: string | null }
 /** A rank write: `seen` is the slugs the console listed at `basedOn`, `order` its new order of some of them. */
 export interface RankWrite { basedOn: number; seen: readonly string[]; order: readonly RankOrderEntry[] }
+
+/** A real `YYYY-MM-DD` calendar date: the month 01 to 12 and the day inside that month, leap years counted. No clock. */
+export function isCalendarDate(v: unknown): v is string {
+  if (typeof v !== 'string') return false;
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(v);
+  if (m === null) return false;
+  const [y, mo, d] = [Number(m[1]), Number(m[2]), Number(m[3])];
+  const leap = (y % 4 === 0 && y % 100 !== 0) || y % 400 === 0;
+  const days = [31, leap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][mo - 1];
+  return days !== undefined && d >= 1 && d <= days;
+}
+
+/** The rank door's body, read once (plan w1-portfolio.md Task 3, item 3): the write, or the reason it is `bad-request`. */
+export function parseRankWrite(body: unknown): { ok: true; write: RankWrite } | { ok: false; detail: string } {
+  const bad = (detail: string) => ({ ok: false as const, detail });
+  if (typeof body !== 'object' || body === null) return bad('the body is { basedOn, seen, order }');
+  const { basedOn, seen, order } = body as { basedOn?: unknown; seen?: unknown; order?: unknown };
+  if (typeof basedOn !== 'number' || !Number.isSafeInteger(basedOn) || basedOn < 0) return bad('basedOn is a non-negative integer, the revision the console read');
+  if (!Array.isArray(seen) || !seen.every((s): s is string => typeof s === 'string' && s.length > 0)) return bad('seen is a list of programme slugs');
+  if (!Array.isArray(order)) return bad('order is a list of { slug, cls, fixedDate? }');
+  if (seen.length > RANK_ORDER_MAX || order.length > RANK_ORDER_MAX) return bad(`seen and order carry at most ${RANK_ORDER_MAX} entries each`);
+  if (new Set(seen).size !== seen.length) return bad('a slug appears twice in seen');
+  const out: RankOrderEntry[] = [];
+  for (const raw of order) {
+    if (typeof raw !== 'object' || raw === null) return bad('each order entry is { slug, cls, fixedDate? }');
+    const { slug, cls, fixedDate } = raw as { slug?: unknown; cls?: unknown; fixedDate?: unknown };
+    if (typeof slug !== 'string' || slug.length === 0) return bad('each order entry names a slug');
+    if (!seen.includes(slug)) return bad(`${slug} is in order but not in seen`);
+    if (out.some((e) => e.slug === slug)) return bad(`${slug} appears twice in order`);
+    if (!isServiceClass(cls)) return bad(`${slug}: the class is one of ${SERVICE_CLASSES.join(', ')}`);
+    if (cls === 'fixed-date' ? !isCalendarDate(fixedDate) : fixedDate !== undefined && fixedDate !== null) {
+      return bad(`${slug}: fixedDate is a YYYY-MM-DD calendar date on fixed-date, and on no other class`);
+    }
+    out.push({ slug, cls, fixedDate: cls === 'fixed-date' ? (fixedDate as string) : null });
+  }
+  return { ok: true, write: { basedOn, seen, order: out } };
+}
