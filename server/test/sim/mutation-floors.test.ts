@@ -19,6 +19,8 @@ import { PROBE_DOOR_MUTANT_SETS } from './probeDoorSets.js';
 import { NOTES_MUTANT_SETS } from './notesMutants.js';
 import { TIMER_MUTANT_SETS } from './timerSets.js';
 import { ANCHOR_MUTANT_SETS } from './anchorSets.js';
+import { PUSH_OUTBOX_MUTANT_SETS } from './pushOutboxSets.js';
+import { VOCABULARY_MUTANT_SETS } from './vocabularySets.js';
 import { POOL_SET_MUTANT_SETS } from './poolSetSets.js';
 import { simulate } from './run.js';
 import {
@@ -158,6 +160,8 @@ const MUTANT_SETS: Record<string, MutantSet<never>> = {
   ...NOTES_MUTANT_SETS,
   ...TIMER_MUTANT_SETS,
   ...ANCHOR_MUTANT_SETS,
+  ...PUSH_OUTBOX_MUTANT_SETS,
+  ...VOCABULARY_MUTANT_SETS,
   ...POOL_SET_MUTANT_SETS,
 };
 

@@ -1,5 +1,5 @@
 import { parseStallDetail } from './stall.js';
-import { TRIGGER_TABLE, signatureText } from '../../../shared/practice-triggers.js';
+import { TRIGGER_TABLE, signatureText, type TriggerSignature } from '../../../shared/practice-triggers.js';
 /**
  * L1 policy: the case lane's decider (Overlord spec §10.5). No clock, no I/O, no store.
  *
@@ -57,8 +57,15 @@ export function caseRunIds(rows: readonly CaseObservationRow[]): number[] {
   return [...ids].sort((a, b) => a - b);
 }
 
-/** The signature text of each arm, read from the trigger table so this file spells no kind. */
-const SIGNATURE_OF = new Map<string, string>(TRIGGER_TABLE.map((s) => [s.key, signatureText(s)]));
+/** Each stall arm's signature text, from the trigger table's rows of the one kind this file reads, `stall-arm`: a map
+ *  keyed by key alone across two kinds would let a later refusal word shadow an arm. Exported so a test can hand it
+ *  planted rows (`SIGNATURE_OF` is built at import). */
+export function stallSignatureMap(rows: readonly TriggerSignature[]): Map<string, string> {
+  return new Map<string, string>(rows.filter((s) => s.kind === 'stall-arm').map((s) => [s.key, signatureText(s)]));
+}
+
+/** The signature text of each arm, read from the trigger table; this file spells one kind, the one it reads. */
+const SIGNATURE_OF = stallSignatureMap(TRIGGER_TABLE);
 
 interface Episode { readonly signature: string; readonly runId: number; at: number; eventId: number }
 

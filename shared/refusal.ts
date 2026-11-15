@@ -229,6 +229,60 @@ export const TIMER_REFUSALS = {
   'timer-not-found': 404,
 } as const;
 export type TimerRefusal = keyof typeof TIMER_REFUSALS;
+/** The Overlord's W1 refusal words (Overlord W1, the vocabulary piece; spec §11.6 and Table 11.6), grouped by door, each
+ *  with its one status, declared once here and spread into `REFUSAL_STATUS` (`TIMER_REFUSALS`' idiom). No W1 door sends
+ *  one yet: each later W1 piece ships its door and reads its word from here. Each status is CHOSEN, not measured, by this
+ *  file's family rule: 403 for a caller that is not allowed (as `not-owner`), 409 for a state of the world (as
+ *  `note-not-asked`), 429 for a rate (as `timer-rate`), 501 for a build that lacks what the door needs (as `unsupported`
+ *  and `auth-off`), 503 for a box fault (as `journal-unreadable`). Later waves' words join this group with their doors. */
+export const OVERLORD_REFUSALS = {
+  // Every Overlord door, and designate and rebind: ccd does not advertise a capability word the door needs. 501, the
+  // `unsupported` case (ruled, review 2102 F6): the build lacks it, which no state of the world can change. In W1a the
+  // client's word only (`ccrc-api timer`, which still answers it locally for `timers-v1`).
+  'capability-missing': 501,
+  // Every Overlord door: the caller is not the designated session (gates B). 403, a caller that is not allowed.
+  'not-the-overlord': 403,
+  // The operator's rung is `off`, at every door but card, probe and note (the ladder). 409, a state of the world.
+  'overlord-off': 409,
+  // Every write door: the effective rung does not allow this act kind (the ladder). 403, the caller is not allowed it.
+  'rung-below': 403,
+  // Designate: a session is bound, or pending (designation A). 409.
+  'overlord-exists': 409,
+  // Rebind: the old session does not measure dead or absent (designation B). 409.
+  'overlord-body-alive': 409,
+  // Designate, rebind and the account set's Settings row: fewer than two accounts (designation A and C). 409.
+  'overlord-single-account': 409,
+  // Designate and rebind: a property of the sandbox check failed (sandbox B). 409.
+  'overlord-sandbox-unmet': 409,
+  // Every door but card, probe and note: the session's profile digest is not the designation's (sandbox B). 409.
+  'launch-profile-unmet': 409,
+  // Every door but card, probe and note: boot coherence failed, the authority journal rolled back (authority journal A).
+  // 503, a box fault.
+  'authority-rolled-back': 503,
+  // Every write door: the call carries an older term, or a wrong generation or act key (gates B). 409.
+  'stale-designation': 409, 'stale-generation': 409,
+  // Every door but card, probe and note: this generation has not read the current card (gates B). 409.
+  'card-unread': 409,
+  // Every write door: the hook reported no matching call before it (gates B, door process B). 409.
+  'unwitnessed': 409,
+  // Peer mail, item raise, claims, the claimant's question door and coordinator intent (other-lane refusals). 403.
+  'overlord-uses-its-doors': 403,
+  // Run open: the designated session may never open a run (other-lane refusals). 403 (ruled, review 2102 F6), with
+  // `not-the-overlord`, unlike its neighbour `not-coordinator` (409): it refuses an identity, not a role that can change.
+  'overlord-not-a-coordinator': 403,
+  // The history door: no connected agent, or more than one, serves the history store (board and history B). 503.
+  'history-unreachable': 503,
+  // Every Overlord read door: the read rate's ceiling is reached (the inbox piece; the W1 index's question 32). 429, a
+  // rate. Not yet in Table 11.6: `refusal-table.data.json`'s codeOnly names it until the spec-fixes run adds the row.
+  'read-ceiling': 429,
+} as const;
+export type OverlordRefusal = keyof typeof OVERLORD_REFUSALS;
+/** The group's words, in its order. */
+export const OVERLORD_REFUSAL_WORDS = Object.keys(OVERLORD_REFUSALS) as OverlordRefusal[];
+/** The group's guard: the `includes` form, never `in`, so an inherited key such as `constructor` is never a word. */
+export function isOverlordRefusal(v: unknown): v is OverlordRefusal {
+  return typeof v === 'string' && (OVERLORD_REFUSAL_WORDS as readonly string[]).includes(v);
+}
 
 /** The approval routes' own words (plan Task 16, D-5298): typed from the start, as D-5381 set out to make them. */
 export type RouteRefusal = ClaimRefusal | MailRouteRefusal | UpdateRouteError | CollectLaneRouteRefusal | SwapRefusal | GenericRefusal
@@ -258,6 +312,8 @@ export type RouteRefusal = ClaimRefusal | MailRouteRefusal | UpdateRouteError | 
   | ProbeRefusal
   // The timer doors (Overlord W1a, the timers piece): their ten words, each with its status in `TIMER_REFUSALS`.
   | TimerRefusal
+  // The Overlord's W1 words (the vocabulary piece), each with its status in `OVERLORD_REFUSALS`.
+  | OverlordRefusal
   // The lane routes, Check and the kill switch (accounts plan Task A14, D-7732): their four words of their own.
   | AccountRouteRefusal
   // The test box connect routes (D-8166): their one word of their own.
@@ -475,6 +531,8 @@ export const REFUSAL_STATUS: Readonly<Record<RouteRefusal, number>> = {
   [PROBE_REFUSALS.noneOpen]: 409, [PROBE_REFUSALS.closed]: 409,
   // The timer doors (Overlord W1a): CHOSEN, not measured, each status declared once in `TIMER_REFUSALS`.
   ...TIMER_REFUSALS,
+  // The Overlord's W1 words: CHOSEN, not measured, each status declared once in `OVERLORD_REFUSALS`.
+  ...OVERLORD_REFUSALS,
   // D-8126: CHOSEN, not measured. 400 for both: the coordinator sent a list of the wrong shape, or a change with nothing
   // to stand on; either is theirs to fix, as `bad-in-short`.
   [LEDGER_ROUTE_REFUSALS.badDoneWhen]: 400, [LEDGER_ROUTE_REFUSALS.doneWhenNeedsRuling]: 400,
