@@ -18,6 +18,7 @@ import { PROBE_DOOR_MUTANT_SETS } from './probeDoorSets.js';
 import { NOTES_MUTANT_SETS } from './notesMutants.js';
 import { TIMER_MUTANT_SETS } from './timerSets.js';
 import { ANCHOR_MUTANT_SETS } from './anchorSets.js';
+import { POOL_SET_MUTANT_SETS } from './poolSetSets.js';
 import { CHAINED_JOURNAL_MUTANT_SETS } from './chainedJournalSets.js';
 import { simulate } from './run.js';
 import {
@@ -156,6 +157,7 @@ const MUTANT_SETS: Record<string, MutantSet<never>> = {
   ...NOTES_MUTANT_SETS,
   ...TIMER_MUTANT_SETS,
   ...ANCHOR_MUTANT_SETS,
+  ...POOL_SET_MUTANT_SETS,
   ...CHAINED_JOURNAL_MUTANT_SETS,
 };
 

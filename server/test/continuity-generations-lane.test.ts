@@ -14,7 +14,7 @@ import { CoordStore } from '../src/coord/store.js';
 import type { GenRow } from '../src/continuity/continuityStore.js';
 import {
   GENERATIONS_LANE, applyFedEvents, gatherGenerationReadings, generationsPass, softTimesOf,
-  type CompactionsMemo, type FedEvent, type GatherPorts, type GenReadings, type GenerationsDeps, type RegistryFacts,
+  type CompactionsMemo, type EmptyTries, type FedEvent, type GatherPorts, type GenReadings, type GenerationsDeps, type RegistryFacts,
 } from '../src/continuity/generationsLane.js';
 import type { CompactionsRead } from '../src/continuity/compactions.js';
 import type { UsageRead } from '../src/usage.js';
@@ -25,7 +25,7 @@ import { HOLD_OFF_MS } from '../../shared/continuity.js';
 import { START_RETRY_MS } from '../src/continuity/generationStart.js';
 import { parsedFile } from './scan/symbols.js';
 import { snapshotFactsJson } from '../src/continuity/card.js';
-import { gradeAnswers, maskedQuestion } from '../src/continuity/probeDoor.js';
+import { gradeAnswers } from '../src/continuity/probeDoor.js';
 import type { CardFacts } from '../../shared/continuity-card.js';
 import type { TurnMarkRead } from '../src/coord/stall.js';
 import { fakeTime, FAKE_T0, type FakeTime } from './fakeTime.js';
@@ -57,7 +57,7 @@ function fixture(): Fixture {
   const registry: RegistryFacts[] = [{ id: COORD, uuid: U1, lane: 'lane-a', child: { kind: 'none' } }];
   let n = 0;
   const memos = new Map<string, Set<number>>();
-  const empties = new Map<string, Map<number, string>>();
+  const empties = new Map<string, EmptyTries>();
   const deps = (proc: string): GenerationsDeps => {
     if (!memos.has(proc)) memos.set(proc, new Set());
     if (!empties.has(proc)) empties.set(proc, new Map());
@@ -535,8 +535,9 @@ const SNAPSHOT_FACTS: CardFacts = {
   history: { kind: 'read', value: { verb: 'ccrc history describe', node: null } }, timers: { kind: 'read', value: [] },
 };
 const SNAPSHOT = snapshotFactsJson(SNAPSHOT_FACTS);
-const usage = (ctxTokens: number, ctxWindow: number, stale = false): UsageRead => ({ kind: 'reading', usage: {
-  ts: 1, model: 'claude-opus-5-5', class: null, effort: null, ctxPct: null, ctxTokens, ctxWindow, cost: null, cacheExpiresAt: null, stale,
+/** A usage reading; `ts` is the statusline's clock in epoch SECONDS (1 by default: older than any compaction line). */
+const usage = (ctxTokens: number, ctxWindow: number, stale = false, ts = 1): UsageRead => ({ kind: 'reading', usage: {
+  ts, model: 'claude-opus-5-5', class: null, effort: null, ctxPct: null, ctxTokens, ctxWindow, cost: null, cacheExpiresAt: null, stale,
 } });
 const lines = (n: number, at: number): CompactionsRead => ({ kind: 'lines', skipped: 0, eventsAbsent: false,
   lines: Array.from({ length: n }, (_, i) => ({ at: at + i * 3_600_000, trigger: 'auto' as const, phase: 'pre' as const, transcript: null, scope: 'main' as const })) });
@@ -796,9 +797,11 @@ describe('the card read (the card piece, PR B, Task 5)', () => {
 });
 
 describe('the gather', () => {
+  let journal = (): MeasuredStat => ({ ok: false, reason: 'absent' });
   const ports = (calls: string[], stamp: () => MeasuredStat): GatherPorts => ({
     usage: async () => { calls.push('usage'); return usage(1, 2); },
     eventsStamp: async () => stamp(),
+    journalStamp: async () => journal(),
     compactions: async () => { calls.push('compactions'); return { kind: 'absent' }; },
     turnMark: async () => ({ ok: false, reason: 'absent' }) as never,
     processStartedAt: async () => 100,
@@ -826,6 +829,36 @@ describe('the gather', () => {
     expect(calls.filter((c) => c === 'compactions')).toHaveLength(4);
     // A process started before the install completed is behind (the roll's own test).
     expect(r1.get(g.id)!.behind).toEqual({ kind: 'measured', value: true });
+  });
+
+  it('reads the compactions again when the journal changed, so a post line that landed is seen without a restart (review 2103 F2)', async () => {
+    const f = fixture();
+    f.start('startup', U1);
+    f.pass();
+    const g = live(f.s)[0]!;
+    f.s.clearShadowWalk(g.id, { term: g.term, n: g.n, state: g.state, shadowState: g.shadowState, walk: g.walk }, 0);
+    const calls: string[] = [];
+    const memo: CompactionsMemo = new Map();
+    const st = (): MeasuredStat => ({ ok: true, mtimeMs: 1, size: 10 });
+    const n = (): number => calls.filter((c) => c === 'compactions').length;
+    try {
+      journal = () => ({ ok: false, reason: 'absent' });
+      await gatherGenerationReadings(f.s, ports(calls, st), memo);
+      await gatherGenerationReadings(f.s, ports(calls, st), memo);
+      expect(n()).toBe(1);
+      journal = () => ({ ok: true, mtimeMs: 5, size: 3 });
+      await gatherGenerationReadings(f.s, ports(calls, st), memo);
+      await gatherGenerationReadings(f.s, ports(calls, st), memo);
+      expect(n()).toBe(2);
+      journal = () => ({ ok: true, mtimeMs: 6, size: 9 });
+      await gatherGenerationReadings(f.s, ports(calls, st), memo);
+      expect(n()).toBe(3);
+      // A journal whose stamp could not be read keys nothing: read every pass.
+      journal = () => ({ ok: false, reason: 'unreadable' } as MeasuredStat);
+      await gatherGenerationReadings(f.s, ports(calls, st), memo);
+      await gatherGenerationReadings(f.s, ports(calls, st), memo);
+      expect(n()).toBe(5);
+    } finally { journal = () => ({ ok: false, reason: 'absent' }); }
   });
 
   it('reads for a generation on a shadow walk, and nothing for one on a live walk (review 2003 F1)', async () => {
@@ -1017,9 +1050,23 @@ describe('the probes (the probes piece, PR B, Tasks 5 and 6)', () => {
     expect(f.pass(at(f, usage(60_000, 1_000_000), turn('idle')))).toMatchObject({ roundsOpened: 0 });
     expect(f.pass(at(f, usage(70_000, 1_000_000), turn('idle')))).toMatchObject({ roundsOpened: 0 });
     expect(f.pass(at(f, usage(99_999, 1_000_000), turn('idle')))).toMatchObject({ roundsOpened: 0 });
-    expect([tries, f.logs.filter((l) => l.includes('had no question to ask')).length]).toEqual([1, 1]);
+    // Its rows are read each pass, since they are part of its key (review 2068 F5), but it is drawn and logged once.
+    expect([tries, f.logs.filter((l) => l.includes('had no question to ask')).length]).toEqual([3, 1]);
     expect(f.pass(at(f, usage(100_000, 1_000_000), turn('idle')))).toMatchObject({ roundsOpened: 0 });
-    expect(tries).toBe(2);
+    expect([tries, f.logs.filter((l) => l.includes('had no question to ask')).length]).toEqual([4, 2]);
+  });
+
+  it('a new note ends a spot step\'s skip: the rows it is drawn from are part of its key (review 2068 F5)', () => {
+    const f = active();
+    const g = gen(f);
+    expect(f.pass(at(f, usage(60_000, 1_000_000), turn('idle')))).toMatchObject({ roundsOpened: 0 });
+    expect(f.pass(at(f, usage(61_000, 1_000_000), turn('idle')))).toMatchObject({ roundsOpened: 0 });
+    for (const k of ['a', 'b', 'c']) {
+      if (!f.s.appendNote({ identity: COORD, sessionId: COORD, generationId: g.id, key: { kind: 'run', id: 1 }, kind: 'thread', waitsOn: 'w', next: `next ${k}`, revises: null, closes: false, at: f.t.ports.clock.wall() }).ok) throw new Error('note');
+    }
+    // The same 50k step: the notes end the skip, and the round opens at once.
+    expect(f.pass(at(f, usage(62_000, 1_000_000), turn('idle')))).toMatchObject({ roundsOpened: 1 });
+    expect(rounds(f.s).map((x) => [x.kind, x.depthTokens])).toEqual([['start', null], ['spot', 62_000]]);
   });
 
   /** A live coordinator proven active by a passed start round. */
@@ -1074,7 +1121,7 @@ describe('the probes (the probes piece, PR B, Tasks 5 and 6)', () => {
     if (!open.ok) throw new Error(open.detail);
     const run = open.rows.find((r) => r.question.includes('Which run'));
     expect(run).toBeDefined();
-    const graded = gradeAnswers([maskedQuestion(run!, (t) => t)], new Map([[run!.qid, '6']]));
+    const graded = gradeAnswers([run!], new Map([[run!.qid, '6']]), (t) => t);
     expect(graded[0]!.grade).toBe('pass');
   });
 
@@ -1094,13 +1141,127 @@ describe('the probes (the probes piece, PR B, Tasks 5 and 6)', () => {
     }
     expect(f.pass(at(f, usage(60_000, 1_000_000), turn('idle')))).toMatchObject({ roundsOpened: 1 });
     f.t.advance(1_000);
-    expect(f.pass(at(f, usage(20_000, 1_000_000), turn('working'), lines(1, f.t.ports.clock.wall() - 500)))).toMatchObject({ roundsOpened: 1 });
+    const after = Math.ceil(f.t.ports.clock.wall() / 1000);
+    const settled = compaction(f.t.ports.clock.wall() - 600, f.t.ports.clock.wall() - 500);
+    expect(f.pass(at(f, usage(20_000, 1_000_000, false, after), turn('working'), settled))).toMatchObject({ roundsOpened: 1 });
     expect(rounds(f.s).map((x) => [x.kind, x.depthTokens])).toEqual([['start', null], ['spot', 60_000], ['compaction', 20_000]]);
     const spot = f.s.db.prepare("SELECT grade, answer FROM continuity_probes WHERE kind = 'spot'").all();
     expect(spot).toEqual([{ grade: 'unmeasured', answer: null }]);
     // The superseded spot round never reads failed, and the compaction round is the one served.
     expect(f.s.openProbeRound(COORD).ok && (f.s.openProbeRound(COORD) as { rows: { kind: string }[] }).rows[0]!.kind).toBe('compaction');
   });
+
+  /** Three notes of this generation's, so a spot round has something to ask. */
+  const threeNotes = (f: Fixture): void => {
+    for (const k of ['a', 'b', 'c']) {
+      if (!f.s.appendNote({ identity: COORD, sessionId: COORD, generationId: gen(f).id, key: { kind: 'run', id: 1 }, kind: 'thread', waitsOn: 'w', next: `next ${k}`, revises: null, closes: false, at: f.t.ports.clock.wall() }).ok) throw new Error('note');
+    }
+  };
+  /** The lines of one compaction: its pre line at `pre`, and its post line at `post` when given. */
+  const compaction = (pre: number, post?: number): Extract<CompactionsRead, { kind: 'lines' }> => ({ kind: 'lines', skipped: 0, eventsAbsent: false, lines: [
+    { at: pre, trigger: 'auto', phase: 'pre', transcript: null, scope: 'main' },
+    ...(post === undefined ? [] : [{ at: post, trigger: 'auto' as const, phase: 'post' as const, transcript: null, scope: 'main' as const }]),
+  ] });
+
+  it('after a compaction the baseline is the context newer than it, or 0: a spot round opens about 50k into the new context, not at 221k (review 2068 F1)', () => {
+    const f = active();
+    threeNotes(f);
+    const secs = (): number => Math.ceil(f.t.ports.clock.wall() / 1000);
+    // A spot round at 170k, answered: the baseline.
+    expect(f.pass(at(f, usage(170_000, 1_000_000, false, secs()), turn('idle')))).toMatchObject({ roundsOpened: 1 });
+    answer(f, 'pass');
+    f.t.advance(60_000);
+    // A compaction: the sidecar still reads 171k, written before the compaction's line.
+    const stale = secs();
+    f.t.advance(60_000);
+    const line = f.t.ports.clock.wall();
+    f.t.advance(1_000);
+    const settled = compaction(line - 500, line);
+    expect(f.pass(at(f, usage(171_000, 1_000_000, false, stale), turn('working'), settled))).toMatchObject({ roundsOpened: 1 });
+    expect(rounds(f.s).map((x) => [x.kind, x.depthTokens])).toEqual([['start', null], ['spot', 170_000], ['compaction', 0]]);
+    answer(f, 'pass');
+    f.t.advance(60_000);
+    // The old reading opens no spot round; the new context, read after the compaction, opens one at about 50k.
+    expect(f.pass(at(f, usage(171_000, 1_000_000, false, stale), turn('idle'), settled))).toMatchObject({ roundsOpened: 0 });
+    expect(f.pass(at(f, usage(45_000, 1_000_000, false, secs()), turn('idle'), settled))).toMatchObject({ roundsOpened: 0 });
+    f.t.advance(60_000);
+    expect(f.pass(at(f, usage(50_000, 1_000_000, false, secs()), turn('idle'), settled))).toMatchObject({ roundsOpened: 1 });
+    expect(rounds(f.s).map((x) => [x.kind, x.depthTokens])[3]).toEqual(['spot', 50_000]);
+  });
+
+  it('one compaction, one round: a pre line before the round was asked and its post line after it open no second round, a restart too (review 2068 F7)', () => {
+    const f = active();
+    const pre = f.t.ports.clock.wall() - 1_000;
+    expect(f.pass(at(f, usage(10_000, 1_000_000), turn('working'), compaction(pre)))).toMatchObject({ roundsOpened: 1 });
+    answer(f, 'pass');
+    f.t.advance(60_000);
+    const post = f.t.ports.clock.wall();
+    f.t.advance(1_000);
+    expect(f.pass(at(f, usage(10_000, 1_000_000), turn('working'), compaction(pre, post)))).toMatchObject({ roundsOpened: 0 });
+    // A restart: a new process, every memo cold, reads the same lines and counts the same.
+    expect(f.pass(at(f, usage(10_000, 1_000_000), turn('working'), compaction(pre, post)), 'p2')).toMatchObject({ roundsOpened: 0 });
+    expect(rounds(f.s).map((x) => x.kind)).toEqual(['start', 'compaction']);
+    // A compaction begun after the round is one more, and opens the next round.
+    f.t.advance(3_600_000);
+    const later = f.t.ports.clock.wall();
+    f.t.advance(1_000);
+    const both: CompactionsRead = { kind: 'lines', skipped: 0, eventsAbsent: false,
+      lines: [...compaction(pre, post).lines, { at: later, trigger: 'auto', phase: 'pre', transcript: null, scope: 'main' }] };
+    expect(f.pass(at(f, usage(10_000, 1_000_000), turn('working'), both), 'p2')).toMatchObject({ roundsOpened: 1 });
+  });
+
+  it('a compaction round that composes empty does not block spot rounds for the generation\'s life, nor keep the old baseline (review 2068 F4, review 2103 F1 and F4)', () => {
+    const f = active();
+    threeNotes(f);
+    const secs = (): number => Math.ceil(f.t.ports.clock.wall() / 1000);
+    // An earlier spot round at 150k, answered: the baseline before the compaction.
+    expect(f.pass(at(f, usage(150_000, 1_000_000, false, secs()), turn('idle')))).toMatchObject({ roundsOpened: 1 });
+    answer(f, 'pass');
+    f.t.advance(60_000);
+    // The newest card the conversation read names nothing to ask: a compaction round over it composes empty.
+    readCardOf(f, snapshotFactsJson({ ...SNAPSHOT_FACTS, runs: { kind: 'read', value: [] }, itemsRaised: { kind: 'read', value: [] } }));
+    f.t.advance(1_000);
+    const line = f.t.ports.clock.wall();
+    const settled = compaction(line - 500, line);
+    f.t.advance(1_000);
+    expect(f.pass(at(f, usage(60_000, 1_000_000, false, secs()), turn('working'), settled))).toMatchObject({ roundsOpened: 0 });
+    expect(f.logs.filter((l) => l.includes('had no question to ask'))).toHaveLength(1);
+    // Idle at 60k, read after the compaction: the spot round opens, from baseline 0, though the compaction round is still due.
+    expect(f.pass(at(f, usage(60_000, 1_000_000, false, secs()), turn('idle'), settled))).toMatchObject({ roundsOpened: 1 });
+    expect(rounds(f.s).map((x) => [x.kind, x.depthTokens])).toEqual([['start', null], ['spot', 150_000], ['spot', 60_000]]);
+    // The remembered compaction try outlives the spot round: it is not drawn or logged again.
+    answer(f, 'pass');
+    f.t.advance(60_000);
+    expect(f.pass(at(f, usage(70_000, 1_000_000, false, secs()), turn('idle'), settled))).toMatchObject({ roundsOpened: 0 });
+    expect(f.logs.filter((l) => l.includes('had no question to ask'))).toHaveLength(1);
+    // And the spot round asked since the compaction is the baseline now: the next opens 50k past it, not every pass.
+    expect(f.pass(at(f, usage(110_000, 1_000_000, false, secs()), turn('idle'), settled))).toMatchObject({ roundsOpened: 1 });
+  });
+
+  it('a compaction still in flight records 0: a reading newer than its pre line may still carry the old depth (review 2103 F2)', () => {
+    const f = active();
+    const pre = f.t.ports.clock.wall() - 1_000;
+    const secs = Math.ceil(f.t.ports.clock.wall() / 1000);
+    expect(f.pass(at(f, usage(171_000, 1_000_000, false, secs), turn('working'), compaction(pre)))).toMatchObject({ roundsOpened: 1 });
+    expect(rounds(f.s).map((x) => [x.kind, x.depthTokens])).toEqual([['start', null], ['compaction', 0]]);
+  });
+
+  it('a generation that ended leaves no empty-try memo behind (review 2103 F4)', () => {
+    const f = fixture();
+    f.s.setLaneArm(CONTINUITY_LANE, 'live', 1);
+    f.start('startup', U1);
+    f.pass();
+    readCardOf(f, snapshotFactsJson({ ...SNAPSHOT_FACTS, runs: { kind: 'read', value: [] }, itemsRaised: { kind: 'read', value: [] } }));
+    const tries: EmptyTries = new Map();
+    const deps = { coord: f.s, clock: f.t.ports.clock, entropy: f.t.ports.entropy, proc: 'p9', log: () => {}, retried: new Set<number>(), emptyTries: tries, gate: () => null };
+    generationsPass(deps, { registry: f.registry, readings: new Map(), listedAt: f.t.ports.clock.wall() + 1 });
+    const id = gen(f).id;
+    expect(tries.get(id)?.get('start')).toMatch(/^start:/);
+    f.s.db.prepare("UPDATE continuity_generations SET state = 'ended' WHERE id = ?").run(id);
+    generationsPass(deps, { registry: f.registry, readings: new Map(), listedAt: f.t.ports.clock.wall() + 1 });
+    expect(tries.has(id)).toBe(false);
+  });
+
 
   it('50k past the last spot depth while idle opens one spot round about this generation\'s own rows, and sends no mail (slug spot-mail-waits-on-the-renewal-act)', () => {
     const f = active();

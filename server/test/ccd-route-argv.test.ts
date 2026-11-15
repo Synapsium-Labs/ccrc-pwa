@@ -218,6 +218,18 @@ describe('--route on ws-add (routing spec §5.3, the dispatch wave)', () => {
     expect(fs.existsSync(path.join(h.home, '.cc-sessions', 'demo-quiet-mesa.uuid'))).toBe(false);
   });
 
+  // The Overlord W1 pool set (plan w1-pool-set.md, open question 10, the coordinator's ruling on review 2085 F2): a set
+  // is written only by `ccd route --session`, never at a mint, which places its account before it writes the record.
+  it('the pool set\'s two fields are refused on the argv, before anything is minted (route-argv-refuses-the-set)', () => {
+    for (const kv of ['poolset=pool-a', 'acctorder=claude-a']) {
+      const r = shStatus(`${WS_ADD_REAL_SPAWN} CCD_WS_SLUG=quiet-mesa cmd_ws_add --no-rc --route ${kv} demo`);
+      expect(r.status, kv).toBe(1);
+      expect(r.out, kv).toContain(`'${kv.split('=')[0]}' is written only by ccd route --session; nothing was touched`);
+      expect(fs.existsSync(path.join(h.home, '.cc-sessions', 'demo-quiet-mesa.uuid')), kv).toBe(false);
+    }
+    expect(newSessions()).toHaveLength(0);
+  });
+
   it('a dispatched worker (--no-rc) without --route gets NO row — the spawn line carries no routing flag but the box-default --effort (D-8149)', () => {
     h.sh(`${WS_ADD_REAL_SPAWN} CCD_WS_SLUG=quiet-mesa cmd_ws_add --no-rc demo`);
     expect(record('demo-quiet-mesa')).toEqual([null, null, null, null]);
@@ -373,6 +385,20 @@ describe('a --route that names only browser keeps the coordinator row (D-8121, D
 });
 
 describe('--route on start and enable (routing spec §5.3)', () => {
+  it('start and enable refuse a --route that carries the pool set, and nothing is created (Overlord W1, route-argv-refuses-the-set)', () => {
+    const s = shStatus(`${START_SPAWNLESS} cmd_start --route poolset=pool-a claude demo`);
+    expect(s.status).toBe(1);
+    expect(s.out).toContain("'poolset' is written only by ccd route --session; nothing was touched");
+    const e = shStatus(`${START_SPAWNLESS} cmd_enable --route acctorder=claude-a claude-a demo`);
+    expect(e.status).toBe(1);
+    expect(e.out).toContain("'acctorder' is written only by ccd route --session; nothing was touched");
+    for (const id of ['claude-demo', 'claude-a-demo']) {
+      expect(fs.existsSync(path.join(h.home, '.cc-sessions', `${id}.uuid`)), id).toBe(false);
+      expect(fs.existsSync(path.join(h.home, '.cc-sessions', `${id}.wrapper`)), id).toBe(false);
+    }
+    expect(routeRows()).toHaveLength(0);
+  });
+
   it('start takes --route, writes after the mint, journals with actor start; enable forwards it; an existing row is never re-seeded', () => {
     h.sh(`${START_SPAWNLESS} cmd_start --route subagent=haiku claude demo`);
     expect(h.reg('claude-demo', 'subagent')).toBe('haiku');
@@ -607,16 +633,18 @@ describe('_route_argv_check IS cmd_route\'s validator, measured against the ship
     // `_route_argv_class` reads the FIRST `class=` and picks the LANE while the
     // write loop's LAST one wins the RECORD — so a repeat is two answers to one
     // question. The signature line moved with it (`seen=""`), which is why the
-    // count is five rather than four plus one.
+    // count is five rather than four plus one. SIX since the Overlord W1's pool set: the refusal of `poolset` and
+    // `acctorder` on a mint's `--route` (open question 10), argv-only because `cmd_route` is the set's one writer.
     expect(only).toEqual([
       `local kv f v rc cls="" eff="" seen=""`,
       `for kv in "$@"; do`,
       `[[ "$kv" == *=* ]] || die "bad --route '$kv' (want <field>=<value>)"`,
+      `[[ "$f" == poolset || "$f" == acctorder ]] && die "'$f' is written only by ccd route --session; nothing was touched"`,
       `_route_word_in "$f" "$seen" && die "--route $f given twice — one value per field; nothing was touched"; seen+="$f "`,
       `return 0`,
     ]);
     const dies = only.filter((l) => l.includes('die '));
-    expect(dies).toHaveLength(2);
+    expect(dies).toHaveLength(3);
     // The well-formedness refusal is the SAME sentence on both sides, each flag
     // spelled as the caller typed it...
     expect(verb).toContain(dies[0]!.replace('--route', '--set'));
@@ -624,7 +652,11 @@ describe('_route_argv_check IS cmd_route\'s validator, measured against the ship
     // as an assertion so that "no counterpart" stays a measurement: the day
     // `cmd_route` grows its own given-twice arm, this reds and somebody has to
     // decide whether the two are still allowed to differ.
-    expect(dies[1]).toContain('given twice');
+    // The pool set's refusal (Overlord W1, route-argv-refuses-the-set) is argv-only too, for the opposite reason:
+    // `cmd_route` IS the one writer of a set, so it must accept both fields there.
+    expect(dies[1]).toContain('written only by ccd route --session');
+    expect(verb.some((l) => l.includes('written only by ccd route --session'))).toBe(false);
+    expect(dies[2]).toContain('given twice');
     expect(verb.some((l) => l.includes('given twice'))).toBe(false);
   });
 });

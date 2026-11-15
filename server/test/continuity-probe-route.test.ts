@@ -1,6 +1,7 @@
 // Overlord W1a, the probes piece, PR B (plan `w1a-probes.md` Task 4; spec §3.3.5 C41, §3.3.9 C52): the probe door.
 // `GET /api/sessions/:id/probe` serves the caller's open round without what it expects, every question masked and rendered as
-// untrusted data; `POST` grades every answer closed-form against the masked question, records the book state (`open` after
+// untrusted data; `POST` grades every answer closed-form (against the masked question when it carries a placeholder, the
+// stored one otherwise), in the live generation only, records the book state (`open` after
 // a card or notes read since the round was asked, else `unmeasured`) and refuses a second answer. Fixture HOMEs only.
 import { createHash } from 'node:crypto';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -223,6 +224,51 @@ describe('GET: the open round, without what it expects', () => {
     round(last, { roundId: 'r-last' });
     c().db.prepare("UPDATE continuity_generations SET state = 'ended' WHERE id = ?").run(last.id);
     expect([(await get(app)).statusCode, c().openProbeRound(ID)]).toEqual([409, { ok: true, rows: [] }]);
+  });
+
+  it("answers only a round of the session's live generation: an older generation's open round is probe-none-open, never graded (review 2068 F3)", async () => {
+    app = await open();
+    const old = mint();
+    const r = round(old, { roundId: 'r-old' });
+    mint();
+    const res = await post(app, answers(r, RIGHT));
+    expect([res.statusCode, res.json().error]).toEqual([409, 'probe-none-open']);
+    expect(stored(r).every((row) => row.answeredAt === null && row.grade === null)).toBe(true);
+    expect(c().probeRoundRows(r, ID)).toEqual({ ok: true, rows: [] });
+    // A generation that has ended is not live, even when it is the session's newest.
+    const last = mint();
+    const r2 = round(last, { roundId: 'r-last' });
+    c().db.prepare("UPDATE continuity_generations SET state = 'ended' WHERE id = ?").run(last.id);
+    expect((await post(app, answers(r2, RIGHT))).json().error).toBe('probe-none-open');
+    // The live generation's round is answered as before.
+    const r3 = round(mint(), { roundId: 'r-live' });
+    expect((await post(app, answers(r3, RIGHT))).json().verdict).toBe('passed');
+  });
+
+  it('a wrong answer that differs from a choice only inside a masked secret fails; a copied masked choice still passes (review 2068 F6)', async () => {
+    app = await open();
+    const [A, B] = [secretOf('probe-f6-a'), secretOf('probe-f6-b')];
+    const qs = (): RoundInsert['questions'] => [{ qid: 'p1', cls: 'continuation', question: 'Next?',
+      choices: [`rotate ${A} then deploy`, 'run the migration', 'ask the operator'], expected: `rotate ${A} then deploy` }];
+    const r = round(mint(), { roundId: 'r-wrong', questions: qs() });
+    expect((await post(app, answers(r, [['p1', `rotate ${B} then deploy`]]))).json()).toMatchObject({ verdict: 'failed', grades: [{ id: 'p1', grade: 'fail' }] });
+    expect(JSON.stringify(stored(r))).not.toContain(B.slice(-40));
+    const r2 = round(mint(), { roundId: 'r-copied', questions: qs() });
+    const masked = JSON.parse(/choices: (\[.*\])/.exec((await get(app)).json().text as string)![1]!) as string[];
+    expect(masked[0]).toContain(SECRET_MASK);
+    expect((await post(app, answers(r2, [['p1', masked[0]!]]))).json().verdict).toBe('passed');
+  });
+
+  it('an abstention answer that carries a secret shape is graded, and fails: no choice was copied, so nothing was masked away (review 2068 F2)', async () => {
+    app = await open();
+    const r = round(mint(), { roundId: 'r-abstain' });
+    // Given whole (no placeholder, graded as stored) or copied with the placeholder in it, the answer fails either way.
+    for (const [id, given] of [['r-abstain', secretOf('probe-f2')], ['r-abstain-2', `rule ${SECRET_MASK}`]] as const) {
+      const rr = id === 'r-abstain' ? r : round(mint(), { roundId: id });
+      const res = await post(app, answers(rr, [['p1', '41'], ['p2', given], ['p3', 'merge wave 2']]));
+      expect(res.json(), id).toMatchObject({ verdict: 'failed', grades: [{ id: 'p1', grade: 'pass' }, { id: 'p2', grade: 'fail' }, { id: 'p3', grade: 'pass' }] });
+      expect(stored(rr)[1]!.answer).toContain(SECRET_MASK);
+    }
   });
 
   it('a long round is paged under the tool result cut, every page and every question whole across the pages', async () => {
