@@ -19,7 +19,7 @@ import type { RunCcd, WatcherCoordPort } from './ports.js';
 import type { LandingEntry } from '../../../shared/landingLine.js';
 import type { LandingLand } from './landingEntry.js';
 import {
-  landedAnswerOf, landedCallStep, landedMarkStep, landedMissingWarning, landedNext, landedNoticeFailure, landedNoticeModeOf,
+  landedAnswerOf, landedCallStep, landedExpectOf, landedMarkStep, landedMissingWarning, landedNext, landedNoticeFailure, landedNoticeModeOf,
   landedProjectsStep, landedProjectStep, landedPruneIds, landedStopped, mergedBody, mergedKey, mergedNoticeOf,
   pickLandedReads, type LandedCandidate, type LandedMemory,
 } from './landed.js';
@@ -106,7 +106,7 @@ export async function landedPass(deps: LandedLaneDeps): Promise<LandedPassResult
     }
     const mark = landedMarkStep(deps.coord.advanceLanding({
       kind: 'land', project: cand.project, pr: cand.pr, by: 'reader', at: deps.now(), outcome: answer.outcome,
-      expect: { id: cand.id, pinnedAt: cand.pinnedAt },
+      expect: landedExpectOf(cand),
     } satisfies LandingLand), cand);
     if (mark.act === 'held') {
       // The hold appeared between the read and the write; L1 decides when the entry is read again (`landedNext`'s `held`).

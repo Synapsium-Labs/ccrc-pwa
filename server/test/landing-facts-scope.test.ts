@@ -53,7 +53,7 @@ describe('landing facts: one project read across two projects', () => {
     db.exec('PRAGMA ignore_check_constraints = ON');
     db.prepare("UPDATE landing_entries SET pr = 0 WHERE id = 4").run();
     db.exec('PRAGMA ignore_check_constraints = OFF');
-    expect(read('project-a')).toEqual({ ok: false, error: 'landing-projection-unreadable', recovery: 'restart' });
+    expect(read('project-a')).toEqual({ ok: false, error: 'landing-projection-unreadable', recovery: 'repair' });
   });
 });
 
@@ -247,7 +247,8 @@ const EXPECTED_A = {
         "kind": "no-run"
       }
     }
-  ]
+  ],
+  "terminalRepairs": []
 };
 const EXPECTED_B = {
   "project": "project-b",
@@ -401,5 +402,6 @@ const EXPECTED_B = {
         "kind": "no-run"
       }
     }
-  ]
+  ],
+  "terminalRepairs": []
 };

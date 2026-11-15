@@ -42,6 +42,11 @@ export interface AdvanceGateFacts<R extends AdvanceRunFacts = AdvanceRunFacts> {
   readonly overConcurrency: () => { limit: number; running: number } | null;
 }
 
+/** A landing infrastructure failure as a `reject`: its `error` as `code`, every other field of its arm kept whole (wave 5i:
+ *  distributive over the two arms, so the projection arm's `repair` and the boundary arm's `mayApply` and `invalid` both survive). */
+type LandingInfrastructureReject<F extends LandingInfrastructureFailure = LandingInfrastructureFailure> =
+  F extends LandingInfrastructureFailure ? { code: F['error'] } & Omit<F, 'error'> : never;
+
 /** The body of a `reject` object: its `code` and exactly the fields the inline sends wrote. */
 export type AdvanceReject =
   | { code: 'unknown-run' | 'not-dispatched' | 'bad-session' }
@@ -52,7 +57,7 @@ export type AdvanceReject =
   | { code: 'cap-concurrency'; limit: number; running: number }
   // Landing order wave 5f: the line's infrastructure failures keep their recovery remedy, `mayApply` and typed invalid
   // metadata; the three mutation words an advance can meet carry nothing else.
-  | ({ code: LandingInfrastructureCode } & Omit<LandingInfrastructureFailure, 'error'>)
+  | LandingInfrastructureReject
   | { code: Extract<LandingMutationCode, 'landing-recovery-unresolved' | 'landing-identity-conflict' | 'landing-id-overflow'> };
 
 /** The reject `advanceLanding`'s own refusal or failure becomes: its `error` as `code`, every other field kept whole

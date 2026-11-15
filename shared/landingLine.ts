@@ -173,12 +173,22 @@ export const LANDING_INFRASTRUCTURE_CODE_MAP: Record<LandingInfrastructureCode, 
   'landing-db-apply': true, 'landing-db-commit': true, 'landing-fenced': true, 'landing-projection-unreadable': true,
 };
 export const LANDING_INFRASTRUCTURE_CODES = Object.keys(LANDING_INFRASTRUCTURE_CODE_MAP) as LandingInfrastructureCode[];
-export interface LandingInfrastructureFailure {
-  error: LandingInfrastructureCode;
+/** The failures of the line's boundary entrances (the journal, the database connection, the fence): what a replay or a
+ *  restart can clear. The ONLY arm that may stand in `landingFence`, so `'repair'` cannot enter it. */
+export interface LandingBoundaryFailure {
+  error: Exclude<LandingInfrastructureCode, 'landing-projection-unreadable'>;
   recovery: 'replay' | 'restart';
   mayApply?: true;
   invalid?: { reason: LandingJournalInvalidReason; record: number | null };
 }
+/** A row of the line that does not read (wave 5i, D-8627): the data is damaged, so neither a replay nor a restart clears
+ *  it. `repair` names the row's own data: the terminal repair of a retired PR (`coord/landingEntry.ts`) or an operator's
+ *  edit. It is never a fence word and never a promise that anything repairs itself. */
+export interface LandingProjectionFailure {
+  error: 'landing-projection-unreadable';
+  recovery: 'repair';
+}
+export type LandingInfrastructureFailure = LandingBoundaryFailure | LandingProjectionFailure;
 export type LandingMutationCode =
   | 'landing-entry-exists' | 'landing-entry-missing'
   | 'landing-after-missing' | 'landing-after-cross-project'

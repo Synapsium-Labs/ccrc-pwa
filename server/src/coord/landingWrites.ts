@@ -28,9 +28,10 @@
 //   7. an effective no-op (the same resulting afterIds and fixesMain) -> {kind:'noop'}, appending nothing.
 // Omitted `afterIds`/`fixesMain` keep the current value; `[]` and `false` are explicit clears.
 import type {
-  LandingEntry, LandingInfrastructureFailure, LandingLineFlags, LandingMutationCode, LandingRecovery, LandingSubjectRef,
+  LandingBoundaryFailure, LandingEntry, LandingInfrastructureFailure, LandingLineFlags, LandingMutationCode, LandingRecovery,
+  LandingSubjectRef,
 } from '../../../shared/landingLine.js';
-import type { LandingProjectionRead } from './landingEntry.js';
+import type { LandingProjectionRead, LandingTerminalRepair } from './landingEntry.js';
 import type { NoticeRecord } from '../notice.js';
 
 type Coordinator = { kind: 'no-run' } | { kind: 'run'; runId: number; claimedBy: string | null };
@@ -49,6 +50,9 @@ export interface LandingMutationFacts {
   foreignIds: number[];
   /** The current association of each entry, from its projection's own run id (never a historical one). */
   coordinators: { id: number; value: Coordinator | { kind: 'unreadable' } }[];
+  /** Wave 5i (D-8626): the terminal-evidence permission of each open row that does not read, from `landingFactsOf`. It is
+   *  independent of `projections` and `dependencies`, never a repaired display, and no reader may take it for readability. */
+  terminalRepairs: { id: number; value: LandingTerminalRepair }[];
 }
 export type LandingReadResult =
   | { ok: true; facts: LandingMutationFacts }
@@ -56,7 +60,7 @@ export type LandingReadResult =
 
 export type LandingJournalReplay =
   | { ok: true; applied: number; lastSeq: number }
-  | ({ ok: false } & LandingInfrastructureFailure);
+  | ({ ok: false } & LandingBoundaryFailure);
 export type LandingAuthorityWrite =
   | { ok: true; entry: LandingEntry; previous: LandingEntry | null; changed: boolean; seq: number | null; coordinator: Coordinator }
   | ({ ok: false } & LandingInfrastructureFailure)

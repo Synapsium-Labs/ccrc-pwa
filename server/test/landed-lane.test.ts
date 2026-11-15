@@ -420,7 +420,7 @@ describe('the landed reader walks projects one by one', () => {
     pinned(r.coord, 2502, Q);
     const realRead = r.coord.readLanding.bind(r.coord);
     vi.spyOn(r.coord, 'readLanding').mockImplementation((project: string) =>
-      project === P ? { ok: false, error: 'landing-projection-unreadable', recovery: 'restart' } : realRead(project));
+      project === P ? { ok: false, error: 'landing-projection-unreadable', recovery: 'repair' } : realRead(project));
     expect(await r.pass()).toMatchObject({ read: 1, stopped: null });
     expect(r.calls).toEqual([2502]);
     expect(r.warns).toEqual([]);
@@ -526,7 +526,7 @@ describe('the landed reader: the decisions the pass makes between its calls', ()
     r.memory.set(stale, memOf(1));
     const realRead = r.coord.readLanding.bind(r.coord);
     const spy = vi.spyOn(r.coord, 'readLanding').mockImplementation((project: string) =>
-      project === P ? { ok: false, error: 'landing-projection-unreadable', recovery: 'restart' } : realRead(project));
+      project === P ? { ok: false, error: 'landing-projection-unreadable', recovery: 'repair' } : realRead(project));
     expect(await r.pass()).toMatchObject({ read: 1, stopped: null });
     expect(r.calls).toEqual([3102]);
     expect(r.memory.has(idP), 'an incomplete inventory retains memory').toBe(true);
@@ -591,5 +591,114 @@ describe('the landed reader: the decisions the pass makes between its calls', ()
       'ccrc-server: landed reader: the merged record of project-a #3601 failed (feed down)',
       'ccrc-server: landed reader: the merged record of project-a #3602 failed (feed down)',
     ]);
+  });
+});
+
+describe('the landed reader retires a row whose pin metadata does not read, on a fresh terminal answer only (wave 5i, D-8626)', () => {
+  const damage = (r: Rig, pr: number, sql = "UPDATE landing_entries SET handoffCommit = 'not-a-hash' WHERE pr = ?"): void => { r.coord.db.prepare(sql).run(pr); };
+  const rawOf = (r: Rig, pr: number): Record<string, unknown> => r.coord.db.prepare('SELECT * FROM landing_entries WHERE pr = ?').get(pr) as Record<string, unknown>;
+  const retainedOf = (r: Rig, pr: number): Record<string, unknown> => { const { state: _s, detail: _d, ...rest } = rawOf(r, pr); return rest; };
+  const witnessOf = (r: Rig): unknown[] => r.coord.db.prepare('SELECT * FROM landing_projection_witness ORDER BY entryId').all();
+
+  it('a merged answer retires the unreadable row landed, carrying its token to the line; only state and detail move', async () => {
+    const r = await rig();
+    pinned(r.coord, 7001);
+    damage(r, 7001);
+    const retained = retainedOf(r, 7001);
+    const witnesses = witnessOf(r);
+    const advance = vi.spyOn(r.coord, 'advanceLanding');
+    r.answer.fn = (pr) => ran(mergedLine(pr));
+    expect(await r.pass()).toMatchObject({ read: 1, landed: 1, stopped: null });
+    expect(advance).toHaveBeenCalledWith(expect.objectContaining({ expect: { id: expect.any(Number), pinnedAt: expect.any(Number), repairToken: expect.stringMatching(/^[0-9a-f]{64}$/) } }));
+    expect(stateOf(r.coord, 7001)).toBe('landed');
+    expect(retainedOf(r, 7001)).toEqual(retained);
+    expect(witnessOf(r)).toEqual(witnesses);
+    expect(mergedRows(r)).toHaveLength(1);
+  });
+
+  it('a normal row beside it is marked as before and carries no token', async () => {
+    const r = await rig();
+    pinned(r.coord, 7101);
+    pinned(r.coord, 7102);
+    damage(r, 7101);
+    const advance = vi.spyOn(r.coord, 'advanceLanding');
+    r.answer.fn = (pr) => ran(mergedLine(pr));
+    await r.pass();
+    const expects = advance.mock.calls.map((c) => (c[0] as LandingLand).expect);
+    expect(expects.filter((e) => e !== null && 'repairToken' in e)).toHaveLength(1);
+    expect(expects.filter((e) => e !== null && !('repairToken' in e))).toHaveLength(1);
+    expect(stateOf(r.coord, 7101)).toBe('landed');
+    expect(stateOf(r.coord, 7102)).toBe('landed');
+  });
+
+  it('closed and absent retire it closed', async () => {
+    const r = await rig();
+    pinned(r.coord, 7201);
+    pinned(r.coord, 7202);
+    damage(r, 7201);
+    damage(r, 7202, "UPDATE landing_entries SET setBy = '' WHERE pr = ?");
+    r.answer.fn = (pr) => ran(pr === 7201 ? line(7201, { state: 'closed' }) : `${JSON.stringify({ number: 7202, state: 'absent' })}\n`);
+    expect(await r.pass()).toMatchObject({ read: 2, closed: 2 });
+    expect(stateOf(r.coord, 7201)).toBe('closed');
+    expect(stateOf(r.coord, 7202)).toBe('closed');
+  });
+
+  it.each([
+    ['open', (pr: number) => ran(openLine(pr))],
+    ['unmeasured', (pr: number) => ran(unmeasured(pr, 'gh-failed'))],
+    ['a failed call', () => ran('boom', false)],
+    ['an unparseable answer', () => ran('not json\n')],
+  ])('%s retires nothing: the row and the line are untouched', async (_n, answer) => {
+    const r = await rig();
+    pinned(r.coord, 7301);
+    damage(r, 7301);
+    const before = rawOf(r, 7301);
+    r.answer.fn = answer;
+    expect(await r.pass()).toMatchObject({ read: 1, landed: 0, closed: 0 });
+    expect(rawOf(r, 7301)).toEqual(before);
+    expect(mergedRows(r)).toEqual([]);
+  });
+
+  it('the cap and the beat are unchanged: twelve unreadable rows are read ten at a time', async () => {
+    const r = await rig();
+    const prs = Array.from({ length: 12 }, (_, i) => 7401 + i);
+    prs.forEach((pr) => { pinned(r.coord, pr); damage(r, pr); });
+    r.answer.fn = (pr) => ran(mergedLine(pr));
+    expect(await r.pass()).toMatchObject({ read: LANDED_READS_PER_SWEEP, landed: LANDED_READS_PER_SWEEP });
+    expect(await r.pass()).toMatchObject({ read: 2, landed: 2 });
+  });
+
+  it('a quarantined row is never read, though the forge would say merged', async () => {
+    const r = await rig();
+    pinned(r.coord, 7501);
+    damage(r, 7501);
+    r.coord.db.prepare("UPDATE landing_entries SET state = 'unknown', quarantineKind = 'stale-episode-head' WHERE pr = 7501").run();
+    r.answer.fn = (pr) => ran(mergedLine(pr));
+    expect(await r.pass()).toMatchObject({ read: 0, landed: 0 });
+    expect(r.calls).toEqual([]);
+  });
+
+  it('a byte that changes between the read and the mark is moved: nothing is written, and the next pass reads the new token', async () => {
+    const r = await rig();
+    pinned(r.coord, 7601);
+    damage(r, 7601);
+    r.answer.fn = (pr) => {
+      r.coord.db.prepare("UPDATE landing_entries SET handoffCommit = 'changed-meanwhile' WHERE pr = ?").run(pr);
+      return ran(mergedLine(pr));
+    };
+    expect(await r.pass()).toMatchObject({ read: 1, landed: 0, closed: 0 });
+    expect(rawOf(r, 7601).handoffCommit).toBe('changed-meanwhile');
+    expect(rawOf(r, 7601).detail).toBeNull();
+    r.answer.fn = (pr) => ran(mergedLine(pr));
+    expect(await r.pass()).toMatchObject({ read: 1, landed: 1 });
+    expect(stateOf(r.coord, 7601)).toBe('landed');
+  });
+
+  it('a project with only an unknown-state row is walked, without a session or a pin', async () => {
+    const r = await rig();
+    r.coord.db.prepare("INSERT INTO landing_entries (project, pr, pinnedSha, handoffCommit, runId, state, setBy, pinnedAt) VALUES (?, 7701, 'x', 'y', NULL, 'future-word', 'z', 1)").run(P);
+    r.answer.fn = (pr) => ran(line(pr, { state: 'closed' }));
+    expect(await r.pass()).toMatchObject({ read: 1, closed: 1 });
+    expect(stateOf(r.coord, 7701)).toBe('closed');
   });
 });

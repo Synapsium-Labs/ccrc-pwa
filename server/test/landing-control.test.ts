@@ -353,7 +353,7 @@ const factsOf = (entries: LandingEntry[] = [entry(7)], over: Partial<LandingMuta
   projections: entries.map((x) => ({ id: x.id, value: { kind: 'readable' as const, quarantine: null } })),
   dependencies: entries.map((x) => ({ id: x.id, value: { kind: 'readable' as const, afterIds: x.afterIds } })),
   recovery: { subjects: [], hold: null }, nextId: 200, foreignIds: [],
-  coordinators: entries.map((x) => ({ id: x.id, value: { kind: 'no-run' as const } })), ...over,
+  coordinators: entries.map((x) => ({ id: x.id, value: { kind: 'no-run' as const } })), terminalRepairs: [], ...over,
 });
 const probeWith = (over: Record<string, unknown> = {}, headOver: Record<string, unknown> = {}) => {
   const base = controlRead();

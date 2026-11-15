@@ -32,9 +32,15 @@ export const mergedBody = (number: number | null, reason: string | null): string
   ? `PR #${number ?? '?'} merged; nothing archived.`
   : `PR #${number ?? '?'} merged — ${reason}; nothing archived.`;
 
-/** One entry the reader may read: a row the land arm could mark. */
+/** One entry the reader may read: a row the land arm could mark. `repairToken` (wave 5i, D-8626) is present only on a
+ *  terminal-repair candidate: a row that does not read, whose `terminalRepairs` verdict is eligible. */
 export interface LandedCandidate {
-  project: string; id: number; pr: number; pinnedAt: number; pinnedSha: string; runId: number | null;
+  project: string; id: number; pr: number; pinnedAt: number; pinnedSha: string; runId: number | null; repairToken?: string;
+}
+
+/** The land arm's compare-and-set for a candidate: the entry the reader read, and a repair candidate's token beside it. */
+export function landedExpectOf(c: LandedCandidate): NonNullable<LandingLand['expect']> {
+  return { id: c.id, pinnedAt: c.pinnedAt, ...(c.repairToken === undefined ? {} : { repairToken: c.repairToken }) };
 }
 
 /** The entries of one project's facts that are landable and not held, in the facts' order. A held subject is the line's
@@ -45,9 +51,14 @@ export function landedCandidatesOf(facts: LandingMutationFacts): LandedCandidate
   const out: LandedCandidate[] = [];
   for (const e of facts.entries) {
     const projection = facts.projections.find((p) => p.id === e.id)?.value ?? null;
-    if (!isLandable(e.state, projection)) continue;
+    // Normal first: `isLandable` is the strict gate and stays. A row that does not read is a candidate only through its
+    // separate terminal verdict (Amendment B), which carries its token and never makes the projection look readable.
+    const repair = facts.terminalRepairs.find((r) => r.id === e.id)?.value;
+    const token = isLandable(e.state, projection) ? undefined : repair?.kind === 'eligible' ? repair.token : null;
+    if (token === null) continue;
     if (!landingHoldGate(facts.recovery, 'land', { project: e.project, pr: e.pr }, projection).ok) continue;
-    out.push({ project: e.project, id: e.id, pr: e.pr, pinnedAt: e.pinnedAt, pinnedSha: e.pinnedSha, runId: e.runId });
+    out.push({ project: e.project, id: e.id, pr: e.pr, pinnedAt: e.pinnedAt, pinnedSha: e.pinnedSha, runId: e.runId,
+      ...(token === undefined ? {} : { repairToken: token }) });
   }
   return out;
 }

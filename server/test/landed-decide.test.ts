@@ -2,7 +2,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   LANDED_FRESH_MS, LANDED_READS_PER_SWEEP, LANDED_STANDING_BACKOFF_MS, landedAnswerOf, landedCandidatesOf, landedNext,
-  isHeldRefusal, closeLandingOf, landedNoticeModeOf, mergedBody, mergedKey, mergedNoticeOf, pickLandedReads, type LandedCandidate, type LandedMemory,
+  isHeldRefusal, closeLandingOf, landedExpectOf, landedNoticeModeOf, mergedBody, mergedKey, mergedNoticeOf, pickLandedReads, type LandedCandidate, type LandedMemory,
 } from '../src/coord/landed.js';
 import { PR_BACKOFF_MAX_MS, PR_SWEEP_MS } from '../src/laneSchedule.js';
 import type { PrMergedFacts, PrStatePrRead } from '../src/prstate.js';
@@ -119,11 +119,13 @@ describe('landedNext', () => {
 
 describe('landedCandidatesOf', () => {
   /** A real `LandingMutationFacts`: the fields the test is about, honest empty values for the rest. */
-  const factsOf = (o: { entries: LandingEntry[]; projections: LandingMutationFacts['projections']; recovery: LandingRecovery }): LandingMutationFacts => ({
+  const factsOf = (o: { entries: LandingEntry[]; projections: LandingMutationFacts['projections']; recovery: LandingRecovery;
+    terminalRepairs?: LandingMutationFacts['terminalRepairs'] }): LandingMutationFacts => ({
     project: 'project-a', flags: { operatorPaused: false, mainRedHold: false }, entries: o.entries, projections: o.projections,
     dependencies: o.entries.map((e) => ({ id: e.id, value: { kind: 'readable' as const, afterIds: [] } })),
     recovery: o.recovery, nextId: Math.max(0, ...o.entries.map((e) => e.id)) + 1, foreignIds: [],
     coordinators: o.entries.map((e) => ({ id: e.id, value: { kind: 'no-run' as const } })),
+    terminalRepairs: o.terminalRepairs ?? [],
   });
   const entry = (id: number, state: LandingEntryState): LandingEntry => ({ id, project: 'project-a', pr: 100 + id, pinnedSha: HEAD, handoffCommit: HEAD,
     runId: id, state, baseSha: null, ejectionKind: null, ejections: 0, afterIds: [], fixesMain: false, setBy: 'lane-a', pinnedAt: id * 10 });
@@ -164,6 +166,45 @@ describe('landedCandidatesOf', () => {
   });
   it('an identity conflict holds the whole project: no candidate', () => {
     expect(landedCandidatesOf(facts2(held(subject('project-a', 150, { kind: 'identity-conflict', conflicts: [] }))))).toEqual([]);
+  });
+});
+
+describe('landedCandidatesOf: the terminal-repair alternative (wave 5i, D-8626)', () => {
+  const factsOf = (entries: LandingEntry[], terminalRepairs: LandingMutationFacts['terminalRepairs'], recovery: LandingRecovery = NO_HOLD): LandingMutationFacts => ({
+    project: 'project-a', flags: { operatorPaused: false, mainRedHold: false }, entries,
+    projections: entries.map((e) => ({ id: e.id, value: { kind: 'unreadable' } as LandingProjectionRead })),
+    dependencies: entries.map((e) => ({ id: e.id, value: { kind: 'readable' as const, afterIds: [] } })), recovery, nextId: 99, foreignIds: [],
+    coordinators: entries.map((e) => ({ id: e.id, value: { kind: 'no-run' as const } })), terminalRepairs,
+  });
+  const entry = (id: number, state: LandingEntryState): LandingEntry => ({ id, project: 'project-a', pr: 100 + id, pinnedSha: HEAD, handoffCommit: HEAD,
+    runId: id, state, baseSha: null, ejectionKind: null, ejections: 0, afterIds: [], fixesMain: false, setBy: 'lane-a', pinnedAt: id * 10 });
+  const T = 'c'.repeat(64);
+  it('an eligible row is a candidate carrying its token; a blocked one, and a row with no verdict, are not', () => {
+    const got = landedCandidatesOf(factsOf([entry(1, 'pinned'), entry(2, 'pinned'), entry(3, 'unknown'), entry(4, 'pinned')], [
+      { id: 1, value: { kind: 'eligible', token: T } }, { id: 2, value: { kind: 'blocked', reason: 'quarantine' } },
+      { id: 3, value: { kind: 'eligible', token: 'd'.repeat(64) } },
+    ]));
+    expect(got).toEqual([
+      { project: 'project-a', id: 1, pr: 101, pinnedAt: 10, pinnedSha: HEAD, runId: 1, repairToken: T },
+      { project: 'project-a', id: 3, pr: 103, pinnedAt: 30, pinnedSha: HEAD, runId: 3, repairToken: 'd'.repeat(64) },
+    ]);
+  });
+  it('a normal candidate carries no repairToken key at all', () => {
+    const facts = factsOf([entry(1, 'pinned')], []);
+    facts.projections = [{ id: 1, value: { kind: 'readable', quarantine: null } }];
+    expect(landedCandidatesOf(facts)).toEqual([{ project: 'project-a', id: 1, pr: 101, pinnedAt: 10, pinnedSha: HEAD, runId: 1 }]);
+  });
+  it('the hold gate still applies: a repair row that is its own unresolved subject, or sits in an identity-conflicted project, is skipped', () => {
+    const subject = (pr: number, projection: LandingRecoverySubject['projection']): LandingRecoverySubject => ({
+      id: 1, project: 'project-a', pr, creation: { kind: 'not-recorded' }, historical: { binding: { kind: 'no-run' }, observedSeq: 1 }, projection, authority: { kind: 'not-set' } });
+    const held = (s: LandingRecoverySubject): LandingRecovery => ({ hold: { reason: 'landing-recovery-unresolved', subjectIds: [s.id] }, subjects: [s] });
+    const verdicts: LandingMutationFacts['terminalRepairs'] = [{ id: 1, value: { kind: 'eligible', token: T } }, { id: 2, value: { kind: 'eligible', token: T } }];
+    expect(ids(landedCandidatesOf(factsOf([entry(1, 'pinned'), entry(2, 'pinned')], verdicts, held(subject(101, { kind: 'missing', association: 'unmeasured' })))))).toEqual([2]);
+    expect(landedCandidatesOf(factsOf([entry(1, 'pinned'), entry(2, 'pinned')], verdicts, held(subject(150, { kind: 'identity-conflict', conflicts: [] }))))).toEqual([]);
+  });
+  it('landedExpectOf carries the token into the compare-and-set, and only for a repair candidate', () => {
+    expect(landedExpectOf({ project: 'project-a', id: 1, pr: 101, pinnedAt: 10, pinnedSha: HEAD, runId: 1 })).toEqual({ id: 1, pinnedAt: 10 });
+    expect(landedExpectOf({ project: 'project-a', id: 1, pr: 101, pinnedAt: 10, pinnedSha: HEAD, runId: 1, repairToken: T })).toEqual({ id: 1, pinnedAt: 10, repairToken: T });
   });
 });
 
