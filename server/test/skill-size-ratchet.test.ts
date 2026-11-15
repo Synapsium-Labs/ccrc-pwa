@@ -48,7 +48,11 @@ const SKILL_FILE = /^ccd\/[^/]+-skill\/SKILL\.md$/;
 // The budget was 16,000 bytes: 5,000 tokens at 3.2 bytes a token. It was raised once, to 16,750, to fit
 // four waiting coordinator clauses as written (the autonomy, recall, Linear and Overlord clauses), by the
 // operator's decision (operator item 326, programme `overlord`). A further raise needs the operator's
-// decision again. At 3.2 bytes a token, 16,750 bytes is about 5,234 tokens: 234 past the 5,000 Claude
+// decision again. The sum it fits is 16,524 bytes: where the contract ended (13,660), the four clause
+// lines as their plans write them (2,813), the count word (5), and the fixed new words of D-8126's
+// clause 11 rewrite (46). D-8126's rewrites of clauses 4, 11, 19 and 20 had no other fixed words, so
+// their further net growth must fit in the 226 bytes left; a rewrite that needs more goes back to the
+// operator. At 3.2 bytes a token, 16,750 bytes is about 5,234 tokens: 234 past the 5,000 Claude
 // Code re-attaches. The cut notice before the contract covers that tail: a session that cannot see the
 // section after the contract loads the skill again. These files measure about 4.0 bytes a token on a
 // public tokenizer; Claude's own is not measured here and counts more tokens for the same text.
