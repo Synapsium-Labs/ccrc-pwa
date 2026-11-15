@@ -122,3 +122,40 @@ Pass: 248 tests, 5 files, rc 0 (full selection of the brief, `--maxWorkers=2`), 
 Each mutant was restored from the saved copy; `cmp` matched; the unmutated file is the committed one.
 
 A marked terminal target: a stored `landed` target carrying the `stale-episode-head` marker and one damage field settles the edge (H ready, cue queues once, then `duplicate`), consistent with fix round 1's ruling. It was green at the fix, not red-first; 249 tests pass in the 5-file selection.
+
+## R1
+
+**Defect (F1).** In `decideLandingWrite`'s retreat arm, `current.state !== 'pinned'` read the DISPLAY state before the
+projection-unreadable refusal. An owned row whose stored word is `pinned` but whose afterIds, fixesMain, ejectionKind,
+pinnedAt or ejections do not read displays `unknown`, took the `kept` branch, and the retreat moved the run merging to
+working past an entry nobody can read.
+
+**Rule.** For an owned row (`current.runId === runId`) whose STORED word is exactly `pinned`, a projection that is not
+`readable` is refused with `landing-projection-unreadable`, recovery `repair`, before any display-state test and before the
+equal/stale head comparison: no move, no write, no ejection count, no ask. Any other stored word, no record, or an unowned
+row keeps today's answer. Neither terminal repair nor `stateWords` authorizes a retreat through an unreadable owned row.
+
+**Interface (departure `retreat-reads-stored-word`).** `decideLandingWrite` gains the required input
+`storedState: LandingEntryState | 'unrecognised' | null` (the stored word of `current`, null when no row or no record).
+store.ts hunk: in `CoordStore.advanceLanding`, 1 line added (`const storedState = facts?.stateWords.find(...)`) and the
+`decideLandingWrite(...)` call line changed (2 lines touched in all, nothing else).
+
+**Cases.** Pure (`landing-entry-store.test.ts`): owned stored-pinned display-unknown over unreadable/null projection,
+bare/named, equal/stale head refuse; unowned, null-runId, and stored landed/closed/withdrawn/ejected/unknown/unrecognised/null
+keep; readable owned pinned still ejects/quarantines. HTTP (`landing-advance-route.test.ts`): damaged afterIds, fixesMain,
+ejectionKind, pinnedAt, ejections x equal/stale x bare/named = 20 cases, ejections seeded 1 where not the damaged field,
+asserting 503 `landing-projection-unreadable` `recovery: repair`, run still merging, raw entry/run/witness rows and mail count
+byte-identical, no ask; controls: readable bare/named equal-head eject, stale-head quarantine, owned stored-landed damaged row
+kept. The two oversized pinnedAt/ejections store cases (retreat step) now expect the refusal, not `kept`.
+Red at ef6611c40 (new cases only): 21 failed (20 HTTP, each 200 with `landing: kept unknown`; 1 pure `kept` instead of
+refuse); controls were green. Green at c93a33136: landing-advance-route, landing-entry-store, landing-writes,
+landing-terminal-damage, landing-ejection-ask, landing-land-store, landing-entry-census: 7 files, 327 tests passed.
+
+**Mutations** (measured at c93a33136; selection: landing-advance-route + landing-entry-store with `-t "R1|fix round 2"`;
+saved copy, `cmp` restore, same selection green after: 27 passed).
+
+| Mutant | Result |
+|---|---|
+| (a) `ownedPinned = false` (refusal deleted) | 21 failed (the 20 HTTP damaged cases + the pure refuse case) |
+| (b) `ownedPinned` reads `current.state === 'pinned'` (display) | 21 failed, same set |
+| (c) `ownedPinned = storedState === 'pinned'` and the outer ownership test dropped | 1 failed: the pure "unowned or other word keeps today's answer" case |
