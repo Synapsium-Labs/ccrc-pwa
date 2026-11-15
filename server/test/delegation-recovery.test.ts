@@ -3595,7 +3595,7 @@ describe('the pure/impure split is explicit, and nothing pure mints an ID or rea
     expect(src.lastIndexOf('byIdentity(identity)', at)).toBeGreaterThan(0);
     expect(src.lastIndexOf('byPath(request.canonicalPath)', at)).toBeGreaterThan(src.lastIndexOf('byIdentity(identity)', at));
   });
-  it('only the model is imported for canonical JSON: neither module defines a second canonical writer', () => {
+  it('the delegation modules import the one RFC 8785 writer: neither defines a second canonical writer', () => {
     for (const file of ['delegation-journal.ts', 'delegation-checkpoint.ts']) {
       const src = strip(readFileSync(path.join(dir, file), 'utf8'));
       expect(src).not.toMatch(/JSON\.stringify\([^)]*\)\s*\+\s*'\\n'|function canonical|const canonical[A-Z]\w* =/);
