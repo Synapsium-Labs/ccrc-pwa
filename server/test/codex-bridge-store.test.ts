@@ -692,15 +692,22 @@ describe.skipIf(!PY)('the start check: a damaged store is set aside and started 
   it.skipIf(OLD_PY)('RETENTION: two damaged starts in a row leave only the newest copy and its siblings', async () => {
     const { home, dir, db } = lane('cb-store-start-keep-');
     // An older copy and a stray sibling of another, both in the copy's name shape; two names outside it stay.
-    for (const n of ['reasoning.sqlite.damaged-20200101T000000Z', 'reasoning.sqlite.damaged-20200101T000000Z-wal',
-      'reasoning.sqlite.damaged-20200102T000000Z-shm', 'reasoning.sqlite.damaged-notes',
-      'other.sqlite.damaged-20200101T000000Z']) writeFileSync(path.join(dir, n), 'old', { mode: 0o600 });
-    await run(home, [{ op: 'store-damage', path: db, how: 'stale-index', walCall: 'call_fx_wal' }, { op: 'store-open', path: db }]);
+    const older = ['reasoning.sqlite.damaged-20200101T000000Z', 'reasoning.sqlite.damaged-20200101T000000Z-wal',
+      'reasoning.sqlite.damaged-20200102T000000Z-shm'];
+    for (const n of [...older, 'reasoning.sqlite.damaged-notes', 'other.sqlite.damaged-20200101T000000Z']) {
+      writeFileSync(path.join(dir, n), 'old', { mode: 0o600 });
+    }
+    // The first start's copy is stamped with `2020` in its time of day, as a real clock does at 20:20, at xx:20:20 or
+    // at T220205Z: the case names the older files it means, never a date fragment a fresh stamp can also carry. The
+    // second start keeps the real clock, so the stamp's own format is still the one under test there.
+    await run(home, [{ op: 'store-damage', path: db, how: 'stale-index', walCall: 'call_fx_wal' }, { op: 'store-open', path: db }],
+      { consts: { 'store.DAMAGED_STAMP': '%Y%m%dT2020%SZ' } });
     const first = damaged(dir).filter((n) => COPY_RE.test(n));
     expect(first).toHaveLength(1);
-    expect(first[0]).not.toBe('reasoning.sqlite.damaged-20200101T000000Z');
+    expect(first[0]).toContain('2020');
+    expect(older).not.toContain(first[0]);
     // The first start already removed the older copy and the stray sibling; its own copy keeps its WAL.
-    expect(damaged(dir).filter((n) => n.includes('2020'))).toEqual([]);
+    for (const n of older) expect(existsSync(path.join(dir, n)), n).toBe(false);
     expect(existsSync(path.join(dir, first[0] + '-wal'))).toBe(true);
     // The stamp has one-second resolution: the second start waits past it, so its copy has a name of its own.
     await run(home, [

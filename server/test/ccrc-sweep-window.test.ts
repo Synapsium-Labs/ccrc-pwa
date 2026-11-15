@@ -780,8 +780,10 @@ describe('W21: a signal to the sweep\'s process group during a concurrent batch 
         `ended by ${sig}: signal ${ended!.signal}, code ${ended!.code}`).toBe(true);
       expect(ended!.stdout).not.toContain(SWEEP_OK);
       if (mode.startsWith('full')) {
-        // A survivor in a TERMed group writes its capture files while `rm -rf` runs: the dir is asserted only without one.
-        if (after.termed.length === 0) expect(after.left.filter((n) => n.startsWith('ccrc-sweep.')), `left in tmp: ${after.left.join(' ')}`).toEqual([]);
+        // The dir is asserted whatever survived. A job TERMed inside its own `open` of a capture file still finishes
+        // that create, and one `rm -rf` lost to it (`Directory not empty`, with or without a survivor: measured 6 runs in
+        // 868 on a loaded box, every one of them with none); `_upd_sweep_rm` removes again until its `rmdir` succeeds.
+        expect(after.left.filter((n) => n.startsWith('ccrc-sweep.')), `left in tmp: ${after.left.join(' ')}`).toEqual([]);
         expect(after.leaks, `launcher leaks (survivors in a group never TERMed): ${after.leaks.join(' ')} of ${after.found.join(' ')}`).toEqual([]);
         expect(started, 'jobs started: the loop-top stop check keeps the launcher from forking all 120').toBeLessThan(120);
       }
@@ -819,7 +821,101 @@ describe('W21: a signal to the sweep\'s process group during a concurrent batch 
     // Wave 12, Reading 8 (D-4072): a shell-alone INT ends the run BY the signal (the handler re-raises, D-3988, answer 3565).
     expect(ended!.signal === 'SIGINT', `ended by SIGINT: signal ${ended!.signal}, code ${ended!.code}`).toBe(true);
     expect(ended!.stdout).not.toContain(SWEEP_OK);
-    if (after.termed.length === 0) expect(after.left.filter((n) => n.startsWith('ccrc-sweep.')), `left in tmp: ${after.left.join(' ')}`).toEqual([]);
+    // Asserted whatever survived, as in the launch-loop cases above (`_upd_sweep_rm`).
+    expect(after.left.filter((n) => n.startsWith('ccrc-sweep.')), `left in tmp: ${after.left.join(' ')}`).toEqual([]);
+    expect(after.leaks, `launcher leaks (survivors in a group never TERMed): ${after.leaks.join(' ')} of ${after.found.join(' ')}`).toEqual([]);
+    noPoison(box);
+  }, 60_000);
+
+  // THE REMOVAL RACE, PLANTED: a job TERMed inside its own `open` of a capture file finishes that create after the TERM
+  // (the kernel ends a syscall in flight before the signal), so the exit chain's one `rm -rf` could unlink every entry
+  // and then fail its `rmdir`, leaving a dir whose `owner` was already removed, which no later sweep's cleanup removes
+  // (the merge-queue failure of 2026-11-14; measured 6 runs in 868 of the launch-loop TERM case on a loaded box, every
+  // one with no survivor and only `<k>.out` or `<k>.err` left). Here `rm` loses that race once, by construction: its
+  // first removal of the scratch dir unlinks the entries, a capture file appears, and its `rmdir` fails.
+  itLinux('W21: a capture file created while the exit chain removes the scratch dir does not leave the dir', async () => {
+    const rmRace = [
+      'rm() {',
+      '  if [ "$#" -eq 3 ] && [ "$1" = -rf ] && [ "$2" = -- ] && [[ "$3" == */ccrc-sweep.* ]] && [ ! -e "$HOME/rm-raced" ]; then',
+      '    : >"$HOME/rm-raced"; command rm -rf -- "$3"/*; : >"$3/0.out"; command rmdir -- "$3"; return',
+      '  fi',
+      '  command rm "$@"',
+      '}',
+    ].join('\n');
+    const script = fixtureScript('v21r.sh', 'printf \'%s\\n\' "$1" >> "$HOME/fixture-calls"\nsleep 20');
+    const box = makeBox({ units: [stable(A, 0), stable(B, 1)], verifySrc: script });
+    const g = spawnGroup(box, { pre: `${killShadow}\n${rmRace}` });
+    let ended: Ended | null = null;
+    let after: ReturnType<typeof collect>;
+    try {
+      for (let i = 0; i < 150 && fixtureCalls(box).length < 2; i++) await sleepMs(100);
+      try { process.kill(g.pid, 'SIGTERM'); } catch { /* gone: the assertions say so */ }
+      ended = await Promise.race([g.done, sleepMs(15_000).then(() => null)]);
+    } finally {
+      try { process.kill(-g.pid, 'SIGKILL'); } catch { /* gone */ }
+      after = collect(box);
+    }
+    expect(fixtureCalls(box), 'both jobs were running when the signal was sent').toHaveLength(2);
+    expect(ended, 'the sweep ended on its own, within 15 s').not.toBeNull();
+    expect(ended!.signal === 'SIGTERM' || ended!.code === 143, `ended by SIGTERM: signal ${ended!.signal}, code ${ended!.code}`).toBe(true);
+    expect(existsSync(join(box.home, 'rm-raced')), 'the planted race fired').toBe(true);
+    expect(after.left.filter((n) => n.startsWith('ccrc-sweep.')), `left in tmp: ${after.left.join(' ')}`).toEqual([]);
+    expect(after.jobs, `survivors: ${after.found.join(' ')}`).toEqual([]);
+    noPoison(box);
+  }, 60_000);
+
+  // THE LAUNCHER BEFORE ITS RECORD, PLANTED: a signal can end the run after the launcher's fork and before the sweep's
+  // `printf` writes `launcher.proc` (a starved shell whose launcher is already forking: measured on a loaded box, where
+  // the stop then found no pid, the launcher forked every job, and the jobs it forked after the TERM ran on). Here that
+  // `printf` waits for ten `.pid` files, TERMs its own shell and writes nothing, so the exit chain finds the file empty
+  // and must stop the launcher by the fork's own `$!` (without it: red 8 runs in 8). The launcher's
+  // next `.pid` write is held until the exit chain has looked, so the launcher cannot finish its loop first.
+  itLinux('W21: a TERM before the sweep has recorded its launcher still stops the launcher, and leaves no job and no scratch dir', async () => {
+    const procRace = [
+      'printf() {',
+      '  if [ "$BASHPID" = "$$" ] && [ ! -e "$HOME/proc-raced" ] && [ -n "${vdir:-}" ] && [ /dev/stdout -ef "$vdir/launcher.proc" ]; then',
+      '    : >"$HOME/proc-raced"',
+      '    local w=0 n f',
+      '    while [ "$w" -lt 2000 ]; do',
+      '      n=0; for f in "$vdir"/*.pid; do [ -e "$f" ] && n=$((n + 1)); done',
+      '      [ "$n" -lt 10 ] || break',
+      '      sleep 0.01; w=$((w + 1))',
+      '    done',
+      // `wait`, which a terminating signal breaks at once.
+      '    : >"$HOME/proc-termed"; builtin kill -TERM "$BASHPID"; wait "$!"; return 0',
+      '  fi',
+      // The launcher's next `.pid` write waits until the exit chain has looked (its stop file, or its first TERM).
+      '  if [ "$BASHPID" != "$$" ] && [ -e "$HOME/proc-termed" ] && [ ! -e "$HOME/launcher-held" ]; then',
+      '    : >"$HOME/launcher-held"',
+      '    local h=0',
+      '    while [ "$h" -lt 1000 ] && [ ! -e "$vdir/stop" ] && [ ! -e "$HOME/kill-log" ]; do sleep 0.01; h=$((h + 1)); done',
+      '  fi',
+      '  builtin printf "$@"',
+      '}',
+    ].join('\n');
+    const script = fixtureScript('v21p.sh', 'printf \'%s\\n\' "$1" >> "$HOME/fixture-calls"\nsleep 20');
+    const units = Array.from({ length: 120 }, (_, i) => stable(`claude-session@demo-u${i}.service`, i));
+    const box = makeBox({ units, verifySrc: script });
+    const g = spawnGroup(box, { pre: `${killShadow}\n${procRace}` });
+    let ended: Ended | null = null;
+    let after: ReturnType<typeof collect>;
+    try {
+      ended = await Promise.race([g.done, sleepMs(30_000).then(() => null)]);
+    } finally {
+      try { process.kill(-g.pid, 'SIGKILL'); } catch { /* gone */ }
+      after = collect(box);
+    }
+    const started = killLog(box).filter((l) => l.startsWith('-TERM -- -')).length;
+    expect(existsSync(join(box.home, 'proc-raced')), 'the planted race fired').toBe(true);
+    expect(ended, 'the sweep ended on its own, within 30 s').not.toBeNull();
+    expect(ended!.signal === 'SIGTERM' || ended!.code === 143, `ended by SIGTERM: signal ${ended!.signal}, code ${ended!.code}`).toBe(true);
+    expect(ended!.stdout).not.toContain(SWEEP_OK);
+    expect(started, 'the ten recorded jobs were TERMed, and the stopped launcher forked no more than its loop-top check allows')
+      .toBeGreaterThanOrEqual(10);
+    expect(started, 'jobs started: the launcher was stopped').toBeLessThan(120);
+    // Every job that ran its script was one the exit chain TERMed: none was forked after it looked.
+    expect(fixtureCalls(box).length, `verify calls ${fixtureCalls(box).length}, jobs TERMed ${started}`).toBeLessThanOrEqual(started);
+    expect(after.left.filter((n) => n.startsWith('ccrc-sweep.')), `left in tmp: ${after.left.join(' ')}`).toEqual([]);
     expect(after.leaks, `launcher leaks (survivors in a group never TERMed): ${after.leaks.join(' ')} of ${after.found.join(' ')}`).toEqual([]);
     noPoison(box);
   }, 60_000);
