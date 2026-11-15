@@ -35,10 +35,10 @@ import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import {
   EXIT, COVERAGE, SCHEMA_VERSION, UUID_RE, HARNESSES, CLI_STAT_DEADLINE_MS,
-  historyPaths, readBoxEnvValue, decideCliStore, CONTROL_FILE_MAX, decideStatusRead, capOf, floorThreshold, exportHorizonDays, parseOpMarker,
+  historyPaths, decideCliStore, CONTROL_FILE_MAX, decideStatusRead, capOf, floorThreshold, exportHorizonDays, parseOpMarker,
   decideStatusReadFailure, RETENTION_STATE_META, SIDECAR_WALK_META, decideGrepIndex, parsePassMarker, decidePassLive, parsePassDied, decideOpLive,
 } from './lib.mjs';
-import { StoreError, measureStoreFacts, openReader, userVersion, measuredSize, readBounded, FTS_GATE_SQL, ftsGateFactsOn } from './store.mjs';
+import { StoreError, openReader, userVersion, measuredSize, readBounded, FTS_GATE_SQL, ftsGateFactsOn } from './store.mjs';
 // The health block's own imports (task 28). Namespace imports, so this block
 // binds no name the status code above already imported.
 import * as healthLib from './lib.mjs';
@@ -67,6 +67,9 @@ import { runTree, grepVerb, describeVerb, expandVerb, touchedVerb, familiesOf, t
 import { spawn as spawnOp } from 'node:child_process';
 import { isatty as isattyOp } from 'node:tty';
 import { recoverStepAt as opRecoverStepAt, storedVersionAt as opStoredVersionAt } from './store.mjs';
+import {
+  readTrimmed, readRole, settleWithin, measureReach, cliFactsOf, NO_PAIRS, errLine, refusal, refusalStoreId, readFailure,
+} from './read-context.mjs';
 
 process.umask(0o077);
 
@@ -100,55 +103,8 @@ const EXIT_MEANING = Object.freeze({
  *  by design, so OP_EXIT_WORDS[EXIT.INTERNAL]'s "gave no result" is false there. The operator note still follows. */
 const RECALL_OFF_STATED_WORDS = 'the history writer stopped, as the line above says';
 
-/** The inputs §8.3's table does not reach on its first rows (Darwin, a server role, an unsettled stat):
- *  passed as unmeasured, so the table, not this file, decides every answer. */
-function unmeasuredFacts(role) {
-  const unread = { state: 'unreadable' };
-  return {
-    role, dbDir: 'unmeasured', storeId: unread, pending: unread, writer: unread, db: 'unmeasured',
-    dbStoreId: unread, wal: false, shm: false, journalStoreDirs: [], backupsDb: [],
-  };
-}
-
-/** Bytes of a file, trimmed, or null when it cannot be read: one bounded nonblocking open that refuses a link
- *  (store.mjs `readBounded`, D-4347 (history-planted-entries-never-wedge)), so a FIFO is never waited on. */
-function readTrimmed(p) {
-  const r = readBounded(p, CONTROL_FILE_MAX, false);
-  return r.state === 'value' ? r.value.trim() : null;
-}
-
 function listNames(dir) {
   try { return readdirSync(dir); } catch { return []; }
-}
-
-/** CCRC_ROLE exactly as doctor's _check_skills reads it (ccd/ccrc-doctor-checks:3016): a regular, readable
- *  file, one key, readBoxEnvValue's rules (O53); anything else is '' (not server). */
-function readRole(P) {
-  const f = readBounded(P.ccrcEnv, CONTROL_FILE_MAX, true);
-  if (f.state !== 'value') return '';
-  const r = readBoxEnvValue(f.value, 'CCRC_ROLE');
-  return r.found ? r.value : '';
-}
-
-/** A name's presence, never folded (IV5): ENOENT is absent; any other failure is unmeasured. */
-function presence(p) {
-  try {
-    lstatSync(p);
-    return 'present';
-  } catch (e) {
-    return e !== null && typeof e === 'object' && e.code === 'ENOENT' ? 'absent' : 'unmeasured';
-  }
-}
-
-/** A promise raced against a deadline: {settled:false} when it did not answer in time. */
-function settleWithin(promise, ms) {
-  return new Promise((resolve) => {
-    const t = setTimeout(() => resolve({ settled: false }), ms);
-    promise.then(
-      (value) => { clearTimeout(t); resolve({ settled: true, value }); },
-      (error) => { clearTimeout(t); resolve({ settled: true, error }); },
-    );
-  });
 }
 
 function parseJsonOr(text, fallback) {
@@ -375,27 +331,6 @@ function readStoreAnswered(env, P, nowMs) {
   }
 }
 
-/** What §8.3's no-store table reads, measured in the table's own order (W1-B2 Task 10: shared by status and the
- *  read verbs, so the two never measure a store differently):
- *   - Darwin and the recorded role first: they answer before anything else is touched;
- *   - then the 2 s reachability stat of db/history.db; one that never settles reads unsettled, and nothing
- *     behind it is measured;
- *   - then every presence input (measureStoreFacts), with the shim measured beside them. */
-export async function measureReach(home) {
-  const P = historyPaths(home);
-  const darwin = process.platform === 'darwin';
-  const role = readRole(P);
-  if (darwin || role === 'server') return { darwin, role, facts: unmeasuredFacts(role), statSettled: true, shim: 'unmeasured' };
-  const stat = await settleWithin(fsp.stat(P.dbFile), CLI_STAT_DEADLINE_MS);
-  if (!stat.settled) return { darwin, role, facts: unmeasuredFacts(role), statSettled: false, shim: presence(P.shim) };
-  return { darwin, role, facts: measureStoreFacts(home, role), statSettled: true, shim: presence(P.shim) };
-}
-
-/** decideCliStore's input from a reach measurement. */
-function cliFactsOf(reach) {
-  return { ...reach.facts, darwin: reach.darwin, statSettled: reach.statSettled, shim: reach.shim };
-}
-
 /** `status --json`'s envelope (§8.3, §8.4). The no-store answer is §8.3's table over measureReach. */
 export async function statusEnvelope(home, nowMs) {
   const P = historyPaths(home);
@@ -509,19 +444,6 @@ const USAGE = [
   '  every exit code and reason: the ccrc-history skill',
 ].join('\n');
 
-/** No pairs: a refusal prints no recalled text, but every output still takes the final belt's context and shape
- *  layers (§8.3). */
-const NO_PAIRS = makePairIndex([]);
-
-/** One stderr line carrying a thrown error's text, through redactFinalLines (D-4613 round 5: never framed, so no tag split;
- *  D-5021: the field pass first, as the only redaction raw text gets) like every other output (§8.3, §12: the final
- *  stdout, stderr and --json each take one more pass). A SQLite message can quote a value, and the three sites that
- *  wrote `e.message` raw did not redact it (HA2 H-32). Every error text on stderr goes through here. `idx` is the pair
- *  index of the read the text belongs to, where there is one (D-5023): NO_PAIRS only where no index was built. */
-function errLine(text, idx = NO_PAIRS) {
-  process.stderr.write(redactFinalLines(`${text}\n`, idx));
-}
-
 /** A thrown value's text for an internal-error line. */
 function thrownText(e) {
   return e && e.message ? e.message : String(e);
@@ -566,23 +488,6 @@ export function tmuxSession(pane) {
   return { settled: r.error === undefined && r.signal === null, status: r.status, stdout: typeof r.stdout === 'string' ? r.stdout : '' };
 }
 
-/** A read verb's answer when there is no ReadContext. `reason` rides only where §8.3 gives the exit one. `id`
- *  and `gen` are what the counter line names; both are null before the identity resolved. */
-function refusal(exit, reason, storeId, id, gen) {
-  return { exit, ...(reason === undefined ? {} : { reason }), storeId, id, gen };
-}
-
-/** The store_id an exit-5 or exit-6 answer names (§8.3: the store-unbound remedy needs no sqlite3). */
-function refusalStoreId(reach, P) {
-  if (reach.facts.storeId.state === 'value') return reach.facts.storeId.value;
-  if (reach.facts.dbStoreId.state === 'value') return reach.facts.dbStoreId.value;
-  if (!reach.statSettled) {
-    const id = readTrimmed(P.storeId);
-    return id !== null && UUID_RE.test(id) ? id : null;
-  }
-  return null;
-}
-
 /** The output redaction's index (§8.3 layers 1 and 4). Pairs: every (len, sha256) the sweep recorded in redact_hashes,
  *  which covers each account's declared secretsFile, plus the pairs of the files read now, so a value added since the
  *  last tick is redacted too. The belt (W1-B2 Task 7A): the units of the frozen list's and the declared secretsFiles'
@@ -599,21 +504,6 @@ export function pairIndexOf(db, home) {
   const sources = db.prepare('SELECT v FROM meta WHERE k = ?').get(REDACT_SOURCES_META);
   const loaded = loadSecrets(home, parseRedactSources(sources?.v));
   return makePairIndex([...recorded, ...loaded.pairs], makeBelt(beltUnits(loaded.values)));
-}
-
-/** A failed read of an admitted store as a read verb's refusal (§8.3: ONE answer, exit 5, for a DB or schema error),
- *  measured as B1's readStoreAnswered measures it and decided by lib's decideStatusReadFailure: a StoreError's word,
- *  SQLite's own error (ERR_SQLITE_ERROR: a missing table or column, a corrupt page, an I/O error) as
- *  store-read-failed, the error's message on stderr. Null for any other throw, a defect the caller rethrows, so it
- *  stays exit 1 with no answer (review 316 F11's rule; B1's slug history-import-refusal-words names the word). */
-function readFailure(e, storeId, id, gen, idx = NO_PAIRS) {
-  const f = decideStatusReadFailure({
-    storeWord: e instanceof StoreError ? e.word : null,
-    sqliteError: e !== null && typeof e === 'object' && e.code === 'ERR_SQLITE_ERROR',
-  });
-  if (f === null) return null;
-  errLine(`ccrc history: ${f.reason}: ${e.message}`, idx);
-  return refusal(f.exit, f.reason, storeId, id, gen);
 }
 
 /** The argv that reproduces this scope on a next: line: the one scope flag, then `--agents` when the call read the subagent rows
