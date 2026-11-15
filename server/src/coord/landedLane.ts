@@ -89,12 +89,12 @@ export async function landedPass(deps: LandedLaneDeps): Promise<LandedPassResult
   for (const id of landedPruneIds(complete, cands, deps.memory)) deps.memory.delete(id);
   for (const cand of pickLandedReads(cands, deps.memory, at)) {
     const res = await deps.runCcd(CCD_ARGV.prStatePr(cand.project, cand.pr));
-    if (res.ran === false) {
-      deps.memory.set(cand.id, landedNext(deps.memory.get(cand.id), cand, { act: 'retry', missingField: false }, at));
-      return { ...result, stopped: 'link' };
+    const call = landedCallStep(res);
+    if (call.act === 'not-ran') {
+      deps.memory.set(cand.id, landedNext(deps.memory.get(cand.id), cand, call.answer, at));
+      return { ...result, stopped: call.stopped };
     }
     result.read++;
-    const call = landedCallStep(res);
     const read = call.act === 'parse' ? readPrStatePrLine(call.stdout, cand.pr) : { state: 'call-failed' as const };
     const answer = landedAnswerOf(read);
     if (answer.act === 'wait' || answer.act === 'retry') {

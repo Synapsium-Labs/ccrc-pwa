@@ -1,7 +1,7 @@
 // Landing order wave 5h (Task 4): the landed reader's pure decisions (`coord/landed.ts`, L1).
 import { describe, it, expect } from 'vitest';
 import {
-  LANDED_FRESH_MS, LANDED_READS_PER_SWEEP, LANDED_STANDING_BACKOFF_MS, landedAnswerOf, landedCandidatesOf, landedNext,
+  LANDED_FRESH_MS, LANDED_READS_PER_SWEEP, LANDED_STANDING_BACKOFF_MS, landedAnswerOf, landedCallStep, landedCandidatesOf, landedNext,
   isHeldRefusal, closeLandingOf, landedExpectOf, landedNoticeModeOf, mergedBody, mergedKey, mergedNoticeOf, pickLandedReads, type LandedCandidate, type LandedMemory,
 } from '../src/coord/landed.js';
 import { PR_BACKOFF_MAX_MS, PR_SWEEP_MS } from '../src/laneSchedule.js';
@@ -9,6 +9,10 @@ import type { PrMergedFacts, PrStatePrRead } from '../src/prstate.js';
 import type { LandingMutationFacts } from '../src/coord/landingWrites.js';
 import type { LandingEntry, LandingEntryState, LandingRecovery, LandingRecoverySubject } from '../../shared/landingLine.js';
 import type { LandingProjectionRead } from '../src/coord/landingEntry.js';
+import type { CcdResult } from '../src/coord/ports.js';
+import { parseFile } from './scan/parse.js';
+import { REPO_ROOT } from './scan/symbols.js';
+import { codeOf } from './consolidationCensus.js';
 
 const HEAD = 'a'.repeat(40);
 const MERGE = 'b'.repeat(40);
@@ -247,5 +251,27 @@ describe('closeLandingOf', () => {
   });
   it('a failed close is null, facts or not', () => {
     expect(closeLandingOf({ state: 'failed', facts, project: 'project-a', at: 5 })).toBeNull();
+  });
+});
+
+// Fix round 1, R3: the `pr-state --pr` call's not-ran decision is L1's (`landedCallStep` reads `ran` first), and the lane acts on it.
+describe('landedCallStep', () => {
+  const Z = { stderr: '', killed: false as const, signal: null };
+  it('a call that did not run is not-ran, carrying the retry answer and the link stop, whatever its stdout and ok say', () => {
+    const notRan: CcdResult = { ran: false, ok: false, reason: 'transport', detail: 'agent down', stdout: '{"x":1}', ...Z };
+    expect(landedCallStep(notRan)).toEqual({ act: 'not-ran', answer: { act: 'retry', missingField: false }, stopped: 'link' });
+  });
+  it('a call that ran and exited 0 is parsed from its stdout', () => {
+    expect(landedCallStep({ ran: true, ok: true, stdout: 'line\n', ...Z })).toEqual({ act: 'parse', stdout: 'line\n' });
+  });
+  it('a call that ran and failed is failed', () => {
+    expect(landedCallStep({ ran: true, ok: false, stdout: 'boom', ...Z })).toEqual({ act: 'failed' });
+  });
+  it('the lane reads no `.ran` of a runner result: the not-ran policy is landedCallStep\'s alone', () => {
+    const lane = parseFile(`${REPO_ROOT}/server/src/coord/landedLane.ts`);
+    const src = lane.text.split('\n').map(codeOf).join('\n');
+    expect(src).not.toMatch(/\.ran\b/);
+    expect(lane.comparisons.filter((c) => c.leftLeaf === 'ran' || c.rightLeaf === 'ran')).toEqual([]);
+    expect(src).not.toMatch(/missingField:\s*false/);
   });
 });
