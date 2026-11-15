@@ -18,7 +18,7 @@ import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { spawnSyncGroup } from './spawnGroup.js';
 import { fileURLToPath } from 'node:url';
-import { makeCcdHarness, type CcdHarness, WIDE_PANE, WS_ADD, CCD, BOUNDED, ghContainedEnv, ccdSource } from './ccdWsHelpers.js';
+import { makeCcdHarness, type CcdHarness, WIDE_PANE, WS_ADD, CCD, BOUNDED, ghContainedEnv, ccdSource, seedAccountsSh } from './ccdWsHelpers.js';
 import { inheritedEnv } from './gitEnvStrip.js';
 import { platformDeadline, platformDeadlineSeconds } from './timeScale.js';
 import { familyClassOf, FAMILY_TOKENS } from '../../shared/models.mjs';
@@ -615,6 +615,74 @@ describe('_operator_choice_keep writes the operator\'s own /model and /effort to
     const landed = log.findIndex((l) => l.includes(` swap ${ID}: claude-d -> claude `));
     expect(route).toBeGreaterThan(-1);
     expect(landed).toBeGreaterThan(route);
+  });
+});
+
+// ── A CODEX LANE'S /effort (D-8631) ───────────────────────────────────────────
+
+// A Codex lane's spawn carries `--effort <record or SPAWN_EFFORT>` since D-8631, so an
+// operator's acknowledged `/effort` typed into its pane must reach the record before the
+// next spawn, or that spawn puts it back to the default. Its `/model` names a model outside
+// the class vocabulary and stays unread; a lane that is neither backend reads neither.
+describe('an acknowledged /effort on a Codex lane survives a respawn (D-8631)', () => {
+  /** Three backends: the harness's Anthropic `claude`, a Codex lane and a lane that is neither. */
+  const threeLanes = (): void => {
+    seedAccountsSh(h.home, {
+      version: 1, accounts: [
+        { id: 'claude', label: 'a', configDirSuffix: '.claude', exec: { kind: 'upstream' }, homeAble: true, hue: 'cyan', telemetry: 'anthropic' },
+        { id: 'lane-a', label: 'la', configDirSuffix: '.lane-a', exec: { kind: 'external' }, homeAble: true, hue: 'blue', telemetry: 'codex' },
+        { id: 'gpt', label: 'g', configDirSuffix: '.gpt-cfg', exec: { kind: 'external' }, homeAble: true, hue: 'magenta', telemetry: 'none' },
+      ],
+    });
+    for (const w of ['lane-a', 'gpt']) fs.writeFileSync(path.join(h.home, '.local', 'bin', w), '#!/bin/sh\n', { mode: 0o755 });
+  };
+  /** The REAL `_spawn_start` (the keep lives in it) over a tmux that logs the pane it is asked to create. */
+  const spawnLines = (): string[] => {
+    h.sh(`_alive() { return 1; }
+      tmux() { ${WIDE_PANE} [[ "\${1:-}" == new-session ]] && echo "spawn $*" >> "$HOME/ccd-calls"; return 0; }
+      _spawn_settle() { :; }
+      _spawn_start ${ID} resume`);
+    return h.calls().filter((c) => c.startsWith('spawn new-session'));
+  };
+  const effortFlags = (line: string): string[] => [...line.matchAll(/--effort (\S+)/g)].map((m) => m[1]!);
+  beforeEach(() => { threeLanes(); });
+
+  it('a Codex session\'s acknowledged /effort max reaches the record, and its next spawn carries --effort max', () => {
+    seed(); h.sh(`_reg_set ${ID} wrapper lane-a`); record({ class: 'opus' }); const t = now() - 600;
+    writeTranscript([cmd(t, 'effort', 'max'), ack(t, EFFORT_ACK('max'))]);
+    const lines = spawnLines();
+    expect(lines.length, h.calls().join('\n')).toBeGreaterThan(0);
+    expect(h.reg(ID, 'effort')).toBe('max');
+    for (const l of lines) expect(effortFlags(l)).toEqual(['max']);
+    expect(routeLines().some((l) => l.includes(`route ${ID}: effort`) && l.includes('-> max [actor=operator-session]')), swapLog()).toBe(true);
+  });
+
+  it('control: a Codex session\'s acknowledged /model is NOT promoted, not logged, and its /effort beside it still is', () => {
+    seed(); h.sh(`_reg_set ${ID} wrapper lane-a`); record({ class: 'sonnet' }); const t = now() - 600;
+    writeTranscript([cmd(t, 'model', 'opus'), ack(t, MODEL_ACK('Opus 5.5')), cmd(t + 30, 'effort', 'max'), ack(t + 30, EFFORT_ACK('max'))]);
+    expect(keep()).toBe('rc=0');
+    expect(h.reg(ID, 'class'), 'the /model stays unread').toBe('sonnet');
+    expect(h.reg(ID, 'effort')).toBe('max');
+    expect(swapLog(), 'no operator-choice line about the /model').not.toMatch(/operator-choice/);
+    expect(routeLines().filter((l) => l.includes(`route ${ID}: class`)), 'no class write').toEqual([]);
+  });
+
+  it('control: a Codex session\'s /model alone writes nothing and logs nothing, even an unrecognised one', () => {
+    seed(); h.sh(`_reg_set ${ID} wrapper lane-a`); record({ class: 'sonnet' }); const t = now() - 600;
+    writeTranscript([cmd(t, 'model', 'opus'), ack(t, MODEL_ACK('Opus 5.5')), cmd(t + 30, 'model', 'gpt-5.6-sol'), ack(t + 30, 'Something else entirely')]);
+    expect(keep()).toBe('rc=0');
+    expect(h.reg(ID, 'class')).toBe('sonnet');
+    expect(swapLog()).toBe('');
+  });
+
+  it('control: a lane that is neither Anthropic nor Codex promotes neither its /effort nor its /model', () => {
+    seed(ID, false); h.sh(`_reg_set ${ID} wrapper gpt`); record({ class: 'sonnet', effort: 'high' }); const t = now() - 600;
+    writeTranscript([cmd(t, 'model', 'opus'), ack(t, MODEL_ACK('Opus 5.5')), cmd(t + 30, 'effort', 'max'), ack(t + 30, EFFORT_ACK('max'))]);
+    expect(keep()).toBe('rc=0');
+    expect(h.reg(ID, 'class')).toBe('sonnet');
+    expect(h.reg(ID, 'effort')).toBe('high');
+    expect(swapLog(), 'no operator-choice line, no route line').toBe('');
+    expect(h.reg(ID, 'typed'), 'a skipped session opens no journal floor either').toBeNull();
   });
 });
 
