@@ -14,10 +14,15 @@
  * first blank line) to the file. Names are bound with a syntax-only program per file, so a parameter or a local that
  * shadows a top-level name is not a reference to it.
  *
- * KNOWN WIDTH: a new file's header is set aside only when a blank line follows it; `export *` satisfies any name when
- * imports are resolved; a mention of the source outside an import (`vi.mock`, a dynamic `import()`, a path a test reads)
- * is reported, never repointed; a change in the order two already-loaded modules evaluate is not judged; an
- * `import x = require(…)` binding the moved code uses is refused.
+ * A diff is a MOVE only when it adds a marker line (`destHeader`), which the tool writes at the top of a new destination
+ * and in front of the regions it appends to an existing one: a shared private name across two changed files is not a
+ * move signal (a feature PR has them all the time).
+ *
+ * KNOWN WIDTH: a hand move without the marker is not judged; a new file's header is set aside only when a blank line
+ * follows it; `export *` satisfies any name when imports are resolved; a mention of the source outside an import
+ * (`vi.mock`, a dynamic `import()`, a path a test reads) and a namespace object passed on as a value are reported, never
+ * repointed; a change in the order two already-loaded modules evaluate is not judged; an `import x = require(…)` binding
+ * the moved code uses is refused.
  */
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
@@ -32,9 +37,22 @@ export type Tree = ReadonlyMap<string, string>;
 /** The source files the tool reads and writes: TypeScript and ES modules, not declarations. */
 export const isCodeFile = (f: string): boolean => /\.(?:ts|tsx|mts|mjs)$/.test(f) && !/\.d\.[cm]?ts$/.test(f);
 
-/** The header the tool writes at the top of a destination it creates. */
+/** The marker the tool writes at the top of a destination it creates, and in front of the regions it appends to one
+ *  that exists. A diff that adds a marker line is a move the verdict judges; one that adds none is not (a feature PR
+ *  shares private names such as `TOKEN` across files all the time). */
 export const destHeader = (source: string): string =>
   `/** Moved out of \`${source}\` by \`.github/ci/file-split.mjs\`: a pure move (D-8636). */`;
+
+/** A marker line, `destHeader`'s shape for any source, alone on its line. */
+const MARK = String.raw`\/\*\* Moved out of \`[^\`\n]+\` by \`\.github\/ci\/file-split\.mjs\``;
+const MARK_LINE = new RegExp(String.raw`^[ \t]*${MARK}[^\n]*$`, 'gm');
+/** A marker line with the blank lines after it, as a region carries it in front of its own lead comment. */
+const MARK_LEAD = new RegExp(String.raw`^[ \t]*${MARK}[^\n]*\n(?:[ \t]*\n)*`, 'gm');
+/** An added line of a `git diff` that is a marker line. */
+const MARK_ADDED = new RegExp(String.raw`^\+[ \t]*${MARK}`, 'm');
+
+/** How many marker lines a file text holds. */
+export const moveMarks = (text: string | undefined): number => (text === undefined ? 0 : text.match(MARK_LINE)?.length ?? 0);
 
 // ---- The top-level model of a file ----
 
@@ -144,26 +162,37 @@ function norm(m: FileModel, e: Entry): string {
     const b = skipSpace(m.text, ex.end, e.end) - e.start;
     t = t.slice(0, a) + t.slice(b);
   }
-  return t.trimEnd();
+  return t.replace(MARK_LEAD, '').trimEnd();
 }
 
 /** The names a file exports, by declaration, by a local `export { … }` list and by a named `export … from`; `star`
- *  when it has an `export * from`. */
-function exportedNames(m: FileModel): { names: Set<string>; star: boolean } {
+ *  when it has an `export * from`; `twice`, a name exported more than once (Node refuses the module: TS2323). A
+ *  declaration merged over several statements (overloads, an interface and a namespace) exports its name once. */
+function exportedNames(m: FileModel): { names: Set<string>; star: boolean; twice: string[] } {
   const names = new Set<string>();
+  const twice = new Set<string>();
+  const byDecl = new Set<string>();
   let star = false;
+  const add = (n: string): void => { if (names.has(n)) twice.add(n); names.add(n); };
   for (const e of m.entries) {
-    if (e.kind === 'decl' && e.exported) for (const n of e.names) names.add(e.isDefault ? 'default' : n);
-    if (e.kind === 'other' && e.exported && e.isDefault) names.add('default');
-    if (ts.isExportAssignment(e.stmt) && !e.stmt.isExportEquals) names.add('default');
+    if (e.kind === 'decl' && e.exported) {
+      for (const n of e.names) {
+        const x = e.isDefault ? 'default' : n;
+        if (byDecl.has(x)) continue;
+        byDecl.add(x);
+        add(x);
+      }
+    }
+    if (e.kind === 'other' && e.exported && e.isDefault) add('default');
+    if (ts.isExportAssignment(e.stmt) && !e.stmt.isExportEquals) add('default');
     if (ts.isExportDeclaration(e.stmt)) {
       const c = e.stmt.exportClause;
       if (c === undefined) star = true;
-      else if (ts.isNamedExports(c)) for (const el of c.elements) names.add(el.name.text);
-      else names.add(c.name.text);
+      else if (ts.isNamedExports(c)) for (const el of c.elements) add(el.name.text);
+      else add(c.name.text);
     }
   }
-  return { names, star };
+  return { names, star, twice: [...twice].sort() };
 }
 
 /** Local `export { a, b as c }` lists (no `from`): exported name to local name. */
@@ -217,7 +246,8 @@ export interface MoveVerdict {
   pure: boolean;
   moved: { name: string; from: string; to: string }[];
   /** Each rule a diff breaks: `text:<name>`, `rest:<file>`, `defined-twice:<name>`, `removed:<name>`,
-   *  `added:<name>`, `surface:<file>#<name>`, `export-unused:<file>#<name>`, `unresolved:<importer>#<name>`. */
+   *  `added:<name>`, `surface:<file>#<name>`, `export-unused:<file>#<name>`, `exported-twice:<file>#<name>`,
+   *  `unresolved:<importer>#<name>`, `no-move` (a marker added and no declaration moved). */
   differing: string[];
   /** Names exported only now, as `<file>#<name>`: a declaration the cut made another module import. */
   newlyExported: string[];
@@ -272,10 +302,12 @@ function importUses(importer: string, sf: ts.SourceFile, files: ReadonlySet<stri
 /**
  * The pure-move verdict over the files a diff changes, `base` and `head` holding each side (a file absent on a side
  * is absent from that map). `importers` are other head files whose imports of a changed file must still resolve.
- * Null when no declaration moved: a name newly declared in one file that another changed file declared at the base.
+ * Null when the diff is not a move: no changed file gains a marker line (`destHeader`). A moved name is one newly
+ * declared in one file that another changed file declared at the base.
  */
 export function pureMoveVerdict(base: Tree, head: Tree, importers: Tree = new Map()): MoveVerdict | null {
   const files = uniq([...base.keys(), ...head.keys()]).filter(isCodeFile).sort();
+  if (!files.some((f) => moveMarks(head.get(f)) > moveMarks(base.get(f)))) return null;
   const mb = new Map<string, FileModel>();
   const mh = new Map<string, FileModel>();
   for (const f of files) {
@@ -305,7 +337,7 @@ export function pureMoveVerdict(base: Tree, head: Tree, importers: Tree = new Ma
     moved.push({ name: n, from: from[0]!, to: to[0]! });
     if (regionsOf(mb.get(from[0]!)!, n) !== regionsOf(mh.get(to[0]!)!, n)) differing.push(`text:${n}`);
   }
-  if (candidates.size === 0) return null;
+  if (candidates.size === 0) differing.push('no-move');
   for (const n of added.keys()) if (!candidates.has(n)) differing.push(`added:${n}`);
   for (const n of removed.keys()) if (!moved.some((m) => m.name === n)) differing.push(`removed:${n}`);
 
@@ -327,6 +359,7 @@ export function pureMoveVerdict(base: Tree, head: Tree, importers: Tree = new Ma
   for (const f of files) {
     const before = mb.has(f) ? exportedNames(mb.get(f)!).names : new Set<string>();
     const after = exportsAt.get(f)?.names ?? new Set<string>();
+    for (const n of exportsAt.get(f)?.twice ?? []) differing.push(`exported-twice:${f}#${n}`);
     for (const e of before) {
       if (after.has(e)) continue;
       const mv = moved.find((m) => m.name === e && m.from === f);
@@ -389,7 +422,8 @@ type Binding =
   | { kind: 'import'; local: string; stmt: ts.ImportDeclaration | ts.ImportEqualsDeclaration }
   | { kind: 'decl'; name: string; entry: Entry };
 
-interface Use { binding: Binding; value: boolean }
+/** `value`: some use reads it as a value; `written`: some use assigns it. */
+interface Use { binding: Binding; value: boolean; written: boolean }
 
 /** A syntax-only program over one file, so names bind as the language binds them. */
 function bind(file: string, text: string): { sf: ts.SourceFile; checker: ts.TypeChecker } {
@@ -438,6 +472,30 @@ function inTypePosition(id: ts.Node): boolean {
 
 const TYPE_ONLY_DECL = (e: Entry): boolean => ts.isInterfaceDeclaration(e.stmt) || ts.isTypeAliasDeclaration(e.stmt);
 
+const isAssignOp = (k: ts.SyntaxKind): boolean =>
+  k >= ts.SyntaxKind.FirstAssignment && k <= ts.SyntaxKind.LastAssignment;
+
+/** True when an identifier is assigned where it stands: the left of `=` or a compound assignment, `++`/`--`, a
+ *  target inside a destructuring assignment, or a `for … in/of` target. */
+function isWritten(id: ts.Identifier): boolean {
+  let n: ts.Node = id;
+  for (let p = n.parent; p !== undefined; n = p, p = p.parent) {
+    if (ts.isParenthesizedExpression(p) || ts.isNonNullExpression(p) || ts.isAsExpression(p) || ts.isSatisfiesExpression(p)
+      || ts.isTypeAssertionExpression(p)) continue;
+    // The elements of a literal: assigned only when the literal is itself a target (climb on to see).
+    if (ts.isArrayLiteralExpression(p) || ts.isObjectLiteralExpression(p) || ts.isSpreadElement(p) || ts.isSpreadAssignment(p)
+      || ts.isShorthandPropertyAssignment(p) || (ts.isPropertyAssignment(p) && p.initializer === n)) continue;
+    if (ts.isPrefixUnaryExpression(p) || ts.isPostfixUnaryExpression(p)) {
+      return p.operator === ts.SyntaxKind.PlusPlusToken || p.operator === ts.SyntaxKind.MinusMinusToken;
+    }
+    if (ts.isForInStatement(p) || ts.isForOfStatement(p)) return p.initializer === n;
+    // `x = …`, `x += …`, and a default inside a target (`[x = 1] = …`), which assigns x as well.
+    if (ts.isBinaryExpression(p)) return p.left === n && isAssignOp(p.operatorToken.kind);
+    return false;
+  }
+  return false;
+}
+
 /** The top-level bindings the given statements reference, each with whether any use reads it as a value. */
 function usesIn(stmts: readonly ts.Node[], sf: ts.SourceFile, checker: ts.TypeChecker, byStmt: Map<ts.Node, Entry>):
   Map<string, Use> {
@@ -456,8 +514,9 @@ function usesIn(stmts: readonly ts.Node[], sf: ts.SourceFile, checker: ts.TypeCh
         if (binding === null) continue;
         const key = binding.kind === 'import' ? `import:${binding.local}` : `decl:${binding.name}`;
         const value = !inTypePosition(n);
+        const written = isWritten(n);
         const had = out.get(key);
-        out.set(key, { binding, value: value || (had?.value ?? false) });
+        out.set(key, { binding, value: value || (had?.value ?? false), written: written || (had?.written ?? false) });
         break;
       }
     }
@@ -580,6 +639,10 @@ export function planMove(req: MoveRequest, program: Tree): MovePlan {
   if (destValue.length > 0 && srcValue.length > 0) {
     plan.problems.push(`cycle: the destination uses ${destValue.join(', ')} from the source, and the source uses ${srcValue.join(', ')} from the destination`);
   }
+  // An import is a read-only binding: a name assigned on the side that would import it cannot cross.
+  for (const u of [...fromSource, ...toSource]) {
+    if (u.written) plan.problems.push(`${nameOf(u)}: assigned on the other side of the cut, where it would be a read-only import; move it with the code that assigns it`);
+  }
   plan.destUsesSource = fromSource.map(nameOf);
   plan.sourceUsesDest = toSource.map(nameOf);
   const needsExport = new Set([...toSource.map(nameOf), ...plan.moved.filter((n) => listed.has(n))]);
@@ -660,15 +723,24 @@ export function planMove(req: MoveRequest, program: Tree): MovePlan {
       const at = imps.length > 0 ? lineAfter(dm.text, imps[imps.length - 1]!.end) : (dm.entries[0]?.start ?? dm.text.length);
       edits.push({ start: at, end: at, text: `${importLines.join('\n')}\n${imps.length > 0 ? '' : '\n'}` });
     }
-    destOut = `${applyEdits(dm.text, edits).trimEnd()}\n\n${regions.join('\n\n')}\n`;
+    // The marker in front of the appended regions makes the diff a move the verdict judges; it sets nothing else.
+    destOut = `${applyEdits(dm.text, edits).trimEnd()}\n\n${destHeader(source)}\n\n${regions.join('\n\n')}\n`;
   }
 
   // The source.
   const srcEdits: Edit[] = moving.map((e) => ({ start: e.cut, end: e.end, text: '' }));
-  // A declaration the destination now imports gains `export` where it stays.
+  // A declaration the destination now imports gains `export` where it stays, unless a local `export { … }` list already
+  // exports it (a second export of one name is a module Node refuses).
   for (const e of uniq(fromSource.map((u) => (u.binding as { entry: Entry }).entry))) {
-    if (!e.exported) srcEdits.push({ start: e.stmt.getStart(sf), end: e.stmt.getStart(sf), text: 'export ' });
+    if (e.exported) continue;
+    const inList = e.names.filter((n) => listed.has(n));
+    const needed = fromSource.filter((u) => (u.binding as { entry: Entry }).entry === e).map(nameOf);
+    if (inList.length === 0) srcEdits.push({ start: e.stmt.getStart(sf), end: e.stmt.getStart(sf), text: 'export ' });
+    else if (!needed.every((n) => listed.has(n))) {
+      plan.problems.push(`${needed.join(', ')}: its statement is exported through a local export list in part; export it by hand first`);
+    }
   }
+  if (plan.problems.length > 0) return plan;
   let lastImportLine = -1;
   for (const e of m.entries) {
     const s = e.stmt;
@@ -718,15 +790,28 @@ export function planMove(req: MoveRequest, program: Tree): MovePlan {
       const destSpec = specFor(f, dest, spec);
       const after = lineAfter(text, s.end);
       if (ts.isImportDeclaration(s) && s.importClause?.namedBindings && ts.isNamespaceImport(s.importClause.namedBindings)) {
-        const ns = s.importClause.namedBindings.name.text;
+        const ns = s.importClause.namedBindings.name;
         const used = new Set<string>();
+        const escapes: number[] = [];
+        const strings = new Set<string>();
         const walk = (n: ts.Node): void => {
-          if (ts.isPropertyAccessExpression(n) && ts.isIdentifier(n.expression) && n.expression.text === ns && exportedMoved.has(n.name.text)) used.add(n.name.text);
-          if (ts.isQualifiedName(n) && ts.isIdentifier(n.left) && n.left.text === ns && exportedMoved.has(n.right.text)) used.add(n.right.text);
+          if (ts.isStringLiteral(n) || ts.isNoSubstitutionTemplateLiteral(n)) strings.add(n.text);
+          if (ts.isIdentifier(n) && n.text === ns.text && n !== ns) {
+            const p = n.parent;
+            if (ts.isPropertyAccessExpression(p) && p.expression === n) { if (exportedMoved.has(p.name.text)) used.add(p.name.text); }
+            else if (ts.isQualifiedName(p) && p.left === n) { if (exportedMoved.has(p.right.text)) used.add(p.right.text); }
+            else if (ts.isElementAccessExpression(p) && p.expression === n && ts.isStringLiteralLike(p.argumentExpression)) {
+              if (exportedMoved.has(p.argumentExpression.text)) used.add(p.argumentExpression.text);
+            } else escapes.push(isf.getLineAndCharacterOfPosition(n.getStart(isf)).line + 1);
+          }
           ts.forEachChild(n, walk);
         };
         walk(isf);
+        // The namespace object passed on as a value (`vi.spyOn(ns, 'f')`, `Object.keys(ns)`): a moved name the file
+        // spells as a string is a use; otherwise the escape is reported.
+        if (escapes.length > 0) for (const n of exportedMoved) if (strings.has(n)) used.add(n);
         if (used.size > 0) plan.problems.push(`${f}: a namespace import of ${source} uses ${[...used].sort().join(', ')}; repoint it by hand first`);
+        else for (const l of uniq(escapes)) plan.mentions.push(`${f}:${l}`);
         continue;
       }
       if (ts.isExportDeclaration(s) && s.exportClause === undefined) {
@@ -864,11 +949,19 @@ export function moveBase(env: NodeJS.ProcessEnv, root: string): string {
   return gitRead(['merge-base', 'origin/main', 'HEAD'], root).trim();
 }
 
-/** The pure-move verdict of `baseSha..headRef` in `root`, with every head file that names a changed file's stem as an
- *  importer; null when the diff moves no declaration. */
+const CODE_PATHS = ['*.ts', '*.tsx', '*.mts', '*.mjs'];
+
+/** True when the diff `baseSha..headRef` adds a marker line to a code file: one `git diff`, so a pull request that
+ *  moves nothing costs the pin one git call. */
+export function addsMoveMarker(root: string, baseSha: string, headRef: string): boolean {
+  return MARK_ADDED.test(gitRead(['diff', '-U0', '--no-color', '--no-ext-diff', '--no-renames', baseSha, headRef, '--', ...CODE_PATHS], root));
+}
+
+/** The pure-move verdict of `baseSha..headRef` in `root`; null when the diff adds no marker line (`destHeader`). The
+ *  importers it resolves are the head files whose text names a file a declaration moved out of as a relative path. */
 export function branchVerdict(root: string, baseSha: string, headRef: string): MoveVerdict | null {
+  if (!addsMoveMarker(root, baseSha, headRef)) return null;
   const changed = changedFiles(baseSha, headRef, root).filter(isCodeFile);
-  if (changed.length === 0) return null;
   const base = new Map<string, string>();
   const head = new Map<string, string>();
   for (const f of changed) {
@@ -877,12 +970,17 @@ export function branchVerdict(root: string, baseSha: string, headRef: string): M
     if (b !== null) base.set(f, b);
     if (h !== null) head.set(f, h);
   }
-  if (pureMoveVerdict(base, head) === null) return null;
-  const stems = uniq(changed.map((f) => path.basename(f).replace(/\.(?:ts|tsx|mts|mjs)$/, '')));
+  const first = pureMoveVerdict(base, head);
+  if (first === null) return null;
+  const sources = uniq([...first.moved.map((m) => m.from),
+    ...first.differing.filter((d) => d.startsWith('surface:')).map((d) => d.slice('surface:'.length).split('#')[0]!)]);
+  if (sources.length === 0) return first;
+  const stems = uniq(sources.map((f) => path.basename(f).replace(/\.(?:ts|tsx|mts|mjs)$/, '')));
   const importers = new Map<string, string>();
   let listed = '';
   try {
-    listed = gitRead(['grep', '-l', '-F', ...stems.flatMap((s) => ['-e', s]), headRef, '--', '*.ts', '*.tsx', '*.mts', '*.mjs'], root);
+    listed = gitRead(['grep', '-l', '-F', ...stems.flatMap((s) => ['-e', `/${s}.`, '-e', `/${s}'`, '-e', `/${s}"`]),
+      headRef, '--', ...CODE_PATHS], root);
   } catch { /* no match: git grep exits 1 */ }
   for (const row of listed.split('\n').filter(Boolean)) {
     const f = row.slice(headRef.length + 1);

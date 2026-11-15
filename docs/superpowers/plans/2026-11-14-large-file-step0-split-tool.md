@@ -32,7 +32,7 @@ its parser.
 |---|---|---|
 | region | a function, its lead `#` block and nothing else | a top-level declaration statement with its leading comments and same-line trailing comment |
 | pure move | the splice of both sides equal byte for byte, `__CCD_LIBS` gaining only the library | each moved declaration's text equal (an `export` modifier aside); every other statement of a changed file equal; only import and export lines differ |
-| `pureMoveVerdict` | `{pure, differing}`, or null when no pointer is added | `{pure, moved, differing, newlyExported}`, or null when no declaration moved |
+| `pureMoveVerdict` | `{pure, differing}`, or null when no pointer is added | `{pure, moved, differing, newlyExported}`, or null when no marker line is added |
 | `duplicateDefinitions` | a function defined twice in the program | a name declared top-level in more than one of the given files |
 | `moveBase` | `merge_group.base_sha` in a queue run, else `merge-base(origin/main, HEAD)` | the same rule |
 | `preflight` | no open PR has a hunk in a slice function | the same, per declaration, plus the context slot (§4) and one open move PR per file |
@@ -48,7 +48,12 @@ its parser.
 
 ## The rules the verdict applies
 
-1. **A move is a name removed from one changed file and added to another.** No such name: the verdict is null.
+0. **A diff is judged only when it adds a marker line**, the `destHeader` comment the tool writes at the top of a new
+   destination and in front of the regions it appends to an existing one. No marker added: the verdict is null, so an
+   ordinary pull request (which shares private names such as `TOKEN` or `server` across files all the time) is never
+   read as a move, and `branchVerdict` costs it one `git diff`. The marker is stripped wherever regions are compared.
+1. **A move is a name removed from one changed file and added to another.** A marker added with no such name is
+   `no-move`.
 2. **Each moved name's region text is equal**, after removing one `export ` modifier on each side.
 3. **Every other statement of every changed file is equal**, in order, after the same normalisation. Import
    declarations with bindings, `export { … }` lists and `export … from` lines are free; a bare `import './x.js'` and an
@@ -57,16 +62,18 @@ its parser.
    `defined-twice`; a name removed and added nowhere is `removed`; one added and removed nowhere is `added`.
 5. **The exported surface is unchanged:** every name a changed file exported is still exported by it or, for a moved
    name, by its destination. A name exported only now is listed in `newlyExported`, and must be imported by another
-   changed file (`export-unused` otherwise).
+   changed file (`export-unused` otherwise). A name a file exports twice (a declaration and a local `export { … }`
+   list) is `exported-twice`: Node refuses that module.
 6. **Every import resolves:** each relative named import or `export … from` (in the changed files and the importers
    given) of a changed file names something that file exports.
 7. **`.mjs`:** `mjsNamespace` imports a module and returns its namespace keys and `String()` of each export, so a pin
    can compare a module before and after (spec §2 item 4).
 
-KNOWN WIDTH: a new file's header comment is set aside only when it is followed by a blank line; `export *` satisfies any
-name (rule 6); a mention of the source module outside an import (a `vi.mock`, a dynamic `import()`, a path a test reads)
-is reported by `plan` and `move`, not repointed; a side-effect order change between two already-loaded modules is not
-judged.
+KNOWN WIDTH: a hand move without the tool's marker is not judged (rule 0); a new file's header comment is set aside only
+when it is followed by a blank line; `export *` satisfies any name (rule 6); a mention of the source module outside an
+import (a `vi.mock`, a dynamic `import()`, a path a test reads) is reported by `plan` and `move`, not repointed; a
+namespace object passed on as a value (`Object.keys(ns)`) is reported unless the file spells a moved name as a string;
+a side-effect order change between two already-loaded modules is not judged.
 
 ## The move
 
@@ -80,8 +87,13 @@ judged.
   moved declarations it references gain `export`.
 - A cut with value references both ways is refused (`cycle`): move more, or cut elsewhere. A type-only edge back is
   allowed, because it is erased.
+- A binding assigned on the side that would import it is refused: an import is read-only, so `count++` on an imported
+  `let` throws at run time, and `.mjs` files have no typecheck to catch it (TypeScript reports TS2632). Moved together
+  with the code that assigns it, the binding stays live for the side that only reads it.
+- A staying declaration the destination imports gains `export`, unless a local `export { … }` list already exports it.
 - Every importer of a moved, previously exported name is repointed to the destination; a namespace import that uses a
-  moved name is refused.
+  moved name (`ns.X`, `ns['X']`, or the namespace passed on beside the string `'X'`, as `vi.spyOn(ns, 'X')` does) is
+  refused.
 - `move` runs `pureMoveVerdict` on its own output and writes nothing unless it is pure.
 
 ## Preflight
@@ -133,7 +145,8 @@ head's diff from its merge base with `--base` has a hunk in that declaration). `
   and repoints the importer, `verdict --base` then answers pure, and `preflight` refuses a head that edits a moved
   declaration and passes one that does not. Spawned through `spawnSyncGroup`.
 - [ ] **Step 2: Implement the script.** Run: PASS. Add **REAL**: this branch's diff against `moveBase` is pure whenever
-  it moves a declaration (null on this PR, which moves none). `moveBase` reads `merge_group.base_sha` in a queue run.
+  it adds a marker line (null on this PR, which moves nothing, and on every feature PR). `moveBase` reads
+  `merge_group.base_sha` in a queue run.
 - [ ] **Step 3: Gates:** both typechecks, the tests' typecheck, the census and ratchet suites named in the brief.
 
 ### Task 5: Prove it on a scratch copy of the pilot
@@ -153,6 +166,12 @@ head's diff from its merge base with `--base` has a hunk in that declaration). `
 - **The library lives in `server/test/`, beside the parser and the context table it reads**, as the ccd plan puts
   `ccdSplit.ts` there. The script under `.github/ci/` loads it through Node's type stripping and a `.js`-to-`.ts`
   resolve hook, so the tool's decisions have one copy and the tests import it directly.
+- **The move signal is the tool's marker, not a shared name (review round 1).** The first verdict read any name newly
+  declared in one changed file and declared at the base in another as a move. Private helpers and test constants share
+  names across files all the time, so 12 of about 60 recent merges to main were judged impure moves, and the REAL row
+  (a `-pin` suite, so on every fast PR) would have redded them, at 37 to 60 s each. The verdict now waits for a marker
+  line, as the ccd verdict waits for a library pointer: over the latest 60 first-parent merges every verdict is null in
+  at most 1 s, and the pilot's real move (16 declarations, 26 files) is judged pure in 2 s.
 - **Importers are repointed, not served by a façade re-export.** A re-export from the source would make every cut a
   value cycle (the destination imports the source's remaining code, the source re-exports the destination), which the
   pilot's L3-below-L1 cut would hit at once. A file whose role is a façade (`store.ts`) gets its delegates in a

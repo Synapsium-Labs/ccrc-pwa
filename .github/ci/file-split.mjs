@@ -10,7 +10,8 @@
 //   file-split.mjs verdict   --base <ref> [--head <ref>] [--root <dir>]
 //
 // Paths are relative to --root (default: the working directory). Each verb prints one JSON document and exits 0 when it
-// passes, 1 when it refuses, 2 on a usage error. `move` writes nothing unless its own output is a pure move.
+// passes, 1 when it refuses, 2 on a usage error. `move` writes nothing unless its own output is a pure move. `verdict`
+// prints null for a diff that adds no move marker (the comment `move` writes in front of what it moves).
 // The heads file is `[{ "pr": <n>, "head": "<sha>", "move"?: { "source": "<file>", "dests": ["<file>", ...] } }]`:
 // each head must be a commit the repository holds (`git fetch origin pull/<n>/head`).
 import { registerHooks } from 'node:module';

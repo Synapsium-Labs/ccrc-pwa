@@ -3,7 +3,8 @@
 // The pure-move pin of the TypeScript and `.mjs` slice tool. FIXTURE rows judge the library (`fileSplit.ts`) on
 // small trees; the end-to-end rows run `.github/ci/file-split.mjs` in a fixture git repository (git environment
 // scrubbed, so nothing writes into this checkout); the REAL row judges this branch's own diff against `moveBase`:
-// a pull request that moves a declaration must be a pure move, and one that moves none answers null.
+// a pull request that adds a move marker must be a pure move; one that adds none (every feature PR) answers null
+// after one `git diff`.
 import { describe, it, expect } from 'vitest';
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, readFileSync, writeFileSync, existsSync } from 'node:fs';
@@ -14,8 +15,8 @@ import { isGitRedirectVar } from './scrub-git-env.mjs';
 import { spawnSyncGroup } from './spawnGroup.js';
 import { SPEC_FILE, readContextTable } from './rings/ringContextMap.js';
 import {
-  contextOf, duplicateDefinitions, mjsNamespace, moveBase, parseHunks, planMove, preflightVerdict, pureMoveVerdict,
-  touchedDeclarations, branchVerdict, type Tree,
+  contextOf, destHeader, duplicateDefinitions, mjsNamespace, moveBase, parseHunks, planMove, preflightVerdict,
+  pureMoveVerdict, touchedDeclarations, branchVerdict, type Tree,
 } from './fileSplit.js';
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
@@ -48,6 +49,12 @@ export function stays(): number { return LIMIT; }
 const USER = `import { Mover, stays, type Box } from './a.js';
 export const go = (b: Box): string => new Mover().run(b) + String(stays());
 `;
+
+/** Node runs `code` as an ES module in `dir`: the runtime check for `.mjs` output. */
+const nodeEval = (dir: string, code: string): { status: number | null; out: string; err: string } => {
+  const r = spawnSyncGroup(process.execPath, ['--input-type=module', '-e', code], { cwd: dir, encoding: 'utf8', timeout: 60_000 });
+  return { status: r.status, out: r.stdout, err: r.stderr };
+};
 
 const base = (): Tree => new Map([['src/a.ts', A], ['src/lib.ts', LIB], ['src/user.ts', USER]]);
 const req = { source: 'src/a.ts', dest: 'src/b.ts', names: ['Box', 'Mover'] };
@@ -150,12 +157,67 @@ export const go = (b: Box): string => new Mover().run(b) + String(stays());
     const out = plan.files.get('src/b.ts')!;
     expect(out.startsWith("import { helper } from './lib.js';\nimport path from 'node:path';\nimport { type Shape } from './lib.js';\n"))
       .toBe(true);
-    expect(out).toContain('export const OTHER = helper(1);\n\n/** A box. */\nexport interface Box');
+    // The marker goes in front of the appended regions: it is what makes the diff a move the verdict judges.
+    expect(out).toContain(`export const OTHER = helper(1);\n\n${destHeader('src/a.ts')}\n\n/** A box. */\nexport interface Box`);
     const { b, h } = sides(plan.files);
     b.set('src/b.ts', dest);
     expect(pureMoveVerdict(b, h)?.pure).toBe(true);
     const clash = planMove(req, new Map([...base(), ['src/b.ts', 'export const Mover = 1;\n']]));
     expect(clash.problems).toEqual(['Mover: src/b.ts already binds that name']);
+  });
+
+  it('FIXTURE: a namespace import that names a moved export by a string is refused; one that escapes is reported', () => {
+    for (const use of ["export const m = a['Mover'];\n", "vi.spyOn(a, 'Mover');\n"]) {
+      const tree = new Map([...base(), ['src/ns.ts', `import * as a from './a.js';\n${use}`]]);
+      expect(planMove(req, tree).problems).toEqual(['src/ns.ts: a namespace import of src/a.ts uses Mover; repoint it by hand first']);
+    }
+    const tree = new Map([...base(), ['src/ns.ts', "import * as a from './a.js';\nexport const keys = Object.keys(a);\n"]]);
+    const plan = planMove(req, tree);
+    expect(plan.problems).toEqual([]);
+    expect(plan.mentions).toEqual(['src/ns.ts:2']);
+  });
+
+  it('FIXTURE: a binding assigned on the other side of the cut is refused, since an import is read-only', () => {
+    const src = 'export let count = 0;\nexport function bump() { count++; }\nexport const read = () => count;\n';
+    const tree = new Map([['a.mjs', src]]);
+    const refusal = ['count: assigned on the other side of the cut, where it would be a read-only import; move it with the code that assigns it'];
+    // The staying code assigns a moved binding.
+    expect(planMove({ source: 'a.mjs', dest: 'b.mjs', names: ['count'] }, tree).problems).toEqual(refusal);
+    // The moved code assigns a staying binding.
+    expect(planMove({ source: 'a.mjs', dest: 'b.mjs', names: ['bump'] }, tree).problems).toEqual(refusal);
+    expect(planMove({ source: 'a.mjs', dest: 'b.mjs', names: ['bump'] },
+      new Map([['a.mjs', 'let count = 0;\nexport function bump() { [count] = [count + 1]; }\nexport const read = () => count;\n']])).problems)
+      .toEqual(refusal);
+    // Moved with the code that assigns it, the binding stays live for the code that only reads it.
+    const plan = planMove({ source: 'a.mjs', dest: 'b.mjs', names: ['count', 'bump'] }, tree);
+    expect(plan.problems).toEqual([]);
+    const dir = mkTmp('file-split-live-');
+    for (const [f, t] of plan.files) writeFileSync(path.join(dir, f), t);
+    const run = nodeEval(dir, "const a = await import('./a.mjs'); const b = await import('./b.mjs'); b.bump(); console.log(a.read());");
+    expect(run.status, run.err).toBe(0);
+    expect(run.out.trim()).toBe('1');
+  });
+
+  it('FIXTURE: a staying declaration exported through a local list keeps its one export', () => {
+    const src = 'function helper() { return 1; }\nexport function f() { return helper(); }\nexport { helper };\n';
+    const plan = planMove({ source: 'a.mjs', dest: 'b.mjs', names: ['f'] }, new Map([['a.mjs', src]]));
+    expect(plan.problems).toEqual([]);
+    expect(plan.files.get('a.mjs')).toBe('function helper() { return 1; }\nexport { helper };\n');
+    const dir = mkTmp('file-split-list-');
+    for (const [f, t] of plan.files) writeFileSync(path.join(dir, f), t);
+    // Node itself loads the pair (vitest's transform would accept a duplicate export).
+    const loads = nodeEval(dir, "const a = await import('./a.mjs'); const b = await import('./b.mjs'); "
+      + 'console.log(JSON.stringify([Object.keys(a), Object.keys(b), b.f()]));');
+    expect(loads.status, loads.err).toBe(0);
+    expect(JSON.parse(loads.out)).toEqual([['helper'], ['f'], 1]);
+    // The same output with a second export of the helper is a module Node refuses, and not a pure move.
+    const twice = new Map(plan.files);
+    twice.set('a.mjs', `export ${twice.get('a.mjs')!}`);
+    writeFileSync(path.join(dir, 'a.mjs'), twice.get('a.mjs')!);
+    const refused = nodeEval(dir, "await import('./a.mjs');");
+    expect(refused.status).not.toBe(0);
+    expect(refused.err).toContain("Duplicate export of 'helper'");
+    expect(pureMoveVerdict(new Map([['a.mjs', src]]), twice)).toMatchObject({ pure: false, differing: ['exported-twice:a.mjs#helper'] });
   });
 
   it('FIXTURE: a mention of the source module outside an import is reported, not repointed', () => {
@@ -170,6 +232,19 @@ describe('file-split: the pure-move verdict (D-8636)', () => {
   it('FIXTURE: a diff that moves no declaration is not judged', () => {
     const head = new Map([['src/a.ts', A.replace('return LIMIT;', 'return LIMIT + 1;')]]);
     expect(pureMoveVerdict(new Map([['src/a.ts', A]]), head)).toBeNull();
+  });
+
+  it('FIXTURE: a feature diff that shares a private name across files is not judged: it adds no move marker', () => {
+    const was = new Map([['test/a.test.ts', "const TOKEN = 'x';\nexport const a = TOKEN;\n"]]);
+    const now = new Map([['test/a.test.ts', "const TOKEN = 'x';\nexport const a = TOKEN + 1;\n"],
+      ['test/b.test.ts', "const TOKEN = 'y';\nexport const b = TOKEN;\n"]]);
+    expect(pureMoveVerdict(was, now)).toBeNull();
+    // A diff that looks like a move but carries no marker is not judged either: the marker is the move's signal.
+    const { b, h } = sides(edit(moved(), 'src/b.ts', `${destHeader('src/a.ts')}\n\n`, ''));
+    expect(pureMoveVerdict(b, h)).toBeNull();
+    // A marker with nothing moved is judged, and is not a pure move.
+    const marked = new Map([['src/a.ts', A.replace('export function stays', `${destHeader('src/x.ts')}\nexport function stays`)]]);
+    expect(pureMoveVerdict(new Map([['src/a.ts', A]]), marked)).toMatchObject({ pure: false, differing: ['no-move'] });
   });
 
   it('FIXTURE: an edited moved body is not pure', () => {
@@ -331,6 +406,14 @@ describe('file-split: the script, end to end (D-8636)', () => {
     put('server/src/coord/a.ts', A.replace('return LIMIT; }\n', 'return LIMIT + 0; }\n'));
     git(dir, 'commit', '-q', '-am', 'feature in stays');
     const h8 = git(dir, 'rev-parse', 'HEAD').trim();
+    // A feature head that edits a.ts and adds a file sharing one of its names, with no move marker.
+    git(dir, 'checkout', '-q', '-b', 'feature', baseSha);
+    put('server/src/coord/a.ts', A.replace('return LIMIT; }\n', 'return LIMIT + 1; }\n'));
+    put('server/src/coord/a2.ts', 'export const LIMIT = 4;\n');
+    git(dir, 'add', '-A'); git(dir, 'commit', '-q', '-m', 'feature sharing a name');
+    const feature = tool(dir, 'verdict', '--base', baseSha, '--head', 'feature');
+    expect(feature.status, feature.err).toBe(0);
+    expect(JSON.parse(feature.out)).toBeNull();
     git(dir, 'checkout', '-q', 'main');
 
     const args = ['--source', 'server/src/coord/a.ts', '--dest', 'server/src/coord/b.ts', '--names', 'Box,Mover'];
@@ -371,7 +454,7 @@ describe('file-split: the script, end to end (D-8636)', () => {
 });
 
 describe('file-split: this branch (D-8636)', () => {
-  it('REAL: this diff, against moveBase, is a pure move whenever it moves a declaration', (ctx) => {
+  it('REAL: this diff, against moveBase, is a pure move whenever it adds a move marker', (ctx) => {
     let baseSha: string;
     try {
       baseSha = moveBase(process.env, REPO);
