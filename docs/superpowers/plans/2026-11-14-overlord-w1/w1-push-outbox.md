@@ -10,7 +10,7 @@ operator gets a reach stamp, `reachedOperatorAt`, and its one outbox row, both i
 releases it. A row whose level makes no push today gets its outbox row too, marked `silent`. One L1 decider, `pushDue`,
 says whether a row pushes now or stays silent. Each row carries a random push id. The pushes the operator receives are
 the same as today's, behind characterization tests written first, and the server advertises the change with its own
-capability word, `push-outbox-v1`.
+capability word, `push-outbox-v1`. A rollback to a build without that word refuses unless forced.
 
 **Why:** today a push is a call that returns nothing. It is fire-and-forget, a crash between a row's write and its push
 loses the push for good, and nothing records whether a row reached the operator. W3's holds delay pushes, so they need a
@@ -23,10 +23,10 @@ next state, the retry time and the boot pass's answer per row. L2: the sender's 
 table's functions in a new `server/src/coord/pushOutboxStore.ts`, with one-line `CoordStore` delegates, and a per-send
 verdict from `PushService.notify`. L4: the sender in a new `server/src/pushSender.ts`, with a `LANE_SCHEDULE` row for
 retries and a boot pass run once by the composition root. The funnel (`server/src/notice.ts`) hands every push to the
-sender instead of sending it. Two pull requests.
+sender instead of sending it. The rollback verb in `ccd/ccrc` refuses to drop a guarded word, which it reads from each
+release's own word list. Three pull requests.
 
-**Tech Stack:** TypeScript (ESM), `node:sqlite`, Fastify, vitest.
-
+**Tech Stack:** TypeScript (ESM), `node:sqlite`, Fastify, bash (`ccd/ccrc`), vitest.
 **Spec:** `docs/superpowers/specs/2026-11-09-overlord-design.md` §6.7 ("Pushes go through an outbox", "Older builds
 fail towards the operator", "The invariants this section serves"), §6.1 C31 (the reach stamp on asks and items), §4.2
 (`pushDue` beside `pushAdmission`), §4.3 and C67 (the push id stored on the outbox row, the per-send verdict, a row that
@@ -65,11 +65,17 @@ recommendation unless the coordinator rules otherwise.
    derives it on read. **Recommendation:** an item raised with no `heldUntil` is stamped at its raise. A held item is
    stamped, with its silent outbox row, by the sender's lane pass once `heldUntil` has passed while the item is still
    open, through the same one writer. All three raises are `soon` or `later`, so none pushes, before or after.
-5. **Rollback below `push-outbox-v1`** (slug `rollback-refusal-ships-with-holds`). §11.5 says `ccrc rollback` below the
-   word refuses unless forced. The refusal protects holds, and W1 has none. `ccrc rollback` (`ccd/ccrc#cmd_rollback`)
-   reads no server, no `coord.db` and no capability word today. **Recommendation:** W1 advertises the word only. The
-   refusal ships with the hold tier's arming in W3, the first state a rollback could lose. A rollback from this build
-   loses at most the rows still unsent, which is no worse than today's crash.
+5. **Rollback below `push-outbox-v1`** (slug `rollback-reads-the-targets-words`). **Ruled (index review 2075, F8): this
+   piece owns the refusal** of §11.5, "a rollback below it refuses unless forced". The rollback verb
+   (`ccd/ccrc#cmd_rollback`) reads no server, no `coord.db` and no server capability word today. It skips the version
+   floor by design (`_upd_floor_check` lets `--from rollback` through), and a release records no server words
+   (`build.json` carries `sha`, `ref`, `builtAt`, `dirty` and `version` only). So the refusal needs a fact it can read
+   from both builds. **Recommendation:** each release carries its own word list, `server-caps.list`, written by
+   `deploy/build-release.sh` from the built `SERVER_CAPS`. A guarded word is marked on its line, and the guarded set is
+   spelled once, in TypeScript. The rollback verb refuses, before it changes anything, when the current tree's list
+   marks a word guarded and the target's list lacks it. A target with no list is older than every guarded word, so it
+   lacks them. `--force` overrides the refusal. The watchdog's rollback and the gate-failure restore go through with a
+   warning, because they are the way back from an unhealthy box, as they do past the version floor. Task 7 builds it.
 6. **The ask's reach stamp beside `releasedAt`** (slug `reach-stamp-beside-released-at`). `asks.releasedAt` already
    records "the instant the operator's push was released" (`CoordStore.declineAsk`). In W1 the two are equal. In W3 an
    ask the coordinator releases may be held for the Overlord, so they part. **Recommendation:** a column of its own,
@@ -143,7 +149,15 @@ Measured on `main` at `416b8f942`.
   (`TIME_PORT_FAMILIES`, `TIME_PORT_FILES`).
 - **Lanes.** `server/src/laneSchedule.ts#LANE_SCHEDULE`, pinned by `server/test/lane-schedule.test.ts`.
 - **Capability words.** `shared/api.ts#SERVER_CAP_MAP` (nine words, `timers-v1` the newest). `health.test.ts` and
-  `ccrc-api.test.ts` read `SERVER_CAPS`.
+  `ccrc-api.test.ts` read `SERVER_CAPS`. `ccd/ccrc`'s `CCRC_CAP_WORDS` lists what this install's `ccrc` can do
+  (`verify`, `node-id`, `floor`, `update-json`, `update-gate`, `rollback`, `versions`, `token-sync`), and the
+  `ccrc-install-*.test.ts` suites pin each word to the code it names. No word there is an Overlord word.
+- **Rollback.** `ccd/ccrc#cmd_rollback` has two arms: a flip to a kept tree (`_ver_flip_back`, under
+  `~/ccrc-versions/<tag>`), and a reinstall through `cmd_update --to <tag> --downgrade --from rollback`, which fetches and
+  verifies the tarball (`_upd_fetch`). The only refusal on version is `_upd_floor_check`, and it lets a run
+  `--from restore`, `rollback` or `watchdog` through with a warning. `rollback` takes no `--force`. A build's identity is
+  `build.json` (`deploy/build-release.sh`), with no capability words in it. The PWA's rollback
+  (`POST /api/updates/rollback`) ends in the same verb, run `--detach --from pwa`.
 - **Contexts.** The architecture spec's C6 row names `push.ts` and `notice.ts` exactly
   (`docs/superpowers/specs/2026-08-10-architecture-ddd-clean-solid.md`), so a new file there needs its row.
 - **Tests that pin the funnel today:** `notify-push.test.ts`, `notice.test.ts`, `feed-writers-pin.test.ts`,
@@ -180,7 +194,19 @@ Measured on `main` at `416b8f942`.
   `MUTANT_SETS` through a new `server/test/sim/pushOutboxSets.ts` and `server/test/sim/mutation-floors.json`, in PR A.
 - **Growth check** (`server/test/growthCheck.ts#GROWTH_FILES`, 40 net lines a file a pull request): each PR states its
   estimate below, and the builder measures it before pushing.
-- **No door, no client verb, no ccd change, no PWA change.** This piece adds no route, so no door census moves.
+- **No door, no client verb, no PWA change.** This piece adds no route, so no door census moves. Its one ccd change is
+  the rollback refusal in `ccd/ccrc` (Task 7). It never edits `ccd/ccd`, and its tests run the verb on fixture HOMEs only
+  (`ccrc-updateFixture.ts`), never against a live box.
+- **One concern per file** (the large-file programme, #2769; index review F6). Every new wire type (`PushSendVerdict`, the
+  states, the bounds) lives in the new `shared/push-outbox.ts`, and the guarded words in a new `shared/rollback-guards.ts`.
+  `shared/api.ts` gains only `push-outbox-v1`'s row in `ServerCap` and `SERVER_CAP_MAP`.
+- **Shared files, by row** (index review F13). In `server/src/coord/ledgersRoutes.ts`, this piece touches
+  `pushBlocking` and its one call line in each of the raise route (`POST /api/programmes/:slug/items`) and the blocking
+  route (`POST /api/items/:id/blocking`), and no other handler. The goals doors belong to the portfolio piece and the
+  gate rows to the gates piece. In `server/src/coord/ledgersStore.ts` it touches `raiseItemInTx`, `setBlocking` and the
+  new `heldItemsReached` read only. It does not touch `pwa/src/lib/api.ts`.
+- **The push id has one owner, this piece:** its column, its minting through `Entropy`, and its uniqueness. The
+  response record reads it from the outbox row and puts it in the payload.
 - Cite by symbol or `@anchor`. No private names: fixtures `lane-a-project-a`, `prog-a`. No D-number invented: the
   builder's departures go in `docs/superpowers/plans/2026-11-14-overlord-w1/w1-push-outbox/departures.md`.
 
@@ -195,6 +221,9 @@ Measured on `main` at `416b8f942`.
    one seam. A push the presence gate suppressed today writes no unbound row and, for a bound row, a `silent` one.
 4. **A failed write never costs the push.** With no `coord.db`, or an insert that throws, the push still goes, as today.
 5. **One writer each.** `reachedOperatorAt` and `pushedAt` each have one writer. `PushService.notify` has one caller.
+6. **The rollback refusal fails the right way.** It refuses before anything on the box changes. It reads the guarded
+   words from the two builds' own lists, never from a list in bash, and it never stops the watchdog's rollback or the
+   gate-failure restore.
 
 ## The PR split
 
@@ -202,10 +231,14 @@ Measured on `main` at `416b8f942`.
 |---|---|---|---|---|
 | A, the record and its rules | 1 to 3 | The characterization suite; the vocabulary and deciders; `push_outbox`, the reach stamps, their writers, and the per-send verdict. Nothing reachable: no caller writes a row yet | nothing: **ready to build** | `server/src/coord/schema.ts` about +30; `server/src/coord/store.ts` about +10 |
 | B, the sender and the move | 4 to 6 | The sender with its lane row and boot pass; the funnel behind it; the raising transactions for asks and items; the held item's reach; the word `push-outbox-v1` | PR A | `server/src/coord/store.ts` about +18; `server/src/watch.ts` about +16; `shared/api.ts` about +6 |
+| C, the rollback refusal | 7 | `server-caps.list` in every release, the guarded set, the refusal in the rollback verb with `--force`, and the `ccrc` word `cap-floor` | nothing: **ready to build**, in parallel with A | `ccd/ccrc` about +34 |
 
-**Order:** PR A at once; PR B once PR A has merged. The index lists one pull request. Two keep the move, which changes
-every push in the server, apart from the record it moves onto, and PR A's characterization suite is green on `main`
-before anything moves.
+**Order:** PR A and PR C at once; PR B once PR A has merged. The index lists one pull request. Two keep the move, which
+changes every push in the server, apart from the record it moves onto, and PR A's characterization suite is green on
+`main` before anything moves. The refusal is a third, because it is the update control plane's code, in `ccd/ccrc` and
+`deploy/`, with its own fixtures and its own review lens. It reads `push-outbox-v1` from the lists and never names it in
+bash, so it can merge before the word exists: until PR B adds the word, no build marks a guarded word, so it refuses
+nothing.
 
 **Why the word comes last.** `push-outbox-v1` is added by Task 6, the last commit of PR B, once every site writes rows
 and the sender drains them.
@@ -516,16 +549,65 @@ never sent again.
 - [ ] **Step 3:** Before the push, read the mail lane and `notice.ts` at the oldest version a box can roll back to
   (`ccrc versions` lists them, `git show <tag>:server/src/notice.ts`) and record in the departures note that an older
   build ignores `push_outbox` and the two columns, as Table 11.5's "ignored" class.
-- [ ] **Step 4: Commit.** `feat(api): advertise push-outbox-v1 (H18)`
+- [ ] **Step 4:** Add `push-outbox-v1` to `ROLLBACK_GUARDED_CAPS` (Task 7's list) in the same commit, so the first
+  release that carries the word also marks it guarded. If PR C has not merged yet, the builder adds the word to that
+  list in PR C instead and says so in the departures note.
+- [ ] **Step 5: Commit.** `feat(api): advertise push-outbox-v1 (H18)`
+
+**PR B ends here.**
+
+### Task 7: The rollback refusal below a guarded word (PR C)
+
+**Files:**
+- Create: `shared/rollback-guards.ts` (L0, K: `ROLLBACK_GUARDED_CAPS: readonly ServerCap[]`, empty until Task 6 adds
+  `push-outbox-v1`; a type import from `shared/api.ts` only)
+- Modify: `deploy/build-release.sh` (after the build, write `server-caps.list` at the tarball's root from the built
+  `SERVER_CAPS` and `ROLLBACK_GUARDED_CAPS`: one word a line, a guarded word followed by ` guarded`)
+- Modify: `ccd/ccrc` (`cmd_rollback`'s `--force`; one reader, `_rb_caps_of <tree|tarball>`; one check,
+  `_rb_cap_floor_check`; the word `cap-floor` in `CCRC_CAP_WORDS` and its line in the words-by-wave comment)
+- Modify: the release suites that pin the tarball's entries and `release-main.sh compare`'s set-aside list, if a new
+  entry needs naming there
+- Test: `server/test/ccrc-rollback-cap-floor.test.ts` (new, on `ccrc-updateFixture.ts`'s fixture HOMEs and trees),
+  the `ccrc-install-*.test.ts` word pin, `server/test/build-release.test.ts`, `release-artifact.test.ts` and
+  `release-main.test.ts` for the new entry
+
+**The check**, run after the target is named and before anything on the box changes: in the flip arm before
+`_ver_flip_back`, and in the reinstall arm after `_upd_fetch` has verified the tarball and before it is extracted. It
+reads the current tree's list and the target's (the kept tree's file, or the verified tarball's entry read in place).
+It refuses when a word the current list marks `guarded` is not in the target's list, and a target with no list lacks
+every word. The sentence leads with the verdict and names the word:
+`rollback: refused — <tag> does not carry push-outbox-v1, which this build guards; a rollback below it can lose pushes (pass --force to roll back anyway). Nothing on this box was changed`.
+- A current tree with no list (one placed by `deploy.sh`, or a release from before this task) refuses nothing and
+  prints one warning that the guard could not be read.
+- `--force` goes through, with a warning that names the word.
+- `--from watchdog` and `--from restore` go through, with a warning, as `_upd_floor_check` lets them through.
+- `--from pwa` is refused like a typed run: the update report's phase names the refusal, and the console's row shows it.
+  The console offers no forced rollback in W1.
+- `ccrc update --to <older> --downgrade` is not changed: `--downgrade` is already the operator's explicit override, and
+  the version floor already refuses a downgrade without it.
+
+- [ ] **Step 1: Failing tests:** a kept target with a list that lacks a guarded word refuses, and `~/ccrc` still points
+  at the current tree; the same target with `--force` flips; a target with no list refuses; a current tree with no
+  list flips with the warning; `--from watchdog` flips with the warning; a reinstall target whose verified tarball lacks
+  the word refuses before extraction; a target that carries every guarded word flips with no warning; an empty
+  guarded set refuses nothing; the built tarball carries `server-caps.list` equal to `SERVER_CAPS`, one line each,
+  guarded words marked; `cap-floor` is in the box's `ccrc-caps` after an install.
+- [ ] **Step 2: Run.** Red. **Step 3: Implement.** **Step 4: Run** these suites, the `ccrc-update-*` and
+  `ccrc-install-*` suites, `test/ccrc-rollout.test.ts`, the growth check armed, and shellcheck's ratchet. Green.
+- [ ] **Step 5: Mutation.** Let the reader treat a missing target list as carrying every word: the no-list case goes
+  red. Move the check after `_ver_flip_back`: the "still points at the current tree" case goes red. Let `--from
+  watchdog` refuse: red. Revert each.
+- [ ] **Step 6: Commit.** `feat(ccrc): a rollback refuses to drop a guarded server word unless forced (H18, §11.5)`
 
 ## Rollback below `push-outbox-v1`
 
 An older server reads the newer database: the higher `user_version` is readable, and it never reads `push_outbox` or
 `reachedOperatorAt`. Its pushes are today's. What a rollback loses is the rows still unsent at the moment it stops
-this build, which is the same set a crash loses today. No hold exists in W1, so no row waits on a push that an older
-build would drop. The refusal of §11.5 ships with the hold tier (open question 5). After a roll forward, the boot pass
-sends the rows that were `pending` or `retrying` when this build last stopped. They are as old as the downtime, and
-the plan accepts that: each is a push the operator would have had.
+this build, which is the same set a crash loses today. No hold exists in W1, so in W1 the refusal guards that small set
+and, from W3, the holds it was written for. Task 7 makes a typed or console rollback below the word refuse unless
+forced, and lets the watchdog's and the restore's through. After a roll forward, the boot pass sends the rows that were
+`pending` or `retrying` when this build last stopped. They are as old as the downtime, and the plan accepts that: each
+is a push the operator would have had.
 
 ## Deviations found
 
@@ -536,7 +618,9 @@ None yet. **Spec departures**, for the spec's next correction:
   `unknown`, so "sends every unsent row again at boot" reads "every row no attempt claimed" (open question 3).
 - **item-held-until-is-a-hold** — items already have a hold, `heldUntil`; the drain stamps their reach when it passes
   (open question 4).
-- **rollback-refusal-ships-with-holds** — W1 advertises `push-outbox-v1` and refuses no rollback (open question 5).
+- **rollback-reads-the-targets-words** — §11.5's refusal needs to know what the target build carries, and nothing
+  records it today, so each release carries `server-caps.list`, and the watchdog's rollback and the restore pass with a
+  warning (open question 5, ruled F8).
 
 Decisions this plan takes, by slug:
 
@@ -553,11 +637,26 @@ Decisions this plan takes, by slug:
 - **payload-masked-at-rest** — the stored payload is masked before the insert.
 - **boot-before-listen** — the boot pass runs before the server listens and the watcher starts, so it needs no process
   id to tell a dead attempt from a live one.
-- **two-prs** — the index's one pull request becomes two (The PR split).
+- **three-prs** — the index's one pull request becomes three (The PR split).
+- **guarded-words-spelled-once** — `ROLLBACK_GUARDED_CAPS` in `shared/rollback-guards.ts` is the one list, and bash
+  reads it only through the release's `server-caps.list`.
+- **no-list-current-tree-refuses-nothing** — a current tree with no list (a `deploy.sh` push) warns and refuses nothing,
+  because it cannot say what it guards.
+- **downgrade-is-already-forced** — `ccrc update --to <older> --downgrade` is not refused: `--downgrade` is the
+  override, and the version floor refuses a downgrade without it.
+- **no-forced-rollback-in-the-console** — the console's rollback is refused like a typed one, and W1 offers no forced
+  rollback there.
+- **wire-types-in-a-sibling** — every new wire type is in `shared/push-outbox.ts`, and `shared/api.ts` gains only the
+  word's row (index review F6).
 
 ## Where things stand
 
-**Needs before it starts:** nothing beyond `main`. PR B needs PR A.
+**Needs before it starts:** nothing beyond `main`. PR B needs PR A. PR C needs nothing.
+
+**Changed after the index's review (2075):** F8, the rollback refusal, is this piece's (Task 7, PR C). F6, every new
+wire type is in a new `shared/` sibling and `shared/api.ts` gains only the word's row. F13, the rows this piece touches
+in `ledgersRoutes.ts` and `ledgersStore.ts` are named in Global Constraints, and it does not touch
+`pwa/src/lib/api.ts`. The push id's one owner is this piece.
 
 **What depends on it:** responses PR A (the push id, the verdict and the claim step); W3's holds, the repeat push and the
 attention budget (`pushDue` gains `deferred`); the readiness piece's "a dead Overlord's one push", which is an unbound
@@ -565,12 +664,15 @@ push through the same sender.
 
 **What a merge arms:** nothing the operator sees changes, apart from three named effects: a push the service refused is
 retried for ten minutes, a push unsent when the server stopped is sent at its next boot, and a blocking toggle during a
-send in flight adds no second push. No Shadow lanes row is added.
+send in flight adds no second push. A typed or console rollback to a build without a guarded word refuses unless forced,
+and once PR B marks `push-outbox-v1` guarded, that is every build from before it. No Shadow lanes row is added.
 
-**What the index should change:** the row reads "2 PRs, 6 tasks"; "`PushService`'s per-send verdict" moves from
-responses PR A to this row; lane E's file list adds `server/src/pushSender.ts`, `server/src/pushOutbox.ts`,
-`server/src/coord/pushOutboxStore.ts`, `shared/push-outbox.ts`, `server/src/coord/ledgersStore.ts`'s `raiseItemInTx` and
-`setBlocking`, and the architecture spec's C6 row; and the piece plans live in
+**What the index should change:** the row reads "3 PRs, 7 tasks", with PR C ready to build; "`PushService`'s per-send
+verdict" moves from responses PR A to this row; lane E's file list adds `server/src/pushSender.ts`,
+`server/src/pushOutbox.ts`, `server/src/coord/pushOutboxStore.ts`, `shared/push-outbox.ts`, `shared/rollback-guards.ts`,
+`server/src/coord/ledgersStore.ts`'s `raiseItemInTx` and `setBlocking`, `ccd/ccrc`'s rollback verb and `CCRC_CAP_WORDS`,
+`deploy/build-release.sh`, and the architecture spec's C6 row; "Where lanes meet" adds `ccd/ccrc` (growth-checked) for
+lane E's one function group; and the piece plans live in
 `docs/superpowers/plans/2026-11-14-overlord-w1/`, as the brief says, not beside the W1a plans.
 
 **Later:** binding the other durable once-only marks (open question 7) to their outbox rows, one site per change: the
