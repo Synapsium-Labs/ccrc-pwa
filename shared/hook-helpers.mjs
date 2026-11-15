@@ -31,7 +31,7 @@
 //
 // Plain ESM with no npm imports, like `shared/mark.mjs`, so `deploy/` and the tests can run it with a bare `node`.
 
-import { readFileSync, realpathSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { markGenerated, verifyMarker } from './mark.mjs';
 
@@ -56,6 +56,34 @@ export const LOGLINE_REGION_END = '# ── END GENERATED LOG-LINE REDACTOR ─�
 
 /** The auth-dead marker's writers (D-7049), in their `ccd/ccd` definition order. */
 export const AUTHDEAD_WRITERS = Object.freeze(['_authdead_mark', '_authdead_clear', '_authdead_sweep_staged']);
+
+/** `main` with each `# @ccd-lib:<id>` pointer line replaced by that region of the library texts `libs`, one level deep: a
+ *  pointer with no region stays as it is, and an id two libraries both name throws. The same splice as
+ *  `server/test/ccdWsHelpers.ts#spliceCcd`, which ccd-lib-shape.test.ts holds equal to this one (the file split, D-8048). */
+export function spliceProgram(main, libs) {
+  const regions = new Map();
+  for (const text of libs) {
+    const parts = text.split(/^# @ccd-lib:(\w+)\n/m);
+    for (let i = 1; i + 1 < parts.length; i += 2) {
+      if (regions.has(parts[i])) throw new Error(`hook-helpers: the region id ${parts[i]} is named twice across ccd's libraries`);
+      regions.set(parts[i], parts[i + 1].replace(/\n+$/, ''));
+    }
+  }
+  if (regions.size === 0) return main;
+  return main.replace(/^# @ccd-lib:(\w+)\b.*$/gm, (line, id) => regions.get(id) ?? line);
+}
+
+/** ccd's program as ONE text (the file split, D-8048): the ccd at `ccdPath`, each pointer line replaced by its region of the
+ *  libraries its `__CCD_LIBS` table names, read from `lib/` beside it (one absent is skipped). A function the split moved
+ *  into a library is still found here, so `ccrc restamp` regenerates `_authdead_*` wherever they sit. */
+export function readCcdProgram(ccdPath) {
+  const main = readFileSync(ccdPath, 'utf8');
+  const table = main.split('\n').find((l) => l.startsWith('__CCD_LIBS=('));
+  const words = table === undefined ? [] : (/^__CCD_LIBS=\(([a-z0-9 -]*)\)/.exec(table)?.[1] ?? '').split(' ').filter((w) => w !== '');
+  const libs = words.map((w) => fileURLToPath(new URL(`lib/${w}.sh`, pathToFileURL(ccdPath)))).filter((f) => existsSync(f))
+    .map((f) => readFileSync(f, 'utf8'));
+  return spliceProgram(main, libs);
+}
 
 /** The body of ccd's `_plat_epoch_ms`, or null when ccd has no such function. */
 export function ccdEpochBody(ccdSrc) {
@@ -206,8 +234,9 @@ if (startedAsScript()) {
     process.exit(2);
   }
   const target = readFileSync(targetPath, 'utf8');
-  const ccd = readFileSync(givenPath, 'utf8');
   const row = regionOf(target);
+  // A row rendered from ccd/ccd reads ccd's whole program, its libraries spliced back (D-8048); any other file as it is.
+  const ccd = (row ?? HOOK).file === 'ccd/ccd' ? readCcdProgram(givenPath) : readFileSync(givenPath, 'utf8');
   // The given file must be the one the target's row names (W5 C5i), compared by basename (a caller may know only that
   // its file is named `ccd`), once, before any mode renders or writes. A file with no region has no row, so nothing is
   // checked: `--restamp` prints `nothere`, and `--write` and `--check` keep the base's output through the hook row

@@ -15,6 +15,7 @@ import { inheritedEnv } from './gitEnvStrip.js';
 import { CONTAINED_TOOLS, assertNoPoisonLeft, busUnder, ledgerHitLine, plantPoison, takePoisonRecord } from './containedTools.js';
 import { CLOSED_AUTH_BASE } from './codexAuthFixture.js';
 import { markGenerated } from '../../shared/mark.mjs';
+import { ccdLibNames } from './ccdLibTable.js';
 
 /** The home-able ids of the test roster — the set ccd reads as `CCRC_HOME_ABLE`
  *  out of the roster `seedAccountsSh` writes below. Derived, not hand-typed,
@@ -52,8 +53,9 @@ export const CCD_POOLSET_LIB = path.resolve(__dirname, '../../ccd/lib/pool-set.s
 /** Its committed pin placeholder, rendered at install time like `CCD_LIB_PIN_PLACEHOLDER`. */
 export const CCD_POOLSET_LIB_PIN_PLACEHOLDER = '__CCD_LIB_POOLSET_SHA256=stamp-at-install';
 
-/** Every library `CCD` loads, in load order: the file and the name it is installed under in `lib/` beside the body. */
-export const CCD_LIBS: readonly string[] = [CCD_LIB, CCD_TRAIN_LIB, CCD_LEASE_LIB, CCD_POOLSET_LIB];
+/** Every library `CCD` loads, in load order: the file and the name it is installed under in `lib/` beside the body. Read
+ *  from ccd/ccd's `__CCD_LIBS` table (`ccdLibNames`, the file split, D-8048), never listed here. */
+export const CCD_LIBS: readonly string[] = ccdLibNames().map((w) => path.resolve(__dirname, '../../ccd/lib', `${w}.sh`));
 
 /** The docs redactor's two files (D-7077, OA-C11 (a)): installed beside the body in `shared/`, read by the installer from the
  *  tree's `shared/`, and pinned by digest in the body like the library. */

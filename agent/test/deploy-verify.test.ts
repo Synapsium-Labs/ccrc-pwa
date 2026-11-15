@@ -42,6 +42,7 @@ import path, { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { bodyDigest, markGenerated } from '../../shared/mark.mjs';
 import { mkTmp } from './tmpHelpers.js';
+import { ccdLibNames } from '../../server/test/ccdLibTable.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const deployDir = path.resolve(here, '..', '..', 'deploy');
@@ -1842,7 +1843,7 @@ describe('the verification is actually wired into the deploy, and can observe a 
       for (const f of ['ccd', 'ccd-entry.py', 'ccd-entry-install.py']) cpSync(path.join(repoCcd, f), path.join(home, 'ccrc', 'ccd', f));
       // The libraries the body pins and the publisher places first (D-6913, D-7463).
       mkdirSync(path.join(home, 'ccrc', 'ccd', 'lib'), { recursive: true });
-      for (const f of ['disk-retention.sh', 'train-proof.sh', 'delegation-lease.sh', 'pool-set.sh']) cpSync(path.join(repoCcd, 'lib', f), path.join(home, 'ccrc', 'ccd', 'lib', f));
+      for (const w of ccdLibNames()) cpSync(path.join(repoCcd, 'lib', `${w}.sh`), path.join(home, 'ccrc', 'ccd', 'lib', `${w}.sh`));   // the table's (D-8048)
       // The docs redactor's two files (D-7077), which the publisher places beside the library and pins in the body.
       mkdirSync(path.join(home, 'ccrc', 'shared'), { recursive: true });
       for (const f of ['redact.mjs', 'redact-cli.mjs']) cpSync(path.join(repoCcd, '..', 'shared', f), path.join(home, 'ccrc', 'shared', f));
@@ -1858,14 +1859,11 @@ describe('the verification is actually wired into the deploy, and can observe a 
       expect(out.indexOf('library published'), 'the body\'s library is published before the body that pins it').toBeGreaterThan(-1);
       expect(out.indexOf('library published')).toBeLessThan(out.indexOf('body published'));
       expect(out.indexOf('body published'), 'body before the launcher, launcher LAST').toBeLessThan(out.indexOf('launcher published'));
-      expect(readFileSync(path.join(home, '.local', 'libexec', 'ccrc', 'lib', 'disk-retention.sh')).equals(readFileSync(path.join(repoCcd, 'lib', 'disk-retention.sh'))),
-        'the library is the tree\'s').toBe(true);
-      expect(readFileSync(path.join(home, '.local', 'libexec', 'ccrc', 'lib', 'train-proof.sh')).equals(readFileSync(path.join(repoCcd, 'lib', 'train-proof.sh'))),
-        'the second library is the tree\'s').toBe(true);
-      expect(readFileSync(path.join(home, '.local', 'libexec', 'ccrc', 'lib', 'delegation-lease.sh')).equals(readFileSync(path.join(repoCcd, 'lib', 'delegation-lease.sh'))),
-        'the third library is the tree\'s').toBe(true);
-      expect(readFileSync(path.join(home, '.local', 'libexec', 'ccrc', 'lib', 'pool-set.sh')).equals(readFileSync(path.join(repoCcd, 'lib', 'pool-set.sh'))),
-        'the fourth library is the tree\'s').toBe(true);
+      // Every library of ccd's `__CCD_LIBS` table (the file split, D-8048), in its place beside the body.
+      for (const w of ccdLibNames()) {
+        expect(readFileSync(path.join(home, '.local', 'libexec', 'ccrc', 'lib', `${w}.sh`)).equals(readFileSync(path.join(repoCcd, 'lib', `${w}.sh`))),
+          `the library ${w} is the tree's`).toBe(true);
+      }
       const entry = path.join(home, '.local', 'bin', 'ccd');
       const bodyPath = path.join(home, '.local', 'libexec', 'ccrc', 'ccd');
       const shebang = readFileSync(entry, 'utf8').split('\n')[0]!;

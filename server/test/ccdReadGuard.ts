@@ -27,6 +27,7 @@ const SELF = path.join(REPO, 'server', 'test', 'ccdReadGuard.ts');
 /** Files about the bytes of ccd/ccd itself: they read, copy or list the file on purpose. Repo-relative. */
 export const FILE_READERS: readonly string[] = [
   'server/test/ccdWsHelpers.ts',              // ccdSource(), ccdTreeCopy(), installedCcdBody() and installDirectEntry(): the one place that reads it
+  'server/test/ccdLibTable.ts',               // ccdLibNames(): the one `__CCD_LIBS` line every test-side list derives from
   'server/test/ccd-lib-load.test.ts',         // the load, its pins and its refusals
   'server/test/ccd-lib-shape.test.ts',        // the table and the libraries' shape
   'server/test/ccd-entry-install.test.ts',    // the installer's output, byte for byte

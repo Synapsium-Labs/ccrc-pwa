@@ -209,6 +209,25 @@ def render_lib_pin(data, lib_digest, placeholder=LIB_PIN_PLACEHOLDER, name=b'__C
     return placeholder.sub(name + b'=' + lib_digest.encode('ascii'), data)
 
 
+# THE LIBRARY TABLE (the file split, D-8048): ccd/ccd names every library it loads, once, in load order, in its literal
+# `__CCD_LIBS=(...)` line, one word per ccd/lib/<word>.sh, and its load builds its file list from that line. `read_lib_table`
+# reads it here. Until the install assembles the libraries into the body (the split's Task 5), this program publishes the
+# four it names above, each under its own pin, so `install` refuses, before anything moves, a body whose table is not
+# exactly those four in that order: a body that loads a library this install does not publish would refuse every start.
+LIB_TABLE_LINE = re.compile(rb'^__CCD_LIBS=\(([a-z0-9 -]+)\)( .*)?$')
+
+
+def read_lib_table(body):
+    """The words of the body's one `__CCD_LIBS=(...)` line, in load order (THE LIBRARY TABLE). A body with no such line,
+    more than one, or one that is not a word list refuses."""
+    lines = [line for line in body.split(b'\n') if line.startswith(b'__CCD_LIBS=(')]
+    m = LIB_TABLE_LINE.match(lines[0]) if len(lines) == 1 else None
+    if m is None:
+        raise Refused('%s carries %d `__CCD_LIBS=(` line(s), not exactly one word list: the body names the libraries it loads'
+                      ' there, once' % (BODY_SOURCE, len(lines)))
+    return [w.decode('ascii') for w in m.group(1).split()]
+
+
 def read_lib(tree, source):
     """A library's bytes from the tree, refused unless they end in exactly one newline and hold no NUL (THE LIBRARY)."""
     data = read_regular(os.path.join(tree, *source.split('/')))
@@ -519,6 +538,13 @@ def sweep(directory, pattern, is_dir):
 
 def install(tree, home):
     python = check_interpreter()
+    body_src = read_regular(os.path.join(tree, *BODY_SOURCE.split('/')))
+    published = [src[len('ccd/lib/'):-len('.sh')] for src in (LIB_SOURCE, TRAIN_LIB_SOURCE, LEASE_LIB_SOURCE, POOLSET_LIB_SOURCE)]
+    table = read_lib_table(body_src)
+    if table != published:
+        raise Refused('%s loads %s (its `__CCD_LIBS` table), but this install publishes %s, in that order: a body that loads'
+                      ' a library this install does not publish would refuse every ccd start' % (BODY_SOURCE, ' '.join(table),
+                                                                                                ' '.join(published)))
     lib_data = read_lib(tree, LIB_SOURCE)
     lib_digest = hashlib.sha256(lib_data).hexdigest()
     train_data = read_lib(tree, TRAIN_LIB_SOURCE)
@@ -530,8 +556,7 @@ def install(tree, home):
     redact_data = read_regular(os.path.join(tree, *REDACT_SOURCE.split('/')))
     cli_data = read_regular(os.path.join(tree, *REDACT_CLI_SOURCE.split('/')))
     # The pins first, then the stamp over them, then the launcher's digest over all (THE LIBRARY, above).
-    pinned = render_redact_pins(read_regular(os.path.join(tree, *BODY_SOURCE.split('/'))),
-                                (hashlib.sha256(redact_data).hexdigest(), hashlib.sha256(cli_data).hexdigest()))
+    pinned = render_redact_pins(body_src, (hashlib.sha256(redact_data).hexdigest(), hashlib.sha256(cli_data).hexdigest()))
     pinned = render_lib_pin(pinned, lib_digest)
     pins = LIB_PIN.findall(pinned)
     if len(pins) != 1 or pins[0].decode('ascii') != lib_digest:

@@ -48480,12 +48480,29 @@ __CCD_REDACT_CLI_SHA256=stamp-at-install
 # installed layout. A census in ccd-lib-load.test.ts pins the single writer over ccd/ccd and ccd/lib/*.sh.
 __CCD_LAYOUT=
 __CCD_HASH_CMD=()
-_ccd_lib_load() {   # -> 0 with ccd/lib/disk-retention.sh's, ccd/lib/train-proof.sh's, ccd/lib/delegation-lease.sh's and ccd/lib/pool-set.sh's functions defined; else the refusal line on stderr and rc 1, nothing evaluated
-  local self="${BASH_SOURCE[0]}" dir=. f src sum __ccd_i
+# THE LIBRARY TABLE (the file split, D-8048): every library ccd loads, in load order, one word per ccd/lib/<word>.sh. It is the
+# one list. `_ccd_lib_load` builds its file list from it, ccd/ccd-entry-install.py reads it (`read_lib_table`), and every
+# test-side list derives from it (server/test/consolidationCensus.ts#ccdLibNames). It is a literal and never changes at run
+# time: ccd loads only a fixed list, never a file chosen at run time. A move of the file split appends its library's word.
+__CCD_LIBS=(disk-retention train-proof delegation-lease pool-set)   # load order; one word per ccd/lib/<word>.sh
+_ccd_lib_load() {   # -> 0 with the functions of every library __CCD_LIBS names defined; else the refusal line on stderr and rc 1, nothing evaluated
+  local self="${BASH_SOURCE[0]}" dir=. f src sum __ccd_i __ccd_w
   [[ "$self" == */* ]] && dir="${self%/*}"
   # THE LIBRARIES, in load order, each beside its pin (D-7463): every file is read, and every digest checked, before ANY
-  # file is evaluated, so one library that is not what was shipped refuses the start with none of the others run.
-  local -a __ccd_lib_files=("$dir/lib/disk-retention.sh" "$dir/lib/train-proof.sh" "$dir/lib/delegation-lease.sh" "$dir/lib/pool-set.sh") __ccd_lib_pins=("$__CCD_LIB_SHA256" "$__CCD_LIB_TRAIN_SHA256" "$__CCD_LIB_LEASE_SHA256" "$__CCD_LIB_POOLSET_SHA256") __ccd_lib_srcs=()
+  # file is evaluated, so one library that is not what was shipped refuses the start with none of the others run. The
+  # files come from the table, in its order (D-8048); each word takes its pin line above, and a word with none has only the
+  # placeholder, so an installed body refuses it (lib-digest) until the install assembles the libraries (the split's Task 5).
+  local -a __ccd_lib_files=() __ccd_lib_pins=() __ccd_lib_srcs=()
+  for __ccd_w in "${__CCD_LIBS[@]}"; do
+    __ccd_lib_files+=("$dir/lib/$__ccd_w.sh")
+    case $__ccd_w in
+      disk-retention)   __ccd_lib_pins+=("$__CCD_LIB_SHA256") ;;
+      train-proof)      __ccd_lib_pins+=("$__CCD_LIB_TRAIN_SHA256") ;;
+      delegation-lease) __ccd_lib_pins+=("$__CCD_LIB_LEASE_SHA256") ;;
+      pool-set)         __ccd_lib_pins+=("$__CCD_LIB_POOLSET_SHA256") ;;
+      *)                __ccd_lib_pins+=(stamp-at-install) ;;
+    esac
+  done
   for f in "${__ccd_lib_files[@]}"; do
     if [[ -L "$f" || ! -f "$f" || ! -r "$f" ]]; then
       printf 'ccd: refused (lib-missing): %s is not a readable regular file — ccd and its library install together (re-run: ccrc update); nothing was run\n' "$f" >&2

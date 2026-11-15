@@ -12,6 +12,7 @@ import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { CCD } from './ccdWsHelpers.js';
+import { ccdLibNames, ccdLibWordsIn } from './ccdLibTable.js';
 import { parsedFile } from './scan/symbols.js';
 import { scheduleFacts, type ScheduleFacts } from './scan/parse.js';
 
@@ -105,10 +106,20 @@ export function ccdLauncherIn(root: string = REPO): string {
   return path.join(root, path.relative(REPO, CCD));
 }
 
+export { ccdLibNames } from './ccdLibTable.js';
+
 /** The library files `ccd/ccd` loads at its foot (D-6913), in load order. The census reads them AFTER `ccd/ccd`,
  *  as one program: a moved function is still ccd's, with its row in `ccd/contexts.tsv`, its edges in the call graph and its
- *  line in the heredoc check. A tree without one (a fixture) has no lines from it. */
-export const CCD_LIB_FILES: readonly string[] = ['ccd/lib/disk-retention.sh', 'ccd/lib/train-proof.sh', 'ccd/lib/delegation-lease.sh', 'ccd/lib/pool-set.sh'];
+ *  line in the heredoc check. A tree without one (a fixture) has no lines from it. Read from ccd/ccd's `__CCD_LIBS` table
+ *  (`ccdLibNames`, the file split, D-8048), never listed here. */
+export const CCD_LIB_FILES: readonly string[] = ccdLibNames().map((w) => `ccd/lib/${w}.sh`);
+
+/** The library files of the tree under `root`: its own table's, or, for a fixture whose ccd/ccd has no table line, the
+ *  repository's `CCD_LIB_FILES`. */
+export function ccdLibFilesIn(root: string = REPO): readonly string[] {
+  if (path.resolve(root) === REPO || !existsSync(ccdLauncherIn(root))) return CCD_LIB_FILES;
+  return ccdLibWordsIn(root)?.map((w) => `ccd/lib/${w}.sh`) ?? CCD_LIB_FILES;
+}
 
 /** The file a census names for a definition at `rel` (the file split's Task 4, D-8048): `ccd/ccd` for `ccd/ccd` and for each
  *  library of `CCD_LIB_FILES`, since a function a slice moves is still ccd's, and `rel` itself otherwise. A census that says
@@ -131,7 +142,7 @@ export function ccdSourceLines(root: string = REPO): CcdSourceLine[] {
     lines.forEach((text, i) => out.push({ file, line: i + 1, text }));
   };
   add('ccd/ccd', ccdLauncherIn(root));
-  for (const rel of CCD_LIB_FILES) add(rel, path.join(root, rel));
+  for (const rel of ccdLibFilesIn(root)) add(rel, path.join(root, rel));
   return out;
 }
 
