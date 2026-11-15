@@ -41,6 +41,7 @@ import { navigate } from '../lib/router';
 import { ackAll, acksSnapshot, prune, subscribeAcks } from '../lib/seen';
 import { archivedSizeText, archivedSummary } from './ArchiveScreen';
 import type { FleetStore } from '../stores/fleet';
+import { useHeardRuns } from '../fleet/useHeard';
 import { FLEET_ID, useFrameSet } from '../skins/frame';
 import { useDesk } from '../lib/useMediaQuery';
 import '../fleet/fleet.css';
@@ -176,13 +177,12 @@ export function FleetScreen({
   // runs" by content alone — the store's own docstring on the flag says so.
   // Without this, the footer asserted "Runs · none active" as fact, aria-
   // label included, while /runs one tap away could be showing three runs
-  // this row had simply not heard about yet.
-  const runsFrameSeen = useStore((s) => s.runsFrameSeen);
+  // this row had simply not heard about yet. The gate is `useHeardRuns`'s
+  // (`fleet/useHeard.ts`), the one rule every surface asks.
   // The line says what it counts (T2d, D-6330): `runsLineLabel` (navBadges.ts) reads "N active" off
   // `ACTIVE_RUN_STATES` and "N open" when none is active but some are open, so the bar's Runs badge (what needs you)
   // and this line never show one number twice.
-  const runs = useStore((s) => s.runs);
-  const runsLabel = runsLineLabel(runsFrameSeen ? runs : null);
+  const runsLabel = runsLineLabel(useHeardRuns(useStore));
   // One poll of /api/fleet/health feeds both the banner and BuildLine below
   // (spec §6) — the chrome owns it (D-5468) so neither issues its own request.
   // The same for /api/updates (centralised-update §13): ONE 60 s poll, its

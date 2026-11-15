@@ -39,6 +39,7 @@ import { backToFleet } from '../command/door';
 import { Button, EmptyState, PageScaffold, cn, useNow } from '@ccrc/ui';
 import { GHOST_ANCHOR } from '../lib/ghostAnchor';
 import { useFleetStore, type FleetStore } from '../stores/fleet';
+import { useHeard } from '../fleet/useHeard';
 import { markerState } from '../fleet/coordWords';
 import { needsYou, needsYouCount } from '../ledgers/needsYou';
 import '../fleet/fleet.css';
@@ -203,9 +204,12 @@ function RunsBoard({
   const waitingView = store((s) => s.waiting);
   const stallQuietMs = store((s) => s.stallQuietMs);
   const coordPaused = store((s) => markerState(s.coord?.pause) === 'set');
-  const runsFrameSeen = store((s) => s.runsFrameSeen);
   const sessions = store((s) => s.sessions);
-  const fleetFrameSeen = store((s) => s.fleetFrameSeen);
+  // What the board has heard (`useHeard`): the open half, the cards' needs-you counts and every "heard yet?" below ask it.
+  // `live` and `sessions` are the store's rows as they stand, which the board lists and looks up once the frame is heard.
+  const heard = useHeard(store);
+  const runsHeard = heard.runs !== null;
+  const fleetHeard = heard.sessions !== null;
   const conn = store((s) => s.conn);
   // Task 12, spec §4.3: which run's AbandonSheet is open, or `null`. ONE
   // sheet at screen level, reused across rows — the same shape
@@ -221,7 +225,7 @@ function RunsBoard({
 
   // The programmes (§8.2.2, §8.2.3, D-8075): the cards' counts and Finished's endings, read again when the frame changes what is
   // open. Every act that closes or rewrites a run re-reads it: the cards' counts and Finished's rows are its answer.
-  const programmes = usePrograms({ ...(loadProgrammes === undefined ? {} : { read: loadProgrammes }), live, seen: runsFrameSeen });
+  const programmes = usePrograms({ ...(loadProgrammes === undefined ? {} : { read: loadProgrammes }), live, seen: runsHeard });
   const reloadProgrammes = programmes.reload;
   const loadCold = async (): Promise<void> => { await reloadProgrammes(); };
   const finishedState = programmes.state;
@@ -234,7 +238,7 @@ function RunsBoard({
   // with no binding, finds none, and the sheet hedges as it does for no row.
   const abandonSession = abandonTarget === null ? undefined : workerOf(abandonTarget, sessionById) ?? undefined;
   // The sheet's "Its coordinator is told." line asks `coordinatorGoneOf`, whose fallback is the board's reading of the claimant.
-  const abandonPresence = abandonTarget === null ? 'unknown' : coordinatorPresence(abandonTarget.claimedBy, coordinatorOf(abandonTarget, sessionById), fleetFrameSeen);
+  const abandonPresence = abandonTarget === null ? 'unknown' : coordinatorPresence(abandonTarget.claimedBy, coordinatorOf(abandonTarget, sessionById), fleetHeard);
   // OPEN reads `live` alone, from the instant the socket has said anything at all (`runsFrameSeen`) — including an honest
   // `[]`, which is what a run closing broadcasts. Before any frame has landed (a cold deep link, or a server too old to send
   // it) `noSignalYet` holds and nothing is listed as open: no other read may stand in for the frame (Task 12a).
@@ -331,7 +335,7 @@ function RunsBoard({
   // (`runsFrameSeen`), and nothing else lists an open run. Until then the board says Loading…, or that the server could not be
   // reached once Finished has failed, and never "No runs open." Finished's rows show below as they arrive: Finished
   // answering says nothing about whether runs are OPEN (its `find` is a closed-only read), so it does not end this window.
-  const noSignalYet = !runsFrameSeen;
+  const noSignalYet = heard.runs === null;
   // The board's own answer to "does this project already have a program
   // running?", handed to the sheet rather than fetched by it — the sheet's
   // composition is pinned at exactly two network calls
@@ -350,7 +354,7 @@ function RunsBoard({
     noSignalYet ? null : new Set(active.map((r) => r.project));
   // The cards (§8.2.2): the open programmes of the live frame, needs you first, then the newest move. What needs the operator is
   // the one source's count per programme (`needsYou`, F20), the same number the Waiting door and a programme's chip print.
-  const entries = waitingView === null || !fleetFrameSeen ? [] : needsYou(waitingView.items, sessions, live);
+  const entries = waitingView === null || heard.sessions === null ? [] : needsYou(waitingView.items, heard.sessions, live);
   const needsOf = (slug: string): number => needsYouCount(entries, slug);
   // A card counted from the frame alone, while the read has not answered, shows at once when the frame gives it a last move.
   // One the frame gives none (`runLastMove` is null for every run) waits for the read: it would sit in the live list and then
@@ -450,7 +454,7 @@ function RunsBoard({
       {/* The Stuck band (§8.2 item 4): one head per reason, right under the paused banner, so no healthy work sits above it.
           The band is a second view of the stuck runs, not a move (§8.2.2): they stay in their programme's rows and counts. The group control opens the group sheet (Task 14). */}
       {!finding && !noSignalYet && <StuckBand runs={active} nowMs={now} openId={openId} onAbandon={setAbandonTarget}
-        presence={(r) => coordinatorPresence(r.claimedBy, coordinatorOf(r, sessionById), fleetFrameSeen)} onGroupDone={() => { void loadCold(); }} />}
+        presence={(r) => coordinatorPresence(r.claimedBy, coordinatorOf(r, sessionById), fleetHeard)} onGroupDone={() => { void loadCold(); }} />}
 
       {/* Closed today (§8.2 item 5): below the Stuck band, above everything healthy, so no healthy work sits above the band
           (check 12). The counts come from the programmes read, which asks from the operator's local midnight. */}

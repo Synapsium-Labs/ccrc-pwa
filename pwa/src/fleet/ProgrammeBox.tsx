@@ -29,6 +29,7 @@ import { programmeWaitingCount } from '../ledgers/ledgerWords';
 import { navigate } from '../lib/router';
 import { programmeIsOpenable, programmePath, waitingPath } from '../lib/routes';
 import { useFleetStore } from '../stores/fleet';
+import { useHeard, useHeardRuns } from './useHeard';
 import { WAITING_BADGE_UNIT, badgePrint } from './navBadges';
 import { inAppClick } from './settingsText';
 import { fleetRowKey, type FleetRow } from './nestFleet';
@@ -36,6 +37,9 @@ import {
   footerWords, movementWords, progressWords, type BoxState, type ProgHue, type ProgrammeBoxView, type Tray,
 } from './programmeBoxes';
 import './programmeBox.css';
+
+/** No runs heard: the Spec link's home project is looked for in none. */
+const NO_RUNS: readonly RunSummary[] = [];
 
 /** Keyed on the box's state where it is drawn, so when the state turns (a box crossing its stall boundary, Task G1b) its
  *  clock starts again at that instant: the readout agrees with the state from the boundary on (spec §2.5), never "no
@@ -54,7 +58,9 @@ const waitingChipWords = (figure: string): string => `${figure} ${WAITING_BADGE_
 
 /** The box's Spec link: the pinned spec in the Docs reader, or nothing without a pin or a home project. */
 function BoxSpec({ slug, title }: { slug: string; title: string }): ReactNode {
-  const href = useFleetStore((s) => (s.waiting === null ? null : programmeSpecHref(slug, s.waiting.goals, s.runsFrameSeen ? s.runs : [])));
+  // The home project comes from the runs heard; before a runs frame, no run names one (`useHeardRuns`).
+  const runs = useHeardRuns(useFleetStore);
+  const href = useFleetStore((s) => (s.waiting === null ? null : programmeSpecHref(slug, s.waiting.goals, runs ?? NO_RUNS)));
   return <SpecLink href={href} programme={title} className="pg-spec" />;
 }
 
@@ -70,8 +76,8 @@ function Title({ slug, title }: { slug: string; title: string }): ReactNode {
 function WaitingChip({ slug, title }: { slug: string; title: string }): ReactNode {
   // The same number the Goals page's link reads (`waitingTotal`): open items plus its sessions' questions. The
   // fleet's rows and runs count only once their frames have landed, as the navigation badge reads them.
-  const count = useFleetStore((s) =>
-    programmeWaitingCount(s.waiting, s.fleetFrameSeen ? s.sessions : null, s.runsFrameSeen ? s.runs : null, slug));
+  const heard = useHeard(useFleetStore);
+  const count = useFleetStore((s) => programmeWaitingCount(s.waiting, heard.sessions, heard.runs, slug));
   if (count === null || count === 0) return null;
   const drawn = waitingChipWords(badgePrint(count));
   const spoken = waitingChipWords(String(count));
