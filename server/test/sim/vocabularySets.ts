@@ -6,6 +6,8 @@
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { expect } from 'vitest';
+import { STALL_ARMS } from '../../../shared/stall-watch.js';
+import { OVERLORD_REFUSAL_WORDS } from '../../../shared/refusal.js';
 import type { MutantSet, SuiteCase } from './mutate.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
@@ -88,6 +90,51 @@ export const INJECTED_PROMPT_SET: MutantSet<InjectedPromptsModule> = {
   suite: injectedRowCases,
 };
 
+// ---------- parseSignature ----------
+
+export type PracticeTriggersModule = typeof import('../../../shared/practice-triggers.js');
+
+/** The trigger table's cases over a module: its kinds, its rows in order, and its reader. */
+export function triggerParseCases(m: PracticeTriggersModule): Record<string, SuiteCase> {
+  return {
+    'the kinds are the stall arm and the refusal word': () => {
+      expect(m.TRIGGER_KINDS).toEqual(['stall-arm', 'refusal']);
+    },
+    'the table is the stall arms\' signatures, in their order, then refusal:<word> for each Overlord word in order': () => {
+      expect(m.TRIGGER_TABLE.map(m.signatureText)).toEqual([
+        ...STALL_ARMS.map((a) => `stall-arm:${a}`),
+        ...OVERLORD_REFUSAL_WORDS.map((w) => `refusal:${w}`),
+      ]);
+    },
+    'reads back every signature it writes': () => {
+      for (const s of m.TRIGGER_TABLE) expect(m.parseSignature(m.signatureText(s))).toEqual(s);
+      expect(m.parseSignature('refusal:capability-missing')).toEqual({ kind: 'refusal', key: 'capability-missing' });
+      expect(m.parseSignature('stall-arm:quiet')).toEqual({ kind: 'stall-arm', key: 'quiet' });
+    },
+    'reads anything else as null: a key under the wrong kind, an unknown key, an inherited name': () => {
+      for (const t of ['', 'stall-arm', 'stall-arm:', 'stall-arm:limit-capp', 'stall-arm:quiet:1', 'stall:quiet',
+        'constructor', 'stall-arm:constructor', 'stall-arm:toString',
+        'refusal:', 'refusal:not-a-word', 'refusal:quiet', 'stall-arm:capability-missing', 'refusal:constructor',
+        'refusal:toString', 'refusal:rung-below:1', 'quiet:stall-arm', 'capability-missing:refusal']) {
+        expect(m.parseSignature(t), t).toBeNull();
+      }
+    },
+  };
+}
+
+export const TRIGGER_PARSE_KEY = 'shared/practice-triggers.ts#parseSignature';
+export const TRIGGER_PARSE_SET: MutantSet<PracticeTriggersModule> = {
+  modulePath: path.join(ROOT, 'shared/practice-triggers.ts'),
+  mutants: [
+    { id: 'T1 any key under refusal', old: "if (kind === 'refusal') return isOverlordRefusal(key) ? { kind: 'refusal', key } : null;", new: "if (kind === 'refusal') return { kind: 'refusal', key: key as OverlordRefusal };" },
+    { id: 'T2 no kind check', old: "  if (kind === 'stall-arm') return isStallArm(key) ? { kind: 'stall-arm', key } : null;\n  if (kind === 'refusal') return isOverlordRefusal(key) ? { kind: 'refusal', key } : null;", new: "  if (isStallArm(key)) return { kind: 'stall-arm', key };\n  if (isOverlordRefusal(key)) return { kind: 'refusal', key };" },
+    { id: 'T3 the text before the first colon read as the key', old: 'const key = text.slice(at + 1);', new: 'const key = text.slice(0, at);' },
+    { id: 'T4 the guard by in', old: "if (kind === 'refusal') return isOverlordRefusal(key) ?", new: "if (kind === 'refusal') return key in Object.fromEntries(OVERLORD_REFUSAL_WORDS.map((w) => [w, true])) ?" },
+  ],
+  suite: triggerParseCases,
+};
+
 export const VOCABULARY_MUTANT_SETS: Record<string, MutantSet<never>> = {
   [INJECTED_PROMPT_KEY]: INJECTED_PROMPT_SET as MutantSet<never>,
+  [TRIGGER_PARSE_KEY]: TRIGGER_PARSE_SET as MutantSet<never>,
 };

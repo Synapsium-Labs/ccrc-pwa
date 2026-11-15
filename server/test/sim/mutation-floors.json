@@ -55,5 +55,6 @@
   "server/src/continuity/timers.ts#timerPreview": 1,
   "server/src/continuity/timers.ts#packTimerMail": 1,
   "server/src/coord/stall.ts#timerHoldUntil": 1,
-  "shared/injected-prompts.mjs#injectedPromptOf": 1
+  "shared/injected-prompts.mjs#injectedPromptOf": 1,
+  "shared/practice-triggers.ts#parseSignature": 1
 }

@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import {
   CASE_CAUSES, CASE_MIN_OCCURRENCES, CASE_MIN_PROGRAMMES, CASE_MODE, CASE_WINDOW_MS, caseReadFrom, caseRunIds, caseWindowFrom, casesDue,
+  stallSignatureMap,
 } from '../src/coord/practiceCases.js';
+import { TRIGGER_TABLE, type TriggerSignature } from '../../shared/practice-triggers.js';
 import type { CaseDue, CaseObservationRow, CasesInput } from '../src/coord/practiceCases.js';
 import { stallDetail } from '../src/coord/stall.js';
 import type { StallArm, StallMode } from '../src/coord/stall.js';
@@ -192,6 +194,21 @@ describe('the whole domain', () => {
       const extra: CaseObservationRow = { eventId: 999, runId: 1, at: NOW, detail: 'stall:new-arm:1:5' };
       expect(casesDue({ ...input, rows: [...input.rows, extra] })).toEqual(casesDue(input));
     }
+  });
+});
+
+// Overlord W1, the vocabulary piece, Task 4 (F14): the decider's map is built from the stall-arm rows alone, so a later
+// refusal word whose key equals an arm's can never shadow that arm.
+describe('stallSignatureMap', () => {
+  it('maps each stall arm to its signature, and a planted refusal row keyed like an arm does not shadow it', () => {
+    const planted = { kind: 'refusal', key: 'quiet' } as unknown as TriggerSignature;
+    const m = stallSignatureMap([...TRIGGER_TABLE, planted]);
+    expect(m.get('quiet')).toBe('stall-arm:quiet');
+    expect([...m.keys()]).toEqual([...STALL_ARMS]);
+  });
+  it('is empty over refusal rows alone', () => {
+    expect(stallSignatureMap(TRIGGER_TABLE.filter((s) => s.kind === 'refusal')).size).toBe(0);
+    expect(TRIGGER_TABLE.some((s) => s.kind === 'refusal')).toBe(true);
   });
 });
 
