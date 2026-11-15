@@ -71,6 +71,8 @@
   "server/src/continuity/renewalOrder.ts#overlordFirst": 1,
   "server/src/continuity/renewalDrain.ts#drainVerdict": 1,
   "server/src/continuity/compactOwner.ts#compactRefusal": 1,
+  "shared/injected-prompts.mjs#injectedPromptOf": 1,
+  "shared/practice-triggers.ts#parseSignature": 1,
   "shared/poolrule.ts#poolRule": 1,
   "shared/poolset.ts#poolSetSpelling": 1,
   "shared/poolset.ts#parsePoolSet": 1

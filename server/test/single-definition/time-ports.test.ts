@@ -20,6 +20,8 @@ const TIME_PORT_FILES: readonly string[] = [
   'server/src/coord/practiceCases.ts',
   'server/src/coord/practiceCasesStore.ts',
   'shared/practice-triggers.ts',
+  // The vocabulary piece's list (Overlord W1): it reads no clock today; the entry makes a later read red.
+  'shared/injected-prompts.mjs',
   'server/src/roleOf.ts',
   'shared/fleetRoles.ts',
 ];
