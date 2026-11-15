@@ -814,6 +814,7 @@ cmd_docs_index	C9
 cmd_docs_tree	C9
 cmd_docs_show	C9
 cmd_docs_fetch	C9
+cmd_docs_log	C9
 _docs_py	C9
 _ws_title	C1
 _ws_title_check	C1
