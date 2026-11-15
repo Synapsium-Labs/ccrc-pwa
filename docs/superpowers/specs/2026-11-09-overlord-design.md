@@ -6,12 +6,13 @@
   its accounts from account pools the operator names, and no account is reserved for it (§2, §3.4). The same day the
   operator gave R19: renewals wait for a break in the conversation and carry the current thread, so the operator never
   feels one or repeats themselves (§2, §3.3). On 2026-11-14 the operator gave R20: a session may set itself follow-up
-  timers, and what the operator does with each message is measured (§2, §3.3.12, §4.3). Appendix B says what those
-  changed, and records the corrections the W1a builds measured (Table B5). This is the hardened edition of rev 8: an
-  outside review's calls H1 to H39 are folded in, so that each mechanism is stated once, as it now is. A builder's check
-  was applied to rev 8 by its author. This edition was then checked in nine ways: a builder's check in four slices, its
-  closed vocabularies and state machines, its names and numbers, its claims about the tree, and a red team. Their
-  findings are folded in.
+  timers, and what the operator does with each message is measured (§2, §3.3.12, §4.3). On 2026-11-15 the operator gave
+  R21: a box on each row of Waiting on you that they tick for a question the Overlord could answer for them, to train
+  what it answers (§2, §9.2.1). Appendix B says what those changed, and records the corrections the W1a builds measured
+  (Table B5). This is the hardened edition of rev 8: an outside review's calls H1 to H39 are folded in, so that each
+  mechanism is stated once, as it now is. A builder's check was applied to rev 8 by its author. This edition was then
+  checked in nine ways: a builder's check in four slices, its closed vocabularies and state machines, its names and
+  numbers, its claims about the tree, and a red team. Their findings are folded in.
 - **Programme:** Overlord (slug `overlord`)
 - **Owner:** the Overlord programme's coordinator
 - **Issue:** #2491
@@ -24,8 +25,9 @@
 
 This document defines no D-numbers. The programme's plan allocates them when its run opens. There are three series of
 numbered decisions, and the operator can approve or overturn each one by number:
-- **R1 to R20** are the operator's rulings (§2).
-- **C1 to C69** are the author's calls. §13 restates each one as it now stands. C61 to C69 carry R20.
+- **R1 to R21** are the operator's rulings (§2).
+- **C1 to C70** are the author's calls. §13 restates each one as it now stands. C61 to C69 carry R20, and C70
+  carries R21.
 - **H1 to H39** are the hardening review's calls (§13.1). They have a series of their own, so that they never collide
   with the R and C series while the author keeps writing. Appendix A says what each one changed in rev 8.
 - **H40 to H45** follow from R16 and R17 (§6.9, §13.1). Appendix B gives the reason for each.
@@ -41,16 +43,17 @@ is truly the operator's.
 **The aim.** Direction is the operator's. On decisions, the operator and the Overlord together should decide better
 than either would alone, and the operator should get better over time, not rustier (R16, §6.9).
 
-**What is decided.** The operator ruled the ticket's six open questions on 2026-11-09 (R1 to R6, §2), and ruled the
-same day that there is one and only one Overlord (R7), which must live a very long time without memory loss (R8).
-The Overlord is the console's home (R9). It may read everything (R10). It oversees every project at once and never
-moves between them (R11). It does brain work and never execution (R12). The long-life fixes apply to coordinators too
-(R13). It survives account swaps and limits and is never tied to one account (R14). It draws its accounts from the pools
-the operator names, and nothing is reserved for it (R18). It is the operator's colleague,
-advisor and majordomo (R15). It is there to make the pair decide better than either alone, with direction the
-operator's (R16). It starts from a profile each operator sets, and gives the picture before the question (R17). A
-session can set itself a timer, and what the operator does with each message is measured, the two primitives of an
-always-on agent the design lacked (R20). The operator also gave the hardening review three directions: build it so that it runs
+**What is decided.** The operator ruled the ticket's six open questions on 2026-11-09 (R1 to R6, §2), and ruled the same
+day that there is one and only one Overlord (R7), which must live a very long time without memory loss (R8). The
+Overlord is the console's home (R9). It may read everything (R10). It oversees every project at once and never moves
+between them (R11). It does brain work and never execution (R12). The long-life fixes apply to coordinators too (R13).
+It survives account swaps and limits and is never tied to one account (R14). It draws its accounts from the pools the
+operator names, and nothing is reserved for it (R18). It is the operator's colleague, advisor and majordomo (R15). It is
+there to make the pair decide better than either alone, with direction the operator's (R16). It starts from a profile
+each operator sets, and gives the picture before the question (R17). A session can set itself a timer, and what the
+operator does with each message is measured, the two primitives of an always-on agent the design lacked (R20). The
+operator ticks the questions on Waiting on you that the Overlord could answer for them, a label that trains what it
+answers and grants nothing (R21). The operator also gave the hardening review three directions: build it so that it runs
 in containers soon, use a decision model for the yes-or-no questions that code cannot decide, and do not fence whole
 accounts off for it.
 
@@ -262,6 +265,7 @@ in each row states the mechanism once.
 | R16 | **Better together, and direction is the operator's** (the operator, 2026-11-10, on the review's questions): the questions assumed that the operator is always right, which is not the case. The point of the Overlord is to maximise the operator's ability to make the right decisions, with general direction coming from the operator. It should make the operator better, not worse: its strengths and the operator's should combine into a much stronger whole | Direction is never scored. Every decision carries an outcome test sealed before the answer, and is scored by how it turned out, for the operator and the Overlord alike. The Overlord seals its own pick, never a prediction of the operator's. Three records for each kind of decision: the operator's alone, the Overlord's alone and the two together. Agreement that later fails counts against it. The operator sees their own record (§6.9) |
 | R17 | **A starting profile, and the picture first** (the operator, 2026-11-10): the Overlord is not for one operator only, though this operator is a reasonable starting point: strongest in strategy, vision and the higher level, less so in implementation detail of low impact, and thinking from the high level down, so that a low-level question is hard to answer without the picture | A Setting, the operator's profile, says who decides each kind of decision at the start, and the records then correct it. By default direction and operator-only acts are the operator's, an implementation choice with strategic weight is decided together, and a routine answer of class none is the Overlord's. Every brief opens with where the question sits. A premise that several questions share is asked once (§6.9) |
 | R20 | **Timers, and measured responses** (the operator, 2026-11-14, on a comparison of this design with an article on building always-on agents, whose five primitives are an event inbox, timers, memory, permissions and an outbox): "Both: self-set follow-up timers (a timer row, one scheduler lane, mail delivery) and measuring how you respond to each message" | Any session may set itself a timer: a row of its identity and a stamp of its incarnation, never of a generation, with a note that is data, fired by one `LANE_SCHEDULE` row in the transaction that queues its mail. A timer never acts, and no session sets one for another. Each message to the operator gets one response row, sealed from measured facts, with `unmeasured` a word of its own. The attention budget reads a state per class of push: it starts quiet, the server may only make an unpinned class quieter, and a class interrupts only by the operator's tick, a choice that stands until they change it, or unpinned when they turn "start quiet" off (§3.3.12, §4.3, Appendix B) |
+| R21 | **Mark what the Overlord could answer** (the operator, 2026-11-15): "The point of overlord is to make many routine decisions for the operator. I'd like you to add a checkbox to 'waiting on you' that I can tick in order to help train what kinds of questions overlord should answer on my behalf." | A box, "The Overlord could answer this", on each row of Waiting on you the operator was shown, open or recently cleared: an answer mark. One value a row, reversible, every change kept. It grants nothing and is never an answer: it is a stated fact of the operator's, which feeds the operator model, decides which kinds the Overlord briefs first, and sits beside a grant proposal's evidence. It is gathered from W1, before any Overlord exists (§9.2.1, C70, Appendix B) |
 
 *Table 2a. The operator's rulings, and the design each one became.*
 
@@ -2726,7 +2730,8 @@ each is defined once, where the table says. A part from a later wave is not draw
   (§4.1).
 - **Waiting on you stays where it is.** It shows what the Overlord escalated, and what reached the operator without a
   hold (§6.7). Each escalated item carries its brief (§6.6) and the reason it was raised, such as "O3: this changes
-  the definition of done".
+  the definition of done". Each row the operator was shown carries the box "The Overlord could answer this", the
+  answer mark (§9.2.1).
 - **Nothing held is hidden.** Rows held for the Overlord sit on Waiting on you in one collapsed group, "Held for the
   Overlord (n), until hh:mm". A hold delays the push, never the row (§6.7).
 - **Pause sits on the Overlord place.** What it does, and why it needs no step-up, is in §7.5.
@@ -3897,7 +3902,9 @@ What changes after day one, and in what order:
 - **A cell starts to act** only when its record makes `U x W_wrong` small enough. Until then the door says
   `ask-is-cheaper` and the Overlord escalates with its recommendation.
 - **Under the default profile, routine answers of class none come first.** Their record is the audited shadow picks
-  of step one, so the operator is not asked hundreds of low-impact questions to build it (§6.9, H44).
+  of step one, so the operator is not asked hundreds of low-impact questions to build it (§6.9, H44). The operator's
+  answer marks say which kinds and scopes of question they would hand over first, and those are briefed first, so
+  their record starts sooner (§9.2.1).
 - **Over-asking is caught.** An item with no class gets a triage hold. The Overlord sends it back with the goal that
   answers it, or escalates it. It answers such an item only after its coordinator raises it again with a class.
 - **An O-class question is settled only under a grant.** A grant proposal needs at least 19 blind answers, spread
@@ -4617,7 +4624,8 @@ server suspends without being asked.*
   the gates table's (§9.5): 19 blind cases and a lower bound of 0.85. Why: 12 agreeing cases out of 12 prove no more
   than 78% agreement at 95% confidence. 19 of 19 prove 85%, and 29 of 29 prove 90%.
 - **The Overlord may propose a grant, never take one.** `propose-grant` files a proposal with the server's evidence.
-  The server also raises a proposal itself when the evidence passes the floor (W6).
+  The server also raises a proposal itself when the evidence passes the floor (W6). A proposal shows the operator's
+  answer marks in its effect and scope beside that evidence, counted apart and never as part of it (§9.2.1).
 - **Ticking a proposal writes no grant.** It opens the grants door, where the server renders the grant and the
   operator confirms it behind the step-up.
 - **When it ships.** All of this ships with the grants door, in W3's second step, answer first (§14). Only the
@@ -5171,7 +5179,7 @@ Everything else can make it `inferred` at most, and some of it only a candidate 
 ```mermaid
 flowchart LR
   subgraph Sources["Sources, and the strongest basis each can yield"]
-    S1["Rulings in coord.db<br/>answered items, asks and approvals,<br/>digest corrections, overturns,<br/>goal changes, operator run events<br/>stated or ratified"]
+    S1["Rulings in coord.db<br/>answered items, asks and approvals,<br/>digest corrections, overturns,<br/>goal changes, operator run events,<br/>answer marks<br/>stated or ratified"]
     S2["Operator messages<br/>the server's record<br/>off-the-record ones skipped<br/>stated"]
     S3["Every project's history<br/>leaves first<br/>inferred at most"]
     S4["Rulings quoted in documents<br/>Agreed sections, ledgers<br/>inferred at most"]
@@ -5217,7 +5225,7 @@ never make an entry the operator's own words. The operator's corrections go stra
 
 | Basis or status | How the server decides it | When it is served |
 |---|---|---|
-| `stated` | a source resolves to something the operator did under the cookie: an operator message, an answered item or ask (but not an accept of the Overlord's recommendation, which the `ratified` row governs), a correction, an overturn, a Confirm or Edit on About you | at once |
+| `stated` | a source resolves to something the operator did under the cookie: an operator message, an answered item or ask (but not an accept of the Overlord's recommendation, which the `ratified` row governs), a correction, an overturn, a Confirm or Edit on About you, an answer mark made signed in (§9.2.1) | at once |
 | `ratified` | a source is an answer the operator accepted unchanged with the recommendation in view, and `examined` (§6.6). A `glanced` accept is no evidence. It ranks below `stated` | at once |
 | `inferred` | every other entry with an operator source | after three supporting sources, from two different days and two different targets, with no later contradiction |
 | `candidate` (a status) | an entry learned only from tool or model text: issue bodies, pull-request comments, fetched pages | never. About you shows it as needing corroboration |
@@ -5228,8 +5236,8 @@ never make an entry the operator's own words. The operator's corrections go stra
   - **Rulings (S1)** come through `GET /api/overlord/feed?after=<cursor>`, one union reader over durable tables that
     already exist. It reads `asks` and `approvals` rows the operator answered, and `operator_items` with their answers
     and `operator_item_events`. It also reads digest corrections, act overturns (§10.3), `programme_modifications`, and
-    the `run_events` the operator caused. It adds no writer. Settings switches keep no history today, so they are
-    not a source until they do.
+    the `run_events` the operator caused, and the operator's answer marks (§9.2.1). It adds no writer. Settings
+    switches keep no history today, so they are not a source until they do.
   - **Operator messages (S2)** come from the server's record (§3.8), read through the Overlord's `messages` tool. When
     the operator states a preference, a rule or a correction, the Overlord records it at once, citing the message
     (clause 8). "Remember ..." and "forget ..." are plain requests to it.
@@ -5269,6 +5277,60 @@ never make an entry the operator's own words. The operator's corrections go stra
 - **A secret has no place in a preference.** Every statement and quote passes the egress mask (`accounts/mask.ts`) on
   the way in. A statement or a quote the mask changes is refused (`entry-masked`), not stored masked.
 - **Learning needs an isolated server.** On a `shared-user` box, learning is refused `server-not-isolated` (§7.4).
+
+#### 9.2.1 Answer marks: what the operator would hand over (R21)
+
+The operator ruled on 2026-11-15 that the Overlord is there to take many routine decisions off them, and asked for a box
+on Waiting on you to tick for each question the Overlord should answer on their behalf, so as to train which kinds of
+question it answers (R21). This section says what the tick is, what it feeds, and what it never does. The ticket calls
+it a delegation mark. This spec calls it an answer mark, because "delegation" already names the delegation broker's
+leases in the coordination context, and one context keeps one word for one thing.
+
+- **C70. One box on each row the operator was shown.** Waiting on you draws "The Overlord could answer this" on each
+  row it lists, and on an item's own page. The first time the box is used on a device, one line explains it: it tells
+  the Overlord which kinds of question the operator would hand over, and gives it no authority.
+  - **Which rows.** An item the operator has been shown, while it is open or in Recently cleared (`CLEARED_WINDOW_MS`,
+    48 hours). An ask that reached the operator: released or declined to them, or answered by them inside the same
+    window. A root session's own ask and a permission prompt have no ask row for a mark to name, so they carry no box
+    ("Where things stand", Later).
+  - **One value a row, reversible at any time.** A tick or an untick writes one record, with its time and actor, and
+    the newest record stands. A write equal to the standing value records nothing.
+  - **An unticked box is no label.** A row never marked and a row whose mark was withdrawn are told apart, and neither
+    one says "keep this mine". The marks say what the operator would hand over, never what they would not.
+- **It grants nothing.** A mark is never a grant, a command, an arming or a rung (§7.2, §7.5), and nothing in §7.3
+  relaxes for it. No door and no decider reads a mark as authority: `overlordMayAct`, `mayHold` and `askOrAct` never
+  read one. It is direction (H40), the operator's statement of which decisions they would hand over, so no record of
+  §6.9 scores it.
+- **What it feeds.**
+  - **The operator model, as a stated fact.** The rulings feed (S1) reads each mark together with its row, from W4. A
+    mark made signed in is a source the operator authored, so an entry it supports, such as "the operator would hand
+    over questions like this one", can be `stated` (Table 9.2a). A mark written while sign-in is dark records the
+    actor `flag-off`. It is kept and shown, and it can support an entry as `inferred` at most, because no cookie says
+    who made it.
+  - **Which kinds the Overlord briefs first** (H44). From W3's first step, when the Overlord cannot brief every row at
+    once (the inbox's bands and load lines, §6.8), rows of the kinds and scopes the operator marked are briefed first,
+    so their shadow record grows first. The arming item of a kind of answer (§7.5) shows the marks of that kind beside
+    its bound.
+  - **The profile, only by the operator's tap.** When the marks of one kind run against the profile's row for it
+    (Table 6.9c), the Overlord says so with a link that opens the profile in Settings (§9.3). The operator's own tap
+    there changes it. A mark never changes a cell's rule or bound, and never sets the profile.
+  - **A grant proposal**, which shows the marks in its effect and scope beside its evidence (§7.2).
+- **It is never an answer.** A mark is not a blind answer, an examined accept or agreement. It counts in no bound of
+  Table 9.5a, in no cell of `askOrAct`, in no grant's evidence and in no consistency pair (§9.5).
+- **Where it lives.** One append-only table in `coord.db`, `answer_marks`: the kind of row it names (`item` or `ask`)
+  and that row's id, the value, the time and the actor. It copies nothing from the row it names. An item's kind,
+  programme and coordinator, an ask's run, parent and the way it reached the operator, and from W3 the classes of
+  both, are read from that row, which is never deleted, so a later reader groups the marks by kind without a second
+  copy of any fact.
+- **Its one writer is the operator's door,** `POST /api/answer-marks`. It is session-gated, carries no box token and
+  needs no step-up, because it confers nothing. Like the rank door (§5.6) it works while sign-in is dark, and records
+  `flag-off` then. No session has a path to it: `ccrc-api` has no verb for it, and with sign-in armed the auth gate
+  refuses a caller that holds only the box token. A mark on a row the operator was not shown, or on a cleared row past
+  the window, is refused `not-markable`, which the pull request that builds the door adds to Table 11.6.
+- **The privacy controls cover it.** Export carries the marks, and "wipe everything" removes them with the response
+  rows (§9.4, from W4).
+- **It ships in W1, live from its first pull request, with nothing to arm.** The label is gathered from the first day,
+  before any Overlord exists. Its readers come later: the operator model's feed in W4, and the briefing order in W3.
 
 ### 9.3 How the operator reviews and corrects it
 
@@ -5503,6 +5565,7 @@ agreement of 0.95.*
     only when the console's events show that no chat text the Overlord wrote after the filing was on screen before
     the pick. Otherwise it is `examined` at most (§6.6).
   - Only `blind` answers count as grant evidence (§7.2). `blind` and `examined` answers count for M1 (§12).
+  - An answer mark is never an answer of any kind: it counts in no bound, no cell and no grant's evidence (§9.2.1).
   - The operator can turn the sample off. No unbiased number then exists, and no grant proposal can gather evidence.
 - **Scored by option, against the operator's own consistency.** Agreement is an exact match of the chosen option, with
   no judge. People answer the same question differently over time: about 81% test-retest in one large study (arXiv
@@ -5940,6 +6003,7 @@ name that owner.
 | `overlord_audits`, the auditor's row | C5, L3 | `coord.db` | The audit lane | Daily | W3 | yes | Ignores them |
 | Decision-model records, the label queue | C5, L3 | `coord.db`, on act and hold rows | The server's one caller of `DecisionModel` | The anchor set, daily | W2 | yes | Ignores them |
 | `portfolio_rank` | C5, L3 | `coord.db` | The operator's rank door | none | W1 | yes | Ignores it |
+| `answer_marks` (append-only: the kind of row it names, `item` or `ask`, and that row's id; marked or not; the time; the actor, the session's device actor or `flag-off`; the newest record for a row stands, §9.2.1) | C5, L3 | `coord.db` | The operator's answer-mark door | none | W1 | yes; "wipe everything" removes it (§9.4) | Ignores it |
 | `programme_remaining` (append-only) | C5, L3 | `coord.db` | The coordinator's remaining-work door | none | W2 | yes | Ignores it |
 | `programme_edges` | C5, L3 | `coord.db` | The owning coordinator's remaining-work door, because an edge is part of what a programme says is left. The server alone clears an edge, on measurement | Cleared on measurement | W2 | yes | Ignores it |
 | `programme_pairs` (pair key, kind `overlap` or `goal-conflict`, first seen, ruled) | C5, L3 | `coord.db` | The overlaps arm. `ruled`: the operator's goal-conflict door, with the operator's choice | On a new pair | W2 | yes | Ignores it |
@@ -6058,6 +6122,7 @@ tested over its whole input domain (§11.7).*
 | Open a request: `POST /api/overlord/requests` | C5, L4 | `overlord_requests` | it | n/a | W2 | n/a | No route |
 | Route, route elsewhere, re-relay, drop and `close-request` | C5, L4 | `overlord_requests` | each its own move | n/a | W2 | n/a | No route |
 | The operator's request doors: answer, for a request that reached `needs-you` any other way; confirm `done-unverified`; withdraw; take (`routed`, `in-progress` or `blocked` to `needs-you`, storing that state as `takenFrom`, with the reason `operator-took-it` on the move's news row); and hand back, which returns a taken request to `takenFrom` and clears it | C5, L4 | `overlord_requests` | each its own move | n/a | W2 | n/a | No route |
+| The operator's answer mark, `POST /api/answer-marks`: one row of Waiting on you, an item or an ask, marked or not; session-gated, no box token, no step-up; works while sign-in is dark, recording `flag-off` (§9.2.1) | C5, L4 | `answer_marks` | it | n/a | W1 | n/a | No route |
 | The goal-conflict ruling, on the board's Goal conflicts row | C5, L4 | `programme_pairs.ruled`, with the operator's choice | it | n/a | W2 | n/a | No route |
 | Relay, and `nudge-owner` under the relay's egress checks and ceilings (Table 11.5b): `POST /api/overlord/relay` | C5, L4 | mail and the act row | it | n/a | W2 | n/a | No route |
 | Coordinator-facing: the request doors (`ack`, `decline`, `blocked`, `failed`), `POST /api/runs` with `requestId`, mail and `goals modify` with `requestId`, the remaining-work door, the act read. There is no report door: a coordinator's progress is mail that carries `requestId` | C5, L4 | `overlord_requests`, runs, mail, goals versions, `programme_remaining`, `programme_edges` | each its own move | n/a | W2 | n/a | No route; an older server drops `requestId` |
@@ -6623,7 +6688,8 @@ from rows the server writes, never from the Overlord's own account.
 
 The rulings are in §2. These are the calls the author made to build them, each stated in its final form. The operator
 approved them on 2026-11-10 ("Where things stand"), and each can still be overturned by number. C61 to C69 carry R20
-(2026-11-14), and the operator approved them on 2026-11-14, with this revision's pull request (#2792). "Shaped by" names
+(2026-11-14), and the operator approved them on 2026-11-14, with this revision's pull request (#2792). C70 carries R21
+(2026-11-15), proposed with its revision's pull request. "Shaped by" names
 the hardening calls that changed a call from its rev 8 form. §13.1 lists every H call.
 
 | # | Call | Options considered | Chosen, and why | Status | Shaped by |
@@ -6697,6 +6763,7 @@ the hardening calls that changed a call from its rev 8 form. §13.1 lists every 
 | C67 | How delivery, shows and opens are measured | assume them, build them | Built in W1, and `unmeasured` until built. Today the push path returns no verdict, a push lives ten minutes and may never reach an offline device, and a tap carries nothing that names the push. W1 writes the response row `pending` before each send, with a random push id stored on the outbox row so a resend keeps it; a per-send verdict from `PushService` names the subscriptions that accepted. Response receipts: the service worker reports `shown` when it shows a push, and at a tap issues `opened` first without awaiting it before the open; the console reports `opened` for the messages it shows; one session-gated door writes `response_receipts`, ignoring a receipt for a subscription outside the accepted set or from the wrong source. A push is `not-opened` only on a `shown` receipt from every accepted subscription and no `opened`; a missing receipt, an older worker, a push replaced by a later one with its tag, or a change of the server's build or restore generation inside the window reads `unmeasured`. An `opened` lost after a `shown` is a known undercount | Approved | R20 |
 | C68 | How the budget uses the figures | not at all, a weight on each push, a state per class | A state per class, `quiet` or `interrupting`, and a pin, in `response_classes`. A class is one of H35's kinds of push that a state can change: escalation, released hold, brief. A batch push is no class: it always waits for a briefing time, and each push it carries counts for its own class, so a quiet class is still measured. New classes start quiet, a Setting on by default and read as on when unreadable: a quiet class waits for the briefing time, never past its urgency's deferral limit. The operator's "Let it interrupt" or "Keep it quiet" pins the class until the operator changes it again (the coordinator's ruling). The acted share counts every delivered row with a verdict, less those settled elsewhere, not actionable, or unread, because acts need no receipts (the coordinator's ruling). The server may only move an unpinned interrupting class to quiet, under 20% acted over 30 measured messages; at the defaults no class is unpinned and interrupting, so it acts only once "start quiet" is off or a class is released with "Let the figures decide". It proposes "let it interrupt" when half of a quiet class's messages were acted on, withheld while more than half of the rows not acted on are unmeasured, and only the operator decides. Evidence counts only messages admitted after the class's last change of state, a carried push by the time it was deferred. Only the pushes the budget rules on are affected, so I9 holds. Shadow first, with the budget. Not a feed of the operator model. Narrowing alone follows ruling 4's direction by the author's analogy, not by the operator's words | Approved | R20, H35, H37 |
 | C69 | Where the operator sees it, and corrects it | Settings only, the Week page and Settings | The figures per class on the Week page, split by delivery at once or in a batch, with the pushes outside the classes and digest corrections shown apart. In Settings, each class's state and pin with "Let it interrupt", "Keep it quiet" and "Let the figures decide". "I handled this elsewhere" on any measured message, kept in a column of its own and read ahead of the lane's seal. None needs the step-up | Approved | R20, H36 |
+| C70 | What the operator's tick on Waiting on you is | a grant in waiting, a blind answer, a stated fact | A stated fact, the answer mark: one reversible value a row, every change kept, on items and asks the operator was shown, open or recently cleared. It grants nothing and counts in no bound, cell or grant's evidence. It feeds the operator model through S1, decides which kinds are briefed first, and sits beside a grant proposal's evidence. One append-only table that copies no fact from the row it names, written by one session-gated operator door that confers nothing (§9.2.1) | Proposed with R21 | H40, H44 |
 
 *Table 13a. The author's calls in their final form, and the hardening calls that shaped each one.*
 
@@ -6787,7 +6854,7 @@ prerequisites gate W1, where the Overlord itself begins. Nothing in any wave is 
 |---|---|
 | W0, a spike | It changes nothing that runs: its test-only files ship in the tarball and do nothing. It measures what the design depends on: the hook's cap and the anchor slot; a fresh start as the renewal act, and its time; what a clear or a fresh start does to running readers, queued input and scheduled tasks; whether a compaction rotates the uuid; auto memory, forks, the subagent model, the model-switch hooks and a refused proactive compaction; the door process under a restricted launch (hooks, skills, the permission mode); reader types with no shell; nudge-and-read for the operator's messages; the statusline's token fields; whether the inbox socket can be used with the peer channel closed; a continuity record for each lane; whether its accounts bill Fable to usage credits; how closely the seven-day figure times the Fable share reading tracks the Fable allowance; how ccd picks an account today (no listed order exists yet: that is W1's build); the restart numbers and the first sweep after boot (§6.4); what an account's shared config directory loads into a session; how reliable the typed `/clear` is. It writes the first model of holds, readiness and generations (§11.7). Where the real thing does not exist yet (the renewal verb, probes), it measures the parts with stand-ins, and W1a measures again with the real ones |
 | W1a, continuity for every long-lived role | The one role table and its launch profiles; `continuity_generations`, the receipt and the renewal lane on the `SessionHost` port (in shadow: the `continuity` row's gate refuses Live, `lane-gated`, until the renewal act ships); the anchor slot and the card door; notes; compaction instructions (after history W3-1); probes and the weekly quiz; the trigger table (stall arms); coordinator clause 23; the skill-size ratchet, with caps measured at its merge, and each role skill's contract moved to the front of its file; the `MAIL_PACE` table (today's two rows first, behind a characterization test; total over `FLEET_ROLES`, with the Overlord's row, once the role table lands); the ports for time and chance; the simulator's skeleton; mutation floors for new deciders; the case lane in shadow; ccd's fresh-start flag and its capability word `hibernate-fresh`; the capability word `continuity-v1`; timers for coordinators and workers: `continuity_timers`, `TIMER_TRANSITIONS`, the timer doors and the operator's cancel, the `timers` row with its cleanup arm, the `timer` mail sender, pending timers on the card, worker clause 17 naming a timer as a wake, the timer hold in the stall watch's hold map, and the capability word `timers-v1` |
-| W1, designate and talk | The private store, with the operator's messages and the read ledger; the designation with its term and `designatedTerm`; the identity port and the isolation word; the door process and the reader types; the history door and its agent op; the sandbox check; the fence; ccd's sleep markers' verb and its capability word `keep-awake`; the ladder at `chat`, and Pause; the readiness word; the inbox, with band 1 (the operator's messages), probes and the coalesced wake; the journal kernel, the authority journal, the privacy journal's file with its record of the highest message id issued, and the "Confirm the restore" door; the push outbox and its capability word `push-outbox-v1`; the account set on the designation, the pool rule's set and ccd's capability word `pool-set`, and the two-account check; the home, the chat with message ticks, the board; the portfolio rank, the limit samples and `portfolioFor`; the refusal on other write lanes; the invariant monitor and `overlord_sequence`, with its cursor read; the Overlord's timers, through its door process, stamped with `designatedTerm`; the response record: `operator_responses`, `response_receipts` and the receipts door, the response lane, and "I handled this elsewhere", recording only, with the per-send verdict of `PushService`, a random push id in each push's payload, and the service worker's `shown` and `opened` receipts; the capability word `overlord-v1` |
+| W1, designate and talk | The private store, with the operator's messages and the read ledger; the designation with its term and `designatedTerm`; the identity port and the isolation word; the door process and the reader types; the history door and its agent op; the sandbox check; the fence; ccd's sleep markers' verb and its capability word `keep-awake`; the ladder at `chat`, and Pause; the readiness word; the inbox, with band 1 (the operator's messages), probes and the coalesced wake; the journal kernel, the authority journal, the privacy journal's file with its record of the highest message id issued, and the "Confirm the restore" door; the push outbox and its capability word `push-outbox-v1`; the account set on the designation, the pool rule's set and ccd's capability word `pool-set`, and the two-account check; the home, the chat with message ticks, the board; the portfolio rank, the limit samples and `portfolioFor`; the refusal on other write lanes; the invariant monitor and `overlord_sequence`, with its cursor read; the Overlord's timers, through its door process, stamped with `designatedTerm`; the response record: `operator_responses`, `response_receipts` and the receipts door, the response lane, and "I handled this elsewhere", recording only, with the per-send verdict of `PushService`, a random push id in each push's payload, and the service worker's `shown` and `opened` receipts; the operator's answer marks on Waiting on you (R21); the capability word `overlord-v1` |
 | W2, route and follow up | The act catalogue, `overlordMayAct`, revisions and operation keys, two-step acts and the act journal; requests as contracts, with `requestId` on runs, on mail and on `goals modify`, and the request doors; the home's Requests groups, the one-tap next steps, and what each request and programme cost; band 3 of the inbox (request moves, follow-ups, read-back flags and the Overlord's fired timers); the relay door with its checks, and the door that uploads the private-name list; `followUpDue`, with the follow-up arm on a `LANE_SCHEDULE` row of its own; overlaps and goal conflicts, with the operator's door that rules a goal-conflict pair; remaining work, forecasts, health and edges; the decision-model port, with its W2 rows in shadow, and the label queue and its cards; the ladder at `advise`; the capability word `overlord-route-v1` |
 | W3, step one: brief first | `operatorClass` and `effect` on rows, with the floors; the operator's profile, the place line, outcome tests, `decisionOutcome` and the three records (§6.9); briefs with their reveal modes, `answerExamined` and `decisionRank`; `attach-brief`, and the inbox's rows that wait for a brief; sealed predictions; the blind sample; proposals and commands; the attention budget and its Settings, in shadow, with the state and pin of each class of push, start quiet and the class step (§4.3); engagement per programme; the replay body and the scenario suite; the weekly check and the Week page, with the response figures; the handover brief; the capability word `overlord-brief-v1` |
 | W3, step two: answer first | The holds, `mayHold`, retention and the breaker; the inbox's held rows, admission, packets and precedents; `askOrAct`; the answer and escalate doors; the grants door with all of H26, and staging; drills and the outside audit; background work; each kind of answer armed on evidence; the capability word `overlord-answer-v1` |
@@ -6993,6 +7060,8 @@ agree them. Appendix B's Table B5 lists each one with its source.
 - R20, the operator's ruling of 2026-11-14: "Both: self-set follow-up timers (a timer row, one scheduler lane, mail
   delivery) and measuring how you respond to each message" (§3.3.12, §4.3). The calls that carry it, C61 to C69, the
   operator approved on 2026-11-14, with its pull request (#2792).
+- R21, the operator's ruling of 2026-11-15: a box on Waiting on you that the operator ticks for a question the Overlord
+  could answer for them, to train what it answers (§9.2.1). C70 carries it.
 - **The operator approved this spec on 2026-11-10:** the author's calls C1 to C60 as §13 restates them, and the
   hardening calls H1 to H39 (§13.1), subject to the rulings below. C47 is where "everything" stops: it keeps the
   credential stores closed.
@@ -7041,6 +7110,8 @@ agree them. Appendix B's Table B5 lists each one with its source.
 - **Which account pools the Overlord may draw from, and whether untagged accounts are among them.** You name them at
   the designate door or in Settings once W1's pool set is live. At least two accounts in them must be able to serve
   it (C46, C56). This spec names none.
+- **C70, the answer mark (R21).** You approve it on its pull request: what a tick is, that it grants nothing and is
+  never an answer, and what it feeds (§9.2.1).
 - **This revision itself (R18).** You approve it on its pull request. The calls it settles under R18 are in C46 and
   Appendix B, each with its reason, and each is open to overrule.
 - **The prerequisites.** D-8126 (PR #2487) and its four open questions. Its spec and plan have merged, and its waves A2
@@ -7064,6 +7135,12 @@ agree them. Appendix B's Table B5 lists each one with its source.
 - **Delivery through the session's inbox socket** (H2). Trigger: W0 shows it can be used with the peer channel closed.
 - **Other channels.** Mobile push beyond the web push, Telegram and Discord (R4). Trigger: the operator asks.
 - **Settings history as a feed.** Switch changes have no history today. Trigger: the operator model needs them.
+- **Answer marks on the rows that have none** (R21): a root session's own ask, and a permission prompt. Neither has an
+  ask row for a mark to name. Trigger: such rows are a large share of what the operator answers.
+- **A one-line "why" on an answer mark** (R21). Trigger: the operator asks for it, or the operator model's
+  entries from marks prove too coarse to group.
+- **The answer marks on the Week page and on About you** (R21), with the kinds the operator marks most. Trigger: W4's
+  About you, or the Week page's next revision.
 - **Programme-aware placement for the coordinators it starts.** This comes free when #749 lands.
 - **A read-only deliberation workflow for the Overlord** (C55). Trigger: the continuity programme shows a workflow
   survives a fresh start and a swap, and M2 shows answers waiting on serial reading.
@@ -7132,8 +7209,9 @@ The body of the spec states only the result.
 
 ## Appendix B. What the rulings since 2026-11-10 changed, and what the W1a builds corrected
 
-This appendix keeps two trails. The first is the operator's rulings since 2026-11-10 (Tables B to B4); the second is
-the corrections the W1a builds measured, which are no rulings (Table B5). The body of the spec states only the result.
+This appendix keeps two trails. The first is the operator's rulings since 2026-11-10 (Tables B to B4, and B6); the
+second is the corrections the W1a builds measured, which are no rulings (Table B5). The body of the spec states only the
+result.
 
 The operator approved this edition on 2026-11-10, ruled on the review's fifteen questions, and gave R16 and R17. This
 table keeps the trail for the six calls those two rulings added.
@@ -7251,6 +7329,20 @@ source. A departure that only refines a plan changed nothing here.
 | C61 to C69 (Table 13a, §13, Where things stand) | Proposed with R20, waiting on the operator | Approved by the operator on 2026-11-14, with the R20 revision's pull request (#2792); the item that waited on it is gone. The W1 index review (2075) |
 
 *Table B5. The corrections from the W1a builds.*
+
+**R21, 2026-11-15: the operator marks what the Overlord could answer.** The operator ruled: "The point of overlord is to
+make many routine decisions for the operator. I'd like you to add a checkbox to 'waiting on you' that I can tick in
+order to help train what kinds of questions overlord should answer on my behalf." This table keeps the trail. The body
+states only the result.
+
+| What | Before | Now, and why |
+|---|---|---|
+| What the operator says about handing a question over | Nothing on the row. The profile (H44) spoke for kinds of decision, and only answers built a cell's record | One reversible box on each row the operator was shown: the answer mark (C70). It is the operator's own label, gathered from W1, before any Overlord exists, so the evidence of what they would hand over is there when W3 starts |
+| What a mark may do | Did not exist | Nothing that widens: no grant, no arming, no rung, no hold. The operator ruled on what trains the Overlord, and §7's rules for what lets it act stand unchanged |
+| What it feeds | Did not exist | S1, as a stated fact of the operator's; the order in which W3 briefs; a link to the profile when the marks run against it; and a grant proposal's sheet, counted apart. It is never an answer, so the gates of §9.5 read nothing from it |
+| Where it lives | Did not exist | `answer_marks` in `coord.db`, append-only, written by one session-gated operator door; Tables 11.1a and 11.1e |
+
+*Table B6. What R21 changed.*
 
 ---
 
