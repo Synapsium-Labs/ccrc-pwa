@@ -953,7 +953,8 @@ export const GEN_DAY_INVARIANTS: readonly Invariant[] = [
         if (l.state === 'degraded') open.delete(who);
         if (l.state === 'active') {
           if (n === r.n && live && !r.proven) return violation('G10', l, `${l.id}: an unproven generation went back to active (it ends in degraded)`);
-          if (n === r.n && live) owes.set(l.id, { line: l, died: false });
+          // In the day's last minutes no acts start (`ACTS_END`), so no hold-off is owed for a step taken then.
+          if (n === r.n && live && l.at < ACTS_END) owes.set(l.id, { line: l, died: false });
           if (n >= r.n) open.delete(who);
         }
       }
