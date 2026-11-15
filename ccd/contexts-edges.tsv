@@ -475,9 +475,12 @@ cmd_start -> _is_valid_wrapper
 cmd_start -> _lc_done
 cmd_start -> _pool_mismatch_why
 cmd_start -> _pool_ok
+cmd_start -> _pool_set_sid
+cmd_start -> _pool_set_start_warn
+cmd_start -> _pool_side_is_set
+cmd_start -> _pool_side_token
 cmd_start -> _pool_undecidable_why
 cmd_start -> _pool_untaggable
-cmd_start -> _project_pool_state
 cmd_start -> _reg_claim
 cmd_start -> _reg_generation_init
 cmd_start -> _reg_get
@@ -487,6 +490,7 @@ cmd_start -> _reg_set
 cmd_start -> _route_argv_check
 cmd_start -> _route_argv_write
 cmd_start -> _route_seed_default
+cmd_start -> _session_pool_side
 cmd_start -> _strand_clear
 cmd_start -> _wake_ceiling_move
 cmd_start -> _ws_expire_refuse_return

@@ -157,6 +157,12 @@ const EXPECTED: Record<string, { what: string; codes: string[] }> = {
     what: 'the docs fetch verb granted without --project',
     codes: ['TS2322'],
   },
+  // NATIVE DOCS READER wave 5b, g18's shape for the history verb: read-only, enrolled on `--project`, so the narrowed
+  // grant is a compile error.
+  'g28-docs-log-without-project.ts': {
+    what: 'the docs history verb granted without --project',
+    codes: ['TS2322'],
+  },
   // CHILD RECLAMATION wave 7, g13's and g15's shape for the temp-root collector: enrolled on its confirmation token, so
   // the narrowed grant is a compile error.
   'g20-ws-collect-without-expect.ts': {
@@ -550,6 +556,7 @@ describe('mechanism 3, values — a prefix that grants more than it names is a b
       [['docs-tree'], '--project'],
       [['docs-show', '--all'], '--project'],
       [['docs-fetch'], '--project'],
+      [['docs-log'], '--project'],
       [['docs-show', '--ref', '--project'], '--project'],
     ];
     for (const [prefix, flag] of REFUSED) {
@@ -558,6 +565,7 @@ describe('mechanism 3, values — a prefix that grants more than it names is a b
     }
     const LAWFUL: readonly (readonly string[])[] = [
       ['docs-index', '--all'], ['docs-tree', '--project'], ['docs-show', '--project'], ['docs-fetch', '--project'],
+      ['docs-log', '--project'],
     ];
     for (const prefix of LAWFUL) {
       expect(() => auditExecWhitelist(withCcd([prefix])), prefix.join(' ')).not.toThrow();

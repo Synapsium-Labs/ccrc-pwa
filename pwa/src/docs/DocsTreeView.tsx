@@ -11,7 +11,7 @@ import {
 import { navigate } from '../lib/router';
 import { docsLocation } from './docsLinks';
 import { DOCS_VIEW_TEXT, ENTRY_BADGE_TEXT, fillSentence, kib, pluralS, shortCommit } from './docsText';
-import { CLASS_GLYPH, FOLDER_GLYPH, SECTION_LABEL, docsPathKind, leafName, listDir } from './docsTree';
+import { CLASS_GLYPH, FOLDER_GLYPH, SECTION_LABEL, docsPathKind, leafName, listDir, sectionFacts } from './docsTree';
 
 /** An in-app link to a Docs page: a real `href` (a modifier or middle click opens a new tab), and a plain left click
  *  navigates in place with a history entry. */
@@ -39,7 +39,7 @@ function modeOf(page: DocsPageLocation): EntryMode {
   return page.kind !== 'index' && page.ref !== null ? 'ref' : 'default';
 }
 
-/** A project's four section rows, in `DOC_SECTIONS` order, and its notes (spec 4.4's project row). */
+/** A project's section rows, in `DOC_SECTIONS` order, for the sections the tree answer lists, and its notes (spec 4.4). */
 function ProjectPage(p: { readonly tree: DocsTreeOk; readonly page: DocsPageLocation }): ReactNode {
   const { tree, page } = p;
   const mode = modeOf(page);
@@ -49,8 +49,8 @@ function ProjectPage(p: { readonly tree: DocsTreeOk; readonly page: DocsPageLoca
     <div className="docs-project">
       <ul className="docs-rows">
         {DOC_SECTION_SLUGS.map((slug) => {
-          const s = tree.sections.find((x) => x.slug === slug);
-          if (s === undefined) return null;
+          const s = sectionFacts(tree, slug);
+          if (s === null) return null;
           const label = <span className="docs-row-name">{SECTION_LABEL[slug]}</span>;
           const path = <span className="docs-row-path">{s.path}</span>;
           if (s.state !== 'present') {
@@ -119,7 +119,9 @@ function ListingPage(p: {
         type="search" className="docs-filter" aria-label={DOCS_VIEW_TEXT.filterEntries} placeholder={DOCS_VIEW_TEXT.filterEntries} value={filter}
         onChange={(e) => setFilter(e.target.value)}
       />
-      {listing.folders.length + listing.files.length === 0 && <p className="docs-note">{DOCS_VIEW_TEXT.emptyListing}</p>}
+      {sectionFacts(tree, section) === null
+        ? <p className="docs-note">{DOCS_VIEW_TEXT.sectionUnserved}</p>
+        : listing.folders.length + listing.files.length === 0 && <p className="docs-note">{DOCS_VIEW_TEXT.emptyListing}</p>}
       <ul className="docs-rows">
         {folders.map((f) => (
           <li key={'d:' + f.name}>
@@ -153,10 +155,13 @@ function ListingPage(p: {
 /** A path the tree answer does not list (spec 4.4): "Not in this listing at <short commit>". The default-view hint
  *  that may follow it (spec 4.4: "plus the default-view hint when it applies") is `DocsBanners`' one hint, shown on
  *  every default-view page of a holder with drafts, so this page draws no second copy of it. */
-function MissingPage(p: { readonly tree: DocsTreeOk }): ReactNode {
+function MissingPage(p: { readonly tree: DocsTreeOk; readonly section: DocSectionSlug }): ReactNode {
+  const unserved = sectionFacts(p.tree, p.section) === null;
   return (
     <div className="docs-missing">
-      <p className="docs-note">{fillSentence(DOCS_VIEW_TEXT.missing, { short: shortCommit(p.tree.ref.commit) })}</p>
+      <p className="docs-note">
+        {unserved ? DOCS_VIEW_TEXT.sectionUnserved : fillSentence(DOCS_VIEW_TEXT.missing, { short: shortCommit(p.tree.ref.commit) })}
+      </p>
     </div>
   );
 }
@@ -177,7 +182,7 @@ export function DocsTreeView(p: { readonly tree: DocsTreeOk; readonly page: Docs
       if (kind === 'dir') {
         return <ListingPage key={page.section + '/' + page.path} tree={tree} page={page} section={page.section} dir={page.path} />;
       }
-      return kind === 'missing' ? <MissingPage tree={tree} /> : null;
+      return kind === 'missing' ? <MissingPage tree={tree} section={page.section} /> : null;
     }
   }
 }

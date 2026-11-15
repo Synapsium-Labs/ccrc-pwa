@@ -1,8 +1,9 @@
 // The native Docs reader's HTTP routes (design 2026-10-01, section 3.4, section 3.6, section 6.3-6.5; W3 refinements
 // (c), (i), (j), (k) and (l)): L4. `composeDocs` builds one node's reader, fetcher, lanes and caches, once per call
-// (never at module scope); `registerDocsReadRoutes` registers the three reads on the docs plugin's own instance, and
+// (never at module scope); `registerDocsReadRoutes` registers the four reads on the docs plugin's own instance, and
 // Task 7's `registerDocsRefreshRoute` the refresh. The read registration never receives a fetcher (section 2 (g)'s
-// wall 1): its signature takes readers and lanes only.
+// wall 1): its signature takes readers and lanes only. The history read has no cache of its own (rich-docs spec G4):
+// it joins a single flight and books the read lane on every request.
 //
 // Ring (M7.10; the ring guard in `single-definition.test.ts`): this file may import fastify and name `reply`, and it
 // DECIDES NOTHING. The query, project and pin verdicts, every key, the show plan, the known size, the shape guard,
@@ -13,7 +14,7 @@
 // ...')`: the server runs `Fastify({ logger: false })`, so the request logger is a silent no-op.
 import type { FastifyInstance, FastifyReply } from 'fastify';
 import type {
-  DocPin, DocsFailureBody, DocsProjectsResponse, DocsRefreshFetch, DocsRefSpec, DocsTreeOk, DocsTreeResponse,
+  DocPin, DocsFailureBody, DocsHistoryResponse, DocsProjectsResponse, DocsRefreshFetch, DocsRefSpec, DocsTreeOk, DocsTreeResponse,
 } from '../../../shared/docs.js';
 import { docsCaches, type DocsCaches } from './cache.js';
 import { ccdDocsFetcher, ccdDocsReader, type CcdDocsDeps } from './ccdsource.js';
@@ -23,15 +24,15 @@ import {
   type DocsLaneRun, type DocsReadLane,
 } from './lane.js';
 import {
-  DOCS_PRIMARY_NODE, DOCS_REFRESH_SKIPPED, LISTING_JOB, docsAnswerShape, docsCacheFill, docsCacheHitAnswer,
-  docsCacheVerdict, docsFileReply, docsIndexCacheable, docsIndexFlightKey, docsKnownSize, docsLogDue, docsNodeKey,
+  DOCS_PRIMARY_NODE, DOCS_REFRESH_SKIPPED, HISTORY_JOB, LISTING_JOB, docsAnswerShape, docsCacheFill, docsCacheHitAnswer,
+  docsCacheVerdict, docsFileReply, docsIndexCacheable, docsIndexFlightKey, docsKnownSize, docsLogDue, docsLogFlightKey, docsNodeKey,
   docsProjectKey, docsRefreshAnswer, docsRefreshFetchHalf, docsRefreshFlightKey, docsShowBound, docsShowFlightKey,
   docsShowPlan, docsStoredShow, docsTreeEcho, docsTreeFlightKey, fetchBranchFor, parseDocsApiQuery, parseDocsProjectParam,
   parseDocsRefreshBody, refreshDue, type DocsApiRequest, type DocsFileReply, type DocsJob, type DocsListedFile, type DocsRefreshHalf,
   type DocsRefreshRequest,
 } from './policy.js';
 import type {
-  DocsFetchRun, DocsFetcher, DocsIndexRead, DocsReader, DocsShowRead, DocsSourceId, DocsTreeRead,
+  DocsFetchRun, DocsFetcher, DocsIndexRead, DocsLogRead, DocsReader, DocsShowRead, DocsSourceId, DocsTreeRead,
 } from './ports.js';
 
 /** One value per fleet node (section 3.12). `primary` is the node every request reads: the API carries no node key,
@@ -131,6 +132,7 @@ type DocsQuery = Readonly<Record<string, unknown>>;
 type DocsParams = Readonly<{ project?: unknown }>;
 type TreeRequest = Extract<DocsApiRequest, { route: 'tree' }>;
 type FileRequest = Extract<DocsApiRequest, { route: 'file' }>;
+type HistoryRequest = Extract<DocsApiRequest, { route: 'history' }>;
 
 /** An ok index the adapter passed, believed only after `docsAnswerShape`; a believed index fills the node's
  *  micro-cache only when L1's `docsIndexCacheable` says the node's generation is still `gen`, the one its flight
@@ -191,6 +193,18 @@ function believeShow(at: DocsNodeLanes, node: string, pin: DocPin, listed: { rep
   return got;
 }
 
+/** An ok log the adapter passed, believed only after `docsAnswerShape` (rich-docs spec G4; refinement (f)). A failure is
+ *  handed back as it came. Nothing is cached: a log is cheap, and its route answers `no-store` like every JSON. */
+function believeLog(got: DocsLogRead): DocsLogRead {
+  if (!got.ok) return got;
+  const shape = docsAnswerShape('docs-log', got.answer);
+  if (!shape.ok) {
+    console.warn('ccrc-server: docs log answer failed its shape check');
+    return shape;
+  }
+  return got;
+}
+
 /**
  * One tree read (section 6.4): join the tree flight of (node, project, ref, the project's CURRENT generation), whose
  * starter books `LISTING_JOB` on the read lane; the answer is believed (and recorded) once, inside the flight, before
@@ -218,11 +232,12 @@ function sendFile(reply: FastifyReply, out: DocsFileReply): FastifyReply {
 }
 
 /**
- * The three docs reads (section 3.4), on the docs plugin's own instance, each with `exposeHeadRoute: false`
+ * The four docs reads (section 3.4), on the docs plugin's own instance, each with `exposeHeadRoute: false`
  * (refinement (c): a HEAD would run the whole GET for a discarded body), and an `onClose` that closes every node's
  * read and fetch lane, so a closing server answers every queued job `docs-busy` instead of leaving it to its wait.
  * Each handler parses `:project` and the query with L1's parsers (a refusal is sent before any exec), probes its
- * cache, joins its flight, and books the read lane; every failure body is sent verbatim.
+ * cache, joins its flight, and books the read lane; every failure body is sent verbatim. The history read has no
+ * cache to probe: it goes straight to its flight and the read lane.
  */
 export function registerDocsReadRoutes(app: FastifyInstance, readers: DocsNodes<DocsReader>,
   lanes: DocsNodes<DocsNodeLanes>): void {
@@ -265,6 +280,21 @@ export function registerDocsReadRoutes(app: FastifyInstance, readers: DocsNodes<
     if (run.kind !== 'ran') return notRan(reply, run);
     if (!run.value.ok) return sendDocsFailure(reply, run.value);
     return reply.send(treeResponse(run.value.answer));
+  });
+
+  app.get('/api/docs/:project/history', { exposeHeadRoute: false }, async (req, reply) => {
+    const p = parseDocsProjectParam((req.params as DocsParams).project);
+    if (!p.ok) return sendDocsFailure(reply, p);
+    const q = parseDocsApiQuery('history', req.query as DocsQuery);
+    if (!q.ok) return sendDocsFailure(reply, q);
+    const { ask } = q.req as HistoryRequest;
+    const src: DocsSourceId = { node, project: p.project };
+    const run = await at.flights.join(docsLogFlightKey(node, src.project, ask), clientGone(reply),
+      (flight) => at.read.run(HISTORY_JOB, flight, async () => believeLog(await reader.log(src, ask))));
+    if (run.kind !== 'ran') return notRan(reply, run);
+    if (!run.value.ok) return sendDocsFailure(reply, run.value);
+    const body: DocsHistoryResponse = { ok: true, log: run.value.answer };
+    return reply.send(body);
   });
 
   app.get('/api/docs/:project/file', { exposeHeadRoute: false }, async (req, reply) => {

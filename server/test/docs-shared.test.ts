@@ -10,6 +10,8 @@ import {
   DOCS_MAX_FILE_BYTES, DOCS_MAX_DOC_BYTES, DOCS_MAX_IMAGE_BYTES, DOCS_ENVELOPE_RESERVE, DOCS_MAX_ANSWER_BYTES,
   DOCS_MAX_LISTING_WIRE_BYTES, DOCS_MAX_ENTRIES, DOCS_DRAFT_HASH_BUDGET, DOCS_MAX_DRAFTS, DOCS_MAX_IMAGES_PER_PAGE,
   DOCS_FETCH_MIN_INTERVAL_MS, DOCS_STALE_MS, DOCS_RETRY_FLOOR_MS,
+  DOCS_LOG_MAX_ENTRIES, DOCS_LOG_SUBJECT_MAX_CHARS, DOCS_LOG_AUTHOR_MAX_CHARS, DOCS_LOG_MAX_WIRE_BYTES,
+  DOCS_PATH_MAX_BYTES, type DocsLogEntry, type DocsLogOk,
 } from '../../shared/docs.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -70,18 +72,20 @@ describe('shared/docs.ts is L0 and imports nothing but the redactor and the byte
   });
 });
 
-describe('DOC_SECTIONS: the four sections, declared once', () => {
+describe('DOC_SECTIONS: the sections, declared once', () => {
   it('maps each slug to its repo path, in display order', () => {
     expect(DOC_SECTIONS).toEqual({
       specs: 'docs/superpowers/specs',
       plans: 'docs/superpowers/plans',
       'product-design': 'docs/product-design',
       conventions: 'docs/conventions',
+      vision: 'docs/vision',
+      promise: 'docs/promise',
     });
-    expect(DOC_SECTION_SLUGS).toEqual(['specs', 'plans', 'product-design', 'conventions']);
+    expect(DOC_SECTION_SLUGS).toEqual(['specs', 'plans', 'product-design', 'conventions', 'vision', 'promise']);
   });
 
-  it('isDocsSection admits the four slugs and nothing else, an inherited key included', () => {
+  it('isDocsSection admits the slugs and nothing else, an inherited key included', () => {
     for (const s of DOC_SECTION_SLUGS) expect(isDocsSection(s), s).toBe(true);
     for (const s of ['', 'Specs', 'spec', 'docs', 'superpowers', 'product_design', 'specs/', 'toString', '__proto__', 'constructor']) {
       expect(isDocsSection(s), s).toBe(false);
@@ -522,7 +526,7 @@ describe('docs ccd wire types: canned answers compile against the types', () => 
     const unknownWord: DocsFailureBody = { ok: false, failure: 'not-a-word' };
     // @ts-expect-error -- show answers utf8 or base64 only
     const hex: DocsShowOk['encoding'] = 'hex';
-    // @ts-expect-error -- a ccd failure line names one of the four verbs
+    // @ts-expect-error -- a ccd failure line names one of the five verbs
     const verb: DocsCcdFailure['verb'] = 'docs-list';
     // @ts-expect-error -- four retry classes, no fifth
     const later: DocsRetryClass = 'later';
@@ -1586,4 +1590,68 @@ describe('docs section H, W5: githubPermalink, the one assembler, and the repo a
       }
     });
   });
+});
+
+// The docs-log caps (refinement (e); rich-docs spec G4, M9.7). The wire cap is ccd's final guard on the framed answer,
+// so the case below measures a worst-case answer the way ccd frames one (`line_of`, then `framed_len` in ccd's embedded
+// Docs helper: compact JSON as UTF-8, then JSON-encoded once more as one string inside the agent's frame).
+describe('the docs-log caps and the framed size of a worst-case history answer (docs W5b-1)', () => {
+  it('holds the four caps at 100 entries, 200 and 100 code points, and 131 072 framed bytes', () => {
+    expect(DOCS_LOG_MAX_ENTRIES).toBe(100);
+    expect(DOCS_LOG_SUBJECT_MAX_CHARS).toBe(200);
+    expect(DOCS_LOG_AUTHOR_MAX_CHARS).toBe(100);
+    expect(DOCS_LOG_MAX_WIRE_BYTES).toBe(131072);
+  });
+
+  /** ccd's `framed_len(line_of(obj))`: the compact line, JSON-encoded once more as a string, in UTF-8 bytes. */
+  const framedLen = (obj: unknown): number => Buffer.byteLength(JSON.stringify(JSON.stringify(obj)), 'utf8');
+
+  /** The worst-case answer: the cap's 100 entries, each with a subject and an author at their cap in `ch`, a full
+   *  1 KiB path, the longest section slug and a `hex`-long object name (40 for sha1, 64 for sha256). */
+  const worst = (ch: string, hex: number): DocsLogOk => {
+    const longest = [...DOC_SECTION_SLUGS].sort((a, b) => b.length - a.length)[0]!;
+    const entry = (): DocsLogEntry => ({
+      sha: 'a'.repeat(hex), parent: 'b'.repeat(hex), date: '2026-11-15T10:20:30+01:00',
+      author: ch.repeat(DOCS_LOG_AUTHOR_MAX_CHARS), subject: ch.repeat(DOCS_LOG_SUBJECT_MAX_CHARS),
+    });
+    return {
+      v: 1, verb: 'docs-log', ok: true, elapsedMs: 30000, commit: 'c'.repeat(hex), section: longest,
+      path: 'p'.repeat(DOCS_PATH_MAX_BYTES), entries: Array.from({ length: DOCS_LOG_MAX_ENTRIES }, entry), truncated: false,
+    };
+  };
+
+  /** THE ESTIMATE, written out so no figure is hand-picked. The framed answer is the outer frame's two quotes, plus the
+   *  compact line, plus one more byte for every `"` in it (a quote is 1 byte raw and 2 once the line is a JSON string).
+   *  The line is the wrapper (every field but the entries) plus the entries: 100 of them, 99 commas between. One entry
+   *  is `{"sha":S,"parent":P,"date":D,"author":A,"subject":U}`: 2 braces, 4 commas, 5 colons, 26 key letters, the two
+   *  object names (2 * hex), the 25-byte date and the two texts at `textBytes`, with 20 quotes (10 around the five
+   *  keys, 10 around the five values) that cost one more byte each when framed. The wrapper is counted from the
+   *  string `wrapperLine` below (ASCII only, so its length is its bytes), each of its quotes counted the same way. */
+  const estimate = (hex: number, textBytes: number): number => {
+    const entry = 2 + 4 + 5 + 26 + 2 * hex + 25 + textBytes + 2 * 20;
+    const wrapperLine = '{"v":1,"verb":"docs-log","ok":true,"elapsedMs":30000,"commit":"' + 'c'.repeat(hex)
+      + '","section":"product-design","path":"' + 'p'.repeat(DOCS_PATH_MAX_BYTES) + '","entries":[],"truncated":false}';
+    const wrapper = wrapperLine.length + (wrapperLine.match(/"/g) ?? []).length;
+    return 2 + wrapper + DOCS_LOG_MAX_ENTRIES * entry + (DOCS_LOG_MAX_ENTRIES - 1);
+  };
+
+  // The two character sets: a CJK ideograph (3 bytes in UTF-8) and an emoji (4 bytes). The texts are at their code-point
+  // caps, so textBytes is 300 code points of the set's width.
+  const THREE = '\u4e2d';
+  const FOUR = '\u{1F600}';
+  const TEXT = DOCS_LOG_SUBJECT_MAX_CHARS + DOCS_LOG_AUTHOR_MAX_CHARS;
+
+  it.each([[40, 'sha1'], [64, 'sha256']] as const)('the estimate equals the measured framed size of the answer (%s, %s)', (hex, _name) => {
+    expect(framedLen(worst(THREE, hex))).toBe(estimate(hex, TEXT * 3));
+    expect(framedLen(worst(FOUR, hex))).toBe(estimate(hex, TEXT * 4));
+  });
+
+  it.each([[40, 'sha1'], [64, 'sha256']] as const)(
+    'a worst-case history in three-byte characters fits the wire cap, and in four-byte characters it does not (%s, %s)',
+    (hex, _name) => {
+      // Measured with a 1 KiB path and the longest section: about 109 500 (sha1) and 114 300 (sha256) in three-byte
+      // characters, about 139 500 and 144 300 in four-byte ones, against the 131 072 cap.
+      expect(framedLen(worst(THREE, hex))).toBeLessThanOrEqual(DOCS_LOG_MAX_WIRE_BYTES);
+      expect(framedLen(worst(FOUR, hex)), 'four-byte text answers too-many-entries, never a list').toBeGreaterThan(DOCS_LOG_MAX_WIRE_BYTES);
+    });
 });

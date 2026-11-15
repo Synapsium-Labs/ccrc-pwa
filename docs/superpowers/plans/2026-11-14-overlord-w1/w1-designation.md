@@ -259,6 +259,11 @@ plan's.
   its row only, with no append and with the head row unmoved, so the operator keeps every lever; Confirm the restore
   folds the narrower row side in, as `restoreStricter` already takes the narrowest value. A widening is still
   refused." Retire is such a narrowing (Task 1). The rest is the authority plan's.
+- **X3b** (the ladder plan's fix round 1, review 2159 F3): on any refused append an operator narrowing writes its row
+  only, the journal calls `writerFailed`, and the answer says `journalled: false`; a widening still refuses. The
+  authority journal answers `row-only` for a narrowing in every row of its decision table, so a live retire, a model
+  class set to `opus` and a narrowing of the account set always land as their row, and only `not-in-transaction` (a
+  caller's error) writes nothing. It trades journal completeness for a brake that always lands.
 - **X4:** "The designation piece owns it, as sandbox ruling G1 to G3 already says: Start the Overlord (designate),
   Restart and rebind send the new body its first prompt after the create. A renewal of a running body is the renewal
   act's (its deliver at `carded`, or the door process's first call once that piece exists)." Tasks 5 to 7.
@@ -442,9 +447,10 @@ in flight.
     parse, `coord.db` unreadable). It never throws. Each caller fails closed in its own existing way (Task 3's table).
     The doors answer 503 `unavailable`, an existing `REFUSAL_STATUS` word, with the detail "the designation row could
     not be read", and write nothing.
-  - An authority append the journal refuses: a door maps `authority-rolled-back` to that word and every other error to
-    `journal-unreadable` (503), as the authority plan says, and writes no row. A retire over an incoherent journal
-    writes its row only (X3).
+  - An authority append the journal refuses: a door maps `authority-rolled-back` and `authority-unmeasured` to
+    `authority-rolled-back` and every other error to `journal-unreadable` (503), as the authority plan says, and writes
+    no row. Only a widening meets a refusal: a narrowing (a live retire, `opus`, a narrower account set) receives
+    `row-only` whenever its record cannot be appended, and writes its row only (X3, X3b).
   - A lane whose coordination port is absent (`store: 'optional'` on the roll lane) has no `coord.db`, so no
     designation can exist there, and it reads `not-designated` with no row. That is a measured absence, not an
     unreadable row.
@@ -649,7 +655,8 @@ export const DESIGNATE_SERVER_WORDS = ['continuity-v1'] as const;
 export interface DesignationView {
   readonly bound: { readonly sessionId: string; readonly generation: string } | null;   // null: no live binding
   readonly pending: { readonly sessionId: string; readonly kind: (typeof PENDING_KINDS)[number];
-    readonly deadlineAt: number } | null;                                              // null: no attempt
+    readonly deadlineAt: number;
+    readonly generation: string | null } | null;   // null: no attempt. `generation` null: the create has not answered yet
   readonly term: number; readonly designatedTerm: number;
   readonly model: OverlordModelClass; readonly accountPools: PoolSet;
   readonly pastIds: readonly string[]; readonly actor: string;
@@ -665,6 +672,9 @@ export type DesignationRead =
 ```
 
 `bound: null` and `pending: null` each say one thing, "no such binding", and the view carries no other absence on them.
+`pending.generation` is the `pendingGeneration` column, the incarnation `bindPendingGeneration` records once the create
+answers, and `null` says only that it is not recorded yet. Gates B's step 1 reads it to tell a pending body whose
+incarnation is recorded from one whose is not (gates plan, fix round 1, F7).
 A row that cannot be narrowed is never a view: `designationRead()` answers `unmeasured` and never throws (X7, Global
 Constraints). The private store's prompt route reads the first two arms' `sessionId` and `term`, and answers 502
 `unmeasured` on the third.
@@ -718,8 +728,9 @@ returning `{ ok: false, authority: error }` for its caller to map (X2):
   - A pending-only row: the attempt's outcome `retired`, its id onto `stopsOwed`, no term raised, no append.
   - A live row: appends `authority-retire` with the raised term and `previousSessionId` set to the bound id, then
     unbinds, appends the bound id to `pastIds`, raises the term, cancels any pending attempt (`retired`), and puts
-    both ids on `stopsOwed`. Over an incoherent journal the retire writes its row only, with no append, as the
-    authority plan's narrowing rule says (X3); every other refused append writes nothing.
+    both ids on `stopsOwed`. When the journal answers `row-only` (an incoherent journal, or under X3b any append it
+    cannot make), the retire writes its row only, with no append, as the authority plan's narrowing rule says (X3,
+    X3b); only `not-in-transaction` writes nothing.
 
   It answers the ids it put on `stopsOwed`, and the term.
 - `stopDone(sessionId)`: removes one id from `stopsOwed`. No append.
@@ -734,7 +745,8 @@ returning `{ ok: false, authority: error }` for its caller to map (X2):
     retire appends `authority-retire` with `previousSessionId`; `bindPendingGeneration`, `failPending`, `stopDone` and
     a pending-only retire append nothing. Each appending writer, given `{ ok: false }`, writes no row and answers the
     error.
-  - A retire over an incoherent journal (the authority guard's answer) writes its row and appends nothing.
+  - A retire answered `row-only` writes its row and appends nothing, for each journal state that answers it: the guard
+    `rolled-back` or `unmeasured`, a head mismatch, an unreadable file, and an append that failed (X3, X3b).
   - `designatePending` refuses when a row is bound or pending. `bindPendingGeneration` refuses after a retire.
   - `goLive` raises the term once and re-stamps the body's live generation (`identity: 'overlord'`, the raised term).
     A resent `goLive` for a session that is no longer pending changes nothing.
@@ -1035,7 +1047,8 @@ M5).
 
 **Files:**
 - Create: `server/src/coord/overlordRoutes.ts` (C5, L4): `registerOverlordRoutes(app, deps)`, and `drainOwedStops`
-- Modify: `shared/overlord-designation.ts` (`OVERLORD_FIRST_PROMPT`, the body parsers)
+- Modify: `shared/overlord-designation.ts` (the body parsers)
+- Modify: `shared/injected-prompts.mjs` and `shared/injected-prompts.d.mts` (the row `overlord-first-prompt`, typer `server`)
 - Modify: `server/src/server.ts` (the registration beside `registerFaceRoutes`, with `serial` from the coordination
   routes' handle, as `hierarchyRoutes.ts` takes `CoordRoutesHandle['serial']`, and W1a's `SessionHost`)
 - Modify: `server/test/auth-gate.test.ts` (`ROUTES` gains `...scanRoutes('coord/overlordRoutes.ts')`, the count and
@@ -1069,7 +1082,7 @@ nothing is created.
      `designateVerdict`;
   4. on `create`: `designatePending` (the deadline from question 5, the gate's actor; it journals the set and the
      class), `body.ensureProject()`, `body.create(…)`, `bindPendingGeneration`, `body.writeSet(…)`;
-  5. `body.keepAwake(id, 'on')`, then the first prompt: `SessionHost.deliver(id, OVERLORD_FIRST_PROMPT)` (X4);
+  5. `body.keepAwake(id, 'on')`, then the first prompt: `SessionHost.deliver(id, 'overlord-first-prompt')` (X4);
   6. answers 200 `{ ok: true, state: 'pending', sessionId, deadlineAt, warnings, awake, prompted }`.
 
   Any failure in step 4 after `designatePending`, including a refusal of `bindPendingGeneration` (review F5), runs
@@ -1085,8 +1098,13 @@ nothing is created.
   Then `drainOwedStops` stops each owed id, and the door answers `{ ok: true, changed: true, term, stopped: [...],
   owed: [...] }`, naming any id whose stop failed and stays owed.
 
-**`OVERLORD_FIRST_PROMPT`** is one line in this piece's L0 file that sends the body to its card (W1a's card line).
-Door process A re-points it to the door's first call in its own pull request; the sending stays here (X4).
+**The first prompt** is one `INJECTED_PROMPTS` row, `overlord-first-prompt`, owned by this piece (ruled, review 2162
+F9): `SessionHost.deliver` takes an injected prompt's key, so the line is a row of that census, never a constant of
+this piece's L0 file. This piece adds the row and widens the port's prompt type to take it (on the renewal act's
+branch, `RenewalPrompt` in `server/src/continuity/sessionHost.ts`, with its one `sendPrompt` in `renewalWiring.ts`).
+Its first text sends the body to its card. Door process A re-texts the row so that it names the door tools, and the
+renewal act delivers the same row to a renewed Overlord generation; the sending of a new body's first prompt stays here
+(X4).
 
 **`drainOwedStops(ids)`**, the one drain (review F5), for each id: `writeSet` with empty values, `clearProfile`,
 `keepAwake(id, 'off')`, then `stop`. An `ok` stop, or `absent`, ends with `stopDone(id)`. A failed stop leaves the id
@@ -1326,7 +1344,8 @@ store's writers and the drain, each a transaction of its own, so a concurrent do
 door answers `not-found`. On `set`, the door calls `setModelClass` (one transaction; `authority-model-class` is
 appended first and its answer checked, X2), then `routeSet(boundId, { class })` through the body adapter, as one
 server-composed write that D-6790 does not refuse (C45). Over an incoherent journal a change to `opus` is a narrowing
-and writes its row only, and a change to `fable` is a widening and refuses (X3). A failed route write is reported in
+and lands as its row whenever the journal answers `row-only` (X3, X3b), and a change to `fable` is a widening and
+refuses. A failed route write is reported in
 the answer. The renewal lane writes the record again at the next renewal.
 The change lands at the next renewal, never mid-generation (C44). The renewal readings piece's `classChanged` reads it.
 
@@ -1334,7 +1353,8 @@ The change lands at the next renewal, never mid-generation (C44). The renewal re
   - `fable` asks the step-up and `opus` does not.
   - With no row, `not-found`.
   - The authority record precedes the row, and a refused append writes no row.
-  - Over an incoherent journal: `opus` writes its row only, and `fable` refuses.
+  - On a `row-only` answer, in each journal state that gives one (X3, X3b): `opus` writes its row only, and `fable`
+    refuses.
   - The route write's `class`.
   - The renewal path is never called from the door.
 - [ ] **Step 2 to 5** as Task 5, `modelClassVerdict` joining `MUTANT_SETS` at floor 1, with a mutant that drops the
@@ -1366,7 +1386,8 @@ With a row that binds nothing, the set is saved for the next Start, and the coun
 On `set` the door:
 
 - calls `setAccountSet`, with `authority-account-set` appended first and its answer checked (X2). Over an
-  incoherent journal a narrowing writes its row only, and a widening or a reorder that also widens refuses (X3);
+  incoherent journal, or on any append the journal cannot make, a narrowing writes its row only, and a widening or a
+  reorder that also widens refuses (X3, X3b);
 - then, for the bound id, calls `writeSet` with the new spelling and list (the list in the set's new order);
 - answers the list, the count, and `unknown-pool` warnings, which are never refusals.
 
@@ -1378,7 +1399,8 @@ door's.
   - Below two refuses only while bound or pending.
   - An empty set refuses while bound, and is saved with a warning while unbound.
   - Unknown names warn.
-  - A refused append writes no row. Over an incoherent journal a narrowing writes its row only, and a widening refuses.
+  - A refused append writes no row. On a `row-only` answer a narrowing writes its row only, and a widening refuses
+    (X3, X3b).
   - The route write carries the new list.
 - [ ] **Step 2 to 5** as Task 5. `accountSetVerdict` and `setWidens` join at floor 1, with mutants that read a
   reorder as a widening and that skip the count while bound.
@@ -1463,7 +1485,7 @@ and no D-number is minted for them (X9).
 - PR C: PR A.
 
 **What depends on it:** authority journal C, the ladder, gates A, sequence A, sandbox B (`goLive`, `failPending`,
-`stopCreated`), door process A (`OVERLORD_FIRST_PROMPT`), private store B (`designationRead()`), portfolio B,
+`stopCreated`), door process A (the `overlord-first-prompt` row), private store B (`designationRead()`), portfolio B,
 other-lane refusals, home A (A); readiness, home B and the Overlord's timers (B); home C and the renewal readings (C).
 
 **Later:**

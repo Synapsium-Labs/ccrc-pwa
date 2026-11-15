@@ -84,7 +84,7 @@ The load-path measurement and the coordinator's rulings on it are in `load-path.
 - **Records**: the migration slot is 78: the plan said 74, the branch took 75, and the push outbox (#2838) took 75 first,
   so on the coordinator's word of 2026-11-15 this PR merged `main` once and renumbered to 76; at landing the portfolio
   (#2842) had taken 76 and the replay quiz (#2839) 77, so the landing merge renumbered it to 78, on that word. The same
-  merge added the loads door to the portfolio's route counts (`auth-gate.test.ts`: 242 routes, 239 HTTP, 94 exempt) and
+  merge added the loads door to the portfolio's route counts (`auth-gate.test.ts`: 242 routes, 239 HTTP, 94 exempt; 243, 240 and 94 after a second landing merge beside #2860's docs history route) and
   corrected run-close-switch's replay count to twenty-five (54 to 78). `server/src/watch.ts` grows by 1 (the lane's build-agreement wiring). The real-`jq` digest check
   lives in `server/test/sim/launchProfileSets.ts#launchRowCases`, run from `continuity-launch-profile.test.ts` and the
   mutation floor, not in `launch-profiles-file.test.ts`.
