@@ -634,7 +634,7 @@ export interface DocsLogEntry { sha: Sha; parent: Sha | null; date: string; auth
 /** `docs-log`'s answer: the ask echoed, at most `DOCS_LOG_MAX_ENTRIES` entries newest first, and `truncated`: true when
  *  the walk ended short of that many before it reached the start of history (the helper deadline, the stdout cap, or a
  *  shallow repository's cut history), or when a shallow repository's walk read past a commit without a parent that touched
- *  the doc, so an older change may be missing. */
+ *  the doc, so a change may be missing from the list. */
 export interface DocsLogOk {
   v: 1; verb: 'docs-log'; ok: true; elapsedMs: number;
   commit: Sha; section: DocSectionSlug; path: string; entries: DocsLogEntry[]; truncated: boolean;
