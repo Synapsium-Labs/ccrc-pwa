@@ -43,6 +43,7 @@ describe('docs L0 single definitions (docs reader W1a, row 48)', () => {
       'DOCS_MAX_ANSWER_BYTES', 'DOCS_MAX_LISTING_WIRE_BYTES', 'DOCS_MAX_ENTRIES', 'DOCS_DRAFT_HASH_BUDGET',
       'DOCS_MAX_DRAFTS', 'DOCS_MAX_IMAGES_PER_PAGE', 'DOCS_FETCH_MIN_INTERVAL_MS', 'DOCS_STALE_MS',
       'DOCS_RETRY_FLOOR_MS',
+      'DOCS_LOG_MAX_ENTRIES', 'DOCS_LOG_SUBJECT_MAX_CHARS', 'DOCS_LOG_AUTHOR_MAX_CHARS', 'DOCS_LOG_MAX_WIRE_BYTES',
       'DOCS_REF_MAX_CHARS', 'DOCS_PATH_MAX_BYTES', 'DOCS_PATH_MAX_COMPONENT_BYTES', 'DOCS_PATH_MAX_DEPTH',
     ];
     const OWN = (name: string): RegExp => new RegExp('^export const ' + name + String.raw`\s*=\s*\d+\s*;`, 'm');
@@ -132,7 +133,7 @@ describe('docs failure vocabulary, redactor and ccd wire types are declared once
   const TYPES = [
     'DocsFailure', 'DocsRetryClass', 'DocsFetchFailure', 'DocsNotAFileKind', 'DocsFailureContext', 'DocsFailureBody',
     'DocsVerb', 'DocsGithub', 'DocsTreeOk', 'DocsEntry', 'DraftsFacts', 'DocsShowOk', 'DocsFetchOk', 'DocsIndexOk',
-    'DocsIndexRow', 'DocsCcdFailure',
+    'DocsIndexRow', 'DocsCcdFailure', 'DocsLogAsk', 'DocsLogEntry', 'DocsLogOk', 'DocsHistoryResponse',
   ] as const;
   const VALUES = ['DOCS_FAILURES', 'DOCS_FAILURE_RETRY', 'DOCS_CCD_FAILURES', 'DOCS_REDACT_RULES'] as const;
   const FUNCTIONS = ['redactDocsText'] as const;

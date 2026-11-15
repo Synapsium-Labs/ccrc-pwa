@@ -238,6 +238,11 @@ describe('the docs API URL builder', () => {
     expect(docsApi.refresh('example-project')).toBe('/api/docs/example-project/refresh');
   });
 
+  it('writes the history route as commit, section, path, each value through encodeURIComponent', () => {
+    expect(docsApi.history('demo', { commit: C40, section: 'specs', path: 'a b+c.md' }))
+      .toBe(`/api/docs/demo/history?commit=${C40}&section=specs&path=a%20b%2Bc.md`);
+  });
+
   it('writes the ref text, bare or qualified, through encodeURIComponent', () => {
     expect(docsApi.tree('demo', { kind: 'bare', name: 'ws/a' })).toBe('/api/docs/demo/tree?ref=ws%2Fa');
     expect(docsApi.tree('demo', { kind: 'qualified', ref: 'refs/remotes/origin/ws/a' }))
