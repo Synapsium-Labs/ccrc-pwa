@@ -37,7 +37,7 @@ export const DOCS_INDEX_READY: DocsIndexOk = {
     {
       project: 'demo', state: 'ready', github: { state: 'named', slug: 'example-org/example-repo' }, repoKey: ZERO_KEY,
       default: { name: 'main', via: 'default:origin-head', commit: ZERO_SHA },
-      sections: { specs: 2, plans: 1, 'product-design': null, conventions: null },
+      sections: { specs: 2, plans: 1, 'product-design': null, conventions: null, vision: null, promise: null },
       fetch: { okAgeMs: 0, lastOutcome: 'ok' },
     },
     { project: 'nongit', state: 'not-a-git-repo', github: { state: 'none' }, sectionsOnDisk: ['specs'] },
@@ -53,7 +53,7 @@ export const DOCS_INDEX_UNREADABLE: DocsIndexOk = {
     {
       project: 'demo', state: 'ready', github: { state: 'none' }, repoKey: ZERO_KEY,
       default: { name: 'main', via: 'default:origin-head', commit: ZERO_SHA },
-      sections: { specs: null, plans: null, 'product-design': null, conventions: null },
+      sections: { specs: null, plans: null, 'product-design': null, conventions: null, vision: null, promise: null },
     },
   ],
 };

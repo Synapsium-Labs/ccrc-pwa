@@ -174,6 +174,10 @@ describe('docs verbs: advertised, dispatched, and every well-shaped call is one 
     for (const t of ['docs-index', 'docs-tree', 'docs-show', 'docs-fetch', 'docs-v1']) expect(caps, t).toContain(t);
   });
 
+  it('ccd caps lists docs-sections-v2', () => {
+    expect(h.sh('cmd_caps').split('\n')).toContain('docs-sections-v2');
+  });
+
   it('the dispatcher\'s usage line names the four verbs', () => {
     const r = runCcdDocs(h, ['docs-nope']);
     expect(r.code).toBe(1);
@@ -1852,9 +1856,9 @@ t11v.describe('T11: docs-index, one HOME of every repository shape (spec §2 (h)
 
   t11v.it('a ready row carries its default branch, commit and section counts, and no other row does', () => {
     t11v.expect(t11row(ans, 'demo')['default']).toEqual({ name: 'main', via: 'default:origin-head', commit: demoCommit });
-    t11v.expect(t11row(ans, 'demo')['sections']).toEqual({ specs: 2, plans: 1, 'product-design': null, conventions: null });
+    t11v.expect(t11row(ans, 'demo')['sections']).toEqual({ specs: 2, plans: 1, 'product-design': null, conventions: null, vision: null, promise: null });
     t11v.expect(t11row(ans, 'a')['default']).toEqual({ name: 'main', via: 'default:origin-head', commit: aCommit });
-    t11v.expect(t11row(ans, 'a')['sections']).toEqual({ specs: 0, plans: 1, 'product-design': null, conventions: null });
+    t11v.expect(t11row(ans, 'a')['sections']).toEqual({ specs: 0, plans: 1, 'product-design': null, conventions: null, vision: null, promise: null });
     for (const r of t11rows(ans).filter((x) => x.state !== 'ready')) {
       t11v.expect(r, r.project).not.toHaveProperty('default');
       t11v.expect(r, r.project).not.toHaveProperty('sections');

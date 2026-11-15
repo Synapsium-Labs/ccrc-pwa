@@ -405,14 +405,14 @@ describe('the index (spec 4.4, refinement (r))', () => {
 });
 
 describe('the project page (spec 4.4)', () => {
-  it('four section rows in DOC_SECTIONS order; absent and not-a-directory say so at the short commit', async () => {
+  it('six section rows in DOC_SECTIONS order; absent and not-a-directory say so at the short commit', async () => {
     const t = treeOk();
     t.sections[2] = { ...t.sections[2]!, state: 'absent', count: 0 };
     t.sections[3] = { ...t.sections[3]!, state: 'not-a-directory', count: 0 };
     open('/docs/demo', fakeLoaders({ tree: okTree(t) }));
     await screen.findByText('specs');
     const rows = [...document.querySelectorAll('.docs-project .docs-row')];
-    expect(rows.map((r) => r.querySelector('.docs-row-name')?.textContent)).toEqual(['specs', 'plans', 'design', 'conventions']);
+    expect(rows.map((r) => r.querySelector('.docs-row-name')?.textContent)).toEqual(['specs', 'plans', 'design', 'conventions', 'vision', 'promise']);
     expect(rows[0]).toHaveTextContent('docs/superpowers/specs');
     expect(rows[2]).toHaveTextContent(`not in this repository at ${COMMIT_A.slice(0, 8)}`);
     expect(rows[3]).toHaveTextContent(`is not a directory at ${COMMIT_A.slice(0, 8)}`);

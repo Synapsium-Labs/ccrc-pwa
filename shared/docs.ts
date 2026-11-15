@@ -19,13 +19,18 @@ import { utf8Bytes } from './utf8.js';
 
 // ---- (A) Sections ----------------------------------------------------------------------------------------------
 
-/** The four doc sections, slug to repo path, in display order. Every other list of sections is derived from this
- *  object: `DOC_SECTION_SLUGS`, `DOCS_SECTION_RE_BODY`, and ccd's `SECTIONS` parity copy. */
+/** The six doc sections, slug to repo path, in display order. Every other list of sections is derived from this
+ *  object: `DOC_SECTION_SLUGS`, `DOCS_SECTION_RE_BODY`, and ccd's `SECTIONS` parity copy. `vision` and `promise` came
+ *  with the rich-docs spec's G1 (W5b): a ccd that serves them says so in `ccd caps` (the token
+ *  `server/src/ccdargv.ts#DOCS_SECTIONS_CAP` names), and the server names either to ccd only behind it
+ *  (`server/src/docs/ccdsource.ts#readDocs`). */
 export const DOC_SECTIONS = {
   specs: 'docs/superpowers/specs',
   plans: 'docs/superpowers/plans',
   'product-design': 'docs/product-design',
   conventions: 'docs/conventions',
+  vision: 'docs/vision',
+  promise: 'docs/promise',
 } as const;
 
 export type DocSectionSlug = keyof typeof DOC_SECTIONS;
@@ -33,7 +38,7 @@ export type DocSectionSlug = keyof typeof DOC_SECTIONS;
 /** The slugs, in `DOC_SECTIONS` order (a string key keeps its insertion order). */
 export const DOC_SECTION_SLUGS: readonly DocSectionSlug[] = Object.keys(DOC_SECTIONS) as DocSectionSlug[];
 
-/** True iff `s` is one of the four slugs. A list test, never `in`: `toString` and `__proto__` are no section. */
+/** True iff `s` is one of the slugs. A list test, never `in`: `toString` and `__proto__` are no section. */
 export function isDocsSection(s: string): s is DocSectionSlug {
   return typeof s === 'string' && (DOC_SECTION_SLUGS as readonly string[]).includes(s);
 }
@@ -522,7 +527,8 @@ export interface DocsTreeOk {
     };
   };
   mainCheckout: { path: string; branch: string | null; head: Sha };
-  /** All four, in DOC_SECTIONS order. */
+  /** Every section this ccd serves, in DOC_SECTIONS order: all six from a ccd that lists the sections token, the first
+   *  four from an older one. A reader never assumes a slug is here (`pwa/src/docs/docsTree.ts#sectionFacts`). */
   sections: { slug: DocSectionSlug; path: string; state: 'present' | 'absent' | 'not-a-directory'; count: number }[];
   entries: DocsEntry[];
   unlisted: { count: number; byReason: Partial<Record<'invalid-utf8' | 'unsafe-char' | 'too-long' | 'too-deep', number>> };
@@ -597,8 +603,11 @@ export interface DocsIndexOk {
     project: string;
     state: 'ready' | 'not-a-git-repo' | 'linked-worktree' | 'shared-repo' | 'partial-clone' | 'no-default-branch' | 'repo-unreadable';
     github: DocsGithub; repoKey?: string;
-    default?: { name: string; via: string; commit: Sha }; sections?: Record<DocSectionSlug, number | null>;
-    sectionsOnDisk?: DocSectionSlug[] /* non-git dirs: 4 lstats */; owner?: string | null; branch?: string | null;
+    default?: { name: string; via: string; commit: Sha };
+    /** One count per section this ccd serves: six, or four from a ccd without the sections token. A slug it does not
+     *  carry is a section that ccd does not know, never zero (`pwa/src/docs/docsTree.ts#presentSectionCounts`). */
+    sections?: Partial<Record<DocSectionSlug, number | null>>;
+    sectionsOnDisk?: DocSectionSlug[] /* non-git dirs: one lstat per section */; owner?: string | null; branch?: string | null;
     fetch?: { okAgeMs: number | null; lastOutcome: string };
   }[];
 }

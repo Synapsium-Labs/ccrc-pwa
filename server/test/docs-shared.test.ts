@@ -70,18 +70,20 @@ describe('shared/docs.ts is L0 and imports nothing but the redactor and the byte
   });
 });
 
-describe('DOC_SECTIONS: the four sections, declared once', () => {
+describe('DOC_SECTIONS: the sections, declared once', () => {
   it('maps each slug to its repo path, in display order', () => {
     expect(DOC_SECTIONS).toEqual({
       specs: 'docs/superpowers/specs',
       plans: 'docs/superpowers/plans',
       'product-design': 'docs/product-design',
       conventions: 'docs/conventions',
+      vision: 'docs/vision',
+      promise: 'docs/promise',
     });
-    expect(DOC_SECTION_SLUGS).toEqual(['specs', 'plans', 'product-design', 'conventions']);
+    expect(DOC_SECTION_SLUGS).toEqual(['specs', 'plans', 'product-design', 'conventions', 'vision', 'promise']);
   });
 
-  it('isDocsSection admits the four slugs and nothing else, an inherited key included', () => {
+  it('isDocsSection admits the slugs and nothing else, an inherited key included', () => {
     for (const s of DOC_SECTION_SLUGS) expect(isDocsSection(s), s).toBe(true);
     for (const s of ['', 'Specs', 'spec', 'docs', 'superpowers', 'product_design', 'specs/', 'toString', '__proto__', 'constructor']) {
       expect(isDocsSection(s), s).toBe(false);

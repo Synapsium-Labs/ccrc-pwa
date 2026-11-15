@@ -9458,6 +9458,7 @@ EOF
   echo ws-add-base-v1   # delegation broker wave 5 (PR3): `ws-add --child <run> --base <commit>`, a start point only (D-7827)
   echo orphan-lease-v1   # delegation broker wave 5 PR4: the orphan ladder's lease rung (`_dl_orphan_rung`, ccd/lib/delegation-lease.sh)
   echo docs-v1; echo delegation-events-v1   # delegation broker wave 3: the spool grammar and ccd-made spool directories (`_delegation_spool_dir`); the hook's registration is the doctor's to measure, not this token's
+  echo docs-sections-v2   # native Docs reader W5b (rich-docs spec G1): SECTIONS in the Docs helper holds vision and promise; the server names either only behind this word
   # ws-title-v1 / ws-wrapper-v1 — this ccd takes `--title <text>` and `--wrapper <lane>` on `ws-add` (named workspaces S1,
   # design 2026-10-20 §4.1). Two tokens, because the two flags are separable: the server sends each only behind its own
   # word, and PLACES IT BEFORE THE PROJECT. An older ccd binds an unknown `--` token as a positional (D-6164): leading,
@@ -44681,7 +44682,7 @@ cmd_docs_index() {   # --all; every project under ccd's projects root, as one JS
   _docs_py docs-index "$PROJECTS_ROOT" "$WORKTREES_ROOT" "$REG" "$@" </dev/null
 }
 
-cmd_docs_tree() {   # --project P [--ref R]; one project's four sections at one ref, with its drafts
+cmd_docs_tree() {   # --project P [--ref R]; one project's sections at one ref, with its drafts
   [[ "${1-}" == --project && ( $# -eq 2 || ( $# -eq 4 && "${3-}" == --ref ) ) ]] \
     || die "usage: ccd docs-tree --project P [--ref R]"
   _docs_front docs-tree || return 0
@@ -44765,7 +44766,7 @@ HELPER_FAILED_DETAIL_MAX_BYTES = 512
 # declares, each compared with its TS twin by docs-parity.test.ts, in both
 # directions. Nothing but those literals and comments goes between the markers.
 # docs-parity: begin
-SECTIONS={'specs':'docs/superpowers/specs','plans':'docs/superpowers/plans','product-design':'docs/product-design','conventions':'docs/conventions'}
+SECTIONS={'specs':'docs/superpowers/specs','plans':'docs/superpowers/plans','product-design':'docs/product-design','conventions':'docs/conventions','vision':'docs/vision','promise':'docs/promise'}
 PROJECT_RE=r'[A-Za-z0-9_][A-Za-z0-9._-]{0,99}'
 BARE_REF_RE=r'(?!HEAD$)(?!refs/)(?!.*\.\.)(?!.*\.lock(?:/|$))(?!.*\.(?:/|$))[A-Za-z0-9][A-Za-z0-9._-]*(?:/[A-Za-z0-9][A-Za-z0-9._-]*)*'
 REF_MAX_CHARS=200
@@ -46103,7 +46104,7 @@ def list_committed(repo, commit, dl, stdout_cap=GIT_STDOUT_CAP):
     """The committed half of a tree answer, from ONE ls-tree at `commit`.
 
     Returns (sections, entries, unlisted, blobs):
-    - sections: all four, in SECTIONS order, each {slug, path, state, count}.
+    - sections: every one in SECTIONS, in its order, each {slug, path, state, count}.
       state is 'present' (records under it), 'absent' (nothing there at C:
       section 2 (h) 7, an ok answer, never an error) or 'not-a-directory'
       (the section path is itself a record: a symlink, a gitlink or a file).
@@ -46338,7 +46339,7 @@ def index_name(raw):
 
 
 def index_sections_on_disk(path):
-    """The sections a non-git directory holds as directories: four lstats, in
+    """The sections a non-git directory holds as directories: one lstat each, in
     SECTIONS order. A section that cannot be lstat'd is not there."""
     have = []
     for slug, sec in SECTIONS.items():

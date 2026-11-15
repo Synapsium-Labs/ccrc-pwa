@@ -104,6 +104,11 @@ describe('docs L0 single definitions (docs reader W1a, row 48)', () => {
       }
     });
 
+    it('CONTROL: the section fingerprint also sees a six-joined copy (the sections of W5b)', () => {
+      const section = LITERALS.find(([what]) => what === 'section')!;
+      expect(section[1].test("const S = 'specs|plans|product-design|conventions|vision|promise';")).toBe(true);
+    });
+
     it.each(BODIES)('%s is declared in shared/docs.ts and nowhere else across the four roots', (name) => {
       expect(holders(DEF(name))).toEqual(['shared/docs.ts']);
     });

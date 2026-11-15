@@ -1,7 +1,7 @@
 // The Docs listing's pure rules (spec 2026-10-01 4.4; W5 part 1 Task 9): what a section or directory page lists and
 // in what order, what a path page IS (a leaf, a directory, or not in this listing), the section labels and the
 // counts string. Every list of sections is derived from L0's `DOC_SECTION_SLUGS`, and the label and order tables are
-// `Record`s over its type, so a fifth section is a compile error here until it has both. No React, no DOM, no state.
+// `Record`s over its type, so a seventh section is a compile error here until it has both. No React, no DOM, no state.
 import {
   DOC_SECTION_SLUGS, entryView,
   type DocContentClass, type DocSectionSlug, type DocsEntry, type DocsPageLocation, type DocsTreeOk, type DraftsFacts,
@@ -14,15 +14,19 @@ export const SECTION_LABEL: Readonly<Record<DocSectionSlug, string>> = {
   plans: 'plans',
   'product-design': 'design',
   conventions: 'conventions',
+  vision: 'vision',
+  promise: 'promise',
 };
 
 /** How a section lists (spec 4.4): `specs` and `plans` newest first (name descending; their names are
- *  date-prefixed), the other two alphabetical. Folders and files each follow it. */
+ *  date-prefixed), the other four alphabetical. Folders and files each follow it. */
 export const SECTION_ORDER: Readonly<Record<DocSectionSlug, 'newest-first' | 'alphabetical'>> = {
   specs: 'newest-first',
   plans: 'newest-first',
   'product-design': 'alphabetical',
   conventions: 'alphabetical',
+  vision: 'alphabetical',
+  promise: 'alphabetical',
 };
 
 /** A row's glyph by the path's content class (decorative; the row's name carries the meaning). */
@@ -81,15 +85,27 @@ const SECTION_LABEL_ONE: Readonly<Record<DocSectionSlug, string>> = {
   plans: 'plan',
   'product-design': 'design',
   conventions: 'convention',
+  vision: 'vision',
+  promise: 'promise',
 };
 
-/** The four section counts in `DOC_SECTION_SLUGS` order, joined by ` · ` (spec 4.4). A `null` count renders `?`:
- *  the count is not known, never zero. A count of one takes the singular noun (D-5502). */
-export function sectionCountsText(counts: Readonly<Record<DocSectionSlug, number | null>>): string {
-  return DOC_SECTION_SLUGS.map((slug) => {
+/** An index row's counts in `DOC_SECTION_SLUGS` order, for the sections its ccd serves: six, or four from a ccd without
+ *  the sections token (rich-docs spec G1, W5b). THE ONE READER of `DocsIndexRow.sections` (the wire's absence-permits
+ *  rule): a slug the row does not carry is left out, never shown as `?` or 0; a `null` count is kept (not known). */
+export function presentSectionCounts(counts: Readonly<Partial<Record<DocSectionSlug, number | null>>>):
+  readonly (readonly [DocSectionSlug, number | null])[] {
+  return DOC_SECTION_SLUGS.flatMap((slug) => {
     const n = counts[slug];
-    return `${n ?? '?'} ${n === 1 ? SECTION_LABEL_ONE[slug] : SECTION_LABEL[slug]}`;
-  }).join(' · ');
+    return n === undefined ? [] : [[slug, n] as const];
+  });
+}
+
+/** The section counts `presentSectionCounts` gives, joined by ` · ` (spec 4.4). A `null` count renders `?`: the count is
+ *  not known, never zero. A count of one takes the singular noun (D-5502). */
+export function sectionCountsText(counts: Readonly<Partial<Record<DocSectionSlug, number | null>>>): string {
+  return presentSectionCounts(counts)
+    .map(([slug, n]) => `${n ?? '?'} ${n === 1 ? SECTION_LABEL_ONE[slug] : SECTION_LABEL[slug]}`)
+    .join(' · ');
 }
 
 /** What a `path` page is, from the tree answer, never from the URL's shape (spec 3.1, 4.4): `leaf` when an entry has
