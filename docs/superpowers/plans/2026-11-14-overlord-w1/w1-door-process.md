@@ -7,50 +7,60 @@
 credential and the fence, so the model never sees a key; and the hook reports what the session really did, so the
 server can tell a witnessed write from a forged one.
 
-- **PR A, the door process.**
-  - ccd starts a door process with each generation. Its spawn step lives in a new library, `ccd/lib/door.sh`, and
-    writes a one-time launch nonce into the door process's environment, never into the pane's command.
-  - The server binds that nonce to the generation it mints, by the nonce's hash on the start report. It issues the act
-    key once, to the first call that presents the nonce.
+- **PR A1 and A2, the door process.**
+  - ccd's spawn step, in a new library `ccd/lib/door.sh`, writes a one-time launch nonce into the door process's
+    environment through a 0600 tool-server config, never into the pane's command. Claude Code starts the process from
+    that config with each generation's launch.
+  - The server binds the nonce to the session's newest recorded start, by the nonce's hash on the start report. It
+    issues the act key once, to the first call that presents the nonce, once that start's generation is minted.
   - The door process is an MCP stdio server, `ccd/door-process.mjs`, with `ccrc-api` inside: every tool it serves is
     one `ccrc-api` verb, so the route table and the token handling stay in one client.
   - It keeps the per-prompt delta cache (C38), which the hook prints on every prompt with no network call.
-- **PR B, the readers and the reports.**
+- **PR B1 and B2, the readers and the reports.**
   - The readers' one read tool.
-  - The hook's reports through one report door: the witness, reader start and stop, the model switch, and "picked
-    up".
-  - The hook's guard arms: reader scope, reader model, and a typed `/model` refused.
-  - What reads the reports: the witness step of the gate order, the third unwitnessed write's latch, the off-model
-    condition, closed-book grading in the probes, and two readings the renewal readings piece wires (`modelDrift`,
-    `readersRunning`).
+  - The hook's reports through one report door: the witness, reader start and stop, a turn's end clearing the readers,
+    the model switch, and "picked up".
+  - What reads them: the witness gates B's step 7a asks for, the third unwitnessed write's latch, the off-model
+    condition, and two readings the renewal readings piece wires (`modelDrift`, `readersRunning`). Closed-book grading
+    reads the server's read ledger.
+  - The hook's guard arms (PR B2): reader scope, the three-reader bound, reader model, and a typed `/model` refused.
 
 **Why:** §3.6 H1 and §3.3.11 H12: the model must not hold the act key, and "today the client reads its uuid from the
 registry file at the moment of the call (`ccd/ccrc-api`), so any process in the pane passes as current: a reader started
 before a renewal, the old body after a rebind, a forked copy. The fence refuses all three." §7.4: "a write with no
 witness has no turn behind it." §3.3.10 C55: readers keep the Overlord's context lean, and never act.
 
-**Architecture:** two pull requests in lane B.
+**Architecture:** four pull requests in lane B, split so that every growth-checked file, and the `ccd (program)` row,
+stays within 40 net lines in each.
 
-- **PR A (Tasks 1 to 5).**
-  - `shared/continuity-door.ts` (L0): the fence's header names, the claim's wire, the delta cache's grammar and its
-    starting values.
+- **PR A1 (Tasks 1 to 3): the claim, and the library's sites.**
+  - `shared/continuity-door.ts` (L0): the fence's header names, the claim's wire, the delta's grammar and the starting
+    values.
   - `server/src/continuity/actKey.ts` (C3, L1): `actKeyClaimVerdict`, pure.
-  - `server/src/continuity/actKeyStore.ts` (C3, L3): `continuity_act_keys`, its one writer and its reads.
+  - `server/src/continuity/actKeyStore.ts` (C3, L3): `continuity_act_keys`, its writers and its reads.
   - The claim door, `POST /api/sessions/:id/act-key`, in `server/src/continuity/routes.ts`.
-  - `ccd/lib/door.sh`: the spawn step and its purge. `ccd/ccd` gains one-line calls.
-  - `ccd/door-process.mjs`: the process, with its tool table.
-  - `ccd/ccrc-api`: the fence's headers on curl's stdin, and two rows.
-  - The hook: the start report carries the nonce's hash, and `UserPromptSubmit` prints the delta.
-- **PR B (Tasks 6 to 8).**
-  - `shared/continuity-reports.ts` (L0): the report kinds and their wire.
-  - `server/src/continuity/hookReports.ts` (C3, L1): the deciders over reports.
-  - `server/src/continuity/hookReportStore.ts` (C3, L3): `continuity_hook_reports` and `continuity_witness_checks`.
-  - The report door, `POST /api/sessions/:id/report`, in the continuity routes file.
-  - The hook's report arms and guard arms.
-  - The witness input of gates B's decider, the ladder's two rows, closed-book in `probeDoor.ts`.
+  - `ccd/ccrc-api` sends every request body in the curl config it already sends on stdin, never on curl's argv.
+  - `ccd/lib/door.sh`'s first region (`_door_prog_ok`, `_door_purge`), the loader's and installers' sites, the deny
+    path, and the start report's nonce hash.
+- **PR A2 (Tasks 4 to 6): the spawn step, the process and the delta.**
+  - `_door_spawn` and its one line in `_profile_spawn_compose`.
+  - `ccd/door-process.mjs`, with its tool table and one argv builder a row, installed and pinned by the entry installer
+    in one step.
+  - The Overlord's first line re-texted to name the door tools.
+  - The delta cache, the anchor's `delta` form at its four sites, and the hook's print.
+- **PR B1 (Tasks 7 and 9): the reports and what reads them.**
+  - `shared/continuity-reports.ts` (L0), `server/src/continuity/hookReports.ts` (C3, L1) and `hookReportStore.ts`
+    (C3, L3).
+  - The report door, `POST /api/sessions/:id/report`, and the hook's witness, reader, turn-end and pick-up reports.
+  - The witness port gates B declares, bound; the latch; the off-model condition; the two readings; closed-book.
+- **PR B2 (Task 8): the hook's model events and guard arms.**
+  - `PreModelSwitch` and `PostModelSwitch` join `HOOK_EVENTS`, report-only, with `ccd/lib/launch-profiles.json`
+    regenerated.
+  - The reader-scope, three-reader and reader-model arms, and a typed `/model` refused on the prompt path.
 
-**Tech Stack:** bash (`ccd/ccd`, `ccd/lib/door.sh`, `ccd/session-hook.sh`, `ccd/ccrc-api`, `ccd/ccrc`), Node ESM with
-no dependency (`ccd/door-process.mjs`), TypeScript (ESM), `node:sqlite`, Fastify, vitest. No new dependency.
+**Tech Stack:** bash (`ccd/ccd`, `ccd/lib/door.sh`, `ccd/session-hook.sh`, `ccd/ccrc-api`, `ccd/ccrc`), Python
+(`ccd/ccd-entry-install.py`), Node ESM with no dependency (`ccd/door-process.mjs`), TypeScript (ESM), `node:sqlite`,
+Fastify, vitest. No new dependency.
 
 **Spec:** `docs/superpowers/specs/2026-11-09-overlord-design.md`:
 
@@ -60,30 +70,29 @@ no dependency (`ccd/door-process.mjs`), TypeScript (ESM), `node:sqlite`, Fastify
   bullet, which is not built (question 1). W0a's "As measured" paragraph (W0-15 to W0-19).
 - §3.6 H2, "No authority or switch in a file on a fleet host", and Table 3.6a's rows "the door process's delta cache",
   "the model-switch journal" and "the act key file, W0's fallback only".
-- §3.3.3 C38, the bullet "A delta on every prompt", and W0a's measurement of a 600-character `UserPromptSubmit`
-  context.
-- §3.3.10 C55: what a reader is, "a reader never acts", "a second line" (the subagent-scope arm), and "Bounds" (three
-  readers, `sonnet`, the hook arm that refuses a reader call naming another model).
+- §3.3.3 C38, "A delta on every prompt", and W0a's measurement of a 600-character `UserPromptSubmit` context.
+- §3.3.10 C55: what a reader is, "a reader never acts", "a second line" (the subagent-scope arm), and "Bounds".
 - §3.3.11 H12, "The fence": the nonce, the key issued once, the counter, "a start the server did not receive is
-  reported again", `stale-designation` and `stale-generation`, and why.
+  reported again … mints its generation then", `stale-designation` and `stale-generation`, and why.
 - §3.3.5 C41, "Closed-book": "the server records whether any read door was called between the probe and the answer".
-- §3.4, Table 3.4b's row "The model changes inside a generation", W0-11 and W0-12's measurement, and §3.3.7's "a
-  change of model inside a generation is model drift".
-- §3.8: "Picked up: the prompt hook reported the id" and "Delivery is like mail".
+- §3.4, Table 3.4b's row "The model changes inside a generation", W0-11 and W0-12, and §3.3.7's "a change of model
+  inside a generation is model drift".
+- §3.8: "Picked up: the prompt hook reported the id", and "Delivery is like mail".
 - §7.4: "An unwitnessed write is refused and counted". §7.5, Table 7.5a's rows "the third unwitnessed write in a day"
   and "a generation off the designated model, its replay not passed".
-- §11.2: the gate order's step 1 (`unwitnessed`) and "After the gates"; Table 11.2's row "The hook's reports".
-- Table 11.1a, the row `continuity_generations` (the act key, bound at the mint); Table 11.1b, the row "The door
-  process, with `ccrc-api` inside; the reader types it serves"; Table 11.1e, the row "The hook's reports".
-- Table 11.6, the rows `unwitnessed` and `stale-generation`.
+- §11.2: the gate order and "After the gates"; Table 11.2's row "The hook's reports".
+- Table 11.1a's row `continuity_generations` (the act key, bound at the mint); Table 11.1b's row "The door process,
+  with `ccrc-api` inside; the reader types it serves"; Table 11.1e's row "The hook's reports". Table 11.6's rows
+  `unwitnessed` and `stale-generation`.
 - Table 13.1, rows H9 and H12 (`shape`, W1): a shape call ships with the piece that creates its table or door. This
   piece creates the act-key table, the claim door, the report door and their tables, so H9's door process and H12's
   fence half ship here, and gates B ships H12's check.
 
 The index is `docs/superpowers/plans/2026-11-14-overlord-w1.md`. This plan builds on its row "Door process and
-readers" (lane B, two pull requests), its questions 13, 16, 20, 26, 30 and 36, "Where lanes meet" (the new ccd library
-sites, `ccd/session-hook.sh`, `server/src/continuity/routes.ts`, the ladder's tables) and "What a merge arms". It takes
-the coordinator's corrections in brief 20630 as binding over the index's text.
+readers", its questions 13, 16, 20, 26, 30 and 36, "Where lanes meet" and "What a merge arms". It takes the
+coordinator's corrections in brief 20630 as binding over the index's text. Revised in fix round 1 (review 2162): the
+coordinator's rulings are marked "(ruled, F<n>)". The gates plan (`w1-gates.md`, #2863) received the same rulings on
+the witness (F5), the term (F6) and the counter (F7), and this plan meets its shapes.
 
 ## Open questions
 
@@ -91,144 +100,194 @@ The index's questions come first, each with how this plan builds it. The others 
 tree contradicts. The plan builds every recommendation unless the coordinator or the operator rules otherwise.
 
 1. **Question 13: how the door process carries `ccrc-api`, and who starts it** (slug
-   `door-process-wraps-the-one-client`). **Built as recommended.**
+   `door-process-wraps-the-one-client`). **Built as recommended, with one departure.**
    - An MCP stdio server that calls the existing `ccrc-api` verbs, one child process a call. No second client: the
      route table, the address, the box token and the closed-client rules stay in `ccd/ccrc-api`.
-   - **ccd starts it, through the tool-server config.** Claude Code starts a stdio tool server itself, as a child of
-     the session, from the `--mcp-config` file it is given. So "ccd starts it with each generation" means ccd writes a
-     fresh config with a fresh nonce at every spawn (Task 3), and the session it starts runs the process. A process
-     ccd forked beside the session could not be the session's tool server.
+   - **Claude Code starts it, from ccd's config** (slug `claude-code-starts-the-door-process`). A stdio tool server is
+     started by Claude Code as a child of the session, from the `--mcp-config` file it is given. So ccd writes a fresh
+     config with a fresh nonce at every spawn (Task 4), and Claude Code runs the process. A process ccd forked beside
+     the session could not be its tool server. This departs from §3.6 and Table 11.1b ("a fleet-host process ccd
+     starts"), and it is why a crashed door process's restart is Claude Code's behaviour, not ccd's (question 7).
    - Its tool names are the door names the `ccrc-overlord` skill uses, with each space as `_` (the skill plan's slug
-     `skill-names-doors-by-name`), each mapped to its `ccrc-api` verb. A test holds the tool table, `ccrc-api`'s
-     `ROUTES` and the skill's door table together (Task 4).
+     `skill-names-doors-by-name`), each mapped to its `ccrc-api` verb through one argv builder (Task 5).
    - The fallback (a shell that runs only `ccrc-api`, and the act key file) is not built.
-2. **Question 30: is the door process a launcher on `PATH`?** **No, as recommended.** It is a Node program installed
-   beside `compact-card.mjs`, at `~/.cc-sessions/door-process.mjs`, and started by `node` by its absolute path from the
-   tool-server config. `_inst_bins` and `install-census.test.ts`'s launcher list do not change. The file lists that
-   carry `compact-card.mjs` gain it: `ccd/ccrc`'s install (`_inst_atomic`), update backup (`_upd_backup_copy`) and
-   uninstall lists, `deploy/deploy.sh`'s install and backup lines, and their pins (Task 4). It is pinned by digest at
-   install, as the redactor is (slug `door-process-file-pinned-at-install`).
-3. **Question 16: a late or lost witness refuses the write `unwitnessed`.** Settled; built in Task 8. An unreadable
-   witness store is not a missing witness: it refuses 502 `unmeasured` and is not counted (Review Focus 3).
+2. **Question 30: is the door process a launcher on `PATH`?** **No.** The entry installer, `ccd/ccd-entry-install.py`,
+   installs it beside the redactor, at `~/.local/libexec/ccrc/door-process.mjs` (mode 644, not on `PATH`), and renders
+   its pin into the ccd body in the same step (ruled, F16; slug `door-process-installed-with-its-pin`). `node` starts it
+   by its absolute path from the tool-server config. `_inst_bins` and `install-census.test.ts`'s launcher list do not
+   change; `ccd/ccrc`'s update backup and uninstall lists gain the path.
+3. **Question 16: a late or lost witness refuses the write `unwitnessed`.** Settled. Gates B owns the step (7a, after
+   the fence) and its arms; this piece ships `witnessVerdict`, `recordWitnessCheck` and the latch, and binds the port
+   gates B declares (ruled, F5). An unreadable witness store answers 502 `unmeasured` and is not counted.
 4. **Question 20: the ladder's two cause rows ship here** (the third unwitnessed write in a day, and off the
-   designated model). Built in Task 8, after the ladder.
-5. **Question 26: the nudge rides the mail lane**, and "picked up" stays the hook's report of the id that line names
-   (the private store's ruling). This piece ships that report and its door (ruled, F9), and the pattern the hook
-   matches is held equal to the private store's renderer by a test (Task 6).
-6. **What is the witness's operation key?** (Slug `witness-key-is-the-call-digest`.) §7.4 says "the same call (session
-   and operation key)" and names no key. **Recommendation:** the sha256 of the tool's full name, a newline, and the
-   tool input printed by `jq -cS`. The hook computes it from the `PreToolUse` payload, and the door process computes it
-   from the MCP call's name and arguments through the same `jq -cS`, so one canonical form serves both sides. A call
-   repeated with the same input is the same key, and each witness is used once (Task 8). The alternative, the tool-use
-   id Claude Code may pass in an MCP call's `_meta`, is unmeasured. Task 6's live step measures that the two digests
-   agree on the pinned build. A mismatch reads as `unwitnessed`, which fails closed.
-7. **What happens to a door process that dies inside a generation?** (Slug `lost-door-process-waits-for-a-renewal`.)
-   Its key was in memory only, and the nonce is spent, so a restarted door process cannot claim again: its writes
-   refuse `stale-generation`, and its reads, card, probe and note still answer. **Recommendation:** in W1 the second
-   claim is recorded and shown on the board (a fact, `claimsRefused` on the act-key row), and the remedy is the
-   operator's Renew now (W1a's hand-offs), which starts a fresh generation with a fresh door process. Making a refused
-   second claim a hard renewal trigger is a row in Table 3.3.11b, so it goes to the spec-fixes run as a proposal, not
-   into this build. A key file on disk would survive the crash, but it is a credential in a file a child of the same
-   user can read, which is what §3.6 keeps for the fallback only.
-8. **Does a `PreModelSwitch` hook refusal stop a typed `/model`?** W0-12 measured that the event fires with
-   `from_model` and `to_model`, not that a refusal blocks it. **Recommendation:** ship the arm (Task 7) and report the
-   switch either way. If Claude Code ignores the refusal, the switch is still journalled, model drift is a hard
-   renewal trigger, and the next generation starts on the designated model. Task 7's live step records which.
-9. **Which doors may a reader read?** §3.3.10 says readers have "one read tool from the door process" and names no
-   list. **Recommendation:** the read tool serves the rows of the tool table marked `reader: true`, which in W1 are
-   `board` and `history` (each once its piece has added its `ccrc-api` row). Never `messages` (the operator's words reach
-   the main thread only, §3.8), and never `card`, `probe` or the notes (they are the generation's own memory, and
-   closed-book grading counts them).
-10. **The bound of three readers.** §3.3.10 says "at most three readers run at once" and names no enforcer.
-    **Recommendation:** the reader-scope arm refuses a fourth `Agent` call while three readers stand in the hook's own
-    roster (slug `reader-bound-in-the-scope-arm`). The roster is the subagent list the hook already keeps (D-5232),
-    from which a `SubagentStop` removes the entry; the join file is not used for this, because a join is a fact, not
-    liveness.
-11. **Model-switch reports for which sessions?** **Recommendation:** for every session the start report covers (a
-    non-child, non-fork session), so a coordinator's drift is measured the same way (R13). The refusal of a typed
-    `/model` applies only to a session with a door (Task 7).
-12. **Starting values** (Table 11.5b has none of them). **Recommendation:** in `shared/continuity-door.ts` and
-    `shared/continuity-reports.ts`, each named once: the witness window 120 s, witness rows kept 24 h, witness checks
-    kept 7 days, a reader start with no stop read as unmeasured after 30 min, the delta refreshed every 60 s with a
-    180 s lease and at most 300 characters, and the report door's hook timeout 3 s. The spec-fixes run adds them to
-    Table 11.5b.
+   designated model). Built in Task 9, after the ladder.
+5. **Question 26: the nudge rides the mail lane**, and "picked up" stays the hook's report of the id that line names.
+   This piece ships that report and its door (ruled at the index, F9), and the hook's pattern is held equal to the
+   private store's renderer by a test (Task 7).
+6. **What is the witness key?** (Slug `witness-key-is-the-call-digest`.) §7.4 says "the same call (session and
+   operation key)" and names no key. **Recommendation:** the sha256 of these bytes: the tool's full name
+   (`mcp__door__<name>`), one newline, and the tool input printed by `jq -cS` with its trailing newline removed; an
+   absent input hashes as `{}`. The hook computes it from the `PreToolUse` payload, and the door process from the MCP
+   call's name and arguments, both through `jq -cS` (the door process runs jq rather than reimplementing it, so large
+   integers, floats, unicode escapes and key order canonicalise the same on both sides). A call repeated with the same
+   input is the same key, and each witness is used once (Task 9).
+   - **Named apart from W2's operation key** (ruled, F20; slug `witness-key-is-not-the-dedupe-key`). §10.1 uses an
+     operation key as the transport's dedupe ("a repeated key returns the first call's row and never acts again").
+     This key is not that one: its header is `x-ccrc-witness-key` (`WITNESS_KEY_HEADER`), and W2's dedupe key gets a
+     header of its own. Nothing in W1 dedupes on it. A spec fix says so.
+   - Task 7's live step measures that the two digests agree on the pinned build, and records Claude Code's tool-use id
+     in an MCP call's `_meta` as the fallback, should they not. A mismatch reads as `unwitnessed`, which fails closed.
+7. **What happens to a door process that dies inside a generation?** (Slug `lost-door-process-waits-for-a-renewal`;
+   ruled, F12.)
+   - **What still works.** Its key was in memory only, and the nonce is spent. If Claude Code restarts it, the new
+     process's claim answers `stale-generation` (`nonce-spent`), so it serves **reads only**: the card's pages and the
+     reads of the inbox and board. Note writes, probe answers and the card's recording page are writes behind the fence
+     (gates B, question 12), so they refuse.
+   - **What follows.** A crash while the generation is `probing` leaves its probes unanswered, and the generation goes
+     `degraded` at `probing`'s deadline (§3.3.11). A crash after `active` stops write-through (C37), and W1 measures no
+     soft trigger that would end the generation by itself (`renewalInputsOf` answers `turns`, `backstopDue` and
+     `modelDrift` "W1" until the renewal readings piece), so the remedy is the operator's Renew now (W1a's hand-offs,
+     which PR A1 needs, question 13).
+   - **Whether Claude Code restarts a dead stdio server at all is unmeasured.** Task 5's live step measures it. If it
+     does not, no second claim happens, and the tools simply fail.
+   - **Where it shows.** `claimsRefused` on the act-key row, read by the board's facts (the board piece's line; the
+     index carries it).
+   - **The skill's wording.** `starting.md`'s refusal table reads `stale-generation` as "a newer generation exists, stop
+     acting". For a lost door process that is wrong; the refusal's detail (`nonce-spent`) tells the two apart, and the
+     index passes the wording to the skill's owner.
+   - **A hard renewal trigger** for "a refused claim or lost tools on the live generation" is a Table 3.3.11b row, so
+     it goes to the spec-fixes run as a proposal for the operator, not into this build.
+8. **`PreModelSwitch` is report-only** (ruled, F11). W0-12 measured the event for a typed `/model`; whether it fires
+   for Claude Code's own switch on a flagged request is unmeasured, and that switch is pinned on (§3.6 H1), so a
+   refusal there could stop the fallback the spec wants. So the hook never refuses `PreModelSwitch`. **Only a typed
+   `/model` is refused, on the prompt path:** the `UserPromptSubmit` arm blocks a prompt that begins `/model` in a
+   session with a door (Task 8). If the pinned build does not pass a built-in command through `UserPromptSubmit`, the
+   switch is still reported by `PostModelSwitch`, drift is a hard renewal trigger, and the next generation starts on the
+   designated model. Task 8's live step records both, and which payload field, if any, tells a typed switch from an
+   automatic one.
+9. **Which doors may a reader read?** **Recommendation:** the read tool serves the rows of the tool table marked
+   `reader: true`, which in W1 are `board` and `history` (each once its piece has added its row). Never `messages` (the
+   operator's words reach the main thread only, §3.8), and never `card`, `probe` or the notes (the generation's own
+   memory, which closed-book grading counts).
+10. **The bound of three readers** (slug `reader-bound-in-the-scope-arm`). §3.3.10 says "at most three readers run at
+    once" and names no enforcer. **Recommendation:** the B2 arm refuses a fourth `Agent` call while the hook's
+    subagent roster (`subs` in `hookstate.json`, D-5232, from which a `SubagentStop` removes the entry) holds three.
+    Its residuals are stated, not hidden (Task 8): the roster is rewritten whole and loses writes under load, so a lost
+    start can let a fourth reader through, and one message with four `Agent` calls passes, because every `PreToolUse`
+    runs before any `SubagentStart`. "In the background" is not enforced.
+11. **Model-switch reports for which sessions?** **Recommendation:** every session the start report covers (a
+    non-child, non-fork session), so a coordinator's drift is measured the same way (R13). The `/model` refusal applies
+    only to a session with a door.
+12. **Starting values** (Table 11.5b has none of them). **Recommendation:** each named once in `shared/continuity-door.ts`
+    or `shared/continuity-reports.ts`: the witness window 120 s, witness rows kept 24 h, witness checks, reader and
+    model-switch rows kept 7 days, a reader start with no stop read as unmeasured after 30 min, the delta refreshed
+    every 60 s with a 180 s lease and at most 300 bytes, the report door's hook timeout 3 s, and the claim's retry
+    back-off from 1 s doubling to 30 s. The spec-fixes run adds them to Table 11.5b.
+13. **What `renewing` needs** (ruled, F8). The claim door's retry word is `renewing`, which is not on `main`'s
+    `OVERLORD_REFUSALS`: W1a's renewal hand-offs add it. So PR A1 needs the hand-offs first, which also bring the
+    operator's Renew now that question 7 relies on.
 
 ## What exists today
 
-Measured on `main` at `2b082b91f` (2026-11-15), and on the open branches named.
+Measured on `main` at `04dd17659` (2026-11-15), and on the open branches named.
 
 - **The launch profile's surface (sandbox A, #2847, open).** On its branch, `LaunchSurface` in `shared/fleetRoles.ts`
   declares `toolServer: 'door'` and one reader type, `overlord-reader`, whose only tool is `mcp__door__read` on model
   `sonnet`. The surface branch of `ccd/ccd#_profile_spawn_compose` adds `--setting-sources project --tools Agent,Skill
-  --strict-mcp-config --agents <json>` and `CCRC_LAUNCH_PROFILE=<role>:<digest>` to the spawn's environment, and
-  leaves the tool server's launch to this piece: "Its `--mcp-config` joins the surface branch of
-  `_profile_spawn_compose` with one line" (`w1-sandbox.md`). The sandbox check requires `door` present, so sandbox B
-  needs door process A.
+  --strict-mcp-config --agents <json>` and `CCRC_LAUNCH_PROFILE=<role>:<digest>`, and leaves the tool server's launch
+  to this piece with one line. Its `surfaceSettings` registers ccrc's hook on every `HOOK_EVENTS` event, and
+  `launchDigestOf` covers the whole row, so a new hook event changes `ccd/lib/launch-profiles.json` and the Overlord's
+  digest. `_profile_refused` is on that branch. The sandbox check requires `door` present, so sandbox B needs door
+  process A.
 - **The spawn.** `ccd/ccd#_profile_spawn_compose` runs once per spawn, before both spawn lines, and its
-  `PROFILE_SPAWN_ENV` joins `$resenv`, which is written into the pane's `exec env … claude …` command. So anything in
-  that environment is in the pane's command and in every process listing: the nonce must never go there.
+  `PROFILE_SPAWN_ENV` is spliced into the pane's `exec env … claude …` command. Anything in it is in every process
+  listing, so the nonce must never go there. `_spawn_start` checks that the registry fields read, not the id's shape,
+  so the new helpers check `_reg_id_ok` themselves.
 - **The libraries.** `ccd/ccd#_ccd_lib_load` reads `ccd/lib/disk-retention.sh`, `train-proof.sh`,
-  `delegation-lease.sh` and `pool-set.sh`, each checked against its `__CCD_LIB_*_SHA256` pin, before evaluating any.
-  The ccd arms plan adds `ccd/lib/long-lived.sh` (#2854, open). The split pin's new-code arm
-  (`server/test/ccdSplit.ts#pureMoveVerdict`, slug `new-code-library-is-not-a-move`) passes a new pointer whose region
-  defines no function and assigns no variable the base program defines.
+  `delegation-lease.sh` and `pool-set.sh`, each against its `__CCD_LIB_*_SHA256` pin, before evaluating any; the ccd
+  arms plan adds `long-lived.sh` (#2854). The split pin's new-code arm (`server/test/ccdSplit.ts#pureMoveVerdict`, slug
+  `new-code-library-is-not-a-move`) judges a diff that adds a `# @ccd-lib:<name>` pointer, and passes one whose region
+  defines no function and assigns no column-0 variable `ccd/ccd` defines.
 - **The growth check.** `server/test/growthCheck.ts`: `ccd/ccd`, `ccd/ccrc`, `ccd/session-hook.sh`,
-  `server/src/coord/schema.ts`, `server/src/server.ts`, `shared/api.ts` and every `ccd/lib/*.sh` grow at most
-  `GROWTH_LIMIT` (40) net lines a pull request, and `PROGRAM_ROW` (`ccd (program)`) sums `ccd/ccd` and every
-  non-`ccrc-*` library at 40. `ccd/ccrc-api`, `ccd/install-session-hooks.sh`, `deploy/deploy.sh` and
-  `server/src/continuity/*` are not listed.
-- **Node programs beside ccd.** `ccd/compact-card.mjs` is installed to `~/.cc-sessions/compact-card.mjs` by
-  `ccd/ccrc`'s `_inst_atomic`, backed up by `_upd_backup_copy`, removed by the uninstall list, and pushed by
-  `deploy/deploy.sh`'s `install_atomic`. The hook resolves `node` from `PATH` (`command -v node`). The redactor's two
-  `.mjs` files are pinned by digest in `ccd/ccd` (`__CCD_REDACT_SHA256`, `__CCD_REDACT_CLI_SHA256`), rendered by
-  `ccd/ccd-entry-install.py`.
-- **`ccrc-api`.** `ccd/ccrc-api#send_request` sends the box token on curl's stdin as a config line (`-K -`), never on
-  its argv (R16). `ROUTES` holds eighty-three rows on `main`; `sessions.start`, `sessions.card` (with `--anchor`),
-  `sessions.probe`, `probe.answer`, `note.*` and `timer.*` are the continuity rows. The client derives `fromId` and
-  `fromUuid` from the pane.
+  `server/src/coord/schema.ts`, `server/src/server.ts` and every `ccd/lib/*.sh` grow at most `GROWTH_LIMIT` (40) net
+  code lines a pull request (comments are free), and `PROGRAM_ROW` sums `ccd/ccd` and every non-`ccrc-*` library at
+  40. `shared/api.ts` is held by its cap file (`growth-caps/shared-api-ts.json`). `ccd/ccrc-api`,
+  `ccd/ccd-entry-install.py`, `ccd/install-session-hooks.sh`, `deploy/deploy.sh` and `server/src/continuity/*` are not
+  listed.
+- **The entry installer.** `ccd/ccd-entry-install.py` installs `shared/redact.mjs` and `shared/redact-cli.mjs` to
+  `~/.local/libexec/ccrc/shared/` and renders their pins (`__CCD_REDACT_SHA256`, `__CCD_REDACT_CLI_SHA256`) into the
+  ccd body, file first, in one program; `ccd/ccrc`'s `_inst_bins` and `deploy/deploy.sh` both run it.
+- **`ccrc-api`.** `ccd/ccrc-api#send_request` sends the box token on curl's stdin as a config line (`-K -`, R16), but
+  the request body as `--data-binary "$body"` on curl's argv. The answer lands in `REQ_OUT`, a `mktemp` file under
+  `$TMPDIR`, removed by the exit trap. `ROUTES` holds eighty-three rows. The continuity verbs and their argv, from its
+  usage: `card [--page N --hash H]` and `card --anchor --form start|prompt|fork` (the pane's id, no positional id, the
+  form held to `^(start|prompt|fork)$`); `probe [--page N]` and `probe answer --json -` (the pane's id); `note add`,
+  `note close` and `note handover` (`<id> --json -`); `note list <id> [--before | --limit]`; `timer set
+  <90m|2h|3d> <note> [--run <id> | --programme <slug>]`, `timer list` and `timer cancel <id>`, which fill the pane's
+  identity and take no `--json`. `card` and `probe` print plain text whose footers name `ccrc-api` commands
+  (`cmd_card`, `cmd_probe`, and the probe page's tail in `server/src/continuity/probeDoor.ts`).
 - **The start report.** `ccd/session-hook.sh#_hook_start_report` sends every non-child, non-fork `SessionStart` to
-  `POST /api/sessions/:id/start` through `ccrc-api sessions start`, spooled in `$REG/<id>.startpending`.
-  `server/src/continuity/continuityStore.ts#insertStart` is its one writer, into `continuity_starts` (its migration in
-  `server/src/coord/schema.ts`). The renewal lane mints a generation from a start row and keeps its `startId`.
+  `POST /api/sessions/:id/start` through `ccrc-api sessions start`, spooled in `$REG/<id>.startpending` and sent again
+  when the server is back. `server/src/continuity/continuityStore.ts#insertStart` is its one writer. The door trusts
+  the body's `fromId`/`fromUuid` against the registry's readable uuid. The renewal lane mints a generation from a start
+  row (a `resume`, `clear` or `startup` start; a compaction or fork mints none) on its period
+  (`RENEWAL_LANE_PERIOD_MS`, 30 s) and keeps its `startId`, so after a crash respawn, a Restart, a swap landing or a
+  wake, the old generation stays live until the new start is minted.
 - **The continuity doors.** `server/src/continuity/routes.ts#registerContinuityRoutes` registers the start report, the
-  card, the notes, the handover, the timers and the probe doors: box-token lanes, each with an `EXEMPT` reason in
-  `server/src/auth/gate.ts`, counted in `server/test/box-token-census.test.ts`'s `CONTINUITY_LANES` and in the
-  machine-lane count word (eighty-four on `main`), which `auth/gate.ts`'s header comments and `README.md`'s auth
-  paragraph repeat. `auth-gate.test.ts` lists each door.
-- **The anchor.** `ccd/session-hook.sh#_hook_anchor_fetch` asks `ccrc-api card --anchor --form start|prompt|fork`
-  under the hook's one network budget, and `_hook_anchor_owed` prints the prompt anchor on the first
-  `UserPromptSubmit` after an automatic compaction. The one stdout payload of an event is one envelope (R7b).
-- **The hook's subagent roster.** A `SubagentStart` records the agent id in the owner's join file `$REG/<id>.joined`
-  (D-5232). A tool event with an `agent_id` counts as a subagent's only when a join for that id is recorded, never on a
-  bare `agent_id` (the delegation broker's amendment `tool-agent-id-alone-is-unjoined-evidence`).
-- **The hook's events.** `shared/hook-events.ts#HOOK_EVENT_MAP` lists twelve; no model-switch event. `ccd/install-session-hooks.sh`
-  registers them for every account, and `install-session-hooks.test.ts` holds the map to the hook's arms both ways.
-- **The no-model arm.** The D-6798 arm in `ccd/session-hook.sh` denies an `Agent` call that names no model. Sandbox A
-  makes it read the pin from the environment (`CLAUDE_CODE_SUBAGENT_MODEL_FORCE=1` with
-  `CLAUDE_CODE_SUBAGENT_MODEL`), so under the Overlord's profile a reader call passes it.
-- **The model on the server.** `server/src/usage.ts` parses the status line sidecar's `model` and its `class`
-  (`familyClassOf`). `continuity_starts` and `continuity_generations` keep the start's `model`.
-  `server/src/continuity/generationsLane.ts#renewalInputsOf` answers `modelDrift: W1` (unmeasured, "W1").
+  card, the notes, the handover, the timers and the probe doors: box-token lanes with `EXEMPT` reasons in
+  `server/src/auth/gate.ts`. `server/test/box-token-census.test.ts` counts them in `CONTINUITY_LANES` (ten) and the
+  machine-lane number words; `auth/gate.ts`'s header comments carry two count words per passage (machine lanes, and
+  all lanes); `README.md`'s auth paragraph repeats them; `auth-gate.test.ts` lists each door and pins `ROUTES.length`;
+  `server/test/rings/fastify-l4.data.ts`'s reason string lists the continuity doors.
+- **The anchor.** `shared/continuity-card.ts` holds `ANCHOR_FORM_MAP` and `AnchorForm`; `server/src/continuity/anchor.ts`
+  renders `AnchorTextForm`s; the card door's route checks the form; `ccrc-api`'s regex checks it again. While the
+  `anchor-slot` lane is shadow the door answers `{ dark: true }`. Its ceilings are UTF-8 bytes, and the rules version
+  "joins with W1's grants" (not yet in the canaries). `ccd/session-hook.sh#_hook_anchor_fetch` asks it under the hook's
+  one network budget; `_hook_anchor_owed` and `_hook_roster_wake` each print a whole envelope of their own on
+  `UserPromptSubmit`, one per event only because they exclude each other.
+- **The hook's rosters.** A `SubagentStart` adds `{name, startedAt, id}` to the `subs` roster in `hookstate.json`, and a
+  `SubagentStop` removes it (D-5232); the roster is rewritten whole, measured at 20 to 37% lost writes under load, and
+  the update is skipped when there is no prior state (D-4041). A main-turn `Stop` with no background work empties it.
+  Separately, the owner's join file `$REG/<id>.joined` records each `SubagentStart` as a fact, not liveness: a tool
+  event counts as a subagent's only when its agent id has a join (the amendment
+  `tool-agent-id-alone-is-unjoined-evidence`).
+- **The hook's events.** `shared/hook-events.ts#HOOK_EVENT_MAP` lists twelve; no model-switch event.
+  `ccd/install-session-hooks.sh` registers them in every account. The main `case` ends `*) exit 0`, and an event arm
+  that sets no skip flag falls through to the hookstate write. The three envelope builders hard-code
+  `hookEventName:"PreToolUse"`. The header declares that `PreToolUse` waits on nothing over the network, with five
+  named exceptions.
+- **The account arm.** `shared/api.ts#ACCOUNT_SECRET_PATHS` and `ACCOUNT_WRITE_DIRS` become rules in
+  `ACCOUNT_DENY_RULES`, which every session is spawned with. `ccd/install-session-hooks.sh` holds a bash copy, held
+  equal by `server/test/account-deny.test.ts`, which also requires `CLAUDE.md`'s SAFETY section to name every entry.
+  The hook's account arm (`ASEC`, `APSEC`, and the write defs) refuses the shell forms, but for a non-child session a
+  prefilter clears the arm unless the payload holds one of a fixed list of fragments (`account`, `.cc-secrets`,
+  `auth-scratch`, `agent.env`, `runtime.env`, `.auth`, the Linear store, `operator-secrets`, `printenv`, `prune` or a
+  bare `env`); `.cc-sessions` is in the child branch only.
+- **The model on the server.** `server/src/usage.ts` parses the status line sidecar's `model` and `class`.
+  `continuity_starts` and `continuity_generations` keep the start's `model`. `generationsLane.ts#renewalInputsOf`
+  answers `modelDrift`, `turns` and `backstopDue` as "W1" (unmeasured).
 - **Closed-book.** `server/src/continuity/probeDoor.ts#bookOf` answers `open` after a card or notes read and
-  `unmeasured` otherwise, and `BOOK_STATES_RECORDED` leaves out `closed`, which "needs W1's witness" (`shared/continuity.ts`,
-  slug `closed-book-is-unmeasured-in-w1a`).
-- **The refusal words.** `shared/refusal.ts#OVERLORD_REFUSALS` holds `unwitnessed` (409, "gates B, door process B"),
-  `stale-generation` (409), `renewing`'s W1a row and `not-the-overlord`. This piece needs no new word.
-- **The deny list.** `shared/api.ts#ACCOUNT_SECRET_PATHS` becomes `Read(…)` rules in `ACCOUNT_DENY_RULES`, which every
-  session is spawned with, children included. `ccd/install-session-hooks.sh` holds a bash copy, held equal by
-  `server/test/account-deny.test.ts`, and the hook's account arm (the jq definitions `ASEC` and `APSEC`) refuses the
-  path-qualified, quoted and `$VAR` forms (`session-hook-account-deny.test.ts`).
-- **Time and chance.** `server/src/time/ports.ts#Entropy` (`hex(bytes)`, "for secrets and ids") and `Clock`. Every file
-  under `server/src/continuity/` and every `shared/continuity*.ts` is in `time-ports.test.ts`'s families already.
-- **The first line of a fresh conversation.** On the renewal act's branch (#2852, open), `renewalActs.ts`'s
-  `first-prompt` case calls `deps.host.deliver(sessionId, 'renewal-first-prompt')`, an `INJECTED_PROMPTS` row whose
-  text names `ccrc-api card` and `ccrc-api probe`. Its departure `first-prompt-by-deliver` says: "for the Overlord (W1)
-  this line is the door process's first call instead." The designation plan (#2856, open) owns a new body's first
-  prompt (its X4), as `OVERLORD_FIRST_PROMPT`, and says "Door process A re-points it to the door's first call in its own
-  pull request; the sending stays here."
-- **Not on `main`:** sandbox A, the designation, the ladder, gates A and B, the private store, the renewal act, the
-  board and history B, and the inbox. Each interface this plan reads from them is taken from its plan or the spec, and
-  says so.
+  `unmeasured` otherwise; `BOOK_STATES_RECORDED` (in `probeDoor.ts`) leaves out `closed`, which "needs W1's witness"
+  (slug `closed-book-is-unmeasured-in-w1a`). Its cases are in `continuity-probe-door.test.ts`.
+- **The refusal words.** `shared/refusal.ts#OVERLORD_REFUSALS` holds `unwitnessed` (409), `stale-generation` (409),
+  `not-the-overlord` and `unmeasured` (502). `renewing` is not in it: `refusal-table.data.json`'s wave map lists it as
+  W1a's, added by the renewal hand-offs. `unknown-message` exists nowhere.
+- **Time and chance.** `server/src/time/ports.ts#Entropy` (`hex(bytes)`, "for secrets and ids") and `Clock`. Every
+  file under `server/src/continuity/` and every `shared/continuity*.ts` is in `time-ports.test.ts`'s families.
+- **The first line of a fresh conversation.** On the renewal act's branch (#2852), `SessionHost.deliver` takes
+  `RenewalPrompt = Extract<InjectedPromptKey, 'renewal-first-prompt'>`, `renewalWiring.ts` has one `sendPrompt`, and
+  `renewalActs.ts` delivers the key at `first-prompt` and at `renudge-card`. The designation plan (on `main`) owns the
+  Overlord's first prompt as the `INJECTED_PROMPTS` row `overlord-first-prompt` and widens the port's prompt type for it
+  (ruled, F9); this piece re-texts it.
+- **The gates plan's shapes (#2863, its branch).** Step 7a asks a `witness(sessionId, key)` port (default
+  `unmeasured`) and records through `recordWitnessCheck`; step 5 compares the caller's live generation row's `term` with
+  the designation's (no term header); the counter is reached through `overlordGateStore.ts#advanceCounterGuarded`, which
+  refuses an `ended` generation and calls `actKeyStore.ts#advanceActCounter`; a refused `stale-generation` write is
+  counted in its `overlord_fence_refusals`; the card's recording page is a write (`card-record`), so the card tool
+  presents the key, the counter and the witness key.
+- **Not on `main`:** sandbox A, the ladder, gates A and B, the private store, the renewal act and hand-offs, the board
+  and history B, and the inbox. Each interface this plan reads from them is taken from its plan or the spec, and says
+  so.
 
 ## Global Constraints
 
@@ -238,91 +297,101 @@ Measured on `main` at `2b082b91f` (2026-11-15), and on the open branches named.
   - `actKey.ts` and `hookReports.ts` are L1: pure, no `fs`, no store, no clock. `now` is an argument.
   - `actKeyStore.ts` and `hookReportStore.ts` are L3: SQL only, synchronous over `coord.db`'s handle, each keeping
     every distinction it reads. No repository and no async wrapper over `CoordStore`.
-  - The doors are L4 in the continuity routes file and decide nothing: the claim's answer is `actKeyClaimVerdict`'s,
-    a report's validity `hookReportOf`'s.
-  - The pick-up crosses from C3 to C11. C3 declares the port it consumes, `MessagePickUp`, in
-    `server/src/continuity/routes.ts`'s deps (the consumer's file), and the composition root passes the private store's
-    `moveMessage` and `messageSessionOf` behind it. No C3 file imports the private store.
-  - The door process is a ccd-side component: it names no tmux, no systemd and nothing of Claude Code's on-disk layout,
-    and it reaches the server only through `ccrc-api`.
+  - The doors are L4 in the continuity routes file and decide nothing.
+  - Two ports cross into C11, each declared by its consumer: the report door's `MessagePickUp` (in
+    `continuity/routes.ts`'s deps) and closed-book's `ReadLedgerCount` (in `probeDoor.ts`'s deps). The composition root
+    builds both from the private store. No C3 file imports the private store.
+  - The door process names no tmux, no systemd and nothing of Claude Code's on-disk layout, and reaches the server only
+    through `ccrc-api`.
 - **One writer each.**
-  - `continuity_act_keys`: `actKeyStore.ts#issueActKey` (the claim door) for a row, `noteRefusedClaim` (the claim
-    door) for `claimsRefused`, and gates B's fence step for the counter (`advanceActCounter`, shipped here, called only
-    there). Three facts, three writers, one row.
+  - `continuity_act_keys`: `actKeyStore.ts#issueActKey` (the claim door) for a row, `noteRefusedClaim` (the claim door)
+    for `claimsRefused`, and `advanceActCounter` for the counter, called only through gates B's guarded adapter. Three
+    facts, three writers, one row.
   - `continuity_starts.doorNonceSha256`: `insertStart`, as every column of that row.
   - `continuity_hook_reports`: `hookReportStore.ts#insertHookReport` (the report door), which also prunes its own
-    expired witness rows.
-  - `continuity_witness_checks`: `hookReportStore.ts#recordWitnessCheck` (the witness step).
-  - The delta cache file: the door process. `$REG/.door/<id>/mcp.json`: `ccd/lib/door.sh#_door_spawn`, removed by
+    rows past their keep.
+  - `continuity_witness_checks`: `hookReportStore.ts#recordWitnessCheck`, called by gates B's runner; it prunes its own
+    rows past 7 days.
+  - `$REG/.door/<id>/mcp.json`: `ccd/lib/door.sh#_door_spawn`. The delta cache: the door process. Both removed by
     `_door_purge` from `_reg_purge`.
   - "Picked up" on `operator_messages`: the private store's `moveMessage(id, 'pick-up', 'hook')`, called only by the
     report door.
-  - A census in `single-definition/writers-map.test.ts` pins each table's writers (Tasks 1 and 6).
-- **The act key and the nonce are secrets.**
-  - Never printed, never in a log line, never in a transcript or a tool result, never in the pane or its command, never
-    on any argv.
-  - The nonce lives in `$REG/.door/<id>/mcp.json` (0600, its directory 0700), in the door process's memory and its
-    initial environment, and once in the claim's request body. Only its sha256 rides the spawn's environment and the
-    start report.
-  - The key is minted by the server's `Entropy`, stored only as its sha256, answered once, held in the door process's
-    memory, and handed to each `ccrc-api` child in that child's environment, which `ccrc-api` puts on curl's stdin.
-  - No child can read either through a tool: `~/.cc-sessions/.door/**` joins `ACCOUNT_SECRET_PATHS`, so every session
-    is spawned with `Read(~/.cc-sessions/.door/**)` denied and the hook's account arm refuses the shell forms (Task 3).
-  - **Where sessions share a UNIX user this is an accident guard, not a wall** (§3.3.11): any process of that user can
-    read `/proc/<pid>/environ` and the 0600 file. In a container it is a credential. The plan says so in each place.
-  - Rotation is per generation. Every start (a renewal, a crash restart, a swap landing, a wake) spawns a fresh door
-    process with a fresh nonce. A key is valid only while its generation is the identity's live one, so the next mint
-    voids it with no write. A nonce hash binds at most one generation (a unique column), so a typed `/clear`, which
+  - A census in `single-definition/writers-map.test.ts` pins each table's writers, file-qualified.
+- **The act key and the nonce are secrets** (ruled, F1).
+  - **No secret on any argv.** `ccrc-api` sends every request body in the curl config it writes to curl's stdin, never
+    as `--data-binary "$body"`, so neither the nonce in the claim's body nor any other body is in a process listing. A
+    stub `curl` that records its own command line proves it (Task 2). jq reads the nonce from its environment, never
+    its argv (Task 4). The door process passes nothing secret on any child's argv.
+  - Never printed, never in a log line, never in a transcript or a tool result, never in the pane or its command.
+  - **Where the nonce is:** `$REG/.door/<id>/mcp.json` (0600, its directory 0700), the door process's memory and its
+    initial environment, and once in the claim's body on curl's stdin. Only its sha256 rides the spawn's environment
+    and the start report.
+  - **Where the key is:** minted by the server's `Entropy`, stored only as its sha256, answered once, held in the door
+    process's memory, handed to each `ccrc-api` child in that child's environment, and put by `ccrc-api` on curl's stdin.
+    The claim's answer also sits in `ccrc-api`'s answer file (`REQ_OUT`, a 0600 `mktemp` file under the session's
+    `$TMPDIR`) for the length of the claim, until the client's exit trap removes it: a named residual.
+  - **No child can read either through a tool:** `~/.cc-sessions/.door/**` joins `ACCOUNT_SECRET_PATHS` and
+    `ACCOUNT_WRITE_DIRS`, the hook's non-child prefilter learns the fragment, and `CLAUDE.md`'s SAFETY section names the
+    path (Task 3). The Overlord itself has no shell (`tools: ['Agent','Skill']`), and a reader has only
+    `mcp__door__read`, so "through a tool" is the whole surface for the session that holds the key.
+  - **Where sessions share a UNIX user this is an accident guard, not a wall** (§3.3.11). Any process of that user can
+    read `/proc/<pid>/environ` and the 0600 file. Two more residuals are binding and named (ruled, F23): the start door
+    trusts the body's `fromId`/`fromUuid` against a readable registry uuid, so a holder of the box token can post a start
+    bound to a hash of its own choosing; and a forked copy launched with the same config sends no start report and can
+    claim before the original. In a container, where only the session can read its files, it is a credential.
+  - **Rotation is per spawn.** Every start that ccd spawns (a renewal, a crash restart, a swap landing, a wake, a
+    Restart) writes a fresh nonce. A key is valid only while its generation is the identity's live one, so the next
+    mint voids it with no write. A nonce hash binds at most one generation (a unique column), so a typed `/clear`, which
     starts a conversation without a spawn, finds its nonce spent.
+- **The door process sends one call at a time** (ruled, F7). Every call, the claim included, runs through one promise
+  chain, so at most one claim is in flight and writes reach the server in counter order. The counter rises by one
+  before each fenced send and is never reused. So gates B can read a lower counter after a higher one as a fork.
 - **ccd.**
-  - **Zero new ccd verbs.** The spawn step is an internal function of the spawn path. Its SAFETY status: no verb, so
-    nothing to forbid; it writes one per-session directory under the registry and removes only that directory's two
-    named files. It stops nothing and deletes nothing else. Every test runs in a fixture HOME (`makeCcdHarness`).
-  - Only new helpers go in `ccd/lib/door.sh`; no existing function moves. Callers pass validated session ids: the
-    spawn has validated `$id` before `_profile_spawn_compose` runs, and `_reg_purge` takes ids only from its callers.
-  - Every new function that parses carries `local LC_ALL=C IFS=' '`. Constants are plain assignments (the loader
-    evaluates a library inside a function). A read of a file a session could replace with a FIFO is bounded
-    (`_plat_timeout`).
+  - **Zero new ccd verbs.** The spawn step and the purge are internal functions of the spawn and purge paths. SAFETY:
+    no verb, so nothing to forbid; they write and remove only `$REG/.door/<id>/`'s named files, refuse a symlinked
+    `$REG/.door` or `<id>` directory, and stop nothing. PR B1 adds one capability word, `door-witness-v1`, to `cmd_caps`
+    (a word, not a verb). Every test runs in a fixture HOME (`makeCcdHarness`).
+  - Only new helpers go in `ccd/lib/door.sh`; no existing function moves. Each helper checks its id with `_reg_id_ok`.
+  - Every new function that parses carries `local LC_ALL=C IFS=' '`. Constants are plain assignments. A read of a file a
+    session could replace with a FIFO is bounded (`_plat_timeout`).
   - `ccd/ccd` and `ccd (program)` each stay within 40 net lines in each pull request.
-- **The hook** fails open, as its header says, for reports: a report it cannot send is lost, never retried in a loop,
-  and never delays a tool call past the report door's timeout. Its guard arms fail closed only where the spec asks: a
-  door write tool in a recorded reader's scope, a fourth reader, a reader call naming another model, a typed `/model`
-  in a session with a door.
-- **Wire discipline.** Every new field is additive. The start report's `doorNonceSha256` is absent from an older hook,
-  and the server reads absence as "this start bound no nonce", which a claim reads as `stale-generation`, never as a
-  match. `FLEET_PROTO` does not move.
-- **Censuses move with each door.** The claim door (PR A) and the report door (PR B) each touch: `auth/gate.ts`'s
-  `EXEMPT` (one reason each), `server/test/auth-gate.test.ts` (its door lists and count comment),
-  `server/test/box-token-census.test.ts` (`CONTINUITY_LANES`, the number-word list, and the count), the machine-lane
-  count word in `auth/gate.ts`'s two header comments and `README.md`'s auth paragraph, `server/test/rings/fastify-l4.data.ts`
-  if it lists the continuity routes, and `ccd/ccrc-api`'s `ROUTES` with its count word, `server/test/ccrc-api.test.ts`'s
-  length and `WORDS`. Neither is a GET, so `MASKED_GET_ROUTES` does not change. Neither is a coordination write, so
-  `CLAUDE.md`'s box-token paragraph does not change (the census reads it against `SESSION_ONLY`, which these doors are
-  not in).
-- **Migrations.** One a pull request. Each edits `server/test/run-close-switch.test.ts` (its undo step and count) and
-  `server/test/coord-db.test.ts` (the version), and takes its number at build time, re-measured before merge.
-- **Mutation floors.** Every new L1 decider joins `MUTANT_SETS` (`server/test/sim/mutation-floors.test.ts`) and
-  `server/test/sim/mutation-floors.json` in the pull request that creates it, with the floor the builder measures
-  (`../ccrc-coordinator/references/mutation-run.py`).
+- **The hook.** Its reports fail open: a report it cannot send is lost, never retried in a loop, and never delays a
+  tool call past the report door's bound. That is why closed-book reads the server's ledger, never these reports
+  (ruled, F10). Its guard arms fail closed only where the spec asks. Every new event arm sets its skip flag and exits,
+  so it never reaches the hookstate write (ruled, F14). The witness is a sixth named exception to the header's "no
+  network wait on `PreToolUse`", added to that list.
+- **Wire discipline.** Every new field is additive. An older hook's start carries no `doorNonceSha256`, which the claim
+  reads as "this start bound no nonce", never as a match. `FLEET_PROTO` does not move.
+- **Censuses move with each door.** The claim door (A1) and the report door (B1) each touch: `auth/gate.ts`'s `EXEMPT`
+  (one reason each) and both count words of its two header passages; `server/test/auth-gate.test.ts` (its door lists,
+  its count comment and its `ROUTES.length` assertion); `server/test/box-token-census.test.ts` (`CONTINUITY_LANES`, the
+  number words and the count); `README.md`'s auth paragraph; `server/test/rings/fastify-l4.data.ts`'s reason string;
+  `ccd/ccrc-api`'s `ROUTES`, its count word, and `server/test/ccrc-api.test.ts`'s length and `WORDS`. Neither door is a
+  GET, so `MASKED_GET_ROUTES` does not change. Neither is a coordination write, so `CLAUDE.md`'s box-token paragraph
+  does not change.
+- **Migrations.** One a pull request (A1 and B1). Each edits `server/test/run-close-switch.test.ts` and
+  `server/test/coord-db.test.ts`, and takes its number at build time, re-measured before merge.
+- **Mutation floors.** Every new L1 decider joins `MUTANT_SETS` and `mutation-floors.json` in the pull request that
+  creates it, with the floor the builder measures (`../ccrc-coordinator/references/mutation-run.py`). A guard proved by
+  hand is mutated, run red, and restored from a saved copy, never with `git checkout`.
 - **Public repository.** Fixtures use `lane-a`, `project-a` and `<projects-root>`. No host, account or path of a real
   deployment.
 
 ## Review Focus
 
-1. **The model never holds a key.** Trace the nonce from ccd to the claim, and the key from the server to curl's stdin.
-   No argv, no log, no tool result, no pane text, no file but the 0600 config (nonce) carries either, and the deny path
-   covers that file for every session. A fixture run of the door process greps its whole stdout for the key.
-2. **One nonce, one generation, one key.** A spent nonce, a nonce bound to an earlier generation, a start with no
-   nonce, and a generation not yet minted each answer their own word (`stale-generation` with a reason, or
-   `renewing`), and none issues a key. The key's validity is derived from the generation's state, so no void write is
-   needed and none can be missed.
-3. **Unmeasured is never a value.** An unreadable witness store refuses 502 `unmeasured` and counts toward no latch. A
-   reader with a lost stop reads `readersRunning` unmeasured, never zero. A model with no reading is unmeasured drift,
-   never "no drift". A delta cache past its lease prints "unknown", never the stale counts.
-4. **The hook stays fast and fails open where it reports.** Every report has the report door's 3 s bound inside the
-   hook's one network budget, and a report that cannot be sent costs nothing but its own row.
-5. **The arms key on facts, never on a role's name.** "Has a door" is the spawn's `CCRC_DOOR_NONCE_SHA256` in the
-   environment; "a reader's scope" is a recorded join; "another model" is the pin the launch put in the environment.
+1. **The model never holds a key, and no secret is on an argv.** Trace the nonce from ccd to the claim, and the key from
+   the server to curl's stdin. A recording `curl` stub sees no body on its command line; the door process's whole stdout
+   and stderr in the fixtures hold neither secret.
+2. **One nonce, one start, one key.** The claim binds the newest recorded start. A start not yet reported or not yet
+   minted answers `renewing` and the process keeps its nonce and retries; a spent nonce, a superseded start and a start
+   with no hash each answer `stale-generation` with their reason. Crash respawn, Restart, swap and wake each reach a key.
+3. **Unmeasured is never a value.** An unreadable witness store refuses 502 and counts toward no latch. A reader with a
+   lost stop reads `readersRunning` unmeasured until a turn's end clears it, never zero. A stale sidecar with no switch
+   report is unmeasured drift. A delta past its lease prints "unknown".
+4. **Every tool row can be called.** Each `DOOR_TOOLS` row has an argv builder pinned against the real `ccrc-api`, and
+   each verb a row needs is extended where it cannot take the call today.
+5. **The arms key on facts, never on a role's name.** "Has a door" is `CCRC_DOOR_NONCE_SHA256` in the environment; "a
+   reader's scope" is a recorded join or an `agent_type`; "another model" is the pin the launch put in the environment.
 
 ```mermaid
 sequenceDiagram
@@ -336,16 +405,17 @@ sequenceDiagram
   CC->>D: start the tool server, the nonce in its environment
   CC->>H: SessionStart
   H->>S: start report with doorNonceSha256
-  S->>S: the renewal lane mints generation n from that start
   S->>CC: the first line, which names the card door
   CC->>D: tools/call card
-  D->>S: claim, the nonce in the body
-  S->>D: term, n and the act key, once
-  D->>S: card, then every later call through ccrc-api
+  D->>S: claim, the nonce in the body on curl's stdin
+  S->>D: renewing, until the renewal lane mints that start
+  D->>S: claim again after a back-off
+  S->>D: generation n and the act key, once
+  D->>S: card, then every later call, one at a time
 ```
 
-*Figure 1. One generation's launch: the nonce never leaves ccd's file and the door process except in the claim, and the
-key never leaves the server and the door process except toward curl.*
+*Figure 1. One generation's launch. The nonce leaves ccd's file and the door process only in the claim, and the key
+leaves the server and the door process only toward curl's stdin.*
 
 ```mermaid
 sequenceDiagram
@@ -354,10 +424,10 @@ sequenceDiagram
   participant D as door process
   participant S as server
   M->>H: PreToolUse mcp__door__note_add
-  H->>S: report witness, key sha256(name and jq -cS input)
+  H->>S: report witness, key sha256 of the name and jq -cS input
   M->>D: tools/call note_add
-  D->>S: the write, with its operation key, act key and counter
-  S->>S: gate step 1 finds an unused witness, records its use
+  D->>S: the write, with its witness key, act key and counter
+  S->>S: the fence passes, step 7a finds an unused witness and records its use
   S->>D: the door's answer
 ```
 
@@ -368,54 +438,56 @@ sequenceDiagram
 
 | PR | Tasks | What it ships | Needs first | Growth-checked files, estimate (net lines) |
 |---|---|---|---|---|
-| A | 1 to 5 | The fence's wire; `actKeyClaimVerdict`; `continuity_act_keys` and the start's `doorNonceSha256`; the claim door; `ccd/lib/door.sh` and its one-line calls; the deny path; `ccd/door-process.mjs` with its tool table and installs; the fence headers in `ccrc-api`; the Overlord's first line; the delta cache, the card door's `delta` form and the hook's print | sandbox A (the surface branch and the names `door` and `mcp__door__read`), designation A (`identityOf`, the term, `OVERLORD_FIRST_PROMPT`), W1a's renewal act (the mint path and `renewal-first-prompt`) | `ccd/ccd` +6; `ccd/lib/door.sh` +30, new; `ccd (program)` +36; `ccd/session-hook.sh` +12; `ccd/ccrc` +5; `server/src/coord/schema.ts` +18 (one migration); `server/src/server.ts` +2; `shared/api.ts` +0 (one path in place) |
-| B | 6 to 8 | The report kinds; `continuity_hook_reports` and `continuity_witness_checks`; the report door; the hook's witness, reader, model-switch and pick-up reports; the reader-scope, reader-model and typed-`/model` arms; the witness step in gates B's decider; the unwitnessed latch and the off-model condition on the ladder; closed-book; `modelDriftOf` and `readersRunning` | PR A, the ladder, gates B (the decider the witness joins), private store B (the nudge's line and `moveMessage`) | `ccd/session-hook.sh` +34; `server/src/coord/schema.ts` +22 (one migration); `server/src/server.ts` +3; `shared/api.ts` 0 |
+| A1 | 1 to 3 | The fence's wire; `actKeyClaimVerdict`; `continuity_act_keys` and the start's `doorNonceSha256`; the claim door; `ccrc-api`'s bodies on stdin; `door.sh`'s first region and every library and installer site; the deny path; the start report's hash | sandbox A, designation A (`identityOf`), W1a's renewal act (the mint) and renewal hand-offs (`renewing`, Renew now) | `ccd/ccd` +3; `ccd/lib/door.sh` +19, new; `ccd (program)` +22; `ccd/session-hook.sh` +2; `ccd/ccrc` +2; `server/src/coord/schema.ts` +18; `server/src/server.ts` +2; `shared/api.ts` 0 (in place) |
+| A2 | 4 to 6 | `_door_spawn` and its compose line; `ccd/door-process.mjs` with its argv builders, installed and pinned in one step; the verbs' door phrasing; the first line's text; the delta at its four sites and the hook's print | PR A1 | `ccd/ccd` +1; `ccd/lib/door.sh` +28; `ccd (program)` +29; `ccd/session-hook.sh` +20; `ccd/ccrc` 0 |
+| B1 | 7 and 9 | The report kinds; `continuity_hook_reports` and `continuity_witness_checks`; the report door; the witness, reader, turn-end and pick-up reports; the read tool; `witnessVerdict`, the latch, off-model, the two readings, closed-book; `door-witness-v1` | PR A2, the ladder, gates B (the port and step 7a), private store B (the nudge line, `moveMessage`, the read ledger) | `ccd/session-hook.sh` +22; `ccd/ccd` +1; `ccd (program)` +1; `server/src/coord/schema.ts` +24; `server/src/server.ts` +4; `shared/api.ts` 0 |
+| B2 | 8 | `PreModelSwitch` and `PostModelSwitch` in `HOOK_EVENTS`, report-only; `launch-profiles.json` regenerated; the reader-scope, three-reader and reader-model arms; the typed `/model` refusal | PR B1 | `ccd/session-hook.sh` +32 |
 
-**If a measured file passes 40.** `ccd/session-hook.sh` in PR B is the tightest. If the builder measures it over 40,
-Task 7 (the guard arms) moves to a PR B2 of its own, after Task 6, in a commit of its own, with no waiver. The
-`ccd (program)` row in PR A counts `ccd/ccd` and the new library together: if it measures over 40, the purge helper
-stays in `ccd/ccd`'s `_reg_purge` as two literal-path lines and the library keeps only the spawn step.
+**Sequencing B2** (ruled, F13). B2 changes the Overlord's launch row, so a running Overlord reads `launch-profile-unmet`
+from B2's merge until its next start. B2 should land before the operator's first designation. If an Overlord already
+runs, the operator renews it once B2 is on the fleet, and the pull request says so.
 
 For scale, the files that are not growth-checked change by about this much:
 
-| File | PR A | PR B |
-|---|---|---|
-| `ccd/door-process.mjs` | +260, new | +25 (the read tool) |
-| `shared/continuity-door.ts` | +70, new | |
-| `shared/continuity-reports.ts` | | +80, new |
-| `server/src/continuity/actKey.ts` | +60, new | |
-| `server/src/continuity/actKeyStore.ts` | +80, new | |
-| `server/src/continuity/hookReports.ts` | | +170, new |
-| `server/src/continuity/hookReportStore.ts` | | +120, new |
-| `server/src/continuity/routes.ts` | +55 | +70 |
-| `server/src/continuity/anchor.ts` | +25 | |
-| `server/src/continuity/probeDoor.ts` | | +15 |
-| `ccd/ccrc-api` | +20 | +3 |
-| `ccd/install-session-hooks.sh` | +1 | +2 |
-| `deploy/deploy.sh` | +3 | |
-| `shared/hook-events.ts` | | +2 |
+| File | A1 | A2 | B1 | B2 |
+|---|---|---|---|---|
+| `ccd/door-process.mjs` | | +300, new | +30 | |
+| `ccd/ccrc-api` | +15 | +20 | +3 | |
+| `ccd/ccd-entry-install.py` | +4 | +12 | | |
+| `shared/continuity-door.ts` | +70, new | +10 | | |
+| `shared/continuity-reports.ts` | | | +90, new | |
+| `server/src/continuity/actKey.ts` | +70, new | | | |
+| `server/src/continuity/actKeyStore.ts` | +90, new | | | |
+| `server/src/continuity/hookReports.ts` | | | +190, new | |
+| `server/src/continuity/hookReportStore.ts` | | | +140, new | |
+| `server/src/continuity/routes.ts` | +60 | +3 | +70 | |
+| `server/src/continuity/anchor.ts`, `probeDoor.ts`, `shared/continuity-card.ts` | | +30 | +20 | |
+| `ccd/install-session-hooks.sh` | +1 | | | +2 |
+| `ccd/lib/launch-profiles.json` | | | | regenerated |
+| `CLAUDE.md`, `README.md` | +3 | +2 | +2 | |
 
-Each pull request merges `main` once before merge and re-measures its migration slot and its census counts (the
-index's "Where lanes meet"). Sandbox A also adds a continuity lane (`POST /api/sessions/:id/start/loads`), so the
-second of the two to land re-counts the machine lanes.
+Each pull request merges `main` once before merge and re-measures its migration slot and census counts. Sandbox A also
+adds a continuity lane (`POST /api/sessions/:id/start/loads`), so the second of the two to land re-counts the machine
+lanes and `ROUTES.length`.
 
 ---
 
-### Task 1: The fence's wire, the claim's decider and the act-key table (L0, L1, L3)
+### Task 1: The fence's wire, the claim's decider and the act-key table (PR A1)
 
 **Files:**
 
-- Create: `shared/continuity-door.ts` (L0): `ACT_KEY_HEADER` (`x-ccrc-act-key`), `ACT_COUNTER_HEADER`,
-  `ACT_TERM_HEADER`, `ACT_GENERATION_HEADER`; `NONCE_SHA256_SHAPE` and `ACT_KEY_SHAPE` (64 lowercase hex); the claim's
-  wire `ActKeyClaimAnswer` (`{ ok: true; term: number; generation: number; key: string }`); `CLAIM_WHY_MAP` (below);
-  the delta's constants (Task 5).
+- Create: `shared/continuity-door.ts` (L0): `ACT_KEY_HEADER` (`x-ccrc-act-key`), `ACT_COUNTER_HEADER` and
+  `ACT_GENERATION_HEADER` (no term header: the server compares the term itself, ruled, F6); `NONCE_SHA256_SHAPE` and
+  `ACT_KEY_SHAPE` (64 lowercase hex); the claim's wire `ActKeyClaimAnswer` (`{ ok: true; generation: number; key:
+  string }`); `CLAIM_WHY_MAP` (below); `CLAIM_RETRY_MIN_MS` (1,000) and `CLAIM_RETRY_MAX_MS` (30,000).
 - Create: `server/src/continuity/actKey.ts` (C3, L1): `actKeyClaimVerdict`.
 - Create: `server/src/continuity/actKeyStore.ts` (C3, L3): `issueActKey`, `noteRefusedClaim`, `advanceActCounter`,
   `actKeyOf`, `actKeyByNonce`.
-- Modify: `server/src/coord/schema.ts` (one migration: `continuity_act_keys`, and `continuity_starts.doorNonceSha256`).
-- Modify: `server/src/continuity/continuityStore.ts#insertStart` (the new column, from `StartInsert`).
+- Modify: `server/src/continuity/continuityStore.ts`: `insertStart` takes the new column; `newestStartOf(sessionId)`
+  and `startByNonce(sessionId, sha256)` read a start with its minted generation, if any.
+- Modify: `server/src/coord/schema.ts` (one migration).
 - Test: `server/test/continuity-act-key.test.ts` (new), `server/test/continuity-act-key-store.test.ts` (new),
-  `server/test/coord-db.test.ts`, `server/test/run-close-switch.test.ts`,
+  `server/test/continuity-starts-store.test.ts`, `server/test/coord-db.test.ts`, `server/test/run-close-switch.test.ts`,
   `server/test/single-definition/writers-map.test.ts`, `server/test/sim/mutation-floors.{test.ts,json}`.
 
 **The table.**
@@ -426,80 +498,96 @@ CREATE TABLE continuity_act_keys (
   nonceSha256 TEXT NOT NULL UNIQUE,          -- the launch nonce binds at most one generation
   keySha256 TEXT NOT NULL,                   -- the key itself is never stored
   issuedAt INTEGER NOT NULL,
-  counter INTEGER NOT NULL DEFAULT 0,        -- gates B's fence step is its one writer
+  counter INTEGER NOT NULL DEFAULT 0,        -- advanceActCounter, reached only through gates B's guarded adapter
   claimsRefused INTEGER NOT NULL DEFAULT 0,  -- a spent nonce presented again
   lastRefusedAt INTEGER
 );
 ALTER TABLE continuity_starts ADD COLUMN doorNonceSha256 TEXT;
 ```
 
-**The decider.** Its inputs are facts the door read, each a `Read` that keeps "unmeasured" apart:
+`advanceActCounter(g, c)` changes the row only when `c` is above the stored counter, and answers `{ changed }`; gates
+B's `advanceCounterGuarded` wraps it in one transaction with the generation's `state <> 'ended'` check (ruled, F7), and
+no other caller exists (a census).
+
+**The decider binds the newest recorded start** (ruled, F2). Its inputs are facts the door read, each a `Read` that
+keeps "unmeasured" apart:
 
 ```ts
+type StartFact = { startId: number; nonceSha256: string | null;
+  generation: { id: number; n: number; state: GenerationState } | 'not-minted' };
 type ClaimFacts = {
-  /** The identity's live generation (designation A's `identityOf`), with its start row's nonce hash. */
-  live: Read<{ generationId: number; n: number; term: number; startNonceSha256: string | null } | 'none'>;
-  /** sha256 of the presented nonce, hashed by the door (L4); never the nonce itself. */
-  presented: string;
-  /** The act-key row already holding this nonce hash, in any generation (`actKeyByNonce`). */
-  spent: Read<{ generationId: number } | 'none'>;
+  presented: string;                                   // sha256 of the presented nonce, hashed by the door (L4)
+  spent: Read<{ generationId: number } | 'none'>;      // an act-key row already holding this hash (actKeyByNonce)
+  newest: Read<StartFact | 'none'>;                    // the session's newest recorded start (newestStartOf)
+  matching: Read<StartFact | 'none'>;                  // the session's start carrying this hash, if any (startByNonce)
 };
 type ClaimVerdict =
-  | { kind: 'issue'; generationId: number; n: number; term: number }
+  | { kind: 'issue'; generationId: number; n: number }
   | { kind: 'refuse'; error: 'renewing' | 'stale-generation' | 'unmeasured'; why: ClaimWhy };
 ```
 
 First match wins:
 
-1. a read that is unmeasured answers `unmeasured` (502, `store-unreadable`);
-2. a nonce already spent answers `stale-generation` (`nonce-spent`), and the door calls `noteRefusedClaim` on that row;
-3. no live generation answers `renewing` (`not-minted`: the start has not landed, so the door process retries at its
-   next call);
-4. a live generation whose start bound no nonce answers `stale-generation` (`no-nonce-bound`: an older hook, a start
-   nobody spawned, or a typed `/clear`);
-5. a hash that differs answers `stale-generation` (`nonce-mismatch`);
-6. otherwise `issue`.
+1. any read unmeasured: `unmeasured` (502, `store-unreadable`);
+2. the nonce already spent: `stale-generation` (`nonce-spent`), and the door calls `noteRefusedClaim` on that row;
+3. no start carries the hash: `renewing` (`start-unreported`): the start report has not landed (the hook spools it while
+   the server is away), so the door process keeps its nonce and retries;
+4. the matching start is not the newest: `stale-generation` (`superseded`: a newer spawn's door process exists);
+5. the matching start's generation is not minted yet: `renewing` (`not-minted`: the renewal lane mints it within its
+   period, while the old generation may still be live);
+6. the matching start's generation is `ended`: `stale-generation` (`generation-ended`);
+7. otherwise `issue`, for that generation.
 
-`ClaimWhy` is `CLAIM_WHY_MAP`'s keys, said in the refusal's detail and never as a refusal word of its own.
+A start with no hash (an older hook, a start nobody spawned) never matches. `ClaimWhy` is `CLAIM_WHY_MAP`'s keys,
+said in the refusal's detail and never as a refusal word of its own.
 
-- [ ] **Step 1: Failing tests.**
-  - `continuity-act-key.test.ts`: one case per arm in the order above, and the order itself (a spent nonce on a
-    generation with no binding answers `nonce-spent`, not `no-nonce-bound`; an unmeasured `spent` beside a mismatch
-    answers `unmeasured`); `issue` carries the live row's `n` and `term`; a `null` start hash never matches any
-    presented hash, the empty string included.
-  - `continuity-act-key-store.test.ts`, on a fixture `coord.db`: `issueActKey` inserts once and answers
-    `{ok:false, error:'refused'}` on a second insert for the same generation or the same nonce hash (the unique
-    constraint, never a throw); the stored row holds `keySha256` and never the key (`SELECT *` over the whole table
-    holds no value equal to the key); `advanceActCounter(g, c)` changes only when `c` is above the stored counter, and
-    answers `{changed:false}` otherwise; `noteRefusedClaim` raises `claimsRefused` and stamps the time; every read
-    answers `unmeasured` with its detail when the table is missing, never `'none'`.
-  - `coord-db.test.ts` names the new version; `run-close-switch.test.ts` drops the migration (its undo step) and its
-    count moves by one; `writers-map.test.ts`'s `TABLES` gains `continuity_act_keys: [issueActKey, noteRefusedClaim,
-    advanceActCounter]`, and the census reds on a fourth writer.
-- [ ] **Step 2: Run them, red.** From `server/`: `ccrc test -- ./node_modules/.bin/vitest run
-  test/continuity-act-key.test.ts test/continuity-act-key-store.test.ts test/coord-db.test.ts
-  test/run-close-switch.test.ts test/single-definition/writers-map.test.ts`.
+- [ ] **Step 1: Write the failing tests.**
+  - `continuity-act-key.test.ts`: one case per arm in the order above, and the order itself (a spent nonce whose start
+    is superseded answers `nonce-spent`; an unmeasured `matching` beside a spent nonce answers `unmeasured`). The four
+    restarts, each with the old generation still live and the new start not minted: a crash respawn, a Restart, a swap
+    landing and a wake each answer `renewing` (`not-minted`), then `issue` once the new start is minted, never
+    `stale-generation`. A spooled start (none carries the hash) answers `renewing` (`start-unreported`).
+  - `continuity-act-key-store.test.ts` (a fixture `coord.db`): `issueActKey` inserts once, and answers `{ok:false,
+    error:'refused'}` on a second insert for the same generation or the same hash (the unique constraint, never a
+    throw); the table never holds the key (`SELECT *` holds no value equal to it); `advanceActCounter` changes only on a
+    higher counter; `noteRefusedClaim` raises `claimsRefused`; every read answers `unmeasured` with its detail when the
+    table is missing, never `'none'`.
+  - `continuity-starts-store.test.ts`: the column stored and read; `newestStartOf` and `startByNonce` with and without a
+    minted generation.
+  - `coord-db.test.ts` names the version; `run-close-switch.test.ts` gains the undo step and its count;
+    `writers-map.test.ts`'s `TABLES` gains `continuity_act_keys` with its three writers, file-qualified.
+- [ ] **Step 2: Run them, and see them fail.** From `server/`: `ccrc test -- ./node_modules/.bin/vitest run
+  test/continuity-act-key.test.ts test/continuity-act-key-store.test.ts test/continuity-starts-store.test.ts
+  test/coord-db.test.ts test/run-close-switch.test.ts test/single-definition/writers-map.test.ts`.
 - [ ] **Step 3: Implement** the L0 file, the decider, the store and the migration (its number taken at build time).
-- [ ] **Step 4: Green, then the mutants.** `actKeyClaimVerdict` joins `MUTANT_SETS` with: each arm deleted, the order
-  of `nonce-spent` and `not-minted` swapped, the hash compare negated, `null` read as a match. Its floor is what the
-  builder measures, recorded in `mutation-floors.json`.
-- [ ] **Step 5: Commit** `feat(continuity): the act-key table and the claim's decider (Overlord W1 door process A)`.
+- [ ] **Step 4: Run them, and see them pass.**
+- [ ] **Step 5: The mutants.** `actKeyClaimVerdict` joins `MUTANT_SETS`: each arm deleted; arms 3 and 4 swapped; arms
+  5 and 6 swapped; the hash compare negated; a `null` hash read as a match. The floor is what the builder measures.
+- [ ] **Step 6: Commit** `feat(continuity): the act-key table and the claim's decider (Overlord W1 door process A1)`.
 
-### Task 2: The claim door, the start report's nonce hash, and `ccrc-api`'s claim row
+### Task 2: The claim door, the start's nonce hash, and `ccrc-api`'s bodies on stdin (PR A1)
 
 **Files:**
 
+- Modify: `ccd/ccrc-api#send_request`: the body joins the curl config written to curl's stdin as one `data-binary`
+  line, with `\` and `"` escaped as curl's config grammar requires, and `--data-binary` leaves the argv (ruled, F1).
+  `ROUTES` gains `[sessions.act-key]='POST|/api/sessions/{id}/act-key|yes|-'`, with a comment that its body carries a
+  secret, and the count word.
 - Modify: `server/src/continuity/routes.ts#registerContinuityRoutes`: `POST /api/sessions/:id/act-key`; the start
-  report's body reads `doorNonceSha256`. `ContinuityRouteDeps` gains `entropy: Entropy` and designation A's
-  `identityOf`, used at every live-generation lookup.
+  report reads `doorNonceSha256`. `ContinuityRouteDeps` gains `entropy: Entropy`.
 - Modify: `server/src/server.ts` (the composition passes `entropy`, about +2).
 - Modify: `ccd/session-hook.sh#_hook_start_report` (one field, +1).
-- Modify: `ccd/ccrc-api` (`ROUTES` gains `sessions.act-key`, and its count word).
-- Modify: `server/src/auth/gate.ts` (`EXEMPT`, one reason; the machine-lane count word in its two header comments) and
-  `README.md` (the auth paragraph's count word, and the door in the exempt-but-authenticated class).
-- Test: `server/test/continuity-act-key-route.test.ts` (new), the start report's route suite,
-  `server/test/box-token-census.test.ts`, `server/test/auth-gate.test.ts`, `server/test/ccrc-api.test.ts`, and the
-  hook's start report suite.
+- Modify: `server/src/auth/gate.ts` (`EXEMPT`, one reason; both count words of its two header passages), `README.md`
+  (the auth paragraph's count words, and the door in the exempt-but-authenticated class),
+  `server/test/rings/fastify-l4.data.ts` (the reason string's door list).
+- Test: `server/test/ccrc-api-stdin-body.test.ts` (new), `server/test/continuity-act-key-route.test.ts` (new),
+  `server/test/continuity-start-route.test.ts`, `server/test/session-hook-start-report.test.ts`,
+  `server/test/box-token-census.test.ts`, `server/test/auth-gate.test.ts`, `server/test/ccrc-api.test.ts`,
+  `server/test/ccrc-api-closed.test.ts`.
+
+**The body on stdin.** This changes how every `ccrc-api` POST travels, on every session, so it ships behind a
+characterization first: for each row's fixture body, the bytes the suite's local server receives are the same before
+and after. A body holding a newline, a quote, a backslash and a non-ASCII character is in the fixtures.
 
 **The door.** In order:
 
@@ -507,266 +595,320 @@ First match wins:
 2. the path id and the body's shape: `fromUuid`, and `nonce` matching 64 lowercase hex (400 `bad-request`, with no
    echo of the value);
 3. the registry's attribution of `fromUuid` (`deps.attribute`: 403 `stale-uuid` and its kin);
-4. the facts, each read once: the live generation through `identityOf`, its start row's hash, and the act-key row by
-   the presented nonce's hash;
+4. the facts, each read once, in one synchronous stretch: `actKeyByNonce`, `newestStartOf`, `startByNonce`;
 5. `actKeyClaimVerdict`.
 
 On `issue` the door mints `entropy.hex(32)`, hashes it, calls `issueActKey`, and only on `{ok:true}` answers
-`200 { ok: true, term, generation, key }`. A refused insert (two claims racing) answers `stale-generation`
-(`nonce-spent`), never a key. A refusal answers 409 `stale-generation` or `renewing`, or 502 `unmeasured`, with its
-`why` in `detail`. No line the door logs names the nonce or the key: its `console.warn('ccrc-server: …')` names the
-session, the generation and the `why` only.
+`200 { ok: true, generation, key }`. A refused insert (two claims racing) answers `stale-generation` (`nonce-spent`),
+never a key. A refusal answers 409 `stale-generation` or `renewing`, or 502 `unmeasured`, with its `why` in `detail`.
+No line the door logs names the nonce or the key: its `console.warn('ccrc-server: …')` names the session, the start and
+the `why` only.
 
-**The start report.** The hook reads `CCRC_DOOR_NONCE_SHA256` from its own environment (the spawn put it there, Task 3)
-and adds `doorNonceSha256` to the body only when it is 64 lowercase hex. The route checks the same shape, stores
-`null` for an absent field, and refuses a malformed one as it refuses today's malformed fields. An older hook sends no
-field, so its start binds nothing.
+**The start report.** The hook reads `CCRC_DOOR_NONCE_SHA256` from its environment (the spawn put it there, Task 4) and
+adds `doorNonceSha256` only when it is 64 lowercase hex. The route checks the same shape, stores `null` for an absent
+field, and refuses a malformed one as it refuses today's malformed fields.
 
-- [ ] **Step 1: Failing tests.**
-  - The route suite, on a fixture store and a fake `Entropy`:
-    - each refusal in order (token, shape, attribution, then each verdict arm);
-    - a good claim answers the key once, and a second claim with the same nonce answers 409 `stale-generation` with
-      `nonce-spent` and raises `claimsRefused`;
-    - the stored row holds the key's hash, and the answer body is the only place the key appears (the fake logger's
-      lines and every row of every table hold no copy);
-    - a claim before the mint answers `renewing`; a generation whose start carried no hash answers `stale-generation`
-      (`no-nonce-bound`);
-    - a typed `/clear` (a second start row under the same hash, minted as generation n+1) answers `nonce-spent` for
-      n+1.
-  - The start report's suite: a body with the field stores it; without it stores `null`; a malformed one is refused.
-  - The hook's suite (fixture HOME): with `CCRC_DOOR_NONCE_SHA256` a good hash, the spooled body carries it; with a bad
-    one, or none, the body has no such field.
-  - `box-token-census.test.ts`: `CONTINUITY_LANES` gains `POST /api/sessions/:id/act-key`, the number words gain the
-    next one, and the count moves by one. `auth-gate.test.ts`'s lists and count comment name the door.
+- [ ] **Step 1: Write the failing tests.**
+  - `ccrc-api-stdin-body.test.ts`: the real `ccrc-api` with a recording `curl` stub on `PATH` that writes its own
+    command line (`/proc/self/cmdline`) and its stdin to files: for `sessions act-key` and for three other POST rows, the
+    command line holds neither the body nor any value from it, and the stdin config holds the body; the
+    characterization above against the suite's local server.
+  - The route suite (a fixture store, a fake `Entropy`): each refusal in order; a good claim answers the key once; a
+    second claim with the same nonce answers 409 `stale-generation` (`nonce-spent`) and raises `claimsRefused`; the four
+    restarts of Task 1 through the door; a typed `/clear` (a second start under the same hash, minted as generation n+1)
+    answers `nonce-spent`; the fake logger's lines and every table hold no copy of the key or the nonce.
+  - The start route's and the hook's start-report suites: the field stored, absent, or refused; the hook sends it only
+    for a good hash (a fixture HOME).
+  - The censuses: `CONTINUITY_LANES` gains the door, the number words gain the next one, both count words in
+    `auth/gate.ts` move by one, `auth-gate.test.ts` names the door and its `ROUTES.length` moves by one,
     `ccrc-api.test.ts`'s length and `WORDS` move by one.
-- [ ] **Step 2: Red.** Run the five suites through `ccrc test`.
-- [ ] **Step 3: Implement** the door, the field, the `EXEMPT` row (reason: "the door process's one claim: box token,
-  attribution and a launch nonce the server bound at the mint; it issues the act key once"), the `ROUTES` row
-  `[sessions.act-key]='POST|/api/sessions/{id}/act-key|yes|-'` with a comment saying its body carries a secret and rides
-  `--json -` only, and the count words.
-- [ ] **Step 4: Green, then mutate by hand:** delete the attribution call (the `stale-uuid` case reds); answer the key
-  on a refused insert (the race case reds); log the nonce (the logger scan reds). Revert each.
-- [ ] **Step 5: Commit** `feat(continuity): the act-key claim door and the start's nonce hash (Overlord W1 door process A)`.
+- [ ] **Step 2: Run them, and see them fail** (each suite through `ccrc test`).
+- [ ] **Step 3: Implement** the client change, the door, the field, the `EXEMPT` row (reason: "the door process's one
+  claim: box token, attribution and a launch nonce bound to the session's newest start; it issues the act key once"), the
+  `ROUTES` row and the count words.
+- [ ] **Step 4: Run them, and see them pass.**
+- [ ] **Step 5: Prove the guards by hand:** put the body back on the argv (the cmdline case fails); answer the key on a
+  refused insert (the race case fails); log the nonce (the logger case fails). Restore each from a saved copy.
+- [ ] **Step 6: Commit** `feat(continuity): the act-key claim door, the start's nonce hash, and ccrc-api bodies on stdin (Overlord W1 door process A1)`.
 
-### Task 3: ccd's spawn step, `ccd/lib/door.sh`, and the deny path
+### Task 3: The library's first region, its sites, and the deny path (PR A1)
 
 **Files:**
 
-- Create: `ccd/lib/door.sh`: `_door_spawn`, `_door_prog_ok`, `_door_purge`, and the constant `DOOR_REG_DIR=.door`, in
-  new-code regions under the split pin's new-code arm (`new-code-library-is-not-a-move`, with its variable arm: the
-  library assigns no top-level variable that `ccd/ccd` assigns).
-- Modify: `ccd/ccd`:
-  - `_ccd_lib_load`: `door.sh` and its pin join the two arrays (in place), and its header comment names it;
-  - `__CCD_LIB_DOOR_SHA256=stamp-at-install` with its shellcheck line, and `__CCD_DOOR_SHA256=stamp-at-install` (the
-    door program's own pin, Task 4) with its shellcheck line;
-  - the surface branch of `_profile_spawn_compose`: one line, `_door_spawn "$id" || { _profile_refused "$id" "door
-    process: $DOOR_SPAWN_WHY"; return 1; }`, after the surface flags are added;
-  - `_reg_purge`: one line, `_door_purge "$id"`, and its inventory comment names `$REG/.door/<id>/`.
-- Modify: the new-library sites the index lists: `ccd/ccd-entry-install.py` (two pins) and `ccd/ccd-entry.py`'s
-  header; `ccd/ccrc`'s update backup names (`_upd_backup_copy`) and its uninstall list; `deploy/deploy.sh`;
+- Create: `ccd/lib/door.sh`, its first region: `_door_prog_ok` (the program's digest against `__CCD_DOOR_SHA256`, with
+  the hash command the loader chose; a source checkout skips it, as the redactor's reader does), `_door_purge`, and the
+  constant `DOOR_REG_DIR=.door`. A new-code region under the split pin's new-code arm, pointed at by `# @ccd-lib:door`.
+- Modify: `ccd/ccd`: `_ccd_lib_load`'s two arrays (in place) and its header comment; `__CCD_LIB_DOOR_SHA256` and
+  `__CCD_DOOR_SHA256`, each `stamp-at-install` with its shellcheck line; `_reg_purge`: one line, `_door_purge "$id"`,
+  its inventory comment, and its unlink count.
+- Modify: the library and installer sites: `ccd/ccd-entry-install.py` (the library's pin) and `ccd/ccd-entry.py`'s
+  header; `ccd/ccrc`'s update backup names (`_upd_backup_copy`) and uninstall list; `deploy/deploy.sh`;
   `server/test/ccdWsHelpers.ts` (`CCD_LIBS`), `consolidationCensus.ts` (`CCD_LIB_FILES`), `installTreeFixture.ts`,
-  `ownership.test.ts`, `session-hook.test.ts`'s `SCANNED`, `single-definition/writers-map.test.ts` and
-  `tmux-socket-census.test.ts`; `ccd/contexts.tsv` (three rows, the session host's context) and
-  `ccd/contexts-edges.tsv` only if a row crosses a context. The ccd arms' `ccd/lib/long-lived.sh` lands first (Figure
-  W1), so this library adds its name beside that one after merging `main`.
-- Modify: `shared/api.ts#ACCOUNT_SECRET_PATHS` and `ACCOUNT_WRITE_DIRS` (each gains `~/.cc-sessions/.door/**`, in
-  place); `ccd/install-session-hooks.sh`'s bash copy; the hook's account arm (`ASEC`, `APSEC`).
-- Test: `server/test/ccd-door-spawn.test.ts` (new, `makeCcdHarness`); the new-library suites (`ccd-lib-load`,
+  `install-census.test.ts` (the `libDecl` prefix union and the backup order), `ccd-docs-helper-redactor.test.ts` (the
+  loader's hash-call count), `ccrc-install-tree.test.ts`, `ownership.test.ts`, `session-hook.test.ts`'s `SCANNED`,
+  `single-definition/writers-map.test.ts`, `tmux-socket-census.test.ts` and `ccd-workspaces.test.ts` (`_reg_purge`'s
+  unlink count); `README.md`'s library paragraphs and restore list; `ccd/contexts.tsv` (the new functions' rows) and
+  `ccd/contexts-edges.tsv` (`_reg_purge -> _door_purge`). The ccd arms' `long-lived.sh` lands first (Figure W1), so this
+  library adds its name beside that one after merging `main`. The file-split plan
+  (`docs/superpowers/plans/2026-11-06-ccd-file-split.md`) lists libraries; the index passes it this name.
+- Modify: the deny path (ruled, F4): `shared/api.ts#ACCOUNT_SECRET_PATHS` and `ACCOUNT_WRITE_DIRS` each gain
+  `~/.cc-sessions/.door/**` (in place, and their doc comment); `ccd/install-session-hooks.sh`'s bash copy; the hook's
+  account arm (`ASEC`, `APSEC` and the write defs); the hook's **non-child prefilter** gains the `.cc-sessions/.door`
+  fragment, so the arm runs for a top-level session; `CLAUDE.md`'s SAFETY section gains one sentence naming
+  `~/.cc-sessions/.door/` as the door process's directory, which no session reads or writes.
+- Test: `server/test/ccd-door-lib.test.ts` (new, `makeCcdHarness`); the library suites (`ccd-lib-load`,
   `ccd-entry-install`, `ccd-install-stamp`, `build-release`, `ccrc-uninstall`, `ccrc-update-flip-backups`,
-  `ccd-ws-add-child`, `ccd-split-pin`, and the agent's `ccd-entry-exec` and `deploy-verify`);
+  `ccd-ws-add-child`, `ccd-split-pin`, `ccd-workspaces`, and the agent's `ccd-entry-exec` and `deploy-verify`);
   `server/test/account-deny.test.ts`; `server/test/session-hook-account-deny.test.ts`.
 
-**`_door_spawn <id>`** (its caller validated `<id>`):
+**`_door_purge <id>`** checks the id with `_reg_id_ok`, refuses when `$REG/.door` or `$REG/.door/<id>` is a symlink,
+then removes `mcp.json`, `mcp.json.tmp`, `delta` and `delta.tmp` by their literal names, then the directory if it is
+empty. Each unlink failure goes through `_reg_purge_unremoved`, as `_reg_purge`'s own do. A door process still running
+can write `delta` again after the purge (it holds no row lock); it exits when its session's stdin closes (Task 5), so
+the file is left at most once, and the next spawn's purge or write replaces it: a named residual, the `joined` file's
+two-sided case.
 
-1. Finds the program: beside this script in a tree, else `~/.cc-sessions/door-process.mjs` (the `carry-dedupe.py`
-   precedent). It refuses a symlink or a missing file. In the installed layout it checks the file's sha256 against
-   `__CCD_DOOR_SHA256`, with the hash command the loader chose (`__CCD_HASH_CMD`). A source checkout skips the check,
-   as the redactor's reader does.
-2. Resolves `node` to an absolute path (`command -v node`), or refuses.
-3. Mints the nonce: 32 bytes of `/dev/urandom` as hex, checked against the 64-hex shape.
-4. Makes `$REG/.door/<id>/` at 0700, and writes `mcp.json` at 0600 through a temp file and `mv` (umask 077 in a
-   subshell). jq reads the nonce from its own environment (its `$ENV`), never from its argv. The file is
-   `{"mcpServers":{"door":{"type":"stdio","command":<node>,"args":[<program>],"env":{"CCRC_DOOR_NONCE":<nonce>,
-   "CCRC_SESSION_ID":<id>,"CCRC_DOOR_DIR":<dir>,"CCRC_API":<the installed ccrc-api>}}}}`.
-5. Appends `--mcp-config '<dir>/mcp.json'` to `PROFILE_SPAWN_FLAGS`, and `CCRC_DOOR_NONCE_SHA256=<sha256>` to
-   `PROFILE_SPAWN_ENV`. Nothing else reaches the pane's command.
+- [ ] **Step 1: Write the failing tests.**
+  - `ccd-door-lib.test.ts`: `_door_prog_ok` passes the pinned file and refuses a changed, missing or symlinked one;
+    `_door_purge` removes the four names and the empty directory, leaves a file planted beside it, refuses a bad id and a
+    symlinked directory, and reports an unremovable file through `_reg_purge_unremoved`.
+  - The library suites: the loader reads and pins `door.sh`; a tampered `door.sh` refuses the load; the split pin's
+    new-code arm passes the region, and fails a variant that assigns a column-0 variable `ccd/ccd` assigns.
+  - `account-deny.test.ts`: `ACCOUNT_DENY_RULES` holds the read and write rules for the path, the bash copy agrees, and
+    `CLAUDE.md`'s SAFETY section names it. `session-hook-account-deny.test.ts`: a `cat` of a file under the path is
+    refused for a **non-child** session and a child alike, in the quoted, `$HOME` and path-qualified forms; deleting the
+    prefilter fragment makes the non-child case fail; `must-allow.json` still passes.
+- [ ] **Step 2: Run them, and see them fail.**
+- [ ] **Step 3: Implement.** `local LC_ALL=C IFS=' '` in `_door_prog_ok`; constants as plain assignments.
+- [ ] **Step 4: Run them, and see them pass.** Measure growth with `growthCheck`'s own measure (`ccd/ccd` about +3,
+  `door.sh` about +19, `ccd (program)` about +22, `session-hook.sh` about +2 with Task 2's line) and shellcheck (the
+  ratchet).
+- [ ] **Step 5: Commit** `feat(ccd): the door library's first region, its sites, and the deny path (Overlord W1 door process A1)`.
 
-Any failure sets `DOOR_SPAWN_WHY` to a fixed phrase (never a value) and returns 1, and the compose refuses the spawn
-through `_profile_refused`, so an Overlord never starts without its doors. A spawn with no surface never calls it.
-
-**`_door_purge <id>`** removes `mcp.json`, `mcp.json.tmp` and `delta` by their literal names inside
-`$REG/.door/<id>/`, then the directory if it is empty. Each path is built from `$REG`, the literal `.door` and the
-validated id, and nothing else.
-
-- [ ] **Step 1: Failing tests** (`ccd-door-spawn.test.ts`, a fixture HOME, a stub `node` and a fixture program):
-  - a surfaced spawn writes `mcp.json` at mode 0600 in a 0700 directory, whose door entry's `CCRC_DOOR_NONCE` is 64
-    hex and hashes to the `CCRC_DOOR_NONCE_SHA256` the spawn's environment carries;
-  - the pane's command (the harness's recorded tmux argv) holds the hash and the config's path, and never the nonce;
-    jq's argv, recorded by a stub wrapper, never holds it;
-  - two spawns write two different nonces;
-  - a program whose digest differs from the pin, a missing program, a symlinked program and no `node` each refuse the
-    spawn with their phrase in `swap.log`, start no pane, and leave no `mcp.json`;
-  - a spawn with no surface writes nothing under `$REG/.door/`;
-  - `_reg_purge` removes the directory, and a file planted outside `.door/<id>/` survives;
-  - the new-library suites: the loader reads and pins `door.sh`; a tampered `door.sh` refuses the load; the split
-    pin's new-code arm passes the library, and reds a variant that assigns a top-level variable `ccd/ccd` assigns;
-  - `account-deny.test.ts`: `ACCOUNT_DENY_RULES` holds `Read(~/.cc-sessions/.door/**)`, and the bash copy agrees;
-    `session-hook-account-deny.test.ts`: a `cat` of a file under that directory is refused in its quoted, `$HOME` and
-    path-qualified forms, and `must-allow.json` still passes.
-- [ ] **Step 2: Red** through `ccrc test`, each suite named.
-- [ ] **Step 3: Implement.** `local LC_ALL=C IFS=' '` in `_door_spawn` and `_door_prog_ok`; constants as plain
-  assignments.
-- [ ] **Step 4: Green, and measure growth** with `growthCheck`'s own measure (`ccd/ccd` about +6, `ccd/lib/door.sh`
-  about +30, `ccd (program)` about +36, `ccd/ccrc` about +2 here), shellcheck clean (the ratchet). By hand: pass the
-  nonce with `--arg` (the jq argv case reds); write `mcp.json` without the umask (the mode case reds). Revert each.
-- [ ] **Step 5: Commit** `feat(ccd): the door process's spawn step and its deny path (Overlord W1 door process A)`.
-
-### Task 4: The door process, its tool table, the fence on `ccrc-api`, and the Overlord's first line
+### Task 4: ccd's spawn step (PR A2)
 
 **Files:**
 
-- Create: `ccd/door-process.mjs`: an MCP stdio server with no dependency: newline-delimited JSON-RPC 2.0, answering
-  `initialize`, `notifications/initialized`, `tools/list` and `tools/call`, and an error for anything else.
-- Modify: `ccd/ccrc-api#send_request`: when `CCRC_ACT_KEY` is 64 hex, curl's stdin config gains four header lines
-  (`ACT_KEY_HEADER`, `ACT_COUNTER_HEADER`, `ACT_TERM_HEADER`, `ACT_GENERATION_HEADER`), each value checked against its
-  shape first. Nothing else changes.
-- Modify: `ccd/ccrc` (`_inst_atomic` for `door-process.mjs` at 644, `_upd_backup_copy`, the uninstall list),
-  `deploy/deploy.sh` (its `install_atomic` and backup lines, beside `compact-card.mjs`'s), and
-  `ccd/ccd-entry-install.py` (the `__CCD_DOOR_SHA256` render).
-- Modify: `shared/injected-prompts.mjs`: the row designation A adds for `OVERLORD_FIRST_PROMPT` (as
-  `overlord-first-prompt`) now names the door tools: `Read your card with your card door, then answer your probes with
-  your probe door.` One row serves designation's new body and the renewal's fresh generation.
-- Modify: the renewal act's first-prompt case (`server/src/continuity/renewalActs.ts`): the key it delivers comes from
-  one L1 table, `FIRST_PROMPT_OF_ROLE`, in `server/src/continuity/renewalFeed.ts` (`overlord` to
-  `overlord-first-prompt`, every other long-lived role to `renewal-first-prompt`).
+- Modify: `ccd/lib/door.sh`: `_door_spawn`, a second new-code region.
+- Modify: `ccd/ccd`: the surface branch of `_profile_spawn_compose` gains one line, after the surface flags:
+  `_door_spawn "$id" || { _profile_refused "$id" "door process: $DOOR_SPAWN_WHY"; return 1; }`.
+- Modify: `ccd/contexts-edges.tsv` (`_profile_spawn_compose -> _door_spawn`).
+- Test: `server/test/ccd-door-spawn.test.ts` (new, `makeCcdHarness`).
+
+**`_door_spawn <id>`** checks the id with `_reg_id_ok`, then:
+
+1. Finds the program: beside this script in a tree, else `~/.local/libexec/ccrc/door-process.mjs`, and checks it with
+   `_door_prog_ok`.
+2. Resolves `node` to an absolute path with `command -v node`, under the PATH ccd runs with (ruled, F25: Step 5
+   measures, on the fleet box, which PATH that is under `ccd supervise`'s unit and which `node` it finds, against the
+   pane's `SESSION_PANE_PATH`).
+3. Mints the nonce: 32 bytes of `/dev/urandom` as hex, checked against the 64-hex shape.
+4. Refuses a symlinked `$REG/.door` or `<id>` directory; makes it at 0700; writes `mcp.json` at 0600 through a temp file
+   and `mv` (umask 077 in a subshell). jq reads the nonce from its own environment (its `$ENV`), never its argv:
+   `{"mcpServers":{"door":{"type":"stdio","command":<node>,"args":[<program>],"env":{"CCRC_DOOR_NONCE":<nonce>,
+   "CCRC_SESSION_ID":<id>,"CCRC_DOOR_DIR":<dir>,"CCRC_API":<the installed ccrc-api>}}}}`.
+5. Appends `--mcp-config '<dir>/mcp.json'` to `PROFILE_SPAWN_FLAGS` and `CCRC_DOOR_NONCE_SHA256=<sha256>` to
+   `PROFILE_SPAWN_ENV`. Nothing else reaches the pane's command.
+
+Any failure sets `DOOR_SPAWN_WHY` to a fixed phrase, never a value, and returns 1; the compose then refuses the spawn
+through `_profile_refused`, so an Overlord never starts without its doors. A spawn with no surface never calls it.
+
+- [ ] **Step 1: Write the failing tests** (a fixture HOME, a stub `node`, a fixture program and its pin):
+  - a surfaced spawn writes `mcp.json` at 0600 in a 0700 directory, whose `CCRC_DOOR_NONCE` is 64 hex and hashes to the
+    `CCRC_DOOR_NONCE_SHA256` in the spawn's environment;
+  - the pane's command (the harness's recorded tmux argv) holds the hash and the path, never the nonce; a recording jq
+    wrapper's argv never holds it;
+  - two spawns write two different nonces;
+  - a changed program, a missing program, a symlinked program, a symlinked `.door` directory and no `node` each refuse
+    the spawn with their phrase in `swap.log`, start no pane, and leave no `mcp.json`;
+  - a spawn with no surface writes nothing under `$REG/.door/`.
+- [ ] **Step 2: Run them, and see them fail.**
+- [ ] **Step 3: Implement**, with `local LC_ALL=C IFS=' '`.
+- [ ] **Step 4: Run them, and see them pass.** Measure growth (`ccd/ccd` +1, `door.sh` about +28, `ccd (program)` about
+  +29). By hand: pass the nonce with `--arg` (the jq case fails); drop the umask (the mode case fails). Restore each from
+  a saved copy.
+- [ ] **Step 5: The live step**, recorded in the pull request: on the fleet box, the PATH a `claude-session@` unit's
+  `ccd supervise` runs with, the `node` it resolves, and its version against the node floor. A scratch run of
+  `_door_spawn` in a fixture HOME on that box, never the live registry.
+- [ ] **Step 6: Commit** `feat(ccd): the door process's spawn step (Overlord W1 door process A2)`.
+
+### Task 5: The door process, its argv builders, its install, and the first line's text (PR A2)
+
+**Files:**
+
+- Create: `ccd/door-process.mjs`: an MCP stdio server with no dependency (newline-delimited JSON-RPC 2.0: `initialize`,
+  `notifications/initialized`, `tools/list`, `tools/call`, and an error for anything else). It exits when its stdin
+  closes (ruled, F24), so an orphaned process never outlives its session.
+- Modify: `ccd/ccrc-api#send_request`: when `CCRC_ACT_KEY` is 64 hex, the stdin config gains `ACT_KEY_HEADER`,
+  `ACT_COUNTER_HEADER` and `ACT_GENERATION_HEADER` lines, each value checked against its shape first.
+- Modify: `ccd/ccrc-api`'s `cmd_card` and `cmd_probe`, and the probe page's tail in `server/src/continuity/probeDoor.ts`:
+  a `--door` flag (and a `door=1` query the client sends with it) phrases each next-step line as a door call ("call the
+  card door with page 2", "answer with the probe_answer door") instead of a shell command; one renderer arm each.
+- Modify: `ccd/ccd-entry-install.py`: installs `ccd/door-process.mjs` to `~/.local/libexec/ccrc/door-process.mjs` at 644
+  and renders `__CCD_DOOR_SHA256` from the file it installs, file first, in the same step, as it does for the redactor
+  (ruled, F16). `ccd/ccrc`'s backup and uninstall lists name the path; `deploy/deploy.sh` reaches it through the entry
+  installer.
+- Modify: `shared/injected-prompts.mjs`: designation A's row `overlord-first-prompt` is re-texted to name the door tools:
+  `Read your card with your card door, then answer your probes with your probe door.`
+- Modify: the renewal act's first prompt (`server/src/continuity/renewalActs.ts`, `renewalFeed.ts`): one L1 table,
+  `FIRST_PROMPT_OF_ROLE` (`overlord` to `overlord-first-prompt`, every other long-lived role to `renewal-first-prompt`),
+  used at both delivery sites, `first-prompt` and `renudge-card`. Designation A has widened `SessionHost.deliver`'s
+  prompt type and its `sendPrompt` to take the row (ruled, F9).
 - Test: `server/test/door-process.test.ts` (new), `server/test/door-tools.test.ts` (new),
-  `server/test/ccrc-api-act-key.test.ts` (new), `server/test/ccrc-api-closed.test.ts`, `server/test/ccrc-uninstall.test.ts`,
-  `server/test/installTreeFixture.ts`, `server/test/ccrc-versioned-audit.test.ts`, the agent's `deploy-verify`,
-  `server/test/continuity-renewal-acts.test.ts`, and the injected-prompts census.
+  `server/test/door-tools-argv.test.ts` (new), `server/test/ccrc-api-act-key.test.ts` (new),
+  `server/test/ccrc-api-closed.test.ts`, `server/test/continuity-probe-door.test.ts`, the entry installer's and the
+  uninstall suites, `server/test/continuity-renewal-acts.test.ts`, the injected-prompts census.
 
 **The tool table** is one exported array in `ccd/door-process.mjs`, `DOOR_TOOLS`. Each row is `{ name, verb, class:
-'view' | 'operate', reader, input }`: `verb` is a key of `ccrc-api`'s `ROUTES`, and `input` is the JSON schema the
-model sees.
+'view' | 'operate', fenced, reader, input, argv }`: `verb` is a key of `ccrc-api`'s `ROUTES`, `input` the JSON schema the
+model sees, `argv(input, self)` the row's one argv builder (ruled, F3), and `fenced` whether the call carries the key,
+the counter and the witness key.
 
-- PR A's rows are the verbs on `main`: `card`, `probe`, `probe_answer`, `note_add`, `note_close`, `note_list`,
-  `note_handover`, `timer_set`, `timer_list` and `timer_cancel`.
-- Each later piece adds the row of the door it ships, in its own pull request, beside its `ccrc-api` row: `inbox`,
-  `messages` and `acknowledge` (the inbox), `board` and `history` (board and history B).
-- No schema names `fromId`, `fromUuid`, `byId` or `byUuid`. The door process fills attribution from `ccrc-api whoami`
-  at each call, and refuses an input that names one.
+| Tool | `ccrc-api` argv | Body on stdin | Class | Fenced |
+|---|---|---|---|---|
+| `card` | `card --door [--page N] [--hash H]` | none | `view` | yes: the page that records the read is a write (gates B, question 12) |
+| `probe` | `probe --door [--page N]` | none | `view` | no |
+| `probe_answer` | `probe answer --json -` | the answers | `operate` | yes |
+| `note_add` | `note add <self> --json -` | the note | `operate` | yes |
+| `note_close` | `note close <self> --json -` | `{ revises, closes: true }` | `operate` | yes |
+| `note_list` | `note list <self> [--before T] [--limit N]` | none | `view` | no |
+| `note_handover` | `note handover <self> --json -` | the handover | `operate` | yes |
+| `timer_set` | `timer set <duration> <note> [--run R \| --programme P]` | none | `operate` | yes |
+| `timer_list` | `timer list` | none | `view` | no |
+| `timer_cancel` | `timer cancel <id>` | none | `operate` | yes |
+
+`<self>` is the door process's own session id. The `card` and `probe` schemas carry their paging fields. A timer's note
+rides the argv because `timer set` takes it there; it is the model's own text, not a secret. Each later piece adds the
+row of the door it ships, beside its `ccrc-api` row: `inbox`, `messages` and `acknowledge` (the inbox), `board` and
+`history` (board and history B). No schema names `fromId`, `fromUuid`, `byId` or `byUuid`: the client fills
+attribution from the pane, and the door process refuses an input that names one.
 
 **A call.**
 
-1. **The claim, once.** At start, before anything else, the process copies the nonce into memory and deletes
-   `CCRC_DOOR_NONCE` from its own environment, so no child inherits it. While it holds no key, it claims before serving
-   any call: `ccrc-api sessions act-key <id> --json -`, the body `{ fromUuid, nonce }` on stdin, `<id>` its own session
-   id, which must equal `ccrc-api whoami`'s or the process refuses every call.
-   - `ok`: it keeps `term`, `generation` and `key` in memory, and drops the nonce.
-   - `renewing`: it serves the call with no key, and claims again at the next call.
-   - Any other refusal: it drops the nonce, serves reads, and answers every `operate` call with the claim's refusal.
-2. **The call.** `execFile(CCRC_API, [...verbArgs, '--json', '-'], …)` with the body on stdin and a 35 s timeout. For
-   an `operate` row the child's environment adds `CCRC_ACT_KEY`, `CCRC_ACT_TERM`, `CCRC_ACT_GENERATION` and
-   `CCRC_ACT_COUNTER`; the counter rises by one before each send and is never reused, even after a send that got no
-   answer. A `view` row carries none of them.
-3. **The answer.** The tool result is `ccrc-api`'s stdout as one text block, marked as an error when its body says
-   `ok: false` or `ccrc-api` exits 3 (`transport`). Nothing else the process holds ever reaches a result.
+1. **Start.** The process copies the nonce into memory, deletes `CCRC_DOOR_NONCE` from its own environment so no child
+   inherits it, and checks that `ccrc-api whoami` names `CCRC_SESSION_ID`, or it refuses every call. Parse errors are
+   answered with a fixed message, never a quote of the input, and nothing it logs to stderr names a secret (ruled, F21).
+2. **The claim, once, one at a time.** While it holds no key, a fenced call first claims: `ccrc-api sessions act-key
+   <self> --json -`, the body `{ fromUuid, nonce }` on stdin. `ok` keeps `generation` and `key` in memory and drops the
+   nonce. `renewing` keeps the nonce and retries after a back-off from `CLAIM_RETRY_MIN_MS` doubling to
+   `CLAIM_RETRY_MAX_MS`; the call itself is served without a key, and a fenced write refuses on the server. Any
+   `stale-generation` drops the nonce; reads still serve.
+3. **The call.** Every call runs through one promise chain (ruled, F7). `execFile(CCRC_API, row.argv(input, self), …)`,
+   the body on stdin, a 35 s timeout. A fenced call's child environment adds `CCRC_ACT_KEY`, `CCRC_ACT_GENERATION` and
+   `CCRC_ACT_COUNTER`; the counter rises by one before each fenced send and is never reused, even after a send that got no
+   answer. B1 adds the witness key.
+4. **The answer.** The tool result is `ccrc-api`'s stdout as one text block, marked as an error when its JSON body says
+   `ok: false`, when a text verb exits non-zero, or when `ccrc-api` exits 3 (`transport`). Nothing else the process holds
+   ever reaches a result.
 
 **How the first line works** (the renewal act's note `first-prompt-by-deliver`). A fresh conversation has no first
-turn, and a tool server cannot start one, so the line is still a `SessionHost.deliver`. For the Overlord its text
-names the `card` door, so the generation's first tool call is the door process's first call, and the claim happens
-inside that call. Designation A sends the line to a new body (its X4), and the renewal act sends it to a renewed
-generation. The key is never in the line.
+turn, and a tool server cannot start one, so the line is still a `SessionHost.deliver`. Its text names the `card` door,
+so the generation's first tool call is the door process's first call, and the claim happens inside it. Designation A
+sends the row to a new body (X4), and the renewal act sends it to a renewed Overlord generation. The key is never in
+the line.
 
-- [ ] **Step 1: Failing tests.**
-  - `door-process.test.ts` runs `node ccd/door-process.mjs` against a stub `CCRC_API` (a bash script in the test's
-    temp root that records its argv, stdin and environment to files and answers canned bodies):
+- [ ] **Step 1: Write the failing tests.**
+  - `door-process.test.ts` runs `node ccd/door-process.mjs` against a stub `CCRC_API` (a bash script in the test's temp
+    root recording its argv, stdin and environment):
     - `initialize` names the server `door`; `tools/list` equals `DOOR_TOOLS`' names and schemas;
-    - the first call runs `sessions act-key` with the nonce on stdin, never on argv, and later calls do not claim;
-    - no child's recorded environment holds `CCRC_DOOR_NONCE`; an `operate` call's child carries the key and a counter
-      one above the last; a `view` call's child carries neither;
-    - the process's whole stdout, across every case, holds neither the key nor the nonce;
-    - a `renewing` claim is retried at the next call, and a `stale-generation` claim answers every `operate` call with
-      that refusal while reads still serve;
-    - an input naming `fromUuid` is refused; an unknown tool answers a JSON-RPC error; a `whoami` that differs from
-      `CCRC_SESSION_ID` refuses every call.
-  - `door-tools.test.ts`: every row's `verb` is a key of `ccd/ccrc-api`'s `ROUTES`; every name is the skill's door
-    name with spaces as `_`, and every door in `ccd/overlord-skill/references/starting.md`'s table whose `ccrc-api` row
-    exists has a tool row (the skill plan's cross-check); `reader` is true on no row in PR A.
-  - `ccrc-api-act-key.test.ts`: with `CCRC_ACT_KEY` set, curl's recorded stdin config carries the four headers and its
-    argv carries none; a malformed key adds nothing. `ccrc-api-closed.test.ts` still holds (no new argument is a URL).
-  - The install suites: `door-process.mjs` is installed at 644 beside `compact-card.mjs`, and backed up and
-    uninstalled with it.
-  - `continuity-renewal-acts.test.ts`: an `overlord` generation's first prompt delivers `overlord-first-prompt`, a
-    coordinator's `renewal-first-prompt`. The injected-prompts census finds the row's text and its typer.
-- [ ] **Step 2: Red** through `ccrc test`.
+    - the first fenced call claims with the nonce on stdin, never argv; later calls do not claim; two calls sent at once
+      produce one claim, and their sends reach the stub in counter order;
+    - no child's environment holds `CCRC_DOOR_NONCE`; a fenced call's child carries the key and a counter one above the
+      last; an unfenced call's carries neither;
+    - `renewing` keeps the nonce and retries with the back-off (a fake clock); `stale-generation` drops it, and reads
+      still serve;
+    - the process's whole stdout and stderr, across every case and a malformed JSON-RPC line, hold neither secret;
+    - an input naming `fromUuid` is refused; an unknown tool answers a JSON-RPC error; a `whoami` that differs refuses
+      every call; closing stdin ends the process.
+  - `door-tools-argv.test.ts`: each row's `argv` run through the **real** `ccrc-api` against a recording curl stub
+    reaches the row's route with the row's query and body (one case a row).
+  - `door-tools.test.ts`: every `verb` is a `ROUTES` key; every name is the skill's door name with spaces as `_`, or is
+    on the named list `DOOR_ONLY_TOOLS` (`probe`, `note_handover`, each with its reason: `starting.md`'s table lacks
+    them, and the index passes them to the skill's owner) (ruled, F26); `reader` is true on no row in A2.
+  - `ccrc-api-act-key.test.ts`: with `CCRC_ACT_KEY` set, the stdin config carries the three headers and the argv none; a
+    malformed key adds nothing. `ccrc-api-closed.test.ts` still holds (no new argument is a URL; `--door` is a flag).
+  - `continuity-probe-door.test.ts`: the `door=1` tail names no shell command; the default tail is unchanged.
+  - The installer suites: the program installed at 644, its pin rendered from the installed bytes in the same run, and
+    a run that fails between them leaves neither changed.
+  - `continuity-renewal-acts.test.ts`: an `overlord` generation's first prompt and re-nudge deliver
+    `overlord-first-prompt`, a coordinator's `renewal-first-prompt`.
+- [ ] **Step 2: Run them, and see them fail.**
 - [ ] **Step 3: Implement.** The process imports only `node:child_process`, `node:fs`, `node:crypto` and `node:path`.
-  `FIRST_PROMPT_OF_ROLE` is total over the long-lived roles.
-- [ ] **Step 4: Green, then mutate by hand:** keep the nonce in the process's environment (the child-environment case
-  reds); send the key on a `view` call (reds); reuse a counter after a failed send (reds). `FIRST_PROMPT_OF_ROLE` joins
-  `MUTANT_SETS` (each row swapped). Revert each.
-- [ ] **Step 5: Commit** `feat(ccd): the door process with ccrc-api inside, and the Overlord's first line (Overlord W1 door process A)`.
+- [ ] **Step 4: Run them, and see them pass.** By hand: keep the nonce in the environment (the child case fails); send
+  the key on an unfenced call (fails); reuse a counter after a failed send (fails); run two calls without the chain (the
+  order case fails). Restore each from a saved copy. `FIRST_PROMPT_OF_ROLE` joins `MUTANT_SETS` (each row swapped).
+- [ ] **Step 5: The live step**, recorded in the pull request: in a scratch session the builder starts on the pinned
+  build, kill the door process and record whether Claude Code restarts a dead stdio tool server (question 7).
+- [ ] **Step 6: Commit** `feat(ccd): the door process with ccrc-api inside, its argv builders, and the first line's text (Overlord W1 door process A2)`.
 
-### Task 5: The per-prompt delta cache (C38)
+### Task 6: The per-prompt delta cache (C38) (PR A2)
 
 **Files:**
 
-- Modify: `shared/continuity-door.ts`: `DELTA_REFRESH_MS` (60,000), `DELTA_LEASE_MS` (180,000), `DELTA_MAX_CHARS`
-  (300), and the cache's first line, `v=1 at=<ms> until=<ms>`.
-- Modify: `server/src/continuity/anchor.ts`: the anchor renderer's form union gains `delta`, one line of at most
-  `DELTA_MAX_CHARS` holding the canaries (term, generation, card hash, rules version) and then the counts the anchor
-  already carries, so a cut keeps the canaries. The card door's `form` query accepts it.
-- Modify: `ccd/door-process.mjs`: after each call it serves, and on an unreferenced 60 s timer, it runs `ccrc-api
-  card <id> --anchor --form delta` and writes `$CCRC_DOOR_DIR/delta` at 0600 through a temp file and a rename: the
-  first line, then the text. A failed fetch writes nothing, so the lease lapses.
-- Modify: `ccd/session-hook.sh`: `_hook_door_delta`, called on `UserPromptSubmit` only when `CCRC_DOOR_NONCE_SHA256`
-  is set. It refuses a symlink or a file that is not regular, reads with a bound, parses the first line with `local
-  LC_ALL=C IFS=' '`, and prints the text while `until` is ahead of now, else `ccrc-delta: unknown (the door process's
-  cache is stale)`. It makes no network call. Its line joins the event's one envelope, after the prompt anchor.
-- Test: `server/test/continuity-anchor.test.ts` (the `delta` form, a new `AnchorTextForm`), `server/test/door-process.test.ts` (the cache),
+- Modify: `shared/continuity-door.ts`: `DELTA_REFRESH_MS` (60,000), `DELTA_LEASE_MS` (180,000), `DELTA_MAX_BYTES`
+  (300, UTF-8 bytes, as the anchor's ceilings are), and the cache's first line, `v=1 at=<ms> until=<ms>`.
+- Modify: the `delta` form at its four sites (ruled, F3): `shared/continuity-card.ts` (`ANCHOR_FORM_MAP`, `AnchorForm`,
+  `AnchorTextForm`); `server/src/continuity/anchor.ts` (one line of at most `DELTA_MAX_BYTES`: the canaries the anchor has
+  today, term, generation and card hash, then its counts, so a cut keeps the canaries; the rules version joins when the
+  anchor's does); the card door's form check in `routes.ts`; and `ccrc-api`'s form regex in `cmd_card`.
+- Modify: `ccd/door-process.mjs`: after each call it serves, and on an unreferenced 60 s timer, it runs `ccrc-api card
+  --anchor --form delta` and writes `$CCRC_DOOR_DIR/delta` at 0600 through `delta.tmp` and a rename. A text answer
+  writes the text; a `{ dark: true }` answer (the anchor slot still shadow) writes an empty text, so the hook prints
+  nothing; a failed fetch writes nothing, so the lease lapses.
+- Modify: `ccd/session-hook.sh`: `_hook_door_delta`, on `UserPromptSubmit` only when `CCRC_DOOR_NONCE_SHA256` is set. It
+  refuses a symlink or a file that is not regular, reads with a bound, parses the first line with `local LC_ALL=C
+  IFS=' '`, and yields the text while `until` is ahead of now, nothing for an empty text, else `ccrc-delta: unknown (the
+  door process's cache is stale)`. It makes no network call. Its line goes into the envelope that
+  `_hook_roster_wake` or `_hook_anchor_owed` prints, through one variable each appends, or into an envelope of its own
+  when neither prints (ruled, F14): one envelope an event either way.
+- Test: `server/test/continuity-anchor.test.ts`, the card route's suite, `server/test/door-process.test.ts`,
   `server/test/session-hook-door-delta.test.ts` (new).
 
-- [ ] **Step 1: Failing tests.**
-  - The `delta` form is one line of at most 300 characters, canaries first, and a cut keeps them.
-  - The door process writes the cache after a call, with `until` 180 s after `at`, at 0600, by rename, so a reader
-    never sees half a file; a failed fetch leaves the old file.
-  - The hook (fixture HOME, a fixed clock): a fresh cache prints its text; a cache past `until`, an absent cache with
-    the hash set, a malformed first line and a FIFO each print the unknown line within the bound; a session without
-    the hash prints nothing; the envelope is one JSON object holding the prompt anchor and the delta; the hook makes no
-    `ccrc-api` call on this path (a poisoned client on `PATH` stays untouched).
-- [ ] **Step 2: Red. Step 3: Implement. Step 4: Green.** `ccd/session-hook.sh` measures about +12 in PR A with Task
-  2's line. The `delta` renderer joins the anchor's mutant set.
-- [ ] **Step 5: Commit** `feat(continuity): the door process's delta cache and the prompt's delta line (Overlord W1 door process A)`.
+- [ ] **Step 1: Write the failing tests.**
+  - The `delta` form: one line, at most 300 bytes, canaries first, kept by a cut; the route and the client accept it;
+    a dark answer stays dark.
+  - The door process writes the cache after a call, with `until` 180 s after `at`, at 0600, by rename; a dark answer
+    writes an empty text; a failed fetch leaves the old file.
+  - The hook (a fixture HOME, a fixed clock): a fresh cache prints its text; an empty text prints nothing; a cache past
+    `until`, an absent cache with the hash set, a malformed first line and a FIFO each print the unknown line within the
+    bound; a session without the hash prints nothing; with the prompt anchor or the roster wake owed, the stdout is one
+    JSON object holding both; the hook makes no `ccrc-api` call on this path (a poisoned client on `PATH` stays
+    untouched).
+- [ ] **Step 2: Run them, and see them fail.**
+- [ ] **Step 3: Implement.**
+- [ ] **Step 4: Run them, and see them pass.** `ccd/session-hook.sh` measures about +20 in A2. The `delta` renderer
+  joins the anchor's mutant set.
+- [ ] **Step 5: Commit** `feat(continuity): the door process's delta cache and the prompt's delta line (Overlord W1 door process A2)`.
 
-### Task 6: The report door, the hook's reports, and the readers' read tool (PR B)
+### Task 7: The report door, the hook's reports, and the readers' read tool (PR B1)
 
 **Files:**
 
 - Create: `shared/continuity-reports.ts` (L0): `HOOK_REPORT_KIND_MAP` (`witness`, `reader-start`, `reader-stop`,
-  `model-switch`, `picked-up`) and the wire `HookReport`, one arm a kind; `OP_KEY_HEADER` (`x-ccrc-op-key`);
-  `WITNESS_WINDOW_MS` (120,000), `WITNESS_KEEP_MS` (24 h), `WITNESS_CHECK_KEEP_MS` (7 days), `READER_STALE_MS`
-  (30 min), `REPORT_TIMEOUT_S` (3).
+  `readers-clear`, `model-switch`, `picked-up`) and the wire `HookReport`, one arm a kind; `WITNESS_KEY_HEADER`
+  (`x-ccrc-witness-key`, ruled, F20); `WITNESS_WINDOW_MS` (120,000), `WITNESS_KEEP_MS` (24 h), `REPORT_KEEP_MS` (7
+  days), `READER_STALE_MS` (30 min), `REPORT_TIMEOUT_S` (3).
 - Create: `server/src/continuity/hookReports.ts` (C3, L1): `hookReportOf` (a body to a `HookReport`, or why not).
-- Create: `server/src/continuity/hookReportStore.ts` (C3, L3): `insertHookReport` (which also deletes its own
-  witness rows older than `WITNESS_KEEP_MS`), `witnessesFor`, `readerEventsSince`, `modelSwitchesSince`.
-- Modify: `server/src/coord/schema.ts` (one migration: `continuity_hook_reports`, and `continuity_witness_checks` for
-  Task 8).
-- Modify: `server/src/continuity/routes.ts`: `POST /api/sessions/:id/report`. `ContinuityRouteDeps` gains
-  `pickUp: MessagePickUp`, a port declared there: `{ sessionOf(id: number): Read<{ sessionId: string } | 'absent'>;
-  pickUp(id: number, at: number): StoreWrite<{ changed: boolean }> }`, whose adapter the composition root builds from
-  the private store's `messageSessionOf` and `moveMessage(id, 'pick-up', 'hook', at)`.
-- Modify: `server/src/server.ts` (the adapter, about +3).
+- Create: `server/src/continuity/hookReportStore.ts` (C3, L3): `insertHookReport` (which also deletes its own rows past
+  their keep), `witnessesFor`, `readerEventsSince`, `modelSwitchesSince`.
+- Modify: `server/src/coord/schema.ts` (one migration: `continuity_hook_reports` and `continuity_witness_checks`).
+- Modify: `server/src/continuity/routes.ts`: `POST /api/sessions/:id/report`. `ContinuityRouteDeps` gains `pickUp:
+  MessagePickUp`, a port declared there: `{ sessionOf(id): Read<{ sessionId: string } | 'absent'>; pickUp(id, at):
+  StoreWrite<{ changed: boolean }> }`.
+- Modify: `server/src/server.ts` (the adapter from the private store's `messageSessionOf` and `moveMessage(id,
+  'pick-up', 'hook', at)`, about +4).
+- Modify: `shared/refusal.ts`: `unknown-message` (404) joins the W1 group, with the Table 11.6 test's exception list and
+  wave map in the same pull request (ruled, F8).
 - Modify: `ccd/session-hook.sh`: one sender, `_hook_door_report`, and four report arms, below.
-- Modify: `shared/hook-events.ts#HOOK_EVENT_MAP` (`PreModelSwitch`, `PostModelSwitch`) and
-  `ccd/install-session-hooks.sh`'s `EVENTS_JSON`.
-- Modify: `ccd/ccrc-api` (`ROUTES` gains `sessions.report`; and `CCRC_OP_KEY`, when 64 hex, adds `OP_KEY_HEADER` to
-  curl's stdin config beside the act key's lines).
-- Modify: `ccd/door-process.mjs`: for an `operate` row it computes the operation key (below) and passes
-  `CCRC_OP_KEY`; and the `read` tool.
+- Modify: `ccd/ccrc-api`: `ROUTES` gains `sessions.report`; `CCRC_WITNESS_KEY`, when 64 hex, adds `WITNESS_KEY_HEADER`
+  to the stdin config.
+- Modify: `ccd/door-process.mjs`: a fenced call computes the witness key (question 6) and passes `CCRC_WITNESS_KEY`; the
+  `read` tool.
 - Modify: the census sites of Task 2, for the report door.
 - Test: `server/test/continuity-hook-reports.test.ts` (new), `server/test/continuity-report-route.test.ts` (new),
-  `server/test/session-hook-door-reports.test.ts` (new), `server/test/install-session-hooks.test.ts`,
-  `server/test/door-process.test.ts`, `server/test/door-tools.test.ts`, the census suites,
-  `server/test/single-definition/writers-map.test.ts`, `coord-db.test.ts`, `run-close-switch.test.ts`.
+  `server/test/session-hook-door-reports.test.ts` (new), `server/test/door-process.test.ts`,
+  `server/test/door-tools.test.ts`, the censuses, the refusal-table test, `writers-map.test.ts`, `coord-db.test.ts`,
+  `run-close-switch.test.ts`.
 
 **The tables.**
 
@@ -774,8 +916,8 @@ generation. The key is never in the line.
 CREATE TABLE continuity_hook_reports (
   id INTEGER PRIMARY KEY,
   sessionId TEXT NOT NULL,
-  kind TEXT NOT NULL,          -- witness | reader-start | reader-stop | model-switch
-  key TEXT,                    -- the operation key, or the agent id
+  kind TEXT NOT NULL,          -- witness | reader-start | reader-stop | readers-clear | model-switch
+  key TEXT,                    -- the witness key, or the agent id
   agentId TEXT,                -- a witness from a reader's scope
   detail TEXT,                 -- the tool name, the agent type, or the switch as JSON
   at INTEGER NOT NULL,         -- the hook's clock
@@ -786,7 +928,7 @@ CREATE TABLE continuity_witness_checks (
   id INTEGER PRIMARY KEY,
   sessionId TEXT NOT NULL,
   generationId INTEGER NOT NULL,
-  opKey TEXT NOT NULL,
+  witnessKey TEXT,
   witnessId INTEGER UNIQUE,    -- a witness is used at most once
   outcome TEXT NOT NULL,       -- used | unwitnessed
   why TEXT,
@@ -794,290 +936,334 @@ CREATE TABLE continuity_witness_checks (
 );
 ```
 
-"Picked up" is not a row here: it is a move of the operator's message, through the private store's one writer.
+"Picked up" is not a row here: it is a move of the operator's message through the private store's one writer.
 
 **The door.** The token; the path and the body's shape (`fromUuid`, then `hookReportOf`, which bounds every string and
 refuses an unknown kind); the attribution of `fromUuid`. Then, by kind:
 
 - `picked-up`: `pickUp.sessionOf(id)`. `absent` answers 404 `unknown-message`; another session's message answers 403
-  `not-owner`; unmeasured answers 502 `unmeasured`. Otherwise `pickUp.pickUp(id, now)`, whose `{changed: false}` (a
-  message already past picked up) answers 200 with `changed: false`, never a refusal.
-- every other kind: `insertHookReport`, answering 200 with the row's id, or 502 `unmeasured` on a failed write.
+  `not-owner`; unmeasured answers 502 `unmeasured`. Otherwise `pickUp.pickUp(id, now)`: `{changed: false}` (a message
+  already past picked up) answers 200 with `changed: false`, never a refusal.
+- every other kind: `insertHookReport`, 200 with the row's id, or 502 `unmeasured` on a failed write.
 
-**The hook's arms.** One sender, `_hook_door_report <json>`, runs `ccrc-api sessions report <id> --json -` under
-`_hook_timeout "$REPORT_TIMEOUT_S"` inside the hook's one network budget. It spools nothing and retries nothing: a lost
-report costs its own row only.
+**The hook's arms.** One sender, `_hook_door_report <json>`, runs `ccrc-api sessions report <self> --json -` under
+`_hook_timeout "$REPORT_TIMEOUT_S"` inside the hook's one network budget; it spools nothing and retries nothing. Each arm
+runs only in a session with a door, on events the hook already handles:
 
-- **Witness:** on `PreToolUse` of a tool named `mcp__door__*`, after every deny arm has let the call through, the key is
-  the sha256 of the tool's full name, a newline, and `jq -cS '.tool_input'`. The report carries `agentId` when the
-  event's agent id has a qualifying join (a reader's call), else `null`. Only in a session with a door
-  (`CCRC_DOOR_NONCE_SHA256` set).
-- **Reader start and stop:** on `SubagentStart` and `SubagentStop`, with the agent id the roster already keeps, and the
-  agent type on a start. Only in a session with a door.
-- **Model switch:** on `PostModelSwitch`, `{ from, to, how: 'typed' }`, for every session the start report covers
-  (question 11). Task 7 adds `typed-refused`.
-- **Picked up:** on `UserPromptSubmit`, when the prompt is exactly the private store's nudge line, the id it names. Only
-  in a session with a door. The pattern is built in one jq definition, and a test holds it to
-  `renderOperatorMessageNudge` (the private store's renderer, `server/src/coord/envelope.ts`).
+- **Witness:** on `PreToolUse` of a tool named `mcp__door__*`, after every deny arm has let the call through: the
+  witness key of question 6, and `agentId` when the event's agent id has a qualifying join or carries an `agent_type`.
+  The header's list of `PreToolUse` network exceptions gains this one, with its bound.
+- **Reader start and stop:** on `SubagentStart` and `SubagentStop`, the agent id the roster keeps, and the type on a
+  start.
+- **A turn's end clears the readers** (ruled, F15): on the main-turn `Stop` whose background work is none, where the
+  hook already empties its roster, it sends `readers-clear`, so one lost stop heals at the next quiet turn end.
+- **Picked up:** on `UserPromptSubmit`, each line of the prompt that is exactly the private store's nudge line yields
+  one report of the id it names. The pattern is one jq definition, held to `renderOperatorMessageNudge`
+  (`server/src/coord/envelope.ts`) by a test.
 
-**The door process's side.** For an `operate` row the operation key is the sha256 of `mcp__door__<name>`, a newline,
-and the call's arguments printed by `jq -cS .` (the same program the hook runs, so both sides use one canonical form).
-It rides to `ccrc-api` as `CCRC_OP_KEY`. **The `read` tool** is one more row, `{ name: 'read', class: 'view', input:
-{ door, args } }`, where `door` is an enum of the rows marked `reader: true`, and the call runs that row's verb. In W1
-the enum is empty until board and history B add their rows; the tool then answers that no door is readable yet. It
-never serves a row without `reader: true` (question 9).
+**The read tool** is one row, `{ name: 'read', class: 'view', fenced: false, input: { door, args } }`, where `door` is an
+enum of the rows marked `reader: true`; the call runs that row's argv builder. In W1 the enum is empty until board and
+history B add their rows, and the tool answers that no door is readable yet. It never serves a row without `reader:
+true` (question 9).
 
-- [ ] **Step 1: Failing tests.**
-  - `continuity-hook-reports.test.ts`: `hookReportOf` accepts each kind's good body and refuses an unknown kind, a key
+- [ ] **Step 1: Write the failing tests.**
+  - `continuity-hook-reports.test.ts`: `hookReportOf` accepts each kind's good body, and refuses an unknown kind, a key
     that is not 64 hex, an agent id outside the roster's shape, an over-long string and a non-integer id.
-  - The route suite: each refusal in order; each kind stores its row; `picked-up` moves the message through the port
-    (a fake), refuses another session's message 403 and an absent one 404, and reads a `changed: false` as 200; a
-    failed store write answers 502 `unmeasured`; witness rows past `WITNESS_KEEP_MS` are gone after the next insert.
-  - The hook's suite (fixture HOME, a recording `ccrc-api` stub): a door tool call in a door session sends one witness
-    whose key equals the door process's key for the same input (the same fixture run through both); a call another arm
-    denies sends none; a reader's call carries its agent id; a session without the hash sends nothing; a
-    `SubagentStart` and `SubagentStop` each send one report; `PostModelSwitch` sends one for a coordinator too; the
-    nudge line for three ids sends three pick-ups, and a line that differs by one character sends none; a stub that
-    hangs is cut at the bound and the tool call goes on.
-  - `install-session-hooks.test.ts`: the two new events are registered and handled, both directions.
-  - `door-process.test.ts`: an `operate` call's child carries `CCRC_OP_KEY` equal to the hook's key for that input; a
-    `view` call carries none; `read` refuses a door not marked `reader` and lists none in PR B.
-  - `writers-map.test.ts`: `continuity_hook_reports: [insertHookReport]`; `continuity_witness_checks:
-    [recordWitnessCheck]` (Task 8).
-- [ ] **Step 2: Red. Step 3: Implement. Step 4: Green.** `hookReportOf` joins `MUTANT_SETS` (each kind's check
-  dropped, the length bound loosened).
-- [ ] **Step 5: The live step**, on the fleet box's pinned build, recorded in the pull request: one door call's
-  witness key and the door process's key agree (question 6); a typed `/model` fires `PostModelSwitch` with both models.
-  It runs in a scratch session the builder starts for the purpose, never in a fleet session's pane.
-- [ ] **Step 6: Commit** `feat(continuity): the hook's reports and their door, and the readers' read tool (Overlord W1 door process B)`.
+  - The route suite: each refusal in order; each kind stores its row; `picked-up` moves the message through a fake port,
+    refuses another session's message 403 and an absent one 404 `unknown-message`, and answers `changed: false` with
+    200; a failed write answers 502; rows past their keep are gone after the next insert.
+  - The hook's suite (a fixture HOME, a recording `ccrc-api` stub): a door tool call sends one witness whose key equals
+    the door process's key for the same input (one fixture through both, with a large integer, a float, a unicode
+    escape and keys out of order); a call another arm denies sends none; a reader's call carries its agent id; a session
+    without the hash sends nothing; starts and stops send one report each; a quiet `Stop` sends `readers-clear` and a
+    `Stop` with background work does not; a prompt holding three nudge lines sends three pick-ups, and a line that
+    differs by one character sends none; a stub that hangs is cut at the bound and the tool call goes on; hookstate is
+    unchanged by every report.
+  - `door-process.test.ts`: a fenced call's child carries `CCRC_WITNESS_KEY` equal to the hook's key; an unfenced one
+    carries none; `read` refuses a door not marked `reader` and lists none in B1.
+  - The refusal-table test: `unknown-message` is on its exception list with its wave.
+  - `writers-map.test.ts`: `continuity_hook_reports: [insertHookReport]`, `continuity_witness_checks:
+    [recordWitnessCheck]`.
+- [ ] **Step 2: Run them, and see them fail.**
+- [ ] **Step 3: Implement.**
+- [ ] **Step 4: Run them, and see them pass.** `hookReportOf` joins `MUTANT_SETS` (each kind's check dropped, the length
+  bound loosened).
+- [ ] **Step 5: The live step**, recorded in the pull request: on the pinned build, in a scratch session the builder
+  starts, one door call's hook key and door-process key agree (question 6), and the `_meta` tool-use id Claude Code
+  sends with the call, if any, is recorded as the fallback.
+- [ ] **Step 6: Commit** `feat(continuity): the hook's reports and their door, and the readers' read tool (Overlord W1 door process B1)`.
 
-### Task 7: The hook's guard arms: reader scope, reader model, and a typed `/model` (PR B)
+### Task 8: The model events and the guard arms (PR B2)
 
 **Files:**
 
-- Modify: `ccd/session-hook.sh` (three arms on `PreToolUse` and one on `PreModelSwitch`).
-- Test: `server/test/session-hook-reader-arms.test.ts` (new).
+- Modify: `shared/hook-events.ts#HOOK_EVENT_MAP` (`PreModelSwitch`, `PostModelSwitch`) and
+  `ccd/install-session-hooks.sh`'s `EVENTS_JSON`.
+- Regenerate: `ccd/lib/launch-profiles.json` (sandbox A's `surfaceSettings` registers the hook on every
+  `HOOK_EVENTS` event, so the Overlord's row and digest change; ruled, F13).
+- Modify: `ccd/session-hook.sh`: the two event arms, and four guard arms.
+- Test: `server/test/session-hook-reader-arms.test.ts` (new), `server/test/session-hook-model-events.test.ts` (new),
+  `server/test/install-session-hooks.test.ts`, `server/test/launch-profiles-file.test.ts`.
 
-**The arms.** Each keys on a fact, never on a role's name.
+**The model events are report-only** (ruled, F11). Each arm sets its skip flag and exits before the hookstate write
+(ruled, F14). `PostModelSwitch` sends `model-switch` with `{ from, to, how }` for every session the start report covers
+(question 11), where `how` is what the payload tells (`typed`, `automatic`, or `unknown` when it tells nothing).
+`PreModelSwitch` refuses nothing and sends nothing; the `PostModelSwitch` report is the fact.
 
-- **Reader scope** (§3.3.10's "second line"): a `PreToolUse` whose agent id has a qualifying join, for a tool named
-  `mcp__door__*` other than `mcp__door__read`, is denied: "a reader holds no write door (C55)". A bare agent id with no
-  join is the main thread, as everywhere in the hook.
-- **Three readers** (question 10): a main-thread `Agent` call in a session with a door, while the hook's own subagent
-  roster (D-5232, from which a `SubagentStop` removes the entry) holds three entries, is denied: "three readers already
-  run".
-- **Reader model:** an `Agent` call in a session whose environment carries `CLAUDE_CODE_SUBAGENT_MODEL_FORCE=1`, whose
-  input names a `model` that is not `$CLAUDE_CODE_SUBAGENT_MODEL`, is denied. Under the pin Claude Code drops the field
+**The guard arms.** Each keys on a fact, never on a role's name.
+
+- **A typed `/model`:** a `UserPromptSubmit` whose prompt begins `/model`, in a session with a door, is blocked with
+  the event's own block answer (a `UserPromptSubmit` envelope, which the hook's builders gain; their `PreToolUse` builders
+  are unchanged), and reported as `model-switch` with `how: 'typed-refused'`.
+- **Reader scope** (§3.3.10's "second line"; ruled, F24): a `PreToolUse` for a tool named `mcp__door__*` other than
+  `mcp__door__read` is denied when its agent id has a qualifying join **or** its payload carries an `agent_type`: "a
+  reader holds no write door (C55)".
+- **Three readers** (question 10): a main-thread `Agent` call in a session with a door, while the `subs` roster holds
+  three entries, is denied: "three readers already run". Its residuals are those of question 10.
+- **Reader model:** an `Agent` call whose input names a `model` other than `$CLAUDE_CODE_SUBAGENT_MODEL`, in a session
+  whose environment carries `CLAUDE_CODE_SUBAGENT_MODEL_FORCE=1`, is denied. Under the pin Claude Code drops the field
   (W0-11), so the arm stands for a launch where the pin did not engage (slug `reader-model-arm-kept-as-a-belt`).
-- **A typed `/model`:** `PreModelSwitch` in a session with a door answers the hook's refusal for that event and sends
-  `model-switch` with `how: 'typed-refused'`.
 
-- [ ] **Step 1: Failing tests** (fixture HOME): a reader's `mcp__door__note_add` is denied and its `mcp__door__read`
-  is allowed; the same tool with an unjoined agent id is allowed; a fourth reader is denied and a third is allowed, and
-  a stop frees a place; a reader call naming `opus` under the pin is denied, one naming `sonnet` or none is allowed, and
-  without the pin the arm does nothing; a typed `/model` in a door session is refused and reported, and in a session
-  without a door it is neither.
-- [ ] **Step 2: Red. Step 3: Implement. Step 4: Green;** measure `ccd/session-hook.sh` for Tasks 6 and 7 together
-  (about +34). If it passes 40, this task becomes PR B2 (the PR split). By hand: drop the join test from the scope arm
-  (the unjoined case reds). Revert.
-- [ ] **Step 5: The live step:** whether Claude Code honours the `PreModelSwitch` refusal on the pinned build
-  (question 8), recorded in the pull request. Either answer ships: an ignored refusal is still reported, and drift
-  renews.
-- [ ] **Step 6: Commit** `feat(hook): the reader-scope, reader-model and typed-model arms (Overlord W1 door process B)`.
+- [ ] **Step 1: Write the failing tests** (a fixture HOME):
+  - the model events: `PostModelSwitch` sends one report, for a coordinator too, with the `how` the payload tells;
+    `PreModelSwitch` sends nothing and prints no refusal; `hookstate.json` is byte-identical after each event;
+  - a `/model` prompt in a door session is blocked and reported, and in a session without a door it passes;
+  - reader scope: a joined reader's `mcp__door__note_add` is denied and its `mcp__door__read` allowed; an unjoined call
+    carrying `agent_type` is denied; a call with neither is allowed;
+  - three readers: a fourth is denied, a third allowed, and a stop frees a place;
+  - reader model: under the pin, `opus` denied and `sonnet` or none allowed; without the pin the arm does nothing;
+  - `install-session-hooks.test.ts`: the events registered and handled, both ways; `launch-profiles-file.test.ts`: the
+    regenerated file equals `launchRowOf`, and its digest moved.
+- [ ] **Step 2: Run them, and see them fail.**
+- [ ] **Step 3: Implement**, regenerating the launch file with sandbox A's generator.
+- [ ] **Step 4: Run them, and see them pass.** `ccd/session-hook.sh` measures about +32. By hand: drop the skip flag from
+  one model arm (the hookstate case fails); drop the join test from the scope arm (the joined case fails). Restore each
+  from a saved copy.
+- [ ] **Step 5: The live step**, recorded in the pull request: on the pinned build, whether a typed `/model` reaches
+  `UserPromptSubmit`, and what `PostModelSwitch` carries for a typed switch and, if one can be caused, an automatic one
+  (question 8).
+- [ ] **Step 6: Commit** `feat(hook): the model events, report-only, and the reader and typed-model arms (Overlord W1 door process B2)`.
 
-### Task 8: What reads the reports: the witness step, two ladder rows, closed-book, and two readings (PR B)
+### Task 9: What reads the reports (PR B1)
 
 **Files:**
 
 - Modify: `server/src/continuity/hookReports.ts`: `witnessVerdict`, `unwitnessedLatchDue`, `offModelOf`,
   `modelDriftOf`, `readersRunning`.
 - Modify: `server/src/continuity/hookReportStore.ts`: `recordWitnessCheck`, `usedWitnesses`, `unwitnessedSince`.
-- Modify: gates B's gate-order decider and its door runner (the files gates B names): the input `witness`, and the step
-  after the fence.
+- Modify: `server/src/server.ts`: the binding of gates B's `witness(sessionId, key)` port and its recorder.
+- Modify: `ccd/ccd`: `cmd_caps` gains `door-witness-v1` (+1), and `server/test/ccdCapTokens.ts#CCD_CAPABILITY_TOKENS`
+  with it.
 - Modify: the ladder's cause and condition tables (the files the ladder names): one latch row and one condition row.
 - Modify: `server/src/continuity/probeDoor.ts#bookOf` and `BOOK_STATES_RECORDED`; `shared/continuity.ts`'s
-  `BOOK_STATE_MAP` text for `closed`.
-- Test: `server/test/continuity-hook-reports.test.ts`, gates B's decider suite, the ladder's suite,
-  `server/test/continuity-probes.test.ts` (or the probe door's suite), `server/test/sim/mutation-floors.{test.ts,json}`.
+  `BOOK_STATE_MAP` text for `closed`; `probeDoor.ts`'s deps gain `ReadLedgerCount`.
+- Test: `server/test/continuity-hook-reports.test.ts`, gates B's runner suite (the binding), the ladder's suite,
+  `server/test/continuity-probe-door.test.ts`, `server/test/sim/mutation-floors.{test.ts,json}`.
 
-**The witness step** (§7.4, §11.2's "After the gates"; slug `witness-checked-after-the-fence`).
+**The witness** (ruled, F5). Gates B owns step 7a and its arms. This piece ships the verdict in gates B's shape and
+binds the port:
 
 ```ts
 type WitnessVerdict =
   | { kind: 'witnessed'; witnessId: number }
   | { kind: 'unwitnessed'; why: 'none' | 'stale' | 'used' | 'reader-scope' | 'before-generation' }
   | { kind: 'unmeasured'; why: string };
-witnessVerdict(i: { witnesses: Read<readonly Witness[]>; used: Read<ReadonlySet<number>>; opKey: string | null;
+witnessVerdict(i: { witnesses: Read<readonly Witness[]>; used: Read<ReadonlySet<number>>; key: string | null;
   generationStartedAt: number; now: number }): WitnessVerdict
 ```
 
 It takes the newest main-thread witness for this session and key, received within `WITNESS_WINDOW_MS` before `now`
-and after the generation's start, and not used. A missing `x-ccrc-op-key` is `none`. Only reader-scope witnesses
-answer `reader-scope`; only older ones `stale`; only used ones `used`. A failed read answers `unmeasured`.
+and after the generation's start, and not used. A missing `x-ccrc-witness-key` is `none`. Only reader-scope witnesses
+answer `reader-scope`, only older ones `stale`, only used ones `used`. A failed read answers `unmeasured`: gates B
+refuses 502 and counts nothing. Gates B's runner calls `recordWitnessCheck`: `used` with its id on a pass, `unwitnessed`
+on a refusal, nothing on `unmeasured`.
 
-Gates B's decider takes `witness` at write doors and answers it after `stale-generation` and before `card-unread`:
-`unwitnessed` refuses 409 `unwitnessed` with the `why`, `unmeasured` refuses 502 `unmeasured`. The runner records the
-outcome with `recordWitnessCheck`: `used` with its witness id on a pass, `unwitnessed` on a refusal, nothing on
-`unmeasured`. A witness used by a write that later fails stays used, and the next turn brings a new one.
+- **The capability word** (ruled, F22). The port answers `unmeasured` (`the fleet's hook sends no witness yet`) until
+  the fleet node's ccd advertises `door-witness-v1`, so a server updated first refuses Overlord writes 502 and fires no
+  latch.
+- **A refused `stale-generation` write** at an Overlord door is counted by gates B's `overlord_fence_refusals`, its
+  writer, for a later cause row (ruled, F5). This piece adds nothing there.
 
-**The latch.** After recording an `unwitnessed`, the runner reads `unwitnessedSince(designatedSession, now - 24 h)`
-and asks `unwitnessedLatchDue({ count, latchStanding })`: true when the count reaches three and no latch for this
-cause stands. Then it calls the ladder's one latch writer with the cause `unwitnessed-third` (cap `advise`) and makes
-one push through the push outbox's enqueue. The count is rolling, so a restart resets nothing.
+**The latch.** After recording an `unwitnessed`, the runner reads `unwitnessedSince(designatedSession, since)`, where
+`since` is the later of 24 hours ago and the operator's last clear of this latch (ruled, F27), and asks
+`unwitnessedLatchDue({ count, latchStanding })`: true when the count reaches three and no latch for this cause stands.
+It then calls the ladder's one latch writer with the cause `unwitnessed-third` (cap `advise`) and makes one push through
+the push outbox's enqueue.
 
 **The off-model condition.** `offModelOf({ designatedClass, startClass, switches, sidecarClass })` answers
-`Read<boolean>`: true when the generation's start model, any reported switch since its start, or a fresh sidecar's
-class differs from the designation's model class; unmeasured when the start model is unknown, or the switches read
-failed. The ladder's condition row reads it: one under the operator's rung, never under `chat`. "Its replay not
-passed" reads as not passed in W1, because no replay of an off-model generation exists before W3 (slug
+`Read<boolean>`: true when the generation's start model, any reported switch since its start, or a fresh sidecar's class
+differs from the designation's class; unmeasured when the start model is unknown or the switches read failed. The
+ladder's condition row reads it: one under the operator's rung, never under `chat`. "Its replay not passed" reads as not
+passed in W1, because no replay of an off-model generation exists before W3 (slug
 `off-model-replay-reads-not-passed-in-w1`).
 
 **Two readings for the renewal readings piece**, which wires them into `renewalInputsOf` and the soft-renewal
-assembly (the index's row):
+assembly:
 
-- `modelDriftOf({ startClass, switches, sidecarClass })` answers `Read<boolean>`: a `typed` switch since the
-  generation's start, or a fresh sidecar class that differs from the start's. A `typed-refused` report is no drift. A
-  stale sidecar with no switch reports is unmeasured: Claude Code's own switch on a flagged request fires no measured
-  hook event (W0-12), so only the sidecar can see it.
-- `readersRunning({ events, generationStartedAt, now })` answers `Read<number>`: reader starts since the generation's
-  start with no stop. A start older than `READER_STALE_MS` with no stop makes the reading unmeasured, naming the agent
-  id, never a count that leaves it out.
+- `modelDriftOf({ startClass, switches, sidecarClass })`: `Read<boolean>`: a reported switch since the generation's
+  start other than `typed-refused`, or a fresh sidecar class that differs from the start's. A stale sidecar with no
+  switch report is unmeasured: whether Claude Code's own switch fires a hook event is unmeasured (W0-12 calls it
+  inconclusive), so only the sidecar is sure to see it.
+- `readersRunning({ events, generationStartedAt, now })`: `Read<number>`: reader starts since the generation's start, or
+  since its latest `readers-clear`, with no stop. A start older than `READER_STALE_MS` with no stop or clear makes it
+  unmeasured, naming the agent id, never a count that leaves it out.
 
-**Closed-book** (C41). `bookOf(last, askedAt, door)` gains `door: Read<{ covered: boolean; reads: number }>`: `covered`
-is true when the generation's start bound a nonce (a session whose every read goes through a door), and `reads` is the
-witness reports, main thread or reader, of door tools other than `probe` and `probe_answer`, received between the ask
-and the answer. `open` as today, or when `reads` is above zero; `closed` when covered, measured, no reads and no card or
-notes read; `unmeasured` otherwise. `BOOK_STATES_RECORDED` gains `closed`. A coordinator, which reads through
-`ccrc-api` in a shell the hook does not witness as a door, stays `open` or `unmeasured` (slug `closed-book-needs-a-door`).
+**Closed-book reads the server's read ledger** (ruled, F10). `bookOf(last, askedAt, ledger)` gains `ledger:
+Read<{ covered: boolean; reads: number }>`, from a port `ReadLedgerCount` the probe door declares: `covered` is true for
+the designated session (every read it makes goes through an Overlord read door, and each such door writes a ledger line,
+private store A's `recordRead`), and `reads` is that session's ledger lines between the ask and the answer. `open` as
+today, or when `reads` is above zero; `closed` when covered, measured, no reads and no card or notes read; `unmeasured`
+otherwise. `BOOK_STATES_RECORDED` gains `closed`. A coordinator stays `open` or `unmeasured` (slug
+`closed-book-reads-the-ledger`). The private store adds the count read, `readsBetween(sessionId, from, to)`, beside
+`recordRead` (index changes).
 
-- [ ] **Step 1: Failing tests.**
-  - `witnessVerdict`: each arm, the window's edges (at 120 s and one past), a witness from before the generation's
-    start, a used one, a reader's, two witnesses for one key (the newest unused is taken), and an unmeasured read.
-  - Gates B's decider: a write door with a good fence and `unwitnessed` refuses `unwitnessed`; with a bad fence it
-    refuses `stale-generation` and records no check; a read door never asks.
-  - The runner: the third `unwitnessed` in 24 hours raises the latch once and pushes once; a fourth raises nothing;
-    the count survives a restart (rows, not memory).
-  - `offModelOf`, `modelDriftOf` and `readersRunning`: each arm, each unmeasured reason, and that no unmeasured read
-    folds into `false` or `0`.
-  - `bookOf`: `closed` for a door session with no reads between ask and answer; `open` with one reader read; a
-    coordinator with no reads stays `unmeasured`.
-- [ ] **Step 2: Red. Step 3: Implement. Step 4: Green, then the mutants.** `witnessVerdict`,
-  `unwitnessedLatchDue`, `offModelOf`, `modelDriftOf` and `readersRunning` join `MUTANT_SETS`, and `bookOf`'s set
-  gains the new arm; floors as measured.
-- [ ] **Step 5: Commit** `feat(continuity): the witness step, the unwitnessed latch, off-model, closed-book and two readings (Overlord W1 door process B)`.
+- [ ] **Step 1: Write the failing tests.**
+  - `witnessVerdict`: each arm, the window's edges (at 120 s and one past), a witness before the generation's start, a
+    used one, a reader's, two for one key (the newest unused is taken), an unmeasured read.
+  - The binding: without `door-witness-v1` the port answers `unmeasured`; with it, the verdict; the recorder writes
+    `used` and `unwitnessed` and nothing on `unmeasured`.
+  - The latch: the third `unwitnessed` in 24 hours raises it once and pushes once; a fourth raises nothing; after a clear,
+    two more do not raise it and a third does; the count survives a restart.
+  - `offModelOf`, `modelDriftOf` and `readersRunning`: each arm and each unmeasured reason; no unmeasured read folds into
+    `false` or `0`; a `readers-clear` heals a lost stop.
+  - `bookOf`: `closed` for the designated session with no ledger lines and no card read between ask and answer; `open`
+    with one; a coordinator stays `unmeasured`; an unreadable ledger is `unmeasured`.
+- [ ] **Step 2: Run them, and see them fail.**
+- [ ] **Step 3: Implement.**
+- [ ] **Step 4: Run them, and see them pass.**
+- [ ] **Step 5: The mutants.** `witnessVerdict`, `unwitnessedLatchDue`, `offModelOf`, `modelDriftOf` and
+  `readersRunning` join `MUTANT_SETS`, and `bookOf`'s set gains its new arm; floors as measured.
+- [ ] **Step 6: Commit** `feat(continuity): the witness, the unwitnessed latch, off-model, closed-book and two readings (Overlord W1 door process B1)`.
 
 ## What a merge arms
 
 Nothing changes what a running session sees or does at merge, except where said.
 
-- **PR A.** Only a spawn whose profile has a surface calls `_door_spawn`, and no Overlord exists until the operator
-  starts one. Every session is spawned with one more deny rule, `Read(~/.cc-sessions/.door/**)`, and one more write
-  directory, over a directory that is empty. The start report gains a field only where the spawn's environment carries
-  a hash. The delta prints only there. `ccrc-api` sends the fence's headers only when `CCRC_ACT_KEY` is set.
-- **PR B.** `install-session-hooks.sh` registers ccrc's hook on two more events in every account, so every
-  non-child session's typed `/model` sends one report (question 11) and changes nothing else. The witness, reader and
-  pick-up reports come only from a session with a door. The witness step refuses only the Overlord's write doors. The
-  ladder's two rows cannot lower `effectiveRung` below `chat` in W1 (question 19's cap).
+- **A1.** Every `ccrc-api` POST now sends its body on curl's stdin, on every session: the same bytes reach the server
+  (the characterization), and the body leaves the process listing. Every session is spawned with read and write deny
+  rules for `~/.cc-sessions/.door/**`, an empty directory. The start report gains a field only where the spawn's
+  environment carries a hash, which no spawn does before A2.
+- **A2.** Only a spawn whose profile has a surface calls `_door_spawn`, and no Overlord exists until the operator starts
+  one. The delta prints only in a session with a door.
+- **B1.** The witness, reader, turn-end and pick-up reports come only from a session with a door. The witness port reads
+  `unmeasured` until the fleet advertises `door-witness-v1`, so a server updated first refuses Overlord writes 502 and
+  latches nothing.
+- **B2.** `install-session-hooks.sh` registers ccrc's hook on two more events in every account, so every non-child
+  session's model switch sends one report and changes nothing else. A running Overlord reads `launch-profile-unmet` until
+  its next start (the PR split's sequencing note). The ladder's rows cannot lower `effectiveRung` below `chat` in W1.
 
 ## Index changes
 
 The index should carry these. The coordinator passes them to the index's own fix round.
 
 - **The row "Door process and readers":**
-  - what it ships: "A: the door process, `ccd/door-process.mjs`, an MCP stdio server with `ccrc-api` inside, its
-    tool names the skill's door names (question 13); ccd's spawn step in `ccd/lib/door.sh`, which writes the nonce into
-    a 0600 tool-server config and only its hash into the spawn; the nonce's hash on the start report;
-    `continuity_act_keys` and the claim door `POST /api/sessions/:id/act-key`, which issues the key once; the fence's
-    headers on `ccrc-api`; the deny path `~/.cc-sessions/.door/**`; the Overlord's first line, chosen by role; the delta
-    cache (C38) and the card door's `delta` form. B: the readers' read tool; one report door `POST
-    /api/sessions/:id/report` for the witness, reader start and stop, the model switch and "picked up"; the reader-scope,
-    reader-model and typed-`/model` arms; the witness step in gates B's decider; the ladder's unwitnessed latch and
-    off-model condition; closed-book; `modelDriftOf` and `readersRunning`";
-  - "needs first": "A: sandbox A, designation A, W1a renewal act. B: PR A, ladder, gates B, private store B".
-- **Figure W1:** add `GB --> DPB` (the witness joins gates B's decider) and `PSB --> DPB` (the nudge's line and
-  `moveMessage`). Gates B still needs door process A, so no cycle forms.
+  - what it ships: "A1: the claim (`continuity_act_keys`, the claim door `POST /api/sessions/:id/act-key` bound to the
+    session's newest start), `ccrc-api`'s bodies on stdin, the door library's first region and every library site, and
+    the deny path. A2: the spawn step, the door process (`ccd/door-process.mjs`, an MCP stdio server with `ccrc-api`
+    inside, one argv builder a tool), the first line's text, and the delta cache with the anchor's `delta` form. B1: the
+    report door `POST /api/sessions/:id/report` (witness, readers, turn end, picked up), the read tool, the witness
+    verdict and port binding, the unwitnessed latch, off-model, closed-book from the read ledger, `modelDriftOf` and
+    `readersRunning`. B2: the model events, report-only, and the reader and typed-`/model` arms";
+  - size: "4 PRs, 9 tasks";
+  - "needs first": "A1: sandbox A, designation A, W1a renewal act and renewal hand-offs. A2: PR A1. B1: PR A2, ladder,
+    gates B, private store B. B2: PR B1".
+- **Figure W1:** `DPA` becomes `DPA1 --> DPA2`; add `RH -.-> DPA1`, `GB --> DPB1`, `PSB --> DPB1` and `DPB1 --> DPB2`.
+  Gates B needs door process A2 (the headers and the table). No cycle forms.
 - **Lane B's file list:** "the act-key columns of `continuity_generations`" becomes "`continuity_act_keys` and
   `continuity_starts.doorNonceSha256`"; the "picked up" door becomes the report door; add `ccd/door-process.mjs`,
   `ccd/lib/door.sh`, `shared/continuity-door.ts`, `shared/continuity-reports.ts`,
-  `server/src/continuity/{actKey,actKeyStore,hookReports,hookReportStore}.ts`, `ccd/ccrc-api` (two rows and the
-  headers), `shared/hook-events.ts` and `ccd/install-session-hooks.sh` (two events).
+  `server/src/continuity/{actKey,actKeyStore,hookReports,hookReportStore}.ts`, `ccd/ccrc-api`,
+  `ccd/ccd-entry-install.py`, `CLAUDE.md` (SAFETY), `shared/continuity-card.ts`, `shared/hook-events.ts`,
+  `ccd/install-session-hooks.sh` and `ccd/lib/launch-profiles.json` (regenerated).
 - **"Where lanes meet":**
-  - `server/src/continuity/routes.ts`: lane B adds the claim door (A) and the report door (B), and extends the start
-    report's body, as sandbox A does; the second to land re-counts the machine lanes.
-  - `server/src/continuity/anchor.ts` (W1a's): lane B adds the `delta` form.
+  - `server/src/continuity/routes.ts`: lane B adds the claim door (A1), the report door (B1) and the anchor form check
+    (A2), and extends the start report's body, as sandbox A does; the second to land re-counts the machine lanes and
+    `ROUTES.length`.
   - The renewal act's `renewalActs.ts` and `renewalFeed.ts`: lane B adds `FIRST_PROMPT_OF_ROLE`.
-  - `shared/injected-prompts.mjs`: designation A adds the Overlord's first-prompt row, and door process A rewrites its
-    text to name the door tools.
-  - Gates B's decider: door process B adds the witness input and its step.
-  - `shared/api.ts`: lane B edits `ACCOUNT_SECRET_PATHS` and `ACCOUNT_WRITE_DIRS` in place (0 net lines).
-  - `ccd/ccrc` and `deploy/deploy.sh`: lane B adds the door program's lines beside `compact-card.mjs`'s; question 30
-    holds, so `_inst_bins` and the launcher list do not change.
-  - The tool table in `ccd/door-process.mjs` is an append-only registry: the inbox and board and history B each add
-    their row beside their `ccrc-api` row.
-- **"Where each Table 14 item went":** "The fence | Door process (the nonce and the key), gates and identity (the
-  check)" stands, with the counter's writer shipped here and called only by gates B.
+  - `shared/injected-prompts.mjs`: designation A owns the Overlord's first-prompt row; door process A2 re-texts it.
+  - Gates B's runner: door process B1 binds the witness port and its recorder; gates B owns step 7a.
+  - `shared/api.ts`: lane B edits `ACCOUNT_SECRET_PATHS` and `ACCOUNT_WRITE_DIRS` in place.
+  - The private store: door process B1's closed-book reads `readsBetween`, a count beside `recordRead` that the private
+    store adds (or B1 adds, in C11's file, if the private store has merged).
+  - Sandbox A's launch row: B2's two events change `ccd/lib/launch-profiles.json` and the Overlord's digest.
+  - `DOOR_TOOLS` is an append-only registry: the inbox and board and history B each add their row beside their
+    `ccrc-api` row.
+- **The board** shows the act-key row's `claimsRefused` as a fact (question 7); board and history B owns that line.
+- **The skill** (`ccd/overlord-skill/references/starting.md`): its door table gains `probe` (the page read) and `note
+  handover`; its refusal table reads a `stale-generation` with detail `nonce-spent` as "the door process restarted;
+  reads only until a renewal" (question 7).
+- **The gates plan:** the witness header is `x-ccrc-witness-key`, not `x-ccrc-op-key` (ruled, F20).
 - **The spec-fixes list gains:**
   - Table 11.1a's `continuity_generations` row: the act key is a table of its own, written by the claim door, and the
-    nonce binds through the start report's hash.
-  - §11.2 places `unwitnessed` both in step 1 and "once the fence passes": it is checked after the fence.
+    nonce binds through the newest start's hash.
+  - Table 11.1b and §3.6: Claude Code starts the door process from ccd's config.
+  - §11.2 places `unwitnessed` in step 1 and "once the fence passes": it is step 7a, after the fence.
+  - §10.1's operation key is W2's dedupe key; the W1 witness key is a header of its own.
+  - C41's closed-book is graded from the read ledger.
   - Table 3.6a lacks the tool-server config `$REG/.door/<id>/mcp.json` (writer ccd's spawn step; it holds the nonce
     until the claim spends it; when stale: `stale-generation`). Its row "the model-switch journal" is server rows from
     the hook's report, beside the sidecar's model, not a fleet file.
   - Table 11.1e's hook reports ride one door with a kind each.
-  - §3.3.10's three-reader bound has no enforcer: the reader-scope arm.
-  - Table 11.5b lacks the witness window, the report timeout, the reader staleness and the delta's refresh, lease and
-    size.
-  - A door process lost inside a generation has no remedy but a renewal (question 7).
+  - Table 11.6 lacks `unknown-message`.
+  - §3.3.10's three-reader bound has no enforcer: the B2 arm, with its residuals.
+  - §3.6 H1's automatic model switch: `PreModelSwitch` is report-only, because a refusal could stop it.
+  - The hook's header gains a sixth `PreToolUse` network exception, the witness.
+  - Table 11.5b lacks the witness window, the report timeout, the reader staleness, the claim's back-off, and the delta's
+    refresh, lease and size.
+  - For the operator: a hard renewal trigger for "a refused claim or lost tools on the live generation" (question 7).
 
 ## Deviations found
 
 None found in the tree yet. These are the decisions this plan takes, by slug. The coordinator mints numbers.
 
-- **`act-key-is-its-own-row`**: Table 11.1a keeps the act key on `continuity_generations`, written by the renewal
-  lane. Issuing the key is the claim door's act, so it is `continuity_act_keys`, with one writer for each of its three
-  facts, and voiding is derived from the generation's state.
-- **`nonce-bound-by-its-hash-on-the-start-report`**: "at the mint the server binds that nonce to the generation". The
-  binding is the start report's `doorNonceSha256`, which the mint already carries through `startId`; the nonce itself
-  reaches the server only in the claim.
+- **`act-key-is-its-own-row`**: Table 11.1a keeps the act key on `continuity_generations`, written by the renewal lane.
+  Issuing the key is the claim door's act, so it is `continuity_act_keys`, with one writer for each of its three facts;
+  voiding is derived from the generation's state.
+- **`nonce-bound-by-its-hash-on-the-start-report`**: "at the mint the server binds that nonce". The binding is the
+  newest start's `doorNonceSha256`; the claim waits for that start's mint (`renewing`). The nonce itself reaches the
+  server only in the claim.
 - **`nonce-rides-the-tool-server-config`**: the nonce reaches the door process's environment through the 0600 config
   ccd writes, never the pane's command, which every process listing shows.
-- **`door-process-installed-beside-compact-card`** (question 30): no launcher on `PATH`; the program is installed
-  beside `compact-card.mjs` and started by `node` by its absolute path.
-- **`door-process-file-pinned-at-install`**: the program holds the key, so ccd checks its digest at every spawn, as it
-  checks its libraries.
+- **`claude-code-starts-the-door-process`**: §3.6 says ccd starts it; Claude Code starts it from ccd's config.
+- **`door-process-installed-with-its-pin`** (question 30): no launcher on `PATH`; the entry installer installs the program
+  beside the redactor and renders its pin in the same step.
+- **`ccrc-api-bodies-on-stdin`**: every `ccrc-api` request body moves from curl's argv to its stdin config.
 - **`hook-reports-share-one-door`**: one report door with a kind each, not four doors.
-- **`witness-key-is-the-call-digest`** (question 6): the operation key is the sha256 of the tool name and its
-  `jq -cS` input.
-- **`witness-checked-after-the-fence`**: §11.2 names `unwitnessed` in step 1 and after the fence; it is checked after.
-- **`witness-step-joins-gates-b`**: door process B adds the witness input to gates B's decider, so it needs gates B.
-- **`reader-model-arm-kept-as-a-belt`**: sandbox A's plan lets this piece drop the arm; it is kept, reading the pin
-  from the environment.
-- **`reader-bound-in-the-scope-arm`** (question 10).
-- **`model-switch-events-join-hook-events`**: `PreModelSwitch` and `PostModelSwitch` are registered in every account.
+- **`witness-key-is-the-call-digest`** and **`witness-key-is-not-the-dedupe-key`** (question 6).
+- **`witness-after-the-fence`**: gates B's slug; §11.2 names `unwitnessed` in two places, and it is step 7a.
+- **`reader-model-arm-kept-as-a-belt`**: sandbox A's plan lets this piece drop the arm; it is kept.
+- **`reader-bound-in-the-scope-arm`** (question 10), with its residuals.
+- **`model-switch-events-join-hook-events`**: `PreModelSwitch` and `PostModelSwitch` are registered in every account,
+  report-only.
+- **`typed-model-refused-on-the-prompt-path`** (question 8).
 - **`off-model-replay-reads-not-passed-in-w1`**.
-- **`delta-rides-a-card-door-form`**: the delta's text is the card door's `delta` form, one renderer with the anchor.
+- **`delta-rides-a-card-door-form`**: the delta's text is the anchor's `delta` form, one renderer with the anchor.
 - **`lost-door-process-waits-for-a-renewal`** (question 7).
-- **`closed-book-needs-a-door`**: `closed` is recorded only for a session whose reads all go through witnessed doors.
-- **`first-prompt-chosen-by-role`**: the renewal act's first line comes from `FIRST_PROMPT_OF_ROLE`, so the Overlord's
-  names its doors.
+- **`closed-book-reads-the-ledger`**.
+- **`first-prompt-chosen-by-role`**: the renewal act's two delivery sites take `FIRST_PROMPT_OF_ROLE`.
 
 ## Where things stand
 
 **Agreed:**
-- The door process carries `ccrc-api` and is started from the tool-server config ccd writes at each spawn (question 13).
-- It is no launcher on `PATH` (question 30).
-- A late or lost witness refuses `unwitnessed` (question 16), and this piece ships the ladder's two rows (question 20).
-- "Picked up" is the hook's report of the id the private store's nudge names, through this piece's door.
-- Zero new ccd verbs, the new library under the split pin's new-code arm, and every growth-checked file within 40.
+- The door process carries `ccrc-api`, started by Claude Code from the config ccd writes at each spawn (question 13).
+- It is no launcher on `PATH` (question 30), and its pin is rendered in the step that installs it.
+- No secret on any argv: `ccrc-api` bodies ride curl's stdin.
+- The claim binds the newest recorded start, and waits for its mint with `renewing`.
+- Gates B owns the witness step; this piece ships its verdict, recorder, port binding and latch.
+- The counter lives in `continuity_act_keys`, reached through gates B's guarded adapter; the door process sends one call
+  at a time; no term header.
+- The first prompt is designation A's `INJECTED_PROMPTS` row; door process A2 re-texts it, and the designation plan says
+  so (edited in this pull request).
+- Closed-book is graded from the read ledger. `PreModelSwitch` is report-only.
+- Zero new ccd verbs, the new library under the split pin's new-code arm, every growth-checked file within 40 in each of
+  four pull requests.
 
-**Waiting on you** (the coordinator):
-- Questions 6 to 12: the operation key, a lost door process, the `PreModelSwitch` refusal, the readable doors, the
-  three-reader bound, which sessions report a model switch, and the starting values.
-- The index changes above, above all the two new edges into door process B.
+**Waiting on you:**
+- The operator: a hard renewal trigger for a lost door process (question 7), through the spec-fixes run.
+- The coordinator: questions 6, 9, 10, 11 and 12's recommendations, and the index changes above.
 
 **Later:**
-- The live steps in Tasks 6 and 7, measured on the pinned build by the builder.
-- W2 and W3 add tool rows and reader-readable doors; the act journal's head joins the witness epoch, which is
-  authority journal B's, not this piece's.
+- The live steps in Tasks 4, 5, 7 and 8, measured on the pinned build by the builder.
+- W2 and W3 add tool rows and reader-readable doors, and W2's dedupe key gets a header of its own.
 - A container's `workload` credential replaces the key's shared-user caveat (§7.4); the door process holds whichever
   credential the box gives it, with no change to any door.

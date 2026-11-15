@@ -1035,7 +1035,8 @@ M5).
 
 **Files:**
 - Create: `server/src/coord/overlordRoutes.ts` (C5, L4): `registerOverlordRoutes(app, deps)`, and `drainOwedStops`
-- Modify: `shared/overlord-designation.ts` (`OVERLORD_FIRST_PROMPT`, the body parsers)
+- Modify: `shared/overlord-designation.ts` (the body parsers)
+- Modify: `shared/injected-prompts.mjs` and `shared/injected-prompts.d.mts` (the row `overlord-first-prompt`, typer `server`)
 - Modify: `server/src/server.ts` (the registration beside `registerFaceRoutes`, with `serial` from the coordination
   routes' handle, as `hierarchyRoutes.ts` takes `CoordRoutesHandle['serial']`, and W1a's `SessionHost`)
 - Modify: `server/test/auth-gate.test.ts` (`ROUTES` gains `...scanRoutes('coord/overlordRoutes.ts')`, the count and
@@ -1069,7 +1070,7 @@ nothing is created.
      `designateVerdict`;
   4. on `create`: `designatePending` (the deadline from question 5, the gate's actor; it journals the set and the
      class), `body.ensureProject()`, `body.create(…)`, `bindPendingGeneration`, `body.writeSet(…)`;
-  5. `body.keepAwake(id, 'on')`, then the first prompt: `SessionHost.deliver(id, OVERLORD_FIRST_PROMPT)` (X4);
+  5. `body.keepAwake(id, 'on')`, then the first prompt: `SessionHost.deliver(id, 'overlord-first-prompt')` (X4);
   6. answers 200 `{ ok: true, state: 'pending', sessionId, deadlineAt, warnings, awake, prompted }`.
 
   Any failure in step 4 after `designatePending`, including a refusal of `bindPendingGeneration` (review F5), runs
@@ -1085,8 +1086,13 @@ nothing is created.
   Then `drainOwedStops` stops each owed id, and the door answers `{ ok: true, changed: true, term, stopped: [...],
   owed: [...] }`, naming any id whose stop failed and stays owed.
 
-**`OVERLORD_FIRST_PROMPT`** is one line in this piece's L0 file that sends the body to its card (W1a's card line).
-Door process A re-points it to the door's first call in its own pull request; the sending stays here (X4).
+**The first prompt** is one `INJECTED_PROMPTS` row, `overlord-first-prompt`, owned by this piece (ruled, review 2162
+F9): `SessionHost.deliver` takes an injected prompt's key, so the line is a row of that census, never a constant of
+this piece's L0 file. This piece adds the row and widens the port's prompt type to take it (on the renewal act's
+branch, `RenewalPrompt` in `server/src/continuity/sessionHost.ts`, with its one `sendPrompt` in `renewalWiring.ts`).
+Its first text sends the body to its card. Door process A re-texts the row so that it names the door tools, and the
+renewal act delivers the same row to a renewed Overlord generation; the sending of a new body's first prompt stays here
+(X4).
 
 **`drainOwedStops(ids)`**, the one drain (review F5), for each id: `writeSet` with empty values, `clearProfile`,
 `keepAwake(id, 'off')`, then `stop`. An `ok` stop, or `absent`, ends with `stopDone(id)`. A failed stop leaves the id
@@ -1463,7 +1469,7 @@ and no D-number is minted for them (X9).
 - PR C: PR A.
 
 **What depends on it:** authority journal C, the ladder, gates A, sequence A, sandbox B (`goLive`, `failPending`,
-`stopCreated`), door process A (`OVERLORD_FIRST_PROMPT`), private store B (`designationRead()`), portfolio B,
+`stopCreated`), door process A (the `overlord-first-prompt` row), private store B (`designationRead()`), portfolio B,
 other-lane refusals, home A (A); readiness, home B and the Overlord's timers (B); home C and the renewal readings (C).
 
 **Later:**
