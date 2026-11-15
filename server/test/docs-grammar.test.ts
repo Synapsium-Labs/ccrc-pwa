@@ -116,7 +116,7 @@ describe('the commit, fingerprint and max-bytes grammars', () => {
 
 describe('the section grammar', () => {
   it('is generated from DOC_SECTIONS and agrees with isDocsSection', () => {
-    expect(DOCS_SECTION_RE_BODY).toBe('specs|plans|product-design|conventions');
+    expect(DOCS_SECTION_RE_BODY).toBe('specs|plans|product-design|conventions|vision|promise');
     expect(DOCS_SECTION_RE_BODY).toBe(DOC_SECTION_SLUGS.join('|'));
     const re = full(DOCS_SECTION_RE_BODY);
     for (const s of [...DOC_SECTION_SLUGS, 'Specs', 'spec', 'specsx', 'plans|specs', 'product', '']) {

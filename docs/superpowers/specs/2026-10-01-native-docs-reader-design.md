@@ -346,9 +346,10 @@ The helper enforces them.
   - `cat-file`, `--batch-check` or `blob` only;
   - `worktree list`, `status`, `ls-files`;
   - `merge-base --is-ancestor`, `rev-list --left-right --count`;
-  - `config --get` and `config -z --get-regexp`.
+  - `config --get` and `config -z --get-regexp`;
+  - `log`, for `docs-log` only and only as one fixed row: `-c log.showSignature=false -c log.follow=false -c log.mailmap=false -c log.showRoot=true log --no-show-signature --encoding=UTF-8 --no-merges --format=%H%x00%P%x00%cI%x00%an%x00%s -z --name-only --end-of-options <commit> -- <section path>` (rich-docs spec A12, G4; amended 2026-11-15; W5b-1).
 - **`docs-fetch`** may additionally run `fetch`.
-- **Never used:** `show`, `log`, `diff`, `archive`, `checkout-index`, `--textconv`, `--filters`, `<commit>:<path>`, `remote set-head`, `check-attr`.
+- **Never used:** `show`, `diff`, `archive`, `checkout-index`, `--textconv`, `--filters`, `<commit>:<path>`, `remote set-head`, `check-attr`. `log` left this list for `docs-log`'s one row above (amended 2026-11-15; W5b-1).
 
 ---
 

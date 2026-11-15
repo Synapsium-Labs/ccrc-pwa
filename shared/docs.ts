@@ -19,13 +19,18 @@ import { utf8Bytes } from './utf8.js';
 
 // ---- (A) Sections ----------------------------------------------------------------------------------------------
 
-/** The four doc sections, slug to repo path, in display order. Every other list of sections is derived from this
- *  object: `DOC_SECTION_SLUGS`, `DOCS_SECTION_RE_BODY`, and ccd's `SECTIONS` parity copy. */
+/** The six doc sections, slug to repo path, in display order. Every other list of sections is derived from this
+ *  object: `DOC_SECTION_SLUGS`, `DOCS_SECTION_RE_BODY`, and ccd's `SECTIONS` parity copy. `vision` and `promise` came
+ *  with the rich-docs spec's G1 (W5b): a ccd that serves them says so in `ccd caps` (the token
+ *  `server/src/ccdargv.ts#DOCS_SECTIONS_CAP` names), and the server names either to ccd only behind it
+ *  (`server/src/docs/ccdsource.ts#readDocs`). */
 export const DOC_SECTIONS = {
   specs: 'docs/superpowers/specs',
   plans: 'docs/superpowers/plans',
   'product-design': 'docs/product-design',
   conventions: 'docs/conventions',
+  vision: 'docs/vision',
+  promise: 'docs/promise',
 } as const;
 
 export type DocSectionSlug = keyof typeof DOC_SECTIONS;
@@ -33,7 +38,7 @@ export type DocSectionSlug = keyof typeof DOC_SECTIONS;
 /** The slugs, in `DOC_SECTIONS` order (a string key keeps its insertion order). */
 export const DOC_SECTION_SLUGS: readonly DocSectionSlug[] = Object.keys(DOC_SECTIONS) as DocSectionSlug[];
 
-/** True iff `s` is one of the four slugs. A list test, never `in`: `toString` and `__proto__` are no section. */
+/** True iff `s` is one of the slugs. A list test, never `in`: `toString` and `__proto__` are no section. */
 export function isDocsSection(s: string): s is DocSectionSlug {
   return typeof s === 'string' && (DOC_SECTION_SLUGS as readonly string[]).includes(s);
 }
@@ -77,6 +82,14 @@ export const DOCS_MAX_DRAFTS = 1000;
 export const DOCS_MAX_IMAGES_PER_PAGE = 30;
 /** ccd: the floor between two fetch attempts of one branch. */
 export const DOCS_FETCH_MIN_INTERVAL_MS = 10000;
+/** ccd: the most entries one docs-log answer lists (rich-docs spec G4). The helper stops reading there. */
+export const DOCS_LOG_MAX_ENTRIES = 100;
+/** ccd: the most code points of one commit subject in a docs-log answer, cut after it is redacted. */
+export const DOCS_LOG_SUBJECT_MAX_CHARS = 200;
+/** ccd: the most code points of one author name in a docs-log answer, cut after it is redacted. */
+export const DOCS_LOG_AUTHOR_MAX_CHARS = 100;
+/** ccd's final docs-log guard, in framed bytes; over it the answer is `too-many-entries {count, bytes}`. */
+export const DOCS_LOG_MAX_WIRE_BYTES = 131072;
 /** refreshDue: the age at which a last attempt that ended `ok` or `remote-branch-absent` is due again. */
 export const DOCS_STALE_MS = 600000;
 /** refreshDue: the age at which any other last attempt is due again. */
@@ -496,11 +509,11 @@ export function redactDocsText(s: string): string {
 // Spec 2026-10-01 section 2 (b) "Types", with section 3.5's additive amendments (`onRef`, `github`) folded in.
 // Additive only: no FLEET_PROTO bump. Every ccd answer is one JSON line: `{v:1, verb, ok, elapsedMs, ...}`.
 
-export type DocsVerb = 'docs-index' | 'docs-tree' | 'docs-show' | 'docs-fetch';
+export type DocsVerb = 'docs-index' | 'docs-tree' | 'docs-show' | 'docs-fetch' | 'docs-log';
 
 /** D-6048 (ARCH-12): the runtime list, derived from the type (`SESSION_ROLE_MAP`'s idiom). */
 const DOCS_VERB_MAP: Record<DocsVerb, true> = {
-  'docs-index': true, 'docs-tree': true, 'docs-show': true, 'docs-fetch': true,
+  'docs-index': true, 'docs-tree': true, 'docs-show': true, 'docs-fetch': true, 'docs-log': true,
 };
 export const DOCS_VERBS: readonly DocsVerb[] = Object.keys(DOCS_VERB_MAP) as DocsVerb[];
 
@@ -522,7 +535,8 @@ export interface DocsTreeOk {
     };
   };
   mainCheckout: { path: string; branch: string | null; head: Sha };
-  /** All four, in DOC_SECTIONS order. */
+  /** Every section this ccd serves, in DOC_SECTIONS order: all six from a ccd that lists the sections token, the first
+   *  four from an older one. A reader never assumes a slug is here (`pwa/src/docs/docsTree.ts#sectionFacts`). */
   sections: { slug: DocSectionSlug; path: string; state: 'present' | 'absent' | 'not-a-directory'; count: number }[];
   entries: DocsEntry[];
   unlisted: { count: number; byReason: Partial<Record<'invalid-utf8' | 'unsafe-char' | 'too-long' | 'too-deep', number>> };
@@ -597,13 +611,34 @@ export interface DocsIndexOk {
     project: string;
     state: 'ready' | 'not-a-git-repo' | 'linked-worktree' | 'shared-repo' | 'partial-clone' | 'no-default-branch' | 'repo-unreadable';
     github: DocsGithub; repoKey?: string;
-    default?: { name: string; via: string; commit: Sha }; sections?: Record<DocSectionSlug, number | null>;
-    sectionsOnDisk?: DocSectionSlug[] /* non-git dirs: 4 lstats */; owner?: string | null; branch?: string | null;
+    default?: { name: string; via: string; commit: Sha };
+    /** One count per section this ccd serves: six, or four from a ccd without the sections token. A slug it does not
+     *  carry is a section that ccd does not know, never zero (`pwa/src/docs/docsTree.ts#presentSectionCounts`). */
+    sections?: Partial<Record<DocSectionSlug, number | null>>;
+    sectionsOnDisk?: DocSectionSlug[] /* non-git dirs: one lstat per section */; owner?: string | null; branch?: string | null;
     fetch?: { okAgeMs: number | null; lastOutcome: string };
   }[];
 }
 
 export type DocsIndexRow = DocsIndexOk['projects'][number];
+
+/** What a history read asks for (rich-docs spec G4): the doc's place and the commit its walk starts from. Every value
+ *  reaches ccd as a value read by fixed index, never as a pathspec: ccd matches the path by exact bytes. */
+export interface DocsLogAsk { commit: Sha; section: DocSectionSlug; path: string }
+
+/** One commit that changed the doc. `parent` is the first parent; `null` has one meaning, a root commit. `date` is the
+ *  committer date in strict ISO 8601; `author` is the author's name (never an email); both texts are redacted, then cut
+ *  to `DOCS_LOG_AUTHOR_MAX_CHARS` and `DOCS_LOG_SUBJECT_MAX_CHARS` code points. */
+export interface DocsLogEntry { sha: Sha; parent: Sha | null; date: string; author: string; subject: string }
+
+/** `docs-log`'s answer: the ask echoed, at most `DOCS_LOG_MAX_ENTRIES` entries newest first, and `truncated`: true when
+ *  the walk ended short of that many before it reached the start of history (the helper deadline, the stdout cap, or a
+ *  shallow repository's cut history), or when a shallow repository's walk read past a commit without a parent that touched
+ *  the doc, so a change may be missing from the list. */
+export interface DocsLogOk {
+  v: 1; verb: 'docs-log'; ok: true; elapsedMs: number;
+  commit: Sha; section: DocSectionSlug; path: string; entries: DocsLogEntry[]; truncated: boolean;
+}
 
 /** A ccd failure line: the envelope plus the word, a redacted `detail` of at most 2 KiB, and that word's context.
  *  `retryAfterMs` rides `fetch-too-soon`. */
@@ -734,6 +769,7 @@ export type DocsRefreshFetch =
   | { state: 'failed'; failure: DocsFailureBody }
   | { state: 'skipped'; why: 'local-ref' };
 export interface DocsRefreshResponse { ok: true; fetch: DocsRefreshFetch; tree: DocsTreeResponse | DocsFailureBody }
+export interface DocsHistoryResponse { ok: true; log: DocsLogOk }
 
 // ---------------------------------------------------------------------------
 // (G) resolveDocRef (spec 4.11): where a link or an image reference inside a
@@ -743,7 +779,7 @@ export interface DocsRefreshResponse { ok: true; fetch: DocsRefreshFetch; tree: 
 
 export type DocRefResolution =
   | { kind: 'doc'; section: DocSectionSlug; path: string; fragment: string | null }
-  | { kind: 'repo'; repoPath: string }                              // inside the repo, outside the four sections
+  | { kind: 'repo'; repoPath: string }                              // inside the repo, outside the Docs sections
   | { kind: 'fragment'; fragment: string }
   | { kind: 'external'; url: string; scheme: 'http' | 'https' | 'mailto'; origin: string | null }
   | { kind: 'self-contained'; scheme: 'data' | 'blob' }
@@ -1091,7 +1127,7 @@ export function githubPermalink(
 /** The PWA's Docs pages live under this prefix. The server never registers it (spec 3.1); W4's service-worker
  *  refusal imports it, and docs-parity.test.ts holds it to one declaration (M7.3). */
 export const DOCS_PAGE_PREFIX = '/docs';
-/** The four docs API routes live under this prefix (spec 3.4). */
+/** The docs API routes live under this prefix (spec 3.4; the history route, rich-docs spec G4). */
 export const DOCS_API_PREFIX = '/api/docs';
 /** The marker header every PWA docs fetch carries (spec 3.8, clause 3). An img, iframe, script, link or
  *  navigation cannot attach it, and a cross-origin fetch can only after a preflight the server never answers. */
@@ -1318,4 +1354,7 @@ export const docsApi = {
       ? [['commit', pin.commit], ['servedRef', pin.servedRef], ['section', pin.section], ['path', pin.path]]
       : [['branch', pin.branch], ['head', pin.head], ['section', pin.section], ['path', pin.path], ['fp', pin.fp]]),
   refresh: (project: string): string => apiProjectPath(project) + '/refresh',
+  /** One doc's history (rich-docs spec G4): commit, section, path, in ccd's argv order. */
+  history: (project: string, ask: DocsLogAsk): string => apiProjectPath(project) + '/history'
+    + apiQuery([['commit', ask.commit], ['section', ask.section], ['path', ask.path]]),
 };

@@ -57,9 +57,9 @@ describe('linkRuns: https, console paths and document paths in item text are lin
     expect(links(linkRuns('docs/conventions/a/b.md', HOME))[0]?.href).toBe('/docs/project-a/conventions/a/b.md');
   });
 
-  it('a document path stays text with no home project, outside the four sections, or with a .. step', () => {
+  it('a document path stays text with no home project, outside the Docs sections, or with a .. step', () => {
     expect(links(linkRuns('docs/superpowers/specs/a.md', null))).toEqual([]);
-    expect(links(linkRuns('docs/vision/a.md docs/superpowers/specs/../../x.md docs/superpowers/specs/', HOME))).toEqual([]);
+    expect(links(linkRuns('docs/wiki/a.md docs/superpowers/specs/../../x.md docs/superpowers/specs/', HOME))).toEqual([]);
   });
 
   it('a javascript, data, vbscript or other address stays text, in any case', () => {
