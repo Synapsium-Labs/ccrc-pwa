@@ -80,3 +80,5 @@ the previous commit failed `expected { ok: false, reason: 'unreadable' } to deep
 |---|---|
 | old bundling: a late control returns `failedBundle(n, late)` | rc 1, 4 failed: both pass cases (`expected { ok: false, reason: 'late' } to deeply equal { ok: true, ... }`) and both sweep cases (`the answered probe was dropped with the late control: expected [] to deeply equal [ 'claude-a-proj-a-alpha' ]`) |
 | late control made `{ lander: late, probe: <answered>, health: late }` | rc 1, 4 failed, all at the control-equality assertion (`expected { lander: ..., probe: ..., health: ... } to deeply equal ...`). The zero-cue assertion was NOT reached in this run, so this mutant shows the control equality catches it, not that the cue count would; I did not measure whether the store would queue a cue from that partial bundle. |
+
+Deadline note: the pass-level R2 cases now use a 2000 ms deadline instead of 60 ms (the hung reads never resolve, so they still settle at the deadline; a loaded box cannot make the fast probe miss it).

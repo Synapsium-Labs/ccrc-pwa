@@ -851,7 +851,7 @@ describe('wave 5i: the control bundle through the pass', () => {
     const seen: string[] = [];
     const base = await readRadarPass(localIO, reg, new Set(['proj-a']), NOW, 5000, new Set(['proj-a']));
     const io = spied(seen, { lstatMeasured: (p) => (p.endsWith(`${path.sep}lander`) ? hang() : localIO.lstatMeasured(p)) });
-    const r = await readRadarPass(io, reg, new Set(['proj-a']), NOW, 60, new Set(['proj-a']));
+    const r = await readRadarPass(io, reg, new Set(['proj-a']), NOW, 2000, new Set(['proj-a']));
     if (!r.ok || !base.ok) throw new Error('pass');
     expect(r.reads.get('proj-a')).toEqual(base.reads.get('proj-a'));
     expect(r.reads.get('proj-a')?.ok).toBe(true);
@@ -864,7 +864,7 @@ describe('wave 5i: the control bundle through the pass', () => {
     const seen: string[] = [];
     const base = await readRadarPass(localIO, reg, new Set(['proj-a']), NOW, 5000, new Set(['proj-a']));
     const io = spied(seen, { lstatMeasured: (p) => (p.endsWith(`${path.sep}main-health`) ? hang() : localIO.lstatMeasured(p)) });
-    const r = await readRadarPass(io, reg, new Set(['proj-a']), NOW, 60, new Set(['proj-a']));
+    const r = await readRadarPass(io, reg, new Set(['proj-a']), NOW, 2000, new Set(['proj-a']));
     if (!r.ok || !base.ok) throw new Error('pass');
     expect(r.reads.get('proj-a')).toEqual(base.reads.get('proj-a'));
     expect(r.reads.get('proj-a')?.ok).toBe(true);
@@ -897,7 +897,7 @@ describe('wave 5i: the control bundle through the pass', () => {
   it('R2: a genuinely late probe is late in both maps, and a healthy neighbour keeps its answers', async () => {
     plantAll('proj-a'); plantAll('proj-b');
     const io = spied([], { lstatMeasured: (p) => (p.includes(`${path.sep}proj-a${path.sep}`) && p.endsWith(`${path.sep}probe`) ? hang() : localIO.lstatMeasured(p)) });
-    const r = await readRadarPass(io, reg, new Set(['proj-a', 'proj-b']), NOW, 60, new Set(['proj-a', 'proj-b']));
+    const r = await readRadarPass(io, reg, new Set(['proj-a', 'proj-b']), NOW, 2000, new Set(['proj-a', 'proj-b']));
     if (!r.ok) throw new Error('pass');
     expect(r.reads.get('proj-a')).toEqual(late);
     expect(r.controls.get('proj-a')).toEqual({ lander: late, probe: late, health: late });
