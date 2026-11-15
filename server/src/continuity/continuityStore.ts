@@ -893,8 +893,8 @@ export function handoverBefore(db: DatabaseSync, identity: string, liveGeneratio
 }
 
 // ------------------------------------------------------------------------------------------------- the checkpoint
-// `continuity_checkpoints` and `continuity_renew_calls` (Overlord spec §3.3.2 C37, §3.3.11 H12, W1a, the renewal act; migration
-// 75). ONE writer, the generations lane, through `putCheckpoint`, `claimRenewCall` and `answerRenewCall`; the card's gatherer
+// `continuity_checkpoints` and `continuity_renew_calls` (Overlord spec §3.3.2 C37, §3.3.11 H12, W1a, the renewal act; its
+// migration). ONE writer, the generations lane, through `putCheckpoint`, `claimRenewCall` and `answerRenewCall`; the card's gatherer
 // reads the checkpoint of the generation that ended last (`checkpointBefore`), the lane the renew calls of one generation
 // (`renewCallsOf`) and a coordinator's rulings (`rulingRowsOf`, which reads mail and writes nothing). A failed statement
 // answers ok: false, never a throw; a row this build cannot read fails the read whole, never a partial row.

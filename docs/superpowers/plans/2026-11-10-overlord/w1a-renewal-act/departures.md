@@ -129,10 +129,10 @@ own row and no state column.
   renews again with its tries starting at 1, so a claim keyed by (generation, try) left every later renewal of that row
   without a call. `continuity_renew_calls` is keyed by (generation, episode, try), the episode being the wall time the
   generation entered `clearing` (set once on entry, kept while it retries). The table is new in this piece, so its key
-  changed in place in migration 75.
+  changed in place in this piece's migration (76 at the PR; it may move at landing).
 - **soft-renewals-are-rows** (found by the simulator). The soft budget counted one stamp per generation row
   (`softRenewalObservedMs`), so a generation that renewed softly twice counted once, and a shadow walk that repeats was
-  unbudgeted. Each soft due the lane feeds is now a row of `continuity_soft_renewals` (migration 75), counted per identity
+  unbudgeted. Each soft due the lane feeds is now a row of `continuity_soft_renewals` (this piece's migration), counted per identity
   and term in observed time. The old column has no writer and is left as it is.
 - **handover-belongs-to-its-renewal.** The notes door keeps one handover note per generation (`ON CONFLICT DO NOTHING`), so
   a generation that renews a second time still holds its first renewal's note. The walk's `handover` event takes a note only
