@@ -1,5 +1,5 @@
 /**
- * The `overlord-history` op (Overlord W1, plan `docs/superpowers/plans/2026-11-14-overlord-w1/w1-board-history.md`,
+ * The `overlord-history` op (Overlord W1, the board-and-history plan `w1-board-history.md`,
  * Task 3; spec 2026-11-09 §3.2, C47; the coordinator's rulings F2, F5 and R5).
  *
  * It runs `ccd/history/overlord-worker.mjs` in a `node:worker_threads` worker inside the agent's process, so a long

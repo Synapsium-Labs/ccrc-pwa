@@ -1,4 +1,4 @@
-// The agent's `overlord-history` op (Overlord W1, plan docs/superpowers/plans/2026-11-14-overlord-w1/w1-board-history.md,
+// The agent's `overlord-history` op (Overlord W1, the board-and-history plan w1-board-history.md,
 // Tasks 3 and 4; ruled F2, F5, R5, R6).
 //
 // A REAL agent over loopback. The op's worker entry is injected through the resolver seam, so each case points it at a
