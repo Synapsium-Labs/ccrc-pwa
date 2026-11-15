@@ -436,12 +436,15 @@ describe('the radar lane', () => {
       const bobDone = new Promise<void>((r) => { bobRead = r; });
       // Proj-b's io calls in flight while `hang` is set: the first answer is not the end of proj-b's reads.
       let bobInFlight = 0;
+      const realTimers = { setTimeout, clearTimeout };   // captured before the fake clock is installed: the cap below is real time
+      let bobComplete: () => void = () => undefined;
+      const bobSettled = new Promise<void>((r) => { bobComplete = r; });   // proj-b has nothing in flight and both stats done
       let bobStatsDone = 0;   // the probe is stat'd before and after its ranges (pinned above): its second stat ends proj-b's chain
       const inBob = (p: string): boolean => hang && p.includes(`${path.sep}proj-b${path.sep}`);
       const track = async <T,>(p: string, run: () => Promise<T>): Promise<T> => {
         if (!inBob(p)) return run();
         bobInFlight += 1;
-        try { return await run(); } finally { bobInFlight -= 1; }
+        try { return await run(); } finally { bobInFlight -= 1; if (bobInFlight === 0 && bobStatsDone >= 2) bobComplete(); }
       };
       const io: FleetIO = {
         ...localIO,
@@ -465,10 +468,15 @@ describe('the radar lane', () => {
       const pass = w.sweepRadar(recs, NOW + 1000);
       await bobDone;                                              // proj-b answered, on the real event loop
       // Wait for the rest of proj-b's chain to finish: the first answer is not its last I/O (wave 5i added the stat after the
-      // ranges), and on a loaded box it is still in flight when the clock advances. Bounded, and asserted below.
-      for (let turn = 0; turn < 1000 && (bobInFlight > 0 || bobStatsDone < 2); turn += 1) await new Promise<void>((r) => setImmediate(r));
+      // ranges), and on a loaded box it is still in flight when the clock advances. The wait is on the fixture's completion
+      // event, bounded by a generous REAL-time cap (never the faked setTimeout): a slow read completes, a hang fails below.
+      const CAP_MS = 10_000;
+      let capTimer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        await Promise.race([bobSettled, new Promise<void>((r) => { capTimer = realTimers.setTimeout(r, CAP_MS); })]);
+      } finally { realTimers.clearTimeout(capTimer); }
       await new Promise<void>((r) => setImmediate(r));
-      expect([bobInFlight, bobStatsDone], 'proj-b\'s reads never finished: the case would pass or fail on timing alone').toEqual([0, 2]);
+      expect([bobInFlight, bobStatsDone], `proj-b's reads did not finish within ${CAP_MS} ms of real time: the case would pass or fail on timing alone`).toEqual([0, 2]);
       await vi.advanceTimersByTimeAsync(30_000);                  // half the lane's 60 s cadence
       await pass;
       expect(keys(w), 'the deadline kept the old map, or took proj-b with it').toEqual([BOB]);
