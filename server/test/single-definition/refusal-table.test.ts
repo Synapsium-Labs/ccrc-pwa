@@ -72,8 +72,9 @@ const OVERLORD_GROUPS: Readonly<Record<string, readonly string[]>> = {
   NOTE_REFUSALS: Object.values(NOTE_REFUSALS),
   PROBE_REFUSALS: Object.values(PROBE_REFUSALS),
   TIMER_REFUSALS: Object.keys(TIMER_REFUSALS),
-  // Hand-registered: LANE_ARM_REFUSALS' comment does not name the Overlord, and only its `lane-gated` is a route word.
-  'LANE_ARM_REFUSALS#lane-gated': LANE_ARM_REFUSALS.filter((w) => w === 'lane-gated'),
+  // Hand-registered: LANE_ARM_REFUSALS' comment does not name the Overlord, and only its `lane-gated` and the replay
+  // quiz's `baseline-missing` are route words of the table.
+  'LANE_ARM_REFUSALS#lane-gated,baseline-missing': LANE_ARM_REFUSALS.filter((w) => w === 'lane-gated' || w === 'baseline-missing'),
 };
 
 /** The two directions' findings, pure over the table, the code's words, the Overlord's words and the data. */

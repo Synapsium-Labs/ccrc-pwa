@@ -33,13 +33,10 @@ import {
   type DelegationRecoveryState,
 } from '../src/coord/delegation-model.js';
 import {
-  DelegationDurability,
   decodeDelegationCheckpoint,
   encodeDelegationCheckpoint,
-  type DelegationApplyOutcome,
-  type DelegationCheckpointChange,
-  type DelegationDurabilityDeps,
 } from '../src/coord/delegation-checkpoint.js';
+import { DelegationDurability, type DelegationApplyOutcome, type DelegationCheckpointChange, type DelegationDurabilityDeps } from '../src/coord/delegation-durability.js';
 import { nodeDelegationFilePort } from '../src/coord/delegation-file-port.js';
 import {
   DELEGATION_BUCKET_REPLACED,

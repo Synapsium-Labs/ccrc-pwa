@@ -60,31 +60,25 @@ import {
 import { nodeDelegationFilePort } from '../src/coord/delegation-file-port.js';
 import {
   DELEGATION_CHECKPOINT_FILE,
-  DELEGATION_DURABILITY_EDGES,
   DELEGATION_RECOVERY_PHASES,
   DelegationCheckpointBuilder,
   DelegationCheckpointError,
   COORDINATION_RESTORE_MARKER_FILE,
   DELEGATION_REPAIR_FULL_MS,
   DELEGATION_RESTORE_IN_PROGRESS,
-  DelegationDurability,
   DelegationEvidenceIndex,
   assertDelegationCheckpointProjectable,
   decodeDelegationCheckpoint,
   encodeDelegationCheckpoint,
-  isDelegationCheckpointKebab,
   recoverDelegation,
-  recoverDelegationFromFiles,
   recoverDelegationState,
   repairDelegationProjection,
-  type DelegationDurabilityDeps,
-  type DelegationDurabilityEdge,
-  type DelegationDurableBatch,
   type DelegationProjectionPort,
   type DelegationProjectionRepairReport,
 } from '../src/coord/delegation-checkpoint.js';
+import { DELEGATION_DURABILITY_EDGES, DelegationDurability, isDelegationCheckpointKebab, recoverDelegationFromFiles, type DelegationDurabilityDeps, type DelegationDurabilityEdge, type DelegationDurableBatch } from '../src/coord/delegation-durability.js';
 import { unreadableDelegationBucketResult } from '../src/coord/delegation-ingest.js';
-import type { DelegationApplyOutcome } from '../src/coord/delegation-checkpoint.js';
+import type { DelegationApplyOutcome } from '../src/coord/delegation-durability.js';
 import * as modelNs from '../src/coord/delegation-model.js';
 import { oldRuleCheckpoint } from './delegationOldRuleFixture.js';
 import { callsIn, parsedFile, symbolOf } from './scan/symbols.js';
