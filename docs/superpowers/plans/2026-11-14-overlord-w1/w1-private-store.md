@@ -718,7 +718,8 @@ existing pin's title ("coord.db's recorded tables") stays true.
 ### Task 3: The privacy journal, on the kernel, with its boot coherence
 
 Needs authority journal A0 merged: this task creates no adapter, and uses `server/src/chainedJournalFile.ts` over
-`server/src/appendOnlyFile.ts` as `w1-authority-journal.md` (PR A0) states their contract (open question 1).
+`server/src/appendOnlyFile.ts` as `w1-authority-journal.md` (PR A0) states their contract (open question 1): `ChainedJournalFile<E>`'s `read`,
+`appendNext` and `cutAside`, and the named error unions.
 
 **Files:**
 - Create: `server/src/operatorModel/privacyJournal.ts` (L1: `PRIVACY_JOURNAL_FORMAT`, `PrivacyJournalError`,
@@ -750,15 +751,17 @@ export function privacyCoherence(journal: { kind: 'absent' } | { kind: 'read'; h
 
 **The privacy journal's use of the adapters** (their signatures and error unions are the authority plan's, cited, not
 restated):
-- The store's open calls the adapter's read, which verifies the whole file through the kernel. A torn tail is healed
-  into `privacy-journal.torn/` by the adapter's heal, through the port's one cut operation, before `privacyCoherence`
-  is asked. A malformed file and an unmeasured read are the coherence's `refuse` arm, each with its own code, never
-  folded into one.
-- `recordMessage`, inside its `tx()` (checked with `DatabaseSync#isTransaction`), takes the journal's highest id from
-  a read, asks `nextMessageId`, and calls `appendNext`, which re-reads and verifies the file itself on every call: no
-  snapshot is held across records. A file that moved between the two reads is refused by `appendNext`, rolls the
-  insert back and answers `journal-unwritable`; so does any refusal with `mayApply: true`, and the next record starts
-  above whatever the journal then holds.
+- The store's open calls `ChainedJournalFile.read()`, which verifies the whole file through the kernel and holds no
+  snapshot. A torn tail is healed by the adapter's `cutAside({ kind: 'tail', plan }, privacyJournalTornDir)`, the
+  port's one cut operation (it creates the directory at 0700 and keeps the torn bytes), before `privacyCoherence` is
+  asked. A malformed file and an unmeasured read are the coherence's `refuse` arm, each with its own code, never folded
+  into one.
+- `recordMessage`, inside its `tx()` (checked with `DatabaseSync#isTransaction`), calls `appendNext(check)`, which
+  re-reads and verifies the whole file on every call. `check` receives that verified read, takes the journal's highest
+  id from it, asks `nextMessageId` with the store's highest, and answers `go` with the `privacy-message-issued` entry,
+  or `stop` on a `malformed` read; so the id and the append come from one read, and no snapshot is held across
+  records. A `stop` or any append error rolls the insert back and answers `journal-unwritable` (or
+  `journal-unreadable` for a malformed file), and the next record starts above whatever the journal then holds.
 
 - [ ] **Step 1: Failing tests:**
   - `privacyCoherence` over every row of open question 10, and both sides of each: the journal one ahead, equal, one
@@ -776,8 +779,8 @@ restated):
 - [ ] **Step 2: Run.** Red. **Step 3: Implement.** **Step 4: Run** these, the kernel's and the adapters' own suites,
   `chained-journal-formats.test.ts`, `rings/*.test.ts`, `sim/mutation-floors.test.ts` and both `tsc` runs: green.
 - [ ] **Step 5: Mutation.** Let `privacyCoherence` read a journal behind as `coherent`: red. Append after the insert
-  instead of before: the fault case reds. Keep the open's snapshot and append with it again: the two-in-a-row case
-  reds. Revert each. Register `privacyCoherence` and the format's entry validator in `MUTANT_SETS`.
+  instead of before: the fault case reds. Take the id from the open's read instead of `check`'s: the two-in-a-row
+  case reds. Revert each. Register `privacyCoherence` and the format's entry validator in `MUTANT_SETS`.
 - [ ] **Step 6: Commit.** `feat(operator-model): the privacy journal on the chained kernel, with the highest message id and boot coherence (H27)`
 
 ### Task 4: The snapshot, the restore set and the deny path
