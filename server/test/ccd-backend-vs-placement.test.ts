@@ -125,6 +125,9 @@ describe('the four callers now ask the backend question', () => {
       .toContain('_is_anthropic_backend');
     expect(code.find((l) => l.includes('-n "$SPAWN_EFFORT"')))
       .toContain('_is_anthropic_backend');
+    // D-8631: the effort default asks BOTH named backends — a Codex lane takes it too, a third backend does not.
+    expect(code.find((l) => l.includes('-n "$SPAWN_EFFORT"')))
+      .toContain('_is_codex_backend');
   });
 
   it('placement keeps asking the PLACEMENT question', () => {

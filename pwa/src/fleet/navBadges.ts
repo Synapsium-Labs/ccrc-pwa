@@ -8,6 +8,7 @@ import { ACTIVE_RUN_STATES } from '../../../shared/api';
 import type { WaitingView } from '../../../shared/ledgers';
 import { needsYou, needsYouCount, runsNeedingYou } from '../ledgers/needsYou';
 import { useFleetChrome } from './FleetChrome';
+import { useHeard } from './useHeard';
 import { operatorAsk } from './rollup';
 import { isRunClosed, runState } from './runWords';
 
@@ -90,17 +91,14 @@ export function placeBadge(id: string, badges: NavBadges): { count: number; word
   return { count: 0, word: '' };
 }
 
-/** The three counts, from the shell's fleet store. */
+/** The three counts, from the shell's fleet store: the rows and runs it has heard (`useHeard`, the one rule). */
 export function useNavBadges(): NavBadges {
   const useStore = useFleetChrome().store;
-  const sessions = useStore((s) => s.sessions);
-  const fleetFrameSeen = useStore((s) => s.fleetFrameSeen);
-  const runs = useStore((s) => s.runs);
-  const runsFrameSeen = useStore((s) => s.runsFrameSeen);
+  const { sessions, runs } = useHeard(useStore);
   const waiting = useStore((s) => s.waiting);
   return {
-    waiting: waitingOnYou(fleetFrameSeen ? sessions : null),
-    runsNeedYou: runsNeedYou(runsFrameSeen ? runs : null, fleetFrameSeen ? sessions : null),
-    waitingItems: waitingItemsCount(waiting, fleetFrameSeen ? sessions : null, runsFrameSeen ? runs : null),
+    waiting: waitingOnYou(sessions),
+    runsNeedYou: runsNeedYou(runs, sessions),
+    waitingItems: waitingItemsCount(waiting, sessions, runs),
   };
 }

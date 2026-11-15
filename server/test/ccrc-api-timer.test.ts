@@ -105,6 +105,20 @@ describe('ccrc-api timer set', () => {
     expect(seen).toEqual([]);
   });
 
+  it('a binding flag before the duration and the note is refused bad-args for its position, not as a typed identity (review 2064 F7)', async () => {
+    for (const args of [['set', '--run', '5', '2h', 'n'], ['set', '--programme', 'prog-a', '2h', 'n'], ['set', '--run=5', '2h', 'n']]) {
+      const r = await run(args);
+      const b = JSON.parse(r.stdout) as { error: string; detail: string };
+      expect([r.status, b.error], args.join(' ')).toEqual([2, 'bad-args']);
+      expect(b.detail, args.join(' ')).toContain(`timer set takes the duration and the note first, then ${args[1]}`);
+      expect(b.detail, args.join(' ')).not.toContain('identity');
+    }
+    // Any other flag in the first place is still a typed identity.
+    const r = await run(['set', '--fromId', 'lane-b-project-a', '2h', 'n']);
+    expect((JSON.parse(r.stdout) as { detail: string }).detail).toContain("the identity is this pane's");
+    expect(seen).toEqual([]);
+  });
+
   it('a set with no note, or nothing at all, refuses, unsent', async () => {
     for (const args of [['set'], ['set', '2h']]) {
       expect((await run(args)).status, args.join(' ')).toBe(2);

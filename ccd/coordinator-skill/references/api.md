@@ -143,6 +143,17 @@ routes alike — answers when this box's server has no coordination database
 wired in at all. It is not a per-call failure to retry; it is a fact about
 the box, the same as `unsupported`: stop and report it to the operator.
 
+**Timers.** `ccrc-api timer set <duration> <note>`, then at most one of
+`--run <id>` or `--programme <slug>` (a duration of `90m`, `2h` or `3d`),
+`timer list` and `timer cancel <id>`; the identity is the pane's on all three. A
+timer bound with `--run <id>` lasts only as long as that run: when the run
+closes, the timer lane cancels it `run-closed` and sends NO mail, so it never
+wakes its setter. A timer bound with `--programme <slug>` is cancelled
+`programme-ended`, also without mail, when that programme's plan ends. So a
+worker that counts a timer as its wake (worker clause 17) binds it to the run
+only when the run's close should end the wait too; a coordinator that briefs a
+worker to wait on a timer says which.
+
 **Landing writes.** `fixesMain` is the coordinator's or the operator's to set
 or clear, never a worker's. For a PR with no run, use
 `POST /api/landing/entries`; to replace its order edges or `fixesMain`, use

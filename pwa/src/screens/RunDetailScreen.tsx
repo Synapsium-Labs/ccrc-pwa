@@ -47,6 +47,7 @@ import { runTimerSections } from '../session/timersWords';
 import { runQueryOf, programmeIsOpenable, programmePath, runPath, runsSearchPath, sessionPath } from '../lib/routes';
 import { useLocation } from '../lib/router';
 import { useFleetStore, type FleetStore } from '../stores/fleet';
+import { useHeardRuns } from '../fleet/useHeard';
 import './run-detail.css';
 
 type Record_ = { kind: 'loading' } | { kind: 'ok'; answer: RunRecordAnswer } | { kind: 'missing' } | { kind: 'failed' };
@@ -276,7 +277,10 @@ export function RunDetailScreen({ id, store = useFleetStore, pane = false }: { i
   const sessions = store((s) => s.sessions);
   const frameSeen = store((s) => s.fleetFrameSeen);
   const liveRuns = store((s) => s.runs);
-  const runsFrameSeen = store((s) => s.runsFrameSeen);
+  // The runs heard, for the Resume answer and the re-read below; `liveRuns` is the store's runs as they stand, which the
+  // open run's override reads (D-5545).
+  const heardRuns = useHeardRuns(store);
+  const runsHeard = heardRuns !== null;
   const stallQuietMs = store((s) => s.stallQuietMs);
   const recordRun = state.kind === 'ok' ? state.answer.run : null;
   // The live runs frame wins for an open run, so a page beside the board cannot disagree with its row (D-5545); a closed run
@@ -288,8 +292,8 @@ export function RunDetailScreen({ id, store = useFleetStore, pane = false }: { i
   useEffect(() => {
     const inFrame = recordRun !== null && liveRuns.some((r) => r.id === recordRun.id);
     if (inFrame) wasLive.current = true;
-    else if (wasLive.current && runsFrameSeen) { wasLive.current = false; retry(); }
-  }, [liveRuns, recordRun, runsFrameSeen, retry]);
+    else if (wasLive.current && runsHeard) { wasLive.current = false; retry(); }
+  }, [liveRuns, recordRun, runsHeard, retry]);
   const now = useNow(run !== null && anyDispatchPending([run]) ? 1_000 : 30_000);
   const side = useSide(id, readRun);
   const items = useSide(id, readItems);
@@ -334,7 +338,7 @@ export function RunDetailScreen({ id, store = useFleetStore, pane = false }: { i
   const presence = coordinatorPresence(run.claimedBy, coordSession, frameSeen);
   // Resume (spec §8.4, §9.5, A55): the server's verdict on the coordinator, and the run open or its programme with no open run;
   // a runs frame not yet heard hides it.
-  const programHasOpenRun = runsFrameSeen ? programsWithOpenRun(liveRuns).has(run.program) : null;
+  const programHasOpenRun = heardRuns === null ? null : programsWithOpenRun(heardRuns).has(run.program);
   const resumable = run.claimedBy !== null && resumeShown(run, presence, programHasOpenRun);
   const pr = worker?.pr ?? null;
   const spend = side === undefined ? undefined : runSpendLine(side.spend)?.short;

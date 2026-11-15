@@ -10,12 +10,13 @@
 
 **Spec:** the rulings in `docs/superpowers/specs/2026-08-10-architecture-ddd-clean-solid.md` ("Rulings recorded for ARCH-02b") and O9 (a) in `docs/superpowers/specs/2026-10-19-ccrc-consolidation-wave-design.md`; the scope is issue #2006. There is no separate design spec: the design is the section below.
 
-**Status:** the operator ruled Q1 to Q8 on 2026-11-06 (D-8048). The answers close each question under Operator Rulings, at the end of this plan. Only Part A of Task 2, the two list fixes, starts now, in a PR of its own. Everything else waits for Task 0 (Q5). On 2026-11-10 the operator added one context, C10 Session host, in the session-host report's ruling Q13 (`docs/superpowers/specs/2026-11-09-session-host-research.md`, §6.1 and §8 A4). Task 7 gives it a home and orders its PRs against slices 6, 9, 12 and 13 (D-8272).
+**Status:** the operator ruled Q1 to Q8 on 2026-11-06 (D-8048). The answers close each question under Operator Rulings, at the end of this plan. Only Part A of Task 2, the two list fixes, starts now, in a PR of its own. Everything else waits for Task 0 (Q5). On 2026-11-10 the operator added one context, C10 Session host, in the session-host report's ruling Q13 (`docs/superpowers/specs/2026-11-09-session-host-research.md`, §6.1 and §8 A4). Task 7 gives it a home and orders its PRs against slices 6, 9, 12 and 13 (D-8272). On 2026-11-14 the operator's ruling S1 settled Task 0 (D-8634): the split starts now, though other programmes are still open, and every slice gives way to open PRs. Task 1, which moves nothing, came first.
 
 ## Ledger
 
 - **D-8048 (2026-11-06)** — `ccd-file-split-plan`: assemble `ccd/ccd` at install from fixed libraries, move functions in 19 pure slices, tighten the growth check, then repeat for `ccd/ccrc`. Measured at `4c677d328`.
 - **D-8272 (2026-11-11)** — `ccd-file-split-session-host`: the session-host ruling Q13 adds context C10 Session host to `ccd/contexts.tsv`, homed in `ccd/lib/sessionhost.sh` (Task 7). It owns hosting, observing and driving sessions behind the one `SessionHost` interface of the session-host report's §8 A4, and its PRs are ordered against slices 6, 9, 12 and 13.
+- **D-8634 (2026-11-14)** — `ccd-file-split-start`: the operator's ruling S1 settles Task 0. The split starts now, though other programmes (session-continuity, Overlord) are still open, and open PRs always go first: before each slice, `ccd-split.py preflight` and `move` refuse any function whose lines an open PR head's diff touches, naming each blocking head, from a heads file the coordinator writes with one gh call. The slice waits, or another slice moves. Task 1 moves nothing and comes first.
 
 ## Global Constraints
 
@@ -100,7 +101,7 @@ Everything here was measured at `4c677d328` unless it says otherwise. Hunk count
 - Merge conflicts. The line-2 conflict is already gone, and git merges non-overlapping hunks in one file. The real relief is that the lane serialises per file, so feature PRs in different libraries stop queueing behind each other. Q4 ruled for that: one lane per library.
 - The spine stays hot. In the 32 commits since 2026-10-27, 16 hunks hit the dispatcher `case`. A new verb still edits the spine, by a line or two.
 - **CI time does not fall.** Every ccd test sources the whole program, so the test map selects the same tests. The earlier claim that this split helps CI is not supported.
-- Shellcheck memory does not fall. Q3 ruled for the spliced pass, which still peaks near 6.2 GB, so the macOS CI legs keep skipping. One 4,999-line library peaked at 1.0 GB.
+- Shellcheck memory does not fall; it rises. Q3 ruled for the spliced pass. `ccd/ccd` alone peaked at 6.2 GB; the program text is about 6% longer and takes about 11% more memory (9.09 GB against 8.16 GB, both measured on one Mac, D-8048), so the spliced pass is estimated near 6.9 GB, and the macOS CI legs keep skipping. One 4,999-line library peaked at 1.0 GB.
 
 ## The Assembled Artifact
 
@@ -136,6 +137,7 @@ The redactor pins stay: node runs those two files, so they stay files. `transcri
 
 - **Only the two list fixes start now (Q5),** as Part A of Task 2, in a separate PR. They touch no `ccd/ccd` line, so they sit outside the lane.
 - **Everything else is held** for the refactor, any open PR on `ccd/ccd` and a check of #2006's conditions (Task 0). That covers Task 1, Part B of Task 2 (the lint rebaseline and the program row) and Task 3 onward.
+- **S1 lifts that hold (2026-11-14, D-8634).** The split goes ahead while other programmes are open. An open PR no longer holds the whole split; it holds only the functions its diff touches, through the yield check in `ccd-split.py` (Task 1). Its work always goes first.
 - **Tasks 3 to 5 and the slices need the lane.** Open on `ccd/ccd` at `4c677d328`: #1114 (169+ lines), #2347 and #2307 (3 lines each, spine only). All three have merged since, as has #2374, the one open at the ruling, so none is open at `5dd21cdb2`. #1611 touches `ccd/ccrc` only.
 - **A move syncs like any other PR, and is regenerated only on a conflict.** `main` takes about 40 commits a day and about 3 of them touch `ccd/ccd`, so a clean move PR is left alone. On a conflict in `ccd/ccd` or `ccd/contexts.tsv`, the move is rebuilt inside a `git merge` commit (Task 6 Step 7), so the branch never needs a force-push and no exception is asked for.
 - **A move yields to features.** `preflight` refuses a slice while any open PR has a hunk in one of its functions. The move waits; the feature does not.
@@ -166,14 +168,18 @@ This gates Task 1, Part B of Task 2 and Task 3 onward (Q5). Only Part A of Task 
 
 **Files:** none.
 
-- [ ] **Step 1: Read the open PRs on the shared files.**
+- [x] **Step 1: Read the open PRs on the shared files.**
 
 Run: `gh pr list --repo Synapsium-Labs/ccrc-pwa --state open --limit 100 --json number,files --jq '.[] | select(any(.files[]; .path=="ccd/ccd")) | .number'`
 Expected: nothing listed. An open PR holds the start, as #2374 did at the ruling.
 
-- [ ] **Step 2: Confirm the refactor has closed, and issue #2006's own conditions.** The 2026-10-30 ruling on #2006 starts this work after the refactor closes, and 8 architecture epics were still open at the 2026-11-06 ruling. The W5 ccd series and the K5/K16 ccd tasks have merged, and no other ccd programme is open. Not measured here. A programme still open stops everything Task 0 gates, and goes to the operator.
+  *Settled by S1 (2026-11-14, D-8634):* an open PR no longer holds the start. Each slice gives way to the PRs open when it moves (Task 1's yield check), so this list is now an input to `preflight`, not a gate. *Refreshed 2026-11-14 with git only,* at `origin/main` `391b5c65b`: every PR head fetched (`git fetch origin '+refs/pull/*/head:refs/remotes/origin/pr/*'`, 1,815 heads), less those whose number a squash subject on `origin/main` names or that `origin/main` contains, less those that leave `ccd/ccd` alone from their merge-base. Four remain: #2803 (2 lines changed, pushed 2026-11-14), #2309 (+228/-38, pushed 2026-11-05), and #107 and #170 (September). git cannot tell open from closed, so their state was read with one `gh pr list` on 2026-11-15: only #2803 is open; #2309, #107 and #170 are closed. The three heads D-8565 named (#2735, #2739, #2742) have all merged. Against today's slice table, #2803 touches `_reg_purge` (slice 13), so every other slice is clear.
+
+- [x] **Step 2: Confirm the refactor has closed, and issue #2006's own conditions.** The 2026-10-30 ruling on #2006 starts this work after the refactor closes, and 8 architecture epics were still open at the 2026-11-06 ruling. The W5 ccd series and the K5/K16 ccd tasks have merged, and no other ccd programme is open. Not measured here. A programme still open stops everything Task 0 gates, and goes to the operator.
 
   *Measured 2026-11-13 (D-8565):* the refactor has **closed**. All six architecture epics are done, and the closure is recorded in `docs/superpowers/programs/architecture-refactor.md`. The other condition still **holds** the split: three open session-continuity PRs edit `ccd/ccd` (#2735, #2739, #2742), so another ccd programme is open. Step 1 answers the same. Tick this step when that programme's ccd work has landed.
+
+  *Ruled S1, 2026-11-14 (D-8634):* the split starts now even though other programmes (session-continuity, Overlord) are still open. Their work goes first, function by function: before each slice, the yield check refuses to move code that any open PR touches, and the slice waits or another slice moves. Task 1 moves nothing and comes first.
 
 ---
 
@@ -181,7 +187,7 @@ Expected: nothing listed. An open PR holds the start, as #2374 did at the ruling
 
 ### Task 1: The pure-move pin and the slice tool
 
-**Held (Q5):** this starts only once Task 0 passes.
+**Started under S1 (2026-11-14, D-8634).** Task 0 is settled; this task moves no function.
 
 **Files:**
 - Create: `.github/ci/ccd-split.py`, `.github/ci/ccd-split-slices.tsv`, `server/test/ccd-split-pin.test.ts`, `server/test/ccdSplit.ts`, `server/test/ccd-split-records/` (empty)
@@ -189,13 +195,13 @@ Expected: nothing listed. An open PR holds the start, as #2374 did at the ruling
 
 **Interfaces:**
 - Produces: `spliceCcd(main: string, libs: readonly string[]): string`, the body of today's `ccdSource()` as a pure function.
-- Produces: `.github/ci/ccd-split.py plan|preflight|move|unmove <slice>`. `plan` prints functions, lines, runs and citations, and with `--record` writes the record. `preflight` exits 0 only when no open PR has a hunk in a slice function; it reads PR heads with `git fetch origin pull/<n>/head`, because `gh pr diff` gave nothing usable for these PRs (measured). `move` writes the library, pointer lines, the `__CCD_LIBS` word and reordered `contexts.tsv` rows. `unmove` puts each region back at its pointer. Both refuse `die`, `_roster_fp_to`, `_ccd_lib_load` and every K row, and refuse any region that fails Step 4's check.
+- Produces: `.github/ci/ccd-split.py plan|preflight|move|unmove <slice>`. `plan` prints functions, lines, runs and citations, and with `--record` writes the record. `preflight` exits 0 only when no open PR has a hunk in a slice function. It reads the PR heads from `--heads FILE`, which the caller writes (S1: one `gh pr list --json number,headRefOid` call, then `git fetch origin '+refs/pull/*/head:refs/remotes/origin/pr/*'`), one `<sha-or-ref> [label]` per line, because `gh pr diff` gave nothing usable for these PRs (measured). The tool itself never calls gh and never fetches, so its tests stay offline. `move` takes the same `--heads` and runs the same check first. `move` writes the library, pointer lines, the `__CCD_LIBS` word and reordered `contexts.tsv` rows. `unmove` puts each region back at its pointer. Both refuse `die`, `_roster_fp_to`, `_ccd_lib_load` and every K row, and refuse any region that fails Step 4's check.
 - Produces: `.github/ci/ccd-split-slices.tsv`, rows `<move-order>\t<library>\t<context>\t<name-regex>`. A function belongs to the first row in file order that matches, so the catch-all rows sit last in the file whatever their move order.
 - Produces: `server/test/ccd-split-records/<NN>-<library>.json`: `{library, functions: string[]}`, and nothing derived. No digest and no count is stored, because either would go stale while the PR queues.
 - Produces: `moveBase(env, root): string`, the sha a run judges against. In a `merge_group` run it is `merge_group.base_sha` from `GITHUB_EVENT_PATH`, the same base `ci.yml` uses, so an entry ahead in the queue is not counted as part of a move. Otherwise it is `merge-base(origin/main, HEAD)`.
 - Produces: `programDump(tree): string`, the `declare -f` and `declare -p` output of a tree sourced on a fixture home, with the shell's own variables and `__CCD_LIBS` removed by name.
 
-- [ ] **Step 1: Write the failing tests** in `ccd-split-pin.test.ts`.
+- [x] **Step 1: Write the failing tests** in `ccd-split-pin.test.ts`.
 
 ```ts
 it('FIXTURE: a diff that adds a pointer is a pure move', () => {
@@ -232,14 +238,14 @@ it('REAL: a record added in this diff holds', () => {
 
 `moveBase` is read at run time, so a change that lands on `main` while the move is queued sits on both sides of every comparison and cannot eject it.
 
-- [ ] **Step 2: Run them to see them fail.**
+- [x] **Step 2: Run them to see them fail.**
 
 Run: `cd server && ./node_modules/.bin/vitest run test/ccd-split-pin.test.ts --maxWorkers=2`
 Expected: FAIL, `pureMoveVerdict` not defined.
 
-- [ ] **Step 3: Implement** `pureMoveVerdict(base: Tree, head: Tree): {pure: boolean, differing: string[]} | null`, `duplicateDefinitions(tree: Tree): string[]`, `regionProblems(text: string): string[]`, `programDump` and `moveBase` in `ccdSplit.ts`. Purity has two parts. First, the one `__CCD_LIBS=(` line is taken out of each side, and the head's words must equal the base's plus exactly the libraries the diff adds, order kept; anything else answers `differing: ['__CCD_LIBS']`. Second, `spliceCcd` of both sides, with `# @ccd-lib:` lines and each library's header block (everything above its first marker, comment lines only) removed, compares byte for byte. Records follow `waiversAdded`: only a file `moveBase` does not hold counts.
+- [x] **Step 3: Implement** `pureMoveVerdict(base: Tree, head: Tree): {pure: boolean, differing: string[]} | null`, `duplicateDefinitions(tree: Tree): string[]`, `regionProblems(text: string): string[]`, `programDump` and `moveBase` in `ccdSplit.ts`. Purity has two parts. First, the one `__CCD_LIBS=(` line is taken out of each side, and the head's words must equal the base's plus exactly the libraries the diff adds, order kept; anything else answers `differing: ['__CCD_LIBS']`. Second, `spliceCcd` of both sides, with `# @ccd-lib:` lines and each library's header block (everything above its first marker, comment lines only) removed, compares byte for byte. Records follow `waiversAdded`: only a file `moveBase` does not hold counts.
 
-- [ ] **Step 4: Implement `ccd-split.py`.** Fill the slice table from the table in Task 6. A region is found like this:
+- [x] **Step 4: Implement `ccd-split.py`.** Fill the slice table from the table in Task 6. A region is found like this:
 
 1. A definition is a column-0 `name() {` line (729 at `4c677d328`).
 2. Its end is the first line, before the next definition, at which `bash -n` accepts the span with exit 0 and empty stderr. Stderr matters: an unclosed heredoc is only a warning. This handles all three forms without a list: 67 one-liners, 659 that close on a column-0 `}`, and 3 that close on `; }` (`_ws_supervise`, `_lc_intent`, `_lc_done`). It costs 3,929 `bash -n` runs at this size.
@@ -249,14 +255,25 @@ Expected: FAIL, `pureMoveVerdict` not defined.
 
 `ccdCallGraph` does not use this rule: it stops at the next definition, so it sees a one-liner's following statements as its body. Step 5 of Task 6 allows for that.
 
-- [ ] **Step 5: Prove the tool on a scratch copy.**
+- [x] **Step 5: Prove the tool on a scratch copy.**
 
 Run: `.github/ci/ccd-split.py plan docs`
 Expected: 8 functions, about 3,709 lines, 1 run. Then, in a scratch copy with the `__CCD_LIBS` line added (Task 4 has not landed yet), `move` every slice in table order. After each one, check that `spliceCcd` equals today's text apart from that line, and that `programDump` is unchanged. The dump is the check that sees a swallowed global; the splice cannot, because it puts moved bytes back where they were. At the end, inline all the libraries at the foot and check `programDump` again.
 
-- [ ] **Step 6: Run the tests, then commit.**
+- [x] **Step 6: Run the tests, then commit.**
 
 Exit count: `ccd/ccd` unchanged, its function count equal to `moveBase`'s; every region passes `regionProblems`; 19 slices match in `programDump`. The pin suite runs on every PR through the guard list.
+
+*Measured 2026-11-14 (D-8634), at `origin/main` `391b5c65b`:* `ccd/ccd` is 48,588 lines with 811 definitions. `check-regions` over it finds 811 regions and no problem (22 s). `plan docs` answers 8 functions, 3,709 lines, 1 run. In a scratch copy with the `__CCD_LIBS` line added and `_ccd_lib_load`'s file list read from it, `move` took all 19 slices in move order. After each one, the splice equalled the starting text apart from that line, `pureMoveVerdict` against the slice before answered pure, `programDump` was byte-identical, and no function was defined twice. Inlining every library at the foot left the dump unchanged apart from `__CCD_LAYOUT`, which only the load sets. The end state: a 4,750-line spine with 34 functions (the 29 K rows, `die` among them; `_roster_fp_to`; `_ccd_lib_load`; and the three C10 `_tmx*` functions, which Task 7 homes), 22 libraries, the largest `accounts.sh` at 5,465 lines, and the 932 `contexts.tsv` rows reordered into program order. The 19 moves took 18 s together.
+
+The slice counts have grown since `4c677d328`, as the table's note says they would. `plan` now answers, in move order: 1, 7, 4, 18, 8, 40, 71, 8, 80, 25, 3, 63, 147, 31, 26, 9, 94, 59 and 83 functions. The regexes in `ccd-split-slices.tsv` are a first cut of the table's "Rows it takes" column; `plan` recomputes each slice before it moves.
+
+*Deviations found:*
+- `fast-plan.mjs` is not edited. Its `GUARD_TESTS` already match `server/test/<name>-pin.test.ts`, so the pin suite runs on every PR as the plan wants. The suite takes about 3 s.
+- `regionProblems` asks the tool (`ccd-split.py check-regions`), so the region rule has one implementation, in Python.
+- The end search tries only the lines where `}` can be a reserved word: at the start of a line or after a blank, `;`, `&` or `|`, and before the end, a blank, `;`, `&`, `|`, `)` or a redirection. A function's closing line always has one, so the first line `bash -n` accepts is the same.
+- `pureMoveVerdict` also refuses a diff that adds a library with no `__CCD_LIBS` line to load it, and `move` refuses to write one, so a move cannot land before Task 4.
+- The S1 yield check maps each hunk to functions at the head's merge-base with HEAD, by name, so a head opened against an older `main` is still read right. An insertion touches the functions on both sides of it. A head the repository does not hold refuses.
 
 ### Task 2: The ratchet reads the program as one, and CI follows the libraries
 
@@ -303,7 +320,7 @@ Exit count: every `ccd/lib/*.sh` listed (4 today); `GROWTH_FILES` holds no `ccd/
 - Produces: the `ccd/ccd + ccd/lib` pin measured over one spliced temp file, findings mapped back to `<file>:<line>`.
 - Produces: `programRow(base, head, root): GrowthRow`, named `ccd (program)`: the net code lines of `ccd/ccd` plus every `ccd/lib/*.sh` not named `ccrc-*`, summed at each sha.
 
-- [ ] **Step 1: Write the failing rows.**
+- [x] **Step 1: Write the failing rows.**
 
 ```ts
 it('FIXTURE: moving a function between ccd/ccd and a library leaves the count alone', () => { /* same count both ways */ });
@@ -342,15 +359,15 @@ it('FIXTURE: no waiver or exemption can name the program row', () => {
 
 The rows stand on the shrink rule that exists today. `netGrowth` gives a new library a base of 0, so a move shows that library's whole size as its delta, and `growthOver` passes it only because `ccd/ccd` shrinks by at least as much. The spike measured the two as exactly equal in all 19 slices.
 
-- [ ] **Step 2: Run to see them fail.**
+- [x] **Step 2: Run to see them fail.**
 
 Run: `cd server && ./node_modules/.bin/vitest run test/shellcheck-ratchet.test.ts test/growth-check.test.ts --maxWorkers=2`
 
-- [ ] **Step 3: Change the ratchet** (Q3). `pinKey` keeps the group; the group is linted once, over `spliceCcd`. `ccd/lib/ccrc-settings.sh` takes its own pin of 6, because the sweeps source it and ccd does not. Correct the header's claim.
+- [x] **Step 3: Change the ratchet** (Q3). `pinKey` keeps the group; the group is linted once, over `spliceCcd`. `ccd/lib/ccrc-settings.sh` takes its own pin of 6, because the sweeps source it and ccd does not. Correct the header's claim.
 
-- [ ] **Step 4: Rebaseline** the group from 142 to the measured count (154 at `4c677d328`), with the `codes` map the run prints. The comment on the pin says why this one rise happened, and the PR lists the new findings by code.
+- [x] **Step 4: Rebaseline** the group from 142 to the measured count (154 at `4c677d328`), with the `codes` map the run prints. The comment on the pin says why this one rise happened, and the PR lists the new findings by code.
 
-- [ ] **Step 5: Add the program row.** `armedGrowth` adds `programRow`.
+- [x] **Step 5: Add the program row.** `armedGrowth` adds `programRow`.
 
 The per-file rule stays, with one addition: a member of the program that is absent at head counts as a shrink of its whole size, so `git revert` and `unmove` pass. Every other file keeps today's rule.
 
@@ -360,15 +377,23 @@ Two kinds of entry raise the program row, each by its own limit, so a feature ne
 
 No entry names the row itself: `ccd (program)` stays out of the file list that `parseExemptions` and `parseWaiverFiles` check against, so they refuse it. `growthVerdicts` decides this row last instead. It adds up the entries that applied to a member's row, and the program row fails only over `GROWTH_LIMIT` plus that sum. An entry that did not apply raises nothing: one over its limit, one on a member that is not over, or an exemption whose diff edits the check's own files.
 
-- [ ] **Step 6: Run, then commit.**
+- [x] **Step 6: Run, then commit.**
 
 Exit count: group pin = measured value; total ratchet files unchanged plus 1; `ccd/ccd` unchanged; `ccd (program)` delta 0 on a fixture move.
+
+*Measured 2026-11-15 (D-8048), at `origin/main` `2126f46db`,* started under the operator's ruling S1 (2026-11-14), which the Task 1 branch records. Part A landed in #2400. The group pin stood at 63, not 142: the SC2100, SC2128 and SC2178 triage PRs (#2619, #2637) lowered it. Summed per file it is 57 over `ccd/ccd` and its three libraries, plus 6 in `ccrc-settings.sh`. Linted once over the splice (51,666 lines, 28 s on a development Mac), the group counts **82**, with no line changed. That one text adds 37 findings a file read alone hides (SC2128 14, SC2100 11, SC2178 8, SC2179 3, SC2190 1), all names shellcheck does not scope by function or file, and drops 12 SC2034 that only a file read alone reports. So the ratchet goes from 63 to 88 in all (82 and 6), and the rise like for like is 57 to 82. Over the same splice a pure move cannot change the count; the fixture row moves one function and finds the same finding at its new file and line. The program row at the same sha: `ccd/ccd` 21,814 net code lines, the three libraries 2,516, `ccd (program)` 24,330.
+
+*Deviations found:*
+- `spliceCcd` is Task 1's (#2810), which has not merged. This PR adds it to `ccdWsHelpers.ts` byte for byte as that branch does, so the two merge clean in either order.
+- The pin's comment sits on `GROUP` in `shellcheck-ratchet.test.ts`, because the baseline is JSON and holds no comment.
+- The lint also refuses library code that no pointer splices back (above a library's first marker, or a region nothing points at), naming each line, so moved code cannot drop out of the one text.
+- Both checks take one rule for the program's members: `ccd/ccd`, and every `ccd/lib/*.sh` not named `ccrc-*`. A file under `ccd/lib/` that is not a top-level `.sh` keeps a pin of its own.
 
 ### Task 3: Citations out of `ccd/ccd`
 
 **Files:** Modify: `ccd/ccd` (comments only), `server/test/ccd-split-pin.test.ts`, `server/test/citations.test.ts`
 
-- [ ] **Step 1: First commit: the pin.** Add this row, and commit it alone. It passes on the old code, where the diff changes nothing.
+- [x] **Step 1: First commit: the pin.** Add this row, and commit it alone. It passes on the old code, where the diff changes nothing.
 
 ```ts
 it('REAL: a diff that changes only comments in ccd/ccd leaves programDump alone', () => { /* moveBase against HEAD, computed now */ });
@@ -376,14 +401,24 @@ it('REAL: a diff that changes only comments in ccd/ccd leaves programDump alone'
 
 `bash` drops comments from the dump, so a comment edit cannot move it.
 
-- [ ] **Step 2: Second commit: the rewrite.** Rewrite each `ccd:NNNN` and `<file>.<ext>:NN` in `ccd/ccd` to a symbol (`ccd#_ws_least_loaded`), following the header of `citations.test.ts`.
+- [x] **Step 2: Second commit: the rewrite.** Rewrite each `ccd:NNNN` and `<file>.<ext>:NN` in `ccd/ccd` to a symbol (`ccd#_ws_least_loaded`), following the header of `citations.test.ts`.
 
-- [ ] **Step 3: Verify.**
+- [x] **Step 3: Verify.**
 
 Run: `grep -cE 'ccd:[0-9]{3,5}\b|\.(ts|tsx|mjs|sh):[0-9]+\b' ccd/ccd`
 Expected: `0` (150 today). `BASELINE` in `citations.test.ts` drops by the same count in this PR.
 
 Exit count: 0 citation lines in `ccd/ccd`; `programDump` byte-identical.
+
+*Measured 2026-11-15 (D-8048):* 149 of the 150 citation lines in `ccd/ccd` now cite a symbol, 159 of its 161 citations, and `BASELINE` drops by those 159, from 1,242 to 1,083. Every line the rewrite changes is a `#` line, the file's text with those lines left out is unchanged, `bash -n` passes, and `programDump` is byte-identical before and after. Every symbol a new citation names exists. Of the 156 server suites that read ccd's source through `ccdSource()`, two go red on a development Mac with the old `ccd/ccd` too (`ccd-account-auth`, `ccd-inflight`), and four that went red under load pass alone; nothing else is red.
+
+*Deviations found:*
+- One line keeps its two citations: the `prnumber` sentence in `_pr_py`'s embedded python. It is a `#` line inside a heredoc, so it is data in the function's body, not a bash comment, and rewriting it moves `programDump`. It waits for a change that edits `_pr_py` anyway. Step 3's grep therefore answers `1`, not `0`.
+- The S1 yield check: the one open PR on `ccd/ccd` changes two comment lines in `_reg_purge`'s field-count paragraph. Neither holds a citation, so no citation was deferred for it, and `ccd/ccd` merges with that PR's head without a conflict (`git merge-tree`; the head's other conflicts are with `main` itself, the same with or without this change). The three citations lower in `_reg_purge` are rewritten.
+- The line numbers predate the first commit that holds them, so `git log -S` cannot say what they pointed at. Each target was read from the sentence around it: the function it names, or the code it describes.
+- A citation of a line in the same function became plain words ("above", "below", "further down"): a function citing itself by name says nothing.
+- The pin has a second row, a fixture: a bash comment edit leaves the dump alone, and a `#` line of heredoc data moves it. That second case is the `_pr_py` line above.
+- The pin needs `programDump` and `moveBase`, which Task 1 adds, so this work sits on Task 1's branch.
 
 ### Task 4: One library table, and every scanner on it
 
@@ -800,5 +835,8 @@ The operator ruled all eight questions on 2026-11-06 (D-8048), each as recommend
 
 **Later ruling (2026-11-10, D-8272): does the harness layer get its own context?** This is the session-host report's question 13 (§4, "Relation to the file-split plan"). The plan gave a context a home only in a catch-all library of its own context, and Q8 caps the spine at 10 lines per PR. So the shared gates (`host_send_keys`, `host_capture` and `observe_gate`, with their tables) had no place to go.
 *Ruled: a Session host context.* One new context in `ccd/contexts.tsv`, C10, has a home library, `ccd/lib/sessionhost.sh`. It owns hosting, observing and driving behind the one `SessionHost` interface of the report's §8 A4, and its PRs are ordered against slices 6, 9, 12 and 13. Task 7 holds the home and the order.
+
+**Later ruling (2026-11-14, D-8634), S1: may the split start while other programmes are open?** Task 0 held everything for any open PR on `ccd/ccd`, and session-continuity and Overlord still had some.
+*Ruled: start now, and let open work go first.* Each slice gives way to open PRs: before it moves, the yield check refuses any function an open PR head touches, and the slice waits or another slice moves. Task 1 moves nothing and comes first.
 
 **For the record:** the second reason in issue #2006 is out of date and should be corrected there. `ccrc restamp` is refused for `ccd/ccd`, and the line-2 stamp no longer conflicts (#1525).

@@ -65,12 +65,14 @@ import {
   DelegationCheckpointBuilder,
   DelegationCheckpointError,
   COORDINATION_RESTORE_MARKER_FILE,
+  DELEGATION_REPAIR_FULL_MS,
   DELEGATION_RESTORE_IN_PROGRESS,
   DelegationDurability,
   DelegationEvidenceIndex,
   assertDelegationCheckpointProjectable,
   decodeDelegationCheckpoint,
   encodeDelegationCheckpoint,
+  isDelegationCheckpointKebab,
   recoverDelegation,
   recoverDelegationFromFiles,
   recoverDelegationState,
@@ -82,12 +84,16 @@ import {
   type DelegationProjectionRepairReport,
 } from '../src/coord/delegation-checkpoint.js';
 import { unreadableDelegationBucketResult } from '../src/coord/delegation-ingest.js';
-import * as checkpointNs from '../src/coord/delegation-checkpoint.js';
 import type { DelegationApplyOutcome } from '../src/coord/delegation-checkpoint.js';
 import * as modelNs from '../src/coord/delegation-model.js';
 import { oldRuleCheckpoint } from './delegationOldRuleFixture.js';
 import { callsIn, parsedFile, symbolOf } from './scan/symbols.js';
+import { declaringFile, programMembers, programSource, programTexts } from './scan/programView.js';
 import { mulberry32 } from './fakeTime.js';
+
+/** D-8641 (the large-file pilot): the source scans below read this file's PROGRAM (`scan/programView.ts`), the file plus
+ *  the modules its code moves to, so a pure move neither reds a scan nor lets one read less code. */
+const CHECKPOINT_SOURCE = 'server/src/coord/delegation-checkpoint.ts';
 
 // A pass-through of the journal's append planner that a test can switch to "skip everything". `createLease` calls the planner after its
 // own checks, so no real input makes the planner skip the entry it was handed; this is the only way to reach that branch (fix round 1, M6).
@@ -3499,7 +3505,7 @@ describe('no-compaction / hold table (W3-M38): holds are computed and tested, an
       expect(p.match(/O_APPEND/g)?.length ?? 0).toBe(1);
     });
     it('the checkpoint module cuts the journal in ONE place (the heal, at the plan\'s offset), renames only its two temp files, and opens the journal only for append or read', () => {
-      const c = code('delegation-checkpoint.ts');
+      const c = stripComments(programSource(CHECKPOINT_SOURCE));
       // wave 4 (D-7021): the compaction's two renames join the checkpoint's and the quarantine's, each of a temp onto its own file, the carried
       // file's FIRST (a crash between them leaves a valid retained set)
       expect(c.match(/\.rename\(/g), 'the checkpoint, quarantine, carried and journal temp files').toEqual(['.rename(', '.rename(', '.rename(', '.rename(']);
@@ -3507,7 +3513,7 @@ describe('no-compaction / hold table (W3-M38): holds are computed and tested, an
       expect(c).toMatch(/this\.port\.rename\(temp, kept\)/);
       // the compaction's renames and temp removals, read from the parse by symbol (ARCH-06): the carried file's rename comes first, and
       // `removeTemp` names the two temps and nothing else (W4-CM16)
-      const CHECKPOINT_TS = 'server/src/coord/delegation-checkpoint.ts';
+      const CHECKPOINT_TS = declaringFile(CHECKPOINT_SOURCE, 'DelegationDurability');
       const compact = symbolOf(CHECKPOINT_TS, 'DelegationDurability.compactJournal');
       const argsOf = (callee: string): string[] => callsIn(compact).filter((x) => x.callee === callee).map((x) => x.args.map((a) => a.text).join(', '));
       expect(argsOf('this.port.rename'), 'the carried file, then the journal').toEqual(['carriedTemp, this.carriedPath', 'journalTemp, this.journalPath']);
@@ -3554,7 +3560,10 @@ describe('no-compaction / hold table (W3-M38): holds are computed and tested, an
         }
       };
       walk(srcDir);
-      expect(hits.sort()).toEqual(['coord/delegation-checkpoint.ts', 'coord/delegation-journal.ts']);
+      // the applier's file and the file side of recovery's, wherever the pilot's moves put them (D-8641), and the journal module
+      const homes = ['DelegationDurability', 'recoverDelegationFromFiles']
+        .map((n) => path.relative('server/src', declaringFile(CHECKPOINT_SOURCE, n)).split(path.sep).join('/'));
+      expect(hits.sort()).toEqual([...new Set([...homes, 'coord/delegation-journal.ts'])].sort());
     });
   });
 });
@@ -3565,21 +3574,40 @@ describe('the pure/impure split is explicit, and nothing pure mints an ID or rea
   const dir = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'src', 'coord');
   const strip = (s: string): string => s.split('\n').filter((l) => !/^\s*(\*|\/\/|\/\*)/.test(l)).join('\n');
   const BANNER = /^\/\/ IMPURE SHELL:/m;
+  const NAMES_IO = /node:fs|fsp\.|fsConstants|node:sqlite|\.\/db\.js|\.\/store\.js|CoordStore|process\.|readFileSync|writeFileSync|openSync/;
+  const importsOf = (code: string): string[] => [...code.matchAll(/^import\s[^;]*?from\s+'([^']+)';/gms)].map((m) => m[1]!);
+  /** The module's text; for the checkpoint, its program (D-8641), so a pure move keeps every scan below on the same code. */
+  const textOf = (file: string): string => (file === 'delegation-checkpoint.ts' ? programSource(CHECKPOINT_SOURCE) : readFileSync(path.join(dir, file), 'utf8'));
 
-  for (const file of ['delegation-journal.ts', 'delegation-checkpoint.ts']) {
-    it(`${file}: above the IMPURE SHELL banner the code names no filesystem, no SQLite and no store`, () => {
-      const src = readFileSync(path.join(dir, file), 'utf8');
+  it('delegation-journal.ts: above the IMPURE SHELL banner the code names no filesystem, no SQLite and no store', () => {
+    const src = readFileSync(path.join(dir, 'delegation-journal.ts'), 'utf8');
+    const at = src.search(BANNER);
+    expect(at).toBeGreaterThan(0);
+    const pure = strip(src.slice(0, at));
+    expect(pure).not.toMatch(NAMES_IO);
+    expect(importsOf(pure).sort()).toEqual(['../../../shared/api.js', '../chainedJournal.js', './delegation-lease-state.js', './delegation-model.js']);
+  });
+  // D-8641: over the checkpoint's program. The banner stands in the impure shell's file alone; the homes of the codec, the builder and
+  // the pure recovery name no filesystem, SQLite or store above it (or anywhere, in a file without it); and the program imports from
+  // outside itself exactly what the one file imported on the day of the pin.
+  it('delegation-checkpoint.ts: above the IMPURE SHELL banner the code names no filesystem, no SQLite and no store', () => {
+    const texts = programTexts(CHECKPOINT_SOURCE);
+    const shell = declaringFile(CHECKPOINT_SOURCE, 'recoverDelegationFromFiles');
+    expect(texts.filter((t) => BANNER.test(t.text)).map((t) => t.file), 'the banner, in the impure shell\'s file and no other').toEqual([shell]);
+    const pureHomes = [...new Set(['encodeDelegationCheckpoint', 'DelegationCheckpointBuilder', 'DelegationRecovery'].map((n) => declaringFile(CHECKPOINT_SOURCE, n)))];
+    for (const home of pureHomes) {
+      const src = texts.find((t) => t.file === home)!.text;
       const at = src.search(BANNER);
-      expect(at).toBeGreaterThan(0);
-      const pure = strip(src.slice(0, at));
-      expect(pure).not.toMatch(/node:fs|fsp\.|fsConstants|node:sqlite|\.\/db\.js|\.\/store\.js|CoordStore|process\.|readFileSync|writeFileSync|openSync/);
-      const imports = [...pure.matchAll(/^import\s[^;]*?from\s+'([^']+)';/gms)].map((m) => m[1]);
-      expect(imports.sort()).toEqual(file === 'delegation-journal.ts'
-        ? ['../../../shared/api.js', '../chainedJournal.js', './delegation-lease-state.js', './delegation-model.js']
-        : ['../../../shared/api.js', './delegation-compaction.js', './delegation-journal.js', './delegation-lease-state.js', './delegation-model.js', 'node:path']);
-    });
+      if (home === shell) expect(at, home).toBeGreaterThan(0);
+      expect(strip(at >= 0 ? src.slice(0, at) : src), home).not.toMatch(NAMES_IO);
+    }
+    const own = new Set(programMembers(CHECKPOINT_SOURCE).map((f) => `./${path.basename(f, '.ts')}.js`));
+    const imports = [...new Set(texts.flatMap((t) => importsOf(strip(t.text))).filter((s) => !own.has(s)))];
+    expect(imports.sort()).toEqual(['../../../shared/api.js', './delegation-compaction.js', './delegation-journal.js', './delegation-lease-state.js', './delegation-model.js', 'node:path']);
+  });
+  for (const file of ['delegation-journal.ts', 'delegation-checkpoint.ts']) {
     it(`${file}: no randomness and no clock anywhere in the module (they are injected)`, () => {
-      const src = strip(readFileSync(path.join(dir, file), 'utf8'));
+      const src = strip(textOf(file));
       expect(src).not.toMatch(/(?<!deps\.)\brandomUUID\(|\brandomBytes\b|Math\.random|Date\.now|new Date\(|performance\.now|node:crypto/);
       // R76 M2: Web Crypto's randomness too (the heal names its quarantine file from a digest, and a digest is the ONLY Web Crypto use)
       expect(src).not.toMatch(/getRandomValues|crypto\.randomUUID|webcrypto/);
@@ -3589,7 +3617,7 @@ describe('the pure/impure split is explicit, and nothing pure mints an ID or rea
     });
   }
   it('the lease adapter calls the INJECTED randomUUID in one place only, after the identity and path checks', () => {
-    const src = strip(readFileSync(path.join(dir, 'delegation-checkpoint.ts'), 'utf8'));
+    const src = strip(programSource(CHECKPOINT_SOURCE));
     expect(src.match(/this\.deps\.randomUUID\(\)/g)).toHaveLength(1);
     const at = src.indexOf('this.deps.randomUUID()');
     expect(src.lastIndexOf('byIdentity(identity)', at)).toBeGreaterThan(0);
@@ -3597,7 +3625,7 @@ describe('the pure/impure split is explicit, and nothing pure mints an ID or rea
   });
   it('the delegation modules import the one RFC 8785 writer: neither defines a second canonical writer', () => {
     for (const file of ['delegation-journal.ts', 'delegation-checkpoint.ts']) {
-      const src = strip(readFileSync(path.join(dir, file), 'utf8'));
+      const src = strip(textOf(file));
       expect(src).not.toMatch(/JSON\.stringify\([^)]*\)\s*\+\s*'\\n'|function canonical|const canonical[A-Z]\w* =/);
     }
   });
@@ -4240,8 +4268,8 @@ describe('D-5836 R2: every case where the per-pass repair must still take the FU
   /** `repairProjection({ perPass: true })`, reached through a cast so this file is type-clean before the option exists. */
   const perPassOf = (d: DelegationDurability): Promise<PerPassReport> =>
     (d as unknown as { repairProjection(o?: { perPass?: boolean }): Promise<PerPassReport> }).repairProjection({ perPass: true });
-  /** The forced-full interval; the fallback keeps these rows running (and failing on their own assertions) before it is exported. */
-  const FULL_MS = ((checkpointNs as unknown as Record<string, unknown>)['DELEGATION_REPAIR_FULL_MS'] as number | undefined) ?? 3_600_000;
+  /** The forced-full interval, the export itself (a named import since D-8641, so the pilot's move repoints it). */
+  const FULL_MS: number = DELEGATION_REPAIR_FULL_MS;
 
   interface Lane {
     h: Harness;
@@ -4414,8 +4442,8 @@ describe('D-5836 R2: every case where the per-pass repair must still take the FU
   });
 
   it('D-5836 R2: the forced-full period is the exported DELEGATION_REPAIR_FULL_MS, one hour', () => {
-    // The `?? 3_600_000` above keeps the other rows running before the export exists; this row is what a missing or renamed export fails.
-    const exported = (checkpointNs as unknown as Record<string, unknown>)['DELEGATION_REPAIR_FULL_MS'];
+    // A missing or renamed export fails the typecheck now (a named import, D-8641); this row pins its value.
+    const exported: unknown = DELEGATION_REPAIR_FULL_MS;
     expect(typeof exported, 'delegation-checkpoint.ts exports DELEGATION_REPAIR_FULL_MS').toBe('number');
     expect(exported).toBe(3_600_000);
   });
@@ -4953,7 +4981,7 @@ describe('run 762: the zero-delta Bash retirement door, its lease guard and its 
     expect(h.uuidCalls.n, 'no UUID was minted').toBe(uuidsBefore);
     expect(readDisk(dir), 'the journal and the checkpoint are unchanged').toEqual(disk);
     expect(dur.state().checkpoint).toBe(cp0);
-    expect(checkpointNs.isDelegationCheckpointKebab('zero-delta-call'), 'the refusal word is admitted to the kebab scan').toBe(true);
+    expect(isDelegationCheckpointKebab('zero-delta-call'), 'the refusal word is admitted to the kebab scan').toBe(true);
     const control = await dur.createLease(request(K2, 'wt-k2'));
     expect(control.kind, 'the control: K2 changed its listing and is leased').toBe('created');
     expect(h.uuidCalls.n, 'one UUID, for the control').toBe(uuidsBefore + 1);
@@ -4994,11 +5022,12 @@ describe('run 762: the zero-delta Bash retirement door, its lease guard and its 
   // ── RB18: the one code that deletes ─────────────────────────────────────────────────────────────────────────────────
 
   it('RB18: the builder\'s only code that deletes a mapping entry or an activity row is retireZeroDeltaBash, and since wave 4 retireBehindCut (C1, D-7001) (a census of code lines, by enclosing method)', () => {
-    const file = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'src', 'coord', 'delegation-checkpoint.ts');
+    // D-8641: over the checkpoint's program, each member read from its own start (no method carries across a file boundary)
     let method = '(file)';
     let inClass = false;
     const hits: string[] = [];
-    for (const raw of readFileSync(file, 'utf8').split('\n')) {
+    for (const raw of programTexts(CHECKPOINT_SOURCE).flatMap((t) => [null, ...t.text.split('\n')])) {
+      if (raw === null) { method = '(file)'; inClass = false; continue; }
       if (/^\s*(\*|\/\/|\/\*)/.test(raw)) continue;                         // a comment line is not code
       const l = raw.replace(/\s\/\/.*$/, '');                               // nor is a trailing comment
       if (/^(?:export )?(?:abstract )?class [A-Za-z_]\w*/.test(l)) { inClass = true; method = '(class)'; }

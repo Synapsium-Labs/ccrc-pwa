@@ -43,7 +43,8 @@ import {
   prNumberFromEnv, parseExemptions, exemptionsOnMain, matchExemptions, GROWTH_EXEMPTIONS_FILE,
   GROWTH_EXEMPTIONS_STAMP, GROWTH_MACHINERY, overLine, growthVerdicts, armedGrowth, gitRead, type GrowthRow, type GrowthExemption,
   GROWTH_WAIVERS_DIR, GROWTH_WAIVERS_LEGACY_FILE, parseWaiverFiles, waiversAdded, waiversAt, waiversInDiff, type GrowthWaiver,
-  definedDNumbers,
+  definedDNumbers, PROGRAM_ROW, isProgramMember, programRow, parseCapFiles, parseFrozenFiles, stageFileName, stageFor, SPINE_LIMIT,
+  type Stage, type StageOf,
 } from './growthCheck.js';
 import { EXEMPTION_SET_STAMPS } from './rings/exemption-age.data.js';
 import { parseFile } from './scan/parse.js';
@@ -1058,6 +1059,169 @@ describe('growthCheck: every large file is measured, a new file waives only in i
     const items = waiverItemsAtHead();
     expect(items.filter((i) => typeof (JSON.parse(i.text) as { createdAt?: unknown }).createdAt !== 'string').map((i) => i.name))
       .toEqual([]);
+  });
+});
+
+describe('growthCheck: the program row, ccd/ccd and its libraries as one total (D-8048)', () => {
+  const today = new Date('2026-11-15T12:00:00Z');
+  const row = (file: string, delta: number): GrowthRow => ({ file, base: 5000, head: 5000 + delta, delta, atBoth: true });
+  /** A library the diff adds: no base, so its whole size is its delta. */
+  const newLib = (n: number, file = 'ccd/lib/docs.sh'): GrowthRow => ({ file, base: 0, head: n, delta: n, atBoth: false });
+  /** A library the diff deletes (a revert, an `unmove`): its whole size is the shrink. */
+  const deletedLib = (n: number, file = 'ccd/lib/docs.sh'): GrowthRow => ({ file, base: -n, head: 0, delta: n, atBoth: false });
+  const program = (delta: number): GrowthRow => row(PROGRAM_ROW, delta);
+  const threeLibsAt = (delta: number): GrowthRow[] => ['a', 'b', 'c'].map((n) => row(`ccd/lib/${n}.sh`, delta));
+  const exemption = (o: Partial<GrowthExemption>): GrowthExemption => ({
+    pr: 1100, file: 'ccd/ccd', cap: 100, reason: 'a fixture', ruling: 'operator, a fixture', since: '2026-11-15', ...o,
+  });
+  const waiver = (o: Partial<GrowthWaiver>): GrowthWaiver => ({
+    file: 'ccd/lib/workspace.sh', maxDelta: 60, d: 'D-8048', reason: 'a fixture', added: '2026-11-15', createdAt: '2026-11-15', ...o,
+  });
+  const failing = (vs: readonly { file: string; fails: boolean }[]): string[] => vs.filter((v) => v.fails).map((v) => v.file);
+  const list = (...entries: unknown[]): string => JSON.stringify({ exemptions: entries });
+  const files = [...GROWTH_FILES, 'ccd/lib/workspace.sh'];
+
+  it('the program is ccd/ccd and every ccd/lib/*.sh not named ccrc-*', () => {
+    expect(PROGRAM_ROW).toBe('ccd (program)');
+    for (const f of ['ccd/ccd', 'ccd/lib/disk-retention.sh', 'ccd/lib/workspace.sh']) expect(isProgramMember(f), f).toBe(true);
+    for (const f of ['ccd/ccrc', 'ccd/lib/ccrc-settings.sh', 'ccd/lib/transcript.jq', 'ccd/lib/nested/x.sh', 'ccd/session-hook.sh']) {
+      expect(isProgramMember(f), f).toBe(false);
+    }
+  });
+
+  it('FIXTURE: a pure move passes: the new library against the shrink, and the program row at 0', () => {
+    expect(growthOver([newLib(1000), row('ccd/ccd', -1000), program(0)], [])).toEqual([]);
+  });
+
+  it('FIXTURE: a feature of 41 lines in a library is named, in the file and in the program', () => {
+    expect(growthOver([row('ccd/lib/workspace.sh', 41), program(41)], [])).toEqual(['ccd/lib/workspace.sh', PROGRAM_ROW]);
+  });
+
+  it('FIXTURE: 30 lines in each of three libraries passes every file and reds the program', () => {
+    expect(growthOver([...threeLibsAt(30), program(90)], [])).toEqual([PROGRAM_ROW]);
+  });
+
+  it('FIXTURE: shrinking one library cannot pay for growing two', () => {
+    expect(growthOver([row('ccd/lib/a.sh', -1000), row('ccd/lib/b.sh', 1000), row('ccd/lib/c.sh', 1000), program(1000)], []))
+      .toEqual([PROGRAM_ROW]);
+  });
+
+  it('FIXTURE: a revert passes: the deleted library is the shrink', () => {
+    expect(growthOver([row('ccd/ccd', 1000), deletedLib(-1000), program(0)], [])).toEqual([]);
+    // Only a member counts whole when deleted: any other listed file deleted is no shrink, as before.
+    expect(growthOver([row('ccd/ccd', 1000), { ...deletedLib(-1000), file: 'ccd/ccrc' }, program(1000)], []))
+      .toEqual(['ccd/ccd', PROGRAM_ROW]);
+  });
+
+  it('FIXTURE: the program row is never a shrink for another row, and no new file waives it', () => {
+    expect(growthOver([row('ccd/ccrc', 100), program(-1000)], [])).toEqual(['ccd/ccrc']);
+    const homeOf: HomeOf = () => ({ ring: 'L4', context: 'C3' });
+    expect(growthOver([program(100)], ['server/src/watchLane.ts'], homeOf)).toEqual([PROGRAM_ROW]);
+  });
+
+  it('FIXTURE: one waiver on a library covers its file up to maxDelta, and raises the program row by maxDelta', () => {
+    const verdicts = (lib: number, prog: number, maxDelta = 60) => {
+      const rows = [row('ccd/lib/workspace.sh', lib), program(prog)];
+      return growthVerdicts(rows, growthOver(rows, []), [], null, [], [waiver({ maxDelta })]);
+    };
+    expect(failing(verdicts(60, 60))).toEqual([]);
+    expect(failing(verdicts(60, GROWTH_LIMIT + 60)), 'the program at its limit plus the waiver').toEqual([]);
+    expect(failing(verdicts(60, GROWTH_LIMIT + 61)), 'one past it').toEqual([PROGRAM_ROW]);
+    // A waiver over its own limit applies to nothing, so it raises nothing.
+    expect(failing(verdicts(61, 61))).toEqual(['ccd/lib/workspace.sh', PROGRAM_ROW]);
+    // A waiver on a member that is not over raises nothing: the program is judged alone.
+    const notOver = [row('ccd/lib/workspace.sh', 30), row('ccd/lib/b.sh', 30), program(60)];
+    expect(failing(growthVerdicts(notOver, growthOver(notOver, []), [], null, [], [waiver({})]))).toEqual([PROGRAM_ROW]);
+    const v = growthVerdicts([row('ccd/lib/workspace.sh', 60), program(60)], ['ccd/lib/workspace.sh', PROGRAM_ROW], [], null, [], [waiver({})])
+      .find((x) => x.file === PROGRAM_ROW)!;
+    expect(v.title).toBe(`${PROGRAM_ROW}: delta +60 (GROWTH_OVER, raised by 60: its members' entries)`);
+  });
+
+  it('FIXTURE: an exemption on main for a member raises the program row by its cap; one that does not apply raises nothing', () => {
+    const rows = [row('ccd/ccd', 60), program(60)];
+    const over = growthOver(rows, []);
+    const named = [exemption({ pr: 1100, file: 'ccd/ccd', cap: 100 })];
+    expect(failing(growthVerdicts(rows, over, named, 1100, []))).toEqual([]);
+    expect(failing(growthVerdicts(rows, over, named, 1101, []))).toEqual(['ccd/ccd', PROGRAM_ROW]);
+    expect(failing(growthVerdicts(rows, over, named, 1100, ['server/test/growthCheck.ts']))).toEqual(['ccd/ccd', PROGRAM_ROW]);
+    // Past its cap, the exemption applies to nothing and raises nothing.
+    const past = [row('ccd/ccd', 101), program(101)];
+    expect(failing(growthVerdicts(past, growthOver(past, []), named, 1100, []))).toEqual(['ccd/ccd', PROGRAM_ROW]);
+    expect(growthVerdicts(past, growthOver(past, []), named, 1100, []).find((x) => x.file === PROGRAM_ROW)!.why)
+      .toBe(`${PROGRAM_ROW} grew by 101 net code lines, over the limit of ${GROWTH_LIMIT}`);
+  });
+
+  it('FIXTURE: the program row keeps the listed stage, whatever stage its members hold (D-8635)', () => {
+    const everywhere = (st: Stage): StageOf => () => st;
+    const frozen = everywhere({ stage: 'frozen' });
+    const capped = everywhere({ stage: 'capped', base: 9000, head: 9000, prior: 'frozen' });
+    const newCap = everywhere({ stage: 'capped', base: null, head: 9000, prior: 'frozen' });
+    for (const st of [frozen, capped, newCap]) expect(stageFor(st, PROGRAM_ROW)).toEqual({ stage: 'listed' });
+    expect(stageFor(frozen, 'ccd/ccd')).toEqual({ stage: 'frozen' });
+    // Frozen members: each is held at SPINE_LIMIT; the program stays at GROWTH_LIMIT, never SPINE_LIMIT.
+    const small = SPINE_LIMIT + 5;
+    expect(growthOver([row('ccd/ccd', small), program(small)], [], NO_HOME, frozen)).toEqual(['ccd/ccd']);
+    expect(growthOver([row('ccd/ccd', small), program(GROWTH_LIMIT + 1)], [], NO_HOME, frozen)).toEqual(['ccd/ccd', PROGRAM_ROW]);
+    // Capped members: no per-PR limit of their own, and still the program's total is bounded per PR.
+    expect(growthOver([row('ccd/ccd', GROWTH_LIMIT), program(GROWTH_LIMIT)], [], NO_HOME, capped)).toEqual([]);
+    expect(growthOver([row('ccd/ccd', 300), program(300)], [], NO_HOME, capped)).toEqual([PROGRAM_ROW]);
+    expect(growthOver([row('ccd/ccd', 300), program(300)], [], NO_HOME, newCap)).toEqual(['ccd/ccd', PROGRAM_ROW]);
+    // The verdicts agree: the program row is the listed row's verdict, never a cap's.
+    const rows = [row('ccd/ccd', 300), program(300)];
+    const v = growthVerdicts(rows, growthOver(rows, [], NO_HOME, capped), [], null, [], [], capped);
+    expect(failing(v)).toEqual([PROGRAM_ROW]);
+    expect(v.find((x) => x.file === PROGRAM_ROW)!.title).toBe(`${PROGRAM_ROW}: delta +300 (GROWTH_OVER)`);
+  });
+
+  it('FIXTURE: a cap or freeze cannot name the program row', () => {
+    const name = stageFileName(PROGRAM_ROW);
+    const cap = parseCapFiles([{ name, text: JSON.stringify({ file: PROGRAM_ROW, cap: 9000, d: 'D-8048', since: '2026-11-15' }) }], today);
+    expect(cap).toEqual({ entries: [], problems: [`${name}: file must not be the program row, ${PROGRAM_ROW}`] });
+    const freeze = parseFrozenFiles([{ name, text: JSON.stringify({ file: PROGRAM_ROW, d: 'D-8048', since: '2026-11-15' }) }], files, today);
+    expect(freeze.problems).toEqual([`${name}: file must be one of the listed files`]);
+  });
+
+  it('FIXTURE: no waiver or exemption can name the program row', () => {
+    expect(parseExemptions(list({ ...exemption({ file: PROGRAM_ROW }) }), files, today).problems).not.toEqual([]);
+    expect(parseWaiverFiles([{ name: 'D-8048-program.json', text: JSON.stringify(waiver({ file: PROGRAM_ROW })) }], files, today).problems)
+      .not.toEqual([]);
+  });
+
+  it('programRow sums the members at each sha, and armedGrowth adds it: a move between files leaves it at 0', (ctx) => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'growth-program-'));
+    ctx.onTestFinished(() => rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }));
+    const git = (...a: string[]) => execFileSync('git', a, { cwd: dir, encoding: 'utf8', stdio: 'pipe' }).trim();
+    const commit = (m: string) => { git('add', '-A'); git('commit', '-q', '-m', m); return git('rev-parse', 'HEAD'); };
+    const put = (f: string, text: string) => {
+      mkdirSync(path.dirname(path.join(dir, f)), { recursive: true });
+      writeFileSync(path.join(dir, f), text);
+    };
+    const fns = (from: number, to: number) => Array.from({ length: to - from }, (_, i) => `f${from + i}() {\n  echo ${from + i}\n}\n`).join('');
+    git('init', '-q');
+    git('config', 'user.name', 'fixture');
+    git('config', 'user.email', 'fixture@example.invalid');
+    git('config', 'gc.auto', '0');
+    git('config', 'maintenance.auto', 'false');
+    put('ccd/ccd', `#!/usr/bin/env bash\n${fns(0, 100)}`);
+    put('ccd/lib/ccrc-settings.sh', 'x=1\n');
+    const base = commit('base');
+    // The move: 60 functions (180 code lines) leave ccd/ccd for a new library, behind one pointer line.
+    put('ccd/ccd', `#!/usr/bin/env bash\n${fns(0, 40)}# @ccd-lib:moved\n`);
+    put('ccd/lib/moved.sh', `# a header\n# @ccd-lib:moved\n${fns(40, 100)}`);
+    const moved = commit('move');
+    expect(programRow(base, moved, dir)).toEqual({ file: PROGRAM_ROW, base: 300, head: 300, delta: 0, atBoth: true });
+    const armed = armedGrowth(growthFiles(base, moved, dir), dir, base, moved, {}, today);
+    expect(armed.rows.map((r) => r.file)).toContain(PROGRAM_ROW);
+    expect(failing(armed.verdicts)).toEqual([]);
+    // 30 lines in ccd/ccd and 30 in the library: each file passes, and the program, at +60, does not. ccrc-settings.sh
+    // is no member: its +99 is its own row, and the program's total leaves it out.
+    put('ccd/ccd', `#!/usr/bin/env bash\n${fns(0, 40)}${'echo a\n'.repeat(30)}# @ccd-lib:moved\n`);
+    put('ccd/lib/moved.sh', `# a header\n# @ccd-lib:moved\n${fns(40, 100)}${'echo b\n'.repeat(30)}`);
+    put('ccd/lib/ccrc-settings.sh', 'y=1\n'.repeat(100));
+    const grown = commit('grow both');
+    expect(programRow(moved, grown, dir).delta).toBe(60);
+    expect(failing(armedGrowth(growthFiles(moved, grown, dir), dir, moved, grown, {}, today).verdicts))
+      .toEqual(['ccd/lib/ccrc-settings.sh', PROGRAM_ROW]);
   });
 });
 
