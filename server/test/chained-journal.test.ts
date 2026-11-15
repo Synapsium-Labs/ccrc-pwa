@@ -18,8 +18,12 @@ const LOG_FIRST_KERNEL = 'server/src/journalKernel.ts';
 
 /** A file's code with its comments left out: every token, in order (a string or template's text stays; a comment never is one). */
 function codeWithoutComments(file: string): string {
-  const parsed = parsedFile(file);
-  const sf = ts.createSourceFile(file, parsed.text, ts.ScriptTarget.Latest, true);
+  return tokensOf(file, parsedFile(file).text);
+}
+
+/** The comment-free view of a source text: its tokens, in order, joined by one space (so `Date.now` reads `Date . now`). */
+function tokensOf(file: string, text: string): string {
+  const sf = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true);
   const parts: string[] = [];
   const walk = (n: ts.Node): void => {
     if (ts.isJSDoc(n)) return;
@@ -79,6 +83,57 @@ describe('structure: the kernel stands alone', () => {
     for (const file of [KERNEL, CANONICAL]) {
       expect(parsedFile(file).imports.some((i) => /journalKernel/.test(i.specifier)), file).toBe(false);
     }
+  });
+});
+
+// The clock, randomness and crypto-handle list the delegation files' scans use (`delegation-recovery.test.ts`'s "no randomness and
+// no clock anywhere in the module" row, and `delegation-model.test.ts`'s "calls no source of randomness or time"): the codec, the
+// chain and the canonical writer were under those scans before they moved here, so the scans move with them. Over the comment-free
+// token view, so a pattern allows the space the view puts between tokens.
+const CLOCK_OR_RANDOM: ReadonlyArray<readonly [string, RegExp]> = [
+  ['randomUUID', /\brandomUUID\b/],
+  ['randomBytes', /\brandomBytes\b/],
+  ['Math.random', /\bMath\s*\.\s*random\b/],
+  ['Date.now', /\bDate\s*\.\s*now\b/],
+  ['performance.now', /\bperformance\s*\.\s*now\b/],
+  ['getRandomValues', /\bgetRandomValues\b/],
+  ['webcrypto', /\bwebcrypto\b/],
+  ['globalThis.crypto', /\bglobalThis\s*\.\s*crypto\b/],
+  ['a crypto handle', /\bcrypto\s*\./],
+];
+/** The journal's own list adds any `new Date(` and `node:crypto`; the model's adds the argument-less `new Date()` only, because the
+ *  canonical instant check formats the instant it was given (`new Date(ms)`), and hashing is `canonical.ts`'s one import. */
+const KERNEL_ONLY: ReadonlyArray<readonly [string, RegExp]> = [['new Date(', /\bnew\s+Date\s*\(/], ['node:crypto', /node:crypto/]];
+const CANONICAL_ONLY: ReadonlyArray<readonly [string, RegExp]> = [['new Date()', /\bnew\s+Date\s*\(\s*\)/]];
+
+/** The names of the patterns a comment-free token view matches. Pure. */
+const clockOrRandomHits = (tokens: string, extra: ReadonlyArray<readonly [string, RegExp]>): string[] =>
+  [...CLOCK_OR_RANDOM, ...extra].filter(([, re]) => re.test(tokens)).map(([name]) => name);
+
+describe('purity: no clock, no randomness and no crypto handle in the kernel files', () => {
+  it('chainedJournal.ts names no clock, no randomness, no Web Crypto, no node:crypto and no new Date(', () => {
+    expect(clockOrRandomHits(codeWithoutComments(KERNEL), KERNEL_ONLY)).toEqual([]);
+  });
+
+  it('canonical.ts names no clock and no randomness, and takes only createHash from node:crypto', () => {
+    expect(clockOrRandomHits(codeWithoutComments(CANONICAL), CANONICAL_ONLY)).toEqual([]);
+    expect(parsedFile(CANONICAL).imports.map((i) => [i.specifier, [...i.names].sort()])).toEqual([['node:crypto', ['createHash']]]);
+  });
+
+  it('CONTROL: each pattern is seen in the token view, and a comment or a date given an instant is not', () => {
+    const planted = tokensOf('planted.ts', [
+      "import { createHash, randomBytes } from 'node:crypto';",
+      '// Date.now() in a comment is not code',
+      'const a = Date.now() + Math.random() + performance.now();',
+      'const b = randomUUID(); const c = globalThis.crypto.getRandomValues(new Uint8Array(1)); const d = webcrypto;',
+      'const e = new Date(); const f = new Date(5);',
+    ].join('\n'));
+    expect(clockOrRandomHits(planted, [...KERNEL_ONLY, ...CANONICAL_ONLY]).sort()).toEqual([
+      'Date.now', 'Math.random', 'a crypto handle', 'getRandomValues', 'globalThis.crypto', 'new Date(', 'new Date()', 'node:crypto',
+      'performance.now', 'randomBytes', 'randomUUID', 'webcrypto',
+    ].sort());
+    expect(clockOrRandomHits(tokensOf('quiet.ts', '// Date.now() and randomBytes, in a comment\nconst t = new Date(5);'), CANONICAL_ONLY)).toEqual([]);
+    expect(clockOrRandomHits(tokensOf('quiet.ts', "import { rfc8785Json } from './canonical.js';"), KERNEL_ONLY)).toEqual([]);
   });
 });
 

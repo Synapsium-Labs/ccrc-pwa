@@ -55,7 +55,7 @@ export function probeFormat(m: Kernel): Fmt<ProbeEntry> {
   return formatOver<ProbeEntry>(['probe'], (raw, fmt) => {
     if (!m.isRecord(raw)) throw fmt.fail('bad-field', 'a probe entry is not an object');
     m.chainedExactKeys(fmt, raw, ['kind', 'n'], 'a probe entry');
-    if (raw['kind'] !== 'probe') throw fmt.fail('bad-field', 'a probe entry has another kind');
+    if (raw['kind'] !== 'probe') throw fmt.fail('bad-field', `a probe entry has kind ${JSON.stringify(raw['kind'])}, not "probe"`);
     const n = raw['n'];
     if (typeof n !== 'number' || !Number.isSafeInteger(n) || n < 1) throw fmt.fail('bad-field', 'n is not a positive safe integer');
     return { kind: 'probe', n };
@@ -247,6 +247,8 @@ function groups(m: Kernel): { shared: Cases; decode: Cases; chain: Cases; heal: 
       refusal(line(concat(new Uint8Array([0xef, 0xbb, 0xbf]), sans(m.encodeChainedRecord(fmt, r1)))), 'bom', W);
       refusal(line(new Uint8Array(0)), 'blank-line', W);
       refusal(line(concat(sans(m.encodeChainedRecord(fmt, r1)), new Uint8Array([0x0d]))), 'crlf', W);
+      // A BOM and a CR on one line: the BOM is checked first, so it is what the line is refused for.
+      refusal(line(concat(new Uint8Array([0xef, 0xbb, 0xbf]), sans(m.encodeChainedRecord(fmt, r1)), new Uint8Array([0x0d]))), 'bom', W);
       refusal(line(new Uint8Array([0xff])), 'invalid-utf8', W);
       refusal(line(ENC.encode('{')), 'malformed-json', W);
       refusal(line(ENC.encode('[]')), 'bad-field', W);
@@ -456,6 +458,15 @@ const DECODE_SET: MutantSet<Kernel> = {
     { id: 'D17 digest not checked', old: "if (chainedRecordDigest(fmt, record) !== digest) refuse(", new: 'if (false) refuse(' },
     { id: 'D18 digest code swapped', old: "refuse(fmt, 'digest-mismatch'", new: "refuse(fmt, 'journal-id-mismatch'" },
     { id: 'D19 scanner misses a nested duplicate', old: 'if (keys.has(k)) {', new: 'if (depth === 0 && keys.has(k)) {' },
+    {
+      id: 'D20 CR checked before the BOM',
+      old: "  if (line.length >= 3 && line[0] === 0xef && line[1] === 0xbb && line[2] === 0xbf) refuse(fmt, 'bom', 'a byte-order mark', w);\n"
+        + "  if (line.length === 0) refuse(fmt, 'blank-line', 'an empty line', w);\n"
+        + "  if (line[line.length - 1] === 0x0d) refuse(fmt, 'crlf', 'a line ends in CR before its LF', w);\n",
+      new: "  if (line[line.length - 1] === 0x0d) refuse(fmt, 'crlf', 'a line ends in CR before its LF', w);\n"
+        + "  if (line.length >= 3 && line[0] === 0xef && line[1] === 0xbb && line[2] === 0xbf) refuse(fmt, 'bom', 'a byte-order mark', w);\n"
+        + "  if (line.length === 0) refuse(fmt, 'blank-line', 'an empty line', w);\n",
+    },
   ],
   suite(m) { const g = groups(m); return { ...g.shared, ...g.decode }; },
 };
