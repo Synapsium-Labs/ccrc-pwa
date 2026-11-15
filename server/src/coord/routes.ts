@@ -4295,7 +4295,7 @@ export function registerCoordRoutes(
    * enqueues. It follows the `GET /api/ledger` convention: box token, a read with no attribution to check, per-project
    * and REQUIRED. The order is computed on this read by `landingLine.ts#landingOrder` and never stored. A project with
    * no `landing_projects` row answers both flags `false`. `binding` (wave 5i) is decided on this read from the current facts and the watcher's
-   * latest control snapshot, never stored. The read is advisory in 5e (D-7626). The handler decides nothing: decide in L1, act here.
+   * latest control snapshot, never stored; the top-level `mainRedHold` is the hold as recomputed on this read from that snapshot, not the stored flag. The read is advisory in 5e (D-7626). The handler decides nothing: decide in L1, act here.
    */
   app.get('/api/landing', async (req, reply) => {
     if (!deps.coord) return notConfigured(reply);

@@ -207,7 +207,7 @@ export const RADAR_PASS_CONCURRENCY = 8;
 export type RadarPassRead = ProbeRead | ControlFailure;
 
 /** A bundle in which every document failed the same way (a deadline, a refused name, a directory that is not listed). */
-const allFailed = (f: ControlFailure): LandingControlRead => ({ lander: f, probe: f, health: f });
+export const allFailed = (f: ControlFailure): LandingControlRead => ({ lander: f, probe: f, health: f });
 
 /** One pass of the radar lane's reads: ONE listing, then each wanted project's `probe` at most `RADAR_PASS_CONCURRENCY`
  *  at a time, under ONE deadline that starts before the listing. A listing or a project that has not answered by

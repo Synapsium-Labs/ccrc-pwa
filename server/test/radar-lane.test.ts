@@ -979,9 +979,12 @@ describe('the radar lane composes the control bundle and the store apply', () =>
     plantRowIn(reg, 'claude-a-proj-a-alpha'); plantControl('proj-a');
     const ap = applies();
     vi.spyOn(coord, 'landingReadProjects').mockReturnValue({ ok: false, error: 'landing-db-unavailable', recovery: 'restart' } as never);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     const w = make();
     await w.sweepRadar(await readRegistry(localIO, testDeps(home).cfg), NOW);
+    await w.sweepRadar(await readRegistry(localIO, testDeps(home).cfg), NOW + 1000);
     expect(ap).toEqual([]);
+    expect(warn.mock.calls.map((c) => String(c[0])).filter((m) => m.includes('landing control inventory')), 'said once, deduped').toHaveLength(1);
     expect(w.currentLandingControl('proj-a')).toMatchObject({ lander: { ok: true } });
   });
 

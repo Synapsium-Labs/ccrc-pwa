@@ -5,7 +5,7 @@ import { timed } from './perf/recorder.js';
 import type { PerfHealth } from '../../shared/perf.js';
 import type { Bus } from './bus.js';
 import { assembleFleetWithPanePids, fleetNow, lifecycleInputFor, registrySecondsToMs, sessionBranchOf, sessionPrOf } from './fleet.js';
-import { readRadarPass } from './coord/lineageRead.js';
+import { allFailed, readRadarPass } from './coord/lineageRead.js';
 import type { LandingControlRead } from './coord/radar.js';
 import { radarRowsOf, sessionLandingsOf } from './coord/radar.js';
 import { askPushBody, withCoordinatorBody } from './askbody.js';
@@ -787,6 +787,9 @@ export class FleetWatcher {
   /** The last reason each project's `probe` read gave (`''` the listing), so a warning is said once per change. Keyed by the
    *  raw name; `sweepRadar` prints it through `printableDetail`, so a listed name cannot forge a log line. */
   private radarSaid = new Map<string, string>();
+  /** The control apply's own warning latches (never the probe keys above): per project, and the inventory's. */
+  private controlSaid = new Map<string, string>();
+  private inventorySaid = 'ok';
   /** The radar lane's pass counter: the latest pass to start is the only one that may commit `landings` or speak. A pass the
    *  runner abandoned and later released finds a newer count and returns, so it never overwrites a newer map. */
   private radarGen = 0;
@@ -1990,12 +1993,8 @@ export class FleetWatcher {
       this.deps.io, this.deps.cfg.registryDir, new Set(byProject.keys()), nowMs, LANDING_RADAR_SWEEP_MS / 2, wanted);
     if (gen !== this.radarGen) return;
     if (records !== null) said('', pass.ok ? 'ok' : pass.reason, !pass.ok && pass.reason !== 'absent');
-    // A failed listing is explicit unavailable evidence for every wanted project, never a retained green.
-    const unavailable = (reason: Exclude<typeof pass, { ok: true }>['reason']): LandingControlRead => {
-      const f = { ok: false, reason } as const;
-      return { lander: f, probe: f, health: f };
-    };
-    const controls = pass.ok ? pass.controls : new Map([...wanted].map((p) => [p, unavailable(pass.reason)]));
+    // A failed listing is explicit unavailable evidence for every wanted project (`allFailed`), never a retained green.
+    const controls = pass.ok ? pass.controls : new Map([...wanted].map((p) => [p, allFailed({ ok: false, reason: pass.reason })]));
     if (!pass.ok) this.landings = records !== null && pass.reason === 'absent' ? new Map() : reaged();
     else if (records === null) this.landings = reaged();
     else {
@@ -2009,12 +2008,15 @@ export class FleetWatcher {
     }
     // One synchronous apply per project, right after the generation check: the store owns the flag and the cue.
     this.landingControls = controls;
+    const inventoryWhy = inventory === undefined || inventory.ok ? 'ok' : inventory.error;
+    if (this.inventorySaid !== inventoryWhy && inventoryWhy !== 'ok') console.warn(`ccrc-server: the landing control inventory is unavailable (${inventoryWhy}); no control applied`);
+    this.inventorySaid = inventoryWhy;
     if (inventory?.ok !== true) return;
     for (const [project, control] of controls) {
       const r = this.deps.coord!.applyLandingControl({ project, control, nowMs });
       const why = r.kind === 'failure' ? r.failure.error : 'ok';
-      if (this.radarSaid.get(`control:${project}`) !== why && r.kind === 'failure') console.warn(`ccrc-server: the landing control of ${printableDetail(project)} was not applied (${why})`);
-      this.radarSaid.set(`control:${project}`, why);
+      if (this.controlSaid.get(project) !== why && r.kind === 'failure') console.warn(`ccrc-server: the landing control of ${printableDetail(project)} was not applied (${why})`);
+      this.controlSaid.set(project, why);
     }
   }
 

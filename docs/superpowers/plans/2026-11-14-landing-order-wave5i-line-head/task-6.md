@@ -32,3 +32,11 @@ Restored from the saved copy; file green again.
 ## Limitations
 - The route's freshness uses the route's `Date.now()`; the snapshot itself is not re-aged, the decider rechecks each document's age.
 - A registry project with no entry is also applied (a no-op unless health moves its hold).
+
+## Fix round 1
+1. `lineageRead.ts#allFailed` exported; `sweepRadar` reuses it for a failed listing (no local rebuild).
+2. A failed inventory now warns once (deduped by `inventorySaid`), still applies nothing; covered in `radar-lane.test.ts`.
+3. Apply warnings use a separate `controlSaid` map (per project), never `radarSaid`.
+4. Skill prose: a missing `binding` stops only on a positively opted-in project; `ccrc rollout --server-first` sentence added; LINE pin updated.
+5. Route doc comment says top-level `mainRedHold` is the hold recomputed on the read. README does not describe the field; untouched.
+Covering: radar-lane, landing-read-route, coordinator-skill, coordinator-landing-verdict, coord-radar, fleetio-contract, advance-switches, rings, single-definition (50 files, 2677 pass); armed growth check 73 pass; production tsc rc=0.
