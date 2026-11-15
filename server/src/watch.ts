@@ -187,6 +187,7 @@ import { childMarkOf, type ChildMarkRead } from '../../shared/runBelongs.js';
 import { coordinatorOfRun, readCoordinatorOfRun } from './coord/bindingReads.js';
 import { abandonDeadDispatches } from './coord/abandonDeadDispatch.js';
 import type { PushPayload } from './push.js';
+import { noticeTitle } from './pushOutbox.js';
 import { notify, noticeSink, notifyPushOnly } from './notice.js';
 import { mergedBody, mergedKey, mergedNoticeOf, type LandedMemory } from './coord/landed.js';
 import { landedPass } from './coord/landedLane.js';
@@ -3643,7 +3644,7 @@ export class FleetWatcher {
     // (run-less mail whose recipient session could not be resolved either,
     // `pushNewMail`'s own fallback chain) must degrade to no decoration at
     // all, never to a dangling ` · ` with nothing after it.
-    const title = projects.size > 1 && e.project !== '' ? `${e.title} · ${e.project}` : e.title;
+    const title = noticeTitle(e.title, e.project, projects);
     // D-5857: the presence gate, the ring record, its flush, the GUARDED durable archive (review finding 1: one bad
     // lane must not kill the others, and `node:sqlite` throws synchronously from every kind this method raises) and
     // the push are `notify`'s (`notice.ts`), in the mode the two flags name. The ring record and the push are

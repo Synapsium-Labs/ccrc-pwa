@@ -49,7 +49,7 @@ describe('the asks table', () => {
     // D-5860), and since then MIGRATIONS[29] to MIGRATIONS[36], the last being the programme ledgers' operator_items,
     // operator_item_events and programme_modifications tables with the spec pin on programs (PL2). Only
     // MIGRATIONS[20] and MIGRATIONS[24]
-    // touch the asks table. This test asserts "no migration after the one it
+    // touch the asks table, and the push outbox's migration (Overlord W1) adds `reachedOperatorAt`, the reach stamp. This test asserts "no migration after the one it
     // knows about has changed the asks table's columns", not anything about
     // any of the twelve. The total is not pinned: the asks migration is found
     // by its DDL (slot order is coord-db.test.ts's), so a new migration
@@ -59,7 +59,7 @@ describe('the asks table', () => {
       { name: string }[]).map((r) => r.name).sort();
     expect(cols).toEqual([
       'answer', 'answeredAt', 'answeredBy', 'askAt', 'askKey', 'at', 'childId', 'corrected',
-      'dialogId', 'id', 'options', 'parentId', 'question', 'releaseReason', 'releasedAt', 'runId', 'state',
+      'dialogId', 'id', 'options', 'parentId', 'question', 'reachedOperatorAt', 'releaseReason', 'releasedAt', 'runId', 'state',
     ]);
     db.close();
   });

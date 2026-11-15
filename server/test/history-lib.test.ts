@@ -90,6 +90,13 @@ const RINGS: Record<string, { ring: 'L1' | 'L3' | 'L4'; forbids: (s: string) => 
   'steer.mjs': { ring: 'L3', forbids: (s) => s === 'node:sqlite' || s === './sweep.mjs' || s === './cli.mjs' || s === './card.mjs' || s === './derive.mjs' || s.startsWith('../') },
   'recall.mjs': { ring: 'L4', forbids: (s) => s === 'node:sqlite' || s === './sweep.mjs' || s === './cli.mjs' },
   'regex-worker.mjs': { ring: 'L4', forbids: (s) => s === 'node:sqlite' || s === './sweep.mjs' || s === './cli.mjs' || s === './recall.mjs' },
+  // Overlord W1 Task 1: the store-measuring helpers cli.mjs and the Overlord's read share, L3 like store.mjs. A worker loads it, and
+  // it never imports the CLI or the sweep, so nothing it reaches loads secrets (w1-board-history.md, ruled F1, F4).
+  'read-context.mjs': { ring: 'L3', forbids: (s) => s === 'node:sqlite' || s === './sweep.mjs' || s === './cli.mjs' || s === './recall.mjs' || s.startsWith('../') },
+  // Overlord W1 Task 3: the Overlord's read and its worker entry, L4 like the CLI's read path. Neither imports the CLI or the sweep,
+  // so neither reaches loadSecrets (ruled F4); only the worker entry imports node:worker_threads.
+  'overlord-read.mjs': { ring: 'L4', forbids: (s) => s === 'node:sqlite' || s === './sweep.mjs' || s === './cli.mjs' || s.startsWith('../') || s === 'node:child_process' },
+  'overlord-worker.mjs': { ring: 'L4', forbids: (s) => s !== 'node:worker_threads' && s !== './overlord-read.mjs' },
 };
 
 describe('lib.mjs is L1: its import block is node:crypto, the shared run-id grammar and the shared redactor, nothing else (spec §6.4, §13; W4 addendum P10; D-5867)', () => {

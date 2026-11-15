@@ -67,6 +67,9 @@ const IMPORTS = [
   "import type { CHECKS_MAIL_TOKEN } from './landing.js';",
   "import type { LandingWrite } from './landingLine.js';",
   "import { hookEventIs, type HookEvent } from './hook-events.js';",
+  // Overlord W1, the vocabulary piece: the two prompt constants moved into the list of what ccrc types, an import-free
+  // `.mjs`; `shared/api.ts` imports them and re-exports them with a bare `export { … }`, so no importer changes.
+  "import { IDLE_COMPACT_NUDGE_PROMPT, RESUME_PROMPT_PREFIX } from './injected-prompts.mjs';",
   "import type { NodeRole } from './node-role.js';",
   // The sign-in's state words (accounts plan Task A21) join the same import-free `accounts.ts` line: no new import.
   "import type { AccountStateAnswer, AuthMethod, AuthStatusState, LaneState } from './accounts.js';",

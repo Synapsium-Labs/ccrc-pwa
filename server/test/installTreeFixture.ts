@@ -179,6 +179,8 @@ export const TREE_FILES = [
   'ccd/lib/train-proof.sh',
   // Its third library (wave 5), the delegation lease: read, pinned and published exactly as the others.
   'ccd/lib/delegation-lease.sh',
+  // Its fourth library (the Overlord's pool set): read, pinned and published exactly as the others.
+  'ccd/lib/pool-set.sh',
   'ccd/ccd-cap-scopes',
   // graphify Task 10: the sweep executable `_inst_bins` ships alongside the
   // other two, unconditionally (mirrors the `ccd-cap-scopes` line — only the

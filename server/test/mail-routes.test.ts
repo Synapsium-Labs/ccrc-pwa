@@ -617,6 +617,12 @@ describe('the rejection table is total, in both directions', () => {
     // never merged into one, because a run refusal and a mail refusal are
     // different vocabularies that happen to share this one scanner.
     const NOT_CODES = new Set([
+      // Overlord W1, the vocabulary piece: `renderMailNudge` (`coord/envelope.ts`) reads its fixed head from the
+      // `mail-nudge` row of `INJECTED_PROMPTS` by key. A list key, not a mail or run refusal.
+      'mail-nudge',
+      // The same piece: `coord/practiceCases.ts#stallSignatureMap` keeps the trigger table's rows of the one kind it reads.
+      // A trigger kind (`shared/practice-triggers.ts`), not a refusal.
+      'stall-arm',
       // D-8126 — the coordinator call record (`coord/coordCalls.ts`, `coord/coordCallsStore.ts`): `big-call` is the digest's
       // line kind a big call becomes (`DIGEST_LINE_KINDS`), and `not-big` is `markCallSeen`'s answer for a row the Seen door
       // does not take. Neither is a mail or run refusal; the route that carries `not-big` words it as its own 409 `not-big`.

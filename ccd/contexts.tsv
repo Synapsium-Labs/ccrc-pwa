@@ -7,7 +7,8 @@
 # server/test/ccd-contexts.test.ts holds it: every definition has exactly one row, every row names a definition,
 # and the cross-context reference count may only shrink. A NEW FUNCTION NEEDS A ROW in the same change.
 # Rows are in definition order, ccd/ccd first and then its libraries in load order, ccd/lib/disk-retention.sh (D-6913)
-# ccd/lib/train-proof.sh (D-7463) and ccd/lib/delegation-lease.sh (wave 5), which ccd loads at its foot:
+# ccd/lib/train-proof.sh (D-7463), ccd/lib/delegation-lease.sh (wave 5) and ccd/lib/pool-set.sh (the Overlord's W1), which
+# ccd loads at its foot:
 # <function name><TAB><context>.
 _tmx_sock	C10
 _tmx_argv	C10
@@ -941,3 +942,9 @@ cmd_ws_lease_audit	C4
 _dl_audit_heads	C4
 _dl_audit_ladder	C4
 _dl_orphan_rung	C4
+_poolset_parse	C1
+_acctorder_valid	C1
+_session_pool_side	C1
+_pool_ok_set	C1
+_pool_set_undecidable_why	C1
+_pool_set_mismatch_why	C1

@@ -1,5 +1,5 @@
 // The skill-size ratchet: every shipped SKILL.md (ccd/*-skill/SKILL.md) is capped in bytes, and its
-// contract must end inside the part of the file a compaction keeps.
+// contract must end inside the restore budget, CONTRACT_BUDGET_BYTES from the file's start.
 //
 // Why. After a compaction Claude Code re-attaches only the start of a loaded skill (its documentation
 // gives the first 5,000 tokens of each). The skill then still looks loaded, so a compacted session
@@ -26,8 +26,11 @@
 // goes there.
 //
 // Lower a cap by editing skill-size-caps.json down to the size the R2 lowered message prints.
-// Raise a cap only by the bytes of the clause line a pull request appends. R6 has no raise: a clause
-// that pushes the contract past the budget needs shorter clauses, or less text before the contract.
+// Raise a cap only by the bytes of the clause line a pull request appends. R6's budget was raised once,
+// from 16,000 to 16,750 bytes, to fit four waiting coordinator clauses as written (the autonomy, recall,
+// Linear and Overlord clauses), by the operator's decision (operator item 326, programme `overlord`).
+// A further raise needs the operator's decision again. Without one, a clause that pushes the contract
+// past the budget needs shorter clauses, or less text before the contract.
 import { execFileSync } from 'node:child_process';
 import { lstatSync, readFileSync, writeSync } from 'node:fs';
 import path from 'node:path';
@@ -42,9 +45,18 @@ type Base = { caps: Caps | 'absent'; sizes: Sizes };
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const CAPS = 'server/test/skill-size-caps.json';
 const SKILL_FILE = /^ccd\/[^/]+-skill\/SKILL\.md$/;
-// 5,000 tokens at 3.2 bytes a token. These files measure about 4.0 bytes a token on a public tokenizer;
-// Claude's own is not measured here and counts more tokens for the same text, so the bound leans short.
-const CONTRACT_BUDGET_BYTES = 16_000;
+// The budget was 16,000 bytes: 5,000 tokens at 3.2 bytes a token. It was raised once, to 16,750, to fit
+// four waiting coordinator clauses as written (the autonomy, recall, Linear and Overlord clauses), by the
+// operator's decision (operator item 326, programme `overlord`). A further raise needs the operator's
+// decision again. The sum it fits is 16,524 bytes: where the contract ended (13,660), the four clause
+// lines as their plans write them (2,813), the count word (5), and the fixed new words of D-8126's
+// clause 11 rewrite (46). D-8126's rewrites of clauses 4, 11, 19 and 20 had no other fixed words, so
+// their further net growth must fit in the 226 bytes left; a rewrite that needs more goes back to the
+// operator. At 3.2 bytes a token, 16,750 bytes is about 5,234 tokens: 234 past the 5,000 Claude
+// Code re-attaches. The cut notice before the contract covers that tail: a session that cannot see the
+// section the notice names loads the skill again. These files measure about 4.0 bytes a token on a
+// public tokenizer; Claude's own is not measured here and counts more tokens for the same text.
+const CONTRACT_BUDGET_BYTES = 16_750;
 const CONTRACT_HEADING = '## The contract';
 const CUT_NOTICE = 'load this skill again';
 
@@ -161,7 +173,7 @@ function contractPlace(file: string, text: string): string[] {
   const next = text.indexOf('\n## ', at + CONTRACT_HEADING.length);
   const end = Buffer.byteLength(next === -1 ? text : text.slice(0, next + 1));
   if (end > CONTRACT_BUDGET_BYTES) {
-    out.push(`${file}: the contract ends ${end} bytes in, past the ${CONTRACT_BUDGET_BYTES} a compaction keeps. `
+    out.push(`${file}: the contract ends ${end} bytes in, past the ${CONTRACT_BUDGET_BYTES}-byte restore budget. `
       + 'Shorten the clauses, or the text before the contract');
   }
   return out;
@@ -302,11 +314,14 @@ describe('the ratchet rules', () => {
   });
 });
 
-describe('R6: the contract sits where a compaction keeps it', () => {
+describe('R6: the contract sits first, behind the notice, inside the restore budget', () => {
   const NOTICE = 'If you cannot see a later section, load this skill again.\n\n';
   const skill = (before: string, clauses: string, after = '## Steps\n\nrest\n'): string =>
     `---\nname: x\n---\n\n# Title\n\n${before}## The contract\n\n${clauses}\n${after}`;
 
+  it('the budget is 16,750 bytes, raised once by the operator\'s decision (operator item 326): a further raise needs it again', () => {
+    expect(CONTRACT_BUDGET_BYTES).toBe(16_750);
+  });
   it('a contract that is the first section, behind the notice and inside the budget, passes', () => {
     expect(contractPlace(F, skill(NOTICE, one + two))).toEqual([]);
   });

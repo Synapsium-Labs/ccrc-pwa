@@ -490,7 +490,9 @@ generated value is never hand-edited, and the contrast gate rules on the result 
   manual verb; the server REFUSES (409/503), FORECASTS and composes the wire, and **never places a
   session or writes the marker**. `_project_pool_state` is ccd's ONLY reader (`server/src/pools.ts` is
   the server's own) and answers four words — `named <n>`/`untagged`/`unreadable`/`malformed`, always
-  rc 0 — and an undecidable tag never folds into `untagged`. `--cross-pool` is NOT `--force` (transcript
+  rc 0 — and an undecidable tag never folds into `untagged`. `_session_pool_side` is the one reader of a
+  SESSION's side: its `$REG/<id>.poolset` set if one stands, else those four words; a set it cannot read
+  or parse is `set-unreadable`/`set-malformed`, never the project. `--cross-pool` is NOT `--force` (transcript
   loss); `.crosspool`/`.stranded`/`.strandnotify` purge with the row. Fixtures are `pool-a`/`pool-b`; real
   pool names are operator DATA that NOTHING scans for — `topology-clean` has no pool class — so keep them out by hand.
   **The account side is CENTRAL and LEASED.** An account's pool now lives in `pool_edges` in
