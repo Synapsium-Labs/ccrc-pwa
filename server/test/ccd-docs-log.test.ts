@@ -225,6 +225,24 @@ describe('docs-log: the listing (M9.4 through M9.7)', () => {
     expect(entriesOf(answer(t2, 'specs', 'a.md'))[0]!.author).toBe('Bo Short');
   });
 
+  it('a token straddling the subject and author caps is redacted before the cut', () => {
+    const dir = freshRepo();
+    const token = `ghp_${'C'.repeat(36)}`;
+    // Each token starts 15 code points before its cap, so a cut taken first would leave `ghp_` and eleven token
+    // characters, too short for the redactor to match; redacted first, the mask (`ghp_***`) is what the cut meets.
+    const subject = `${'s'.repeat(185)}${token} ${'t'.repeat(60)}`;
+    const author = `${'a'.repeat(85)}${token} ${'u'.repeat(60)}`;
+    const tip = commitAs(dir, `${SPECS}/a.md`, `${author} <who@example.invalid>`, subject);
+    const e = entriesOf(answer(tip, 'specs', 'a.md'))[0]!;
+    for (const [label, text, cap] of [['subject', e.subject, 200], ['author', e.author, 100]] as const) {
+      expect(text, label).not.toContain('CCCC');
+      expect(text, label).toContain('ghp_***');
+      expect(Array.from(text), label).toHaveLength(cap);
+    }
+    expect(e.subject.startsWith('s'.repeat(185))).toBe(true);
+    expect(e.author.startsWith('a'.repeat(85))).toBe(true);
+  });
+
   it('a doc whose last change is older than the newest 100 commits in its section still lists its history', () => {
     const dir = freshRepo();
     const a1 = commitDocs(h, dir, { [`${SPECS}/a.md`]: 'one\n', [`${SPECS}/b.md`]: 'b\n' }, 'the doc');
