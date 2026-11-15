@@ -78,5 +78,8 @@
   "shared/practice-triggers.ts#parseSignature": 1,
   "shared/poolrule.ts#poolRule": 1,
   "shared/poolset.ts#poolSetSpelling": 1,
-  "shared/poolset.ts#parsePoolSet": 1
+  "shared/poolset.ts#parsePoolSet": 1,
+  "server/src/chainedJournal.ts#decodeChainedLine": 1,
+  "server/src/chainedJournal.ts#ChainVerifier": 1,
+  "server/src/chainedJournal.ts#chainedTailHealPlan": 1
 }
