@@ -248,7 +248,8 @@ const EXPECTED_A = {
       }
     }
   ],
-  "terminalRepairs": []
+  "terminalRepairs": [],
+  "creations": []
 };
 const EXPECTED_B = {
   "project": "project-b",
@@ -403,5 +404,6 @@ const EXPECTED_B = {
       }
     }
   ],
-  "terminalRepairs": []
+  "terminalRepairs": [],
+  "creations": []
 };

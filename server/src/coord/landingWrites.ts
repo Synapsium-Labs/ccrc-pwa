@@ -53,6 +53,10 @@ export interface LandingMutationFacts {
   /** Wave 5i (D-8626): the terminal-evidence permission of each open row that does not read, from `landingFactsOf`. It is
    *  independent of `projections` and `dependencies`, never a repaired display, and no reader may take it for readability. */
   terminalRepairs: { id: number; value: LandingTerminalRepair }[];
+  /** Wave 5i: the journal creation claim of each entry of this project whose exact identity (id, project, pr) a recorded
+   *  creation names, with that creation's seq and its claimant. Never read off the mutable projection's `setBy`: an order
+   *  setter replaces that, and the next-to-land cue goes to the creator. */
+  creations: { id: number; seq: number; setBy: string }[];
 }
 export type LandingReadResult =
   | { ok: true; facts: LandingMutationFacts }

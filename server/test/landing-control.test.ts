@@ -11,7 +11,10 @@ import { parseLander, parseMainHealth, parseProbe, RADAR_PROBE_MAX_BYTES, type P
 import { localIO, type FleetIO } from '../src/io.js';
 import { READ_FROM_MAX_BYTES } from '../../shared/agent-protocol.js';
 import { CONTROL_BASE_SHA, CONTROL_HEAD_SHA, CONTROL_NOW as now, controlRead } from './landingFixture.js';
-import { mkTmp } from './tmpHelpers.js';
+import { mkTmp, removeTmpFixtures } from './tmpHelpers.js';
+import { openCoordDb } from '../src/coord/db.js';
+import type { CoordStore } from '../src/coord/store.js';
+import { landingStoreOver } from './landingFixture.js';
 import { landingBindingOf, mainRedNext } from '../src/coord/landingLine.js';
 import type { LandingMutationFacts } from '../src/coord/landingWrites.js';
 import type { LandingEntry } from '../../shared/landingLine.js';
@@ -353,7 +356,7 @@ const factsOf = (entries: LandingEntry[] = [entry(7)], over: Partial<LandingMuta
   projections: entries.map((x) => ({ id: x.id, value: { kind: 'readable' as const, quarantine: null } })),
   dependencies: entries.map((x) => ({ id: x.id, value: { kind: 'readable' as const, afterIds: x.afterIds } })),
   recovery: { subjects: [], hold: null }, nextId: 200, foreignIds: [],
-  coordinators: entries.map((x) => ({ id: x.id, value: { kind: 'no-run' as const } })), terminalRepairs: [], ...over,
+  coordinators: entries.map((x) => ({ id: x.id, value: { kind: 'no-run' as const } })), terminalRepairs: [], creations: [], ...over,
 });
 const probeWith = (over: Record<string, unknown> = {}, headOver: Record<string, unknown> = {}) => {
   const base = controlRead();
@@ -555,5 +558,72 @@ describe('mainRedNext: the transition matrix', () => {
   it('a positive lander reading is required: absent opt-in keeps the flags', () => {
     expect(mainRedNext(false, controlRead({ lander: { ok: false, reason: 'absent' }, health: healthWith(RED_HEALTH) }), now, P)).toEqual({ kind: 'keep', value: false });
     expect(mainRedNext(true, controlRead({ lander: { ok: false, reason: 'absent' } }), now, P)).toEqual({ kind: 'keep', value: true });
+  });
+});
+
+describe('applyLandingControl: the measured health writes mainRedHold and never operatorPaused (M13, M14)', () => {
+  afterEach(() => removeTmpFixtures());
+  let store: CoordStore;
+  beforeEach(() => {
+    const dbPath = path.join(mkTmp('ccrc-control-flags-'), '.ccrc', 'coord.db');
+    store = landingStoreOver(openCoordDb(dbPath), dbPath);
+  });
+  const flagsOf = (): { operatorPaused: boolean; mainRedHold: boolean } => {
+    const r = store.db.prepare('SELECT operatorPaused, mainRedHold FROM landing_projects WHERE project = ?').get(P) as { operatorPaused: number; mainRedHold: number } | undefined;
+    return { operatorPaused: (r?.operatorPaused ?? 0) !== 0, mainRedHold: (r?.mainRedHold ?? 0) !== 0 };
+  };
+  const apply = (control: ReturnType<typeof controlRead>) => store.applyLandingControl({ project: P, control, nowMs: now });
+  const redCtl = controlRead({ health: healthWith(RED_HEALTH) });
+  const pause = (on: boolean): void => {
+    store.db.prepare('INSERT INTO landing_projects (project, operatorPaused) VALUES (?, ?) ON CONFLICT(project) DO UPDATE SET operatorPaused = excluded.operatorPaused').run(P, on ? 1 : 0);
+  };
+
+  it('red sets the flag, green clears it, and each reports exactly the change it committed', () => {
+    expect(apply(redCtl)).toMatchObject({ holdChanged: true });
+    expect(flagsOf()).toEqual({ operatorPaused: false, mainRedHold: true });
+    expect(apply(redCtl)).toMatchObject({ holdChanged: false });
+    expect(apply(controlRead())).toMatchObject({ holdChanged: true });
+    expect(flagsOf()).toEqual({ operatorPaused: false, mainRedHold: false });
+    expect(apply(controlRead())).toMatchObject({ holdChanged: false });
+  });
+
+  it('M14: a pause standing before red to green is still standing after', () => {
+    pause(true);
+    expect(apply(redCtl)).toMatchObject({ holdChanged: true });
+    expect(flagsOf()).toEqual({ operatorPaused: true, mainRedHold: true });
+    expect(apply(controlRead())).toMatchObject({ holdChanged: true });
+    expect(flagsOf()).toEqual({ operatorPaused: true, mainRedHold: false });
+  });
+
+  it('M14: a pause placed between red and green is kept by the green transition', () => {
+    expect(apply(redCtl)).toMatchObject({ holdChanged: true });
+    pause(true);
+    expect(apply(controlRead())).toMatchObject({ holdChanged: true });
+    expect(flagsOf()).toEqual({ operatorPaused: true, mainRedHold: false });
+  });
+
+  it('M13: pending and unmeasured health never clear red, and a clear flag stays clear', () => {
+    const unmeasured = controlRead({ health: healthWith({ state: 'unmeasured', why: 'pending', failing: [], pending: ['required-a'] }) });
+    expect(apply(redCtl)).toMatchObject({ holdChanged: true });
+    expect(apply(unmeasured)).toMatchObject({ holdChanged: false });
+    expect(flagsOf().mainRedHold).toBe(true);
+    expect(apply(controlRead({ health: { ok: false, reason: 'absent' } }))).toMatchObject({ holdChanged: false });
+    expect(flagsOf().mainRedHold).toBe(true);
+    expect(apply(controlRead())).toMatchObject({ holdChanged: true });
+    expect(apply(unmeasured)).toMatchObject({ holdChanged: false });
+    expect(flagsOf()).toEqual({ operatorPaused: false, mainRedHold: false });
+  });
+
+  it('M13: unknown health holds the mail independently when the flag was false, and moves no flag', () => {
+    expect(store.writeLandingAuthority({ kind: 'entry', project: P, pr: 7, pinnedSha: CONTROL_HEAD_SHA, handoffCommit: 'c'.repeat(40), setBy: 'creator-a' }, 1000)).toMatchObject({ ok: true });
+    expect(apply(controlRead({ health: { ok: false, reason: 'absent' } }))).toEqual({ kind: 'no-send', reason: 'health-unmeasured', holdChanged: false });
+    expect(flagsOf()).toEqual({ operatorPaused: false, mainRedHold: false });
+  });
+
+  it('a foreign bundle keeps the previous red and a failed fact read writes nothing', () => {
+    expect(apply(redCtl)).toMatchObject({ holdChanged: true });
+    const foreign = controlRead({ health: healthWith({ ...RED_HEALTH, project: 'project-b' }) });
+    expect(apply(foreign)).toMatchObject({ holdChanged: false });
+    expect(flagsOf().mainRedHold).toBe(true);
   });
 });

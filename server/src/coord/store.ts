@@ -22,6 +22,8 @@ import type { LandingAdvance, LandingLand, LandingLandWrite, LandingWrite } from
 import type { LandingBoundaryFailure, LandingEntryState, LandingInfrastructureFailure, LandingJournalRecord } from '../../../shared/landingLine.js';
 import { LANDING_TERMINAL_STATES } from '../../../shared/landingLine.js';
 import { decideLandingMutation } from './landingWrites.js';
+import { applyLandingControlTx, type LandingControlInput, type LandingControlPhase } from './landingControlTx.js';
+import type { LandingControlApplyResult } from './landingNext.js';
 import type { LandingAuthorityCommand, LandingAuthorityWrite, LandingJournalReplay, LandingMutationFacts, LandingReadResult } from './landingWrites.js';
 import type { LandingJournalPort, LandingJournalSnapshot } from './landingJournalPort.js';
 import { redactCommand } from './redact.js';
@@ -3493,6 +3495,22 @@ export class CoordStore {
         'UNION SELECT project FROM landing_projects WHERE mainRedHold IS NOT 0 ORDER BY project').all() as { project: string }[];
       return { ok: true, projects: rows.map((r) => r.project) };
     } catch { return { ok: false, error: 'landing-db-unavailable', recovery: this.landingBoundary() }; }
+  }
+
+  /** Wave 5i: apply one measured control bundle to the project's `mainRedHold` and queue the exact next-to-land cue, in ONE
+   *  owned transaction (`landingControlTx.ts` holds the body). No journal record is written. A failure once a write began
+   *  fences the landing entrances exactly as `writeLandingAuthority` does, and a replay or restart alone reopens them. */
+  applyLandingControl(input: LandingControlInput): LandingControlApplyResult {
+    const fenced = this.landingGuard();
+    if (fenced !== null) return { kind: 'failure', failure: fenced };
+    const phase: { at: LandingControlPhase } = { at: 'decide' };
+    try { return tx(this.db, () => applyLandingControlTx(this, this.db, () => this.landingFactsInner(input.project), input, phase)); }
+    catch {
+      const recovery = this.landingBoundary();
+      if (phase.at === 'decide') return { kind: 'failure', failure: { error: 'landing-db-unavailable', recovery } };
+      this.landingFence = recovery;
+      return { kind: 'failure', failure: { error: phase.at === 'apply' ? 'landing-db-apply' : 'landing-db-commit', recovery, mayApply: true } };
+    }
   }
 
   /** The landing entrances' guard: unavailable without a journal port, `landing-fenced` while the fence stands. */

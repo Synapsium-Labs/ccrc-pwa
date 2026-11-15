@@ -495,6 +495,10 @@ export function landingFactsOf(project: string, rows: LandingStoreRows): Landing
     projections: mine.map((m) => ({ id: m.facts.entry.id, value: m.facts.projection })),
     dependencies: mine.map((m) => ({ id: m.facts.entry.id, value: m.facts.dependencies })),
     nextId: max + 1 > Number.MAX_SAFE_INTEGER ? null : max + 1, foreignIds: [...foreign], coordinators, terminalRepairs,
+    creations: mine.flatMap(({ facts }) => {
+      const e = facts.entry; const c = subjects.find((s) => s.id === e.id && s.project === e.project && s.pr === e.pr)?.creation;
+      return c?.kind === 'recorded' ? [{ id: e.id, seq: c.seq, setBy: c.claim.setBy }] : [];
+    }),
   } };
 }
 

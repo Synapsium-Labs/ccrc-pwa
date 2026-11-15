@@ -39,7 +39,7 @@ const facts = (o: Opts): LandingMutationFacts => ({
   nextId: o.nextId === undefined ? 900 : o.nextId, foreignIds: o.foreign ?? [],
   coordinators: o.entries.map((x) => ({ id: x.id, value: o.unreadableRun?.includes(x.id) ? { kind: 'unreadable' as const }
     : x.runId === null ? { kind: 'no-run' as const } : { kind: 'run' as const, runId: x.runId, claimedBy: 'coord' } })),
-  terminalRepairs: [],
+  terminalRepairs: [], creations: [],
 });
 const recovered = (id: number, pr: number, projection: LandingRecoverySubject['projection'], project = 'project-a'): LandingRecoverySubject => ({
   id, project, pr, creation: { kind: 'not-recorded' }, historical: { binding: { kind: 'no-run' }, observedSeq: 1 }, projection,
