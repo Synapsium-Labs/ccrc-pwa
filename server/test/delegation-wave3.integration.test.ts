@@ -1844,7 +1844,7 @@ describe('8. the closed scope census', () => {
       // wave 4 (PR1 Task 1.3): `sweep` answers whether a pass ran, so the watcher projects only after one
       'if (this.deps.coord === undefined) return false;',
       // wave 5 (PR7 Task 5.7.3): the adoption step's notice sinks, the feed archive and the lease notices' mail (`queueRunlessNotice`)
-      'const deps = this.deps, sink = { notifyLog: deps.notifyLog, coord: deps.coord, push: deps.push };',
+      'const deps = this.deps, sink = { notifyLog: deps.notifyLog, coord: deps.coord, push: deps.push, time: deps.time, masker: deps.masker };',
       'notice: (title, body, mode) => { notify(sink, { kind: \'coord\', sessionId: \'\', runId: null, title, body }, mode, { degraded: `delegation adoption ${title}, feed archive degraded` }); },',
     ]);
     expect(lane).toMatch(/private readonly dropped = new Map/);

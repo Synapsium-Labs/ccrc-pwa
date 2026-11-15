@@ -6166,6 +6166,7 @@ export class FleetWatcher {
 
   /** The push outbox lane (Overlord W1, `pushSender.ts`): the held items' reach, every due row sent once per claim, the purge. */
   async sweepPushOutbox(): Promise<void> {
+    if (!this.deps.coord) return;
     await this.runLane('pushOutbox', () => senderFor(this.deps).drain(this.deps.time.clock.wall(), this.outboxSettled));
   }
 

@@ -77,3 +77,12 @@ Measured at `v0.0.1179`, an older release tag: it has no `coord/pushOutboxStore.
 `reachedOperatorAt` columns (Table 11.5's "ignored" class). Rolled back to, it drops only the rows still `pending` or
 `retrying`, the set a crash loses today; rolled forward again, the boot pass sends what is inside the horizon and fails
 the rest.
+
+## Found by the pull request's first fast run
+
+- **overloads-count-once**. The W3 question census (`test/census-w3/questions.ts#coordStoreQuestionShapedMethods`) read
+  each overload signature of `insertAsk`, `releaseAsk` and `declineAsk` as a method of its own. It now names an overloaded
+  method once, so the closed list it partitions is unchanged.
+- **lane-needs-the-store**. The `pushOutbox` lane returns at once on a watcher built without a store, as the timers lane
+  beside it does (`watch.ts#sweepPushOutbox`). A watcher built from a narrow test's deps (no store, no time ports) used
+  to log a lane failure each tick; `push-sender.test.ts` now goes red without the line.

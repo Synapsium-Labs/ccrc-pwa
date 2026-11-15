@@ -16,6 +16,10 @@ import type { PushPayload } from '../src/push.js';
 import { OUTBOX_RETRY_HORIZON_MS, OUTBOX_SEND_DEADLINE_MS, type PushSendVerdict } from '../../shared/push-outbox.js';
 import { fakeTime, type FakeTime } from './fakeTime.js';
 import { mkTmp, removeTmpFixtures } from './tmpHelpers.js';
+import { Bus } from '../src/bus.js';
+import { FleetWatcher } from '../src/watch.js';
+import { testDeps } from './helpers.js';
+import { quietAtTestEnd } from './laneQuiet.js';   // D-8140: nothing a watcher fires outlives its test
 
 afterEach(() => { vi.restoreAllMocks(); removeTmpFixtures(); });
 
@@ -360,5 +364,15 @@ describe('bootPushOutbox and the held drain', () => {
     expect(push.notify).not.toHaveBeenCalled();
     await sender.drain(r.now(), OPEN);
     expect(raw(r.coord)).toHaveLength(1);
+  });
+});
+
+describe('FleetWatcher.sweepPushOutbox: the lane needs the store (slug lane-needs-the-store)', () => {
+  it('a watcher built without a store or time ports (a narrow test\'s deps) runs no pass, so the lane logs no failure', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const deps = { ...testDeps(mkTmp('ccrc-sender-w-')), coord: undefined, time: undefined };
+    const w = quietAtTestEnd(new FleetWatcher(deps as never, new Bus(), 2000));
+    await w.sweepPushOutbox();
+    expect(warn.mock.calls.flat().join('\n')).not.toMatch(/push outbox lane failed/);
   });
 });

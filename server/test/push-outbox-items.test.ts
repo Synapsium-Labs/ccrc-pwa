@@ -143,8 +143,9 @@ describe('the toggle to blocking', () => {
       options: null, neededBy: 'soon' as const, soonLabel: null, secretSlot: null, heldUntil: null };
     const { id } = r.coord.raiseItemReached(input, T, 'coordinator', reachBound(r, { title: 'Do it', neededBy: 'soon' }));
     const armed = r.coord.setBlocking(id, true, T + 1, blockingBound(r));
-    expect(armed.row).not.toBeNull();
-    const rowId = armed.row!.id;
+    const armedRow = 'row' in armed ? armed.row : null;
+    expect(armedRow).not.toBeNull();
+    const rowId = armedRow!.id;
     const claim = r.coord.claimOutboxRow(rowId, T + 2);
     expect(claim).toMatchObject({ changed: true, claimSeq: 1 });
     expect(rowsOfItem(r.coord, id)).toMatchObject([{ state: 'sending', claimSeq: 1 }]);
