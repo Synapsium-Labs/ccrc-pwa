@@ -69,7 +69,8 @@ const ID_NAME_TEMPLATES: readonly IdNameTemplate[] = [
   { file: 'ccd/ccd', template: '<id>.hookstate.json', overhead: 15 },
   { file: 'ccd/ccd', template: '<id>.turn.json', overhead: 10 },
   { file: 'ccd/ccd', template: '<id>.supervise.log', overhead: 14 },
-  // Three `$REG/<id>.<name>` files whose names carry a dash, which the `<field>` family's a-z spelling does not take.
+  // Three of ccd's `$REG/<id>.<name>` files whose names carry a dash, which the `<field>` family's a-z spelling does not
+  // take; the session hook's `<id>.anchor-owed`, below, is a fourth.
   { file: 'ccd/ccd', template: '<id>.deny-settings', overhead: 14 },
   { file: 'ccd/ccd', template: '<id>.no-hibernate', overhead: 13 },
   { file: 'ccd/ccd', template: '<id>.no-roll', overhead: 8 },   // D-7458: `cmd_hibernate --roll`'s opt-out
@@ -110,6 +111,8 @@ const ID_NAME_TEMPLATES: readonly IdNameTemplate[] = [
   { file: 'ccd/session-hook.sh', template: '.<id>.compactions-stage.<pid>.<R>.<R>.tmp', overhead: 43 },
   // Overlord W1a, context readings: the compaction events file's rotation, a field longer than the family's FIELD_MAX.
   { file: 'ccd/session-hook.sh', template: '<id>.compacteventsprev', overhead: 18 },
+  // Overlord W1a, the anchor: the owed mark after an automatic compaction, a field the family's grammar does not take (a hyphen).
+  { file: 'ccd/session-hook.sh', template: '<id>.anchor-owed', overhead: 12 },
   { file: 'ccd/session-hook.sh', template: '.<id>.compactpost.<pid>.<R>.<R>.claim', overhead: 39 },
 ];
 

@@ -9,8 +9,9 @@
 // line carries the hook's scope verdict, and only `main` lines count: every PreCompact payload names the parent's
 // transcript, so the verdict is all that tells a subagent's compaction apart (plan review 1896 B2).
 //
-// Three exported functions: `readCompactionsMeasured` (L3, reads the three files through `FleetIO` and keeps every
-// distinction it receives), and `compactionsSince` and `refusedSince` (L1, pure: they import nothing that does I/O). No renewal decision is
+// Six exported functions: `readCompactionsMeasured` (L3, reads the three files through `FleetIO` and keeps every
+// distinction it receives), and `compactionsSince`, `compactionsBegunSince`, `newestCompactionAt`, `compactionInFlight` and
+// `refusedSince` (L1, pure: they import nothing that does I/O). No renewal decision is
 // made here; the renewal deciders read these answers.
 import path from 'node:path';
 import type { FleetIO } from '../io.js';
@@ -131,6 +132,35 @@ export function compactionsSince(lines: readonly CompactionLine[], sinceMs: numb
   let matched = 0;
   for (let j = 0; j < posts.length; j += 1) if (augment(j, new Array<boolean>(pres.length).fill(false))) matched += 1;
   return pres.length + posts.length - matched;
+}
+
+/** Pure. How many compactions of the MAIN conversation BEGAN at or after `sinceMs` (review 2068 F7): as `compactionsSince`,
+ *  but a `post` that may settle a `pre` from before `sinceMs` is that earlier compaction, never a new one. So a compaction
+ *  whose `pre` came before a round was asked and whose `post` came after it is not counted again. It is the compactions
+ *  since one pairing window (COMPACTION_PAIR_MS) before `sinceMs`, less those the lines before `sinceMs` record on their
+ *  own; a line appended at or after `sinceMs` adds at most one pair, so the count never falls below zero or as lines come.
+ *  It reads only the lines it is given, so a restart (every memo cold) counts the same. */
+export function compactionsBegunSince(lines: readonly CompactionLine[], sinceMs: number): number {
+  const from = sinceMs - COMPACTION_PAIR_MS;
+  return compactionsSince(lines, from) - compactionsSince(lines.filter((l) => l.at < sinceMs), from);
+}
+
+/** Pure. When the newest line of a MAIN-conversation compaction was written, a `pre` or a `post` (a `refused` line is no
+ *  compaction), or null when none is on record. The probe schedule reads a usage reading as taken after the compaction only
+ *  when it is newer than this (review 2068 F1). */
+export function newestCompactionAt(lines: readonly CompactionLine[]): number | null {
+  const ats = lines.filter((l) => l.scope === 'main' && l.phase !== 'refused').map((l) => l.at);
+  return ats.length === 0 ? null : Math.max(...ats);
+}
+
+/** Pure. Is a compaction of the MAIN conversation in flight at `nowMs` (review 2103 F2)? A `pre` line younger than
+ *  COMPACTION_PAIR_MS that no `post` may settle (see `pairs`): the compaction began and has not been seen to end, so a usage
+ *  reading written since may still carry the depth from before it. A `pre` older than the pairing window is no longer in
+ *  flight: an automatic compaction may fire PreCompact with no PostCompact after it (W0-05). */
+export function compactionInFlight(lines: readonly CompactionLine[], nowMs: number): boolean {
+  const main = lines.filter((l) => l.scope === 'main');
+  const posts = main.filter((l) => l.phase === 'post');
+  return main.some((p) => p.phase === 'pre' && nowMs - p.at < COMPACTION_PAIR_MS && !posts.some((q) => pairs(p, q)));
 }
 
 /** Pure. Did the PreCompact refusal arm refuse a compaction of the MAIN conversation at or after `sinceMs`? A `refused`

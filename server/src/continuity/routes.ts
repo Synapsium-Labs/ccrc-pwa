@@ -14,16 +14,18 @@ import type { CoordStore } from '../coord/store.js';
 import { MAIL_TOKEN_HEADER, checkMailToken, type BoxTokenHolder } from '../coord/token.js';
 import { refuseRoute } from '../refuse.js';
 import { REG_GENERATION_SHAPE, shapeProgramSlug } from '../../../shared/api.js';
-import { CARD_BUDGET_TOKENS } from '../../../shared/continuity-card.js';
+import { CARD_BUDGET_TOKENS, isAnchorForm, type AnchorForm, type Fact } from '../../../shared/continuity-card.js';
 import {
   PROBE_ROUND_MAX, isNoteKeyKind, isNoteKind, noteKeyText, type ContinuityReadDoor, type HandoverNote, type HandoverThread, type KeyFact,
   type NoteKey,
 } from '../../../shared/continuity.js';
 import { timerNoteFits, type TimerView } from '../../../shared/continuity-timers.js';
 import { timerCapOf } from '../../../shared/fleetRoles.js';
-import { CONTINUITY_LANE, laneArmGate } from '../../../shared/lane-arm.js';
+import { ANCHOR_SLOT_LANE, CONTINUITY_LANE, laneArmGate } from '../../../shared/lane-arm.js';
+import { utf8Bytes } from '../../../shared/utf8.js';
 import { CARD_REFUSALS, NOTE_REFUSALS, PROBE_REFUSALS } from '../../../shared/refusal.js';
 import { laneArmRowViewOf } from '../coord/laneArm.js';
+import { anchorAnswer, anchorGeneration, renderAnchor, type AnchorGenRow, type AnchorStart } from './anchor.js';
 import { cardPages, renderCard, snapshotFactsJson, trimCard } from './card.js';
 import { gatherCardFacts, sessionRoleRead, type CardFactsDeps } from './cardFacts.js';
 import { effectiveGeneration, type TimerRow } from './continuityStore.js';
@@ -80,6 +82,9 @@ const isSafeNat = (v: unknown): v is number => typeof v === 'number' && Number.i
 /** A card page's number in the query, and a card hash (a sha256 in hex). */
 const PAGE_RE = /^[1-9][0-9]{0,5}$/;
 const HASH_RE = /^[0-9a-f]{64}$/;
+/** The page `part=anchor` asks for: one no older server serves (its pages start at 1), so it refuses the anchor's read
+ *  before it reads, stores or records anything (fix round 1, F1). */
+const ANCHOR_PAGE = '0';
 /** At most this many conversations' partly served cards are remembered (the door's memo, below). */
 const CARD_MEMO_MAX = 512;
 const sha256 = (text: string): string => createHash('sha256').update(text, 'utf8').digest('hex');
@@ -157,6 +162,34 @@ function bindingOf(coord: CoordStore, id: string, bound: { runId: number | null;
 }
 
 export function registerContinuityRoutes(app: FastifyInstance, deps: ContinuityRouteDeps): void {
+  // THE MEMO OF SERVED PAGES (slug card-read-is-the-last-page): which pages of one card hash this door served to one
+  // conversation. A full read is recorded only when every page of that hash was served to it; a different hash starts
+  // over. Bookkeeping, never a decision's durable state: a restart forgets a card half read, so every answer says whether
+  // it `recorded` the read, and `ccrc-api card` tells a caller whose last page recorded nothing to read the card again.
+  // A write that failed puts the memo back, so a retry of that page records it. Bounded, the oldest conversation dropped
+  // first. A new start of a conversation forgets its partly served card (the start door, below; review 2027 N4): a resumed
+  // conversation keeps its uuid, and pages served to its previous generation are no read of the new one's card. So each memo
+  // carries the start it belongs to (`starts`, a stamp per conversation that every fresh start raises; review 2087 F3), and a
+  // page whose request began before the conversation's latest start is served but joins no memo: a request of the old
+  // generation still in flight when the new one starts cannot complete the new one's read. A stamp dropped by the bound
+  // reads as no start, which only ever starts a memo over (a read asked again), never completes one.
+  type Memo = { hash: string; start: number; pages: Set<number> };
+  const memoKey = (sessionId: string, uuid: string): string => `${sessionId}\n${uuid}`;
+  const served = new Map<string, Memo>();
+  const remember = (key: string, memo: Memo): void => {
+    served.set(key, memo);
+    if (served.size > (deps.cardMemoMax ?? CARD_MEMO_MAX)) served.delete(served.keys().next().value!);
+  };
+  const starts = new Map<string, number>();
+  let startSeq = 0;
+  const startOf = (key: string): number => starts.get(key) ?? 0;
+  const noteStart = (key: string): void => {
+    starts.delete(key);
+    starts.set(key, startSeq += 1);
+    if (starts.size > (deps.cardMemoMax ?? CARD_MEMO_MAX)) starts.delete(starts.keys().next().value!);
+    served.delete(key);
+  };
+
   /**
    * `POST /api/sessions/:id/start`: the hook reports one SessionStart of a session that is not a child (its source, the
    * conversation's uuid, the model, the row's incarnation). A box-token machine lane, an `auth/gate.ts` EXEMPT entry:
@@ -199,25 +232,36 @@ export function registerContinuityRoutes(app: FastifyInstance, deps: ContinuityR
     if (coord === undefined) return refuseRoute(reply, 'unavailable');
     const r = coord.insertStart({ sessionId: id, reportId, uuid: startedUuid, source, model, rowIncarnation, reportedAt, receivedAt: deps.wall() });
     if (!r.ok) return refuseRoute(reply, 'write-failed', { detail: 'continuity_starts could not be written' });
+    if (r.fresh) noteStart(memoKey(id, startedUuid));
     return reply.code(202).send({ ok: true, id: r.id, fresh: r.fresh });
   });
 
-  // THE MEMO OF SERVED PAGES (slug card-read-is-the-last-page): which pages of one card hash this door served to one
-  // conversation. A full read is recorded only when every page of that hash was served to it; a different hash starts
-  // over. Bookkeeping, never a decision's durable state: a restart forgets a card half read, so every answer says whether
-  // it `recorded` the read, and `ccrc-api card` tells a caller whose last page recorded nothing to read the card again.
-  // A write that failed puts the memo back, so a retry of that page records it. Bounded, the oldest conversation dropped
-  // first.
-  type Memo = { hash: string; pages: Set<number> };
-  const served = new Map<string, Memo>();
-  const remember = (key: string, memo: Memo): void => {
-    served.set(key, memo);
-    if (served.size > (deps.cardMemoMax ?? CARD_MEMO_MAX)) served.delete(served.keys().next().value!);
-  };
   /** A card or notes read served: the probe door marks an answer after it `open` (closed-book, Review Focus 3). A stamp that
    *  could not be written leaves the answer `unmeasured`, which claims nothing, so the read is served and the miss logged. */
   const stampRead = (coord: CoordStore, id: string, door: ContinuityReadDoor): void => {
     if (!coord.stampContinuityRead(id, door, deps.wall()).ok) console.warn(`ccrc-server: continuity: the ${door} read of ${id} could not be stamped`);
+  };
+
+  // THE ANCHOR'S SHADOW RECORD (the anchor piece): while the `anchor-slot` row is shadow the door renders each anchor it
+  // would serve and logs its size, once per session, form and card hash, so the shadow week measures it without a line per
+  // start. Bookkeeping, bounded as the memo above; a restart logs again.
+  const anchorLogged = new Map<string, string>();
+  const logShadowAnchor = (id: string, form: AnchorForm, hash: string, text: string): void => {
+    const key = `${id}\n${form}`;
+    if (anchorLogged.get(key) === hash) return;
+    anchorLogged.delete(key);
+    anchorLogged.set(key, hash);
+    if (anchorLogged.size > (deps.cardMemoMax ?? CARD_MEMO_MAX)) anchorLogged.delete(anchorLogged.keys().next().value!);
+    console.warn(`ccrc-server: anchor-slot shadow: the ${form} anchor for ${id} is ${[...text].length} characters, ${utf8Bytes(text)} bytes (card ${hash.slice(0, 12)}); not served`);
+  };
+  /** The generation canary's two reads: the identity's live generation, and the session's newest start. */
+  const anchorReads = (coord: CoordStore, id: string): { live: Fact<AnchorGenRow | null>; newest: Fact<AnchorStart | null> } => {
+    const gens = coord.liveGenerations();
+    const starts = coord.startsOf(id, 1);
+    return {
+      live: gens.ok ? { kind: 'read', value: gens.rows.find((g) => g.identity === id) ?? null } : { kind: 'unmeasured', what: 'the generations' },
+      newest: starts.ok ? { kind: 'read', value: starts.rows[0] ?? null } : { kind: 'unmeasured', what: "the session's starts" },
+    };
   };
 
   /**
@@ -232,6 +276,15 @@ export function registerContinuityRoutes(app: FastifyInstance, deps: ContinuityR
    * trimmed text is masked here, once and whole, before it is hashed and paged: a secret that crosses a page edge is masked
    * as one string (review 2023 F2; `secret-mask.test.ts` lists the route under INLINE, as `/api/mail/inbox`). `200 { ok,
    * hash, snapshotId, page, pages, text, recorded }`, `recorded` true when this answer recorded the full read.
+   *
+   * `part=anchor&form=start|prompt|fork` (the anchor piece, C38): the card's short part, for the session hook. The same
+   * checks, gather, render, trim and mask, so the anchor names the hash of the card the same facts render, then
+   * `renderAnchor` (L1) with the same masker; it stores no snapshot and records no read. It asks for `page=0` and names no
+   * hash: an older server, which ignores `part`, refuses page 0 before it reads anything, so the hook's read never stores a
+   * snapshot or records a card read there (fix round 1, F1). Its answer is `anchorAnswer`'s, every one carrying `part` and
+   * the form it served: `{ dark }` with no text while the Shadow lanes row `anchor-slot` is shadow (the door still renders,
+   * and logs the size to the server journal once per card), and once it is live `{ hash, text }`, or, for a fork,
+   * `{ live }` alone, read before any gather.
    */
   app.get('/api/sessions/:id/card', {
     onRequest: async (req: FastifyRequest, reply: FastifyReply) => {
@@ -245,21 +298,39 @@ export function registerContinuityRoutes(app: FastifyInstance, deps: ContinuityR
     if (q['byId'] !== id) return refuseRoute(reply, 'not-owner', { detail: 'byId must be the session the path names: a session reads its own card' });
     const uuid = q['byUuid'];
     if (!IDENTITY_RE.test(id) || typeof uuid !== 'string' || !IDENTITY_RE.test(uuid)) return refuseRoute(reply, 'bad-request', { detail: 'byId and byUuid' });
+    const part = q['part'];
     const pageRaw = q['page'] ?? '1';
-    if (typeof pageRaw !== 'string' || !PAGE_RE.test(pageRaw)) return refuseRoute(reply, 'bad-request', { detail: 'page is a positive integer' });
+    if (part === 'anchor' && (pageRaw !== ANCHOR_PAGE || q['hash'] !== undefined)) return refuseRoute(reply, 'bad-request', { detail: 'part=anchor asks for page 0 and names no hash' });
+    if (part !== 'anchor' && (typeof pageRaw !== 'string' || !PAGE_RE.test(pageRaw))) return refuseRoute(reply, 'bad-request', { detail: 'page is a positive integer' });
     const page = Number(pageRaw);
     const asked = q['hash'];
     if (asked !== undefined && (typeof asked !== 'string' || !HASH_RE.test(asked))) return refuseRoute(reply, 'bad-request', { detail: 'hash is a card hash' });
     if (page > 1 && asked === undefined) return refuseRoute(reply, 'bad-request', { detail: 'a page after the first names its card hash' });
+    const form = q['form'] ?? 'start';
+    if (part !== undefined && part !== 'anchor') return refuseRoute(reply, 'bad-request', { detail: 'part is anchor, or absent for the card' });
+    if (part === undefined && q['form'] !== undefined) return refuseRoute(reply, 'bad-request', { detail: 'form is part=anchor\'s' });
+    if (!isAnchorForm(form)) return refuseRoute(reply, 'bad-request', { detail: 'form is start, prompt or fork' });
+    // The conversation's start as this request began, before its first await (review 2087 F3).
+    const key = memoKey(id, uuid);
+    const begun = startOf(key);
     const attributed = await deps.attributeReader(id, uuid);
     if (!attributed.ok) return refuseRoute(reply, attributed.error, { detail: attributed.detail });
 
     const coord = deps.coord;
     if (coord === undefined) return refuseRoute(reply, 'unavailable');
+    const anchorLive = part === 'anchor' && laneArmRowViewOf(ANCHOR_SLOT_LANE, coord.laneArmSetting(ANCHOR_SLOT_LANE), laneArmGate(ANCHOR_SLOT_LANE)).live;
+    if (part === 'anchor' && form === 'fork') return reply.code(200).send(anchorAnswer(anchorLive, { form }));
     const at = deps.wall();
+    const masker = deps.masker ?? SHAPE_ONLY_MASKER;
     const { facts, renderer } = await gatherCardFacts({ coord, ...deps.cardRegistry }, id, at);
-    const text = (deps.masker ?? SHAPE_ONLY_MASKER).maskText(trimCard(renderCard(renderer, facts), CARD_BUDGET_TOKENS).text);
+    const text = masker.maskText(trimCard(renderCard(renderer, facts), CARD_BUDGET_TOKENS).text);
     const hash = sha256(text);
+    if (part === 'anchor') {
+      const { live, newest } = anchorReads(coord, id);
+      const anchor = renderAnchor(facts, { cardHash: hash, generation: anchorGeneration(live, newest) }, form === 'prompt' ? 'prompt' : 'start', (t) => masker.maskText(t));
+      if (!anchorLive) logShadowAnchor(id, form, hash, anchor);
+      return reply.code(200).send(anchorAnswer(anchorLive, { form: form === 'prompt' ? 'prompt' : 'start', hash, text: anchor }));
+    }
     const factsJson = snapshotFactsJson(facts);
     const snapshotId = sha256(factsJson);
     const stored = coord.insertSnapshot({ id: snapshotId, sessionId: id, at, facts: factsJson, hash });
@@ -268,20 +339,23 @@ export function registerContinuityRoutes(app: FastifyInstance, deps: ContinuityR
     const slices = cardPages(text);
     if (page > slices.length) return refuseRoute(reply, 'bad-request', { detail: `the card has ${slices.length} page(s)` });
 
-    const key = `${id}\n${uuid}`;
+    const start = startOf(key);
     const prior = served.get(key);
-    const memo: Memo = prior !== undefined && prior.hash === hash ? prior : { hash, pages: new Set() };
-    served.delete(key);
-    memo.pages.add(page);
+    const memo: Memo = prior !== undefined && prior.hash === hash && prior.start === start ? prior : { hash, start, pages: new Set() };
     let recorded = false;
-    if (memo.pages.size === slices.length) {
-      const r = coord.insertCardRead({ sessionId: id, uuid, snapshotId, hash, pages: slices.length, at });
-      if (!r.ok) {
-        remember(key, memo);
-        return refuseRoute(reply, 'write-failed', { detail: 'continuity_card_reads could not be written' });
-      }
-      recorded = true;
-    } else remember(key, memo);
+    // A start of this conversation that arrived while the request was in flight leaves the page served and in no memo.
+    if (begun === start) {
+      served.delete(key);
+      memo.pages.add(page);
+      if (memo.pages.size === slices.length) {
+        const r = coord.insertCardRead({ sessionId: id, uuid, snapshotId, hash, pages: slices.length, at });
+        if (!r.ok) {
+          remember(key, memo);
+          return refuseRoute(reply, 'write-failed', { detail: 'continuity_card_reads could not be written' });
+        }
+        recorded = true;
+      } else remember(key, memo);
+    }
     stampRead(coord, id, 'card');
     return reply.code(200).send({ ok: true, hash, snapshotId, page, pages: slices.length, text: slices[page - 1], recorded });
   });
@@ -683,12 +757,12 @@ export function registerContinuityRoutes(app: FastifyInstance, deps: ContinuityR
 
   /**
    * `POST /api/sessions/:id/probe { byId, byUuid, roundId, answers: [{ id, answer }] }`: answer every question of one open
-   * round of the caller's, in one call. Each answer is graded closed-form against the masked question (`gradeAnswers`; a
-   * question left out fails), the book state is `open` after a card or notes read since the round was asked and `unmeasured`
+   * round of the caller's live generation, in one call. Each answer is graded closed-form (`gradeAnswers`: against the
+   * masked question when it carries a placeholder, the stored one otherwise; a question left out fails), the book state is `open` after a card or notes read since the round was asked and `unmeasured`
    * otherwise (`bookOf`), and the round's verdict is `roundVerdict`'s. `200 { ok, roundId, verdict, grades: [{ id, grade }],
-   * book }`; what a question expected is never answered. `probe-none-open` 409 when no round of the caller's carries the id
-   * (another session's round is invisible), `probe-closed` 409 when it was answered already, `bad-request` 400 for an answer
-   * id the round does not ask, a repeated id, or an answer over `PROBE_ANSWER_MAX_CHARS`. The answer is graded and stored masked.
+   * book }`; what a question expected is never answered. `probe-none-open` 409 when no round of the caller's live generation
+   * carries the id (another session's round, and one left open by an earlier generation, are invisible, as on the GET), `probe-closed` 409 when it was answered already, `bad-request` 400 for an answer
+   * id the round does not ask, a repeated id, or an answer over `PROBE_ANSWER_MAX_CHARS`. The answer is stored masked.
    */
   app.post('/api/sessions/:id/probe', {
     onRequest: async (req: FastifyRequest, reply: FastifyReply) => {
@@ -724,8 +798,8 @@ export function registerContinuityRoutes(app: FastifyInstance, deps: ContinuityR
     const asked = new Set(round.rows.map((r) => r.qid));
     const stray = [...answers.keys()].filter((q) => !asked.has(q));
     if (stray.length > 0) return refuseRoute(reply, 'bad-request', { detail: `round ${roundId} asks no ${stray.join(', ')}` });
-    // The answer is masked as the question is, so one copied from a masked choice and one given whole from memory both match.
-    const graded = gradeAnswers(round.rows.map((r) => maskedQuestion(r, mask)), new Map([...answers].map(([q, a]) => [q, mask(a)])));
+    // An answer copied from a masked choice is graded masked, one given whole from memory against the stored question.
+    const graded = gradeAnswers(round.rows, answers, mask);
     const last = coord.lastContinuityRead(id);
     const lastRead: LastRead = last.ok ? { kind: 'read', at: last.at } : { kind: 'unmeasured' };
     const book = bookOf(lastRead, first.askedAt);

@@ -305,6 +305,10 @@ export const TREE_FILES = [
   'ccd/reviewer-skill',
   'ccd/history-skill',
   'ccd/linear-skill',
+  // The Overlord's skill tree and its staging installer (Overlord W1): `_inst_skills` runs that installer out of this
+  // tree, and it stages the tree once at `~/.cc-sessions/overlord-skill`, in no account home.
+  'ccd/overlord-skill',
+  'ccd/install-overlord-skill.sh',
   'ccd/install-coordinator-skill.sh',
   'ccd/install-worker-skill.sh',
   'ccd/install-reviewer-skill.sh',

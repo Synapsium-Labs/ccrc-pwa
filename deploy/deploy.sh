@@ -1012,6 +1012,9 @@ cd ~/ccrc/agent && npm ci && npm run build \
   rsync -az --delete -e "${SSH[*]}" ccd/linear-skill/ "$BOX":.cc-sessions/linear-skill/
   install_atomic ccd/install-linear-skill.sh .cc-sessions/install-linear-skill.sh 755
   "${SSH[@]}" "$BOX" 'bash ~/.cc-sessions/install-linear-skill.sh'
+  # The Overlord's skill is staged once on the box, outside every home, from the tree rsynced to ~/ccrc above: its
+  # installer is the one writer of the staged copy, which `_inst_skills` and doctor's fix run as well (Overlord W1).
+  "${SSH[@]}" "$BOX" 'bash ~/ccrc/ccd/install-overlord-skill.sh'
   # graphify Task 10 (O3/O6b): the assembled-SRC skill installer, AFTER all
   # five roster-reading skill arms above (spec §B: its SRC is the INSTALLED
   # package, never vendored, which is what makes it a plain `install_atomic` +

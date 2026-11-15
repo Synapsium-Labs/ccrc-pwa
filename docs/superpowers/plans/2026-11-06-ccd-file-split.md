@@ -101,7 +101,7 @@ Everything here was measured at `4c677d328` unless it says otherwise. Hunk count
 - Merge conflicts. The line-2 conflict is already gone, and git merges non-overlapping hunks in one file. The real relief is that the lane serialises per file, so feature PRs in different libraries stop queueing behind each other. Q4 ruled for that: one lane per library.
 - The spine stays hot. In the 32 commits since 2026-10-27, 16 hunks hit the dispatcher `case`. A new verb still edits the spine, by a line or two.
 - **CI time does not fall.** Every ccd test sources the whole program, so the test map selects the same tests. The earlier claim that this split helps CI is not supported.
-- Shellcheck memory does not fall. Q3 ruled for the spliced pass, which still peaks near 6.2 GB, so the macOS CI legs keep skipping. One 4,999-line library peaked at 1.0 GB.
+- Shellcheck memory does not fall; it rises. Q3 ruled for the spliced pass. `ccd/ccd` alone peaked at 6.2 GB; the program text is about 6% longer and takes about 11% more memory (9.09 GB against 8.16 GB, both measured on one Mac, D-8048), so the spliced pass is estimated near 6.9 GB, and the macOS CI legs keep skipping. One 4,999-line library peaked at 1.0 GB.
 
 ## The Assembled Artifact
 
@@ -321,7 +321,7 @@ Exit count: every `ccd/lib/*.sh` listed (4 today); `GROWTH_FILES` holds no `ccd/
 - Produces: the `ccd/ccd + ccd/lib` pin measured over one spliced temp file, findings mapped back to `<file>:<line>`.
 - Produces: `programRow(base, head, root): GrowthRow`, named `ccd (program)`: the net code lines of `ccd/ccd` plus every `ccd/lib/*.sh` not named `ccrc-*`, summed at each sha.
 
-- [ ] **Step 1: Write the failing rows.**
+- [x] **Step 1: Write the failing rows.**
 
 ```ts
 it('FIXTURE: moving a function between ccd/ccd and a library leaves the count alone', () => { /* same count both ways */ });
@@ -360,15 +360,15 @@ it('FIXTURE: no waiver or exemption can name the program row', () => {
 
 The rows stand on the shrink rule that exists today. `netGrowth` gives a new library a base of 0, so a move shows that library's whole size as its delta, and `growthOver` passes it only because `ccd/ccd` shrinks by at least as much. The spike measured the two as exactly equal in all 19 slices.
 
-- [ ] **Step 2: Run to see them fail.**
+- [x] **Step 2: Run to see them fail.**
 
 Run: `cd server && ./node_modules/.bin/vitest run test/shellcheck-ratchet.test.ts test/growth-check.test.ts --maxWorkers=2`
 
-- [ ] **Step 3: Change the ratchet** (Q3). `pinKey` keeps the group; the group is linted once, over `spliceCcd`. `ccd/lib/ccrc-settings.sh` takes its own pin of 6, because the sweeps source it and ccd does not. Correct the header's claim.
+- [x] **Step 3: Change the ratchet** (Q3). `pinKey` keeps the group; the group is linted once, over `spliceCcd`. `ccd/lib/ccrc-settings.sh` takes its own pin of 6, because the sweeps source it and ccd does not. Correct the header's claim.
 
-- [ ] **Step 4: Rebaseline** the group from 142 to the measured count (154 at `4c677d328`), with the `codes` map the run prints. The comment on the pin says why this one rise happened, and the PR lists the new findings by code.
+- [x] **Step 4: Rebaseline** the group from 142 to the measured count (154 at `4c677d328`), with the `codes` map the run prints. The comment on the pin says why this one rise happened, and the PR lists the new findings by code.
 
-- [ ] **Step 5: Add the program row.** `armedGrowth` adds `programRow`.
+- [x] **Step 5: Add the program row.** `armedGrowth` adds `programRow`.
 
 The per-file rule stays, with one addition: a member of the program that is absent at head counts as a shrink of its whole size, so `git revert` and `unmove` pass. Every other file keeps today's rule.
 
@@ -378,15 +378,23 @@ Two kinds of entry raise the program row, each by its own limit, so a feature ne
 
 No entry names the row itself: `ccd (program)` stays out of the file list that `parseExemptions` and `parseWaiverFiles` check against, so they refuse it. `growthVerdicts` decides this row last instead. It adds up the entries that applied to a member's row, and the program row fails only over `GROWTH_LIMIT` plus that sum. An entry that did not apply raises nothing: one over its limit, one on a member that is not over, or an exemption whose diff edits the check's own files.
 
-- [ ] **Step 6: Run, then commit.**
+- [x] **Step 6: Run, then commit.**
 
 Exit count: group pin = measured value; total ratchet files unchanged plus 1; `ccd/ccd` unchanged; `ccd (program)` delta 0 on a fixture move.
+
+*Measured 2026-11-15 (D-8048), at `origin/main` `2126f46db`,* started under the operator's ruling S1 (2026-11-14), which the Task 1 branch records. Part A landed in #2400. The group pin stood at 63, not 142: the SC2100, SC2128 and SC2178 triage PRs (#2619, #2637) lowered it. Summed per file it is 57 over `ccd/ccd` and its three libraries, plus 6 in `ccrc-settings.sh`. Linted once over the splice (51,666 lines, 28 s on a development Mac), the group counts **82**, with no line changed. That one text adds 37 findings a file read alone hides (SC2128 14, SC2100 11, SC2178 8, SC2179 3, SC2190 1), all names shellcheck does not scope by function or file, and drops 12 SC2034 that only a file read alone reports. So the ratchet goes from 63 to 88 in all (82 and 6), and the rise like for like is 57 to 82. Over the same splice a pure move cannot change the count; the fixture row moves one function and finds the same finding at its new file and line. The program row at the same sha: `ccd/ccd` 21,814 net code lines, the three libraries 2,516, `ccd (program)` 24,330.
+
+*Deviations found:*
+- `spliceCcd` is Task 1's (#2810), which has not merged. This PR adds it to `ccdWsHelpers.ts` byte for byte as that branch does, so the two merge clean in either order.
+- The pin's comment sits on `GROUP` in `shellcheck-ratchet.test.ts`, because the baseline is JSON and holds no comment.
+- The lint also refuses library code that no pointer splices back (above a library's first marker, or a region nothing points at), naming each line, so moved code cannot drop out of the one text.
+- Both checks take one rule for the program's members: `ccd/ccd`, and every `ccd/lib/*.sh` not named `ccrc-*`. A file under `ccd/lib/` that is not a top-level `.sh` keeps a pin of its own.
 
 ### Task 3: Citations out of `ccd/ccd`
 
 **Files:** Modify: `ccd/ccd` (comments only), `server/test/ccd-split-pin.test.ts`, `server/test/citations.test.ts`
 
-- [ ] **Step 1: First commit: the pin.** Add this row, and commit it alone. It passes on the old code, where the diff changes nothing.
+- [x] **Step 1: First commit: the pin.** Add this row, and commit it alone. It passes on the old code, where the diff changes nothing.
 
 ```ts
 it('REAL: a diff that changes only comments in ccd/ccd leaves programDump alone', () => { /* moveBase against HEAD, computed now */ });
@@ -394,14 +402,24 @@ it('REAL: a diff that changes only comments in ccd/ccd leaves programDump alone'
 
 `bash` drops comments from the dump, so a comment edit cannot move it.
 
-- [ ] **Step 2: Second commit: the rewrite.** Rewrite each `ccd:NNNN` and `<file>.<ext>:NN` in `ccd/ccd` to a symbol (`ccd#_ws_least_loaded`), following the header of `citations.test.ts`.
+- [x] **Step 2: Second commit: the rewrite.** Rewrite each `ccd:NNNN` and `<file>.<ext>:NN` in `ccd/ccd` to a symbol (`ccd#_ws_least_loaded`), following the header of `citations.test.ts`.
 
-- [ ] **Step 3: Verify.**
+- [x] **Step 3: Verify.**
 
 Run: `grep -cE 'ccd:[0-9]{3,5}\b|\.(ts|tsx|mjs|sh):[0-9]+\b' ccd/ccd`
 Expected: `0` (150 today). `BASELINE` in `citations.test.ts` drops by the same count in this PR.
 
 Exit count: 0 citation lines in `ccd/ccd`; `programDump` byte-identical.
+
+*Measured 2026-11-15 (D-8048):* 149 of the 150 citation lines in `ccd/ccd` now cite a symbol, 159 of its 161 citations, and `BASELINE` drops by those 159, from 1,242 to 1,083. Every line the rewrite changes is a `#` line, the file's text with those lines left out is unchanged, `bash -n` passes, and `programDump` is byte-identical before and after. Every symbol a new citation names exists. Of the 156 server suites that read ccd's source through `ccdSource()`, two go red on a development Mac with the old `ccd/ccd` too (`ccd-account-auth`, `ccd-inflight`), and four that went red under load pass alone; nothing else is red.
+
+*Deviations found:*
+- One line keeps its two citations: the `prnumber` sentence in `_pr_py`'s embedded python. It is a `#` line inside a heredoc, so it is data in the function's body, not a bash comment, and rewriting it moves `programDump`. It waits for a change that edits `_pr_py` anyway. Step 3's grep therefore answers `1`, not `0`.
+- The S1 yield check: the one open PR on `ccd/ccd` changes two comment lines in `_reg_purge`'s field-count paragraph. Neither holds a citation, so no citation was deferred for it, and `ccd/ccd` merges with that PR's head without a conflict (`git merge-tree`; the head's other conflicts are with `main` itself, the same with or without this change). The three citations lower in `_reg_purge` are rewritten.
+- The line numbers predate the first commit that holds them, so `git log -S` cannot say what they pointed at. Each target was read from the sentence around it: the function it names, or the code it describes.
+- A citation of a line in the same function became plain words ("above", "below", "further down"): a function citing itself by name says nothing.
+- The pin has a second row, a fixture: a bash comment edit leaves the dump alone, and a `#` line of heredoc data moves it. That second case is the `_pr_py` line above.
+- The pin needs `programDump` and `moveBase`, which Task 1 adds, so this work sits on Task 1's branch.
 
 ### Task 4: One library table, and every scanner on it
 
