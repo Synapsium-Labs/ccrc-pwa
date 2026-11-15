@@ -113,3 +113,56 @@ describe('the compact head in docs.css (the phone-header plan, refinements (d), 
     expect(blocks).toEqual(['@media (max-width: 899.98px) {']);
   });
 });
+
+/** The body of every `@media` block in `css` whose query names a width, its braces matched, so a rule is known to sit
+ *  outside any width query. */
+function widthMediaBodies(css: string): string[] {
+  const text = stripComments(css);
+  const out: string[] = [];
+  for (const m of text.matchAll(/@media[^{]*width[^{]*\{/g)) {
+    let depth = 1;
+    let i = (m.index ?? 0) + m[0].length;
+    const start = i;
+    for (; i < text.length && depth > 0; i += 1) {
+      if (text[i] === '{') depth += 1;
+      else if (text[i] === '}') depth -= 1;
+    }
+    out.push(text.slice(start, i - 1));
+  }
+  return out;
+}
+
+describe('the one bar in docs.css (the take-up plan, refinements (j), (k), (l))', () => {
+  it('the bar positions the reading line; the title, a tool and the line carry their declarations; no selector of the block names a width', () => {
+    expect(declValue(ruleIn(docsCss, '.docs-one-bar .docs-compact-bar'), 'position')).toBe('relative');
+    // A keyboard-focused control is lifted over the reading line, so its inset ring is whole along the bottom edge, and
+    // the line itself stays over the divider and an open title's ground (the browser file asserts both paint orders).
+    const focused = ruleIn(docsCss, '.docs-one-bar .docs-compact-bar :focus-visible');
+    expect(declValue(focused, 'position')).toBe('relative');
+    expect(declValue(focused, 'z-index')).toBe('1');
+    const title = ruleIn(docsCss, '.docs-title');
+    expect(declValue(title, 'flex')).toBe('1 1 auto');
+    expect(declValue(title, 'min-width')).toBe('0');
+    expect(declValue(title, 'min-height')).toBe('var(--tap-min)');
+    expect(declValue(title, 'background')).toBe('none');
+    expect(declValue(ruleIn(docsCss, ".docs-title[aria-expanded='true']"), 'background')).toBe('var(--bg-pressed)');
+    const tool = ruleIn(docsCss, '.docs-tool');
+    expect(declValue(tool, 'min-height')).toBe('var(--tap-min)');
+    expect(declValue(tool, 'min-width')).toBe('var(--tap-min)');
+    // The line: 2 px of the accent at the bar's bottom edge (the padding box ends above the divider, so -1px puts its
+    // bottom at the bar's), inside the bar's height, with no motion and no fade.
+    const line = ruleIn(docsCss, '.docs-read');
+    expect(declValue(line, 'position')).toBe('absolute');
+    expect(declValue(line, 'inset-block-end')).toBe('-1px');
+    expect(declValue(line, 'block-size')).toBe('2px');
+    expect(declValue(line, 'background')).toBe('var(--accent)');
+    for (const prop of ['transition', 'opacity', 'height', 'margin', 'z-index']) expect(declValue(line, prop), prop).toBeNull();
+    for (const sel of [
+      '.docs-one-bar .docs-compact-bar', '.docs-one-bar .docs-compact-bar :focus-visible', '.docs-title', ".docs-title[aria-expanded='true']", '.docs-title-dot', '.docs-tool', '.docs-read',
+    ]) {
+      expect(selectorsOf(docsCss, sel).join(' '), sel).not.toMatch(/@media|\d\s*px|width/);
+      const named = new RegExp(`${sel.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![\\w-])`);
+      for (const body of widthMediaBodies(docsCss)) expect(named.test(body), `${sel} inside a width @media block`).toBe(false);
+    }
+  });
+});

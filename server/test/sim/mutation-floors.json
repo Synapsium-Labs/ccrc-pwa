@@ -69,6 +69,8 @@
   "server/src/pushOutbox.ts#outboxNextState": 1,
   "server/src/pushOutbox.ts#outboxRetryAt": 1,
   "server/src/pushOutbox.ts#outboxBootVerdict": 1,
+  "shared/injected-prompts.mjs#injectedPromptOf": 1,
+  "shared/practice-triggers.ts#parseSignature": 1,
   "shared/poolrule.ts#poolRule": 1,
   "shared/poolset.ts#poolSetSpelling": 1,
   "shared/poolset.ts#parsePoolSet": 1

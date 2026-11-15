@@ -8,6 +8,7 @@ import {
 } from '../../../shared/api.js';
 import { CHAT_ABOUT_ROW_RE, FREE_TEXT_PLACEHOLDER_RE, parseAskTabs, reviewRows } from '../../../shared/ask-menu.js';
 import { hookEventIs } from '../../../shared/hook-events.js';
+import { INJECTED_PROMPTS } from '../../../shared/injected-prompts.mjs';
 import { turnWordOf } from '../sessionReading.js';
 
 export interface SendDeps {
@@ -982,9 +983,9 @@ const stillContains = (tail: string): StillInBox => (pane) => {
 };
 
 /** The exact text `dispatch.ts` types into a resumed worker's box before a
- *  wave brief (`sendPrompt(..., '/clear')`) — the one draft `ownStrandedClear`
- *  can ever be about. */
-const STRANDED_CLEAR = '/clear';
+ *  wave brief (`clearSender`'s send of the `clear` row) — the one draft
+ *  `ownStrandedClear` can ever be about. */
+const STRANDED_CLEAR = INJECTED_PROMPTS.clear.text;
 
 /**
  * Does this box hold EXACTLY the `/clear` a caller is claiming it stranded —
@@ -1819,7 +1820,7 @@ export function sendPrompt(
  * `/clear` and restored after it (D-5912), never a reason to skip the clear.
  */
 export function clearSender(d: SendDeps): (sessionId: string) => Promise<SendResult> {
-  return (sessionId) => sendPrompt(d, sessionId, '/clear', { onDraft: 'stash' });
+  return (sessionId) => sendPrompt(d, sessionId, INJECTED_PROMPTS.clear.text, { onDraft: 'stash' });
 }
 
 /** A box-horizontal rule row — the same convention `pane/dialog.ts`'s private
