@@ -18,7 +18,7 @@
 //   PR's entry in any state. The order is always computed over every entry, so the answer's `order` does not move.
 import {
   LANDING_ENTRY_TERMINAL, LANDING_PAUSE_BY, isLandingEntryState, LANDING_PAUSE_BYS,
-  type LandingBinding, type LandingBindingReason, type LandingEntry, type LandingLineFlags, type LandingOrder, type LandingRecovery,
+  type LandingBinding, type LandingEntryState, type LandingBindingReason, type LandingEntry, type LandingLineFlags, type LandingOrder, type LandingRecovery,
 } from '../../../shared/landingLine.js';
 import { RADAR_PROBE_FRESH_S, freshWithin } from '../../../shared/api.js';   // L0: the one freshness rule
 import type { LandingControlRead } from './radar.js';                       // type-only: no ring edge
@@ -133,10 +133,18 @@ export function landingBindingOf(facts: LandingMutationFacts, control: LandingCo
   if (lander.doc.project !== facts.project || !fresh(lander.doc.at, nowMs)) return held('opt-in-unknown');
   if (facts.flags.operatorPaused) return held('paused');
   if (facts.recovery.hold !== null) return held('recovery');
-  const open = facts.entries.filter((x) => !LANDING_ENTRY_TERMINAL[x.state]);
-  // An open row is clear only when its state is a recognised one other than `unknown` (so `pinned` or `ejected`, the open
-  // states of the L0 vocabulary), its projection reads with a null quarantine marker, and its dependencies read. Every
-  // other open row, an unrecognised state word included, holds. Terminal rows (any damage) never come here.
+  // Openness is classified from the STORED state word (`facts.stateWords`), not the display state: the strict reader shows a
+  // raw terminal row with display-level damage as `unknown`, and that row is not an open blocker (plan Task 3 Step 5). A
+  // stored word that is unrecognised or `unknown`, or has no record, is open (fail closed).
+  const wordOf = (x: LandingEntry): LandingEntryState | 'unrecognised' | undefined => facts.stateWords.find((w) => w.id === x.id)?.value;
+  const isOpen = (x: LandingEntry): boolean => {
+    const w = wordOf(x);
+    return w === undefined || w === 'unrecognised' || w === 'unknown' || LANDING_ENTRY_TERMINAL[w] === false;
+  };
+  const open = facts.entries.filter(isOpen);
+  // An open row is clear only when its display state is a recognised one other than `unknown` (so `pinned` or `ejected`, the
+  // open states of the L0 vocabulary), its projection reads with a null quarantine marker, and its dependencies read. Every
+  // other open row, an unrecognised state word included, holds. A terminal stored word with display damage never comes here.
   const clear = (x: LandingEntry): boolean => {
     const projection = facts.projections.find((p) => p.id === x.id)?.value;
     return isLandingEntryState(x.state) && x.state !== 'unknown' && projection?.kind === 'readable' && projection.quarantine === null

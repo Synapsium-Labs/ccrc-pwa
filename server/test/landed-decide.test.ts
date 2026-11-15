@@ -122,7 +122,8 @@ describe('landedCandidatesOf', () => {
   const factsOf = (o: { entries: LandingEntry[]; projections: LandingMutationFacts['projections']; recovery: LandingRecovery;
     terminalRepairs?: LandingMutationFacts['terminalRepairs'] }): LandingMutationFacts => ({
     project: 'project-a', flags: { operatorPaused: false, mainRedHold: false }, entries: o.entries, projections: o.projections,
-    dependencies: o.entries.map((e) => ({ id: e.id, value: { kind: 'readable' as const, afterIds: [] } })),
+    stateWords: o.entries.map((e) => ({ id: e.id, value: e.state })),
+        dependencies: o.entries.map((e) => ({ id: e.id, value: { kind: 'readable' as const, afterIds: [] } })),
     recovery: o.recovery, nextId: Math.max(0, ...o.entries.map((e) => e.id)) + 1, foreignIds: [],
     coordinators: o.entries.map((e) => ({ id: e.id, value: { kind: 'no-run' as const } })),
     terminalRepairs: o.terminalRepairs ?? [], creations: [],
@@ -173,6 +174,7 @@ describe('landedCandidatesOf: the terminal-repair alternative (wave 5i, D-8626)'
   const factsOf = (entries: LandingEntry[], terminalRepairs: LandingMutationFacts['terminalRepairs'], recovery: LandingRecovery = NO_HOLD): LandingMutationFacts => ({
     project: 'project-a', flags: { operatorPaused: false, mainRedHold: false }, entries,
     projections: entries.map((e) => ({ id: e.id, value: { kind: 'unreadable' } as LandingProjectionRead })),
+    stateWords: entries.map((e) => ({ id: e.id, value: e.state })),
     dependencies: entries.map((e) => ({ id: e.id, value: { kind: 'readable' as const, afterIds: [] } })), recovery, nextId: 99, foreignIds: [],
     coordinators: entries.map((e) => ({ id: e.id, value: { kind: 'no-run' as const } })), terminalRepairs, creations: [],
   });

@@ -197,6 +197,20 @@ const EXPECTED_A = {
       }
     }
   ],
+  "stateWords": [
+    {
+      "id": 1,
+      "value": "pinned"
+    },
+    {
+      "id": 2,
+      "value": "landed"
+    },
+    {
+      "id": 5,
+      "value": "ejected"
+    }
+  ],
   "dependencies": [
     {
       "id": 1,
@@ -364,6 +378,16 @@ const EXPECTED_B = {
         "kind": "readable",
         "quarantine": null
       }
+    }
+  ],
+  "stateWords": [
+    {
+      "id": 3,
+      "value": "pinned"
+    },
+    {
+      "id": 4,
+      "value": "withdrawn"
     }
   ],
   "dependencies": [

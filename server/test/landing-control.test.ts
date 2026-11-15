@@ -17,7 +17,7 @@ import type { CoordStore } from '../src/coord/store.js';
 import { landingStoreOver } from './landingFixture.js';
 import { landingBindingOf, mainRedNext } from '../src/coord/landingLine.js';
 import type { LandingMutationFacts } from '../src/coord/landingWrites.js';
-import type { LandingEntry } from '../../shared/landingLine.js';
+import { isLandingEntryState, type LandingEntry, type LandingEntryState } from '../../shared/landingLine.js';
 
 const iso = (offsetS: number): string => new Date(now + offsetS * 1000).toISOString().replace(/\.\d{3}Z$/, 'Z');
 const P = 'project-a';
@@ -354,6 +354,7 @@ const entry = (pr: number, over: Partial<LandingEntry> = {}): LandingEntry => ({
 const factsOf = (entries: LandingEntry[] = [entry(7)], over: Partial<LandingMutationFacts> = {}): LandingMutationFacts => ({
   project: P, flags: { operatorPaused: false, mainRedHold: false }, entries,
   projections: entries.map((x) => ({ id: x.id, value: { kind: 'readable' as const, quarantine: null } })),
+  stateWords: entries.map((x) => ({ id: x.id, value: isLandingEntryState(x.state) ? x.state : 'unrecognised' as const })),
   dependencies: entries.map((x) => ({ id: x.id, value: { kind: 'readable' as const, afterIds: x.afterIds } })),
   recovery: { subjects: [], hold: null }, nextId: 200, foreignIds: [],
   coordinators: entries.map((x) => ({ id: x.id, value: { kind: 'no-run' as const } })), terminalRepairs: [], creations: [], ...over,
@@ -423,15 +424,20 @@ describe('landingBindingOf: precedence and the evidence it binds', () => {
     const dep = factsOf([entry(7)], { dependencies: [{ id: 107, value: { kind: 'unreadable' } }] });
     expect(landingBindingOf(dep, controlRead(), now)).toMatchObject({ reason: 'projection-unreadable' });
   });
-  it('ORDER-unknown: an unreadable terminal row is not an open blocker, an unreadable open one is', () => {
-    const terminal = factsOf([entry(7), entry(5, { state: 'landed' })], {
-      projections: [{ id: 107, value: { kind: 'readable', quarantine: null } }, { id: 105, value: { kind: 'unreadable' } }] });
-    expect(landingBindingOf(terminal, controlRead(), now).mode).toBe('ready');
+  // The shape the real reader produces: a raw terminal row with display-level damage shows `unknown`, its stored word stays terminal.
+  const words = (...w: [number, LandingEntryState | 'unrecognised'][]): LandingMutationFacts['stateWords'] => w.map(([id, value]) => ({ id, value }));
+  it('ORDER-unknown: a damaged terminal row (display unknown, stored word terminal) is not an open blocker, an unreadable open one is', () => {
+    for (const word of ['landed', 'closed', 'withdrawn'] as const) {
+      const terminal = factsOf([entry(7), entry(5, { state: 'unknown' })], {
+        projections: [{ id: 107, value: { kind: 'readable', quarantine: null } }, { id: 105, value: { kind: 'unreadable' } }],
+        stateWords: words([107, 'pinned'], [105, word]) });
+      expect(landingBindingOf(terminal, controlRead(), now).mode, word).toBe('ready');
+    }
     const open = factsOf([entry(7), entry(8, { state: 'ejected', ejections: 1 })], {
       projections: [{ id: 107, value: { kind: 'readable', quarantine: null } }, { id: 108, value: { kind: 'unreadable' } }] });
     expect(landingBindingOf(open, controlRead(), now)).toMatchObject({ reason: 'projection-unreadable' });
   });
-  it('ORDER-unknown (fix round 1): a nonterminal unknown row holds, quarantined or clean; a terminal damaged row does not', () => {
+  it('ORDER-unknown (fix round 1): a nonterminal unknown row holds, quarantined or clean; a damaged terminal row does not', () => {
     const quarantined = factsOf([entry(7), entry(9, { state: 'unknown' })], {
       projections: [{ id: 107, value: { kind: 'readable', quarantine: null } }, { id: 109, value: { kind: 'readable', quarantine: 'stale-episode-head' } }] });
     expect(landingBindingOf(quarantined, controlRead(), now)).toEqual({ mode: 'held', reason: 'projection-unreadable', entryId: 107 });
@@ -439,9 +445,17 @@ describe('landingBindingOf: precedence and the evidence it binds', () => {
     expect(landingBindingOf(cleanUnknown, controlRead(), now)).toMatchObject({ mode: 'held', reason: 'projection-unreadable' });
     const quarantinedPinned = factsOf([entry(7)], { projections: [{ id: 107, value: { kind: 'readable', quarantine: 'stale-episode-head' } }] });
     expect(landingBindingOf(quarantinedPinned, controlRead(), now)).toMatchObject({ reason: 'projection-unreadable' });
-    const closed = factsOf([entry(7), entry(5, { state: 'closed' })], {
-      projections: [{ id: 107, value: { kind: 'readable', quarantine: null } }, { id: 105, value: { kind: 'unreadable' } }] });
-    expect(landingBindingOf(closed, controlRead(), now).mode).toBe('ready');
+    // Display unknown over an unreadable projection holds when the stored word is pinned, unknown or unrecognised, and for no record.
+    for (const word of ['pinned', 'unknown', 'unrecognised'] as const) {
+      const damaged = factsOf([entry(7), entry(5, { state: 'unknown' })], {
+        projections: [{ id: 107, value: { kind: 'readable', quarantine: null } }, { id: 105, value: { kind: 'unreadable' } }],
+        stateWords: words([107, 'pinned'], [105, word]) });
+      expect(landingBindingOf(damaged, controlRead(), now), word).toMatchObject({ mode: 'held', reason: 'projection-unreadable' });
+    }
+    const noRecord = factsOf([entry(7), entry(5, { state: 'unknown' })], {
+      projections: [{ id: 107, value: { kind: 'readable', quarantine: null } }, { id: 105, value: { kind: 'unreadable' } }],
+      stateWords: words([107, 'pinned']) });
+    expect(landingBindingOf(noRecord, controlRead(), now)).toMatchObject({ mode: 'held', reason: 'projection-unreadable' });
   });
   it('ORDER-unknown (fix round 2): an open row in an unrecognised state word holds even with a clean projection', () => {
     const f = factsOf([entry(7), entry(9, { state: 'mystery' as LandingEntry['state'] })]);

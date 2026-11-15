@@ -493,6 +493,7 @@ export function landingFactsOf(project: string, rows: LandingStoreRows): Landing
   return { ok: true, facts: {
     project, flags: landingFlagsOfRow(rows.flags), entries: mine.map((m) => m.facts.entry), recovery,
     projections: mine.map((m) => ({ id: m.facts.entry.id, value: m.facts.projection })),
+    stateWords: mine.map((m) => ({ id: m.facts.entry.id, value: isLandingEntryState(m.row.state) ? m.row.state : 'unrecognised' as const })),
     dependencies: mine.map((m) => ({ id: m.facts.entry.id, value: m.facts.dependencies })),
     nextId: max + 1 > Number.MAX_SAFE_INTEGER ? null : max + 1, foreignIds: [...foreign], coordinators, terminalRepairs,
     creations: mine.flatMap(({ facts }) => {

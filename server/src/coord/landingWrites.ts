@@ -28,7 +28,7 @@
 //   7. an effective no-op (the same resulting afterIds and fixesMain) -> {kind:'noop'}, appending nothing.
 // Omitted `afterIds`/`fixesMain` keep the current value; `[]` and `false` are explicit clears.
 import type {
-  LandingBoundaryFailure, LandingEntry, LandingInfrastructureFailure, LandingLineFlags, LandingMutationCode, LandingRecovery,
+  LandingBoundaryFailure, LandingEntry, LandingEntryState, LandingInfrastructureFailure, LandingLineFlags, LandingMutationCode, LandingRecovery,
   LandingSubjectRef,
 } from '../../../shared/landingLine.js';
 import type { LandingProjectionRead, LandingTerminalRepair } from './landingEntry.js';
@@ -42,6 +42,10 @@ export interface LandingMutationFacts {
   flags: LandingLineFlags;
   entries: LandingEntry[];
   projections: { id: number; value: LandingProjectionRead }[];
+  /** Wave 5i (fix round 1, R1): the STORED state word of each entry of this project, as the row holds it (the raw
+   *  `row.state`), `'unrecognised'` when it is not a word of the L0 vocabulary. Read before the display fold; it never
+   *  says the row reads, and no reader may take it for readability. Every entry has one record. */
+  stateWords: { id: number; value: LandingEntryState | 'unrecognised' }[];
   dependencies: { id: number; value: { kind: 'readable'; afterIds: number[] } | { kind: 'unreadable' } }[];
   recovery: LandingRecovery;
   /** The next entry id, or null when the one allocator would overflow. */
