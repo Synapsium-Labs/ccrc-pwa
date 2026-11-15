@@ -381,6 +381,12 @@ export interface ChainedPosition {
   digest: string;
 }
 
+/** The next record's position from a head: sequence 1 and no previous digest before the first record, else the head's
+ *  sequence plus one and the head's digest. The one copy of that arithmetic: every writer that appends after a head asks it. */
+export function chainNext(head: ChainedPosition | null): { sequence: number; previousDigest: string | null } {
+  return head === null ? { sequence: 1, previousDigest: null } : { sequence: head.sequence + 1, previousDigest: head.digest };
+}
+
 /** What a validated journal covers, in the shape a snapshot manifest carries it. */
 export interface ChainedCoverage {
   firstSequence: number | null;

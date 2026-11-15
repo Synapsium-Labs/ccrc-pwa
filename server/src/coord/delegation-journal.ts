@@ -32,6 +32,7 @@ import {
   ChainVerifier,
   ChainedLineSplitter,
   buildChainedRecord,
+  chainNext,
   chainedAssertInstant,
   chainedExactKeys,
   chainedHex64,
@@ -440,8 +441,7 @@ export function planDelegationJournalAppend(input: {
   const batchLeaseByPath = new Map<string, string>();
   const records: DelegationJournalRecordV1[] = [];
   const skipped: DelegationAppendPlan['skipped'] = [];
-  let sequence = input.head?.sequence ?? 0;
-  let previousDigest = input.head?.digest ?? null;
+  let head: ChainedPosition | null = input.head;
   input.items.forEach((item, index) => {
     const entry = validateEntry(item.entry);
     if (entry.kind === 'evidence-accepted') {
@@ -459,10 +459,9 @@ export function planDelegationJournalAppend(input: {
       batchLeaseByIdentity.set(identityKey, entry.leaseId);
       batchLeaseByPath.set(entry.canonicalPath, entry.leaseId);
     }
-    const record = buildDelegationJournalRecord({ sequence: sequence + 1, acceptedAt: item.acceptedAt, previousDigest, entry });
+    const record = buildDelegationJournalRecord({ ...chainNext(head), acceptedAt: item.acceptedAt, entry });
     records.push(record);
-    sequence = record.sequence;
-    previousDigest = record.digest;
+    head = { sequence: record.sequence, journalId: record.journalId, digest: record.digest };
   });
   return { records, skipped };
 }
