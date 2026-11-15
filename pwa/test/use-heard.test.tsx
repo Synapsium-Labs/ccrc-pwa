@@ -1,6 +1,6 @@
 import { readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
-import ts from 'typescript';
+import { ts } from '../../server/test/scan/parse';
 import { renderHook, act } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 import { useHeard, useHeardRuns, useHeardSessions } from '../src/fleet/useHeard';
