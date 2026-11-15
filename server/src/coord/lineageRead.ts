@@ -242,7 +242,9 @@ export async function readRadarPass(
       const probe = await Promise.race([readRadarProbe(io, registryDir, n, nowMs, ac.signal), late]);
       if (!probe.ok && probe.reason === 'late') return failedBundle(n, lateOf);
       if (!controlsWanted.has(n)) return { probe, control: null };
-      const control = await Promise.race([readLandingControl(io, registryDir, n, probe, nowMs, ac.signal), late]);
+      // A control read that rejects after the probe answered is `unreadable` for the control alone; the probe is kept.
+      const control = await Promise.race([readLandingControl(io, registryDir, n, probe, nowMs, ac.signal), late])
+        .catch(() => allFailed({ ok: false, reason: 'unreadable' }));
       return { probe, control: 'lander' in control ? control : allFailed(lateOf) };
     };
     const answers = await mapBounded(safe, RADAR_PASS_CONCURRENCY, (n): Promise<Bundle> => (ac.signal.aborted

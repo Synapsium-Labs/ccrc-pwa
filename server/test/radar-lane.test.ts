@@ -872,6 +872,28 @@ describe('wave 5i: the control bundle through the pass', () => {
     expect(seen.filter((x) => x.startsWith('range ') && x.endsWith(`${path.sep}proj-a${path.sep}probe`)), 'one probe read').toHaveLength(1);
   });
 
+  it('R2: a fast probe with a lander read that rejects stays the radar result, and its control is unreadable in all three documents', async () => {
+    plantAll('proj-a');
+    const base = await readRadarPass(localIO, reg, new Set(['proj-a']), NOW, 5000, new Set(['proj-a']));
+    const io = spied([], { lstatMeasured: (p) => (p.endsWith(`${path.sep}lander`) ? Promise.reject(new Error('boom')) : localIO.lstatMeasured(p)) });
+    const r = await readRadarPass(io, reg, new Set(['proj-a']), NOW, 5000, new Set(['proj-a']));
+    const bad = { ok: false, reason: 'unreadable' } as const;
+    if (!r.ok || !base.ok) throw new Error('pass');
+    expect(r.reads.get('proj-a')).toEqual(base.reads.get('proj-a'));
+    expect(r.reads.get('proj-a')?.ok).toBe(true);
+    expect(r.controls.get('proj-a')).toEqual({ lander: bad, probe: bad, health: bad });
+  });
+
+  it('R2: a probe that rejects keeps today\'s answer, unreadable in both maps', async () => {
+    plantAll('proj-a');
+    const io = spied([], { lstatMeasured: (p) => (p.endsWith(`${path.sep}probe`) ? Promise.reject(new Error('boom')) : localIO.lstatMeasured(p)) });
+    const r = await readRadarPass(io, reg, new Set(['proj-a']), NOW, 5000, new Set(['proj-a']));
+    const bad = { ok: false, reason: 'unreadable' } as const;
+    if (!r.ok) throw new Error('pass');
+    expect(r.reads.get('proj-a')).toEqual(bad);
+    expect(r.controls.get('proj-a')).toEqual({ lander: bad, probe: bad, health: bad });
+  });
+
   it('R2: a genuinely late probe is late in both maps, and a healthy neighbour keeps its answers', async () => {
     plantAll('proj-a'); plantAll('proj-b');
     const io = spied([], { lstatMeasured: (p) => (p.includes(`${path.sep}proj-a${path.sep}`) && p.endsWith(`${path.sep}probe`) ? hang() : localIO.lstatMeasured(p)) });
@@ -1087,21 +1109,32 @@ describe('the radar lane composes the control bundle and the store apply', () =>
     expect(ap, 'the superseded pass cannot apply').toEqual(['proj-b']);
   });
 
-  // R2 at the sweep: the probe answered, the lander read never does. The radar result is kept, the control is held (late in all
-  // three documents), and no cue or delivery is queued. The unhung twin queues no cue either with this fixture (one pinned
-  // entry, no selectable head), so the zero is the strongest cue assertion the fixture allows; the hold is the control read.
+  // R2 at the sweep: the probe answered, one control read never does. The fixture is a READY head (a pinned entry whose run is
+  // at `merging` with a current episode matching its PR and sha, a fresh lander, a probe naming that head clean against the
+  // health sha, fresh green health), so the unhung twin queues exactly one `next-to-land:` cue and one delivery and the zero
+  // below can fail.
   const cueRows = (): number => (dbHandle.prepare("SELECT COUNT(*) AS n FROM mail WHERE subject LIKE 'next-to-land:%'").get() as { n: number }).n;
   const deliveryRows = (): number => (dbHandle.prepare('SELECT COUNT(*) AS n FROM mail_deliveries').get() as { n: number }).n;
-  const sweepWith = async (slowLander: boolean): Promise<{ w: FleetWatcher; probeReadCount: number }> => {
+  const seedReady = (): void => {
+    plantRowIn(reg, 'claude-a-proj-a-alpha'); plantControl('proj-a');
+    const opened = coord.openRun({ program: 'prog-a', title: 't', project: 'proj-a', wave: 1, waveOf: 2, claimedBy: 'coordinator-a' });
+    if (!('id' in opened)) throw new Error('fixture openRun refused');
+    coord.setSession(opened.id, 'claude-a-proj-a-alpha');
+    for (const to of ['dispatched', 'working', 'awaiting-review'] as const) if (!coord.advance(opened.id, to, 'test').ok) throw new Error(`fixture advance ${to}`);
+    const pinned = coord.advanceLanding({ runId: opened.id, to: 'merging', causedBy: 'coordinator',
+      landing: { kind: 'pin', head: sha(12), pr: 12, mode: 'off', handoffCommit: sha(112) } });
+    if (!pinned.ok) throw new Error('fixture pin refused');
+  };
+  const sweepWith = async (hangs: ((m: string, p: string) => boolean) | null): Promise<{ w: FleetWatcher; probeReadCount: number }> => {
     const seen: string[] = [];
     let landerAsked: () => void = () => undefined;
     const asked = new Promise<void>((r) => { landerAsked = r; });
     const w = make(bentIo((m, p) => {
-      if (slowLander && m === 'lstat' && p.endsWith(`${path.sep}lander`)) { landerAsked(); return new Promise<never>(() => undefined); }
+      if (hangs !== null && hangs(m, p)) { landerAsked(); return new Promise<never>(() => undefined); }
       return undefined;
     }, seen));
     const recs = await readRegistry(localIO, testDeps(home).cfg);
-    if (!slowLander) { await w.sweepRadar(recs, NOW); return { w, probeReadCount: probeReads(seen, 'proj-a') }; }
+    if (hangs === null) { await w.sweepRadar(recs, NOW); return { w, probeReadCount: probeReads(seen, 'proj-a') }; }
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     try {
       const pass = w.sweepRadar(recs, NOW);
@@ -1111,22 +1144,25 @@ describe('the radar lane composes the control bundle and the store apply', () =>
     } finally { vi.useRealTimers(); }
     return { w, probeReadCount: probeReads(seen, 'proj-a') };
   };
+  const lateAll = { lander: { ok: false, reason: 'late' }, probe: { ok: false, reason: 'late' }, health: { ok: false, reason: 'late' } } as const;
 
-  it('R2: a fast probe and a slow lander keep the radar result, hold the control, and queue no cue', async () => {
-    plantRowIn(reg, 'claude-a-proj-a-alpha'); plantControl('proj-a'); seedOpen('proj-a', 1, 12);
-    const twin = await sweepWith(false);
-    const keptByTwin = [...twin.w.currentLandings().keys()];
-    expect(keptByTwin, 'the unhung twin must have a radar result to compare').toEqual(['claude-a-proj-a-alpha']);
-    twin.w.stop(); watchers.length = 0;
-    dbHandle.exec('DELETE FROM mail_deliveries; DELETE FROM mail;');
-    const cuesBefore = cueRows();
-    const hung = await sweepWith(true);
-    expect([...hung.w.currentLandings().keys()], 'the answered probe was dropped with the late control').toEqual(keptByTwin);
-    const late = { ok: false, reason: 'late' } as const;
-    expect(hung.w.currentLandingControl('proj-a', NOW)).toEqual({ lander: late, probe: late, health: late });
-    expect(hung.probeReadCount, 'one probe read').toBe(1);
-    expect([cueRows() - cuesBefore, deliveryRows()], 'a late control queued a cue or a delivery').toEqual([0, 0]);
+  it('R2 twin: with nothing hung, the ready head queues exactly one next-to-land cue and one delivery', async () => {
+    seedReady();
+    const twin = await sweepWith(null);
+    expect([...twin.w.currentLandings().keys()]).toEqual(['claude-a-proj-a-alpha']);
+    expect([cueRows(), deliveryRows()]).toEqual([1, 1]);
   });
+
+  for (const [name, doc] of [['lander', 'lander'], ['health', 'main-health']] as const) {
+    it(`R2: a fast probe and a slow ${name} keep the radar result, hold the control, and queue no cue`, async () => {
+      seedReady();
+      const hung = await sweepWith((m, p) => m === 'lstat' && p.endsWith(`${path.sep}${doc}`));
+      expect([...hung.w.currentLandings().keys()], 'the answered probe was dropped with the late control').toEqual(['claude-a-proj-a-alpha']);
+      expect(hung.w.currentLandingControl('proj-a', NOW)).toEqual(lateAll);
+      expect(hung.probeReadCount, 'one probe read').toBe(1);
+      expect([cueRows(), deliveryRows()], 'a late control queued a cue or a delivery').toEqual([0, 0]);
+    });
+  }
 
   it('a cached control older than the radar freshness allows answers nothing, so the route holds', async () => {
     plantControl('proj-b'); seedOpen('proj-b', 1, 12);
