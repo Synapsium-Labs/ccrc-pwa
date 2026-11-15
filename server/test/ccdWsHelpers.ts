@@ -85,18 +85,23 @@ let ccdSourceMemo: string | undefined;
  *  read the real bytes of `CCD` and `CCD_LIB` themselves. Only the pointer lines differ from the pre-move text. */
 export function ccdSource(): string {
   if (ccdSourceMemo !== undefined) return ccdSourceMemo;
-  const main = fs.readFileSync(CCD, 'utf8');
+  return (ccdSourceMemo = spliceCcd(fs.readFileSync(CCD, 'utf8'), CCD_LIBS.filter((lib) => fs.existsSync(lib)).map((lib) => fs.readFileSync(lib, 'utf8'))));
+}
+
+/** `ccdSource()`'s splice as a pure function of the texts (the file split's Task 1, D-8634): `main` with each
+ *  `# @ccd-lib:<id>` pointer line replaced by that region of the library texts `libs`, one level deep. A pointer with
+ *  no region stays as it is; an id two libraries both name throws. */
+export function spliceCcd(main: string, libs: readonly string[]): string {
   const regions = new Map<string, string>();
-  for (const lib of CCD_LIBS) {
-    if (!fs.existsSync(lib)) continue;
-    const parts = fs.readFileSync(lib, 'utf8').split(/^# @ccd-lib:(\w+)\n/m);
+  for (const text of libs) {
+    const parts = text.split(/^# @ccd-lib:(\w+)\n/m);
     for (let i = 1; i + 1 < parts.length; i += 2) {
       if (regions.has(parts[i]!)) throw new Error(`ccdSource: the region id ${parts[i]} is named twice across ccd's libraries`);
       regions.set(parts[i]!, parts[i + 1]!.replace(/\n+$/, ''));
     }
   }
-  if (regions.size === 0) return (ccdSourceMemo = main);
-  return (ccdSourceMemo = main.replace(/^# @ccd-lib:(\w+)\b.*$/gm, (line, id: string) => regions.get(id) ?? line));
+  if (regions.size === 0) return main;
+  return main.replace(/^# @ccd-lib:(\w+)\b.*$/gm, (line, id: string) => regions.get(id) ?? line);
 }
 
 /** The coordination client, beside `ccd` and installed the same way. Spelled

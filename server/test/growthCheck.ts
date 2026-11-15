@@ -55,6 +55,14 @@
 // one PR. The PR that adds a cap is still judged by the stage the file held at the merge-base (`prior`): frozen, or
 // listed for any other file, so a cap written in the same PR never lifts the per-PR limit it grows under. Both directories hold one JSON file per file (`stageFileName`), read at the merge-base and at HEAD, so a PR
 // cannot unfreeze or uncap itself; either one malformed at either sha is a failing row of its own.
+//
+// D-8048 (the ccd file split, Task 2 Part B): one more row, `ccd (program)`, the net code lines of `ccd/ccd` and every
+// `ccd/lib/*.sh` not named `ccrc-*`, summed at each sha (`programRow`). The per-file rows cannot bound a total: 30
+// lines in each of three libraries passes every file. The program row is red over GROWTH_LIMIT, is never another row's
+// shrink, and no entry names it; the entries that applied to a member's row raise it, each by its own limit. A member
+// absent at head (a revert, an `unmove`) counts as a shrink of its whole size, so a slice can be undone. The program row
+// has D-8635's listed stage and no other: a freeze or cap never names it (`stageFor`), and a member's own stage leaves it
+// at GROWTH_LIMIT, so a capped `ccd/ccd` still moves the program's total by at most that much per PR.
 import { execFileSync } from 'node:child_process';
 import { appendFileSync, readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
@@ -321,6 +329,41 @@ const sameHome = (a: Home | null, b: Home | null): boolean =>
 
 const RING_PACKAGE = /^(server|pwa)\/src\/(.+)$/;
 
+/** The program row's name: `ccd/ccd` and its libraries as one total. No entry may name it: it is in no file list. */
+export const PROGRAM_ROW = 'ccd (program)';
+
+/** A member of the program: `ccd/ccd`, or a `ccd/lib/*.sh` that is not a `ccrc-*` file (the sweeps source those). */
+export function isProgramMember(file: string): boolean {
+  return file === 'ccd/ccd' || (CCD_LIBRARY.test(file) && !path.basename(file).startsWith('ccrc-'));
+}
+
+/** The program row between two shas: the members each sha holds, their net code lines summed there. */
+export function programRow(baseSha: string, headSha: string, cwd: string): GrowthRow {
+  const at = (sha: string): number | null => {
+    const members = ['ccd/ccd', ...gitRead(['ls-tree', '--name-only', '-z', sha, '--', 'ccd/lib/'], cwd).split('\0')]
+      .filter(isProgramMember);
+    let total: number | null = null;
+    for (const f of members) {
+      const text = fileAt(f, sha, cwd);
+      if (text !== null) total = (total ?? 0) + codeLines(f, text);
+    }
+    return total;
+  };
+  const base = at(baseSha);
+  const head = headSha === baseSha ? base : at(headSha);
+  const b = base ?? 0;
+  const h = head ?? 0;
+  return { file: PROGRAM_ROW, base: b, head: h, delta: h - b, atBoth: base !== null && head !== null };
+}
+
+/** `o` pays for another row's growth: a file at both shas that shrank, or a program member the diff deletes (its whole
+ *  size, so a revert or an `unmove` passes). The program row pays for nothing. */
+const shrinkOf = (o: GrowthRow): number => {
+  if (o.file === PROGRAM_ROW) return 0;
+  if (o.atBoth || (isProgramMember(o.file) && o.head === 0 && o.delta < 0)) return -o.delta;
+  return 0;
+};
+
 /** The ring classifier the growth check reads (D-8563): a `server/src` or `pwa/src` source file's ring by `serverRing`
  *  or `pwaRing` over its blob at `headSha`, and its context by the spec's `ring-context-map` table as `baseSha` holds
  *  it, so a row the PR itself writes moves nothing. A table the merge-base lacks or cannot parse gives no file a home.
@@ -355,20 +398,24 @@ export function ringHomes(root: string, baseSha: string, headSha: string): HomeO
  *  same diff adds another file `homeOf` puts in this file's ring and context
  *  (D-8563; with no classifier, none), or shrinks another listed file by at
  *  least as much as this one grew. A listed file absent at either sha (deleted,
- *  renamed, new) is no shrink and waives nothing. */
+ *  renamed, new) is no shrink and waives nothing, except a program member the
+ *  diff deletes (D-8048). The program row is waived by neither route, and its
+ *  stage is always listed (`stageFor`). */
 export function growthOver(rows: readonly GrowthRow[], added: readonly string[], homeOf: HomeOf = NO_HOME,
   stageOf: StageOf = ALL_LISTED): string[] {
   return rows
     .filter((r) => {
       // D-8635: a capped file has no per-PR limit (its verdict reads the cap); a frozen one has SPINE_LIMIT and no waiver.
       // The PR that adds a cap is judged by the stage the file held before it.
-      const s = stageOf(r.file);
+      const s = stageFor(stageOf, r.file);
       const stage = s.stage === 'capped' && s.base === null ? s.prior : s.stage;
       if (stage === 'capped') return false;
       if (stage === 'frozen') return r.delta > SPINE_LIMIT;
-      return r.delta > GROWTH_LIMIT
-        && !added.some((p) => p !== r.file && sameHome(homeOf(r.file), homeOf(p)))
-        && !rows.some((o) => o.file !== r.file && o.atBoth && -o.delta >= r.delta);
+      if (r.delta <= GROWTH_LIMIT) return false;
+      // D-8048: the program row is waived by neither a new file nor a shrink.
+      if (r.file === PROGRAM_ROW) return true;
+      return !added.some((p) => p !== r.file && sameHome(homeOf(r.file), homeOf(p)))
+        && !rows.some((o) => o.file !== r.file && shrinkOf(o) > 0 && shrinkOf(o) >= r.delta);
     })
     .map((r) => r.file);
 }
@@ -658,6 +705,8 @@ export type Stage =
 export type StageOf = (file: string) => Stage;
 /** Every file listed: the stage when no cap or freeze is read. */
 export const ALL_LISTED: StageOf = () => ({ stage: 'listed' });
+/** A row's stage: the program row's is listed whatever `stageOf` answers (D-8048), every other file's is `stageOf`'s. */
+export const stageFor = (stageOf: StageOf, file: string): Stage => (file === PROGRAM_ROW ? { stage: 'listed' } : stageOf(file));
 
 /** The one file name a cap or freeze of `file` takes: the path, lower case, each run of other characters a `-`. */
 export const stageFileName = (file: string): string => `${file.toLowerCase().replace(/[^a-z0-9]+/g, '-')}.json`;
@@ -704,6 +753,8 @@ export function parseCapFiles(items: readonly { name: string; text: string }[], 
   { entries: GrowthCap[]; problems: string[] } {
   const got = parseStageFiles(items, ['file', 'cap', 'd', 'since'], today, (o, at, problems) => {
     if (!Number.isInteger(o['cap']) || (o['cap'] as number) < 1) problems.push(`${at}: cap must be a positive integer`);
+    // D-8048: the program row is no file and keeps the listed stage; no cap names it.
+    if (o['file'] === PROGRAM_ROW) problems.push(`${at}: file must not be the program row, ${PROGRAM_ROW}`);
   });
   return { entries: got.entries as GrowthCap[], problems: got.problems };
 }
@@ -722,7 +773,7 @@ function cappedNamesAt(sha: string, cwd: string): string[] {
   return dirItemsAt(GROWTH_CAPS_DIR, sha, cwd).flatMap(({ text }) => {
     try {
       const file = (JSON.parse(text) as { file?: unknown } | null)?.file;
-      return typeof file === 'string' && file !== '' ? [file] : [];
+      return typeof file === 'string' && file !== '' && file !== PROGRAM_ROW ? [file] : [];
     } catch {
       return [];
     }
@@ -850,7 +901,9 @@ export interface GrowthVerdict {
 
 /** The armed decision, pure: a row fails when its file grew over the limit,
  *  unwaived, and neither an exemption nor a ledger entry the diff adds
- *  (`waivers`, D-6223) applies to it. */
+ *  (`waivers`, D-6223) applies to it. The program row (D-8048) is decided last:
+ *  it fails over GROWTH_LIMIT plus the limits of the entries that applied to a
+ *  member's row, an exemption's `cap` and a waiver's `maxDelta`. */
 export function growthVerdicts(rows: readonly GrowthRow[], over: readonly string[],
   entries: readonly GrowthExemption[], pr: number | null, touched: readonly string[],
   waivers: readonly GrowthWaiver[] = [], stageOf: StageOf = ALL_LISTED): GrowthVerdict[] {
@@ -878,7 +931,8 @@ export function growthVerdicts(rows: readonly GrowthRow[], over: readonly string
       why: `${r.file} grew by ${r.delta} net code lines, ${reason}`,
     };
   };
-  return rows.map((r) => {
+  // D-8048: the program row is decided after its members, below.
+  const verdicts = rows.filter((r) => r.file !== PROGRAM_ROW).map((r) => {
     const s = stageOf(r.file);
     if (s.stage !== 'capped') return perPr(r, s.stage === 'frozen');
     const c = capVerdict(r, s, entries, pr, touched);
@@ -888,6 +942,22 @@ export function growthVerdicts(rows: readonly GrowthRow[], over: readonly string
     return { ...p, fails: c.fails || p.fails, title: `${c.title}, ${p.title.slice(r.file.length + 2)}`,
       why: !p.fails ? c.why : c.fails ? `${c.why}; ${p.why}` : p.why };
   });
+  const program = rows.find((r) => r.file === PROGRAM_ROW);
+  if (program === undefined) return verdicts;
+  const raise = verdicts.filter((v) => isProgramMember(v.file)).reduce((n, v) =>
+    n + (v.exemption?.applies === true ? v.exemption.entry.cap : 0) + (v.waiver?.applies === true ? v.waiver.entry.maxDelta : 0), 0);
+  const isOver = over.includes(PROGRAM_ROW);
+  const note = raise > 0 ? `, raised by ${raise}: its members' entries` : '';
+  const limit = raise > 0 ? `the limit of ${GROWTH_LIMIT} plus the ${raise} its members' entries allow` : `the limit of ${GROWTH_LIMIT}`;
+  return [...verdicts, {
+    file: PROGRAM_ROW,
+    over: isOver,
+    exemption: undefined,
+    waiver: undefined,
+    fails: isOver && program.delta > GROWTH_LIMIT + raise,
+    title: `${PROGRAM_ROW}: delta ${signed(program.delta)}${isOver ? ` (GROWTH_OVER${note})` : ''}`,
+    why: `${PROGRAM_ROW} grew by ${program.delta} net code lines, over ${limit}`,
+  }];
 }
 
 /** The armed rows' whole read and decision between `base` and `head` in
@@ -899,7 +969,8 @@ export function armedGrowth(files: readonly string[], root: string, base: string
   // D-8635: the caps and freezes at both shas; a capped file is measured though `files` does not name it.
   const stages = stagesInDiff(files, base, head, root, today);
   const all = [...files, ...stages.capped.filter((f) => !files.includes(f))];
-  const rows = all.map((f) => netGrowth(f, base, head, root));
+  // D-8048: then the program row, ccd/ccd and its libraries summed at each sha.
+  const rows = [...all.map((f) => netGrowth(f, base, head, root)), programRow(base, head, root)];
   const over = growthOver(rows, addedFiles(base, head, root), ringHomes(root, base, head), stages.stageOf);
   const pr = prNumberFromEnv(env);
   const onMain = exemptionsOnMain(all, root, today);
