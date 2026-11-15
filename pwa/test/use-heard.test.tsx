@@ -55,12 +55,22 @@ describe('useHeard, the one reader of the frame-seen gate', () => {
   //   - a ternary whose condition is the flag, its negation, or a `&&`/`||`/`??`/comparison chain with the flag in it;
   //   - a `&&`/`||`/`??` chain with the flag as an operand, used as a VALUE (an initializer, an argument, a JSX child): one
   //     per outermost chain;
-  // where "the flag" is a read of `.fleetFrameSeen`/`.runsFrameSeen`, an identifier of either name, or an
-  // ALIAS bound in the same file: a variable initialized from a read (`const seen = store((s) => s.runsFrameSeen)`, or its
-  // negation `!runsFrameSeen`), a destructured field (`const { runsFrameSeen: seen } = …`) or a renamed import
-  // (`import { runsFrameSeen as seen }`). A chain in an `if`/`while`/`for` test is not a gate on rows (`if (!seen) return`),
-  // and a prop of another name (`frameSeen?: boolean`, `props.frameSeen ?? false`) is not the heard fact. An alias binds by
-  // name across its file (the scan has no scopes), which errs toward refusing.
+  // where "the flag" is a read of `.fleetFrameSeen`/`.runsFrameSeen`, an identifier of either name, or an ALIAS bound in the
+  // same file. A read is also a selector over one, its body an expression or a block that returns it
+  // (`store((s) => { return s.runsFrameSeen; })`), and `Boolean(…)` of one. An alias is a variable initialized from a read
+  // (`const seen = store((s) => s.runsFrameSeen)`, or its negation `!runsFrameSeen`), a destructured field or parameter
+  // (`const { runsFrameSeen: seen } = …`, `store(({ runsFrameSeen: seen, runs }) => …)`), a renamed import
+  // (`import { runsFrameSeen as seen }`), a field of an object built with a read in it (`const flags = store((s) => ({ seen:
+  // s.runsFrameSeen }))`, then `flags.seen` or `const { seen } = flags`), or an alias of any of these, in any order.
+  // A chain in an `if`/`while`/`for` test is not a gate on rows (`if (!seen) return`), and a prop of another name
+  // (`frameSeen?: boolean`, `props.frameSeen ?? false`) is not the heard fact. EXEMPT BY DESIGN: a boolean derived from the
+  // hook's own answer (`const runsHeard = heard.runs !== null`, `noSignalYet = heard.runs === null`) is the hook's word, not
+  // a second spelling of it, so the census does not count it, even where it gates the store's raw rows beside it. That is
+  // what a surface that keeps its raw rows pays (RunsScreen's `live`, RunDetailScreen's `liveRuns`): once heard, the raw
+  // rows ARE the heard rows, so the two spellings cannot disagree. KNOWN WIDTH: no scopes (an alias binds its name across
+  // its file, which errs toward refusing); a read through an element access (`s['runsFrameSeen']`), an assignment
+  // (`let x; x = s.runsFrameSeen`), a call other than `Boolean` around a read, a flag passed into a function and gated there
+  // under another name, and a gate in a statement (`if (seen) rows = runs`, a `switch`) are not seen.
   const FLAGS = new Set(['fleetFrameSeen', 'runsFrameSeen']);
   const K = ts.SyntaxKind;
   const LOGICAL = new Set<ts.SyntaxKind>([K.AmpersandAmpersandToken, K.BarBarToken, K.QuestionQuestionToken]);
@@ -81,12 +91,43 @@ describe('useHeard, the one reader of the frame-seen gate', () => {
   function heardHolders(text: string, file = 'probe.tsx'): number {
     const sf = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true, file.endsWith('.tsx') ? ts.ScriptKind.TSX : ts.ScriptKind.TS);
     const aliases = new Set<string>();
+    // An object variable's fields that hold a read: `flags` → `seen` for `const flags = store((s) => ({ seen: s.runsFrameSeen }))`.
+    const fields = new Map<string, Set<string>>();
+    // What a one-argument call's function answers: its expression body, or every `return` of its block (not of a function
+    // nested in it). Empty for anything else.
+    const answers = (e: ts.Expression): ts.Expression[] => {
+      const x = strip(e);
+      const [fn] = ts.isCallExpression(x) && x.arguments.length === 1 ? x.arguments : [];
+      if (fn === undefined || !(ts.isArrowFunction(fn) || ts.isFunctionExpression(fn))) return [];
+      if (!ts.isBlock(fn.body)) return [fn.body];
+      const out: ts.Expression[] = [];
+      const visit = (n: ts.Node): void => {
+        if (ts.isFunctionLike(n)) return;
+        if (ts.isReturnStatement(n) && n.expression !== undefined) out.push(n.expression);
+        ts.forEachChild(n, visit);
+      };
+      ts.forEachChild(fn.body, visit);
+      return out;
+    };
     const isRead = (e: ts.Expression): boolean => {
       const x = strip(e);
       if (ts.isIdentifier(x)) return FLAGS.has(x.text) || aliases.has(x.text);
-      if (ts.isPropertyAccessExpression(x)) return FLAGS.has(x.name.text);
-      const [arg] = ts.isCallExpression(x) && x.arguments.length === 1 ? x.arguments : [];
-      return arg !== undefined && ts.isArrowFunction(arg) && !ts.isBlock(arg.body) && isRead(arg.body);
+      if (ts.isPropertyAccessExpression(x)) {
+        return FLAGS.has(x.name.text) || (ts.isIdentifier(x.expression) && fields.get(x.expression.text)?.has(x.name.text) === true);
+      }
+      if (ts.isCallExpression(x) && ts.isIdentifier(x.expression) && x.expression.text === 'Boolean' && x.arguments.length === 1) {
+        return isRead(x.arguments[0]!);
+      }
+      const answered = answers(x);
+      return answered.length > 0 && answered.every(isRead);
+    };
+    // The object literal an initializer builds, directly or as a selector's one answer.
+    const objectOf = (e: ts.Expression): ts.ObjectLiteralExpression | null => {
+      const x = strip(e);
+      if (ts.isObjectLiteralExpression(x)) return x;
+      const answered = answers(x);
+      const only = answered.length === 1 ? strip(answered[0]!) : null;
+      return only !== null && ts.isObjectLiteralExpression(only) ? only : null;
     };
     const involves = (e: ts.Expression): boolean => {
       const x = strip(e);
@@ -97,15 +138,24 @@ describe('useHeard, the one reader of the frame-seen gate', () => {
     for (let grew = true; grew;) {
       grew = false;
       const add = (name: string): void => { if (!FLAGS.has(name) && !aliases.has(name)) { aliases.add(name); grew = true; } };
+      const addField = (owner: string, name: string): void => {
+        const set = fields.get(owner) ?? new Set<string>();
+        if (!set.has(name)) { set.add(name); fields.set(owner, set); grew = true; }
+      };
       const visit = (n: ts.Node): void => {
-        if (ts.isVariableDeclaration(n)) {
-          if (ts.isIdentifier(n.name) && n.initializer !== undefined && isRead(n.initializer)) add(n.name.text);
-          if (ts.isObjectBindingPattern(n.name)) {
-            for (const el of n.name.elements) {
-              const key = el.propertyName ?? el.name;
-              if (ts.isIdentifier(key) && FLAGS.has(key.text) && ts.isIdentifier(el.name)) add(el.name.text);
-            }
+        if (ts.isVariableDeclaration(n) && ts.isIdentifier(n.name) && n.initializer !== undefined) {
+          if (isRead(n.initializer)) add(n.name.text);
+          for (const p of objectOf(n.initializer)?.properties ?? []) {
+            if (ts.isPropertyAssignment(p) && ts.isIdentifier(p.name) && isRead(p.initializer)) addField(n.name.text, p.name.text);
           }
+        }
+        // A destructured field or parameter: the flag's own key, or a field of an object that holds a read.
+        if (ts.isBindingElement(n) && ts.isIdentifier(n.name) && ts.isObjectBindingPattern(n.parent)) {
+          const key = n.propertyName ?? n.name;
+          const decl = n.parent.parent;
+          const from = ts.isVariableDeclaration(decl) && decl.initializer !== undefined && ts.isIdentifier(strip(decl.initializer))
+            ? fields.get((strip(decl.initializer) as ts.Identifier).text) : undefined;
+          if (ts.isIdentifier(key) && (FLAGS.has(key.text) || from?.has(key.text) === true)) add(n.name.text);
         }
         if (ts.isImportSpecifier(n) && n.propertyName !== undefined && FLAGS.has(n.propertyName.text)) add(n.name.text);
         ts.forEachChild(n, visit);
@@ -176,6 +226,15 @@ describe('useHeard, the one reader of the frame-seen gate', () => {
     expect(hits("import { runsFrameSeen as heardRuns } from './x';\nconst r = heardRuns ? runs : null;")).toBe(1);
     expect(hits('const a = state.fleetFrameSeen;\nconst b = a;\nconst r = b ? rows : null;')).toBe(1);
     expect(hits('const r = () => (late ? rows : null);\nconst late = early;\nconst early = state.runsFrameSeen;')).toBe(1);
+    // A block-bodied selector, `Boolean(…)`, a destructured or renamed parameter, an object-wrapped read (review 2107 F2).
+    expect(hits('const seen = store((s) => { return s.runsFrameSeen; });\nconst r = seen ? runs : null;')).toBe(1);
+    expect(hits('const seen = store(function (s) { return s.fleetFrameSeen; });\nconst r = seen && rows;')).toBe(1);
+    expect(hits('const r = Boolean(store((s) => s.runsFrameSeen)) ? runs : null;')).toBe(1);
+    expect(hits('const seen = Boolean(state.runsFrameSeen);\nconst r = seen && runs;')).toBe(1);
+    expect(hits('const rows = store(({ runsFrameSeen: seen, runs }) => (seen ? runs : null));')).toBe(1);
+    expect(hits('function Box({ fleetFrameSeen: heard }: P) { return heard ? rows : null; }')).toBe(1);
+    expect(hits('const flags = store((s) => ({ seen: s.runsFrameSeen }));\nconst r = flags.seen ? runs : null;')).toBe(1);
+    expect(hits('const flags = { seen: state.runsFrameSeen, n: 1 };\nconst { seen } = flags;\nconst r = seen ? runs : null;')).toBe(1);
     // Short-circuits used as a value: one per outermost chain.
     expect(hits('const r = runsFrameSeen && runs;')).toBe(1);
     expect(hits('const r = !fleetFrameSeen || rows.length === 0;')).toBe(1);
@@ -193,5 +252,10 @@ describe('useHeard, the one reader of the frame-seen gate', () => {
     expect(hits('function F({ frameSeen }: { frameSeen?: boolean }) { return frameSeen ? a : b; }')).toBe(0);
     expect(hits('const seen = store((s) => s.runsFrameSeen);\nf(seen);\nconst p = presence(id, row, seen);')).toBe(0);
     expect(hits('const heard = useHeard(store);\nconst r = heard.runs ?? [];\nconst waiting = heard.runs === null;')).toBe(0);
+    expect(hits('const heard = useHeard(store);\nconst runsHeard = heard.runs !== null;\nconst r = runsHeard ? live : [];')).toBe(0);
+    expect(hits('const v = store((s) => { if (s.runsFrameSeen) return 1; return 2; });\nconst r = v ? a : b;')).toBe(0);
+    expect(hits('const flags = store((s) => ({ seen: s.coordFrameSeen, n: s.runsFrameSeen }));\nconst r = flags.seen ? a : b;')).toBe(0);
+    expect(hits('const label = String(runsFrameSeen) ? a : b;')).toBe(0);
+    expect(hits('const v = store((s) => { list.forEach(function () { return s.runsFrameSeen; }); });\nconst r = v ? a : b;')).toBe(0);
   });
 });

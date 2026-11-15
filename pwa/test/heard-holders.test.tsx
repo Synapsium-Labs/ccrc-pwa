@@ -7,6 +7,7 @@
 // Where a site reads one flag only, or both, the mixed states that matter are pinned too.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, render, screen, within } from '@testing-library/react';
+import { Profiler } from 'react';
 import type { FleetSession, RunSummary } from '../../shared/api';
 import { fleetTree } from '../src/fleet/fleetTree';
 import { NO_ROLLUP_PREFS, rollupFleet } from '../src/fleet/rollup';
@@ -74,16 +75,18 @@ describe('the programme box, in four states', () => {
     return { sessions: withRunBinding([coord, w1], runs), runs };
   }
 
-  /** The card drawn from the fleet's own rows (the tree is not what is under test); the singleton store is what the box reads. */
-  function drawBox(): HTMLElement {
+  /** The card drawn from the fleet's own rows (the tree is not what is under test); the singleton store is what the box reads.
+   *  `onCommit` counts every time React draws the card again: its props never change here, so only a store read inside it can. */
+  function drawBox(onCommit?: () => void): HTMLElement {
     const { sessions, runs } = fleet();
     const tree = fleetTree(withRunBinding(sessions, runs), [], runs);
     const g = tree.find((x) => x.project === 'project-c')!;
     const rollup = rollupFleet(tree, NO_ROLLUP_PREFS, NOW, null).cards.get('project-c');
-    const { container } = render(
+    const card = (
       <ProjectCard group={g} rollup={rollup} runs={g.runs} abroad={g.abroad} nowMs={NOW} boxNow={NOW}
-        onOpen={() => {}} onActions={() => {}} onToggleChildren={() => {}} />,
+        onOpen={() => {}} onActions={() => {}} onToggleChildren={() => {}} />
     );
+    const { container } = render(onCommit === undefined ? card : <Profiler id="box" onRender={onCommit}>{card}</Profiler>);
     return container;
   }
 
@@ -157,6 +160,36 @@ describe('the programme box, in four states', () => {
       const r = { id: 10, program: 'port-api', state: 'working', claimedBy: 'w1' } as unknown as RunSummary;
       put({ waiting: waitingView({ items: OPEN2 }), sessions: [w1], runs: [r], ...link('heard') });
       expect(chip(drawBox())!.getAttribute('aria-label')).toBe('3 waiting on you in Port the API');
+    });
+  });
+
+  // What draws the box again. On `main` the Spec link and the chip were each one selector answering a string or a number, so
+  // a frame that changed neither was not drawn; reading the heard rows through a second subscription drew both on every
+  // frame. A new array with the same rows, as each frame brings, must draw nothing; a change of what it shows draws it.
+  describe('what draws the Spec link and the chip again', () => {
+    const rows = (): StoreSlice => ({ waiting: waitingView({ goals: [goals], items: OPEN2 }), sessions: fleet().sessions, runs: fleet().runs });
+
+    for (const state of ['not-heard', 'heard', 'link-lost'] as const) {
+      it(`${state}: a new sessions array or a new runs array with the same rows draws neither again`, () => {
+        put({ ...rows(), ...link(state) });
+        let commits = 0;
+        drawBox(() => { commits += 1; });
+        const drawn = commits;
+        put({ sessions: [...useFleetStore.getState().sessions] });
+        expect(commits).toBe(drawn);
+        put({ runs: [...useFleetStore.getState().runs] });
+        expect(commits).toBe(drawn);
+      });
+    }
+
+    it('heard: a change of what it shows draws it again (a third open item, the chip reads 4)', () => {
+      put({ ...rows(), ...link('heard') });
+      let commits = 0;
+      const c = drawBox(() => { commits += 1; });
+      const drawn = commits;
+      put({ waiting: waitingView({ goals: [goals], items: [...OPEN2, itemView({ id: 102, program: 'port-api' })] }) });
+      expect(commits).toBeGreaterThan(drawn);
+      expect(chip(c)!.getAttribute('aria-label')).toBe('4 waiting on you in Port the API');
     });
   });
 });

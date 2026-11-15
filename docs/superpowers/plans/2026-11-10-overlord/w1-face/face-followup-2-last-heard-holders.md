@@ -40,8 +40,7 @@ number: the programme mints them.
   separately:
   - FleetScreen, whose runs line uses `useHeardRuns`;
   - MailScreen, which uses `useHeardRuns`;
-  - the programme box's Spec link, which uses `useHeardRuns`;
-  - the programme box's waiting chip, which uses `useHeard`;
+  - the programme box's Spec link and waiting chip, each one selector that calls the pickers (below);
   - RunDetailScreen's runs flag, which is now `heardRuns !== null`;
   - RunsScreen's two flags, which are now `heard.runs !== null` and `heard.sessions !== null`.
 - **raw-rows-kept-where-read-ungated** — three surfaces still subscribe to a list both raw and through the hook. Each
@@ -52,6 +51,23 @@ number: the programme mints them.
 
   Folding these would change what the screens show before a frame lands. The second subscription costs one selector
   call per store change and no extra render, because both selectors return the same reference.
+- **box-draws-only-on-what-it-shows** (fix round 1, review 2107 F1) — after round 1's move, the programme box's Spec link
+  and waiting chip each subscribed twice: through the hook, whose answer is the rows array, and through their own selector.
+  So every fleet frame and every runs frame drew them again, even a frame that left the href and the count unchanged. On
+  `main`, each was one selector that answered a primitive, a string or a number. `useHeard.ts` now exports the rule as two
+  pickers, `heardSessions(s)` and `heardRuns(s)`, which the two hooks select with. Each box surface calls them inside its
+  one selector, `programmeWaitingCount(s.waiting, heardSessions(s), heardRuns(s), slug)`, so it is drawn again only when
+  that primitive changes. `heard-holders.test.tsx` pins it with a Profiler on the card:
+  - not heard, heard and link lost: a new sessions array or a new runs array with the same rows draws nothing;
+  - heard: a third open item draws the chip again, reading 4.
+
+  Measured: two cases red with the box file at round 1's tip, and green with the box file at `main`. Each time the file
+  was restored from a saved copy.
+- **heard-pickers-stay-in-the-hook-file** — the pickers are pure, so they could sit in an L1 module of their own. They
+  stay in `fleet/useHeard.ts` beside the hooks, because the rule already lived there and the census pins that file as its
+  one home (two ternaries). A new L1 file would also add a decider, with its oracle cases in a server mutant set and its
+  `mutation-floors.json` rows, which is more than this round's fix needs. If the programme wants the rule in policy, the
+  move is a follow-up: the file, its ring entry and the floors.
 - **fleet-flag-reads-kept** — RunDetailScreen still reads `fleetFrameSeen` raw, for `coordinatorPresence`. That read is
   an argument, not a gate on rows, so the census does not count it. Routing it through the hook would add a sessions
   subscription that the screen already has.
@@ -65,16 +81,30 @@ number: the programme mints them.
     counted once per outermost chain.
 
   "The flag" covers four forms: a read of `.fleetFrameSeen` or `.runsFrameSeen` (`?.` included), an identifier with
-  either name, or an alias bound in the same file. An alias is one of these:
+  either name, or an alias bound in the same file. A read also covers a selector whose expression body, or every `return`
+  of whose block body, answers a read (`store((s) => { return s.runsFrameSeen; })`, a `function` expression too), and
+  `Boolean(…)` of a read. An alias is one of these:
   - a variable initialized from a read (a selector `store((s) => s.runsFrameSeen)` or its negation);
-  - a destructured field;
+  - a destructured field or parameter (`const { runsFrameSeen: seen } = …`, `store(({ runsFrameSeen: seen, runs }) => …)`,
+    `function Box({ fleetFrameSeen: heard }: P)`);
   - a renamed import;
+  - a field of an object built with a read in it (`const flags = store((s) => ({ seen: s.runsFrameSeen }))`, read as
+    `flags.seen` or destructured as `const { seen } = flags`);
   - an alias of an alias, in any order (resolved to a fixed point).
+
+  Round 1 missed four of these spellings: the block-bodied selector, `Boolean(…)`, the destructured or renamed parameter
+  and the object-wrapped read (review 2107 F2). Fix round 1 added them.
 
   The census leaves alone a chain in an `if`, `while` or `for` test (`useColdRuns`'s re-read conditions), a prop of
   another name (`frameSeen?: boolean`, `props.frameSeen ?? false`), an argument (`coordinatorPresence(…, seen)`) and the
-  hook's own answer (`heard.runs ?? []`, `heard.runs === null`). The allow-list is gone: the tree scan expects `{}` once
-  the hook's two ternaries are counted.
+  hook's own answer (`heard.runs ?? []`, `heard.runs === null`). It also leaves alone the returns of a function nested
+  inside a selector. The allow-list is gone: the tree scan expects `{}` once the hook's two ternaries are counted.
+- **derived-heard-boolean-exempt-by-design** (review 2107 F3) — a boolean derived from the hook's own answer is the
+  hook's word, not a second spelling of it, so the census does not count it, even where it gates the store's raw rows
+  beside it. Examples are `const runsHeard = heard.runs !== null`, and RunsScreen's `noSignalYet = heard.runs === null`
+  gating `active`, which is built from raw `live`. That is what `raw-rows-kept-where-read-ungated` costs: once heard, the
+  raw rows are the heard rows, so the two spellings cannot disagree. A pin holds it (`runsHeard ? live : []` counts 0),
+  and the census header says the same.
 - **census-arms-measured** — 16 mutants, each applied to a saved copy and restored by copying it back, and all 16 turned
   the suite red:
   - each census arm switched off (the initializer alias, the destructured alias, the renamed import, the short-circuit
@@ -85,13 +115,28 @@ number: the programme mints them.
 
   The fixed-point arm survived until a pin declared the alias before the name it aliases. Declarations in source order
   resolve in one pass.
+
+  Fix round 1 added 11 more mutants, and all 11 turned the suite red:
+  - each new arm switched off: a block's returns not collected, a `function` expression not taken as a selector,
+    `Boolean(…)` not seen through, a parameter not destructured, no object fields recorded, a field not destructured, a
+    field read not seen, and a nested function's returns counted;
+  - a block-bodied selector gate added to `MailScreen.tsx` (review 2107's own M2, which round 1's census missed);
+  - a `Boolean(…)` alias gate added to `StatusBar.tsx`;
+  - a third ternary added to the hook file.
+
+  Round 1's 16 mutants were re-run against the new code, with their strings updated where the edit had moved them, and
+  all 16 are still red.
 - **census-parser-from-scan-parse** — the first version imported `typescript` directly. That turned
   `single-definition/advance-switches.test.ts` red ("only scan/parse.ts imports a TS parser"). It now imports the shared
   export, as the other pwa scan suites do.
 - **census-known-width** — the census has known limits:
   - it has no scopes, so an alias binds its name across the whole file, which errs toward refusing;
   - it does not see a read through an element access (`s['runsFrameSeen']`), an assignment (`let x; x = s.runsFrameSeen`),
-    a flag passed into a function and gated there under another name, or a gate in a statement (`if (seen) rows = runs`).
+    a call other than `Boolean` around a read (`String(seen)` stays an argument), a flag passed into a function and gated
+    there under another name, or a gate in a statement (`if (seen) rows = runs`, an `if (!seen) return …`, a `switch`).
+- **runs-screen-comments** (review 2107 F4) — five RunsScreen comments said the board reads `runsFrameSeen` where the
+  code now asks `heard.runs`, so they now say that. The one about the store fields being sticky stays, since it is still
+  true of the store.
 
 ## Runs
 

@@ -6,7 +6,7 @@
 // `emitRuns` calls `coord.runs()` with no options, and `CoordStore.runs()` defaults to excluding `TERMINAL_RUN_STATES`
 // (`shared/api.ts`'s `done`/`failed` pair). It can never carry a finished run, so it is trusted for the OPEN half only, and
 // nothing else lists an open run: the instant it has said anything at all, including an honestly empty `[]`
-// (`runsFrameSeen`, `stores/fleet.ts`), the open half is answered, because an empty array from a frame that DID arrive is a
+// (`heard.runs` not null, `fleet/useHeard.ts`), the open half is answered, because an empty array from a frame that DID arrive is a
 // true empty roster, not silence. Before it, the open half says Loading…, whatever Finished answered.
 //
 // `GET /api/programmes` (`usePrograms`) is the PROGRAMMES half (Task 18, D-8075): each open programme's card takes its wave
@@ -239,7 +239,7 @@ function RunsBoard({
   const abandonSession = abandonTarget === null ? undefined : workerOf(abandonTarget, sessionById) ?? undefined;
   // The sheet's "Its coordinator is told." line asks `coordinatorGoneOf`, whose fallback is the board's reading of the claimant.
   const abandonPresence = abandonTarget === null ? 'unknown' : coordinatorPresence(abandonTarget.claimedBy, coordinatorOf(abandonTarget, sessionById), fleetHeard);
-  // OPEN reads `live` alone, from the instant the socket has said anything at all (`runsFrameSeen`) — including an honest
+  // OPEN reads `live` alone, from the instant the socket has said anything at all (`heard.runs` not null) — including an honest
   // `[]`, which is what a run closing broadcasts. Before any frame has landed (a cold deep link, or a server too old to send
   // it) `noSignalYet` holds and nothing is listed as open: no other read may stand in for the frame (Task 12a).
   //
@@ -332,7 +332,7 @@ function RunsBoard({
     return () => window.removeEventListener('keydown', onKey);
   }, []);
   // Review finding 19: the open half is not trustworthy enough to assert "there are none of these" until the frame has answered
-  // (`runsFrameSeen`), and nothing else lists an open run. Until then the board says Loading…, or that the server could not be
+  // (`heard.runs` not null), and nothing else lists an open run. Until then the board says Loading…, or that the server could not be
   // reached once Finished has failed, and never "No runs open." Finished's rows show below as they arrive: Finished
   // answering says nothing about whether runs are OPEN (its `find` is a closed-only read), so it does not end this window.
   const noSignalYet = heard.runs === null;
@@ -366,7 +366,7 @@ function RunsBoard({
   const finishedRows = finishedProgrammes(programmes.answer, new Set(active.map((r) => r.program)), now);
   const hasAny = active.length > 0 || finishedRows.length > 0;
   // I6 (residual): a failed Finished read is a fact about the FINISHED half specifically — the open half can be fully
-  // answered by the live frame alone (`runsFrameSeen`) while Finished's `find` has failed outright. With the frame seen and no
+  // answered by the live frame alone (`heard.runs` not null) while Finished's `find` has failed outright. With the frame seen and no
   // run open, `!hasAny` would fall straight through to the ordinary "No runs open." — a POSITIVE claim about the program's
   // whole history that a failed read has no standing to make. Read below for the second half: open rows present, Finished
   // failed.
@@ -480,7 +480,7 @@ function RunsBoard({
         </>
       ) : !hasAny ? (
         // I6: `noSignalYet` above only covers the "nothing has answered at
-        // all" window — once the live frame has said `runsFrameSeen`, this
+        // all" window — once the live frame has been heard (`heard.runs`), this
         // arm is reached even with `active` honestly empty AND
         // Finished's read having FAILED. That is not "No
         // runs" either: it is "no active runs, and the archive could not be

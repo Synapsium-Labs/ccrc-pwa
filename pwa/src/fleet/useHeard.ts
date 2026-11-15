@@ -9,18 +9,31 @@
 // (`test/use-heard.test.tsx`) refuses a hand-written gate on either frame flag anywhere else, and lists no holder.
 //
 // One subscription per half: each half is one selector that answers the rows or null, so a surface that reads only the
-// runs (`useHeardRuns`) is not rendered again by a fleet frame, and none subscribes to a flag and its rows separately.
+// runs (`useHeardRuns`) is not rendered again by a fleet frame, and none subscribes to a flag and its rows separately. A
+// surface that shows a primitive computed from the heard rows (the programme box's waiting count and Spec link) calls the
+// pickers, `heardSessions` and `heardRuns`, inside its own one selector instead, so it is rendered again only when that
+// primitive changes, never by a frame that changes nothing it shows.
 import type { FleetSession, RunSummary } from '../../../shared/api';
 import type { FleetStore } from '../stores/fleet';
 
+/** The fleet's rows once a fleet frame has landed, else null: the rule, for a selector. */
+export function heardSessions(s: { fleetFrameSeen: boolean; sessions: readonly FleetSession[] }): readonly FleetSession[] | null {
+  return s.fleetFrameSeen ? s.sessions : null;
+}
+
+/** The runs once a runs frame has landed, else null: the rule, for a selector. */
+export function heardRuns(s: { runsFrameSeen: boolean; runs: readonly RunSummary[] }): readonly RunSummary[] | null {
+  return s.runsFrameSeen ? s.runs : null;
+}
+
 /** The fleet's rows once a fleet frame has landed, else null. */
 export function useHeardSessions(store: FleetStore): readonly FleetSession[] | null {
-  return store((s) => (s.fleetFrameSeen ? s.sessions : null));
+  return store(heardSessions);
 }
 
 /** The runs once a runs frame has landed, else null. */
 export function useHeardRuns(store: FleetStore): readonly RunSummary[] | null {
-  return store((s) => (s.runsFrameSeen ? s.runs : null));
+  return store(heardRuns);
 }
 
 export function useHeard(store: FleetStore): { sessions: readonly FleetSession[] | null; runs: readonly RunSummary[] | null } {
