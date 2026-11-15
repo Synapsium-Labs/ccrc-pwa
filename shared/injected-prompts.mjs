@@ -66,6 +66,12 @@ const HEAD = ROWS.filter((r) => r.match === 'head');
  * `exact` rows are tried first, against the text with one trailing newline trimmed. A `head` row matches only at a
  * word boundary: its text followed by the end of the input, a space or a newline, so `/compactfoo` is no row's.
  * A text matches at most one row (the census holds that no head row's text is a word-boundary prefix of another's).
+ *
+ * It trims EXACTLY ONE trailing `\n` and nothing else, unlike `server/src/transcript/parse.ts#eventsOfRecord`, which
+ * matches its pills on `.trim()`: a trailing space, a `\r\n` or a second newline leaves an `exact` row unmatched
+ * (`'/clear '` is `null`), while a `head` row still matches when a space or a newline follows its text
+ * (`'/compact '` is `compact`). A slash command with an empty argument list joins as its name alone (`/clear`, never
+ * `/clear `), so a caller that joins name and arguments adds the space only when there are arguments.
  */
 export function injectedPromptOf(text) {
   if (typeof text !== 'string' || text === '') return null;

@@ -75,12 +75,25 @@ describe('INJECTED_PROMPTS, its rows and its reader', () => {
 /** The names whose every reference must be a call, an import or the name's own definition. */
 const TYPER_NAMES = new Set(['sendPrompt', 'sendLiteral', 'sendKey', 'answerDialogText']);
 
-/** A `sendPrompt` text that references the list, matched against the argument's WHOLE flattened text (F11). */
-const LIST_REFERENCES: ReadonlyArray<{ re: RegExp; row: (m: RegExpExecArray) => string }> = [
-  { re: /^INJECTED_PROMPTS(?:\.([a-z]+)|\['([a-z-]+)'\])\.text$/, row: (m) => m[1] ?? m[2]! },
-  { re: /^IDLE_COMPACT_NUDGE_PROMPT$/, row: () => 'idle-compact-nudge' },
-  { re: /^renderMailNudge\([\w.]+\)$/, row: () => 'mail-nudge' },
+/** A `sendPrompt` text that references the list, matched against the argument's WHOLE flattened text (F11). Its
+ *  identifier must be BOUND to the list: imported, by a value import, from one of `from` (the list's module or a module
+ *  that re-exports the name), or the file is itself one of them, so a file-local `INJECTED_PROMPTS` is no reference
+ *  (review 2125, F6). */
+const LIST_REFERENCES: ReadonlyArray<{ re: RegExp; row: (m: RegExpExecArray) => string; from: readonly string[] }> = [
+  { re: /^INJECTED_PROMPTS(?:\.([a-z]+)|\['([a-z-]+)'\])\.text$/, row: (m) => m[1] ?? m[2]!, from: ['shared/injected-prompts.mjs'] },
+  { re: /^IDLE_COMPACT_NUDGE_PROMPT$/, row: () => 'idle-compact-nudge', from: ['shared/injected-prompts.mjs', 'shared/api.ts'] },
+  { re: /^renderMailNudge\([\w.]+\)$/, row: () => 'mail-nudge', from: ['server/src/coord/envelope.ts'] },
 ];
+
+/** Whether `file` binds `name` to one of `from`: a value import of it from one of them, or `file` is one of them. */
+function boundFrom(file: string, p: ParsedFile, name: string, from: readonly string[]): boolean {
+  if (from.includes(file)) return true;
+  return p.imports.some((e) => {
+    if (e.kind !== 'import' || e.typeOnly || !e.names.includes(name) || !e.specifier.startsWith('.')) return false;
+    const target = path.posix.normalize(path.posix.join(path.posix.dirname(file), e.specifier));
+    return from.includes(target) || from.includes(target.replace(/\.js$/, '.ts'));
+  });
+}
 
 /** The operator's own text: the console's prompt route and its dialog's free-text row. An anonymous arrow inside
  *  `app.post` has no symbol, so a site is keyed by its file, its callee, its argument's exact text, and a count. */
@@ -108,7 +121,8 @@ const enclosing = (p: ParsedFile, at: number): string =>
   p.symbols.filter((s) => s.start <= at && at <= s.end).sort((a, b) => (a.end - a.start) - (b.end - b.start))[0]?.name
     ?? '(top)';
 
-/** Each reference to a typer name that is not a call, an import or the name's own definition, as `<line>`. */
+/** Each reference to a typer name that is not a call, an import or the name's own definition, and each element access
+ *  by a typer's name (`d.tmux['sendLiteral']`, review 2125 F6), as `<line>`. */
 function aliasLines(p: ParsedFile): number[] {
   const sf = ts.createSourceFile(p.path, p.text, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
   const out: number[] = [];
@@ -126,6 +140,9 @@ function aliasLines(p: ParsedFile): number[] {
     if (ts.isIdentifier(n) && TYPER_NAMES.has(n.text)) {
       const imp = ts.isImportSpecifier(n.parent) || ts.isImportClause(n.parent) || ts.isExportSpecifier(n.parent);
       if (!imp && !isCallee(n) && !isDefinition(n)) out.push(sf.getLineAndCharacterOfPosition(n.getStart(sf)).line + 1);
+    }
+    if (ts.isElementAccessExpression(n) && ts.isStringLiteralLike(n.argumentExpression) && TYPER_NAMES.has(n.argumentExpression.text)) {
+      out.push(sf.getLineAndCharacterOfPosition(n.getStart(sf)).line + 1);
     }
     ts.forEachChild(n, visit);
   };
@@ -151,6 +168,10 @@ export function serverCensus(files: readonly ServerFile[]): ServerCensus {
         const ref = a?.kind === 'other' ? LIST_REFERENCES.map((r) => ({ r, m: r.re.exec(a.text) })).find((x) => x.m !== null) : undefined;
         if (ref === undefined) {
           findings.push(`${where}: sendPrompt's text is no reference to INJECTED_PROMPTS and no OPERATOR_TEXT_SITES entry`);
+          continue;
+        }
+        if (!boundFrom(file, p, /^\w+/.exec(a!.text)![0], ref.r.from)) {
+          findings.push(`${where}: sendPrompt's text names the list, but the name is not imported from ${ref.r.from.join(' or ')}`);
           continue;
         }
         const row = ref.r.row(ref.m!);
@@ -193,6 +214,10 @@ export function serverCensus(files: readonly ServerFile[]): ServerCensus {
   return { findings, promptCallers, literalCallers, rowsTyped };
 }
 
+/** The rows of `typer` no site of a census typed. */
+const untypedRows = (rows: Rows, typer: Row['typer'], rowsTyped: ReadonlySet<string>): string[] =>
+  Object.keys(rows).filter((k) => rows[k]!.typer === typer && !rowsTyped.has(k));
+
 const serverFiles = (): ServerFile[] =>
   walkSrc({ roots: ['server/src'], min: 300, match: /\.ts$/ }).map((file) => ({ file, parsed: parsedFile(file) }));
 
@@ -211,8 +236,7 @@ describe('the server types only the list and the operator\'s own text', () => {
   });
 
   it('every server row has at least one typer that references it', () => {
-    const server = Object.keys(ROWS).filter((k) => ROWS[k]!.typer === 'server');
-    expect(server.filter((k) => !census.rowsTyped.has(k))).toEqual([]);
+    expect(untypedRows(ROWS, 'server', census.rowsTyped)).toEqual([]);
   });
 
   it('renderMailNudge begins with the mail-nudge row, by reference', () => {
@@ -240,9 +264,23 @@ describe('the server types only the list and the operator\'s own text', () => {
     it('a computed sendKey at an unnamed site', () => red(planted('async function f(d, id, k) { await d.tmux.sendKey(id, k); }')));
     it('an answerDialogText off the operator sites', () => red(planted("function f(d, id) { return answerDialogText(d, id, 'a', 0, 'pick'); }"), 'pick'));
     it('a send-keys string in a server file other than exec.ts', () => red(planted("const argv = ['send-keys', '-t', 'x'];")));
-    it('a sendPrompt typing a ccd row', () => red(planted('function f(d, id) { return sendPrompt(d, id, INJECTED_PROMPTS.model.text); }')));
+    it('a sendPrompt typing a ccd row', () => {
+      const f = planted("import { INJECTED_PROMPTS } from '../../shared/injected-prompts.mjs';\nfunction f(d, id) { return sendPrompt(d, id, INJECTED_PROMPTS.model.text); }");
+      expect(serverCensus([f]).findings).toEqual([expect.stringMatching(/types row model, which is no server row/)]);
+    });
+    it('a sendPrompt naming a file-local INJECTED_PROMPTS, not the imported list (review 2125, F6)', () => red(planted("const INJECTED_PROMPTS = { clear: { text: 'x' } };\nfunction f(d, id) { return sendPrompt(d, id, INJECTED_PROMPTS.clear.text); }")));
+    it('a typer called by element access (review 2125, F6)', () => red(planted("async function f(d, id) { await d.tmux['sendLiteral'](id, 'typed'); }"), 'typed'));
+    it('an operator site measured above its count (review 2125, F7)', () => {
+      const two = planted('function f(d, id, body) { sendPrompt(d, id, body.text); return sendPrompt(d, id, body.text); }', 'server/src/server.ts');
+      expect(serverCensus([two]).findings).toContainEqual(expect.stringMatching(/OPERATOR_TEXT_SITES names sendPrompt 1 time\(s\), measured 2/));
+    });
+    it('a server row no site types (review 2125, F7)', () => {
+      const rows = { ...ROWS, planted: { text: '/planted', match: 'exact', typer: 'server' } } as Rows;
+      expect(untypedRows(rows, 'server', census.rowsTyped)).toEqual(['planted']);
+    });
     it('the census itself is green over a planted reference to a server row', () => {
-      expect(serverCensus([planted('function f(d, id) { return sendPrompt(d, id, INJECTED_PROMPTS.clear.text); }')]).findings).toEqual([]);
+      const ref = "import { INJECTED_PROMPTS } from '../../shared/injected-prompts.mjs';\nfunction f(d, id) { return sendPrompt(d, id, INJECTED_PROMPTS.clear.text); }";
+      expect(serverCensus([planted(ref)]).findings).toEqual([]);
     });
   });
 });
@@ -259,26 +297,41 @@ const CCD_NON_PROMPT_LITERALS: Readonly<Record<string, string>> = {
 
 type SpliceRule =
   | { rule: 'head'; row: string }
-  | { rule: 'prompt-var'; row: string; arg: string; fn: string; variable: string }
+  | { rule: 'prompt-var'; row: string; arg: string; fn: string; variable: string; starts: readonly string[] }
   | { rule: 'none'; word: 'operator-supplied' | 'operator-secret'; sha: string };
 
 /** Every function whose send splices a value, with the one splice it holds and that splice's rule (ruled, F2). */
 const CCD_SPLICED_SITES: Readonly<Record<string, SpliceRule>> = {
-  // `/compact` with the launch profile's compaction text after a space: the text before the first `$` is the row's.
+  // `/compact` with the launch profile's compaction text after a space: the text before the first `$` is the row's, and
+  // what follows it is nothing, a space, or a `${x:+ …}` whose text begins with one (review 2125, F5).
   _auto_compact_check: { rule: 'head', row: 'compact' },
-  // The whole resume prompt, built by `_resume_prompt_for` from RESUME_PROMPT, which begins with the row's text.
+  // The whole resume prompt, built by `_resume_prompt_for` from RESUME_PROMPT, which begins with the row's text: every
+  // `printf` there prints a text that starts with `$RESUME_PROMPT` or `$head`, its part before the cause (review 2125, F4).
   _redrive_after_spawn: {
     rule: 'prompt-var', row: 'resume', arg: '"$(_resume_prompt_for "$id")"', fn: '_resume_prompt_for', variable: 'RESUME_PROMPT',
+    starts: ['$RESUME_PROMPT', '$head'],
   },
-  // The path of a clip the operator filed, then a space (`"$dest "`).
-  cmd_clip: { rule: 'none', word: 'operator-supplied', sha: '50acb92dbc8774b0' },
+  // The path of a clip the operator filed, then a space: the whole send as written, its flags included
+  // (`send-keys -t "$(_tmux_t "$id")" -l "$dest "`), so a dropped `-l` changes the digest (review 2125, F5).
+  cmd_clip: { rule: 'none', word: 'operator-supplied', sha: 'e6686f63971e9e2f' },
 };
 
-/** The SHA-256 of a splice's argument as written, its first 16 hex digits: source text, never a typed value. */
+/** The SHA-256 of a send as written (source text, never a typed value), its first 16 hex digits. */
 const argSha = (raw: string): string => createHash('sha256').update(raw).digest('hex').slice(0, 16);
 
 interface CcdFile { file: string; text: string }
-interface CcdSend { file: string; fn: string; line: number; literal: boolean; args: string[] }
+interface CcdSend { file: string; fn: string; line: number; literal: boolean; args: string[]; raw: string }
+
+/** The functions that forward their own arguments to tmux (`"$@"`), each a head the verb read follows too, with why. */
+const CCD_TMUX_FORWARDERS: Readonly<Record<string, string>> = {
+  _pane_scope_tmux: 'one tmux call bounded by a deadline; its callers name the verb, and the census reads it there',
+};
+
+/** tmux's verbs that type into a pane without `send-keys`: the buffer verbs and their aliases (`man tmux`). */
+const BUFFER_VERB = /^(?:paste|load|set)(?:b|-b[a-z]*)$/;
+
+/** The global flags tmux reads before its verb that take a value. */
+const TMUX_VALUE_FLAGS = new Set(['-L', '-S', '-f', '-c', '-T']);
 
 /** One shell word at `i` of `s`, as written (quotes kept), and where it ends; null at a command's end. */
 function shellWord(s: string, i: number): { word: string; end: number } | null {
@@ -326,17 +379,47 @@ const plainValue = (w: string): string | null => (/[$`]/.test(w) ? null : w.repl
 export function ccdSends(files: readonly CcdFile[]): { sends: CcdSend[]; findings: string[] } {
   const sends: CcdSend[] = [];
   const findings: string[] = [];
+  const heads = ['_tmx', 'tmux', ...Object.keys(CCD_TMUX_FORWARDERS)].join('|');
   for (const { file, text } of files) {
     let fn = '(top)';
     text.split('\n').forEach((line, idx) => {
       const def = /^\s*(?:function\s+)?([A-Za-z_][\w:-]*)\s*\(\)\s*\{/.exec(line);
       if (def) fn = def[1]!;
       if (/^\s*#/.test(line)) return;
+      // Inside a comment that trails code: not an invocation.
+      const inComment = (at: number): boolean => /(?:^|\s)#/.test(line.slice(0, at).replace(/'[^']*'|"(?:[^"\\]|\\.)*"/g, ''));
+      const where = `${file}:${idx + 1} ${fn}`;
+      // The verb after each tmux head (review 2125, F2): `send` and every `send-…` other than `send-keys` itself, a
+      // buffer verb, and a verb that is no literal are findings. A forwarder's own `"$@"` is its callers' verb. A head is
+      // a word of its own followed by a blank (never `.tmux.conf`, `"tmux(`). A verb that is no literal is read only where
+      // a command starts, since a message's prose (`"… Check with: tmux ls" … "$reason"`) is no call.
+      for (const h of line.matchAll(new RegExp(`(?<![\\w$./"'-])(?:${heads})(?=[ \\t])`, 'g'))) {
+        if (inComment(h.index)) continue;
+        const atCommand = /(?:^|[;&|(!{]|\b(?:then|do|else|if|while|until|command|exec))\s*$/.test(line.slice(0, h.index));
+        let i = h.index + h[0].length;
+        let verb: string | null = null;
+        for (let w = shellWord(line, i); w !== null; w = shellWord(line, i)) {
+          i = w.end;
+          if (TMUX_VALUE_FLAGS.has(w.word)) { const v = shellWord(line, i); if (v === null) break; i = v.end; continue; }
+          if (/^-/.test(w.word) || /^\$\{\w+:\+-/.test(w.word)) continue; // a flag, or `${X:+-L …}`, an optional one
+          verb = w.word;
+          break;
+        }
+        if (verb === null || /^[<>0-9&]/.test(verb)) continue; // no verb: prose, a test, or a redirection
+        const v = plainValue(verb);
+        if (v === null) {
+          if (atCommand && !(fn in CCD_TMUX_FORWARDERS && verb === '"$@"')) findings.push(`${where}: a tmux verb that is no literal`);
+        } else if (v === 'send' || (v.startsWith('send-') && v !== 'send-keys')) {
+          findings.push(`${where}: tmux's send-keys under another spelling (an alias or a prefix); spell it send-keys`);
+        } else if (BUFFER_VERB.test(v) && !v.endsWith('-buffer')) { // the full names are read anywhere, below
+          findings.push(`${where}: a tmux buffer verb, which types into a pane without send-keys`);
+        }
+      }
+      for (const b of line.matchAll(/(?<![\w-])(?:paste|load|set)-buffer(?![\w-])/g)) {
+        if (!inComment(b.index)) findings.push(`${where}: a tmux buffer verb, which types into a pane without send-keys`);
+      }
       for (const m of line.matchAll(/(?<![\w-])send-keys(?![\w-])/g)) {
-        // Inside a comment that trails code: not an invocation.
-        const before = line.slice(0, m.index);
-        if (/(?:^|\s)#/.test(before.replace(/'[^']*'|"(?:[^"\\]|\\.)*"/g, ''))) continue;
-        const where = `${file}:${idx + 1} ${fn}`;
+        if (inComment(m.index)) continue;
         let i = m.index + 'send-keys'.length;
         let literal = false;
         const args: string[] = [];
@@ -350,7 +433,7 @@ export function ccdSends(files: readonly CcdFile[]): { sends: CcdSend[]; finding
           flags = false;
           args.push(w.word);
         }
-        sends.push({ file, fn, line: idx + 1, literal, args });
+        sends.push({ file, fn, line: idx + 1, literal, args, raw: line.slice(m.index, i).trim() });
       }
     });
   }
@@ -365,6 +448,33 @@ const ccdBody = (files: readonly CcdFile[], name: string): string | null => {
   }
   return null;
 };
+
+/** The text each `printf` of a function's `body` prints, as written with its quotes removed: the format, or for a
+ *  `'%s'` format the word after it. A `printf` inside a `$(…)` prints into that substitution, not the function's
+ *  output, so each `$(…)` is cut first. */
+function printfTexts(body: string): string[] {
+  let flat = '';
+  for (let i = 0; i < body.length;) {
+    if (body[i] === '$' && body[i + 1] === '(') {
+      let depth = 1, j = i + 2;
+      while (j < body.length && depth > 0) { if (body[j] === '(') depth++; else if (body[j] === ')') depth--; j++; }
+      i = j;
+      continue;
+    }
+    flat += body[i++];
+  }
+  const unq = (w: string): string => w.replace(/^"(.*)"$/s, '$1').replace(/^'(.*)'$/s, '$1');
+  const out: string[] = [];
+  for (const line of flat.split('\n')) {
+    if (/^\s*#/.test(line)) continue;
+    for (const m of line.matchAll(/(?<![\w-])printf(?![\w-])/g)) {
+      const f = shellWord(line, m.index + 'printf'.length);
+      if (f === null) { out.push(''); continue; }
+      out.push(unq(f.word) === '%s' ? unq(shellWord(line, f.end)?.word ?? '') : unq(f.word));
+    }
+  }
+  return out;
+}
 
 interface CcdCensus { findings: string[]; sends: CcdSend[]; rowsTyped: Set<string> }
 
@@ -398,19 +508,23 @@ export function ccdCensus(files: readonly CcdFile[], rows: Rows = ROWS, sites = 
     if (list.length !== 1) { findings.push(`${where} (${word}): ${list.length} splices where CCD_SPLICED_SITES names exactly one`); continue; }
     const { send, arg } = list[0]!;
     if (site.rule === 'head') {
+      const t = rows[site.row]?.text;
       const head = plainValue(arg.slice(0, arg.indexOf('$')).replace(/^"/, ''));
-      if (!send.literal || head !== rows[site.row]?.text) findings.push(`${where} (${word}): the splice's text before its first $ is not the row's`);
+      const rest = arg.slice(arg.indexOf('$')).replace(/"$/, '');
+      if (!send.literal || t === undefined || (head !== t && head !== `${t} `)) findings.push(`${where} (${word}): the splice's text before its first $ is not the row's`);
+      else if (head === t && !/^\$\{\w+:\+ [^}]*\}$/.test(rest)) findings.push(`${where} (${word}): the row's text is not followed by a space or the end`);
       else rowsTyped.add(site.row);
     } else if (site.rule === 'prompt-var') {
       const body = ccdBody(files, site.fn);
       const value = files.map((f) => new RegExp(`^${site.variable}="([^"]*)"`, 'm').exec(f.text)?.[1]).find((x) => x !== undefined);
-      const fromVar = body !== null && new RegExp(`"\\$${site.variable}"`).test(body);
+      const printed = body === null ? [] : printfTexts(body);
+      const fromVar = printed.length > 0 && printed.every((t) => site.starts.some((h) => t.startsWith(h) && !/\w/.test(t.charAt(h.length))));
       if (!send.literal || arg !== site.arg) findings.push(`${where} (${word}): the splice is not the one CCD_SPLICED_SITES pins`);
-      else if (!fromVar) findings.push(`${where} (${word}): ${site.fn} does not start its prompt from ${site.variable}`);
+      else if (!fromVar) findings.push(`${where} (${word}): a printf in ${site.fn} does not start its text with ${site.starts.join(' or ')}`);
       else if (value === undefined || !value.startsWith(rows[site.row]?.text ?? '\0')) findings.push(`${where} (${word}): ${site.variable} does not begin with the row's text`);
       else rowsTyped.add(site.row);
-    } else if (argSha(arg) !== site.sha) {
-      findings.push(`${where} (${word}): the splice is not the one CCD_SPLICED_SITES pins (measured sha ${argSha(arg)})`);
+    } else if (argSha(send.raw) !== site.sha) {
+      findings.push(`${where} (${word}): the send is not the one CCD_SPLICED_SITES pins (measured sha ${argSha(send.raw)})`);
     }
   }
   for (const fn of Object.keys(sites)) {
@@ -449,8 +563,7 @@ describe('ccd types only its rows, named literals, named keys and mapped splices
   });
 
   it('every ccd row is typed by at least one site', () => {
-    const ccd = Object.keys(ROWS).filter((k) => ROWS[k]!.typer === 'ccd');
-    expect(ccd.filter((k) => !census.rowsTyped.has(k))).toEqual([]);
+    expect(untypedRows(ROWS, 'ccd', census.rowsTyped)).toEqual([]);
   });
 
   it('floors: five functions and eight -l sends, five with no $ and three spliced (F12)', () => {
@@ -480,12 +593,48 @@ describe('ccd types only its rows, named literals, named keys and mapped splices
     it('a bare tmux send-keys with a literal', () => red('planted_tmux() {\n  tmux send-keys -t "$pane" -l "rm -rf x"\n}\n', 'rm -rf'));
     it('a row no site types', () => {
       const rows = { ...ROWS, planted: { text: '/planted', match: 'exact', typer: 'ccd' } } as Rows;
-      const c = ccdCensus(files, rows);
-      expect(Object.keys(rows).filter((k) => rows[k]!.typer === 'ccd' && !c.rowsTyped.has(k))).toEqual(['planted']);
+      expect(untypedRows(rows, 'ccd', ccdCensus(files, rows).rowsTyped)).toEqual(['planted']);
     });
     it('a head splice whose head is not the row\'s', () => red('_auto_compact_check() {\n  _tmx send-keys -t "$t" -l "/compacted${x}"\n}\n'));
     it('a commented send-keys is no send', () => {
       expect(ccdSends([{ file: 'ccd/planted.sh', text: 'planted_f() {\n  # _tmx send-keys -t "$t" -l "/exit"\n  echo x  # send-keys -l "/exit"\n}\n' }]).sends).toEqual([]);
+    });
+
+    // Review 2125: each control below plants one change and reds for its own reason, named by the finding it expects.
+    const reason = (text: string, re: RegExp, plant: string): void => {
+      const { findings } = ccdCensus([...files, { file: 'ccd/planted.sh', text }]);
+      expect(findings, text).toContainEqual(expect.stringMatching(re));
+      for (const m of findings) expect(m).not.toContain(plant);
+    };
+    it('tmux\'s send alias, and a send- prefix, after _tmx or tmux (F2)', () => {
+      reason('planted_alias() {\n  _tmx send -t "$t" -l "/exit"\n}\n', /another spelling/, '/exit');
+      reason('planted_prefix() {\n  tmux -L "$sock" send-k -t "$t" -l "/exit"\n}\n', /another spelling/, '/exit');
+    });
+    it('a buffer verb in ccd, by name or alias (F2)', () => {
+      reason('planted_paste() {\n  _tmx paste-buffer -t "$t"\n}\n', /buffer verb/, 'paste-buffer');
+      reason('planted_load() {\n  printf x | tmux load-buffer -\n}\n', /buffer verb/, 'load-buffer');
+      reason('planted_set() {\n  _tmx set-buffer -- "$planted_code"\n}\n', /buffer verb/, 'planted_code');
+      reason('planted_alias() {\n  _tmx pasteb -t "$t"\n}\n', /buffer verb/, 'pasteb');
+    });
+    it('a tmux verb that is no literal (F2)', () => reason('planted_verb() {\n  _tmx "$verb" -t "$t" -l "/exit"\n}\n', /verb that is no literal/, '$verb'));
+
+    /** The real ccd source with `from` replaced by `to` once (held present), census over it and the other files. */
+    const mutated = (from: string, to: string): string[] => {
+      const real = files.find((f) => f.file === 'ccd/ccd+libs')!;
+      expect(real.text.includes(from), `the mutation's target ${from}`).toBe(true);
+      return ccdCensus(files.map((f) => (f === real ? { ...f, text: f.text.replace(from, to) } : f))).findings;
+    };
+    it('a printf in _resume_prompt_for whose text starts other than from RESUME_PROMPT (F4)', () => {
+      expect(mutated(`printf '%s' "$RESUME_PROMPT"`, `printf '%s' "Hi $RESUME_PROMPT"`))
+        .toEqual([expect.stringMatching(/a printf in _resume_prompt_for does not start its text/)]);
+    });
+    it('a compact head followed by a splice with no space (F5)', () => {
+      expect(mutated('-l "/compact${ctext:+ $ctext}"', '-l "/compact$ctext"'))
+        .toEqual([expect.stringMatching(/not followed by a space or the end/)]);
+    });
+    it('cmd_clip\'s send with its -l dropped (F5)', () => {
+      expect(mutated('-t "$(_tmux_t "$id")" -l "$dest "', '-t "$(_tmux_t "$id")" "$dest "'))
+        .toEqual([expect.stringMatching(/cmd_clip \(operator-supplied\): the send is not the one/)]);
     });
   });
 });

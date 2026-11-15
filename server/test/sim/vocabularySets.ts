@@ -53,6 +53,14 @@ export function injectedRowCases(m: InjectedPromptsModule): Record<string, Suite
       expect(of('/effort ultracode')).toBe('effort-ultracode');
       expect(of('/compact keep the plan')).toBe('compact');
     },
+    'one trailing newline is trimmed, never a space, a CR or a second newline (review 2125, F3: as it reads today)': () => {
+      const idle = rows['idle-compact-nudge']!.text;
+      for (const t of ['/clear ', '/clear\r\n', '/clear\n\n', `${idle} `, `${idle}\r\n`, `${idle}\n\n`, '/compact\r\n']) {
+        expect(of(t), JSON.stringify(t)).toBeNull();
+      }
+      expect(of('/compact ')).toBe('compact');
+      expect(of('/compact\n\n')).toBe('compact');
+    },
     'null for a non-string or an empty string, never coerced': () => {
       for (const v of ['', ['/clear'], 42, null, undefined, { text: '/clear' }, true]) expect(of(v), String(v)).toBeNull();
     },
