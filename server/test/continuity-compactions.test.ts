@@ -11,7 +11,7 @@ import {
 } from '../src/continuity/compactions.js';
 import { COUNT_CASES, checkMonotonic, smallSequences } from './continuityCompactionsCases.js';
 import * as compactions from '../src/continuity/compactions.js';
-import { compactionsBegunSinceCases, newestCompactionAtCases } from './sim/probeDoorSets.js';
+import { compactionInFlightCases, compactionsBegunSinceCases, newestCompactionAtCases } from './sim/probeDoorSets.js';
 
 const ID = 'lane-a-project-a';
 const T = 1_800_000_000_000;
@@ -169,4 +169,7 @@ describe('compactionsBegunSince: a compaction begun before the window is not cou
 });
 describe('newestCompactionAt: the newest main compaction line (review 2068 F1)', () => {
   for (const [name, run] of Object.entries(newestCompactionAtCases(compactions))) it(name, run);
+});
+describe('compactionInFlight: a compaction begun and not seen to end (review 2103 F2)', () => {
+  for (const [name, run] of Object.entries(compactionInFlightCases(compactions))) it(name, run);
 });

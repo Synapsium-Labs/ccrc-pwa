@@ -17,7 +17,8 @@
 //   `probeFailedUnfixed` reads true (`renewalDue`'s `probe-failed` row). A compaction round supersedes an unanswered spot
 //   round (review 2063 F3): nothing announces a spot round yet, so one left open must not block the compaction rounds.
 //   A compaction round whose composition was empty over the same snapshot (`compactionStalled`, review 2068 F4) is not asked
-//   again until that snapshot changes, and the spot branch runs as if it were not due, so it never blocks spot rounds.
+//   again until that snapshot changes, and the spot branch runs as if it were not due, so it never blocks spot rounds; its
+//   baseline is the newest mark asked since that compaction, or 0 (review 2103 F1).
 //   A spot round opens while the session is idle and its fresh context is `SPOT_PROBE_EVERY_TOKENS` past the baseline: the
 //   depth the newest spot or compaction round opened at, so a compaction resets it (review 2063 F5); a busy session, a stale
 //   sidecar, an unread turn marker or a baseline that was not measured opens none (unmeasured, never a guess). A compaction
@@ -86,6 +87,8 @@ export interface ProbeScheduleInput {
   readonly ctx: Reading<CtxReading>;
   /** When the newest line of a main-conversation compaction was written (`newestCompactionAt`), null when none is on record. */
   readonly compactedAt: Reading<number | null>;
+  /** A main-conversation compaction began and has not been seen to end (`compactionInFlight`, review 2103 F2). */
+  readonly compactionInFlight: Reading<boolean>;
   /** The compaction round this pass would open composed empty over the same snapshot, remembered by its `emptyTryKey`. */
   readonly compactionStalled: boolean;
 }
@@ -107,10 +110,12 @@ const measured = <T>(value: T): Reading<T> => ({ kind: 'measured', value });
 
 /** The context as it stands since the newest compaction (review 2068 F1): a fresh reading's tokens only when the reading is
  *  newer than the compaction's newest line, since the sidecar can hold the depth from before a compaction for up to
- *  `USAGE_FRESH_S`. Null when there is no such reading: none fresh, one older than the line, or lines that were not read. A
- *  compaction round then records 0, never the old depth, and a spot round opens none until a newer reading comes. */
-export function ctxSinceCompaction(ctx: Reading<CtxReading>, compactedAt: Reading<number | null>): number | null {
+ *  `USAGE_FRESH_S`. Null when there is no such reading: none fresh, one older than the line, lines that were not read, or a
+ *  compaction still in flight, whose end no reading can yet be newer than (review 2103 F2). A compaction round then records
+ *  0, never the old depth, and a spot round opens none until a newer reading comes. */
+export function ctxSinceCompaction(ctx: Reading<CtxReading>, compactedAt: Reading<number | null>, inFlight: Reading<boolean>): number | null {
   if (ctx.kind !== 'measured' || compactedAt.kind !== 'measured') return null;
+  if (inFlight.kind !== 'measured' || inFlight.value) return null;
   return compactedAt.value === null || ctx.value.at > compactedAt.value ? ctx.value.tokens : null;
 }
 const answered = (rs: readonly RoundSummary[]): RoundSummary[] => rs.filter((r) => r.answeredAt !== null);
@@ -154,7 +159,7 @@ export function probeSchedule(i: ProbeScheduleInput): ProbeSchedule {
   if (i.state !== 'active') return none;
   const openRound = i.rounds.find((r) => r.answeredAt === null);
   if (openRound !== undefined && openRound.kind !== 'spot') return none;
-  const depth = ctxSinceCompaction(i.ctx, i.compactedAt);
+  const depth = ctxSinceCompaction(i.ctx, i.compactedAt, i.compactionInFlight);
   const compaction = { ...none, open: { kind: 'compaction' as const, depthTokens: depth ?? 0, supersedes: openRound?.roundId ?? null } };
   const comps = answered(i.rounds.filter((r) => r.kind === 'compaction'));
   const lastComp = comps[comps.length - 1];
@@ -163,7 +168,10 @@ export function probeSchedule(i: ProbeScheduleInput): ProbeSchedule {
     : i.compactionsSince.kind === 'measured' && i.compactionsSince.value >= 1;
   if (compactionDue && !i.compactionStalled) return compaction;
   if (openRound !== undefined || i.idle.kind !== 'measured' || !i.idle.value || depth === null) return none;
-  const marks = i.rounds.filter((r) => r.kind === 'spot' || r.kind === 'compaction');
+  // A stalled compaction writes no mark, so while it is due the baseline counts only the marks asked since that compaction,
+  // and is 0 with none (review 2103 F1, the ruling compaction-baseline-zero-without-a-newer-reading on this path too).
+  const after = compactionDue && i.compactedAt.kind === 'measured' && i.compactedAt.value !== null ? i.compactedAt.value : null;
+  const marks = i.rounds.filter((r) => (r.kind === 'spot' || r.kind === 'compaction') && (after === null || r.askedAt > after));
   const baseline = marks.length === 0 ? 0 : marks[marks.length - 1]!.depthTokens;
   if (baseline !== null && depth - baseline >= SPOT_PROBE_EVERY_TOKENS) return { ...none, open: { kind: 'spot', depthTokens: depth, supersedes: null } };
   return none;

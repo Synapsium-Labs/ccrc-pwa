@@ -62,12 +62,23 @@ export function gradableAsServed(q: ProbeQuestion): boolean {
 /** The answer carries a mask placeholder: it was copied from a masked text. */
 const hasPlaceholder = (answer: string): boolean => answer.includes(SECRET_MASK) || answer.includes(SECRET_MASK_TOO_LARGE);
 
-/** The answer carries a mask placeholder and is none of the served choices: it was copied from a text the masker has since
- *  changed, so it proves nothing either way. Only a question with choices can be masked away (review 2068 F2): an answer to an
- *  id or `none` question copies no choice, so one that carries a secret's shape is graded, and fails unless it is the
- *  expected one. */
-const maskedAway = (q: ProbeQuestion, answer: string): boolean =>
-  q.choices !== null && hasPlaceholder(answer) && !q.choices.some((c) => fold(c) === fold(answer));
+/** A regular expression's literal text. */
+const literal = (t: string): string => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+/** Each placeholder in an answer, as the text to split it at. */
+const PLACEHOLDERS = new RegExp(`${literal(fold(SECRET_MASK))}|${literal(fold(SECRET_MASK_TOO_LARGE))}`);
+/** The answer, read with each placeholder as a wildcard, is the whole of the stored choice `raw` (both folded). */
+const wildcardMatches = (answer: string, raw: string): boolean =>
+  new RegExp(`^${fold(answer).split(PLACEHOLDERS).map(literal).join('[\\s\\S]*')}$`).test(fold(raw));
+
+/** The answer carries a mask placeholder, is none of the served choices, and, reading each placeholder as a wildcard, is
+ *  still one of the stored choices: it was copied from a text the masker has since changed, so it proves nothing either way.
+ *  One that matches no stored choice even so is a wrong answer, and fails (review 2103 F3): a placeholder never turns a
+ *  failed round into an unmeasured one. Only a question with choices can be masked away (review 2068 F2): an answer to an id
+ *  or `none` question copies no choice, so one that carries a secret's shape is graded, and fails unless it is the expected
+ *  one. */
+const maskedAway = (q: ProbeQuestion, answer: string, stored: readonly string[] | null): boolean =>
+  q.choices !== null && hasPlaceholder(answer) && !q.choices.some((c) => fold(c) === fold(answer))
+  && (stored ?? []).some((c) => wildcardMatches(answer, c));
 
 /** The question as stored, unmasked: what an answer with no placeholder is graded against (review 2068 F6). */
 const rawQuestion = (q: StoredQuestion): ProbeQuestion => ({ id: q.qid, cls: q.cls, text: q.question, choices: q.choices, expected: q.expected });
@@ -82,7 +93,7 @@ export function gradeAnswers(rows: readonly StoredQuestion[], answers: ReadonlyM
     const q = maskedQuestion(row, mask);
     const a = answers.get(row.qid);
     const grade: ProbeGrade = !gradableAsServed(q) ? 'unmeasured' : a === undefined ? 'fail'
-      : !hasPlaceholder(a) ? gradeProbe(rawQuestion(row), a) : maskedAway(q, mask(a)) ? 'unmeasured' : gradeProbe(q, mask(a));
+      : !hasPlaceholder(a) ? gradeProbe(rawQuestion(row), a) : maskedAway(q, mask(a), row.choices) ? 'unmeasured' : gradeProbe(q, mask(a));
     return { qid: row.qid, answer: a === undefined ? null : mask(a), grade };
   });
 }

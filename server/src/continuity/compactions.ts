@@ -9,9 +9,9 @@
 // line carries the hook's scope verdict, and only `main` lines count: every PreCompact payload names the parent's
 // transcript, so the verdict is all that tells a subagent's compaction apart (plan review 1896 B2).
 //
-// Five exported functions: `readCompactionsMeasured` (L3, reads the three files through `FleetIO` and keeps every
-// distinction it receives), and `compactionsSince`, `compactionsBegunSince`, `newestCompactionAt` and `refusedSince` (L1,
-// pure: they import nothing that does I/O). No renewal decision is
+// Six exported functions: `readCompactionsMeasured` (L3, reads the three files through `FleetIO` and keeps every
+// distinction it receives), and `compactionsSince`, `compactionsBegunSince`, `newestCompactionAt`, `compactionInFlight` and
+// `refusedSince` (L1, pure: they import nothing that does I/O). No renewal decision is
 // made here; the renewal deciders read these answers.
 import path from 'node:path';
 import type { FleetIO } from '../io.js';
@@ -151,6 +151,16 @@ export function compactionsBegunSince(lines: readonly CompactionLine[], sinceMs:
 export function newestCompactionAt(lines: readonly CompactionLine[]): number | null {
   const ats = lines.filter((l) => l.scope === 'main' && l.phase !== 'refused').map((l) => l.at);
   return ats.length === 0 ? null : Math.max(...ats);
+}
+
+/** Pure. Is a compaction of the MAIN conversation in flight at `nowMs` (review 2103 F2)? A `pre` line younger than
+ *  COMPACTION_PAIR_MS that no `post` may settle (see `pairs`): the compaction began and has not been seen to end, so a usage
+ *  reading written since may still carry the depth from before it. A `pre` older than the pairing window is no longer in
+ *  flight: an automatic compaction may fire PreCompact with no PostCompact after it (W0-05). */
+export function compactionInFlight(lines: readonly CompactionLine[], nowMs: number): boolean {
+  const main = lines.filter((l) => l.scope === 'main');
+  const posts = main.filter((l) => l.phase === 'post');
+  return main.some((p) => p.phase === 'pre' && nowMs - p.at < COMPACTION_PAIR_MS && !posts.some((q) => pairs(p, q)));
 }
 
 /** Pure. Did the PreCompact refusal arm refuse a compaction of the MAIN conversation at or after `sinceMs`? A `refused`

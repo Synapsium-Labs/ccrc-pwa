@@ -109,6 +109,23 @@ export function gradeAnswersCases(m: ProbeDoorModule): Record<string, SuiteCase>
       expect(m.gradeAnswers([served], new Map([['p2', ` ROTATE ${SECRET_MASK} `]]), SEAL)[0]!.grade).toBe('pass');
       expect(m.gradeAnswers([served], new Map([['p2', 'b']]), SEAL)[0]!.grade).toBe('fail');
     },
+    'a placeholder answer that is no stored choice even with the placeholder read as a wildcard fails, never unmeasured (review 2103 F3)': () => {
+      const qq = sq('p1', ['rotate key-1 then deploy', 'run the migration', 'stop'], 'rotate key-1 then deploy');
+      expect(m.gradeAnswers([qq], new Map([['p1', `deploy ${SECRET_MASK}`]]), SAME)[0]!.grade).toBe('fail');
+      expect(m.gradeAnswers([qq], new Map([['p1', `${SECRET_MASK_TOO_LARGE} the migration twice`]]), SAME)[0]!.grade).toBe('fail');
+      // Read as a wildcard it must match a whole stored choice, not a part of one.
+      expect(m.gradeAnswers([qq], new Map([['p1', `key-1 ${SECRET_MASK}`]]), SAME)[0]!.grade).toBe('fail');
+      expect(m.gradeAnswers([qq], new Map([['p1', `rotate ${SECRET_MASK} then`]]), SAME)[0]!.grade).toBe('fail');
+      // Either placeholder is a wildcard, and one that still matches a stored choice is masked away.
+      expect(m.gradeAnswers([qq], new Map([['p1', `${SECRET_MASK_TOO_LARGE} then deploy`]]), SAME)[0]!.grade).toBe('unmeasured');
+      expect(m.gradeAnswers([qq], new Map([['p1', ` ROTATE ${SECRET_MASK} THEN DEPLOY `]]), SAME)[0]!.grade).toBe('unmeasured');
+      // A wildcard matches any text, a regular expression's own characters in the answer only themselves.
+      const dotted = sq('p2', ['a.b (c) ok', 'x', 'y'], 'a.b (c) ok');
+      expect(m.gradeAnswers([dotted], new Map([['p2', `a.b (${SECRET_MASK}) ok`]]), SAME)[0]!.grade).toBe('unmeasured');
+      expect(m.gradeAnswers([dotted], new Map([['p2', `a?b (${SECRET_MASK}) ok`]]), SAME)[0]!.grade).toBe('fail');
+      const plain = sq('p3', ['axb (c) ok', 'x', 'y'], 'axb (c) ok');
+      expect(m.gradeAnswers([plain], new Map([['p3', `a.b (${SECRET_MASK}) ok`]]), SAME)[0]!.grade).toBe('fail');
+    },
     'a question with no choices masks nothing away: an answer with a placeholder is graded, and fails unless it is the expected one (review 2068 F2)': () => {
       const byId = sq('p3', null, 'x SECRET_A');
       expect(m.gradeAnswers([byId], new Map([['p3', `x ${SECRET_MASK}`]]), SEAL)[0]!.grade).toBe('pass');
@@ -328,7 +345,7 @@ export function probeFailedUnfixedOfCases(m: ProbeScheduleModule): Record<string
 
 const base = (over: Partial<Input> = {}): Input => ({
   state: 'active', probeRounds: 0, rounds: [], cardReadAt: M(null), compactionsSince: M(0), idle: M(false), ctx: C(0),
-  compactedAt: M(null), compactionStalled: false, ...over,
+  compactedAt: M(null), compactionInFlight: M(false), compactionStalled: false, ...over,
 });
 /** A usage reading of `tokens`, written by the statusline at `at` (by default after every compaction line a case writes). */
 function C(tokens: number, at = AT): Input['ctx'] { return M({ tokens, at }); }
@@ -473,6 +490,27 @@ export function probeScheduleCases(m: ProbeScheduleModule): Record<string, Suite
       // Stalled only blocks a compaction round that is due: nothing else changes.
       expect(opens({ compactionStalled: true, idle: M(true), ctx: C(K - 1) })).toBeNull();
     },
+    'active, while a stalled compaction is due the spot baseline counts only marks asked since it, else 0 (review 2103 F1)': () => {
+      const line = AT + MIN;
+      const before = DONE('s1', 'spot', 'passed', { depthTokens: 150_000, askedAt: AT });
+      const stalled = (rounds: Input['rounds'], tokens: number) =>
+        opens({ rounds, compactionsSince: M(1), compactionStalled: true, compactedAt: M(line), idle: M(true), ctx: C(tokens, line + 2 * MIN) });
+      // The reviewer's case: an earlier spot round at 150k, a stalled compaction, a 60k reading after it.
+      expect(stalled([before], 60_000)).toEqual({ kind: 'spot', depthTokens: 60_000, supersedes: null });
+      expect(stalled([before], K - 1)).toBeNull();
+      // A spot round asked since the compaction is the baseline: no spot round every pass while the stall lasts.
+      const since = DONE('s2', 'spot', 'passed', { depthTokens: 60_000, askedAt: line + MIN });
+      expect(stalled([before, since], 60_000 + K - 1)).toBeNull();
+      expect(stalled([before, since], 60_000 + K)).toEqual({ kind: 'spot', depthTokens: 60_000 + K, supersedes: null });
+      // With no compaction due the baseline is the newest mark, as before.
+      expect(opens({ rounds: [before], compactedAt: M(line), idle: M(true), ctx: C(60_000, line + 2 * MIN) })).toBeNull();
+    },
+    'active, a compaction in flight opens its round at depth 0 and no spot round (review 2103 F2)': () => {
+      const line = AT - MIN;
+      expect(opens({ compactionsSince: M(1), compactedAt: M(line), compactionInFlight: M(true), ctx: C(171_000, line + 5_000) }))
+        .toEqual({ kind: 'compaction', depthTokens: 0, supersedes: null });
+      expect(opens({ compactedAt: M(line), compactionInFlight: M(true), idle: M(true), ctx: C(171_000, line + 5_000) })).toBeNull();
+    },
     'no state but probing and active opens a round, however many compactions or tokens': () => {
       for (const state of GENERATION_STATES.filter((x) => x !== 'probing' && x !== 'active')) {
         const s = go({ state, compactionsSince: M(4), idle: M(true), ctx: C(4 * K) });
@@ -532,19 +570,25 @@ export function probeScheduleCases(m: ProbeScheduleModule): Record<string, Suite
 
 export function ctxSinceCompactionCases(m: ProbeScheduleModule): Record<string, SuiteCase> {
   const line = AT - 5 * MIN;
+  const SETTLED = M(false);
   return {
     'a reading newer than the newest compaction line is the context; one at or before it is none (review 2068 F1)': () => {
-      expect(m.ctxSinceCompaction(C(45_000, line + 1), M(line))).toBe(45_000);
-      expect(m.ctxSinceCompaction(C(171_000, line), M(line))).toBeNull();
-      expect(m.ctxSinceCompaction(C(171_000, line - 1), M(line))).toBeNull();
+      expect(m.ctxSinceCompaction(C(45_000, line + 1), M(line), SETTLED)).toBe(45_000);
+      expect(m.ctxSinceCompaction(C(171_000, line), M(line), SETTLED)).toBeNull();
+      expect(m.ctxSinceCompaction(C(171_000, line - 1), M(line), SETTLED)).toBeNull();
     },
     'with no compaction on record any fresh reading is the context': () => {
-      expect(m.ctxSinceCompaction(C(171_000, 0), M(null))).toBe(171_000);
+      expect(m.ctxSinceCompaction(C(171_000, 0), M(null), SETTLED)).toBe(171_000);
     },
     'a reading not measured, or compaction lines not read, is none, never zero and never a guess': () => {
-      expect(m.ctxSinceCompaction(NOPE, M(line))).toBeNull();
-      expect(m.ctxSinceCompaction(NOPE, M(null))).toBeNull();
-      expect(m.ctxSinceCompaction(C(45_000, line + 1), NOPE)).toBeNull();
+      expect(m.ctxSinceCompaction(NOPE, M(line), SETTLED)).toBeNull();
+      expect(m.ctxSinceCompaction(NOPE, M(null), SETTLED)).toBeNull();
+      expect(m.ctxSinceCompaction(C(45_000, line + 1), NOPE, SETTLED)).toBeNull();
+    },
+    'a compaction in flight, or one that could not be told settled, has no context since it, however new the reading (review 2103 F2)': () => {
+      expect(m.ctxSinceCompaction(C(171_000, line + 5_000), M(line), M(true))).toBeNull();
+      expect(m.ctxSinceCompaction(C(171_000, line + 5_000), M(line), NOPE)).toBeNull();
+      expect(m.ctxSinceCompaction(C(45_000, line + 5_000), M(line), SETTLED)).toBe(45_000);
     },
   };
 }
@@ -582,6 +626,33 @@ export function compactionsBegunSinceCases(m: CompactionsModule): Record<string,
       for (const extra of [L(T0, 'pre'), L(T0 + 2 * MIN, 'post'), L(T0 + 50 * MIN, 'post'), L(T0 + 3 * MIN, 'pre', { scope: 'subagent' })]) {
         expect(m.compactionsBegunSince([...base, extra], T0)).toBeGreaterThanOrEqual(m.compactionsBegunSince(base, T0));
       }
+    },
+  };
+}
+
+export function compactionInFlightCases(m: CompactionsModule): Record<string, SuiteCase> {
+  return {
+    'a main pre younger than the pairing window with no post that settles it is in flight (review 2103 F2)': () => {
+      expect(m.compactionInFlight([L(T0, 'pre')], T0 + MIN)).toBe(true);
+      expect(m.compactionInFlight([L(T0, 'pre')], T0 + PAIR - 1)).toBe(true);
+    },
+    'a post that settles it ends it; one of another trigger, or before the pre, does not': () => {
+      expect(m.compactionInFlight([L(T0, 'pre'), L(T0 + MIN, 'post')], T0 + 2 * MIN)).toBe(false);
+      expect(m.compactionInFlight([L(T0, 'pre'), L(T0 + MIN, 'post', { trigger: 'manual' })], T0 + 2 * MIN)).toBe(true);
+      expect(m.compactionInFlight([L(T0 - MIN, 'post'), L(T0, 'pre')], T0 + 2 * MIN)).toBe(true);
+    },
+    'a pre as old as the pairing window is no longer in flight: a compaction may fire no PostCompact': () => {
+      expect(m.compactionInFlight([L(T0, 'pre')], T0 + PAIR)).toBe(false);
+      expect(m.compactionInFlight([L(T0, 'pre')], T0 + 3 * PAIR)).toBe(false);
+    },
+    'only a main pre counts: another scope, a refused line or no line is not in flight': () => {
+      expect(m.compactionInFlight([L(T0, 'pre', { scope: 'subagent' })], T0 + MIN)).toBe(false);
+      expect(m.compactionInFlight([L(T0, 'pre', { scope: null })], T0 + MIN)).toBe(false);
+      expect(m.compactionInFlight([L(T0, 'refused')], T0 + MIN)).toBe(false);
+      expect(m.compactionInFlight([], T0)).toBe(false);
+    },
+    'a settled compaction does not hide a newer one in flight': () => {
+      expect(m.compactionInFlight([L(T0 - 30 * MIN, 'pre'), L(T0 - 29 * MIN, 'post'), L(T0, 'pre')], T0 + MIN)).toBe(true);
     },
   };
 }
@@ -828,7 +899,7 @@ const GRADE_ANSWERS_SET: MutantSet<ProbeDoorModule> = {
     { id: 'A4 an empty answer taken for missing', old: "a === undefined ? 'fail'", new: "a === undefined || a === '' ? 'fail'" },
     { id: 'A5 the answer read by the wrong id', old: 'answers.get(row.qid)', new: 'answers.get(row.cls)' },
     { id: 'A6 a question that cannot be graded is graded', old: "!gradableAsServed(q) ? 'unmeasured' : ", new: '' },
-    { id: 'A7 an answer masked away is graded', old: "maskedAway(q, mask(a)) ? 'unmeasured' : ", new: '' },
+    { id: 'A7 an answer masked away is graded', old: "maskedAway(q, mask(a), row.choices) ? 'unmeasured' : ", new: '' },
     { id: 'A8 colliding choices accepted', old: 'new Set(folded).size === folded.length && ', new: '' },
     { id: 'A9 an expected answer outside the choices accepted', old: ' && folded.filter((c) => c === fold(q.expected)).length === 1', new: '' },
     { id: 'A10 choices compared unfolded', old: 'q.choices.map(fold)', new: 'q.choices' },
@@ -837,8 +908,15 @@ const GRADE_ANSWERS_SET: MutantSet<ProbeDoorModule> = {
     { id: 'A13 an answer to a question with no choices masked away (review 2068 F2)', old: 'q.choices !== null && hasPlaceholder(answer)', new: 'hasPlaceholder(answer)' },
     { id: 'A14 a placeholder answer matched unfolded', old: '.some((c) => fold(c) === fold(answer))', new: '.some((c) => c === answer)' },
     { id: 'A15 an answer with no placeholder graded masked (review 2068 F6)', old: '!hasPlaceholder(a) ? gradeProbe(rawQuestion(row), a)', new: '!hasPlaceholder(a) ? gradeProbe(q, mask(a))' },
-    { id: 'A16 a placeholder answer graded as stored', old: ": maskedAway(q, mask(a)) ? 'unmeasured' : gradeProbe(q, mask(a))", new: ": maskedAway(q, mask(a)) ? 'unmeasured' : gradeProbe(rawQuestion(row), a)" },
+    { id: 'A16 a placeholder answer graded as stored', old: ": maskedAway(q, mask(a), row.choices) ? 'unmeasured' : gradeProbe(q, mask(a))", new: ": maskedAway(q, mask(a), row.choices) ? 'unmeasured' : gradeProbe(rawQuestion(row), a)" },
     { id: 'A17 the answer recorded unmasked', old: 'answer: a === undefined ? null : mask(a)', new: 'answer: a ?? null' },
+    { id: 'A19 any placeholder answer masked away (review 2103 F3)', old: '\n  && (stored ?? []).some((c) => wildcardMatches(answer, c))', new: '' },
+    { id: 'A20 a placeholder matches nothing', old: ".join('[\\\\s\\\\S]*')", new: ".join('')" },
+    { id: 'A21 a wildcard match need not start the choice', old: 'new RegExp(`^${', new: 'new RegExp(`${' },
+    { id: 'A22 a wildcard match need not end the choice', old: "join('[\\\\s\\\\S]*')}$`)", new: "join('[\\\\s\\\\S]*')}`)" },
+    { id: 'A23 the answer read unescaped', old: '.split(PLACEHOLDERS).map(literal)', new: '.split(PLACEHOLDERS)' },
+    { id: 'A24 the too-large placeholder not a wildcard', old: '|${literal(fold(SECRET_MASK_TOO_LARGE))}', new: '' },
+    { id: 'A25 the stored choices not passed', old: 'maskedAway(q, mask(a), row.choices)', new: 'maskedAway(q, mask(a), null)' },
     { id: 'A18 the stored question read without its choices', old: 'text: q.question, choices: q.choices,', new: 'text: q.question, choices: null,' },
   ],
   suite: gradeAnswersCases,
@@ -947,7 +1025,11 @@ const SCHEDULE_SET: MutantSet<ProbeScheduleModule> = {
     { id: 'C27 a compaction round with no newer reading leaves the baseline unmeasured (review 2068 F1)', old: 'depthTokens: depth ?? 0', new: 'depthTokens: depth' },
     { id: 'C28 a stalled compaction round asked again (review 2068 F4)', old: 'if (compactionDue && !i.compactionStalled) return compaction;', new: 'if (compactionDue) return compaction;' },
     { id: 'C29 a stalled compaction round holds the spot branch (review 2068 F4)', old: 'if (compactionDue && !i.compactionStalled) return compaction;', new: 'if (compactionDue) return i.compactionStalled ? none : compaction;' },
-    { id: 'C30 the spot depth read from any fresh reading (review 2068 F1)', old: 'const depth = ctxSinceCompaction(i.ctx, i.compactedAt);', new: "const depth = i.ctx.kind === 'measured' ? i.ctx.value.tokens : null;" },
+    { id: 'C30 the spot depth read from any fresh reading (review 2068 F1)', old: 'const depth = ctxSinceCompaction(i.ctx, i.compactedAt, i.compactionInFlight);', new: "const depth = i.ctx.kind === 'measured' ? i.ctx.value.tokens : null;" },
+    { id: 'C32 a stalled compaction keeps the old baseline (review 2103 F1)', old: ' && (after === null || r.askedAt > after)', new: '' },
+    { id: 'C33 marks before the stalled compaction kept', old: 'r.askedAt > after', new: 'r.askedAt < after' },
+    { id: 'C34 the baseline narrowed with no compaction due', old: 'const after = compactionDue && ', new: 'const after = ' },
+    { id: 'C35 in flight not passed on (review 2103 F2)', old: 'ctxSinceCompaction(i.ctx, i.compactedAt, i.compactionInFlight)', new: "ctxSinceCompaction(i.ctx, i.compactedAt, { kind: 'measured', value: false })" },
     { id: 'C31 a stalled flag stalls any round', old: 'if (compactionDue && !i.compactionStalled) return compaction;', new: 'if (i.compactionStalled) return none;\n  if (compactionDue) return compaction;' },
     { id: 'C25 a start round counts as a mark', old: "r.kind === 'spot' || r.kind === 'compaction'", new: 'true' },
     { id: 'C26 spot rounds opened in probing', old: "    if (isOpen) return none;\n", new: "    if (isOpen && i.rounds.some((r) => r.answeredAt === null && r.kind !== 'spot')) return none;\n" },
@@ -1003,6 +1085,8 @@ const CTX_SINCE_SET: MutantSet<ProbeScheduleModule> = {
     { id: 'X2 an older reading counts', old: 'compactedAt.value === null || ctx.value.at > compactedAt.value ? ctx.value.tokens : null', new: 'ctx.value.tokens' },
     { id: 'X3 unread lines read as no compaction', old: "if (ctx.kind !== 'measured' || compactedAt.kind !== 'measured') return null;", new: "if (ctx.kind !== 'measured') return null;\n  if (compactedAt.kind !== 'measured') return ctx.value.tokens;" },
     { id: 'X4 no compaction on record reads nothing', old: 'compactedAt.value === null || ', new: '' },
+    { id: 'X6 a compaction in flight ignored (review 2103 F2)', old: "if (inFlight.kind !== 'measured' || inFlight.value) return null;", new: '' },
+    { id: 'X7 an unmeasured in-flight read as settled', old: "inFlight.kind !== 'measured' || inFlight.value", new: "inFlight.kind === 'measured' && inFlight.value" },
     { id: 'X5 an unmeasured reading read as zero', old: "if (ctx.kind !== 'measured' || compactedAt.kind !== 'measured') return null;", new: "if (ctx.kind !== 'measured' || compactedAt.kind !== 'measured') return 0;" },
   ],
   suite: ctxSinceCompactionCases,
@@ -1017,6 +1101,18 @@ const BEGUN_SINCE_SET: MutantSet<CompactionsModule> = {
     { id: 'B4 everything before the window kept', old: 'return compactionsSince(lines, from) - ', new: 'return compactionsSince(lines, 0) - ' },
   ],
   suite: compactionsBegunSinceCases,
+};
+
+const IN_FLIGHT_SET: MutantSet<CompactionsModule> = {
+  modulePath: COMPACTIONS,
+  mutants: [
+    { id: 'I1 a settling post ignored', old: ' && !posts.some((q) => pairs(p, q))', new: '' },
+    { id: 'I2 a pre at the window edge in flight', old: 'nowMs - p.at < COMPACTION_PAIR_MS', new: 'nowMs - p.at <= COMPACTION_PAIR_MS' },
+    { id: 'I3 any scope counted', old: "const main = lines.filter((l) => l.scope === 'main');", new: 'const main = lines;' },
+    { id: 'I4 an old pre in flight', old: 'nowMs - p.at < COMPACTION_PAIR_MS && ', new: '' },
+    { id: 'I5 a refused line read as a pre', old: "p.phase === 'pre' && nowMs", new: "p.phase !== 'post' && nowMs" },
+  ],
+  suite: compactionInFlightCases,
 };
 
 const NEWEST_COMPACTION_SET: MutantSet<CompactionsModule> = {
@@ -1088,4 +1184,5 @@ export const PROBE_DOOR_MUTANT_SETS: Record<string, MutantSet<never>> = {
   'server/src/continuity/probeSchedule.ts#ctxSinceCompaction': CTX_SINCE_SET as MutantSet<never>,
   'server/src/continuity/compactions.ts#compactionsBegunSince': BEGUN_SINCE_SET as MutantSet<never>,
   'server/src/continuity/compactions.ts#newestCompactionAt': NEWEST_COMPACTION_SET as MutantSet<never>,
+  'server/src/continuity/compactions.ts#compactionInFlight': IN_FLIGHT_SET as MutantSet<never>,
 };

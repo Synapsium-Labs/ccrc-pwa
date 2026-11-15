@@ -59,12 +59,49 @@ ledger.
   and records the answer masked. `gradableAsServed` still reads the masked question, so two choices that collapse once masked
   grade `unmeasured` whatever the answer: the session could not tell them apart in what it was served.
 
+## Fix round 1 (review 2103, the coordinator's rulings)
+
+- **stalled-compaction-baseline** (review 2103 F1, the ruling `compaction-baseline-zero-without-a-newer-reading` on this
+  path too). A compaction round that composed empty writes no mark, so the baseline stayed at the earlier spot round's depth:
+  a spot round at 150k, a stalled compaction, and a 60k reading after it opened nothing until 200k. While a stalled compaction
+  is due, the baseline now counts only the marks asked after the compaction's newest line, and is 0 with none. It is not 0
+  outright: the compaction stays due for as long as it is stalled, so a flat 0 would open a spot round after every answer.
+  The first spot round after the compaction opens from 0, and the next one 50k past it.
+- **compaction-in-flight** (review 2103 F2). A compaction round can open on a `pre` line alone, and a reading written while
+  the compaction runs may still carry the old depth. An unmatched main `pre` younger than `COMPACTION_PAIR_MS`
+  (`compactionInFlight`, compactions.ts, L1) is a compaction in flight: `ctxSinceCompaction` then answers null, so the round
+  records 0 and no spot round opens. An in-flight answer that could not be read is null too. Whether the statusline rewrites
+  the sidecar during a compaction was not measured; the rule holds either way.
+- **journal-in-the-compactions-key** (review 2103 F2). The compactions memo was keyed on `.compactevents` alone, and the
+  `post` line lands in the journal (`.compactions`). The key is now both stamps, through a second port (`journalStamp`).
+  An absent journal is part of the key (`absent`), so a session with no compaction yet keeps its memo. A journal whose stamp
+  could not be read keys nothing, so the compactions are read every pass, as for an unreadable events file.
+- **placeholder-as-wildcard** (review 2103 F3). On a question with choices, an answer that carries a placeholder and matches
+  no served choice counts as masked away only when, reading each placeholder as a wildcard, it is the whole of a stored
+  choice (both folded, the rest of the answer matched literally). Otherwise it grades `fail`, so a placeholder on a wrong
+  answer no longer turns a failed round into an unmeasured one.
+- **empty-try-clear-per-kind** (review 2103 F4). A round that opens clears only its own kind's empty-try memo, so a
+  remembered empty compaction try outlives a spot round, and the lane drops the memo of every generation that is no longer
+  live, once per pass.
+- **cross-box-clock-order** (review 2103 F5, recorded with no margin, as ruled). F7's window compares a compaction line's
+  `at`, written on the fleet box, with a round's `askedAt`, taken on the server box after the pass's fleet reads. With the
+  fleet clock ahead, or a `pre` written between those reads and the ask, a `pre` just before the ask can land at or after the
+  window start and open the second round F7 removed. With the fleet clock behind, a compaction just after an ask can fall
+  before the window start and be absorbed. A compaction whose `pre` came before the generation became `active` and whose
+  `post` came after opens none. F1's comparison (the sidecar's `ts` against a line's `at`) is on the fleet box's one clock,
+  and `compactionInFlight` compares a fleet-box `at` with the server's now, over a ten-minute window.
+- **spot-key-reads-every-pass** (review 2103 F6, accepted as noted). A spot try that came out empty reads its notes and mail
+  every pass, and a read that keeps failing logs every pass where the old memo skipped it.
+
 ## Deciders added to the mutation floors
 
-`ctxSinceCompaction` (probeSchedule.ts), `compactionsBegunSince` and `newestCompactionAt` (compactions.ts) are new L1 deciders,
+`ctxSinceCompaction` (probeSchedule.ts), and `compactionsBegunSince`, `newestCompactionAt` and `compactionInFlight` (the
+last added in fix round 1; compactions.ts) are new L1 deciders,
 each with its own set in `server/test/sim/probeDoorSets.ts` and a floor of 1 in `mutation-floors.json`. The sets of
 `probeSchedule`, `emptyTryKey` and `gradeAnswers` gained mutants for the new rules (C27 to C31, E5 to E8, A15 to A18), and
-the mutants whose text moved were rewritten (A2, A3, A5, A7, A12, A13, C10, C13, C24, E4).
+the mutants whose text moved were rewritten (A2, A3, A5, A7, A12, A13, C10, C13, C24, E4). Fix round 1 adds A19 to A25
+(the wildcard), C32 to C35 (the stalled baseline, the in-flight reading) and X6 and X7 (in flight), and moves A7, A16 and
+C30.
 
 ## Measured growth
 

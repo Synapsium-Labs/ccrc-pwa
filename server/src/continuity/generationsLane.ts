@@ -64,7 +64,7 @@ import type { Clock, Entropy } from '../time/ports.js';
 import { observeTime, observedStepCapMs, type ObservedGap } from '../time/observed.js';
 import type { MeasuredStat } from '../io.js';
 import type { UsageRead } from '../usage.js';
-import { compactionsBegunSince, compactionsSince, newestCompactionAt, type CompactionsRead } from './compactions.js';
+import { compactionInFlight, compactionsBegunSince, compactionsSince, newestCompactionAt, type CompactionsRead } from './compactions.js';
 import { effectiveGeneration, genExpectOf, genViewOf, type GenRow, type MintInput } from './continuityStore.js';
 import { generationStep, type GenEvent } from './generationMachine.js';
 import { snapshotFactsOf } from './card.js';
@@ -339,7 +339,7 @@ export function generationsPass(deps: GenerationsDeps, input: GenerationsInput):
       const s = probeSchedule({
         state: effectiveGeneration(g, live).state, probeRounds: g.probeRounds, rounds,
         cardReadAt: card.ok ? { kind: 'measured', value: card.read?.at ?? null } : later(card.detail),
-        ...probeReadings(input.readings.get(g.id), compactionWindowStart(g.enteredAt, rounds)),
+        ...probeReadings(input.readings.get(g.id), compactionWindowStart(g.enteredAt, rounds), now),
         compactionStalled: compSnap.kind === 'measured' && tried?.get('compaction') === emptyTryKey('compaction', compSnap.value, null, null),
       });
       probeFailed.set(g.id, s.probeFailedUnfixed);
@@ -362,11 +362,13 @@ export function generationsPass(deps: GenerationsDeps, input: GenerationsInput):
         snapshotId: snap.value, depthTokens: s.open.depthTokens, modelClass: spot && g.model !== null ? familyClassOf(g.model) : null,
         roundUnmeasured: composed.unmeasured, askedAt: now, supersedes: s.open.supersedes,
       });
-      if (w.ok) { roundsOpened += 1; deps.emptyTries.delete(g.id); }
+      // Only this kind's memo is forgotten: a remembered empty compaction try outlives a spot round (review 2103 F4).
+      if (w.ok) { roundsOpened += 1; if (tried !== undefined) deps.emptyTries.set(g.id, new Map([...tried].filter(([k]) => k !== s.open!.kind))); }
       else if (w.kind === 'empty') { emptyRounds += 1; deps.emptyTries.set(g.id, new Map(tried).set(s.open.kind, key)); }
       else if (w.kind === 'write-failed') fail('probes', 'continuity_probes could not be written', `generation ${g.id}'s round waits for the next pass, and`);
     }
     probesFed += applyFedEvents(coord, events, live, now);
+    for (const id of [...deps.emptyTries.keys()]) if (!forProbes.rows.some((g) => g.id === id)) deps.emptyTries.delete(id);
   }
 
   // ---- THREE: the `renewalDue` answer is recorded for every generation whose `state` is at rest (`active` or `degraded`),
@@ -500,15 +502,16 @@ function usageReading(r: GenReadings | undefined, pick: 'ctxTokens' | 'ctxWindow
  *  F7), when the newest compaction line was written, whether the turn marker reads idle, and the fresh context with the time
  *  the statusline wrote it (the sidecar's `ts`, in seconds). A generation with no readings this pass reads every one
  *  unmeasured. */
-function probeReadings(r: GenReadings | undefined, since: number): Pick<ProbeScheduleInput, 'compactionsSince' | 'compactedAt' | 'idle' | 'ctx'> {
+function probeReadings(r: GenReadings | undefined, since: number, now: number): Pick<ProbeScheduleInput, 'compactionsSince' | 'compactedAt' | 'compactionInFlight' | 'idle' | 'ctx'> {
   const lines = r === undefined ? later('unread this pass') : r.compactions.kind === 'unreadable' ? later('compactions unreadable')
     : { kind: 'measured' as const, value: r.compactions.kind === 'absent' ? [] : r.compactions.lines };
   const idle: Reading<boolean> = r === undefined ? later('unread this pass') : !r.turn.ok ? later(`turn marker ${r.turn.reason}`)
     : { kind: 'measured', value: r.turn.state !== 'working' };
   const ctx = ctxReading(r);
-  return lines.kind !== 'measured' ? { compactionsSince: lines, compactedAt: lines, idle, ctx } : {
+  return lines.kind !== 'measured' ? { compactionsSince: lines, compactedAt: lines, compactionInFlight: lines, idle, ctx } : {
     compactionsSince: { kind: 'measured', value: compactionsBegunSince(lines.value, since) },
-    compactedAt: { kind: 'measured', value: newestCompactionAt(lines.value) }, idle, ctx,
+    compactedAt: { kind: 'measured', value: newestCompactionAt(lines.value) },
+    compactionInFlight: { kind: 'measured', value: compactionInFlight(lines.value, now) }, idle, ctx,
   };
 }
 
@@ -559,6 +562,8 @@ export interface GatherPorts {
   usage(id: string): Promise<UsageRead>;
   /** `$REG/<id>.compactevents`'s size and time, the key the compactions are re-read on (review 1927 N2). */
   eventsStamp(id: string): Promise<MeasuredStat>;
+  /** `$REG/<id>.compactions`'s size and time, the journal's half of that key: a `post` line lands there (review 2103 F2). */
+  journalStamp(id: string): Promise<MeasuredStat>;
   compactions(id: string): Promise<CompactionsRead>;
   turnMark(id: string): Promise<TurnMarkRead>;
   processStartedAt(id: string): Promise<number | null>;
@@ -570,7 +575,8 @@ export type CompactionsMemo = Map<string, { stamp: string; read: CompactionsRead
 
 /** The fleet reads for every live generation the pass will judge (`judgedForDue`). The
  *  compactions are re-read only when the PreCompact events file changed (every compaction writes it, the pre line or the
- *  rotation; review 1927 N2), and every time when it is absent (an older hook) or its stamp could not be read. */
+ *  rotation; review 1927 N2) or the journal did (a settled compaction's `post` line, review 2103 F2), and every time when
+ *  the events file is absent (an older hook) or either stamp could not be read. An absent journal is part of the key. */
 export async function gatherGenerationReadings(coord: Pick<GenerationsCoord, 'liveGenerations'>,
   ports: GatherPorts, memo: CompactionsMemo): Promise<Map<number, GenReadings>> {
   const out = new Map<number, GenReadings>();
@@ -583,7 +589,9 @@ export async function gatherGenerationReadings(coord: Pick<GenerationsCoord, 'li
     const id = g.sessionId;
     const usage = await ports.usage(id);
     const stamp = await ports.eventsStamp(id);
-    const key = stamp.ok ? `${stamp.mtimeMs}:${stamp.size}` : null;
+    const journal = await ports.journalStamp(id);
+    const jkey = journal.ok ? `${journal.mtimeMs}:${journal.size}` : journal.reason === 'absent' ? 'absent' : null;
+    const key = stamp.ok && jkey !== null ? `${stamp.mtimeMs}:${stamp.size}|${jkey}` : null;
     const held = memo.get(id);
     let compactions: CompactionsRead;
     if (key !== null && held !== undefined && held.stamp === key) compactions = held.read;
