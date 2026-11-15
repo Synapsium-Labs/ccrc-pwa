@@ -78,3 +78,4 @@ green survives, pending and unmeasured never clear red).
   store row asserts the envelope.
 - Verification slots were shared with other work; two runs were moved to the background by the harness and one reported an
   OOM kill in the test slice with exit 0.
+- Fix round 1: `tsc --noEmit -p test/tsconfig.tests.json` alone was OOM-killed (rc=137) twice on the final tree; it was rc=0 on the tree before the round, and the changes since touch one test file and type-level source. Production `tsc --noEmit` is rc=0.
