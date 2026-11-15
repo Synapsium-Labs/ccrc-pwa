@@ -12,11 +12,12 @@
 // Runs ccd/session-hook.sh for real inside a fixture HOME with a fake `ccrc-api` (the start-report suite's harness, copied:
 // a test file cannot import another); no live box, no live server.
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { execFileSync, spawnSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { mkTmp } from './tmpHelpers.js';
+import { spawnSyncGroup } from './spawnGroup.js';
 
 const HOOK = path.resolve(__dirname, '../../ccd/session-hook.sh');
 const FIX = path.resolve(__dirname, 'fixtures/start-loads');
@@ -90,7 +91,7 @@ const ENV = { CCRC_LAUNCH_PROFILE: `overlord:${DIGEST}`, CCRC_LAUNCH_RC: 'off', 
 const base = (): object => ({ session_id: SID, transcript_path: tpath(), cwd: path.join(home, 'rig', 'repo') });
 const start = (source: string): object => ({ ...base(), hook_event_name: 'SessionStart', source, model: 'claude-model-a' });
 const stop = (): object => ({ ...base(), hook_event_name: 'Stop', stop_hook_active: false, permission_mode: 'bypassPermissions' });
-const hook = (p: object, env: Record<string, string> = ENV): number | null => spawnSync('bash', [HOOK], {
+const hook = (p: object, env: Record<string, string> = ENV): number | null => spawnSyncGroup('bash', [HOOK], {
   input: JSON.stringify(p), encoding: 'utf8', timeout: 60_000,
   env: { ...process.env, HOME: home, PATH: `${path.join(home, 'bin')}:${process.env['PATH'] ?? ''}`, TMUX_PANE: '%1',
     CLAUDE_CODE_SESSION_ID: SID, CLAUDE_PID: '4242', CCRC_SESSION_GENERATION: GENERATION, ...env },
