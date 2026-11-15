@@ -106,7 +106,7 @@ describe('ccrc-api timer set', () => {
   });
 
   it('a binding flag before the duration and the note is refused bad-args for its position, not as a typed identity (review 2064 F7)', async () => {
-    for (const args of [['set', '--run', '5', '2h', 'n'], ['set', '--programme', 'prog-a', '2h', 'n']]) {
+    for (const args of [['set', '--run', '5', '2h', 'n'], ['set', '--programme', 'prog-a', '2h', 'n'], ['set', '--run=5', '2h', 'n']]) {
       const r = await run(args);
       const b = JSON.parse(r.stdout) as { error: string; detail: string };
       expect([r.status, b.error], args.join(' ')).toEqual([2, 'bad-args']);

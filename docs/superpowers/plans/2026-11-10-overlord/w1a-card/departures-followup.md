@@ -15,14 +15,18 @@ slug; no deviation number was taken. The coordinator folds these into the ledger
   so the cap still bounds what is shown. After it, no character of a page is more than four bytes as JSON (a four-byte
   character's), so `CARD_PAGE_CHARS` (7,000 code points) keeps both paths under the cut: `ccrc-api card` (one page and its
   footer) and the raw row (one page as JSON, the newline `print_body` adds and `http 200`). A raw ESC or CR no longer
-  reaches the pane through `ccrc-api card` either. Pinned in the render suite, for thirteen width classes of character at
+  reaches the pane through `ccrc-api card` either. Pinned in the render suite, for thirteen width classes of character (seventeen since fix round 1) at
   every cap the card has (forty programmes, fifty items, a hundred mails, the notes, fifty timers and a checkpoint), at the
   card's budget and with no budget, with a CONTROL that the same page of raw controls passes the cut. A route case in the
   new `continuity-card-memo.test.ts` measures the real answer's body. Mutant M9 (the escape dropped) joins
   `CARD_BLOCK_SET`, killed by its new case; the floor is unchanged.
-- **lone-surrogates-unreachable** (measured). The escape leaves lone surrogates alone, and `oneLine` does too: no stored
-  string can hold one. `node:sqlite` stores U+FFFD for a lone surrogate (measured: `"a\ud800b"` reads back as `a�b`), and a
-  UTF-8 file read gives U+FFFD as well, so every fact the card renders is well-formed text.
+- **lone-surrogates-escaped** (fix round 1, review 2087 F1; replaces `lone-surrogates-unreachable`, which was false). A TEXT
+  column and a UTF-8 file read give U+FFFD for a lone surrogate, but a JSON-parsed column gives one back: a programme's
+  `doneWhen` (stored as `JSON.stringify` of the list, read with `JSON.parse`) and the handover note. JSON writes a lone
+  surrogate as six bytes. Both escapers (`oneLine` and `blockText`) now escape it as `\u{d800}`, so no character of a page is
+  more than four bytes as JSON, whatever the column. Pinned: the render suite's alphabet gains U+D800 and U+DC00, and the
+  reviewer's worst case (40 programmes x 12 `doneWhen` goals x 2,000 lone surrogates, at the card's budget and with none) is
+  under `TOOL_RESULT_CUT_BYTES` on every page; mutant O7 (the class without `\p{Cs}`) joins `CARD_ONE_LINE_SET`.
 - **N2, served-comment-stays-in-the-frozen-migration** (recorded, not changed). The `served` column's comment inside
   migration 69's SQL still says "a sequence over every serve"; since review 2023 F11(a) it is each session's own. Migration
   69 is on `main`, and its entry says every earlier entry is frozen, so its text stays as it is. The reader's docstring,
@@ -37,6 +41,26 @@ slug; no deviation number was taken. The coordinator folds these into the ledger
   a fresh start (`fresh: true`; a resend of a recorded report forgets nothing). The memo's declaration moved above the
   start door, its first reader. Pinned by `continuity-card-memo.test.ts`, with a CONTROL that pages 1 to 3 with no start
   between record one read.
+- **memo-carries-its-start** (fix round 1, review 2087 F3). The card door awaits the attribution and the gather before it
+  touches the memo, so a page request of the old generation still in flight when a fresh start lands used to add its page
+  to the new memo. Each memo now carries the start it belongs to: every fresh start raises that conversation's stamp
+  (`starts`, bounded like the memo), the card door reads the stamp before its first await, and a page whose request began
+  under an older stamp is served (`recorded: false`) but joins no memo. A stamp dropped by the bound reads as no start, which
+  only ever starts a memo over. Pinned by a memo case that holds a page request at its registry read across a fresh start.
+- **card-escapes-what-oneLine-escapes** (fix round 1, review 2087 F2, F4a). One class, `ESCAPED`, serves both escapers: every
+  control, format and line or paragraph separator character (bidi overrides and isolates, zero-width and tag characters,
+  U+2028 and U+2029 among them), every lone surrogate, and the backslash, which is doubled so a stored `\u{1b}` reads
+  `\\u{1b}`, never as an escaped ESC. `blockText` keeps a block's newlines and tabs. A block whose lines `fieldLine` already
+  escaped (a note's two fields, the checkpoint, the timers) is fenced by `fieldsBlock`, which does not escape again, so its
+  backslashes are not doubled twice. The timer cap is unchanged after the widening: the timers block is built from escaped
+  fields, the widest escape is still under `'\u{10ffff}'.length` (a tag character's `\u{e007f}` is nine characters, a
+  backslash two), and the factor-4 mutation still reds review 2064's F1 case. Mutants: M10 (`blockText` back to controls
+  only), M11 (a field block escaped twice), O8 (the class without the backslash).
+- **review-2087-f4-text** (b and d). (b) `untrustedBlock`'s cap can cut a `\u{..}` escape in half; correcting it is a change
+  to the shared `capUtf8` in `server/src/coord/untrusted.ts`, not one line, so it stays and is said here. (d) `timer set
+  --run=5 2h n` now takes the position refusal too (one line); `--` first keeps the identity refusal, and `set 2h --run 5 x`
+  still takes `--run` as the note, which a ruled note of review 2064 (F8) keeps as data. (c) The constant-only CONTROL case
+  is dropped; the render suite names the real guards instead (its RAW_CONTROL and size assertions, M9, M10, O1, O2, O7, O8).
 - **N5, card-changes-when-its-masking-changes** (recorded, not changed). The card is masked whole before it is hashed, so
   if the masker's fingerprint rows change between two pages of one read, the masked text and its hash change, and the next
   page answers `card-changed`. That is right: the hash names what the reader sees, and a reader told to start again from
@@ -73,6 +97,12 @@ sha256: the block escape dropped (render suite red, six cases); the timer line f
 coordinator's timers section dropped (render red); the start door's forget dropped (memo suite red); the forget on every
 start, `fresh` or not (memo suite red, the resend case); the client's position check dropped (timer suite red, the F7
 case); the timer regex with `/i` again (worker-skill red, the upper-case fixture).
+
+Fix round 1, the same way: the class without `\p{Cs}` (render red, four cases: the U+D800 and U+DC00 cards, the block case
+and the reviewer's worst case); the class without the backslash (render red, the block case); `blockText` back to controls
+only (render red, eight cases); a field block escaped twice (render red, five cases); the timer line factor at 4 again, after
+the widening (render red, review 2064's F1 case); the memo's start check dropped (memo suite red, the in-flight case); the
+client's position check without the `=` form (timer suite red).
 
 ## Claims
 

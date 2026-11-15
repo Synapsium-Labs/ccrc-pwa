@@ -584,7 +584,7 @@ parse_timer() {   # verb, then the verb's arguments
   local verb="$1" duration note run='' programme='' ms flag
   shift
   # A binding flag in the first place is a legitimate flag in the wrong position, not a typed identity (review 2064 F7).
-  if [[ "$verb" == 'set' && ( "${1:-}" == '--run' || "${1:-}" == '--programme' ) ]]; then
+  if [[ "$verb" == 'set' && "${1:-}" =~ ^--(run|programme)(=|$) ]]; then
     refuse 'bad-args' "timer set takes the duration and the note first, then $1: timer set <duration> <note> [--run <id> | --programme <slug>]"
   fi
   if [[ "${1:-}" == --* ]]; then

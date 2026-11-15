@@ -739,11 +739,14 @@ describe('every page the raw row prints stays under the cut, its controls escape
   const rawRowBytes = (text: string): number => utf8Bytes(JSON.stringify({
     ok: true, hash: 'f'.repeat(64), snapshotId: 'f'.repeat(64), page: 99_999, pages: 99_999, text, recorded: false,
   })) + 1 + 'http 200\n'.length;
-  /** Every C0 and C1 control but the newline and the tab: what the pane would act on, and what JSON writes as six bytes. */
-  const RAW_CONTROL = /[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/u;
-  /** One character of each width class a stored string can hold. Lone surrogates are not among them: SQLite and a UTF-8 file
-   *  read hand back U+FFFD for one (measured with `node:sqlite`). */
-  const ALPHABET = ['\u0001', '\u001b', '\u009b', '\r', '\u007f', '"', '\\', '\n', '\t', '\u{1F642}', ' ', '\u{E0001}', '�'];
+  /** What must never reach a page raw: every control but the newline and the tab, every format and line or paragraph
+   *  separator character, and every lone surrogate (what the pane would act on, what would hide text, and what JSON writes as
+   *  six bytes). */
+  const RAW_CONTROL = /[\u0000-\u0008\u000b-\u001f\u007f-\u009f\p{Cf}\p{Zl}\p{Zp}\p{Cs}]/u;
+  /** One character of each width class a stored string can hold, the lone surrogates among them: a JSON-parsed column (a
+   *  programme's `doneWhen`, the handover note) gives one back (review 2087 F1), and JSON writes it as six bytes. */
+  const ALPHABET = ['\u0001', '\u001b', '\u009b', '\r', '\u007f', '"', '\\', '\n', '\t', '\u{1F642}', ' ', '\u{E0001}', '�',
+    '\ud800', '\udc00', '‮', '​'];
 
   /** The crafted card of review 2027 N1, at every cap the card has: forty programmes, each with a goal of each kind and a
    *  decision of `ch`, items, mail, notes and timers of `ch`, and a checkpoint. */
@@ -772,13 +775,26 @@ describe('every page the raw row prints stays under the cut, its controls escape
     }
   });
 
-  it('a block keeps its newlines and tabs, and escapes every other control as the bare fields do', () => {
-    const t = textOf(renderCard('coordinator', empty({ itemsRaised: read([item(7, 'a\tb\nc\u0001d\u001be\rf\u009bg\u007fh')]) })));
-    expect(t).toContain('a\tb\nc\\u{1}d\\u{1b}e\\u{d}f\\u{9b}g\\u{7f}h');
+  it('a block keeps its newlines and tabs, and escapes what a bare field escapes: controls, format characters, separators, lone surrogates and the backslash', () => {
+    const t = textOf(renderCard('coordinator', empty({
+      itemsRaised: read([item(7, 'a\tb\nc\u0001d\u001be\rf\u009bg\u007fh‮i​j k\ud800l\\u{1b}m')]),
+    })));
+    expect(t).toContain('a\tb\nc\\u{1}d\\u{1b}e\\u{d}f\\u{9b}g\\u{7f}h\\u{202e}i\\u{200b}j\\u{2028}k\\u{d800}l\\\\u{1b}m');
   });
+  // What goes red when the escape is dropped or narrowed: the RAW_CONTROL and size assertions above (a page of lone
+  // surrogates or C0 controls is six bytes a code point as JSON, 42,000 bytes a page), and mutants M9 and M10 of
+  // `CARD_BLOCK_SET` and O1, O2, O7 and O8 of `CARD_ONE_LINE_SET` (sim/cardMutants.ts). Measured in the departures note.
 
-  it('CONTROL: the same page with its controls raw passes the cut, so the escape is what holds it', () => {
-    const raw = '\u0001'.repeat(CARD_PAGE_CHARS);
-    expect(rawRowBytes(raw)).toBeGreaterThan(TOOL_RESULT_CUT_BYTES);
+  it('the reviewer\'s worst case: 40 programmes x 12 doneWhen goals x 2,000 lone surrogates, at the budget and with none (review 2087 F1)', () => {
+    const goals = Array.from({ length: 12 }, () => ({ text: '\ud800'.repeat(2_000), ratified: false }));
+    const programmes = Array.from({ length: 40 }, (_, i) => ({ slug: `prog-${String(i).padStart(2, '0')}`, goals, openItems: [], decisions: [] }));
+    for (const keep of [CARD_BUDGET_TOKENS, 1_000_000]) {
+      const { text } = trimCard(renderCard('coordinator', empty({ ledger: read(programmes) })), keep);
+      expect(text).toContain('\\u{d800}');
+      for (const [i, page] of cardPages(text).entries()) {
+        expect(rawRowBytes(page), `page ${i + 1} at budget ${keep}`).toBeLessThanOrEqual(TOOL_RESULT_CUT_BYTES);
+        expect(RAW_CONTROL.test(page), `page ${i + 1} at budget ${keep}`).toBe(false);
+      }
+    }
   });
 });

@@ -8,6 +8,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { FastifyInstance } from 'fastify';
 import type { CoordStore } from '../src/coord/store.js';
+import { localIOFor, type FleetIO } from '../src/io.js';
 import { TOOL_RESULT_CUT_BYTES } from '../../shared/continuity-card.js';
 import { FAKE_T0, fakeTime, type FakeTime } from './fakeTime.js';
 import { ID_GATE_TOKEN, appFor, recorder, seedRow } from './idGateFixture.js';
@@ -35,8 +36,8 @@ afterEach(async () => {
   removeTmpFixtures();
 });
 
-const open = async (): Promise<FastifyInstance> => {
-  const r = await appFor(home, recorder().run, { time: time.ports });
+const open = async (io?: FleetIO): Promise<FastifyInstance> => {
+  const r = await appFor(home, recorder().run, { time: time.ports, ...(io ? { io } : {}) });
   coord = r.coord;
   await r.app.ready();
   return r.app;
@@ -116,6 +117,41 @@ describe('a new start of one conversation forgets its partly served card (review
     expect((await card(app, { page: 2, hash })).json().recorded).toBe(false);
     expect((await start(app, 'r-0001-abcd')).json().fresh).toBe(false);
     expect((await card(app, { page: 3, hash })).json().recorded).toBe(true);
+    expect(reads()).toEqual([{ pages: 3 }]);
+  });
+
+  it('a page of the old generation still in flight when a fresh start lands joins no memo (review 2087 F3)', async () => {
+    // The registry listing of the next request, once armed, waits until it is released: the card door's attribution is the
+    // first read a card request makes, so the request is held after it began and before it touches the memo.
+    const base = localIOFor(home);
+    let armed = false;
+    let entered!: () => void;
+    const inGate = new Promise<void>((r) => { entered = r; });
+    let release!: () => void;
+    const gate = new Promise<void>((r) => { release = r; });
+    const io: FleetIO = {
+      ...base,
+      readdirMeasured: async (...a: Parameters<FleetIO['readdirMeasured']>) => {
+        if (armed) { armed = false; entered(); await gate; }
+        return base.readdirMeasured(...a);
+      },
+    };
+    app = await open(io);
+    mail(15, (i) => `s${i} ${'x'.repeat(1000)}`);
+    const { hash, pages } = (await card(app)).json() as { hash: string; pages: number };
+    expect(pages).toBe(3);
+    armed = true;
+    const inFlight = card(app, { page: 2, hash });
+    await inGate;
+    expect((await start(app, 'r-0001-abcd')).json().fresh).toBe(true);
+    release();
+    const old = await inFlight;
+    expect([old.statusCode, old.json().page, old.json().recorded]).toEqual([200, 2, false]);
+    // The new generation reads pages 1 and 3: the old page 2 is in no memo, so nothing is recorded until page 2 is served again.
+    expect((await card(app)).json().recorded).toBe(false);
+    expect((await card(app, { page: 3, hash })).json().recorded).toBe(false);
+    expect(reads()).toEqual([]);
+    expect((await card(app, { page: 2, hash })).json().recorded).toBe(true);
     expect(reads()).toEqual([{ pages: 3 }]);
   });
 

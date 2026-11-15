@@ -64,10 +64,23 @@ const ONE_LINE_MAX_CHARS = 200;
 /** What `iso` prints for a stamp that is not a time (review 1892, F8): a corrupt row renders a line, never a throw. */
 export const CARD_UNREADABLE_TIME = '(an unreadable time)';
 
-/** A row's field printed bare, on one line: every control, format and line or paragraph separator character (newline,
- *  CR, U+2028 and U+2029 among them) is escaped as `\u{<hex>}`, and the result is cut at `max` characters. */
+/** What the card escapes, in a bare field and in an untrusted block alike (review 2027 N1; review 2087 F1, F2, F4): every
+ *  control, format and line or paragraph separator character (newline, CR, ESC, U+2028 and U+2029, bidi overrides and
+ *  isolates, zero-width and tag characters among them), every lone surrogate, and the backslash itself. A lone surrogate can
+ *  be stored: a JSON-parsed column (a programme's `doneWhen`, the handover note) gives one back, though a TEXT column and a
+ *  UTF-8 file read give U+FFFD. The backslash is escaped so a stored `\u{1b}` reads `\\u{1b}`, never as an escaped ESC. */
+const ESCAPED = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}\p{Cs}\\]/gu;
+/** One escaped character: `\\` for the backslash, `\u{<hex>}` for the rest. An escape is ASCII, at most two bytes a
+ *  character as JSON, and what is left raw (with a block's newlines and tabs, two bytes each as JSON) is well-formed text JSON
+ *  writes as its UTF-8, at most four bytes a code point. So no page is more than four bytes a code point as JSON, and
+ *  `CARD_PAGE_CHARS` keeps every printed page under the cut: `ccrc-api card`'s, and the raw row `ccrc-api sessions card`'s,
+ *  which prints the page as JSON. (`\p{Cs}` under the `u` flag matches a lone surrogate only: a pair is one code point.) */
+const escapeOf = (c: string): string => (c === '\\' ? '\\\\' : `\\u{${c.codePointAt(0)!.toString(16)}}`);
+
+/** A row's field printed bare, on one line: every character `ESCAPED` names is escaped, and the result is cut at `max`
+ *  characters. */
 export function oneLine(v: string, max: number = ONE_LINE_MAX_CHARS): string {
-  const escaped = String(v).replace(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu, (c) => `\\u{${c.codePointAt(0)!.toString(16)}}`);
+  const escaped = String(v).replace(ESCAPED, escapeOf);
   const chars = [...escaped];
   return chars.length > max ? `${chars.slice(0, max).join('')}…` : escaped;
 }
@@ -86,18 +99,22 @@ export function iso(ms: number): string {
   return Number.isNaN(d.getTime()) ? CARD_UNREADABLE_TIME : d.toISOString().replace(/\.\d{3}Z$/, 'Z');
 }
 
-/** An untrusted block's text with every control character but the newline and the tab (C0 and C1, CR and ESC among them)
- *  escaped as `\u{<hex>}`, as `oneLine` escapes them (review 2027, N1). A raw ESC or CR would act on the reader's pane through
- *  `ccrc-api card`, and JSON writes each such control as six bytes (`\u0001`), so a page of them, printed as JSON by the raw
- *  row `ccrc-api sessions card`, ran past the tool-result cut. Escaped, no character of a page is more than four bytes as
- *  JSON (a four-byte character's), so `CARD_PAGE_CHARS` holds for both paths. Applied before the cap, so the cap bounds what
- *  is shown. Lone surrogates are not escaped: no stored string holds one (SQLite and a UTF-8 file read hand back U+FFFD). */
+/** An untrusted block's text: every character `ESCAPED` names is escaped but the newline and the tab, so a block keeps its
+ *  lines (review 2027 N1; review 2087 F1, F2). A raw ESC or CR would act on the reader's pane through `ccrc-api card`, a bidi
+ *  override or a zero-width character would hide what the text says, and JSON writes a control or a lone surrogate as six
+ *  bytes. Applied before the cap, so the cap bounds what is shown. */
 function blockText(text: string): string {
-  return text.replace(/[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/gu, (c) => `\\u{${c.codePointAt(0)!.toString(16)}}`);
+  return text.replace(ESCAPED, (c) => (c === '\n' || c === '\t' ? c : escapeOf(c)));
 }
 
+/** A block of raw text a session or a person wrote: escaped by `blockText`, then fenced and capped. */
 const block = (text: string, capBytes: number, fullAt: string): string =>
   untrustedBlock(blockText(text), capBytes, fullAt, CARD_TEXT_PREFACE);
+
+/** A block whose every line is already escaped field by field (`fieldLine`, so nothing in it is raw): fenced and capped as it
+ *  is. Escaping it again would double the backslashes its escapes wrote. */
+const fieldsBlock = (escaped: string, capBytes: number, fullAt: string): string =>
+  untrustedBlock(escaped, capBytes, fullAt, CARD_TEXT_PREFACE);
 
 /** Ranks: a `keep` section's rank is never read; a droppable one is dropped lowest first. Within the mail and notes
  *  bands the newer entries rank higher; programmes rank by slug, the first slug highest (a programme carries no time).
@@ -209,7 +226,7 @@ function notesSections(f: CardFacts): readonly CardSection[] {
       return {
         key: `note:${n.id}`, rank: banded(RANK.note, sorted.length - 1 - i, sorted.length), keep: false,
         text: `Note ${n.id} (${oneLine(n.kind)}, on ${oneLine(n.key)}${KEY_NOW[n.keyFact]}), written ${iso(n.at)}. Next:\n`
-          + `${block(fieldLine(n.next), NOTE_FIELD_CAP_BYTES, at)}\nWaits on:\n${block(fieldLine(n.waitsOn), NOTE_FIELD_CAP_BYTES, at)}`,
+          + `${fieldsBlock(fieldLine(n.next), NOTE_FIELD_CAP_BYTES, at)}\nWaits on:\n${fieldsBlock(fieldLine(n.waitsOn), NOTE_FIELD_CAP_BYTES, at)}`,
       };
     });
   });
@@ -230,7 +247,7 @@ function checkpointSections(f: CardFacts): readonly CardSection[] {
     return [{
       key: 'checkpoint', rank: RANK.checkpoint, keep: false,
       text: `Checkpoint from ${iso(cp.at)}: the handover note of generation ${h.generation}, ${h.dropped} status word(s) dropped `
-        + `(its claims of done, ids, promises, authority and preferences are not rows):\n${block(lines.join('\n'), CHECKPOINT_CAP_BYTES, 'stored on the handover row, which nothing reads back in W1a')}`,
+        + `(its claims of done, ids, promises, authority and preferences are not rows):\n${fieldsBlock(lines.join('\n'), CHECKPOINT_CAP_BYTES, 'stored on the handover row, which nothing reads back in W1a')}`,
     }];
   });
 }
@@ -246,7 +263,7 @@ function timersSections(f: CardFacts): readonly CardSection[] {
     const bound = (t: CardTimer): string => t.runId !== null ? `run ${t.runId}` : t.programme !== null ? `programme ${oneLine(t.programme)}` : 'no run or programme';
     const lines = sorted.map((t) => `timer ${t.id}, due ${iso(t.dueAt)}, ${bound(t)}: ${fieldLine(t.preview)}`);
     return [keepLine('timers', `Pending timers: ${sorted.length} pending; the next is due at ${iso(sorted[0]!.dueAt)}.\n`
-      + block(lines.join('\n'), TIMERS_CAP_BYTES, 'in `ccrc-api timer list`'))];
+      + fieldsBlock(lines.join('\n'), TIMERS_CAP_BYTES, 'in `ccrc-api timer list`'))];
   });
 }
 
