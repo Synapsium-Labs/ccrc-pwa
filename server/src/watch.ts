@@ -6152,7 +6152,7 @@ export class FleetWatcher {
   async sweepQuiz(): Promise<void> {
     const port = this.deps.quiz;
     if (!port) return;
-    await this.runLane('quiz', () => { runQuizLane(port, this.deps.time.clock.wall()); });
+    await this.runLane('quiz', () => { runQuizLane(port, this.deps.time.clock.wall(), (line) => console.warn(line)); });
   }
 
   /** One pass of the dead-coordinator lane — `sweepDeadCoordinators`'s body, run only while no other pass runs. */

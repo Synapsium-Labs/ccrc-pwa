@@ -22,7 +22,9 @@ has a D-number; the coordinator folds them into the ledger.
   `server/src/continuity/quiz.ts#QUIZ_RECORD_READY` (`false`), which `quizLaneVerdict` reads first;
   `continuity-quiz-lane.test.ts` pins that it equals whether `server/src/continuity/quizRoutes.ts` exists, so the pull
   request that ships Task 3's door must set it `true` in the same change, and the lane then raises. A fixture pins both
-  directions (raises nothing while absent, once a week while present).
+  directions (raises nothing while absent, once a week while present). The item's driver step says only "as its runbook says"
+  and names the fleet box: the Task 3 pull request rewrites that step to the runbook's commands for the single-arm mode, and the
+  node to the operator's answer to the plan's open question 2 (review 2121 F4).
 - **The guard now stands for rows whose own gate is open.** `launch-profile` and `anchor-slot` have no gate today, so from
   this merge their Live is refused `baseline-missing` until a baseline row exists, which needs Task 3. That is the ruling's
   intent ("no W1a arm before the baseline"); the plan's open question 1 (arm with the baseline recorded as "not taken") is the

@@ -94,6 +94,17 @@ export function quizRuns(db: DatabaseSync): QuizRunsRead {
   }
 }
 
+/** When each recorded run was recorded, oldest first: the quiz lane's read (review 2121 F2). It selects that column alone, so
+ *  a corrupt value in another column never makes the lane's read fail. */
+export function quizRecordedAts(db: DatabaseSync): { ok: true; value: number[] } | { ok: false; detail: string } {
+  try {
+    const rows = db.prepare('SELECT recordedAt FROM continuity_quiz_runs ORDER BY id').all() as { recordedAt: number }[];
+    return { ok: true, value: rows.map((r) => r.recordedAt) };
+  } catch (e) {
+    return { ok: false, detail: e instanceof Error ? e.message : String(e) };
+  }
+}
+
 /** Whether a baseline row exists: the lane-arm door's fact (`decideLaneArmPost`) and the quiz lane's title. */
 export function quizBaselineRead(db: DatabaseSync): QuizBaselineRead {
   try {
@@ -108,10 +119,7 @@ export function quizBaselineRead(db: DatabaseSync): QuizBaselineRead {
 export function quizLanePortOf(coord: Pick<CoordStore, 'db' | 'raiseItem'>, recordReady: boolean): QuizLanePort {
   return {
     recordReady,
-    recordedAts: () => {
-      const runs = quizRuns(coord.db);
-      return runs.ok ? { ok: true, value: runs.rows.map((r) => r.recordedAt) } : runs;
-    },
+    recordedAts: () => quizRecordedAts(coord.db),
     baseline: () => quizBaselineRead(coord.db),
     itemRaised: (titles) => {
       try {

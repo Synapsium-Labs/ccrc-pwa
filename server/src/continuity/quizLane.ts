@@ -25,14 +25,22 @@ export interface QuizLanePort {
 
 export type QuizLaneResult = { readonly kind: 'hold'; readonly why: QuizLaneHold } | { readonly kind: 'raised'; readonly id: number; readonly title: string };
 
-/** One pass: read, decide, raise at most one item. */
-export function runQuizLane(port: QuizLanePort, now: number): QuizLaneResult {
+/** One pass: read, decide, raise at most one item. A hold because a read failed is logged once, naming each read that failed
+ *  (review 2121 F2), as the sibling lanes log theirs; no other hold logs. */
+export function runQuizLane(port: QuizLanePort, now: number, log: (line: string) => void): QuizLaneResult {
   const week = quizWeek(now);
-  const verdict = quizLaneVerdict({
-    recordReady: port.recordReady, week, recordedAts: port.recordedAts(), baseline: port.baseline(),
-    itemRaised: port.itemRaised([quizItemText(week.key, false).title, quizItemText(week.key, true).title]),
-  });
-  if (verdict.kind === 'hold') return verdict;
+  const recordedAts = port.recordedAts();
+  const baseline = port.baseline();
+  const itemRaised = port.itemRaised([quizItemText(week.key, false).title, quizItemText(week.key, true).title]);
+  const verdict = quizLaneVerdict({ recordReady: port.recordReady, week, recordedAts, baseline, itemRaised });
+  if (verdict.kind === 'hold') {
+    if (verdict.why === 'unmeasured') {
+      const failed = ([['recorded runs', recordedAts], ['baseline', baseline], ['raised items', itemRaised]] as const)
+        .flatMap(([what, r]) => (r.ok ? [] : [`${what}: ${r.detail}`]));
+      log(`ccrc-server: the quiz lane raised nothing: a read failed (${failed.join('; ')})`);
+    }
+    return verdict;
+  }
   const { title, why, how } = verdict.item;
   const id = port.raise({
     program: QUIZ_ITEM_PROGRAMME, runId: null, raisedBy: 'ccrc', kind: 'do', title, why, how: [...how], options: null,

@@ -136,6 +136,8 @@ export function quizWeek(now: number): { readonly key: string; readonly start: n
 /** The item's words: what, how and why, the four conditions of the W0-28 ruling among them. Before a baseline exists the
  *  title says this run is the baseline. */
 export function quizItemText(weekKey: string, baselineExists: boolean): { readonly title: string; readonly why: string; readonly how: readonly string[] } {
+  // The lane keys "once a week" on this exact title (`ledgersStore.ts#itemRaisedWithTitle`; `operator_items` has no other key
+  // for a plain item), so rewording it mid-week raises that week's item a second time (review 2121 F6).
   const title = baselineExists
     ? `Run this week's replay quiz (${weekKey})`
     : `Run this week's replay quiz: the baseline (${weekKey})`;
