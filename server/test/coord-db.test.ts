@@ -727,9 +727,10 @@ describe('coord.db: migration 4 — runs.dispatchStartedAt', () => {
     // and MIGRATIONS[69] (continuity_timers, the timers, Overlord W1a)
     // and MIGRATIONS[70] (plain_memory_settings and the launch-profile lane-arm row, Overlord W1a launch profiles PR B)
     // and MIGRATIONS[71] (continuity_notes and continuity_handovers, the note door, Overlord W1a)
-    // and MIGRATIONS[72] (continuity_probes and continuity_reads, the probe door, Overlord W1a).
-    expect(COORD_SCHEMA_VERSION).toBe(73);
-    expect(MIGRATIONS.length).toBe(73);
+    // and MIGRATIONS[72] (continuity_probes and continuity_reads, the probe door, Overlord W1a)
+    // and MIGRATIONS[73] (push_outbox, push_outbox_meta and the reach stamps on asks and items, the push outbox, Overlord W1).
+    expect(COORD_SCHEMA_VERSION).toBe(74);
+    expect(MIGRATIONS.length).toBe(74);
   });
 
   it('is ADDITIVE: every column migration 1 wrote is still on the table, unchanged', () => {
@@ -827,8 +828,9 @@ describe('coord.db: migration 11 — runs.kind and runs.reviews (design 2026-09-
     // and MIGRATIONS[69] (continuity_timers, Overlord W1a)
     // and MIGRATIONS[70] (plain_memory_settings, launch profiles PR B)
     // and MIGRATIONS[71] (continuity_notes and continuity_handovers, Overlord W1a)
-    // and MIGRATIONS[72] (continuity_probes and continuity_reads, Overlord W1a); the migration above is still entry 11.
-    expect(COORD_SCHEMA_VERSION).toBe(73);
+    // and MIGRATIONS[72] (continuity_probes and continuity_reads, Overlord W1a)
+    // and MIGRATIONS[73] (push_outbox and the reach stamps, Overlord W1); the migration above is still entry 11.
+    expect(COORD_SCHEMA_VERSION).toBe(74);
     const row = db.prepare('SELECT kind, reviews FROM runs').get() as { kind: string; reviews: number | null };
     expect(row).toEqual({ kind: 'work', reviews: null });
     db.close();
@@ -2732,6 +2734,39 @@ describe('coord.db: continuity_probes and continuity_reads, the probe door (Over
     expect(db.prepare('SELECT count(*) AS n FROM continuity_probes').get()).toEqual({ n: 0 });
     expect(db.prepare('SELECT count(*) AS n FROM continuity_reads').get()).toEqual({ n: 0 });
     expect(db.prepare('SELECT next, at FROM continuity_notes').get()).toEqual({ next: 'n', at: 7 });
+    db.close();
+  });
+});
+
+describe('coord.db: push_outbox and the reach stamps, the push outbox (Overlord §6.7, §6.1 C31)', () => {
+  /** Found by its DDL, never hard-coded. */
+  const SLOT = MIGRATIONS.findIndex((m) => m.includes('CREATE TABLE push_outbox (')) + 1;
+  it('two new tables and two nullable columns, the entry after the probes\'', () => {
+    expect(SLOT).toBe(MIGRATIONS.findIndex((m) => m.includes('CREATE TABLE continuity_probes')) + 2);
+    expect(SLOT).toBe(74);
+    const body = MIGRATIONS[SLOT - 1]!.replace(/--[^\n]*/g, '');
+    expect(body.match(/\b(CREATE TABLE|CREATE UNIQUE INDEX|CREATE INDEX|ALTER TABLE) \w+/g)).toEqual([
+      'CREATE TABLE push_outbox', 'CREATE UNIQUE INDEX push_outbox_one_per_source', 'CREATE INDEX push_outbox_due',
+      'CREATE TABLE push_outbox_meta', 'ALTER TABLE asks', 'ALTER TABLE operator_items',
+    ]);
+    expect(body).not.toMatch(/\b(DROP|UPDATE|DELETE|INSERT)\b/);
+  });
+
+  it('reaches a database ALREADY at the version before it: the tables land empty, the stamps NULL, every row as it was', () => {
+    const p = dbPathIn(mkTmp('ccrc-coord-'));
+    mkdirSync(path.dirname(p), { recursive: true });
+    const raw = new DatabaseSync(p);
+    tx(raw, () => {
+      for (let v = 0; v < SLOT - 1; v++) raw.exec(MIGRATIONS[v]!);
+      raw.exec(`PRAGMA user_version = ${SLOT - 1}`);
+      raw.exec("INSERT INTO asks (at, childId, parentId, askKey, askAt, dialogId, question, options, state, releasedAt) VALUES (7, 'lane-a-project-a', 'lane-b-project-a', 'k', 7, 'd', 'q', '[]', 'released', 8)");
+    });
+    raw.close();
+    const db = openCoordDb(p);
+    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(COORD_SCHEMA_VERSION);
+    expect(db.prepare('SELECT count(*) AS n FROM push_outbox').get()).toEqual({ n: 0 });
+    expect(db.prepare('SELECT count(*) AS n FROM push_outbox_meta').get()).toEqual({ n: 0 });
+    expect(db.prepare('SELECT state, releasedAt, reachedOperatorAt FROM asks').get()).toEqual({ state: 'released', releasedAt: 8, reachedOperatorAt: null });
     db.close();
   });
 });
