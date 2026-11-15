@@ -765,10 +765,14 @@ export function DocsHead(p: {
   // stable control. The pressed Export cannot keep it: it goes disabled while the plain view formats, and it remounts as
   // its state moves (`exportKeyOf`); from the one bar's panel, the whole bar withdraws with the reader. So each head's
   // plain-view call is wrapped here, in the component that stays mounted across those swaps, and marks the choice for
-  // this page. Once the head that follows it has drawn (never while the one bar is still up), focus goes to the compact
-  // row's Page details, or else to the full head's back, but only when focus was lost (body, or nothing) or is still on
-  // the pressed Export. Focus elsewhere is the reader's own and stays. A mount, a rotation or a tree recovery marks
-  // nothing, so nothing moves without the choice.
+  // this page. Once the head that follows it has drawn (never while the one bar is still up), focus goes to the
+  // plain-view note, which every head that follows the choice draws (focusable by script only, `tabIndex={-1}`, still a
+  // status, so a screen reader hears that the plain view is on, and never a control that navigates: fix round 3, A19
+  // and A22); Page details stands in where no note is drawn. It moves only when focus was lost (body, or nothing) or is
+  // still on the pressed Export. Focus elsewhere is the reader's own and stays. The mark is spent on that first commit,
+  // so a later render (a tick, a rotation) moves nothing. A mount, a rotation or a tree recovery marks nothing.
+  // The page-change clear is defensive: a mark outlives a commit only while the one bar is up, and the bar withdraws
+  // in the commit after the tap, so no navigation can land between them in a case.
   const here = docsPageUrl(page);
   const choseAt = useRef<string | null>(null);
   const onPlainView = p.onPlainView == null ? null : (): void => {
@@ -784,7 +788,7 @@ export function DocsHead(p: {
     const held = document.activeElement;
     if (held !== null && held !== document.body && !held.classList.contains('docs-export')) return;
     const head = document.querySelector('.docs-head');
-    (head?.querySelector<HTMLElement>('.docs-more') ?? head?.querySelector<HTMLElement>('.docs-back'))?.focus();
+    (head?.querySelector<HTMLElement>('[data-plain-note]') ?? head?.querySelector<HTMLElement>('.docs-more'))?.focus();
   });
   // The take-up plan, refinement (f): a leaf whose frame takes commands draws the one bar once the tree is `ok` (its
   // panel needs the tree); while it is not, the width-based head stands in (compact only at a compact width). Keyed by the page.
@@ -827,7 +831,7 @@ export function DocsHead(p: {
           <>
             <TruthLine page={listed.page} visit={visit} tree={listed.tree} receivedAt={receivedAt} now={now} />
             <Actions form="stacked" page={listed.page} tree={listed.tree} {...actionInputs} />
-            {p.plainView === true && <p className="docs-note" role="status">{DOCS_HEAD_TEXT.exportPlainShown}</p>}
+            {p.plainView === true && <p className="docs-note" role="status" tabIndex={-1} data-plain-note="">{DOCS_HEAD_TEXT.exportPlainShown}</p>}
           </>
         )}
         {visit.updatedTo !== null && (
@@ -842,7 +846,7 @@ export function DocsHead(p: {
       {listed !== null && (
         <>
           <TruthLine page={listed.page} visit={visit} tree={listed.tree} receivedAt={receivedAt} now={now} />
-          {p.plainView === true && <p className="docs-note" role="status">{DOCS_HEAD_TEXT.exportPlainShown}</p>}
+          {p.plainView === true && <p className="docs-note" role="status" tabIndex={-1} data-plain-note="">{DOCS_HEAD_TEXT.exportPlainShown}</p>}
         </>
       )}
       {visit.updatedTo !== null && (
@@ -1057,7 +1061,7 @@ function CompactHead(p: CompactProps & { readonly tree: DocsTreeOk | null }): Re
           </div>
         )
         : <CompactRow {...p} tree={tree} where={where} name={name} />}
-      {p.plainView && <p className="docs-note" role="status">{DOCS_HEAD_TEXT.exportPlainShown}</p>}
+      {p.plainView && <p className="docs-note" role="status" tabIndex={-1} data-plain-note="">{DOCS_HEAD_TEXT.exportPlainShown}</p>}
       {visit.updatedTo !== null && (
         <p className="docs-updated" role="status">{fillSentence(DOCS_HEAD_TEXT.updatedTo, { short: shortCommit(visit.updatedTo) })}</p>
       )}

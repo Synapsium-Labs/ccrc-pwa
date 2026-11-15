@@ -268,6 +268,9 @@
   font-size: var(--text-sm); line-height: var(--leading-normal);
   color: var(--ink-secondary); overflow-wrap: anywhere;
 }
+/* The plain-view note takes focus after a plain-view choice (fix round 3, A19): script only (`tabIndex={-1}`), so it
+   draws its ring on any focus, a mouse's tap included, where the global ring is keyboard-only. */
+.docs-note[data-plain-note]:focus { outline: 2px solid var(--accent); outline-offset: 2px; }
 /* The meta words: an action's note or refusal, "copied", "Updated to", the GitHub mark on an in-repo link. */
 .docs-action-note, .docs-action-off, .docs-copy-said, .docs-updated, .doc-link-gh {
   margin: 0;

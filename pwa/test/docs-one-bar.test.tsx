@@ -364,7 +364,7 @@ describe('the one bar (refinements (f), (j), (k), (l))', () => {
     expect(panel?.contains(shown)).toBe(false);
   });
 
-  it('choosing the plain view from the one bar\'s panel puts focus on the row\'s Page details, not on the body (fix rounds 1 and 2, F1)', async () => {
+  it('choosing the plain view from the one bar\'s panel puts focus on the plain-view note under option 1\'s row, not on the body (fix rounds 1 to 3, F1, A19)', async () => {
     await openReady('/docs/demo/specs/a.md');
     fireEvent.click(titleButton());
     const exportPlain = within(panelOf()).getByRole('button', { name: DOCS_HEAD_TEXT.exportPlainView });
@@ -373,30 +373,55 @@ describe('the one bar (refinements (f), (j), (k), (l))', () => {
     fireEvent.click(exportPlain);
     await screen.findByText(DOCS_HEAD_TEXT.exportPlainShown);
     await waitFor(() => expect(document.querySelector('.docs-one-bar')).toBeNull());
-    const more = screen.getByRole('button', { name: /^Page details/ });
-    await waitFor(() => expect(document.activeElement).toBe(more));
+    const note = screen.getByText(DOCS_HEAD_TEXT.exportPlainShown);
+    await waitFor(() => expect(document.activeElement).toBe(note));
+    expect(note.getAttribute('role'), 'the note is still a status').toBe('status');
+    expect(note.tabIndex, 'focusable by script only').toBe(-1);
   });
 
-  it('choosing the plain view from option 1\'s row, before ready, puts focus on its Page details, not on the body (fix round 2, F2\')', async () => {
+  it('choosing the plain view from option 1\'s row, before ready, puts focus on the plain-view note, not on the body (fix rounds 2 and 3, F2\', A19)', async () => {
     await openMounted('/docs/demo/specs/a.md', 412);
     expect(document.querySelector('.docs-one-bar')).toBeNull();
     const row = document.querySelector<HTMLElement>('.docs-head.docs-compact')!;
     const exportPlain = within(row).getByRole('button', { name: DOCS_HEAD_TEXT.exportPlainView });
     exportPlain.focus();
     fireEvent.click(exportPlain);
-    await screen.findByText(DOCS_HEAD_TEXT.exportPlainShown);
-    const more = screen.getByRole('button', { name: /^Page details/ });
-    await waitFor(() => expect(document.activeElement).toBe(more));
+    const note = await screen.findByText(DOCS_HEAD_TEXT.exportPlainShown);
+    await waitFor(() => expect(document.activeElement).toBe(note));
   });
 
-  it('choosing the plain view from the full head at 1280 puts focus on its back, not on the body (fix round 2, F2\')', async () => {
+  it('choosing the plain view from the full head at 1280 puts focus on the plain-view note, never on back, which navigates (fix rounds 2 and 3, F2\', A19)', async () => {
     await openReady('/docs/demo/specs/a.md', 1280);
     const head = document.querySelector<HTMLElement>('.docs-head.docs-full')!;
     const exportPlain = within(head).getByRole('button', { name: DOCS_HEAD_TEXT.exportPlainView });
     exportPlain.focus();
     fireEvent.click(exportPlain);
-    await screen.findByText(DOCS_HEAD_TEXT.exportPlainShown);
-    await waitFor(() => expect(document.activeElement).toBe(document.querySelector('.docs-head .docs-back')));
+    const note = await screen.findByText(DOCS_HEAD_TEXT.exportPlainShown);
+    await waitFor(() => expect(document.activeElement).toBe(note));
+    expect(document.activeElement).not.toBe(document.querySelector('.docs-head .docs-back'));
+  });
+
+  it('the choice is spent once: focus left on the body afterwards stays there when the head re-renders (fix round 3, F1\'\')', async () => {
+    const setWidth = liveWidth(412);
+    const r = rig();
+    navigate('/docs/demo/specs/a.md');
+    render(<Routed loaders={fakeLoaders().loaders} reader={r.reader} />);
+    await waitFor(() => expect(r.inputs.length).toBe(1));
+    const row = await waitFor(() => {
+      const el = document.querySelector<HTMLElement>('.docs-head.docs-compact');
+      if (el === null) throw new Error('no compact row');
+      return el;
+    });
+    const exportPlain = await waitFor(() => within(row).getByRole('button', { name: DOCS_HEAD_TEXT.exportPlainView }));
+    exportPlain.focus();
+    fireEvent.click(exportPlain);
+    const note = await screen.findByText(DOCS_HEAD_TEXT.exportPlainShown);
+    await waitFor(() => expect(document.activeElement).toBe(note));
+    act(() => { note.blur(); });
+    expect(document.activeElement).toBe(document.body);
+    setWidth(1280);
+    expect(document.querySelector('.docs-head.docs-full')).not.toBeNull();
+    expect(document.activeElement, 'a later render moves nothing').toBe(document.body);
   });
 
   it('a plain-view choice made while focus is elsewhere leaves it there: only a lost focus, or the pressed Export\'s, moves (fix round 2, A14)', async () => {
