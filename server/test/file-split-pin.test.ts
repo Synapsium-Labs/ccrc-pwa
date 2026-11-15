@@ -174,7 +174,7 @@ export const go = (b: Box): string => new Mover().run(b) + String(stays());
     const tree = new Map([...base(), ['src/ns.ts', "import * as a from './a.js';\nexport const keys = Object.keys(a);\n"]]);
     const plan = planMove(req, tree);
     expect(plan.problems).toEqual([]);
-    expect(plan.mentions).toEqual(['src/ns.ts:2']);
+    expect(plan.mentions).toEqual([['src/ns.ts', 2].join(':')]);
   });
 
   it('FIXTURE: a binding assigned on the other side of the cut is refused, since an import is read-only', () => {
@@ -223,7 +223,7 @@ export const go = (b: Box): string => new Mover().run(b) + String(stays());
   it('FIXTURE: a mention of the source module outside an import is reported, not repointed', () => {
     const tree = new Map([...base(), ['src/t.test.ts', "vi.mock('./a.js');\n"]]);
     const plan = planMove(req, tree);
-    expect(plan.mentions).toEqual(['src/t.test.ts:1']);
+    expect(plan.mentions).toEqual([['src/t.test.ts', 1].join(':')]);
     expect(plan.files.has('src/t.test.ts')).toBe(false);
   });
 });
