@@ -48009,14 +48009,16 @@ def verb_show(ctx, a):
 # path, byte for byte, and stops there. The helper deadline and GIT_STDOUT_CAP
 # bound the walk; a walk either ended short of that many is `truncated`, and so
 # is a shallow repository's short walk, since a cut history can hide older
-# commits (on_ref's rule).
+# commits (on_ref's rule). A shallow walk that read past a parentless record
+# touching the doc is `truncated` however full its list.
 LOG_SHA_RE = re.compile(rb'[0-9a-f]{40}|[0-9a-f]{64}')
 
 
 def parse_log(buf, sec_b, want, limit, shallow=False):
-    """The records of LOG_ROW's output whose names hold `want` exactly, as
-    (sha, parents, date, author, subject) byte strings, newest first, at most
-    `limit`. A record is five NUL-ended fields, the newline git writes before
+    """`(rows, skipped)`: the records of LOG_ROW's output whose names hold `want`
+    exactly, as (sha, parents, date, author, subject) byte strings, newest
+    first, at most `limit`, and the count of parentless records a shallow walk
+    read past that touched `want` (each may be a change to the doc). A record is five NUL-ended fields, the newline git writes before
     the names, then NUL-ended names, each under `sec_b` + '/' or `sec_b`
     itself (the pathspec limits them; the bare name is a commit that touched a
     FILE at the section path, which is never the doc but must be read past);
@@ -48029,6 +48031,7 @@ def parse_log(buf, sec_b, want, limit, shallow=False):
     shallow boundary is a root to git, so it prints every file of the section,
     and it cannot be told from a true root without reading the shallow file."""
     rows = []
+    skipped = 0
     prefix = sec_b + b'/'
     bare = sec_b + b'\0'
     i, n = 0, len(buf)
@@ -48037,11 +48040,11 @@ def parse_log(buf, sec_b, want, limit, shallow=False):
         for _ in range(5):
             j = buf.find(b'\0', i)
             if j < 0:
-                return rows
+                return rows, skipped
             fields.append(buf[i:j])
             i = j + 1
         if i >= n:
-            return rows
+            return rows, skipped
         parent = fields[1].split(b' ')[0]
         if (not LOG_SHA_RE.fullmatch(fields[0])
                 or (parent and not LOG_SHA_RE.fullmatch(parent))):
@@ -48052,12 +48055,14 @@ def parse_log(buf, sec_b, want, limit, shallow=False):
             while i < n and (buf.startswith(prefix, i) or buf.startswith(bare, i)):
                 j = buf.find(b'\0', i)
                 if j < 0:
-                    return rows
+                    return rows, skipped
                 hit = hit or buf[i:j] == want
                 i = j + 1
         if hit and not (shallow and not parent):
             rows.append(tuple(fields))
-    return rows
+        elif hit:
+            skipped += 1
+    return rows, skipped
 
 
 def log_entries(rows):
@@ -48122,8 +48127,10 @@ def verb_log(ctx, a):
     if not cut and r.rc != 0:
         raise show_failed('log', r)
     want = (sec + '/' + a.path).encode('utf-8')
-    entries = log_entries(parse_log(r.out, sec.encode('ascii'), want, DOCS_LOG_MAX_ENTRIES, repo.shallow))
-    truncated = len(entries) < DOCS_LOG_MAX_ENTRIES and (cut or repo.shallow)
+    rows, skipped = parse_log(r.out, sec.encode('ascii'), want, DOCS_LOG_MAX_ENTRIES, repo.shallow)
+    entries = log_entries(rows)
+    # A full list is truncated too when a shallow walk read past a parentless record that touched the doc.
+    truncated = len(entries) < DOCS_LOG_MAX_ENTRIES and (cut or repo.shallow) or skipped > 0
     return {'commit': a.commit, 'section': a.section, 'path': a.path, 'entries': entries, 'truncated': truncated}
 
 # ===== docs: fetch =====

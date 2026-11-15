@@ -423,6 +423,42 @@ describe('docs-log: a walk that ends short is truncated', () => {
     for (const e of es) expect(e.parent).toMatch(/^[0-9a-f]{40}$/);
     expect(o['truncated']).toBe(true);
   });
+
+  it('a shallow walk that reads past a parentless record touching the doc is truncated, even with a full list', () => {
+    const dir = freshRepo();
+    const mainRoot = touch(dir, `${SPECS}/a.md`, 'root', 'the main root');
+    many(dir, `${SPECS}/a.md`, 100, 'old');
+    // A true second root, made after the hundred `old` commits (so it is never older than they are), then merged
+    // with the first parent on its side: the walk meets it ahead of every `old` commit.
+    h.git(dir, 'checkout', '-q', '--orphan', 'side');
+    h.git(dir, 'rm', '-rq', '--cached', '.');
+    fs.rmSync(path.join(dir, 'docs'), { recursive: true, force: true });
+    const orphan = touch(dir, `${SPECS}/a.md`, 'orphan', 'the second root');
+    // The merge's tree differs from both parents', so git's history simplification follows both sides of it.
+    h.git(dir, 'merge', '-q', '-s', 'ours', '--no-commit', '--allow-unrelated-histories', 'main');
+    fs.writeFileSync(path.join(dir, SPECS, 'a.md'), 'merged\n');
+    h.git(dir, 'add', '--', `${SPECS}/a.md`);
+    h.git(dir, 'commit', '-q', '-m', 'merge main');
+    touch(dir, `${SPECS}/a.md`, 'one', 't1');
+    const t2 = touch(dir, `${SPECS}/a.md`, 'two', 't2');
+    // CONTROL: before the repository is shallow, the second root is listed (a true root, parent null) near the top,
+    // the list is full, and the walk is complete.
+    const before = answer(t2, 'specs', 'a.md');
+    expect(entriesOf(before)).toHaveLength(100);
+    expect(entriesOf(before).slice(0, 5).map((e) => e.sha)).toContain(orphan);
+    expect(entriesOf(before).find((e) => e.sha === orphan)).toMatchObject({ parent: null });
+    expect(before['truncated']).toBe(false);
+    // Mark the repository shallow without cutting anything: the boundary is the main root, already parentless.
+    fs.writeFileSync(path.join(dir, '.git', 'shallow'), `${mainRoot}\n`);
+    expect(h.git(dir, 'rev-parse', '--is-shallow-repository')).toBe('true');
+    const o = answer(t2, 'specs', 'a.md');
+    const es = entriesOf(o);
+    expect(es).toHaveLength(100);
+    expect(es.map((e) => e.sha)).not.toContain(orphan);
+    for (const e of es) expect(e.parent).toMatch(/^[0-9a-f]{40}$/);
+    // The list is full, yet a change (the second root) was read past: the answer says so.
+    expect(o['truncated']).toBe(true);
+  });
 });
 
 describe('docs-log: output the helper refuses to read', () => {
