@@ -1863,3 +1863,139 @@ describe('FR1 review F8: lane verdicts are L1\'s', () => {
     expect(fetchAdmit(running, keyRunning)).toBe(word);
   });
 });
+
+// ===== W5b-1 Task 9: the history read's L1 (rich-docs spec G4, M9.7, refinement (f)) =====
+// The history query, the log shape check, the history job and the log flight key. Every expected value is written out
+// from the spec; the caps come from L0, never typed.
+//
+// Imports sit here for W2 Task 3's reason: no line above this block moves.
+import { HISTORY_JOB, docsLogFlightKey } from '../src/docs/policy.js';
+import {
+  DOCS_LOG_AUTHOR_MAX_CHARS, DOCS_LOG_MAX_ENTRIES, DOCS_LOG_MAX_WIRE_BYTES, DOCS_LOG_SUBJECT_MAX_CHARS, redactDocsText,
+} from '../../shared/docs.js';
+
+describe('W5b-1 T9: parseDocsApiQuery history (rich-docs spec G4)', () => {
+  const OK = `commit=${T3_COMMIT}&section=vision&path=a.md`;
+  const WANT = { ok: true, req: { route: 'history', ask: { commit: T3_COMMIT, section: 'vision', path: 'a.md' } } };
+
+  it.each([
+    ['commit, section, path', OK],
+    ['path, section, commit', `path=a.md&section=vision&commit=${T3_COMMIT}`],
+    ['section, path, commit', `section=vision&path=a.md&commit=${T3_COMMIT}`],
+  ])('the three keys parse in any order: %s', (_what, search) => {
+    expect(parseDocsApiQuery('history', form(search))).toStrictEqual(WANT);
+  });
+
+  it.each([
+    ['commit', `section=vision&path=a.md`],
+    ['section', `commit=${T3_COMMIT}&path=a.md`],
+    ['path', `commit=${T3_COMMIT}&section=vision`],
+    ['all three', ''],
+  ])('a missing %s is bad-query pin-shape', (_what, search) => {
+    expect(parseDocsApiQuery('history', form(search))).toStrictEqual(badQuery('pin-shape'));
+  });
+
+  it.each(['commit', 'section', 'path'])('a repeated %s is bad-query repeated', (key) => {
+    expect(parseDocsApiQuery('history', form(`${OK}&${key}=x`))).toStrictEqual(badQuery('repeated', key));
+  });
+
+  it.each([
+    ['servedRef', 'servedRef=refs/remotes/origin/main'],
+    ['branch', 'branch=ws/a'],
+    ['maxBytes', 'maxBytes=10'],
+  ])('an unknown key (%s) is bad-query unknown', (key, extra) => {
+    expect(parseDocsApiQuery('history', form(`${OK}&${extra}`))).toStrictEqual(badQuery('unknown', key));
+  });
+
+  it('a short commit is bad-commit', () => {
+    expect(parseDocsApiQuery('history', form(`commit=abc&section=vision&path=a.md`))).toStrictEqual(refusal('bad-commit'));
+  });
+
+  it('a section outside the six, wiki, is bad-section', () => {
+    expect(parseDocsApiQuery('history', form(`commit=${T3_COMMIT}&section=wiki&path=a.md`)))
+      .toStrictEqual(refusal('bad-section'));
+  });
+
+  it('a parent step in the path is bad-path', () => {
+    expect(parseDocsApiQuery('history', form(`commit=${T3_COMMIT}&section=vision&path=../a`))).toStrictEqual(refusal('bad-path'));
+  });
+
+  it("the first fault wins in ccd's argv order: commit, then section, then path", () => {
+    expect(parseDocsApiQuery('history', form('commit=abc&section=wiki&path=../a'))).toStrictEqual(refusal('bad-commit'));
+    expect(parseDocsApiQuery('history', form(`commit=${T3_COMMIT}&section=wiki&path=../a`)))
+      .toStrictEqual(refusal('bad-section'));
+  });
+});
+
+describe('W5b-1 T9: docsAnswerShape docs-log (rich-docs spec G4, M9.7)', () => {
+  const sha = (c: string): string => c.repeat(40);
+  const entry = (over: Record<string, unknown> = {}): Record<string, unknown> =>
+    ({ sha: sha('a'), parent: sha('b'), date: '2026-11-01T10:00:00+00:00', author: 'Ann Author', subject: 'Reword intro', ...over });
+  const log = (over: Record<string, unknown> = {}): Record<string, unknown> =>
+    ({ v: 1, verb: 'docs-log', ok: true, elapsedMs: 3, commit: sha('c'), section: 'vision', path: 'a.md',
+      entries: [entry(), entry({ sha: sha('b'), parent: null })], truncated: false, ...over });
+  /** A subject the docs redactor rewrites; the precondition is measured in the case below. */
+  const SECRET = 'see https://user:pass@example.invalid/x';
+
+  it('a good answer passes, and so does an empty history and exactly the entries cap', () => {
+    expect(docsAnswerShape('docs-log', log())).toStrictEqual({ ok: true });
+    expect(docsAnswerShape('docs-log', log({ entries: [] }))).toStrictEqual({ ok: true });
+    expect(docsAnswerShape('docs-log', log({ entries: Array.from({ length: DOCS_LOG_MAX_ENTRIES }, () => entry()) })))
+      .toStrictEqual({ ok: true });
+  });
+
+  it('the redactor does rewrite the unredacted fixture (the precondition of the case below)', () => {
+    expect(redactDocsText(SECRET)).not.toBe(SECRET);
+  });
+
+  it.each([
+    ['one entry over the cap', log({ entries: Array.from({ length: DOCS_LOG_MAX_ENTRIES + 1 }, () => entry()) })],
+    ['a short sha', log({ entries: [entry({ sha: 'abc' })] })],
+    ['a short parent', log({ entries: [entry({ parent: 'abc' })] })],
+    ['a non-hex parent', log({ entries: [entry({ parent: 'z'.repeat(40) })] })],
+    ['an undefined parent', log({ entries: [entry({ parent: undefined })] })],
+    ['a non-text date', log({ entries: [entry({ date: 5 })] })],
+    ['a subject of one code point over the cap', log({ entries: [entry({ subject: 'x'.repeat(DOCS_LOG_SUBJECT_MAX_CHARS + 1) })] })],
+    ['an author of one code point over the cap', log({ entries: [entry({ author: 'x'.repeat(DOCS_LOG_AUTHOR_MAX_CHARS + 1) })] })],
+    ['a non-boolean truncated', log({ truncated: 'no' })],
+    ['a missing truncated', log({ truncated: undefined })],
+    ['entries that are not an array', log({ entries: {} })],
+    ['an entry that is not an object', log({ entries: [null] })],
+    ['an unredacted subject', log({ entries: [entry({ subject: SECRET })] })],
+    ['an unredacted author', log({ entries: [entry({ author: SECRET })] })],
+  ])('%s is schema', (_what, answer) => {
+    expect(docsAnswerShape('docs-log', answer)).toStrictEqual(T2_SCHEMA);
+  });
+
+  it('the caps count code points, not UTF-16 units: a subject of exactly the cap in astral characters passes', () => {
+    const subject = '\u{1F600}'.repeat(DOCS_LOG_SUBJECT_MAX_CHARS);
+    expect(docsAnswerShape('docs-log', log({ entries: [entry({ subject })] }))).toStrictEqual({ ok: true });
+  });
+});
+
+describe('W5b-1 T9: the history flight key and job (rich-docs spec G4)', () => {
+  const ASK = { commit: 'a'.repeat(40), section: 'vision', path: 'a.md' } as const;
+  const base = docsLogFlightKey('n', 'demo', ASK);
+
+  it.each([
+    ['node', docsLogFlightKey('m', 'demo', ASK)],
+    ['project', docsLogFlightKey('n', 'other', ASK)],
+    ['commit', docsLogFlightKey('n', 'demo', { ...ASK, commit: 'b'.repeat(40) })],
+    ['section', docsLogFlightKey('n', 'demo', { ...ASK, section: 'promise' })],
+    ['path', docsLogFlightKey('n', 'demo', { ...ASK, path: 'b.md' })],
+  ])('differs when only the %s differs', (_what, other) => {
+    expect(other).not.toBe(base);
+  });
+
+  it('is the same for the same ask, and is no other lane key', () => {
+    expect(docsLogFlightKey('n', 'demo', { ...ASK })).toBe(base);
+    expect(base).not.toBe(docsShowFlightKey('n', 'demo', { kind: 'committed', commit: ASK.commit,
+      servedRef: 'refs/remotes/origin/main', section: ASK.section, path: ASK.path }, 0));
+  });
+
+  it("HISTORY_JOB is ccd's framed log bound on both sides, and frozen", () => {
+    expect(HISTORY_JOB).toStrictEqual({ raw: DOCS_LOG_MAX_WIRE_BYTES, wire: DOCS_LOG_MAX_WIRE_BYTES });
+    expect(DOCS_LOG_MAX_WIRE_BYTES).toBe(131072);
+    expect(Object.isFrozen(HISTORY_JOB)).toBe(true);
+  });
+});

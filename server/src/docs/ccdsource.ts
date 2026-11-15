@@ -32,11 +32,12 @@ import { ccdEnding, type CcdResult, type CcdRunner } from '../lifecycle.js';
 import type { FleetState } from '../fleetstate.js';
 import {
   DOCS_CCD_FAILURES, docsRefText, redactDocsText,
-  type DocPin, type DocsFailure, type DocsFailureBody, type DocsFetchOk, type DocsIndexOk, type DocsRefSpec,
+  type DocPin, type DocsFailure, type DocsFailureBody, type DocsFetchOk, type DocsIndexOk, type DocsLogAsk, type DocsLogOk,
+  type DocsRefSpec,
   type DocsShowOk, type DocsTreeOk, type DocsVerb,
 } from '../../../shared/docs.js';
-import { DOCS_SECTION_GATED, LISTING_JOB, type DocsJob } from './policy.js';
-import type { DocsFetchRun, DocsFetcher, DocsReader, DocsShowAsk, DocsShowRead } from './ports.js';
+import { DOCS_SECTION_GATED, HISTORY_JOB, LISTING_JOB, type DocsJob } from './policy.js';
+import type { DocsFetchRun, DocsFetcher, DocsLogRead, DocsReader, DocsShowAsk, DocsShowRead } from './ports.js';
 
 /** What both adapters are built from. `fleetState` is the server's live fleet state, read at each call (the server
  *  refreshes `ccdVerbs` from `ccd caps`); `undefined` means only "this server holds no fleet state object", which
@@ -72,7 +73,8 @@ const ON_REF_WORDS: Readonly<Record<NonNullable<DocsShowOk['onRef']>, true>> =
 type DocsReadCall =
   | { verb: 'docs-index' }
   | { verb: 'docs-tree'; project: string; ref: DocsRefSpec | null }
-  | { verb: 'docs-show'; project: string; pin: DocPin; ask: DocsShowAsk };
+  | { verb: 'docs-show'; project: string; pin: DocPin; ask: DocsShowAsk }
+  | { verb: 'docs-log'; project: string; log: DocsLogAsk };
 
 /** What a gated executor hands back: the run's raw result, or the gate's own failure body. */
 type DocsRan = { ok: true; res: CcdResult } | DocsFailureBody;
@@ -127,12 +129,13 @@ async function readDocs(deps: CcdDocsDeps, call: DocsReadCall): Promise<DocsRan>
   if (verbs === null || !verbs.includes('caps')) return fail('caps-unknown');
   const can = ccdCan(deps.fleetState, call.verb === 'docs-index' ? 'docsIndex'
     : call.verb === 'docs-tree' ? 'docsTree'
-      : call.pin.kind === 'committed' ? 'docsShowCommitted' : 'docsShowDraft');
+      : call.verb === 'docs-log' ? 'docsLog'
+        : call.pin.kind === 'committed' ? 'docsShowCommitted' : 'docsShowDraft');
   if (!can) return fail('unsupported');
   // The rich-docs spec's G1 (W5b): a section that came with DOCS_SECTIONS_CAP is named to ccd only on a box that lists
   // that token, so a new server only ever under-calls an old fleet. `null`: this call names no section. Decided before
   // any exec, like the two answers above.
-  const section = call.verb === 'docs-show' ? call.pin.section : null;
+  const section = call.verb === 'docs-show' ? call.pin.section : call.verb === 'docs-log' ? call.log.section : null;
   if (section !== null && DOCS_SECTION_GATED[section] && !docsSectionsServed(deps.fleetState)) {
     return fail('unsupported');
   }
@@ -152,6 +155,11 @@ async function readDocs(deps: CcdDocsDeps, call: DocsReadCall): Promise<DocsRan>
             call.ask.maxBytes)
           : CCD_ARGV.docsShowDraft(call.project, call.pin.branch, call.pin.head, call.pin.section, call.pin.path,
             call.pin.fp, call.ask.maxBytes)),
+      };
+    case 'docs-log':
+      return {
+        ok: true,
+        res: await deps.runCcd(CCD_ARGV.docsLog(call.project, call.log.commit, call.log.section, call.log.path)),
       };
   }
 }
@@ -342,6 +350,14 @@ export function ccdDocsReader(deps: CcdDocsDeps): DocsReader {
         const answer = line as unknown as DocsShowOk;
         const shown = checkShow(answer, pin, ask);
         return shown.ok ? { ok: true, answer, bytes: shown.bytes } : shown;
+      }),
+    // Rich-docs spec G4: the answer must echo the ask, as check 8 holds a show to its pin; L1's `docsAnswerShape` checks
+    // the entries where the route believes it.
+    log: async (src, ask): Promise<DocsLogRead> => settle(
+      await readDocs(deps, { verb: 'docs-log', project: src.project, log: ask }), 'docs-log', HISTORY_JOB, (line) => {
+        const answer = line as unknown as DocsLogOk;
+        return answer.commit === ask.commit && answer.section === ask.section && answer.path === ask.path
+          ? { ok: true, answer } : fail('malformed-answer', { why: 'pin' });
       }),
   };
 }

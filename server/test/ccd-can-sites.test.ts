@@ -311,15 +311,14 @@ describe('the docs verbs (D-5866, Step 1)', () => {
     await d.fetcher.fetch({ project: 'demo' } as never, null);
     expect(d.sent).toEqual(v !== null && v.includes(DOCS_CAP) ? ['docs-index', 'docs-fetch'] : []);
   });
-  // docs-log (docs W5b-1): the row is read through `ccdCan` and refuses on no evidence, so a list without
-  // `docs-log-v1` (or no list at all) sends nothing; the caller's two lines are `ccdCan` then `runCcd`.
-  it.each(FOUR(DOCS_LOG_CAP))('docs-log over %s is unsupported, with zero execs unless the token is there', async (_what, v) => {
-    const sent: string[] = [];
-    const runCcd = async (argv: readonly string[]) => { sent.push(argv[0]!); return { ran: true, ok: false, stdout: '', stderr: '' }; };
-    const can = ccdCan(stateOf(v), 'docsLog');
-    if (can) await runCcd(CCD_ARGV.docsLog('demo', 'a'.repeat(40), 'specs', 'a.md'));
-    expect(can).toBe(v !== null && v.includes(DOCS_LOG_CAP));
-    expect(sent).toEqual(can ? ['docs-log'] : []);
+  // docs-log (docs W5b-1): the adapter's log read gates on the `docsLog` row, which refuses on no evidence, so a list
+  // without `docs-log-v1` (or no list at all) sends nothing.
+  it.each(FOUR(DOCS_LOG_CAP))('docs-log over %s is unsupported, with zero execs', async (_what, v) => {
+    const d = docs(v);
+    const out = await d.reader.log({ node: 'n', project: 'demo' }, { commit: 'a'.repeat(40), section: 'specs', path: 'a.md' });
+    const has = v !== null && v.includes(DOCS_LOG_CAP);
+    expect(d.sent).toEqual(has ? ['docs-log'] : []);
+    if (!has) expect(out).toEqual({ ok: false, failure: v !== null && v.includes('caps') ? 'unsupported' : 'caps-unknown' });
   });
   it('the four docs verb names without docs-v1 are not the token', async () => {
     const d = docs(['caps', 'docs-index', 'docs-tree', 'docs-show', 'docs-fetch']);

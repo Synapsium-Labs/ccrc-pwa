@@ -9,12 +9,13 @@
 // Spelled nowhere here, by rule: the two qualified ref prefixes (derived below from L0's prefix body, refinement
 // (q)), any grammar body, the redactor's rules, and the docs cap token.
 import {
-  DOCS_ALLOWED_CONTENT_TYPES, DOCS_CLASS_CAP, DOCS_ENVELOPE_RESERVE, DOCS_MAX_LISTING_WIRE_BYTES, DOCS_PIN_KEYS,
+  DOCS_ALLOWED_CONTENT_TYPES, DOCS_CLASS_CAP, DOCS_ENVELOPE_RESERVE, DOCS_LOG_AUTHOR_MAX_CHARS, DOCS_LOG_MAX_ENTRIES,
+  DOCS_LOG_MAX_WIRE_BYTES, DOCS_LOG_SUBJECT_MAX_CHARS, DOCS_MAX_LISTING_WIRE_BYTES, DOCS_PIN_KEYS,
   DOCS_QUALIFIED_PREFIX_RE_BODY, DOCS_RASTER_EXT, DOCS_RASTER_TYPES, DOCS_REQUEST_HEADER, DOCS_REQUEST_HEADER_VALUE,
   DOCS_RESPONSE_HEADERS, DOCS_RETRY_FLOOR_MS, DOCS_STALE_MS, contentClass, docsRefText, isDocsBareRef, isDocsCommit,
-  isDocsFingerprint, isDocsProject, isDocsQualifiedRef, isDocsRelPath, isDocsSection, parseDocsRef, sniffRaster,
+  isDocsFingerprint, isDocsProject, isDocsQualifiedRef, isDocsRelPath, isDocsSection, parseDocsRef, redactDocsText, sniffRaster,
   type DocContentClass, type DocPin, type DocSectionSlug, type DocsEntry, type DocsFailure, type DocsFailureBody,
-  type DocsFetchOk, type DocsFileResponse, type DocsRefreshFetch, type DocsRefreshResponse, type DocsRefSpec,
+  type DocsFetchOk, type DocsFileResponse, type DocsLogAsk, type DocsRefreshFetch, type DocsRefreshResponse, type DocsRefSpec,
   type DocsShowOk, type DocsTreeOk, type DocsTreeResponse, type DocsVerb, type RasterMime, type RasterType,
 } from '../../../shared/docs.js';
 
@@ -191,14 +192,15 @@ export function refreshDue(tree: DocsTreeOk): boolean {
 // `docsApi` writes every value through `encodeURIComponent`, so only a hand-typed URL meets a bare `+`, and it reads
 // as a space.
 
-/** The three GET routes whose query `parseDocsApiQuery` reads. The refresh POST's body is `parseDocsRefreshBody`'s. */
-export type DocsApiRoute = 'projects' | 'tree' | 'file';
+/** The four GET routes whose query `parseDocsApiQuery` reads. The refresh POST's body is `parseDocsRefreshBody`'s. */
+export type DocsApiRoute = 'projects' | 'tree' | 'file' | 'history';
 
 /** A GET request, parsed. `ref: null` is the default view (the query has no `ref` key), one meaning. */
 export type DocsApiRequest =
   | { route: 'projects' }
   | { route: 'tree'; ref: DocsRefSpec | null }
-  | { route: 'file'; pin: DocPin };
+  | { route: 'file'; pin: DocPin }
+  | { route: 'history'; ask: DocsLogAsk };
 
 /** The pin keys by name, in `DOCS_PIN_KEYS`'s order: a committed pin's two, then a draft pin's three. */
 const [PIN_COMMIT, PIN_SERVED_REF, PIN_BRANCH, PIN_HEAD, PIN_FP] = DOCS_PIN_KEYS;
@@ -211,6 +213,7 @@ const API_KEYS: Readonly<Record<DocsApiRoute, readonly string[]>> = {
   projects: [],
   tree: ['ref'],
   file: [...DOCS_PIN_KEYS, 'section', 'path'],
+  history: [PIN_COMMIT, 'section', 'path'],
 };
 
 /** The refresh body's keys: exactly these two (section 3.4). */
@@ -311,6 +314,16 @@ export function parseDocsApiQuery(route: DocsApiRoute, query: Readonly<Record<st
     const text = own(query, 'ref');
     const ref = isText(text) ? parseDocsRef(text) : null;
     return ref === null ? refused('bad-ref') : { ok: true, req: { route, ref } };
+  }
+  if (route === 'history') {
+    // Rich-docs spec G4: all three keys, then each value in ccd's argv order (commit, section, path).
+    if (!Object.hasOwn(query, PIN_COMMIT) || !Object.hasOwn(query, 'section') || !Object.hasOwn(query, 'path')) {
+      return badQuery('pin-shape');
+    }
+    const commit = own(query, PIN_COMMIT);
+    if (!isText(commit) || !isDocsCommit(commit)) return refused('bad-commit');
+    const place = parsePinPlace(query);
+    return place.ok ? { ok: true, req: { route, ask: { commit, section: place.section, path: place.path } } } : place;
   }
   const pin = parseFilePin(query);
   return pin.ok ? { ok: true, req: { route, pin: pin.pin } } : pin;
@@ -461,6 +474,10 @@ export function showWire(raw: number): number {
  *  no caller can change every other caller's estimate. */
 export const LISTING_JOB: Readonly<DocsJob> =
   Object.freeze({ raw: DOCS_MAX_LISTING_WIRE_BYTES, wire: DOCS_MAX_LISTING_WIRE_BYTES });
+
+/** The estimate of every history job: ccd's framed log bound on both sides (rich-docs spec G4). Frozen, as above. */
+export const HISTORY_JOB: Readonly<DocsJob> =
+  Object.freeze({ raw: DOCS_LOG_MAX_WIRE_BYTES, wire: DOCS_LOG_MAX_WIRE_BYTES });
 
 /** A show's server-side plan: the path's class, the `--max-bytes` it sends ccd, and the lane job it books. */
 export interface DocsShowPlan { cls: DocContentClass; maxBytes: number; job: DocsJob }
@@ -695,6 +712,7 @@ const KEY_INDEX = 'index';
 const KEY_TREE = 'tree';
 const KEY_SHOW = 'show';
 const KEY_REFRESH = 'refresh';
+const KEY_LOG = 'log';
 const KEY_PROJECT = 'project';
 const KEY_BLOB = 'blob';
 const KEY_LISTING = 'listing';
@@ -729,6 +747,12 @@ export function docsShowFlightKey(node: string, project: string, pin: DocPin, ma
 /** A refresh flight (section 6.4): the fetched branch, the empty field for the origin default (`null`). */
 export function docsRefreshFlightKey(node: string, project: string, branch: string | null): string {
   return docsKey(KEY_REFRESH, [node, project, branch ?? '']);
+}
+
+/** A history flight (rich-docs spec G4): the ask's three fields. A log at a fixed commit is the same answer for every
+ *  joiner, so no generation is needed. */
+export function docsLogFlightKey(node: string, project: string, ask: DocsLogAsk): string {
+  return docsKey(KEY_LOG, [node, project, ask.commit, ask.section, ask.path]);
 }
 
 /** One project on one node: the generation counter's key and the fetch lane's queue key. */
@@ -880,6 +904,31 @@ function treeShapeOk(t: AnswerRecord): boolean {
   return Array.isArray(entries) && entries.every(entryOk);
 }
 
+/** Text of at most `max` code points that the docs redactor leaves as it is (refinement (f)): ccd redacted it, and this
+ *  proves it without rewriting the answer. */
+function redactedText(v: unknown, max: number): boolean {
+  return isText(v) && [...v].length <= max && redactDocsText(v) === v;
+}
+
+/** One history entry: a full sha, a full sha or `null` parent, a text date, and an author and a subject inside their caps
+ *  and already redacted. */
+function logEntryOk(e: unknown): boolean {
+  if (!isRecord(e)) return false;
+  const sha = own(e, 'sha');
+  const parent = own(e, 'parent');
+  return isText(sha) && isDocsCommit(sha) && (parent === null || (isText(parent) && isDocsCommit(parent)))
+    && isText(own(e, 'date')) && redactedText(own(e, 'author'), DOCS_LOG_AUTHOR_MAX_CHARS)
+    && redactedText(own(e, 'subject'), DOCS_LOG_SUBJECT_MAX_CHARS);
+}
+
+/** The log fields the history route sends: at most `DOCS_LOG_MAX_ENTRIES` entries, each `logEntryOk`, and a boolean
+ *  `truncated`. */
+function logShapeOk(l: AnswerRecord): boolean {
+  const entries = own(l, 'entries');
+  return Array.isArray(entries) && entries.length <= DOCS_LOG_MAX_ENTRIES && entries.every(logEntryOk)
+    && typeof own(l, 'truncated') === 'boolean';
+}
+
 /** The index field W3 reads: `projects`, an array of plain objects. */
 function indexShapeOk(i: AnswerRecord): boolean {
   const projects = own(i, 'projects');
@@ -897,7 +946,8 @@ function indexShapeOk(i: AnswerRecord): boolean {
  *    `attemptAgeMs` and a text `lastOutcome`, and `entries` is an array whose every row has an L0 section, a key-text
  *    path, a `committed` slot (`null`, or a listed kind, a commit-form blob and a byte count or `null`) and a
  *    `draft` slot (`null`, or a fingerprint or `null` and a byte count or `null`);
- * 4. `docs-index`: `projects` is an array of plain objects.
+ * 4. `docs-index`: `projects` is an array of plain objects;
+ * 5. `docs-log`: `logShapeOk`.
  * `docs-show` (check 8 ran in the adapter) and `docs-fetch` stop after 2. Takes `unknown`: this is the check that
  * makes the answer's static type true.
  */
@@ -906,6 +956,7 @@ export function docsAnswerShape(verb: DocsVerb, answer: unknown): { ok: true } |
   if (!withinDepth(answer)) return schemaFault();
   if (verb === 'docs-tree' && !treeShapeOk(answer)) return schemaFault();
   if (verb === 'docs-index' && !indexShapeOk(answer)) return schemaFault();
+  if (verb === 'docs-log' && !logShapeOk(answer)) return schemaFault();
   return { ok: true };
 }
 

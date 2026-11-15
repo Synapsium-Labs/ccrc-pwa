@@ -12,7 +12,7 @@
 // The failure arm is the whole `DocsFailureBody`, not a narrower per-operation union (refinement (d)): ccd's per-verb
 // word set is not a checked contract, so a narrower static type would claim what the adapter cannot measure.
 import type {
-  DocPin, DocsFailureBody, DocsFetchOk, DocsIndexOk, DocsRefSpec, DocsShowOk, DocsTreeOk,
+  DocPin, DocsFailureBody, DocsFetchOk, DocsIndexOk, DocsLogAsk, DocsLogOk, DocsRefSpec, DocsShowOk, DocsTreeOk,
 } from '../../../shared/docs.js';
 import type { DocsJob } from './policy.js';
 
@@ -43,7 +43,10 @@ export type DocsShowRead = { ok: true; answer: DocsShowOk; bytes: Uint8Array } |
 /** `docs-fetch`'s answer, carried verbatim, or the failure. */
 export type DocsFetchRun = { ok: true; answer: DocsFetchOk } | DocsFailureBody;
 
-/** The three reads. None of them writes anything on the fleet (section 2 (g)'s wall 1: the read registration is built
+/** `docs-log`'s answer, carried verbatim once it echoes the ask, or the failure (rich-docs spec G4). */
+export type DocsLogRead = { ok: true; answer: DocsLogOk } | DocsFailureBody;
+
+/** The four reads. None of them writes anything on the fleet (section 2 (g)'s wall 1: the read registration is built
  *  with this port alone and holds no fetcher). */
 export interface DocsReader {
   /** Every project on the node (`docs-index --all`). */
@@ -53,6 +56,8 @@ export interface DocsReader {
   tree(src: DocsSourceId, ref: DocsRefSpec | null): Promise<DocsTreeRead>;
   /** One file at a pin from a tree answer: a committed pin, or a draft pin; `ask` carries the server's facts. */
   show(src: DocsSourceId, pin: DocPin, ask: DocsShowAsk): Promise<DocsShowRead>;
+  /** One doc's history from `ask.commit` back (rich-docs spec G4); `ask` is what L1's history parser admitted. */
+  log(src: DocsSourceId, ask: DocsLogAsk): Promise<DocsLogRead>;
 }
 
 /** The one docs operation that writes (a git fetch on the fleet), held apart so a read route cannot reach it. */

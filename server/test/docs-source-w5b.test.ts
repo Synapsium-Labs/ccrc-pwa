@@ -6,12 +6,12 @@
  * A recording `CcdRunner` double keeps every argv it was handed; no case runs `ccd`.
  */
 import { describe, it, expect } from 'vitest';
-import { DOCS_CAP, DOCS_SECTIONS_CAP, type CcdArgv } from '../src/ccdargv.js';
+import { DOCS_CAP, DOCS_LOG_CAP, DOCS_SECTIONS_CAP, type CcdArgv } from '../src/ccdargv.js';
 import type { CcdResult, CcdRunner } from '../src/lifecycle.js';
 import { ccdDocsReader } from '../src/docs/ccdsource.js';
-import { docsShowPlan } from '../src/docs/policy.js';
+import { HISTORY_JOB, docsShowPlan } from '../src/docs/policy.js';
 import type { DocsShowAsk } from '../src/docs/ports.js';
-import type { DocPin } from '../../shared/docs.js';
+import type { DocPin, DocsLogAsk } from '../../shared/docs.js';
 
 /** A recording runner: every argv it is handed, and one scripted answer for all of them. */
 function recorder(answer: CcdResult): { run: CcdRunner; calls: string[][] } {
@@ -73,5 +73,87 @@ describe('the sections gate (rich-docs spec G1, M9.3)', () => {
     expect(await ccdDocsReader({ runCcd: rec.run, fleetState: state([]) }).show(SRC, committed('vision'), ASK))
       .toEqual({ ok: false, failure: 'caps-unknown' });
     expect(rec.calls).toEqual([]);
+  });
+});
+
+// ── the history read (rich-docs spec G4, M9.7, M9.9; docs W5b-1) ───────────────────────────────────────────────────
+/** A box whose ccd lists the history token, with and without the sections token. */
+const LOG_ONLY = state(['caps', DOCS_LOG_CAP]);
+const LOG_AND_SECTIONS = state(['caps', DOCS_LOG_CAP, DOCS_SECTIONS_CAP]);
+const LOG_ASK: DocsLogAsk = { commit: SHA, section: 'specs', path: 'a.md' };
+/** ccd's ok line for `LOG_ASK`, with `over` replacing top-level fields. */
+const logLine = (over: Record<string, unknown> = {}): string => line({
+  v: 1, verb: 'docs-log', ok: true, elapsedMs: 3, commit: SHA, section: 'specs', path: 'a.md',
+  entries: [{ sha: SHA, parent: null, date: '2026-11-01T10:00:00+00:00', author: 'Ann', subject: 'Add a' }],
+  truncated: false, ...over,
+});
+
+describe('the log read (rich-docs spec G4)', () => {
+  it('a list without docs-log-v1 is unsupported, with zero execs', async () => {
+    // The old docs token alone is not the history token (M9.9).
+    const rec = recorder(res({ stdout: logLine() }));
+    expect(await ccdDocsReader({ runCcd: rec.run, fleetState: OLD }).log(SRC, LOG_ASK))
+      .toEqual({ ok: false, failure: 'unsupported' });
+    expect(rec.calls).toEqual([]);
+  });
+
+  it("with docs-log-v1 the argv is exactly the builder's 9 tokens", async () => {
+    const rec = recorder(res({ stdout: logLine() }));
+    const out = await ccdDocsReader({ runCcd: rec.run, fleetState: LOG_ONLY }).log(SRC, LOG_ASK);
+    expect(rec.calls).toEqual([['docs-log', '--project', 'demo', '--commit', SHA, '--section', 'specs', '--path', 'a.md']]);
+    expect(rec.calls[0]).toHaveLength(9);
+    expect(out).toEqual({ ok: true, answer: JSON.parse(logLine()) });
+  });
+
+  it('a log of a vision doc without docs-sections-v2 is unsupported, with zero execs', async () => {
+    const rec = recorder(res({ stdout: logLine({ section: 'vision' }) }));
+    expect(await ccdDocsReader({ runCcd: rec.run, fleetState: LOG_ONLY }).log(SRC, { ...LOG_ASK, section: 'vision' }))
+      .toEqual({ ok: false, failure: 'unsupported' });
+    expect(rec.calls).toEqual([]);
+  });
+
+  it('a log of a vision doc with docs-sections-v2 execs once', async () => {
+    const rec = recorder(res({ stdout: logLine({ section: 'vision' }) }));
+    const out = await ccdDocsReader({ runCcd: rec.run, fleetState: LOG_AND_SECTIONS })
+      .log(SRC, { ...LOG_ASK, section: 'vision' });
+    expect(rec.calls).toHaveLength(1);
+    expect(out.ok).toBe(true);
+  });
+
+  it('caps-unknown still answers first', async () => {
+    const rec = recorder(res({ stdout: logLine() }));
+    expect(await ccdDocsReader({ runCcd: rec.run, fleetState: state([]) }).log(SRC, LOG_ASK))
+      .toEqual({ ok: false, failure: 'caps-unknown' });
+    expect(rec.calls).toEqual([]);
+  });
+
+  it.each([
+    ['path', { path: 'b.md' }],
+    ['section', { section: 'plans' }],
+    ['commit', { commit: 'b'.repeat(40) }],
+  ])('an answer for another path, section or commit is malformed-answer {why:pin}: the %s', async (_what, over) => {
+    const rec = recorder(res({ stdout: logLine(over) }));
+    expect(await ccdDocsReader({ runCcd: rec.run, fleetState: LOG_ONLY }).log(SRC, LOG_ASK))
+      .toEqual({ ok: false, failure: 'malformed-answer', why: 'pin' });
+  });
+
+  it('a ccd failure line is carried verbatim', async () => {
+    const rec = recorder(res({ stdout: line({ v: 1, verb: 'docs-log', ok: false, elapsedMs: 2,
+      failure: 'unknown-commit', detail: 'no such commit' }) }));
+    expect(await ccdDocsReader({ runCcd: rec.run, fleetState: LOG_ONLY }).log(SRC, LOG_ASK))
+      .toEqual({ ok: false, failure: 'unknown-commit', detail: 'no such commit' });
+  });
+
+  it("an answer over HISTORY_JOB's wire is malformed-answer {why:oversize}", async () => {
+    const pad = 'x'.repeat(HISTORY_JOB.wire);
+    const rec = recorder(res({ stdout: logLine({ pad }) }));
+    expect(await ccdDocsReader({ runCcd: rec.run, fleetState: LOG_ONLY }).log(SRC, LOG_ASK))
+      .toEqual({ ok: false, failure: 'malformed-answer', why: 'oversize' });
+  });
+
+  it('an answer of exactly the wire bound is within it', async () => {
+    const base = Buffer.byteLength(logLine({ pad: '' }));
+    const rec = recorder(res({ stdout: logLine({ pad: 'x'.repeat(HISTORY_JOB.wire - base) }) }));
+    expect((await ccdDocsReader({ runCcd: rec.run, fleetState: LOG_ONLY }).log(SRC, LOG_ASK)).ok).toBe(true);
   });
 });
