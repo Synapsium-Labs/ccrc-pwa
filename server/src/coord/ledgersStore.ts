@@ -12,7 +12,7 @@ import type { DatabaseSync } from 'node:sqlite';
 import { TERMINAL_RUN_STATES, type MailDeliveryState, type StuckReason } from '../../../shared/api.js';
 import {
   CLEARED_WINDOW_MS, ITEM_KINDS, NEEDED_BY_LEVELS, OPEN_ITEM_STATES, doneWhenOf, isCloseRefusedAction, isEndRunAction, isReleaseReviewAction,
-  RELEASE_REVIEW_VERB, nextItemState, parseItemAction, recommendationOf,
+  RELEASE_REVIEW_VERB, nextItemState, operatorShownAt, parseItemAction, recommendationOf,
   type GoalsView, type ItemAct, type ItemAction, type ItemActor, type ItemKind, type ItemMoveRefusal, type ItemState, type NeededBy,
 } from '../../../shared/ledgers.js';
 import { tx } from './tx.js';
@@ -152,10 +152,11 @@ export function itemsFor(db: DatabaseSync, program: string | null, now: number):
 
 /** Whether the operator was ever shown an item (D-8194), the hold rule `itemsFor` filters by, for one row read by its id: an
  *  item still held (`heldUntil` in the future) is not, nor is one its coordinator settled inside the hold (closed before
- *  `heldUntil`); every other item is, whatever its state and however long ago it closed. */
-export function operatorWasShown(row: Pick<ItemRow, 'heldUntil' | 'closedAt'>, now: number): boolean {
-  if (row.heldUntil === null) return true;
-  return row.closedAt === null ? row.heldUntil <= now : row.closedAt >= row.heldUntil;
+ *  `heldUntil`); every other item is, whatever its state and however long ago it closed. The rule is
+ *  `shared/ledgers.ts#operatorShownAt`'s, which the portfolio reads too. */
+export function operatorWasShown(row: Pick<ItemRow, 'raisedAt' | 'heldUntil' | 'closedAt'>, now: number): boolean {
+  const shownAt = operatorShownAt(row);
+  return shownAt !== null && shownAt <= now;
 }
 
 /** One move, inside a transaction the CALLER holds. The decider is `nextItemState`; this reads the row, asks it, and
