@@ -99,8 +99,8 @@ const holdOkFlags = (text: string | null): string[] => (text === null ? [] : ['-
 export type HibernateMode = 'sleep' | 'roll' | 'fresh';
 /** The flags each mode sends. NO CAPABILITY DECISION HERE: a caller sends `fresh` only where
  *  `capSupported(state, HIBERNATE_FRESH_CAP)` answered yes for the box (the word `hibernate-fresh`, Table 11.1d), as `roll`
- *  is sent only behind `capSupported(state, HIBERNATE_ROLL_CAP)`; the renewal act, the first caller, adds that constant and
- *  its gate with its call. The server is the only caller by contract. */
+ *  is sent only behind `capSupported(state, HIBERNATE_ROLL_CAP)`; the renewal act's ccd adapter (`ccdSessionHost.ts`) is the
+ *  first caller and holds that gate in the same function as its call. The server is the only caller by contract. */
 const HIBERNATE_MODE_FLAGS: Readonly<Record<HibernateMode, readonly string[]>> = {
   sleep: [],
   roll: ['--roll'],
@@ -1374,6 +1374,12 @@ export const HIBERNATE_HOLD_OK_CAP = 'hibernate-hold-ok';
  *  nothing (`capSupported`, false on no evidence). ccd's `echo hibernate-roll` and `server/test/ccdCapTokens.ts` are
  *  the other two spellings. */
 export const HIBERNATE_ROLL_CAP = 'hibernate-roll';
+
+/** The `ccd caps` token that says this box's `cmd_hibernate` takes `--roll --fresh` (spec 2026-11-09 §3.3.11 H13): the
+ *  roll whose wake starts a new conversation under the same session id. It gates the renewal act (the ccd adapter of
+ *  `SessionHost`): with no token `renew` answers `capability-missing` and sends nothing (`capSupported`, false on no
+ *  evidence). ccd's `echo hibernate-fresh` and `server/test/ccdCapTokens.ts` are the other two spellings. */
+export const HIBERNATE_FRESH_CAP = 'hibernate-fresh';
 
 /**
  * Whether the DEPLOYED ccd advertised a CAPABILITY token — a verb-shaped string
