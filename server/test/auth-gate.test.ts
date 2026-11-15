@@ -106,7 +106,7 @@ function scanRoutes(file: string): ScannedRoute[] {
  *  `registerCoordRoutes` but written in a file of their own); EIGHT since the Linear proxy (`server/src/linear/proxyRoutes.ts`, #1444 plan task LK9: its
  *  thirteen box-token routes since `link`, D-8141); SEVEN since the accounts lane routes (`server/src/accounts/routes.ts`, accounts plan Task A14:
  *  Check and the kill switch); SIX since named workspaces S4 (`server/src/linear/routes.ts`, its one preview read); FIVE files registered them since the native Docs reader's W3 (design
- *  2026-10-01 §3.13): `server/src/docs/routes.ts` registers its four on the docs
+ *  2026-10-01 §3.13): `server/src/docs/routes.ts` registers its five on the docs
  *  plugin's own instance, whose parameter is named `app` so this literal scan
  *  reads them like any other. FOUR since the box-token lifecycle (spec 4.6):
  *  `server/src/token/routes.ts` joined the three, after update-management W2

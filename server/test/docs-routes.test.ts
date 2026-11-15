@@ -1,4 +1,4 @@
-// `server/src/docs/routes.ts`, part 1: the three docs reads (design 2026-10-01, section 3.4, section 3.6, section
+// `server/src/docs/routes.ts`, part 1: the docs reads (design 2026-10-01, section 3.4, section 3.6, section
 // 6.3-6.5; W3 refinements (c), (d), (f), (i), (j) and (k)). Task 6 drives `composeDocs` and
 // `registerDocsReadRoutes` over W2's REAL adapter and a scripted `CcdRunner` (`docsRouteHelpers.ts`), through
 // Fastify's REAL query parser (`app.inject` with a raw URL; W2's review carry), and every case counts the argv the
@@ -1077,13 +1077,17 @@ function realOk(stdout: string): ExecResult {
   return { ran: true, code: 0, stdout, stderr: '', killed: false, signal: null };
 }
 
-/** The fixture fleet: ok answers for the four docs verbs (a show answers the pin its argv names); any other ccd argv
- *  exits 1 with nothing on stdout. */
+/** The fixture fleet: ok answers for the five docs verbs (a show answers the pin its argv names, a log the commit, section
+ *  and path its argv names); any other ccd argv exits 1 with nothing on stdout. */
 function realAnswer(args: string[]): ExecResult {
   if (args[0] === 'docs-index') return realOk(line(indexOk()));
   if (args[0] === 'docs-tree') return realOk(line(treeOk()));
   if (args[0] === 'docs-show') return realOk(showLine(args.includes('--commit') ? REAL_COMMITTED : REAL_DRAFT, REAL_MD));
   if (args[0] === 'docs-fetch') return realOk(line(fetchOk()));
+  if (args[0] === 'docs-log') {
+    const value = (flag: string): string => args[args.indexOf(flag) + 1] ?? '';
+    return realOk(line(logAnswer({ commit: value('--commit'), section: value('--section'), path: value('--path') })));
+  }
   return { ran: true, code: 1, stdout: '', stderr: 'usage', killed: false, signal: null };
 }
 

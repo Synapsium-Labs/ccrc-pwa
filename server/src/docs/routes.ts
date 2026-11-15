@@ -2,7 +2,8 @@
 // (c), (i), (j), (k) and (l)): L4. `composeDocs` builds one node's reader, fetcher, lanes and caches, once per call
 // (never at module scope); `registerDocsReadRoutes` registers the four reads on the docs plugin's own instance, and
 // Task 7's `registerDocsRefreshRoute` the refresh. The read registration never receives a fetcher (section 2 (g)'s
-// wall 1): its signature takes readers and lanes only.
+// wall 1): its signature takes readers and lanes only. The history read has no cache of its own (rich-docs spec G4):
+// it joins a single flight and books the read lane on every request.
 //
 // Ring (M7.10; the ring guard in `single-definition.test.ts`): this file may import fastify and name `reply`, and it
 // DECIDES NOTHING. The query, project and pin verdicts, every key, the show plan, the known size, the shape guard,
@@ -235,7 +236,8 @@ function sendFile(reply: FastifyReply, out: DocsFileReply): FastifyReply {
  * (refinement (c): a HEAD would run the whole GET for a discarded body), and an `onClose` that closes every node's
  * read and fetch lane, so a closing server answers every queued job `docs-busy` instead of leaving it to its wait.
  * Each handler parses `:project` and the query with L1's parsers (a refusal is sent before any exec), probes its
- * cache, joins its flight, and books the read lane; every failure body is sent verbatim.
+ * cache, joins its flight, and books the read lane; every failure body is sent verbatim. The history read has no
+ * cache to probe: it goes straight to its flight and the read lane.
  */
 export function registerDocsReadRoutes(app: FastifyInstance, readers: DocsNodes<DocsReader>,
   lanes: DocsNodes<DocsNodeLanes>): void {

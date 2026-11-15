@@ -488,6 +488,8 @@ describe('every ccd call site in server/src answers the version-skew question', 
     // permits on none. Named here so the site cannot vanish or lose its gate.
     // The four Docs verbs (docs W2) join for `ws-reclaim`'s reason: each is gated by `capSupported(DOCS_CAP)` in
     // CAP_GATED_VERBS above, and naming them here reds a vanished call site or a lost gate.
+    // `docs-log` (docs W5b-1) joins the Docs verbs for the same reason: gated by `ccdCan`'s `docsLog` row (`DOCS_LOG_CAP`),
+    // so naming it reds a vanished call site or a lost gate.
     // `ws-collect` (child reclamation wave 9) joins for the same reason: naming it reds a vanished act site or a lost gate.
     // `project-add` (add-project spec 2026-11-04 §4) joins for `project-pool`'s reason: its one site is
     // `planProjectAdd` (`projectAdd.ts`), gated by `ccdCan`'s `verbRow`, and naming it reds a vanished site or a lost gate.

@@ -394,9 +394,8 @@ describe('layer 3 — the list never drifts wider than the code', () => {
       'c'.repeat(64), 2097152)])).toBe(true);
     expect(isExecAllowed('ccd', [...CCD_ARGV.docsFetch('demo', null)])).toBe(true);
     expect(isExecAllowed('ccd', [...CCD_ARGV.docsFetch('demo', 'ws/a')])).toBe(true);
-    // The history verb's literal 8-token argv (`CCD_ARGV.docsLog` itself waits for the builder wave).
-    expect(isExecAllowed('ccd', ['docs-log', '--project', 'demo', '--commit', 'a'.repeat(40), '--section', 'specs',
-      '--path', 'a.md'])).toBe(true);
+    // The history verb's 8-token argv, as the builder writes it.
+    expect(isExecAllowed('ccd', [...CCD_ARGV.docsLog('demo', 'a'.repeat(40), 'specs', 'a.md')])).toBe(true);
     expect(isExecAllowed('ccd', ['docs-log', '--all'])).toBe(false);
   });
 

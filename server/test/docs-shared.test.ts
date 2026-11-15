@@ -526,7 +526,7 @@ describe('docs ccd wire types: canned answers compile against the types', () => 
     const unknownWord: DocsFailureBody = { ok: false, failure: 'not-a-word' };
     // @ts-expect-error -- show answers utf8 or base64 only
     const hex: DocsShowOk['encoding'] = 'hex';
-    // @ts-expect-error -- a ccd failure line names one of the four verbs
+    // @ts-expect-error -- a ccd failure line names one of the five verbs
     const verb: DocsCcdFailure['verb'] = 'docs-list';
     // @ts-expect-error -- four retry classes, no fifth
     const later: DocsRetryClass = 'later';

@@ -468,7 +468,7 @@ const M54_PIN: DocPin = {
   kind: 'committed', commit: FIXTURE_COMMIT, servedRef: FIXTURE_SERVED, section: 'specs', path: 'a.md',
 };
 
-/** The history ask the history recipe makes, and ccd's ok line for it. */
+/** The history ask the history recipe makes (the ok line for it is built where the runner answers). */
 const M54_LOG_ASK = { commit: FIXTURE_COMMIT, section: 'specs', path: 'a.md' } as const;
 
 /** One request: its method, URL and, for the POST, a JSON body. */
