@@ -444,6 +444,23 @@ describe('GET /api/sessions/:id/card?part=anchor: the card\'s short part, for th
     expect(snapshots()).toEqual([]);
   });
 
+  // The card door's memo of served pages (#2823) is the card's: an anchor read between a card's pages serves no page, so it
+  // neither adds one to the conversation's memo nor forgets the pages it holds (the dequeue's merge of main, mail 20067).
+  it('an anchor read between a card\'s pages joins no memo: the card\'s last page still records its one read', async () => {
+    app = await open();
+    mail(THREE_PAGES);
+    const { hash, pages } = (await card(app)).json() as { hash: string; pages: number };
+    expect(pages).toBe(3);
+    expect((await card(app, { page: 2, hash })).json().recorded).toBe(false);
+    for (const live of [false, true]) {
+      if (live) arm();
+      for (const form of ['start', 'prompt', 'fork']) expect((await anchor(app, form)).statusCode, `${form} ${live}`).toBe(200);
+    }
+    expect(reads(), 'no anchor completed the card').toEqual([]);
+    expect((await card(app, { page: 3, hash })).json().recorded).toBe(true);
+    expect(reads().map((r) => r['pages'])).toEqual([3]);
+  });
+
   // A programme slug fits the run's hold reason (127 characters), so twenty runs make the long role line.
   it('THE SIZE PIN at the door, ASCII: the anchor stays under ANCHOR_CARD_MAX_CHARS bytes, its canaries and instruction whole', async () => {
     app = await open();
