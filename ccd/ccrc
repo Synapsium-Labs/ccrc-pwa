@@ -3213,9 +3213,10 @@ _ver_newer() {
 # `single-definition` is pointed at that pair.) It answers with a return code
 # per CONDITION, because the callers do different things about each:
 #
-#   0  the stamp parsed  -> BOX_BUILD=(sha ref builtAt true|false version)
+#   0  the stamp parsed  -> BOX_BUILD=(sha ref builtAt true|false version ccdCaps)
 #                           (version = "" when the stamp carries none — the
-#                           additive fifth field, stage 4 Task 1)
+#                           additive fifth field, stage 4 Task 1; ccdCaps is
+#                           `<absent>`, `<malformed>` or the space-joined list)
 #   3  no stamp at all   -> a dev checkout, or a box no deploy has touched
 #   4  the path is there but is not a regular file (a directory, say)
 #   5  jq is not on PATH — a MISSING DEPENDENCY, never a corrupt stamp
@@ -3225,7 +3226,7 @@ _ver_newer() {
 # an operator acts on completely differently (`apt install jq` vs. redeploy)
 # must not share one signal.
 #
-# The output is SIX lines — the five fields (version as `""` when absent) and
+# The output is SEVEN lines — the six fields (version as `""` when absent) and
 # an `END` sentinel — and both
 # are checked. `$( )` strips trailing newlines, so a sentinel-less form would lose
 # an empty last field silently; the sentinel makes any truncation loud. A field
@@ -3285,6 +3286,11 @@ _box_build_fields() {
   # about a well-formed stamp would have this verb printing one the server
   # refuses to serve). It travels as a fifth line, `""` for absent, so the END
   # sentinel keeps its truncation duty at index 5.
+  # `ccdCaps` (the Overlord W1 pool set, plan Task 8, slug `ccdcaps-field-level-answer`) is a FIELD-LEVEL answer on a
+  # sixth line, `BOX_BUILD[5]`: `<absent>`, `<malformed>` (not an array of capability tokens), or the tokens joined by
+  # one space (empty for `[]`). Its expression cannot throw and never empties the output, so whatever `ccdCaps` holds the
+  # stamp parses as it did before (`shared/buildinfo.ts#parseBuildInfo` ignores the key too); the sentinels hold `<`,
+  # outside the token grammar, so no list spells them. `_upd_cap_floor_check` is its one reader; END moves to index 6.
   out="$(jq -r '
     try (
       if (type == "object")
@@ -3294,15 +3300,19 @@ _box_build_fields() {
          and (.dirty | type == "boolean")
          and ((has("version") | not)
               or ((.version | type == "string") and (.version | length > 0)))
-      then "\(.sha)\n\(.ref)\n\(.builtAt)\n\(.dirty)\n\(.version // "")\nEND"
+      then "\(.sha)\n\(.ref)\n\(.builtAt)\n\(.dirty)\n\(.version // "")\n\(
+        if has("ccdCaps") | not then "<absent>"
+        elif (.ccdCaps | type == "array") and (.ccdCaps | all(type == "string" and test("^[a-z][a-z0-9-]*$")))
+        then .ccdCaps | join(" ")
+        else "<malformed>" end)\nEND"
       else empty
       end
     ) catch empty
   ' -- "$stamp" 2>/dev/null)"
   [[ -n "$out" ]] || return 6
   mapfile -t BOX_BUILD <<< "$out"
-  [[ "${#BOX_BUILD[@]}" -eq 6 && "${BOX_BUILD[5]}" == END ]] || { BOX_BUILD=(); return 6; }
-  unset 'BOX_BUILD[5]'
+  [[ "${#BOX_BUILD[@]}" -eq 7 && "${BOX_BUILD[6]}" == END ]] || { BOX_BUILD=(); return 6; }
+  unset 'BOX_BUILD[6]'
   local f
   for f in "${BOX_BUILD[@]}"; do
     [[ "$f" =~ [[:cntrl:]] ]] && { BOX_BUILD=(); return 6; }
@@ -21350,6 +21360,10 @@ cmd_update() {
   # still reads `ccrc update` as a no-op rather than a `failed` report it
   # never earned.
   [ "$floor_checked" -eq 1 ] || _upd_floor_check "$UPD_TARGET_VIA" "$downgrade" "$UPD_FROM"
+  # The capability floor (Overlord W1 pool set, Task 8's call site (a)): the staged stamp's `ccdCaps`, inside the
+  # reporting window and before anything is installed. It covers the rollout's per-box update, a rollback's fall-through
+  # and restore arm 2's child (`--from restore`, which warns and proceeds).
+  _upd_cap_floor_check "$UPD_TREE/build.json" "$UPD_FROM"
   _upd_phase backing-up
   _upd_backup
   # THE BASELINE (design §10): written after the backup and BEFORE the staged
@@ -22190,6 +22204,9 @@ cmd_rollback() {
     UPD_VERSION="$to"
     UPD_REPORT_TARGET="$to"
     UPD_REPORTING=1
+    # The capability floor's call site (b), AFTER the reporting window opens so a refused console tap gets its `failed`
+    # row, and before `_ver_flip_back` changes anything: the kept tree's stamp copy (`--from watchdog` warns and proceeds).
+    _upd_cap_floor_check "$BOX_VERSIONS_ROOT/$to/$VER_STAMP_COPY" "$run_from"
     # A belt: the resume at the top of this verb already ran, so this one is
     # masked by it — it exists for a crash made in the migration's window
     # between the two by a lockless plain install (final review F11).
@@ -24744,6 +24761,52 @@ _upd_floor_check() {
   _ccrc_die "$UPD_VERSION (resolved by $via) is below this box's floor $floor ($BOX_FLOOR_FILE: the highest version this box completed an install of)$raised — moving down is a typed act: ccrc update --to $UPD_VERSION --downgrade. Nothing on this box was changed"
 }
 
+# ── THE CAPABILITY FLOOR (the Overlord W1 pool set, plan Task 8, Table 2) ─────────────────────────────────────────────
+# A standing fact on this box that only a build advertising a `ccd caps` word honours: while it stands, no update or
+# rollback takes the box to a build without the word. DATA, one row per word, `fact|word|remedy`, and every reader reads
+# every row (this check, the doctor's `cap-floor`, and PR B2's override and push), so a later piece adds a row and no
+# code. The fact is a registry suffix: any entry `~/.cc-sessions/<id>.<fact>` stands, a link, a directory and a FIFO
+# included, because the newer ccd fails closed on each and an older one ignores it (slug
+# `standing-set-is-a-poolset-entry`). The word is read from the target stamp's `ccdCaps` (`BOX_BUILD[5]`). The remedy
+# leads the refusal, because the update control plane keeps only a report detail's first 200 characters.
+CAP_FLOOR_ROWS=(
+  'poolset|pool-set|clear the set (retire or rebind the Overlord in Settings)'
+)
+_cap_floor_standing() {   # -> CAP_FLOOR_STANDING: "<row>| <id>…" per row whose fact stands; rc 0 measured (no registry: nothing stands), 1 unlistable
+  local LC_ALL=C IFS=' ' reg="$HOME/.cc-sessions" row e n ids
+  CAP_FLOOR_STANDING=()
+  [[ -e "$reg" || -L "$reg" ]] || return 0
+  [[ -d "$reg" && -r "$reg" && -x "$reg" ]] || return 1
+  for row in "${CAP_FLOOR_ROWS[@]}"; do
+    ids=""
+    for e in "$reg"/*."${row%%|*}"; do [[ -e "$e" || -L "$e" ]] && n="${e##*/}" && ids+=" ${n%."${row%%|*}"}"; done
+    [[ -z "$ids" ]] || CAP_FLOOR_STANDING+=("$row|$ids")
+  done
+}
+_upd_cap_floor_check() {   # <target-stamp|-> <from> -> 0 proceed; else the refusal (exit 1, nothing changed), or a WARN for restore/watchdog
+  local stamp="$1" from="$2" row fact word say ids why msg="" caps="" brc=-1
+  local -a keep=(${BOX_BUILD[@]+"${BOX_BUILD[@]}"})
+  if ! _cap_floor_standing; then
+    msg="make ~/.cc-sessions listable: it could not be listed, so nobody knows whether a fact stands that needs a capability"
+  fi
+  for row in "${CAP_FLOOR_STANDING[@]}"; do
+    IFS='|' read -r fact word say ids <<<"$row"
+    if [[ "$stamp" == - ]]; then why="the restored build's capabilities could not be read"
+    else
+      (( brc >= 0 )) || { brc=0; _box_build_fields "$stamp" || brc=$?; caps="${BOX_BUILD[5]-}"; BOX_BUILD=(${keep[@]+"${keep[@]}"}); }
+      if (( brc != 0 )); then why="the target's stamp could not be read (rc $brc)"
+      elif [[ "$caps" == "<absent>" ]]; then why="builds before ccdCaps predate $word"
+      elif [[ "$caps" == "<malformed>" ]]; then why="the target's ccdCaps cannot be read"
+      elif [[ " $caps " == *" $word "* ]]; then continue
+      else why="the target build lacks $word"; fi
+    fi
+    msg+="${msg:+ | }$say: $why; a $fact stands for$ids"
+  done
+  [[ -n "$msg" ]] || return 0
+  case "$from" in restore|watchdog) echo "update: WARN: $msg - proceeding because this run is --from $from"; return 0 ;; esac
+  _ccrc_die "$msg. Nothing on this box was changed"
+}
+
 # ── _upd_floor_word — the floor as ONE word, for `update --check` (M3) ────
 # Reads ~/.ccrc/floor with EXACTLY `_upd_floor_check`'s four tests, in its
 # order, so a check line never answers a floor the install path would read
@@ -25212,6 +25275,7 @@ _upd_restore_arm3() {
   # no sameness and reads the same way. `old_completed` is passed through
   # from `_upd_restore` (round 1 stopped one call short of doing so).
   local same_build=0 same_tag=0
+  _upd_cap_floor_check - restore   # the backup keeps no build.json: no capability to read, so it warns while a fact stands
   if [ -n "$old_version" ] && [ "$old_version" = "$UPD_VERSION" ] \
      && [ -n "$UPD_STAGED_SHA" ] && [ -n "$old_sha" ] && [ "$UPD_STAGED_SHA" = "$old_sha" ]; then
     if [ "$old_completed" -eq 1 ]; then
@@ -25595,6 +25659,7 @@ _upd_restore_arm1() {   # <role> <reason> <old_version> <old_completed>
     done_as="flipped back to $UPD_PREV_TAG"
     echo "update: arm 1: $UPD_PREV_TAG is kept at \$HOME/ccrc-versions/$UPD_PREV_TAG — flipping back to it (no download)"
   fi
+  _upd_cap_floor_check "$BOX_VERSIONS_ROOT/$UPD_PREV_TAG/$VER_STAMP_COPY" restore   # health first: warns, never refuses
   _ver_flip_back "$UPD_PREV_TAG" "$role" update || frc=$?
   local spine_rc="$VER_SPINE_RC"
   case "$frc" in

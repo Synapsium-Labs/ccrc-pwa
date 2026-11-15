@@ -206,7 +206,7 @@ CCRC_DOCTOR_CHECKS=(
   accounts
   credentials auto-memory   # one line, as `flock timeout`: _check_auto-memory follows _check_credentials (Overlord W1a launch profiles PR B)
   pools
-  pool-sync
+  pool-sync cap-floor   # one line, as `flock timeout`: _check_cap-floor is at the very END of this file (Overlord W1 pool set)
   transcripts transcript_work   # one line, as `flock timeout`: _check_transcript_work is at the END of this file
   update-sync server-caps approval-verifier-runnable approval-key approval-key-colocated approval-digest-mismatch   # one line, as `flock timeout`: _check_server-caps is APPENDED near the end of this file, just before _check_oom-policy; the four approval checks are at the very END
   graphify
@@ -12177,4 +12177,31 @@ _check_browser-mcp() {
     return 2
   fi
   _dr_pass browser-mcp "$detail"
+}
+
+# ── cap-floor: a standing fact this box's ccd does not honour (the Overlord W1 pool set, plan Task 8) ──────────────
+# `ccd/ccrc`'s `CAP_FLOOR_ROWS` names each fact on this box (a `~/.cc-sessions/<id>.<fact>` entry) that only a ccd
+# advertising its `ccd caps` word honours; the update and the rollback refuse to move below the word while one stands.
+# This check FAILs on a box that got there anyway (the override, an unattended path, a hand deploy), where the fact
+# fails open, and reads every row. Every role: a `server` box has no registry rows and passes. A `~/.cc-sessions` with
+# no `x` is `pools-unlistable`'s (`_check_pools`), so it SKIPs here; one with `x` but no `r` no other check names, so it
+# FAILs here as unmeasured.
+_check_cap-floor() {
+  local reg="$HOME/.cc-sessions" row fact word say ids caps bad="" fix=""
+  if [ -e "$reg" ] || [ -L "$reg" ]; then
+    [ -x "$reg" ] || { _dr_skip cap-floor "~/.cc-sessions cannot be searched, which the pools check reports"; return 3; }
+  fi
+  _cap_floor_standing || { _dr_fail cap-floor "unmeasured: ~/.cc-sessions can be searched but not listed, so nobody knows whether a fact stands that needs a capability" \
+    "give ~/.cc-sessions its read bit back (chmod u+r ~/.cc-sessions), then re-run: ccrc doctor"; return 1; }
+  [ "${#CAP_FLOOR_STANDING[@]}" -gt 0 ] || { _dr_pass cap-floor "no fact stands on this box that needs a ccd capability"; return 0; }
+  caps="$("$HOME/.local/bin/ccd" caps 2>/dev/null)" || { _dr_fail cap-floor "unmeasured: a fact stands, and this box's ccd caps did not answer" \
+    "run \$HOME/.local/bin/ccd caps by hand to see why; ccrc update installs a ccd that answers"; return 1; }
+  for row in "${CAP_FLOOR_STANDING[@]}"; do
+    IFS='|' read -r fact word say ids <<<"$row"
+    [[ $'\n'"$caps"$'\n' == *$'\n'"$word"$'\n'* ]] && continue   # one whole line; bash only, no grep on the doctor's PATH
+    bad+="${bad:+; }this box's ccd lacks $word while a $fact stands for$ids, so it fails open there"
+    fix+="${fix:+; }ccrc update to a release whose ccd advertises $word, or $say"
+  done
+  [ -z "$bad" ] || { _dr_fail cap-floor "$bad" "$fix"; return 1; }
+  _dr_pass cap-floor "every standing fact's capability is advertised by this box's ccd"
 }
