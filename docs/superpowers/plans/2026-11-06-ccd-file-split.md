@@ -16,6 +16,7 @@
 
 - **D-8048 (2026-11-06)** — `ccd-file-split-plan`: assemble `ccd/ccd` at install from fixed libraries, move functions in 19 pure slices, tighten the growth check, then repeat for `ccd/ccrc`. Measured at `4c677d328`.
 - **D-8272 (2026-11-11)** — `ccd-file-split-session-host`: the session-host ruling Q13 adds context C10 Session host to `ccd/contexts.tsv`, homed in `ccd/lib/sessionhost.sh` (Task 7). It owns hosting, observing and driving sessions behind the one `SessionHost` interface of the session-host report's §8 A4, and its PRs are ordered against slices 6, 9, 12 and 13.
+- **D-8634 (2026-11-14)** — `ccd-file-split-start`: the operator's ruling S1 settles Task 0. The split starts now, though other programmes (session-continuity, Overlord) are still open, and open PRs always go first: before each slice, `ccd-split.py preflight` and `move` refuse any function whose lines an open PR head's diff touches, naming each blocking head, from a heads file the coordinator writes with one gh call. The slice waits, or another slice moves. Task 1 moves nothing and comes first.
 
 ## Global Constraints
 
