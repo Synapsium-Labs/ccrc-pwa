@@ -128,7 +128,8 @@ export function quizWeek(now: number): { readonly key: string; readonly start: n
   const start = midnight - dow * 86_400_000;
   const thursday = new Date(start + 3 * 86_400_000);        // the ISO year is the year of the week's Thursday
   const year = thursday.getUTCFullYear();
-  const week = 1 + Math.floor((thursday.getTime() - Date.UTC(year, 0, 1)) / (7 * 86_400_000));
+  const dayOfYear = (thursday.getTime() - Date.UTC(year, 0, 1)) / 86_400_000;   // whole days: both are UTC midnights
+  const week = 1 + Math.floor(dayOfYear / 7);
   return { key: `${year}-W${String(week).padStart(2, '0')}`, start };
 }
 
