@@ -3,10 +3,10 @@
  * in the landing line, reads ten of them from GitHub by PR number (`ccd pr-state --project <p> --pr <n>`), and asks the
  * line's one writer (`CoordStore.advanceLanding`, the land arm) to mark each merged one landed and each closed or absent
  * one closed. The decisions about the entries and the PR are `landed.ts`'s (L1) or `landingEntry.ts`'s (L1): which entries are
- * landable and not held, which are read, what an answer means, when the entry is read again. L4 still makes three choices
- * of its own: whether a `readLanding` refusal skips the project (an unreadable projection) or stops the pass, the pruning
- * of the memory on a complete pass (a held entry's memory goes with it, so it is due at once when the hold clears, still competing for ten reads;
- * on an incomplete pass it is kept, so it is read when its `nextAt` comes), and the mapping of a refused mark (a hold is remembered, a fence or a store failure stops).
+ * candidates (landable and not held, plus the terminal-repair ones), which are read, what an answer means, when the entry is read again, and
+ * the three choices that were once the lane's: whether a `readLanding` refusal skips the project or stops the pass
+ * (`landed.ts#landedProjectStep`), the pruning of the memory on a complete pass (`landed.ts#landedPruneIds`), and the mapping of a
+ * refused mark (`landed.ts#landedMarkStep`). L4 acts on those answers and makes none of them itself.
  * It reads the store only through its injected port.
  * It sends the PR-keyed form only behind `ccdCan(…, 'prStatePr')` and treats a call that did not run as a stop, never as
  * an answer about the PR.

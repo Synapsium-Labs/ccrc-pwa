@@ -43,7 +43,8 @@ export function landedExpectOf(c: LandedCandidate): NonNullable<LandingLand['exp
   return { id: c.id, pinnedAt: c.pinnedAt, ...(c.repairToken === undefined ? {} : { repairToken: c.repairToken }) };
 }
 
-/** The entries of one project's facts that are landable and not held, in the facts' order. A held subject is the line's
+/** The candidates of one project's facts, in the facts' order: the entries that are landable and not held, and also the non-landable
+ *  terminal-repair candidates (an entry whose repair token the facts carry). A held subject is the line's
  *  to repair, not the PR's to answer: the store would refuse its mark, so it is skipped HERE (the one hold rule, the
  *  land arm's own `landingHoldGate`) and costs no `ccd pr-state --pr` call. On a complete pass its memory is pruned, so
  *  it is due at once when the hold clears, still competing for the ten reads; on an incomplete pass the memory is kept, so it is read when its `nextAt` comes. */
