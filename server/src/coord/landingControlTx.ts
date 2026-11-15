@@ -24,8 +24,6 @@ export interface LandingControlInput { project: string; control: LandingControlR
 export function applyLandingControlTx(coord: WatcherCoordPort, readFacts: () => LandingReadResult, input: LandingControlInput,
   phase: { at: LandingControlPhase }): LandingControlApplyResult {
   const { project, control, nowMs } = input;
-  // The handle is destructured off the port: `single-definition/core-vocab.test.ts` forbids the dotted receiver spelling outside the store.
-  const { db } = coord;
   const read = readFacts();
   if (!read.ok) { const { ok: _ok, ...failure } = read; return { kind: 'failure', failure }; }
   const transition = mainRedNext(read.facts.flags.mainRedHold, control, nowMs, project);
@@ -33,7 +31,7 @@ export function applyLandingControlTx(coord: WatcherCoordPort, readFacts: () => 
   let holdChanged = false;
   if (transition.kind === 'set') {
     phase.at = 'apply';
-    db.prepare('INSERT INTO landing_projects (project, mainRedHold) VALUES (?, ?) ON CONFLICT(project) DO UPDATE SET mainRedHold = excluded.mainRedHold')
+    coord.db.prepare('INSERT INTO landing_projects (project, mainRedHold) VALUES (?, ?) ON CONFLICT(project) DO UPDATE SET mainRedHold = excluded.mainRedHold')
       .run(project, transition.value ? 1 : 0);
     facts = { ...facts, flags: { ...facts.flags, mainRedHold: transition.value } };
     holdChanged = true;
