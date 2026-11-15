@@ -8,7 +8,7 @@ import { CoordStore } from '../src/coord/store.js';
 import { genExpectOf, type GenRow } from '../src/continuity/continuityStore.js';
 import { GEN_ACTIVE } from '../src/continuity/generationMachine.js';
 import {
-  generationsPass, type GenReadings, type GenerationsDeps, type PlannedAct, type RegistryFacts,
+  generationsPass, type EmptyTries, type GenReadings, type GenerationsDeps, type PlannedAct, type RegistryFacts,
 } from '../src/continuity/generationsLane.js';
 import { runRenewalActs } from '../src/continuity/renewalActs.js';
 import { RENEWAL_FIRST_PROMPT, RENEWAL_HANDOVER_SUBJECT } from '../src/continuity/renewalFeed.js';
@@ -104,7 +104,7 @@ function fx(live = true): Fx {
     return r.id;
   };
   const host = new FakeHost({ s, start, nextUuid: () => uuids.shift()! });
-  const memo = new Set<number>(); const empties = new Map<number, string>();
+  const memo = new Set<number>(); const empties: EmptyTries = new Map();
   const deps: GenerationsDeps = { coord: s, clock: t.ports.clock, entropy: t.ports.entropy, proc: 'p1', log: (l) => logs.push(l), retried: memo, emptyTries: empties };
   const liveRows = (): GenRow[] => { const r = s.liveGenerations(); if (!r.ok) throw new Error(r.detail); return r.rows; };
   const pass = (readings: (g: GenRow) => GenReadings | undefined = () => undefined, canRenew = true) => {

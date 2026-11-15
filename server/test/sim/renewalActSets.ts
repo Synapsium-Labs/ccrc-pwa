@@ -198,7 +198,7 @@ const ROW: HibernateRow = {
   id: 'lane-a-project-a', status: 'idle', archivedAt: null, bucket: 'idle', held: null, unmeasured: [], statusUnmeasured: false,
   dialogPending: false, background: null, subagents: null, stranded: null, swapBlocked: null, substrate: null,
 };
-const MARK: HibernateMark = { ok: true, state: 'done', bg: 0, crons: 0, turnAt: NOW - 2_000, stopAt: NOW - 1_000, restartAt: null };
+const MARK: Extract<HibernateMark, { ok: true }> = { ok: true, state: 'done', bg: 0, crons: 0, turnAt: NOW - 2_000, stopAt: NOW - 1_000, restartAt: null };
 const LIVE = (word = 'idle', mark: HibernateMark = MARK): HibernateLive => ({ kind: 'read', word: { ok: true, word }, mark });
 
 export function drainCases(m: DrainModule): Record<string, SuiteCase> {
@@ -212,7 +212,7 @@ export function drainCases(m: DrainModule): Record<string, SuiteCase> {
     'the facts it keeps hold: a running turn, a menu, background work, subagents, scheduled work, an unfinished marker': () => {
       expect(m.drainVerdict(ROW, LIVE('busy'), NOW)).toEqual({ held: true, reason: 'live-word' });
       expect(m.drainVerdict({ ...ROW, dialogPending: true }, LIVE(), NOW)).toMatchObject({ held: true });
-      expect(m.drainVerdict({ ...ROW, background: 'shell' } as HibernateRow, LIVE(), NOW)).toEqual({ held: true, reason: 'background' });
+      expect(m.drainVerdict({ ...ROW, background: 'shell' } as unknown as HibernateRow, LIVE(), NOW)).toEqual({ held: true, reason: 'background' });
       expect(m.drainVerdict({ ...ROW, subagents: [{ id: 'x' }] } as unknown as HibernateRow, LIVE(), NOW)).toEqual({ held: true, reason: 'roster' });
       expect(m.drainVerdict(ROW, LIVE('idle', { ...MARK, crons: 1 }), NOW)).toEqual({ held: true, reason: 'scheduled' });
       expect(m.drainVerdict(ROW, LIVE('idle', { ...MARK, bg: 1 }), NOW)).toEqual({ held: true, reason: 'marker-background' });
