@@ -38,3 +38,8 @@ deviation ledger.
 - **red-first-by-mutation** — Task 2's and Task 3's modules were written beside their tests rather than strictly after a
   red run. Every case was then shown to bite by mutation: the seven decider sets kill every mutant (registered in
   `mutation-floors.json` at 1), and Task 3's four named mutations each turned their case red (recorded in the PR body).
+- **outbox-keep-ruled-into-the-seven-day-census** — `OUTBOX_KEEP_MS` (seven days) is a new seven-day quantity, so
+  `token-shared.test.ts`'s census of seven-day holders counts fifteen. The coordinator ruled it in as a separate quantity
+  (the outbox's own retention of terminal unbound rows, unrelated to token rotation), a file the plan did not list.
+- **asks-column-pin** — `asks-store.test.ts` pins the `asks` columns, and `reachedOperatorAt` joins its list, a file the
+  plan did not list.
