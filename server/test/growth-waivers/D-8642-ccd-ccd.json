@@ -1,0 +1,8 @@
+{
+  "file": "ccd/ccd",
+  "maxDelta": 154,
+  "d": "D-8642",
+  "reason": "native Docs reader W5b: docs-log, one doc's history (rich-docs spec G4): the bash front, the helper's log section (parse_log, log_entries, guard_log, verb_log), the runner's fixed log row and its shape check, the four log caps' parity literals and two caps lines; measured +154 net code lines against the merge-base (21829 to 21983); kept in ccd/ccd because the Docs helper is embedded for _pr_py's reason (a sibling file would be a second deployment step)",
+  "added": "2026-11-15",
+  "createdAt": "2026-11-15"
+}
