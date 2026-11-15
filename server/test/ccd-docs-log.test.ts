@@ -285,6 +285,21 @@ describe('docs-log: the listing (M9.4 through M9.7)', () => {
     expect(es[99]!.sha).toBe(shas[1]);
     expect(o['truncated']).toBe(false);
   });
+
+  it('a shallow repository with more than 100 matching commits above its boundary lists 100, truncated false', () => {
+    const dir = freshRepo();
+    const shas = many(dir, `${SPECS}/a.md`, 103, 'edit');
+    // The boundary is the second commit: the walk reaches 101 commits above it, so the list is full and nothing older
+    // is hidden from it (a full list is never `truncated`, shallow or not).
+    fs.writeFileSync(path.join(dir, '.git', 'shallow'), `${shas[1]}\n`);
+    expect(h.git(dir, 'rev-parse', '--is-shallow-repository')).toBe('true');
+    const o = answer(head(dir), 'specs', 'a.md');
+    const es = entriesOf(o);
+    expect(es).toHaveLength(100);
+    expect(es[0]!.sha).toBe(shas[102]);
+    expect(es[99]!.sha).toBe(shas[3]);
+    expect(o['truncated']).toBe(false);
+  });
 });
 
 describe('docs-log: a walk that ends short is truncated', () => {
@@ -407,6 +422,56 @@ describe('docs-log: a walk that ends short is truncated', () => {
     expect(es.map((e) => e.sha)).not.toContain(boundary);
     for (const e of es) expect(e.parent).toMatch(/^[0-9a-f]{40}$/);
     expect(o['truncated']).toBe(true);
+  });
+});
+
+describe('docs-log: output the helper refuses to read', () => {
+  it('a record whose sha or parent is not a full object id answers git-failed, step log', () => {
+    const dir = freshRepo();
+    const [, , c3] = many(dir, `${SPECS}/a.md`, 3, 'edit');
+    const got = unitJson<{ whole: Answer; sha: Answer; parent: Answer }>(h.home, [
+      ...unitArgv(c3!),
+      'MODE = [None]',
+      ...logPlant([
+        'out = real.out',
+        "if MODE[0] == 'sha':",
+        '    out = out[:10] + b"a" + out[10:]',
+        "elif MODE[0] == 'parent':",
+        "    k = out.index(b'\\0') + 5",
+        '    out = out[:k] + b"a" + out[k:]',
+        'return H.Spawned(0, out, b"", False, False)',
+      ]),
+      "answers = {}",
+      "for m in (None, 'sha', 'parent'):",
+      '    MODE[0] = m',
+      "    answers[m or 'whole'] = ask()",
+      'out(answers)',
+    ].join('\n'));
+    // CONTROL: the unchanged bytes through the same plant list the three commits.
+    expect(got.whole).toMatchObject({ ok: true, truncated: false });
+    expect(entriesOf(got.whole)).toHaveLength(3);
+    // One extra byte inside the first record's sha (41 characters) or inside its parent.
+    for (const [label, a] of [['sha', got.sha], ['parent', got.parent]] as const) {
+      expect(a, label).toMatchObject({ v: 1, verb: 'docs-log', ok: false, failure: 'git-failed', step: 'log' });
+    }
+  });
+
+  it('a redactor that changes the line count answers helper-failed', () => {
+    const dir = freshRepo();
+    const [, , c3] = many(dir, `${SPECS}/a.md`, 3, 'edit');
+    const got = unitJson<{ whole: Answer; planted: Answer }>(h.home, [
+      ...unitArgv(c3!),
+      'whole = ask()',
+      'class PlantedRedact(H.Sys):',
+      '    def redact(self, s):',
+      "        return H.Sys.redact(self, s) + '\\nextra'",
+      'H.SYS = PlantedRedact()',
+      "out({'whole': whole, 'planted': ask()})",
+    ].join('\n'));
+    // CONTROL: the real redactor lists the three commits, so the plant is what fails the second ask.
+    expect(got.whole).toMatchObject({ ok: true });
+    expect(entriesOf(got.whole)).toHaveLength(3);
+    expect(got.planted).toMatchObject({ v: 1, verb: 'docs-log', ok: false, failure: 'helper-failed' });
   });
 });
 
@@ -546,6 +611,9 @@ describe('docs-log: refusals and the argument shape (M9.4)', () => {
       ['--section and --commit swapped', ['docs-log', '--project', 'demo', '--section', 'specs', '--commit', c, '--path', 'a.md']],
       ['--path first', ['docs-log', '--path', 'a.md', '--project', 'demo', '--commit', c, '--section', 'specs']],
       ['a stray token for a flag', ['docs-log', '--project', 'demo', '--commit', c, '--section', 'specs', 'x', 'a.md']],
+      // Only the first and the fifth flag checks refuse these two: every other token is in its place.
+      ['a stray token in place of --project', ['docs-log', 'X', 'demo', '--commit', c, '--section', 'specs', '--path', 'a.md']],
+      ['a stray token in place of --section', ['docs-log', '--project', 'demo', '--commit', c, 'X', 'specs', '--path', 'a.md']],
       ['no arguments', ['docs-log']],
     ];
     for (const [label, args] of shapes) {
