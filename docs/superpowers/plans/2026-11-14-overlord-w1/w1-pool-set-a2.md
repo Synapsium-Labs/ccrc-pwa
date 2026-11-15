@@ -102,3 +102,35 @@ Both are under 40 with no waiver, so the two renderers stay in A2.
   two earlier raises.
 - **`tests-written-with-the-code`.** The library was written first. The red evidence is the three set-sentence cases,
   red against the unchanged `ccd/ccd` before its arms went in, and the twelve mutations above.
+
+## Fix round 1, after review 2134 (the coordinator's rulings, mail 20423)
+
+Each new case below ran red against the round's starting tip (`6e93ffafa`) before its fix: `ccd-session-pool-side` 2
+failed (F1, F2), `ccd-pool-ok` 1 failed (F4).
+
+- **F1, `set-decided-account-arm-names-the-set`.** `_pool_undecidable_why`'s fifth argument, the session id, is passed
+  only when the session's side is a set. Given it, each account arm (`stale`, `malformed`, `unreadable`) ends "the
+  session's pool set decided; the project's tag is not involved" instead of "project '<p>' is tagged and its tag reads
+  fine". Without it the sentences are byte-identical to `main`'s, still pinned by the characterization block. The change
+  adds no code line: one `local` and the three `echo` lines changed in place.
+- **F2, `unsearchable-reg-reads-unreadable`.** `_session_pool_side` answers `unreadable` whenever `$REG` is not a
+  searchable directory, whatever the project argument, an empty one included. It cannot say whether a set stands, so it
+  never answers an empty project's `untagged`. New row: a valid set, `$REG` mode 600, the empty project and no project
+  each read `unreadable`. For a non-empty project the answer is the same as before (`_project_pool_state` answers
+  `unreadable` there). This is the one place the reader no longer gives the project's own word when no set can be seen:
+  the empty project on an unsearchable `$REG`.
+- **F3.** One sentence in the PR body: the session-shell refusal is an accident guard like `_route_fable_shell`'s (an
+  empty or unset `CLAUDECODE` passes), not a wall.
+- **F4, `set-membership-needs-a-pool-name`.** `_pool_ok_set`'s named arm asks `_pool_name_valid` before the membership
+  test, so `named pool-a pool-b` (or `named pool-a,pool-b`) against `set pool-a,pool-b` is a mismatch, as
+  `shared/poolrule.ts` answers. It adds no code line.
+- **F5.** Nothing here. The coordinator carries "callers pass validated ids only" to A3's brief.
+
+Growth after the round, against `origin/main`: `ccd/ccd` +4, `ccd/lib/pool-set.sh` +35, the program (`ccd/ccd` and its
+libraries as one) +39, within 40.
+
+Suites after the round: `ccd-session-pool-side` 46, `ccd-pool-ok` 87, `ccd-crosspool` 125, `ccd-pool-sync` 41,
+`ccd-acct-pool-state` 46, `ccd-project-pool` 65, `ccd-auto-swap-pool` 52, `ccd-default-pool` 14, `pool-set-spelling` 72,
+`pool-rule-core` 98, `ccd-route-fields` 56, `growth-check` armed 95, `deviation-refs` 31 (after `git fetch origin main`),
+and the server and tests type checks clean. The library alone shows no shellcheck warning beyond SC2034, which only a
+file linted alone reports.

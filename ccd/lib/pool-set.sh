@@ -55,12 +55,14 @@ _session_pool_side() {   # id [project] -> "set <spelling>" | set-unreadable | s
   # Focus 1): a link, a non-regular file or an unreadable one is `set-unreadable` (`_reg_read`'s own tests, without its read,
   # which takes the whole file and drops a NUL), and bytes that are not one spelling are `set-malformed`. The read is bounded
   # at the cap + 1 bytes, so a NUL or a read that hit the cap answers rc 0 and is malformed, and a failed open leaves zero
-  # bytes, malformed too. A `$REG` that cannot be searched answers the project's words, as `_project_pool_state` does there.
+  # bytes, malformed too. A `$REG` that cannot be searched answers `unreadable` whatever the project argument, an empty one
+  # included: it cannot say whether a set stands, so it never answers an empty project's `untagged` (review 2134 F2).
   # The project is the second argument when one is passed (`$# -ge 2`, so an empty project is not "no project"); otherwise
   # it is the row's field, read as `_swap_target` reads it: absent is the empty name, unreadable is `unreadable` unless no
   # project can be tagged (`_pool_untaggable`).
   local LC_ALL=C IFS=' ' f="$REG/$1.poolset" v="" p prc
-  if [[ -d "$REG" && -x "$REG" ]] && [[ -e "$f" || -L "$f" ]]; then
+  [[ -d "$REG" && -x "$REG" ]] || { echo unreadable; return 0; }
+  if [[ -e "$f" || -L "$f" ]]; then
     [[ -L "$f" || ! -f "$f" || ! -r "$f" ]] && { echo set-unreadable; return 0; }
     if { IFS= read -r -d '' -n $((POOL_SET_SPELLING_MAX_BYTES + 1)) v; } 2>/dev/null < "$f"; then v=""; fi
     _poolset_parse "$v" >/dev/null && echo "set $v" || echo set-malformed
@@ -77,7 +79,8 @@ _pool_ok_set() {   # account-id side-word -> 0 serve | 1 mismatch | 2 undecidabl
   # account never serves past it: `set-unreadable`, `set-malformed`, a spelling that does not parse (a caller's word, never
   # `_session_pool_side`'s), and a set word this build does not know, which names the set side too, never the project's
   # tag file (A1 review N5). Then the account side as `_pool_ok` reads it: undecidable there, an untagged account serves
-  # iff the set says `+untagged`, and `named p` serves iff p is one of the set's names.
+  # iff the set says `+untagged`, and `named p` serves iff p is a pool name and one of the set's names (a "name" that spans
+  # two adjacent names, `pool-a pool-b`, is no pool name: review 2134 F4).
   local LC_ALL=C IFS=' ' ap parsed names
   POOL_OK_SIDE='set'; POOL_OK_STATE=unrecognised
   [[ "$2" == set-unreadable || "$2" == set-malformed ]] && { POOL_OK_STATE=${2#set-}; return 2; }
@@ -87,7 +90,7 @@ _pool_ok_set() {   # account-id side-word -> 0 serve | 1 mismatch | 2 undecidabl
   ap=$(_acct_pool_state "$1"); POOL_OK_SIDE=account; POOL_OK_STATE="$ap"
   case "$ap" in
     untagged)  [[ "$parsed" == *$'\n'untagged=yes ]] && return 0; return 1 ;;
-    "named "*) [[ " $names " == *" ${ap#named } "* ]] && return 0; return 1 ;;
+    "named "*) _pool_name_valid "${ap#named }" && [[ " $names " == *" ${ap#named } "* ]] && return 0; return 1 ;;
     *)         return 2 ;;
   esac
 }

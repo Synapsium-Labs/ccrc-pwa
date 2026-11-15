@@ -156,6 +156,9 @@ describe('_pool_ok over POOL_RULE_CASES — the rule, three exit codes', () => {
     for (const ap of ['named *', 'named pool-?', 'named pool-[ab]', 'named pool']) {
       expect(poolOk(ap, 'set pool-a,pool-b').startsWith('rc=1|'), ap).toBe(true);
     }
+    // Review 2134 F4: a "name" spanning two adjacent set names is no pool name at all, so it never matches the run.
+    expect(poolOk('named pool-a pool-b', 'set pool-a,pool-b').startsWith('rc=1|')).toBe(true);
+    expect(poolOk('named pool-a,pool-b', 'set pool-a,pool-b').startsWith('rc=1|')).toBe(true);
   });
 
   it.each(POOL_RULE_PROJECT_CASES.map((c) => [c.name, c] as const))('%s', (_name, c) => {

@@ -56,13 +56,25 @@ describe('_session_pool_side: no set stands, so the project decides as it does t
     expect(h.sh(`_project_pool_state ${PROJECT}`)).toBe(want);
   });
 
-  it('a $REG that cannot be searched answers the project\'s word, as _project_pool_state does there', () => {
+  it('a $REG that cannot be searched answers unreadable (a passed project, as _project_pool_state answers there)', () => {
     tagProject('pool-a\n');
     plantSet('pool-b');
     fs.chmodSync(reg, 0o600);
     const got = side();
     fs.chmodSync(reg, 0o755);
     expect(got).toBe('unreadable|rc=0');
+  });
+
+  it('a $REG that cannot be searched answers unreadable whatever the project argument, an empty one included (review 2134 F2)', () => {
+    // It cannot know whether a set stands, so it never answers the empty project's `untagged`, which would ignore one.
+    plantSet('pool-b');
+    h.sh(`_reg_set ${ID} project ${PROJECT}`);
+    fs.chmodSync(reg, 0o600);
+    const empty = h.sh(`out=$(_session_pool_side ${ID} ''); printf '%s|rc=%s' "$out" "$?"`);
+    const none = sideOfRow();
+    fs.chmodSync(reg, 0o755);
+    expect(empty).toBe('unreadable|rc=0');
+    expect(none).toBe('unreadable|rc=0');
   });
 
   it('a passed EMPTY project is a project argument, not "no project": the row\'s field is not read', () => {
@@ -229,6 +241,21 @@ describe('the sentences: a set side names the route record and its remedy (Revie
       const s = h.sh(`_pool_undecidable_why set ${st} ${PROJECT} claude ${ID}`);
       expect(s, st).toBe(`the pool set for session ${ID} is ${st}: ${reg}/${ID}.poolset — the server writes it again at its next sweep, or the operator saves the set again in Settings; the project's tag is not involved`);
       expect(s, 'never the project\'s tag file').not.toContain(`pools/${PROJECT}`);
+    }
+  });
+  it('the account arms, given the session id after a set decided, say the set decided, never that the project\'s tag reads fine (review 2134 F1)', () => {
+    // The id is passed only when the session's side is a set: an undecidable ACCOUNT under a valid set. Without it the
+    // sentences are today's, byte for byte (the characterization block above).
+    const tail = 'the session\'s pool set decided; the project\'s tag is not involved';
+    expect(h.sh(`_pool_undecidable_why account stale ${PROJECT} claude ${ID}`))
+      .toBe(`the pool projection for claude is stale: ${reg}/pool-epoch is past its lease — the remedy is the control-plane link (the pool sync), not this file; ${tail}`);
+    expect(h.sh(`_pool_undecidable_why account malformed ${PROJECT} claude ${ID}`))
+      .toBe(`the pool projection for claude is malformed: ${reg}/pool-epoch is off the grammar — re-sync or remove it; ${tail}`);
+    expect(h.sh(`_pool_undecidable_why account unreadable ${PROJECT} claude ${ID}`))
+      .toBe(`the pool projection for claude is unreadable: ${reg}/pool-epoch is absent or unreadable — this node may never have synced; check that and the file's permissions; ${tail}`);
+    for (const st of ['stale', 'malformed', 'unreadable']) {
+      expect(h.sh(`_pool_undecidable_why account ${st} ${PROJECT} claude ${ID}`), st).not.toContain('tag reads fine');
+      expect(h.sh(`_pool_undecidable_why account ${st} ${PROJECT} claude`), st).toContain(`project '${PROJECT}' is tagged and its tag reads fine`);
     }
   });
   it('_pool_mismatch_why for a set names the spelling, and says the account\'s pool is not in it', () => {

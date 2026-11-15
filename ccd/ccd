@@ -3063,23 +3063,25 @@ _pool_ok() {   # account-id pool-state -> 0 serve | 1 mismatch | 2 undecidable
 # a caller that runs something else in between must pass its SNAPSHOT, and a
 # renderer that silently read whatever the globals hold now would be the same
 # stale-fact defect one level up.
-_pool_undecidable_why() {   # side state project account-id [session-id] -> the rc-2 sentence (the id names a set side's route record)
+_pool_undecidable_why() {   # side state project account-id [session-id, only when the side is a set] -> the rc-2 sentence
   # FIVE CONDITIONS, FIVE REMEDIES, and saying which is the whole obligation:
   # "both mean nobody decides, but one's remedy is file permissions and the
   # other's is the control-plane link, and the die message and the chip each
   # need to say which" (spec §5.7). The account arms each state POSITIVELY that
   # the project tag is fine, because the sentence they replace said the
   # opposite and an operator acted on it.
-  local side="$1" state="$2" project="$3" acct="$4"
+  # GIVEN THE SESSION ID (passed only when the session's side is a set), an account arm says the set decided, because the
+  # project's tag took no part and may be untagged (review 2134 F1); without it the sentences are today's, byte for byte.
+  local side="$1" state="$2" project="$3" acct="$4" tail="${5:+the session's pool set decided; the project's tag is not involved}"
   [[ "$side" == set ]] && { _pool_set_undecidable_why "$state" "${5-}"; return 0; }
   if [[ "$side" == project ]]; then
     echo "pool tag for $project is $state: $POOLS_DIR/$project — fix or clear it"
     return 0
   fi
   case "$state" in
-    stale)     echo "the pool projection for $acct is stale: $REG/pool-epoch is past its lease — the remedy is the control-plane link (the pool sync), not this file; project '$project' is tagged and its tag reads fine" ;;
-    malformed) echo "the pool projection for $acct is malformed: $REG/pool-epoch is off the grammar — re-sync or remove it; project '$project' is tagged and its tag reads fine" ;;
-    *)         echo "the pool projection for $acct is $state: $REG/pool-epoch is absent or unreadable — this node may never have synced; check that and the file's permissions; project '$project' is tagged and its tag reads fine" ;;
+    stale)     echo "the pool projection for $acct is stale: $REG/pool-epoch is past its lease — the remedy is the control-plane link (the pool sync), not this file; ${tail:-project '$project' is tagged and its tag reads fine}" ;;
+    malformed) echo "the pool projection for $acct is malformed: $REG/pool-epoch is off the grammar — re-sync or remove it; ${tail:-project '$project' is tagged and its tag reads fine}" ;;
+    *)         echo "the pool projection for $acct is $state: $REG/pool-epoch is absent or unreadable — this node may never have synced; check that and the file's permissions; ${tail:-project '$project' is tagged and its tag reads fine}" ;;
   esac
 }
 _pool_mismatch_why() {   # account-id account-state project project-pool-state -> the rc-1 clause
