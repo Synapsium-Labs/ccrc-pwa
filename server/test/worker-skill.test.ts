@@ -976,7 +976,8 @@ describe('the stop clause names only wakes that wake (stall watch spec §6.2)', 
       const mail = /^an? mail\b.*\basks?\b/i.test(m);
       const ask = /^an? structured ask$/i.test(m);
       const bg = /^an? background ((?:[a-z]+(?: or | and ))*[a-z]+) (?:you|that|which)\b(?:(?!\b(?:or|and|background)\b).)*$/i.exec(m);
-      const timer = /^an? timer the server accepted \(`ccrc-api timer set`\)$/i.test(m);
+      // Case-sensitive (review 2064 F6): the verb is a command, and `CCRC-API TIMER SET` names none.
+      const timer = /^an? timer the server accepted \(`ccrc-api timer set`\)$/.test(m);
       if ([mail, ask, bg !== null, timer].filter(Boolean).length !== 1) {
         out.push(`the wake list member "${m}" is not a mail that asks, a structured ask, a background kind, or a timer the server accepted`);
       }
@@ -1002,6 +1003,7 @@ describe('the stop clause names only wakes that wake (stall watch spec §6.2)', 
   it.each([
     ['a background shell', 'a background shell you started'], ['a Monitor', 'a Monitor you armed'], ['"a timer"', 'a timer'],
     ['"a timer that fires"', 'a timer that fires'], ['"or until a timer fires"', 'until a timer fires'],
+    ['the timer member in upper case (review 2064 F6)', 'A TIMER THE SERVER ACCEPTED (`CCRC-API TIMER SET`)'],
   ])('refuses a wake list that names %s in the timer\'s place (fixtures on the real clause)', (_name, member) => {
     const line = stopClause()!;
     expect(line, 'the real clause no longer names the timer as its last wake').toContain(TIMER_MEMBER);

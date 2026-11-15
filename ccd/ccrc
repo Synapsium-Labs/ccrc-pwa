@@ -14617,10 +14617,10 @@ _codex_tier_stale() {   # <id> <tier>
 # and this file half runs AFTER it — a pidfile removed under a live tier is a handle lost for good.
 _codex_reap_files() {   # <id>
   local id="${1:-}" dir f t rc=0 had_nullglob=0 rec='' st='' d='[0-9]'
-  # The bridge's markers (codex-bridge Stage 2, Task 11; the three request markers, D-8622; record-requests, D-8619), which an operator touches
+  # The bridge's markers (codex-bridge Stage 2, Task 11; the four request markers, D-8622, D-8632; record-requests, D-8619), which an operator touches
   # and no ccrc code writes; then liveprobe.count and its tmp, and the stats file's tmp (below), which a killed write_count or stats flush leaves.
   local -a names=(lane.json runtime.env litellm.yaml litellm.yaml.prev .lock
-                  bridge-instructions bridge-reasoning-all-turns bridge-verbosity bridge-turn-state record-streams record-requests liveprobe-allowed liveprobe.count liveprobe.count.tmp)
+                  bridge-instructions bridge-reasoning-all-turns bridge-verbosity bridge-turn-state bridge-service-tier-fast record-streams record-requests liveprobe-allowed liveprobe.count liveprobe.count.tmp)
   local -a tmps=() bf=()
   _codex_shape || return 1
   if ! [[ "$id" =~ $WRAPPER_ID_RE ]]; then
@@ -25833,11 +25833,24 @@ _upd_sweep_launch() {
 # TERMed; otherwise it reads the stop file at its next iteration, ends, and never waits for its jobs. BOUNDED either
 # way: the `wait` here returns after at most the one fork and `.pid` write the launcher is in. (Whichever order the
 # two sides run in, the launcher either sees `stop` after writing `looped` and exits, or `looped` is there when we look.)
+# BEFORE THE SWEEP'S WRITE: a signal can end the run after the fork and before `launcher.proc` names the launcher (a
+# starved shell, its launcher already forking: measured under load, the launcher then forked every job and none of the
+# later ones was stopped). So while a launch is in flight (`lpre`, the sweep's `$!` before the fork, by dynamic scope),
+# a `$!` that has moved is the launcher's pid: bash sets it at the fork, with TERM blocked across it.
+# `_upd_sweep_lastbg` sets UPD_LASTBG to `x` and this shell's `$!`: `x` alone before its first background job, where
+# `$!` is unset and this file's `set -u` would end the run on reading it.
+_upd_sweep_lastbg() {
+  case $- in
+    *u*) set +u; UPD_LASTBG="x$!"; set -u ;;
+    *) UPD_LASTBG="x$!" ;;
+  esac
+}
 _upd_sweep_stop() {
   local p=""
-  [ -f "$1/launcher.proc" ] || return 0
-  IFS= read -r p < "$1/launcher.proc" || :
-  case "$p" in ''|*[!0-9]*) return 0 ;; esac
+  [ ! -f "$1/launcher.proc" ] || IFS= read -r p < "$1/launcher.proc" || :
+  case "$p" in ''|*[!0-9]*) p="" ;; esac
+  if [ -z "$p" ] && [ -n "${lpre:-}" ]; then _upd_sweep_lastbg; [ "$UPD_LASTBG" = "$lpre" ] || p="${UPD_LASTBG#x}"; fi
+  [ -n "$p" ] || return 0
   [ "$p" -gt 1 ] || return 0
   : >"$1/stop"
   if [ -e "$1/looped" ]; then kill -TERM "$p" 2>/dev/null; fi
@@ -25863,6 +25876,17 @@ _upd_sweep_kill() {
     : >"${f%.pid}.killed"
   done
   return 0
+}
+# _upd_sweep_rm <vdir> — remove the scratch dir, and again while it is still there (at most 20 more tries, 50 ms apart).
+# A job its group TERM caught inside its own `open` of a capture file finishes that create after the TERM, so one
+# `rm -rf` can unlink every entry and still fail its `rmdir` (`Directory not empty`, measured under load), and that dir,
+# its `owner` already removed, is one no later sweep's cleanup removes. An `rmdir` that succeeds is final: a create in a
+# removed directory fails.
+_upd_sweep_rm() {
+  local n=0
+  rm -rf -- "$1" 2>/dev/null
+  while [ -e "$1" ] && [ "$n" -lt 20 ]; do sleep 0.05; rm -rf -- "$1" 2>/dev/null; n=$((n + 1)); done
+  [ ! -e "$1" ] || rm -rf -- "$1"
 }
 # _upd_sweep_replay <file> <1|2> — a captured file to stdout (1) or stderr (2), by builtins: no fork (D-3972 c).
 _upd_sweep_replay() {
@@ -26124,7 +26148,7 @@ _upd_sweep() {
   _upd_sweep_knobs
   local verify="$BOX_TREE_DIR/deploy/verify-service.sh"
   local after_listing arc=0 cs=0 i0=0 nb vtried=0 left
-  local vdir="" vjobs="${CCRC_SWEEP_VERIFY_JOBS:-128}" i j k r lrc d o cu _cl cw _cs _cd clist crc=0 m inb cb kc=0 mn=0 rfail="" lpid="" ltrap=""
+  local vdir="" vjobs="${CCRC_SWEEP_VERIFY_JOBS:-128}" i j k r lrc d o cu _cl cw _cs _cd clist crc=0 m inb cb kc=0 mn=0 rfail="" lpid="" ltrap="" lpre=""
   [[ "$vjobs" =~ ^[123456789][0123456789]{0,3}$ ]] || vjobs=128
   nb=$(( (${#todo[@]} + SWB_BATCH - 1) / SWB_BATCH ))
   SWB_WAITED=0; SWB_GAVE_UP=0
@@ -26234,7 +26258,7 @@ _upd_sweep() {
         rm -rf -- "$d"
       done
       if vdir="$(mktemp -d "${TMPDIR:-/tmp}/ccrc-sweep.XXXXXX" 2>/dev/null)" && [ -d "$vdir" ] && printf '%s\n' "$$" >"$vdir/owner" 2>/dev/null; then
-        _exit_add "_upd_sweep_stop $(printf '%q' "$vdir"); _upd_sweep_kill $(printf '%q' "$vdir"); rm -rf -- $(printf '%q' "$vdir")"
+        _exit_add "_upd_sweep_stop $(printf '%q' "$vdir"); _upd_sweep_kill $(printf '%q' "$vdir"); _upd_sweep_rm $(printf '%q' "$vdir")"
       else
         [ -z "$vdir" ] || rm -rf -- "$vdir"
         vdir=""
@@ -26256,13 +26280,15 @@ _upd_sweep() {
           # caller): the exit chain TERMs each unrecorded job, once, and removes the scratch dir. The caller's own INT trap
           # is saved and put back (one of the caller's that does not exit would otherwise swallow the INT: measured).
           # `lpid` is reset per batch, so a handler never signals a previous batch's launcher; the handler writes it to
-          # `launcher.proc` itself, so an INT between the launch and the sweep's own write still stops the launcher.
+          # `launcher.proc` itself, so an INT between the launch and the sweep's own write still stops the launcher. It
+          # clears `lpre` once it has, so the exit chain's stop after the re-raise never takes the reaped `$!`.
           lrc=0; lpid=""; ltrap="$(trap -p INT)"; rm -f "$vdir/looped" "$vdir/stop"
-          trap 'trap - INT; if [ -n "$lpid" ]; then echo "$lpid" >"$vdir/launcher.proc"; _upd_sweep_stop "$vdir"; : >"$vdir/launcher.proc"; fi; kill -INT "$BASHPID"' INT
+          trap 'trap - INT; if [ -n "$lpid" ]; then echo "$lpid" >"$vdir/launcher.proc"; _upd_sweep_stop "$vdir"; lpre=""; : >"$vdir/launcher.proc"; fi; kill -INT "$BASHPID"' INT
+          _upd_sweep_lastbg; lpre="$UPD_LASTBG"
           ( _upd_sweep_launch "$vdir" "$verify" "$i" "$j" ) 2>"$vdir/launch.err" &
           lpid=$!; printf '%s\n' "$lpid" >"$vdir/launcher.proc"
           wait "$lpid" || lrc=$?
-          lpid=""; : >"$vdir/launcher.proc"
+          lpre=""; lpid=""; : >"$vdir/launcher.proc"
           eval "${ltrap:-trap - INT}"
           if [ "$lrc" -ne 0 ]; then
             _upd_sweep_kill "$vdir"

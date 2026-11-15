@@ -108,8 +108,10 @@ const card = (m: Card, f: CardFacts): string => join(m.renderCard('coordinator',
 export const CARD_ONE_LINE_SET: MutantSet<Card> = {
   modulePath: CARD_TS,
   mutants: [
-    { id: 'O1', old: '/[\\p{Cc}\\p{Cf}\\p{Zl}\\p{Zp}]/gu', new: '/(?!)/gu' },
-    { id: 'O2', old: '/[\\p{Cc}\\p{Cf}\\p{Zl}\\p{Zp}]/gu', new: '/[\\p{Cc}]/gu' },
+    { id: 'O1', old: '/[\\p{Cc}\\p{Cf}\\p{Zl}\\p{Zp}\\p{Cs}\\\\]/gu', new: '/(?!)/gu' },
+    { id: 'O2', old: '/[\\p{Cc}\\p{Cf}\\p{Zl}\\p{Zp}\\p{Cs}\\\\]/gu', new: '/[\\p{Cc}\\p{Cs}\\\\]/gu' },
+    { id: 'O7', old: '/[\\p{Cc}\\p{Cf}\\p{Zl}\\p{Zp}\\p{Cs}\\\\]/gu', new: '/[\\p{Cc}\\p{Cf}\\p{Zl}\\p{Zp}\\\\]/gu' },
+    { id: 'O8', old: '/[\\p{Cc}\\p{Cf}\\p{Zl}\\p{Zp}\\p{Cs}\\\\]/gu', new: '/[\\p{Cc}\\p{Cf}\\p{Zl}\\p{Zp}\\p{Cs}]/gu' },
     { id: 'O3', old: 'chars.length > max ?', new: 'false ?' },
     { id: 'O4', old: "c.paths.map((x) => oneLine(x)).join(', ')", new: "c.paths.join(', ')" },
     { id: 'O5', old: "oneLine(r.planPath)", new: 'r.planPath' },
@@ -126,6 +128,8 @@ export const CARD_ONE_LINE_SET: MutantSet<Card> = {
       'a hostile sender stays on its line': () => {
         expect(forged(card(m, empty({ mailOutstanding: read([{ ...MAIL, fromId: H }]) })))).toBe(false);
       },
+      'a lone surrogate in a bare field is escaped (review 2087 F1)': () => { expect(m.oneLine('a\ud800b\udc00')).toBe('a\\u{d800}b\\u{dc00}'); },
+      'a backslash in a bare field is doubled (review 2087 F4)': () => { expect(m.oneLine('a\\u{1b}')).toBe('a\\\\u{1b}'); },
       'oneLine cuts a long field at its cap': () => { expect(m.oneLine('z'.repeat(250))).toBe(`${'z'.repeat(200)}…`); },
     };
   },
@@ -134,14 +138,17 @@ export const CARD_ONE_LINE_SET: MutantSet<Card> = {
 export const CARD_BLOCK_SET: MutantSet<Card> = {
   modulePath: CARD_TS,
   mutants: [
-    { id: 'M1', old: '${block(fieldLine(n.next), NOTE_FIELD_CAP_BYTES, at)}', new: '${fieldLine(n.next)}' },
-    { id: 'M7', old: '${block(fieldLine(n.waitsOn), NOTE_FIELD_CAP_BYTES, at)}', new: '${fieldLine(n.waitsOn)}' },
-    { id: 'M2', old: "${block(lines.join('\\n'), CHECKPOINT_CAP_BYTES, 'stored on the handover row, which nothing reads back in W1a')}", new: "${lines.join('\\n')}" },
+    { id: 'M1', old: '${fieldsBlock(fieldLine(n.next), NOTE_FIELD_CAP_BYTES, at)}', new: '${fieldLine(n.next)}' },
+    { id: 'M7', old: '${fieldsBlock(fieldLine(n.waitsOn), NOTE_FIELD_CAP_BYTES, at)}', new: '${fieldLine(n.waitsOn)}' },
+    { id: 'M2', old: "${fieldsBlock(lines.join('\\n'), CHECKPOINT_CAP_BYTES, 'stored on the handover row, which nothing reads back in W1a')}", new: "${lines.join('\\n')}" },
     { id: 'M3', old: "block(it.text, SHORT_CAP_BYTES, `on item ${it.id}'s row`)", new: 'it.text' },
     { id: 'M4', old: "block(p.decisions.map((d) => `${iso(d.at)}: ${d.text}`).join('\\n'), SHORT_CAP_BYTES, where)", new: "p.decisions.map((d) => `${iso(d.at)}: ${d.text}`).join('\\n')" },
     { id: 'M5', old: "block(ratified.join('\\n'), SHORT_CAP_BYTES, where)", new: "ratified.join('\\n')" },
     { id: 'M6', old: "block(unratified.join('\\n'), SHORT_CAP_BYTES, where)", new: "unratified.join('\\n')" },
-    { id: 'M8', old: "block(lines.join('\\n'), TIMERS_CAP_BYTES, 'in `ccrc-api timer list`')", new: "lines.join('\\n')" },
+    { id: 'M8', old: "fieldsBlock(lines.join('\\n'), TIMERS_CAP_BYTES, 'in `ccrc-api timer list`')", new: "lines.join('\\n')" },
+    { id: 'M9', old: 'untrustedBlock(blockText(text), capBytes, fullAt, CARD_TEXT_PREFACE)', new: 'untrustedBlock(text, capBytes, fullAt, CARD_TEXT_PREFACE)' },
+    { id: 'M10', old: 'text.replace(ESCAPED, (c) =>', new: 'text.replace(/[\\p{Cc}]/gu, (c) =>' },
+    { id: 'M11', old: 'untrustedBlock(escaped, capBytes, fullAt, CARD_TEXT_PREFACE)', new: 'untrustedBlock(blockText(escaped), capBytes, fullAt, CARD_TEXT_PREFACE)' },
   ],
   suite(m): Record<string, SuiteCase> {
     const ledger = (over: Partial<CardFacts['ledger'] extends Fact<infer T> ? T extends readonly (infer P)[] ? P : never : never>) =>
@@ -170,6 +177,19 @@ export const CARD_BLOCK_SET: MutantSet<Card> = {
         expect([forged(t), exposed(t)]).toEqual([false, false]);
       },
       'a mail subject is fenced': () => { expect(forged(card(m, empty({ mailOutstanding: read([{ ...MAIL, subject: H }]) })))).toBe(false); },
+      'a block escapes format characters, lone surrogates and the backslash (review 2087 F1, F2, F4)': () => {
+        const t = card(m, empty({ mailOutstanding: read([{ ...MAIL, subject: 'a\u202eb\u200bc\ud800d\\e\u2028f' }]) }));
+        expect(t).toContain('a\\u{202e}b\\u{200b}c\\u{d800}d\\\\e\\u{2028}f');
+      },
+      'a block of escaped fields is escaped once (review 2087 F4)': () => {
+        const t = card(m, empty({ notes: read([noteOf(8, AT, 'x\ny\\z')]) }));
+        expect(t).toContain('x\\u{a}y\\\\z');
+        expect(t).not.toContain('x\\\\u{a}');
+      },
+      'a block escapes its controls but the newline and the tab (review 2027 N1)': () => {
+        const t = card(m, empty({ mailOutstanding: read([{ ...MAIL, subject: 'a\u001b[2Jb\u0001c\td' }]) }));
+        expect(t).toContain('a\\u{1b}[2Jb\\u{1}c\td');
+      },
     };
   },
 };

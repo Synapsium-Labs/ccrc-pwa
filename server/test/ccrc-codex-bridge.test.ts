@@ -422,6 +422,7 @@ describe.skipIf(!PY)('ccrc codex: the bridge tier (codex bridge Stage 2, Task 11
       'liveprobe.count', 'bridge.stats.json', 'reasoning.sqlite', 'reasoning.sqlite-wal', 'reasoning.sqlite-shm'];
     files.push('liveprobe.count.tmp', 'bridge.stats.json.tmp');   // a killed write_count's or stats flush's tmp (Z11)
     files.push('bridge-reasoning-all-turns', 'bridge-verbosity', 'bridge-turn-state');   // the request markers (D-8622)
+    files.push('bridge-service-tier-fast');   // Fast mode's marker (D-8632)
     files.push('record-requests', 'bridge.requests.jsonl', 'bridge.requests.jsonl.1');   // the request record (D-8619)
     for (const f of files) fs.writeFileSync(join(d, f), 'fixture\n');
     fs.mkdirSync(join(d, 'recordings', 'nested'), { recursive: true, mode: 0o700 });

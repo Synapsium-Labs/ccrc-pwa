@@ -1665,7 +1665,8 @@ describe.skipIf(!PY)('the request markers, their 400 fallback and the turn-state
   const ALL_TURNS = 'bridge-reasoning-all-turns';
   const VERBOSITY = 'bridge-verbosity';
   const TURN_STATE = 'bridge-turn-state';
-  const MARKERS = [ALL_TURNS, VERBOSITY, TURN_STATE];
+  const FAST = 'bridge-service-tier-fast'; // D-8632
+  const MARKERS = [ALL_TURNS, VERBOSITY, TURN_STATE, FAST];
   const LITE = { useResponsesLite: true, supportVerbosity: true, defaultVerbosity: 'low' };
   const session = { 'x-claude-code-session-id': 'sess-fx1' };
   const zeros = (): Json => Object.fromEntries(MARKERS.map((m) => [m, 0]));
@@ -1971,7 +1972,14 @@ describe.skipIf(!PY)('the request markers, their 400 fallback and the turn-state
 
   it('no marker at all: the upstream body, its headers and the client\'s answer are the unmarked bridge\'s, byte for byte', async () => {
     const state = token('n');
-    await withBridge([withState(state, 'Hello'), withState(null, 'Hello')], async ({ bridge, up, lane }) => {
+    // D-8632, D-8633: the first answer names a service tier and reasons before its text; both are measured, and
+    // neither changes a byte of what the client is sent
+    const rsItem = { type: 'reasoning', id: 'rs_fx1', summary: [], encrypted_content: 'ENC-fx1' };
+    const measured: ResponsesAnswer = {
+      status: 200, headers: { 'x-codex-turn-state': state },
+      sse: created() + done(0, rsItem) + done(1, msgItem('msg_fx1', 'Hello')) + completed({}, { service_tier: 'default' }),
+    };
+    await withBridge([measured, withState(null, 'Hello')], async ({ bridge, up, lane }) => {
       lite(lane);
       const a = await call(bridge, '/v1/messages', { body: highBody(), headers: session });
       expect(a.status, a.text).toBe(200);
@@ -1992,6 +2000,7 @@ describe.skipIf(!PY)('the request markers, their 400 fallback and the turn-state
       const names = ['host', 'authorization', 'chatgpt-account-id', 'originator', 'user-agent', 'session-id', 'content-type',
         'accept', 'accept-encoding', 'content-length'];
       for (const r of up.requests) expect(r.headers).toEqual(names);
+      for (const r of up.requests) expect(Object.keys(r.body!)).not.toContain('service_tier');
       const id = a.frames[0].data.message.id as string;
       const f = (o: Json): string => `event: ${String(o.type)}\ndata: ${JSON.stringify(o)}\n\n`;
       const zero = { input_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, output_tokens: 0 };
@@ -2008,6 +2017,164 @@ describe.skipIf(!PY)('the request markers, their 400 fallback and the turn-state
       const row = readStats(lane).parity[KEY];
       expect(row.markers).toEqual(zeros());
       expect(row.turnState).toEqual({ captured: 0, echoed: 0 });
+      expect(row.servedTier).toEqual({ default: 1, absent: 1 });
+      expect(Object.values(row.reasoningMs as Json).reduce((n: number, c) => n + (c as number), 0)).toBe(1);
+    });
+  });
+});
+
+// D-8632: Fast mode behind `bridge-service-tier-fast`, and the tier the backend says it served; D-8633: how much of each
+// response's wait was reasoning, beside its first-output time.
+describe.skipIf(!PY)('the service tier marker and the reasoning time (D-8632, D-8633)', () => {
+  const KEY = `backend/${MODEL}`;
+  const FAST = 'bridge-service-tier-fast';
+  const ALL_TURNS = 'bridge-reasoning-all-turns';
+  const session = { 'x-claude-code-session-id': 'sess-fx1' };
+  const BUCKETS = ['250', '500', '1000', '2000', '4000', '8000', '16000', '32000', '64000', 'inf'];
+  const total = (h: Json): number => Object.values(h).reduce((a: number, b) => a + (b as number), 0);
+  const touch = (lane: BridgeLane, names: string[]): void => { for (const n of names) writeFileSync(join(lane.laneDir, n), ''); };
+  const recordFile = (lane: BridgeLane): string => join(lane.laneDir, 'bridge.requests.jsonl');
+  const rowsOf = (lane: BridgeLane): Json[] => (existsSync(recordFile(lane))
+    ? readFileSync(recordFile(lane), 'utf8').split('\n').filter((l) => l !== '').map((l) => JSON.parse(l) as Json) : []);
+  const tiered = (tier: unknown, text = 'ok'): ResponsesAnswer => ({
+    status: 200, sse: created() + done(0, msgItem('msg_fx1', text)) + completed({}, tier === undefined ? {} : { service_tier: tier }),
+  });
+  const rs = (n: number): Json => ({ type: 'reasoning', id: `rs_fx${n}`, summary: [], encrypted_content: `ENC-fx${n}` });
+  const unsupported: ResponsesAnswer = {
+    status: 400, headers: { 'x-request-id': 'req_fx400' },
+    body: { error: { type: 'invalid_request_error', code: 'unsupported_parameter', param: 'service_tier', message: 'Unsupported parameter: service_tier' } },
+  };
+
+  it('marker on: priority right after stream on every POST, counted, and the tier each response names is counted', async () => {
+    const long = `tier-${'x'.repeat(100)}`;
+    await withBridge([tiered('priority'), tiered(undefined), tiered(long)], async ({ bridge, up, lane }) => {
+      touch(lane, [FAST, 'record-requests']);
+      for (let i = 0; i < 3; i += 1) {
+        const a = await call(bridge, '/v1/messages', { body: messages(), headers: session });
+        expect(a.status, a.text).toBe(200);
+      }
+      expect(up.requests).toHaveLength(3);
+      for (const r of up.requests) {
+        expect(r.body!.service_tier).toBe('priority');
+        expect(Object.keys(r.body!).slice(0, 4)).toEqual(['model', 'stream', 'service_tier', 'input']);
+        // the bridge presents itself as ccrc: no routing hint of Codex's beside the tier
+        expect(r.headers).not.toContain('x-codex-routing-hint');
+      }
+      expect(await bridge.stop()).toEqual({ code: 0, signal: null });
+      const doc = readStats(lane);
+      const row = doc.parity[KEY];
+      expect(row.markers[FAST]).toBe(3);
+      expect(row.fallbacks[FAST]).toBe(0);
+      expect(row.servedTier).toEqual({ priority: 1, absent: 1, unrecognised: 1 });
+      expect(JSON.stringify(doc)).not.toContain('x'.repeat(65));
+      const rows = rowsOf(lane);
+      expect(rows.map((r) => [r.servedTier, r.markers])).toEqual([
+        ['priority', [FAST]], ['absent', [FAST]], ['unrecognised', [FAST]],
+      ]);
+      expect(readFileSync(recordFile(lane), 'utf8')).not.toContain('x'.repeat(65));
+    });
+  });
+
+  it('a compaction request with the marker on carries it too', async () => {
+    const compaction = messages({ text: 'CRITICAL: Respond with TEXT ONLY. Summarise the conversation.' });
+    await withBridge([tiered('priority', 'summary')], async ({ bridge, up, lane }) => {
+      touch(lane, [FAST]);
+      const a = await call(bridge, '/v1/messages', { body: compaction, headers: session });
+      expect(a.status, a.text).toBe(200);
+      expect(up.requests[0].body!.service_tier).toBe('priority');
+      expect(await bridge.stop()).toEqual({ code: 0, signal: null });
+      const doc = readStats(lane);
+      expect(doc.outcomes.compactionRequests, 'CONTROL: the request was a compaction').toBe(1);
+      expect(doc.parity[KEY].markers[FAST]).toBe(1);
+    });
+  });
+
+  it('[400, 200] with the marker on: the retry carries no service_tier, the fallback is counted, the client gets the 200', async () => {
+    await withBridge([unsupported, tiered(undefined, 'after the fallback')], async ({ bridge, up, lane }) => {
+      touch(lane, [FAST]);
+      const a = await call(bridge, '/v1/messages', { body: messages(), headers: session });
+      expect(a.status, a.text).toBe(200);
+      expect(textOf(a)).toBe('after the fallback');
+      expect(up.requests).toHaveLength(2);
+      expect(up.requests[0].body!.service_tier).toBe('priority');
+      expect(Object.keys(up.requests[1].body!)).not.toContain('service_tier');
+      expect(Object.keys(up.requests[1].body!)).toEqual(Object.keys(up.requests[0].body!).filter((k) => k !== 'service_tier'));
+      expect(await bridge.stop()).toEqual({ code: 0, signal: null });
+      const stats = readStats(lane);
+      expect(stats.outcomes).toEqual({ '2xx': 1 });
+      expect(stats.parity[KEY].markers[FAST]).toBe(1);
+      expect(stats.parity[KEY].fallbacks[FAST]).toBe(1);
+      expect(stats.parity[KEY].servedTier).toEqual({ absent: 1 });
+    });
+  });
+
+  it('the fast marker beside all_turns on a Lite row: both carried, both dropped by one fallback', async () => {
+    await withBridge([unsupported, tiered(undefined)], async ({ bridge, up, lane }) => {
+      touch(lane, [FAST, ALL_TURNS, 'record-requests']);
+      writeBridgeCatalogue(lane.catalogue, BRIDGE_MODELS, { [MODEL]: { useResponsesLite: true } });
+      const a = await call(bridge, '/v1/messages', { body: { ...messages(), output_config: { effort: 'high' } }, headers: session });
+      expect(a.status, a.text).toBe(200);
+      expect(up.requests[0].body!.service_tier).toBe('priority');
+      expect(up.requests[0].body!.reasoning).toEqual({ effort: 'high', context: 'all_turns' });
+      expect(Object.keys(up.requests[1].body!)).not.toContain('service_tier');
+      expect(up.requests[1].body!.reasoning).toEqual({ effort: 'high' });
+      expect(await bridge.stop()).toEqual({ code: 0, signal: null });
+      // the row names the markers in MARKERS' order
+      expect(rowsOf(lane).map((r) => [r.fallback, r.markers])).toEqual([[true, [ALL_TURNS, FAST]], [false, []]]);
+      const row = readStats(lane).parity[KEY];
+      expect([row.fallbacks[ALL_TURNS], row.fallbacks[FAST]]).toEqual([1, 1]);
+    });
+  });
+
+  it('reasoningMs: the last reasoning item before the first output, at least its delay and at most firstOutputMs', async () => {
+    const DELAY = 450;
+    // chunks DELAY apart: the first reasoning item at about DELAY, the second at 2 x DELAY, the call at 3 x DELAY
+    const call0 = { type: 'function_call', id: 'fc_fx3', call_id: 'call_fx3', name: 'Read', arguments: '{"file_path":"a"}', status: 'completed' };
+    const reasoned: ResponsesAnswer = {
+      status: 200, sse: { chunks: [created(), done(0, rs(1)), done(1, rs(2)), done(2, call0) + completed()], delayMs: DELAY },
+    };
+    await withBridge([reasoned, tiered(undefined)], async ({ bridge, lane }) => {
+      touch(lane, ['record-requests']);
+      const a = await call(bridge, '/v1/messages', { body: { ...messages(), tools: [READ_TOOL] }, headers: session });
+      expect(a.status, a.text).toBe(200);
+      const b = await call(bridge, '/v1/messages', { body: messages(), headers: session });
+      expect(b.status, b.text).toBe(200);
+      expect(await bridge.stop()).toEqual({ code: 0, signal: null });
+      const [withReasoning, without] = rowsOf(lane);
+      // the last reasoning item before the first block, never the first one
+      expect(withReasoning.reasoningMs, JSON.stringify(withReasoning)).toBeGreaterThanOrEqual(2 * DELAY);
+      expect(withReasoning.reasoningMs).toBeLessThanOrEqual(withReasoning.firstOutputMs);
+      expect(withReasoning.firstOutputMs - withReasoning.reasoningMs, 'the call came a chunk later').toBeGreaterThanOrEqual(DELAY / 2);
+      expect(withReasoning.servedTier).toBe('absent');
+      // a response with no reasoning item has none
+      expect(without.reasoningMs).toBeNull();
+      expect(without.firstOutputMs).not.toBeNull();
+      const row = readStats(lane).parity[KEY];
+      expect(Object.keys(row.reasoningMs)).toEqual(BUCKETS);
+      expect(total(row.reasoningMs)).toBe(1);
+      expect(total(row.firstOutputMs)).toBe(2);
+      // the histogram rebuilt from the rows is the parity row's
+      const BOUNDS = [250, 500, 1000, 2000, 4000, 8000, 16000, 32000, 64000];
+      const bucketOf = (ms: number): string => String(BOUNDS.find((x) => ms <= x) ?? 'inf');
+      expect(row.reasoningMs[bucketOf(withReasoning.reasoningMs)]).toBe(1);
+    });
+  });
+
+  it('a reasoning item that finishes after the first output, or a response with no output, counts no reasoning time', async () => {
+    const after: ResponsesAnswer = { status: 200, sse: created() + done(0, msgItem('msg_fx1', 'first')) + done(1, rs(2)) + completed() };
+    const silent: ResponsesAnswer = { status: 200, sse: created() + done(0, rs(1)) + completed({}, { end_turn: true }) };
+    await withBridge([after, silent], async ({ bridge, lane }) => {
+      touch(lane, ['record-requests']);
+      for (let i = 0; i < 2; i += 1) {
+        const a = await call(bridge, '/v1/messages', { body: messages(), headers: session });
+        expect(a.status, a.text).toBe(200);
+      }
+      expect(await bridge.stop()).toEqual({ code: 0, signal: null });
+      const rows = rowsOf(lane);
+      expect(rows.map((r) => [r.firstOutputMs === null, r.reasoningMs])).toEqual([[false, null], [true, null]]);
+      const row = readStats(lane).parity[KEY];
+      expect(row.responses).toBe(2);
+      expect(total(row.reasoningMs)).toBe(0);
     });
   });
 });
@@ -2047,8 +2214,9 @@ describe.skipIf(!PY)('the per-request record behind the record-requests marker (
   const REPLAY_ZERO = { 'text-hit': 0, 'text-empty': 0, 'text-absent': 0, 'call-hit': 0, 'call-absent': 0 };
   /** A row's keys, in the order the record writes them: `replay` on a message's first POST only, `turnState` when set. */
   const fieldsOf = (r: Json): string[] => [
-    'v', 'at', 'postAt', 'session', 'subagent', 'message', 'post', 'route', 'model', 'status', 'outcome', 'served', 'effort',
-    'inputTokens', 'cachedTokens', 'outputTokens', 'reasoningTokens', 'firstOutputMs', 'totalMs', 'inputTransformations',
+    'v', 'at', 'postAt', 'session', 'subagent', 'message', 'post', 'route', 'model', 'status', 'outcome', 'served', 'servedTier',
+    'effort', 'inputTokens', 'cachedTokens', 'outputTokens', 'reasoningTokens', 'firstOutputMs', 'reasoningMs', 'totalMs',
+    'inputTransformations',
     ...(r.post === 0 ? ['replay'] : []), 'markers', 'fallback', ...('turnState' in r ? ['turnState'] : []),
   ];
   const recordFile = (lane: BridgeLane): string => join(lane.laneDir, 'bridge.requests.jsonl');
@@ -2067,8 +2235,9 @@ describe.skipIf(!PY)('the per-request record behind the record-requests marker (
       expect(Object.keys(r), JSON.stringify(r)).toEqual(fieldsOf(r));
       expect(r.v).toBe(1);
       expect(Number.isInteger(r.at) && Number.isInteger(r.postAt) && r.at >= r.postAt, JSON.stringify(r)).toBe(true);
-      for (const k of ['firstOutputMs', 'totalMs']) expect(r[k] === null || (Number.isInteger(r[k]) && r[k] >= 0), k).toBe(true);
+      for (const k of ['firstOutputMs', 'reasoningMs', 'totalMs']) expect(r[k] === null || (Number.isInteger(r[k]) && r[k] >= 0), k).toBe(true);
       if (r.firstOutputMs !== null && r.totalMs !== null) expect(r.firstOutputMs).toBeLessThanOrEqual(r.totalMs);
+      if (r.reasoningMs !== null) expect(r.reasoningMs).toBeLessThanOrEqual(r.firstOutputMs);
       expect(r.route).toBe('backend');
     }
   };
@@ -2123,8 +2292,8 @@ describe.skipIf(!PY)('the per-request record behind the record-requests marker (
       const r = rows[0];
       expect(r).toEqual({
         v: 1, at: r.at, postAt: r.postAt, session: 'sess-fx1', subagent: false, message: 1, post: 0, route: 'backend',
-        model: MODEL, status: 200, outcome: '2xx', served: 'same', effort: 'high', inputTokens: 120, cachedTokens: 20,
-        outputTokens: 7, reasoningTokens: 3, firstOutputMs: r.firstOutputMs, totalMs: r.totalMs,
+        model: MODEL, status: 200, outcome: '2xx', served: 'same', servedTier: 'absent', effort: 'high', inputTokens: 120,
+        cachedTokens: 20, outputTokens: 7, reasoningTokens: 3, firstOutputMs: r.firstOutputMs, reasoningMs: null, totalMs: r.totalMs,
         inputTransformations: { 'reasoning:removed:turn_boundary': 2, 'reasoning:removed:prefix_mismatch': 1 },
         replay: REPLAY_ZERO, markers: [], fallback: false,
       });
@@ -2272,10 +2441,13 @@ describe.skipIf(!PY)('the per-request record behind the record-requests marker (
   });
 
   it('the rows agree with the parity section\'s deltas over the same requests', async () => {
+    // the first part reasons before its text and names its tier (D-8632, D-8633); the second does neither
+    const reasoned = done(0, { type: 'reasoning', id: 'rs_fx1', summary: [], encrypted_content: 'ENC-fx1' }) + done(1, msgItem('msg_fx1', 'part 1'));
     const part = (n: number, last: boolean): ResponsesAnswer => ({
       status: 200,
-      sse: created(n) + done(0, msgItem(`msg_fx${n}`, `part ${n}`)) + completed({ input: 300 + n, cached: n, output: 4, reasoning: 2 },
-        { model: n === 2 ? 'model-6.1-beta' : MODEL, input_transformations: [removed('turn_boundary')], ...(last ? {} : { end_turn: false }) }),
+      sse: created(n) + (n === 1 ? reasoned : done(0, msgItem(`msg_fx${n}`, `part ${n}`))) + completed({ input: 300 + n, cached: n, output: 4, reasoning: 2 },
+        { model: n === 2 ? 'model-6.1-beta' : MODEL, input_transformations: [removed('turn_boundary')], ...(last ? {} : { end_turn: false }),
+          ...(n === 1 ? { service_tier: 'priority' } : {}) }),
     });
     // a stream that releases output and then breaks: the parity row counts no response for it, so no instant either
     const broken: ResponsesAnswer = { status: 200, sse: created() + added(0, 'msg_fx1') + delta(0, 'msg_fx1', 'par') };
@@ -2308,7 +2480,10 @@ describe.skipIf(!PY)('the per-request record behind the record-requests marker (
       // the histograms rebuilt from the rows: each integer lies in the bucket the parity row counted its instant in
       const BOUNDS = [250, 500, 1000, 2000, 4000, 8000, 16000, 32000, 64000];
       const bucketOf = (ms: number): string => String(BOUNDS.find((b) => ms <= b) ?? 'inf');
-      for (const k of ['firstOutputMs', 'totalMs']) {
+      expect(tally(rows.filter((r) => r.servedTier !== null).map((r) => r.servedTier))).toEqual(row.servedTier);
+      expect(row.servedTier.priority, 'CONTROL: a tier was named').toBe(1);
+      expect(rows.filter((r) => r.reasoningMs !== null), 'CONTROL: one response reasoned first').toHaveLength(1);
+      for (const k of ['firstOutputMs', 'reasoningMs', 'totalMs']) {
         const rebuilt: Json = Object.fromEntries(Object.keys(row[k] as Json).map((b) => [b, 0]));
         for (const r of rows) if (r[k] !== null) rebuilt[bucketOf(r[k] as number)] += 1;
         expect(rebuilt, k).toEqual(row[k]);
