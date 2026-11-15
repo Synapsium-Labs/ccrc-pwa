@@ -11,7 +11,7 @@
 # is waiting on) and never held across a fork the arm does not reap. A miss
 # publishes nothing; there is no unlocked fallback. The THIRD (D4, #757): the roster card, one `_hook_timeout 4` server
 # read (`ccrc-api runs list`) on compact, resume and clear of a non-child session, and on its wake arm (R-5a, D-8201: a server wake prompt after an idle compaction), fail-open
-# (no roster line on any failure), made even when unarmed (shadow). The FOURTH (Overlord W1a): the start report, a send on a non-child SessionStart and a resend pass on it and on UserPromptSubmit, all inside one 4 s budget (`_hook_start_report`), fail-open. The FIFTH (Overlord W1a, the anchor piece): the anchor, one `_hook_timeout 4` read
+# (no roster line on any failure), made even when unarmed (shadow). The FOURTH (Overlord W1a): the start report, a send on a non-child SessionStart and a resend pass on it and on UserPromptSubmit, all inside at most 4 s, and since the anchor piece inside what the invocation's one network budget has left (`_hook_start_report`), fail-open. The FIFTH (Overlord W1a, the anchor piece): the anchor, one `_hook_timeout 4` read
 # (`ccrc-api card --anchor`) on a non-child SessionStart, and on the first UserPromptSubmit after an automatic compaction
 # that brought no start (`_hook_anchor_owed`, after the hookstate write), fail-open (today's role card, no prompt context).
 # The THIRD, FOURTH and FIFTH share ONE network budget per invocation (`_hook_net_bound`, HOOK_NET_BUDGET_MS, 8 s, the
@@ -3288,7 +3288,7 @@ _hook_anchor_fetch() {   # <form: start|prompt|fork> -> ANCHOR_WORD (text, dark,
   _hook_net_bound 4000 || return 1
   out=$(_hook_timeout "$NET_B" "$HOME/.local/bin/ccrc-api" card --anchor --form "$1" 2>/dev/null) || { (( $? == 124 )) && HOOK_NET_HUNG=1; return 0; }
   { IFS= read -r ANCHOR_WORD; IFS= read -r -d '' ANCHOR_TEXT; } < <(jq -j --arg f "$1" 'if .ok != true or .part != "anchor" or .form != $f then empty elif .dark == true then "dark\n"
-    elif .live == true then "live\n" elif (.text | type) == "string" and (.text | startswith("ccrc-anchor: ")) then "text\n", .text else empty end' <<<"$out" 2>/dev/null) 2>/dev/null
+    elif .live == true and $f == "fork" then "live\n" elif (.text | type) == "string" and (.text | startswith("ccrc-anchor: ")) then "text\n", .text else empty end' <<<"$out" 2>/dev/null) 2>/dev/null
   return 0
 }
 _hook_roster_card() {   # <event word> -> sets CARD_ROSTER (armed) or appends the shadow log (unarmed); 0 on every path
@@ -6187,8 +6187,9 @@ fi
 # (m-B10, slug prompt-fetch-after-hookstate), and prints it as this prompt's one envelope. A `dark` answer clears the mark
 # with nothing printed; no answer keeps it for the next prompt, at most ANCHOR_OWED_TRIES prompts (the count in the
 # mark). A prompt whose roster wake printed keeps the mark untouched: one envelope per event. So does a read the network
-# budget did not start (fix round 1, F5): no try was spent. A purge during the read takes the row's `generation` first,
-# so a mark written after it is removed again (F6), as the start report's spool is.
+# budget did not start (fix round 1, F5): no try was spent. No purge orphans a mark the try count rewrites, by the start
+# report's two-sided rule: a purge that took `generation` before the rewrite is seen by the look after it, here (F6),
+# and one that has not yet taken it removes the mark once more after `generation` (`_reg_purge`; review 2073 N2).
 _hook_anchor_owed() {   # UserPromptSubmit: prints at most one envelope carrying the prompt anchor; 0 on every path
   local m="$REG/$id.anchor-owed" t="" j=""
   { IFS= read -r t < "$m"; } 2>/dev/null; [[ "$t" =~ ^[0-9]$ ]] || t=0

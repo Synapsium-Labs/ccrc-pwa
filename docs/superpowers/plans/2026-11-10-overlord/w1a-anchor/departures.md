@@ -74,6 +74,14 @@ coordinator issued it. The coordinator folds these into the ledger.
   once a read has run out its bound (`timeout`'s 124 sets `HOOK_NET_HUNG`, set empty at load, so the environment cannot
   set it: F7). A start report the budget does not start stays spooled, as one with no time left did; an owed read the
   budget does not start keeps its try. A refusal or a fast failure is no hang, and the next read runs as before.
+  ACCEPTED COST (review 2073 N1, the coordinator's ruling): on a resume, clear or compact start the anchor's and the roster
+  card's reads come first, so the start report gets 8 - 2x seconds when the server answers each read in x seconds. At
+  x under about 2.7 s it is sent as before; from about 2.7 s to 3.5 s its send starts with the second or so left and can
+  be cut off mid-flight (`timeout`'s 124, which also marks the server hung for the rest of the invocation); from 3.5 s it
+  never starts. Either way the report stays in the spool with no try spent and none dropped, and the next prompt resends
+  it after the back-off with a fresh budget (the server takes a report once by its `reportId`): the start reaches the
+  server late, and the lane mints late, only while the server is already slow. A startup start has one read before the
+  report and is unaffected. Nothing in the hook works round it.
 - **owed-tries-in-mark.** The mark holds the tries already spent (0 to 2); a third prompt with no answer removes it.
 - **a-child-spends-its-mark.** `_hook_compact_pre_line` marks on a main-scope `auto` line whoever the session is; a
   child's prompt makes no read (the eligibility rule) and spends the mark within three prompts.
@@ -81,8 +89,12 @@ coordinator issued it. The coordinator folds these into the ledger.
   exactly `auto` (the event line records a missing trigger as `auto`), and never opened when a FIFO, a symlink or a
   directory stands at its path (the siblings' rule in the same lock: an open of a FIFO would block inside the held
   lock). A start whose anchor read answered clears it whatever its source, a fork included, so a later prompt never
-  prints a second anchor, nor the original's in a forked copy. After the owed read's try-count write the row's
-  `generation` is looked at again, and the mark removed if a purge took the row during the read.
+  prints a second anchor, nor the original's in a forked copy. No purge orphans the mark, by the start report's
+  two-sided rule: after the owed read's try-count write the row's `generation` is looked at again, and the mark removed
+  if a purge took it first (F6); and `_reg_purge` removes the mark once more after `generation`, in the one `rm` call it
+  already makes for `joined`, `joinedprev`, `deleg` and `startpending`, so a rewrite that lands after its glob loop and
+  before `generation` goes is taken too (review 2073 N2; `ccd-lifecycle-purge.test.ts`). The hook accepts `live` only as
+  a fork's answer (review 2073 N4): a `live` on the start or prompt form is no answer.
 - **anchor-on-its-own-lines** (fix round 1, F9). A newline, not a space, joins the anchor to the next slot, so its lines
   stay lines; the pinned sum (1500 + 1 + ...) counts that one character as before.
 

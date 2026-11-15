@@ -309,6 +309,19 @@ describe('an older server\'s card page is no anchor (fix round 1, F1)', () => {
     for (const [source, card] of Object.entries(BEFORE)) expect(run(start(source)), source).toBe(envelope('SessionStart', card));
   });
 
+  it('N4: `live` is a fork\'s word only: a start or prompt answer of `live` is no answer, so the role card stands and the mark stays', () => {
+    const liveAs = (form: Form): string => JSON.stringify({ ok: true, part: 'anchor', form, live: true });
+    answer('start', liveAs('start'));
+    for (const source of ['startup', 'resume', 'clear', 'compact']) {
+      fs.writeFileSync(owed(), '0\n');
+      expect(run(start(source)), source).toBe(envelope('SessionStart', BEFORE[source]!));
+      expect(fs.readFileSync(owed(), 'utf8'), source).toBe('0\n');
+    }
+    answer('prompt', liveAs('prompt'));
+    expect(run(prompt())).toBe('');
+    expect(fs.readFileSync(owed(), 'utf8'), 'a try spent, as on no answer').toBe('1\n');
+  });
+
   it('a compact start keeps the owed mark, and so does every source: an answer without the proof is no answer', () => {
     for (const f of ['start', 'fork'] as const) answer(f, OLD_CARD_PAGE);
     for (const source of Object.keys(BEFORE)) {
