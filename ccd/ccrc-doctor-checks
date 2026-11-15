@@ -3431,7 +3431,7 @@ _check_skills() {
     done
   done <<< "$rows"
   # The Overlord's skill is staged once, outside every home (Overlord W1); `install-overlord-skill.sh` is its one writer.
-  # It is owed where the spine staged the other skill trees: `_inst_skills` (and deploy.sh's fallback) places
+  # It is owed where the spine staged the other skill trees, since `_inst_skills` (and deploy.sh's fallback) places
   # `coordinator-skill` beside it on every run, so a box without that tree was never installed by either lane.
   local reg="$HOME/.cc-sessions" staged="" said_staged=""
   if [ -d "$reg/coordinator-skill" ]; then
