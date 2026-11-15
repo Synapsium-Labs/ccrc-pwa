@@ -24,7 +24,7 @@ departure is a slug; the coordinator mints the numbers.
 - **`rank-body-parser-in-shared`**: the rank door's body is read by `parseRankWrite` (and `isCalendarDate`) in
   `shared/portfolio.ts`, a pure parser beside the wire, so the door decides nothing and the console can check a write
   before it sends one. The plan lists the checks in the door. The route suite's refusal cases cover every arm.
-- **`unknown-programme-inside-the-write`**: the "every `order` slug names a `programs` row" check (Task 3, item 4) runs
+- **`unknown-slug-inside-the-write`**: the "every `order` slug names a `programs` row" check (Task 3, item 4) runs
   inside `setPortfolioRank`'s transaction, before the revision check, and the door answers it `not-found`. The plan
   places it in the door. Inside the transaction no programme can vanish between the check and the write, and the store
   gains no new delegate.
@@ -38,3 +38,16 @@ departure is a slug; the coordinator mints the numbers.
 - **`live-ask-needs-a-waiting-hookstate`**: `FleetWatcher#liveAskKey` answers `null` for a hookstate that is not
   `waiting` even when it still carries an ask, as the plan's port text says ("the ask the child's newest hookstate is
   `waiting` on").
+
+## The first CI run
+
+The first fast run on the PR was red on three checks the brief's gate list did not name, each a census the build missed
+(shallow), and each fixed in one round:
+
+- `pwa/test/item-view.test.tsx`: every ledger route word needs a console sentence, so `rank-changed` gained one in
+  `pwa/src/lib/refusalWords.ts#LEDGER_REFUSAL_TEXT`.
+- `server/test/mail-routes.test.ts`: every quoted kebab word under `server/src/coord` must be declared. The writer's
+  "no such programme" answer is now a field (`unknownSlug`), and its `rank-changed` reads `LEDGER_ROUTE_REFUSALS.rankChanged`.
+- `server/test/token-shared.test.ts`: the portfolio's seven-day closed-waves window (`portfolio.ts#WEEK_MS`) is a new
+  seven-day quantity; the coordinator ruled it in as a separate one (ask 437), the fifteenth holder. The push outbox adds
+  its own holder on its branch; whichever lands second keeps both and sets the count to sixteen.

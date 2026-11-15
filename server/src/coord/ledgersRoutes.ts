@@ -733,7 +733,7 @@ export function registerLedgerOperatorRoutes(app: FastifyInstance, deps: LedgerO
     if (!parsed.ok) return bad(reply, parsed.detail);
     const now = deps.now();
     const res = coord.setPortfolioRank(parsed.write, actor, now);
-    if (!res.ok && res.why === 'unknown-programme') return refuseRoute(reply, 'not-found', { detail: `no programme ${res.slug}` });
+    if (!res.ok && 'unknownSlug' in res) return refuseRoute(reply, 'not-found', { detail: `no programme ${res.unknownSlug}` });
     if (!res.ok) return refuseRoute(reply, LEDGER_ROUTE_REFUSALS.rankChanged, { revision: res.revision, detail: `the rank is at revision ${res.revision}: read it again` });
     return reply.code(200).send({ ok: true, revision: res.revision, portfolio: portfolioView(coord, now) });
   });

@@ -13,6 +13,7 @@
 import type { DatabaseSync } from 'node:sqlite';
 import { isRunKind } from '../../../shared/api.js';
 import { OPEN_ITEM_STATES } from '../../../shared/ledgers.js';
+import { LEDGER_ROUTE_REFUSALS } from '../../../shared/refusal.js';
 import {
   PORTFOLIO_WINDOW_DAYS, isServiceClass,
   type PortfolioAsk, type PortfolioFacts, type PortfolioItem, type PortfolioProgramme, type PortfolioRun, type RankRow, type RankWrite,
@@ -21,12 +22,12 @@ import type { LiveAskRead } from './ports.js';
 import { tx } from './tx.js';
 export type { LiveAskRead, PortfolioFacts, RankWrite };
 
-/** `setPortfolioRank`'s answer: the new revision; or, having written nothing, `unknown-programme` with the first `order` slug
- *  no `programs` row names, or `rank-changed` with the current revision. */
+/** `setPortfolioRank`'s answer: the new revision; or, having written nothing, `unknownSlug`, the first `order` slug no
+ *  `programs` row names (the door's `not-found`), or `rank-changed` with the current revision. */
 export type RankWriteResult =
   | { ok: true; revision: number }
-  | { ok: false; why: 'unknown-programme'; slug: string }
-  | { ok: false; why: 'rank-changed'; revision: number };
+  | { ok: false; unknownSlug: string }
+  | { ok: false; why: typeof LEDGER_ROUTE_REFUSALS.rankChanged; revision: number };
 
 interface RankRowRaw { program: string; position: number; cls: string; fixedDate: string | null; setAt: number; setBy: string }
 
@@ -40,9 +41,9 @@ export function setPortfolioRank(db: DatabaseSync, write: RankWrite, actor: stri
   return tx(db, () => {
     const exists = db.prepare('SELECT 1 FROM programs WHERE slug = ?');
     const unknown = write.order.find((e) => exists.get(e.slug) === undefined);
-    if (unknown !== undefined) return { ok: false, why: 'unknown-programme', slug: unknown.slug };
+    if (unknown !== undefined) return { ok: false, unknownSlug: unknown.slug };
     const revision = revisionOf(db);
-    if (write.basedOn !== revision) return { ok: false, why: 'rank-changed', revision };
+    if (write.basedOn !== revision) return { ok: false, why: LEDGER_ROUTE_REFUSALS.rankChanged, revision };
     const ordered = new Set(write.order.map((e) => e.slug));
     const del = db.prepare('DELETE FROM portfolio_rank WHERE program = ?');
     for (const slug of write.seen) if (!ordered.has(slug)) del.run(slug);
