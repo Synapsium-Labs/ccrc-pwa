@@ -81,7 +81,9 @@ async function scenario() {
   const notices = (): number => notifyLog.catchUp(notifyLog.epoch, 0).events.length;
   const toAwaiting = async () => { expect((await post('awaiting-review')).statusCode).toBe(200); };
   const toMerging = async () => { await toAwaiting(); expect((await post('merging')).statusCode).toBe(200); };
-  return { app, coord, id, post, state, events, notices, push, toAwaiting, toMerging };
+  /** The second-ejection asks (`landing-ejection-ask.test.ts`): a wrongly successful retreat over a row already ejected once raises one. */
+  const asks = () => notifyLog.catchUp(notifyLog.epoch, 0).events.filter((x) => x.title.startsWith('Landing: '));
+  return { app, coord, id, post, state, events, notices, push, toAwaiting, toMerging, asks };
 }
 
 type Fx = Awaited<ReturnType<typeof scenario>>;
@@ -148,15 +150,53 @@ describe('POST /api/runs/:id/advance carries the landing refusals over HTTP (rev
   });
 
   it.each([['bare', {}], ['named', { ejection: { base: 'b'.repeat(40), kind: 'new-head' } }]] as const)(
-    'a %s stale-head retreat over an unreadable projection: 503 landing-projection-unreadable, recovery restart, no mayApply, the run stays at merging',
+    'a %s stale-head retreat over an unreadable projection: 503 landing-projection-unreadable, recovery repair, no mayApply, the run stays at merging',
     async (_n, extra) => {
       const f = await scenario(); app = f.app;
       await f.toMerging();
-      // the pin names another head than the episode's, and a retained field no longer reads
-      f.coord.db.prepare("UPDATE landing_entries SET pinnedSha = ?, handoffCommit = 'not-a-hash' WHERE pr = 7").run('c'.repeat(40));
+      // the pin names another head than the episode's, and a retained field no longer reads; one ejection already counted,
+      // so a retreat that wrongly went through would raise the second-ejection ask
+      f.coord.db.prepare("UPDATE landing_entries SET pinnedSha = ?, handoffCommit = 'not-a-hash', ejections = 1 WHERE pr = 7").run('c'.repeat(40));
       const before = measure(f);
-      expectLandingRefusal(await f.post('working', extra), { code: 'landing-projection-unreadable', recovery: 'restart' });
+      expectLandingRefusal(await f.post('working', extra), { code: 'landing-projection-unreadable', recovery: 'repair' });
       expectNothingLeft(f, before);
+      expect(f.asks()).toHaveLength(0);
       expect(before.state).toBe('merging');
+    });
+});
+
+describe('an equal-head retreat over a row that does not read is refused before the run moves (wave 5i, M16)', () => {
+  const damage = {
+    handoffCommit: "UPDATE landing_entries SET handoffCommit = 'not-a-hash', ejections = 1 WHERE pr = 7",
+    setBy: "UPDATE landing_entries SET setBy = '', ejections = 1 WHERE pr = 7",
+  } as const;
+  const rawRow = (f: Fx): unknown => f.coord.db.prepare('SELECT * FROM landing_entries WHERE pr = 7').get();
+  it.each([
+    ['bare', 'handoffCommit', {}], ['named', 'handoffCommit', { ejection: { base: 'b'.repeat(40), kind: 'new-head' } }],
+    ['bare', 'setBy', {}], ['named', 'setBy', { ejection: { base: 'b'.repeat(40), kind: 'new-head' } }],
+  ] as const)('a %s retreat, the pin at the episode head, a corrupt %s: 503 landing-projection-unreadable, recovery repair; nothing moves, no ask',
+    async (_n, field, extra) => {
+      const f = await scenario(); app = f.app;
+      await f.toMerging();
+      f.coord.db.prepare(damage[field]).run();
+      const before = measure(f);
+      const row = rawRow(f);
+      expectLandingRefusal(await f.post('working', extra), { code: 'landing-projection-unreadable', recovery: 'repair' });
+      expectNothingLeft(f, before);
+      expect(f.asks()).toHaveLength(0);
+      expect(rawRow(f)).toEqual(row);
+      expect(before.state).toBe('merging');
+    });
+
+  it.each([['bare', {}], ['named', { ejection: { base: 'b'.repeat(40), kind: 'new-head' } }]] as const)(
+    'positive control: a readable %s equal-head retreat over a row ejected once really is the second ejection and raises its ask',
+    async (_n, extra) => {
+      const f = await scenario(); app = f.app;
+      await f.toMerging();
+      f.coord.db.prepare('UPDATE landing_entries SET ejections = 1 WHERE pr = 7').run();
+      expect((await f.post('working', extra)).statusCode).toBe(200);
+      expect(f.state()).toBe('working');
+      expect(f.asks()).toHaveLength(1);
+      expect(f.asks()[0]).toMatchObject({ title: 'Landing: demo #7 ejected twice' });
     });
 });

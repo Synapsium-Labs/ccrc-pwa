@@ -265,6 +265,8 @@ export const RAN_CARRY_READERS: readonly string[] = [
   'cutShort', 'sweepFailureReason', 'failureDetail', 'classifyAddFailure', 'classifyTitleFailure', 'archiveOutcome',
   // The project add's reader (`server/src/projectAdd.ts`), `classifyAddFailure`'s shape: `ran === false` is `other` first.
   'classifyProjectAddFailure',
+  // The landed reader's call decider (`server/src/coord/landed.ts`): `ran === false` is `not-ran` first, the lane acts on it.
+  'landedCallStep',
 ];
 
 /** `classify` is a generic name: it counts as a carry reader only in the file that defines the one that reads `ran` first. */

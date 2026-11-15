@@ -4119,6 +4119,16 @@ describe('landing order wave 5e: the landing line read before every landing', ()
     'A PR with no entry, which a run that entered `merging` before the line existed leaves, lands as the verdict says, and your turn\'s text names the missing entry.',
     'A read answered 404 comes from a server older than the line: read it as no entry, and land the same way.',
     'The order it answers is read and not yet acted on: which entry lands next is the line\'s head, a later stage\'s.',
+    'The same read answers a `binding`, computed on that read from the line\'s facts and the server\'s latest control measurement.',
+    'On `binding.mode: \'ready\'`, land only when its `entryId`, `pr` and full `pinnedSha` identify this run\'s own pinned entry and the head you bind; on a ready `fixesMain` exception, still run the unchanged canonical required-checks gate above.',
+    'A project is positively opted in to the binding head when its `binding` is present and anything but `inert`, or when `$REG/landing/<project>/lander` exists; that is not the lineage `enabled` marker, and the two are independent.',
+    'On a project that is positively opted in, a `held` binding, a `binding` naming a PR that is not this run\'s, an answer you cannot read, or no entry for this PR means stop and report what you read to the operator; never choose a successor.',
+    'A `held` binding, `opt-in-unknown` included, stops. A missing `binding` (a server older than wave 5i) is the only fallback to the checks above, and on a project whose `lander` exists it still stops; `ccrc rollout --server-first` avoids the window in which a server older than wave 5i answers without one.',
+    'An `inert` binding on a project whose `lander` exists stops too.',
+    'An `inert` binding where `lander` does not exist (the opt-in marker proven absent) leaves the checks above in force exactly as before: nothing here removes a project\'s earlier line and pause checks.',
+    'A 404 stays the older-server fallback.',
+    'A next-to-land mail restarts this read and check from the top; it never renews a spent wait on a verdict.',
+    'Apply the same head condition before the admin-merge door below; that door is not widened.',
   ].join(' ');
 
   it('pins the whole landing-line paragraph, between the boundary paragraph and the admin-merge door paragraph (the line pin)', () => {

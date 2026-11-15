@@ -9,7 +9,7 @@ import { describe, it, expect } from 'vitest';
 import { existsSync, readFileSync } from 'node:fs';
 import { builtinModules } from 'node:module';
 import path from 'node:path';
-import { identifierReferences, parseSource, type ImportEdge, type ParsedFile } from './scan/parse.js';
+import { identifierReferences, parseSource, ts, type ImportEdge, type ParsedFile } from './scan/parse.js';
 import { callsIn, inlinedSourceOf, parsedFile, sqlStatementsInFile, symbolOf, REPO_ROOT } from './scan/symbols.js';
 import { walkSrc } from './rings/walkSrc.js';
 
@@ -38,6 +38,126 @@ const writes = (re: RegExp) => FILES.flatMap((f) => sqlStatementsInFile(f))
   .filter((q) => !isSchema(q) && ['INSERT', 'UPDATE', 'REPLACE'].includes(q.verb) && re.test(q.source));
 const allWrites = (tableRe: RegExp) => FILES.flatMap((f) => sqlStatementsInFile(f))
   .filter((q) => !isSchema(q) && ['INSERT', 'UPDATE', 'REPLACE', 'DELETE'].includes(q.verb) && tableRe.test(q.table ?? ''));
+
+// ---- wave 5i Task 7: the callers of advanceLanding, read as AST spans and resolved through their bindings -------------
+const LANDING_CALLERS: Record<string, { symbol: string; shape: 'run arm' | 'land object' | 'closeLandingOf value' }> = {
+  'routes.ts': { symbol: 'advanceAct', shape: 'run arm' },
+  'landedLane.ts': { symbol: 'landedPass', shape: 'land object' },
+  'close.ts': { symbol: 'landOnClose', shape: 'closeLandingOf value' },
+};
+
+/** Parentheses, `as`, `satisfies`, `<T>x` and a non-null, taken off: the node the value actually is. */
+function unwrapExpr(n: ts.Expression): ts.Expression {
+  let e = n;
+  while (ts.isParenthesizedExpression(e) || ts.isAsExpression(e) || ts.isSatisfiesExpression(e) || ts.isTypeAssertionExpression(e) || ts.isNonNullExpression(e)) e = e.expression;
+  return e;
+}
+/** True when `e` sits under an `as` (or `<T>x`) cast anywhere between itself and the value it returns. A cast hides the
+ *  shape; `satisfies` and parentheses do not. */
+function castOf(n: ts.Expression): boolean {
+  let e = n;
+  while (ts.isParenthesizedExpression(e) || ts.isAsExpression(e) || ts.isSatisfiesExpression(e) || ts.isTypeAssertionExpression(e) || ts.isNonNullExpression(e)) {
+    if (ts.isAsExpression(e) || ts.isTypeAssertionExpression(e)) return true;
+    e = e.expression;
+  }
+  return false;
+}
+const propName = (m: ts.ObjectLiteralElementLike): string | null =>
+  m.name !== undefined && (ts.isIdentifier(m.name) || ts.isStringLiteralLike(m.name)) ? m.name.text : null;
+const isLandKind = (m: ts.ObjectLiteralElementLike): boolean =>
+  ts.isPropertyAssignment(m) && propName(m) === 'kind' && ts.isStringLiteralLike(m.initializer) && m.initializer.text === 'land';
+
+/** The scope container of a declaration: the nearest block, case block, loop, function or file holding it. */
+function scopeOf(n: ts.Node): ts.Node {
+  let p = n.parent;
+  while (!(ts.isBlock(p) || ts.isSourceFile(p) || ts.isModuleBlock(p) || ts.isCaseBlock(p) || ts.isForStatement(p) || ts.isForOfStatement(p) || ts.isForInStatement(p) || ts.isFunctionLike(p))) p = p.parent;
+  return p;
+}
+
+/**
+ * The binding-aware caller check (wave 5i Task 7). It finds the ONE `advanceLanding` call in the caller symbol the file
+ * names, takes its argument as a whole AST node (never a character window), and holds the argument to the caller's shape:
+ * `advanceAct` passes a run arm (an object literal with `runId`, no `kind`, no spread, no cast); `landedPass` passes a land
+ * object (an object literal with `kind: 'land'` and `expect`, no spread, no cast); `landOnClose` passes an identifier whose
+ * innermost lexical binding is a `const` initialised by `closeLandingOf(…)`, through parentheses, `satisfies`, a non-null
+ * and immutable `const` aliases, and refuses a parameter shadow, a `let`/`var`, a reassignment, a second declaration of
+ * the name, a cast, a computed or unresolved expression. Throws a message naming what failed.
+ */
+export function assertLandingCallerBindings(text: string, file: string): void {
+  const spec = LANDING_CALLERS[path.basename(file)];
+  if (spec === undefined) throw new Error(`${file}: no landing caller is declared for this file`);
+  const sf = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true);
+  const parsed = parseSource(text, file);
+  const syms = parsed.symbols.filter((s) => s.name === spec.symbol || s.name.endsWith(`.${spec.symbol}`));
+  if (syms.length !== 1) throw new Error(`${file}: expected one symbol ${spec.symbol}, found ${syms.length}`);
+  const sym = syms[0]!;
+  const calls: ts.CallExpression[] = [];
+  const find = (n: ts.Node): void => {
+    if (ts.isCallExpression(n) && n.getStart(sf) >= sym.start && n.end <= sym.end
+      && ((ts.isIdentifier(n.expression) && n.expression.text === 'advanceLanding')
+        || (ts.isPropertyAccessExpression(n.expression) && n.expression.name.text === 'advanceLanding'))) calls.push(n);
+    ts.forEachChild(n, find);
+  };
+  find(sf);
+  if (calls.length !== 1) throw new Error(`${file}#${spec.symbol}: expected exactly one advanceLanding call, found ${calls.length}`);
+  const call = calls[0]!;
+  if (call.arguments.length !== 1) throw new Error(`${file}#${spec.symbol}: advanceLanding takes one argument, got ${call.arguments.length}`);
+  const arg = call.arguments[0]!;
+  const fail = (why: string): never => { throw new Error(`${file}#${spec.symbol}: ${why}`); };
+
+  if (spec.shape === 'run arm' || spec.shape === 'land object') {
+    const obj = unwrapExpr(arg);
+    if (!ts.isObjectLiteralExpression(obj) || castOf(arg)) return fail(`the ${spec.shape} must be an object literal at the call, uncast`);
+    const props = obj.properties;
+    if (props.some((m) => ts.isSpreadAssignment(m) || propName(m) === null)) return fail(`the ${spec.shape} has a spread or computed member`);
+    const names = props.map((m) => propName(m));
+    if (spec.shape === 'run arm') {
+      if (!names.includes('runId') || names.includes('kind') || props.some(isLandKind)) fail("the run arm must carry runId and no 'kind' member");
+    } else if (!props.some(isLandKind) || !names.includes('expect')) fail("the land object must carry kind: 'land' and expect");
+    return;
+  }
+
+  // landOnClose: the value produced by closeLandingOf, resolved through its innermost lexical binding.
+  const producer = (name: string, from: ts.Node, depth: number): void => {
+    if (depth > 4) fail(`closeLandingOf: the alias chain of '${name}' is too long`);
+    const decls: ts.VariableDeclaration[] = [];
+    const params: ts.ParameterDeclaration[] = [];
+    const assigns: ts.Node[] = [];
+    const collect = (n: ts.Node): void => {
+      if (n.getStart(sf) >= sym.start && n.end <= sym.end) {
+        if (ts.isVariableDeclaration(n) && ts.isIdentifier(n.name) && n.name.text === name) decls.push(n);
+        if (ts.isParameter(n) && ts.isIdentifier(n.name) && n.name.text === name) params.push(n);
+        if (ts.isBinaryExpression(n) && n.operatorToken.kind >= ts.SyntaxKind.FirstAssignment && n.operatorToken.kind <= ts.SyntaxKind.LastAssignment
+          && ts.isIdentifier(unwrapExpr(n.left)) && (unwrapExpr(n.left) as ts.Identifier).text === name) assigns.push(n);
+        if ((ts.isPrefixUnaryExpression(n) || ts.isPostfixUnaryExpression(n)) && (n.operator === ts.SyntaxKind.PlusPlusToken || n.operator === ts.SyntaxKind.MinusMinusToken)
+          && ts.isIdentifier(n.operand) && n.operand.text === name) assigns.push(n);
+      }
+      ts.forEachChild(n, collect);
+    };
+    collect(sf);
+    // the parameters of the symbol itself count: the scan over the symbol's span includes its own signature
+    if (params.length > 0) fail(`closeLandingOf: '${name}' is a parameter, which shadows the binding`);
+    if (assigns.length > 0) fail(`closeLandingOf: '${name}' is reassigned`);
+    if (decls.length !== 1) fail(`closeLandingOf: '${name}' has ${decls.length} declarations; exactly one producer is allowed`);
+    const decl = decls[0]!;
+    // innermost lexical binding: the declaration's scope must enclose the use, and it must precede it
+    const scope = scopeOf(decl);
+    if (!(scope.getStart(sf) <= from.getStart(sf) && from.end <= scope.end) || decl.getStart(sf) > from.getStart(sf)) fail(`closeLandingOf: '${name}' does not resolve to a binding visible at the call`);
+    const list = decl.parent;
+    if (!ts.isVariableDeclarationList(list) || (list.flags & ts.NodeFlags.Const) === 0) fail(`closeLandingOf: '${name}' is not a const`);
+    if (decl.initializer === undefined) fail(`closeLandingOf: '${name}' has no initialiser`);
+    const init = decl.initializer!;
+    if (castOf(init)) fail(`closeLandingOf: '${name}' is cast, which hides what it holds`);
+    const value = unwrapExpr(init);
+    if (ts.isIdentifier(value)) return producer(value.text, decl, depth + 1);
+    if (ts.isCallExpression(value) && ts.isIdentifier(value.expression) && value.expression.text === 'closeLandingOf') return;
+    fail(`closeLandingOf: '${name}' is not bound from closeLandingOf(...)`);
+  };
+  const value = unwrapExpr(arg);
+  if (castOf(arg)) fail('closeLandingOf: the argument is cast');
+  if (!ts.isIdentifier(value)) fail('closeLandingOf: the argument is not an identifier bound from closeLandingOf(...)');
+  producer((value as ts.Identifier).text, call, 0);
+}
 
 describe('the landing line has one writer (landing order wave 5e, D-7614)', () => {
   it('pinnedSha has one writer, advanceLanding, but for the genuine no-run creation INSERT (5f)', () => {
@@ -177,9 +297,6 @@ describe('the landing line has one writer (landing order wave 5e, D-7614)', () =
     expect(calls.every(inWriter)).toBe(true);
   });
 
-  // Only code may satisfy the land-arm check: a comment is a request, a red suite is a mechanism.
-  const stripComments = (t: string): string => t.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '');
-
   const CLOSE = 'server/src/coord/close.ts';
   const LANE = 'server/src/coord/landedLane.ts';
   const CLOSE_LAND = 'landOnClose';
@@ -196,14 +313,69 @@ describe('the landing line has one writer (landing order wave 5e, D-7614)', () =
     expect(within(ROUTES, ADVANCE_ACT), 'advanceAct').toHaveLength(1);
     expect(within(CLOSE, CLOSE_LAND), 'close.ts#landOnClose').toHaveLength(1);
     expect(within(LANE, LANE_PASS), 'landedLane.ts#landedPass').toHaveLength(1);
-    const act = symbolOf(ROUTES, ADVANCE_ACT);
-    const actText = stripComments(parsedFile(ROUTES).text.slice(within(ROUTES, ADVANCE_ACT)[0]!.start, act.end).slice(0, 400));
-    expect(actText).not.toMatch(/kind: 'land'/);
-    // the other two compose a land command: the lane spells it, the close takes it from the one builder
-    expect(stripComments(parsedFile(LANE).text.slice(within(LANE, LANE_PASS)[0]!.start, within(LANE, LANE_PASS)[0]!.start + 400))).toMatch(/kind: 'land'/);
-    const closeText = stripComments(symbolOf(CLOSE, CLOSE_LAND).text);
-    expect(closeText).toMatch(/closeLandingOf\(/);
-    expect(closeText, 'the close passes the value bound from closeLandingOf, never a command of its own').toMatch(/advanceLanding\(\s*land\s*\)/);
+    // wave 5i Task 7: the argument is read as a whole AST span and resolved through its binding, never a 400-character window.
+    for (const file of [ROUTES, LANE, CLOSE]) {
+      expect(() => assertLandingCallerBindings(parsedFile(file).text, file), file).not.toThrow();
+    }
+  });
+
+  describe('assertLandingCallerBindings reads the argument, not its spelling (wave 5i Task 7)', () => {
+    const closeText = (): string => parsedFile(CLOSE).text;
+    const routesText = (): string => parsedFile(ROUTES).text;
+    const laneText = (): string => parsedFile(LANE).text;
+    const swap = (text: string, from: string, to: string): string => {
+      expect(text.split(from).length - 1, `the probe's anchor is gone: ${from}`).toBe(1);
+      return text.replace(from, to);
+    };
+    const PRODUCER = 'const land = closeLandingOf({ state, facts, project: run.project, at });';
+    /** A one-function probe for the close arm: `body` replaces the binding line of `landOnClose`. */
+    const closeProbe = (body: string, param = 'line: CcdPrLine'): string =>
+      `function landOnClose(deps: D, run: RunRow, state: 'done', ${param}, at: number): void {\n${body}\n  deps.coord.advanceLanding(land);\n}\n`;
+
+    it('the real close, route and lane pass; a producer rebound to a cast run arm throws, and so does a padded run arm', () => {
+      expect(() => assertLandingCallerBindings(closeText(), CLOSE)).not.toThrow();
+      const rebound = swap(closeText(), PRODUCER, "const land = { runId: 1, to: 'done', causedBy: 'coordinator' } as unknown as LandingLand;");
+      expect(() => assertLandingCallerBindings(rebound, CLOSE)).toThrow(/closeLandingOf/);
+      const padded = swap(routesText(), "causedBy: 'coordinator', landing })", `causedBy: 'coordinator', landing,${' '.repeat(600)}kind: 'land' })`);
+      expect(() => assertLandingCallerBindings(padded, ROUTES)).toThrow(/run arm/);
+      const pastTheWindow = swap(laneText(), "kind: 'land', project: cand.project", `project: cand.project, ${'/* pad */ '.repeat(60)}kind: 'land'`);
+      expect(() => assertLandingCallerBindings(pastTheWindow, LANE), 'a land object whose kind moves past 400 characters is still read').not.toThrow();
+    });
+
+    it('the lane must pass a land object and the route a run arm: each refuses the other\'s shape', () => {
+      expect(() => assertLandingCallerBindings(swap(laneText(), "kind: 'land', project: cand.project", "kind: 'run', project: cand.project"), LANE)).toThrow(/land object/);
+      expect(() => assertLandingCallerBindings(swap(routesText(), 'runId: id, to, causedBy', 'to, causedBy'), ROUTES)).toThrow(/run arm/);
+      expect(() => assertLandingCallerBindings(swap(routesText(), 'coord.advanceLanding({ runId: id', 'coord.advanceLanding({ ...extra, runId: id'), ROUTES)).toThrow(/run arm/);
+    });
+
+    it('the close accepts the immutable forms: parentheses, satisfies, a non-null and a const alias', () => {
+      expect(() => assertLandingCallerBindings(closeProbe(`  ${PRODUCER}`), CLOSE)).not.toThrow();
+      expect(() => assertLandingCallerBindings(closeProbe('  const land = (closeLandingOf({ state }) satisfies LandingLand);'), CLOSE)).not.toThrow();
+      expect(() => assertLandingCallerBindings(closeProbe('  const made = closeLandingOf({ state });\n  const land = made;'), CLOSE)).not.toThrow();
+      expect(() => assertLandingCallerBindings(closeProbe('  const land = closeLandingOf({ state })!;'), CLOSE)).not.toThrow();
+    });
+
+    it('the close refuses a parameter shadow, a reassignment, a second producer, a computed or unresolved expression', () => {
+      for (const [what, text, phrase] of [
+        ['a parameter named land', closeProbe(`  ${PRODUCER}`, 'land: LandingLand'), /parameter/],
+        ['a let binding', closeProbe('  let land = closeLandingOf({ state });'), /not a const/],
+        ['a reassignment', closeProbe(`  ${PRODUCER}\n  (land as unknown) = other;`), /reassigned/],
+        ['a second producer', closeProbe(`  ${PRODUCER}\n  { const land = makeOther(); void land; }`), /declarations/],
+        ['an inner shadow', closeProbe(`  ${PRODUCER}\n  if (state) { const land = other; void land; }`), /declarations/],
+        ['an alias of a cast', closeProbe('  const made = other as LandingLand;\n  const land = made;'), /cast/],
+        ['no binding', closeProbe('  void 0;'), /declarations/],
+      ] as const) expect(() => assertLandingCallerBindings(text, CLOSE), what).toThrow(phrase);
+      const computed = `function landOnClose(deps: D): void {\n  deps.coord.advanceLanding(pick());\n}\n`;
+      expect(() => assertLandingCallerBindings(computed, CLOSE), 'a computed argument').toThrow(/closeLandingOf/);
+      const element = `function landOnClose(deps: D): void {\n  const lands = [closeLandingOf({})];\n  deps.coord.advanceLanding(lands[0]);\n}\n`;
+      expect(() => assertLandingCallerBindings(element, CLOSE), 'an element access').toThrow(/closeLandingOf/);
+    });
+
+    it('a file with no caller, two callers, or a file the census does not know is a refusal', () => {
+      expect(() => assertLandingCallerBindings('function landOnClose(): void {}', CLOSE)).toThrow(/advanceLanding/);
+      expect(() => assertLandingCallerBindings(closeProbe(`  ${PRODUCER}\n  deps.coord.advanceLanding(land);`), CLOSE)).toThrow(/advanceLanding/);
+      expect(() => assertLandingCallerBindings('', 'server/src/coord/other.ts')).toThrow(/no landing caller/);
+    });
   });
 
   it('advanceLanding decides the edge before it writes, in one tx', () => {
@@ -212,6 +384,103 @@ describe('the landing line has one writer (landing order wave 5e, D-7614)', () =
     expect(at('transitionsFor(')).toBeLessThan(at('this.advanceInner('));
     expect(at('this.advanceInner(')).toBeLessThan(at('INSERT INTO landing_entries'));
     expect(src.split('tx(this.db').length - 1).toBe(1);
+  });
+});
+
+describe('wave 5i ownership: one writer of mainRedHold, terminal repair inside advanceLanding, pure policy modules (Task 7)', () => {
+  const CONTROL_TX = 'server/src/coord/landingControlTx.ts';
+  const NODE_BUILTINS = new Set(builtinModules.map((m) => m.replace(/^node:/, '')));
+  const isNodeBuiltin = (specifier: string): boolean => specifier.startsWith('node:') || NODE_BUILTINS.has(specifier.split('/')[0]!);
+  const valueEdges = (p: ParsedFile): ImportEdge[] => p.imports.filter((e) => {
+    if (e.kind === 'type-query' || e.typeOnly) return false;
+    return e.names.length === 0 || !e.names.every((n) => (e.typeNames ?? []).includes(n));
+  });
+  const CLOCK_AND_FS = new Set(['Date', 'performance', 'fs', 'require', 'readFileSync', 'writeFileSync', 'readFile', 'writeFile', 'setTimeout', 'setInterval']);
+  /** `Date.parse(text)` is a pure parse of a given string, not a clock read (`landed.ts#landedNoticeModeOf` parses a PR's mergedAt). */
+  const clockAndFs = (p: ParsedFile): string[] => identifierReferences(p.text, p.path, CLOCK_AND_FS)
+    .filter((x) => !(x.name === 'Date' && /\bDate\.parse\(/.test(p.text.split('\n')[x.line - 1] ?? '')))
+    .map((x) => `${x.line} ${x.name}`);
+  const STORE_NAMES = new Set(['CoordStore', 'db']);
+  const storeReaches = (p: ParsedFile): string[] => [
+    ...identifierReferences(p.text, p.path, STORE_NAMES).map((x) => `${x.line} ${x.name}`),
+    ...p.imports.filter((x) => /(^|\/)(store|db|schema)(\.js)?$/.test(x.specifier) && !x.typeOnly && x.kind !== 'type-query'
+      && !(x.names.length > 0 && x.names.every((n) => (x.typeNames ?? []).includes(n)))).map((x) => `${x.line} ${x.specifier}`),
+  ];
+
+  it('mainRedHold is written by ONE statement, the UPSERT in landingControlTx.ts, and operatorPaused is not in its SET', () => {
+    const marks = writes(/\bmainRedHold\b/i);
+    expect(marks.map((q) => `${q.verb} ${q.table} ${path.basename(q.file)}`)).toEqual(['INSERT landing_projects landingControlTx.ts']);
+    const flat = marks[0]!.source.replace(/\s+/g, ' ');
+    expect(flat).toMatch(/ON CONFLICT\(project\) DO UPDATE SET mainRedHold = excluded\.mainRedHold['"`]?$/);
+    expect(flat).not.toMatch(/operatorPaused/);
+    // and it is the only runtime write of the table at all: no second writer of either flag
+    expect(allWrites(/^landing_projects$/).map((q) => `${q.verb} ${path.basename(q.file)}`)).toEqual(['INSERT landingControlTx.ts']);
+  });
+
+  it('the transaction body is called only by CoordStore.applyLandingControl, inside its tx', () => {
+    const callers = FILES.flatMap((f) => parsedFile(f).calls.filter((c) => c.name === 'applyLandingControlTx').map((c) => ({ file: f, start: c.start })));
+    expect(callers).toHaveLength(1);
+    expect(callers.every(inSymbol('CoordStore.applyLandingControl'))).toBe(true);
+    const src = inlinedSourceOf(symbolOf(STORE, 'CoordStore.applyLandingControl'));
+    expect(src.indexOf('tx(this.db')).toBeGreaterThan(-1);
+    expect(src.indexOf('tx(this.db')).toBeLessThan(src.indexOf('applyLandingControlTx('));
+    // the sibling of nothing: the INSERT sits in the one body function
+    const body = symbolOf(CONTROL_TX, 'applyLandingControlTx');
+    expect(sqlStatementsInFile(CONTROL_TX).filter((q) => q.verb === 'INSERT' && q.start >= body.start && q.start < body.end)).toHaveLength(1);
+  });
+
+  it('terminal repair rides advanceLanding: its verdict is read inside the land arm before the one state/detail UPDATE, and its token is built once, in the facts', () => {
+    const src = inlinedSourceOf(symbolOf(STORE, WRITER));
+    const at = (n: string): number => { const i = src.indexOf(n); expect(i, n).toBeGreaterThan(-1); return i; };
+    expect(src.split('terminalRepairs.find(').length - 1).toBe(1);
+    expect(at('terminalRepairs.find(')).toBeLessThan(at('decideLandingLand('));
+    expect(at('decideLandingLand(')).toBeLessThan(at("UPDATE landing_entries SET state = ?, detail = ? WHERE id = ?"));
+    // the repair adds no writer: the state/detail UPDATE is still the one statement (the census above) and no other symbol holds it
+    const marks = writes(/\bdetail\b/i).filter((q) => /^landing_entries$/.test(q.table ?? '')).filter((q) => /SET state = \?, detail = \?/.test(q.source.replace(/\s+/g, ' ')));
+    expect(marks).toHaveLength(1);
+    expect(marks.every(inWriter)).toBe(true);
+    // the token builder: declared once and called once, by the facts reader, and nothing else names it
+    const builders = FILES.flatMap((f) => parsedFile(f).calls.filter((c) => c.name === 'terminalRepairTokens').map((c) => ({ file: f, start: c.start })));
+    expect(builders).toHaveLength(1);
+    expect(builders.every(inSymbol('CoordStore.landingFactsInner'))).toBe(true);
+    expect(() => symbolOf(STORE, 'CoordStore.terminalRepairTokens')).not.toThrow();
+    // a repair is no fourth caller of the writer: the census of callers above stays three
+    expect(FILES.flatMap((f) => parsedFile(f).calls.filter((c) => c.name === 'advanceLanding')).length).toBe(3);
+  });
+
+  const POLICY_VALUE_IMPORTS: Record<string, string[]> = {
+    'server/src/coord/landingNext.ts': ['./landingLine.js'],
+    'server/src/coord/landingReadView.ts': ['./landingLine.js'],
+    'server/src/coord/landed.ts': ['../laneSchedule.js', './landingEntry.js'],
+    'server/src/coord/landingLine.ts': ['../../../shared/landingLine.js', '../../../shared/api.js'],
+  };
+
+  it('the new policy modules read no clock and no filesystem, import no node builtin and reach no store', () => {
+    for (const [file, values] of Object.entries(POLICY_VALUE_IMPORTS)) {
+      const p = parsedFile(file);
+      expect(p.calls.length, `${file} parses to nothing`).toBeGreaterThan(0);
+      expect(clockAndFs(p), `${file} reads the clock or reaches for a filesystem`).toEqual([]);
+      expect(p.imports.map((x) => x.specifier).filter(isNodeBuiltin), `${file} imports a node builtin`).toEqual([]);
+      expect(storeReaches(p), `${file} reaches the store`).toEqual([]);
+      expect(valueEdges(p).map((x) => x.specifier), `${file}'s value imports`).toEqual(values);
+      expect(p.imports.filter((x) => x.kind === 'dynamic' || x.kind === 'export-from' || (x.kind === 'import' && !x.typeOnly && x.names.length === 0)), `${file}: a side-effect, dynamic or re-export edge`).toEqual([]);
+    }
+  });
+
+  it('landingLine.ts takes only freshWithin and RADAR_PROBE_FRESH_S from shared/api.js', () => {
+    const edge = parsedFile('server/src/coord/landingLine.ts').imports.find((x) => x.specifier === '../../../shared/api.js')!;
+    expect([...edge.names].sort()).toEqual(['RADAR_PROBE_FRESH_S', 'freshWithin']);
+  });
+
+  it('CONTROL: the policy scan sees a clock, a builtin, a store reach and a value edge', () => {
+    const probe = (t: string): ParsedFile => parseSource(t, 'probe.ts');
+    expect(clockAndFs(probe('const t = Date.now();'))).toEqual(['1 Date']);
+    expect(clockAndFs(probe('const t = Date.parse(x);'))).toEqual([]);
+    expect(clockAndFs(probe('const t = new Date(1);'))).toEqual(['1 Date']);
+    expect(probe("import { x } from 'node:crypto';").imports.map((x) => x.specifier).filter(isNodeBuiltin)).toEqual(['node:crypto']);
+    expect(storeReaches(probe("import { CoordStore } from './store.js';")).length).toBeGreaterThan(0);
+    expect(storeReaches(probe("import type { CoordStore } from './store.js';"))).toEqual(['1 CoordStore']);
+    expect(valueEdges(probe("import { type A, b } from './x.js';\nimport type { C } from './y.js';")).map((x) => x.specifier)).toEqual(['./x.js']);
   });
 });
 

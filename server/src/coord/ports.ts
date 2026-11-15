@@ -59,7 +59,7 @@ export interface FleetWatcherView {
  *  needs a new member adds it here, in its sorted place, in the same PR. Never split it per lane or per callee (the
  *  ruling of 2026-10-30, the plan's Rejected list): one port, one member list. */
 export type WatcherCoordMember =
-  | 'absorbParkEscalation' | 'activeClaims' | 'advanceCursor' | 'advanceLanding' | 'advanceObserved'
+  | 'absorbParkEscalation' | 'activeClaims' | 'advanceCursor' | 'advanceLanding' | 'advanceObserved' | 'applyLandingControl'
   | 'approvalById' | 'approvalsForChild' | 'approvalsInState' | 'askById'
   | 'autoContinueHeldUntil' | 'backOff' | 'baselineParkBox' | 'bigCallsIn' | 'bindingRunsOf' | 'bindingsOf' | 'bumpReplayCount'
   | 'cancelDeliveriesTo' | 'cancelTimer' | 'cardReadOfStart' | 'checksRows' | 'childReclaimCoordinatorClaims' | 'childReclaimSessionIds'

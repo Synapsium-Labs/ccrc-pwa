@@ -4,7 +4,7 @@
 // cannot be made on disk. Review Focus 1 and 4 of the plan, case by case. Neutral names throughout.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, symlinkSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { Bus } from '../src/bus.js';
 import { FleetWatcher } from '../src/watch.js';
@@ -14,8 +14,12 @@ import { RADAR_PROBE_MAX_BYTES } from '../src/coord/radar.js';
 import { readRegistry, type SessionRecord } from '../src/registry.js';
 import { localIO, type FleetIO } from '../src/io.js';
 import type { PrState } from '../../shared/api.js';
+import { RADAR_PROBE_FRESH_S } from '../../shared/api.js';
 import { seedRoster, testDeps, withFakeClock } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
+import { openCoordDb } from '../src/coord/db.js';
+import { landingStoreOver } from './landingFixture.js';
+import type { CoordStore } from '../src/coord/store.js';
 
 const NOW = Date.parse('2026-10-27T09:00:00Z');
 const iso = (offsetS: number): string => new Date(NOW + offsetS * 1000).toISOString().replace(/\.\d{3}Z$/, 'Z');
@@ -104,6 +108,8 @@ describe('the radar lane', () => {
       lstatMeasured: wrap('lstat', (p: string) => localIO.lstatMeasured(p)),
       statMeasured: wrap('stat', (p: string) => localIO.statMeasured(p)),
       readFileMeasured: wrap('read', (p: string, t?: number, s?: AbortSignal) => localIO.readFileMeasured(p, t, s)),
+      // Wave 5i: the probe's bytes come through byte ranges; a bend on 'read' reaches them too.
+      readFileFromBytesMeasured: wrap('read', (p: string, o: number, m: number, t?: number, s?: AbortSignal) => localIO.readFileFromBytesMeasured(p, o, m, t, s)),
     };
   };
 
@@ -279,18 +285,17 @@ describe('the radar lane', () => {
       expect(ok.ok).toBe(true);
     });
 
-    // G9 (review 1225, F4). `parseProbe` checks the bytes against the cap again, so a case through `readRadarProbe`, the
-    // pass or the lane cannot see `readRegular`'s own post-read check: call it directly, with an io whose stat says the
-    // file is within the cap and whose read hands back more than the cap.
-    it('readRegular checks the bytes it read against the cap, whatever the stat said', async () => {
+    // G9 (review 1225, F4), re-pointed at wave 5i's byte ranges: the cap is checked on the stat BEFORE any byte moves, and a
+    // range that hands back more than it was asked is refused, whatever the stat said.
+    it('readRegular asks for no more than the stat promised, and refuses a range that overruns it', async () => {
       const cap = 16;
       const io = {
         lstatMeasured: async () => ({ ok: true as const, kind: 'regular' as const }),
         statMeasured: async () => ({ ok: true as const, mtimeMs: 0, size: cap }),
-        readFileMeasured: async () => ({ ok: true as const, content: 'x'.repeat(cap + 1) }),
+        readFileFromBytesMeasured: async (_p: string, _o: number, m: number) => ({ ok: true as const, bytes: new Uint8Array(m + 1), size: cap }),
       };
       expect(await readRegular(io, '/f', undefined, cap)).toEqual({ ok: false, reason: 'unreadable' });
-      const within = { ...io, readFileMeasured: async () => ({ ok: true as const, content: 'x'.repeat(cap) }) };
+      const within = { ...io, readFileFromBytesMeasured: async (_p: string, _o: number, m: number) => ({ ok: true as const, bytes: new Uint8Array(m).fill(120), size: cap }) };
       expect(await readRegular(within, '/f', undefined, cap), 'a file at the cap reads').toEqual({ ok: true, content: 'x'.repeat(cap) });
     });
 
@@ -384,7 +389,7 @@ describe('the radar lane', () => {
   });
 
   describe('the lane costs little and fails alone (Review Focus 4)', () => {
-    it('one listing, then one lstat, one stat and one read per project a session names', async () => {
+    it('one listing, then one lstat, two stats (before and after the ranges, wave 5i) and one read per project a session names', async () => {
       plantRow(ALPHA); plantRow('claude-a-proj-b-alpha', { project: 'proj-b' });
       plantProbe(worked()); plantProbe(worked({ project: 'proj-b', heads: [], pairs: [], pairHeads: [] }), 'proj-b');
       mkdirSync(probeDir('proj-c'), { recursive: true });   // a project no session names: never read
@@ -396,7 +401,7 @@ describe('the radar lane', () => {
       expect(landing.filter((s) => s.startsWith('readdir '))).toHaveLength(1);
       for (const project of ['proj-a', 'proj-b']) {
         const mine = landing.filter((s) => s.endsWith(`${path.sep}${project}${path.sep}probe`));
-        expect(mine.map((s) => s.split(' ')[0]).sort(), project).toEqual(['lstat', 'read', 'stat']);
+        expect(mine.map((s) => s.split(' ')[0]).sort(), project).toEqual(['lstat', 'read', 'stat', 'stat']);
       }
       expect(landing.filter((s) => s.includes('proj-c'))).toEqual([]);
     });
@@ -429,12 +434,24 @@ describe('the radar lane', () => {
       let hang = false;
       let bobRead: () => void = () => undefined;
       const bobDone = new Promise<void>((r) => { bobRead = r; });
+      // Proj-b's io calls in flight while `hang` is set: the first answer is not the end of proj-b's reads.
+      let bobInFlight = 0;
+      let bobStatsDone = 0;   // the probe is stat'd before and after its ranges (pinned above): its second stat ends proj-b's chain
+      const inBob = (p: string): boolean => hang && p.includes(`${path.sep}proj-b${path.sep}`);
+      const track = async <T,>(p: string, run: () => Promise<T>): Promise<T> => {
+        if (!inBob(p)) return run();
+        bobInFlight += 1;
+        try { return await run(); } finally { bobInFlight -= 1; }
+      };
       const io: FleetIO = {
         ...localIO,
-        statMeasured: (p) => (hang && p.includes(`${path.sep}proj-a${path.sep}`) ? new Promise<never>(() => undefined) : localIO.statMeasured(p)),
-        readFileMeasured: async (p, t, s) => {
-          const r = await localIO.readFileMeasured(p, t, s);
-          if (hang && p.includes(`${path.sep}proj-b${path.sep}`)) bobRead();
+        statMeasured: (p) => (hang && p.includes(`${path.sep}proj-a${path.sep}`) ? new Promise<never>(() => undefined)
+          : track(p, async () => { const r = await localIO.statMeasured(p); if (inBob(p)) bobStatsDone += 1; return r; })),
+        lstatMeasured: (p, ...a) => track(p, () => localIO.lstatMeasured(p, ...a)),
+        readdirMeasured: (p, ...a) => track(p, () => localIO.readdirMeasured(p, ...a)),
+        readFileFromBytesMeasured: async (p, o, m, t, s) => {
+          const r = await track(p, () => localIO.readFileFromBytesMeasured(p, o, m, t, s));
+          if (inBob(p)) bobRead();
           return r;
         },
       };
@@ -447,7 +464,11 @@ describe('the radar lane', () => {
       vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
       const pass = w.sweepRadar(recs, NOW + 1000);
       await bobDone;                                              // proj-b answered, on the real event loop
+      // Wait for the rest of proj-b's chain to finish: the first answer is not its last I/O (wave 5i added the stat after the
+      // ranges), and on a loaded box it is still in flight when the clock advances. Bounded, and asserted below.
+      for (let turn = 0; turn < 1000 && (bobInFlight > 0 || bobStatsDone < 2); turn += 1) await new Promise<void>((r) => setImmediate(r));
       await new Promise<void>((r) => setImmediate(r));
+      expect([bobInFlight, bobStatsDone], 'proj-b\'s reads never finished: the case would pass or fail on timing alone').toEqual([0, 2]);
       await vi.advanceTimersByTimeAsync(30_000);                  // half the lane's 60 s cadence
       await pass;
       expect(keys(w), 'the deadline kept the old map, or took proj-b with it').toEqual([BOB]);
@@ -458,10 +479,10 @@ describe('the radar lane', () => {
       let signal: AbortSignal | undefined;
       const io: FleetIO = {
         ...localIO,
-        readFileMeasured: (_p, _t, s) => { signal = s; return new Promise<never>(() => undefined); },
+        readFileFromBytesMeasured: (_p, _o, _m, _t, s) => { signal = s; return new Promise<never>(() => undefined); },
       };
       const r = await readRadarPass(io, reg, new Set(['proj-a']), NOW, 20);
-      expect(r).toEqual({ ok: true, reads: new Map([['proj-a', { ok: false, reason: 'late' }]]) });
+      expect(r).toEqual({ ok: true, reads: new Map([['proj-a', { ok: false, reason: 'late' }]]), controls: new Map() });
       expect(signal?.aborted).toBe(true);
     });
 
@@ -746,6 +767,109 @@ describe('the radar lane', () => {
   });
 });
 
+describe('wave 5i: the control bundle through the pass', () => {
+  let home: string;
+  let reg: string;
+  beforeEach(() => { home = mkTmp('ccrc-radar-ctl-'); reg = path.join(home, '.cc-sessions'); mkdirSync(reg, { recursive: true }); });
+  afterEach(() => { vi.useRealTimers(); });
+
+  const dirOf = (project: string): string => path.join(reg, 'landing', project);
+  const plantAll = (project: string, probeBody?: string): void => {
+    mkdirSync(dirOf(project), { recursive: true });
+    writeFileSync(path.join(dirOf(project), 'probe'), probeBody ?? JSON.stringify(worked({ project, heads: [], pairs: [], pairHeads: [] })));
+    writeFileSync(path.join(dirOf(project), 'lander'), JSON.stringify({ v: 1, project, lander: 'coordinator', at: iso(-2) }));
+    writeFileSync(path.join(dirOf(project), 'main-health'), JSON.stringify({
+      v: 1, project, at: iso(0), sha: sha(9), state: 'green', required: [{ name: 'required-a', app: null }], failing: [], pending: [],
+    }));
+  };
+  const spied = (seen: string[], over: Partial<FleetIO> = {}): FleetIO => ({
+    ...localIO,
+    lstatMeasured: (p) => { seen.push(`lstat ${p}`); return localIO.lstatMeasured(p); },
+    statMeasured: (p) => { seen.push(`stat ${p}`); return localIO.statMeasured(p); },
+    readFileFromBytesMeasured: (p, o, m, t, s) => { seen.push(`range ${m} ${p}`); return localIO.readFileFromBytesMeasured(p, o, m, t, s); },
+    ...over,
+  });
+
+  it('no controlsWanted: the existing reads only, an empty controls map', async () => {
+    plantAll('proj-a');
+    const r = await readRadarPass(localIO, reg, new Set(['proj-a']), NOW, 5000);
+    expect(r.ok && r.controls.size).toBe(0);
+    expect(r.ok && r.reads.get('proj-a')?.ok).toBe(true);
+  });
+
+  it('each wanted project gets one bundle, and its probe is read once', async () => {
+    plantAll('proj-a'); plantAll('proj-b');
+    const seen: string[] = [];
+    const r = await readRadarPass(spied(seen), reg, new Set(['proj-a']), NOW, 5000, new Set(['proj-a', 'proj-b']));
+    if (!r.ok) throw new Error('pass');
+    expect([...r.reads.keys()]).toEqual(['proj-a']);
+    expect([...r.controls.keys()].sort()).toEqual(['proj-a', 'proj-b']);
+    const c = r.controls.get('proj-a')!;
+    expect(c.lander.ok && c.health.ok && c.probe.ok).toBe(true);
+    expect(c.probe).toBe(r.reads.get('proj-a'));
+    for (const project of ['proj-a', 'proj-b']) {
+      expect(seen.filter((x) => x.startsWith('range ') && x.endsWith(`${path.sep}${project}${path.sep}probe`)), project).toHaveLength(1);
+    }
+  });
+
+  it('a wanted project the listing does not return is absent, a refused name is refused, and a failed listing yields none', async () => {
+    plantAll('proj-a');
+    mkdirSync(path.join(reg, 'landing', 'bad name'), { recursive: true });
+    const r = await readRadarPass(localIO, reg, new Set(), NOW, 5000, new Set(['proj-z', 'bad name']));
+    if (!r.ok) throw new Error('pass');
+    const absent = { ok: false, reason: 'absent' } as const;
+    expect(r.controls.get('proj-z')).toEqual({ lander: absent, probe: absent, health: absent });
+    const refused = { ok: false, reason: 'refused' } as const;
+    expect(r.controls.get('bad name')).toEqual({ lander: refused, probe: refused, health: refused });
+    const gone = await readRadarPass(localIO, path.join(home, 'nowhere'), new Set(), NOW, 5000, new Set(['proj-a']));
+    expect(gone).toEqual({ ok: false, reason: 'absent' });
+  });
+
+  it('a bundle that misses the deadline is late in all three documents', async () => {
+    plantAll('proj-a');
+    const io: FleetIO = { ...localIO, lstatMeasured: (p) => (p.endsWith(`${path.sep}probe`) ? new Promise<never>(() => undefined) : localIO.lstatMeasured(p)) };
+    const r = await readRadarPass(io, reg, new Set(), NOW, 30, new Set(['proj-a']));
+    const late = { ok: false, reason: 'late' } as const;
+    expect(r.ok && r.controls.get('proj-a')).toEqual({ lander: late, probe: late, health: late });
+  });
+
+  it('M10: an oversize file moves no byte, and no range ever exceeds 262144', async () => {
+    plantAll('proj-a');
+    const seen: string[] = [];
+    const over = spied(seen, { statMeasured: (p) => (p.endsWith('main-health') || p.endsWith('/probe') ? Promise.resolve({ ok: true as const, mtimeMs: 0, size: RADAR_PROBE_MAX_BYTES + 1 }) : localIO.statMeasured(p)) });
+    const r = await readRadarPass(over, reg, new Set(['proj-a']), NOW, 5000, new Set(['proj-a']));
+    if (!r.ok) throw new Error('pass');
+    const c = r.controls.get('proj-a')!;
+    expect(c.health).toEqual({ ok: false, reason: 'oversize', size: RADAR_PROBE_MAX_BYTES + 1 });
+    expect(c.probe).toEqual({ ok: false, reason: 'oversize', size: RADAR_PROBE_MAX_BYTES + 1 });
+    expect(seen.filter((x) => x.startsWith('range ') && !x.endsWith('lander')), 'an oversize file was read').toEqual([]);
+
+    const body = JSON.stringify(worked({ project: 'proj-b', heads: [], pairs: [], pairHeads: [] }));
+    plantAll('proj-b', body + ' '.repeat(RADAR_PROBE_MAX_BYTES - body.length));
+    const seen2: string[] = [];
+    const r2 = await readRadarPass(spied(seen2), reg, new Set(['proj-b']), NOW, 5000, new Set(['proj-b']));
+    expect(r2.ok && r2.reads.get('proj-b')?.ok).toBe(true);
+    const sizes = seen2.filter((x) => x.startsWith('range ')).map((x) => Number(x.split(' ')[1]));
+    expect(sizes.length).toBeGreaterThan(0);
+    expect(Math.max(...sizes)).toBeLessThanOrEqual(262144);
+    expect(seen2.filter((x) => x.startsWith('range ') && x.endsWith(`${path.sep}proj-b${path.sep}probe`)), 'a 524288-byte probe takes at most two ranges').toHaveLength(2);
+  });
+
+  it('M9: a symlinked marker ancestor is absent for the lander, and its target is never byte-read', async () => {
+    plantAll('proj-a');
+    const target = path.join(home, 'project-target');
+    mkdirSync(target, { recursive: true });
+    for (const n of ['probe', 'lander', 'main-health']) writeFileSync(path.join(target, n), readFileSync(path.join(dirOf('proj-a'), n)));
+    execFileSync('mv', [dirOf('proj-a'), path.join(home, 'aside')]);
+    symlinkSync(target, dirOf('proj-a'));
+    const seen: string[] = [];
+    const r = await readRadarPass(spied(seen), reg, new Set(['proj-a']), NOW, 5000, new Set(['proj-a']));
+    if (!r.ok) throw new Error('pass');
+    expect(r.controls.get('proj-a')!.lander).toEqual({ ok: false, reason: 'absent' });
+    expect(seen.filter((x) => x.startsWith('range ') && x.endsWith(`${path.sep}lander`)), 'target bytes of the marker').toEqual([]);
+  });
+});
+
 describe('the branch and PR derivations the lane and assembleFleet share (D-7484)', () => {
   const rec = (over: Partial<SessionRecord>): SessionRecord => ({ id: 'claude-a-proj-a-alpha', branch: 'ws/registry', workspace: 'alpha', prPhase: null, prNumber: null, prCheckedAt: null, ...over } as SessionRecord);
   const sl = (over: Record<string, unknown>) => ({ branch: 'ws/pane', retained: false, ...over }) as never;
@@ -764,5 +888,169 @@ describe('the branch and PR derivations the lane and assembleFleet share (D-7484
     expect(sessionPrOf(rec({}), new Map([['claude-a-proj-a-alpha', swept]]))).toBe(swept);
     expect(sessionPrOf(rec({ prPhase: 'merged', prNumber: 3 }), undefined)).toMatchObject({ phase: 'merged', number: 3 });
     expect(sessionPrOf(rec({ workspace: null }), undefined)).toBeNull();
+  });
+});
+
+// Landing order wave 5i, Task 6: the radar lane also reads each wanted project's control bundle in its one pass, applies it
+// to the store synchronously (behind the generation fence), and keeps only the latest pass's bundle for the route.
+function plantRowIn(reg: string, id: string): void {
+  const fields: Record<string, string> = {
+    uuid: `u-${id}`, wrapper: 'claude-a', project: 'proj-a', workdir: `/w/${id}`, workspace: 'alpha', branch: 'ws/alpha', base: 'origin/main', started: '1' };
+  for (const [f, v] of Object.entries(fields)) writeFileSync(path.join(reg, `${id}.${f}`), v);
+}
+
+describe('the radar lane composes the control bundle and the store apply', () => {
+  let home: string;
+  let reg: string;
+  let watchers: FleetWatcher[];
+  let coord: CoordStore;
+  let dbHandle: ReturnType<typeof openCoordDb>;
+
+  beforeEach(() => {
+    home = mkTmp('ccrc-radar-ctl-');
+    seedRoster(home);
+    reg = path.join(home, '.cc-sessions');
+    mkdirSync(reg, { recursive: true });
+    watchers = [];
+    const dbPath = path.join(home, '.ccrc', 'coord.db');
+    dbHandle = openCoordDb(dbPath);
+    coord = landingStoreOver(dbHandle, dbPath);
+  });
+  afterEach(() => { for (const w of watchers) w.stop(); vi.restoreAllMocks(); });
+
+  const make = (io: FleetIO = localIO, over: Record<string, unknown> = {}): FleetWatcher => {
+    const deps = { ...testDeps(home), io, coord, ...over };
+    const w = new FleetWatcher(withFakeClock(deps as never), new Bus(), 10_000);
+    watchers.push(w);
+    return w;
+  };
+  const dir = (project: string): string => path.join(reg, 'landing', project);
+  const plantControl = (project: string, healthOver: Record<string, unknown> = {}): void => {
+    mkdirSync(dir(project), { recursive: true });
+    writeFileSync(path.join(dir(project), 'probe'), JSON.stringify(worked({ project })));
+    writeFileSync(path.join(dir(project), 'lander'), JSON.stringify({ v: 1, project, lander: 'coordinator', at: iso(-2) }));
+    writeFileSync(path.join(dir(project), 'main-health'), JSON.stringify({
+      v: 1, project, at: iso(0), sha: sha(9), state: 'green', required: [{ name: 'required-a', app: null }], failing: [], pending: [], ...healthOver }));
+  };
+  const seedOpen = (project: string, id: number, pr: number): void => {
+    dbHandle.prepare(
+      `INSERT INTO landing_entries (id, project, pr, pinnedSha, handoffCommit, runId, state, baseSha, ejectionKind, ejections, afterIds, fixesMain, setBy, pinnedAt)
+       VALUES (?, ?, ?, ?, ?, NULL, 'pinned', NULL, NULL, 0, '[]', 0, 'lane-a-${project}', ?)`)
+      .run(id, project, pr, sha(pr), sha(pr + 100), 1000 + id);
+  };
+  const applies = (): string[] => {
+    const seen: string[] = [];
+    const real = coord.applyLandingControl.bind(coord);
+    vi.spyOn(coord, 'applyLandingControl').mockImplementation((input) => { seen.push(input.project); return real(input); });
+    return seen;
+  };
+  const probeReads = (seen: string[], project: string): number =>
+    seen.filter((x) => x === `read ${path.join(dir(project), 'probe')}`).length;
+  const bentIo = (bend: (method: string, p: string) => unknown | undefined, seen: string[] = []): FleetIO => {
+    const wrap = <A extends unknown[], R>(method: string, f: (...a: A) => Promise<R>) => async (...a: A): Promise<R> => {
+      seen.push(`${method} ${String(a[0])}`);
+      const b = bend(method, String(a[0]));
+      return b === undefined ? f(...a) : (b as R);
+    };
+    return {
+      ...localIO,
+      readdirMeasured: wrap('readdir', (p: string, t?: number, s?: AbortSignal) => localIO.readdirMeasured(p, t, s)),
+      lstatMeasured: wrap('lstat', (p: string) => localIO.lstatMeasured(p)),
+      statMeasured: wrap('stat', (p: string) => localIO.statMeasured(p)),
+      readFileMeasured: wrap('read', (p: string, t?: number, s?: AbortSignal) => localIO.readFileMeasured(p, t, s)),
+      readFileFromBytesMeasured: wrap('read', (p: string, o: number, m: number, t?: number, s?: AbortSignal) => localIO.readFileFromBytesMeasured(p, o, m, t, s)),
+    };
+  };
+
+  it('a project with an open entry and no fleet session is read once and applied once', async () => {
+    plantControl('proj-b'); seedOpen('proj-b', 1, 12);
+    const seen: string[] = []; const ap = applies();
+    const w = make(bentIo(() => undefined, seen));
+    await w.sweepRadar([], NOW);
+    expect(probeReads(seen, 'proj-b')).toBe(1);
+    expect(ap.filter((p) => p === 'proj-b')).toHaveLength(1);
+    expect(w.currentLandingControl('proj-b', NOW)).toMatchObject({ lander: { ok: true }, probe: { ok: true }, health: { ok: true } });
+    expect(w.currentLandingControl('proj-unknown', NOW)).toBeUndefined();
+  });
+
+  it('a registry project with no entry is read too, and the getter hands out a copy', async () => {
+    plantRowIn(reg, 'claude-a-proj-a-alpha'); plantControl('proj-a');
+    const w = make();
+    await w.sweepRadar(await readRegistry(localIO, testDeps(home).cfg), NOW);
+    const first = w.currentLandingControl('proj-a', NOW);
+    expect(first).toMatchObject({ lander: { ok: true } });
+    (first as { lander: unknown }).lander = { ok: false, reason: 'late' };
+    expect(w.currentLandingControl('proj-a', NOW)).toMatchObject({ lander: { ok: true } });
+  });
+
+  it('an unlistable registry still reads and applies a DB-known project and keeps re-aging the chips', async () => {
+    plantControl('proj-b'); seedOpen('proj-b', 1, 12);
+    const ap = applies();
+    const w = make();
+    await w.sweepRadar(null, NOW);
+    expect(ap).toEqual(['proj-b']);
+    expect(w.currentLandingControl('proj-b', NOW)).toMatchObject({ health: { ok: true } });
+  });
+
+  it('a failed store inventory reads the registry projects but applies nothing', async () => {
+    plantRowIn(reg, 'claude-a-proj-a-alpha'); plantControl('proj-a');
+    const ap = applies();
+    vi.spyOn(coord, 'landingReadProjects').mockReturnValue({ ok: false, error: 'landing-db-unavailable', recovery: 'restart' } as never);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const w = make();
+    await w.sweepRadar(await readRegistry(localIO, testDeps(home).cfg), NOW);
+    await w.sweepRadar(await readRegistry(localIO, testDeps(home).cfg), NOW + 1000);
+    expect(ap).toEqual([]);
+    expect(warn.mock.calls.map((c) => String(c[0])).filter((m) => m.includes('landing control inventory')), 'said once, deduped').toHaveLength(1);
+    expect(w.currentLandingControl('proj-a', NOW)).toMatchObject({ lander: { ok: true } });
+  });
+
+  it('a failed listing replaces a retained green with explicit unavailable evidence, never a borrowed snapshot', async () => {
+    plantControl('proj-b'); seedOpen('proj-b', 1, 12);
+    let broken = false;
+    const w = make(bentIo((m, p) => (broken && m === 'readdir' && p.endsWith(`${path.sep}landing`) ? { ok: false, reason: 'unreadable' } : undefined)));
+    await w.sweepRadar([], NOW);
+    expect(w.currentLandingControl('proj-b', NOW)).toMatchObject({ lander: { ok: true } });
+    broken = true;
+    await w.sweepRadar([], NOW + 1000);
+    expect(w.currentLandingControl('proj-b', NOW)).toEqual({
+      lander: { ok: false, reason: 'unreadable' }, probe: { ok: false, reason: 'unreadable' }, health: { ok: false, reason: 'unreadable' } });
+  });
+
+  it('a superseded pass cannot apply or cache: only the newer pass speaks', async () => {
+    plantControl('proj-b'); seedOpen('proj-b', 1, 12);
+    const ap = applies();
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>((r) => { release = r; });
+    let first = true;
+    const w = make(bentIo((m, p) => {
+      if (m !== 'readdir' || !p.endsWith(`${path.sep}landing`) || !first) return undefined;
+      first = false;
+      return gate.then(() => localIO.readdirMeasured(p));
+    }));
+    const stale = w.sweepRadar([], NOW);
+    await w.sweepRadar([], NOW + 1000);
+    expect(ap).toEqual(['proj-b']);
+    release();
+    expect(await stale).toBeUndefined();
+    expect(ap, 'the superseded pass cannot apply').toEqual(['proj-b']);
+  });
+
+  it('a cached control older than the radar freshness allows answers nothing, so the route holds', async () => {
+    plantControl('proj-b'); seedOpen('proj-b', 1, 12);
+    const w = make();
+    await w.sweepRadar([], NOW);
+    expect(w.currentLandingControl('proj-b', NOW + 1000)).toMatchObject({ lander: { ok: true } });
+    expect(w.currentLandingControl('proj-b', NOW + (RADAR_PROBE_FRESH_S + 1) * 1000)).toBeUndefined();
+  });
+
+  it('a remote box whose agent link is down answers no snapshot at all', async () => {
+    plantControl('proj-b'); seedOpen('proj-b', 1, 12);
+    const base = testDeps(home);
+    const w = make(localIO, { cfg: { ...base.cfg, fleetMode: 'remote' as const }, fleetState: { connected: true } });
+    await w.sweepRadar([], NOW);
+    expect(w.currentLandingControl('proj-b', NOW)).toMatchObject({ lander: { ok: true } });
+    (w as unknown as { deps: { fleetState: { connected: boolean } } }).deps.fleetState.connected = false;
+    expect(w.currentLandingControl('proj-b', NOW)).toBeUndefined();
   });
 });

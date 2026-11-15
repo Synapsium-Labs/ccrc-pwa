@@ -5774,11 +5774,11 @@ pinned when the run entered `merging`, which the coordinator requires to equal t
 `--match-head-commit`), its `handoffCommit`, its state and its ejections — and, with `&pr=<n>` (`--pr <n>`), that PR's entry in any
 state, `entriesScope` saying which of the two the answer is; beside them the
 operator pause and the main-red hold, and the order the server's decider computes on that read; the line is paused
-while either flag is set. An entry leaves the line `landed` when GitHub reads its PR merged (a merge train's proved landing included), with a head other than
+while either flag is set, except that a dependency-eligible `fixesMain` head already selected is not paused by the main-red hold alone (D-8625). An entry leaves the line `landed` when GitHub reads its PR merged (a merge train's proved landing included), with a head other than
 the pinned one kept in its `detail`, or `closed` when GitHub reads it closed unmerged or says no such PR exists. The landed reader
 (at most ten entries a sweep, oldest first) marks it, and a work run's `done` close marks it `landed` when GitHub reads the PR
 MERGED (a merge train's landing is left to the landed reader, which carries the train facts); a verified pin re-pins a `closed`
-entry. A project the line has never seen answers no entries and both flags off. The line's authority (no-run creation evidence,
+entry only when its projection is readable and carries no quarantine marker (D-8626). A project the line has never seen answers no entries and both flags off. The line's authority (no-run creation evidence,
 order edges, `fixesMain` and setter attribution) is journalled in `~/.ccrc/landing.log`, which a restored `coord.db` leaves in
 place (no backup copies it) and which the server replays before it serves anything. Replay never fabricates a measured pin or a
 current run association: a project whose projection is missing or whose binding evidence contradicts is reported as unmeasured
@@ -5788,14 +5788,21 @@ and write, an advance's pin and its retreat from `merging` and a landing's mark 
 `landing-fenced` with that word. An uncertain apply is named beside the append and the commit (`landing-db-apply`, as
 `landing-db-commit`, with `mayApply: true`), because the land arm answers the same words. After a `restart` fence the database
 handle is closed, so a later call that reads the database before the landing guard (the advance route reads the run first) fails
-on the closed handle instead of answering `landing-fenced`. A `replay`
+on the closed handle instead of answering `landing-fenced`. That closed handle is why a `restart` fence can leave later non-landing route reads failing too. Landing reads and writes are all fenced alike, and the
+read answers a `binding` (`inert`, `held` with a reason, or `ready` for the selected head), decided on that read, never stored. A `replay`
 fence and a `restart` fence alike clear only when the server restarts: the replay is the only thing that reopens the line, and only
 the boot calls it, so there is no retry timer and nothing reopens the line while the server runs; a restart whose replay refuses
-does not start. A retreat refused `landing-projection-unreadable` (its pin names another head than the
-episode's and a retained field no longer reads) is not cured by a restart, because replay never writes a projection: the run
+does not start. A retreat refused `landing-projection-unreadable` (its projection does not read, whether its pin names the
+episode's head or another) answers `recovery: 'repair'` (D-8627) and is not cured by a restart, because replay never writes a projection: the run
 stays at `merging` and goes to the operator, and this build has no repair route for it. `POST /api/landing/entries` and `POST /api/landing/order` (box token and measured
 `byId`/`byUuid` attribution, `ccrc-api landing entries|order --json -`) record an entry and its order edges; the attributed `byId` is
 the setter, and an omitted `afterIds` or `fixesMain` keeps its value while an explicit `[]` or `false` clears it.
+
+The main-red hold has one writer: a fresh, same-base `main-health` measurement applied through the radar lane. A next-to-land mail
+is sent once per exact episode, base and recipient; it tells a coordinator to re-read the line and is not merge permission. The
+landed reader retires bounded damaged rows on fresh terminal evidence. One trap: a project that opts out (its `lander` removed)
+while main is red keeps `mainRedHold` set, which the pre-5i order checks still honour, until it opts back in and a green
+measurement clears it.
 
 **The bypass deny (landing-order wave 2b).** The deny stands whole after D-8124, which adds one gated door beside it ("The admin-merge door", below). A second question, asked of every session after the worker
 deny's and with its text unchanged, closes the two ways past the queue that the worker deny leaves open:
@@ -6823,7 +6830,7 @@ It writes five JSON files, each `"v": 1`, under `~/.cc-sessions/landing/<project
 | `main-health` | `green`, `red` or `unmeasured`, with the required names, the failing ones and those not yet proven |
 | `<id>.lineage` | one registry row's branch tip and its proven chain of clean base merges |
 | `enabled` | the mirror of the conf's `lineage=on`, with its own time |
-| `lander` | the mirror of the conf's `lander=coordinator`, with its own time. The probe removes it on a project's pause, for an invalid conf, a conf whose `lander` is not `coordinator`, a project that is not a main checkout and a landing directory with no conf. When `landing/` or the project's directory under it is a symlink, the probe writes and removes nothing there, so a file already behind the symlink stays; nothing reads it yet, and the reader stage 5's landing line adds in a later wave must treat such a file as absent (D-7647) |
+| `lander` | the mirror of the conf's `lander=coordinator`, with its own time. The probe removes it on a project's pause, for an invalid conf, a conf whose `lander` is not `coordinator`, a project that is not a main checkout and a landing directory with no conf. When `landing/` or the project's directory under it is a symlink, the probe writes and removes nothing there, so a file already behind the symlink stays; wave 5i's landing control reads it, and a file behind such a symlinked ancestor reads as absent (D-7647) |
 
 Anything the probe cannot measure is written as `unmeasured` with a why, and never as clean or green. That covers a
 failed fetch or gh call, a git child past its deadline (`timeout`), and an error before the first write. A child the

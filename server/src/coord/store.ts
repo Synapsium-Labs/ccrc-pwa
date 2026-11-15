@@ -16,11 +16,14 @@ import * as planStore from './planStore.js';
 import { LINEAR_SYNC_PROGRAMME } from '../../../shared/plan.js';
 import type { ItemEventRow, ItemMoveResult, ItemRow, RaiseItemInput } from './ledgersStore.js';
 export type { ItemEventRow, ItemMoveResult, ItemRow, RaiseItemInput } from './ledgersStore.js';
-import { decideLandingLand, decideLandingWrite, landingFactsOf, landingHoldGate, landingRecordOf, LANDING_LANDABLE_STATES } from './landingEntry.js';
+import { decideLandingLand, decideLandingWrite, landingFactsOf, landingHoldGate, landingRecordOf } from './landingEntry.js';
 import { parseLandingJournal } from './landingJournalPolicy.js';
 import type { LandingAdvance, LandingLand, LandingLandWrite, LandingWrite } from './landingEntry.js';
-import type { LandingEntryState, LandingInfrastructureFailure, LandingJournalRecord } from '../../../shared/landingLine.js';
+import type { LandingBoundaryFailure, LandingEntryState, LandingInfrastructureFailure, LandingJournalRecord } from '../../../shared/landingLine.js';
+import { LANDING_TERMINAL_STATES } from '../../../shared/landingLine.js';
 import { decideLandingMutation } from './landingWrites.js';
+import { applyLandingControlTx, type LandingControlInput, type LandingControlPhase } from './landingControlTx.js';
+import type { LandingControlApplyResult } from './landingNext.js';
 import type { LandingAuthorityCommand, LandingAuthorityWrite, LandingJournalReplay, LandingMutationFacts, LandingReadResult } from './landingWrites.js';
 import type { LandingJournalPort, LandingJournalSnapshot } from './landingJournalPort.js';
 import { redactCommand } from './redact.js';
@@ -3372,7 +3375,10 @@ export class CoordStore {
             const projection = read.facts.projections.find((p) => p.id === current?.id)?.value ?? null;
             const gate = landingHoldGate(read.facts.recovery, 'land', { project: land.project, pr: land.pr }, projection);
             if (!gate.ok) return { ok: false as const, error: gate.error };
-            const decision = decideLandingLand({ land, current, projection });
+            // Amendment B (D-8626): the verdict of THIS read, inside this transaction, so a repair token the reader carried is
+            // compared against the evidence as it stands now. The verdict is no readability: `projection` is passed as read.
+            const terminalRepair = read.facts.terminalRepairs.find((r) => r.id === current?.id)?.value;
+            const decision = decideLandingLand({ land, current, projection, ...(terminalRepair === undefined ? {} : { terminalRepair }) });
             if (decision.act === 'none') return { ok: true as const, landing: decision.write };
             effects = 'applying';
             this.db.prepare('UPDATE landing_entries SET state = ?, detail = ? WHERE id = ?').run(decision.state, decision.detail, decision.id);
@@ -3478,20 +3484,40 @@ export class CoordStore {
     }
   }
 
-  /** The projects the landed reader walks (wave 5h): the distinct projects holding a row a mark could take, sorted. Behind
-   *  the landing guard like every landing read. */
-  landingReadProjects(): { ok: true; projects: string[] } | ({ ok: false } & LandingInfrastructureFailure) {
+  /** The projects the landed reader walks (wave 5h, widened in 5i): the sorted union of the projects holding a row whose
+   *  state is not terminal (a word this build does not know included, so no positive pinned/ejected list filters it away),
+   *  the projects any recovered subject names, and the projects with a persisted main-red hold. A project of terminal rows
+   *  alone needs no read. Behind the landing guard like every landing read; a failure stays typed. */
+  landingReadProjects(): { ok: true; projects: string[] } | ({ ok: false } & LandingBoundaryFailure) {
     const fenced = this.landingGuard();
     if (fenced !== null) return { ok: false, ...fenced };
     try {
-      const rows = this.db.prepare(`SELECT DISTINCT project FROM landing_entries WHERE state IN (${LANDING_LANDABLE_STATES.map((w) => `'${w}'`).join(', ')}) ORDER BY project`)
-        .all() as { project: string }[];
+      const rows = this.db.prepare(
+        `SELECT project FROM landing_entries WHERE state NOT IN (${LANDING_TERMINAL_STATES.map((w) => `'${w}'`).join(', ')}) ` +
+        'UNION SELECT project FROM landing_subjects ' +
+        'UNION SELECT project FROM landing_projects WHERE mainRedHold IS NOT 0 ORDER BY project').all() as { project: string }[];
       return { ok: true, projects: rows.map((r) => r.project) };
     } catch { return { ok: false, error: 'landing-db-unavailable', recovery: this.landingBoundary() }; }
   }
 
+  /** Wave 5i: apply one measured control bundle to the project's `mainRedHold` and queue the exact next-to-land cue, in ONE
+   *  owned transaction (`landingControlTx.ts` holds the body). No journal record is written. A failure once a write began
+   *  fences the landing entrances exactly as `writeLandingAuthority` does, and a replay or restart alone reopens them. */
+  applyLandingControl(input: LandingControlInput): LandingControlApplyResult {
+    const fenced = this.landingGuard();
+    if (fenced !== null) return { kind: 'failure', failure: fenced };
+    const phase: { at: LandingControlPhase } = { at: 'decide' };
+    try { return tx(this.db, () => applyLandingControlTx(this, () => this.landingFactsInner(input.project), input, phase)); }
+    catch {
+      const recovery = this.landingBoundary();
+      if (phase.at === 'decide') return { kind: 'failure', failure: { error: 'landing-db-unavailable', recovery } };
+      this.landingFence = recovery;
+      return { kind: 'failure', failure: { error: phase.at === 'apply' ? 'landing-db-apply' : 'landing-db-commit', recovery, mayApply: true } };
+    }
+  }
+
   /** The landing entrances' guard: unavailable without a journal port, `landing-fenced` while the fence stands. */
-  private landingGuard(): LandingInfrastructureFailure | null {
+  private landingGuard(): LandingBoundaryFailure | null {
     if (this.landing.landingJournal === undefined) return { error: 'landing-journal-unavailable', recovery: 'restart' };
     return this.landingFence === null ? null : { error: 'landing-fenced', recovery: this.landingFence };
   }
@@ -3518,16 +3544,54 @@ export class CoordStore {
   /** The guarded inner read: every landing SELECT reads bigints, and one project's rows fold into its coherent facts. */
   private landingFactsInner(project: string): LandingReadResult {
     const all = (sql: string, ...p: string[]): Record<string, unknown>[] => this.bigReads(sql).all(...p) as Record<string, unknown>[];
+    const entries = all('SELECT id, project, pr, pinnedSha, handoffCommit, runId, state, baseSha, ejectionKind, ejections, afterIds, fixesMain, ' +
+      'setBy, pinnedAt, quarantineKind FROM landing_entries WHERE project = ? ORDER BY pinnedAt, id', project);
+    const subjects = all('SELECT id, project, pr, bindingKind, observedRunId, observedSeq, creationSeq, creationClaim FROM landing_subjects');
+    const authorities = all('SELECT subjectId, afterIds, fixesMain, setBy, seq FROM landing_authority');
+    const witnesses = all('SELECT entryId, project, pr, observedSeq, runId, pinnedSha, handoffCommit FROM landing_projection_witness');
     return landingFactsOf(project, {
-      entries: all('SELECT id, project, pr, pinnedSha, handoffCommit, runId, state, baseSha, ejectionKind, ejections, afterIds, fixesMain, ' +
-        'setBy, pinnedAt, quarantineKind FROM landing_entries WHERE project = ? ORDER BY pinnedAt, id', project),
+      entries,
       foreign: all('SELECT id, project, pr FROM landing_entries WHERE project <> ? ORDER BY pinnedAt, id', project),
-      subjects: all('SELECT id, project, pr, bindingKind, observedRunId, observedSeq, creationSeq, creationClaim FROM landing_subjects'),
-      authorities: all('SELECT subjectId, afterIds, fixesMain, setBy, seq FROM landing_authority'),
-      witnesses: all('SELECT entryId, project, pr, observedSeq, runId, pinnedSha, handoffCommit FROM landing_projection_witness'),
+      subjects, authorities, witnesses,
       flags: all('SELECT operatorPaused, mainRedHold FROM landing_projects WHERE project = ?', project)[0],
       runs: all('SELECT id, claimedBy FROM runs WHERE id IN (SELECT runId FROM landing_entries WHERE project = ? AND runId IS NOT NULL)', project),
+      terminalTokens: this.terminalRepairTokens(entries, subjects, authorities, witnesses),
     });
+  }
+
+  /**
+   * The ONE builder of a terminal repair token (wave 5i, D-8626, Amendment B). One full SHA-256 per entry over, in this fixed
+   * order, the row's fifteen retained columns, then the matching subject, authority and witness rows (each, or an explicit
+   * absent tag). Every raw value is tagged by its SQLite kind: `["string",s]`, `["bigint","<decimal>"]` (an INTEGER is read
+   * as a bigint, so none is rounded), `["number","<text>"]`, `["null"]`, and `["bytes","<lowercase hex of every byte>"]` for a
+   * BLOB, so bytes `[0,255]` and the text `00ff` differ, and so do an empty BLOB, the empty string and null. A kind SQLite
+   * never returns is not stringified and not dropped: that entry gets NO token, and the fold reads it as retained-fields. L1
+   * sees only the string. The land arm calls this again inside its own transaction before it writes.
+   */
+  private terminalRepairTokens(entries: Record<string, unknown>[], subjects: Record<string, unknown>[], authorities: Record<string, unknown>[],
+    witnesses: Record<string, unknown>[]): { id: number; token: string }[] {
+    const tag = (v: unknown): unknown[] | null => v === undefined ? ['absent'] : v === null ? ['null'] : typeof v === 'string' ? ['string', v]
+      : typeof v === 'bigint' ? ['bigint', v.toString()] : typeof v === 'number' ? ['number', Object.is(v, -0) ? '-0' : String(v)]
+      : v instanceof Uint8Array ? ['bytes', Buffer.from(v.buffer, v.byteOffset, v.byteLength).toString('hex')] : null;
+    const part = (r: Record<string, unknown> | undefined, names: string): unknown[] | null => {
+      if (r === undefined) return ['absent'];
+      const tags = names.split(' ').map((n) => tag(r[n]));
+      return tags.includes(null) ? null : tags;
+    };
+    const out: { id: number; token: string }[] = [];
+    for (const row of entries) {
+      const id = typeof row.id === 'bigint' ? Number(row.id) : NaN;
+      const subject = subjects.find((s) => s.id === row.id && s.project === row.project && s.pr === row.pr);
+      const authority = subject === undefined ? undefined : authorities.find((a) => a.subjectId === subject.id);
+      const witness = witnesses.find((w) => w.entryId === row.id && w.project === row.project && w.pr === row.pr);
+      const parts = [part(row, 'id project pr pinnedSha handoffCommit runId state baseSha ejectionKind ejections afterIds fixesMain setBy pinnedAt quarantineKind'),
+        part(subject, 'id project pr bindingKind observedRunId observedSeq creationSeq creationClaim'), part(authority, 'subjectId afterIds fixesMain setBy seq'),
+        part(witness, 'entryId project pr observedSeq runId pinnedSha handoffCommit')];
+      if (Number.isSafeInteger(id) && !parts.includes(null)) {
+        out.push({ id, token: createHash('sha256').update(JSON.stringify(['ccrc-landing-terminal-repair-v1', ...parts])).digest('hex') });
+      }
+    }
+    return out;
   }
 
   /** One project's guarded landing facts (entries, flags, recovery and the inner inventories): a synchronous read
@@ -3535,13 +3599,20 @@ export class CoordStore {
   readLanding(project: string): LandingReadResult {
     const fenced = this.landingGuard();
     if (fenced !== null) return { ok: false, ...fenced };
-    try { return this.db.isTransaction ? this.landingFactsInner(project) : tx(this.db, () => this.landingFactsInner(project)); }
+    // An AMBIENT transaction is the caller's: this read neither owns its rollback nor can prove it, so a SQL failure inside it
+    // THROWS to the caller (wave 5i, M18), who rolls back and whose own landing entrance, if any, proves the boundary. The catch
+    // below owns only the transaction this read opened itself; reaching `landingBoundary` from inside a caller's transaction
+    // would find `isTransaction` true and close the shared connection under it.
+    let ambient: boolean;
+    try { ambient = this.db.isTransaction; } catch { return { ok: false, error: 'landing-db-unavailable', recovery: this.landingBoundary() }; }
+    if (ambient) return this.landingFactsInner(project);
+    try { return tx(this.db, () => this.landingFactsInner(project)); }
     catch { return { ok: false, error: 'landing-db-unavailable', recovery: this.landingBoundary() }; }
   }
 
   /** The whole journal, validated, against the DB cursor: `fail` is the typed refusal (never raw text), `snapshot` the
    *  adapter's evidence the caller must release. Absence is bootstrap only with cursor 0 and no overlay rows. */
-  private landingHistory(log: LandingJournalPort): { fail: LandingInfrastructureFailure | null; snapshot: LandingJournalSnapshot | null;
+  private landingHistory(log: LandingJournalPort): { fail: LandingBoundaryFailure | null; snapshot: LandingJournalSnapshot | null;
     records: LandingJournalRecord[]; lastSeq: number; cursor: number } {
     const r = log.read();
     if (!r.ok) return { fail: { error: 'landing-journal-unreadable', recovery: 'replay' }, snapshot: null, records: [], lastSeq: 0, cursor: 0 };
@@ -3549,7 +3620,7 @@ export class CoordStore {
   }
 
   /** `landingHistory`'s body after a successful read: a throw out of it is released by the caller. */
-  private landingHistoryOf(r: Extract<ReturnType<LandingJournalPort['read']>, { ok: true }>): { fail: LandingInfrastructureFailure | null;
+  private landingHistoryOf(r: Extract<ReturnType<LandingJournalPort['read']>, { ok: true }>): { fail: LandingBoundaryFailure | null;
     snapshot: LandingJournalSnapshot | null; records: LandingJournalRecord[]; lastSeq: number; cursor: number } {
     const c = this.bigReads('SELECT appliedSeq AS cursor, (SELECT COUNT(*) FROM landing_subjects) + (SELECT COUNT(*) FROM landing_authority) AS overlay ' +
       'FROM landing_journal_cursor WHERE id = 1').get() as { cursor: bigint; overlay: bigint } | undefined;
@@ -3596,7 +3667,7 @@ export class CoordStore {
     let phase = 'read' as 'read' | 'apply' | 'commit';
     // Called with the fence OPEN, a failed replay closes it (the more severe restart fence a boundary proof sets stays).
     const wasOpen = this.landingFence === null;
-    const refuse = (f: LandingInfrastructureFailure): LandingJournalReplay => {
+    const refuse = (f: LandingBoundaryFailure): LandingJournalReplay => {
       if (wasOpen) this.landingFence = this.landingFence ?? f.recovery;
       return { ok: false, ...f };
     };
@@ -3638,14 +3709,14 @@ export class CoordStore {
         decide: () => {
           const hist = this.landingHistory(log);
           held = hist.snapshot;
-          const stop = (f: LandingInfrastructureFailure): { stop: LandingAuthorityWrite } => { this.landingFence ??= 'replay'; return { stop: { ok: false, ...f } }; };
+          const stop = (f: LandingBoundaryFailure): { stop: LandingAuthorityWrite } => { this.landingFence ??= 'replay'; return { stop: { ok: false, ...f } }; };
           if (hist.fail !== null) return stop(hist.fail);
           if (hist.lastSeq !== hist.cursor) return stop({ error: 'landing-journal-cursor', recovery: 'replay' });
           const read = this.landingFactsInner(command.project);
           if (!read.ok) return { stop: read };
           const decision = decideLandingMutation(command, read.facts);
           if (!decision.ok) {
-            return { stop: decision.error === 'landing-projection-unreadable' ? { ok: false, error: decision.error, recovery: 'restart' }
+            return { stop: decision.error === 'landing-projection-unreadable' ? { ok: false, error: decision.error, recovery: 'repair' }
               : { ok: false, error: decision.error } };
           }
           const m = decision.mutation;

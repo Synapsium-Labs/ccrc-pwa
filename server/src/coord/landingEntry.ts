@@ -3,10 +3,11 @@
 // the facts, calls `decideLandingWrite`, and acts inside its transaction. Value imports are L0 only.
 import type { RunState } from '../../../shared/api.js';
 import type { ChecksMode } from '../../../shared/landing.js';
-import { isLandingEjectionKind, isLandingEntryState } from '../../../shared/landingLine.js';
+import { isLandingEjectionKind, isLandingEntryState, LANDING_ENTRY_TERMINAL } from '../../../shared/landingLine.js';
 import type {
   LandingAuthority, LandingEjectionKind, LandingEntry, LandingEntryState, LandingHistoricalBinding, LandingIdentity,
-  LandingJournalRecord, LandingMutationCode, LandingRecovery, LandingRecoverySubject, LandingSubjectRef, LandingWrite,
+  LandingJournalRecord, LandingMutationCode, LandingProjectionFailure, LandingRecovery, LandingRecoverySubject, LandingSubjectRef,
+  LandingWrite,
 } from '../../../shared/landingLine.js';
 import type { LandingAuthorityCommand, LandingMutationDecision, LandingMutationFacts, LandingReadResult } from './landingWrites.js';
 
@@ -32,9 +33,10 @@ export type LandingWriteDecision =
   /** A retreat whose entry names a head other than the episode's: the row is marked `unknown` with its one marker, and
    *  nothing else about it moves (no base, no count, no notice). */
   | { act: 'quarantine'; id: number }
-  /** A retreat whose owned, pinned entry names another head and cannot be read as a whole: the advance is refused before
-   *  the run moves, with the line's own typed infrastructure answer (nothing is rewritten, the run stays at `merging`). */
-  | { act: 'refuse'; failure: { ok: false; error: 'landing-projection-unreadable'; recovery: 'restart' } };
+  /** A retreat whose owned, pinned entry cannot be read as a whole, at the episode's head or at another (wave 5i): the
+   *  advance is refused before the run moves, with the line's own typed answer, which names a repair, not a restart
+   *  (nothing is rewritten, the run stays at `merging`, no ejection is counted and no ask is raised). */
+  | { act: 'refuse'; failure: { ok: false } & LandingProjectionFailure };
 
 /** advanceAct's choice: to 'merging' with a verdict → pin (head = measured.branchTip, pr = measured.prNumber ?? null);
  *  to 'working' → retreat (the parsed ejection or null); anything else → plain. */
@@ -58,8 +60,15 @@ export function decideLandingWrite(f: { landing: LandingAdvance; from: RunState;
   if (landing.kind === 'pin') {
     if (landing.pr === null) return { act: 'none', write: { kind: 'no-pr' } };
     if (current === null) return { act: 'insert' };
+    if (current.state === 'pinned' || current.state === 'ejected') return { act: 'repin', id: current.id };
     // A `closed` row re-pins as an ejected one does: GitHub lets a closed PR reopen, and only a verified pin brings it back.
-    if (current.state === 'pinned' || current.state === 'ejected' || current.state === 'closed') return { act: 'repin', id: current.id };
+    // Wave 5i (D-8626): only over a projection that reads with no marker. A closed row whose pin metadata does not read (a
+    // terminal repair retired it without restoring anything) stays closed: a re-pin would write a witness and a pinned row
+    // over a setter or a handoff nobody can read, inventing the metadata that was never there.
+    if (current.state === 'closed') {
+      return f.projection?.kind === 'readable' && f.projection.quarantine === null ? { act: 'repin', id: current.id }
+        : { act: 'none', write: { kind: 'kept', state: 'closed' } };
+    }
     // Wave 5f: `projection` is the single row reader's verdict on `current`. A quarantined row (literal unknown with exactly
     // the stale-head marker and every retained field readable) re-pins; every other unknown row stays kept.
     if (current.state === 'unknown' && f.projection?.kind === 'readable' && f.projection.quarantine === 'stale-episode-head') {
@@ -72,15 +81,15 @@ export function decideLandingWrite(f: { landing: LandingAdvance; from: RunState;
   if (f.episode.pr === null) return { act: 'none', write: { kind: 'no-pr' } };
   if (current === null) return { act: 'none', write: { kind: 'no-entry' } };
   if (current.runId !== f.runId || current.state !== 'pinned') return { act: 'none', write: { kind: 'kept', state: current.state } };
-  // Wave 5f: an owned, pinned entry whose head is not the episode's head is stale, so nothing about its ejection is known:
-  // it is quarantined (no ejection, base, count or notice). An unreadable projection is neither ejected nor rewritten to
-  // mint the marker, and the retreat is refused, so the run is not moved past an entry nobody can read.
-  if (current.pinnedSha !== f.episode.head) {
-    if (f.projection?.kind !== 'readable') {
-      return { act: 'refuse', failure: { ok: false, error: 'landing-projection-unreadable', recovery: 'restart' } };
-    }
-    return { act: 'quarantine', id: current.id };
+  // An unreadable projection is neither ejected nor rewritten to mint the marker, and the retreat is refused, so the run is
+  // not moved past an entry nobody can read. Wave 5i (M16): this is asked BEFORE the head is compared, so the owned, pinned
+  // entry at the episode's own head is held to it too (a corrupt handoff or setter is no ejection, and counts no ask).
+  if (f.projection?.kind !== 'readable') {
+    return { act: 'refuse', failure: { ok: false, error: 'landing-projection-unreadable', recovery: 'repair' } };
   }
+  // Wave 5f: an owned, pinned entry whose head is not the episode's head is stale, so nothing about its ejection is known:
+  // it is quarantined (no ejection, base, count or notice).
+  if (current.pinnedSha !== f.episode.head) return { act: 'quarantine', id: current.id };
   return { act: 'eject', id: current.id, base: landing.ejection?.base ?? null, kind: landing.ejection?.kind ?? null,
     ejections: current.ejections >= Number.MAX_SAFE_INTEGER ? current.ejections : current.ejections + 1 };
 }
@@ -107,7 +116,9 @@ export type LandingOutcome =
  *  the close's: a merge is final, so no later pin can make it untrue. */
 export interface LandingLand {
   kind: 'land'; project: string; pr: number; by: 'close' | 'reader'; at: number; outcome: LandingOutcome;
-  expect: { id: number; pinnedAt: number } | null;
+  /** `repairToken` (wave 5i, D-8626) marks a terminal-repair candidate: the reader read the row's `terminalRepairs` verdict
+   *  as eligible and carries its token, which the arm recomputes in its own transaction. Absent: a normal candidate. */
+  expect: { id: number; pinnedAt: number; repairToken?: string } | null;
 }
 
 /** What the land arm recorded, as the store answers it. */
@@ -118,14 +129,25 @@ export type LandingLandWrite =
   | { kind: 'moved' };
 
 /** The mark's decision, from values: which row takes which word and `detail`, or why nothing is written. */
-export function decideLandingLand(f: { land: LandingLand; current: LandingEntry | null; projection: LandingProjectionRead | null }):
+export function decideLandingLand(f: { land: LandingLand; current: LandingEntry | null; projection: LandingProjectionRead | null;
+  terminalRepair?: LandingTerminalRepair }):
   { act: 'land'; id: number; state: 'landed' | 'closed'; detail: string } | { act: 'none'; write: LandingLandWrite } {
   const { land, current } = f;
   if (current === null) return { act: 'none', write: { kind: 'no-entry' } };
   if (land.expect !== null && (land.expect.id !== current.id || land.expect.pinnedAt !== current.pinnedAt)) {
     return { act: 'none', write: { kind: 'moved' } };
   }
-  if (!isLandable(current.state, f.projection)) return { act: 'none', write: { kind: 'kept', state: current.state } };
+  const token = land.expect?.repairToken;
+  if (token === undefined) {
+    // A normal candidate: `isLandable` stays the strict gate, and a terminal verdict is no permission for it.
+    if (!isLandable(current.state, f.projection)) return { act: 'none', write: { kind: 'kept', state: current.state } };
+  } else if (f.terminalRepair?.kind !== 'eligible') {
+    // A repair candidate whose row is no longer eligible (a marker, a hold-free exclusion, or a row that reads again).
+    return { act: 'none', write: { kind: 'kept', state: current.state } };
+  } else if (f.terminalRepair.token !== token) {
+    // The row, or the evidence it was measured with, changed since the reader's read: moved, never a new repair attempt.
+    return { act: 'none', write: { kind: 'moved' } };
+  }
   const o = land.outcome;
   const base = { v: 1, by: land.by, at: land.at, word: o.word };
   const detail = o.word === 'merged'
@@ -178,6 +200,23 @@ export interface LandingEntryFacts {
   projection: LandingProjectionRead;
 }
 
+/** The structural readings of one row that both the strict reader and the terminal repair verdict need. ONE copy, so the
+ *  verdict cannot call readable what the reader refuses, or the reverse. */
+interface RowParts {
+  kindOk: boolean; afterIds: number[] | null; id: number | null; pr: number | null; runId: number | null; runIdOk: boolean;
+  fixesRaw: unknown; fixesOk: boolean; pinnedAt: number | null; ejections: number | null; baseOk: boolean;
+}
+function rowParts(row: Record<string, unknown>): RowParts {
+  const runId = absent(row.runId) ? null : safeIntOf(row.runId, 1);
+  const fixesRaw = typeof row.fixesMain === 'bigint' ? Number(row.fixesMain) : row.fixesMain;
+  return {
+    kindOk: absent(row.ejectionKind) || isLandingEjectionKind(row.ejectionKind), afterIds: afterIdsOf(row.afterIds),
+    id: safeIntOf(row.id, 1), pr: safeIntOf(row.pr, 1), runId, runIdOk: absent(row.runId) || runId !== null,
+    fixesRaw, fixesOk: typeof fixesRaw === 'number' && (fixesRaw === 0 || fixesRaw === 1),
+    pinnedAt: safeIntOf(row.pinnedAt, 0), ejections: safeIntOf(row.ejections, 0), baseOk: absent(row.baseSha) || hash40(row.baseSha),
+  };
+}
+
 /** THE strict reader of one `landing_entries` row (the row is never mutated). The display `entry` keeps its 5e contract:
  *  a `state` that is not a word, an `ejectionKind` that is neither null nor a kind, an unreadable `afterIds`, a
  *  `fixesMain` that is not exactly 0 or 1, or a `pinnedAt`/`ejections` that is not a nonnegative safe integer
@@ -186,16 +225,7 @@ export interface LandingEntryFacts {
  *  invalid id, pr or run id makes it unreadable, and the store refuses the whole snapshot), and the state is either an
  *  ordinary word with no quarantine marker or the literal `unknown` with exactly the `stale-episode-head` marker. */
 export function landingEntryFactsOfRow(row: Record<string, unknown>): LandingEntryFacts {
-  const kindOk = absent(row.ejectionKind) || isLandingEjectionKind(row.ejectionKind);
-  const afterIds = afterIdsOf(row.afterIds);
-  const id = safeIntOf(row.id, 1);
-  const pr = safeIntOf(row.pr, 1);
-  const runId = absent(row.runId) ? null : safeIntOf(row.runId, 1);
-  const runIdOk = absent(row.runId) || runId !== null;
-  const fixesRaw = typeof row.fixesMain === 'bigint' ? Number(row.fixesMain) : row.fixesMain;
-  const fixesOk = typeof fixesRaw === 'number' && (fixesRaw === 0 || fixesRaw === 1);
-  const pinnedAt = safeIntOf(row.pinnedAt, 0);
-  const ejections = safeIntOf(row.ejections, 0);
+  const { kindOk, afterIds, id, pr, runId, runIdOk, fixesRaw, fixesOk, pinnedAt, ejections, baseOk } = rowParts(row);
   const wordOk = isLandingEntryState(row.state) && row.state !== 'unknown';
   const displayOk = isLandingEntryState(row.state) && kindOk && afterIds !== null && fixesOk && pinnedAt !== null
     && ejections !== null && id !== null && pr !== null && runIdOk;
@@ -210,7 +240,6 @@ export function landingEntryFactsOfRow(row: Record<string, unknown>): LandingEnt
   };
   const marker = row.quarantineKind;
   const stateOk = wordOk ? absent(marker) : row.state === 'unknown' && marker === 'stale-episode-head';
-  const baseOk = absent(row.baseSha) || hash40(row.baseSha);
   const readable = stateOk && kindOk && baseOk && afterIds !== null && fixesOk && pinnedAt !== null
     && ejections !== null && id !== null && pr !== null && runIdOk && nonblank(row.project) && hash40(row.pinnedSha)
     && hash40(row.handoffCommit) && nonblank(row.setBy);
@@ -329,10 +358,48 @@ export interface LandingStoreRows {
   flags: Record<string, unknown> | undefined;
   /** `{id, claimedBy}` of the runs this project's entries name. */
   runs: Record<string, unknown>[];
+  /** Wave 5i (D-8626): the full SHA-256 repair token of each of this project's entries, measured by the store's ONE builder
+   *  (`CoordStore`) over the exact raw retained values and the matching subject, authority and witness. An entry with no
+   *  token here carries a value the builder could not tag; the fold treats it as retained-fields, never as eligible. */
+  terminalTokens: { id: number; token: string }[];
 }
 
 const json = (v: unknown): unknown => { try { return typeof v === 'string' ? JSON.parse(v) : undefined; } catch { return undefined; } };
-const UNREADABLE: LandingReadResult = { ok: false, error: 'landing-projection-unreadable', recovery: 'restart' };
+const UNREADABLE: LandingReadResult = { ok: false, error: 'landing-projection-unreadable', recovery: 'repair' };
+
+// ── Wave 5i (D-8626, Amendment B): the terminal-evidence permission ──
+
+/** Whether a fresh PR-keyed merged/closed/absent answer may retire one open row whose pin-only metadata does not read:
+ *  `eligible` carries the repair token the land arm recomputes; `blocked` names the first exclusion that stands. It restores
+ *  no metadata, head, pin, association or witness, and it is never a readable projection. */
+export type LandingTerminalRepair =
+  | { kind: 'eligible'; token: string }
+  | { kind: 'blocked'; reason: 'identity' | 'binding' | 'quarantine' | 'retained-fields' };
+
+/** The columns a repair token covers and the verdict inspects: all fifteen, each of a kind SQLite itself returns. */
+const RETAINED_COLUMNS = ['id', 'project', 'pr', 'pinnedSha', 'handoffCommit', 'runId', 'state', 'baseSha', 'ejectionKind', 'ejections',
+  'afterIds', 'fixesMain', 'setBy', 'pinnedAt', 'quarantineKind'] as const;
+const isSqliteValue = (v: unknown): boolean =>
+  v === undefined || v === null || typeof v === 'string' || typeof v === 'number' || typeof v === 'bigint' || v instanceof Uint8Array;
+
+/** The verdict for one row, from values; `null` when none applies (the row reads with no marker, or it already left the
+ *  line). Only pin SHA, handoff, setter or the state word may be what does not read: identity, a marker, dependencies,
+ *  counters, pin time, base, ejection kind and the current association each exclude, in that order. The token is the
+ *  store's; this never hashes and never touches SQLite. */
+function terminalRepairOf(f: { row: Record<string, unknown>; facts: LandingEntryFacts; recovery: LandingRecovery;
+  coordinator: LandingMutationFacts['coordinators'][number]['value']; token: string | undefined }): LandingTerminalRepair | null {
+  const { row, facts } = f;
+  const reads = facts.projection.kind === 'readable' && facts.projection.quarantine === null;
+  if (reads || (isLandingEntryState(row.state) && LANDING_ENTRY_TERMINAL[row.state])) return null;
+  const blocked = (reason: Extract<LandingTerminalRepair, { kind: 'blocked' }>['reason']): LandingTerminalRepair => ({ kind: 'blocked', reason });
+  const p = rowParts(row);
+  if (f.recovery.subjects.some((s) => s.projection.kind === 'identity-conflict') || !nonblank(row.project) || !p.runIdOk) return blocked('identity');
+  if (!absent(row.quarantineKind)) return blocked('quarantine');
+  if (f.token === undefined || !RETAINED_COLUMNS.every((c) => isSqliteValue(row[c])) || !p.kindOk || !p.baseOk || p.afterIds === null
+    || !p.fixesOk || p.pinnedAt === null || p.ejections === null) return blocked('retained-fields');
+  if (f.coordinator.kind === 'unreadable' || f.recovery.subjects.some((s) => s.project === facts.entry.project && s.pr === facts.entry.pr)) return blocked('binding');
+  return { kind: 'eligible', token: f.token };
+}
 
 /** The recovered subjects, from the overlay tables; null when a row is not what the SQL constraints promise. */
 function subjectsOf(rows: LandingStoreRows): LandingRecoverySubjectFact[] | null {
@@ -374,7 +441,7 @@ export function landingFactsOf(project: string, rows: LandingStoreRows): Landing
   const subjects = subjectsOf(rows);
   if (subjects === null) return UNREADABLE;
   const all: LandingEntryFacts[] = [];
-  const mine: { facts: LandingEntryFacts; row: Record<string, unknown> }[] = [];
+  const mine: { facts: LandingEntryFacts; row: Record<string, unknown>; eff: Record<string, unknown> }[] = [];
   const ids: number[] = subjects.map((s) => s.id);
   const foreign = new Set<number>(subjects.filter((s) => s.project !== project).map((s) => s.id));
   for (const row of rows.entries) {
@@ -383,10 +450,10 @@ export function landingFactsOf(project: string, rows: LandingStoreRows): Landing
     ids.push(id);
     const subject = subjects.find((s) => s.id === id && s.project === row.project && s.pr === pr);
     const set = subject?.authority.kind === 'set' ? subject.authority.value : null;
-    const facts = landingEntryFactsOfRow(set === null ? row
-      : { ...row, afterIds: JSON.stringify(set.afterIds), fixesMain: set.fixesMain ? 1 : 0, setBy: set.setBy });
+    const eff = set === null ? row : { ...row, afterIds: JSON.stringify(set.afterIds), fixesMain: set.fixesMain ? 1 : 0, setBy: set.setBy };
+    const facts = landingEntryFactsOfRow(eff);
     all.push(facts);
-    mine.push({ facts, row });
+    mine.push({ facts, row, eff });
   }
   // Another project's row is read by identity only: its id, project and pr are all the allocator, the foreign ids and
   // the recovery fold's conflict and exact-identity search use of it. The stub facts carry no other claim.
@@ -414,18 +481,31 @@ export function landingFactsOf(project: string, rows: LandingStoreRows): Landing
     const ok = runId !== null && run !== undefined && (claimedBy === null || typeof claimedBy === 'string');
     return { id, value: ok ? { kind: 'run' as const, runId, claimedBy: claimedBy as string | null } : { kind: 'unreadable' as const } };
   });
+  const recovery = landingRecoveryOf(project, { subjects, projections: all, witnesses });
+  const tokens = new Map(rows.terminalTokens.map((t) => [t.id, t.token] as const));
+  const terminalRepairs: LandingMutationFacts['terminalRepairs'] = [];
+  for (const m of mine) {
+    const id = m.facts.entry.id;
+    const coordinator = coordinators.find((c) => c.id === id)?.value ?? { kind: 'unreadable' as const };
+    const value = terminalRepairOf({ row: m.eff, facts: m.facts, recovery, coordinator, token: tokens.get(id) });
+    if (value !== null) terminalRepairs.push({ id, value });
+  }
   return { ok: true, facts: {
-    project, flags: landingFlagsOfRow(rows.flags), entries: mine.map((m) => m.facts.entry),
-    recovery: landingRecoveryOf(project, { subjects, projections: all, witnesses }),
+    project, flags: landingFlagsOfRow(rows.flags), entries: mine.map((m) => m.facts.entry), recovery,
     projections: mine.map((m) => ({ id: m.facts.entry.id, value: m.facts.projection })),
+    stateWords: mine.map((m) => ({ id: m.facts.entry.id, value: isLandingEntryState(m.row.state) ? m.row.state : 'unrecognised' as const })),
     dependencies: mine.map((m) => ({ id: m.facts.entry.id, value: m.facts.dependencies })),
-    nextId: max + 1 > Number.MAX_SAFE_INTEGER ? null : max + 1, foreignIds: [...foreign], coordinators,
+    nextId: max + 1 > Number.MAX_SAFE_INTEGER ? null : max + 1, foreignIds: [...foreign], coordinators, terminalRepairs,
+    creations: mine.flatMap(({ facts }) => {
+      const e = facts.entry; const c = subjects.find((s) => s.id === e.id && s.project === e.project && s.pr === e.pr)?.creation;
+      return c?.kind === 'recorded' ? [{ id: e.id, seq: c.seq, setBy: c.claim.setBy }] : [];
+    }),
   } };
 }
 
 export type LandingHoldGate =
   | { ok: true; own: LandingRecoverySubject | null }
-  | { ok: false; error: Extract<LandingMutationCode, 'landing-recovery-unresolved' | 'landing-identity-conflict'> };
+  | { ok: false; error: 'landing-recovery-unresolved' | 'landing-identity-conflict' };
 
 /**
  * Whether a pin, retreat or mark may go ahead while recovery holds the project (shared contract §6). A hold is refused to every

@@ -812,7 +812,8 @@ describe('Build 7 nouns', () => {
     // the hierarchy routes and the sync take a `PlanStorePort` built once in `index.ts`.
     // D-8289: `claudeBuildsStore.ts` is the trusted Claude Code builds' SQL, in `linkingStore.ts`'s idiom.
     // The push outbox (Overlord W1): `pushOutboxStore.ts` is the `push_outbox` SQL and the reach stamp, in the same idiom.
-    const HANDLE_HOLDERS = new Set(['store.ts', 'rundefsTx.ts', 'routes.ts', 'db.ts', 'schema.ts', 'tx.ts', 'ledgersStore.ts', 'reviewCapStore.ts', 'linkingStore.ts', 'coordCallsStore.ts', 'practiceCasesStore.ts', 'planStore.ts', 'claudeBuildsStore.ts', 'pushOutboxStore.ts']);
+    // Wave 5i: `landingControlTx.ts` runs the main-red hold UPSERT inside `CoordStore.applyLandingControl`'s owned transaction, so it names the handle.
+    const HANDLE_HOLDERS = new Set(['store.ts', 'rundefsTx.ts', 'routes.ts', 'db.ts', 'schema.ts', 'tx.ts', 'ledgersStore.ts', 'reviewCapStore.ts', 'linkingStore.ts', 'coordCallsStore.ts', 'practiceCasesStore.ts', 'planStore.ts', 'claudeBuildsStore.ts', 'pushOutboxStore.ts', 'landingControlTx.ts']);
     const coordFiles = sources(coordDir);
 
     it('visits the whole directory — a moved directory must turn this red, not disarm it', () => {
