@@ -24174,7 +24174,7 @@ _route_apply_now() {   # id -> 0 everything wanted is applied | 1 something is s
       _route_applied_set "$id" effort auto
       _route_note_clear "$id"
     else
-      # D-8631: a Codex lane is typed the RENDERED level (`ultracode` -> `xhigh`); the stamp below keeps the record's word.
+      # D-8631: a Codex lane is typed the RENDERED level (`ultracode` -> `xhigh`); the stamp below keeps the record's word. This does NOT read `codex-lane-workflows` (the spawn alone reads it), so on a lane with that marker a live move to `ultracode` types `xhigh`, is stamped `effort=ultracode`, and takes its workflows only at the next spawn.
       _route_type_effort "$id" "$(_is_codex_backend "$w" && _route_effort_shown "$eff" || printf '%s' "$eff")"; rc=$?   # journals its own keystroke (`_typed_note`) once the typing check passed
       case "$rc" in
         0) _route_applied_set "$id" effort "$eff"; _route_note_clear "$id" ;;
