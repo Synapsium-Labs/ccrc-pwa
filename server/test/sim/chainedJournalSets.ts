@@ -100,6 +100,11 @@ function edited(m: Kernel, fmt: Fmt<ProbeEntry>, edit: (o: Record<string, unknow
   return ENC.encode(JSON.stringify(o));
 }
 const lineText = (m: Kernel, fmt: Fmt<ProbeEntry>, r: ChainedJournalRecord<ProbeEntry>): string => DEC.decode(sans(m.encodeChainedRecord(fmt, r)));
+/** The canonical line with one space after its opening brace: valid JSON, the same record, but not the canonical bytes. */
+const spacedLine = (text: string): string => {
+  if (!text.startsWith('{')) throw new Error(`a canonical line opens with '{', not ${JSON.stringify(text.slice(0, 1))}`);
+  return `{ ${text.slice(1)}`;
+};
 const position = (r: ChainedJournalRecord<ProbeEntry>): ChainedPosition => ({ sequence: r.sequence, journalId: r.journalId, digest: r.digest });
 
 function thrown(fn: () => unknown): unknown {
@@ -143,7 +148,7 @@ export function reaches(m: Kernel): Record<ChainedJournalErrorCode, () => unknow
     'unknown-key': dec(edited(m, fmt, (o) => { o['extra'] = 1; })),
     'bad-field': dec(edited(m, fmt, (o) => { o['v'] = 2; })),
     'invalid-domain': () => m.decodeChainedLine(loose, LONE_SURROGATE_LINE),
-    noncanonical: dec(ENC.encode(lineText(m, fmt, r1).replace('{', '{ '))),
+    noncanonical: dec(ENC.encode(spacedLine(lineText(m, fmt, r1)))),
     'sequence-domain': dec(edited(m, fmt, (o) => { o['sequence'] = 0; })),
     'sequence-start': feed([r2], { completeFromStart: true }),
     'sequence-duplicate': feed([r1, r1]),
@@ -246,7 +251,7 @@ function groups(m: Kernel): { shared: Cases; decode: Cases; chain: Cases; heal: 
       refusal(line(ENC.encode('{')), 'malformed-json', W);
       refusal(line(ENC.encode('[]')), 'bad-field', W);
       refusal(line(edited(m, fmt, (o) => { o['v'] = 2; })), 'bad-field', W);
-      refusal(line(ENC.encode(lineText(m, fmt, r1).replace('{', '{ '))), 'noncanonical', W);
+      refusal(line(ENC.encode(spacedLine(lineText(m, fmt, r1)))), 'noncanonical', W);
       refusal(line(ENC.encode(lineText(m, fmt, r1).replace('"n":1}', '"n":1,"n":1}'))), 'duplicate-key', W);
       refusal(line(edited(m, fmt, (o) => { o['journalId'] = HEX_B; })), 'journal-id-mismatch', W);
       refusal(line(edited(m, fmt, (o) => { o['digest'] = HEX_B; })), 'digest-mismatch', W);
