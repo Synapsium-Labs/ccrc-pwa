@@ -310,7 +310,7 @@ describe('section 2.2\'s facts each map to the writers pins that hold them (#236
 const TABLES = ['run_events', 'mail_deliveries', 'feed_events', 'lifecycle_events', 'lifecycle_generations',
   'lifecycle_gaps', 'asks', 'approvals', 'practice_cases', 'continuity_starts', 'continuity_generations', 'continuity_cursor',
   'continuity_snapshots', 'continuity_card_reads', 'continuity_timers', 'continuity_notes', 'continuity_handovers',
-  'continuity_probes', 'continuity_reads'] as const;
+  'continuity_probes', 'continuity_reads', 'portfolio_rank', 'portfolio_rank_revision'] as const;
 
 /** Each table's writers, `file#Class.method`, sorted and unique. */
 export const tableWriters = (files: readonly string[]): Record<string, string[]> => {
@@ -380,7 +380,43 @@ describe(TABLES_PIN, () => {
       // The probes (Overlord W1a): one writer per fact, the lane's round and the door's answers; the card and note GETs' stamp.
       continuity_probes: ['answerRound', 'openRound'].map((f) => `server/src/continuity/continuityStore.ts#${f}`),
       continuity_reads: ['server/src/continuity/continuityStore.ts#stampContinuityRead'],
+      // The portfolio (Overlord W1): the operator's order and its revision, one writer for both, reached from the rank door.
+      portfolio_rank: ['server/src/coord/portfolioStore.ts#setPortfolioRank'],
+      portfolio_rank_revision: ['server/src/coord/portfolioStore.ts#setPortfolioRank'],
     });
+  });
+
+  // The portfolio's one writer is reached only from the rank door (Overlord W1, plan w1-portfolio.md Task 2): its callers
+  // under `server/src`, named by the innermost enclosing symbol, are `CoordStore`'s one-line delegate and the door.
+  const rankCallers = (files: readonly string[]): string[] => {
+    const out = new Set<string>();
+    for (const f of files) {
+      const text = readFileSync(f, 'utf8').replace(/^\s*(?:\*|\/\*|\/\/).*$/gm, (l) => ' '.repeat(l.length));
+      // A call, never a definition: not after `function `, and not the delegate's own signature (`setPortfolioRank(w: `).
+      const hits = [...text.matchAll(/(?<!function )\bsetPortfolioRank\((?!w: )/g)];
+      if (hits.length === 0) continue;
+      const syms = parseFile(f).symbols;
+      for (const m of hits) {
+        const inner = syms.filter((x) => x.start <= m.index! && m.index! < x.end).sort((a, b) => (a.end - a.start) - (b.end - b.start))[0];
+        out.add(`${rel(f)}#${inner?.name ?? '(module)'}`);
+      }
+    }
+    return [...out].sort();
+  };
+  it('CONTROL: a call to setPortfolioRank in a function is named by it; its definition is not a call', async () => {
+    const { mkdtempSync, writeFileSync, rmSync } = await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    const d = mkdtempSync(path.join(tmpdir(), 'writers-map-rank-'));
+    try {
+      const f = path.join(d, 'a.ts');
+      writeFileSync(f, ['export function setPortfolioRank(): void {}', 'export function door(): void { setPortfolioRank(); }'].join('\n'));
+      expect(rankCallers([f]).map((s) => s.replace(/^.*#/, ''))).toEqual(['door']);
+    } finally { rmSync(d, { recursive: true, force: true }); }
+  });
+  it('setPortfolioRank is called only by CoordStore\'s delegate and the rank door', () => {
+    expect(rankCallers(ALL.filter((f) => rel(f).startsWith('server/src/')))).toEqual([
+      'server/src/coord/ledgersRoutes.ts#registerLedgerOperatorRoutes', `${S}setPortfolioRank`,
+    ]);
   });
 });
 

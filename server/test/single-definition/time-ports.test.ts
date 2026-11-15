@@ -22,9 +22,10 @@ const TIME_PORT_FILES: readonly string[] = [
   'shared/practice-triggers.ts',
   'server/src/roleOf.ts',
   'shared/fleetRoles.ts',
-  // Overlord W1, portfolio: the class vocabulary and the pure decider take `now` as an argument.
+  // Overlord W1, portfolio: the class vocabulary, the pure decider and the store take `now` as an argument.
   'shared/portfolio.ts',
   'server/src/coord/portfolio.ts',
+  'server/src/coord/portfolioStore.ts',
 ];
 const TIME_PORT_SCOPE = { test: (f: string): boolean => TIME_PORT_FAMILIES.test(f) || TIME_PORT_FILES.includes(f) };
 /** The one file allowed to read the ambient sources: the system adapters. */

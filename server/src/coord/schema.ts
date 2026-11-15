@@ -3111,6 +3111,32 @@ export const MIGRATIONS: readonly string[] = [
     PRIMARY KEY (sessionId, door)
   );
   `,
+
+  // ── 74: user_version 73 -> 74 ─────────────────────────────────────────────
+  // The portfolio (Overlord spec §5.6 H38; W1, plan `w1-portfolio.md` Task 2): `portfolio_rank`, the operator's order, one row
+  // per ranked programme, and `portfolio_rank_revision`, one row whose counter only rises. ONE writer for both,
+  // `portfolioStore.ts#setPortfolioRank`, reached only from the rank door; no row exists until the operator writes one.
+  // NEW TABLES, nothing on an existing table: an older build opening a file at `user_version 74` takes rule 3 and boots.
+  // RE-MEASURE the slot before the PR and before merge (it must print 73 before this entry is counted; renumber on the
+  // coordinator's word):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE portfolio_rank (
+    program   TEXT PRIMARY KEY,   -- a programs.slug; the door checks it exists
+    position  INTEGER NOT NULL,   -- the place inside its class band, 1 first
+    cls       TEXT NOT NULL,      -- ServiceClass; read through isServiceClass, never a cast
+    fixedDate TEXT,               -- YYYY-MM-DD, only on fixed-date
+    setAt     INTEGER NOT NULL,   -- wall ms of the write that last placed this row
+    setBy     TEXT NOT NULL       -- that write's actor: the session's device actor, or flag-off
+  );
+  CREATE TABLE portfolio_rank_revision (
+    id       INTEGER PRIMARY KEY CHECK (id = 1),
+    revision INTEGER NOT NULL,    -- only rises; 0 is "never written", which no row stores
+    setAt    INTEGER NOT NULL,
+    setBy    TEXT NOT NULL
+  );
+  `,
 ];
 
 /** The version this build writes. `MIGRATIONS.length` and nothing else: a

@@ -41,7 +41,7 @@ import {
   decideIdleCompactNudge, idleNudgeDisabled, idleNudgeFeedBody, idleNudgeRefusedBody, idleNudgeRowHold, readCompactionTail,
   type CompactionTail, type IdleNudgeRowFacts,
 } from './idlenudge.js';
-import { askActions } from './askkey.js';
+import { askActions, askKey } from './askkey.js';
 // The ask lane's two WINDOWS moved out of this file (whole-branch review
 // F2(b)): `fleet.ts`'s chip is their second reader and cannot import this
 // module — `watch.ts` imports `assembleFleetWithPanePids` from it — so they now live
@@ -2165,6 +2165,12 @@ export class FleetWatcher {
    *  immediately. Same reasoning as currentPending(). */
   currentHookStates(): Map<string, HookState> {
     return new Map(this.hookStates);
+  }
+  /** `LiveAskRead`'s adapter (Overlord W1, portfolio): the `askKey` of the ask this child's newest hookstate is `waiting` on,
+   *  `null` when it shows none, `unmeasured` when no hookstate was read for it in this process. A pure read; stores nothing. */
+  liveAskKey(childId: string): string | null | 'unmeasured' {
+    const hs = this.hookStates.get(childId);
+    return hs === undefined ? 'unmeasured' : hs.state === 'waiting' ? askKey(hs.ask) : null;
   }
 
   /** The last measured marker state, for `/ws/fleet`'s cold start. `null` means
