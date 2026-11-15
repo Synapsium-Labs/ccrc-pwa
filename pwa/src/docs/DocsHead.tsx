@@ -831,7 +831,7 @@ export function DocsHead(p: {
           <>
             <TruthLine page={listed.page} visit={visit} tree={listed.tree} receivedAt={receivedAt} now={now} />
             <Actions form="stacked" page={listed.page} tree={listed.tree} {...actionInputs} />
-            {p.plainView === true && <p className="docs-note" role="status" tabIndex={-1} data-plain-note="">{DOCS_HEAD_TEXT.exportPlainShown}</p>}
+            {p.plainView === true && <PlainViewNote />}
           </>
         )}
         {visit.updatedTo !== null && (
@@ -846,7 +846,7 @@ export function DocsHead(p: {
       {listed !== null && (
         <>
           <TruthLine page={listed.page} visit={visit} tree={listed.tree} receivedAt={receivedAt} now={now} />
-          {p.plainView === true && <p className="docs-note" role="status" tabIndex={-1} data-plain-note="">{DOCS_HEAD_TEXT.exportPlainShown}</p>}
+          {p.plainView === true && <PlainViewNote />}
         </>
       )}
       {visit.updatedTo !== null && (
@@ -1061,7 +1061,7 @@ function CompactHead(p: CompactProps & { readonly tree: DocsTreeOk | null }): Re
           </div>
         )
         : <CompactRow {...p} tree={tree} where={where} name={name} />}
-      {p.plainView && <p className="docs-note" role="status" tabIndex={-1} data-plain-note="">{DOCS_HEAD_TEXT.exportPlainShown}</p>}
+      {p.plainView && <PlainViewNote />}
       {visit.updatedTo !== null && (
         <p className="docs-updated" role="status">{fillSentence(DOCS_HEAD_TEXT.updatedTo, { short: shortCommit(visit.updatedTo) })}</p>
       )}
@@ -1145,6 +1145,12 @@ const TOOL_ICON: Record<ReaderCommand, IconName> = {
 function ReadLine(p: { readonly progress: ReaderProgress }): ReactNode {
   const share = useSyncExternalStore(p.progress.subscribe, p.progress.read, p.progress.read);
   return <span className="docs-read" aria-hidden="true" style={{ inlineSize: `${Math.round(share * 1000) / 10}%` }} />;
+}
+
+/** The plain-view note (refinement (a)), drawn by every head once the reader is off on the page. It takes focus after a
+ *  plain-view choice (fix round 3, A19): focusable by script only, still a status. One writer for the three heads. */
+function PlainViewNote(): ReactNode {
+  return <p className="docs-note" role="status" tabIndex={-1} data-plain-note="">{DOCS_HEAD_TEXT.exportPlainShown}</p>;
 }
 
 /** The one bar (the library 1.1 take-up plan, refinements (f) to (l)): a leaf whose reader frame is ready on ccrc's bar.
