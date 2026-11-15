@@ -223,7 +223,9 @@ describe('CONTROL: each extractor refuses zero and two, so no case above can pas
     expect(helperDeadlinesIn(ok)).toEqual({ 'docs-index': 12, 'docs-tree': 12, 'docs-show': 7, 'docs-fetch': 45, 'docs-log': 10 });
     expect(() => helperDeadlinesIn("HELPER_DEADLINE_S={'docs-index':12,'docs-tree':12,'docs-show':7,'docs-fetch':45}\n"))
       .toThrow(/exactly the docs verbs/);
-    expect(() => helperDeadlinesIn(ok.replace('}', ",'docs-x':1}"))).toThrow(/exactly the docs verbs/);
+    expect(() => helperDeadlinesIn(
+      "HELPER_DEADLINE_S={'docs-index':12,'docs-tree':12,'docs-show':7,'docs-fetch':45,'docs-log':10,'docs-x':1}\n",
+    )).toThrow(/exactly the docs verbs/);
     expect(() => helperDeadlinesIn(ok.replace(':7,', ':7.5,'))).toThrow(/integer seconds/);
     expect(() => helperDeadlinesIn(`${ok}HELPER_DEADLINE_S={}\n`)).toThrow(/bound 2 times/);
   });
