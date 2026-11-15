@@ -109,7 +109,7 @@ describe('nextLandingNoticeOf: recipient and tuple policy (pure)', () => {
     const f = nextFacts();
     const run = f.run as NextLandingRun;
     const reason = (over: Partial<NextLandingFacts>): string => { const o = nextLandingNoticeOf({ ...f, ...over }); return o.kind === 'send' ? 'send' : o.reason; };
-    expect(reason({ run: 'missing' })).toBe('run-absent');
+    expect(reason({ run: 'missing' })).toBe('run-unreadable');
     expect(reason({ run: 'unreadable' })).toBe('run-unreadable');
     expect(reason({ run: { ...run, project: 'project-b' } })).toBe('run-unreadable');
     expect(reason({ run: { ...run, id: run.id + 1 } })).toBe('run-unreadable');
@@ -281,6 +281,17 @@ describe('applyLandingControl: the facts are revalidated inside the transaction 
     coord.db.prepare("UPDATE landing_entries SET pinnedSha = ?").run('e'.repeat(40));
     expect(apply(control)).toEqual({ kind: 'no-send', reason: 'head-mismatch', holdChanged: false });
     expect(cueMails()).toHaveLength(0);
+  });
+
+  it('a selected head whose run row is gone answers run-unreadable: no mail, no delivery, no observation', () => {
+    const id = atMerging();
+    const control = controlAt();
+    coord.db.exec('PRAGMA foreign_keys = OFF');
+    coord.db.prepare('DELETE FROM runs WHERE id = ?').run(id);
+    expect(apply(control)).toEqual({ kind: 'no-send', reason: 'run-unreadable', holdChanged: false });
+    expect(rows('SELECT * FROM mail')).toHaveLength(0);
+    expect(rows('SELECT * FROM mail_deliveries')).toHaveLength(0);
+    expect(cueObservations()).toHaveLength(0);
   });
 
   it('an entry that left the line, a pause and a run that left merging send nothing', () => {

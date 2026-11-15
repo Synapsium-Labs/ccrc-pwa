@@ -16,7 +16,7 @@ import type { LandingMutationFacts } from './landingWrites.js';
 /** Why no cue is sent: a binding refusal (its own word), a proven marker absence, or a recipient or episode that cannot be
  *  named. An eligibility refusal and nothing else: a durable prior mail is `duplicate` and an unproven operation `failure`. */
 export type NextLandingNoSendReason = LandingBindingReason
-  | 'inert' | 'run-absent' | 'run-unreadable' | 'run-not-merging' | 'episode-unreadable' | 'episode-changed' | 'recipient-missing' | 'creation-unrecorded';
+  | 'inert' | 'run-unreadable' | 'run-not-merging' | 'episode-unreadable' | 'episode-changed' | 'recipient-missing' | 'creation-unrecorded';
 
 /** The episode a cue is minted for: a run's verified `merging` entry, or the immutable creation of a no-run row. */
 export type NextLandingEpisode =
@@ -65,8 +65,7 @@ export function nextLandingNoticeOf(f: NextLandingFacts): NextLandingNotice {
 
   let episode: NextLandingEpisode;
   if (entry.runId !== null) {
-    if (run === 'missing') return noSend('run-absent');
-    if (run === 'unreadable' || run.id !== entry.runId || run.project !== entry.project) return noSend('run-unreadable');
+    if (run === 'missing' || run === 'unreadable' || run.id !== entry.runId || run.project !== entry.project) return noSend('run-unreadable');
     if (run.state !== 'merging') return noSend('run-not-merging');
     if (run.claimedBy === null) return noSend('recipient-missing');
     if (run.episode === null || !Number.isSafeInteger(run.episode.e)) return noSend('episode-unreadable');
