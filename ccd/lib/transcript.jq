@@ -341,11 +341,12 @@ def agent_end:
 def sl_rows: split("\n") | map(select(length > 0) | [turn_row] | .[] | select(type == "object" and .isSidechain != true));
 def sl_marker: .type == "api-request" and .querySource == "repl_main_thread";
 def sl_att($k): select(.type == "attachment" and (.attachment | type) == "object" and .attachment.type == $k) | .attachment;
-def sl_names: if type == "array" and all(.[]; type == "string") then sort | unique else "unmeasured" end;
+def sl_every(f): (map(f) | index(false)) == null;
+def sl_names: if type == "array" and sl_every(type == "string") then sort | unique else "unmeasured" end;
 def sl_hooks: [.[] | (sl_att("hook_success"), sl_att("hook_non_blocking_error")) | select(.hookEvent == "SessionStart") | .command]
-  | if length == 0 then "unmeasured" elif all(.[]; type == "string") then . else "unmeasured" end;
+  | if length == 0 then "unmeasured" elif sl_every(type == "string") then . else "unmeasured" end;
 def sl_instr: [.[] | sl_att("instructions")] | if length == 0 then "unmeasured" else .[-1].files
-  | if type == "array" and all(.[]; type == "object" and (.path | type) == "string" and (.type | type) == "string")
+  | if type == "array" and sl_every(type == "object" and (.path | type) == "string" and (.type | type) == "string")
     then map({type, path}) else "unmeasured" end end;
 def start_loads($h; $w; $c; $src; $last):
   ($w | sl_rows) as $W | ($h | sl_rows) as $H
@@ -385,8 +386,8 @@ def loads_body($o; $x; $id; $rid; $lp; $rc; $ver; $wd; $cf; $at):
    launchRc: (if $rc == "on" or $rc == "off" then $rc else null end), claudeVersion: (if $ver == "" then null else $ver end),
    permissionMode: (.permission_mode | strings // null),
    cwdInWorkspace: (if $wd == "" or (.cwd | type) != "string" then null else (.cwd | inws) end), reportedAt: $at,
-   loaded: {instructions: (if $o.instr == "unmeasured" or any($x[:$n][]; bad) then "unmeasured"
+   loaded: {instructions: (if $o.instr == "unmeasured" or ($x[:$n] | sl_every(bad | not) | not) then "unmeasured"
               else [range(0; $n) as $i | $o.instr[$i] | {type, name: (.path | split("/") | .[-1]), inWorkspace: (.path | inws), sha256: $x[$i]}] | sort_by(.name) end),
-            hooks: (if $o.hookCmds == "unmeasured" or any($x[$n:][]; bad) then "unmeasured" else $x[$n:] | sort end),
+            hooks: (if $o.hookCmds == "unmeasured" or ($x[$n:] | sl_every(bad | not) | not) then "unmeasured" else $x[$n:] | sort end),
             skills: $o.skills, agents: $o.agents, tools: $o.tools, toolServers: $o.toolServers}}
   + (if $cf != "" and $o.carried == true then {carriedFrom: $cf} else {} end);

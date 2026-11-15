@@ -26168,7 +26168,8 @@ _fleet_spawn_compose() {   # id launchflags -> sets FLEET_SPAWN_FLAGS; never fai
 # `--agents` value only for a quote, then single-quoted), `surfaceSettings` (merged after `settings` and
 # `compactionSettings`) and `remoteControl` (`off` strips the `--remote-control '<id>'` the launch flags open with) are
 # rendered, with CCRC_LAUNCH_PROFILE=<role>:<digest> and CCRC_LAUNCH_RC=on|off (read from the final flags) in the
-# environment. Any step that fails refuses the spawn (rc 1, one `launch-profile-refused` line in swap.log): the field,
+# environment. Any step that fails refuses the spawn (rc 1 here, one `launch-profile-refused` line in swap.log, and
+# `_spawn_start` dies on it, its only failure mode, D-300): the field,
 # never a role word, makes a spawn fail closed. A route without the field takes the W1a path above, fail-open included.
 # The program's output is read with the unit separator, which is not IFS whitespace, so an empty field keeps its place.
 LAUNCH_PROFILES_JSON="${BASH_SOURCE[0]%/*}/lib/launch-profiles.json"
@@ -26178,7 +26179,7 @@ PROFILE_ROW_JQ='.[$r] as $x
   if ($x | type) == "object" and ($x.env | type) == "object" and ($x.settings | type) == "object"
        and ($x.compactionSettings | type) == "object" and ($x.autoMemory == "off" or $x.autoMemory == "switch")
        and ($x.env | to_entries | all((.key | test("\\ACLAUDE_CODE_[A-Z_]+\\z")) and (.value | type == "string") and (.value | test("\\A[A-Za-z0-9._-]+\\z"))))
-       and ($sf == "" or (($x.flags | type) == "array" and ($x.surfaceSettings | type) == "object" and ($x.remoteControl | IN("on", "off"))
+       and ($sf == "" or (($x.flags | type) == "array" and ($x.surfaceSettings | type) == "object" and ($x.remoteControl == "on" or $x.remoteControl == "off")
          and ($x.flags | to_entries | all(.value | type == "string") and all(if agents(.key) then (.value | test("\u0027") | not) else (.value | test("\\A[A-Za-z0-9,._-]+\\z")) end))))
     then . else error("malformed row") end
   | ($x.settings * (if $cw == "" then {} else $x.compactionSettings end) * (if $sf == "" then {} else $x.surfaceSettings end) | tojson) + "\u001f"
@@ -26876,7 +26877,7 @@ _spawn_start() {   # id mode(new|resume) -> creates the tmux session, sets SPAWN
   _account_spawn_compose "$id" "$launchflags"; launchflags="$ACCOUNT_SPAWN_FLAGS"
   # THE FLEET PINS (D-8173), for EVERY row, LAST: the auto-continue, inbox and idle-compaction rulings merge into the one `--settings`.
   _fleet_spawn_compose "$id" "$launchflags"; launchflags="$FLEET_SPAWN_FLAGS"
-  _profile_spawn_compose "$id" "$launchflags" || return 1; launchflags="$PROFILE_SPAWN_FLAGS"; resenv="$resenv${PROFILE_SPAWN_ENV:+ $PROFILE_SPAWN_ENV}"
+  _profile_spawn_compose "$id" "$launchflags" || die "$id: launch profile refused, no pane started (swap.log names the step)"; launchflags="$PROFILE_SPAWN_FLAGS"; resenv="$resenv${PROFILE_SPAWN_ENV:+ $PROFILE_SPAWN_ENV}"
   # COLORTERM=truecolor so Claude Code emits 24-bit colour (it otherwise quantises
   # to 256, collapsing its palette). tmux passes it through to the terminal-drawer
   # xterm once the server has the RGB terminal-feature (see hardening/tmux.conf).

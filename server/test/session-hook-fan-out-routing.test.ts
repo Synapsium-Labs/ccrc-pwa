@@ -71,7 +71,7 @@ describe('the pin: a session launched with the subagent model forced (Overlord W
     expect(fire(tool, { description: 'x', prompt: 'do it', subagent_type: 'overlord-reader' }, PIN)).toBeNull();
   });
   it('FORCE alone, the model alone, or FORCE other than 1 denies it as before', () => {
-    for (const extra of [{ CLAUDE_CODE_SUBAGENT_MODEL_FORCE: '1' }, { CLAUDE_CODE_SUBAGENT_MODEL: 'sonnet' },
+    for (const extra of [{ CLAUDE_CODE_SUBAGENT_MODEL_FORCE: '1' }, { CLAUDE_CODE_SUBAGENT_MODEL: 'sonnet' } as Record<string, string>,
       { CLAUDE_CODE_SUBAGENT_MODEL_FORCE: 'true', CLAUDE_CODE_SUBAGENT_MODEL: 'sonnet' }]) {
       expect(fire('Agent', { prompt: 'p' }, extra), JSON.stringify(extra)).toMatch(/names no model/);
     }

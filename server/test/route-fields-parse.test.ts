@@ -26,7 +26,7 @@ import {
  */
 const ALL_FIELDS: Record<RouteField, true> = {
   class: true, effort: true, subagent: true, workflow: true, compact: true, browser: true,
-  profile: true, automem: true, compactwindow: true, precompact: true, poolset: true, acctorder: true,
+  profile: true, automem: true, compactwindow: true, precompact: true, poolset: true, acctorder: true, profiledigest: true,
 };
 void ALL_FIELDS;   // its whole job is the type error above, not a runtime read
 

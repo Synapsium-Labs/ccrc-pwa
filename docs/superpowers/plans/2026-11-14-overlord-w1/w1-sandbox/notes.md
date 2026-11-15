@@ -36,6 +36,10 @@ The load-path measurement and the coordinator's rulings on it are in `load-path.
 - **`refused-spawn-characterization-not-in-pr-a`**: Task 3 Step 1's characterization of a refused `_spawn_start` under
   `supervise`, `cmd_ensure`, `cmd_start` and `cmd_swap` is not in this pull request; PR A's tests pin the refusal at
   `_spawn_start` (no pane, rc 1, one journal line). Task 6 (PR A2), which changes the swap and resume paths, carries it.
+- **`profile-refusal-dies-in-spawn-start`**: the plan writes `_profile_spawn_compose … || return 1` in `_spawn_start`. Every
+  failure there is a `die` (D-300, pinned by `ccd-arith-containment.test.ts`), because a bare `return` would let the
+  `|| return $?` callers skip `_reg_claim`, so the refusal dies instead, after its one `launch-profile-refused` line and
+  before any pane starts. Each caller still sees a non-zero status.
 - **`profiledigest-joins-the-route-after-pool-set-a1`**: `ROUTE_WRITABLE_FIELDS` gains `profiledigest` after
   `acctorder`, which pool set A1 (#2836) appends on the same line, so the field and the route-field censuses land in one
   main merge after #2836, on the coordinator's word.
