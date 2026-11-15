@@ -153,3 +153,9 @@ own row and no state column.
   `renewal-first-prompt` (exact, typed by the server), and the port's `deliver` takes a row's key (`RenewalPrompt`, today
   that one row), not free text; `renewalWiring.ts` types it with one `sendPrompt` per row. The vocabulary's key list and the
   characterization of `sendPrompt`'s callers grow by one each.
+- **renew-refuses-a-non-registry-id** (found by the PR's first CI run). `ccdSessionHost.renew` takes its id from a stored
+  generation row, which no gate vetted before `hibernate` composed its argv (the id-argv census). It now refuses a
+  non-registry id with `refused` (`not a registry id`, before the first half: nothing touched) and asks ccd nothing.
+- **compact-refusal-rides-the-parse.** On the coordinator's route door the `compact` refusal is folded into the parse's own
+  400 `bad-request` with its detail, so the handler keeps ARCH-20's five `if`s; the operator's door sends it through
+  `refuseRoute`. Same words, same status.
