@@ -1048,6 +1048,14 @@ function CompactRow(p: CompactProps & { readonly tree: DocsTreeOk; readonly wher
   const [open, setOpen] = useState(false);
   const toggle = useRef<HTMLButtonElement>(null);
   const panelId = useId();
+  // The take-up's fix round 1 (F1): choosing Export's plain view in the one bar's panel unmounts the reader, which
+  // withdraws the bar, so this row replaces it and the control that had focus is gone. Focus goes to Page details, the
+  // row's control for the panel the tap came from (Export is inside it again), never left on the body. The plain-view
+  // note announces itself as a status. A tap on this row's own Export keeps its focus: it is not on the body.
+  const plainView = p.plainView;
+  useLayoutEffect(() => {
+    if (plainView && (document.activeElement === null || document.activeElement === document.body)) toggle.current?.focus();
+  }, [plainView]);
   const { target, showsDraft, share, exported, committedHref } = useHeadActions({
     page, tree, file, leafImage: p.leafImage, exportBody: p.exportBody, pageStore: p.pageStore,
     exportAssets: p.exportAssets, onPlainView: p.onPlainView,

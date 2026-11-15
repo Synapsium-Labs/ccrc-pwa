@@ -320,6 +320,19 @@ describe('the one bar (refinements (f), (j), (k), (l))', () => {
     expect(panel?.contains(shown)).toBe(false);
   });
 
+  it('choosing the plain view from the one bar\'s panel puts focus on the row\'s Page details, not on the body (fix round 1, F1)', async () => {
+    await openReady('/docs/demo/specs/a.md');
+    fireEvent.click(titleButton());
+    const exportPlain = within(panelOf()).getByRole('button', { name: DOCS_HEAD_TEXT.exportPlainView });
+    exportPlain.focus();
+    expect(document.activeElement).toBe(exportPlain);
+    fireEvent.click(exportPlain);
+    await screen.findByText(DOCS_HEAD_TEXT.exportPlainShown);
+    await waitFor(() => expect(document.querySelector('.docs-one-bar')).toBeNull());
+    const more = screen.getByRole('button', { name: /^Page details/ });
+    await waitFor(() => expect(document.activeElement).toBe(more));
+  });
+
   it.each([[412, 'compact'], [1280, 'full']] as const)(
     'a bar handle without a usable tree at %s uses the %s head',
     (width, head) => {
