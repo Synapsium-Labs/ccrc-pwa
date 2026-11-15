@@ -1215,6 +1215,9 @@ describe('the rulings: every egress of session-derived text goes through the mas
     // The card (Overlord W1a; review 2023 F2): the trimmed text is masked once, whole, before it is hashed and paged, so a
     // secret crossing a page edge is masked as one string.
     '/api/sessions/:id/card': /\.maskText\(trimCard\(renderCard\(renderer, facts\), CARD_BUDGET_TOKENS\)\.text\)/,
+    // The probe door (Overlord W1a, the probes piece; notes review 2039 F12): each question, choice and expected answer is
+    // masked once with the card's masker before it is rendered, paged or graded.
+    '/api/sessions/:id/probe': /const questions = open\.rows\.map\(\(r\) => maskedQuestion\(r, mask\)\)/,
     '/api/runs/:id/items': /items: \(deps\.masker \?\? SHAPE_ONLY_MASKER\)\.maskDeep\(/,
     '/api/coord/shadow-journal': /rows: \(deps\.masker \?\? SHAPE_ONLY_MASKER\)\.maskDeep\(deps\.coord\.shadowVerdicts/,
     '/api/feed': /events: \(deps\.masker \?\? SHAPE_ONLY_MASKER\)\.maskDeep\(/,

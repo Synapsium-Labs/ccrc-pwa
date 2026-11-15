@@ -3,8 +3,9 @@
 // lane shares. This file is a lane source of its own for `box-token-census.test.ts`, as `linking/routes.ts` is.
 //
 // W1a registers the start report, the card door, the note door (the notes piece: a note, the live notes, the handover
-// note) and the timer doors (the session's three, box-token lanes, and the operator's two, session-gated). W1's loaded-file
-// report and witness extend this file (Table 11.1e, "The hook's reports").
+// note), the timer doors (the session's three, box-token lanes, and the operator's two, session-gated) and the probe door (the
+// probes piece: a session's open round, and its answers). W1's loaded-file report and witness extend this file (Table 11.1e,
+// "The hook's reports").
 import { createHash } from 'node:crypto';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { SHAPE_ONLY_MASKER, type SecretMasker } from '../accounts/mask.js';
@@ -15,17 +16,20 @@ import { refuseRoute } from '../refuse.js';
 import { REG_GENERATION_SHAPE, shapeProgramSlug } from '../../../shared/api.js';
 import { CARD_BUDGET_TOKENS } from '../../../shared/continuity-card.js';
 import {
-  isNoteKeyKind, isNoteKind, noteKeyText, type HandoverNote, type HandoverThread, type KeyFact, type NoteKey,
+  PROBE_ROUND_MAX, isNoteKeyKind, isNoteKind, noteKeyText, type ContinuityReadDoor, type HandoverNote, type HandoverThread, type KeyFact,
+  type NoteKey,
 } from '../../../shared/continuity.js';
 import { timerNoteFits, type TimerView } from '../../../shared/continuity-timers.js';
 import { timerCapOf } from '../../../shared/fleetRoles.js';
 import { CONTINUITY_LANE, laneArmGate } from '../../../shared/lane-arm.js';
-import { CARD_REFUSALS, NOTE_REFUSALS } from '../../../shared/refusal.js';
+import { CARD_REFUSALS, NOTE_REFUSALS, PROBE_REFUSALS } from '../../../shared/refusal.js';
 import { laneArmRowViewOf } from '../coord/laneArm.js';
 import { cardPages, renderCard, snapshotFactsJson, trimCard } from './card.js';
 import { gatherCardFacts, sessionRoleRead, type CardFactsDeps } from './cardFacts.js';
 import { effectiveGeneration, type TimerRow } from './continuityStore.js';
 import { noteKeyReader } from './noteKeys.js';
+import { PROBE_ANSWER_MAX_CHARS, bookOf, gradeAnswers, maskedQuestion, probePages, type LastRead } from './probeDoor.js';
+import { roundVerdict } from './probes.js';
 import {
   NOTE_LIST_LIMIT, handoverAsked, handoverVerdict, noteKeyFact, noteListBytes, notesPage, noteVerdict, revisedNoteFact, type NoteInput,
   type NoteVerdictRefusal, type RevisedFact,
@@ -103,6 +107,9 @@ const NOTE_DETAIL: Readonly<Record<NoteVerdictRefusal, string>> = {
   unmeasured: 'could not check: a row it needs could not be read; try again',
   'bad-request': 'a thread names its next act (next is not blank), and a close names the note it closes in revises',
 };
+/** A round's id, as the lane mints it, and a question's id inside its round. */
+const ROUND_ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
+const QID_RE = /^p[1-9]$/;
 /** A list query's positive whole number (`before`, `limit`). */
 const QUERY_NAT_RE = /^[1-9][0-9]{0,15}$/;
 /** The handover door's body limit: a handover at every field cap, in four-byte or escaped text, parses, so the decider
@@ -211,6 +218,12 @@ export function registerContinuityRoutes(app: FastifyInstance, deps: ContinuityR
     return reply.code(202).send({ ok: true, id: r.id, fresh: r.fresh });
   });
 
+  /** A card or notes read served: the probe door marks an answer after it `open` (closed-book, Review Focus 3). A stamp that
+   *  could not be written leaves the answer `unmeasured`, which claims nothing, so the read is served and the miss logged. */
+  const stampRead = (coord: CoordStore, id: string, door: ContinuityReadDoor): void => {
+    if (!coord.stampContinuityRead(id, door, deps.wall()).ok) console.warn(`ccrc-server: continuity: the ${door} read of ${id} could not be stamped`);
+  };
+
   /**
    * `GET /api/sessions/:id/card?byId&byUuid&page&hash`: the caller's own card (spec §3.3.3 C38, §11.2). A box-token lane,
    * an `auth/gate.ts` EXEMPT entry: the token first (never the cookie), then the path's session is the caller
@@ -273,6 +286,7 @@ export function registerContinuityRoutes(app: FastifyInstance, deps: ContinuityR
       }
       recorded = true;
     } else remember(key, memo);
+    stampRead(coord, id, 'card');
     return reply.code(200).send({ ok: true, hash, snapshotId, page, pages: slices.length, text: slices[page - 1], recorded });
   });
 
@@ -287,9 +301,10 @@ export function registerContinuityRoutes(app: FastifyInstance, deps: ContinuityR
     return { id, by: (typeof by === 'object' && by !== null ? by : {}) as Record<string, unknown> };
   };
   /** The caller, attributed, or the refusal already sent. */
-  const caller = async (req: FastifyRequest, reply: FastifyReply): Promise<{ id: string; b: Record<string, unknown> } | null> => {
+  const caller = async (req: FastifyRequest, reply: FastifyReply, keeps = 'keeps its own notes'):
+    Promise<{ id: string; b: Record<string, unknown> } | null> => {
     const { id, by } = identityOf(req);
-    if (by['byId'] !== id) { await refuseRoute(reply, 'not-owner', { detail: 'byId must be the session the path names: a session keeps its own notes' }); return null; }
+    if (by['byId'] !== id) { await refuseRoute(reply, 'not-owner', { detail: `byId must be the session the path names: a session ${keeps}` }); return null; }
     const uuid = by['byUuid'];
     if (!IDENTITY_RE.test(id) || typeof uuid !== 'string' || !IDENTITY_RE.test(uuid)) { await refuseRoute(reply, 'bad-request', { detail: 'byId and byUuid' }); return null; }
     return { id, b: by };
@@ -406,6 +421,7 @@ export function registerContinuityRoutes(app: FastifyInstance, deps: ContinuityR
     }));
     const { page, more } = notesPage(wire, rawBefore === undefined ? null : Number(rawBefore),
       rawLimit === undefined ? NOTE_LIST_LIMIT.default : Number(rawLimit), noteListBytes);
+    stampRead(coord, c.id, 'notes');
     return reply.code(200).send({ ok: true, notes: page.map((n) => ({ ...n, keyFact: noteKeyFact(read(n.key), c.id) })), more });
   });
 
@@ -623,5 +639,109 @@ export function registerContinuityRoutes(app: FastifyInstance, deps: ContinuityR
     const cut = cancelOf(coord, timerId, 'operator-cancel', 'operator', deps.wall());
     if (cut !== 'ok') return refuseRoute(reply, cut, cut === 'write-failed' ? { detail: 'continuity_timers could not be written' } : {});
     return reply.code(200).send({ ok: true, id: timerId });
+  });
+
+  // THE PROBE DOOR (spec §3.3.5 C41, §3.3.9 C52; the probes piece, Task 4). Two box-token lanes, each an `auth/gate.ts` EXEMPT
+  // entry: the token first (never the cookie), then the path's session is the caller (`not-owner`), then the shape, then the
+  // registry's attribution of `byUuid`. A session reads and answers only its own rounds; the generations lane opens them. The
+  // door masks every question once with the card's masker (`maskedQuestion`) and asks the deciders (`probeDoor.ts`, L1) what
+  // to serve, how each answer grades and what the book state is; it decides nothing itself. Everything after the
+  // attribution is synchronous, so no other request runs between the read of a round and its answer.
+  const mask = (text: string): string => (deps.masker ?? SHAPE_ONLY_MASKER).maskText(text);
+
+  /**
+   * `GET /api/sessions/:id/probe?byId&byUuid[&page]`: the caller's open round (its newest with no answer), every question
+   * masked and rendered as untrusted data, never with what it expects. One page per call (`probePages`, the card's pager):
+   * `200 { ok, roundId, kind, page, pages, questions: [{ id, cls }], text }`. `probe-none-open` 409 when no round of the
+   * caller's is open; `unmeasured` 502 when the rounds could not be read. The text carries session-written text and is masked
+   * here, field by field before it is rendered (`secret-mask.test.ts` lists the route under INLINE, as the card).
+   */
+  app.get('/api/sessions/:id/probe', {
+    onRequest: async (req: FastifyRequest, reply: FastifyReply) => {
+      const verdict = checkMailToken(deps.mailToken(), req.headers[MAIL_TOKEN_HEADER], 'GET /api/sessions/:id/probe');
+      if (verdict !== 'ok') return refuseRoute(reply, 'unauthenticated', { detail: TOKEN_DETAIL[verdict] });
+      return undefined;
+    },
+  }, async (req, reply) => {
+    const c = await caller(req, reply, 'answers its own probes');
+    if (c === null) return reply;
+    const pageRaw = c.b['page'] ?? '1';
+    if (typeof pageRaw !== 'string' || !PAGE_RE.test(pageRaw)) return refuseRoute(reply, 'bad-request', { detail: 'page is a positive integer' });
+    const attributed = await deps.attributeReader(c.id, c.b['byUuid'] as string);
+    if (!attributed.ok) return refuseRoute(reply, attributed.error, { detail: attributed.detail });
+    const coord = deps.coord;
+    if (coord === undefined) return refuseRoute(reply, 'unavailable');
+    const open = coord.openProbeRound(c.id);
+    if (!open.ok) return refuseRoute(reply, 'unmeasured', { detail: 'could not check: continuity_probes could not be read' });
+    const first = open.rows[0];
+    if (first === undefined) return refuseRoute(reply, PROBE_REFUSALS.noneOpen, { detail: 'no probe round of yours is open' });
+    const questions = open.rows.map((r) => maskedQuestion(r, mask));
+    const pages = probePages(first.roundId, first.kind, questions);
+    const page = Number(pageRaw);
+    if (page > pages.length) return refuseRoute(reply, 'bad-request', { detail: `the round has ${pages.length} page(s)` });
+    return reply.code(200).send({
+      ok: true, roundId: first.roundId, kind: first.kind, page, pages: pages.length, questions: questions.map((q) => ({ id: q.id, cls: q.cls })),
+      text: pages[page - 1],
+    });
+  });
+
+  /**
+   * `POST /api/sessions/:id/probe { byId, byUuid, roundId, answers: [{ id, answer }] }`: answer every question of one open
+   * round of the caller's, in one call. Each answer is graded closed-form against the masked question (`gradeAnswers`; a
+   * question left out fails), the book state is `open` after a card or notes read since the round was asked and `unmeasured`
+   * otherwise (`bookOf`), and the round's verdict is `roundVerdict`'s. `200 { ok, roundId, verdict, grades: [{ id, grade }],
+   * book }`; what a question expected is never answered. `probe-none-open` 409 when no round of the caller's carries the id
+   * (another session's round is invisible), `probe-closed` 409 when it was answered already, `bad-request` 400 for an answer
+   * id the round does not ask, a repeated id, or an answer over `PROBE_ANSWER_MAX_CHARS`. The answer is graded and stored masked.
+   */
+  app.post('/api/sessions/:id/probe', {
+    onRequest: async (req: FastifyRequest, reply: FastifyReply) => {
+      const verdict = checkMailToken(deps.mailToken(), req.headers[MAIL_TOKEN_HEADER], 'POST /api/sessions/:id/probe');
+      if (verdict !== 'ok') return refuseRoute(reply, 'unauthenticated', { detail: TOKEN_DETAIL[verdict] });
+      return undefined;
+    },
+  }, async (req, reply) => {
+    const c = await caller(req, reply, 'answers its own probes');
+    if (c === null) return reply;
+    const { id, b } = c;
+    const roundId = b['roundId']; const raw = b['answers'];
+    if (typeof roundId !== 'string' || !ROUND_ID_RE.test(roundId)) return refuseRoute(reply, 'bad-request', { detail: 'roundId is the id the round was served with' });
+    if (!Array.isArray(raw) || raw.length > PROBE_ROUND_MAX) return refuseRoute(reply, 'bad-request', { detail: `answers is a list of at most ${PROBE_ROUND_MAX}` });
+    const answers = new Map<string, string>();
+    for (const a of raw as unknown[]) {
+      const o = (typeof a === 'object' && a !== null ? a : {}) as Record<string, unknown>;
+      const qid = o['id']; const text = o['answer'];
+      if (typeof qid !== 'string' || !QID_RE.test(qid) || typeof text !== 'string' || [...text].length > PROBE_ANSWER_MAX_CHARS || answers.has(qid)) {
+        return refuseRoute(reply, 'bad-request', { detail: `an answer is { id, answer }: each id once, each answer at most ${PROBE_ANSWER_MAX_CHARS} characters` });
+      }
+      answers.set(qid, text);
+    }
+    const attributed = await deps.attributeReader(id, b['byUuid'] as string);
+    if (!attributed.ok) return refuseRoute(reply, attributed.error, { detail: attributed.detail });
+    const coord = deps.coord;
+    if (coord === undefined) return refuseRoute(reply, 'unavailable');
+
+    const round = coord.probeRoundRows(roundId, id);
+    if (!round.ok) return refuseRoute(reply, 'unmeasured', { detail: 'could not check: continuity_probes could not be read' });
+    const first = round.rows[0];
+    if (first === undefined) return refuseRoute(reply, PROBE_REFUSALS.noneOpen, { detail: `no probe round of yours is ${roundId}` });
+    const asked = new Set(round.rows.map((r) => r.qid));
+    const stray = [...answers.keys()].filter((q) => !asked.has(q));
+    if (stray.length > 0) return refuseRoute(reply, 'bad-request', { detail: `round ${roundId} asks no ${stray.join(', ')}` });
+    // The answer is masked as the question is, so one copied from a masked choice and one given whole from memory both match.
+    const graded = gradeAnswers(round.rows.map((r) => maskedQuestion(r, mask)), new Map([...answers].map(([q, a]) => [q, mask(a)])));
+    const last = coord.lastContinuityRead(id);
+    const lastRead: LastRead = last.ok ? { kind: 'read', at: last.at } : { kind: 'unmeasured' };
+    const book = bookOf(lastRead, first.askedAt);
+    // `answerRound` compares and sets on every question being unanswered: a round answered already is refused there.
+    const w = coord.answerRound(roundId, id, graded, book, deps.wall());
+    if (!w.ok) {
+      return w.kind === 'closed' ? refuseRoute(reply, PROBE_REFUSALS.closed, { detail: `round ${roundId} was answered or closed already` })
+        : refuseRoute(reply, 'write-failed', { detail: 'continuity_probes could not be written' });
+    }
+    return reply.code(200).send({
+      ok: true, roundId, verdict: roundVerdict(graded.map((g) => g.grade), first.roundUnmeasured),
+      grades: graded.map((g) => ({ id: g.qid, grade: g.grade })), book,
+    });
   });
 }

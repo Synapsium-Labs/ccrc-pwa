@@ -29,12 +29,25 @@
 // feed (nudges, the receipt, probe rounds) replaces the feed and keeps the loop (review 1902 F6, review 2023 F5). In
 // shadow this is a record on the shadow column, and the probes piece takes it on from `probing`.
 //
+// THE PROBES (the probes piece, PR B, plan `w1a-probes.md` Tasks 5 and 6). Each live generation's rounds are read
+// (`probeRows`), and `probeSchedule` (L1) says which graded round to feed the machine and which round to open: the feed goes
+// through the same apply loop as the card read (`applyFedEvents`), so only a step the machine reports `changed` is written,
+// and the round is composed by `probeRound` (L1) over a snapshot (`roundSnapshotOf`: the carded one for a start round, the
+// newest the conversation read for a compaction round; read back by `snapshotFactsOf`), or, for a spot round,
+// over the notes it wrote and the mail it was sent since it entered its state (`spotFactsOf`), and opened through the store
+// (`openRound`, one open round per generation, compared and set there). A spot round is RECORDED ONLY: no mail announces it
+// in this piece (the coordinator's ruling, slug spot-mail-waits-on-the-renewal-act), so the lane still sends nothing. The
+// graded compaction rounds give `renewalDue` its `probe-failed` input (`probeFailedUnfixedOf`). A composition with no question
+// opens nothing, and is remembered by its key (`emptyTryKey`, in `emptyTries`) so it is neither drawn nor logged again until
+// the key changes (review 2063 F4).
+//
 // TWO HALVES. `gatherGenerationReadings` (async) makes the fleet reads for the generations a pass will judge; then
 // `generationsPass` (synchronous, one transaction per write, nothing awaited) reads `coord.db`, decides and writes. So a
 // pass after a restart resumes from the cursor and the stored columns, never from memory, and the simulator drives the
 // pass itself on its fake clock.
 import { CONTINUITY_LANE, laneArmGate } from '../../../shared/lane-arm.js';
-import { RENEWAL_LANE_PERIOD_MS } from '../../../shared/continuity.js';
+import { RENEWAL_LANE_PERIOD_MS, noteKeyText, type ProbeRoundKind } from '../../../shared/continuity.js';
+import { CARD_MAIL_MAX, type CardFacts, type CardMail, type CardNote } from '../../../shared/continuity-card.js';
 import { familyClassOf } from '../../../shared/models.js';
 import type { ChildMark, RunKind } from '../../../shared/api.js';
 import type { CoordStore } from '../coord/store.js';
@@ -44,13 +57,16 @@ import { newestClaimedWorkRuns } from '../coord/bindingReads.js';
 import { roleFactsOf, roleOf, type RoleReading } from '../roleOf.js';
 import { startedBeforeRelease } from '../coord/rollTarget.js';
 import type { ReleaseRead } from '../rollLane.js';
-import type { Clock } from '../time/ports.js';
+import type { Clock, Entropy } from '../time/ports.js';
 import { observeTime, observedStepCapMs, type ObservedGap } from '../time/observed.js';
 import type { MeasuredStat } from '../io.js';
 import type { UsageRead } from '../usage.js';
 import { compactionsSince, type CompactionsRead } from './compactions.js';
 import { effectiveGeneration, genExpectOf, genViewOf, type GenRow, type MintInput } from './continuityStore.js';
 import { generationStep, type GenEvent } from './generationMachine.js';
+import { snapshotFactsOf } from './card.js';
+import { probeRound } from './probes.js';
+import { compactionWindowStart, emptyTryKey, probeSchedule, roundSnapshotOf, roundsOf, spotFactsOf } from './probeSchedule.js';
 import type { StartRow } from '../../../shared/continuity.js';
 import {
   START_SKIPS, firstMintOf, judgedForDue, planStartBatch, startVerdict, waveBoundaryOf, type HoldClock, type StartFacts, type StartSkip,
@@ -70,7 +86,8 @@ export const FIRST_MINT_LOOKBACK = 20;
 /** The store members the pass reaches, declared by this consumer, so a test can hand a small fake. */
 export type GenerationsCoord = Pick<CoordStore, 'startsSince' | 'startsOf' | 'liveGenerations' | 'mintGeneration' | 'advanceObserved'
   | 'setGenerationDue' | 'clearShadowWalk' | 'generationsCursor' | 'advanceCursor' | 'laneArmSetting' | 'openCoordinatorIds'
-  | 'run' | 'bindingRunsOf' | 'cardReadOfStart' | 'stepGeneration'>;
+  | 'run' | 'bindingRunsOf' | 'cardReadOfStart' | 'stepGeneration' | 'probeRows' | 'openRound' | 'snapshotFacts' | 'liveNotes'
+  | 'mailForRecipient'>;
 
 /** What the registry says of one row at the pass: its current conversation (null: unreadable), its account and its child
  *  mark. */
@@ -88,6 +105,8 @@ export interface GenReadings {
 export interface GenerationsDeps {
   readonly coord: GenerationsCoord;
   readonly clock: Clock;
+  /** The one source of chance: a probe round's questions are drawn from it (`probeRound`), and its id. */
+  readonly entropy: Entropy;
   /** This server process's id: an observed stamp from another process is a `process` gap (`observeTime`). */
   readonly proc: string;
   readonly log: (line: string) => void;
@@ -99,6 +118,9 @@ export interface GenerationsDeps {
   /** The starts this process held for a failed read on an earlier pass (`HoldClock.retried`), kept by the caller across
    *  passes and rewritten by each pass that judges a batch: a memo, never a decision's durable state (review 2006 R3). */
   readonly retried: Set<number>;
+  /** Each generation's newest probe composition that had no question, by its `emptyTryKey`: a memo kept by the caller across
+   *  passes, never a decision's durable state (review 2063 F4). */
+  readonly emptyTries: Map<number, string>;
 }
 
 export interface GenerationsInput {
@@ -127,11 +149,14 @@ export interface GenerationsResult {
   readonly due: number;
   /** Generations in `carded` that a card read of the current hash moved to `probing` (in shadow, on the shadow column). */
   readonly cardRead: number;
+  /** Graded probe rounds fed to the machine as a written step, and rounds opened (the probes piece). */
+  readonly probesFed: number;
+  readonly roundsOpened: number;
   /** Generations whose due write named at least one trigger it could not read. */
   readonly blind: number;
   readonly cleared: number;
   /** A read that failed and stopped part of the pass, or null. */
-  readonly unread: 'cursor' | 'starts' | 'generations' | 'registry' | 'card-reads' | null;
+  readonly unread: 'cursor' | 'starts' | 'generations' | 'registry' | 'card-reads' | 'probes' | null;
   /** A mint that could not be written stopped the batch. */
   readonly stopped: boolean;
 }
@@ -146,7 +171,7 @@ export function generationsPass(deps: GenerationsDeps, input: GenerationsInput):
   const skipped = zeroSkips();
   const gaps: (ObservedGap & { identity: string })[] = [];
   let read = 0; let minted = 0; let firstMinted = 0; let held = 0; let superseded = 0; let due = 0; let blind = 0; let cleared = 0;
-  let cardRead = 0;
+  let cardRead = 0; let probesFed = 0; let roundsOpened = 0; let emptyRounds = 0;
   let stopped = false;
   // Every read that failed, each with what it stopped at the point it failed (review 2006 N3); `unread` is the first.
   const failures: Failure[] = [];
@@ -154,8 +179,9 @@ export function generationsPass(deps: GenerationsDeps, input: GenerationsInput):
     failures.push({ what, detail, stops });
   };
   const result = (): GenerationsResult => {
-    logPass(deps.log, { skipped, held, superseded, stopped, failures, gaps });
-    return { live, read, minted, firstMinted, skipped, held, superseded, gaps, due, cardRead, blind, cleared, unread: failures[0]?.what ?? null, stopped };
+    logPass(deps.log, { skipped, held, superseded, stopped, failures, gaps, emptyRounds });
+    return { live, read, minted, firstMinted, skipped, held, superseded, gaps, due, cardRead, probesFed, roundsOpened, blind, cleared,
+      unread: failures[0]?.what ?? null, stopped };
   };
 
   // ---- ONE: every live generation's accumulator advances by the lane's step cap (review 1896 R4.1), before any mint, so a
@@ -287,6 +313,47 @@ export function generationsPass(deps: GenerationsDeps, input: GenerationsInput):
     cardRead += applyFedEvents(coord, feed.events, live, now);
   }
 
+  // ---- THE PROBES: each generation's graded round fed, its next round opened, its `probe-failed` input kept for THREE.
+  const probeFailed = new Map<number, Reading<boolean>>();
+  const forProbes = coord.liveGenerations();
+  if (!forProbes.ok) fail('generations', forProbes.detail, 'no probe round is fed or opened');
+  else {
+    const events: FedEvent[] = [];
+    for (const g of forProbes.rows) {
+      const rows = coord.probeRows(g.id);
+      if (!rows.ok) { fail('probes', rows.detail, `generation ${g.id}'s probes wait for the next pass, and`); continue; }
+      const rounds = roundsOf(rows.rows);
+      const card = coord.cardReadOfStart(g.startId);
+      const s = probeSchedule({
+        state: effectiveGeneration(g, live).state, probeRounds: g.probeRounds, rounds,
+        cardReadAt: card.ok ? { kind: 'measured', value: card.read?.at ?? null } : later(card.detail),
+        ...probeReadings(input.readings.get(g.id), compactionWindowStart(g.enteredAt, rounds)),
+      });
+      probeFailed.set(g.id, s.probeFailedUnfixed);
+      if (s.feed !== null) events.push({ gen: g, event: { kind: 'probes', passed: s.feed.passed }, card: null });
+      if (s.open === null) continue;
+      const waits = `generation ${g.id}'s ${s.open.kind} round waits for the next pass, and`;
+      const snap = roundSnapshotOf(s.open.kind, g.snapshotId, card.ok ? { kind: 'measured', value: card.read?.snapshotId ?? null } : later(card.detail));
+      if (snap.kind !== 'measured') { fail('card-reads', snap.why, waits); continue; }
+      const key = emptyTryKey(s.open.kind, snap.value, s.open.depthTokens);
+      if (deps.emptyTries.get(g.id) === key) continue;
+      const facts = probeFactsOf(coord, g, s.open.kind, snap.value, now);
+      if (typeof facts === 'string') { fail('probes', facts, waits); continue; }
+      const composed = probeRound(g.role, facts, deps.entropy, s.open.kind);
+      const spot = s.open.kind === 'spot';
+      const w = coord.openRound({
+        roundId: `r-${deps.entropy.uuid()}`, sessionId: g.sessionId, generationId: g.id, kind: s.open.kind,
+        questions: composed.questions.map((q) => ({ qid: q.id, cls: q.cls, question: q.text, choices: q.choices, expected: q.expected })),
+        snapshotId: snap.value, depthTokens: s.open.depthTokens, modelClass: spot && g.model !== null ? familyClassOf(g.model) : null,
+        roundUnmeasured: composed.unmeasured, askedAt: now, supersedes: s.open.supersedes,
+      });
+      if (w.ok) { roundsOpened += 1; deps.emptyTries.delete(g.id); }
+      else if (w.kind === 'empty') { emptyRounds += 1; deps.emptyTries.set(g.id, key); }
+      else if (w.kind === 'write-failed') fail('probes', 'continuity_probes could not be written', `generation ${g.id}'s round waits for the next pass, and`);
+    }
+    probesFed += applyFedEvents(coord, events, live, now);
+  }
+
   // ---- THREE: the `renewalDue` answer is recorded for every generation whose `state` is at rest (`active` or `degraded`),
   // whatever a shadow walk holds (review 2003 F1).
   const gens = coord.liveGenerations();
@@ -297,7 +364,7 @@ export function generationsPass(deps: GenerationsDeps, input: GenerationsInput):
       const runs = newestClaimedWorkRuns(coord, g.identity);
       return runs.ok ? { kind: 'measured', value: waveBoundaryOf(runs.runs) } : { kind: 'unmeasured', why: runs.detail };
     })();
-    const d = renewalDue(renewalInputsOf(g, input.readings.get(g.id), wave, now));
+    const d = renewalDue(renewalInputsOf(g, input.readings.get(g.id), wave, now, probeFailed.get(g.id) ?? later('probes unread this pass')));
     if (d.due) due += 1;
     if (d.blind.length > 0) blind += 1;
     coord.setGenerationDue(g.id, genExpectOf(g), d.due
@@ -352,7 +419,7 @@ interface Failure { readonly what: NonNullable<GenerationsResult['unread']>; rea
  *  gaps in another. */
 function logPass(log: (line: string) => void, p: {
   skipped: Readonly<Record<StartSkip, number>>; held: number; superseded: number; stopped: boolean;
-  failures: readonly Failure[]; gaps: readonly ObservedGap[];
+  failures: readonly Failure[]; gaps: readonly ObservedGap[]; emptyRounds: number;
 }): void {
   const parts = START_SKIPS.filter((k) => p.skipped[k] > 0).map((k) => `${p.skipped[k]} ${k}`);
   if (p.held > 0) parts.push(`${p.held} held for a later pass`);
@@ -360,6 +427,7 @@ function logPass(log: (line: string) => void, p: {
   if (p.stopped) parts.push('a mint could not be written, so the batch stopped and the cursor stays');
   if (parts.length > 0) log(`ccrc-server: generations: starts this pass: ${parts.join(', ')}`);
   for (const f of p.failures) log(`ccrc-server: generations: the ${f.what} could not be read, so ${f.stops} this pass: ${f.detail}`);
+  if (p.emptyRounds > 0) log(`ccrc-server: generations: ${p.emptyRounds} probe round(s) had no question to ask, so none was opened (slug an-empty-round-is-not-opened)`);
   if (p.gaps.length > 0) {
     const of = (k: ObservedGap['kind']): number => p.gaps.filter((x) => x.kind === k).length;
     log(`ccrc-server: generations: observed time gaps this pass: ${of('process')} process, ${of('backwards')} backwards, ${of('step')} step`);
@@ -373,15 +441,10 @@ const W1 = later('W1');
 
 /** The gather's readings, as `renewalDue`'s inputs. Every reading that is not a fresh measurement reaches the decider as
  *  unmeasured with its reason: a stale sidecar is unmeasured, never a reading below the cap. */
-export function renewalInputsOf(g: GenRow, r: GenReadings | undefined, wave: Reading<boolean>, nowMs: number): RenewalInputs {
+export function renewalInputsOf(g: GenRow, r: GenReadings | undefined, wave: Reading<boolean>, nowMs: number,
+  probeFailedUnfixed: Reading<boolean>): RenewalInputs {
   const unread = later('unread this pass');
-  const usage = (pick: 'ctxTokens' | 'ctxWindow'): Reading<number> => {
-    if (r === undefined) return unread;
-    if (r.usage.kind !== 'reading') return later(`usage ${r.usage.kind}`);
-    if (r.usage.usage.stale) return later('usage stale');
-    const v = r.usage.usage[pick];
-    return v === null || v === undefined ? later(`usage has no ${pick}`) : { kind: 'measured', value: v };
-  };
+  const usage = (pick: 'ctxTokens' | 'ctxWindow'): Reading<number> => usageReading(r, pick);
   const compactions = ((): Reading<number> => {
     if (r === undefined) return unread;
     if (r.compactions.kind === 'unreadable') return later('compactions unreadable');
@@ -403,10 +466,54 @@ export function renewalInputsOf(g: GenRow, r: GenReadings | undefined, wave: Rea
   return {
     role: g.role, contextTokens: usage('ctxTokens'), windowTokens: usage('ctxWindow'), fittedCeilingTokens: W1, turns: W1,
     compactions, idleMs, backstopDue: W1, installBehind: r === undefined ? unread : r.behind,
-    probeFailedUnfixed: later('probes'), modelDrift: W1, startResumed, entryRetired: W1, termRaised: W1, accountOutsideSet: W1,
+    probeFailedUnfixed, modelDrift: W1, startResumed, entryRetired: W1, termRaised: W1, accountOutsideSet: W1,
     classUnservable: W1, accountLoadMove: W1, compactionRefused: later('compaction'), classChanged: W1, evaluationDue: W1,
     notLocal: W1, waveBoundary: wave, renewNow: false,
   };
+}
+
+/** One usage figure from a fresh sidecar, or why it is unmeasured: a stale sidecar is unmeasured, never a reading. */
+function usageReading(r: GenReadings | undefined, pick: 'ctxTokens' | 'ctxWindow'): Reading<number> {
+  if (r === undefined) return later('unread this pass');
+  if (r.usage.kind !== 'reading') return later(`usage ${r.usage.kind}`);
+  if (r.usage.usage.stale) return later('usage stale');
+  const v = r.usage.usage[pick];
+  return v === null || v === undefined ? later(`usage has no ${pick}`) : { kind: 'measured', value: v };
+}
+
+/** The fleet readings `probeSchedule` takes: the compactions since `since`, whether the turn marker reads idle, and the
+ *  fresh context. A generation with no readings this pass reads every one unmeasured. */
+function probeReadings(r: GenReadings | undefined, since: number): { compactionsSince: Reading<number>; idle: Reading<boolean>; ctxTokens: Reading<number> } {
+  const counted: Reading<number> = r === undefined ? later('unread this pass')
+    : r.compactions.kind === 'unreadable' ? later('compactions unreadable')
+    : r.compactions.kind === 'absent' ? { kind: 'measured', value: 0 } : { kind: 'measured', value: compactionsSince(r.compactions.lines, since) };
+  const idle: Reading<boolean> = r === undefined ? later('unread this pass') : !r.turn.ok ? later(`turn marker ${r.turn.reason}`)
+    : { kind: 'measured', value: r.turn.state !== 'working' };
+  return { compactionsSince: counted, idle, ctxTokens: usageReading(r, 'ctxTokens') };
+}
+
+/** The facts a round of `kind` is drawn from (the snapshot `roundSnapshotOf` chose, or this generation's own rows for a spot
+ *  round), or what kept them from being read. */
+function probeFactsOf(coord: Pick<GenerationsCoord, 'snapshotFacts' | 'liveNotes' | 'mailForRecipient'>, g: GenRow, kind: ProbeRoundKind,
+  snapshotId: string | null, now: number): CardFacts | string {
+  if (kind === 'spot') {
+    const notes = coord.liveNotes(g.identity);
+    if (!notes.ok) return notes.detail;
+    let mail: CardMail[];
+    try {
+      mail = coord.mailForRecipient(g.sessionId, CARD_MAIL_MAX)
+        .map((m) => ({ deliveryId: m.deliveryId, fromId: m.fromId, at: m.at, subject: m.subject, parked: false }));
+    } catch (e) { return `the mail could not be read: ${e instanceof Error ? e.message : String(e)}`; }
+    const mine: CardNote[] = notes.notes.filter((n) => n.generationId === g.id).map((n) => ({
+      id: n.id, at: n.at, kind: n.kind, key: noteKeyText(n.key), keyFact: 'unmeasured', waitsOn: n.waitsOn, next: n.next,
+    }));
+    return spotFactsOf(g.sessionId, g.role, now, mine, mail, g.enteredAt);
+  }
+  if (snapshotId === null) return `generation ${g.id} names no snapshot`;
+  const s = coord.snapshotFacts(snapshotId);
+  if (!s.ok) return s.detail;
+  if (s.facts === null) return `snapshot ${snapshotId} is not stored`;
+  return snapshotFactsOf(s.facts, now) ?? `snapshot ${snapshotId} does not read`;
 }
 
 /** The soft renewal's observed times for a generation (`softRenewalMay`'s inputs; review 1902 F4): its age since its mint,
