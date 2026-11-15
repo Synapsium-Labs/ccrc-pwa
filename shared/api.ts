@@ -12325,7 +12325,7 @@ export function backgroundOnlyRefusal(body: unknown): { count: number | null; ki
 
 /** One capability word the server advertises. Spelled once, as the keys of `SERVER_CAP_MAP`. */
 export type ServerCap = 'dispatch-live-gate-v1' | 'hook-main-state-v1' | 'ask-pairing-v1' | 'questions-v1' | 'review-rounds-v1' | 'goals-read-v1' | 'calls-v1' | 'plan-v1'
-  | 'timers-v1';
+  | 'timers-v1' | 'push-outbox-v1';
 
 /** Every word, with what it promises. The value is `true`; the promise is the comment, which a word's reader may
  *  rely on and nothing weaker. `PR_REASON_MAP`'s idiom: a word added to `ServerCap` and not here is TS2741. */
@@ -12385,6 +12385,11 @@ const SERVER_CAP_MAP: Readonly<Record<ServerCap, true>> = {
   /** W1a: the timer doors, the timers lane and `ccrc-api timer` (Overlord timers piece). `ccrc-api timer` refuses
    *  `capability-missing`, unsent, when a current cap file omits this word. Added by the change that builds the client. */
   'timers-v1': true,
+  /** Overlord W1, the push outbox (H18; Table 11.1d): every push this server sends has a `push_outbox` row, or is logged as
+   *  unwritable; an ask or an item that reached the operator after this build carries `reachedOperatorAt` and one outbox
+   *  row written in the same transaction, with or without a push service; a claimed attempt is never retried. W3's hold
+   *  arming reads it. Added by the change that moves every push behind the one sender, cut after every site writes rows. */
+  'push-outbox-v1': true,
 };
 
 /** The words this server advertises, in `GET /health`'s `caps`, and in the file a `server` or `both` node writes. */
