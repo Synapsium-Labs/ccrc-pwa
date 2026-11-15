@@ -3072,7 +3072,8 @@ _pool_undecidable_why() {   # side state project account-id [session-id, only wh
   # opposite and an operator acted on it.
   # GIVEN THE SESSION ID (passed only when the session's side is a set), an account arm says the set decided, because the
   # project's tag took no part and may be untagged (review 2134 F1); without it the sentences are today's, byte for byte.
-  local side="$1" state="$2" project="$3" acct="$4" tail="${5:+the session's pool set decided; the project's tag is not involved}"
+  # No apostrophe inside the `${5:+…}`: bash keeps it literally, but shellcheck reads it as a quote (SC1011).
+  local side="$1" state="$2" project="$3" acct="$4" tail="${5:+the session pool set decided; the project tag is not involved}"
   [[ "$side" == set ]] && { _pool_set_undecidable_why "$state" "${5-}"; return 0; }
   if [[ "$side" == project ]]; then
     echo "pool tag for $project is $state: $POOLS_DIR/$project — fix or clear it"

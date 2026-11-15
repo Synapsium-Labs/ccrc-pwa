@@ -110,7 +110,7 @@ failed (F1, F2), `ccd-pool-ok` 1 failed (F4).
 
 - **F1, `set-decided-account-arm-names-the-set`.** `_pool_undecidable_why`'s fifth argument, the session id, is passed
   only when the session's side is a set. Given it, each account arm (`stale`, `malformed`, `unreadable`) ends "the
-  session's pool set decided; the project's tag is not involved" instead of "project '<p>' is tagged and its tag reads
+  session pool set decided; the project tag is not involved" instead of "project '<p>' is tagged and its tag reads
   fine". Without it the sentences are byte-identical to `main`'s, still pinned by the characterization block. The change
   adds no code line: one `local` and the three `echo` lines changed in place.
 - **F2, `unsearchable-reg-reads-unreadable`.** `_session_pool_side` answers `unreadable` whenever `$REG` is not a
@@ -134,3 +134,8 @@ Suites after the round: `ccd-session-pool-side` 46, `ccd-pool-ok` 87, `ccd-cross
 `pool-rule-core` 98, `ccd-route-fields` 56, `growth-check` armed 95, `deviation-refs` 31 (after `git fetch origin main`),
 and the server and tests type checks clean. The library alone shows no shellcheck warning beyond SC2034, which only a
 file linted alone reports.
+
+The round's first fast run (`c98ed279d`) failed one check: `shellcheck-ratchet` found SC1011 in F1's line, because
+the sentence had apostrophes inside `"${5:+…}"`. Bash keeps them literally, but shellcheck reads them as quotes. The
+sentence now has no apostrophe ("the session pool set decided; the project tag is not involved"), still with no code
+line added. That was the round's only red; every other required check and CodeQL were green on `c98ed279d`.

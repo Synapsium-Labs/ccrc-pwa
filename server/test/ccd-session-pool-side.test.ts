@@ -246,7 +246,7 @@ describe('the sentences: a set side names the route record and its remedy (Revie
   it('the account arms, given the session id after a set decided, say the set decided, never that the project\'s tag reads fine (review 2134 F1)', () => {
     // The id is passed only when the session's side is a set: an undecidable ACCOUNT under a valid set. Without it the
     // sentences are today's, byte for byte (the characterization block above).
-    const tail = 'the session\'s pool set decided; the project\'s tag is not involved';
+    const tail = 'the session pool set decided; the project tag is not involved';
     expect(h.sh(`_pool_undecidable_why account stale ${PROJECT} claude ${ID}`))
       .toBe(`the pool projection for claude is stale: ${reg}/pool-epoch is past its lease — the remedy is the control-plane link (the pool sync), not this file; ${tail}`);
     expect(h.sh(`_pool_undecidable_why account malformed ${PROJECT} claude ${ID}`))
