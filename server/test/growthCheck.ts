@@ -46,8 +46,17 @@
 // named as its follow-up: a new file waives a listed file's growth only when `rings/ring.ts` gives it the grown file's
 // ring and the spec's context table (read at the merge-base) the grown file's context (`ringHomes`). And every waiver
 // carries a `createdAt` day; the check reports those older than WAIVER_AGE_DAYS by name, a report and never a failure.
+//
+// D-8635 (the large-file programme's step 0, D-8615 §4): three stages. A LISTED file grows by GROWTH_LIMIT per PR,
+// waivers counting. A FROZEN file (`growth-frozen/`, from its pin PR to its cap PR) grows by SPINE_LIMIT per PR, and no
+// waiver of any kind counts: only the named exemption passes it. A CAPPED file (`growth-caps/`) drops the per-PR limit
+// and every waiver: its code lines at HEAD stay within the cap at HEAD, the cap at HEAD within the merge-base's (it may
+// only fall), a new cap is at most the code lines plus GROWTH_LIMIT, and the named exemption may raise it once, for its
+// one PR. The PR that adds a cap is still judged by the stage the file held at the merge-base (`prior`): frozen, or
+// listed for any other file, so a cap written in the same PR never lifts the per-PR limit it grows under. Both directories hold one JSON file per file (`stageFileName`), read at the merge-base and at HEAD, so a PR
+// cannot unfreeze or uncap itself; either one malformed at either sha is a failing row of its own.
 import { execFileSync } from 'node:child_process';
-import { appendFileSync } from 'node:fs';
+import { appendFileSync, readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { parseSource } from './scan/parse.js';
 import { malformedEntries } from './rings/exemptions.js';
@@ -58,6 +67,9 @@ import type { CcdContext } from './ccdContextIds.js';
 
 /** A listed file may grow by this many net code lines before it is named. */
 export const GROWTH_LIMIT = 40;
+
+/** A frozen file may grow by this many net code lines before it is named (D-8635; the large-file spec's §2.6, Q8). */
+export const SPINE_LIMIT = 10;
 
 const signed = (n: number): string => `${n >= 0 ? '+' : ''}${n}`;
 
@@ -290,7 +302,10 @@ const CCD_LIBRARY = /^ccd\/lib\/[^/]+\.sh$/;
 export function growthFiles(baseSha: string, headSha: string, cwd: string): string[] {
   const at = (sha: string): string[] => gitRead(['ls-tree', '--name-only', '-z', sha, '--', 'ccd/lib/'], cwd)
     .split('\0').filter((p) => CCD_LIBRARY.test(p));
-  return [...GROWTH_FILES, ...[...new Set([...at(baseSha), ...at(headSha)])].sort()];
+  const listed = [...GROWTH_FILES, ...[...new Set([...at(baseSha), ...at(headSha)])].sort()];
+  // D-8635: then every file a cap names at either sha, so a capped file is measured though no list names it.
+  const capped = [...new Set([...cappedNamesAt(baseSha, cwd), ...cappedNamesAt(headSha, cwd)])];
+  return [...listed, ...capped.filter((f) => !listed.includes(f)).sort()];
 }
 
 /** A file's place in the 08-10 architecture: its ring by `rings/ring.ts` and its context by the spec's table. */
@@ -341,11 +356,20 @@ export function ringHomes(root: string, baseSha: string, headSha: string): HomeO
  *  (D-8563; with no classifier, none), or shrinks another listed file by at
  *  least as much as this one grew. A listed file absent at either sha (deleted,
  *  renamed, new) is no shrink and waives nothing. */
-export function growthOver(rows: readonly GrowthRow[], added: readonly string[], homeOf: HomeOf = NO_HOME): string[] {
+export function growthOver(rows: readonly GrowthRow[], added: readonly string[], homeOf: HomeOf = NO_HOME,
+  stageOf: StageOf = ALL_LISTED): string[] {
   return rows
-    .filter((r) => r.delta > GROWTH_LIMIT)
-    .filter((r) => !added.some((p) => p !== r.file && sameHome(homeOf(r.file), homeOf(p))))
-    .filter((r) => !rows.some((o) => o.file !== r.file && o.atBoth && -o.delta >= r.delta))
+    .filter((r) => {
+      // D-8635: a capped file has no per-PR limit (its verdict reads the cap); a frozen one has SPINE_LIMIT and no waiver.
+      // The PR that adds a cap is judged by the stage the file held before it.
+      const s = stageOf(r.file);
+      const stage = s.stage === 'capped' && s.base === null ? s.prior : s.stage;
+      if (stage === 'capped') return false;
+      if (stage === 'frozen') return r.delta > SPINE_LIMIT;
+      return r.delta > GROWTH_LIMIT
+        && !added.some((p) => p !== r.file && sameHome(homeOf(r.file), homeOf(p)))
+        && !rows.some((o) => o.file !== r.file && o.atBoth && -o.delta >= r.delta);
+    })
     .map((r) => r.file);
 }
 
@@ -550,17 +574,23 @@ export function parseLegacyWaivers(text: string, files: readonly string[], today
  *  is a problem, as is any malformed one (and then nothing is answered). */
 export function waiversAt(files: readonly string[], sha: string, cwd: string, today: Date = new Date(),
   opts: WaiverReadOptions = {}): { entries: GrowthWaiver[]; problems: string[] } {
-  let listing = '';
-  try {
-    listing = gitRead(['ls-tree', '--name-only', '-r', sha, '--', `${GROWTH_WAIVERS_DIR}/`], cwd);
-  } catch { /* no such directory at this sha */ }
-  const names = listing.split('\n').filter((l) => l !== '').map((l) => l.slice(GROWTH_WAIVERS_DIR.length + 1));
-  if (names.length === 0) {
+  const items = dirItemsAt(GROWTH_WAIVERS_DIR, sha, cwd);
+  if (items.length === 0) {
     const legacy = fileAt(GROWTH_WAIVERS_LEGACY_FILE, sha, cwd);
     if (legacy !== null) return parseLegacyWaivers(legacy, files, today);
   }
-  const items = names.map((name) => ({ name, text: fileAt(`${GROWTH_WAIVERS_DIR}/${name}`, sha, cwd) ?? '' }));
   return parseWaiverFiles(items, files, today, opts);
+}
+
+/** Every file under the repo directory `dir` at `sha`, by its name inside `dir`, with its text; none when `dir` is
+ *  absent there. The waiver ledger, the caps and the freezes are each read through it. */
+function dirItemsAt(dir: string, sha: string, cwd: string): { name: string; text: string }[] {
+  let listing = '';
+  try {
+    listing = gitRead(['ls-tree', '--name-only', '-r', sha, '--', `${dir}/`], cwd);
+  } catch { /* no such directory at this sha */ }
+  return listing.split('\n').filter((l) => l !== '').map((l) => l.slice(dir.length + 1))
+    .map((name) => ({ name, text: fileAt(`${dir}/${name}`, sha, cwd) ?? '' }));
 }
 
 /** The ledger entries the diff `baseSha..headSha` adds: the waiver files the diff adds. Absent at a sha, the
@@ -609,6 +639,173 @@ export function agedWaivers(items: readonly { name: string; text: string }[], to
 export const agedLine = (aged: readonly AgedWaiver[]): string =>
   (aged.length ? aged.map((a) => `${a.name} (${a.days === null ? 'age unknown' : `${a.days} days`})`).join(', ') : '(none)');
 
+/** D-8635: the cap directory, one JSON file per capped file, named by `stageFileName`. */
+export const GROWTH_CAPS_DIR = 'server/test/growth-caps';
+/** D-8635: the freeze directory, one JSON file per frozen file, named by `stageFileName`. */
+export const GROWTH_FROZEN_DIR = 'server/test/growth-frozen';
+
+/** One cap: `file` may hold at most `cap` code lines (`codeLines`), set under `d` on `since`. */
+export interface GrowthCap { file: string; cap: number; d: string; since: string }
+/** One freeze: `file` grows by at most SPINE_LIMIT per PR, from `since`, under `d`. */
+export interface GrowthFreeze { file: string; d: string; since: string }
+
+/** A measured file's stage. A capped file carries its cap at the merge-base and at HEAD (null where none), and the
+ *  stage it held before any cap (`prior`), which judges the PR that adds the cap (no cap at the merge-base). */
+export type Stage =
+  | { stage: 'listed' }
+  | { stage: 'frozen' }
+  | { stage: 'capped'; base: number | null; head: number | null; prior: 'listed' | 'frozen' };
+export type StageOf = (file: string) => Stage;
+/** Every file listed: the stage when no cap or freeze is read. */
+export const ALL_LISTED: StageOf = () => ({ stage: 'listed' });
+
+/** The one file name a cap or freeze of `file` takes: the path, lower case, each run of other characters a `-`. */
+export const stageFileName = (file: string): string => `${file.toLowerCase().replace(/[^a-z0-9]+/g, '-')}.json`;
+
+const D_NUMBER = /^D-[1-9]\d*$/;
+
+/** The shared read of a cap or freeze directory: each file one object of exactly `keys`, named for its `file`, a
+ *  D-number, a real `since` day not in the future, and whatever `check` adds. Any problem names its file, and then no
+ *  entry is answered. */
+function parseStageFiles(items: readonly { name: string; text: string }[], keys: readonly string[], today: Date,
+  check: (o: Record<string, unknown>, at: string, problems: string[]) => void): { entries: unknown[]; problems: string[] } {
+  const problems: string[] = [];
+  const entries: unknown[] = [];
+  for (const { name, text } of [...items].sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))) {
+    const at = name;
+    let raw: unknown;
+    try {
+      raw = JSON.parse(text);
+    } catch (e) {
+      problems.push(`${at}: not JSON: ${(e as Error).message}`);
+      continue;
+    }
+    if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) { problems.push(`${at}: not an object`); continue; }
+    const o = raw as Record<string, unknown>;
+    for (const k of Object.keys(o)) if (!keys.includes(k)) problems.push(`${at}: unknown key \`${k}\``);
+    for (const k of keys) if (!(k in o)) problems.push(`${at}: missing \`${k}\``);
+    const file = o['file'];
+    if (typeof file !== 'string' || file === '' || file.startsWith('/') || file.split('/').includes('..')) {
+      problems.push(`${at}: file must be a repo path`);
+    } else if (name !== stageFileName(file)) {
+      problems.push(`${at}: the name must be ${stageFileName(file)}`);
+    }
+    if (typeof o['d'] !== 'string' || !D_NUMBER.test(o['d'])) problems.push(`${at}: d must be a D-number, D-<n>`);
+    if (typeof o['since'] !== 'string') problems.push(`${at}: since must be a string`);
+    else problems.push(...malformedEntries({ [at]: { reason: 'since', since: o['since'] } }, today));
+    check(o, at, problems);
+    entries.push(raw);
+  }
+  return problems.length ? { entries: [], problems } : { entries, problems };
+}
+
+/** The cap directory's files as caps: each exactly `{file, cap, d, since}`, `cap` a positive integer. */
+export function parseCapFiles(items: readonly { name: string; text: string }[], today: Date = new Date()):
+  { entries: GrowthCap[]; problems: string[] } {
+  const got = parseStageFiles(items, ['file', 'cap', 'd', 'since'], today, (o, at, problems) => {
+    if (!Number.isInteger(o['cap']) || (o['cap'] as number) < 1) problems.push(`${at}: cap must be a positive integer`);
+  });
+  return { entries: got.entries as GrowthCap[], problems: got.problems };
+}
+
+/** The freeze directory's files as freezes: each exactly `{file, d, since}`, `file` one of `files` (a listed file). */
+export function parseFrozenFiles(items: readonly { name: string; text: string }[], files: readonly string[],
+  today: Date = new Date()): { entries: GrowthFreeze[]; problems: string[] } {
+  const got = parseStageFiles(items, ['file', 'd', 'since'], today, (o, at, problems) => {
+    if (typeof o['file'] === 'string' && !files.includes(o['file'])) problems.push(`${at}: file must be one of the listed files`);
+  });
+  return { entries: got.entries as GrowthFreeze[], problems: got.problems };
+}
+
+/** The files the caps at `sha` name, read leniently (what `growthFiles` measures; the parse judges the shape). */
+function cappedNamesAt(sha: string, cwd: string): string[] {
+  return dirItemsAt(GROWTH_CAPS_DIR, sha, cwd).flatMap(({ text }) => {
+    try {
+      const file = (JSON.parse(text) as { file?: unknown } | null)?.file;
+      return typeof file === 'string' && file !== '' ? [file] : [];
+    } catch {
+      return [];
+    }
+  });
+}
+
+/** The caps and freezes at `sha`, a freeze checked against `files`; malformed, the problems say which directory. */
+export function stagesAt(files: readonly string[], sha: string, cwd: string, today: Date = new Date()):
+  { caps: GrowthCap[]; frozen: GrowthFreeze[]; problems: string[] } {
+  const caps = parseCapFiles(dirItemsAt(GROWTH_CAPS_DIR, sha, cwd), today);
+  const frozen = parseFrozenFiles(dirItemsAt(GROWTH_FROZEN_DIR, sha, cwd), files, today);
+  return { caps: caps.entries, frozen: frozen.entries,
+    problems: [...caps.problems.map((p) => `${GROWTH_CAPS_DIR}/${p}`), ...frozen.problems.map((p) => `${GROWTH_FROZEN_DIR}/${p}`)] };
+}
+
+/** Each file's stage between `baseSha` and `headSha`: capped when a cap names it at either sha, else frozen when a
+ *  freeze does at either, else listed. Reading both shas is what keeps a PR from uncapping or unfreezing itself. A
+ *  capped file's `prior` is frozen when a freeze names it at either sha, else listed (a file no list named is judged as
+ *  listed in the PR that caps it). */
+export function stagesInDiff(files: readonly string[], baseSha: string, headSha: string, cwd: string,
+  today: Date = new Date()): { stageOf: StageOf; capped: string[]; problems: string[] } {
+  const b = stagesAt(files, baseSha, cwd, today);
+  const h = stagesAt(files, headSha, cwd, today);
+  const capOf = (caps: readonly GrowthCap[], f: string): number | null => caps.find((c) => c.file === f)?.cap ?? null;
+  const capped = [...new Set([...b.caps, ...h.caps].map((c) => c.file))].sort();
+  const frozen = new Set([...b.frozen, ...h.frozen].map((f) => f.file));
+  const stageOf: StageOf = (f) => (capped.includes(f)
+    ? { stage: 'capped', base: capOf(b.caps, f), head: capOf(h.caps, f), prior: frozen.has(f) ? 'frozen' : 'listed' }
+    : frozen.has(f) ? { stage: 'frozen' } : { stage: 'listed' });
+  return { stageOf, capped,
+    problems: [...b.problems.map((p) => `base: ${p}`), ...h.problems.map((p) => `head: ${p}`)] };
+}
+
+/** A capped file's verdict (D-8635): within its cap at HEAD; a new cap at most its code lines plus GROWTH_LIMIT; a cap
+ *  that rose only under the named exemption for this PR and file, the rise within the entry's `cap` and the growth
+ *  check's own files untouched; a cap removed only with the file gone. */
+function capVerdict(r: GrowthRow, s: { base: number | null; head: number | null }, entries: readonly GrowthExemption[],
+  pr: number | null, touched: readonly string[]): GrowthVerdict {
+  let exemption: ExemptionMatch | undefined;
+  let why: string | null = null;
+  if (s.head === null) {
+    if (r.head > 0) why = `${r.file}: its cap of ${s.base} is removed while it holds ${r.head} code lines; a cap may only fall`;
+  } else if (r.head > s.head) {
+    why = `${r.file} holds ${r.head} code lines, over its cap of ${s.head}`;
+  } else if (s.base === null && s.head > r.head + GROWTH_LIMIT) {
+    why = `${r.file}: a new cap is at most its code lines plus ${GROWTH_LIMIT}, ${r.head + GROWTH_LIMIT}, not ${s.head}`;
+  } else if (s.base !== null && s.head > s.base) {
+    const entry = pr === null ? undefined : entries.find((e) => e.pr === pr && e.file === r.file);
+    if (entry !== undefined) exemption = { file: r.file, entry, applies: s.head - s.base <= entry.cap && touched.length === 0, touched };
+    const rose = `${r.file}: its cap rose from ${s.base} to ${s.head}`;
+    if (exemption === undefined) why = `${rose}, and no exemption names this PR`;
+    else if (!exemption.applies) why = `${rose}, ${notExempt(exemption)}`;
+  }
+  const fails = why !== null;
+  const notes = [...(fails ? ['GROWTH_CAP'] : []),
+    ...(exemption === undefined ? [] : [exemption.applies ? `exempt: PR #${exemption.entry.pr}, cap ${exemption.entry.cap}` : notExempt(exemption)])];
+  const was = s.base !== null && s.base !== s.head ? `, was ${s.base}` : '';
+  return {
+    file: r.file, over: fails, exemption, waiver: undefined, fails,
+    title: `${r.file}: ${r.head} code lines, cap ${s.head ?? 'removed'}${was}${notes.length ? ` (${notes.join(', ')})` : ''}`,
+    why: why ?? (s.head === null ? `${r.file} is gone, and its cap with it` : `${r.file} holds ${r.head} code lines, within its cap of ${s.head}`),
+  };
+}
+
+/** The failing row a malformed cap or freeze directory gives: a malformed cap must never read as no cap. */
+function stageProblemsVerdict(problems: readonly string[]): GrowthVerdict {
+  return { file: GROWTH_CAPS_DIR, over: false, exemption: undefined, waiver: undefined, fails: true,
+    title: `${GROWTH_CAPS_DIR} and ${GROWTH_FROZEN_DIR} are malformed (GROWTH_CAP)`, why: problems.join('; ') };
+}
+
+/** The D-numbers the plans under `root` define: a `- **D-N**` bullet or a `## D-N` heading, deviation-refs' shape. */
+export function definedDNumbers(root: string): Set<string> {
+  const dir = path.join(root, 'docs/superpowers/plans');
+  const out = new Set<string>();
+  for (const f of readdirSync(dir).filter((n) => n.endsWith('.md'))) {
+    for (const line of readFileSync(path.join(dir, f), 'utf8').split('\n')) {
+      const m = /^(?:#{2,4} |- \*\*)(D-\d+)\b/.exec(line);
+      if (m) out.add(m[1]!);
+    }
+  }
+  return out;
+}
+
 /** The added entry that best covers one over file: the largest `maxDelta` for it. */
 export interface WaiverMatch { file: string; entry: GrowthWaiver; applies: boolean }
 function matchWaiver(row: GrowthRow, added: readonly GrowthWaiver[]): WaiverMatch | undefined {
@@ -656,18 +853,21 @@ export interface GrowthVerdict {
  *  (`waivers`, D-6223) applies to it. */
 export function growthVerdicts(rows: readonly GrowthRow[], over: readonly string[],
   entries: readonly GrowthExemption[], pr: number | null, touched: readonly string[],
-  waivers: readonly GrowthWaiver[] = []): GrowthVerdict[] {
+  waivers: readonly GrowthWaiver[] = [], stageOf: StageOf = ALL_LISTED): GrowthVerdict[] {
   const matches = matchExemptions(over, rows, entries, pr, touched);
-  return rows.map((r) => {
+  // D-8635: a frozen file is held at SPINE_LIMIT, and no ledger waiver passes it.
+  const perPr = (r: GrowthRow, frozen: boolean): GrowthVerdict => {
     const isOver = over.includes(r.file);
     const m = matches.find((x) => x.file === r.file);
-    const w = isOver ? matchWaiver(r, waivers) : undefined;
+    const w = isOver && !frozen ? matchWaiver(r, waivers) : undefined;
     const notes = [
+      ...(isOver && frozen ? ['frozen'] : []),
       ...(m === undefined ? [] : [m.applies ? `exempt: PR #${m.entry.pr}, cap ${m.entry.cap}` : notExempt(m)]),
       ...(w === undefined ? [] : [waiverNote(w)]),
     ];
+    const limit = frozen ? `over the frozen limit of ${SPINE_LIMIT}` : `over the limit of ${GROWTH_LIMIT}`;
     const reason = w !== undefined && !w.applies ? waiverNote(w)
-      : m === undefined ? `over the limit of ${GROWTH_LIMIT}` : notExempt(m);
+      : m === undefined ? limit : notExempt(m);
     return {
       file: r.file,
       over: isOver,
@@ -677,6 +877,16 @@ export function growthVerdicts(rows: readonly GrowthRow[], over: readonly string
       title: `${r.file}: delta ${signed(r.delta)}${isOver ? ` (GROWTH_OVER${notes.map((n) => `, ${n}`).join('')})` : ''}`,
       why: `${r.file} grew by ${r.delta} net code lines, ${reason}`,
     };
+  };
+  return rows.map((r) => {
+    const s = stageOf(r.file);
+    if (s.stage !== 'capped') return perPr(r, s.stage === 'frozen');
+    const c = capVerdict(r, s, entries, pr, touched);
+    // D-8635: the PR that adds a cap is judged by its prior stage too, so the new cap never lifts that stage's limit.
+    if (s.base !== null || !over.includes(r.file)) return c;
+    const p = perPr(r, s.prior === 'frozen');
+    return { ...p, fails: c.fails || p.fails, title: `${c.title}, ${p.title.slice(r.file.length + 2)}`,
+      why: !p.fails ? c.why : c.fails ? `${c.why}; ${p.why}` : p.why };
   });
 }
 
@@ -686,16 +896,24 @@ export function growthVerdicts(rows: readonly GrowthRow[], over: readonly string
  *  ledger entries the diff adds (D-6223), and the verdict per file. */
 export function armedGrowth(files: readonly string[], root: string, base: string, head: string,
   env: NodeJS.ProcessEnv, today: Date = new Date()) {
-  const rows = files.map((f) => netGrowth(f, base, head, root));
-  const over = growthOver(rows, addedFiles(base, head, root), ringHomes(root, base, head));
+  // D-8635: the caps and freezes at both shas; a capped file is measured though `files` does not name it.
+  const stages = stagesInDiff(files, base, head, root, today);
+  const all = [...files, ...stages.capped.filter((f) => !files.includes(f))];
+  const rows = all.map((f) => netGrowth(f, base, head, root));
+  const over = growthOver(rows, addedFiles(base, head, root), ringHomes(root, base, head), stages.stageOf);
   const pr = prNumberFromEnv(env);
-  const onMain = exemptionsOnMain(files, root, today);
+  const onMain = exemptionsOnMain(all, root, today);
   const touched = changedFiles(base, head, root).filter((p) => GROWTH_MACHINERY.includes(p));
-  const ledger = waiversInDiff(files, base, head, root, today);
-  const verdicts = growthVerdicts(rows, over, onMain.entries, pr, touched, ledger.added);
+  const ledger = waiversInDiff(all, base, head, root, today);
+  const verdicts = [...growthVerdicts(rows, over, onMain.entries, pr, touched, ledger.added, stages.stageOf),
+    ...(stages.problems.length ? [stageProblemsVerdict(stages.problems)] : [])];
   const exemptions = verdicts.flatMap((v) => (v.exemption === undefined ? [] : [v.exemption]));
   const waivers = verdicts.flatMap((v) => (v.waiver === undefined ? [] : [v.waiver]));
-  return { rows, over, pr, onMain, touched, ledger, verdicts, exemptions, waivers };
+  const caps = rows.flatMap((r) => {
+    const s = stages.stageOf(r.file);
+    return s.stage === 'capped' && s.head !== null ? [{ file: r.file, head: r.head, cap: s.head }] : [];
+  });
+  return { rows, over, pr, onMain, touched, ledger, verdicts, exemptions, waivers, stages, caps };
 }
 
 /** `GROWTH_OVER`'s list: every file that grew over the limit, an exempted one
@@ -749,6 +967,8 @@ export interface GrowthSummaryInput {
   waivers?: readonly WaiverMatch[];
   /** D-8563: the ledger's waivers older than WAIVER_AGE_DAYS; the line is left out when not given. */
   aged?: readonly AgedWaiver[];
+  /** D-8635: each capped file's code lines at HEAD and its cap there; the line is left out when not given. */
+  caps?: readonly { file: string; head: number; cap: number }[];
 }
 
 /** The CI job summary: one row per listed file with its absolute code lines,
@@ -768,6 +988,8 @@ export function growthSummary(i: GrowthSummaryInput): string {
     `GROWTH_OVER: ${overLine(i.over, i.exemptions, (f) => `\`${f}\``, i.waivers)}`,
     '',
     ...(i.aged === undefined ? [] : [`Waivers older than ${WAIVER_AGE_DAYS} days (a report, not a failure): ${agedLine(i.aged)}`, '']),
+    ...(i.caps === undefined ? [] : [`Caps (D-8635): ${i.caps.length
+      ? i.caps.map((c) => `\`${c.file}\` ${c.head} of ${c.cap}`).join(', ') : '(none)'}`, '']),
   ].join('\n');
 }
 
