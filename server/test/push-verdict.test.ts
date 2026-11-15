@@ -7,6 +7,10 @@ import path from 'node:path';
 
 const calls = vi.hoisted(() => [] as { endpoint: string; options: unknown }[]);
 const behaviour = vi.hoisted(() => new Map<string, () => Promise<unknown>>());
+/** Endpoints whose stored keys web-push's own request builder refuses (review 2119 F10): the builder throws, so the send
+ *  rejects with that same plain error before any request exists. */
+const badKeys = vi.hoisted(() => new Set<string>());
+const BAD_KEYS = 'The subscription p256dh value should be 65 bytes long.';
 vi.mock('web-push', () => {
   class WebPushError extends Error {
     constructor(message: string, readonly statusCode: number) { super(message); }
@@ -14,8 +18,13 @@ vi.mock('web-push', () => {
   return {
     default: {
       setVapidDetails: () => {},
+      generateRequestDetails: (s: { endpoint: string }) => {
+        if (badKeys.has(s.endpoint)) throw new Error(BAD_KEYS);
+        return {};
+      },
       sendNotification: async (s: { endpoint: string }, _body: string, options: unknown) => {
         calls.push({ endpoint: s.endpoint, options });
+        if (badKeys.has(s.endpoint)) throw new Error(BAD_KEYS);
         const b = behaviour.get(s.endpoint);
         return b === undefined ? { statusCode: 201 } : b();
       },
@@ -42,7 +51,7 @@ const service = async (n: number): Promise<PushService> => {
   return push;
 };
 
-beforeEach(() => { calls.length = 0; behaviour.clear(); });
+beforeEach(() => { calls.length = 0; behaviour.clear(); badKeys.clear(); });
 void webpush;
 
 describe('PushService.notify answers a PushSendVerdict (Overlord §4.3, C67)', () => {
@@ -113,6 +122,17 @@ describe('PushService.notify answers a PushSendVerdict (Overlord §4.3, C67)', (
     behaviour.set(ep(4), () => Promise.reject(new Error('unable to verify the first certificate')));
     const v = await push.notify(PAYLOAD);
     expect(v.kind === 'sent' && v.subs.map((s) => s.verdict)).toEqual(['no-answer', 'no-answer', 'no-answer', 'no-answer']);
+  });
+
+  it('a send web-push refuses on this box before building any request (bad stored keys) is unsendable, beside a reset (F10)', async () => {
+    const push = await service(2);
+    badKeys.add(ep(1));
+    behaviour.set(ep(2), () => Promise.reject(errWith('ECONNRESET')));
+    const v = await push.notify(PAYLOAD);
+    expect(v).toEqual({ kind: 'sent', subs: [
+      { endpointHash: hash(ep(1)), verdict: 'unsendable', status: null },
+      { endpointHash: hash(ep(2)), verdict: 'no-answer', status: null },
+    ] });
   });
 
   it('a subscription that hangs past its timeout beside one that accepts: the verdict is sent, with both answers', async () => {

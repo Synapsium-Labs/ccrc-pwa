@@ -29,6 +29,7 @@
 import type { NotifyLog } from '../notifylog.js';
 import type { DeadCoordinatorStop } from '../deadCoordinator.js';
 import { notifyEach } from '../notice.js';
+import type { ItemReachOf } from './pushOutboxStore.js';
 import { readSwitches } from '../../../shared/switches.js';
 import type { ChildMarkRead } from '../../../shared/runBelongs.js';
 import type { RunStuck } from '../../../shared/api.js';
@@ -84,6 +85,8 @@ export interface RunCloseLaneDeps {
   /** `abandonRefusal(coord, runId)`: the abandon arm's own read of a run's row, without acting. Asked inside the hold before an item
    *  whose door is Abandon is raised (A62). */
   readonly abandonRefusal: (runId: number) => Extract<CloseOutcome, { ok: false }> | null;
+  /** The push outbox (Overlord W1): a refusal item shown at its raise gets its reach stamp and one row (`RefusalDeps`). */
+  readonly itemReach?: ItemReachOf | undefined;
   /** E5's R6 read (D-8078): is a pull request open from the RUN'S OWN branch, read by that head and never by `--session` (the
    *  session's branch is the later run's). `null` is unmeasured. Absent, every E5 run is unmeasured and listed. */
   readonly branchOpenPr?: (project: string, branch: string) => Promise<boolean | null>;
@@ -564,7 +567,7 @@ async function routeClosesRefused(
     add({ run, row: null, reason: 'unknown-run', claimant: run.claimedBy, lives: v !== null && v.state === 'alive', held: v !== null && registryHolds(v) });
   }
   await deps.serial!(deps.coord, async () => {
-    routeRefusals({ coord: deps.coord, abandonRefusal: deps.abandonRefusal, notifyLog: deps.notifyLog }, current, now, unmeasured);
+    routeRefusals({ coord: deps.coord, abandonRefusal: deps.abandonRefusal, notifyLog: deps.notifyLog, itemReach: deps.itemReach }, current, now, unmeasured);
   });
 }
 

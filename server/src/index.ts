@@ -13,6 +13,7 @@ import { Bus } from './bus.js';
 import { FleetWatcher } from './watch.js';
 import { installShutdownSeal } from './shutdownseal.js';
 import { connectFleet, type FleetClient } from './remote/client.js';
+import { bootPushOutbox } from './pushSender.js';
 import { PerfRecorder } from './perf/recorder.js';
 import { makeRefreshCaps } from './refreshcaps.js';
 import { recordCcdVerbs } from './fleetstate.js';
@@ -103,6 +104,10 @@ if (restoreRefusal !== null) {
 // ccrc.service` (added this build) is what turns it into a failed deploy with
 // the journal tail attached, rather than a green deploy in front of a
 // three-second crash loop.
+// The process's ONE set of time ports (Overlord spec §11.5): both modes and every consumer get the same object, through
+// `Deps.time`. Nothing else builds the system adapters (`single-definition/time-ports.test.ts`). Built before the store,
+// whose boot pass below reads its clock; it takes no argument and reads nothing the store builds.
+const time = systemTimePorts();
 const coordDb = openCoordDb(cfg.coordDbPath);
 // Landing order wave 5f (shared contract §6): the store owns ONE authority journal, `landing.log` inside `cfg.ccrcDir`
 // (made here, because the adapter never creates a directory), and its landing entrances start fenced. The replay below
@@ -119,6 +124,10 @@ if (!landingReplay.ok) {
   try { coordDb.close(); } catch { /* the process stops either way */ }
   process.exit(1);
 }
+// The push outbox's boot pass (Overlord W1, `pushSender.ts#bootPushOutbox`): synchronously, before the fleet link
+// connects, the server listens or the watcher starts, so nothing can push before it and every `sending` row it finds
+// belongs to a process that died.
+bootPushOutbox(coord, time.clock);
 
 // The process's ONE `PoolEdgeLog` — beside `coord`, same reason as
 // `routes.ts`'s `LedgerLog`: `CoordStore.setAccountPools` calls `log.append`
@@ -170,10 +179,6 @@ const collectLane: CollectLaneDeps = {
 // POST /workspace/reap is the point; a per-consumer queue would serialise a
 // call only against itself.
 const queue = new KeyedQueue();
-// The process's ONE set of time ports (Overlord spec §11.5), built here beside the queue for the same reason: both
-// modes and every consumer get the same object, through `Deps.time`. Nothing else builds the system adapters
-// (`single-definition/time-ports.test.ts`).
-const time = systemTimePorts();
 
 // The one agent connection, hoisted out of the remote arm so the `ready`
 // hook below can reach it once the watcher exists. Null in local mode.

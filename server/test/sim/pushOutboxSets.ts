@@ -179,6 +179,12 @@ export function outboxNextStateCases(m: PushOutboxModule): Record<string, SuiteC
     'refused-for-good beside refused is retrying (some refusal can pass)': () => {
       expect(m.outboxNextState(sent('refused-for-good', 'refused'), ROW, at)).toEqual({ to: 'retrying', nextAttemptAt: at + BASE });
     },
+    'unsendable (refused on this box, F10) is failed alone and beside gone, retrying beside refused, unknown beside no-answer': () => {
+      expect(m.outboxNextState(sent('unsendable'), ROW, at)).toEqual({ to: 'failed' });
+      expect(m.outboxNextState(sent('gone', 'unsendable'), ROW, at)).toEqual({ to: 'failed' });
+      expect(m.outboxNextState(sent('unsendable', 'refused'), ROW, at)).toEqual({ to: 'retrying', nextAttemptAt: at + BASE });
+      expect(m.outboxNextState(sent('unsendable', 'no-answer'), ROW, at)).toEqual({ to: 'unknown' });
+    },
     'refused-for-good alone, or beside gone, is failed': () => {
       expect(m.outboxNextState(sent('refused-for-good'), ROW, at)).toEqual({ to: 'failed' });
       expect(m.outboxNextState(sent('gone', 'refused-for-good'), ROW, at)).toEqual({ to: 'failed' });

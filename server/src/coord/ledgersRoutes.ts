@@ -53,6 +53,9 @@ import {
   removeOperatorSecret, programmeChainKey, sweepOperatorSecretTemps, writeOperatorSecret, type OperatorSecretMeta, type OperatorSecretState,
   type RegisterSecret,
 } from './ledgersSecrets.js';
+import type { BoundRowRef } from './pushOutboxStore.js';
+import { WAITING_URL } from '../pushOutbox.js';
+import { itemBoundOf, type OutboxView } from '../pushSender.js';
 
 /** What the coordinator routes need. `requireMailToken` and `requireAttribution` are `registerCoordRoutes`'s own closures,
  *  handed in rather than rebuilt, so the gate and the sender check are one implementation for every lane. */
@@ -68,10 +71,13 @@ export interface LedgerCoordinatorDeps {
   presenceOf: (sessionId: string) => CoordinatorPresence;
   /** A secret item's slot state for its view (plan PL6): the coordinator learns only that it is set. */
   secretOf: SecretMetaOf;
+  /** The push outbox (Overlord W1, Task 5): the sender's view, from which an item's bound write is built (`itemBoundOf`)
+   *  and its bound send re-reads its source. Absent (a narrow test), an item writes no row and pushes as before. */
+  outbox?: OutboxView | undefined;
 }
 
 /** The PWA route a blocking item's push opens on tap: the Waiting on you list (`pwa/src/lib/routes.ts`'s `waiting` row). */
-const WAITING_URL = '/waiting';
+
 /** A reason for `ruling` on a modification: the programme ledger's entry id or a short pointer, never prose. */
 const RULING_MAX = 600;
 /** The coordinator's note when it sends an item back (spec §3.3). */
@@ -271,11 +277,14 @@ export function registerLedgerCoordinatorRoutes(app: FastifyInstance, deps: Ledg
   /** A blocking item must reach the operator. It is a `coord` notice with no session: a `run` notice naming the
    *  coordinator's session is held back while the operator views that session, and a `run` notice with an empty
    *  session is the review-cap notice's shape alone (D-6911). */
-  const pushBlocking = (item: ItemRow): void => {
+  const pushBlocking = (item: ItemRow, row: BoundRowRef | null): void => {
     // `url` is the list a tap opens (review 1331 F1; review 1332 F6 measured that `opts.url` reaches `sendPush`). The feed
-    // row gets no target: `NotifyEvent` carries no url and widening it is not this programme's.
+    // row gets no target: `NotifyEvent` carries no url and widening it is not this programme's. With the push outbox the
+    // item's row, written by its move, carries the copy (`itemPushPayload`), and the funnel sends that row (I2).
+    const outbox = deps.outbox;
     deps.notice({ kind: 'coord', sessionId: '', runId: item.runId, title: 'Waiting on you', body: item.title }, 'push',
-      { tag: `item-${item.id}`, url: WAITING_URL });
+      row === null || outbox === undefined ? { tag: `item-${item.id}`, url: WAITING_URL }
+        : { bound: { row: { id: row.id, source: 'item', sourceId: item.id }, due: row.due, settledOf: outbox.settledOf } });
   };
 
   /** The refusal of a text that links a document outside the console (`outsideDocLink`, spec D28): the raise route's and the
@@ -311,8 +320,10 @@ export function registerLedgerCoordinatorRoutes(app: FastifyInstance, deps: Ledg
       if (read.run.program !== slug) return bad(reply, `run ${v.runId} belongs to another programme`);
     }
     const now = deps.now();
-    const id = coord.raiseItem({ program: slug, raisedBy: who.byId, ...v }, now);
-    if (v.neededBy === 'blocking') pushBlocking(coord.itemById(id) as ItemRow);
+    const input = { program: slug, raisedBy: who.byId, ...v };
+    const { id, row } = deps.outbox === undefined ? { id: coord.raiseItem(input, now), row: null }
+      : coord.raiseItemReached(input, now, 'coordinator', itemBoundOf(deps.outbox.deps, v, 'reach'));
+    if (v.neededBy === 'blocking') pushBlocking(coord.itemById(id) as ItemRow, row);
     changed();
     return reply.code(200).send({ ok: true, id });
   });
@@ -428,11 +439,12 @@ export function registerLedgerCoordinatorRoutes(app: FastifyInstance, deps: Ledg
     const item = ownedItem(coord, reply, head);
     if (item === null) return;
     const blocking = flag === true;
-    const res = coord.setBlocking(item.id, blocking, deps.now());
+    const res = coord.setBlocking(item.id, blocking, deps.now(),
+      deps.outbox && itemBoundOf(deps.outbox.deps, { title: item.title, neededBy: 'blocking' }, 'arm'));
     if (!res.ok) return refuseRoute(reply, res.why, { detail: `item ${item.id} is closed` });
     // The store decides, inside its transaction, whether the level moved; the push and the emit follow its answer.
     if (res.changed) {
-      if (blocking) pushBlocking(item);
+      if (blocking) pushBlocking(item, 'row' in res ? res.row : null);
       changed();
     }
     return reply.code(200).send({ ok: true });

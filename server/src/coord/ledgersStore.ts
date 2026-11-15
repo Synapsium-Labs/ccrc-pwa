@@ -90,10 +90,17 @@ function writeItemEvent(db: DatabaseSync, itemId: number, at: number, act: ItemE
  *  (`recommendationOf`) can read (plan PL9): no caller can store a decide row the view would show without one. Returns the
  *  new id. `actor` is who the `raise` event names: the coordinator for its own item, `ccrc` for one the server wrote on
  *  another session's behalf (A18). */
-export function raiseItem(db: DatabaseSync, input: RaiseItemInput, now: number, actor: 'coordinator' | 'ccrc' = 'coordinator'): number {
+export function raiseItem(
+  db: DatabaseSync, input: RaiseItemInput, now: number, actor: 'coordinator' | 'ccrc' = 'coordinator', reach?: ItemReach,
+): number {
   checkRaise(input);
-  return tx(db, () => raiseItemInTx(db, input, now, actor));
+  return tx(db, () => raiseItemInTx(db, input, now, actor, reach));
 }
+
+/** The push outbox's write beside a raise (Overlord W1, `pushOutboxStore.ts#reachInTx`), handed in by `CoordStore` so this
+ *  file imports no outbox code: called inside the raise's transaction, with the new id, only for an item the operator is
+ *  shown at its raise (`operatorWasShown`, the hold's one rule); a held item's reach is the held drain's (I2). */
+export type ItemReach = (id: number) => void;
 
 /** `raiseItem`'s vocabulary checks, thrown before any transaction opens. */
 function checkRaise(input: RaiseItemInput): void {
@@ -105,7 +112,7 @@ function checkRaise(input: RaiseItemInput): void {
 }
 
 /** The insert and its `raise` event, inside a transaction the CALLER holds (`tx` does not nest). */
-function raiseItemInTx(db: DatabaseSync, input: RaiseItemInput, now: number, actor: 'coordinator' | 'ccrc'): number {
+function raiseItemInTx(db: DatabaseSync, input: RaiseItemInput, now: number, actor: 'coordinator' | 'ccrc', reach?: ItemReach): number {
   const res = db.prepare(
     'INSERT INTO operator_items (program, runId, raisedBy, kind, title, why, how, options, neededBy, soonLabel, ' +
     "secretSlot, state, raisedAt, recommended, recommendedWhy, action, heldUntil) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?, ?, ?, ?)",
@@ -115,16 +122,17 @@ function raiseItemInTx(db: DatabaseSync, input: RaiseItemInput, now: number, act
     input.action === undefined || input.action === null ? null : JSON.stringify(input.action), input.heldUntil ?? null);
   const id = Number(res.lastInsertRowid);
   writeItemEvent(db, id, now, 'raise', actor, null);
+  if (reach !== undefined && operatorWasShown({ heldUntil: input.heldUntil ?? null, closedAt: null }, now)) reach(id);
   return id;
 }
 
 /** `raiseItem` and a mail in ONE transaction (the pattern of `tickWithMail`): `queue` gets the new id and inserts the system
  *  mail; a throw from it rolls the item back. `queue` must open no transaction of its own. */
 export function raiseItemWithMail<T>(
-  db: DatabaseSync, input: RaiseItemInput, now: number, actor: 'coordinator' | 'ccrc', queue: (id: number) => T,
+  db: DatabaseSync, input: RaiseItemInput, now: number, actor: 'coordinator' | 'ccrc', queue: (id: number) => T, reach?: ItemReach,
 ): { id: number; mail: T } {
   checkRaise(input);
-  return tx(db, () => { const id = raiseItemInTx(db, input, now, actor); return { id, mail: queue(id) }; });
+  return tx(db, () => { const id = raiseItemInTx(db, input, now, actor, reach); return { id, mail: queue(id) }; });
 }
 
 export function itemById(db: DatabaseSync, id: number): ItemRow | null {
@@ -335,7 +343,7 @@ export function settleEndRequestsOfClosedRuns(db: DatabaseSync, note: string, no
  *  as the `block` event's note; lowering restores that level, and an item that was RAISED blocking (no earlier level on
  *  record) falls back to `soon` when it carries a label and `later` when it does not. A repeat of the level it already
  *  has writes nothing and answers `changed: false`: the one place that says whether the level moved. It writes `neededBy` and an event and never `state`. */
-export function setBlocking(db: DatabaseSync, id: number, blocking: boolean, now: number):
+export function setBlocking(db: DatabaseSync, id: number, blocking: boolean, now: number, arm?: ItemReach):
   { ok: true; changed: boolean } | { ok: false; why: Extract<ItemMoveRefusal, 'unknown-item' | 'not-open'> } {
   return tx(db, () => {
     const row = itemById(db, id);
@@ -351,6 +359,8 @@ export function setBlocking(db: DatabaseSync, id: number, blocking: boolean, now
     }
     db.prepare('UPDATE operator_items SET neededBy = ? WHERE id = ?').run(next, id);
     writeItemEvent(db, id, now, blocking ? 'block' : 'unblock', 'coordinator', blocking ? row.neededBy : null);
+    // The push outbox's arm (slug rearm-is-an-upsert): a move to blocking arms the item's one row in this transaction.
+    if (blocking) arm?.(id);
     return { ok: true, changed: true } as const;
   });
 }

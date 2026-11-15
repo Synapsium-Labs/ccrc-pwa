@@ -12,7 +12,7 @@ import {
 } from '../../../shared/push-outbox.js';
 import { NEEDED_BY_LEVELS, type NeededBy } from '../../../shared/ledgers.js';
 import type { PushPayload } from '../push.js';
-import { asSendVerdict } from '../pushOutbox.js';
+import { asSendVerdict, type PreparedPush, type PushDue } from '../pushOutbox.js';
 import { operatorWasShown } from './ledgersStore.js';
 import { tx } from './tx.js';
 
@@ -132,15 +132,63 @@ export type BoundRowWrite = { readonly source: OutboxSource; readonly sourceId: 
 
 /** A bound row, written by the move that raised or released its source, INSIDE that move's transaction: it opens none
  *  of its own, so a throw here rolls the move back (slug a-failed-bound-write-rolls-back). `push_outbox_one_per_source`
- *  refuses a second row for one source (I2). A terminal (`silent`) row stores no payload. Answers the row's id. */
-export function insertBoundRowInTx(db: DatabaseSync, row: BoundRowWrite): number {
-  mustMove(null, row.state, 'raise', 'insertBoundRowInTx');
+ *  refuses a second row for one source (I2). A terminal (`silent`) row stores no payload. Answers the row's id. The
+ *  actor is the move's: `raise` for a raising or releasing move, `sender` for the held drain's insert, so the row of
+ *  `OUTBOX_TRANSITIONS` checked is the one that move is (review 2119 F6). */
+export function insertBoundRowInTx(db: DatabaseSync, row: BoundRowWrite, actor: 'raise' | 'sender' = 'raise'): number {
+  mustMove(null, row.state, actor, 'insertBoundRowInTx');
   const silent = row.state === 'silent';
   const res = stmt(db, 'INSERT INTO push_outbox (pushId, sourceKind, sourceId, payload, tag, state, createdAt, armedAt, silentWhy, '
     + 'settledAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').run(row.pushId, row.source, row.sourceId,
     silent ? null : JSON.stringify(row.payload), row.payload?.tag ?? null, row.state, row.at, row.at,
     silent ? row.silentWhy : null, silent ? row.at : null);
   return Number(res.lastInsertRowid);
+}
+
+/** What a bound move writes beside itself: its prepared push (`senderFor(deps).prepare`) and `pushDue`'s answer for it,
+ *  asked once, before the move's transaction (slug presence-read-once). */
+export interface BoundWrite { readonly prepared: PreparedPush; readonly due: PushDue }
+/** An item's bound write, built from its id (the tag `item-<id>` needs it; slug bound-row-callback). */
+export type BoundOf = (id: number) => BoundWrite;
+/** An item raiser's bound write for one item, from its copy and its level (`pushSender.ts#itemBoundOf` builds it): what
+ *  the three `ccrc` raisers' deps carry, so they import no sender code. */
+export type ItemReachOf = (item: { readonly title: string; readonly neededBy: NeededBy }) => BoundOf;
+/** The bound row a move wrote, by id, with the answer it was written under. */
+export interface BoundRowRef { readonly id: number; readonly due: PushDue }
+
+/** A move's reach (I2), INSIDE the move's transaction once its compare-and-set has won: the reach stamp and the one
+ *  bound row, `pending` on `now` (which `pushDue` answers only with a payload) or `silent` with its why. A payload
+ *  without a tag, or a `now` without a payload, throws, which rolls the move back rather than write a row that cannot
+ *  be sent. */
+export function reachInTx(db: DatabaseSync, source: OutboxSource, sourceId: number, b: BoundWrite, at: number): BoundRowRef {
+  const p = b.prepared.payload;
+  if (p !== null && typeof p.tag !== 'string') throw new Error(`reachInTx: the ${source} ${sourceId} payload has no tag`);
+  const payload = p as OutboxPayload | null;
+  stampReach(db, source, sourceId, at);
+  const base = { source, sourceId, pushId: b.prepared.pushId, at };
+  if (b.due.due === 'now') {
+    if (payload === null) throw new Error(`reachInTx: the ${source} ${sourceId} push is due with no payload`);
+    return { id: insertBoundRowInTx(db, { ...base, state: 'pending', payload }), due: b.due };
+  }
+  return { id: insertBoundRowInTx(db, { ...base, state: 'silent', silentWhy: b.due.why, payload }), due: b.due };
+}
+
+/** The toggle to blocking's reach (slug rearm-is-an-upsert), INSIDE `setBlocking`'s transaction once the level moved:
+ *  the stamp when absent, and the source's one row armed `pending` when `pushDue` answers `now`. On `silent` (no push
+ *  service) a row is written `silent` only when none exists, and an existing row is left as it is, so the toggle still
+ *  leaves exactly one row (I2). */
+export function armInTx(db: DatabaseSync, source: OutboxSource, sourceId: number, b: BoundWrite, at: number): BoundRowRef {
+  stampReach(db, source, sourceId, at);
+  const payload = b.prepared.payload as OutboxPayload | null;
+  const idOf = (): number | undefined =>
+    (stmt(db, 'SELECT id FROM push_outbox WHERE sourceKind = ? AND sourceId = ?').get(source, sourceId) as { id: number } | undefined)?.id;
+  if (b.due.due === 'now') {
+    if (payload === null || typeof payload.tag !== 'string') throw new Error(`armInTx: the ${source} ${sourceId} push has no tagged payload`);
+    armBoundRowInTx(db, source, sourceId, { pushId: b.prepared.pushId, payload, at });
+  } else if (idOf() === undefined) {
+    insertBoundRowInTx(db, { source, sourceId, pushId: b.prepared.pushId, state: 'silent', silentWhy: b.due.why, payload, at });
+  }
+  return { id: Number(idOf()), due: b.due };
 }
 
 /** THE ONE WRITER of `reachedOperatorAt` (C31): a row is stamped at most once (`WHERE reachedOperatorAt IS NULL`). It
@@ -196,17 +244,26 @@ export function insertUnboundRow(db: DatabaseSync, row: { readonly pushId: strin
   }
 }
 
+/** A won claim: its number, and what the attempt's verdict is decided over (the backoff's count since the last arm, the
+ *  horizon's start) and sends (the stored payload; null only for a row that cannot be read, sealed by the sender). */
+export interface OutboxClaim {
+  readonly changed: true; readonly claimSeq: number; readonly attempts: number; readonly armedAt: number;
+  readonly payload: OutboxPayload | null;
+}
+
 /** One attempt's claim: `pending` (whatever the clock) or a `retrying` row whose `nextAttemptAt` has come to `sending`,
  *  `attempts + 1` and `claimSeq + 1`, in one statement. A row in any other state is not claimed (a drain or a boot won
  *  it), nor a retry before its time, and either answers `changed: false` with no claim number. */
-export function claimOutboxRow(db: DatabaseSync, id: number, at: number):
-  { readonly changed: true; readonly claimSeq: number } | { readonly changed: false } {
+export function claimOutboxRow(db: DatabaseSync, id: number, at: number): OutboxClaim | { readonly changed: false } {
   mustMove('pending', 'sending', 'sender', 'claimOutboxRow');
   mustMove('retrying', 'sending', 'sender', 'claimOutboxRow');
   const r = stmt(db, "UPDATE push_outbox SET state = 'sending', attempts = attempts + 1, claimSeq = claimSeq + 1, claimedAt = ? "
-    + "WHERE id = ? AND (state = 'pending' OR (state = 'retrying' AND nextAttemptAt <= ?)) RETURNING claimSeq").get(at, id, at) as
-    { claimSeq: number } | undefined;
-  return r === undefined ? { changed: false } : { changed: true, claimSeq: Number(r.claimSeq) };
+    + "WHERE id = ? AND (state = 'pending' OR (state = 'retrying' AND nextAttemptAt <= ?)) RETURNING claimSeq, attempts, armedAt, payload")
+    .get(at, id, at) as { claimSeq: number; attempts: number; armedAt: number; payload: unknown } | undefined;
+  if (r === undefined) return { changed: false };
+  let payload: OutboxPayload | null;
+  try { payload = r.payload === null ? null : payloadOf(r.payload); } catch { payload = null; }
+  return { changed: true, claimSeq: Number(r.claimSeq), attempts: Number(r.attempts), armedAt: Number(r.armedAt), payload };
 }
 
 /** A bound row its source re-read settled, or `pushDue` silenced: `pending` or `retrying` to `silent`, its payload nulled. */
@@ -281,6 +338,29 @@ export function heldItemsReached(db: DatabaseSync, now: number, firstBootAt: num
     return { id: Number(r.id), heldUntil: Number(r.heldUntil), neededBy };
   });
   return { ok: true, ...read };
+}
+
+/** The boot pass's one write of `firstBootAt` (`push_outbox_meta`): the first boot of this build, kept across later
+ *  boots, from which the held drain stamps held items (slug no-backfill). Answers the stored value. */
+export function markFirstBoot(db: DatabaseSync, at: number): number {
+  stmt(db, "INSERT OR IGNORE INTO push_outbox_meta (k, v) VALUES ('firstBootAt', ?)").run(at);
+  return firstBootAt(db) ?? at;
+}
+/** `firstBootAt`, or null before the first boot pass of this build. */
+export function firstBootAt(db: DatabaseSync): number | null {
+  const r = stmt(db, "SELECT v FROM push_outbox_meta WHERE k = 'firstBootAt'").get() as { v: number } | undefined;
+  return r === undefined ? null : Number(r.v);
+}
+
+/** The held drain's write for one held item that reached the operator (slug item-held-until-is-a-hold), in its own
+ *  transaction: the reach stamp and, only when the stamp changed, one `silent` row written by the sender (review 2119
+ *  F6: `{ null -> silent, sender }`), with no payload, so the drain never sends it (slug held-drain-is-silent). */
+export function reachHeldItem(db: DatabaseSync, id: number, pushId: string, why: PushSilentWhy, at: number): { changed: boolean } {
+  return tx(db, () => {
+    if (!stampReach(db, 'item', id, at).changed) return { changed: false };
+    insertBoundRowInTx(db, { source: 'item', sourceId: id, pushId, state: 'silent', silentWhy: why, payload: null, at }, 'sender');
+    return { changed: true };
+  });
 }
 
 /** Terminal unbound rows settled before `before` (the caller passes `now - OUTBOX_KEEP_MS`). A bound row stays: no

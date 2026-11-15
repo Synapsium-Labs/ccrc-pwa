@@ -4,10 +4,11 @@
 // `lane-beats-characterization.test.ts` pins the same four beats through `tick`.
 import { RENEWAL_LANE_PERIOD_MS } from '../../shared/continuity.js';
 import { TIMER_LANE_PERIOD_MS } from '../../shared/continuity-timers.js';
+import { OUTBOX_SEND_DEADLINE_MS } from '../../shared/push-outbox.js';
 import { describe, it, expect, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
-import { LANE_SCHEDULE, laneRow, type LaneRow } from '../src/laneSchedule.js';
+import { LANE_SCHEDULE, OUTBOX_LANE_PERIOD_MS, laneRow, type LaneRow } from '../src/laneSchedule.js';
 import { LaneRunner } from '../src/laneRunner.js';
 import { callsIn, symbolOf } from './scan/symbols.js';
 import { CATALOGUE_POLL_INTERVAL_MS, SERVER_CAPS_WRITE_MS, CHILD_RECLAIM_SWEEP_MS } from '../src/laneSchedule.js';
@@ -520,9 +521,9 @@ describe('the four reclaim lanes (D-5862, PR 3)', () => {
 });
 
 describe('every throttle is on the monotonic clock (OA-C4, ruled (a) on #803)', () => {
-  it('no row of LANE_SCHEDULE is on the wall clock: 44 of 44 are monotonic (the disk alarm, the tmp census and the stale-archive arm are rows, D-7895; the stuck verdict pass, D-8071; the run-close lane, D-8077; the case lane, Overlord §10.5; the generations lane, Overlord §3.3.11; the launch-profile lane, Overlord §3.6; the timers lane, Overlord §3.3.12)', () => {
+  it('no row of LANE_SCHEDULE is on the wall clock: 45 of 45 are monotonic (the disk alarm, the tmp census and the stale-archive arm are rows, D-7895; the stuck verdict pass, D-8071; the run-close lane, D-8077; the case lane, Overlord §10.5; the generations lane, Overlord §3.3.11; the launch-profile lane, Overlord §3.6; the timers lane, Overlord §3.3.12; the push outbox lane, Overlord §6.7)', () => {
     expect(LANE_SCHEDULE.filter((r) => r.clock === 'wall').map((r) => r.name), 'a throttle on Date.now()').toEqual([]);
-    expect(LANE_SCHEDULE.filter((r) => r.clock === 'mono')).toHaveLength(44);
+    expect(LANE_SCHEDULE.filter((r) => r.clock === 'mono')).toHaveLength(45);
   });
 
   it('the runner throttles a monotonic row on the monotonic reading: a wall step back runs it at its cadence, a step forward never early', () => {
@@ -599,6 +600,16 @@ describe('the launch-profile lane row (Overlord spec §3.6 H1, W1a launch profil
       cadenceMs: USAGE_SWEEP_MS, clock: 'mono', flight: 'skip',
       warnKey: 'ccrc-server: the launch-profile lane failed', derivedFrom: { name: 'USAGE_SWEEP_MS' },
     });
+  });
+});
+
+describe('the push outbox lane row (Overlord spec §6.7, Table 11.1c; W1 push outbox Task 4)', () => {
+  it('drains every 30 s, one pass at a time, abandons a pass older than two send deadlines, and names its warning', () => {
+    expect(laneRow('pushOutbox')).toEqual({
+      name: 'pushOutbox', cadenceMs: OUTBOX_LANE_PERIOD_MS, derivedFrom: null, clock: 'mono', flight: 'skip',
+      staleAfterMs: 2 * OUTBOX_SEND_DEADLINE_MS, warnKey: 'ccrc-server: the push outbox lane failed',
+    });
+    expect(OUTBOX_LANE_PERIOD_MS).toBe(30_000);
   });
 });
 

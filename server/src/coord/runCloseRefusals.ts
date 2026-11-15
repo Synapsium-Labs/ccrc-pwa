@@ -25,6 +25,7 @@ import type { WatcherCoordPort } from './ports.js';
 import {
   REFUSAL_REASONS, refusalRoute, type DoorFacts, type LaneRun, type RefusalReason, type RunCloseRow,
 } from './runClose.js';
+import type { ItemReachOf } from './pushOutboxStore.js';
 
 const mailBytes = (s: string): number => Buffer.byteLength(s, 'utf8');
 /** A mail body cut to `MAIL_BODY_MAX_BYTES` on a code-point boundary. */
@@ -72,6 +73,8 @@ export interface RefusalDeps {
   /** `abandonRefusal(coord, runId)`: the arm's own read of the row, asked inside the hold. */
   readonly abandonRefusal: (runId: number) => Extract<CloseOutcome, { ok: false }> | null;
   readonly notifyLog?: NotifyLog | undefined;
+  /** The push outbox (Overlord W1): an item shown at its raise gets its reach stamp and one `silent` row in the raise's tx. */
+  readonly itemReach?: ItemReachOf | undefined;
 }
 
 export interface RefusalOutcome {
@@ -204,7 +207,7 @@ export function routeRefusals(
               why: WHY[r.reason], graceSeconds: askGraceSeconds() });
             return insertSystemMailTx(coord, null, { fromId: 'operator', toId: mailTo, runId: null, kind: 'status',
               subject: mail.subject, body: mail.body, wake: 'never' });
-          }));
+          }, deps.itemReach?.(input)));
           if (mailTo !== null) { told.push(r.run.id); toldInItem = true; }
         }
       }

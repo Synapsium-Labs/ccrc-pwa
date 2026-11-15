@@ -60,10 +60,12 @@ export const OUTBOX_SOURCES = Object.keys(OUTBOX_SOURCE_MAP) as OutboxSource[];
 
 /** One subscription's answer to one send. `refused` can pass (429, any 5xx, or an error raised before the request left
  *  the box); `refused-for-good` cannot (400, 403, 413); `gone` is a 404 or 410, pruned; `no-answer` is a reset or a
- *  timeout after the request was written, where the service may have taken it (slug no-answer-is-never-retried). */
-export type SubscriptionVerdict = 'accepted' | 'refused' | 'refused-for-good' | 'gone' | 'no-answer';
+ *  timeout after the request was written, where the service may have taken it (slug no-answer-is-never-retried);
+ *  `unsendable` is web-push refusing it on this box before any request was built (a stored subscription with bad keys),
+ *  so no service saw it and no retry can pass (review 2119 F10, slug local-refusal-is-unsendable). */
+export type SubscriptionVerdict = 'accepted' | 'refused' | 'refused-for-good' | 'gone' | 'no-answer' | 'unsendable';
 const SUBSCRIPTION_VERDICT_MAP: Readonly<Record<SubscriptionVerdict, true>> = {
-  accepted: true, refused: true, 'refused-for-good': true, gone: true, 'no-answer': true,
+  accepted: true, refused: true, 'refused-for-good': true, gone: true, 'no-answer': true, unsendable: true,
 };
 export const SUBSCRIPTION_VERDICTS = Object.keys(SUBSCRIPTION_VERDICT_MAP) as SubscriptionVerdict[];
 

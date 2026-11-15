@@ -39,6 +39,16 @@ export function noticePayload(
   };
 }
 
+/** The PWA route an item's push opens on tap: the Waiting on you list (`pwa/src/lib/routes.ts`'s `waiting` row). */
+export const WAITING_URL = '/waiting';
+
+/** An item's push copy, the one place it is built (the blocking item's, `ledgersRoutes.ts#pushBlocking` before the
+ *  push outbox): a `coord` notice with no session, titled "Waiting on you", the item's title as its body, collapsed
+ *  under `item-<id>` and opening the list on tap. Built by `noticePayload`, as every payload is. */
+export function itemPushPayload(id: number, title: string): PushPayload {
+  return noticePayload({ kind: 'coord', sessionId: '', title: 'Waiting on you', body: title }, { tag: `item-${id}`, url: WAITING_URL });
+}
+
 /** What the sender's `prepare` answers. `payload` is null and `service` false when there is no push service. */
 export interface PreparedPush { readonly payload: PushPayload | null; readonly pushId: string; readonly service: boolean }
 /** The bound-row callback a raising transaction calls with its source's id, built from the sender's `prepare`, so the
@@ -122,7 +132,8 @@ export function outboxRetryAt(attempts: number, armedAt: number, now: number): n
  *  rejected. In order: `no-subscription` is `unsent`; any `accepted` is `sent`; any `no-answer` or a null verdict is
  *  `unknown`, because the service may have taken it (slug no-answer-is-never-retried); every subscription `gone` is
  *  `unsent` (slug all-gone-is-unsent); any `refused` is `retrying` at `outboxRetryAt`, or `failed` past the horizon;
- *  anything else (a `refused-for-good` with no `refused`) is `failed` (slug permanent-refusal-fails). */
+ *  anything else (a `refused-for-good` or an `unsendable` with no `refused`) is `failed` (slugs permanent-refusal-fails,
+ *  local-refusal-is-unsendable). */
 export function outboxNextState(
   v: PushSendVerdict | null, row: { readonly attempts: number; readonly armedAt: number }, now: number,
 ): { readonly to: 'sent' | 'unsent' | 'failed' | 'unknown' } | { readonly to: 'retrying'; readonly nextAttemptAt: number } {

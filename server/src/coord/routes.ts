@@ -126,7 +126,8 @@ import {
   approvalFor, createQuestions, openFor, type ApprovalRaiseDeps, type ClaimantDoorDeps, type ClaimantRule, type OperatorAnswer,
   type OperatorDoorDeps, type Questions, type QuestionDoorAnswer,
 } from './questions.js';
-import { noticeSink, type NoticeSink } from '../notice.js';
+import { noticeSink, questionOutboxOf, type NoticeSink } from '../notice.js';
+import { itemBoundOf, outboxSettledOf } from '../pushSender.js';
 import { registerLedgerCoordinatorRoutes } from './ledgersRoutes.js';
 import { registerReviewRoundsRoute } from './reviewRoundsRoute.js';
 import { endRequestHandler } from './endRequest.js';
@@ -638,7 +639,8 @@ export function registerCoordRoutes(
    * new instance over these same `deps`, so a test that registers these routes on a bare Fastify gets its own. Q3e: the raise ladder and the approval inputs live in it; Q3d moves the
    * hold carrier.
    */
-  questions: Questions = watcher?.questions ?? createQuestions(deps),
+  questions: Questions = watcher?.questions
+    ?? createQuestions(deps, { heldFor, outbox: questionOutboxOf(deps, () => questions) }), // the push outbox (Overlord W1)
   /**
    * W3 Q3f (D-7030): the operator's door's wiring (`OperatorDoorWiring`), which `buildServer` passes, read at a request
    * (a thunk, because `buildServer` declares `knownId` beside its session routes, after this call). Absent for a test
@@ -2128,6 +2130,7 @@ export function registerCoordRoutes(
     const runId = parseCanonicalPositiveSafeInteger((req.params as { id: string }).id);
     return endRequestHandler(runId, {
       coord: deps.coord, now: () => Date.now(), requireAttribution, changed: () => { bus.emit('waiting'); },
+      itemReach: (item) => itemBoundOf(deps, item, 'reach'),
       verdictOf: (runId) => {
         const v = watcher?.runVerdicts.of(runId) ?? null;
         return v === null ? null : { reason: v.stuck?.reason ?? null, coordinatorGone: v.coordinatorGone };
@@ -4917,6 +4920,7 @@ export function registerCoordRoutes(
   registerLedgerCoordinatorRoutes(app, {
     coord: deps.coord, requireMailToken, requireAttribution, notice, bus, now: () => Date.now(),
     presenceOf, secretOf: (program, slot) => readOperatorSecretMeta(deps.cfg.ccrcDir, program, slot),
+    outbox: { deps, settledOf: outboxSettledOf(questions, deps.coord) },
   });
   // The coordinator call record (D-8126, wave A3): its handler lives in `coordCallsRoute.ts`, a lane source of its own.
   registerCoordCallsRoute(app, { coord: deps.coord, requireMailToken, requireAttribution, notice, bus, now: () => Date.now(), build: deps.build?.version ?? null });
