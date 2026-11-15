@@ -35,7 +35,10 @@ D-number. The coordinator folds them into the plan's deviation ledger.
   before. The item raise gets a sibling, `raiseItemReached` (`{ id, row }`), since its SQL lives in `ledgersStore.ts`.
 - **sender-ring-is-the-funnels**. `pushSender.ts` declares no ring: by its facts it is the funnel's (`notice.ts`), since
   every effect it has is reached through the deps it is handed, so the funnel's import of it points no edge outward
-  (`rings/outward-edges.test.ts`). The plan had named it L4.
+  (`rings/outward-edges.test.ts`). The plan had named it L4. Review 2150 F14 asked for L4; measured, `notice.ts` is L1
+  by its facts and imports the sender at run time, and `OUTWARD_EDGE_EXEMPTIONS` is empty and may only shrink, so an L4
+  header would add an outward edge. The coordinator's ruling: the departure stands; the sender's ring, with
+  `notice.ts`'s, is a later wave's decision.
 - **masker-from-the-push-service**. Until `index.ts` sets `Deps.masker`, the sender masks with the push service's own
   masker (`PushService.payloadMasker`, the shape-only one it is built with), not by importing `SHAPE_ONLY_MASKER`:
   `accounts/mask.ts` is ring L4, and the sender is the funnel's ring. The row and the push carry the same bytes either
@@ -59,8 +62,11 @@ D-number. The coordinator folds them into the plan's deviation ledger.
 - **no-clock-no-row**. A caller with no time ports (a narrow test's deps) sends with no row and no deadline timer, as it
   sends with no store: the store needs the clock for `at` and the push id needs `Entropy`. Every production funnel site
   carries `Deps.time`. `prepare` throws without time ports; every bound caller holds them.
-- **claim-blocking-is-the-arms**. `SettledOf` answers whether the source settled, not its level, so `pushDue` at the
-  claim reads `blocking: true`: the level was decided at the reach or the arm.
+- **claim-rereads-the-level** (review 2150 F2, replacing claim-blocking-is-the-arms). `SettledOf` answers the source as
+  it stands at the claim, `{ settled, blocking }`: an ask always pushes; an item is settled unless `open` (a ticked one,
+  `checking`, is the coordinator's, as `shared/ledgers.ts#waitingCount` counts it) and is at its level now. So a lowered
+  or ticked item's retry is silenced (`level`, `settled`) through the existing `retrying -> silent` row, never pushed
+  again.
 - **held-drain-payload-fact**. The held drain asks `pushDue` with `payload: true` (an item always has its copy) so its
   answer is `level` or `older-build`, as the plan's tests name, and stores no payload.
 - **release-door-answers-internal**. A decline whose bound write throws answers the door's existing `internal` refusal
@@ -77,6 +83,29 @@ Measured at `v0.0.1179`, an older release tag: it has no `coord/pushOutboxStore.
 `reachedOperatorAt` columns (Table 11.5's "ignored" class). Rolled back to, it drops only the rows still `pending` or
 `retrying`, the set a crash loses today; rolled forward again, the boot pass sends what is inside the horizon and fails
 the rest.
+
+## Review 2150's rulings
+
+- **presence-is-its-own-fact** (F1). The bound write and the row ref carry `viewing`, the presence answer read once
+  before the move, beside `due`. The funnel's record gate reads it, not `pushDue`'s first silent reason, so a viewed ask
+  on a box with no push service writes no ring record and no feed row, as before the outbox.
+- **held-stamp-at-held-until** (F3). The held drain stamps an item at its `heldUntil`, as the plan says (the code had
+  used the pass's time).
+- **superseded-retry-is-silent** (F4). `pushDue` gains the fact `superseded` and the silent word `superseded`: at the
+  claim, an unbound row a newer row under the same tag replaced with an accepted push (`supersededUnbound`) is sealed
+  silent and never sent. Bound rows and the other events pass `false`.
+- **drain-applies-the-boot-horizon** (F6). The boot pass seals each row in its own `try`; the drain fails a due row past
+  the horizon (`outboxBootVerdict`'s `fail-stale`) by the boot's own seal, so a row the boot pass could not seal is
+  never sent stale.
+- **unbound-insert-commits-alone** (F7). `insertUnboundRow` refuses inside an open transaction (`ok: false`), so the push
+  is sent with no row and no rolled-back id is ever reused by the next insert.
+- **item-raise-names-its-arms** (F9). The item route's blocking push takes its bound row, `held-at-raise` (sends
+  nothing; the held drain stamps it) or `no-outbox` (today's unbound push).
+- **held-drain-answers-every-due** (F10). The held drain switches over every `pushDue` answer (an unexpected one is
+  logged once and leaves the item unstamped), and on a box with no push service the sender's latch is kept per store.
+- F5, F8, F12 and F13 change a comment, two log sentences, two doc comments' places and one test; F11 is no change.
+- **fix-round-after-the-word**. The first fast run's fix round, and this one, are commits after Task 6's word; the
+  branch is never rebased.
 
 ## Found by the pull request's first fast run
 
