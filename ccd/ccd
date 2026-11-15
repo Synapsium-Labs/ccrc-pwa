@@ -24016,11 +24016,11 @@ _operator_choice_keep() {   # id — before a stop that a spawn follows, and at 
 }
 
 _operator_choice_promote() {   # id [reason] [incoming-sid incoming-cfg] — the keep's read and route write, WITHOUT its choicekept marker (the dead-session keep owns that marker): `_operator_choice_keep` calls it, and `_sync_uuid` calls it before a live pane rotation moves the registry uuid off the transcript that holds the operator's choice. Reads the CURRENT registry uuid's transcript and, given the rotation's incoming sid AND the config dir the caller already resolved for it (the promotion makes no call into the registry context for it; no config dir, no incoming read), that one too: the newest acknowledged command of each kind in either wins, by time (D-4321). Always 0.
-  local id="$1" reason="${2:-kept across a restart}" sid="${3:-}" icfg="${4:-}" f typed why="" out kind val at n field want fm shown drift=0 w fin inc="" merged="" kv
+  local id="$1" reason="${2:-kept across a restart}" sid="${3:-}" icfg="${4:-}" f typed why="" out kind val at n field want fm shown drift=0 w fin inc="" merged="" kv cx=""
   local -A ackv=() acka=() ackn=() drifta=()
   local -a sets=() kinds=()
   [[ -f "$REG/$id.uuid" ]] || return 0
-  w=$(_reg_get "$id" wrapper); _is_anthropic_backend "$w" || return 0   # a non-Anthropic lane's /model is outside the class vocabulary: skipped, as the settle skips it (§5.7)
+  w=$(_reg_get "$id" wrapper); _is_anthropic_backend "$w" || { _is_codex_backend "$w" || return 0; cx=1; }   # a non-Anthropic lane's /model is outside the class vocabulary: skipped, as the settle skips it (§5.7); a Codex lane's /effort is promoted, since its spawn carries --effort too (D-8631)
   typed=$(_reg_get "$id" typed)
   if ! [[ "${typed%%$'\n'*}" =~ ^[0-9]{1,12}\ since$ ]]; then
     _typed_note "$id" since
@@ -24075,7 +24075,7 @@ _operator_choice_promote() {   # id [reason] [incoming-sid incoming-cfg] — the
   while read -r kind val at n; do
     [[ "$at" =~ ^[0-9]+$ ]] || continue
     case "$kind" in
-      model|drift-model)   field=class ;;
+      model|drift-model)   [[ -n "$cx" ]] && continue; field=class ;;
       effort|drift-effort) field=effort ;;
       *)                   continue ;;
     esac
