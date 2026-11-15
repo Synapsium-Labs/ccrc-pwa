@@ -620,6 +620,30 @@ describe('docs-log: history git config would hide (refinement (e))', () => {
     expect(logCalls(rec.calls())).toHaveLength(2);
   });
 
+  it('a commit that git prints without names (a submodule ignored by .gitmodules) is read past, not a failure', () => {
+    const dir = freshRepo();
+    const root = commitDocs(h, dir, { [`${VISION}/a.md`]: 'one\n' }, 'the doc root');
+    fs.writeFileSync(path.join(dir, '.gitmodules'), `[submodule "sub"]\n\tpath = ${VISION}/sub\n\turl = ./nowhere\n\tignore = all\n`);
+    h.git(dir, 'add', '--', '.gitmodules');
+    h.git(dir, 'commit', '-q', '-m', 'declare the submodule');
+    const s1 = '1'.repeat(40);
+    const s2 = '2'.repeat(40);
+    h.git(dir, 'update-index', '--add', '--cacheinfo', `160000,${s1},${VISION}/sub`);
+    h.git(dir, 'commit', '-q', '-m', 'add the gitlink');
+    h.git(dir, 'update-index', '--cacheinfo', `160000,${s2},${VISION}/sub`);
+    h.git(dir, 'commit', '-q', '-m', 'bump the gitlink');
+    const bump = head(dir);
+    const edit = touch(dir, `${VISION}/a.md`, 'two', 'edit the doc');
+    // CONTROL: git itself prints the two gitlink commits with no names (the ignore setting hides the gitlink), so the
+    // fixture really produces the record shape this case is about.
+    const raw = h.git(dir, '-c', 'log.showRoot=true', 'log', '--no-merges', '--format=%H%x00%P%x00%cI%x00%an%x00%s', '-z', '--name-only', '--', VISION);
+    expect(raw).toContain(`${bump}\0`);
+    expect(raw).not.toContain(`${VISION}/sub`);
+    const o = answer(edit, 'vision', 'a.md');
+    expect(o).toMatchObject({ ok: true, section: 'vision', truncated: false });
+    expect(entriesOf(o).map((e) => e.sha)).toEqual([edit, root]);
+  });
+
   it('a section path that was once a file still lists the doc\'s history', () => {
     const dir = freshRepo();
     commitDocs(h, dir, { [VISION]: 'once a file\n' }, 'vision as a file');

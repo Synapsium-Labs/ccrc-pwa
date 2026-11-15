@@ -48010,7 +48010,9 @@ def parse_log(buf, sec_b, want, limit, shallow=False):
     the names, then NUL-ended names, each under `sec_b` + '/' or `sec_b`
     itself (the pathspec limits them; the bare name is a commit that touched a
     FILE at the section path, which is never the doc but must be read past);
-    the next record starts after the last name's NUL. A buffer cut inside a
+    the next record starts after the last name's NUL. A record git prints
+    without names (a gitlink under diff.ignoreSubmodules=all) has no newline
+    and is read as touching nothing. A buffer cut inside a
     record (an expiry or the stdout cap) ends the walk at the last whole
     record. A record that does not parse is git-failed {step:'log'}. When
     `shallow`, a parentless record is parsed and read past but never listed: a
@@ -48031,17 +48033,18 @@ def parse_log(buf, sec_b, want, limit, shallow=False):
         if i >= n:
             return rows
         parent = fields[1].split(b' ')[0]
-        if (buf[i:i + 1] != b'\n' or not LOG_SHA_RE.fullmatch(fields[0])
+        if (not LOG_SHA_RE.fullmatch(fields[0])
                 or (parent and not LOG_SHA_RE.fullmatch(parent))):
             raise fail('git-failed', step='log', detail='unexpected log output')
-        i += 1
         hit = False
-        while i < n and (buf.startswith(prefix, i) or buf.startswith(bare, i)):
-            j = buf.find(b'\0', i)
-            if j < 0:
-                return rows
-            hit = hit or buf[i:j] == want
-            i = j + 1
+        if buf[i:i + 1] == b'\n':
+            i += 1
+            while i < n and (buf.startswith(prefix, i) or buf.startswith(bare, i)):
+                j = buf.find(b'\0', i)
+                if j < 0:
+                    return rows
+                hit = hit or buf[i:j] == want
+                i = j + 1
         if hit and not (shallow and not parent):
             rows.append(tuple(fields))
     return rows
