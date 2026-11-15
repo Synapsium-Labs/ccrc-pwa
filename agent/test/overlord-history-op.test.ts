@@ -24,6 +24,10 @@ const ROWS = {
   outcome: 'rows', exit: 0, items: [{ node_id: 'N1', trust: 'untrusted' }], shown: 1, total: 1,
   scope: { kind: 'overlord', id: 'all', project: null, families: [], families_total: 0, transcripts: 1 },
 };
+/** ROWS as fixed source text for the test entries: no generated code is built from a serialised value. The good read's case
+ *  checks the GOOD entry, built from this text, answers exactly ROWS. */
+const ROWS_SRC = "{ outcome: 'rows', exit: 0, items: [{ node_id: 'N1', trust: 'untrusted' }], shown: 1, total: 1, "
+  + "scope: { kind: 'overlord', id: 'all', project: null, families: [], families_total: 0, transcripts: 1 } }";
 const REQ = { op: 'overlord-history', verb: 'search', target: { kind: 'all' }, agents: false, args: ['zq'] };
 
 /** Test worker entries, one file each, under the suite's temp parent. */
@@ -33,13 +37,13 @@ const entry = (name: string, body: string): string => {
   writeFileSync(f, `import { parentPort, workerData } from 'node:worker_threads';\n${body}\n`);
   return f;
 };
-const GOOD = entry('good', `parentPort.postMessage(${JSON.stringify(ROWS)});`);
+const GOOD = entry('good', `parentPort.postMessage(${ROWS_SRC});`);
 // About twenty million rows of a native statement: seconds of SQLite, not a JS loop.
 const SLOW = entry('slow', [
   "import { DatabaseSync } from 'node:sqlite';",
   "const db = new DatabaseSync(':memory:');",
   "db.prepare('WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM c WHERE x < 20000000) SELECT count(*) AS n FROM c').get();",
-  `parentPort.postMessage(${JSON.stringify(ROWS)});`,
+  `parentPort.postMessage(${ROWS_SRC});`,
 ].join('\n'));
 const THROWS = entry('throws', `throw new Error('boom ${SECRET}');`);
 const EXIT3 = entry('exit3', 'process.exit(3);');
@@ -47,12 +51,12 @@ const UNCLONABLE = entry('unclonable', 'parentPort.postMessage({ outcome: "rows"
 const LOUD = entry('loud', [
   "process.stderr.write('e'.repeat(128 * 1024));",
   "process.stdout.write('o'.repeat(128 * 1024));",
-  `parentPort.postMessage(${JSON.stringify(ROWS)});`,
+  `parentPort.postMessage(${ROWS_SRC});`,
 ].join('\n'));
-const BIG = entry('big', `parentPort.postMessage({ ...${JSON.stringify(ROWS)}, items: [{ text: 'x'.repeat(${OVERLORD_HISTORY_ANSWER_MAX_BYTES}), trust: 'untrusted' }] });`);
-const LATE = entry('late', `setTimeout(() => parentPort.postMessage(${JSON.stringify(ROWS)}), 600);`);
+const BIG = entry('big', `parentPort.postMessage({ ...${ROWS_SRC}, items: [{ text: 'x'.repeat(${OVERLORD_HISTORY_ANSWER_MAX_BYTES}), trust: 'untrusted' }] });`);
+const LATE = entry('late', `setTimeout(() => parentPort.postMessage(${ROWS_SRC}), 600);`);
 const OFFSHAPE = entry('offshape', `parentPort.postMessage({ outcome: 'failed', word: 'boom ${SECRET}' });`);
-const ENV = entry('env', `parentPort.postMessage({ ...${JSON.stringify(ROWS)}, items: [{ keys: Object.keys(process.env).join(','), trust: 'untrusted' }] });`);
+const ENV = entry('env', `parentPort.postMessage({ ...${ROWS_SRC}, items: [{ keys: Object.keys(process.env).join(','), trust: 'untrusted' }] });`);
 
 interface Res { t: string; id: number; ok: boolean; [k: string]: unknown }
 
