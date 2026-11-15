@@ -81,9 +81,11 @@ The load-path measurement and the coordinator's rulings on it are in `load-path.
   L4 census names the loads door; the new `REFUSAL_STATUS` entry says CHOSEN, not measured; `PROFILE_ROW_JQ` refuses
   control characters in the `--agents` value as well as `'`; `2>/dev/null` stands before `<` in the loads arm; the
   "computed once and spooled" comment says what the code does (a send that does not take the body spools it).
-- **Records**: the migration slot is 76: the plan said 74, the branch took 75, and the push outbox (#2838) took 75 first,
-  so on the coordinator's word of 2026-11-15 this PR merged `main` once and renumbered to 76 (one more renumber may come at
-  landing, on that word). `server/src/watch.ts` grows by 1 (the lane's build-agreement wiring). The real-`jq` digest check
+- **Records**: the migration slot is 78: the plan said 74, the branch took 75, and the push outbox (#2838) took 75 first,
+  so on the coordinator's word of 2026-11-15 this PR merged `main` once and renumbered to 76; at landing the portfolio
+  (#2842) had taken 76 and the replay quiz (#2839) 77, so the landing merge renumbered it to 78, on that word. The same
+  merge added the loads door to the portfolio's route counts (`auth-gate.test.ts`: 242 routes, 239 HTTP, 94 exempt) and
+  corrected run-close-switch's replay count to twenty-five (54 to 78). `server/src/watch.ts` grows by 1 (the lane's build-agreement wiring). The real-`jq` digest check
   lives in `server/test/sim/launchProfileSets.ts#launchRowCases`, run from `continuity-launch-profile.test.ts` and the
   mutation floor, not in `launch-profiles-file.test.ts`.
 

@@ -395,7 +395,9 @@ describe('the scanner is looking at something', () => {
     // 19 since D-8194: `GET /api/items/:id`, one item by its id, the same registration, session-gated and NOT EXEMPT, no box token.
     // 20 since D-8126 (wave A3): `POST /api/calls/:id/seen`, the operator's Seen on a big call, the same registration, session-gated
     // and NOT EXEMPT, no box token.
-    expect(scanRoutes('coord/ledgersRoutes.ts').length).toBe(20);
+    // 22 since the portfolio (Overlord W1): `GET /api/portfolio` and `POST /api/portfolio/rank`, the same registration,
+    // session-gated and NOT EXEMPT, no box token; the rank door works dark (`flag-off`), so it is not in FLAG_AWARE.
+    expect(scanRoutes('coord/ledgersRoutes.ts').length).toBe(22);
     // 1 in `coord/coordCallsRoute.ts` (D-8126, wave A3): `POST /api/coord/programmes/:slug/calls`, a box-token machine lane IN EXEMPT.
     expect(scanRoutes('coord/coordCallsRoute.ts').length).toBe(1);
     // 3 in `accounts/routes.ts` (accounts plan Task A14, D-7732): `POST /api/accounts/:id/check`, `/enable` and
@@ -646,9 +648,12 @@ describe('the scanner is looking at something', () => {
     // 239 since the probe door (Overlord W1a, the probes piece), in `continuity/routes.ts`: `GET` and `POST
     // /api/sessions/:id/probe`, two box-token machine lanes IN EXEMPT: the HTTP half 234 -> 236, the gated count stays 142, the
     // exempt-HTTP count 91 -> 93.
-    // 240 since the loads door (Overlord W1 sandbox), in `continuity/routes.ts`: `POST /api/sessions/:id/start/loads`, one
-    // box-token machine lane IN EXEMPT: the HTTP half 236 -> 237, the gated count stays 142, the exempt-HTTP count 93 -> 94.
-    expect(ROUTES.length).toBe(240);
+    // 241 since the portfolio (Overlord W1, 2026-11-15), in `coord/ledgersRoutes.ts`: `GET /api/portfolio` and `POST
+    // /api/portfolio/rank`, session-gated and NOT EXEMPT, no box token: the HTTP half 236 -> 238, the gated count 142 -> 144,
+    // the exempt-HTTP count stays 93.
+    // 242 since the loads door (Overlord W1 sandbox), in `continuity/routes.ts`: `POST /api/sessions/:id/start/loads`, one
+    // box-token machine lane IN EXEMPT: the HTTP half 238 -> 239, the gated count stays 144, the exempt-HTTP count 93 -> 94.
+    expect(ROUTES.length).toBe(242);
     expect(scanRoutes('testboxAdmin.ts').length).toBe(2);
     // …and the three partitions add up: the websockets plus the HTTP half.
     expect(ROUTES.filter(isWs).length + ROUTES.filter((r) => !isWs(r)).length).toBe(ROUTES.length);
@@ -823,7 +828,7 @@ describe('the scanner is COMPLETE — measured against Fastify\'s own route tabl
     const w = await openApp(); app = w.app;
     const real = realRouteTable(app);
     expect([...real].filter((r) => r.startsWith('UNPARSED'))).toEqual([]);
-    // 240 scanned + the static wildcard when the bundle is built.
+    // 242 scanned + the static wildcard when the bundle is built.
     // (59 stood here across several waves; the account-pools merge is where
     // it was finally re-measured, not where it went stale.)
     expect(real.size).toBe(ROUTES.length + (HAS_PWA ? 1 : 0));
@@ -1539,7 +1544,7 @@ describe('with CCRC_AUTH off — the shipped default', () => {
   });
 
   it('the gate changes the status of EXACTLY the gated routes, and of nothing else', async () => {
-    // THE PROPERTY, in one loop over all 237 HTTP routes, with THREE probes each:
+    // THE PROPERTY, in one loop over all 239 HTTP routes, with THREE probes each:
     // dark, armed-anonymous, and armed-with-a-live-session. Comparing dark
     // against AUTHENTICATED is what makes this a real status assertion for the
     // gated routes too (review R1) — the earlier version asserted only
@@ -1603,7 +1608,7 @@ describe('with CCRC_AUTH off — the shipped default', () => {
           }
 
           // 3. Armed WITH a live session: identical to dark, for every route that
-          //    is not itself flag-aware — the assertion that covers all 237 HTTP routes, not the 94 exempt.
+          //    is not itself flag-aware — the assertion that covers all 239 HTTP routes, not the 94 exempt.
           //    (Both counts are derived and checked against this very sentence at the
           //    bottom of this file. They read fifty-five and fifteen for several builds
           //    after the tree had grown past both — D-1223.)

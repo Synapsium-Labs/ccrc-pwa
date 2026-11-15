@@ -178,10 +178,10 @@ describe('the routing record (routing spec 2026-09-14 §5.1)', () => {
 });
 
 /** `cmd_route`, observed through its exit status (it refuses through `die`): the `ccd-launch-profile.test.ts` shape. */
-const route = (args: string): { status: number; out: string } => {
+const route = (args: string, env: NodeJS.ProcessEnv = {}): { status: number; out: string } => {
   try {
     const out = execFileSync('bash', ['-c', `source "${CCD}"; exec 2>&1; cmd_route ${args}`],
-      { encoding: 'utf8', cwd: h.home, env: ghContainedEnv(h.home, { ...process.env, HOME: h.home }, { systemd: true, tmux: true }) });
+      { encoding: 'utf8', cwd: h.home, env: ghContainedEnv(h.home, { ...process.env, HOME: h.home, ...env }, { systemd: true, tmux: true }) });
     return { status: 0, out };
   } catch (e) {
     const err = e as { status?: number | null; stdout?: string; stderr?: string };
@@ -237,6 +237,49 @@ describe('the pool set route fields: poolset and acctorder', () => {
     expect(log).toMatch(new RegExp(`route ${ID}: acctorder ∅ -> claude-a,claude-b`));
     expect(log).toMatch(new RegExp(`route ${ID}: poolset pool-a -> ∅`));
     expect(log).toMatch(new RegExp(`route ${ID}: acctorder claude-a,claude-b -> ∅`));
+  });
+  // PR A2 (the coordinator's ruling on A1's review, slug a-session-shell-cannot-write-its-own-set): from A2 a standing set is
+  // honoured at `_pool_ok`, so a session's shell (CLAUDECODE set, as `_route_fable_shell` reads it) may neither write nor
+  // clear a set or the ordered list. The designate door, composed by the server, is not a session's shell.
+  describe('a session\'s shell cannot write its own set (a-session-shell-cannot-write-its-own-set)', () => {
+    const shell = { CCRC_TEST_CLAUDECODE: '1' };
+    it.each([
+      ['poolset', 'pool-b'], ['acctorder', 'claude-a,claude-b'],
+    ])('--set %s=… from a session shell is refused and writes nothing', (field, value) => {
+      seed();
+      const r = route(`--session ${ID} --set ${field}=${value}`, shell);
+      expect(r.status).not.toBe(0);
+      expect(r.out).toContain(`pool-set-operator-only: a Claude Code session may not write ${field}`);
+      expect(fs.existsSync(regFile(field))).toBe(false);
+      expect(swapLog()).toBe('');
+    });
+    it.each(['poolset', 'acctorder'])('clearing %s from a session shell is refused too, and the standing value stays', (field) => {
+      seed();
+      h.sh(`_reg_set ${ID} poolset pool-b; _reg_set ${ID} acctorder claude-b`);
+      const r = route(`--session ${ID} --set ${field}=`, shell);
+      expect(r.status).not.toBe(0);
+      expect(r.out).toContain('pool-set-operator-only');
+      expect(h.reg(ID, 'poolset')).toBe('pool-b');
+      expect(h.reg(ID, 'acctorder')).toBe('claude-b');
+    });
+    it('a refused field refuses the whole call: another field in it is not written either', () => {
+      seed();
+      const r = route(`--session ${ID} --set class=opus --set poolset=pool-b`, shell);
+      expect(r.status).not.toBe(0);
+      expect(h.reg(ID, 'class')).toBeNull();
+    });
+    it('the same writes without CLAUDECODE pass (the server\'s designate door, the operator\'s own shell)', () => {
+      seed();
+      expect(route(`--session ${ID} --set poolset=pool-b --set acctorder=claude-b`).status).toBe(0);
+      expect(h.reg(ID, 'poolset')).toBe('pool-b');
+      expect(route(`--session ${ID} --set poolset= --set acctorder=`).status).toBe(0);
+      expect(fs.existsSync(regFile('poolset'))).toBe(false);
+    });
+    it('other fields from a session shell still pass', () => {
+      seed();
+      expect(route(`--session ${ID} --set class=opus`, shell).status).toBe(0);
+      expect(h.reg(ID, 'class')).toBe('opus');
+    });
   });
   it('a row carrying only poolset and acctorder has no routing record: _route_any says no (pool-fields-outside-route-any)', () => {
     seed();

@@ -574,7 +574,9 @@ describe('ccrc history: every vocabulary is declared once, in lib.mjs, and bound
     // W4 P11, P12, P17 to P19 (Task 1G): the census's vocabularies and the metas' failure words.
     'CENSUS_PARTS', 'CENSUS_VERDICTS', 'CENSUS_COLUMNS', 'META_FAILURES', 'CENSUS_REASONS', 'CENSUS_WITHHELD', 'HOLDING_SHAPES', 'HOLDING_UNBOUND_CAUSES',
     // the census's link window and decode bound: the window literal lives once, in lib.
-    'LINK_WINDOW_MS', 'LINK_DECODE_MAX'] as const;
+    'LINK_WINDOW_MS', 'LINK_DECODE_MAX',
+    // Overlord W1 (w1-board-history.md Task 2): the read-scope kinds, SCOPE_KINDS plus the Overlord's, declared once in lib.
+    'READ_SCOPE_KINDS'] as const;
   /** The declaration scan's corpus: the history modules and every deploy/ and shared/ `.mjs`. NOT the rest of
    *  ccd/: `ccd/compact-card.mjs` declares an `EXIT` of its own (its exit codes, a different module's). */
   const DECL_CORPUS = [...new Set([...HISTORY_MJS, ...mjsUnder(path.join(ccrcRoot, 'deploy')), ...mjsUnder(path.join(ccrcRoot, 'shared'))])];

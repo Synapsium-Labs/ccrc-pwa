@@ -714,7 +714,7 @@ describe('W29: the ccd-* sweeps read their settings through the shared reader fi
   });
 
   // The helper scan below catches only literal ccrc.env beside a direct fs opener on the same line. It does not
-  // trace paths or wrapper calls: history/cli.mjs's readRole -> readBounded(P.ccrcEnv) -> readBoxEnvValue reads
+  // trace paths or wrapper calls: history/sweep.mjs's readRole -> readBounded(P.ccrcEnv) -> readBoxEnvValue reads
   // CCRC_ROLE through history/lib.mjs's own parser, outside this guard; it is not one of the six sweep settings.
   it('W29-S4: siblings have no direct box-env reader, and helpers have no same-line literal ccrc.env fs open', () => {
     const faults: string[] = [];

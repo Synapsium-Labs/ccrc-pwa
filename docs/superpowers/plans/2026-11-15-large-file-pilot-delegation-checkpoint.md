@@ -311,6 +311,15 @@ each slice exercises are listed per task.
     `delegationLeaseDoor.ts`, `routes.ts` with +1 line, and `watch.ts`) and 19 tests. `routes.ts` and `watch.ts` are
     listed files at 40 per PR.
 - **Pins it exercises:** all six from Task 1 Step 4, the `checkpointNs` named import, and the kebab census.
+- **The run (2026-11-15, on `origin/main` `2b082b91f`):**
+  - [x] Step 1: Preflight. 19 open heads, none carrying a move; `"ok": true`, `"slots": ["C5"]`, `"refusals": []`.
+  - [x] Step 2: Plan. 26 moved, `destContexts` `["C5"]`, `sourceUsesDest` `[]`, `problems` `[]`.
+  - [x] Step 3: Move, then the L3 header above the marker.
+  - [x] Step 4: Gates. All 38 `delegation-*` suites and the ten named ones, the rings, `census-w7` and
+    `single-definition` suites, both typechecks, and the tests-project typecheck printing nothing.
+  - [x] Step 5: Commit, by the 27 files `move` wrote.
+  - [x] Step 6: Verdict on the commit. `pure: true`, 26 moved, `differing: []`, `newlyExported` as expected above; the
+    19 tests change on import lines alone.
 
 ### Task 4: Slice 2, the SQLite projection port and its repair → `server/src/coord/delegation-db-projection.ts`
 

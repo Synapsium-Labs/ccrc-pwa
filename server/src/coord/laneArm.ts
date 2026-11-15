@@ -7,11 +7,12 @@
 // `laneArmLive`). Every other read (a token this build does not know, a lost row, a read that failed, a gated row) is
 // shadow, so doubt never arms a lane.
 import {
-  LANE_ARM_LANES, LANE_ARM_MARKER, ROSTER_CARD_LANE, ROSTER_CARD_SHADOW_LOG, isLaneArmChoice, isLaneArmImport, isLaneArmLane, laneArmGate,
-  laneArmLive,
+  LANE_ARM_LANES, LANE_ARM_MARKER, LANE_ARM_TEXT, ROSTER_CARD_LANE, ROSTER_CARD_SHADOW_LOG, isLaneArmChoice, isLaneArmImport, isLaneArmLane,
+  laneArmGate, laneArmLive,
   type LaneArmChoice, type LaneArmConfirmRequired, type LaneArmImport, type LaneArmLane, type LaneArmRequest,
   type LaneArmRowView, type LaneArmView,
 } from '../../../shared/lane-arm.js';
+import { isW1aArmRow } from '../continuity/quiz.js';
 
 /** One row as the store read it (`CoordStore.laneArmSetting`), declared here by its consumer: the raw stored token, its
  *  write time and the import's columns, a lost row, or a read that failed. */
@@ -69,25 +70,38 @@ export function decideLaneArmBody(body: unknown):
   return { ok: true, request: { lane: b.lane, choice: b.choice, ...(b.confirm === undefined ? {} : { confirm: b.confirm }) } };
 }
 
+/** Whether the replay quiz's baseline row exists (`continuity/quizStore.ts#quizBaselineRead`), or the read failed: never
+ *  folded into `exists: false`. Declared here, by its consumer. */
+export type LaneArmBaseline = { readonly ok: true; readonly exists: boolean } | { readonly ok: false; readonly detail: string };
+
 /** The POST's verdict, in the collector door's order, after one of its own: Live is refused while the row's gate stands
  *  (review 2003 F3: the lane cannot go live yet, whoever asks); Live is refused while sign-in is dark (arming needs a
- *  signed-in operator); an unreadable row is refused (nothing is written over a read that failed); a Live whose key is missing or
- *  no longer matches the row answers 409 with the facts; anything else is written. Shadow never asks. */
+ *  signed-in operator); an unreadable row is refused (nothing is written over a read that failed); Live on a W1a row
+ *  (`W1A_ARM_ROWS`) is refused until the replay quiz's baseline exists (W0-28, slug arming-waits-for-the-baseline), and
+ *  refused as unreadable when that could not be read; a Live whose key is missing or no longer matches the row answers 409
+ *  with the facts; anything else is written. Shadow never asks. */
 export type LaneArmPostVerdict =
   | { readonly kind: 'gated'; readonly reason: string }
   | { readonly kind: 'sign-in-unarmed' }
   | { readonly kind: 'unreadable'; readonly detail: string }
+  | { readonly kind: 'baseline-missing' }
   | { readonly kind: 'confirm'; readonly body: LaneArmConfirmRequired }
   | { readonly kind: 'write'; readonly lane: LaneArmLane; readonly choice: LaneArmChoice };
 
+/** `gate` is `laneArmGate(request.lane)`; a caller passes another only to drive a gated lane's live path in a test. */
 export function decideLaneArmPost(i: {
-  readonly request: LaneArmRequest; readonly row: LaneArmRowView; readonly signedIn: boolean;
+  readonly request: LaneArmRequest; readonly row: LaneArmRowView; readonly signedIn: boolean; readonly baseline: LaneArmBaseline;
+  readonly gate?: string | null;
 }): LaneArmPostVerdict {
   const { request, row } = i;
-  const gate = laneArmGate(request.lane);
+  const gate = i.gate === undefined ? laneArmGate(request.lane) : i.gate;
   if (request.choice === 'live' && gate !== null) return { kind: 'gated', reason: gate };
   if (request.choice === 'live' && !i.signedIn) return { kind: 'sign-in-unarmed' };
   if (row.stored === 'unreadable') return { kind: 'unreadable', detail: row.detail ?? 'the row could not be read' };
+  if (request.choice === 'live' && isW1aArmRow(request.lane)) {
+    if (!i.baseline.ok) return { kind: 'unreadable', detail: `${LANE_ARM_TEXT.baselineUnreadable}: ${i.baseline.detail}` };
+    if (!i.baseline.exists) return { kind: 'baseline-missing' };
+  }
   if (request.choice === 'live') {
     const key = laneArmConfirmKey(row);
     if (request.confirm !== key) {

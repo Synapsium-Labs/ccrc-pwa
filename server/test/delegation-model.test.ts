@@ -1158,9 +1158,9 @@ describe('the model is L1: pure, with no randomness and no IO of its own', () =>
   const src = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'src', 'coord', 'delegation-model.ts'), 'utf8');
   const code = src.split('\n').filter((l) => !/^\s*(\*|\/\/|\/\*)/.test(l)).join('\n');
 
-  it('imports node:crypto, shared/api.ts, shared/agent-protocol.ts and (types only) delegation-lease-state.ts, and nothing else (no fs, no fastify, no node:sqlite, no CoordStore)', () => {
+  it('imports canonical.ts, shared/api.ts, shared/agent-protocol.ts and (types only) delegation-lease-state.ts, and nothing else (no fs, no fastify, no node:sqlite, no CoordStore)', () => {
     const specs = [...code.matchAll(/^import\s[^;]*?from\s+'([^']+)';/gms)].map((m) => m[1]);
-    expect(specs.sort()).toEqual(['../../../shared/agent-protocol.js', '../../../shared/api.js', './delegation-lease-state.js', 'node:crypto']);
+    expect(specs.sort()).toEqual(['../../../shared/agent-protocol.js', '../../../shared/api.js', '../canonical.js', './delegation-lease-state.js']);
     // Wave 5 (PR5a): `./delegation-lease-state.js` is a type-only import (its reason words); `coord-policy-rings` walks runtime edges.
   });
 

@@ -3152,7 +3152,69 @@ export const MIGRATIONS: readonly string[] = [
   ALTER TABLE asks ADD COLUMN reachedOperatorAt INTEGER;
   ALTER TABLE operator_items ADD COLUMN reachedOperatorAt INTEGER;
   `,
+
   // ── 76: user_version 75 -> 76 ─────────────────────────────────────────────
+  // The portfolio (Overlord spec §5.6 H38; W1, plan `w1-portfolio.md` Task 2): `portfolio_rank`, the operator's order, one row
+  // per ranked programme, and `portfolio_rank_revision`, one row whose counter only rises. ONE writer for both,
+  // `portfolioStore.ts#setPortfolioRank`, reached only from the rank door; no row exists until the operator writes one.
+  // NEW TABLES, nothing on an existing table: an older build opening a file at `user_version 76` takes rule 3 and boots.
+  // The anchor took 74 and the push outbox 75, so this entry is 76 (the coordinator's word at landing). RE-MEASURE the slot
+  // before the PR and before merge (it must print 75 before this entry is counted; renumber on the coordinator's word):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE portfolio_rank (
+    program   TEXT PRIMARY KEY,   -- a programs.slug; the writer checks it exists
+    position  INTEGER NOT NULL,   -- the place inside its class band, 1 first
+    cls       TEXT NOT NULL,      -- ServiceClass; read through isServiceClass, never a cast
+    fixedDate TEXT,               -- YYYY-MM-DD, only on fixed-date
+    setAt     INTEGER NOT NULL,   -- wall ms of the write that last placed this row
+    setBy     TEXT NOT NULL       -- that write's actor: the session's device actor, or flag-off
+  );
+  CREATE TABLE portfolio_rank_revision (
+    id       INTEGER PRIMARY KEY CHECK (id = 1),
+    revision INTEGER NOT NULL,    -- only rises; 0 is "never written", which no row stores
+    setAt    INTEGER NOT NULL,
+    setBy    TEXT NOT NULL
+  );
+  `,
+
+  // ── 77: user_version 76 -> 77 ─────────────────────────────────────────────
+  // The replay quiz (Overlord spec §3.3.9 C52, §12 M13; W1a, plan `w1a-replay-quiz.md` Task 1; W0-28 ruled B):
+  // `continuity_quiz_runs`, one row per replay quiz run the operator ran by hand and recorded. ONE writer,
+  // `continuity/quizStore.ts#insertQuizRun`, which sets `baseline` by `continuity/quiz.ts#quizBaseline` in its own
+  // transaction. A row holds the score and its interval only, never a PASS or a benefit. `reportSha` is unique, so a resend
+  // is one row. The anchor took 74, the push outbox 75 and the portfolio 76, so this entry is 77 (the coordinator's
+  // word at landing).
+  //
+  // A NEW TABLE, nothing on an existing table: an older build opening a file at `user_version 77` takes rule 3 (it warns,
+  // reads as-is and migrates nothing), never names the table, and boots. Every earlier entry is frozen. RE-MEASURE the slot
+  // before the PR and before merge (it must print 76 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE continuity_quiz_runs (
+    id            INTEGER PRIMARY KEY,
+    measuredAt    INTEGER NOT NULL,     -- wall ms the quiz was measured (the report's)
+    recordedAt    INTEGER NOT NULL,     -- wall ms the row was written
+    recordedBy    TEXT NOT NULL,        -- who recorded it (attribution, not authentication)
+    reportSha     TEXT NOT NULL UNIQUE, -- the report's sha256
+    questionsSha  TEXT NOT NULL,        -- the frozen question list's sha256
+    questions     INTEGER NOT NULL,
+    families      INTEGER NOT NULL,
+    score         REAL NOT NULL,
+    lo            REAL NOT NULL,        -- the score's interval
+    hi            REAL NOT NULL,
+    judgeModel    TEXT NOT NULL,
+    ccrcRelease   TEXT NOT NULL,
+    claudeBuilds  TEXT NOT NULL,        -- the Claude Code builds, a JSON list
+    steerArmed    TEXT NOT NULL,        -- yes | no | partial | unmeasured (QuizArmed)
+    agentsOnArmed TEXT NOT NULL,        -- yes | no | partial | unmeasured (QuizArmed)
+    baseline      INTEGER NOT NULL      -- 1 for M13's baseline (quizBaseline), else 0
+  );
+  `,
+
+  // ── 78: user_version 77 -> 78 ─────────────────────────────────────────────
   // The loads report (Overlord spec §3.6 H4, Table 11.1e; W1 sandbox, plan `w1-sandbox.md` Task 5): `continuity_start_loads`,
   // what a session's `startup` or `resume` start loaded, one row per start, joined by `startId`. ONE writer,
   // `insertStartLoads` (`continuityStore.ts`), from the loads door: the first body for a start is kept, a resend of the same
@@ -3161,11 +3223,11 @@ export const MIGRATIONS: readonly string[] = [
   // `carriedFrom` is the `reportId` of the start a resume carried instructions and hooks from (slug
   // resume-carries-its-own-start).
   //
-  // A NEW TABLE, nothing on an existing one: an older build opening a file at `user_version 76` takes rule 3 (it warns, reads
+  // A NEW TABLE, nothing on an existing one: an older build opening a file at `user_version 78` takes rule 3 (it warns, reads
   // as-is and migrates nothing), never names the table, and boots. Every earlier entry is frozen. Sibling W1 pieces add
-  // migrations too: whoever lands later renumbers on the coordinator's word; the push outbox (#2838) took 75, so this is 76
-  // (the coordinator's word of 2026-11-15). RE-MEASURE the slot before the PR and before merge (it must print 75 before
-  // this entry is counted):
+  // migrations too: whoever lands later renumbers on the coordinator's word; the push outbox (#2838) took 75, the portfolio (#2842) 76
+  // and the replay quiz (#2839) 77, so this is 78 (the coordinator's word at landing, 2026-11-15). RE-MEASURE the slot
+  // before the PR and before merge (it must print 77 before this entry is counted):
   //     git fetch origin main
   //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
   `

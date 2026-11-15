@@ -73,8 +73,9 @@ const OVERLORD_GROUPS: Readonly<Record<string, readonly string[]>> = {
   PROBE_REFUSALS: Object.values(PROBE_REFUSALS),
   TIMER_REFUSALS: Object.keys(TIMER_REFUSALS),
   START_LOADS_REFUSALS: Object.values(START_LOADS_REFUSALS),   // the loads door's word (Overlord W1 sandbox, Task 5)
-  // Hand-registered: LANE_ARM_REFUSALS' comment does not name the Overlord, and only its `lane-gated` is a route word.
-  'LANE_ARM_REFUSALS#lane-gated': LANE_ARM_REFUSALS.filter((w) => w === 'lane-gated'),
+  // Hand-registered: LANE_ARM_REFUSALS' comment does not name the Overlord, and only its `lane-gated` and the replay
+  // quiz's `baseline-missing` are route words of the table.
+  'LANE_ARM_REFUSALS#lane-gated,baseline-missing': LANE_ARM_REFUSALS.filter((w) => w === 'lane-gated' || w === 'baseline-missing'),
 };
 
 /** The two directions' findings, pure over the table, the code's words, the Overlord's words and the data. */

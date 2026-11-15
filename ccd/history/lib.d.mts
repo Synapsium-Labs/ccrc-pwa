@@ -681,6 +681,9 @@ export function deriveHealth(h: HealthInputs): HealthResult;
 // --- W1-B2 Task 1: identity, scope and ids (spec §8.2, §6.1, §6.9, §6.10, §8.6, §9.7)
 export type ScopeKind = 'family' | 'project' | 'workspace';
 export const SCOPE_KINDS: readonly ['family', 'project', 'workspace'];
+/** A read context's scope kind (Overlord W1): ScopeKind plus `overlord`, which decideScope never answers. */
+export type ReadScopeKind = ScopeKind | 'overlord';
+export const READ_SCOPE_KINDS: readonly ['family', 'project', 'workspace', 'overlord'];
 export const NODE_ID_DISPLAY_MIN: 6;
 export const HISTORY_NODE_ID_RE: RegExp;
 export const RECALL_OFF_DIR: 'recall-off';

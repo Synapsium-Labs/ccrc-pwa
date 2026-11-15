@@ -256,6 +256,8 @@ export const MASKED_GET_ROUTES: ReadonlySet<string> = new Set([
   '/api/sessions/:id/notes',
   // A session's pending timers, its own read and the operator's (Overlord W1a, the timers piece): each note a session wrote.
   '/api/timers', '/api/sessions/:id/timers',
+  // The portfolio (Overlord W1): programme titles a coordinator wrote, and blocking items' titles a session wrote.
+  '/api/portfolio',
 ]);
 /** Whether the one answer hook masks a route's answer (D-5995). */
 export const answerMasked = (method: string, url: string | undefined): boolean =>
@@ -2645,6 +2647,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     registerSecret: (laneId, value, o) => deps.masker?.ingestSecret(laneId, value, o) ?? 'unregistered',
     retireSecret: (laneId) => { deps.masker?.retireSecret(laneId); },
     ...(deps.plan === undefined ? {} : { plan: deps.plan }),
+    liveAsk: (childId) => (watcher === undefined ? { kind: 'unmeasured' } : watcher.liveAskKey(childId)),
   });
 
   /**
