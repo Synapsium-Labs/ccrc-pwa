@@ -60,3 +60,23 @@ case with the dropped-probe assertion). Restored from the saved copy, `cmp` iden
 **Unchanged:** one pass budget (the one `late` promise and its one timer, a local of the call), `RADAR_PASS_CONCURRENCY` 8, one
 probe read per project, the abort signal, generation fencing in the watcher (`watch.ts` untouched), bounded adapters, the
 `refused`/`absent`/`unreadable` answers and the listing's handling. No renewed deadline, no second timer, no second probe read.
+
+### R2 addendum: ready-head twin, thrown control, two more mutants
+
+**Sweep fixture is now a ready head.** The sweep cases seed a pinned entry whose run is at `merging` (claimed, episode matching the
+entry's PR and sha), a fresh lander, a probe naming that head clean against the health sha, and fresh green health. Its unhung
+twin queues exactly one `next-to-land:` mail and one delivery (`R2 twin`), so the zero in the hung cases can fail. The hung cases
+(slow lander, slow health, each a fresh store) assert the radar result kept, the control late in all three documents, one probe read,
+and zero cue mail and zero deliveries. They replace the earlier single sweep case, whose twin queued no cue.
+
+**Thrown control.** A control read that rejects after the probe answered keeps the probe in `reads`; the control for that project is
+`allFailed({ ok: false, reason: 'unreadable' })` (a `.catch` on the control race in `readRadarPass`). A probe that rejects keeps
+today's answer (`unreadable` in both maps; pinned by a case that passes before and after). Red first: the lander-rejects case at
+the previous commit failed `expected { ok: false, reason: 'unreadable' } to deeply equal { ok: true, doc: ... }`.
+
+**Mutants** (measured at `e72d31a1b`; command `timeout 600s ccrc test -- ./node_modules/.bin/vitest run test/radar-lane.test.ts test/coord-lineage.test.ts test/coord-radar.test.ts --maxWorkers=2 -t R2`; each restored from the saved copy, `cmp` identical, the three files green at 302 passed):
+
+| Mutant | Result |
+|---|---|
+| old bundling: a late control returns `failedBundle(n, late)` | rc 1, 4 failed: both pass cases (`expected { ok: false, reason: 'late' } to deeply equal { ok: true, ... }`) and both sweep cases (`the answered probe was dropped with the late control: expected [] to deeply equal [ 'claude-a-proj-a-alpha' ]`) |
+| late control made `{ lander: late, probe: <answered>, health: late }` | rc 1, 4 failed, all at the control-equality assertion (`expected { lander: ..., probe: ..., health: ... } to deeply equal ...`). The zero-cue assertion was NOT reached in this run, so this mutant shows the control equality catches it, not that the cue count would; I did not measure whether the store would queue a cue from that partial bundle. |
