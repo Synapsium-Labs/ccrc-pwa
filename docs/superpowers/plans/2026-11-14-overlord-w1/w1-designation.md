@@ -649,7 +649,8 @@ export const DESIGNATE_SERVER_WORDS = ['continuity-v1'] as const;
 export interface DesignationView {
   readonly bound: { readonly sessionId: string; readonly generation: string } | null;   // null: no live binding
   readonly pending: { readonly sessionId: string; readonly kind: (typeof PENDING_KINDS)[number];
-    readonly deadlineAt: number } | null;                                              // null: no attempt
+    readonly deadlineAt: number;
+    readonly generation: string | null } | null;   // null: no attempt. `generation` null: the create has not answered yet
   readonly term: number; readonly designatedTerm: number;
   readonly model: OverlordModelClass; readonly accountPools: PoolSet;
   readonly pastIds: readonly string[]; readonly actor: string;
@@ -665,6 +666,9 @@ export type DesignationRead =
 ```
 
 `bound: null` and `pending: null` each say one thing, "no such binding", and the view carries no other absence on them.
+`pending.generation` is the `pendingGeneration` column, the incarnation `bindPendingGeneration` records once the create
+answers, and `null` says only that it is not recorded yet. Gates B's step 1 reads it to tell a pending body whose
+incarnation is recorded from one whose is not (gates plan, fix round 1, F7).
 A row that cannot be narrowed is never a view: `designationRead()` answers `unmeasured` and never throws (X7, Global
 Constraints). The private store's prompt route reads the first two arms' `sessionId` and `term`, and answers 502
 `unmeasured` on the third.
