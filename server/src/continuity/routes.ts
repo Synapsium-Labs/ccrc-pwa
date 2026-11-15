@@ -157,6 +157,34 @@ function bindingOf(coord: CoordStore, id: string, bound: { runId: number | null;
 }
 
 export function registerContinuityRoutes(app: FastifyInstance, deps: ContinuityRouteDeps): void {
+  // THE MEMO OF SERVED PAGES (slug card-read-is-the-last-page): which pages of one card hash this door served to one
+  // conversation. A full read is recorded only when every page of that hash was served to it; a different hash starts
+  // over. Bookkeeping, never a decision's durable state: a restart forgets a card half read, so every answer says whether
+  // it `recorded` the read, and `ccrc-api card` tells a caller whose last page recorded nothing to read the card again.
+  // A write that failed puts the memo back, so a retry of that page records it. Bounded, the oldest conversation dropped
+  // first. A new start of a conversation forgets its partly served card (the start door, below; review 2027 N4): a resumed
+  // conversation keeps its uuid, and pages served to its previous generation are no read of the new one's card. So each memo
+  // carries the start it belongs to (`starts`, a stamp per conversation that every fresh start raises; review 2087 F3), and a
+  // page whose request began before the conversation's latest start is served but joins no memo: a request of the old
+  // generation still in flight when the new one starts cannot complete the new one's read. A stamp dropped by the bound
+  // reads as no start, which only ever starts a memo over (a read asked again), never completes one.
+  type Memo = { hash: string; start: number; pages: Set<number> };
+  const memoKey = (sessionId: string, uuid: string): string => `${sessionId}\n${uuid}`;
+  const served = new Map<string, Memo>();
+  const remember = (key: string, memo: Memo): void => {
+    served.set(key, memo);
+    if (served.size > (deps.cardMemoMax ?? CARD_MEMO_MAX)) served.delete(served.keys().next().value!);
+  };
+  const starts = new Map<string, number>();
+  let startSeq = 0;
+  const startOf = (key: string): number => starts.get(key) ?? 0;
+  const noteStart = (key: string): void => {
+    starts.delete(key);
+    starts.set(key, startSeq += 1);
+    if (starts.size > (deps.cardMemoMax ?? CARD_MEMO_MAX)) starts.delete(starts.keys().next().value!);
+    served.delete(key);
+  };
+
   /**
    * `POST /api/sessions/:id/start`: the hook reports one SessionStart of a session that is not a child (its source, the
    * conversation's uuid, the model, the row's incarnation). A box-token machine lane, an `auth/gate.ts` EXEMPT entry:
@@ -199,21 +227,10 @@ export function registerContinuityRoutes(app: FastifyInstance, deps: ContinuityR
     if (coord === undefined) return refuseRoute(reply, 'unavailable');
     const r = coord.insertStart({ sessionId: id, reportId, uuid: startedUuid, source, model, rowIncarnation, reportedAt, receivedAt: deps.wall() });
     if (!r.ok) return refuseRoute(reply, 'write-failed', { detail: 'continuity_starts could not be written' });
+    if (r.fresh) noteStart(memoKey(id, startedUuid));
     return reply.code(202).send({ ok: true, id: r.id, fresh: r.fresh });
   });
 
-  // THE MEMO OF SERVED PAGES (slug card-read-is-the-last-page): which pages of one card hash this door served to one
-  // conversation. A full read is recorded only when every page of that hash was served to it; a different hash starts
-  // over. Bookkeeping, never a decision's durable state: a restart forgets a card half read, so every answer says whether
-  // it `recorded` the read, and `ccrc-api card` tells a caller whose last page recorded nothing to read the card again.
-  // A write that failed puts the memo back, so a retry of that page records it. Bounded, the oldest conversation dropped
-  // first.
-  type Memo = { hash: string; pages: Set<number> };
-  const served = new Map<string, Memo>();
-  const remember = (key: string, memo: Memo): void => {
-    served.set(key, memo);
-    if (served.size > (deps.cardMemoMax ?? CARD_MEMO_MAX)) served.delete(served.keys().next().value!);
-  };
   /** A card or notes read served: the probe door marks an answer after it `open` (closed-book, Review Focus 3). A stamp that
    *  could not be written leaves the answer `unmeasured`, which claims nothing, so the read is served and the miss logged. */
   const stampRead = (coord: CoordStore, id: string, door: ContinuityReadDoor): void => {
@@ -251,6 +268,9 @@ export function registerContinuityRoutes(app: FastifyInstance, deps: ContinuityR
     const asked = q['hash'];
     if (asked !== undefined && (typeof asked !== 'string' || !HASH_RE.test(asked))) return refuseRoute(reply, 'bad-request', { detail: 'hash is a card hash' });
     if (page > 1 && asked === undefined) return refuseRoute(reply, 'bad-request', { detail: 'a page after the first names its card hash' });
+    // The conversation's start as this request began, before its first await (review 2087 F3).
+    const key = memoKey(id, uuid);
+    const begun = startOf(key);
     const attributed = await deps.attributeReader(id, uuid);
     if (!attributed.ok) return refuseRoute(reply, attributed.error, { detail: attributed.detail });
 
@@ -268,20 +288,23 @@ export function registerContinuityRoutes(app: FastifyInstance, deps: ContinuityR
     const slices = cardPages(text);
     if (page > slices.length) return refuseRoute(reply, 'bad-request', { detail: `the card has ${slices.length} page(s)` });
 
-    const key = `${id}\n${uuid}`;
+    const start = startOf(key);
     const prior = served.get(key);
-    const memo: Memo = prior !== undefined && prior.hash === hash ? prior : { hash, pages: new Set() };
-    served.delete(key);
-    memo.pages.add(page);
+    const memo: Memo = prior !== undefined && prior.hash === hash && prior.start === start ? prior : { hash, start, pages: new Set() };
     let recorded = false;
-    if (memo.pages.size === slices.length) {
-      const r = coord.insertCardRead({ sessionId: id, uuid, snapshotId, hash, pages: slices.length, at });
-      if (!r.ok) {
-        remember(key, memo);
-        return refuseRoute(reply, 'write-failed', { detail: 'continuity_card_reads could not be written' });
-      }
-      recorded = true;
-    } else remember(key, memo);
+    // A start of this conversation that arrived while the request was in flight leaves the page served and in no memo.
+    if (begun === start) {
+      served.delete(key);
+      memo.pages.add(page);
+      if (memo.pages.size === slices.length) {
+        const r = coord.insertCardRead({ sessionId: id, uuid, snapshotId, hash, pages: slices.length, at });
+        if (!r.ok) {
+          remember(key, memo);
+          return refuseRoute(reply, 'write-failed', { detail: 'continuity_card_reads could not be written' });
+        }
+        recorded = true;
+      } else remember(key, memo);
+    }
     stampRead(coord, id, 'card');
     return reply.code(200).send({ ok: true, hash, snapshotId, page, pages: slices.length, text: slices[page - 1], recorded });
   });
