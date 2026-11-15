@@ -179,6 +179,11 @@ describe('GET/POST /api/coord/lane-arm (D-8274)', () => {
 
   it('the renewal act lifted the continuity row\'s gate: its Live asks for the confirm key like any row, and no row is gated (review 2003 F3)', async () => {
     const { app, coord } = await setup();
+    // The replay quiz's baseline (W0-28) stands first, so what answers here is the row's own gate, not the baseline guard.
+    expect(insertQuizRun(coord.db, { recordedBy: 'operator', recordedAt: 1, report: {
+      measuredAt: 1, reportSha: 'c'.repeat(64), questionsSha: 'd'.repeat(64), questions: 40, families: 6, score: 0.7, lo: 0.6, hi: 0.8,
+      judgeModel: 'judge-a', ccrcRelease: 'v1', claudeBuilds: ['2.1.0'], steerArmed: 'no', agentsOnArmed: 'no',
+    } }, (lane) => coord.laneArmSetting(lane))).toMatchObject({ ok: true, baseline: true });
     const first = await post(app, { lane: 'continuity', choice: 'live' });
     expect(first.statusCode).toBe(409);
     expect(first.json()).toMatchObject({ ok: false, error: 'confirm-required', lane: 'continuity' });
