@@ -428,6 +428,18 @@ describe('landingBindingOf: precedence and the evidence it binds', () => {
       projections: [{ id: 107, value: { kind: 'readable', quarantine: null } }, { id: 108, value: { kind: 'unreadable' } }] });
     expect(landingBindingOf(open, controlRead(), now)).toMatchObject({ reason: 'projection-unreadable' });
   });
+  it('ORDER-unknown (fix round 1): a nonterminal unknown row holds, quarantined or clean; a terminal damaged row does not', () => {
+    const quarantined = factsOf([entry(7), entry(9, { state: 'unknown' })], {
+      projections: [{ id: 107, value: { kind: 'readable', quarantine: null } }, { id: 109, value: { kind: 'readable', quarantine: 'stale-episode-head' } }] });
+    expect(landingBindingOf(quarantined, controlRead(), now)).toEqual({ mode: 'held', reason: 'projection-unreadable', entryId: 107 });
+    const cleanUnknown = factsOf([entry(7), entry(9, { state: 'unknown' })]);
+    expect(landingBindingOf(cleanUnknown, controlRead(), now)).toMatchObject({ mode: 'held', reason: 'projection-unreadable' });
+    const quarantinedPinned = factsOf([entry(7)], { projections: [{ id: 107, value: { kind: 'readable', quarantine: 'stale-episode-head' } }] });
+    expect(landingBindingOf(quarantinedPinned, controlRead(), now)).toMatchObject({ reason: 'projection-unreadable' });
+    const closed = factsOf([entry(7), entry(5, { state: 'closed' })], {
+      projections: [{ id: 107, value: { kind: 'readable', quarantine: null } }, { id: 105, value: { kind: 'unreadable' } }] });
+    expect(landingBindingOf(closed, controlRead(), now).mode).toBe('ready');
+  });
   it('an empty line or a blocked remainder holds empty-or-blocked with no entry', () => {
     expect(landingBindingOf(factsOf([]), controlRead(), now)).toEqual({ mode: 'held', reason: 'empty-or-blocked', entryId: null });
     const cyc = factsOf([entry(1, { afterIds: [102] }), entry(2, { afterIds: [101] })]);

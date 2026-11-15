@@ -40,3 +40,13 @@ M12's "later clean entry queues 0 mails" half and M13's mail half belong to Task
 Lander failure other than `absent`, a foreign or stale marker, and undefined control all hold `opt-in-unknown`; a cut head
 list, an unreadable/stale/foreign probe hold `probe-unmeasured`; a health `unmeasured` state or null sha holds
 `health-unmeasured`; duplicate heads for the selected PR hold `head-mismatch`.
+
+## Fix round 1
+- Open rows: `landingBindingOf` now holds `projection-unreadable` for any nonterminal row (an unrecognised state included)
+  whose state is `unknown`, whose projection is missing, unreadable or carries a quarantine marker, or whose dependencies
+  are unreadable. Terminal rows with damage still do not block. Header and `entryId` doc comment updated.
+- Rows (red first: 1 failed, `expected { mode: 'ready', ... } to deeply equal { mode: 'held', ... }`): quarantined unknown,
+  clean unknown, quarantined pinned hold; a closed row with an unreadable projection does not.
+- Green: the two files, 94 passed; production `tsc --noEmit` clean.
+- Mutation: the `unknown`/quarantine conditions removed (projection kind check only) -> `ORDER-unknown (fix round 1)`:
+  `expected { mode: 'ready', entryId: 107, ... } to deeply equal { mode: 'held', ... }`; restored from a saved copy.

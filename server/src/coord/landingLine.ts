@@ -1,5 +1,5 @@
-// L1, context C4 (landing order wave 5e). PURE: no clock, no fs, no store, no I/O; its one value import is the L0
-// vocabulary in `shared/landingLine.ts` (D-7613). Three deciders, all folds over values:
+// L1, context C4 (landing order wave 5e). PURE: no clock, no fs, no store, no I/O; its value imports are the L0
+// vocabulary in `shared/landingLine.ts` (D-7613) and `freshWithin` with its window in `shared/api.ts` (wave 5i). Five deciders, all folds over values:
 //
 // - `landingOrder` decides the landing line's order and its head from a project's entries and the project's two flags
 //   (D-7621). The L4 read route reads the project row (`CoordStore.readLanding`) and hands the values in; this file
@@ -119,7 +119,9 @@ export function mainRedNext(previous: boolean, control: LandingControlRead, nowM
  *  here against `nowMs`), equal base, the exact selected PR and pinned sha, clean base composition, health policy.
  *  The selected head is the one `landingOrder` picks with no flag set, so a main-red or a failed gate holds on that entry
  *  and never searches a later one. `mainRedHold` is a fact and not a gate here: the same fresh evidence that sets it
- *  decides the health policy, and only the selected fixesMain head is ready under red (Amendment A, D-8625). */
+ *  decides the health policy, and only the selected fixesMain head is ready under red (Amendment A, D-8625).
+ *  `entryId` of a held answer names the flag-free walk's selected head. Under `paused` and `recovery` that can be the row
+ *  whose authority is unresolved: it is not a head `landingOrder` reports (it reports none then). */
 export function landingBindingOf(facts: LandingMutationFacts, control: LandingControlRead | undefined, nowMs: number): LandingBinding {
   const selected = landingOrder(facts.entries, CLEAR);
   const head = selected.paused ? null : selected.head;
@@ -132,10 +134,15 @@ export function landingBindingOf(facts: LandingMutationFacts, control: LandingCo
   if (facts.flags.operatorPaused) return held('paused');
   if (facts.recovery.hold !== null) return held('recovery');
   const open = facts.entries.filter((x) => !LANDING_ENTRY_TERMINAL[x.state]);
-  const readable = (id: number): boolean =>
-    facts.projections.find((p) => p.id === id)?.value.kind === 'readable'
-    && facts.dependencies.find((d) => d.id === id)?.value.kind === 'readable';
-  if (open.some((x) => !readable(x.id))) return held('projection-unreadable');
+  // An open row holds the binding unless its state is a known one other than `unknown`, its projection reads with no
+  // quarantine marker and its dependencies read. A quarantined or `unknown` row is outstanding to the walk, so a head
+  // chosen beside it is not a line this build can vouch for. Terminal rows (any damage) never come here.
+  const clear = (x: LandingEntry): boolean => {
+    const projection = facts.projections.find((p) => p.id === x.id)?.value;
+    return x.state !== 'unknown' && projection?.kind === 'readable' && projection.quarantine === null
+      && facts.dependencies.find((d) => d.id === x.id)?.value.kind === 'readable';
+  };
+  if (open.some((x) => !clear(x))) return held('projection-unreadable');
   if (head === null) return held('empty-or-blocked');
   if (!probe.ok || probe.doc.project !== facts.project || !fresh(probe.doc.at, nowMs) || probe.doc.headsCut) return held('probe-unmeasured');
   if (!health.ok || health.doc.project !== facts.project || !fresh(health.doc.at, nowMs)
