@@ -16,7 +16,8 @@
 import type { NotifyEvent } from '../../shared/api.js';
 import type { NotifyLog } from './notifylog.js';
 import type { CoordStore } from './coord/store.js';
-import type { PushPayload, PushService } from './push.js';
+import type { PushPayload } from './push.js';
+import { noticePayload } from './pushOutbox.js';
 import type { Viewers } from './viewer.js';
 import type { Bus } from './bus.js';
 
@@ -64,7 +65,10 @@ export interface NoticeOutcome {
 export interface NoticeDeps {
   readonly notifyLog?: NotifyLog | undefined;
   readonly coord?: Pick<CoordStore, 'recordFeedEvent'> | undefined;
-  readonly push?: Pick<PushService, 'notify'> | undefined;
+  /** Widened from `Pick<PushService, 'notify'>` (the push outbox, Task 3): `PushService.notify` now answers a
+   *  `PushSendVerdict`, and a double that answers `void` still types. The funnel ignores the answer until the sender
+   *  reads it. */
+  readonly push?: { notify(p: PushPayload): Promise<unknown> } | undefined;
   readonly viewers?: Pick<Viewers, 'isVisible'> | undefined;
 }
 
@@ -131,12 +135,8 @@ function raise(deps: NoticeDeps, event: NoticeRecord, mode: NoticeMode, opts: No
     }
   }
   if (mode === 'record-only' || visible) return { recorded, archived };
-  sendPush(deps.push, {
-    title: event.title, body: event.body, sessionId: event.sessionId,
-    tag: opts.tag ?? `${event.kind}-${event.sessionId}`,
-    ...(opts.actions ? { actions: opts.actions } : {}),
-    ...(opts.url !== undefined ? { url: opts.url } : {}),
-  });
+  // The payload's one builder (the push outbox, Task 2): the default tag or the caller's, and `actions` and `url` when given.
+  sendPush(deps.push, noticePayload(event, opts));
   return { recorded, archived };
 }
 
