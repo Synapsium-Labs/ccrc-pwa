@@ -168,6 +168,31 @@ export interface CardFacts {
   readonly history: Fact<CardHistory>;
 }
 
+/** THE ANCHOR (C38; plan `w1a-anchor.md`): the card's short part, which the session hook prints in its first slot at a
+ *  start, and once after an automatic compaction that brought no start. Its ceilings, counted in UTF-8 BYTES, so the text
+ *  fits them under any count Claude Code or a bash in any locale makes (a byte bound is also a character and a UTF-16
+ *  bound; slug anchor-cap-in-bytes). The hook's own clip (`ANCHOR_CARD_MAX_CHARS` in `ccd/session-hook.sh`) is the same
+ *  number, so a server answer never meets it. */
+export const ANCHOR_CARD_MAX_CHARS = 1_500;
+/** The prompt's anchor after an automatic compaction: the canaries and the instruction only (W0-04 measured a 600-character
+ *  UserPromptSubmit context arriving with the prompt). */
+export const ANCHOR_PROMPT_MAX_CHARS = 600;
+/** The anchor's forms: `start` (role, canaries, counts, instruction), `prompt` (canaries and instruction) and `fork` (no
+ *  text: the door answers whether the slot is live, and the hook prints its one refusal line). */
+const ANCHOR_FORM_MAP: Readonly<Record<'start' | 'prompt' | 'fork', true>> = { start: true, prompt: true, fork: true };
+export type AnchorForm = keyof typeof ANCHOR_FORM_MAP;
+export const ANCHOR_FORMS = Object.keys(ANCHOR_FORM_MAP) as readonly AnchorForm[];
+export function isAnchorForm(v: unknown): v is AnchorForm {
+  return typeof v === 'string' && (ANCHOR_FORMS as readonly string[]).includes(v);
+}
+/** The generation canary's facts: the identity's live generation (its term and `n`, and whether a newer start of the
+ *  session is not yet minted, which reads `n+1 starting`), `none` when the identity has no live generation, or what could
+ *  not be read. */
+export type AnchorGeneration =
+  | { readonly kind: 'live'; readonly term: number; readonly n: number; readonly starting: boolean }
+  | { readonly kind: 'none' }
+  | { readonly kind: 'unmeasured'; readonly what: string };
+
 /** One part of a rendered card. Sections are in reading order (stable first, live last); `rank` orders what trimming
  *  drops (lowest first), and a `keep` section is never dropped. */
 export interface CardSection {
