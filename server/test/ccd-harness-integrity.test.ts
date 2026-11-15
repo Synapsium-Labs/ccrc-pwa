@@ -98,6 +98,7 @@ const TEST_LOCAL_HELPERS: Readonly<Record<string, readonly string[]>> = {
   'ccd-python-reader-census.test.ts': ['_limit_rows_new', '_new_reader', '_not_a_reader'],
   // This suite's own CONTROL plants these three in strings.
   'ccd-harness-integrity.test.ts': ['_method', '_nope', '_tmpl'],
+  'ccd-split-pin.test.ts': ['_load'],
   'ccd-collect-race-forge.test.ts': ['_race_swap'],
   'ccd-die-containment.test.ts': ['_c', '_f', '_g', '_leaf', '_middle', '_top', '_v'],
   'ccd-leaf-root-newline.test.ts': ['_fp', '_fpp'],
