@@ -60,31 +60,25 @@ import {
 import { nodeDelegationFilePort } from '../src/coord/delegation-file-port.js';
 import {
   DELEGATION_CHECKPOINT_FILE,
-  DELEGATION_DURABILITY_EDGES,
   DELEGATION_RECOVERY_PHASES,
   DelegationCheckpointBuilder,
   DelegationCheckpointError,
   COORDINATION_RESTORE_MARKER_FILE,
   DELEGATION_REPAIR_FULL_MS,
   DELEGATION_RESTORE_IN_PROGRESS,
-  DelegationDurability,
   DelegationEvidenceIndex,
   assertDelegationCheckpointProjectable,
   decodeDelegationCheckpoint,
   encodeDelegationCheckpoint,
-  isDelegationCheckpointKebab,
   recoverDelegation,
-  recoverDelegationFromFiles,
   recoverDelegationState,
   repairDelegationProjection,
-  type DelegationDurabilityDeps,
-  type DelegationDurabilityEdge,
-  type DelegationDurableBatch,
   type DelegationProjectionPort,
   type DelegationProjectionRepairReport,
 } from '../src/coord/delegation-checkpoint.js';
+import { DELEGATION_DURABILITY_EDGES, DelegationDurability, isDelegationCheckpointKebab, recoverDelegationFromFiles, type DelegationDurabilityDeps, type DelegationDurabilityEdge, type DelegationDurableBatch } from '../src/coord/delegation-durability.js';
 import { unreadableDelegationBucketResult } from '../src/coord/delegation-ingest.js';
-import type { DelegationApplyOutcome } from '../src/coord/delegation-checkpoint.js';
+import type { DelegationApplyOutcome } from '../src/coord/delegation-durability.js';
 import * as modelNs from '../src/coord/delegation-model.js';
 import { oldRuleCheckpoint } from './delegationOldRuleFixture.js';
 import { callsIn, parsedFile, symbolOf } from './scan/symbols.js';
@@ -3585,7 +3579,7 @@ describe('the pure/impure split is explicit, and nothing pure mints an ID or rea
     expect(at).toBeGreaterThan(0);
     const pure = strip(src.slice(0, at));
     expect(pure).not.toMatch(NAMES_IO);
-    expect(importsOf(pure).sort()).toEqual(['../../../shared/api.js', './delegation-lease-state.js', './delegation-model.js']);
+    expect(importsOf(pure).sort()).toEqual(['../../../shared/api.js', '../chainedJournal.js', './delegation-lease-state.js', './delegation-model.js']);
   });
   // D-8641: over the checkpoint's program. The banner stands in the impure shell's file alone; the homes of the codec, the builder and
   // the pure recovery name no filesystem, SQLite or store above it (or anywhere, in a file without it); and the program imports from
@@ -3623,7 +3617,7 @@ describe('the pure/impure split is explicit, and nothing pure mints an ID or rea
     expect(src.lastIndexOf('byIdentity(identity)', at)).toBeGreaterThan(0);
     expect(src.lastIndexOf('byPath(request.canonicalPath)', at)).toBeGreaterThan(src.lastIndexOf('byIdentity(identity)', at));
   });
-  it('only the model is imported for canonical JSON: neither module defines a second canonical writer', () => {
+  it('the delegation modules import the one RFC 8785 writer: neither defines a second canonical writer', () => {
     for (const file of ['delegation-journal.ts', 'delegation-checkpoint.ts']) {
       const src = strip(textOf(file));
       expect(src).not.toMatch(/JSON\.stringify\([^)]*\)\s*\+\s*'\\n'|function canonical|const canonical[A-Z]\w* =/);

@@ -60,8 +60,11 @@ has a D-number; the coordinator folds them into the ledger.
 
 ## Measured before merge
 
-- **Migration slot.** This branch takes 75, the next free slot on `main` at its base. The push outbox piece (run 2099) takes
-  75 too, and the portfolio and renewal act pieces add migrations; whoever lands later renumbers on the coordinator's word.
-- **Peer merges.** The vocabulary piece's `refusal-table.data.json` maps `baseline-missing` to W1a; if it lands first, this
-  pull request deletes that line. The renewal act lifts `continuity`'s gate; if it lands first, its confirmed continuity Live
-  case in `lane-arm-route.test.ts` needs a baseline row seeded.
+- **Migration slot.** This branch took 75, the next free slot on `main` at its base. The push outbox piece took 75 and the
+  portfolio piece 76 on `main` first, so the landing merge renumbered this entry to 77 on the coordinator's word (mail
+  20641): the schema entry and its header, `coord-db.test.ts`'s version pins and a new slot pin (77, the entry after the
+  portfolio's), and `run-close-switch.test.ts`'s rollback.
+- **Peer merges.** The vocabulary piece landed first with `baseline-missing` on its `refusal-table.data.json` wave map; the
+  landing merge deletes that line, since the word is now in the code. The floors files keep both sides. The renewal act lifts
+  `continuity`'s gate; if it lands first, its confirmed continuity Live case in `lane-arm-route.test.ts` needs a baseline row
+  seeded.

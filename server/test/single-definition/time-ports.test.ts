@@ -20,8 +20,16 @@ const TIME_PORT_FILES: readonly string[] = [
   'server/src/coord/practiceCases.ts',
   'server/src/coord/practiceCasesStore.ts',
   'shared/practice-triggers.ts',
+  // The vocabulary piece's list (Overlord W1): it reads no clock today; the entry makes a later read red.
+  'shared/injected-prompts.mjs',
   'server/src/roleOf.ts',
   'shared/fleetRoles.ts',
+  'server/src/pushOutbox.ts',
+  'server/src/coord/pushOutboxStore.ts',
+  // Overlord W1, portfolio: the class vocabulary, the pure decider and the store take `now` as an argument.
+  'shared/portfolio.ts',
+  'server/src/coord/portfolio.ts',
+  'server/src/coord/portfolioStore.ts',
 ];
 const TIME_PORT_SCOPE = { test: (f: string): boolean => TIME_PORT_FAMILIES.test(f) || TIME_PORT_FILES.includes(f) };
 /** The one file allowed to read the ambient sources: the system adapters. */

@@ -45,7 +45,9 @@ const WORDS = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'e
   'eleven', 'twelve', 'thirteen', 'fourteen', 'fifteen', 'sixteen', 'seventeen', 'eighteen', 'nineteen',
   'twenty', 'twenty-one', 'twenty-two'] as const;
 const COUNT_WORD = WORDS[CONTRACT.length];
-const WHOLE_FILE_BYTES = 16_000; // the ratchet's CONTRACT_BUDGET_BYTES: 5,000 tokens at 3.2 bytes a token
+// 5,000 tokens at 3.2 bytes a token (spec §11.3). Not the ratchet's CONTRACT_BUDGET_BYTES, which operator
+// item 326 raised to 16,750.
+const WHOLE_FILE_BYTES = 16_000;
 // The spec's four repository write verbs (§3.6), as literals: OVERLORD_DENY_RULES is not on `main`.
 const WRITE_VERBS = ['git commit', 'git push', 'gh pr create', 'gh pr merge'] as const;
 const REFERENCES = ['answering.md', 'operator-model.md', 'routing.md', 'starting.md'] as const;

@@ -1,4 +1,5 @@
 import { MAIL_ENVELOPE_FENCE, type MailKind } from '../../../shared/api.js';
+import { INJECTED_PROMPTS } from '../../../shared/injected-prompts.mjs';
 import { MAIL_INBOX_FENCE_INFO, parseMailEnvelope } from '../../../shared/api.js';
 
 export interface EnvelopeInput {
@@ -214,7 +215,7 @@ export function pageInbox<T extends { text: string }>(entries: readonly T[], bud
  *  first 24 characters, and the only variable part (toId) must land after it. */
 export function renderMailNudge(toId: string): string {
   const api = '~/.local/bin/ccrc-api';
-  return `ccrc-mail: you have new mail. Use the client, never curl or raw HTTP: ` +
+  return `${INJECTED_PROMPTS['mail-nudge'].text} Use the client, never curl or raw HTTP: ` +
     `${api} mail list --to ${toId} ; then per row use its deliveryId, NOT id: ` +
     `${api} mail fetch <deliveryId> and ${api} mail ack <deliveryId> --json - ` +
     `with body {"fromId":"${toId}","fromUuid":"<your uuid>"}. ` +

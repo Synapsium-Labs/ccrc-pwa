@@ -1,0 +1,48 @@
+{
+  "codeOnly": {
+    "read-ceiling": "The inbox piece's read-door rate (the W1 index's question 32), in OVERLORD_REFUSALS before Table 11.6 has its row; the spec-fixes run adds the row and takes it off this list."
+  },
+  "waveMap": {
+    "renewing": "W1a",
+    "renew-pending": "W1a",
+    "renew-not-long-lived": "W1a",
+    "act-ceiling": "W2",
+    "server-not-isolated": "W2",
+    "said-not-operator": "W2",
+    "operator-has-it": "W2",
+    "operator-only": "W2",
+    "identity-too-weak": "W2",
+    "relay-carries-method": "W2",
+    "egress-refused": "W2",
+    "request-not-yours": "W2",
+    "dependency-cycle": "W2",
+    "goal-conflict-open": "W2",
+    "proposal-stale": "W3",
+    "proposal-limit": "W3",
+    "no-new-evidence": "W3",
+    "default-not-safest": "W3",
+    "class-unstated": "W3",
+    "evidence-too-weak": "W3",
+    "ask-is-cheaper": "W3",
+    "defer": "W3",
+    "mail-disabled": "W3",
+    "prediction-late": "W3",
+    "entry-retired": "W4",
+    "entry-unsourced": "W4",
+    "entry-clash": "W4",
+    "entry-masked": "W4",
+    "entry-stated": "W4",
+    "practice-retired": "W4b",
+    "practice-contradicts": "W4b",
+    "split-overlaps": "W5",
+    "portfolio-full": "W5",
+    "overlord-cap": "W5",
+    "kickoff-names-overlord": "W5",
+    "coordinator-paused": "W5"
+  },
+  "releaseReasons": {
+    "not-ready:<word>": "W3",
+    "server-gap": "W3",
+    "released:<cause>": "W3"
+  }
+}
