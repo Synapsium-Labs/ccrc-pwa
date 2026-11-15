@@ -13,19 +13,20 @@
 //   calls the port's cut: the landing journal's authority recovery (never in a snapshot, never restored over) is untouched.
 // - The snapshot is the port's own, passed through: unusable after `release` or an `append`, and refused when foreign.
 // - No answer carries a path or an error message; only the closed words of the landing port, which are the port's.
-import { appendOnlyFileAt, NODE_APPEND_ONLY_FS, type AppendOnlyFsOps } from '../appendOnlyFile.js';
+import { appendOnlyFileAt, NODE_APPEND_ONLY_FS, type AppendOnlyIoOps } from '../appendOnlyFile.js';
 import type { LandingJournalRecord } from '../../../shared/landingLine.js';
 import type { LandingJournalPort } from './landingJournalPort.js';
 
 /** The journal's basename, spelled once. */
 export const LANDING_JOURNAL_BASENAME = 'landing.log';
 
-/** The low-level operations the port performs, under the name the landing journal's tests use. */
-export type LandingJournalFsOps = AppendOnlyFsOps;
+/** The low-level operations the port reads and appends with, under the name the landing journal's tests use. The port's
+ *  three cut operations are not among them: this binding never cuts, and fills them from `node:fs`. */
+export type LandingJournalFsOps = AppendOnlyIoOps;
 
 // `ops` is a TEST SEAM (fault injection and observation of the open flags): production passes only `ccrcDir`.
 export function createLandingJournal(ccrcDir: string, ops: LandingJournalFsOps = NODE_APPEND_ONLY_FS): LandingJournalPort {
-  const file = appendOnlyFileAt(ccrcDir, LANDING_JOURNAL_BASENAME, ops);
+  const file = appendOnlyFileAt(ccrcDir, LANDING_JOURNAL_BASENAME, { ...NODE_APPEND_ONLY_FS, ...ops });
   return {
     read() {
       const r = file.read();
