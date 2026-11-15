@@ -6,14 +6,18 @@ a slug; no D-number is invented.
 
 ## Characterization (Task 4 Step 1), green on `main` before any reader moved
 
-`server/test/ccd-pool-a3-characterization.test.ts`, committed alone, 96 pins, green against `main`'s `ccd/ccd`. For a
-session with no set it drives eleven users (the swap target, the home re-seed and the affinity verb on a quiet tick, the
-pay-per-use admission, `_strand_why`, `_strand_mark`, the hard-blocked tick's strand, the new-row and existing-row
+`server/test/ccd-pool-a3-characterization.test.ts`, committed alone, 96 pins, green against `main`'s `ccd/ccd` (98 after
+fix round 1, below). For a session with no set it drives eleven users (the swap target, the home re-seed on a quiet tick,
+the pay-per-use admission, `_strand_why`, `_strand_mark`, the hard-blocked tick's strand, the new-row and existing-row
 start, `ccd swap`, `ccd prefer`, and the `cross-pool` swap.log line with its marker) in ten states: the project's four
 (`untagged`, `named pool-a`, `unreadable`, `malformed`), the three undecidable account states of a tagged project
 (`unreadable`, `stale`, `malformed`), the row's project field absent, that field unreadable on a box with no
 `$POOLS_DIR`, and an unsearchable `$REG`. Each answer is pinned verbatim, the fixture HOME written as `$HOME` and the
 clock as `<ts>`.
+
+The quiet tick's affinity verb label (`auto-pool`, `auto-home`) is not pinned here: the `reseed` user plants no idle status,
+so no tick dispatches. A3 does not touch `aff_verb`, and the label is pinned for a session without a set by suites
+identical on `main` (`ccd-auto-swap-pool.test.ts`, `ccd-swap-pin.test.ts`, `ccd-affinity-stagger.test.ts`) (review 2154 F4).
 
 ## What PR A3 adds
 
@@ -38,7 +42,9 @@ clock as `<ts>`.
 - **The one behaviour change for sessions without a set** (slug `projection-word-fleet-wide`, its own commit): an
   undecidable account side now answers rc 7, stamps `projection`, and strands with a sentence naming
   `$REG/pool-epoch` and the pool sync, where it named the project's tag file. The characterization's nine account-state
-  rows were rewritten in that commit and in no other.
+  rows were rewritten in that commit and in no other. One more output moves with it: `_watchdog_one`'s swap.log line
+  `watchdog-undecidable <id>: rc<n>` reads `rc7` where it read `rc4`. Its code needs no change and nothing in the tree reads
+  that line (review 2154 F3).
 
 ### The readers of `_swap_target`'s rc (Task 5 Step 1), re-measured on the branch
 
@@ -53,8 +59,8 @@ clock as `<ts>`.
 
 | Suite | Result |
 |---|---|
-| `ccd-pool-a3-characterization` (new) | 96 passed: green on `main`, after Task 4 unchanged, after the projection commit with nine rows rewritten |
-| `ccd-pool-a3` (new) | 30 passed; 24 failed against `main`'s `ccd/ccd`, and the last three (the projection ones) until that commit |
+| `ccd-pool-a3-characterization` (new) | 96 passed: green on `main`, after Task 4 unchanged, after the projection commit with nine rows rewritten. Fix round 1: 98 (F5's two `payPerUse` rows; against `origin/main`'s `ccd/ccd` and `lib/pool-set.sh`, swapped in from saved copies and restored byte for byte, 98 ran and the only reds were the nine projection rows) |
+| `ccd-pool-a3` (new) | 30 passed; 24 failed against `main`'s `ccd/ccd`, and the last three (the projection ones) until that commit. Fix round 1: 34 |
 | `ccd-crosspool` | 125 passed (the unknown-rc stub moved from 7 to 9; the known-words case gained `projection` and `set`) |
 | `ccd-auto-swap-pool`, `ccd-auto-swap-hold`, `ccd-default-pool`, `ccd-pool-ok`, `ccd-pool-sync` | 52, 5, 14, 87, 41 |
 | `ccd-rescue-policy`, `-unknown-rank`, `-classwindow-drop`, `-jitter-solo` | 112, 14, 4, 19 |
@@ -76,8 +82,8 @@ header in `ccd/ccd` says so, and says that `_default_pool` clobbers the globals 
 | File | Net |
 |---|---|
 | `ccd/ccd` | +3 |
-| `ccd/lib/pool-set.sh` | +30 |
-| `ccd (program)` | +33 |
+| `ccd/lib/pool-set.sh` | +30 (+31 after fix round 1: F11's `local` line) |
+| `ccd (program)` | +33 (+34 after fix round 1) |
 
 All under 40, no waiver, so Task 5 stays in this PR.
 
@@ -100,6 +106,8 @@ All under 40, no waiver, so Task 5 stays in this PR.
 | The projection sentence without the set's tail | 1 failed |
 | `_pool_side_token` prints the word for a set | 3 failed |
 | `_strand_mark` names a named side only | 1 failed |
+| Fix round 1: `_default_pool` without the `POOL_OK_STATE == "named "*` conjunct (F1) | 1 failed (the untagged lane under `pool-b+untagged`) |
+| Fix round 1: `cmd_start --cross-pool` marks `${pps#named }` (F6a) | 1 failed |
 
 ## Departures
 
@@ -132,3 +140,32 @@ All under 40, no waiver, so Task 5 stays in this PR.
   (`set-unreadable`), never as `(untagged)`, which is what an undecidable project tag still prints, as on `main`.
 - **`contexts-edges-under-a-peer-grant`.** `ccd/contexts-edges.tsv` gains `cmd_start`'s five new edges and loses
   `cmd_start -> _project_pool_state`, under the run 2117 builder's grant; `ccd/ccd`'s hunks are under the same grant.
+- **`unreadable-project-field-holds-a-set-session`** (review 2154 F2, the coordinator's ruling). On `_swap_target`,
+  `_auto_swap_check`, `cmd_swap` and `cmd_prefer` the unreadable-project-field guard runs before the side is read, so a
+  session with a readable set whose `$REG/<id>.project` cannot be read is held, stranded or refused, though the set alone
+  could decide. Kept: it matches `main` for every session and fails closed, and nothing is placed outside the set.
+  `cmd_start`'s existing-row path lets the set win, as before.
+- **`projection-sentence-says-the-project-tag`** (review 2154 F10). Plan Task 5's sentence ends "not the project's tag";
+  `_pool_undecidable_cause` says "not the project tag", and nine characterization rows pin it. Accepted as it is.
+
+## Fix round 1 (review 2154)
+
+- **F1.** `ccd-pool-a3` now drives a pay-per-use lane with no pool under `pool-b+untagged`, where `_pool_ok` answers rc 0
+  with the account side `untagged` and only the `named` conjunct keeps the lane out (red without it, in the table above),
+  and a `set-unreadable` and a `set-malformed` session admit no such lane. The case it replaces planted the lane in
+  `pool-a` and stopped at `_pool_ok`'s mismatch.
+- **F5.** Two `payPerUse` rows: the project field absent, and unreadable with no `$POOLS_DIR`; both green on `main`.
+- **F6.** (a) `cmd_start --cross-pool` on a new row with a set writes `set:pool-b`; (b) an existing row whose set reads but
+  whose projection is stale warns with the projection sentence and "the session pool set decided"; (c) `_strand_mark` with
+  no cause prints `[pool=set-unreadable]`.
+- **F7.** The rescue map's `4|7|8)` comment and `_default_pool`'s header name the side, not only the project's tag.
+- **F8.** The `set` sentence says "could not be read or parsed", and the tick case drives a malformed set too.
+- **F9.** `ccd-pool-a3.test.ts` landed in `cd2d25071`, the projection commit, not with Task 4's code in `10ba4ddb4`, so the
+  "24 failed against main" figure rests on this note's measurement. `a17fb5679` also changed the characterization file's
+  header comment and turned `USERS_OF` from a record into a function, mapping unchanged. Step 2's cases that the plan
+  lists under existing suites went into the new suite too, beside `characterization-in-one-suite`.
+- **F11.** `_pool_side_is_set` and `_pool_side_token` carry `local LC_ALL=C IFS=' '`.
+- **F12.** Rollback: a `set:<spelling>` marker read by an older `ccd` (A2 or earlier) matches nothing, and its tick ends the
+  crossing ("project pool is now …"). That fails closed.
+- **F13** (the swap route's early refusal in `server/src/server.ts` reads the project's tag only) is carried to the
+  designation piece by the coordinator.

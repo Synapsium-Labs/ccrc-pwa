@@ -295,6 +295,7 @@ const EXPECTED: Record<State, Partial<Record<User, string>>> = {
     swap: 'rc=0\nwrapper=claude-b',
     prefer: 'rc=0\nhome=claude-b',
     crossLog: '\nmarker=',
+    payPerUse: 'claude claude-a claude-b claude-d',
   },
   'project field unreadable, no pools dir': {
     swapTarget: 'claude-a|rc=0',
@@ -305,6 +306,7 @@ const EXPECTED: Record<State, Partial<Record<User, string>>> = {
     swap: 'rc=0\nwrapper=claude-b',
     prefer: 'rc=0\nhome=claude-b',
     crossLog: '\nmarker=',
+    payPerUse: 'claude claude-a claude-b claude-d',
   },
   '$REG unsearchable': {
     swapTarget: '|rc=3',
@@ -316,7 +318,7 @@ const EXPECTED: Record<State, Partial<Record<User, string>>> = {
 /** The users a state applies to: the field states need a row (no new-row start), and an unsearchable `$REG` lets only the
  *  readers that answer without writing to it be measured (a write or a field read there fails before the pool is asked). */
 const ALL = Object.keys(USERS) as User[];
-const FIELD_USERS = ALL.filter((u) => u !== 'startNew' && u !== 'startExisting' && u !== 'payPerUse');
+const FIELD_USERS = ALL.filter((u) => u !== 'startNew' && u !== 'startExisting');   // payPerUse added in review 2154 F5
 const USERS_OF = (s: State): readonly User[] => {
   if (s === '$REG unsearchable') return ['swapTarget', 'strandWhy', 'payPerUse'];
   if (s === 'project field absent' || s === 'project field unreadable, no pools dir') return FIELD_USERS;

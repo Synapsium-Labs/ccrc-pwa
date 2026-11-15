@@ -19457,8 +19457,10 @@ _default_pool() {   # id -> wrappers this session may auto-swap between.
   # A PAY-PER-USE LANE IS THE EXCEPTION (operator ruling 2026-11-07, D-8098).
   # Being enabled is not enough for a non-home-able lane whose provider bills
   # per use (`_is_pay_per_use`): every session it takes spends the key. It joins
-  # only when a pool names it — the session's project is tagged with a pool and
-  # the lane's own pool, as the projection measures it, is that same pool. A
+  # only when a pool names it — the session's side (its set when one stands on the
+  # route record, else its project's tag) serves the lane by the lane's own pool,
+  # as the projection measures it (`_pool_ok` rc 0 with the account side named):
+  # an untagged lane never joins, even under a set that admits `+untagged`. A
   # hand-set registry `pool` list names it too, because `_pool_for` then never
   # calls this function. A session already on such a lane is not evacuated:
   # nothing checks that `cur` is a pool member, the same asymmetry as above. A
@@ -19466,7 +19468,7 @@ _default_pool() {   # id -> wrappers this session may auto-swap between.
   # knowingly, so it stays in the unconditional half.
   #
   # `$1` is the session id every caller passes (`_pool_for`). Only that rule
-  # reads it, for the project's pool tag, and only when a pay-per-use lane is
+  # reads it, for the session's side (`_session_pool_side`), and only when a pay-per-use lane is
   # enabled; for every other lane the default pool is the same for every session.
   #
   # A SPACE-JOINED STRING, not an array, and `_swap_target` consumes it through
@@ -21718,7 +21720,7 @@ _auto_swap_check() {   # id — called each supervise tick. HOME-account affinit
       case "$strc" in
         2) uword=crosspool ;;   # the crossing record, asked about cur and about home
         3) uword=project ;;     # the row's own registry field, re-read at the inner seam
-        4|7|8) uword=$(_pool_undecided_word "$strc") ;;        # the pool rule against cur — the tag under `$POOLS_DIR`
+        4|7|8) uword=$(_pool_undecided_word "$strc") ;;        # the pool rule against cur, by side: 4 the project's tag, 7 the projection, 8 the session's set
         5) uword=classwindow ;;   # the class window — the sweep's share for fable, the seven-day figure otherwise — on the lanes that could take the session
         *) uword="rc$strc" ;;   # deliberately unreachable: the next code added upstream
       esac

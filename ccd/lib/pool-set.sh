@@ -104,10 +104,11 @@ _pool_set_mismatch_why() {   # account-id account-state spelling -> the rc-1 cla
 # ── THE USERS KEYED BY A SESSION (PR A3: Table 3.4d, the plan's Tasks 4 and 5) ───────────────────────────────────────
 # Every ccd user of the pool decision keyed by a session reads `_session_pool_side`, and these helpers give a side word
 # its token, its crossing field, its undecided word and its sentences. None decides membership: that is `_pool_ok`'s.
-_pool_side_is_set() { [[ "$1" == "set "* || "$1" == set-unreadable || "$1" == set-malformed ]]; }   # side word -> 0 iff a set side
+_pool_side_is_set() { local LC_ALL=C IFS=' '; [[ "$1" == "set "* || "$1" == set-unreadable || "$1" == set-malformed ]]; }   # side word -> 0 iff a set side
 _pool_set_sid() { _pool_side_is_set "$1" && printf '%s' "$2"; return 0; }   # side id -> the id iff a set side (`_pool_undecidable_why`'s fifth)
 _pool_side_token() {   # side word -> one log token, which is also the crossing marker's pool field: `<n>`, `set:<spelling>`, else the word
   # A set side never prints as a pool name ("set pool-b"), and a named side prints exactly what it printed before A3.
+  local LC_ALL=C IFS=' '
   case "$1" in "named "*) printf '%s\n' "${1#named }" ;; "set "*) printf 'set:%s\n' "${1#set }" ;; *) printf '%s\n' "$1" ;; esac
 }
 _pool_cross_match() {   # side-word marker-field -> 0 iff a crossing marker's pool field names this decided side
@@ -130,7 +131,7 @@ _pool_undecidable_cause() {   # word id -> `_undecidable_cause`'s sentence for `
   # `projection` is every session's, not only a set session's (slug `projection-word-fleet-wide`): an undecidable account
   # side names the projection and its remedy, never the project's tag. A set session's says the set decided (A2 F1).
   if [[ "$1" == set ]]; then
-    printf '%s' "the account set on the route record could not be read ($REG/$2.poolset), so no destination could be computed; the server writes it again at its next sweep, or the operator saves the set again"
+    printf '%s' "the account set on the route record could not be read or parsed ($REG/$2.poolset), so no destination could be computed; the server writes it again at its next sweep, or the operator saves the set again"
     return 0
   fi
   local tail="not the project tag"; _pool_side_is_set "$(_session_pool_side "$2")" && tail="the session pool set decided, and the project tag is not involved"

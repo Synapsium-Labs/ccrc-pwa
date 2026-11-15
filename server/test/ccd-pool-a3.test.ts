@@ -197,6 +197,24 @@ describe('Task 4: cmd_start — a new row outside the set is refused; an existin
     expect(r.stderr).toContain(`ccd: warn: ${NEW} lives on claude-a and its pool could not be decided: the pool set for session ${NEW} is unreadable: ${SET_PATH(NEW)}`);
   });
 
+  it('a NEW row started --cross-pool outside its (hand-planted) set writes the set: marker (review 2154 F6a)', () => {
+    fs.mkdirSync(path.join(h.home, 'projects', PROJECT), { recursive: true });
+    plantSet('pool-b', NEW);
+    const r = run(`${START_STUBS} cmd_start --cross-pool claude-a ${PROJECT}`);
+    expect(r.code, r.stderr).toBe(0);
+    expect(h.reg(NEW, 'crosspool')).toMatch(/^\d{10} set:pool-b claude-a$/);
+  });
+
+  it('an EXISTING row whose set reads but whose projection is stale warns, naming the projection (review 2154 F6b)', () => {
+    seedRow('claude-b', `claude-b-${PROJECT}`); plantSet('pool-b', `claude-b-${PROJECT}`);
+    plantPoolEpoch(h.home, POOL_BY_ID, { lease: 1 });
+    const r = run(`${START_STUBS} cmd_start claude-b ${PROJECT}`);
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stderr.trim()).toBe(`ccd: warn: claude-b-${PROJECT} lives on claude-b and its pool could not be decided: the pool projection`
+      + ` for claude-b is stale: ${reg('pool-epoch')} is past its lease — the remedy is the control-plane link (the pool sync),`
+      + ' not this file; the session pool set decided; the project tag is not involved — nothing moves until it can');
+  });
+
   it('an EXISTING row in its set says nothing', () => {
     seedRow('claude-b', `claude-b-${PROJECT}`); plantSet('pool-b', `claude-b-${PROJECT}`);
     const r = run(`${START_STUBS} cmd_start claude-b ${PROJECT}`);
@@ -234,13 +252,14 @@ describe('Task 4: the tick — relocation into the set, and the home re-seed sta
 });
 
 describe('Task 4: the pay-per-use lane and the strand read the set', () => {
-  const plantLane = (pool: string): void => {
+  /** The pay-per-use lane `lane-d`, in `pool`, or in no pool at all when `pool` is undefined. */
+  const plantLane = (pool: string | undefined): void => {
     seedAccountsSh(h.home, {
       ...POOLED_TEST_ROSTER,
       accounts: [...POOLED_TEST_ROSTER.accounts, {
         id: 'lane-d', label: 'lane·d', configDirSuffix: '.claude-lane-d',
         exec: { kind: 'generated', provider: 'openrouter', secretsFile: '.cc-secrets/lane-d-openrouter.env' },
-        homeAble: false, hue: 'amber', telemetry: 'openrouter', pool,
+        homeAble: false, hue: 'amber', telemetry: 'openrouter', ...(pool === undefined ? {} : { pool }),
       }],
     });
     plantPoolEpoch(h.home, { ...POOL_BY_ID, 'lane-d': pool });
@@ -254,9 +273,20 @@ describe('Task 4: the pay-per-use lane and the strand read the set', () => {
     plantLane('pool-a'); seedRow('claude-b'); plantSet('pool-b');
     expect(h.sh(`_default_pool ${ID}`)).not.toContain('lane-d');
   });
-  it('one an untagged-admitting set could serve is still not named by a pool, so it stays out', () => {
-    plantLane('pool-a'); seedRow('claude-b'); plantSet('+untagged');
+  it('an untagged lane that a +untagged set serves is still named by no pool, so it stays out (review 2154 F1)', () => {
+    // `_pool_ok` answers rc 0 here with the account side `untagged`: only the `named` conjunct keeps the billed lane out.
+    plantLane(undefined); seedRow('claude-b'); plantSet('pool-b+untagged');
+    expect(h.sh(`_pool_ok lane-d "$(_session_pool_side ${ID})"; echo "rc=$? $POOL_OK_SIDE $POOL_OK_STATE"`)).toBe('rc=0 account untagged');
     expect(h.sh(`_default_pool ${ID}`)).not.toContain('lane-d');
+  });
+  it('a set that cannot be decided admits no pay-per-use lane, even one in a pool it would name (review 2154 F1)', () => {
+    plantLane('pool-b'); seedRow('claude-b');
+    for (const [label, plant] of [['unreadable', () => unreadableSet()], ['malformed', () => plantSet('poola,pool-b')]] as const) {
+      plant();
+      expect(h.sh(`_session_pool_side ${ID}`), label).toBe(`set-${label}`);
+      expect(h.sh(`_default_pool ${ID}`), label).not.toContain('lane-d');
+      fs.rmSync(setOf(ID), { recursive: true, force: true });
+    }
   });
 
   it('the strand names the set by its token, set:pool-b', () => {
@@ -287,12 +317,25 @@ describe('Task 4 and 5: a set that cannot be read decides nothing, on the set si
     seedRow('claude'); unreadableSet();
     expect(h.sh(`_strand_why ${ID} ${PROJECT}`)).toBe(`set:unreadable ${SET_PATH()}`);
   });
-  it('the tick stamps set and strands with the set sentence', () => {
+  it('the tick stamps set and strands with the set sentence, for an unreadable and a malformed set alike', () => {
+    seedRow('claude'); plantNotify();
+    for (const w of ['claude', 'claude-a', 'claude-b', 'claude-d']) writeLimits(w, 99, 99);
+    for (const [label, plant] of [['unreadable', () => unreadableSet()], ['malformed', () => plantSet('poola,pool-b')]] as const) {
+      for (const f of ['tickstuck', 'stranded', 'strandnotify']) fs.rmSync(reg(`${ID}.${f}`), { force: true });
+      plant();
+      tick(BLOCKED);
+      expect(String(h.reg(ID, 'tickstuck')).split(' ')[1], label).toBe('set');
+      expect(String(h.reg(ID, 'stranded')), label)
+        .toContain(`the account set on the route record could not be read or parsed (${SET_PATH()})`);
+      fs.rmSync(setOf(ID), { recursive: true, force: true });
+    }
+  });
+  it('_strand_mark with no cause names an undecidable set by its word, never as untagged (review 2154 F6c)', () => {
     seedRow('claude'); unreadableSet(); plantNotify();
     for (const w of ['claude', 'claude-a', 'claude-b', 'claude-d']) writeLimits(w, 99, 99);
-    tick(BLOCKED);
-    expect(String(h.reg(ID, 'tickstuck')).split(' ')[1]).toBe('set');
-    expect(String(h.reg(ID, 'stranded'))).toContain(`the account set on the route record could not be read (${SET_PATH()})`);
+    h.sh(`_strand_mark ${ID} claude ${PROJECT}`);
+    expect(swapLog()).toContain(`stranded ${ID}: claude (blocked) -> nowhere [pool=set-unreadable]`);
+    expect(swapLog()).not.toContain('[pool=-]');
   });
   it('the rescue map names the set side from rc 8, and the projection from rc 7', () => {
     seedRow('claude'); plantNotify();
