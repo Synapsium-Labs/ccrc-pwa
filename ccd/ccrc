@@ -20220,7 +20220,9 @@ _inst_skills() {
     CCRC_SKILL_SRC="$HOME/.cc-sessions/$name" bash "$HOME/.cc-sessions/install-$name.sh" \
       || _ccrc_die "install-$name.sh refused — read its lines above; it converges one account's skill directory at a time and rolls back a swap it could not finish, so no home was left without the skill it already had"
   done
-  echo "install: skills: ccrc-coordinator, ccrc-worker, ccrc-reviewer, ccrc-history and ccrc-linear in each account's skills directory"
+  # The Overlord's skill is staged once, outside every home: its launch loads it as a project skill (Overlord W1).
+  CCRC_SKILL_SRC="$tree/ccd/overlord-skill" bash "$tree/ccd/install-overlord-skill.sh" || _ccrc_die "install-overlord-skill.sh refused — read its lines above; it swaps the staged copy whole or keeps the one it had"
+  echo "install: skills: ccrc-coordinator, ccrc-worker, ccrc-reviewer, ccrc-history and ccrc-linear in each account's skills directory, and ccrc-overlord staged at ~/.cc-sessions/overlord-skill"
 }
 
 # The graphify skill is NOT one of _inst_skills' names on purpose (spec §B):
@@ -24840,6 +24842,7 @@ _upd_backup_set() {
   _upd_backup_copy "$HOME/.local/libexec/ccrc/lib/disk-retention.sh" ccd-lib-disk-retention.sh   # the body's library (D-6913): restored before the body that pins it
   _upd_backup_copy "$HOME/.local/libexec/ccrc/lib/train-proof.sh" ccd-lib-train-proof.sh   # its second library (D-7463): restored before the body that pins it
   _upd_backup_copy "$HOME/.local/libexec/ccrc/lib/delegation-lease.sh" ccd-lib-delegation-lease.sh   # its third library (wave 5): restored before the body that pins it
+  _upd_backup_copy "$HOME/.local/libexec/ccrc/lib/pool-set.sh" ccd-lib-pool-set.sh   # its fourth library (the Overlord's pool set): restored before the body that pins it
   _upd_backup_copy "$HOME/.local/libexec/ccrc/ccd" ccd-body
   _upd_backup_copy "$HOME/.local/bin/ccd"          ccd
   _upd_backup_copy "$HOME/.cc-sessions/session-hook.sh" session-hook.sh
@@ -29288,8 +29291,8 @@ _uninst_cc_sessions() {
     done
   fi
   rm -rf -- "$reg/coordinator-skill" "$reg/worker-skill" "$reg/reviewer-skill" "$reg/history-skill" "$reg/linear-skill" \
-    || _ccrc_die "removing the skill trees under $reg failed"
-  echo "uninstall: ~/.cc-sessions: ccrc's own artifacts removed (hooks, notify, the children's and accounts' deny files, the five skill trees, the conflict radar's opt-in mirrors); the registry rows and operator switches stay"
+    "$reg/overlord-skill" || _ccrc_die "removing the skill trees under $reg failed"
+  echo "uninstall: ~/.cc-sessions: ccrc's own artifacts removed (hooks, notify, the children's and accounts' deny files, the six skill trees, the conflict radar's opt-in mirrors); the registry rows and operator switches stay"
 }
 
 # ── _uninst_graphify_skills — the per-home graphify skill directories ─────
@@ -29491,12 +29494,12 @@ _uninst_tree_bins() {
   # and its directory only if that leaves it empty — anything else an operator
   # keeps under ~/.local/libexec is not ccrc's to remove.
   rm -f -- "$HOME/.local/libexec/ccrc/ccd" "$HOME/.local/libexec/ccrc/lib/disk-retention.sh" "$HOME/.local/libexec/ccrc/lib/train-proof.sh" "$HOME/.local/libexec/ccrc/lib/delegation-lease.sh" \
-    "$HOME/.local/libexec/ccrc/shared/redact.mjs" "$HOME/.local/libexec/ccrc/shared/redact-cli.mjs" \
+    "$HOME/.local/libexec/ccrc/lib/pool-set.sh" "$HOME/.local/libexec/ccrc/shared/redact.mjs" "$HOME/.local/libexec/ccrc/shared/redact-cli.mjs" \
     || _ccrc_die "removing ccd's body and library from \$HOME/.local/libexec/ccrc failed"
   rmdir -- "$HOME/.local/libexec/ccrc/shared" 2>/dev/null || :
   rmdir -- "$HOME/.local/libexec/ccrc/lib" 2>/dev/null || :
   rmdir -- "$HOME/.local/libexec/ccrc" 2>/dev/null || :
-  echo "uninstall: tree: ~/ccrc removed; ccd, ccd-cap-scopes, ccd-graph-sweep, ccd-account-health, ccd-telemetry-keepalive, ccd-account-auth, ccd-usage-sweep, ccd-usage-sweep.py, ccd-tmp-sweep, ccd-scope-sweep, ccd-land-probe, ccd-testbox-times, ccd-carry-dedupe-sweep, ccd-tool-adj, ccd-history-sweep, ccd-pool-sync, ccd-update-sync, ccgpt-auth.py, ccgpt-proxy.py, ccgpt-usage.py, ccgpt-runtime, ccrc-codex, ccrc-api and the ccrc launcher removed from \$HOME/.local/bin, and ccd's body from \$HOME/.local/libexec/ccrc; its libraries and redactor (lib/disk-retention.sh, lib/train-proof.sh, lib/delegation-lease.sh, shared/redact.mjs, shared/redact-cli.mjs) with it; the completed-install record and the node's update state (~/.ccrc/previous, install-step, update.json, update.lock, update-intent) removed$vsaid$msaid$nsaid"
+  echo "uninstall: tree: ~/ccrc removed; ccd, ccd-cap-scopes, ccd-graph-sweep, ccd-account-health, ccd-telemetry-keepalive, ccd-account-auth, ccd-usage-sweep, ccd-usage-sweep.py, ccd-tmp-sweep, ccd-scope-sweep, ccd-land-probe, ccd-testbox-times, ccd-carry-dedupe-sweep, ccd-tool-adj, ccd-history-sweep, ccd-pool-sync, ccd-update-sync, ccgpt-auth.py, ccgpt-proxy.py, ccgpt-usage.py, ccgpt-runtime, ccrc-codex, ccrc-api and the ccrc launcher removed from \$HOME/.local/bin, and ccd's body from \$HOME/.local/libexec/ccrc; its libraries and redactor (lib/disk-retention.sh, lib/train-proof.sh, lib/delegation-lease.sh, lib/pool-set.sh, shared/redact.mjs, shared/redact-cli.mjs) with it; the completed-install record and the node's update state (~/.ccrc/previous, install-step, update.json, update.lock, update-intent) removed$vsaid$msaid$nsaid"
   echo "uninstall: tree: the box token's node records (~/.ccrc/box-token-generation, token-sync.json) removed; its value and state files stay with ~/.ccrc/mail.token, and ~/.cc-secrets/ccrc-mail.token is not touched"
   # ── the one entry that is not ccrc's own binary ─────────────────────────
   # `_inst_graphify_engine` converges `$HOME/.local/bin/graphify` onto the

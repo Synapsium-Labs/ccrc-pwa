@@ -547,7 +547,7 @@ that copy. The hook installer points each rostered home's `statusLine` at that s
 none is set; a home with a status line of its own keeps it, and reports no `~/.cc-limits` telemetry
 unless that line runs ccrc's script. Beyond those two files, every rostered home gets ccrc's managed
 hook entries in its `settings.json` and five skills (`ccrc-coordinator`, `ccrc-worker`, `ccrc-reviewer`, `ccrc-history`
-and graphify's) — on a fresh box that home is your own `~/.claude`, so the skills are listed in every
+and graphify's; the Overlord's `ccrc-overlord` is staged once on the box instead, in no home) — on a fresh box that home is your own `~/.claude`, so the skills are listed in every
 Claude Code session you start there, while the hook entries act only inside a `ccd` session's
 `cc-<id>` tmux session and exit at once anywhere else.
 
@@ -4197,7 +4197,7 @@ honest boundary — this section covers only what that one does not: the install
 lane and the skills' client, the PWA surfaces, the disaster-recovery drill, the
 Build 4 dogfood runbook, cross-repo programmes, and workspace holds.
 
-**All five skills ship to every rostered account's config dir.** The
+**All five skills ship to every rostered account's config dir, and `ccrc-overlord` is staged once per box (below).** The
 coordinator's protocol is now a trio: its worker counterpart is the
 `ccrc-worker` skill (`ccd/worker-skill/SKILL.md`, twenty clauses pinned by
 `server/test/worker-skill.test.ts`), and its reviewer counterpart is the
@@ -4233,16 +4233,21 @@ and its MIT notice, `LICENSE.lossless-claw`, is copied into every home beside it
 A fifth, `ccrc-linear` (`ccd/linear-skill/`, installed by `ccd/install-linear-skill.sh`, #1444), rides the same lanes
 into the same homes and teaches every session the `ccrc-api linear` verbs (below); like the history skill it points
 into no other skill's tree, and doctor's `skills` check and `ccrc doctor --fix` cover it too.
+The Overlord's skill, `ccrc-overlord` (`ccd/overlord-skill/SKILL.md`, twenty-two clauses pinned by
+`server/test/overlord-skill.test.ts`, with four references), goes in no home: `ccd/install-overlord-skill.sh`, its one
+writer, stages it once at `~/.cc-sessions/overlord-skill` on every box `_inst_skills` serves, and deploy's agent arm,
+doctor's `skills` check and `ccrc doctor --fix` stage and measure that copy. It acts only under `overlord-v1`, only
+the `overlord` launch profile loads it, and a subagent cannot load it (below).
 
-**None of the three role skills (`ccrc-coordinator`, `ccrc-worker` and `ccrc-reviewer`; not `ccrc-history`) is a subagent's to load, and the hook now enforces it (D-4934).** Each skill's
+**None of the four role skills (`ccrc-coordinator`, `ccrc-worker`, `ccrc-reviewer` and `ccrc-overlord`; not `ccrc-history`) is a subagent's to load, and the hook now enforces it (D-4934).** Each skill's
 description says "Never use it inside a subagent": a session started by another session's Agent tool or a
 workflow `agent()` call returns its report to its parent, and loading one of these makes it act as the
 session instead (ack mail, take claims, send wave-done or review-done, open or dispatch runs, all under
 the session's identity). Wording alone did not hold, since a subagent on a Codex lane loaded the reviewer
 skill as its first action after that wording shipped. So `ccd/session-hook.sh`'s `PreToolUse` arm denies the
-`Skill` call itself when its payload carries a non-empty `agent_id` and names one of the three, on every
+`Skill` call itself when its payload carries a non-empty `agent_id` and names one of the four, on every
 lane; the deny is listed under "What replaced it" (R1's stdout paragraph) and pinned by
-`server/test/session-hook-role-skill-deny.test.ts`, which also pins the three names against the skills'
+`server/test/session-hook-role-skill-deny.test.ts`, which also pins the four names against the skills'
 `name:` frontmatter. Every other skill stays open to a subagent, and the main thread is never asked.
 
 **The skills' one client is `~/.local/bin/ccrc-api`** (`ccd/ccrc-api`), a closed
@@ -6269,10 +6274,10 @@ is that the read side lives only where ccrc owns the file it is written in, and 
   coordinator merges, workers never do; a speed bump on that one verb, not a wall — the bypass deny
   (landing-order wave 2b, "The native merge queue" above) answers every session's `--admin` merge and `gh api`
   merge in the same reason slot, with the worker deny's reason first), the role-skill deny on a `Skill` call from a subagent (a payload with a non-empty
-  `agent_id`) that names `ccrc-worker`, `ccrc-reviewer` or `ccrc-coordinator`, exactly or behind one
+  `agent_id`) that names `ccrc-worker`, `ccrc-reviewer`, `ccrc-coordinator` or `ccrc-overlord`, exactly or behind one
   `<namespace>:` prefix, with the name read as Claude Code reads it (trimmed of JavaScript's `trim` set,
   then ONE leading `/` stripped, so ` ccrc-worker` and `/ccrc-worker` are the worker skill) (D-4934: those
-  three skills make whoever loads them act as the session, and a
+  four skills make whoever loads them act as the session, and a
   subagent cannot be the session; any other skill, and the main thread, pass; a speed bump, since the
   `SKILL.md` files stay readable), the Read nudge's `additionalContext` on a nudged call (R6,
   below), or the landing advisory's on a sync of main — a deny supersedes any advice built for the same
@@ -7774,7 +7779,8 @@ you need to reason about one.*
   disk-retention verbs; installed first, at `~/.local/libexec/ccrc/lib/`, #1279) and
   `lib/train-proof.sh` (the train proof of a PR a merge train landed, beside it, D-7463) and
   `lib/delegation-lease.sh` (the delegation broker's lease carrier, `ws-lease-mark` and the read-only
-  `ws-lease-audit`, beside them); `ccrc`, the box
+  `ws-lease-audit`, beside them) and `lib/pool-set.sh` (a session's pool set, the Overlord's W1: the
+  route fields `poolset` and `acctorder`); `ccrc`, the box
   lifecycle CLI, with the files it sources or execs (`ccrc-doctor-checks`,
   `ccrc-wrapper-shape`, `ccrc-adopt`); `session-hook.sh` (the Claude Code hook that reports each
   session's state), `install-session-hooks.sh` (the idempotent installer that
@@ -8539,6 +8545,7 @@ restore() { cp -a "$1" "$2.restore" && mv -f "$2.restore" "$2"; }
 [ ! -f ~/ccrc-backups/<ts>/ccd-lib-disk-retention.sh ] || restore ~/ccrc-backups/<ts>/ccd-lib-disk-retention.sh ~/.local/libexec/ccrc/lib/disk-retention.sh   # the body's library, when the backup has one
 [ ! -f ~/ccrc-backups/<ts>/ccd-lib-train-proof.sh ] || restore ~/ccrc-backups/<ts>/ccd-lib-train-proof.sh ~/.local/libexec/ccrc/lib/train-proof.sh   # its second library, when the backup has one
 [ ! -f ~/ccrc-backups/<ts>/ccd-lib-delegation-lease.sh ] || restore ~/ccrc-backups/<ts>/ccd-lib-delegation-lease.sh ~/.local/libexec/ccrc/lib/delegation-lease.sh   # its third library, when the backup has one
+[ ! -f ~/ccrc-backups/<ts>/ccd-lib-pool-set.sh ] || restore ~/ccrc-backups/<ts>/ccd-lib-pool-set.sh ~/.local/libexec/ccrc/lib/pool-set.sh   # its fourth library, when the backup has one
 restore ~/ccrc-backups/<ts>/ccd-body ~/.local/libexec/ccrc/ccd
 restore ~/ccrc-backups/<ts>/ccd ~/.local/bin/ccd
 restore ~/ccrc-backups/<ts>/notify.sh ~/.cc-sessions/notify.sh
@@ -8912,9 +8919,10 @@ These conventions carry more weight here than style:
   the stamp covers the pin. Editing the library needs no restamp. The library must end in exactly
   one newline and carry no NUL byte (the body hashes it as bash reads it), or the install refuses.
   `ccd/lib/train-proof.sh` (the train proof, D-7463) is the second library and
-  `ccd/lib/delegation-lease.sh` (the delegation lease carrier, wave 5) the third; each is treated the
-  same way, their pins `__CCD_LIB_TRAIN_SHA256=stamp-at-install` and `__CCD_LIB_LEASE_SHA256=stamp-at-install`;
-  the body reads and checks all three before it evaluates any.
+  `ccd/lib/delegation-lease.sh` (the delegation lease carrier, wave 5) the third, and `ccd/lib/pool-set.sh`
+  (a session's pool set, the Overlord's W1) the fourth; each is treated the same way, their pins
+  `__CCD_LIB_TRAIN_SHA256=stamp-at-install`, `__CCD_LIB_LEASE_SHA256=stamp-at-install` and
+  `__CCD_LIB_POOLSET_SHA256=stamp-at-install`; the body reads and checks all four before it evaluates any.
   `ccd/session-hook.sh` carries a generated helpers region (`shared/hook-helpers.mjs`);
   after editing `ccd/ccd`'s epoch helper, or on a conflict in the region's stamp line, run
   `bash ccd/ccrc restamp ccd/session-hook.sh`; `hook-helpers-generated.test.ts` reds when the

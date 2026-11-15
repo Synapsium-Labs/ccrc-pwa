@@ -944,7 +944,8 @@ const shippedOf = (root: string): string[] => [
   ...['ccd/ccd', 'ccd/ccrc', 'ccd/ccrc-api', 'ccd/ccrc-doctor-checks', 'ccd/session-hook.sh', 'ccd/install-session-hooks.sh'],
   ...filesUnder('ccd/lib', undefined, root),
   ...filesUnder('ccd/coordinator-skill', undefined, root), ...filesUnder('ccd/worker-skill', undefined, root),
-  ...filesUnder('ccd/reviewer-skill', undefined, root), ...filesUnder('agent/src', undefined, root), ...filesUnder('server/src', undefined, root),
+  ...filesUnder('ccd/reviewer-skill', undefined, root), ...filesUnder('ccd/overlord-skill', undefined, root),
+  ...filesUnder('agent/src', undefined, root), ...filesUnder('server/src', undefined, root),
   ...filesUnder('shared', undefined, root), ...filesUnder('deploy', /\.(mjs|js|sh|json)$/, root),
 ].filter((f) => existsSync(path.join(root, f)));
 const SHIPPED = shippedOf(REPO_ROOT);
@@ -1670,7 +1671,7 @@ describe('8. the closed scope census', () => {
   });
 
   it('no `ws-*lease*` skill text: the coordinator, worker and reviewer skills name no lease verb', () => {
-    const skills = ['ccd/coordinator-skill', 'ccd/worker-skill', 'ccd/reviewer-skill'].flatMap((d) => filesUnder(d, /\.md$/));
+    const skills = ['ccd/coordinator-skill', 'ccd/worker-skill', 'ccd/reviewer-skill', 'ccd/overlord-skill'].flatMap((d) => filesUnder(d, /\.md$/));
     expect(skills.length).toBeGreaterThan(3);
     // `ws-release` is a verb the skills legitimately name; `(?<!re)lease` keeps it legal and still catches `ws-adopt-lease`
     expect(skills.filter((f) => /\bws-[\w-]*?(?<!re)lease|\blease-(?:mark|audit|clean)\b|ws-add\s+--base/i.test(read(f)))).toEqual([]);

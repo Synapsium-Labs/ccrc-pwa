@@ -6,12 +6,17 @@
 import type { DocsPageLocation } from '../../../shared/docs';
 
 /** Which header a page draws. */
-export type HeadLayout = 'full' | 'compact';
+export type HeadLayout = 'full' | 'compact' | 'one-bar';
 
-/** The header for `page` (phone-header refinement (a)): the compact row on a leaf page at the compact width, else the full header. A
- *  directory (its URL ends in `/`), a section, a project and the index keep the full header at every width. */
-export function headLayoutFor(compactWidth: boolean, page: DocsPageLocation): HeadLayout {
-  return compactWidth && page.kind === 'path' && !page.dirSlash ? 'compact' : 'full';
+/** The header for `page` (phone-header refinement (a); the library 1.1 take-up plan, refinement (f)): the one bar on a
+ *  leaf whose reader frame takes commands (ready, and mounted on ccrc's bar, which only a mount at the compact width
+ *  is; it stays at any later width, so the reader's tools stay reachable); else the compact row on a leaf page at the
+ *  compact width; else the full header. A directory (its URL ends in `/`), a section, a project and the index keep the
+ *  full header at every width. */
+export function headLayoutFor(compactWidth: boolean, page: DocsPageLocation, takesCommands: boolean): HeadLayout {
+  const leaf = page.kind === 'path' && !page.dirSlash;
+  if (leaf && takesCommands) return 'one-bar';
+  return compactWidth && leaf ? 'compact' : 'full';
 }
 
 /** How the full header is drawn (desk-nav Part B, D-8101; fix round 1, F2(b)): at 600 CSS px and wider, the desk head's

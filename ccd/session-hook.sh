@@ -5148,17 +5148,21 @@ if [[ "$event" == PreToolUse && "${tool:-}" == Bash \
 fi
 
 # ── THE ROLE-SKILL DENY (D-4934) ─────────────────────────────────────────
-# Three skills make whoever loads them act AS the session: `ccrc-worker`,
+# Four skills make whoever loads them act AS the session: `ccrc-worker`,
 # `ccrc-reviewer` and `ccrc-coordinator` ack mail, take claims, send wave-done
-# or review-done, and open or dispatch runs, all under the session's identity.
+# or review-done, and open or dispatch runs, all under the session's identity,
+# and `ccrc-overlord` speaks for the operator's designated Overlord.
 # A subagent (a session started by another session's Agent tool or a workflow
 # agent() call) cannot be the session, and one that loaded the worker skill once
-# sent a false wave-done as its worker. The three descriptions already say
+# sent a false wave-done as its worker. The descriptions already say
 # "Never use it inside a subagent", and a subagent on a Codex lane loaded the
 # reviewer skill as its first action after that wording shipped, so wording is
 # not enough: this arm refuses the call, on every lane. It is the operator's
 # ruling of 2026-10-13 ("guard against those 3"), and it is a speed bump in the
 # merge deny's sense: a subagent that wants the text can still read the file.
+# The fourth name, `ccrc-overlord`, is spec 2026-11-09 §3.6's "The role-skill
+# deny", which the operator approved with that spec (Overlord W1): no subagent
+# anywhere may load the Overlord's skill.
 # NOTHING ELSE IS LIMITED. Subagents may use skills by design, so any other
 # skill passes, and so does the main thread: `paid` (the payload parse's flag,
 # a non-empty `agent_id`) is what tells the two apart, and an empty string is no
@@ -5177,8 +5181,8 @@ fi
 # since this file must work with a jq built without Oniguruma. `//ccrc-worker`
 # strips one slash and so stays a name no skill has, and `a:b:ccrc-worker` has
 # two prefixes and the match strips one.
-# THE THREE NAMES ARE WRITTEN HERE, ONCE. `session-hook-role-skill-deny.test.ts`
-# pins them against the `name:` frontmatter of the three SKILL.md files, so a
+# THE FOUR NAMES ARE WRITTEN HERE, ONCE. `session-hook-role-skill-deny.test.ts`
+# pins them against the `name:` frontmatter of the four SKILL.md files, so a
 # rename turns that suite red rather than silently disarming this deny.
 # ORDER IS BUDGET, as in the merge deny above: the event, the tool name and
 # `paid` are already in memory, so a non-Skill event, and the main thread's
@@ -5192,7 +5196,7 @@ fi
 # nothing, and a `_hook_deny_json` that cannot build the envelope leaves
 # `pre_json` as it was. This arm prints nothing itself: the one print site at
 # the end of the file emits the envelope, after the hookstate rename.
-ROLE_SKILLS="ccrc-worker ccrc-reviewer ccrc-coordinator"
+ROLE_SKILLS="ccrc-worker ccrc-reviewer ccrc-coordinator ccrc-overlord"
 if [[ "$event" == PreToolUse && "${tool:-}" == Skill && -n "$paid" \
       && "$pre_json" != *'"permissionDecision":"deny"'* ]]; then
   rsk=$(jq -r '

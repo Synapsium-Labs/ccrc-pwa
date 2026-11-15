@@ -177,11 +177,11 @@ describe("the row's stage probe (review 1704 F7, F9)", () => {
 });
 
 describe('which head a desk page draws (desk-nav Part B)', () => {
-  it('a leaf draws the compact row under 600 px and the full head at 600 and wider; headLayoutFor keeps its two arguments', () => {
+  it('a leaf without reader commands keeps its width-based head; adoption widens headLayoutFor to three arguments', () => {
     const leaf = pageAt('/docs/demo/specs/a.md');
-    expect(headLayoutFor(true, leaf)).toBe('compact');
-    expect(headLayoutFor(false, leaf)).toBe('full');
-    expect(headLayoutFor.length).toBe(2);
+    expect(headLayoutFor(true, leaf, false)).toBe('compact');
+    expect(headLayoutFor(false, leaf, false)).toBe('full');
+    expect(headLayoutFor.length).toBe(3);
   });
 
   it('at 412 the compact head is drawn, unchanged: no full row', async () => {

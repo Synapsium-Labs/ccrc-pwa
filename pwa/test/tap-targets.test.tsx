@@ -18,7 +18,7 @@
 import { describe, it, expect, afterEach, vi, beforeEach, onTestFinished } from 'vitest';
 import type { CoordCapsView } from '../../shared/api';
 import { fleetSession } from './fleetFixture';
-import { act, cleanup, render, screen, fireEvent } from '@testing-library/react';
+import { act, cleanup, render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import type { CoordStatus, FleetSession, MailSummary, NotifyEvent, PrState, RunSummary, WsAudit } from '../../shared/api';
@@ -45,7 +45,9 @@ import { DocsScreen } from '../src/screens/DocsScreen';
 import { DOCS_COMPACT_QUERY } from '../src/docs/DocsHead';
 import { DocsFailureView } from '../src/docs/DocsFailureView';
 import { DOC_MARKDOWN_ACTION } from '../src/docs/DocMarkdown';
-import { DOC_IMAGE_TEXT, DOCS_BANNER_TEXT, DOCS_HEAD_TEXT, DOCS_VIEW_TEXT, SHARE_SHEET_TEXT } from '../src/docs/docsText';
+import { DOC_IMAGE_TEXT, DOCS_BANNER_TEXT, DOCS_HEAD_TEXT, DOCS_TOOL_TEXT, DOCS_VIEW_TEXT, SHARE_SHEET_TEXT } from '../src/docs/docsText';
+import type { ReaderDeps } from '../src/docs/ReaderFrame';
+import type { ReaderMount, ReaderMountInput } from '../src/docs/reader/bridge';
 import { SessionActionsSheet } from '../src/fleet/SessionActionsSheet';
 import { SessionHeaderHost } from './sessionHost';
 import { parseMarkdown } from '../src/lib/markdownParse';
@@ -351,6 +353,7 @@ describe('the two rules that were already scraped still reach a real element', (
       ruleIn(docsCss, '.docs-action'), ruleIn(docsCss, '.docs-filter'), ruleIn(docsCss, '.docs-nodocs > summary'),
       ruleIn(docsCss, '.btn-ghost.docs-banner-action'), ruleIn(docsCss, '.doc-img-link'),
       ruleIn(docsCss, '.docs-more'),
+      ruleIn(docsCss, '.docs-title'), ruleIn(docsCss, '.docs-tool'),
     ]) {
       // Comments off: a rule may legitimately MENTION 44px in prose
       // explaining the token, and that is not a hardcoded literal.
@@ -1275,6 +1278,50 @@ describe('the compact head: the rendered row carries .docs-back, .docs-action an
     expect(await screen.findByRole('button', { name: DOCS_HEAD_TEXT.export })).toHaveClass('docs-action', 'docs-export');
     expect(screen.getByRole('button', { name: DOCS_HEAD_TEXT.moreNever })).toHaveClass('docs-more');
     expect(screen.getByRole('button', { name: DOCS_HEAD_TEXT.back })).toHaveClass('docs-back');
+  });
+});
+
+// — the one bar (the library 1.1 take-up plan, refinements (j), (k)): the title and the reader's tools. The floor half. —
+describe('the one bar: .docs-title and .docs-tool are a whole tap (docs library 1.1 take-up)', () => {
+  it('are at least one tap tall, the tools one tap wide, off the shared token', () => {
+    expect(floorIn(docsCss, '.docs-title')).toBe('var(--tap-min)');
+    expect(floorIn(docsCss, '.docs-tool')).toBe('var(--tap-min)');
+    expect(declValue(ruleIn(docsCss, '.docs-tool'), 'min-width')).toBe('var(--tap-min)');
+  });
+});
+
+// — the render half of the describe above: a ready one bar carries the classes. —
+describe('the one bar: the rendered bar carries .docs-title and .docs-tool (docs library 1.1 take-up)', () => {
+  afterEach(() => {
+    history.replaceState(null, '', '/');
+  });
+
+  it('are the classes the rendered one bar carries', async () => {
+    vi.stubGlobal('matchMedia', (q: string) => ({
+      matches: q === DOCS_COMPACT_QUERY, media: q, onchange: null,
+      addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {}, dispatchEvent: () => false,
+    }));
+    const inputs: ReaderMountInput[] = [];
+    const reader = {
+      render: vi.fn(async () => ({
+        kind: 'rendered',
+        result: { outcome: 'rendered', html: '<p>x</p>', meta: { title: 'Doc title', frontList: null, headings: [], figures: 0, mermaidKinds: [] } },
+        mermaid: { fences: 0, largestBytes: 0, totalBytes: 0, largestChars: 0, totalChars: 0 },
+        images: [], imagesTruncated: false,
+      })),
+      mount: vi.fn(async (_el: HTMLElement, input: ReaderMountInput) => {
+        inputs.push(input);
+        return { destroy: vi.fn(), setPrefs: vi.fn(), command: vi.fn() } as unknown as ReaderMount;
+      }),
+      images: vi.fn(async () => ({ urls: {}, drafts: 0 })),
+    } as unknown as ReaderDeps;
+    const f = markdownLeaf('# A\n');
+    navigate('/docs/demo/specs/a.md');
+    render(<DocsScreen path={location.pathname} search={location.search} loaders={f.loaders} parser={docsParser} reader={reader} />);
+    await waitFor(() => expect(inputs.length).toBe(1));
+    act(() => inputs[0]!.onReady());
+    expect(document.querySelector('.docs-one-bar .docs-title')).not.toBeNull();
+    expect(screen.getByRole('button', { name: DOCS_TOOL_TEXT.jump })).toHaveClass('docs-tool');
   });
 });
 
