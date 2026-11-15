@@ -7,7 +7,9 @@
 // bar holds (desktop-polish PL10, D-7952; the Account door's name had changed to lead with its word, D-7897, before it went),
 // the programme box's title, which is now a door into its programme view, wrapped round the base's same title span (PL10, D26
 // amended), and the New project door on each fleet screen's runs line (add-project spec 2026-11-04 §2, as redrawn), which
-// the base predates; nothing else is removed or rewritten. The file renders the world ONCE: React's
+// the base predates, and the console's face straight after the fleet head's wordmark (the Overlord face plan, Task 8:
+// `FaceMark`, an `svg.chr.face-mark`, grouped with the wordmark in a `span.fleet-id` so it centres on the wordmark's
+// row), which the base predates too; nothing else is removed or rewritten. The file renders the world ONCE: React's
 // `useId` counter is per module graph, so a second render, or a case before this one, numbers Instrument's tab ids
 // differently from the capture's single render.
 import { createHash } from 'node:crypto';
@@ -40,6 +42,11 @@ const STRIP_PLACEHOLDER = /<div class="accounts-strip" role="link"[^>]*><span cl
 const ROLE_ONLY_LINE = /<span class="sess-meta sess-meta--context"><span class="sess-role"[^>]*>coordinator<\/span><\/span>/g;
 const ROLE_CELL = /<span class="sess-role"[^>]*>coordinator<\/span>/g;
 /** The programme box's title door (PL10, D26 amended), round the title span the base drew. */
+/** The console's face after the fleet head's wordmark (the Overlord face plan, Task 8), once per fleet head. The base
+ *  predates it. */
+const FACE_MARK = /<svg class="chr face-mark"[^>]*>[\s\S]*?<\/svg>/g;
+/** The group the face shares with the wordmark on the fleet head; with the face removed it holds the base's wordmark alone. */
+const FACE_GROUP = /<span class="fleet-id">(<span class="wordmark">[^<]*<\/span>)<\/span>/g;
 const TITLE_DOOR = /<a [^>]*pg-title-door[^>]*>(<span class="pg-title">[^<]*<\/span>)<\/a>/g;
 /** React's `useId` values, renumbered by first appearance. The ids' NUMBERS are the counter's position, not markup: a
  *  closed sheet mounted at screen level (the Add project sheet, whose vaul root takes three ids though it draws nothing)
@@ -78,7 +85,10 @@ describe('an older server: no delegation frame, the base\'s fleet (delegation br
       expect(html.match(TITLE_DOOR)?.length ?? 0, `${view}: one title door per box`).toBe(baseline.views[view].split('class="pg-title"').length - 1);
       // The Instrument view renders the skin's table alone, outside `FleetScreen`, so it draws no head.
       expect((html.match(PROJECTS_HEAD) ?? []).length, `${view}: one projects head per fleet screen`).toBe(view === 'instrument' ? 0 : 1);
-      const old = html.split(MARKED).join(LIST).split(BACKUP_SLOT).join('').replace(TITLE_DOOR, '$1').replace(PROJECTS_HEAD, '');
+      expect((html.match(FACE_MARK) ?? []).length, `${view}: one face per fleet head`).toBe(count(html, 'class="fleet-head"'));
+      expect(count(html, 'class="fleet-id"'), `${view}: one wordmark-and-face group per fleet head`).toBe(count(html, 'class="fleet-head"'));
+      const old = html.split(MARKED).join(LIST).split(BACKUP_SLOT).join('').replace(TITLE_DOOR, '$1').replace(PROJECTS_HEAD, '')
+        .replace(FACE_MARK, '').replace(FACE_GROUP, '$1');
       expect(baseline.views[view].match(ROLE_CELL), `${view}: the base drew no role cell`).toBeNull();
       expect(old, `${view}: no other delegation attribute`).not.toContain('data-delegation');
       for (const word of ['inferred', 'Unowned work', 'Offline coordinator', 'delegated']) {

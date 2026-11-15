@@ -2808,6 +2808,309 @@ export const MIGRATIONS: readonly string[] = [
   ALTER TABLE mail ADD COLUMN answersMail INTEGER REFERENCES mail(id);
   CREATE UNIQUE INDEX mail_answers_once ON mail(answersMail) WHERE answersMail IS NOT NULL;
   `,
+  // ── 66: user_version 65 -> 66 ─────────────────────────────────────────────
+  // The start report (Overlord spec §3.3.11, H12, W1a): `continuity_starts`, one row per SessionStart the hook reported
+  // through `POST /api/sessions/:id/start` (`server/src/continuity/routes.ts`). `reportId` is the hook's own id for the
+  // report, so a resend of a spooled report is the same row (`UNIQUE (sessionId, reportId)`); `source` is a word of
+  // `START_SOURCES` (`other` for any word outside it); `rowIncarnation` is the registry row's incarnation as the session's
+  // environment carries it (`CCRC_SESSION_GENERATION`, a lowercase UUID ccd writes); `model` and `rowIncarnation` are null when the
+  // payload or the environment carried none; `reportedAt` is the hook's clock, by which a reader orders a session's starts, and `receivedAt` the server's, which every reader ages from
+  // (§11.5). Its one writer is `insertStart` in `server/src/continuity/continuityStore.ts`.
+  //
+  // A NEW TABLE AND AN INDEX, nothing on an existing table: an older build opening a file at `user_version 66` takes rule 3
+  // (it warns, reads as-is and migrates nothing), never names this table, and boots. Every earlier entry is frozen.
+  // This build's writer names its columns, so a later build that adds a column to `continuity_starts` must make it
+  // nullable or give it a DEFAULT, or this build's writer fails after a rollback.
+  // RE-MEASURE the slot before the PR and before merge (it must print 65 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE continuity_starts (
+    id         INTEGER PRIMARY KEY,
+    sessionId  TEXT NOT NULL,
+    reportId   TEXT NOT NULL,     -- the hook's own id for this report, so a resend is one row
+    uuid       TEXT NOT NULL,     -- the conversation that started
+    source     TEXT NOT NULL,     -- startup | resume | clear | compact | fork | other
+    model      TEXT,              -- as the payload carries it, or null
+    rowIncarnation TEXT,          -- the row's incarnation, CCRC_SESSION_GENERATION (a lowercase UUID), or null
+    reportedAt INTEGER NOT NULL,  -- the hook's clock, ms: a session's start order
+    receivedAt INTEGER NOT NULL,  -- the server's clock, ms: what every reader ages from
+    UNIQUE (sessionId, reportId)
+  );
+  CREATE INDEX continuity_starts_by_session ON continuity_starts(sessionId, receivedAt);
+  `,
+  // ── 67: user_version 66 -> 67 ─────────────────────────────────────────────
+  // The Overlord face plan, Task 6: the operator's character choice, `face_settings`, one row seeded `(1, 'orb', 0)`
+  // (`updatedAt` 0 = never chosen). Its one writer is `CoordStore.setFaceCharacter`, behind `POST /api/face`; its one reader
+  // is `CoordStore.faceSettings`, which reads a word `isCharacter` refuses, or a lost row, as the default character.
+  // `character` carries NO CHECK, `collect_lane_settings.choice`'s reason: a word a newer build writes must not stop an
+  // older build opening the file.
+  //
+  // ONE NEW TABLE AND ITS SEED, nothing else: an older build opening a file at `user_version 67` takes rule 3 (it warns,
+  // reads as-is and migrates nothing) and never names the table. Every earlier entry is frozen. RE-MEASURE the slot before
+  // the PR and before merge (it must print 66 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE face_settings (
+    id        INTEGER PRIMARY KEY CHECK (id = 1),
+    character TEXT NOT NULL,
+    updatedAt INTEGER NOT NULL
+  );
+  INSERT INTO face_settings (id, character, updatedAt) VALUES (1, 'orb', 0);
+  `,
+  // ── 68: user_version 67 -> 68 ─────────────────────────────────────────────
+  // The generations (Overlord spec §3.3.1 C36, §3.3.11 H12, Table 11.1a, W1a): `continuity_generations`, one row per life
+  // of a long-lived identity, minted at each reported start, and `continuity_cursor`, the renewal lane's place in
+  // `continuity_starts`. Both have ONE writer, the generations lane, through `server/src/continuity/continuityStore.ts`
+  // (every write a compare-and-set on `(identity, term, n)` and both state columns). `state` moves only on a walk begun
+  // while `continuity` was live, `shadowState` only on one begun in shadow (`walk` records which; reviews 1896 R1, 1902
+  // F1), and each carries its own deadline column, so a shadow walk's deadline never stands on a live row. Every
+  // observed-time column is the identity's accumulator (`observed`, carried across mints), and a deadline is wall time.
+  // The seed row `continuity` = `shadow` adds the lane to the Shadow lanes card.
+  //
+  // NEW TABLES, AN INDEX AND ONE SEED ROW, nothing on an existing table: an older build opening a file at `user_version 68`
+  // takes rule 3 (it warns, reads as-is and migrates nothing), never names either table, reads the `continuity` lane-arm
+  // row as no lane it knows, and boots. Every earlier entry is frozen. RE-MEASURE the slot before the PR and before merge
+  // (it must print 67 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE continuity_generations (
+    id          INTEGER PRIMARY KEY,
+    identity    TEXT NOT NULL,          -- a coordinator's session id ('overlord' from W1)
+    sessionId   TEXT NOT NULL,
+    role        TEXT NOT NULL,          -- a FleetRole word
+    term        INTEGER NOT NULL,       -- 1 in W1a
+    rowIncarnation TEXT,                -- the registry row's incarnation at the start, or null
+    n           INTEGER NOT NULL,
+    state       TEXT NOT NULL,          -- a GenerationState word; moves only on a live walk
+    shadowState TEXT,                   -- the would-be state of a walk begun in shadow, else null
+    walk        TEXT,                   -- 'live' | 'shadow': the mode the walk in flight began in; null outside a walk
+    walkClass   TEXT,                   -- the walk's TriggerClass, or null
+    enteredAt   INTEGER NOT NULL,       -- wall ms the walk's column last changed state
+    deadlineAt  INTEGER,                -- wall ms, state's deadline, set once on entry; null outside a timed state
+    shadowDeadlineAt INTEGER,           -- wall ms, shadowState's deadline, the same rule
+    dueSince    INTEGER,                -- wall ms, shown to the operator; never read for a decision
+    dueWhy      TEXT,
+    dueClass    TEXT,
+    dueSinceObservedMs INTEGER,         -- the accumulator when the trigger became due
+    proven      INTEGER NOT NULL DEFAULT 0,
+    renudged    INTEGER NOT NULL DEFAULT 0,
+    probeRounds INTEGER NOT NULL DEFAULT 0,  -- failed rounds in this probing (0 or 1)
+    hostEnded   INTEGER NOT NULL DEFAULT 0,  -- the receipt's first half came in this clearing
+    blind       TEXT,                   -- JSON array of the RenewalTrigger words the last pass could not read
+    model       TEXT,
+    prevModel   TEXT,                   -- the ended generation's model, for a resumed start's class
+    lane        TEXT,
+    host        TEXT,
+    cardHash    TEXT,
+    snapshotId  TEXT,
+    attempts    INTEGER NOT NULL DEFAULT 0,
+    outcome     TEXT,                   -- a GenerationOutcome word, set when ended
+    resumed     INTEGER NOT NULL,
+    startId     INTEGER NOT NULL UNIQUE REFERENCES continuity_starts(id),
+    startReportedAt INTEGER NOT NULL,   -- the start's reportedAt: the hook's clock, the order of a session's starts
+    observed    TEXT NOT NULL,          -- JSON Observed, the identity's accumulator
+    mintedObservedMs INTEGER NOT NULL,
+    softRenewalObservedMs INTEGER,
+    holdOffUntilObservedMs INTEGER,     -- absolute, on the accumulator; the gather subtracts mintedObservedMs
+    UNIQUE (identity, term, n)
+  );
+  CREATE UNIQUE INDEX continuity_generations_live ON continuity_generations(identity) WHERE state <> 'ended';
+  CREATE TABLE continuity_cursor (lane TEXT PRIMARY KEY, lastStartId INTEGER NOT NULL);
+  INSERT INTO lane_arm_settings (lane, choice, updatedAt) VALUES ('continuity', 'shadow', 0);
+  `,
+  // ── 69: user_version 68 -> 69 ─────────────────────────────────────────────
+  // The card door (Overlord spec §3.3.3 C38, §3.3.5, W1a, the card piece): `continuity_snapshots`, the facts each card was
+  // rendered from, and `continuity_card_reads`, one row per full read (every page of one card hash served to the session).
+  // Both have ONE writer, the card door (`server/src/continuity/routes.ts`), through `continuityStore.ts`. A snapshot's id
+  // is the sha256 of its facts with the time of rendering left out, so unchanged facts keep one row; `hash` is the card
+  // hash it rendered to when last served and `served` a sequence that orders the serves, so the session's current card is
+  // its snapshot with the highest `served` (slug card-current-hash-is-the-last-served). A read carries the conversation's
+  // uuid, so the generations lane matches it to the start that minted a generation (slug card-read-by-the-start). A read
+  // names its snapshot (a foreign key, no ON DELETE, `foreign_keys` on), so a retention sweep deletes a snapshot's reads
+  // before the snapshot, and `continuity_card_reads_by_snapshot` makes each such delete a keyed one (slug
+  // card-snapshots-kept; review 2023 F11).
+  //
+  // NEW TABLES AND INDEXES, nothing on an existing table: an older build opening a file at `user_version 69` takes rule 3
+  // (it warns, reads as-is and migrates nothing), never names either table, and boots. Every earlier entry is frozen.
+  // RE-MEASURE the slot before the PR and before merge (it must print 68 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE continuity_snapshots (
+    id         TEXT PRIMARY KEY,        -- sha256 of the facts JSON, the time of rendering left out
+    sessionId  TEXT NOT NULL,
+    at         INTEGER NOT NULL,        -- wall ms it was first rendered
+    facts      TEXT NOT NULL,           -- the CardFacts JSON, without \`at\`
+    hash       TEXT NOT NULL,           -- the card hash (sha256 of the trimmed text) it rendered to when last served
+    served     INTEGER NOT NULL         -- a sequence over every serve: the session's highest is its current card
+  );
+  CREATE INDEX continuity_snapshots_by_session ON continuity_snapshots(sessionId, served);
+  CREATE TABLE continuity_card_reads (
+    id         INTEGER PRIMARY KEY,
+    sessionId  TEXT NOT NULL,
+    uuid       TEXT NOT NULL,           -- the conversation that read it (the door's attributed byUuid)
+    snapshotId TEXT NOT NULL REFERENCES continuity_snapshots(id),
+    hash       TEXT NOT NULL,
+    pages      INTEGER NOT NULL,
+    at         INTEGER NOT NULL         -- wall ms the last page was served
+  );
+  CREATE INDEX continuity_card_reads_by_conversation ON continuity_card_reads(sessionId, uuid, id);
+  CREATE INDEX continuity_card_reads_by_snapshot ON continuity_card_reads(snapshotId);
+  `,
+  // ── 70: user_version 69 -> 70 ─────────────────────────────────────────────
+  // The timers (Overlord spec §3.3.12 C61 to C65, Table 3.3.12a, I17; W1a, the timers piece): `continuity_timers`, one row
+  // per timer a session set itself. Its moves are `TIMER_TRANSITIONS` (`shared/continuity-timers.ts`), each with ONE
+  // writer in `server/src/continuity/continuityStore.ts`: the set (`insertTimer`), the fire (`markTimersFired`, in the
+  // transaction that queues its one mail), the cancel (`cancelTimer`, its reason checked against its actor) and the purge
+  // of terminal rows past `TIMER_KEEP_MS` (`purgeTimers`). `setterIncarnation` is the setter row's `.generation` at the
+  // set (W1's designation term for the Overlord's), so a renewed generation of the same identity gets the mail and a
+  // different session under the same id never does. A timer binds a run or a programme, never both (the CHECK).
+  //
+  // A NEW TABLE and its indexes, nothing on an existing table: an older build opening a file at `user_version 70` takes
+  // rule 3 (it warns, reads as-is and migrates nothing), never names the table, and boots. Every earlier entry is frozen.
+  // RE-MEASURE the slot before the PR and before merge (it must print 69 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE continuity_timers (
+    id                INTEGER PRIMARY KEY,
+    setter            TEXT NOT NULL,          -- a session id, or 'overlord' from W1
+    setterIncarnation TEXT NOT NULL,          -- the registry row's .generation; the designation's designatedTerm from W1
+    setById           TEXT NOT NULL,          -- the caller as attributed at the set
+    setByUuid         TEXT NOT NULL,
+    role              TEXT NOT NULL,          -- roleOf at the set, or 'undecided'
+    note              TEXT NOT NULL,
+    runId             INTEGER,
+    programme         TEXT,
+    setAt             INTEGER NOT NULL,
+    dueAt             INTEGER NOT NULL,
+    state             TEXT NOT NULL DEFAULT 'pending',
+    firedAt           INTEGER,
+    mailId            INTEGER,
+    cancelledAt       INTEGER,
+    cancelReason      TEXT,
+    CHECK (runId IS NULL OR programme IS NULL)
+  );
+  CREATE INDEX continuity_timers_pending ON continuity_timers(state, dueAt);
+  CREATE INDEX continuity_timers_by_setter ON continuity_timers(setter, setAt);
+  `,
+  // ── 71: user_version 70 -> 71 ─────────────────────────────────────────────
+  // Launch profiles PR B (Overlord spec §3.6 H1, §3.3.7 H14, Table 11.1d; W1a): the seed row `launch-profile` = `shadow`
+  // adds the launch-profile lane to the Shadow lanes card, and `plain_memory_settings` is the Settings row "Auto memory for
+  // plain sessions". ONE ROW, `CHECK (id = 1)`, the `roll_settings` idiom. `choice` is a `PlainAutoMemoryChoice` (`off` or
+  // `on`), read back through `isPlainAutoMemoryChoice`, never cast, so NO CHECK: a word a newer build writes reads as
+  // unknown here, and the lane writes nothing from it (`plainAutoMemoryOf`). Its one writer is
+  // `CoordStore.setPlainAutoMemory`, called only by `POST /api/coord/plain-auto-memory`; its one reader
+  // `CoordStore.plainAutoMemorySettings`.
+  //
+  // THE SEED IS THE SPEC'S DEFAULT (H14): `off` on a fleet host. A lost row reads as the same default. Nothing changes a
+  // session from this row while the `launch-profile` row is shadow.
+  //
+  // A NEW TABLE AND ONE SEED ROW, nothing on an existing table: an older build opening a file at `user_version 71` takes
+  // rule 3 (it warns, reads as-is and migrates nothing), never names the table, reads the `launch-profile` lane-arm row as
+  // no lane it knows, and boots. Every earlier entry is frozen. It lands after card PR B's entry 69 (#2793) and timers
+  // PR A's entry 70 (#2797), which took those slots first; `coord-db.test.ts` holds the order. RE-MEASURE the slot before
+  // merge (it must print 70 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE plain_memory_settings (
+    id        INTEGER PRIMARY KEY CHECK (id = 1),
+    choice    TEXT    NOT NULL,
+    updatedAt INTEGER NOT NULL
+  );
+  INSERT INTO plain_memory_settings (id, choice, updatedAt) VALUES (1, 'off', 0);
+  INSERT INTO lane_arm_settings (lane, choice, updatedAt) VALUES ('launch-profile', 'shadow', 0);
+  `,
+  // ── 72: user_version 71 -> 72 ─────────────────────────────────────────────
+  // The notes (Overlord spec §3.3.2 C37, W1a, the notes piece): `continuity_notes`, a long-lived session's working notes,
+  // and `continuity_handovers`, the handover note a generation writes in `checkpointed`. Both have ONE writer, the note door
+  // (`server/src/continuity/routes.ts`), through `continuityStore.ts`, so `continuity_generations` keeps its one writer
+  // (slug handover-table). A note is APPEND-ONLY: a revision is a new row naming the note it supersedes (`revises`), a close
+  // is a revision with `closes` set, and no statement updates or deletes a note. A note is live while no row revises it and
+  // it does not close. `continuity_notes_one_revision` makes a second revision of one note a constraint failure, so two
+  // revisions race to one winner (slug revision-by-unique-index); `continuity_notes_by_identity` keys the live read.
+  //
+  // NEW TABLES AND INDEXES, nothing on an existing table: an older build opening a file at `user_version 72` takes rule 3
+  // (it warns, reads as-is and migrates nothing), never names either table, and boots. Every earlier entry is frozen.
+  // RE-MEASURE the slot before the PR and before merge (it must print 71 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE continuity_notes (
+    id           INTEGER PRIMARY KEY,
+    identity     TEXT NOT NULL,         -- the long-lived identity the note belongs to (a coordinator's session id)
+    sessionId    TEXT NOT NULL,         -- the session that wrote it
+    generationId INTEGER,               -- the identity's live generation when it was written, or NULL
+    keyKind      TEXT NOT NULL,         -- programme | item | run (NoteKey)
+    keyRef       TEXT NOT NULL,         -- the programme's slug, or the item's or run's id
+    kind         TEXT NOT NULL,         -- thread | caution (NoteKind)
+    waitsOn      TEXT NOT NULL,
+    next         TEXT NOT NULL,
+    revises      INTEGER REFERENCES continuity_notes(id),
+    closes       INTEGER NOT NULL DEFAULT 0,
+    at           INTEGER NOT NULL       -- wall ms it was written
+  );
+  CREATE UNIQUE INDEX continuity_notes_one_revision ON continuity_notes(revises) WHERE revises IS NOT NULL;
+  CREATE INDEX continuity_notes_by_identity ON continuity_notes(identity, id);
+  CREATE TABLE continuity_handovers (
+    generationId INTEGER PRIMARY KEY REFERENCES continuity_generations(id),
+    note         TEXT NOT NULL,         -- the HandoverNote JSON, its status words dropped
+    dropped      INTEGER NOT NULL,      -- how many status words were dropped
+    at           INTEGER NOT NULL       -- wall ms it was written
+  );
+  `,
+  // ── 73: user_version 72 -> 73 ─────────────────────────────────────────────
+  // The probes (Overlord spec §3.3.5 C41, §3.3.9 C52, W1a, the probes piece, PR B): `continuity_probes`, one row per question
+  // of a round. Two writers through `continuityStore.ts`, one per fact: the generations lane opens a round (`openRound`: the
+  // questions and what each expects), and the probe door records its answers (`answerRound`: the answer, the grade and
+  // whether the session read its card or notes in between, `book`). `roundUnmeasured` is the round's own fact, on each of its
+  // rows: the round was short because a read its composition needed had failed, so it is never graded `failed` for that.
+  // `continuity_reads` is when a session last read its card or its notes through the continuity doors, one row per door
+  // (ONE writer, `stampContinuityRead`, from the card and note GETs): the probe door marks an answer `open` when it follows
+  // such a read (slug closed-book-is-unmeasured-in-w1a).
+  //
+  // NEW TABLES AND AN INDEX, nothing on an existing table: an older build opening a file at `user_version 73` takes rule 3
+  // (it warns, reads as-is and migrates nothing), never names either table, and boots. Every earlier entry is frozen.
+  // RE-MEASURE the slot before the PR and before merge (it must print 72 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE continuity_probes (
+    id              INTEGER PRIMARY KEY,
+    roundId         TEXT NOT NULL,      -- the round's id, shared by its questions
+    qid             TEXT NOT NULL,      -- the question's id inside its round (p1 to p5), what the door serves
+    sessionId       TEXT NOT NULL,
+    generationId    INTEGER NOT NULL REFERENCES continuity_generations(id),
+    kind            TEXT NOT NULL,      -- start | compaction | spot (ProbeKind)
+    cls             TEXT NOT NULL,      -- the probe class (ProbeClass)
+    question        TEXT NOT NULL,
+    choices         TEXT,               -- the choices as a JSON list, or NULL for an id or none
+    expected        TEXT NOT NULL,      -- never leaves the server
+    snapshotId      TEXT,               -- the snapshot a start or compaction round was drawn from; NULL for a spot round
+    depthTokens     INTEGER,            -- the context depth a spot or compaction round opened at (the spot baseline)
+    modelClass      TEXT,               -- a spot round's model class when it opened
+    roundUnmeasured INTEGER NOT NULL DEFAULT 0,
+    askedAt         INTEGER NOT NULL,   -- wall ms the round opened
+    answeredAt      INTEGER,
+    answer          TEXT,
+    grade           TEXT,               -- pass | fail | unmeasured (ProbeGrade)
+    book            TEXT,               -- closed | open | unmeasured (BookState)
+    UNIQUE (roundId, qid),
+    UNIQUE (roundId, cls, question)
+  );
+  CREATE INDEX continuity_probes_by_generation ON continuity_probes(generationId, id);
+  CREATE INDEX continuity_probes_by_session ON continuity_probes(sessionId, id);
+  CREATE TABLE continuity_reads (
+    sessionId TEXT NOT NULL,
+    door      TEXT NOT NULL,            -- card | notes
+    at        INTEGER NOT NULL,         -- wall ms of the newest read through that door
+    PRIMARY KEY (sessionId, door)
+  );
+  `,
 ];
 
 /** The version this build writes. `MIGRATIONS.length` and nothing else: a

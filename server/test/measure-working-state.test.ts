@@ -193,7 +193,7 @@ describe('measure-working-state.py: its second spellings are bound to their home
 
   it('CARRIER_EVENTS is fleet.ts’s BACKGROUND_CARRIER_EVENTS (D-5272)', () => {
     const fleet = fs.readFileSync(path.join(ROOT, 'server', 'src', 'fleet.ts'), 'utf8');
-    const m = /BACKGROUND_CARRIER_EVENTS: ReadonlySet<string> = new Set\(\[([^\]]*)\]\)/.exec(fleet);
+    const m = /BACKGROUND_CARRIER_EVENTS: ReadonlySet<HookEvent> = new Set\(\[([^\]]*)\]\)/.exec(fleet);
     expect(m).not.toBeNull();
     expect(tuple('CARRIER_EVENTS')).toEqual(m![1]!.split(',').map((x) => x.trim().replace(/'/g, '')));
   });

@@ -27,6 +27,8 @@ const GENERATION_OUTCOME_MAP = {
   swapped: 'a swap landing replaced it',
   woken: 'a wake on the same host replaced it',
   'woken-elsewhere': 'a wake on another host replaced it',
+  unmeasured: 'a start replaced it, and what that start was cannot be told from what the lane read',
+  cleared: 'a /clear on the same row and account replaced it: asked for, but not by a renewal (review 2006)',
 } as const;
 export type GenerationOutcome = keyof typeof GENERATION_OUTCOME_MAP;
 export const GENERATION_OUTCOMES = Object.keys(GENERATION_OUTCOME_MAP) as GenerationOutcome[];
@@ -105,6 +107,69 @@ export const EARLY_WHILE_AWAY_FRACTION = 0.5;
 export const CHECKPOINT_THREAD = { messages: 60, tokens: 6_000 } as const;
 /** Table 11.5b: the caps on `continuity_notes` for one identity. */
 export const NOTES_CAP = { count: 200, chars: 500 } as const;
+/** The continuity notes (Overlord spec §3.3.2, C37; the notes piece of W1a). What a note keys to: a programme (by slug), an
+ *  item or a run (by id), each a row the server can look up. `request` joins in W2 and `message` (a `miss`) in W1, as their
+ *  rows appear (slug note-keys-in-w1a). */
+export type NoteKey =
+  | { readonly kind: 'programme'; readonly slug: string }
+  | { readonly kind: 'item'; readonly id: number }
+  | { readonly kind: 'run'; readonly id: number };
+const NOTE_KEY_KIND_MAP = { programme: 'a programme, by slug', item: 'an item, by id', run: 'a run, by id' } as const;
+export type NoteKeyKind = keyof typeof NOTE_KEY_KIND_MAP;
+export const NOTE_KEY_KINDS = Object.keys(NOTE_KEY_KIND_MAP) as NoteKeyKind[];
+export function isNoteKeyKind(v: unknown): v is NoteKeyKind {
+  return typeof v === 'string' && (NOTE_KEY_KINDS as readonly string[]).includes(v);
+}
+const NOTE_KIND_MAP = {
+  thread: 'an open thread: what it waits on and what comes next',
+  caution: 'something the next generation should watch for',
+} as const;
+export type NoteKind = keyof typeof NOTE_KIND_MAP;
+export const NOTE_KINDS = Object.keys(NOTE_KIND_MAP) as NoteKind[];
+export function isNoteKind(v: unknown): v is NoteKind {
+  return typeof v === 'string' && (NOTE_KINDS as readonly string[]).includes(v);
+}
+/** What the door measured of a key: a row of the caller's that is live, a row that is gone (absent, closed, or no longer
+ *  open), a row that is not the caller's, or a read that failed. `unmeasured` is never folded into `gone`. */
+const KEY_FACT_MAP = {
+  live: "a live row of the caller's",
+  gone: 'no such row, or it is closed',
+  'not-yours': "a row that is not the caller's",
+  unmeasured: 'the row could not be read',
+} as const;
+export type KeyFact = keyof typeof KEY_FACT_MAP;
+export const KEY_FACTS = Object.keys(KEY_FACT_MAP) as KeyFact[];
+export function isKeyFact(v: unknown): v is KeyFact {
+  return typeof v === 'string' && (KEY_FACTS as readonly string[]).includes(v);
+}
+/** Characters that show nothing: format characters (`\p{Cf}`: zero-width spaces and joiners, the soft hyphen, direction
+ *  marks), whitespace, the combining grapheme joiner and the blank fillers (braille blank, the Hangul fillers). */
+const INVISIBLE_RE = /[\p{Cf}\s\p{Zs}\u034f\u115f\u1160\u2800\u3164\uffa0]/gu;
+/** Is `s` blank to a reader, though it may hold characters (review 2046, F3)? The one blank test of a note's `next`, at
+ *  the note door (`noteVerdict`) and in the continuation probe's pool alike. */
+export function isBlankText(s: string): boolean {
+  return s.replace(INVISIBLE_RE, '') === '';
+}
+/** C37: the handover note's tone line, at most this many characters. */
+export const HANDOVER_TONE_MAX_CHARS = 300;
+/** The handover note's whole size as it is stored (its JSON, in UTF-8 bytes), at most: one over it is refused `note-too-long`
+ *  at write, so the row the renewal act reads later stays inside one tool result (review 2039, F3; slug handover-body-cap).
+ *  The field caps alone allowed a note of megabytes. */
+export const HANDOVER_MAX_BYTES = 16_384;
+/** One thread of a handover note: a reference that must exist, what it waits on and what comes next. */
+export interface HandoverThread { readonly ref: NoteKey; readonly waitsOn: string; readonly next: string }
+/** C37: the handover note the ending generation writes in `checkpointed`. Its claims of done, its ids, its promises, its
+ *  authority and its preferences are never read as rows. */
+export interface HandoverNote {
+  readonly threads: readonly HandoverThread[];
+  readonly cautions: readonly string[];
+  readonly tone: string;
+}
+/** A note's key as one short phrase (`run 12`, `programme prog-a`), for the card and the door's details. */
+export function noteKeyText(k: NoteKey): string {
+  return k.kind === 'programme' ? `programme ${k.slug}` : `${k.kind} ${k.id}`;
+}
+
 /** Table 11.5b and Table 3.3.11b: the context floor of the idle trigger and of the wave boundary, as a fraction of the
  *  hard cap ("a quarter of the hard cap"). */
 export const IDLE_FLOOR_FRACTION = 0.25;
@@ -125,3 +190,117 @@ export const OBSERVED_STEP_PERIODS = 2;
  *  first pass at or after the nudge point always comes before the pass that sees the deadline, so the re-nudge can be
  *  answered (review 1912, F4). 15 s with today's values. */
 export const CARDED_NUDGE_AT_MS = STATE_DEADLINE_S.carded * 1_000 - RENEWAL_LANE_PERIOD_MS;
+
+/** The start report (Overlord W1a, spec §3.3.11; reviews 1911 F10 and 1949 G8): the SessionStart sources a
+ *  `continuity_starts` row may carry, beside the generation vocabulary its reader decides with. A word outside them is
+ *  read as `other` by `startSourceOf`, the one rule the table's writer and its read both go through: the payload is
+ *  Claude Code's, and a new source word there must not lose the start. */
+const START_SOURCE_MAP = {
+  startup: 'a new conversation in a new process',
+  resume: 'a stored conversation taken up again',
+  clear: 'a /clear: a fresh conversation in the same process',
+  compact: 'a compaction: the same conversation, summarised',
+  fork: 'a fork: a new conversation sharing the pane (never reported)',
+  other: 'any word outside these, so a new one never loses the start',
+} as const;
+export type StartSource = keyof typeof START_SOURCE_MAP;
+export const START_SOURCES = Object.keys(START_SOURCE_MAP) as StartSource[];
+export function isStartSource(v: unknown): v is StartSource {
+  return typeof v === 'string' && (START_SOURCES as readonly string[]).includes(v);
+}
+export function startSourceOf(w: string): StartSource {
+  return isStartSource(w) ? w : 'other';
+}
+/** A recorded start, as `continuity_starts` holds it and `startsSince` answers it. `uuid` is the reported conversation's
+ *  (the body's `startedUuid`, else its `fromUuid`); `rowIncarnation` is the registry row's generation, or null.
+ *  ORDER: id order is receipt order; a session's start order is `reportedAt`. A start kept and resent lands after a
+ *  newer one, so a reader orders one session's starts by `reportedAt`, never by `id` or `receivedAt` (review 1949, G3). */
+export interface StartRow {
+  id: number;
+  sessionId: string;
+  reportId: string;
+  uuid: string;
+  source: StartSource;
+  model: string | null;
+  rowIncarnation: string | null;
+  reportedAt: number;
+  receivedAt: number;
+}
+
+/** The probe classes (Overlord design spec §3.3.5, C41 and Table 3.3.5a, in its order; C52 for a coordinator's). A role's
+ *  set is its `FLEET_ROLES` row's `probeSet` column; `probeRound` (`server/src/continuity/probes.ts`) draws a round across
+ *  it. `thread` is not a row of Table 3.3.5a: it is C41's probe after every renewal (R19), the Overlord's in W1a, and a
+ *  coordinator's if the operator's item rules so (the probes plan, Task 7), so it sits in this one list rather than a
+ *  second one. */
+const PROBE_CLASS_MAP = {
+  fact: 'an extracted fact, graded by the id or choice in the snapshot',
+  update: 'a preference that was superseded, graded by the entry that stands now',
+  temporal: 'an order in time, graded by the rows\' times',
+  abstention: 'a question with no answer on record, graded by `none`',
+  continuation: 'what a thread does next, graded by the note\'s next act',
+  decision: 'which entries decided an act, graded by the ids its act row cites',
+  contradiction: 'a superseded entry crossed with a scope, graded by the entry that applies there',
+  application: 'a case that uses an entry, graded by the option the entry implies',
+  thread: 'the current thread after a renewal, graded against the checkpoint\'s thread (R19)',
+} as const;
+export type ProbeClass = keyof typeof PROBE_CLASS_MAP;
+export const PROBE_CLASSES = Object.keys(PROBE_CLASS_MAP) as ProbeClass[];
+export function isProbeClass(v: unknown): v is ProbeClass {
+  return typeof v === 'string' && (PROBE_CLASSES as readonly string[]).includes(v);
+}
+/** §3.3.5, C41: a round asks three to five. A spot probe at depth is a round of one (the probes plan, Task 6). */
+export const PROBE_ROUND_MIN = 3;
+export const PROBE_ROUND_MAX = 5;
+/** §3.3.5, C41: while idle, one spot probe each time the context grows by another this many tokens. Also the width of
+ *  one depth bucket of the fitted ceiling. */
+export const SPOT_PROBE_EVERY_TOKENS = 50_000;
+/** §3.3.5, C41: the fitted ceiling is the deepest depth whose rolling pass rate is at least this. */
+export const FIT_PASS_RATE = 0.95;
+/** §3.3.5, C41, "the plan fixes the rolling window as a count" (slug fit-window-twenty): the last this many closed-book
+ *  spot probes of one depth and model class. */
+export const FIT_WINDOW = 20;
+/** The one answer an abstention question expects (C41: "an answer is an id, a choice from a list, or `none`"). */
+export const PROBE_NONE = 'none';
+/** A round's occasion (§3.3.5, C41): after a start that minted a generation, after a compaction, or a spot probe at depth
+ *  while idle. A `continuity_probes` row's `kind`. */
+const PROBE_ROUND_KIND_MAP = {
+  start: 'after a start: drawn from the snapshot the generation was carded with',
+  compaction: 'after a compaction: drawn from the newest snapshot the conversation read',
+  spot: 'at depth while idle: one question about the rows of this generation',
+} as const;
+export type ProbeRoundKind = keyof typeof PROBE_ROUND_KIND_MAP;
+export const PROBE_ROUND_KINDS = Object.keys(PROBE_ROUND_KIND_MAP) as ProbeRoundKind[];
+export function isProbeRoundKind(v: unknown): v is ProbeRoundKind {
+  return typeof v === 'string' && (PROBE_ROUND_KINDS as readonly string[]).includes(v);
+}
+/** One answer's grade, closed-form (C41). `unmeasured` is the door's, never the session's: the question could not be graded
+ *  as served (its masked choices collide, or its masked expected answer is not exactly one of them), the answer carries the
+ *  mask placeholder and matches no choice (the masker changed between ask and answer), or the round was superseded. */
+const PROBE_GRADE_MAP = {
+  pass: 'the expected id, choice or `none`', fail: 'anything else', unmeasured: 'could not be graded as served',
+} as const;
+export type ProbeGrade = keyof typeof PROBE_GRADE_MAP;
+export const PROBE_GRADES = Object.keys(PROBE_GRADE_MAP) as ProbeGrade[];
+export function isProbeGrade(v: unknown): v is ProbeGrade {
+  return typeof v === 'string' && (PROBE_GRADES as readonly string[]).includes(v);
+}
+/** Whether the session read anything between ask and answer (C41, closed-book). In W1a the server can attribute only its
+ *  own continuity reads (the card, the notes), so an answer is `open` after one of them and `unmeasured` otherwise; `closed`
+ *  needs W1's witness (slug closed-book-is-unmeasured-in-w1a). */
+const BOOK_STATE_MAP = {
+  closed: 'nothing was read between ask and answer (W1, the witness)',
+  open: 'the session read its card or its notes between ask and answer',
+  unmeasured: 'no read the server can attribute; reads through other doors carry no attribution in W1a',
+} as const;
+export type BookState = keyof typeof BOOK_STATE_MAP;
+export const BOOK_STATES = Object.keys(BOOK_STATE_MAP) as BookState[];
+export function isBookState(v: unknown): v is BookState {
+  return typeof v === 'string' && (BOOK_STATES as readonly string[]).includes(v);
+}
+/** The doors whose reads the probe door counts towards `open` (`continuity_reads.door`). */
+const CONTINUITY_READ_DOOR_MAP = { card: 'GET /api/sessions/:id/card', notes: 'GET /api/sessions/:id/notes' } as const;
+export type ContinuityReadDoor = keyof typeof CONTINUITY_READ_DOOR_MAP;
+export const CONTINUITY_READ_DOORS = Object.keys(CONTINUITY_READ_DOOR_MAP) as ContinuityReadDoor[];
+export function isContinuityReadDoor(v: unknown): v is ContinuityReadDoor {
+  return typeof v === 'string' && (CONTINUITY_READ_DOORS as readonly string[]).includes(v);
+}

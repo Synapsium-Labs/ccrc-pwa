@@ -160,7 +160,7 @@ const files = [
 ];
 
 // Only a run of this file does anything: importing it writes nothing.
-if (process.argv[1] && realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url))) {
+if (process.argv[1] && existsSync(process.argv[1]) && realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url))) {
   if (process.argv.includes('--check')) {
     const stale = files.filter(([name, spec]) => {
       const file = path.join(outDir, name);

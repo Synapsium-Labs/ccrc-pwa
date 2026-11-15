@@ -1,7 +1,7 @@
 // The two ladder arms of the Waiting on you routes (desktop-polish PL5a, D-7712): `/waiting`, the combined list, and
 // `/waiting/<id>`, one item. The screens they render (`WaitingScreen`, `ItemView`) take everything as props. The programme's
 // Goals page (`ProgrammeScreen`, PL5b; Goals only since PL11, D-7986) reads the store and the router itself, as a screen of its
-// own, through the hooks and the back button this file exports (`useHeard`, `useUnavailable`, `Back`). Ring L4: no decision is
+// own, through the hooks and the back button this file exports (`useUnavailable`, `Back`) and `useHeard` (`fleet/useHeard.ts`). Ring L4: no decision is
 // made here that the words or the server did not make (a tick's order and refusals are the server's, the labels are
 // `ledgerWords.ts`'s).
 //
@@ -29,9 +29,10 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import type { ReactNode, Ref } from 'react';
 import { BackButton, Button } from '@ccrc/ui';
-import type { FleetSession, RunSummary } from '../../../shared/api';
+import type { RunSummary } from '../../../shared/api';
 import type { ItemView as ItemWire, WaitingView } from '../../../shared/ledgers';
 import { fleetHues } from '../fleet/programmeBoxes';
+import { useHeard } from '../fleet/useHeard';
 import { programmeTitle } from '../fleet/runWords';
 import { api } from '../lib/api';
 import { LEDGER_REFUSAL_TEXT } from '../lib/refusalWords';
@@ -86,15 +87,6 @@ function useItemHref(texts: readonly string[], list: WaitingView | null, self: n
   const heard = useMemo(() => new Set(list === null ? [] : [...list.items, ...list.cleared].map((i) => i.id)), [list]);
   const isItem = useItemRefs(itemRefIds(texts).filter((id) => id !== self), heard);
   return (id) => (id !== self && isItem(id) ? itemPath(id) : null);
-}
-
-/** The rows and runs this page has heard, or `null` for each it has not: see the file's header. */
-export function useHeard(store: FleetStore): { sessions: readonly FleetSession[] | null; runs: readonly RunSummary[] | null } {
-  const sessions = store((s) => s.sessions);
-  const fleetFrameSeen = store((s) => s.fleetFrameSeen);
-  const runs = store((s) => s.runs);
-  const runsFrameSeen = store((s) => s.runsFrameSeen);
-  return { sessions: fleetFrameSeen ? sessions : null, runs: runsFrameSeen ? runs : null };
 }
 
 /** With no list yet, ask for it once on arrival, and say so when this box has none to give: a box with no coordination

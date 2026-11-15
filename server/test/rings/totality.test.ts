@@ -14,10 +14,10 @@ import { pwaRing, serverRing, type Ring } from './ring.js';
 import {
   SPEC_FILE, assignContexts, fileRowNames, parseContextTable, readContextTable, type ContextRow,
 } from './ringContextMap.js';
-import { REPO, walkSrc } from './walkSrc.js';
+import { PWA_RING_EXTENSIONS, REPO, walkSrc } from './walkSrc.js';
 
 const SERVER_FILES = (): string[] => walkSrc({ roots: ['server/src'], min: 150 });
-const PWA_FILES = (): string[] => walkSrc({ roots: ['pwa/src'], min: 250, extensions: /\.(?:ts|tsx|mjs|css)$/ });
+const PWA_FILES = (): string[] => walkSrc({ roots: ['pwa/src'], min: 250, extensions: PWA_RING_EXTENSIONS });
 const srcRel = (pkg: 'server' | 'pwa', f: string): string => f.slice(`${pkg}/src/`.length);
 
 const TABLE = [

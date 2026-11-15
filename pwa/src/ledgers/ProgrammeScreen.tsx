@@ -50,7 +50,8 @@ import { EMPTY_WORD, NO_FRAME_WORD, ageWords, itemPath, openRunsOf, programmeWai
 import { STORED_TEXT, StoredSecretRemove, removeStoredSecret, type RemoveSecret } from './ItemView';
 import { needsYou, needsYouCount } from './needsYou';
 import { HeadResumeSheet, ProgrammeHeadFacts, ProgrammeRunsSection, useProgrammeRuns, type ProgrammeRunsReaders } from './ProgrammeRuns';
-import { Back, useHeard, useUnavailable } from './WaitingRoutes';
+import { useHeard } from '../fleet/useHeard';
+import { Back, useUnavailable } from './WaitingRoutes';
 import { isGoalsFor } from './waitingView';
 import './ledgers.css';
 

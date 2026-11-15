@@ -125,6 +125,7 @@ export type ResponsesScript = ResponsesAnswer[];
  *  kept. The authorization value is recorded only as its sha256, so a case can tell which token was sent. */
 export const RESPONSES_HEADER_VALUES = [
   'originator', 'user-agent', 'session-id', 'chatgpt-account-id', 'content-type', 'accept', 'accept-encoding',
+  'x-codex-turn-state', // D-8623: a synthetic sticky-routing token, so a case can tell which one was echoed
 ] as const;
 
 /** One request `fakeResponses` saw: the method and path; `headers`, every header NAME, lower-cased, in the order
@@ -252,8 +253,10 @@ export const BRIDGE_AUTH_LIB = path.join(CCD_DIR, 'ccgpt-auth.py');
 /** The models a planted lane's catalogue lists, neutral ids (the plan's Global Constraints). */
 export const BRIDGE_MODELS = ['model-6.1-alpha', 'model-6-beta'] as const;
 /** The bridge's file names a planted `lane.json` carries in `bridgeFiles` (Task 10 spells them in `laneManifest`;
- *  the fixture plants what that manifest will hold). */
-export const BRIDGE_FILES = { stats: 'bridge.stats.json', store: 'reasoning.sqlite', recordings: 'recordings' } as const;
+ *  the fixture plants what that manifest will hold; `requests`, the per-request record, is D-8619's). */
+export const BRIDGE_FILES = {
+  stats: 'bridge.stats.json', store: 'reasoning.sqlite', recordings: 'recordings', requests: 'bridge.requests.jsonl',
+} as const;
 
 /** One planted lane: every path absolute; `key` the lane's gateway key; `cred` the planted credential's tokens (null
  *  when none was planted). */
@@ -268,11 +271,15 @@ export type BridgeLane = {
  *  listing `models` (default BRIDGE_MODELS); `<configDir>/settings.json` whose env carries
  *  `CLAUDE_CODE_MAX_CONTEXT_TOKENS` = `window` (default 400000; `null` writes no settings file); and, unless
  *  `credential` is false, a backend credential in `authDir` through Stage 1's `plantBackendCredential` with those
- *  options. */
+ *  options. `bridgeFiles`, when given, is written in BRIDGE_FILES' place (a lane.json an older `laneManifest` wrote,
+ *  say). */
 export function plantBridgeLane(
   home: string,
   lane: string,
-  o: { models?: readonly string[]; window?: number | null; credential?: Parameters<typeof plantBackendCredential>[1] | false } = {},
+  o: {
+    models?: readonly string[]; window?: number | null; credential?: Parameters<typeof plantBackendCredential>[1] | false;
+    bridgeFiles?: Record<string, unknown>;
+  } = {},
 ): BridgeLane {
   const laneDir = path.join(home, '.ccrc', 'codex', lane);
   mkdirSync(laneDir, { recursive: true });
@@ -282,7 +289,7 @@ export function plantBridgeLane(
   writeFileSync(path.join(laneDir, 'lane.json'), JSON.stringify({
     id: lane, configDir: configRel, authDir: authRel, proxyPort: 1, litellmPort: 1,
     units: { litellm: `ccgpt-${lane}-litellm.service`, shim: `ccgpt-${lane}-shim.service` },
-    bridgeFiles: BRIDGE_FILES,
+    bridgeFiles: o.bridgeFiles ?? BRIDGE_FILES,
   }));
   const key = `sk-${randomBytes(24).toString('hex')}`;
   const envFile = path.join(laneDir, 'runtime.env');
@@ -306,11 +313,14 @@ export function plantBridgeLane(
   };
 }
 
-/** (Re)write a lane catalogue listing `models`, in the shape `deploy/models-op.mjs`'s `readCatalogue` reads. */
-export function writeBridgeCatalogue(file: string, models: readonly string[]): void {
+/** (Re)write a lane catalogue listing `models`, in the shape `deploy/models-op.mjs`'s `readCatalogue` reads; `fields`
+ *  adds keys to a model's row by its id (D-8620's request-shape fields, say). */
+export function writeBridgeCatalogue(
+  file: string, models: readonly string[], fields: Record<string, Record<string, unknown>> = {},
+): void {
   writeFileSync(file, JSON.stringify({
     fetchedAt: new Date().toISOString(), stale: false,
-    models: models.map((id) => ({ id, hidden: false, efforts: [] })),
+    models: models.map((id) => ({ id, hidden: false, efforts: [], ...(fields[id] ?? {}) })),
   }));
 }
 

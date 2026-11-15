@@ -217,9 +217,11 @@ def trans_checks(s, lbl, info, s2, c):
         if q2.held and not q1.held and not s2.gen.card:
             out.append(('X5', 'a hold was taken on q%d while generation %d has not read its card'
                         % (i, s2.gen.n)))
-    # Extra X6 (review 1912, F5; review 1920, R3): a renewal begun in degraded never returns to active. A degraded
-    # generation is never proven, because its proof ended with its conversation, so a failure before the first half
-    # returns it to degraded; only probes passing in a new generation reach active.
+    # Extra X6 (review 1912, F5; review 1920, R3; reworded for review 1925, N5): a renewal begun in degraded never returns
+    # to active. A degraded generation is never proven: one that timed out in carded or failed its probes never read its
+    # card and passed a round, one sent back() unproven never was proven, and one that degraded after the first half lost
+    # its proof with its conversation. So a failure before the first half returns it to degraded; only probes passing in a
+    # new generation reach active.
     if s.gen.fromdeg and s.gen.st in ('draining', 'checkpointed', 'clearing') and s2.gen.st == 'active' and \
             s2.gen.n == s.gen.n:
         out.append(('X6', 'generation %d returned to active from a renewal begun in degraded (%s)' % (s.gen.n, lbl)))

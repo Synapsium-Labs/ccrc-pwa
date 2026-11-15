@@ -1,4 +1,5 @@
 import type { TurnMarkRead } from './stall.js';
+import { hookEventIs } from '../../../shared/hook-events.js';
 
 /**
  * FINISHED NEEDS A MAIN STOP (D-5233, working-state spec §5.3). L1, pure: no fs, no clock.
@@ -34,5 +35,5 @@ export function finishedAfter(mark: TurnMarkRead, hook: FinishedHookFact | null,
   }
   if (mark.reason !== 'absent') return false;
   if (hook === null) return true;
-  return hook.state === 'done' && hook.event === 'Stop' && hook.updatedAt >= busySince;
+  return hook.state === 'done' && hookEventIs(hook.event, 'Stop') && hook.updatedAt >= busySince;
 }

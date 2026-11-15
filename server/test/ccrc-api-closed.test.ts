@@ -412,8 +412,13 @@ describe('the client stays closed', () => {
     // `calls.record` (autonomy-default wave A3, D-8126) took it to sixty-four; it is the one body fill that REFUSES a caller's byId
     // and byUuid, so it is counted by its own scan (`calls.record` below), not by the keyed fills' spelling.
     // `mail.inbox` (D-6780) took it to sixty-five; its read takes no body, and the ack body it synthesizes is pinned below.
-    // The seven `plan` rows (D-8181) took it to seventy-two.
-    expect(routeKeys().size).toBe(72);
+    // The seven `plan` rows (D-8181) took it to seventy-two; `sessions.start` (Overlord W1a, the start report, no body fill) to seventy-three.
+    // `sessions.card` (Overlord W1a, the card piece, no body fill) took it to seventy-four, and the note door's four (the notes
+    // piece) to seventy-eight: the three POSTs take the `calls.record` fill's rule, pinned below. The three `timer` rows (the
+    // timers piece) took it to eighty-one: `parse_timer` builds each body whole from the pane's pair, no splice and no fill.
+    // The probe door's two (Overlord, the probes piece: `sessions.probe`, a read, and `probe.answer`, which takes the note door's
+    // rule) to eighty-three.
+    expect(routeKeys().size).toBe(83);
     // The call record's fill is the one that REFUSES a caller's identity (D-8126): it tests the stripped copy for both keys and
     // refuses, then derives the pair from the pane, and fills nowhere else.
     const callFill = code.slice(code.indexOf("if [[ \"$key\" == 'calls.record' ]]; then"));
@@ -421,6 +426,19 @@ describe('the client stays closed', () => {
     expect(callFill).toMatch(/\*'"byId":'\*\|\*'"byUuid":'\*\)\s+refuse 'bad-body'/);
     expect(callFill).toMatch(/splice_body_field 'byUuid' "\$DERIVED_UUID"/);
     expect(callFill).toMatch(/splice_body_field 'byId' "\$DERIVED_ID"/);
+    // The note door's fill (Overlord W1a, the notes piece) is the call record's rule on its three POST rows: it refuses a body
+    // naming either key, then splices the pane's pair; `note list` fills the query.
+    const noteFill = code.slice(code.indexOf("if [[ \"$key\" == 'note.add' || \"$key\" == 'note.close' || \"$key\" == 'note.handover' ]]; then"));
+    expect(code.match(/if \[\[ "\$key" == 'note\.add' \|\| "\$key" == 'note\.close' \|\| "\$key" == 'note\.handover' \]\]; then/g) ?? []).toHaveLength(1);
+    expect(noteFill).toMatch(/\*'"byId":'\*\|\*'"byUuid":'\*\)\s+refuse 'bad-body'/);
+    expect(noteFill).toMatch(/splice_body_field 'byUuid' "\$DERIVED_UUID"/);
+    expect(noteFill).toMatch(/splice_body_field 'byId' "\$DERIVED_ID"/);
+    // The probe answer's fill is the note door's rule on one row: refuse a body naming either key, then append the pane's pair.
+    const probeFill = code.slice(code.indexOf("if [[ \"$key\" == 'probe.answer' ]]; then\n    [[ -n"));
+    expect(code.match(/if \[\[ "\$key" == 'probe\.answer' \]\]; then\n    \[\[ -n/g) ?? []).toHaveLength(1);
+    expect(probeFill).toMatch(/\*'"byId":'\*\|\*'"byUuid":'\*\)\s+refuse 'bad-body'/);
+    expect(probeFill).toMatch(/append_body_field 'byId' "\$DERIVED_ID"/);
+    expect(probeFill).toMatch(/append_body_field 'byUuid' "\$DERIVED_UUID"/);
     // The claimant's identity is the PANE's, derived, never a value the caller
     // passes as a flag: the runs.open fill splices `$DERIVED_UUID` and nothing else.
     expect(code).toMatch(/splice_body_field 'claimedByUuid' "\$DERIVED_UUID"/);

@@ -19,6 +19,7 @@ import { changeLatchSites, changeLatchReported, onceWarnDefinitions } from './co
 import { registryListingSites } from './consolidationCensus.js';
 import { dialogFrameProducers, sessionStreamPollSites } from './consolidationCensus.js';
 import { cadenceLiterals, declaredDerivations, laneClockFields, laneClockReported, laneClockShapes, singleFlightGuards } from './consolidationCensus.js';
+import { handClocksOutsideSchedule, LANE_SCHEDULE_EXCEPTIONS } from './consolidationCensus.js';
 
 const show = (name: string, sites: readonly CensusSite[]): void => {
   console.log(`census ${name}: ${sites.length}\n${sites.map((s) => `  ${s.file}:${s.line}  ${s.text.trim()}`).join('\n')}`);
@@ -498,6 +499,67 @@ describe('the lane schedule census (D-5862)', () => {
     expect(fields).toEqual([]);
     expect(laneClockReported(), 'DelegationLane#lastSweepAt and the three disk-retention beats\' clocks are rows of LANE_SCHEDULE').toEqual([]);
     expect(declaredDerivations()).toHaveLength(3);
+  });
+});
+
+// D-8614 (ARCH-68's follow-up): the hand-made clocks outside `LANE_SCHEDULE`, each tagged with the exception that names it.
+describe('the schedule\'s recorded exceptions (D-8614)', () => {
+  let tree = '';
+  beforeAll(() => {
+    tree = mkdtempSync(path.join(tmpdir(), 'consolidation-census-exceptions-'));
+    mkdirSync(path.join(tree, 'server/src'), { recursive: true });
+    writeFileSync(path.join(tree, 'server/src/watch.ts'), [
+      'export class FleetWatcher {',
+      '  private lastStallJudgedAt: number | null = null;',
+      '  private lastNewSweep = 0;',
+      '  a(now: number): void {',
+      '    if (now - this.lastStallJudgedAt > GAP_MS) return;',                 // 5: named (gap rule)
+      '    if (now - this.lastNewSweep < SWEEP_MS) return;',                    // 6: unnamed
+      '  }',
+      '}',
+      'class DelegationLane {',
+      '  private lastRecoverAt = 0;',
+      '  private lastUpkeepHour = -1;',
+      '  private lastOtherDay = -1;',
+      '  private lastLabel = \'\';',
+      '  m(now: number, hour: number, day: number, label: string): void {',
+      '    if (now - this.lastRecoverAt < RETRY_MS) return;',                   // 15: named (safety interval)
+      '    const hourly = hour !== this.lastUpkeepHour;',                       // 16: named (calendar latch)
+      '    if (this.lastUpkeepHour === hour) return;',                          // 17: the same field again: one site
+      '    if (day === this.lastOtherDay) return;',                             // 18: unnamed latch
+      '    if (this.lastOtherDay === null) return;',                            // 19: a literal: a state test, not a key
+      '    if (label === this.lastLabel) return;',                              // 20: not numeric
+      '  }',
+      '}',
+      'class Elsewhere { private lastX = 0; m(d: number): void { if (d === this.lastX) return; } }', // 23: another class
+    ].join('\n'));
+    writeFileSync(path.join(tree, 'server/src/index.ts'), [
+      'accountAudit.sweep(Date.now());',
+      'setInterval(() => { accountAudit.sweep(Date.now()); }, 86_400_000).unref();', // 2: named (process timer)
+      '// setInterval(() => {}, 1000) in a comment',                           // 3: not code
+      'setInterval(() => { other.beat(); }, 60_000);',                          // 4: unnamed
+    ].join('\n'));
+  });
+  afterAll(() => { if (tree) rmSync(tree, { recursive: true, force: true }); });
+
+  it('FIXTURE: each shape is found once per clock, named or not, and a literal, a string field, a comment and another class are not', () => {
+    expect(handClocksOutsideSchedule(tree).map((x) => [x.file, x.line, x.name, x.exception?.kind ?? null])).toEqual([
+      ['server/src/index.ts', 2, 'accountAudit.sweep', 'process-timer'],
+      ['server/src/index.ts', 4, 'setInterval', null],
+      ['server/src/watch.ts', 5, 'lastStallJudgedAt', 'gap-rule'],
+      ['server/src/watch.ts', 6, 'lastNewSweep', null],
+      ['server/src/watch.ts', 15, 'lastRecoverAt', 'safety-interval'],
+      ['server/src/watch.ts', 16, 'lastUpkeepHour', 'calendar-latch'],
+      ['server/src/watch.ts', 18, 'lastOtherDay', null],
+    ]);
+  });
+
+  it('REAL: every clock the census finds is a recorded exception, and every exception names a clock it finds', () => {
+    const found = handClocksOutsideSchedule();
+    show('handClocksOutsideSchedule', found);
+    expect(found.filter((x) => x.exception === null).map((x) => x.text.trim()), 'a hand-made clock is a row or a recorded exception').toEqual([]);
+    expect(found.map((x) => `${x.owner ?? x.file}#${x.name}`).sort()).toEqual(LANE_SCHEDULE_EXCEPTIONS.map((e) => `${e.owner ?? e.file}#${e.name}`).sort());
+    for (const e of LANE_SCHEDULE_EXCEPTIONS) expect(e.reason.length, `${e.name} carries no reason`).toBeGreaterThan(0);
   });
 });
 

@@ -342,8 +342,11 @@ describe('crossTreeCollisions — one merge earlier', () => {
     // never remembered: `deviation-refs.test.ts` reads the line below and checks
     // it against the corpus. It read SIX until D-1310 found that D-149 and D-172
     // are citations the shipped DEFINITION drops — a retraction that reached two
-    // plan entries and not this file (D-1433).
-    // SUB-211 COLLISIONS: D-73, D-142, D-143, D-144
+    // plan entries and not this file (D-1433). It then read four (73, 142, 143
+    // and 144) until D-8562's renumbering moved every later pre-allocator
+    // definition to an issued number and reworded the citations written in the
+    // definition shape: the corpus now derives none, and GRANDFATHERED is empty.
+    // SUB-211 COLLISIONS: none
     expect(crossTreeCollisions([f('a.md', '- **D-72** — x')], [f('b.md', '- **D-72** — y')])).toEqual([]);
     expect(crossTreeCollisions([f('a.md', '- **D-210** — x')], [f('b.md', '- **D-210** — y')])).toEqual([]);
     // 211 is the first allocator-era number and IS in scope.

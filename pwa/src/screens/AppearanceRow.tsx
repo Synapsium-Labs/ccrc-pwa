@@ -20,7 +20,7 @@
 // lets a file hold them only beside the primitive (design-system-boundary
 // .test.ts). With the row gone, SettingsScreen.tsx no longer rendered a
 // `<Radio>`, so the frame both fieldsets share lives here too.
-import type { ReactNode } from 'react';
+import type { KeyboardEvent, ReactNode } from 'react';
 import { RADIO_FIELDSET, RADIO_LEGEND, Radio, SYSTEM, THEMES } from '@ccrc/ui';
 import { doorMark } from '../command/door';
 
@@ -76,4 +76,19 @@ export function AppearanceRow({ choice, current, onPick, group }: {
       </span>
     </Radio>
   );
+}
+
+const STEP: Record<string, number> = { ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1 };
+
+/** The arrow keys of one radiogroup of `count` cards with `at` checked, as the group's `onKeyDown`: one press is one
+ *  `pick(next)`, and `preventDefault` keeps the browser's own radio arrowing from moving the choice a second time. */
+export function radioArrows(count: number, at: number, pick: (next: number) => void): (e: KeyboardEvent<HTMLDivElement>) => void {
+  return (e) => {
+    const step = STEP[e.key];
+    if (step === undefined) return;
+    e.preventDefault();
+    const next = (at + step + count) % count;
+    pick(next);
+    e.currentTarget.querySelectorAll<HTMLInputElement>('input[type="radio"]')[next]?.focus();
+  };
 }

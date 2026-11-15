@@ -33,6 +33,7 @@ import { READ_FROM_MAX_BYTES } from '../../../shared/agent-protocol.js';
 import {
   DELEGATION_SPOOL_BOUNDS,
   type DelegationEventEnvelopeV1,
+  type DelegationEventKind,
   type DelegationSpoolLineV1,
 } from '../../../shared/api.js';
 import type { FleetIO, MeasuredDirectoryRead } from '../io.js';
@@ -163,8 +164,9 @@ function closedKeys(o: Record<string, unknown>, required: readonly string[], opt
 const COMMON_REQUIRED = ['v', 'eventKind', 'observedAt', 'sessionId', 'parentIncarnation', 'claudeSessionId'] as const;
 const COMMON_OPTIONAL = ['claudeVersion', 'cwd', 'transcriptPath', 'agentId', 'agentType', 'truncated'] as const;
 
+/** A lifecycle event's variant is its own kind (the L0 list's, D-8613); a tool event's is split by tool. */
 type Variant =
-  | 'SessionStart' | 'SessionEnd' | 'SubagentStart' | 'SubagentStop' | 'UserPromptSubmit'
+  | Exclude<DelegationEventKind, 'PreToolUse' | 'PostToolUse'>
   | 'PreAgentic' | 'PreBash' | 'PostAgent' | 'PostWorkflow' | 'PostBash';
 
 /** The variant a line names, from its `eventKind` and (for a tool event) its `toolName`; anything outside the closed set is refused. */

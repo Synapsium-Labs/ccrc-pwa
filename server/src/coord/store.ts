@@ -31,6 +31,20 @@ import type { BuildCaptureResult, BuildCaptureTry, ClaudeBuildRecord } from '../
 import type { LinkingWriteBody, ProjectLinkingWire } from '../../../shared/linking.js';
 import { openPracticeCase, practiceCaseNewest, type PracticeCaseNewestRead, type PracticeCaseOpen } from './practiceCasesStore.js';
 import type { CaseDue } from './practiceCases.js';
+import {
+  advanceCursor, advanceObserved, appendNote, cardReadOfStart, clearShadowWalk, generationsCursor, handoverBefore, insertCardRead,
+  insertSnapshot, insertStart, liveGenerations, liveNotes, mintGeneration, noteById, putHandover, setGenerationDue, setHoldOff,
+  startsOf, startsSince, stepGeneration,
+  type CardReadInsert, type CardReadRead, type CursorAdvance, type CursorRead, type DueWrite, type SnapshotInsert,
+  type GenExpect, type GenerationsRead, type MintInput, type MintResult, type StartInsert, type StartInsertResult, type StartsRead,
+  type HandoverRead, type NoteByIdRead, type NoteInsert, type NotesRead,
+} from '../continuity/continuityStore.js';
+import * as timers from '../continuity/continuityStore.js';
+import * as probes from '../continuity/continuityStore.js';
+import type { TimerActor, TimerCancelReason } from '../../../shared/continuity-timers.js';
+import type { GenView } from '../continuity/generationMachine.js';
+import type { Observed } from '../time/observed.js';
+import type { BookState, ContinuityReadDoor, HandoverNote, RenewalTrigger } from '../../../shared/continuity.js';
 import type { Invitation } from './peerBound.js';
 import { liftReviewCapByCoordinator, raiseReviewCapAsk, reviewCapGate, reviewCapStatesOf, type CoordLiftResult, type ReviewCapState } from './reviewCapStore.js';
 import { renderEnvelope } from './envelope.js';
@@ -112,6 +126,8 @@ import { bodyDigest } from '../../../shared/mark.mjs';
 import { isNewerTag, newestTag } from '../../../shared/semver.js';
 import type { ClaudeRollTargets } from '../../../shared/claudeVersion.js';
 import type { RollSettingsRead } from './rollTarget.js';
+import type { PlainAutoMemoryRead } from '../continuity/profileFor.js';
+import type { PlainAutoMemoryChoice } from '../../../shared/plainAutoMemory.js';
 import {
   SHADOW_JOURNAL_MAX_AGE_MS, SHADOW_JOURNAL_MAX_ROWS, isShadowLane, shadowVerdictKey,
   type ShadowLane, type ShadowVerdictInput, type ShadowVerdictRow,
@@ -129,6 +145,7 @@ import type { RunLastMovesRead } from './runWire.js';
 import { reviveDec, reviveMeas, reviveObs, type JournalRow } from './journalparse.js';
 import { BRIEF_NOTICE_DETAIL, BRIEF_RETRY_DETAIL, WAVE_BRIEF_SUBJECT, briefTakenStartDetail, type BriefTakenHow, type UnlandedBrief } from './briefwatch.js';
 import { MAIL_REPLAY_CEILING_ERROR } from './delivery.js';
+import { DEFAULT_CHARACTER, isCharacter, type Character } from '../../../shared/face.js';
 import { LIFECYCLE_PARK_ERRORS, REVIVABLE_PARK_ERRORS, REVIVE_SKIPPED_SENDERS, REVIVE_SKIPPED_SUBJECT_HEADS } from './mailRevive.js';
 import {
   DEAD_COORDINATOR_BREAKER_HELD_HEAD, DEAD_COORDINATOR_JOURNAL_ACTS, deadCoordinatorBreakerHeldDetail,
@@ -5362,6 +5379,53 @@ export class CoordStore {
   practiceCaseNewest(): PracticeCaseNewestRead { return practiceCaseNewest(this.db); }
   /** Overlord §10.5: the table's one writer, a compare-and-set open (`practiceCasesStore.ts`). */
   openPracticeCase(due: CaseDue, seenNewest: number | null, at: number): PracticeCaseOpen { return openPracticeCase(this.db, due, seenNewest, at); }
+  /** Overlord §3.3.11: the start report's one writer, idempotent on the hook's report id (`continuityStore.ts`). */
+  insertStart(row: StartInsert): StartInsertResult { return insertStart(this.db, row); }
+  /** Overlord §3.3.11: every reported start after an id, the generations lane's read (`continuityStore.ts`). */
+  startsSince(sinceId: number, limit?: number): StartsRead { return startsSince(this.db, sinceId, limit); }
+  startsOf(sessionId: string, limit: number): StartsRead { return startsOf(this.db, sessionId, limit); }
+  /** Overlord §3.3.11, H12: the generations, written only by the generations lane through `continuityStore.ts`. */
+  liveGenerations(): GenerationsRead { return liveGenerations(this.db); }
+  mintGeneration(i: MintInput, e: GenExpect | null, live: boolean, c: CursorAdvance | null = null): MintResult { return mintGeneration(this.db, i, e, live, c); }
+  stepGeneration(id: number, e: GenExpect, next: GenView, live: boolean, now: number, card: { hash: string; snapshotId: string } | null = null): { changed: boolean } { return stepGeneration(this.db, id, e, next, live, now, card); }
+  clearShadowWalk(id: number, e: GenExpect, now: number): { changed: boolean } { return clearShadowWalk(this.db, id, e, now); }
+  setGenerationDue(id: number, e: GenExpect, due: DueWrite, blind: readonly RenewalTrigger[]): { changed: boolean } { return setGenerationDue(this.db, id, e, due, blind); }
+  advanceObserved(id: number, e: GenExpect, o: Observed): { changed: boolean } { return advanceObserved(this.db, id, e, o); }
+  setHoldOff(id: number, e: GenExpect): { changed: boolean } { return setHoldOff(this.db, id, e); }
+  generationsCursor(lane: string): CursorRead { return generationsCursor(this.db, lane); }
+  advanceCursor(c: CursorAdvance): { changed: boolean } { return advanceCursor(this.db, c); }
+  /** Overlord §3.3.3 (the card piece, `continuityStore.ts`): the card door's two writers, the generations lane's read of a
+   *  generation's card read, and the card's read of declared coordinator intent. */
+  insertSnapshot(s: SnapshotInsert): { ok: true; fresh: boolean } | { ok: false } { return insertSnapshot(this.db, s); }
+  insertCardRead(r: CardReadInsert): { ok: true; id: number } | { ok: false } { return insertCardRead(this.db, r); }
+  cardReadOfStart(startId: number): CardReadRead { return cardReadOfStart(this.db, startId); }
+  /** Overlord §3.3.12 (the timers piece, `continuityStore.ts`): one writer per move of `TIMER_TRANSITIONS`, and the reads. */
+  insertTimer(row: timers.TimerInsert): { ok: true; id: number } | { ok: false; kind: 'write-failed' } { return timers.insertTimer(this.db, row); }
+  cancelTimer(id: number, actor: TimerActor, reason: TimerCancelReason, at: number): { changed: boolean } { return timers.cancelTimer(this.db, id, actor, reason, at); }
+  markTimersFired(ids: readonly number[], mailId: number, at: number): { changed: boolean } { return timers.markTimersFired(this.db, ids, mailId, at); }
+  pendingTimersOf(setter: string): timers.TimersRead { return timers.pendingTimersOf(this.db, setter); }
+  pendingTimers(): timers.TimersRead { return timers.pendingTimers(this.db); }
+  timerById(id: number): timers.TimerByIdRead { return timers.timerById(this.db, id); }
+  timerHoldFacts(setter: string, firedSince: number): timers.TimerHoldRead { return timers.timerHoldFacts(this.db, setter, firedSince); }
+  setsSince(setter: string, since: number): number { return timers.setsSince(this.db, setter, since); }
+  purgeTimers(before: number): { removed: number } { return timers.purgeTimers(this.db, before); }
+  /** Overlord §3.3.2 C37 (the notes piece, `continuityStore.ts`): the note door's two writers, append-only, and the reads
+   *  the door and the card's gatherer make. */
+  appendNote(n: NoteInsert): { ok: true; id: number } | { ok: false; kind: 'superseded' | 'write-failed' } { return appendNote(this.db, n); }
+  liveNotes(identity: string): NotesRead { return liveNotes(this.db, identity); }
+  noteById(id: number): NoteByIdRead { return noteById(this.db, id); }
+  putHandover(h: { generationId: number; note: HandoverNote; dropped: number; at: number }): { ok: true; fresh: boolean; dropped: number } | { ok: false } { return putHandover(this.db, h); }
+  handoverBefore(identity: string, liveGenerationId: number): HandoverRead { return handoverBefore(this.db, identity, liveGenerationId); }
+  /** Overlord §3.3.5 C41 (the probes piece, `continuityStore.ts`): the lane's round writer, the probe door's answer writer, the
+   *  card and note GETs' read stamp, and the reads. */
+  openRound(r: probes.RoundInsert): ReturnType<typeof probes.openRound> { return probes.openRound(this.db, r); }
+  answerRound(roundId: string, sessionId: string, answers: readonly probes.ProbeAnswerWrite[], book: BookState, at: number): ReturnType<typeof probes.answerRound> { return probes.answerRound(this.db, roundId, sessionId, answers, book, at); }
+  probeRows(generationId: number): probes.ProbeRowsRead { return probes.probeRows(this.db, generationId); }
+  openProbeRound(sessionId: string): probes.ProbeRowsRead { return probes.openProbeRound(this.db, sessionId); }
+  probeRoundRows(roundId: string, sessionId: string): probes.ProbeRowsRead { return probes.probeRoundRows(this.db, roundId, sessionId); }
+  stampContinuityRead(sessionId: string, door: ContinuityReadDoor, at: number): { ok: boolean } { return probes.stampContinuityRead(this.db, sessionId, door, at); }
+  lastContinuityRead(sessionId: string): ReturnType<typeof probes.lastContinuityRead> { return probes.lastContinuityRead(this.db, sessionId); }
+  snapshotFacts(id: string): ReturnType<typeof probes.snapshotFacts> { return probes.snapshotFacts(this.db, id); }
 
   /** D-6909: the review-cap state of a batch of runs (`reviewCapStore.ts`). */
   reviewCapStates(ids: readonly number[]): Map<number, ReviewCapState> {
@@ -5961,6 +6025,51 @@ export class CoordStore {
       }
       return { before, after: this.rollSettings() };
     });
+  }
+
+  // ── auto memory for plain sessions (Overlord W1a, launch profiles PR B; spec §3.3.7 H14) ──────────────
+
+  /** The row as read: a row, no row, or a read that failed. Nothing is decided here: `plainAutoMemoryOf` (L1,
+   *  `continuity/profileFor.ts`) decides what the stored word means. */
+  plainAutoMemorySettings(): PlainAutoMemoryRead {
+    try {
+      const r = this.db.prepare('SELECT choice FROM plain_memory_settings WHERE id = 1').get() as { choice: unknown } | undefined;
+      return r === undefined ? { kind: 'absent' } : { kind: 'row', choice: r.choice };
+    } catch (err) {
+      return { kind: 'unreadable', detail: err instanceof Error ? err.message : String(err) };
+    }
+  }
+
+  /** The one writer of `plain_memory_settings`, in one `tx()`: the row before, then the write (an insert for a lost row),
+   *  then the row after. It validates nothing: the route has narrowed `choice`. A write that changes nothing runs no
+   *  `UPDATE`, so `updatedAt` stays. */
+  setPlainAutoMemory(choice: PlainAutoMemoryChoice, at: number): { before: PlainAutoMemoryRead; after: PlainAutoMemoryRead } {
+    return tx(this.db, () => {
+      const before = this.plainAutoMemorySettings();
+      if (before.kind === 'unreadable') throw new Error(`plain auto memory setting unreadable inside the write: ${before.detail}`);
+      if (before.kind === 'absent') {
+        this.db.prepare('INSERT INTO plain_memory_settings (id, choice, updatedAt) VALUES (1, ?, ?)').run(choice, at);
+      } else if (before.choice !== choice) {
+        this.db.prepare('UPDATE plain_memory_settings SET choice = ?, updatedAt = ? WHERE id = 1').run(choice, at);
+      }
+      return { before, after: this.plainAutoMemorySettings() };
+    });
+  }
+
+  // ── the operator's character choice (the Overlord face plan, Task 6) ─────
+
+  /** The chosen character. A word `isCharacter` refuses (a newer build's) or a lost row reads `DEFAULT_CHARACTER`. */
+  faceSettings(): { character: Character; updatedAt: number } {
+    const r = this.db.prepare('SELECT character, updatedAt FROM face_settings WHERE id = 1').get() as
+      { character: unknown; updatedAt: unknown } | undefined;
+    if (r === undefined) return { character: DEFAULT_CHARACTER, updatedAt: 0 };
+    return { character: isCharacter(r.character) ? r.character : DEFAULT_CHARACTER, updatedAt: Number(r.updatedAt) };
+  }
+
+  /** The one writer of `face_settings`; it validates nothing: the route has narrowed `c`. An upsert, so a lost row returns. */
+  setFaceCharacter(c: Character, at: number): void {
+    this.db.prepare('INSERT INTO face_settings (id, character, updatedAt) VALUES (1, ?, ?) ' +
+      'ON CONFLICT(id) DO UPDATE SET character = excluded.character, updatedAt = excluded.updatedAt').run(c, at);
   }
 
   // ── the trusted set of Claude Code builds (D-8289) ─────────────────────────

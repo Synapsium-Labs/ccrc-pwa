@@ -604,7 +604,10 @@ describe('with `CCRC_AUTH` off the PWA behaves exactly as it does today', () => 
   });
 
   it('an armed box that reports us still signed in clears a stale signal', async () => {
-    vi.stubGlobal('fetch', statusFetch({ authed: true, passkeysEnrolled: 0, mode: 'passphrase' }));
+    // A box that reports us signed in refuses no other read as unauthenticated: the reads that wake on a regained
+    // sign-in (the sockets, the character choice's re-read) get a plain answer, never the gate's 401.
+    vi.stubGlobal('fetch', statusFetch({ authed: true, passkeysEnrolled: 0, mode: 'passphrase' },
+      () => json(404, { ok: false, error: 'not-found' })));
     raiseAuthLost('no-session');
     checkAuth();
     await waitFor(() => expect(isAuthLost()).toBe(false));

@@ -458,6 +458,22 @@ describe('ccrc-agent file ops', () => {
       .toMatchObject({ ok: false, err: 'forbidden' });
   });
 
+  it('stat answers one history W3 steer marker (review 2024 F1), and read, readdir and lstat of it stay forbidden', async () => {
+    await open();
+    const dir = path.join(fixture!.home, '.ccrc', 'history', 'steer-on');
+    mkdirSync(dir, { recursive: true });
+    const marker = path.join(dir, 'lane-a-project-a');
+    expect(await client!.req<Res>(nextId(), { op: 'stat', path: marker })).toMatchObject({ ok: true, missing: true, absent: true });
+    writeFileSync(marker, '');
+    expect(await client!.req<Res>(nextId(), { op: 'stat', path: marker })).toMatchObject({ ok: true, size: 0 });
+    for (const op of ['read', 'lstat', 'readB64'] as const) {
+      expect(await client!.req<Res>(nextId(), { op, path: marker }), op).toMatchObject({ ok: false, err: 'forbidden' });
+    }
+    expect(await client!.req<Res>(nextId(), { op: 'readdir', path: dir })).toMatchObject({ ok: false, err: 'forbidden' });
+    expect(await client!.req<Res>(nextId(), { op: 'stat', path: path.join(dir, '..', 'lane-a-project-a') }))
+      .toMatchObject({ ok: false, err: 'forbidden' });
+  });
+
   it('lstat answers about the PATH, not its target — the distinction `stat` structurally cannot carry', async () => {
     await open();
     const target = path.join(fixture!.home, '.cc-limits', 'target.json');

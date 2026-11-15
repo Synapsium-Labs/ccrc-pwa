@@ -6,7 +6,7 @@
 // `verb-gate.test.ts` and `routes.test.ts`'s knownId census. A new call, or a new builder key, must classify itself
 // here, or this suite goes red.
 //
-// THE CLAIM: 49 id-taking calls across 15 files.
+// THE CLAIM: 50 id-taking calls across 16 files.
 //
 // Origins:
 //   `request`   a route's own parameter or body;
@@ -305,6 +305,8 @@ const GATES = {
   },
   /** `readRegistryMeasured` refuses a non-registry name: it is never read, built or composed. */
   'registry-refused': { file: 'registry.ts', scope: 'readRegistryMeasured', re: /\bisRegistryId\(/ },
+  /** The launch-profile lane refuses a row whose id is not a registry id before it composes any argv (Overlord W1a). */
+  'profile-lane-id': { file: 'continuity/profileLane.ts', scope: 'profilePass', re: /if \(!isRegistryId\(r\.id\)\) \{ routeUnread \+= 1; continue; \}/ },
   /** `POST /api/runs` checks `claimedBy`, then `sessionId`, as given: two gates of its decider's table (D-5384), right
    *  after the shape gate, so a refusal comes before any registry read. */
   'run-open-checks': {
@@ -495,6 +497,9 @@ const CENSUS: readonly CensusRow[] = [
   // watch.ts: the naming sweep's rows come from the listing, which never builds a refused name; the `entry` ties the
   // loop's `r` to the listing's rows.
   { file: 'watch.ts', scope: 'namesPass', builder: 'wsRename', id: 'r.id', origin: ['registry'], gate: ['registry-refused'], entry: SWEEP_NAMES_LISTING },
+  // continuity/profileLane.ts (Overlord W1a launch profiles PR B): the lane's rows are the watcher's listing, and the pass
+  // refuses a non-registry id itself before `routeSet` composes an argv.
+  { file: 'continuity/profileLane.ts', scope: 'profilePass', builder: 'routeSet', id: 'r.id', origin: ['registry'], gate: ['profile-lane-id'] },
 ];
 
 /** The files whose gates ask the predicate themselves. */
@@ -507,6 +512,8 @@ const GATE_FILES = [
   'coord/expireArchived.ts', 'coord/childReclaimStale.ts', 'coord/runCloseFacts.ts',
   // orphanTreeLane.ts (D-6635): the orphan census's `inside` id is vetted by the predicate before the lane reads that row.
   'orphanTreeLane.ts',
+  // continuity/profileLane.ts (Overlord W1a launch profiles PR B): each row's id is vetted by the predicate before `routeSet`.
+  'continuity/profileLane.ts',
   // ccdargv.ts (delegation broker wave 5): `CCD_ARGV.leaseMark` vets the parent and a promoted session with the predicate
   // inside the builder, which throws before any argv is built (W5-G6b).
   'ccdargv.ts',

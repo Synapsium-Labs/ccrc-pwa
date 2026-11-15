@@ -32,7 +32,7 @@ import { KeyedQueue } from '../src/inject/queue.js';
 import { Bus } from '../src/bus.js';
 import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
-import { SessionStream } from '../src/sessionws.js';
+import { NO_TICK, SessionStream } from '../src/sessionws.js';
 import { createSpawnPty } from '../src/remote/pty.js';
 import type { FleetClient } from '../src/remote/client.js';
 import type { PtyLike } from '../src/pty.js';
@@ -202,7 +202,7 @@ describe('the session socket carries only the mask (D-5513)', () => {
     const cfg = loadConfig({ CCRC_HOME: home });
     const run: Runner = async () => ({ ran: true, code: 0, stdout: '', stderr: '' });
     const deps: Deps = { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue(), time: fakeTime().ports };
-    const stream = new SessionStream(deps, new Bus(), ID, (m) => frames.push(m));
+    const stream = new SessionStream(deps, new Bus(), ID, (m) => frames.push(m), undefined, NO_TICK);
     const send = (stream as unknown as { send(m: SessionStreamMsg): void }).send;
     const ask = { type: 'ask', ask: { questions: [{ question: `use ${OAT}?`, header: 'Key', multiSelect: false, options: [{ label: ORKEY }] }] } };
     send(ask as unknown as SessionStreamMsg);
@@ -1212,6 +1212,12 @@ describe('the rulings: every egress of session-derived text goes through the mas
     '/api/mail': /mail: \(deps\.masker \?\? SHAPE_ONLY_MASKER\)\.maskDeep\(mail\)/,
     '/api/mail/:id': /envelope: \(deps\.masker \?\? SHAPE_ONLY_MASKER\)\.maskDeep\(row\.envelope\)/,
     '/api/mail/inbox': /text: masker\.maskDeep\(renderInboxEntry\(/,   // D-6778: each rendered entry is masked before paging
+    // The card (Overlord W1a; review 2023 F2): the trimmed text is masked once, whole, before it is hashed and paged, so a
+    // secret crossing a page edge is masked as one string.
+    '/api/sessions/:id/card': /\.maskText\(trimCard\(renderCard\(renderer, facts\), CARD_BUDGET_TOKENS\)\.text\)/,
+    // The probe door (Overlord W1a, the probes piece; notes review 2039 F12): each question, choice and expected answer is
+    // masked once with the card's masker before it is rendered, paged or graded.
+    '/api/sessions/:id/probe': /const questions = open\.rows\.map\(\(r\) => maskedQuestion\(r, mask\)\)/,
     '/api/runs/:id/items': /items: \(deps\.masker \?\? SHAPE_ONLY_MASKER\)\.maskDeep\(/,
     '/api/coord/shadow-journal': /rows: \(deps\.masker \?\? SHAPE_ONLY_MASKER\)\.maskDeep\(deps\.coord\.shadowVerdicts/,
     '/api/feed': /events: \(deps\.masker \?\? SHAPE_ONLY_MASKER\)\.maskDeep\(/,
@@ -1237,7 +1243,9 @@ describe('the rulings: every egress of session-derived text goes through the mas
     '/api/coord/dispatch-abandon': "the dead-dispatch switch's choice and bound (D-7319)",
     '/api/coord/lane-arm': "each shadow lane's choice word, write and import times, and its retired marker's name: no session text (D-8274)",
     '/api/coord/run-close': "the run-close groups' states, run ids with their programme slugs and reasons, and 7-day counts: no session text (D-8077)",
+    '/api/face': 'the face character, one word from a closed set, and its change time: no session-derived text',
     '/api/coord/roll-idle': 'one setting word and its two choices (D-7453)',
+    '/api/coord/plain-auto-memory': 'one setting word, its default and its two choices (Overlord W1a launch profiles PR B)',
     '/api/coord/scope-sweep': "the sweep's two switches, each a marker state word (D-7994)",
     '/api/coord/delegation-adopt': "the adoption switch's marker state, two capability words, refusal words, and the lane's counts and kept worktrees' projects, names and parent sessions: no session text (D-8112, D-8114)",
     '/api/testbox': "the test box's state and reasons, the two hosts' tool versions and the run counts: no session text (D-7411)",

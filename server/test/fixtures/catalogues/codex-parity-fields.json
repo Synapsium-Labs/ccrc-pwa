@@ -1,0 +1,44 @@
+{
+  "models": [
+    {
+      "slug": "gpt-6.1-sol",
+      "context_window": 272000,
+      "max_context_window": 872000,
+      "visibility": "list",
+      "supported_reasoning_levels": [
+        {"effort": "low"}, {"effort": "medium"}, {"effort": "high"},
+        {"effort": "xhigh"}, {"effort": "max"}, {"effort": "ultra"}
+      ],
+      "use_responses_lite": true,
+      "support_verbosity": true,
+      "default_verbosity": "low",
+      "default_reasoning_level": "low",
+      "truncation_policy": {"mode": "tokens", "limit": 10000},
+      "supports_parallel_tool_calls": true,
+      "tool_mode": "code_mode_only"
+    },
+    {
+      "slug": "gpt-5.5",
+      "context_window": 272000,
+      "max_context_window": 272000,
+      "visibility": "list",
+      "supported_reasoning_levels": [
+        {"effort": "low"}, {"effort": "medium"}, {"effort": "high"}, {"effort": "xhigh"}
+      ],
+      "use_responses_lite": "false",
+      "support_verbosity": false,
+      "default_verbosity": "terse",
+      "default_reasoning_level": "max",
+      "truncation_policy": {"mode": "lines", "limit": 0}
+    },
+    {
+      "slug": "codex-auto-review",
+      "context_window": 272000,
+      "max_context_window": 872000,
+      "visibility": "hide",
+      "supported_reasoning_levels": [
+        {"effort": "low"}, {"effort": "medium"}, {"effort": "high"}, {"effort": "xhigh"}, {"effort": "max"}
+      ]
+    }
+  ]
+}

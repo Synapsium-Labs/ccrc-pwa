@@ -4,7 +4,7 @@
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { expect } from 'vitest';
-import type { CardFacts, CardSection, Fact } from '../../../shared/continuity-card.js';
+import type { CardCheckpoint, CardFacts, CardNote, CardSection, Fact } from '../../../shared/continuity-card.js';
 import type * as CardModule from '../../src/continuity/card.js';
 import type { MutantSet, SuiteCase } from './mutate.js';
 
@@ -18,14 +18,20 @@ export const CARD_BLOCK_KEY = 'server/src/continuity/card.ts#block';
 const AT = Date.UTC(2026, 10, 13, 12, 0, 0);
 const read = <T>(value: T): Fact<T> => ({ kind: 'read', value });
 const unmeasured = (what: string): Fact<never> => ({ kind: 'unmeasured', what });
+/** A live thread note whose next act is `next` (the notes piece's shape). */
+const noteOf = (id: number, at: number, next: string): CardNote =>
+  ({ id, at, kind: 'thread', key: 'run 11', keyFact: 'live', waitsOn: 'w', next });
+/** A checkpoint whose handover note's tone is `tone`, with no threads or cautions. */
+const cpOf = (at: number, tone: string): CardCheckpoint =>
+  ({ at, handover: { generation: 1, dropped: 0, threads: [], cautions: [], tone } });
 const empty = (over: Partial<CardFacts> = {}): CardFacts => ({
   sessionId: 'lane-a-project-a', role: 'coordinator', roleWhy: 'fixture', at: AT,
   runs: read([]), ledger: read([]), claims: read([]), intent: read(false), itemsRaised: read([]),
-  mailOutstanding: read([]), notes: read([]), checkpoint: read(null),
+  mailOutstanding: read([]), mailMore: false, notes: read([]), checkpoint: read(null), timers: read([]),
   history: read({ verb: 'ccrc history describe', node: null }), ...over,
 });
 const RUN = { id: 11, programme: 'prog-a', wave: 1, waveOf: 2, state: 'working', planPath: null, kind: 'work' };
-const MAIL = { deliveryId: 7, fromId: 'coordinator', at: AT, subject: 's' };
+const MAIL = { deliveryId: 7, fromId: 'coordinator', at: AT, subject: 's', parked: false };
 const sec = (key: string, rank: number, keep: boolean, size: number): CardSection => ({ key, rank, keep, text: `${key}:${'x'.repeat(size)}` });
 const join = (s: readonly CardSection[]): string => s.map((x) => x.text).join('\n');
 
@@ -94,6 +100,9 @@ function bareLines(text: string): string[] {
   return out;
 }
 const forged = (text: string): boolean => bareLines(text).some((l) => /^FORGED|[\r\u2028\u2029\u202e]/.test(l));
+/** A field that is escaped to one line (a note's, a handover's: review 2039 F9) cannot forge a line, so its fence is held by
+ *  this: none of its text stands outside every fence. */
+const exposed = (text: string): boolean => bareLines(text).some((l) => l.includes('FORGED'));
 const card = (m: Card, f: CardFacts): string => join(m.renderCard('coordinator', f));
 
 export const CARD_ONE_LINE_SET: MutantSet<Card> = {
@@ -125,25 +134,41 @@ export const CARD_ONE_LINE_SET: MutantSet<Card> = {
 export const CARD_BLOCK_SET: MutantSet<Card> = {
   modulePath: CARD_TS,
   mutants: [
-    { id: 'M1', old: "${block(n.text, SHORT_CAP_BYTES, `on note ${n.id}'s row`)}", new: '${n.text}' },
-    { id: 'M2', old: "${block(cp.text, CHECKPOINT_CAP_BYTES, 'on the checkpoint row')}", new: '${cp.text}' },
+    { id: 'M1', old: '${block(fieldLine(n.next), NOTE_FIELD_CAP_BYTES, at)}', new: '${fieldLine(n.next)}' },
+    { id: 'M7', old: '${block(fieldLine(n.waitsOn), NOTE_FIELD_CAP_BYTES, at)}', new: '${fieldLine(n.waitsOn)}' },
+    { id: 'M2', old: "${block(lines.join('\\n'), CHECKPOINT_CAP_BYTES, 'stored on the handover row, which nothing reads back in W1a')}", new: "${lines.join('\\n')}" },
     { id: 'M3', old: "block(it.text, SHORT_CAP_BYTES, `on item ${it.id}'s row`)", new: 'it.text' },
     { id: 'M4', old: "block(p.decisions.map((d) => `${iso(d.at)}: ${d.text}`).join('\\n'), SHORT_CAP_BYTES, where)", new: "p.decisions.map((d) => `${iso(d.at)}: ${d.text}`).join('\\n')" },
     { id: 'M5', old: "block(ratified.join('\\n'), SHORT_CAP_BYTES, where)", new: "ratified.join('\\n')" },
     { id: 'M6', old: "block(unratified.join('\\n'), SHORT_CAP_BYTES, where)", new: "unratified.join('\\n')" },
+    { id: 'M8', old: "block(lines.join('\\n'), TIMERS_CAP_BYTES, 'in `ccrc-api timer list`')", new: "lines.join('\\n')" },
   ],
   suite(m): Record<string, SuiteCase> {
     const ledger = (over: Partial<CardFacts['ledger'] extends Fact<infer T> ? T extends readonly (infer P)[] ? P : never : never>) =>
       empty({ ledger: read([{ slug: 'prog-a', goals: [], openItems: [], decisions: [], ...over }]) });
     return {
-      'a note is fenced': () => { expect(forged(card(m, empty({ notes: read([{ id: 8, at: AT, text: H }]) })))).toBe(false); },
-      'a checkpoint is fenced': () => { expect(forged(card(m, empty({ checkpoint: read({ at: AT, text: H }) })))).toBe(false); },
+      'a note is fenced': () => {
+        const t = card(m, empty({ notes: read([noteOf(8, AT, H)]) }));
+        expect([forged(t), exposed(t)]).toEqual([false, false]);
+      },
+      'a note\'s waits-on is fenced': () => {
+        const t = card(m, empty({ notes: read([{ ...noteOf(8, AT, 'n'), waitsOn: H }]) }));
+        expect([forged(t), exposed(t)]).toEqual([false, false]);
+      },
+      'a checkpoint is fenced': () => {
+        const t = card(m, empty({ checkpoint: read(cpOf(AT, H)) }));
+        expect([forged(t), exposed(t)]).toEqual([false, false]);
+      },
       'an item text is fenced': () => {
-        expect(forged(card(m, empty({ itemsRaised: read([{ id: 6, programme: 'prog-a', kind: 'decide', state: 'open', neededBy: 'soon', at: AT, text: H }]) })))).toBe(false);
+        expect(forged(card(m, empty({ itemsRaised: read([{ id: 6, programme: 'prog-a', kind: 'decide', state: 'open', neededBy: 'soon', at: AT, text: H, everTicked: false, held: false }]) })))).toBe(false);
       },
       'a decision is fenced': () => { expect(forged(card(m, ledger({ decisions: [{ at: AT, text: H }] })))).toBe(false); },
       'a ratified goal is fenced': () => { expect(forged(card(m, ledger({ goals: [{ text: H, ratified: true }] })))).toBe(false); },
       'an unratified goal is fenced': () => { expect(forged(card(m, ledger({ goals: [{ text: H, ratified: false }] })))).toBe(false); },
+      'a timer preview is fenced': () => {
+        const t = card(m, empty({ timers: read([{ id: 9, dueAt: AT, preview: H, runId: null, programme: null }]) }));
+        expect([forged(t), exposed(t)]).toEqual([false, false]);
+      },
       'a mail subject is fenced': () => { expect(forged(card(m, empty({ mailOutstanding: read([{ ...MAIL, subject: H }]) })))).toBe(false); },
     };
   },
@@ -179,7 +204,55 @@ export const CARD_NEVER_EMPTY_SET: MutantSet<Card> = {
       'a reviewer with only its run has content': () => { expect(has('reviewer', empty({ runs: read([RUN]) }))).toBe(false); },
       'plain does not read the runs': () => { expect(has('plain', empty({ runs: unmeasured('the runs') }))).toBe(true); },
       'a coordinator with only a note has content': () => {
-        expect(has('coordinator', empty({ notes: read([{ id: 1, at: AT, text: 'n' }]) }))).toBe(false);
+        expect(has('coordinator', empty({ notes: read([noteOf(1, AT, 'n')]) }))).toBe(false);
+      },
+    };
+  },
+};
+
+// PR B (plan `w1a-card.md` Task 3): `cardRoleOf`, the card's role, its reason and the renderer that draws it. Its suite
+// writes each answer out rather than reading it off the code: the renderer per role, the wider card for an undecided
+// reading, and the reason naming the fact that could not be measured.
+export const CARD_ROLE_KEY = 'server/src/continuity/card.ts#cardRoleOf';
+type RoleFactsArg = Exclude<Parameters<Card['cardRoleOf']>[0], string>;
+const facts = (over: Partial<RoleFactsArg>): RoleFactsArg => ({
+  designation: 'none', auditBody: false, replayBody: false, child: { kind: 'none' }, childRunKind: 'unmeasured',
+  claimsOpenRun: 'no', declaredIntent: 'no', ...over,
+});
+export const CARD_ROLE_SET: MutantSet<Card> = {
+  modulePath: CARD_TS,
+  mutants: [
+    { id: 'R1 undecided coordinator-or-plain drawn plain', old: "could not be read: coordinator or plain`, renderer: 'coordinator' }", new: "could not be read: coordinator or plain`, renderer: 'plain' }" },
+    { id: 'R2 undecided worker-or-reviewer drawn as reviewer', old: "return { role: 'undecided', roleWhy: why, renderer: 'worker' };", new: "return { role: 'undecided', roleWhy: why, renderer: 'reviewer' };" },
+    { id: 'R3 every role drawn plain', old: 'renderer: FLEET_ROLES[role].cardRenderer }', new: "renderer: 'plain' }" },
+    { id: 'R4 the intent never named as unread', old: "f.declaredIntent === 'unmeasured' ? 'its declared coordinator intent' : null", new: 'null' },
+    { id: 'R5 the coordinator reason inverted', old: "f.claimsOpenRun === 'yes' ? 'it claims an open run'", new: "f.claimsOpenRun === 'no' ? 'it claims an open run'" },
+    { id: 'R6 the child mark read as the run kind', old: "const why = f.child.kind === 'child'", new: "const why = f.child.kind !== 'child'" },
+    { id: 'R7 the registry unread drawn by the worker card', old: "worker, reviewer, coordinator or plain', renderer: 'coordinator' }", new: "worker, reviewer, coordinator or plain', renderer: 'worker' }" },
+    { id: 'R8 the registry unread folded into an unreadable marker', old: 'if (f === CARD_REGISTRY_UNREAD) {', new: "if (f === CARD_REGISTRY_UNREAD) { return cardRoleOf({ designation: 'none', auditBody: false, replayBody: false, child: { kind: 'unreadable' }, childRunKind: 'unmeasured', claimsOpenRun: 'unmeasured', declaredIntent: 'unmeasured' });" },
+  ],
+  suite(m): Record<string, SuiteCase> {
+    return {
+      'each decided role is drawn by its FLEET_ROLES renderer': () => {
+        expect(m.cardRoleOf(facts({ claimsOpenRun: 'yes' }))).toEqual({ role: 'coordinator', roleWhy: 'it claims an open run', renderer: 'coordinator' });
+        expect(m.cardRoleOf(facts({ declaredIntent: 'yes' }))).toEqual({ role: 'coordinator', roleWhy: 'it declared coordinator intent', renderer: 'coordinator' });
+        expect(m.cardRoleOf(facts({}))).toMatchObject({ role: 'plain', renderer: 'plain' });
+        expect(m.cardRoleOf(facts({ child: { kind: 'child', runId: 3 }, childRunKind: 'work' }))).toEqual({ role: 'worker', roleWhy: 'a child of run 3, a work run', renderer: 'worker' });
+        expect(m.cardRoleOf(facts({ child: { kind: 'child', runId: 3 }, childRunKind: 'review' }))).toMatchObject({ role: 'reviewer', renderer: 'reviewer' });
+        expect(m.cardRoleOf(facts({ designation: 'live' }))).toMatchObject({ role: 'overlord', renderer: 'overlord' });
+        expect(m.cardRoleOf(facts({ auditBody: true }))).toMatchObject({ role: 'auditor', renderer: 'plain' });
+      },
+      'an undecided reading is drawn by the wider card and names what could not be read': () => {
+        expect(m.cardRoleOf(facts({ claimsOpenRun: 'unmeasured', declaredIntent: 'unmeasured' }))).toEqual({ role: 'undecided',
+          roleWhy: 'its runs and its declared coordinator intent could not be read: coordinator or plain', renderer: 'coordinator' });
+        expect(m.cardRoleOf(facts({ declaredIntent: 'unmeasured' })).roleWhy).toBe('its declared coordinator intent could not be read: coordinator or plain');
+        expect(m.cardRoleOf(facts({ child: { kind: 'unreadable' } }))).toEqual({ role: 'undecided',
+          roleWhy: 'its child marker could not be read: worker or reviewer', renderer: 'worker' });
+        expect(m.cardRoleOf(facts({ child: { kind: 'child', runId: 4 } })).roleWhy).toBe('a child of run 4, whose kind could not be read: worker or reviewer');
+      },
+      'the registry could not say whether it is a child: no role ruled out, the widest card (review 2023 F7)': () => {
+        expect(m.cardRoleOf(m.CARD_REGISTRY_UNREAD)).toEqual({ role: 'undecided',
+          roleWhy: 'the registry could not say whether it is a child: worker, reviewer, coordinator or plain', renderer: 'coordinator' });
       },
     };
   },

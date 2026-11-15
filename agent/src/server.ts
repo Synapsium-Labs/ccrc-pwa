@@ -80,7 +80,7 @@ import {
 } from './testboxAdminOp.js';
 import type { TestboxAdminArgvRefusal } from '../../shared/testbox-admin.js';
 import type { AccountArgvRefusal } from '../../shared/account-argv.js';
-import { canonicalize, checkCcrcSwitchStat, checkPath, checkReadTarget, isExecAllowed, type WhitelistConfig } from './whitelist.js';
+import { canonicalize, checkCcrcSwitchStat, checkPath, checkReadTarget, checkSteerOnStat, isExecAllowed, type WhitelistConfig } from './whitelist.js';
 
 /**
  * ccrc-agent: a small authenticated WS service exposing a whitelisted
@@ -528,8 +528,10 @@ async function handleReq(ws: WebSocket, req: AgentReq, ctx: ConnCtx, verbCache: 
       return;
     }
     case 'stat': {
-      // D-8382: the read roots, or the operator's ~/.ccrc switch files, for this op alone (`checkCcrcSwitchStat`).
-      const p = await checkPath(req.path, ctx.cfg, 'read') ?? await checkCcrcSwitchStat(req.path, ctx.cfg);
+      // D-8382: the read roots, or the operator's ~/.ccrc switch files, for this op alone (`checkCcrcSwitchStat`); and one
+      // history W3 steer marker, for the launch-profile lane (`checkSteerOnStat`).
+      const p = await checkPath(req.path, ctx.cfg, 'read') ?? await checkCcrcSwitchStat(req.path, ctx.cfg)
+        ?? await checkSteerOnStat(req.path, ctx.cfg);
       if (!p) { send(ws, fail(req.id, 'forbidden')); return; }
       send(ws, ok(req.id, statPayload(await statMeasured(p))));
       return;

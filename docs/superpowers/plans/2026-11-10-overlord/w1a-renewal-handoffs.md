@@ -204,6 +204,26 @@ renewed from canonical state instead of resumed (§3.3.8).
   `shadow` writes nothing)
 - Test: `server/test/continuity-generations-lane.test.ts`, `server/test/continuity-hibernate-wake.test.ts` (new)
 
+**Precondition: three facts to measure before the lane writes `refuse`** (review 2004 F2, the coordinator's ruling). The
+compaction piece ships the arm dark and measured none of them. Measure each on the rig, on the Claude Code build the
+fleet runs, before this task's `refuse` reaches a live route:
+- **The JSON block form.** The arm prints `{"decision":"block","reason":...}` on stdout and exits 0, because the hook's
+  contract is exit 0 on every path. W0-13 measured only the exit-code-2 form. If a build ignores the JSON form, four
+  things go wrong at once:
+  - the compaction happens with no compaction card set, because the card returned on `CS_REFUSED`;
+  - the events file says `refused` for a compaction that happened, with no `pre` line, so `compactionsSince` counts
+    one fewer;
+  - history's steer print is suppressed, so that compaction carries no leaf block;
+  - the raw JSON is appended to the compaction instructions.
+- **Claude Code's precomputed automatic compaction.** Static strings in Claude Code 2.1.325 show a precomputed
+  compaction run beside the turn, also with `trigger: "auto"` (`Precomputed compact blocked by PreCompact hook`). If
+  PreCompact fires for it, the once-a-turn refusal is spent there, and that turn's real proactive compaction passes.
+- **The order of UserPromptSubmit and an automatic PreCompact at a turn's start.** If PreCompact runs first, the turn
+  marker's `turnAt` is still the previous turn's start, a refusal made then counts as this turn's, and the arm lets
+  this compaction through. That fails open: at worst the arm refuses every other turn, never twice in one.
+
+The compaction piece's departures (`w1a-compaction/departures.md`, `refusal-block-is-the-json-form`) hold the detail.
+
 - [ ] **Step 1: Failing tests:** live with budget writes `refuse` once; spent writes `allow`; a generation inside its
   least age with budget left writes `refuse` (the budget alone decides); shadow writes nothing; `precompactField` at
   2, 3 and 4.

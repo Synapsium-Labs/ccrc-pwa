@@ -17,6 +17,7 @@
 import { createElement, Fragment, useCallback, useEffect, useId, useRef, useState } from 'react';
 import type { FocusEvent, MouseEvent, ReactNode } from 'react';
 import { STALL_SECTION_TEXT, type StallLevel } from '../../../shared/api';
+import { PLAIN_AUTO_MEMORY_TEXT } from '../../../shared/plainAutoMemory';
 import { navigate } from '../lib/router';
 import type { SettingsSectionId } from '../lib/routes';
 import { COLLECT_PAUSE_TEXT, COLLECT_SECTION_TEXT } from './collectLaneWords';
@@ -36,7 +37,7 @@ export const UNCONFIRMED_TEXT = "Saved — the server's answer could not be read
 export const SETTINGS_INDEX_TEXT = {
   purpose: {
     updates: 'Which ccrc release the fleet runs, and how new releases reach it.',
-    appearance: 'How ccrc looks on this device. Other devices keep their own choice.',
+    appearance: 'How ccrc looks: the layout and theme on this device, and your character on every device.',
     notifications: 'What this browser is told, and which releases the server announces to everyone.',
     automation: 'What the server does to the fleet by itself: checking on quiet workers, abandoning dispatches that never '
       + 'came back, and clearing what dead sessions leave behind.',
@@ -302,6 +303,10 @@ export const SETTINGS_CARDS = {
       scope: SETTINGS_SCOPE.device, title: 'Layout and theme',
       purpose: 'How ccrc looks on this device. Other devices keep their own choice.',
     },
+    character: {
+      scope: SETTINGS_SCOPE.you, title: 'Character',
+      purpose: 'The face the console wears. Your choice follows you to every device.',
+    },
   },
   notifications: {
     browser: { scope: SETTINGS_SCOPE.browser, title: 'Push notifications', purpose: NOTIFICATIONS_TEXT.browserPurpose },
@@ -332,6 +337,10 @@ export const SETTINGS_CARDS = {
       scope: SETTINGS_SCOPE.fleet, title: 'Roll idle sessions',
       purpose: 'Restarts an idle session onto the current ccrc release and the newest Claude Code build, resuming its '
         + 'conversation, once it has been quiet for 90 minutes. One session at a time, and never one that is working.',
+    },
+    /** Overlord W1a launch profiles PR B (H14): auto memory for plain sessions, after Roll idle sessions. */
+    plainMemory: {
+      scope: SETTINGS_SCOPE.fleet, title: PLAIN_AUTO_MEMORY_TEXT.legend, purpose: PLAIN_AUTO_MEMORY_TEXT.purpose,
     },
     /** D-8121: the browser MCP servers' box default and what the fleet's running sessions use, before Roll idle sessions. */
     browser: {

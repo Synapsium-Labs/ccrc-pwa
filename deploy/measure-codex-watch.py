@@ -408,6 +408,8 @@ def read_lane(home, lane):
         value = obj.get(key)
         if isinstance(value, str) and REL_RE.match(value) and ".." not in value.split("/"):
             out[key] = value
+    # Only `stats` is read: the other keys, the optional per-request record's `requests` (D-8619) among them, are the
+    # bridge's, and a lane.json with or without that one reads the same here.
     files = obj.get("bridgeFiles")
     name = files.get("stats") if isinstance(files, dict) else None
     if isinstance(name, str) and REL_RE.match(name) and "/" not in name:

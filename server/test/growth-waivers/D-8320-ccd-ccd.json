@@ -3,5 +3,6 @@
   "maxDelta": 90,
   "d": "D-8320",
   "reason": "the graceful stop in shadow (session-continuity 6a): five C2 functions beside the pane-scope stop and their six call lines",
-  "added": "2026-11-12"
+  "added": "2026-11-12",
+  "createdAt": "2026-11-12"
 }

@@ -44,41 +44,46 @@ export interface GenView {
 export type GenAction = 'hold-deliveries' | 'release-deliveries' | 'assemble-checkpoint' | 'ask-handover' | 'renew'
   | 'renudge-card' | 'start-probes' | 'raise-item' | 'set-hold-off' | 'mint-next' | 'end-this';
 
-export interface GenStep { readonly next: GenView; readonly actions: readonly GenAction[] }
+/** `changed`: the next view differs from the view stepped, in any field (a step can keep the state and change a counter:
+ *  `carded`'s re-nudge, `clearing`'s receipt and retries, `probing`'s second round). The lane writes every changed step and
+ *  only those (the coordinator's ruling F5 on review 2023). */
+export interface GenStep { readonly next: GenView; readonly actions: readonly GenAction[]; readonly changed: boolean }
 
 /** A working generation, outside any renewal. */
 export const GEN_ACTIVE: GenView = { state: 'active', tries: 0, cls: null, renudged: false, probeRounds: 0, hostEnded: false, proven: true };
 /** A generation as a start mints it: at `carded`, not yet proven, its deliveries held until it is `active`. */
 export const GEN_MINTED: GenView = { ...GEN_ACTIVE, state: 'carded', proven: false };
 
-const same = (g: GenView): GenStep => ({ next: g, actions: [] });
-const to = (g: GenView, state: GenerationState, actions: readonly GenAction[], over: Partial<GenView> = {}): GenStep =>
+/** A step before `changed` is measured: `generationStep` measures it once, on the whole view. */
+type Move = Omit<GenStep, 'changed'>;
+const same = (g: GenView): Move => ({ next: g, actions: [] });
+const to = (g: GenView, state: GenerationState, actions: readonly GenAction[], over: Partial<GenView> = {}): Move =>
   ({ next: { ...g, ...over, state }, actions });
 
 /** Into `draining`, from `active` or `degraded`. */
-const drain = (g: GenView, cls: TriggerClass): GenStep =>
+const drain = (g: GenView, cls: TriggerClass): Move =>
   to(g, 'draining', ['hold-deliveries'], { cls, tries: 0, renudged: false, probeRounds: 0, hostEnded: false });
 
 /** Into `degraded`: one operator item, on every step into it (review 1912, F1; one open item per generation is the
  *  renewal act's to keep, not the machine's). After the receipt's first half the old conversation has ended, so the
  *  generation is no longer proven (F5). */
-const degrade = (g: GenView): GenStep =>
+const degrade = (g: GenView): Move =>
   to({ ...GEN_ACTIVE, proven: g.proven && !g.hostEnded }, 'degraded', ['release-deliveries', 'raise-item']);
 
 /** A failure before the receipt's first half (§3.3.11): "returns the generation to `active` with a hold-off if it was
  *  proven, whichever state the renewal began from, and to `degraded` with one operator item if it was not" (the
  *  model's FAILED_RENEWAL_RETURNS='proven'; slug failed-renewal-returns-to-active-only-if-proven). */
-const back = (g: GenView): GenStep => (g.proven
+const back = (g: GenView): Move => (g.proven
   ? to(GEN_ACTIVE, 'active', ['release-deliveries', 'set-hold-off'])
   : degrade(g));
 
 /** Into `clearing`: the host ends the conversation and starts a fresh one; this is the try's one `renew`. */
-const clear = (g: GenView): GenStep => to(g, 'clearing', ['renew'], { tries: 1, hostEnded: false });
+const clear = (g: GenView): Move => to(g, 'clearing', ['renew'], { tries: 1, hostEnded: false });
 
 /** Every start that is not a compaction ends this generation; the lane mints the next at `carded` (`GEN_MINTED`). */
-const startedHere = (g: GenView): GenStep => to(g, 'ended', ['end-this', 'mint-next']);
+const startedHere = (g: GenView): Move => to(g, 'ended', ['end-this', 'mint-next']);
 
-const HANDLERS: Readonly<Record<GenerationState, (g: GenView, e: GenEvent) => GenStep>> = {
+const HANDLERS: Readonly<Record<GenerationState, (g: GenView, e: GenEvent) => Move>> = {
   active: (g, e) => {
     if (e.kind === 'due') return drain(g, e.cls);
     if (e.kind === 'renew-now') return drain(g, 'hard');
@@ -136,7 +141,15 @@ const HANDLERS: Readonly<Record<GenerationState, (g: GenView, e: GenEvent) => Ge
   ended: (g) => same(g),
 };
 
-/** One event on one generation: its next view and the acts the lane takes. */
+/** Every field of a view, so `changed` compares the whole of it: a record over `keyof GenView`, so a new field is a compile
+ *  error here until it is listed. */
+const VIEW_FIELDS: Readonly<Record<keyof GenView, true>> = {
+  state: true, tries: true, cls: true, renudged: true, probeRounds: true, hostEnded: true, proven: true,
+};
+const VIEW_KEYS = Object.keys(VIEW_FIELDS) as readonly (keyof GenView)[];
+
+/** One event on one generation: its next view, the acts the lane takes, and whether the view changed. */
 export function generationStep(g: GenView, e: GenEvent): GenStep {
-  return HANDLERS[g.state](g, e);
+  const m = HANDLERS[g.state](g, e);
+  return { ...m, changed: VIEW_KEYS.some((k) => m.next[k] !== g[k]) };
 }

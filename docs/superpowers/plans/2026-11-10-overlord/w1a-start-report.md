@@ -209,7 +209,15 @@ answered through `refuseRoute` (`stale-uuid` 403, `registry-unmeasurable` 502), 
 
 ## Deviations found
 
-None yet. Decisions this plan takes, by slug:
+- **D-8557, start-report-hook-growth, scope** (2026-11-13) — the fixes of reviews 1911, 1949 and 1975 to the start report
+  (one millisecond budget for the report, the fresh report first, the back-off stamped from the pass's end by how the
+  pass ended and clamped, the sender's uuid rewritten on the resend of a `clear`, `resume` or `compact` report, and the
+  answers that keep a report and count a try) put `ccd/session-hook.sh` at +55 net code lines against the merge-base
+  (2865 to 2920), over the growth limit of 40. Waived to 56 by
+  `server/test/growth-waivers/D-8557-session-hook.json`: the report must run on the SessionStart path itself, and the
+  hook loads no library.
+
+Decisions this plan takes, by slug:
 
 - **start-report-for-every-non-child** — the hook reports the start of every session that is not a child and not a
   fork; the generations lane keeps only the long-lived roles' (the hook cannot know a role; `roleOf` is the server's).

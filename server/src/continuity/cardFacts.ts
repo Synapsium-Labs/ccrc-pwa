@@ -1,0 +1,240 @@
+/**
+ * THE CARD'S GATHERER (Overlord design spec §3.3.3 C38, §3.3.9 C49 to C52; plan `w1a-card.md` Task 3). L3, context C3: it
+ * reads one session's facts from `CoordStore` and the registry, once per request, and decides nothing; the role is
+ * `cardRoleOf`'s (L1) and the text the renderers' (`card.ts`).
+ *
+ * EVERY DISTINCTION IS KEPT. A read that failed, or threw, is a fact of its own (`unmeasured`, naming what could not be
+ * read), and the card renders it as a line. It is never an empty list, which would read as "nothing there".
+ *
+ * ABSOLUTE STAMPS ONLY (plan review A4). Every time a fact carries is a row's own stamp (a mail's send time, an item's
+ * raise time, a decision's time), never an age computed at the request, so unchanged rows give one snapshot and one hash.
+ *
+ * THE READS (measured in Task 3 Step 1, named in the departures note): the runs, through the binding's own readers
+ * (ARCH-62 and ARCH-42: no run/session equality is decided here): `bindingsOf`'s open runs it claims (`claimant`) and
+ * works (`worker`), each hydrated by `run(id)` for its state and kind, and the newest run in its binding series
+ * (`bindingRunsOf`) for a session that claims no open run; the open claimants (`openCoordinatorIds`) for the
+ * role; a child's run kind (`run`), the claims (`activeClaims`, by holder), declared intent (the delegation checkpoint's
+ * `coordinatorIntentByParent` on the registry incarnation, `unmeasured` while the checkpoint is not ready: the coordinator's
+ * ruling F4 on review 2023), the items (`itemsFor`, all programmes, once, the hold disregarded: the session's raised items,
+ * each programme's open items, and the held items of the runs it claims), each programme's goals and modifications
+ * (`goalsFor`), and the outstanding mail (`outstandingMailFor`). The notes piece adds the identity's live notes
+ * (`liveNotes`, each key measured now through `noteKeyReader`, the note door's own reader) and the checkpoint: the handover
+ * note of the generation the identity's live one replaced (`liveGenerations`, then `handoverBefore`, which finds that
+ * generation by its place in the line and reads no state column). The timers piece adds the session's own pending timers
+ * (`pendingTimersOf`, oldest due first), each carried with `timerPreview`'s cut of its note and never the note itself.
+ */
+import { OUTSTANDING_DELIVERY_STATES, type ChildMark, type ChildReclaimGeneration, type RunKind } from '../../../shared/api.js';
+import {
+  CARD_MAIL_MAX, type CardCheckpoint, type CardClaim, type CardFacts, type CardHistory, type CardItem, type CardMail,
+  type CardNote, type CardProgramme, type CardRenderer, type CardRun, type CardTimer, type Fact,
+} from '../../../shared/continuity-card.js';
+import { noteKeyText } from '../../../shared/continuity.js';
+import type { CoordStore } from '../coord/store.js';
+import { operatorWasShown, type ItemRow } from '../coord/ledgersStore.js';
+import { roleFactsOf } from '../roleOf.js';
+import { CARD_REGISTRY_UNREAD, cardRoleOf, type CardRole } from './card.js';
+import { noteKeyReader } from './noteKeys.js';
+import { noteKeyFact } from './notes.js';
+import { timerPreview } from './timers.js';
+
+/** The store reads the gatherer makes, declared by this consumer. */
+export type CardFactsCoord = Pick<CoordStore, 'bindingsOf' | 'bindingRunsOf' | 'openCoordinatorIds' | 'run' | 'activeClaims'
+  | 'outstandingMailFor' | 'itemsFor' | 'goalsFor' | 'liveNotes' | 'claimsProgramme' | 'itemById' | 'liveGenerations'
+  | 'handoverBefore' | 'pendingTimersOf'>;
+
+export interface CardFactsDeps {
+  readonly coord: CardFactsCoord;
+  /** The session's registry record's child mark, or `CARD_REGISTRY_UNREAD` when the registry could not say (the row is
+   *  unmeasurable, the registry unlistable): then no role is ruled out, never "not a child" and never "a child". */
+  childMark(id: string): Promise<ChildMark | typeof CARD_REGISTRY_UNREAD>;
+  /** The registry row's incarnation (`childReclaimGenerationRead`): the key declared intent is stored under. */
+  incarnation(id: string): Promise<ChildReclaimGeneration>;
+  /** Declared coordinator intent on one incarnation, from the delegation checkpoint (`intentOfCheckpoint`, the one reader,
+   *  `declaredIntent.ts`), or `not-ready` while the delegation lane has no ready checkpoint. */
+  declaredIntent(id: string, incarnation: string): boolean | 'not-ready';
+}
+
+/** The history line's verb (C52). No read names a session's newest node yet (slug history-line-without-a-node). */
+export const CARD_HISTORY: CardHistory = { verb: 'ccrc history describe', node: null };
+/** The `now` that reads every open item whatever its hold (`itemsFor` leaves out an item held past its `now`): the gatherer
+ *  then splits them by `operatorWasShown`, the hold's one rule, at the time of rendering. */
+const HOLD_DISREGARDED = Number.MAX_SAFE_INTEGER;
+const OUTSTANDING: ReadonlySet<string> = new Set(OUTSTANDING_DELIVERY_STATES);
+
+const read = <T>(value: T): Fact<T> => ({ kind: 'read', value });
+const unmeasured = (what: string): Fact<never> => ({ kind: 'unmeasured', what });
+/** One read: its value, or `unmeasured` naming `what` when it answered a failure or threw. */
+function attempt<T>(what: string, f: () => T | null): Fact<T> {
+  try {
+    const v = f();
+    return v === null ? unmeasured(what) : read(v);
+  } catch {
+    return unmeasured(what);
+  }
+}
+
+const cardItemOf = (i: ItemRow, held: boolean): CardItem => ({
+  id: i.id, programme: i.program, kind: i.kind, state: i.state, neededBy: i.neededBy, at: i.raisedAt, text: i.title,
+  everTicked: i.tickedAt !== null, held,
+});
+
+/** The role read's ports: the store's two reads it makes, and the registry reads the card takes (`CardFactsDeps`). */
+export type RoleReadDeps = Omit<CardFactsDeps, 'coord'> & { readonly coord: Pick<CoordStore, 'run' | 'openCoordinatorIds'> };
+/** One session's role, its reason, the renderer it is drawn by, and the declared-intent fact, which is both a role input
+ *  and a card field. */
+export interface SessionRoleRead extends CardRole { readonly intent: Fact<boolean> }
+
+/**
+ * ONE ROLE READ (plan `w1a-timers.md` Task 4, slug one-role-read): the card and the timer set door (its cap by role) both
+ * call it, so the role is assembled in one place. It reads the child mark, the registry incarnation and declared intent on
+ * it, the child's run kind and the open claimants, then `cardRoleOf(roleFactsOf(…))` (L1) decides. A read that fails or
+ * throws is kept apart (`CARD_REGISTRY_UNREAD`, an unreadable incarnation, `unmeasured` facts), never folded into "none".
+ */
+export async function sessionRoleRead(deps: RoleReadDeps, id: string): Promise<SessionRoleRead> {
+  const { coord } = deps;
+  let child: ChildMark | typeof CARD_REGISTRY_UNREAD;
+  try { child = await deps.childMark(id); } catch { child = CARD_REGISTRY_UNREAD; }
+  let incarnation: ChildReclaimGeneration;
+  try { incarnation = await deps.incarnation(id); } catch { incarnation = { kind: 'unreadable' }; }
+
+  const intent: Fact<boolean> = incarnation.kind === 'absent' ? read(false)
+    : incarnation.kind === 'unreadable' ? unmeasured('declared coordinator intent (the registry incarnation)')
+    : ((): Fact<boolean> => {
+      let r: boolean | 'not-ready';
+      try { r = deps.declaredIntent(id, incarnation.v); } catch { return unmeasured('declared coordinator intent'); }
+      return r === 'not-ready' ? unmeasured('declared coordinator intent (the delegation checkpoint is not ready)') : read(r);
+    })();
+
+  const childRunKind = ((): RunKind | 'unmeasured' => {
+    if (child === CARD_REGISTRY_UNREAD || child.kind !== 'child') return 'unmeasured';
+    try {
+      const r = coord.run(child.runId);
+      return r.ok && r.run !== null ? r.run.kind : 'unmeasured';
+    } catch { return 'unmeasured'; }
+  })();
+  let openCoordinators: ReadonlySet<string> | 'unmeasured';
+  try { openCoordinators = new Set(coord.openCoordinatorIds()); } catch { openCoordinators = 'unmeasured'; }
+  const role = cardRoleOf(child === CARD_REGISTRY_UNREAD ? CARD_REGISTRY_UNREAD : roleFactsOf(id, {
+    child, childRunKind, openCoordinators, intentDeclared: intent.kind === 'read' ? intent.value : 'unmeasured',
+  }));
+  return { ...role, intent };
+}
+
+/** One session's card facts, and the renderer its role is drawn by. `now` is the server's time of rendering: it is
+ *  `CardFacts.at`, and the hold filter of `itemsFor` (an item still held is not yet shown to anyone). The role and the
+ *  intent fact are `sessionRoleRead`'s. */
+export async function gatherCardFacts(deps: CardFactsDeps, id: string, now: number):
+  Promise<{ readonly facts: CardFacts; readonly renderer: CardRenderer }> {
+  const { coord } = deps;
+  const role = await sessionRoleRead(deps, id);
+  const { intent } = role;
+
+  // The runs: the open runs it claims and the open runs it works, each read whole by its id for its state and kind.
+  const bindings = coord.bindingsOf(id);
+  const claimedOpen = attempt('the runs', () => { const r = bindings.claimant(); return r.ok ? r.siblings : null; });
+  const workedOpen = attempt('the runs', () => { const r = bindings.worker(); return r.ok ? r.siblings : null; });
+  const runs = attempt<readonly CardRun[]>('the runs', () => {
+    if (claimedOpen.kind === 'unmeasured' || workedOpen.kind === 'unmeasured') return null;
+    const ids = [...new Set([...claimedOpen.value, ...workedOpen.value].map((r) => r.id))].sort((a, b) => a - b);
+    const out: CardRun[] = [];
+    for (const runId of ids) {
+      const r = coord.run(runId);
+      if (!r.ok || r.run === null) return null;
+      out.push({ id: runId, programme: r.run.program, wave: r.run.wave, waveOf: r.run.waveOf, state: r.run.state, planPath: null, kind: r.run.kind });
+    }
+    return out;
+  });
+  const claims = attempt<readonly CardClaim[]>('the claims', () => coord.activeClaims()
+    .filter((c) => c.heldBy === id).map((c) => ({ id: c.id, paths: c.paths, runId: c.runId })));
+
+  // Every open item, the hold disregarded, split by the hold's one rule: an item the operator is shown, and a held one,
+  // which only the coordinator whose hold it is (the claimant of the item's run) sees, marked held (ruling F14).
+  const allOpen = attempt('the open items', () => coord.itemsFor(null, HOLD_DISREGARDED).open);
+  const claimedIds = new Set(claimedOpen.kind === 'read' ? claimedOpen.value.map((r) => r.id) : []);
+  const shown = (i: ItemRow): boolean => operatorWasShown(i, now);
+  const openItems: Fact<readonly CardItem[]> = allOpen.kind === 'unmeasured' ? allOpen : read(allOpen.value.flatMap((i) =>
+    shown(i) ? [cardItemOf(i, false)] : i.runId !== null && claimedIds.has(i.runId) ? [cardItemOf(i, true)] : []));
+  const itemsRaised: Fact<readonly CardItem[]> = allOpen.kind === 'unmeasured' ? unmeasured('the items you raised')
+    : read(allOpen.value.filter((i) => i.raisedBy === id && shown(i)).map((i) => cardItemOf(i, false)));
+
+  // The programmes: those of the session's open runs and of the items it raised, and, for a session that claims no open
+  // run, the programme of the newest run in its series (C51: a coordinator between runs gets its programme's card).
+  const ledger = ((): Fact<readonly CardProgramme[]> => {
+    if (runs.kind === 'unmeasured' || claimedOpen.kind === 'unmeasured') return unmeasured('the programme ledger (its programmes are read from the runs)');
+    if (openItems.kind === 'unmeasured') return unmeasured('the programme ledger (its open items)');
+    const slugs = new Set(runs.value.map((r) => r.programme));
+    if (itemsRaised.kind === 'read') for (const i of itemsRaised.value) slugs.add(i.programme);
+    try {
+      if (claimedOpen.value.length === 0) {
+        // The newest run in the session's binding series (claimed or worked) gives the programme it is between runs of.
+        const series = coord.bindingRunsOf(id);
+        if (!series.ok) return unmeasured('the programme ledger (the runs it claimed)');
+        const newest = [...series.runs].sort((a, b) => b.id - a.id)[0];
+        if (newest !== undefined) {
+          const r = coord.run(newest.id);
+          if (!r.ok || r.run === null) return unmeasured('the programme ledger (the runs it claimed)');
+          slugs.add(r.run.program);
+        }
+      }
+      return read([...slugs].sort().map((slug): CardProgramme => {
+        const g = coord.goalsFor(slug);
+        // No goals version carries `ratifiedBy` yet, so every goal is rendered as not ratified (slug goals-unratified).
+        const goals = [...(g.inShort === null ? [] : [g.inShort]), ...(g.doneWhen ?? [])].map((text) => ({ text, ratified: false }));
+        const decisions = g.modifications.map((m) => ({ at: m.at, text: m.ruling === null ? m.text : `${m.text} (ruling: ${m.ruling})` }));
+        return { slug, goals, decisions, openItems: openItems.value.filter((i) => i.programme === slug) };
+      }));
+    } catch {
+      return unmeasured('the programme ledger');
+    }
+  })();
+
+  // One more than the card lists is read, so the card can say that more exist.
+  const mailRead = attempt('the outstanding mail', () => coord.outstandingMailFor(id, CARD_MAIL_MAX + 1));
+  const mailOutstanding: Fact<readonly CardMail[]> = mailRead.kind === 'unmeasured' ? mailRead : read(mailRead.value
+    .slice(0, CARD_MAIL_MAX).map((m) => ({ deliveryId: m.deliveryId, fromId: m.fromId, at: m.at, subject: m.subject, parked: !OUTSTANDING.has(m.state) })));
+  const mailMore = mailRead.kind === 'read' && mailRead.value.length > CARD_MAIL_MAX;
+
+  // The notes: the identity's live ones (the identity is the session id), each with what its key's row is now.
+  const keyOf = noteKeyReader(coord, id);
+  const notes = attempt<readonly CardNote[]>('the notes', () => {
+    const r = coord.liveNotes(id);
+    return !r.ok ? null : r.notes.map((n) => ({
+      id: n.id, at: n.at, kind: n.kind, key: noteKeyText(n.key), keyFact: noteKeyFact(keyOf(n.key), id), waitsOn: n.waitsOn, next: n.next,
+    }));
+  });
+  // The checkpoint: the handover note of the generation the live one replaced, or null when it wrote none.
+  // A read that failed is `unmeasured`; no live generation, or one whose predecessor wrote no note, is a read null.
+  const checkpoint = ((): Fact<CardCheckpoint | null> => {
+    const what = 'the checkpoint (the handover note)';
+    try {
+      const gens = coord.liveGenerations();
+      if (!gens.ok) return unmeasured(what);
+      const live = gens.rows.find((g) => g.identity === id);
+      if (live === undefined) return read(null);
+      const h = coord.handoverBefore(id, live.id);
+      if (!h.ok) return unmeasured(what);
+      if (h.handover === null) return read(null);
+      const { n, at, dropped, note } = h.handover;
+      return read({ at, handover: {
+        generation: n, dropped, cautions: note.cautions, tone: note.tone,
+        threads: note.threads.map((t) => ({ ref: noteKeyText(t.ref), waitsOn: t.waitsOn, next: t.next })),
+      } });
+    } catch {
+      return unmeasured(what);
+    }
+  })();
+
+  // The pending timers: the session's own, oldest due first, each note cut to its preview (the one cut, `timerPreview`).
+  const timers = attempt<readonly CardTimer[]>('your pending timers', () => {
+    const r = coord.pendingTimersOf(id);
+    return !r.ok ? null : r.rows.map((t) => ({ id: t.id, dueAt: t.dueAt, preview: timerPreview(t.note), runId: t.runId, programme: t.programme }));
+  });
+
+  return {
+    renderer: role.renderer,
+    facts: {
+      sessionId: id, role: role.role, roleWhy: role.roleWhy, at: now, runs, ledger, claims, intent, itemsRaised, mailOutstanding, mailMore,
+      notes, checkpoint, timers, history: read(CARD_HISTORY),
+    },
+  };
+}

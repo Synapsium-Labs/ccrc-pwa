@@ -604,7 +604,8 @@ under "Attention, notifications and answering" below.
 summary line; it exits 1 when anything FAILs (a WARN does not), which is the exit code `ccrc install`
 ends with. A `server`-role box SKIPs the checks that measure per-account or per-session state — `wrappers`,
 `skills`, `accounts`, `pools`, `memory`, `routing`, `codex`, `graphify`, `graphify-path` (D-3111), `playwright`,
-`timeout`, `model-default`, `history`, `transcripts`, `transcript_work`, and `jq_regex` (no session hook runs there).
+`timeout`, `model-default`, `history`, `transcripts`, `transcript_work`, `auto-memory`, and `jq_regex` (no session hook
+runs there).
 
 | checks | what they measure |
 |---|---|
@@ -623,6 +624,7 @@ ends with. A `server`-role box SKIPs the checks that measure per-account or per-
 | `pools`, `memory`, `routing`, `models` | project pool tags; one memory store per project; lane routing; model-catalogue freshness |
 | `transcripts` | every registry row's uuid against its transcript, read by the one `continued-in` rule `ccd` and the server share: a WARN names the sessions reading a transcript Claude Code has superseded (a supervised one clears on its next supervise tick; a stopped or archived one is followed when it is next resumed) and, apart, a session whose marker names a successor never written (it clears at that job's first line, or at the first prompt the session answers on its own transcript; the row's wrapper is named, because `<wrapper> agents` lists only that account's jobs); rows it could not measure (at neither direct spelling, unreadable, or a registry row it cannot read) are counted apart inside the PASS, never claimed clean; a FAIL when `~/.cc-sessions` is not a readable, searchable directory |
 | `transcript_work` | work kept inside Claude Code's transcript folders: every roster config dir's `projects/<slug>/` entries, and each session directory's, that are not the shapes Claude Code writes (a `<uuid>.jsonl` transcript, a `<uuid>/` session directory, `memory`; inside a session directory `subagents/`, `tool-results/`, `workflows/`), counted and sized as `du -sb` sizes them; a WARN over 1 GiB in all or 256 MiB in one entry names the five largest, and a walk past its 20 s bound, or one that cannot read a directory, is unmeasured, never a PASS. It deletes nothing. `GET /api/fleet/health`'s `disk.transcriptWork` carries the agent's count of the same tree, shown in Settings › Automation (D-7898) |
+| `auto-memory` | every roster config dir's auto-memory directories (`projects/<slug>/memory/`) that hold a file, named by account and slug and never opened or deleted (scratch slugs skipped, as `memory` skips them): a WARN gives the count and the first three, because once the launch-profile lane is live a session's next launch loads none of it, except a plain session whose Settings row keeps auto memory on. A directory it cannot list, or a walk past its 20 s bound, is unmeasured, never a PASS. SKIP on a server-role box |
 | `pool-sync`, `update-sync` | a fleet box's two pulled projections, present and in lease |
 | `graphify`, `graphify-path` | the pinned graph engine, its skill and the sweep's last census; `graphify` resolving to that engine on the `PATH` sessions get (read from each live session's environment, else the user manager's; `path` asks the same of `ccrc`, `ccd` and `ccrc-api`) |
 | `playwright` | every cached Playwright browser build, really launched offline with a throwaway profile: a build the loader refuses or one left incomplete is a WARN naming it, never a FAIL. SKIP with nothing cached or on a server box |
@@ -1498,13 +1500,17 @@ step 10 of
      named here, derived from `gate.ts`'s own EXEMPT reasons (D-1233/D-1234). -->
 
 What is gated, and what is not: **everything except** `/health` (deploy's own
-liveness gate reads the shipped sha out of it), the seventy-four machine lanes the
+liveness gate reads the shipped sha out of it), the eighty-four machine lanes the
 fleet host reaches (thirty-nine box-token-consulting coordination routes plus
 the Linear proxy's routes under `/api/linear/proxy/`, which a session's `ccrc-api linear`
 verbs call and which refuse any call without the token whatever `CCRC_AUTH` says,
 the programme ledgers' item and goal routes (`/api/programmes/:slug/{items,spec,modifications,modifications/merged}`
 and `/api/items/:id/{confirm,return,withdraw,blocking}`),
 the plan verbs' routes (`POST /api/programmes/:slug/plan` and `/api/programmes/:slug/plan/{met,tickets,tickets/move,epics/drop,close}`),
+the hook's start report (`POST /api/sessions/:id/start`), the card door (`GET /api/sessions/:id/card`), the note door
+(`POST /api/sessions/:id/notes`, `GET /api/sessions/:id/notes`, `POST /api/sessions/:id/handover`), the timer doors
+(`POST /api/timers`, `GET /api/timers`, `POST /api/timers/:id/cancel`), the probe door
+(`GET /api/sessions/:id/probe`, `POST /api/sessions/:id/probe`),
 `/api/notify`, which refuses an absent token like every lane,
 `/api/pools/epoch` and `/api/updates/intent/:nodeId` — the callers are `curl` inside a
 Claude Code session, `ccd-pool-sync.timer` and, from update-management W4, `ccd-update-sync.timer`, none with a cookie jar, though the
@@ -2500,7 +2506,8 @@ It runs on the system `python3`, 3.9 or later (below that `ccrc codex start` ref
 needs no LiteLLM runtime. It sends `originator: ccrc` and a ccrc user agent, never presenting itself as Codex. Claude
 Code's top-level system prompt travels as the first developer message, with no `instructions` field and no prompt of the
 bridge's own; a lane directory holding the marker file `bridge-instructions` (no ccrc code writes it) sends it as
-`instructions` instead. A
+`instructions` instead. Three more marker files, `bridge-reasoning-all-turns`, `bridge-verbosity` and
+`bridge-turn-state`, each add one part of native Codex's request (below). A
 mid-conversation `role: "system"` entry becomes a developer message in its place, and effort follows the shim's own rule
 (above). Each reply's blocks are built from the upstream's finished items, except that a message's first text part
 streams live as it arrives (so a long compaction summary shows as it is written), and each reply streams zero usage in
@@ -2511,8 +2518,9 @@ every 15 seconds, and the upstream idle bound is 300 seconds, as in Codex. A con
 Code's own `prompt is too long: N tokens > M maximum`, so it compacts; N is the bridge's estimate, because the backend's
 overflow message carries no counts. A usage limit is a 429 `billing_error` and a policy refusal a 400 `policy_blocked`,
 each with `x-should-retry: false`. Retries are Claude Code's: the bridge never retries an upstream request, except once
-after it refreshed a token the upstream answered 401 (a reply the upstream marks unfinished is continued inside the same
-message, at most three times). `count_tokens` is answered locally, from an estimate seeded at 3.5 bytes per token and
+after it refreshed a token the upstream answered 401, and once without the request markers' additions after a 400
+(below; a reply the upstream marks unfinished is continued inside the same message, at most three times).
+`count_tokens` is answered locally, from an estimate seeded at 3.5 bytes per token and
 calibrated on the lane's own replies, for any model. A `/v1/messages` request for a model the lane's catalogue does not
 list is answered 404 locally and never sent upstream.
 The credential's refresher is the bridge: it checks every minute and refreshes at about half the token's lifetime,
@@ -2536,7 +2544,8 @@ it, set `exec.upstream` back to `backend` (or remove it) in `~/.ccrc/accounts.js
 does not change), then re-run.
 
 **What a `direct` lane writes.** Beside `lane.json`, whose `bridgeFiles` names them, the bridge keeps two files in the
-lane directory, each 0600: `bridge.stats.json`, its one non-secret output, and `reasoning.sqlite`, the reasoning store.
+lane directory, each 0600: `bridge.stats.json`, its one non-secret output, and `reasoning.sqlite`, the reasoning store
+(and, only behind its marker, the per-request record below).
 The stats file holds counts, sizes, names and request ids: requests and the largest prompt accepted per route and
 model, each context refusal with the size it estimated and when, outcome counters, the protocol names it met (bounded,
 else `unrecognised`) and those it does not know, the upstream request id of its last error, and the `x-codex-` usage
@@ -2563,9 +2572,67 @@ which restarts a running, proven, stale bridge, or by `ccrc codex stop` then `st
 only when the same run re-placed the shim, the runtime or the auth library for another finding, and neither starts a
 stopped one), foreign and unmeasured
 rows; a FAIL, `runs a retired refresher`, when the lane's LiteLLM tier or shim runs beside it; a FAIL for the `siwc`
-route; no half-up row and no `litellm.yaml` row. On a lane in either mode, a stats file or store that is not a regular
-file of mode 0600 is a FAIL. Removing the lane reaps both files, the store's set-aside copy, the recordings directory and the
-marker files with the rest of its state.
+route; no half-up row and no `litellm.yaml` row. On a lane in either mode, a stats file, store, request record or its
+older generation that is not a regular file of mode 0600 is a FAIL. Removing the lane reaps both files, the store's
+set-aside copy, the recordings directory, the request record with its older generation, and the marker files, the three
+request markers and `record-requests` below among them, with the rest of its state.
+
+**The stats file's `parity` section** measures what parity with native Codex hinges on, per route and model, from what
+the bridge already receives and sends, so nothing new goes on the wire (D-8618). Each row counts the upstream responses
+that reached `response.completed` or `response.incomplete` and their input, cached, output and reasoning tokens; the
+`reasoning.effort` each request carried (`none` when it carried none); whether the model that answered is the one asked
+for; the backend's `input_transformations` by type, action and reason, so `reasoning:removed:turn_boundary` counts the
+earlier reasoning the backend dropped; each reasoning-store lookup by what it found (per lookup, so a long conversation
+counts its old turns again); and the milliseconds to the first output and to the end, in fixed buckets. Every name in
+it is bounded like the others. It is not drift: nothing in it reaches doctor's WARN or the watch's drift check, and
+`ccrc codex status` does not show it. The stats file is written at most every 10 seconds while answers come, and again
+once the bridge has been idle for 10 seconds after its last answer, so a run's figures are on disk soon after the run
+ends rather than at the next request (D-8624).
+
+**The request markers** close three gaps between the bridge's request and native Codex's (D-8622, D-8623). Each is off
+until an operator touches its file in the lane directory (no ccrc code writes them), and each is read at every request:
+- `bridge-reasoning-all-turns` adds `reasoning.context: "all_turns"`, after the effort, for a model whose catalogue row
+  says `useResponsesLite: true`;
+- `bridge-verbosity` adds `text.verbosity`, the row's `defaultVerbosity`, for a row that says `supportVerbosity: true`,
+  in one `text` object with an output format;
+- `bridge-turn-state` sends back the `x-codex-turn-state` header the backend set at the start of a Claude Code turn, on
+  every later request of that turn. A turn is the requests that share their latest user message holding no tool
+  result: the same message at the same place in the conversation, so two turns that open on the same words are two.
+  The value is kept in memory only, for at most 256 turns, and is cleared when the credential's account changes.
+
+The bridge never sends Codex's internal Lite header. When the backend answers 400 to a request that carried any of
+these, the bridge sends it once more without them, and sends none of them for the rest of that message; it does not
+for a context overflow or a policy refusal, which no removed field cures. The client sees only the second answer, and
+the first is not written to the credential's status file. The `parity` row counts the requests that carried each
+marker (`markers`), each marker a fallback dropped (`fallbacks`), and the turn-state values captured and sent back
+(`turnState`), never a value.
+
+**The per-request record** (D-8619) is one JSON line per upstream answer, for the parity eval, which joins a run's rows by
+its Claude Code session id and a time window. It is off until an operator touches `record-requests` in the lane
+directory (no ccrc code writes it), and it is read at every answer; with no marker nothing is written, and the marker
+changes nothing on the wire or in the client's answer. The file is `lane.json`'s `bridgeFiles.requests`,
+`bridge.requests.jsonl`, mode 0600, appended one whole line at a time and never through a symlink; at 16 MiB it is
+renamed to `bridge.requests.jsonl.1`, replacing the older one, so at most two generations (32 MiB) are kept. A
+`lane.json` rendered before the record existed names no file: the bridge, the live probe and lane removal accept it,
+and the bridge then writes no record and says so once in its log. ccrc reads such a `lane.json` as stale, as one from
+before the bridge, so `ccrc update` re-renders it (its codex-lanes step), as do a lane start and `ccrc doctor --fix`;
+until then doctor FAILs it as a `lane.json` that disagrees with its roster row, never as a record file.
+Each row holds, in order: `v` (1), `at` and `postAt` (UTC milliseconds when the answer ended and when the request
+started), `session` (the session id when it has the shape of one, at most 128 characters, else null), `subagent` (true
+for a subagent's request, never its id), `message` and `post` (the client message's number in this process, and the
+request's index within it: continuations and retries count on), `route` and `model` (the `parity` row's), `status`
+(null when no answer came), `outcome` (the word the stats file counts for what the bridge did with the answer: `2xx`,
+`continuations`, `continuation-cap`, `refresh-after-401`, `4xx`, `5xx`, `client-gone`, `drain-cut`, or `fallback` for the
+400 that started a fallback), `served`, `effort`, the four token counts, `firstOutputMs` and `totalMs` (whole
+milliseconds, from the same instants the `parity` histograms bucket), `inputTransformations`, `replay` (the message's
+reasoning-store lookups, on its first request only), `markers`, `fallback` and, when set, `turnState`. A field the
+answer did not reach is null, and so are `served`, the token counts, `inputTransformations`, `firstOutputMs` and
+`totalMs` of every answer the `parity` row counted no response for (a non-2xx, a stream that broke, even one that
+released output first), so the `parity` histograms rebuilt from the rows are the stats file's own. It never holds conversation text, a tool name, the
+prompt cache key, a turn-state value, a header value other than the session id, an account id or a token. A row that
+cannot be written (a full disk, a directory in the file's place) never fails the request: the stats file counts it as
+the outcome `requests:write-failed` every time, and the log says so once per bridge process, whatever the cause,
+naming the first one's (`record-requests write-failed eisdir`, say).
 
 **A restart cuts long streams.** The bridge runs under the shim's unit, so a restart (a rollout's install restarts a
 running bridge whose bytes are stale; a switch stops it) is a stop, then a start. On the stop the bridge closes its

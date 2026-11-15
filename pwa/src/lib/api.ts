@@ -18,6 +18,7 @@ import type { ResolveRead } from '../fleet/workspaceNameWords';
 import type { PaneScopeStopState } from '../fleet/paneScopeStopWords';
 import { raiseAuthLostFrom } from './auth';
 import { ApiError } from './apiError';
+import type { Character as CharacterName } from '../../../shared/face';
 import { LONG_READ_MS, limitedFetch, type ReadOpts } from './readLimit';
 import { questionAnswerRequest } from '../session/answerLifecycle';
 import { ANSWERED, readDoorAnswer, readDoorRefusal, type DoorAnswer, answered, linearViewOf, linearWorkspacesOf, linearWorkspacesNotConnectedOf, rotateRefusalOf, readRotateStarted, linearNotConnectedOf, readResolve, readProjectAdd, readWorkspaceAdd, readWorkspaceTitle, archiveBody, workspaceAddBody, type ArchiveOptions, type UpdateIntentRequest, type WorkspaceAddAnswer, type WorkspaceAddOptions, type WorkspaceTitleAnswer, type WorkspaceTitleChange, type LinearWorkspacesRead } from './wireReaders';
@@ -31,10 +32,14 @@ import {
   declaredRaster, docsAnswerFromError, readDocsEnvelope, readDocsRaster, type DocsAnswer, type DocsLoaders,
 } from '../docs/failures';
 import type { ClaudeRollTargets } from '../../../shared/claudeVersion';
+import type { PlainAutoMemoryChoice, PlainAutoMemoryView } from '../../../shared/plainAutoMemory';
 import type { TestboxAdminFields, TestboxAdminSub } from '../../../shared/testbox-admin';
 import type { ProjectAddAnswer, ProjectAddBody } from '../../../shared/projectAdd';
 import type { LinkingWriteBody, ProjectLinkingWire } from '../../../shared/linking';
 import type { SecretRemoveAnswer, SecretSaveAnswer, StoredSecretsAnswer } from '../../../shared/ledgers';
+
+/** `GET`/`POST /api/face`'s answer. */
+export interface FaceAnswer { readonly character: CharacterName; readonly updatedAt: number }
 
 /** `GET`/`POST /api/coord/roll-idle`'s answer (D-7453). */
 export interface RollIdleView {
@@ -931,6 +936,10 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
      *  read" may well have stored the value, and is not "the request never happened". */
     setStallWatch: (body: StallWatchRequest) =>
       postJsonOr<StallWatchView | 'unreadable'>('/api/coord/stall-watch', 'unreadable', body),
+    /** `GET /api/face`: the operator's character, one server row (`{ character, updatedAt }`). */
+    getFace: () => getJson<FaceAnswer>('/api/face'),
+    /** `POST /api/face` `{ character }`: answers the row; a refusal (400 `bad-request`) rejects with `ApiError`. */
+    setFace: (character: CharacterName) => postJson<FaceAnswer>('/api/face', { character }),
     /** `GET /api/coord/collect-lane` (path-identity spec 2026-10-12 §5.6, §5.7): the Settings page's Temp root
      *  collector section reads it through `useCollectLaneView`, whose `asCollectLaneView` (`fleet/collectLaneRead.ts`) is the wire guard, so the
      *  type here is what the server promises, not what arrived. `getJson`, as `stallWatch` is: a read changes
@@ -1001,6 +1010,12 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
      *  could not be read" may well have stored the choice. */
     setRollIdle: (targets: ClaudeRollTargets) =>
       postJsonOr<RollIdleView | 'unreadable'>('/api/coord/roll-idle', 'unreadable', { targets }),
+    /** `GET /api/coord/plain-auto-memory` (Overlord W1a launch profiles PR B): Settings › Automation › Auto memory for plain
+     *  sessions, `off` or `on` (`choice` null when the server could not read its row). Session-gated when armed; no box token. */
+    plainAutoMemory: () => getJson<PlainAutoMemoryView & { readonly ok: true }>('/api/coord/plain-auto-memory'),
+    /** `POST /api/coord/plain-auto-memory`: `{choice}`. `postJsonOr`, for `setCoordCaps`' reason. */
+    setPlainAutoMemory: (choice: PlainAutoMemoryChoice) =>
+      postJsonOr<(PlainAutoMemoryView & { readonly ok: true }) | 'unreadable'>('/api/coord/plain-auto-memory', 'unreadable', { choice }),
     /** `GET /api/testbox` (test box plan TB9, D-7411; spec 2026-10-28 §2.7): `{ok, testbox}`, the block the server's
      *  poll last decided, `null` before its first pass. Settings › Automation › Test box reads it through
      *  `useTestboxView`, whose `asTestboxBlock` is the wire guard, so the type here is the envelope only. */
@@ -1080,6 +1095,11 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
       })).json() as Promise<SecretRemoveAnswer>,
     /** `POST /api/items/:id/dismiss` (PL4): refused `programme-live` while the programme has an open run. */
     dismissItem: (id: number) => postJson<{ readonly ok: true; readonly item: ItemView }>(`/api/items/${id}/dismiss`),
+    /** `GET /api/sessions/:id/timers` (Overlord W1a, timers Task 13): the session's pending timers, notes masked and marked
+     *  untrusted. `unknown`: `timersWords.ts`' `readTimers` is the one reader. Session-gated when armed. */
+    sessionTimers: (id: string) => getJson<unknown>(`${sid(id)}/timers`),
+    /** `POST /api/sessions/:id/timers/:timerId/cancel`: the operator cancels one; a refusal rejects with its `ApiError`. */
+    cancelSessionTimer: (id: string, timerId: number) => postJson<unknown>(`${sid(id)}/timers/${timerId}/cancel`),
     commands: (id: string) =>
       getJson<{ builtins: SlashCommand[]; skills: SlashCommand[] }>(`${sid(id)}/commands`),
     upload: async (id: string, file: File): Promise<StagedClip> => {

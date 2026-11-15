@@ -1018,6 +1018,21 @@ describe('one lane schedule (ARCH-68): LANE_SCHEDULE and runLane (D-5862)', () =
     expect(laneClockReported(), 'DelegationLane#lastSweepAt and the three beats\' clocks are rows of LANE_SCHEDULE').toEqual([]);
   });
 
+  // D-8614 (ARCH-68's follow-up): the clocks that stay outside the table are named, each with its reason, in
+  // `LANE_SCHEDULE_EXCEPTIONS`: the delegation lane's recovery backoff, its hourly and daily latches and its marks warn hour,
+  // the breaker's and the stall watch's gap rules, and the composition root's daily retention timer. A clock the census finds
+  // that no entry names reds here, and so does an entry whose clock is gone. The list only shrinks.
+  it('every hand-made clock outside LANE_SCHEDULE is a recorded exception, and no exception is stale (D-8614)', async () => {
+    const { handClocksOutsideSchedule, LANE_SCHEDULE_EXCEPTIONS } = await import('../consolidationCensus.js');
+    const found = handClocksOutsideSchedule();
+    expect(text(found.filter((x) => x.exception === null)), 'a hand-made clock is a row of LANE_SCHEDULE or a recorded exception').toEqual([]);
+    expect(LANE_SCHEDULE_EXCEPTIONS.filter((e) => !found.some((x) => x.exception === e)).map((e) => e.name), 'an exception whose clock is gone').toEqual([]);
+    expect(LANE_SCHEDULE_EXCEPTIONS.map((e) => `${e.owner ?? e.file}#${e.name}`)).toEqual([
+      'FleetWatcher#lastStallJudgedAt', 'DelegationLane#reconciledWallMs', 'DelegationLane#lastRecoverAt', 'DelegationLane#lastUpkeepHour',
+      'DelegationLane#lastCompactDay', 'DelegationLane#lastMarkWarnHour', 'server/src/index.ts#accountAudit.sweep',
+    ]);
+  });
+
   it('no throttle reads the wall clock: every row of LANE_SCHEDULE is monotonic (OA-C4, ruled (a) on #803), 0 wall rows', async () => {
     const { LANE_SCHEDULE } = await import('../../src/laneSchedule.js');
     expect(LANE_SCHEDULE.filter((r) => r.clock === 'wall').map((r) => r.name), 'a throttle on Date.now(): verdicts keep the wall clock, cadences do not').toEqual([]);

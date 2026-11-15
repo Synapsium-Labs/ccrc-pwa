@@ -1143,7 +1143,7 @@ Then send the `wave-done` mail with `{branchTip, prNumber, prPhase:"open", hando
   `lastIndexOf('.')` path and contributes `.prstate-<id>` to `claimedById`. Inert for the identical
   reason — a leading dot can never equal a `<project>-<slug>` id — and named here so the next reader
   does not have to re-derive it for the second producer.
-- **D-128 (2026-08-20, survey)** — m1 was reported with two halves and only one is done here.
+- **D-8586 (2026-08-20, survey; was D-128)** — m1 was reported with two halves and only one is done here.
   Order-insensitivity is fixed (Task 6). The second half — `server/test/` being outside
   `single-definition.test.ts`'s four scanned ROOTS, so a second copy of the pair inside a TEST file
   is invisible — is NOT fixed: adding a fifth root changes what every other assertion in that file
@@ -1153,7 +1153,7 @@ Then send the `wave-done` mail with `{branchTip, prNumber, prPhase:"open", hando
 
 ### Found during execution
 
-- **D-129 (2026-08-20, execution)** — the wave's own smallest change produced its only Critical
+- **D-8587 (2026-08-20, execution; was D-129)** — the wave's own smallest change produced its only Critical
   finding, and the shape is worth keeping. Task 5's review raised two comment-accuracy minors; the
   fix for one of them (E1, re-anchoring the `ccd:<N>` citations in `_pr_py`'s lock comment)
   replaced 2 comment lines with 5 — **net +3, ABOVE every line it cited** — and the numbers were
@@ -1166,14 +1166,14 @@ Then send the `wave-done` mail with `{branchTip, prNumber, prPhase:"open", hando
   corrected number was verified by printing its line back. **The general rule this earns: a commit
   that re-anchors line citations must either be line-count-neutral or iterate to a fixed point,
   because the edit is upstream of its own evidence.**
-- **D-130 (2026-08-20, execution)** — a defect in THIS PLAN, ruled in the implementer's favour.
+- **D-8588 (2026-08-20, execution; was D-130)** — a defect in THIS PLAN, ruled in the implementer's favour.
   Task 8 step 2 told the executor to `grep -rn "can only come from" src/ test/` and expect zero
   hits. Wrong on its face: m3's own replacement sentence QUOTES that phrase (`the earlier "can
   only come from" here was wrong`), m2's new `io.ts` text quotes it inside a nested clause, and six
   unrelated pre-existing uses live in test files — 8 hits, not 0. The executor reported the
   mismatch instead of forcing the expectation. The check was a proxy; the real question — does
   `watch.ts` still ASSERT "only `_reg_purge`" as fact — was verified directly instead, and does not.
-- **D-131 (2026-08-20, execution)** — moving `_pr_py`'s lock off `.uuid` (D-123) broke a
+- **D-8589 (2026-08-20, execution; was D-131)** — moving `_pr_py`'s lock off `.uuid` (D-123) broke a
   PRE-EXISTING test: `server/test/ccd-prhistory.test.ts`'s "the write is under an exclusive lock",
   which took an external `flock` on `.uuid` to prove serialisation. It was amended to contend the
   new `$REG/.prstate-<id>.lock` instead. A test changed to agree with new code is how a regression
@@ -1181,20 +1181,20 @@ Then send the `wave-done` mail with `{branchTip, prNumber, prPhase:"open", hando
   still created, serialisation gone) → test **RED** (`expected 170 to be greater than 700`); lock
   target reverted to `.uuid` → test **RED**, plus 2 of the 3 new pr-state tests RED; `put()`
   reverted to `open(dst,'w')` → 1 RED (the text-scan). The amended test is still a mechanism.
-- **D-132 (2026-08-20, execution)** — `_pr_py`'s new `put()` re-raises `OSError`, which widens
+- **D-8590 (2026-08-20, execution; was D-132)** — `_pr_py`'s new `put()` re-raises `OSError`, which widens
   refusal by exactly one case the old `open(dst,'w')` survived: a `$REG` DIRECTORY that is
   unwritable while the existing field file is writable (`chmod 0555`). There `cmd_pr_state` now
   exits non-zero with no JSON on stdout, so the caller loses the DISPLAY answer as well as the
   persistence. Accepted: such a registry already breaks `_reg_set` for every other field (D-122),
   and raise-on-persist-failure is the pre-existing class, not a new one.
-- **D-133 (2026-08-20, execution)** — `_reg_set`'s `printf '%s' "$3" > "$tmp" 2>/dev/null`
+- **D-8591 (2026-08-20, execution; was D-133)** — `_reg_set`'s `printf '%s' "$3" > "$tmp" 2>/dev/null`
   silences printf's OWN stderr, i.e. a failure AFTER the tmp is open (ENOSPC mid-write). Measured
   that this is narrower than it looks: bash reports a FAILED REDIRECTION before `2>/dev/null` is
   applied, so an unwritable `$REG` still prints `Permission denied`, and `mv`'s stderr is not
   redirected at all, so a refused rename still prints `cannot overwrite directory`. One narrow
   observability gap, not a correctness one; the exit-status contract and the no-tmp-leak guarantee
   hold on every path.
-- **D-134 (2026-08-20, execution)** — a residual overstatement introduced by m3's own fix, left
+- **D-8592 (2026-08-20, execution; was D-134)** — a residual overstatement introduced by m3's own fix, left
   standing: `server/src/watch.ts`'s new sentence says registry-directory loss mid-pass makes
   "every row take this route at once". Exact only if the loss lands between
   `readRegistryMeasured`'s top-level `readdir` and the start of its `buildRecord` loop; a loss
@@ -1203,7 +1203,7 @@ Then send the `wave-done` mail with `{branchTip, prNumber, prPhase:"open", hando
 
 ### Found during the final fix wave
 
-- **D-135 (2026-08-20, final review)** — `_reg_set` now **SUCCEEDS where it used to refuse**, and
+- **D-8593 (2026-08-20, final review; was D-135)** — `_reg_set` now **SUCCEEDS where it used to refuse**, and
   silently rewrites the destination's MODE. Re-measured for this entry on the fleet box (uid 1000,
   `umask 0002`, GNU coreutils 9.4), destination `demo-quiet-basin.wrapper` at mode `0444` holding
   `oldvalue`, inside a WRITABLE `$REG`:
@@ -1239,10 +1239,10 @@ Then send the `wave-done` mail with `{branchTip, prNumber, prPhase:"open", hando
   freshness window ages every row to `orphan` inside two minutes: a fleet that reads as entirely
   dead, from one missing flag.
 
-- **D-137 (2026-08-21, final review)** — D-129 recurred, which is the finding that matters more
-  than D-129 itself. The final fix wave's three `ccd/ccd` commits added +7/+12/+18 lines UPSTREAM
+- **D-8594 (2026-08-21, final review; was D-137)** — D-8587 recurred, which is the finding that matters more
+  than D-8587 itself. The final fix wave's three `ccd/ccd` commits added +7/+12/+18 lines UPSTREAM
   of `_pr_py`'s citations and re-staled all six — each was correct at `b036e94` and pointed at an
-  unrelated comment line afterwards. So the rule D-129 states is not sufficient: a commit can be
+  unrelated comment line afterwards. So the rule D-8587 states is not sufficient: a commit can be
   line-count-neutral *and* correct at the moment it lands, and still be invalidated by the NEXT
   commit in the same wave. **A line number in a comment is not a fact about the code; it is a fact
   about a revision.** Fixed by removing the class rather than resetting the trap: every citation
@@ -1258,7 +1258,7 @@ Then send the `wave-done` mail with `{branchTip, prNumber, prPhase:"open", hando
   mechanical anchor check in CI, or the same function-name conversion applied in bulk. Not this
   wave's job, and doing it here would have buried a registry change under a repo-wide reflow.
 
-- **D-138 (2026-08-21, wave review round)** — a dot-leading PROJECT id aliases ccd's own hidden
+- **D-8595 (2026-08-21, wave review round; was D-138)** — a dot-leading PROJECT id aliases ccd's own hidden
   registry files, reopening the double compare-and-set this branch's lock migration was supposed to
   close. The mechanism: `_reg_purge` unlinks `"$REG/$id".*` for every suffix holding no dot, ids are
   `<project>-<slug>`, and project validation (`^[A-Za-z0-9._-]+$`) permits a LEADING DOT — so a
@@ -1308,14 +1308,14 @@ Then send the `wave-done` mail with `{branchTip, prNumber, prPhase:"open", hando
   `ls ~/.cc-sessions/.*.workspace` at deploy time: any match names a pre-existing dot-leading
   workspace row that needs manual attention (rename or reap) before it can be trusted not to alias.
 
-- **D-139 (2026-08-21, wave review round)** — D-138 closes the CREATION side; `_pr_py`'s pr-state
+- **D-8596 (2026-08-21, wave review round; was D-139)** — D-8595 closes the CREATION side; `_pr_py`'s pr-state
   lock has its own residual, disclosed rather than closed. Measured under a `$REG` at `chmod 0555`
   (readable, not writable): an EXISTING `.prstate-<id>.lock` opens (`open(path, 'a')`) and its flock
   is taken, fine; the FIRST-EVER `.prstate-<id>.lock` for a session raises `PermissionError` at that
   same open, because it must CREATE the file, which needs write on the DIRECTORY; an append to an
   EXISTING `.prhistory` (also `open(path, 'a')`) is fine too, because appending needs write on the
   FILE, not the directory; and both `clear`'s `os.remove` and `put`'s tmp-create raise
-  `PermissionError`, because both need write on the DIRECTORY (D-132). So for a session that has
+  `PermissionError`, because both need write on the DIRECTORY (D-8590). So for a session that has
   never run `pr-state` under an unwritable `$REG`: the lock cannot be created, the compare-and-set
   proceeds UNLOCKED, and two concurrent runs can each reach the prhistory append — the
   duplicate-append harm the lock exists to prevent — before both die at `clear`/`put`. The result is
@@ -1329,4 +1329,4 @@ Then send the `wave-done` mail with `{branchTip, prNumber, prPhase:"open", hando
   `OSError` on the lock open — not only in the unwritable-`$REG` case above — both worse trades for
   a state in which the registry is already unwritable.
 
-<!-- Execution appends D-129… here, with measured before/after counts for every mutation claim. -->
+<!-- Execution appends D-8587… here, with measured before/after counts for every mutation claim. -->

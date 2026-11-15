@@ -256,9 +256,10 @@
 //  15 the tip's aria-hidden dropped ................... "at 1280 and 1920 each door shows its word and no tip; … a tip reading its word" (Settings at 1280)
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
+import { lazy, Suspense } from 'react';
 import type { ReactNode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { INSTRUMENT, REFINED } from '@ccrc/ui';
 import type { AccountUsage, FleetSession, NotifyEvent, RunSummary } from '../../shared/api';
 import { api } from '../src/lib/api';
@@ -274,6 +275,22 @@ vi.mock('../src/lib/push', () => ({
   pushSupported: () => true,
   pushEnabled: async () => false,
 }));
+
+// The Digest screen's chunk is held at a gate until a row opens it (#2780). `app.tsx` loads it through `lazyScreen`, which
+// keeps the first load for the life of the page, so the first mount of `/digest` in this file is the one that finds the
+// chunk still loading, and which row that is must not depend on how fast the box imports a module. Held, the pane shows
+// "Loading…" and nothing else, exactly as it does on a loaded runner. Only the route walk opens it, and it is the first
+// row to read `/digest`'s pane, so it finds the chunk loading on any box, however fast.
+const digestChunk = vi.hoisted(() => {
+  let open!: () => void;
+  const held = new Promise<void>((resolve) => { open = resolve; });
+  return { held, open };
+});
+vi.mock('../src/screens/DigestScreen', async (importOriginal) => {
+  const real = await importOriginal<typeof import('../src/screens/DigestScreen')>();
+  await digestChunk.held;
+  return real;
+});
 
 const { App } = await import('../src/app');
 const { navigate } = await import('../src/lib/router');
@@ -308,6 +325,19 @@ function mount(at: string, sessions: FleetSession[] = [S, WS]): void {
   act(() => useFleetStore.setState({ conn: 'open', sessions }));
   navigate(at);
   render(<App />);
+}
+
+/** The pane's loading line: what `app.tsx`'s Suspense draws while a lazy screen's chunk loads (and nothing else draws). */
+const paneLoading = (): HTMLElement | null =>
+  [...document.querySelectorAll<HTMLElement>('main.shell-detail [role="status"]')].find((el) => el.textContent === 'Loading…') ?? null;
+
+/** Wait for the pane to be a page and not the loading line (#2780). A lazy screen (`/digest`, `/runs`, `/settings`, the
+ *  session) draws "Loading…" until its chunk lands, which a loaded runner can take longer than the mount's own commit
+ *  to do; a row that reads the pane straight after `mount` reads that line, which has no heading and no current door.
+ *  This waits for what the row asserts to be able to exist, and asserts nothing itself: a page that never leaves the
+ *  loading line fails here, and a page that settles on neither a door nor a heading fails in the row. */
+async function settled(): Promise<void> {
+  await waitFor(() => { expect(paneLoading(), 'the pane is still loading its screen').toBeNull(); }, { timeout: 15_000 });
 }
 
 const topBar = (): HTMLElement => document.querySelector<HTMLElement>('header.shell-accounts')!;
@@ -646,13 +676,48 @@ describe('the desk top bar (desk-nav Task A)', () => {
     expect(rule).toMatch(/min-width:\s*var\(--tap-min\)/);
   });
 
-  it('every route says where you are', () => {
+  // The guard for `settled()` (#2780), whatever order the rows run in: a screen whose chunk lands late, built here, draws
+  // the loading line under the pane's own Suspense and its heading only afterwards. Read at once it says nothing; read
+  // after `settled()` it says its heading. The walk below holds the real `/digest` chunk the same way, through the gate.
+  // MUTATION TABLE (RUN, each mutant on the working tree, this file alone, then restored from a saved copy):
+  //   `settled()` without its `waitFor` ......... this row ("a late screen: its heading, once settled") and the walk
+  //   the walk without `await settled()` ........ the walk (`/digest: a current door or the page's own heading`)
+  //   the walk without `digestChunk.open()` ..... the walk ("the pane is still loading its screen": the wait times out)
+//   the gate opened before the walk reaches /digest   the walk ("/digest: its chunk is held, so the pane is loading")
+  it('settled() waits for a lazy screen that lands late, and the loading line says nothing', async () => {
+    const Late = lazy(() => new Promise<{ default: () => ReactNode }>((resolve) => {
+      setTimeout(() => resolve({ default: () => <h1>Late page</h1> }), 25);
+    }));
+    render(
+      <main className="shell-detail">
+        <Suspense fallback={<p className="shell-placeholder-copy" role="status">Loading…</p>}><Late /></Suspense>
+      </main>,
+    );
+    expect(paneLoading(), 'a late screen draws the loading line first').not.toBeNull();
+    expect(document.querySelector('main.shell-detail h1, main.shell-detail .chat-title'), 'and no heading yet').toBeNull();
+    await settled();
+    expect(document.querySelector('main.shell-detail h1')?.textContent, 'a late screen: its heading, once settled').toBe('Late page');
+    cleanup();
+  });
+
+  // The walk reads each page's heading, so it reads it once the page has drawn: a lazy screen's chunk can still be loading
+  // at the first read (#2780, the `/digest` row on a loaded runner), and the loading line says nothing. `settled()` waits
+  // for the pane to leave it; the assertion below is as strict as it was.
+  it('every route says where you are', async () => {
     stubAt(1280);
     act(() => useFleetStore.setState({ waiting: waitingView({ items: [itemView({ id: 1 })] }) }));
     const paths = ROUTES.map((r) => ROUTE_PATHS[r.id] ?? r.path);
     expect(paths.every((p) => p !== null), 'a path for every row').toBe(true);
     for (const at of paths as string[]) {
       mount(at);
+      if (at === ROUTE_PATHS.digest) {
+        // The first read of `/digest` in this file: its chunk is held, so the pane is the loading line, which says nothing.
+        // The read below, taken now, is the flake of #2780 on any box; opened and waited for, it reads the page.
+        expect(paneLoading(), '/digest: its chunk is held, so the pane is loading').not.toBeNull();
+        expect(document.querySelector('main.shell-detail h1, main.shell-detail .chat-title'), '/digest: no heading yet').toBeNull();
+        digestChunk.open();
+      }
+      await settled();
       const current = topBar().querySelectorAll('[aria-current="page"]');
       const detail = document.querySelector('main.shell-detail')!;
       const heading = detail.querySelector('h1, .chat-title');

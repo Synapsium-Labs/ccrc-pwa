@@ -78,11 +78,11 @@ describe('CoordStore.runLastMoves: the newest act on a run', () => {
     expect(movesOf(coord, [id]).get(id)).toBe(NOW - H);
   });
 
-  it('mail under either role sender does not move it', () => {
+  it('mail under any role sender does not move it (the timer lane\'s role included, Overlord W1a)', () => {
     const coord = fresh();
     const id = open(coord);
     event(coord, id, NOW - 3 * H, 'coordinator');
-    expect([...MAIL_ROLE_IDS].sort()).toEqual(['coordinator', 'operator']);
+    expect([...MAIL_ROLE_IDS].sort()).toEqual(['coordinator', 'operator', 'timer']);
     for (const role of MAIL_ROLE_IDS) mail(coord, id, NOW - H, role);
     expect(movesOf(coord, [id]).get(id)).toBe(NOW - 3 * H);
   });

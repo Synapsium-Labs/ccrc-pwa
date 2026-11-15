@@ -4,6 +4,7 @@ import {
   holdReason as serializeHoldReason,
   isPositiveDecimalSafeInteger,
 } from '../../../shared/api.js';
+import { TIMER_MAIL_SENDER } from '../../../shared/continuity-timers.js';
 
 /**
  * Shared by `routes.ts` (the `POST /api/runs` open route, and
@@ -234,11 +235,20 @@ export const survivorOf = (s: readonly OpenSibling[]): OpenSibling | null => s[s
  * and its report to that run's coordinator are both operator mail, sent by
  * `queueStallNotice` off a measured silence. The reasoning is the ask nudge's:
  * the operator is who the watch speaks for, and no session is.
+ *
+ * `timer` JOINED WITH THE TIMERS LANE (Overlord W1a, C63). A timer's mail carries
+ * its setter's own earlier words back to that setter, as untrusted data, so it
+ * must never speak as `operator`. As a role it resolves to no sender
+ * (`mailSender`: no park notice, no push tagged with it), no session can send as
+ * it (`POST /api/mail` finds no registry row), and `runLastMoves` never counts it.
+ * It is not in `REVIVE_SKIPPED_SENDERS`: a run's reminder is still owed.
  */
 const SYSTEM_MAIL_SENDER_MAP = {
   coordinator: "the program's own coordinator session, speaking as the role",
   operator: 'the operator — either through a PWA-surface route or raised by the ' +
     'watcher on their behalf (the ask nudge, the stall watch, the landing notices); never a session speaking for itself',
+  [TIMER_MAIL_SENDER]: 'the timer lane: a reminder its recipient set itself; the note inside is that session\'s own ' +
+    'words, untrusted',
 } as const;
 
 export type SystemMailSender = keyof typeof SYSTEM_MAIL_SENDER_MAP;

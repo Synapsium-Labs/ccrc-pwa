@@ -44,7 +44,7 @@ import { parseAudit, parseReap } from './wsaudit.js';
 import { readTasks } from './tasks/read.js';
 import { Bus, type Notice } from './bus.js';
 import type { FleetWatcher } from './watch.js';
-import { SessionStream, parseSince } from './sessionws.js';
+import { NO_TICK, SessionStream, parseSince } from './sessionws.js';
 import { BEAT_MS } from './sessionws.js';
 // D-5866: the one verb question. Its own line, so the ccdargv import above is left as it stands.
 import { ccdCan } from './ccdargv.js';
@@ -83,8 +83,14 @@ import { readLaneModels } from './laneModels.js';
 import { registerLinearRoutes, registerLinearWorkspaceRoutes } from './linear/routes.js';
 import { registerLinearProxyRoutes } from './linear/proxyRoutes.js';
 import { registerLinkingRoutes } from './linking/routes.js';
+import { registerContinuityRoutes } from './continuity/routes.js';
+import { CARD_REGISTRY_UNREAD } from './continuity/card.js';
+import { intentOfCheckpoint } from './continuity/declaredIntent.js';
+import { childReclaimGenerationRead } from './coord/childReclaim.js';
+import { incarnationOf } from './coord/delegationLeaseDoor.js';
 import { registerPlanRoutes } from './coord/planRoutes.js';
 import { registerHierarchyRoutes } from './coord/hierarchyRoutes.js';
+import { registerFaceRoutes } from './face/routes.js';
 import { readLinearStore } from './linear/store.js';
 import { trackerIdsIn } from './linking/policy.js';
 import { UNSET_LINKING } from './coord/linkingStore.js';
@@ -143,6 +149,7 @@ import { moveClaims } from './coord/reclaim.js';
 import { admitArchive } from './coord/archiveAdmission.js';
 import { actArchive, replyArchiveRefused } from './archiveAct.js';
 import { liveRowFor, liveRowWithHookFor, liveWordFor, turnReadDeps, turnVerdictFor } from './turnverdict.js';
+import { turnWordOf } from './sessionReading.js';
 import { ccdSwapRefusal, swapTurnRefusal } from './swapguard.js';
 
 /**
@@ -247,6 +254,10 @@ export const MASKED_GET_ROUTES: ReadonlySet<string> = new Set([
   '/api/programmes/:slug/plan',
   // The hierarchy settings (D-8181): the owner ids are session ids a coordinator took.
   '/api/hierarchy',
+  // A session's live notes (Overlord W1a, the notes piece): what each thread waits on and what comes next, written by it.
+  '/api/sessions/:id/notes',
+  // A session's pending timers, its own read and the operator's (Overlord W1a, the timers piece): each note a session wrote.
+  '/api/timers', '/api/sessions/:id/timers',
 ]);
 /** Whether the one answer hook masks a route's answer (D-5995). */
 export const answerMasked = (method: string, url: string | undefined): boolean =>
@@ -2181,6 +2192,25 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     readRecord: (id) => readSessionRecord(deps.io, deps.cfg, id),
     runCcd: deps.runCcd, fleetState: () => deps.fleetState,
   });
+  // The continuity routes (Overlord §3.3.11, W1a): the hook's start report, a box-token lane in a file of its own.
+  registerContinuityRoutes(app, {
+    coord: deps.coord, mailToken: () => deps.mailToken ?? null, wall: () => deps.time.clock.wall(),
+    attribute: (id, uuid) => attributionVerdict(deps.io, deps.cfg, id, uuid, 'fromUuid'),
+    attributeReader: (id, uuid) => attributionVerdict(deps.io, deps.cfg, id, uuid, 'byUuid'),
+    // The card's registry reads (the row's child mark, or that the registry could not say; its incarnation) and declared
+    // intent, read from the delegation checkpoint, the authority (`not-ready` until the lane has one).
+    cardRegistry: {
+      childMark: async (id) => {
+        const r = await readSessionRecord(deps.io, deps.cfg, id);
+        return r.kind === 'found' ? r.record.child : r.kind === 'absent' ? { kind: 'none' } : CARD_REGISTRY_UNREAD;
+      },
+      incarnation: (id) => childReclaimGenerationRead(deps.io, deps.cfg.registryDir, id),
+      declaredIntent: (id, incarnation) => intentOfCheckpoint(watcher?.delegationCheckpointIfReady() ?? null, id, incarnation),
+    },
+    // The timer set door's stamp: two agreeing reads of `.generation` (slug setter-stamp-is-a-double-read).
+    setterStamp: (id) => incarnationOf({ io: deps.io, registryDir: deps.cfg.registryDir }, id),
+    masker: deps.masker,
+  });
   // The lane routes, Check and the kill switch (accounts plan Task A14, D-7732), registered from their own file, which
   // `auth-gate.test.ts`'s `ROUTES` and `box-token-census.test.ts` read by name. Each takes the same account gate on the
   // `account-v2` cap, and runs the ONE reconciling `AccountOps` arm `index.ts` built; a server with none (a test, a
@@ -2253,12 +2283,15 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     registerDocsRefreshRoute(app, docs.readers, docs.fetchers, docs.lanes);
   });
   registerReaderLabRoutes(app, readerLab);
+  // The operator's character choice (the Overlord face plan, Task 6), from its own file: two session-gated routes, no box token.
+  registerFaceRoutes(app, { coord: deps.coord });
 
   app.get('/ws/session/:id', { websocket: true }, (socket, req) => {
     const { id } = req.params as { id: string };
     const q = req.query as { since?: string; sinceFile?: string };
     const since = parseSince(q.since, q.sinceFile);
-    const stream = new SessionStream(deps, bus, id, (m: SessionStreamMsg) => socket.send(JSON.stringify(m)), since, watcher);
+    // D-8611: a box with no watcher hands NO_TICK; its streams read for themselves and re-resolve on the backstop alone.
+    const stream = new SessionStream(deps, bus, id, (m: SessionStreamMsg) => socket.send(JSON.stringify(m)), since, watcher ?? NO_TICK);
     void stream.start();
     // A per-connection token, not the session id: one socket's close drops
     // only its OWN claim, so a second tab watching the same session doesn't
@@ -2571,7 +2604,9 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
    * `{field, value}`, one pair, never the multi-field `{route: {...}}` body
    * the operator's own spawn/dispatch doors take (`parseOperatorRoute`
    * above): the picker taps ONE control, and `routeApply` builds ONE `--set`.
-   * `parseRouteFields` is reused for its SHAPE guard only — built from the
+   * `parseRouteFields` is reused for its SHAPE guard and its `lane-only`
+   * refusal (a launch-profile or `precompact` field is a lane's alone, so the
+   * 400 then carries a `detail` naming it; review 1970 N3) — built from the
    * single named field so its `Object.keys(...).length !== 1` arm can never
    * see more than the one key this body can produce, defensive against the
    * function's own general contract rather than reachable from this route.
@@ -2587,7 +2622,10 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     const body = (req.body ?? {}) as { field?: unknown; value?: unknown };
     const parsed = parseRouteFields(typeof body.field === 'string' ? { [body.field]: body.value } : null);
     if (!parsed.ok || Object.keys(parsed.route).length !== 1) {
-      return reply.code(400).send({ ok: false, error: 'bad-request' });
+      // A lane-only field (`ROUTE_LANE_ONLY_FIELDS`: the launch-profile lane's three and the generations lane's
+      // `precompact`) is real but a lane's alone, so the 400 says which and why.
+      const laneOnly = !parsed.ok && parsed.why === 'lane-only' ? { detail: routeParseDetail(parsed) } : {};
+      return reply.code(400).send({ ok: false, error: 'bad-request', ...laneOnly });
     }
     if (!ccdCan(deps.fleetState, 'routeApply')) return reply.code(501).send({ ok: false, error: 'unsupported' });
     // D-8121: the `browser` field needs `browser-route-v1` (an older ccd refuses it by name). It is applied at the
@@ -2811,7 +2849,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       if (read.kind !== 'found') return { kind: 'idle' };
       const word = await liveWordFor(turnReads, read.record);
       const identity = measuredIdentity(read.record);
-      if (!word.ok || word.word === 'idle' || identity === null) {
+      if (!word.ok || turnWordOf(word.word) === 'idle' || identity === null) {
         return interruptVerdict({ word, row: null, hookUpdatedAt: null, hookEvent: null });
       }
       return interruptVerdict({ word, ...(await liveRowWithHookFor(turnReads, read.record, identity.uuid)) });

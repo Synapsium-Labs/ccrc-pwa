@@ -243,6 +243,18 @@ describe('the closed route table', () => {
     // The linking standard's read (D-8147): the pane's own project's team key, override and measured visibility. The identity
     // rides the query, as the Linear rows' does, so it runs in a pane.
     [['linking', 'show'], 'GET', '/api/linking'],
+    // The start report (Overlord W1a): the session hook's report of its own SessionStart.
+    [['sessions', 'start', 'lane-a-project-a'], 'POST', '/api/sessions/lane-a-project-a/start'],
+    [['sessions', 'card', 'lane-a-project-a'], 'GET', '/api/sessions/lane-a-project-a/card'],
+    // The note door (Overlord W1a, the notes piece): a session's own notes; every row fills the pane's pair, so each runs in a pane.
+    [['note', 'add', 'lane-a-project-a', '--json', '-'], 'POST', '/api/sessions/lane-a-project-a/notes'],
+    [['note', 'close', 'lane-a-project-a', '--json', '-'], 'POST', '/api/sessions/lane-a-project-a/notes'],
+    [['note', 'list', 'lane-a-project-a'], 'GET', '/api/sessions/lane-a-project-a/notes'],
+    [['note', 'handover', 'lane-a-project-a', '--json', '-'], 'POST', '/api/sessions/lane-a-project-a/handover'],
+    // The probe door (Overlord, the probes piece): the raw page read takes the session id; `probe answer` takes none, its id is the
+    // pane's, derived (`demo-ws` here). Both fill the pane's pair, so both run in a pane.
+    [['sessions', 'probe', 'lane-a-project-a'], 'GET', '/api/sessions/lane-a-project-a/probe'],
+    [['probe', 'answer', '--json', '-'], 'POST', '/api/sessions/demo-ws/probe'],
     // The plan verbs (D-8181): by programme slug; every one but `show` carries the pane's identity in the query, so runs in a pane.
     [['plan', 'put', 'prog-a'], 'POST', '/api/programmes/prog-a/plan'],
     [['plan', 'show', 'prog-a'], 'GET', '/api/programmes/prog-a/plan'],
@@ -251,12 +263,16 @@ describe('the closed route table', () => {
     [['plan', 'ticket-move', 'prog-a'], 'POST', '/api/programmes/prog-a/plan/tickets/move'],
     [['plan', 'epic-drop', 'prog-a'], 'POST', '/api/programmes/prog-a/plan/epics/drop'],
     [['plan', 'close', 'prog-a'], 'POST', '/api/programmes/prog-a/plan/close'],
+    // The timers (Overlord W1a, the timers piece): parsed whole by `parse_timer`, every one fills the pane's pair, so each runs in a pane.
+    [['timer', 'set', '2h', 'check the checks'], 'POST', '/api/timers'],
+    [['timer', 'list'], 'GET', '/api/timers'],
+    [['timer', 'cancel', '12'], 'POST', '/api/timers/12/cancel'],
   ];
 
   it.each(ROWS)('%s -> %s %s', async (args, method, url, family) => {
     const paned = (args[0] === 'asks' && args[1] === 'list') || args[0] === 'coordinators'
       || (args[0] === 'approvals' && args[1] === 'show') || args[0] === 'linear' || args[0] === 'linking' || (args[0] === 'plan' && args[1] !== 'show') || (args[0] === 'runs' && args[1] === 'review-rounds')
-      || args[0] === 'calls' || (args[0] === 'mail' && args[1] === 'inbox');
+      || args[0] === 'calls' || (args[0] === 'mail' && args[1] === 'inbox') || (args[0] === 'sessions' && (args[1] === 'card' || args[1] === 'probe')) || args[0] === 'note' || args[0] === 'probe' || args[0] === 'timer';
     if (paned) plantPane('demo-ws');
     await run(args as string[], args.includes('--json') ? '{"class":"routine","text":"q"}' : undefined, paned ? { TMUX_PANE: '%7' } : undefined);
     expect(seen).toHaveLength(1);
@@ -302,7 +318,12 @@ describe('the closed route table', () => {
     // Sixty-four since `calls.record` (autonomy-default wave A3, D-8126).
     // Sixty-five since `mail.inbox` (mail inbox, D-6780).
     // Seventy-two since the seven `plan` rows (D-8181).
-    expect(keys).toHaveLength(72);
+    // Seventy-three since `sessions.start` (Overlord W1a, the start report).
+    // Seventy-four since `sessions.card` (Overlord W1a, the card piece).
+    // Seventy-eight since the note door's four (Overlord W1a, the notes piece).
+    // Eighty-one since the three `timer` rows (Overlord W1a, the timers piece); eighty-three since the probe door's two (Overlord,
+    // the probes piece): `sessions.probe` and `probe.answer`.
+    expect(keys).toHaveLength(83);
   });
 
   it('states the row count in prose as the number the table actually holds', () => {
@@ -316,7 +337,8 @@ describe('the closed route table', () => {
       37: 'thirty-seven', 38: 'thirty-eight', 39: 'thirty-nine', 40: 'forty', 41: 'forty-one', 42: 'forty-two',
       43: 'forty-three', 44: 'forty-four', 45: 'forty-five', 46: 'forty-six', 47: 'forty-seven', 48: 'forty-eight',
       49: 'forty-nine', 50: 'fifty', 51: 'fifty-one', 52: 'fifty-two', 53: 'fifty-three', 54: 'fifty-four', 55: 'fifty-five',
-      56: 'fifty-six', 57: 'fifty-seven', 58: 'fifty-eight', 59: 'fifty-nine', 60: 'sixty', 61: 'sixty-one', 62: 'sixty-two', 63: 'sixty-three', 64: 'sixty-four', 65: 'sixty-five', 66: 'sixty-six', 67: 'sixty-seven', 68: 'sixty-eight', 69: 'sixty-nine', 70: 'seventy', 71: 'seventy-one', 72: 'seventy-two',
+      56: 'fifty-six', 57: 'fifty-seven', 58: 'fifty-eight', 59: 'fifty-nine', 60: 'sixty', 61: 'sixty-one', 62: 'sixty-two', 63: 'sixty-three', 64: 'sixty-four', 65: 'sixty-five', 66: 'sixty-six', 67: 'sixty-seven', 68: 'sixty-eight', 69: 'sixty-nine', 70: 'seventy', 71: 'seventy-one', 72: 'seventy-two', 73: 'seventy-three', 74: 'seventy-four', 75: 'seventy-five', 76: 'seventy-six', 77: 'seventy-seven', 78: 'seventy-eight',
+      79: 'seventy-nine', 80: 'eighty', 81: 'eighty-one', 82: 'eighty-two', 83: 'eighty-three',
     };
     const want = WORDS[n];
     expect(want, `the ROUTES table outgrew this test's word list at ${n}`).toBeDefined();
@@ -490,6 +512,11 @@ describe('the four claimant rows send the question door family, and refuse local
       ['plan', 'put', 'prog-a', '--json', '-'], ['plan', 'show', 'prog-a'], ['plan', 'met', 'prog-a', '--json', '-'],
       ['plan', 'ticket-add', 'prog-a', '--json', '-'], ['plan', 'ticket-move', 'prog-a', '--json', '-'],
       ['plan', 'epic-drop', 'prog-a', '--json', '-'], ['plan', 'close', 'prog-a', '--json', '-'],
+      ['sessions', 'start', 'lane-a-project-a', '--json', '-'], ['sessions', 'card', 'lane-a-project-a'],
+      ['note', 'add', 'lane-a-project-a', '--json', '-'], ['note', 'close', 'lane-a-project-a', '--json', '-'],
+      ['note', 'list', 'lane-a-project-a'], ['note', 'handover', 'lane-a-project-a', '--json', '-'],
+      ['timer', 'set', '2h', 'check the checks'], ['timer', 'list'], ['timer', 'cancel', '12'],
+      ['sessions', 'probe', 'lane-a-project-a'], ['probe', 'answer', '--json', '-'],
     ];
     expect(rows.map((a) => `${a[0]}.${a[1]}`).sort(), 'every non-claimant row, once').toEqual(routeKeys().filter((k) => !keys.has(k)).sort());
     plantPane('demo-ws');

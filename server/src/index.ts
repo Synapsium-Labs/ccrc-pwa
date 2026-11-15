@@ -387,8 +387,9 @@ const masker = new SecretMasker({
 });
 deps.masker = masker;
 push?.setMasker(masker);
-// The audit's 365-day retention, at boot and then daily on its own unref'd timer. Not a lane in `watch.ts`'s
-// coordination sweeps, which another branch holds (D-5620). The Linear journal's 365 days ride the same beat (D-7671).
+// The audit's 365-day retention, at boot and then daily on its own unref'd timer (D-5620). The Linear journal's 365 days
+// ride the same beat (D-7671). Not a row of `LANE_SCHEDULE`: this root holds the three stores, none of them is a watcher
+// lane, and the sweep runs before the server listens and whether or not the tick does. A recorded exception (D-8614).
 accountAudit.sweep(Date.now());
 testboxAudit.sweep(Date.now());
 linearJournal.sweep(Date.now());

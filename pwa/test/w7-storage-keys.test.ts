@@ -1,6 +1,6 @@
 // Every key each storage owner reads or writes, as a literal sorted list (D-7179; Task C7a Step 5; plan
 // docs/superpowers/plans/2026-10-27-consolidation-w7-pwa.md, item 13; ARCH-75). The owners are `storageOwners()`
-// (census-w7, 12 files); each is driven through its own read and write, and `Storage`'s three methods are recorded, so
+// (census-w7); each is driven through its own read and write, and `Storage`'s three methods are recorded, so
 // the keys are what the code touches, not text it holds. C7l moves every owner onto one storage port; every key here
 // stays byte-identical (a renamed key loses a device's remembered choice).
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
@@ -17,6 +17,7 @@ import { inspectorHidden, resetInspectorChoiceForTests, setInspectorHidden } fro
 import { loadMark, saveMark } from '../src/lib/notifymark';
 import { forgetWaitingSnapshot, loadFleetSnapshot, loadWaitingSnapshot, saveFleetSnapshot, saveWaitingSnapshot } from '../src/lib/offline';
 import { ack, loadAcks } from '../src/lib/seen';
+import { CHARACTER_STORAGE_KEY, initCharacter, setCharacter } from '../src/lib/character';
 import { rememberSkin, storedSkin } from '../src/lib/skin';
 import { rememberTheme, storedTheme } from '../src/lib/theme';
 import { readViewOverride, writeViewOverride } from '../src/session/drawerView';
@@ -90,6 +91,11 @@ describe('each storage owner\'s keys (read and write), byte for byte', () => {
   it('lib/skin.ts', async () => {
     expect(await keysTouched(() => { rememberSkin('auto'); storedSkin(); })).toEqual(['ccrc-skin']);
   });
+  it('lib/character.ts', async () => {
+    vi.stubGlobal('fetch', vi.fn(() => new Promise(() => {})));
+    expect(await keysTouched(() => { setCharacter('orb'); initCharacter(); })).toEqual([CHARACTER_STORAGE_KEY]);
+    expect(CHARACTER_STORAGE_KEY).toBe('ccrc-character');
+  });
   it('lib/theme.ts', async () => {
     expect(await keysTouched(() => { rememberTheme('system'); storedTheme(); })).toEqual(['ccrc-theme']);
   });
@@ -119,17 +125,17 @@ describe('each storage owner\'s keys (read and write), byte for byte', () => {
   });
 });
 
-describe('every key, across the twelve owners, as one sorted list', () => {
+describe('every key, across the owners above, as one sorted list', () => {
   it('the literal list (the union of the rows above)', () => {
     expect([...ALL].sort()).toEqual([
-      'ccrc-accounts-strip', 'ccrc-fleet-group', 'ccrc-inspector', 'ccrc-release-dismissed', 'ccrc-skin', 'ccrc-theme',
+      'ccrc-accounts-strip', 'ccrc-character', 'ccrc-fleet-group', 'ccrc-inspector', 'ccrc-release-dismissed', 'ccrc-skin', 'ccrc-theme',
       'ccrc.drawer-view.v1', 'ccrc.fleet-folded.v1', 'ccrc.fleet-rollup.v1', 'ccrc.fleet-snapshot.v1',
       'ccrc.waiting-snapshot.v1', 'ccrc:chat-row-samples', 'ccrc:chat-row-samples-v2', 'ccrc:notify:v1', 'ccrc:seen:v1',
     ]);
   });
 });
 
-// W8a (Task 7): the reader's keys. They are NOT in the union list above (the list is the twelve owners' keys, and the
+// W8a (Task 7): the reader's keys. They are NOT in the union list above (the list is the owners' keys above, and the
 // reader's are a family under one prefix, not a literal set); this describe pins that the library's store keeps every
 // write and every eviction inside `READER_STORE_PREFIX`, and the budget and caps it states (M8.15).
 describe('W8a: the reader\'s keys stay under its own prefix (M8.15)', () => {

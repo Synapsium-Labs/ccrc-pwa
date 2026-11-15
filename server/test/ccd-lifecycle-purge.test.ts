@@ -2663,7 +2663,7 @@ describe('_reg_purge leaves no join record behind, whenever the hook\'s append l
     expect(h.sh(`_ws_slug_free demo still-river; echo "free=$?"`), 'and the slug is free').toContain('free=0');
   });
 
-  it('it is the LAST unlink, ONE rm call for the three names: after generation, before the lock is released', () => {
+  it('it is the LAST unlink, ONE rm call for the four names: after generation, before the lock is released', () => {
     const id = seed();
     fs.writeFileSync(path.join(REGD(), `${id}.generation`), '0189abcd-1234-5678-9abc-0123456789ab');
     fs.writeFileSync(path.join(REGD(), `${id}.joined`), 'a-1\n');
@@ -2674,10 +2674,10 @@ describe('_reg_purge leaves no join record behind, whenever the hook\'s append l
       [ -z "$names" ] || printf '%s\\n' "$names" >> '${log}'; command rm "$@"; }
       _reg_purge ${id}`);
     const calls = fs.readFileSync(log, 'utf8').split('\n').filter(Boolean);
-    expect(calls.at(-1), 'the last call takes the join record\'s two names and the launch record at once').toBe(`${id}.joined ${id}.joinedprev ${id}.deleg `);
+    expect(calls.at(-1), 'the last call takes the join record\'s two names, the launch record and the start spool at once').toBe(`${id}.joined ${id}.joinedprev ${id}.deleg ${id}.startpending `);
     expect(calls.at(-2), 'and right before it the generation went').toBe(`${id}.generation `);
     expect(calls.filter((c) => c.includes('.joined ') || c.includes('.joinedprev ')), 'the loop took each first, one call apiece')
-      .toEqual([`${id}.joined `, `${id}.joinedprev `, `${id}.joined ${id}.joinedprev ${id}.deleg `]);
+      .toEqual([`${id}.joined `, `${id}.joinedprev `, `${id}.joined ${id}.joinedprev ${id}.deleg ${id}.startpending `]);
   });
 
   it('a refusal of that unlink is its own condition: status 3, and each path still standing is named', () => {

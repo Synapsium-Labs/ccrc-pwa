@@ -18,6 +18,7 @@ import type { WorkflowView } from './workflows.js';
 import type { WaitingView } from './ledgers.js';
 import type { CHECKS_MAIL_TOKEN } from './landing.js';
 import type { LandingWrite } from './landingLine.js';
+import { hookEventIs, type HookEvent } from './hook-events.js';
 
 export type SessionStatus = 'busy' | 'idle' | 'dead';
 
@@ -972,6 +973,15 @@ export interface SessionUsage {
   readonly class: string | null;
   readonly effort: string | null;
   readonly ctxPct: number | null;
+  /** Overlord W0-18: the context's size in tokens, Claude Code's statusline field
+   *  `context_window.total_input_tokens` (input plus cache read plus cache creation), the figure the renewal triggers
+   *  read. Null when the sidecar has none or it is not a number above zero: never 0 for "no reading". Optional
+   *  because an older sidecar omits it. Two readers, one rule (`tokenCountOf`): `parseUsageSidecar` reads the sidecar,
+   *  and `reviveUsage` reads the persisted shape (a state-cache or offline snapshot) back. */
+  readonly ctxTokens?: number | null;
+  /** Overlord W0-18: the context window's size in tokens, `context_window.context_window_size`. Null as for
+   *  `ctxTokens`, and read by the same two readers through `tokenCountOf`. Optional because an older sidecar omits it. */
+  readonly ctxWindow?: number | null;
   readonly cost: number | null;
   /** D-8267: when the main conversation's cached prompt prefix leaves its TTL, in epoch SECONDS (the sidecar's unit):
    *  Claude Code's documented statusline field `prompt_cache.expires_at` (v2.1.251 and later), null when the last
@@ -980,6 +990,11 @@ export interface SessionUsage {
   readonly cacheExpiresAt?: number | null;
   readonly stale: boolean;
 }
+
+/** A token count's one rule (`SessionUsage.ctxTokens`, `.ctxWindow`; review 1927 I2, review 1937 F4): a finite number
+ *  above zero, else null. A negative is no reading, never a small context; nor is a zero, which Claude Code sends before
+ *  a conversation's first API response, and which as a window would make a ratio NaN or Infinity. */
+export const tokenCountOf = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) && v > 0 ? v : null);
 
 /** Where a workspace's pull request is, as ccrc last managed to find out.
  *
@@ -1825,7 +1840,7 @@ export function sessionBucket(
   // `idle`. D-75's wedge recovery is kept for a Stop with no delegated work.
   const delegated = s.background !== null && s.background.count > 0;
   const finishedAfterStatus =
-    hookNewer && s.hookState === 'done' && hookEvent !== 'SessionStart' && !delegated;
+    hookNewer && s.hookState === 'done' && !hookEventIs(hookEvent, 'SessionStart') && !delegated;
   // NOT the hook's timestamp: the hook rewrites `updatedAt` on every
   // PostToolUse, so a busy session would report a continuously-refreshed
   // "since" — permanently new, and permanently badged. That holds for the
@@ -1846,7 +1861,7 @@ export function sessionBucket(
     // function's own docstring for `hookEvent`. Degrade to `idle`: exactly
     // the bucket a virgin session would report if `SessionStart` had never
     // touched `state` at all, which is the honest fact on the ground.
-    if (hookEvent === 'SessionStart') return { bucket: 'idle', bucketSince: s.statusUpdatedAt };
+    if (hookEventIs(hookEvent, 'SessionStart')) return { bucket: 'idle', bucketSince: s.statusUpdatedAt };
     // D-5231: after a Stop that left delegated work running, `done` is reached
     // only once the live file writes `idle` (the rung above held `working`
     // until then), so it is dated from THAT write when it is the later one —
@@ -3357,6 +3372,9 @@ function reviveUsage(o: Record<string, unknown>, key: string): SessionUsage | nu
     ts: reqNum(u, 'ts'), model: optStr(u, 'model'), class: optStr(u, 'class'),
     effort: optStr(u, 'effort'), ctxPct: optNum(u, 'ctxPct'), cost: optNum(u, 'cost'),
     cacheExpiresAt: optNum(u, 'cacheExpiresAt'), stale: optBool(u, 'stale', false),
+    // Overlord W1a (review 1927 M2): a present non-number refuses the session like any number field; a number takes the
+    // sidecar parser's above-zero rule, so a revived 0 or negative is no reading, as a parsed one is (review 1937 F4).
+    ctxTokens: tokenCountOf(optNum(u, 'ctxTokens')), ctxWindow: tokenCountOf(optNum(u, 'ctxWindow')),
   };
 }
 
@@ -6466,8 +6484,25 @@ export function parseWaveDoneSignals(body: string): WaveDoneSignals {
  * browser MCP servers (absent: the box default, `CCRC_BROWSER_MCP_DEFAULT`). It
  * has no keystroke and is never applied live; `FleetSession.browserMcp` says
  * what the running pane's spawn applied.
+ *
+ * `profile`, `automem` and `compactwindow` (Overlord W1a, spec §3.6 H1) name the
+ * launch profile a session's spawn applies: a `FLEET_ROLES` key, the memory choice
+ * for `plain` (`on`/`off`), and Claude Code's own auto-compact window in tokens.
+ * ccd renders them at every spawn (`_profile_spawn_compose`) from
+ * `ccd/lib/launch-profiles.json`; like `browser`, none is applied live. They are
+ * `ROUTE_LANE_ONLY_FIELDS`: no door's body may name them.
+ *
+ * `precompact` (Overlord W1a compaction, spec §3.3.4 C39) is `refuse`/`allow`: whether the session hook's PreCompact
+ * refusal arm (`_hook_compact_refuse`) refuses a proactive automatic compaction, once a turn. Absent is dark. Its one
+ * writer is the generations lane (the renewal hand-offs piece), so it is lane-only too.
  */
-export const ROUTE_WRITABLE_FIELDS = ['class', 'effort', 'subagent', 'workflow', 'compact', 'browser'] as const;
+export const ROUTE_WRITABLE_FIELDS = ['class', 'effort', 'subagent', 'workflow', 'compact', 'browser', 'profile', 'automem', 'compactwindow', 'precompact'] as const;
+/** The route fields only a server lane writes (Overlord W1a; "one writer per route field: the lane"): the launch-profile
+ *  lane's three and the generations lane's `precompact`.
+ *  `parseRouteFields`, the one door parse, refuses each as `lane-only` with a 400 naming it, at the operator's route
+ *  door, the spawn and dispatch `route` bodies, and the coordinator's `POST /api/runs/:id/route`. The lane composes
+ *  `CCD_ARGV.routeSet` itself and never passes a door. Derived: `ROUTE_WRITABLE_FIELDS` from `profile` on. */
+export const ROUTE_LANE_ONLY_FIELDS: readonly RouteField[] = ROUTE_WRITABLE_FIELDS.slice(ROUTE_WRITABLE_FIELDS.indexOf('profile'));
 export type RouteField = (typeof ROUTE_WRITABLE_FIELDS)[number];
 export type RouteFields = Partial<Record<RouteField, string>>;
 
@@ -6520,11 +6555,13 @@ export const ROUTE_CONTROL_CHAR_RE = /[\x00-\x1f\x7f]/;
  * `why` is `not-object` for a body that is not a plain object at all (an
  * array, a primitive, `null`); `unknown-field`/`bad-value` name the offending
  * `field` — two conditions a caller must be able to tell apart, so they never
- * collapse onto one bare `false`.
+ * collapse onto one bare `false`. `lane-only` names a `ROUTE_LANE_ONLY_FIELDS`
+ * member: a real field, but one no door may write (every caller of this parse
+ * is a door).
  */
 export type RouteFieldsParse =
   | { ok: true; route: RouteFields }
-  | { ok: false; why: 'not-object' | 'unknown-field' | 'bad-value'; field?: string };
+  | { ok: false; why: 'not-object' | 'unknown-field' | 'bad-value' | 'lane-only'; field?: string };
 
 export function parseRouteFields(v: unknown): RouteFieldsParse {
   if (typeof v !== 'object' || v === null || Array.isArray(v)) {
@@ -6535,6 +6572,7 @@ export function parseRouteFields(v: unknown): RouteFieldsParse {
     if (!(ROUTE_WRITABLE_FIELDS as readonly string[]).includes(field)) {
       return { ok: false, why: 'unknown-field', field };
     }
+    if (ROUTE_LANE_ONLY_FIELDS.includes(field as RouteField)) return { ok: false, why: 'lane-only', field };
     if (typeof value !== 'string' || value.length === 0 || ROUTE_CONTROL_CHAR_RE.test(value)
         // `TextEncoder`, not `.length`: a web global, not `node:*` — L0 may
         // use it, and `.length` counts UTF-16 units, which would let a
@@ -6564,7 +6602,14 @@ export function parseRouteFields(v: unknown): RouteFieldsParse {
  * rather than the word `undefined`.
  */
 export function routeParseDetail(p: Extract<RouteFieldsParse, { ok: false }>): string {
-  return `route: ${p.why}` + (p.field === undefined ? '' : ` ${p.field}`);
+  return `route: ${routeParseWhy(p)}`;
+}
+
+/** The refusal's words after its prefix: the `why`, then the field when there is one. The ONE spelling of that suffix, which
+ *  `routeParseDetail` prefixes with `route:` and the coordinator's `POST /api/runs/:id/route` with `field/value invalid:`
+ *  (`parseRouteRequest`; review 1970 N2), so neither door re-spells the field rule. */
+export function routeParseWhy(p: Extract<RouteFieldsParse, { ok: false }>): string {
+  return p.why + (p.field === undefined ? '' : ` ${p.field}`);
 }
 
 /**
@@ -12283,7 +12328,8 @@ export function backgroundOnlyRefusal(body: unknown): { count: number | null; ki
 // from Tasks 2 and 10, the file's name, the lease and the grammar in `ccd/session-hook.sh`.
 
 /** One capability word the server advertises. Spelled once, as the keys of `SERVER_CAP_MAP`. */
-export type ServerCap = 'dispatch-live-gate-v1' | 'hook-main-state-v1' | 'ask-pairing-v1' | 'questions-v1' | 'review-rounds-v1' | 'goals-read-v1' | 'calls-v1' | 'plan-v1';
+export type ServerCap = 'dispatch-live-gate-v1' | 'hook-main-state-v1' | 'ask-pairing-v1' | 'questions-v1' | 'review-rounds-v1' | 'goals-read-v1' | 'calls-v1' | 'plan-v1'
+  | 'timers-v1';
 
 /** Every word, with what it promises. The value is `true`; the promise is the comment, which a word's reader may
  *  rely on and nothing weaker. `PR_REASON_MAP`'s idiom: a word added to `ServerCap` and not here is TS2741. */
@@ -12340,6 +12386,9 @@ const SERVER_CAP_MAP: Readonly<Record<ServerCap, true>> = {
    *  `plan-missing`, `reserved-programme`, `ticket-unavailable`, `plan-closed`). `ccrc-api plan` refuses `no-plan-door`,
    *  unsent, when a current cap file omits this word. Added by the change that builds the plan routes, cut after them. */
   'plan-v1': true,
+  /** W1a: the timer doors, the timers lane and `ccrc-api timer` (Overlord timers piece). `ccrc-api timer` refuses
+   *  `capability-missing`, unsent, when a current cap file omits this word. Added by the change that builds the client. */
+  'timers-v1': true,
 };
 
 /** The words this server advertises, in `GET /health`'s `caps`, and in the file a `server` or `both` node writes. */
@@ -12559,7 +12608,7 @@ export const DELEGATION_EVENT_KINDS = [
   'SubagentStop',
   'UserPromptSubmit',
   'SessionEnd',
-] as const;
+] as const satisfies readonly HookEvent[];
 export type DelegationEventKind = (typeof DELEGATION_EVENT_KINDS)[number];
 
 /** Where an activity (a unit of delegated work the parent started) came from. `bash-worktree` is raw Bash use of

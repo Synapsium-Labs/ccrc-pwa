@@ -1129,7 +1129,7 @@ describe('the launch record: one appender, one purge, and no reader in the tree 
     const close = all.findIndex((l, i) => i > open && l === '}');
     const named = all.map((l, i) => ({ l, i })).filter(({ l }) => !isBashComment(l) && bashNames(l));
     expect(named).toHaveLength(2);
-    expect(named[0]!.l).toContain('rm -f "$REG/$id.joined" "$REG/$id.joinedprev" "$REG/$id.deleg" ||');
+    expect(named[0]!.l).toContain('rm -f "$REG/$id.joined" "$REG/$id.joinedprev" "$REG/$id.deleg" "$REG/$id.startpending" ||');
     expect(named[1]!.l.trim()).toContain('_reg_set "$id" deleg "$kept"');
     expect(named[1]!.i > open && named[1]!.i < close, 'the compaction write is inside _inflight_write').toBe(true);
   });

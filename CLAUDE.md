@@ -583,7 +583,8 @@ generated value is never hand-edited, and the contrast gate rules on the result 
   operator's switch on abandoning a dispatch that never came back), `POST /api/coord/run-close` (D-8077, the operator's
   three-state control over the run-close lanes, which also refuses `on` while coordination is paused), `POST /api/coord/scope-sweep` (D-7994, the
   operator's switch on the sweep stopping a dead session's busy processes), `POST /api/coord/roll-idle` (D-7453, the
-  operator's Settings row for the automatic roll; every idle session by default since D-8276), `POST /api/coord/pane-scope-stop` (D-7902, the operator's
+  operator's Settings row for the automatic roll; every idle session by default since D-8276), `POST /api/coord/plain-auto-memory` (Overlord W1a,
+  the operator's Settings row for auto memory in plain sessions, off by default), `POST /api/coord/pane-scope-stop` (D-7902, the operator's
   switch that arms a deliberate stop's pane-scope stop), `POST /api/coord/delegation-adopt` (D-8112, the operator's switch
   on the delegation lane keeping a finished delegated worktree, which also refuses `on` while sign-in is dark), `POST /api/coord/lane-arm` (D-8274,
   the operator's Shadow lanes card, one switch per shadow lane, which also refuses `live` while sign-in is dark), `POST /api/testbox/switch` (test box plan TB9, D-7411,
@@ -594,7 +595,7 @@ generated value is never hand-edited, and the contrast gate rules on the result 
   keep, attach and "not delegated" for a delegated worktree) are session-gated only — armed, they sit behind the auth gate like every other PWA-surface write. The first
   needs prose because no scanner can see it: `coord-pause-route.test.ts` reads
   `server/src/coord/routes.ts` alone, and that route is registered in `server.ts`, so a door opened outside
-  that one file is invisible to the set that pins the doors. The other sixteen are in that file's `SESSION_ONLY`
+  that one file is invisible to the set that pins the doors. The other seventeen are in that file's `SESSION_ONLY`
   set, and `box-token-census.test.ts` checks this sentence against it in both directions (D-1231). The update
   control plane's routes are session-only by design (the box token never writes intent — design 2026-09-20,
   decision 15): `GET /api/updates`, `POST /api/updates/intent`, `POST /api/updates/refresh`, `POST
@@ -620,7 +621,10 @@ generated value is never hand-edited, and the contrast gate rules on the result 
   behind a step-up, and every one is session-gated when armed. They are
   registered by `registerLedgerOperatorRoutes` in `server/src/coord/ledgersRoutes.ts`, called from `server.ts`; the census reads
   that file as a lane source of its own and keeps their names in a hand-kept `LEDGER_OPERATOR_DOORS`, checked against it in both
-  directions. The box-token lifecycle's `POST /api/token/claim` (EXEMPT: it authenticates by a single-use code
+  directions. The operator's read and cancel of a session's timers (Overlord W1a, the timers piece), `GET /api/sessions/:id/timers`
+  and `POST /api/sessions/:id/timers/:timerId/cancel`, consult no box token either and are session-gated when armed; they register
+  from `server/src/continuity/routes.ts` beside the session's own box-token timer doors, and the census keeps every session-gated
+  door of that file in a hand-kept `CONTINUITY_SESSION_DOORS`, checked against it in both directions. The box-token lifecycle's `POST /api/token/claim` (EXEMPT: it authenticates by a single-use code
   the server sent over the agent link, never by the token it hands out) and `POST /api/token/rotate` (session-only,
   the console's "Rotate now") consult no box token either; they register from `server/src/token/routes.ts`, which
   the census reads as a lane source of its own and checks against `CODE_DOORS` and `TOKEN_DOORS` in both directions.

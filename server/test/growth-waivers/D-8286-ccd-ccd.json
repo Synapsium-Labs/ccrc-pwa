@@ -3,5 +3,6 @@
   "maxDelta": 70,
   "d": "D-8286",
   "reason": "the archived-expiry gaps before arming (#318): rung 6's stale-lock classifier `_ws_index_lock_state` and its two calls (the child's tree and the nested twin), the token's optional `staleLock=` input, the audit and journal writers `_ws_stale_lock_doc` and `_ws_stale_lock_meas`, and `_ws_reclaim_head_unborn`'s other-branch arm; about +65 net lines against the merge-base; kept inline beside `_ws_reclaim_ladder` and `_ws_reclaim_head_unborn`, the ladder's own region, which every caller already sources",
-  "added": "2026-11-11"
+  "added": "2026-11-11",
+  "createdAt": "2026-11-11"
 }

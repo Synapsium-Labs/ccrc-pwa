@@ -937,13 +937,16 @@ function laneManifest(account, registry) {
     upstream: parsed.upstream,
     ...(probeModel === null ? {} : { probeModel }),
     units: { litellm: `ccgpt-${id}-litellm.service`, shim: `ccgpt-${id}-shim.service` },
-    // The bridge's three file names, spelled HERE and nowhere else in shipped
+    // The bridge's four file names, spelled HERE and nowhere else in shipped
     // code (`single-definition.test.ts` pins that): `bash` and the bridge read
     // them from `lane.json`. `stats` is the bridge's one non-secret output,
     // `store` the reasoning store (sqlite adds its `-wal`/`-shm` beside it),
     // `recordings` a directory written only while the lane's `record-streams`
-    // marker exists.
-    bridgeFiles: { stats: 'bridge.stats.json', store: 'reasoning.sqlite', recordings: 'recordings' },
+    // marker exists, and `requests` the per-request record (D-8619), written
+    // only while its `record-requests` marker exists, with one older
+    // generation, `<name>.1`, beside it. Every reader takes `requests` as
+    // optional: a lane.json rendered before it existed names none.
+    bridgeFiles: { stats: 'bridge.stats.json', store: 'reasoning.sqlite', recordings: 'recordings', requests: 'bridge.requests.jsonl' },
   };
 }
 

@@ -1331,6 +1331,21 @@ describe('measure-codex-watch.py: unmeasured is never pass', () => {
     expect(criterion(report(), 'credential').verdict).toBe('unmeasured');
   });
 
+  // D-8619: `bridgeFiles.requests`, the per-request record, is optional in lane.json and the watch reads only the
+  // stats file: a lane.json with the name and one without it (an older laneManifest's) give the same report.
+  it('a lane.json with or without the request record\'s name gives the same report', () => {
+    passing();
+    const without = run(['--json']);
+    expect(without.code, without.stderr).toBe(0);
+    const files = (lane().bridgeFiles as Record<string, string>);
+    write(path.join(laneDir(), 'lane.json'), JSON.stringify(lane({ bridgeFiles: { ...files, requests: 'bridge.requests.jsonl' } })));
+    write(path.join(laneDir(), 'bridge.requests.jsonl'), '{"v":1}\n');
+    const withIt = run(['--json']);
+    expect(withIt.code, withIt.stderr).toBe(0);
+    expect(withIt.stdout).toBe(without.stdout);
+    expect(criterion(JSON.parse(withIt.stdout), 'empty-tool-calls').verdict).not.toBe('unmeasured');
+  });
+
   it('a lane.json that names no stats file leaves the bridge unmeasured, never a guessed name', () => {
     passing();
     write(path.join(laneDir(), 'lane.json'), JSON.stringify(lane({ bridgeFiles: {} })));

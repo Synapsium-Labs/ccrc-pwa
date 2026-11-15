@@ -56,6 +56,10 @@ export interface FleetState {
    *  `RosterWire` only (G15; accounts plan Task A12): `null` until an answer carries it, and again after one that
    *  does not (a signed-out session, a dark gate). */
   lanes: Readonly<Record<string, LaneWire>> | null;
+  /** True once a `GET /api/accounts` answer carrying a roster has landed in this store (never hydrated, memory only). It is
+   *  what tells "not read yet" from "read, and no `lanes` served to this reader" (`lanes` is `null` in both). One writer:
+   *  `landAccounts`. The face's calm moods read it (`face/mood.ts#lanesRead`). */
+  accountsHeard: boolean;
   /** The lanes a sign-out may have changed that this store has not read since (D-7992). `lanes` still holds each as it was,
    *  so no sheet may take it at its word: `oldCredentialOf`. A mark goes with the first good read of the lanes that
    *  started after it, and after `notBefore`; a failed read, or one already in flight, leaves it. Memory only. */
@@ -518,6 +522,7 @@ export function createFleetStore(deps: FleetStoreDeps = {}): FleetStore {
         warnNonArrayRoster(r);
       }
       readAt = Date.now();
+      if (Array.isArray(r.roster) && !held.accountsHeard) next.accountsHeard = true;
       if (Object.keys(next).length > 0) set(next);
       return Array.isArray(r.roster) ? 'ok' : 'error';
     };
@@ -574,6 +579,7 @@ export function createFleetStore(deps: FleetStoreDeps = {}): FleetStore {
       roster: snapshot?.roster ?? [],
       // Never hydrated: the snapshot holds no lane, by design (G15).
       lanes: null,
+      accountsHeard: false,
       lanesUnread: {},
       markLaneUnread(id, holdMs = 0) {
         set({ lanesUnread: { ...get().lanesUnread, [id]: { afterRead: readsStarted, notBefore: Date.now() + holdMs } } });

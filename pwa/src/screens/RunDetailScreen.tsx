@@ -42,6 +42,8 @@ import { ResumeSheet } from '../fleet/ResumeSheet';
 import { resumeHeirs } from '../fleet/resumeHeirs';
 import { capWaiting } from '../fleet/reviewCapWords';
 import { RunTrail } from './RunTrail';
+import { TimersSection } from '../session/TimersSection';
+import { runTimerSections } from '../session/timersWords';
 import { runQueryOf, programmeIsOpenable, programmePath, runPath, runsSearchPath, sessionPath } from '../lib/routes';
 import { useLocation } from '../lib/router';
 import { useFleetStore, type FleetStore } from '../stores/fleet';
@@ -354,6 +356,7 @@ export function RunDetailScreen({ id, store = useFleetStore, pane = false }: { i
       <Controls run={run} coordinatorOpenable={coordSession !== null} onLift={() => setLiftOpen(true)} onAbandon={() => setAbandonOpen(true)}
         {...(resumable ? { onResume: () => setResumeOpen(true) } : {})} />
       <Facts groups={groups} />
+      {runTimerSections(run).map((t) => <TimersSection key={t.sessionId} sessionId={t.sessionId} title={t.title} />)}
       <RunTrail events={state.answer.events} olderEvents={state.answer.olderEvents} />
       <ResumeSheet run={resumeOpen ? run : null} heirs={resumeHeirs(sessions, runHomeProject(run) ?? run.project, run.claimedBy, frameSeen)}
         onClose={() => setResumeOpen(false)} onDone={retry} />

@@ -33,7 +33,10 @@ export interface HookState {
    *  `null`, not a union: the set of hook event names is Claude Code's, it
    *  grows between harness versions, and narrowing it here would make a new
    *  event name reject a whole hookstate read. A string this build does not
-   *  recognise is simply not the edge it was looking for. */
+   *  recognise is simply not the edge it was looking for. The names a consumer
+   *  looks for are `HookEvent` (`shared/hook-events.ts`, D-8613): it tests this
+   *  field through `hookEventIs` or a list typed by that union, never a bare
+   *  literal, so a misspelt name fails to compile. */
   event: string | null;
   ask: HookAsk | null;
   subagents: { name: string; startedAt: number }[];

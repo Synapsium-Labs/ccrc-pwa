@@ -21,13 +21,14 @@
 #     this process's caller does not supply. Absent, it REFUSES; it never guesses
 #     a host. (A worker guessed one on 2026-08-25 and reported success against
 #     nothing.)
-#   * The route comes from ROUTES below, seventy-two rows, and nothing else; the
+#   * The route comes from ROUTES below, eighty-three rows, and nothing else; the
 #     four claimant rows name the question door family's template, their only
 #     door since the old ones were retired (D-7324), refused here, unsent, when a
 #     current cap file says the server lacks `questions-v1` (D-7328); `runs
 #     review-rounds` is refused the same way for `review-rounds-v1` (D-8125),
 #     `goals show` for `goals-read-v1` (D-8126), and `calls record` for `calls-v1`;
-#     the seven `plan` rows are refused `no-plan-door` the same way for `plan-v1` (D-8181).
+#     the seven `plan` rows are refused `no-plan-door` the same way for `plan-v1` (D-8181), and the three
+#     `timer` rows `capability-missing` for `timers-v1` (Overlord W1a, the timers piece).
 #   * The only caller-supplied text that ever reaches a URL is an id or a query
 #     value the row itself declares, each validated against `SAFE_RE` BEFORE the
 #     request is built — refused, never escaped and sent.
@@ -92,7 +93,7 @@ SAFE_RE='^[A-Za-z0-9_-]+$'
 # (`/api/questions/<ask|approval>-{id}/<rule|release>`): from Q3j it was their
 # fifth field, sent only while the server advertised `questions-v1` (D-7325), and
 # since the old doors were retired it is their path (D-7324). Every row has four.
-# Seventy-two rows, and that word is SCANNED: `server/test/ccrc-api.test.ts`
+# Eighty-three rows, and that word is SCANNED: `server/test/ccrc-api.test.ts`
 # derives the count from the table below and reds if this line or the bullet at
 # the top of this file states a different one. The original rows were chosen on
 # 2026-08-26 by measuring the skill corpora; the standing executable-corpus
@@ -258,6 +259,32 @@ declare -A ROUTES=(
   # visibility, and the mode they give. One read, no id and no query key: the project is the caller's registry record's, and the
   # identity rides the query like every Linear row's (the block in `main` that appends it).
   [linking.show]='GET|/api/linking|no|-'
+  # The start report (Overlord W1a, spec §3.3.11): the session hook reports one SessionStart of its own session. `{id}` is the
+  # session's id; the body (`fromId`, `fromUuid`, `startedUuid`, `reportId`, `source`, `model`, `rowIncarnation`, `reportedAt`) is
+  # one JSON report, as the hook builds it or keeps it on one line of its spool.
+  [sessions.start]='POST|/api/sessions/{id}/start|yes|-'
+  # The card (Overlord W1a, the card piece; spec §3.3.3 C38): a session reads its OWN card, one page per request. `{id}` is the
+  # session's id; the declared query keys are the page and, after the first, the card's hash, and the pane's pair (`byId`,
+  # `byUuid`) is filled from `derive_identity` after them, never typed (review 2023 F13, the `runs review-rounds` rule of
+  # D-8125). `ccrc-api card` (`cmd_card`) reads one page through this row and prints its text; this row is the raw read.
+  [sessions.card]='GET|/api/sessions/{id}/card|yes|page,hash'
+  # The note door (Overlord W1a, the notes piece; spec §3.3.2 C37): a session's OWN working notes. `{id}` is the session's id.
+  # `note add` appends one (`{"key":{"kind":"run","id":12},"kind":"thread","waitsOn":"…","next":"…"}`, `"revises":<id>` to
+  # supersede one), `note close` ends one (`{"revises":<id>,"closes":true}`), `note list` reads the live ones, newest first,
+  # and `note handover` writes the handover note while the generation is checkpointed. The pane's pair (`byId`, `byUuid`)
+  # is filled from `derive_identity`, into the body of the three POSTs and the query of the list, and never typed (the
+  # `calls.record` rule: a body that names either is refused, unsent).
+  [note.add]='POST|/api/sessions/{id}/notes|yes|-'
+  [note.close]='POST|/api/sessions/{id}/notes|yes|-'
+  [note.list]='GET|/api/sessions/{id}/notes|yes|before,limit'
+  [note.handover]='POST|/api/sessions/{id}/handover|yes|-'
+  # The probe door (Overlord, the probes piece): a session reads and answers only its OWN open probe round. `ccrc-api probe`
+  # (`cmd_probe`) reads ONE PAGE per call through `sessions.probe`; the pane's pair (`byId`, `byUuid`) rides its query, filled
+  # from `derive_identity`, never typed. `probe answer --json -` posts every answer of the round in one call through
+  # `probe.answer`: its `{id}` is the PANE's, derived (no positional id), and the pair is appended LAST to the body (the note
+  # door's rule: a body that names either is refused, unsent; a bodyless call too).
+  [sessions.probe]='GET|/api/sessions/{id}/probe|yes|page'
+  [probe.answer]='POST|/api/sessions/{id}/probe|yes|-'
   # The plan verbs (Linear hierarchy design, D-8181): `{id}` is the programme's slug. Every one but `plan.show` carries the pane's
   # identity in the QUERY (the `linear.*` block's rule, never the body); `plan.show` is a session-or-token read and sends none. All
   # are refused locally `no-plan-door` when a CURRENT cap file omits `plan-v1`. The second operand of a verb (a checkpoint, a
@@ -269,6 +296,12 @@ declare -A ROUTES=(
   [plan.ticket-move]='POST|/api/programmes/{id}/plan/tickets/move|yes|-'
   [plan.epic-drop]='POST|/api/programmes/{id}/plan/epics/drop|yes|-'
   [plan.close]='POST|/api/programmes/{id}/plan/close|yes|-'
+  # The timers (Overlord W1a, the timers piece; spec §3.3.12 C61, C64): a session sets, lists and cancels its OWN timers. All
+  # three are parsed whole by `parse_timer`, which derives the pane's pair and refuses a typed one; `{id}` is the timer's id. All
+  # are refused locally `capability-missing` when a CURRENT cap file omits `timers-v1`.
+  [timer.set]='POST|/api/timers|no|-'
+  [timer.list]='GET|/api/timers|no|-'
+  [timer.cancel]='POST|/api/timers/{id}/cancel|yes|-'
 )
 
 # A Linear issue identifier, the `<REF>` of the five issue rows (D-7669): a team key that starts with a letter, a hyphen,
@@ -364,6 +397,11 @@ usage() {
     done
     printf '  %-18s %s\n' '' 'coordinators intent takes set|clear --session <this session'"'"'s id> and nothing else'
     printf '  %-18s %s\n' 'whoami' 'this session'"'"'s {id,uuid}, from tmux + the registry'
+    printf '  %-18s %s\n' 'card' 'this session'"'"'s card, one page per call (--page N --hash H), as plain text'
+    printf '  %-18s %s\n' '' 'timer set takes <90m|2h|3d> <note> [--run <id> | --programme <slug>]; timer cancel takes <id>;'
+    printf '  %-18s %s\n' '' 'every timer verb fills this pane'"'"'s identity and takes no --json'
+    printf '  %-18s %s\n' 'probe' 'this session'"'"'s open probe round, one page per call (--page N), as plain text;'
+    printf '  %-18s %s\n' '' '`probe answer --json -` answers every question of the round in one call (no id: the pane'"'"'s)'
     printf '  %-18s %s\n' '' 'mail inbox takes nothing: it prints this pane'"'"'s unacked mail as plain text, not JSON,'
     printf '  %-18s %s\n' '' 'and acks each entry it printed. Run it bare: no pipe, no redirect, no head or tail.'
     printf '  %-18s %s\n' '' '(ledger allocate fills "byId" from this pane; --by <id> for a caller with none)'
@@ -480,6 +518,20 @@ splice_body_field() {   # field, value, not-an-object detail
   else body="{\"$1\":\"$2\",$rest"; fi
 }
 
+append_body_field() {   # field, value, not-an-object detail: the field goes LAST, so a parser that keeps the later of two
+  # duplicate keys keeps this one (review 2039, F7). Same safety as splice_body_field: SAFE_RE admits no quote in the value.
+  local lead rest trail inner
+  lead="${body%%[![:space:]]*}"
+  rest="${body#"$lead"}"
+  trail="${rest##*[![:space:]]}"
+  rest="${rest%"$trail"}"
+  [[ "$rest" == '{'* && "$rest" == *'}' ]] || refuse 'bad-body' "$3"
+  inner="${rest#\{}"
+  inner="${inner%\}}"
+  if [[ -z "${inner//[[:space:]]/}" ]]; then body="{\"$1\":\"$2\"}"
+  else body="{$inner,\"$1\":\"$2\"}"; fi
+}
+
 cmd_whoami() {
   derive_identity
   printf '{"id":"%s","uuid":"%s"}\n' "$DERIVED_ID" "$DERIVED_UUID"
@@ -515,6 +567,66 @@ parse_intent() {
     || refuse 'session-mismatch' '--session must name this pane-derived session'
   INTENT_ID="$DERIVED_ID"
   INTENT_BODY="{\"action\":\"$action\",\"byId\":\"$DERIVED_ID\",\"byUuid\":\"$DERIVED_UUID\"}"
+}
+
+# `timer set <duration> <note> [--run <id> | --programme <slug>]`, `timer list` and `timer cancel <id>` (Overlord W1a, the timers
+# piece, plan `w1a-timers.md` Task 11): a grammar of their own, parsed whole before the generic parser, as `parse_intent` is.
+# THE IDENTITY IS THE PANE'S on all three (slug timer-verbs-derive-identity): `derive_identity` fills the pair and the caller
+# types none, so `--json`, `--by` and every flag but `set`'s two are refused, and a session cannot send another session's pair.
+# Flags are read with `if`/`elif`, never `case` labels: `ccrc-api-closed.test.ts` reads every `--flag)` label as an identity flag.
+# `set` builds its body whole with `jq --arg`, which escapes every control character where `json_escape` escapes five (slug
+# timer-body-built-by-jq), and refuses `no-jq` without jq, as `cmd_card` does. The duration is `<n>m`, `<n>h` or `<n>d`, turned
+# into `durationMs` here; its bounds, and the cancel id's integer check, are the server's. `cancel`'s body is the pane's pair
+# alone, built whole (never through `splice_body_field`). Sets TIMER_ID and TIMER_BODY, or refuses. NEVER call it inside $( ).
+TIMER_ID=''
+TIMER_BODY=''
+parse_timer() {   # verb, then the verb's arguments
+  local verb="$1" duration note run='' programme='' ms flag
+  shift
+  if [[ "${1:-}" == --* ]]; then
+    refuse 'bad-args' "timer $verb takes no $1 here: the identity is this pane's, and the client fills it"
+  fi
+  if [[ "$verb" == 'list' ]]; then
+    (( $# == 0 )) || refuse 'bad-args' "timer list takes no argument: $1"
+  elif [[ "$verb" == 'cancel' ]]; then
+    (( $# >= 1 )) || refuse 'no-id' 'timer cancel needs an id'
+    (( $# == 1 )) || refuse 'bad-args' "timer cancel takes one id and nothing else: $2"
+    TIMER_ID="$1"
+  else
+    (( $# >= 2 )) || refuse 'bad-args' 'timer set needs a duration (90m, 2h or 3d) and a note'
+    duration="$1"; note="$2"; shift 2
+    [[ "$duration" =~ ^([123456789][0123456789]{0,8})([mhd])$ ]] \
+      || refuse 'bad-duration' "timer set takes a duration of minutes, hours or days (90m, 2h, 3d): $duration"
+    if [[ "${BASH_REMATCH[2]}" == 'm' ]]; then ms=60000; elif [[ "${BASH_REMATCH[2]}" == 'h' ]]; then ms=3600000; else ms=86400000; fi
+    ms=$(( 10#${BASH_REMATCH[1]} * ms ))
+    while (( $# > 0 )); do
+      flag="$1"
+      (( $# >= 2 )) || refuse 'bad-args' "timer set: $flag needs a value"
+      if [[ "$flag" == '--run' ]]; then
+        [[ -z "$run" ]] || refuse 'bad-args' 'timer set: --run was given twice'
+        [[ "$2" =~ ^[123456789][0123456789]{0,14}$ ]] || refuse 'bad-args' "timer set: --run is a run id: $2"
+        run="$2"
+      elif [[ "$flag" == '--programme' ]]; then
+        [[ -z "$programme" ]] || refuse 'bad-args' 'timer set: --programme was given twice'
+        [[ "$2" =~ $SAFE_RE ]] || refuse 'bad-args' "timer set: --programme is a programme slug: $2"
+        programme="$2"
+      else
+        refuse 'bad-args' "timer set takes --run or --programme only: $flag (the identity is this pane's, and the client fills it)"
+      fi
+      shift 2
+    done
+    [[ -z "$run" || -z "$programme" ]] || refuse 'bad-args' 'timer set: a timer binds a run or a programme, not both'
+    command -v jq >/dev/null 2>&1 || refuse 'no-jq' 'timer set builds its body with jq, and jq is not on PATH; no timer was set'
+  fi
+  derive_identity
+  if [[ "$verb" == 'cancel' ]]; then
+    TIMER_BODY="{\"fromId\":\"$DERIVED_ID\",\"fromUuid\":\"$DERIVED_UUID\"}"
+  elif [[ "$verb" == 'set' ]]; then
+    TIMER_BODY=$(jq -cn --arg fromId "$DERIVED_ID" --arg fromUuid "$DERIVED_UUID" --argjson durationMs "$ms" --arg note "$note" \
+      --arg run "$run" --arg programme "$programme" '{fromId: $fromId, fromUuid: $fromUuid, durationMs: $durationMs, note: $note}
+        + (if $run == "" then {} else {runId: ($run | tonumber)} end) + (if $programme == "" then {} else {programme: $programme} end)') \
+      || refuse 'bad-args' 'timer set: jq could not build the body; no timer was set'
+  fi
 }
 
 # ONE RUN, MANY REQUESTS (D-6780). Every request this client sends goes through `send_request`: the one-request rows
@@ -684,10 +796,147 @@ cmd_inbox() {   # url of the read
   exit 0
 }
 
+# AN EXPLICIT TEMPLATE, because BSD `mktemp` IGNORES `$TMPDIR` when given
+# none (measured in install.sh) — and this file cannot source ccd's
+# platform block, so the template is spelled locally, unconditionally, the
+# same shape install.sh uses. GNU mktemp honours the template identically.
+# ONE file and ONE trap for the whole run, armed before the first request (D-6780): curl's `-o` rewrites it on
+# each request, and `send_request` never arms one of its own. `main` arms it for a row, and `cmd_card` for its page.
+arm_req_out() {
+  REQ_OUT=$(mktemp "${TMPDIR:-/tmp}/ccrc-api.XXXXXXXXXX") || refuse 'no-tmp' 'cannot create a temp file'
+  # shellcheck disable=SC2064
+  trap "rm -f '$REQ_OUT'" EXIT
+}
+
+# `card` (Overlord W1a, the card piece, plan `w1a-card.md` Task 5; review 2023 F1): this pane's own card, ONE PAGE PER
+# CALL, through the `sessions.card` row. A whole card can pass the size at which Claude Code stops showing a tool result
+# (`TOOL_RESULT_CUT_BYTES`, `shared/continuity-card.ts`), so each call prints one page (`CARD_PAGE_CHARS`, under it) and a
+# last line naming the page, the page count, the hash and the exact command for the next page. `--page N --hash H` reads a
+# later page of the card page 1 named; page 1 takes no hash. The server records the read once every page of one hash was
+# served to this conversation, and the last line says whether it did: a page whose answer did not record it (a server
+# restart forgets a half-read card) says so, with the command that reads the card again. A `card-changed` (409) means the
+# card was rendered anew since page 1: nothing is printed but that line and the command to start again. Any other answer is
+# printed as it came, with its status on stderr. Exit 0 for an answer, 3 for none. A session reads its own card, the pane's.
+# NEVER call it inside $( ): it prints, refuses and exits.
+cmd_card() {
+  local page=1 hash='' flag
+  while (( $# > 0 )); do
+    flag="$1"
+    (( $# >= 2 )) || refuse 'bad-args' "card: $flag needs a value"
+    # Neither is an identity flag (`ccrc-api-closed.test.ts` reads the client's case labels for those): the page and its card.
+    if [[ "$flag" == '--page' ]]; then
+      [[ "$2" =~ ^[1-9][0-9]{0,5}$ ]] || refuse 'bad-args' "card: --page is a positive integer: $2"
+      page="$2"
+    elif [[ "$flag" == '--hash' ]]; then
+      [[ "$2" =~ ^[0-9a-f]{64}$ ]] || refuse 'bad-args' "card: --hash is a card hash (64 hex characters): $2"
+      hash="$2"
+    else
+      refuse 'bad-args' "card takes --page N and --hash H only: $flag"
+    fi
+    shift 2
+  done
+  (( page == 1 )) || [[ -n "$hash" ]] || refuse 'bad-args' 'card: a page after the first names its card hash (--hash), from page 1'"'"'s last line'
+  command -v jq >/dev/null 2>&1 || refuse 'no-jq' 'card reads the page with jq, and jq is not on PATH; nothing was read'
+  derive_identity
+  local method tmpl _needs _qkeys
+  IFS='|' read -r method tmpl _needs _qkeys <<< "${ROUTES[sessions.card]}"
+  server_url
+  read_token
+  arm_req_out
+  local url="$SERVER_URL${tmpl/\{id\}/$DERIVED_ID}?byId=$DERIVED_ID&byUuid=$DERIVED_UUID&page=$page${hash:+&hash=$hash}"
+  if ! send_request "$method" "$url" ''; then TOKEN=""; transport_exit; fi
+  TOKEN=""
+  if [[ "$REQ_CODE" == '409' ]] && [[ "$(jq -r '.error // empty' "$REQ_OUT" 2>/dev/null)" == 'card-changed' ]]; then
+    printf 'card: the card changed since page 1 was read; read it again from page 1: ccrc-api card\n'
+    exit 0
+  fi
+  local shape got
+  shape=$(jq -r 'if (.ok == true and (.hash | type) == "string" and (.hash | test("^[0-9a-f]{64}$"))
+        and (.pages | type) == "number" and .pages >= 1 and .pages == (.pages | floor)
+        and (.page | type) == "number" and .page >= 1 and .page <= .pages and .page == (.page | floor)
+        and (.text | type) == "string" and (.recorded | type) == "boolean")
+      then "\(.hash) \(.page) \(.pages) \(.recorded)" else "bad" end' "$REQ_OUT" 2>/dev/null) || shape='bad'
+  if [[ "$REQ_CODE" != '200' || ! "$shape" =~ ^([0-9a-f]{64})\ ([0-9]+)\ ([0-9]+)\ (true|false)$ ]]; then
+    print_body
+    printf 'http %s\n' "$REQ_CODE" >&2
+    exit 0
+  fi
+  local h="${BASH_REMATCH[1]}" p="${BASH_REMATCH[2]}" n="${BASH_REMATCH[3]}" recorded="${BASH_REMATCH[4]}"
+  # A page's text may end in a newline, which `$( )` would strip: a sentinel byte keeps it, and is cut after.
+  got=$(jq -j '.text, "."' "$REQ_OUT" 2>/dev/null) || got='.'
+  printf '%s\n' "${got%.}"
+  if [[ "$recorded" == 'true' ]]; then
+    printf 'card: page %s of %s, hash %s; every page of this card is read, and the read is recorded\n' "$p" "$n" "$h"
+  elif (( p < n )); then
+    printf 'card: page %s of %s, hash %s; next: ccrc-api card --page %s --hash %s\n' "$p" "$n" "$h" "$(( p + 1 ))" "$h"
+  else
+    printf 'card: page %s of %s, hash %s; the read is NOT recorded: the server did not see every page of this card served to this conversation (a restart forgets a half-read card); read it again from page 1: ccrc-api card\n' "$p" "$n" "$h"
+  fi
+  exit 0
+}
+
+# `probe` (Overlord, the probes piece): this pane's own open probe round, ONE PAGE PER CALL, through the `sessions.probe` row.
+# `--page N` reads a later page (default 1). It prints the page's text and one last line naming the page, the page count and the
+# round, with the exact command for the next page, or, on the last page, the command that answers the round. `probe-none-open`
+# (409) prints one line and exits 0. Any other answer is printed as it came, with its status on stderr; exit 0 for an answer, 3
+# for none. The pair is the pane's (`derive_identity`), never typed. `probe answer` is a generic row (`probe.answer`), not this.
+# NEVER call it inside $( ): it prints, refuses and exits.
+cmd_probe() {
+  local page=1
+  while (( $# > 0 )); do
+    (( $# >= 2 )) || refuse 'bad-args' "probe: $1 needs a value"
+    if [[ "$1" == '--page' ]]; then
+      [[ "$2" =~ ^[1-9][0-9]{0,5}$ ]] || refuse 'bad-args' "probe: --page is a positive integer: $2"
+      page="$2"
+    else
+      refuse 'bad-args' "probe takes --page N only (or the verb answer): $1"
+    fi
+    shift 2
+  done
+  command -v jq >/dev/null 2>&1 || refuse 'no-jq' 'probe reads the page with jq, and jq is not on PATH; nothing was read'
+  derive_identity
+  local method tmpl _needs _qkeys
+  IFS='|' read -r method tmpl _needs _qkeys <<< "${ROUTES[sessions.probe]}"
+  server_url
+  read_token
+  arm_req_out
+  local url="$SERVER_URL${tmpl/\{id\}/$DERIVED_ID}?byId=$DERIVED_ID&byUuid=$DERIVED_UUID&page=$page"
+  if ! send_request "$method" "$url" ''; then TOKEN=""; transport_exit; fi
+  TOKEN=""
+  if [[ "$REQ_CODE" == '409' ]] && [[ "$(jq -r '.error // empty' "$REQ_OUT" 2>/dev/null)" == 'probe-none-open' ]]; then
+    printf 'probe: no probe round of yours is open\n'
+    exit 0
+  fi
+  local shape got
+  shape=$(jq -r 'if (.ok == true and (.roundId | type) == "string" and (.roundId | test("^[A-Za-z0-9._:-]+$"))
+        and (.pages | type) == "number" and .pages >= 1 and .pages == (.pages | floor)
+        and (.page | type) == "number" and .page >= 1 and .page <= .pages and .page == (.page | floor)
+        and (.text | type) == "string")
+      then "\(.roundId) \(.page) \(.pages)" else "bad" end' "$REQ_OUT" 2>/dev/null) || shape='bad'
+  if [[ "$REQ_CODE" != '200' || ! "$shape" =~ ^([A-Za-z0-9._:-]+)\ ([0-9]+)\ ([0-9]+)$ ]]; then
+    print_body
+    printf 'http %s\n' "$REQ_CODE" >&2
+    exit 0
+  fi
+  local r="${BASH_REMATCH[1]}" p="${BASH_REMATCH[2]}" n="${BASH_REMATCH[3]}"
+  # A page's text may end in a newline, which `$( )` would strip: a sentinel byte keeps it, and is cut after.
+  got=$(jq -j '.text, "."' "$REQ_OUT" 2>/dev/null) || got='.'
+  printf '%s\n' "${got%.}"
+  if (( p < n )); then
+    printf 'probe: page %s of %s, round %s; next: ccrc-api probe --page %s\n' "$p" "$n" "$r" "$(( p + 1 ))"
+  else
+    printf 'probe: page %s of %s, round %s; answer every question in one call: ccrc-api probe answer --json -\n' "$p" "$n" "$r"
+  fi
+  exit 0
+}
+
 main() {
   (( $# >= 1 )) || { usage; refuse 'no-verb' 'no group given'; }
 
   [[ "$1" == 'whoami' ]] && { cmd_whoami; exit 0; }
+  [[ "$1" == 'card' ]] && { shift; cmd_card "$@"; }
+  # `probe answer` is the generic row `probe.answer`; any other `probe` is the page read.
+  [[ "$1" == 'probe' && "${2:-}" != 'answer' ]] && { shift; cmd_probe "$@"; }
   [[ "$1" == '-h' || "$1" == '--help' ]] && { usage; exit 0; }
 
   (( $# >= 2 )) || { usage; refuse 'no-verb' "group '$1' needs a verb"; }
@@ -708,12 +957,21 @@ main() {
     parse_intent "$@"
     id="$INTENT_ID"; intent_body="$INTENT_BODY"
     set --
+  elif [[ "$key" == timer.* ]]; then
+    parse_timer "$verb" "$@"
+    id="$TIMER_ID"; intent_body="$TIMER_BODY"
+    set --
   elif [[ "$key" == 'mail.inbox' ]]; then
     # `mail inbox` takes NOTHING (D-6780): no id, no flag, no `--to`. A session reads its own inbox, the pane's.
     (( $# == 0 )) || refuse 'bad-args' "mail inbox takes no argument: $1"
     command -v jq >/dev/null 2>&1 \
       || refuse 'no-jq' 'mail inbox reads the inbox answer with jq, and jq is not on PATH; nothing was read or acked'
     derive_identity
+  elif [[ "$key" == 'probe.answer' ]]; then
+    # The id is the PANE's, derived: a session answers only its own round, so no positional id is taken (one typed is
+    # `unexpected argument`, below).
+    derive_identity
+    id="$DERIVED_ID"
   elif [[ $# -gt 0 && "$1" != --* ]]; then id="$1"; shift; fi
 
   if [[ "$needs" == 'yes' ]]; then
@@ -771,7 +1029,8 @@ main() {
     fi
   fi
 
-  # The intent row's body is the body `parse_intent` synthesized: never read from a file or stdin.
+  # The intent row's body is the body `parse_intent` synthesized, and a timer row's the one `parse_timer` built: never read
+  # from a file or stdin.
   [[ -z "$intent_body" ]] || body="$intent_body"
 
   # THE FIRST BODY THIS CLIENT REWRITES. It now rewrites three more: the intent
@@ -881,6 +1140,42 @@ main() {
     splice_body_field 'byId' "$DERIVED_ID" 'the call body is not a JSON object; byId cannot be added'
   fi
 
+  # THE NOTE DOOR'S IDENTITY (Overlord W1a, the notes piece), the `calls.record` rule: a note is attributed to this pane, so a
+  # body that names `byId` or `byUuid` is REFUSED, unsent, and both are spliced from `derive_identity`; a bodyless POST, a
+  # body that is not a JSON object and a pane with no identity are refused and nothing is sent. `note list` carries the pair
+  # in the query. `note close` and `note add` are one route: the body says which (`"closes":true`), and the server refuses a
+  # body that is neither a whole note nor a close. The pair goes LAST (review 2039, F7): the server's JSON parse keeps the later
+  # of two duplicate keys, so a spelling of `byId` the textual test misses can never outrank the pane's. `note list` pages with
+  # `--before <id>` and `--limit <n>`, so every page stays under the tool result cut.
+  if [[ "$key" == 'note.add' || "$key" == 'note.close' || "$key" == 'note.handover' ]]; then
+    [[ -n "$body" ]] || refuse 'no-body' "${key/./ } needs a body on --json"
+    local notebody="${body//[[:space:]]/}"
+    case "$notebody" in
+      *'"byId":'*|*'"byUuid":'*)
+        refuse 'bad-body' 'the body names byId or byUuid; a note is attributed to this pane, and the client fills both' ;;
+    esac
+    derive_identity
+    append_body_field 'byId' "$DERIVED_ID" 'the note body is not a JSON object; byId cannot be added'
+    append_body_field 'byUuid' "$DERIVED_UUID" 'the note body is not a JSON object; byUuid cannot be added'
+  fi
+  # THE PROBE ANSWER'S IDENTITY, the note door's rule above, word for word: a body that names `byId` or `byUuid` is refused
+  # unsent, a bodyless call is refused, and the pane's pair is appended LAST.
+  if [[ "$key" == 'probe.answer' ]]; then
+    [[ -n "$body" ]] || refuse 'no-body' 'probe answer needs a body on --json'
+    local probebody="${body//[[:space:]]/}"
+    case "$probebody" in
+      *'"byId":'*|*'"byUuid":'*)
+        refuse 'bad-body' 'the body names byId or byUuid; a probe is answered as this pane, and the client fills both' ;;
+    esac
+    derive_identity
+    append_body_field 'byId' "$DERIVED_ID" 'the probe body is not a JSON object; byId cannot be added'
+    append_body_field 'byUuid' "$DERIVED_UUID" 'the probe body is not a JSON object; byUuid cannot be added'
+  fi
+  if [[ "$key" == 'note.list' ]]; then
+    derive_identity
+    query+="${query:+&}byId=$DERIVED_ID&byUuid=$DERIVED_UUID"
+  fi
+
   # `approvals show` reads one row as the claimant it was held for (plan Task 16): the identity pair is the pane's,
   # never the caller's, exactly as `asks list` below derives its own.
   if [[ "$key" == 'approvals.show' ]]; then
@@ -909,6 +1204,16 @@ main() {
     derive_identity
     query+="${query:+&}byId=$DERIVED_ID&byUuid=$DERIVED_UUID"
   fi
+
+  # The card's identity (review 2023 F13), the Linear block's rule: the pane's pair rides the query after the declared keys,
+  # so this client reads the pane's own card and no other's (`--byId` is `unknown-query`; the server refuses a path id that is
+  # not `byId`, `not-owner`).
+  if [[ "$key" == 'sessions.card' || "$key" == 'sessions.probe' ]]; then
+    derive_identity
+    query+="${query:+&}byId=$DERIVED_ID&byUuid=$DERIVED_UUID"
+  fi
+  # `timer list` reads with the pair `parse_timer` derived, the `approvals show` shape: the query holds nothing else.
+  [[ "$key" != 'timer.list' ]] || query="byId=$DERIVED_ID&byUuid=$DERIVED_UUID"
 
   if [[ "$key" == 'asks.list' ]]; then
     derive_identity
@@ -1025,21 +1330,21 @@ main() {
     refuse 'no-plan-door' 'the server this box talks to does not answer the plan verbs; update it before using them'
   fi
 
+  # THE TIMERS' GATE (Overlord W1a, the timers piece, plan Task 11), the plan door's fail direction: a CURRENT, well-formed cap file
+  # that omits `timers-v1` says the server keeps no timers yet, so `capability-missing` is answered, naming the word, and nothing
+  # is sent. An absent, stale, torn or future file sends, as every gate here does (slug timer-gate-fails-open-like-every-gate):
+  # a server without the doors then answers its own 404, which accepts no timer either.
+  if [[ "$key" == timer.* ]] && ! _api_server_cap timers-v1 && _api_server_cap ''; then
+    refuse 'capability-missing' 'the server this box talks to does not keep timers yet (it does not advertise timers-v1); no timer was set'
+  fi
+
   local path url
   server_url
   read_token
   path="${tmpl/\{id\}/$id}"
   url="$SERVER_URL$path${query:+?$query}"
 
-  # AN EXPLICIT TEMPLATE, because BSD `mktemp` IGNORES `$TMPDIR` when given
-  # none (install.sh:54 measured it) — and this file cannot source ccd's
-  # platform block, so the template is spelled locally, unconditionally, the
-  # same shape install.sh uses. GNU mktemp honours the template identically.
-  # ONE file and ONE trap for the whole run, armed before the first request (D-6780): curl's `-o` rewrites it on
-  # each request, and `send_request` never arms one of its own.
-  REQ_OUT=$(mktemp "${TMPDIR:-/tmp}/ccrc-api.XXXXXXXXXX") || refuse 'no-tmp' 'cannot create a temp file'
-  # shellcheck disable=SC2064
-  trap "rm -f '$REQ_OUT'" EXIT
+  arm_req_out
 
   [[ "$key" != 'mail.inbox' ]] || cmd_inbox "$url"
 

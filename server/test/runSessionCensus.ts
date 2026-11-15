@@ -163,8 +163,8 @@ export const NOT_BINDING_SITES: readonly NotBindingSite[] = [
     why: "the binding module's own rule, the one place a run is told to bind a session: this is the decider the other sites route through (parentOrMinter: an undecided run of the minting claimant)" },
   { file: 'server/src/coord/runBinding.ts', text: 'r.claimedBy === sessionId',
     why: "the binding module's own rule, the one place a run is told to bind a session: this is the decider the other sites route through (claimantAt: a run the session claims itself is no coordinator of its own)" },
-  { file: 'server/src/coord/runBinding.ts', text: 'r.claimedBy === coordinatorId',
-    why: "the binding module's own rule, the one place a run is told to bind a session: this is the decider the other sites route through (childrenOf: the runs a coordinator claims)" },
+  { file: 'server/src/coord/runBinding.ts', text: 'r.claimedBy === coordinatorId', count: 2,
+    why: "the binding module's own rule, the one place a run is told to bind a session: this is the decider the other sites route through (childrenOf and runsClaimedBy: the runs a coordinator claims)" },
   { file: 'server/src/coord/stall.ts', text: "hook.sessionId === ''",
     why: "a hook fact's session id tested for empty: a Claude Code hook record, no run is read" },
   { file: 'server/src/coord/stall.ts', text: "hook.sessionId !== ''",
@@ -237,6 +237,12 @@ export const NOT_BINDING_SITES: readonly NotBindingSite[] = [
     why: "a delegation checkpoint row (observation interval, bucket cursor or activity) against the owner session of the pass: the delegation lane's own records, no run is read" },
   { file: 'server/src/watch.ts', text: 'a.parentId === event.sessionId',
     why: "a delegation checkpoint row (observation interval, bucket cursor or activity) against the owner session of the pass: the delegation lane's own records, no run is read" },
+  { file: 'server/src/continuity/generationsLane.ts', text: 'g.identity === s.sessionId',
+    why: 'the live generation of the identity a reported start names: a coordinator\'s identity is its session id (Overlord §3.3.9), and no run is read' },
+  { file: 'server/src/continuity/generationsLane.ts', text: 'g.sessionId === id',
+    why: 'the compactions read cache pruned to the generations the gather still reads: a cache key, no run is read' },
+  { file: 'server/src/continuity/generationStart.ts', text: 'n.sessionId !== s.sessionId',
+    why: 'two reported starts of the same identity, for which is its newest (review 2006 R6): no run is read' },
 ];
 
 /** The sites that still decide a binding by hand: every site but the `NOT_BINDING_SITES` ones. */
