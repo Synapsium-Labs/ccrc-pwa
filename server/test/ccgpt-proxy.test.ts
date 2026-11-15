@@ -2279,6 +2279,26 @@ describe.skipIf(!PY)('ccgpt-proxy: effort precedence and the single-slot cache (
     expect('output_config' in seen).toBe(false);
   });
 
+  // D-8631: the level map is the IDENTITY. Claude Code's five levels are all Codex levels, so each one a
+  // client sends comes out as the same `reasoning.effort`, never translated and never the lane default.
+  it('each of low medium high xhigh max comes out as the same reasoning.effort (the identity map, D-8631)', async () => {
+    const home = mkTmp('ccgpt-proxy-effort-identity-');
+    const seen: any[] = [];
+    const { lane } = await startPair(home, (_req, body, res) => {
+      seen.push(JSON.parse(body.toString('utf8')));
+      res.writeHead(200, { 'content-type': 'application/json' }); res.end('{"ok":true}');
+    });
+    writeEffortFile(home, lane, { 'gpt-x': 'ultra' });
+    const LEVELS = ['low', 'medium', 'high', 'xhigh', 'max'];
+    for (const level of LEVELS) {
+      await fetch(`http://127.0.0.1:${PROXY_PORT}/v1/messages`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ model: 'gpt-x', output_config: { effort: level }, messages: [{ role: 'user', content: 'hi' }] }),
+      });
+    }
+    expect(seen.map((b) => b.reasoning)).toEqual(LEVELS.map((effort) => ({ effort })));
+  });
+
   // Case 2: with no explicit effort, the lane default for THIS request's
   // own model applies.
   it('applies the lane default for this model when no explicit effort is sent', async () => {

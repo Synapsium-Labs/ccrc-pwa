@@ -240,6 +240,128 @@ describe('_spawn_start carries the routing record (routing spec 2026-09-14 §5.2
   });
 });
 
+/** A CODEX lane (D-8631): `telemetry: 'codex'`, `exec.kind: 'external'` — the shape
+ *  `ccd-backend-vs-placement.test.ts` uses — beside the `none` lane `gptLane` plants, which
+ *  stays the third-backend control. */
+const codexLane = (): void => {
+  seedAccountsSh(h.home, {
+    version: 1, accounts: [
+      { id: 'claude', label: 'a', configDirSuffix: '.claude', exec: { kind: 'upstream' }, homeAble: true, hue: 'cyan', telemetry: 'anthropic' },
+      { id: 'lane-a', label: 'la', configDirSuffix: '.lane-a', exec: { kind: 'external' }, homeAble: true, hue: 'blue', telemetry: 'codex' },
+      { id: 'gpt', label: 'g', configDirSuffix: '.gpt-cfg', exec: { kind: 'external' }, homeAble: true, hue: 'magenta', telemetry: 'none' },
+    ],
+  });
+  for (const w of ['lane-a', 'gpt']) fs.writeFileSync(path.join(h.home, '.local', 'bin', w), '#!/bin/sh\n', { mode: 0o755 });
+};
+const WORKFLOWS = (): void => { fs.writeFileSync(path.join(h.home, '.cc-sessions', 'codex-lane-workflows'), ''); };
+const efforts = (line: string): string[] => [...line.matchAll(/--effort (\S+)/g)].map((m) => m[1]!);
+
+describe('a Codex lane carries the record\'s effort as an Anthropic lane does (D-8631)', () => {
+  beforeEach(() => { codexLane(); });
+
+  it('(d) effort=high: --effort high on BOTH lines, no inert, routeapplied claims it', () => {
+    seed('myid', 'lane-a'); h.sh('_reg_set myid effort high');
+    for (const l of spawnBoth('myid')) expect(efforts(l)).toEqual(['high']);
+    expect(h.reg('myid', 'inert')).toBeNull();
+    expect(h.reg('myid', 'routeapplied')).toBe('effort=high');
+  });
+
+  it('(e) class=opus effort=ultracode subagent=sonnet: --model opus --effort xhigh, nothing else; inert=workflow,subagent', () => {
+    seed('myid', 'lane-a'); h.sh('_reg_set myid class opus; _reg_set myid effort ultracode; _reg_set myid subagent sonnet');
+    for (const l of spawnBoth('myid')) {
+      expect(l).toContain(`'${h.home}/.local/bin/lane-a' --model opus --effort xhigh --`);
+      expect(efforts(l)).toEqual(['xhigh']);
+      expect(l).not.toContain('ultracode');
+      expect(l).not.toContain('--settings');
+      expect(l).not.toContain('CLAUDE_CODE_SUBAGENT_MODEL');
+    }
+    expect(h.reg('myid', 'inert')).toBe('workflow,subagent');
+    expect(h.reg('myid', 'routeapplied')).toBe('class=opus effort=ultracode');
+  });
+
+  it('(f) effort=max: --effort max', () => {
+    seed('myid', 'lane-a'); h.sh('_reg_set myid class opus; _reg_set myid effort max');
+    for (const l of spawnBoth('myid')) expect(efforts(l)).toEqual(['max']);
+  });
+
+  it('control: workflow=on with the switch absent composes no --settings and stamps inert=workflow', () => {
+    seed('myid', 'lane-a'); h.sh('_reg_set myid class opus; _reg_set myid effort high; _reg_set myid workflow on');
+    for (const l of spawnBoth('myid')) {
+      expect(l).not.toContain('--settings');
+      expect(efforts(l)).toEqual(['high']);
+    }
+    expect(h.reg('myid', 'inert')).toBe('workflow');
+  });
+
+  it('control: a lane that is neither Anthropic nor Codex keeps today\'s stamp and composes no flag', () => {
+    seed('myid', 'gpt'); h.sh('_reg_set myid class opus; _reg_set myid effort high');
+    for (const l of spawnBoth('myid')) expect(efforts(l)).toEqual([]);
+    expect(h.reg('myid', 'inert')).toBe('effort');
+  });
+});
+
+// The operator's switch for question (a): `$REG/codex-lane-workflows`, an existence marker with NO writer in the tree.
+describe('the codex-lane-workflows switch (D-8631)', () => {
+  beforeEach(() => { codexLane(); });
+
+  it('present, effort=ultracode: the Anthropic arm\'s argv (--effort ultracode and the workflow --settings); inert names subagent only', () => {
+    WORKFLOWS();
+    seed('myid', 'lane-a'); h.sh('_reg_set myid class opus; _reg_set myid effort ultracode; _reg_set myid subagent sonnet');
+    for (const l of spawnBoth('myid')) {
+      expect(l).toContain(`--model opus --settings '{"enableWorkflows":true,"ultracode":true}' --effort ultracode --`);
+      expect(efforts(l)).toEqual(['ultracode']);
+      expect(l).not.toContain('CLAUDE_CODE_SUBAGENT_MODEL');
+    }
+    expect(h.reg('myid', 'inert')).toBe('subagent');
+    expect(h.reg('myid', 'routeapplied')).toBe('class=opus effort=ultracode workflow=on');
+  });
+
+  it('present, workflow=on: the workflow --settings, and the level as recorded', () => {
+    WORKFLOWS();
+    seed('myid', 'lane-a'); h.sh('_reg_set myid class opus; _reg_set myid effort high; _reg_set myid workflow on');
+    for (const l of spawnBoth('myid')) expect(l).toContain(`--model opus --settings '{"enableWorkflows":true}' --effort high --`);
+    expect(h.reg('myid', 'inert')).toBeNull();
+  });
+
+  it('present, on a lane that is neither Anthropic nor Codex: nothing changes', () => {
+    WORKFLOWS();
+    seed('myid', 'gpt'); h.sh('_reg_set myid class opus; _reg_set myid effort ultracode; _reg_set myid subagent sonnet');
+    for (const l of spawnBoth('myid')) {
+      expect(l).not.toContain('--settings');
+      expect(efforts(l)).toEqual([]);
+    }
+    expect(h.reg('myid', 'inert')).toBe('effort,workflow,subagent');
+  });
+
+  it('absent: case (e) unchanged — --effort xhigh, no --settings', () => {
+    seed('myid', 'lane-a'); h.sh('_reg_set myid class opus; _reg_set myid effort ultracode');
+    for (const l of spawnBoth('myid')) {
+      expect(efforts(l)).toEqual(['xhigh']);
+      expect(l).not.toContain('--settings');
+    }
+    expect(h.reg('myid', 'inert')).toBe('workflow');
+  });
+
+  // The marker is the operator's, by hand. The ONE line in the shipped tree that may name it is ccd's read in
+  // `_spawn_start`; any other code line naming it, in any shipped root and any language, is a writer in waiting.
+  it('has no writer in the shipped tree: its one code line is the spawn\'s read', () => {
+    const root = path.resolve(__dirname, '..', '..');
+    const SKIP = new Set(['node_modules', 'dist', '.git', 'coverage']);
+    const walk = (d: string): string[] => fs.readdirSync(d, { withFileTypes: true }).flatMap((e) => {
+      const p = path.join(d, e.name);
+      if (e.isDirectory()) return SKIP.has(e.name) ? [] : walk(p);
+      return e.name.endsWith('.md') ? [] : [p];
+    });
+    const files = [...['ccd', 'deploy', 'shared', 'server/src', 'agent/src', 'pwa/src'].flatMap((r) => walk(path.join(root, r))),
+      ...['install.sh'].map((f) => path.join(root, f)).filter((f) => fs.existsSync(f))];
+    expect(files.length, 'the walk reached the shipped tree').toBeGreaterThan(200);
+    const code = (f: string): string[] => fs.readFileSync(f, 'utf8').split('\n').filter((l) => !/^\s*(#|\/\/|\*|\/\*)/.test(l));
+    const hits = files.flatMap((f) => code(f).filter((l) => l.includes('codex-lane-workflows')).map((l) => `${path.relative(root, f)}: ${l.trim()}`));
+    expect(hits).toHaveLength(1);
+    expect(hits[0]).toMatch(/^ccd\/ccd: .*\[\[ -e "\$REG\/codex-lane-workflows" \]\]/);
+  });
+});
+
 describe('the pressure-reap key follows the execution kind, not the provider', () => {
   it('an external Claude Code shim receives the pressure key on primary and retry without adopting Anthropic route semantics', () => {
     gptLane(); seed('myid', 'gpt');

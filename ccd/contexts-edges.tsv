@@ -115,6 +115,7 @@ _route_applied_before_write -> _route_apply_seed
 _route_applied_get_to -> _reg_get_to
 _route_applied_set -> _reg_get
 _route_applied_set -> _reg_set
+_route_apply_now -> _is_codex_backend
 _route_apply_now -> _reg_get
 _route_apply_pending -> _route_any
 _route_apply_seed -> _reg_set
@@ -181,6 +182,7 @@ _spawn_start -> _compact_lock_release
 _spawn_start -> _delegation_spool_dir
 _spawn_start -> _delegation_spool_prune_absent
 _spawn_start -> _is_anthropic_backend
+_spawn_start -> _is_codex_backend
 _spawn_start -> _lc_done
 _spawn_start -> _operator_choice_keep
 _spawn_start -> _reg_generation_read
@@ -190,6 +192,7 @@ _spawn_start -> _reg_set
 _spawn_start -> _route_any
 _spawn_start -> _route_degrade
 _spawn_start -> _route_effort_for
+_spawn_start -> _route_effort_shown
 _spawn_start -> _route_get
 _spawn_start -> _route_inert_has
 _spawn_start -> _route_restore
