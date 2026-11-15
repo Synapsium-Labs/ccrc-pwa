@@ -63,6 +63,11 @@ export const realHistoryOpSeams = (): HistoryOpSeams => ({
 });
 
 export interface HistoryOp {
+  /** Whether this agent can serve the history store, decided once at boot (Task 4, F20): the worker's entry is found and
+   *  the platform is not macOS. The `ready` frame lists `overlord-history` only then. No role is read (R1): an agent runs
+   *  only on a `fleet` or `both` box. The store's own state, absent or unreadable, is the op's answer, never a reason to
+   *  withhold the word. */
+  readonly servable: boolean;
   /** One read for `owner` (the connection that asked). Never rejects. */
   run(home: string, request: OverlordHistoryRequest, owner: object): Promise<OverlordHistoryAnswer>;
   /** The link `owner` closed: its read's worker is terminated; the slot still frees only on the worker's exit. */
@@ -131,6 +136,7 @@ export function createHistoryOp(seams: HistoryOpSeams): HistoryOp {
   }
 
   return {
+    servable: seams.platform !== 'darwin' && seams.resolveWorker() !== null,
     async run(home, request, owner) {
       try {
         return await start(home, request, owner);

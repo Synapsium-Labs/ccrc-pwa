@@ -52,7 +52,7 @@ import { measureBackup, type BackupSeams } from './backup.js';
 import { measureTestbox, syncTestboxTools, type TestboxOpSeams } from './testboxOp.js';
 import { createHistoryOp, realHistoryOpSeams, type HistoryOp, type HistoryOpSeams } from './historyOp.js';
 import { readOverlordHistoryRequest, type OverlordHistoryRequestRefusal } from '../../shared/overlordHistory.js';
-import type { OverlordHistoryReq } from '../../shared/agent-protocol.js';
+import { OVERLORD_HISTORY_OP, type OverlordHistoryReq } from '../../shared/agent-protocol.js';
 import { parseBuildInfo, type BuildInfo } from '../../shared/buildinfo.js';
 import { bodyDigest } from '../../shared/mark.mjs';
 import { boundedSpawn } from '../../shared/spawn.mjs';
@@ -1406,6 +1406,9 @@ function handleConnection(
       const frame: ReadyFrame = {
         t: 'ready', v: 1, ccdVerbs: verbCache.verbs, observedEpoch: readObservedEpoch(opts.home), ops: [UPDATE_OP, TOKEN_SYNC_OP, ACCOUNT_OP, DISK_OP, PRESSURE_OP, TESTBOX_OP, TESTBOX_TOOLS_SYNC_OP, TESTBOX_ADMIN_OP, BACKUP_OP, READDIR_MTIMES_OP],
       };
+      // `overlord-history` (Overlord W1, Task 4) goes last, and only where this agent can serve the history store
+      // (historyOp.ts#servable: the worker's entry found, not macOS), so a server never counts an agent that cannot.
+      if (historyOp.servable) frame.ops!.push(OVERLORD_HISTORY_OP);
       const rosterFp = readRosterFp(opts.home);
       if (rosterFp !== undefined) frame.rosterFp = rosterFp;
       const build = readBuildStamp(opts.home);

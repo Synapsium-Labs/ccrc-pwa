@@ -7,12 +7,15 @@
 // over the cap, a late answer. One case runs the real entry (ccd/history/overlord-worker.mjs) on a fixture home with no
 // history store. No case reads a real home.
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { writeFileSync } from 'node:fs';
+import fs, { mkdirSync, writeFileSync } from 'node:fs';
+import { syncBuiltinESMExports } from 'node:module';
 import path from 'node:path';
 import type { RunningAgent } from '../src/server.js';
 import { OVERLORD_HISTORY_DEADLINE_MS, resolveOverlordWorker } from '../src/historyOp.js';
 import { OVERLORD_READ_BUSY_TIMEOUT_MS } from '../../ccd/history/overlord-read.mjs';
 import { OVERLORD_HISTORY_ANSWER_MAX_BYTES, readOverlordHistoryAnswer } from '../../shared/overlordHistory.js';
+import { OVERLORD_HISTORY_OP, type AgentReady } from '../../shared/agent-protocol.js';
+import { CAP_WORD, MAX_CAP_WORDS } from '../../shared/api.js';
 import { makeFixture, boot, TestClient } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
 
@@ -248,5 +251,64 @@ describe('the op\'s bounds and its resolver', () => {
     expect(resolveOverlordWorker(path.join(repo, 'agent', 'src', 'historyOp.ts'))).toBe(real);
     expect(resolveOverlordWorker(path.join(repo, 'agent', 'dist', 'agent', 'src', 'historyOp.js'))).toBe(real);
     expect(resolveOverlordWorker(path.join(mkTmp('overlord-history-none-'), 'a', 'b', 'historyOp.js'))).toBeNull();
+  });
+});
+
+describe('the word overlord-history in ready.ops (Task 4)', () => {
+  const TEN = ['update', 'token-sync', 'account', 'disk', 'pressure', 'testbox', 'testbox-tools-sync', 'testbox-admin', 'backup', 'readdir-mtimes'];
+  let agent: RunningAgent | undefined;
+  const clients: TestClient[] = [];
+  afterEach(async () => {
+    for (const c of clients.splice(0)) c.ws.close();
+    await agent?.close();
+    agent = undefined;
+  });
+  async function opsWith(seams: { platform: NodeJS.Platform; resolve: () => string | null }, home?: string): Promise<string[]> {
+    const fx = makeFixture();
+    agent = await boot(home === undefined ? fx : { ...fx, home }, {
+      historySeams: { resolveWorker: seams.resolve, platform: seams.platform, deadlineMs: 5_000, log: () => {} },
+    });
+    const c = new TestClient(agent.port);
+    clients.push(c);
+    return ((await c.hello()) as AgentReady).ops!;
+  }
+
+  it('advertised, last, on a Linux agent whose worker entry is found; the word passes CAP_WORD', async () => {
+    const ops = await opsWith({ platform: 'linux', resolve: () => resolveOverlordWorker() });
+    expect(ops).toEqual([...TEN, OVERLORD_HISTORY_OP]);
+    expect(CAP_WORD.test(OVERLORD_HISTORY_OP)).toBe(true);
+    expect(ops.length).toBeLessThanOrEqual(MAX_CAP_WORDS);
+  });
+
+  it('withheld when the resolver answers absent, the other ten unchanged', async () => {
+    expect(await opsWith({ platform: 'linux', resolve: () => null })).toEqual(TEN);
+  });
+
+  it('withheld on macOS, the other ten unchanged', async () => {
+    expect(await opsWith({ platform: 'darwin', resolve: () => resolveOverlordWorker() })).toEqual(TEN);
+  });
+
+  it('the boot check reads no role: a sentinel ccrc.env in the home is never opened (R1)', async () => {
+    const home = makeFixture().home;
+    mkdirSync(path.join(home, '.ccrc'), { recursive: true });
+    writeFileSync(path.join(home, '.ccrc', 'ccrc.env'), 'CCRC_ROLE=server\n');
+    const opened: string[] = [];
+    const real = { openSync: fs.openSync, readFileSync: fs.readFileSync, open: fs.promises.open, readFile: fs.promises.readFile };
+    const note = (p: unknown): void => { if (typeof p === 'string') opened.push(p); };
+    fs.openSync = ((p: fs.PathLike, ...r: unknown[]) => { note(p); return (real.openSync as (...a: unknown[]) => number)(p, ...r); }) as typeof fs.openSync;
+    fs.readFileSync = ((p: fs.PathOrFileDescriptor, ...r: unknown[]) => { note(p); return (real.readFileSync as (...a: unknown[]) => unknown)(p, ...r); }) as typeof fs.readFileSync;
+    fs.promises.open = ((p: fs.PathLike, ...r: unknown[]) => { note(p); return (real.open as (...a: unknown[]) => unknown)(p, ...r); }) as typeof fs.promises.open;
+    fs.promises.readFile = ((p: fs.PathLike, ...r: unknown[]) => { note(p); return (real.readFile as (...a: unknown[]) => unknown)(p, ...r); }) as typeof fs.promises.readFile;
+    syncBuiltinESMExports();
+    try {
+      const ops = await opsWith({ platform: 'linux', resolve: () => resolveOverlordWorker() }, home);
+      expect(ops, 'a server role recorded on disk changes nothing').toEqual([...TEN, OVERLORD_HISTORY_OP]);
+    } finally {
+      Object.assign(fs, { openSync: real.openSync, readFileSync: real.readFileSync });
+      Object.assign(fs.promises, { open: real.open, readFile: real.readFile });
+      syncBuiltinESMExports();
+    }
+    expect(opened.length, 'CONTROL: the spy saw the boot\'s own reads').toBeGreaterThan(0);
+    expect(opened.filter((p) => p.endsWith('ccrc.env'))).toEqual([]);
   });
 });
