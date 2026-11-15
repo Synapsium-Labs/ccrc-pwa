@@ -213,3 +213,24 @@ now count 57 + 41 + 36 = 134.
 owner measured it." now has one added sentence saying the `Re-run` column records the state at the reviewed tip and that fix round 1 re-ran every row
 except M8-M10; and the paragraph "Re-run decision: ..." has one sentence added at its end saying it records the state at the reviewed tip and that
 fix round 1 re-ran the rows, both pointing at `fix-round-1.md#r2`. No column value and no existing text was changed.
+
+## Absorb and gates
+
+`git merge-tree --write-tree --name-only --no-messages HEAD origin/HEAD` exited 1 with a tree id and named
+`server/test/single-definition/core-vocab.test.ts` (clause 16 trigger 1). The merge of origin/main 2b082b91f is commit 23ff069f8.
+Its one conflict was additive: main added `pushOutboxStore.ts` to core-vocab's `HANDLE_HOLDERS`, and this branch added
+`landingControlTx.ts`. Both entries and both comment lines are kept, and the merge makes no other edit.
+
+Gates after the merge. Each ran from `server/` through `ccrc test --`, in the foreground, one at a time:
+- **Landing and mail slice:** two runs of 8 files, 366 passed then 257 passed, both rc 0. A single 16-file run was killed by the slice's
+  memory cap (6G, 2 OOM kills, rc 124) and is not counted.
+- **Guards and censuses:** `single-definition`, `rings`, `coord-policy-rings`, `consolidation-census`, `mail-routes`, `anchors`, `citations`,
+  `deviation-refs`, `dtbd`, `topology-clean` and `coordinator-skill`, 55 files, 2051 passed, rc 0.
+- **Growth:** armed `growth-check` with `rings/watcher-store-port`, 118 passed, rc 0.
+- **Typechecks:** the production project and the tests project (`test/tsconfig.tests.json`), each run directly, both rc 0.
+- **`typecheck-tests.test.ts`:** run alone before the merge, it went red twice under fleet load. Neither run printed a type error, and both
+  failures look like a killed child process:
+  1. Every file was reported as in no project, which means the file listing died.
+  2. The tests-project child exited -1 with empty output.
+
+  The direct typecheck runs above stand in for this file here. The PR's fast run is the arbiter for it.
