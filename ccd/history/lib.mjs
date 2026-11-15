@@ -4909,6 +4909,10 @@ export function deriveHealth(h) {
 /** The scope a read verb answers in (§8.2, the §8.3 header). Plan-chosen
  *  spelling of the three kinds the spec's header names. */
 export const SCOPE_KINDS = Object.freeze(['family', 'project', 'workspace']);
+/** What a read context's scope may be (Overlord W1, w1-board-history.md question 1): SCOPE_KINDS plus `overlord`, the
+ *  Overlord's read over every project. decideScope's answer stays a SCOPE_KINDS word, by type and by test: only
+ *  overlord-read.mjs, which cli.mjs never imports, builds an `overlord` scope, so no argv or environment yields it. */
+export const READ_SCOPE_KINDS = Object.freeze([...SCOPE_KINDS, 'overlord']);
 
 /** The fewest hex digits a displayed node id keeps after its `L` or `N`,
  *  chosen (§6.1). Counted in hex digits so every display prefix passes the
