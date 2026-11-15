@@ -48,11 +48,17 @@ export const FORMS: ReadonlyArray<readonly [string, (t: string) => string[]]> = 
 /** A one-way relation: a site that names every skill of `if` names `then` too. `sameSpelling` (the default) asks it in
  *  every spelling the site names `if` in; without it, in any spelling at all, for a tree that is not on a per-home
  *  list (the staged Overlord skill). */
-export interface SitePair { if: readonly string[]; then: string; sites: readonly string[]; sameSpelling?: boolean }
+export interface SitePair {
+  if: readonly string[]; then: string; sites: readonly string[]; sameSpelling?: boolean;
+  /** Lines of the site's code to leave out as well as comments, such as its `echo` reports: a report naming a tree does
+   *  not stage it. */
+  ignore?: RegExp;
+}
 
 /** The spellings in which a body names every skill of `pair.if`, and those of them that leave out `pair.then`. */
-export function siteRelation(body: string, pair: Pick<SitePair, 'if' | 'then' | 'sameSpelling'>): { named: string[]; missing: string[] } {
-  const c = code(body);
+export function siteRelation(body: string, pair: Pick<SitePair, 'if' | 'then' | 'sameSpelling' | 'ignore'>): { named: string[]; missing: string[] } {
+  const ignore = pair.ignore;
+  const c = ignore ? code(body).split('\n').filter((l) => !ignore.test(l)).join('\n') : code(body);
   const named: string[] = [];
   const missing: string[] = [];
   let anywhere = false;

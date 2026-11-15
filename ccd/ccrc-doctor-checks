@@ -3380,7 +3380,7 @@ _check_skills() {
   local tree="$BOX_TREE_DIR/ccd" name notree=""
   # EVERY missing one, in one line (R19, D-3112): the first-only probe sent an
   # operator back once per missing directory.
-  for name in coordinator-skill worker-skill reviewer-skill history-skill linear-skill; do
+  for name in coordinator-skill worker-skill reviewer-skill history-skill linear-skill overlord-skill; do
     [ -d "$tree/$name" ] || notree="$notree${notree:+, }$tree/$name"
   done
   if [ -n "$notree" ]; then
@@ -3430,12 +3430,21 @@ _check_skills() {
       diff -r -q "$tree/$name" "$dir/skills/$installed" >/dev/null 2>&1 || stale+=("$id: $installed differs")
     done
   done <<< "$rows"
-  if [ "$homes" -eq 0 ]; then
+  # The Overlord's skill is staged once, outside every home (Overlord W1); `install-overlord-skill.sh` is its one writer.
+  # It is owed beside a registry only: `_inst_skills` creates `~/.cc-sessions` on every role it serves, so a box with no
+  # registry was never installed, and its homes' own missing skills say so above.
+  local reg="$HOME/.cc-sessions" staged="" said_staged=""
+  if [ -d "$reg" ]; then
+    staged="$reg/overlord-skill"; said_staged=", and the staged ccrc-overlord copy"
+    if [ ! -d "$staged" ]; then stale+=("ccrc-overlord: staged copy missing")
+    elif ! diff -r -q "$tree/overlord-skill" "$staged" >/dev/null 2>&1; then stale+=("ccrc-overlord: staged copy differs"); fi
+  fi
+  if [ "$homes" -eq 0 ] && [ "${#stale[@]}" -eq 0 ]; then
     _dr_skip skills "none of the roster's config directories exist on this box, so there is no installed skill to compare"
     return 3
   fi
   if [ "${#stale[@]}" -eq 0 ]; then
-    _dr_pass skills "$homes/$homes homes carry the shipped ccrc-coordinator, ccrc-worker, ccrc-reviewer, ccrc-history and ccrc-linear"
+    _dr_pass skills "$homes/$homes homes carry the shipped ccrc-coordinator, ccrc-worker, ccrc-reviewer, ccrc-history and ccrc-linear$said_staged"
     return 0
   fi
   # THE HEADLINE (R19, validated 2026-09-19, D-3112): an entry is "<id>: <skill>
@@ -3456,7 +3465,7 @@ _check_skills() {
   # `pool-name-parity.test.ts` pins. `ccrc doctor --fix` runs exactly this
   # remedy (`_fix_skills`, D-3113).
   _dr_fail skills "${#stale[@]} skill(s) in the rostered homes differ from the shipped tree or are missing from their home: $(_dr_join "${stale[@]}")" \
-    "run 'ccrc doctor --fix' (the shipped tree's installers into every rostered home), or 'ccrc update' (re-places the tree and re-runs them) — or by hand: CCRC_SKILL_SRC=\"\$HOME/ccrc/ccd/coordinator-skill\" bash \"\$HOME/ccrc/ccd/install-coordinator-skill.sh\"; CCRC_SKILL_SRC=\"\$HOME/ccrc/ccd/worker-skill\" bash \"\$HOME/ccrc/ccd/install-worker-skill.sh\"; CCRC_SKILL_SRC=\"\$HOME/ccrc/ccd/reviewer-skill\" bash \"\$HOME/ccrc/ccd/install-reviewer-skill.sh\"; CCRC_SKILL_SRC=\"\$HOME/ccrc/ccd/history-skill\" bash \"\$HOME/ccrc/ccd/install-history-skill.sh\"; CCRC_SKILL_SRC=\"\$HOME/ccrc/ccd/linear-skill\" bash \"\$HOME/ccrc/ccd/install-linear-skill.sh\""
+    "run 'ccrc doctor --fix' (the shipped tree's installers into every rostered home), or 'ccrc update' (re-places the tree and re-runs them) — or by hand: CCRC_SKILL_SRC=\"\$HOME/ccrc/ccd/coordinator-skill\" bash \"\$HOME/ccrc/ccd/install-coordinator-skill.sh\"; CCRC_SKILL_SRC=\"\$HOME/ccrc/ccd/worker-skill\" bash \"\$HOME/ccrc/ccd/install-worker-skill.sh\"; CCRC_SKILL_SRC=\"\$HOME/ccrc/ccd/reviewer-skill\" bash \"\$HOME/ccrc/ccd/install-reviewer-skill.sh\"; CCRC_SKILL_SRC=\"\$HOME/ccrc/ccd/history-skill\" bash \"\$HOME/ccrc/ccd/install-history-skill.sh\"; CCRC_SKILL_SRC=\"\$HOME/ccrc/ccd/linear-skill\" bash \"\$HOME/ccrc/ccd/install-linear-skill.sh\"; CCRC_SKILL_SRC=\"\$HOME/ccrc/ccd/overlord-skill\" bash \"\$HOME/ccrc/ccd/install-overlord-skill.sh\""
   return 1
 }
 
@@ -3500,6 +3509,11 @@ _fix_skills() {
     done
     n=$((n + 1)); list="$list${list:+, }$id"
   done <<< "$rows"
+  # The staged Overlord skill, beside a registry only, as `_check_skills` measures it.
+  if [ -d "$HOME/.cc-sessions" ]; then
+    said="$(CCRC_SKILL_SRC="$tree/overlord-skill" "${BASH:-bash}" "$tree/install-overlord-skill.sh" 2>&1)" || { echo "FIX skills: refused — $tree/install-overlord-skill.sh said: ${said##*$'\n'}"; return 1; }
+    list="$list, and staged ccrc-overlord"
+  fi
   [ "$n" -gt 0 ] || { echo "FIX skills: nothing to cure — no rostered home exists on this box"; return 0; }
   echo "FIX skills: re-ran the shipped tree's installers into $n home(s): $list"
 }
