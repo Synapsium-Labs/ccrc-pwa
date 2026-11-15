@@ -120,14 +120,21 @@ _pool_cross_match() {   # side-word marker-field -> 0 iff a crossing marker's po
 _pool_cross_lapse_why() {   # decided side word -> `crosspool-ended`'s reason when the side no longer matches the marker
   if [[ "$1" == "set "* ]]; then echo "account set is now ${1#set }"; else echo "project pool is now $1"; fi
 }
-_pool_undecided_rc() {   # POOL_OK_SIDE -> `_swap_target`'s undecided rc: 4 the project, 8 the set
-  case "$1" in set) return 8 ;; *) return 4 ;; esac
+_pool_undecided_rc() {   # POOL_OK_SIDE -> `_swap_target`'s undecided rc: 4 the project, 7 the account (projection), 8 the set
+  case "$1" in account) return 7 ;; set) return 8 ;; *) return 4 ;; esac
 }
 _pool_undecided_word() {   # `_swap_target`'s rc, or POOL_OK_SIDE -> the `_undecidable_cause` word for that side
-  case "$1" in 8|set) echo set ;; *) echo pool ;; esac
+  case "$1" in 7|account) echo projection ;; 8|set) echo set ;; *) echo pool ;; esac
 }
-_pool_undecidable_cause() {   # word id -> `_undecidable_cause`'s sentence for `set`
-  printf '%s' "the account set on the route record could not be read ($REG/$2.poolset), so no destination could be computed; the server writes it again at its next sweep, or the operator saves the set again"
+_pool_undecidable_cause() {   # word id -> `_undecidable_cause`'s sentence for `projection` or `set`
+  # `projection` is every session's, not only a set session's (slug `projection-word-fleet-wide`): an undecidable account
+  # side names the projection and its remedy, never the project's tag. A set session's says the set decided (A2 F1).
+  if [[ "$1" == set ]]; then
+    printf '%s' "the account set on the route record could not be read ($REG/$2.poolset), so no destination could be computed; the server writes it again at its next sweep, or the operator saves the set again"
+    return 0
+  fi
+  local tail="not the project tag"; _pool_side_is_set "$(_session_pool_side "$2")" && tail="the session pool set decided, and the project tag is not involved"
+  printf '%s' "the pool projection could not be read ($REG/pool-epoch), so no destination could be computed; the remedy is the pool sync and the control-plane link, $tail"
 }
 _pool_set_start_warn() {   # id wrapper prc side state project pps -> `cmd_start`'s warning for an existing row its set does not serve
   # An existing row is never refused (slug `existing-row-warns-the-tick-relocates`): a mismatch warns, and the tick moves it

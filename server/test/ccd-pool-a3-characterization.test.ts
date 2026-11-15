@@ -3,8 +3,9 @@
 // keyed by a session (Table 3.4d) is driven for a session WITHOUT a set, in each project state and in each undecidable
 // account state of a tagged project, and its answer, sentence or log line is pinned here verbatim (the fixture HOME
 // written as `$HOME`, the clock as `<ts>`). Task 4 moves every one of these users onto `_session_pool_side`; Review
-// Focus 2 says nothing here may change. The one named change is Task 5's `projection` word, which rewrites the rows
-// marked `projection-word-fleet-wide` in the commit that makes it, and in no other.
+// Focus 2 says nothing here may change. The one named change is Task 5's `projection` word (slug
+// `projection-word-fleet-wide`): it rewrote nine rows, the swap target's rc (4 to 7), the re-seed's stamp and the
+// strand tick's sentence, stamp and log line in the three account states, in the commit that made it and in no other.
 //
 // FIXTURE HOME ONLY (`makeCcdHarness`): tmux, systemd and the dispatcher are stubs. Pool names are the fixture table's
 // (`pool-a`, `pool-b`), account ids the test roster's; no real pool, account, host or path appears here.
@@ -247,12 +248,12 @@ const EXPECTED: Record<State, Partial<Record<User, string>>> = {
     crossLog: '\nmarker=',
   },
   'account unreadable': {
-    swapTarget: '|rc=4',
-    reseed: 'home=claude-b\n\ntickstuck=<ts> pool',
+    swapTarget: '|rc=7',
+    reseed: 'home=claude-b\n\ntickstuck=<ts> projection',
     payPerUse: 'claude claude-a claude-b claude-d',
     strandWhy: 'projection:unreadable $HOME/.cc-sessions/pool-epoch',
     strandMark: '<ts> projection:unreadable $HOME/.cc-sessions/pool-epoch\nstranded claude-project-a: claude (blocked) -> nowhere [pool=pool-a] (projection:unreadable $HOME/.cc-sessions/pool-epoch)\ncc swap STRANDED: claude-project-a is blocked on claude and no account in pool pool-a can take it — projection:unreadable $HOME/.cc-sessions/pool-epoch',
-    strandTick: '<ts> the project\'s pool tag could not be read ($HOME/.cc-sessions/pools/project-a), so no destination could be computed\ntickstuck=<ts> pool\ntick-undecidable claude-project-a: pool could not be measured — deciding nothing',
+    strandTick: '<ts> the pool projection could not be read ($HOME/.cc-sessions/pool-epoch), so no destination could be computed; the remedy is the pool sync and the control-plane link, not the project tag\ntickstuck=<ts> projection\ntick-undecidable claude-project-a: projection could not be measured — deciding nothing',
     startNew: 'rc=1\nccd: the pool projection for claude-b is unreadable: $HOME/.cc-sessions/pool-epoch is absent or unreadable — this node may never have synced; check that and the file\'s permissions; project \'project-a\' is tagged and its tag reads fine; nothing was touched\ncreated=false',
     startExisting: 'rc=0',
     swap: 'rc=1\nccd: the pool projection for claude-b is unreadable: $HOME/.cc-sessions/pool-epoch is absent or unreadable — this node may never have synced; check that and the file\'s permissions; project \'project-a\' is tagged and its tag reads fine; nothing was touched\nwrapper=claude',
@@ -260,12 +261,12 @@ const EXPECTED: Record<State, Partial<Record<User, string>>> = {
     crossLog: '\nmarker=',
   },
   'account stale': {
-    swapTarget: '|rc=4',
-    reseed: 'home=claude-b\n\ntickstuck=<ts> pool',
+    swapTarget: '|rc=7',
+    reseed: 'home=claude-b\n\ntickstuck=<ts> projection',
     payPerUse: 'claude claude-a claude-b claude-d',
     strandWhy: 'projection:stale $HOME/.cc-sessions/pool-epoch',
     strandMark: '<ts> projection:stale $HOME/.cc-sessions/pool-epoch\nstranded claude-project-a: claude (blocked) -> nowhere [pool=pool-a] (projection:stale $HOME/.cc-sessions/pool-epoch)\ncc swap STRANDED: claude-project-a is blocked on claude and no account in pool pool-a can take it — projection:stale $HOME/.cc-sessions/pool-epoch',
-    strandTick: '<ts> the project\'s pool tag could not be read ($HOME/.cc-sessions/pools/project-a), so no destination could be computed\ntickstuck=<ts> pool\ntick-undecidable claude-project-a: pool could not be measured — deciding nothing',
+    strandTick: '<ts> the pool projection could not be read ($HOME/.cc-sessions/pool-epoch), so no destination could be computed; the remedy is the pool sync and the control-plane link, not the project tag\ntickstuck=<ts> projection\ntick-undecidable claude-project-a: projection could not be measured — deciding nothing',
     startNew: 'rc=1\nccd: the pool projection for claude-b is stale: $HOME/.cc-sessions/pool-epoch is past its lease — the remedy is the control-plane link (the pool sync), not this file; project \'project-a\' is tagged and its tag reads fine; nothing was touched\ncreated=false',
     startExisting: 'rc=0',
     swap: 'rc=1\nccd: the pool projection for claude-b is stale: $HOME/.cc-sessions/pool-epoch is past its lease — the remedy is the control-plane link (the pool sync), not this file; project \'project-a\' is tagged and its tag reads fine; nothing was touched\nwrapper=claude',
@@ -273,12 +274,12 @@ const EXPECTED: Record<State, Partial<Record<User, string>>> = {
     crossLog: '\nmarker=',
   },
   'account malformed': {
-    swapTarget: '|rc=4',
-    reseed: 'home=claude-b\n\ntickstuck=<ts> pool',
+    swapTarget: '|rc=7',
+    reseed: 'home=claude-b\n\ntickstuck=<ts> projection',
     payPerUse: 'claude claude-a claude-b claude-d',
     strandWhy: 'projection:malformed $HOME/.cc-sessions/pool-epoch',
     strandMark: '<ts> projection:malformed $HOME/.cc-sessions/pool-epoch\nstranded claude-project-a: claude (blocked) -> nowhere [pool=pool-a] (projection:malformed $HOME/.cc-sessions/pool-epoch)\ncc swap STRANDED: claude-project-a is blocked on claude and no account in pool pool-a can take it — projection:malformed $HOME/.cc-sessions/pool-epoch',
-    strandTick: '<ts> the project\'s pool tag could not be read ($HOME/.cc-sessions/pools/project-a), so no destination could be computed\ntickstuck=<ts> pool\ntick-undecidable claude-project-a: pool could not be measured — deciding nothing',
+    strandTick: '<ts> the pool projection could not be read ($HOME/.cc-sessions/pool-epoch), so no destination could be computed; the remedy is the pool sync and the control-plane link, not the project tag\ntickstuck=<ts> projection\ntick-undecidable claude-project-a: projection could not be measured — deciding nothing',
     startNew: 'rc=1\nccd: the pool projection for claude-b is malformed: $HOME/.cc-sessions/pool-epoch is off the grammar — re-sync or remove it; project \'project-a\' is tagged and its tag reads fine; nothing was touched\ncreated=false',
     startExisting: 'rc=0',
     swap: 'rc=1\nccd: the pool projection for claude-b is malformed: $HOME/.cc-sessions/pool-epoch is off the grammar — re-sync or remove it; project \'project-a\' is tagged and its tag reads fine; nothing was touched\nwrapper=claude',

@@ -21037,7 +21037,7 @@ _undecidable_cause() {   # word id project -> the operator-facing sentence for t
     crosspool) printf '%s' "the crossing record could not be read, so no destination could be computed" ;;
     project)   printf '%s' "the project's own registry field could not be read ($REG/$2.project), so no destination could be computed" ;;
     pool)      printf '%s' "the project's pool tag could not be read ($POOLS_DIR/$3), so no destination could be computed" ;;
-    set)       _pool_undecidable_cause "$1" "$2" ;;
+    projection|set) _pool_undecidable_cause "$1" "$2" ;;
     classwindow) printf '%s' "the per-class window for the session's class could not be measured on the lanes that could take it ($REG/usage/sweep/latest.json for fable, $LIMITS_DIR/<lane>.json otherwise), so no destination could be computed" ;;
     *)         printf '%s' "the tick declined to decide on a condition this build does not name ($1), so no destination could be computed" ;;
   esac
