@@ -1,6 +1,9 @@
 // `compactThresholdFor`'s oracle and mutant set (Overlord W1a launch profiles, Task 4: w1a-launch-profiles.md). Its cases
 // are written ONCE here, as suite cases over a module: `continuity-launch-profile.test.ts` runs them against the real
 // module, and `mutation-floors.test.ts` runs them against each textual mutant (D-8217's every-run floors).
+import { spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
+import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { expect } from 'vitest';
@@ -127,6 +130,66 @@ const COMPACT_AT: ReadonlyMap<number | null, { compact: number; compactwindow: n
   [null, null], [200_000, { compact: 60, compactwindow: 154_000 }], [1_000_000, { compact: 35, compactwindow: 384_000 }],
 ]);
 
+/** ccd's copy of the role table (W1 sandbox Task 2): the committed file, read as text. */
+const LAUNCH_PROFILES_FILE = path.join(ROOT, 'ccd/lib/launch-profiles.json');
+/** What real `jq -cS` prints for one role's committed row, its trailing newline included: the bytes ccd hashes. */
+export function jqRowBytes(role: string): string {
+  const r = spawnSync('jq', ['-cS', `.["${role}"]`, LAUNCH_PROFILES_FILE], { encoding: 'utf8' });
+  if (r.status !== 0) throw new Error(`jq failed: ${r.stderr}`);
+  return r.stdout;
+}
+/** The sha256 ccd computes over a role's committed row (Review Focus 4): an oracle that never calls the code it judges. */
+export const committedDigest = (role: string): string => createHash('sha256').update(jqRowBytes(role), 'utf8').digest('hex');
+
+/** `launchRowOf`'s cases (W1 sandbox Task 2): the projection is the committed file's row, for every role, and its digest is
+ *  real `jq -cS`'s; a surfaced row carries each part of the surface. */
+export function launchRowCases(m: LaunchProfileModule): Record<string, SuiteCase> {
+  return {
+    'launchRowOf is the committed file row, for every role, and launchDigestOf is jq -cS over it (Review Focus 4)': () => {
+      const file = JSON.parse(fs.readFileSync(LAUNCH_PROFILES_FILE, 'utf8')) as Record<string, unknown>;
+      for (const role of FLEET_ROLE_NAMES) {
+        expect(m.launchRowOf(role), role).toStrictEqual(file[role]);
+        expect(`${JSON.stringify(m.launchRowOf(role))}\n`, role).toBe(jqRowBytes(role));
+        expect(m.launchDigestOf(role), role).toBe(committedDigest(role));
+      }
+    },
+    'the overlord row carries every flag, every deny word, ccrc hook on every event and remote control off': () => {
+      const row = m.launchRowOf('overlord') as { flags: string[]; remoteControl: string;
+        surfaceSettings: { permissions: { deny: string[] }; hooks: Record<string, Array<{ matcher?: string }>> } };
+      expect(row.flags.slice(0, 5)).toStrictEqual(['--setting-sources', 'project', '--tools', 'Agent,Skill', '--strict-mcp-config']);
+      expect(row.flags[5]).toBe('--agents');
+      expect(JSON.parse(row.flags[6] as string)).toStrictEqual({ 'overlord-reader': {
+        description: FLEET_ROLES.overlord.launchProfile.surface!.readerTypes['overlord-reader']!.description,
+        model: 'sonnet', prompt: FLEET_ROLES.overlord.launchProfile.surface!.readerTypes['overlord-reader']!.prompt,
+        tools: ['mcp__door__read'] } });
+      expect(row.surfaceSettings.permissions.deny).toStrictEqual(['Bash', 'Edit', 'Write', 'NotebookEdit', 'WebFetch', 'WebSearch',
+        'SendMessage', 'ListAgents', 'Workflow', 'CronCreate', 'CronList', 'CronDelete']);
+      expect(Object.keys(row.surfaceSettings.hooks).sort()).toStrictEqual(['PermissionRequest', 'PostCompact', 'PostToolUse',
+        'PreCompact', 'PreToolUse', 'SessionEnd', 'SessionStart', 'Stop', 'StopFailure', 'SubagentStart', 'SubagentStop',
+        'UserPromptSubmit']);
+      expect(row.surfaceSettings.hooks.PreToolUse?.[0]?.matcher).toBe('*');
+      expect(row.remoteControl).toBe('off');
+    },
+    'a row with no surface keeps the five keys W1a ships': () => {
+      for (const role of FLEET_ROLE_NAMES.filter((r) => r !== 'overlord')) {
+        expect(Object.keys(m.launchRowOf(role)), role).toStrictEqual(['autoMemory', 'compactText', 'compactionSettings', 'env', 'settings']);
+      }
+    },
+  };
+}
+
+/** `launchRowOf`'s mutants (W1 sandbox Task 2): drop a flag, a deny word, the hook's matcher, and `remoteControl`. */
+const LAUNCH_ROW_SET: MutantSet<LaunchProfileModule> = {
+  modulePath: path.join(ROOT, 'server/src/continuity/launchProfile.ts'),
+  mutants: [
+    { id: 'R1', old: "'--strict-mcp-config',\n      '--agents'", new: "\n      '--agents'" },
+    { id: 'R2', old: 'surfaceSettings: { permissions: { deny: s.deny }', new: 'surfaceSettings: { permissions: { deny: s.deny.slice(1) }' },
+    { id: 'R3', old: "ev === 'PreToolUse' ? { matcher: '*', hooks: [hook] } : { hooks: [hook] }", new: '{ hooks: [hook] }' },
+    { id: 'R4', old: "    remoteControl: 'off',\n", new: '' },
+  ],
+  suite: launchRowCases,
+};
+
 export function profileForCases(m: ProfileForModule): Record<string, SuiteCase> {
   return {
     'exhaustive: nine readings x two memory choices x three windows x continuity live or not (Task 5)': () => {
@@ -140,6 +203,7 @@ export function profileForCases(m: ProfileForModule): Record<string, SuiteCase> 
               expect(m.profileFor(reading, mem, w, continuityLive), label).toStrictEqual({
                 profile: role, automem: role === 'plain' ? mem : 'off',
                 compact: compact === null ? null : compact.compact, compactwindow: compact === null ? null : compact.compactwindow,
+                ...(role === 'overlord' ? { profiledigest: committedDigest('overlord') } : {}),
               });
             }
           }
@@ -159,6 +223,28 @@ export function profileForCases(m: ProfileForModule): Record<string, SuiteCase> 
         .toStrictEqual({ profile: 'plain', automem: 'on', compact: null, compactwindow: null });
       expect(m.profileFor({ kind: 'undecided', between: 'worker-or-reviewer' }, 'on', 1_000_000, true))
         .toStrictEqual({ profile: 'worker', automem: 'off', compact: null, compactwindow: null });
+    },
+    'profiledigest stands for the overlord alone, and is the digest of its committed row (W1 sandbox, Task 2)': () => {
+      const r = m.profileFor({ kind: 'role', role: 'overlord' }, 'off', null, false);
+      expect(r.profiledigest).toBe(committedDigest('overlord'));
+      for (const role of FLEET_ROLE_NAMES.filter((x) => x !== 'overlord')) {
+        expect(Object.hasOwn(m.profileFor({ kind: 'role', role }, 'off', null, false), 'profiledigest'), role).toBe(false);
+      }
+    },
+    'profileDigestWriteOf: write at build agreement, hold under skew or an unmeasured inventory, clear a standing field for a role with no surface': () => {
+      const D = 'a'.repeat(64); const E = 'b'.repeat(64);
+      expect(m.profileDigestWriteOf(D, undefined, 'agreed')).toStrictEqual({ act: 'write', value: D });
+      expect(m.profileDigestWriteOf(D, E, 'agreed')).toStrictEqual({ act: 'write', value: D });
+      expect(m.profileDigestWriteOf(D, D, 'agreed')).toStrictEqual({ act: 'none' });
+      for (const b of ['skewed', 'unknown'] as const) {
+        expect(m.profileDigestWriteOf(D, E, b), b).toStrictEqual({ act: 'hold' });
+        expect(m.profileDigestWriteOf(D, undefined, b), b).toStrictEqual({ act: 'hold' });
+        expect(m.profileDigestWriteOf(D, D, b), b).toStrictEqual({ act: 'none' });
+      }
+      for (const b of ['agreed', 'skewed', 'unknown'] as const) {
+        expect(m.profileDigestWriteOf(undefined, D, b), b).toStrictEqual({ act: 'clear' });
+        expect(m.profileDigestWriteOf(undefined, undefined, b), b).toStrictEqual({ act: 'none' });
+      }
     },
     'the Settings row: a lost row is off (H14), a failed read or an unknown word is null': () => {
       expect(m.plainAutoMemoryOf({ kind: 'absent' })).toBe('off');
@@ -180,6 +266,19 @@ const PROFILE_FOR_SET: MutantSet<ProfileForModule> = {
     { id: 'P3', old: "  'coordinator-or-plain': 'plain',\n};", new: "  'coordinator-or-plain': 'coordinator',\n};" },
     { id: 'P4', old: 'const t = continuityLive ? compactThresholdFor(row, windowTokens) : null;', new: 'const t = compactThresholdFor(row, windowTokens);' },
     { id: 'P5', old: "  'worker-or-reviewer': 'worker',", new: "  'worker-or-reviewer': 'reviewer'," },
+    // W1 sandbox Task 2: drop `profiledigest`.
+    { id: 'P6', old: 'return row.surface === null ? base : { ...base, profiledigest: launchDigestOf(profile) };', new: 'return base;' },
+  ],
+  suite: profileForCases,
+};
+
+/** `profileDigestWriteOf`'s mutants (W1 sandbox Task 2): write under skew, and never clear. */
+const PROFILE_DIGEST_WRITE_SET: MutantSet<ProfileForModule> = {
+  modulePath: path.join(ROOT, 'server/src/continuity/profileFor.ts'),
+  mutants: [
+    { id: 'W1', old: "return builds === 'agreed' ? { act: 'write', value: target } : { act: 'hold' };", new: "return { act: 'write', value: target };" },
+    { id: 'W2', old: "if (target === undefined) return standing !== undefined ? { act: 'clear' } : { act: 'none' };", new: "if (target === undefined) return { act: 'none' };" },
+    { id: 'W3', old: "if (standing === target) return { act: 'none' };", new: '' },
   ],
   suite: profileForCases,
 };
@@ -200,4 +299,6 @@ export const LAUNCH_PROFILE_MUTANT_SETS: Record<string, MutantSet<never>> = {
   'server/src/continuity/launchProfile.ts#compactThresholdFor': COMPACT_THRESHOLD_SET as MutantSet<never>,
   'server/src/continuity/profileFor.ts#profileFor': PROFILE_FOR_SET as MutantSet<never>,
   'server/src/continuity/profileFor.ts#plainAutoMemoryOf': PLAIN_AUTO_MEMORY_SET as MutantSet<never>,
+  'server/src/continuity/profileFor.ts#profileDigestWriteOf': PROFILE_DIGEST_WRITE_SET as MutantSet<never>,
+  'server/src/continuity/launchProfile.ts#launchRowOf': LAUNCH_ROW_SET as MutantSet<never>,
 };

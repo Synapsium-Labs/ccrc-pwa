@@ -7,27 +7,28 @@
 import { describe, expect, it } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
-import { FLEET_ROLES, FLEET_ROLE_NAMES } from '../../shared/fleetRoles.js';
-import { compactInstructionsFor } from '../src/continuity/compaction.js';
+import { FLEET_ROLE_NAMES } from '../../shared/fleetRoles.js';
+import { launchRowOf } from '../src/continuity/launchProfile.js';
 
 const FILE = path.resolve(__dirname, '../../ccd/lib/launch-profiles.json');
 
-/** Every object's keys sorted, recursively, so the file has one spelling. */
-const sorted = (v: unknown): unknown => {
-  if (v === null || typeof v !== 'object' || Array.isArray(v)) return v;
-  return Object.fromEntries(Object.keys(v).sort().map((k) => [k, sorted((v as Record<string, unknown>)[k])]));
-};
-
-/** The projection: `{ role: { env, settings, autoMemory, compactionSettings, compactText } }`, `compactionSettings`
- *  being `compaction.settings` or `{}`, and `compactText` the role's compaction instructions (`compactInstructionsFor`,
- *  Overlord W1a compaction, decision compaction-text-rides-the-profile-projection), which ccd's auto-compact types and
- *  the hook's PreCompact print carries, both only when the route carries `compactwindow`. `aboveHardCapPts` stays server-side (the threshold is computed per session and rides
- *  the route's `compactwindow`), so ccd's copy does not carry it. */
-const projection = (): unknown => sorted(Object.fromEntries(FLEET_ROLE_NAMES.map((r) => {
-  const p = FLEET_ROLES[r].launchProfile;
-  return [r, { env: p.env, settings: p.settings, autoMemory: p.autoMemory, compactionSettings: p.compaction?.settings ?? {}, compactText: compactInstructionsFor(r) }];
-})));
+/** The projection is `launchRowOf` (Overlord W1 sandbox Task 2): the one function the file, ccd's digest, the route field
+ *  `profiledigest` and the sandbox check all call (Review Focus 4). A row with no surface is W1a's five keys: `env`,
+ *  `settings`, `autoMemory`, `compactionSettings` (`compaction.settings` or `{}`) and `compactText` (the role's compaction
+ *  instructions, `compactInstructionsFor`); `aboveHardCapPts` stays server-side. A surfaced row adds what ccd renders. */
+const projection = (): unknown => Object.fromEntries([...FLEET_ROLE_NAMES].sort().map((r) => [r, launchRowOf(r)]));
 const expectedText = (): string => `${JSON.stringify(projection(), null, 2)}\n`;
+const FIVE = ['autoMemory', 'compactText', 'compactionSettings', 'env', 'settings'];
+const SURFACED = [...FIVE, 'flags', 'memory', 'remoteControl', 'stagedSkills', 'surfaceSettings'].sort();
+
+/** Every string and number in a JSON value, keys included. */
+function leaves(v: unknown, out: { strings: string[]; numbers: number[] } = { strings: [], numbers: [] }): { strings: string[]; numbers: number[] } {
+  if (typeof v === 'string') out.strings.push(v);
+  else if (typeof v === 'number') out.numbers.push(v);
+  else if (Array.isArray(v)) for (const x of v) leaves(x, out);
+  else if (v !== null && typeof v === 'object') for (const [k, x] of Object.entries(v)) { out.strings.push(k); leaves(x, out); }
+  return out;
+}
 
 describe('ccd/lib/launch-profiles.json is the role table, projected (H1)', () => {
   it('equals the projection of FLEET_ROLES, byte for byte', () => {
@@ -42,8 +43,22 @@ describe('ccd/lib/launch-profiles.json is the role table, projected (H1)', () =>
     const parsed = JSON.parse(fs.readFileSync(FILE, 'utf8')) as Record<string, Record<string, unknown>>;
     expect(Object.keys(parsed).sort()).toEqual([...FLEET_ROLE_NAMES].sort());
     for (const r of Object.keys(parsed)) {
-      expect(Object.keys(parsed[r]!).sort(), r).toEqual(['autoMemory', 'compactText', 'compactionSettings', 'env', 'settings']);
+      expect(Object.keys(parsed[r]!).sort(), r).toEqual(r === 'overlord' ? SURFACED : FIVE);
     }
+  });
+  it('holds only what jq -cS and JSON.stringify spell alike: printable ASCII strings and integers (launchDigestOf)', () => {
+    // jq and JSON.stringify differ on DEL, astral key order and exponent spellings (measured), so the digest ccd computes
+    // and the server's agree only while the row holds neither.
+    const { strings, numbers } = leaves(JSON.parse(fs.readFileSync(FILE, 'utf8')));
+    for (const s of strings) expect(s, s).toMatch(/^[\x20-\x7e]*$/);
+    for (const n of numbers) expect(Number.isInteger(n), String(n)).toBe(true);
+  });
+  it("the overlord row's flag words are argv-safe, and the agents value carries no single quote", () => {
+    const flags = (JSON.parse(fs.readFileSync(FILE, 'utf8')) as Record<string, { flags?: string[] }>).overlord!.flags!;
+    const at = flags.indexOf('--agents');
+    expect(at).toBeGreaterThan(-1);
+    flags.forEach((w, i) => { if (i !== at + 1) expect(w).toMatch(/^[A-Za-z0-9,._-]+$/); });
+    expect(flags[at + 1]).not.toContain("'");
   });
   it('ships where ccd reads it: both installers place it in ~/.cc-sessions/lib, ccd fallback path, and uninstall removes it', () => {
     const read = (rel: string): string => fs.readFileSync(path.resolve(__dirname, '../..', rel), 'utf8');
@@ -53,6 +68,14 @@ describe('ccd/lib/launch-profiles.json is the role table, projected (H1)', () =>
     expect(ccrc).toContain('_upd_backup_copy "$HOME/.cc-sessions/lib/launch-profiles.json" launch-profiles.json');
     expect(ccrc).toContain('"$reg/lib/launch-profiles.json" \\');
     expect(read('deploy/deploy.sh')).toContain('install_atomic ccd/lib/launch-profiles.json .cc-sessions/lib/launch-profiles.json 644');
+  });
+  it('ships the constitution beside it: both installers, the backup set and uninstall (W1 sandbox Task 2)', () => {
+    const read = (rel: string): string => fs.readFileSync(path.resolve(__dirname, '../..', rel), 'utf8');
+    const ccrc = read('ccd/ccrc');
+    expect(ccrc).toContain('_inst_atomic "$tree/ccd/lib/overlord-constitution.md" "$HOME/.cc-sessions/lib/overlord-constitution.md" 644');
+    expect(ccrc).toContain('_upd_backup_copy "$HOME/.cc-sessions/lib/overlord-constitution.md" overlord-constitution.md');
+    expect(ccrc).toContain('"$reg/lib/overlord-constitution.md" \\');
+    expect(read('deploy/deploy.sh')).toContain('install_atomic ccd/lib/overlord-constitution.md .cc-sessions/lib/overlord-constitution.md 644');
   });
   it("every value is a literal ccd may put on an argv: no quote, no space, no shell character", () => {
     const parsed = JSON.parse(fs.readFileSync(FILE, 'utf8')) as Record<string, { env: Record<string, string> }>;

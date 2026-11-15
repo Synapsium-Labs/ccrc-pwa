@@ -18318,6 +18318,8 @@ _inst_files() {   # the artifacts the box RUNS that are not on PATH
   # The launch profiles ccd renders at every spawn whose route names one (Overlord W1a; a projection of FLEET_ROLES),
   # 0644: data for jq. Without it a profile-naming spawn launches without its profile and warns.
   _inst_atomic "$tree/ccd/lib/launch-profiles.json" "$HOME/.cc-sessions/lib/launch-profiles.json" 644
+  # The Overlord's constitution (W1 sandbox), 0644: ccd links it into the Overlord's workspace as its CLAUDE.md.
+  _inst_atomic "$tree/ccd/lib/overlord-constitution.md" "$HOME/.cc-sessions/lib/overlord-constitution.md" 644
   # `ccd carry-dedupe`'s program (#317), 0644: a script python3 runs. Without it the verb refuses by name.
   _inst_atomic "$tree/ccd/lib/carry-dedupe.py" "$HOME/.cc-sessions/lib/carry-dedupe.py" 644
   # the in-flight manifest's program (session-continuity 6b, D-8368), 0644, read-only.
@@ -24848,6 +24850,7 @@ _upd_backup_set() {
   _upd_backup_copy "$HOME/.cc-sessions/compact-card.mjs" compact-card.mjs
   _upd_backup_copy "$HOME/.cc-sessions/lib/transcript.jq" transcript.jq
   _upd_backup_copy "$HOME/.cc-sessions/lib/launch-profiles.json" launch-profiles.json
+  _upd_backup_copy "$HOME/.cc-sessions/lib/overlord-constitution.md" overlord-constitution.md
   _upd_backup_copy "$HOME/.cc-sessions/lib/roster-card.jq" roster-card.jq
   _upd_backup_copy "$HOME/.cc-sessions/lib/carry-dedupe.py" carry-dedupe.py
   _upd_backup_copy "$HOME/.cc-sessions/lib/inflight-manifest.py" inflight-manifest.py
@@ -29265,6 +29268,7 @@ _uninst_cc_sessions() {
   rm -f -- "$reg/session-hook.sh" "$reg/install-session-hooks.sh" "$reg/notify.sh" \
     "$reg/compact-card.mjs" "$reg/approval-verify.mjs" "$reg/lib/transcript.jq" "$reg/lib/carry-dedupe.py" "$reg/lib/inflight-manifest.py" \
     "$reg/lib/roster-card.jq" "$reg/lib/launch-profiles.json" \
+    "$reg/lib/overlord-constitution.md" \
     "$reg/install-coordinator-skill.sh" "$reg/install-worker-skill.sh" \
     "$reg/install-reviewer-skill.sh" "$reg/install-history-skill.sh" "$reg/install-linear-skill.sh" \
     "$reg/install-graphify-skill.sh" "$reg/child-deny.settings.json" \

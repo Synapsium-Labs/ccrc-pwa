@@ -21,7 +21,7 @@ import {
 import type { CcdResult, WatcherCoordPort } from './coord/ports.js';
 import { parseDialog } from './pane/dialog.js';
 import { parseStatusline, type Statusline } from './pane/statusline.js';
-import { defaultCachePath, persistFleetSnapshot, SnapshotWriter, snapshotNotice } from './fleetstate.js';
+import { defaultCachePath, inventoryBuildAgreement, persistFleetSnapshot, SnapshotWriter, snapshotNotice } from './fleetstate.js';
 import { readTasks, taskProgress } from './tasks/read.js';
 import { CCD_ARGV, EXPIRE_CHILD_CAP, RECLAIM_PAUSE_CAP, capSupported, ccdCan, sweepDec } from './ccdargv.js';
 import {
@@ -6131,6 +6131,8 @@ export class FleetWatcher {
           declaredIntent: async (id) => declaredIntentOf(
             await childReclaimGenerationRead(io, cfg.registryDir, id).catch((): ChildReclaimGeneration => ({ kind: 'unreadable' })),
             (sid, inc) => intentOfCheckpoint(this.delegationCheckpointIfReady(), sid, inc), id),
+          // Whether the fleet node runs this server's build, from the node inventory (W1 sandbox: `profiledigest` waits for it).
+          buildAgreement: () => inventoryBuildAgreement(coord),
         },
       }, records.map((r) => ({ id: r.id, child: r.child, route: r.route })));
     });

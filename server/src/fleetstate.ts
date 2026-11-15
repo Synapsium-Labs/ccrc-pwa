@@ -6,6 +6,8 @@ import {
 } from '../../shared/api.js';
 import { compareReleaseTags } from '../../shared/semver.js';
 import type { BuildInfo } from '../../shared/buildinfo.js';
+import type { CoordStore } from './coord/store.js';
+import { buildInfoOfRow } from './update/inventory.js';
 
 // One vocabulary for "the two boxes' builds", declared in `shared/api.ts`
 // because `FleetHealth` (the wire shape) needs it and L0 may not import from
@@ -325,6 +327,16 @@ export function derivedBuilds(sources: readonly BuildSource[]): { own: BuildInfo
   const own = sources.find((s) => s.role === 'server' || s.role === 'both');
   const fleet = sources.find((s) => s.role === 'fleet');
   return { own: own?.build ?? null, fleet: fleet?.build ?? null };
+}
+
+/** `buildAgreement` over the node inventory's rows (`derivedBuilds` of each row's role and `buildInfoOfRow`): the launch-profile
+ *  lane's read of whether the fleet node runs the server's build (Overlord W1 sandbox Task 2, question 5). A throwing `nodes()`
+ *  answers `unknown`, which the lane reads as unmeasured and holds `profiledigest` at its old value. */
+export function inventoryBuildAgreement(coord: Pick<CoordStore, 'nodes'>): BuildAgreement {
+  let rows: ReturnType<CoordStore['nodes']>;
+  try { rows = coord.nodes(); } catch { return 'unknown'; }
+  const b = derivedBuilds(rows.map((r) => ({ role: r.role, build: buildInfoOfRow(r) })));
+  return buildAgreement(b.fleet, b.own);
 }
 
 /**
