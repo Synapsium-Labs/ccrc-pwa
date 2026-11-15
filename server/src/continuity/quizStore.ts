@@ -5,7 +5,7 @@
 // of `lane_arm_settings`). Two reads: `quizRuns` and `quizBaselineRead` (the lane-arm door's fact). Nothing here decides
 // beyond asking that rule, and no read folds a failure into an answer: each tells a failed read apart.
 import type { DatabaseSync } from 'node:sqlite';
-import type { LaneArmRead } from '../coord/laneArm.js';
+import type { LaneArmBaseline, LaneArmRead } from '../coord/laneArm.js';
 import { tx } from '../coord/tx.js';
 import { W1A_ARM_ROWS, quizBaseline, type QuizArmed, type QuizReport, type W1aArmRow } from './quiz.js';
 
@@ -31,7 +31,7 @@ export type QuizRunInsertResult =
   | { ok: false; kind: 'write-failed' };
 export type QuizRunsRead = { ok: true; rows: QuizRunRow[] } | { ok: false; detail: string };
 /** Whether a baseline row exists, or the read failed: never folded into `exists: false`. */
-export type QuizBaselineRead = { ok: true; exists: boolean } | { ok: false; detail: string };
+export type QuizBaselineRead = LaneArmBaseline;
 
 const COLS = 'id, measuredAt, recordedAt, recordedBy, reportSha, questionsSha, questions, families, score, lo, hi, judgeModel, '
   + 'ccrcRelease, claudeBuilds, steerArmed, agentsOnArmed, baseline';
