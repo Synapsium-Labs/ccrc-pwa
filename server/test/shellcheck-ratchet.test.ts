@@ -1,7 +1,12 @@
 // The shellcheck ratchet (D-7995): most of the box-side machinery is bash, and nothing linted it. A big-bang cleanup
 // would rewrite scripts that work, so this pins what is there and only lets it go down:
-//   - each tracked bash file has a pinned count of warning-level findings in shellcheck-baseline.json; `ccd/ccd` and
-//     everything under `ccd/lib/` are ONE pin, so code moved between them by a split does not trip it;
+//   - each tracked bash file has a pinned count of warning-level findings in shellcheck-baseline.json;
+//   - `ccd/ccd` and its libraries, every `ccd/lib/*.sh` but `ccrc-*`, are ONE pin, linted as ONE text (D-8048,
+//     the file split's Q3): `spliceCcd` puts each library region back at its `# @ccd-lib:` pointer, shellcheck reads
+//     that text once, and each finding is named at the file and line it came from. Summed per file, a split DOES trip
+//     the pin: a variable set in ccd/ccd and read in a library reads as unused in one file and unassigned in the other.
+//     Over the one text a pure move cannot change the count. Library code no pointer splices back fails by name, so it
+//     can never drop out of the lint. `ccd/lib/ccrc-*.sh` keeps a pin of its own: the sweeps source it, ccd does not;
 //   - a count above its pin fails and names the lines; a count below it passes and prints the entry to paste;
 //   - a bash file with no pin (a new file) must have 0 findings; each intended exception carries a
 //     `# shellcheck disable=SCxxxx  # reason` directive (the reason after a second `#`: ` -- reason` is not shellcheck
@@ -13,8 +18,9 @@
 //
 // The counts are only as good as the tool that made them, so the baseline pins the version: another version here is a
 // printed skip, and in CI a failure, so a skip can never read as a pass there. server-deps installs that version on
-// Linux (.github/ci/shellcheck-install.sh). The macOS CI legs skip: ccd/ccd alone peaks at 6.2 GB (measured on 0.11.0)
-// on a 7 GB runner, and the same tool over the same files has nothing to add to the Linux legs.
+// Linux (.github/ci/shellcheck-install.sh). The macOS CI legs skip: ccd/ccd alone peaked at 6.2 GB (measured on 0.11.0),
+// the program text it now lints with its libraries about 11% more, near 6.9 GB, on a 7 GB runner; and the same tool
+// over the same files has nothing to add to the Linux legs.
 //
 // The whole pass is slow, so it is no guard suite (fast-plan.mjs HEAVY_TREE_READERS): the queue and the full suite run
 // it, and a fast pull request runs it only when the map selects it for a file it reads.
@@ -25,16 +31,26 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
+import { spliceCcd } from './ccdWsHelpers.js';
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const BASELINE = 'server/test/shellcheck-baseline.json';
 const ROOTS = ['ccd', 'deploy', 'install.sh', '.github/ci'];
-/** The pin `ccd/ccd` and `ccd/lib/` share. */
+/** The pin `ccd/ccd` and its libraries share, linted as one spliced text. It rose once, on the new measure (D-8048, the
+ *  operator's ruling Q3 on the file split): 57 summed per file over ccd/ccd and its three libraries (63 with
+ *  `ccrc-settings.sh`, which takes its own pin of 6), 82 over the one text. No line changed. shellcheck does not scope
+ *  a name by function or by file, so the one text surfaces 37 findings that a file read alone hides (SC2128 14, SC2100
+ *  11, SC2178 8, SC2179 3, SC2190 1) and clears 12 that only a file read alone reports (SC2034 12: a name set in one
+ *  file and read in another). From here a move between ccd/ccd and a library cannot change the count. */
 const GROUP = 'ccd/ccd + ccd/lib';
+/** What the spliced program is called inside its scratch directory, where shellcheck reads it. */
+const PROGRAM_FILE = 'ccd-program';
 /** `--norc` and an empty SHELLCHECK_OPTS: a developer's own settings must not move a count. */
 const SHELLCHECK_ARGS = ['--norc', '--shell=bash', '-S', 'warning', '-f', 'gcc'];
-/** Two at once. Peak RSS is 6.2 GB for ccd/ccd and 4.1 GB for ccd/ccrc, on a 16 GB runner shared with the shard's
- *  vitest workers; the whole pass takes about 30 s locally and 66 s on a runner at two lanes. */
+/** Two at once. Peak RSS is about 6.9 GB for the program (ccd/ccd and its libraries as one text) and 4.1 GB for
+ *  ccd/ccrc, on a 16 GB runner shared with the shard's vitest workers. ccd/ccd alone peaked at 6.2 GB; the splice is
+ *  about 6% more text but about 11% more memory (9.09 GB against 8.16 GB, both measured on one Mac, D-8048). The whole
+ *  pass takes about 30 s locally and 66 s on a runner at two lanes. */
 const LANES = 2;
 /**
  * What shellcheck reports when it gave up on a file: everything after that point was not checked. Its parser has two
@@ -51,7 +67,16 @@ type Baseline = { shellcheckVersion: string; shellcheckSha256: string; files: Pi
 
 const baseline = JSON.parse(readFileSync(path.join(REPO, BASELINE), 'utf8')) as Baseline;
 
-const pinKey = (file: string): string => (file === 'ccd/ccd' || file.startsWith('ccd/lib/') ? GROUP : file);
+/** `ccd/ccd` and every `ccd/lib/*.sh` but the `ccrc-*` ones, which ccd never loads: the growth check's
+ *  `isProgramMember`, the same rule. */
+const isProgramFile = (file: string): boolean =>
+  file === 'ccd/ccd' || (/^ccd\/lib\/[^/]+\.sh$/.test(file) && !path.basename(file).startsWith('ccrc-'));
+
+const pinKey = (file: string): string => (isProgramFile(file) ? GROUP : file);
+
+/** The program's members among `files`, `ccd/ccd` first. */
+const programFiles = (files: readonly string[]): string[] =>
+  files.filter(isProgramFile).sort((a, b) => (a === 'ccd/ccd' ? -1 : b === 'ccd/ccd' ? 1 : a.localeCompare(b)));
 
 const countCodes = (found: Finding[]): Record<string, number> => {
   const codes: Record<string, number> = {};
@@ -69,6 +94,69 @@ function parseGcc(out: string): Finding[] {
     const m = GCC_LINE.exec(l);
     if (!m) throw new Error(`a shellcheck line this test cannot read: ${l}`);
     return { file: m[1], line: Number(m[2]), code: m[4], text: m[3] };
+  });
+}
+
+type Source = { file: string; text: string };
+type Origin = { file: string; line: number };
+
+const MARKER = /^# @ccd-lib:(\w+)$/;
+const POINTER = /^# @ccd-lib:(\w+)\b/;
+const isCode = (line: string): boolean => line.trim() !== '' && !line.trimStart().startsWith('#');
+
+/**
+ * The program as one text, `spliceCcd`'s, with where each of its lines came from. A region is read as `spliceCcd` reads
+ * it: the lines after a `# @ccd-lib:<id>` line, up to the next one, less trailing empty lines. `unlinted` names each
+ * library code line no pointer splices back (above a library's first marker, or in a region nothing points at). The
+ * map is checked against `spliceCcd`'s text line by line, so the two cannot drift apart.
+ */
+function programText(main: Source, libs: readonly Source[]): { text: string; origin: Origin[]; unlinted: string[] } {
+  const text = spliceCcd(main.text, libs.map((l) => l.text));
+  const regions = new Map<string, { lines: string[]; origin: Origin[] }>();
+  const outside: { line: string; at: Origin }[] = [];
+  for (const lib of libs) {
+    let cur: { lines: string[]; origin: Origin[] } | null = null;
+    lib.text.split('\n').forEach((line, i) => {
+      const m = MARKER.exec(line);
+      if (m) { cur = { lines: [], origin: [] }; regions.set(m[1]!, cur); return; }
+      if (cur === null) { outside.push({ line, at: { file: lib.file, line: i + 1 } }); return; }
+      cur.lines.push(line);
+      cur.origin.push({ file: lib.file, line: i + 1 });
+    });
+  }
+  for (const r of regions.values()) {
+    while (r.lines.length > 0 && r.lines[r.lines.length - 1] === '') { r.lines.pop(); r.origin.pop(); }
+  }
+  const lines: string[] = [];
+  const origin: Origin[] = [];
+  const used = new Set<string>();
+  main.text.split('\n').forEach((line, i) => {
+    const id = POINTER.exec(line)?.[1];
+    const r = id === undefined ? undefined : regions.get(id);
+    if (r === undefined || r.lines.length === 0) {
+      lines.push(r === undefined ? line : '');
+      origin.push({ file: main.file, line: i + 1 });
+      if (r !== undefined) used.add(id!);
+      return;
+    }
+    used.add(id!);
+    lines.push(...r.lines);
+    origin.push(...r.origin);
+  });
+  if (lines.join('\n') !== text) throw new Error('the program\'s line map does not give spliceCcd\'s text');
+  const unlinted = [
+    ...outside.filter((o) => isCode(o.line)).map((o) => o.at),
+    ...[...regions].filter(([id]) => !used.has(id)).flatMap(([, r]) => r.origin.filter((_, k) => isCode(r.lines[k]!))),
+  ].map((o) => `${o.file}:${o.line}`);
+  return { text, origin, unlinted };
+}
+
+/** Each finding in the spliced program, named at the file and line it came from. */
+function mapBack(found: readonly Finding[], origin: readonly Origin[]): Finding[] {
+  return found.map((f) => {
+    const at = origin[f.line - 1];
+    if (at === undefined) throw new Error(`a finding at line ${f.line} of the spliced program maps to no file: ${f.code} ${f.text}`);
+    return { ...f, file: at.file, line: at.line };
   });
 }
 
@@ -149,12 +237,36 @@ function shellcheck(file: string, cwd: string): Promise<Finding[]> {
   });
 }
 
-/** Every file, the largest first so the long ones do not end up alone at the tail. */
+/** The program, `ccd/ccd` and `libs`, spliced into one scratch file, linted once and mapped back. */
+async function lintProgram(libs: readonly string[], cwd: string): Promise<Finding[]> {
+  const read = (file: string): Source => ({ file, text: readFileSync(path.join(cwd, file), 'utf8') });
+  const p = programText(read('ccd/ccd'), libs.map(read));
+  if (p.unlinted.length > 0) {
+    throw new Error(`library code that no \`# @ccd-lib:\` pointer in ccd/ccd splices back, so the lint would never read it: ${p.unlinted.join(', ')}`);
+  }
+  const dir = mkdtempSync(path.join(tmpdir(), 'shellcheck-program-'));
+  try {
+    writeFileSync(path.join(dir, PROGRAM_FILE), p.text);
+    return mapBack(await shellcheck(PROGRAM_FILE, dir), p.origin);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+/** Every file, the largest first so the long ones do not end up alone at the tail. The program's members are one job,
+ *  `lintProgram`, when `ccd/ccd` is among them. */
 async function analyse(files: string[], cwd: string): Promise<Finding[]> {
-  const queue = [...files].sort((a, b) => statSync(path.join(cwd, b)).size - statSync(path.join(cwd, a)).size);
+  const size = (f: string): number => statSync(path.join(cwd, f)).size;
+  const members = programFiles(files);
+  const whole = members[0] === 'ccd/ccd';
+  const jobs: { size: number; run: () => Promise<Finding[]> }[] = [
+    ...files.filter((f) => !whole || !members.includes(f)).map((f) => ({ size: size(f), run: () => shellcheck(f, cwd) })),
+    ...(whole ? [{ size: members.reduce((n, f) => n + size(f), 0), run: () => lintProgram(members.slice(1), cwd) }] : []),
+  ];
+  const queue = jobs.sort((a, b) => b.size - a.size);
   const found: Finding[] = [];
   const lane = async (): Promise<void> => {
-    for (let f = queue.shift(); f !== undefined; f = queue.shift()) found.push(...await shellcheck(f, cwd));
+    for (let j = queue.shift(); j !== undefined; j = queue.shift()) found.push(...await j.run());
   };
   await Promise.all(Array.from({ length: LANES }, lane));
   return found;
@@ -199,6 +311,14 @@ describe('the ratchet rules', () => {
     expect(failures).toHaveLength(1);
     expect(failures[0]).toContain('a new bash file must have 0 findings');
     expect(failures[0]).toContain(cite('new.sh', 2, 'SC2164'));
+  });
+
+  it('ccd/lib/ccrc-*.sh is its own pin: the sweeps source it, ccd does not, so it is no part of the program', () => {
+    expect(pinKey('ccd/ccd')).toBe(GROUP);
+    expect(pinKey('ccd/lib/disk-retention.sh')).toBe(GROUP);
+    expect(pinKey('ccd/lib/a-future-slice.sh')).toBe(GROUP);
+    expect(pinKey('ccd/lib/ccrc-settings.sh')).toBe('ccd/lib/ccrc-settings.sh');
+    expect(pinKey('ccd/ccrc')).toBe('ccd/ccrc');
   });
 
   it('ccd/ccd and ccd/lib are one pin: code moved between them does not trip it, and a new lib file joins the group', () => {
@@ -248,6 +368,73 @@ describe('the ratchet rules', () => {
     expect(gate(null, '0.11.0', true, 'darwin').verdict).toBe('skip');
     expect(gate('0.11.0', '0.11.0', false, 'darwin')).toEqual({ verdict: 'run' });
   });
+});
+
+describe('the program is linted as one text', () => {
+  const MAIN = ['#!/usr/bin/env bash', 'limit=5', 'f() {', '  local unused=1', '  echo "$limit"', '}', 'f', ''].join('\n');
+  const MOVED_MAIN = ['#!/usr/bin/env bash', 'limit=5', '# @ccd-lib:f', 'f', ''].join('\n');
+  const MOVED_LIB = ['# ccd/lib/moved.sh: a header', '# @ccd-lib:f', 'f() {', '  local unused=1', '  echo "$limit"', '}', ''].join('\n');
+
+  it('FIXTURE: the spliced text is spliceCcd\'s, and every line of it maps back to the file and line it came from', () => {
+    const p = programText({ file: 'ccd/ccd', text: MOVED_MAIN }, [{ file: 'ccd/lib/moved.sh', text: MOVED_LIB }]);
+    expect(p.text).toBe(MAIN);
+    expect(p.origin.slice(0, 7)).toEqual([
+      { file: 'ccd/ccd', line: 1 }, { file: 'ccd/ccd', line: 2 },
+      { file: 'ccd/lib/moved.sh', line: 3 }, { file: 'ccd/lib/moved.sh', line: 4 }, { file: 'ccd/lib/moved.sh', line: 5 },
+      { file: 'ccd/lib/moved.sh', line: 6 }, { file: 'ccd/ccd', line: 4 },
+    ]);
+    expect(p.unlinted).toEqual([]);
+    expect(mapBack([finding('program.sh', 4, 'SC2034')], p.origin)).toEqual([finding('ccd/lib/moved.sh', 4, 'SC2034')]);
+    expect(() => mapBack([finding('program.sh', 99, 'SC2034')], p.origin)).toThrow('maps to no file');
+  });
+
+  it('FIXTURE: library code no pointer splices back is named, never silently left out of the lint', () => {
+    const orphan = `${MOVED_LIB}# @ccd-lib:nowhere\ng() {\n  :\n}\n`;
+    const p = programText({ file: 'ccd/ccd', text: MOVED_MAIN }, [{ file: 'ccd/lib/moved.sh', text: orphan }]);
+    // Built, not spelled, as `cite` is: `citations.test.ts` reads a literal file and line as a line citation.
+    const at = (line: number): string => ['ccd/lib/moved.sh', line].join(':');
+    expect(p.unlinted).toEqual([at(8), at(9), at(10)]);
+    // Code above a library's first marker is outside every region too.
+    const above = programText({ file: 'ccd/ccd', text: MOVED_MAIN }, [{ file: 'ccd/lib/moved.sh', text: `x=1\n${MOVED_LIB}` }]);
+    expect(above.unlinted).toEqual([at(1)]);
+  });
+
+  it('REAL: every line of the spliced program maps back to the line it came from, and no library code is left out', () => {
+    const libs = programFiles(bashFiles()).filter((f) => f !== 'ccd/ccd');
+    expect(libs.length, 'the tree holds libraries').toBeGreaterThan(0);
+    const read = (file: string) => ({ file, text: readFileSync(path.join(REPO, file), 'utf8') });
+    const p = programText(read('ccd/ccd'), libs.map(read));
+    expect(p.unlinted).toEqual([]);
+    const lines = p.text.split('\n');
+    const texts = new Map(['ccd/ccd', ...libs].map((f) => [f, read(f).text.split('\n')]));
+    const wrong = p.origin.flatMap((o, i) => (texts.get(o.file)![o.line - 1] === lines[i] ? [] : [`${i + 1} -> ${o.file}:${o.line}`]));
+    expect(wrong).toEqual([]);
+    for (const lib of libs.filter((f) => /^# @ccd-lib:/m.test(read(f).text))) expect(p.origin.some((o) => o.file === lib), lib).toBe(true);
+  });
+
+  it.skipIf(gate(installedVersion(), baseline.shellcheckVersion, Boolean(process.env.CI), process.platform).verdict !== 'run')(
+    'FIXTURE: moving a function between ccd/ccd and a library leaves the count alone', { timeout: 60_000 }, async () => {
+      const dir = mkdtempSync(path.join(tmpdir(), 'shellcheck-program-'));
+      try {
+        const lint = async (files: Record<string, string>): Promise<{ program: Finding[]; perFile: Finding[] }> => {
+          rmSync(path.join(dir, 'ccd'), { recursive: true, force: true });
+          mkdirSync(path.join(dir, 'ccd/lib'), { recursive: true });
+          for (const [f, t] of Object.entries(files)) writeFileSync(path.join(dir, f), t);
+          const names = Object.keys(files);
+          const perFile = (await Promise.all(names.map((f) => shellcheck(f, dir)))).flat();
+          return { program: await analyse(names, dir), perFile };
+        };
+        const before = await lint({ 'ccd/ccd': MAIN });
+        const after = await lint({ 'ccd/ccd': MOVED_MAIN, 'ccd/lib/moved.sh': MOVED_LIB });
+        expect(before.program.map((f) => cite(f.file, f.line, f.code))).toEqual([cite('ccd/ccd', 4, 'SC2034')]);
+        expect(after.program.map((f) => cite(f.file, f.line, f.code)), 'the same finding, named where it now sits')
+          .toEqual([cite('ccd/lib/moved.sh', 4, 'SC2034')]);
+        // Summed per file, the same move reads `limit` as unused in one file and unassigned in the other.
+        expect(after.perFile.length).toBeGreaterThan(before.perFile.length);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
 });
 
 describe('the baseline and its install', () => {

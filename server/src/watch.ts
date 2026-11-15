@@ -172,7 +172,7 @@ import { createWorkerSeen, workerSeenOf, type WorkerSeen, type WorkerSeenBoard }
 import { runStuckPass } from './coord/runStuckPass.js';
 import { isUntoldNotice, untoldPass } from './coord/untold.js';
 import { casesPass } from './coord/casesLane.js';
-import { gatherGenerationReadings, generationsPass, type CompactionsMemo } from './continuity/generationsLane.js';
+import { gatherGenerationReadings, generationsPass, type CompactionsMemo, type EmptyTries } from './continuity/generationsLane.js';
 import { iso } from './continuity/card.js';
 import { runTimersLane, timerListingOf } from './continuity/timerLane.js';
 import { TIMER_MAIL_SENDER } from '../../shared/continuity-timers.js';
@@ -2036,8 +2036,8 @@ export class FleetWatcher {
   /** The generations lane's compactions read cache, and this process's id for its observed stamps. */
   private readonly generationsCompactions: CompactionsMemo = new Map();
   private generationsProc: string | undefined;
-  /** The starts this process held for a failed read (`GenerationsDeps.retried`). */
-  private readonly generationsRetried = new Set<number>();
+  /** The starts this process held for a failed read, and each generation's empty probe try (`GenerationsDeps.retried`, `.emptyTries`). */
+  private readonly generationsRetried = new Set<number>(); private readonly generationsEmptyTries: EmptyTries = new Map();
   /** The launch-profile lane's last logged line (`ProfileLaneMemory`): a log throttle, never a decision's memory. */
   private readonly launchProfileMemory: ProfileLaneMemory = { lastLine: null };
   private delegationLane(): DelegationLane {
@@ -6135,14 +6135,15 @@ export class FleetWatcher {
       const readings = await gatherGenerationReadings(coord, {
         usage: (id) => readUsageMeasured(io, cfg.registryDir, id, Math.floor(this.deps.time.clock.wall() / 1000)),
         eventsStamp: (id) => io.statMeasured(compactionsPaths(cfg.registryDir, id).pre),
+        journalStamp: (id) => io.statMeasured(compactionsPaths(cfg.registryDir, id).journal),
         compactions: (id) => readCompactionsMeasured(io, cfg.registryDir, id),
         turnMark: async (id) => { const r = rec(id); return r === undefined ? { ok: false, reason: 'unmeasured' } : turnMarkFor(reads, r); },
         processStartedAt: async (id) => { const r = rec(id); return r === undefined ? null : processStartedAtFor(reads, r); },
         release: () => this.nodeRelease(),
       }, this.generationsCompactions);
       this.generationsProc ??= this.deps.time.entropy.uuid();
-      generationsPass({ coord, clock: this.deps.time.clock, proc: this.generationsProc, log: (line) => console.warn(line),
-        retried: this.generationsRetried }, {
+      generationsPass({ coord, clock: this.deps.time.clock, entropy: this.deps.time.entropy, proc: this.generationsProc,
+        log: (line) => console.warn(line), retried: this.generationsRetried, emptyTries: this.generationsEmptyTries }, {
         registry: records.map((r) => ({ id: r.id, uuid: r.unmeasured.includes('uuid') ? null : r.uuid,
           lane: r.unmeasured.includes('wrapper') ? null : r.wrapper, child: r.child })),
         // When this tick's registry read began: a start received since is held a pass (review 2006 R1).

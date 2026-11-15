@@ -43,10 +43,11 @@ import {
   type HandoverRead, type NoteByIdRead, type NoteInsert, type NotesRead,
 } from '../continuity/continuityStore.js';
 import * as timers from '../continuity/continuityStore.js';
+import * as probes from '../continuity/continuityStore.js';
 import type { TimerActor, TimerCancelReason } from '../../../shared/continuity-timers.js';
 import type { GenView } from '../continuity/generationMachine.js';
 import type { Observed } from '../time/observed.js';
-import type { HandoverNote, RenewalTrigger } from '../../../shared/continuity.js';
+import type { BookState, ContinuityReadDoor, HandoverNote, RenewalTrigger } from '../../../shared/continuity.js';
 import type { Invitation } from './peerBound.js';
 import { liftReviewCapByCoordinator, raiseReviewCapAsk, reviewCapGate, reviewCapStatesOf, type CoordLiftResult, type ReviewCapState } from './reviewCapStore.js';
 import { renderEnvelope } from './envelope.js';
@@ -5486,6 +5487,16 @@ export class CoordStore {
   noteById(id: number): NoteByIdRead { return noteById(this.db, id); }
   putHandover(h: { generationId: number; note: HandoverNote; dropped: number; at: number }): { ok: true; fresh: boolean; dropped: number } | { ok: false } { return putHandover(this.db, h); }
   handoverBefore(identity: string, liveGenerationId: number): HandoverRead { return handoverBefore(this.db, identity, liveGenerationId); }
+  /** Overlord §3.3.5 C41 (the probes piece, `continuityStore.ts`): the lane's round writer, the probe door's answer writer, the
+   *  card and note GETs' read stamp, and the reads. */
+  openRound(r: probes.RoundInsert): ReturnType<typeof probes.openRound> { return probes.openRound(this.db, r); }
+  answerRound(roundId: string, sessionId: string, answers: readonly probes.ProbeAnswerWrite[], book: BookState, at: number): ReturnType<typeof probes.answerRound> { return probes.answerRound(this.db, roundId, sessionId, answers, book, at); }
+  probeRows(generationId: number): probes.ProbeRowsRead { return probes.probeRows(this.db, generationId); }
+  openProbeRound(sessionId: string): probes.ProbeRowsRead { return probes.openProbeRound(this.db, sessionId); }
+  probeRoundRows(roundId: string, sessionId: string): probes.ProbeRowsRead { return probes.probeRoundRows(this.db, roundId, sessionId); }
+  stampContinuityRead(sessionId: string, door: ContinuityReadDoor, at: number): { ok: boolean } { return probes.stampContinuityRead(this.db, sessionId, door, at); }
+  lastContinuityRead(sessionId: string): ReturnType<typeof probes.lastContinuityRead> { return probes.lastContinuityRead(this.db, sessionId); }
+  snapshotFacts(id: string): ReturnType<typeof probes.snapshotFacts> { return probes.snapshotFacts(this.db, id); }
 
   /** D-6909: the review-cap state of a batch of runs (`reviewCapStore.ts`). */
   reviewCapStates(ids: readonly number[]): Map<number, ReviewCapState> {

@@ -30,19 +30,25 @@ THE PARITY SECTION (D-8618) is measured on that path from what the bridge alread
 wire and the client's answer is unchanged: each reasoning-store lookup of the translation (`counted_lookup`), each
 POST's `reasoning.effort` as the body was built (`_post`), and each upstream response whose terminal
 `response.completed` or `response.incomplete` the reducer saw (`_reduce`, on every return, the error ones included):
-its `diagnostics`, and the milliseconds from the POST's start to the first output released and to the terminal.
+its `diagnostics` (the served tier among them, D-8632), and the milliseconds from the POST's start to the first output
+released and to the terminal, and (D-8633) to the last reasoning item before that first output: after each batch of
+parsed events `_reduce` notes the batch's instant whenever the reducer's `reasoning_lead` (R22) grew, and since that
+count stops growing at the first released block, the last instant noted is that reasoning item's. The reducer reads no
+clock; the instant is the one `first_at` is taken with, so `reasoningMs` never exceeds `firstOutputMs`.
 
-THE REQUEST MARKERS (D-8622, D-8623). Each POST reads the lane's request markers (`backend.markers`) and the request
-model's catalogue row (`catalogue_rows`, read with the catalogue check), and sends what `backend.additions` decides
-from them, and with `bridge-turn-state` the turn's captured `x-codex-turn-state`. THE FALLBACK: an upstream 400 to a
-POST that carried at least one marker's addition is retried once with none of them, and none is sent for the rest of
-that client message; only before any byte of the message reached the client, and never for a 400 that is not the plain
-refusal row (`kind` `refused`: an overflow or a policy refusal is not cured by removing a field). The retry is counted
-(the parity row's `fallbacks`), not hidden; the first 400 is not recorded in the status file and is no 4xx outcome,
-and `stats.request` does not count the retry again, while `parity_effort` counts each body sent. THE TURN (D-8623):
-`inbound.turn_key` names a request's Claude Code turn by a hash; the first 2xx response of a turn that carries the
-header sets its value (a non-2xx never reaches Codex's capture: its transport returns an error first), later ones do not
-replace it, and every later POST of the turn echoes it. `TurnStates` holds at most TURN_STATES_MAX turns in memory,
+THE REQUEST MARKERS (D-8622, D-8623, D-8632). Each POST reads the lane's request markers (`backend.markers`) and the
+request model's catalogue row (`catalogue_rows`, read with the catalogue check), and sends what `backend.additions`
+decides from them (with `bridge-service-tier-fast`, `service_tier: priority` on every POST, a compaction request's too,
+whatever the row), and with `bridge-turn-state` the turn's captured `x-codex-turn-state`. Codex's `x-codex-routing-hint`
+header is never sent with the tier: the bridge presents itself as ccrc. THE FALLBACK: an upstream 400 to a POST that
+carried at least one marker's addition is retried once with none of them (`service_tier` among them), and none is sent
+for the rest of that client message; only before any byte of the message reached the client, and never for a 400 that is
+not the plain refusal row (`kind` `refused`: an overflow or a policy refusal is not cured by removing a field). The
+retry is counted (the parity row's `fallbacks`), not hidden; the first 400 is not recorded in the status file and is no
+4xx outcome, and `stats.request` does not count the retry again, while `parity_effort` counts each body sent. THE TURN
+(D-8623): `inbound.turn_key` names a request's Claude Code turn by a hash; the first 2xx response of a turn that carries
+the header sets its value (a non-2xx never reaches Codex's capture: its transport returns an error first), later ones do
+not replace it, and every later POST of the turn echoes it. `TurnStates` holds at most TURN_STATES_MAX turns in memory,
 least recent dropped first, and is cleared when the credential reading's account id changes (Codex resets it on an auth
 owner change). The value reaches no stats, status or log line (stats.TOKEN_HEADERS refuses it in the stats file; a
 recording made under the operator's `record-streams` marker keeps every response header, as it always has).
@@ -987,12 +993,14 @@ class _Request:
         marks = frozenset() if self.fell_back else backend.markers(st.cfg.lane_dir)
         add = backend.additions(self.row, marks)
         body = backend.build_body(turn, instructions_form=backend.instructions_form(st.cfg.lane_dir),
-                                  reasoning_context=add.reasoning_context, verbosity=add.verbosity)
+                                  reasoning_context=add.reasoning_context, verbosity=add.verbosity,
+                                  service_tier=add.service_tier)
         echo = None  # D-8623: the turn's captured state, only with the marker
         if backend.TURN_STATE_MARKER in marks and self.turn_key() is not None:
             echo = st.turns.get(self.turn_key(), getattr(reading, "account_id", None))
         self.marks = marks
-        self.carried = add.carried + ((backend.TURN_STATE_MARKER,) if echo is not None else ())
+        sent = set(add.carried) | ({backend.TURN_STATE_MARKER} if echo is not None else set())
+        self.carried = tuple(m for m in backend.MARKERS if m in sent)  # in MARKERS' order
         ans.markers = self.carried  # D-8619
         if counted:  # D-8622: the fallback's retry is the same request, not a second one
             st.stats.request(ROUTE, turn.model, turn.countable_bytes)
@@ -1144,12 +1152,14 @@ class _Request:
         return up if rec is None else record.tee(up, rec)  # type: ignore[return-value]
 
     def _observe(self, turn: inbound.NeutralRequest, red: reducer.Reducer, ans: reqrecord.Answer,
-                 first_at: Optional[float], end_at: Optional[float]) -> None:
+                 first_at: Optional[float], end_at: Optional[float], reasoning_at: Optional[float]) -> None:
         """One upstream 2xx answer's end, observed once into `ans` (D-8619), and the parity counts read from it
         (D-8618): counted when the reducer saw its terminal `response.completed` or `response.incomplete`
-        (`diagnostics`), whatever the bridge then answered."""
+        (`diagnostics`), whatever the bridge then answered. `reasoning_at` (D-8633) counts only beside a first
+        output."""
         ans.ended()
         ans.first_ms = ans.since_post(first_at)
+        ans.reasoning_ms = ans.since_post(reasoning_at) if first_at is not None else None
         ans.total_ms = ans.since_post(end_at)
         d = red.diagnostics
         if d is None:
@@ -1157,7 +1167,7 @@ class _Request:
         ans.measure(d)
         self.state.stats.parity_response(ROUTE, turn.model, served=ans.served, usage=ans.usage,
                                          transformations=ans.transformations, first_output_ms=ans.first_ms,
-                                         total_ms=ans.total_ms)
+                                         total_ms=ans.total_ms, served_tier=ans.tier, reasoning_ms=ans.reasoning_ms)
 
     def _reduce(self, turn: inbound.NeutralRequest, up: backend.Upstream, out: stream.AnthropicStream,
                 rid: Optional[str], reading: object, ans: reqrecord.Answer) -> object:
@@ -1168,6 +1178,8 @@ class _Request:
         last_event = head_at
         timed_out = False
         first_at = end_at = None  # type: Optional[float]  (D-8618: the first output released, the terminal seen)
+        reasoning_at = None  # type: Optional[float]  (D-8633: the reducer's reasoning_lead last grew)
+        lead = 0
         try:
             while True:
                 now = time.monotonic()
@@ -1185,6 +1197,9 @@ class _Request:
                         break
                 if red.terminal is not None and end_at is None:
                     end_at = now
+                if red.reasoning_lead > lead:  # D-8633: it grows only before the first block is released (R22)
+                    lead = red.reasoning_lead
+                    reasoning_at = now
                 released = red.release()
                 if released and first_at is None:
                     first_at = now
@@ -1205,7 +1220,7 @@ class _Request:
                     out.ping()
         finally:
             feed.stop()
-            self._observe(turn, red, ans, first_at, end_at)  # every return, the error ones included (D-8618)
+            self._observe(turn, red, ans, first_at, end_at, reasoning_at)  # every return, the errors too (D-8618)
         term = red.finish()
         released = red.release()
         if released:

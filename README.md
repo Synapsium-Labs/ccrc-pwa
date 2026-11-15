@@ -547,7 +547,7 @@ that copy. The hook installer points each rostered home's `statusLine` at that s
 none is set; a home with a status line of its own keeps it, and reports no `~/.cc-limits` telemetry
 unless that line runs ccrc's script. Beyond those two files, every rostered home gets ccrc's managed
 hook entries in its `settings.json` and five skills (`ccrc-coordinator`, `ccrc-worker`, `ccrc-reviewer`, `ccrc-history`
-and graphify's) — on a fresh box that home is your own `~/.claude`, so the skills are listed in every
+and graphify's; the Overlord's `ccrc-overlord` is staged once on the box instead, in no home) — on a fresh box that home is your own `~/.claude`, so the skills are listed in every
 Claude Code session you start there, while the hook entries act only inside a `ccd` session's
 `cc-<id>` tmux session and exit at once anywhere else.
 
@@ -1500,7 +1500,7 @@ step 10 of
      named here, derived from `gate.ts`'s own EXEMPT reasons (D-1233/D-1234). -->
 
 What is gated, and what is not: **everything except** `/health` (deploy's own
-liveness gate reads the shipped sha out of it), the eighty-two machine lanes the
+liveness gate reads the shipped sha out of it), the eighty-four machine lanes the
 fleet host reaches (thirty-nine box-token-consulting coordination routes plus
 the Linear proxy's routes under `/api/linear/proxy/`, which a session's `ccrc-api linear`
 verbs call and which refuse any call without the token whatever `CCRC_AUTH` says,
@@ -1509,7 +1509,8 @@ and `/api/items/:id/{confirm,return,withdraw,blocking}`),
 the plan verbs' routes (`POST /api/programmes/:slug/plan` and `/api/programmes/:slug/plan/{met,tickets,tickets/move,epics/drop,close}`),
 the hook's start report (`POST /api/sessions/:id/start`), the card door (`GET /api/sessions/:id/card`), the note door
 (`POST /api/sessions/:id/notes`, `GET /api/sessions/:id/notes`, `POST /api/sessions/:id/handover`), the timer doors
-(`POST /api/timers`, `GET /api/timers`, `POST /api/timers/:id/cancel`),
+(`POST /api/timers`, `GET /api/timers`, `POST /api/timers/:id/cancel`), the probe door
+(`GET /api/sessions/:id/probe`, `POST /api/sessions/:id/probe`),
 `/api/notify`, which refuses an absent token like every lane,
 `/api/pools/epoch` and `/api/updates/intent/:nodeId` — the callers are `curl` inside a
 Claude Code session, `ccd-pool-sync.timer` and, from update-management W4, `ccd-update-sync.timer`, none with a cookie jar, though the
@@ -1692,8 +1693,8 @@ overflowed onto it returns home when home has headroom again *and* home is still
 servable for the project's pool;
 `telemetry` is `'anthropic'`, `'codex'`, `'openrouter'` or `'none'`: `'anthropic'` means the statusline publishes this
 account's 5h/7d windows and ccd treats the lane as speaking Claude Code's own protocol
-(`CCRC_ANTHROPIC_BACKEND` — `--remote-control`, the spawn-time effort, the 429 exclusion writer and Fable
-eligibility all key on it); `'codex'` means usage is published in Codex's weekly shape by the lane's own
+(`CCRC_ANTHROPIC_BACKEND` — `--remote-control`, the 429 exclusion writer and Fable eligibility key on it, and the
+spawn-time effort keys on it or on `'codex'`); `'codex'` means usage is published in Codex's weekly shape by the lane's own
 publisher, never the statusline; `'openrouter'` marks an OpenRouter key lane, which has no
 `~/.cc-limits` writer, is not an Anthropic backend and carries a class registry (D-5521);
 `'none'` says the account will never report rate limits,
@@ -2505,8 +2506,8 @@ It runs on the system `python3`, 3.9 or later (below that `ccrc codex start` ref
 needs no LiteLLM runtime. It sends `originator: ccrc` and a ccrc user agent, never presenting itself as Codex. Claude
 Code's top-level system prompt travels as the first developer message, with no `instructions` field and no prompt of the
 bridge's own; a lane directory holding the marker file `bridge-instructions` (no ccrc code writes it) sends it as
-`instructions` instead. Three more marker files, `bridge-reasoning-all-turns`, `bridge-verbosity` and
-`bridge-turn-state`, each add one part of native Codex's request (below). A
+`instructions` instead. Four more marker files, `bridge-reasoning-all-turns`, `bridge-verbosity`, `bridge-turn-state`
+and `bridge-service-tier-fast`, each add one part of native Codex's request (below). A
 mid-conversation `role: "system"` entry becomes a developer message in its place, and effort follows the shim's own rule
 (above). Each reply's blocks are built from the upstream's finished items, except that a message's first text part
 streams live as it arrives (so a long compaction summary shows as it is written), and each reply streams zero usage in
@@ -2573,23 +2574,27 @@ stopped one), foreign and unmeasured
 rows; a FAIL, `runs a retired refresher`, when the lane's LiteLLM tier or shim runs beside it; a FAIL for the `siwc`
 route; no half-up row and no `litellm.yaml` row. On a lane in either mode, a stats file, store, request record or its
 older generation that is not a regular file of mode 0600 is a FAIL. Removing the lane reaps both files, the store's
-set-aside copy, the recordings directory, the request record with its older generation, and the marker files, the three
+set-aside copy, the recordings directory, the request record with its older generation, and the marker files, the four
 request markers and `record-requests` below among them, with the rest of its state.
 
 **The stats file's `parity` section** measures what parity with native Codex hinges on, per route and model, from what
 the bridge already receives and sends, so nothing new goes on the wire (D-8618). Each row counts the upstream responses
 that reached `response.completed` or `response.incomplete` and their input, cached, output and reasoning tokens; the
 `reasoning.effort` each request carried (`none` when it carried none); whether the model that answered is the one asked
-for; the backend's `input_transformations` by type, action and reason, so `reasoning:removed:turn_boundary` counts the
+for; the service tier the response named (`servedTier`: `priority`, `default` and so on, `absent` when it named none, at
+most 16 tiers, then `overflow`); the backend's `input_transformations` by type, action and reason, so `reasoning:removed:turn_boundary` counts the
 earlier reasoning the backend dropped; each reasoning-store lookup by what it found (per lookup, so a long conversation
-counts its old turns again); and the milliseconds to the first output and to the end, in fixed buckets. Every name in
+counts its old turns again); and the milliseconds to the first output and to the end, in fixed buckets, and beside the
+first output's, for a response that finished a reasoning item before its first output, the milliseconds to the last such
+item (`reasoningMs`, the same buckets), so a slow first output reads as reasoning or as waiting (D-8633). Every name in
 it is bounded like the others. It is not drift: nothing in it reaches doctor's WARN or the watch's drift check, and
 `ccrc codex status` does not show it. The stats file is written at most every 10 seconds while answers come, and again
 once the bridge has been idle for 10 seconds after its last answer, so a run's figures are on disk soon after the run
 ends rather than at the next request (D-8624).
 
-**The request markers** close three gaps between the bridge's request and native Codex's (D-8622, D-8623). Each is off
-until an operator touches its file in the lane directory (no ccrc code writes them), and each is read at every request:
+**The request markers** close four gaps between the bridge's request and native Codex's (D-8622, D-8623, D-8632). Each
+is off until an operator touches its file in the lane directory (no ccrc code writes them), and each is read at every
+request:
 - `bridge-reasoning-all-turns` adds `reasoning.context: "all_turns"`, after the effort, for a model whose catalogue row
   says `useResponsesLite: true`;
 - `bridge-verbosity` adds `text.verbosity`, the row's `defaultVerbosity`, for a row that says `supportVerbosity: true`,
@@ -2598,8 +2603,11 @@ until an operator touches its file in the lane directory (no ccrc code writes th
   every later request of that turn. A turn is the requests that share their latest user message holding no tool
   result: the same message at the same place in the conversation, so two turns that open on the same words are two.
   The value is kept in memory only, for at most 256 turns, and is cleared when the credential's account changes.
+- `bridge-service-tier-fast` sends `service_tier: "priority"`, native Codex's Fast mode, right after `stream` in every
+  request, compaction requests included, for any model: nothing in the catalogue gates it. The `parity` row's
+  `servedTier` shows which tier the backend answered with, so whether it honoured the request can be read there.
 
-The bridge never sends Codex's internal Lite header. When the backend answers 400 to a request that carried any of
+The bridge never sends Codex's internal Lite header, or the routing hint Codex sends beside a service tier. When the backend answers 400 to a request that carried any of
 these, the bridge sends it once more without them, and sends none of them for the rest of that message; it does not
 for a context overflow or a policy refusal, which no removed field cures. The client sees only the second answer, and
 the first is not written to the credential's status file. The `parity` row counts the requests that carried each
@@ -2622,11 +2630,12 @@ for a subagent's request, never its id), `message` and `post` (the client messag
 request's index within it: continuations and retries count on), `route` and `model` (the `parity` row's), `status`
 (null when no answer came), `outcome` (the word the stats file counts for what the bridge did with the answer: `2xx`,
 `continuations`, `continuation-cap`, `refresh-after-401`, `4xx`, `5xx`, `client-gone`, `drain-cut`, or `fallback` for the
-400 that started a fallback), `served`, `effort`, the four token counts, `firstOutputMs` and `totalMs` (whole
-milliseconds, from the same instants the `parity` histograms bucket), `inputTransformations`, `replay` (the message's
+400 that started a fallback), `served`, `servedTier` (the `parity` row's word for the tier the response named, or
+`absent`), `effort`, the four token counts, `firstOutputMs`, `reasoningMs` (null when no reasoning item finished before
+the first output) and `totalMs` (whole milliseconds, from the same instants the `parity` histograms bucket), `inputTransformations`, `replay` (the message's
 reasoning-store lookups, on its first request only), `markers`, `fallback` and, when set, `turnState`. A field the
-answer did not reach is null, and so are `served`, the token counts, `inputTransformations`, `firstOutputMs` and
-`totalMs` of every answer the `parity` row counted no response for (a non-2xx, a stream that broke, even one that
+answer did not reach is null, and so are `served`, `servedTier`, the token counts, `inputTransformations`,
+`firstOutputMs`, `reasoningMs` and `totalMs` of every answer the `parity` row counted no response for (a non-2xx, a stream that broke, even one that
 released output first), so the `parity` histograms rebuilt from the rows are the stats file's own. It never holds conversation text, a tool name, the
 prompt cache key, a turn-state value, a header value other than the session id, an account id or a token. A row that
 cannot be written (a full disk, a directory in the file's place) never fails the request: the stats file counts it as
@@ -3508,6 +3517,13 @@ never reads back, since the status line shows a model's default level the same w
 tick types it. `default` never reads back either, since no model id names it. `haiku` takes no effort level, and
 the pair is refused whichever order it arrives in. A session
 with no record spawns as it always did.
+A Codex lane (`telemetry: 'codex'`) takes the effort level for level with an Anthropic lane (D-8631): the record's
+level, else the box's spawn default, rides its spawn as `--effort`, and a live change is typed into its pane. There
+`ultracode` is rendered as `xhigh`, and `workflow` and `subagent` are stamped `inert`, unless the operator has placed
+`$REG/codex-lane-workflows` by hand (it has no writer in the tree): then a Codex spawn composes the workflow
+`--settings` and the record's own effort word as an Anthropic spawn does, while a live move to `ultracode` is still
+typed as `xhigh` and takes its workflows only at the next spawn. `subagent` stays inert on a Codex lane either way. A
+lane that is neither Anthropic nor Codex stamps `effort` inert too.
 
 **From the phone**, the session header's model and effort chips (or **Change model** / **Change effort** in its
 menu) write one field each through `POST /api/sessions/:id/route`, which runs `ccd route … --apply` (`501` from a
@@ -4181,7 +4197,7 @@ honest boundary — this section covers only what that one does not: the install
 lane and the skills' client, the PWA surfaces, the disaster-recovery drill, the
 Build 4 dogfood runbook, cross-repo programmes, and workspace holds.
 
-**All five skills ship to every rostered account's config dir.** The
+**All five skills ship to every rostered account's config dir, and `ccrc-overlord` is staged once per box (below).** The
 coordinator's protocol is now a trio: its worker counterpart is the
 `ccrc-worker` skill (`ccd/worker-skill/SKILL.md`, twenty clauses pinned by
 `server/test/worker-skill.test.ts`), and its reviewer counterpart is the
@@ -4217,16 +4233,21 @@ and its MIT notice, `LICENSE.lossless-claw`, is copied into every home beside it
 A fifth, `ccrc-linear` (`ccd/linear-skill/`, installed by `ccd/install-linear-skill.sh`, #1444), rides the same lanes
 into the same homes and teaches every session the `ccrc-api linear` verbs (below); like the history skill it points
 into no other skill's tree, and doctor's `skills` check and `ccrc doctor --fix` cover it too.
+The Overlord's skill, `ccrc-overlord` (`ccd/overlord-skill/SKILL.md`, twenty-two clauses pinned by
+`server/test/overlord-skill.test.ts`, with four references), goes in no home: `ccd/install-overlord-skill.sh`, its one
+writer, stages it once at `~/.cc-sessions/overlord-skill` on every box `_inst_skills` serves, and deploy's agent arm,
+doctor's `skills` check and `ccrc doctor --fix` stage and measure that copy. It acts only under `overlord-v1`, only
+the `overlord` launch profile loads it, and a subagent cannot load it (below).
 
-**None of the three role skills (`ccrc-coordinator`, `ccrc-worker` and `ccrc-reviewer`; not `ccrc-history`) is a subagent's to load, and the hook now enforces it (D-4934).** Each skill's
+**None of the four role skills (`ccrc-coordinator`, `ccrc-worker`, `ccrc-reviewer` and `ccrc-overlord`; not `ccrc-history`) is a subagent's to load, and the hook now enforces it (D-4934).** Each skill's
 description says "Never use it inside a subagent": a session started by another session's Agent tool or a
 workflow `agent()` call returns its report to its parent, and loading one of these makes it act as the
 session instead (ack mail, take claims, send wave-done or review-done, open or dispatch runs, all under
 the session's identity). Wording alone did not hold, since a subagent on a Codex lane loaded the reviewer
 skill as its first action after that wording shipped. So `ccd/session-hook.sh`'s `PreToolUse` arm denies the
-`Skill` call itself when its payload carries a non-empty `agent_id` and names one of the three, on every
+`Skill` call itself when its payload carries a non-empty `agent_id` and names one of the four, on every
 lane; the deny is listed under "What replaced it" (R1's stdout paragraph) and pinned by
-`server/test/session-hook-role-skill-deny.test.ts`, which also pins the three names against the skills'
+`server/test/session-hook-role-skill-deny.test.ts`, which also pins the four names against the skills'
 `name:` frontmatter. Every other skill stays open to a subagent, and the main thread is never asked.
 
 **The skills' one client is `~/.local/bin/ccrc-api`** (`ccd/ccrc-api`), a closed
@@ -6260,10 +6281,10 @@ is that the read side lives only where ccrc owns the file it is written in, and 
   coordinator merges, workers never do; a speed bump on that one verb, not a wall — the bypass deny
   (landing-order wave 2b, "The native merge queue" above) answers every session's `--admin` merge and `gh api`
   merge in the same reason slot, with the worker deny's reason first), the role-skill deny on a `Skill` call from a subagent (a payload with a non-empty
-  `agent_id`) that names `ccrc-worker`, `ccrc-reviewer` or `ccrc-coordinator`, exactly or behind one
+  `agent_id`) that names `ccrc-worker`, `ccrc-reviewer`, `ccrc-coordinator` or `ccrc-overlord`, exactly or behind one
   `<namespace>:` prefix, with the name read as Claude Code reads it (trimmed of JavaScript's `trim` set,
   then ONE leading `/` stripped, so ` ccrc-worker` and `/ccrc-worker` are the worker skill) (D-4934: those
-  three skills make whoever loads them act as the session, and a
+  four skills make whoever loads them act as the session, and a
   subagent cannot be the session; any other skill, and the main thread, pass; a speed bump, since the
   `SKILL.md` files stay readable), the Read nudge's `additionalContext` on a nudged call (R6,
   below), or the landing advisory's on a sync of main — a deny supersedes any advice built for the same

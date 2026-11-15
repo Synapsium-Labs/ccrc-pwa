@@ -970,14 +970,15 @@ describe.skipIf(!PY)('the store entry: the reasoning store\'s state for this pro
 const BUCKETS = ['250', '500', '1000', '2000', '4000', '8000', '16000', '32000', '64000', 'inf'];
 const zeros = (keys: string[]): Record<string, number> => Object.fromEntries(keys.map((k) => [k, 0]));
 const REPLAY = ['text-hit', 'text-empty', 'text-absent', 'call-hit', 'call-absent'];
-/** D-8622: the request markers, in backend.MARKERS' order. */
-const MARKERS = ['bridge-reasoning-all-turns', 'bridge-verbosity', 'bridge-turn-state'];
+/** D-8622: the request markers, in backend.MARKERS' order (D-8632's last). */
+const MARKERS = ['bridge-reasoning-all-turns', 'bridge-verbosity', 'bridge-turn-state', 'bridge-service-tier-fast'];
 /** A parity row as the writers leave it when they have counted nothing, with `over` laid on top. */
 function parityRow(over: Record<string, unknown> = {}): Line {
   return {
     responses: 0, inputTokens: 0, cachedTokens: 0, outputTokens: 0, reasoningTokens: 0, effort: {},
-    served: { same: 0, other: 0, absent: 0 }, servedOther: {}, inputTransformations: {}, responsesWithTransformations: 0,
-    replay: zeros(REPLAY), firstOutputMs: zeros(BUCKETS), totalMs: zeros(BUCKETS),
+    served: { same: 0, other: 0, absent: 0 }, servedOther: {}, servedTier: {}, inputTransformations: {},
+    responsesWithTransformations: 0, replay: zeros(REPLAY), firstOutputMs: zeros(BUCKETS), reasoningMs: zeros(BUCKETS),
+    totalMs: zeros(BUCKETS),
     markers: zeros(MARKERS), fallbacks: zeros(MARKERS), turnState: { captured: 0, echoed: 0 }, ...over,
   };
 }
@@ -1020,6 +1021,7 @@ describe.skipIf(!PY)('the parity section (D-8618)', () => {
     expect(snap.doc.parity[ROUTE_KEY]).toEqual(parityRow({
       responses: 4, inputTokens: 151, cachedTokens: 21, outputTokens: 10, reasoningTokens: 4,
       served: { same: 1, other: 2, absent: 1 }, servedOther: { 'model-6.1-beta': 2 },
+      servedTier: { absent: 4 }, // none of them named a service tier (D-8632)
       inputTransformations: { 'reasoning:removed:turn_boundary': 2, 'message:changed:none': 1 },
       responsesWithTransformations: 1,
       // an upper bound is inclusive; a response with no output counts only in totalMs
@@ -1072,14 +1074,14 @@ describe.skipIf(!PY)('the parity section (D-8618)', () => {
     ]);
     // each response is counted, and nothing malformed in either is: no token, no served word, no key, no bucket
     expect(snap.doc.parity[ROUTE_KEY]).toEqual(parityRow({
-      responses: 2, responsesWithTransformations: 1, served: { same: 0, other: 0, absent: 1 },
+      responses: 2, responsesWithTransformations: 1, served: { same: 0, other: 0, absent: 1 }, servedTier: { absent: 2 },
     }));
     const [, , notMapping] = await run(home, [
       open(path.join(path.dirname(file), 'third.json')),
       response({ usage: 'lots', transformations: { type: 'reasoning' }, first_output_ms: 'soon', total_ms: { float: 'inf' } }),
       { op: 'stats-snapshot' },
     ]);
-    expect(notMapping.doc.parity[ROUTE_KEY]).toEqual(parityRow({ responses: 1, served: { same: 0, other: 0, absent: 1 } }));
+    expect(notMapping.doc.parity[ROUTE_KEY]).toEqual(parityRow({ responses: 1, served: { same: 0, other: 0, absent: 1 }, servedTier: { absent: 1 } }));
   });
 
   it('each open map reaches OVERFLOW at its cap: 16 effort levels, 16 served models, 32 transformations', async () => {
@@ -1215,15 +1217,17 @@ describe.skipIf(!PY)('the parity section: the request markers (D-8622, D-8623)',
       call('parity_marker', ['backend', MODEL, 'bridge-reasoning-all-turns']),
       call('parity_marker', ['backend', MODEL, 'bridge-verbosity']),
       call('parity_marker', ['backend', MODEL, 'bridge-turn-state']),
+      call('parity_marker', ['backend', MODEL, 'bridge-service-tier-fast']),
       call('parity_fallback', ['backend', MODEL, 'bridge-reasoning-all-turns']),
+      call('parity_fallback', ['backend', MODEL, 'bridge-service-tier-fast']),
       call('parity_turn_state', ['backend', MODEL, 'captured']),
       call('parity_turn_state', ['backend', MODEL, 'echoed']),
       call('parity_turn_state', ['backend', MODEL, 'echoed']),
       { op: 'stats-snapshot' },
     ]);
     expect(rest.at(-1)!.doc.parity).toEqual({ [ROUTE_KEY]: parityRow({
-      markers: { 'bridge-reasoning-all-turns': 2, 'bridge-verbosity': 1, 'bridge-turn-state': 1 },
-      fallbacks: { ...zeros(MARKERS), 'bridge-reasoning-all-turns': 1 },
+      markers: { 'bridge-reasoning-all-turns': 2, 'bridge-verbosity': 1, 'bridge-turn-state': 1, 'bridge-service-tier-fast': 1 },
+      fallbacks: { ...zeros(MARKERS), 'bridge-reasoning-all-turns': 1, 'bridge-service-tier-fast': 1 },
       turnState: { captured: 1, echoed: 2 },
     }) });
     // a measurement, never drift
@@ -1236,6 +1240,7 @@ describe.skipIf(!PY)('the parity section: the request markers (D-8622, D-8623)',
     const [, ...rest] = await run(home, [
       open(file),
       call('parity_marker', ['backend', MODEL, 'bridge-instructions']),
+      call('parity_marker', ['backend', MODEL, 'priority']),
       call('parity_marker', ['backend', MODEL, 'overflow']),
       call('parity_marker', ['backend', MODEL, ['bridge-verbosity']]),
       call('parity_marker', ['backend', MODEL, null]),
@@ -1251,8 +1256,9 @@ describe.skipIf(!PY)('the parity section: the request markers (D-8622, D-8623)',
   it('a restart carries the counts and re-checks them; a row from before them loads zero-filled', async () => {
     const { home, file } = lane('cb-parity-markers-load-');
     const good = parityRow({
-      responses: 1, markers: { 'bridge-reasoning-all-turns': 4, 'bridge-verbosity': 0, 'bridge-turn-state': 2 },
-      fallbacks: { 'bridge-reasoning-all-turns': 1, 'bridge-verbosity': 0, 'bridge-turn-state': 0 },
+      responses: 1,
+      markers: { 'bridge-reasoning-all-turns': 4, 'bridge-verbosity': 0, 'bridge-turn-state': 2, 'bridge-service-tier-fast': 3 },
+      fallbacks: { 'bridge-reasoning-all-turns': 1, 'bridge-verbosity': 0, 'bridge-turn-state': 0, 'bridge-service-tier-fast': 1 },
       turnState: { captured: 3, echoed: 7 },
     });
     const before = parityRow({ responses: 2 }) as Record<string, unknown>;
@@ -1281,5 +1287,102 @@ describe.skipIf(!PY)('the parity section: the request markers (D-8622, D-8623)',
         markers: { ...zeros(MARKERS), 'bridge-turn-state': 5 }, turnState: { captured: 0, echoed: 2 },
       }),
     });
+  });
+});
+
+// D-8632: the served tier, an open map capped like servedOther; D-8633: the reasoning time, a histogram in the
+// firstOutputMs buckets. Both are additive: a row from before them loads with the map empty and the histogram zero-filled.
+describe.skipIf(!PY)('the parity section: the served tier and the reasoning time (D-8632, D-8633)', () => {
+  it('each response counts its service tier, bounded, absent when it named none, nothing when it is not a string', async () => {
+    const { home, file } = lane('cb-parity-tier-');
+    const lines = await run(home, [
+      open(file),
+      response({ served_tier: 'priority' }),
+      response({ served_tier: 'priority' }),
+      response({ served_tier: 'default' }),
+      response({ served_tier: null }),
+      response({}),
+      response({ served_tier: 'two words' }),
+      response({ served_tier: `tier-${'x'.repeat(80)}` }),
+      response({ served_tier: 5 }),
+      response({ served_tier: ['priority'] }),
+      { op: 'stats-snapshot' },
+    ]);
+    const row = lines.at(-1)!.doc.parity[ROUTE_KEY];
+    expect(row.responses).toBe(9);
+    // an unbounded value is never written as it came: it is `unrecognised`, as a model or an effort level is
+    expect(row.servedTier).toEqual({ priority: 2, default: 1, absent: 2, unrecognised: 2 });
+    expect(JSON.stringify(lines.at(-1)!.doc)).not.toContain('x'.repeat(65));
+    expect(lines.at(-1)!.doc.names).toEqual({});
+    expect(lines.at(-1)!.doc.unexplained).toEqual({});
+  });
+
+  it('servedTier reaches OVERFLOW at PARITY_KEYS_MAX, a held tier still counted under its own name', async () => {
+    const { home, file } = lane('cb-parity-tier-cap-');
+    const tiers = Array.from({ length: 18 }, (_, i) => `tier-${i}`);
+    const lines = await run(home, [
+      open(file),
+      ...tiers.map((t) => response({ served_tier: t })),
+      response({ served_tier: 'tier-0' }),
+      { op: 'stats-snapshot' },
+    ]);
+    const row = lines.at(-1)!.doc.parity[ROUTE_KEY];
+    expect(Object.keys(row.servedTier)).toHaveLength(17);
+    expect(row.servedTier.overflow).toBe(2);
+    expect(row.servedTier['tier-0']).toBe(2);
+    expect(row.servedTier['tier-16']).toBeUndefined();
+  });
+
+  it('reasoningMs is bucketed as firstOutputMs is; a response with none counts nothing there', async () => {
+    const { home, file } = lane('cb-parity-reasoning-');
+    const lines = await run(home, [
+      open(file),
+      response({ first_output_ms: 900, reasoning_ms: 250, total_ms: 1200 }),
+      response({ first_output_ms: 900, reasoning_ms: 250.5, total_ms: 1200 }),
+      response({ first_output_ms: 70_000, reasoning_ms: 64_001, total_ms: 70_001 }),
+      response({ first_output_ms: 300, total_ms: 400 }),
+      response({ first_output_ms: 300, reasoning_ms: -1, total_ms: 400 }),
+      response({ first_output_ms: 300, reasoning_ms: true, total_ms: 400 }),
+      response({ first_output_ms: 300, reasoning_ms: { float: 'nan' }, total_ms: 400 }),
+      { op: 'stats-snapshot' },
+    ]);
+    const row = lines.at(-1)!.doc.parity[ROUTE_KEY];
+    expect(Object.keys(row.reasoningMs)).toEqual(BUCKETS);
+    expect(row.reasoningMs).toEqual(hist({ 250: 1, 500: 1, inf: 1 }));
+    expect(row.firstOutputMs).toEqual(hist({ 500: 4, 1000: 2, inf: 1 }));
+  });
+
+  it('a restart carries both, re-checked and capped; a row from before them loads with them empty', async () => {
+    const { home, file } = lane('cb-parity-tier-load-');
+    const good = parityRow({ responses: 4, servedTier: { priority: 3, absent: 1 }, reasoningMs: hist({ 1000: 2, inf: 1 }) });
+    const before = parityRow({ responses: 2 }) as Record<string, unknown>;
+    delete before.servedTier;
+    delete before.reasoningMs;
+    const tiers = Object.fromEntries(Array.from({ length: 20 }, (_, i) => [`tier-${String(i).padStart(2, '0')}`, 1]));
+    const planted = {
+      version: 1, lane: 'lane-a', since: '2026-01-01T00:00:00.000Z', startedAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:00:00.000Z', routes: {}, refusals: {}, outcomes: {}, names: {}, unexplained: {},
+      usageHeaders: null, lastUpstreamRequestId: null,
+      parity: {
+        [ROUTE_KEY]: good,
+        'backend/model-b': before,
+        'backend/model-c': {
+          servedTier: { priority: 2, 'two words': 1, flex: -1, auto: '3', [`t${'x'.repeat(70)}`]: 1 },
+          reasoningMs: { 250: 1, 300: 4, inf: 1.5, 64000: 2 },
+        },
+        'backend/model-d': { servedTier: { ...tiers, overflow: 5 }, reasoningMs: 'many' },
+      },
+    };
+    writeFileSync(file, JSON.stringify(planted), { mode: 0o600 });
+    const [o] = await run(home, [open(file)]);
+    expect(o.doc.parity[ROUTE_KEY]).toEqual(good);
+    expect(o.doc.parity['backend/model-b']).toEqual(parityRow({ responses: 2 }));
+    expect(o.doc.parity['backend/model-c']).toEqual(parityRow({ servedTier: { priority: 2 }, reasoningMs: hist({ 250: 1, 64000: 2 }) }));
+    const capped = o.doc.parity['backend/model-d'];
+    expect(Object.keys(capped.servedTier)).toHaveLength(17);
+    expect(capped.servedTier.overflow).toBe(5);
+    expect(capped.servedTier['tier-15']).toBe(1);
+    expect(capped.servedTier['tier-16']).toBeUndefined();
+    expect(capped.reasoningMs).toEqual(zeros(BUCKETS));
   });
 });

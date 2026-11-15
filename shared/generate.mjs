@@ -178,10 +178,11 @@ function idArray(ids) {
  * backend memberships, and they are deliberately not each other's complement:
  * `telemetry` has four values, and a lane whose telemetry is `openrouter` or
  * `none` is in neither (D-5521). ccd
- * reads the first for the four things that only work against Claude Code's own
- * protocol (`--remote-control`, spawn-effort injection, the cross-backend
- * sanitiser, the 429 exclusion writer) and the second for the one thing that
- * speaks Codex's usage vocabulary (`_codex_lane_status`, the `ccd ls` trailer).
+ * reads the first for the three things that only work against Claude Code's own
+ * protocol (`--remote-control`, the cross-backend sanitiser, the 429 exclusion
+ * writer), the second for the one thing that speaks Codex's usage vocabulary
+ * (`_codex_lane_status`, the `ccd ls` trailer), and either for spawn-effort
+ * injection, which a Codex lane takes too (D-8631).
  *
  * ── `_ccrc_pool` ──
  *
@@ -251,6 +252,7 @@ export function generateAccountsSh(roster) {
   // the cross-backend transcript sanitiser, and the 429 exclusion writer — and
   // the moment a Codex lane becomes placeable those four start lying. Emit the
   // backend answer separately so each site can ask the question it means.
+  // (The spawn-time effort has since asked both: a Codex lane takes it too, D-8631.)
   const anthropicIds = roster.accounts.filter((a) => a.telemetry === 'anthropic').map((a) => a.id);
   // The same split, read from the other side. `ccd ls` tells a Codex lane's
   // usage story in Codex's own vocabulary — weekly caps, ccgpt-usage's JSON

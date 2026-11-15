@@ -10,12 +10,15 @@ import { agentLink } from '../../fleet/agentLink';
 import { useFleetChrome } from '../../fleet/FleetChrome';
 import { fleetSummary } from '../../fleet/fleetSummary';
 import { UpdateIndicator } from '../../fleet/UpdateIndicator';
+import { useHeard } from '../../fleet/useHeard';
 import { useFleetStore } from '../../stores/fleet';
 
 export function StatusBar(): ReactNode {
   const { health } = useFleetChrome();
+  // The readout counts the store's rows as they stand (the offline snapshot's included, so a cold start shows the fleet),
+  // and its runs only once heard (`useHeard`): runs before their frame are unknown, and `fleetSummary` leaves them out.
   const sessions = useFleetStore((s) => s.sessions);
-  const runs = useFleetStore((s) => (s.runsFrameSeen ? s.runs : null));
+  const { runs } = useHeard(useFleetStore);
   const link = agentLink(health);
   return (
     <div className="ins-status">

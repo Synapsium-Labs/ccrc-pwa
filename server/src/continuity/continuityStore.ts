@@ -1,13 +1,14 @@
 // L3 adapter: the start report's table and the generations' (Overlord spec §3.3.11, H12, W1a), the card's and the notes'
-// (§3.3.3, §3.3.2; each its own section below). `continuity_starts` has one writer, `insertStart`, and one read,
+// (§3.3.3, §3.3.2; each its own section below), and the probes' (§3.3.5, the last section). `continuity_starts` has one writer, `insertStart`, and one read,
 // `startsSince` (the generations lane's); `continuity_generations` and `continuity_cursor` are written only through the
 // generation functions below, by the generations lane. `CoordStore` keeps one-line delegates of the same names. Nothing
 // here decides: the door (`routes.ts`) validates, the lane's deciders decide, and this file records and measures.
 import type { DatabaseSync, StatementSync } from 'node:sqlite';
 import {
-  GENERATION_STATES, HOLD_OFF_MS, STATE_DEADLINE_S, isGenerationOutcome, isGenerationState, isNoteKeyKind, isNoteKind,
-  isRenewalTrigger, isTriggerClass, startSourceOf, type GenerationOutcome, type GenerationState, type HandoverNote,
-  type HandoverThread, type NoteKey, type NoteKind, type RenewalTrigger, type StartRow, type TriggerClass,
+  GENERATION_STATES, HOLD_OFF_MS, STATE_DEADLINE_S, isBookState, isGenerationOutcome, isGenerationState, isNoteKeyKind, isNoteKind,
+  isProbeClass, isProbeGrade, isProbeRoundKind, isRenewalTrigger, isTriggerClass, startSourceOf, type BookState, type ContinuityReadDoor,
+  type GenerationOutcome, type GenerationState, type HandoverNote, type HandoverThread, type NoteKey, type NoteKind, type ProbeClass,
+  type ProbeGrade, type ProbeRoundKind, type RenewalTrigger, type StartRow, type TriggerClass,
 } from '../../../shared/continuity.js';
 import { isFleetRole, type FleetRole } from '../../../shared/fleetRoles.js';
 import {
@@ -838,5 +839,195 @@ export function handoverBefore(db: DatabaseSync, identity: string, liveGeneratio
     return { ok: true, handover: { generationId: gid, n, note, dropped, at } };
   } catch (e) {
     return { ok: false, detail: `continuity_handovers read failed: ${e instanceof Error ? e.message : String(e)}` };
+  }
+}
+
+// ------------------------------------------------------------------------------------------------- the probes
+// `continuity_probes` and `continuity_reads` (Overlord spec §3.3.5 C41, §3.3.9 C52, W1a, the probes piece, PR B; migration 73).
+// One writer per fact: the generations lane opens a round (`openRound`), the probe door records its answers (`answerRound`),
+// and the card and note GETs stamp a session's reads (`stampContinuityRead`). The lane reads one generation's rounds
+// (`probeRows`); the door reads the session's open round (`openProbeRound`) or one round by id (`probeRoundRows`), both in
+// its live generation. A failed statement answers ok: false, never a throw; a row this build cannot read fails the read whole.
+
+/** One question of a round as the lane opens it. `choices` is null for an id or `none`. */
+export interface ProbeInsertQuestion {
+  readonly qid: string; readonly cls: ProbeClass; readonly question: string; readonly choices: readonly string[] | null;
+  readonly expected: string;
+}
+/** A round as the lane opens it: its questions, what it was drawn from, and whether a failed read made it short. */
+export interface RoundInsert {
+  readonly roundId: string; readonly sessionId: string; readonly generationId: number; readonly kind: ProbeRoundKind;
+  readonly questions: readonly ProbeInsertQuestion[]; readonly snapshotId: string | null; readonly depthTokens: number | null;
+  readonly modelClass: string | null; readonly roundUnmeasured: boolean; readonly askedAt: number;
+  /** An unanswered spot round of the same generation this round supersedes (review 2063 F3), or null. */
+  readonly supersedes: string | null;
+}
+/** One row of `continuity_probes`, as read. */
+export interface ProbeRow extends ProbeInsertQuestion {
+  readonly id: number; readonly roundId: string; readonly sessionId: string; readonly generationId: number;
+  readonly kind: ProbeRoundKind; readonly snapshotId: string | null; readonly depthTokens: number | null;
+  readonly modelClass: string | null; readonly roundUnmeasured: boolean; readonly askedAt: number;
+  readonly answeredAt: number | null; readonly answer: string | null; readonly grade: ProbeGrade | null; readonly book: BookState | null;
+}
+export type ProbeRowsRead = { ok: true; rows: ProbeRow[] } | { ok: false; detail: string };
+
+const PROBE_COLUMNS = 'id, roundId, qid, sessionId, generationId, kind, cls, question, choices, expected, snapshotId, depthTokens, '
+  + 'modelClass, roundUnmeasured, askedAt, answeredAt, answer, grade, book';
+
+function choicesOf(v: unknown): readonly string[] | null | undefined {
+  if (v === null) return null;
+  if (typeof v !== 'string') return undefined;
+  try {
+    const a: unknown = JSON.parse(v);
+    return Array.isArray(a) && a.every((x) => typeof x === 'string') ? a : undefined;
+  } catch { return undefined; }
+}
+
+/** A row as stored, or why it does not read: a word outside a vocabulary, or a column in a shape this build does not know. */
+function probeRowOf(raw: Record<string, unknown>): ProbeRow | string {
+  const id = intOrNull(raw.id); const generationId = intOrNull(raw.generationId); const askedAt = intOrNull(raw.askedAt);
+  if (id === null || generationId === null || askedAt === null) return 'a counter';
+  if (!isProbeRoundKind(raw.kind)) return `kind ${String(raw.kind)}`;
+  if (!isProbeClass(raw.cls)) return `cls ${String(raw.cls)}`;
+  if (raw.grade !== null && !isProbeGrade(raw.grade)) return `grade ${String(raw.grade)}`;
+  if (raw.book !== null && !isBookState(raw.book)) return `book ${String(raw.book)}`;
+  const choices = choicesOf(raw.choices);
+  if (choices === undefined) return 'choices';
+  if (typeof raw.roundId !== 'string' || typeof raw.qid !== 'string' || typeof raw.question !== 'string' || typeof raw.expected !== 'string') return 'text';
+  if (raw.answer !== null && typeof raw.answer !== 'string') return 'answer';
+  return {
+    id, roundId: raw.roundId, qid: raw.qid, sessionId: String(raw.sessionId), generationId, kind: raw.kind, cls: raw.cls,
+    question: raw.question, choices, expected: raw.expected, snapshotId: strOrNull(raw.snapshotId), depthTokens: intOrNull(raw.depthTokens),
+    modelClass: strOrNull(raw.modelClass), roundUnmeasured: intOrNull(raw.roundUnmeasured) === 1, askedAt,
+    answeredAt: intOrNull(raw.answeredAt), answer: strOrNull(raw.answer), grade: raw.grade as ProbeGrade | null, book: raw.book as BookState | null,
+  };
+}
+function probeRowsOf(raws: readonly Record<string, unknown>[]): ProbeRowsRead {
+  const rows: ProbeRow[] = [];
+  for (const raw of raws) {
+    const r = probeRowOf(raw);
+    if (typeof r === 'string') return { ok: false, detail: `continuity_probes row ${String(raw.id)}: ${r}` };
+    rows.push(r);
+  }
+  return { ok: true, rows };
+}
+const probeReadFailed = (e: unknown): { ok: false; detail: string } =>
+  ({ ok: false, detail: `continuity_probes read failed: ${e instanceof Error ? e.message : String(e)}` });
+
+class RoundHeld extends Error {}
+
+/** The lane's writer: every question of one round, in ONE transaction. `open` when the generation already has a round with
+ *  no answer (one open round at a time, compared and set here, so two passes never open two); a round with no question is
+ *  never written (`empty`). A round that supersedes an unanswered spot round closes it first, in the same transaction, every
+ *  question graded `unmeasured` with no answer (review 2063 F3): it was never the session's to answer, so it never fails. */
+export function openRound(db: DatabaseSync, r: RoundInsert): { ok: true } | { ok: false; kind: 'open' | 'empty' | 'write-failed' } {
+  if (r.questions.length === 0) return { ok: false, kind: 'empty' };
+  try {
+    return tx(db, () => {
+      if (r.supersedes !== null) {
+        stmt(db, "UPDATE continuity_probes SET answeredAt = ?, answer = NULL, grade = 'unmeasured', book = 'unmeasured' "
+          + "WHERE roundId = ? AND generationId = ? AND kind = 'spot' AND answeredAt IS NULL").run(r.askedAt, r.supersedes, r.generationId);
+      }
+      if (stmt(db, 'SELECT 1 FROM continuity_probes WHERE generationId = ? AND answeredAt IS NULL LIMIT 1').get(r.generationId) !== undefined) {
+        throw new RoundHeld();
+      }
+      const ins = stmt(db, 'INSERT INTO continuity_probes (roundId, qid, sessionId, generationId, kind, cls, question, choices, expected, '
+        + 'snapshotId, depthTokens, modelClass, roundUnmeasured, askedAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
+      for (const q of r.questions) {
+        ins.run(r.roundId, q.qid, r.sessionId, r.generationId, r.kind, q.cls, q.question, q.choices === null ? null : JSON.stringify(q.choices),
+          q.expected, r.snapshotId, r.depthTokens, r.modelClass, r.roundUnmeasured ? 1 : 0, r.askedAt);
+      }
+      return { ok: true as const };
+    });
+  } catch (e) {
+    return { ok: false, kind: e instanceof RoundHeld ? 'open' : 'write-failed' };
+  }
+}
+
+/** One answered question, as the door records it. */
+export interface ProbeAnswerWrite { readonly qid: string; readonly answer: string | null; readonly grade: ProbeGrade }
+
+/** The probe door's writer: every question of one round answered, in ONE transaction, compared and set on the round being
+ *  unanswered and the session's own. `closed` when the round was answered meanwhile, or does not hold exactly these
+ *  questions. */
+export function answerRound(db: DatabaseSync, roundId: string, sessionId: string, answers: readonly ProbeAnswerWrite[], book: BookState,
+  at: number): { ok: true } | { ok: false; kind: 'closed' | 'write-failed' } {
+  try {
+    return tx(db, () => {
+      const held = stmt(db, 'SELECT count(*) AS n FROM continuity_probes WHERE roundId = ? AND sessionId = ? AND answeredAt IS NULL')
+        .get(roundId, sessionId) as { n: number | bigint };
+      if (Number(held.n) !== answers.length) throw new RoundHeld();
+      const up = stmt(db, 'UPDATE continuity_probes SET answeredAt = ?, answer = ?, grade = ?, book = ? '
+        + 'WHERE roundId = ? AND sessionId = ? AND qid = ? AND answeredAt IS NULL');
+      for (const a of answers) {
+        if (Number(up.run(at, a.answer, a.grade, book, roundId, sessionId, a.qid).changes) !== 1) throw new RoundHeld();
+      }
+      return { ok: true as const };
+    });
+  } catch (e) {
+    return { ok: false, kind: e instanceof RoundHeld ? 'closed' : 'write-failed' };
+  }
+}
+
+/** Every question of one generation's rounds, in id order: the lane's read. */
+export function probeRows(db: DatabaseSync, generationId: number): ProbeRowsRead {
+  try {
+    return probeRowsOf(stmt(db, `SELECT ${PROBE_COLUMNS} FROM continuity_probes WHERE generationId = ? ORDER BY id`).all(generationId) as Record<string, unknown>[]);
+  } catch (e) { return probeReadFailed(e); }
+}
+
+/** The session's open round: the questions of the newest round with no answer of the session's live generation (its newest
+ *  that has not ended, review 2063 F7), in id order, or an empty list when none is open. The door's read. */
+export function openProbeRound(db: DatabaseSync, sessionId: string): ProbeRowsRead {
+  try {
+    return probeRowsOf(stmt(db, `SELECT ${PROBE_COLUMNS} FROM continuity_probes WHERE roundId = (SELECT roundId FROM continuity_probes `
+      + 'WHERE sessionId = ? AND answeredAt IS NULL AND generationId = (SELECT max(id) FROM continuity_generations '
+      + "WHERE sessionId = ? AND state <> 'ended') ORDER BY id DESC LIMIT 1) AND sessionId = ? ORDER BY id")
+      .all(sessionId, sessionId, sessionId) as Record<string, unknown>[]);
+  } catch (e) { return probeReadFailed(e); }
+}
+
+/** One round's questions by its id, in id order, or an empty list when no row of the session's live generation carries it
+ *  (review 2068 F3: the answer door finds a round where the read door serves one, in the newest generation that has not
+ *  ended, so a round an earlier generation left open is answered `probe-none-open`, never graded). */
+export function probeRoundRows(db: DatabaseSync, roundId: string, sessionId: string): ProbeRowsRead {
+  try {
+    return probeRowsOf(stmt(db, `SELECT ${PROBE_COLUMNS} FROM continuity_probes WHERE roundId = ? AND sessionId = ? AND generationId = `
+      + "(SELECT max(id) FROM continuity_generations WHERE sessionId = ? AND state <> 'ended') ORDER BY id")
+      .all(roundId, sessionId, sessionId) as Record<string, unknown>[]);
+  } catch (e) { return probeReadFailed(e); }
+}
+
+/** The card and note GETs' one writer: the session's newest read through `door`, kept as the latest time stamped. */
+export function stampContinuityRead(db: DatabaseSync, sessionId: string, door: ContinuityReadDoor, at: number): { ok: boolean } {
+  try {
+    stmt(db, 'INSERT INTO continuity_reads (sessionId, door, at) VALUES (?, ?, ?) ON CONFLICT (sessionId, door) '
+      + 'DO UPDATE SET at = MAX(continuity_reads.at, excluded.at)').run(sessionId, door, at);
+    return { ok: true };
+  } catch {
+    return { ok: false };
+  }
+}
+
+/** The session's newest card or notes read through the continuity doors, or null when it has made none. */
+export function lastContinuityRead(db: DatabaseSync, sessionId: string): { ok: true; at: number | null } | { ok: false; detail: string } {
+  try {
+    const row = stmt(db, 'SELECT MAX(at) AS at FROM continuity_reads WHERE sessionId = ?').get(sessionId) as { at: unknown } | undefined;
+    const at = row === undefined || row.at === null ? null : intOrNull(row.at);
+    if (row !== undefined && row.at !== null && at === null) return { ok: false, detail: 'continuity_reads.at is not a number' };
+    return { ok: true, at };
+  } catch (e) {
+    return { ok: false, detail: `continuity_reads read failed: ${e instanceof Error ? e.message : String(e)}` };
+  }
+}
+
+/** A stored snapshot's facts JSON (the card door's `snapshotFactsJson`), or null when no snapshot carries the id. */
+export function snapshotFacts(db: DatabaseSync, id: string): { ok: true; facts: string | null } | { ok: false; detail: string } {
+  try {
+    const row = stmt(db, 'SELECT facts FROM continuity_snapshots WHERE id = ?').get(id) as { facts: unknown } | undefined;
+    if (row === undefined) return { ok: true, facts: null };
+    return typeof row.facts === 'string' ? { ok: true, facts: row.facts } : { ok: false, detail: `continuity_snapshots row ${id}: facts` };
+  } catch (e) {
+    return { ok: false, detail: `continuity_snapshots read failed: ${e instanceof Error ? e.message : String(e)}` };
   }
 }

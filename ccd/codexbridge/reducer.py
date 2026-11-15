@@ -54,6 +54,11 @@ THE RULES (each is a case or a mutation row in codex-bridge-replay.test.ts):
       table does not know fails the response, so a response answered as an error is measured too; a failed or
       truncated one leaves it None. Codex's rule holds here as there: a diagnostic field is optional and never makes
       an otherwise valid response fail, so a malformed entry or part is counted `unrecognised`, never raised.
+      D-8632 adds `tier`: the terminal response's `service_tier` when it is a non-empty string, else None, kept as
+      `model` is (the stats file bounds it by its NAME_RE, `stats.tier_word`, so no unbounded value is ever written).
+- R22 (D-8633) `reasoning_lead` counts the reasoning items (with or without `encrypted_content`) released before the
+      first block was opened, so it stops growing at the first released block; the server takes the instant it last
+      grew, which is when the last reasoning item before the first output finished. The reducer reads no clock.
 
 NOTHING HERE HOLDS CONTENT IN A COUNT OR A NAME. Names go to the NameSink by family (`itemType`, `eventType`,
 `incompleteReason`); counts are integers; warnings name what was wrong, never a value. Encrypted reasoning leaves this
@@ -190,6 +195,12 @@ def _model_of(response: object) -> Optional[str]:
     return model if isinstance(model, str) and model else None
 
 
+def _tier_of(response: dict) -> Optional[str]:
+    """D-8632: the terminal response's `service_tier` (R21), a non-empty string or None; bounded where it is written."""
+    tier = response.get("service_tier")
+    return tier if isinstance(tier, str) and tier else None
+
+
 def _reject_constant(name: str) -> object:
     raise ValueError("not JSON: " + name)
 
@@ -229,6 +240,7 @@ class Reducer:
         self.response_id = None  # type: Optional[str]
         self.created_model = None  # type: Optional[str]  (response.created's `model`, R21)
         self.diagnostics = None  # type: Optional[dict]  (R21: set by a completed or incomplete terminal)
+        self.reasoning_lead = 0  # R22 (D-8633): reasoning items released before the first block
         self.counts = {"emptyArguments": 0, "invalidArguments": 0, "liveTextMismatch": 0}  # type: Dict[str, int]
         self.warnings = []  # type: List[str]
         self._out = []  # type: List[Tuple[str, dict]]
@@ -396,6 +408,8 @@ class Reducer:
         elif kind in TOOL_ITEMS:
             self._tool(item)
         elif kind == "reasoning":
+            if not self._released_any:  # R22
+                self.reasoning_lead += 1
             enc = item.get("encrypted_content")
             if isinstance(enc, str) and enc:
                 self._unkeyed.append(len(self._reasoning))
@@ -494,6 +508,7 @@ class Reducer:
         self.diagnostics = {
             "model": _model_of(resp) or self.created_model, "usage": _diagnostic_usage(resp),
             "transformations": [transformation_key(e) for e in raw] if isinstance(raw, list) else None,
+            "tier": _tier_of(resp),  # D-8632
         }
         reason = None  # type: Optional[str]
         if kind == "incomplete":

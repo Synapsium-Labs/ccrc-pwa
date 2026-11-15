@@ -553,7 +553,8 @@ stream("synth-input-transformations",
                           "reasoning:removed:turn_boundary", "reasoning:removed:turn_boundary",
                           "reasoning:removed:fx_new_reason", "reasoning:removed:none", "message:changed:turn_boundary",
                           "unrecognised:unrecognised:unrecognised", "reasoning:removed:unrecognised",
-                          "reasoning:unrecognised:none"]}))
+                          "reasoning:unrecognised:none"],
+                      "tier": None}))
 
 
 def main():

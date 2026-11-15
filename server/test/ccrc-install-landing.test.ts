@@ -349,7 +349,7 @@ describe('ccrc install: all four skills reach every rostered account', () => {
     // whichever lane converged it — which is what makes the installers' own
     // `CCRC_SKILL_SRC` default correct on a self-installed box.
     const { home } = skillBox;
-    for (const name of ['coordinator-skill', 'worker-skill', 'reviewer-skill', 'history-skill', 'linear-skill']) {
+    for (const name of ['coordinator-skill', 'worker-skill', 'reviewer-skill', 'history-skill', 'linear-skill', 'overlord-skill']) {
       const staged = join(home, '.cc-sessions', name);
       expect(existsSync(staged), `${name} was never staged in ~/.cc-sessions`).toBe(true);
       expect(readFileSync(join(staged, 'SKILL.md')))
@@ -374,7 +374,14 @@ describe('ccrc install: all four skills reach every rostered account', () => {
     const src = read(join(REPO, 'ccd', 'ccrc'));
     const body = /_inst_skills\(\) \{([\s\S]*?)\n\}/.exec(src);
     expect(body, 'ccd/ccrc has no _inst_skills').toBeTruthy();
-    const lines = body![1]!.split('\n').filter((l) => l.includes('CCRC_SKILL_SRC'));
+    // ONE EXCEPTION, the Overlord's staging installer (Overlord W1): its destination IS the staged copy under
+    // `$HOME/.cc-sessions`, so the tree is the only source it can read, and the tree's installer is the one every
+    // caller runs (this step, doctor's fix and deploy.sh alike), so it is the box's own copy here. Pinned by name below.
+    const STAGING = 'install-overlord-skill.sh';
+    const staging = body![1]!.split('\n').filter((l) => l.includes(STAGING) && !/^\s*#/.test(l));
+    expect(staging, 'the staging installer runs once, from the tree, reading the tree').toEqual(
+      [expect.stringContaining('CCRC_SKILL_SRC="$tree/ccd/overlord-skill" bash "$tree/ccd/install-overlord-skill.sh"')]);
+    const lines = body![1]!.split('\n').filter((l) => l.includes('CCRC_SKILL_SRC') && !l.includes(STAGING));
     expect(lines.length, 'no line in _inst_skills sets CCRC_SKILL_SRC at all')
       .toBeGreaterThan(0);
     for (const l of lines) {
@@ -386,7 +393,7 @@ describe('ccrc install: all four skills reach every rostered account', () => {
     // …and the SCRIPT that runs is the staged one too, by the same rule: every
     // `bash` this step invokes reaches into `$HOME/.cc-sessions`, never into
     // the tree it placed.
-    const runs = body![1]!.split('\n').filter((l) => /\bbash\b/.test(l));
+    const runs = body![1]!.split('\n').filter((l) => /\bbash\b/.test(l) && !l.includes(STAGING));
     expect(runs.length, '_inst_skills runs no installer at all').toBeGreaterThan(0);
     for (const l of runs) {
       expect(l, 'the installer that RUNS must be the box’s own copy')

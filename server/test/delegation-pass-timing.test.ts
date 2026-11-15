@@ -51,7 +51,7 @@ import * as correlation from '../src/coord/delegation-correlation.js';
 import * as model from '../src/coord/delegation-model.js';
 import * as checkpointMod from '../src/coord/delegation-checkpoint.js';
 import type { DelegationCensusPass, ParentIncarnation, WorktreeCensus } from '../src/coord/gitref.js';
-import { DELEGATION_CHECKPOINT_FILE, DelegationDurability, decodeDelegationCheckpoint, type DelegationProjectionRepairReport } from '../src/coord/delegation-checkpoint.js';
+import { DELEGATION_CHECKPOINT_FILE, DELEGATION_REPAIR_FULL_MS, DelegationDurability, decodeDelegationCheckpoint, type DelegationProjectionRepairReport } from '../src/coord/delegation-checkpoint.js';
 import { DELEGATION_JOURNAL_FILE, buildDelegationJournalRecord, encodeDelegationJournalRecord } from '../src/coord/delegation-journal.js';
 import { DELEGATION_EVENTS_CAP, canonicalDelegationJson, type DelegationAttemptRow, type DelegationCensusRecord, type DelegationCheckpointV1 } from '../src/coord/delegation-model.js';
 import { seedRoster, testDeps } from './helpers.js';
@@ -320,8 +320,8 @@ function expectTimings(lineText: string, ms: Record<string, number>): Map<string
 const RAW = record('demo', 'raw-tree');
 const OLD = record('demo', 'old-tree');
 type Shape = 'std' | 'recover' | 'absence' | 'intervals';
-/** D-5836: the forced full repair's interval, reached through a namespace so the file is type-clean at main (the fallback is the ruling's hour). */
-const FULL_MS = ((checkpointMod as unknown as Record<string, unknown>)['DELEGATION_REPAIR_FULL_MS'] as number | undefined) ?? 3_600_000;
+/** D-5836: the forced full repair's interval, the export itself (a named import since D-8641, so the pilot's move repoints it). */
+const FULL_MS: number = DELEGATION_REPAIR_FULL_MS;
 type PlanFn = typeof policy.planDelegationReconciliation;
 interface PlanSpy { mockImplementation(fn: (input: Parameters<PlanFn>[0]) => ReturnType<PlanFn>): unknown }
 /** What a row may ask of `scenario` beyond its shape and the clock it arms. */

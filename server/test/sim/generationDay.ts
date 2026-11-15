@@ -22,7 +22,7 @@ import { MIGRATIONS } from '../../src/coord/schema.js';
 import { CoordStore } from '../../src/coord/store.js';
 import { effectiveGeneration, genExpectOf, genViewOf, type GenRow } from '../../src/continuity/continuityStore.js';
 import {
-  GENERATIONS_LANE, generationsPass, softTimesOf, type GenerationsCoord, type GenerationsResult,
+  GENERATIONS_LANE, generationsPass, softTimesOf, type EmptyTries, type GenerationsCoord, type GenerationsResult,
 } from '../../src/continuity/generationsLane.js';
 import type { GenEvent } from '../../src/continuity/generationMachine.js';
 import type { Reading, RenewalInputs } from '../../src/continuity/renewalDue.js';
@@ -134,7 +134,7 @@ export function generationDay(mods: GenDayModules): Scenario<GenDayEdge> {
       let proc = 'p0';
       let boots = 0;
       // The lane's per-process memo of the starts it held (review 2006 R3): a boot forgets it, as a restarted server does.
-      let retried = new Set<number>();
+      let retried = new Set<number>(); let emptyTries: EmptyTries = new Map();
 
       // Both generations working when the day begins: n=1 minted from a startup, then active (a generation that was
       // working when the machine began), and the cursor past both starts.
@@ -362,7 +362,7 @@ export function generationDay(mods: GenDayModules): Scenario<GenDayEdge> {
         // The stand-in registry is listed after this beat's deliveries (it names every conversation reported so far), so its
         // listing postdates every start received yet.
         // The day drives the live walk too (its arm drawn per seed), so it opens the continuity row's gate.
-        const passed = wrote(generationsPass({ coord: lane, clock: server.clock, proc, log: () => {}, observe: mods.observed.observeTime, retried, gate: () => null },
+        const passed = wrote(generationsPass({ coord: lane, clock: server.clock, entropy, proc, log: () => {}, observe: mods.observed.observeTime, retried, emptyTries, gate: () => null },
           { registry: WHO.map(([who]) => ({ id: who, uuid: uuids.get(who)!, lane: 'lane-a', child: { kind: 'none' as const } })),
             listedAt: wall() + 1, readings: new Map() }));
         // W1's designation, stood in for: the Overlord's starts mint through the same store function, in order.
@@ -447,7 +447,7 @@ export function generationDay(mods: GenDayModules): Scenario<GenDayEdge> {
 
       world.onBoot(() => {
         proc = `p${boots++}`;
-        retried = new Set<number>();
+        retried = new Set<number>(); emptyTries = new Map();
         arm(DISARMED);
         // A crash right after a thaw loses what waited in the socket, except a start (the start-while-down rule).
         for (const [who, , e] of frozenQueue.splice(0)) if (e.kind === 'started') startQueue.push([who, e]);

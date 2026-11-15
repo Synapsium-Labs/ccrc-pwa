@@ -414,13 +414,17 @@ function markedLane(prefix: string, names: string[]): { home: string; laneDir: s
 }
 
 describe.skipIf(!PY)('the request markers: the body (D-8622)', () => {
-  const ALL = ['bridge-reasoning-all-turns', 'bridge-verbosity', 'bridge-turn-state'];
+  // D-8632: the fourth, last, so the three before it keep their order
+  const ALL = ['bridge-reasoning-all-turns', 'bridge-verbosity', 'bridge-turn-state', 'bridge-service-tier-fast'];
 
   it('the marker names and the words they send are the backend\'s constants, and its verbosities are the catalogue\'s', async () => {
     const [c] = await run([{ op: 'backend-consts' }]);
     expect(c).toMatchObject({
       ALL_TURNS_MARKER: 'bridge-reasoning-all-turns', VERBOSITY_MARKER: 'bridge-verbosity', TURN_STATE_MARKER: 'bridge-turn-state',
+      SERVICE_TIER_FAST_MARKER: 'bridge-service-tier-fast',
       ALL_TURNS: 'all_turns', TURN_STATE_HEADER: 'x-codex-turn-state',
+      // Codex's ServiceTier::Fast.request_value() (upstream openai/codex @ 826b6e8, protocol/src/config_types.rs)
+      SERVICE_TIER_PRIORITY: 'priority',
     });
     expect(c.MARKERS).toEqual(ALL);
     // the three words of Codex's OpenAiVerbosity, the same bound D-8620's catalogue readers apply
@@ -523,16 +527,70 @@ describe.skipIf(!PY)('the request markers: the body (D-8622)', () => {
       { op: 'from-anthropic', headers: SESSION_H, body: anthropic(), output_config: FORMAT_CONFIG },
     ], { home });
     expect(line.body).toEqual({
-      model: 'model-6.1-alpha', stream: true,
+      model: 'model-6.1-alpha', stream: true, service_tier: 'priority',
       input: [DEVELOPER_ITEM, { type: 'message', role: 'user', content: [{ type: 'input_text', text: USER }] }],
       tools: [], tool_choice: 'auto', parallel_tool_calls: true, reasoning: { effort: 'medium', context: 'all_turns' },
       store: false, include: ['reasoning.encrypted_content'], prompt_cache_key: line.body.prompt_cache_key,
       text: { verbosity: 'low', format: translated.request.output_format },
     });
-    expect(line.keys).toEqual([...ORDER, 'text']);
+    expect(line.keys).toEqual(['model', 'stream', 'service_tier', ...ORDER.slice(2), 'text']);
+    expect(line.wire.startsWith('{"model":"model-6.1-alpha","stream":true,"service_tier":"priority","input":[')).toBe(true);
     expect(line.wire).toContain('"reasoning":{"effort":"medium","context":"all_turns"},"store":false,');
     expect(line.wire).toContain('"prompt_cache_key":"ccrc:sess-fx1","text":{"verbosity":"low","format":{');
-    expect(line.carried).toEqual(['bridge-reasoning-all-turns', 'bridge-verbosity']);
+    // in MARKERS' order; the turn-state marker's addition is a header the server sends, never a body field
+    expect(line.carried).toEqual(['bridge-reasoning-all-turns', 'bridge-verbosity', 'bridge-service-tier-fast']);
+  });
+
+  // D-8632: Codex's Fast mode. Its ResponsesApiRequest (upstream openai/codex @ 826b6e8, codex-rs/codex-api/src/
+  // common.rs) declares `model`, `stream`, `service_tier`, `input`: a routing field first, so it goes right after stream.
+  it('bridge-service-tier-fast: service_tier priority right after stream, whatever the row, the rest byte for byte', async () => {
+    const { home, laneDir } = markedLane('cb-backend-fast-', ['bridge-service-tier-fast']);
+    const rows = [undefined, PLAIN_ROW, LITE_ROW, { id: 'model-6.1-alpha' }];
+    for (const extra of [{}, { reasoning: { effort: 'high' } }]) {
+      const [base, ...lines] = await run([
+        { op: 'backend-body', headers: SESSION_H, body: anthropic(extra) },
+        ...rows.map((row) => ({ op: 'backend-body', headers: SESSION_H, body: anthropic(extra), laneDir, ...(row ? { row } : {}) })),
+      ], { home });
+      expect(base.keys).not.toContain('service_tier');
+      for (const [i, l] of lines.entries()) {
+        const what = JSON.stringify({ extra, row: rows[i] });
+        expect(l.body.service_tier, what).toBe('priority');
+        expect(l.keys, what).toEqual(['model', 'stream', 'service_tier', ...base.keys.slice(2)]);
+        // the unmarked bytes with the one field spliced in after stream, and nothing else moved
+        expect(l.wire, what).toBe(base.wire.replace('"stream":true,', '"stream":true,"service_tier":"priority",'));
+        expect(l.carried, what).toEqual(['bridge-service-tier-fast']);
+      }
+    }
+  });
+
+  it('bridge-service-tier-fast with the instructions form: service_tier comes before instructions', async () => {
+    const { home, laneDir } = markedLane('cb-backend-fast-instr-', ['bridge-service-tier-fast', 'bridge-instructions']);
+    const plain = markedLane('cb-backend-fast-instr-plain-', ['bridge-instructions']);
+    const [line] = await run([{ op: 'backend-body', headers: SESSION_H, body: anthropic(), laneDir }], { home });
+    const [base] = await run([{ op: 'backend-body', headers: SESSION_H, body: anthropic(), laneDir: plain.laneDir }], { home: plain.home });
+    expect(line.keys.slice(0, 4)).toEqual(['model', 'stream', 'service_tier', 'instructions']);
+    expect(line.body.instructions).toBe(SYSTEM);
+    expect(line.wire).toBe(base.wire.replace('"stream":true,', '"stream":true,"service_tier":"priority",'));
+    expect(line.carried).toEqual(['bridge-service-tier-fast']);
+  });
+
+  it('a client\'s own service_tier is never sent: none without the marker, the marker\'s priority with it', async () => {
+    const { home, laneDir } = markedLane('cb-backend-fast-client-', ['bridge-service-tier-fast']);
+    const [without, marked] = await run([
+      { op: 'backend-body', headers: SESSION_H, body: anthropic({ service_tier: 'flex' }) },
+      { op: 'backend-body', headers: SESSION_H, body: anthropic({ service_tier: 'flex' }), laneDir },
+    ], { home });
+    expect(without.keys).not.toContain('service_tier');
+    expect(without.wire).not.toContain('flex');
+    expect(marked.body.service_tier).toBe('priority');
+    expect(marked.wire).not.toContain('flex');
+  });
+
+  it('with the fast marker and the other two on a Lite row, the carried markers keep MARKERS\' order', async () => {
+    const { home, laneDir } = markedLane('cb-backend-fast-order-', ['bridge-service-tier-fast', 'bridge-verbosity']);
+    const [line] = await run([{ op: 'backend-body', headers: SESSION_H, body: anthropic(), laneDir, row: LITE_ROW }], { home });
+    expect(line.carried).toEqual(['bridge-verbosity', 'bridge-service-tier-fast']);
+    expect(line.keys).toEqual(['model', 'stream', 'service_tier', ...ORDER.slice(2).filter((k) => k !== 'reasoning'), 'text']);
   });
 });
 

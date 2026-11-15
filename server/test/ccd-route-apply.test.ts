@@ -31,7 +31,7 @@ import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { CCD, ghContainedEnv, harnessBin, makeCcdHarness, type CcdHarness, ccdSource } from './ccdWsHelpers.js';
+import { CCD, ghContainedEnv, harnessBin, makeCcdHarness, seedAccountsSh, type CcdHarness, ccdSource } from './ccdWsHelpers.js';
 import { USAGE_FRESH_S } from '../src/usage.js';
 
 let h: CcdHarness;
@@ -507,6 +507,47 @@ describe('route --apply (routing spec §5.3 live change; slice 1 keystrokes D-28
     expect(keys()).toEqual(['-l /model', 'Enter', 'Down', 'Down', '-l s']);
     expect(h.reg(GPT, 'routeapplied')).toContain('class=sonnet');
     expect(h.reg(GPT, 'routeskip')).toBeNull();
+  });
+});
+
+// D-8631 — a live effort change on a Codex lane types the RENDERED level (`_route_effort_shown`: `ultracode` -> `xhigh`),
+// so ultracode mode is never switched on there by a keystroke, and the stamp keeps the record's own word, so the next
+// tick finds nothing pending.
+describe('route --apply on a Codex lane types the rendered level and records the record\'s word (D-8631)', () => {
+  const CX = 'demo-lane-a';
+  beforeEach(() => {
+    seedAccountsSh(h.home, {
+      version: 1, accounts: [
+        { id: 'claude', label: 'a', configDirSuffix: '.claude', exec: { kind: 'upstream' }, homeAble: true, hue: 'cyan', telemetry: 'anthropic' },
+        { id: 'lane-a', label: 'la', configDirSuffix: '.lane-a', exec: { kind: 'external' }, homeAble: true, hue: 'blue', telemetry: 'codex' },
+      ],
+    });
+    install('lane-a');
+  });
+
+  it('(g) effort=ultracode over an applied high: the slider to the xhigh stop, never `/effort ultracode`; stamped ultracode', () => {
+    seed(CX, 'lane-a'); plantIdle('lane-a'); pane(IDLE_PANE);
+    h.sh(`_reg_set ${CX} class opus; _reg_set ${CX} effort ultracode; _reg_set ${CX} routeapplied "class=opus effort=high"`);
+    after('s', ACK_EFFORT('xhigh'));
+    h.sh(`${TMUX_STUB} _route_apply_now ${CX}`);
+    const rights = STOPS.indexOf('xhigh');
+    expect(rights).toBeGreaterThan(0);
+    expect(keys()).toEqual(['-l /effort', 'Enter', ...Array(7).fill('Left'), ...Array(rights).fill('Right'), '-l s']);
+    expect(keys()).not.toContain('-l /effort ultracode');
+    expect(h.reg(CX, 'routeapplied')).toBe('class=opus effort=ultracode');
+    // and the next look finds nothing pending: no keystroke at all
+    fs.rmSync(path.join(h.home, 'tmux-calls'), { force: true });
+    h.sh(`${TMUX_STUB} _route_apply_now ${CX}`);
+    expect(keys()).toEqual([]);
+  });
+
+  it('control: on an Anthropic lane the same record types `/effort ultracode`', () => {
+    seed(ID); plantIdle(); pane(IDLE_PANE);
+    h.sh(`_reg_set ${ID} class opus; _reg_set ${ID} effort ultracode; _reg_set ${ID} routeapplied "class=opus effort=high"`);
+    after('effort ultracode', ACK_EFFORT('ultracode'));
+    h.sh(`${TMUX_STUB} _route_apply_now ${ID}`);
+    expect(keys()).toEqual(['-l /effort ultracode', 'Enter']);
+    expect(h.reg(ID, 'routeapplied')).toBe('class=opus effort=ultracode');
   });
 });
 

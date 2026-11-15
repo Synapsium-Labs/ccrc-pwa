@@ -28,12 +28,15 @@ import {
 } from '../../../shared/continuity-card.js';
 import { TIMER_PREVIEW_CHARS } from '../../../shared/continuity-timers.js';
 import { NOTES_CAP, type KeyFact } from '../../../shared/continuity.js';
-import { FLEET_ROLES, FLEET_ROLE_NAMES, type FleetRole } from '../../../shared/fleetRoles.js';
+import { FLEET_ROLES, FLEET_ROLE_NAMES, isFleetRole, type FleetRole } from '../../../shared/fleetRoles.js';
 import { utf8Bytes } from '../../../shared/utf8.js';
 import { CARD_TEXT_PREFACE, untrustedBlock } from '../coord/untrusted.js';
 import { roleOf, type RoleFacts } from '../roleOf.js';
 
-/** The line a card carries when the session holds nothing its role's card reads, and every read answered (C51). */
+/** The line a card carries when the session holds none of its role's body facts (`BODY_FACTS`: runs, claims, coordinator
+ *  intent and the rest, never pending timers), and every one of those reads answered (C51). A card that holds only pending
+ *  timers carries this line and its timers section both, and the line stays true: it names runs, claims and coordinator
+ *  intent, which the timers are not (slug timers-are-not-body-facts; review 2064, F3). */
 export const CARD_NOTHING_LINE = 'No runs, claims or coordinator intent were measured for this session.';
 /** The line before the first untrusted block (§3.3.2: notes are data; authority comes only from rows). */
 export const CARD_AUTHORITY_LINE =
@@ -61,10 +64,23 @@ const ONE_LINE_MAX_CHARS = 200;
 /** What `iso` prints for a stamp that is not a time (review 1892, F8): a corrupt row renders a line, never a throw. */
 export const CARD_UNREADABLE_TIME = '(an unreadable time)';
 
-/** A row's field printed bare, on one line: every control, format and line or paragraph separator character (newline,
- *  CR, U+2028 and U+2029 among them) is escaped as `\u{<hex>}`, and the result is cut at `max` characters. */
+/** What the card escapes, in a bare field and in an untrusted block alike (review 2027 N1; review 2087 F1, F2, F4): every
+ *  control, format and line or paragraph separator character (newline, CR, ESC, U+2028 and U+2029, bidi overrides and
+ *  isolates, zero-width and tag characters among them), every lone surrogate, and the backslash itself. A lone surrogate can
+ *  be stored: a JSON-parsed column (a programme's `doneWhen`, the handover note) gives one back, though a TEXT column and a
+ *  UTF-8 file read give U+FFFD. The backslash is escaped so a stored `\u{1b}` reads `\\u{1b}`, never as an escaped ESC. */
+const ESCAPED = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}\p{Cs}\\]/gu;
+/** One escaped character: `\\` for the backslash, `\u{<hex>}` for the rest. An escape is ASCII, at most two bytes a
+ *  character as JSON, and what is left raw (with a block's newlines and tabs, two bytes each as JSON) is well-formed text JSON
+ *  writes as its UTF-8, at most four bytes a code point. So no page is more than four bytes a code point as JSON, and
+ *  `CARD_PAGE_CHARS` keeps every printed page under the cut: `ccrc-api card`'s, and the raw row `ccrc-api sessions card`'s,
+ *  which prints the page as JSON. (`\p{Cs}` under the `u` flag matches a lone surrogate only: a pair is one code point.) */
+const escapeOf = (c: string): string => (c === '\\' ? '\\\\' : `\\u{${c.codePointAt(0)!.toString(16)}}`);
+
+/** A row's field printed bare, on one line: every character `ESCAPED` names is escaped, and the result is cut at `max`
+ *  characters. */
 export function oneLine(v: string, max: number = ONE_LINE_MAX_CHARS): string {
-  const escaped = String(v).replace(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu, (c) => `\\u{${c.codePointAt(0)!.toString(16)}}`);
+  const escaped = String(v).replace(ESCAPED, escapeOf);
   const chars = [...escaped];
   return chars.length > max ? `${chars.slice(0, max).join('')}…` : escaped;
 }
@@ -83,8 +99,22 @@ export function iso(ms: number): string {
   return Number.isNaN(d.getTime()) ? CARD_UNREADABLE_TIME : d.toISOString().replace(/\.\d{3}Z$/, 'Z');
 }
 
+/** An untrusted block's text: every character `ESCAPED` names is escaped but the newline and the tab, so a block keeps its
+ *  lines (review 2027 N1; review 2087 F1, F2). A raw ESC or CR would act on the reader's pane through `ccrc-api card`, a bidi
+ *  override or a zero-width character would hide what the text says, and JSON writes a control or a lone surrogate as six
+ *  bytes. Applied before the cap, so the cap bounds what is shown. */
+function blockText(text: string): string {
+  return text.replace(ESCAPED, (c) => (c === '\n' || c === '\t' ? c : escapeOf(c)));
+}
+
+/** A block of raw text a session or a person wrote: escaped by `blockText`, then fenced and capped. */
 const block = (text: string, capBytes: number, fullAt: string): string =>
-  untrustedBlock(text, capBytes, fullAt, CARD_TEXT_PREFACE);
+  untrustedBlock(blockText(text), capBytes, fullAt, CARD_TEXT_PREFACE);
+
+/** A block whose every line is already escaped field by field (`fieldLine`, so nothing in it is raw): fenced and capped as it
+ *  is. Escaping it again would double the backslashes its escapes wrote. */
+const fieldsBlock = (escaped: string, capBytes: number, fullAt: string): string =>
+  untrustedBlock(escaped, capBytes, fullAt, CARD_TEXT_PREFACE);
 
 /** Ranks: a `keep` section's rank is never read; a droppable one is dropped lowest first. Within the mail and notes
  *  bands the newer entries rank higher; programmes rank by slug, the first slug highest (a programme carries no time).
@@ -196,7 +226,7 @@ function notesSections(f: CardFacts): readonly CardSection[] {
       return {
         key: `note:${n.id}`, rank: banded(RANK.note, sorted.length - 1 - i, sorted.length), keep: false,
         text: `Note ${n.id} (${oneLine(n.kind)}, on ${oneLine(n.key)}${KEY_NOW[n.keyFact]}), written ${iso(n.at)}. Next:\n`
-          + `${block(fieldLine(n.next), NOTE_FIELD_CAP_BYTES, at)}\nWaits on:\n${block(fieldLine(n.waitsOn), NOTE_FIELD_CAP_BYTES, at)}`,
+          + `${fieldsBlock(fieldLine(n.next), NOTE_FIELD_CAP_BYTES, at)}\nWaits on:\n${fieldsBlock(fieldLine(n.waitsOn), NOTE_FIELD_CAP_BYTES, at)}`,
       };
     });
   });
@@ -217,7 +247,7 @@ function checkpointSections(f: CardFacts): readonly CardSection[] {
     return [{
       key: 'checkpoint', rank: RANK.checkpoint, keep: false,
       text: `Checkpoint from ${iso(cp.at)}: the handover note of generation ${h.generation}, ${h.dropped} status word(s) dropped `
-        + `(its claims of done, ids, promises, authority and preferences are not rows):\n${block(lines.join('\n'), CHECKPOINT_CAP_BYTES, 'stored on the handover row, which nothing reads back in W1a')}`,
+        + `(its claims of done, ids, promises, authority and preferences are not rows):\n${fieldsBlock(lines.join('\n'), CHECKPOINT_CAP_BYTES, 'stored on the handover row, which nothing reads back in W1a')}`,
     }];
   });
 }
@@ -233,7 +263,7 @@ function timersSections(f: CardFacts): readonly CardSection[] {
     const bound = (t: CardTimer): string => t.runId !== null ? `run ${t.runId}` : t.programme !== null ? `programme ${oneLine(t.programme)}` : 'no run or programme';
     const lines = sorted.map((t) => `timer ${t.id}, due ${iso(t.dueAt)}, ${bound(t)}: ${fieldLine(t.preview)}`);
     return [keepLine('timers', `Pending timers: ${sorted.length} pending; the next is due at ${iso(sorted[0]!.dueAt)}.\n`
-      + block(lines.join('\n'), TIMERS_CAP_BYTES, 'in `ccrc-api timer list`'))];
+      + fieldsBlock(lines.join('\n'), TIMERS_CAP_BYTES, 'in `ccrc-api timer list`'))];
   });
 }
 
@@ -398,4 +428,44 @@ export function cardPages(text: string): readonly string[] {
 export function snapshotFactsJson(f: CardFacts): string {
   const { at: _at, ...rest } = f;
   return JSON.stringify(rest);
+}
+
+/** A stored snapshot read back as facts (the probes piece: a round is drawn from the snapshot its generation was carded
+ *  with), `at` the snapshot row's own time. Null when the text is not a snapshot's object at all. A fact whose shape this
+ *  build does not read, such as an item from before `everTicked` existed, reads `unmeasured` (`the snapshot's <name>`),
+ *  never as a guess: an item read as never ticked would let an abstention probe ask about one that carries a ruling. */
+export function snapshotFactsOf(json: string, at: number): CardFacts | null {
+  let o: unknown;
+  try { o = JSON.parse(json); } catch { return null; }
+  if (typeof o !== 'object' || o === null || Array.isArray(o)) return null;
+  const v = o as Record<string, unknown>;
+  if (typeof v.sessionId !== 'string') return null;
+  const isObj = (x: unknown): x is Record<string, unknown> => typeof x === 'object' && x !== null && !Array.isArray(x);
+  const num = (x: unknown): boolean => typeof x === 'number' && Number.isFinite(x);
+  const str = (x: unknown): boolean => typeof x === 'string';
+  const item = (x: unknown): boolean => isObj(x) && num(x.id) && str(x.state) && num(x.at) && typeof x.everTicked === 'boolean' && str(x.programme);
+  const listOf = (ok: (x: unknown) => boolean) => (x: unknown): boolean => Array.isArray(x) && x.every(ok);
+  const fact = <T>(name: string, ok: (x: unknown) => boolean): Fact<T> => {
+    const f = v[name];
+    const what = `the snapshot's ${name}`;
+    if (!isObj(f)) return { kind: 'unmeasured', what };
+    if (f.kind === 'unmeasured') return { kind: 'unmeasured', what: str(f.what) ? (f.what as string) : what };
+    return f.kind === 'read' && ok(f.value) ? { kind: 'read', value: f.value as T } : { kind: 'unmeasured', what };
+  };
+  const role = v.role;
+  return {
+    sessionId: v.sessionId, role: role === 'undecided' || isFleetRole(role) ? role : 'undecided', roleWhy: str(v.roleWhy) ? (v.roleWhy as string) : '', at,
+    runs: fact('runs', listOf((x) => isObj(x) && num(x.id) && str(x.programme) && str(x.state) && (x.planPath === null || str(x.planPath)))),
+    ledger: fact('ledger', listOf((x) => isObj(x) && str(x.slug) && listOf(item)(x.openItems))),
+    claims: fact('claims', listOf((x) => isObj(x) && listOf(str)(x.paths))),
+    intent: fact('intent', (x) => typeof x === 'boolean'),
+    itemsRaised: fact('itemsRaised', listOf(item)),
+    mailOutstanding: fact('mailOutstanding', listOf((x) => isObj(x) && num(x.deliveryId) && num(x.at))),
+    mailMore: v.mailMore === true,
+    notes: fact('notes', listOf((x) => isObj(x) && num(x.id) && num(x.at) && str(x.kind) && str(x.next))),
+    checkpoint: fact('checkpoint', (x) => x === null || isObj(x)),
+    history: fact('history', isObj),
+    timers: fact('timers', listOf((x) => isObj(x) && num(x.id) && num(x.dueAt) && str(x.preview)
+      && (x.runId === null || num(x.runId)) && (x.programme === null || str(x.programme)))),
+  };
 }
