@@ -49,3 +49,55 @@ _acctorder_valid() {   # list -> 0 iff account ids joined by `,`, none twice, at
   for a in ${v//,/ }; do [[ "$seen" == *",$a,"* ]] && return 1; seen+="$a,"; done
   return 0
 }
+_session_pool_side() {   # id [project] -> "set <spelling>" | set-unreadable | set-malformed | _project_pool_state's four words; rc 0
+  # THE ONE READER OF A SESSION'S POOL SIDE (C46): the set on its route record when one stands, else its project's tag
+  # through `_project_pool_state`, the one reader of that tag. A `poolset` entry that exists is never "no set" (Review
+  # Focus 1): a link, a non-regular file or an unreadable one is `set-unreadable` (`_reg_read`'s own tests, without its read,
+  # which takes the whole file and drops a NUL), and bytes that are not one spelling are `set-malformed`. The read is bounded
+  # at the cap + 1 bytes, so a NUL or a read that hit the cap answers rc 0 and is malformed, and a failed open leaves zero
+  # bytes, malformed too. A `$REG` that cannot be searched answers `unreadable` whatever the project argument, an empty one
+  # included: it cannot say whether a set stands, so it never answers an empty project's `untagged` (review 2134 F2).
+  # The project is the second argument when one is passed (`$# -ge 2`, so an empty project is not "no project"); otherwise
+  # it is the row's field, read as `_swap_target` reads it: absent is the empty name, unreadable is `unreadable` unless no
+  # project can be tagged (`_pool_untaggable`).
+  local LC_ALL=C IFS=' ' f="$REG/$1.poolset" v="" p prc
+  [[ -d "$REG" && -x "$REG" ]] || { echo unreadable; return 0; }
+  if [[ -e "$f" || -L "$f" ]]; then
+    [[ -L "$f" || ! -f "$f" || ! -r "$f" ]] && { echo set-unreadable; return 0; }
+    if { IFS= read -r -d '' -n $((POOL_SET_SPELLING_MAX_BYTES + 1)) v; } 2>/dev/null < "$f"; then v=""; fi
+    _poolset_parse "$v" >/dev/null && echo "set $v" || echo set-malformed
+    return 0
+  fi
+  (( $# >= 2 )) && { _project_pool_state "$2"; return 0; }
+  _reg_read_to p "$1" project; prc=$?
+  (( prc == 2 )) && ! _pool_untaggable && { echo unreadable; return 0; }
+  _project_pool_state "$p"
+}
+_pool_ok_set() {   # account-id side-word -> 0 serve | 1 mismatch | 2 undecidable; sets POOL_OK_SIDE/POOL_OK_STATE, so call it bare
+  # `_pool_ok`'s set case, the rule's one membership test for a set (Review Focus 3; `shared/poolrule.ts#poolRule`'s set arm,
+  # the two driven by one table). A bad set is undecidable on the set side before the account side is read, so an untagged
+  # account never serves past it: `set-unreadable`, `set-malformed`, a spelling that does not parse (a caller's word, never
+  # `_session_pool_side`'s), and a set word this build does not know, which names the set side too, never the project's
+  # tag file (A1 review N5). Then the account side as `_pool_ok` reads it: undecidable there, an untagged account serves
+  # iff the set says `+untagged`, and `named p` serves iff p is a pool name and one of the set's names (a "name" that spans
+  # two adjacent names, `pool-a pool-b`, is no pool name: review 2134 F4).
+  local LC_ALL=C IFS=' ' ap parsed names
+  POOL_OK_SIDE='set'; POOL_OK_STATE=unrecognised
+  [[ "$2" == set-unreadable || "$2" == set-malformed ]] && { POOL_OK_STATE=${2#set-}; return 2; }
+  [[ "$2" == "set "* ]] || return 2
+  POOL_OK_STATE=malformed; parsed=$(_poolset_parse "${2#set }") || return 2
+  names=${parsed%%$'\n'*}; names=${names#names=}
+  ap=$(_acct_pool_state "$1"); POOL_OK_SIDE=account; POOL_OK_STATE="$ap"
+  case "$ap" in
+    untagged)  [[ "$parsed" == *$'\n'untagged=yes ]] && return 0; return 1 ;;
+    "named "*) _pool_name_valid "${ap#named }" && [[ " $names " == *" ${ap#named } "* ]] && return 0; return 1 ;;
+    *)         return 2 ;;
+  esac
+}
+_pool_set_undecidable_why() {   # state id -> the rc-2 sentence for the set side (`_pool_undecidable_why`'s set arm)
+  echo "the pool set for session $2 is $1: $REG/$2.poolset — the server writes it again at its next sweep, or the operator saves the set again in Settings; the project's tag is not involved"
+}
+_pool_set_mismatch_why() {   # account-id account-state spelling -> the rc-1 clause for a set (`_pool_mismatch_why`'s set arm)
+  [[ "$2" == untagged ]] && { echo "$1 is in no pool and the session's pool set '$3' does not admit untagged accounts"; return 0; }
+  echo "$1 is in pool '${2#named }' (measured from the projection, $REG/pool-epoch) and that pool is not in the session's pool set '$3'"
+}
