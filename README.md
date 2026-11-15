@@ -2506,8 +2506,8 @@ It runs on the system `python3`, 3.9 or later (below that `ccrc codex start` ref
 needs no LiteLLM runtime. It sends `originator: ccrc` and a ccrc user agent, never presenting itself as Codex. Claude
 Code's top-level system prompt travels as the first developer message, with no `instructions` field and no prompt of the
 bridge's own; a lane directory holding the marker file `bridge-instructions` (no ccrc code writes it) sends it as
-`instructions` instead. Three more marker files, `bridge-reasoning-all-turns`, `bridge-verbosity` and
-`bridge-turn-state`, each add one part of native Codex's request (below). A
+`instructions` instead. Four more marker files, `bridge-reasoning-all-turns`, `bridge-verbosity`, `bridge-turn-state`
+and `bridge-service-tier-fast`, each add one part of native Codex's request (below). A
 mid-conversation `role: "system"` entry becomes a developer message in its place, and effort follows the shim's own rule
 (above). Each reply's blocks are built from the upstream's finished items, except that a message's first text part
 streams live as it arrives (so a long compaction summary shows as it is written), and each reply streams zero usage in
@@ -2574,23 +2574,27 @@ stopped one), foreign and unmeasured
 rows; a FAIL, `runs a retired refresher`, when the lane's LiteLLM tier or shim runs beside it; a FAIL for the `siwc`
 route; no half-up row and no `litellm.yaml` row. On a lane in either mode, a stats file, store, request record or its
 older generation that is not a regular file of mode 0600 is a FAIL. Removing the lane reaps both files, the store's
-set-aside copy, the recordings directory, the request record with its older generation, and the marker files, the three
+set-aside copy, the recordings directory, the request record with its older generation, and the marker files, the four
 request markers and `record-requests` below among them, with the rest of its state.
 
 **The stats file's `parity` section** measures what parity with native Codex hinges on, per route and model, from what
 the bridge already receives and sends, so nothing new goes on the wire (D-8618). Each row counts the upstream responses
 that reached `response.completed` or `response.incomplete` and their input, cached, output and reasoning tokens; the
 `reasoning.effort` each request carried (`none` when it carried none); whether the model that answered is the one asked
-for; the backend's `input_transformations` by type, action and reason, so `reasoning:removed:turn_boundary` counts the
+for; the service tier the response named (`servedTier`: `priority`, `default` and so on, `absent` when it named none, at
+most 16 tiers, then `overflow`); the backend's `input_transformations` by type, action and reason, so `reasoning:removed:turn_boundary` counts the
 earlier reasoning the backend dropped; each reasoning-store lookup by what it found (per lookup, so a long conversation
-counts its old turns again); and the milliseconds to the first output and to the end, in fixed buckets. Every name in
+counts its old turns again); and the milliseconds to the first output and to the end, in fixed buckets, and beside the
+first output's, for a response that finished a reasoning item before its first output, the milliseconds to the last such
+item (`reasoningMs`, the same buckets), so a slow first output reads as reasoning or as waiting (D-8633). Every name in
 it is bounded like the others. It is not drift: nothing in it reaches doctor's WARN or the watch's drift check, and
 `ccrc codex status` does not show it. The stats file is written at most every 10 seconds while answers come, and again
 once the bridge has been idle for 10 seconds after its last answer, so a run's figures are on disk soon after the run
 ends rather than at the next request (D-8624).
 
-**The request markers** close three gaps between the bridge's request and native Codex's (D-8622, D-8623). Each is off
-until an operator touches its file in the lane directory (no ccrc code writes them), and each is read at every request:
+**The request markers** close four gaps between the bridge's request and native Codex's (D-8622, D-8623, D-8632). Each
+is off until an operator touches its file in the lane directory (no ccrc code writes them), and each is read at every
+request:
 - `bridge-reasoning-all-turns` adds `reasoning.context: "all_turns"`, after the effort, for a model whose catalogue row
   says `useResponsesLite: true`;
 - `bridge-verbosity` adds `text.verbosity`, the row's `defaultVerbosity`, for a row that says `supportVerbosity: true`,
@@ -2599,8 +2603,11 @@ until an operator touches its file in the lane directory (no ccrc code writes th
   every later request of that turn. A turn is the requests that share their latest user message holding no tool
   result: the same message at the same place in the conversation, so two turns that open on the same words are two.
   The value is kept in memory only, for at most 256 turns, and is cleared when the credential's account changes.
+- `bridge-service-tier-fast` sends `service_tier: "priority"`, native Codex's Fast mode, right after `stream` in every
+  request, compaction requests included, for any model: nothing in the catalogue gates it. The `parity` row's
+  `servedTier` shows which tier the backend answered with, so whether it honoured the request can be read there.
 
-The bridge never sends Codex's internal Lite header. When the backend answers 400 to a request that carried any of
+The bridge never sends Codex's internal Lite header, or the routing hint Codex sends beside a service tier. When the backend answers 400 to a request that carried any of
 these, the bridge sends it once more without them, and sends none of them for the rest of that message; it does not
 for a context overflow or a policy refusal, which no removed field cures. The client sees only the second answer, and
 the first is not written to the credential's status file. The `parity` row counts the requests that carried each
@@ -2623,11 +2630,12 @@ for a subagent's request, never its id), `message` and `post` (the client messag
 request's index within it: continuations and retries count on), `route` and `model` (the `parity` row's), `status`
 (null when no answer came), `outcome` (the word the stats file counts for what the bridge did with the answer: `2xx`,
 `continuations`, `continuation-cap`, `refresh-after-401`, `4xx`, `5xx`, `client-gone`, `drain-cut`, or `fallback` for the
-400 that started a fallback), `served`, `effort`, the four token counts, `firstOutputMs` and `totalMs` (whole
-milliseconds, from the same instants the `parity` histograms bucket), `inputTransformations`, `replay` (the message's
+400 that started a fallback), `served`, `servedTier` (the `parity` row's word for the tier the response named, or
+`absent`), `effort`, the four token counts, `firstOutputMs`, `reasoningMs` (null when no reasoning item finished before
+the first output) and `totalMs` (whole milliseconds, from the same instants the `parity` histograms bucket), `inputTransformations`, `replay` (the message's
 reasoning-store lookups, on its first request only), `markers`, `fallback` and, when set, `turnState`. A field the
-answer did not reach is null, and so are `served`, the token counts, `inputTransformations`, `firstOutputMs` and
-`totalMs` of every answer the `parity` row counted no response for (a non-2xx, a stream that broke, even one that
+answer did not reach is null, and so are `served`, `servedTier`, the token counts, `inputTransformations`,
+`firstOutputMs`, `reasoningMs` and `totalMs` of every answer the `parity` row counted no response for (a non-2xx, a stream that broke, even one that
 released output first), so the `parity` histograms rebuilt from the rows are the stats file's own. It never holds conversation text, a tool name, the
 prompt cache key, a turn-state value, a header value other than the session id, an account id or a token. A row that
 cannot be written (a full disk, a directory in the file's place) never fails the request: the stats file counts it as

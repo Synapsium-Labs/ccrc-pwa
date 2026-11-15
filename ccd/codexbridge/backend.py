@@ -7,27 +7,34 @@ upstream idle timeout of 300 s, as in Codex"); plan 2026-10-22, Task 7 and "The 
 `bridge-instructions` marker), D-6425 (`output_config.format` becomes the Responses `text.format`), D-6426 (the
 sampling fields are dropped on the backend route too).
 
-THE BODY follows Codex's own request (upstream openai/codex @ 092d3ac: codex-rs/codex-api/src/common.rs:278-304),
-with `stream` moved up beside `model`: `model`, `stream`, `input`, `tools`, `tool_choice`, `parallel_tool_calls`,
-`reasoning` (only with an effort, never a `summary`), `store: false`, `include`, `prompt_cache_key`, then `text` only
-for an output format. The developer message is `input[0]` (Codex sends no top-level `instructions` and puts its base
-prompt in the first developer message), so Claude Code's system prompt is the highest-ranked text the model sees and
-no prompt of the bridge's own is sent. Only with the lane's `bridge-instructions` marker does that text travel as
-`instructions` instead, and then it is not `input[0]`. `max_output_tokens`, `temperature`, `top_p`, `user`, `metadata`,
-`previous_response_id` and `truncation` are never sent.
+THE BODY follows Codex's own request (upstream openai/codex @ 092d3ac: codex-rs/codex-api/src/common.rs:278-304), with
+`stream` moved up beside `model`: `model`, `stream`, `service_tier` (only with its marker, below), `input`, `tools`,
+`tool_choice`, `parallel_tool_calls`, `reasoning` (only with an effort, never a `summary`), `store: false`, `include`,
+`prompt_cache_key`, then `text` only for an output format. The developer message is `input[0]` (Codex sends no top-level
+`instructions` and puts its base prompt in the first developer message), so Claude Code's system prompt is the
+highest-ranked text the model sees and no prompt of the bridge's own is sent. Only with the lane's `bridge-instructions`
+marker does that text travel as `instructions` instead, and then it is not `input[0]`. `max_output_tokens`,
+`temperature`, `top_p`, `user`, `metadata`, `previous_response_id` and `truncation` are never sent.
 
-THE REQUEST MARKERS (D-8622). Three more markers in the lane directory, each existence-only, read at each POST, no
-writer in the tree, each adding one thing native Codex sends and this body otherwise does not:
+THE REQUEST MARKERS (D-8622, D-8632). Four more markers in the lane directory, each existence-only, read at each POST,
+no writer in the tree, each adding one thing native Codex sends and this body otherwise does not:
 `bridge-reasoning-all-turns` adds `"context": "all_turns"` to `reasoning` (Codex's `Reasoning` serialises `effort`,
 `summary`, `context` in that order, so it follows the effort, or is `reasoning`'s only key with none), only for a
 catalogue row saying `useResponsesLite: true`; `bridge-verbosity` adds `text.verbosity`, the row's
 `defaultVerbosity`, only for a row saying `supportVerbosity: true` with a valid `defaultVerbosity`, in the one `text`
-object before `format` (Codex's `TextControls` order); and `bridge-turn-state` echoes the `x-codex-turn-state`
-header (D-8623; the server keeps the turn's value). `additions` decides the body's two from the row and the markers,
-and `build_body` takes them as arguments, so it stays pure.
+object before `format` (Codex's `TextControls` order); `bridge-turn-state` echoes the `x-codex-turn-state`
+header (D-8623; the server keeps the turn's value); and `bridge-service-tier-fast` (D-8632) adds
+`"service_tier": "priority"`, Codex's Fast mode (`ServiceTier::Fast.request_value()`), right after `stream` and
+before anything else (`instructions` with the instructions form, else `input`): Codex's `ResponsesApiRequest` puts
+it there, a routing field first. It is sent on every POST while the marker exists, a compaction request's and any
+model's alike, never gated on the catalogue (whose probe keeps no service tiers). `additions` decides the body's
+three from the row and the markers, and `build_body` takes them as arguments, so it stays pure.
 (upstream openai/codex @ 826b6e8: codex-rs/codex-api/src/common.rs `Reasoning`, `TextControls`,
-`ResponsesApiRequest`; codex-rs/core/src/client.rs `build_reasoning`.) Codex's internal Lite header
-(`x-openai-internal-codex-responses-lite`) is never sent: the bridge presents itself as ccrc, never as Codex (below).
+`ResponsesApiRequest`; codex-rs/core/src/client.rs `build_reasoning`; codex-rs/protocol/src/config_types.rs
+`ServiceTier::request_value`.) Codex's internal Lite header (`x-openai-internal-codex-responses-lite`) is never
+sent, and neither is the routing hint Codex sends beside a service tier (`x-codex-routing-hint`,
+`model=<model>;tier=<tier>`: codex-rs/core/src/client.rs `build_routing_hint_header`): the bridge presents itself as
+ccrc, never as Codex (below).
 
 THE HEADERS are Codex's spellings: `ChatGPT-Account-ID` (codex-rs/model-provider/src/bearer_auth_provider.rs:37-41),
 carrying the CREDENTIAL's account id (`Reading.account_id`, the `chatgpt_account_id` claim), never CCGPT_ACCOUNT_ID,
@@ -76,9 +83,13 @@ INSTRUCTIONS_MARKER = "bridge-instructions"
 ALL_TURNS_MARKER = "bridge-reasoning-all-turns"
 VERBOSITY_MARKER = "bridge-verbosity"
 TURN_STATE_MARKER = "bridge-turn-state"
-MARKERS = (ALL_TURNS_MARKER, VERBOSITY_MARKER, TURN_STATE_MARKER)
+SERVICE_TIER_FAST_MARKER = "bridge-service-tier-fast"  # D-8632
+MARKERS = (ALL_TURNS_MARKER, VERBOSITY_MARKER, TURN_STATE_MARKER, SERVICE_TIER_FAST_MARKER)  # a new one goes last
 # Codex's ReasoningContext::AllTurns, as serde writes it.
 ALL_TURNS = "all_turns"
+# D-8632: Codex's Fast mode on the wire, `ServiceTier::Fast.request_value()` (upstream openai/codex @ 826b6e8:
+# codex-rs/protocol/src/config_types.rs), the `service_tier` the `bridge-service-tier-fast` marker sends.
+SERVICE_TIER_PRIORITY = "priority"
 # Codex's OpenAiVerbosity words: the bound D-8620's catalogue readers put on `defaultVerbosity` (ccd/ccrc-models-probe's
 # VERBOSITIES, shared/models.mjs's CATALOGUE_VERBOSITIES), pinned equal by codex-bridge-backend.test.ts.
 VERBOSITIES = ("low", "medium", "high")
@@ -145,29 +156,32 @@ def markers(lane_dir: str) -> FrozenSet[str]:
 
 
 class Additions(NamedTuple):
-    """What the request markers add to one body (D-8622): `reasoning.context` and `text.verbosity`, each None when
-    not sent."""
+    """What the request markers add to one body (D-8622): `reasoning.context`, `text.verbosity` and (D-8632)
+    `service_tier`, each None when not sent."""
     reasoning_context: Optional[str]
     verbosity: Optional[str]
+    service_tier: Optional[str] = None
 
     @property
     def carried(self) -> Tuple[str, ...]:
         """The markers whose field this body carries, in MARKERS' order."""
-        return tuple(m for m, v in ((ALL_TURNS_MARKER, self.reasoning_context), (VERBOSITY_MARKER, self.verbosity))
-                     if v is not None)
+        return tuple(m for m, v in ((ALL_TURNS_MARKER, self.reasoning_context), (VERBOSITY_MARKER, self.verbosity),
+                                    (SERVICE_TIER_FAST_MARKER, self.service_tier)) if v is not None)
 
 
 def additions(row: object, marks: FrozenSet[str]) -> Additions:
     """D-8622: the body's additions for a request whose model has catalogue `row` (None when it has none), with the
     markers `marks`: `all_turns` only for a row whose `useResponsesLite` is true, and the row's `defaultVerbosity`
     only for a row whose `supportVerbosity` is true and whose `defaultVerbosity` is one of VERBOSITIES (D-8620's
-    fields; anything else, a string `"true"` among it, says no)."""
+    fields; anything else, a string `"true"` among it, says no); and SERVICE_TIER_PRIORITY whenever the
+    `bridge-service-tier-fast` marker is among `marks`, whatever the row (D-8632)."""
     fields = row if isinstance(row, dict) else {}
     context = ALL_TURNS if ALL_TURNS_MARKER in marks and fields.get("useResponsesLite") is True else None
     value = fields.get("defaultVerbosity")
     verbosity = (value if VERBOSITY_MARKER in marks and fields.get("supportVerbosity") is True
                  and isinstance(value, str) and value in VERBOSITIES else None)
-    return Additions(context, verbosity)
+    tier = SERVICE_TIER_PRIORITY if SERVICE_TIER_FAST_MARKER in marks else None  # D-8632: never gated on the row
+    return Additions(context, verbosity, tier)
 
 
 # ── the body ─────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -177,12 +191,15 @@ def _is_developer_item(item: object, text: str) -> bool:
 
 
 def build_body(req: NeutralRequest, *, instructions_form: bool, reasoning_context: Optional[str] = None,
-               verbosity: Optional[str] = None) -> dict:
+               verbosity: Optional[str] = None, service_tier: Optional[str] = None) -> dict:
     """The Responses body, keys in Codex's order with `stream` second (above). With `instructions_form`, the developer
-    text is `instructions` and is not `input[0]`; otherwise there is never an `instructions` key. `reasoning_context`
-    and `verbosity` are D-8622's additions (`additions`); with both None the body is the unmarked one, byte for byte."""
+    text is `instructions` and is not `input[0]`; otherwise there is never an `instructions` key. `reasoning_context`,
+    `verbosity` and `service_tier` are the markers' additions (`additions`, D-8622, D-8632); with all three None the
+    body is the unmarked one, byte for byte."""
     items = list(req.items)
     body = {"model": req.model, "stream": True}  # type: Dict[str, object]
+    if service_tier is not None:  # D-8632: right after `stream`, before everything else, as Codex's struct orders it
+        body["service_tier"] = service_tier
     if instructions_form and req.developer is not None:
         body["instructions"] = req.developer
         if items and _is_developer_item(items[0], req.developer):

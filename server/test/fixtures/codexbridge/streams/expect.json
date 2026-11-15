@@ -1084,6 +1084,7 @@
    "error": null,
    "parity": {
     "model": "model-6.1-beta",
+    "tier": null,
     "transformations": [
      "reasoning:removed:organization_mismatch",
      "reasoning:removed:end_user_mismatch",

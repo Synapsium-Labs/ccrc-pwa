@@ -16,9 +16,10 @@ THE FILE, VERSION 1 (`bridge.stats.json` in the lane directory; the name is `lan
                                   "file": <copy's basename>}},
    "parity": {"<route>/<model>": {"responses", "inputTokens", "cachedTokens", "outputTokens", "reasoningTokens",
               "effort": {"<level>" | "none": n}, "served": {"same", "other", "absent"}, "servedOther": {"<model>": n},
+              "servedTier": {"<tier>" | "absent": n},
               "inputTransformations": {"<type>:<action>:<reason>": n}, "responsesWithTransformations",
               "replay": {"text-hit", "text-empty", "text-absent", "call-hit", "call-absent"},
-              "firstOutputMs": {"<bucket>": n}, "totalMs": {"<bucket>": n},
+              "firstOutputMs": {"<bucket>": n}, "reasoningMs": {"<bucket>": n}, "totalMs": {"<bucket>": n},
               "markers": {"<marker>": n}, "fallbacks": {"<marker>": n}, "turnState": {"captured", "echoed"}}}}
 `since` is the file's first start, carried across restarts; `startedAt` is this process's. `promptTokensMax` is the
 largest upstream `input_tokens` of a reply the model accepted (the caller reports only those); a refusal's `tokens`
@@ -50,6 +51,9 @@ outcomes. A row counts:
   OVERFLOW.
 - `served`: the terminal's `response.model` (else `response.created`'s) against the model the body asked for: `same`,
   `other` (that model counted in `servedOther`, capped as `effort` is) or `absent`.
+- `servedTier` (D-8632): the terminal response's `service_tier`, bounded by NAME_RE (else UNRECOGNISED), or `absent`
+  when it carried none (`tier_word`); capped as `effort` is. It says whether the backend honoured the
+  `bridge-service-tier-fast` marker's `priority`, and what it serves without one.
 - `inputTransformations`: one per entry of the terminal response's `input_transformations` (an array on the response
   object, not an event), keyed `<type>:<action>:<reason>` by `reducer.transformation_key`, so openai/codex's reasoning
   removals by reason are the keys `reasoning:removed:<reason>`; at most PARITY_TRANSFORMS_MAX keys, then OVERFLOW.
@@ -65,10 +69,14 @@ outcomes. A row counts:
 - `firstOutputMs` and `totalMs`: milliseconds from the upstream POST's start (`time.monotonic()`) to the first output
   the reducer released (a text delta or a finished block) and to the terminal event, in PARITY_BUCKETS_MS (each an
   inclusive upper bound) or PARITY_INF; a response that released no output counts in `totalMs` only.
+- `reasoningMs` (D-8633): for a response counted in `firstOutputMs`, milliseconds from the same POST start, on the
+  same clock, to the moment the bridge saw the last reasoning item before the first released block finish (the
+  reducer's R22), in the same buckets; a response with no reasoning item before its first output counts nothing here.
 - `markers` (D-8622): one per upstream POST that carried a request marker's addition, by the marker
-  (`backend.MARKERS`): the body's `reasoning.context` or `text.verbosity`, or the echoed `x-codex-turn-state`; a marker
-  present that added nothing (the row not eligible, nothing captured yet) is not counted. `fallbacks`: one per marker a
-  400's fallback dropped (the POST it answered carried it). Both are zero-filled over `backend.MARKERS`.
+  (`backend.MARKERS`): the body's `reasoning.context`, `text.verbosity` or `service_tier` (D-8632), or the echoed
+  `x-codex-turn-state`; a marker present that added nothing (the row not eligible, nothing captured yet) is not
+  counted. `fallbacks`: one per marker a 400's fallback dropped (the POST it answered carried it). Both are zero-filled
+  over `backend.MARKERS`.
 - `turnState` (D-8623): `captured`, each turn's first sticky-routing token kept, and `echoed`, each POST that sent one
   back. The token itself is never in this file (TOKEN_HEADERS).
 A writer ignores a malformed argument (a level, a model or an outcome that is not a string, a count that is not a
@@ -90,7 +98,8 @@ tokens and account id (`server._Request.record`), as the status file's is bounde
 A RESTART LOSES NOTHING THE READERS NEED: construction loads a valid version-1 file of the same lane and carries its
 refusals (the hourly refresh may not have read them yet, Task 15), each route's ratio, request count and largest
 prompt (D24's calibration), the names, the unexplained list, the outcomes, the parity rows and `since` (the 7-day
-watch's counters). A file written before the parity section existed has no `parity` key and loads as it is.
+watch's counters). A file written before the parity section existed has no `parity` key and loads as it is; a parity
+row written before a field existed loads with it empty (`servedTier`) or zero-filled (`reasoningMs`, the markers').
 Any other file (unreadable, another version, another lane) starts fresh and counts `stats:reset`. At load, and at
 every `name()`, a name `known.explained` now covers leaves `unexplained`. The load also drops the two markers,
 UNRECOGNISED and OVERFLOW, from `unexplained` (the Stage 2 wave 3 whole-wave fix round, Z1): neither is a name known.py
@@ -211,6 +220,14 @@ def served_word(served: object, model: object) -> Optional[str]:
     return "absent" if served is None else "same" if served == model else "other"
 
 
+def tier_word(tier: object) -> Optional[str]:
+    """D-8632: the parity row's `servedTier` key for a response's `service_tier`: `absent` for None, else the tier
+    bounded by NAME_RE; None (counted nowhere) when it is neither None nor a string."""
+    if tier is not None and not isinstance(tier, str):
+        return None
+    return SERVED[2] if tier is None else _bounded(tier)
+
+
 def effort_word(effort: object) -> Optional[str]:
     """The parity row's `effort` key for a body's `reasoning.effort`: NO_EFFORT for None, else the level bounded by
     NAME_RE; None (counted nowhere) when it is neither None nor a string."""
@@ -272,9 +289,10 @@ def _is_transform_key(key: object) -> bool:
 
 def _parity_row() -> dict:
     """A parity row that has counted nothing: the fixed vocabularies zero-filled, the open maps empty."""
-    row = {"responses": 0, "responsesWithTransformations": 0, "effort": {}, "servedOther": {},
+    row = {"responses": 0, "responsesWithTransformations": 0, "effort": {}, "servedOther": {}, "servedTier": {},
            "inputTransformations": {}, "served": {k: 0 for k in SERVED}, "replay": {k: 0 for k in REPLAY_OUTCOMES},
-           "firstOutputMs": {k: 0 for k in _buckets()}, "totalMs": {k: 0 for k in _buckets()},
+           "firstOutputMs": {k: 0 for k in _buckets()}, "reasoningMs": {k: 0 for k in _buckets()},
+           "totalMs": {k: 0 for k in _buckets()},
            "markers": {k: 0 for k in backend.MARKERS}, "fallbacks": {k: 0 for k in backend.MARKERS},
            "turnState": {k: 0 for k in TURN_STATE_EVENTS}}  # type: dict
     for _, field in PARITY_TOKENS:
@@ -296,13 +314,14 @@ def _carried_row(old: dict) -> dict:
     for field in ("responses", "responsesWithTransformations") + tuple(f for _, f in PARITY_TOKENS):
         if _is_int(old.get(field)):
             row[field] = old[field]
-    for field in ("served", "replay", "firstOutputMs", "totalMs", "markers", "fallbacks", "turnState"):
+    for field in ("served", "replay", "firstOutputMs", "reasoningMs", "totalMs", "markers", "fallbacks", "turnState"):
         held = old.get(field)
         for k in row[field] if isinstance(held, dict) else ():
             if _is_int(held.get(k)):
                 row[field][k] = held[k]
     for field, valid, cap in (("effort", lambda k: _bounded(k) == k, PARITY_KEYS_MAX),
                               ("servedOther", lambda k: _bounded(k) == k, PARITY_KEYS_MAX),
+                              ("servedTier", lambda k: _bounded(k) == k, PARITY_KEYS_MAX),
                               ("inputTransformations", _is_transform_key, PARITY_TRANSFORMS_MAX)):
         held = old.get(field)
         for k in sorted(k for k in held if isinstance(k, str)) if isinstance(held, dict) else ():
@@ -559,12 +578,14 @@ class Stats:
 
     def parity_response(self, route: str, model: str, *, served: Optional[str] = None,
                         usage: Optional[Mapping[str, int]] = None, transformations: Optional[list] = None,
-                        first_output_ms: Optional[float] = None, total_ms: Optional[float] = None) -> None:
+                        first_output_ms: Optional[float] = None, total_ms: Optional[float] = None,
+                        served_tier: Optional[str] = None, reasoning_ms: Optional[float] = None) -> None:
         """One upstream response whose terminal event the reducer saw: `served` is the model the response named (None:
-        it named none), compared with `model`, the one asked for; `usage` the terminal's valid counts by
-        PARITY_TOKENS' names; `transformations` its `input_transformations` keys (None: no array); the two times in
-        milliseconds from the POST (`first_output_ms` None: no output). Each malformed argument counts nothing; the
-        response itself is always counted."""
+        it named none), compared with `model`, the one asked for; `served_tier` the service tier it named (None: it
+        named none, D-8632); `usage` the terminal's valid counts by PARITY_TOKENS' names; `transformations` its
+        `input_transformations` keys (None: no array); the three times in milliseconds from the POST
+        (`first_output_ms` None: no output; `reasoning_ms` None: no reasoning before it, D-8633). Each malformed
+        argument counts nothing; the response itself is always counted."""
         with self._lock:
             row = self._parity(route, model)
             row["responses"] += 1
@@ -579,11 +600,16 @@ class Stats:
                     others = row["servedOther"]
                     name = _capped(others, _bounded(served), PARITY_KEYS_MAX)
                     others[name] = others.get(name, 0) + 1
+            tier = tier_word(served_tier)  # D-8632
+            if tier is not None:
+                tiers = row["servedTier"]
+                tier = _capped(tiers, tier, PARITY_KEYS_MAX)
+                tiers[tier] = tiers.get(tier, 0) + 1
             if isinstance(transformations, list):
                 if transformations:
                     row["responsesWithTransformations"] += 1
                 count_transformations(row["inputTransformations"], transformations)
-            for field, ms in (("firstOutputMs", first_output_ms), ("totalMs", total_ms)):
+            for field, ms in (("firstOutputMs", first_output_ms), ("reasoningMs", reasoning_ms), ("totalMs", total_ms)):
                 at = _bucket(ms)
                 if at is not None:
                     row[field][at] += 1
