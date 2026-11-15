@@ -92,3 +92,13 @@ Task 7: none beyond the above; the census scan treats `Date.parse` as no clock r
 - Every mutation run on this box took minutes under load; the harness moves a foreground command to the background after 180 s,
   so the Step 6 groups were waited on by a foreground poll of the run's own output file, not started twice.
 - Fix round 1: the close-probe rejection rows now match each rejection's own phrase (`parameter`, `not a const`, `reassigned`, `declarations`, `cast`).
+
+## Final review fix wave
+
+- F1: the 5b landing reference now defines "positively opted in" in place (binding present and not `inert`, or the `lander` marker exists; not the lineage `enabled` marker), says `held` including `opt-in-unknown` stops, and a missing `binding` is the only fallback, still stopping where `lander` exists. The canonical verdict fence is untouched; the LINE pin in `coordinator-skill.test.ts` was extended by exact equality. Tests: `coordinator-skill`, `coordinator-landing-verdict` green (1050).
+- F2: README landing-section text corrected (main-red pause under D-8625, re-pin condition D-8626, retreat refusal and `recovery: 'repair'` D-8627, the `lander` row), plus one paragraph on the single main-red writer, the next-to-land mail, the landed reader's retirement of damaged rows and the opt-out trap. The auth paragraph and install text are unchanged.
+- F3: `currentLandingControl(project, nowMs = Date.now())` in `watch.ts` answers `undefined` once the pass that wrote the cache is older than `freshWithin(..., RADAR_PROBE_FRESH_S, ...)` allows (pass time kept in `landingControlsAt`, stamped through `iso` because a server radar reader may not build a Date, which `single-definition/core-vocab` pins). Existing getter calls in `radar-lane.test.ts` pass the pass's `NOW`. New test: "a cached control older than the radar freshness allows answers nothing, so the route holds".
+  Mutant row: getter ignores age (age check replaced by `void nowMs`) -> `radar-lane.test.ts -t "older than the radar freshness"` rc=1, `AssertionError: expected { lander: { ok: true, …(1) }, …(2) } to be undefined`; restored from the saved copy, same selection rc=0.
+- F4: `landingControlTx.ts` checks a missing run row for a run episode before the phase moves to `apply` and answers `no-send` `episode-changed`; no invariant throw remains. `landing-next-mail` green.
+- F5: unused `LandingInfrastructureCode` import removed from `advance.ts`.
+- Gates: skill/verdict, radar-lane/landing-read-route/landing-control/landing-next-mail, `single-definition` + `rings` (45 files), `GROWTH_CHECK=1 growth-check` (pass), anchors/citations/deviation-refs/dtbd/topology-clean, production `tsc --noEmit` rc=0, private-names scan rc 0 with no output, `git diff --check` clean.

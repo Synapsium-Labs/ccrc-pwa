@@ -14,6 +14,7 @@ import { RADAR_PROBE_MAX_BYTES } from '../src/coord/radar.js';
 import { readRegistry, type SessionRecord } from '../src/registry.js';
 import { localIO, type FleetIO } from '../src/io.js';
 import type { PrState } from '../../shared/api.js';
+import { RADAR_PROBE_FRESH_S } from '../../shared/api.js';
 import { seedRoster, testDeps, withFakeClock } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
 import { openCoordDb } from '../src/coord/db.js';
@@ -952,18 +953,18 @@ describe('the radar lane composes the control bundle and the store apply', () =>
     await w.sweepRadar([], NOW);
     expect(probeReads(seen, 'proj-b')).toBe(1);
     expect(ap.filter((p) => p === 'proj-b')).toHaveLength(1);
-    expect(w.currentLandingControl('proj-b')).toMatchObject({ lander: { ok: true }, probe: { ok: true }, health: { ok: true } });
-    expect(w.currentLandingControl('proj-unknown')).toBeUndefined();
+    expect(w.currentLandingControl('proj-b', NOW)).toMatchObject({ lander: { ok: true }, probe: { ok: true }, health: { ok: true } });
+    expect(w.currentLandingControl('proj-unknown', NOW)).toBeUndefined();
   });
 
   it('a registry project with no entry is read too, and the getter hands out a copy', async () => {
     plantRowIn(reg, 'claude-a-proj-a-alpha'); plantControl('proj-a');
     const w = make();
     await w.sweepRadar(await readRegistry(localIO, testDeps(home).cfg), NOW);
-    const first = w.currentLandingControl('proj-a');
+    const first = w.currentLandingControl('proj-a', NOW);
     expect(first).toMatchObject({ lander: { ok: true } });
     (first as { lander: unknown }).lander = { ok: false, reason: 'late' };
-    expect(w.currentLandingControl('proj-a')).toMatchObject({ lander: { ok: true } });
+    expect(w.currentLandingControl('proj-a', NOW)).toMatchObject({ lander: { ok: true } });
   });
 
   it('an unlistable registry still reads and applies a DB-known project and keeps re-aging the chips', async () => {
@@ -972,7 +973,7 @@ describe('the radar lane composes the control bundle and the store apply', () =>
     const w = make();
     await w.sweepRadar(null, NOW);
     expect(ap).toEqual(['proj-b']);
-    expect(w.currentLandingControl('proj-b')).toMatchObject({ health: { ok: true } });
+    expect(w.currentLandingControl('proj-b', NOW)).toMatchObject({ health: { ok: true } });
   });
 
   it('a failed store inventory reads the registry projects but applies nothing', async () => {
@@ -985,7 +986,7 @@ describe('the radar lane composes the control bundle and the store apply', () =>
     await w.sweepRadar(await readRegistry(localIO, testDeps(home).cfg), NOW + 1000);
     expect(ap).toEqual([]);
     expect(warn.mock.calls.map((c) => String(c[0])).filter((m) => m.includes('landing control inventory')), 'said once, deduped').toHaveLength(1);
-    expect(w.currentLandingControl('proj-a')).toMatchObject({ lander: { ok: true } });
+    expect(w.currentLandingControl('proj-a', NOW)).toMatchObject({ lander: { ok: true } });
   });
 
   it('a failed listing replaces a retained green with explicit unavailable evidence, never a borrowed snapshot', async () => {
@@ -993,10 +994,10 @@ describe('the radar lane composes the control bundle and the store apply', () =>
     let broken = false;
     const w = make(bentIo((m, p) => (broken && m === 'readdir' && p.endsWith(`${path.sep}landing`) ? { ok: false, reason: 'unreadable' } : undefined)));
     await w.sweepRadar([], NOW);
-    expect(w.currentLandingControl('proj-b')).toMatchObject({ lander: { ok: true } });
+    expect(w.currentLandingControl('proj-b', NOW)).toMatchObject({ lander: { ok: true } });
     broken = true;
     await w.sweepRadar([], NOW + 1000);
-    expect(w.currentLandingControl('proj-b')).toEqual({
+    expect(w.currentLandingControl('proj-b', NOW)).toEqual({
       lander: { ok: false, reason: 'unreadable' }, probe: { ok: false, reason: 'unreadable' }, health: { ok: false, reason: 'unreadable' } });
   });
 
@@ -1019,13 +1020,21 @@ describe('the radar lane composes the control bundle and the store apply', () =>
     expect(ap, 'the superseded pass cannot apply').toEqual(['proj-b']);
   });
 
+  it('a cached control older than the radar freshness allows answers nothing, so the route holds', async () => {
+    plantControl('proj-b'); seedOpen('proj-b', 1, 12);
+    const w = make();
+    await w.sweepRadar([], NOW);
+    expect(w.currentLandingControl('proj-b', NOW + 1000)).toMatchObject({ lander: { ok: true } });
+    expect(w.currentLandingControl('proj-b', NOW + (RADAR_PROBE_FRESH_S + 1) * 1000)).toBeUndefined();
+  });
+
   it('a remote box whose agent link is down answers no snapshot at all', async () => {
     plantControl('proj-b'); seedOpen('proj-b', 1, 12);
     const base = testDeps(home);
     const w = make(localIO, { cfg: { ...base.cfg, fleetMode: 'remote' as const }, fleetState: { connected: true } });
     await w.sweepRadar([], NOW);
-    expect(w.currentLandingControl('proj-b')).toMatchObject({ lander: { ok: true } });
+    expect(w.currentLandingControl('proj-b', NOW)).toMatchObject({ lander: { ok: true } });
     (w as unknown as { deps: { fleetState: { connected: boolean } } }).deps.fleetState.connected = false;
-    expect(w.currentLandingControl('proj-b')).toBeUndefined();
+    expect(w.currentLandingControl('proj-b', NOW)).toBeUndefined();
   });
 });

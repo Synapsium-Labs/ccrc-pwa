@@ -173,6 +173,7 @@ import { runStuckPass } from './coord/runStuckPass.js';
 import { isUntoldNotice, untoldPass } from './coord/untold.js';
 import { casesPass } from './coord/casesLane.js';
 import { gatherGenerationReadings, generationsPass, type CompactionsMemo } from './continuity/generationsLane.js';
+import { iso } from './continuity/card.js';
 import { runTimersLane, timerListingOf } from './continuity/timerLane.js';
 import { TIMER_MAIL_SENDER } from '../../shared/continuity-timers.js';
 import { LAUNCH_PROFILE_LANE_ROW, profilePass, steerMarkerOf, type ProfileLaneMemory } from './continuity/profileLane.js';
@@ -795,6 +796,7 @@ export class FleetWatcher {
   private radarGen = 0;
   /** Wave 5i: the LATEST pass's control bundle per project (failures included), `sweepRadar` its one writer. */
   private landingControls = new Map<string, LandingControlRead>();
+  private landingControlsAt = 0;
   /** Last-measured repo cell per PROJECT — retained, not derived, from what
    *  `sweepPr` already reads off `CcdPrLine.repo` / `CcdPrFailure.reason` for
    *  `GET /api/projects`. See `repoCellFor` (prstate.ts) for the fold. */
@@ -1955,8 +1957,10 @@ export class FleetWatcher {
 
   /** The latest pass's control bundle of one project, a copy, or `undefined` when none was measured or (on a remote box) the
    *  agent link is down: a prior connection's bundle is never handed out. Values only; the binding's freshness is the decider's. */
-  currentLandingControl(project: string): LandingControlRead | undefined {
+  currentLandingControl(project: string, nowMs = Date.now()): LandingControlRead | undefined {
     if (this.deps.cfg.fleetMode === 'remote' && !this.deps.fleetState?.connected) return undefined;
+    // A cached failure never ages by itself: a pass older than the radar's freshness owner allows answers nothing (the route holds).
+    if (!freshWithin(iso(this.landingControlsAt), RADAR_PROBE_FRESH_S, nowMs)) return undefined;
     const c = this.landingControls.get(project);
     return c === undefined ? undefined : structuredClone(c);
   }
@@ -2008,6 +2012,7 @@ export class FleetWatcher {
     }
     // One synchronous apply per project, right after the generation check: the store owns the flag and the cue.
     this.landingControls = controls;
+    this.landingControlsAt = nowMs;
     const inventoryWhy = inventory === undefined || inventory.ok ? 'ok' : inventory.error;
     if (this.inventorySaid !== inventoryWhy && inventoryWhy !== 'ok') console.warn(`ccrc-server: the landing control inventory is unavailable (${inventoryWhy}); no control applied`);
     this.inventorySaid = inventoryWhy;

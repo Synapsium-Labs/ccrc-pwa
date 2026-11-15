@@ -52,12 +52,16 @@ export function applyLandingControlTx(coord: WatcherCoordPort, readFacts: () => 
 
   const digest = createHash('sha256').update(out.identity).digest('hex');
   const subject = `next-to-land:#${out.pr}:${digest}`;
-  phase.at = 'apply';
   let queued: ReturnType<typeof queueRunlessNoticeTx>;
   if (out.episode.kind === 'run') {
-    if (row === null) throw new Error('landing cue: a run episode without its run');
+    // A run episode whose run row is gone is the episode predicate failing: nothing was sent (checked before the apply phase).
+    if (row === null) return finish({ kind: 'no-send', reason: 'episode-changed', holdChanged });
+    phase.at = 'apply';
     queued = queueLandingNoticeTx(coord, row, { detail: `landing:next:v1:${digest}`, at: nowMs, episode: out.episode.episode, toId: out.toId, subject, body: out.body });
-  } else queued = queueRunlessNoticeTx(coord, { toId: out.toId, kind: 'status', subject, body: out.body });
+  } else {
+    phase.at = 'apply';
+    queued = queueRunlessNoticeTx(coord, { toId: out.toId, kind: 'status', subject, body: out.body });
+  }
   if (queued.queued) return finish({ kind: 'queued', mailId: queued.mailId, deliveryId: queued.deliveryId, holdChanged });
   // The run arm's own `run-gone` is the episode predicate failing inside the transaction: the episode moved, nothing was sent.
   return finish(queued.why === 'run-gone' ? { kind: 'no-send', reason: 'episode-changed', holdChanged } : { kind: 'duplicate', holdChanged });

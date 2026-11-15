@@ -2,7 +2,7 @@ import { IDLE_RUN_STATES, isRegistryId, isRunState, transitionsFor } from '../..
 import type { RunKind, RunState } from '../../../shared/api.js';
 import { isHead40 } from '../../../shared/landing.js';
 import { isLandingEjectionKind } from '../../../shared/landingLine.js';
-import type { LandingEjectionKind, LandingInfrastructureCode, LandingInfrastructureFailure, LandingMutationCode } from '../../../shared/landingLine.js';
+import type { LandingEjectionKind, LandingInfrastructureFailure, LandingMutationCode } from '../../../shared/landingLine.js';
 import { LANDING_REFUSAL_STATUS } from '../../../shared/refusal.js';
 
 /**
