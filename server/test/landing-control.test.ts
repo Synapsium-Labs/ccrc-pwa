@@ -440,6 +440,10 @@ describe('landingBindingOf: precedence and the evidence it binds', () => {
       projections: [{ id: 107, value: { kind: 'readable', quarantine: null } }, { id: 105, value: { kind: 'unreadable' } }] });
     expect(landingBindingOf(closed, controlRead(), now).mode).toBe('ready');
   });
+  it('ORDER-unknown (fix round 2): an open row in an unrecognised state word holds even with a clean projection', () => {
+    const f = factsOf([entry(7), entry(9, { state: 'mystery' as LandingEntry['state'] })]);
+    expect(landingBindingOf(f, controlRead(), now)).toMatchObject({ mode: 'held', reason: 'projection-unreadable' });
+  });
   it('an empty line or a blocked remainder holds empty-or-blocked with no entry', () => {
     expect(landingBindingOf(factsOf([]), controlRead(), now)).toEqual({ mode: 'held', reason: 'empty-or-blocked', entryId: null });
     const cyc = factsOf([entry(1, { afterIds: [102] }), entry(2, { afterIds: [101] })]);

@@ -50,3 +50,10 @@ list, an unreadable/stale/foreign probe hold `probe-unmeasured`; a health `unmea
 - Green: the two files, 94 passed; production `tsc --noEmit` clean.
 - Mutation: the `unknown`/quarantine conditions removed (projection kind check only) -> `ORDER-unknown (fix round 1)`:
   `expected { mode: 'ready', entryId: 107, ... } to deeply equal { mode: 'held', ... }`; restored from a saved copy.
+
+## Fix round 2
+- `clear()` now accepts an open row only when `isLandingEntryState(state)` (the L0 guard) and the state is not `unknown`
+  (so `pinned` or `ejected`), the projection is readable with a null quarantine, and the dependencies are readable; the
+  comment says exactly that. An unrecognised state word such as `'mystery'` holds `projection-unreadable`.
+- Red first (old code): `ORDER-unknown (fix round 2)`: expected { mode: 'ready', entryId: 107, ... } to match object { mode: 'held', ... }.
+- Green: 2 files, 95 passed. Production `tsc --noEmit; echo rc=$?`: rc=0, no `error TS`.

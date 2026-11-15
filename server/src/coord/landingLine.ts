@@ -17,7 +17,7 @@
 // - `landingViewOf` decides which entries the read lists (landing order wave 5h): the ones still in the line, or one
 //   PR's entry in any state. The order is always computed over every entry, so the answer's `order` does not move.
 import {
-  LANDING_ENTRY_TERMINAL, LANDING_PAUSE_BY, LANDING_PAUSE_BYS,
+  LANDING_ENTRY_TERMINAL, LANDING_PAUSE_BY, isLandingEntryState, LANDING_PAUSE_BYS,
   type LandingBinding, type LandingBindingReason, type LandingEntry, type LandingLineFlags, type LandingOrder, type LandingRecovery,
 } from '../../../shared/landingLine.js';
 import { RADAR_PROBE_FRESH_S, freshWithin } from '../../../shared/api.js';   // L0: the one freshness rule
@@ -134,12 +134,12 @@ export function landingBindingOf(facts: LandingMutationFacts, control: LandingCo
   if (facts.flags.operatorPaused) return held('paused');
   if (facts.recovery.hold !== null) return held('recovery');
   const open = facts.entries.filter((x) => !LANDING_ENTRY_TERMINAL[x.state]);
-  // An open row holds the binding unless its state is a known one other than `unknown`, its projection reads with no
-  // quarantine marker and its dependencies read. A quarantined or `unknown` row is outstanding to the walk, so a head
-  // chosen beside it is not a line this build can vouch for. Terminal rows (any damage) never come here.
+  // An open row is clear only when its state is a recognised one other than `unknown` (so `pinned` or `ejected`, the open
+  // states of the L0 vocabulary), its projection reads with a null quarantine marker, and its dependencies read. Every
+  // other open row, an unrecognised state word included, holds. Terminal rows (any damage) never come here.
   const clear = (x: LandingEntry): boolean => {
     const projection = facts.projections.find((p) => p.id === x.id)?.value;
-    return x.state !== 'unknown' && projection?.kind === 'readable' && projection.quarantine === null
+    return isLandingEntryState(x.state) && x.state !== 'unknown' && projection?.kind === 'readable' && projection.quarantine === null
       && facts.dependencies.find((d) => d.id === x.id)?.value.kind === 'readable';
   };
   if (open.some((x) => !clear(x))) return held('projection-unreadable');
