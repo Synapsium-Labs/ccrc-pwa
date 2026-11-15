@@ -17,7 +17,7 @@ import { CCD_ARGV, LEASE_MARK_LOCK_CAP, capSupported, ccdCan, type LeaseMarkArgs
 import type { FleetState } from '../fleetstate.js';
 import type { FleetIO } from '../io.js';
 import type { RunCcd } from './ports.js';
-import type { DelegationDurability } from './delegation-checkpoint.js';
+import type { DelegationDurability } from './delegation-durability.js';
 import { delegationTreeKey } from './delegation-correlation.js';
 import {
   DELEGATION_CARRIER_REFUSAL_RETRY_PASSES, carrierMarkArgs, carrierReadBackVersus, carrierReadsOf, carrierStateHoldsTree, delegationCarrierCensusRow, isStandingMarkRefusal,

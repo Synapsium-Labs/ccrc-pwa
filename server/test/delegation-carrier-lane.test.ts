@@ -14,7 +14,8 @@ import { CoordStore } from '../src/coord/store.js';
 import { openCoordDb } from '../src/coord/db.js';
 import { LEASE_MARK_CAP, LEASE_MARK_LOCK_CAP } from '../src/ccdargv.js';
 import type { CcdResult } from '../src/coord/ports.js';
-import { DELEGATION_CHECKPOINT_FILE, DelegationDurability, decodeDelegationCheckpoint } from '../src/coord/delegation-checkpoint.js';
+import { DELEGATION_CHECKPOINT_FILE, decodeDelegationCheckpoint } from '../src/coord/delegation-checkpoint.js';
+import { DelegationDurability } from '../src/coord/delegation-durability.js';
 import { DELEGATION_JOURNAL_FILE } from '../src/coord/delegation-journal.js';
 import {
   DELEGATION_EVENTS_CAP, formatDelegationInstant, type DelegationCensusRecord, type DelegationCheckpointV1, type DelegationLeaseRow,
