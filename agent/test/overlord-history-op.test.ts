@@ -7,13 +7,16 @@
 // over the cap, a late answer. One case runs the real entry (ccd/history/overlord-worker.mjs) on a fixture home with no
 // history store. No case reads a real home.
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import fs, { mkdirSync, writeFileSync } from 'node:fs';
+import fs, { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { syncBuiltinESMExports } from 'node:module';
 import path from 'node:path';
+import { Worker } from 'node:worker_threads';
 import type { RunningAgent } from '../src/server.js';
 import { OVERLORD_HISTORY_DEADLINE_MS, resolveOverlordWorker } from '../src/historyOp.js';
 import { OVERLORD_READ_BUSY_TIMEOUT_MS } from '../../ccd/history/overlord-read.mjs';
-import { OVERLORD_HISTORY_ANSWER_MAX_BYTES, readOverlordHistoryAnswer } from '../../shared/overlordHistory.js';
+import {
+  OVERLORD_HISTORY_ANSWER_MAX_BYTES, OVERLORD_HISTORY_REQUEST_MAX_BYTES, readOverlordHistoryAnswer,
+} from '../../shared/overlordHistory.js';
 import { OVERLORD_HISTORY_OP, type AgentReady } from '../../shared/agent-protocol.js';
 import { CAP_WORD, MAX_CAP_WORDS } from '../../shared/api.js';
 import { makeFixture, boot, TestClient } from './helpers.js';
@@ -54,7 +57,15 @@ const LOUD = entry('loud', [
   `parentPort.postMessage(${ROWS_SRC});`,
 ].join('\n'));
 const BIG = entry('big', `parentPort.postMessage({ ...${ROWS_SRC}, items: [{ text: 'x'.repeat(${OVERLORD_HISTORY_ANSWER_MAX_BYTES}), trust: 'untrusted' }] });`);
-const LATE = entry('late', `setTimeout(() => parentPort.postMessage(${ROWS_SRC}), 600);`);
+// A late answer: `started` beside the home at once, the answer 2.5 s later, then `posted`. The deadline (2 s) passes first.
+const LATE = entry('late', [
+  "import { writeFileSync } from 'node:fs';",
+  "import path from 'node:path';",
+  "writeFileSync(path.join(workerData.home, 'late-started'), '');",
+  `setTimeout(() => { parentPort.postMessage(${ROWS_SRC}); writeFileSync(path.join(workerData.home, 'late-posted'), ''); }, 2500);`,
+].join('\n'));
+// A worker that never answers, in JS that terminate() interrupts at once.
+const NEVER = entry('never', 'setInterval(() => {}, 1000);');
 const OFFSHAPE = entry('offshape', `parentPort.postMessage({ outcome: 'failed', word: 'boom ${SECRET}' });`);
 const ENV = entry('env', `parentPort.postMessage({ ...${ROWS_SRC}, items: [{ keys: Object.keys(process.env).join(','), trust: 'untrusted' }] });`);
 
@@ -73,13 +84,18 @@ describe('the overlord-history op on the wire', () => {
     logged = [];
     vi.restoreAllMocks();
   });
+  let home = '';
   async function connect(opts: { deadlineMs?: number; resolve?: () => string | null } = {}): Promise<TestClient> {
-    agent ??= await boot(makeFixture(), {
-      historySeams: {
-        resolveWorker: opts.resolve ?? (() => worker), deadlineMs: opts.deadlineMs ?? 5_000, platform: 'linux',
-        log: (l) => { logged.push(l); },
-      },
-    });
+    if (agent === undefined) {
+      const fx = makeFixture();
+      home = fx.home;
+      agent = await boot(fx, {
+        historySeams: {
+          resolveWorker: opts.resolve ?? (() => worker), deadlineMs: opts.deadlineMs ?? 5_000, platform: 'linux',
+          log: (l) => { logged.push(l); },
+        },
+      });
+    }
     const c = new TestClient(agent.port);
     clients.push(c);
     await c.hello();
@@ -126,6 +142,30 @@ describe('the overlord-history op on the wire', () => {
       served = answerOf(await ask(c));
     }
     expect(served).toEqual(ROWS);
+  }, 30_000);
+
+  it('closing the link calls terminate(): a worker that never answers exits long before the deadline, and the slot frees (F1)', async () => {
+    const terminate = vi.spyOn(Worker.prototype, 'terminate');
+    worker = NEVER;
+    const first = await connect({ deadlineMs: 15_000 });
+    first.send({ t: 'req', id: 501, ...REQ });
+    await new Promise((r) => setTimeout(r, 200));
+    expect(terminate, 'no terminate before the close').not.toHaveBeenCalled();
+    const t0 = Date.now();
+    first.ws.close();
+    for (let i = 0; i < 100 && terminate.mock.calls.length === 0; i += 1) await new Promise((r) => setTimeout(r, 20));
+    expect(terminate, 'the close called terminate() on the read\'s worker').toHaveBeenCalled();
+    expect(terminate.mock.instances[0], 'on that worker, not another').toBeInstanceOf(Worker);
+    const second = await connect();
+    worker = GOOD;
+    let served: unknown = { outcome: 'busy' };
+    for (let i = 0; i < 100 && (served as { outcome: string }).outcome === 'busy'; i += 1) {
+      served = answerOf(await ask(second));
+      if ((served as { outcome: string }).outcome === 'busy') await new Promise((r) => setTimeout(r, 50));
+    }
+    expect(served, 'served after the abandoned worker exited').toEqual(ROWS);
+    expect(Date.now() - t0, 'the slot freed on the close, not at the 15 s deadline').toBeLessThan(5_000);
+    expect(logged, 'the abandoned read exited with no answer: the one fixed line').toEqual(['ccrc-agent: overlord-history failed']);
   }, 30_000);
 
   it('closing the link mid-read terminates the worker, and the slot frees on its exit', async () => {
@@ -212,12 +252,40 @@ describe('the overlord-history op on the wire', () => {
 
   it('a late answer, posted after the deadline, is dropped', async () => {
     worker = LATE;
-    const c = await connect({ deadlineMs: 200 });
+    const c = await connect({ deadlineMs: 2_000 });
     const seen: unknown[] = [];
     c.ws.on('message', (raw) => { seen.push(JSON.parse(String(raw))); });
-    expect(answerOf(await ask(c))).toEqual({ outcome: 'deadline' });
-    await new Promise((r) => setTimeout(r, 900));
+    const pending = ask(c);
+    const started = path.join(home, 'late-started');
+    const posted = path.join(home, 'late-posted');
+    for (let i = 0; i < 200 && !existsSync(started); i += 1) await new Promise((r) => setTimeout(r, 10));
+    expect(existsSync(started), 'the worker started').toBe(true);
+    // Hold this thread (and so the agent's) until the worker has posted: the deadline passes and the answer waits in the
+    // port. Held from a check-phase callback, the loop's next turn runs the expired deadline (timers) before it delivers
+    // the posted answer (poll), so the answer arrives after the deadline settled the read.
+    await new Promise<void>((resolve) => {
+      setImmediate(() => {
+        const nap = new Int32Array(new SharedArrayBuffer(4));
+        const end = Date.now() + 10_000;
+        while (!existsSync(posted) && Date.now() < end) Atomics.wait(nap, 0, 0, 5);
+        resolve();
+      });
+    });
+    expect(existsSync(posted), 'the worker posted its answer, late').toBe(true);
+    expect(answerOf(await pending)).toEqual({ outcome: 'deadline' });
+    await new Promise((r) => setTimeout(r, 300));
     expect(seen.filter((m) => (m as { outcome?: string }).outcome === 'rows')).toEqual([]);
+    expect(logged, 'a dropped answer is no failure').toEqual([]);
+  }, 30_000);
+
+  it('the request bound measures the body, not the frame: exactly the maximum is read, one byte more is oversize (F5)', async () => {
+    const c = await connect();
+    const bodyOf = (n: number) => ({ verb: 'search', target: { kind: 'all' }, agents: false, args: ['zq'], pad: 'x'.repeat(n) });
+    const fill = OVERLORD_HISTORY_REQUEST_MAX_BYTES - JSON.stringify(bodyOf(0)).length;
+    expect(JSON.stringify(bodyOf(fill)).length).toBe(OVERLORD_HISTORY_REQUEST_MAX_BYTES);
+    expect(answerOf(await ask(c, { op: 'overlord-history', ...bodyOf(fill) })), 'at the bound').toEqual(ROWS);
+    expect(answerOf(await ask(c, { op: 'overlord-history', ...bodyOf(fill + 1) })), 'one byte over')
+      .toEqual({ outcome: 'request-refused', word: 'oversize' });
   });
 
   it('a refused request answers request-refused with its word, on ResOk; bad-request stays "this agent predates the op"', async () => {
@@ -228,6 +296,7 @@ describe('the overlord-history op on the wire', () => {
       [{ ...REQ, args: ['--regex', 'a.*'] }, 'regex'],
       [{ ...REQ, regex: 'a.*' }, 'regex'],
       [{ ...REQ, args: [1] }, 'bad-args'],
+      [{ ...REQ, args: ['--', 'zq'] }, 'separator'],
     ] as const) {
       const r = await ask(c, frame);
       expect([r.ok, answerOf(r)], JSON.stringify(frame)).toEqual([true, { outcome: 'request-refused', word }]);
