@@ -6187,9 +6187,8 @@ fi
 # (m-B10, slug prompt-fetch-after-hookstate), and prints it as this prompt's one envelope. A `dark` answer clears the mark
 # with nothing printed; no answer keeps it for the next prompt, at most ANCHOR_OWED_TRIES prompts (the count in the
 # mark). A prompt whose roster wake printed keeps the mark untouched: one envelope per event. So does a read the network
-# budget did not start (fix round 1, F5): no try was spent. No purge orphans a mark the try count rewrites, by the start
-# report's two-sided rule: a purge that took `generation` before the rewrite is seen by the look after it, here (F6),
-# and one that has not yet taken it removes the mark once more after `generation` (`_reg_purge`; review 2073 N2).
+# budget did not start (F5): no try was spent. No purge orphans a rewritten mark (the start report's two-sided rule): the
+# look at `generation` after the write sees an earlier purge (F6), and `_reg_purge` takes the mark after `generation` (N2).
 _hook_anchor_owed() {   # UserPromptSubmit: prints at most one envelope carrying the prompt anchor; 0 on every path
   local m="$REG/$id.anchor-owed" t="" j=""
   { IFS= read -r t < "$m"; } 2>/dev/null; [[ "$t" =~ ^[0-9]$ ]] || t=0
