@@ -473,11 +473,11 @@ describe('ccd types only its rows, named literals, named keys and mapped splices
       expect(findings.length, text).toBeGreaterThan(0);
       if (plant !== null) for (const m of findings) expect(m).not.toContain(plant);
     };
-    it('a new -l literal that is no row', () => red('_planted_exit() {\n  _tmx send-keys -t "$t" -l "/exit"\n}\n', '/exit'));
-    it('a spliced -l in a function the map does not name', () => red('_planted_splice() {\n  _tmx send-keys -t "$t" -l "$x"\n}\n', '$x'));
+    it('a new -l literal that is no row', () => red('planted_exit() {\n  _tmx send-keys -t "$t" -l "/exit"\n}\n', '/exit'));
+    it('a spliced -l in a function the map does not name', () => red('planted_splice() {\n  _tmx send-keys -t "$t" -l "$x"\n}\n', '$x'));
     it('a second splice inside _redrive_after_spawn', () => red('_redrive_after_spawn() {\n  _tmx send-keys -t "$t" -l "$(_resume_prompt_for "$id")"\n  _tmx send-keys -t "$t" -l "$secret_code"\n}\n', 'secret_code'));
-    it('a key outside the closed set', () => red('_planted_key() {\n  _tmx send-keys -t "$t" C-c\n}\n', 'C-c'));
-    it('a bare tmux send-keys with a literal', () => red('_planted_tmux() {\n  tmux send-keys -t "$pane" -l "rm -rf x"\n}\n', 'rm -rf'));
+    it('a key outside the closed set', () => red('planted_key() {\n  _tmx send-keys -t "$t" C-c\n}\n', 'C-c'));
+    it('a bare tmux send-keys with a literal', () => red('planted_tmux() {\n  tmux send-keys -t "$pane" -l "rm -rf x"\n}\n', 'rm -rf'));
     it('a row no site types', () => {
       const rows = { ...ROWS, planted: { text: '/planted', match: 'exact', typer: 'ccd' } } as Rows;
       const c = ccdCensus(files, rows);
@@ -485,7 +485,7 @@ describe('ccd types only its rows, named literals, named keys and mapped splices
     });
     it('a head splice whose head is not the row\'s', () => red('_auto_compact_check() {\n  _tmx send-keys -t "$t" -l "/compacted${x}"\n}\n'));
     it('a commented send-keys is no send', () => {
-      expect(ccdSends([{ file: 'ccd/planted.sh', text: '_f() {\n  # _tmx send-keys -t "$t" -l "/exit"\n  echo x  # send-keys -l "/exit"\n}\n' }]).sends).toEqual([]);
+      expect(ccdSends([{ file: 'ccd/planted.sh', text: 'planted_f() {\n  # _tmx send-keys -t "$t" -l "/exit"\n  echo x  # send-keys -l "/exit"\n}\n' }]).sends).toEqual([]);
     });
   });
 });
@@ -507,9 +507,12 @@ describe('INJECTED_PROMPTS and its two constants have one definition (F3)', () =
   }
 
   it('shared/api.ts re-exports the two constants and declares neither', () => {
+    // An import and a bare `export { … }`: `collect-lane-l0.test.ts` holds api.ts's import lines to a list and refuses
+    // an `export … from`.
     const p = parsedFile('shared/api.ts');
-    const edge = p.imports.find((e) => e.kind === 'export-from' && e.specifier === './injected-prompts.mjs');
+    const edge = p.imports.find((e) => e.kind === 'import' && e.specifier === './injected-prompts.mjs');
     expect(edge?.names.sort()).toEqual(['IDLE_COMPACT_NUDGE_PROMPT', 'RESUME_PROMPT_PREFIX']);
+    expect(p.text).toMatch(/^export \{ IDLE_COMPACT_NUDGE_PROMPT, RESUME_PROMPT_PREFIX \};$/m);
     expect(p.bindings.filter((b) => b.name === 'IDLE_COMPACT_NUDGE_PROMPT' || b.name === 'RESUME_PROMPT_PREFIX')).toEqual([]);
   });
 });

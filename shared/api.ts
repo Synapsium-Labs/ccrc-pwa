@@ -4692,7 +4692,8 @@ export const IDLE_COMPACT_NOTICE_PREFIXES = [
 ] as const;
 /** `idle-compact-nudge` (D-5373) and the resume prompt's prefix: declared once, in `INJECTED_PROMPTS`' module, the list of
  *  every fixed string ccrc types into a pane (Overlord W1, the vocabulary piece); their doc comments moved with them. */
-export { IDLE_COMPACT_NUDGE_PROMPT, RESUME_PROMPT_PREFIX } from './injected-prompts.mjs';
+import { IDLE_COMPACT_NUDGE_PROMPT, RESUME_PROMPT_PREFIX } from './injected-prompts.mjs';
+export { IDLE_COMPACT_NUDGE_PROMPT, RESUME_PROMPT_PREFIX };
 /** D-8267 (the operator's ruling of 2026-11-11): the fixed estimate of when Claude Code's idle compaction runs, kept as the fallback:
  *  about 55 minutes after the turn ended (`end_turn`, Stop fired), the D-5371 measurement (110 of 111). */
 export const IDLE_COMPACT_ESTIMATE_MS = 55 * 60_000;
