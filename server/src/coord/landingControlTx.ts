@@ -7,7 +7,6 @@
 // needs its private fields (the guard, the owned transaction, the fence); this file keeps the body, so the store does not grow.
 // The SHA-256 digest of the cue's identity is taken here (L3), never in the pure file.
 import { createHash } from 'node:crypto';
-import type { DatabaseSync } from 'node:sqlite';
 import { mainRedNext } from './landingLine.js';
 import { nextLandingNoticeOf, nextLandingRunId, type LandingControlApplyResult, type NextLandingRun } from './landingNext.js';
 import { queueLandingNoticeTx, queueRunlessNoticeTx } from './rundefsTx.js';
@@ -19,10 +18,14 @@ import type { WatcherCoordPort } from './ports.js';
  *  the COMMIT is next). A failure past `decide` fences the landing entrances, as the authority writer's does. */
 export type LandingControlPhase = 'decide' | 'apply' | 'commit';
 
+/** The one statement this body runs itself, the handle's `prepare(...).run(...)`, named structurally: only the store and
+ *  `rundefsTx.ts` import the driver (`single-definition/core-vocab.test.ts`). */
+export interface LandingControlDb { prepare(sql: string): { run(...params: (string | number)[]): unknown } }
+
 export interface LandingControlInput { project: string; control: LandingControlRead; nowMs: number }
 
 /** Runs inside the store's transaction. Throws on any database fault (the store rolls back and classifies it by `phase`). */
-export function applyLandingControlTx(coord: WatcherCoordPort, db: DatabaseSync, readFacts: () => LandingReadResult, input: LandingControlInput,
+export function applyLandingControlTx(coord: WatcherCoordPort, db: LandingControlDb, readFacts: () => LandingReadResult, input: LandingControlInput,
   phase: { at: LandingControlPhase }): LandingControlApplyResult {
   const { project, control, nowMs } = input;
   const read = readFacts();
