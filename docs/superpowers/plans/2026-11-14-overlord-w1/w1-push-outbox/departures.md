@@ -40,6 +40,6 @@ deviation ledger.
   `mutation-floors.json` at 1), and Task 3's four named mutations each turned their case red (recorded in the PR body).
 - **outbox-keep-ruled-into-the-seven-day-census** — `OUTBOX_KEEP_MS` (seven days) is a new seven-day quantity, so
   `token-shared.test.ts`'s census of seven-day holders counts fifteen. The coordinator ruled it in as a separate quantity
-  (the outbox's own retention of terminal unbound rows, unrelated to token rotation), a file the plan did not list.
-- **asks-column-pin** — `asks-store.test.ts` pins the `asks` columns, and `reachedOperatorAt` joins its list, a file the
-  plan did not list.
+  (ask 435: the outbox's own retention of terminal unbound rows, unrelated to token rotation), a file the plan did not list.
+- **reach-stamp-column-pins** — `asks-store.test.ts` pins the `asks` columns and `ledgers-migration.test.ts` the
+  `operator_items` columns, and `reachedOperatorAt` joins each list, two files the plan did not list.

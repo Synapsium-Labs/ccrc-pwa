@@ -408,8 +408,9 @@ describe('the rotation interval: declared once in L0, pinned by name and by valu
     // Coordinator calls (D-8126 wave A3) bring the thirteenth and fourteenth, both from the coordinator-autonomy design: how long a
     // big call stays the operator's to see before it ages out of the Waiting group, and the furthest ahead a `time:` wake may be
     // set. Each is that design's own week, unrelated to token rotation, and neither imports the token interval.
-    // The push outbox (Overlord W1) brings the fifteenth, ruled in by its coordinator: how long a terminal unbound outbox row is
-    // kept before the purge, the push outbox plan's own week, unrelated to token rotation, and it does not import the token interval.
+    // The push outbox (Overlord W1) brings the fifteenth: how long a terminal unbound outbox row is kept after it settles before
+    // the purge, the retention docs/superpowers/plans/2026-11-14-overlord-w1/w1-push-outbox.md sets, ruled separate by the
+    // coordinator (ask 435). It is unrelated to token rotation, and it does not import the token interval.
     expect(sevenDayHolders(ALL), HOLDERS_MESSAGE).toEqual([
       'pwa/src/screens/usePrograms.ts:QUIET_AFTER_MS',
       'server/src/childReclaimSweep.ts:CHILD_RECLAIM_LEAF_KEPT_HORIZON_MS',
