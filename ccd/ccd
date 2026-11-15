@@ -1723,7 +1723,7 @@ COMPACT_NOTE_FLOOR=1800         # D-2013 — min seconds between swap.log lines 
 # ROUTE_FIELD it names a class and is checked against `CCRC_SUBAGENT_CLASSES`;
 # inside an `inert` list it is the FIELD's name, stamped by a lane that composed
 # no `CLAUDE_CODE_SUBAGENT_MODEL` whatever class the field held.
-ROUTE_FIELDS=(class effort subagent workflow compact browser degraded inert profile automem compactwindow precompact)
+ROUTE_FIELDS=(class effort subagent workflow compact browser degraded inert profile automem compactwindow precompact profiledigest)
 ROUTE_CLASSES="fable opus sonnet haiku default"
 ROUTE_EFFORTS="auto low medium high xhigh max ultracode"
 # THE SLIDER'S STOPS, IN THE ORDER THE SLIDER PUTS THEM (D-2808, measured on a
@@ -10091,8 +10091,9 @@ cmd_route() {   # ccd route --session <id> --set <field>=<value> [--set ...] [--
     _route_word_in "$f" "${ROUTE_FIELDS[*]}" || die "unknown routing field '$f' (want one of: ${ROUTE_FIELDS[*]})"
     [[ "$f" == degraded || "$f" == inert ]] && die "'$f' is written by ccd only"
     # AN EMPTY VALUE CLEARS a compaction field (the launch-profile lane, review 2024 F2 c): the field is removed, which every
-    # reader takes as absent (ccd's own threshold, no auto-compact window). No other field has an empty form.
-    [[ -z "$v" && ( "$f" == compact || "$f" == compactwindow ) ]] && continue
+    # reader takes as absent (ccd's own threshold, no auto-compact window). `profiledigest` clears the same way (Overlord W1
+    # sandbox: retire, rebind and a failed pending designation). No other field has an empty form.
+    [[ -z "$v" && ( "$f" == compact || "$f" == compactwindow || "$f" == profiledigest ) ]] && continue
     # THREE ANSWERS, THREE SENTENCES (fix round 2, Finding 1). `_route_valid`
     # answers 2 when the field's vocabulary itself could not be read — `subagent`,
     # whose list is PROJECTED into `$HOME/.ccrc/accounts.sh` by `ccrc install`, and
@@ -22113,9 +22114,10 @@ _route_any() {   # id — 0 iff ANY routing field file exists (spec §5.1: a ses
   # seed, and on the tick and spawn paths it is not read per tick by `_route_apply_pending` (m-B9) and writes no
   # `routeapplied`. A `ccd route --set` of one on a never-routed row can leave an empty stamp, as `browser` does; the
   # next spawn removes it. `precompact` (Overlord W1a compaction, plan slug route-fields-outside-route-any) is skipped
-  # for the same reason: the session hook's PreCompact refusal arm reads it, and nothing here.
+  # for the same reason: the session hook's PreCompact refusal arm reads it, and nothing here. So is `profiledigest` (Overlord
+  # W1 sandbox): `_profile_spawn_compose` reads it, and an Overlord row is not a routed row.
   local f
-  for f in "${ROUTE_FIELDS[@]}"; do case "$f" in browser|profile|automem|compactwindow|precompact) ;; *) [[ -e "$REG/$1.$f" ]] && return 0 ;; esac; done
+  for f in "${ROUTE_FIELDS[@]}"; do case "$f" in browser|profile|automem|compactwindow|precompact|profiledigest) ;; *) [[ -e "$REG/$1.$f" ]] && return 0 ;; esac; done
   return 1
 }
 _route_valid() {   # field value — THREE answers, because two of them are two different
@@ -22157,6 +22159,9 @@ _route_valid() {   # field value — THREE answers, because two of them are two 
     # `precompact` (Overlord W1a compaction, spec §3.3.4 C39): `refuse` arms the hook's PreCompact refusal arm
     # (`_hook_compact_refuse`), `allow` and absent leave it dark. Its one writer is the generations lane.
     precompact) _route_word_in "$v" "refuse allow" ;;
+    # `profiledigest` (Overlord W1 sandbox, Task 3): the sha256 the server expects of the row `profile` names. While it
+    # stands, `_profile_spawn_compose` renders the row's surface whole or refuses the spawn.
+    profiledigest) [[ "$v" =~ ^[0-9a-f]{64}$ ]] ;;
     # `degraded` is the four CLASS names WITHOUT `default` — a session cannot
     # degrade TO "no override" — and they are DERIVED from `ROUTE_CLASSES`
     # rather than typed a second time three lines below the first (controller
@@ -26146,26 +26151,58 @@ _fleet_spawn_compose() {   # id launchflags -> sets FLEET_SPAWN_FLAGS; never fai
 # that cannot be read journals its own `route-unmeasured` line here, floored by the same `routeunmeasprofile` marker.
 # The raw read keeps `_route_get`'s other two lines itself (review 1970 N1): a `.profile` present but unreadable journals
 # `_route_unread_note`'s line, and a word that is not a row (or bytes of no word's shape) `_route_reject_note`'s.
+# THE SURFACE (Overlord W1 sandbox, Task 3; slugs expected-digest-rides-the-route, surfaced-profile-fails-closed). Only when
+# the route's `profiledigest` stands, and tested BEFORE the "no `profile`" return: `_profile_digest_ok` must pass (the row
+# `profile` names, as `jq -cS` prints it, hashes to the field), and the row's `flags` (each word checked by shape, the
+# `--agents` value only for a quote, then single-quoted), `surfaceSettings` (merged after `settings` and
+# `compactionSettings`) and `remoteControl` (`off` strips the `--remote-control '<id>'` the launch flags open with) are
+# rendered, with CCRC_LAUNCH_PROFILE=<role>:<digest> and CCRC_LAUNCH_RC=on|off (read from the final flags) in the
+# environment. Any step that fails refuses the spawn (rc 1, one `launch-profile-refused` line in swap.log): the field,
+# never a role word, makes a spawn fail closed. A route without the field takes the W1a path above, fail-open included.
+# The program's output is read with the unit separator, which is not IFS whitespace, so an empty field keeps its place.
 LAUNCH_PROFILES_JSON="${BASH_SOURCE[0]%/*}/lib/launch-profiles.json"
 [[ -f "$LAUNCH_PROFILES_JSON" ]] || LAUNCH_PROFILES_JSON="$HOME/.cc-sessions/lib/launch-profiles.json"
 PROFILE_ROW_JQ='.[$r] as $x
-  | if ($x | type) == "object" and ($x.env | type) == "object" and ($x.settings | type) == "object"
+  | def agents($i): $i > 0 and $x.flags[$i - 1] == "--agents";
+  if ($x | type) == "object" and ($x.env | type) == "object" and ($x.settings | type) == "object"
        and ($x.compactionSettings | type) == "object" and ($x.autoMemory == "off" or $x.autoMemory == "switch")
        and ($x.env | to_entries | all((.key | test("\\ACLAUDE_CODE_[A-Z_]+\\z")) and (.value | type == "string") and (.value | test("\\A[A-Za-z0-9._-]+\\z"))))
+       and ($sf == "" or (($x.flags | type) == "array" and ($x.surfaceSettings | type) == "object" and ($x.remoteControl | IN("on", "off"))
+         and ($x.flags | to_entries | all(.value | type == "string") and all(if agents(.key) then (.value | test("\u0027") | not) else (.value | test("\\A[A-Za-z0-9,._-]+\\z")) end))))
     then . else error("malformed row") end
-  | ($x.settings * (if $cw == "" then {} else $x.compactionSettings end) | tojson) + "\t"
+  | ($x.settings * (if $cw == "" then {} else $x.compactionSettings end) * (if $sf == "" then {} else $x.surfaceSettings end) | tojson) + "\u001f"
     + ([$x.env | to_entries[] | "\(.key)=\(.value)"]
        + (if $x.autoMemory == "off" or $am == "off" then ["CLAUDE_CODE_DISABLE_AUTO_MEMORY=1"] else [] end)
-       + (if $cw == "" then [] else ["CLAUDE_CODE_AUTO_COMPACT_WINDOW=" + $cw] end) | join(" "))'
-_profile_spawn_compose() {   # id launchflags -> sets PROFILE_SPAWN_FLAGS, PROFILE_SPAWN_ENV; never fails, never half-applies
-  local id="$1" p="" am cw out="" pset="" penv="" unread=""
+       + (if $cw == "" then [] else ["CLAUDE_CODE_AUTO_COMPACT_WINDOW=" + $cw] end) | join(" "))
+    + "\u001f" + (if $sf == "" then "" else ([$x.flags | to_entries[] | if agents(.key) then "\u0027" + .value + "\u0027" else .value end] | join(" ")) + "\u001f" + $x.remoteControl end)'
+_profile_digest_ok() {   # id -> 0 iff no `profiledigest` stands, or the row `profile` names hashes to it; else 1 and PROFILE_DIGEST_WHY
+  local d p="" h; PROFILE_DIGEST_WHY=""
+  [[ -e "$REG/$1.profiledigest" || -L "$REG/$1.profiledigest" ]] || return 0
+  d=$(_route_get "$1" profiledigest)
+  if [[ -z "$d" ]]; then PROFILE_DIGEST_WHY="profiledigest unreadable"
+  elif ! _reg_get_to p "$1" profile 2>/dev/null || [[ ! "$p" =~ ^[a-z]{1,16}$ ]]; then PROFILE_DIGEST_WHY="profile absent or unreadable"
+  elif ! h=$(jq -cS --arg r "$p" '.[$r]' "$LAUNCH_PROFILES_JSON" 2>/dev/null | _plat_sha256); then PROFILE_DIGEST_WHY="launch profiles unreadable"
+  elif [[ "${h%% *}" != "$d" ]]; then PROFILE_DIGEST_WHY="row $p does not hash to profiledigest"
+  else return 0; fi
+  return 1
+}
+_profile_refused() {   # id why -> journal one launch-profile-refused line; the caller returns 1
+  echo "$(date '+%F %T') launch-profile-refused $1: $2 — no pane started" >> "$REG/swap.log"; echo "ccd: error: $1: launch profile refused: $2" >&2
+}
+_profile_spawn_compose() {   # id launchflags -> sets PROFILE_SPAWN_FLAGS, PROFILE_SPAWN_ENV; never half-applies; rc 1 only under a standing profiledigest
+  local id="$1" p="" am cw out="" pset="" penv="" pflags="" prc="" unread="" sf="" d=""
   PROFILE_SPAWN_FLAGS="$2"; PROFILE_SPAWN_ENV=""
+  if [[ -e "$REG/$id.profiledigest" || -L "$REG/$id.profiledigest" ]]; then
+    _profile_digest_ok "$id" || { _profile_refused "$id" "$PROFILE_DIGEST_WHY"; return 1; }
+    sf=1; d=$(_route_get "$id" profiledigest)
+  fi
   [[ -e "$REG/$id.profile" || -L "$REG/$id.profile" ]] || return 0
   _reg_get_to p "$id" profile 2>/dev/null || { _route_unread_note "$id" profile; unread=1; }
   am=$(_route_get "$id" automem); cw=$(_route_get "$id" compactwindow)
-  [[ "$p" =~ ^[a-z]{1,16}$ ]] && out=$(jq -r --arg r "$p" --arg am "$am" --arg cw "$cw" "$PROFILE_ROW_JQ" "$LAUNCH_PROFILES_JSON" 2>/dev/null) || out=""
-  IFS=$'\t' read -r pset penv <<< "$out"
+  [[ "$p" =~ ^[a-z]{1,16}$ ]] && out=$(jq -r --arg r "$p" --arg am "$am" --arg cw "$cw" --arg sf "$sf" "$PROFILE_ROW_JQ" "$LAUNCH_PROFILES_JSON" 2>/dev/null) || out=""
+  IFS=$'\x1f' read -r pset penv pflags prc <<< "$out"
   if [[ -z "$pset" ]]; then
+    [[ -z "$sf" ]] || { _profile_refused "$id" "row $p malformed"; return 1; }
     if ! jq -e 'type == "object"' "$LAUNCH_PROFILES_JSON" >/dev/null 2>&1; then _route_note_floored "$id" routeunmeasprofile \
       || echo "$(date '+%F %T') route-unmeasured $id: field profile could not be checked — this box's launch profiles ($LAUNCH_PROFILES_JSON) cannot be read; treated as absent — re-run ccrc install" >> "$REG/swap.log"
     elif [[ -z "$unread" ]] && ! { [[ "$p" =~ ^[a-z]{1,16}$ ]] && jq -e --arg r "$p" 'has($r)' "$LAUNCH_PROFILES_JSON" >/dev/null 2>&1; }; then
@@ -26174,8 +26211,17 @@ _profile_spawn_compose() {   # id launchflags -> sets PROFILE_SPAWN_FLAGS, PROFI
     [[ "$p" =~ ^[a-z]{1,16}$ ]] || p="<$(_route_bytes "$p") bytes>"
     echo "ccd: warn: $id: launch profile $p unreadable — spawning without it" >&2; return 0
   fi
-  [[ "$pset" == '{}' ]] || { _spawn_settings_last "$id" "$2" "$pset" "launch profile $p" || return 0; PROFILE_SPAWN_FLAGS="$SPAWN_SETTINGS_FLAGS"; }
+  if [[ "$pset" != '{}' ]] && ! _spawn_settings_last "$id" "$2" "$pset" "launch profile $p"; then
+    [[ -z "$sf" ]] || { _profile_refused "$id" "settings merge failed"; return 1; }
+    return 0
+  fi
+  [[ "$pset" == '{}' ]] || PROFILE_SPAWN_FLAGS="$SPAWN_SETTINGS_FLAGS"
   PROFILE_SPAWN_ENV="$penv"
+  [[ -n "$sf" ]] || return 0
+  [[ "$prc" != off ]] || { PROFILE_SPAWN_FLAGS="${PROFILE_SPAWN_FLAGS#"--remote-control '$id'"}"; PROFILE_SPAWN_FLAGS="${PROFILE_SPAWN_FLAGS# }"; }
+  PROFILE_SPAWN_FLAGS="${PROFILE_SPAWN_FLAGS:+$PROFILE_SPAWN_FLAGS }$pflags"
+  [[ "$PROFILE_SPAWN_FLAGS" == *"--remote-control "* ]] && prc=on || prc=off
+  PROFILE_SPAWN_ENV="${penv:+$penv }CCRC_LAUNCH_PROFILE=$p:$d CCRC_LAUNCH_RC=$prc"
 }
 # THE ROLE'S COMPACTION TEXT (Overlord W1a compaction, spec §3.3.9 C51): the row's `compactText`, which
 # `_auto_compact_check` types after `/compact`. Only when the route carries `compactwindow` too, which the lane writes
@@ -26819,7 +26865,7 @@ _spawn_start() {   # id mode(new|resume) -> creates the tmux session, sets SPAWN
   _account_spawn_compose "$id" "$launchflags"; launchflags="$ACCOUNT_SPAWN_FLAGS"
   # THE FLEET PINS (D-8173), for EVERY row, LAST: the auto-continue, inbox and idle-compaction rulings merge into the one `--settings`.
   _fleet_spawn_compose "$id" "$launchflags"; launchflags="$FLEET_SPAWN_FLAGS"
-  _profile_spawn_compose "$id" "$launchflags"; launchflags="$PROFILE_SPAWN_FLAGS"; resenv="$resenv${PROFILE_SPAWN_ENV:+ $PROFILE_SPAWN_ENV}"
+  _profile_spawn_compose "$id" "$launchflags" || return 1; launchflags="$PROFILE_SPAWN_FLAGS"; resenv="$resenv${PROFILE_SPAWN_ENV:+ $PROFILE_SPAWN_ENV}"
   # COLORTERM=truecolor so Claude Code emits 24-bit colour (it otherwise quantises
   # to 256, collapsing its palette). tmux passes it through to the terminal-drawer
   # xterm once the server has the RGB terminal-feature (see hardening/tmux.conf).

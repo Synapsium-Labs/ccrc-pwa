@@ -17,6 +17,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { makeCcdHarness, ghContainedEnv, CCD, type CcdHarness } from './ccdWsHelpers.js';
 import { COMPACT_WINDOW_MAX_TOKENS, COMPACT_WINDOW_MIN_TOKENS } from '../src/continuity/launchProfile.js';
+import { FLEET_ROLES } from '../../shared/fleetRoles.js';
 
 const ID = 'lane-a-project-a';
 const UUID = 'deadbeef-0000-4000-8000-000000000000';
@@ -136,7 +137,11 @@ describe('the spawn applies the launch profile the route names (H1, H14, C39)', 
     seed([['profile', 'overlord']]);
     const l = spawn('new').lines[0]!;
     for (const w of ['CLAUDE_CODE_DISABLE_AGENT_VIEW=1', 'CLAUDE_CODE_FORK_SUBAGENT=0', MEM]) expect(l).toContain(` ${w} `);
-    expect(settingsOf(l)).toStrictEqual(PINS);
+    // W1 sandbox Task 2: the row's settings (the surface's switches) merge over the pins; with no `profiledigest` on the
+    // route, nothing of the surface is rendered (no flag, no hook) and the spawn stays W1a's fail-open one.
+    expect(settingsOf(l)).toStrictEqual({ ...PINS, ...FLEET_ROLES.overlord.launchProfile.settings });
+    expect(l).not.toContain('--tools');
+    expect(l).not.toContain('CCRC_LAUNCH_PROFILE');
   });
   it('a worker gets memory off and nothing else: the line is the no-profile line plus one word', () => {
     seed([['profile', 'worker']]);
