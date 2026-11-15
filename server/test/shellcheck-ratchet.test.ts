@@ -201,6 +201,14 @@ describe('the ratchet rules', () => {
     expect(failures[0]).toContain(cite('new.sh', 2, 'SC2164'));
   });
 
+  it('ccd/lib/ccrc-*.sh is its own pin: the sweeps source it, ccd does not, so it is no part of the program', () => {
+    expect(pinKey('ccd/ccd')).toBe(GROUP);
+    expect(pinKey('ccd/lib/disk-retention.sh')).toBe(GROUP);
+    expect(pinKey('ccd/lib/a-future-slice.sh')).toBe(GROUP);
+    expect(pinKey('ccd/lib/ccrc-settings.sh')).toBe('ccd/lib/ccrc-settings.sh');
+    expect(pinKey('ccd/ccrc')).toBe('ccd/ccrc');
+  });
+
   it('ccd/ccd and ccd/lib are one pin: code moved between them does not trip it, and a new lib file joins the group', () => {
     const pins = { [GROUP]: pinOf({ SC2034: 2 }) };
     const moved = [finding('ccd/ccd', 3, 'SC2034'), finding('ccd/lib/new-split.sh', 9, 'SC2034')];
@@ -248,6 +256,71 @@ describe('the ratchet rules', () => {
     expect(gate(null, '0.11.0', true, 'darwin').verdict).toBe('skip');
     expect(gate('0.11.0', '0.11.0', false, 'darwin')).toEqual({ verdict: 'run' });
   });
+});
+
+describe('the program is linted as one text', () => {
+  const MAIN = ['#!/usr/bin/env bash', 'limit=5', 'f() {', '  local unused=1', '  echo "$limit"', '}', 'f', ''].join('\n');
+  const MOVED_MAIN = ['#!/usr/bin/env bash', 'limit=5', '# @ccd-lib:f', 'f', ''].join('\n');
+  const MOVED_LIB = ['# ccd/lib/moved.sh: a header', '# @ccd-lib:f', 'f() {', '  local unused=1', '  echo "$limit"', '}', ''].join('\n');
+
+  it('FIXTURE: the spliced text is spliceCcd\'s, and every line of it maps back to the file and line it came from', () => {
+    const p = programText({ file: 'ccd/ccd', text: MOVED_MAIN }, [{ file: 'ccd/lib/moved.sh', text: MOVED_LIB }]);
+    expect(p.text).toBe(MAIN);
+    expect(p.origin.slice(0, 7)).toEqual([
+      { file: 'ccd/ccd', line: 1 }, { file: 'ccd/ccd', line: 2 },
+      { file: 'ccd/lib/moved.sh', line: 3 }, { file: 'ccd/lib/moved.sh', line: 4 }, { file: 'ccd/lib/moved.sh', line: 5 },
+      { file: 'ccd/lib/moved.sh', line: 6 }, { file: 'ccd/ccd', line: 4 },
+    ]);
+    expect(p.unlinted).toEqual([]);
+    expect(mapBack([finding('program.sh', 4, 'SC2034')], p.origin)).toEqual([finding('ccd/lib/moved.sh', 4, 'SC2034')]);
+    expect(() => mapBack([finding('program.sh', 99, 'SC2034')], p.origin)).toThrow('maps to no file');
+  });
+
+  it('FIXTURE: library code no pointer splices back is named, never silently left out of the lint', () => {
+    const orphan = `${MOVED_LIB}# @ccd-lib:nowhere\ng() {\n  :\n}\n`;
+    const p = programText({ file: 'ccd/ccd', text: MOVED_MAIN }, [{ file: 'ccd/lib/moved.sh', text: orphan }]);
+    expect(p.unlinted).toEqual(['ccd/lib/moved.sh:8', 'ccd/lib/moved.sh:9', 'ccd/lib/moved.sh:10']);
+    // Code above a library's first marker is outside every region too.
+    const above = programText({ file: 'ccd/ccd', text: MOVED_MAIN }, [{ file: 'ccd/lib/moved.sh', text: `x=1\n${MOVED_LIB}` }]);
+    expect(above.unlinted).toEqual(['ccd/lib/moved.sh:1']);
+  });
+
+  it('REAL: every line of the spliced program maps back to the line it came from, and no library code is left out', () => {
+    const libs = programFiles(bashFiles()).filter((f) => f !== 'ccd/ccd');
+    expect(libs.length, 'the tree holds libraries').toBeGreaterThan(0);
+    const read = (file: string) => ({ file, text: readFileSync(path.join(REPO, file), 'utf8') });
+    const p = programText(read('ccd/ccd'), libs.map(read));
+    expect(p.unlinted).toEqual([]);
+    const lines = p.text.split('\n');
+    const texts = new Map(['ccd/ccd', ...libs].map((f) => [f, read(f).text.split('\n')]));
+    const wrong = p.origin.flatMap((o, i) => (texts.get(o.file)![o.line - 1] === lines[i] ? [] : [`${i + 1} -> ${o.file}:${o.line}`]));
+    expect(wrong).toEqual([]);
+    for (const lib of libs.filter((f) => /^# @ccd-lib:/m.test(read(f).text))) expect(p.origin.some((o) => o.file === lib), lib).toBe(true);
+  });
+
+  it.skipIf(gate(installedVersion(), baseline.shellcheckVersion, Boolean(process.env.CI), process.platform).verdict !== 'run')(
+    'FIXTURE: moving a function between ccd/ccd and a library leaves the count alone', { timeout: 60_000 }, async () => {
+      const dir = mkdtempSync(path.join(tmpdir(), 'shellcheck-program-'));
+      try {
+        const lint = async (files: Record<string, string>): Promise<{ program: Finding[]; perFile: Finding[] }> => {
+          rmSync(path.join(dir, 'ccd'), { recursive: true, force: true });
+          mkdirSync(path.join(dir, 'ccd/lib'), { recursive: true });
+          for (const [f, t] of Object.entries(files)) writeFileSync(path.join(dir, f), t);
+          const names = Object.keys(files);
+          const perFile = (await Promise.all(names.map((f) => shellcheck(f, dir)))).flat();
+          return { program: await analyse(names, dir), perFile };
+        };
+        const before = await lint({ 'ccd/ccd': MAIN });
+        const after = await lint({ 'ccd/ccd': MOVED_MAIN, 'ccd/lib/moved.sh': MOVED_LIB });
+        expect(before.program.map((f) => cite(f.file, f.line, f.code))).toEqual([cite('ccd/ccd', 4, 'SC2034')]);
+        expect(after.program.map((f) => cite(f.file, f.line, f.code)), 'the same finding, named where it now sits')
+          .toEqual([cite('ccd/lib/moved.sh', 4, 'SC2034')]);
+        // Summed per file, the same move reads `limit` as unused in one file and unassigned in the other.
+        expect(after.perFile.length).toBeGreaterThan(before.perFile.length);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
 });
 
 describe('the baseline and its install', () => {
