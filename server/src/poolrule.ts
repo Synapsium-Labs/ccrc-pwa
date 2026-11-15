@@ -1,5 +1,5 @@
 import { poolRule, declaredAccountPool } from '../../shared/poolrule.js';
-import type { AccountPoolWire, PoolVerdict } from '../../shared/poolrule.js';
+import type { AccountPoolWire, ProjectPoolVerdict } from '../../shared/poolrule.js';
 import type { ProjectPlacement, ProjectPoolWire } from '../../shared/api.js';
 import type { AccountDef, Roster } from '../../shared/roster.js';
 
@@ -22,7 +22,7 @@ import type { AccountDef, Roster } from '../../shared/roster.js';
  */
 
 /**
- * L0's verdict plus the one answer only a roster-holder can give.
+ * L0's project-side verdict plus the one answer only a roster-holder can give.
  *
  * `account-not-in-roster` is an `ok` member on purpose: `ccd`'s
  * `_is_valid_wrapper` is the authority on what a wrapper is, and the PWA
@@ -31,7 +31,7 @@ import type { AccountDef, Roster } from '../../shared/roster.js';
  * would have carried out — the server inventing a policy instead of mirroring
  * one.
  */
-export type RosterVerdict = PoolVerdict | { ok: true; why: 'account-not-in-roster' };
+export type RosterVerdict = ProjectPoolVerdict | { ok: true; why: 'account-not-in-roster' };
 
 /** Build the wire shape for a CENTRAL edge — the one place `{ state: 'tagged',
  *  origin: 'central' }` is spelled, shared by every reader of `pool_edges`

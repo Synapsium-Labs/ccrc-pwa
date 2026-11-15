@@ -8,7 +8,9 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseRoster } from '../../shared/roster.js';
 import { poolEligible, poolRostered, poolUndecidable, poolVerdict } from '../src/poolrule.js';
-import { POOL_RULE_CASES, POOLED_TEST_ROSTER, type PoolRuleCase } from './fixtures/poolRule.js';
+import {
+  POOL_RULE_CASES, POOL_RULE_PROJECT_CASES, POOL_RULE_SET_CASES, POOLED_TEST_ROSTER, isSetCase, type PoolRuleCase,
+} from './fixtures/poolRule.js';
 
 /** A one-account roster carrying exactly the case's account pool. The key is
  *  OMITTED for `null`: `parseAccount` refuses a literal `null` in JSON and
@@ -63,15 +65,15 @@ describe('poolVerdict answers the shared fixture table', () => {
       expect(POOL_RULE_CASES.filter((c) => c.expect === cls).length, cls).toBeGreaterThan(0);
     }
     for (const state of ['tagged', 'untagged', 'malformed', 'unreadable'] as const) {
-      expect(POOL_RULE_CASES.filter((c) => c.project.state === state).length, state).toBeGreaterThan(0);
+      expect(POOL_RULE_PROJECT_CASES.filter((c) => c.project.state === state).length, state).toBeGreaterThan(0);
     }
   });
 
   it('the skip is bounded — non-empty, account-state-only, and it leaves a table behind', () => {
     // A SKIPPED CASE IS NOT A PIN, so the skip itself gets pinned. Three
     // claims, each closing a different way for this predicate to rot:
-    const skipped = POOL_RULE_CASES.filter(SERVER_BLIND);
-    const walked = POOL_RULE_CASES.filter((c) => !SERVER_BLIND(c));
+    const skipped = POOL_RULE_PROJECT_CASES.filter(SERVER_BLIND);
+    const walked = POOL_RULE_PROJECT_CASES.filter((c) => !SERVER_BLIND(c));
 
     // (1) A skip that matches nothing is a vacuous zero — it would report as a
     // live boundary while the rows it claims to except had been renamed away.
@@ -103,13 +105,23 @@ describe('poolVerdict answers the shared fixture table', () => {
       .toBeGreaterThanOrEqual(10);
   });
 
+  it('the SET rows are skipped here, bounded — only set rows, and the whole set arm', () => {
+    // `poolVerdict` takes a PROJECT side only in this piece (the pool-set plan, Task 1): the session's set reaches the
+    // server's mirror in the designation piece, which drives these rows then. Until then the rows are pinned by
+    // `pool-rule-core.test.ts` (L0) and, from a later pull request of the plan, by `_pool_ok`. A skip is not a pin, so
+    // the skip itself is pinned: it matches something, and it matches exactly the rows that carry a `set`.
+    expect(POOL_RULE_SET_CASES.length, 'no set rows: this boundary is a comment about nothing').toBeGreaterThan(0);
+    expect(POOL_RULE_CASES.filter(isSetCase).length).toBe(POOL_RULE_SET_CASES.length);
+    expect(POOL_RULE_PROJECT_CASES.length + POOL_RULE_SET_CASES.length).toBe(POOL_RULE_CASES.length);
+  });
+
   // `new Map()` at every fixture-table call: NO central edges is exactly what
   // this table's cases assert against — the DECLARED-roster behaviour the
   // table has always driven. See `describe('poolVerdict and central edges')`
   // below for the precedence the `edges` argument itself adds.
   const NO_EDGES = new Map<string, readonly string[]>();
 
-  it.each(POOL_RULE_CASES.filter((c) => !SERVER_BLIND(c)).map((c) => [c.name, c] as const))(
+  it.each(POOL_RULE_PROJECT_CASES.filter((c) => !SERVER_BLIND(c)).map((c) => [c.name, c] as const))(
     '%s', (_name, c) => {
       expect(word(poolVerdict(rosterWith(c.accountPool), 'a', c.project, NO_EDGES))).toBe(c.expect);
     });
@@ -132,9 +144,9 @@ describe('poolVerdict and the roster', () => {
     // the relabel above must touch the ok arm only, or an unreadable tag plus
     // an unknown wrapper would permit the very placement 503 exists to stop.
     expect(poolVerdict(r, 'nobody', { state: 'unreadable' }, NO_EDGES))
-      .toEqual({ ok: false, reason: 'pool-undecidable', state: 'unreadable' });
+      .toEqual({ ok: false, reason: 'pool-undecidable', side: 'project', state: 'unreadable' });
     expect(poolVerdict(r, 'nobody', { state: 'malformed' }, NO_EDGES))
-      .toEqual({ ok: false, reason: 'pool-undecidable', state: 'malformed' });
+      .toEqual({ ok: false, reason: 'pool-undecidable', side: 'project', state: 'malformed' });
   });
 
   it('names the two pools on a mismatch, so the 409 can render both sides — the DECLARED fallback still enforced with no central edges', () => {
@@ -144,7 +156,7 @@ describe('poolVerdict and the roster', () => {
     // central lookup missed would wrongly answer `account-not-in-roster` (an
     // `ok` verdict) instead of this mismatch.
     expect(poolVerdict(r, 'claude-b', { state: 'tagged', name: 'pool-a' }, NO_EDGES))
-      .toEqual({ ok: false, reason: 'pool-mismatch', accountPool: 'pool-b', projectPool: 'pool-a' });
+      .toEqual({ ok: false, reason: 'pool-mismatch', side: 'project', accountPool: 'pool-b', projectPool: 'pool-a' });
   });
 });
 
@@ -166,7 +178,7 @@ describe('poolVerdict and central edges — precedence (design §5.6)', () => {
     // which the permissive declared default alone would have let through.
     const edges = new Map([['claude-d', ['pool-b']]]);
     expect(poolVerdict(r, 'claude-d', { state: 'tagged', name: 'pool-a' }, edges))
-      .toEqual({ ok: false, reason: 'pool-mismatch', accountPool: 'pool-b', projectPool: 'pool-a' });
+      .toEqual({ ok: false, reason: 'pool-mismatch', side: 'project', accountPool: 'pool-b', projectPool: 'pool-a' });
   });
 
   it('an edges entry for another account never leaks onto this one', () => {
@@ -174,7 +186,7 @@ describe('poolVerdict and central edges — precedence (design §5.6)', () => {
     // `claude-b` is not in `edges` at all, so its DECLARED `pool-b` still
     // decides — same answer as the no-edges case above.
     expect(poolVerdict(r, 'claude-b', { state: 'tagged', name: 'pool-a' }, edges))
-      .toEqual({ ok: false, reason: 'pool-mismatch', accountPool: 'pool-b', projectPool: 'pool-a' });
+      .toEqual({ ok: false, reason: 'pool-mismatch', side: 'project', accountPool: 'pool-b', projectPool: 'pool-a' });
   });
 });
 

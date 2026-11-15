@@ -1073,8 +1073,8 @@ export function rulingRowsOf(db: DatabaseSync, sessionId: string, limit: number)
 // `continuity_probes` and `continuity_reads` (Overlord spec §3.3.5 C41, §3.3.9 C52, W1a, the probes piece, PR B; migration 73).
 // One writer per fact: the generations lane opens a round (`openRound`), the probe door records its answers (`answerRound`),
 // and the card and note GETs stamp a session's reads (`stampContinuityRead`). The lane reads one generation's rounds
-// (`probeRows`); the door reads the session's open round (`openProbeRound`) or one round by id (`probeRound`). A failed
-// statement answers ok: false, never a throw; a row this build cannot read fails the read whole.
+// (`probeRows`); the door reads the session's open round (`openProbeRound`) or one round by id (`probeRoundRows`), both in
+// its live generation. A failed statement answers ok: false, never a throw; a row this build cannot read fails the read whole.
 
 /** One question of a round as the lane opens it. `choices` is null for an id or `none`. */
 export interface ProbeInsertQuestion {
@@ -1214,11 +1214,14 @@ export function openProbeRound(db: DatabaseSync, sessionId: string): ProbeRowsRe
   } catch (e) { return probeReadFailed(e); }
 }
 
-/** One round's questions by its id, in id order, or an empty list when no row of the session's carries it. */
+/** One round's questions by its id, in id order, or an empty list when no row of the session's live generation carries it
+ *  (review 2068 F3: the answer door finds a round where the read door serves one, in the newest generation that has not
+ *  ended, so a round an earlier generation left open is answered `probe-none-open`, never graded). */
 export function probeRoundRows(db: DatabaseSync, roundId: string, sessionId: string): ProbeRowsRead {
   try {
-    return probeRowsOf(stmt(db, `SELECT ${PROBE_COLUMNS} FROM continuity_probes WHERE roundId = ? AND sessionId = ? ORDER BY id`)
-      .all(roundId, sessionId) as Record<string, unknown>[]);
+    return probeRowsOf(stmt(db, `SELECT ${PROBE_COLUMNS} FROM continuity_probes WHERE roundId = ? AND sessionId = ? AND generationId = `
+      + "(SELECT max(id) FROM continuity_generations WHERE sessionId = ? AND state <> 'ended') ORDER BY id")
+      .all(roundId, sessionId, sessionId) as Record<string, unknown>[]);
   } catch (e) { return probeReadFailed(e); }
 }
 

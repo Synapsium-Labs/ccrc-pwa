@@ -42,7 +42,8 @@ import type { TurnMarkRead } from '../../src/coord/stall.js';
 import type { UsageRead } from '../../src/usage.js';
 import { effectiveGeneration, genExpectOf, genViewOf, type GenRow } from '../../src/continuity/continuityStore.js';
 import {
-  GENERATIONS_LANE, generationsPass, softTimesOf, type GenerationsCoord, type GenerationsResult, type GenReadings, type PlannedAct,
+  GENERATIONS_LANE, generationsPass, softTimesOf, type EmptyTries, type GenerationsCoord, type GenerationsResult, type GenReadings,
+  type PlannedAct,
 } from '../../src/continuity/generationsLane.js';
 import type { GenEvent, GenView } from '../../src/continuity/generationMachine.js';
 import type { Reading } from '../../src/continuity/renewalDue.js';
@@ -190,7 +191,7 @@ export function generationDay(mods: GenDayModules): Scenario<GenDayEdge> {
       let proc = 'p0';
       let boots = 0;
       // The lane's per-process memo of the starts it held (review 2006 R3): a boot forgets it, as a restarted server does.
-      let retried = new Set<number>(); let emptyTries = new Map<number, string>();
+      let retried = new Set<number>(); let emptyTries: EmptyTries = new Map();
 
       // ---- THE WORLD'S TRUTH, for the lines the machine is held to: which card the session read and which round it passed.
       const cardReadHash = new Map<string, string>();   // a conversation's uuid -> the hash of its newest read
@@ -695,7 +696,7 @@ export function generationDay(mods: GenDayModules): Scenario<GenDayEdge> {
 
       world.onBoot(() => {
         proc = `p${boots++}`;
-        retried = new Set<number>(); emptyTries = new Map<number, string>();
+        retried = new Set<number>(); emptyTries = new Map();
         arm(DISARMED);
         acting = false;
         handoverAsked.clear();

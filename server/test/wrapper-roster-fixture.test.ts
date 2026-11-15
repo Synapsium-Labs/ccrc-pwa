@@ -412,6 +412,23 @@ describe('install-coordinator-skill.sh REQUIRED_REFS agrees with the real refere
   });
 });
 
+// The same projection, for the Overlord's staging installer (Overlord W1): its four references carry every procedure
+// SKILL.md points at, so a fifth reference with no REQUIRED_REFS entry would be the half-staged shape it refuses.
+describe('install-overlord-skill.sh REQUIRED_REFS agrees with the real references/ directory (I8, Overlord W1)', () => {
+  it('names exactly the files that live under ccd/overlord-skill/references/ today', () => {
+    const src = readFileSync(path.join(ccrcRoot, 'ccd', 'install-overlord-skill.sh'), 'utf8');
+    const m = /REQUIRED_REFS=\(([^)]*)\)/.exec(src);
+    expect(m, "install-overlord-skill.sh's REQUIRED_REFS=(...) line").not.toBeNull();
+    const declared = sortedSet((m as RegExpExecArray)[1].trim().split(/\s+/).filter(Boolean));
+    const actual = sortedSet(
+      readdirSync(path.join(ccrcRoot, 'ccd', 'overlord-skill', 'references'), { withFileTypes: true })
+        .filter((d) => d.isFile()).map((d) => d.name),
+    );
+    expect(actual.length).toBeGreaterThan(0);
+    expect(declared).toEqual(actual);
+  });
+});
+
 // Also gone with them: the `ccdValid ⊆ hooksAble` invariant (fix, review
 // finding 15). It existed because the two sets were kept by different hands —
 // `hooksAble` by the installers' literal arrays, `ccdValid` by ccd's own

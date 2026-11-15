@@ -179,6 +179,8 @@ export const TREE_FILES = [
   'ccd/lib/train-proof.sh',
   // Its third library (wave 5), the delegation lease: read, pinned and published exactly as the others.
   'ccd/lib/delegation-lease.sh',
+  // Its fourth library (the Overlord's pool set): read, pinned and published exactly as the others.
+  'ccd/lib/pool-set.sh',
   'ccd/ccd-cap-scopes',
   // graphify Task 10: the sweep executable `_inst_bins` ships alongside the
   // other two, unconditionally (mirrors the `ccd-cap-scopes` line — only the
@@ -303,6 +305,10 @@ export const TREE_FILES = [
   'ccd/reviewer-skill',
   'ccd/history-skill',
   'ccd/linear-skill',
+  // The Overlord's skill tree and its staging installer (Overlord W1): `_inst_skills` runs that installer out of this
+  // tree, and it stages the tree once at `~/.cc-sessions/overlord-skill`, in no account home.
+  'ccd/overlord-skill',
+  'ccd/install-overlord-skill.sh',
   'ccd/install-coordinator-skill.sh',
   'ccd/install-worker-skill.sh',
   'ccd/install-reviewer-skill.sh',
