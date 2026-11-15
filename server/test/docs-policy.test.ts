@@ -1911,6 +1911,12 @@ describe('W5b-1 T9: parseDocsApiQuery history (rich-docs spec G4)', () => {
     expect(parseDocsApiQuery('history', form(`commit=abc&section=vision&path=a.md`))).toStrictEqual(refusal('bad-commit'));
   });
 
+  it('an uppercase commit of 40 hex digits is bad-commit', () => {
+    const upper = T3_COMMIT.toUpperCase();
+    expect(upper).not.toBe(T3_COMMIT);   // CONTROL: the fixture commit holds letters, so the upper form differs
+    expect(parseDocsApiQuery('history', form(`commit=${upper}&section=vision&path=a.md`))).toStrictEqual(refusal('bad-commit'));
+  });
+
   it('a section outside the six, wiki, is bad-section', () => {
     expect(parseDocsApiQuery('history', form(`commit=${T3_COMMIT}&section=wiki&path=a.md`)))
       .toStrictEqual(refusal('bad-section'));
