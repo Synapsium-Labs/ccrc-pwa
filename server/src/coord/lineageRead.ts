@@ -216,8 +216,9 @@ export const allFailed = (f: ControlFailure): LandingControlRead => ({ lander: f
  *  rejects answers `unreadable`. The timer is a local of this call (a deadline inside one adapter call).
  *
  *  Wave 5i: a project in `controlsWanted` also gets its control bundle in the same slot, around the probe already read
- *  (each probe is read once). A wanted project the successful listing does not return is `absent` in all three documents,
- *  a refused name is `refused`, and no `controlsWanted` means an empty `controls`. */
+ *  (each probe is read once). The probe and the control each race the one deadline: a probe that answered stays the
+ *  radar result when the control misses the SAME deadline, and that control is `late` in all three documents (held).
+ *  A wanted project the successful listing does not return is `absent` in all three documents, a refused name is `refused`, and no `controlsWanted` means an empty `controls`. */
 export async function readRadarPass(
   io: Pick<FleetIO, 'readFileFromBytesMeasured' | 'lstatMeasured' | 'statMeasured' | 'readdirMeasured'>, registryDir: string,
   projectsWanted: ReadonlySet<string>, nowMs: number, deadlineMs: number, controlsWanted: ReadonlySet<string> = new Set(),
@@ -234,13 +235,19 @@ export async function readRadarPass(
     if (!listing.ok) return listing;
     const safe = listing.names.filter((n) => projectsWanted.has(n) || controlsWanted.has(n));
     const failedBundle = (n: string, f: ControlFailure): Bundle => ({ probe: f, control: controlsWanted.has(n) ? allFailed(f) : null });
+    // The probe and then the control each race the ONE `late` on their own, so an answered probe is never replaced by a
+    // control that misses the same deadline: that control alone is `late` in all three documents (held, no cue).
+    const lateOf = { ok: false, reason: 'late' } as const;
     const read = async (n: string): Promise<Bundle> => {
-      const probe = await readRadarProbe(io, registryDir, n, nowMs, ac.signal);
-      return { probe, control: controlsWanted.has(n) ? await readLandingControl(io, registryDir, n, probe, nowMs, ac.signal) : null };
+      const probe = await Promise.race([readRadarProbe(io, registryDir, n, nowMs, ac.signal), late]);
+      if (!probe.ok && probe.reason === 'late') return failedBundle(n, lateOf);
+      if (!controlsWanted.has(n)) return { probe, control: null };
+      const control = await Promise.race([readLandingControl(io, registryDir, n, probe, nowMs, ac.signal), late]);
+      return { probe, control: 'lander' in control ? control : allFailed(lateOf) };
     };
     const answers = await mapBounded(safe, RADAR_PASS_CONCURRENCY, (n): Promise<Bundle> => (ac.signal.aborted
-      ? Promise.resolve(failedBundle(n, { ok: false, reason: 'late' }))
-      : Promise.race([read(n).catch((): Bundle => failedBundle(n, { ok: false, reason: 'unreadable' })), late.then((l) => failedBundle(n, l))])));
+      ? Promise.resolve(failedBundle(n, lateOf))
+      : read(n).catch((): Bundle => failedBundle(n, { ok: false, reason: 'unreadable' }))));
     const reads = new Map<string, RadarPassRead>();
     const controls = new Map<string, LandingControlRead>();
     safe.forEach((n, i) => {
