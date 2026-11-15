@@ -26,11 +26,13 @@ from `$REG/<id>.poolset` through a bounded, measured read and never folds an unr
 The new set helpers live in a fourth ccd library, `ccd/lib/pool-set.sh`; `ccd/ccd`'s body keeps its own functions and
 gains one-line calls into the library (the large-file programme's rule: new code goes to its target module, and no
 existing function moves here, which is that programme's pure-move work). The server never places and never writes the
-set in this piece: the designation piece is the set's first writer. Four pull requests: **PR A1** (Tasks 1 and 2: the
+set in this piece: the designation piece is the set's first writer. Five pull requests: **PR A1** (Tasks 1 and 2: the
 set in L0, the library, the route fields), **PR A2** (Task 3: the one reader and `_pool_ok`'s set case), **PR A3**
-(Tasks 4 and 5: every ccd user of Table 3.4d, the crossing marker and the undecided words), and **PR B** (Tasks 6 to 9:
-`ccd pool-answer`, the word `pool-set` and the release's `ccdCaps`, the floor below `pool-set` with the doctor's check,
-and the server's push when a placing box loses the word while a set stands).
+(Tasks 4 and 5: every ccd user of Table 3.4d, the crossing marker and the undecided words), **PR B1** (Tasks 6 to 8:
+`ccd pool-answer`, the word `pool-set` and the release's `ccdCaps`, the stamp's field, the floor below `pool-set`, its
+call sites and restore arms, and the doctor's check), and **PR B2** (Tasks 9 and 10: the override `--below-cap
+pool-set` on three verbs with its forwardings and its cap word, and the server's push when a placing box loses the word
+while a set stands).
 
 **Tech Stack:** TypeScript (ESM), bash (`ccd/ccd`, `ccd/ccrc`, `ccd/ccrc-doctor-checks`), vitest. No new dependency.
 
@@ -49,10 +51,12 @@ ccd's capability words, §11.5's "An older fleet build" (the doctor failure, and
 1862 are in the programme ledger (`docs/superpowers/programs/overlord.md`, "R18's minors, for the W1 plan"); each is
 answered below. The large-file programme is `docs/superpowers/specs/2026-11-13-large-file-programme-design.md`.
 
-Written against `origin/main` at `4fd5998ed` (2026-11-15), re-based after review 2085 from the first draft's
-`416b8f942`: of the files this plan touches only `server/test/growthCheck.ts` moved between them (the three
-growth stages of #2811). The index was read from `origin/ws/overlord-plan-w1`. The coordinator's rulings on review 2085 are
-recorded in the open questions they settle.
+Measured against `origin/main` at `4fd5998ed` (2026-11-15); the branch itself is parented on the first draft's
+`416b8f942`. Of the files this plan touches, five moved between the two (review 2092 N12): `server/test/growthCheck.ts`
+(the three growth stages of #2811), `server/src/watch.ts`, `server/test/sim/mutation-floors.test.ts`,
+`server/test/sim/mutation-floors.json` and `server/test/single-definition/writers-map.test.ts`. Every task's builder
+re-measures what it cites on the `main` it starts from. The index was read from `origin/ws/overlord-plan-w1`. The
+coordinator's rulings on reviews 2085 and 2092 are recorded in the open questions they settle.
 
 ## Open questions
 
@@ -134,44 +138,54 @@ piece's, not this one's).
     and membership is all the check asks, so the whole list is stamped. The builder seeds a scratch `HOME` with the
     generated default roster (`node deploy/gen-accounts.mjs deploy/accounts.default.json`), because with an empty `HOME`
     `ccd caps` exits 1 ("no account roster"). It fails the build on a non-zero exit and never writes an empty array.
-    The reader is the one build-stamp parser, `ccd/ccrc#_box_build_fields`, widened by one line with its pin. Three
-    answers: the list has `pool-set`; the field is absent (a build from before the field, a `deploy/deploy.sh` stamp,
-    a kept tree from before it), which reads "lacks it" with its own sentence; or the field is present but not an array
-    of well-shaped tokens, which reads "lacks it" with another sentence. The one token that reflects the build box
-    rather than the target (`pool-sync-installed` or `pool-sync-absent`) is stamped as printed and read by nothing.
+    The reader is the one build-stamp parser, `ccd/ccrc#_box_build_fields`, widened by one output line with its pin.
+    That line is a field-level answer (review 2092 N2, ruled): `<absent>` (a build from before the field, a
+    `deploy/deploy.sh` stamp, a kept tree from before it), `<malformed>` (present but not an array of well-shaped
+    tokens), or the space-joined list, `[]` being the empty list, which "lists no `pool-set`" and refuses. The
+    sentinels sit outside the token grammar, and the field never fails the stamp, so the stamp parser and
+    `shared/buildinfo.ts#parseBuildInfo` still agree on every stamp. The one token that reflects the build box rather
+    than the target (`pool-sync-installed` or `pool-sync-absent`) is stamped as printed and read by nothing.
 12. **What overrides the floor** (slug `below-cap-is-a-typed-flag`; review 2085 F6, ruled). `--force` already means
     "reinstall a converged box" on the update verb and "move a converged fleet anyway" on the rollout verb (forwarded to
     every box), and the rollback verb takes no `--force` by design (D-3285). **Ruled and built:** the override is a
-    typed flag, `--below-cap pool-set`, accepted by the update, rollback and rollout verbs (the rollout verb forwards it
-    to every box), naming the one capability it passes. Any other word after it is a usage error. `--force` keeps its
-    meanings and never crosses the floor. The console's rollback tap (`POST /api/updates/rollback`, `--from pwa`) passes
-    no such flag, so it refuses while a set stands; its refusal sentence names the flag and the step that clears it
-    (retire or rebind the Overlord in Settings, which clears the set, or run the rollback from the box's shell with
-    `--below-cap pool-set`). The refused tap reads as a `failed` row in the update control plane, whose detail is that
-    sentence, and it halts the rest of the move until acked, as any refusal before a change does today. A retry hits
-    the same refusal until the set is cleared or the flag is passed.
+    typed flag, `--below-cap pool-set`, accepted by the update, rollback and rollout verbs, naming the one capability
+    it passes, and carried through every re-exec (the two detaches and the rollback's fall-through, review 2092 N1).
+    Any other word after it is a usage error. `--force` keeps its meanings and never crosses the floor. The rollout
+    verb forwards the flag only to a box whose check line advertises the new cap word `below-cap`, and refuses up
+    front, before any box moves, naming every box that lacks it (review 2092 N7, ruled; Task 9). The console's
+    rollback tap (`POST /api/updates/rollback`, `--from pwa`) passes no such flag, so it refuses while a set stands;
+    its refusal sentence puts the remedy first (run the rollback from the box's shell with `--below-cap pool-set`, or
+    retire or rebind the Overlord in Settings, which clears the set). The refused tap reads as a `failed` row in the
+    update control plane, whose detail is that sentence cut to 200 characters, and it halts the rest of the move until
+    acked, as any refusal before a change does today. A retry hits the same refusal until the set is cleared or the
+    flag is passed.
 13. **How a set is cleared** (slug `poolset-empty-value-clears`; review 2085 F10). `cmd_route` refuses an empty value
     for every field except `compact` and `compactwindow`. **Built:** `poolset` and `acctorder` join that exemption, so
     `ccd route --session <id> --set poolset= --set acctorder=` removes both files. That is how the designation piece's
     retire clears the retired row's set, and how its rebind clears the old row's set after writing the new row's.
 14. **The unattended paths** (slug `pool-set-floor-unattended-warn-and-push`; review 2085 F7, ruled). The watchdog's
     rollback (`--from watchdog`) and the gate-failure restore (`--from restore`) put health first and never refuse.
-    They read `previous`'s `ccdCaps`; when it lacks `pool-set` and a set stands, they still roll back, print the
-    `WARN`, and the operator is pushed, naming every standing set (Task 9). The realistic trigger is narrow: both paths
+    They read `previous`'s `ccdCaps` where a stamp exists (the watchdog's rollback, restore arms 1 and 2); when it
+    lacks `pool-set` and a set stands, they still roll back, print the `WARN`, and the operator is pushed, naming every
+    standing set (Task 10). Restore arm 3 has no stamp to read (the backup keeps no `build.json`), so it reads no
+    capability and, while a set stands, prints the "could not be read" `WARN` (review 2092 N8, ruled). The realistic trigger is narrow: both paths
     return to `previous`, so they cross below the word only when `previous` names a build without `pool-set`, as when a
     same-tag reinstall of a `pool-set` build fails while `previous` still names an older build. In the ordinary failed
     move from one release to the next, neither path crosses. (The first draft's reason, "a box that fails its health
     probe places nothing", was false: the gate measures `ccrc.service` and `ccrc-agent.service`, never the session
     supervisors, which keep placing.)
 15. **How the push reaches the operator** (slug `pool-set-loss-push-from-the-caps-lane`). A box cannot push: the
-    unattended paths run in bash, on the box. **Built (Task 9):** the server raises the push, from facts it already
-    reads. After each refresh of a box's `ccd caps` (the `caps` lane), one L1 decider, `poolSetLoss`, answers whether
-    that box lacks `pool-set` while any session on it carries a `poolset` route field (the registry reader reads every
-    `ROUTE_WRITABLE_FIELDS` file a listing shows, so after Task 2 it reads `poolset`). It raises one notice through the
-    notice funnel (`server/src/notice.ts#notify`, mode `push`), deduplicated by its `dedupeKey`, naming each session
-    that carries a set. That covers every path below the word, forced, unattended or a hand deploy, with one mechanism.
-    On a `both` box a rollback takes the server below Task 9 as well, so no push comes, and the doctor's line is the
-    signal there. The operator item the designation piece may raise for a lost word reads the same decider.
+    unattended paths run in bash, on the box. **Built (Task 10):** the server raises the push, from facts it already
+    reads. On each watcher tick, a lane file (`server/src/poolSetLossLane.ts`) asks one L1 decider, `poolSetLoss`,
+    whether the box lacks `pool-set` in the caps the `caps` lane last recorded while any session on it carries a
+    `poolset` route field, readable or listed but unreadable (the registry reader reads every `ROUTE_WRITABLE_FIELDS`
+    file a listing shows, so after Task 2 it reads `poolset`, and it names an unreadable one in `route.unreadable`). It
+    raises one notice through the notice funnel (`server/src/notice.ts#notify`, mode `push`, kind `coord`, session id
+    `''`, `hasNotice` read first, as `buildCaptureLane.ts` does), naming each session that carries a set. In remote
+    mode that covers every path below the word, forced, unattended or a hand deploy, with one mechanism. In `local`
+    mode the caps are read once at boot, so a change is seen at the next server restart; and on any `both` box a
+    rollback below PR B2 takes the server below Task 10 as well, so no push comes, and the doctor's line is the signal
+    there. The operator item the designation piece may raise for a lost word reads the same decider.
 
 ## What exists today
 
@@ -333,15 +347,17 @@ Measured on `origin/main` at `4fd5998ed`.
   build-stamp scans (`roster-bash.test.ts`); `ccd-verb-sets.test.ts`; `ccd-can.test.ts`; `verb-gate.test.ts`;
   `id-argv-census.test.ts`; `ccdArgvSamples.ts`; `whitelist-subset.test.ts`, the agent's whitelist suites and a new
   bypass file `g29`; `ccdCapTokens.ts` and `KNOWN_CAPABILITY_TOKENS`; every site a new ccd library touches (Task 2,
-  Step 0); `build-release.test.ts`'s `build.json` shape; `CCRC_DOCTOR_CHECKS` and the suites that count it; the watcher
-  censuses for the `caps` lane's new call (`watcher-quiet-census`, if it builds a watcher). No route, table, new lane or
-  migration.
+  Step 0); `build-release.test.ts`'s `build.json` shape and its and `release-main.test.ts`'s fixture trees (Task 7);
+  `CCRC_CAP_WORDS` and the suites that pin the check line's `caps=` (Task 9); `CCRC_DOCTOR_CHECKS` and the suites that
+  count it; the watcher censuses for Task 10's call (`watcher-quiet-census`, if a test builds a watcher) and the rings'
+  table for its new lane file. No route, table, lane schedule row or migration; one lane file, shaped like
+  `buildCaptureLane.ts`.
 - **Wire.** Additive only. `FLEET_PROTO` does not change. Two new route-record files appear in a listing, and an older
   server reads only the fields it knows. `build.json`'s `ccdCaps` is additive: an older `ccrc` ignores it.
 - **Public repository.** Fixtures use `pool-a` and `pool-b` (and `pool-ab` where the table already does), the test
   roster's account ids, and session ids of the form `<account>-overlord` or `<account>-project-a`. No real pool name,
   account, host or path. Cite by symbol or `@anchor`, never by line. No D-number is invented: departures are slugs here
-  and in `docs/superpowers/plans/2026-11-14-overlord-w1/w1-pool-set/departures.md`, which Task 1 creates.
+  and in `docs/superpowers/plans/2026-11-14-overlord-w1/w1-pool-set-departures.md`, beside its siblings' `<plan>-departures.md`, which Task 1 creates.
 
 ## Review Focus
 
@@ -359,12 +375,15 @@ Measured on `origin/main` at `4fd5998ed`.
    projection names `$REG/pool-epoch` and the pool sync, a bad project tag names `$POOLS_DIR/<project>`, on the start,
    tick, rescue and strand paths alike.
 5. **An existing row warns, the tick relocates.** A revival or `ccd enable` on an account outside the set, or with the
-   set unreadable, warns on stderr and is never silent; a new row outside the set is refused; the tick moves an
-   existing one back at its next idle boundary.
+   set unreadable, warns on stderr and is never silent; a new row outside the set is refused (a case production never
+   meets, because a new id carries no set, so its test plants the set by hand); the tick moves an existing one back at
+   its next idle boundary.
 6. **`ccd pool-answer` cannot be widened by the wire,** and its refusal by an older agent reads as `ran: false`.
-7. **The way below `pool-set` is closed while a set stands.** Both call sites refuse before anything changes; absent
-   or malformed `ccdCaps` and an unlistable registry refuse; only `--below-cap pool-set` and the two unattended paths
-   pass, each with a `WARN`, and the server pushes the operator once per loss.
+7. **The way below `pool-set` is closed while a set stands.** Both call sites refuse before anything changes, each
+   inside the reporting window, so the console's tap gets its `failed` row; absent or malformed `ccdCaps` and an
+   unlistable registry refuse, and no `ccdCaps` shape fails the stamp itself; only `--below-cap pool-set`, carried
+   through every re-exec and forwarded only to a box that advertises `below-cap`, and the two unattended paths pass,
+   each with a `WARN`, and the server pushes the operator once per loss, an unreadable set included.
 
 ## The rule, widened
 
@@ -412,7 +431,7 @@ one-name tag `n` is the set `n+untagged` (C46), and the fixture table pins that 
   and set in, spelling or `null` out)
 - Create: `server/test/sim/poolSetSets.ts`; Modify: `server/test/sim/mutation-floors.test.ts`,
   `server/test/sim/mutation-floors.json`
-- Create: `docs/superpowers/plans/2026-11-14-overlord-w1/w1-pool-set/departures.md` (the measurements and departures
+- Create: `docs/superpowers/plans/2026-11-14-overlord-w1/w1-pool-set-departures.md` (the measurements and departures
   each later task records)
 - Test: `server/test/pool-rule-core.test.ts`, `server/test/pool-set-spelling.test.ts` (new), `server/test/pools.test.ts`
   (the server mirror's purity scan stays green), pwa's `tsc`, and `rings/totality.test.ts` if it lists `shared/`
@@ -546,11 +565,15 @@ at most `ROUTE_LIST_MAX_BYTES` (1,024) bytes by `_route_bytes`, and never roster
 _session_pool_side() {   # id [project] -> "set <spelling>" | set-unreadable | set-malformed | the project's four words ; rc 0
   # 1. $REG not a searchable directory: the project's words, as _project_pool_state answers there (review 2085 F11)
   # 2. no entry at $REG/<id>.poolset (-e and -L both false): the project's words
-  # 3. an entry that is not a regular file, or one _reg_read calls unreadable: set-unreadable
+  # 3. an entry that is a link, not a regular file, or not readable (-L, ! -f, ! -r: _reg_read's own tests,
+  #    reproduced here without its read, which takes the whole file first): set-unreadable
   # 4. the bytes, by a bounded read: read -r -d '' -n $((POOL_SET_SPELLING_MAX_BYTES + 1)); a read that hit the cap,
   #    found a NUL, read zero bytes, or holds a CR or a newline: set-malformed (review 2085 F1)
   # 5. _poolset_parse on the bytes: "set <spelling>" or set-malformed
-  # The project argument is taken when $# -ge 2 (read from the row otherwise), so an empty project is not "no project".
+  # The project argument is taken when $# -ge 2, so an empty project is not "no project". With $# -lt 2 the project
+  # is read from the row only after steps 1 to 5 find no set, as _swap_target reads it today: an absent field (rc 1)
+  # is the empty name, which _project_pool_state answers as it does today; an unreadable one (rc 2) answers
+  # unreadable unless _pool_untaggable says no project can be tagged (review 2092 N14). Both are pinned.
 }
 ```
 
@@ -569,7 +592,9 @@ for `"set "*`, the account side as today, then untagged serves iff the set says 
   not); mode 000, a directory at that path, a dangling symlink and a FIFO each answer `set-unreadable`, never the
   project's word; `pool-b,pool-a`, `pool-a\0+untagged`, a zero-byte file, `pool-a\r` (CRLF) and a 1,025-byte file each
   answer `set-malformed`; an unsearchable `$REG` answers the project's word (as `_project_pool_state` does there); a
-  passed empty project is not read as "no project argument"; the same bytes give the same word under `LC_ALL=C` and
+  passed empty project is not read as "no project argument"; with no project argument, an absent project field and an
+  unreadable one each answer as `_swap_target`'s read does today; an open failure inside the bounded read folds to
+  zero bytes and reads `set-malformed`, fail-closed; the same bytes give the same word under `LC_ALL=C` and
   `en_US.UTF-8`. The sentences: the `set` arm of `_pool_undecidable_why` names `$REG/<id>.poolset`, says the server
   writes it again at its next sweep or the operator saves the set again in Settings, and says the project's tag is not
   involved; `_pool_mismatch_why` for a set names the spelling and says the account's pool is not in it, or that the
@@ -601,7 +626,7 @@ reader of `pps` that tests `"named "*` gains the quoted `"set "*` case where it 
 | User | What changes |
 |---|---|
 | `_swap_target`, `cmd_swap`, `cmd_prefer` | Read the session's side. A swap target, a manual swap and a `prefer` honour the set, and refuse an account outside it as a mismatch, overridable by `--cross-pool` exactly as a project mismatch is |
-| `cmd_start` | Reads the session's side. A **new** row outside the set is refused, as today's new-row refusal. An **existing** row (revival, `ccd enable`) keeps today's warn-only arm: a mismatch warns on stderr with a set-side text naming the spelling, and an undecidable set (rc 2) warns too, naming `$REG/<id>.poolset`, where today rc 2 is silent. The tick's relocation (below) is what moves an existing row back inside the set (slug `existing-row-warns-the-tick-relocates`, the coordinator's ruling on review 2085 F8) |
+| `cmd_start` | Reads the session's side. A **new** row outside the set is refused, as today's new-row refusal (no production path meets it, because a set lives on an existing row; the test plants one by hand). An **existing** row (revival, `ccd enable`) keeps today's warn-only arm: a mismatch warns on stderr with a set-side text naming the spelling, and an undecidable set (rc 2) warns too, naming `$REG/<id>.poolset`, where today rc 2 is silent. The tick's relocation (below) is what moves an existing row back inside the set (slug `existing-row-warns-the-tick-relocates`, the coordinator's ruling on review 2085 F8) |
 | The home re-seed in `_auto_swap_check` | Stands down when the side is `"set "*` (Table 3.4d's second row): no `_ws_least_loaded` call, no `home` write, no `rehome` line. The affinity arm's stand-down is the ccd arms piece's, keyed on the role |
 | `_auto_swap_check`'s relocation | Reads the session's side, so an existing row on an account outside its set is moved at the next idle turn boundary, as an out-of-pool row is today |
 | `_default_pool` | Asks `_pool_ok` instead of its own equality test: a pay-per-use lane joins when `_pool_ok` answers rc 0 with `POOL_OK_SIDE=account` and `POOL_OK_STATE` `"named "*` (D-8098's "only when a pool names it", in the rule's terms) |
@@ -626,8 +651,9 @@ second rule.
   an unsearchable `$REG`. Commit the pins alone; they stay green through this task.
 - [ ] **Step 2: Failing tests.** A session `<account>-overlord` whose project is untagged and whose `poolset` is
   `pool-b`: the swap target never names a `pool-a` account; `ccd swap` to a `pool-a` account refuses a mismatch and
-  `--cross-pool` writes the marker; a new row on a `pool-a` account is refused; an existing row revived on a `pool-a`
-  account warns with the set-side text and starts; with `poolset` unreadable, the revival warns naming
+  `--cross-pool` writes the marker; a new row on a `pool-a` account is refused (a hand-made fixture: a `poolset` file
+  planted for an id that has no `uuid` yet, because in production a new id carries no set, review 2092 N13); an
+  existing row revived on a `pool-a` account warns with the set-side text and starts; with `poolset` unreadable, the revival warns naming
   `$REG/<id>.poolset`; the tick relocates that existing row into the set at its next idle boundary; `ccd prefer`
   refuses and `--cross-pool` marks; the home re-seed writes no `home` when the home is outside the set; a pay-per-use
   lane in `pool-b` joins the candidates and one in `pool-a` does not; the strand line names `set:pool-b`; the
@@ -694,7 +720,7 @@ its own.
 **PR A3 ends here.** Its body says that nothing writes a set yet, that every session without a set behaves as before
 except the `projection` sentence, and that an existing row outside its set warns and the tick relocates it.
 
-### Task 6: `ccd pool-answer`, its argv, its whitelist row and its parser (PR B)
+### Task 6: `ccd pool-answer`, its argv, its whitelist row and its parser (PR B1)
 
 **Files:**
 - Modify: `ccd/lib/pool-set.sh` (new `cmd_pool_answer`)
@@ -767,81 +793,138 @@ Nobody calls it yet: the renewal rows piece composes the read through `CCD_ARGV.
   Restore.
 - [ ] **Step 6: Commit.** `feat(ccd): ccd pool-answer, the read-only pool answer for a session's account (W1)`
 
-### Task 7: The word `pool-set`, and the release that names it (PR B)
+### Task 7: The release's `ccdCaps`, and the word `pool-set` (PR B1)
 
 **Files:**
 - Modify: `ccd/ccd` (`cmd_caps` echoes `pool-set`, with a comment naming what it advertises)
 - Modify: `server/src/ccdargv.ts` (`POOL_SET_CAP = 'pool-set'`, spelled once, beside `ACCOUNT_POOLS_CAP`)
 - Modify: `server/test/ccdCapTokens.ts`, `server/test/ccd-archive.test.ts` (`KNOWN_CAPABILITY_TOKENS`)
-- Modify: `deploy/build-release.sh` (`build.json` gains `ccdCaps`, open question 11)
-- Test: `server/test/ccd-archive.test.ts`, `server/test/build-release.test.ts`
+- Modify: `deploy/build-release.sh` (the `ccdCaps` step and its bash floor, open question 11)
+- Modify: `server/test/build-release.test.ts` and `server/test/release-main.test.ts` (their fixture trees, below)
+- Test: `server/test/ccd-archive.test.ts`, `server/test/build-release.test.ts`, `server/test/release-main.test.ts`
 
 The word advertises all of Tasks 1 to 6 on one box: the set side, the two route fields and `ccd pool-answer` (Table
-11.1d). It is added last among them, so no build that lacks a part advertises it.
+11.1d). It is added last among them, so no build that lacks a part advertises it. It ships in PR B1, before PR B2's
+override and push, so the designation piece's doors need PR B2, not only B1 ("What the index should change"): no set is
+written while a box has the word but not the override.
 
 **`ccdCaps`** is the whole list the built tree's `ccd/ccd caps` prints (verbs and tokens together; membership is all
-the floor asks), run as a source checkout under a scratch `HOME` seeded with the generated default roster (`node
-deploy/gen-accounts.mjs deploy/accounts.default.json` into that `HOME`'s `.ccrc/accounts.sh`). A non-zero exit, or an
-empty list, fails the build: the field is never written empty or partial. The builder is CI's `build-release.sh` run
-(`release-main.yml` and `release.yml`, `ubuntu-24.04`, bash 5.2). On a maintainer's machine whose bash is below ccd's
-floor (4.4; macOS ships 3.2 as `/bin/bash`), `ccd caps` exits non-zero and the build fails with a sentence naming the
-bash it ran, rather than stamping nothing. `deploy/deploy.sh`'s stamper writes no `ccdCaps`, because the fallback path
-never runs the update's preflight; Task 8 reads an absent field as "lacks it".
+the floor asks). The step sits in `build-release.sh` after the tree is extracted and before the `build.json` `printf`,
+in the script's `set -euo pipefail`, each failure an explicit `|| die`:
 
-- [ ] **Step 1: Failing tests.** `ccd caps` lists `pool-set` and `pool-answer`; the token is in both TypeScript
+1. **The bash floor, tested by the builder itself.** `ccd/ccd` has no general bash floor: its one `BASH_VERSINFO` test
+   guards the privileged entry verbs only. So the step tests `BASH_VERSINFO` for 4.4 or later itself, through a small
+   function the test can call with a version pair, and dies naming the bash it ran (`$BASH_VERSION`; macOS ships 3.2 as
+   `/bin/bash`), rather than stamping nothing.
+2. **A scratch `HOME` with the generated default roster.** `node deploy/gen-accounts.mjs deploy/accounts.default.json`
+   writes the roster to stdout, so the step makes the directory and redirects: `mkdir -p "$H/.ccrc"`, then the
+   generator `> "$H/.ccrc/accounts.sh"`. With an empty `HOME`, `ccd caps` exits 1 ("no account roster"); with this
+   one it exits 0 and prints 111 lines (measured by review 2092). The run also creates `.cc-sessions/` inside that
+   scratch `HOME`, and nothing outside it.
+3. **The list.** `HOME="$H" bash <tree>/ccd/ccd caps`: a non-zero exit, an empty list, or a line that fails
+   `^[a-z][a-z0-9-]*$` fails the build, so the field is never written empty, partial or with a byte that needs
+   escaping. The lines are joined into a JSON array of strings inside the existing `printf` template.
+
+The builder is CI's `build-release.sh` run (`release-main.yml` and `release.yml`, `ubuntu-24.04`, bash 5.2).
+`deploy/deploy.sh`'s stamper writes no `ccdCaps`, because the fallback path never runs the update's preflight; Task 8
+reads an absent field as "lacks it".
+
+**The fixture work** (review 2092 N3). `build-release.test.ts`'s `FIXTURE_FILES['ccd/ccd']` is `echo fixture ccd body`,
+and its fixture repository has no `deploy/gen-accounts.mjs`, `deploy/accounts.default.json` or `shared/generate.mjs`;
+`release-main.test.ts`'s smallest tree has no `ccd/ccd` at all. Each suite's fixture tree gains three stubs: a `ccd/ccd`
+that answers `caps` with a short list of well-shaped lines, a `deploy/gen-accounts.mjs` that prints a one-line roster,
+and a `deploy/accounts.default.json`. Every existing case runs green on the stubs before the step lands.
+
+- [ ] **Step 1: The fixtures, alone.** Add the three stubs to both suites' trees; both suites stay green on `main`'s
+  `build-release.sh`, which ignores them. Commit `test(release): fixture trees carry a ccd and a roster generator (W1)`.
+- [ ] **Step 2: Failing tests.** `ccd caps` lists `pool-set` and `pool-answer`; the token is in both TypeScript
   spellings; a built release's `build.json` carries `ccdCaps` with `pool-set` in it, a JSON array of tokens that each
-  pass the capability-token shape; a `ccd caps` that exits non-zero (a stub) fails the build and writes no field; an
-  empty list fails it too.
-- [ ] **Step 2: Run.** Red. **Step 3: Implement.** **Step 4: Run.** Green.
-- [ ] **Step 5: Measure the fail-open once, by hand.** Run `ccd/ccd` from `main` before PR A1 (`git show <sha>:ccd/ccd`
-  into the scratch directory, never a vendored copy in the tree) in a fixture HOME whose registry carries a `poolset`:
-  its `ccd route --set poolset=…` refuses `unknown routing field`, and its swap target serves an account outside the set.
-  Record both answers and the sha in the departures note: they are why Task 8 refuses.
-- [ ] **Step 6: Commit.** `feat(ccd): the capability word pool-set, and the release's ccdCaps (W1)`
+  pass the capability-token shape; a stub `ccd caps` that exits non-zero fails the build and writes no `build.json`; an
+  empty list fails it too; a line with a space or a capital fails it; the floor function answers "too old", naming the
+  version, for 3.2 and 4.3, and passes 4.4 and 5.2.
+- [ ] **Step 3: Run.** Red. **Step 4: Implement.** **Step 5: Run.** Green.
+- [ ] **Step 6: Measure the fail-open once, by hand.** Take a tree from before PR A1 (a `main` sha before A1 merged):
+  `git archive <sha> ccd shared | tar -x -C <scratch>`, never a vendored copy in the tree. (`git show <sha>:ccd/ccd`
+  alone fails: `ccd/ccd` loads `lib/*.sh` at its foot and answers rc 125 `lib-missing`.) Run its `ccd/ccd` in a fixture
+  HOME with the roster seeded as above and a registry that carries a `poolset`: its `ccd route --set poolset=…` refuses
+  `unknown routing field`, and its swap target serves an account outside the set. Record both answers and the sha in
+  the departures note: they are why Task 8 refuses.
+- [ ] **Step 7: Commit.** `feat(ccd): the capability word pool-set, and the release's ccdCaps (W1)`
 
-### Task 8: The floor below `pool-set` while a set stands, and the doctor's check (PR B)
+### Task 8: The floor below `pool-set` while a set stands, and the doctor's check (PR B1)
 
 **Files:**
-- Modify: `ccd/ccrc` (`_box_build_fields` gains one output line, `ccdCaps`, before its END sentinel, with its count
-  check and control-byte loop widened, and its pin in `single-definition/roster-bash.test.ts`; a new
-  `_upd_cap_floor_check` beside `_upd_floor_check`; its two call sites; `--below-cap pool-set` on the update, rollback
-  and rollout verbs, the rollout verb forwarding it to every box)
+- Modify: `ccd/ccrc` (`_box_build_fields` gains a field-level `ccdCaps` answer, below, with its pin in
+  `single-definition/roster-bash.test.ts`; a new `_upd_cap_floor_check` beside `_upd_floor_check`; its two call sites;
+  restore arms 1 and 3)
 - Modify: `ccd/ccrc-doctor-checks` (`pool-set` joins `pool-sync`'s line of `CCRC_DOCTOR_CHECKS`, and `_check_pool-set`
   is appended at the end of the file)
-- Test: `server/test/ccrc-update-cap-floor.test.ts` (new), `server/test/ccrc-doctor-pool-set.test.ts` (new),
-  `server/test/single-definition/roster-bash.test.ts`, and the suites that pin `cmd_update`'s refusal order, the
-  rollback verb's arguments and the doctor's table (measure: the floor's suite, the rollback suite,
-  `ccrc-doctor-fleet-box.test.ts`)
+- Test: `server/test/ccrc-update-cap-floor.test.ts` (new), `server/test/ccrc-box-build-caps.test.ts` (new),
+  `server/test/ccrc-doctor-pool-set.test.ts` (new), `server/test/single-definition/roster-bash.test.ts`, and the suites
+  that pin `cmd_update`'s refusal order, the rollback verb's kept branch and the doctor's table (measure: the floor's
+  suite, the rollback suite, `ccrc-doctor-fleet-box.test.ts`)
 
-**The check, `_upd_cap_floor_check <target-stamp> <from> <below-cap>`.** The standing fact (open question 7) is any
-entry at `$REG/<id>.poolset` (`-e` or `-L`), measured by one listing of `$REG`. The target's capabilities come from its
-stamp, read by `_box_build_fields`:
+**The stamp's `ccdCaps` is a field-level answer** (review 2092 N2, ruled). `_box_build_fields` accepts a stamp whole or
+answers rc 6, so a `ccdCaps` folded into its one filter as a plain `join` would make a stamp the server accepts
+(`shared/buildinfo.ts#parseBuildInfo` ignores unknown keys) fail as rc 6 everywhere: `_inst_stamp_shipped`,
+`_upd_fetch`, `_ver_kept` and `cmd_version` would refuse it. So the new output line is its own three-way answer,
+computed inside the same `jq -r` (still one parse, as the pin counts) by an expression that cannot throw:
 
-| Standing fact | Target's `ccdCaps` | Answer |
+```
+(if has("ccdCaps") | not then "<absent>"
+ elif (.ccdCaps | type == "array")
+      and (.ccdCaps | all(type == "string" and test("^[a-z][a-z0-9-]*$")))
+ then .ccdCaps | join(" ")
+ else "<malformed>" end)
+```
+
+`BOX_BUILD[5]` is `<absent>`, `<malformed>`, or the space-joined list, which is empty for `[]`. The two sentinel words
+hold `<`, outside the token grammar, so no list spells them. The field never fails the stamp: whatever `ccdCaps`
+holds, the rc and the five fields are what they are today. A token carrying a control byte fails the pattern and reads
+`<malformed>`, so the control-byte loop meets no new byte. The output grows to seven lines, the count check reads 7
+and the `END` sentinel moves to index 6. The six callers read indexes 0 to 4 and need no edit; `_upd_cap_floor_check`
+is the one reader of index 5.
+
+**The check, `_upd_cap_floor_check <target-stamp|-> <from>`** (PR B2 adds its third argument, the override). The
+standing fact (open question 7) is any entry at `$REG/<id>.poolset` (`-e` or `-L`), measured by one listing of `$REG`.
+The target's capabilities come from its stamp's index 5; `-` names no stamp (restore arm 3, below):
+
+| Standing fact | The target stamp's `ccdCaps` answer | Answer |
 |---|---|---|
-| nothing stands (no entry, or no registry at all) | any | Proceeds |
-| a set stands | lists `pool-set` | Proceeds |
-| a set stands | absent (a build from before the field, a `deploy/deploy.sh` stamp, a kept tree from before it) | Refuses: "the target build does not say what it can do; builds before `ccdCaps` predate `pool-set`", naming the rows that carry a set |
-| a set stands | present but not an array of well-shaped tokens | Refuses: "the target's `ccdCaps` cannot be read", naming the field and the rows |
-| a set stands | lists no `pool-set` | Refuses: "the target build lacks `pool-set`", naming the rows |
-| unmeasured (`$REG` exists but cannot be listed) | any | Refuses: "the registry could not be read, so nobody knows whether a set stands" |
+| nothing stands (no entry, or no registry at all) | not read | Proceeds |
+| a set stands | a list holding `pool-set` | Proceeds |
+| a set stands | `<absent>` (a build from before the field, a `deploy/deploy.sh` stamp, a kept tree from before it) | Refuses: builds before `ccdCaps` predate `pool-set` |
+| a set stands | `<malformed>` | Refuses: the target's `ccdCaps` cannot be read |
+| a set stands | a list without `pool-set`, `[]` included | Refuses: the target build lacks `pool-set` |
+| a set stands | the stamp does not parse (`_box_build_fields` rc 3 to 6) | Refuses: the target's stamp could not be read, naming the rc. Neither call site meets this today (`_upd_fetch` and `_ver_kept` refuse such a stamp first); the check refuses rather than proceed |
+| unmeasured (`$REG` exists but cannot be listed) | not read | Refuses: the registry could not be read, so nobody knows whether a set stands |
 
 *Table 2. The floor below `pool-set`.* Every refusal changes nothing (the stamp, `~/ccrc`'s link and
-`~/.ccrc/installed` unchanged) and exits 1, like the version floor's. Its sentence names `--below-cap pool-set` and the
-step that clears the set (retire or rebind the Overlord in Settings). `--below-cap pool-set` passes every refusal with
-a `WARN` line naming what it passed. `--from watchdog` and `--from restore` pass with that `WARN` (open question 14).
-`--from rollback` with no flag refuses; `--from pwa`, the console's tap, can pass no flag, so it refuses while a set
-stands, and its `failed` row reads as open question 12 says.
+`~/.ccrc/installed` unchanged) and exits 1, like the version floor's. **Its sentence is one ASCII line, the remedy
+first and the rows last** (review 2092 N4), because the update control plane keeps only the first `REPORT_DETAIL_MAX`
+(200) printable-ASCII characters of a report's detail (`server/src/update/inventory.ts#printableDetail`; an em-dash
+becomes a space): `clear the set (retire or rebind the Overlord in Settings): <reason>; sets stand on <ids>`. PR B2
+puts `pass --below-cap pool-set, or ` at its front. `--from watchdog` and `--from restore` pass with a `WARN` line
+naming what they passed (open question 14). `--from rollback` refuses. `--from pwa`, the console's tap, can pass no
+flag, so it refuses while a set stands, and its `failed` row reads as open question 12 says.
 
-**Its two call sites** (review 2085 F3). (a) `cmd_update`, once the target tree is staged and verified and before
-anything is installed, reading the staged `build.json`: this covers an update to any version, the rollout verb's
-per-box update, a rollback that falls through to `cmd_update`, and restore arm 2's child update, which runs as `--from
-restore`. (b) `cmd_rollback`'s kept branch, under its lock and before `_ver_flip_back`, reading the kept tree's stamp
-copy: this covers the operator's rollback and the console's tap to a kept tree, and the watchdog's rollback to a kept
-tree (`--from watchdog`, which passes with the `WARN`). The gate-failure restore's **arm 1** (a flip to `previous`)
-calls the check as `--from restore`, so it prints the `WARN`; **arm 2** passes through (a); **arm 3** (a copy back
-from the backup) calls the check as `--from restore` on the backup's stamp, and prints the `WARN` there, or a `WARN`
-that the backup's capabilities could not be read. No restore arm ever refuses.
+**Its two call sites** (review 2085 F3, review 2092 N4). (a) `cmd_update`, once the target tree is staged and verified
+and before anything is installed, reading the staged `$UPD_TREE/build.json`. That point is after `cmd_update` sets
+`UPD_REPORTING=1`, so a refusal there writes the `failed` report. This covers an update to any version, the rollout
+verb's per-box update, a rollback that falls through to `cmd_update`, and restore arm 2's child update, which runs as
+`--from restore`. (b) `cmd_rollback`'s kept branch, reading the kept tree's stamp copy, **after** `UPD_FROM`,
+`UPD_REPORT_TARGET` and `UPD_REPORTING=1` are set and before `_upd_phase installing` and `_ver_flip_back`. Under the
+lock the branch holds `UPD_REPORTING=0` until that line (its "RESET" comment), and `_ccrc_die` writes `failed` only
+when the flag is 1, so a check placed earlier would print to stderr and leave the detached console run with no row.
+This covers the operator's rollback and the console's tap to a kept tree, and the watchdog's rollback to a kept tree
+(`--from watchdog`, which passes with the `WARN`).
+
+**The restore arms.** **Arm 1** (a flip to `previous`) calls the check as `--from restore` on `previous`'s kept stamp
+copy, so it prints the `WARN`. **Arm 2** passes through (a). **Arm 3** (a copy back from the backup) reads no
+capability (review 2092 N8, ruled): the backup set (`_upd_backup_set`) keeps no `build.json`, and stays as it is. Arm 3
+calls the check with `-`, which measures only the standing fact: when a set stands, or the registry is unmeasured, it
+prints the `WARN` that the restored build's capabilities could not be read, and Task 10's push is the signal. No restore
+arm ever refuses.
 
 **The doctor's check** runs on every role. It passes when nothing stands or this box's `ccd caps` lists `pool-set`, and
 fails when a set stands and this box's ccd does not advertise `pool-set`: a box moved below the word with the flag, by
@@ -851,65 +934,150 @@ carries `pool-set`. A `$REG` with `x` but no `r` cannot be listed and is not rep
 without `x` is `pools-unlistable`'s already, and this check skips it, so the doctor never fails twice for one cause. A
 `server` box has no registry rows and passes.
 
-- [ ] **Step 1: Measure** `cmd_update`'s spine (where the staged `build.json` is first on disk), `cmd_rollback`'s kept
-  branch and its lock, the three restore arms' entry points, `_box_build_fields`'s callers (six, read by index, which
-  need no edit) and the doctor table's `pool-sync` line. Record each in the departures note.
-- [ ] **Step 2: Failing tests.** In a fixture HOME with fixture release trees: each row of Table 2, through call site
-  (a) and through call site (b); an update to a target whose `ccdCaps` lists `pool-set` proceeds; a dangling link at
-  `$REG/<id>.poolset` counts as standing; `--below-cap pool-set` proceeds with the `WARN`, and `--below-cap
-  something-else` is a usage error; `--force` alone still refuses; the rollout verb forwards `--below-cap pool-set` to
-  every box and stops on the first refusal without it; a `--from pwa` rollback refuses and its sentence names the flag;
-  `--from watchdog` and `--from restore` pass with the `WARN`; arm 1 and arm 3 print the `WARN`. Doctor: a `poolset`
-  entry and a ccd without `pool-set` fail `pool-set`; with `pool-set`, pass; no entry, pass; a `$REG` without `r`
-  reports its own unmeasured line; a `server` box passes.
+- [ ] **Step 1: Measure** `cmd_update`'s spine (where the staged `build.json` is first on disk, and where
+  `UPD_REPORTING=1` is set), `cmd_rollback`'s kept branch (its lock, its `UPD_REPORTING=0` reset and the line that sets
+  it to 1 again), the three restore arms' entry points, `_box_build_fields`'s callers (six, read by index, which need no
+  edit) and the doctor table's `pool-sync` line. Record each in the departures note.
+- [ ] **Step 2: Failing tests.** The stamp, in the new suite: an absent `ccdCaps` answers `<absent>`; `[]` answers the
+  empty list; `["ws-add","pool-set"]` answers `ws-add pool-set`; a string, an object, a number, `[1]`, `["Pool"]`,
+  `["a b"]` and a token holding a control byte each answer `<malformed>`; for every one of them `_box_build_fields`
+  answers rc 0 with the five fields unchanged, and `parseBuildInfo` accepts the same stamp. Each row of Table 2,
+  through call site (a) and through call site (b); a dangling link at `$REG/<id>.poolset` counts as standing; `--force`
+  alone still refuses; a `--from pwa --detach` rollback to a kept tree while a set stands writes a `failed` report, and
+  `printableDetail` of its detail, with ten 40-character session ids, still holds `Settings`; `--from watchdog` and
+  `--from restore` pass with the `WARN`; arm 1 prints the `WARN`, and arm 3 the "could not be read" `WARN` without
+  reading any stamp. Doctor: a `poolset` entry and a ccd without `pool-set` fail `pool-set`; with `pool-set`, pass; no
+  entry, pass; a `$REG` without `r` reports its own unmeasured line; a `server` box passes.
 - [ ] **Step 3: Run.** Red. **Step 4: Implement.** **Step 5: Run** these suites and the suites Step 1 named. Green.
-- [ ] **Step 6: Mutation.** Read an absent `ccdCaps` as "has it": the absent row goes red. Let `--from rollback` pass
-  unforced: the rollback row goes red. Drop call site (b): the kept-tree rows go red. Let `--force` pass the floor: the
-  `--force` row goes red. Restore each from its saved copy.
-- [ ] **Step 7: Commit.** `feat(ccrc): no move below pool-set while a set stands without --below-cap, and the doctor's check (W1)`
+- [ ] **Step 6: Mutation.** Read `<absent>` as "has it": the absent row goes red. Drop the type guard from the
+  `ccdCaps` expression: the string row's rc 0 goes red. Drop call site (b): the kept-tree rows go red. Move (b) above
+  `UPD_REPORTING=1`: the `failed`-report row goes red. Let `--force` pass the floor: the `--force` row goes red. Restore
+  each from its saved copy.
+- [ ] **Step 7: Commit.** `feat(ccrc): no move below pool-set while a set stands, and the doctor's check (W1)`
 
-### Task 9: The server's push when a placing box loses `pool-set` while a set stands (PR B)
+**PR B1 ends here.** Its body says that the word ships here, that until PR B2 the floor's only remedy is the Settings
+step, and that the designation piece's doors need PR B2.
+
+### Task 9: `--below-cap pool-set`, its forwardings, and the cap word `below-cap` (PR B2)
+
+**Files:**
+- Modify: `ccd/ccrc` (the flag on the update, rollback and rollout verbs and in their usage text; `_upd_cap_floor_check`'s
+  third argument; the three forwardings; `CCRC_CAP_WORDS` gains `below-cap`; the rollout verb's up-front gate and its
+  rc 2 arm; the refusal sentence gains the flag at its front)
+- Test: `server/test/ccrc-update-cap-floor.test.ts`, and the suites that pin the rollout verb, the check line's `caps=`
+  and the detach argv (measure: the rollout suite, the cap-words suite, the detach suite)
+
+**The flag** (open question 12). `--below-cap pool-set` names the one capability it passes; any other word after it is
+a usage error. It passes every refusal of Table 2 with a `WARN` line naming what it passed. `--force` keeps its
+meanings and never crosses the floor.
+
+**The three forwardings** (review 2092 N1). A flag that a re-exec drops is D-3139's defect, and the floor is fail-closed,
+so a dropped flag makes the operator's flagged run refuse. (1) The update verb's `--detach` re-exec goes through
+`_upd_detach` with its explicit `dflags` (`--force`, `--downgrade`, `--allow-unsigned`, `--no-gate`): `--below-cap
+pool-set` joins them, last, in the fixed order. (2) The rollback verb's `--detach` calls `_upd_detach rollback "$to"
+"$from"` with no flags today: it passes the flag. (3) `cmd_rollback`'s fall-through runs `cmd_update --to "$to"
+--downgrade --from "$run_from" ${extra[@]}`, where `extra` carries only `--allow-unsigned`: `extra` gains the flag.
+There the version floor is already passed by `--downgrade`, so the cap floor is the one refusal left.
+
+**Only a box that says it knows the flag gets it** (review 2092 N7, ruled). An older `ccrc`'s update verb ends its
+argument loop in `_ccrc_usage_die` ("unknown argument: --below-cap", the whole usage, exit 2), and the `--check`
+preflight sends no flag, so nothing would trip before a box moved. **Built:** `below-cap` joins `CCRC_CAP_WORDS` (one
+word on its existing line), so the check line prints it in `caps=`. `ccrc rollout --below-cap pool-set` reads each
+box's `caps=` in its preflight, as it already does, and before any box moves refuses, naming every box whose caps lack
+`below-cap`. It then forwards the flag to each box whose caps list it, which after the gate is every box. The precedent
+is `update-json` gating `--from rollout`. An older `ccrc` has no cap floor, so a box without the word loses nothing by
+the refusal but a move it can make without the flag.
+
+**The rollout's rc 2 sentence.** Today every exit other than 0, 3 and 4 reads "Its lines above name the backup taken
+before anything changed", which is false for a usage exit: an argument-parse failure takes no backup. **Built:** an rc 2
+arm reads "exited 2, a usage error from that box's ccrc: it changed nothing and took no backup". Step 1 measures every
+`exit 2` that `cmd_update` can reach; if one sits after the backup, the arm says "read its lines above" instead. With the
+gate, `--below-cap` never meets an older box, so the arm covers only the other usage exits.
+
+- [ ] **Step 1: Measure** the three forwarding sites, the rollout verb's preflight loop and its exit arms, and every
+  `exit 2` `cmd_update` can reach; record each in the departures note.
+- [ ] **Step 2: Failing tests.** `--below-cap pool-set` proceeds past each refusal of Table 2 with the `WARN`;
+  `--below-cap something-else` is a usage error; `--force` alone still refuses; a detached update with the flag passes,
+  and the child's argv carries it; a detached rollback with the flag passes; a rollback with no kept tree (the
+  fall-through) with the flag passes; the check line's `caps=` lists `below-cap`; `rollout --below-cap pool-set` with
+  one fixture box whose check line lacks `below-cap` refuses before either box moves, naming that box; with both
+  advertising it, the flag reaches both; the rc 2 arm's sentence; the refusal sentence's `printableDetail` cut, with ten
+  40-character session ids, still holds `--below-cap pool-set` and `Settings`.
+- [ ] **Step 3: Run.** Red. **Step 4: Implement.** **Step 5: Run.** Green.
+- [ ] **Step 6: Mutation.** Drop the flag from `dflags`: the detached-update row goes red. Drop it from `extra`: the
+  fall-through row goes red. Drop the rollout gate: the older-box row goes red. Restore each from its saved copy.
+- [ ] **Step 7: Commit.** `feat(ccrc): --below-cap pool-set on update, rollback and rollout, to boxes that know it (W1)`
+
+### Task 10: The server's push when a placing box loses `pool-set` while a set stands (PR B2)
 
 **Files:**
 - Modify: `server/src/poolrule.ts` (`poolSetLoss`, L1)
-- Modify: the `caps` lane's pass (`server/src/laneSchedule.ts`'s `caps` row runs it; measure where its body is): one
-  call after a box's `ccd caps` are refreshed
-- Test: `server/test/pool-set-loss.test.ts` (new), the `caps` lane's own suite (measure), and the watcher censuses if the
-  call site is in `FleetWatcher`
+- Create: `server/src/poolSetLossLane.ts` (the lane, shaped like `server/src/buildCaptureLane.ts`: the decider, the
+  `hasNotice` read and the `notify` call)
+- Modify: `server/src/watch.ts` (the lane's field and its one call in the tick, about +2 lines, as `buildCaptureLane`'s)
+- Test: `server/test/pool-set-loss.test.ts` (new), `server/test/pool-set-loss-lane.test.ts` (new), and the watcher and
+  ring censuses the new file and call reach (measure: `watcher-quiet-census` if a test builds a watcher, the rings'
+  table for the new file)
+
+**Where the call sits** (review 2092 N11 a). The `caps` lane's body is `server/src/refreshcaps.ts#makeRefreshCaps`,
+which records the box's `ccd caps` into the fleet state and has no registry access; it is wired in remote mode only
+(`server/src/index.ts`). The two facts meet in `FleetWatcher`'s tick, which holds the registry read and the caps last
+recorded. So the lane runs on each tick, after the registry read, reading the caps the `caps` lane last recorded; the
+dedupe makes a repeated call free. That costs `watch.ts` its field and its call, measured against the precedent, rather
+than 0. In `local` mode there is no `caps` lane: the server reads `ccd caps` once at boot (Step 1 measures where), so a
+ccd-only change on a local box is seen at the next server restart. A local box is a `both` box, and a rollback below
+PR B2 takes the server below this task too, so no push comes there, and the doctor's line is the signal.
 
 ```ts
 /** Whether a box that places sessions has lost `pool-set` while a session on it carries a set (§11.5, open question
- *  15). `caps` is the box's `ccd caps` answer (`null` = unmeasured, which raises nothing); `sets` are the session ids
- *  whose route record carries `poolset`, from the registry read. */
-export function poolSetLoss(caps: readonly string[] | null, sets: readonly string[], build: string | null):
+ *  15). `caps` is the caps last recorded (`null` = unmeasured, which raises nothing); `sets` are the session ids whose
+ *  route record carries `poolset`, and `unreadableSets` those whose `poolset` was listed but could not be read. */
+export function poolSetLoss(caps: readonly string[] | null, sets: readonly string[],
+  unreadableSets: readonly string[], build: string | null):
   | { readonly raise: false }
   | { readonly raise: true; readonly sessions: readonly string[]; readonly dedupeKey: string };
 ```
 
-`dedupeKey` is `pool-set-lost:<build>:<sorted session ids>` (`build` the box's measured stamp sha, or `unmeasured`), so
-one loss raises one push, a different build or a new set raises again, and a restart raises nothing twice
-(`CoordStore.hasNotice`). The call raises the notice through the notice funnel (mode `push`), naming each session that
-carries a set and the remedy (move the box up to a release that carries `pool-set`). It is a read of facts the server
-already holds, so it adds no poller, lane or table.
+**An unreadable set counts** (N11 b). `server/src/registry.ts` puts a listed-but-unreadable route field in
+`route.unreadable`, not in `route.fields`. A box that lost the word while its only set is mode 000 or a dangling link is
+the fail-open this plan forbids for ccd, so a session whose `route.unreadable` names `poolset` is counted, and the push
+marks it as unreadable.
 
-- [ ] **Step 1: Measure** the `caps` lane's body and where the registry read's `route.fields` reach it; record both.
+**The notice, copied from the precedent** (N11 c). As `buildCaptureLane.ts` does: read `coord.hasNotice('coord', '',
+dedupeKey)` first (a throw sends the notice), then `notify(deps, {kind: 'coord', sessionId: '', runId: null, title,
+body}, 'push', {tag: 'pool-set-lost', dedupeKey, url: '/settings', lane: 'pool set', degraded: …})`. The session id is
+`''`: with a real one, `notice.ts`'s raise skips both the record and the push while the operator is viewing that
+session, and the dedupe would not hold. The body names each session that carries a set and the remedy (move the box up
+to a release that carries `pool-set`).
+
+**The key, and the re-pushes it accepts** (N11 d). `dedupeKey` is `pool-set-lost:<build>:<sorted session ids>`, `build`
+being the box's measured stamp sha (`build?.sha` on the fleet state, at handshake cadence) or `unmeasured`. One loss
+pushes once, and a new build or a new set pushes again. Two re-pushes are accepted, because each names a loss that
+still stands: a standing loss pushes again once its feed row is pruned past `FEED_RETENTION` (2,000 rows; `hasNotice`
+reads a pruned row as never recorded), and retiring one of two sets changes the key. It reads facts the server already
+holds, so it adds no poller, lane schedule row or table.
+
+- [ ] **Step 1: Measure** `makeRefreshCaps` and its wiring, where the tick's registry read and the recorded caps are
+  both in scope, `local` mode's boot read of `ccd caps`, and `buildCaptureLane.ts`'s notice call; record each.
 - [ ] **Step 2: Failing tests.** `poolSetLoss`: caps with `pool-set` raise nothing; caps without it and no sets raise
-  nothing; caps without it and two sets raise once, naming both, sorted; `null` caps raise nothing. The lane: a box whose
-  refreshed caps lose the word while a session carries `poolset` pushes once; the next refresh with the same facts pushes
-  nothing; a new build pushes again.
+  nothing; caps without it and two sets raise once, naming both, sorted; one unreadable set alone raises; `null` caps
+  raise nothing. The lane: a box whose recorded caps lack the word while a session carries `poolset` pushes once, with
+  session id `''`; the next tick with the same facts pushes nothing; a new build pushes again; a `hasNotice` that throws
+  still sends.
 - [ ] **Step 3: Run.** Red. **Step 4: Implement.** **Step 5: Run.** Green.
-- [ ] **Step 6: Mutation.** Register `poolSetLoss` in `POOL_SET_MUTANT_SETS` and set its floor.
+- [ ] **Step 6: Mutation.** Register `poolSetLoss` in `POOL_SET_MUTANT_SETS` and set its floor. By hand: drop the
+  `unreadableSets` input: the unreadable row goes red. Restore.
 - [ ] **Step 7: Commit.** `feat(pools): push the operator when a placing box loses pool-set while a set stands (W1)`
 
-**PR B ends here.** Its body says the word reaches every agent through the release, that the designate door (a later
+**PR B2 ends here.** Its body says the word reaches every agent through the release, that the designate door (a later
 piece) refuses `capability-missing` until every placing agent advertises the word and answers `pool-answer`, and what an
-older build does, with the floor, the doctor check and the push that now guard it.
+older build does, with the floor, the override, the doctor check and the push that now guard it.
 
 ## Every agent before the server
 
 ```mermaid
 flowchart LR
-  A["PR A1, A2, A3 merge<br/>ccd reads sets"] --> B["PR B merges<br/>pool-answer, the word, the floor, the push"]
+  A["PR A1, A2, A3 merge<br/>ccd reads sets"] --> B["PR B1 and B2 merge<br/>pool-answer, the word, the floor,<br/>the override, the push"]
   B --> R["a release carries both<br/>ccd and the agent"]
   R --> U["the rollout verb<br/>fleet box first"]
   U --> C["the agent re-reads ccd caps<br/>and restarts with its new whitelist"]
@@ -922,23 +1090,26 @@ can write one.*
 | Mix | What happens | Safe? |
 |---|---|---|
 | ccd at PR A2 or later, no set written | Every session reads its project's side, as today | Yes |
-| ccd at PR B, agent older than PR B (any ccd-only landing, for about a minute before the agent restarts, or a hand deploy) | The agent re-reads `ccd caps` and advertises `pool-set`, but its whitelist refuses `pool-answer` (`ran: false`). The designate door refuses on that (the designation piece, open question 8), and the renewal lane reads a failed read (not due). ccd honours the set at every placement | Yes |
-| ccd below PR A2, set on a route record | The set is ignored, and the session reads its project's side, which for the Overlord is untagged: any account serves it | **No: fails open.** The floor refuses to reach it without `--below-cap pool-set` (Task 8), the unattended paths warn, the server pushes the operator (Task 9), and the doctor fails on a box that got there |
+| ccd at PR B1 or later, agent older than PR B1 (any ccd-only landing, for about a minute before the agent restarts, or a hand deploy) | The agent re-reads `ccd caps` and advertises `pool-set`, but its whitelist refuses `pool-answer` (`ran: false`). The designate door refuses on that (the designation piece, open question 8), and the renewal lane reads a failed read (not due). ccd honours the set at every placement | Yes |
+| ccd below PR A2, set on a route record | The set is ignored, and the session reads its project's side, which for the Overlord is untagged: any account serves it | **No: fails open.** The floor refuses to reach it without `--below-cap pool-set` (Tasks 8 and 9), the unattended paths warn, the server pushes the operator (Task 10), and the doctor fails on a box that got there |
 | `local` mode (no agent) | The server's own `ccd caps` answer the same word | Yes |
 
 *Table 3. Each mix of builds, and what it does.*
 
 ## Rollback below `pool-set`: the set survives only to PR A2, and the way below it is guarded
 
-A box moved back from PR B to PR A3 keeps honouring the set, but loses `ccd pool-answer` and the word, so the designate
+A box moved back from PR B1 or later to PR A3 keeps honouring the set, but loses `ccd pool-answer` and the word, so the designate
 and rebind doors refuse, and the renewal lane's set trigger reads unmeasured. A box moved below PR A2 forgets the set:
-its `_pool_ok` reads the Overlord's untagged project and serves every account, and its `cmd_route` refuses the server's
-re-write of `poolset`, so the next renewal's route write fails (Task 7 records both). §11.5's answer is built here.
+its `_pool_ok` reads the Overlord's untagged project and serves every account. Below PR A1 its `cmd_route` also refuses
+the server's re-write of `poolset` (`unknown routing field`), so the next renewal's route write fails (Task 7's Step 6
+records both answers); a box at PR A1 accepts the write and reads nothing (review 2092 N15). §11.5's answer is built
+here.
 While a set stands, both call sites refuse a target whose stamp does not list `pool-set`, unless `--below-cap pool-set`
-is passed, and the rollout verb stops on that box. The unattended paths pass with a `WARN`, and the server pushes the
+is passed, and the rollout verb stops on that box; with the flag, it refuses before any box moves when a box's check
+line does not advertise `below-cap`. The unattended paths pass with a `WARN`, and the server pushes the
 operator naming every standing set. The doctor fails on a box where a set stands and ccd lacks the word.
 
-One cost is left, said plainly. A move from PR B to PR A3 is a move below `pool-set` (PR A3 advertises nothing), so it
+One cost is left, said plainly. A move from PR B1 or later to PR A3 is a move below `pool-set` (PR A3 advertises nothing), so it
 refuses too while a set stands, although PR A3 still honours the set. That costs a `--below-cap pool-set` on a move
 that is safe, and it never fails open. `deploy/deploy.sh`, the fallback, runs no preflight and checks nothing, as with
 the version floor; the doctor and the push still see its result.
@@ -947,17 +1118,21 @@ the version floor; the doctor and the push still see its result.
 
 | PR | Tasks | Needs first | Growth (net code lines, estimated; each measured against `origin/main`'s stages before it opens) |
 |---|---|---|---|
-| A1 | 1, 2 | nothing: ready to build | `ccd/ccd` about +7 (the pointer line, the loader's lines, `ROUTE_FIELDS`, two `_route_valid` arms, the exemption and the argv refusal); `ccd/lib/pool-set.sh` about +25, new, counted in full; `ccd/ccrc` about +2 (the backup and uninstall names); `shared/api.ts` +0, within its cap |
-| A2 | 3 | A1 | `ccd/ccd` about +5 (one `_pool_ok` arm, two renderer arms); `ccd/lib/pool-set.sh` about +30 (`_session_pool_side`, `_pool_ok_set`, the two renderers) |
-| A3 | 4, 5 | A2 | `ccd/ccd` about +18 (the 1:1 reader swaps, the re-seed's stand-down, `_default_pool`, the existing-row warnings, `_undecidable_cause`'s two arms, the tick's site, the rc readers); `ccd/lib/pool-set.sh` about +20 (the side token, the crossing helpers, the rc-word map) |
-| B | 6 to 9 | A3 | `ccd/lib/pool-set.sh` about +30 (`cmd_pool_answer`); `ccd/ccd` about +4 (the dispatch arm and the caps lines); `ccd/ccrc` about +35 (`_box_build_fields`'s line, `_upd_cap_floor_check`, its two call sites, the flag on three verbs); `ccd/ccrc-doctor-checks` about +20; `server/src/watch.ts` about +3 if the `caps` lane's body is there |
+| A1 | 1, 2 | nothing: ready to build | `ccd/ccd` about +4 to +7 (the pointer line, the loader's lines, `ROUTE_FIELDS`, two `_route_valid` arms, the exemption and the argv refusal); `ccd/lib/pool-set.sh` about +25 to +32, new, counted in full; `ccd/ccrc` about +2 (the backup and uninstall names); `shared/api.ts` +0, within its cap |
+| A2 | 3 | A1 | `ccd/ccd` about +3 to +5 (one `_pool_ok` arm, two renderer arms); `ccd/lib/pool-set.sh` about **+38** (`_session_pool_side` 13 with the bounded read, the `$# -ge 2` fallback and the `-e`/`-L` tests; `_pool_ok_set` 14 plus 2 to 3 for the parse call; the two renderers 7), a 2-line margin: measured before A2 opens, and if it is over 40 the two renderers move to A3 (review 2092 N6) |
+| A3 | 4, 5 | A2 | `ccd/ccd` about +18 to +28 (the 1:1 reader swaps, the re-seed's stand-down, `_default_pool`, the existing-row warnings, `_undecidable_cause`'s two arms, the tick's site, the rc readers); `ccd/lib/pool-set.sh` about +22 to +28 (the side token, the crossing helpers, the rc-word map) |
+| B1 | 6, 7, 8 | A3 | `ccd/lib/pool-set.sh` about +28 to +34 (`cmd_pool_answer`); `ccd/ccd` about +3 to +4 (the dispatch arm, the verb and the word in `cmd_caps`); `ccd/ccrc` about +32 (the stamp's `ccdCaps` line 3 to 4, `_upd_cap_floor_check` 22 to 26, its two call sites 2, restore arms 1 and 3 2 to 4: 29 to 36); `ccd/ccrc-doctor-checks` about +15 to +25; `deploy/build-release.sh` about +12, not a listed file (`GROWTH_FILES` names files over 3,000 lines and the ccd libraries) |
+| B2 | 9, 10 | B1 | `ccd/ccrc` about +30 (the flag on three verbs about 15, the three forwardings 3, the usage text 3 to 4, the rollout gate about 6, the rc 2 arm about 3, the cap word 0 on its existing line: 30 to 32); `server/src/watch.ts` about +2 (the lane's field and its call); `server/src/poolSetLossLane.ts` new and not listed |
 
-*Table 4. The four pull requests.* All are lane A's and land before the ccd arms piece, which reads `acctorder` and the
-set side (index, lane A). Every growth-checked file stays under 40 in every pull request, with no waiver. If a
-measurement shows a file over 40, the worker splits that pull request's task before opening it, and asks the
-coordinator if it cannot. If a stage freezes or caps `ccd/ccd` or `ccd/lib` before PR A1 opens, the worker asks the
-coordinator first. PR B's `ccd/ccrc` and `ccd/ccrc-doctor-checks` are the bash track's next files in the large-file
-programme; if either is frozen (10 lines) before PR B opens, Task 8 becomes a pull request of its own per file.
+*Table 4. The five pull requests.* All are lane A's and land before the ccd arms piece, which reads `acctorder` and the
+set side (index, lane A). The growth is counted the way `server/test/growthCheck.ts` counts it (non-blank, non-comment
+lines, heredoc bodies included, a new listed file in full; review 2092 N5 sketched PR B's `ccd/ccrc` at about +52 as
+one pull request, which is why it splits). Every growth-checked file stays under 40 in every pull request, with no
+waiver. If a measurement shows a file over 40, the worker splits that pull request's task before opening it, and asks
+the coordinator if it cannot. If a stage freezes or caps `ccd/ccd` or `ccd/lib` before PR A1 opens, the worker asks the
+coordinator first. PR B1's and B2's `ccd/ccrc` and B1's `ccd/ccrc-doctor-checks` are the bash track's next files in the
+large-file programme; if either is frozen (10 lines) before its pull request opens, the task that grows it becomes a
+pull request of its own per file.
 
 ## Deviations found
 
@@ -985,8 +1160,8 @@ None from the spec's intent. Decisions this plan takes, by slug (the coordinator
   ccd arms piece (open question 6).
 - **`standing-set-is-a-poolset-entry`** — §11.5's "a standing fact needs it" is measured on the box as any entry at a
   `poolset` path, not as a designation row the box cannot see (open question 7).
-- **`ccd-caps-ride-build-json`** — a release names its whole `ccd caps` list in `build.json`'s `ccdCaps`; absent and
-  malformed both read as lacking `pool-set`, each with its own sentence (open question 11).
+- **`ccd-caps-ride-build-json`** — a release names its whole `ccd caps` list in `build.json`'s `ccdCaps`; absent,
+  malformed and an empty list each read as lacking `pool-set`, each with its own sentence (open question 11).
 - **`below-cap-is-a-typed-flag`** — `--below-cap pool-set` passes the floor, and `--force` never does (open question 12,
   the coordinator's ruling on review 2085 F6). §11.5 says only "unless forced".
 - **`pool-set-floor-unattended-warn-and-push`** — the restore and watchdog paths pass with a `WARN` and the operator is
@@ -995,26 +1170,34 @@ None from the spec's intent. Decisions this plan takes, by slug (the coordinator
   notice funnel (open question 15).
 - **`projection-word-fleet-wide`** — the `projection` sentence changes the stranded text for every session whose
   account side is undecidable, not only the Overlord (review 1862 minor). Named in PR A3's body.
+- **`ccdcaps-field-level-answer`** — the stamp parser answers `ccdCaps` as `<absent>`, `<malformed>` or the list, and
+  the field never fails the stamp (open question 11, the coordinator's ruling on review 2092 N2).
+- **`below-cap-gated-by-cap-word`** — the rollout verb forwards `--below-cap pool-set` only to a box whose check line
+  advertises `below-cap`, and refuses up front otherwise (open question 12, the ruling on review 2092 N7).
+- **`restore-arm-3-reads-no-caps`** — restore arm 3 reads no capability and warns while a set stands; the backup set
+  stays without `build.json` (open question 14, the ruling on review 2092 N8).
+- **`pool-set-loss-lane-in-the-tick`** — the push's lane runs in the watcher's tick, where the recorded caps and the
+  registry read meet, at about +2 lines on `watch.ts`, and counts an unreadable set (open question 15, review 2092 N11).
 - **`pool-set-library`** — the new set helpers and the verb live in a fourth ccd library, `ccd/lib/pool-set.sh`, and the
   new wire words in `shared/poolset.ts` (index review 2075 F6; review 2085's growth ruling: PR A splits, no waiver).
 
 ## Where things stand
 
-**Needs before it starts:** PR A1 needs nothing beyond `main`. A2 needs A1, A3 needs A2, and B needs A3. No waiver is
-needed.
+**Needs before it starts:** PR A1 needs nothing beyond `main`. A2 needs A1, A3 needs A2, B1 needs A3, and B2 needs B1.
+No waiver is needed.
 
 **What depends on it:** the ccd arms piece (the three-step pick reads `acctorder` and the set side; it clears the
 crossing marker at the fresh start), the designation piece (the set's writer through `CCD_ARGV.routeSet`, and its
 clearing at retire and rebind; its first account and C56's count through `server/src/limits.ts#projectPlacement` with
 the set as the side, which it widens; `capability-missing` on `pool-set`, and a `pool-answer` answer from every placing
-agent, read `ran` first), the serviceability piece (PR A1 to A3, as the index says), and the renewal rows piece (the set
+agent, read `ran` first; its doors need PR B2, not only B1), the serviceability piece (PR A1 to A3, as the index says), and the renewal rows piece (the set
 trigger reads `ccd pool-answer` through `parsePoolAnswer`).
 
 **What changed in fix round 1 (review 2085):** the fail-opens closed (a bounded read for the set, F1; no `--route` set,
 F2); the floor's second call site in the rollback verb's kept branch and the restore arms stated (F3); `ccdCaps` built
 with a seeded roster as the whole list, failing the build rather than stamping nothing, and read through the widened
 `_box_build_fields` with its third answer (F4, F5); `--below-cap pool-set` in place of `--force` (F6); the unattended
-paths warn and the server pushes, with the rationale corrected (F7, Task 9); an existing row warns and the tick
+paths warn and the server pushes, with the rationale corrected (F7, now Task 10); an existing row warns and the tick
 relocates (F8); quoted side matches and the kept-marker row (F9); the empty-value exemption (F10); `$REG` searchability
 and `$# -lt 2` in the reader (F11); the crosspool test's stub moved to 9 (F12); the agent's caps re-read and the
 designation's `pool-answer` requirement (F13); the missing characterization pins (F14); the library's region and every
@@ -1023,6 +1206,34 @@ census suites (F16); any entry counts for the floor, and an `r`-less `$REG` gets
 `_rescue_target`'s widened test and the named readers (F18); `set:<spelling>` in log lines (F19); `departures.md`
 created in Task 1 and the wording fixes (F20); PR A split into A1, A2 and A3 with no waiver; measurements re-based on
 `origin/main`.
+
+**What changed in fix round 2 (review 2092):** `_box_build_fields`'s `ccdCaps` line is a field-level three-way answer
+with sentinel words that never fails the stamp, `[]` reading "lists no `pool-set`", and a Table 2 row for a stamp that
+does not parse (N2, ruled); the rollout verb forwards `--below-cap pool-set` only to a box whose check line advertises
+the new cap word `below-cap`, refuses up front naming every box that lacks it, and its rc 2 arm no longer claims a
+backup (N7, ruled; Task 9); the flag survives the detached update, the detached rollback and the rollback's
+fall-through, each tested (N1); call site (b) sits after `UPD_REPORTING=1`, and the refusal sentence is ASCII with the
+remedy first and its 200-character cut tested (N4); restore arm 3 reads no capability and prints the "could not be
+read" `WARN` while a set stands, `build.json` staying out of the backup set (N8, ruled); PR B split into B1 (Tasks 6 to
+8) and B2 (Tasks 9 and 10), the old Task 8's flag becoming Task 9 and the push Task 10, with the growth recounted the
+way `growthCheck.ts` counts (N5, ruled); Task 10's place measured (a lane file and a 2-line call in the watcher's tick,
+since the caps and the registry read meet only there), `local` mode stated, an unreadable set counted, the precedent's
+notice call copied, and the two accepted re-pushes stated (N11); the build step's `mkdir` and redirect, the two release
+suites' fixture trees, and the bash floor tested by `build-release.sh` itself (N3); PR A2's library at about +38,
+measured before it opens (N6); the pre-A1 tree taken with `git archive … | tar -x` (N9); `_reg_read`'s tests reproduced
+without its read (N10); the five files that moved under the plan re-listed (N12); the hand-made fixture for a new row
+with a set (N13); the `$# -lt 2` project field's absent and unreadable answers (N14); the PR A1 box sentence (N15); the
+departures file beside its siblings, as `w1-pool-set-departures.md` (the note).
+
+**What the index should change:** the pool set row is now 5 pull requests (A1, A2, A3, B1, B2) and 10 tasks, with
+`server/src/poolSetLossLane.ts` among lane A's new files; the designation row needs PR B2, not only B1 (the override
+and the push ship there); the designation row also takes the `pool-answer` requirement and the clearing of a set at
+retire and rebind, and the ccd arms row the clearing of the crossing marker at the fresh start (open question 6); lane
+E's hot-files list names Task 10's call in `server/src/watch.ts`, and the push outbox piece's table of push sites gains
+a row for `poolSetLoss`'s notice (review 2092's answer to the brief's question 2: no collision, since that piece keeps
+`notify` and `dedupeKey`). Two points from the first wave-done still stand: the index gives C10 to the Operator Model
+while C10 already names "Session host", and this plan's directory (`2026-11-14-overlord-w1/`, as the brief said) is not
+the index's `2026-11-10-overlord/`.
 
 **What changed after index review 2075:** F8 moved the doctor failure and the refusal below `pool-set` into this
 piece. F6 moved the new helpers and the verb into `ccd/lib/pool-set.sh` and the new wire words into `shared/poolset.ts`.
@@ -1033,9 +1244,10 @@ designation piece.
 question 5); the whitelist row and argument form for `ccd pool-answer` (Task 6, open question 4); its exit codes and
 grammar (Task 6); the `projection` word applies fleet-wide (Task 5, `projection-word-fleet-wide`); a rescue can land on a
 `prefer --cross-pool` home until the next renewal (Task 4, pinned); what follows a `pool-set` rollback ("Rollback below
-`pool-set`", Tasks 8 and 9).
+`pool-set`", Tasks 8 to 10).
 
 **Open questions for the coordinator:** the fifteen above, of which 8, 10, 12 and 14 are the coordinator's rulings on
-review 2085 and 6 moves work to the ccd arms piece, so the index should say so.
+review 2085, 11, 12 and 14 also carry its rulings on review 2092 (N2, N7, N8), and 6 moves work to the ccd arms piece,
+so the index should say so.
 
 **Open questions for the operator:** none.
