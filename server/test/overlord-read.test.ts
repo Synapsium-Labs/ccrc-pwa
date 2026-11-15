@@ -3,8 +3,9 @@
 // docs/superpowers/plans/2026-11-14-overlord-w1/w1-board-history.md, Task 3; ruled F3, F4, F5, R1, R3).
 //
 // The module runs in a file worker inside a child process (the agent's own way of running it), never in-process; the
-// credential case runs it in a child process's main thread, under the read spy, because a worker started with
-// `env: {}` would leave the spy inert. Every HOME is a fixture under the per-run temp root.
+// credential case runs it in a child process's main thread, under the open spy (fixtures/overlord-history/
+// preload-openspy.mjs: sync, callback and promise opens and streams), because a worker started with `env: {}` would leave
+// the spy inert. Every HOME is a fixture under the per-run temp root.
 import { describe, it, expect } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -15,10 +16,13 @@ import { DatabaseSync } from 'node:sqlite';
 import * as lib from '../../ccd/history/lib.mjs';
 import { OVERLORD_READ_ANSWER_MAX_BYTES } from '../../ccd/history/overlord-read.mjs';
 import * as overlordHistory from '../../shared/overlordHistory.js';
-import { HISTORY_REASON_WORDS, OVERLORD_HISTORY_ANSWER_MAX_BYTES, readOverlordHistoryAnswer, overlordTargetId } from '../../shared/overlordHistory.js';
+import {
+  HISTORY_REASON_WORDS, OVERLORD_HISTORY_ANSWER_MAX_BYTES, OVERLORD_HISTORY_SCOPE_ARGS, readOverlordHistoryAnswer,
+  readOverlordHistoryRequest, overlordTargetId,
+} from '../../shared/overlordHistory.js';
 import { requestReaderCases, answerReaderCases } from './sim/overlordHistorySets.js';
 import {
-  makeHistoryBox, runSweep, runCli, withPane, seedFamily, preloadOptions, PRELOADS, REPO, type HistoryBox,
+  makeHistoryBox, runSweep, runCli, withPane, seedFamily, preloadOptions, REPO, type HistoryBox,
 } from './historyHelpers.js';
 import { userRow, assistantRow, boundaryRow, summaryRow, type Row } from './historyFixtures.js';
 import { removeTmpFixturesEachTest } from './tmpHelpers.js';
@@ -29,6 +33,7 @@ const HEAVY = 180_000;
 const HIST = path.join(REPO, 'ccd', 'history');
 const WORKER = path.join(HIST, 'overlord-worker.mjs');
 const READ = path.join(HIST, 'overlord-read.mjs');
+const OPENSPY = path.join(REPO, 'server', 'test', 'fixtures', 'overlord-history', 'preload-openspy.mjs');
 
 // ── the request and answer readers: their cases live once, in sim/overlordHistorySets.ts ─────────────────────────────
 describe('readOverlordHistoryRequest: the one reader of a request', () => {
@@ -51,6 +56,36 @@ describe('readOverlordHistoryAnswer: the one reader of an answer', () => {
 
   it("the module's bound is the wire's bound", () => {
     expect(OVERLORD_READ_ANSWER_MAX_BYTES).toBe(OVERLORD_HISTORY_ANSWER_MAX_BYTES);
+  });
+});
+
+describe("the request reader's hand copies of lib's grammar, both ways (review 2126 F8)", () => {
+  const read = (raw: unknown): unknown => {
+    const r = readOverlordHistoryRequest(raw);
+    return r.ok ? 'ok' : r.refusal;
+  };
+
+  it("the scope flags are exactly lib's options every read verb takes (COMMON_READ_OPTIONS)", () => {
+    const perVerb = Object.values(lib.READ_OPTIONS).map((spec) => new Set(Object.keys((spec as { options: object }).options)));
+    expect(perVerb.length, 'CONTROL: the table was read').toBeGreaterThanOrEqual(5);
+    const common = [...perVerb[0]!].filter((o) => perVerb.every((s) => s.has(o))).sort();
+    expect(common.length, 'CONTROL: the common options are not empty').toBeGreaterThan(0);
+    expect([...OVERLORD_HISTORY_SCOPE_ARGS].sort()).toEqual(common);
+    for (const flag of common) expect(read({ verb: 'search', target: { kind: 'all' }, args: ['x', flag] }), flag).toBe('bad-args');
+  });
+
+  it("a project or session name is exactly lib's idOk, its length bound SPOOL_ID_MAX included", () => {
+    const names = [
+      'a', 'lane-a-project-a', 'A.b_c-9', '.', '..', '', ' ', 'a b', 'a/b', '\u00e9', 'a\nb',
+      ...Array.from({ length: 95 }, (_, k) => String.fromCharCode(32 + k)),
+      'x'.repeat(lib.SPOOL_ID_MAX), 'x'.repeat(lib.SPOOL_ID_MAX + 1),
+    ];
+    expect(lib.idOk('x'.repeat(lib.SPOOL_ID_MAX)) && !lib.idOk('x'.repeat(lib.SPOOL_ID_MAX + 1)), 'CONTROL: lib bounds the length').toBe(true);
+    for (const name of names) {
+      const want = lib.idOk(name);
+      expect(read({ verb: 'search', target: { kind: 'project', project: name }, args: ['x'] }) === 'ok', `project ${JSON.stringify(name)}`).toBe(want);
+      expect(read({ verb: 'search', target: { kind: 'session', session: name }, args: ['x'] }) === 'ok', `session ${JSON.stringify(name)}`).toBe(want);
+    }
   });
 });
 
@@ -211,6 +246,18 @@ describe('overlord-read.mjs on a fixture store, in a worker', () => {
       .toEqual({ outcome: 'request-refused', word: 'regex' });
   }, HEAVY);
 
+  it("no --json is appended (review 2126 F3): a bare -- that reached the module is refused, and a trailing value-taking option is the verb's bad-args", () => {
+    const box = twoProjects('ccrc-ovr-read-sep-');
+    expect(read(box, { verb: 'search', target: { kind: 'all' }, agents: false, args: ['--', 'zqbravo'] }), 'a bare --')
+      .toEqual({ outcome: 'request-refused', word: 'separator' });
+    for (const [verb, args] of [['search', ['zqbravo', '--cursor']], ['describe', ['--node']], ['expand', ['--around']]] as const) {
+      expect(read(box, { verb, target: { kind: 'all' }, agents: false, args: [...args] }), `${verb} ${args.join(' ')}`)
+        .toEqual({ outcome: 'verb-refused', word: 'bad-args' });
+    }
+    const ok = read(box, { verb: 'search', target: { kind: 'all' }, agents: false, args: ['zqbravo'] });
+    expect([ok.outcome, ok['exit']], 'CONTROL: the same words without the dangling option read').toEqual(['rows', 0]);
+  }, HEAVY);
+
   it('writes nothing: the db file and its -wal are byte-identical after every read', () => {
     const box = twoProjects('ccrc-ovr-read-nowrite-');
     // A WAL reader's open creates an EMPTY -wal when none stands (the CLI's openReader does the same): no byte is written,
@@ -227,8 +274,8 @@ describe('overlord-read.mjs on a fixture store, in a worker', () => {
   }, HEAVY);
 });
 
-describe('no credential file is opened (R1), in a child process under the read spy', () => {
-  it('the read opens no ~/.cc-secrets file, no box token and no ccrc.env, and still answers', () => {
+describe('no credential file is opened (R1), in a child process under the open spy (review 2126 F4)', () => {
+  it('search, describe and expand open no ~/.cc-secrets file, no box token and no ccrc.env, by any fs form, and still answer', () => {
     const box = twoProjects('ccrc-ovr-read-spy-');
     fs.mkdirSync(path.join(box.home, '.cc-secrets'), { recursive: true });
     fs.writeFileSync(path.join(box.home, '.cc-secrets', 'sentinel.env'), 'SENTINEL_KEY=sentinel-value-1\n');
@@ -236,20 +283,43 @@ describe('no credential file is opened (R1), in a child process under the read s
     fs.writeFileSync(path.join(box.home, '.ccrc', 'mail.token'), 'sentinel-token\n');
     fs.writeFileSync(path.join(box.home, '.ccrc', 'agent.env'), 'CCRC_AGENT_TOKEN=sentinel\n');
     expect(fs.existsSync(path.join(box.home, '.ccrc', 'ccrc.env')), 'CONTROL: the box carries a ccrc.env').toBe(true);
-    const spy = path.join(box.home, 'readspy.log');
+    const db = new DatabaseSync(dbFile(box), { readOnly: true });
+    let node: string;
+    try {
+      node = (db.prepare('SELECT node_id AS id FROM nodes WHERE depth = 0 ORDER BY node_id LIMIT 1').get() as { id: string }).id;
+    } finally { db.close(); }
+    const spy = path.join(box.home, 'openspy.log');
     const probe = path.join(box.home, 'probe.mjs');
+    const control = path.join(box.home, 'spy-control');
+    fs.writeFileSync(control, 'x');
     fs.writeFileSync(probe, [
+      "import fs from 'node:fs';",
+      "import { open as openP } from 'node:fs/promises';",
       `import { overlordRead } from ${JSON.stringify(pathToFileURL(READ).href)};`,
-      `const a = await overlordRead(${JSON.stringify(box.home)}, { verb: 'search', target: { kind: 'all' }, agents: true, args: ['fixture'] }, Date.now());`,
-      'process.stdout.write(JSON.stringify(a));',
+      `const home = ${JSON.stringify(box.home)};`,
+      `const node = ${JSON.stringify(node)};`,
+      'const out = [];',
+      "out.push(await overlordRead(home, { verb: 'search', target: { kind: 'all' }, agents: true, args: ['fixture'] }, Date.now()));",
+      "out.push(await overlordRead(home, { verb: 'describe', target: { kind: 'all' }, agents: true, args: [node] }, Date.now()));",
+      "out.push(await overlordRead(home, { verb: 'expand', target: { kind: 'all' }, agents: true, args: [node] }, Date.now()));",
+      // CONTROL: each form the spy wraps, on a file of the test's own, so a spy that went inert is red.
+      `const c = ${JSON.stringify(control)};`,
+      "fs.readFileSync(c); fs.closeSync(fs.openSync(c, 'r')); await (await openP(c, 'r')).close();",
+      'await fs.promises.readFile(c); await new Promise((r) => fs.readFile(c, () => r()));',
+      "await new Promise((r) => fs.open(c, 'r', (e, fd) => { fs.closeSync(fd); r(); }));",
+      "await new Promise((r) => fs.createReadStream(c).on('close', r).resume());",
+      'process.stdout.write(JSON.stringify(out.map((a) => a.outcome)));',
     ].join('\n'));
     const r = spawnSync(process.execPath, ['--no-warnings', probe], {
-      encoding: 'utf8', timeout: 120_000, env: { ...box.env, HISTORY_TEST_READSPY: spy, NODE_OPTIONS: preloadOptions([PRELOADS.readspy]) },
+      encoding: 'utf8', timeout: 120_000, env: { ...box.env, OVERLORD_TEST_OPENSPY: spy, NODE_OPTIONS: preloadOptions([OPENSPY]) },
     });
     expect(r.status, r.stderr).toBe(0);
-    expect((JSON.parse(r.stdout) as Answer).outcome).toBe('rows');
+    expect(JSON.parse(r.stdout), 'each verb answered rows').toEqual(['rows', 'rows', 'rows']);
     const opened = fs.readFileSync(spy, 'utf8');
     expect(opened, 'CONTROL: the spy recorded the store reads').toContain('history');
+    for (const fn of ['readFileSync', 'openSync', 'promises.open', 'promises.readFile', 'readFile', 'open', 'createReadStream']) {
+      expect(opened.split('\n'), `CONTROL: the spy sees ${fn}`).toContain(`${fn} ${control}`);
+    }
     for (const p of ['.cc-secrets', 'mail.token', 'ccrc.env', 'agent.env', 'auth-scratch', 'operator-secrets']) expect(opened, p).not.toContain(p);
   }, HEAVY);
 });

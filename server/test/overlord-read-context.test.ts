@@ -15,12 +15,14 @@ import { createHash } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
 import { DatabaseSync } from 'node:sqlite';
 import {
-  makeHistoryBox, runSweep, runCli, withPane, seedFamily, preloadOptions, PRELOADS, REPO, type HistoryBox,
+  makeHistoryBox, runSweep, runCli, withPane, seedFamily, preloadOptions, REPO, type HistoryBox,
 } from './historyHelpers.js';
 import { userRow, assistantRow, boundaryRow, summaryRow, type Row } from './historyFixtures.js';
 import { parsedFile } from './scan/symbols.js';
-import { identifierReferences } from './scan/parse.js';
-import { removeTmpFixturesEachTest } from './tmpHelpers.js';
+import { identifierReferences, parseSource, type ParsedFile } from './scan/parse.js';
+import { removeTmpFixturesEachTest, mkTmp } from './tmpHelpers.js';
+import { rewriteRelativeImports } from './sim/mutate.js';
+import { measureReachCases, type ReadContextModule } from './sim/overlordHistorySets.js';
 
 removeTmpFixturesEachTest();
 
@@ -33,6 +35,9 @@ const HEAVY = 120_000;
 const HIST = path.join(REPO, 'ccd', 'history');
 const READ_CONTEXT = path.join(HIST, 'read-context.mjs');
 const CLI = path.join(HIST, 'cli.mjs');
+const OPENSPY = path.join(REPO, 'server', 'test', 'fixtures', 'overlord-history', 'preload-openspy.mjs');
+/** A top-level umask, the load-time side effect cli.mjs has: the planted controls append it to read-context.mjs's text. */
+const PLANTED_UMASK = 'process.umask(0o077);';
 
 const rid = (transcript: string, n: number): string => `${transcript.slice(0, 8)}-0000-4000-8000-${n.toString(16).padStart(12, '0')}`;
 const iso = (k: number): string => new Date(T0 + k * 1000).toISOString();
@@ -174,20 +179,43 @@ describe('Task 1: read-context.mjs loads in a worker, has no side effects and re
     expect(importInWorker(CLI)).toEqual({ ok: false, code: 'ERR_WORKER_UNSUPPORTED_OPERATION' });
   }, HEAVY);
 
+  /** What runs at load (a call outside every function body), and every `process` reference that reads the environment,
+   *  sets the umask, exits or moves. */
+  const loadEffects = (p: ParsedFile): { atLoad: string[]; forbidden: string[]; platform: boolean } => {
+    const uses = identifierReferences(p.text, p.path, new Set(['process'])).map((r) => r.context);
+    return {
+      atLoad: p.calls.filter((c) => !p.symbols.some((s) => c.start >= s.start && c.end <= s.end)).map((c) => c.callee),
+      forbidden: uses.filter((c) => /\bprocess\.(env|umask|exit|exitCode|chdir)\b/.test(c)),
+      platform: uses.some((c) => c.includes('process.platform')),
+    };
+  };
+
   it('no side effects: no call runs at load but NO_PAIRS\' makePairIndex, and nothing names umask, env, exit or chdir', () => {
-    const p = parsedFile(READ_CONTEXT);
-    // A call outside every function body runs at load.
-    const atLoad = p.calls.filter((c) => !p.symbols.some((s) => c.start >= s.start && c.end <= s.end)).map((c) => c.callee);
-    expect(atLoad).toEqual(['makePairIndex']);
-    // Every reference to `process`, by the line it stands in: none reads the environment, sets the umask, exits or moves.
-    const uses = identifierReferences(p.text, READ_CONTEXT, new Set(['process'])).map((r) => r.context);
-    expect(uses.some((c) => c.includes('process.platform')), 'CONTROL: the scan sees process.platform').toBe(true);
-    expect(uses.filter((c) => /\bprocess\.(env|umask|exit|exitCode|chdir)\b/.test(c))).toEqual([]);
+    const e = loadEffects(parsedFile(READ_CONTEXT));
+    expect(e.platform, 'CONTROL: the scan sees process.platform').toBe(true);
+    expect([e.atLoad, e.forbidden]).toEqual([['makePairIndex'], []]);
   });
 
-  it('measureReach(home, \'\') answers without opening ccrc.env (R1), in a child process with the read spy', () => {
+  it('CONTROL (planted, review 2126 F9): a top-level umask appended to the text is red on both counts, and the copy fails to load in a worker', () => {
+    const text = fs.readFileSync(READ_CONTEXT, 'utf8');
+    const e = loadEffects(parseSource(`${text}\n${PLANTED_UMASK}\n`, READ_CONTEXT));
+    expect(e.atLoad).toEqual(['makePairIndex', 'process.umask']);
+    expect(e.forbidden).toEqual(['process.umask']);
+    // The same copy, its imports made absolute, in a file worker: what the worker test above would see.
+    const planted = path.join(mkTmp('ccrc-ovr-rc-planted-'), 'read-context.mjs');
+    fs.writeFileSync(planted, rewriteRelativeImports(`${text}\n${PLANTED_UMASK}\n`, HIST));
+    expect(importInWorker(planted)).toEqual({ ok: false, code: 'ERR_WORKER_UNSUPPORTED_OPERATION' });
+  }, HEAVY);
+
+  // The in-process case lives once, in sim/overlordHistorySets.ts, so the mutation floors run it against a role read.
+  const readContext: ReadContextModule = {
+    measureReach: async (home, role) => ((await import(pathToFileURL(READ_CONTEXT).href)) as ReadContextModule).measureReach(home, role),
+  };
+  for (const [name, c] of Object.entries(measureReachCases(readContext))) it(name, c, HEAVY);
+
+  it('measureReach(home, \'\') answers without opening ccrc.env (R1), in a child process with the open spy', () => {
     const box = makeHistoryBox('ccrc-ovr-rc-norole-', { role: 'server' });
-    const spy = path.join(box.home, 'readspy.log');
+    const spy = path.join(box.home, 'openspy.log');
     const probe = path.join(box.home, 'probe.mjs');
     fs.writeFileSync(probe, [
       `import { measureReach } from ${JSON.stringify(pathToFileURL(READ_CONTEXT).href)};`,
@@ -196,7 +224,7 @@ describe('Task 1: read-context.mjs loads in a worker, has no side effects and re
     ].join('\n'));
     const r = spawnSync(process.execPath, ['--no-warnings', probe], {
       encoding: 'utf8', timeout: 60_000,
-      env: { ...box.env, HISTORY_TEST_READSPY: spy, NODE_OPTIONS: preloadOptions([PRELOADS.readspy]) },
+      env: { ...box.env, OVERLORD_TEST_OPENSPY: spy, NODE_OPTIONS: preloadOptions([OPENSPY]) },
     });
     expect(r.status, r.stderr).toBe(0);
     expect(JSON.parse(r.stdout)).toEqual({ role: '', darwin: false, statSettled: true });

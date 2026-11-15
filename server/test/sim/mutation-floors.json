@@ -59,5 +59,8 @@
   "server/src/continuity/anchor.ts#anchorGeneration": 1,
   "server/src/continuity/anchor.ts#anchorAnswer": 1,
   "shared/overlordHistory.ts#readOverlordHistoryRequest": 1,
-  "shared/overlordHistory.ts#readOverlordHistoryAnswer": 1
+  "shared/overlordHistory.ts#readOverlordHistoryAnswer": 1,
+  "ccd/history/lib.mjs#decideScope": 1,
+  "ccd/history/read-context.mjs#measureReach": 1,
+  "agent/src/historyOp.ts#createHistoryOp": 1
 }

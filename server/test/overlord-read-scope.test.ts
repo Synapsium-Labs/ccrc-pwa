@@ -18,6 +18,9 @@ import {
 } from './historyHelpers.js';
 import { userRow, assistantRow, type Row } from './historyFixtures.js';
 import { parsedFile } from './scan/symbols.js';
+import { parseSource, type ParsedFile } from './scan/parse.js';
+import * as store from '../../ccd/history/store.mjs';
+import { decideScopeCases } from './sim/overlordHistorySets.js';
 import { removeTmpFixturesEachTest } from './tmpHelpers.js';
 
 removeTmpFixturesEachTest();
@@ -27,36 +30,8 @@ const HIST = path.join(REPO, 'ccd', 'history');
 const OVERLORD = 'overlord';
 
 describe('decideScope never answers overlord: an enumeration over its inputs', () => {
-  type Presence = { state: 'value'; value: string } | { state: 'absent' } | { state: 'unreadable' };
-  const presences = (value: string): Array<Presence | { state: 'value'; value: string }> => [
-    { state: 'value', value }, { state: 'absent' }, { state: 'unreadable' }, { state: 'value', value: '' },
-    { state: 'value', value: OVERLORD },
-  ];
-  const sources = [...lib.SCOPE_SOURCES, 'nowhere', OVERLORD];
-  const sessions: Array<string | null> = [null, 'lane-a-project-a', 'lane-b-project-a', 'Not An Id!', OVERLORD];
-  const bools = [false, true];
-
-  it('for every input, the verdict is a refusal or a SCOPE_KINDS kind, never overlord', () => {
-    let verdicts = 0;
-    let oks = 0;
-    for (const source of sources) for (const project of bools) for (const workspace of bools) for (const agents of bools)
-      for (const session of sessions) for (const regProject of presences('project-a')) for (const regWorkdir of presences('/w'))
-        for (const sessionProject of [null, ...presences('project-a')]) {
-          const v = lib.decideScope({
-            source, id: 'lane-a-project-a', generation: { value: null, via: 'none' } as never,
-            flags: { project, workspace, session, agents },
-            reg: { project: regProject as never, workdir: regWorkdir as never, sessionProject: sessionProject as never },
-          });
-          verdicts += 1;
-          if (v.ok) {
-            oks += 1;
-            expect(lib.SCOPE_KINDS as readonly string[], JSON.stringify({ source, project, workspace, session })).toContain(v.kind);
-            expect(v.kind).not.toBe(OVERLORD);
-          }
-        }
-    expect(verdicts, 'the enumeration ran').toBeGreaterThan(10_000);
-    expect(oks, 'CONTROL: some inputs pass, so the kind check is not vacuous').toBeGreaterThan(100);
-  });
+  // The case lives once, in sim/overlordHistorySets.ts, so the mutation floors run it against decideScope's mutant.
+  for (const [name, c] of Object.entries(decideScopeCases(lib))) it(name, c);
 
   it('READ_SCOPE_KINDS is SCOPE_KINDS plus overlord, and SCOPE_KINDS does not hold overlord', () => {
     expect([...lib.READ_SCOPE_KINDS]).toEqual([...lib.SCOPE_KINDS, OVERLORD]);
@@ -98,6 +73,59 @@ describe('the import pin: cli.mjs never reaches the Overlord read module', () =>
     const reached = [...reachedFrom(path.join(HIST, 'cli.mjs'))].map((f) => path.basename(f));
     expect(reached, 'CONTROL: the walk reaches recall.mjs and read-context.mjs').toEqual(expect.arrayContaining(['recall.mjs', 'read-context.mjs', 'lib.mjs']));
     expect(reached.filter((f) => f === 'overlord-read.mjs' || f === 'overlord-worker.mjs')).toEqual([]);
+  });
+});
+
+/** What the Overlord's read path may take from store.mjs, by file: overlord-read.mjs nothing past the read handle and its
+ *  version (it opens through read-context.mjs#openAdmitted), read-context.mjs the read handle and its measurers. */
+const STORE_READS: Record<string, ReadonlySet<string>> = {
+  'overlord-read.mjs': new Set(['openReader', 'userVersion']),
+  'read-context.mjs': new Set(['openReader', 'userVersion', 'StoreError', 'measureStoreFacts', 'readBounded']),
+};
+/** The names of history's writing operations (lib.mjs WRITING_FORMS' `op`), and their `run<Op>` spellings. */
+const WRITING_OPS = new Set(Object.values(lib.WRITING_FORMS as Record<string, { op: string }>).flatMap(({ op }) => {
+  const camel = op.replace(/-(\w)/g, (_m, c: string) => c.toUpperCase());
+  return [camel, `run${camel[0]!.toUpperCase()}${camel.slice(1)}`];
+}));
+
+/** What a read-path file does past reading (review 2126 F2): a store.mjs name off its allowed set, imported or called; a
+ *  call named for a writing operation; a `db.exec` but the busy timeout's PRAGMA; a SQL text that is not a read. */
+function readPathViolations(p: ParsedFile, allowed: ReadonlySet<string>): string[] {
+  const out: string[] = [];
+  const storeNames = new Set(Object.keys(store));
+  for (const e of p.imports) {
+    if (e.specifier !== './store.mjs') continue;
+    for (const n of e.names) if (!allowed.has(n)) out.push(`imports ${n} from store.mjs`);
+  }
+  for (const c of p.calls) {
+    if (c.name === null) continue;
+    if (storeNames.has(c.name) && !allowed.has(c.name)) out.push(`calls store.mjs ${c.name}`);
+    if (WRITING_OPS.has(c.name)) out.push(`calls the writing operation ${c.name}`);
+    if (c.name === 'exec' && !(c.args.length === 1 && /^`PRAGMA busy_timeout = \$\{[^}]*\}`$/.test(c.args[0]!.text))) out.push(`exec ${c.callee}(${c.args.map((a) => a.text).join(', ')})`);
+    if (c.name === 'prepare' && c.args[0]?.kind === 'string' && !/^\s*(SELECT|WITH|PRAGMA journal_mode)\b/i.test(c.args[0].text)) out.push(`prepares ${c.args[0].text}`);
+  }
+  return out;
+}
+
+describe("the read path's calls (review 2126 F2): read-only store names, no writing operation, no exec but the busy timeout", () => {
+  for (const file of Object.keys(STORE_READS)) {
+    it(`${file} imports and calls only read-only store names, and execs only the busy timeout`, () => {
+      const p = parsedFile(path.join(HIST, file));
+      expect(p.calls.length, 'CONTROL: the parse saw calls').toBeGreaterThan(5);
+      expect(readPathViolations(p, STORE_READS[file]!)).toEqual([]);
+    });
+  }
+
+  it('CONTROL: a planted openWriter, a writing call, an exec and a write statement are each red', () => {
+    const file = path.join(HIST, 'overlord-read.mjs');
+    const text = fs.readFileSync(file, 'utf8');
+    expect(readPathViolations(parseSource(text, file), STORE_READS['overlord-read.mjs']!), 'CONTROL: the real text is clean').toEqual([]);
+    const planted = (extra: string): string[] => readPathViolations(parseSource(`${text}\n${extra}\n`, file), STORE_READS['overlord-read.mjs']!);
+    expect(planted("import { openWriter } from './store.mjs';")).toEqual(['imports openWriter from store.mjs']);
+    expect(planted("function w(home) { return openWriter(home); }")).toEqual(['calls store.mjs openWriter']);
+    expect(planted('function w(rc) { return runRepair(rc); }')).toEqual(['calls the writing operation runRepair']);
+    expect(planted("function w(db) { db.exec('DELETE FROM meta'); }")).toEqual(['exec db.exec(DELETE FROM meta)']);
+    expect(planted("function w(db) { db.prepare('DELETE FROM meta').run(); }")).toEqual(['prepares DELETE FROM meta']);
   });
 });
 
