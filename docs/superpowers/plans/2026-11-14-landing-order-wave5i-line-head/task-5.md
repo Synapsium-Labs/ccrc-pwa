@@ -46,8 +46,9 @@ route, ccd verb, wire op or exec-whitelist change.
 | M21 state | `run-not-merging` check removed | `-t M21`: 1 failed | `expected { kind: 'no-send', …(2) } to match object { kind: 'no-send', …(1) }`: no cue was sent (the observation's `episode` predicate answers `run-gone`), but the reason is `episode-changed`, not `run-not-merging` |
 | M22 | the `!stamped.ok` throw removed in `insertSystemMailTx` | `-t M22`: 1 failed | `expected { kind: 'queued', mailId: 1, …(2) } to match object { kind: 'failure', …(1) }` |
 | M27 | `this.landingFence = recovery` removed from the catch | `-t "fault\|COMMIT\|rolled back"`: 6 failed | `expected { ok: true, facts: { …(11) } } to match object { ok: false, error: 'landing-fenced' }` for the five faults and the COMMIT fault |
-Also pinned here though owned elsewhere: M13 and M14 (`landing-control.test.ts`, real store: a pause before or between red and
-green survives, pending and unmeasured never clear red).
+Also in this task: real-store cases in `landing-control.test.ts` for a pause before or between red and green (M14) and for
+pending and unmeasured health (M13). This task recorded no mutant for either and measured no M12 mail half (the M21 rows
+above are a different mutant); those rows are measured in `fix-round-1.md#r2`.
 
 ## Departures
 - departure: port-member-deferred. `applyLandingControl` is NOT added to `WatcherCoordMember` in this task. The census
