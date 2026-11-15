@@ -31,3 +31,10 @@ header value-import description).
 
 ## Findings
 No characterization row failed against the old lane; no suspected defect.
+
+## CI fix round
+The fast CI reds were the runCcd not-ran census (`landedLane.ts` had no explicit `res.ran === false` after the call) and the
+mail-routes kebab-token scan (the `'not-ran'` act word). The lane now narrows `res.ran === false` right after the call (same
+retry memory, same `link` stop), `landedCallStep` takes the ran arm only and answers `parse` | `failed`, and the `'not-ran'`
+act word is gone. Behaviour unchanged: landed-decide, landed-lane (link-stop rows included) and landing-entry-census 112
+passed; `test/single-definition` 1331 passed; production tsc rc 0; the census test passes.

@@ -215,10 +215,10 @@ export function landedMarkStep(mark: LandingLandResult, candidate: LandedCandida
   return { act: 'stop', ...landedStopped(mark.error) };
 }
 
-/** What the `ccd pr-state --pr` call means: a call that did not run is a stop (never an answer about the PR); a failed
- *  one backs the entry off; an exit 0 is parsed by the lane with the PR parser. */
-export function landedCallStep(call: CcdResult): { act: 'parse'; stdout: string } | { act: 'failed' } | { act: 'not-ran' } {
-  if (call.ran === false) return { act: 'not-ran' };
+/** What a `ccd pr-state --pr` call that RAN means: a failed one backs the entry off; an exit 0 is parsed by the lane with
+ *  the PR parser. A call that did not run is the lane's to narrow (`res.ran === false`) before this is asked: it is a stop,
+ *  never an answer about the PR, so this takes the ran arm only. */
+export function landedCallStep(call: Extract<CcdResult, { ran: true }>): { act: 'parse'; stdout: string } | { act: 'failed' } {
   return call.ok ? { act: 'parse', stdout: call.stdout } : { act: 'failed' };
 }
 
