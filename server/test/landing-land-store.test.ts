@@ -578,7 +578,7 @@ describe('terminal repair: a fresh terminal answer retires an unreadable row and
     it.each([
       ['a retained blank setter', "UPDATE landing_entries SET setBy = '' WHERE pr = 7", []],
       ['a BLOB handoff', 'UPDATE landing_entries SET handoffCommit = ? WHERE pr = 7', [new Uint8Array([9, 9, 9])]],
-    ] as const)('repair, closed, then a verified pin over %s: kept closed, no projection or witness mutation, no metadata invented', (_n, sql, params) => {
+    ] as [string, string, unknown[]][])('repair, closed, then a verified pin over %s: kept closed, no projection or witness mutation, no metadata invented', (_n, sql, params) => {
       const run = pinned(coord);
       coord.db.prepare(sql).run(...(params as never[]));
       expect(coord.advanceLanding(repairLand(coord, tokenOf(coord), { outcome: { word: 'closed' } })))
