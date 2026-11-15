@@ -148,11 +148,15 @@ describe('Task 4: ccd swap and ccd prefer honour the set, and --cross-pool cross
     expect(h.reg(ID, 'crosspool')).toMatch(/^\d{10} set:pool-b claude-a$/);
   });
 
-  it('ccd swap and ccd prefer refuse an id that is not a session id before any file is read', () => {
-    const r = run(`${SWAP_STUBS} cmd_swap ../${ID} claude-a`, { TMUX: '' });
-    expect(r.code).not.toBe(0);
-    expect(r.stderr).toContain('no registry for');
-    expect(run(`${SWAP_STUBS} cmd_prefer ../${ID} claude-a`, { TMUX: '' }).stderr).toContain('no registry for');
+  it('ccd swap and ccd prefer bind no id _reg_id_ok refuses, even one whose path reaches a .uuid (A2 review F5)', () => {
+    // `$REG/../stray.uuid` exists, so the old `-f` test alone would have taken `../stray` as a session.
+    fs.writeFileSync(path.join(h.home, 'stray.uuid'), `${UUID}\n`);
+    plantSet('pool-b', '../stray');
+    for (const verb of ['swap', 'prefer']) {
+      const r = run(`${SWAP_STUBS} cmd_${verb} ../stray claude-a`, { TMUX: '' });
+      expect(r.code, verb).not.toBe(0);
+      expect(r.stderr, verb).toContain("no registry for '../stray'");
+    }
   });
 });
 
@@ -204,7 +208,8 @@ describe('Task 4: cmd_start — a new row outside the set is refused; an existin
 describe('Task 4: the tick — relocation into the set, and the home re-seed stands down', () => {
   it('relocates an existing row on an account outside its set at the idle boundary, and writes no home', () => {
     seedRow('claude'); plantSet('pool-b'); idleStatus();
-    for (const w of ['claude', 'claude-a', 'claude-b', 'claude-d']) writeLimits(w, 10, 10);
+    for (const w of ['claude-a', 'claude-b', 'claude-d']) writeLimits(w, 10, 10);
+    writeLimits('claude', 60, 60);   // the busiest: a re-seed by the project (untagged) would move home off it
     tick(AFFINITY);
     expect(calls()).toContain(`dispatch ${ID} -> claude-b`);
     expect(swapLog()).toContain(`auto-pool ${ID}: claude -> claude-b`);

@@ -316,15 +316,15 @@ const EXPECTED: Record<State, Partial<Record<User, string>>> = {
 /** The users a state applies to: the field states need a row (no new-row start), and an unsearchable `$REG` lets only the
  *  readers that answer without writing to it be measured (a write or a field read there fails before the pool is asked). */
 const ALL = Object.keys(USERS) as User[];
-const USERS_OF: Record<State, readonly User[]> = {
-  ...Object.fromEntries((Object.keys(STATES) as State[]).map((k) => [k, ALL])) as Record<State, readonly User[]>,
-  'project field absent': ALL.filter((u) => u !== 'startNew' && u !== 'startExisting' && u !== 'payPerUse'),
-  'project field unreadable, no pools dir': ALL.filter((u) => u !== 'startNew' && u !== 'startExisting' && u !== 'payPerUse'),
-  '$REG unsearchable': ['swapTarget', 'strandWhy', 'payPerUse'],
+const FIELD_USERS = ALL.filter((u) => u !== 'startNew' && u !== 'startExisting' && u !== 'payPerUse');
+const USERS_OF = (s: State): readonly User[] => {
+  if (s === '$REG unsearchable') return ['swapTarget', 'strandWhy', 'payPerUse'];
+  if (s === 'project field absent' || s === 'project field unreadable, no pools dir') return FIELD_USERS;
+  return ALL;
 };
 
 describe.each(Object.keys(STATES) as State[])('a session with no set, %s: every user answers as on main', (s) => {
-  it.each(USERS_OF[s])('%s', (u) => {
+  it.each(USERS_OF(s))('%s', (u) => {
     const got = USERS[u](s);
     expect(got).toBe(EXPECTED[s][u]);
   });
