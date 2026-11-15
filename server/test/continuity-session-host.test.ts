@@ -2,7 +2,7 @@
 // answer is named by an exhaustive switch whose default is `never`, so a new answer is a compile error here (the test
 // tsconfig type-checks this file) until each reader places it on its side of the receipt's first half.
 import { describe, expect, it } from 'vitest';
-import type { DeliverResult, ReceiptRead, RenewKind, RenewResult, SessionHost } from '../src/continuity/sessionHost.js';
+import type { DeliverResult, ReceiptRead, RenewalPrompt, RenewKind, RenewResult, SessionHost } from '../src/continuity/sessionHost.js';
 
 /** Which side of the receipt's first half an answer sits on (the port's failure contract). */
 function halfOf(r: RenewResult): 'pending-receipt' | 'before' | 'after' | 'unknown' | 'retry-later' {
@@ -34,7 +34,7 @@ class FakeHost implements SessionHost {
   readonly calls: string[] = [];
   constructor(private readonly answer: RenewResult) {}
   async renew(sessionId: string, n: number): Promise<RenewResult> { this.calls.push(`renew ${sessionId} ${n}`); return this.answer; }
-  async deliver(sessionId: string, text: string): Promise<DeliverResult> { this.calls.push(`deliver ${sessionId} ${text}`); return { kind: 'sent' }; }
+  async deliver(sessionId: string, prompt: RenewalPrompt): Promise<DeliverResult> { this.calls.push(`deliver ${sessionId} ${prompt}`); return { kind: 'sent' }; }
   async contextUsage(): Promise<{ kind: 'measured'; value: { tokens: number; window: number } }> {
     return { kind: 'measured', value: { tokens: 10, window: 200_000 } };
   }

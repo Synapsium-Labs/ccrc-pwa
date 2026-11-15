@@ -92,10 +92,10 @@ describe('renew', () => {
 
 describe('deliver', () => {
   it('maps each answer', async () => {
-    expect(await harness({ send: async () => ({ ok: true }) }).host.deliver(ID, 'hi')).toEqual({ kind: 'sent' });
+    expect(await harness({ send: async () => ({ ok: true }) }).host.deliver(ID, 'renewal-first-prompt')).toEqual({ kind: 'sent' });
     const no: SendResult = { ok: false, error: 'draft-present' };
-    expect(await harness({ send: async () => no }).host.deliver(ID, 'hi')).toEqual({ kind: 'refused', reason: 'draft-present' });
-    expect(await harness({ send: async () => { throw new Error('gone'); } }).host.deliver(ID, 'hi')).toEqual({ kind: 'unreachable', detail: 'gone' });
+    expect(await harness({ send: async () => no }).host.deliver(ID, 'renewal-first-prompt')).toEqual({ kind: 'refused', reason: 'draft-present' });
+    expect(await harness({ send: async () => { throw new Error('gone'); } }).host.deliver(ID, 'renewal-first-prompt')).toEqual({ kind: 'unreachable', detail: 'gone' });
   });
 });
 

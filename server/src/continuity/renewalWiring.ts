@@ -10,6 +10,7 @@ import type { WatcherDeps } from '../deps.js';
 import type { WatcherCoordPort } from '../coord/ports.js';
 import { queueSystemMail } from '../coord/rundefsTx.js';
 import { sendPrompt } from '../inject/send.js';
+import { INJECTED_PROMPTS } from '../../../shared/injected-prompts.mjs';
 import { liveWordFor, turnMarkFor, type TurnReadDeps } from '../turnverdict.js';
 import { readUsageMeasured } from '../usage.js';
 import { ccdSessionHost } from './ccdSessionHost.js';
@@ -35,7 +36,8 @@ export function renewalActsOf(
   const unmeasured: DrainRead = { held: true, reason: 'unmeasured' };
   const host = ccdSessionHost({
     runCcd: deps.runCcd, fleetState: deps.fleetState,
-    send: (id, text) => sendPrompt({ tmux: deps.tmux, queue: deps.queue }, id, text,
+    // One `sendPrompt` per row the port can name (`RenewalPrompt` has one), each typed by reference to the list.
+    send: (id) => sendPrompt({ tmux: deps.tmux, queue: deps.queue }, id, INJECTED_PROMPTS['renewal-first-prompt'].text,
       { onDraft: 'stash', holdIfAutoContinueArmed: true, refuseIfTurnRunning: true }),
     usage: (id) => readUsageMeasured(deps.io, deps.cfg.registryDir, id, Math.floor(now() / 1000)),
     startsOf: (id, limit) => coord.startsOf(id, limit),

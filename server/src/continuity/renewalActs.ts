@@ -25,7 +25,7 @@ import { genExpectOf, genViewOf, type GenRow } from './continuityStore.js';
 import { generationStep } from './generationMachine.js';
 import type { ActTarget, PlannedAct } from './generationsLane.js';
 import {
-  RENEWAL_FIRST_PROMPT, RENEWAL_HANDOVER_BODY, RENEWAL_HANDOVER_SUBJECT, SPOT_PROBE_BODY, SPOT_PROBE_SUBJECT, actsOfStep, handoverInRenewal, renewAnswerEvent,
+  RENEWAL_HANDOVER_BODY, RENEWAL_HANDOVER_SUBJECT, SPOT_PROBE_BODY, SPOT_PROBE_SUBJECT, actsOfStep, handoverInRenewal, renewAnswerEvent,
   type RenewalAct,
 } from './renewalFeed.js';
 import type { SessionHost } from './sessionHost.js';
@@ -76,7 +76,7 @@ async function act(deps: RenewalActsDeps, t: ActTarget, a: RenewalAct, r: Counts
   switch (a.kind) {
     case 'renew': return renew(deps, t, a.try, r, say);
     case 'first-prompt': case 'renudge-card': {
-      const d = await deps.host.deliver(t.sessionId, RENEWAL_FIRST_PROMPT);
+      const d = await deps.host.deliver(t.sessionId, 'renewal-first-prompt');
       if (d.kind === 'sent') r.delivered += 1;
       else { r.failed += 1; say(`the ${a.kind} was not delivered (${d.kind === 'refused' ? d.reason : d.detail})`); }
       return;

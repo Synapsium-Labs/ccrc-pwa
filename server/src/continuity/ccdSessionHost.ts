@@ -11,14 +11,14 @@ import type { SendResult } from '../inject/send.js';
 import type { UsageRead } from '../usage.js';
 import type { StartsRead } from './continuityStore.js';
 import type { Reading } from './renewalDue.js';
-import type { DeliverResult, ReceiptRead, RenewResult, SessionHost } from './sessionHost.js';
+import type { DeliverResult, ReceiptRead, RenewalPrompt, RenewResult, SessionHost } from './sessionHost.js';
 
 /** What the adapter reaches, each narrow so a test hands fakes. The server binds `send` to `sendPrompt`, `usage` to
  *  `readUsageMeasured` and `startsOf` to the store's member of that name. */
 export interface CcdSessionHostDeps {
   readonly runCcd: RunCcd;
   readonly fleetState: Pick<FleetState, 'ccdVerbs'> | undefined;
-  readonly send: (sessionId: string, text: string) => Promise<SendResult>;
+  readonly send: (sessionId: string, prompt: RenewalPrompt) => Promise<SendResult>;
   readonly usage: (sessionId: string) => Promise<UsageRead>;
   readonly startsOf: (sessionId: string, limit: number) => StartsRead;
   readonly log?: (line: string) => void;
@@ -63,9 +63,9 @@ export function ccdSessionHost(deps: CcdSessionHostDeps): SessionHost {
     }
   }
 
-  async function deliver(sessionId: string, text: string): Promise<DeliverResult> {
+  async function deliver(sessionId: string, prompt: RenewalPrompt): Promise<DeliverResult> {
     let r: SendResult;
-    try { r = await deps.send(sessionId, text); }
+    try { r = await deps.send(sessionId, prompt); }
     catch (e) { return { kind: 'unreachable', detail: messageOf(e) }; }
     return r.ok ? { kind: 'sent' } : { kind: 'refused', reason: r.error };
   }

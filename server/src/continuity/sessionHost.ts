@@ -14,7 +14,12 @@
 //
 // `compact` (C39's act) is not declared: no consumer asks for it in W1a, so it stays ccd's auto-compact until one does
 // (slug port-declares-what-w1a-consumes).
+import type { InjectedPromptKey } from '../../../shared/injected-prompts.mjs';
 import type { Reading } from './renewalDue.js';
+
+/** The rows of `INJECTED_PROMPTS` the lane types through `deliver`: the port types list rows, never free text (spec §3.8
+ *  H7; slug port-delivers-list-rows). */
+export type RenewalPrompt = Extract<InjectedPromptKey, 'renewal-first-prompt'>;
 
 /** The renewal lane's view of a session's host (§3.6 H2). Declared by its consumer; adapter one is ccd. */
 export interface SessionHost {
@@ -22,8 +27,8 @@ export interface SessionHost {
    *  renewal's generation number, carried for the record: the caller keeps the call idempotent on `(n, try)` by reading
    *  the receipt before any retry, and never asks twice for one try. */
   renew(sessionId: string, n: number): Promise<RenewResult>;
-  /** Type the one line that starts the fresh conversation's first turn. */
-  deliver(sessionId: string, text: string): Promise<DeliverResult>;
+  /** Type the one line that starts the fresh conversation's first turn: a row of `INJECTED_PROMPTS`, by its key. */
+  deliver(sessionId: string, prompt: RenewalPrompt): Promise<DeliverResult>;
   /** The session's context, from a fresh usage sidecar; a stale or missing one is unmeasured. */
   contextUsage(sessionId: string): Promise<Reading<{ readonly tokens: number; readonly window: number }>>;
   /** The second half of the receipt: the newest reported start since a start id, if any. */

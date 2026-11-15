@@ -148,3 +148,8 @@ own row and no state column.
   and `GenReadings.soft` (the soft preconditions' fleet reads the hand-offs piece and W1 will fill; absent, unmeasured).
 - **hold-off-and-item-not-rederived.** A crash between a pass and its acts loses that pass's hold-off and degraded item:
   they are acts of the step, not derived from stored state on the next pass.
+- **port-delivers-list-rows** (the W1 vocabulary piece, #2840, landed during this piece). Every string ccrc types into a pane is a
+  row of `INJECTED_PROMPTS`, and every `sendPrompt` types a row by reference. The first prompt is the new row
+  `renewal-first-prompt` (exact, typed by the server), and the port's `deliver` takes a row's key (`RenewalPrompt`, today
+  that one row), not free text; `renewalWiring.ts` types it with one `sendPrompt` per row. The vocabulary's key list and the
+  characterization of `sendPrompt`'s callers grow by one each.

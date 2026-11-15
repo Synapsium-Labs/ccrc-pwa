@@ -11,8 +11,8 @@ import {
   generationsPass, type EmptyTries, type GenReadings, type GenerationsDeps, type PlannedAct, type RegistryFacts,
 } from '../src/continuity/generationsLane.js';
 import { runRenewalActs } from '../src/continuity/renewalActs.js';
-import { RENEWAL_FIRST_PROMPT, RENEWAL_HANDOVER_SUBJECT } from '../src/continuity/renewalFeed.js';
-import type { DeliverResult, ReceiptRead, RenewResult, SessionHost } from '../src/continuity/sessionHost.js';
+import { RENEWAL_HANDOVER_SUBJECT } from '../src/continuity/renewalFeed.js';
+import type { DeliverResult, ReceiptRead, RenewalPrompt, RenewResult, SessionHost } from '../src/continuity/sessionHost.js';
 import type { DrainRead } from '../src/continuity/renewalDrain.js';
 import { snapshotFactsJson } from '../src/continuity/card.js';
 import type { UsageRead } from '../src/usage.js';
@@ -65,7 +65,7 @@ class FakeHost implements SessionHost {
     if (a.kind === 'started' && this.landStart) this.f.start('startup', this.f.nextUuid());
     return a;
   }
-  async deliver(id: string, text: string): Promise<DeliverResult> { this.delivered.push(`${id}: ${text}`); return { kind: 'sent' }; }
+  async deliver(id: string, prompt: RenewalPrompt): Promise<DeliverResult> { this.delivered.push(`${id}: ${prompt}`); return { kind: 'sent' }; }
   async contextUsage(): Promise<never> { throw new Error('not read in W1a'); }
   async receipt(id: string, since: number): Promise<ReceiptRead> {
     const r = this.f.s.startsOf(id, 50);
@@ -164,7 +164,7 @@ describe('the renewal act, live (Task 4)', () => {
     await f.cycle();
     expect(f.gen()).toMatchObject({ n: 2, state: 'carded' });
     expect(f.s.db.prepare("SELECT outcome FROM continuity_generations WHERE n = 1").get()).toEqual({ outcome: 'renewed' });
-    expect(f.host.delivered).toEqual([`${COORD}: ${RENEWAL_FIRST_PROMPT}`]);
+    expect(f.host.delivered).toEqual([`${COORD}: renewal-first-prompt`]);
     readCard(f);
     f.t.advance(5_000);
     await f.cycle();

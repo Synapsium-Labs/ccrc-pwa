@@ -146,8 +146,6 @@ export function actsOfStep(actions: readonly GenAction[], from: GenerationState,
   return out;
 }
 
-/** The one line that starts a fresh conversation's first turn, and the card re-nudge (slug first-prompt-by-deliver). */
-export const RENEWAL_FIRST_PROMPT = 'Read your card with `ccrc-api card`, then answer your probes with `ccrc-api probe`.';
 /** The handover ask's subject (the one mail the renewing gate lets through) and its body (notes review 2039 F11). */
 export const RENEWAL_HANDOVER_SUBJECT = 'handover';
 export const RENEWAL_HANDOVER_BODY = 'Your renewal is starting. Write your handover note now with `ccrc-api note handover`.';
