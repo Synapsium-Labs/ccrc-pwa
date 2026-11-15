@@ -18,16 +18,14 @@ import type { WatcherCoordPort } from './ports.js';
  *  the COMMIT is next). A failure past `decide` fences the landing entrances, as the authority writer's does. */
 export type LandingControlPhase = 'decide' | 'apply' | 'commit';
 
-/** The one statement this body runs itself, the handle's `prepare(...).run(...)`, named structurally: only the store and
- *  `rundefsTx.ts` import the driver (`single-definition/core-vocab.test.ts`). */
-export interface LandingControlDb { prepare(sql: string): { run(...params: (string | number)[]): unknown } }
-
 export interface LandingControlInput { project: string; control: LandingControlRead; nowMs: number }
 
 /** Runs inside the store's transaction. Throws on any database fault (the store rolls back and classifies it by `phase`). */
-export function applyLandingControlTx(coord: WatcherCoordPort, db: LandingControlDb, readFacts: () => LandingReadResult, input: LandingControlInput,
+export function applyLandingControlTx(coord: WatcherCoordPort, readFacts: () => LandingReadResult, input: LandingControlInput,
   phase: { at: LandingControlPhase }): LandingControlApplyResult {
   const { project, control, nowMs } = input;
+  // The handle is destructured off the port: `single-definition/core-vocab.test.ts` forbids the dotted receiver spelling outside the store.
+  const { db } = coord;
   const read = readFacts();
   if (!read.ok) { const { ok: _ok, ...failure } = read; return { kind: 'failure', failure }; }
   const transition = mainRedNext(read.facts.flags.mainRedHold, control, nowMs, project);
@@ -46,7 +44,8 @@ export function applyLandingControlTx(coord: WatcherCoordPort, db: LandingContro
   const read2 = runId === null ? null : coord.run(runId);
   const row = read2 !== null && read2.ok ? read2.run : null;
   const ep = row === null ? null : coord.currentEpisode(row.id);
-  const run: NextLandingRun | null = row === null ? null : { id: row.id, project: row.project, state: row.state, claimedBy: row.claimedBy,
+  // A missing run and one that does not read are two conditions, kept apart (`run-absent` / `run-unreadable`).
+  const run: NextLandingRun | 'missing' | 'unreadable' = read2 !== null && !read2.ok ? 'unreadable' : row === null ? 'missing' : { id: row.id, project: row.project, state: row.state, claimedBy: row.claimedBy,
     program: row.program, wave: row.wave, waveOf: row.waveOf, episode: ep === null ? null : { e: ep.e, head: ep.head, pr: ep.pr } };
   const out = nextLandingNoticeOf({ facts, control, nowMs, run });
   if (out.kind === 'no-send') return finish({ kind: 'no-send', reason: out.reason, holdChanged });
@@ -54,10 +53,11 @@ export function applyLandingControlTx(coord: WatcherCoordPort, db: LandingContro
   const digest = createHash('sha256').update(out.identity).digest('hex');
   const subject = `next-to-land:#${out.pr}:${digest}`;
   phase.at = 'apply';
-  if (out.episode.kind === 'run' && row === null) throw new Error('landing cue: a run episode without its run');
-  const queued = out.episode.kind === 'run'
-    ? queueLandingNoticeTx(coord, row!, { detail: `landing:next:v1:${digest}`, at: nowMs, episode: out.episode.episode, toId: out.toId, subject, body: out.body })
-    : queueRunlessNoticeTx(coord, { toId: out.toId, kind: 'status', subject, body: out.body });
+  let queued: ReturnType<typeof queueRunlessNoticeTx>;
+  if (out.episode.kind === 'run') {
+    if (row === null) throw new Error('landing cue: a run episode without its run');
+    queued = queueLandingNoticeTx(coord, row, { detail: `landing:next:v1:${digest}`, at: nowMs, episode: out.episode.episode, toId: out.toId, subject, body: out.body });
+  } else queued = queueRunlessNoticeTx(coord, { toId: out.toId, kind: 'status', subject, body: out.body });
   if (queued.queued) return finish({ kind: 'queued', mailId: queued.mailId, deliveryId: queued.deliveryId, holdChanged });
   // The run arm's own `run-gone` is the episode predicate failing inside the transaction: the episode moved, nothing was sent.
   return finish(queued.why === 'run-gone' ? { kind: 'no-send', reason: 'episode-changed', holdChanged } : { kind: 'duplicate', holdChanged });

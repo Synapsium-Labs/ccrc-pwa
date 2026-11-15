@@ -3504,7 +3504,7 @@ export class CoordStore {
     const fenced = this.landingGuard();
     if (fenced !== null) return { kind: 'failure', failure: fenced };
     const phase: { at: LandingControlPhase } = { at: 'decide' };
-    try { return tx(this.db, () => applyLandingControlTx(this, this.db, () => this.landingFactsInner(input.project), input, phase)); }
+    try { return tx(this.db, () => applyLandingControlTx(this, () => this.landingFactsInner(input.project), input, phase)); }
     catch {
       const recovery = this.landingBoundary();
       if (phase.at === 'decide') return { kind: 'failure', failure: { error: 'landing-db-unavailable', recovery } };

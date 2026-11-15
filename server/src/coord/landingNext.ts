@@ -16,7 +16,7 @@ import type { LandingMutationFacts } from './landingWrites.js';
 /** Why no cue is sent: a binding refusal (its own word), a proven marker absence, or a recipient or episode that cannot be
  *  named. An eligibility refusal and nothing else: a durable prior mail is `duplicate` and an unproven operation `failure`. */
 export type NextLandingNoSendReason = LandingBindingReason
-  | 'inert' | 'run-unreadable' | 'run-not-merging' | 'episode-unreadable' | 'episode-changed' | 'recipient-missing' | 'creation-unrecorded';
+  | 'inert' | 'run-absent' | 'run-unreadable' | 'run-not-merging' | 'episode-unreadable' | 'episode-changed' | 'recipient-missing' | 'creation-unrecorded';
 
 /** The episode a cue is minted for: a run's verified `merging` entry, or the immutable creation of a no-run row. */
 export type NextLandingEpisode =
@@ -28,7 +28,9 @@ export interface NextLandingRun {
   id: number; project: string; state: string; claimedBy: string | null; program: string; wave: number; waveOf: number | null;
   episode: { e: number; head: string; pr: number | null } | null;
 }
-export interface NextLandingFacts { facts: LandingMutationFacts; control: LandingControlRead; nowMs: number; run: NextLandingRun | null }
+export interface NextLandingFacts { facts: LandingMutationFacts; control: LandingControlRead; nowMs: number;
+  /** `missing`: the run row is not there; `unreadable`: it is there and does not read. Two conditions, never one null. */
+  run: NextLandingRun | 'missing' | 'unreadable' }
 
 export type NextLandingNotice =
   | { kind: 'no-send'; reason: NextLandingNoSendReason }
@@ -63,7 +65,8 @@ export function nextLandingNoticeOf(f: NextLandingFacts): NextLandingNotice {
 
   let episode: NextLandingEpisode;
   if (entry.runId !== null) {
-    if (run === null || run.id !== entry.runId || run.project !== entry.project) return noSend('run-unreadable');
+    if (run === 'missing') return noSend('run-absent');
+    if (run === 'unreadable' || run.id !== entry.runId || run.project !== entry.project) return noSend('run-unreadable');
     if (run.state !== 'merging') return noSend('run-not-merging');
     if (run.claimedBy === null) return noSend('recipient-missing');
     if (run.episode === null || !Number.isSafeInteger(run.episode.e)) return noSend('episode-unreadable');

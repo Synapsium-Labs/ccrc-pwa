@@ -9,7 +9,7 @@ import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
 import type { LandingControlRead } from '../src/coord/radar.js';
 import type { LandingAdvance } from '../src/coord/landingEntry.js';
-import { nextLandingNoticeOf, type NextLandingFacts } from '../src/coord/landingNext.js';
+import { nextLandingNoticeOf, type NextLandingFacts, type NextLandingRun } from '../src/coord/landingNext.js';
 import { OUTSTANDING_DELIVERY_STATES, TERMINAL_DELIVERY_STATES, MAIL_SUBJECT_MAX_BYTES } from '../../shared/api.js';
 import { CONTROL_BASE_SHA, CONTROL_HEAD_SHA, CONTROL_NOW, controlRead, landingFactsOf, landingStoreOver } from './landingFixture.js';
 import { mkTmp, removeTmpFixtures } from './tmpHelpers.js';
@@ -78,7 +78,7 @@ const nextFacts = (control: LandingControlRead | undefined = controlAt(), over: 
   const read = runId === null ? null : coord.run(runId);
   const r = read !== null && read.ok ? read.run : null;
   const ep = runId === null ? null : coord.currentEpisode(runId);
-  const run = r === null ? null : { id: r.id, project: r.project, state: r.state, claimedBy: r.claimedBy, program: r.program, wave: r.wave,
+  const run = r === null ? 'missing' as const : { id: r.id, project: r.project, state: r.state, claimedBy: r.claimedBy, program: r.program, wave: r.wave,
     waveOf: r.waveOf, episode: ep === null ? null : { e: ep.e, head: ep.head, pr: ep.pr } };
   return { facts, control, nowMs: CONTROL_NOW, run, ...over };
 };
@@ -96,8 +96,8 @@ describe('nextLandingNoticeOf: recipient and tuple policy (pure)', () => {
     const e = f.facts.entries[0]!;
     expect(out.toId).toBe('coordinator-a');
     expect(out.runId).toBe(id);
-    expect(out.episode).toEqual({ kind: 'run', runId: id, episode: f.run!.episode!.e, toId: 'coordinator-a' });
-    expect(JSON.parse(out.identity)).toEqual(['landing-next', 1, P, e.id, 7, CONTROL_HEAD_SHA, HC, e.pinnedAt, 'run', id, f.run!.episode!.e, CONTROL_BASE_SHA, 'coordinator-a']);
+    expect(out.episode).toEqual({ kind: 'run', runId: id, episode: (f.run as NextLandingRun).episode!.e, toId: 'coordinator-a' });
+    expect(JSON.parse(out.identity)).toEqual(['landing-next', 1, P, e.id, 7, CONTROL_HEAD_SHA, HC, e.pinnedAt, 'run', id, (f.run as NextLandingRun).episode!.e, CONTROL_BASE_SHA, 'coordinator-a']);
     expect(out.body.startsWith(`Next-to-land cue for ${P} #7 at ${CONTROL_HEAD_SHA}, measured against base ${CONTROL_BASE_SHA}.`)).toBe(true);
     expect(out.body).toContain('This is not merge permission.');
     expect(out.body).toContain(out.identity);
@@ -106,9 +106,10 @@ describe('nextLandingNoticeOf: recipient and tuple policy (pure)', () => {
   it('refuses a recipient it cannot name: a missing, foreign or unreadable run, a run that left merging, no claimant, no episode', () => {
     atMerging();
     const f = nextFacts();
-    const run = f.run!;
+    const run = f.run as NextLandingRun;
     const reason = (over: Partial<NextLandingFacts>): string => { const o = nextLandingNoticeOf({ ...f, ...over }); return o.kind === 'send' ? 'send' : o.reason; };
-    expect(reason({ run: null })).toBe('run-unreadable');
+    expect(reason({ run: 'missing' })).toBe('run-absent');
+    expect(reason({ run: 'unreadable' })).toBe('run-unreadable');
     expect(reason({ run: { ...run, project: 'project-b' } })).toBe('run-unreadable');
     expect(reason({ run: { ...run, id: run.id + 1 } })).toBe('run-unreadable');
     expect(reason({ run: { ...run, state: 'awaiting-review' } })).toBe('run-not-merging');
@@ -122,7 +123,7 @@ describe('nextLandingNoticeOf: recipient and tuple policy (pure)', () => {
   it('a valid run with a null wave total is eligible, and the null passes through unchanged', () => {
     atMerging('coordinator-a', null);
     const f = nextFacts();
-    expect(f.run!.waveOf).toBeNull();
+    expect((f.run as NextLandingRun).waveOf).toBeNull();
     expect(sent(f).toId).toBe('coordinator-a');
   });
 
@@ -312,6 +313,30 @@ describe('applyLandingControl: the facts are revalidated inside the transaction 
     coord.db.prepare('UPDATE run_events SET detail = replace(detail, ?, ?) WHERE id = ?').run(e.head, 'e'.repeat(40), e.e);
     expect(coord.currentEpisode(id)!.head).toBe('e'.repeat(40));
     expect(apply(control)).toEqual({ kind: 'no-send', reason: 'episode-changed', holdChanged: false });
+    expect(cueMails()).toHaveLength(0);
+    expect(cueObservations()).toHaveLength(0);
+  });
+
+  it('a dependency edge added after evidence collection holds the line behind its target: no stale cue', () => {
+    atMerging();
+    const control = controlAt();
+    expect(coord.writeLandingAuthority({ kind: 'entry', project: P, pr: 8, pinnedSha: 'f'.repeat(40), handoffCommit: HC, setBy: 'creator-a' }, 3000)).toMatchObject({ ok: true });
+    const target = landingFactsOf(coord, P).entries.find((e) => e.pr === 8)!;
+    expect(coord.writeLandingAuthority({ kind: 'order', project: P, pr: 7, afterIds: [target.id], setBy: 'lane-b' }, 4000)).toMatchObject({ ok: true });
+    expect(apply(control)).toMatchObject({ kind: 'no-send', reason: 'head-mismatch' });
+    expect(cueMails()).toHaveLength(0);
+    expect(cueObservations()).toHaveLength(0);
+  });
+
+  it('a recovery hold or an identity conflict appearing after evidence collection sends nothing', () => {
+    atMerging();
+    const control = controlAt();
+    const entryId = landingFactsOf(coord, P).entries[0]!.id;
+    coord.db.prepare("INSERT INTO landing_subjects (id, project, pr, bindingKind, observedSeq) VALUES (99, ?, 99, 'no-run', 1)").run(P);
+    expect(apply(control)).toEqual({ kind: 'no-send', reason: 'recovery', holdChanged: false });
+    coord.db.prepare('DELETE FROM landing_subjects WHERE id = 99').run();
+    coord.db.prepare("INSERT INTO landing_subjects (id, project, pr, bindingKind, observedSeq) VALUES (?, ?, 99, 'no-run', 1)").run(entryId, P);
+    expect(apply(control)).toEqual({ kind: 'no-send', reason: 'recovery', holdChanged: false });
     expect(cueMails()).toHaveLength(0);
     expect(cueObservations()).toHaveLength(0);
   });

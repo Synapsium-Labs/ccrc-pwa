@@ -54,9 +54,14 @@ green survives, pending and unmeasured never clear red).
   (`rings/watcher-store-port.test.ts`) reds with `gone: applyLandingControl` while no watcher or lane file reaches the member,
   and the plan's own rule is to extend the port only for a member actually reached. Task 6 calls it from the radar sweep and adds
   the sorted entry then (between `advanceObserved` and `approvalById`).
-- departure: structural-db-handle. `landingControlTx.ts` takes the one statement it runs as a structural `LandingControlDb`
-  (`prepare().run()`), because `single-definition/core-vocab.test.ts` forbids any coord file but the store and `rundefsTx.ts` from
-  importing `node:sqlite` (even as a type) or naming `coord.db`.
+- departure: control-tx-takes-port (ruling 1 bend, recorded). The reused transaction-free notice bodies take the
+  `WatcherCoordPort`, so `applyLandingControlTx` takes it too; it receives no other private store field than the one
+  `landingFactsInner` closure. There is no separate `db` parameter: the body reads the handle as `const { db } = coord`, because
+  `single-definition/core-vocab.test.ts` (REACH) forbids the dotted `coord.db` spelling in any coord file but the store.
+- departure: run-absent-word. `NextLandingFacts.run` is `NextLandingRun | 'missing' | 'unreadable'` (not a nullable run), so a
+  run row that is not there answers `run-absent` and one that does not read (or names another run or project) answers
+  `run-unreadable`. The literal is `'missing'` because `single-definition/vocabularies.test.ts` reserves the quoted
+  `'absent' | 'unreadable'` pair for `shared/agent-protocol.ts`.
 - departure: facts-literals. Adding the required `creations` fact meant adding `creations: []` to the facts literals of
   `landed-decide`, `landing-writes`, `landing-control` and the two pinned literals of `landing-facts-scope`.
 
@@ -64,6 +69,11 @@ green survives, pending and unmeasured never clear red).
 - `rings/wire-totality.test.ts` is red on `LandingBindingReason` (`shared/landingLine.ts`): a literal union with no
   `Record<X, true>` map or guard. It comes from Task 3 and is untouched by this task; it needs a map and derived list in
   `shared/landingLine.ts` (not in this task's file list) or an exemption.
+- Step 2 rows `after` (an order edge added after collection) and `recovery` (a recovery subject, then an identity conflict) are in
+  the M21 block; M21 re-measured red on the episode mutant (`-t M21`: 1 failed, 6 passed) and green restored (7 passed).
+- The earlier OOM note: the slice that reported it was `landing-control` + `landing-next-mail` (92 passed, exit 0). Re-run with
+  `landing-line-order` added: 3 files, 140 passed, and the last run reported no OOM kill (an intermediate run of the same files
+  also passed, with the slice reporting kills by other processes at exit 0).
 - A run whose `waveOf` is null reaches the envelope as `(program:… wave N)` with no total; the pure rows assert the DTO and the real
   store row asserts the envelope.
 - Verification slots were shared with other work; two runs were moved to the background by the harness and one reported an
