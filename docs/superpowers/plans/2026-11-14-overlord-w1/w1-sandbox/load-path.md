@@ -7,7 +7,7 @@ the workspace and a `.claude/rules` file load too; no bypass dialog shows with t
 account's enabled plugin does not load under the pinned source. Three findings change what the hook can read: a resume
 writes no start attachment at all, the door's tools are offered directly (so `deferred_tools_delta` and
 `mcp_instructions_delta` are never written), and the transcript records the offered tool list, with each tool's server,
-in a `prompt_snapshot` attachment. Those three are put to the coordinator below; nothing in PR A widens a table on them.
+in a `prompt_snapshot` attachment. The coordinator ruled on those three (§4), and PR A builds the rulings.
 
 ## 1. How it was run
 
@@ -80,20 +80,26 @@ What this selects for Task 4, inside the plan's table (tightening only):
 | `instructions` | the window (from the recorded offset to the marker) |
 | `skill_listing` | the window; at a resume, the newest before it (measured: a resume does not write it) |
 | `agent_listing_delta` | the fold from the newest `compact_boundary` or the head to the window's end; `isInitial: true` starts it again |
-| `mcp_instructions_delta`, `deferred_tools_delta` | the fold, as above; **measured left out when there is nothing to list**, so absence after the marker is an empty list |
+| `prompt_snapshot` (`tools`, ruled) | the first tool-bearing one after the marker; `toolServers` from its tools' `server` (the delta kinds are left out when nothing is deferred, so they are not read) |
 | `hook_success` | the window; `hook_non_blocking_error`, the failing hook's kind, read beside it, each by its `command` |
 
-## 4. Put to the coordinator (none built on in PR A)
+## 4. Ruled by the coordinator (2026-11-15), and built in PR A
 
-1. **A resume writes no start attachment.** Under the plan's table, every `resume` start reads `instructions` and `hooks`
-   `unmeasured`, so it is never engaged: an Overlord whose pane is resumed (a swap, a supervised respawn) reads
-   `launch-profile-unmet` until its next fresh start. Reading those two kinds at a resume from the newest start before it
-   would loosen the table, so it is the coordinator's call.
-2. **The tool list lives in `prompt_snapshot`, not in the delta kinds.** With the door offered directly, the plan's
-   `toolServers` (from `mcp_instructions_delta`) and `deferredTools` read empty, and `tool-servers` fails on an empty set.
-   The tools M7 found carry their server, so `tools` and `tool-servers` could both read the first tool-bearing
-   `prompt_snapshot` after the marker, at the cost of waiting one step more for the report. That rewords the two
-   properties (M7's licence) and adds a kind and a gate to Task 4: put to the coordinator before it is built.
-3. **The own lists need a live read** (M5's caveat) before PR B judges a live start by them.
+1. **A resume writes no start attachment** (slug `resume-carries-its-own-start`). At a `resume`, `instructions` and
+   `hooks` are carried from the newest reported `startup` of the same transcript, and only when that start's report
+   recorded the same profile digest and the same Claude Code build (the hook keeps both in `$REG/<id>.loadlast`, written
+   on that report's 202) and the transcript is within the read bound. The resume still sends its own report, with its
+   own digest, build and every kind it measured, and names the start it carried from in `carriedFrom`. With no such
+   start, or any mismatch, both kinds read `unmeasured`. **Residual:** a linked file whose content is edited between the
+   start and the resume is not seen, since the carry reads the start's list and the hook hashes each file where it
+   stands. And a resume writes no `prompt_snapshot` either, so its `tools` and `toolServers` read `unmeasured`; a resumed
+   Overlord stays not engaged until a fresh start, as the plan's question 5 already says of a changed row.
+2. **Tools from the prompt snapshot** (slug `tools-read-from-the-prompt-snapshot`). The kind `tools` is the names of the
+   first tool-bearing `prompt_snapshot` after the marker, and `toolServers` the servers its tools name. The report waits
+   for that snapshot; on the hook's last try (or once a second request marker shows none came) it goes out with both
+   kinds `unmeasured`, never empty. The deferred-tools reading is dropped from the table.
+3. **The own lists are a rig lower bound** (slug `own-lists-are-a-rig-lower-bound`). Recorded here (M5) and beside
+   `CLAUDE_CODE_OWN_LISTS`; nothing in PR A judges against them, and the live read is a Needs-first of PR B, which the
+   coordinator carries.
 4. **A silent foreign SessionStart hook is invisible** to the `hooks` property; doctor's `overlord-mods` check (PR A2) is
    what sees it.

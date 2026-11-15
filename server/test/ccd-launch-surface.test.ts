@@ -8,6 +8,7 @@
 // The substrate is that suite's: `_spawn_start` in a fixture HOME with tmux recorded, both resume lines, the fleet pins.
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { execFileSync, spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { makeCcdHarness, ghContainedEnv, CCD, type CcdHarness } from './ccdWsHelpers.js';
@@ -62,6 +63,9 @@ const altFile = (edit: (rows: Record<string, any>) => unknown): string => {
   fs.writeFileSync(f, typeof out === 'string' ? out : JSON.stringify(out));
   return `LAUNCH_PROFILES_JSON='${f}';`;
 };
+/** The digest ccd computes over the doctored file's overlord row: real `jq -cS`, hashed here. */
+const altDigest = (): string => createHash('sha256')
+  .update(execFileSync('jq', ['-cS', '.overlord', path.join(h.home, 'alt-profiles.json')], { encoding: 'utf8' })).digest('hex');
 const rcOn = (): void => { fs.mkdirSync(path.join(h.home, '.ccrc'), { recursive: true }); fs.writeFileSync(path.join(h.home, '.ccrc', 'remote-control'), 'on\n'); };
 const route = (args: string, pre = ''): { status: number; out: string } => {
   try {
@@ -105,7 +109,7 @@ describe('a standing profiledigest renders the overlord surface whole (Review Fo
     seed(OVERLORD);
     const pre = altFile((rows) => { rows.overlord.remoteControl = 'on'; return rows; });
     const doctored = JSON.parse(fs.readFileSync(path.join(h.home, 'alt-profiles.json'), 'utf8')).overlord;
-    const d = execFileSync('bash', ['-c', `jq -cS '.overlord' '${path.join(h.home, 'alt-profiles.json')}' | sha256sum`], { encoding: 'utf8' }).split(' ')[0]!;
+    const d = altDigest();
     h.sh(`_reg_set ${ID} profiledigest '${d}'`);
     const l = spawn('new', pre).lines[0]!;
     expect(doctored.remoteControl).toBe('on');
@@ -116,7 +120,7 @@ describe('a standing profiledigest renders the overlord surface whole (Review Fo
     seed(OVERLORD);
     const f = path.join(h.home, 'alt-profiles.json');
     const pre = altFile((rows) => { rows.overlord.env = {}; rows.overlord.autoMemory = 'switch'; return rows; });
-    const d = execFileSync('bash', ['-c', `jq -cS '.overlord' '${f}' | sha256sum`], { encoding: 'utf8' }).split(' ')[0]!;
+    const d = altDigest();
     h.sh(`_reg_set ${ID} profiledigest '${d}'; _reg_set ${ID} automem on`);
     const l = spawn('new', pre).lines[0]!;
     expect(l).toContain(' --tools Agent,Skill ');
@@ -153,7 +157,7 @@ describe('each failure refuses the spawn: no pane, one journal line, rc 1 (Revie
     it(name, () => {
       seed([['profile', 'overlord']]);
       const pre = altFile(edit);
-      const d = execFileSync('bash', ['-c', `jq -cS '.overlord' '${path.join(h.home, 'alt-profiles.json')}' | sha256sum`], { encoding: 'utf8' }).split(' ')[0]!;
+      const d = altDigest();
       h.sh(`_reg_set ${ID} profiledigest '${d}'`);
       const out = spawn('new', pre);
       expect(out.status).not.toBe(0);
@@ -194,8 +198,8 @@ describe('the route field (Task 3)', () => {
   });
   it('_route_any does not count a row whose only fields are profile and profiledigest as routed', () => {
     seed(OVERLORD);
-    expect(spawnSync('bash', ['-c', `source "${CCD}"; _route_any ${ID}`], { env: h.env(), cwd: h.home }).status).toBe(1);
+    expect(spawnSync('bash', ['-c', `source "${CCD}"; _route_any ${ID}`], { env: ghContainedEnv(h.home, h.env(), { systemd: true, tmux: true }), cwd: h.home }).status).toBe(1);
     h.sh(`_reg_set ${ID} effort high`);
-    expect(spawnSync('bash', ['-c', `source "${CCD}"; _route_any ${ID}`], { env: h.env(), cwd: h.home }).status).toBe(0);
+    expect(spawnSync('bash', ['-c', `source "${CCD}"; _route_any ${ID}`], { env: ghContainedEnv(h.home, h.env(), { systemd: true, tmux: true }), cwd: h.home }).status).toBe(0);
   });
 });

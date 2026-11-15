@@ -28,19 +28,21 @@ beforeAll(() => {
 });
 afterAll(() => { fs.rmSync(home, { recursive: true, force: true }); });
 
-const env = (): NodeJS.ProcessEnv => ({
-  ...process.env, HOME: home, PATH: `${path.join(home, 'bin')}:${process.env['PATH'] ?? ''}`,
-  TMUX_PANE: `%${TOP}`, CLAUDE_CODE_SESSION_ID: 'uuid-1', CLAUDE_PID: '4242', CCRC_SESSION_GENERATION: GENERATION,
+/** The runner's own environment, less the pin's two variables, so a case sets exactly the pin it names. */
+const { CLAUDE_CODE_SUBAGENT_MODEL: _m, CLAUDE_CODE_SUBAGENT_MODEL_FORCE: _f, ...BASE_ENV } = process.env;
+const env = (extra: Record<string, string> = {}): NodeJS.ProcessEnv => ({
+  ...BASE_ENV, HOME: home, PATH: `${path.join(home, 'bin')}:${process.env['PATH'] ?? ''}`,
+  TMUX_PANE: `%${TOP}`, CLAUDE_CODE_SESSION_ID: 'uuid-1', CLAUDE_PID: '4242', CCRC_SESSION_GENERATION: GENERATION, ...extra,
 });
-const run = (stdin: string): string => {
-  const r = spawnSync('bash', [HOOK], { input: stdin, encoding: 'utf8', env: env() });
+const run = (stdin: string, extra: Record<string, string> = {}): string => {
+  const r = spawnSync('bash', [HOOK], { input: stdin, encoding: 'utf8', env: env(extra) });
   expect(r.status, 'exit 0 on every path').toBe(0);
   expect(r.stderr, 'silent on stderr').toBe('');
   return r.stdout.trim();
 };
 /** The deny reason, or null when the hook printed no deny. */
-const fire = (tool: string, input: unknown): string | null => {
-  const out = run(JSON.stringify({ hook_event_name: 'PreToolUse', tool_name: tool, tool_input: input, cwd: CWD }));
+const fire = (tool: string, input: unknown, extra: Record<string, string> = {}): string | null => {
+  const out = run(JSON.stringify({ hook_event_name: 'PreToolUse', tool_name: tool, tool_input: input, cwd: CWD }), extra);
   if (out === '') return null;
   const e = JSON.parse(out) as { hookSpecificOutput: { permissionDecision?: string; permissionDecisionReason?: string } };
   return e.hookSpecificOutput.permissionDecision === 'deny' ? String(e.hookSpecificOutput.permissionDecisionReason) : null;
@@ -60,6 +62,23 @@ describe('an Agent or Task call must name its model (D-6798)', () => {
   });
   it('a Task with a model is allowed', () => {
     expect(fire('Task', { prompt: 'p', model: 'sonnet' })).toBeNull();
+  });
+});
+
+describe('the pin: a session launched with the subagent model forced (Overlord W1 sandbox, question 14)', () => {
+  const PIN = { CLAUDE_CODE_SUBAGENT_MODEL_FORCE: '1', CLAUDE_CODE_SUBAGENT_MODEL: 'sonnet' };
+  it.each(['Agent', 'Task'])('FORCE with a model set allows a model-less %s call: it runs on the pinned model', (tool) => {
+    expect(fire(tool, { description: 'x', prompt: 'do it', subagent_type: 'overlord-reader' }, PIN)).toBeNull();
+  });
+  it('FORCE alone, the model alone, or FORCE other than 1 denies it as before', () => {
+    for (const extra of [{ CLAUDE_CODE_SUBAGENT_MODEL_FORCE: '1' }, { CLAUDE_CODE_SUBAGENT_MODEL: 'sonnet' },
+      { CLAUDE_CODE_SUBAGENT_MODEL_FORCE: 'true', CLAUDE_CODE_SUBAGENT_MODEL: 'sonnet' }]) {
+      expect(fire('Agent', { prompt: 'p' }, extra), JSON.stringify(extra)).toMatch(/names no model/);
+    }
+  });
+  it('a Workflow call with no model is denied either way', () => {
+    expect(fire('Workflow', { script: "await agent('do it')" }, PIN)).not.toBeNull();
+    expect(fire('Workflow', { script: "await agent('do it')" })).not.toBeNull();
   });
 });
 

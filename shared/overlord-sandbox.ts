@@ -16,10 +16,12 @@ export const SANDBOX_PROPERTIES = [
 ] as const;
 export type SandboxProperty = (typeof SANDBOX_PROPERTIES)[number];
 
-/** The kinds a loads report carries, one per start attachment the hook reads (Task 1, M4 and M7). Each is the sorted list
- *  the hook measured, or the word `unmeasured`: a kind the transcript window did not hold, could not be read, or held in a
- *  shape this build does not know. */
-export const START_LOAD_KINDS = ['instructions', 'hooks', 'skills', 'agents', 'toolServers', 'deferredTools'] as const;
+/** The kinds a loads report carries (Task 1, M4 and M7). Each is the sorted list the hook measured, or the word
+ *  `unmeasured`: a kind the transcript window did not hold, could not be read, or held in a shape this build does not know.
+ *  `tools` is the offered tool list of the first tool-bearing `prompt_snapshot` after the start's first request, and
+ *  `toolServers` the servers its tools name (ruled 2026-11-15, slug `tools-read-from-the-prompt-snapshot`: the door's tools
+ *  are offered directly, so no deferred-tools kind is read). */
+export const START_LOAD_KINDS = ['instructions', 'hooks', 'skills', 'agents', 'tools', 'toolServers'] as const;
 export type StartLoadKind = (typeof START_LOAD_KINDS)[number];
 
 /** The word a kind carries when it was not measured. Never read as an empty list (Review Focus 3). */
@@ -64,6 +66,10 @@ export interface StartLoadsBody {
   /** Whether the payload's `cwd` lies in the registry row's `workdir`, or null when unmeasured. */
   readonly cwdInWorkspace: boolean | null;
   readonly loaded: Readonly<Record<StartLoadKind, LoadedKind>>;
+  /** At a resume, the `reportId` of the newest reported `startup` of the same transcript whose digest and build equal this
+   *  report's, when `instructions` or `hooks` was carried from it (ruled 2026-11-15, slug `resume-carries-its-own-start`);
+   *  absent otherwise. */
+  readonly carriedFrom?: string;
   readonly reportedAt: number;
 }
 
@@ -71,10 +77,11 @@ export interface StartLoadsBody {
  *  were measured on (question 4, slug `claude-code-own-lists-are-keyed-by-build`). The check allows exactly the profile's
  *  names plus the report build's lists; a build with no entry reads `skills` and `agents` `unmeasured`, naming the build.
  *
- *  Measured in the W0 rig (Task 1, M5: `docs/superpowers/plans/2026-11-14-overlord-w1/w1-sandbox/load-path.md`) under the
- *  Overlord's pinned launch against the mock API: the `agent_listing_delta` attachment's `builtInTypes` and the
- *  `skill_listing` names less the profile's own. A live account can list more bundled skills than the mock does (the
- *  note's M5 caveat), so a name outside these lists fails the check rather than passing it. */
+ *  A RIG LOWER BOUND (ruled 2026-11-15, slug `own-lists-are-a-rig-lower-bound`): measured in the W0 rig (Task 1, M5:
+ *  `docs/superpowers/plans/2026-11-14-overlord-w1/w1-sandbox/load-path.md`) under the Overlord's pinned launch against the
+ *  mock API, from the `agent_listing_delta` attachment's `builtInTypes` and the `skill_listing` names less the profile's
+ *  own. A live account lists more bundled skills than the mock does, so nothing in PR A judges against these lists, and a
+ *  live read is a Needs-first of PR B. */
 export const CLAUDE_CODE_OWN_LISTS: Readonly<Record<string, { readonly agents: readonly string[]; readonly skills: readonly string[] }>> = {
   '2.1.323': {
     agents: ['Explore', 'Plan', 'general-purpose'],

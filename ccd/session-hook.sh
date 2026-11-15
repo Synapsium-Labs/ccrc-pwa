@@ -4019,10 +4019,18 @@ _hook_launch_record_append() {   # $lrc_line (a row, or a drop row, one TAB, the
 # so no purge orphans it. It holds no authority, is never read as truth, prints nothing, and no path through it changes
 # this hook's exit code or stdout.
 START_PENDING_MAX=20 START_RESEND_TRIES=5 START_RESEND_BACKOFF_MS=30000 START_STALE_BACKOFF_MS=5000 START_BUDGET_MS=4000
-_hook_start_send() {   # <report JSON> <deadline ms> -> 0 taken; 1 stale-uuid; 2 no answer; 3 refused for good; 4 kept and tried; 5 no time
+# THE LOADS REPORT'S PENDING FILE (Overlord W1 sandbox, Task 4): at a `startup` or `resume` SessionStart of a session ccd
+# launched under a surface (`CCRC_LAUNCH_PROFILE`), `$REG/<id>.loadpending` holds the tries, the start report's `reportId`,
+# the transcript's byte size now (the window's start), the source and the transcript's path. Written without the registry
+# lock, like `startpending`, so `_reg_purge` takes it a second time after `generation`; looked at again here.
+_hook_loads_pend() {   # <reportId> -> 0 always
+  local tp sz=0; tp=$(jq -r '.transcript_path | strings' <<<"$payload" 2>/dev/null); [[ "$tp" == /* ]] || return 0; [[ -f "$tp" ]] && sz=$(wc -c < "$tp" 2>/dev/null | tr -d ' ')
+  printf '0\t%s\t%s\t%s\t%s\n' "$1" "${sz:-0}" "$src" "$tp" > "$REG/$id.loadpending" 2>/dev/null; [[ -e "$REG/$id.generation" ]] || rm -f -- "$REG/$id.loadpending" 2>/dev/null
+}
+_hook_start_send() {   # <report JSON> <deadline ms> [<verb>, default start] -> 0 taken; 1 stale-uuid; 2 no answer; 3 refused for good; 4 kept and tried; 5 no time
   local out left=$(( $2 - $(_hook_epoch_ms) ))
   (( left >= 1000 )) || return 5
-  out=$(printf '%s\n' "$1" | CCRC_API_STATUS=line _hook_timeout "$(( left / 1000 )).$(( left % 1000 / 100 ))" "$HOME/.local/bin/ccrc-api" sessions start "$id" --json - 2>&1)
+  out=$(printf '%s\n' "$1" | CCRC_API_STATUS=line _hook_timeout "$(( left / 1000 )).$(( left % 1000 / 100 ))" "$HOME/.local/bin/ccrc-api" sessions "${3:-start}" "$id" --json - 2>&1)
   case "$?" in 0) ;; 2) return 4 ;; 124) HOOK_NET_HUNG=1; return 2 ;; *) return 2 ;; esac
   case "$out" in *'http 202'*) return 0 ;; *'"stale-uuid"'*) return 1 ;; *'http 40'[14]*|*'http 5'[0-9][0-9]*) return 4 ;; *'http 4'[0-9][0-9]*) return 3 ;; *) return 2 ;; esac
 }
@@ -4033,7 +4041,7 @@ _hook_start_keep() {   # <tries> <report JSON> <send rc, 6 unsent, 7 stale under
   (( t >= START_RESEND_TRIES )) && drop=$(( drop + 1 )) || stay+=("$t"$'\t'"$2")
 }
 _hook_start_report() {
-  local f="$REG/$id.startpending" now dl after=0 drop=0 t j r rc=6 pass=1 why=0 body="" inc="" e kept=() stay=()
+  local f="$REG/$id.startpending" now dl after=0 drop=0 t j r rc=6 pass=1 why=0 body="" inc="" e kept=() stay=() rid
   case "$event" in UserPromptSubmit|SessionStart) ;; *) return 0 ;; esac
   [[ -z "$paid" && "$id" =~ ^[A-Za-z0-9_-]+$ && -f "$REG/$id.generation" && ! -L "$f" ]] || return 0
   { [ -e "$REG/$id.child" ] || [ -L "$REG/$id.child" ]; } && return 0
@@ -4045,7 +4053,8 @@ _hook_start_report() {
   if [[ "$event" == SessionStart && "$src" != fork ]]; then
     # `_reg_generation_valid`'s grammar (ccd/ccd), which `REG_GENERATION_SHAPE` (shared/api.ts) holds for the server.
     [[ "${CCRC_SESSION_GENERATION:-}" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]] && inc="$CCRC_SESSION_GENERATION"
-    body=$(jq -c --arg id "$id" --arg rid "$now-$$-$RANDOM" --arg inc "$inc" --argjson at "$now" \
+    rid="$now-$$-$RANDOM"; [[ -n "${CCRC_LAUNCH_PROFILE:-}" && ( "$src" == startup || "$src" == resume ) ]] && _hook_loads_pend "$rid"
+    body=$(jq -c --arg id "$id" --arg rid "$rid" --arg inc "$inc" --argjson at "$now" \
       '(.session_id // "" | tostring) as $u | {fromId: $id, fromUuid: $u, startedUuid: $u, reportId: $rid,
         source: (.source // "" | tostring | if . == "" then "other" else .[0:32] end),
         model: (.model | if type == "string" then .[0:128] elif type == "object" and (.id | type) == "string" then .id[0:128] else null end),
@@ -5853,6 +5862,10 @@ if [[ "$event" == PreToolUse && "$pre_json" != *'"permissionDecision":"deny"'* \
           end
       else "" end' <<<"$payload" 2>/dev/null) || fo=""
   fi
+  # THE PIN (Overlord W1 sandbox, question 14; slug no-model-arm-reads-the-pin): under CLAUDE_CODE_SUBAGENT_MODEL_FORCE=1 the
+  # payload carries no `model` even when the call named one (W0-11), and the call runs on CLAUDE_CODE_SUBAGENT_MODEL, so an
+  # Agent or Task call is not judged while both stand in this session's environment. A Workflow call is judged as before.
+  [[ "$fo" == agent && "${CLAUDE_CODE_SUBAGENT_MODEL_FORCE:-}" == 1 && -n "${CLAUDE_CODE_SUBAGENT_MODEL:-}" ]] && fo=""
   if [[ "$fo" == agent || "$fo" == workflow ]]; then
     if [[ "$fo" == agent ]]; then foname="names no model"; else foname="has an agent() call that names no model or no effort (a haiku call needs no effort)"; fi
     foreason="ccrc: this ${tool} call ${foname}, so it would run at the lane default (operator ruling 2026-10-24; D-6798). Name them from the routing matrix: pass model (opus, sonnet or haiku) on an Agent or Task call, and model on every agent() call in a Workflow script, and effort too unless the model is haiku (haiku takes no effort level). Take the row for the work: a mechanical task is haiku or sonnet, judgement is opus."
@@ -6404,6 +6417,43 @@ _hook_approval_wait() {
   done
 }
 if [[ "$event" == PermissionRequest && -n "$apr" ]]; then _hook_approval_wait || true; fi
+# ── THE LOADS REPORT (Overlord W1 sandbox, Task 4; spec §3.6 H4; slugs loaded-sets-read-from-the-transcript,
+# start-loads-is-its-own-report, resume-carries-its-own-start, tools-read-from-the-prompt-snapshot) ─────────────────────
+# At each main-thread `Stop` while `loadpending` stands, `start_loads` (ccd/lib/transcript.jq) reads the transcript, at
+# most LOADS_MAX_BYTES within the hook's 3 s bound: the window from the recorded offset to the first-request marker and
+# the tool-bearing prompt snapshot after it, and what came before it for the listings. Until the window holds them the
+# file is kept and a try counted; the last try sends without waiting for the snapshot, and a try past LOADS_TRIES drops
+# the file (the start then reads not engaged). The body is computed ONCE and spooled as the file's second line, so every
+# resend is the same bytes with the same `reportId`. Instruction files are hashed where they stand and hook commands by
+# their text, never sent. At a resume, instructions and hooks are carried from the newest reported `startup` of the same
+# transcript only when its digest and build equal this session's (`loadlast`, written on its 202), named `carriedFrom`.
+# Sent through `_hook_start_send`: a 202 removes the file, a 404 (an older server, or `unknown-start`), 401, 5xx, no
+# answer or `stale-uuid` keeps it and counts a try, any other 4xx drops it. Prints nothing; never changes the exit code.
+LOADS_TRIES=5 LOADS_MAX_BYTES=16777216
+_hook_start_loads() {   # 0 on every path
+  local f="$REG/$id.loadpending" t rid off sc tp body="" out="" c="" lr="" ld="" lb="" lo="" lt="" ver wd="" e hs=() r
+  [[ "$event" == Stop && -z "$paid" && -f "$f" && ! -L "$f" ]] || return 0
+  { IFS=$'\t' read -r t rid off sc tp; IFS= read -r body; } < "$f" 2>/dev/null
+  [[ "$t" =~ ^[0-9]+$ && "$off" =~ ^[0-9]+$ && "$tp" == /* ]] || { rm -f -- "$f"; return 0; }
+  ver="${CLAUDE_CODE_EXECPATH:-}"; ver="${ver##*/}"; [[ "$ver" =~ ^[0-9][0-9A-Za-z.+-]{0,31}$ ]] || ver=""
+  if [[ -z "$body" ]]; then
+    [[ "$sc" == resume && -f "$REG/$id.loadlast" ]] && IFS=$'\t' read -r lr ld lb lo lt < "$REG/$id.loadlast" 2>/dev/null && [[ "$lt" == "$tp" && "$ld" == "${CCRC_LAUNCH_PROFILE#*:}" && -n "$ver" && "$lb" == "$ver" && "$lo" =~ ^[0-9]+$ ]] && (( lo <= off )) && c=1
+    (( $(wc -c < "$tp" 2>/dev/null || echo "$LOADS_MAX_BYTES"1) <= LOADS_MAX_BYTES )) && out=$(_hook_timeout 3 jq -L "$ROSTER_CARD_LIB" -nc --rawfile h <(head -c "$off" "$tp") --rawfile w <(tail -c "+$(( off + 1 ))" "$tp") --rawfile c <([[ -z "$c" ]] || { tail -c "+$(( lo + 1 ))" "$tp" | head -c "$(( off - lo ))"; }) --arg s "$sc" --argjson last "$(( t + 1 >= LOADS_TRIES ))" 'include "transcript"; start_loads($h; $w; $c; $s; $last == 1)' 2>/dev/null)
+    if [[ "$out" == *'"state":"ready"'* ]]; then
+      while IFS= read -r -d '' e; do if [[ "$e" == F* ]]; then hs+=("$(_apr_sha256 < "${e#F}" 2>/dev/null || echo x)"); else hs+=("$(printf '%s' "${e#C}" | _apr_sha256 || echo x)"); fi; done < <(jq -L "$ROSTER_CARD_LIB" -j 'include "transcript"; loads_hash_items' <<<"$out" 2>/dev/null)
+      [[ -f "$REG/$id.workdir" ]] && IFS= read -r wd < "$REG/$id.workdir"
+      body=$(jq -L "$ROSTER_CARD_LIB" -c --argjson o "$out" --arg id "$id" --arg rid "$rid" --arg lp "${CCRC_LAUNCH_PROFILE:-}" --arg rc "${CCRC_LAUNCH_RC:-}" --arg ver "$ver" --arg wd "$wd" --arg cf "${c:+$lr}" --argjson at "$(_hook_epoch_ms)" 'include "transcript"; loads_body($o; $ARGS.positional; $id; $rid; $lp; $rc; $ver; $wd; $cf; $at)' --args ${hs[@]+"${hs[@]}"} <<<"$payload" 2>/dev/null) || body=""
+    fi
+    [[ -n "$body" ]] || { (( t + 1 >= LOADS_TRIES )) && rm -f -- "$f" || printf '%s\t%s\t%s\t%s\t%s\n' "$(( t + 1 ))" "$rid" "$off" "$sc" "$tp" > "$f"; return 0; }
+  fi
+  _hook_start_send "$body" "$(( $(_hook_epoch_ms) + 3000 ))" loads; r=$?
+  if (( r == 0 )); then rm -f -- "$f"; [[ "$sc" == startup ]] && printf '%s\t%s\t%s\t%s\t%s\n' "$rid" "${CCRC_LAUNCH_PROFILE#*:}" "$ver" "$off" "$tp" > "$REG/$id.loadlast"
+  elif (( r == 3 || t + 1 >= LOADS_TRIES )); then rm -f -- "$f"
+  else printf '%s\t%s\t%s\t%s\t%s\n%s\n' "$(( t + 1 ))" "$rid" "$off" "$sc" "$tp" "$body" > "$f"; fi
+  [[ -e "$REG/$id.generation" ]] || rm -f -- "$f" "$REG/$id.loadlast" 2>/dev/null
+  return 0
+}
+_hook_start_loads || true
 # The two compaction arms run LAST, after the `working`/`done` stamp is on
 # disk: each calls the helper under one locally resolved deadline, and the
 # state write must never wait on either. Nothing below prints except one PreCompact payload: the refusal arm's block decision (`_hook_compact_refuse`, dark until the route says refuse; Overlord C39),
