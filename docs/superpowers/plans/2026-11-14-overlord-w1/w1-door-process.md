@@ -722,7 +722,7 @@ generation. The key is never in the line.
   is set. It refuses a symlink or a file that is not regular, reads with a bound, parses the first line with `local
   LC_ALL=C IFS=' '`, and prints the text while `until` is ahead of now, else `ccrc-delta: unknown (the door process's
   cache is stale)`. It makes no network call. Its line joins the event's one envelope, after the prompt anchor.
-- Test: the anchor's suite (the `delta` form), `server/test/door-process.test.ts` (the cache),
+- Test: `server/test/continuity-anchor.test.ts` (the `delta` form, a new `AnchorTextForm`), `server/test/door-process.test.ts` (the cache),
   `server/test/session-hook-door-delta.test.ts` (new).
 
 - [ ] **Step 1: Failing tests.**
