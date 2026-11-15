@@ -454,6 +454,26 @@ describe('terminal repair: a fresh terminal answer retires an unreadable row and
       expect(dump(r.store)).toEqual(before);
     });
 
+    // M17 identity (blank project): `landing_entries` accepts any text for `project`, and the store reads rows `WHERE project = ?`
+    // under whatever key it is given, so a row whose project is empty or padded is read under that same key and reaches the
+    // verdict. It is otherwise eligible (the control below), and the project term alone excludes it.
+    it.each([['an empty project', ''], ['a padded project', ' project-a ']])('%s is the identity exclusion, never a repair', (_n, key) => {
+      pinned(coord);
+      coord.db.prepare("UPDATE landing_entries SET handoffCommit = 'not-a-hash' WHERE pr = 7").run();
+      expect(verdict(coord)?.kind, 'the control: otherwise eligible').toBe('eligible');
+      coord.db.prepare('UPDATE landing_entries SET project = ? WHERE pr = 7').run(key);
+      expect(verdict(coord, 7, key)).toEqual({ kind: 'blocked', reason: 'identity' });
+      const before = dump(coord);
+      const e = entryOf(coord, 7, key);
+      const pair = (token?: string): LandingLand => land({ project: key, pr: 7,
+        expect: { id: e.id, pinnedAt: e.pinnedAt, ...(token === undefined ? {} : { repairToken: token }) } });
+      for (const attempt of [pair(FORGED), pair()]) {
+        const out = coord.advanceLanding(attempt);
+        expect(out.ok && out.landing.kind, JSON.stringify(out)).toBe('kept');
+      }
+      expect(dump(coord)).toEqual(before);
+    });
+
     it.each([
       ['a subject of the same project that names the row\'s PR under another id', (_id: number) => `(50, '${P}', 7`],
       ['a subject of another project that names the row\'s id', (id: number) => `(${id}, '${Q}', 5`],

@@ -356,15 +356,15 @@ describe('the landing line has one writer (landing order wave 5e, D-7614)', () =
     });
 
     it('the close refuses a parameter shadow, a reassignment, a second producer, a computed or unresolved expression', () => {
-      for (const [what, text] of [
-        ['a parameter named land', closeProbe(`  ${PRODUCER}`, 'land: LandingLand')],
-        ['a let binding', closeProbe('  let land = closeLandingOf({ state });')],
-        ['a reassignment', closeProbe(`  ${PRODUCER}\n  (land as unknown) = other;`)],
-        ['a second producer', closeProbe(`  ${PRODUCER}\n  { const land = makeOther(); void land; }`)],
-        ['an inner shadow', closeProbe(`  ${PRODUCER}\n  if (state) { const land = other; void land; }`)],
-        ['an alias of a cast', closeProbe('  const made = other as LandingLand;\n  const land = made;')],
-        ['no binding', closeProbe('  void 0;')],
-      ] as const) expect(() => assertLandingCallerBindings(text, CLOSE), what).toThrow(/closeLandingOf/);
+      for (const [what, text, phrase] of [
+        ['a parameter named land', closeProbe(`  ${PRODUCER}`, 'land: LandingLand'), /parameter/],
+        ['a let binding', closeProbe('  let land = closeLandingOf({ state });'), /not a const/],
+        ['a reassignment', closeProbe(`  ${PRODUCER}\n  (land as unknown) = other;`), /reassigned/],
+        ['a second producer', closeProbe(`  ${PRODUCER}\n  { const land = makeOther(); void land; }`), /declarations/],
+        ['an inner shadow', closeProbe(`  ${PRODUCER}\n  if (state) { const land = other; void land; }`), /declarations/],
+        ['an alias of a cast', closeProbe('  const made = other as LandingLand;\n  const land = made;'), /cast/],
+        ['no binding', closeProbe('  void 0;'), /declarations/],
+      ] as const) expect(() => assertLandingCallerBindings(text, CLOSE), what).toThrow(phrase);
       const computed = `function landOnClose(deps: D): void {\n  deps.coord.advanceLanding(pick());\n}\n`;
       expect(() => assertLandingCallerBindings(computed, CLOSE), 'a computed argument').toThrow(/closeLandingOf/);
       const element = `function landOnClose(deps: D): void {\n  const lands = [closeLandingOf({})];\n  deps.coord.advanceLanding(lands[0]);\n}\n`;

@@ -58,7 +58,7 @@
 | M17 binding | binding exclusion removed | same shape, reason `binding` (3 failed) | task-4 | no |
 | M17 token | token comparison removed | `kind: 'landed'` received where `moved` expected (4 failed) | task-4 | no |
 | M17 identity (invalid run id) | `!p.runIdOk` removed from the identity exclusion | `an invalid run id`: `expected { kind: 'blocked', reason: 'binding' } to deeply equal { kind: 'blocked', reason: 'identity' }`; 1 failed, 17 passed | task-7 (measured here) | n/a |
-| M17 identity (blank project) | `!nonblank(row.project)` removed | SURVIVES: 29 passed with the term removed (`exclusions\|identity\|blank` over land-store, writes, entry-store). A blank `project` is the read key, so no store row reaches it; see Limitations | task-7 | n/a |
+| M17 identity (blank project) | `!nonblank(row.project)` removed | Fix round 1: the first measurement (existing cases only) SURVIVED, 29 passed. After the new real-store cases `an empty project` / `a padded project is the identity exclusion, never a repair` (`landing-land-store.test.ts`; project `''` and `' project-a '`, otherwise eligible, read under that same key): 2 failed, each `AssertionError: expected { kind: 'eligible', ...(1) } to deeply equal { kind: 'blocked', reason: 'identity' }`; restored from the saved copy, 2 passed | task-7 | n/a |
 | M17 retained-fields | the per-column, kind, base, afterIds, fixes, pinnedAt, ejections checks removed (only the token-absent check stays) | 7 failed: `an unreadable afterIds`, `an unreadable ejection counter`, `an unreadable pin time`, `an oversized pin time`, `an unreadable fixesMain`, `an unreadable base`, `an unreadable ejection kind`, each `expected { kind: 'eligible', ... } to deeply equal { kind: 'blocked', ... }`; restored, 18 passed | task-7 | n/a |
 | M18 | ambient read caught in `readLanding` | `expected [Function] to throw error including 'fixture select fault' but got 'database is not open'` | task-4 | no |
 | M19 | dedupe on outstanding mail only / unique observation | `expected { kind: 'queued', ... } to deeply equal { kind: 'duplicate', ... }` (acked, rejected rows; 4 rows for the run arm) | task-5 | no |
@@ -87,10 +87,8 @@ run-absent-word, facts-literals. task 6: new-l1-view-file, shared-landing-line-u
 Task 7: none beyond the above; the census scan treats `Date.parse` as no clock read (`landed.ts` is unchanged).
 
 ## Limitations
-- The blank-project half of the M17 identity exclusion survives its mutant: no store row can carry a blank project into the
-  read of a non-blank project, and the verdict function is private. Pinning it needs a case in `landing-land-store.test.ts`
-  (a file outside this task's list); left for the controller's decision.
 - Static census: `assertLandingCallerBindings` is syntax only; a call through an alias of `advanceLanding` or a computed member
   is out of width (the census of callers counts calls by name).
 - Every mutation run on this box took minutes under load; the harness moves a foreground command to the background after 180 s,
   so the Step 6 groups were waited on by a foreground poll of the run's own output file, not started twice.
+- Fix round 1: the close-probe rejection rows now match each rejection's own phrase (`parameter`, `not a const`, `reassigned`, `declarations`, `cast`).
