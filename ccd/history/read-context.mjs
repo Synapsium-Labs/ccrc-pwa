@@ -120,3 +120,11 @@ export function readFailure(e, storeId, id, gen, idx = NO_PAIRS) {
   errLine(`ccrc history: ${f.reason}: ${e.message}`, idx);
   return refusal(f.exit, f.reason, storeId, id, gen);
 }
+
+/** Every (len, sha256) pair the sweep recorded in redact_hashes, as lib's makePairIndex takes them (§8.3 layer 1). It reads
+ *  the store alone, never a secret file: cli.mjs's pairIndexOf adds the pairs of the files it loads now, and the Overlord's
+ *  read builds its belt from these alone (the store-only belt, ruled F4). */
+export function recordedPairsOf(db) {
+  return db.prepare('SELECT len, sha256 FROM redact_hashes').all()
+    .map((r) => ({ len: Number(r.len), sha256: Buffer.from(r.sha256).toString('hex') }));
+}

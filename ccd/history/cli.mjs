@@ -68,7 +68,7 @@ import { spawn as spawnOp } from 'node:child_process';
 import { isatty as isattyOp } from 'node:tty';
 import { recoverStepAt as opRecoverStepAt, storedVersionAt as opStoredVersionAt } from './store.mjs';
 import {
-  readTrimmed, settleWithin, measureReach, cliFactsOf, NO_PAIRS, errLine, refusal, refusalStoreId, readFailure,
+  readTrimmed, settleWithin, measureReach, cliFactsOf, NO_PAIRS, errLine, refusal, refusalStoreId, readFailure, recordedPairsOf,
 } from './read-context.mjs';
 
 process.umask(0o077);
@@ -499,8 +499,7 @@ export function tmuxSession(pane) {
  *  this module sets the process umask to 0o077 and loads sweep.mjs, recall.mjs and store.mjs; main runs only behind
  *  the entry guard, this file's last statement. */
 export function pairIndexOf(db, home) {
-  const recorded = db.prepare('SELECT len, sha256 FROM redact_hashes').all()
-    .map((r) => ({ len: Number(r.len), sha256: Buffer.from(r.sha256).toString('hex') }));
+  const recorded = recordedPairsOf(db);
   const sources = db.prepare('SELECT v FROM meta WHERE k = ?').get(REDACT_SOURCES_META);
   const loaded = loadSecrets(home, parseRedactSources(sources?.v));
   return makePairIndex([...recorded, ...loaded.pairs], makeBelt(beltUnits(loaded.values)));
