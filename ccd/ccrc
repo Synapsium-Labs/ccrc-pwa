@@ -8558,7 +8558,7 @@ _acct_enable() {   # [--id X] [--force]
 # is measured by `check`, so it refuses `not-a-token-lane`. `--placement full|overflow`: whether fresh sessions may
 # be placed on the lane (`homeAble`), under the placement lock, refused `last-home-able` for the only placeable lane.
 _acct_set() {
-  local id="" stated=0 placement="" v="" was_placeable=0 f="" done_note="" method="" attempt=""
+  local id="" stated=0 placement="" v="" was_placeable=0 f="" done_note="" method="" attempt="" billing="" continuity=""
   while [ $# -gt 0 ]; do
     case "$1" in
       -h|--help) usage; exit 0 ;;
@@ -8574,7 +8574,13 @@ _acct_set() {
       --stated=*) _acct_refuse 2 stated-not-stdin "the flag --stated takes exactly \"-\" and reads the words from stdin: on an argv they would be readable by every process on this box. Nothing was written." ;;
       --placement=overflow|--placement=full) placement="${1#*=}" ;;
       --placement) { [ "${2:-}" = overflow ] || [ "${2:-}" = full ]; } || _acct_refuse 2 bad-value "the flag --placement takes overflow or full. Nothing was written."; placement="$2"; shift ;;
-      *) _acct_refuse 2 unknown-argument "ccrc account set has no argument \"$1\" - it takes --id, --stated -, --placement overflow|full and --method setup-token|login|openai-login --attempt <attemptId>" ;;
+      --fable-billing=included|--fable-billing=credits) billing="${1#*=}" ;;
+      --fable-billing) { [ "${2:-}" = included ] || [ "${2:-}" = credits ]; } || _acct_refuse 2 bad-value "the flag --fable-billing takes included or credits. Nothing was written."; billing="$2"; shift ;;
+      --fable-billing=*) _acct_refuse 2 bad-value "the flag --fable-billing takes included or credits. Nothing was written." ;;
+      --continuity=on|--continuity=off) continuity="${1#*=}" ;;
+      --continuity) { [ "${2:-}" = on ] || [ "${2:-}" = off ]; } || _acct_refuse 2 bad-value "the flag --continuity takes on or off. Nothing was written."; continuity="$2"; shift ;;
+      --continuity=*) _acct_refuse 2 bad-value "the flag --continuity takes on or off. Nothing was written." ;;
+      *) _acct_refuse 2 unknown-argument "ccrc account set has no argument \"$1\" - it takes --id, --stated -, --placement overflow|full, --fable-billing included|credits, --continuity on|off and --method setup-token|login|openai-login --attempt <attemptId>" ;;
     esac
     shift
   done
@@ -8582,13 +8588,13 @@ _acct_set() {
   if [ -n "$method" ] || [ -n "$attempt" ]; then
     { [ -n "$method" ] && [ -n "$attempt" ]; } \
       || _acct_refuse 2 missing-value "the flags --method and --attempt come together: the method is installed from what that sign-in attempt captured. Nothing was written."
-    { [ "$stated" -eq 0 ] && [ -z "$placement" ]; } \
-      || _acct_refuse 2 bad-argument "the flag --method is its own act and takes no --stated or --placement beside it. Nothing was written."
+    { [ "$stated" -eq 0 ] && [ -z "$placement$billing$continuity" ]; } \
+      || _acct_refuse 2 bad-argument "the flag --method is its own act and takes no --stated, --placement, --fable-billing or --continuity beside it. Nothing was written."
     _acct_set_method "$id" "$method" "$attempt"
     return 0
   fi
-  [ "$stated" -eq 1 ] || [ -n "$placement" ] \
-    || _acct_refuse 2 missing-value "ccrc account set needs --stated - or --placement overflow|full. Nothing was written."
+  [ "$stated" -eq 1 ] || [ -n "$placement$billing$continuity" ] \
+    || _acct_refuse 2 missing-value "ccrc account set needs --stated -, --placement overflow|full, --fable-billing included|credits or --continuity on|off. Nothing was written."
   _acct_known_or_refuse "$id"
   _acct_lane_lock "$id" "Nothing was written."
   _acct_lane "$id"
@@ -8617,6 +8623,12 @@ _acct_set() {
     fi
     _acct_write_op "${done_note}Nothing else was written." set-placement --file "$(_acct_roster_path)" --id "$id" --placement "$placement"
     _acct_projection "The roster records lane $id's placement as $placement."
+  fi
+  if [ -n "$billing$continuity" ]; then   # the serviceability facts (H16), under the same marker lock as the placement write
+    [ -n "$placement" ] || _acct_marker_lock "${done_note}Nothing else was written."
+    _acct_write_op "${done_note}Nothing else was written." set-facts --file "$(_acct_roster_path)" --id "$id" \
+      ${billing:+--fable-billing "$billing"} ${continuity:+--continuity "$continuity"} --recorded-at now
+    _acct_projection "The roster records lane $id's billing and continuity facts."
   fi
   _acct_read_op "The change was written; only this report failed." set-done --file "$(_acct_roster_path)" --id "$id"
   printf '%s\n' "$ACCT_OUT"

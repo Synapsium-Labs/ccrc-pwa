@@ -168,6 +168,15 @@ describe('the classifier answers forbidden for each account verb (D-6202): no ap
     const misses = verbs.flatMap((v) => forms(v).filter((c) => classOf('Bash', { command: c }) !== 'forbidden'));
     expect(misses).toEqual([]);
   });
+
+  // The serviceability facts (plan 2026-11-14 Task 3): the verb's two new flags are the verb's, so already denied.
+  it('the set verb with the billing and continuity flags is refused on a session\'s prompt, in both spellings', () => {
+    for (const flags of ['--continuity on', '--continuity=off', '--fable-billing included', '--fable-billing=credits']) {
+      const cmd = `ccrc account set --id lane-a ${flags}`;
+      expect(bashDenied(cmd), cmd).toBeDefined();
+      expect(classOf('Bash', { command: cmd }), cmd).toBe('forbidden');
+    }
+  });
 });
 
 describe('CLAUDE.md\'s SAFETY section (D-6202)', () => {
