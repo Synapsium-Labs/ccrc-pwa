@@ -99,8 +99,8 @@ the rest.
   never sent stale.
 - **unbound-insert-commits-alone** (F7). `insertUnboundRow` refuses inside an open transaction (`ok: false`), so the push
   is sent with no row and no rolled-back id is ever reused by the next insert.
-- **item-raise-names-its-arms** (F9). The item route's blocking push takes its bound row, `held-at-raise` (sends
-  nothing; the held drain stamps it) or `no-outbox` (today's unbound push).
+- **item-raise-names-its-arms** (F9). The item route's blocking push takes its bound row, `held` (sends nothing;
+  the held drain stamps it) or `unwired` (no push outbox: today's unbound push).
 - **held-drain-answers-every-due** (F10). The held drain switches over every `pushDue` answer (an unexpected one is
   logged once and leaves the item unstamped), and on a box with no push service the sender's latch is kept per store.
 - F5, F8, F12 and F13 change a comment, two log sentences, two doc comments' places and one test; F11 is no change.
