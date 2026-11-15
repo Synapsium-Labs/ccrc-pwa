@@ -91,6 +91,21 @@ describe('the Overlord skill: its contract', () => {
     for (const w of stated) expect(w, `SKILL.md says ${w} where the CONTRACT pins ${CONTRACT.length}`).toBe(COUNT_WORD);
   });
 
+  // Task 4: the README half of the count, beside the paragraph it reads. CLAUDE.md's bullet lands with `overlord-v1`
+  // (plan slug overlord-skill-prose-in-readme-only), which then adds CLAUDE.md to this scan.
+  it('spells that same count wherever the README names the file', () => {
+    const marker = 'ccd/overlord-skill/SKILL.md';
+    const text = readFileSync(path.join(root, 'README.md'), 'utf8');
+    let hits = 0;
+    for (let i = text.indexOf(marker); i >= 0; i = text.indexOf(marker, i + 1)) {
+      const m = /\b([a-z]+(?:-[a-z]+)?) clauses\b/.exec(text.slice(i, i + 160));
+      expect(m, `README.md names ${marker} without stating how many clauses it has`).not.toBeNull();
+      expect(m![1], `README.md says ${m![1]} clauses where the CONTRACT pins ${CONTRACT.length}`).toBe(COUNT_WORD);
+      hits++;
+    }
+    expect(hits, `README.md no longer names ${marker} at all`).toBeGreaterThan(0);
+  });
+
   it('maps every clause to exactly one reference', () => {
     const notes = section(skill, '## Notes on the contract');
     const lines = REFERENCES.map((ref) => {

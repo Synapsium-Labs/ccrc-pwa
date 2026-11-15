@@ -293,11 +293,11 @@ describe("README states grep's reach, the inexact-window note and the refused sp
     expect(readme).toContain('outside every `<ccrc-recall>` block');
   });
 
-  it("states what --tool matches and what the regex-syntax refusal spares, and names the three role skills (fix round 1, F15-F17)", () => {
+  it("states what --tool matches and what the regex-syntax refusal spares, and names the four role skills (fix round 1, F15-F17; Overlord W1)", () => {
     expect(readme).toContain("`--tool <name>` matches the model's call (the `tool_use` row) and its input, never the tool's output");
     expect(readme).toContain('drops every sidecar hit');
     expect(readme).toContain('only OUTSIDE double quotes: a quoted phrase holding such characters is searched as an FTS phrase');
-    expect(readme).toContain('None of the three role skills (`ccrc-coordinator`, `ccrc-worker` and `ccrc-reviewer`; not `ccrc-history`)');
+    expect(readme).toContain('None of the four role skills (`ccrc-coordinator`, `ccrc-worker`, `ccrc-reviewer` and `ccrc-overlord`; not `ccrc-history`)');
     expect(readme, 'the history skill is in the role skills\' install order').not.toContain('then reviewer, then history');
     expect(readme).toContain('has no place in that order (below)');
   });
