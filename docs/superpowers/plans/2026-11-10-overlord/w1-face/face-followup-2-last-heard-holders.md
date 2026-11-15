@@ -154,3 +154,12 @@ number: the programme mints them.
   tests passed, with 2 skipped. The one failure came in a run with six OOM kills, in which vitest's type check was
   killed as well: `skin-switch`'s phone Goals-icon case timed out at 5 s. The file passed alone (29/29), and its type
   check passes on its own run.
+- **fix-round-1-runs** — after fix round 1, each run one file at a time, all green:
+  - `use-heard` 5/5 and `heard-holders` 38/38;
+  - `heard-surfaces`, `pr-sheet` and the surfaces' suites;
+  - the face suites and `markup-census`;
+  - pwa's type check;
+  - server `rings/*` (132) and `single-definition/*` (1331).
+
+  Browser shard 2 holds `programme-box.browser.test.ts`, by `balancedShard` over the browser directory. It ran with two
+  workers and was green: 33 files, 816 tests passed.
