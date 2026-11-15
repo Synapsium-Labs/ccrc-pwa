@@ -2377,11 +2377,13 @@ describe('B5 — `_swap_target` SAYS which condition it could not decide', () =>
     tick(BLOCKED);
     const word = String(h.reg(ID, 'tickstuck')).split(' ')[1];
     const sentence = String(h.reg(ID, 'stranded'));
-    const named = ['crosspool', 'pool', 'project', 'home']
+    const named = ['crosspool', 'pool', 'projection', 'set', 'project', 'home']
       .filter((w) => (w === 'crosspool' ? sentence.includes('crossing record')
         : w === 'pool' ? sentence.includes('pool tag')
-          : w === 'project' ? sentence.includes('own registry field')
-            : sentence.includes('home account')));
+          : w === 'projection' ? sentence.includes('pool projection')
+            : w === 'set' ? sentence.includes('account set on the route record')
+              : w === 'project' ? sentence.includes('own registry field')
+                : sentence.includes('home account')));
     expect(named, 'the sentence names exactly one condition').toHaveLength(1);
     expect(named[0], `the stamp says ${word}; the sentence must agree`).toBe(word);
   });
@@ -2393,12 +2395,13 @@ describe('B5 — `_swap_target` SAYS which condition it could not decide', () =>
     // X can take it" — a fabricated positive claim about accounts nobody asked.
     seedRow(); tagPool('demo', 'pool-a'); plantNotify();
     for (const w of ['claude', 'claude-a', 'claude-b', 'claude-d']) writeLimits(w, 99, 99);
-    h.sh(`${BLOCKED} _swap_target() { return 7; }; _auto_swap_check ${ID}`);
+    // rc 7 and 8 are named since the pool set's PR A3 (the projection and the set sides), so the stub is rc 9.
+    h.sh(`${BLOCKED} _swap_target() { return 9; }; _auto_swap_check ${ID}`);
     expect(String(h.reg(ID, 'stranded')), 'it says it does not know')
       .toContain('this build does not name');
     expect(String(h.reg(ID, 'stranded')), 'and never a pool census')
       .not.toContain('can take it');
-    expect(String(h.reg(ID, 'tickstuck')), 'the stamp carries the code itself').toContain('rc7');
+    expect(String(h.reg(ID, 'tickstuck')), 'the stamp carries the code itself').toContain('rc9');
   });
 });
 
