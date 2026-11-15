@@ -14,6 +14,7 @@ import { COMPACTION_MUTANT_SETS } from './compactionSets.js';
 import { RENEWAL_MUTANT_SETS } from './renewalDeciderSets.js';
 import { GENERATION_START_MUTANT_SETS } from './generationStartSets.js';
 import { PROBE_MUTANT_SETS } from './probeSets.js';
+import { PROBE_DOOR_MUTANT_SETS } from './probeDoorSets.js';
 import { NOTES_MUTANT_SETS } from './notesMutants.js';
 import { TIMER_MUTANT_SETS } from './timerSets.js';
 import { ANCHOR_MUTANT_SETS } from './anchorSets.js';
@@ -150,6 +151,7 @@ const MUTANT_SETS: Record<string, MutantSet<never>> = {
   ...LAUNCH_PROFILE_MUTANT_SETS,
   ...COMPACTION_MUTANT_SETS,
   ...PROBE_MUTANT_SETS,
+  ...PROBE_DOOR_MUTANT_SETS,
   ...NOTES_MUTANT_SETS,
   ...TIMER_MUTANT_SETS,
   ...ANCHOR_MUTANT_SETS,

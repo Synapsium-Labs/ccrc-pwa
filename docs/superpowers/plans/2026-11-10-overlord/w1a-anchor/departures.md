@@ -114,4 +114,7 @@ coordinator issued it. The coordinator folds these into the ledger.
 - The anchor's mutant sets (`server/test/sim/anchorSets.ts`, at floor 1 in `mutation-floors.json`): `renderAnchor` (ten
   mutants, the plan's four first), `anchorGeneration` (five) and `anchorAnswer` (two, the first the plan's "serve the text
   in shadow"). Every mutant killed.
-- The migration slot: `main` held 72 entries when this branch absorbed it (after timers PR B, #2798), so this entry is 73.
+- The migration slot: `main` held 72 entries when this branch first absorbed it (after timers PR B, #2798), so this entry
+  was 73. Probes PR B (#2802) landed first and took 73, so at the absorb of 19835 (`main` measured at 73 entries) this
+  entry moved to 74, the next free slot, after the probes' entry; `coord-db.test.ts` pins it there and upgrades a
+  database at 73 to it.

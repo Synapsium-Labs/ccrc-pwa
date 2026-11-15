@@ -21,7 +21,7 @@
 #     this process's caller does not supply. Absent, it REFUSES; it never guesses
 #     a host. (A worker guessed one on 2026-08-25 and reported success against
 #     nothing.)
-#   * The route comes from ROUTES below, eighty-one rows, and nothing else; the
+#   * The route comes from ROUTES below, eighty-three rows, and nothing else; the
 #     four claimant rows name the question door family's template, their only
 #     door since the old ones were retired (D-7324), refused here, unsent, when a
 #     current cap file says the server lacks `questions-v1` (D-7328); `runs
@@ -93,7 +93,7 @@ SAFE_RE='^[A-Za-z0-9_-]+$'
 # (`/api/questions/<ask|approval>-{id}/<rule|release>`): from Q3j it was their
 # fifth field, sent only while the server advertised `questions-v1` (D-7325), and
 # since the old doors were retired it is their path (D-7324). Every row has four.
-# Eighty-one rows, and that word is SCANNED: `server/test/ccrc-api.test.ts`
+# Eighty-three rows, and that word is SCANNED: `server/test/ccrc-api.test.ts`
 # derives the count from the table below and reds if this line or the bullet at
 # the top of this file states a different one. The original rows were chosen on
 # 2026-08-26 by measuring the skill corpora; the standing executable-corpus
@@ -278,6 +278,13 @@ declare -A ROUTES=(
   [note.close]='POST|/api/sessions/{id}/notes|yes|-'
   [note.list]='GET|/api/sessions/{id}/notes|yes|before,limit'
   [note.handover]='POST|/api/sessions/{id}/handover|yes|-'
+  # The probe door (Overlord, the probes piece): a session reads and answers only its OWN open probe round. `ccrc-api probe`
+  # (`cmd_probe`) reads ONE PAGE per call through `sessions.probe`; the pane's pair (`byId`, `byUuid`) rides its query, filled
+  # from `derive_identity`, never typed. `probe answer --json -` posts every answer of the round in one call through
+  # `probe.answer`: its `{id}` is the PANE's, derived (no positional id), and the pair is appended LAST to the body (the note
+  # door's rule: a body that names either is refused, unsent; a bodyless call too).
+  [sessions.probe]='GET|/api/sessions/{id}/probe|yes|page'
+  [probe.answer]='POST|/api/sessions/{id}/probe|yes|-'
   # The plan verbs (Linear hierarchy design, D-8181): `{id}` is the programme's slug. Every one but `plan.show` carries the pane's
   # identity in the QUERY (the `linear.*` block's rule, never the body); `plan.show` is a session-or-token read and sends none. All
   # are refused locally `no-plan-door` when a CURRENT cap file omits `plan-v1`. The second operand of a verb (a checkpoint, a
@@ -394,6 +401,8 @@ usage() {
     printf '  %-18s %s\n' 'card --anchor' 'its short part for the session hook (--form start|prompt|fork): an anchor answer as it came, else exit 3'
     printf '  %-18s %s\n' '' 'timer set takes <90m|2h|3d> <note> [--run <id> | --programme <slug>]; timer cancel takes <id>;'
     printf '  %-18s %s\n' '' 'every timer verb fills this pane'"'"'s identity and takes no --json'
+    printf '  %-18s %s\n' 'probe' 'this session'"'"'s open probe round, one page per call (--page N), as plain text;'
+    printf '  %-18s %s\n' '' '`probe answer --json -` answers every question of the round in one call (no id: the pane'"'"'s)'
     printf '  %-18s %s\n' '' 'mail inbox takes nothing: it prints this pane'"'"'s unacked mail as plain text, not JSON,'
     printf '  %-18s %s\n' '' 'and acks each entry it printed. Run it bare: no pipe, no redirect, no head or tail.'
     printf '  %-18s %s\n' '' '(ledger allocate fills "byId" from this pane; --by <id> for a caller with none)'
@@ -885,11 +894,68 @@ cmd_card() {
   exit 0
 }
 
+# `probe` (Overlord, the probes piece): this pane's own open probe round, ONE PAGE PER CALL, through the `sessions.probe` row.
+# `--page N` reads a later page (default 1). It prints the page's text and one last line naming the page, the page count and the
+# round, with the exact command for the next page, or, on the last page, the command that answers the round. `probe-none-open`
+# (409) prints one line and exits 0. Any other answer is printed as it came, with its status on stderr; exit 0 for an answer, 3
+# for none. The pair is the pane's (`derive_identity`), never typed. `probe answer` is a generic row (`probe.answer`), not this.
+# NEVER call it inside $( ): it prints, refuses and exits.
+cmd_probe() {
+  local page=1
+  while (( $# > 0 )); do
+    (( $# >= 2 )) || refuse 'bad-args' "probe: $1 needs a value"
+    if [[ "$1" == '--page' ]]; then
+      [[ "$2" =~ ^[1-9][0-9]{0,5}$ ]] || refuse 'bad-args' "probe: --page is a positive integer: $2"
+      page="$2"
+    else
+      refuse 'bad-args' "probe takes --page N only (or the verb answer): $1"
+    fi
+    shift 2
+  done
+  command -v jq >/dev/null 2>&1 || refuse 'no-jq' 'probe reads the page with jq, and jq is not on PATH; nothing was read'
+  derive_identity
+  local method tmpl _needs _qkeys
+  IFS='|' read -r method tmpl _needs _qkeys <<< "${ROUTES[sessions.probe]}"
+  server_url
+  read_token
+  arm_req_out
+  local url="$SERVER_URL${tmpl/\{id\}/$DERIVED_ID}?byId=$DERIVED_ID&byUuid=$DERIVED_UUID&page=$page"
+  if ! send_request "$method" "$url" ''; then TOKEN=""; transport_exit; fi
+  TOKEN=""
+  if [[ "$REQ_CODE" == '409' ]] && [[ "$(jq -r '.error // empty' "$REQ_OUT" 2>/dev/null)" == 'probe-none-open' ]]; then
+    printf 'probe: no probe round of yours is open\n'
+    exit 0
+  fi
+  local shape got
+  shape=$(jq -r 'if (.ok == true and (.roundId | type) == "string" and (.roundId | test("^[A-Za-z0-9._:-]+$"))
+        and (.pages | type) == "number" and .pages >= 1 and .pages == (.pages | floor)
+        and (.page | type) == "number" and .page >= 1 and .page <= .pages and .page == (.page | floor)
+        and (.text | type) == "string")
+      then "\(.roundId) \(.page) \(.pages)" else "bad" end' "$REQ_OUT" 2>/dev/null) || shape='bad'
+  if [[ "$REQ_CODE" != '200' || ! "$shape" =~ ^([A-Za-z0-9._:-]+)\ ([0-9]+)\ ([0-9]+)$ ]]; then
+    print_body
+    printf 'http %s\n' "$REQ_CODE" >&2
+    exit 0
+  fi
+  local r="${BASH_REMATCH[1]}" p="${BASH_REMATCH[2]}" n="${BASH_REMATCH[3]}"
+  # A page's text may end in a newline, which `$( )` would strip: a sentinel byte keeps it, and is cut after.
+  got=$(jq -j '.text, "."' "$REQ_OUT" 2>/dev/null) || got='.'
+  printf '%s\n' "${got%.}"
+  if (( p < n )); then
+    printf 'probe: page %s of %s, round %s; next: ccrc-api probe --page %s\n' "$p" "$n" "$r" "$(( p + 1 ))"
+  else
+    printf 'probe: page %s of %s, round %s; answer every question in one call: ccrc-api probe answer --json -\n' "$p" "$n" "$r"
+  fi
+  exit 0
+}
+
 main() {
   (( $# >= 1 )) || { usage; refuse 'no-verb' 'no group given'; }
 
   [[ "$1" == 'whoami' ]] && { cmd_whoami; exit 0; }
   [[ "$1" == 'card' ]] && { shift; cmd_card "$@"; }
+  # `probe answer` is the generic row `probe.answer`; any other `probe` is the page read.
+  [[ "$1" == 'probe' && "${2:-}" != 'answer' ]] && { shift; cmd_probe "$@"; }
   [[ "$1" == '-h' || "$1" == '--help' ]] && { usage; exit 0; }
 
   (( $# >= 2 )) || { usage; refuse 'no-verb' "group '$1' needs a verb"; }
@@ -920,6 +986,11 @@ main() {
     command -v jq >/dev/null 2>&1 \
       || refuse 'no-jq' 'mail inbox reads the inbox answer with jq, and jq is not on PATH; nothing was read or acked'
     derive_identity
+  elif [[ "$key" == 'probe.answer' ]]; then
+    # The id is the PANE's, derived: a session answers only its own round, so no positional id is taken (one typed is
+    # `unexpected argument`, below).
+    derive_identity
+    id="$DERIVED_ID"
   elif [[ $# -gt 0 && "$1" != --* ]]; then id="$1"; shift; fi
 
   if [[ "$needs" == 'yes' ]]; then
@@ -1106,6 +1177,19 @@ main() {
     append_body_field 'byId' "$DERIVED_ID" 'the note body is not a JSON object; byId cannot be added'
     append_body_field 'byUuid' "$DERIVED_UUID" 'the note body is not a JSON object; byUuid cannot be added'
   fi
+  # THE PROBE ANSWER'S IDENTITY, the note door's rule above, word for word: a body that names `byId` or `byUuid` is refused
+  # unsent, a bodyless call is refused, and the pane's pair is appended LAST.
+  if [[ "$key" == 'probe.answer' ]]; then
+    [[ -n "$body" ]] || refuse 'no-body' 'probe answer needs a body on --json'
+    local probebody="${body//[[:space:]]/}"
+    case "$probebody" in
+      *'"byId":'*|*'"byUuid":'*)
+        refuse 'bad-body' 'the body names byId or byUuid; a probe is answered as this pane, and the client fills both' ;;
+    esac
+    derive_identity
+    append_body_field 'byId' "$DERIVED_ID" 'the probe body is not a JSON object; byId cannot be added'
+    append_body_field 'byUuid' "$DERIVED_UUID" 'the probe body is not a JSON object; byUuid cannot be added'
+  fi
   if [[ "$key" == 'note.list' ]]; then
     derive_identity
     query+="${query:+&}byId=$DERIVED_ID&byUuid=$DERIVED_UUID"
@@ -1143,7 +1227,7 @@ main() {
   # The card's identity (review 2023 F13), the Linear block's rule: the pane's pair rides the query after the declared keys,
   # so this client reads the pane's own card and no other's (`--byId` is `unknown-query`; the server refuses a path id that is
   # not `byId`, `not-owner`).
-  if [[ "$key" == 'sessions.card' ]]; then
+  if [[ "$key" == 'sessions.card' || "$key" == 'sessions.probe' ]]; then
     derive_identity
     query+="${query:+&}byId=$DERIVED_ID&byUuid=$DERIVED_UUID"
   fi

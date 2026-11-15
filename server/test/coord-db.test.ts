@@ -727,9 +727,10 @@ describe('coord.db: migration 4 — runs.dispatchStartedAt', () => {
     // and MIGRATIONS[69] (continuity_timers, the timers, Overlord W1a)
     // and MIGRATIONS[70] (plain_memory_settings and the launch-profile lane-arm row, Overlord W1a launch profiles PR B)
     // and MIGRATIONS[71] (continuity_notes and continuity_handovers, the note door, Overlord W1a)
-    // and MIGRATIONS[72] (the anchor-slot lane-arm row, the anchor, Overlord W1a).
-    expect(COORD_SCHEMA_VERSION).toBe(73);
-    expect(MIGRATIONS.length).toBe(73);
+    // and MIGRATIONS[72] (continuity_probes and continuity_reads, the probe door, Overlord W1a)
+    // and MIGRATIONS[73] (the anchor-slot lane-arm row, the anchor, Overlord W1a).
+    expect(COORD_SCHEMA_VERSION).toBe(74);
+    expect(MIGRATIONS.length).toBe(74);
   });
 
   it('is ADDITIVE: every column migration 1 wrote is still on the table, unchanged', () => {
@@ -827,8 +828,9 @@ describe('coord.db: migration 11 — runs.kind and runs.reviews (design 2026-09-
     // and MIGRATIONS[69] (continuity_timers, Overlord W1a)
     // and MIGRATIONS[70] (plain_memory_settings, launch profiles PR B)
     // and MIGRATIONS[71] (continuity_notes and continuity_handovers, Overlord W1a)
-    // and MIGRATIONS[72] (the anchor-slot lane-arm row, Overlord W1a); the migration above is still entry 11.
-    expect(COORD_SCHEMA_VERSION).toBe(73);
+    // and MIGRATIONS[72] (continuity_probes and continuity_reads, Overlord W1a)
+    // and MIGRATIONS[73] (the anchor-slot lane-arm row, Overlord W1a); the migration above is still entry 11.
+    expect(COORD_SCHEMA_VERSION).toBe(74);
     const row = db.prepare('SELECT kind, reviews FROM runs').get() as { kind: string; reviews: number | null };
     expect(row).toEqual({ kind: 'work', reviews: null });
     db.close();
@@ -2707,17 +2709,47 @@ describe('coord.db: continuity_notes and continuity_handovers, the note door (Ov
   });
 });
 
-describe('coord.db: the anchor-slot lane-arm row (Overlord W1a, the anchor piece; C38)', () => {
-  /** Found by its text, never hard-coded. */
-  const SLOT = MIGRATIONS.findIndex((m) => m.includes("VALUES ('anchor-slot', 'shadow', 0)")) + 1;
-  const ENTRY = /^INSERT INTO lane_arm_settings \(lane, choice, updatedAt\) VALUES \('anchor-slot', 'shadow', 0\);$/;
-  it('ONE SEED ROW, shadow, nothing else, the entry after the notes\' (the coordinator\'s ruling on ask 416: pinned to the entry before it)', () => {
+describe('coord.db: continuity_probes and continuity_reads, the probe door (Overlord §3.3.5, C41)', () => {
+  /** Found by its DDL, never hard-coded. */
+  const SLOT = MIGRATIONS.findIndex((m) => m.includes('CREATE TABLE continuity_probes')) + 1;
+  const ENTRY = /^CREATE TABLE continuity_probes \([^;]*\);\s*CREATE INDEX continuity_probes_by_generation ON continuity_probes\(generationId, id\);\s*CREATE INDEX continuity_probes_by_session ON continuity_probes\(sessionId, id\);\s*CREATE TABLE continuity_reads \([^;]*\);$/;
+  it('NEW TABLES and their indexes, nothing on an existing table, the entry after the notes\'', () => {
     expect(SLOT).toBe(MIGRATIONS.findIndex((m) => m.includes('CREATE TABLE continuity_notes')) + 2);
     expect(SLOT).toBe(73);
     expect(MIGRATIONS[SLOT - 1]!.replace(/--[^\n]*/g, '').trim()).toMatch(ENTRY);
   });
 
-  it('reaches a database ALREADY at the version before it: the row lands shadow, and every existing row is as it was', () => {
+  it('reaches a database ALREADY at the version before it: both tables land empty and every existing row is as it was', () => {
+    const p = dbPathIn(mkTmp('ccrc-coord-'));
+    mkdirSync(path.dirname(p), { recursive: true });
+    const raw = new DatabaseSync(p);
+    tx(raw, () => {
+      for (let v = 0; v < SLOT - 1; v++) raw.exec(MIGRATIONS[v]!);
+      raw.exec(`PRAGMA user_version = ${SLOT - 1}`);
+      raw.exec("INSERT INTO continuity_notes (identity, sessionId, keyKind, keyRef, kind, waitsOn, next, at) VALUES ('lane-a-project-a', 'lane-a-project-a', 'run', '1', 'thread', 'w', 'n', 7)");
+    });
+    raw.close();
+    const db = openCoordDb(p);
+    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(COORD_SCHEMA_VERSION);
+    expect(db.prepare('SELECT count(*) AS n FROM continuity_probes').get()).toEqual({ n: 0 });
+    expect(db.prepare('SELECT count(*) AS n FROM continuity_reads').get()).toEqual({ n: 0 });
+    expect(db.prepare('SELECT next, at FROM continuity_notes').get()).toEqual({ next: 'n', at: 7 });
+    db.close();
+  });
+});
+
+describe('coord.db: the anchor-slot lane-arm row (Overlord W1a, the anchor piece; C38)', () => {
+  /** Found by its text, never hard-coded. */
+  const SLOT = MIGRATIONS.findIndex((m) => m.includes("VALUES ('anchor-slot', 'shadow', 0)")) + 1;
+  const ENTRY = /^INSERT INTO lane_arm_settings \(lane, choice, updatedAt\) VALUES \('anchor-slot', 'shadow', 0\);$/;
+  it('ONE SEED ROW, shadow, nothing else, the entry after the probes\' (the coordinator\'s rulings on ask 416 and of 19835: pinned to the entry before it)', () => {
+    expect(SLOT).toBe(MIGRATIONS.findIndex((m) => m.includes('CREATE TABLE continuity_probes')) + 2);
+    expect(SLOT).toBe(74);
+    expect(MIGRATIONS[SLOT - 1]!.replace(/--[^\n]*/g, '').trim()).toMatch(ENTRY);
+  });
+
+  it('reaches a database ALREADY at the version before it (73): the row lands shadow, and every existing row is as it was', () => {
+    expect(SLOT - 1).toBe(73);
     const p = dbPathIn(mkTmp('ccrc-coord-'));
     mkdirSync(path.dirname(p), { recursive: true });
     const raw = new DatabaseSync(p);
@@ -2725,12 +2757,14 @@ describe('coord.db: the anchor-slot lane-arm row (Overlord W1a, the anchor piece
       for (let v = 0; v < SLOT - 1; v++) raw.exec(MIGRATIONS[v]!);
       raw.exec(`PRAGMA user_version = ${SLOT - 1}`);
       raw.exec("UPDATE lane_arm_settings SET choice = 'live', updatedAt = 7 WHERE lane = 'roster-card'");
+      raw.exec("INSERT INTO continuity_reads (sessionId, door, at) VALUES ('lane-a-project-a', 'card', 5)");
     });
     raw.close();
     const db = openCoordDb(p);
     expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(COORD_SCHEMA_VERSION);
     expect(db.prepare("SELECT choice, updatedAt FROM lane_arm_settings WHERE lane = 'anchor-slot'").get()).toEqual({ choice: 'shadow', updatedAt: 0 });
     expect(db.prepare("SELECT choice, updatedAt FROM lane_arm_settings WHERE lane = 'roster-card'").get()).toEqual({ choice: 'live', updatedAt: 7 });
+    expect(db.prepare('SELECT sessionId, door, at FROM continuity_reads').all()).toEqual([{ sessionId: 'lane-a-project-a', door: 'card', at: 5 }]);
     db.close();
   });
 });

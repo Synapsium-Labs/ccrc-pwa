@@ -418,7 +418,11 @@ describe('GET /api/sessions/:id/card?part=anchor: the card\'s short part, for th
     expect(Object.keys(a).sort()).toEqual(['form', 'hash', 'ok', 'part', 'text']);
     expect([a.part, a.form], 'the proof the hook and the client ask for (fix round 1, F1)').toEqual(['anchor', 'start']);
     expect([snapshots(), reads()], 'the anchor stores no snapshot and records no read').toEqual([[], []]);
+    // Nor does it stamp a card read for the probe door's closed book (probes PR B's `continuity_reads`): an anchor is no read.
+    const stamps = (): unknown[] => coord!.db.prepare('SELECT door FROM continuity_reads').all();
+    expect(stamps()).toEqual([]);
     const c = (await card(app)).json() as { hash: string };
+    expect(stamps(), 'the card read itself stamps').toEqual([{ door: 'card' }]);
     expect(a.hash).toBe(c.hash);
     expect(a.text.split('\n')).toEqual([
       'ccrc-anchor: role: coordinator of prog-a',
