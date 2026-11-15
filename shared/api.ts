@@ -6486,10 +6486,15 @@ export function parseWaveDoneSignals(body: string): WaveDoneSignals {
  * `precompact` (Overlord W1a compaction, spec §3.3.4 C39) is `refuse`/`allow`: whether the session hook's PreCompact
  * refusal arm (`_hook_compact_refuse`) refuses a proactive automatic compaction, once a turn. Absent is dark. Its one
  * writer is the generations lane (the renewal hand-offs piece), so it is lane-only too.
+ *
+ * `poolset` and `acctorder` (the Overlord's W1, spec §3.4 C46 and C56) are the session's pool set, one token in
+ * `shared/poolset.ts`'s spelling, and the Overlord's ordered account list, account ids joined by `,`. Their writers are
+ * the designation's doors and the renewal lane, through `CCD_ARGV.routeSet`, so both are lane-only; ccd refuses either on
+ * a `--route` at the mint (`_route_argv_check`), so only `ccd route --session` writes them, and an empty value clears them.
  */
-export const ROUTE_WRITABLE_FIELDS = ['class', 'effort', 'subagent', 'workflow', 'compact', 'browser', 'profile', 'automem', 'compactwindow', 'precompact'] as const;
+export const ROUTE_WRITABLE_FIELDS = ['class', 'effort', 'subagent', 'workflow', 'compact', 'browser', 'profile', 'automem', 'compactwindow', 'precompact', 'poolset', 'acctorder'] as const;
 /** The route fields only a server lane writes (Overlord W1a; "one writer per route field: the lane"): the launch-profile
- *  lane's three and the generations lane's `precompact`.
+ *  lane's three, the generations lane's `precompact`, and the pool set's two (W1), written by the designation's doors.
  *  `parseRouteFields`, the one door parse, refuses each as `lane-only` with a 400 naming it, at the operator's route
  *  door, the spawn and dispatch `route` bodies, and the coordinator's `POST /api/runs/:id/route`. The lane composes
  *  `CCD_ARGV.routeSet` itself and never passes a door. Derived: `ROUTE_WRITABLE_FIELDS` from `profile` on. */

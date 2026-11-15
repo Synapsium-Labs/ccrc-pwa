@@ -22,6 +22,10 @@ export const CCD_SPLIT_RECORDS = 'server/test/ccd-split-records';
 const LIB_RE = /^ccd\/lib\/([^/]+)\.sh$/;
 const DEF_RE = /^([A-Za-z_][A-Za-z0-9_]*)\(\) *\{/gm;
 const POINTER_RE = /^# @ccd-lib:(\w+)\b/;
+// An assignment, with or without a `declare`-family prefix: anywhere in a base text (a superset of its globals, which
+// only widens what a new-code region may not assign), at column 0 in a region (its own top level).
+const ASSIGN_ANY_RE = /^[ \t]*(?:(?:declare|typeset|readonly|export|local)(?:[ \t]+-\w+)*[ \t]+)?([A-Za-z_]\w*)(?:\[[^\]\n]*\])?\+?=/gm;
+const ASSIGN_TOP_RE = /^(?:(?:declare|typeset|readonly|export)(?:[ \t]+-\w+)*[ \t]+)?([A-Za-z_]\w*)(?:\[[^\]\n]*\])?\+?=/gm;
 
 /** The program's library files in `tree`, by word (the file's name without `.sh`), `ccrc-*` left out. */
 function programLibs(tree: Tree): Map<string, string> {
@@ -75,16 +79,50 @@ function definitionsOf(text: string): Map<string, string> {
   return out;
 }
 
-/** Is `head` a pure move of `base`? Null when the diff adds no pointer line (a feature, not judged here). Otherwise the
- *  `__CCD_LIBS` line of `head` must hold the base's words plus exactly the libraries the diff adds, order kept, and the
+/** Each `# @ccd-lib:<id>` region's text across the library texts, by id: `spliceCcd`'s own split of a library. */
+function regionsOf(libs: Iterable<string>): Map<string, string> {
+  const out = new Map<string, string>();
+  for (const text of libs) {
+    const parts = text.split(/^# @ccd-lib:(\w+)\n/m);
+    for (let i = 1; i + 1 < parts.length; i += 2) out.set(parts[i]!, parts[i + 1]!);
+  }
+  return out;
+}
+
+/** What the verdict says of a new pointer it skips: the one sentence, spelled once. */
+export const NEW_CODE_NOT_JUDGED = 'new library code, not judged as a move';
+
+/** Is `head` a pure move of `base`? Null when the diff adds no pointer line (a feature, not judged here). A new pointer
+ *  whose library region defines only functions absent from the base's `ccd/ccd` and from every library on the base,
+ *  and assigns at its top level no variable either of them assigns, is NEW CODE (a new library's region; the Overlord W1 pool set's `ccd/lib/pool-set.sh` the first, plan slug
+ *  new-code-library-is-not-a-move): when every new pointer is of that kind and the diff removes no function from
+ *  `ccd/ccd`, the verdict is pure and names those pointers in `newCode` with `NEW_CODE_NOT_JUDGED`. A region that mixes
+ *  moved and new functions, a pointer with no region anywhere, or a diff that also removes any function from `ccd/ccd`
+ *  is judged in full. Otherwise the `__CCD_LIBS` line of `head` must hold the base's words plus exactly the libraries the diff adds, order kept, and the
  *  two splices, with that line and any pointer line left unspliced removed, must be equal byte for byte. `differing`
  *  names `__CCD_LIBS` for the first, and the functions whose text differs for the second (`spliced text` when the
  *  difference is in no function). */
-export function pureMoveVerdict(base: Tree, head: Tree): { pure: boolean; differing: string[] } | null {
+export function pureMoveVerdict(base: Tree, head: Tree): { pure: boolean; differing: string[]; newCode?: { ids: string[]; note: string } } | null {
   const baseMain = base['ccd/ccd'] ?? '';
   const headMain = head['ccd/ccd'] ?? '';
   const before = pointerIds(baseMain);
-  if (![...pointerIds(headMain)].some((id) => !before.has(id))) return null;
+  const newPointers = [...pointerIds(headMain)].filter((id) => !before.has(id));
+  if (newPointers.length === 0) return null;
+  // Every function the base program defines, and every variable it assigns, in ccd/ccd or any library: a region that
+  // defines none of those functions and assigns none of those variables at its top level is new code. The variable arm
+  // is review 2120 F4's case G: a library loads at ccd's foot, so its `X=2` would silently override ccd/ccd's `X=1`.
+  const baseTexts = [baseMain, ...programLibs(base).values()];
+  const baseDefs = new Set(baseTexts.flatMap((t) => [...t.matchAll(DEF_RE)].map((m) => m[1]!)));
+  const baseVars = new Set(baseTexts.flatMap((t) => [...t.matchAll(ASSIGN_ANY_RE)].map((m) => m[1]!)));
+  const headRegions = regionsOf(programLibs(head).values());
+  const isNewCode = (id: string): boolean => {
+    const region = headRegions.get(id);
+    return region !== undefined && ![...region.matchAll(DEF_RE)].some((m) => baseDefs.has(m[1]!))
+      && ![...region.matchAll(ASSIGN_TOP_RE)].some((m) => baseVars.has(m[1]!));
+  };
+  const headMainDefs = new Set(definitionsOf(headMain).keys());
+  const removesFromMain = [...definitionsOf(baseMain).keys()].some((f) => !headMainDefs.has(f));
+  if (!removesFromMain && newPointers.every(isNewCode)) return { pure: true, differing: [], newCode: { ids: newPointers, note: NEW_CODE_NOT_JUDGED } };
   const differing: string[] = [];
   const b = takeLibsLine(baseMain);
   const h = takeLibsLine(headMain);
