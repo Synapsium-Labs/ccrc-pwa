@@ -847,3 +847,39 @@ describe('the grouped Recently cleared list and item references on a card (D-819
     expect(within(document.querySelector<HTMLElement>('li:has([data-item="6"])')!).queryByRole('link')).toBeNull();
   });
 });
+
+describe('the answer marks on the list (Overlord W1)', () => {
+  const MARKS = { couldAnswer: { state: 'never' as const }, unsure: { state: 'marked' as const, at: NOW - MIN, signedIn: true } };
+  const view = (withMarks: boolean) => waitingView({
+    items: [itemView({ id: 1, kind: 'decide', title: 'Pick a branch', ...(withMarks ? { answerMarks: MARKS } : {}) })],
+    cleared: [itemView({ id: 2, kind: 'value', state: 'done', title: 'Name the flag', closedAt: NOW - 60 * MIN, ...(withMarks ? { answerMarks: MARKS } : {}) })],
+  });
+  const groupsOf = () => screen.getAllByRole('group', { name: 'Your marks for the Overlord' });
+
+  it('an open item and a cleared item each draw both boxes when the view carries answerMarks', () => {
+    open({ view: view(true) });
+    const groups = groupsOf();
+    expect(groups.map((g) => g.getAttribute('data-item'))).toEqual(['1', '2']);
+    for (const g of groups) {
+      const boxes = within(g).getAllByRole('checkbox') as HTMLInputElement[];
+      expect(boxes.map((b) => b.checked)).toEqual([false, true]);
+    }
+  });
+
+  it('neither draws a box when the field is absent (an older server)', () => {
+    open({ view: view(false) });
+    expect(screen.queryAllByRole('checkbox')).toEqual([]);
+  });
+
+  it('the boxes are not inside the row\'s button', () => {
+    open({ view: view(true) });
+    const row = document.querySelector('[data-item="1"].wl-item')!;
+    expect(row).not.toBeNull();
+    expect(within(row as HTMLElement).queryAllByRole('checkbox')).toEqual([]);
+  });
+
+  it('on the device\'s saved copy every box is disabled', () => {
+    open({ view: view(true), notCurrent: 'Saved on this device' });
+    for (const b of screen.getAllByRole('checkbox') as HTMLInputElement[]) expect(b.disabled).toBe(true);
+  });
+});

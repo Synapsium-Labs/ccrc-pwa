@@ -23,6 +23,7 @@ import { RowMain, RowMeta } from './rowParts';
 import { ItemControls, LiftCapControl, carriesControls, useItemActs, type ItemActs } from './ItemActs';
 import { itemRefIds, programmeSpecHref } from './ledgerLinks';
 import { inAppClick } from '../fleet/settingsText';
+import { AnswerMarkBoxes } from './AnswerMarkBox';
 import './ledgers.css';
 
 export interface WaitingScreenProps {
@@ -116,6 +117,8 @@ function ItemRow({ item, now, onOpen, current, rowActs, itemHref }: {
         <RowMeta pills={itemPills(item)} when={meta} />
       </BareRow>
       {rowActs !== null && <ItemControls item={item} runs={rowActs.runs} acts={rowActs.acts} enabled={rowActs.enabled} />}
+      {/* The operator's two answer marks (Overlord W1), beside the row's button, never inside it; off on a saved copy. */}
+      <AnswerMarkBoxes item={item} current={rowActs === null || rowActs.enabled} />
       <Mentions item={item} note={back ? note : null} itemHref={itemHref} />
     </li>
   );
@@ -200,13 +203,17 @@ export function ListGroup({ group, runs, hue, now, onOpenItem, onOpenSession, cu
 
 /** One struck-through row of the Recently cleared trail: its title, its number, where (beside a row of the list that holds several
  *  programmes, and not under a programme's own heading), and when. */
-function ClearedRow({ item, where, now }: { item: ItemView; where?: ((item: ItemView) => string) | undefined; now: number }): ReactNode {
+function ClearedRow({ item, where, now, current }: {
+  item: ItemView; where?: ((item: ItemView) => string) | undefined; now: number; current: boolean;
+}): ReactNode {
   const tail = [itemNumber(item), where?.(item), item.closedAt === null ? undefined : `confirmed ${ageWords(item.closedAt, now)}`]
     .filter((t) => t !== undefined);
   return (
     <li className="wl-cleared-row">
       <span aria-hidden="true">✓ </span><s>{item.title}</s>
       {` · ${tail.join(' · ')}`}
+      {/* An answer is often best judged once given (Overlord W1): the marks stay inside the Recently cleared window. */}
+      <AnswerMarkBoxes item={item} current={current} />
     </li>
   );
 }
@@ -223,8 +230,10 @@ interface ClearedGrouping { readonly title: (program: string) => string; readonl
  *  order of its newest clear, its name beside its hue's swatch and its count, each COLLAPSED until its heading is pressed. Which
  *  groups are open lives in this component's state alone: Show fewer forgets it, and so does leaving the page (nothing is kept
  *  in storage). The list filtered to one programme has one group, so it draws its share as one plain list. */
-export function ClearedTrail({ items, where, now, grouping }: {
+export function ClearedTrail({ items, where, now, grouping, current = true }: {
   items: readonly ItemView[]; where?: (item: ItemView) => string; now: number; grouping?: ClearedGrouping;
+  /** False on the device's saved copy: the rows' answer marks are off, as every act on a saved copy is. */
+  current?: boolean;
 }): ReactNode {
   const [all, setAll] = useState(false);
   const [open, setOpen] = useState<ReadonlySet<string>>(() => new Set());
@@ -256,13 +265,13 @@ export function ClearedTrail({ items, where, now, grouping }: {
                     <span className="wl-cg-n">{clearedCountWord(g.items.length)}</span>
                     <span className="wl-cg-chev" aria-hidden="true" />
                   </BareRow>
-                  {shown && <ul id={listId}>{g.items.map((c) => <ClearedRow key={c.id} item={c} now={now} />)}</ul>}
+                  {shown && <ul id={listId}>{g.items.map((c) => <ClearedRow key={c.id} item={c} now={now} current={current} />)}</ul>}
                 </div>
               );
             })}
           </div>
         )
-        : <ul>{(whole ? trail : trail.slice(0, CLEARED_SHOWN)).map((c) => <ClearedRow key={c.id} item={c} where={where} now={now} />)}</ul>}
+        : <ul>{(whole ? trail : trail.slice(0, CLEARED_SHOWN)).map((c) => <ClearedRow key={c.id} item={c} where={where} now={now} current={current} />)}</ul>}
       {more && (
         <Button variant="ghost" size="fit" className="wl-cleared-more" aria-expanded={all}
                 onClick={() => { setAll((v) => !v); setOpen(new Set()); }}>
@@ -357,8 +366,8 @@ export function WaitingScreen(props: WaitingScreenProps): ReactNode {
       {/* The trail follows the filter (PL11, D-7986): the programme's page lost its own trail, so the list filtered to one
           programme holds that programme's, without naming it on every row, and the sessions in no programme have none. */}
       {list.programme !== null
-        ? <ClearedTrail items={view.cleared.filter((c) => c.program === list.programme)} now={now} />
-        : <ClearedTrail items={noProgramme ? [] : view.cleared} now={now} where={(c) => programmeTitle(c.program, heardRuns)}
+        ? <ClearedTrail items={view.cleared.filter((c) => c.program === list.programme)} now={now} current={rowActs.enabled} />
+        : <ClearedTrail items={noProgramme ? [] : view.cleared} now={now} where={(c) => programmeTitle(c.program, heardRuns)} current={rowActs.enabled}
                         grouping={{ title: (p) => programmeTitle(p, heardRuns), hue: (p) => hues.get(p) ?? null }} />}
       {sheets}
     </div>
