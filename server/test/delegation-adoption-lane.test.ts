@@ -19,7 +19,7 @@ import {
 } from '../src/coord/delegation-model.js';
 import type { DelegationCensusPass } from '../src/coord/gitref.js';
 import { DELEGATION_AUDIT_HOLD_MS, DELEGATION_HOLD_CLOSING, DELEGATION_REMINDER_LEAD_MS } from '../src/coord/delegation-adoption.js';
-import type { DelegationDurability } from '../src/coord/delegation-checkpoint.js';
+import type { DelegationDurability } from '../src/coord/delegation-durability.js';
 import { delegationAdoptionHealthOf, type DelegationEventEnvelopeV1, type FleetSession, type Presence } from '../../shared/api.js';
 import { seedRoster, testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';

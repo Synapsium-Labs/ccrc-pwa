@@ -6,7 +6,6 @@
     "renewing": "W1a",
     "renew-pending": "W1a",
     "renew-not-long-lived": "W1a",
-    "baseline-missing": "W1a",
     "act-ceiling": "W2",
     "server-not-isolated": "W2",
     "said-not-operator": "W2",

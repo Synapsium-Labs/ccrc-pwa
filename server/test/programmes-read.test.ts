@@ -131,6 +131,22 @@ describe('GET /api/programmes', () => {
     expect(r.waveOf).toBe(5);
   });
 
+  // Overlord W1 portfolio, characterization of the wave rule before it moves to `shared/programmes.ts#waveRepresentative`:
+  // the open run stands for its wave over a newer closed one, and between two open runs the higher id wins.
+  it('a wave whose older work run is open and whose newer one is closed buckets by the open one', async () => {
+    seed({ wave: 1, state: 'working' });
+    seed({ wave: 1, state: 'failed', closedBy: 'sweep' });
+    const r = row((await read()).body);
+    expect(r.waves).toEqual({ working: 1, waiting: 0, queued: 0, done: 0, failed: 0 });
+  });
+
+  it('a wave with two open work runs buckets by the higher id', async () => {
+    seed({ wave: 1, state: 'working' });
+    seed({ wave: 1, state: 'planned' });
+    const r = row((await read()).body);
+    expect(r.waves).toEqual({ working: 0, waiting: 0, queued: 1, done: 0, failed: 0 });
+  });
+
   it('a programme whose only open run is planned reads its lowest queued wave', async () => {
     seed({ wave: 3, state: 'planned' });
     seed({ wave: 4, state: 'planned', waveOf: 6 });

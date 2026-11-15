@@ -53,13 +53,10 @@ import {
 import {
   DELEGATION_CHECKPOINT_FILE,
   DELEGATION_REPAIR_FULL_MS,
-  DelegationDurability,
-  type DelegationApplyOutcome,
-  type DelegationDurabilityDeps,
-  type DelegationDurabilityEdge,
   type DelegationProjectionPort,
   type DelegationProjectionRepairReport,
 } from '../src/coord/delegation-checkpoint.js';
+import { DelegationDurability, type DelegationApplyOutcome, type DelegationDurabilityDeps, type DelegationDurabilityEdge } from '../src/coord/delegation-durability.js';
 import { type DelegationFileHandle, type DelegationFilePort } from '../src/coord/delegation-journal.js';
 import { nodeDelegationFilePort } from '../src/coord/delegation-file-port.js';
 

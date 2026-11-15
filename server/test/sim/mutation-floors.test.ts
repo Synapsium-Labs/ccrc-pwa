@@ -18,6 +18,8 @@ import { PROBE_DOOR_MUTANT_SETS } from './probeDoorSets.js';
 import { NOTES_MUTANT_SETS } from './notesMutants.js';
 import { TIMER_MUTANT_SETS } from './timerSets.js';
 import { ANCHOR_MUTANT_SETS } from './anchorSets.js';
+import { QUIZ_MUTANT_SETS } from './quizSets.js';
+import { PORTFOLIO_MUTANT_SETS } from './portfolioSets.js';
 import { OVERLORD_HISTORY_MUTANT_SETS } from './overlordHistorySets.js';
 import { PUSH_OUTBOX_MUTANT_SETS } from './pushOutboxSets.js';
 import { VOCABULARY_MUTANT_SETS } from './vocabularySets.js';
@@ -160,6 +162,8 @@ const MUTANT_SETS: Record<string, MutantSet<never>> = {
   ...NOTES_MUTANT_SETS,
   ...TIMER_MUTANT_SETS,
   ...ANCHOR_MUTANT_SETS,
+  ...QUIZ_MUTANT_SETS,
+  ...PORTFOLIO_MUTANT_SETS,
   ...OVERLORD_HISTORY_MUTANT_SETS,
   ...PUSH_OUTBOX_MUTANT_SETS,
   ...VOCABULARY_MUTANT_SETS,
