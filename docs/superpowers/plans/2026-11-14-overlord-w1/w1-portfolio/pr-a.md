@@ -5,9 +5,10 @@ departure is a slug; the coordinator mints the numbers.
 
 ## Measured
 
-- **Migration slot.** The portfolio's migration is entry 74 on this branch. `main` took 74 for the anchor's seed row while
-  this was built, and another W1 piece (the push outbox) also holds 74, so this entry renumbers on the coordinator's word.
-  Its header, `coord-db.test.ts`' slot pins and `run-close-switch.test.ts`' count word follow the number.
+- **Migration slot.** The portfolio's migration is entry 75. `main` took 74 for the anchor's seed row while this was built,
+  so the branch merged `main` once and took 75 (the coordinator's ruling on ask 436). Two other open W1 pull requests also
+  carry 75; whichever lands first keeps it, and each later one renumbers on the coordinator's word. The header,
+  `coord-db.test.ts`' slot pins and `run-close-switch.test.ts`' count word follow the number.
 - **Growth, net lines against the merge base:** `schema.ts` +26, `store.ts` +3, `server.ts` +3, `watch.ts` +6,
   `ledgersRoutes.ts` +37, `shared/refusal.ts` +3. `growth-check` armed is green.
 - **Mutation floors:** `portfolioOrder` (6 mutants), `itemWaitMs` (7) and `portfolioFor` (19), every mutant killed, each

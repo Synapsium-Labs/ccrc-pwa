@@ -22,8 +22,13 @@ export const CONTINUITY_LANE = 'continuity';
  *  its role's launch profile. In shadow the lane counts the route writes it would make; live, it writes them, and from each
  *  session's next launch auto memory is off for every role but `plain` (whose Settings row decides). */
 export const LAUNCH_PROFILE_LANE = 'launch-profile';
+/** The anchor's row (Overlord W1a, the anchor piece; spec §3.3.3 C38): the card door's `part=anchor`. In shadow the door
+ *  renders each anchor and logs its size, and answers `dark`, so the hook prints today's role card; live, it serves the
+ *  anchor, which the hook prints in its first slot at every start of a session that is not a child, a fork's one refusal
+ *  line, and the anchor once after an automatic compaction that brought no start. */
+export const ANCHOR_SLOT_LANE = 'anchor-slot';
 /** The lanes the Shadow lanes card has a row for, in the card's order. */
-export const LANE_ARM_LANES = [ROSTER_CARD_LANE, CONTINUITY_LANE, LAUNCH_PROFILE_LANE] as const;
+export const LANE_ARM_LANES = [ROSTER_CARD_LANE, CONTINUITY_LANE, LAUNCH_PROFILE_LANE, ANCHOR_SLOT_LANE] as const;
 export type LaneArmLane = (typeof LANE_ARM_LANES)[number];
 export function isLaneArmLane(v: unknown): v is LaneArmLane {
   return typeof v === 'string' && (LANE_ARM_LANES as readonly string[]).includes(v);
@@ -151,6 +156,16 @@ export const LANE_ARM_TEXT = {
       liveNote: 'Each session\'s route names its role\'s launch profile: from its next launch, auto memory is off for every '
         + 'role but plain sessions, which follow their Settings row. Nothing is deleted, and no compaction setting moves '
         + 'until the renewal lane is live too.',
+      gate: null,
+    },
+    [ANCHOR_SLOT_LANE]: {
+      legend: 'Anchor at every start',
+      shadowNote: 'The server renders the anchor each start would get and logs its size to the server journal, as lines '
+        + 'beginning "ccrc-server: anchor-slot shadow:"; every session still starts with today\'s role card, a fork '
+        + 'included, and nothing is added after a compaction.',
+      liveNote: 'Each start of a session that is not a child begins with its anchor (its role, its canaries and counts, '
+        + 'and to read its card) in place of the role card; a fork gets one line saying it has no card, and the first '
+        + 'prompt after an automatic compaction carries the anchor once.',
       gate: null,
     },
   },

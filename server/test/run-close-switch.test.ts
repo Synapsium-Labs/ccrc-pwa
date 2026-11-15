@@ -100,7 +100,7 @@ describe('the store: three states per group, default shadow', () => {
     // testbox_events.changes, D-8399), 62 (claims.chainedFrom,
     // D-8395), 61 (nodes.reportedSweep, D-8386), 60 (claude_builds, D-8289), 59 (the plan model, D-8181), 58 (practice_cases,
     // Overlord W1a), 57 (testbox_events, D-8166), 56 (lane_arm_settings, D-8274) and 55 (coordinator_calls, D-8126) as well
-    // as 54, and 74 (portfolio_rank and portfolio_rank_revision, Overlord W1), so the reopen replays all twenty-one.
+    // as 54, and 74 (the anchor-slot row) and 75 (portfolio_rank and portfolio_rank_revision, Overlord W1), so the reopen replays all twenty-two.
     fresh.exec(`ALTER TABLE project_linking DROP COLUMN teamSource; ALTER TABLE project_linking DROP COLUMN teamName;
       ALTER TABLE project_linking DROP COLUMN teamEvidence; ALTER TABLE project_linking DROP COLUMN teamAt;
       ALTER TABLE project_linking DROP COLUMN teamCandidates;

@@ -3111,19 +3111,35 @@ export const MIGRATIONS: readonly string[] = [
     PRIMARY KEY (sessionId, door)
   );
   `,
-
   // ── 74: user_version 73 -> 74 ─────────────────────────────────────────────
+  // The anchor piece (Overlord spec §3.3.3 C38; W1a, plan `w1a-anchor.md` Task 2): the seed row `anchor-slot` = `shadow`
+  // adds the anchor's switch to the Shadow lanes card. Shadow, the card door's `part=anchor` renders the anchor, logs its
+  // size and answers `dark`, so the session hook prints today's role card; only `live`, set by the operator at
+  // `POST /api/coord/lane-arm`, serves it. The merge arms nothing.
+  //
+  // ONE SEED ROW, nothing else: an older build opening a file at `user_version 74` takes rule 3 (it warns, reads as-is and
+  // migrates nothing), reads the `anchor-slot` lane-arm row as no lane it knows, and boots. Every earlier entry is frozen.
+  // Probes PR B (#2802) took 73, so this entry is 74, the next free slot, pinned to the entry before it (the coordinator's
+  // rulings on ask 416 and of 19835). RE-MEASURE the slot before the PR and before merge (it must print 73 before this entry
+  // is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  INSERT INTO lane_arm_settings (lane, choice, updatedAt) VALUES ('anchor-slot', 'shadow', 0);
+  `,
+
+  // ── 75: user_version 74 -> 75 ─────────────────────────────────────────────
   // The portfolio (Overlord spec §5.6 H38; W1, plan `w1-portfolio.md` Task 2): `portfolio_rank`, the operator's order, one row
   // per ranked programme, and `portfolio_rank_revision`, one row whose counter only rises. ONE writer for both,
   // `portfolioStore.ts#setPortfolioRank`, reached only from the rank door; no row exists until the operator writes one.
-  // NEW TABLES, nothing on an existing table: an older build opening a file at `user_version 74` takes rule 3 and boots.
-  // RE-MEASURE the slot before the PR and before merge (it must print 73 before this entry is counted; renumber on the
-  // coordinator's word):
+  // NEW TABLES, nothing on an existing table: an older build opening a file at `user_version 75` takes rule 3 and boots.
+  // The anchor took 74, so this entry is 75 (the coordinator's ruling on ask 436). RE-MEASURE the slot before the PR and
+  // before merge (it must print 74 before this entry is counted; renumber on the coordinator's word):
   //     git fetch origin main
   //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
   `
   CREATE TABLE portfolio_rank (
-    program   TEXT PRIMARY KEY,   -- a programs.slug; the door checks it exists
+    program   TEXT PRIMARY KEY,   -- a programs.slug; the writer checks it exists
     position  INTEGER NOT NULL,   -- the place inside its class band, 1 first
     cls       TEXT NOT NULL,      -- ServiceClass; read through isServiceClass, never a cast
     fixedDate TEXT,               -- YYYY-MM-DD, only on fixed-date

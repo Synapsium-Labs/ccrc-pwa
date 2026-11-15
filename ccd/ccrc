@@ -20220,7 +20220,9 @@ _inst_skills() {
     CCRC_SKILL_SRC="$HOME/.cc-sessions/$name" bash "$HOME/.cc-sessions/install-$name.sh" \
       || _ccrc_die "install-$name.sh refused — read its lines above; it converges one account's skill directory at a time and rolls back a swap it could not finish, so no home was left without the skill it already had"
   done
-  echo "install: skills: ccrc-coordinator, ccrc-worker, ccrc-reviewer, ccrc-history and ccrc-linear in each account's skills directory"
+  # The Overlord's skill is staged once, outside every home: its launch loads it as a project skill (Overlord W1).
+  CCRC_SKILL_SRC="$tree/ccd/overlord-skill" bash "$tree/ccd/install-overlord-skill.sh" || _ccrc_die "install-overlord-skill.sh refused — read its lines above; it swaps the staged copy whole or keeps the one it had"
+  echo "install: skills: ccrc-coordinator, ccrc-worker, ccrc-reviewer, ccrc-history and ccrc-linear in each account's skills directory, and ccrc-overlord staged at ~/.cc-sessions/overlord-skill"
 }
 
 # The graphify skill is NOT one of _inst_skills' names on purpose (spec §B):
@@ -29288,8 +29290,8 @@ _uninst_cc_sessions() {
     done
   fi
   rm -rf -- "$reg/coordinator-skill" "$reg/worker-skill" "$reg/reviewer-skill" "$reg/history-skill" "$reg/linear-skill" \
-    || _ccrc_die "removing the skill trees under $reg failed"
-  echo "uninstall: ~/.cc-sessions: ccrc's own artifacts removed (hooks, notify, the children's and accounts' deny files, the five skill trees, the conflict radar's opt-in mirrors); the registry rows and operator switches stay"
+    "$reg/overlord-skill" || _ccrc_die "removing the skill trees under $reg failed"
+  echo "uninstall: ~/.cc-sessions: ccrc's own artifacts removed (hooks, notify, the children's and accounts' deny files, the six skill trees, the conflict radar's opt-in mirrors); the registry rows and operator switches stay"
 }
 
 # ── _uninst_graphify_skills — the per-home graphify skill directories ─────

@@ -38,6 +38,7 @@
     "ccd/install-graphify-skill.sh": {"count":0,"codes":{}},
     "ccd/install-history-skill.sh": {"count":0,"codes":{}},
     "ccd/install-linear-skill.sh": {"count":0,"codes":{}},
+    "ccd/install-overlord-skill.sh": {"count":0,"codes":{}},
     "ccd/install-reviewer-skill.sh": {"count":0,"codes":{}},
     "ccd/install-session-hooks.sh": {"count":11,"codes":{"SC2088":11}},
     "ccd/install-worker-skill.sh": {"count":0,"codes":{}},

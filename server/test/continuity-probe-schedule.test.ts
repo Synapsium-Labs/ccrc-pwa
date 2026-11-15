@@ -4,7 +4,7 @@
 import { describe, it } from 'vitest';
 import * as schedule from '../src/continuity/probeSchedule.js';
 import {
-  compactionWindowStartCases, emptyTryKeyCases, probeFailedUnfixedOfCases, probeScheduleCases, roundSnapshotOfCases, roundsOfCases,
+  compactionWindowStartCases, ctxSinceCompactionCases, emptyTryKeyCases, probeFailedUnfixedOfCases, probeScheduleCases, roundSnapshotOfCases, roundsOfCases,
   spotFactsOfCases,
 } from './sim/probeDoorSets.js';
 
@@ -28,4 +28,7 @@ describe('roundSnapshotOf: the snapshot a round is drawn from (review 2063 F2)',
 });
 describe('emptyTryKey: what an empty try is remembered by (review 2063 F4)', () => {
   for (const [name, run] of Object.entries(emptyTryKeyCases(schedule))) it(name, run);
+});
+describe('ctxSinceCompaction: the context only from a reading newer than the compaction (review 2068 F1)', () => {
+  for (const [name, run] of Object.entries(ctxSinceCompactionCases(schedule))) it(name, run);
 });
