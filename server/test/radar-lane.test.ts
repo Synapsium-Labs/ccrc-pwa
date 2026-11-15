@@ -16,6 +16,9 @@ import { localIO, type FleetIO } from '../src/io.js';
 import type { PrState } from '../../shared/api.js';
 import { seedRoster, testDeps, withFakeClock } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
+import { openCoordDb } from '../src/coord/db.js';
+import { landingStoreOver } from './landingFixture.js';
+import type { CoordStore } from '../src/coord/store.js';
 
 const NOW = Date.parse('2026-10-27T09:00:00Z');
 const iso = (offsetS: number): string => new Date(NOW + offsetS * 1000).toISOString().replace(/\.\d{3}Z$/, 'Z');
@@ -868,5 +871,158 @@ describe('the branch and PR derivations the lane and assembleFleet share (D-7484
     expect(sessionPrOf(rec({}), new Map([['claude-a-proj-a-alpha', swept]]))).toBe(swept);
     expect(sessionPrOf(rec({ prPhase: 'merged', prNumber: 3 }), undefined)).toMatchObject({ phase: 'merged', number: 3 });
     expect(sessionPrOf(rec({ workspace: null }), undefined)).toBeNull();
+  });
+});
+
+// Landing order wave 5i, Task 6: the radar lane also reads each wanted project's control bundle in its one pass, applies it
+// to the store synchronously (behind the generation fence), and keeps only the latest pass's bundle for the route.
+function plantRowIn(reg: string, id: string): void {
+  const fields: Record<string, string> = {
+    uuid: `u-${id}`, wrapper: 'claude-a', project: 'proj-a', workdir: `/w/${id}`, workspace: 'alpha', branch: 'ws/alpha', base: 'origin/main', started: '1' };
+  for (const [f, v] of Object.entries(fields)) writeFileSync(path.join(reg, `${id}.${f}`), v);
+}
+
+describe('the radar lane composes the control bundle and the store apply', () => {
+  let home: string;
+  let reg: string;
+  let watchers: FleetWatcher[];
+  let coord: CoordStore;
+  let dbHandle: ReturnType<typeof openCoordDb>;
+
+  beforeEach(() => {
+    home = mkTmp('ccrc-radar-ctl-');
+    seedRoster(home);
+    reg = path.join(home, '.cc-sessions');
+    mkdirSync(reg, { recursive: true });
+    watchers = [];
+    const dbPath = path.join(home, '.ccrc', 'coord.db');
+    dbHandle = openCoordDb(dbPath);
+    coord = landingStoreOver(dbHandle, dbPath);
+  });
+  afterEach(() => { for (const w of watchers) w.stop(); vi.restoreAllMocks(); });
+
+  const make = (io: FleetIO = localIO, over: Record<string, unknown> = {}): FleetWatcher => {
+    const deps = { ...testDeps(home), io, coord, ...over };
+    const w = new FleetWatcher(withFakeClock(deps as never), new Bus(), 10_000);
+    watchers.push(w);
+    return w;
+  };
+  const dir = (project: string): string => path.join(reg, 'landing', project);
+  const plantControl = (project: string, healthOver: Record<string, unknown> = {}): void => {
+    mkdirSync(dir(project), { recursive: true });
+    writeFileSync(path.join(dir(project), 'probe'), JSON.stringify(worked({ project })));
+    writeFileSync(path.join(dir(project), 'lander'), JSON.stringify({ v: 1, project, lander: 'coordinator', at: iso(-2) }));
+    writeFileSync(path.join(dir(project), 'main-health'), JSON.stringify({
+      v: 1, project, at: iso(0), sha: sha(9), state: 'green', required: [{ name: 'required-a', app: null }], failing: [], pending: [], ...healthOver }));
+  };
+  const seedOpen = (project: string, id: number, pr: number): void => {
+    dbHandle.prepare(
+      `INSERT INTO landing_entries (id, project, pr, pinnedSha, handoffCommit, runId, state, baseSha, ejectionKind, ejections, afterIds, fixesMain, setBy, pinnedAt)
+       VALUES (?, ?, ?, ?, ?, NULL, 'pinned', NULL, NULL, 0, '[]', 0, 'lane-a-${project}', ?)`)
+      .run(id, project, pr, sha(pr), sha(pr + 100), 1000 + id);
+  };
+  const applies = (): string[] => {
+    const seen: string[] = [];
+    const real = coord.applyLandingControl.bind(coord);
+    vi.spyOn(coord, 'applyLandingControl').mockImplementation((input) => { seen.push(input.project); return real(input); });
+    return seen;
+  };
+  const probeReads = (seen: string[], project: string): number =>
+    seen.filter((x) => x === `read ${path.join(dir(project), 'probe')}`).length;
+  const bentIo = (bend: (method: string, p: string) => unknown | undefined, seen: string[] = []): FleetIO => {
+    const wrap = <A extends unknown[], R>(method: string, f: (...a: A) => Promise<R>) => async (...a: A): Promise<R> => {
+      seen.push(`${method} ${String(a[0])}`);
+      const b = bend(method, String(a[0]));
+      return b === undefined ? f(...a) : (b as R);
+    };
+    return {
+      ...localIO,
+      readdirMeasured: wrap('readdir', (p: string, t?: number, s?: AbortSignal) => localIO.readdirMeasured(p, t, s)),
+      lstatMeasured: wrap('lstat', (p: string) => localIO.lstatMeasured(p)),
+      statMeasured: wrap('stat', (p: string) => localIO.statMeasured(p)),
+      readFileMeasured: wrap('read', (p: string, t?: number, s?: AbortSignal) => localIO.readFileMeasured(p, t, s)),
+      readFileFromBytesMeasured: wrap('read', (p: string, o: number, m: number, t?: number, s?: AbortSignal) => localIO.readFileFromBytesMeasured(p, o, m, t, s)),
+    };
+  };
+
+  it('a project with an open entry and no fleet session is read once and applied once', async () => {
+    plantControl('proj-b'); seedOpen('proj-b', 1, 12);
+    const seen: string[] = []; const ap = applies();
+    const w = make(bentIo(() => undefined, seen));
+    await w.sweepRadar([], NOW);
+    expect(probeReads(seen, 'proj-b')).toBe(1);
+    expect(ap.filter((p) => p === 'proj-b')).toHaveLength(1);
+    expect(w.currentLandingControl('proj-b')).toMatchObject({ lander: { ok: true }, probe: { ok: true }, health: { ok: true } });
+    expect(w.currentLandingControl('proj-unknown')).toBeUndefined();
+  });
+
+  it('a registry project with no entry is read too, and the getter hands out a copy', async () => {
+    plantRowIn(reg, 'claude-a-proj-a-alpha'); plantControl('proj-a');
+    const w = make();
+    await w.sweepRadar(await readRegistry(localIO, testDeps(home).cfg), NOW);
+    const first = w.currentLandingControl('proj-a');
+    expect(first).toMatchObject({ lander: { ok: true } });
+    (first as { lander: unknown }).lander = { ok: false, reason: 'late' };
+    expect(w.currentLandingControl('proj-a')).toMatchObject({ lander: { ok: true } });
+  });
+
+  it('an unlistable registry still reads and applies a DB-known project and keeps re-aging the chips', async () => {
+    plantControl('proj-b'); seedOpen('proj-b', 1, 12);
+    const ap = applies();
+    const w = make();
+    await w.sweepRadar(null, NOW);
+    expect(ap).toEqual(['proj-b']);
+    expect(w.currentLandingControl('proj-b')).toMatchObject({ health: { ok: true } });
+  });
+
+  it('a failed store inventory reads the registry projects but applies nothing', async () => {
+    plantRowIn(reg, 'claude-a-proj-a-alpha'); plantControl('proj-a');
+    const ap = applies();
+    vi.spyOn(coord, 'landingReadProjects').mockReturnValue({ ok: false, error: 'landing-db-unavailable', recovery: 'restart' } as never);
+    const w = make();
+    await w.sweepRadar(await readRegistry(localIO, testDeps(home).cfg), NOW);
+    expect(ap).toEqual([]);
+    expect(w.currentLandingControl('proj-a')).toMatchObject({ lander: { ok: true } });
+  });
+
+  it('a failed listing replaces a retained green with explicit unavailable evidence, never a borrowed snapshot', async () => {
+    plantControl('proj-b'); seedOpen('proj-b', 1, 12);
+    let broken = false;
+    const w = make(bentIo((m, p) => (broken && m === 'readdir' && p.endsWith(`${path.sep}landing`) ? { ok: false, reason: 'unreadable' } : undefined)));
+    await w.sweepRadar([], NOW);
+    expect(w.currentLandingControl('proj-b')).toMatchObject({ lander: { ok: true } });
+    broken = true;
+    await w.sweepRadar([], NOW + 1000);
+    expect(w.currentLandingControl('proj-b')).toEqual({
+      lander: { ok: false, reason: 'unreadable' }, probe: { ok: false, reason: 'unreadable' }, health: { ok: false, reason: 'unreadable' } });
+  });
+
+  it('a superseded pass cannot apply or cache: only the newer pass speaks', async () => {
+    plantControl('proj-b'); seedOpen('proj-b', 1, 12);
+    const ap = applies();
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>((r) => { release = r; });
+    let first = true;
+    const w = make(bentIo((m, p) => {
+      if (m !== 'readdir' || !p.endsWith(`${path.sep}landing`) || !first) return undefined;
+      first = false;
+      return gate.then(() => localIO.readdirMeasured(p));
+    }));
+    const stale = w.sweepRadar([], NOW);
+    await w.sweepRadar([], NOW + 1000);
+    expect(ap).toEqual(['proj-b']);
+    release();
+    expect(await stale).toBeUndefined();
+    expect(ap, 'the superseded pass cannot apply').toEqual(['proj-b']);
+  });
+
+  it('a remote box whose agent link is down answers no snapshot at all', async () => {
+    plantControl('proj-b'); seedOpen('proj-b', 1, 12);
+    const base = testDeps(home);
+    const w = make(localIO, { cfg: { ...base.cfg, fleetMode: 'remote' as const }, fleetState: { connected: true } });
+    await w.sweepRadar([], NOW);
+    expect(w.currentLandingControl('proj-b')).toMatchObject({ lander: { ok: true } });
+    (w as unknown as { deps: { fleetState: { connected: boolean } } }).deps.fleetState.connected = false;
+    expect(w.currentLandingControl('proj-b')).toBeUndefined();
   });
 });

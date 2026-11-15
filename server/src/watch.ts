@@ -6,6 +6,7 @@ import type { PerfHealth } from '../../shared/perf.js';
 import type { Bus } from './bus.js';
 import { assembleFleetWithPanePids, fleetNow, lifecycleInputFor, registrySecondsToMs, sessionBranchOf, sessionPrOf } from './fleet.js';
 import { readRadarPass } from './coord/lineageRead.js';
+import type { LandingControlRead } from './coord/radar.js';
 import { radarRowsOf, sessionLandingsOf } from './coord/radar.js';
 import { askPushBody, withCoordinatorBody } from './askbody.js';
 import { measuredIdentity, readRegistry, readRegistryMeasured, readSessionRecord } from './registry.js';
@@ -789,6 +790,8 @@ export class FleetWatcher {
   /** The radar lane's pass counter: the latest pass to start is the only one that may commit `landings` or speak. A pass the
    *  runner abandoned and later released finds a newer count and returns, so it never overwrites a newer map. */
   private radarGen = 0;
+  /** Wave 5i: the LATEST pass's control bundle per project (failures included), `sweepRadar` its one writer. */
+  private landingControls = new Map<string, LandingControlRead>();
   /** Last-measured repo cell per PROJECT — retained, not derived, from what
    *  `sweepPr` already reads off `CcdPrLine.repo` / `CcdPrFailure.reason` for
    *  `GET /api/projects`. See `repoCellFor` (prstate.ts) for the fold. */
@@ -1947,6 +1950,14 @@ export class FleetWatcher {
   /** The radar lane's map, for the two one-shot assemblies of `server.ts` (the REST fleet and the cold frame): a copy. */
   currentLandings(): Map<string, SessionLanding> { return new Map(this.landings); }
 
+  /** The latest pass's control bundle of one project, a copy, or `undefined` when none was measured or (on a remote box) the
+   *  agent link is down: a prior connection's bundle is never handed out. Values only; the binding's freshness is the decider's. */
+  currentLandingControl(project: string): LandingControlRead | undefined {
+    if (this.deps.cfg.fleetMode === 'remote' && !this.deps.fleetState?.connected) return undefined;
+    const c = this.landingControls.get(project);
+    return c === undefined ? undefined : structuredClone(c);
+  }
+
   /** The landing radar lane, one pass (landing order wave 4b; `coord/radar.ts`, `coord/lineageRead.ts`). `records` is the
    *  tick's registry listing, null when it cannot be listed. An unlistable registry or `landing` directory only RE-AGES
    *  the kept map, and a proven absence of that directory empties it. A listed one builds a NEW map from the projects
@@ -1959,9 +1970,13 @@ export class FleetWatcher {
       if (this.radarSaid.get(key) !== reason && warn) console.warn(`ccrc-server: the landing radar's ${key === '' ? 'listing' : `probe of ${printableDetail(key)}`} is ${reason}`);
       this.radarSaid.set(key, reason);
     };
-    if (records === null) { this.landings = reaged(); return; }
+    // Wave 5i: the store inventory joins the registry's projects, so a project with no session is read too. A failed inventory
+    // reads the registry's projects only and applies nothing.
+    const inventory = this.deps.coord?.landingReadProjects();
+    const known = inventory?.ok ? inventory.projects : [];
+    if (records === null && known.length === 0) { this.landings = reaged(); this.landingControls = new Map(); return; }
     const heads = this.currentHeadBranches();
-    const { byProject, stray } = radarRowsOf(records, (r) => {
+    const { byProject, stray } = radarRowsOf(records ?? [], (r) => {
       const pr = sessionPrOf(r, this.prStates);
       // D-7515: a draft is an open PR to GitHub and to the radar. A row whose PR is any other phase and still carries a number
       // (merged, closed, or a sweep backing off as `unknown`/`unchecked`) matches nothing, and fails closed while the sweep fails.
@@ -1970,18 +1985,37 @@ export class FleetWatcher {
         pr: pr === null || pr.number === null ? null : { number: pr.number, open: pr.phase === 'open' || pr.phase === 'draft' },
       };
     });
+    const wanted = new Set(this.deps.coord === undefined ? [] : [...byProject.keys(), ...known]);
     const pass = await readRadarPass(
-      this.deps.io, this.deps.cfg.registryDir, new Set(byProject.keys()), nowMs, LANDING_RADAR_SWEEP_MS / 2);
+      this.deps.io, this.deps.cfg.registryDir, new Set(byProject.keys()), nowMs, LANDING_RADAR_SWEEP_MS / 2, wanted);
     if (gen !== this.radarGen) return;
-    said('', pass.ok ? 'ok' : pass.reason, !pass.ok && pass.reason !== 'absent');
-    if (!pass.ok) { this.landings = pass.reason === 'absent' ? new Map() : reaged(); return; }
-    const next = new Map<string, SessionLanding>();
-    for (const [project, read] of pass.reads) {
-      said(project, read.ok ? 'ok' : read.reason, !read.ok && read.reason !== 'absent');
-      if (!read.ok) continue;
-      for (const [id, l] of sessionLandingsOf(read.doc, byProject.get(project) ?? [], nowMs, stray)) next.set(id, l);
+    if (records !== null) said('', pass.ok ? 'ok' : pass.reason, !pass.ok && pass.reason !== 'absent');
+    // A failed listing is explicit unavailable evidence for every wanted project, never a retained green.
+    const unavailable = (reason: Exclude<typeof pass, { ok: true }>['reason']): LandingControlRead => {
+      const f = { ok: false, reason } as const;
+      return { lander: f, probe: f, health: f };
+    };
+    const controls = pass.ok ? pass.controls : new Map([...wanted].map((p) => [p, unavailable(pass.reason)]));
+    if (!pass.ok) this.landings = records !== null && pass.reason === 'absent' ? new Map() : reaged();
+    else if (records === null) this.landings = reaged();
+    else {
+      const next = new Map<string, SessionLanding>();
+      for (const [project, read] of pass.reads) {
+        said(project, read.ok ? 'ok' : read.reason, !read.ok && read.reason !== 'absent');
+        if (!read.ok) continue;
+        for (const [id, l] of sessionLandingsOf(read.doc, byProject.get(project) ?? [], nowMs, stray)) next.set(id, l);
+      }
+      this.landings = next;
     }
-    this.landings = next;
+    // One synchronous apply per project, right after the generation check: the store owns the flag and the cue.
+    this.landingControls = controls;
+    if (inventory?.ok !== true) return;
+    for (const [project, control] of controls) {
+      const r = this.deps.coord!.applyLandingControl({ project, control, nowMs });
+      const why = r.kind === 'failure' ? r.failure.error : 'ok';
+      if (this.radarSaid.get(`control:${project}`) !== why && r.kind === 'failure') console.warn(`ccrc-server: the landing control of ${printableDetail(project)} was not applied (${why})`);
+      this.radarSaid.set(`control:${project}`, why);
+    }
   }
 
   /** The delegation lane's input from the last census pass (see `delegationCensus`). */

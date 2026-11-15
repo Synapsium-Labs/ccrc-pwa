@@ -24,6 +24,7 @@ import { decideCaps } from './caps.js';
 import { tx } from './db.js';
 import { LEDGER_ALLOC_MAX } from './ledger.js';
 import { landingViewOf } from './landingLine.js';
+import { landingReadView } from './landingReadView.js';
 import { landingCommandOf, parseLandingReadQuery, parseLandingWrite } from './landingWrites.js';
 import { actLandingWrite } from './landingWritesAct.js';
 import type { LandingLineView } from '../../../shared/landingLine.js';
@@ -4293,8 +4294,8 @@ export function registerCoordRoutes(
    * `?pr=` that PR's entry in any state; `entriesScope` says which), read cookieless from the fleet host before the coordinator
    * enqueues. It follows the `GET /api/ledger` convention: box token, a read with no attribution to check, per-project
    * and REQUIRED. The order is computed on this read by `landingLine.ts#landingOrder` and never stored. A project with
-   * no `landing_projects` row answers both flags `false`: inert until their writers (5i, 5j). The read is advisory
-   * in 5e (D-7626). The handler decides nothing: decide in L1, act here.
+   * no `landing_projects` row answers both flags `false`. `binding` (wave 5i) is decided on this read from the current facts and the watcher's
+   * latest control snapshot, never stored. The read is advisory in 5e (D-7626). The handler decides nothing: decide in L1, act here.
    */
   app.get('/api/landing', async (req, reply) => {
     if (!deps.coord) return notConfigured(reply);
@@ -4304,8 +4305,10 @@ export function registerCoordRoutes(
     const { project, pr } = query;
     const read = deps.coord.readLanding(project);
     if (!read.ok) { const { ok: _ok, error, ...extra } = read; return refuseRoute(reply, error, extra); }
-    const { entries, flags, recovery } = read.facts;
-    const view: LandingLineView = { project, ...flags, ...landingViewOf(entries, flags, recovery, pr), recovery };
+    const { entries, recovery } = read.facts;
+    // One view of the hold: the order and the binding are decided from the same value (`landingReadView`), the route's own now.
+    const { flags: held, binding } = landingReadView(read.facts, watcher?.currentLandingControl(project), Date.now());
+    const view: LandingLineView = { project, ...held, ...landingViewOf(entries, held, recovery, pr), binding, recovery };
     return reply.code(200).send({ ok: true, ...view });
   });
 

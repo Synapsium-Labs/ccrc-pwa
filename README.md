@@ -5767,7 +5767,8 @@ and write, an advance's pin and its retreat from `merging` and a landing's mark 
 `landing-fenced` with that word. An uncertain apply is named beside the append and the commit (`landing-db-apply`, as
 `landing-db-commit`, with `mayApply: true`), because the land arm answers the same words. After a `restart` fence the database
 handle is closed, so a later call that reads the database before the landing guard (the advance route reads the run first) fails
-on the closed handle instead of answering `landing-fenced`. A `replay`
+on the closed handle instead of answering `landing-fenced`. That closed handle is why a `restart` fence can leave later non-landing route reads failing too. Landing reads and writes are all fenced alike, and the
+read answers a `binding` (`inert`, `held` with a reason, or `ready` for the selected head), decided on that read, never stored. A `replay`
 fence and a `restart` fence alike clear only when the server restarts: the replay is the only thing that reopens the line, and only
 the boot calls it, so there is no retry timer and nothing reopens the line while the server runs; a restart whose replay refuses
 does not start. A retreat refused `landing-projection-unreadable` (its pin names another head than the
