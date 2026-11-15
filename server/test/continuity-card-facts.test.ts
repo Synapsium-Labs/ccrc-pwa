@@ -323,31 +323,34 @@ describe('gatherCardFacts: the notes and the checkpoint (the notes piece, Task 3
     expect((await gather(c)).facts.notes).toEqual({ kind: 'unmeasured', what: 'the notes' });
   });
 
-  it('the checkpoint is the handover note of the generation the live one replaced, and null when it wrote none', async () => {
+  it('the checkpoint is the stored checkpoint of the generation the live one replaced, at a renewal only, and null when it stored none', async () => {
     const c = store();
     expect((await gather(c)).facts.checkpoint).toEqual({ kind: 'read', value: null });
     const first = mint(c);
     expect((await gather(c)).facts.checkpoint).toEqual({ kind: 'read', value: null });
-    expect(c.putHandover({ generationId: first, note: { threads: [{ ref: { kind: 'run', id: 4 }, waitsOn: 'w', next: 'n' }], cautions: ['c'], tone: 't' }, dropped: 1, at: NOW - 9 }).ok).toBe(true);
-    // Still the first generation: no generation before it wrote a note.
+    // The notes piece's handover row is not the card's source any more: the lane copies it into the checkpoint row.
+    expect(c.putHandover({ generationId: first, note: { threads: [], cautions: [], tone: 'notes row' }, dropped: 0, at: NOW - 9 }).ok).toBe(true);
+    expect(c.putCheckpoint({ generationId: first, notes: [], rulings: [], at: NOW - 9,
+      handover: { n: 1, dropped: 1, note: { threads: [{ ref: { kind: 'run', id: 4 }, waitsOn: 'w', next: 'n' }], cautions: ['c'], tone: 't' } } }).ok).toBe(true);
+    // Still the first generation: no generation before it stored a checkpoint.
     expect((await gather(c)).facts.checkpoint).toEqual({ kind: 'read', value: null });
     mint(c);
     expect((await gather(c)).facts.checkpoint).toEqual({ kind: 'read', value: {
-      at: NOW - 9, handover: { generation: 1, dropped: 1, threads: [{ ref: 'run 4', waitsOn: 'w', next: 'n' }], cautions: ['c'], tone: 't' },
+      at: NOW - 9, handover: { generation: 1, dropped: 1, threads: [{ ref: 'run 4', waitsOn: 'w', next: 'n' }], cautions: ['c'], tone: 't' }, notes: [], rulings: [],
     } });
-    // A third generation whose predecessor wrote none: null, never the older note.
+    // A third generation whose predecessor stored none: null, never the older checkpoint.
     mint(c);
     expect((await gather(c)).facts.checkpoint).toEqual({ kind: 'read', value: null });
   });
 
-  it('a generations or handover read that fails is an unmeasured checkpoint, never null', async () => {
+  it('a generations or checkpoint read that fails is an unmeasured checkpoint, never null', async () => {
     for (const breakIt of [(c: CoordStore) => { c.liveGenerations = () => ({ ok: false, detail: 'x' }); },
-      (c: CoordStore) => { c.handoverBefore = () => ({ ok: false, detail: 'x' }); },
-      (c: CoordStore) => { c.handoverBefore = () => { throw new Error('disk'); }; }]) {
+      (c: CoordStore) => { c.checkpointBefore = () => ({ ok: false, detail: 'x' }); },
+      (c: CoordStore) => { c.checkpointBefore = () => { throw new Error('disk'); }; }]) {
       const c = store();
       mint(c);
       breakIt(c);
-      expect((await gather(c)).facts.checkpoint).toEqual({ kind: 'unmeasured', what: 'the checkpoint (the handover note)' });
+      expect((await gather(c)).facts.checkpoint).toEqual({ kind: 'unmeasured', what: 'the checkpoint' });
     }
   });
 });

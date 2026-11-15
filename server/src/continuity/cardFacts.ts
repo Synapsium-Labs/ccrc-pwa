@@ -18,9 +18,9 @@
  * ruling F4 on review 2023), the items (`itemsFor`, all programmes, once, the hold disregarded: the session's raised items,
  * each programme's open items, and the held items of the runs it claims), each programme's goals and modifications
  * (`goalsFor`), and the outstanding mail (`outstandingMailFor`). The notes piece adds the identity's live notes
- * (`liveNotes`, each key measured now through `noteKeyReader`, the note door's own reader) and the checkpoint: the handover
- * note of the generation the identity's live one replaced (`liveGenerations`, then `handoverBefore`, which finds that
- * generation by its place in the line and reads no state column). The timers piece adds the session's own pending timers
+ * (`liveNotes`, each key measured now through `noteKeyReader`, the note door's own reader) and the checkpoint: what the generation
+ * the identity's live one replaced stored at its renewal (`liveGenerations`, then `checkpointBefore`, which finds that
+ * generation by its place in the line, reads no state column and answers its outcome; read only at `renewed`). The timers piece adds the session's own pending timers
  * (`pendingTimersOf`, oldest due first), each carried with `timerPreview`'s cut of its note and never the note itself.
  */
 import { OUTSTANDING_DELIVERY_STATES, type ChildMark, type ChildReclaimGeneration, type RunKind } from '../../../shared/api.js';
@@ -40,7 +40,7 @@ import { timerPreview } from './timers.js';
 /** The store reads the gatherer makes, declared by this consumer. */
 export type CardFactsCoord = Pick<CoordStore, 'bindingsOf' | 'bindingRunsOf' | 'openCoordinatorIds' | 'run' | 'activeClaims'
   | 'outstandingMailFor' | 'itemsFor' | 'goalsFor' | 'liveNotes' | 'claimsProgramme' | 'itemById' | 'liveGenerations'
-  | 'handoverBefore' | 'pendingTimersOf'>;
+  | 'checkpointBefore' | 'pendingTimersOf'>;
 
 export interface CardFactsDeps {
   readonly coord: CardFactsCoord;
@@ -202,23 +202,29 @@ export async function gatherCardFacts(deps: CardFactsDeps, id: string, now: numb
       id: n.id, at: n.at, kind: n.kind, key: noteKeyText(n.key), keyFact: noteKeyFact(keyOf(n.key), id), waitsOn: n.waitsOn, next: n.next,
     }));
   });
-  // The checkpoint: the handover note of the generation the live one replaced, or null when it wrote none.
-  // A read that failed is `unmeasured`; no live generation, or one whose predecessor wrote no note, is a read null.
+  // The checkpoint: what the generation the live one replaced stored when the lane renewed it (the renewal act), read only
+  // when that generation ended by a renewal (its outcome is `renewed`); a crash, a swap or a wake carries none. A read that
+  // failed is `unmeasured`; no live generation, no stored checkpoint or another outcome is a read null.
   const checkpoint = ((): Fact<CardCheckpoint | null> => {
-    const what = 'the checkpoint (the handover note)';
+    const what = 'the checkpoint';
     try {
       const gens = coord.liveGenerations();
       if (!gens.ok) return unmeasured(what);
       const live = gens.rows.find((g) => g.identity === id);
       if (live === undefined) return read(null);
-      const h = coord.handoverBefore(id, live.id);
-      if (!h.ok) return unmeasured(what);
-      if (h.handover === null) return read(null);
-      const { n, at, dropped, note } = h.handover;
-      return read({ at, handover: {
-        generation: n, dropped, cautions: note.cautions, tone: note.tone,
-        threads: note.threads.map((t) => ({ ref: noteKeyText(t.ref), waitsOn: t.waitsOn, next: t.next })),
-      } });
+      const c = coord.checkpointBefore(id, live.id);
+      if (!c.ok) return unmeasured(what);
+      if (c.checkpoint === null || c.checkpoint.outcome !== 'renewed') return read(null);
+      const { at, handover, notes: held, rulings } = c.checkpoint;
+      return read({
+        at,
+        handover: handover === null ? null : {
+          generation: handover.n, dropped: handover.dropped, cautions: handover.note.cautions, tone: handover.note.tone,
+          threads: handover.note.threads.map((t) => ({ ref: noteKeyText(t.ref), waitsOn: t.waitsOn, next: t.next })),
+        },
+        notes: held.map((n) => ({ id: n.id, at: n.at, kind: n.kind, key: noteKeyText(n.key), waitsOn: n.waitsOn, next: n.next })),
+        rulings: rulings.map((r) => ({ at: r.at, source: r.source, subject: r.subject, text: r.text })),
+      });
     } catch {
       return unmeasured(what);
     }

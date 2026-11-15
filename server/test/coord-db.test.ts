@@ -728,9 +728,10 @@ describe('coord.db: migration 4 — runs.dispatchStartedAt', () => {
     // and MIGRATIONS[70] (plain_memory_settings and the launch-profile lane-arm row, Overlord W1a launch profiles PR B)
     // and MIGRATIONS[71] (continuity_notes and continuity_handovers, the note door, Overlord W1a)
     // and MIGRATIONS[72] (continuity_probes and continuity_reads, the probe door, Overlord W1a)
-    // and MIGRATIONS[73] (the anchor-slot lane-arm row, the anchor, Overlord W1a).
-    expect(COORD_SCHEMA_VERSION).toBe(74);
-    expect(MIGRATIONS.length).toBe(74);
+    // and MIGRATIONS[73] (the anchor-slot lane-arm row, the anchor, Overlord W1a)
+    // and MIGRATIONS[74] (continuity_checkpoints and continuity_renew_calls, the renewal act, Overlord W1a).
+    expect(COORD_SCHEMA_VERSION).toBe(75);
+    expect(MIGRATIONS.length).toBe(75);
   });
 
   it('is ADDITIVE: every column migration 1 wrote is still on the table, unchanged', () => {
@@ -829,8 +830,9 @@ describe('coord.db: migration 11 — runs.kind and runs.reviews (design 2026-09-
     // and MIGRATIONS[70] (plain_memory_settings, launch profiles PR B)
     // and MIGRATIONS[71] (continuity_notes and continuity_handovers, Overlord W1a)
     // and MIGRATIONS[72] (continuity_probes and continuity_reads, Overlord W1a)
-    // and MIGRATIONS[73] (the anchor-slot lane-arm row, Overlord W1a); the migration above is still entry 11.
-    expect(COORD_SCHEMA_VERSION).toBe(74);
+    // and MIGRATIONS[73] (the anchor-slot lane-arm row, Overlord W1a)
+    // and MIGRATIONS[74] (continuity_checkpoints and continuity_renew_calls, Overlord W1a); the migration above is still entry 11.
+    expect(COORD_SCHEMA_VERSION).toBe(75);
     const row = db.prepare('SELECT kind, reviews FROM runs').get() as { kind: string; reviews: number | null };
     expect(row).toEqual({ kind: 'work', reviews: null });
     db.close();
@@ -2764,6 +2766,43 @@ describe('coord.db: the anchor-slot lane-arm row (Overlord W1a, the anchor piece
     expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(COORD_SCHEMA_VERSION);
     expect(db.prepare("SELECT choice, updatedAt FROM lane_arm_settings WHERE lane = 'anchor-slot'").get()).toEqual({ choice: 'shadow', updatedAt: 0 });
     expect(db.prepare("SELECT choice, updatedAt FROM lane_arm_settings WHERE lane = 'roster-card'").get()).toEqual({ choice: 'live', updatedAt: 7 });
+    expect(db.prepare('SELECT sessionId, door, at FROM continuity_reads').all()).toEqual([{ sessionId: 'lane-a-project-a', door: 'card', at: 5 }]);
+    db.close();
+  });
+});
+
+describe('coord.db: the checkpoint and renew-call tables (Overlord W1a, the renewal act; C37, H12)', () => {
+  /** Found by its text, never hard-coded. */
+  const SLOT = MIGRATIONS.findIndex((m) => m.includes('CREATE TABLE continuity_checkpoints')) + 1;
+  const columns = (db: DatabaseSync, table: string): string[] =>
+    (db.prepare(`PRAGMA table_info(${table})`).all() as { name: string; notnull: number; pk: number }[])
+      .map((c) => `${c.name}${c.notnull === 1 ? '!' : ''}${c.pk > 0 ? `#${c.pk}` : ''}`);
+
+  it('TWO NEW TABLES in one entry, the one after the anchor row\'s, and nothing on an existing table', () => {
+    expect(SLOT).toBe(MIGRATIONS.findIndex((m) => m.includes("VALUES ('anchor-slot', 'shadow', 0)")) + 2);
+    expect(SLOT).toBe(75);
+    expect(MIGRATIONS[SLOT - 1]).toContain('CREATE TABLE continuity_renew_calls');
+    const sql = MIGRATIONS[SLOT - 1]!.replace(/--[^\n]*/g, '');
+    expect(sql.match(/\b(?:CREATE|ALTER|DROP|INSERT|UPDATE|DELETE)\b[^;(]*/g)!.map((x) => x.trim())).toEqual([
+      'CREATE TABLE continuity_checkpoints', 'CREATE TABLE continuity_renew_calls']);
+  });
+
+  it('reaches a database ALREADY at the version before it (74): both tables land, empty, and an existing row is as it was', () => {
+    const p = dbPathIn(mkTmp('ccrc-coord-'));
+    mkdirSync(path.dirname(p), { recursive: true });
+    const raw = new DatabaseSync(p);
+    tx(raw, () => {
+      for (let v = 0; v < SLOT - 1; v++) raw.exec(MIGRATIONS[v]!);
+      raw.exec(`PRAGMA user_version = ${SLOT - 1}`);
+      raw.exec("INSERT INTO continuity_reads (sessionId, door, at) VALUES ('lane-a-project-a', 'card', 5)");
+    });
+    raw.close();
+    const db = openCoordDb(p);
+    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(COORD_SCHEMA_VERSION);
+    expect(columns(db, 'continuity_checkpoints')).toEqual(['generationId#1', 'notes!', 'rulings!', 'handover', 'at!']);
+    expect(columns(db, 'continuity_renew_calls')).toEqual(['generationId!#1', 'try!#2', 'at!', 'answer']);
+    expect(db.prepare('SELECT count(*) AS n FROM continuity_checkpoints').get()).toEqual({ n: 0 });
+    expect(db.prepare('SELECT count(*) AS n FROM continuity_renew_calls').get()).toEqual({ n: 0 });
     expect(db.prepare('SELECT sessionId, door, at FROM continuity_reads').all()).toEqual([{ sessionId: 'lane-a-project-a', door: 'card', at: 5 }]);
     db.close();
   });

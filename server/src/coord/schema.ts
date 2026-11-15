@@ -3127,6 +3127,36 @@ export const MIGRATIONS: readonly string[] = [
   `
   INSERT INTO lane_arm_settings (lane, choice, updatedAt) VALUES ('anchor-slot', 'shadow', 0);
   `,
+  // ── 75: user_version 74 -> 75 ─────────────────────────────────────────────
+  // The renewal act (Overlord spec §3.3.2 C37 and §3.3.11 H12; W1a, plan `w1a-renewal-act.md` Task 3): two tables of the
+  // generations lane, which is their only writer. `continuity_checkpoints` holds the checkpoint the lane assembles for a
+  // generation before it renews it: the identity's live notes and, for a coordinator, its last ten rulings (each a JSON
+  // array), and the handover note's JSON or NULL (a hard trigger carries none). The card reads the row of the generation
+  // that ended last. `continuity_renew_calls` holds one row per `SessionHost.renew` call the lane makes for a generation's
+  // try, inserted BEFORE the call (a crash then never repeats a try) and given its answer word after.
+  //
+  // NEW TABLES, nothing on an existing table: an older build opening a file at `user_version 74` takes rule 3 (it warns,
+  // reads as-is and migrates nothing), never names either table, and boots. Every earlier entry is frozen.
+  // The anchor piece took 74, so this entry is 75, the next free slot. RE-MEASURE the slot before the PR and before merge
+  // (it must print 74 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE continuity_checkpoints (
+    generationId INTEGER PRIMARY KEY,   -- the generation the checkpoint was assembled for (continuity_generations.id)
+    notes        TEXT NOT NULL,         -- JSON array: the identity's live notes as stored
+    rulings      TEXT NOT NULL,         -- JSON array: a coordinator's last ten rulings, newest first; [] for any other role
+    handover     TEXT,                  -- JSON: the handover note (with its generation and dropped count), or NULL
+    at           INTEGER NOT NULL       -- wall ms the lane stored it
+  );
+  CREATE TABLE continuity_renew_calls (
+    generationId INTEGER NOT NULL,
+    try          INTEGER NOT NULL,      -- the try within the generation (1-based)
+    at           INTEGER NOT NULL,      -- wall ms the call was claimed, before it was made
+    answer       TEXT,                  -- the RenewResult word, or NULL while the call is in flight or its answer was lost
+    PRIMARY KEY (generationId, try)
+  );
+  `,
 ];
 
 /** The version this build writes. `MIGRATIONS.length` and nothing else: a

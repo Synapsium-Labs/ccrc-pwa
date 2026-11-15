@@ -32,12 +32,13 @@ import type { LinkingWriteBody, ProjectLinkingWire } from '../../../shared/linki
 import { openPracticeCase, practiceCaseNewest, type PracticeCaseNewestRead, type PracticeCaseOpen } from './practiceCasesStore.js';
 import type { CaseDue } from './practiceCases.js';
 import {
-  advanceCursor, advanceObserved, appendNote, cardReadOfStart, clearShadowWalk, generationsCursor, handoverBefore, insertCardRead,
-  insertSnapshot, insertStart, liveGenerations, liveNotes, mintGeneration, noteById, putHandover, setGenerationDue, setHoldOff,
-  startsOf, startsSince, stepGeneration,
+  advanceCursor, advanceObserved, answerRenewCall, appendNote, cardReadOfStart, checkpointBefore, claimRenewCall, clearShadowWalk,
+  generationsCursor, handoverBefore, insertCardRead, insertSnapshot, insertStart, liveGenerations, liveNotes, mintGeneration, noteById,
+  putCheckpoint, putHandover, renewCallsOf, rulingRowsOf, setGenerationDue, setHoldOff, startsOf, startsSince, stepGeneration,
   type CardReadInsert, type CardReadRead, type CursorAdvance, type CursorRead, type DueWrite, type SnapshotInsert,
   type GenExpect, type GenerationsRead, type MintInput, type MintResult, type StartInsert, type StartInsertResult, type StartsRead,
   type HandoverRead, type NoteByIdRead, type NoteInsert, type NotesRead,
+  type CheckpointInsert, type CheckpointRead, type RenewCallsRead, type RulingsRead,
 } from '../continuity/continuityStore.js';
 import * as timers from '../continuity/continuityStore.js';
 import * as probes from '../continuity/continuityStore.js';
@@ -5416,6 +5417,13 @@ export class CoordStore {
   noteById(id: number): NoteByIdRead { return noteById(this.db, id); }
   putHandover(h: { generationId: number; note: HandoverNote; dropped: number; at: number }): { ok: true; fresh: boolean; dropped: number } | { ok: false } { return putHandover(this.db, h); }
   handoverBefore(identity: string, liveGenerationId: number): HandoverRead { return handoverBefore(this.db, identity, liveGenerationId); }
+  /** Overlord §3.3.2 C37, §3.3.11 H12 (the renewal act, `continuityStore.ts`): the generations lane's checkpoint and renew-call writers, and the reads. */
+  putCheckpoint(c: CheckpointInsert): ReturnType<typeof putCheckpoint> { return putCheckpoint(this.db, c); }
+  checkpointBefore(identity: string, liveGenerationId: number): CheckpointRead { return checkpointBefore(this.db, identity, liveGenerationId); }
+  claimRenewCall(generationId: number, tryN: number, at: number): ReturnType<typeof claimRenewCall> { return claimRenewCall(this.db, generationId, tryN, at); }
+  answerRenewCall(generationId: number, tryN: number, answer: string): ReturnType<typeof answerRenewCall> { return answerRenewCall(this.db, generationId, tryN, answer); }
+  renewCallsOf(generationId: number): RenewCallsRead { return renewCallsOf(this.db, generationId); }
+  rulingRowsOf(sessionId: string, limit: number): RulingsRead { return rulingRowsOf(this.db, sessionId, limit); }
   /** Overlord §3.3.5 C41 (the probes piece, `continuityStore.ts`): the lane's round writer, the probe door's answer writer, the
    *  card and note GETs' read stamp, and the reads. */
   openRound(r: probes.RoundInsert): ReturnType<typeof probes.openRound> { return probes.openRound(this.db, r); }
