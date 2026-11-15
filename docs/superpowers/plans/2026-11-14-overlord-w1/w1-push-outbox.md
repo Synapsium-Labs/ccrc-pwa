@@ -75,9 +75,12 @@ recommendation unless the coordinator rules otherwise. Rulings so far are marked
    and the two columns (Table 11.5's "ignored" class). The obligation W3 inherits, recorded here so W3's plan finds it:
    `ccd/ccrc#cmd_rollback` reads no server capability word today. A release records none (`build.json` carries `sha`,
    `ref`, `builtAt`, `dirty` and `version` only). `CCRC_CAP_WORDS` names what an install's `ccrc` can do, never a
-   server word, and "a version number is never a capability" (decision 13). So W3's refusal first needs each build to
-   carry its server words, or the shared floor check the index gives the pool-set piece. The coordinator records this
-   on the index row and Table 11.1d's line.
+   server word, and "a version number is never a capability" (decision 13). **Ruled (second report of review 2083):**
+   there is one release capability record and one rollback floor check, and both are the pool-set piece's
+   (`_upd_cap_floor_check` beside `_upd_floor_check` in `ccd/ccrc`, reading the target's `build.json` `ccdCaps`, its
+   Task 8, with `--force` and the unattended passes it defines). W3's refusal below `push-outbox-v1` reuses that check
+   and adds only its word to the record that check reads. It builds no second record, reader, flag or warning. The
+   coordinator records this on the index row and Table 11.1d's line.
 6. **The ask's reach stamp beside `releasedAt`** (slug `reach-stamp-beside-released-at`). `asks.releasedAt` already
    records "the instant the operator's push was released" (`CoordStore.declineAsk`). In W1 the two are equal. In W3 an
    ask the coordinator releases may be held for the Overlord, so they part. **Recommendation:** a column of its own. Its
@@ -728,8 +731,8 @@ None yet. **Spec departures**, for the spec's next correction:
   (open question 3).
 - **item-held-until-is-a-hold** — items already have a hold, `heldUntil`. The drain stamps their reach at it (open
   question 4).
-- **rollback-refusal-ships-with-holds** — W1 advertises `push-outbox-v1` and refuses no rollback. The refusal, and the
-  record of each build's server words it first needs, ship with W3's hold arming (open question 5, ruled R1).
+- **rollback-refusal-ships-with-holds** — W1 advertises `push-outbox-v1` and refuses no rollback. The refusal ships
+  with W3's hold arming, and adds only its word to the pool-set piece's one floor check (open question 5, ruled R1).
 - **silent-is-its-own-state** — the spec says a silent row is "marked sent at once". Here it is `silent`, a terminal
   state of its own with its reason, so `sent` always means the push service accepted it.
 
@@ -801,6 +804,8 @@ Decisions this plan takes, by slug:
   - The verdict mapping and `outboxRetryAt`'s null are defined.
   - `silentWhy` is typed, the actors are renamed, `unknown`'s wording is fixed, and `silent` is listed as a departure.
 - From the index review, F6 and F13 stand: the wire types are in a sibling, and the shared rows are named.
+- From the second report: no rollback task and no PR C. The one floor check is the pool-set piece's, and W3 reuses it
+  (open question 5).
 
 **What depends on it:** responses PR A (the push id, the verdict and the claim step); W3's holds, the repeat push and the
 attention budget (`pushDue` gains `deferred`); W3's hold arming, which carries the rollback refusal; the readiness
@@ -813,7 +818,8 @@ next boot, if it is still inside that horizon. No Shadow lanes row is added.
 **What the index should change:**
 - The row reads "2 PRs, 6 tasks".
 - "`PushService`'s per-send verdict" moves from responses PR A to this row.
-- The rollback refusal below `push-outbox-v1` moves to W3's hold arming, with the obligation in open question 5.
+- The rollback refusal below `push-outbox-v1` moves to W3's hold arming, and reuses the pool-set piece's
+  `_upd_cap_floor_check` (open question 5).
 - Lane E's file list adds:
   - the new files: `server/src/pushSender.ts`, `server/src/pushOutbox.ts`, `server/src/coord/pushOutboxStore.ts` and
     `shared/push-outbox.ts`;
