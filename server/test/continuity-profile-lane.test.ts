@@ -65,6 +65,8 @@ interface World {
   fail?: Set<string>;
   notRan?: Set<string>;
   openGate?: boolean;
+  /** The fleet node's build against the server's (W1 sandbox: `profiledigest` waits for `agreed`); `agreed` when unnamed. */
+  builds?: 'agreed' | 'skewed' | 'unknown';
 }
 
 function harness(w: World = {}) {
@@ -89,6 +91,7 @@ function harness(w: World = {}) {
       },
       steerMarker: async (id) => (w.steer?.[id] ?? 'absent') as 'present' | 'absent' | 'unreadable',
       declaredIntent: async (id) => { intentAsked.push(id); return w.intent?.[id] ?? false; },
+      buildAgreement: () => w.builds ?? 'agreed',
     },
     act: {
       runCcd: async (argv: CcdArgv): Promise<CcdResult> => {
