@@ -101,7 +101,7 @@ Everything here was measured at `4c677d328` unless it says otherwise. Hunk count
 - Merge conflicts. The line-2 conflict is already gone, and git merges non-overlapping hunks in one file. The real relief is that the lane serialises per file, so feature PRs in different libraries stop queueing behind each other. Q4 ruled for that: one lane per library.
 - The spine stays hot. In the 32 commits since 2026-10-27, 16 hunks hit the dispatcher `case`. A new verb still edits the spine, by a line or two.
 - **CI time does not fall.** Every ccd test sources the whole program, so the test map selects the same tests. The earlier claim that this split helps CI is not supported.
-- Shellcheck memory does not fall. Q3 ruled for the spliced pass, which still peaks near 6.2 GB, so the macOS CI legs keep skipping. One 4,999-line library peaked at 1.0 GB.
+- Shellcheck memory does not fall; it rises. Q3 ruled for the spliced pass. `ccd/ccd` alone peaked at 6.2 GB; the program text is about 6% longer and takes about 11% more memory (9.09 GB against 8.16 GB, both measured on one Mac, D-8048), so the spliced pass is estimated near 6.9 GB, and the macOS CI legs keep skipping. One 4,999-line library peaked at 1.0 GB.
 
 ## The Assembled Artifact
 

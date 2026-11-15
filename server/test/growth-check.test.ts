@@ -43,7 +43,8 @@ import {
   prNumberFromEnv, parseExemptions, exemptionsOnMain, matchExemptions, GROWTH_EXEMPTIONS_FILE,
   GROWTH_EXEMPTIONS_STAMP, GROWTH_MACHINERY, overLine, growthVerdicts, armedGrowth, gitRead, type GrowthRow, type GrowthExemption,
   GROWTH_WAIVERS_DIR, GROWTH_WAIVERS_LEGACY_FILE, parseWaiverFiles, waiversAdded, waiversAt, waiversInDiff, type GrowthWaiver,
-  definedDNumbers, PROGRAM_ROW, isProgramMember, programRow,
+  definedDNumbers, PROGRAM_ROW, isProgramMember, programRow, parseCapFiles, parseFrozenFiles, stageFileName, stageFor, SPINE_LIMIT,
+  type Stage, type StageOf,
 } from './growthCheck.js';
 import { EXEMPTION_SET_STAMPS } from './rings/exemption-age.data.js';
 import { parseFile } from './scan/parse.js';
@@ -1148,6 +1149,36 @@ describe('growthCheck: the program row, ccd/ccd and its libraries as one total (
     expect(failing(growthVerdicts(past, growthOver(past, []), named, 1100, []))).toEqual(['ccd/ccd', PROGRAM_ROW]);
     expect(growthVerdicts(past, growthOver(past, []), named, 1100, []).find((x) => x.file === PROGRAM_ROW)!.why)
       .toBe(`${PROGRAM_ROW} grew by 101 net code lines, over the limit of ${GROWTH_LIMIT}`);
+  });
+
+  it('FIXTURE: the program row keeps the listed stage, whatever stage its members hold (D-8635)', () => {
+    const everywhere = (st: Stage): StageOf => () => st;
+    const frozen = everywhere({ stage: 'frozen' });
+    const capped = everywhere({ stage: 'capped', base: 9000, head: 9000, prior: 'frozen' });
+    const newCap = everywhere({ stage: 'capped', base: null, head: 9000, prior: 'frozen' });
+    for (const st of [frozen, capped, newCap]) expect(stageFor(st, PROGRAM_ROW)).toEqual({ stage: 'listed' });
+    expect(stageFor(frozen, 'ccd/ccd')).toEqual({ stage: 'frozen' });
+    // Frozen members: each is held at SPINE_LIMIT; the program stays at GROWTH_LIMIT, never SPINE_LIMIT.
+    const small = SPINE_LIMIT + 5;
+    expect(growthOver([row('ccd/ccd', small), program(small)], [], NO_HOME, frozen)).toEqual(['ccd/ccd']);
+    expect(growthOver([row('ccd/ccd', small), program(GROWTH_LIMIT + 1)], [], NO_HOME, frozen)).toEqual(['ccd/ccd', PROGRAM_ROW]);
+    // Capped members: no per-PR limit of their own, and still the program's total is bounded per PR.
+    expect(growthOver([row('ccd/ccd', GROWTH_LIMIT), program(GROWTH_LIMIT)], [], NO_HOME, capped)).toEqual([]);
+    expect(growthOver([row('ccd/ccd', 300), program(300)], [], NO_HOME, capped)).toEqual([PROGRAM_ROW]);
+    expect(growthOver([row('ccd/ccd', 300), program(300)], [], NO_HOME, newCap)).toEqual(['ccd/ccd', PROGRAM_ROW]);
+    // The verdicts agree: the program row is the listed row's verdict, never a cap's.
+    const rows = [row('ccd/ccd', 300), program(300)];
+    const v = growthVerdicts(rows, growthOver(rows, [], NO_HOME, capped), [], null, [], [], capped);
+    expect(failing(v)).toEqual([PROGRAM_ROW]);
+    expect(v.find((x) => x.file === PROGRAM_ROW)!.title).toBe(`${PROGRAM_ROW}: delta +300 (GROWTH_OVER)`);
+  });
+
+  it('FIXTURE: a cap or freeze cannot name the program row', () => {
+    const name = stageFileName(PROGRAM_ROW);
+    const cap = parseCapFiles([{ name, text: JSON.stringify({ file: PROGRAM_ROW, cap: 9000, d: 'D-8048', since: '2026-11-15' }) }], today);
+    expect(cap).toEqual({ entries: [], problems: [`${name}: file must not be the program row, ${PROGRAM_ROW}`] });
+    const freeze = parseFrozenFiles([{ name, text: JSON.stringify({ file: PROGRAM_ROW, d: 'D-8048', since: '2026-11-15' }) }], files, today);
+    expect(freeze.problems).toEqual([`${name}: file must be one of the listed files`]);
   });
 
   it('FIXTURE: no waiver or exemption can name the program row', () => {
