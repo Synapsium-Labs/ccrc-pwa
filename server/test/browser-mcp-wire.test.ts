@@ -46,7 +46,7 @@ const record = async (io: FleetIO = localIO): Promise<SessionRecord> => {
 describe('the vocabulary (D-8121)', () => {
   it('`browser` is a writable routing field, after `compact`, and so a read field too', () => {
     expect(ROUTE_WRITABLE_FIELDS.indexOf('browser')).toBe(ROUTE_WRITABLE_FIELDS.indexOf('compact') + 1);
-    expect(ROUTE_WRITABLE_FIELDS.indexOf('browser'), 'the launch profile\'s three, the compaction piece\'s precompact and the W1 sandbox\'s profiledigest follow it (Overlord W1a, W1)').toBe(ROUTE_WRITABLE_FIELDS.length - 6);
+    expect(ROUTE_WRITABLE_FIELDS.indexOf('browser'), 'the launch profile\'s three, the compaction piece\'s precompact (Overlord W1a) the pool set\'s two and the sandbox\'s profiledigest (W1) follow it').toBe(ROUTE_WRITABLE_FIELDS.length - 8);
     expect(ROUTE_READ_FIELDS).toContain('browser');
     expect(parseRouteFields({ browser: 'on' })).toEqual({ ok: true, route: { browser: 'on' } });
   });

@@ -837,7 +837,7 @@ describe('POST /api/runs/:id/route', () => {
     const w = await openApp(home, run, { fleetState: ROUTE_READY_FLEET }); app = w.app;
     const { id } = await dispatchedRun(w.app, 'demo-w13');
 
-    expect(ROUTE_LANE_ONLY_FIELDS).toHaveLength(5);   // the launch profile's three, the compaction piece's precompact and the W1 sandbox's profiledigest
+    expect(ROUTE_LANE_ONLY_FIELDS).toHaveLength(7);   // the launch profile's three, the compaction piece's precompact, the pool set's poolset and acctorder (Overlord W1) and the W1 sandbox's profiledigest
     for (const target of ['worker', 'coordinator']) {
       for (const field of ROUTE_LANE_ONLY_FIELDS) {
         const res = await postRoute(w.app, id, { target, why: 'operator judgement', field, value: LANE_ONLY_VALUE[field] });

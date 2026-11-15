@@ -7779,7 +7779,8 @@ you need to reason about one.*
   disk-retention verbs; installed first, at `~/.local/libexec/ccrc/lib/`, #1279) and
   `lib/train-proof.sh` (the train proof of a PR a merge train landed, beside it, D-7463) and
   `lib/delegation-lease.sh` (the delegation broker's lease carrier, `ws-lease-mark` and the read-only
-  `ws-lease-audit`, beside them); `ccrc`, the box
+  `ws-lease-audit`, beside them) and `lib/pool-set.sh` (a session's pool set, the Overlord's W1: the
+  route fields `poolset` and `acctorder`); `ccrc`, the box
   lifecycle CLI, with the files it sources or execs (`ccrc-doctor-checks`,
   `ccrc-wrapper-shape`, `ccrc-adopt`); `session-hook.sh` (the Claude Code hook that reports each
   session's state), `install-session-hooks.sh` (the idempotent installer that
@@ -8544,6 +8545,7 @@ restore() { cp -a "$1" "$2.restore" && mv -f "$2.restore" "$2"; }
 [ ! -f ~/ccrc-backups/<ts>/ccd-lib-disk-retention.sh ] || restore ~/ccrc-backups/<ts>/ccd-lib-disk-retention.sh ~/.local/libexec/ccrc/lib/disk-retention.sh   # the body's library, when the backup has one
 [ ! -f ~/ccrc-backups/<ts>/ccd-lib-train-proof.sh ] || restore ~/ccrc-backups/<ts>/ccd-lib-train-proof.sh ~/.local/libexec/ccrc/lib/train-proof.sh   # its second library, when the backup has one
 [ ! -f ~/ccrc-backups/<ts>/ccd-lib-delegation-lease.sh ] || restore ~/ccrc-backups/<ts>/ccd-lib-delegation-lease.sh ~/.local/libexec/ccrc/lib/delegation-lease.sh   # its third library, when the backup has one
+[ ! -f ~/ccrc-backups/<ts>/ccd-lib-pool-set.sh ] || restore ~/ccrc-backups/<ts>/ccd-lib-pool-set.sh ~/.local/libexec/ccrc/lib/pool-set.sh   # its fourth library, when the backup has one
 restore ~/ccrc-backups/<ts>/ccd-body ~/.local/libexec/ccrc/ccd
 restore ~/ccrc-backups/<ts>/ccd ~/.local/bin/ccd
 restore ~/ccrc-backups/<ts>/notify.sh ~/.cc-sessions/notify.sh
@@ -8917,9 +8919,10 @@ These conventions carry more weight here than style:
   the stamp covers the pin. Editing the library needs no restamp. The library must end in exactly
   one newline and carry no NUL byte (the body hashes it as bash reads it), or the install refuses.
   `ccd/lib/train-proof.sh` (the train proof, D-7463) is the second library and
-  `ccd/lib/delegation-lease.sh` (the delegation lease carrier, wave 5) the third; each is treated the
-  same way, their pins `__CCD_LIB_TRAIN_SHA256=stamp-at-install` and `__CCD_LIB_LEASE_SHA256=stamp-at-install`;
-  the body reads and checks all three before it evaluates any.
+  `ccd/lib/delegation-lease.sh` (the delegation lease carrier, wave 5) the third, and `ccd/lib/pool-set.sh`
+  (a session's pool set, the Overlord's W1) the fourth; each is treated the same way, their pins
+  `__CCD_LIB_TRAIN_SHA256=stamp-at-install`, `__CCD_LIB_LEASE_SHA256=stamp-at-install` and
+  `__CCD_LIB_POOLSET_SHA256=stamp-at-install`; the body reads and checks all four before it evaluates any.
   `ccd/session-hook.sh` carries a generated helpers region (`shared/hook-helpers.mjs`);
   after editing `ccd/ccd`'s epoch helper, or on a conflict in the region's stamp line, run
   `bash ccd/ccrc restamp ccd/session-hook.sh`; `hook-helpers-generated.test.ts` reds when the

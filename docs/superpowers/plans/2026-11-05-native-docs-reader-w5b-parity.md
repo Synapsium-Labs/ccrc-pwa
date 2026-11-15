@@ -2051,6 +2051,11 @@ export interface DocsHistoryLoader { history(project: string, ask: DocsLogAsk): 
 
 Known departures are allocated and defined by the coordinator in one act at each run-open, then included in the brief. Each close copies those definitions and reconciles its already issued reserve (W5b-1: refinement (a), then (b), then any found; W5b-2: refinement (m), then (n), (p), (q) and (t), then any found).
 
+- **D-8642 (2026-11-15)** — ccd-growth-waiver. Refinement (a): departs from ARCH-01's growth limit (`server/test/growth-check.test.ts`). `ccd/ccd` grows by about 140 net code lines (the docs-log front, its embedded helper, the runner's log row and shape check, the parity literals and the caps lines); the helper stays embedded for `_pr_py`'s reason, since a sibling file would be a second deployment step. Task 12 adds one waiver file for `ccd/ccd`, tagged with this number, its `maxDelta` the measured delta. Issued to run 2124 at its opening.
+- **D-8643 (2026-11-15)** — no-ccd-restamp. Refinement (b): departs from the rich-docs spec §8's W5b row ("`ccd/ccd` is restamped"). The run edits `ccd/ccd` and never restamps it: the stamp is written at install time, and `ccrc restamp ccd/ccd` is refused. Task 12 amends the sentence. Issued to run 2124 at its opening.
+
+Reserve issued to run 2124 and unused at its opening: 8644, 8645, 8646.
+
 ## Where things stand
 
 ### Agreed
