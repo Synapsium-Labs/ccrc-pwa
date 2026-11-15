@@ -453,6 +453,22 @@ describe('wave 5i ownership: one writer of mainRedHold, terminal repair inside a
     expect(sqlStatementsInFile(CONTROL_TX).filter((q) => q.verb === 'INSERT' && q.start >= body.start && q.start < body.end)).toHaveLength(1);
   });
 
+  /** The file's code with its comments cut out, so a word in a header cannot satisfy or trip a scan. */
+  const codeOf = (file: string): string => parsedFile(file).text.replace(/\/\*[\s\S]*?\*\//g, '').split('\n').map((l) => l.replace(/(^|\s)\/\/.*$/, '$1')).join('\n');
+
+  it('the transaction body holds the database handle once, in applyLandingControlTx, opens no transaction of its own, and only store.ts imports it', () => {
+    const code = codeOf(CONTROL_TX);
+    expect(code.match(/\bcoord\.db\b/g) ?? [], 'the handle is named exactly once').toHaveLength(1);
+    const body = symbolOf(CONTROL_TX, 'applyLandingControlTx');
+    const handle = identifierReferences(parsedFile(CONTROL_TX).text, CONTROL_TX, new Set(['db']));
+    expect(handle, 'one reference to db').toHaveLength(1);
+    const at = parsedFile(CONTROL_TX).text.indexOf('coord.db');
+    expect(at >= body.start && at < body.end, 'the one reference sits inside applyLandingControlTx').toBe(true);
+    expect(code.match(/\b(async|await|Promise|BEGIN|COMMIT|ROLLBACK)\b|\btx\(/g) ?? [], 'no async, promise or transaction keyword').toEqual([]);
+    const importers = FILES.filter((f) => f !== CONTROL_TX && parsedFile(f).imports.some((e) => /(^|\/)landingControlTx(\.js)?$/.test(e.specifier)));
+    expect(importers).toEqual([STORE]);
+  });
+
   it('terminal repair rides advanceLanding: its verdict is read inside the land arm before the one state/detail UPDATE, and its token is built once, in the facts', () => {
     const src = inlinedSourceOf(symbolOf(STORE, WRITER));
     const at = (n: string): number => { const i = src.indexOf(n); expect(i, n).toBeGreaterThan(-1); return i; };

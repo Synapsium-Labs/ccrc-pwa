@@ -5773,7 +5773,8 @@ is the coordinator's read of one project's line before it enqueues: the entries 
 pinned when the run entered `merging`, which the coordinator requires to equal the head it binds and passes to
 `--match-head-commit`), its `handoffCommit`, its state and its ejections — and, with `&pr=<n>` (`--pr <n>`), that PR's entry in any
 state, `entriesScope` saying which of the two the answer is; beside them the
-operator pause and the main-red hold, and the order the server's decider computes on that read; the line is paused
+operator pause (the stored flag) and the main-red hold (`mainRedHold`, and `order.paused`), which the read recomputes from the stored flag and the
+watcher's latest control snapshot, with the same pure transition the radar lane applies and without writing it, and the order the server's decider computes on that read; the line is paused
 while either flag is set, except that a dependency-eligible `fixesMain` head already selected is not paused by the main-red hold alone (D-8625). An entry leaves the line `landed` when GitHub reads its PR merged (a merge train's proved landing included), with a head other than
 the pinned one kept in its `detail`, or `closed` when GitHub reads it closed unmerged or says no such PR exists. The landed reader
 (at most ten entries a sweep, oldest first) marks it, and a work run's `done` close marks it `landed` when GitHub reads the PR
@@ -5801,7 +5802,8 @@ the setter, and an omitted `afterIds` or `fixesMain` keeps its value while an ex
 The main-red hold has one writer: a fresh, same-base `main-health` measurement applied through the radar lane. A next-to-land mail
 is sent once per exact episode, base and recipient; it tells a coordinator to re-read the line and is not merge permission. The
 landed reader retires bounded damaged rows on fresh terminal evidence. One trap: a project that opts out (its `lander` removed)
-while main is red keeps `mainRedHold` set, which the pre-5i order checks still honour, until it opts back in and a green
+while main is red keeps the stored `mainRedHold` set, and the read keeps showing it (an absent marker is no evidence, so the recomputation
+keeps the stored value, and `order.paused` stays set for main-red while the `binding` reads `inert`), until it opts back in and a green
 measurement clears it.
 
 **The bypass deny (landing-order wave 2b).** The deny stands whole after D-8124, which adds one gated door beside it ("The admin-merge door", below). A second question, asked of every session after the worker
