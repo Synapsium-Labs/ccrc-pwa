@@ -259,6 +259,11 @@ plan's.
   its row only, with no append and with the head row unmoved, so the operator keeps every lever; Confirm the restore
   folds the narrower row side in, as `restoreStricter` already takes the narrowest value. A widening is still
   refused." Retire is such a narrowing (Task 1). The rest is the authority plan's.
+- **X3b** (the ladder plan's fix round 1, review 2159 F3): on any refused append an operator narrowing writes its row
+  only, the journal calls `writerFailed`, and the answer says `journalled: false`; a widening still refuses. The
+  authority journal answers `row-only` for a narrowing in every row of its decision table, so a live retire, a model
+  class set to `opus` and a narrowing of the account set always land as their row, and only `not-in-transaction` (a
+  caller's error) writes nothing. It trades journal completeness for a brake that always lands.
 - **X4:** "The designation piece owns it, as sandbox ruling G1 to G3 already says: Start the Overlord (designate),
   Restart and rebind send the new body its first prompt after the create. A renewal of a running body is the renewal
   act's (its deliver at `carded`, or the door process's first call once that piece exists)." Tasks 5 to 7.
@@ -442,9 +447,10 @@ in flight.
     parse, `coord.db` unreadable). It never throws. Each caller fails closed in its own existing way (Task 3's table).
     The doors answer 503 `unavailable`, an existing `REFUSAL_STATUS` word, with the detail "the designation row could
     not be read", and write nothing.
-  - An authority append the journal refuses: a door maps `authority-rolled-back` to that word and every other error to
-    `journal-unreadable` (503), as the authority plan says, and writes no row. A retire over an incoherent journal
-    writes its row only (X3).
+  - An authority append the journal refuses: a door maps `authority-rolled-back` and `authority-unmeasured` to
+    `authority-rolled-back` and every other error to `journal-unreadable` (503), as the authority plan says, and writes
+    no row. Only a widening meets a refusal: a narrowing (a live retire, `opus`, a narrower account set) receives
+    `row-only` whenever its record cannot be appended, and writes its row only (X3, X3b).
   - A lane whose coordination port is absent (`store: 'optional'` on the roll lane) has no `coord.db`, so no
     designation can exist there, and it reads `not-designated` with no row. That is a measured absence, not an
     unreadable row.
@@ -718,8 +724,9 @@ returning `{ ok: false, authority: error }` for its caller to map (X2):
   - A pending-only row: the attempt's outcome `retired`, its id onto `stopsOwed`, no term raised, no append.
   - A live row: appends `authority-retire` with the raised term and `previousSessionId` set to the bound id, then
     unbinds, appends the bound id to `pastIds`, raises the term, cancels any pending attempt (`retired`), and puts
-    both ids on `stopsOwed`. Over an incoherent journal the retire writes its row only, with no append, as the
-    authority plan's narrowing rule says (X3); every other refused append writes nothing.
+    both ids on `stopsOwed`. When the journal answers `row-only` (an incoherent journal, or under X3b any append it
+    cannot make), the retire writes its row only, with no append, as the authority plan's narrowing rule says (X3,
+    X3b); only `not-in-transaction` writes nothing.
 
   It answers the ids it put on `stopsOwed`, and the term.
 - `stopDone(sessionId)`: removes one id from `stopsOwed`. No append.
@@ -734,7 +741,8 @@ returning `{ ok: false, authority: error }` for its caller to map (X2):
     retire appends `authority-retire` with `previousSessionId`; `bindPendingGeneration`, `failPending`, `stopDone` and
     a pending-only retire append nothing. Each appending writer, given `{ ok: false }`, writes no row and answers the
     error.
-  - A retire over an incoherent journal (the authority guard's answer) writes its row and appends nothing.
+  - A retire answered `row-only` writes its row and appends nothing, for each journal state that answers it: the guard
+    `rolled-back` or `unmeasured`, a head mismatch, an unreadable file, and an append that failed (X3, X3b).
   - `designatePending` refuses when a row is bound or pending. `bindPendingGeneration` refuses after a retire.
   - `goLive` raises the term once and re-stamps the body's live generation (`identity: 'overlord'`, the raised term).
     A resent `goLive` for a session that is no longer pending changes nothing.
@@ -1326,7 +1334,8 @@ store's writers and the drain, each a transaction of its own, so a concurrent do
 door answers `not-found`. On `set`, the door calls `setModelClass` (one transaction; `authority-model-class` is
 appended first and its answer checked, X2), then `routeSet(boundId, { class })` through the body adapter, as one
 server-composed write that D-6790 does not refuse (C45). Over an incoherent journal a change to `opus` is a narrowing
-and writes its row only, and a change to `fable` is a widening and refuses (X3). A failed route write is reported in
+and lands as its row whenever the journal answers `row-only` (X3, X3b), and a change to `fable` is a widening and
+refuses. A failed route write is reported in
 the answer. The renewal lane writes the record again at the next renewal.
 The change lands at the next renewal, never mid-generation (C44). The renewal readings piece's `classChanged` reads it.
 
@@ -1334,7 +1343,8 @@ The change lands at the next renewal, never mid-generation (C44). The renewal re
   - `fable` asks the step-up and `opus` does not.
   - With no row, `not-found`.
   - The authority record precedes the row, and a refused append writes no row.
-  - Over an incoherent journal: `opus` writes its row only, and `fable` refuses.
+  - On a `row-only` answer, in each journal state that gives one (X3, X3b): `opus` writes its row only, and `fable`
+    refuses.
   - The route write's `class`.
   - The renewal path is never called from the door.
 - [ ] **Step 2 to 5** as Task 5, `modelClassVerdict` joining `MUTANT_SETS` at floor 1, with a mutant that drops the
@@ -1366,7 +1376,8 @@ With a row that binds nothing, the set is saved for the next Start, and the coun
 On `set` the door:
 
 - calls `setAccountSet`, with `authority-account-set` appended first and its answer checked (X2). Over an
-  incoherent journal a narrowing writes its row only, and a widening or a reorder that also widens refuses (X3);
+  incoherent journal, or on any append the journal cannot make, a narrowing writes its row only, and a widening or a
+  reorder that also widens refuses (X3, X3b);
 - then, for the bound id, calls `writeSet` with the new spelling and list (the list in the set's new order);
 - answers the list, the count, and `unknown-pool` warnings, which are never refusals.
 
@@ -1378,7 +1389,8 @@ door's.
   - Below two refuses only while bound or pending.
   - An empty set refuses while bound, and is saved with a warning while unbound.
   - Unknown names warn.
-  - A refused append writes no row. Over an incoherent journal a narrowing writes its row only, and a widening refuses.
+  - A refused append writes no row. On a `row-only` answer a narrowing writes its row only, and a widening refuses
+    (X3, X3b).
   - The route write carries the new list.
 - [ ] **Step 2 to 5** as Task 5. `accountSetVerdict` and `setWidens` join at floor 1, with mutants that read a
   reorder as a widening and that skip the count while bound.
