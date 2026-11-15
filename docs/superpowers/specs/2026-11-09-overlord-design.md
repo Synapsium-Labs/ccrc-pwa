@@ -6465,6 +6465,7 @@ The egress refusal is the one exception, because a detailed answer there is an o
 | `probe-none-open` | The probe door | The session has no open probe round (plan-driven consistency, the W1a plans) | C41 |
 | `probe-closed` | The probe door | The round was already answered (plan-driven consistency, the W1a plans) | C41 |
 | `card-changed` | The card door | A later page names a card hash that no longer matches the current render; the caller starts again at page 1 (plan-driven consistency, the W1a plans) | C38 |
+| `unknown-start` | The loads door | The report's id names no startup or resume start this session has recorded yet; the hook keeps the report and resends it (plan-driven consistency, the W1 sandbox plan) | H1, H4 |
 | `note-key-unknown` | The note door | The note's key names no live programme, open item or non-terminal run of the caller's, or a revision's `revises` names no live note of the caller's (plan-driven consistency). A key or revised note that cannot be measured now is no refusal of the key: the door answers `unmeasured` (502), unless another fact already refuses the note | C37 |
 | `note-cap` | The note door | The identity holds its cap of live notes (Table 11.5b) (plan-driven consistency) | C37 |
 | `note-too-long` | The note door | A field is over its length cap (Table 11.5b); or, for the handover note, its tone is over 300 characters, it has more threads or cautions than the note count cap, or its whole JSON is over `HANDOVER_MAX_BYTES` (16,384 bytes), measured as sent and as it would be stored (plan-driven consistency) | C37 |
