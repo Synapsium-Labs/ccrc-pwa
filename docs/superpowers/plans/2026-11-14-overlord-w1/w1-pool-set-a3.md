@@ -159,6 +159,9 @@ All under 40, no waiver, so Task 5 stays in this PR.
   whose projection is stale warns with the projection sentence and "the session pool set decided"; (c) `_strand_mark` with
   no cause prints `[pool=set-unreadable]`.
 - **F7.** The rescue map's `4|7|8)` comment and `_default_pool`'s header name the side, not only the project's tag.
+  The first push of this round dropped `$POOLS_DIR` from the rescue map's comment, the only place `_auto_swap_check` names
+  it, and `pools-existence-pairing` (which blocks out every function naming it) went red in the fast run; the comment names
+  it again, as the tag rc 4 reads.
 - **F8.** The `set` sentence says "could not be read or parsed", and the tick case drives a malformed set too.
 - **F9.** `ccd-pool-a3.test.ts` landed in `cd2d25071`, the projection commit, not with Task 4's code in `10ba4ddb4`, so the
   "24 failed against main" figure rests on this note's measurement. `a17fb5679` also changed the characterization file's

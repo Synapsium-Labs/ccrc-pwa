@@ -21720,7 +21720,7 @@ _auto_swap_check() {   # id — called each supervise tick. HOME-account affinit
       case "$strc" in
         2) uword=crosspool ;;   # the crossing record, asked about cur and about home
         3) uword=project ;;     # the row's own registry field, re-read at the inner seam
-        4|7|8) uword=$(_pool_undecided_word "$strc") ;;        # the pool rule against cur, by side: 4 the project's tag, 7 the projection, 8 the session's set
+        4|7|8) uword=$(_pool_undecided_word "$strc") ;;        # the pool rule against cur, by side: 4 the tag under `$POOLS_DIR`, 7 the projection, 8 the session's set
         5) uword=classwindow ;;   # the class window — the sweep's share for fable, the seven-day figure otherwise — on the lanes that could take the session
         *) uword="rc$strc" ;;   # deliberately unreachable: the next code added upstream
       esac
