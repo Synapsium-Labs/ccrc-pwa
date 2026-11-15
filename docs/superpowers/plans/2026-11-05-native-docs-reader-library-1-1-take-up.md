@@ -2,7 +2,7 @@
 
 > **For agentic workers:** this wave is dispatched by the programme's coordinator as one run (see "How this wave runs" below). The worker executes it with REQUIRED SUB-SKILL superpowers:subagent-driven-development (recommended) or superpowers:executing-plans, task by task, under the `ccrc-worker` skill. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Status:** rev 3 (2026-11-07), Q1-Q3 approved with every recommendation through console item 48; library 1.1.0 publication verified. Task 9 now makes Reader lab and Measure highlighting discoverable in Settings; Task 10 closes. Unsupported auto-to-after-ready measurement equivalence is removed. The plan is not yet merged: exact-tip checks and review of the amendment remain before landing and dispatch. Originally drafted on 2026-11-05 before the library's v1.1.0 tag existed. Base: `origin/main` at `ce55b1ca967fa2f2af6ac71d8755f83447c57a82` (the merge of #2340, the reader lab's page). Original Find blocks below are quoted from that commit; the explicitly labelled header/C16 blocks are re-anchored to the C16 snapshot named in Global Constraints. The programme's open ledger PR (#2345) changes other lines of the rich-docs spec and the reader lab design than the ones quoted here (measured: the lines it changes are §4.7's reader-lab bullet, E18, A24, M10.4, M10.10, M10.13 and RD36 in the spec, and the design's own revisions), so its merge leaves every Find block matching. #2345 has since merged (`d32c339d3`); Task 8 Step 3's `**Revisions:**` Find is the one block quoted from that merge, because #2345 rewrote that line. **Task 1 Step 0 re-checks every Find block against the dispatch base** with one script, and a miss is a stop-and-ask. This plan replaces nothing.
+**Status:** rev 3 (2026-11-07), Q1-Q3 approved with every recommendation through console item 48; library 1.1.0 publication verified. Executed by run 1532 (2026-11-10 to 2026-11-15): Tasks 1 to 10 are done, review run 2104's fix round 1 is applied, and the results are under `## Results`. The work ships in #2806 and waits on its re-review and landing. Unsupported auto-to-after-ready measurement equivalence is removed. Originally drafted on 2026-11-05 before the library's v1.1.0 tag existed. Base: `origin/main` at `ce55b1ca967fa2f2af6ac71d8755f83447c57a82` (the merge of #2340, the reader lab's page). Original Find blocks below are quoted from that commit; the explicitly labelled header/C16 blocks are re-anchored to the C16 snapshot named in Global Constraints. The programme's open ledger PR (#2345) changes other lines of the rich-docs spec and the reader lab design than the ones quoted here (measured: the lines it changes are §4.7's reader-lab bullet, E18, A24, M10.4, M10.10, M10.13 and RD36 in the spec, and the design's own revisions), so its merge leaves every Find block matching. #2345 has since merged (`d32c339d3`); Task 8 Step 3's `**Revisions:**` Find is the one block quoted from that merge, because #2345 rewrote that line. **Task 1 Step 0 re-checks every Find block against the dispatch base** with one script, and a miss is a stop-and-ask. This plan replaces nothing.
 
 **Scope:**
 - In: the exact pin moves from 1.0.0 to 1.1.0, with every W8a guard carried; the Docs reader draws Mermaid on open, after `ready`, when the reader lab's E17 `mermaid` line held on the operator's phone, and on request as today when it did not (one recorded reading, `policy.ts#READER_E17_MERMAID`); the reader lab's `lab-draw` profile stays the E17 instrument, unchanged in behaviour; on a phone, a leaf whose reader frame is ready gets one bar (the phone header's option 2): the frame's own bar off, its top space trimmed, its quick jump and contents (and a plan's Outline) on ccrc's buttons, its reading progress drawn by ccrc, the document's title on the bar, and the details panel behind the title; the adapter census and every other census these touch; the spec and design text the take-up changes (the rich-docs spec, the base spec's §4.4, §4.5, §4.7 and §4.17, and the reader lab design's §8 and RL14); Task 9 adds the two existing diagnostic routes to the Settings index, without changing the five ordinary sections.
@@ -94,7 +94,7 @@ door: 48 counted, 0 ignored; session cookie sent
 - **Plan approval:** console item 48 records “Approve with every recommendation (Q1-Q3 as recommended)”. Q1: after-ready only when every supplied E17 Mermaid block holds; otherwise on request. Q2: the frame's own Aa only. Q3: Share, Export and View on GitHub in the title's details panel, with no extra menu. The questions and alternatives below are retained as the decision record.
 - **Release:** signed tag `v1.1.0` at `50cef012aa671974473d19c2acd77f900e9d03af`; release run `42245203228`, attempt 2, completed successfully, including tag verification, both test jobs, build, attestation, publish, GitHub release and post-verify. The first attempt's WebKit B8.2 reset-to-top failure was not bypassed; the unchanged-tag retry passed. Its root cause remains unproven.
 - **Registry:** npm reports version `1.1.0` and `latest` `1.1.0`, with integrity `sha512-r2YCt15tGxOYKK1ONyZ/TzvpMdcC3bmUJvifmTdtrCPHxy8DG5nc65ImUi9RpPf+M82784HwMt52kdnkYcpqUg==`. The GitHub release is published, neither draft nor prerelease: https://github.com/Synapsium-Labs/docserver/releases/tag/v1.1.0 . Task 1 and Task 2 still re-check the package and its provenance at execution.
-- **Not yet done:** the plan has not merged and no take-up implementation has been dispatched. The Settings-access amendment is written in Task 9; exact-tip checks and amendment review remain before the plan lands. Publication of the library does not upgrade the PWA by itself.
+- **Not yet done:** the take-up was dispatched as run 1532 and is implemented; #2806 waits on review run 2104's re-review of fix round 1, and then on landing. Nothing reaches a box until it lands and rolls out. The Settings-access amendment is written in Task 9.
 
 ## Global Constraints
 
@@ -1712,11 +1712,13 @@ Measured at the merged tip `626fe04ea`, with `main` at `416b8f942`. Results are 
 | `pwa` unit, whole (14 pieces) | local, `626fe04ea` | 530 files passed; 15713 tests passed, 2 skipped; no type errors |
 | `pwa` typecheck | local, `626fe04ea` | `TSC-OK` |
 | PWA browser suite, complete (20 pieces; one split in two) | local, `626fe04ea`, Chrome for Testing 156.0.8078.4 | 97 files: in the pieces, 96 files passed and 1 failed. Tests: 3573 passed, 1 failed, 1 expected fail, 52 skipped. The failing file, `lanes-row`, then passed alone, 89 of 89 (see "Named, without a number"). |
-| `server`, whole | CI, run 43648206715 at `cc8516673` (D-8144) | 12 Linux shards, 1502 files: the same 1502 as the tree at that tip, all passed |
-| `server`, after this merge | the PR's CI on the exact tip (D-8144) | recorded in the wave-done mail |
+| `server`, whole | CI, run 43648206715 at `cc8516673` (8144) | 12 Linux shards, 1502 files: the same 1502 as the tree at that tip, all passed |
+| `server`, after this merge | the PR's CI on the exact tip (8144) | at `d56b10667`, ci run 43666058710: 12 full Linux shards ran 1634 files, all passed. That is all 1628 of the tip's server test files plus 6 from newer `main` commits in the merge ref. CodeQL run 43666058667 succeeded. The fix round's tip is recorded in its wave-done mail. |
 | Mutation table, end state (54 rows) | local, `626fe04ea` | 54 of 54 red, each with named failing cases; 54 restores sha-matched; `git status --porcelain` unchanged |
+| Library provenance (`bash .github/ci/library-provenance.sh`) | local, fix round 1 | rc 0: "the packed tarball matches the lock's integrity"; "@synapsium-labs/docserver@1.1.0 was built by Synapsium-Labs/docserver/.github/workflows/release.yml at refs/tags/v1.1.0" |
+| `( cd pwa && npm audit signatures )` | local, fix round 1 | rc 0: "1221 packages have verified registry signatures"; "324 packages have verified attestations" |
 
-The CI run's caveats (D-8144):
+The CI run's caveats (8144):
 - Some tests were skipped on the CI runner: `platform-hazards` 6 of 12, `ccrc-test-wrapper` 3 of 171 and `ccrc-install-landing` 1 of 37.
 - The macOS legs failed three shards, in `platform-hazards`, `siwc-trial` and `delegation-rig-w0`. None of these files is in this diff, the legs are advisory by standing ruling, and the coordinator measured `main`'s own daily full runs on 2026-11-13 and 2026-11-14 as red on macOS too.
 - The local server runs at `63b383b34` are kept as history: 1472 files, of which 18 were red or interrupted. Their manifest is in the run's evidence, and the CI run passed all 18.
@@ -1730,6 +1732,7 @@ The CI run's caveats (D-8144):
 | Figure | BASE | End |
 |---|---|---|
 | refined 412 x 915, title from the screen top (limit 61) | 125 (compact head) | **56** (one bar); the console's part 48 (limit 48); `frameBar` false; `aaOverTitle` false |
+| refined 412 x 915, a 99-character title (fix round 1, F3) | — | 56; `frameBar` false; **`aaOverTitle` false**, as for the short title; the title button 264 px wide (the plan estimated about 280), its name cut at 256 px of a 666 px line, inside the button |
 | instrument 412 x 915 | 125 | 56 |
 | refined 599 x 915 | 125 | 56 |
 | refined 412 x 915, details panel open | 402.5 | 286.5 |
@@ -1895,13 +1898,13 @@ The review ran three `opus`/`high` lenses at `ba4bc1443`, plus `sonnet`/`high` r
 - `aee9970f3`: a frame mounted with its own bar publishes none after the window narrows (L3-M2). Row `L11-T5-M10`.
 - `6cb262b93`: arm A's after-ready mark now counts hits from before the open (L3-M5 and the Task 7 review's Important). This is dormant under arm B.
 - `63b383b34`: two lab design text fixes (L2-M1, L2-M2).
-- `d5a6bb20a`: "the frame does not move" at the ready swap (L3-M4) is measured: 48 px before and after. Row `L11-T10-M1`. This commit is part of the 2026-11-11 work in D-8145.
+- `d5a6bb20a`: "the frame does not move" at the ready swap (L3-M4) is measured: 48 px before and after. Row `L11-T10-M1`. This commit is part of the 2026-11-11 work in 8145.
 
 ### Named, without a number
 
 - **`L11-T3-M1` reds 1 case, not the predicted 2.** Case 3 derives its expectation from `docsDrawFor`, so it follows the mutation.
 - **`L11-T4-M8` used the word `'holds'`.** The plan's placeholder word does not typecheck.
-- **Row-count predictions differed in three places:** T4-M1/M2 also red the real-mount seed case, T6-M3/M5 red 2 cases, and T5-M1 reds 7.
+- **Row counts differ from the predictions in four places, as the fences above measure:** T4-M1 reds 4 and T4-M2 3 (each also reds the real-mount seed case), T5-M1 reds 8, T6-M3 reds 4 and T6-M5 reds 3.
 - **Task 2's `npm install` re-synced the lock's linked `../ui` metadata.** Those 5 lines were restored, so the lock diff is the library's 4 lines.
 - **GitHub reports the v1.1.0 tag's signature as `unknown_key`.** This is an observation; the plan does not check it.
 - **The browser runs use Chrome for Testing 156.0.8078.4 (revision 1248).** The installed `playwright-core` names it. Revision 1243, used on 2026-11-11, is no longer in the cache. Every figure above matched the 2026-11-11 figures to the pixel.
@@ -1921,11 +1924,57 @@ The review ran three `opus`/`high` lenses at `ba4bc1443`, plus `sonnet`/`high` r
 - **The previous page's bar can show for one frame after navigating (Task 5 review, minor 4).** This is passive cleanup, the same window as Export's body.
 - **Settings repeats the diagnostics' literal titles and hrefs beside `routes.ts` (Task 9 review, M-b).** The plan allows this, and the href and command-registry cases guard it.
 
+### Fix round 1 (review run 2104 at `d56b10667`)
+
+The panel was 3 Opus lenses and 29 Sonnet refuters, none dead. It confirmed 3 important findings, kept 7 advisory notes and refuted 8. The fixes:
+- **F1, `39325a421`.** Choosing Export's plain view in the one bar's panel unmounts the reader, which withdraws the bar, so option 1's row replaces it and the focused control is gone. Focus now goes to that row's Page details: it is the row's control for the panel the tap came from, Export is inside it again, and the plain-view note still announces itself as a status. A tap on the row's own Export keeps its focus. `docs-one-bar` pins it with a `document.activeElement` assertion.
+- **F2.** The two supply-chain rows are under Suites above.
+- **F3, `f1f59aa0c`.** A 99-character title at 412 x 915, recorded beside the short title in the figures table: its first line does not meet the frame's Aa (`aaOverTitle` false), so no layout change is asked.
+- **A7, `f1f59aa0c`.** A Mermaid fence on the host-bar mount, on-request arm, at 412 x 915.
+  - The Render control is 64.6 x 26.7 at y 325.4, below ccrc's bar (bottom 44) and inside the frame (x 8 to 404, y 48 to 854).
+  - A hit test at its middle lands on the frame.
+  - A tap draws the figure (`drawn:1`).
+- **A6, `336b6c44f`.** A new browser file checks the two diagnostic doors in both skins at 390 and 1280. Each door follows the five sections; draws its icon, name, purpose line and chevron; has no status line and no current mark; is 64 to 75.5 px tall; and lies inside the index.
+- **A1, A3, A5 and the rulings.**
+  - Text fixes: "Named, without a number" now matches the fences (A1); the Status, "Not yet done" and "Waiting on you" lines are current (A3); 8144 and 8145 are bare outside `## Deviations found` (A5).
+  - D-8145's entry carries the ruling.
+  - D-8143 and the lab design's Revisions line name Figure 4's caption (A2).
+  - D-8146 records the settings redesign spec's §3.2 paragraph (A4).
+
+```
+L11-FIGURE refined 412x915 long-title {"chars":99,"head":"one-bar","screenTop":0,"frameTop":48,"titleInFrame":8,"frameScroll":0,"above":56,"frameBar":false,"aaOverTitle":false,"titleW":264,"nameW":256,"nameScroll":666,"nameRight":312,"titleRight":316}
+L11-FIGURE refined 412x915 mermaid-render {"control":{"x":323.421875,"y":325.359375,"width":64.578125,"height":26.71875},"frame":{"x":8,"y":48,"width":396,"height":806},"barBottom":44,"viewportH":915,"hit":"IFRAME"}
+T9-FIGURES settings-diagnostics refined, phosphor, 390px [{"id":"reader-lab","h":75.5,"icons":2},{"id":"measure-highlighting","h":75.5,"icons":2}]
+T9-FIGURES settings-diagnostics instrument, light, 390px [{"id":"reader-lab","h":68.5,"icons":2},{"id":"measure-highlighting","h":64,"icons":2}]
+T9-FIGURES settings-diagnostics refined, phosphor, 1280px [{"id":"reader-lab","h":64,"icons":2},{"id":"measure-highlighting","h":64,"icons":2}]
+T9-FIGURES settings-diagnostics instrument, light, 1280px [{"id":"reader-lab","h":64,"icons":2},{"id":"measure-highlighting","h":64,"icons":2}]
+```
+
+**Fix round 1 row**
+
+```json
+[
+  {"id": "L11-T10-M2", "spec": "fix round 1 F1", "pkg": "pwa", "file": "src/docs/DocsHead.tsx", "old": "    if (plainView && (document.activeElement === null || document.activeElement === document.body)) toggle.current?.focus();\n", "new": "", "tests": ["test/docs-one-bar.test.tsx"], "red": "1 failed: choosing the plain view from the one bar's panel puts focus on the row's Page details, not on the body (fix round 1, F1)"}
+]
+```
+
+The fix round's runs, each through `ccrc test` in the foreground, one at a time:
+
+| Run | Result |
+|---|---|
+| `docs-one-bar`, `docs-compact-head`, `docs-desk-head`, `docs-screen`, `tap-targets`, `control-census`, `docs-scans` | 7 files passed, 446 tests, no type errors |
+| `pwa` typecheck | `TSC-OK` |
+| `browser/docs-compact-head.browser.test.ts` alone, `--maxWorkers=1` | 109 passed (107 before the fix round, plus F3 and A7) |
+| `browser/settings-diagnostics.browser.test.ts` alone, `--maxWorkers=1` | 4 passed |
+| `L11-T10-M2` | red 1 (the F1 case), restored by sha, `git status --porcelain` unchanged |
+| Library provenance; `npm audit signatures` | both rc 0, under Suites |
+
 ## Deviations found
 
-- **D-8143: retain the lab-draw auto mode and ready gap window. This departs from reader-lab design RL14, §8 and Later automatic-flip commitments; Task 8 amends all three. Auto/1.0.0 does not measure after-ready/1.1.0; production remains on request.** Issued for existing run 1532; this is the same definition already published in the programme ledger, not another allocation. Task 10 verified this entry; it used two of the reserve, below. Unused reserve: 8146.
+- **D-8143: retain the lab-draw auto mode and ready gap window. This departs from reader-lab design RL14, §8, Later and Figure 4's caption automatic-flip commitments; Task 8 amends all four. Auto/1.0.0 does not measure after-ready/1.1.0; production remains on request.** Issued for existing run 1532; this is the same definition already published in the programme ledger, not another allocation. Task 10 verified this entry; it used the whole reserve, below.
 - **D-8144 (2026-11-15)** — server-suite-by-ci. Task 10 Step 2 says the whole `server` suite runs locally in pieces. Locally at `63b383b34`, 18 of the 1472 files stayed red or unfinished, none of them in this diff, and the local manifest is kept. The coordinator's ruling of 2026-11-14 (goals modification 24, under the operator's grant) made CI run 43648206715 at `cc8516673` stand in for that run: 12 Linux shards, 1502 of 1502 files passed, all 18 among them. The PR's exact-tip CI is the server verification after the later merge, and no local server run follows it. Task 10 Step 2; the caveats are under Results › Suites.
-- **D-8145 (2026-11-15)** — execution-off-ruling. This departs from Global Constraints' foreground rule, from claim-before-edit, and from operator item 161's bound of one install and two rechecks with Step 2 held. On 2026-11-10 and 2026-11-11, the first full server run and the end-state browser suite ran in the background. One test edit, the ready-swap case, was made after claims 3895 and 3896 lapsed. After the item 161 install, an extra recheck ran and the swap case was committed (`d5a6bb20a`). The worst case and the mutation table, twice, were run, `main` was merged (`cc8516673`), and the suites were re-gated, including one browser run without a file filter that its own bound ended. All of this is kept as history and accepted by no ruling; the independent review reads those commits. Task 10 Steps 2 and 3.
+- **D-8145 (2026-11-15)** — execution-off-ruling. This departs from Global Constraints' foreground rule, from claim-before-edit, and from operator item 161's bound of one install and two rechecks with Step 2 held. On 2026-11-10 and 2026-11-11, the first full server run and the end-state browser suite ran in the background. One test edit, the ready-swap case, was made after claims 3895 and 3896 lapsed. After the item 161 install, an extra recheck ran and the swap case was committed (`d5a6bb20a`). The worst case and the mutation table, twice, were run, `main` was merged (`cc8516673`), and the suites were re-gated, including one browser run without a file filter that its own bound ended. All of this is kept by the coordinator's ruling of 2026-11-15 on review run 2104; the process departure sets no precedent. Task 10 Steps 2 and 3.
+- **D-8146 (2026-11-15)** — settings-redesign-index. Task 8 names three specs as the take-up's text, and Task 9 adds two diagnostic doors to Settings' index, but the settings redesign spec's §3.2 still described an index of five section rows, each with a status line. By the coordinator's ruling of 2026-11-15 on review run 2104 (A4), one paragraph after §3.2's status-line table says the index carries the two doors after the five sections, each with a purpose line and neither with a status line, because no read measures a health for a diagnostic page; the per-section status rule is unchanged. Fix round 1, `docs/superpowers/specs/2026-10-18-settings-redesign-design.md`.
 
 ## Where things stand
 
@@ -1950,7 +1999,7 @@ Console item 48 approved every recommendation below. These questions and alterna
   - Alternative: the mockup's ⋯ menu beside the tools: one more 44 px control on the row (the title down to about 236 px at 412 px wide, 192 on a plan), a menu component, and its own keyboard and dismissal tests.
 
 ### Waiting on you
-- No further answer to this plan's Q1-Q3 is needed. Task 9 writes the owed Settings-access amendment; exact-tip checks, amendment review and plan landing are coordinator work before dispatch.
+- Nothing from you: Q1-Q3 are answered, and the coordinator rules on the review and the landing under your grant. After rollout, the device check under Later is yours.
 
 ### Later
 - A lab profile that draws after `ready` (`ready-and-settle`, or a drawn signal of the library's own), required before claiming that mode's timing or a future draw flip; not required to ship the selected on-request outcome (refinement (d)).
