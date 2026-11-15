@@ -24,3 +24,39 @@ rc 1: `proj-b's reads never finished: the case would pass or fail on timing alon
 the case, 12 s wall), rc 1: `proj-b's reads did not finish within 10000 ms of real time: the case would pass or fail on
 timing alone: expected [ 1, 1 ] to deeply equal [ +0, 2 ]`. Restored from a saved copy, `cmp` identical, case green again.
 Measured at the test commit of this item.
+
+## R2
+
+**Defect (F2).** `readRadarPass` raced only the whole probe-plus-control bundle against the pass's one deadline, so when the
+lander or health read missed it, `failedBundle` replaced a probe that had already answered with `late` and the project's radar
+result was dropped. At the merge base the probe raced the deadline alone. Wave 5i's first form regressed that race; it was never
+an approved departure.
+
+**Fix** (`server/src/coord/lineageRead.ts#readRadarPass` only). The probe read races the one `late` on its own; then, for a wanted
+control, `readLandingControl` races the same `late`. A late probe is `late` in `reads` and `allFailed(late)` in `controls`, as
+before. An answered probe with a late control keeps the probe in `reads` and gets `allFailed({ ok: false, reason: 'late' })` in
+`controls` (held, no cue, no older green). A throw keeps today's `unreadable` bundle. The outer per-project race is gone (each
+stage races itself); the doc comment says so.
+
+**Tests** (`server/test/radar-lane.test.ts`), each red at `dffade1c0` and green after:
+
+| Case | Red at the old code | Green |
+|---|---|---|
+| fast probe, slow lander (pass level) | `expected { ok: false, reason: 'late' } to deeply equal { ok: true, doc: ... }` | yes |
+| fast probe, slow health (pass level) | same assertion | yes |
+| genuinely late probe, healthy neighbour | passes at both (pins today's behaviour) | yes |
+| sweep: fast probe, slow lander, store attached | `the answered probe was dropped with the late control: expected [] to deeply equal [ 'claude-a-proj-a-alpha' ]` | yes |
+
+Each probe file is still read once (`range` count 1 in the pass cases; `probeReads` 1 in the sweep case). The sweep case also pins
+the control as `late` in all three documents and zero new `next-to-land:` mail and zero deliveries. Limit, measured: the unhung
+twin of that fixture queues no cue either (one pinned entry, no selectable head), so the zero-cue assertion is the strongest the
+fixture allows; the hold is shown by the control being late.
+
+**Mutant.** Old bundling restored in the control step (`if (!('lander' in control)) return failedBundle(n, lateOf);`), measured
+at the fix commit. Command: `timeout 600s ccrc test -- ./node_modules/.bin/vitest run test/radar-lane.test.ts test/coord-lineage.test.ts test/coord-radar.test.ts --maxWorkers=2 -t R2`.
+Result: rc 1, 3 failed (the two pass cases with `expected { ok: false, reason: 'late' } to deeply equal { ok: true, ... }`, the sweep
+case with the dropped-probe assertion). Restored from the saved copy, `cmp` identical, the same three files green (298 passed).
+
+**Unchanged:** one pass budget (the one `late` promise and its one timer, a local of the call), `RADAR_PASS_CONCURRENCY` 8, one
+probe read per project, the abort signal, generation fencing in the watcher (`watch.ts` untouched), bounded adapters, the
+`refused`/`absent`/`unreadable` answers and the listing's handling. No renewed deadline, no second timer, no second probe read.
