@@ -1981,6 +1981,9 @@ describe('the verification is actually wired into the deploy, and can observe a 
       ['history skill', "\"${SSH[@]}\" \"$BOX\" 'bash ~/.cc-sessions/install-history-skill.sh'"],
       // The Linear skill's installer is the SEVENTH (#1444, spec 2026-10-31 §11), for the same reason.
       ['linear skill', "\"${SSH[@]}\" \"$BOX\" 'bash ~/.cc-sessions/install-linear-skill.sh'"],
+      // The Overlord skill's staging installer (Overlord W1) reads no roster: it stages one copy outside every home, out
+      // of the tree rsynced to ~/ccrc. It is in this table for the run line itself; landing after the roster costs nothing.
+      ['overlord skill', "\"${SSH[@]}\" \"$BOX\" 'bash ~/ccrc/ccd/install-overlord-skill.sh'"],
     ] as const) {
       const runIdx = agentBranch.indexOf(invocation);
       expect(runIdx, `the agent branch no longer runs the ${what} installer (looked for: ${invocation})`)

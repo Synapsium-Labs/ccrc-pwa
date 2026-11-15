@@ -12,6 +12,7 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { mkTmp } from './tmpHelpers.js';
+import { SITES, siteRelation } from './skillSiteRelations.js';
 import { DEFAULT_TEST_ROSTER } from './helpers.js';
 import { seedAccountsSh } from './ccdWsHelpers.js';
 import { healthy, linkReal, lineFor, runDoctor } from './ccrc-doctorFixture.js';
@@ -246,45 +247,9 @@ describe('the deploy ships the linear skill too: the fleet lane', () => {
 describe('every hand-kept skill-name site that names ccrc-history also names ccrc-linear (spec §11, §14 census)', () => {
   // The history suite's one-way relation, anchored on the history skill: `ccrc-linear` joins every list the history
   // skill is on (spec §11), in the same spelling, at the same sites. Comment lines are dropped: a site is what it runs.
-  const read = (rel: string): string => fs.readFileSync(path.join(REPO, rel), 'utf8');
-  const fnBody = (rel: string, name: string): string => {
-    const m = new RegExp(`\\n${name}\\(\\) \\{[^\\n]*\\n([\\s\\S]*?)\\n\\}\\n`).exec(read(rel));
-    expect(m, `${rel} has no ${name}() defined at column 0`).not.toBeNull();
-    return m![1]!;
-  };
-  const agentArm = (): string => {
-    const d = read('deploy/deploy.sh');
-    return d.slice(d.indexOf('if [ "$TARGET" = "agent" ]'), d.indexOf('\nelse\n'));
-  };
-  const SITES: ReadonlyArray<readonly [string, () => string]> = [
-    ['ccd/ccrc _acct_provision', () => fnBody('ccd/ccrc', '_acct_provision')],
-    ['ccd/ccrc _acct_unprovision', () => fnBody('ccd/ccrc', '_acct_unprovision')],
-    ['ccd/ccrc _inst_skills', () => fnBody('ccd/ccrc', '_inst_skills')],
-    ['ccd/ccrc _uninst_cc_sessions', () => fnBody('ccd/ccrc', '_uninst_cc_sessions')],
-    ['ccd/ccrc-doctor-checks _check_skills', () => fnBody('ccd/ccrc-doctor-checks', '_check_skills')],
-    ['ccd/ccrc-doctor-checks _fix_skills', () => fnBody('ccd/ccrc-doctor-checks', '_fix_skills')],
-    ['deploy/deploy.sh agent arm', agentArm],
-  ];
-  const code = (t: string): string => t.split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
-  const FORMS: ReadonlyArray<readonly [string, (t: string) => string[]]> = [
-    ['install-<x>-skill.sh', (t) => [...t.matchAll(/install-([a-z]+)-skill\.sh/g)].map((m) => m[1]!)],
-    ['ccrc-<x>', (t) => [...t.matchAll(/(?<![\w./-])ccrc-([a-z]+)\b/g)].map((m) => m[1]!)],
-    ['<x>-skill', (t) => [...t.matchAll(/(?<![\w-])([a-z]+)-skill\b(?![.\w-])/g)].map((m) => m[1]!)],
-    ['for name in <x> …', (t) => [...t.matchAll(/\bfor name in ([a-z][a-z ]*); do/g)]
-      .flatMap((m) => m[1]!.trim().split(/\s+/))],
-  ];
-  const relation = (body: string): { named: string[]; missing: string[] } => {
-    const c = code(body);
-    const named: string[] = [];
-    const missing: string[] = [];
-    for (const [form, names] of FORMS) {
-      const got = new Set(names(c));
-      if (!got.has('history')) continue;
-      named.push(form);
-      if (!got.has('linear')) missing.push(form);
-    }
-    return { named, missing };
-  };
+  // The harness (the sites, the four spellings, comment lines dropped) is shared: skillSiteRelations.ts.
+  const relation = (body: string): { named: string[]; missing: string[] } =>
+    siteRelation(body, { if: ['history'], then: 'linear' });
 
   it('CONTROL: the relation sees a site that left linear out, and passes one that names both', () => {
     expect(relation('  for name in coordinator-skill history-skill; do').missing).toEqual(['<x>-skill']);

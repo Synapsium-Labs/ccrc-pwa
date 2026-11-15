@@ -1,10 +1,10 @@
 /**
  * The role-skill deny (D-4934): the session hook's PreToolUse arm DENIES a
- * `Skill` call that names `ccrc-worker`, `ccrc-reviewer` or `ccrc-coordinator`
- * when it comes from a SUBAGENT (a payload with a non-empty `agent_id`: a
+ * `Skill` call that names `ccrc-worker`, `ccrc-reviewer`, `ccrc-coordinator` or
+ * `ccrc-overlord` (the fourth, Overlord W1) when it comes from a SUBAGENT (a payload with a non-empty `agent_id`: a
  * session started by another session's Agent tool or a workflow `agent()` call).
  *
- * Those three skills make whoever loads them act AS the session: ack mail, take
+ * Those skills make whoever loads them act AS the session: ack mail, take
  * claims, send wave-done or review-done, open or dispatch runs, all under the
  * session's identity. A subagent cannot be the session, and one that loaded the
  * worker skill once sent a false wave-done as its worker. The skills' own
@@ -30,8 +30,12 @@ const SKILL_FILES = {
   'ccrc-worker': path.resolve(__dirname, '../../ccd/worker-skill/SKILL.md'),
   'ccrc-reviewer': path.resolve(__dirname, '../../ccd/reviewer-skill/SKILL.md'),
   'ccrc-coordinator': path.resolve(__dirname, '../../ccd/coordinator-skill/SKILL.md'),
+  // The fourth (Overlord W1, spec 2026-11-09 §3.6 "The role-skill deny"): no subagent anywhere may load the Overlord's.
+  'ccrc-overlord': path.resolve(__dirname, '../../ccd/overlord-skill/SKILL.md'),
 } as const;
 const ROLE_SKILLS = Object.keys(SKILL_FILES) as Array<keyof typeof SKILL_FILES>;
+/** The map's size as the word the titles say, so a fifth skill changes one table and no title. */
+const COUNT = ['zero', 'one', 'two', 'three', 'four', 'five', 'six'][ROLE_SKILLS.length]!;
 const GENERATION = '0189abcd-1234-5678-9abc-0123456789ab';
 const ID = 'demo-quiet-basin';
 
@@ -78,7 +82,7 @@ const subagentSkill = (skill: unknown, id: unknown = 'a1b2c3d4e5f6'): Result =>
 const mainSkill = (skill: unknown): Result => fire('Skill', { skill });
 
 describe('the role-skill deny (D-4934)', () => {
-  it('refuses a subagent\'s load of each of the three role skills, in the PreToolUse deny envelope, naming the skill', () => {
+  it(`refuses a subagent's load of each of the ${COUNT} role skills, in the PreToolUse deny envelope, naming the skill`, () => {
     for (const name of ROLE_SKILLS) {
       const r = subagentSkill(name);
       expect(r.deny, `a subagent loaded ${name}`).not.toBeNull();
@@ -95,7 +99,7 @@ describe('the role-skill deny (D-4934)', () => {
     }
   });
 
-  it('names the skill the call named, not another of the three', () => {
+  it(`names the skill the call named, not another of the ${COUNT}`, () => {
     // A reason that always said "ccrc-worker" would pass the loop above for the
     // worker alone; each reason must carry its own skill and not the others'.
     for (const name of ROLE_SKILLS) {
@@ -107,7 +111,7 @@ describe('the role-skill deny (D-4934)', () => {
     }
   });
 
-  it('refuses the same three behind one `<namespace>:` prefix — `x:ccrc-worker` is the worker skill', () => {
+  it(`refuses the same ${COUNT} behind one \`<namespace>:\` prefix — \`x:ccrc-worker\` is the worker skill`, () => {
     for (const name of ROLE_SKILLS) {
       const r = subagentSkill(`x:${name}`);
       expect(r.deny, `a subagent loaded x:${name}`).not.toBeNull();
@@ -139,11 +143,11 @@ describe('the role-skill deny (D-4934)', () => {
 
   it('the near misses pass — a name matches exactly, or after ONE namespace prefix and ONE leading slash, never as a substring', () => {
     for (const name of ['ccrc-workers', 'my-ccrc-worker', 'ccrc-worker:x', 'ccrc-reviewers', 'ccrc-coordinator2',
-      'ccrc-work', 'CCRC-WORKER', 'ccrc worker',
+      'ccrc-work', 'CCRC-WORKER', 'ccrc worker', 'ccrc-overlords', 'the-ccrc-overlord',
       // One prefix: `a:b:ccrc-worker` is the skill `b:ccrc-worker` of the plugin `a`, not the worker skill.
-      'a:b:ccrc-worker', 'x:y:ccrc-reviewer', 'x:y:ccrc-coordinator',
+      ...ROLE_SKILLS.map((n) => `a:b:${n}`),
       // One slash: `//ccrc-worker` is `/ccrc-worker` after Claude Code's strip, a name no skill has.
-      '//ccrc-worker', '//ccrc-reviewer', '//ccrc-coordinator']) {
+      ...ROLE_SKILLS.map((n) => `//${n}`)]) {
       expect(subagentSkill(name).stdout, `a near miss was denied: ${JSON.stringify(name)}`).toBe('');
     }
   });
@@ -298,7 +302,7 @@ describe('the deny never replaces a deny already set (D-4934)', () => {
   });
 });
 
-describe('the three names, written once (D-4934)', () => {
+describe(`the ${COUNT} names, written once (D-4934)`, () => {
   const hook = fs.readFileSync(HOOK, 'utf8');
   const defs = hook.split('\n').filter((l) => /^ROLE_SKILLS=/.test(l));
 
@@ -307,7 +311,7 @@ describe('the three names, written once (D-4934)', () => {
     expect(defs[0]).toMatch(/^ROLE_SKILLS="[a-z-]+( [a-z-]+)*"$/);
   });
 
-  it('the list is exactly the `name:` frontmatter of the worker, reviewer and coordinator skills — a rename turns this red', () => {
+  it('the list is exactly the `name:` frontmatter of the role skills in SKILL_FILES — a rename turns this red', () => {
     const named = (file: string): string => {
       const fm = /^---\n([\s\S]*?)\n---\n/.exec(fs.readFileSync(file, 'utf8'));
       expect(fm, `${file} has no frontmatter`).not.toBeNull();
