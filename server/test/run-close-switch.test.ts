@@ -88,7 +88,7 @@ describe('the store: three states per group, default shadow', () => {
     const file = path.join(mkTmp('ccrc-runclose-migrate-'), 'coord.db');
     const fresh = openCoordDb(file);
     fresh.prepare("UPDATE run_close_settings SET neverStarted = 'on', claimantCrashed = 'off', updatedAt = 9").run();
-    // Back to version 53: undo migrations 74 (push_outbox, push_outbox_meta and the reach stamps, Overlord W1), 73 (continuity_probes and continuity_reads, Overlord W1a), 72 (continuity_notes and
+    // Back to version 53: undo migrations 75 (push_outbox, push_outbox_meta and the reach stamps, Overlord W1), 74 (the anchor-slot lane-arm row, which goes with lane_arm_settings), 73 (continuity_probes and continuity_reads, Overlord W1a), 72 (continuity_notes and
     // continuity_handovers, Overlord W1a), 71
     // (plain_memory_settings, Overlord W1a launch profiles PR B), 70 (continuity_timers,
     // Overlord W1a), 69 (continuity_snapshots and continuity_card_reads, Overlord W1a), 68
@@ -100,7 +100,7 @@ describe('the store: three states per group, default shadow', () => {
     // testbox_events.changes, D-8399), 62 (claims.chainedFrom,
     // D-8395), 61 (nodes.reportedSweep, D-8386), 60 (claude_builds, D-8289), 59 (the plan model, D-8181), 58 (practice_cases,
     // Overlord W1a), 57 (testbox_events, D-8166), 56 (lane_arm_settings, D-8274) and 55 (coordinator_calls, D-8126) as well
-    // as 54, so the reopen replays all twenty-one.
+    // as 54, so the reopen replays all twenty-two.
     fresh.exec(`ALTER TABLE project_linking DROP COLUMN teamSource; ALTER TABLE project_linking DROP COLUMN teamName;
       ALTER TABLE project_linking DROP COLUMN teamEvidence; ALTER TABLE project_linking DROP COLUMN teamAt;
       ALTER TABLE project_linking DROP COLUMN teamCandidates;

@@ -10,6 +10,7 @@ import path from 'node:path';
 import { readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { parsedFile, sqlStatementsInFile, symbolOf } from './scan/symbols.js';
+import { programMembers } from './scan/programView.js';
 import { openCoordDb, tx } from '../src/coord/db.js';
 import { CoordStore, MAIL_RECLAIM_CANCELLED_ERROR, MAIL_REPLAY_CEILING_ERROR,
          MAIL_RUN_CLOSED_ERROR, toRunSummary } from '../src/coord/store.js';
@@ -1537,7 +1538,8 @@ describe('CoordStore: the delegation projection (delegation broker wave 3, Task 
       const walk = (d: string): string[] => readdirSync(d, { withFileTypes: true }).flatMap((e) => (e.isDirectory() ? walk(path.join(d, e.name)) : e.name.endsWith('.ts') ? [path.join(d, e.name)] : []));
       const homes = walk(root).filter((f) => /(?:interface|type)\s+DelegationInsertEventsResult\b\s*[={<]/.test(readFileSync(f, 'utf8')));
       expect(homes.map((f) => path.relative(root, f))).toEqual([path.join('coord', 'delegation-model.ts')]);
-      expect(src('store.ts')).not.toMatch(/delegation-checkpoint/);
+      // D-8641: nor from any module of delegation-checkpoint.ts's program, so the pilot's moves cannot carry it a new importer
+      for (const m of programMembers('server/src/coord/delegation-checkpoint.ts')) expect(src('store.ts'), m).not.toContain(path.basename(m, '.ts'));
       expect(src('store.ts')).toMatch(/type DelegationInsertEventsResult\b/);
     });
   });

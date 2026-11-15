@@ -17,6 +17,7 @@ import { PROBE_MUTANT_SETS } from './probeSets.js';
 import { PROBE_DOOR_MUTANT_SETS } from './probeDoorSets.js';
 import { NOTES_MUTANT_SETS } from './notesMutants.js';
 import { TIMER_MUTANT_SETS } from './timerSets.js';
+import { ANCHOR_MUTANT_SETS } from './anchorSets.js';
 import { PUSH_OUTBOX_MUTANT_SETS } from './pushOutboxSets.js';
 import { simulate } from './run.js';
 import {
@@ -154,6 +155,7 @@ const MUTANT_SETS: Record<string, MutantSet<never>> = {
   ...PROBE_DOOR_MUTANT_SETS,
   ...NOTES_MUTANT_SETS,
   ...TIMER_MUTANT_SETS,
+  ...ANCHOR_MUTANT_SETS,
   ...PUSH_OUTBOX_MUTANT_SETS,
 };
 

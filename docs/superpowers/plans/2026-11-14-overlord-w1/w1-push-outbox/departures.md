@@ -4,9 +4,9 @@ Plan: `docs/superpowers/plans/2026-11-14-overlord-w1/w1-push-outbox.md`, Tasks 1
 Each departure is named by a plain-words slug; none carries a D-number. The coordinator folds them into the plan's
 deviation ledger.
 
-- **migration-slot-74** — the `push_outbox` migration takes entry 74 (`user_version 73 -> 74`), the next free slot on
-  `origin/main` at build time. Another W1 piece that lands first takes it, and this one renumbers on the coordinator's
-  word.
+- **migration-slot-75** — the `push_outbox` migration takes entry 75 (`user_version 74 -> 75`). It was built at 74, the
+  next free slot then; the anchor (#2803) landed 74 first, and the absorb of `origin/main` put this entry after it.
+  Another W1 piece that lands first takes 75, and this one renumbers on the coordinator's word.
 - **tag-null-without-payload** — the plan's schema has `tag TEXT NOT NULL`, but the same plan writes a bound row with a
   null payload when there is no push service or no payload (F4). Such a row has no tag to store. `tag` is nullable, and
   NULL means exactly one thing: the row was written with no payload. Every row written with a payload stores its tag.

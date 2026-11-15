@@ -1,0 +1,8 @@
+{
+  "file": "ccd/session-hook.sh",
+  "maxDelta": 45,
+  "d": "D-8630",
+  "reason": "Overlord W1a, the anchor (spec section 3.3.3 C38) with the fixes of review 2062: the anchor's slot, its owed mark after an automatic compaction, and F5's one 8-second budget for the hook's network reads in one invocation (the anchor, the roster card, the start report and its resend, the owed anchor), each read bounded by what is left and none started once one has run out its bound; measured +45 net code lines against the merge-base (2960 to 3005), +7 of them the fix round's (the budget's helper and its call sites); kept in the hook because its reads run on the SessionStart and prompt paths themselves and the hook loads no library",
+  "added": "2026-11-14",
+  "createdAt": "2026-11-14"
+}

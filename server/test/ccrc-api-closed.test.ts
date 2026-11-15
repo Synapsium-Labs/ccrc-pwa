@@ -20,7 +20,7 @@ const root = path.join(import.meta.dirname, '..', '..');
 const corpusFiles = (): string[] => {
   const out: string[] = [];
   // `ccd/linear-skill` (#1444, spec 2026-10-31 §11): its worked examples are executable, so each must map to a row.
-  for (const dir of ['ccd/coordinator-skill', 'ccd/worker-skill', 'ccd/reviewer-skill', 'ccd/history-skill', 'ccd/linear-skill']) {
+  for (const dir of ['ccd/coordinator-skill', 'ccd/worker-skill', 'ccd/reviewer-skill', 'ccd/history-skill', 'ccd/linear-skill', 'ccd/overlord-skill']) {
     const walk = (d: string): void => {
       for (const e of fs.readdirSync(d, { withFileTypes: true })) {
         const p = path.join(d, e.name);

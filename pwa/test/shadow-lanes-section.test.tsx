@@ -70,6 +70,22 @@ describe('Settings › Automation › Shadow lanes (D-8274)', () => {
     expect((own.getByRole('radio', { name: T.live }) as HTMLInputElement).disabled).toBe(false);
   });
 
+  it('the anchor-slot row (Overlord W1a, the anchor piece) is listed last, in its own words, ungated, with no shadow record', async () => {
+    const P = T.rows['launch-profile'];
+    const A = T.rows['anchor-slot'];
+    vi.spyOn(api, 'laneArm').mockResolvedValue({ lanes: [row(), row({ lane: 'continuity', marker: null }),
+      row({ lane: 'launch-profile', marker: null }), row({ lane: 'anchor-slot', marker: null })] });
+    mount();
+    await waitFor(() => expect(screen.getByRole('group', { name: A.legend })).toBeInTheDocument());
+    const groups = screen.getAllByRole('group').map((g) => g.getAttribute('aria-label') ?? g.querySelector('legend')?.textContent);
+    expect(groups.indexOf(A.legend)).toBeGreaterThan(groups.indexOf(P.legend));
+    const own = within(screen.getByRole('group', { name: A.legend }));
+    expect(own.getByText(A.shadowNote)).toBeInTheDocument();
+    expect(own.queryByText(/Shadow record:/)).toBeNull();
+    expect(laneArmGate('anchor-slot')).toBeNull();
+    expect((own.getByRole('radio', { name: T.live }) as HTMLInputElement).disabled).toBe(false);
+  });
+
   it('the continuity row says why it cannot go live yet, and a Live tap the server refuses lane-gated says the server\'s reason (review 2003 F3)', async () => {
     const C = T.rows.continuity;
     const gate = laneArmGate('continuity')!;

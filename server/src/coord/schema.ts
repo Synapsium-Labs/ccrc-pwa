@@ -3112,12 +3112,28 @@ export const MIGRATIONS: readonly string[] = [
   );
   `,
   // ── 74: user_version 73 -> 74 ─────────────────────────────────────────────
+  // The anchor piece (Overlord spec §3.3.3 C38; W1a, plan `w1a-anchor.md` Task 2): the seed row `anchor-slot` = `shadow`
+  // adds the anchor's switch to the Shadow lanes card. Shadow, the card door's `part=anchor` renders the anchor, logs its
+  // size and answers `dark`, so the session hook prints today's role card; only `live`, set by the operator at
+  // `POST /api/coord/lane-arm`, serves it. The merge arms nothing.
+  //
+  // ONE SEED ROW, nothing else: an older build opening a file at `user_version 74` takes rule 3 (it warns, reads as-is and
+  // migrates nothing), reads the `anchor-slot` lane-arm row as no lane it knows, and boots. Every earlier entry is frozen.
+  // Probes PR B (#2802) took 73, so this entry is 74, the next free slot, pinned to the entry before it (the coordinator's
+  // rulings on ask 416 and of 19835). RE-MEASURE the slot before the PR and before merge (it must print 73 before this entry
+  // is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  INSERT INTO lane_arm_settings (lane, choice, updatedAt) VALUES ('anchor-slot', 'shadow', 0);
+  `,
+  // ── 75: user_version 74 -> 75 ─────────────────────────────────────────────
   // The push outbox (Overlord spec §6.7, §6.1 C31, §4.3 C67; plan `docs/superpowers/plans/2026-11-14-overlord-w1/
   // w1-push-outbox.md`, Task 3): one row per push, moved only through `pushOutboxStore.ts` by `OUTBOX_TRANSITIONS`;
   // `push_outbox_one_per_source` holds a bound row to one per ask or item (I2), and `claimSeq` ties a verdict to its
-  // claim. `reachedOperatorAt` has ONE writer, `stampReach`. No backfill. NEW TABLES AND TWO NULLABLE COLUMNS: an older
-  // build opening a file at `user_version 74` takes rule 3, never names them, and boots. RE-MEASURE the slot before the PR
-  // and before merge (it must print 73 before this entry is counted):
+  // claim. `reachedOperatorAt` has ONE writer, `stampReach`. No backfill. The anchor (#2803) took 74, so this is 75. NEW
+  // TABLES AND TWO NULLABLE COLUMNS: an older build opening a file at `user_version 75` takes rule 3, never names them, and
+  // boots. RE-MEASURE the slot before the PR and before merge (it must print 74 before this entry is counted):
   //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
   `
   CREATE TABLE push_outbox (
