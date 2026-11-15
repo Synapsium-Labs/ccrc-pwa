@@ -35,7 +35,7 @@
   - G4 `run-routes ccd-land-probe -t 'mark that throws|lander key and its mirror'`: 2 files, 13 passed.
 
 ## Mutation matrix M1 to M27
-"Owner note" is the task note that measured the row. A row was re-run only when its mutated code changed after the owner measured it.
+"Owner note" is the task note that measured the row. A row was re-run only when its mutated code changed after the owner measured it. The `Re-run` column records the state at the reviewed tip; fix round 1 re-ran every row except M8-M10, see `fix-round-1.md#r2`.
 | Row | Mutant | Measured red assertion | Owner note | Re-run |
 |---|---|---|---|---|
 | M1 | project read refusal `skip` not `stop` | `a store stop in the first project ends the pass`: expected { read: 1, ... } to match { read: 0, stopped: 'store' } | task-1 | no |
@@ -77,13 +77,13 @@ task 4 (task 5 added the `creations` fact and the cue transaction). The mutated 
 token, the closed-row gate, the retreat refusal) were not touched by those commits, and the task 4 selections are in the
 Step 6 groups at this tip and green; so they were not re-mutated. M27's guarded line and M19-M22's code were last changed by
 task 5's own fix round and measured there. `landing-control.test.ts` and `landed-lane.test.ts`, the selections of M13, M14, M1-M4,
-are green at this tip (G1).
+are green at this tip (G1). This paragraph records the state at the reviewed tip; fix round 1 re-ran the rows (see `fix-round-1.md#r2`).
 
 ## Departures (by slug, collected from tasks 1 to 6, then this task)
 task 1: node-modules-install, gate-literal. task 2: probe-reasons, health-ancestors. task 3: shared-api-import, flag-not-gate
 (and the rewrite of row C17 to the Amendment A behaviour). task 4: subjects-whole-union, tests-beyond-the-list,
 no-verdict-for-terminal-rows. task 5: port-member-deferred (superseded: task 6 added the member), control-tx-takes-port,
-run-absent-word, facts-literals. task 6: new-l1-view-file, shared-landing-line-untouched.
+run-absent-word, facts-literals, related-selection-substituted, control-tx-module. task 6: new-l1-view-file, shared-landing-line-untouched.
 Task 7: none beyond the above; the census scan treats `Date.parse` as no clock read (`landed.ts` is unchanged).
 
 ## Limitations

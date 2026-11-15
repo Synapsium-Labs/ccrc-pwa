@@ -101,3 +101,116 @@
 | M27 | task-5 | `store.ts#applyLandingControl` `this.landingFence = recovery` removed | 59640f62b | unchanged; selection as M19 | RE-RUN, `-t 'fault\|COMMIT\|rolled back'`: 6 failed, `expected { ok: true, facts: { …(11) } } to match object { ok: false, error: 'landing-fenced' }` (the faults and the COMMIT fault); green 7 passed |
 
 **Final selection (green).** `vitest run test/landing-control.test.ts test/landing-next-mail.test.ts test/landing-terminal-damage.test.ts test/landed-lane.test.ts test/landed-decide.test.ts` through `ccrc test --`: 5 files, 221 passed, rc 0. `git status` shows no modified source file (the only edits of the round are the test file, committed, and these notes).
+
+## R4
+
+The plan's `vitest related src/coord/rundefsTx.ts` selection, run from `server/` in the foreground through `ccrc test --`. Grep-selected
+callers are supplemental evidence below, not a replacement for it.
+
+| Run | Command | rc | Result |
+|---|---|---|---|
+| 1 | `timeout 600s ccrc test -- ./node_modules/.bin/vitest related src/coord/rundefsTx.ts --run --maxWorkers=2` | 137 | killed after 28 s, no `Test Files` / `Tests` line printed; the wrapper reported `the test slice's memory cap killed a process during this run (MemoryMax=6G; 2 OOM kill(s) in ccrctests.slice)` |
+| 2 (the one retry, `--maxWorkers=1`, first waited about 2 s for a heavy test slot) | the same with `--maxWorkers=1` | 137 | killed after 57 s, no summary lines; the same wrapper message, 2 OOM kills |
+
+The number of files the selection chooses was never printed (the process died before any file result), so it is not known. The
+selection did NOT complete. Verification limitation: the related selection has no result, at either worker count, on this box; nothing here
+approves or implies a result for it. Not retried again.
+
+Supplemental: the focused mail suites, one run, `timeout 600s ccrc test -- ./node_modules/.bin/vitest run test/landing-checks-lane.test.ts
+test/mail-revive.test.ts test/delegation-wave3.integration.test.ts test/landing-next-mail.test.ts test/landing-control.test.ts
+test/mail-hardening.test.ts test/mail-deliveries-writer.test.ts`: all seven files exist; rc 0, `Test Files 7 passed (7)`, `Tests 269 passed (269)`,
+duration 399 s (the harness moved it to the background after 180 s; waited on its output file). The wrapper again printed its OOM line
+(`2 OOM kill(s) in ccrctests.slice`) while the run exited 0: those kills are the slice's, counted over its life, and no test failed.
+Per-file counts of the notice-body callers are in R6.
+
+Departure `related-selection-substituted`: Task 5 ran the three grep-found callers (`landing-checks-lane`, `mail-revive`,
+`delegation-wave3.integration`, 134 passed) instead of the plan's `vitest related` selection, which is a subset chosen by a text search and
+not the import-graph selection, so it was not a replacement. It is now recorded in `task-5.md` and `task-7.md`.
+
+## R5
+
+**Reconciliation.** The slug `control-tx-module` is in no file of the tree (`grep -rn control-tx-module` over `docs/` and `.superpowers/`
+found it nowhere before this round); the controller reports it in the wave-done mail and the PR body, which I cannot read from here. So the
+reviewer's "no departure slug of its own" is right about the notes: `task-5.md` `## Departures` named `control-tx-takes-port` (the
+`WatcherCoordPort` parameter) but not the split itself, and `task-7.md`'s slug list likewise. Both now carry `control-tx-module`, pointing here.
+The split was a coordinator ruling recorded in `.superpowers/sdd/.../progress.md` ("Ruling (T5 ...)"), made because `store.ts` stood at +35 of 40.
+
+**Growth figures, measured at HEAD.** `GROWTH_CHECK=1 timeout 600s ccrc test -- ./node_modules/.bin/vitest run test/growth-check.test.ts --maxWorkers=2`:
+rc 0, 1 file, 94 passed (the notes recorded 73; the file has grown). The test prints no per-file figure, so I measured with its own rule:
+`codeLines` from `test/growthCheck.ts` applied to `git show <merge-base>:<file>` and `git show HEAD:<file>`, merge-base of `origin/main` and
+HEAD as already fetched (`a6b87cf79`, no fetch run), in a throwaway test file that I removed.
+
+| File | Base | Head | Delta |
+|---|---|---|---|
+| `server/src/coord/store.ts` | 5341 | 5390 | +49 |
+| `server/src/coord/landingControlTx.ts` (new, 66 physical lines) | absent | 47 | +48 |
+
+The delta +49 equals the +49 recorded in `task-5.md`, over the limit of 40; the absolute figures there (5332 and 5381) are 9 lower on both
+sides most likely because the recorded measurement used an older merge-base (not re-derived here); the delta is unchanged. Task 4's +35 became +49 with
+Task 5's `applyLandingControl` method (+14 net: guard, owned transaction, catch, fence). `GROWTH_OVER: (none)` stands only because the new L3 C5 file
+takes the new-file rule (D-8563): a passing growth rule is not design approval.
+
+**The split.** `CoordStore.applyLandingControl` (`store.ts`) keeps the guard (`landingGuard`), the one owned transaction (`tx(this.db, ...)`),
+the phase-classified catch and the fence and boundary (`landingBoundary`, `this.landingFence`). `applyLandingControlTx` (`landingControlTx.ts`,
+L3, C5) is only the body that runs INSIDE that transaction, and it has one call site, `store.ts` (`applyLandingControl`).
+
+**Why one store owner, a synchronous boundary and the same port surface (checked against the code).**
+- One owner: `applyLandingControlTx` is referenced from one source file, `store.ts` (one call); `landing-entry-census.test.ts` pins that
+  (callers of the function, and that `tx(this.db` precedes the call in source order). The file holds no state, opens no transaction, and
+  writes no journal record; its one write is the `mainRedHold` UPSERT, which the census pins as the single statement for that column
+  and which leaves `operatorPaused` out of its SET. It takes `coord: WatcherCoordPort`, which at the call is the store itself, and
+  `readFacts`, the store's own inner read `landingFactsInner`, so no second reader of the facts exists.
+- Synchronous boundary: the file contains no `async`, `await` or `Promise` (grep, empty); the body runs inside the synchronous `tx` over
+  `node:sqlite` `DatabaseSync`, and a throw unwinds to the store's catch, which classifies it by the `phase` object the body moves
+  (`decide`, `apply`, `commit`).
+- Port surface: the body reaches exactly three members of `WatcherCoordPort`: `coord.db` (the UPSERT), `coord.run` and
+  `coord.currentEpisode`, plus the two notice bodies in `rundefsTx.ts` (`queueLandingNoticeTx`, `queueRunlessNoticeTx`), which already take
+  that port. The one member this wave added is `applyLandingControl`, pinned by `rings/watcher-store-port.test.ts` (reach equals port, no
+  unused addition). `landingControlTx.ts` is in `HANDLE_HOLDERS` of `single-definition/core-vocab.test.ts` because it names `coord.db`.
+
+**Precedent, checked.** The store already delegates bodies to same-ring companion modules: `rundefsTx.ts#queueLandingNoticeTx` and
+`rundefsTx.ts#queueRunlessNoticeTx` take `coord: WatcherCoordPort` and run inside a caller's transaction, which is the closest match (and
+the bodies this file reuses); `linkingStore.ts#setLinking`, `reviewCapStore.ts#liftReviewCapByCoordinator` and
+`continuity/continuityStore.ts#mintGeneration` take the `db` and open their own `tx(db, ...)` inside the companion; `practiceCasesStore.ts#openPracticeCase`
+takes the `db` too (I did not verify a transaction in it). So the form is not new, but `applyLandingControlTx` differs from the db-taking
+companions in that the store, not the companion, owns the transaction.
+
+**Request.** The growth rule passing is not design approval. No further decomposition or exemption is requested, no port is widened and no
+growth guard is edited. The next independent architecture review is asked to assess the existing split before coordinator acceptance.
+Departure `control-tx-module` is added to `task-5.md` and `task-7.md`. Note (not changed here): `task-5.md`'s `control-tx-takes-port` bullet
+still says the body reads `const { db } = coord`; fix round 1 of the final review wave changed that to plain `coord.db` (task-7 F6).
+
+## R6
+
+**Reconciliation.** `server/test/landing-notice-tx.test.ts` never existed: `git log --all --oneline -- server/test/landing-notice-tx.test.ts` is
+empty, and the name is in no plan or task note (grep of `docs/` and `.superpowers/`: none). It was only a path in this worker's claim 4285,
+taken in advance for a test that was never written, which the review brief then repeated. No such test is created. The notice bodies are
+exercised through their callers' tests below.
+
+**Notice-body callers** (source-to-test pairing is by the call graph read from the grep and the test names, not by a per-test trace; `grep -rlE "queueLandingNotice|queueRunlessNotice" server/src server/test`), with results measured this round
+(`vitest run` of the five files below with the JSON reporter: rc 0, 5 files, 197 passed, 549 s; the seven-file mail run in R4 covers the rest):
+
+| Source file | Test files that exercise it | Result |
+|---|---|---|
+| `src/coord/rundefsTx.ts` (defines the bodies) | all below | see rows |
+| `src/coord/landingControlTx.ts` | `landing-next-mail.test.ts`, `landing-control.test.ts`, `landing-terminal-damage.test.ts`, `landing-entry-census.test.ts` (static) | R4 seven-file run green; `landing-terminal-damage` 40 passed (this round) |
+| `src/watch.ts` | `landing-checks-lane.test.ts`, `mail-revive.test.ts`, `rings/watcher-store-port.test.ts` | 57, 41 and 23 passed |
+| `src/coord/delegation-adoption.ts`, `src/coord/delegationAdoptStep.ts` | `delegation-wave3.integration.test.ts` | 36 passed |
+| delivery-state guard under all of them | `mail-hardening.test.ts`, `mail-deliveries-writer.test.ts` | R4 seven-file run green (269 passed over its seven files) |
+
+(`landing-next-mail`, `landing-control`, `landing-entry-census`, `mail-hardening` and `mail-deliveries-writer` have no per-file count of their own this
+round: the R4 run reported only the seven-file total, 269.) The Task 5 grep-selected group was 134 passed over three files; the same three files
+now count 57 + 41 + 36 = 134.
+
+**Selections for the next reviewer** (from `server/`, foreground, each through `timeout 600s ccrc test -- ./node_modules/.bin/vitest run ...`):
+- R1, R2, R3 and the pure landing rows: `test/landing-control.test.ts test/landing-next-mail.test.ts test/landing-terminal-damage.test.ts test/landed-lane.test.ts test/landed-decide.test.ts` (R2's final selection: 5 files, 221 passed, rc 0).
+- The notice bodies and their callers: `test/landing-checks-lane.test.ts test/mail-revive.test.ts test/delegation-wave3.integration.test.ts test/landing-next-mail.test.ts test/landing-control.test.ts test/mail-hardening.test.ts test/mail-deliveries-writer.test.ts` (R4: 7 files, 269 passed).
+- Terminal damage and the port census: `test/landing-terminal-damage.test.ts test/rings/watcher-store-port.test.ts`.
+- The mutation rows M12 to M14: the exact `-t` selections are in R2's matrix (`landing-control -t 'mainRedNext|M13'` and the new real-store rows in `landing-next-mail`).
+- Growth and rings for R5: `GROWTH_CHECK=1 ... vitest run test/growth-check.test.ts` and `test/landing-entry-census.test.ts test/single-definition/core-vocab.test.ts`.
+- Do not use `vitest related src/coord/rundefsTx.ts` on this box: it was OOM-killed twice (R4).
+
+**Stale note text corrected.** In `task-7.md`: the matrix header sentence "A row was re-run only when its mutated code changed after the
+owner measured it." now has one added sentence saying the `Re-run` column records the state at the reviewed tip and that fix round 1 re-ran every row
+except M8-M10; and the paragraph "Re-run decision: ..." has one sentence added at its end saying it records the state at the reviewed tip and that
+fix round 1 re-ran the rows, both pointing at `fix-round-1.md#r2`. No column value and no existing text was changed.

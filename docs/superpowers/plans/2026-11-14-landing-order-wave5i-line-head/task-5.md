@@ -25,7 +25,8 @@ route, ccd verb, wire op or exec-whitelist change.
   `landing-next-mail` failed to load (`Cannot find module '../src/coord/landingNext.js'`).
 - Step 5, the existing notice callers after the extraction and before the new caller (`landing-checks-lane`, `mail-revive`,
   `delegation-wave3.integration`): 3 files, 134 passed. The `vitest related src/coord/rundefsTx.ts` selection was not run: the
-  three files above are the concrete callers found by grep, run directly.
+  three files above are the concrete callers found by grep, run directly. That substitution is the departure
+  `related-selection-substituted`; the selection was attempted in fix round 1 and its outcome is in `fix-round-1.md#r4`.
 - Green: `landing-control` + `landing-next-mail` + `landing-line-order`: 3 files, 138 passed; `landed-lane` (with
   single-definition): green.
 - `test/single-definition` (directory): 32 files green after the structural-handle fix below.
@@ -59,6 +60,10 @@ above are a different mutant); those rows are measured in `fix-round-1.md#r2`.
   `WatcherCoordPort`, so `applyLandingControlTx` takes it too; it receives no other private store field than the one
   `landingFactsInner` closure. There is no separate `db` parameter: the body reads the handle as `const { db } = coord`, because
   `single-definition/core-vocab.test.ts` (REACH) forbids the dotted `coord.db` spelling in any coord file but the store.
+- departure: related-selection-substituted. The plan's `vitest related src/coord/rundefsTx.ts` selection was replaced by three
+  grep-found caller files (see `fix-round-1.md#r4`; the selection itself was later attempted and was OOM-killed twice).
+- departure: control-tx-module. `CoordStore.applyLandingControl` keeps the guard, the owned transaction, the phase-classified catch
+  and the fence, and its transaction body lives in the same-ring companion `landingControlTx.ts` (see `fix-round-1.md#r5`).
 - departure: run-absent-word. `NextLandingFacts.run` is `NextLandingRun | 'missing' | 'unreadable'` (not a nullable run), so a
   run row that is not there answers `run-absent` and one that does not read (or names another run or project) answers
   `run-unreadable`. The literal is `'missing'` because `single-definition/vocabularies.test.ts` reserves the quoted
