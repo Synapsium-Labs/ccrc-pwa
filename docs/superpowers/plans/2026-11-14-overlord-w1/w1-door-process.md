@@ -141,7 +141,9 @@ tree contradicts. The plan builds every recommendation unless the coordinator or
    closed-book grading counts them).
 10. **The bound of three readers.** §3.3.10 says "at most three readers run at once" and names no enforcer.
     **Recommendation:** the reader-scope arm refuses a fourth `Agent` call while three readers stand in the hook's own
-    roster (slug `reader-bound-in-the-scope-arm`). The roster is the join file the hook already keeps.
+    roster (slug `reader-bound-in-the-scope-arm`). The roster is the subagent list the hook already keeps (D-5232),
+    from which a `SubagentStop` removes the entry; the join file is not used for this, because a join is a fact, not
+    liveness.
 11. **Model-switch reports for which sessions?** **Recommendation:** for every session the start report covers (a
     non-child, non-fork session), so a coordinator's drift is measured the same way (R13). The refusal of a typed
     `/model` applies only to a session with a door (Task 7).
