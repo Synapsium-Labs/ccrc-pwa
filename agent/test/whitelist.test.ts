@@ -569,7 +569,12 @@ describe('whitelist.isExecAllowed', () => {
       '--section', 'plans', '--path', 'b.md', '--fingerprint', 'c'.repeat(64), '--max-bytes', '2097152'])).toBe(true);
     expect(isExecAllowed('ccd', ['docs-fetch', '--project', 'demo'])).toBe(true);
     expect(isExecAllowed('ccd', ['docs-fetch', '--project', 'demo', '--branch', 'ws/a'])).toBe(true);
-    for (const verb of ['docs-index', 'docs-tree', 'docs-show', 'docs-fetch']) {
+    // One doc's history (docs W5b): 8 tokens after the verb, granted on `--project` alone.
+    expect(isExecAllowed('ccd', ['docs-log', '--project', 'demo', '--commit', sha, '--section', 'specs', '--path',
+      'a.md'])).toBe(true);
+    expect(isExecAllowed('ccd', ['docs-log', 'demo'])).toBe(false);
+    expect(isExecAllowed('ccd', ['docs-log', '--commit', sha, '--project', 'demo'])).toBe(false);
+    for (const verb of ['docs-index', 'docs-tree', 'docs-show', 'docs-fetch', 'docs-log']) {
       expect(isExecAllowed('ccd', [verb]), verb).toBe(false);
     }
     expect(isExecAllowed('ccd', ['docs-tree', 'demo'])).toBe(false);

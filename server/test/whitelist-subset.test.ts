@@ -373,6 +373,7 @@ describe('layer 3 — the list never drifts wider than the code', () => {
   it('docs verbs are grantable ONLY with their flag, one grant each, and both docs-show builders cross it', () => {
     const GRANTS: readonly (readonly [verb: string, flag: string])[] = [
       ['docs-index', '--all'], ['docs-tree', '--project'], ['docs-show', '--project'], ['docs-fetch', '--project'],
+      ['docs-log', '--project'],
     ];
     for (const [verb, flag] of GRANTS) {
       expect(EXEC_WHITELIST.ccd.filter((p) => p[0] === verb), `exactly one ${verb} grant, on ${flag}`)
@@ -393,6 +394,10 @@ describe('layer 3 — the list never drifts wider than the code', () => {
       'c'.repeat(64), 2097152)])).toBe(true);
     expect(isExecAllowed('ccd', [...CCD_ARGV.docsFetch('demo', null)])).toBe(true);
     expect(isExecAllowed('ccd', [...CCD_ARGV.docsFetch('demo', 'ws/a')])).toBe(true);
+    // The history verb's literal 8-token argv (`CCD_ARGV.docsLog` itself waits for the builder wave).
+    expect(isExecAllowed('ccd', ['docs-log', '--project', 'demo', '--commit', 'a'.repeat(40), '--section', 'specs',
+      '--path', 'a.md'])).toBe(true);
+    expect(isExecAllowed('ccd', ['docs-log', '--all'])).toBe(false);
   });
 
   // The other half of the same decision, and the half a `not.toContain(
