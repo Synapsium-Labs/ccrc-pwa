@@ -22,3 +22,29 @@
 # spelling of the first, held equal by the spelling table.
 POOL_SET_SPELLING_MAX_BYTES=1024
 ROUTE_LIST_MAX_BYTES=1024
+_poolset_parse() {   # spelling -> rc 0 and two lines, `names=<n1> <n2>…` and `untagged=yes|no`; rc 1 and nothing: malformed
+  # `shared/poolset.ts#parsePoolSet`'s grammar, the two held equal by the one spelling table: `^(N(,N)*)?(\+untagged)?$`, N a
+  # pool name (`POOL_NAME_RE`), non-empty as a whole, the names strictly ascending in byte order (so a repeat or an unsorted
+  # list is malformed, and one set has one spelling), at most `POOL_SET_SPELLING_MAX_BYTES` bytes. The empty set has no
+  # spelling (open question 3): an empty names list without `+untagged` is malformed. The C locale gives one verdict for any
+  # bytes, and the charset test comes first, so a newline, a CR or any byte off the grammar never reaches the split.
+  local LC_ALL=C s="$1" u=no n prev="" names=""
+  [[ -n "$s" && ${#s} -le $POOL_SET_SPELLING_MAX_BYTES && "$s" =~ ^[a-z0-9,+-]+$ ]] || return 1
+  [[ "$s" == *+untagged ]] && { u=yes; s="${s%+untagged}"; }
+  [[ "$s" != ,* && "$s" != *, && "$s" != *,,* ]] || return 1
+  for n in ${s//,/ }; do
+    [[ "$n" =~ $POOL_NAME_RE ]] || return 1
+    [[ -z "$prev" || "$prev" < "$n" ]] || return 1
+    prev="$n"; names+="${names:+ }$n"
+  done
+  printf 'names=%s\nuntagged=%s\n' "$names" "$u"
+}
+_acctorder_valid() {   # list -> 0 iff account ids joined by `,`, none twice, at most `ROUTE_LIST_MAX_BYTES` bytes; else 1
+  # SHAPE ONLY, never roster membership (open question 9): an account removed later leaves the record well-formed, and
+  # the pick that reads the list skips an id `_is_valid_wrapper` does not know. The id is the fleet's wrapper-name shape,
+  # `shared/roster.ts#ACCOUNT_ID_RE`, as `_acct_pool_state` reads it.
+  local LC_ALL=C v="$1" a seen=,
+  [[ -n "$v" && ${#v} -le $ROUTE_LIST_MAX_BYTES && "$v" =~ ^[A-Za-z0-9._-]{1,64}(,[A-Za-z0-9._-]{1,64})*$ ]] || return 1
+  for a in ${v//,/ }; do [[ "$seen" == *",$a,"* ]] && return 1; seen+="$a,"; done
+  return 0
+}

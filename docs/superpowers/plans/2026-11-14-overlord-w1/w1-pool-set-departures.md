@@ -77,3 +77,45 @@ which was unreachable and is now simply the suffix-only answer.
   module and the tests were written in one pass and first run together; the red evidence is the mutation work above (the
   suites kill every mutant, and two by-hand mutations turn them red) rather than a red run against an absent module.
 
+## Task 2: the library, and the route fields `poolset` and `acctorder` (PR A1)
+
+### Step 0: the fourth library, loaded and pinned like the other three
+
+`ccd/lib/pool-set.sh` is wired at every site the third library's pull request (#2256) touched: `_ccd_lib_load`'s two
+arrays, the `__CCD_LIB_POOLSET_SHA256=stamp-at-install` pin and the source-checkout test in `ccd/ccd`; the pin's render,
+the staging (slot `.3`, so `STAGE_RE` admits it) and the rename right after the third library in
+`ccd/ccd-entry-install.py`; `ccd/ccd-entry.py`'s header; `ccd/ccrc`'s update backup (`ccd-lib-pool-set.sh`) and uninstall
+list; `deploy/deploy.sh`'s backup; and in the tests `ccdWsHelpers.ts` (`CCD_LIBS`, `installedCcdBody`),
+`consolidationCensus.ts`, `installTreeFixture.ts`, `ownership`, `session-hook`'s `SCANNED`, `tmux-socket-census`,
+`ccd-lib-load`, `ccd-entry-install`, `ccd-install-stamp`, `build-release`, `install-census`, `ccrc-uninstall`, and the
+agent's `ccd-entry-exec` and `deploy-verify`. `single-definition/writers-map.test.ts` needed no row (the library writes
+no fact), and `ccd-ws-add-child.test.ts` none (the library spells no run-id bound).
+
+Measured red without it: with `"$dir/lib/pool-set.sh"` and its pin taken out of the loader's arrays, `ccd-lib-load`
+went 12 failed and 57 passed; restored from a saved copy, 69 passed.
+
+### Steps 1 to 5: the two route fields
+
+| Suite | Result |
+|---|---|
+| `ccd-route-fields.test.ts` | green, with the fourteen-field record and the pool set's four new cases |
+| `ccd-route-argv.test.ts` | 34 passed, with the argv refusals on `ws-add`, `start` and `enable` and the parity census at six argv-only lines |
+| `pool-set-spelling.test.ts` | 62 passed: its bash arm drives `_poolset_parse` over every row but the one NUL row (argv cannot carry a NUL; the skip is pinned) |
+| `pool-set-route-wire.test.ts` (new) | 3 passed: lane-only at every door parse, `CCD_ARGV.routeSet` composes both last, the registry reads both |
+| `route-fields-parse`, `launch-profile-route-wire`, `single-definition/update-stall` | green, their counts moved from 10 to 12 fields |
+
+No `Record<RouteField, …>` outside `route-fields-parse.test.ts` needed a row: the compiler named none.
+
+| Mutation (Step 5), each restored from a saved copy | Result |
+|---|---|
+| `_poolset_parse` without its ascending-order test | red: `pool-set-spelling.test.ts` 1 failed, 61 passed |
+| `_route_argv_check` refusing `acctorder` only, not `poolset` | red: `ccd-route-argv.test.ts` 3 failed, 31 passed |
+
+### Departures
+
+- **`acctorder-id-is-the-fleet-wrapper-shape`.** `_acctorder_valid` checks each id against `^[A-Za-z0-9._-]{1,64}$`,
+  `shared/roster.ts#ACCOUNT_ID_RE`, the fleet-side wrapper shape `_acct_pool_state` already reads, since this box's own
+  roster grammar is narrower than the ids the fleet carries. Shape only, as open question 9 rules.
+- **`route-argv-refusal-is-argv-only`.** The refusal of both fields in `_route_argv_check` is a line `cmd_route` does not
+  share (it is the set's one writer), so `ccd-route-argv.test.ts`'s census of argv-only lines grows from five to six,
+  with an assertion that `cmd_route` makes no such refusal.

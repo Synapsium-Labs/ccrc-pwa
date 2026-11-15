@@ -1,12 +1,13 @@
 // `shared/poolset.ts`: the pool set's one-token spelling, driven through `POOL_SET_PARSE_CASES` and
 // `POOL_SET_SPELL_CASES` (`fixtures/poolSetSpelling.ts`). The cases the three deciders are judged by are written ONCE in
 // `sim/poolSetSets.ts` and run here against the real module, then by `sim/mutation-floors.test.ts` against each mutant.
-import { describe, it, expect } from 'vitest';
-import { readFileSync } from 'node:fs';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parsePoolSet, poolSetSpelling, POOL_SET_SPELLING_MAX_BYTES } from '../../shared/poolset.js';
 import { POOL_NAME_RE } from '../../shared/roster.js';
+import { makeCcdHarness, type CcdHarness } from './ccdWsHelpers.js';
 import { POOL_SET_PARSE_CASES, POOL_SET_SPELL_CASES } from './fixtures/poolSetSpelling.js';
 import { poolSetSpellingCases, parsePoolSetCases } from './sim/poolSetSets.js';
 
@@ -84,7 +85,31 @@ describe('the mutation suite cases pass on the real module', () => {
 });
 
 describe('bash _poolset_parse over the same table', () => {
-  // TASK 2 (a later pull request of the pool-set plan) adds the bash arm HERE: `_poolset_parse` in `ccd/lib/pool-set.sh`,
-  // driven over POOL_SET_PARSE_CASES in a fixture HOME. Nothing is written in bash by this pull request.
-  it.todo('_poolset_parse reads every spelling in POOL_SET_PARSE_CASES as parsePoolSet does (Task 2)');
+  // Task 2: `_poolset_parse` (`ccd/lib/pool-set.sh`) driven over POOL_SET_PARSE_CASES in a fixture HOME. A value reaches
+  // ccd only through argv (`ccd route --set poolset=…`), which cannot carry a NUL, so the one NUL row is bash's to skip:
+  // the skip is bounded and pinned below. Every other row is fed whole, in ONE shell, from a NUL-separated file.
+  let h: CcdHarness;
+  beforeEach(() => { h = makeCcdHarness('ccrc-pool-set-spelling-'); });
+  afterEach(() => { h.cleanup(); });
+  const fed = POOL_SET_PARSE_CASES.filter((c) => !c.spelling.includes('\0'));
+
+  it('the skip is the one NUL row, and the table it leaves has both answers', () => {
+    expect(POOL_SET_PARSE_CASES.length - fed.length).toBe(1);
+    expect(fed.some((c) => c.out === 'malformed') && fed.some((c) => c.out !== 'malformed')).toBe(true);
+  });
+  it('the bash cap is the TypeScript cap', () => {
+    expect(h.sh('printf %s "$POOL_SET_SPELLING_MAX_BYTES"')).toBe(String(POOL_SET_SPELLING_MAX_BYTES));
+  });
+  it('_poolset_parse reads every spelling as parsePoolSet does', () => {
+    const file = path.join(h.home, 'spellings');
+    writeFileSync(file, fed.map((c) => `${c.spelling}\0`).join(''));
+    const out = h.sh(`while IFS= read -r -d '' x; do o=$(_poolset_parse "$x"); printf '%s|%s\\n' "$?" "\${o//$'\\n'/;}"; done < ${JSON.stringify(file)}`);
+    const lines = out.split('\n');
+    expect(lines).toHaveLength(fed.length);
+    fed.forEach((c, i) => {
+      const want = c.out === 'malformed' ? '1|' : `0|names=${c.out.pools.join(' ')};untagged=${c.out.untagged ? 'yes' : 'no'}`;
+      expect(lines[i], c.name).toBe(want);
+      expect(parsePoolSet(c.spelling).ok, `${c.name}: the TypeScript side agrees with the row`).toBe(c.out !== 'malformed');
+    });
+  });
 });

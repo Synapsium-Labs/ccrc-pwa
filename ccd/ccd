@@ -1723,7 +1723,7 @@ COMPACT_NOTE_FLOOR=1800         # D-2013 — min seconds between swap.log lines 
 # ROUTE_FIELD it names a class and is checked against `CCRC_SUBAGENT_CLASSES`;
 # inside an `inert` list it is the FIELD's name, stamped by a lane that composed
 # no `CLAUDE_CODE_SUBAGENT_MODEL` whatever class the field held.
-ROUTE_FIELDS=(class effort subagent workflow compact browser degraded inert profile automem compactwindow precompact)
+ROUTE_FIELDS=(class effort subagent workflow compact browser degraded inert profile automem compactwindow precompact poolset acctorder)
 ROUTE_CLASSES="fable opus sonnet haiku default"
 ROUTE_EFFORTS="auto low medium high xhigh max ultracode"
 # THE SLIDER'S STOPS, IN THE ORDER THE SLIDER PUTS THEM (D-2808, measured on a
@@ -10047,7 +10047,7 @@ cmd_account_pane() {   # ccd account-pane --id <id> [--method setup-token|openai
 }
 
 cmd_route() {   # ccd route --session <id> --set <field>=<value> [--set ...] [--actor <text>] [--reason <text>]
-  # An empty value (`--set compact=`, `--set compactwindow=`) removes that compaction field; every other field refuses it.
+  # An empty value (`--set compact=`, `--set compactwindow=`, `--set poolset=`, `--set acctorder=`) removes that field; every other field refuses it.
   # Routing spec 2026-09-14 §5.3. WRITES THE RECORD; TYPES ONLY UNDER `--apply`.
   # Without that flag — the COORDINATOR's form, and the default — a session
   # running this against a worker types nothing into that worker's pane and ccd
@@ -10091,8 +10091,9 @@ cmd_route() {   # ccd route --session <id> --set <field>=<value> [--set ...] [--
     _route_word_in "$f" "${ROUTE_FIELDS[*]}" || die "unknown routing field '$f' (want one of: ${ROUTE_FIELDS[*]})"
     [[ "$f" == degraded || "$f" == inert ]] && die "'$f' is written by ccd only"
     # AN EMPTY VALUE CLEARS a compaction field (the launch-profile lane, review 2024 F2 c): the field is removed, which every
-    # reader takes as absent (ccd's own threshold, no auto-compact window). No other field has an empty form.
-    [[ -z "$v" && ( "$f" == compact || "$f" == compactwindow ) ]] && continue
+    # reader takes as absent (ccd's own threshold, no auto-compact window). The pool set's two clear the same way (the
+    # designation's retire and rebind, plan slug poolset-empty-value-clears). No other field has an empty form.
+    [[ -z "$v" && ( "$f" == compact || "$f" == compactwindow || "$f" == poolset || "$f" == acctorder ) ]] && continue
     # THREE ANSWERS, THREE SENTENCES (fix round 2, Finding 1). `_route_valid`
     # answers 2 when the field's vocabulary itself could not be read — `subagent`,
     # whose list is PROJECTED into `$HOME/.ccrc/accounts.sh` by `ccrc install`, and
@@ -22113,9 +22114,10 @@ _route_any() {   # id — 0 iff ANY routing field file exists (spec §5.1: a ses
   # seed, and on the tick and spawn paths it is not read per tick by `_route_apply_pending` (m-B9) and writes no
   # `routeapplied`. A `ccd route --set` of one on a never-routed row can leave an empty stamp, as `browser` does; the
   # next spawn removes it. `precompact` (Overlord W1a compaction, plan slug route-fields-outside-route-any) is skipped
-  # for the same reason: the session hook's PreCompact refusal arm reads it, and nothing here.
+  # for the same reason: the session hook's PreCompact refusal arm reads it, and nothing here. THE POOL SET'S TWO (`poolset`,
+  # `acctorder`; the Overlord's W1, plan slug pool-fields-outside-route-any) decide placement, never the spawn's model or flags.
   local f
-  for f in "${ROUTE_FIELDS[@]}"; do case "$f" in browser|profile|automem|compactwindow|precompact) ;; *) [[ -e "$REG/$1.$f" ]] && return 0 ;; esac; done
+  for f in "${ROUTE_FIELDS[@]}"; do case "$f" in browser|profile|automem|compactwindow|precompact|poolset|acctorder) ;; *) [[ -e "$REG/$1.$f" ]] && return 0 ;; esac; done
   return 1
 }
 # @ccd-lib:poolset — a session's pool set (the Overlord's W1, C46): its bounds, its spelling's parser and the ordered list's shape check, which `_route_valid` reads, live in ccd/lib/pool-set.sh
@@ -22158,6 +22160,10 @@ _route_valid() {   # field value — THREE answers, because two of them are two 
     # `precompact` (Overlord W1a compaction, spec §3.3.4 C39): `refuse` arms the hook's PreCompact refusal arm
     # (`_hook_compact_refuse`), `allow` and absent leave it dark. Its one writer is the generations lane.
     precompact) _route_word_in "$v" "refuse allow" ;;
+    # THE POOL SET'S TWO (the Overlord's W1, spec §3.4 C46, C56): `poolset` is the session's set in its one spelling, and
+    # `acctorder` the Overlord's ordered account list, checked for shape only. Both live in ccd/lib/pool-set.sh.
+    poolset)  _poolset_parse "$v" >/dev/null ;;
+    acctorder) _acctorder_valid "$v" ;;
     # `degraded` is the four CLASS names WITHOUT `default` — a session cannot
     # degrade TO "no override" — and they are DERIVED from `ROUTE_CLASSES`
     # rather than typed a second time three lines below the first (controller
@@ -22268,6 +22274,10 @@ _route_argv_check() {   # k=v... -> 0 all valid | dies naming the field and the 
     f="${kv%%=*}"; v="${kv#*=}"
     _route_word_in "$f" "${ROUTE_FIELDS[*]}" || die "unknown routing field '$f' (want one of: ${ROUTE_FIELDS[*]})"
     [[ "$f" == degraded || "$f" == inert ]] && die "'$f' is written by ccd only"
+    # THE POOL SET IS NEVER MINTED (the Overlord's W1, plan slug route-argv-refuses-the-set): `ws-add`, `start` and `enable`
+    # place their account BEFORE they write the record, so a set on their `--route` would mint a session outside the set it
+    # was handed. Only `ccd route --session` writes one, and it is `cmd_route`'s to accept, so this refusal is argv-only.
+    [[ "$f" == poolset || "$f" == acctorder ]] && die "'$f' is written only by ccd route --session; nothing was touched"
     # ONE VALUE PER FIELD, and this refusal has NO counterpart in `cmd_route`
     # (controller ruling S4-R4) — it is the one place the two validators are
     # allowed to differ in ARMS rather than wording, because only this side
