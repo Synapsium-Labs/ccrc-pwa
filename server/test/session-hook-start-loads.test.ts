@@ -12,7 +12,7 @@
 // Runs ccd/session-hook.sh for real inside a fixture HOME with a fake `ccrc-api` (the start-report suite's harness, copied:
 // a test file cannot import another); no live box, no live server.
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { spawnSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -25,6 +25,8 @@ const SID = '00000000-0000-4000-8000-000000000001';
 const ID = 'lane-a-project-a';
 const DIGEST = 'd'.repeat(64);
 const BUILD = '2.1.325';
+/** The real `timeout`, which this suite's shim in the fixture HOME's bin hands every call it does not fake. */
+const REAL_TIMEOUT = execFileSync('sh', ['-c', 'command -v timeout || command -v gtimeout'], { encoding: 'utf8' }).trim();
 
 let home: string;
 const reg = (): string => path.join(home, '.cc-sessions');
@@ -37,6 +39,17 @@ beforeEach(() => {
   fs.writeFileSync(path.join(reg(), `${ID}.generation`), GENERATION);
   fs.writeFileSync(path.join(reg(), `${ID}.workdir`), path.join(home, 'rig', 'repo'));
   fs.writeFileSync(path.join(home, 'bin', 'tmux'), `#!/bin/sh\necho "cc-${ID}"\n`, { mode: 0o755 });
+  // The `timeout` shim (review 2135 F3, F8): `$HOME/t.purge` removes the row's generation while the transcript is read
+  // (a purge in that window), `$HOME/t.overrun` makes the read run out its bound, and `$HOME/t.hang` makes the loads send
+  // go unanswered, each as `timeout` answers (124). Every other call runs the real one.
+  fs.writeFileSync(path.join(home, 'bin', 'timeout'), [
+    '#!/bin/sh',
+    'case "$*" in',
+    `  *start_loads*) [ -f "$HOME/t.purge" ] && rm -f "$HOME/.cc-sessions/${ID}.generation"; [ -f "$HOME/t.overrun" ] && exit 124 ;;`,
+    '  *"sessions loads"*) [ -f "$HOME/t.hang" ] && exit 124 ;;',
+    'esac',
+    `exec '${REAL_TIMEOUT}' "$@"`,
+  ].join('\n') + '\n', { mode: 0o755 });
   // The rig's instruction files, at the fixture's paths moved under this HOME.
   fs.writeFileSync(path.join(home, 'rig', 'CLAUDE.md'), 'parent\n');
   fs.writeFileSync(path.join(home, 'rig', 'repo', 'CLAUDE.md'), 'constitution\n');
@@ -78,11 +91,14 @@ const base = (): object => ({ session_id: SID, transcript_path: tpath(), cwd: pa
 const start = (source: string): object => ({ ...base(), hook_event_name: 'SessionStart', source, model: 'claude-model-a' });
 const stop = (): object => ({ ...base(), hook_event_name: 'Stop', stop_hook_active: false, permission_mode: 'bypassPermissions' });
 const hook = (p: object, env: Record<string, string> = ENV): number | null => spawnSync('bash', [HOOK], {
-  input: JSON.stringify(p), encoding: 'utf8',
+  input: JSON.stringify(p), encoding: 'utf8', timeout: 60_000,
   env: { ...process.env, HOME: home, PATH: `${path.join(home, 'bin')}:${process.env['PATH'] ?? ''}`, TMUX_PANE: '%1',
     CLAUDE_CODE_SESSION_ID: SID, CLAUDE_PID: '4242', CCRC_SESSION_GENERATION: GENERATION, ...env },
 }).status;
 const sha = (s: string): string => createHash('sha256').update(s).digest('hex');
+const flag = (name: string): void => { fs.writeFileSync(path.join(home, name), ''); };
+const ruleFile = (): string => path.join(home, 'rig', 'repo', '.claude', 'rules', 'w0-rule.md');
+const HOOKS = [sha('bash "$HOME/.cc-sessions/session-hook.sh"'), sha("sh -c 'echo w0-sandbox-failing-hook >&2; exit 1'")].sort();
 
 /** A startup run of the fixture: SessionStart on an absent transcript, then the whole startup transcript, then one Stop. */
 const startup = (env: Record<string, string> = ENV): void => {
@@ -127,7 +143,7 @@ describe('the body (Task 4, M4 fixtures)', () => {
         { type: 'Project', name: 'CLAUDE.md', inWorkspace: true, sha256: sha('constitution\n') },
         { type: 'Project', name: 'w0-rule.md', inWorkspace: true, sha256: sha('rule\n') },
       ]);
-      expect(b.loaded.hooks).toStrictEqual([sha('bash "$HOME/.cc-sessions/session-hook.sh"'), sha("sh -c 'echo w0-sandbox-failing-hook >&2; exit 1'")].sort());
+      expect(b.loaded.hooks).toStrictEqual(HOOKS);
       expect(b.loaded.skills).toContain('ccrc-overlord');
       expect(b.loaded.agents).toStrictEqual(['Explore', 'Plan', 'general-purpose', 'overlord-reader']);
       expect(b.loaded.tools).toStrictEqual(['Agent', 'Skill', 'mcp__door__act', 'mcp__door__card', 'mcp__door__read']);
@@ -135,7 +151,10 @@ describe('the body (Task 4, M4 fixtures)', () => {
       expect(b).not.toHaveProperty('carriedFrom');
       expect(JSON.stringify(b)).not.toContain('session-hook.sh');
       expect(fs.existsSync(pend())).toBe(false);
-      expect(fs.readFileSync(path.join(reg(), `${ID}.loadlast`), 'utf8').split('\t').slice(1, 4)).toStrictEqual([DIGEST, build, '0']);
+      // The start's window: its begin offset and its end, the byte offset of its first request (review 2135 F4).
+      const lines = fixLines(`transcript-${build}-startup.jsonl`);
+      const end = Buffer.byteLength(`${lines.slice(0, at(lines, isMarker)).join('\n')}\n`);
+      expect(fs.readFileSync(path.join(reg(), `${ID}.loadlast`), 'utf8').split('\t').slice(1, 5)).toStrictEqual([DIGEST, build, '0', String(end)]);
     });
   }
   it('a window with no first-request marker sends nothing, keeps the file and counts a try; the fifth drops it', () => {
@@ -204,6 +223,43 @@ describe('the body (Task 4, M4 fixtures)', () => {
     expect(body().loaded).toMatchObject({ instructions: 'unmeasured', agents: 'unmeasured' });
     expect(body().loaded.skills).not.toBe('unmeasured');
   });
+  it('a send that fails five times is dropped at the fifth: each failure counts a try, and the fifth try removes the file (F8)', () => {
+    answer('500 internal');
+    startup();
+    for (let i = 2; i <= 4; i++) { hook(stop()); expect(pendLines()![0]!.split('\t')[0], `after send ${i}`).toBe(String(i)); }
+    hook(stop());
+    expect(sent()).toHaveLength(5);
+    expect(new Set(sent()).size, 'every resend the same bytes').toBe(1);
+    expect(fs.existsSync(pend())).toBe(false);
+  });
+  it('a send with no answer (rc 124) keeps the file, counts a try and spools the body (F8)', () => {
+    flag('t.hang');
+    startup();
+    expect(sent()).toStrictEqual([]);
+    const [head, spool] = pendLines()!;
+    expect(head!.split('\t')[0]).toBe('1');
+    expect(spool).toMatch(/^\d+\t\{"fromId":/);
+  });
+  it('a read that runs out its bound sends nothing, keeps the file and counts a try (F8)', () => {
+    flag('t.overrun');
+    startup();
+    expect(sent()).toStrictEqual([]);
+    expect(pendLines()).toHaveLength(1);
+    expect(pendLines()![0]!.split('\t')[0]).toBe('1');
+  });
+  it('an instruction path that is not a regular file (a FIFO) reads instructions unmeasured, and the report goes in the same Stop (F6)', () => {
+    fs.rmSync(ruleFile());
+    execFileSync('mkfifo', [ruleFile()]);
+    startup();
+    expect(sent()).toHaveLength(1);
+    expect(body().loaded.instructions).toBe('unmeasured');
+    expect(body().loaded.hooks).toStrictEqual(HOOKS);
+  });
+  it('an instruction file over LOADS_FILE_MAX is not hashed: instructions read unmeasured (F6)', () => {
+    fs.writeFileSync(ruleFile(), 'r'.repeat(1024 * 1024 + 1));
+    startup();
+    expect(body().loaded.instructions).toBe('unmeasured');
+  });
   it('a transcript over the 16 MiB bound sends nothing and keeps the file', () => {
     writeT([]); fs.rmSync(tpath());
     hook(start('startup'));
@@ -215,10 +271,33 @@ describe('the body (Task 4, M4 fixtures)', () => {
   });
 });
 
+describe('a stale file and a purge (review 2135 F1, F3)', () => {
+  it('a Stop with no profile over a stale loadpending exits 0, sends nothing and leaves no file (F1)', () => {
+    writeT([]); fs.rmSync(tpath());
+    hook(start('startup'));
+    writeT(fixLines(`transcript-${BUILD}-startup.jsonl`));
+    expect(hook(stop(), {})).toBe(0);
+    expect(sent()).toStrictEqual([]);
+    expect(fs.existsSync(pend())).toBe(false);
+  });
+  it('a purge while the wait path reads leaves no loadpending: the wait ends at the generation re-check too (F3)', () => {
+    writeT([]); fs.rmSync(tpath());
+    hook(start('startup'));
+    const lines = fixLines(`transcript-${BUILD}-startup.jsonl`);
+    writeT(lines.slice(0, at(lines, isMarker)));
+    flag('t.purge');
+    expect(hook(stop())).toBe(0);
+    expect(fs.existsSync(path.join(reg(), `${ID}.generation`))).toBe(false);
+    expect(fs.existsSync(pend())).toBe(false);
+  });
+});
+
 describe('the resume carries its own start, under equality (ruled 2026-11-15, slug resume-carries-its-own-start)', () => {
-  /** A startup reported (202), then a resume of the same transcript: the resume fixture's resume region appended. */
-  const resume = (env: Record<string, string>): void => {
+  /** A startup reported (202), then `between` appended, then a resume of the same transcript: the resume fixture's resume
+   *  region appended. */
+  const resume = (env: Record<string, string>, between: readonly string[] = []): void => {
     startup();
+    if (between.length) fs.appendFileSync(tpath(), `${between.join('\n')}\n`);
     const r = fixLines(`transcript-${BUILD}-resume.jsonl`);
     const from = at(r, (x) => isMarker(x) && x.timestamp > '2026-11-15T05:17');   // the resume's request
     hook(start('resume'), env);
@@ -233,6 +312,22 @@ describe('the resume carries its own start, under equality (ruled 2026-11-15, sl
     expect(b.loaded.instructions).toStrictEqual(first.loaded.instructions);
     expect(b.loaded.hooks).toStrictEqual(first.loaded.hooks);
     expect(b.loaded.tools).toBe('unmeasured');
+  });
+  it('a compaction between the start and the resume adds nothing: the carried lists are exactly the start\'s own (F4)', () => {
+    const s = fixLines(`transcript-${BUILD}-startup.jsonl`);
+    const hk = JSON.parse(s[at(s, (x) => x.type === 'attachment' && x.attachment?.type === 'hook_success')]!) as Record<string, any>;
+    hk.attachment.command = 'compact-only-hook';
+    const ins = JSON.parse(s[at(s, (x) => x.type === 'attachment' && x.attachment?.type === 'instructions')]!) as Record<string, any>;
+    ins.attachment.files = (ins.attachment.files as unknown[]).slice(1, 2);
+    resume(ENV, [JSON.stringify(hk), JSON.stringify(ins), s[at(s, isMarker)]!]);
+    const b = body(1);
+    expect(b.carriedFrom).toBe(body(0).reportId);
+    expect(b.loaded.instructions).toStrictEqual([
+      { type: 'Project', name: 'CLAUDE.md', inWorkspace: false, sha256: sha('parent\n') },
+      { type: 'Project', name: 'CLAUDE.md', inWorkspace: true, sha256: sha('constitution\n') },
+      { type: 'Project', name: 'w0-rule.md', inWorkspace: true, sha256: sha('rule\n') },
+    ]);
+    expect(b.loaded.hooks).toStrictEqual(HOOKS);
   });
   it('a digest that differs: unmeasured, nothing carried', () => {
     resume({ ...ENV, CCRC_LAUNCH_PROFILE: `overlord:${'e'.repeat(64)}` });

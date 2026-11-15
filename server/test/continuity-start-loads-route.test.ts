@@ -8,6 +8,8 @@ import type { FastifyInstance } from 'fastify';
 import type { CoordStore } from '../src/coord/store.js';
 import * as startLoadsModule from '../src/continuity/startLoads.js';
 import { startLoadsRowOf } from '../src/continuity/startLoads.js';
+import { UNMEASURED as SERVER_UNMEASURED } from '../src/unmeasured.js';
+import { UNMEASURED as L0_UNMEASURED } from '../../shared/overlord-sandbox.js';
 import { FAKE_T0 } from './fakeTime.js';
 import { ID_GATE_TOKEN, appFor, recorder, seedRow } from './idGateFixture.js';
 import { mkTmp, removeTmpFixtures } from './tmpHelpers.js';
@@ -91,6 +93,18 @@ describe('POST /api/sessions/:id/start/loads', () => {
     const unknown = await post(app, goodLoads({ reportId: 'r-9999-zzzz' }));
     expect([unknown.statusCode, unknown.json().error]).toEqual([404, 'unknown-start']);
     expect(rows()).toStrictEqual([]);
+  });
+  it('a report naming a clear or compact start is unknown-start: only a startup or resume start takes one (review 2135 nit)', async () => {
+    app = await open();
+    for (const [rid, source] of [['r-0005-abcd', 'clear'], ['r-0006-abcd', 'compact']] as const) {
+      await start(app, rid, source, FAKE_T0 - 5);
+      const res = await post(app, goodLoads({ reportId: rid }));
+      expect([res.statusCode, res.json().error], source).toEqual([404, 'unknown-start']);
+    }
+    expect(rows()).toStrictEqual([]);
+  });
+  it('the L0 word and the server\'s are one word (the second spelling\'s reason, review 2135 nit)', () => {
+    expect(L0_UNMEASURED).toBe(SERVER_UNMEASURED);
   });
   it('a report for another session\'s start is unknown-start: the join is by this session\'s own start', async () => {
     app = await open();

@@ -32,7 +32,7 @@ import { effectiveGeneration, type TimerRow } from './continuityStore.js';
 import { noteKeyReader } from './noteKeys.js';
 import { PROBE_ANSWER_MAX_CHARS, bookOf, gradeAnswers, maskedQuestion, probePages, type LastRead } from './probeDoor.js';
 import { roundVerdict } from './probes.js';
-import { startLoadsOf } from './startLoads.js';
+import { REPORT_ID_RE, startLoadsOf } from './startLoads.js';
 import {
   NOTE_LIST_LIMIT, handoverAsked, handoverVerdict, noteKeyFact, noteListBytes, notesPage, noteVerdict, revisedNoteFact, type NoteInput,
   type NoteVerdictRefusal, type RevisedFact,
@@ -68,8 +68,6 @@ export interface ContinuityRouteDeps {
 /** The identity pair's grammar, the linking read's and the Linear proxy's: `SESSION_ID_RE`'s, so an id the timer doors
  *  store always fits a timer mail (review 2038 F4). */
 const IDENTITY_RE = /^[A-Za-z0-9_-]{1,128}$/;
-/** The hook's own id for one report: a resend carries the same one, so it is recorded once. */
-const REPORT_ID_RE = /^[A-Za-z0-9_-]{8,64}$/;
 const SOURCE_MAX = 32;
 const MODEL_MAX = 128;
 

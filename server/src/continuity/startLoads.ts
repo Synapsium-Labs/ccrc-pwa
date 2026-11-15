@@ -14,10 +14,12 @@
 import { createHash } from 'node:crypto';
 import {
   START_LOADS_MAX_LIST, START_LOAD_KINDS, UNMEASURED, type LoadedEntry, type LoadedInstruction, type LoadedKind, type StartLoadKind,
+  type StartLoadsBody,
 } from '../../../shared/overlord-sandbox.js';
 
-/** The `reportId` the hook mints (the start door's shape). */
-const REPORT_ID_RE = /^[A-Za-z0-9_-]{8,64}$/;
+/** The hook's own id for one start report, which the loads report repeats: a resend carries the same one, so it is
+ *  recorded once. Defined once here; the start door and the loads door both read it (review 2135 nit). */
+export const REPORT_ID_RE = /^[A-Za-z0-9_-]{8,64}$/;
 const DIGEST_RE = /^[0-9a-f]{64}$/;
 /** The build, as the hook derives it from `CLAUDE_CODE_EXECPATH` (the delegation spool's shape). */
 const VERSION_RE = /^[0-9][0-9A-Za-z.+-]{0,31}$/;
@@ -27,20 +29,10 @@ const NAME_RE = /^[\x21-\x7e]{1,128}$/;
 const WORD_MAX = 32;
 const FILE_NAME_MAX = 255;
 
-/** A narrowed report: what the writer stores. */
-export interface StartLoadsReport {
-  readonly fromId: string;
-  readonly fromUuid: string;
-  readonly reportId: string;
-  readonly profileRole: string | null;
-  readonly profileDigest: string | null;
-  readonly launchRc: 'on' | 'off' | null;
-  readonly claudeVersion: string | null;
-  readonly permissionMode: string | null;
-  readonly cwdInWorkspace: boolean | null;
-  readonly loaded: Readonly<Record<StartLoadKind, LoadedKind>>;
+/** A narrowed report: what the writer stores. The wire's own shape (`shared/overlord-sandbox.ts#StartLoadsBody`), with
+ *  `carriedFrom` read to null when absent, and the body's hash. */
+export interface StartLoadsReport extends Omit<StartLoadsBody, 'carriedFrom'> {
   readonly carriedFrom: string | null;
-  readonly reportedAt: number;
   /** sha256 of the narrowed body less `reportedAt`, `fromUuid` and `fromId` (the sender, not what was loaded). */
   readonly bodySha256: string;
 }

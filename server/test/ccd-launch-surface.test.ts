@@ -129,31 +129,37 @@ describe('a standing profiledigest renders the overlord surface whole (Review Fo
   });
 });
 
-describe('each failure refuses the spawn: no pane, one journal line, rc 1 (Review Focus 2)', () => {
+describe('each failure refuses the spawn: no pane, one journal line naming its reason, rc 1 (Review Focus 2; review 2135 F8)', () => {
   const OTHER = 'f'.repeat(64);
-  const cases: [string, readonly (readonly [string, string])[], (() => string) | string][] = [
-    ['an unreadable profiles file', OVERLORD, () => `LAUNCH_PROFILES_JSON='${path.join(h.home, 'nope.json')}';`],
-    ['a missing row', OVERLORD, () => altFile((rows) => { delete rows.overlord; return rows; })],
-    ['a digest that differs', [['profile', 'overlord'], ['profiledigest', OTHER]], ''],
-    ['a profile field of a bad shape', [['profile', 'Not A Row'], ['profiledigest', DIGEST]], ''],
-    ['a standing digest with profile absent', [['profiledigest', DIGEST]], ''],
+  const NO_ROW = 'row overlord does not hash to profiledigest';
+  const NO_PROFILE = 'profile absent or unreadable';
+  const cases: [string, readonly (readonly [string, string])[], (() => string) | string, string][] = [
+    ['an unreadable profiles file', OVERLORD, () => `LAUNCH_PROFILES_JSON='${path.join(h.home, 'nope.json')}';`, 'launch profiles unreadable'],
+    ['a missing row', OVERLORD, () => altFile((rows) => { delete rows.overlord; return rows; }), NO_ROW],
+    ['a digest that differs', [['profile', 'overlord'], ['profiledigest', OTHER]], '', NO_ROW],
+    ['a profile field of a bad shape', [['profile', 'Not A Row'], ['profiledigest', DIGEST]], '', NO_PROFILE],
+    ['a standing digest with profile absent', [['profiledigest', DIGEST]], '', NO_PROFILE],
+    ['a profile field present but unreadable (a directory)', [['profiledigest', DIGEST]], `mkdir "$REG/${ID}.profile";`, NO_PROFILE],
   ];
-  for (const [name, r, pre] of cases) {
+  for (const [name, r, pre, why] of cases) {
     it(name, () => {
       seed(r);
       const out = spawn('new', typeof pre === 'string' ? pre : pre());
       expect(out.status).not.toBe(0);
       expect(out.lines).toStrictEqual([]);
       expect(out.journal).toHaveLength(1);
-      expect(out.journal[0]).toContain(`launch-profile-refused ${ID}:`);
+      expect(out.journal[0]).toContain(`launch-profile-refused ${ID}: ${why} — no pane started`);
     });
   }
-  const doctored: [string, (rows: Record<string, any>) => unknown][] = [
-    ['a malformed flag word', (rows) => { rows.overlord.flags[1] = 'project;rm'; return rows; }],
-    ['an agents value carrying a single quote', (rows) => { rows.overlord.flags[6] = "{'x'}"; return rows; }],
-    ['a settings merge that fails (a quote in a hook command)', (rows) => { rows.overlord.surfaceSettings.statusLine.command = "it's"; return rows; }],
+  const MALFORMED = 'row overlord malformed';
+  const doctored: [string, (rows: Record<string, any>) => unknown, string][] = [
+    ['a malformed flag word', (rows) => { rows.overlord.flags[1] = 'project;rm'; return rows; }, MALFORMED],
+    ['an agents value carrying a single quote', (rows) => { rows.overlord.flags[6] = "{'x'}"; return rows; }, MALFORMED],
+    ['an agents value carrying a control character (a newline)', (rows) => { rows.overlord.flags[6] = '{"x":\n1}'; return rows; }, MALFORMED],
+    ['an agents value carrying the unit separator', (rows) => { rows.overlord.flags[6] = '{"x":\u001f1}'; return rows; }, MALFORMED],
+    ['a settings merge that fails (a quote in a hook command)', (rows) => { rows.overlord.surfaceSettings.statusLine.command = "it's"; return rows; }, 'settings merge failed'],
   ];
-  for (const [name, edit] of doctored) {
+  for (const [name, edit, why] of doctored) {
     it(name, () => {
       seed([['profile', 'overlord']]);
       const pre = altFile(edit);
@@ -163,8 +169,17 @@ describe('each failure refuses the spawn: no pane, one journal line, rc 1 (Revie
       expect(out.status).not.toBe(0);
       expect(out.lines).toStrictEqual([]);
       expect(out.journal).toHaveLength(1);
+      expect(out.journal[0]).toContain(`launch-profile-refused ${ID}: ${why} — no pane started`);
     });
   }
+  it('a surfaced spawn reads the profiles file once: it renders the row the digest covered (review 2135 F7)', () => {
+    seed(OVERLORD);
+    const log = path.join(h.home, 'jq-reads');
+    const out = spawn('new', `jq() { local a; for a in "$@"; do [[ "$a" == "$LAUNCH_PROFILES_JSON" ]] && echo x >> '${log}'; done; command jq "$@"; };`);
+    expect(out.status).toBe(0);
+    expect(out.lines).toHaveLength(1);
+    expect(fs.readFileSync(log, 'utf8').split('\n').filter(Boolean)).toHaveLength(1);
+  });
 });
 
 describe('no field, no change (Review Focus 1)', () => {

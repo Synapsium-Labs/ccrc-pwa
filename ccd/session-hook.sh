@@ -4030,36 +4030,44 @@ _hook_loads_pend() {   # <reportId> -> 0 always
 # ── THE LOADS REPORT (Overlord W1 sandbox, Task 4; spec §3.6 H4; slugs loaded-sets-read-from-the-transcript,
 # start-loads-is-its-own-report, resume-carries-its-own-start, tools-read-from-the-prompt-snapshot) ─────────────────────
 # At each main-thread `Stop` while `loadpending` stands, `start_loads` (ccd/lib/transcript.jq) reads the transcript, at
-# most LOADS_MAX_BYTES within the hook's 3 s bound: the window from the recorded offset to the first-request marker and
-# the tool-bearing prompt snapshot after it, and what came before it for the listings. Until the window holds them the
-# file is kept and a try counted; the last try sends without waiting for the snapshot, and a try past LOADS_TRIES drops
-# the file (the start then reads not engaged). The body is computed ONCE and spooled as the file's second line, so every
-# resend is the same bytes with the same `reportId`. Instruction files are hashed where they stand and hook commands by
-# their text, never sent. At a resume, instructions and hooks are carried from the newest reported `startup` of the same
-# transcript only when its digest and build equal this session's (`loadlast`, written on its 202), named `carriedFrom`.
-# Sent through `_hook_start_send`: a 202 removes the file, a 404 (an older server, or `unknown-start`), 401, 5xx, no
-# answer or `stale-uuid` keeps it and counts a try, any other 4xx drops it. Prints nothing; never changes the exit code.
-LOADS_TRIES=5 LOADS_MAX_BYTES=16777216
+# most LOADS_MAX_BYTES: the window from the recorded offset to the first-request marker and the tool-bearing prompt
+# snapshot after it, and what came before it for the listings. Until the window holds them the file is kept and a try
+# counted; the last try sends without waiting for the snapshot, and a try past LOADS_TRIES drops the file (the start then
+# reads not engaged). One deadline, LOADS_BUDGET_MS, bounds the arm: the read, each hash and the send (review 2135 F6).
+# The body is computed once; a send that does not take it spools it as the file's second line, after the window's end,
+# so every resend is the same bytes with the same `reportId`. Instruction files are hashed where they stand (a regular
+# file of at most LOADS_FILE_MAX bytes, else the kind reads unmeasured) and hook commands by their text, never sent. At a
+# resume, instructions and hooks are carried from the newest reported `startup` of the same transcript only when its
+# digest and build equal this session's (`loadlast`, written on its 202), named `carriedFrom`, and only from that
+# start's own window, its begin offset to its first request (`loadlast` keeps both), so a compaction or `/clear` between
+# adds nothing (review 2135 F4). A Stop with no `CCRC_LAUNCH_PROFILE` (a respawn the route no longer surfaces) removes a
+# stale file and sends nothing (F1). Sent through `_hook_start_send`: a 202 removes the file, a 404 (an older server, or
+# `unknown-start`), 401, 5xx, no answer or `stale-uuid` keeps it and counts a try, any other 4xx drops it. Every path,
+# the wait included, ends at the generation re-check, so a purge during the arm orphans nothing (F3). Prints nothing;
+# never changes the exit code.
+LOADS_TRIES=5 LOADS_MAX_BYTES=16777216 LOADS_FILE_MAX=1048576 LOADS_BUDGET_MS=3000
+_hook_left() { local l=$(( $1 - $(_hook_epoch_ms) )); (( l > 100 )) || l=100; printf '%d.%d' "$(( l / 1000 ))" "$(( l % 1000 / 100 ))"; }   # deadline ms -> seconds left for `_hook_timeout`, at least 0.1
 _hook_start_loads() {   # 0 on every path
-  local f="$REG/$id.loadpending" t rid off sc tp body="" out="" c="" lr="" ld="" lb="" lo="" lt="" ver wd="" e hs=() r
+  local f="$REG/$id.loadpending" lp="${CCRC_LAUNCH_PROFILE:-}" dl t rid off sc tp we="" body="" out="" c="" lr="" ld="" lb="" lo="" le="" lt="" ver wd="" e h hs=() r=6
   [[ "$event" == Stop && -z "$paid" && -f "$f" && ! -L "$f" ]] || return 0
-  { IFS=$'\t' read -r t rid off sc tp; IFS= read -r body; } < "$f" 2>/dev/null
+  [[ -n "$lp" ]] || { rm -f -- "$f"; return 0; }; dl=$(( $(_hook_epoch_ms) + LOADS_BUDGET_MS ))
+  { IFS=$'\t' read -r t rid off sc tp; IFS=$'\t' read -r we body; } 2>/dev/null < "$f"
   [[ "$t" =~ ^[0-9]+$ && "$off" =~ ^[0-9]+$ && "$tp" == /* ]] || { rm -f -- "$f"; return 0; }
   ver="${CLAUDE_CODE_EXECPATH:-}"; ver="${ver##*/}"; [[ "$ver" =~ ^[0-9][0-9A-Za-z.+-]{0,31}$ ]] || ver=""
   if [[ -z "$body" ]]; then
-    [[ "$sc" == resume && -f "$REG/$id.loadlast" ]] && IFS=$'\t' read -r lr ld lb lo lt < "$REG/$id.loadlast" 2>/dev/null && [[ "$lt" == "$tp" && "$ld" == "${CCRC_LAUNCH_PROFILE#*:}" && -n "$ver" && "$lb" == "$ver" && "$lo" =~ ^[0-9]+$ ]] && (( lo <= off )) && c=1
-    (( $(wc -c < "$tp" 2>/dev/null || echo "$LOADS_MAX_BYTES"1) <= LOADS_MAX_BYTES )) && out=$(_hook_timeout 3 jq -L "$ROSTER_CARD_LIB" -nc --rawfile h <(head -c "$off" "$tp") --rawfile w <(tail -c "+$(( off + 1 ))" "$tp") --rawfile c <([[ -z "$c" ]] || { tail -c "+$(( lo + 1 ))" "$tp" | head -c "$(( off - lo ))"; }) --arg s "$sc" --argjson last "$(( t + 1 >= LOADS_TRIES ))" 'include "transcript"; start_loads($h; $w; $c; $s; $last == 1)' 2>/dev/null)
-    if [[ "$out" == *'"state":"ready"'* ]]; then
-      while IFS= read -r -d '' e; do if [[ "$e" == F* ]]; then hs+=("$(_apr_sha256 < "${e#F}" 2>/dev/null || echo x)"); else hs+=("$(printf '%s' "${e#C}" | _apr_sha256 || echo x)"); fi; done < <(jq -L "$ROSTER_CARD_LIB" -j 'include "transcript"; loads_hash_items' <<<"$out" 2>/dev/null)
+    [[ "$sc" == resume && -f "$REG/$id.loadlast" ]] && IFS=$'\t' read -r lr ld lb lo le lt 2>/dev/null < "$REG/$id.loadlast" && [[ "$lt" == "$tp" && "$ld" == "${lp#*:}" && -n "$ver" && "$lb" == "$ver" && "$lo" =~ ^[0-9]+$ && "$le" =~ ^[0-9]+$ ]] && (( lo <= le && le <= off )) && c=1
+    [[ -f "$tp" ]] && (( $(wc -c 2>/dev/null < "$tp" || echo "$LOADS_MAX_BYTES"1) <= LOADS_MAX_BYTES )) && out=$(_hook_timeout "$(_hook_left "$dl")" jq -L "$ROSTER_CARD_LIB" -nc --rawfile h <(head -c "$off" "$tp") --rawfile w <(tail -c "+$(( off + 1 ))" "$tp") --rawfile c <([[ -z "$c" ]] || { tail -c "+$(( lo + 1 ))" "$tp" | head -c "$(( le - lo ))"; }) --arg s "$sc" --argjson last "$(( t + 1 >= LOADS_TRIES ))" 'include "transcript"; start_loads($h; $w; $c; $s; $last == 1)' 2>/dev/null)
+    if [[ "$out" =~ ^\{\"state\":\"ready\",\"end\":([0-9]+), ]]; then
+      we=$(( off + BASH_REMATCH[1] ))
+      while IFS= read -r -d '' e; do if [[ "$e" == F* ]]; then [[ -f "${e#F}" ]] && (( $(wc -c 2>/dev/null < "${e#F}" || echo 0) <= LOADS_FILE_MAX )) && h=$(_hook_timeout "$(_hook_left "$dl")" cat -- "${e#F}" | _apr_sha256) || h=x; hs+=("$h"); else hs+=("$(printf '%s' "${e#C}" | _apr_sha256 || echo x)"); fi; done < <(jq -L "$ROSTER_CARD_LIB" -j 'include "transcript"; loads_hash_items' <<<"$out" 2>/dev/null)
       [[ -f "$REG/$id.workdir" ]] && IFS= read -r wd < "$REG/$id.workdir"
-      body=$(jq -L "$ROSTER_CARD_LIB" -c --argjson o "$out" --arg id "$id" --arg rid "$rid" --arg lp "${CCRC_LAUNCH_PROFILE:-}" --arg rc "${CCRC_LAUNCH_RC:-}" --arg ver "$ver" --arg wd "$wd" --arg cf "${c:+$lr}" --argjson at "$(_hook_epoch_ms)" 'include "transcript"; loads_body($o; $ARGS.positional; $id; $rid; $lp; $rc; $ver; $wd; $cf; $at)' --args ${hs[@]+"${hs[@]}"} <<<"$payload" 2>/dev/null) || body=""
+      body=$(jq -L "$ROSTER_CARD_LIB" -c --argjson o "$out" --arg id "$id" --arg rid "$rid" --arg lp "$lp" --arg rc "${CCRC_LAUNCH_RC:-}" --arg ver "$ver" --arg wd "$wd" --arg cf "${c:+$lr}" --argjson at "$(_hook_epoch_ms)" 'include "transcript"; loads_body($o; $ARGS.positional; $id; $rid; $lp; $rc; $ver; $wd; $cf; $at)' --args ${hs[@]+"${hs[@]}"} <<<"$payload" 2>/dev/null) || body=""
     fi
-    [[ -n "$body" ]] || { (( t + 1 >= LOADS_TRIES )) && rm -f -- "$f" || printf '%s\t%s\t%s\t%s\t%s\n' "$(( t + 1 ))" "$rid" "$off" "$sc" "$tp" > "$f"; return 0; }
   fi
-  _hook_start_send "$body" "$(( $(_hook_epoch_ms) + 3000 ))" loads; r=$?
-  if (( r == 0 )); then rm -f -- "$f"; [[ "$sc" == startup ]] && printf '%s\t%s\t%s\t%s\t%s\n' "$rid" "${CCRC_LAUNCH_PROFILE#*:}" "$ver" "$off" "$tp" > "$REG/$id.loadlast"
+  [[ -n "$body" && "$we" =~ ^[0-9]+$ ]] && { _hook_start_send "$body" "$dl" loads; r=$?; }
+  if (( r == 0 )); then rm -f -- "$f"; [[ "$sc" == startup ]] && printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$rid" "${lp#*:}" "$ver" "$off" "$we" "$tp" > "$REG/$id.loadlast"
   elif (( r == 3 || t + 1 >= LOADS_TRIES )); then rm -f -- "$f"
-  else printf '%s\t%s\t%s\t%s\t%s\n%s\n' "$(( t + 1 ))" "$rid" "$off" "$sc" "$tp" "$body" > "$f"; fi
+  else printf '%s\t%s\t%s\t%s\t%s\n%s\n' "$(( t + 1 ))" "$rid" "$off" "$sc" "$tp" "${body:+$we$'\t'$body}" > "$f"; fi
   [[ -e "$REG/$id.generation" ]] || rm -f -- "$f" "$REG/$id.loadlast" 2>/dev/null
   return 0
 }

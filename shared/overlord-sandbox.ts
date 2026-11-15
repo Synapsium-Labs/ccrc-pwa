@@ -24,7 +24,10 @@ export type SandboxProperty = (typeof SANDBOX_PROPERTIES)[number];
 export const START_LOAD_KINDS = ['instructions', 'hooks', 'skills', 'agents', 'tools', 'toolServers'] as const;
 export type StartLoadKind = (typeof START_LOAD_KINDS)[number];
 
-/** The word a kind carries when it was not measured. Never read as an empty list (Review Focus 3). */
+/** The word a kind carries when it was not measured. Never read as an empty list (Review Focus 3). A second spelling
+ *  beside `server/src/unmeasured.ts#UNMEASURED`, legitimately: this file is L0 and imports nothing, and the hook and the
+ *  wire read the word from here, so it cannot import the server's (review 2135 nit). `continuity-start-loads-route.test.ts`
+ *  pins the two equal. */
 export const UNMEASURED = 'unmeasured' as const;
 
 /** One instruction file the session loaded (`instructions` attachment): its type as Claude Code names it (`Project`,

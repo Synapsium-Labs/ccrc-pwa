@@ -348,6 +348,11 @@ def sl_hooks: [.[] | (sl_att("hook_success"), sl_att("hook_non_blocking_error"))
 def sl_instr: [.[] | sl_att("instructions")] | if length == 0 then "unmeasured" else .[-1].files
   | if type == "array" and sl_every(type == "object" and (.path | type) == "string" and (.type | type) == "string")
     then map({type, path}) else "unmeasured" end end;
+# The byte length of `$w` before its first main-thread request marker (the start's window end, relative to the window's
+# start): `loadlast` records it, so a resume's carry reads that start's own window only (review 2135 F4).
+def sl_end($w): ($w | split("\n")) as $L
+  | ([range(0; $L | length) | select([$L[.] | select(length > 0) | turn_row | select(type == "object" and .isSidechain != true and sl_marker)] | length > 0)] | .[0]) as $i
+  | [$L[:$i][] | utf8bytelength + 1] | add // 0;
 def start_loads($h; $w; $c; $src; $last):
   ($w | sl_rows) as $W | ($h | sl_rows) as $H
   | ([$W | to_entries[] | select(.value | sl_marker) | .key]) as $ms
@@ -358,7 +363,7 @@ def start_loads($h; $w; $c; $src; $last):
     | ([$hist[] | sl_att("skill_listing")] | .[-1]) as $sk
     | ([$hist[] | sl_att("agent_listing_delta")]) as $ad
     | ([$ad | to_entries[] | select(.value.isInitial == true) | .key] | .[-1]) as $ai
-    | {state: "ready",
+    | {state: "ready", end: sl_end($w),
        instr: (($pre | sl_instr) as $i | if $i == "unmeasured" and $c != "" then ($C | sl_instr) else $i end),
        hookCmds: (($pre | sl_hooks) as $k | if $k == "unmeasured" and $c != "" then ($C | sl_hooks) else $k end),
        skills: (if $sk == null or ($src != "resume" and ([$pre[] | sl_att("skill_listing")] | length) == 0) then "unmeasured" else $sk.names | sl_names end),

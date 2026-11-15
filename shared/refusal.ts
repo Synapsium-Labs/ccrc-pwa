@@ -462,6 +462,8 @@ export const REFUSAL_STATUS: Readonly<Record<RouteRefusal, number>> = {
   [END_REQUEST_REFUSALS.notYours]: 403, [END_REQUEST_REFUSALS.alreadyAsked]: 409, [END_REQUEST_REFUSALS.recentlyAsked]: 409,
   // The card door (Overlord W1a): CHOSEN, not measured. 409: the card the caller pages through was superseded by a newer render.
   [CARD_REFUSALS.cardChanged]: 409,
+  // The loads door (Overlord W1 sandbox): CHOSEN, not measured. 404: no start of this session's own, a startup or a resume,
+  // carries the report's id yet; the hook keeps the report and resends it, as for the start door's 404.
   [START_LOADS_REFUSALS.unknownStart]: 404,
   // The note door (Overlord W1a): CHOSEN, not measured. 403 for a key that is not a live row of the caller's (as `not-owner`);
   // 409 for a cap held and for a handover nobody asked (a state of the world, not a fault in the body); 400 for a field over

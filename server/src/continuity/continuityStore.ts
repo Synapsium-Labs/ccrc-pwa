@@ -61,13 +61,14 @@ export function insertStart(db: DatabaseSync, row: StartInsert): StartInsertResu
 
 export type StartLoadsInsertResult = { ok: true; startId: number; fresh: boolean } | { ok: false; kind: 'unknown-start' | 'write-failed' };
 
-/** The table's one writer. The start is the session's own start the `reportId` names (`unknown-start` when the server has
- *  not recorded it yet, which the hook keeps and resends). The first body for a start is kept (`fresh: true`); a resend of
+/** The table's one writer. The start is the session's own `startup` or `resume` start the `reportId` names, the only
+ *  sources the read returns (`unknown-start` when the server has not recorded it yet, which the hook keeps and resends, and
+ *  for a `clear` or `compact` start, whose report no read would return: review 2135 nit). The first body for a start is kept (`fresh: true`); a resend of
  *  the same body changes nothing; a body that differs sets `conflicted`. Both answer `fresh: false`. */
 export function insertStartLoads(db: DatabaseSync, sessionId: string, r: StartLoadsReport, receivedAt: number): StartLoadsInsertResult {
   try {
     return tx(db, () => {
-      const start = db.prepare('SELECT id FROM continuity_starts WHERE sessionId = ? AND reportId = ?').get(sessionId, r.reportId) as
+      const start = db.prepare("SELECT id FROM continuity_starts WHERE sessionId = ? AND reportId = ? AND source IN ('startup', 'resume')").get(sessionId, r.reportId) as
         { id: number } | undefined;
       if (start === undefined) return { ok: false, kind: 'unknown-start' } as const;
       const res = db.prepare(
