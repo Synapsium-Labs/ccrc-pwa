@@ -10,6 +10,8 @@ import {
   COMPACTION_PAIR_MS, compactionsPaths, compactionsSince, readCompactionsMeasured, refusedSince, type CompactionLine,
 } from '../src/continuity/compactions.js';
 import { COUNT_CASES, checkMonotonic, smallSequences } from './continuityCompactionsCases.js';
+import * as compactions from '../src/continuity/compactions.js';
+import { compactionsBegunSinceCases, newestCompactionAtCases } from './sim/probeDoorSets.js';
 
 const ID = 'lane-a-project-a';
 const T = 1_800_000_000_000;
@@ -160,4 +162,11 @@ describe('readCompactionsMeasured keeps absent, unreadable and malformed apart',
       expect(await readCompactionsMeasured(localIO, reg, ID)).toEqual({ kind: 'unreadable' });
     }
   });
+});
+
+describe('compactionsBegunSince: a compaction begun before the window is not counted again (review 2068 F7)', () => {
+  for (const [name, run] of Object.entries(compactionsBegunSinceCases(compactions))) it(name, run);
+});
+describe('newestCompactionAt: the newest main compaction line (review 2068 F1)', () => {
+  for (const [name, run] of Object.entries(newestCompactionAtCases(compactions))) it(name, run);
 });

@@ -38,8 +38,11 @@
 // (`openRound`, one open round per generation, compared and set there). A spot round is RECORDED ONLY: no mail announces it
 // in this piece (the coordinator's ruling, slug spot-mail-waits-on-the-renewal-act), so the lane still sends nothing. The
 // graded compaction rounds give `renewalDue` its `probe-failed` input (`probeFailedUnfixedOf`). A composition with no question
-// opens nothing, and is remembered by its key (`emptyTryKey`, in `emptyTries`) so it is neither drawn nor logged again until
-// the key changes (review 2063 F4).
+// opens nothing, and is remembered by its key (`emptyTryKey`, in `emptyTries`, one per round kind) so it is neither drawn
+// nor logged again until the key changes (review 2063 F4); a compaction round remembered so does not hold the spot branch
+// (`compactionStalled`, review 2068 F4). The compactions that open a round are those that BEGAN in its window
+// (`compactionsBegunSince`, review 2068 F7), and a usage reading counts after a compaction only when it is newer than the
+// compaction's newest line (`newestCompactionAt`, review 2068 F1).
 //
 // TWO HALVES. `gatherGenerationReadings` (async) makes the fleet reads for the generations a pass will judge; then
 // `generationsPass` (synchronous, one transaction per write, nothing awaited) reads `coord.db`, decides and writes. So a
@@ -61,12 +64,14 @@ import type { Clock, Entropy } from '../time/ports.js';
 import { observeTime, observedStepCapMs, type ObservedGap } from '../time/observed.js';
 import type { MeasuredStat } from '../io.js';
 import type { UsageRead } from '../usage.js';
-import { compactionsSince, type CompactionsRead } from './compactions.js';
+import { compactionsBegunSince, compactionsSince, newestCompactionAt, type CompactionsRead } from './compactions.js';
 import { effectiveGeneration, genExpectOf, genViewOf, type GenRow, type MintInput } from './continuityStore.js';
 import { generationStep, type GenEvent } from './generationMachine.js';
 import { snapshotFactsOf } from './card.js';
 import { probeRound } from './probes.js';
-import { compactionWindowStart, emptyTryKey, probeSchedule, roundSnapshotOf, roundsOf, spotFactsOf } from './probeSchedule.js';
+import {
+  compactionWindowStart, emptyTryKey, probeSchedule, roundSnapshotOf, roundsOf, spotFactsOf, type CtxReading, type ProbeScheduleInput,
+} from './probeSchedule.js';
 import type { StartRow } from '../../../shared/continuity.js';
 import {
   START_SKIPS, firstMintOf, judgedForDue, planStartBatch, startVerdict, waveBoundaryOf, type HoldClock, type StartFacts, type StartSkip,
@@ -118,10 +123,14 @@ export interface GenerationsDeps {
   /** The starts this process held for a failed read on an earlier pass (`HoldClock.retried`), kept by the caller across
    *  passes and rewritten by each pass that judges a batch: a memo, never a decision's durable state (review 2006 R3). */
   readonly retried: Set<number>;
-  /** Each generation's newest probe composition that had no question, by its `emptyTryKey`: a memo kept by the caller across
-   *  passes, never a decision's durable state (review 2063 F4). */
-  readonly emptyTries: Map<number, string>;
+  /** Each generation's newest probe composition that had no question, per round kind, by its `emptyTryKey`: a memo kept by
+   *  the caller across passes, never a decision's durable state (review 2063 F4). One key per kind, so a stalled compaction
+   *  try and a spot try never overwrite each other (review 2068 F4). */
+  readonly emptyTries: EmptyTries;
 }
+
+/** The empty-try memo: by generation id, then by round kind, the `emptyTryKey` of the newest try that had no question. */
+export type EmptyTries = Map<number, Map<ProbeRoundKind, string>>;
 
 export interface GenerationsInput {
   /** The registry at this pass, or null when it could not be listed: then no start is judged and the cursor stays. */
@@ -324,23 +333,29 @@ export function generationsPass(deps: GenerationsDeps, input: GenerationsInput):
       if (!rows.ok) { fail('probes', rows.detail, `generation ${g.id}'s probes wait for the next pass, and`); continue; }
       const rounds = roundsOf(rows.rows);
       const card = coord.cardReadOfStart(g.startId);
+      const newestRead: Reading<string | null> = card.ok ? { kind: 'measured', value: card.read?.snapshotId ?? null } : later(card.detail);
+      const tried = deps.emptyTries.get(g.id);
+      const compSnap = roundSnapshotOf('compaction', g.snapshotId, newestRead);
       const s = probeSchedule({
         state: effectiveGeneration(g, live).state, probeRounds: g.probeRounds, rounds,
         cardReadAt: card.ok ? { kind: 'measured', value: card.read?.at ?? null } : later(card.detail),
         ...probeReadings(input.readings.get(g.id), compactionWindowStart(g.enteredAt, rounds)),
+        compactionStalled: compSnap.kind === 'measured' && tried?.get('compaction') === emptyTryKey('compaction', compSnap.value, null, null),
       });
       probeFailed.set(g.id, s.probeFailedUnfixed);
       if (s.feed !== null) events.push({ gen: g, event: { kind: 'probes', passed: s.feed.passed }, card: null });
       if (s.open === null) continue;
       const waits = `generation ${g.id}'s ${s.open.kind} round waits for the next pass, and`;
-      const snap = roundSnapshotOf(s.open.kind, g.snapshotId, card.ok ? { kind: 'measured', value: card.read?.snapshotId ?? null } : later(card.detail));
+      const snap = roundSnapshotOf(s.open.kind, g.snapshotId, newestRead);
       if (snap.kind !== 'measured') { fail('card-reads', snap.why, waits); continue; }
-      const key = emptyTryKey(s.open.kind, snap.value, s.open.depthTokens);
-      if (deps.emptyTries.get(g.id) === key) continue;
+      const spot = s.open.kind === 'spot';
+      // A start or compaction try is keyed by its snapshot before its facts are read; a spot try by the rows it is drawn from.
+      if (!spot && tried?.get(s.open.kind) === emptyTryKey(s.open.kind, snap.value, null, null)) continue;
       const facts = probeFactsOf(coord, g, s.open.kind, snap.value, now);
       if (typeof facts === 'string') { fail('probes', facts, waits); continue; }
+      const key = emptyTryKey(s.open.kind, snap.value, s.open.depthTokens, spot ? facts : null);
+      if (tried?.get(s.open.kind) === key) continue;
       const composed = probeRound(g.role, facts, deps.entropy, s.open.kind);
-      const spot = s.open.kind === 'spot';
       const w = coord.openRound({
         roundId: `r-${deps.entropy.uuid()}`, sessionId: g.sessionId, generationId: g.id, kind: s.open.kind,
         questions: composed.questions.map((q) => ({ qid: q.id, cls: q.cls, question: q.text, choices: q.choices, expected: q.expected })),
@@ -348,7 +363,7 @@ export function generationsPass(deps: GenerationsDeps, input: GenerationsInput):
         roundUnmeasured: composed.unmeasured, askedAt: now, supersedes: s.open.supersedes,
       });
       if (w.ok) { roundsOpened += 1; deps.emptyTries.delete(g.id); }
-      else if (w.kind === 'empty') { emptyRounds += 1; deps.emptyTries.set(g.id, key); }
+      else if (w.kind === 'empty') { emptyRounds += 1; deps.emptyTries.set(g.id, new Map(tried).set(s.open.kind, key)); }
       else if (w.kind === 'write-failed') fail('probes', 'continuity_probes could not be written', `generation ${g.id}'s round waits for the next pass, and`);
     }
     probesFed += applyFedEvents(coord, events, live, now);
@@ -481,15 +496,27 @@ function usageReading(r: GenReadings | undefined, pick: 'ctxTokens' | 'ctxWindow
   return v === null || v === undefined ? later(`usage has no ${pick}`) : { kind: 'measured', value: v };
 }
 
-/** The fleet readings `probeSchedule` takes: the compactions since `since`, whether the turn marker reads idle, and the
- *  fresh context. A generation with no readings this pass reads every one unmeasured. */
-function probeReadings(r: GenReadings | undefined, since: number): { compactionsSince: Reading<number>; idle: Reading<boolean>; ctxTokens: Reading<number> } {
-  const counted: Reading<number> = r === undefined ? later('unread this pass')
-    : r.compactions.kind === 'unreadable' ? later('compactions unreadable')
-    : r.compactions.kind === 'absent' ? { kind: 'measured', value: 0 } : { kind: 'measured', value: compactionsSince(r.compactions.lines, since) };
+/** The fleet readings `probeSchedule` takes: the compactions that began since `since` (`compactionsBegunSince`, review 2068
+ *  F7), when the newest compaction line was written, whether the turn marker reads idle, and the fresh context with the time
+ *  the statusline wrote it (the sidecar's `ts`, in seconds). A generation with no readings this pass reads every one
+ *  unmeasured. */
+function probeReadings(r: GenReadings | undefined, since: number): Pick<ProbeScheduleInput, 'compactionsSince' | 'compactedAt' | 'idle' | 'ctx'> {
+  const lines = r === undefined ? later('unread this pass') : r.compactions.kind === 'unreadable' ? later('compactions unreadable')
+    : { kind: 'measured' as const, value: r.compactions.kind === 'absent' ? [] : r.compactions.lines };
   const idle: Reading<boolean> = r === undefined ? later('unread this pass') : !r.turn.ok ? later(`turn marker ${r.turn.reason}`)
     : { kind: 'measured', value: r.turn.state !== 'working' };
-  return { compactionsSince: counted, idle, ctxTokens: usageReading(r, 'ctxTokens') };
+  const ctx = ctxReading(r);
+  return lines.kind !== 'measured' ? { compactionsSince: lines, compactedAt: lines, idle, ctx } : {
+    compactionsSince: { kind: 'measured', value: compactionsBegunSince(lines.value, since) },
+    compactedAt: { kind: 'measured', value: newestCompactionAt(lines.value) }, idle, ctx,
+  };
+}
+
+/** The fresh context and when the statusline wrote it, epoch ms (the sidecar's `ts` is in seconds), or why it is unmeasured. */
+function ctxReading(r: GenReadings | undefined): Reading<CtxReading> {
+  const tokens = usageReading(r, 'ctxTokens');
+  if (tokens.kind !== 'measured' || r?.usage.kind !== 'reading') return tokens.kind === 'measured' ? later('usage unread') : tokens;
+  return { kind: 'measured', value: { tokens: tokens.value, at: r.usage.usage.ts * 1000 } };
 }
 
 /** The facts a round of `kind` is drawn from (the snapshot `roundSnapshotOf` chose, or this generation's own rows for a spot

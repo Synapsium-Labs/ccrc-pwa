@@ -16,6 +16,8 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../.
 export type ProbeDoorModule = typeof import('../../src/continuity/probeDoor.js');
 export type ProbeScheduleModule = typeof import('../../src/continuity/probeSchedule.js');
 export type CardModule = typeof import('../../src/continuity/card.js');
+export type CompactionsModule = typeof import('../../src/continuity/compactions.js');
+type Line = Parameters<CompactionsModule['compactionsBegunSince']>[0][number];
 type Question = Parameters<ProbeDoorModule['probePages']>[2][number];
 type Rows = Parameters<ProbeScheduleModule['roundsOf']>[0];
 type Row = Rows[number];
@@ -322,8 +324,11 @@ export function probeFailedUnfixedOfCases(m: ProbeScheduleModule): Record<string
 }
 
 const base = (over: Partial<Input> = {}): Input => ({
-  state: 'active', probeRounds: 0, rounds: [], cardReadAt: M(null), compactionsSince: M(0), idle: M(false), ctxTokens: M(0), ...over,
+  state: 'active', probeRounds: 0, rounds: [], cardReadAt: M(null), compactionsSince: M(0), idle: M(false), ctx: C(0),
+  compactedAt: M(null), compactionStalled: false, ...over,
 });
+/** A usage reading of `tokens`, written by the statusline at `at` (by default after every compaction line a case writes). */
+function C(tokens: number, at = AT): Input['ctx'] { return M({ tokens, at }); }
 const DONE = (id: string, kind: ProbeRoundKind, verdict: Round['verdict'], over: Partial<Round> = {}) =>
   round(id, kind, { verdict, ...over });
 const OPENR = (id: string, kind: ProbeRoundKind) => round(id, kind, { answeredAt: null, verdict: null });
@@ -410,74 +415,187 @@ export function probeScheduleCases(m: ProbeScheduleModule): Record<string, Suite
       expect(opens({ rounds: passed, cardReadAt: M(9000), compactionsSince: M(0) })).toBeNull();
     },
     'active, an open start or compaction round blocks every round; an open spot round blocks only spot rounds': () => {
-      expect(opens({ rounds: [OPENR('r1', 'start')], compactionsSince: M(2), idle: M(true), ctxTokens: M(3 * K) })).toBeNull();
-      expect(opens({ rounds: [OPENR('c1', 'compaction')], compactionsSince: M(2), idle: M(true), ctxTokens: M(3 * K) })).toBeNull();
-      expect(opens({ rounds: [{ ...OPENR('s1', 'spot'), depthTokens: K }], idle: M(true), ctxTokens: M(9 * K) })).toBeNull();
+      expect(opens({ rounds: [OPENR('r1', 'start')], compactionsSince: M(2), idle: M(true), ctx: C(3 * K) })).toBeNull();
+      expect(opens({ rounds: [OPENR('c1', 'compaction')], compactionsSince: M(2), idle: M(true), ctx: C(3 * K) })).toBeNull();
+      expect(opens({ rounds: [{ ...OPENR('s1', 'spot'), depthTokens: K }], idle: M(true), ctx: C(9 * K) })).toBeNull();
     },
     'active, a compaction round supersedes an unanswered spot round (review 2063 F3)': () => {
-      expect(opens({ rounds: [OPENR('s1', 'spot')], compactionsSince: M(1), ctxTokens: M(K) }))
+      expect(opens({ rounds: [OPENR('s1', 'spot')], compactionsSince: M(1), ctx: C(K) }))
         .toEqual({ kind: 'compaction', depthTokens: K, supersedes: 's1' });
       const failed = DONE('c1', 'compaction', 'failed', { answeredAt: 5000 });
-      expect(opens({ rounds: [failed, OPENR('s1', 'spot')], cardReadAt: M(5001), ctxTokens: M(K) }))
+      expect(opens({ rounds: [failed, OPENR('s1', 'spot')], cardReadAt: M(5001), ctx: C(K) }))
         .toEqual({ kind: 'compaction', depthTokens: K, supersedes: 's1' });
     },
-    'active, a compaction round records the depth it opened at, the spot baseline; none when the context was not read': () => {
-      expect(opens({ compactionsSince: M(1), ctxTokens: M(31_000) })).toEqual({ kind: 'compaction', depthTokens: 31_000, supersedes: null });
-      expect(opens({ compactionsSince: M(1), ctxTokens: NOPE })).toEqual({ kind: 'compaction', depthTokens: null, supersedes: null });
+    'active, a compaction round records the depth it opened at, the spot baseline; 0 when the context was not read (review 2068 F1)': () => {
+      expect(opens({ compactionsSince: M(1), ctx: C(31_000) })).toEqual({ kind: 'compaction', depthTokens: 31_000, supersedes: null });
+      expect(opens({ compactionsSince: M(1), ctx: NOPE })).toEqual({ kind: 'compaction', depthTokens: 0, supersedes: null });
+    },
+    'active, a compaction round records the context only from a reading newer than the compaction, else 0, never the old depth (review 2068 F1)': () => {
+      const line = AT - 2 * MIN;
+      expect(opens({ compactionsSince: M(1), compactedAt: M(line), ctx: C(171_000, line - 1_000) })).toEqual({ kind: 'compaction', depthTokens: 0, supersedes: null });
+      expect(opens({ compactionsSince: M(1), compactedAt: M(line), ctx: C(171_000, line) })).toEqual({ kind: 'compaction', depthTokens: 0, supersedes: null });
+      expect(opens({ compactionsSince: M(1), compactedAt: M(line), ctx: C(45_000, line + 1) })).toEqual({ kind: 'compaction', depthTokens: 45_000, supersedes: null });
+      expect(opens({ compactionsSince: M(1), compactedAt: NOPE, ctx: C(171_000) })).toEqual({ kind: 'compaction', depthTokens: 0, supersedes: null });
+    },
+    'active, after a compaction the next spot round opens about 50k into the new context, not 50k past the old depth (review 2068 F1)': () => {
+      // The measured case: the baseline stood at 170k, the compaction left about 45k, and the sidecar still read 171k for a while.
+      const line = AT - 20 * MIN;
+      const before = DONE('s1', 'spot', 'passed', { depthTokens: 170_000 });
+      const comp = opens({ rounds: [before], compactionsSince: M(1), compactedAt: M(line), ctx: C(171_000, line - 3 * MIN) });
+      expect(comp).toEqual({ kind: 'compaction', depthTokens: 0, supersedes: null });
+      const rs = [before, DONE('c1', 'compaction', 'passed', { depthTokens: comp!.depthTokens })];
+      // The old reading opens nothing: it is from before the compaction.
+      expect(opens({ rounds: rs, compactedAt: M(line), idle: M(true), ctx: C(171_000, line - 3 * MIN) })).toBeNull();
+      expect(opens({ rounds: rs, compactedAt: M(line), idle: M(true), ctx: C(45_000, line + MIN) })).toBeNull();
+      expect(opens({ rounds: rs, compactedAt: M(line), idle: M(true), ctx: C(50_000, line + 9 * MIN) }))
+        .toEqual({ kind: 'spot', depthTokens: 50_000, supersedes: null });
+      expect(opens({ rounds: rs, compactedAt: M(line), idle: M(true), ctx: C(221_000, line + 9 * MIN) })).toMatchObject({ kind: 'spot' });
+    },
+    'active, a spot round reads the context only from a reading newer than the newest compaction; lines not read open none (review 2068 F1)': () => {
+      const line = AT - MIN;
+      expect(opens({ compactedAt: M(line), idle: M(true), ctx: C(3 * K, line - 1) })).toBeNull();
+      expect(opens({ compactedAt: M(line), idle: M(true), ctx: C(3 * K, line) })).toBeNull();
+      expect(opens({ compactedAt: M(line), idle: M(true), ctx: C(3 * K, line + 1) })).toEqual({ kind: 'spot', depthTokens: 3 * K, supersedes: null });
+      expect(opens({ compactedAt: NOPE, idle: M(true), ctx: C(3 * K) })).toBeNull();
+      expect(opens({ compactedAt: M(null), idle: M(true), ctx: C(3 * K, 0) })).toEqual({ kind: 'spot', depthTokens: 3 * K, supersedes: null });
+    },
+    'active, a compaction round that composed empty over the same snapshot does not hold the spot branch (review 2068 F4)': () => {
+      expect(opens({ compactionsSince: M(1), compactionStalled: true })).toBeNull();
+      expect(opens({ compactionsSince: M(1), compactionStalled: true, idle: M(true), ctx: C(3 * K) })).toEqual({ kind: 'spot', depthTokens: 3 * K, supersedes: null });
+      const failed = DONE('c1', 'compaction', 'failed', { answeredAt: 5000, depthTokens: 0 });
+      expect(opens({ rounds: [failed], cardReadAt: M(5001), compactionStalled: true, idle: M(true), ctx: C(K) }))
+        .toEqual({ kind: 'spot', depthTokens: K, supersedes: null });
+      // A stalled compaction round supersedes nothing: an open spot round stays open, and no other spot round opens.
+      expect(opens({ rounds: [OPENR('s1', 'spot')], compactionsSince: M(1), compactionStalled: true, idle: M(true), ctx: C(9 * K) })).toBeNull();
+      // Stalled only blocks a compaction round that is due: nothing else changes.
+      expect(opens({ compactionStalled: true, idle: M(true), ctx: C(K - 1) })).toBeNull();
     },
     'no state but probing and active opens a round, however many compactions or tokens': () => {
       for (const state of GENERATION_STATES.filter((x) => x !== 'probing' && x !== 'active')) {
-        const s = go({ state, compactionsSince: M(4), idle: M(true), ctxTokens: M(4 * K) });
+        const s = go({ state, compactionsSince: M(4), idle: M(true), ctx: C(4 * K) });
         expect([state, s.feed, s.open]).toEqual([state, null, null]);
       }
     },
     // ---- spot
     'active, idle and 50k past a zero baseline: a spot round opens and records the depth it opened at': () => {
-      expect(opens({ idle: M(true), ctxTokens: M(K) })).toEqual({ kind: 'spot', depthTokens: K, supersedes: null });
-      expect(opens({ idle: M(true), ctxTokens: M(2 * K + 17) })).toEqual({ kind: 'spot', depthTokens: 2 * K + 17, supersedes: null });
+      expect(opens({ idle: M(true), ctx: C(K) })).toEqual({ kind: 'spot', depthTokens: K, supersedes: null });
+      expect(opens({ idle: M(true), ctx: C(2 * K + 17) })).toEqual({ kind: 'spot', depthTokens: 2 * K + 17, supersedes: null });
     },
     'active, less than 50k past the baseline no spot round opens': () => {
-      expect(opens({ idle: M(true), ctxTokens: M(K - 1) })).toBeNull();
-      expect(opens({ idle: M(true), ctxTokens: M(0) })).toBeNull();
+      expect(opens({ idle: M(true), ctx: C(K - 1) })).toBeNull();
+      expect(opens({ idle: M(true), ctx: C(0) })).toBeNull();
     },
     'active, a busy session opens no spot round; an unread marker or a stale sidecar opens none': () => {
-      expect(opens({ idle: M(false), ctxTokens: M(3 * K) })).toBeNull();
-      expect(opens({ idle: { kind: 'unmeasured', why: 'x' }, ctxTokens: M(3 * K) })).toBeNull();
-      expect(opens({ idle: M(true), ctxTokens: { kind: 'unmeasured', why: 'x' } })).toBeNull();
+      expect(opens({ idle: M(false), ctx: C(3 * K) })).toBeNull();
+      expect(opens({ idle: { kind: 'unmeasured', why: 'x' }, ctx: C(3 * K) })).toBeNull();
+      expect(opens({ idle: M(true), ctx: { kind: 'unmeasured', why: 'x' } })).toBeNull();
     },
     'active, the next spot round opens at the last spot depth plus 50k, not at the next 50k bucket (review 2063 F5)': () => {
       const spot = (d: number) => DONE('s1', 'spot', 'passed', { depthTokens: d });
-      expect(opens({ rounds: [spot(2 * K - 1_000)], idle: M(true), ctxTokens: M(2 * K) })).toBeNull();
-      expect(opens({ rounds: [spot(2 * K - 1_000)], idle: M(true), ctxTokens: M(3 * K - 1_001) })).toBeNull();
-      expect(opens({ rounds: [spot(2 * K - 1_000)], idle: M(true), ctxTokens: M(3 * K - 1_000) }))
+      expect(opens({ rounds: [spot(2 * K - 1_000)], idle: M(true), ctx: C(2 * K) })).toBeNull();
+      expect(opens({ rounds: [spot(2 * K - 1_000)], idle: M(true), ctx: C(3 * K - 1_001) })).toBeNull();
+      expect(opens({ rounds: [spot(2 * K - 1_000)], idle: M(true), ctx: C(3 * K - 1_000) }))
         .toEqual({ kind: 'spot', depthTokens: 3 * K - 1_000, supersedes: null });
     },
     'active, the newest spot round sets the baseline, not the first': () => {
       const rs = [DONE('s1', 'spot', 'passed', { depthTokens: K }), DONE('s2', 'spot', 'passed', { depthTokens: 4 * K })];
-      expect(opens({ rounds: rs, idle: M(true), ctxTokens: M(5 * K - 1) })).toBeNull();
-      expect(opens({ rounds: rs, idle: M(true), ctxTokens: M(5 * K) })).toEqual({ kind: 'spot', depthTokens: 5 * K, supersedes: null });
+      expect(opens({ rounds: rs, idle: M(true), ctx: C(5 * K - 1) })).toBeNull();
+      expect(opens({ rounds: rs, idle: M(true), ctx: C(5 * K) })).toEqual({ kind: 'spot', depthTokens: 5 * K, supersedes: null });
     },
     'active, a compaction resets the baseline to the depth after it (review 2063 F5)': () => {
       const rs = [DONE('s1', 'spot', 'passed', { depthTokens: 3 * K }), DONE('c1', 'compaction', 'passed', { depthTokens: 30_000 })];
-      expect(opens({ rounds: rs, idle: M(true), ctxTokens: M(30_000 + K - 1) })).toBeNull();
-      expect(opens({ rounds: rs, idle: M(true), ctxTokens: M(30_000 + K) })).toEqual({ kind: 'spot', depthTokens: 30_000 + K, supersedes: null });
+      expect(opens({ rounds: rs, idle: M(true), ctx: C(30_000 + K - 1) })).toBeNull();
+      expect(opens({ rounds: rs, idle: M(true), ctx: C(30_000 + K) })).toEqual({ kind: 'spot', depthTokens: 30_000 + K, supersedes: null });
     },
     'active, a newest compaction round whose depth was not measured leaves the baseline unmeasured: no spot round': () => {
       const rs = [DONE('s1', 'spot', 'passed', { depthTokens: K }), DONE('c1', 'compaction', 'passed', { depthTokens: null })];
-      expect(opens({ rounds: rs, idle: M(true), ctxTokens: M(9 * K) })).toBeNull();
+      expect(opens({ rounds: rs, idle: M(true), ctx: C(9 * K) })).toBeNull();
     },
     'active, a start round is not a mark: the baseline counts from zero without a spot or compaction round': () => {
       const rs = [DONE('r1', 'start', 'passed', { depthTokens: 9 * K })];
-      expect(opens({ rounds: rs, idle: M(true), ctxTokens: M(K) })).toEqual({ kind: 'spot', depthTokens: K, supersedes: null });
+      expect(opens({ rounds: rs, idle: M(true), ctx: C(K) })).toEqual({ kind: 'spot', depthTokens: K, supersedes: null });
     },
     'active, a compaction round wins over a spot round the same pass': () => {
-      expect(opens({ compactionsSince: M(1), idle: M(true), ctxTokens: M(3 * K) })).toEqual({ kind: 'compaction', depthTokens: 3 * K, supersedes: null });
+      expect(opens({ compactionsSince: M(1), idle: M(true), ctx: C(3 * K) })).toEqual({ kind: 'compaction', depthTokens: 3 * K, supersedes: null });
     },
     'the verdict of probeFailedUnfixed rides every answer, in every state': () => {
       const two = [DONE('c1', 'compaction', 'failed'), DONE('c2', 'compaction', 'failed')];
       for (const state of GENERATION_STATES) {
         expect(go({ state, rounds: two }).probeFailedUnfixed, state).toEqual({ kind: 'measured', value: true });
       }
+    },
+  };
+}
+
+export function ctxSinceCompactionCases(m: ProbeScheduleModule): Record<string, SuiteCase> {
+  const line = AT - 5 * MIN;
+  return {
+    'a reading newer than the newest compaction line is the context; one at or before it is none (review 2068 F1)': () => {
+      expect(m.ctxSinceCompaction(C(45_000, line + 1), M(line))).toBe(45_000);
+      expect(m.ctxSinceCompaction(C(171_000, line), M(line))).toBeNull();
+      expect(m.ctxSinceCompaction(C(171_000, line - 1), M(line))).toBeNull();
+    },
+    'with no compaction on record any fresh reading is the context': () => {
+      expect(m.ctxSinceCompaction(C(171_000, 0), M(null))).toBe(171_000);
+    },
+    'a reading not measured, or compaction lines not read, is none, never zero and never a guess': () => {
+      expect(m.ctxSinceCompaction(NOPE, M(line))).toBeNull();
+      expect(m.ctxSinceCompaction(NOPE, M(null))).toBeNull();
+      expect(m.ctxSinceCompaction(C(45_000, line + 1), NOPE)).toBeNull();
+    },
+  };
+}
+
+const T0 = AT;
+const L = (at: number, phase: Line['phase'], over: Partial<Line> = {}): Line => ({ at, trigger: 'auto', phase, transcript: null, scope: 'main', ...over });
+const PAIR = 10 * MIN;
+
+export function compactionsBegunSinceCases(m: CompactionsModule): Record<string, SuiteCase> {
+  return {
+    'a pre before the start and its post after it are one compaction, begun before: none since (review 2068 F7)': () => {
+      expect(m.compactionsBegunSince([L(T0 - MIN, 'pre'), L(T0 + MIN, 'post')], T0)).toBe(0);
+      expect(m.compactionsBegunSince([L(T0 - PAIR + 1, 'pre'), L(T0 + 1, 'post')], T0)).toBe(0);
+    },
+    'a compaction begun at or after the start counts once, a pre with its post or either alone': () => {
+      expect(m.compactionsBegunSince([L(T0, 'pre'), L(T0 + MIN, 'post')], T0)).toBe(1);
+      expect(m.compactionsBegunSince([L(T0 + MIN, 'pre')], T0)).toBe(1);
+      expect(m.compactionsBegunSince([L(T0 + MIN, 'post')], T0)).toBe(1);
+      expect(m.compactionsBegunSince([L(T0 - MIN, 'pre'), L(T0 + MIN, 'post'), L(T0 + 30 * MIN, 'pre'), L(T0 + 31 * MIN, 'post')], T0)).toBe(1);
+    },
+    'a post too long after a pre before the start settles nothing: it is a compaction of its own': () => {
+      expect(m.compactionsBegunSince([L(T0 - PAIR - MIN, 'pre'), L(T0 + 1, 'post')], T0)).toBe(1);
+      expect(m.compactionsBegunSince([L(T0 - MIN, 'pre', { trigger: 'manual' }), L(T0 + MIN, 'post')], T0)).toBe(1);
+    },
+    'lines only before the start count nothing, however many': () => {
+      expect(m.compactionsBegunSince([L(T0 - 3 * PAIR, 'pre'), L(T0 - 2 * PAIR, 'post'), L(T0 - MIN, 'pre')], T0)).toBe(0);
+      expect(m.compactionsBegunSince([L(T0 - 40 * PAIR, 'pre'), L(T0 - 20 * PAIR, 'pre'), L(T0 + MIN, 'pre')], T0)).toBe(1);
+      expect(m.compactionsBegunSince([], T0)).toBe(0);
+    },
+    'two pres before the start and one post after: the post settles one of them, nothing begins since': () => {
+      expect(m.compactionsBegunSince([L(T0 - 5 * MIN, 'pre'), L(T0 - 3 * MIN, 'pre'), L(T0 + MIN, 'post')], T0)).toBe(0);
+    },
+    'appending a line at or after the start never lowers the count': () => {
+      const base = [L(T0 - 5 * MIN, 'pre'), L(T0 - 4 * MIN, 'post'), L(T0 + MIN, 'pre')];
+      for (const extra of [L(T0, 'pre'), L(T0 + 2 * MIN, 'post'), L(T0 + 50 * MIN, 'post'), L(T0 + 3 * MIN, 'pre', { scope: 'subagent' })]) {
+        expect(m.compactionsBegunSince([...base, extra], T0)).toBeGreaterThanOrEqual(m.compactionsBegunSince(base, T0));
+      }
+    },
+  };
+}
+
+export function newestCompactionAtCases(m: CompactionsModule): Record<string, SuiteCase> {
+  return {
+    'the newest main pre or post line, whichever is later': () => {
+      expect(m.newestCompactionAt([L(T0, 'pre'), L(T0 + MIN, 'post'), L(T0 - MIN, 'pre')])).toBe(T0 + MIN);
+      expect(m.newestCompactionAt([L(T0 + 2 * MIN, 'pre'), L(T0 + MIN, 'post')])).toBe(T0 + 2 * MIN);
+    },
+    'a refused line and a line of another scope are no compaction': () => {
+      expect(m.newestCompactionAt([L(T0, 'pre'), L(T0 + MIN, 'refused')])).toBe(T0);
+      expect(m.newestCompactionAt([L(T0, 'post'), L(T0 + MIN, 'pre', { scope: 'subagent' }), L(T0 + 2 * MIN, 'pre', { scope: 'ambiguous' }), L(T0 + 3 * MIN, 'pre', { scope: null })])).toBe(T0);
+    },
+    'no compaction on record is null, never zero': () => {
+      expect(m.newestCompactionAt([])).toBeNull();
+      expect(m.newestCompactionAt([L(T0, 'refused'), L(T0, 'pre', { scope: 'subagent' })])).toBeNull();
     },
   };
 }
@@ -500,16 +618,27 @@ export function roundSnapshotOfCases(m: ProbeScheduleModule): Record<string, Sui
 }
 
 export function emptyTryKeyCases(m: ProbeScheduleModule): Record<string, SuiteCase> {
+  const since = AT - 10 * MIN;
+  const drawn = (notes: number, mail: number): CardFacts => m.spotFactsOf('lane-a-project-a', 'coordinator', AT,
+    Array.from({ length: notes }, (_, i) => NOTE(i + 1, since + i)), Array.from({ length: mail }, (_, i) => MAIL(i + 1, since + i)), since);
   return {
-    'a start or compaction try is keyed by its kind and snapshot': () => {
-      expect(m.emptyTryKey('start', 'snap-1', null)).toBe('start:snap-1');
-      expect(m.emptyTryKey('compaction', 'snap-1', 40_000)).toBe('compaction:snap-1');
-      expect(m.emptyTryKey('compaction', 'snap-2', null)).not.toBe(m.emptyTryKey('compaction', 'snap-1', null));
+    'a start or compaction try is keyed by its kind and its snapshot, whatever the depth': () => {
+      expect(m.emptyTryKey('start', 'snap-1', null, null)).toBe('start:snap-1');
+      expect(m.emptyTryKey('compaction', 'snap-1', 40_000, null)).toBe('compaction:snap-1');
+      expect(m.emptyTryKey('compaction', 'snap-2', null, null)).not.toBe(m.emptyTryKey('compaction', 'snap-1', null, null));
+      expect(m.emptyTryKey('compaction', 'snap-1', null, drawn(2, 1))).toBe('compaction:snap-1');
     },
-    'a spot try is keyed by its 50k step, so it is tried again only one step on (review 2063 F4)': () => {
-      expect(m.emptyTryKey('spot', null, K + 5)).toBe(m.emptyTryKey('spot', null, 2 * K - 1));
-      expect(m.emptyTryKey('spot', null, 2 * K)).not.toBe(m.emptyTryKey('spot', null, 2 * K - 1));
-      expect(m.emptyTryKey('spot', 'snap-1', 2 * K)).toBe('spot:2');
+    'a spot try is keyed by its 50k step, not its exact depth, nor any snapshot': () => {
+      expect(m.emptyTryKey('spot', null, K + 5, drawn(0, 0))).toBe(m.emptyTryKey('spot', null, 2 * K - 1, drawn(0, 0)));
+      expect(m.emptyTryKey('spot', null, 2 * K, drawn(0, 0))).not.toBe(m.emptyTryKey('spot', null, 2 * K - 1, drawn(0, 0)));
+      expect(m.emptyTryKey('spot', 'snap-1', 2 * K, drawn(0, 0))).toBe('spot:2:0');
+    },
+    'a spot try is keyed by the count of the rows it was drawn from, so a new note or mail ends the skip (review 2068 F5)': () => {
+      expect(m.emptyTryKey('spot', null, K, drawn(1, 0))).not.toBe(m.emptyTryKey('spot', null, K, drawn(0, 0)));
+      expect(m.emptyTryKey('spot', null, K, drawn(0, 1))).not.toBe(m.emptyTryKey('spot', null, K, drawn(0, 0)));
+      expect(m.emptyTryKey('spot', null, K, drawn(2, 1))).toBe('spot:1:3');
+      expect(m.emptyTryKey('spot', null, K, drawn(1, 2))).toBe('spot:1:3');
+      expect(m.emptyTryKey('spot', null, K, null)).toBe('spot:1:0');
     },
   };
 }
@@ -674,6 +803,7 @@ export function snapshotFactsOfCases(m: CardModule): Record<string, SuiteCase> {
 const DOOR = path.join(ROOT, 'server/src/continuity/probeDoor.ts');
 const SCHEDULE = path.join(ROOT, 'server/src/continuity/probeSchedule.ts');
 const CARD = path.join(ROOT, 'server/src/continuity/card.ts');
+const COMPACTIONS = path.join(ROOT, 'server/src/continuity/compactions.ts');
 
 const MASKED_QUESTION_SET: MutantSet<ProbeDoorModule> = {
   modulePath: DOOR,
@@ -796,10 +926,10 @@ const SCHEDULE_SET: MutantSet<ProbeScheduleModule> = {
     { id: 'C7 the delta read as a 50k bucket', old: 'depth - baseline >= SPOT_PROBE_EVERY_TOKENS', new: 'Math.floor(depth / SPOT_PROBE_EVERY_TOKENS) > Math.floor(baseline / SPOT_PROBE_EVERY_TOKENS)' },
     { id: 'C8 a spot at exactly 50k past waits', old: 'baseline >= SPOT_PROBE_EVERY_TOKENS', new: 'baseline > SPOT_PROBE_EVERY_TOKENS' },
     { id: 'C9 the compaction trigger on zero compactions', old: 'i.compactionsSince.value >= 1', new: 'i.compactionsSince.value >= 0' },
-    { id: 'C10 a compaction follow-up without a re-read', old: 'if (reReadAfter(i.cardReadAt, lastComp.answeredAt!))', new: 'if (true)' },
+    { id: 'C10 a compaction follow-up without a re-read', old: 'awaitingReRead ? reReadAfter(i.cardReadAt, lastComp.answeredAt!)', new: 'awaitingReRead ? true' },
     { id: 'C11 a round opened on active while a start or compaction round is open', old: "if (openRound !== undefined && openRound.kind !== 'spot') return none;", new: '' },
     { id: 'C12 rounds opened in any state', old: "  if (i.state !== 'active') return none;", new: '' },
-    { id: 'C13 a new compaction opens during a re-read wait', old: '} else if (i.compactionsSince.kind', new: '}\n  if (i.compactionsSince.kind' },
+    { id: 'C13 a new compaction opens during a re-read wait', old: 'awaitingReRead ? reReadAfter(i.cardReadAt, lastComp.answeredAt!)', new: "awaitingReRead ? reReadAfter(i.cardReadAt, lastComp.answeredAt!) || (i.compactionsSince.kind === 'measured' && i.compactionsSince.value >= 1)" },
     { id: 'C14 an unfixed pair still waits for a re-read', old: '!(probeFailedUnfixed.kind === \'measured\' && probeFailedUnfixed.value)', new: 'true' },
     { id: 'C15 any compaction round asks for a re-read', old: "lastComp?.verdict === 'failed' &&", new: 'lastComp !== undefined &&' },
     { id: 'C16 the first mark sets the baseline', old: 'marks[marks.length - 1]!.depthTokens', new: 'marks[0]!.depthTokens' },
@@ -810,7 +940,12 @@ const SCHEDULE_SET: MutantSet<ProbeScheduleModule> = {
     { id: 'C21 a compaction does not reset the baseline', old: "r.kind === 'spot' || r.kind === 'compaction'", new: "r.kind === 'spot'" },
     { id: 'C22 an unmeasured baseline read as zero', old: 'baseline !== null && depth - baseline', new: 'depth - (baseline ?? 0)' },
     { id: 'C23 an open spot round not superseded', old: 'supersedes: openRound?.roundId ?? null', new: 'supersedes: null' },
-    { id: 'C24 a compaction round without its depth', old: "kind: 'compaction' as const, depthTokens: depth", new: "kind: 'compaction' as const, depthTokens: null" },
+    { id: 'C24 a compaction round without its depth', old: "kind: 'compaction' as const, depthTokens: depth ?? 0", new: "kind: 'compaction' as const, depthTokens: null" },
+    { id: 'C27 a compaction round with no newer reading leaves the baseline unmeasured (review 2068 F1)', old: 'depthTokens: depth ?? 0', new: 'depthTokens: depth' },
+    { id: 'C28 a stalled compaction round asked again (review 2068 F4)', old: 'if (compactionDue && !i.compactionStalled) return compaction;', new: 'if (compactionDue) return compaction;' },
+    { id: 'C29 a stalled compaction round holds the spot branch (review 2068 F4)', old: 'if (compactionDue && !i.compactionStalled) return compaction;', new: 'if (compactionDue) return i.compactionStalled ? none : compaction;' },
+    { id: 'C30 the spot depth read from any fresh reading (review 2068 F1)', old: 'const depth = ctxSinceCompaction(i.ctx, i.compactedAt);', new: "const depth = i.ctx.kind === 'measured' ? i.ctx.value.tokens : null;" },
+    { id: 'C31 a stalled flag stalls any round', old: 'if (compactionDue && !i.compactionStalled) return compaction;', new: 'if (i.compactionStalled) return none;\n  if (compactionDue) return compaction;' },
     { id: 'C25 a start round counts as a mark', old: "r.kind === 'spot' || r.kind === 'compaction'", new: 'true' },
     { id: 'C26 spot rounds opened in probing', old: "    if (isOpen) return none;\n", new: "    if (isOpen && i.rounds.some((r) => r.answeredAt === null && r.kind !== 'spot')) return none;\n" },
   ],
@@ -849,9 +984,47 @@ const EMPTY_TRY_SET: MutantSet<ProbeScheduleModule> = {
     { id: 'E1 a spot try keyed by its exact depth', old: 'Math.floor((depthTokens ?? 0) / SPOT_PROBE_EVERY_TOKENS)', new: '(depthTokens ?? 0)' },
     { id: 'E2 a try keyed without its kind', old: "`${kind}:${snapshotId ?? ''}`", new: "`${snapshotId ?? ''}`" },
     { id: 'E3 a try keyed without its snapshot', old: "`${kind}:${snapshotId ?? ''}`", new: '`${kind}:`' },
-    { id: 'E4 a spot try keyed like a snapshot try', old: "kind === 'spot' ?", new: 'false ?' },
+    { id: 'E4 a spot try keyed like a snapshot try', old: "if (kind !== 'spot') return", new: 'if (true) return' },
+    { id: 'E5 the notes not counted (review 2068 F5)', old: 'rows(drawn?.notes) + ', new: '' },
+    { id: 'E6 the mail not counted (review 2068 F5)', old: ' + rows(drawn?.mailOutstanding)', new: '' },
+    { id: 'E7 a spot try keyed without its rows (review 2068 F5)', old: ':${rows(drawn?.notes) + rows(drawn?.mailOutstanding)}`', new: '`' },
+    { id: 'E8 a spot try keyed without its step', old: '`spot:${Math.floor((depthTokens ?? 0) / SPOT_PROBE_EVERY_TOKENS)}:', new: '`spot:' },
   ],
   suite: emptyTryKeyCases,
+};
+
+const CTX_SINCE_SET: MutantSet<ProbeScheduleModule> = {
+  modulePath: SCHEDULE,
+  mutants: [
+    { id: 'X1 a reading at the compaction line counts', old: 'ctx.value.at > compactedAt.value', new: 'ctx.value.at >= compactedAt.value' },
+    { id: 'X2 an older reading counts', old: 'compactedAt.value === null || ctx.value.at > compactedAt.value ? ctx.value.tokens : null', new: 'ctx.value.tokens' },
+    { id: 'X3 unread lines read as no compaction', old: "if (ctx.kind !== 'measured' || compactedAt.kind !== 'measured') return null;", new: "if (ctx.kind !== 'measured') return null;\n  if (compactedAt.kind !== 'measured') return ctx.value.tokens;" },
+    { id: 'X4 no compaction on record reads nothing', old: 'compactedAt.value === null || ', new: '' },
+    { id: 'X5 an unmeasured reading read as zero', old: "if (ctx.kind !== 'measured' || compactedAt.kind !== 'measured') return null;", new: "if (ctx.kind !== 'measured' || compactedAt.kind !== 'measured') return 0;" },
+  ],
+  suite: ctxSinceCompactionCases,
+};
+
+const BEGUN_SINCE_SET: MutantSet<CompactionsModule> = {
+  modulePath: COMPACTIONS,
+  mutants: [
+    { id: 'B1 every post since counted', old: 'return compactionsSince(lines, from) - compactionsSince(lines.filter((l) => l.at < sinceMs), from);', new: 'return compactionsSince(lines, sinceMs);' },
+    { id: 'B2 no lookback window', old: 'const from = sinceMs - COMPACTION_PAIR_MS;', new: 'const from = sinceMs;' },
+    { id: 'B3 the line at the start taken as before', old: 'lines.filter((l) => l.at < sinceMs)', new: 'lines.filter((l) => l.at <= sinceMs)' },
+    { id: 'B4 everything before the window kept', old: 'return compactionsSince(lines, from) - ', new: 'return compactionsSince(lines, 0) - ' },
+  ],
+  suite: compactionsBegunSinceCases,
+};
+
+const NEWEST_COMPACTION_SET: MutantSet<CompactionsModule> = {
+  modulePath: COMPACTIONS,
+  mutants: [
+    { id: 'N1 a subagent line counted', old: "l.scope === 'main' && l.phase !== 'refused'", new: "l.phase !== 'refused'" },
+    { id: 'N2 a refused line counted', old: "l.scope === 'main' && l.phase !== 'refused'", new: "l.scope === 'main'" },
+    { id: 'N3 the oldest line', old: 'Math.max(...ats)', new: 'Math.min(...ats)' },
+    { id: 'N4 no line reads as zero', old: 'ats.length === 0 ? null', new: 'ats.length === 0 ? 0' },
+  ],
+  suite: newestCompactionAtCases,
 };
 
 const SNAPSHOT_FACTS_SET: MutantSet<CardModule> = {
@@ -909,4 +1082,7 @@ export const PROBE_DOOR_MUTANT_SETS: Record<string, MutantSet<never>> = {
   'server/src/continuity/probeSchedule.ts#roundSnapshotOf': ROUND_SNAPSHOT_SET as MutantSet<never>,
   'server/src/continuity/probeSchedule.ts#emptyTryKey': EMPTY_TRY_SET as MutantSet<never>,
   'server/src/continuity/card.ts#snapshotFactsOf': SNAPSHOT_FACTS_SET as MutantSet<never>,
+  'server/src/continuity/probeSchedule.ts#ctxSinceCompaction': CTX_SINCE_SET as MutantSet<never>,
+  'server/src/continuity/compactions.ts#compactionsBegunSince': BEGUN_SINCE_SET as MutantSet<never>,
+  'server/src/continuity/compactions.ts#newestCompactionAt': NEWEST_COMPACTION_SET as MutantSet<never>,
 };
