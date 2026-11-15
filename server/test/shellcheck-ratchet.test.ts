@@ -1,7 +1,7 @@
 // The shellcheck ratchet (D-7995): most of the box-side machinery is bash, and nothing linted it. A big-bang cleanup
 // would rewrite scripts that work, so this pins what is there and only lets it go down:
 //   - each tracked bash file has a pinned count of warning-level findings in shellcheck-baseline.json;
-//   - `ccd/ccd` and its libraries, every file under `ccd/lib/` but `ccrc-*`, are ONE pin, linted as ONE text (D-8048,
+//   - `ccd/ccd` and its libraries, every `ccd/lib/*.sh` but `ccrc-*`, are ONE pin, linted as ONE text (D-8048,
 //     the file split's Q3): `spliceCcd` puts each library region back at its `# @ccd-lib:` pointer, shellcheck reads
 //     that text once, and each finding is named at the file and line it came from. Summed per file, a split DOES trip
 //     the pin: a variable set in ccd/ccd and read in a library reads as unused in one file and unassigned in the other.
@@ -64,9 +64,10 @@ type Baseline = { shellcheckVersion: string; shellcheckSha256: string; files: Pi
 
 const baseline = JSON.parse(readFileSync(path.join(REPO, BASELINE), 'utf8')) as Baseline;
 
-/** `ccd/ccd` and every file under `ccd/lib/` but the `ccrc-*` ones, which ccd never loads. */
+/** `ccd/ccd` and every `ccd/lib/*.sh` but the `ccrc-*` ones, which ccd never loads: the growth check's
+ *  `isProgramMember`, the same rule. */
 const isProgramFile = (file: string): boolean =>
-  file === 'ccd/ccd' || (file.startsWith('ccd/lib/') && !path.basename(file).startsWith('ccrc-'));
+  file === 'ccd/ccd' || (/^ccd\/lib\/[^/]+\.sh$/.test(file) && !path.basename(file).startsWith('ccrc-'));
 
 const pinKey = (file: string): string => (isProgramFile(file) ? GROUP : file);
 
