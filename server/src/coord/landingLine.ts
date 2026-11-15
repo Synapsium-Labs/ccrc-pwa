@@ -3,9 +3,9 @@
 //
 // - `landingOrder` decides the landing line's order and its head from a project's entries and the project's two flags
 //   (D-7621). The L4 read route reads the project row (`CoordStore.readLanding`) and hands the values in; this file
-//   never sees a project name. An optional `stateWords` input (R4) lets a damaged terminal target stop being outstanding. `afterIds` name ENTRY IDS (`LandingEntry.id`), never PR numbers (D-7613). An after edge
+//   never sees a project name. `afterIds` name ENTRY IDS (`LandingEntry.id`), never PR numbers (D-7613). An after edge
 //   outranks the `fixesMain` jump (D-7622): a fix-main entry that waits on another entry is not taken before it, so the
-//   jump only reorders entries nothing holds back. A `fixesMain` entry is held by `main-red` too (D-7623): inert in 5e,
+//   jump only reorders entries nothing holds back. An optional `stateWords` input (fix round 2, R4) lets a damaged terminal target stop being outstanding. A `fixesMain` entry is held by `main-red` too (D-7623): inert in 5e,
 //   since `mainRedHold` has no writer until 5i, and a question for 5i. AMENDMENT A (D-8625, wave 5i) settles that
 //   question: `mainRedHold` alone no longer pauses the dependency-eligible fixesMain head `landingOrder` already selected
 //   (an ordinary head, an operator pause and a recovery hold still do), and the walk below is untouched.

@@ -120,3 +120,5 @@ Pass: 248 tests, 5 files, rc 0 (full selection of the brief, `--maxWorkers=2`), 
 | (c) exact identity dropped (no one-entry check, any record count >= 1) | 1 failed: "a missing record, a duplicate record and a duplicate entry id stay outstanding" (`expected 1 to be null`); duplicate id is pure-covered only, as the store cannot build it |
 
 Each mutant was restored from the saved copy; `cmp` matched; the unmutated file is the committed one.
+
+A marked terminal target: a stored `landed` target carrying the `stale-episode-head` marker and one damage field settles the edge (H ready, cue queues once, then `duplicate`), consistent with fix round 1's ruling. It was green at the fix, not red-first; 249 tests pass in the 5-file selection.

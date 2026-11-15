@@ -195,6 +195,19 @@ describe('a dependent head behind a damaged terminal target (R4)', () => {
     expect(apply()).not.toMatchObject({ kind: 'queued' });
     expect(cueMails()).toHaveLength(0);
   });
+  it('a landed target with the stale-episode-head marker and a damage field settles the edge: H is ready, its cue queues once', () => {
+    rawRow('landed', null);
+    dependentHead(idOf(5));
+    damageT({ afterIds: 'not-json' });
+    coord.db.exec('PRAGMA ignore_check_constraints = ON');
+    coord.db.prepare("UPDATE landing_entries SET quarantineKind = 'stale-episode-head' WHERE pr = 5").run();
+    coord.db.exec('PRAGMA ignore_check_constraints = OFF');
+    expect(landingFactsOf(coord, P).entries.find((e) => e.pr === 5)!.state).toBe('unknown');
+    expect(binding()).toMatchObject({ ...READY, entryId: idOf(7) });
+    expect(apply()).toMatchObject({ kind: 'queued' });
+    expect(cueMails()).toHaveLength(1);
+    expect(apply()).toEqual({ kind: 'duplicate', holdChanged: false });
+  });
   it('control: a quarantined stored unknown target keeps H blocked, zero cue', () => {
     rawRow('unknown', null);
     dependentHead(idOf(5));
