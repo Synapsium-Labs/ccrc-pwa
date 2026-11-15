@@ -306,6 +306,55 @@ describe('docs-log: a walk that ends short is truncated', () => {
     expect((got.cut['entries'] as LogEntry[]).map((e) => e.sha)).toEqual([c3]);
   });
 
+  it('a buffer cut inside a name keeps only the whole records before it', () => {
+    const dir = freshRepo();
+    const [c1, c2, c3] = many(dir, `${SPECS}/a.md`, 3, 'edit');
+    const got = unitJson<{ full: Answer; cut: Answer }>(h.home, [
+      ...unitArgv(c3!),
+      'full = ask()',
+      ...logPlant([
+        "nl = real.out.index(b'\\n', end)",
+        "cut = nl + 1 + len(b'docs/superpowers/specs/') + 2",
+        'return H.Spawned(None, real.out[:cut], b"", True, False)',
+      ]),
+      "out({'full': full, 'cut': ask()})",
+    ].join('\n'));
+    expect((got.full['entries'] as LogEntry[]).map((e) => e.sha)).toEqual([c3, c2, c1]);
+    expect(got.cut).toMatchObject({ ok: true, truncated: true });
+    expect((got.cut['entries'] as LogEntry[]).map((e) => e.sha)).toEqual([c3]);
+  });
+
+  it('a buffer cut right after the fifth NUL of a record keeps only the whole records before it', () => {
+    const dir = freshRepo();
+    const [c1, c2, c3] = many(dir, `${SPECS}/a.md`, 3, 'edit');
+    const got = unitJson<{ full: Answer; cut: Answer }>(h.home, [
+      ...unitArgv(c3!),
+      'full = ask()',
+      ...logPlant([
+        'j = end',
+        'for _ in range(5):',
+        "    j = real.out.index(b'\\0', j) + 1",
+        'return H.Spawned(None, real.out[:j], b"", True, False)',
+      ]),
+      "out({'full': full, 'cut': ask()})",
+    ].join('\n'));
+    expect((got.full['entries'] as LogEntry[]).map((e) => e.sha)).toEqual([c3, c2, c1]);
+    expect(got.cut).toMatchObject({ ok: true, truncated: true });
+    expect((got.cut['entries'] as LogEntry[]).map((e) => e.sha)).toEqual([c3]);
+  });
+
+  it('a non-zero rc from the log call with no cut answers git-failed, step log', () => {
+    const dir = freshRepo();
+    const [, , c3] = many(dir, `${SPECS}/a.md`, 3, 'edit');
+    const got = unitJson<Answer>(h.home, [
+      ...unitArgv(c3!),
+      ...logPlant(['return H.Spawned(128, b"", b"fatal: planted", False, False)']),
+      'out(ask())',
+    ].join('\n'));
+    expect(got).toMatchObject({ v: 1, verb: 'docs-log', ok: false, failure: 'git-failed', step: 'log', rc: 128 });
+    expect(String(got['stderrHead'])).toContain('fatal: planted');
+  });
+
   it('a shallow repository whose walk ends short answers truncated', () => {
     const dir = freshRepo();
     const [c1, c2, c3] = many(dir, `${SPECS}/a.md`, 3, 'edit');
