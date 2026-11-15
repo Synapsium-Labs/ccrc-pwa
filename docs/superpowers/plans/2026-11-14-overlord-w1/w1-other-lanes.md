@@ -100,7 +100,7 @@ contradicts. The plan builds every recommendation unless the coordinator or the 
 1. **The two words are on `main`, with their Table 11.6 rows** (measured; the brief's ruling). `shared/refusal.ts`'s
    `OVERLORD_REFUSALS` holds `overlord-uses-its-doors` (403) and `overlord-not-a-coordinator` (403), and
    `server/test/single-definition/refusal-table.test.ts` holds both against Table 11.6 in both directions. **Built
-   as:** this plan adds no word to Table 11.6 or to the group, unless question 9's worker arm is ruled in.
+   as:** this plan adds no word to Table 11.6 or to the group.
 2. **"Is this caller the Overlord" has one reader and one matcher** (the brief's ruling). **Recommendation, built
    here:**
    - The reader is designation A's `designationRead()`, read once per call. This plan adds no reader.
@@ -191,20 +191,14 @@ contradicts. The plan builds every recommendation unless the coordinator or the 
 
    If the coordinator rules that the landing and ledger doors join now, each adds one row and one argument, within the
    growth estimates below.
-9. **A run that names the designated session as its worker.** `POST /api/runs`' `sessionId` names an existing
-   workspace for a wave from 2 on, and dispatch then resumes it and injects `/clear`. Nothing on `main` refuses a
-   `sessionId` that is the Overlord's body:
-   - `project-mismatch` reads `coord.sessionProject`, which answers only for a session that has been a worker;
-   - the child gate does not apply, because the Overlord is not a child.
-
-   A coordinator that named it by mistake would clear the Overlord's generation. The spec has no word for this. **Recommendation:**
-   - the same gate refuses it, with a new word `overlord-not-a-worker` (403, "the run names the designated session as
-     its worker");
-   - this pull request adds the word to `OVERLORD_REFUSALS`, its row to Table 11.6 and its entry to
-     `refusal-table.test.ts`'s `W1_GROUP`, as the brief allows ("adds the word's row to Table 11.6 in its own PR");
-   - slug `run-open-refuses-the-overlord-as-worker`.
-
-   It is one step of Task 4, which the coordinator may strike. The gap then goes to the spec-fixes list.
+9. **A run that names the designated session as its worker is already refused** (measured). `POST /api/runs`'
+   `sessionId` names an existing workspace for a wave from 2 on, and dispatch then resumes it and injects `/clear`. A
+   coordinator that named the Overlord's body there by mistake would clear its generation. On `main`, the
+   `notAChild` gate in `OPEN_RUN_GATES` refuses a `sessionId` that names a registry row with no child marker, with
+   `not-a-child` (409): "a session the operator created is never bound as a child". The designate door creates the
+   body with a session create in the `overlord` project, never with `ws-add --child`, so the body carries no child
+   marker. **Built as:** no new word and no new gate. Task 4 adds one case that pins the `not-a-child` refusal for the
+   bound body, so a later change to the child marker cannot open that path unseen.
 10. **A retired body's id is not refused** (the spec says "the designated session"). After a retire the old id is on
     `pastIds` and on `stopsOwed`, and designation A's drain stops it. **Recommendation, built here:** past ids pass, as
     any session does. Refusing them would need a reader of `pastIds` that no other caller has. The body is being
@@ -312,8 +306,7 @@ is in review. Their interfaces are read from their branches and named as such.
 - **Kebab literals.** Lane keys are camelCase (`peerMail`, `runOpen`), so the coord kebab census never reads them as
   codes. The words are admitted through `isOverlordRefusal` (Task 2), never through `NOT_CODES`.
 - **Growth check.** `server/src/coord/routes.ts` is growth-checked. Its net growth is about +22 lines, within the 40-line
-  check, with no waiver (the PR split below). No other growth-checked file changes, unless question 9 adds its word:
-  `shared/refusal.ts` is not growth-checked.
+  check, with no waiver (the PR split below). No other growth-checked file changes.
 - **Mutation floors.** `otherLaneVerdict` joins `MUTANT_SETS` through a new `server/test/sim/otherLanesSets.ts` and
   `server/test/sim/mutation-floors.json`, in this pull request, at the floor its first run measures.
 - **What a merge arms.** Nothing a running session sees or does changes. No designation row exists until the operator
@@ -357,8 +350,6 @@ For scale, the files that are not growth-checked change by about this much:
 | `server/src/coord/openRun.ts` | +16 (one fact, one gate, the `error` arm widened) |
 | `server/src/coord/ledgersRoutes.ts` | +1 (the deps type gains `lane?`; the raise call gains its key) |
 | `server/src/roleOf.ts` | +12, only if question 2 adds `designationFactFrom` |
-| `shared/refusal.ts` | +2, only if question 9 is ruled in |
-| `docs/superpowers/specs/2026-11-09-overlord-design.md` | +1 (Table 11.6), only if question 9 is ruled in |
 | `server/test/routeRegistrations.ts` | +70, new (moved from `box-token-census.test.ts`) |
 | `server/test/box-token-census.test.ts` | −68 (the move: definitions out, one import in) |
 | `server/test/mail-routes.test.ts` | +4 (the guard and its import) |
@@ -465,9 +456,6 @@ export type OtherLaneVerdict =
 export function otherLaneVerdict(lane: OtherLane, callerId: string, designation: DesignationRead): OtherLaneVerdict;
 ```
 
-If question 9 is ruled in, Task 4 adds a second run-open row, `runWorker`, with `overlord-not-a-worker` and the same
-`via`.
-
 **The decider, in order:**
 1. `designation.kind === 'unmeasured'`: refuse `unmeasured`. The detail is: "the Overlord's designation could not be
    read (`<why>`), so `<route>` cannot tell whether this caller is the Overlord; transient, retry".
@@ -488,7 +476,7 @@ on `main`.
   - `unmeasured`: refuse `unmeasured` on every lane, for any caller, with the `why` in the detail.
   - A past id (a retired body): pass (question 10).
   - `OTHER_LANES` is total: every key has a route, a word that `isOverlordRefusal` accepts, and a `via`. No two rows
-    share a route, except the `runOpen` and `runWorker` pair if question 9 adds it.
+    share a route.
   - `REFUSAL_STATUS` gives every row's word 403, and `unmeasured` 502.
 - [ ] **Step 2: Run.** Red.
 - [ ] **Step 3: Implement** the admission in `mail-routes.test.ts`, then `otherLanes.ts` (and `designationFactFrom`, if
@@ -581,8 +569,7 @@ own ownership, run, id or incarnation checks, so the answer names its cause (`ov
 - Modify: `server/src/coord/openRun.ts`:
   - `OpenRunFacts` gains `designation: () => DesignationRead`;
   - `OPEN_RUN_GATES` gains `overlordClaimant` right after `attribution`;
-  - `OpenRunRefusal`'s `error` arm gains `'overlord-not-a-coordinator' | 'unmeasured'` (and `'overlord-not-a-worker'`
-    under question 9).
+  - `OpenRunRefusal`'s `error` arm gains `'overlord-not-a-coordinator' | 'unmeasured'`.
 - Modify: `server/src/coord/routes.ts` (`POST /api/runs` passes `designation: () => coord.designationRead()`)
 - Modify: `server/test/open-run-preconditions.test.ts`:
   - single-gate rows for `overlordClaimant`;
@@ -592,8 +579,6 @@ own ownership, run, id or incarnation checks, so the answer names its cause (`ov
 - Create: `server/test/routeRegistrations.ts` (moved, below)
 - Modify: `server/test/box-token-census.test.ts` (imports the moved helpers; no assertion changes)
 - Create: `server/test/overlord-other-lanes-census.test.ts`
-- Under question 9 only: `shared/refusal.ts` (`overlord-not-a-worker`: 403, in `OVERLORD_REFUSALS`), Table 11.6 in the
-  spec (its row), `refusal-table.test.ts`'s `W1_GROUP` (its entry), and `OTHER_LANES`' `runWorker` row.
 
 **The gate.** `overlordClaimant` runs after `attribution` and before `reviewRead`, the first store read, so a refused
 open leaves no `planned` row and places no hold.
@@ -604,8 +589,7 @@ open leaves no `planned` row and places no hold.
   coordinator corpus (`coordinator-skill.test.ts`), and a coordinator has no recovery for it, for the reason
   `reclaim.ts`' words stay out (slug `overlord-run-refusal-is-an-error-word`).
 - An unattributed open before the switch-over (no `claimedByUuid`) is checked the same way: the gate reads `claimedBy`.
-- **Question 9's arm**, if ruled in: when the body's `sessionId` is present, it asks
-  `otherLaneVerdict('runWorker', sessionId, …)` too, after the claimant's check.
+- A `sessionId` that names the designated body is not this gate's: `notAChild` already refuses it (question 9).
 
 **The route slicer moves.** `registrationsIn`, `routeCallsIn` and `ALL_VERBS` move from `box-token-census.test.ts` into
 `server/test/routeRegistrations.ts`, which also exports `handlerBody(src, key)`: the slice from a route's registration
@@ -641,14 +625,14 @@ read one list. The move commit changes only `box-token-census.test.ts`' imports 
   - In the routes suite: the bound session opens a run and gets 403 `overlord-not-a-coordinator`. No run row and no
     hold are written.
   - The census, as above.
-  - Under question 9: a coordinator's open whose `sessionId` is the bound body is refused `overlord-not-a-worker`,
-    before any store read.
+  - A pin, green from the start (question 9): a coordinator's open whose `sessionId` is the bound body, a registry row
+    with no child marker, is refused `not-a-child` (409), and no run row is written.
 - [ ] **Step 3: Run.** Red.
 - [ ] **Step 4: Implement** the gate, the fact, the `error` arm and the census.
 - [ ] **Step 5: Run** these, green:
   - the census, `open-run-preconditions`, `runs-attribution-switch`, `collect-open-run-hold`, `coord-attribution`;
   - `overlord-other-lanes-pin` (unedited) and `overlord-other-lanes-routes`;
-  - `box-token-census`, `single-definition/refusal-table` (under question 9), `rings/*.test.ts`, `sim/mutation-floors`;
+  - `box-token-census`, `single-definition/refusal-table`, `rings/*.test.ts`, `sim/mutation-floors`;
   - `growth-check` armed, and both `tsc` runs.
 - [ ] **Step 6: Red check.** Each change below reds a case. Revert each.
   - Delete the `'claimRelease'` argument: census assertion 1, and the routes case.
@@ -699,7 +683,8 @@ The coordinator passes these to the index's next fix round.
   - Table 11.1e's "the deny set is the guard": `OVERLORD_DENY_RULES` is not on `main` and no W1 piece creates it, so in
     W1 the guard is the launch profile's deny rules (sandbox A);
   - "peer mail" means every send by the designated session, run mail included (question 5);
-  - the run that names the designated session as its worker (question 9), whether or not it is ruled into W1.
+  - §3.5's server bullet can add that a run naming the designated session as its worker is refused already, by
+    `not-a-child` (question 9).
 
 ## Deviations found
 
@@ -720,8 +705,6 @@ the numbers.
   `refuseRoute`, not as a `RunRefuseCode` `refused` word.
 - **`unnamed-write-doors-classified`**: A5's "every other write lane" is held by a census that classifies every
   box-token write door. Only the spec's five lanes and run open refuse in W1 (question 8).
-- **`run-open-refuses-the-overlord-as-worker`**: only if ruled in (question 9). A new word, `overlord-not-a-worker`,
-  with its Table 11.6 row.
 - **`one-designation-narrowing`**: only if designation A ships no shared narrowing from the read to the fact. This
   piece adds `designationFactFrom` and reports the inline copies (question 2).
 - **`route-slicer-shared`**: the box-token census's route slicer moves to a shared test helper, unchanged, so the two
@@ -742,8 +725,7 @@ the numbers.
 **Waiting on the operator:** nothing.
 
 **Waiting on the coordinator:**
-- The recommendations of questions 2, 3 and 5 to 8 and 10.
-- Question 9: whether run open also refuses the designated session as a worker, with a new word.
+- The recommendations of questions 2, 3, 5 to 8 and 10. Question 9 needs no ruling: `main` already refuses it.
 - Question 8's list of write doors with nothing but the launch profile behind them: whether any joins W1.
 - The index changes above.
 
