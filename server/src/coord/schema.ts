@@ -3127,6 +3127,39 @@ export const MIGRATIONS: readonly string[] = [
   `
   INSERT INTO lane_arm_settings (lane, choice, updatedAt) VALUES ('anchor-slot', 'shadow', 0);
   `,
+  // ── 75: user_version 74 -> 75 ─────────────────────────────────────────────
+  // The replay quiz (Overlord spec §3.3.9 C52, §12 M13; W1a, plan `w1a-replay-quiz.md` Task 1; W0-28 ruled B):
+  // `continuity_quiz_runs`, one row per replay quiz run the operator ran by hand and recorded. ONE writer,
+  // `continuity/quizStore.ts#insertQuizRun`, which sets `baseline` by `continuity/quiz.ts#quizBaseline` in its own
+  // transaction. A row holds the score and its interval only, never a PASS or a benefit. `reportSha` is unique, so a resend
+  // is one row.
+  //
+  // A NEW TABLE, nothing on an existing table: an older build opening a file at `user_version 75` takes rule 3 (it warns,
+  // reads as-is and migrates nothing), never names the table, and boots. Every earlier entry is frozen. RE-MEASURE the slot
+  // before the PR and before merge (it must print 74 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE continuity_quiz_runs (
+    id            INTEGER PRIMARY KEY,
+    measuredAt    INTEGER NOT NULL,     -- wall ms the quiz was measured (the report's)
+    recordedAt    INTEGER NOT NULL,     -- wall ms the row was written
+    recordedBy    TEXT NOT NULL,        -- who recorded it (attribution, not authentication)
+    reportSha     TEXT NOT NULL UNIQUE, -- the report's sha256
+    questionsSha  TEXT NOT NULL,        -- the frozen question list's sha256
+    questions     INTEGER NOT NULL,
+    families      INTEGER NOT NULL,
+    score         REAL NOT NULL,
+    lo            REAL NOT NULL,        -- the score's interval
+    hi            REAL NOT NULL,
+    judgeModel    TEXT NOT NULL,
+    ccrcRelease   TEXT NOT NULL,
+    claudeBuilds  TEXT NOT NULL,        -- the Claude Code builds, a JSON list
+    steerArmed    TEXT NOT NULL,        -- yes | no | partial | unmeasured (QuizArmed)
+    agentsOnArmed TEXT NOT NULL,        -- yes | no | partial | unmeasured (QuizArmed)
+    baseline      INTEGER NOT NULL      -- 1 for M13's baseline (quizBaseline), else 0
+  );
+  `,
 ];
 
 /** The version this build writes. `MIGRATIONS.length` and nothing else: a

@@ -728,9 +728,10 @@ describe('coord.db: migration 4 — runs.dispatchStartedAt', () => {
     // and MIGRATIONS[70] (plain_memory_settings and the launch-profile lane-arm row, Overlord W1a launch profiles PR B)
     // and MIGRATIONS[71] (continuity_notes and continuity_handovers, the note door, Overlord W1a)
     // and MIGRATIONS[72] (continuity_probes and continuity_reads, the probe door, Overlord W1a)
-    // and MIGRATIONS[73] (the anchor-slot lane-arm row, the anchor, Overlord W1a).
-    expect(COORD_SCHEMA_VERSION).toBe(74);
-    expect(MIGRATIONS.length).toBe(74);
+    // and MIGRATIONS[73] (the anchor-slot lane-arm row, the anchor, Overlord W1a)
+    // and MIGRATIONS[74] (continuity_quiz_runs, the replay quiz, Overlord W1a).
+    expect(COORD_SCHEMA_VERSION).toBe(75);
+    expect(MIGRATIONS.length).toBe(75);
   });
 
   it('is ADDITIVE: every column migration 1 wrote is still on the table, unchanged', () => {
@@ -829,8 +830,9 @@ describe('coord.db: migration 11 — runs.kind and runs.reviews (design 2026-09-
     // and MIGRATIONS[70] (plain_memory_settings, launch profiles PR B)
     // and MIGRATIONS[71] (continuity_notes and continuity_handovers, Overlord W1a)
     // and MIGRATIONS[72] (continuity_probes and continuity_reads, Overlord W1a)
-    // and MIGRATIONS[73] (the anchor-slot lane-arm row, Overlord W1a); the migration above is still entry 11.
-    expect(COORD_SCHEMA_VERSION).toBe(74);
+    // and MIGRATIONS[73] (the anchor-slot lane-arm row, Overlord W1a)
+    // and MIGRATIONS[74] (continuity_quiz_runs, the replay quiz, Overlord W1a); the migration above is still entry 11.
+    expect(COORD_SCHEMA_VERSION).toBe(75);
     const row = db.prepare('SELECT kind, reviews FROM runs').get() as { kind: string; reviews: number | null };
     expect(row).toEqual({ kind: 'work', reviews: null });
     db.close();

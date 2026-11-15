@@ -57,5 +57,7 @@
   "server/src/coord/stall.ts#timerHoldUntil": 1,
   "server/src/continuity/anchor.ts#renderAnchor": 1,
   "server/src/continuity/anchor.ts#anchorGeneration": 1,
-  "server/src/continuity/anchor.ts#anchorAnswer": 1
+  "server/src/continuity/anchor.ts#anchorAnswer": 1,
+  "server/src/continuity/quiz.ts#quizBaseline": 1,
+  "server/src/continuity/quiz.ts#validQuizReport": 1
 }
