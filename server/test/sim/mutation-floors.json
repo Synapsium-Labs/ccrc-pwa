@@ -37,6 +37,10 @@
   "server/src/continuity/probeSchedule.ts#spotFactsOf": 1,
   "server/src/continuity/probeSchedule.ts#roundSnapshotOf": 1,
   "server/src/continuity/probeSchedule.ts#emptyTryKey": 1,
+  "server/src/continuity/probeSchedule.ts#ctxSinceCompaction": 1,
+  "server/src/continuity/compactions.ts#compactionsBegunSince": 1,
+  "server/src/continuity/compactions.ts#newestCompactionAt": 1,
+  "server/src/continuity/compactions.ts#compactionInFlight": 1,
   "server/src/continuity/card.ts#snapshotFactsOf": 1,
   "server/src/continuity/generationStart.ts#startVerdict": 1,
   "server/src/continuity/generationStart.ts#waveBoundaryOf": 1,
@@ -61,5 +65,8 @@
   "server/src/continuity/quiz.ts#quizBaseline": 1,
   "server/src/continuity/quiz.ts#validQuizReport": 1,
   "server/src/continuity/quiz.ts#quizLaneVerdict": 1,
-  "server/src/continuity/quiz.ts#quizWeek": 1
+  "server/src/continuity/quiz.ts#quizWeek": 1,
+  "shared/poolrule.ts#poolRule": 1,
+  "shared/poolset.ts#poolSetSpelling": 1,
+  "shared/poolset.ts#parsePoolSet": 1
 }
