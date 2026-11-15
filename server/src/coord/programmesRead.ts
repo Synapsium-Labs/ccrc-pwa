@@ -10,7 +10,9 @@
 import type {
   ProgrammeEnding, ProgrammePendingClose, ProgrammeRow, ProgrammesAnswer, ProgrammeWaves, RunClosedBy, StuckReason,
 } from '../../../shared/api.js';
-import { WAVE_BUCKET, programmeCurrentWave, type WaveBucket, type WaveFact } from '../../../shared/programmes.js';
+import {
+  NEVER_STARTED_DETAIL, WAVE_BUCKET, programmeCurrentWave, waveRepresentative, type WaveBucket, type WaveFact,
+} from '../../../shared/programmes.js';
 import type { RunsDb } from './runsPage.js';
 import type { RunLastMovesRead } from './runWire.js';
 import type { RunVerdicts } from './runVerdicts.js';
@@ -23,7 +25,6 @@ export const PROGRAMMES_SINCE_MAX_MS = 48 * 3_600_000;
 export const PROGRAMMES_FINISHED_WINDOW_MS = PROGRAMME_GONE_KEEP_MS;
 
 const CLOSED_BY: readonly string[] = ['coordinator', 'operator', 'sweep'];
-const NEVER_STARTED_DETAIL = 'abandon:never-started';
 
 interface GroupRow {
   program: string; title: string; wave: number; kind: string; state: string; claimedBy: string | null;
@@ -93,16 +94,18 @@ export function readProgrammes(db: RunsDb, opts: { since: number; now: number },
   return { ok: true, programmes, closedToday };
 }
 
-/** Each work wave's bucket: its newest open work run, else its newest work run. */
+/** Each work wave's bucket, from the group `waveRepresentative` picks (`shared/programmes.ts`). Every run in a group shares
+ *  one state, so the group's newest id and whether it holds open ids stand for its runs. */
 function wavesOf(gs: readonly GroupRow[]): { counts: ProgrammeWaves; facts: WaveFact[] } {
-  const byWave = new Map<number, GroupRow>();
+  const groupsOf = new Map<number, { id: number; open: boolean; g: GroupRow }[]>();
   for (const g of gs) {
     if (g.kind !== 'work') continue;
-    const cur = byWave.get(g.wave);
-    const open = g.openIds !== null;
-    const curOpen = cur !== undefined && cur.openIds !== null;
-    if (cur === undefined || (open && !curOpen) || (open === curOpen && g.maxId > cur.maxId)) byWave.set(g.wave, g);
+    const list = groupsOf.get(g.wave) ?? [];
+    list.push({ id: g.maxId, open: g.openIds !== null, g });
+    groupsOf.set(g.wave, list);
   }
+  const byWave = new Map<number, GroupRow>();
+  for (const [wave, list] of groupsOf) byWave.set(wave, waveRepresentative(list)!.g);
   const counts: ProgrammeWaves = { working: 0, waiting: 0, queued: 0, done: 0, failed: 0 };
   const facts: WaveFact[] = [];
   for (const [wave, g] of byWave) {
