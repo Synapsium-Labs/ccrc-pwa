@@ -1174,8 +1174,8 @@ export function runDoctor(home: string, args: string[] = ['doctor'], extraEnv: N
 export const SHIPPED_SKILLS = [['coordinator-skill', 'ccrc-coordinator'], ['worker-skill', 'ccrc-worker'], ['reviewer-skill', 'ccrc-reviewer'], ['history-skill', 'ccrc-history'], ['linear-skill', 'ccrc-linear']] as const;
 
 /** The one skill staged once per box rather than per home (Overlord W1): its shipped tree, and where `_check_skills`
- *  measures the staged copy, relative to `$HOME`. It is owed beside a registry only, and `healthy()` builds the
- *  no-registry box, so a case that wants it plants the registry and this copy itself. */
+ *  measures the staged copy, relative to `$HOME`. It is owed where the spine staged the other skill trees
+ *  (`~/.cc-sessions/coordinator-skill`), which `healthy()` does not plant, so a case that wants it plants both. */
 export const STAGED_SKILL = ['overlord-skill', '.cc-sessions/overlord-skill'] as const;
 
 /** The hook installer a fixture tree carries beside the doctor file, and the approved event set as an INDEPENDENT

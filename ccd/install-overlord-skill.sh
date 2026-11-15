@@ -51,8 +51,10 @@ if [[ -d "$DEST" ]] && diff -r -q "$SRC" "$DEST" >/dev/null 2>&1; then exit 0; f
 tmp="$DEST.tmp.$$"
 old="$DEST.old.$$"
 rm -rf "$tmp"
-if ! { mkdir -p "$(dirname "$DEST")" && mkdir -p "$tmp" && cp -a "$SRC/." "$tmp/"; }; then
-  rm -rf "$tmp"; echo "install-overlord-skill: could not stage into $(dirname "$DEST")" >&2; exit 1
+# The parent by parameter expansion, not `dirname`: the install spine runs under a contained PATH in its tests.
+parent="${DEST%/*}"; [[ -n "$parent" ]] || parent=/
+if ! { mkdir -p "$parent" && mkdir -p "$tmp" && cp -a "$SRC/." "$tmp/"; }; then
+  rm -rf "$tmp"; echo "install-overlord-skill: could not stage into $parent" >&2; exit 1
 fi
 
 if [[ -e "$DEST" ]]; then

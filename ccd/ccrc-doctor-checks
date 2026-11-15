@@ -3431,10 +3431,10 @@ _check_skills() {
     done
   done <<< "$rows"
   # The Overlord's skill is staged once, outside every home (Overlord W1); `install-overlord-skill.sh` is its one writer.
-  # It is owed beside a registry only: `_inst_skills` creates `~/.cc-sessions` on every role it serves, so a box with no
-  # registry was never installed, and its homes' own missing skills say so above.
+  # It is owed where the spine staged the other skill trees: `_inst_skills` (and deploy.sh's fallback) places
+  # `coordinator-skill` beside it on every run, so a box without that tree was never installed by either lane.
   local reg="$HOME/.cc-sessions" staged="" said_staged=""
-  if [ -d "$reg" ]; then
+  if [ -d "$reg/coordinator-skill" ]; then
     staged="$reg/overlord-skill"; said_staged=", and the staged ccrc-overlord copy"
     if [ ! -d "$staged" ]; then stale+=("ccrc-overlord: staged copy missing")
     elif ! diff -r -q "$tree/overlord-skill" "$staged" >/dev/null 2>&1; then stale+=("ccrc-overlord: staged copy differs"); fi
@@ -3509,8 +3509,8 @@ _fix_skills() {
     done
     n=$((n + 1)); list="$list${list:+, }$id"
   done <<< "$rows"
-  # The staged Overlord skill, beside a registry only, as `_check_skills` measures it.
-  if [ -d "$HOME/.cc-sessions" ]; then
+  # The staged Overlord skill, where the spine staged the other trees, as `_check_skills` measures it.
+  if [ -d "$HOME/.cc-sessions"/coordinator-skill ]; then
     said="$(CCRC_SKILL_SRC="$tree/overlord-skill" "${BASH:-bash}" "$tree/install-overlord-skill.sh" 2>&1)" || { echo "FIX skills: refused — $tree/install-overlord-skill.sh said: ${said##*$'\n'}"; return 1; }
     list="$list, and staged ccrc-overlord"
   fi

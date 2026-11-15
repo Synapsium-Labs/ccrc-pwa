@@ -131,7 +131,8 @@ describe('doctor converges a box that lost the staged copy', () => {
 
   it('a box without it FAILs by name, and --fix stages it again', () => {
     const home = healthy('ccrc-doctor-overlord-skill-');
-    // healthy() is the no-registry box; a fleet box has a registry, and the staged copy beside it, as `ccrc install` leaves it.
+    // healthy() plants no staged trees; an installed fleet box has them, the staged copy beside them, as `ccrc install` leaves it.
+    fs.cpSync(path.join(REPO, 'ccd', 'coordinator-skill'), path.join(home, '.cc-sessions', 'coordinator-skill'), { recursive: true });
     fs.cpSync(path.join(REPO, 'ccd', STAGED_SKILL[0]), stagedIn(home), { recursive: true });
     expect(lineFor(runDoctor(home).stdout, 'skills')).toMatch(/^PASS skills: .*, and the staged ccrc-overlord copy$/);
     fs.rmSync(stagedIn(home), { recursive: true });
@@ -146,12 +147,13 @@ describe('doctor converges a box that lost the staged copy', () => {
     for (const f of files(SRC)) expect(fs.readFileSync(path.join(stagedIn(home), f)), f).toEqual(fs.readFileSync(path.join(SRC, f)));
   }, HEAVY);
 
-  it('a box with no registry owes no staged copy, and --fix makes no registry', () => {
+  it('a box the spine never staged owes no staged copy, even with a registry, and --fix stages none', () => {
     const home = healthy('ccrc-doctor-overlord-noreg-');
+    fs.mkdirSync(path.join(home, '.cc-sessions', 'pools'), { recursive: true });   // a registry, as the pools cases plant one
     expect(lineFor(runDoctor(home).stdout, 'skills')).toMatch(/^PASS skills: 1\/1 homes carry the shipped .*ccrc-linear$/);
     for (const t of ['rm', 'mkdir', 'mv', 'cp', 'date', 'basename', 'dirname']) linkReal(home, t);
     expect(runDoctor(home, ['doctor', '--fix']).code).toBe(0);
-    expect(fs.existsSync(path.join(home, '.cc-sessions')), '--fix created a registry').toBe(false);
+    expect(fs.existsSync(stagedIn(home)), '--fix staged a copy the spine never owed').toBe(false);
   }, HEAVY);
 
   it('the shipped tree without the overlord skill is a FAIL naming it', () => {
