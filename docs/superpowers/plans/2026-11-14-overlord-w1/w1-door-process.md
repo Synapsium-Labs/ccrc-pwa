@@ -344,8 +344,15 @@ Measured on `main` at `04dd17659` (2026-11-15), and on the open branches named.
     mint voids it with no write. A nonce hash binds at most one generation (a unique column), so a typed `/clear`, which
     starts a conversation without a spawn, finds its nonce spent.
 - **The door process sends one call at a time** (ruled, F7). Every call, the claim included, runs through one promise
-  chain, so at most one claim is in flight and writes reach the server in counter order. The counter rises by one
-  before each fenced send and is never reused. So gates B can read a lower counter after a higher one as a fork.
+  chain, so at most one claim is in flight and only one write is ever on the wire: writes reach the server in counter
+  order. The counter rises by one before each fenced send and is never reused. So gates B can read a lower counter after
+  a higher one as a fork. There is no term header (ruled, F6): the server compares the term itself.
+- **The card tool is fenced** (gates B's `card-record-is-fenced`, F9; coordinator mail of fix round 1). For the
+  designated session, the card page that completes a full read is a write (gates B's row `card-record`), so `card` is
+  the one `view` tool that presents the key, the generation, the counter and, from B1, the operation key. It presents
+  them on every page, because the door process cannot tell which page completes the read. The server consumes the
+  counter only on the recording page; a counter it never consumed is a gap, which `advanceActCounter` accepts (it needs
+  only a value above the stored one), never a fork.
 - **ccd.**
   - **Zero new ccd verbs.** The spawn step and the purge are internal functions of the spawn and purge paths. SAFETY:
     no verb, so nothing to forbid; they write and remove only `$REG/.door/<id>/`'s named files, refuse a symlinked
@@ -766,7 +773,7 @@ the counter and the witness key.
 
 | Tool | `ccrc-api` argv | Body on stdin | Class | Fenced |
 |---|---|---|---|---|
-| `card` | `card --door [--page N] [--hash H]` | none | `view` | yes: the page that records the read is a write (gates B, question 12) |
+| `card` | `card --door [--page N] [--hash H]` | none | `view` | yes, on every page: the page that records a full read is a write (gates B's `card-record`, F9) |
 | `probe` | `probe --door [--page N]` | none | `view` | no |
 | `probe_answer` | `probe answer --json -` | the answers | `operate` | yes |
 | `note_add` | `note add <self> --json -` | the note | `operate` | yes |
@@ -815,6 +822,9 @@ the line.
       produce one claim, and their sends reach the stub in counter order;
     - no child's environment holds `CCRC_DOOR_NONCE`; a fenced call's child carries the key and a counter one above the
       last; an unfenced call's carries neither;
+    - the `card` tool presents the key, the generation and a counter one above the last on every page it reads (page 1,
+      a middle page and the last page, each a case), and a `probe` or `note_list` call between two card pages takes no
+      counter (gates B's F9);
     - `renewing` keeps the nonce and retries with the back-off (a fake clock); `stale-generation` drops it, and reads
       still serve;
     - the process's whole stdout and stderr, across every case and a malformed JSON-RPC line, hold neither secret;
@@ -824,7 +834,8 @@ the line.
     reaches the row's route with the row's query and body (one case a row).
   - `door-tools.test.ts`: every `verb` is a `ROUTES` key; every name is the skill's door name with spaces as `_`, or is
     on the named list `DOOR_ONLY_TOOLS` (`probe`, `note_handover`, each with its reason: `starting.md`'s table lacks
-    them, and the index passes them to the skill's owner) (ruled, F26); `reader` is true on no row in A2.
+    them, and the index passes them to the skill's owner) (ruled, F26); `reader` is true on no row in A2; `card` is the
+    one `view` row with `fenced: true`, and every `operate` row is fenced.
   - `ccrc-api-act-key.test.ts`: with `CCRC_ACT_KEY` set, the stdin config carries the three headers and the argv none; a
     malformed key adds nothing. `ccrc-api-closed.test.ts` still holds (no new argument is a URL; `--door` is a flag).
   - `continuity-probe-door.test.ts`: the `door=1` tail names no shell command; the default tail is unchanged.
@@ -835,8 +846,8 @@ the line.
 - [ ] **Step 2: Run them, and see them fail.**
 - [ ] **Step 3: Implement.** The process imports only `node:child_process`, `node:fs`, `node:crypto` and `node:path`.
 - [ ] **Step 4: Run them, and see them pass.** By hand: keep the nonce in the environment (the child case fails); send
-  the key on an unfenced call (fails); reuse a counter after a failed send (fails); run two calls without the chain (the
-  order case fails). Restore each from a saved copy. `FIRST_PROMPT_OF_ROLE` joins `MUTANT_SETS` (each row swapped).
+  the key on an unfenced call (fails); set `card`'s `fenced` to false (the card cases fail); reuse a counter after a
+  failed send (fails); run two calls without the chain (the order case fails). Restore each from a saved copy. `FIRST_PROMPT_OF_ROLE` joins `MUTANT_SETS` (each row swapped).
 - [ ] **Step 5: The live step**, recorded in the pull request: in a scratch session the builder starts on the pinned
   build, kill the door process and record whether Claude Code restarts a dead stdio tool server (question 7).
 - [ ] **Step 6: Commit** `feat(ccd): the door process with ccrc-api inside, its argv builders, and the first line's text (Overlord W1 door process A2)`.
@@ -979,8 +990,8 @@ true` (question 9).
     `Stop` with background work does not; a prompt holding three nudge lines sends three pick-ups, and a line that
     differs by one character sends none; a stub that hangs is cut at the bound and the tool call goes on; hookstate is
     unchanged by every report.
-  - `door-process.test.ts`: a fenced call's child carries `CCRC_WITNESS_KEY` equal to the hook's key; an unfenced one
-    carries none; `read` refuses a door not marked `reader` and lists none in B1.
+  - `door-process.test.ts`: a fenced call's child carries `CCRC_WITNESS_KEY` equal to the hook's key, a `card` page
+    included (gates B's F9); an unfenced one carries none; `read` refuses a door not marked `reader` and lists none in B1.
   - The refusal-table test: `unknown-message` is on its exception list with its wave.
   - `writers-map.test.ts`: `continuity_hook_reports: [insertHookReport]`, `continuity_witness_checks:
     [recordWitnessCheck]`.
@@ -1241,6 +1252,8 @@ None found in the tree yet. These are the decisions this plan takes, by slug. Th
 - **`lost-door-process-waits-for-a-renewal`** (question 7).
 - **`closed-book-reads-the-ledger`**.
 - **`first-prompt-chosen-by-role`**: the renewal act's two delivery sites take `FIRST_PROMPT_OF_ROLE`.
+- **`card-tool-fenced-on-every-page`**: gates B fences only the card's recording page; the door process presents the
+  fence on every card page, since it cannot tell which page records, and the unconsumed counters are gaps.
 
 ## Where things stand
 
@@ -1251,7 +1264,9 @@ None found in the tree yet. These are the decisions this plan takes, by slug. Th
 - The claim binds the newest recorded start, and waits for its mint with `renewing`.
 - Gates B owns the witness step; this piece ships its verdict, recorder, port binding and latch.
 - The counter lives in `continuity_act_keys`, reached through gates B's guarded adapter; the door process sends one call
-  at a time; no term header.
+  at a time, so one write at a time; no term header.
+- The card tool presents the key, the counter and the operation key on every page, because its recording page is fenced
+  (gates B's F9).
 - The first prompt is designation A's `INJECTED_PROMPTS` row; door process A2 re-texts it, and the designation plan says
   so (edited in this pull request).
 - Closed-book is graded from the read ledger. `PreModelSwitch` is report-only.
