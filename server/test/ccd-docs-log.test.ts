@@ -767,6 +767,49 @@ describe('docs-log: history git config would hide (refinement (e))', () => {
     expect(entriesOf(o).map((e) => e.sha)).toEqual([edit, root]);
   });
 
+  it('a commit that git prints without names at the newest position is read past', () => {
+    const dir = freshRepo();
+    const root = commitDocs(h, dir, { [`${VISION}/a.md`]: 'one\n' }, 'the doc root');
+    fs.writeFileSync(path.join(dir, '.gitmodules'), `[submodule "sub"]\n\tpath = ${VISION}/sub\n\turl = ./nowhere\n\tignore = all\n`);
+    h.git(dir, 'add', '--', '.gitmodules');
+    h.git(dir, 'commit', '-q', '-m', 'declare the submodule');
+    const edit = touch(dir, `${VISION}/a.md`, 'two', 'edit the doc');
+    h.git(dir, 'update-index', '--add', '--cacheinfo', `160000,${'1'.repeat(40)},${VISION}/sub`);
+    h.git(dir, 'commit', '-q', '-m', 'add the gitlink');
+    h.git(dir, 'update-index', '--cacheinfo', `160000,${'2'.repeat(40)},${VISION}/sub`);
+    h.git(dir, 'commit', '-q', '-m', 'bump the gitlink');
+    const bump = head(dir);
+    // CONTROL: git itself starts its output with the newest commit (a gitlink bump) and prints no name for it or for
+    // the commit below it, so the record the parser meets first is the nameless shape.
+    const raw = h.git(dir, '-c', 'log.showRoot=true', 'log', '--no-merges', '--format=%H%x00%P%x00%cI%x00%an%x00%s', '-z', '--name-only', '--', VISION);
+    expect(raw.startsWith(`${bump}\0`)).toBe(true);
+    expect(raw).not.toContain(`${VISION}/sub`);
+    const o = answer(bump, 'vision', 'a.md');
+    expect(o).toMatchObject({ ok: true, section: 'vision', truncated: false });
+    expect(entriesOf(o).map((e) => e.sha)).toEqual([edit, root]);
+  });
+
+  it('a root commit that git prints without names, as the last record, is read past', () => {
+    const dir = freshRepo();
+    // The root holds only the declaration (outside the section) and the gitlink: it prints no name in the section.
+    fs.writeFileSync(path.join(dir, '.gitmodules'), `[submodule "sub"]\n\tpath = ${VISION}/sub\n\turl = ./nowhere\n\tignore = all\n`);
+    h.git(dir, 'add', '--', '.gitmodules');
+    h.git(dir, 'update-index', '--add', '--cacheinfo', `160000,${'1'.repeat(40)},${VISION}/sub`);
+    h.git(dir, 'commit', '-q', '-m', 'the nameless root');
+    const root = head(dir);
+    const first = touch(dir, `${VISION}/a.md`, 'one', 'add the doc');
+    const second = touch(dir, `${VISION}/a.md`, 'two', 'edit the doc');
+    // CONTROL: git's output ends with the root's record and no name: the sha is there, the gitlink's path is not.
+    const raw = h.git(dir, '-c', 'log.showRoot=true', 'log', '--no-merges', '--format=%H%x00%P%x00%cI%x00%an%x00%s', '-z', '--name-only', '--', VISION);
+    expect(raw).toContain(`${root}\0`);
+    expect(raw).not.toContain(`${VISION}/sub`);
+    expect(raw.lastIndexOf(root)).toBeGreaterThan(raw.lastIndexOf(first));
+    expect(raw.slice(raw.lastIndexOf(root))).toMatch(/^[0-9a-f]{40}\0\0[^\0]*\0[^\0]*\0the nameless root\0?\n?$/);
+    const o = answer(second, 'vision', 'a.md');
+    expect(o).toMatchObject({ ok: true, section: 'vision', truncated: false });
+    expect(entriesOf(o).map((e) => e.sha)).toEqual([second, first]);
+  });
+
   it('a section path that was once a file still lists the doc\'s history', () => {
     const dir = freshRepo();
     commitDocs(h, dir, { [VISION]: 'once a file\n' }, 'vision as a file');
