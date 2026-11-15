@@ -423,7 +423,7 @@ export interface DiskReq { t: 'req'; id: number; op: 'disk' }
  *  Every argument failure is answered `ok: true` with `kind: 'refused'` and the node's `fleetIdentity`, never
  *  `bad-request`, which from this op means "the agent predates it". */
 export interface TestboxAdminReq { t: 'req'; id: number; op: 'testbox-admin'; sub: TestboxAdminSub; fields: TestboxAdminFields }
-export type AgentReq = ExecReq|ReadReq|ReadFromReq|ReadB64Req|ReaddirReq|StatReq|LstatReq|WriteB64Req|TailOpenReq|TailCloseReq|PtyOpenReq|CapsReq|UpdateReq|TokenSyncReq|AccountOpReq|DiskReq|PressureReq|TestboxReq|TestboxToolsSyncReq|TestboxAdminReq|BackupReq;
+export type AgentReq = ExecReq|ReadReq|ReadFromReq|ReadB64Req|ReaddirReq|StatReq|LstatReq|WriteB64Req|TailOpenReq|TailCloseReq|PtyOpenReq|CapsReq|UpdateReq|TokenSyncReq|AccountOpReq|DiskReq|PressureReq|TestboxReq|TestboxToolsSyncReq|TestboxAdminReq|BackupReq|OverlordHistoryReq;
 export interface ResOk  { t: 'res'; id: number; ok: true;  [k: string]: unknown } // op-specific payload fields below
 /** `detail` is ADDITIVE (design 2026-09-20 §10, D-3373): what an
  *  agent can say beyond the word — the `--detach` parent's first stderr line,
@@ -1167,3 +1167,18 @@ export const BACKUP_OP = 'backup';
 /** The `backup` op's reply: exactly what the decider takes, in this one type. */
 export type BackupOpReply = BackupRead;
 import type { BackupRead } from './backup.js';
+
+// ── the `overlord-history` op (Overlord W1, w1-board-history.md Task 3; spec 2026-11-09 §3.2, C47) ──
+// `ccrc history`'s three read verbs over every project, run by the agent in a worker thread with one slot. The request is
+// shared/overlordHistory.ts' `OverlordHistoryRequest`, read by `readOverlordHistoryRequest` in `validateReq`; a request it
+// refuses is answered `ok: true` as `{outcome: 'request-refused', word}`, so `bad-request` keeps meaning "this agent
+// predates the op". Every answer, refusals and failures included, is an `OverlordHistoryAnswer` on `ResOk`, read by
+// `readOverlordHistoryAnswer`. ADDITIVE: no `FLEET_PROTO` bump; an agent that predates it never lists the word in
+// `ready.ops`, so the server never sends it the op.
+
+/** ONE member of the `req` envelope: the request's fields beside the envelope's. */
+export interface OverlordHistoryReq extends OverlordHistoryRequest { t: 'req'; id: number; op: 'overlord-history' }
+
+/** The op's name, and the word an agent that serves the history store lists in `ready.ops` (Task 4). */
+export const OVERLORD_HISTORY_OP = 'overlord-history';
+import type { OverlordHistoryRequest } from './overlordHistory.js';

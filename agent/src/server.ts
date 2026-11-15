@@ -50,6 +50,9 @@ import { measureDisk, type DiskSeams } from './disk.js';
 import { measureHeadroom, measurePressure, type PressureSeams } from './pressure.js';
 import { measureBackup, type BackupSeams } from './backup.js';
 import { measureTestbox, syncTestboxTools, type TestboxOpSeams } from './testboxOp.js';
+import { createHistoryOp, realHistoryOpSeams, type HistoryOp, type HistoryOpSeams } from './historyOp.js';
+import { readOverlordHistoryRequest, type OverlordHistoryRequestRefusal } from '../../shared/overlordHistory.js';
+import type { OverlordHistoryReq } from '../../shared/agent-protocol.js';
 import { parseBuildInfo, type BuildInfo } from '../../shared/buildinfo.js';
 import { bodyDigest } from '../../shared/mark.mjs';
 import { boundedSpawn } from '../../shared/spawn.mjs';
@@ -105,6 +108,7 @@ export interface AgentOpts {
   pressureSeams?: Partial<PressureSeams>; // default: the two /proc/pressure files — tests inject the text (#1170)
   backupSeams?: Partial<BackupSeams>; // default: this process's environment — tests inject CCRC_BACKUP_STATE_DIR (D-7858)
   testboxSeams?: Partial<TestboxOpSeams>; // default realTestboxSeams() — tests inject the agent's PATH and the clock (D-7411)
+  historySeams?: Partial<HistoryOpSeams>; // default realHistoryOpSeams() — tests inject the worker resolver, the deadline and the platform (Overlord W1)
 }
 
 export interface RunningAgent {
@@ -478,6 +482,8 @@ interface ConnCtx {
   pressureSeams: Partial<PressureSeams>;
   backupSeams: Partial<BackupSeams>;
   testboxSeams: Partial<TestboxOpSeams>;
+  /** The `overlord-history` op and its ONE slot, per agent PROCESS (Overlord W1): shared by every connection. */
+  historyOp: HistoryOp;
 }
 
 async function handleReq(ws: WebSocket, req: AgentReq, ctx: ConnCtx, verbCache: VerbCache): Promise<void> {
@@ -817,6 +823,14 @@ async function handleReq(ws: WebSocket, req: AgentReq, ctx: ConnCtx, verbCache: 
       send(ws, ok(req.id, outcome));
       return;
     }
+    case 'overlord-history': {
+      // Overlord W1 (w1-board-history.md Task 3): history's read verbs over every project, in a worker thread with one
+      // slot (historyOp.ts). It reads ~/.ccrc/history/ only, read-only, outside the read whitelist; it spawns no process.
+      // Every outcome, a failure included, is an OverlordHistoryAnswer on ResOk; the op never throws a message here.
+      const answer = await ctx.historyOp.run(ctx.cfg.home, { verb: req.verb, target: req.target, agents: req.agents, args: req.args }, ws);
+      send(ws, ok(req.id, answer));
+      return;
+    }
     default: {
       // Exhaustive today (every `AgentReq` op above), but kept as a
       // defensive fallback rather than removed — a future protocol variant
@@ -862,6 +876,9 @@ export interface AccountReqRefusal { accountRefused: AccountArgvRefusal; id: num
 /** `validateReq`'s answer for a `testbox-admin` frame the builder refused (connect spec §2.1): answered `ok: true` with
  *  `kind: 'refused'` and the node's `fleetIdentity`; `bad-request` keeps meaning "this agent predates the op". */
 export interface TestboxAdminReqRefusal { testboxAdminRefused: TestboxAdminArgvRefusal; id: number }
+/** An `overlord-history` frame its reader refused (Overlord W1): answered `ok: true` as `request-refused` with the word, so
+ *  `bad-request` keeps meaning "this agent predates the op" (the `account` and `testbox-admin` pattern). */
+export interface HistoryReqRefusal { historyRefused: OverlordHistoryRequestRefusal; id: number }
 
 /** A `testbox-admin` refusal's payload, with the node's identity read at answer time. */
 function testboxAdminRefusal(home: string, why: TestboxAdminArgvRefusal): TestboxAdminOpAnswer {
@@ -885,7 +902,7 @@ function accountRefusal(home: string, why: AccountArgvRefusal): AccountOpAnswer 
  * the actual gate: every op's required fields are checked here, by type,
  * before the frame is ever allowed to reach a handler.
  */
-function validateReq(msg: Record<string, unknown>): AgentReq | ReqRefusal | AccountReqRefusal | TestboxAdminReqRefusal | null {
+function validateReq(msg: Record<string, unknown>): AgentReq | ReqRefusal | AccountReqRefusal | TestboxAdminReqRefusal | HistoryReqRefusal | null {
   if (typeof msg.id !== 'number') return null;
   const id = msg.id;
   switch (msg.op) {
@@ -1024,6 +1041,13 @@ function validateReq(msg: Record<string, unknown>): AgentReq | ReqRefusal | Acco
       return {
         t: 'req', id, op: 'testbox-admin', sub: msg.sub as TestboxAdminReq['sub'], fields: msg.fields as TestboxAdminReq['fields'],
       } satisfies TestboxAdminReq;
+    }
+    case 'overlord-history': {
+      // The ONE reader (shared/overlordHistory.ts). It ignores the envelope's own keys as it ignores any key it does not
+      // know; a refusal is a HistoryReqRefusal carrying its word, and a request that passes is retyped field by field.
+      const read = readOverlordHistoryRequest(msg);
+      if (!read.ok) return { historyRefused: read.refusal, id };
+      return { t: 'req', id, op: 'overlord-history', ...read.request } satisfies OverlordHistoryReq;
     }
     default:
       return null;
@@ -1310,7 +1334,7 @@ async function refreshVerbs(cache: VerbCache, home: string): Promise<string[]> {
 
 function handleConnection(
   ws: WebSocket, opts: Required<Omit<AgentOpts, 'helloTimeoutMs'>>, helloTimeoutMs: number, verbCache: VerbCache,
-  updateGate: UpdateGate, tokenSyncGate: TokenSyncGate,
+  updateGate: UpdateGate, tokenSyncGate: TokenSyncGate, historyOp: HistoryOp,
 ): void {
   let authed = false;
   const ctx: ConnCtx = {
@@ -1330,6 +1354,7 @@ function handleConnection(
     pressureSeams: opts.pressureSeams,
     backupSeams: opts.backupSeams,
     testboxSeams: opts.testboxSeams,
+    historyOp,
   };
 
   const helloTimer = setTimeout(() => {
@@ -1420,6 +1445,11 @@ function handleConnection(
         send(ws, ok(req.id, testboxAdminRefusal(opts.home, req.testboxAdminRefused)));
         return;
       }
+      // An `overlord-history` frame its reader refused (Overlord W1): the word on ResOk, nothing started.
+      if ('historyRefused' in req) {
+        send(ws, ok(req.id, { outcome: 'request-refused', word: req.historyRefused }));
+        return;
+      }
       // Defense in depth: even a validated request could hit an unforeseen
       // rejection downstream — this `.catch` guarantees no rejection from
       // the fire-and-forget dispatch is ever left unhandled.
@@ -1460,6 +1490,8 @@ function handleConnection(
       entry.proc.kill();
     }
     ctx.ptys.clear();
+    // The link closed mid-read: its worker is terminated; the slot frees on the worker's exit (historyOp.ts).
+    ctx.historyOp.abandon(ws);
   });
 }
 
@@ -1487,6 +1519,7 @@ export async function startAgent(rawOpts: AgentOpts): Promise<RunningAgent> {
     pressureSeams: rawOpts.pressureSeams ?? {},
     backupSeams: rawOpts.backupSeams ?? {},
     testboxSeams: rawOpts.testboxSeams ?? {},
+    historySeams: rawOpts.historySeams ?? {},
   };
   const helloTimeoutMs = rawOpts.helloTimeoutMs ?? DEFAULT_HELLO_TIMEOUT_MS;
   const verbCache: VerbCache = {
@@ -1506,7 +1539,9 @@ export async function startAgent(rawOpts: AgentOpts): Promise<RunningAgent> {
   const updateGate: UpdateGate = { spawning: false };
   // ONE token-sync gate per agent process, shared by every connection (spec 4.4).
   const tokenSyncGate: TokenSyncGate = { spawning: false };
-  wss.on('connection', (ws) => handleConnection(ws, opts, helloTimeoutMs, verbCache, updateGate, tokenSyncGate));
+  // ONE overlord-history op per agent process, its one slot shared by every connection (Overlord W1).
+  const historyOp = createHistoryOp({ ...realHistoryOpSeams(), ...opts.historySeams });
+  wss.on('connection', (ws) => handleConnection(ws, opts, helloTimeoutMs, verbCache, updateGate, tokenSyncGate, historyOp));
 
   await new Promise<void>((resolve, reject) => {
     httpServer.once('error', reject);
