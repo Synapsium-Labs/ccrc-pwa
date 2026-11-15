@@ -323,7 +323,7 @@ describe('every `sendPrompt` call is classified (D-5912)', () => {
 
   it('…and a lane that drops `stash` is red', () => {
     const files = srcFiles().map((f) => f.rel === 'inject/send.ts'
-      ? { ...f, text: f.text.replace("'/clear', { onDraft: 'stash' })", "'/clear')") } : f);
+      ? { ...f, text: f.text.replace("INJECTED_PROMPTS.clear.text, { onDraft: 'stash' })", 'INJECTED_PROMPTS.clear.text)') } : f);
     expect(tableFaults(callSites(files))).toEqual(['inject/send.ts clearSender: onDraft (none) breaks policy stash']);
   });
 });

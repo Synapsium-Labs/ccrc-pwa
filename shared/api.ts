@@ -4690,16 +4690,9 @@ export const TASKS_STALE_MS = 6 * 60 * 60 * 1000;
 export const IDLE_COMPACT_NOTICE_PREFIXES = [
   'Compacted while idle',
 ] as const;
-/** `idle-compact-nudge` (D-5373): the one prompt the server types into a
- *  session after an idle compaction when its task list is fresh and has open
- *  items (operator ruling 2026-10-17, "Nudge if work is open"). Typed through
- *  `sendPrompt` as a plain user row; the transcript parser reads a user row
- *  whose whole trimmed text is this sentence as the `idle-compact-nudge`
- *  system pill. The second sentence is the guard for the shape the ruling
- *  names as the risk: a session that had ended its turn on a question to the
- *  operator answers in one line and stops. */
-export const IDLE_COMPACT_NUDGE_PROMPT =
-  "Continue with your open tasks. If you were waiting for the operator's answer, say so in one line and stop.";
+/** `idle-compact-nudge` (D-5373) and the resume prompt's prefix: declared once, in `INJECTED_PROMPTS`' module, the list of
+ *  every fixed string ccrc types into a pane (Overlord W1, the vocabulary piece); their doc comments moved with them. */
+export { IDLE_COMPACT_NUDGE_PROMPT, RESUME_PROMPT_PREFIX } from './injected-prompts.mjs';
 /** D-8267 (the operator's ruling of 2026-11-11): the fixed estimate of when Claude Code's idle compaction runs, kept as the fallback:
  *  about 55 minutes after the turn ended (`end_turn`, Stop fired), the D-5371 measurement (110 of 111). */
 export const IDLE_COMPACT_ESTIMATE_MS = 55 * 60_000;
@@ -4728,9 +4721,6 @@ export function predictIdleCompactAt(
   if (s.bucketSince === null) return null;
   return { at: s.bucketSince + IDLE_COMPACT_ESTIMATE_MS, basis: 'estimate' };
 }
-/** The sentence Claude Code's default resume prompt is, and every variant —
- *  including ccd's RESUME_PROMPT — begins with. The parser matches the prefix. */
-export const RESUME_PROMPT_PREFIX = 'Continue from where you left off.';
 /** `interrupt-and-restart-causes-recorded` (D-5237, second half): how a
  *  session's previous process ended, as `ccd` records it in
  *  `$REG/<id>.lastend` (`<epoch seconds> <cause>`) and in `swap.log`
