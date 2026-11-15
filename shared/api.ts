@@ -6494,11 +6494,14 @@ export function parseWaveDoneSignals(body: string): WaveDoneSignals {
  *
  * `precompact` (Overlord W1a compaction, spec §3.3.4 C39) is `refuse`/`allow`: whether the session hook's PreCompact
  * refusal arm (`_hook_compact_refuse`) refuses a proactive automatic compaction, once a turn. Absent is dark. Its one
- * writer is the generations lane (the renewal hand-offs piece), so it is lane-only too.
+ * writer is the generations lane (the renewal hand-offs piece), so it is lane-only too. `profiledigest` (Overlord W1
+ * sandbox, spec §3.6 H1) is the sha256 the server expects of the row `profile` names: while it stands, ccd renders the
+ * row's surface whole or refuses the spawn. The launch-profile lane writes it (designation's create is its one recorded
+ * second writer), and an empty value clears it.
  */
-export const ROUTE_WRITABLE_FIELDS = ['class', 'effort', 'subagent', 'workflow', 'compact', 'browser', 'profile', 'automem', 'compactwindow', 'precompact'] as const;
+export const ROUTE_WRITABLE_FIELDS = ['class', 'effort', 'subagent', 'workflow', 'compact', 'browser', 'profile', 'automem', 'compactwindow', 'precompact', 'profiledigest'] as const;
 /** The route fields only a server lane writes (Overlord W1a; "one writer per route field: the lane"): the launch-profile
- *  lane's three and the generations lane's `precompact`.
+ *  lane's four (`profiledigest` since W1 sandbox) and the generations lane's `precompact`.
  *  `parseRouteFields`, the one door parse, refuses each as `lane-only` with a 400 naming it, at the operator's route
  *  door, the spawn and dispatch `route` bodies, and the coordinator's `POST /api/runs/:id/route`. The lane composes
  *  `CCD_ARGV.routeSet` itself and never passes a door. Derived: `ROUTE_WRITABLE_FIELDS` from `profile` on. */

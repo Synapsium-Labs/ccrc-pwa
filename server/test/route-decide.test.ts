@@ -71,7 +71,7 @@ describe('parseRouteRequest', () => {
     if (!r.ok) expect(r.detail).toContain(detail.split(':')[0]);
   });
   it('refuses each launch-profile field on the manual arm, naming it (Overlord W1a, F1: the lane writes those)', () => {
-    expect(ROUTE_LANE_ONLY_FIELDS).toHaveLength(4);   // the launch profile's three and the compaction piece's precompact
+    expect(ROUTE_LANE_ONLY_FIELDS).toHaveLength(5);   // the launch profile's three, the compaction piece's precompact and the W1 sandbox's profiledigest
     for (const field of ROUTE_LANE_ONLY_FIELDS) {
       for (const target of ['worker', 'coordinator']) {
         expect(parseRouteRequest(7, { target, why: 'x', field, value: 'off' }))
