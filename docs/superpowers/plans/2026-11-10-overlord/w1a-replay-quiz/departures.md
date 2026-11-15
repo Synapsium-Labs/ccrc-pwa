@@ -65,6 +65,9 @@ has a D-number; the coordinator folds them into the ledger.
   20641): the schema entry and its header, `coord-db.test.ts`'s version pins and a new slot pin (77, the entry after the
   portfolio's), and `run-close-switch.test.ts`'s rollback.
 - **Peer merges.** The vocabulary piece landed first with `baseline-missing` on its `refusal-table.data.json` wave map; the
-  landing merge deletes that line, since the word is now in the code. The floors files keep both sides. The renewal act lifts
+  landing merge deletes that line, since the word is now in the code. Its F4 check then found `LANE_ARM_REFUSALS` by a
+  comment of this branch naming the Overlord; that group is hand-registered by the suite's own convention, so the comment no
+  longer names it and the hand-registered key (`refusal-table.test.ts`) now carries `baseline-missing` beside `lane-gated`,
+  so the code-to-table direction checks the word against Table 11.6. The floors files keep both sides. The renewal act lifts
   `continuity`'s gate; if it lands first, its confirmed continuity Live case in `lane-arm-route.test.ts` needs a baseline row
   seeded.

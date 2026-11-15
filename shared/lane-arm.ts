@@ -104,7 +104,7 @@ export interface LaneArmConfirmRequired {
 
 /** The words the POST refuses with (each a word of `REFUSAL_STATUS`), spelled once for the PWA's reader. `lane-gated` is the
  *  card's own (review 2003 F3): Live refused while the row's gate stands (`laneArmGate`). `baseline-missing` is the replay
- *  quiz's (Overlord W1a, W0-28): Live refused on a W1a row until the quiz's baseline is recorded. */
+ *  quiz's (W1a, W0-28): Live refused on a W1a row until the quiz's baseline is recorded. */
 export const LANE_ARM_REFUSALS = ['bad-request', 'not-configured', 'sign-in-unarmed', 'state-unreadable', 'lane-gated', 'baseline-missing'] as const;
 export type LaneArmRefusal = (typeof LANE_ARM_REFUSALS)[number];
 export function isLaneArmRefusal(v: unknown): v is LaneArmRefusal {
