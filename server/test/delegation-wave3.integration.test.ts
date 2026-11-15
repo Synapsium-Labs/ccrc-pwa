@@ -56,6 +56,7 @@ import * as policy from '../src/coord/delegation-policy.js';
 import { seedRoster, testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
 import { callsIn, parsedFile, sourceOfSymbol, symbolOf } from './scan/symbols.js';
+import { declaringFile, programSource, programTexts } from './scan/programView.js';
 
 const REPO_ROOT = path.resolve(__dirname, '../..');
 const HOOK = path.join(REPO_ROOT, 'ccd/session-hook.sh');
@@ -1517,8 +1518,12 @@ describe('8. the closed scope census', () => {
 
   it('only the torn-tail heal and compactJournal rewrite the retained set: every journal and carried path use and file-port act is on a closed list, by caller', () => {
     const SRC = filesUnder('server/src', /\.ts$/);
+    // D-8641: the applier's file and the file side of recovery's, read off delegation-checkpoint.ts's program, wherever the pilot's moves put them
+    const CHECKPOINT_SOURCE = 'server/src/coord/delegation-checkpoint.ts';
+    const applier = declaringFile(CHECKPOINT_SOURCE, 'DelegationDurability');
+    const fileSide = declaringFile(CHECKPOINT_SOURCE, 'recoverDelegationFromFiles');
     expect(SRC.filter((f) => /delegation-(?:events|carried)\.log|DELEGATION_(?:JOURNAL|CARRIED)_FILE/.test(code(read(f)))), 'only the journal module and the applier name either file').toEqual(
-      ['server/src/coord/delegation-checkpoint.ts', 'server/src/coord/delegation-journal.ts']);
+      [...new Set([applier, fileSide, 'server/src/coord/delegation-journal.ts'])].sort());
 
     // 1. EVERY truncating call in the server, by spelling (`truncate`, `truncateSync`, `ftruncate`, `fsp.truncate`...). The delegation
     //    ones are the port member and its node adapter and the heal's one call; the other two files cut something that is not the broker's
@@ -1529,18 +1534,20 @@ describe('8. the closed scope census', () => {
     const cuts = SRC.filter((f) => reachesFiles(read(f))).flatMap((f) => (code(read(f)).match(/[\w.]*truncate\w*\(/gi) ?? []).map((m) => `${f}: ${m}`)).sort();
     expect(cuts, 'every truncating call in a file that can reach a file (a new string helper there needs listing here)').toEqual([
       'server/src/coord/collectLaneJournal.ts: ftruncateSync(',
-      'server/src/coord/delegation-checkpoint.ts: this.port.truncate(',
+      `${applier}: this.port.truncate(`,
       'server/src/coord/delegation-file-port.ts: fsp.truncate(',
       'server/src/coord/delegation-journal.ts: truncate(',
-    ]);
+    ].sort());
 
     // 2. EVERY journal/carried path use and file-port act in the applier, by its caller. This includes temps, their renames and removal,
     //    so replacing a temp operand with a live file, or adding another writer, cannot hide behind an allowed method name.
-    const lines = code(read('server/src/coord/delegation-checkpoint.ts')).split('\n');
+    //    Over the program (D-8641), each member read from its own start: a later file's import lines inherit no method of the file before.
+    const lines = programTexts(CHECKPOINT_SOURCE).flatMap((t) => [null, ...code(t.text).split('\n')]);
     let method = '(file)';
     let inClass = false;
     const hits: Array<{ method: string; text: string }> = [];
     for (const l of lines) {
+      if (l === null) { method = '(file)'; inClass = false; continue; }
       if (/^(?:export )?class DelegationDurability\b/.test(l)) { inClass = true; method = '(class)'; }
       const top = /^(?:export )?(?:async )?function\*? ([A-Za-z_]\w*)/.exec(l);
       if (top !== null) { inClass = false; method = top[1]!; }
@@ -1606,7 +1613,7 @@ describe('8. the closed scope census', () => {
     expect([...used.entries()].filter(([k, count]) => count !== (ALLOWED[k]![2] ?? 1)), 'each listed use exists exactly as many times as declared').toEqual([]);
     expect(used.size).toBe(ALLOWED.length);
     // the heal is declared once and called once, from recovery, on the plan recovery made; the copy is durable before the cut
-    const checkpoint = code(read('server/src/coord/delegation-checkpoint.ts'));
+    const checkpoint = code(programSource(CHECKPOINT_SOURCE));
     const heal = checkpoint.slice(checkpoint.indexOf('private async healTailLocked'), checkpoint.indexOf('private async remeasureTail'));
     expect(checkpoint.match(/healTailLocked\(/g), 'declared once and called once').toHaveLength(2);
     expect(checkpoint).toMatch(/if \(report\.tailHeal !== null\) \{\s*try \{\s*await this\.healTailLocked\(report\.tailHeal\);/);

@@ -60,6 +60,7 @@ import {
   type DelegationBucketResult,
 } from '../src/coord/delegation-ingest.js';
 import { mkTmp } from './tmpHelpers.js';
+import { declaringFile } from './scan/programView.js';
 
 // ── fixtures ─────────────────────────────────────────────────────────────────────────────────────────────────────────
 
@@ -1596,7 +1597,9 @@ describe('the pure/impure split and the single definition of every bound', () =>
     expect(src.search(BANNER)).toBeGreaterThan(0);
     expect(pure).not.toMatch(/node:fs|fsp\.|node:sqlite|\.\/db\.js|\.\/store\.js|CoordStore|process\.|readFileSync|Date\.now|new Date\(|performance\.now|Math\.random|randomUUID|randomBytes|setTimeout|await /);
     const imports = [...pure.matchAll(/^import\s[^;]*?from\s+'([^']+)';/gms)].map((m) => m[1]);
-    expect(imports.sort()).toEqual(['../../../shared/agent-protocol.js', '../../../shared/api.js', '../io.js', './delegation-checkpoint.js', './delegation-journal.js', './delegation-model.js', 'node:crypto'].sort());
+    // D-8641: the applier's batch type is imported from whichever module of delegation-checkpoint.ts's program declares it
+    const batchHome = `./${path.basename(declaringFile('server/src/coord/delegation-checkpoint.ts', 'DelegationDurableBatch'), '.ts')}.js`;
+    expect(imports.sort()).toEqual(['../../../shared/agent-protocol.js', '../../../shared/api.js', '../io.js', batchHome, './delegation-journal.js', './delegation-model.js', 'node:crypto'].sort());
   });
 
   it('no clock and no randomness anywhere in the module: the one clock is the injected `now` of the adapter', () => {
