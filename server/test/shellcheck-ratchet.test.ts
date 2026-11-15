@@ -18,8 +18,9 @@
 //
 // The counts are only as good as the tool that made them, so the baseline pins the version: another version here is a
 // printed skip, and in CI a failure, so a skip can never read as a pass there. server-deps installs that version on
-// Linux (.github/ci/shellcheck-install.sh). The macOS CI legs skip: ccd/ccd alone peaks at 6.2 GB (measured on 0.11.0)
-// on a 7 GB runner, and the same tool over the same files has nothing to add to the Linux legs.
+// Linux (.github/ci/shellcheck-install.sh). The macOS CI legs skip: ccd/ccd alone peaked at 6.2 GB (measured on 0.11.0),
+// the program text it now lints with its libraries about 11% more, near 6.9 GB, on a 7 GB runner; and the same tool
+// over the same files has nothing to add to the Linux legs.
 //
 // The whole pass is slow, so it is no guard suite (fast-plan.mjs HEAVY_TREE_READERS): the queue and the full suite run
 // it, and a fast pull request runs it only when the map selects it for a file it reads.
@@ -46,8 +47,10 @@ const GROUP = 'ccd/ccd + ccd/lib';
 const PROGRAM_FILE = 'ccd-program';
 /** `--norc` and an empty SHELLCHECK_OPTS: a developer's own settings must not move a count. */
 const SHELLCHECK_ARGS = ['--norc', '--shell=bash', '-S', 'warning', '-f', 'gcc'];
-/** Two at once. Peak RSS is 6.2 GB for ccd/ccd and 4.1 GB for ccd/ccrc, on a 16 GB runner shared with the shard's
- *  vitest workers; the whole pass takes about 30 s locally and 66 s on a runner at two lanes. */
+/** Two at once. Peak RSS is about 6.9 GB for the program (ccd/ccd and its libraries as one text) and 4.1 GB for
+ *  ccd/ccrc, on a 16 GB runner shared with the shard's vitest workers. ccd/ccd alone peaked at 6.2 GB; the splice is
+ *  about 6% more text but about 11% more memory (9.09 GB against 8.16 GB, both measured on one Mac, D-8048). The whole
+ *  pass takes about 30 s locally and 66 s on a runner at two lanes. */
 const LANES = 2;
 /**
  * What shellcheck reports when it gave up on a file: everything after that point was not checked. Its parser has two
