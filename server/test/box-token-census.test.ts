@@ -350,7 +350,9 @@ const WORDS = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'e
   // Overlord W1a, the timers piece: the session's three timer doors, box-token lanes in the continuity file: eighty-two machine lanes in all.
   'eighty', 'eighty-one', 'eighty-two',
   // Overlord W1a, the probes piece: the probe door's two lanes in the continuity file: eighty-four machine lanes in all.
-  'eighty-three', 'eighty-four'];
+  'eighty-three', 'eighty-four',
+  // Overlord W1 sandbox: POST /api/sessions/:id/start/loads, the hook's loads report, a box-token lane in the continuity file: eighty-five machine lanes in all.
+  'eighty-five'];
 // D-2168: LONGEST FIRST, not numeric order. A JS alternation is leftmost-first,
 // so with `twenty` ahead of `twenty-one` the shorter branch wins and `\b` ends
 // the match at the hyphen — `twenty-one` scanned as `twenty`, and `twenty-two`
@@ -501,7 +503,7 @@ describe('the box-token surface is derived, and no prose site under-claims it', 
     // …and the linking standard's one (D-8147): the session's read, by name; the operator's write beside it is no lane.
     expect(LINKING_LANES, 'linking/routes.ts lost its box-token lane, or a write gained a token check').toEqual(['GET /api/linking']);
     // …and the continuity routes' one (Overlord W1a): the hook's start report, by name.
-    expect(CONTINUITY_LANES, 'continuity/routes.ts lost a box-token lane').toEqual(['POST /api/sessions/:id/start', 'GET /api/sessions/:id/card',
+    expect(CONTINUITY_LANES, 'continuity/routes.ts lost a box-token lane').toEqual(['POST /api/sessions/:id/start', 'POST /api/sessions/:id/start/loads', 'GET /api/sessions/:id/card',
       'POST /api/sessions/:id/notes', 'GET /api/sessions/:id/notes', 'POST /api/sessions/:id/handover',
       'POST /api/timers', 'GET /api/timers', 'POST /api/timers/:id/cancel', 'GET /api/sessions/:id/probe', 'POST /api/sessions/:id/probe']);
     expect(ALL_LANES.length).toBe(COORD_LANES.length + 3 + LINEAR_PROXY_LANES.length + LEDGER_LANES.length + LINKING_LANES.length + CALLS_LANES.length + PLAN_LANES.length + CONTINUITY_LANES.length);

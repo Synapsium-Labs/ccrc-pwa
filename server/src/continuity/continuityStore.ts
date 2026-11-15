@@ -17,6 +17,8 @@ import {
 import type { Observed } from '../time/observed.js';
 import type { GenView } from './generationMachine.js';
 import { tx } from '../coord/tx.js';
+import { startLoadsRowOf, type StartLoadsRaw, type StartLoadsReport, type StartLoadsRow } from './startLoads.js';
+export type { StartLoadsReport } from './startLoads.js';
 
 /** What the door hands the writer: `source` is the payload's word as it came. */
 export interface StartInsert {
@@ -49,6 +51,60 @@ export function insertStart(db: DatabaseSync, row: StartInsert): StartInsertResu
     return held === undefined ? { ok: false, kind: 'write-failed' } : { ok: true, id: held.id, fresh: false };
   } catch {
     return { ok: false, kind: 'write-failed' };
+  }
+}
+
+// ── The loads report (Overlord W1 sandbox, Task 5; spec §3.6 H4, Table 11.1e) ─────────────────────────────────────────
+// `continuity_start_loads` has ONE writer, `insertStartLoads`, and one read, `startLoadsOfNewestStart`. No reader picks a
+// report by session alone: every read joins the newest `startup` or `resume` start by `startId`, so an older start's report
+// never answers for a newer start (Review Focus 3).
+
+export type StartLoadsInsertResult = { ok: true; startId: number; fresh: boolean } | { ok: false; kind: 'unknown-start' | 'write-failed' };
+
+/** The table's one writer. The start is the session's own start the `reportId` names (`unknown-start` when the server has
+ *  not recorded it yet, which the hook keeps and resends). The first body for a start is kept (`fresh: true`); a resend of
+ *  the same body changes nothing; a body that differs sets `conflicted`. Both answer `fresh: false`. */
+export function insertStartLoads(db: DatabaseSync, sessionId: string, r: StartLoadsReport, receivedAt: number): StartLoadsInsertResult {
+  try {
+    return tx(db, () => {
+      const start = db.prepare('SELECT id FROM continuity_starts WHERE sessionId = ? AND reportId = ?').get(sessionId, r.reportId) as
+        { id: number } | undefined;
+      if (start === undefined) return { ok: false, kind: 'unknown-start' } as const;
+      const res = db.prepare(
+        'INSERT INTO continuity_start_loads (startId, profileRole, profileDigest, launchRc, claudeVersion, permissionMode, cwdInWorkspace, '
+        + 'loaded, carriedFrom, bodySha256, reportedAt, receivedAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (startId) DO NOTHING',
+      ).run(start.id, r.profileRole, r.profileDigest, r.launchRc, r.claudeVersion, r.permissionMode,
+        r.cwdInWorkspace === null ? null : r.cwdInWorkspace ? 1 : 0, JSON.stringify(r.loaded), r.carriedFrom, r.bodySha256, r.reportedAt, receivedAt);
+      if (Number(res.changes) === 1) return { ok: true, startId: start.id, fresh: true } as const;
+      db.prepare('UPDATE continuity_start_loads SET conflicted = 1 WHERE startId = ? AND bodySha256 != ? AND conflicted = 0').run(start.id, r.bodySha256);
+      return { ok: true, startId: start.id, fresh: false } as const;
+    });
+  } catch {
+    return { ok: false, kind: 'write-failed' };
+  }
+}
+
+export type NewestStartLoadsRead =
+  | { ok: true; newest: { start: StartRow; report: StartLoadsRow | null } | null }
+  | { ok: false; detail: string };
+
+/** The session's newest `startup` or `resume` start (by `reportedAt`, then id) with its report joined by `startId`, the
+ *  start with a null report when none landed, or null when the session has no such start. A failed read answers ok: false. */
+export function startLoadsOfNewestStart(db: DatabaseSync, sessionId: string): NewestStartLoadsRead {
+  try {
+    const row = stmt(db,
+      'SELECT s.id, s.sessionId, s.reportId, s.uuid, s.source, s.model, s.rowIncarnation, s.reportedAt, s.receivedAt, '
+      + 'l.startId AS lStartId, l.profileRole, l.profileDigest, l.launchRc, l.claudeVersion, l.permissionMode, l.cwdInWorkspace, '
+      + 'l.loaded, l.carriedFrom, l.conflicted FROM continuity_starts s LEFT JOIN continuity_start_loads l ON l.startId = s.id '
+      + "WHERE s.sessionId = ? AND s.source IN ('startup', 'resume') ORDER BY s.reportedAt DESC, s.id DESC LIMIT 1",
+    ).get(sessionId) as (Record<string, unknown> & { source: string; lStartId: number | null }) | undefined;
+    if (row === undefined) return { ok: true, newest: null };
+    const start = { id: row['id'], sessionId: row['sessionId'], reportId: row['reportId'], uuid: row['uuid'], source: startSourceOf(row.source),
+      model: row['model'], rowIncarnation: row['rowIncarnation'], reportedAt: row['reportedAt'], receivedAt: row['receivedAt'] } as StartRow;
+    const report = row.lStartId === null ? null : startLoadsRowOf({ ...(row as unknown as StartLoadsRaw), startId: row.lStartId });
+    return { ok: true, newest: { start, report } };
+  } catch (e) {
+    return { ok: false, detail: `continuity_start_loads read failed: ${e instanceof Error ? e.message : String(e)}` };
   }
 }
 

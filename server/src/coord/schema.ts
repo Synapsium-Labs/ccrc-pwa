@@ -3127,6 +3127,38 @@ export const MIGRATIONS: readonly string[] = [
   `
   INSERT INTO lane_arm_settings (lane, choice, updatedAt) VALUES ('anchor-slot', 'shadow', 0);
   `,
+  // ── 75: user_version 74 -> 75 ─────────────────────────────────────────────
+  // The loads report (Overlord spec §3.6 H4, Table 11.1e; W1 sandbox, plan `w1-sandbox.md` Task 5): `continuity_start_loads`,
+  // what a session's `startup` or `resume` start loaded, one row per start, joined by `startId`. ONE writer,
+  // `insertStartLoads` (`continuityStore.ts`), from the loads door: the first body for a start is kept, a resend of the same
+  // body changes nothing, and a second body that differs sets `conflicted`, which every reader reads as every property
+  // unmeasured. No verdict is stored: every reader computes one from the newest start's row and the server's own profile.
+  // `carriedFrom` is the `reportId` of the start a resume carried instructions and hooks from (slug
+  // resume-carries-its-own-start).
+  //
+  // A NEW TABLE, nothing on an existing one: an older build opening a file at `user_version 75` takes rule 3 (it warns, reads
+  // as-is and migrates nothing), never names the table, and boots. Every earlier entry is frozen. Sibling W1 pieces add
+  // migrations too: whoever lands later renumbers on the coordinator's word. RE-MEASURE the slot before the PR and before
+  // merge (it must print 74 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE continuity_start_loads (
+    startId        INTEGER PRIMARY KEY REFERENCES continuity_starts(id),
+    profileRole    TEXT,               -- from CCRC_LAUNCH_PROFILE, or NULL when the session had none
+    profileDigest  TEXT,               -- 64 lowercase hex, or NULL
+    launchRc       TEXT,               -- CCRC_LAUNCH_RC: on | off, or NULL
+    claudeVersion  TEXT,               -- the build, or NULL
+    permissionMode TEXT,               -- the hook payload's word, or NULL
+    cwdInWorkspace INTEGER,            -- 1 | 0, or NULL when unmeasured
+    loaded         TEXT NOT NULL,      -- JSON: per known kind, its sorted list or "unmeasured"
+    carriedFrom    TEXT,               -- the reportId a resume carried from, or NULL
+    bodySha256     TEXT NOT NULL,      -- the first report's narrowed body, reportedAt left out
+    conflicted     INTEGER NOT NULL DEFAULT 0,  -- 1 once a second, different body arrived for this start
+    reportedAt     INTEGER NOT NULL,   -- the hook's clock, ms
+    receivedAt     INTEGER NOT NULL    -- the server's clock, ms
+  );
+  `,
 ];
 
 /** The version this build writes. `MIGRATIONS.length` and nothing else: a

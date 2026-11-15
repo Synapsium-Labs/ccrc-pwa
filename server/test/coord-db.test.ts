@@ -728,9 +728,10 @@ describe('coord.db: migration 4 — runs.dispatchStartedAt', () => {
     // and MIGRATIONS[70] (plain_memory_settings and the launch-profile lane-arm row, Overlord W1a launch profiles PR B)
     // and MIGRATIONS[71] (continuity_notes and continuity_handovers, the note door, Overlord W1a)
     // and MIGRATIONS[72] (continuity_probes and continuity_reads, the probe door, Overlord W1a)
-    // and MIGRATIONS[73] (the anchor-slot lane-arm row, the anchor, Overlord W1a).
-    expect(COORD_SCHEMA_VERSION).toBe(74);
-    expect(MIGRATIONS.length).toBe(74);
+    // and MIGRATIONS[73] (the anchor-slot lane-arm row, the anchor, Overlord W1a)
+    // and MIGRATIONS[74] (continuity_start_loads, the loads report, Overlord W1 sandbox).
+    expect(COORD_SCHEMA_VERSION).toBe(75);
+    expect(MIGRATIONS.length).toBe(75);
   });
 
   it('is ADDITIVE: every column migration 1 wrote is still on the table, unchanged', () => {
@@ -829,8 +830,9 @@ describe('coord.db: migration 11 — runs.kind and runs.reviews (design 2026-09-
     // and MIGRATIONS[70] (plain_memory_settings, launch profiles PR B)
     // and MIGRATIONS[71] (continuity_notes and continuity_handovers, Overlord W1a)
     // and MIGRATIONS[72] (continuity_probes and continuity_reads, Overlord W1a)
-    // and MIGRATIONS[73] (the anchor-slot lane-arm row, Overlord W1a); the migration above is still entry 11.
-    expect(COORD_SCHEMA_VERSION).toBe(74);
+    // and MIGRATIONS[73] (the anchor-slot lane-arm row, Overlord W1a)
+    // and MIGRATIONS[74] (continuity_start_loads, Overlord W1 sandbox); the migration above is still entry 11.
+    expect(COORD_SCHEMA_VERSION).toBe(75);
     const row = db.prepare('SELECT kind, reviews FROM runs').get() as { kind: string; reviews: number | null };
     expect(row).toEqual({ kind: 'work', reviews: null });
     db.close();
@@ -869,6 +871,36 @@ describe('coord.db: dead_claimants, the dead-coordinator lane’s durable anchor
     expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(COORD_SCHEMA_VERSION);
     expect(db.prepare('SELECT count(*) AS n FROM dead_claimants').get()).toEqual({ n: 0 });
     expect(db.prepare('SELECT claimedBy, state FROM runs').get()).toEqual({ claimedBy: 'c', state: 'working' });
+    db.close();
+  });
+});
+
+describe('coord.db: continuity_start_loads, the loads report (Overlord W1 sandbox, Task 5)', () => {
+  /** Found by its DDL, never hard-coded (the dead_claimants case's rule): a sibling that lands first moves this entry up. */
+  const SLOT = MIGRATIONS.findIndex((m) => m.includes('CREATE TABLE continuity_start_loads')) + 1;
+  it('a NEW TABLE and nothing else, keyed by its start', () => {
+    expect(SLOT, 'no MIGRATIONS entry creates continuity_start_loads').toBeGreaterThanOrEqual(75);
+    expect(MIGRATIONS[SLOT - 1]!.replace(/--[^\n]*/g, '').trim(), 'the migration CREATEs one table and alters nothing')
+      .toMatch(/^CREATE TABLE continuity_start_loads \([^;]*\);$/);
+    const db = openCoordDb(dbPathIn(mkTmp('ccrc-coord-')));
+    const pk = db.prepare("SELECT name FROM pragma_table_info('continuity_start_loads') WHERE pk = 1").all() as { name: string }[];
+    expect(pk).toEqual([{ name: 'startId' }]);
+    db.close();
+  });
+  it('reaches a database ALREADY at the version before it and leaves every existing start as it was', () => {
+    const p = dbPathIn(mkTmp('ccrc-coord-'));
+    mkdirSync(path.dirname(p), { recursive: true });
+    const raw = new DatabaseSync(p);
+    tx(raw, () => {
+      for (let v = 0; v < SLOT - 1; v++) raw.exec(MIGRATIONS[v]!);
+      raw.exec(`PRAGMA user_version = ${SLOT - 1}`);
+      raw.exec("INSERT INTO continuity_starts (sessionId, reportId, uuid, source, model, rowIncarnation, reportedAt, receivedAt) VALUES ('lane-a-project-a', 'r-00000001', 'u', 'startup', NULL, NULL, 1, 2)");
+    });
+    raw.close();
+    const db = openCoordDb(p);
+    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(COORD_SCHEMA_VERSION);
+    expect(db.prepare('SELECT count(*) AS n FROM continuity_start_loads').get()).toEqual({ n: 0 });
+    expect(db.prepare('SELECT reportId FROM continuity_starts').get()).toEqual({ reportId: 'r-00000001' });
     db.close();
   });
 });

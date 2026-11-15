@@ -23,7 +23,7 @@ import { timerNoteFits, type TimerView } from '../../../shared/continuity-timers
 import { timerCapOf } from '../../../shared/fleetRoles.js';
 import { ANCHOR_SLOT_LANE, CONTINUITY_LANE, laneArmGate } from '../../../shared/lane-arm.js';
 import { utf8Bytes } from '../../../shared/utf8.js';
-import { CARD_REFUSALS, NOTE_REFUSALS, PROBE_REFUSALS } from '../../../shared/refusal.js';
+import { CARD_REFUSALS, NOTE_REFUSALS, PROBE_REFUSALS, START_LOADS_REFUSALS } from '../../../shared/refusal.js';
 import { laneArmRowViewOf } from '../coord/laneArm.js';
 import { anchorAnswer, anchorGeneration, renderAnchor, type AnchorGenRow, type AnchorStart } from './anchor.js';
 import { cardPages, renderCard, snapshotFactsJson, trimCard } from './card.js';
@@ -32,6 +32,7 @@ import { effectiveGeneration, type TimerRow } from './continuityStore.js';
 import { noteKeyReader } from './noteKeys.js';
 import { PROBE_ANSWER_MAX_CHARS, bookOf, gradeAnswers, maskedQuestion, probePages, type LastRead } from './probeDoor.js';
 import { roundVerdict } from './probes.js';
+import { startLoadsOf } from './startLoads.js';
 import {
   NOTE_LIST_LIMIT, handoverAsked, handoverVerdict, noteKeyFact, noteListBytes, notesPage, noteVerdict, revisedNoteFact, type NoteInput,
   type NoteVerdictRefusal, type RevisedFact,
@@ -234,6 +235,43 @@ export function registerContinuityRoutes(app: FastifyInstance, deps: ContinuityR
     if (!r.ok) return refuseRoute(reply, 'write-failed', { detail: 'continuity_starts could not be written' });
     if (r.fresh) noteStart(memoKey(id, startedUuid));
     return reply.code(202).send({ ok: true, id: r.id, fresh: r.fresh });
+  });
+
+  /**
+   * `POST /api/sessions/:id/start/loads` (Overlord W1 sandbox, Task 5; spec §3.6 H4, Table 11.1e): the hook reports what a
+   * `startup` or `resume` start of a surfaced session loaded. A box-token machine lane, an `auth/gate.ts` EXEMPT entry, as
+   * the start report is: the token first, then the path's session is the sender (`not-owner`), then `startLoadsOf`, the
+   * body's one narrowing (`bad-request` naming the field), then the registry's attribution of `fromUuid`, then the one
+   * writer, which finds the start the `reportId` names for that session (`unknown-start`, 404, which the hook keeps and
+   * resends) and keeps the first body; a resend of the same body, or a different one (which sets `conflicted`), answers
+   * `fresh: false`. `202 { ok, startId, fresh }`. The door decides nothing: no verdict is stored (PR B computes it on read).
+   */
+  app.post('/api/sessions/:id/start/loads', {
+    onRequest: async (req: FastifyRequest, reply: FastifyReply) => {
+      const verdict = checkMailToken(deps.mailToken(), req.headers[MAIL_TOKEN_HEADER], 'POST /api/sessions/:id/start/loads');
+      if (verdict !== 'ok') return refuseRoute(reply, 'unauthenticated', { detail: TOKEN_DETAIL[verdict] });
+      return undefined;
+    },
+  }, async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const b = (typeof req.body === 'object' && req.body !== null ? req.body : {}) as Record<string, unknown>;
+    if (b['fromId'] !== id) return refuseRoute(reply, 'not-owner', { detail: 'fromId must be the session the path names' });
+    const uuid = b['fromUuid'];
+    if (!IDENTITY_RE.test(id) || typeof uuid !== 'string' || !IDENTITY_RE.test(uuid)) {
+      return refuseRoute(reply, 'bad-request', { detail: 'fromId and fromUuid' });
+    }
+    const v = startLoadsOf(b);
+    if (!v.ok) return refuseRoute(reply, 'bad-request', { detail: v.field });
+    const attributed = await deps.attribute(id, uuid);
+    if (!attributed.ok) return refuseRoute(reply, attributed.error, { detail: attributed.detail });
+    const coord = deps.coord;
+    if (coord === undefined) return refuseRoute(reply, 'unavailable');
+    const r = coord.insertStartLoads(id, v.report, deps.wall());
+    if (!r.ok && r.kind === 'unknown-start') {
+      return refuseRoute(reply, START_LOADS_REFUSALS.unknownStart, { detail: 'no start of this session carries that reportId yet' });
+    }
+    if (!r.ok) return refuseRoute(reply, 'write-failed', { detail: 'continuity_start_loads could not be written' });
+    return reply.code(202).send({ ok: true, startId: r.startId, fresh: r.fresh });
   });
 
   /** A card or notes read served: the probe door marks an answer after it `open` (closed-book, Review Focus 3). A stamp that
