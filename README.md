@@ -1692,8 +1692,8 @@ overflowed onto it returns home when home has headroom again *and* home is still
 servable for the project's pool;
 `telemetry` is `'anthropic'`, `'codex'`, `'openrouter'` or `'none'`: `'anthropic'` means the statusline publishes this
 account's 5h/7d windows and ccd treats the lane as speaking Claude Code's own protocol
-(`CCRC_ANTHROPIC_BACKEND` — `--remote-control`, the spawn-time effort, the 429 exclusion writer and Fable
-eligibility all key on it); `'codex'` means usage is published in Codex's weekly shape by the lane's own
+(`CCRC_ANTHROPIC_BACKEND` — `--remote-control`, the 429 exclusion writer and Fable eligibility key on it, and the
+spawn-time effort keys on it or on `'codex'`); `'codex'` means usage is published in Codex's weekly shape by the lane's own
 publisher, never the statusline; `'openrouter'` marks an OpenRouter key lane, which has no
 `~/.cc-limits` writer, is not an Anthropic backend and carries a class registry (D-5521);
 `'none'` says the account will never report rate limits,
@@ -3508,6 +3508,13 @@ never reads back, since the status line shows a model's default level the same w
 tick types it. `default` never reads back either, since no model id names it. `haiku` takes no effort level, and
 the pair is refused whichever order it arrives in. A session
 with no record spawns as it always did.
+A Codex lane (`telemetry: 'codex'`) takes the effort level for level with an Anthropic lane (D-8631): the record's
+level, else the box's spawn default, rides its spawn as `--effort`, and a live change is typed into its pane. There
+`ultracode` is rendered as `xhigh`, and `workflow` and `subagent` are stamped `inert`, unless the operator has placed
+`$REG/codex-lane-workflows` by hand (it has no writer in the tree): then a Codex spawn composes the workflow
+`--settings` and the record's own effort word as an Anthropic spawn does, while a live move to `ultracode` is still
+typed as `xhigh` and takes its workflows only at the next spawn. `subagent` stays inert on a Codex lane either way. A
+lane that is neither Anthropic nor Codex stamps `effort` inert too.
 
 **From the phone**, the session header's model and effort chips (or **Change model** / **Change effort** in its
 menu) write one field each through `POST /api/sessions/:id/route`, which runs `ccd route … --apply` (`501` from a
