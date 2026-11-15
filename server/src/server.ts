@@ -70,7 +70,8 @@ import { registerLedgerOperatorRoutes, waitingViewOf } from './coord/ledgersRout
 import { readOperatorSecretMeta } from './coord/ledgersSecrets.js';
 import { coordinatorPresenceIn, type WaitingView } from '../../shared/ledgers.js';
 import { attributionVerdict } from './coord/attribution.js';
-import { createQuestions, type OperatorDoorDeps } from './coord/questions.js';
+import { createQuestions, type OperatorDoorDeps, type Questions } from './coord/questions.js';
+import { heldFor } from './coord/heldFor.js';
 import { registerUpdateRoutes } from './update/routes.js';
 import { composeDocs, registerDocsReadRoutes, registerDocsRefreshRoute } from './docs/routes.js';
 import { installDocsRequestPolicy, installDocsResponsePolicy } from './docs/hooks.js';
@@ -139,7 +140,7 @@ import {
 import { ARCHIVE_REFUSALS, PTY_EXIT_CLOSE, SERVER_CAPS, SWAP_REFUSALS, interruptRouteSource, type SwapRefusal } from '../../shared/api.js';
 import { refuseRoute } from './refuse.js';
 import { DrawerInterruptThrottle, drawerInterruptSource, recordInterrupt } from './interruptlog.js';
-import { noticeBanner, noticeSink, notifyPushOnly } from './notice.js';
+import { noticeBanner, noticeSink, notifyPushOnly, questionOutboxOf } from './notice.js';
 import type { Dialog, DigestAnswer, DigestCorrectAnswer } from '../../shared/api.js';
 import {
   busyReadFailsClosed, decideArchive, decideStopClaims, frameRowVerdict, stopFlags, worktreeOf, type ArchiveMeasure,
@@ -2094,7 +2095,8 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   // it, which the archive door below runs its `{programme:'end'}` on.
   // D-7026: this server's ONE owner of question state, the watcher's own when it is given one (`index.ts` hands it
   // one, so production has exactly one instance), and its own otherwise; never module scope.
-  const questions = watcher?.questions ?? createQuestions(deps);
+  const questions: Questions = watcher?.questions // its own instance writes an ask's push outbox row (Overlord W1)
+    ?? createQuestions(deps, { heldFor, outbox: questionOutboxOf(deps, () => questions) });
   // W3 Q3f (D-7030): what the operator's core reads (`questions.answer`), built ONCE and handed to the family's
   // `POST /api/questions/:id/answer` in `coord/routes.ts` (the old operator doors that read it too were retired in W7
   // C7p, D-7194): the presses over this server's `askDeps` and `sendDeps`, the answered frame's emit, and the child's

@@ -16,8 +16,11 @@
 import type { NotifyEvent } from '../../shared/api.js';
 import type { NotifyLog } from './notifylog.js';
 import type { CoordStore } from './coord/store.js';
-import type { PushPayload } from './push.js';
-import { noticePayload } from './pushOutbox.js';
+import type { PayloadMasker, PushPayload } from './push.js';
+import { noticePayload, noticeTitle, pushDue, type PushDue } from './pushOutbox.js';
+import { outboxSettledOf, senderFor, type BoundRowTarget, type OutboxStorePort, type SettledOf } from './pushSender.js';
+import type { QuestionOutbox, QuestionPush, Questions } from './coord/questions.js';
+import type { TimePorts } from './time/ports.js';
 import type { Viewers } from './viewer.js';
 import type { Bus } from './bus.js';
 
@@ -52,6 +55,11 @@ export interface NoticeOpts {
    *  the archive and nothing else: the funnel never suppresses the ring or the push on it, and the archive refuses
    *  nothing; whether to raise the notice at all is the caller's read, made before the write. */
   readonly dedupeKey?: string;
+  /** The push outbox (Overlord W1, Task 4): a bound row its move already wrote, with the `pushDue` answer and the presence
+   *  answer read once before the move, and the read `sendRow` re-asks before the claim. With it the funnel reads no
+   *  presence and asks no `pushDue`: `viewing` is the record gate, as presence is for an unbound notice whatever the
+   *  push service (review 2150 F1), and on `now` the row is sent. */
+  readonly bound?: { readonly row: BoundRowTarget; readonly due: PushDue; readonly viewing: boolean; readonly settledOf: SettledOf };
 }
 
 /** What happened: whether the ring recorded it, and the archive's fate (`'none'`: no `notifyLog` or no `coord`, or
@@ -64,12 +72,16 @@ export interface NoticeOutcome {
 /** The sinks, each independently optional. */
 export interface NoticeDeps {
   readonly notifyLog?: NotifyLog | undefined;
-  readonly coord?: Pick<CoordStore, 'recordFeedEvent'> | undefined;
-  /** Widened from `Pick<PushService, 'notify'>` (the push outbox, Task 3): `PushService.notify` now answers a
-   *  `PushSendVerdict`, and a double that answers `void` still types. The funnel ignores the answer until the sender
-   *  reads it. */
-  readonly push?: { notify(p: PushPayload): Promise<unknown> } | undefined;
+  /** The archive, and the push outbox's members the sender reads when present (`pushSender.ts#OutboxStorePort`). */
+  readonly coord?: (Pick<CoordStore, 'recordFeedEvent'> & Partial<OutboxStorePort>) | undefined;
+  /** Widened from `Pick<PushService, 'notify'>` (the push outbox, Task 3): `PushService.notify` answers a
+   *  `PushSendVerdict`, which the sender reads, and a double that answers `void` still types. */
+  readonly push?: { notify(p: PushPayload): Promise<unknown>; readonly payloadMasker?: PayloadMasker } | undefined;
   readonly viewers?: Pick<Viewers, 'isVisible'> | undefined;
+  /** The sender's clock, scheduler and chance (`Deps.time`); without them a push is sent with no row. */
+  readonly time?: TimePorts | undefined;
+  /** The wired masker (`Deps.masker`); absent, the sender masks with the shape-only one, as `PushService` is built. */
+  readonly masker?: PayloadMasker | undefined;
 }
 
 /** The port a writer outside `watch.ts` receives: `notify` bound to the composition root's sinks. */
@@ -112,8 +124,11 @@ export function notifyEach(
 /** The gate, the ring record (flushed after it when `flush`; a batch flushes once itself), the guarded archive and the
  *  push for one notice. */
 function raise(deps: NoticeDeps, event: NoticeRecord, mode: NoticeMode, opts: NoticeOpts, flush: boolean): NoticeOutcome {
-  // `'record-only'` never pushes, so presence decides nothing for it and is not consulted.
-  const visible = mode !== 'record-only' && deps.viewers?.isVisible(event.sessionId) === true;
+  // `'record-only'` never pushes, so presence decides nothing for it and is not consulted. A bound row's presence was
+  // asked once, before its move (slug presence-read-once), and its answer is the gate.
+  const bound = opts.bound;
+  const visible = mode !== 'record-only'
+    && (bound === undefined ? deps.viewers?.isVisible(event.sessionId) === true : bound.viewing);
   if (visible && mode === 'push') return { recorded: false, archived: 'none' };
   const log = deps.notifyLog;
   let recorded = false;
@@ -135,8 +150,14 @@ function raise(deps: NoticeDeps, event: NoticeRecord, mode: NoticeMode, opts: No
     }
   }
   if (mode === 'record-only' || visible) return { recorded, archived };
+  if (bound !== undefined) {
+    if (bound.due.due === 'now') senderFor(deps).sendRow(bound.row, bound.settledOf);
+    return { recorded, archived };
+  }
   // The payload's one builder (the push outbox, Task 2): the default tag or the caller's, and `actions` and `url` when given.
-  sendPush(deps.push, noticePayload(event, opts));
+  const due = pushDue({ event: 'reach', service: deps.push !== undefined, source: 'none', blocking: true, viewing: visible,
+    settled: false, superseded: false, payload: true });
+  if (due.due === 'now') senderFor(deps).send(noticePayload(event, opts));
   return { recorded, archived };
 }
 
@@ -147,11 +168,11 @@ function raise(deps: NoticeDeps, event: NoticeRecord, mode: NoticeMode, opts: No
  *  - The new-release push (`FleetWatcher.pushRelease`, D-3296): a release has no session, so there is nothing for the
  *    presence gate to ask and no row to keep. Its once-per-release guard is the caller's persisted mark.
  *  So it takes neither the gate, the ring nor the archive: passing through here gates NOTHING. The caller's policy has
- *  already decided it is pushable, and this only sends it. The push is the funnel's, so the one `PushService.notify`
- *  call for a notice stays in this file. A rejected send is logged under `failed` (the text before ` (reason)`) and
- *  never thrown, because the caller has already answered. */
-export function notifyPushOnly(deps: Pick<NoticeDeps, 'push'>, payload: PushPayload, failed: string): void {
-  sendPush(deps.push, payload, failed);
+ *  already decided it is pushable, and this only sends it, through the one sender (`pushSender.ts`), as every push is.
+ *  A rejected send is logged under `failed` (the text before ` (reason)`) and never thrown, because the caller has
+ *  already answered. */
+export function notifyPushOnly(deps: Pick<NoticeDeps, 'push' | 'coord' | 'time' | 'masker'>, payload: PushPayload, failed: string): void {
+  senderFor(deps).send(payload, { failed });
 }
 
 /** D-6732 (ARCH-59 (#794)): the `notify.sh` banner, the bus frames `POST /api/notify` raises. A banner is a
@@ -166,15 +187,33 @@ export function noticeBanner(deps: { readonly bus: Pick<Bus, 'emit'> }, message:
   if (swap) deps.bus.emit(`session:${swap[1]}`, { type: 'notice', message });
 }
 
-/** The ONE `PushService.notify` call in this file (the census in `notify-push.test.ts` counts it). `failed` names the
- *  caller's sentence for a rejected send; `raise` names none and keeps its send unguarded, as it always was. */
-function sendPush(push: NoticeDeps['push'], payload: PushPayload, failed?: string): void {
-  const sent = push?.notify(payload);
-  if (failed !== undefined) {
-    void sent?.catch((err: unknown) => {
-      console.warn(`${failed} (${err instanceof Error ? err.message : String(err)})`);
-    });
-  }
+/** The questions owner's push outbox (Overlord W1, Task 5, F8) over a funnel's deps. `prepare` builds today's ask
+ *  payload (`noticeTitle` over the active projects, then `noticePayload`), prepares it through the sender, and asks
+ *  `pushDue` once, with presence read here (slug presence-read-once). `sent` records the ask with its bound row and
+ *  sends that row on `now`: through `raise` when given (the watcher's `pushOne`), else through this funnel's `notify`
+ *  with today's ask record (a composition with no watcher, whose own instance never holds an ask). */
+export function questionOutboxOf(
+  deps: NoticeDeps & { readonly coord?: Pick<CoordStore, 'itemById'> | undefined }, questions: () => Pick<Questions, 'askSettled'>,
+  projects: () => ReadonlySet<string> = () => new Set(),
+  raise?: (ev: QuestionPush, bound: NonNullable<NoticeOpts['bound']>) => void,
+): QuestionOutbox {
+  const settledOf = outboxSettledOf({ askSettled: (id) => questions().askSettled(id) }, deps.coord);
+  return {
+    prepare: (ev) => {
+      const payload = ev === null ? null : noticePayload({ ...ev, title: noticeTitle(ev.title, ev.project, projects()) },
+        ev.actions === undefined ? {} : { actions: ev.actions });
+      const prepared = senderFor(deps).prepare(payload);
+      const viewing = ev !== null && deps.viewers?.isVisible(ev.sessionId) === true;
+      return { prepared, viewing, due: pushDue({ event: 'reach', service: prepared.service, source: 'ask', blocking: true, viewing,
+        settled: false, superseded: false, payload: payload !== null }) };
+    },
+    sent: (ev, askId, row) => {
+      const bound = { row: { id: row.id, source: 'ask' as const, sourceId: askId }, due: row.due, viewing: row.viewing, settledOf };
+      if (raise !== undefined) { raise(ev, bound); return; }
+      notify(deps, { kind: ev.kind, sessionId: ev.sessionId, runId: null, title: noticeTitle(ev.title, ev.project, projects()),
+        body: ev.body }, 'push', { ...(ev.actions === undefined ? {} : { actions: ev.actions }), bound });
+    },
+  };
 }
 
 /** The composition root's one sink over its deps. */

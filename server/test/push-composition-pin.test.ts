@@ -59,3 +59,32 @@ describe("the composition root builds the push service masked (D-7510)", () => {
     expect(index.bindings.filter((b) => b.name === 'SHAPE_ONLY_MASKER')).toEqual([]);
   });
 });
+
+// The push outbox (Overlord W1, plan docs/superpowers/plans/2026-11-14-overlord-w1/w1-push-outbox.md, Task 4): the boot
+// pass runs once, synchronously, on the process's one clock, after the store opens and before the fleet link connects,
+// so nothing can push before it and every `sending` row it finds belongs to a process that died.
+describe('the composition root runs the push outbox boot pass before anything can push (Overlord W1)', () => {
+  const callsNamed = (name: string): CallSite[] => index.calls.filter((c) => c.name === name);
+  const topBinding = (name: string): Binding => {
+    const top = index.bindings.filter((b) => b.name === name && b.scopeStart === 0 && b.scopeEnd === index.text.length);
+    expect(top, `index.ts's top-level \`${name}\` binding`).toHaveLength(1);
+    return top[0]!;
+  };
+
+  it('bootPushOutbox(coord, time.clock) is called once, after the store is built and the time ports exist', () => {
+    const boots = callsNamed('bootPushOutbox');
+    expect(boots).toHaveLength(1);
+    const boot = boots[0]!;
+    expect(boot.args).toEqual([{ kind: 'other', text: 'coord' }, { kind: 'other', text: 'time.clock' }]);
+    expect(boot.start).toBeGreaterThan(topBinding('coord').end);
+    expect(boot.start).toBeGreaterThan(topBinding('time').end);
+    expect(topBinding('time').init).toBe('systemTimePorts()');
+  });
+
+  it('the boot pass comes before the fleet link connects', () => {
+    const connects = callsNamed('connectFleet');
+    expect(connects.length).toBeGreaterThan(0);
+    const boot = callsNamed('bootPushOutbox')[0]!;
+    for (const c of connects) expect(boot.start).toBeLessThan(c.start);
+  });
+});

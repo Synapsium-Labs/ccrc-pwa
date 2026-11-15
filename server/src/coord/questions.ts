@@ -49,6 +49,8 @@ import type { AskResult } from '../inject/ask.js';
 import type { DialogMultiResult, DialogResult, DialogTextResult } from '../inject/send.js';
 import type { NoticeSink } from '../notice.js';
 import type { PushPayload } from '../push.js';
+import type { BoundRowRef, BoundWrite } from './pushOutboxStore.js';
+import { changeLatch } from '../changeLatch.js';
 import { freshAskAt, readRegistry, UNMEASURED_ASK_AT, type SessionRecord } from '../registry.js';
 import { approvalClass, rootsForChild } from './approvalguard.js';
 import { renderApprovalBrief } from './approvalbrief.js';
@@ -183,6 +185,19 @@ export interface QuestionRules {
   readonly heldFor: typeof heldFor;
   /** W3 Q3f (D-7030): the watcher's sink for the door cores, absent on a server's own instance (no watcher). */
   readonly doors?: QuestionDoorSink;
+  /** The push outbox (Overlord W1, Task 5): the watcher's and the server's own instances get one, and an instance made
+   *  without it (a test's) writes no bound row and no stamp, as a narrow `coord` double does. */
+  readonly outbox?: QuestionOutbox;
+}
+
+/** How an ask that reaches the operator gets its one outbox row (Overlord W1, Task 5, F8). Types only from the sender's
+ *  side, so this file's ring holds. */
+export interface QuestionOutbox {
+  /** Before the move: today's payload for this ask (`noticeTitle`, then `noticePayload`), prepared, and `pushDue`'s
+   *  answer, with presence read once. A null `ev` (a handover with no in-memory hold) answers a null payload. */
+  readonly prepare: (ev: QuestionPush | null) => BoundWrite;
+  /** After a move that committed the ask's bound row: the funnel's record with that row, and its send on `now`. */
+  readonly sent: (ev: QuestionPush, askId: number, row: BoundRowRef) => void;
 }
 
 /** What the watcher that makes an instance hands it for the answer doors (W3 Q3f, D-7030): the push a door's answer is
@@ -244,7 +259,7 @@ type QuestionHold =
 export type RaiseVerdict =
   | { readonly kind: 'none' }
   | { readonly kind: 'held'; readonly parent: string; readonly record: QuestionRecord }
-  | { readonly kind: 'released'; readonly push: QuestionPush };
+  | { readonly kind: 'released'; readonly push: QuestionPush; readonly bound: { readonly askId: number; readonly row: BoundRowRef } | null };
 
 /** What a re-seed of one child decided this tick (D-5925): `reseeded` (a hold was re-seeded), `waiting` (doubt, left for
  *  a later tick) or `none` (nothing pending, or the pane disproved it and today's path takes over). */
@@ -457,13 +472,17 @@ export interface Questions {
   /** The ask half's switch read (D-5864): `asks-disabled` as this pass's listing shows it, which later holds read. */
   noteAsksSwitch(disabled: boolean): void;
   /** The ask half's lapse at `now`: each push it sends goes through `push`, in today's order. */
-  lapseAsks(now: number, push: (ev: QuestionPush) => void): void;
+  /** With the push outbox, a won lapse hands its push the bound row its move wrote (`bound`); the caller sends that row. */
+  lapseAsks(now: number, push: (ev: QuestionPush, bound?: { readonly askId: number; readonly row: BoundRowRef }) => void): void;
   /** The approval half's lapse, ceiling and deferred pushes (`ApprovalLapseInput`); a throwing store read throws. */
   lapseApprovals(input: ApprovalLapseInput): void;
   /** The approval half's daily retention (spec §6.7): approval inputs, then the asks' question text. */
   prune(now: number): void;
   /** `POST /api/questions/ask-<n>/release`'s door in: the held ask's snapshot to push now, or null. */
   released(childId: string): QuestionPush | null;
+  /** The push outbox's re-read of an ask before each attempt (Overlord W1): settled unless it is still released or
+   *  declined and not answered; null when the row could not be read. */
+  askSettled(askId: number): boolean | null;
   /** D-5289: `POST /api/questions/ask-<n>/rule` settled row `askId` late; the push that replaces its lapse, or null. */
   answeredLate(childId: string, askId: number, parent: string): QuestionPush | null;
   /** D-5440: `POST /api/questions/approval-<n>/release`'s door in, with the dialog the pane shows: the deferred push, or null. */
@@ -759,7 +778,7 @@ export function createQuestions(deps: QuestionsDeps, rules?: QuestionRules): Que
     r: SessionRecord, dialog: Dialog, actions: PushPayload['actions'],
     hs: HookState, ask: Extract<HookAsk, { questions: HookAskQuestion[] }>, parent: string,
     releaseReason: AskMintReleaseReason | null,
-  ): { until: number; askId: number; ev: QuestionPush; answeringSince: number | null } => {
+  ): { until: number; askId: number; ev: QuestionPush; answeringSince: number | null; row: BoundRowRef | null } => {
     const q = ask.questions[0]!;
     const key = askKey(ask);
     // `actions !== null` (askActions) already proved a key exists — this
@@ -791,12 +810,16 @@ export function createQuestions(deps: QuestionsDeps, rules?: QuestionRules): Que
     if (!sib.ok) throw new Error(`hold: ${sib.detail}`);
     const openRuns = sib.siblings;
     const runId = openRuns.length > 0 ? openRuns[openRuns.length - 1]!.id : null;
-    const askId = deps.coord!.insertAsk({
-      childId: r.id, parentId: parent, runId, askKey: key, askAt: hs.updatedAt,
-      dialogId: dialog.id, question, options, now,
-      ...(releaseReason === null ? {} : { releaseReason }),
-    });
+    // The payload is built before the insert, so an ask minted released reaches the operator with its stamp and its one
+    // outbox row in the insert's own transaction (Overlord W1, I2), and nothing after the insert can throw.
     const ev = askHoldPayload(r, hs, dialog, actions);
+    const bound = releaseReason === null ? undefined : rules?.outbox?.prepare(ev);
+    const mint = {
+      childId: r.id, parentId: parent, runId, askKey: key, askAt: hs.updatedAt,
+      dialogId: dialog.id, question, options, now, ...(releaseReason === null ? {} : { releaseReason }),
+    };
+    const { id: askId, row } = bound === undefined ? { id: deps.coord!.insertAsk(mint), row: null }
+      : deps.coord!.insertAsk({ ...mint, bound });
     // The parent is asleep and nothing else will wake it. Ordinary mail, so
     // the existing idle gating applies unchanged — and the latency does not
     // gate the operator, because the operator's own push is racing this hold
@@ -820,7 +843,7 @@ export function createQuestions(deps: QuestionsDeps, rules?: QuestionRules): Que
         subject: askNudgeSubject(askId), body: renderAskBrief(askId, r.id, question, options, until),
       });
     }
-    return { until, askId, ev, answeringSince: null };
+    return { until, askId, ev, answeringSince: null, row };
   };
 
   /**
@@ -939,14 +962,14 @@ export function createQuestions(deps: QuestionsDeps, rules?: QuestionRules): Que
       if (reason !== null) {
         // Released at once: the operator's answerable push fires on THIS
         // tick, never after the window, and no hold is kept for the sweep.
-        return { kind: 'released', push: mint.ev };
+        return { kind: 'released', push: mint.ev, bound: mint.row === null ? null : { askId: mint.askId, row: mint.row } };
       }
       // D-2172: the RECORD is minted now, not at release. `pushOne` returns
       // before `notifyLog.record` when the operator is looking, so suppressing
       // the raise without recording would delete the operator's only durable
       // trace of a question their parent then answered in their name. The
       // caller sends `record` (slug q3d-record-after-hold).
-      setHeldAsk(r.id, mint);
+      setHeldAsk(r.id, { until: mint.until, askId: mint.askId, ev: mint.ev, answeringSince: mint.answeringSince });
       return { kind: 'held', parent: held.parent, record: { ...mint.ev, recordAlways: true, recordOnly: true } };
     } catch (err) {
       console.warn(`ccrc-server: ask hold failed for ${r.id} (${err instanceof Error ? err.message : String(err)}) — falling back to an immediate push`);
@@ -1253,9 +1276,10 @@ export function createQuestions(deps: QuestionsDeps, rules?: QuestionRules): Que
    * The decisions are `coord/questionPolicy.ts#decideAskLapse`'s (W3 Q3c, D-7027), asked at each stage of what this
    * sweep reads (the window, the release CAS, the re-read row).
    */
-  const lapseAsks = (now: number, push: (ev: QuestionPush) => void): void => {
+  const lapseAsks = (now: number, push: (ev: QuestionPush, bound?: { readonly askId: number; readonly row: BoundRowRef }) => void): void => {
     const store = deps.coord;
     if (!store) return;
+    const outbox = rules?.outbox;
     const holds = heldAskEntries();
     if (holds.length === 0) return;
     for (const held of holds) {
@@ -1263,7 +1287,8 @@ export function createQuestions(deps: QuestionsDeps, rules?: QuestionRules): Que
       const key = askHoldKey(held.askId);
       // `recordLapse` says whether this sweep's own CAS moved the row: only that lapse is recorded for a late answer
       // (D-5289).
-      const act = (answer: AskLapse, recordLapse = false): void => {
+      // A won lapse with the push outbox wrote the ask's row in its move: its push is that row's (no unbound push follows).
+      const act = (answer: AskLapse, recordLapse = false, row: BoundRowRef | null = null): void => {
         switch (answer) {
           case 'wait':
           case 'keep':
@@ -1277,22 +1302,29 @@ export function createQuestions(deps: QuestionsDeps, rules?: QuestionRules): Que
           case 'push-and-drop':
             questionHolds.delete(key);
             if (recordLapse) setLapsedAsk(id, held.askId, held.ev);
-            push(held.ev);
+            if (row !== null) push(held.ev, { askId: held.askId, row });
+            else push(held.ev);
             return;
         }
       };
       if (decideAskLapse(held, { kind: 'window' }, now) === 'wait') continue;
 
-      let released: boolean;
+      let released: BoundRowRef | boolean;
       try {
-        released = store.releaseAsk(held.askId, now);
+        // With the push outbox, the CAS, the reach stamp and the bound row are one transaction (I2); a throw rolls it all
+        // back and the hold stays for the next sweep (slug a-failed-bound-write-rolls-back).
+        released = outbox === undefined ? store.releaseAsk(held.askId, now) : store.releaseAsk(held.askId, now, outbox.prepare(held.ev));
+        releaseWarn.clear();
       } catch (err) {
-        console.warn(`ccrc-server: releaseAsk failed for ask ${held.askId} (session ${id}) (${err instanceof Error ? err.message : String(err)}) — leaving the hold in place to retry next sweep`);
+        const why = err instanceof Error ? err.message : String(err);
+        if (releaseWarn.changed(why)) {
+          console.warn(`ccrc-server: releaseAsk failed for ask ${held.askId} (session ${id}) (${why}) — leaving the hold in place to retry next sweep`);
+        }
         act(decideAskLapse(held, { kind: 'release-threw' }, now));
         continue;
       }
-      if (released) {
-        act(decideAskLapse(held, { kind: 'release-won' }, now), true);
+      if (released !== false) {
+        act(decideAskLapse(held, { kind: 'release-won' }, now), true, released === true ? null : released);
         continue;
       }
 
@@ -1391,6 +1423,17 @@ export function createQuestions(deps: QuestionsDeps, rules?: QuestionRules): Que
   };
 
   // ── the door-ins: each answers what to push; the caller pushes ─────────────────────────────────────────────────
+
+  /** The lapse's release failure, logged once per cause (Overlord W1; a `changeLatch`, where it once warned every sweep). */
+  const releaseWarn = changeLatch<string>();
+
+  /** Whether the ask a bound row belongs to is settled for the push outbox: answered, or no longer released or declined
+   *  (`pushSender.ts#outboxSettledOf` reads it before each claim). A failed read answers null. */
+  const askSettled = (askId: number): boolean | null => {
+    const read = deps.coord?.askById(askId);
+    if (read === undefined || !read.ok) return null;
+    return read.ask === null || (read.ask.state !== 'released' && read.ask.state !== 'declined');
+  };
 
   /**
    * `POST /api/questions/ask-<n>/release` (Task 10, the decline route): a parent has DECLINED to rule on its child's question,
@@ -1633,14 +1676,29 @@ export function createQuestions(deps: QuestionsDeps, rules?: QuestionRules): Que
       if (ask.parentId !== q.fromId) {
         return refused('not-parent', { detail: 'only this child\'s derived parent may decline its question' });
       }
-      if (!coord.declineAsk(q.id, Date.now())) return refused('not-held');
+      // The push outbox (Overlord W1): the hold is read before the decline and dropped only after its CAS wins
+      // (slug handover-reads-before-it-deletes); the decline, the reach stamp and the bound row are one transaction.
+      const outbox = rules?.outbox;
+      const ev = askEntry(ask.childId, 'held')?.[1].ev ?? null;
+      let moved: BoundRowRef | boolean;
+      try {
+        moved = outbox === undefined ? coord.declineAsk(q.id, Date.now()) : coord.declineAsk(q.id, Date.now(), outbox.prepare(ev));
+      } catch (err) {
+        return refused('internal', { detail: `the decline was not written (${err instanceof Error ? err.message : String(err)})` });
+      }
+      if (moved === false) return refused('not-held');
+      if (outbox !== undefined && moved !== true) {
+        questions.released(ask.childId);                      // the CAS won: the hold is dropped only now
+        if (ev !== null) { outbox.sent(ev, q.id, moved); return sent(200, { ok: true }); }   // the row its move wrote
+      }
       // With no watcher (fix round 1, item 1) the row is declined and the answer is `{ok:true}`, which is true, but no
-      // hold is dropped and no push fires: warned, never refused (refusing would contradict the store row).
+      // hold is dropped and no push fires: warned, never refused (refusing would contradict the store row). With the push
+      // outbox a handover with no in-memory hold still wrote its reach and a `silent` row, and pushes nothing, as before.
       if (rules?.doors === undefined) {
         console.warn(`ccrc-server: POST /api/asks/:id/release released ask ${q.id} (child ` +
           `${ask.childId}) with no watcher configured — the row is declined but the operator's ` +
           'push was never fired');
-      } else {
+      } else if (outbox === undefined) {
         pushDoorIn(questions.released(ask.childId));
       }
       return sent(200, { ok: true });
@@ -1777,7 +1835,7 @@ export function createQuestions(deps: QuestionsDeps, rules?: QuestionRules): Que
     forgetApprovalInput: (id) => { approvalInputs.delete(id); },
     raise, loadReseed, reseed, reseedGone, settleReplaced, settleCleared, restamp,
     noteAsksSwitch: (disabled) => { asksDisabled = disabled; },
-    lapseAsks, lapseApprovals, prune, released, answeredLate, approvalReleased, approvalRuled, currentAskOf,
+    lapseAsks, lapseApprovals, prune, released, askSettled, answeredLate, approvalReleased, approvalRuled, currentAskOf,
     answer, rule, release,
     [TEST_VIEW]: testView,
   };

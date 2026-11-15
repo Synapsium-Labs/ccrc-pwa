@@ -12325,7 +12325,7 @@ export function backgroundOnlyRefusal(body: unknown): { count: number | null; ki
 
 /** One capability word the server advertises. Spelled once, as the keys of `SERVER_CAP_MAP`. */
 export type ServerCap = 'dispatch-live-gate-v1' | 'hook-main-state-v1' | 'ask-pairing-v1' | 'questions-v1' | 'review-rounds-v1' | 'goals-read-v1' | 'calls-v1' | 'plan-v1'
-  | 'timers-v1';
+  | 'timers-v1' | 'push-outbox-v1';
 
 /** Every word, with what it promises. The value is `true`; the promise is the comment, which a word's reader may
  *  rely on and nothing weaker. `PR_REASON_MAP`'s idiom: a word added to `ServerCap` and not here is TS2741. */
@@ -12385,6 +12385,13 @@ const SERVER_CAP_MAP: Readonly<Record<ServerCap, true>> = {
   /** W1a: the timer doors, the timers lane and `ccrc-api timer` (Overlord timers piece). `ccrc-api timer` refuses
    *  `capability-missing`, unsent, when a current cap file omits this word. Added by the change that builds the client. */
   'timers-v1': true,
+  /** Overlord W1, the push outbox (H18; Table 11.1d): every push sent through deps that carry the store and the time ports
+   *  has a `push_outbox` row, or is logged as unwritable; an ask released by one of its three moves (the mint, the lapse,
+   *  the decline), or an item shown at its raise, its toggle to blocking or the held drain, carries `reachedOperatorAt` and
+   *  one row written in that move's transaction, with or without a push service. The lapse's `push-and-drop` and the
+   *  hold-failure fallback send an unbound push, with no stamp. A claimed attempt is never retried. W3's hold arming reads
+   *  it. Added by the change that moves every push behind the one sender, cut after every site writes rows. */
+  'push-outbox-v1': true,
 };
 
 /** The words this server advertises, in `GET /health`'s `caps`, and in the file a `server` or `both` node writes. */

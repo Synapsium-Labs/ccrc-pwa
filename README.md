@@ -3788,6 +3788,14 @@ replies, the watch's `orphaned:` and `failed:` self-wake mail, and a run's move 
 and never pushed. Nothing is pushed for a session a client has on screen;
 mail and run records still land in the feed.
 
+**Every push is recorded** (the push outbox, `push-outbox-v1`). Each push the server sends is first a row of
+`push_outbox` in `coord.db`, and one sender sends it and records each subscription's answer. A push that every
+subscription refused for a reason that can pass (a 429, a 5xx, a network error before the request left the box) is
+retried, 30 s and then doubling, for the push's own ten-minute lifetime; one the push service may have taken (a reset or
+a timeout after the request was written) is never sent again, so no device shows it twice. A push still unsent when the
+server stopped is sent at its next boot if it is inside those ten minutes. A question or a Waiting on you item that
+reaches you also gets the time it reached you (`reachedOperatorAt`), with or without push keys.
+
 A `✓ Finished` push means a main turn ended inside the busy stretch that just went idle (D-5233): the session's turn
 marker records a Stop at or after the stretch began (2 s of slack), with no newer turn opened after it. A stretch of
 compaction only, a restart, an overload tick, and a turn ended by Escape or a kill push nothing. A session whose hook

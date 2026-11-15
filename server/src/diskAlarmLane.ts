@@ -19,7 +19,7 @@ export class DiskAlarmLane {
   private state: DiskVerdict | null = null;
   private held: DiskHealth | null = null;
 
-  constructor(private readonly deps: () => Pick<WatcherDeps, 'io' | 'cfg' | 'coord' | 'notifyLog' | 'push' | 'viewers'>) {}
+  constructor(private readonly deps: () => Pick<WatcherDeps, 'io' | 'cfg' | 'coord' | 'notifyLog' | 'push' | 'viewers' | 'time' | 'masker'>) {}
 
   /** The block as the last pass held it, or `null` before the first: absence on the wire reads as UNKNOWN, never as a
    *  healthy disk. `holders` is empty here; the tmp census's are overlaid by the watcher. */

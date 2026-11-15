@@ -199,16 +199,18 @@ describe('claims and verdicts (never twice)', () => {
     expect(rows(s)).toMatchObject([{ sourceKind: null, sourceId: null, state: 'sending', claimSeq: 1, attempts: 1 }]);
   });
 
-  it('inside an open transaction the unbound insert joins it rather than failing', () => {
+  it('inside an open transaction the unbound insert writes nothing and says so, never joining it (review 2150 F7)', () => {
     const s = store();
-    expect(tx(s.db, () => s.insertUnboundRow({ pushId: pushId(), payload: PAYLOAD, at: NOW }))).toMatchObject({ ok: true, claimSeq: 1 });
-    expect(rows(s)).toMatchObject([{ state: 'sending', claimSeq: 1 }]);
+    expect(tx(s.db, () => s.insertUnboundRow({ pushId: pushId(), payload: PAYLOAD, at: NOW })))
+      .toEqual({ ok: false, detail: 'push_outbox insert refused inside an open transaction' });
+    expect(rows(s)).toEqual([]);
+    expect(s.insertUnboundRow({ pushId: pushId(), payload: PAYLOAD, at: NOW })).toMatchObject({ ok: true, claimSeq: 1 });
   });
 
   it('claimOutboxRow on a pending row claims it once; on a sending or terminal row changes nothing', () => {
     const s = store();
     const id = bound(s, item(s));
-    expect(s.claimOutboxRow(id, NOW + 1)).toEqual({ changed: true, claimSeq: 1 });
+    expect(s.claimOutboxRow(id, NOW + 1)).toMatchObject({ changed: true, claimSeq: 1 });
     expect(s.claimOutboxRow(id, NOW + 2)).toEqual({ changed: false });
     s.markOutboxVerdict(id, 1, SENT, NOW + 3);
     expect(s.claimOutboxRow(id, NOW + 4)).toEqual({ changed: false });
@@ -220,7 +222,7 @@ describe('claims and verdicts (never twice)', () => {
     const id = bound(s, item(s));
     s.claimOutboxRow(id, NOW);
     s.markOutboxVerdict(id, 1, retry(NOW + 30_000), NOW + 1);
-    expect(s.claimOutboxRow(id, NOW + 30_000)).toEqual({ changed: true, claimSeq: 2 });
+    expect(s.claimOutboxRow(id, NOW + 30_000)).toMatchObject({ changed: true, claimSeq: 2 });
     expect(rows(s)[0]).toMatchObject({ state: 'sending', attempts: 2, claimSeq: 2 });
   });
 
@@ -231,9 +233,9 @@ describe('claims and verdicts (never twice)', () => {
     s.markOutboxVerdict(id, 1, retry(NOW + 30_000), NOW + 1);
     expect(s.claimOutboxRow(id, NOW + 29_999)).toEqual({ changed: false });
     expect(rows(s)[0]).toMatchObject({ state: 'retrying', attempts: 1, claimSeq: 1 });
-    expect(s.claimOutboxRow(id, NOW + 30_000)).toEqual({ changed: true, claimSeq: 2 });
+    expect(s.claimOutboxRow(id, NOW + 30_000)).toMatchObject({ changed: true, claimSeq: 2 });
     const fresh = bound(s, item(s), { at: NOW });
-    expect(s.claimOutboxRow(fresh, 0)).toEqual({ changed: true, claimSeq: 1 });
+    expect(s.claimOutboxRow(fresh, 0)).toMatchObject({ changed: true, claimSeq: 1 });
   });
 
   it('markOutboxVerdict with a stale claimSeq changes nothing', () => {

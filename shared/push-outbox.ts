@@ -60,10 +60,12 @@ export const OUTBOX_SOURCES = Object.keys(OUTBOX_SOURCE_MAP) as OutboxSource[];
 
 /** One subscription's answer to one send. `refused` can pass (429, any 5xx, or an error raised before the request left
  *  the box); `refused-for-good` cannot (400, 403, 413); `gone` is a 404 or 410, pruned; `no-answer` is a reset or a
- *  timeout after the request was written, where the service may have taken it (slug no-answer-is-never-retried). */
-export type SubscriptionVerdict = 'accepted' | 'refused' | 'refused-for-good' | 'gone' | 'no-answer';
+ *  timeout after the request was written, where the service may have taken it (slug no-answer-is-never-retried);
+ *  `unsendable` is web-push refusing it on this box before any request was built (a stored subscription with bad keys),
+ *  so no service saw it and no retry can pass (review 2119 F10, slug local-refusal-is-unsendable). */
+export type SubscriptionVerdict = 'accepted' | 'refused' | 'refused-for-good' | 'gone' | 'no-answer' | 'unsendable';
 const SUBSCRIPTION_VERDICT_MAP: Readonly<Record<SubscriptionVerdict, true>> = {
-  accepted: true, refused: true, 'refused-for-good': true, gone: true, 'no-answer': true,
+  accepted: true, refused: true, 'refused-for-good': true, gone: true, 'no-answer': true, unsendable: true,
 };
 export const SUBSCRIPTION_VERDICTS = Object.keys(SUBSCRIPTION_VERDICT_MAP) as SubscriptionVerdict[];
 
@@ -78,11 +80,11 @@ export type PushSendVerdict =
     }[];
   };
 
-/** Why a row made no push: no push service, no payload, the source settled, the level, the operator looking, or an
- *  older build that pushed it already. */
-export type PushSilentWhy = 'level' | 'viewing' | 'settled' | 'no-payload' | 'no-service' | 'older-build';
+/** Why a row made no push: no push service, no payload, the source settled, the level, the operator looking, an older
+ *  build that pushed it already, or a newer push under the same tag that a device took (review 2150 F4). */
+export type PushSilentWhy = 'level' | 'viewing' | 'settled' | 'no-payload' | 'no-service' | 'older-build' | 'superseded';
 const PUSH_SILENT_WHY_MAP: Readonly<Record<PushSilentWhy, true>> = {
-  level: true, viewing: true, settled: true, 'no-payload': true, 'no-service': true, 'older-build': true,
+  level: true, viewing: true, settled: true, 'no-payload': true, 'no-service': true, 'older-build': true, superseded: true,
 };
 export const PUSH_SILENT_WHYS = Object.keys(PUSH_SILENT_WHY_MAP) as PushSilentWhy[];
 
