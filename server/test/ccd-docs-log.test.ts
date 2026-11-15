@@ -456,10 +456,11 @@ describe('docs-log: a walk that ends short is truncated', () => {
     fs.rmSync(path.join(dir, 'docs'), { recursive: true, force: true });
     const orphan = touch(dir, `${SPECS}/a.md`, 'orphan', 'the second root');
     // The merge's tree differs from both parents', so git's history simplification follows both sides of it.
-    h.git(dir, 'merge', '-q', '-s', 'ours', '--no-commit', '--allow-unrelated-histories', 'main');
+    // It is built with commit-tree (a `merge --no-commit` prints a line the suite would carry into its output).
     fs.writeFileSync(path.join(dir, SPECS, 'a.md'), 'merged\n');
     h.git(dir, 'add', '--', `${SPECS}/a.md`);
-    h.git(dir, 'commit', '-q', '-m', 'merge main');
+    const merge = h.git(dir, 'commit-tree', h.git(dir, 'write-tree'), '-p', orphan, '-p', 'main', '-m', 'merge main');
+    h.git(dir, 'update-ref', 'refs/heads/side', merge);
     touch(dir, `${SPECS}/a.md`, 'one', 't1');
     const t2 = touch(dir, `${SPECS}/a.md`, 'two', 't2');
     // CONTROL: before the repository is shallow, the second root is listed (a true root, parent null) near the top,
