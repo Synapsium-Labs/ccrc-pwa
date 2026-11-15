@@ -103,6 +103,17 @@ const COMMITTED_TREE = treeOk({ entries: [entry(SECTION, NAME, { committed: { ki
 const HEADED_DOC = `${DOC}${['first', 'second', 'third', 'fourth', 'fifth', 'sixth'].map((n) => `## The ${n} section\n\nText under the ${n} section.\n`).join('\n')}`;
 const HEADED_TREE = treeOk({ entries: [entry(SECTION, NAME, { committed: { kind: 'file', blob: BLOB, size: Buffer.byteLength(HEADED_DOC, 'utf8') } })] });
 
+/** A document whose h1 runs far past the one bar's title (fix round 1, F3): 99 characters, several lines in the frame at
+ *  412 px and several times the plan's 236-280 px estimate for the title on the bar, so the bar must cut it and the
+ *  frame's first line runs under the frame's own Aa if anything does. */
+const LONG_TITLE = 'Path identity across every checkout, branch, worktree and served ref of one project\'s documents set';
+const LONG_DOC = DOC.replace(`# ${TITLE}`, `# ${LONG_TITLE}`);
+/** A document with one Mermaid fence right under its first paragraph (fix round 1, A7), near the top of the trimmed frame
+ *  where ccrc's bar sits above it. */
+const MERMAID_DOC = DOC.replace('checkout.\n\n', 'checkout.\n\n```mermaid\nflowchart LR\n  A[path] --> B[ref]\n  B --> C[document]\n```\n\n');
+const MERMAID_TREE = treeOk({ entries: [entry(SECTION, NAME, { committed: { kind: 'file', blob: BLOB, size: Buffer.byteLength(MERMAID_DOC, 'utf8') } })] });
+const LONG_TREE = treeOk({ entries: [entry(SECTION, NAME, { committed: { kind: 'file', blob: BLOB, size: Buffer.byteLength(LONG_DOC, 'utf8') } })] });
+
 /** The same leaf in a ref view of a long local branch, with a draft over it held by that branch's checkout. */
 function draftTree(leaf = NAME): ReturnType<typeof treeOk> {
   const base = treeOk({
@@ -200,7 +211,7 @@ interface Figure {
   readonly aaOverTitle: boolean;
 }
 
-async function measure(page: Page): Promise<Figure> {
+async function measure(page: Page, title = TITLE): Promise<Figure> {
   const outer = await page.evaluate(async () => {
     await document.fonts.ready;
     const top = (sel: string): number => document.querySelector(sel)?.getBoundingClientRect().top ?? Number.NaN;
@@ -222,8 +233,8 @@ async function measure(page: Page): Promise<Figure> {
       return [...range.getClientRects()].some((r) => r.left < aa.right && r.right > aa.left && r.top < aa.bottom && r.bottom > aa.top);
     });
     return { tops, scroll: window.scrollY, frameBar: document.querySelector('.topbar') !== null, aaOverTitle };
-  }, TITLE);
-  if (inner.tops.length === 0) throw new Error(`no h1 in the frame reads ${TITLE}`);
+  }, title);
+  if (inner.tops.length === 0) throw new Error(`no h1 in the frame reads ${title}`);
   const titleInFrame = Math.max(...inner.tops);
   return {
     ...outer, titleInFrame, frameScroll: inner.scroll, above: outer.frameTop + titleInFrame,
@@ -288,6 +299,73 @@ describe('a phone draws the one bar above a ready reader (the take-up plan, refi
       expect(f.frameTop - f.screenTop, 'the bar and the gap under it').toBeLessThanOrEqual(CONSOLE_PART_MAX);
     });
   }, 120_000);
+
+  it(`412 x 915, Refined, a ${LONG_TITLE.length}-character title: the bar cuts it inside the title, the frame's h1 is where the short one is, and aaOverTitle is recorded (fix round 1, F3)`, async () => {
+    const app = await openLeaf({ ...PHONE, skin: REFINED }, LONG_TREE, NAME, LONG_DOC);
+    try {
+      await oneBar(app.page);
+      const f = await measure(app.page, LONG_TITLE);
+      const bar = await app.page.evaluate(() => {
+        const button = document.querySelector('.docs-one-bar .docs-title')!.getBoundingClientRect();
+        const name = document.querySelector<HTMLElement>('.docs-one-bar .docs-compact-name')!;
+        const box = name.getBoundingClientRect();
+        return { titleW: button.width, nameW: box.width, nameScroll: name.scrollWidth, nameRight: box.right, titleRight: button.right };
+      });
+      console.log(`L11-FIGURE refined 412x915 long-title ${JSON.stringify({ chars: LONG_TITLE.length, ...f, ...bar })}`);
+      expect(f.head).toBe('one-bar');
+      expect(f.frameBar, 'the frame draws no bar of its own').toBe(false);
+      expect(f.above, 'px above the title').toBeLessThanOrEqual(ONE_BAR_TITLE_MAX);
+      expect(bar.titleW, "the title's room on the bar, against the plan's 280 px estimate").toBeLessThanOrEqual(280);
+      expect(bar.nameScroll, 'the long title runs past its room, so the bar cuts it').toBeGreaterThan(bar.nameW);
+      expect(bar.nameRight, 'the cut title stays inside the title button').toBeLessThanOrEqual(bar.titleRight + 0.5);
+      expect(await app.page.locator('.docs-title').textContent(), "the title is the document's h1").toContain(LONG_TITLE);
+      expect(app.errors, 'no page error').toEqual([]);
+    } finally {
+      await app.ctx.close();
+    }
+  }, 120_000);
+
+  it("412 x 915, Refined, a Mermaid fence on the host-bar mount (the on-request arm): its Render control is inside the trimmed frame, below ccrc's bar and reachable, and a tap draws the figure (fix round 1, A7)", async () => {
+    expect(MERMAID_DOC).not.toBe(DOC);
+    const app = await openLeaf({ ...PHONE, skin: REFINED }, MERMAID_TREE, NAME, MERMAID_DOC);
+    try {
+      await oneBar(app.page);
+      const handle = await app.page.locator('.docs-reader iframe').elementHandle({ timeout: 30_000 });
+      const frame = await handle?.contentFrame();
+      if (frame === null || frame === undefined) throw new Error('the reader iframe has no content frame');
+      expect(await frame.evaluate(() => document.querySelector('.topbar') !== null), 'the frame is mounted on ccrc\'s bar, with none of its own').toBe(false);
+      const button = frame.locator('figure.mermaid-figure .fig-render-btn');
+      expect(await button.count(), 'one Render control: the on-request arm').toBe(1);
+      expect(await frame.evaluate(() => [...document.querySelectorAll('figure.mermaid-figure')].map((f) => `${f.getAttribute('data-docreader-draw')}:${f.querySelectorAll('svg').length}`)),
+        'before the tap nothing is drawn').toEqual(['on-request:0']);
+      await button.scrollIntoViewIfNeeded();
+      const inFrame = await button.boundingBox();
+      const frameBox = await app.page.locator('.docs-reader iframe').boundingBox();
+      const barBottom = await app.page.evaluate(() => document.querySelector('.docs-one-bar')!.getBoundingClientRect().bottom);
+      if (inFrame === null || frameBox === null) throw new Error('no box for the Render control or the frame');
+      const cx = inFrame.x + inFrame.width / 2;
+      const cy = inFrame.y + inFrame.height / 2;
+      const hit = await app.page.evaluate(([x, y]) => document.elementFromPoint(x!, y!)?.tagName ?? null, [cx, cy]);
+      const place = { control: inFrame, frame: frameBox, barBottom, viewportH: PHONE.height, hit };
+      console.log(`L11-FIGURE refined 412x915 mermaid-render ${JSON.stringify(place)}`);
+      expect(inFrame.y, 'the control starts below ccrc\'s bar').toBeGreaterThanOrEqual(barBottom);
+      expect(inFrame.y, 'and inside the frame').toBeGreaterThanOrEqual(frameBox.y);
+      expect(inFrame.x).toBeGreaterThanOrEqual(frameBox.x);
+      expect(inFrame.x + inFrame.width, 'the control is not cut at the frame\'s right edge').toBeLessThanOrEqual(frameBox.x + frameBox.width + 0.5);
+      expect(inFrame.y + inFrame.height, 'the control is inside the window').toBeLessThanOrEqual(PHONE.height);
+      expect(hit, 'nothing of the console covers the control: a tap at its middle lands on the frame').toBe('IFRAME');
+      await button.click();
+      await frame.waitForFunction(() => {
+        const state = document.querySelector('figure.mermaid-figure')?.getAttribute('data-docreader-draw');
+        return state === 'drawn' || state === 'failed';
+      }, undefined, { timeout: 90_000 });
+      expect(await frame.evaluate(() => [...document.querySelectorAll('figure.mermaid-figure')].map((f) => `${f.getAttribute('data-docreader-draw')}:${f.querySelectorAll('svg').length}`)),
+        'the tap drew the figure').toEqual(['drawn:1']);
+      expect(app.errors, 'no page error').toEqual([]);
+    } finally {
+      await app.ctx.close();
+    }
+  }, 180_000);
 
   it('599 x 915: still the one bar (the compact width ends at 600)', async () => {
     await at({ width: 599, height: 915, skin: REFINED }, async ({ page }) => {
