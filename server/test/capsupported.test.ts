@@ -11,7 +11,7 @@ import { readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
-  ACTOR_FLAGS_CAP, CCD_ARGV, CHILD_ARGV_CAP, DOCS_CAP, PR_STATE_PR_CAP, RECLAIM_CAP, RECLAIM_PAUSE_CAP, WIN_SIZE_CAP, capSupported, stopSurfaceSupported, verbSupported,
+  ACTOR_FLAGS_CAP, CCD_ARGV, CHILD_ARGV_CAP, DOCS_CAP, DOCS_SECTIONS_CAP, PR_STATE_PR_CAP, RECLAIM_CAP, RECLAIM_PAUSE_CAP, WIN_SIZE_CAP, capSupported, stopSurfaceSupported, verbSupported,
   deviceActor, type ActorFlags,
 } from '../src/ccdargv.js';
 import { isExecAllowed } from '../../agent/src/whitelist.js';
@@ -168,6 +168,17 @@ describe('capSupported', () => {
     expect(capSupported(state(['docs-tree']), DOCS_CAP)).toBe(false);
     expect(capSupported(state([DOCS_CAP]), DOCS_CAP)).toBe(true);
     expect(verbSupported(state(null), ['docs-tree'])).toBe(true);
+  });
+
+  it('spells the docs sections token exactly once in server/src, and refuses on no evidence (docs W5b-1)', () => {
+    // The other two spellings: ccd's own `echo docs-sections-v2` and `ccd-archive.test.ts`'s KNOWN_CAPABILITY_TOKENS,
+    // whose `toContain(DOCS_SECTIONS_CAP)` holds all three equal.
+    expect(DOCS_SECTIONS_CAP).toBe('docs-sections-v2');
+    expect(literalSpellings(DOCS_SECTIONS_CAP)).toBe(1);
+    expect(capSupported(state(null), DOCS_SECTIONS_CAP)).toBe(false);
+    expect(capSupported(undefined, DOCS_SECTIONS_CAP)).toBe(false);
+    expect(capSupported(state([DOCS_CAP]), DOCS_SECTIONS_CAP)).toBe(false);
+    expect(capSupported(state([DOCS_SECTIONS_CAP]), DOCS_SECTIONS_CAP)).toBe(true);
   });
 });
 

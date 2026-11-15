@@ -27,7 +27,7 @@
 // here can recover a secret that cut split) and SEC-3 (an externally killed helper orphans git's process group; this
 // wave's lever is the runner budget invariant that `docs-budget.test.ts` holds, so the agent never kills ccd first).
 import { createHash } from 'node:crypto';
-import { CCD_ARGV, ccdCan } from '../ccdargv.js';
+import { CCD_ARGV, DOCS_SECTIONS_CAP, capSupported, ccdCan } from '../ccdargv.js';
 import { ccdEnding, type CcdResult, type CcdRunner } from '../lifecycle.js';
 import type { FleetState } from '../fleetstate.js';
 import {
@@ -35,7 +35,7 @@ import {
   type DocPin, type DocsFailure, type DocsFailureBody, type DocsFetchOk, type DocsIndexOk, type DocsRefSpec,
   type DocsShowOk, type DocsTreeOk, type DocsVerb,
 } from '../../../shared/docs.js';
-import { LISTING_JOB, type DocsJob } from './policy.js';
+import { DOCS_SECTION_GATED, LISTING_JOB, type DocsJob } from './policy.js';
 import type { DocsFetchRun, DocsFetcher, DocsReader, DocsShowAsk, DocsShowRead } from './ports.js';
 
 /** What both adapters are built from. `fleetState` is the server's live fleet state, read at each call (the server
@@ -105,6 +105,13 @@ function stderrHeadOf(s: string): string {
   return utf8Head(redactDocsText(s), STDERR_HEAD_BYTES);
 }
 
+/** Whether this box's ccd serves the sections that came with `DOCS_SECTIONS_CAP` (rich-docs spec G1, W5b), refusing on
+ *  no evidence. Module-level on purpose: a `capSupported(` inside `readDocs` would read to `verb-gate.test.ts` as a gate
+ *  for every docs argv there, and hide a lost `ccdCan(` row gate. */
+function docsSectionsServed(state: CcdDocsDeps['fleetState']): boolean {
+  return capSupported(state, DOCS_SECTIONS_CAP);
+}
+
 /**
  * The gated read executor: the gate, then ONE `switch` that builds and runs each read argv (refinement (c)). The two
  * gate lines are section 2 (a)'s, literally, and both answers are decided before any exec:
@@ -113,6 +120,7 @@ function stderrHeadOf(s: string): string {
  * - a measured list without `docs-v1`: `unsupported`. Asked as `ccdCan` of the call's own row (D-5866), whose token is
  *   `docs-v1` and which refuses on no evidence: a box can echo the four verb names without the token, and
  *   `verbSupported` would permit it.
+ * - a section that needs `DOCS_SECTIONS_CAP`, on a measured list without it: `unsupported` too (rich-docs spec G1), asked through `docsSectionsServed`.
  */
 async function readDocs(deps: CcdDocsDeps, call: DocsReadCall): Promise<DocsRan> {
   const verbs = deps.fleetState?.ccdVerbs ?? null;
@@ -121,6 +129,13 @@ async function readDocs(deps: CcdDocsDeps, call: DocsReadCall): Promise<DocsRan>
     : call.verb === 'docs-tree' ? 'docsTree'
       : call.pin.kind === 'committed' ? 'docsShowCommitted' : 'docsShowDraft');
   if (!can) return fail('unsupported');
+  // The rich-docs spec's G1 (W5b): a section that came with DOCS_SECTIONS_CAP is named to ccd only on a box that lists
+  // that token, so a new server only ever under-calls an old fleet. `null`: this call names no section. Decided before
+  // any exec, like the two answers above.
+  const section = call.verb === 'docs-show' ? call.pin.section : null;
+  if (section !== null && DOCS_SECTION_GATED[section] && !docsSectionsServed(deps.fleetState)) {
+    return fail('unsupported');
+  }
   switch (call.verb) {
     case 'docs-index':
       return { ok: true, res: await deps.runCcd(CCD_ARGV.docsIndex()) };

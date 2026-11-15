@@ -316,6 +316,12 @@ export function parseDocsApiQuery(route: DocsApiRoute, query: Readonly<Record<st
   return pin.ok ? { ok: true, req: { route, pin: pin.pin } } : pin;
 }
 
+/** Whether a section came to ccd with the sections token (rich-docs spec G1, W5b; `ccdargv.ts#DOCS_SECTIONS_CAP`, which
+ *  this file never spells), so the adapter names it to ccd only on a box that lists that token. Keyed by the L0 type: a seventh section does not compile here until it is placed. */
+export const DOCS_SECTION_GATED: Readonly<Record<DocSectionSlug, boolean>> = {
+  specs: false, plans: false, 'product-design': false, conventions: false, vision: true, promise: true,
+};
+
 /** The `:project` route parameter: the project grammar, else `bad-project` (section 3.4), before any exec. */
 export function parseDocsProjectParam(project: unknown): { ok: true; project: string } | DocsFailureBody {
   return isText(project) && isDocsProject(project) ? { ok: true, project } : refused('bad-project');
