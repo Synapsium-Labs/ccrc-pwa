@@ -159,3 +159,37 @@ saved copy, `cmp` restore, same selection green after: 27 passed).
 | (a) `ownedPinned = false` (refusal deleted) | 21 failed (the 20 HTTP damaged cases + the pure refuse case) |
 | (b) `ownedPinned` reads `current.state === 'pinned'` (display) | 21 failed, same set |
 | (c) `ownedPinned = storedState === 'pinned'` and the outer ownership test dropped | 1 failed: the pure "unowned or other word keeps today's answer" case |
+
+## R5 and R6 (code)
+
+Commits: `6ae3f2daa` (A1), `7177edd4c` (A2), `af7410dbc` (A5 and the control body's header), `fd4ec4090` (the handle guard and README).
+
+- **A1, the Date.parse exemption.** `landing-entry-census.test.ts` `clockAndFs` now exempts only the `Date` identifier that is the
+  receiver of a `.parse(` call (found on the syntax tree), so a mixed line still counts its other `Date`. Controls added to the
+  CONTROL case: `Date.now() - Date.parse(at)` and `new Date(x).getTime() + Date.parse(y)` are flagged, a standalone `Date.parse(at)`
+  passes, a standalone `Date.now()` is flagged. Red first: `expected [] to deeply equal [ '1 Date' ]` against the old whole-line
+  exemption. Mutant: the exemption count forced to cover the whole line, run with `-t "CONTROL: the policy scan"`: rc 1, the same
+  assertion text; `cmp` restore equal; green (1 passed). Measured at `6ae3f2daa`'s parent plus the edit.
+- **A2, comments.** `landedLane.ts` header now says L4 acts on L1's answers (`landedProjectStep`, `landedPruneIds`,
+  `landedMarkStep`); `landedCandidatesOf`'s doc names the non-landable terminal-repair candidates. Comments only.
+- **A5, a missing run answers `run-unreadable`.** `nextLandingNoticeOf` maps `run === 'missing'` and `'unreadable'` to
+  `run-unreadable`; `'run-absent'` left `NextLandingNoSendReason` (no other landing code used it). `NextLandingFacts.run` keeps its three
+  arms. The `row === null` branch in `landingControlTx.ts` was unreachable (the decider answers no-send for a missing run before any
+  `send`, and a run episode is only built from a run object), so it is removed and `queueLandingNoticeTx` takes `row!` with a comment;
+  `queued.why === 'run-gone'` still maps to `episode-changed`. Tests: the pure case now expects `run-unreadable`; a real-store case
+  deletes the selected head's run row (foreign keys off for the delete) and expects
+  `{ kind: 'no-send', reason: 'run-unreadable', holdChanged: false }` with zero mail, deliveries and observations. `mail-routes.test.ts`
+  was not read or edited. Red: pure case `expected 'run-absent' to be 'run-unreadable'`; the real-store case first failed on
+  `FOREIGN KEY constraint failed` (a defect of the test, fixed with `PRAGMA foreign_keys = OFF`), then reds as
+  `expected { kind: 'no-send', …(2) } to deeply equal { kind: 'no-send', …(2) }` under the mutant. Mutant: `'missing'` mapped back to
+  `run-absent`: rc 1, 2 failed, 47 passed; `cmp` restore equal; green 49 passed.
+- **R5, header and handle guard.** The `landingControlTx.ts` header no longer says the store does not grow. New census test, "the
+  transaction body holds the database handle once ...": `coord.db` appears once in the comment-stripped code, inside
+  `applyLandingControlTx`; no `async`, `await`, `Promise`, `tx(`, `BEGIN`, `COMMIT`, `ROLLBACK`; the only importer is `store.ts`.
+  Mutants: a second `coord.db.prepare('SELECT 1').get()` in the body: rc 1, `the handle is named exactly once: expected [ 'coord.db',
+  'coord.db' ] to have a length of 1 but got 2`; a value import of `landingControlTx.js` in `landingNext.ts`: rc 1, `expected [ …(2) ]
+  to deeply equal [ 'server/src/coord/store.ts' ]`. Each restored with `cmp` equal.
+- **README.** The landing-line paragraph now says the pause is the stored flag and `mainRedHold` / `order.paused` are recomputed on the
+  read from the latest control snapshot (the same pure transition, no write), and the opt-out trap sentence says the stored flag stays
+  set and the read keeps showing it while the `binding` reads `inert`.
+- **Gates.** The brief's 7-file vitest selection: 7 files, 277 tests passed; `tsc --noEmit -p .` rc 0.
