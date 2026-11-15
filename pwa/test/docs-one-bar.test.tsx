@@ -91,6 +91,50 @@ async function openReady(url: string, width = 412, f: FakeLoaders = fakeLoaders(
   return r;
 }
 
+/** matchMedia at a width the case can change: a change calls every listener, as an engine's resize does. */
+function liveWidth(start: number): (width: number) => void {
+  let width = start;
+  const listeners = new Set<() => void>();
+  vi.stubGlobal('matchMedia', (q: string) => {
+    const min = /min-width:\s*([\d.]+)px/.exec(q);
+    const max = /max-width:\s*([\d.]+)px/.exec(q);
+    const matches = (min === null || width >= Number(min[1])) && (max === null || width <= Number(max[1]))
+      && (min !== null || max !== null);
+    return {
+      matches, media: q, onchange: null,
+      addEventListener: (_t: string, cb: () => void) => { listeners.add(cb); },
+      removeEventListener: (_t: string, cb: () => void) => { listeners.delete(cb); },
+      addListener() {}, removeListener() {}, dispatchEvent: () => false,
+    };
+  });
+  return (next) => {
+    width = next;
+    act(() => { for (const l of [...listeners]) l(); });
+  };
+}
+
+/** A leaf whose tree is `ok` and whose file is still loading, for a head drawn on its own. */
+function loadingLeaf(): { page: ReturnType<typeof pageAt>; visit: DocsVisit; tree: ReturnType<typeof treeOk> } {
+  const tree = treeOk({ entries: [entry('specs', 'a.md')] });
+  const visit: DocsVisit = {
+    tree: { s: 'ok', answer: treeResponse(tree), receivedAt: Date.now() },
+    file: { s: 'loading', pin: { kind: 'committed', commit: COMMIT_B, servedRef: 'refs/remotes/origin/main', section: 'specs', path: 'a.md' } }, freshness: { s: 'idle' }, updatedTo: null, pendingFragment: null,
+    retryTree: vi.fn(), retryFile: vi.fn(), refreshManual: vi.fn(), fetchFromOrigin: vi.fn(), setFragment: vi.fn(),
+  };
+  return { page: pageAt('/docs/demo/specs/a.md'), visit, tree };
+}
+
+/** Opens a leaf at `width` and waits for the mount, without reporting ready: option 1's row with the reader up. */
+async function openMounted(url: string, width = 412, f: FakeLoaders = fakeLoaders()): Promise<Rig> {
+  atWidth(width);
+  const r = rig();
+  navigate(url);
+  render(<Routed loaders={f.loaders} reader={r.reader} />);
+  await waitFor(() => expect(r.inputs.length).toBe(1));
+  await waitFor(() => expect(screen.getByRole('button', { name: DOCS_HEAD_TEXT.exportPlainView })).toBeTruthy());
+  return r;
+}
+
 const oneBar = (): HTMLElement => {
   const el = document.querySelector<HTMLElement>('.docs-head.docs-one-bar');
   if (el === null) throw new Error('no one bar');
@@ -320,7 +364,7 @@ describe('the one bar (refinements (f), (j), (k), (l))', () => {
     expect(panel?.contains(shown)).toBe(false);
   });
 
-  it('choosing the plain view from the one bar\'s panel puts focus on the row\'s Page details, not on the body (fix round 1, F1)', async () => {
+  it('choosing the plain view from the one bar\'s panel puts focus on the row\'s Page details, not on the body (fix rounds 1 and 2, F1)', async () => {
     await openReady('/docs/demo/specs/a.md');
     fireEvent.click(titleButton());
     const exportPlain = within(panelOf()).getByRole('button', { name: DOCS_HEAD_TEXT.exportPlainView });
@@ -331,6 +375,60 @@ describe('the one bar (refinements (f), (j), (k), (l))', () => {
     await waitFor(() => expect(document.querySelector('.docs-one-bar')).toBeNull());
     const more = screen.getByRole('button', { name: /^Page details/ });
     await waitFor(() => expect(document.activeElement).toBe(more));
+  });
+
+  it('choosing the plain view from option 1\'s row, before ready, puts focus on its Page details, not on the body (fix round 2, F2\')', async () => {
+    await openMounted('/docs/demo/specs/a.md', 412);
+    expect(document.querySelector('.docs-one-bar')).toBeNull();
+    const row = document.querySelector<HTMLElement>('.docs-head.docs-compact')!;
+    const exportPlain = within(row).getByRole('button', { name: DOCS_HEAD_TEXT.exportPlainView });
+    exportPlain.focus();
+    fireEvent.click(exportPlain);
+    await screen.findByText(DOCS_HEAD_TEXT.exportPlainShown);
+    const more = screen.getByRole('button', { name: /^Page details/ });
+    await waitFor(() => expect(document.activeElement).toBe(more));
+  });
+
+  it('choosing the plain view from the full head at 1280 puts focus on its back, not on the body (fix round 2, F2\')', async () => {
+    await openReady('/docs/demo/specs/a.md', 1280);
+    const head = document.querySelector<HTMLElement>('.docs-head.docs-full')!;
+    const exportPlain = within(head).getByRole('button', { name: DOCS_HEAD_TEXT.exportPlainView });
+    exportPlain.focus();
+    fireEvent.click(exportPlain);
+    await screen.findByText(DOCS_HEAD_TEXT.exportPlainShown);
+    await waitFor(() => expect(document.activeElement).toBe(document.querySelector('.docs-head .docs-back')));
+  });
+
+  it('a plain-view choice made while focus is elsewhere leaves it there: only a lost focus, or the pressed Export\'s, moves (fix round 2, A14)', async () => {
+    await openMounted('/docs/demo/specs/a.md', 412);
+    const row = document.querySelector<HTMLElement>('.docs-head.docs-compact')!;
+    const back = row.querySelector<HTMLElement>('.docs-back')!;
+    back.focus();
+    fireEvent.click(within(row).getByRole('button', { name: DOCS_HEAD_TEXT.exportPlainView }));
+    await screen.findByText(DOCS_HEAD_TEXT.exportPlainShown);
+    await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
+    expect(document.activeElement).toBe(back);
+  });
+
+  it('turned from 1280 to 412 with the plain view already chosen, the head moves no focus (fix round 2, F1\')', () => {
+    const setWidth = liveWidth(1280);
+    const { page, visit, tree } = loadingLeaf();
+    render(<DocsHead page={page} visit={visit} tree={tree} plainView onPlainView={vi.fn()} />);
+    expect(document.querySelector('.docs-head.docs-full')).not.toBeNull();
+    expect(document.activeElement).toBe(document.body);
+    setWidth(412);
+    expect(document.querySelector('.docs-head.docs-compact .docs-more')).not.toBeNull();
+    expect(document.activeElement).toBe(document.body);
+  });
+
+  it('a tree that recovers at 412 with the plain view already chosen moves no focus (fix round 2, F1\')', () => {
+    atWidth(412);
+    const { page, visit, tree } = loadingLeaf();
+    const { rerender } = render(<DocsHead page={page} visit={visit} tree={null} plainView onPlainView={vi.fn()} />);
+    expect(document.querySelector('.docs-more')).toBeNull();
+    rerender(<DocsHead page={page} visit={visit} tree={tree} plainView onPlainView={vi.fn()} />);
+    expect(document.querySelector('.docs-head.docs-compact .docs-more')).not.toBeNull();
+    expect(document.activeElement).toBe(document.body);
   });
 
   it.each([[412, 'compact'], [1280, 'full']] as const)(

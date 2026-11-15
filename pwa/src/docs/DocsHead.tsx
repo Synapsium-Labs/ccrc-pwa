@@ -760,14 +760,40 @@ export function DocsHead(p: {
   const compactWidth = useMediaQuery(DOCS_COMPACT_QUERY);
   const bar = p.readerBar ?? null;
   const layout = headLayoutFor(compactWidth, page, bar !== null && tree !== null);
+  const oneBarUp = layout === 'one-bar' && page.kind === 'path' && tree !== null && bar !== null;
+  // The take-up's fix rounds 1 and 2 (F1, F1', F2'): choosing Export's plain view, from any head, must leave focus on a
+  // stable control. The pressed Export cannot keep it: it goes disabled while the plain view formats, and it remounts as
+  // its state moves (`exportKeyOf`); from the one bar's panel, the whole bar withdraws with the reader. So each head's
+  // plain-view call is wrapped here, in the component that stays mounted across those swaps, and marks the choice for
+  // this page. Once the head that follows it has drawn (never while the one bar is still up), focus goes to the compact
+  // row's Page details, or else to the full head's back, but only when focus was lost (body, or nothing) or is still on
+  // the pressed Export. Focus elsewhere is the reader's own and stays. A mount, a rotation or a tree recovery marks
+  // nothing, so nothing moves without the choice.
+  const here = docsPageUrl(page);
+  const choseAt = useRef<string | null>(null);
+  const onPlainView = p.onPlainView == null ? null : (): void => {
+    choseAt.current = here;
+    p.onPlainView?.();
+  };
+  useLayoutEffect(() => {
+    const at = choseAt.current;
+    if (at === null) return;
+    if (at !== here) { choseAt.current = null; return; }
+    if (oneBarUp) return;
+    choseAt.current = null;
+    const held = document.activeElement;
+    if (held !== null && held !== document.body && !held.classList.contains('docs-export')) return;
+    const head = document.querySelector('.docs-head');
+    (head?.querySelector<HTMLElement>('.docs-more') ?? head?.querySelector<HTMLElement>('.docs-back'))?.focus();
+  });
   // The take-up plan, refinement (f): a leaf whose frame takes commands draws the one bar once the tree is `ok` (its
   // panel needs the tree); while it is not, the width-based head stands in (compact only at a compact width). Keyed by the page.
-  if (layout === 'one-bar' && page.kind === 'path' && tree !== null && bar !== null) {
+  if (oneBarUp && page.kind === 'path' && tree !== null && bar !== null) {
     return (
       <OneBar
         key={docsPageUrl(page)} page={page} visit={visit} tree={tree} bar={bar} receivedAt={receivedAt} now={now} crumbs={crumbs}
         leafImage={p.leafImage ?? null} exportBody={p.exportBody ?? null} pageStore={p.pageStore ?? null}
-        exportAssets={p.exportAssets ?? null} onPlainView={p.onPlainView ?? null}
+        exportAssets={p.exportAssets ?? null} onPlainView={onPlainView}
       />
     );
   }
@@ -777,7 +803,7 @@ export function DocsHead(p: {
       <CompactHead
         key={docsPageUrl(page)} page={page} visit={visit} tree={tree} receivedAt={receivedAt} now={now} crumbs={crumbs}
         leafImage={p.leafImage ?? null} exportBody={p.exportBody ?? null} pageStore={p.pageStore ?? null}
-        exportAssets={p.exportAssets ?? null} plainView={p.plainView === true} onPlainView={p.onPlainView ?? null}
+        exportAssets={p.exportAssets ?? null} plainView={p.plainView === true} onPlainView={onPlainView}
       />
     );
   }
@@ -788,7 +814,7 @@ export function DocsHead(p: {
   const listed = tree !== null && page.kind !== 'index' ? { tree, page } : null;
   const actionInputs = {
     file: visit.file, leafImage: p.leafImage ?? null, exportBody: p.exportBody ?? null, pageStore: p.pageStore ?? null,
-    exportAssets: p.exportAssets ?? null, onPlainView: p.onPlainView ?? null,
+    exportAssets: p.exportAssets ?? null, onPlainView,
   };
   if (fullHeadFormFor(compactWidth) === 'stacked') {
     return (
@@ -1048,14 +1074,6 @@ function CompactRow(p: CompactProps & { readonly tree: DocsTreeOk; readonly wher
   const [open, setOpen] = useState(false);
   const toggle = useRef<HTMLButtonElement>(null);
   const panelId = useId();
-  // The take-up's fix round 1 (F1): choosing Export's plain view in the one bar's panel unmounts the reader, which
-  // withdraws the bar, so this row replaces it and the control that had focus is gone. Focus goes to Page details, the
-  // row's control for the panel the tap came from (Export is inside it again), never left on the body. The plain-view
-  // note announces itself as a status. A tap on this row's own Export keeps its focus: it is not on the body.
-  const plainView = p.plainView;
-  useLayoutEffect(() => {
-    if (plainView && (document.activeElement === null || document.activeElement === document.body)) toggle.current?.focus();
-  }, [plainView]);
   const { target, showsDraft, share, exported, committedHref } = useHeadActions({
     page, tree, file, leafImage: p.leafImage, exportBody: p.exportBody, pageStore: p.pageStore,
     exportAssets: p.exportAssets, onPlainView: p.onPlainView,
