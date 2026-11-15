@@ -434,12 +434,24 @@ describe('the radar lane', () => {
       let hang = false;
       let bobRead: () => void = () => undefined;
       const bobDone = new Promise<void>((r) => { bobRead = r; });
+      // Proj-b's io calls in flight while `hang` is set: the first answer is not the end of proj-b's reads.
+      let bobInFlight = 0;
+      let bobStatsDone = 0;   // the probe is stat'd before and after its ranges (pinned above): its second stat ends proj-b's chain
+      const inBob = (p: string): boolean => hang && p.includes(`${path.sep}proj-b${path.sep}`);
+      const track = async <T,>(p: string, run: () => Promise<T>): Promise<T> => {
+        if (!inBob(p)) return run();
+        bobInFlight += 1;
+        try { return await run(); } finally { bobInFlight -= 1; }
+      };
       const io: FleetIO = {
         ...localIO,
-        statMeasured: (p) => (hang && p.includes(`${path.sep}proj-a${path.sep}`) ? new Promise<never>(() => undefined) : localIO.statMeasured(p)),
+        statMeasured: (p) => (hang && p.includes(`${path.sep}proj-a${path.sep}`) ? new Promise<never>(() => undefined)
+          : track(p, async () => { const r = await localIO.statMeasured(p); if (inBob(p)) bobStatsDone += 1; return r; })),
+        lstatMeasured: (p, ...a) => track(p, () => localIO.lstatMeasured(p, ...a)),
+        readdirMeasured: (p, ...a) => track(p, () => localIO.readdirMeasured(p, ...a)),
         readFileFromBytesMeasured: async (p, o, m, t, s) => {
-          const r = await localIO.readFileFromBytesMeasured(p, o, m, t, s);
-          if (hang && p.includes(`${path.sep}proj-b${path.sep}`)) bobRead();
+          const r = await track(p, () => localIO.readFileFromBytesMeasured(p, o, m, t, s));
+          if (inBob(p)) bobRead();
           return r;
         },
       };
@@ -452,7 +464,11 @@ describe('the radar lane', () => {
       vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
       const pass = w.sweepRadar(recs, NOW + 1000);
       await bobDone;                                              // proj-b answered, on the real event loop
+      // Wait for the rest of proj-b's chain to finish: the first answer is not its last I/O (wave 5i added the stat after the
+      // ranges), and on a loaded box it is still in flight when the clock advances. Bounded, and asserted below.
+      for (let turn = 0; turn < 1000 && (bobInFlight > 0 || bobStatsDone < 2); turn += 1) await new Promise<void>((r) => setImmediate(r));
       await new Promise<void>((r) => setImmediate(r));
+      expect([bobInFlight, bobStatsDone], 'proj-b\'s reads never finished: the case would pass or fail on timing alone').toEqual([0, 2]);
       await vi.advanceTimersByTimeAsync(30_000);                  // half the lane's 60 s cadence
       await pass;
       expect(keys(w), 'the deadline kept the old map, or took proj-b with it').toEqual([BOB]);

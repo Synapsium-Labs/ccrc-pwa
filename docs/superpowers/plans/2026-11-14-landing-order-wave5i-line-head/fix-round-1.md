@@ -234,3 +234,26 @@ Gates after the merge. Each ran from `server/` through `ccrc test --`, in the fo
   2. The tests-project child exited -1 with empty output.
 
   The direct typecheck runs above stand in for this file here. The PR's fast run is the arbiter for it.
+
+## CI red after the push
+
+**The red.** On the PR's fast run, shard server 3/12: `radar-lane.test.ts`, "a pass whose one project misses the deadline contributes
+nothing for it, and keeps the others": `the deadline kept the old map, or took proj-b with it: expected [] to deeply equal
+[ 'claude-a-proj-b-alpha' ]`. Green alone, 70 passed.
+
+**The cause, corrected.** The case has no `coord` dependency, so `sweepRadar` asks for no control bundle and no control read
+happens (measured: proj-b's only io calls are `lstat`, `read` and two `stat`, all on `probe`). The race is the probe's SECOND `stat`,
+the one after the ranges that wave 5i added. The test signalled "proj-b answered" at the first read, waited one `setImmediate`, and
+advanced the clock; on a loaded box that last `stat` is still in flight, so proj-b is `late` and dropped. The product is right.
+
+**Red first.** With the fix's wait switched off and every proj-b io call after the first answer delayed by five `setImmediate` turns:
+`ccrc test -- ./node_modules/.bin/vitest run test/radar-lane.test.ts -t 'misses the deadline' --maxWorkers=2` exit 1 with the
+assertion above.
+
+**The fix (test only).** Proj-b's io calls are counted in flight (all four members), and its completed `stat`s counted. After the
+first answer the case waits, in at most 1000 `setImmediate` turns, until nothing is in flight and both stats are done, and asserts
+`[0, 2]` so a hang fails loudly. A count of in-flight calls alone was not enough (measured: it read 0 in the gap before the second
+`stat` began), hence the stat count, whose shape the first case of the block pins. The delay was taken out.
+
+**Greens.** With the delay in place the case passed; without it, three runs of the case passed and the whole file passed (70 of 70).
+The other cases that advance the fake clock hang a listing or hold a `lstat` and never wait on an answered read, so they are safe.
