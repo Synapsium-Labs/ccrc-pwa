@@ -2326,6 +2326,14 @@ Known departures are allocated and defined by the coordinator in one act at each
 
 Reserve issued to run 2124 and unused at its close: 8644, 8645, 8646.
 
+- **D-8648 (2026-11-15)** — version-ref-in-url. Refinement (m): departs from the rich-docs spec's G6 ("'Back to the latest' its ref, in `history.state` for the visit, not in the URL") and RD19 ("`only` and `latest` stay in-visit state"). `ref` stays in the URL beside `at`, as the operator answered Q1 (a), and W5b writes nothing into `history.state`; the spec's Later item loses its `latest` half. Task 21 amends the sentences. Issued to run 2178 at its opening.
+- **D-8649 (2026-11-15)** — version-images-at-version. Refinement (n): departs from base §4.11's pin rule (a committed page gives `CommittedPin{commit: ref.commit, servedRef: ref.served, section, path}`). A version page's images are read at the version. Task 21 amends the sentence. Issued to run 2178 at its opening.
+- **D-8650 (2026-11-15)** — version-needs-listed-file. Refinement (p): departs from four sentences of base §2 (e) (a gc'd pinned commit answers `unknown-commit` and the PWA re-lists once; a commit reaches a request only from a tree answer of the same visit; the tree is re-fetched after `unknown-commit` with one automatic retry; the failure table's `unknown-commit | 404 | auto | re-list`) and from §4.3 item 2 ("Committed bodies are keyed by `blob`"). The version view needs the doc in the served listing, as a committed file. Task 21 amends the sentences. Issued to run 2178 at its opening.
+- **D-8651 (2026-11-15)** — version-head-and-banner. Refinement (q): departs from base §3.1 (`view=committed` survives on a leaf "only together with `ref`") and from §4.5's banner and truth-line rows on a version page. The header and one banner name the version. Task 21 amends the sentences. Issued to run 2178 at its opening.
+- **D-8652 (2026-11-15)** — version-export-links-inert. Refinement (t): departs from base §4.17's link table, whose `doc` and `repo` rows give `githubPermalink` at C. An Export of a version page writes its body's doc and repo links inert. Task 21 amends the table. Issued to run 2178 at its opening.
+
+Reserve issued to run 2178: 8653, 8654, 8655.
+
 ## Where things stand
 
 ### Agreed
