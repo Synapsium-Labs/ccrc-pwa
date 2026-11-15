@@ -273,6 +273,14 @@ export function releaseReviewItemRaised(db: DatabaseSync, reviewRunId: number): 
   return db.prepare(`SELECT 1 AS x ${RELEASE_REVIEW_OF} LIMIT 1`).get(RELEASE_REVIEW_VERB, reviewRunId) !== undefined;
 }
 
+/** Has an item with this exact title ever been raised on this programme by this raiser, in any state? The weekly replay quiz
+ *  lane (Overlord W1a, `continuity/quizLane.ts`) raises one item a week, named by its week, and never again that week: an item
+ *  the operator dismissed or ticked is not raised a second time. */
+export function itemRaisedWithTitle(db: DatabaseSync, program: string, raisedBy: string, title: string): boolean {
+  return db.prepare('SELECT 1 AS x FROM operator_items WHERE program = ? AND raisedBy = ? AND title = ? LIMIT 1')
+    .get(program, raisedBy, title) !== undefined;
+}
+
 /** D-8293: has the operator released this review run's report? True only for a release-review item of it that the operator's
  *  `act` moved to `done` (`moveItemInTx`, the one writer, records the act's event); an item ccrc settled is no release. This is
  *  the one read of the fact: the child reclaim sweep stops keeping the review's workspace for the run it reviewed. */
