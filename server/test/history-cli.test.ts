@@ -389,7 +389,8 @@ describe('ccrc history status (Linux)', () => {
   });
 
   it('H-32: no stderr write in cli.mjs prints an error message except through errLine, which redacts', () => {
-    const src = fs.readFileSync(path.join(REPO, 'ccd', 'history', 'cli.mjs'), 'utf8');
+    // Overlord W1 Task 1 moved errLine, and its one write, to read-context.mjs, which cli.mjs imports it back from: the scan reads both.
+    const src = ['cli.mjs', 'read-context.mjs'].map((f) => fs.readFileSync(path.join(REPO, 'ccd', 'history', f), 'utf8')).join('\n');
     // H-168: scan by line, not by regex up to ';' (an argument can hold one). Every write stands on one line, so the count below
     // proves the scan sees them all; a new write is a deliberate edit of this number and of the allowlist beside it.
     const writes = src.split('\n').filter((l) => /process\.stderr\.write\(/.test(l));
