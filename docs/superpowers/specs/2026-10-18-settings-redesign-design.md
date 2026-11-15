@@ -326,6 +326,12 @@ section's icon, its name, its purpose line (Refined phone index only; desktop na
 A read that has not landed shows a skeleton, and a failed read says "could not be read". Neither is folded into a
 status.
 
+**Two diagnostic doors follow the five section rows** (amended 2026-11-15; library 1.1 take-up, D-8146). Reader lab
+and Measure highlighting are reached from the index through the same row, after the five sections: the icon, the
+name, a purpose line and the chevron. Neither row has a status line. Each opens a measurement page, not a section of
+settings, and no read reports a health for it, so a status line would be made up rather than measured, which the
+rule above forbids. The five sections keep their status lines, and the per-section rule above is unchanged.
+
 ### 3.3 What each section page holds
 
 A section page is a stack of `Section` cards (Ftask 11). Each card has:
