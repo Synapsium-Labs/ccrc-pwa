@@ -105,3 +105,7 @@ number: the programme mints them.
   - shard 1: 1500 of 1514 tests passed, with 12 skipped. The two failures came in a run with two OOM kills.
     `reader-frame` M8.20 read `fallback` where it expected `ready`, and `refined-phone`'s panel case measured
     "the control is 42 tall". Each file passed alone (24/24 and 53/53).
+- **pwa-suite-local** — the whole pwa unit suite, run once locally with two workers (`--maxWorkers=2`): 15680 of 15683
+  tests passed, with 2 skipped. The one failure came in a run with six OOM kills, in which vitest's type check was
+  killed as well: `skin-switch`'s phone Goals-icon case timed out at 5 s. The file passed alone (29/29), and its type
+  check passes on its own run.
