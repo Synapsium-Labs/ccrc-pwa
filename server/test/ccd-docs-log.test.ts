@@ -404,6 +404,27 @@ describe('docs-log: a walk that ends short is truncated', () => {
     expect(after['truncated']).toBe(true);
   });
 
+  it('a shallow walk that ends short is truncated when its boundary does not hold the doc', () => {
+    const dir = freshRepo();
+    touch(dir, `${SPECS}/b.md`, 'root', 'the root');
+    const boundary = touch(dir, `${SPECS}/b.md`, 'other', 'the boundary');
+    const a1 = touch(dir, `${SPECS}/a.md`, 'one', 'add the doc');
+    const a2 = touch(dir, `${SPECS}/a.md`, 'two', 'edit the doc');
+    fs.writeFileSync(path.join(dir, '.git', 'shallow'), `${boundary}\n`);
+    expect(h.git(dir, 'rev-parse', '--is-shallow-repository')).toBe('true');
+    // CONTROL: git prints the boundary as a root with the section's files, and the doc is not among them, so the
+    // parser reads past no parentless record that touched the doc: only the shallow arm can make this answer truncated.
+    const raw = h.git(dir, '-c', 'log.showRoot=true', 'log', '--no-merges', '--format=%H%x00%P%x00%cI%x00%an%x00%s', '-z', '--name-only', '--', SPECS);
+    expect(raw).toContain(`${boundary}\0`);
+    const rec = raw.slice(raw.indexOf(`${boundary}\0\0`));
+    expect(rec).toContain(`${SPECS}/b.md`);
+    expect(rec).not.toContain(`${SPECS}/a.md`);
+    const o = answer(a2, 'specs', 'a.md');
+    expect(entriesOf(o).map((e) => e.sha)).toEqual([a2, a1]);
+    expect(entriesOf(o)[1]).toMatchObject({ parent: boundary });
+    expect(o['truncated']).toBe(true);
+  });
+
   it('a shallow repository never lists its boundary commit, and every listed parent is a full sha', () => {
     const dir = freshRepo();
     commitDocs(h, dir, { [`${SPECS}/a.md`]: 'one\n' }, 'doc one');
