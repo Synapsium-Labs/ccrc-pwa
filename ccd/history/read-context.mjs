@@ -10,7 +10,7 @@
 // sweep.mjs, so nothing here reaches the secret loader.
 import { lstatSync, promises as fsp } from 'node:fs';
 import {
-  UUID_RE, CLI_STAT_DEADLINE_MS, CONTROL_FILE_MAX, historyPaths, readBoxEnvValue, makePairIndex, redactFinalLines,
+  UUID_RE, CLI_STAT_DEADLINE_MS, CONTROL_FILE_MAX, historyPaths, makePairIndex, redactFinalLines,
   decideStatusReadFailure,
 } from './lib.mjs';
 import { StoreError, measureStoreFacts, readBounded } from './store.mjs';
@@ -30,15 +30,6 @@ export function unmeasuredFacts(role) {
 export function readTrimmed(p) {
   const r = readBounded(p, CONTROL_FILE_MAX, false);
   return r.state === 'value' ? r.value.trim() : null;
-}
-
-/** CCRC_ROLE exactly as doctor's _check_skills reads it (ccd/ccrc-doctor-checks:3016): a regular, readable
- *  file, one key, readBoxEnvValue's rules (O53); anything else is '' (not server). */
-export function readRole(P) {
-  const f = readBounded(P.ccrcEnv, CONTROL_FILE_MAX, true);
-  if (f.state !== 'value') return '';
-  const r = readBoxEnvValue(f.value, 'CCRC_ROLE');
-  return r.found ? r.value : '';
 }
 
 /** A name's presence, never folded (IV5): ENOENT is absent; any other failure is unmeasured. */
@@ -67,11 +58,13 @@ export function settleWithin(promise, ms) {
  *   - Darwin and the recorded role first: they answer before anything else is touched;
  *   - then the 2 s reachability stat of db/history.db; one that never settles reads unsettled, and nothing
  *     behind it is measured;
- *   - then every presence input (measureStoreFacts), with the shim measured beside them. */
-export async function measureReach(home) {
+ *   - then every presence input (measureStoreFacts), with the shim measured beside them.
+ *  `role` is the caller's (R1): cli.mjs passes what sweep.mjs's readRole reads from ccrc.env, and the Overlord's read passes
+ *  the empty role, which is what readRole answers on a box whose ccrc.env records none. So this module never opens
+ *  ccrc.env, a SECRET_SOURCES entry. */
+export async function measureReach(home, role) {
   const P = historyPaths(home);
   const darwin = process.platform === 'darwin';
-  const role = readRole(P);
   if (darwin || role === 'server') return { darwin, role, facts: unmeasuredFacts(role), statSettled: true, shim: 'unmeasured' };
   const stat = await settleWithin(fsp.stat(P.dbFile), CLI_STAT_DEADLINE_MS);
   if (!stat.settled) return { darwin, role, facts: unmeasuredFacts(role), statSettled: false, shim: presence(P.shim) };

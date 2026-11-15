@@ -62,13 +62,13 @@ import {
   decideHeadlessStore, asOfFamilySql, decideAsOfFamily, decideHeadlessRead, decideEnvProject,
   readEnvelope, shownLine, nextLine,
 } from './lib.mjs';
-import { loadSecrets, procIdentityOf, measureOpProcess, recallOffPresence } from './sweep.mjs';
+import { loadSecrets, procIdentityOf, measureOpProcess, readRole, recallOffPresence } from './sweep.mjs';
 import { runTree, grepVerb, describeVerb, expandVerb, touchedVerb, familiesOf, transcriptsOf, scopeHeader, scopeJsonOf, asOfCutOf } from './recall.mjs';
 import { spawn as spawnOp } from 'node:child_process';
 import { isatty as isattyOp } from 'node:tty';
 import { recoverStepAt as opRecoverStepAt, storedVersionAt as opStoredVersionAt } from './store.mjs';
 import {
-  readTrimmed, readRole, settleWithin, measureReach, cliFactsOf, NO_PAIRS, errLine, refusal, refusalStoreId, readFailure,
+  readTrimmed, settleWithin, measureReach, cliFactsOf, NO_PAIRS, errLine, refusal, refusalStoreId, readFailure,
 } from './read-context.mjs';
 
 process.umask(0o077);
@@ -335,7 +335,7 @@ function readStoreAnswered(env, P, nowMs) {
 export async function statusEnvelope(home, nowMs) {
   const P = historyPaths(home);
   const env = emptyEnvelope(P);
-  const reach = await measureReach(home);
+  const reach = await measureReach(home, readRole(P));
   env.role = reach.role;
   const d = decideCliStore(cliFactsOf(reach));
   if (reach.darwin || reach.role === 'server') return decided(env, d);
@@ -620,7 +620,7 @@ export async function readContext(home, verb, parsed, nowMs = Date.now()) {
 async function readContextIn(home, verb, parsed, nowMs, seen) {
   const P = historyPaths(home);
   if (process.platform === 'darwin' || readRole(P) === 'server') {
-    const d = decideCliStore(cliFactsOf(await measureReach(home)));
+    const d = decideCliStore(cliFactsOf(await measureReach(home, readRole(P))));
     return refusal(d.exit, d.reason, null, null, null);
   }
   const pane = process.env.TMUX_PANE ?? null;
@@ -654,7 +654,7 @@ async function readContextIn(home, verb, parsed, nowMs, seen) {
   if (offNow && decideRecallOff({ file: offFile, generation: generation.value ?? '' }) === 'off') {
     return refusal(EXIT.RECALL_OFF, undefined, null, id, gen);
   }
-  const reach = await measureReach(home);
+  const reach = await measureReach(home, readRole(P));
   const d = decideCliStore(cliFactsOf(reach));
   if (!d.read) return refusal(d.exit, d.reason, refusalStoreId(reach, P), id, gen);
   let db;
@@ -763,7 +763,7 @@ async function readContextEnv(home, P, parsed, nowMs, seen, recall, pane) {
   const harness = decideHarness(regPresence(P, id, 'harness'));
   if (!harness.ok) return refusal(harness.rc, harness.reason, null, null, null);
   // Step 3: §8.3's table after the 2 s stat, the read-only open and decideStatusRead.
-  const reach = await measureReach(home);
+  const reach = await measureReach(home, readRole(P));
   const d = decideCliStore(cliFactsOf(reach));
   if (!d.read) return refusal(d.exit, d.reason, refusalStoreId(reach, P), null, null);
   let db;
@@ -1647,7 +1647,7 @@ export async function runOpVerb(home, verb, rest, emit, seam = {}) {
   if (map === null) return { exit: EXIT.REFUSED, reason: 'bad-args' };
   const parsed = healthLib.parseOpVerbArgs(map.op, map.opArgs);
   if (!parsed.ok) return { exit: EXIT.REFUSED, reason: parsed.reason };
-  const reach = await measureReach(home);
+  const reach = await measureReach(home, readRole(P));
   const door = healthLib.decideOpDoor(cliFactsOf(reach));
   if (!door.ok) return door.reason === undefined ? { exit: door.exit } : { exit: door.exit, reason: door.reason };
   const form = healthLib.formOf(map.op, map.opArgs);
