@@ -50,8 +50,8 @@ ccd's capability words, §11.5's "An older fleet build" (the doctor failure, and
 answered below. The large-file programme is `docs/superpowers/specs/2026-11-13-large-file-programme-design.md`.
 
 Written against `origin/main` at `4fd5998ed` (2026-11-15), re-based after review 2085 from the first draft's
-`416b8f942`: of the files this plan touches only `server/test/growthCheck.ts` moved between them (D-8635's three
-growth stages). The index was read from `origin/ws/overlord-plan-w1`. The coordinator's rulings on review 2085 are
+`416b8f942`: of the files this plan touches only `server/test/growthCheck.ts` moved between them (the three
+growth stages of #2811). The index was read from `origin/ws/overlord-plan-w1`. The coordinator's rulings on review 2085 are
 recorded in the open questions they settle.
 
 ## Open questions
@@ -259,10 +259,10 @@ Measured on `origin/main` at `4fd5998ed`.
   placeholder) evaluates them unpinned. Each library's code sits in `# @ccd-lib:<id>` regions with a pointer line in
   `ccd/ccd`, which is how `ccdSource()` (read by 158 test files) sees library code. The third library's pull request
   (#2256, `git show --stat a520aaace`) and review 2085's F15 list every site a new library touches (Task 2, Step 0).
-- **Growth stages (D-8635).** A listed file grows at most `GROWTH_LIMIT` (40) net code lines a pull request, waivers
+- **Growth stages (#2811).** A listed file grows at most `GROWTH_LIMIT` (40) net code lines a pull request, waivers
   counting; a frozen file (`server/test/growth-frozen/`) at most `SPINE_LIMIT` (10) with no waiver; a capped file
   (`server/test/growth-caps/`) stays within its cap. On `origin/main`: nothing is frozen (no `growth-frozen/`), and
-  `shared/api.ts` is capped at 5,140 (D-8635); `ccd/ccd`, `ccd/ccrc`, `ccd/ccrc-doctor-checks`, `server/src/watch.ts`
+  `shared/api.ts` is capped at 5,140; `ccd/ccd`, `ccd/ccrc`, `ccd/ccrc-doctor-checks`, `server/src/watch.ts`
   and every `ccd/lib/*.sh` are listed. A listed file new in its own diff counts in full.
 - **The update's floor, its restore and its rollback.** `ccd/ccrc#_upd_floor_check` refuses a version below
   `~/.ccrc/floor` unless `--downgrade` was typed, and lets `--from restore|rollback|watchdog` through with a `WARN`.
