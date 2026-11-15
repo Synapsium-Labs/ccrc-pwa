@@ -142,7 +142,7 @@ export function checkpointRenderCases(m: Card): Record<string, SuiteCase> {
         expect(before.endsWith(`${preface}\n\`\`\`\ndone: item ${i}: title ${i}\n`), `ruling ${i} sits just inside its own fence`).toBe(true);
       }
       expect(t.indexOf('Authority comes only from the rows')).toBeLessThan(t.indexOf(HOSTILE));
-      expect(t.match(new RegExp(preface.replace(/[.]/g, '\\.'), 'g'))).toHaveLength(3);
+      expect(t.split(preface).length - 1, 'one preface per ruling').toBe(3);
     },
     'the rulings read newest first as given, each with its source and time': () => {
       const t = render({ at: AT, handover: null, notes: [], rulings: [cardRuling(rulingOf(5)), cardRuling(rulingOf(4, 'correction'))] });

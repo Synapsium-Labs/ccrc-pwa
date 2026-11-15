@@ -2044,12 +2044,14 @@ export function registerCoordRoutes(
     if (!deps.coord) return notConfigured(reply);
     if (!requireMailToken(req, reply, 'POST /api/runs/:id/route')) return;
     const coord = deps.coord;
-    const request = parseRouteRequest(parseCanonicalPositiveSafeInteger((req.params as { id: string }).id), req.body);
+    const parsed = parseRouteRequest(parseCanonicalPositiveSafeInteger((req.params as { id: string }).id), req.body);
+    // The launch-profile lane owns `compact` while `continuity` is live (`compactRefusal`, review 2024 F3): its refusal is
+    // one more 400 `bad-request` with its detail, so it rides the parse's own refusal.
+    const owned = parsed.ok && parsed.ask.how.by === 'manual'
+      ? compactRefusal(parsed.ask.how.field, laneArmRowViewOf(CONTINUITY_LANE, coord.laneArmSetting(CONTINUITY_LANE)).live) : null;
+    const request = owned === null ? parsed : { ok: false as const, detail: owned };
     if (!request.ok) return refuseRoute(reply, 'bad-request', { detail: request.detail });
     const { id, ask } = request;
-    // The launch-profile lane owns `compact` while `continuity` is live (`compactRefusal`, review 2024 F3).
-    const owned = ask.how.by === 'manual' ? compactRefusal(ask.how.field, laneArmRowViewOf(CONTINUITY_LANE, coord.laneArmSetting(CONTINUITY_LANE)).live) : null;
-    if (owned !== null) return refuseRoute(reply, 'bad-request', { detail: owned });
 
     return coordMutex.run(async () => {
       const decision = await decideRoute({

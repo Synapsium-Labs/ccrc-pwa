@@ -72,6 +72,13 @@ describe('renew', () => {
       expect(calls).toEqual([]);
     }
   });
+  it('an id that is not a registry id is refused before any argv, and ccd is never asked', async () => {
+    for (const id of ['-x', '', 'a b', '../demo']) {
+      const { host, calls } = harness();
+      expect(await host.renew(id, 2)).toEqual({ kind: 'refused', reason: 'not a registry id' });
+      expect(calls).toEqual([]);
+    }
+  });
   it('sends exactly the built argv, with the dec when the box takes actor flags and none otherwise', async () => {
     const withDec = harness();
     await withDec.host.renew(ID, 7);

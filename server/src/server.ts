@@ -2639,7 +2639,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     const [field, value] = Object.entries(parsed.route)[0] as [string, string];
     // The launch-profile lane owns `compact` while `continuity` is live (`compactRefusal`, review 2024 F3).
     const owned = compactRefusal(field, deps.coord !== undefined && laneArmRowViewOf(CONTINUITY_LANE, deps.coord.laneArmSetting(CONTINUITY_LANE)).live);
-    if (owned !== null) return reply.code(400).send({ ok: false, error: 'bad-request', detail: owned });
+    if (owned !== null) return refuseRoute(reply, 'bad-request', { detail: owned });
     return runCcdOr502(reply, CCD_ARGV.routeApply(id, field, value, pwaDec(req)));
   });
 

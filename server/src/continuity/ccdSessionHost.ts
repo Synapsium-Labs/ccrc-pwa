@@ -5,6 +5,7 @@
 // `unreachable` (never a refusal, never zero), and the usage and start reads keep their own kinds. It imports no tmux and
 // makes no decision beyond naming what it was told; the capability gate sits beside the one `CCD_ARGV.hibernate` call.
 import { CCD_ARGV, HIBERNATE_FRESH_CAP, capSupported, ccdCan, sweepDec } from '../ccdargv.js';
+import { isRegistryId } from '../../../shared/api.js';
 import type { RunCcd } from '../coord/ports.js';
 import type { FleetState } from '../fleetstate.js';
 import type { SendResult } from '../inject/send.js';
@@ -42,6 +43,8 @@ export function ccdSessionHost(deps: CcdSessionHostDeps): SessionHost {
   async function renew(sessionId: string, n: number): Promise<RenewResult> {
     // The token is the gate for the `--roll --fresh` flags; `ccdCan` asks the verb itself, as every other `hibernate` act does.
     if (!capSupported(deps.fleetState, HIBERNATE_FRESH_CAP) || !ccdCan(deps.fleetState, 'hibernate')) return { kind: 'capability-missing' };
+    // The id is a stored generation row's: refused here, before any argv, unless it is a registry id (the id-argv census).
+    if (!isRegistryId(sessionId)) return { kind: 'refused', reason: 'not a registry id' };
     const base = sweepDec(deps.fleetState, 'sweep:renew');
     const dec = base === null ? null : { ...base, reason: `renewal n=${n}` };
     let res;
